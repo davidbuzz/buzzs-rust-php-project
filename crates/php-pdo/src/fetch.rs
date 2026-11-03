@@ -357,7 +357,6 @@ fn do_fetch_row(
             if flags & FETCH_CLASSTYPE != 0 {
                 let name = fetch_value(cx, st, column_index, None);
                 column_index += 1;
-                ce = None;
                 if let Value::Str(s) = &name {
                     ce = cx.host().lookup_class(s).map(|i| i.name);
                 }
