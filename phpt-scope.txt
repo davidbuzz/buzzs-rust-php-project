@@ -34,7 +34,6 @@ ext/com_dotnet
 # Test-helper and skeleton extensions of php-src itself
 ext/dl_test
 ext/skeleton
-ext/zend_test
 ext/lexbor
 
 # Non-CLI SAPIs (apache2handler stays in scope)
