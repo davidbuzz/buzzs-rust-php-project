@@ -1,4 +1,3 @@
-# Many agents build concurrently on one 16-core/31GB box: cap per-invocation parallelism
-# so a dozen simultaneous `cargo build`s cannot exhaust memory.
+# 16-core/31GB box: cap per-invocation parallelism at 6 jobs.
 [build]
-jobs = 2
+jobs = 6

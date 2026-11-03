@@ -103,7 +103,7 @@ Several agents work concurrently, one crate each:
 
 ## Resource limits (the box has OOM-crashed once)
 
-- `.cargo/config.toml` caps cargo at **2 jobs**; never override with `-j`.
+- `.cargo/config.toml` caps cargo at **6 jobs**; never override with `-j`.
 - Run at most one `cargo test`/`cargo build` at a time per agent.
 - Do not run the whole php-src suite with `--php /usr/bin/php`; use subsets.
 
