@@ -347,9 +347,14 @@ name = "php-cli"
 version = "0.1.0"
 dependencies = [
  "libc",
+ "php-ext-date",
+ "php-ext-filter",
  "php-ext-hash",
  "php-ext-json",
  "php-ext-pcre",
+ "php-ext-pdo",
+ "php-ext-random",
+ "php-ext-spl",
  "php-ext-stdarr",
  "php-ext-stdmisc",
  "php-ext-stdstr",
@@ -448,7 +453,10 @@ dependencies = [
 name = "php-ext-filter"
 version = "0.1.0"
 dependencies = [
+ "php-filter",
+ "php-pcre",
  "php-runtime",
+ "php-support",
  "php-vm",
 ]
 
@@ -545,7 +553,11 @@ dependencies = [
 name = "php-ext-pdo"
 version = "0.1.0"
 dependencies = [
+ "php-pdo",
  "php-runtime",
+ "php-sqlite",
+ "php-streams",
+ "php-support",
  "php-vm",
 ]
 
@@ -996,6 +1008,7 @@ dependencies = [
  "php-runtime",
  "php-streams",
  "pkg-config",
+ "serde_json",
 ]
 
 [[package]]
