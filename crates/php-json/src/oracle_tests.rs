@@ -341,3 +341,41 @@ fn run_fixture() {
     }
 }
 
+
+const LOCATIONS: &str = include_str!("../tests/fixtures/locations.txt");
+
+/// Replays php-src master's error-location tests (see
+/// `tests/oracle/gen_locations.php`): each file's `json_validate()` calls run
+/// in order on one state, then `json_last_error()`/`json_last_error_msg()`
+/// must match the EXPECT section exactly.
+#[test]
+fn master_error_locations() {
+    let mut failures = Vec::new();
+    let mut state = JsonState::new();
+    let mut current = "";
+    let mut n = 0;
+    for line in LOCATIONS.lines().filter(|l| l.starts_with("L\t")) {
+        let f: Vec<&str> = line.split('\t').collect();
+        if f[1] != current {
+            current = f[1];
+            state = JsonState::new();
+        }
+        let input = unhex(f[2]);
+        let depth: i64 = f[3].parse().expect("depth");
+        let flags: i64 = f[4].parse().expect("flags");
+        let code: i64 = f[5].parse().expect("code");
+        let msg = text(f[6]);
+        let _ = json_validate(&mut state, &input, depth, flags);
+        n += 1;
+        if state.last_error.code() != code || state.last_error.msg() != msg {
+            failures.push(format!(
+                "{current}: {:?}: got {} {:?}, expected {code} {msg:?}",
+                String::from_utf8_lossy(&input),
+                state.last_error.code(),
+                state.last_error.msg()
+            ));
+        }
+    }
+    assert!(n > 100, "fixture too small");
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
