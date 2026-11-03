@@ -29,7 +29,12 @@ pub enum Kind {
     Warning,
 }
 
-const DRIVER_PROPS: &[&str] = &["client_info", "client_version", "driver_version", "report_mode"];
+const DRIVER_PROPS: &[&str] = &[
+    "client_info",
+    "client_version",
+    "driver_version",
+    "report_mode",
+];
 const LINK_PROPS: &[&str] = &[
     "affected_rows",
     "client_info",
@@ -50,7 +55,13 @@ const LINK_PROPS: &[&str] = &[
     "thread_id",
     "warning_count",
 ];
-const RESULT_PROPS: &[&str] = &["current_field", "field_count", "lengths", "num_rows", "type"];
+const RESULT_PROPS: &[&str] = &[
+    "current_field",
+    "field_count",
+    "lengths",
+    "num_rows",
+    "type",
+];
 const STMT_PROPS: &[&str] = &[
     "affected_rows",
     "insert_id",
@@ -103,7 +114,11 @@ enum Fail {
 type Read = Result<Value, Fail>;
 
 fn link_read(vm: &mut Vm, o: &Obj, name: &str, quiet: bool) -> VmResult<Read> {
-    let state = internal::<LinkObj, _>(o, |l| l.0.as_ref().map(|r| (r.status, r.my.borrow().mysql.clone()))).flatten();
+    let state = internal::<LinkObj, _>(o, |l| {
+        l.0.as_ref()
+            .map(|r| (r.status, r.my.borrow().mysql.clone()))
+    })
+    .flatten();
     let need_valid = |st: Option<Status>, need: Status| st.is_some_and(|s| s >= need);
     match name {
         "client_info" => return Ok(Ok(Value::Str(ZStr::from(php_mysqlnd::CLIENT_INFO)))),
@@ -113,7 +128,9 @@ fn link_read(vm: &mut Vm, o: &Obj, name: &str, quiet: bool) -> VmResult<Read> {
         }
         "connect_errno" => return Ok(Ok(Value::Int(globals::with(|g| g.error_no)))),
         "connect_error" => {
-            return Ok(Ok(globals::with(|g| g.error_msg.clone()).map_or(Value::Null, |m| bstr(&m))));
+            return Ok(Ok(
+                globals::with(|g| g.error_msg.clone()).map_or(Value::Null, |m| bstr(&m))
+            ));
         }
         "affected_rows" | "error_list" => {
             let st = state.as_ref().map(|s| s.0);
@@ -163,7 +180,8 @@ fn link_read(vm: &mut Vm, o: &Obj, name: &str, quiet: bool) -> VmResult<Read> {
 }
 
 fn result_read(o: &Obj, name: &str) -> Read {
-    let state = internal::<ResultObj, _>(o, |r| r.0.as_ref().map(|r| (r.status, r.rs.clone()))).flatten();
+    let state =
+        internal::<ResultObj, _>(o, |r| r.0.as_ref().map(|r| (r.status, r.rs.clone()))).flatten();
     let Some((status, rs)) = state else {
         return Err(if matches!(name, "lengths" | "type") {
             Fail::NotAllowed
@@ -193,10 +211,17 @@ fn result_read(o: &Obj, name: &str) -> Read {
 }
 
 fn stmt_read(o: &Obj, name: &str) -> Read {
-    let state = internal::<StmtObj, _>(o, |r| r.0.as_ref().map(|r| (r.status, r.st.borrow().stmt.clone()))).flatten();
+    let state = internal::<StmtObj, _>(o, |r| {
+        r.0.as_ref().map(|r| (r.status, r.st.borrow().stmt.clone()))
+    })
+    .flatten();
     let check_only = matches!(name, "affected_rows" | "error_list" | "id");
     let Some((status, st)) = state else {
-        return Err(if check_only { Fail::NotAllowed } else { Fail::Closed });
+        return Err(if check_only {
+            Fail::NotAllowed
+        } else {
+            Fail::Closed
+        });
     };
     let need = if matches!(name, "errno" | "error" | "error_list" | "sqlstate") {
         Status::Initialized
@@ -222,7 +247,8 @@ fn stmt_read(o: &Obj, name: &str) -> Read {
 }
 
 fn warning_read(o: &Obj, name: &str) -> Read {
-    let w = internal::<WarningObj, _>(o, |w| w.0.as_ref().and_then(|(l, i)| l.get(*i).cloned())).flatten();
+    let w = internal::<WarningObj, _>(o, |w| w.0.as_ref().and_then(|(l, i)| l.get(*i).cloned()))
+        .flatten();
     let Some(w) = w else {
         return Err(Fail::Closed);
     };
@@ -236,7 +262,8 @@ fn warning_read(o: &Obj, name: &str) -> Read {
 fn driver_read(vm: &mut Vm, name: &str, quiet: bool) -> VmResult<Read> {
     Ok(match name {
         "client_info" => Ok(Value::Str(ZStr::from(php_mysqlnd::CLIENT_INFO))),
-        "client_version" => {
+        "client_version" =>
+        {
             #[allow(clippy::cast_possible_wrap)]
             Ok(Value::Int(php_mysqlnd::CLIENT_VERSION as i64))
         }
@@ -244,7 +271,10 @@ fn driver_read(vm: &mut Vm, name: &str, quiet: bool) -> VmResult<Read> {
             if quiet {
                 Err(Fail::Quiet)
             } else {
-                vm.raise(crate::report::E_DEPRECATED, "The driver_version property is deprecated")?;
+                vm.raise(
+                    crate::report::E_DEPRECATED,
+                    "The driver_version property is deprecated",
+                )?;
                 Ok(Value::Int(MYSQLI_VERSION_ID))
             }
         }
@@ -291,7 +321,12 @@ pub fn read_property(vm: &mut Vm, o: &Obj, name: &ZStr) -> VmResult<Option<Value
 
 /// `has_property` handler: the result of `isset()`, or of `empty()` when
 /// `check_empty` is set (the VM's convention).
-pub fn has_property(vm: &mut Vm, o: &Obj, name: &ZStr, check_empty: bool) -> VmResult<Option<bool>> {
+pub fn has_property(
+    vm: &mut Vm,
+    o: &Obj,
+    name: &ZStr,
+    check_empty: bool,
+) -> VmResult<Option<bool>> {
     match read(vm, o, name, true)? {
         None => Ok(None),
         Some(Err(_)) => Ok(Some(check_empty)),
@@ -308,7 +343,9 @@ pub fn has_property(vm: &mut Vm, o: &Obj, name: &ZStr, check_empty: bool) -> VmR
 /// `write_property` handler: the virtual properties are read-only except
 /// `mysqli_driver::$report_mode`.
 pub fn write_property(vm: &mut Vm, o: &Obj, name: &ZStr, v: &Value) -> VmResult<bool> {
-    let Some(k) = kind_of(o) else { return Ok(false) };
+    let Some(k) = kind_of(o) else {
+        return Ok(false);
+    };
     let n = name.to_string_lossy();
     if !table(k).contains(&n.as_str()) {
         return Ok(false);

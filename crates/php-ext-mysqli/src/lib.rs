@@ -42,23 +42,75 @@ pub struct Mysqli;
 
 /// Deprecated constants: `(name, since, message)`.
 const DEPRECATED_CONSTANTS: &[(&str, &str, &str)] = &[
-    ("MYSQLI_STORE_RESULT_COPY_DATA", "8.4", "as the mysqli_store_result() parameter is unused since 8.1"),
+    (
+        "MYSQLI_STORE_RESULT_COPY_DATA",
+        "8.4",
+        "as the mysqli_store_result() parameter is unused since 8.1",
+    ),
     ("MYSQLI_NO_DATA", "8.1", "as it was unused"),
     ("MYSQLI_DATA_TRUNCATED", "8.1", "as it was unused"),
-    ("MYSQLI_SERVER_QUERY_NO_GOOD_INDEX_USED", "8.1", "as it was unused"),
-    ("MYSQLI_SERVER_QUERY_NO_INDEX_USED", "8.1", "as it was unused"),
+    (
+        "MYSQLI_SERVER_QUERY_NO_GOOD_INDEX_USED",
+        "8.1",
+        "as it was unused",
+    ),
+    (
+        "MYSQLI_SERVER_QUERY_NO_INDEX_USED",
+        "8.1",
+        "as it was unused",
+    ),
     ("MYSQLI_SERVER_QUERY_WAS_SLOW", "8.1", "as it was unused"),
     ("MYSQLI_SERVER_PS_OUT_PARAMS", "8.1", "as it was unused"),
-    ("MYSQLI_REFRESH_GRANT", "8.4", "as mysqli_refresh() is deprecated"),
-    ("MYSQLI_REFRESH_LOG", "8.4", "as mysqli_refresh() is deprecated"),
-    ("MYSQLI_REFRESH_TABLES", "8.4", "as mysqli_refresh() is deprecated"),
-    ("MYSQLI_REFRESH_HOSTS", "8.4", "as mysqli_refresh() is deprecated"),
-    ("MYSQLI_REFRESH_STATUS", "8.4", "as mysqli_refresh() is deprecated"),
-    ("MYSQLI_REFRESH_THREADS", "8.4", "as mysqli_refresh() is deprecated"),
-    ("MYSQLI_REFRESH_REPLICA", "8.4", "as mysqli_refresh() is deprecated"),
-    ("MYSQLI_REFRESH_SLAVE", "8.4", "as mysqli_refresh() is deprecated"),
-    ("MYSQLI_REFRESH_MASTER", "8.4", "as mysqli_refresh() is deprecated"),
-    ("MYSQLI_REFRESH_BACKUP_LOG", "8.4", "as mysqli_refresh() is deprecated"),
+    (
+        "MYSQLI_REFRESH_GRANT",
+        "8.4",
+        "as mysqli_refresh() is deprecated",
+    ),
+    (
+        "MYSQLI_REFRESH_LOG",
+        "8.4",
+        "as mysqli_refresh() is deprecated",
+    ),
+    (
+        "MYSQLI_REFRESH_TABLES",
+        "8.4",
+        "as mysqli_refresh() is deprecated",
+    ),
+    (
+        "MYSQLI_REFRESH_HOSTS",
+        "8.4",
+        "as mysqli_refresh() is deprecated",
+    ),
+    (
+        "MYSQLI_REFRESH_STATUS",
+        "8.4",
+        "as mysqli_refresh() is deprecated",
+    ),
+    (
+        "MYSQLI_REFRESH_THREADS",
+        "8.4",
+        "as mysqli_refresh() is deprecated",
+    ),
+    (
+        "MYSQLI_REFRESH_REPLICA",
+        "8.4",
+        "as mysqli_refresh() is deprecated",
+    ),
+    (
+        "MYSQLI_REFRESH_SLAVE",
+        "8.4",
+        "as mysqli_refresh() is deprecated",
+    ),
+    (
+        "MYSQLI_REFRESH_MASTER",
+        "8.4",
+        "as mysqli_refresh() is deprecated",
+    ),
+    (
+        "MYSQLI_REFRESH_BACKUP_LOG",
+        "8.4",
+        "as mysqli_refresh() is deprecated",
+    ),
 ];
 
 /// A procedural function and its optional method alias.
@@ -305,12 +357,17 @@ fn register_classes(m: &mut ModuleBuilder<'_>, entries: &[Entry]) {
     ClassBuilder::new("mysqli_sql_exception")
         .extends(vm, "RuntimeException")
         .flags(class_flags::FINAL)
-        .prop("sqlstate", acc::PROTECTED, Some("string"), Some(Value::Str(ZStr::from("00000"))))
+        .prop(
+            "sqlstate",
+            acc::PROTECTED,
+            Some("string"),
+            Some(Value::Str(ZStr::from("00000"))),
+        )
         .method("getSqlState(): string", acc::PUBLIC, get_sql_state)
         .register(vm);
 
     ClassBuilder::new("mysqli_driver")
-        .flags(class_flags::FINAL | class_flags::NO_CLONE)
+        .flags(class_flags::FINAL | class_flags::NO_CLONE | class_flags::ALLOW_DYNAMIC)
         .prop("client_info", acc::PUBLIC, Some("string"), None)
         .prop("client_version", acc::PUBLIC, Some("int"), None)
         .prop("driver_version", acc::PUBLIC, Some("int"), None)
@@ -319,7 +376,7 @@ fn register_classes(m: &mut ModuleBuilder<'_>, entries: &[Entry]) {
         .register(vm);
 
     let mut link_cls = ClassBuilder::new("mysqli")
-        .flags(class_flags::NO_CLONE)
+        .flags(class_flags::NO_CLONE | class_flags::ALLOW_DYNAMIC)
         .hooks(hooks(link_create));
     for (n, t) in [
         ("affected_rows", "int|string"),
@@ -358,7 +415,7 @@ fn register_classes(m: &mut ModuleBuilder<'_>, entries: &[Entry]) {
 
     let mut result_cls = ClassBuilder::new("mysqli_result")
         .implements(vm, &["IteratorAggregate"])
-        .flags(class_flags::NO_CLONE)
+        .flags(class_flags::NO_CLONE | class_flags::ALLOW_DYNAMIC)
         .hooks(ClassHooks {
             get_iterator: Some(result::get_iterator),
             ..hooks(result_create)
@@ -380,10 +437,14 @@ fn register_classes(m: &mut ModuleBuilder<'_>, entries: &[Entry]) {
         )
         .method("close(): void", acc::PUBLIC, result::free_result)
         .method("free(): void", acc::PUBLIC, result::free_result)
-        .method("getIterator(): Iterator", acc::PUBLIC, result::get_iterator_method);
+        .method(
+            "getIterator(): Iterator",
+            acc::PUBLIC,
+            result::get_iterator_method,
+        );
 
     let mut stmt_cls = ClassBuilder::new("mysqli_stmt")
-        .flags(class_flags::NO_CLONE)
+        .flags(class_flags::NO_CLONE | class_flags::ALLOW_DYNAMIC)
         .hooks(hooks(stmt_create));
     for (n, t) in [
         ("affected_rows", "int|string"),
@@ -406,7 +467,9 @@ fn register_classes(m: &mut ModuleBuilder<'_>, entries: &[Entry]) {
     );
 
     for en in entries {
-        let Some((cls, sig)) = en.method else { continue };
+        let Some((cls, sig)) = en.method else {
+            continue;
+        };
         if sig.is_empty() {
             continue;
         }
@@ -427,11 +490,14 @@ fn register_classes(m: &mut ModuleBuilder<'_>, entries: &[Entry]) {
     }
     vm.builtin_deprecations.insert(
         ZStr::from("init"),
-        deprecation_suffix("8.1", "replace calls to parent::init() with parent::__construct()"),
+        deprecation_suffix(
+            "8.1",
+            "replace calls to parent::init() with parent::__construct()",
+        ),
     );
     link_cls.register(vm);
     ClassBuilder::new("mysqli_warning")
-        .flags(class_flags::FINAL | class_flags::NO_CLONE)
+        .flags(class_flags::FINAL | class_flags::NO_CLONE | class_flags::ALLOW_DYNAMIC)
         .prop("message", acc::PUBLIC, Some("string"), None)
         .prop("sqlstate", acc::PUBLIC, Some("string"), None)
         .prop("errno", acc::PUBLIC, Some("int"), None)
@@ -448,16 +514,51 @@ fn register_ini(m: &mut ModuleBuilder<'_>) {
     let all = Access::ALL;
     for (name, default, access, handler) in [
         ("mysqli.max_links", Some("-1"), sys, ModifyHandler::Long),
-        ("mysqli.max_persistent", Some("-1"), sys, ModifyHandler::Long),
-        ("mysqli.allow_persistent", Some("1"), sys, ModifyHandler::Bool),
-        ("mysqli.rollback_on_cached_plink", Some("0"), sys, ModifyHandler::Bool),
+        (
+            "mysqli.max_persistent",
+            Some("-1"),
+            sys,
+            ModifyHandler::Long,
+        ),
+        (
+            "mysqli.allow_persistent",
+            Some("1"),
+            sys,
+            ModifyHandler::Bool,
+        ),
+        (
+            "mysqli.rollback_on_cached_plink",
+            Some("0"),
+            sys,
+            ModifyHandler::Bool,
+        ),
         ("mysqli.default_host", None, all, ModifyHandler::String),
         ("mysqli.default_user", None, all, ModifyHandler::String),
         ("mysqli.default_pw", None, all, ModifyHandler::String),
-        ("mysqli.default_port", Some("3306"), all, ModifyHandler::Long),
-        ("mysqli.default_socket", None, all, ModifyHandler::StringUnempty),
-        ("mysqli.allow_local_infile", Some("0"), sys, ModifyHandler::Bool),
-        ("mysqli.local_infile_directory", None, sys, ModifyHandler::String),
+        (
+            "mysqli.default_port",
+            Some("3306"),
+            all,
+            ModifyHandler::Long,
+        ),
+        (
+            "mysqli.default_socket",
+            None,
+            all,
+            ModifyHandler::StringUnempty,
+        ),
+        (
+            "mysqli.allow_local_infile",
+            Some("0"),
+            sys,
+            ModifyHandler::Bool,
+        ),
+        (
+            "mysqli.local_infile_directory",
+            None,
+            sys,
+            ModifyHandler::String,
+        ),
     ] {
         m.ini(IniDirective::new(name, default, access, handler, "mysqli"));
     }
@@ -467,7 +568,13 @@ fn register_ini(m: &mut ModuleBuilder<'_>) {
             php_mysqlnd::ini::Modifiable::System => Access::SYSTEM,
             php_mysqlnd::ini::Modifiable::PerDir => Access::PERDIR,
         };
-        m.ini(IniDirective::new(e.name, e.default, access, ModifyHandler::None, "mysqlnd"));
+        m.ini(IniDirective::new(
+            e.name,
+            e.default,
+            access,
+            ModifyHandler::None,
+            "mysqlnd",
+        ));
     }
 }
 
@@ -489,7 +596,13 @@ fn row(k: &str, v: impl Into<String>) -> InfoItem {
 
 /// `PHP_MINFO_FUNCTION(mysqli)`
 fn mysqli_info(_vm: &mut Vm) -> Vec<InfoItem> {
-    let (ap, ip, links) = globals::with(|g| (g.num_active_persistent, g.num_inactive_persistent, g.num_links));
+    let (ap, ip, links) = globals::with(|g| {
+        (
+            g.num_active_persistent,
+            g.num_inactive_persistent,
+            g.num_links,
+        )
+    });
     vec![
         InfoItem::TableStart,
         row("MysqlI Support", "enabled"),
@@ -542,7 +655,12 @@ impl Extension for Mysqli {
                 m.constant(name, Value::Int(v));
             }
         }
-        m.constant_deprecated("MYSQLI_IS_MARIADB", Value::Bool(false), "8.2", "as it is always false");
+        m.constant_deprecated(
+            "MYSQLI_IS_MARIADB",
+            Value::Bool(false),
+            "8.2",
+            "as it is always false",
+        );
         register_ini(m);
         let entries = entries();
         register_classes(m, &entries);
@@ -555,7 +673,11 @@ impl Extension for Mysqli {
         m.ini_on_modify("mysqli.default_port", on_update_default_port);
         m.info(mysqli_info);
         let vm = m.vm();
-        if !vm.loaded_extensions.iter().any(|e| e.eq_ignore_ascii_case("mysqlnd")) {
+        if !vm
+            .loaded_extensions
+            .iter()
+            .any(|e| e.eq_ignore_ascii_case("mysqlnd"))
+        {
             vm.loaded_extensions.push("mysqlnd".to_string());
         }
         vm.module_info.push(("mysqlnd".to_string(), mysqlnd_info));
@@ -585,8 +707,19 @@ mod tests {
     fn default_port_validation() {
         let opts = php_vm::VmOptions::default();
         let mut vm = Vm::new(&opts, Box::new(std::io::sink()));
-        for (v, ok) in [("3306", true), ("0", true), ("65535", true), ("65536", false), ("-1", false), ("x", true)] {
-            assert_eq!(on_update_default_port(&mut vm, v.as_bytes()).ok(), Some(ok), "{v}");
+        for (v, ok) in [
+            ("3306", true),
+            ("0", true),
+            ("65535", true),
+            ("65536", false),
+            ("-1", false),
+            ("x", true),
+        ] {
+            assert_eq!(
+                on_update_default_port(&mut vm, v.as_bytes()).ok(),
+                Some(ok),
+                "{v}"
+            );
         }
     }
 

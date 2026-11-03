@@ -173,7 +173,11 @@ fn not_init(vm: &mut Vm, o: &Obj) -> php_vm::Throw {
 }
 
 /// `MYSQLI_FETCH_RESOURCE_CONN`: the connection data of a `mysqli` object.
-pub fn fetch_link(vm: &mut Vm, o: &Obj, check: Status) -> VmResult<(Rc<RefCell<MyMysql>>, Connection)> {
+pub fn fetch_link(
+    vm: &mut Vm,
+    o: &Obj,
+    check: Status,
+) -> VmResult<(Rc<RefCell<MyMysql>>, Connection)> {
     let r = internal::<LinkObj, _>(o, |l| l.0.as_ref().map(|r| (r.status, r.my.clone()))).flatten();
     let Some((status, my)) = r else {
         return Err(closed(vm, o));
@@ -187,7 +191,6 @@ pub fn fetch_link(vm: &mut Vm, o: &Obj, check: Status) -> VmResult<(Rc<RefCell<M
         None => Err(not_init(vm, o)),
     }
 }
-
 
 /// Sets the status of a `mysqli` object that has a resource.
 pub fn set_link_status(o: &Obj, s: Status) {
@@ -221,7 +224,8 @@ pub fn set_stmt_status(o: &Obj, s: Status) {
 
 /// `MYSQLI_FETCH_RESOURCE(result, MYSQL_RES *, ...)`
 pub fn fetch_result(vm: &mut Vm, o: &Obj, check: Status) -> VmResult<Rc<RefCell<ResultSet>>> {
-    let r = internal::<ResultObj, _>(o, |l| l.0.as_ref().map(|r| (r.status, r.rs.clone()))).flatten();
+    let r =
+        internal::<ResultObj, _>(o, |l| l.0.as_ref().map(|r| (r.status, r.rs.clone()))).flatten();
     let Some((status, rs)) = r else {
         return Err(closed(vm, o));
     };

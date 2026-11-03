@@ -39,9 +39,9 @@ fn bury(st: Statement) {
 pub fn flush_buried(conn: &Connection) {
     let mine: Vec<Statement> = GRAVEYARD.with(|g| {
         let mut g = g.borrow_mut();
-        let (mine, rest): (Vec<_>, Vec<_>) = std::mem::take(&mut *g).into_iter().partition(|s| {
-            s.connection().is_some_and(|c| Connection::ptr_eq(&c, conn))
-        });
+        let (mine, rest): (Vec<_>, Vec<_>) = std::mem::take(&mut *g)
+            .into_iter()
+            .partition(|s| s.connection().is_some_and(|c| Connection::ptr_eq(&c, conn)));
         *g = rest;
         mine
     });
@@ -56,7 +56,12 @@ pub fn clear_graveyard() {
     drop(v);
 }
 
-fn wrap_stmt(vm: &mut Vm, stmt: Statement, query: Option<Vec<u8>>, status: Status) -> VmResult<Value> {
+fn wrap_stmt(
+    vm: &mut Vm,
+    stmt: Statement,
+    query: Option<Vec<u8>>,
+    status: Status,
+) -> VmResult<Value> {
     let o = new_object(vm, "mysqli_stmt")?;
     set_internal(
         &o,
@@ -225,7 +230,13 @@ pub fn bind_result(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 }
 
 /// Binds the `execute(array $params)` values (all as strings).
-fn bind_list(vm: &mut Vm, a: &Args, st: &Statement, arr: &ZArray, argpos: usize) -> VmResult<Option<bool>> {
+fn bind_list(
+    vm: &mut Vm,
+    a: &Args,
+    st: &Statement,
+    arr: &ZArray,
+    argpos: usize,
+) -> VmResult<Option<bool>> {
     if !arr.is_list() {
         return Err(a.value_error(vm, argpos, "must be a list array"));
     }
@@ -466,7 +477,11 @@ pub fn attr_set(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     match u32::try_from(attr) {
         Ok(STMT_ATTR_UPDATE_MAX_LENGTH) => {
             if mode != 0 && mode != 1 {
-                return Err(a.value_error(vm, pos(a, 3), "must be 0 or 1 for attribute MYSQLI_STMT_ATTR_UPDATE_MAX_LENGTH"));
+                return Err(a.value_error(
+                    vm,
+                    pos(a, 3),
+                    "must be 0 or 1 for attribute MYSQLI_STMT_ATTR_UPDATE_MAX_LENGTH",
+                ));
             }
         }
         Ok(STMT_ATTR_CURSOR_TYPE) => {
@@ -530,8 +545,15 @@ pub fn data_seek(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let st = cell.borrow().stmt.clone();
     #[allow(clippy::cast_sign_loss)]
     if !st.data_seek(off as u64) {
-        let f = if a.this.is_some() { "mysqli_stmt::data_seek" } else { "mysqli_stmt_data_seek" };
-        return Err(vm.throw("Error", &format!("{f}(): No result set associated with the statement")));
+        let f = if a.this.is_some() {
+            "mysqli_stmt::data_seek"
+        } else {
+            "mysqli_stmt_data_seek"
+        };
+        return Err(vm.throw(
+            "Error",
+            &format!("{f}(): No result set associated with the statement"),
+        ));
     }
     Ok(Value::Null)
 }

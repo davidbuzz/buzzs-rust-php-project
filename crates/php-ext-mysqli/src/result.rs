@@ -31,7 +31,8 @@ fn res(vm: &mut Vm, a: &Args) -> VmResult<(Obj, Rc<RefCell<ResultSet>>, usize)> 
 }
 
 fn mysqlnd_flags(mode: i64) -> u32 {
-    (if mode & NUM != 0 { FETCH_NUM } else { 0 }) | (if mode & ASSOC != 0 { FETCH_ASSOC } else { 0 })
+    (if mode & NUM != 0 { FETCH_NUM } else { 0 })
+        | (if mode & ASSOC != 0 { FETCH_ASSOC } else { 0 })
 }
 
 /// `php_mysqli_fetch_into_hash_aux`: the next row as an array, `null` at
@@ -68,7 +69,11 @@ pub fn construct(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         0 => c.store_result(),
         1 => c.use_result(),
         _ => {
-            return Err(a.value_error(vm, 2, "must be either MYSQLI_STORE_RESULT or MYSQLI_USE_RESULT"));
+            return Err(a.value_error(
+                vm,
+                2,
+                "must be either MYSQLI_STORE_RESULT or MYSQLI_USE_RESULT",
+            ));
         }
     };
     let Ok(Some(rs)) = r else {
@@ -94,7 +99,11 @@ pub fn fetch_array(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let (o, b) = recv(vm, a)?;
     let mode = a.int(b);
     if !(ASSOC..=BOTH).contains(&mode) {
-        return Err(a.value_error(vm, pos(a, 2), "must be one of MYSQLI_NUM, MYSQLI_ASSOC, or MYSQLI_BOTH"));
+        return Err(a.value_error(
+            vm,
+            pos(a, 2),
+            "must be one of MYSQLI_NUM, MYSQLI_ASSOC, or MYSQLI_BOTH",
+        ));
     }
     let rs = fetch_result(vm, &o, Status::Valid)?;
     fetch_into(vm, &rs, mode)
@@ -120,7 +129,11 @@ pub fn fetch_column(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         return Err(a.value_error(vm, pos(a, 2), "must be greater than or equal to 0"));
     }
     if col >= i64::from(rs.borrow().num_fields()) {
-        return Err(a.value_error(vm, pos(a, 2), "must be less than the number of fields for this result set"));
+        return Err(a.value_error(
+            vm,
+            pos(a, 2),
+            "must be less than the number of fields for this result set",
+        ));
     }
     let row = fetch_into(vm, &rs, NUM)?;
     match row {
@@ -134,7 +147,11 @@ pub fn fetch_all(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let (_, rs, b) = res(vm, a)?;
     let mode = a.int(b);
     if mode == 0 || (mode & !BOTH) != 0 {
-        return Err(a.value_error(vm, pos(a, 2), "must be one of MYSQLI_NUM, MYSQLI_ASSOC, or MYSQLI_BOTH"));
+        return Err(a.value_error(
+            vm,
+            pos(a, 2),
+            "must be one of MYSQLI_NUM, MYSQLI_ASSOC, or MYSQLI_BOTH",
+        ));
     }
     let mut rows = Vec::new();
     while let v @ Value::Array(_) = fetch_into(vm, &rs, mode)? {
@@ -154,12 +171,18 @@ pub fn fetch_object(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
                 vm.value_to_string(&v)?
             }
             other => {
-                let msg = format!("must be a valid class name, {} given", crate::util::type_name(other));
+                let msg = format!(
+                    "must be a valid class name, {} given",
+                    crate::util::type_name(other)
+                );
                 return Err(a.type_error(vm, pos(a, 2), &msg));
             }
         };
         let Some(c) = vm.lookup_class(&name)? else {
-            let msg = format!("must be a valid class name, \"{}\" given", name.to_string_lossy());
+            let msg = format!(
+                "must be a valid class name, \"{}\" given",
+                name.to_string_lossy()
+            );
             return Err(a.type_error(vm, pos(a, 2), &msg));
         };
         c
@@ -173,15 +196,24 @@ pub fn fetch_object(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         None => ZArray::new(),
         Some(Value::Array(arr)) => arr,
         Some(other) => {
-            let msg = format!("must be of type array, {} given", crate::util::type_name(&other));
+            let msg = format!(
+                "must be of type array, {} given",
+                crate::util::type_name(&other)
+            );
             return Err(a.type_error(vm, pos(a, 3), &msg));
         }
     };
-    if class.flags & (cflags::INTERFACE | cflags::ABSTRACT) != 0 || class.is_trait() || class.is_enum() {
+    if class.flags & (cflags::INTERFACE | cflags::ABSTRACT) != 0
+        || class.is_trait()
+        || class.is_enum()
+    {
         let msg = if class.is_enum() {
             format!("Cannot instantiate enum {}", class.name.to_string_lossy())
         } else {
-            format!("Class {} cannot be instantiated", class.name.to_string_lossy())
+            format!(
+                "Class {} cannot be instantiated",
+                class.name.to_string_lossy()
+            )
         };
         return Err(vm.throw("Error", &msg));
     }
@@ -198,7 +230,10 @@ pub fn fetch_object(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         return Ok(row);
     };
     let obj = vm.new_object(&class)?;
-    let direct = class.props.iter().all(|p| p.flags & php_vm::func::flags::STATIC != 0)
+    let direct = class
+        .props
+        .iter()
+        .all(|p| p.flags & php_vm::func::flags::STATIC != 0)
         && class.magic.set.is_none();
     for (k, v) in row.iter() {
         let name = match k {
@@ -269,7 +304,11 @@ pub fn fetch_field_direct(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     }
     let rs = fetch_result(vm, &o, Status::Valid)?;
     if n >= i64::from(rs.borrow().num_fields()) {
-        return Err(a.value_error(vm, pos(a, 2), "must be less than the number of fields for this result set"));
+        return Err(a.value_error(
+            vm,
+            pos(a, 2),
+            "must be less than the number of fields for this result set",
+        ));
     }
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let f = rs.borrow().fetch_field_direct(n as u32).cloned();
@@ -293,7 +332,8 @@ pub fn fetch_lengths(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 #[must_use]
 pub fn lengths_array(l: &[usize]) -> Value {
     Value::Array(ZArray::from_values(
-        l.iter().map(|&n| Value::Int(i64::try_from(n).unwrap_or(i64::MAX))),
+        l.iter()
+            .map(|&n| Value::Int(i64::try_from(n).unwrap_or(i64::MAX))),
     ))
 }
 
@@ -306,7 +346,11 @@ pub fn field_seek(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     }
     let rs = fetch_result(vm, &o, Status::Valid)?;
     if n >= i64::from(rs.borrow().num_fields()) {
-        return Err(a.value_error(vm, pos(a, 2), "must be less than the number of fields for this result set"));
+        return Err(a.value_error(
+            vm,
+            pos(a, 2),
+            "must be less than the number of fields for this result set",
+        ));
     }
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     rs.borrow_mut().field_seek(n as u32);
@@ -329,8 +373,15 @@ pub fn data_seek(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     }
     let rs = fetch_result(vm, &o, Status::Valid)?;
     if !rs.borrow().is_buffered() {
-        let f = if a.this.is_some() { "mysqli_result::data_seek" } else { "mysqli_data_seek" };
-        return Err(vm.throw("Error", &format!("{f}() cannot be used in MYSQLI_USE_RESULT mode")));
+        let f = if a.this.is_some() {
+            "mysqli_result::data_seek"
+        } else {
+            "mysqli_data_seek"
+        };
+        return Err(vm.throw(
+            "Error",
+            &format!("{f}() cannot be used in MYSQLI_USE_RESULT mode"),
+        ));
     }
     #[allow(clippy::cast_sign_loss)]
     let off = off as u64;
@@ -365,7 +416,10 @@ pub fn num_rows(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         (r.is_buffered(), r.eof(), r.num_rows())
     };
     if !buffered && !eof {
-        return Err(vm.throw("Error", "mysqli_num_rows() cannot be used in MYSQLI_USE_RESULT mode"));
+        return Err(vm.throw(
+            "Error",
+            "mysqli_num_rows() cannot be used in MYSQLI_USE_RESULT mode",
+        ));
     }
     Ok(long_or_string(n))
 }
@@ -381,7 +435,10 @@ pub fn get_iterator_method(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 /// `get_iterator` handler of `mysqli_result`.
 pub fn get_iterator(vm: &mut Vm, o: &Obj, by_ref: bool) -> VmResult<Box<dyn NativeIterator>> {
     if by_ref {
-        return Err(vm.throw("Error", "An iterator cannot be used with foreach by reference"));
+        return Err(vm.throw(
+            "Error",
+            "An iterator cannot be used with foreach by reference",
+        ));
     }
     Ok(Box::new(ResultIter::new(o.clone())))
 }

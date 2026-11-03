@@ -22,7 +22,9 @@ use crate::objects::{
 use crate::report::{
     flush_diag, report_conn_error, report_index, throw_sql_exception, E_DEPRECATED,
 };
-use crate::util::{affected, bstr, error_list, is_method, long_or_string, opt_int, opt_str, pos, recv};
+use crate::util::{
+    affected, bstr, error_list, is_method, long_or_string, opt_int, opt_str, pos, recv,
+};
 
 /// `MYSQLI_STORE_RESULT`
 pub const STORE_RESULT: i64 = 0;
@@ -195,7 +197,9 @@ fn common_connect(vm: &mut Vm, a: &Args, is_real_connect: bool, in_ctor: bool) -
         host = Some(host_s.clone());
         if globals::with(|g| g.allow_persistent) {
             persistent = true;
-            let s = |v: &Option<Vec<u8>>| String::from_utf8_lossy(v.as_deref().unwrap_or_default()).into_owned();
+            let s = |v: &Option<Vec<u8>>| {
+                String::from_utf8_lossy(v.as_deref().unwrap_or_default()).into_owned()
+            };
             let key = format!(
                 "mysqli_{}_{}{}{}{}{}",
                 String::from_utf8_lossy(&host_s),
@@ -245,7 +249,10 @@ fn common_connect(vm: &mut Vm, a: &Args, is_real_connect: bool, in_ctor: bool) -
         return connect_err(&my, self_alloced);
     }
     let (max_p, cur_p) = globals::with(|g| {
-        (g.max_persistent, g.num_active_persistent + g.num_inactive_persistent)
+        (
+            g.max_persistent,
+            g.num_active_persistent + g.num_inactive_persistent,
+        )
     });
     if persistent && max_p != -1 && cur_p >= max_p {
         vm.php_warning(&format!("Too many open persistent links ({cur_p})"))?;
@@ -262,8 +269,12 @@ fn common_connect(vm: &mut Vm, a: &Args, is_real_connect: bool, in_ctor: bool) -
     let Some(conn) = conn else {
         return connect_err(&my, self_alloced);
     };
-    let host_str = host.as_deref().map(|h| String::from_utf8_lossy(h).into_owned());
-    let socket_str = socket.as_deref().map(|h| String::from_utf8_lossy(h).into_owned());
+    let host_str = host
+        .as_deref()
+        .map(|h| String::from_utf8_lossy(h).into_owned());
+    let socket_str = socket
+        .as_deref()
+        .map(|h| String::from_utf8_lossy(h).into_owned());
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let r = conn.connect(
         host_str.as_deref(),
@@ -485,7 +496,12 @@ pub fn change_user(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let user = a.str(b);
     let pw = a.str(b + 1);
     let db = opt_str(a, b + 2);
-    let r = c.change_user(user.as_bytes(), pw.as_bytes(), db.as_ref().map(ZStr::as_bytes), false);
+    let r = c.change_user(
+        user.as_bytes(),
+        pw.as_bytes(),
+        db.as_ref().map(ZStr::as_bytes),
+        false,
+    );
     report_conn_error(vm, &c)?;
     Ok(Value::Bool(r.is_ok()))
 }
@@ -561,7 +577,13 @@ pub fn get_client_stats(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
 
 /// `mysqli_get_links_stats()`
 pub fn get_links_stats(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
-    let (t, ap, cp) = globals::with(|g| (g.num_links, g.num_active_persistent, g.num_inactive_persistent));
+    let (t, ap, cp) = globals::with(|g| {
+        (
+            g.num_links,
+            g.num_active_persistent,
+            g.num_inactive_persistent,
+        )
+    });
     Ok(Value::Array(ZArray::from_pairs([
         (ArrayKey::from("total"), Value::Int(t)),
         (ArrayKey::from("active_plinks"), Value::Int(ap)),
@@ -593,7 +615,10 @@ pub fn get_charset(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 /// `mysqli_get_client_info()`
 pub fn get_client_info(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     if !is_method(a) && a.has(0) {
-        vm.php_error_bytes(E_DEPRECATED, b"Passing connection object as an argument is deprecated")?;
+        vm.php_error_bytes(
+            E_DEPRECATED,
+            b"Passing connection object as an argument is deprecated",
+        )?;
     }
     Ok(Value::Str(ZStr::from(php_mysqlnd::CLIENT_INFO)))
 }
@@ -926,9 +951,19 @@ pub fn ssl_set(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let (o, b) = recv(vm, a)?;
     let (_, c) = fetch_link(vm, &o, Status::Initialized)?;
     let p: Vec<Option<String>> = (0..5)
-        .map(|i| opt_str(a, b + i).filter(|s| !s.is_empty()).map(|s| s.to_string_lossy()))
+        .map(|i| {
+            opt_str(a, b + i)
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_string_lossy())
+        })
         .collect();
-    c.ssl_set(p[0].as_deref(), p[1].as_deref(), p[2].as_deref(), p[3].as_deref(), p[4].as_deref());
+    c.ssl_set(
+        p[0].as_deref(),
+        p[1].as_deref(),
+        p[2].as_deref(),
+        p[3].as_deref(),
+        p[4].as_deref(),
+    );
     Ok(Value::Bool(true))
 }
 
@@ -974,7 +1009,6 @@ pub fn report(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     globals::with(|g| g.report_mode = f);
     Ok(Value::Bool(true))
 }
-
 
 /// Collects the connections of a `mysqli_poll()` array (`mysqlnd_zval_array_to_mysqlnd_array`).
 fn poll_array(vm: &mut Vm, arr: &ZArray) -> VmResult<Vec<(Value, Connection)>> {
@@ -1039,8 +1073,18 @@ pub fn poll(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let pick = |list: &[(Value, Connection)], idx: &[usize]| {
         Value::Array(ZArray::from_values(idx.iter().map(|&i| list[i].0.clone())))
     };
-    let dont = res.as_ref().map(|p| p.dont_poll.clone()).unwrap_or_default();
-    a.set_ref(2, if r_arr.is_some() { pick(&r, &dont) } else { Value::Array(ZArray::new()) });
+    let dont = res
+        .as_ref()
+        .map(|p| p.dont_poll.clone())
+        .unwrap_or_default();
+    a.set_ref(
+        2,
+        if r_arr.is_some() {
+            pick(&r, &dont)
+        } else {
+            Value::Array(ZArray::new())
+        },
+    );
     if let Some(p) = res {
         if r_arr.is_some() {
             a.set_ref(0, pick(&r, &p.read));

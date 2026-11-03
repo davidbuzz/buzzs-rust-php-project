@@ -22,7 +22,11 @@ pub const E_DEPRECATED: i64 = 8192;
 pub fn flush_diag_main(vm: &mut Vm) -> VmResult<()> {
     for d in diag::take() {
         let level = if d.fatal { E_ERROR } else { E_WARNING };
-        let mut m = if d.docref { b"main(): ".to_vec() } else { Vec::new() };
+        let mut m = if d.docref {
+            b"main(): ".to_vec()
+        } else {
+            Vec::new()
+        };
         m.extend_from_slice(d.message.as_bytes());
         vm.raise_bytes(level, &m)?;
     }
@@ -54,7 +58,11 @@ pub fn throw_sql_exception(vm: &mut Vm, sqlstate: &str, errno: i64, msg: &[u8]) 
     let t = vm.throw("mysqli_sql_exception", "");
     if let Throw::Exception(o) = &t {
         vm.set_property_raw(o, "message", Value::Str(ZStr::from(msg)));
-        let st = if sqlstate.is_empty() { "00000" } else { sqlstate };
+        let st = if sqlstate.is_empty() {
+            "00000"
+        } else {
+            sqlstate
+        };
         vm.set_property_raw(o, "sqlstate", Value::Str(ZStr::from(st)));
         vm.set_property_raw(o, "code", Value::Int(errno));
     }

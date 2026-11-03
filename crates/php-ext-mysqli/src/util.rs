@@ -82,7 +82,10 @@ pub fn error_list(list: &[php_mysqlnd::ErrorEntry]) -> Value {
     let rows = list.iter().map(|e| {
         Value::Array(ZArray::from_pairs([
             (ArrayKey::from("errno"), Value::Int(i64::from(e.errno))),
-            (ArrayKey::from("sqlstate"), Value::Str(ZStr::from(e.sqlstate.as_str()))),
+            (
+                ArrayKey::from("sqlstate"),
+                Value::Str(ZStr::from(e.sqlstate.as_str())),
+            ),
             (ArrayKey::from("error"), bstr(&e.error)),
         ]))
     });
@@ -151,8 +154,13 @@ mod tests {
         }]);
         let Value::Array(a) = v else { panic!("array") };
         assert_eq!(a.len(), 1);
-        let Some(Value::Array(row)) = a.get(&ArrayKey::Int(0)) else { panic!("row") };
-        assert!(matches!(row.get(&ArrayKey::from("errno")), Some(Value::Int(1064))));
+        let Some(Value::Array(row)) = a.get(&ArrayKey::Int(0)) else {
+            panic!("row")
+        };
+        assert!(matches!(
+            row.get(&ArrayKey::from("errno")),
+            Some(Value::Int(1064))
+        ));
     }
 
     #[test]
