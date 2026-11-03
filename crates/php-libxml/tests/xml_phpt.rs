@@ -1,8 +1,8 @@
 //! Ports of php-src `ext/xml/tests/*.phpt` (libxml flavour). Each test
-#![allow(clippy::many_single_char_names, clippy::too_many_lines)]
 //! reproduces the PHP script's logic with a recording handler and compares
 //! the printed output byte for byte with the `--EXPECT--` section.
 
+#![allow(clippy::many_single_char_names, clippy::too_many_lines)]
 mod common;
 
 use common::{assert_out, index, list, opt, pairs, print_r, s, values, var_dump, PVal};
