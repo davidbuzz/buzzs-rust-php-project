@@ -9,5 +9,6 @@
 pub mod loc;
 pub mod ucal;
 pub mod udat;
+pub mod udatpg;
 pub mod unum;
 pub mod ures;
