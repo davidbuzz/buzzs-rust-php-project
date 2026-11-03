@@ -663,14 +663,11 @@ impl SoapHost for VmHost<'_> {
         let cls = class_of(obj).clone();
         let n = String::from_utf8_lossy(name).into_owned();
         let lc = n.to_ascii_lowercase();
-        let found = cls.find_method(lc.as_bytes()).is_some();
-        if !found {
-            if cls.magic.call.is_none() {
-                return Ok(MethodCall::NotCallable(format!(
-                    "class {} does not have a method \"{n}\"",
-                    php_vm::object::display_name(&cls.name).to_string_lossy()
-                )));
-            }
+        if cls.find_method(lc.as_bytes()).is_none() && cls.magic.call.is_none() {
+            return Ok(MethodCall::NotCallable(format!(
+                "class {} does not have a method \"{n}\"",
+                php_vm::object::display_name(&cls.name).to_string_lossy()
+            )));
         }
         let args = args.to_vec();
         let vm = &mut *self.vm;

@@ -157,8 +157,8 @@ fn value_classes_validate_arguments() {
 #[test]
 fn constants_and_ini() {
     let out = run(
-        r#"var_dump(SOAP_1_2, XSD_ANYXML, WSDL_CACHE_BOTH, ini_get('soap.wsdl_cache_dir'));
-        var_dump(use_soap_error_handler(true), use_soap_error_handler(false));"#,
+        r"var_dump(SOAP_1_2, XSD_ANYXML, WSDL_CACHE_BOTH, ini_get('soap.wsdl_cache_dir'));
+        var_dump(use_soap_error_handler(true), use_soap_error_handler(false));",
     );
     assert_eq!(
         out, "int(2)\nint(147)\nint(3)\nstring(4) \"/tmp\"\nbool(false)\nbool(true)\n",
