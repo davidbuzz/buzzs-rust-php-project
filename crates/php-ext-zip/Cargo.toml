@@ -15,3 +15,6 @@ php-zip = { path = "../php-zip" }
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+php-ext-stdstr = { path = "../php-ext-stdstr" }

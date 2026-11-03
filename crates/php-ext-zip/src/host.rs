@@ -10,10 +10,10 @@
 use std::cell::RefCell;
 
 use php_ext_streams::bridge;
-use php_streams::diag::{self, Diagnostic, Severity, StreamErrorCode};
 use php_runtime::{
     BinaryOp, CastTarget, ErrorLevel, Obj, RtResult, RuntimeContext, RuntimeError, Value,
 };
+use php_streams::diag::{self, Diagnostic, Severity, StreamErrorCode};
 use php_vm::ext::VmResult;
 use php_vm::{Throw, Vm};
 use php_zip::{RegexMatcher, ZipHost};
@@ -166,9 +166,9 @@ fn compile_regex(vm: &mut Vm, regex: &[u8]) -> Option<RegexMatcher> {
         warn(vm, &w);
     }
     match result {
-        Ok(re) => Some(Box::new(move |s: &[u8]| {
-            matches!(php_pcre::match_one(&re, &cfg, s, false, 0, 0).result, Ok(n) if n > 0)
-        })),
+        Ok(re) => Some(Box::new(
+            move |s: &[u8]| matches!(php_pcre::match_one(&re, &cfg, s, false, 0, 0).result, Ok(n) if n > 0),
+        )),
         Err(e) => {
             warn(vm, &e.message());
             None
@@ -215,10 +215,7 @@ fn emit_now(d: Diagnostic) {
 /// Runs a `php-zip` call with a [`VmHost`]: diagnostics are emitted with
 /// the running function's prefix afterwards, and errors (exceptions from
 /// callbacks, bailouts, the library's own exceptions) become throws.
-pub(crate) fn run<R>(
-    vm: &mut Vm,
-    f: impl FnOnce(&mut dyn ZipHost) -> RtResult<R>,
-) -> VmResult<R> {
+pub(crate) fn run<R>(vm: &mut Vm, f: impl FnOnce(&mut dyn ZipHost) -> RtResult<R>) -> VmResult<R> {
     // Warnings are raised while the library runs (`php_error_docref()`
     // inside the C code), so a user error handler sees the archive in the
     // state it has at that point (e.g. "being closed").
@@ -255,7 +252,9 @@ pub(crate) fn run_frameless<R>(
 ) -> VmResult<R> {
     let outer = HELD.with(|h| h.borrow_mut().replace(Vec::new()));
     let r = run(vm, f);
-    let held = HELD.with(|h| std::mem::replace(&mut *h.borrow_mut(), outer)).unwrap_or_default();
+    let held = HELD
+        .with(|h| std::mem::replace(&mut *h.borrow_mut(), outer))
+        .unwrap_or_default();
     if r.is_ok() {
         let prev = diag::set_handler(Some(Box::new(emit_now)));
         bridge::enter(vm, || held.into_iter().for_each(emit_now));

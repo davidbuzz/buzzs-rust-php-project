@@ -22,7 +22,10 @@ fn fname(a: &Args) -> String {
 
 /// `zend_fetch_resource()` failure.
 fn invalid(vm: &mut Vm, a: &Args, kind: &str) -> php_vm::Throw {
-    let msg = format!("{}(): supplied resource is not a valid {kind} resource", fname(a));
+    let msg = format!(
+        "{}(): supplied resource is not a valid {kind} resource",
+        fname(a)
+    );
     vm.throw("TypeError", &msg)
 }
 
@@ -33,12 +36,7 @@ fn resource_arg(vm: &mut Vm, a: &Args, n: usize) -> VmResult<Resource> {
 }
 
 /// Runs `f` with the open directory of argument `n`.
-fn with_dir<R>(
-    vm: &mut Vm,
-    a: &Args,
-    n: usize,
-    f: impl FnOnce(&ZipDir) -> R,
-) -> VmResult<R> {
+fn with_dir<R>(vm: &mut Vm, a: &Args, n: usize, f: impl FnOnce(&ZipDir) -> R) -> VmResult<R> {
     let r = resource_arg(vm, a, n)?;
     let out = {
         let data = r.data();
@@ -73,7 +71,9 @@ fn with_entry<R>(
 fn zip_open(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let name = a.str(0).as_bytes().to_vec();
     Ok(match host::run(vm, |_| lib::zip_open(&name))? {
-        ZipOpenResult::Dir(d) => Value::Resource(Resource::new(DIR_RESOURCE_NAME, Some(Box::new(d)))),
+        ZipOpenResult::Dir(d) => {
+            Value::Resource(Resource::new(DIR_RESOURCE_NAME, Some(Box::new(d))))
+        }
         ZipOpenResult::False => Value::Bool(false),
         ZipOpenResult::Error(e) => Value::Int(e),
     })
@@ -170,7 +170,10 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
             zip_entry_compressedsize,
         )
         .deprecated("8.0", STAT)
-        .function("zip_entry_filesize($zip_entry): int|false", zip_entry_filesize)
+        .function(
+            "zip_entry_filesize($zip_entry): int|false",
+            zip_entry_filesize,
+        )
         .deprecated("8.0", STAT)
         .function(
             "zip_entry_compressionmethod($zip_entry): string|false",
