@@ -8,6 +8,9 @@ rust-version.workspace = true
 [dependencies]
 php-vm = { path = "../php-vm" }
 php-runtime = { path = "../php-runtime" }
+php-posix = { path = "../php-posix" }
+php-streams = { path = "../php-streams" }
+php-ext-streams = { path = "../php-ext-streams" }
 
 [lints]
 workspace = true
