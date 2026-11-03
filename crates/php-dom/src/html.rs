@@ -174,8 +174,11 @@ fn finish(parser: &HtmlParser<'_>, options: i64, input_name: &[u8]) -> DomResult
 pub(crate) fn create_from(source: &[u8], options: i64, override_encoding: Option<&[u8]>, from_file: bool, host: &dyn DomHost) -> DomResult<Node> {
     php_libxml::raw::ensure_init();
     if from_file {
+        if source.is_empty() {
+            return Err(DomError::Value("Path must not be empty".into()));
+        }
         if source.contains(&0) {
-            return Err(DomError::arg_type(1, "must not contain any null bytes"));
+            return Err(DomError::arg_value(1, "must not contain any null bytes"));
         }
         if source.windows(3).any(|w| w == b"%00") {
             return Err(DomError::arg_value(1, "must not contain percent-encoded NUL bytes"));

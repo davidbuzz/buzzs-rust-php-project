@@ -683,6 +683,8 @@ pub enum Offset {
     Null,
     /// `true`/`false`.
     Bool(bool),
+    /// An array (whether it is non-empty: `zval_get_long()` of it).
+    Array(bool),
     /// Any other type (the type name for the error message).
     Other(String),
 }
@@ -727,6 +729,7 @@ fn legacy_offset(off: &Offset) -> Result<i64, Vec<u8>> {
         Offset::Int(i) => Ok(*i),
         Offset::Float(f) => Ok(dval_to_lval(*f)),
         Offset::Bool(b) => Ok(i64::from(*b)),
+        Offset::Array(non_empty) => Ok(i64::from(*non_empty)),
         Offset::Null | Offset::Other(_) => Ok(0),
         Offset::Str(s) => match php_numeric(s) {
             Some(Numeric::Int(i)) => Ok(i),
@@ -747,26 +750,60 @@ enum Numeric {
     Float(f64),
 }
 
-/// A small `is_numeric_string` (allow_errors=true semantics are not needed
-/// here: only fully numeric strings, with leading/trailing whitespace).
+/// `is_numeric_string(..., allow_errors = true)`: a leading numeric
+/// prefix (after whitespace) decides; trailing garbage is allowed.
 fn php_numeric(s: &[u8]) -> Option<Numeric> {
-    let t = std::str::from_utf8(s).ok()?;
-    let trimmed = t.trim_matches(|c: char| matches!(c, ' ' | '\t' | '\n' | '\r' | '\x0b' | '\x0c'));
-    if trimmed.is_empty() {
-        return None;
+    let ws = |c: u8| matches!(c, b' ' | b'\t' | b'\n' | b'\r' | 0x0b | 0x0c);
+    let mut i = 0;
+    while i < s.len() && ws(s[i]) {
+        i += 1;
     }
-    if let Ok(i) = trimmed.parse::<i64>() {
-        return Some(Numeric::Int(i));
+    let start = i;
+    if i < s.len() && (s[i] == b'+' || s[i] == b'-') {
+        i += 1;
     }
-    let valid_float = trimmed
-        .bytes()
-        .all(|b| b.is_ascii_digit() || matches!(b, b'.' | b'e' | b'E' | b'+' | b'-'));
-    if valid_float {
-        if let Ok(f) = trimmed.parse::<f64>() {
-            return Some(Numeric::Float(f));
+    let int_start = i;
+    while i < s.len() && s[i].is_ascii_digit() {
+        i += 1;
+    }
+    let int_digits = i - int_start;
+    let mut is_float = false;
+    let mut frac_digits = 0;
+    if i < s.len() && s[i] == b'.' {
+        let mut j = i + 1;
+        while j < s.len() && s[j].is_ascii_digit() {
+            j += 1;
+        }
+        frac_digits = j - i - 1;
+        if int_digits > 0 || frac_digits > 0 {
+            is_float = true;
+            i = j;
         }
     }
-    None
+    if int_digits == 0 && frac_digits == 0 {
+        return None;
+    }
+    if i < s.len() && (s[i] == b'e' || s[i] == b'E') {
+        let mut j = i + 1;
+        if j < s.len() && (s[j] == b'+' || s[j] == b'-') {
+            j += 1;
+        }
+        let exp_start = j;
+        while j < s.len() && s[j].is_ascii_digit() {
+            j += 1;
+        }
+        if j > exp_start {
+            is_float = true;
+            i = j;
+        }
+    }
+    let text = std::str::from_utf8(&s[start..i]).ok()?;
+    if !is_float {
+        if let Ok(v) = text.parse::<i64>() {
+            return Some(Numeric::Int(v));
+        }
+    }
+    text.parse::<f64>().ok().map(Numeric::Float)
 }
 
 /// An iterator over a collection (`php_dom_iterator`).
@@ -883,6 +920,12 @@ impl NodeList {
         self.iter()?.collect()
     }
 
+    /// A stable identity of the underlying collection object (lists that
+    /// PHP caches, like `$children`, return the same object each time).
+    pub fn identity(&self) -> usize {
+        Rc::as_ptr(&self.0) as usize
+    }
+
     /// The node objects of a fixed list (XPath results), which PHP
     /// materializes before the list object itself; `None` for live lists.
     pub fn fixed_nodes(&self) -> Option<Vec<Node>> {
@@ -909,7 +952,7 @@ impl NodeList {
         match modern_index(offset) {
             ModernIndex::Long(i) => self.item(i),
             ModernIndex::Str(s) if self.0.class == "Dom\\HTMLCollection" => Ok(self.named_item(&s)),
-            _ => Err(illegal_offset(self.0.class, offset)),
+            _ => Err(illegal_offset(self.0.class, offset, false)),
         }
     }
 
@@ -924,7 +967,7 @@ impl NodeList {
         match modern_index(offset) {
             ModernIndex::Long(i) => Ok(i >= 0 && i < self.length()),
             ModernIndex::Str(s) if self.0.class == "Dom\\HTMLCollection" => Ok(self.named_item(&s).is_some()),
-            _ => Err(illegal_offset(self.0.class, offset)),
+            _ => Err(illegal_offset(self.0.class, offset, true)),
         }
     }
 }
@@ -947,16 +990,21 @@ fn modern_index(off: &Offset) -> ModernIndex {
     }
 }
 
-fn illegal_offset(class: &str, off: &Offset) -> DomError {
+fn illegal_offset(class: &str, off: &Offset, isset: bool) -> DomError {
     let ty = match off {
         Offset::Null => "null".to_string(),
         Offset::Bool(_) => "bool".to_string(),
         Offset::Str(_) => "string".to_string(),
         Offset::Int(_) => "int".to_string(),
         Offset::Float(_) => "float".to_string(),
+        Offset::Array(_) => "array".to_string(),
         Offset::Other(t) => t.clone(),
     };
-    DomError::Type(format!("Cannot access offset of type {ty} on {class}"))
+    if isset {
+        DomError::Type(format!("Cannot access offset of type {ty} in isset or empty"))
+    } else {
+        DomError::Type(format!("Cannot access offset of type {ty} on {class}"))
+    }
 }
 
 impl NamedNodeMap {
@@ -1017,7 +1065,7 @@ impl NamedNodeMap {
         match modern_index(offset) {
             ModernIndex::Long(i) => self.0.item(i),
             ModernIndex::Str(s) => Ok(self.0.named_item(&s, None)),
-            ModernIndex::Illegal => Err(illegal_offset(self.0.class, offset)),
+            ModernIndex::Illegal => Err(illegal_offset(self.0.class, offset, false)),
         }
     }
 
@@ -1032,7 +1080,7 @@ impl NamedNodeMap {
         match modern_index(offset) {
             ModernIndex::Long(i) => Ok(i >= 0 && i < self.length()),
             ModernIndex::Str(s) => Ok(self.0.has_named_item(&s, None)),
-            ModernIndex::Illegal => Err(illegal_offset(self.0.class, offset)),
+            ModernIndex::Illegal => Err(illegal_offset(self.0.class, offset, true)),
         }
     }
 }

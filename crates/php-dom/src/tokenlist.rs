@@ -331,25 +331,30 @@ impl TokenList {
                     _ => Err(()),
                 }
             }
-            Offset::Null | Offset::Other(_) => Err(()),
+            Offset::Null | Offset::Array(_) | Offset::Other(_) => Err(()),
         }
     }
 
-    fn illegal(o: &Offset) -> DomError {
+    fn illegal(o: &Offset, isset: bool) -> DomError {
         let ty = match o {
             Offset::Null => "null".to_string(),
             Offset::Str(_) => "string".into(),
+            Offset::Array(_) => "array".into(),
             Offset::Other(t) => t.clone(),
             _ => "int".into(),
         };
-        DomError::Type(format!("Cannot access offset of type {ty} on Dom\\TokenList"))
+        if isset {
+            DomError::Type(format!("Cannot access offset of type {ty} in isset or empty"))
+        } else {
+            DomError::Type(format!("Cannot access offset of type {ty} on Dom\\TokenList"))
+        }
     }
 
     /// `$list[$i]`.
     pub fn offset_get(&self, o: &Offset) -> DomResult<Option<Vec<u8>>> {
         match Self::offset_index(o) {
             Ok(i) => Ok(self.item(i)),
-            Err(()) => Err(Self::illegal(o)),
+            Err(()) => Err(Self::illegal(o, false)),
         }
     }
 
@@ -360,7 +365,7 @@ impl TokenList {
                 self.ensure_up_to_date();
                 Ok(i >= 0 && i < i64::try_from(self.0.set.borrow().count()).unwrap_or(i64::MAX))
             }
-            Err(()) => Err(Self::illegal(o)),
+            Err(()) => Err(Self::illegal(o, true)),
         }
     }
 }

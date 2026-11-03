@@ -59,6 +59,7 @@ pub struct Interp {
     shutdown_fns: RefCell<Vec<V>>,
     ob_stack: RefCell<Vec<Vec<u8>>>,
     statics: RefCell<HashMap<(String, Vec<u8>), V>>,
+    list_objs: RefCell<HashMap<usize, Weak<Obj>>>,
 }
 
 thread_local! {
@@ -123,6 +124,7 @@ impl Interp {
             shutdown_fns: RefCell::new(Vec::new()),
             ob_stack: RefCell::new(Vec::new()),
             statics: RefCell::new(HashMap::new()),
+            list_objs: RefCell::new(HashMap::new()),
         });
         CURRENT.with(|c| *c.borrow_mut() = Some(Rc::downgrade(&i)));
         php_dom::error::set_diagnostic_handler(Some(Box::new(|d| {
@@ -1966,6 +1968,50 @@ impl Interp {
     // Calls
     // ------------------------------------------------------------------
 
+    fn sort_array(&self, kind: &str, arr: &Arr, cb: Option<&V>) -> R<Arr> {
+        let mut items: Vec<(Key, V)> = arr.items.clone();
+        let mut err = None;
+        let key_v = |k: &Key| match k {
+            Key::Int(i) => V::Int(*i),
+            Key::Str(s) => V::Str(s.clone()),
+        };
+        // Merge sort via sort_by with a fallible comparator.
+        items.sort_by(|x, y| {
+            if err.is_some() {
+                return std::cmp::Ordering::Equal;
+            }
+            let r = match kind {
+                "usort" | "uasort" => cb.map(|f| self.call_value(f, vec![x.1.clone(), y.1.clone()]).map(|v| to_int(&v))),
+                "uksort" => cb.map(|f| self.call_value(f, vec![key_v(&x.0), key_v(&y.0)]).map(|v| to_int(&v))),
+                "ksort" => Some(Ok(i64::from(compare(&key_v(&x.0), &key_v(&y.0))))),
+                "krsort" => Some(Ok(-i64::from(compare(&key_v(&x.0), &key_v(&y.0))))),
+                "rsort" | "arsort" => Some(Ok(-i64::from(compare(&x.1, &y.1)))),
+                _ => Some(Ok(i64::from(compare(&x.1, &y.1)))),
+            };
+            match r {
+                Some(Ok(v)) => v.cmp(&0),
+                Some(Err(e)) => {
+                    err = Some(e);
+                    std::cmp::Ordering::Equal
+                }
+                None => std::cmp::Ordering::Equal,
+            }
+        });
+        if let Some(e) = err {
+            return Err(e);
+        }
+        let mut out = Arr::default();
+        let keep_keys = matches!(kind, "uasort" | "uksort" | "ksort" | "krsort" | "asort" | "arsort");
+        for (k, v) in items {
+            if keep_keys {
+                out.set(k, v);
+            } else {
+                out.push(v);
+            }
+        }
+        Ok(out)
+    }
+
     fn eval_args(&self, args: &ArgList) -> R<(Vec<V>, Vec<(Vec<u8>, V)>)> {
         let mut pos = Vec::new();
         let mut named = Vec::new();
@@ -2018,6 +2064,16 @@ impl Interp {
                 let uf = self.functions.borrow().get(&name.to_ascii_lowercase().into_bytes()).cloned();
                 if let Some(f) = uf {
                     return self.call_user(&f, a, named, None, None, None, &[]);
+                }
+                let lname = name.to_ascii_lowercase();
+                if matches!(lname.as_str(), "usort" | "uasort" | "uksort" | "sort" | "rsort" | "ksort" | "krsort" | "asort" | "arsort") {
+                    if let (Some(V::Arr(arr)), Some(first)) = (a.first(), args.args.first()) {
+                        if let ArgKind::Positional(target) = &first.kind {
+                            let sorted = self.sort_array(&lname, arr, a.get(1))?;
+                            self.assign(target, V::arr(sorted))?;
+                            return Ok(V::Bool(true));
+                        }
+                    }
                 }
                 self.builtin(&name, a, named)
             }
@@ -2601,8 +2657,13 @@ impl Interp {
                     .into_iter()
                     .map(|n| self.from_dom_value(DomValue::Node(n)))
                     .collect();
+                let id = l.identity();
+                if let Some(existing) = self.list_objs.borrow().get(&id).and_then(std::rc::Weak::upgrade) {
+                    return V::Obj(existing);
+                }
                 let o = new_obj(l.class_name(), ObjKind::Dom(DomObject::NodeList(l)));
                 *o.keep.borrow_mut() = keep;
+                self.list_objs.borrow_mut().insert(id, Rc::downgrade(&o));
                 V::Obj(o)
             }
             DomValue::NamedNodeMap(m) => V::Obj(new_obj(m.class_name(), ObjKind::Dom(DomObject::NamedNodeMap(m)))),
@@ -2900,6 +2961,7 @@ fn to_offset(v: &V) -> Offset {
         V::Str(s) => Offset::Str(s.clone()),
         V::Null => Offset::Null,
         V::Bool(b) => Offset::Bool(*b),
+        V::Arr(a) => Offset::Array(!a.items.is_empty()),
         other => Offset::Other(other.type_name()),
     }
 }

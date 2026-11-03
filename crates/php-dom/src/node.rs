@@ -946,12 +946,13 @@ impl Node {
     /// `normalize()`.
     pub fn normalize(&self) -> DomResult<()> {
         let n = self.node()?;
+        let _scope = crate::stack::StackScope::enter();
         if self.is_modern() {
             normalize_modern(n);
         } else {
             normalize_legacy(n);
         }
-        Ok(())
+        crate::stack::take_error().map_or(Ok(()), Err)
     }
 
     /// `isSupported($feature, $version)`.
@@ -980,7 +981,9 @@ impl Node {
         if nodep == otherp {
             return Ok(true);
         }
-        Ok(is_equal_node(nodep, otherp, self.family_is_modern()))
+        let _scope = crate::stack::StackScope::enter();
+        let r = is_equal_node(nodep, otherp, self.family_is_modern());
+        crate::stack::take_error().map_or(Ok(r), Err)
     }
 
     /// `lookupPrefix($namespace)`.
@@ -1375,6 +1378,9 @@ fn merge_adjacent_exclusive_text_nodes(node: N) {
 
 /// `php_dom_normalize_legacy`.
 pub(crate) fn normalize_legacy(nodep: N) {
+    if crate::stack::check(crate::stack::STACK_OVERFLOW_MESSAGE) {
+        return;
+    }
     let mut child = nodep.children();
     while let Some(c) = child {
         match c.t() {
@@ -1402,6 +1408,9 @@ pub(crate) fn normalize_legacy(nodep: N) {
 
 /// `php_dom_normalize_modern`.
 pub(crate) fn normalize_modern(this: N) {
+    if crate::stack::check(crate::stack::STACK_OVERFLOW_MESSAGE) {
+        return;
+    }
     let mut node = this.children();
     while let Some(n) = node {
         if n.t() == ffi::XML_TEXT_NODE {
@@ -1462,6 +1471,9 @@ fn ns_list(mut cur: Option<Ns>) -> Vec<Ns> {
 
 /// `php_dom_node_is_equal_node`.
 pub(crate) fn is_equal_node(a: N, b: N, spec: bool) -> bool {
+    if crate::stack::check("Maximum call stack size reached.") {
+        return false;
+    }
     if a.t() != b.t() {
         return false;
     }

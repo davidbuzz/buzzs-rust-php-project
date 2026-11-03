@@ -47,7 +47,7 @@ fn add_content(n: N, s: &[u8]) {
 }
 
 fn int_ovfl(v: i64) -> bool {
-    v > i64::from(i32::MAX) || v < i64::from(i32::MIN)
+    v > i64::from(i32::MAX)
 }
 
 impl Node {

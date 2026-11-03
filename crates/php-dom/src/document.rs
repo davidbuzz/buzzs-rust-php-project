@@ -698,8 +698,9 @@ impl Node {
     /// `normalizeDocument()`.
     pub fn normalize_document(&self) -> DomResult<()> {
         let d = self.doc_node()?;
+        let _scope = crate::stack::StackScope::enter();
         crate::node::normalize_legacy(d);
-        Ok(())
+        crate::stack::take_error().map_or(Ok(()), Err)
     }
 
     fn parse_flags(&self, options: i64) -> ParseFlags {
@@ -805,7 +806,7 @@ impl Node {
             return Err(DomError::arg_value(1, "must not be empty"));
         }
         if filename.contains(&0) {
-            return Err(DomError::arg_type(1, "must not contain any null bytes"));
+            return Err(DomError::arg_value(1, "must not contain any null bytes"));
         }
         let docp = self.doc_node()?;
         let format = self.doc_flag(DocFlag::FormatOutput);
@@ -1220,7 +1221,7 @@ pub fn xml_document_create_from(
         return Err(DomError::arg_value(1, "must not contain percent-encoded NUL bytes"));
     }
     if from_file && source.contains(&0) {
-        return Err(DomError::arg_type(1, "must not contain any null bytes"));
+        return Err(DomError::arg_value(1, "must not contain any null bytes"));
     }
     if options & !VALID_XML_OPTIONS != 0 {
         return Err(DomError::arg_value(

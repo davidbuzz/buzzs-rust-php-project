@@ -64,6 +64,30 @@ impl Drop for StackScope {
     }
 }
 
+thread_local! {
+    static PENDING: Cell<Option<&'static str>> = const { Cell::new(None) };
+}
+
+/// `zend_call_stack_overflowed()` plus `zend_throw_error()` when no error
+/// is pending yet: records `message` and returns `true` on overflow.
+pub(crate) fn check(message: &'static str) -> bool {
+    if overflowed() {
+        PENDING.with(|p| {
+            if p.get().is_none() {
+                p.set(Some(message));
+            }
+        });
+        true
+    } else {
+        false
+    }
+}
+
+/// The error recorded by [`check`], if any (clears it).
+pub(crate) fn take_error() -> Option<crate::error::DomError> {
+    PENDING.with(Cell::take).map(|m| crate::error::DomError::Error(m.into()))
+}
+
 /// `zend_call_stack_overflowed(EG(stack_limit))`.
 pub(crate) fn overflowed() -> bool {
     let sp = approx_sp();
