@@ -859,6 +859,10 @@ pub fn run(script: &str, dir: &Path, fix: &Path) -> String {
                     emit(&st, &format!("entry {i} = {}", ex(&V::opt_str(n))));
                 }
             }
+            "open_basedir" => {
+                let v = subst(&st, rest[0].as_str().unwrap());
+                php_streams::state::update_settings(|s| s.open_basedir = v);
+            }
             "mkdir" => fs::create_dir_all(path(0)).unwrap(),
             "chmod" => {
                 let mode = u32::from_str_radix(rest[1].as_str().unwrap(), 8).unwrap();
@@ -989,6 +993,7 @@ pub fn run(script: &str, dir: &Path, fix: &Path) -> String {
         s.close();
     }
     emit(&st, "END");
+    php_streams::state::update_settings(|s| s.open_basedir = Vec::new());
     diag::set_handler(prev);
     let out = st.borrow().out.clone();
     out

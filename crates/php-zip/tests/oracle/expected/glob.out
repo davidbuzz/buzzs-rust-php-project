@@ -1,0 +1,71 @@
+# addGlob
+z->open = true
+z->addGlob = [0=>"{DIR}/g/data.txt",1=>"{DIR}/g/foo.txt",2=>"{DIR}/g/sub.txt",3=>"{DIR}/g/bar.baz"]
+z->addGlob = [0=>"{DIR}/g/data.txt",1=>"{DIR}/g/foo.txt",2=>"{DIR}/g/sub.txt",3=>"{DIR}/g/bar.baz"]
+z->addGlob = false
+z->getStatusString = "File already exists"
+z->addGlob = [0=>"{DIR}/g/data.txt",1=>"{DIR}/g/foo.txt",2=>"{DIR}/g/sub.txt",3=>"{DIR}/g/bar.baz"]
+z->status = 0
+entry 0 = "bar"
+entry 1 = "foobar/"
+entry 2 = "foobar/baz"
+entry 3 = "entry1.txt"
+entry 4 = "baz/data.txt"
+entry 5 = "baz/foo.txt"
+entry 6 = "baz/sub.txt"
+entry 7 = "baz/bar.baz"
+z->addGlob = [0=>"{DIR}/g/data.txt",1=>"{DIR}/g/foo.txt",2=>"{DIR}/g/sub.txt"]
+z->addGlob = [0=>"{DIR}/g/data.txt",1=>"{DIR}/g/foo.txt",2=>"{DIR}/g/sub.txt"]
+z->addGlob = [0=>"{DIR}/g/data.txt",1=>"{DIR}/g/foo.txt",2=>"{DIR}/g/sub.txt"]
+z->addGlob = [0=>"{DIR}/g/sub.txt"]
+z->addGlob = []
+z->addGlob = []
+z->addGlob = []
+z->addGlob = [0=>"{DIR}/g/data.txt",1=>"{DIR}/g/foo.txt",2=>"{DIR}/g/sub.txt"]
+z->statName = ["name"=>"data.txt","index"=>8,"crc"=>0,"size"=>63000,"mtime"=>NOW,"comp_size"=>0,"comp_method"=>0,"encryption_method"=>0]
+z->addGlob = [0=>"{DIR}/g/data.txt"]
+z->addGlob = false
+entry 0 = "bar"
+entry 1 = "foobar/"
+entry 2 = "foobar/baz"
+entry 3 = "entry1.txt"
+entry 4 = "baz/data.txt"
+entry 5 = "baz/foo.txt"
+entry 6 = "baz/sub.txt"
+entry 7 = "baz/bar.baz"
+entry 8 = "data.txt"
+entry 9 = "foo.txt"
+entry 10 = "sub.txt"
+entry 11 = "pre-ata.txt"
+entry 12 = "pre-{DIR}/g/foo.txt"
+entry 13 = "pre-{DIR}/g/sub.txt"
+entry 14 = "g/sub.txt"
+entry 15 = "d/data.txt"
+entry 16 = "e/foo.txt"
+[Warning] ZipArchive::close(): Read error: Is a directory
+z->close = false
+z->open = true
+entry 0 = "bar"
+entry 1 = "foobar/"
+entry 2 = "foobar/baz"
+entry 3 = "entry1.txt"
+z->statName = false
+z->statName = false
+z->close = true
+# addPattern
+z->open = true
+z->addPattern = [0=>"{DIR}/g/bar.baz",1=>"{DIR}/g/data.txt",2=>"{DIR}/g/foo.txt"]
+z->addPattern = [0=>"{DIR}/g/bar.baz",1=>"{DIR}/g/data.txt",2=>"{DIR}/g/foo.txt"]
+z->addPattern = []
+z->addPattern = [0=>"{DIR}/g/data.txt"]
+! ValueError: ZipArchive::addPattern(): Argument #1 ($pattern) must not be empty
+entry 0 = "baz/bar.baz"
+entry 1 = "baz/data.txt"
+entry 2 = "baz/foo.txt"
+entry 3 = "g/bar.baz"
+entry 4 = "g/data.txt"
+entry 5 = "g/foo.txt"
+entry 6 = "s/data.txt"
+z->statName = ["name"=>"s/data.txt","index"=>6,"crc"=>0,"size"=>63000,"mtime"=>NOW,"comp_size"=>0,"comp_method"=>0,"encryption_method"=>0]
+z->close = true
+END

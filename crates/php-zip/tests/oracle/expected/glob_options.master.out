@@ -1,0 +1,68 @@
+# addGlob option validation
+z->open = true
+! TypeError: Option "remove_all_path" must be of type bool, int given
+! TypeError: Option "remove_all_path" must be of type bool, string given
+! TypeError: Option "comp_method" must be of type int, string given
+! TypeError: Option "comp_method" must be of type int, array given
+! TypeError: Option "comp_flags" must be of type int, string given
+[Warning] ZipArchive::addGlob(): Option "comp_method" must be between 0 and 2147483647
+z->addGlob = [0=>"{DIR}/g/foo.txt"]
+z->addGlob = [0=>"{DIR}/g/foo.txt"]
+z->addGlob = [0=>"{DIR}/g/foo.txt"]
+z->addGlob = [0=>"{DIR}/g/foo.txt"]
+z->addGlob = false
+z->addGlob = [0=>"{DIR}/g/foo.txt"]
+! TypeError: Option "enc_method" must be of type int, string given
+! TypeError: Option "enc_password" must be of type string, int given
+z->addGlob = [0=>"{DIR}/g/foo.txt"]
+! TypeError: Option "remove_path" must be of type string, int given
+! ValueError: Option "remove_path" must not be empty
+! ValueError: Option "remove_path" must be less than 4095 bytes
+! TypeError: Option "add_path" must be of type string, false given
+! ValueError: Option "add_path" must not be empty
+[Warning] ZipArchive::addGlob(): Entry name too long (max: 4095, 4148 given)
+z->addGlob = false
+[Warning] ZipArchive::addGlob(): Entry name too long (max: 4095, 4147 given)
+z->addGlob = false
+! TypeError: Option "flags" must be of type int, string given
+z->addGlob = false
+z->addGlob = [0=>"{DIR}/g/foo.txt"]
+! ValueError: ZipArchive::addGlob(): Argument #1 ($pattern) must not be empty
+[Warning] ZipArchive::addGlob(): Pattern exceeds the maximum allowed length of 4096 characters
+z->addGlob = false
+[Warning] ZipArchive::addGlob(): At least one of the passed flags is invalid or not supported on this platform
+z->addGlob = false
+[Warning] ZipArchive::addGlob(): At least one of the passed flags is invalid or not supported on this platform
+z->addGlob = false
+entry 0 = "{DIR}/g/foo.txt"
+z->close = true
+# addPattern failures
+z->open = true
+[Warning] ZipArchive::addPattern(*): Failed to open directory: No such file or directory
+z->addPattern = false
+[Warning] ZipArchive::addPattern(): No ending delimiter '/' found
+[Warning] ZipArchive::addPattern(): Invalid expression
+z->addPattern = false
+[Warning] ZipArchive::addPattern(): Delimiter must not be alphanumeric, backslash, or NUL byte
+[Warning] ZipArchive::addPattern(): Invalid expression
+z->addPattern = false
+[Warning] ZipArchive::addPattern(*): Failed to open directory: Not a directory
+z->addPattern = false
+z->close = true
+# open_basedir
+z->open = true
+[Warning] ZipArchive::addGlob(): open_basedir restriction in effect. File({FIX}/test.zip) is not within the allowed path(s): ({DIR}/g)
+z->addGlob = false
+[Warning] ZipArchive::addPattern(): open_basedir restriction in effect. File({FIX}) is not within the allowed path(s): ({DIR}/g)
+z->addPattern = false
+[Warning] ZipArchive::addFile(): open_basedir restriction in effect. File({FIX}/test.zip) is not within the allowed path(s): ({DIR}/g)
+z->addFile = false
+z->addGlob = [0=>"{DIR}/g/foo.txt"]
+[Warning] ZipArchive::extractTo(): open_basedir restriction in effect. File({DIR}/notallowed) is not within the allowed path(s): ({DIR}/g)
+z->extractTo = false
+[Warning] ZipArchive::open(): open_basedir restriction in effect. File({FIX}/test.zip) is not within the allowed path(s): ({DIR}/g)
+y->open = false
+[Warning] fopen(): open_basedir restriction in effect. File({FIX}/test.zip) is not within the allowed path(s): ({DIR}/g)
+[Warning] fopen(*): Failed to open stream: operation failed
+fopen = false
+END

@@ -243,6 +243,9 @@ foreach (file($scenario, FILE_IGNORE_NEW_LINES) as $line) {
                     echo "entry $i = ", ex($z->getNameIndex($i)), "\n";
                 }
                 break;
+            case 'open_basedir':
+                ini_set('open_basedir', arg($cmd[0]));
+                break;
             case 'mkdir':
                 mkdir(rel($cmd[0]), 0777, true);
                 break;

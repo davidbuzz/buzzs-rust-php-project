@@ -49,7 +49,11 @@ fn workdir(name: &str, tag: &str) -> PathBuf {
 /// through `php_error_docref1()`; compare those lines without it.
 fn strip_open_failure_params(s: &str) -> String {
     s.lines()
-        .map(|l| match (l.find("): Failed to open stream:"), l.find('(')) {
+        .map(|l| match (
+            l.find("): Failed to open stream:")
+                .or_else(|| l.find("): Failed to open directory:")),
+            l.find('('),
+        ) {
             (Some(end), Some(start)) if start < end => format!("{}(*{}", &l[..start], &l[end..]),
             _ => l.to_string(),
         })
