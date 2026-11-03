@@ -74,6 +74,7 @@ impl ByteSink<'_> {
 }
 
 /// Receives ICU's conversion callbacks.
+#[allow(clippy::wrong_self_convention)]
 pub trait Callbacks {
     /// To-Unicode callback: `source` is the remaining input, `units` the
     /// offending bytes; `error` is the in/out status.

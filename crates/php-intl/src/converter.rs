@@ -381,32 +381,19 @@ impl UConverter {
     pub fn set_subst_chars(&mut self, chars: &[u8]) -> bool {
         let mut ok = true;
         let mut errs = Vec::new();
-        match self.src.as_mut() {
-            Some(c) => {
+        for (cnv, which) in [
+            (self.src.as_mut(), "Source"),
+            (self.dest.as_mut(), "Destination"),
+        ] {
+            if let Some(c) = cnv {
                 if let Err(e) = c.set_subst_chars(chars) {
                     errs.push(ufailure(e));
                     ok = false;
                 }
-            }
-            None => {
+            } else {
                 errs.push(IntlError::new(
                     UErrorCode::INVALID_STATE_ERROR,
-                    "Source Converter has not been initialized yet",
-                ));
-                ok = false;
-            }
-        }
-        match self.dest.as_mut() {
-            Some(c) => {
-                if let Err(e) = c.set_subst_chars(chars) {
-                    errs.push(ufailure(e));
-                    ok = false;
-                }
-            }
-            None => {
-                errs.push(IntlError::new(
-                    UErrorCode::INVALID_STATE_ERROR,
-                    "Destination Converter has not been initialized yet",
+                    format!("{which} Converter has not been initialized yet"),
                 ));
                 ok = false;
             }
