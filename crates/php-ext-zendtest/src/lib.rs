@@ -20,6 +20,8 @@ mod functions;
 mod ini;
 mod iterators;
 mod object_handlers;
+#[cfg(feature = "observer")]
+mod observer;
 mod patch;
 mod stack;
 mod state;
@@ -55,6 +57,8 @@ impl Extension for ZendTest {
         classes::register(m);
         iterators::register(m);
         object_handlers::register(m);
+        #[cfg(feature = "observer")]
+        observer::register(m);
         m.info(info);
         m.on_request_startup(state::request_startup);
         m.on_request_shutdown(state::request_shutdown);

@@ -56,6 +56,14 @@ pub(crate) fn raise_signal(sig: i32) -> bool {
 /// against `memory_limit`.
 pub(crate) fn emalloc(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let size = usize::try_from(a.int(0)).unwrap_or(usize::MAX);
+    if php_memlimit::hard_limit().is_some_and(|h| size > h) {
+        // Beyond the hard limit the allocator's handler terminates the
+        // process ("Hard memory limit of N bytes exhausted"), as
+        // zend_mm_alloc_huge does; the block is never touched.
+        let block: Vec<u8> = Vec::with_capacity(size);
+        drop(std::hint::black_box(block));
+        return Ok(Value::Null);
+    }
     // On failure the VM raises "Allowed memory size of N bytes exhausted"
     // right after this call.
     let _ = php_memlimit::try_reserve(size);

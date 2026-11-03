@@ -14,5 +14,10 @@ php-parser = { path = "../php-parser" }
 php-memlimit = { path = "../php-memlimit" }
 libc = "0.2"
 
+[features]
+# The observer printer (`zend_test.observer.*`): needs the VM observer
+# hooks proposed in `proposals/observer.diff`.
+observer = []
+
 [lints]
 workspace = true

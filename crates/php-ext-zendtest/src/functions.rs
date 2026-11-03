@@ -444,7 +444,7 @@ fn compile_to_ast(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         Ok(p) => Ok(Value::Str(ZStr::from(php_parser::export::export_program(
             &p,
         )))),
-        Err(e) => Err(vm.throw("ParseError", &e.to_string())),
+        Err(e) => Err(vm.throw("ParseError", &e.message)),
     }
 }
 
@@ -733,6 +733,13 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
     for f in ["zend_test_nodiscard", "zend_test_deprecated_nodiscard"] {
         edit_function(vm, f, |b| b.flags |= flags::NODISCARD);
     }
+    let dnf = crate::classes::type_of(vm, "Iterator|(Traversable&Countable)");
+    edit_function(vm, "zend_test_internal_dnf_arguments", |b| {
+        if let Some(p) = b.params.first_mut() {
+            p.ty.clone_from(&dnf);
+        }
+        b.return_type = dnf;
+    });
     edit_function(vm, "zend_test_parameter_with_attribute", |b| {
         if let Some(p) = b.params.first_mut() {
             p.attributes = vec![attribute(

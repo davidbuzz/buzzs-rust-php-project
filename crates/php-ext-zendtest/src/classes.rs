@@ -23,15 +23,20 @@ fn ret_zero(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
     Ok(Value::Int(0))
 }
 
-/// A parsed stub type (through a throw-away function signature).
-fn type_of(vm: &mut Vm, ty: &str) -> Option<TypeDecl> {
-    const TMP: &str = "__zend_test_type_probe";
-    vm.register_function(&format!("{TMP}({ty} $x)"), none);
-    let t = vm
-        .native_function(TMP)
-        .and_then(|b| b.params.first().and_then(|p| p.ty.clone()));
-    vm.functions.remove(&ZStr::from(TMP));
-    t
+/// A type as the compiler resolves it in a declaration (exact union,
+/// intersection and DNF shapes, which the stub-signature parser
+/// flattens): compiled from `function f(TYPE $x) {}`.
+pub(crate) fn type_of(_vm: &mut Vm, ty: &str) -> Option<TypeDecl> {
+    let src = format!("<?php function __zend_test_type_probe({ty} $x) {{}}");
+    let program = php_parser::parse(src.as_bytes(), &php_parser::ParseOptions::default()).ok()?;
+    let unit = php_vm::compiler::compile(
+        &program,
+        std::rc::Rc::from(src.as_bytes()),
+        php_vm::compiler::CompileOptions::default(),
+    )
+    .ok()?;
+    let fns = unit.decls.functions.borrow();
+    fns.first()?.params.first()?.ty.clone()
 }
 
 /// Sets the declared type of the class constant `name`.
@@ -41,6 +46,29 @@ fn set_const_type(c: &mut php_vm::class::Class, name: &str, ty: Option<TypeDecl>
         nc.ty = ty;
         c.consts[i] = Rc::new(nc);
     }
+}
+
+/// Marks the native method `lc` of `c` deprecated (`@deprecated`).
+fn deprecate_method(c: &mut php_vm::class::Class, lc: &str) {
+    let key = ZStr::from(lc);
+    let Some(m) = c.methods.get(&key).cloned() else {
+        return;
+    };
+    let php_vm::func::Func::Builtin(b) = &m.func else {
+        return;
+    };
+    let mut nb = (**b).clone();
+    nb.flags |= php_vm::func::flags::DEPRECATED;
+    c.methods.insert(
+        key,
+        Rc::new(php_vm::func::Method {
+            name: m.name.clone(),
+            func: php_vm::func::Func::Builtin(Rc::new(nb)),
+            flags: m.flags | php_vm::func::flags::DEPRECATED,
+            scope: m.scope.clone(),
+            proto_scope: m.proto_scope.clone(),
+        }),
+    );
 }
 
 /// Sets the declared type of the static property `name`.
@@ -206,7 +234,7 @@ fn register_test_class(vm: &mut Vm) {
             trampoline_test,
         )
         .method(
-            "testTmpMethodWithArgInfo(Foo|Bar|null $tmpMethodParamName = null, string $tmpMethodParamWithStringDefaultValue = \"tmpMethodParamWithStringDefaultValue\"): void",
+            "testTmpMethodWithArgInfo(Foo|Bar|null $tmpMethodParamName = null, string $tmpMethodParamWithStringDefaultValue = \"tmpMethodParamWithStringDefaultValue\")",
             pub_,
             tmp_method,
         )
@@ -220,11 +248,16 @@ fn register_test_class(vm: &mut Vm) {
     ];
     let int_ty = type_of(vm, "int");
     let str_ty = type_of(vm, "string");
+    let inter_ty = type_of(vm, "Traversable&Countable");
+    let dnf_ty = type_of(vm, "Iterator|(Traversable&Countable)");
     let cls = rebuild_class(vm, &cls, |c, _| {
+        edit_prop(c, "classIntersectionProp", |p| p.ty = inter_ty);
+        edit_prop(c, "dnfProperty", |p| p.ty = dnf_ty);
         for (n, t) in tys {
             set_const_type(c, n, t);
         }
         set_static_type(c, "staticIntProp", int_ty);
+        deprecate_method(c, "__tostring");
         for n in [
             "doubleQuoteEscaped",
             "singleQuoteEscaped",
@@ -673,6 +706,28 @@ fn register_namespaced(vm: &mut Vm) {
     ClassBuilder::new("ZendTestNS2\\ZendSubNS\\Foo")
         .method("method(): void", acc::PUBLIC, none)
         .register(vm);
+    // Exact (compiler-resolved) property types.
+    let tys: Vec<(&str, Option<TypeDecl>)> = [
+        ("foo", "ZendTestNS2\\ZendSubNS\\Foo"),
+        (
+            "intersectionProp",
+            "ZendTestNS2\\ZendSubNS\\Foo&ZendTestNS\\Bar",
+        ),
+        ("unionProp", "ZendTestNS2\\ZendSubNS\\Foo|ZendTestNS\\Bar"),
+        ("fooAlias", "ZendTestNS\\Foo"),
+        ("unlProp", "ZendTestNS\\UnlikelyCompileError"),
+        ("notUnlProp", "ZendTestNS\\NotUnlikelyCompileError"),
+    ]
+    .into_iter()
+    .map(|(n, t)| (n, type_of(vm, t)))
+    .collect();
+    if let Some(cls) = vm.find_class(b"ZendTestNS2\\Foo") {
+        rebuild_class(vm, &cls, |c, _| {
+            for (n, t) in tys {
+                edit_prop(c, n, |p| p.ty = t);
+            }
+        });
+    }
 }
 
 fn register_enums(vm: &mut Vm) {

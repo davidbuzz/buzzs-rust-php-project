@@ -1,0 +1,234 @@
+diff --git a/crates/php-vm/src/call.rs b/crates/php-vm/src/call.rs
+index eaabf50..c759cfa 100644
+--- a/crates/php-vm/src/call.rs
++++ b/crates/php-vm/src/call.rs
+@@ -835,11 +835,42 @@ impl Vm {
+             ));
+         }
+         self.frames.push(f);
++        if !Self::observer_skips(uf.flags) {
++            self.observer_begin_top();
++        }
+         Ok(())
+     }
+ 
+-    /// Calls a builtin.
++    /// Calls a builtin (observed: `begin` after its frame is pushed, `end`
++    /// before it is popped).
+     pub(crate) fn call_builtin(
++        &mut self,
++        b: &Rc<Builtin>,
++        call: PendingCall,
++        strict: bool,
++    ) -> VmResult<Value> {
++        if self.observer.hooks.is_none() {
++            return self.call_builtin_impl(b, call, strict);
++        }
++        let depth = self.frames.len() + 1;
++        let saved = std::mem::replace(&mut self.observer.keep_builtin_frame, true);
++        let r = self.call_builtin_impl(b, call, strict);
++        self.observer.keep_builtin_frame = saved;
++        if self.frames.len() >= depth {
++            match &r {
++                Ok(v) => self.observer_end_frame(depth - 1, Some(v), None),
++                Err(Throw::Exception(e)) => {
++                    let e = e.clone();
++                    self.observer_end_frame(depth - 1, None, Some(&e));
++                }
++                Err(_) => self.observer_end_frame(depth - 1, None, None),
++            }
++            self.frames.truncate(depth - 1);
++        }
++        r
++    }
++
++    fn call_builtin_impl(
+         &mut self,
+         b: &Rc<Builtin>,
+         mut call: PendingCall,
+@@ -874,6 +905,7 @@ impl Vm {
+         f.called.clone_from(&call.called);
+         self.frames.push(f);
+         let depth = self.frames.len();
++        self.observer_begin_top();
+         // Arity.
+         let positional_count = call.args.iter().filter(|a| a.is_some()).count();
+         if !call.has_named && npassed < b.required as usize {
+@@ -1009,7 +1041,9 @@ impl Vm {
+             called: call.called,
+             func: Some(b.clone()),
+         };
++        self.observer_internal(None);
+         let mut r = (b.handler)(self, &mut args);
++        self.observer_internal(Some(r.as_ref()));
+         // Blocking builtins (sleep, stream reads) return to a pending
+         // interrupt.
+         if r.is_ok() {
+@@ -1033,7 +1067,7 @@ impl Vm {
+                 };
+             }
+         }
+-        if self.frames.len() >= depth {
++        if self.frames.len() >= depth && !self.observer.keep_builtin_frame {
+             self.frames.truncate(depth - 1);
+         }
+         r
+@@ -1065,7 +1099,7 @@ impl Vm {
+ 
+     /// Pops frames above `depth - 1` (the builtin frame pushed at `depth`).
+     fn pop_frames_to(&mut self, depth: usize) {
+-        if self.frames.len() >= depth {
++        if self.frames.len() >= depth && !self.observer.keep_builtin_frame {
+             self.frames.truncate(depth - 1);
+         }
+     }
+diff --git a/crates/php-vm/src/exec.rs b/crates/php-vm/src/exec.rs
+index 4aedaa8..1f5ffaf 100644
+--- a/crates/php-vm/src/exec.rs
++++ b/crates/php-vm/src/exec.rs
+@@ -188,6 +188,7 @@ impl Vm {
+                     }
+                 }
+                 Err(t) => {
++                    self.observer_end_all(base);
+                     self.frames.truncate(base);
+                     return Err(t);
+                 }
+@@ -235,6 +236,7 @@ impl Vm {
+                 }
+             }
+             // Unwind this frame.
++            self.observer_end_frame(fidx, None, Some(&exc));
+             let popped = self.frames.pop();
+             if let Some(p) = &popped {
+                 if let Some(g) = &p.generator {
+@@ -1230,6 +1232,7 @@ impl Vm {
+     pub(crate) fn op_return_raw(&mut self, v: Option<Value>, base: usize) -> VmResult<Flow> {
+         let v = v.unwrap_or_default();
+         let fidx = self.frames.len() - 1;
++        self.observer_end_frame(fidx, Some(&v), None);
+         let frame = self.frames.pop().expect("frame");
+         if let Some(g) = &frame.generator {
+             crate::generator::finish_with(g, v);
+diff --git a/crates/php-vm/src/ext.rs b/crates/php-vm/src/ext.rs
+index e163555..a8e4436 100644
+--- a/crates/php-vm/src/ext.rs
++++ b/crates/php-vm/src/ext.rs
+@@ -26,6 +26,7 @@ use std::rc::Rc;
+ 
+ pub use crate::builtins::classbuilder::ClassBuilder;
+ pub use crate::func::{Args, BuiltinFn as NativeFn};
++pub use crate::observer::{ObservedFrame, ObserverHooks};
+ pub use crate::vm::{Throw, VmResult};
+ 
+ /// Method/property flag bits for [`ClassBuilder`].
+diff --git a/crates/php-vm/src/generator.rs b/crates/php-vm/src/generator.rs
+index 6c3a986..9620b70 100644
+--- a/crates/php-vm/src/generator.rs
++++ b/crates/php-vm/src/generator.rs
+@@ -265,12 +265,19 @@ impl Vm {
+     fn gen_suspend_frame(&mut self, base: usize, update: impl FnOnce(&mut GenData)) -> Flow {
+         let fidx = self.frames.len() - 1;
+         let mut frame = self.frames.pop().expect("generator frame");
++        let observed = std::mem::take(&mut frame.observed);
++        let info = observed.then(|| crate::observer::observed_frame(&frame));
+         if let Some(g) = frame.generator.take() {
+             with(&g, move |d| {
+                 update(d);
+                 d.frame = Some(Box::new(frame));
+                 d.state = GenState::Suspended;
+             });
++            if let Some(info) = info {
++                // `zend_observer_fcall_end` at `ZEND_YIELD`: the yielded value.
++                let v = with(&g, |d| d.value.clone()).flatten();
++                self.observer_end(&info, v.as_ref(), None);
++            }
+         }
+         if fidx <= base {
+             Flow::Done(Value::Null)
+@@ -583,6 +590,7 @@ impl Vm {
+         frame.generator = Some(g.clone());
+         self.frames.push(*frame);
+         let base = self.frames.len() - 1;
++        self.observer_begin_top();
+         let r = match exc {
+             Some(e) => match self.handle_exception(e, base) {
+                 Ok(()) => self.execute(base).map(|_| ()),
+diff --git a/crates/php-vm/src/include.rs b/crates/php-vm/src/include.rs
+index 1096781..6e0ef6d 100644
+--- a/crates/php-vm/src/include.rs
++++ b/crates/php-vm/src/include.rs
+@@ -180,6 +180,7 @@ impl Vm {
+         f.ufunc = None;
+         self.frames.push(f);
+         let base = self.frames.len() - 1;
++        self.observer_begin_top();
+         if let Err(t) = self.declare_hoisted(&unit) {
+             self.frames.truncate(base);
+             return self.handle_top_throw(t);
+@@ -450,6 +451,7 @@ impl Vm {
+         f.ret = RetTarget::Tmp(dst);
+         f.builtin_name = kind_name.map(ZStr::from);
+         self.frames.push(f);
++        self.observer_begin_top();
+     }
+ 
+     /// Runs a file as `include` would from builtin code (e.g. the
+@@ -471,6 +473,7 @@ impl Vm {
+         let f = Frame::with_vars(unit.main.code.clone(), FrameKind::Main, globals, Some(map));
+         self.frames.push(f);
+         let base = self.frames.len() - 1;
++        self.observer_begin_top();
+         let r = self.execute(base);
+         self.frames.truncate(base);
+         match r {
+diff --git a/crates/php-vm/src/lib.rs b/crates/php-vm/src/lib.rs
+index 81e800e..905a49c 100644
+--- a/crates/php-vm/src/lib.rs
++++ b/crates/php-vm/src/lib.rs
+@@ -30,6 +30,7 @@ mod generator;
+ pub mod gc;
+ mod include;
+ pub mod interrupt;
++mod observer;
+ mod pfa;
+ mod iter;
+ mod lazy;
+@@ -180,6 +181,7 @@ impl Vm {
+             include_opener: None,
+             source_filter: None,
+             builtin_deprecations: std::collections::HashMap::new(),
++            observer: crate::observer::ObserverState::default(),
+             const_deprecation_guard: std::collections::HashSet::new(),
+             const_attributes: std::collections::HashMap::new(),
+             const_files: std::collections::HashMap::new(),
+diff --git a/crates/php-vm/src/vm.rs b/crates/php-vm/src/vm.rs
+index c93b42e..fffddd3 100644
+--- a/crates/php-vm/src/vm.rs
++++ b/crates/php-vm/src/vm.rs
+@@ -297,6 +297,8 @@ pub struct Frame {
+     pub caller_strict: bool,
+     /// Whether the call came from internal code (no "called in" suffix).
+     pub called_from_internal: bool,
++    /// Whether an observer `begin` ran for this frame (its `end` is due).
++    pub observed: bool,
+ }
+ 
+ impl Frame {
+@@ -344,6 +346,7 @@ impl Frame {
+             magic_name: None,
+             caller_strict: false,
+             called_from_internal: false,
++            observed: false,
+         }
+     }
+ 
+@@ -509,6 +512,8 @@ pub struct Vm {
+     /// `#[\Deprecated]` suffixes (" since X, msg") of native functions,
+     /// by lowercase name.
+     pub builtin_deprecations: HashMap<ZStr, Vec<u8>>,
++    /// The observer API state (`zend_observer_fcall_register`).
++    pub(crate) observer: crate::observer::ObserverState,
+     /// Class constants whose `#[\Deprecated]` notice is being built.
+     pub(crate) const_deprecation_guard: HashSet<usize>,
+     /// Attributes of user constants declared with `const` (by name).
