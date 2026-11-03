@@ -769,7 +769,8 @@ pub fn recvmsg(fd: c_int, name_len: Option<usize>, iov_sizes: &[usize], control_
     })
 }
 
-/// `getuid()`/`getgid()`/`getpid()` (credentials tests and defaults).
+/// `getuid()`/`getgid()`/`getpid()` (credentials tests).
+#[cfg(test)]
 pub fn ids() -> (u32, u32, i32) {
     // SAFETY: no preconditions.
     unsafe { (libc::getuid(), libc::getgid(), libc::getpid()) }
@@ -779,4 +780,25 @@ pub fn ids() -> (u32, u32, i32) {
 pub fn cstr(bytes: &[u8]) -> CString {
     let end = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
     CString::new(&bytes[..end]).unwrap_or_default()
+}
+
+/// `SO_ATTACH_REUSEPORT_CBPF` with PHP's two-instruction program
+/// (`LD W ABS SKF_AD_OFF + k; RET A`).
+pub fn attach_reuseport_cbpf(fd: c_int, k: u32) -> Result<(), i32> {
+    let mut prog = [
+        libc::sock_filter { code: 0x20, jt: 0, jf: 0, k: (libc::SKF_AD_OFF as u32).wrapping_add(k) },
+        libc::sock_filter { code: 0x16, jt: 0, jf: 0, k: 0 },
+    ];
+    let fprog = libc::sock_fprog { len: 2, filter: prog.as_mut_ptr() };
+    // SAFETY: `fprog` points to `prog`, which outlives the call.
+    check(unsafe {
+        libc::setsockopt(
+            fd,
+            libc::SOL_SOCKET,
+            libc::SO_ATTACH_REUSEPORT_CBPF,
+            std::ptr::from_ref(&fprog).cast(),
+            socklen(std::mem::size_of::<libc::sock_fprog>()),
+        )
+    })
+    .map(|_| ())
 }
