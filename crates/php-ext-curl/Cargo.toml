@@ -6,6 +6,12 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+php-vm = { path = "../php-vm" }
+php-runtime = { path = "../php-runtime" }
+php-support = { path = "../php-support" }
+php-curl = { path = "../php-curl" }
+php-streams = { path = "../php-streams" }
+php-ext-streams = { path = "../php-ext-streams" }
 
 [lints]
 workspace = true

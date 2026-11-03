@@ -73,11 +73,13 @@ pub trait Handler {
         cint(CURLKHMATCH_MISMATCH)
     }
     /// `CURLMOPT_PUSHFUNCTION`: a server push for the transfer `parent`.
-    /// Return `None` to accept (taking ownership of `child`), or give the
-    /// handle back to deny the push.
-    fn push(&mut self, parent: u64, child: Easy, headers: Vec<Vec<u8>>) -> Option<Easy> {
+    /// Returns whether the push is accepted (the implementation then owns
+    /// `child`). When denying, libcurl frees the handle itself, so the
+    /// implementation must call [`Easy::disown`] on it.
+    fn push(&mut self, parent: u64, child: Easy, headers: Vec<Vec<u8>>) -> bool {
         let _ = (parent, headers);
-        Some(child)
+        child.disown();
+        false
     }
 }
 
@@ -252,14 +254,7 @@ pub(crate) extern "C" fn push_cb(
         .collect();
     let accepted = dispatch(move |h| {
         let child = Easy::adopt(easy)?;
-        match h.push(parent_key, child, list) {
-            None => Some(true),
-            Some(child) => {
-                // libcurl frees a denied handle itself.
-                child.disown();
-                Some(false)
-            }
-        }
+        Some(h.push(parent_key, child, list))
     });
     if accepted == Some(Some(true)) {
         cint(CURL_PUSH_OK)

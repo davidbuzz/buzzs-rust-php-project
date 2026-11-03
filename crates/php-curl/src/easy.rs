@@ -230,8 +230,9 @@ impl Easy {
         Some(e)
     }
 
-    /// Forgets the handle without cleaning it up (libcurl owns it).
-    pub(crate) fn disown(&self) {
+    /// Forgets the handle without cleaning it up (a denied server push:
+    /// libcurl frees it).
+    pub fn disown(&self) {
         self.raw.set(std::ptr::null_mut());
     }
 

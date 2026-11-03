@@ -50,5 +50,6 @@ pub fn all() -> Vec<Box<dyn Extension>> {
         Box::new(php_ext_simplexml::SimpleXml),
         Box::new(php_ext_xsl::Xsl),
         Box::new(php_ext_tokenizer::Tokenizer),
+        Box::new(php_ext_curl::Curl),
     ]
 }
