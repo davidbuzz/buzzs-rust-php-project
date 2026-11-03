@@ -14,6 +14,37 @@
 //! * [`format`] — `date()`/`DateTime::format()` and `DateInterval::format()`.
 //! * [`astro`] — sunrise/sunset/twilight (`date_sun_info()`).
 //! * [`api`] — PHP-function-shaped helpers built on the above.
+//!
+//! # Example
+//!
+//! ```
+//! use php_date::{api, tz};
+//!
+//! let ams = tz::get("Europe/Amsterdam").unwrap();
+//! // strtotime("next monday 10:00", 1136073600)
+//! let ts = api::strtotime(b"next monday 10:00", 1_136_073_600, &ams).unwrap();
+//! assert_eq!(api::date(b"D, d M Y H:i:s T", ts, &ams), b"Mon, 02 Jan 2006 10:00:00 CET");
+//!
+//! // new DateTime('2010-01-31', $ams) ->modify('+1 month')
+//! let (t, _errors) = api::date_initialize(b"2010-01-31", None, None, &ams, 0, 0);
+//! let mut t = t.unwrap();
+//! api::modify(&mut t, b"+1 month").unwrap();
+//! assert_eq!(api::format(&t, b"Y-m-d"), b"2010-03-03");
+//!
+//! // date_parse() errors carry timelib's exact texts and positions.
+//! let (_, errors) = php_date::parse::strtotime(b"10:00 11:00");
+//! assert_eq!(errors.errors[0].message, "Double time specification");
+//! assert_eq!(errors.errors[0].position, 6);
+//! ```
+//!
+//! # Conventions
+//!
+//! * Strings that PHP treats as binary are `&[u8]` / `Vec<u8>`.
+//! * Fields that timelib leaves unset hold [`UNSET`] (`-9999999`).
+//! * Messages are returned *without* the `function(): ` / `Class::method(): `
+//!   prefix PHP adds when reporting them; the VM adds it.
+//! * Arithmetic wraps like the C code does for absurd inputs instead of
+//!   panicking.
 
 // The port keeps timelib's field names (y, m, d, h, i, s, ...) and its
 // long switch-style functions so it can be checked line-by-line against the
