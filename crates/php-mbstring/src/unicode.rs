@@ -111,7 +111,7 @@ pub fn character_width(c: u32) -> usize {
     }
     let (mut lo, mut hi) = (0usize, EAW_TABLE.len());
     while lo < hi {
-        let probe = (lo + hi) / 2;
+        let probe = usize::midpoint(lo, hi);
         let (b, e) = EAW_TABLE[probe];
         if c < b {
             hi = probe;
@@ -167,10 +167,10 @@ const CODE_NOT_FOUND: u32 = u32::MAX;
 #[inline]
 fn mph_hash(d: u32, x: u32) -> u32 {
     let x = x ^ d;
-    ((x >> 16) ^ x).wrapping_mul(0x45d9_f3b)
+    ((x >> 16) ^ x).wrapping_mul(0x045d_9f3b)
 }
 
-#[allow(clippy::cast_sign_loss)]
+#[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
 fn mph_lookup(code: u32, g_table: &[i16], table: &[u32]) -> u32 {
     let g_size = g_table.len() as u32;
     let t_size = (table.len() / 2) as u32;

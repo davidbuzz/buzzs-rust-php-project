@@ -30,6 +30,8 @@ pub enum MbError {
     },
     /// A plain `ValueError` with the full message (no argument prefix).
     Value(String),
+    /// A plain `Error` with the full message.
+    Error(String),
 }
 
 impl MbError {
@@ -63,18 +65,25 @@ impl MbError {
         )
     }
 
+    /// `must not be empty` for argument `arg`
+    /// (`zend_argument_must_not_be_empty_error`).
+    pub fn must_not_be_empty(arg: u32, name: &'static str) -> Self {
+        Self::arg_value(arg, name, "must not be empty")
+    }
+
     /// The PHP exception class name.
     pub fn class(&self) -> &'static str {
         match self {
             Self::ArgValue { .. } | Self::Value(_) => "ValueError",
             Self::ArgType { .. } => "TypeError",
+            Self::Error(_) => "Error",
         }
     }
 
     /// The full exception message for function `func`.
     pub fn message_for(&self, func: &str) -> String {
         match self {
-            Self::Value(m) => m.clone(),
+            Self::Value(m) | Self::Error(m) => m.clone(),
             _ => format!("{func}(): {self}"),
         }
     }
@@ -86,7 +95,7 @@ impl fmt::Display for MbError {
             Self::ArgValue { arg, name, msg } | Self::ArgType { arg, name, msg } => {
                 write!(f, "Argument #{arg} (${name}) {msg}")
             }
-            Self::Value(m) => f.write_str(m),
+            Self::Value(m) | Self::Error(m) => f.write_str(m),
         }
     }
 }
