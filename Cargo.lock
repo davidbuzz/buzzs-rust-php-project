@@ -687,7 +687,12 @@ dependencies = [
 name = "php-ext-sockets"
 version = "0.1.0"
 dependencies = [
+ "libc",
+ "php-ext-stdarr",
+ "php-ext-streams",
  "php-runtime",
+ "php-sockets",
+ "php-streams",
  "php-vm",
 ]
 
@@ -795,9 +800,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "php-ext-xsl"
+version = "0.1.0"
+dependencies = [
+ "php-libxml",
+ "php-runtime",
+ "php-vm",
+ "php-xsl",
+]
+
+[[package]]
 name = "php-ext-zip"
 version = "0.1.0"
 dependencies = [
+ "php-ext-stdstr",
  "php-ext-streams",
  "php-pcre",
  "php-runtime",
