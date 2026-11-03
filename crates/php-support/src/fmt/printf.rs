@@ -64,14 +64,26 @@ impl FormatArg for i32 {
     }
 }
 
-/// `zend_dval_to_lval()`: out-of-range and non-finite values become 0
-/// (PHP 8 on 64-bit platforms), others truncate toward zero.
-#[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+/// `zend_dval_to_lval()` without the out-of-range warning: non-finite
+/// values become 0, out-of-range values wrap modulo 2^64
+/// (`zend_dval_to_lval_slow()`), others truncate toward zero.
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_precision_loss
+)]
 pub(crate) fn dval_to_lval(d: f64) -> i64 {
-    if !d.is_finite() || !(-9_223_372_036_854_775_808.0..9_223_372_036_854_775_808.0).contains(&d) {
+    const TWO_POW_64: f64 = 18_446_744_073_709_551_616.0;
+    if !d.is_finite() {
         0
-    } else {
+    } else if (-9_223_372_036_854_775_808.0..9_223_372_036_854_775_808.0).contains(&d) {
         d as i64
+    } else {
+        let mut m = d % TWO_POW_64;
+        if m < 0.0 {
+            m += TWO_POW_64;
+        }
+        i64::from_ne_bytes((m as u64).to_ne_bytes())
     }
 }
 
@@ -832,6 +844,9 @@ mod tests {
         assert_eq!(sp("%d", &[&"abc"]), "0");
         assert_eq!(sp("%d", &[&3.99]), "3");
         assert_eq!(sp("%d", &[&true]), "1");
+        assert_eq!(sp("%d", &[&1e25]), "1590897979265384448");
+        assert_eq!(sp("%d", &[&-1e19]), "8446744073709551616");
+        assert_eq!(sp("%d", &[&f64::NAN]), "0");
         assert_eq!(sp("%.2d", &[&5]), "5");
     }
 
