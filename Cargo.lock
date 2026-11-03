@@ -835,6 +835,7 @@ dependencies = [
 name = "php-ext-stdstr"
 version = "0.1.0"
 dependencies = [
+ "php-memlimit",
  "php-runtime",
  "php-stdstr",
  "php-support",
