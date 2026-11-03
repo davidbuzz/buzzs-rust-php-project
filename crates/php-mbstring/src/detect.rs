@@ -49,7 +49,7 @@ fn init_candidates<'a>(
                     if strict {
                         continue 'next;
                     }
-                    demerits += 500;
+                    demerits = demerits.wrapping_add(500);
                 }
             }
         }
@@ -105,9 +105,9 @@ fn count_demerits(array: &mut Vec<Candidate<'_>>, strict: bool) {
                         eliminated = true;
                         break;
                     }
-                    c.demerits += 1000;
+                    c.demerits = c.demerits.wrapping_add(1000);
                 } else {
-                    c.demerits += estimate_demerits(w);
+                    c.demerits = c.demerits.wrapping_add(estimate_demerits(w));
                 }
             }
             if eliminated {
@@ -328,5 +328,17 @@ mod tests {
         assert_eq!(g(b"hello", true), Some("ASCII"));
         assert_eq!(g("héllo".as_bytes(), true), Some("UTF-8"));
         assert_eq!(g(b"h\xE9llo", true), Some("ISO-8859-1"));
+    }
+
+    /// GH-17503: demerits are rescaled after every string, so with many
+    /// strings they saturate and then wrap (`uint64_t` arithmetic in C).
+    #[test]
+    fn many_strings_do_not_overflow() {
+        let l = encs(&["UTF-8", "UTF-16"]);
+        let strings: Vec<&[u8]> = vec![&b"<blah>"[..]; 500];
+        assert_eq!(
+            guess_encoding_for_strings(&strings, &l, false, true).map(|e| e.name),
+            Some("UTF-8")
+        );
     }
 }

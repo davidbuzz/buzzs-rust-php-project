@@ -42,72 +42,82 @@ impl MbState {
     pub fn mb_get_info(&mut self, ty: Option<&[u8]>) -> InfoValue {
         let lang = self.language();
         let name = |n: EncodingNo| encoding::get(n).name.to_string();
-        let ty = ty.map(<[u8]>::to_ascii_lowercase);
-        let detect: Vec<&'static str> = self.detect_order().iter().map(|e| e.name).collect();
-        let mimetypes = String::from_utf8_lossy(&self.http_output_conv_mimetypes).into_owned();
-        match ty.as_deref() {
-            None | Some(b"all") => {
-                let mut v = vec![(
-                    "internal_encoding",
-                    InfoValue::Str(self.internal_encoding().name.into()),
-                )];
-                if let Some(e) = self.http_input_identify {
-                    v.push(("http_input", InfoValue::Str(e.name.into())));
-                }
-                v.push((
-                    "http_output",
-                    InfoValue::Str(self.http_output_encoding().name.into()),
-                ));
-                v.push(("http_output_conv_mimetypes", InfoValue::Str(mimetypes)));
-                v.push(("mail_charset", InfoValue::Str(name(lang.mail_charset))));
-                v.push((
-                    "mail_header_encoding",
-                    InfoValue::Str(name(lang.mail_header_encoding)),
-                ));
-                v.push((
-                    "mail_body_encoding",
-                    InfoValue::Str(name(lang.mail_body_encoding)),
-                ));
-                v.push((
-                    "illegal_chars",
-                    InfoValue::Int(i64::try_from(self.illegalchars).unwrap_or(i64::MAX)),
-                ));
-                v.push(("encoding_translation", on_off(self.encoding_translation)));
-                v.push(("language", InfoValue::Str(lang.name.into())));
-                if !detect.is_empty() {
-                    v.push(("detect_order", InfoValue::List(detect)));
-                }
-                v.push(("substitute_character", self.substitute_info()));
-                v.push(("strict_detection", on_off(self.strict_detection)));
-                InfoValue::Assoc(v)
+        let detect =
+            |st: &Self| -> Vec<&'static str> { st.detect_order().iter().map(|e| e.name).collect() };
+        let mimetypes = |st: &Self| {
+            InfoValue::Str(String::from_utf8_lossy(&st.http_output_conv_mimetypes).into_owned())
+        };
+        let illegal =
+            |st: &Self| InfoValue::Int(i64::try_from(st.illegalchars).unwrap_or(i64::MAX));
+        let is = |t: &[u8], k: &str| t.eq_ignore_ascii_case(k.as_bytes());
+        let Some(t) = ty.filter(|t| !is(t, "all")) else {
+            let mut v = vec![(
+                "internal_encoding",
+                InfoValue::Str(self.internal_encoding().name.into()),
+            )];
+            if let Some(e) = self.http_input_identify {
+                v.push(("http_input", InfoValue::Str(e.name.into())));
             }
-            Some(b"internal_encoding") => InfoValue::Str(self.internal_encoding().name.into()),
-            Some(b"http_input") => self
-                .http_input_identify
-                .map_or(InfoValue::Null, |e| InfoValue::Str(e.name.into())),
-            Some(b"http_output") => InfoValue::Str(self.http_output_encoding().name.into()),
-            Some(b"http_output_conv_mimetypes") => InfoValue::Str(mimetypes),
-            Some(b"mail_charset") => InfoValue::Str(name(lang.mail_charset)),
-            Some(b"mail_header_encoding") => InfoValue::Str(name(lang.mail_header_encoding)),
-            Some(b"mail_body_encoding") => InfoValue::Str(name(lang.mail_body_encoding)),
-            Some(b"illegal_chars") => {
-                InfoValue::Int(i64::try_from(self.illegalchars).unwrap_or(i64::MAX))
+            v.push((
+                "http_output",
+                InfoValue::Str(self.http_output_encoding().name.into()),
+            ));
+            v.push(("http_output_conv_mimetypes", mimetypes(self)));
+            v.push(("mail_charset", InfoValue::Str(name(lang.mail_charset))));
+            v.push((
+                "mail_header_encoding",
+                InfoValue::Str(name(lang.mail_header_encoding)),
+            ));
+            v.push((
+                "mail_body_encoding",
+                InfoValue::Str(name(lang.mail_body_encoding)),
+            ));
+            v.push(("illegal_chars", illegal(self)));
+            v.push(("encoding_translation", on_off(self.encoding_translation)));
+            v.push(("language", InfoValue::Str(lang.name.into())));
+            let d = detect(self);
+            if !d.is_empty() {
+                v.push(("detect_order", InfoValue::List(d)));
             }
-            Some(b"encoding_translation") => on_off(self.encoding_translation),
-            Some(b"language") => InfoValue::Str(lang.name.into()),
-            Some(b"detect_order") => {
-                if detect.is_empty() {
-                    InfoValue::Null
-                } else {
-                    InfoValue::List(detect)
-                }
+            v.push(("substitute_character", self.substitute_info()));
+            v.push(("strict_detection", on_off(self.strict_detection)));
+            return InfoValue::Assoc(v);
+        };
+        if is(t, "illegal_chars") {
+            illegal(self)
+        } else if is(t, "internal_encoding") {
+            InfoValue::Str(self.internal_encoding().name.into())
+        } else if is(t, "http_input") {
+            self.http_input_identify
+                .map_or(InfoValue::Null, |e| InfoValue::Str(e.name.into()))
+        } else if is(t, "http_output") {
+            InfoValue::Str(self.http_output_encoding().name.into())
+        } else if is(t, "http_output_conv_mimetypes") {
+            mimetypes(self)
+        } else if is(t, "mail_charset") {
+            InfoValue::Str(name(lang.mail_charset))
+        } else if is(t, "mail_header_encoding") {
+            InfoValue::Str(name(lang.mail_header_encoding))
+        } else if is(t, "mail_body_encoding") {
+            InfoValue::Str(name(lang.mail_body_encoding))
+        } else if is(t, "encoding_translation") {
+            on_off(self.encoding_translation)
+        } else if is(t, "language") {
+            InfoValue::Str(lang.name.into())
+        } else if is(t, "detect_order") {
+            let d = detect(self);
+            if d.is_empty() {
+                InfoValue::Null
+            } else {
+                InfoValue::List(d)
             }
-            Some(b"substitute_character") => self.substitute_info(),
-            Some(b"strict_detection") => on_off(self.strict_detection),
-            Some(_) => {
-                self.warn("argument #1 ($type) must be a valid type");
-                InfoValue::False
-            }
+        } else if is(t, "substitute_character") {
+            self.substitute_info()
+        } else if is(t, "strict_detection") {
+            on_off(self.strict_detection)
+        } else {
+            self.warn("argument #1 ($type) must be a valid type");
+            InfoValue::False
         }
     }
 }

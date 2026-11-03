@@ -6,6 +6,8 @@
 use crate::codecs;
 use crate::convert::{CheckFn, CutFn, FromWcharFn, ToWcharFn};
 use crate::legacy::Vtbl;
+use std::collections::HashMap;
+use std::sync::OnceLock;
 
 /// Single-byte encoding (`MBFL_ENCTYPE_SBCS`).
 pub const ENCTYPE_SBCS: u32 = 0x0000_0001;
@@ -250,27 +252,46 @@ pub static ENCODINGS: [&Encoding; 79] = [
     &codecs::cjk::ENC_CP50222,
 ];
 
+/// Longest name, MIME name or alias (bytes); longer inputs cannot match.
+const MAX_NAME_LEN: usize = 32;
+
+/// Lowercased name / MIME name / alias -> encoding, built once. Names take
+/// precedence over MIME names, which take precedence over aliases (the
+/// search order of `mbfl_name2encoding_ex`).
+fn name_map() -> &'static HashMap<Vec<u8>, &'static Encoding> {
+    static MAP: OnceLock<HashMap<Vec<u8>, &'static Encoding>> = OnceLock::new();
+    MAP.get_or_init(|| {
+        let mut map = HashMap::new();
+        for e in ENCODINGS {
+            map.entry(e.name.to_ascii_lowercase().into_bytes())
+                .or_insert(e);
+        }
+        for e in ENCODINGS {
+            if let Some(m) = e.mime_name {
+                map.entry(m.to_ascii_lowercase().into_bytes()).or_insert(e);
+            }
+        }
+        for e in ENCODINGS {
+            for a in e.aliases {
+                map.entry(a.to_ascii_lowercase().into_bytes()).or_insert(e);
+            }
+        }
+        map
+    })
+}
+
 /// `mbfl_name2encoding_ex`: look an encoding up by name, then MIME name,
 /// then alias, ASCII case-insensitively. `"pass"` and `"wchar"` are not
 /// found (they are not in the public list).
 pub fn by_name(name: &[u8]) -> Option<&'static Encoding> {
-    ENCODINGS
-        .iter()
-        .find(|e| e.name.as_bytes().eq_ignore_ascii_case(name))
-        .or_else(|| {
-            ENCODINGS.iter().find(|e| {
-                e.mime_name
-                    .is_some_and(|m| m.as_bytes().eq_ignore_ascii_case(name))
-            })
-        })
-        .or_else(|| {
-            ENCODINGS.iter().find(|e| {
-                e.aliases
-                    .iter()
-                    .any(|a| a.as_bytes().eq_ignore_ascii_case(name))
-            })
-        })
-        .copied()
+    if name.len() > MAX_NAME_LEN {
+        return None;
+    }
+    let mut buf = [0u8; MAX_NAME_LEN];
+    let key = &mut buf[..name.len()];
+    key.copy_from_slice(name);
+    key.make_ascii_lowercase();
+    name_map().get(&key[..]).copied()
 }
 
 /// `mbfl_name2encoding`: like [`by_name`] but the name ends at the first NUL
@@ -324,6 +345,50 @@ mod tests {
         assert_eq!(by_name(b"pass"), None);
         assert_eq!(by_name(b"wchar"), None);
         assert_eq!(by_cname(b"UTF-8\0junk").map(|e| e.name), Some("UTF-8"));
+    }
+
+    #[test]
+    fn map_matches_linear_search() {
+        let linear = |name: &[u8]| {
+            ENCODINGS
+                .iter()
+                .find(|e| e.name.as_bytes().eq_ignore_ascii_case(name))
+                .or_else(|| {
+                    ENCODINGS.iter().find(|e| {
+                        e.mime_name
+                            .is_some_and(|m| m.as_bytes().eq_ignore_ascii_case(name))
+                    })
+                })
+                .or_else(|| {
+                    ENCODINGS.iter().find(|e| {
+                        e.aliases
+                            .iter()
+                            .any(|a| a.as_bytes().eq_ignore_ascii_case(name))
+                    })
+                })
+                .map(|e| e.no)
+        };
+        for e in ENCODINGS {
+            let mut names = vec![e.name];
+            names.extend(e.mime_name);
+            names.extend(e.aliases.iter().copied());
+            for n in names {
+                for v in [
+                    n.to_string(),
+                    n.to_ascii_uppercase(),
+                    n.to_ascii_lowercase(),
+                ] {
+                    assert!(v.len() <= MAX_NAME_LEN, "{v}");
+                    assert_eq!(
+                        by_name(v.as_bytes()).map(|e| e.no),
+                        linear(v.as_bytes()),
+                        "{v}"
+                    );
+                }
+            }
+        }
+        assert_eq!(by_name(&[b'x'; 100]), None);
+        assert_eq!(by_name(b"UTF-8\0"), None);
     }
 
     #[test]
