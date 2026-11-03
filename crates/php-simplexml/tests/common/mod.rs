@@ -124,8 +124,29 @@ impl RuntimeContext for Host {
             if let (Some(x), Some(y)) = (self.sxe_unwrap(a), self.sxe_unwrap(b)) {
                 return Sxe::compare(&x, &y);
             }
+            return Ok(1);
         }
-        Ok(1)
+        // zend_std_compare_objects: object vs scalar.
+        let (obj, other, lhs) = match (op1, op2) {
+            (Value::Object(o), v) => (o.clone(), v.clone(), true),
+            (v, Value::Object(o)) => (o.clone(), v.clone(), false),
+            _ => return Ok(1),
+        };
+        let target = match other {
+            Value::Bool(_) => CastTarget::Bool,
+            Value::Int(_) => CastTarget::Int,
+            Value::Float(_) => CastTarget::Float,
+            Value::Null => CastTarget::Null,
+            _ => CastTarget::String,
+        };
+        let Some(casted) = self.cast_object(&obj, target)? else {
+            return Ok(if lhs { 1 } else { -1 });
+        };
+        if lhs {
+            php_runtime::ops::compare(&casted, &other, self)
+        } else {
+            php_runtime::ops::compare(&other, &casted, self)
+        }
     }
 
     fn count_object(&mut self, obj: &Obj) -> RtResult<Option<i64>> {
@@ -571,4 +592,34 @@ pub fn trim(s: &str) -> String {
 
 pub fn s(v: &str) -> Value {
     Value::Str(ZStr::from(v))
+}
+
+impl T {
+    /// `$v->name` fetched for writing (`FETCH_OBJ_W`): `get_property_ptr_ptr`
+    /// with the `read_property(BP_VAR_W)` fallback.
+    pub fn prop_w(&mut self, v: &Value, name: &str) -> Value {
+        let s = self.sxe(v);
+        let r = Sxe::property_ptr(&s, &mut self.h, name.as_bytes());
+        match self.catch(r.map(Some)) {
+            Some(php_simplexml::PropertyPtr::Value(x)) => x,
+            Some(php_simplexml::PropertyPtr::Fallback) => self.prop_mode(v, name, FetchMode::Write),
+            _ => Value::Null,
+        }
+    }
+
+    /// `$v[$k] .= $x` / `+=` etc.: read (R), operate, write back.
+    pub fn dim_op(&mut self, v: &Value, key: Value, op: impl FnOnce(&mut T, Value) -> Value) {
+        let cur = self.dim(v, key.clone());
+        let n = op(self, cur);
+        self.set_dim(v, Some(key), n);
+    }
+
+    /// `"..." . $v` (string conversion of any value).
+    pub fn cat(&mut self, parts: &[&Value]) -> String {
+        let mut out = String::new();
+        for p in parts {
+            out.push_str(&self.str(p));
+        }
+        out
+    }
 }
