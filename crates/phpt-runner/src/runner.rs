@@ -80,6 +80,22 @@ impl Extensions {
     }
 }
 
+/// Ask the binary for its `E_ALL` value (`php -r 'echo E_ALL;'`).
+pub fn probe_e_all(php: &Path, env: &Env, cwd: &Path) -> Option<u32> {
+    let argv: Vec<OsString> = vec![php.into(), os("-r"), os("echo E_ALL;")];
+    let out = run(&Invocation {
+        argv: &argv,
+        env,
+        cwd,
+        stdin: None,
+        capture: Capture::STDOUT_ONLY,
+        discard_stderr: true,
+        timeout: Duration::from_secs(30),
+    })
+    .ok()?;
+    std::str::from_utf8(trim(&out.data)).ok()?.parse().ok()
+}
+
 /// Settings shared by all tests in a run.
 #[derive(Debug, Clone)]
 pub struct Config {

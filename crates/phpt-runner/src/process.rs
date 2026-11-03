@@ -10,6 +10,7 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use nix::sys::resource::{getrlimit, setrlimit, Resource};
 use nix::sys::signal::{killpg, Signal};
 use nix::unistd::Pid;
 
@@ -114,6 +115,20 @@ fn wait_until(child: &mut Child, deadline: Instant) -> Option<std::process::Exit
     }
 }
 
+/// Set this process's soft `RLIMIT_CORE` to 0 (once). Resource limits are inherited across
+/// `fork`/`exec`, so no test process (or anything it spawns) writes a core dump; crashing tests
+/// are common while the implementation is young and core handlers such as apport are slow. The
+/// hard limit is left untouched. Done in the parent rather than in a `pre_exec` hook, so no
+/// `unsafe` is needed.
+pub fn disable_core_dumps() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        if let Ok((_, hard)) = getrlimit(Resource::RLIMIT_CORE) {
+            let _ = setrlimit(Resource::RLIMIT_CORE, 0, hard);
+        }
+    });
+}
+
 /// Build the command and wire up its standard streams. Returns the merged stdout+stderr pipe
 /// reader when both are captured.
 fn build_command(inv: &Invocation<'_>) -> std::io::Result<(Command, Option<os_pipe::PipeReader>)> {
@@ -168,6 +183,7 @@ fn build_command(inv: &Invocation<'_>) -> std::io::Result<(Command, Option<os_pi
 /// Run a command, returning its captured output (stdout and stderr interleaved when both are
 /// captured). Errors only if the process cannot be spawned.
 pub fn run(inv: &Invocation<'_>) -> std::io::Result<RunOutput> {
+    disable_core_dumps();
     let (mut cmd, merged) = build_command(inv)?;
     let mut reader: Option<Box<dyn Read + Send>> =
         merged.map(|r| Box::new(r) as Box<dyn Read + Send>);
@@ -294,6 +310,12 @@ mod tests {
             Duration::from_secs(10),
         );
         assert_eq!(out.data, b"unset\n");
+    }
+
+    #[test]
+    fn children_cannot_dump_core() {
+        let out = sh("ulimit -c", Capture::ALL, None, Duration::from_secs(10));
+        assert_eq!(out.data, b"0\n");
     }
 
     #[test]

@@ -3,17 +3,20 @@
 
 use std::fmt::Write as _;
 
-/// `E_ALL` as defined by the php-src version the tests come from (no `E_STRICT`).
+/// `E_ALL` as defined by the php-src version the tests come from (no `E_STRICT`); used when the
+/// binary under test cannot report its own value.
 pub const E_ALL: u32 = 30719;
 
-/// The INI settings run-tests.php passes to every test with `-d`.
-pub fn default_ini_overwrites() -> Vec<String> {
+/// The INI settings run-tests.php passes to every test with `-d`. `e_all` is the `E_ALL` value
+/// for `error_reporting` (run-tests.php uses the constant of the PHP running it, normally the
+/// binary under test).
+pub fn default_ini_overwrites(e_all: u32) -> Vec<String> {
     [
         "output_handler=",
         "open_basedir=",
         "disable_functions=",
         "output_buffering=Off",
-        &format!("error_reporting={E_ALL}"),
+        &format!("error_reporting={e_all}"),
         "fatal_error_backtraces=Off",
         "display_errors=1",
         "display_startup_errors=1",
@@ -191,7 +194,7 @@ mod tests {
 
     #[test]
     fn defaults_contain_error_reporting() {
-        let d = default_ini_overwrites();
+        let d = default_ini_overwrites(E_ALL);
         assert!(d.contains(&"error_reporting=30719".to_string()));
         assert_eq!(d.len(), 39);
     }

@@ -10,11 +10,11 @@ use clap::Parser;
 
 use phpt_runner::baseline::Baseline;
 use phpt_runner::discover::{collect, find_srcdir, ConflictResolver};
-use phpt_runner::ini::{default_ini_overwrites, escapeshellarg, IniSettings};
+use phpt_runner::ini::{default_ini_overwrites, escapeshellarg, IniSettings, E_ALL};
 use phpt_runner::process::Env;
 use phpt_runner::report::{by_dir, dir_table, summary, totals, JsonReport};
 use phpt_runner::result::{Status, TestResult};
-use phpt_runner::runner::{Config, Extensions, Runner};
+use phpt_runner::runner::{probe_e_all, Config, Extensions, Runner};
 use phpt_runner::schedule::{run_jobs, Job};
 
 /// Run php-src `.phpt` tests (a Rust port of run-tests.php).
@@ -232,9 +232,10 @@ fn make_runner(cli: &Cli, srcdir: &Path) -> Result<(Runner, Option<SharedProbeCa
         .canonicalize()
         .map_err(|e| format!("invalid PHP executable {}: {e}", php.display()))?;
 
-    let mut ini_overwrites = default_ini_overwrites();
-    ini_overwrites.extend(cli.ini.iter().cloned());
     let mut env = base_env(&php, cli.skip_slow);
+    let e_all = probe_e_all(&php, &env, srcdir).unwrap_or(E_ALL);
+    let mut ini_overwrites = default_ini_overwrites(e_all);
+    ini_overwrites.extend(cli.ini.iter().cloned());
     env.remove(&OsString::from("TEST_PHP_SHARED_CACHE_DIR"));
     let probe_cache = SharedProbeCache::create();
     if let Some(cache) = &probe_cache {
