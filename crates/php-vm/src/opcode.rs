@@ -496,7 +496,8 @@ pub enum Op {
     /// Throws `UnhandledMatchError` for the subject.
     MatchError { subject: Operand },
     /// `declare(ticks=N)` tick.
-    Ticks,
+    /// `ZEND_TICKS` with N of `declare(ticks=N)`.
+    Ticks(u32),
     /// Emits a compile-time-style diagnostic at runtime (deferred warnings).
     Diag { level: u8, msg: u32 },
     /// `assert()`: when assertions are disabled at runtime, stores `true`

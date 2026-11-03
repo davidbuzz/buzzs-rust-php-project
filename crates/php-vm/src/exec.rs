@@ -839,7 +839,10 @@ impl Vm {
                         let v = self.read(*subject)?;
                         return Err(self.match_error(&v));
                     }
-                    Op::Ticks => Flow::Next,
+                    Op::Ticks(n) => {
+                        self.op_ticks(*n)?;
+                        Flow::Next
+                    }
                     Op::Diag { level, msg } => {
                         let m = self.lit_str(*msg).to_string_lossy();
                         self.error(i64::from(*level), &m)?;
@@ -861,6 +864,7 @@ impl Vm {
                 if php_memlimit::is_pending() {
                     self.raise_pending_oom()?;
                 }
+                self.check_interrupt()?;
                 match flow {
                     Flow::Next => {}
                     Flow::Reload => continue 'frames,
@@ -987,9 +991,10 @@ impl Vm {
             match key {
                 None => {
                     if za.make_mut().push(v).is_err() {
-                        self.warning(
+                        return Err(self.make_throw(
+                            "Error",
                             "Cannot add element to the array as the next element is already occupied",
-                        )?;
+                        ));
                     }
                 }
                 Some(k) => {

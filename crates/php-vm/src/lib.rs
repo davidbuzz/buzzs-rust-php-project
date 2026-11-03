@@ -28,6 +28,7 @@ mod fiber;
 pub mod func;
 mod generator;
 mod include;
+pub mod interrupt;
 mod iter;
 mod lazy;
 pub mod object;
@@ -155,6 +156,12 @@ impl Vm {
             depth: 0,
             once_flags: HashSet::new(),
             tick_functions: Vec::new(),
+            interrupt_handlers: Vec::new(),
+            tick_hooks: Vec::new(),
+            user_ticks: Vec::new(),
+            ticks_count: 0,
+            fiber_switch_block: 0,
+            timeout_seconds: 0,
             headers_sent: false,
             fibers: Vec::new(),
             loaded_extensions: Vec::new(),
@@ -162,6 +169,10 @@ impl Vm {
             startup_hooks: Vec::new(),
             module_startup_hooks: Vec::new(),
             ini_modify_hooks: std::collections::HashMap::new(),
+            module_info: Vec::new(),
+            dim_ctx: crate::ext::DimensionCtx::Read,
+            include_opener: None,
+            source_filter: None,
             builtin_deprecations: std::collections::HashMap::new(),
             const_deprecation_guard: std::collections::HashSet::new(),
             const_attributes: std::collections::HashMap::new(),
@@ -192,6 +203,10 @@ impl Vm {
                 };
             }
             "precision" => self.precision = self.ini.get_long("precision"),
+            "max_execution_time" => {
+                let t = self.ini.get_long("max_execution_time");
+                self.set_time_limit(t);
+            }
             "memory_limit" | "max_memory_limit" => {
                 let limit = u64::try_from(self.ini.get_long("memory_limit")).unwrap_or(u64::MAX);
                 php_memlimit::GLOBAL.force_limit(php_memlimit::limit_from_ini(limit));
@@ -278,6 +293,8 @@ impl Vm {
         if php_memlimit::request_start(php_memlimit::limit_from_ini(limit)).is_err() {
             php_memlimit::GLOBAL.force_limit(Some(php_memlimit::DEFAULT_LIMIT));
         }
+        let t = self.ini.get_long("max_execution_time");
+        self.set_time_limit(t);
         let p = ZStr::from(path);
         let mut r = Ok(());
         let prepend = self

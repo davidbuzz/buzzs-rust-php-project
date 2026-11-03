@@ -92,7 +92,16 @@ name(type $param, ?type $opt = default, type &$byref = null, type ...$rest): ret
   `f(): Argument #1 ($cb) must be a valid callback, function "nope" not
   found or invalid function name` (`?callable` adds "or null").
 * **By-reference** (`&$x`): the handler receives `Value::Reference`; write
-  back with `a.set_ref(n, value)` or `a.reference(n)`.
+  back with `a.set_ref(n, value)` or `a.reference(n)`. Prefix a parameter
+  with `@prefer-ref` (`@prefer-ref array &$array`) for
+  `ZEND_ARG_SEND_PREFER_REF`: variables are passed by reference, literals
+  and call results by value without an error or notice.
+* **`#[\SensitiveParameter]`** before a parameter masks it in stack traces.
+* **Literals**: `0777`, `0o17`, `0x1F`, `0b101`; a default that is a
+  constant name (`PHP_ROUND_HALF_UP`, `Foo::BAR`) is resolved at call time.
+* **Deprecation**: `m.function(...).deprecated("8.4", "use x()")` emits
+  `Deprecated: Function f() is deprecated since 8.4, use x()` before
+  argument parsing.
 * **Variadic** (`...$rest`): all remaining arguments are in `a.values`
   (`a.named` holds extra named arguments).
 
@@ -147,6 +156,16 @@ too (a user error handler may throw), hence `?` on them.
 
 ## 5. Constants and INI
 
+`m.constant_deprecated("MT_RAND_PHP", Value::Int(1), "8.3", "")` defines a
+constant whose use emits `Constant MT_RAND_PHP is deprecated since 8.3`.
+`m.ini_on_modify("date.timezone", f)` validates `ini_set()` values
+(`Ok(false)` rejects; also called after `ini_restore()`).
+`m.on_module_startup(f)` runs after all extensions registered;
+`m.on_request_startup(f)` before the script (reset per-request state).
+`m.info(f)` registers the module's `phpinfo()` section
+(`Vec<InfoItem>`; read with `vm.module_info(name)`).
+
+
 ```rust
 m.constant("JSON_PRETTY_PRINT", Value::Int(128));
 m.ini(IniDirective::new("json.foo", Some("1"), Access::ALL, ModifyHandler::Bool, "json"));
@@ -175,6 +194,13 @@ let cls = ClassBuilder::new("HashContext")
     .register(m.vm());
 ```
 
+**Enums**: `ClassBuilder::new("RoundingMode").unit_enum().case("HalfUp", None)`
+or `.backed_enum("string").case("Hearts", Some(Value::Str("H".into())))`
+gives `cases()`/`from()`/`tryFrom()`, `$name`/`$value` and the
+`UnitEnum`/`BackedEnum` interfaces; add methods as usual.
+`.deprecated_constant(name, value, since, message)` declares a
+`#[\Deprecated]` class constant.
+
 Register classes in dependency order (parents and interfaces first;
 classes from other extensions are found by name if those extensions were
 registered earlier).
@@ -193,13 +219,33 @@ overloading), `count`, `read_property` / `write_property` /
 `get_iterator` (returns a `Box<dyn NativeIterator>` for `foreach`),
 `serialize` / `unserialize`.
 
-## 7. Resources
+## 7. Engine hooks
+
+| API | PHP equivalent |
+|---|---|
+| `php_vm::interrupt::request_interrupt()` + `vm.register_interrupt_handler(f)` | `EG(vm_interrupt)` + `zend_interrupt_function` (async signals; safe from signal handlers) |
+| `vm.register_tick_handler(f)` | `php_add_tick_function` (`declare(ticks=N)`) |
+| `vm.block_fiber_switch(true/false)` | `zend_fiber_switch_block()` / `unblock()` |
+| `vm.set_include_opener(f)` | `zend_stream_open_function` for `include`/`require` (return `IncludeOpen`) |
+| `vm.set_source_filter(f)` | `zend_compile_file` override (e.g. phar stubs) |
+| `vm.new_internal_iterator(Box<dyn NativeIterator>)` | `zend_create_internal_iterator_zval` |
+| `vm.set_property_scoped(&o, name, v, &scope)` | property write from another class scope |
+| `vm.new_object_named(&cls, args, named)`, `vm.call_method_named(...)` | calls with named arguments |
+| `vm.parse_long_weak(&v)` | `zend_parse_arg_long_weak` |
+| `vm.throw_runtime_error(e)` / `vm.runtime_error_from(t)` | `RuntimeError` <-> `Throw` |
+
+`memory_limit`: call `php_memlimit::try_reserve(bytes)` before an
+allocation whose size the script controls; on `Err` return any value —
+the VM raises "Allowed memory size of N bytes exhausted" right after the
+call.
+
+## 8. Resources
 
 Use `php_runtime::Resource::new("stream", Some(Box::new(state)))` and
 return `Value::Resource(r)`; read the payload with
 `r.data().as_ref().and_then(|d| d.downcast_ref::<T>())`.
 
-## 8. Testing
+## 9. Testing
 
 Build `target/debug/php` and run the extension's phpt directory:
 

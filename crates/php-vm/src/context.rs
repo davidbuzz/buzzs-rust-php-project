@@ -193,6 +193,18 @@ impl RuntimeContext for Vm {
     }
 
     fn compare_objects(&mut self, op1: &Value, op2: &Value) -> RtResult<i32> {
+        if let (Value::Object(a), Value::Object(b)) = (op1, op2) {
+            if Obj::ptr_eq(a, b) {
+                return Ok(0);
+            }
+        }
+        // Enums use `zend_objects_not_comparable`.
+        if [op1, op2]
+            .iter()
+            .any(|v| matches!(v, Value::Object(o) if object::class_of(o).is_enum()))
+        {
+            return Ok(1);
+        }
         for v in [op1, op2] {
             if let Value::Object(o) = v {
                 if let Some(f) = crate::ext::hooks_of(o).and_then(|h| h.compare) {

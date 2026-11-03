@@ -195,6 +195,8 @@ pub(crate) struct Compiler {
     pub fn_uses: HashMap<Vec<u8>, Vec<u8>>,
     pub const_uses: HashMap<Vec<u8>, Vec<u8>>,
     pub strict_types: bool,
+    /// `FC(declarables).ticks`: N of the active `declare(ticks=N)`.
+    pub(crate) ticks: u32,
     pub decls: Rc<DeclTable>,
     pub fns: Vec<FnCtx>,
     pub classes: Vec<ClassCtx>,
@@ -224,6 +226,7 @@ pub fn compile(
         fn_uses: HashMap::new(),
         const_uses: HashMap::new(),
         strict_types: false,
+        ticks: 0,
         decls: Rc::new(DeclTable::default()),
         fns: Vec::new(),
         classes: Vec::new(),

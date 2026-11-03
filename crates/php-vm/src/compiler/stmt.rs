@@ -65,6 +65,17 @@ impl Compiler {
 
     #[allow(clippy::too_many_lines)]
     pub(crate) fn compile_stmt(&mut self, s: &Stmt) -> CResult<()> {
+        self.compile_stmt_inner(s)?;
+        // `zend_compile_stmt`: ZEND_TICKS after each ticked statement.
+        if self.ticks > 0 && !matches!(s.kind, StmtKind::Block(_) | StmtKind::Label(_)) {
+            self.f().line = s.span.line;
+            let n = self.ticks;
+            self.emit(Op::Ticks(n));
+        }
+        Ok(())
+    }
+
+    fn compile_stmt_inner(&mut self, s: &Stmt) -> CResult<()> {
         self.f().line = s.span.line;
         match &s.kind {
             StmtKind::Block(b) => self.compile_stmts(b)?,
@@ -240,6 +251,7 @@ impl Compiler {
                 }
             }
             StmtKind::Declare { directives, body } => {
+                let ticks_before = self.ticks;
                 for d in directives {
                     if d.name.eq_ignore_case("strict_types") {
                         if let ExprKind::Int(v) = d.value.kind {
@@ -262,8 +274,15 @@ impl Compiler {
                                 d.span.line,
                             );
                         }
-                    } else if d.name.eq_ignore_case("ticks") || d.name.eq_ignore_case("encoding") {
-                        // Ticks are not supported; encoding is ignored.
+                    } else if d.name.eq_ignore_case("ticks") {
+                        let n = match self.try_fold(&d.value) {
+                            Some(Value::Int(n)) => n,
+                            Some(v) => v.as_int().unwrap_or(0),
+                            None => 0,
+                        };
+                        self.ticks = u32::try_from(n.max(0)).unwrap_or(u32::MAX);
+                    } else if d.name.eq_ignore_case("encoding") {
+                        // Encoding is ignored (no zend.multibyte).
                     } else {
                         self.warnings.push((
                             128,
@@ -273,7 +292,10 @@ impl Compiler {
                     }
                 }
                 if let Some(b) = body {
-                    self.compile_stmt(b)?;
+                    // Block mode: the directives apply to the block only.
+                    let r = self.compile_stmt(b);
+                    self.ticks = ticks_before;
+                    r?;
                 }
             }
             StmtKind::Nop | StmtKind::HaltCompiler { .. } => {}

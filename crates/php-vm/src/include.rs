@@ -18,7 +18,13 @@ pub(crate) enum CompileOutcome {
 
 impl Vm {
     /// Parses and compiles source code.
-    pub(crate) fn compile_source(&mut self, src: &[u8], filename: &ZStr, is_eval: bool, skip_shebang: bool) -> VmResult<CompileOutcome> {
+    pub(crate) fn compile_source(
+        &mut self,
+        src: &[u8],
+        filename: &ZStr,
+        is_eval: bool,
+        skip_shebang: bool,
+    ) -> VmResult<CompileOutcome> {
         let parsed = if is_eval {
             php_parser::parse_eval(src)
         } else {
@@ -99,7 +105,9 @@ impl Vm {
                         "Cannot redeclare function {}() (previously declared in {}:{})",
                         f.name, u.code.filename, u.line_start
                     ),
-                    crate::func::Func::Builtin(_) => format!("Cannot redeclare function {}()", f.name),
+                    crate::func::Func::Builtin(_) => {
+                        format!("Cannot redeclare function {}()", f.name)
+                    }
                 };
                 self.report_compile_error(&msg, &f.code.filename, f.line_start, false);
                 return Err(Throw::Fatal);
@@ -108,14 +116,18 @@ impl Vm {
         }
         for &i in &unit.hoisted_classes {
             let d = unit.decls.classes.borrow()[i as usize].clone();
-            if self.classes.contains_key(&ZStr::from(d.name.to_ascii_lowercase())) {
+            if self
+                .classes
+                .contains_key(&ZStr::from(d.name.to_ascii_lowercase()))
+            {
                 continue;
             }
             if self.can_early_bind(&d) {
                 // Early binding; errors surface when the declaration runs.
                 let saved = self.frames.len();
                 let r = self.declare_class(&d, false);
-                self.frames.truncate(saved.max(self.frames.len().min(saved)));
+                self.frames
+                    .truncate(saved.max(self.frames.len().min(saved)));
                 if let Err(e) = r {
                     match e {
                         Throw::Fatal | Throw::Exit | Throw::FiberSuspend => return Err(e),
@@ -128,7 +140,11 @@ impl Vm {
     }
 
     /// Maps a unit's CVs onto an existing variable store.
-    fn cv_map_for(&mut self, code: &crate::opcode::OpArray, vars: &Rc<std::cell::RefCell<crate::vm::VarStore>>) -> Rc<[u32]> {
+    fn cv_map_for(
+        &mut self,
+        code: &crate::opcode::OpArray,
+        vars: &Rc<std::cell::RefCell<crate::vm::VarStore>>,
+    ) -> Rc<[u32]> {
         let mut st = vars.borrow_mut();
         code.cv_names
             .iter()
@@ -141,7 +157,11 @@ impl Vm {
     /// by the caller.
     pub fn run_main(&mut self, src: &[u8], path: &ZStr) -> Result<(), Throw> {
         self.script_path = path.clone();
-        let unit = match self.compile_source(src, path, false, true) {
+        let src = match self.filter_source(path, src.to_vec()) {
+            Ok(s) => s,
+            Err(t) => return self.handle_top_throw(t),
+        };
+        let unit = match self.compile_source(&src, path, false, true) {
             Ok(CompileOutcome::Ok(u)) => u,
             Ok(CompileOutcome::ParseError(e)) => {
                 self.report_uncaught(&e);
@@ -186,7 +206,11 @@ impl Vm {
         if p.is_absolute() || is_relative_explicit {
             return p.is_file().then(|| p.to_path_buf());
         }
-        let ip = self.ini.get("include_path").map(<[u8]>::to_vec).unwrap_or_else(|| b".".to_vec());
+        let ip = self
+            .ini
+            .get("include_path")
+            .map(<[u8]>::to_vec)
+            .unwrap_or_else(|| b".".to_vec());
         for dir in ip.split(|&c| c == b':') {
             if dir.is_empty() {
                 continue;
@@ -216,7 +240,11 @@ impl Vm {
         let s = self.to_zstr(&v)?;
         if kind == IncludeKind::Eval {
             let (file, line) = self.current_location();
-            let fname = ZStr::from(format!("{}({}) : eval()'d code", file.to_string_lossy(), line));
+            let fname = ZStr::from(format!(
+                "{}({}) : eval()'d code",
+                file.to_string_lossy(),
+                line
+            ));
             let unit = match self.compile_source(s.as_bytes(), &fname, true, false)? {
                 CompileOutcome::Ok(u) => u,
                 CompileOutcome::ParseError(e) => return Err(Throw::Exception(e)),
@@ -240,6 +268,22 @@ impl Vm {
                 &format!("{kind_name}(): Argument #1 ($filename) must not contain any null bytes"),
             ));
         }
+        // Extension opener (stream wrappers, include_path entries such as
+        // `phar://`): `php_stream_open_for_zend_ex`.
+        if let Some(opener) = self.include_opener {
+            match opener(self, name, kind_name)? {
+                crate::ext::IncludeOpen::Opened {
+                    source,
+                    opened_path,
+                } => {
+                    return self.include_source(kind, kind_name, source, opened_path, dst);
+                }
+                crate::ext::IncludeOpen::Failed => {
+                    return self.include_failed(kind, kind_name, &s, dst);
+                }
+                crate::ext::IncludeOpen::NotHandled => {}
+            }
+        }
         let resolved = self.resolve_include_path(name);
         let Some(path) = resolved else {
             let n = s.to_string_lossy();
@@ -251,10 +295,13 @@ impl Vm {
             if name.is_empty() {
                 self.warning(&format!("{kind_name}(): Filename cannot be empty"))?;
             } else {
-                self.warning(&format!("{kind_name}({n}): Failed to open stream: No such file or directory"))?;
+                self.warning(&format!(
+                    "{kind_name}({n}): Failed to open stream: No such file or directory"
+                ))?;
             }
             if matches!(kind, IncludeKind::Require | IncludeKind::RequireOnce) {
-                let msg = format!("Uncaught Error: Failed opening required '{n}' (include_path='{ip}')");
+                let msg =
+                    format!("Uncaught Error: Failed opening required '{n}' (include_path='{ip}')");
                 let _ = msg;
                 let (file, line) = self.current_location();
                 self.report_compile_error(
@@ -274,7 +321,9 @@ impl Vm {
         let real = std::fs::canonicalize(&path).unwrap_or(path.clone());
         use std::os::unix::ffi::OsStrExt;
         let real_z = ZStr::from(real.as_os_str().as_bytes());
-        if matches!(kind, IncludeKind::IncludeOnce | IncludeKind::RequireOnce) && self.included_set.contains(&real_z) {
+        if matches!(kind, IncludeKind::IncludeOnce | IncludeKind::RequireOnce)
+            && self.included_set.contains(&real_z)
+        {
             self.set_tmp(dst, Value::Bool(true));
             return Ok(false);
         }
@@ -296,6 +345,7 @@ impl Vm {
             self.included_set.insert(real_z.clone());
             self.included.push(real_z);
         }
+        let src = self.filter_source(&display_path, src)?;
         let unit = match self.compile_source(&src, &display_path, false, false)? {
             CompileOutcome::Ok(u) => u,
             CompileOutcome::ParseError(e) => return Err(Throw::Exception(e)),
@@ -306,7 +356,83 @@ impl Vm {
         Ok(true)
     }
 
-    fn push_include_frame(&mut self, unit: &Rc<CompiledUnit>, kind: FrameKind, dst: u32, kind_name: Option<&str>) {
+    /// Includes already-opened source (from an opener hook).
+    fn include_source(
+        &mut self,
+        kind: IncludeKind,
+        kind_name: &str,
+        src: Vec<u8>,
+        path: ZStr,
+        dst: u32,
+    ) -> VmResult<bool> {
+        if matches!(kind, IncludeKind::IncludeOnce | IncludeKind::RequireOnce)
+            && self.included_set.contains(&path)
+        {
+            self.set_tmp(dst, Value::Bool(true));
+            return Ok(false);
+        }
+        if !self.included_set.contains(&path) {
+            self.included_set.insert(path.clone());
+            self.included.push(path.clone());
+        }
+        let src = self.filter_source(&path, src)?;
+        let unit = match self.compile_source(&src, &path, false, false)? {
+            CompileOutcome::Ok(u) => u,
+            CompileOutcome::ParseError(e) => return Err(Throw::Exception(e)),
+            CompileOutcome::Fatal => return Err(Throw::Fatal),
+        };
+        self.declare_hoisted(&unit)?;
+        self.push_include_frame(&unit, FrameKind::Include, dst, Some(kind_name));
+        Ok(true)
+    }
+
+    /// The "Failed opening" tail of a failed include (the opener already
+    /// reported why).
+    fn include_failed(
+        &mut self,
+        kind: IncludeKind,
+        kind_name: &str,
+        s: &ZStr,
+        dst: u32,
+    ) -> VmResult<bool> {
+        let n = s.to_string_lossy();
+        let ip = self
+            .ini
+            .get("include_path")
+            .map(|v| String::from_utf8_lossy(v).into_owned())
+            .unwrap_or_default();
+        if matches!(kind, IncludeKind::Require | IncludeKind::RequireOnce) {
+            let (file, line) = self.current_location();
+            self.report_compile_error(
+                &format!("{kind_name}(): Failed opening required '{n}' (include_path='{ip}')"),
+                &file,
+                line,
+                false,
+            );
+            return Err(Throw::Fatal);
+        }
+        self.warning(&format!(
+            "{kind_name}(): Failed opening '{n}' for inclusion (include_path='{ip}')"
+        ))?;
+        self.set_tmp(dst, Value::Bool(false));
+        Ok(false)
+    }
+
+    /// Runs the source-filter hook (e.g. phar stubs) over script source.
+    pub(crate) fn filter_source(&mut self, path: &ZStr, src: Vec<u8>) -> VmResult<Vec<u8>> {
+        match self.source_filter {
+            Some(f) => f(self, path, src),
+            None => Ok(src),
+        }
+    }
+
+    fn push_include_frame(
+        &mut self,
+        unit: &Rc<CompiledUnit>,
+        kind: FrameKind,
+        dst: u32,
+        kind_name: Option<&str>,
+    ) {
         let vars = self.frame().vars.clone();
         let map = self.cv_map_for(&unit.main.code, &vars);
         let mut f = Frame::with_vars(unit.main.code.clone(), kind, vars, Some(map));

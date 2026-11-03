@@ -375,33 +375,27 @@ pub(crate) fn descend(
                             WOp::Assign(val) => {
                                 let val = std::mem::take(val);
                                 if t.push(val.clone()).is_err() {
-                                    diags.push((
-                                        E_WARNING,
+                                    return Step::Err(WalkErr::Error(
                                         "Cannot add element to the array as the next element is already occupied".into(),
                                     ));
-                                    return Step::Done(Value::Null);
                                 }
                                 Step::Done(val)
                             }
                             WOp::AssignRef(r) => {
                                 let r = std::mem::take(r);
                                 if t.push(r.clone()).is_err() {
-                                    diags.push((
-                                        E_WARNING,
+                                    return Step::Err(WalkErr::Error(
                                         "Cannot add element to the array as the next element is already occupied".into(),
                                     ));
-                                    return Step::Done(Value::Null);
                                 }
                                 Step::Done(r)
                             }
                             _ => match t.push_mut(Value::Null) {
                                 Ok(slot) => apply_final(slot, wop),
                                 Err(_) => {
-                                    diags.push((
-                                        E_WARNING,
+                                    Step::Err(WalkErr::Error(
                                         "Cannot add element to the array as the next element is already occupied".into(),
-                                    ));
-                                    Step::Done(Value::Null)
+                                    ))
                                 }
                             },
                         }
@@ -409,11 +403,9 @@ pub(crate) fn descend(
                         match t.push_mut(Value::Null) {
                             Ok(slot) => descend(slot, segs, i + 1, wop, diags, true),
                             Err(_) => {
-                                diags.push((
-                                    E_WARNING,
-                                    "Cannot add element to the array as the next element is already occupied".into(),
-                                ));
-                                Step::Done(Value::Null)
+                                Step::Err(WalkErr::Error(
+                                        "Cannot add element to the array as the next element is already occupied".into(),
+                                    ))
                             }
                         }
                     }
@@ -849,9 +841,26 @@ impl Vm {
                             _ => {}
                         }
                     }
-                    if let (Some(f), Some(k)) = (h.read_dimension, keyopt) {
+                    // `$o[][..] = v` reads the appended dimension (key null).
+                    let read_key = if keyopt.is_none() && !last {
+                        Some(&key)
+                    } else {
+                        keyopt
+                    };
+                    if let (Some(f), Some(k)) = (h.read_dimension, read_key) {
                         if !last || matches!(wop, WOp::FetchRw | WOp::MakeRef) {
-                            if let Some(v) = f(self, &obj, k)? {
+                            self.dim_ctx = if keyopt.is_none() {
+                                crate::ext::DimensionCtx::Append
+                            } else {
+                                match (&wop, last) {
+                                    (WOp::FetchRw, _) => crate::ext::DimensionCtx::ReadWrite,
+                                    (WOp::Unset, false) => crate::ext::DimensionCtx::Unset,
+                                    _ => crate::ext::DimensionCtx::Write,
+                                }
+                            };
+                            let r = f(self, &obj, k);
+                            self.dim_ctx = crate::ext::DimensionCtx::Read;
+                            if let Some(v) = r? {
                                 if last {
                                     return Ok(match wop {
                                         WOp::MakeRef => Value::Reference(match v {
@@ -1258,7 +1267,14 @@ impl Vm {
                         }
                     }
                     if let Some(f) = h.read_dimension {
-                        if let Some(v) = f(self, &o, k)? {
+                        self.dim_ctx = if mode == FetchMode::Is {
+                            crate::ext::DimensionCtx::Is
+                        } else {
+                            crate::ext::DimensionCtx::Read
+                        };
+                        let r = f(self, &o, k);
+                        self.dim_ctx = crate::ext::DimensionCtx::Read;
+                        if let Some(v) = r? {
                             return Ok(v.deref());
                         }
                     }

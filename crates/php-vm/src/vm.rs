@@ -451,6 +451,18 @@ pub struct Vm {
     pub once_flags: HashSet<String>,
     /// Ticks functions.
     pub tick_functions: Vec<Value>,
+    /// Extension interrupt handlers (run when the interrupt flag is set).
+    pub interrupt_handlers: Vec<crate::interrupt::InterruptFn>,
+    /// Extension tick handlers (`php_add_tick_function`).
+    pub tick_hooks: Vec<crate::interrupt::TickFn>,
+    /// `register_tick_function()` entries.
+    pub(crate) user_ticks: Vec<crate::interrupt::UserTick>,
+    /// `EG(ticks_count)`.
+    pub(crate) ticks_count: u32,
+    /// `zend_fiber_switch_block()` depth.
+    pub fiber_switch_block: u32,
+    /// `EG(timeout_seconds)`.
+    pub(crate) timeout_seconds: i64,
     /// Whether output has been flushed to the SAPI at least once.
     pub headers_sent: bool,
     /// Running fibers (innermost last).
@@ -467,6 +479,14 @@ pub struct Vm {
     pub module_startup_hooks: Vec<fn(&mut Vm)>,
     /// Extension `on_modify` handlers by INI name (`ZEND_INI_MH`).
     pub ini_modify_hooks: HashMap<String, crate::ext::IniModifyFn>,
+    /// `PHP_MINFO` callbacks by extension name.
+    pub module_info: Vec<(String, crate::ext::ModuleInfoFn)>,
+    /// Context of the running `read_dimension` hook.
+    pub(crate) dim_ctx: crate::ext::DimensionCtx,
+    /// `include` opener hook.
+    pub include_opener: Option<crate::ext::IncludeOpenerFn>,
+    /// Source filter hook.
+    pub source_filter: Option<crate::ext::SourceFilterFn>,
     /// `#[\Deprecated]` suffixes (" since X, msg") of native functions,
     /// by lowercase name.
     pub builtin_deprecations: HashMap<ZStr, Vec<u8>>,

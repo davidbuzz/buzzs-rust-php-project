@@ -982,7 +982,16 @@ fn get_defined_vars(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
         return Ok(Value::Array(ZArray::new()));
     };
     let t = vm.frames[idx].vars.borrow().to_array();
-    Ok(Value::Array(ZArray::from_table(t)))
+    // `zend_array_dup`: references nobody else holds become plain values.
+    let mut out = HashTable::new();
+    for (k, v) in t.iter() {
+        let v = match v {
+            Value::Reference(r) if r.refcount() == 1 => r.get(),
+            other => other.clone(),
+        };
+        out.insert(k.clone(), v);
+    }
+    Ok(Value::Array(ZArray::from_table(out)))
 }
 
 fn compact(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -1771,7 +1780,21 @@ pub(crate) fn register(vm: &mut Vm) {
         "memory_reset_peak_usage(): void",
         memory_reset_peak_usage,
     );
-    reg(vm, "set_time_limit(int $seconds): bool", ret_true);
+    reg(
+        vm,
+        "set_time_limit(int $seconds): bool",
+        crate::interrupt::set_time_limit,
+    );
+    reg(
+        vm,
+        "register_tick_function(callable $callback, mixed ...$args): bool",
+        crate::interrupt::register_tick_function,
+    );
+    reg(
+        vm,
+        "unregister_tick_function(callable $callback): void",
+        crate::interrupt::unregister_tick_function,
+    );
     reg(vm, "ignore_user_abort(?bool $enable = null): int", ret_zero);
     reg(vm, "connection_status(): int", ret_zero);
     reg(vm, "connection_aborted(): int", ret_zero);

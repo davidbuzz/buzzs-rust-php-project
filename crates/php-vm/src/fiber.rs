@@ -458,7 +458,16 @@ fn fiber_construct(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     Ok(Value::Null)
 }
 
+/// `zend_fiber_switch_blocked()` (ticks, signal handlers).
+fn check_switch(vm: &mut Vm) -> VmResult<()> {
+    if vm.fiber_switch_block > 0 {
+        return Err(vm.fiber_error("Cannot switch fibers in current execution context"));
+    }
+    Ok(())
+}
+
 fn fiber_start(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    check_switch(vm)?;
     let o = a.this_obj();
     if state_of(&o) != FiberState::Init {
         return Err(vm.fiber_error("Cannot start a fiber that has already been started"));
@@ -470,6 +479,7 @@ fn fiber_start(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 }
 
 fn fiber_resume(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    check_switch(vm)?;
     let o = a.this_obj();
     if state_of(&o) != FiberState::Suspended {
         return Err(vm.fiber_error("Cannot resume a fiber that is not suspended"));
@@ -479,6 +489,7 @@ fn fiber_resume(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 }
 
 fn fiber_throw(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    check_switch(vm)?;
     let o = a.this_obj();
     let Value::Object(e) = a.at(0) else {
         return Ok(Value::Null);
@@ -533,6 +544,7 @@ fn fiber_suspend(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     if with(&fiber, |d| d.destroyed).unwrap_or(false) {
         return Err(vm.fiber_error("Cannot suspend in a force-closed fiber"));
     }
+    check_switch(vm)?;
     let Some(s) = with(&fiber, |d| {
         d.transfer = Some(Ok(v));
         d.state = FiberState::Suspended;

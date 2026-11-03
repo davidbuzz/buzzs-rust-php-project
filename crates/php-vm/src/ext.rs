@@ -47,6 +47,72 @@ pub mod class_flags {
 /// the restored value (the result is ignored).
 pub type IniModifyFn = fn(&mut Vm, &[u8]) -> VmResult<bool>;
 
+/// One element of an extension's `phpinfo()` section (`PHP_MINFO`):
+/// the `php_info_print_table_*` calls.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum InfoItem {
+    /// `php_info_print_table_start()`.
+    TableStart,
+    /// `php_info_print_table_end()`.
+    TableEnd,
+    /// `php_info_print_table_header(n, ...)`.
+    Header(Vec<String>),
+    /// `php_info_print_table_colspan_header(n, text)`.
+    ColspanHeader(String),
+    /// `php_info_print_table_row(n, ...)`.
+    Row(Vec<String>),
+    /// `DISPLAY_INI_ENTRIES()`.
+    IniEntries,
+}
+
+/// Why [`ClassHooks::read_dimension`] is being called (the `type`
+/// argument of `read_dimension`: `BP_VAR_R`/`IS`/`W`/`RW`/`UNSET`), read
+/// with [`Vm::dimension_context`] inside the hook.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum DimensionCtx {
+    /// `$o[k]` read.
+    #[default]
+    Read,
+    /// `isset($o[k][..])` / `??` (quiet).
+    Is,
+    /// Intermediate of a nested write (`$o[k][..] = v`, `&$o[k]`).
+    Write,
+    /// Compound assignment / increment (`$o[k] .= v`, `$o[k][..]++`).
+    ReadWrite,
+    /// Intermediate of a nested unset (`unset($o[k][..])`).
+    Unset,
+    /// `$o[][..] = v`: the key passed is null.
+    Append,
+}
+
+/// Result of an include opener hook.
+#[derive(Debug)]
+pub enum IncludeOpen {
+    /// Opened: the source and the path to record (`__FILE__`, `*_once`).
+    Opened {
+        /// The file contents.
+        source: Vec<u8>,
+        /// The opened path (e.g. a `phar://` URL).
+        opened_path: ZStr,
+    },
+    /// Failed; the opener already emitted its warnings. The VM adds
+    /// "Failed opening ... for inclusion" / the `require` fatal.
+    Failed,
+    /// Not for this opener: the VM opens a plain file itself.
+    NotHandled,
+}
+
+/// `zend_stream_open_function`: opens `include`/`require` targets
+/// (receives the name as written and "include"/"require_once"/...).
+pub type IncludeOpenerFn = fn(&mut Vm, &[u8], &str) -> VmResult<IncludeOpen>;
+
+/// Transforms script source before compilation (main script and
+/// includes), e.g. phar stubs (`zend_compile_file` override).
+pub type SourceFilterFn = fn(&mut Vm, &ZStr, Vec<u8>) -> VmResult<Vec<u8>>;
+
+/// A `PHP_MINFO` callback.
+pub type ModuleInfoFn = fn(&mut Vm) -> Vec<InfoItem>;
+
 /// A native extension module.
 pub trait Extension {
     /// The extension name as reported by `get_loaded_extensions()`
@@ -155,6 +221,13 @@ impl<'a> ModuleBuilder<'a> {
     pub fn ini(&mut self, directive: IniDirective) -> &mut Self {
         let mut sink: Vec<php_support::Diagnostic> = Vec::new();
         self.vm.ini.register(directive, &mut sink);
+        self
+    }
+
+    /// Registers the module's `phpinfo()` section (`PHP_MINFO`), used by
+    /// `phpinfo()` and `ReflectionExtension::info()`.
+    pub fn info(&mut self, f: ModuleInfoFn) -> &mut Self {
+        self.vm.module_info.push((self.name.to_string(), f));
         self
     }
 
@@ -318,6 +391,71 @@ impl Vm {
     /// the value is not acceptable as int.
     pub fn parse_long_weak(&mut self, v: &Value) -> VmResult<Option<i64>> {
         self.parse_arg_long_weak(v)
+    }
+
+    /// The context of the running `read_dimension` hook call.
+    pub fn dimension_context(&self) -> DimensionCtx {
+        self.dim_ctx
+    }
+
+    /// Installs the include opener (stream wrappers for `include`).
+    pub fn set_include_opener(&mut self, f: IncludeOpenerFn) {
+        self.include_opener = Some(f);
+    }
+
+    /// Installs a source filter run before compiling scripts.
+    pub fn set_source_filter(&mut self, f: SourceFilterFn) {
+        self.source_filter = Some(f);
+    }
+
+    /// The `phpinfo()` section of extension `name`, if it registered one.
+    pub fn module_info(&mut self, name: &str) -> Option<Vec<InfoItem>> {
+        let f = self
+            .module_info
+            .iter()
+            .find(|(n, _)| n.eq_ignore_ascii_case(name))
+            .map(|(_, f)| *f)?;
+        Some(f(self))
+    }
+
+    /// Names of the extensions with a `phpinfo()` section, in
+    /// registration order.
+    pub fn modules_with_info(&self) -> Vec<String> {
+        self.module_info.iter().map(|(n, _)| n.clone()).collect()
+    }
+
+    /// Registers an interrupt handler, run at the next safe point after
+    /// [`crate::interrupt::request_interrupt`] (async signals, timers,
+    /// client aborts — `zend_interrupt_function`).
+    pub fn register_interrupt_handler(&mut self, f: crate::interrupt::InterruptFn) {
+        self.interrupt_handlers.push(f);
+    }
+
+    /// Registers a native tick handler (`php_add_tick_function`), run by
+    /// `declare(ticks=N)` code with fiber switching blocked.
+    pub fn register_tick_handler(&mut self, f: crate::interrupt::TickFn) {
+        self.tick_hooks.push(f);
+    }
+
+    /// `zend_fiber_switch_block()` / `unblock()`: Fiber switches throw
+    /// "Cannot switch fibers in current execution context" meanwhile
+    /// (e.g. while dispatching signal handlers).
+    pub fn block_fiber_switch(&mut self, block: bool) {
+        if block {
+            self.fiber_switch_block += 1;
+        } else {
+            self.fiber_switch_block = self.fiber_switch_block.saturating_sub(1);
+        }
+    }
+
+    /// Converts a runtime-layer error into a VM throw (exception object).
+    pub fn throw_runtime_error(&mut self, e: php_runtime::RuntimeError) -> Throw {
+        self.rt_throw(e)
+    }
+
+    /// Wraps a VM throw for code returning `RtResult` (runtime hooks).
+    pub fn runtime_error_from(&mut self, t: Throw) -> php_runtime::RuntimeError {
+        self.to_rt(t)
     }
 
     /// Wraps a native iterator in an `InternalIterator` object (what
