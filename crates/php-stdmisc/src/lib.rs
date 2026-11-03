@@ -24,6 +24,7 @@ pub mod highlight;
 pub mod info;
 pub mod locale;
 pub mod mail;
+pub mod misc;
 pub mod net;
 pub mod process;
 pub mod query;
