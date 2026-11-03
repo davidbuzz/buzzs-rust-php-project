@@ -6,7 +6,7 @@ use std::rc::Rc;
 
 use php_runtime::{ArrayKey, Obj, Value, ZStr};
 use php_vm::class::Class;
-use php_vm::ext::{acc, Args, ClassBuilder, ClassHooks};
+use php_vm::ext::{acc, Args, ClassBuilder, ClassHooks, PropCtx};
 use php_vm::object::{self, oflags};
 use php_vm::{Throw, Vm, VmResult};
 use php_xsl::{ParamKey, XmlOutput, XslError, XsltProcessor, PROPERTY_NAMES};
@@ -165,6 +165,22 @@ fn write_property(vm: &mut Vm, o: &Obj, name: &ZStr, v: &Value) -> VmResult<bool
         }
     }
     Ok(true)
+}
+
+/// `xsl_objects_get_property_ptr_ptr` + `xsl_objects_read_property`: the
+/// validated properties cannot be fetched for writing (references, nested
+/// writes/unsets), which would bypass the validation.
+fn read_property(vm: &mut Vm, _o: &Obj, name: &ZStr) -> VmResult<Option<Value>> {
+    if is_validated(name.as_bytes())
+        && matches!(
+            vm.property_context(),
+            PropCtx::Ref | PropCtx::Write | PropCtx::Unset
+        )
+    {
+        let e = XslError::indirect_modification(&name.to_string_lossy());
+        return Err(throw_xsl(vm, &e));
+    }
+    Ok(None)
 }
 
 /// `xsl_objects_unset_property`.
@@ -613,6 +629,7 @@ pub(crate) fn register_class(vm: &mut Vm) {
     }
     b.hooks(ClassHooks {
         create: Some(create),
+        read_property: Some(read_property),
         write_property: Some(write_property),
         unset_property: Some(unset_property),
         ..ClassHooks::default()

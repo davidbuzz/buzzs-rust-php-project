@@ -20,7 +20,8 @@ mod host;
 mod methods;
 
 use php_runtime::{Value, ZStr};
-use php_vm::ext::{Extension, ModuleBuilder};
+use php_vm::ext::{Extension, InfoItem, ModuleBuilder};
+use php_vm::Vm;
 use php_xsl::class::ConstValue;
 
 /// The `xsl` extension.
@@ -41,5 +42,18 @@ impl Extension for Xsl {
             m.constant(name, v);
         }
         methods::register_class(m.vm());
+        m.info(module_info);
     }
+}
+
+/// `PHP_MINFO_FUNCTION(xsl)`.
+fn module_info(_vm: &mut Vm) -> Vec<InfoItem> {
+    let mut items = vec![InfoItem::TableStart];
+    items.extend(
+        php_xsl::class::info_rows()
+            .into_iter()
+            .map(|(k, v)| InfoItem::Row(vec![k.to_string(), v])),
+    );
+    items.push(InfoItem::TableEnd);
+    items
 }

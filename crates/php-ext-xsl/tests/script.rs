@@ -240,3 +240,17 @@ fn callback_errors_propagate() {
          string(2) \"X!\"\n"
     );
 }
+
+#[test]
+fn validated_properties_refuse_references() {
+    let out = run(r"$p = new XSLTProcessor;
+        try { $r =& $p->maxTemplateVars; } catch (Error $e) { echo $e->getMessage(), PHP_EOL; }
+        $p->maxTemplateDepth++;
+        $x =& $p->cloneDocument;
+        $x = true;
+        var_dump($p->maxTemplateDepth > 1, $p->cloneDocument);");
+    assert_eq!(
+        out,
+        "Indirect modification of XSLTProcessor::$maxTemplateVars is not allowed\nbool(true)\nbool(true)\n"
+    );
+}
