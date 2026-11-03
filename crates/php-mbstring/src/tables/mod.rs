@@ -2,4 +2,5 @@
 //! in `tools/`. Do not edit the generated files by hand.
 
 pub mod cjk;
+pub mod html_entities;
 pub mod singlebyte;
