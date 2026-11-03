@@ -191,6 +191,13 @@ impl<'a, 'h> Parser<'a, 'h> {
     fn get_constant(&mut self, name: Sem) -> Sem {
         let n = name.bytes();
         if !n.contains(&b':') {
+            // zend_get_constant() resolves the special constants itself.
+            if n.eq_ignore_ascii_case(b"true") {
+                return Sem::Str(b"1".to_vec(), false);
+            }
+            if n.eq_ignore_ascii_case(b"false") || n.eq_ignore_ascii_case(b"null") {
+                return Sem::Str(Vec::new(), false);
+            }
             if let Some(v) = self.hooks.constant(&n) {
                 return Sem::Str(v, false);
             }

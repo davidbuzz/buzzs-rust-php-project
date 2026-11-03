@@ -10,23 +10,26 @@ use std::fmt::Write as _;
 
 use super::*;
 
-/// `json_encode()` of a string (ASCII-only inputs; `/` is escaped).
+/// `json_encode()` of a string: `/` escaped, non-ASCII UTF-8 as `\uXXXX`.
 fn json(s: &[u8]) -> String {
     let mut o = String::from("\"");
-    for &c in s {
-        match c {
-            b'"' => o.push_str("\\\""),
-            b'\\' => o.push_str("\\\\"),
-            b'/' => o.push_str("\\/"),
-            b'\n' => o.push_str("\\n"),
-            b'\r' => o.push_str("\\r"),
-            b'\t' => o.push_str("\\t"),
-            0x08 => o.push_str("\\b"),
-            0x0c => o.push_str("\\f"),
-            c if !(0x20..0x7f).contains(&c) => {
-                let _ = write!(o, "\\u{c:04x}");
+    for ch in String::from_utf8_lossy(s).chars() {
+        match ch {
+            '"' => o.push_str("\\\""),
+            '\\' => o.push_str("\\\\"),
+            '/' => o.push_str("\\/"),
+            '\n' => o.push_str("\\n"),
+            '\r' => o.push_str("\\r"),
+            '\t' => o.push_str("\\t"),
+            '\u{8}' => o.push_str("\\b"),
+            '\u{c}' => o.push_str("\\f"),
+            c if (c as u32) < 0x20 || (c as u32) >= 0x7f => {
+                let mut buf = [0u16; 2];
+                for unit in c.encode_utf16(&mut buf) {
+                    let _ = write!(o, "\\u{unit:04x}");
+                }
             }
-            c => o.push(char::from(c)),
+            c => o.push(c),
         }
     }
     o.push('"');
@@ -72,11 +75,32 @@ fn hooks() -> FnHooks<Lookup, Lookup> {
             b"BIRD" => Some(b"Humming bird".to_vec()),
             b"TEST_CONST" => Some(b"test const value".to_vec()),
             b"NUM" => Some(b"7".to_vec()),
+            b"TEST_CONSTANT" => Some(b"this_is_test_constant".to_vec()),
+            // PHP 8.3 values (the oracle); master's E_ALL is 30719.
+            b"E_ERROR" => Some(b"1".to_vec()),
+            b"E_WARNING" => Some(b"2".to_vec()),
+            b"E_PARSE" => Some(b"4".to_vec()),
+            b"E_NOTICE" => Some(b"8".to_vec()),
+            b"E_CORE_ERROR" => Some(b"16".to_vec()),
+            b"E_CORE_WARNING" => Some(b"32".to_vec()),
+            b"E_COMPILE_ERROR" => Some(b"64".to_vec()),
+            b"E_COMPILE_WARNING" => Some(b"128".to_vec()),
+            b"E_USER_ERROR" => Some(b"256".to_vec()),
+            b"E_USER_WARNING" => Some(b"512".to_vec()),
+            b"E_USER_NOTICE" => Some(b"1024".to_vec()),
+            b"E_STRICT" => Some(b"2048".to_vec()),
+            b"E_RECOVERABLE_ERROR" => Some(b"4096".to_vec()),
+            b"E_DEPRECATED" => Some(b"8192".to_vec()),
+            b"E_USER_DEPRECATED" => Some(b"16384".to_vec()),
+            b"E_ALL" => Some(b"32767".to_vec()),
             _ => None,
         },
         variable: |n: &[u8]| match n {
             b"FOO" => Some(b"bar".to_vec()),
-            b"EMPTYV" => Some(Vec::new()),
+            b"EMPTYV" | b"emptyval" => Some(Vec::new()),
+            b"basicval" => Some(b"FUBAR_VARIABLE".to_vec()),
+            b"basicqval" => Some(b"FUBAR_QUOTES_VARIABLE".to_vec()),
+            b"falsyval" => Some(b"false".to_vec()),
             _ => None,
         },
     }
