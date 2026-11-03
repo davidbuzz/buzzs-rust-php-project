@@ -291,9 +291,33 @@ fn common_connect(vm: &mut Vm, a: &Args, is_real_connect: bool, in_ctor: bool) -
     let (allow, dir) = globals::with(|g| (g.allow_local_infile, g.local_infile_directory.clone()));
     conn.set_option(MYSQL_OPT_LOCAL_INFILE, OptionValue::Int(i64::from(allow)));
     if let Some(d) = dir {
-        conn.set_option(MYSQL_OPT_LOAD_DATA_LOCAL_DIR, OptionValue::Str(&d));
+        if check_open_basedir(vm, &d)? {
+            conn.set_option(MYSQL_OPT_LOAD_DATA_LOCAL_DIR, OptionValue::Str(&d));
+        }
     }
     connect_end(vm, object, my, persistent, new_connection, is_real_connect)
+}
+
+/// `php_check_open_basedir()`: whether `path` is within `open_basedir`
+/// (warning when not).
+fn check_open_basedir(vm: &mut Vm, path: &[u8]) -> VmResult<bool> {
+    let Some(basedir) = vm.ini_string("open_basedir").filter(|b| !b.is_empty()) else {
+        return Ok(true);
+    };
+    if basedir
+        .split(|&c| c == b':')
+        .filter(|d| !d.is_empty())
+        .any(|d| php_streams::paths::in_specific_basedir(d, path))
+    {
+        return Ok(true);
+    }
+    let mut m = b"open_basedir restriction in effect. File(".to_vec();
+    m.extend_from_slice(path);
+    m.extend_from_slice(b") is not within the allowed path(s): (");
+    m.extend_from_slice(&basedir);
+    m.push(b')');
+    vm.php_warning_bytes(&m)?;
+    Ok(false)
 }
 
 fn connect_end(
@@ -411,7 +435,7 @@ pub fn begin_transaction(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     }
     let name = opt_str(a, b + 1);
     if name.as_ref().is_some_and(ZStr::is_empty) {
-        return Err(a.value_error(vm, pos(a, 3), "cannot be empty"));
+        return Err(a.value_error(vm, pos(a, 3), "must not be empty"));
     }
     let r = c.begin_transaction(tx_flags(a, b), name.as_ref().map(ZStr::as_bytes));
     bool_cmd(vm, &c, &r)
@@ -438,7 +462,7 @@ pub fn savepoint(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let (_, c, b) = link(vm, a)?;
     let name = a.str(b);
     if name.is_empty() {
-        return Err(a.value_error(vm, pos(a, 2), "cannot be empty"));
+        return Err(a.value_error(vm, pos(a, 2), "must not be empty"));
     }
     let r = c.savepoint(Some(name.as_bytes()));
     bool_cmd(vm, &c, &r)
@@ -449,7 +473,7 @@ pub fn release_savepoint(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let (_, c, b) = link(vm, a)?;
     let name = a.str(b);
     if name.is_empty() {
-        return Err(a.value_error(vm, pos(a, 2), "cannot be empty"));
+        return Err(a.value_error(vm, pos(a, 2), "must not be empty"));
     }
     let r = c.release_savepoint(Some(name.as_bytes()));
     bool_cmd(vm, &c, &r)
@@ -651,6 +675,7 @@ pub fn next_result(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 pub fn multi_query(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let (my, c, b) = link(vm, a)?;
     let q = a.str(b);
+    crate::stmt::flush_buried(&c);
     if !my.borrow().multi_query {
         let _ = c.set_server_option(OPTION_MULTI_STATEMENTS_ON);
         my.borrow_mut().multi_query = true;
@@ -744,7 +769,7 @@ pub fn query(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let q = a.str(b);
     let mode = a.int(b + 1);
     if q.is_empty() {
-        return Err(a.value_error(vm, pos(a, 2), "cannot be empty"));
+        return Err(a.value_error(vm, pos(a, 2), "must not be empty"));
     }
     if (mode & !ASYNC) != USE_RESULT && STORE_RESULT != (mode & !(ASYNC | STORE_RESULT_COPY_DATA)) {
         return Err(a.value_error(
@@ -754,6 +779,7 @@ pub fn query(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         ));
     }
     let (my, c) = fetch_link(vm, &o, Status::Valid)?;
+    crate::stmt::flush_buried(&c);
     disable_mq(&my, &c);
     if mode & ASYNC != 0 {
         if c.send_query(q.as_bytes()).is_err() {
@@ -807,6 +833,7 @@ fn finish_result(
 pub fn real_query(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let (my, c, b) = link(vm, a)?;
     let q = a.str(b);
+    crate::stmt::flush_buried(&c);
     disable_mq(&my, &c);
     if c.query(q.as_bytes()).is_err() {
         report_conn_error(vm, &c)?;

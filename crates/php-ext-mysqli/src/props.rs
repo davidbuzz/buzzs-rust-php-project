@@ -281,6 +281,7 @@ fn throw_fail(vm: &mut Vm, o: &Obj, f: &Fail) -> php_vm::Throw {
 
 /// `read_property` handler.
 pub fn read_property(vm: &mut Vm, o: &Obj, name: &ZStr) -> VmResult<Option<Value>> {
+    crate::report::flush_diag_main(vm)?;
     match read(vm, o, name, false)? {
         None => Ok(None),
         Some(Ok(v)) => Ok(Some(v)),

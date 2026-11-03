@@ -17,6 +17,18 @@ pub const E_WARNING: i64 = 2;
 /// `E_DEPRECATED`
 pub const E_DEPRECATED: i64 = 8192;
 
+/// Emits queued diagnostics outside a native function (property
+/// handlers): `php_error_docref` then reports itself as `main()`.
+pub fn flush_diag_main(vm: &mut Vm) -> VmResult<()> {
+    for d in diag::take() {
+        let level = if d.fatal { E_ERROR } else { E_WARNING };
+        let mut m = if d.docref { b"main(): ".to_vec() } else { Vec::new() };
+        m.extend_from_slice(d.message.as_bytes());
+        vm.raise_bytes(level, &m)?;
+    }
+    Ok(())
+}
+
 /// Emits the diagnostics mysqlnd queued (`php_error_docref` /
 /// `php_error` calls inside the driver).
 pub fn flush_diag(vm: &mut Vm) -> VmResult<()> {

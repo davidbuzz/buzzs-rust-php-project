@@ -29,7 +29,9 @@ mod util;
 use php_mysqlnd::consts::MYSQLI_CONSTANTS;
 use php_runtime::{Obj, Value, ZStr};
 use php_support::ini::{Access, IniDirective, ModifyHandler};
-use php_vm::ext::{acc, class_flags, Args, ClassBuilder, ClassHooks, Extension, ModuleBuilder, NativeFn};
+use php_vm::ext::{
+    acc, class_flags, Args, ClassBuilder, ClassHooks, Extension, InfoItem, ModuleBuilder, NativeFn,
+};
 use php_vm::func::flags as fflags;
 use php_vm::object::set_internal;
 use php_vm::{Vm, VmResult};
@@ -132,7 +134,7 @@ fn entries() -> Vec<Entry> {
         em("mysqli_fetch_all(mysqli_result $result, int $mode = MYSQLI_NUM): array", R, "fetch_all(int $mode = MYSQLI_NUM): array", result::fetch_all),
         em("mysqli_fetch_array(mysqli_result $result, int $mode = MYSQLI_BOTH): array|null|false", R, "fetch_array(int $mode = MYSQLI_BOTH): array|null|false", result::fetch_array),
         em("mysqli_fetch_assoc(mysqli_result $result): array|null|false", R, "fetch_assoc(): array|null|false", result::fetch_assoc),
-        em("mysqli_fetch_object(mysqli_result $result, string $class = \"stdClass\", array $constructor_args = []): object|null|false", R, "fetch_object(string $class = \"stdClass\", array $constructor_args = []): object|null|false", result::fetch_object),
+        em("mysqli_fetch_object(mysqli_result $result, $class = \"stdClass\", $constructor_args = []): object|null|false", R, "fetch_object($class = \"stdClass\", $constructor_args = []): object|null|false", result::fetch_object),
         em("mysqli_fetch_row(mysqli_result $result): array|null|false", R, "fetch_row(): array|null|false", result::fetch_row),
         em("mysqli_fetch_column(mysqli_result $result, int $column = 0): null|int|float|string|false", R, "fetch_column(int $column = 0): null|int|float|string|false", result::fetch_column),
         e("mysqli_field_count(mysqli $mysql): int", link::field_count),
@@ -469,6 +471,64 @@ fn register_ini(m: &mut ModuleBuilder<'_>) {
     }
 }
 
+/// `OnUpdateDefaultPort`: `ZEND_ATOL`, rejecting values outside `0..=65535`.
+fn on_update_default_port(_vm: &mut Vm, v: &[u8]) -> VmResult<bool> {
+    let s = String::from_utf8_lossy(v);
+    let t = s.trim_start();
+    let end = t
+        .char_indices()
+        .take_while(|&(i, c)| c.is_ascii_digit() || (i == 0 && (c == '-' || c == '+')))
+        .count();
+    let n: i64 = t[..end].parse().unwrap_or(0);
+    Ok((0..=65535).contains(&n))
+}
+
+fn row(k: &str, v: impl Into<String>) -> InfoItem {
+    InfoItem::Row(vec![k.to_string(), v.into()])
+}
+
+/// `PHP_MINFO_FUNCTION(mysqli)`
+fn mysqli_info(_vm: &mut Vm) -> Vec<InfoItem> {
+    let (ap, ip, links) = globals::with(|g| (g.num_active_persistent, g.num_inactive_persistent, g.num_links));
+    vec![
+        InfoItem::TableStart,
+        row("MysqlI Support", "enabled"),
+        row("Client API library version", php_mysqlnd::CLIENT_INFO),
+        row("Active Persistent Links", ap.to_string()),
+        row("Inactive Persistent Links", ip.to_string()),
+        row("Active Links", links.to_string()),
+        InfoItem::TableEnd,
+        InfoItem::IniEntries,
+    ]
+}
+
+/// `PHP_MINFO_FUNCTION(mysqlnd)`
+fn mysqlnd_info(vm: &mut Vm) -> Vec<InfoItem> {
+    link::sync_mysqlnd_ini(vm);
+    let s = php_mysqlnd::ini::settings();
+    let yn = |b: bool| if b { "Yes" } else { "No" };
+    vec![
+        InfoItem::TableStart,
+        row("mysqlnd", "enabled"),
+        row("Version", php_mysqlnd::CLIENT_INFO),
+        row("Compression", "supported"),
+        row("core SSL", "supported"),
+        row("extended SSL", "supported"),
+        row("Command buffer size", s.net_cmd_buffer_size.to_string()),
+        row("Read buffer size", s.net_read_buffer_size.to_string()),
+        row("Read timeout", s.net_read_timeout.to_string()),
+        row("Collecting statistics", yn(s.collect_statistics)),
+        row("Collecting memory statistics", yn(s.collect_memory_statistics)),
+        row("Tracing", s.debug.clone().unwrap_or_else(|| "n/a".to_string())),
+        row(
+            "Loaded plugins",
+            "mysqlnd,debug_trace,auth_plugin_mysql_native_password,auth_plugin_mysql_clear_password,auth_plugin_caching_sha2_password,auth_plugin_sha256_password",
+        ),
+        InfoItem::TableEnd,
+        InfoItem::IniEntries,
+    ]
+}
+
 impl Extension for Mysqli {
     fn name(&self) -> &'static str {
         "mysqli"
@@ -492,6 +552,13 @@ impl Extension for Mysqli {
                 m.deprecated(since, msg);
             }
         }
+        m.ini_on_modify("mysqli.default_port", on_update_default_port);
+        m.info(mysqli_info);
+        let vm = m.vm();
+        if !vm.loaded_extensions.iter().any(|e| e.eq_ignore_ascii_case("mysqlnd")) {
+            vm.loaded_extensions.push("mysqlnd".to_string());
+        }
+        vm.module_info.push(("mysqlnd".to_string(), mysqlnd_info));
         m.on_request_startup(globals::request_startup);
         m.on_request_shutdown(request_shutdown);
     }

@@ -147,9 +147,19 @@ pub fn fetch_all(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 pub fn fetch_object(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let (o, b) = recv(vm, a)?;
     let class = if a.has(b) {
-        let name = a.str(b);
+        let v = a.at(b);
+        let name = match &v {
+            Value::Str(s) => s.clone(),
+            Value::Object(obj) if php_vm::object::class_of(obj).magic.to_string.is_some() => {
+                vm.value_to_string(&v)?
+            }
+            other => {
+                let msg = format!("must be a valid class name, {} given", crate::util::type_name(other));
+                return Err(a.type_error(vm, pos(a, 2), &msg));
+            }
+        };
         let Some(c) = vm.lookup_class(&name)? else {
-            let msg = format!("must be a valid class name, {} given", name.to_string_lossy());
+            let msg = format!("must be a valid class name, \"{}\" given", name.to_string_lossy());
             return Err(a.type_error(vm, pos(a, 2), &msg));
         };
         c
@@ -159,7 +169,14 @@ pub fn fetch_object(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             None => return Err(vm.throw("Error", "stdClass missing")),
         }
     };
-    let ctor_args = if a.has(b + 1) { a.array(b + 1) } else { ZArray::new() };
+    let ctor_args = match a.get(b + 1) {
+        None => ZArray::new(),
+        Some(Value::Array(arr)) => arr,
+        Some(other) => {
+            let msg = format!("must be of type array, {} given", crate::util::type_name(&other));
+            return Err(a.type_error(vm, pos(a, 3), &msg));
+        }
+    };
     if class.flags & (cflags::INTERFACE | cflags::ABSTRACT) != 0 || class.is_trait() || class.is_enum() {
         let msg = if class.is_enum() {
             format!("Cannot instantiate enum {}", class.name.to_string_lossy())

@@ -11,6 +11,7 @@ php-vm = { path = "../php-vm" }
 php-runtime = { path = "../php-runtime" }
 php-support = { path = "../php-support" }
 php-mysqlnd = { path = "../php-mysqlnd" }
+php-streams = { path = "../php-streams" }
 
 [lints]
 workspace = true

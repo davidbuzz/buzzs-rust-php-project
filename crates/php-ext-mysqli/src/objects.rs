@@ -110,10 +110,23 @@ pub struct StmtRes {
     pub st: Rc<RefCell<MyStmt>>,
 }
 
-/// Internal state of `mysqli_stmt` objects (dropping the statement closes
-/// it implicitly, like `php_clear_stmt_bind`).
+/// Internal state of `mysqli_stmt` objects.
 #[derive(Debug, Default)]
 pub struct StmtObj(pub Option<StmtRes>);
+
+impl Drop for StmtObj {
+    /// `mysqli_stmt_free_storage` -> `php_clear_stmt_bind`: closes the
+    /// statement, warning when that fails.
+    fn drop(&mut self) {
+        if let Some(res) = self.0.take() {
+            if let Ok(st) = res.st.try_borrow() {
+                if !st.stmt.close() {
+                    php_mysqlnd::diag::warn("Error occurred while closing statement");
+                }
+            }
+        }
+    }
+}
 
 /// `MYSQLI_RESOURCE` of a `mysqli_result`.
 #[derive(Debug)]

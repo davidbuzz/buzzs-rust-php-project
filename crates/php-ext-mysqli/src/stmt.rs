@@ -34,6 +34,22 @@ fn bury(st: Statement) {
     GRAVEYARD.with(|g| g.borrow_mut().push(st));
 }
 
+/// Closes the parked statements of `conn` (called before a command that
+/// resets the connection's error / affected rows anyway).
+pub fn flush_buried(conn: &Connection) {
+    let mine: Vec<Statement> = GRAVEYARD.with(|g| {
+        let mut g = g.borrow_mut();
+        let (mine, rest): (Vec<_>, Vec<_>) = std::mem::take(&mut *g).into_iter().partition(|s| {
+            s.connection().is_some_and(|c| Connection::ptr_eq(&c, conn))
+        });
+        *g = rest;
+        mine
+    });
+    for s in mine {
+        s.close();
+    }
+}
+
 /// Closes the parked statements (request shutdown).
 pub fn clear_graveyard() {
     let v = GRAVEYARD.with(|g| std::mem::take(&mut *g.borrow_mut()));
@@ -72,6 +88,7 @@ pub fn prepare(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let (o, b) = recv(vm, a)?;
     let (_, c) = fetch_link(vm, &o, Status::Valid)?;
     let q = a.str(b);
+    flush_buried(&c);
     let st = c.stmt_init();
     if st.prepare(q.as_bytes()).is_err() {
         bury(st);
@@ -145,7 +162,7 @@ pub fn bind_param(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let types = a.str(b);
     let vars: Vec<Value> = a.values.iter().skip(b + 1).cloned().collect();
     if types.is_empty() {
-        return Err(a.value_error(vm, pos(a, 2), "cannot be empty"));
+        return Err(a.value_error(vm, pos(a, 2), "must not be empty"));
     }
     if types.len() != vars.len() {
         return Err(vm.throw(
@@ -261,14 +278,11 @@ pub fn execute(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     Ok(Value::Bool(ret))
 }
 
-/// `close_stmt_and_copy_errors`: on failure the statement is parked so
-/// the connection keeps the error.
-fn finish_stmt(st: Statement, failed: bool) {
-    if failed {
-        bury(st);
-    } else {
-        st.close();
-    }
+/// `close_stmt_and_copy_errors`: closing would reset the connection's
+/// error and affected rows, so the statement is parked and closed before
+/// the next command on the connection.
+fn finish_stmt(st: Statement) {
+    bury(st);
 }
 
 /// `mysqli_execute_query()`
@@ -276,6 +290,7 @@ pub fn execute_query(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let (o, b) = recv(vm, a)?;
     let (_, c) = fetch_link(vm, &o, Status::Valid)?;
     let q = a.str(b);
+    flush_buried(&c);
     let st = c.stmt_init();
     if st.prepare(q.as_bytes()).is_err() {
         bury(st.clone());
@@ -291,7 +306,7 @@ pub fn execute_query(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
                 return Err(t);
             }
             Ok(Some(false)) => {
-                finish_stmt(st, true);
+                finish_stmt(st);
                 flush_diag(vm)?;
                 return Ok(Value::Bool(false));
             }
@@ -308,9 +323,7 @@ pub fn execute_query(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     }
     flush_diag(vm)?;
     if st.field_count() == 0 {
-        let aff = c.affected_rows();
-        finish_stmt(st, false);
-        let _ = aff;
+        finish_stmt(st);
         return Ok(Value::Bool(true));
     }
     if globals::report_mode() & REPORT_INDEX != 0 {
@@ -323,7 +336,7 @@ pub fn execute_query(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         return Ok(Value::Bool(false));
     };
     let v = new_result_object(vm, rs)?;
-    finish_stmt(st, false);
+    finish_stmt(st);
     flush_diag(vm)?;
     Ok(v)
 }
