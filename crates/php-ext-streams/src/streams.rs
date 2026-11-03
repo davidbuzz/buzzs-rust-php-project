@@ -189,7 +189,7 @@ fn select_entries(arr: &ZArray) -> Vec<(ArrayKey, Value, Rc<res::StreamCell>)> {
 
 fn select_fd(cell: &res::StreamCell) -> Option<i32> {
     let mut s = cell.get()?;
-    s.cast(CastAs::FdForSelect, false).filter(|&fd| fd >= 0)
+    s.cast(CastAs::FdForSelect, true).filter(|&fd| fd >= 0)
 }
 
 #[allow(clippy::too_many_lines)]
@@ -207,15 +207,16 @@ fn stream_select(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         .iter()
         .map(|o| o.as_ref().map(select_entries).unwrap_or_default())
         .collect();
-    let mut fds: Vec<Vec<Option<i32>>> = Vec::new();
-    let mut sets = 0;
-    for e in &entries {
-        let f: Vec<Option<i32>> = e.iter().map(|(_, _, c)| select_fd(c)).collect();
-        if f.iter().any(Option::is_some) {
-            sets += 1;
-        }
-        fds.push(f);
-    }
+    let fds: Vec<Vec<Option<i32>>> = bridge::run(vm, || {
+        entries
+            .iter()
+            .map(|e| e.iter().map(|(_, _, c)| select_fd(c)).collect())
+            .collect()
+    })?;
+    let sets = fds
+        .iter()
+        .filter(|f| f.iter().any(Option::is_some))
+        .count();
     if sets == 0 {
         return Err(vm.throw("ValueError", "No stream arrays were passed"));
     }
@@ -535,8 +536,20 @@ pub fn lib_context(v: &Value) -> Option<ContextRef> {
     ctx_from_value(v).map(|c| Rc::clone(&c.ctx))
 }
 
+fn get_resources(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let filter = a.opt(0).map(|_| a.str(0).to_string_lossy());
+    let mut arr = ZArray::new();
+    for (h, ty, v) in res::live_resources() {
+        if filter.as_deref().is_none_or(|f| f == ty) {
+            arr.make_mut().insert(h, v);
+        }
+    }
+    Ok(Value::Array(arr))
+}
+
 /// Registers the functions of this module.
 pub fn register(m: &mut ModuleBuilder<'_>) {
+    m.function("get_resources(?string $type = null): array", get_resources);
     m.function(
         "stream_get_contents($stream, ?int $length = null, int $offset = -1): string|false",
         stream_get_contents,

@@ -227,6 +227,31 @@ pub fn shutdown(vm: &mut Vm) {
     close_deferred(vm);
 }
 
+/// `get_resources()`: the live stream and context resources (the ones this
+/// extension owns), by handle.
+pub fn live_resources() -> Vec<(i64, &'static str, Value)> {
+    let mut out: Vec<(i64, &'static str, Value)> = Vec::new();
+    let cells: Vec<Rc<StreamCell>> =
+        STREAMS.with(|m| m.borrow().values().filter_map(Weak::upgrade).collect());
+    for c in cells {
+        if c.is_closed() {
+            continue;
+        }
+        let ty = if c.persistent { PERSISTENT_STREAM } else { STREAM };
+        let r = Resource::with_handle(c.handle(), ty, Some(Box::new(StreamRes(Rc::clone(&c)))));
+        out.push((c.handle(), ty, Value::Resource(r)));
+    }
+    let ctxs: Vec<Rc<CtxCell>> =
+        CONTEXTS.with(|m| m.borrow().values().filter_map(Weak::upgrade).collect());
+    for c in ctxs {
+        let h = c.handle;
+        let r = Resource::with_handle(h, CONTEXT, Some(Box::new(CtxRes(c))));
+        out.push((h, CONTEXT, Value::Resource(r)));
+    }
+    out.sort_by_key(|(h, _, _)| *h);
+    out
+}
+
 // ---------------------------------------------------------------------------
 // Contexts
 // ---------------------------------------------------------------------------

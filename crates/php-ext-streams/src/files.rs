@@ -34,6 +34,15 @@ pub fn open_stream(
     options: u32,
     ctx: Option<&ContextRef>,
 ) -> VmResult<Option<(Stream, Option<Value>)>> {
+    if path.is_empty() {
+        return Err(vm.throw("ValueError", open::EMPTY_PATH_ERROR));
+    }
+    if trailing_slash_on_file(path) {
+        if options & REPORT_ERRORS != 0 {
+            vm.php_warning("Failed to open stream: No such file or directory")?;
+        }
+        return Ok(None);
+    }
     let mut opened = None;
     crate::userwrap::clear_last_object();
     let s = bridge::run(vm, || open::open_wrapper(path, mode, options, &mut opened, ctx))?;
@@ -49,6 +58,21 @@ pub fn open_stream(
         None
     };
     Ok(Some((s, data)))
+}
+
+/// A plain path with a trailing slash whose prefix is not a directory:
+/// PHP's path expansion fails with `ENOENT` where the library strips the
+/// slash and opens the file.
+fn trailing_slash_on_file(path: &[u8]) -> bool {
+    if path.len() < 2 || !path.ends_with(b"/") {
+        return false;
+    }
+    let p = path.strip_prefix(b"file://").unwrap_or(path);
+    if php_streams::wrapper::scheme_len(p) > 0 && php_streams::util::find_bytes(p, b"://").is_some() {
+        return false;
+    }
+    std::fs::metadata(php_streams::util::os_path(p))
+        .is_err_and(|e| e.raw_os_error() == Some(libc::ENOTDIR))
 }
 
 /// The exception for a failed `php://` open.
@@ -106,13 +130,15 @@ fn fclose(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         vm.php_warning("cannot close the provided stream, as it must not be manually closed")?;
         return Ok(Value::Bool(false));
     }
+    let mut result = 0;
     if let Some(mut s) = cell.take() {
         r.close();
-        bridge::run(vm, || s.close())?;
+        result = bridge::run(vm, || s.close())?;
+        crate::process::reap(cell.id);
     } else {
         r.close();
     }
-    Ok(Value::Bool(true))
+    Ok(Value::Bool(result == 0))
 }
 
 fn fread(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -260,7 +286,6 @@ fn readfile(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 fn file_get_contents(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let path = path_arg(vm, a, 0)?;
     let use_path = a.bool(1);
-    let ctx = context_arg(vm, a, 2, false)?;
     let offset = a.int(3);
     let maxlen = opt_int(a, 4);
     if let Some(m) = maxlen {
@@ -268,6 +293,7 @@ fn file_get_contents(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             return Err(a.value_error(vm, 5, "must be greater than or equal to 0"));
         }
     }
+    let ctx = context_arg(vm, a, 2, false)?;
     let opts = REPORT_ERRORS | if use_path { USE_PATH } else { 0 };
     let Some((mut s, _)) = open_stream(vm, a, &path, "rb", opts, ctx.as_ref())? else {
         return Ok(Value::Bool(false));
@@ -310,6 +336,9 @@ fn file_put_contents(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         _ => None,
     };
     let ctx = context_arg(vm, a, 3, flags & lib::FILE_NO_DEFAULT_CONTEXT != 0)?;
+    if path.is_empty() {
+        return Err(vm.throw("ValueError", open::EMPTY_PATH_ERROR));
+    }
     enum Owned {
         Bytes(Vec<u8>),
         Chunks(Vec<Vec<u8>>),
@@ -365,6 +394,9 @@ fn file(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let path = path_arg(vm, a, 0)?;
     let flags = a.int(1);
     let ctx = context_arg(vm, a, 2, flags & lib::FILE_NO_DEFAULT_CONTEXT != 0)?;
+    if path.is_empty() && flags & !0x17 == 0 {
+        return Err(vm.throw("ValueError", open::EMPTY_PATH_ERROR));
+    }
     let r = bridge::run(vm, || lib::file(&path, flags, ctx.as_ref()))?;
     match r {
         Ok(Some(lines)) => {
@@ -458,6 +490,9 @@ fn readlink(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 fn linkinfo(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let p = path_arg(vm, a, 0)?;
+    if p.is_empty() {
+        return Err(a.value_error(vm, 1, "must not be empty"));
+    }
     let r = bridge::run(vm, || lib::linkinfo(&p))?;
     Ok(Value::Int(r))
 }
@@ -529,11 +564,15 @@ fn pathinfo(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 // ---------------------------------------------------------------------------
 
 fn std_error(vm: &mut Vm, a: &Args, e: &php_stdstr::error::StdError) -> Throw {
-    let msg = if e.func.is_some() {
+    let mut msg = if e.func.is_some() {
         format!("{}(): {}", fname(a), e.message)
     } else {
         e.message.clone()
     };
+    // `%c` of a NUL byte: the message keeps the NUL (zend_string).
+    if msg.ends_with("conversion character \"") {
+        msg.push_str("\0\"");
+    }
     vm.throw(e.kind.class_name(), &msg)
 }
 
@@ -630,7 +669,17 @@ fn scan_value(v: php_stdstr::scanf::ScanValue) -> Value {
 
 fn fscanf(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     use php_stdstr::scanf::{sscanf, SscanfResult};
-    let cell = stream_arg(vm, a, 0)?;
+    // fscanf() still fetches the stream as a "File-Handle" resource.
+    let r = res::resource_arg(vm, a, 0)?;
+    let cell = match res::cell_of(&r) {
+        Some(c) if !r.is_closed() && !c.is_closed() => c,
+        _ => {
+            return Err(vm.throw(
+                "TypeError",
+                "fscanf(): supplied resource is not a valid File-Handle resource",
+            ))
+        }
+    };
     let format = str_arg(a, 1);
     let nvars = a.values.len().saturating_sub(2);
     let line = with_stream(vm, &cell, |s| s.get_line(None))?.flatten();
@@ -638,7 +687,7 @@ fn fscanf(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         return Ok(Value::Bool(false));
     };
     match sscanf(&line, &format, nvars) {
-        Ok(SscanfResult::Array(None)) => Ok(Value::Int(-1)),
+        Ok(SscanfResult::Array(None)) => Ok(Value::Null),
         Ok(SscanfResult::Array(Some(vals))) => {
             let mut arr = ZArray::new();
             for v in vals {

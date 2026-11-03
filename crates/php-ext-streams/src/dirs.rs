@@ -189,7 +189,7 @@ fn m_construct(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
 fn scandir(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let path = path_arg(vm, a, 0)?;
     if path.is_empty() {
-        return Err(a.value_error(vm, 1, "cannot be empty"));
+        return Err(a.value_error(vm, 1, "must not be empty"));
     }
     let sort = match a.int(1) {
         0 => ScandirSort::Ascending,

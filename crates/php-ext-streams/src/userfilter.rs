@@ -298,7 +298,7 @@ fn stream_filter_register(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             return Err(a.type_error(
                 vm,
                 2,
-                &format!("must be a valid class name, {} given", cname.to_string_lossy()),
+                &format!("must be a valid class name, \"{}\" given", cname.to_string_lossy()),
             ))
         }
     };

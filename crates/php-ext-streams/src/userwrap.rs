@@ -175,7 +175,7 @@ fn stream_wrapper_register(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             return Err(a.type_error(
                 vm,
                 2,
-                &format!("must be a valid class name, {} given", name.to_string_lossy()),
+                &format!("must be a valid class name, \"{}\" given", name.to_string_lossy()),
             ))
         }
     };
