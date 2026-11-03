@@ -1,0 +1,732 @@
+//! `ReflectionFunctionAbstract`, `ReflectionFunction` and
+//! `ReflectionMethod`.
+
+use super::class::{bind_args, class_arg, method_php_flags, split_args};
+use super::{class_value, method_value, new_refl, rexc, set_name_props, this, this_refl, zs, FnRef, Refl, PRIV, PUB, RO, STAT};
+use crate::builtins::classbuilder::ClassBuilder;
+use crate::class::{cflags, Class};
+use crate::func::{flags, Args, Func};
+use crate::object;
+use crate::opcode::{Op, Operand};
+use crate::types::TypeDecl;
+use crate::vm::{PendingCall, Vm, VmResult};
+use php_runtime::{ArrayKey, HashTable, Value, ZArray, ZStr};
+use std::rc::Rc;
+
+/// Internal methods whose return type is tentative (`@tentative-return-type`
+/// in the stubs of the reflection classes).
+const TENTATIVE: &[(&str, &str)] = &[
+    ("reflectionclassconstant", "getname getvalue ispublic isprivate isprotected getmodifiers getdeclaringclass getdoccomment"),
+    ("reflectionclass", "getname isinternal isuserdefined isanonymous isinstantiable iscloneable getfilename getstartline getendline getdoccomment getconstructor hasmethod getmethod getmethods hasproperty getproperty getproperties hasconstant getconstants getreflectionconstants getconstant getreflectionconstant getinterfaces getinterfacenames isinterface gettraits gettraitnames gettraitaliases istrait isabstract isfinal getmodifiers isinstance newinstance newinstancewithoutconstructor newinstanceargs getparentclass issubclassof getstaticproperties getstaticpropertyvalue setstaticpropertyvalue getdefaultproperties isiterable isiterateable implementsinterface getextension getextensionname innamespace getnamespacename getshortname"),
+    ("reflectionextension", "getname getversion getfunctions getconstants getinientries getclasses getclassnames getdependencies info ispersistent istemporary"),
+    ("reflectionfunctionabstract", "innamespace isclosure isdeprecated isinternal isuserdefined isgenerator isvariadic isstatic getclosurethis getclosurescopeclass getclosurecalledclass getdoccomment getendline getextension getextensionname getfilename getname getnamespacename getnumberofparameters getnumberofrequiredparameters getparameters getshortname getstartline getstaticvariables returnsreference hasreturntype getreturntype"),
+    ("reflectionfunction", "isdisabled invoke invokeargs getclosure"),
+    ("reflection", "getmodifiernames"),
+    ("reflectionmethod", "ispublic isprivate isprotected isabstract isfinal isconstructor isdestructor getclosure getmodifiers invoke invokeargs getdeclaringclass getprototype setaccessible"),
+    ("reflectionnamedtype", "getname isbuiltin"),
+    ("reflectionparameter", "getname ispassedbyreference canbepassedbyvalue getdeclaringfunction getdeclaringclass getclass hastype gettype isarray iscallable allowsnull getposition isoptional isdefaultvalueavailable getdefaultvalue isdefaultvalueconstant getdefaultvalueconstantname isvariadic"),
+    ("reflectionproperty", "getname getvalue setvalue isinitialized ispublic isprivate isprotected isstatic isdefault getmodifiers getdeclaringclass getdoccomment setaccessible gettype hastype getdefaultvalue"),
+    ("reflectiontype", "allowsnull"),
+    ("reflectionzendextension", "getname getversion getauthor geturl getcopyright"),
+];
+
+fn is_tentative(f: &FnRef) -> bool {
+    let (Func::Builtin(_), Some(m)) = (&f.func, &f.method) else { return false };
+    let scope = m.scope();
+    let lc = String::from_utf8_lossy(&m.name.to_ascii_lowercase()).into_owned();
+    TENTATIVE
+        .iter()
+        .any(|(c, ms)| scope.lc_name.as_bytes() == c.as_bytes() && ms.split(' ').any(|x| x == lc))
+}
+
+/// The return type and whether it is tentative.
+pub(crate) fn return_type(_vm: &Vm, f: &FnRef) -> Option<(TypeDecl, bool)> {
+    let t = f.func.return_type()?.clone();
+    Some((t, is_tentative(f)))
+}
+
+/// The doc comment of parameter `idx` (not tracked by the compiler).
+pub(crate) fn param_doc_comment(_f: &FnRef, _idx: usize) -> Option<ZStr> {
+    None
+}
+
+/// The reflected function.
+pub(crate) fn this_fn(vm: &mut Vm, a: &Args) -> VmResult<FnRef> {
+    match this_refl(vm, a)? {
+        Refl::Function(f) => Ok(f),
+        _ => Err(vm.make_throw("Error", "Internal error: Failed to retrieve the reflection object")),
+    }
+}
+
+/// Static variables (closure `use` variables first) with their current
+/// values (`op_array.static_variables`).
+pub(crate) fn static_vars(vm: &Vm, f: &FnRef) -> Vec<(ZStr, Value)> {
+    let Func::User(u) = &f.func else { return Vec::new() };
+    let mut out: Vec<(ZStr, Value)> = Vec::new();
+    let cdata = f.closure.as_ref().and_then(|c| vm.closure_data(c));
+    if u.is_closure() {
+        for us in &u.uses {
+            let v = cdata.as_ref().and_then(|d| d.vars.iter().find(|(cv, _)| *cv == us.cv).map(|(_, v)| v.deref()));
+            match v {
+                Some(v) => out.push((us.name.clone(), v)),
+                None if !us.implicit => out.push((us.name.clone(), Value::Null)),
+                None => {}
+            }
+        }
+    }
+    let mut inits: Vec<(u32, u32, Option<Value>)> = Vec::new();
+    for op in &u.code.ops {
+        match op {
+            Op::BindStatic { cv, idx, .. } => {
+                if !inits.iter().any(|(i, _, _)| i == idx) {
+                    inits.push((*idx, *cv, None));
+                }
+            }
+            Op::InitStatic { cv, idx, val } => {
+                let lit = match val {
+                    Operand::Lit(l) => u.code.literals.get(*l as usize).cloned(),
+                    _ => None,
+                };
+                if let Some(e) = inits.iter_mut().find(|(i, _, _)| i == idx) {
+                    e.2 = lit;
+                } else {
+                    inits.push((*idx, *cv, lit));
+                }
+            }
+            _ => {}
+        }
+    }
+    let store = match &cdata {
+        Some(d) => d.statics.borrow().clone(),
+        None => u.statics.borrow().clone(),
+    };
+    for (idx, cv, lit) in inits {
+        let name = u.code.cv_names.get(cv as usize).cloned().unwrap_or_default();
+        let v = match store.get(idx as usize).cloned().flatten() {
+            Some(r) => r.get(),
+            None => lit.unwrap_or(Value::Null),
+        };
+        if let Some(e) = out.iter_mut().find(|(n, _)| *n == name) {
+            e.1 = v;
+        } else {
+            out.push((name, v));
+        }
+    }
+    out
+}
+
+fn rf_construct(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let o = this(a);
+    let f = match a.at(0) {
+        Value::Object(c) => match vm.closure_data(&c) {
+            Some(d) => FnRef { func: d.func.clone(), method: None, class: None, closure: Some(c.clone()) },
+            None => {
+                return Err(vm.make_throw(
+                    "TypeError",
+                    &format!(
+                        "ReflectionFunction::__construct(): Argument #1 ($function) must be of type Closure|string, {} given",
+                        object::class_of(&c).name
+                    ),
+                ))
+            }
+        },
+        v => {
+            let s = vm.to_zstr(&v)?;
+            let n = s.as_bytes().strip_prefix(b"\\").unwrap_or(s.as_bytes());
+            match vm.functions.get(n.to_ascii_lowercase().as_slice()).cloned() {
+                Some(f) => FnRef::function(f),
+                None => return Err(rexc(vm, &format!("Function {}() does not exist", s.to_string_lossy()))),
+            }
+        }
+    };
+    let name = f.name();
+    set_name_props(&o, Some(&name), None);
+    object::set_internal(&o, Refl::Function(f));
+    Ok(Value::Null)
+}
+
+fn rf_to_string(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let f = this_fn(vm, a)?;
+    let scope = f.class.clone();
+    Ok(Value::Str(ZStr::from(super::export::function_string(vm, &f, scope.as_ref(), ""))))
+}
+
+/// A real (non-fake) closure: `(fn_flags & (CLOSURE|FAKE_CLOSURE)) == CLOSURE`.
+fn is_real_closure(f: &FnRef) -> bool {
+    f.method.is_none() && f.func.flags() & (flags::CLOSURE | flags::FAKE_CLOSURE) == flags::CLOSURE
+}
+
+fn rf_get_name(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    Ok(Value::Str(this_fn(vm, a)?.name()))
+}
+fn rf_get_short_name(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let f = this_fn(vm, a)?;
+    if is_real_closure(&f) {
+        return Ok(Value::Str(f.name()));
+    }
+    Ok(Value::Str(super::short_name(&f.name())))
+}
+fn rf_get_ns(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let f = this_fn(vm, a)?;
+    if is_real_closure(&f) {
+        return Ok(zs(""));
+    }
+    Ok(Value::Str(super::ns_name(&f.name())))
+}
+fn rf_in_ns(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let f = this_fn(vm, a)?;
+    if is_real_closure(&f) {
+        return Ok(Value::Bool(false));
+    }
+    Ok(Value::Bool(super::in_ns(&f.name())))
+}
+
+fn rf_get_parameters(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let f = this_fn(vm, a)?;
+    let mut out = Vec::new();
+    for i in 0..f.func.params().len() {
+        out.push(super::param::param_value(vm, &f, i)?);
+    }
+    Ok(Value::Array(ZArray::from_values(out)))
+}
+
+fn rf_num_params(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let f = this_fn(vm, a)?;
+    Ok(Value::Int(i64::try_from(f.func.params().len()).unwrap_or(0)))
+}
+
+fn rf_num_required(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let f = this_fn(vm, a)?;
+    Ok(Value::Int(i64::from(f.func.required())))
+}
+
+fn rf_get_return_type(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let f = this_fn(vm, a)?;
+    let scope = f.scope(vm);
+    match return_type(vm, &f) {
+        Some((t, false)) => super::types::type_value(vm, &t, scope.as_ref(), true),
+        _ => Ok(Value::Null),
+    }
+}
+
+fn rf_has_return_type(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let f = this_fn(vm, a)?;
+    Ok(Value::Bool(matches!(return_type(vm, &f), Some((_, false)))))
+}
+
+fn rf_get_tentative_return_type(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let f = this_fn(vm, a)?;
+    let scope = f.scope(vm);
+    match return_type(vm, &f) {
+        Some((t, true)) => super::types::type_value(vm, &t, scope.as_ref(), true),
+        _ => Ok(Value::Null),
+    }
+}
+
+fn rf_has_tentative_return_type(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let f = this_fn(vm, a)?;
+    Ok(Value::Bool(matches!(return_type(vm, &f), Some((_, true)))))
+}
+
+macro_rules! rf_bool {
+    ($name:ident, |$f:ident| $e:expr) => {
+        fn $name(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+            let $f = this_fn(vm, a)?;
+            Ok(Value::Bool($e))
+        }
+    };
+}
+
+rf_bool!(rf_is_variadic, |f| f.func.is_variadic());
+rf_bool!(rf_returns_ref, |f| f.func.flags() & flags::RETURN_REF != 0);
+rf_bool!(rf_is_generator, |f| f.func.flags() & flags::GENERATOR != 0);
+rf_bool!(rf_is_closure, |f| f.method.is_none() && f.func.flags() & flags::CLOSURE != 0);
+rf_bool!(rf_is_internal, |f| !f.func.is_user());
+rf_bool!(rf_is_user, |f| f.func.is_user());
+rf_bool!(rf_is_deprecated, |f| f.func.flags() & flags::DEPRECATED != 0);
+rf_bool!(rf_is_static, |f| f.flags() & flags::STATIC != 0);
+rf_bool!(rf_is_anonymous, |f| is_real_closure(&f));
+
+fn rf_get_doc_comment(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let f = this_fn(vm, a)?;
+    Ok(match &f.func {
+        Func::User(u) => u.doc_comment.clone().map_or(Value::Bool(false), Value::Str),
+        Func::Builtin(_) => Value::Bool(false),
+    })
+}
+
+fn rf_get_start_line(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let f = this_fn(vm, a)?;
+    Ok(match &f.func {
+        Func::User(u) => Value::Int(i64::from(u.line_start)),
+        Func::Builtin(_) => Value::Bool(false),
+    })
+}
+
+fn rf_get_end_line(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let f = this_fn(vm, a)?;
+    Ok(match &f.func {
+        Func::User(u) => Value::Int(i64::from(u.line_end)),
+        Func::Builtin(_) => Value::Bool(false),
+    })
+}
+
+fn rf_get_file_name(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let f = this_fn(vm, a)?;
+    Ok(match &f.func {
+        Func::User(u) => Value::Str(u.code.filename.clone()),
+        Func::Builtin(_) => Value::Bool(false),
+    })
+}
+
+fn rf_get_attributes(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let f = this_fn(vm, a)?;
+    let scope = f.scope(vm);
+    let t = if scope.is_some() && !is_real_closure(&f) { super::target::METHOD } else { super::target::FUNCTION };
+    let attrs = match &f.func {
+        Func::User(u) => u.attributes.clone(),
+        Func::Builtin(_) => Vec::new(),
+    };
+    super::attribute::attributes_array(vm, &attrs, t, scope.as_ref(), a)
+}
+
+fn rf_get_static_variables(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let f = this_fn(vm, a)?;
+    let mut t = HashTable::new();
+    for (k, v) in static_vars(vm, &f) {
+        t.insert(ArrayKey::Str(k), v);
+    }
+    Ok(Value::Array(ZArray::from_table(t)))
+}
+
+fn rf_get_closure_used_variables(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let f = this_fn(vm, a)?;
+    let mut t = HashTable::new();
+    let (Some(c), Func::User(u)) = (&f.closure, &f.func) else {
+        return Ok(Value::Array(ZArray::new()));
+    };
+    if let Some(d) = vm.closure_data(c) {
+        for us in &u.uses {
+            if let Some((_, v)) = d.vars.iter().find(|(cv, _)| *cv == us.cv) {
+                t.insert(ArrayKey::Str(us.name.clone()), v.deref());
+            }
+        }
+    }
+    Ok(Value::Array(ZArray::from_table(t)))
+}
+
+fn rf_get_closure_this(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let f = this_fn(vm, a)?;
+    if let Some(c) = &f.closure {
+        if let Some(d) = vm.closure_data(c) {
+            return Ok(d.this.map_or(Value::Null, Value::Object));
+        }
+    }
+    Ok(Value::Null)
+}
+
+fn rf_get_closure_scope_class(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let f = this_fn(vm, a)?;
+    if let Some(c) = &f.closure {
+        if let Some(s) = vm.closure_data(c).and_then(|d| d.scope) {
+            return class_value(vm, &s);
+        }
+    }
+    Ok(Value::Null)
+}
+
+fn rf_get_closure_called_class(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let f = this_fn(vm, a)?;
+    if let Some(c) = &f.closure {
+        if let Some(d) = vm.closure_data(c) {
+            let cls = d.this.as_ref().map(|t| object::class_of(t).clone()).or(d.called).or(d.scope);
+            if let Some(s) = cls {
+                return class_value(vm, &s);
+            }
+        }
+    }
+    Ok(Value::Null)
+}
+
+fn call_function(vm: &mut Vm, f: &FnRef, args: Vec<Value>, named: Vec<(ZStr, Value)>) -> VmResult<Value> {
+    let mut call = match &f.closure {
+        Some(c) => vm.closure_call(c).unwrap_or_else(|| PendingCall::new(f.func.clone())),
+        None => PendingCall::new(f.func.clone()),
+    };
+    bind_args(vm, &mut call, args, named)?;
+    Ok(vm.call_pending(call)?.deref())
+}
+
+fn rf_invoke(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let f = this_fn(vm, a)?;
+    let args = a.values.clone();
+    let named = std::mem::take(&mut a.named);
+    call_function(vm, &f, args, named)
+}
+
+fn rf_invoke_args(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let f = this_fn(vm, a)?;
+    let (args, named) = match a.at(0) {
+        Value::Array(arr) => split_args(vm, &arr)?,
+        _ => (Vec::new(), Vec::new()),
+    };
+    call_function(vm, &f, args, named)
+}
+
+fn rf_get_closure(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let f = this_fn(vm, a)?;
+    match &f.closure {
+        Some(c) => Ok(Value::Object(c.clone())),
+        None => vm.make_closure_from_call(PendingCall::new(f.func.clone())),
+    }
+}
+
+fn rf_get_extension(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let f = this_fn(vm, a)?;
+    let scope = f.scope(vm);
+    match super::misc::function_module(vm, &f.func, scope.as_ref(), &f.name()) {
+        Some(m) if !f.func.is_user() => super::misc::extension_value(vm, &m),
+        _ => Ok(Value::Null),
+    }
+}
+
+fn rf_get_extension_name(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let f = this_fn(vm, a)?;
+    let scope = f.scope(vm);
+    match super::misc::function_module(vm, &f.func, scope.as_ref(), &f.name()) {
+        Some(m) if !f.func.is_user() => Ok(zs(&m)),
+        _ => Ok(Value::Bool(false)),
+    }
+}
+
+fn rf_is_disabled(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
+    vm.deprecated(
+        "Method ReflectionFunction::isDisabled() is deprecated since 8.0, as ReflectionFunction can no longer be constructed for disabled functions",
+    )?;
+    Ok(Value::Bool(false))
+}
+
+// ---------------------------------------------------------------------
+// ReflectionMethod
+// ---------------------------------------------------------------------
+
+fn instantiate_method(vm: &mut Vm, a: &Args, is_ctor: bool) -> VmResult<(Rc<Class>, FnRef)> {
+    let arg1 = a.at(0);
+    let arg2 = if is_ctor { a.get(1).filter(|v| !v.is_null()) } else { None };
+    let (cls, mname, orig) = match (&arg1, arg2) {
+        (Value::Object(o), Some(m)) => (object::class_of(o).clone(), vm.to_zstr(&m)?, Some(o.clone())),
+        (Value::Object(_), None) => {
+            return Err(vm.make_throw(
+                "ValueError",
+                "ReflectionMethod::__construct(): Argument #2 ($method) cannot be null when argument #1 ($objectOrMethod) is an object",
+            ))
+        }
+        (v, Some(m)) => {
+            let c = class_arg(vm, v, "Class")?;
+            (c, vm.to_zstr(&m)?, None)
+        }
+        (v, None) => {
+            let s = vm.to_zstr(v)?;
+            let Some(p) = crate::call::find_double_colon(s.as_bytes()) else {
+                let fname = if is_ctor { "ReflectionMethod::__construct" } else { "ReflectionMethod::createFromMethodName" };
+                return Err(rexc(vm, &format!("{fname}(): Argument #1 ($objectOrMethod) must be a valid method name")));
+            };
+            let cn = ZStr::from(&s.as_bytes()[..p]);
+            let c = class_arg(vm, &Value::Str(cn), "Class")?;
+            (c, ZStr::from(&s.as_bytes()[p + 2..]), None)
+        }
+    };
+    if cls.lc_name.as_bytes() == b"closure" && mname.eq_ignore_ascii_case(b"__invoke") {
+        if let Some(o) = &orig {
+            if let Some(d) = vm.closure_data(o) {
+                let m = cls.find_method(b"__invoke").cloned();
+                return Ok((cls.clone(), FnRef { func: d.func, method: m, class: Some(cls.clone()), closure: Some(o.clone()) }));
+            }
+        }
+    }
+    match cls.find_method(mname.as_bytes()).cloned() {
+        Some(m) => Ok((cls.clone(), FnRef::method(&m, &cls))),
+        None => Err(rexc(vm, &format!("Method {}::{}() does not exist", cls.name, mname.to_string_lossy()))),
+    }
+}
+
+fn rm_construct(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    if a.values.len() == 1 {
+        vm.deprecated(
+            "Calling ReflectionMethod::__construct() with 1 argument is deprecated, use ReflectionMethod::createFromMethodName() instead",
+        )?;
+    }
+    let (_, f) = instantiate_method(vm, a, true)?;
+    let o = this(a);
+    let scope_name = f.scope(vm).map(|c| c.name.clone()).unwrap_or_default();
+    set_name_props(&o, Some(&f.name()), Some(&scope_name));
+    object::set_internal(&o, Refl::Function(f));
+    Ok(Value::Null)
+}
+
+fn rm_create_from_method_name(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let (_, f) = instantiate_method(vm, a, false)?;
+    let called = a.called.clone().map_or_else(|| "ReflectionMethod".to_string(), |c| c.name.to_string_lossy());
+    let scope_name = f.scope(vm).map(|c| c.name.clone()).unwrap_or_default();
+    let n = f.name();
+    new_refl(vm, &called, Refl::Function(f), Some(&n), Some(&scope_name))
+}
+
+macro_rules! rm_bool {
+    ($name:ident, |$f:ident| $e:expr) => {
+        fn $name(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+            let $f = this_fn(vm, a)?.flags();
+            Ok(Value::Bool($e))
+        }
+    };
+}
+
+rm_bool!(rm_is_public, |f| f & flags::PUBLIC != 0);
+rm_bool!(rm_is_private, |f| f & flags::PRIVATE != 0);
+rm_bool!(rm_is_protected, |f| f & flags::PROTECTED != 0);
+rm_bool!(rm_is_abstract, |f| f & flags::ABSTRACT != 0);
+rm_bool!(rm_is_final, |f| f & flags::FINAL != 0);
+
+fn rm_is_ctor(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let f = this_fn(vm, a)?;
+    let (Some(m), Some(c)) = (&f.method, &f.class) else { return Ok(Value::Bool(false)) };
+    Ok(Value::Bool(
+        m.name.eq_ignore_ascii_case(b"__construct")
+            && c.magic.construct.as_ref().is_some_and(|ct| Rc::ptr_eq(&ct.scope(), &m.scope())),
+    ))
+}
+
+fn rm_is_dtor(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    Ok(Value::Bool(this_fn(vm, a)?.name().eq_ignore_ascii_case(b"__destruct")))
+}
+
+fn rm_get_declaring_class(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let f = this_fn(vm, a)?;
+    match f.scope(vm) {
+        Some(s) => class_value(vm, &s),
+        None => Ok(Value::Null),
+    }
+}
+
+fn rm_get_modifiers(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let f = this_fn(vm, a)?;
+    Ok(Value::Int(match &f.method {
+        Some(m) => method_php_flags(m) & 0x77,
+        None => i64::from(f.flags() & 0x77),
+    }))
+}
+
+fn rm_has_prototype(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let f = this_fn(vm, a)?;
+    Ok(Value::Bool(f.method.as_ref().and_then(super::order::prototype).is_some()))
+}
+
+fn rm_get_prototype(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let f = this_fn(vm, a)?;
+    match f.method.as_ref().and_then(super::order::prototype) {
+        Some(p) => {
+            let s = p.scope();
+            method_value(vm, &p, &s)
+        }
+        None => {
+            let cn = f.class.as_ref().map(|c| c.name.clone()).unwrap_or_default();
+            Err(rexc(vm, &format!("Method {}::{}() does not have a prototype", cn, f.name())))
+        }
+    }
+}
+
+fn invoke_method(vm: &mut Vm, f: &FnRef, obj: Value, args: Vec<Value>, named: Vec<(ZStr, Value)>, variadic: bool) -> VmResult<Value> {
+    let Some(scope) = f.scope(vm) else {
+        return Err(vm.make_throw("Error", "Internal error: Failed to retrieve the reflection object"));
+    };
+    let fl = f.flags();
+    if fl & flags::ABSTRACT != 0 {
+        return Err(rexc(vm, &format!("Trying to invoke abstract method {}::{}()", scope.name, f.name())));
+    }
+    let this = if fl & flags::STATIC != 0 {
+        if !obj.is_null() {
+            let mn = if variadic { "ReflectionMethod::invoke" } else { "ReflectionMethod::invokeArgs" };
+            vm.deprecated(&format!(
+                "Calling {mn}() for static method {}::{}() does not need an object parameter",
+                scope.name,
+                f.name()
+            ))?;
+        }
+        None
+    } else {
+        match obj {
+            Value::Object(o) => {
+                if !object::class_of(&o).is_subclass_of(&scope) {
+                    return Err(rexc(vm, "Given object is not an instance of the class this method was declared in"));
+                }
+                if let Some(orig) = &f.closure {
+                    if !php_runtime::Obj::ptr_eq(orig, &o) {
+                        let same = match (vm.closure_data(orig), vm.closure_data(&o)) {
+                            (Some(x), Some(y)) => Func::ptr_eq(&x.func, &y.func),
+                            _ => false,
+                        };
+                        if !same {
+                            return Err(rexc(vm, "Given Closure is not the same as the reflected Closure"));
+                        }
+                    }
+                    let mut call = vm.closure_call(&o).unwrap_or_else(|| PendingCall::new(f.func.clone()));
+                    bind_args(vm, &mut call, args, named)?;
+                    return Ok(vm.call_pending(call)?.deref());
+                }
+                Some(o)
+            }
+            _ => {
+                return Err(rexc(vm, &format!("Trying to invoke non static method {}::{}() without an object", scope.name, f.name())));
+            }
+        }
+    };
+    let called = match &this {
+        Some(t) => object::class_of(t).clone(),
+        None => f.class.clone().unwrap_or_else(|| scope.clone()),
+    };
+    let mut call = PendingCall { this, scope: Some(scope), called: Some(called), ..PendingCall::new(f.func.clone()) };
+    bind_args(vm, &mut call, args, named)?;
+    Ok(vm.call_pending(call)?.deref())
+}
+
+fn rm_invoke(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let f = this_fn(vm, a)?;
+    let obj = a.at(0);
+    let args: Vec<Value> = a.values.iter().skip(1).cloned().collect();
+    let named = std::mem::take(&mut a.named);
+    invoke_method(vm, &f, obj, args, named, true)
+}
+
+fn rm_invoke_args(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let f = this_fn(vm, a)?;
+    let obj = a.at(0);
+    let (args, named) = match a.at(1) {
+        Value::Array(x) => split_args(vm, &x)?,
+        _ => (Vec::new(), Vec::new()),
+    };
+    invoke_method(vm, &f, obj, args, named, false)
+}
+
+fn rm_get_closure(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let f = this_fn(vm, a)?;
+    let scope = f.scope(vm);
+    if f.flags() & flags::STATIC != 0 {
+        let call = PendingCall { scope: scope.clone(), called: scope, ..PendingCall::new(f.func.clone()) };
+        return vm.make_closure_from_call(call);
+    }
+    let Some(Value::Object(o)) = a.get(0) else {
+        return Err(vm.make_throw(
+            "ValueError",
+            "ReflectionMethod::getClosure(): Argument #1 ($object) cannot be null for non-static methods",
+        ));
+    };
+    if let Some(s) = &scope {
+        if !object::class_of(&o).is_subclass_of(s) {
+            return Err(rexc(vm, "Given object is not an instance of the class this method was declared in"));
+        }
+    }
+    if f.closure.is_some() && object::class_of(&o).lc_name.as_bytes() == b"closure" {
+        return Ok(Value::Object(o));
+    }
+    let called = object::class_of(&o).clone();
+    let call = PendingCall { this: Some(o), scope, called: Some(called), ..PendingCall::new(f.func.clone()) };
+    vm.make_closure_from_call(call)
+}
+
+fn rm_set_accessible(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
+    vm.deprecated("Method ReflectionMethod::setAccessible() is deprecated since 8.5, as it has no effect since PHP 8.1")?;
+    Ok(Value::Null)
+}
+
+fn clone_error(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
+    Err(rexc(vm, "Cannot clone object using __clone()"))
+}
+
+/// Registers `ReflectionFunctionAbstract`.
+pub(crate) fn register_abstract(vm: &mut Vm) {
+    ClassBuilder::new("ReflectionFunctionAbstract")
+        .hooks(super::constant::hooks())
+        .flags(cflags::ABSTRACT | cflags::EXPLICIT_ABSTRACT | cflags::NOT_SERIALIZABLE)
+        .implements(vm, &["Reflector"])
+        .prop("name", RO, Some("string"), None)
+        .method("__clone(): void", PRIV, clone_error)
+        .method("inNamespace(): bool", PUB, rf_in_ns)
+        .method("isClosure(): bool", PUB, rf_is_closure)
+        .method("isDeprecated(): bool", PUB, rf_is_deprecated)
+        .method("isInternal(): bool", PUB, rf_is_internal)
+        .method("isUserDefined(): bool", PUB, rf_is_user)
+        .method("isGenerator(): bool", PUB, rf_is_generator)
+        .method("isVariadic(): bool", PUB, rf_is_variadic)
+        .method("isStatic(): bool", PUB, rf_is_static)
+        .method("getClosureThis(): ?object", PUB, rf_get_closure_this)
+        .method("getClosureScopeClass(): ?ReflectionClass", PUB, rf_get_closure_scope_class)
+        .method("getClosureCalledClass(): ?ReflectionClass", PUB, rf_get_closure_called_class)
+        .method("getClosureUsedVariables(): array", PUB, rf_get_closure_used_variables)
+        .method("getDocComment(): string|false", PUB, rf_get_doc_comment)
+        .method("getEndLine(): int|false", PUB, rf_get_end_line)
+        .method("getExtension(): ?ReflectionExtension", PUB, rf_get_extension)
+        .method("getExtensionName(): string|false", PUB, rf_get_extension_name)
+        .method("getFileName(): string|false", PUB, rf_get_file_name)
+        .method("getName(): string", PUB, rf_get_name)
+        .method("getNamespaceName(): string", PUB, rf_get_ns)
+        .method("getNumberOfParameters(): int", PUB, rf_num_params)
+        .method("getNumberOfRequiredParameters(): int", PUB, rf_num_required)
+        .method("getParameters(): array", PUB, rf_get_parameters)
+        .method("getShortName(): string", PUB, rf_get_short_name)
+        .method("getStartLine(): int|false", PUB, rf_get_start_line)
+        .method("getStaticVariables(): array", PUB, rf_get_static_variables)
+        .method("returnsReference(): bool", PUB, rf_returns_ref)
+        .method("hasReturnType(): bool", PUB, rf_has_return_type)
+        .method("getReturnType(): ?ReflectionType", PUB, rf_get_return_type)
+        .method("hasTentativeReturnType(): bool", PUB, rf_has_tentative_return_type)
+        .method("getTentativeReturnType(): ?ReflectionType", PUB, rf_get_tentative_return_type)
+        .method("getAttributes(?string $name = null, int $flags = 0): array", PUB, rf_get_attributes)
+        .register(vm);
+}
+
+/// Registers `ReflectionFunction`.
+pub(crate) fn register_function(vm: &mut Vm) {
+    ClassBuilder::new("ReflectionFunction")
+        .extends(vm, "ReflectionFunctionAbstract")
+        .constant("IS_DEPRECATED", Value::Int(super::acc::DEPRECATED))
+        .method("__construct(Closure|string $function)", PUB, rf_construct)
+        .method("__toString(): string", PUB, rf_to_string)
+        .method("isAnonymous(): bool", PUB, rf_is_anonymous)
+        .method("isDisabled(): bool", PUB, rf_is_disabled)
+        .method("invoke(mixed ...$args): mixed", PUB, rf_invoke)
+        .method("invokeArgs(array $args): mixed", PUB, rf_invoke_args)
+        .method("getClosure(): Closure", PUB, rf_get_closure)
+        .register(vm);
+}
+
+/// Registers `ReflectionMethod`.
+pub(crate) fn register_method(vm: &mut Vm) {
+    ClassBuilder::new("ReflectionMethod")
+        .extends(vm, "ReflectionFunctionAbstract")
+        .prop("class", RO, Some("string"), None)
+        .constant("IS_STATIC", Value::Int(16))
+        .constant("IS_PUBLIC", Value::Int(1))
+        .constant("IS_PROTECTED", Value::Int(2))
+        .constant("IS_PRIVATE", Value::Int(4))
+        .constant("IS_ABSTRACT", Value::Int(64))
+        .constant("IS_FINAL", Value::Int(32))
+        .method("__construct(object|string $objectOrMethod, ?string $method = null)", PUB, rm_construct)
+        .method("createFromMethodName(string $method): static", STAT, rm_create_from_method_name)
+        .method("__toString(): string", PUB, rf_to_string)
+        .method("isPublic(): bool", PUB, rm_is_public)
+        .method("isPrivate(): bool", PUB, rm_is_private)
+        .method("isProtected(): bool", PUB, rm_is_protected)
+        .method("isAbstract(): bool", PUB, rm_is_abstract)
+        .method("isFinal(): bool", PUB, rm_is_final)
+        .method("isConstructor(): bool", PUB, rm_is_ctor)
+        .method("isDestructor(): bool", PUB, rm_is_dtor)
+        .method("getClosure(?object $object = null): Closure", PUB, rm_get_closure)
+        .method("getModifiers(): int", PUB, rm_get_modifiers)
+        .method("invoke(?object $object, mixed ...$args): mixed", PUB, rm_invoke)
+        .method("invokeArgs(?object $object, array $args): mixed", PUB, rm_invoke_args)
+        .method("getDeclaringClass(): ReflectionClass", PUB, rm_get_declaring_class)
+        .method("getPrototype(): ReflectionMethod", PUB, rm_get_prototype)
+        .method("hasPrototype(): bool", PUB, rm_has_prototype)
+        .method("setAccessible(bool $accessible): void", PUB, rm_set_accessible)
+        .register(vm);
+}

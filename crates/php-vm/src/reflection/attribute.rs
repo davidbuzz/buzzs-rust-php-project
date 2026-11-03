@@ -1,0 +1,297 @@
+//! `ReflectionAttribute` and the `getAttributes()` helper shared by the
+//! reflectors.
+
+use super::class::{bind_args, mark_ctor_failed};
+use super::{rexc, target, this_refl, AttrRef, Refl, PRIV, PUB};
+use crate::builtins::classbuilder::ClassBuilder;
+use crate::class::{cflags, AttributeInfo, Class, ConstExpr};
+use crate::func::{flags, Args};
+use crate::vm::{PendingCall, Vm, VmResult};
+use php_runtime::{ArrayKey, HashTable, Value, ZArray, ZStr};
+use std::rc::Rc;
+
+/// `reflect_attributes`: the `getAttributes(?string $name, int $flags)`
+/// implementation.
+pub(crate) fn attributes_array(vm: &mut Vm, attrs: &[AttributeInfo], tgt: i64, scope: Option<&Rc<Class>>, a: &Args) -> VmResult<Value> {
+    let name = match a.get(0) {
+        Some(Value::Str(s)) => Some(s),
+        _ => None,
+    };
+    let fl = match a.get(1) {
+        Some(Value::Int(i)) => i,
+        _ => 0,
+    };
+    if fl & !2 != 0 {
+        return Err(vm.make_throw(
+            "ValueError",
+            &format!("{}(): Argument #2 ($flags) must be a valid attribute filter flag", a.func_name_qualified()),
+        ));
+    }
+    let mut base: Option<Rc<Class>> = None;
+    let mut name = name;
+    if let (Some(n), true) = (&name, fl & 2 != 0) {
+        match vm.lookup_class(n)? {
+            Some(c) => base = Some(c),
+            None => return Err(vm.make_throw("Error", &format!("Class \"{}\" not found", n.to_string_lossy()))),
+        }
+        name = None;
+    }
+    let mut out = Vec::new();
+    for at in attrs {
+        if let Some(f) = &name {
+            let f = f.as_bytes().strip_prefix(b"\\").unwrap_or(f.as_bytes());
+            if !at.name.eq_ignore_ascii_case(f) {
+                continue;
+            }
+        } else if let Some(b) = &base {
+            match vm.lookup_class(&at.name)? {
+                Some(ac) if ac.is_subclass_of(b) => {}
+                _ => continue,
+            }
+        }
+        let repeated = attrs.iter().filter(|x| x.name.eq_ignore_ascii_case(at.name.as_bytes())).count() > 1;
+        let r = AttrRef { info: at.clone(), target: tgt, repeated, scope: scope.cloned() };
+        out.push(super::new_refl(vm, "ReflectionAttribute", Refl::Attr(Rc::new(r)), Some(&at.name), None)?);
+    }
+    Ok(Value::Array(ZArray::from_values(out)))
+}
+
+trait QualifiedName {
+    fn func_name_qualified(&self) -> String;
+}
+
+impl QualifiedName for Args {
+    fn func_name_qualified(&self) -> String {
+        let n = self.func_name();
+        match &self.this {
+            Some(o) => {
+                let c = crate::object::class_of(o).clone();
+                let lc = ZStr::from(n.to_ascii_lowercase());
+                let owner = c.methods.get(&lc).map_or_else(|| c.name.clone(), |m| m.scope().name.clone());
+                format!("{}::{n}", owner.to_string_lossy())
+            }
+            None => n,
+        }
+    }
+}
+
+fn this_attr(vm: &mut Vm, a: &Args) -> VmResult<Rc<AttrRef>> {
+    match this_refl(vm, a)? {
+        Refl::Attr(r) => Ok(r),
+        _ => Err(vm.make_throw("Error", "Internal error: Failed to retrieve the reflection object")),
+    }
+}
+
+fn ra_get_name(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    Ok(Value::Str(this_attr(vm, a)?.info.name.clone()))
+}
+fn ra_in_ns(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    Ok(Value::Bool(super::in_ns(&this_attr(vm, a)?.info.name)))
+}
+fn ra_get_ns(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    Ok(Value::Str(super::ns_name(&this_attr(vm, a)?.info.name)))
+}
+fn ra_get_short_name(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    Ok(Value::Str(super::short_name(&this_attr(vm, a)?.info.name)))
+}
+fn ra_get_target(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    Ok(Value::Int(this_attr(vm, a)?.target))
+}
+fn ra_is_repeated(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    Ok(Value::Bool(this_attr(vm, a)?.repeated))
+}
+
+/// Evaluates the arguments of an attribute (`zend_get_attribute_value`).
+fn attr_args(vm: &mut Vm, info: &AttributeInfo, scope: Option<&Rc<Class>>) -> VmResult<(Vec<Value>, Vec<(ZStr, Value)>)> {
+    let mut pos = Vec::new();
+    let mut named = Vec::new();
+    for (n, e) in &info.args {
+        let v = vm.eval_const_expr(e, scope)?;
+        match n {
+            Some(n) => named.push((n.clone(), v)),
+            None => pos.push(v),
+        }
+    }
+    Ok((pos, named))
+}
+
+fn ra_get_arguments(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let r = this_attr(vm, a)?;
+    let mut t = HashTable::new();
+    for (n, e) in &r.info.args {
+        let v = vm.eval_const_expr(e, r.scope.as_ref())?;
+        match n {
+            Some(n) => {
+                t.insert(ArrayKey::Str(n.clone()), v);
+            }
+            None => {
+                let _ = t.push(v);
+            }
+        }
+    }
+    Ok(Value::Array(ZArray::from_table(t)))
+}
+
+fn ra_to_string(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let r = this_attr(vm, a)?;
+    let mut out = b"Attribute [ ".to_vec();
+    out.extend_from_slice(r.info.name.as_bytes());
+    out.extend_from_slice(b" ]");
+    if r.info.args.is_empty() {
+        out.push(b'\n');
+    } else {
+        out.extend_from_slice(format!(" {{\n  - Arguments [{}] {{\n", r.info.args.len()).as_bytes());
+        for (i, (n, e)) in r.info.args.iter().enumerate() {
+            out.extend_from_slice(format!("    Argument #{i} [ ").as_bytes());
+            if let Some(n) = n {
+                out.extend_from_slice(n.as_bytes());
+                out.extend_from_slice(b" = ");
+            }
+            let repr = match e {
+                ConstExpr::Value(v) => super::export::format_default_value(vm, v),
+                ConstExpr::Code(_) => {
+                    let v = vm.eval_const_expr(e, r.scope.as_ref())?;
+                    super::export::format_default_value(vm, &v)
+                }
+            };
+            out.extend_from_slice(&repr);
+            out.extend_from_slice(b" ]\n");
+        }
+        out.extend_from_slice(b"  }\n}\n");
+    }
+    Ok(Value::Str(ZStr::from(out)))
+}
+
+/// `zend_get_attribute_target_names`.
+pub(crate) fn target_names(f: i64) -> String {
+    let names = ["class", "function", "method", "property", "class constant", "parameter", "constant"];
+    let mut v = Vec::new();
+    for (i, n) in names.iter().enumerate() {
+        if f & (1 << i) != 0 {
+            v.push(*n);
+        }
+    }
+    v.join(", ")
+}
+
+/// The `Attribute` flags of an attribute class (`None`: not an attribute).
+pub(crate) fn attribute_flags(vm: &mut Vm, c: &Rc<Class>) -> VmResult<Option<i64>> {
+    if c.flags & cflags::INTERNAL != 0 {
+        return Ok(match c.lc_name.as_bytes() {
+            b"attribute" | b"allowdynamicproperties" => Some(target::CLASS),
+            b"returntypewillchange" => Some(target::METHOD),
+            b"sensitiveparameter" => Some(target::PARAMETER),
+            b"override" => Some(target::METHOD | target::PROPERTY | target::CLASS_CONSTANT),
+            b"deprecated" => Some(target::METHOD | target::FUNCTION | target::CLASS_CONSTANT | target::CONSTANT | target::CLASS),
+            b"nodiscard" => Some(target::METHOD | target::FUNCTION),
+            b"delayedtargetvalidation" => Some(target::ALL),
+            _ => None,
+        });
+    }
+    let Some(marker) = c.attributes.iter().find(|x| x.name.eq_ignore_ascii_case(b"Attribute")).cloned() else {
+        return Ok(None);
+    };
+    let Some((_, e)) = marker.args.first() else {
+        return Ok(Some(target::ALL));
+    };
+    let v = vm.eval_const_expr(e, Some(c))?;
+    match v {
+        Value::Int(i) => {
+            if i & !(target::ALL | target::IS_REPEATABLE) != 0 {
+                return Err(vm.make_throw("Error", "Invalid attribute flags specified"));
+            }
+            Ok(Some(i))
+        }
+        other => Err(vm.make_throw(
+            "Error",
+            &format!(
+                "Attribute::__construct(): Argument #1 ($flags) must be of type int, {} given",
+                crate::typecheck::given_type(&other)
+            ),
+        )),
+    }
+}
+
+fn ra_new_instance(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let r = this_attr(vm, a)?;
+    let Some(c) = vm.lookup_class(&r.info.name)? else {
+        return Err(vm.make_throw("Error", &format!("Attribute class \"{}\" not found", r.info.name)));
+    };
+    let Some(fl) = attribute_flags(vm, &c)? else {
+        return Err(vm.make_throw("Error", &format!("Attempting to use non-attribute class \"{}\" as attribute", r.info.name)));
+    };
+    if r.target & fl == 0 {
+        return Err(vm.make_throw(
+            "Error",
+            &format!(
+                "Attribute \"{}\" cannot target {} (allowed targets: {})",
+                r.info.name,
+                target_names(r.target),
+                target_names(fl)
+            ),
+        ));
+    }
+    if c.flags & cflags::INTERNAL == 0 && fl & target::IS_REPEATABLE == 0 && r.repeated {
+        return Err(vm.make_throw("Error", &format!("Attribute \"{}\" must not be repeated", r.info.name)));
+    }
+    let (pos, named) = attr_args(vm, &r.info, r.scope.as_ref())?;
+    let o = vm.instantiate(&c)?;
+    match c.magic.construct.clone() {
+        Some(m) => {
+            if m.visibility() != flags::PUBLIC {
+                mark_ctor_failed(&o);
+                let vis = if m.visibility() == flags::PRIVATE { "private" } else { "protected" };
+                return Err(vm.make_throw(
+                    "Error",
+                    &format!("Call to {vis} {}::__construct() from global scope", super::dn(&c.name)),
+                ));
+            }
+            let mut call =
+                PendingCall { this: Some(o.clone()), scope: Some(m.scope()), called: Some(c.clone()), ..PendingCall::new(m.func.clone()) };
+            if let Err(e) = bind_args(vm, &mut call, pos, named) {
+                mark_ctor_failed(&o);
+                return Err(e);
+            }
+            if let Err(e) = vm.call_pending(call) {
+                mark_ctor_failed(&o);
+                return Err(e);
+            }
+        }
+        None => {
+            if let Some((n, _)) = named.first() {
+                return Err(vm.make_throw("Error", &format!("Unknown named parameter ${}", n.to_string_lossy())));
+            }
+        }
+    }
+    Ok(Value::Object(o))
+}
+
+fn ra_construct(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
+    Err(rexc(vm, "Cannot directly instantiate ReflectionAttribute"))
+}
+
+fn clone_error(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
+    Err(rexc(vm, "Cannot clone object using __clone()"))
+}
+
+/// Registers `ReflectionAttribute`.
+pub(crate) fn register(vm: &mut Vm) {
+    ClassBuilder::new("ReflectionAttribute")
+        .implements(vm, &["Reflector"])
+        .flags(cflags::NOT_SERIALIZABLE)
+        .hooks(super::constant::hooks())
+        .constant("IS_INSTANCEOF", Value::Int(2))
+        .prop("name", super::RO, Some("string"), None)
+        .method("getName(): string", PUB, ra_get_name)
+        .method("inNamespace(): bool", PUB, ra_in_ns)
+        .method("getNamespaceName(): string", PUB, ra_get_ns)
+        .method("getShortName(): string", PUB, ra_get_short_name)
+        .method("getTarget(): int", PUB, ra_get_target)
+        .method("isRepeated(): bool", PUB, ra_is_repeated)
+        .method("getArguments(): array", PUB, ra_get_arguments)
+        .method("newInstance(): object", PUB, ra_new_instance)
+        .method("__toString(): string", PUB, ra_to_string)
+        .method("__clone(): void", PRIV, clone_error)
+        .method("__construct()", PRIV, ra_construct)
+        .register(vm);
+}

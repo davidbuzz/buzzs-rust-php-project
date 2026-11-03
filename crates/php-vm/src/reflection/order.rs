@@ -1,0 +1,305 @@
+//! Member tables in php-src order.
+//!
+//! php-src keeps a class's properties, methods and constants in ordered
+//! hash tables: the class's own declarations first (in declaration order),
+//! then the inherited entries (in the parent's order), then entries bound
+//! from traits and finally those from interfaces. The VM's linked
+//! [`Class`] stores members in slot / lookup order, so reflection rebuilds
+//! the php-src order here.
+
+use crate::class::{AttributeInfo, Class, ClassConst, ConstExpr, PropHooks, PropInfo};
+use crate::func::{flags, Method};
+use crate::types::TypeDecl;
+use crate::vm::Vm;
+use php_runtime::ZStr;
+use std::collections::HashSet;
+use std::rc::Rc;
+
+/// A declared property (instance or static) as reflection sees it
+/// (`zend_property_info`).
+#[derive(Clone, Debug)]
+pub(crate) struct PropMeta {
+    /// Name.
+    pub name: ZStr,
+    /// VM flags (`crate::func::flags`).
+    pub flags: u32,
+    /// Declared type.
+    pub ty: Option<TypeDecl>,
+    /// Declaring class name.
+    pub class: ZStr,
+    /// Default value expression.
+    pub default: Option<ConstExpr>,
+    /// Doc comment.
+    pub doc: Option<ZStr>,
+    /// Attributes.
+    pub attributes: Vec<AttributeInfo>,
+    /// Hooks.
+    pub hooks: Option<Rc<PropHooks>>,
+    /// Whether the property is static.
+    pub is_static: bool,
+    /// The instance property info.
+    pub info: Option<Rc<PropInfo>>,
+}
+
+impl PropMeta {
+    fn from_info(pi: &Rc<PropInfo>) -> Self {
+        PropMeta {
+            name: pi.name.clone(),
+            flags: pi.flags,
+            ty: pi.ty.clone(),
+            class: pi.class.clone(),
+            default: pi.default.clone(),
+            doc: pi.doc_comment.clone(),
+            attributes: pi.attributes.clone(),
+            hooks: pi.hooks.clone(),
+            is_static: false,
+            info: Some(pi.clone()),
+        }
+    }
+
+    /// Visibility bits.
+    pub fn visibility(&self) -> u32 {
+        self.flags & flags::VISIBILITY
+    }
+}
+
+/// Finds the declaration of a static property (for its attributes).
+fn static_decl_attrs(vm: &Vm, class: &ZStr, name: &ZStr) -> Vec<AttributeInfo> {
+    let Some(c) = vm.find_class(class.as_bytes()) else { return Vec::new() };
+    let Some(decl) = &c.decl else { return Vec::new() };
+    if let Some(p) = decl.props.iter().find(|p| p.name == *name) {
+        return p.attributes.clone();
+    }
+    for t in &c.traits {
+        if let Some(td) = &t.decl {
+            if let Some(p) = td.props.iter().find(|p| p.name == *name) {
+                return p.attributes.clone();
+            }
+        }
+    }
+    Vec::new()
+}
+
+/// Looks up property `name` of `c` like `zend_hash_find(&ce->properties_info)`
+/// restricted to entries visible in `c` (no inherited private shadows).
+pub(crate) fn find_prop(vm: &Vm, c: &Rc<Class>, name: &[u8]) -> Option<PropMeta> {
+    let key = ZStr::from(name);
+    if let Some(pi) = c.prop_map.get(&key) {
+        if pi.visibility() != flags::PRIVATE || pi.class.eq_ignore_ascii_case(c.name.as_bytes()) {
+            return Some(PropMeta::from_info(pi));
+        }
+    }
+    if let Some(sp) = c.find_static(name) {
+        if sp.flags & flags::PRIVATE == 0 || sp.class.eq_ignore_ascii_case(c.name.as_bytes()) {
+            return Some(PropMeta {
+                name: sp.name.clone(),
+                flags: sp.flags | flags::STATIC,
+                ty: sp.ty.clone(),
+                class: sp.class.clone(),
+                default: sp.default.clone(),
+                doc: sp.doc_comment.clone(),
+                attributes: static_decl_attrs(vm, &sp.class, &sp.name),
+                hooks: None,
+                is_static: true,
+                info: None,
+            });
+        }
+    }
+    // Own private properties not reachable through `prop_map`.
+    c.props
+        .iter()
+        .find(|p| p.name == key && p.class.eq_ignore_ascii_case(c.name.as_bytes()))
+        .map(PropMeta::from_info)
+}
+
+/// Names of `properties_info` in php-src order (inherited private
+/// properties included).
+fn prop_names(c: &Rc<Class>, out: &mut Vec<ZStr>, seen: &mut HashSet<ZStr>) {
+    let mut push = |n: &ZStr, out: &mut Vec<ZStr>| {
+        if seen.insert(n.clone()) {
+            out.push(n.clone());
+        }
+    };
+    if let Some(decl) = &c.decl {
+        if c.is_enum() {
+            push(&ZStr::from("name"), out);
+            if c.backing.is_some() {
+                push(&ZStr::from("value"), out);
+            }
+        }
+        for p in &decl.props {
+            push(&p.name, out);
+        }
+    } else {
+        for p in &c.props {
+            if p.class.eq_ignore_ascii_case(c.name.as_bytes()) {
+                push(&p.name, out);
+            }
+        }
+        for s in &c.static_props {
+            if s.class.eq_ignore_ascii_case(c.name.as_bytes()) {
+                push(&s.name, out);
+            }
+        }
+    }
+    if let Some(p) = &c.parent {
+        let mut pn = Vec::new();
+        let mut ps = HashSet::new();
+        prop_names(p, &mut pn, &mut ps);
+        for n in &pn {
+            push(n, out);
+        }
+    }
+    for t in &c.traits {
+        if let Some(td) = &t.decl {
+            for p in &td.props {
+                push(&p.name, out);
+            }
+        }
+    }
+    for p in &c.props {
+        push(&p.name, out);
+    }
+    for s in &c.static_props {
+        push(&s.name, out);
+    }
+}
+
+/// The properties of `c` visible from `c` (`properties_info` without the
+/// inherited private ones), in php-src order.
+pub(crate) fn props(vm: &Vm, c: &Rc<Class>) -> Vec<PropMeta> {
+    let mut names = Vec::new();
+    let mut seen = HashSet::new();
+    prop_names(c, &mut names, &mut seen);
+    names.iter().filter_map(|n| find_prop(vm, c, n.as_bytes())).collect()
+}
+
+/// The number of inherited private properties ("shadows") of `c`.
+pub(crate) fn shadow_count(vm: &Vm, c: &Rc<Class>) -> usize {
+    let mut names = Vec::new();
+    let mut seen = HashSet::new();
+    prop_names(c, &mut names, &mut seen);
+    names.iter().filter(|n| find_prop(vm, c, n.as_bytes()).is_none()).count()
+}
+
+/// The methods of `c` (`function_table`) in php-src order.
+pub(crate) fn methods(c: &Rc<Class>) -> Vec<Rc<Method>> {
+    let mut order: Vec<ZStr> = Vec::new();
+    let mut seen: HashSet<ZStr> = HashSet::new();
+    let mut push = |lc: ZStr, order: &mut Vec<ZStr>| {
+        if c.methods.contains_key(&lc) && seen.insert(lc.clone()) {
+            order.push(lc);
+        }
+    };
+    if let Some(decl) = &c.decl {
+        for m in &decl.methods {
+            push(ZStr::from(m.name.to_ascii_lowercase()), &mut order);
+        }
+        if c.is_enum() {
+            push(ZStr::from("cases"), &mut order);
+            if c.backing.is_some() {
+                push(ZStr::from("from"), &mut order);
+                push(ZStr::from("tryfrom"), &mut order);
+            }
+        }
+        if let Some(p) = &c.parent {
+            for m in methods(p) {
+                push(ZStr::from(m.name.to_ascii_lowercase()), &mut order);
+            }
+        }
+    }
+    for lc in &c.method_order {
+        push(lc.clone(), &mut order);
+    }
+    order.iter().filter_map(|lc| c.methods.get(lc).cloned()).collect()
+}
+
+/// The constants of `c` (`constants_table`) in php-src order.
+pub(crate) fn consts(c: &Rc<Class>) -> Vec<Rc<ClassConst>> {
+    let mut order: Vec<ZStr> = Vec::new();
+    let mut seen: HashSet<ZStr> = HashSet::new();
+    let mut push = |n: &ZStr, order: &mut Vec<ZStr>| {
+        if c.const_map.contains_key(n) && seen.insert(n.clone()) {
+            order.push(n.clone());
+        }
+    };
+    if let Some(decl) = &c.decl {
+        let mut own: Vec<(u32, usize, ZStr)> = Vec::new();
+        for (i, cd) in decl.consts.iter().enumerate() {
+            own.push((cd.line, i, cd.name.clone()));
+        }
+        for (i, (n, _, line)) in decl.cases.iter().enumerate() {
+            own.push((*line, decl.consts.len() + i, n.clone()));
+        }
+        own.sort_by_key(|(l, i, _)| (*l, *i));
+        for (_, _, n) in &own {
+            push(n, &mut order);
+        }
+        if let Some(p) = &c.parent {
+            for cc in consts(p) {
+                push(&cc.name, &mut order);
+            }
+        }
+        for t in &c.traits {
+            for cc in consts(t) {
+                push(&cc.name, &mut order);
+            }
+        }
+    } else {
+        for cc in &c.consts {
+            if cc.class.eq_ignore_ascii_case(c.name.as_bytes()) {
+                push(&cc.name, &mut order);
+            }
+        }
+        if let Some(p) = &c.parent {
+            for cc in consts(p) {
+                push(&cc.name, &mut order);
+            }
+        }
+    }
+    for cc in &c.consts {
+        push(&cc.name, &mut order);
+    }
+    order.iter().filter_map(|n| c.find_const(n.as_bytes()).cloned()).collect()
+}
+
+/// `common.prototype` of method `m`.
+pub(crate) fn prototype(m: &Rc<Method>) -> Option<Rc<Method>> {
+    let scope = m.scope();
+    let lc = ZStr::from(m.name.to_ascii_lowercase());
+    let mut proto: Option<Rc<Method>> = None;
+    if let Some(p) = &scope.parent {
+        if let Some(pm) = p.methods.get(&lc) {
+            if pm.visibility() != flags::PRIVATE {
+                let pp = prototype(pm).unwrap_or_else(|| pm.clone());
+                let is_ctor = lc.as_bytes() == b"__construct";
+                if !is_ctor || pp.is_abstract() {
+                    proto = Some(pp);
+                }
+            }
+        }
+    }
+    let inherited: Vec<Rc<Class>> = scope.parent.as_ref().map(|p| p.interfaces.clone()).unwrap_or_default();
+    for i in &scope.interfaces {
+        if Rc::ptr_eq(i, &scope) || inherited.iter().any(|x| Rc::ptr_eq(x, i)) {
+            continue;
+        }
+        if let Some(im) = i.methods.get(&lc) {
+            if Rc::ptr_eq(&im.scope(), &scope) {
+                continue;
+            }
+            proto = Some(prototype(im).unwrap_or_else(|| im.clone()));
+        }
+    }
+    if scope.is_interface() && proto.is_none() {
+        for i in &scope.interfaces {
+            if let Some(im) = i.methods.get(&lc) {
+                if !Rc::ptr_eq(&im.scope(), &scope) {
+                    proto = Some(prototype(im).unwrap_or_else(|| im.clone()));
+                    break;
+                }
+            }
+        }
+    }
+    proto.filter(|p| !Rc::ptr_eq(p, m))
+}
