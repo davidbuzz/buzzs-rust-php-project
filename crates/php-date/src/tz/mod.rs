@@ -6,6 +6,7 @@
 //! `timezone_version_get()`, `timezone_identifiers_list()`,
 //! `DateTimeZone::getTransitions()` and `getLocation()` match PHP exactly.
 
+#[allow(clippy::unreadable_literal)]
 mod generated;
 pub mod posix;
 
@@ -61,8 +62,12 @@ impl fmt::Display for TzError {
             Self::CorruptTransitionsDontIncrease => {
                 "Corrupt tzfile: The transitions in the file don't always increase"
             }
-            Self::CorruptNo64BitPreamble => "Corrupt tzfile: The expected 64-bit preamble is missing",
-            Self::UnsupportedVersion => "The version used in this timezone identifier is unsupported",
+            Self::CorruptNo64BitPreamble => {
+                "Corrupt tzfile: The expected 64-bit preamble is missing"
+            }
+            Self::UnsupportedVersion => {
+                "The version used in this timezone identifier is unsupported"
+            }
             Self::NoSuchTimezone => "No timezone with this name could be found",
             Self::CorruptPosixString => "The embedded POSIX string is not valid",
         })
@@ -204,7 +209,10 @@ pub(crate) fn strcasecmp(a: &str, b: &str) -> std::cmp::Ordering {
 
 /// Binary search of the index exactly as `seek_to_tz_position` does it.
 fn seek(name: &str) -> Option<usize> {
-    let (mut left, mut right) = (0_i64, generated::INDEX.len() as i64 - 1);
+    let (mut left, mut right) = (
+        0_i64,
+        i64::try_from(generated::INDEX.len()).unwrap_or(0) - 1,
+    );
     while left <= right {
         let mid = (left + right) >> 1;
         let idx = usize::try_from(mid).ok()?;
@@ -292,7 +300,10 @@ pub const PER_COUNTRY_ERROR: &str = "must be a two-letter ISO 3166-1 compatible 
 ///
 /// Returns `Err(PER_COUNTRY_ERROR)` (a `ValueError` for argument #2) when
 /// `what` is `PER_COUNTRY` and `country` is not exactly two bytes long.
-pub fn identifiers_list(what: i64, country: Option<&str>) -> Result<Vec<&'static str>, &'static str> {
+pub fn identifiers_list(
+    what: i64,
+    country: Option<&str>,
+) -> Result<Vec<&'static str>, &'static str> {
     let country = country.unwrap_or("").as_bytes();
     if what == group::PER_COUNTRY && country.len() != 2 {
         return Err(PER_COUNTRY_ERROR);
@@ -486,9 +497,9 @@ impl TzInfo {
     }
 
     fn find_ttinfo_index(&self, offset: i64, isdst: bool, abbr: &str) -> Option<usize> {
-        self.types
-            .iter()
-            .position(|t| i64::from(t.offset) == offset && t.isdst == isdst && self.abbr_at(t.abbr_idx) == abbr)
+        self.types.iter().position(|t| {
+            i64::from(t.offset) == offset && t.isdst == isdst && self.abbr_at(t.abbr_idx) == abbr
+        })
     }
 
     fn add_new_ttinfo(&mut self, offset: i64, isdst: bool, abbr: &str) -> usize {
@@ -581,7 +592,10 @@ impl TzInfo {
 
     /// `timelib_get_time_zone_info`.
     pub fn time_zone_info(&self, ts: i64) -> TimeOffset {
-        match self.fetch_offset(ts).and_then(|(i, tt)| self.types.get(i).map(|t| (t, tt))) {
+        match self
+            .fetch_offset(ts)
+            .and_then(|(i, tt)| self.types.get(i).map(|t| (t, tt)))
+        {
             Some((t, tt)) => TimeOffset {
                 offset: t.offset,
                 leap_secs: 0,
@@ -599,7 +613,7 @@ impl TzInfo {
         }
     }
 
-    /// `timelib_get_time_zone_offset_info`: (offset, transition time, is_dst).
+    /// `timelib_get_time_zone_offset_info`: (offset, transition time, `is_dst`).
     pub fn offset_info(&self, ts: i64) -> Option<(i32, i64, bool)> {
         let (i, tt) = self.fetch_offset(ts)?;
         let t = self.types.get(i)?;
@@ -663,7 +677,9 @@ impl TzInfo {
         if found {
             for i in begin..timecnt {
                 if self.trans[i] < timestamp_end {
-                    out.push(self.transition_for_type(usize::from(self.trans_idx[i]), self.trans[i]));
+                    out.push(
+                        self.transition_for_type(usize::from(self.trans_idx[i]), self.trans[i]),
+                    );
                 } else {
                     return out;
                 }

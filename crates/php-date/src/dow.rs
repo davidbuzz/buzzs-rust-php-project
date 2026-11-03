@@ -14,7 +14,11 @@ const ML_TABLE_COMMON: [i64; 13] = [0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 3
 const ML_TABLE_LEAP: [i64; 13] = [0, 31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
 
 fn table(t: &[i64; 13], m: i64) -> i64 {
-    usize::try_from(m).ok().and_then(|i| t.get(i)).copied().unwrap_or(0)
+    usize::try_from(m)
+        .ok()
+        .and_then(|i| t.get(i))
+        .copied()
+        .unwrap_or(0)
 }
 
 fn positive_mod(x: i64, y: i64) -> i64 {
@@ -119,7 +123,8 @@ pub fn isodate_from_date(y: i64, m: i64, d: i64) -> (i64, i64, i64) {
 pub fn daynr_from_weeknr(iy: i64, iw: i64, id: i64) -> i64 {
     let dow = day_of_week(iy, 1, 1);
     let day = 0 - if dow > 4 { dow - 7 } else { dow };
-    day.wrapping_add(iw.wrapping_sub(1).wrapping_mul(7)).wrapping_add(id)
+    day.wrapping_add(iw.wrapping_sub(1).wrapping_mul(7))
+        .wrapping_add(id)
 }
 
 /// Calendar date `(y, m, d)` of ISO year/week/day.
@@ -137,7 +142,11 @@ pub fn date_from_isodate(iy: i64, iw: i64, id: i64) -> (i64, i64, i64) {
         y += 1;
         leap = is_leap(y);
     }
-    let t = if leap { &ML_TABLE_LEAP } else { &ML_TABLE_COMMON };
+    let t = if leap {
+        &ML_TABLE_LEAP
+    } else {
+        &ML_TABLE_COMMON
+    };
     let mut m = 1;
     while m < 12 && daynr > table(t, m) {
         daynr -= table(t, m);

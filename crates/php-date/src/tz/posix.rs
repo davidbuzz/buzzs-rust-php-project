@@ -1,7 +1,7 @@
 //! POSIX TZ footer strings (`EST5EDT,M3.2.0,M11.1.0`), port of timelib's
 //! `parse_posix.c`.
 //!
-//! Slim TZif files only carry transitions up to the point where the footer
+//! Slim `TZif` files only carry transitions up to the point where the footer
 //! rule takes over; later offsets are computed from this rule.
 
 use crate::dow::is_leap;
@@ -114,7 +114,9 @@ impl Reader<'_> {
         }
         let mut acc: i32 = 0;
         while self.peek().is_ascii_digit() {
-            acc = acc.wrapping_mul(10).wrapping_add(i32::from(self.peek() - b'0'));
+            acc = acc
+                .wrapping_mul(10)
+                .wrapping_add(i32::from(self.peek() - b'0'));
             self.p += 1;
         }
         if begin == self.p {

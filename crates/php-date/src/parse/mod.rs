@@ -91,7 +91,13 @@ pub struct Errors {
 }
 
 impl Errors {
-    pub(crate) fn add_error(&mut self, code: u32, position: usize, character: u8, message: &'static str) {
+    pub(crate) fn add_error(
+        &mut self,
+        code: u32,
+        position: usize,
+        character: u8,
+        message: &'static str,
+    ) {
         if self.errors.len() < MAX_ERRORS {
             self.errors.push(Message {
                 code,
@@ -102,7 +108,13 @@ impl Errors {
         }
     }
 
-    pub(crate) fn add_warning(&mut self, code: u32, position: usize, character: u8, message: &'static str) {
+    pub(crate) fn add_warning(
+        &mut self,
+        code: u32,
+        position: usize,
+        character: u8,
+        message: &'static str,
+    ) {
         if self.warnings.len() < MAX_ERRORS {
             self.warnings.push(Message {
                 code,

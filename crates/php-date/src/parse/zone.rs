@@ -83,7 +83,10 @@ fn parse_tz_cor(c: &mut Cur<'_>) -> (i64, bool) {
         5 if at(2) == b':' => (s_hour(strtol(b)) + s_min(strtol(from(3))), true),
         6 => {
             let tmp = strtol(b);
-            (s_hour(tmp / 10000) + s_min((tmp / 100) % 100) + (tmp % 100), true)
+            (
+                s_hour(tmp / 10000) + s_min((tmp / 100) % 100) + (tmp % 100),
+                true,
+            )
         }
         8 if at(2) == b':' && at(5) == b':' => (
             s_hour(strtol(b)) + s_min(strtol(from(3))) + strtol(from(6)),
@@ -237,7 +240,10 @@ mod tests {
     #[test]
     fn abbreviations_and_ids() {
         let (z, nf, ty, dst, abbr) = zone("CEST");
-        assert_eq!((z, nf, ty, dst, abbr.as_deref()), (3600, false, ZoneType::Abbr, 1, Some("CEST")));
+        assert_eq!(
+            (z, nf, ty, dst, abbr.as_deref()),
+            (3600, false, ZoneType::Abbr, 1, Some("CEST"))
+        );
         let (_, nf, ty, ..) = zone("Europe/Amsterdam");
         assert_eq!((nf, ty), (false, ZoneType::Id));
         let (_, nf, ty, ..) = zone("UTC");
@@ -249,8 +255,14 @@ mod tests {
 
     #[test]
     fn timezone_specs() {
-        assert_eq!(parse_timezone_spec("+01:00"), Ok(TimezoneSpec::Offset(3600)));
-        assert!(matches!(parse_timezone_spec("Europe/London"), Ok(TimezoneSpec::Id(_))));
+        assert_eq!(
+            parse_timezone_spec("+01:00"),
+            Ok(TimezoneSpec::Offset(3600))
+        );
+        assert!(matches!(
+            parse_timezone_spec("Europe/London"),
+            Ok(TimezoneSpec::Id(_))
+        ));
         assert_eq!(
             parse_timezone_spec("EDT"),
             Ok(TimezoneSpec::Abbr {
@@ -259,7 +271,10 @@ mod tests {
                 dst: true
             })
         );
-        assert_eq!(parse_timezone_spec("Foo").unwrap_err(), "Unknown or bad timezone (Foo)");
+        assert_eq!(
+            parse_timezone_spec("Foo").unwrap_err(),
+            "Unknown or bad timezone (Foo)"
+        );
         assert_eq!(parse_timezone_spec("+100:00"), Ok(TimezoneSpec::Offset(60)));
         assert_eq!(
             parse_timezone_spec("+999999").unwrap_err(),

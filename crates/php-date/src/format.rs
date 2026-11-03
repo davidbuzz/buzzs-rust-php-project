@@ -4,7 +4,9 @@
 use std::fmt::Write as _;
 use std::sync::Arc;
 
-use crate::dow::{day_of_week, day_of_year, days_in_month, is_leap, iso_day_of_week, isoweek_from_date};
+use crate::dow::{
+    day_of_week, day_of_year, days_in_month, is_leap, iso_day_of_week, isoweek_from_date,
+};
 use crate::time::{RelTime, Time, ZoneType};
 use crate::tz::{TimeOffset, TzInfo};
 use crate::UNSET;
@@ -178,7 +180,11 @@ pub fn format_date(format: &[u8], t: &Time, localtime: bool) -> Vec<u8> {
     if format.is_empty() {
         return out;
     }
-    let offset = if localtime { Some(time_offset(t)) } else { None };
+    let offset = if localtime {
+        Some(time_offset(t))
+    } else {
+        None
+    };
     let off = offset.as_ref().map_or(0, |o| o.offset);
     let mut iso: Option<(i64, i64)> = None;
     let mut buf = String::new();
@@ -231,7 +237,12 @@ pub fn format_date(format: &[u8], t: &Time, localtime: bool) -> Vec<u8> {
                 let _ = write!(buf, "{:02}", int(t.y % 100));
             }
             b'Y' => {
-                let _ = write!(buf, "{}{:04}", if t.y < 0 { "-" } else { "" }, abs_year(t.y));
+                let _ = write!(
+                    buf,
+                    "{}{:04}",
+                    if t.y < 0 { "-" } else { "" },
+                    abs_year(t.y)
+                );
             }
             b'x' => {
                 let sign = if t.y < 0 {
@@ -244,7 +255,12 @@ pub fn format_date(format: &[u8], t: &Time, localtime: bool) -> Vec<u8> {
                 let _ = write!(buf, "{sign}{:04}", abs_year(t.y));
             }
             b'X' => {
-                let _ = write!(buf, "{}{:04}", if t.y < 0 { "-" } else { "+" }, abs_year(t.y));
+                let _ = write!(
+                    buf,
+                    "{}{:04}",
+                    if t.y < 0 { "-" } else { "+" },
+                    abs_year(t.y)
+                );
             }
             b'a' => buf.push_str(if t.h >= 12 { "pm" } else { "am" }),
             b'A' => buf.push_str(if t.h >= 12 { "PM" } else { "AM" }),
@@ -276,7 +292,11 @@ pub fn format_date(format: &[u8], t: &Time, localtime: bool) -> Vec<u8> {
                 let _ = write!(buf, "{:03}", int(t.us / 1000));
             }
             b'I' => {
-                let _ = write!(buf, "{}", i32::from(offset.as_ref().is_some_and(|o| o.is_dst)));
+                let _ = write!(
+                    buf,
+                    "{}",
+                    i32::from(offset.as_ref().is_some_and(|o| o.is_dst))
+                );
             }
             b'p' | b'P' | b'O' => {
                 let is_z = c == b'p'
@@ -489,7 +509,14 @@ fn push_padded(out: &mut Vec<u8>, s: &[u8], width: usize, pad: Pad) {
 }
 
 /// glibc's `DO_NUMBER` / `DO_YEARISH` padding.
-fn push_number(out: &mut Vec<u8>, v: i64, digits: usize, width: Option<usize>, pad: Pad, default_pad: Pad) {
+fn push_number(
+    out: &mut Vec<u8>,
+    v: i64,
+    digits: usize,
+    width: Option<usize>,
+    pad: Pad,
+    default_pad: Pad,
+) {
     let pad = match pad {
         Pad::Default if default_pad == Pad::None && width.is_some() => Pad::Zero,
         Pad::Default => default_pad,
@@ -566,7 +593,16 @@ fn strftime_into(out: &mut Vec<u8>, format: &[u8], tm: &Tm) {
             } else if swapcase {
                 b.make_ascii_lowercase();
             }
-            push_padded(out, &b, width.unwrap_or(0), if pad == Pad::Zero { Pad::Zero } else { Pad::Space });
+            push_padded(
+                out,
+                &b,
+                width.unwrap_or(0),
+                if pad == Pad::Zero {
+                    Pad::Zero
+                } else {
+                    Pad::Space
+                },
+            );
         };
         let mon_idx = usize::try_from(tm.mon).ok().filter(|&m| m < 12);
         let wday_idx = usize::try_from(tm.wday).ok().filter(|&d| d < 7);
@@ -582,7 +618,16 @@ fn strftime_into(out: &mut Vec<u8>, format: &[u8], tm: &Tm) {
             if upcase {
                 tmp.make_ascii_uppercase();
             }
-            push_padded(out, &tmp, width.unwrap_or(0), if pad == Pad::Zero { Pad::Zero } else { Pad::Space });
+            push_padded(
+                out,
+                &tmp,
+                width.unwrap_or(0),
+                if pad == Pad::Zero {
+                    Pad::Zero
+                } else {
+                    Pad::Space
+                },
+            );
         };
         match conv {
             b'a' => text(out, wday_idx.map_or("?", |d| DAY_SHORT_NAMES[d]), false),
@@ -620,9 +665,17 @@ fn strftime_into(out: &mut Vec<u8>, format: &[u8], tm: &Tm) {
             b'u' => push_number(out, (tm.wday + 6) % 7 + 1, 1, width, pad, Pad::Zero),
             b'w' => push_number(out, tm.wday, 1, width, pad, Pad::Zero),
             b'U' => push_number(out, (tm.yday - tm.wday + 7) / 7, 2, width, pad, Pad::Zero),
-            b'W' => push_number(out, (tm.yday - (tm.wday + 6) % 7 + 7) / 7, 2, width, pad, Pad::Zero),
+            b'W' => push_number(
+                out,
+                (tm.yday - (tm.wday + 6) % 7 + 7) / 7,
+                2,
+                width,
+                pad,
+                Pad::Zero,
+            ),
             b's' => {
-                let v = crate::time::ymdhis_to_sse(year, tm.mon + 1, tm.mday, tm.hour, tm.min, tm.sec);
+                let v =
+                    crate::time::ymdhis_to_sse(year, tm.mon + 1, tm.mday, tm.hour, tm.min, tm.sec);
                 push_number(out, v, 1, width, pad, Pad::None);
             }
             b'z' => {
@@ -630,7 +683,14 @@ fn strftime_into(out: &mut Vec<u8>, format: &[u8], tm: &Tm) {
                 out.push(if diff < 0 { b'-' } else { b'+' });
                 let d = diff.abs();
                 let v = (d / 3600) * 100 + (d / 60) % 60;
-                push_number(out, v, 4, width.map(|w| w.saturating_sub(1)), Pad::Zero, Pad::Zero);
+                push_number(
+                    out,
+                    v,
+                    4,
+                    width.map(|w| w.saturating_sub(1)),
+                    Pad::Zero,
+                    Pad::Zero,
+                );
             }
             _ => out.extend_from_slice(&format[start..i]),
         }
@@ -688,10 +748,16 @@ mod tests {
             "Fri, 13 Feb 2009 23:31:30 +0000"
         );
         assert_eq!(date_gmt("c", 1_234_567_890), "2009-02-13T23:31:30+00:00");
-        assert_eq!(date_gmt("r", 1_234_567_890), "Fri, 13 Feb 2009 23:31:30 +0000");
+        assert_eq!(
+            date_gmt("r", 1_234_567_890),
+            "Fri, 13 Feb 2009 23:31:30 +0000"
+        );
         assert_eq!(date_gmt("T e P p Z I", 0), "GMT UTC +00:00 Z 0 0");
         assert_eq!(date_gmt("\\Y\\m\\d", 0), "Ymd");
-        assert_eq!(date_gmt("jS F, l z t L N w W o", 1_234_567_890), "13th February, Friday 43 28 0 5 5 07 2009");
+        assert_eq!(
+            date_gmt("jS F, l z t L N w W o", 1_234_567_890),
+            "13th February, Friday 43 28 0 5 5 07 2009"
+        );
         assert_eq!(date_gmt("B", 0), "041");
         assert_eq!(date_gmt("g G h H a A", 13 * 3600), "1 13 01 13 pm PM");
         assert_eq!(date_gmt("x X", 0), "1970 +1970");
@@ -720,13 +786,21 @@ mod tests {
 
     #[test]
     fn strftime_c_locale() {
-        let f = |fmt: &str, ts: i64| String::from_utf8(strftime(fmt.as_bytes(), ts, None).unwrap()).unwrap();
+        let f = |fmt: &str, ts: i64| {
+            String::from_utf8(strftime(fmt.as_bytes(), ts, None).unwrap()).unwrap()
+        };
         assert_eq!(
             f("[%Y][%C][%y][%G][%g][%F][%D][%10Y][%_5m][%-d][%^a][%#B][%q][%Ec][%Oy][%+][%5%][%-5H][%P][%k][%l][%e][%U][%W][%V][%z][%Z]", -30_000_000_000),
             "[1019][10][19][1019][19][1019-05-04][05/04/19][0000001019][    5][4][TUE][MAY][%q][Tue May  4 18:40:00 1019][19][%+][    %][   18][pm][18][ 6][ 4][18][18][18][+0000][GMT]"
         );
-        assert_eq!(f("[%Y][%C][%y][%10Y]", -63_000_000_000), "[-27][-1][73][-000000027]");
-        assert_eq!(f("[%Y][%C][%y][%G][%g]", -62_000_000_000), "[5][0][05][5][05]");
+        assert_eq!(
+            f("[%Y][%C][%y][%10Y]", -63_000_000_000),
+            "[-27][-1][73][-000000027]"
+        );
+        assert_eq!(
+            f("[%Y][%C][%y][%G][%g]", -62_000_000_000),
+            "[5][0][05][5][05]"
+        );
         assert!(strftime(b"", 0, None).is_none());
         let tz = tz::get("America/New_York").unwrap();
         assert_eq!(
@@ -750,7 +824,10 @@ mod tests {
             ..RelTime::default()
         };
         assert_eq!(
-            format_interval(b"%y %Y %m %M %d %D %h %H %i %I %s %S %f %F %a %r %R %% %z", &r),
+            format_interval(
+                b"%y %Y %m %M %d %D %h %H %i %I %s %S %f %F %a %r %R %% %z",
+                &r
+            ),
             b"1 01 2 02 3 03 4 04 5 05 6 06 7 000007 (unknown) - - % %z".to_vec()
         );
     }

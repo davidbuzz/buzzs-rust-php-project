@@ -15,6 +15,17 @@
 //! * [`astro`] — sunrise/sunset/twilight (`date_sun_info()`).
 //! * [`api`] — PHP-function-shaped helpers built on the above.
 
+// The port keeps timelib's field names (y, m, d, h, i, s, ...) and its
+// long switch-style functions so it can be checked line-by-line against the
+// C sources; these lints would force obscuring that correspondence.
+#![allow(
+    clippy::many_single_char_names,
+    clippy::similar_names,
+    clippy::too_many_lines,
+    clippy::struct_excessive_bools,
+    clippy::too_many_arguments
+)]
+
 pub mod api;
 pub mod astro;
 pub mod dow;

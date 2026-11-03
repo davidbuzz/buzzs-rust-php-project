@@ -1,7 +1,10 @@
 //! Date arithmetic with intervals: `DateTime::diff()`, `add()` and `sub()`
 //! (port of timelib's `interval.c`).
 
-use crate::time::{do_range_limit, do_rel_normalize, hms_to_seconds, hmsf_to_decimal_hour, same_timezone, RelTime, Time, ZoneType};
+use crate::time::{
+    do_range_limit, do_rel_normalize, hms_to_seconds, hmsf_to_decimal_hour, same_timezone, RelTime,
+    Time, ZoneType,
+};
 
 fn same_tzid(one: &Time, two: &Time) -> bool {
     one.zone_type == ZoneType::Id
@@ -15,7 +18,8 @@ fn same_tzid(one: &Time, two: &Time) -> bool {
 /// Orders `(one, two)` oldest first; returns whether they were swapped.
 fn sort_old_to_new(one: &mut Time, two: &mut Time) -> bool {
     let swap = if same_tzid(one, two) {
-        (one.y, one.m, one.d, one.h, one.i, one.s, one.us) > (two.y, two.m, two.d, two.h, two.i, two.s, two.us)
+        (one.y, one.m, one.d, one.h, one.i, one.s, one.us)
+            > (two.y, two.m, two.d, two.h, two.i, two.s, two.us)
     } else {
         (one.sse, one.us) > (two.sse, two.us)
     };
@@ -29,11 +33,19 @@ fn sort_old_to_new(one: &mut Time, two: &mut Time) -> bool {
 #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 pub fn diff_days(one: &Time, two: &Time) -> i64 {
     if same_timezone(one, two) {
-        let (earliest, latest) = if one.compare(two).is_lt() { (one, two) } else { (two, one) };
+        let (earliest, latest) = if one.compare(two).is_lt() {
+            (one, two)
+        } else {
+            (two, one)
+        };
         let earliest_time = hmsf_to_decimal_hour(earliest.h, earliest.i, earliest.s, earliest.us);
         let latest_time = hmsf_to_decimal_hour(latest.h, latest.i, latest.s, latest.us);
         // C computes llabs() of the difference and stores it in an int.
-        let mut days = i64::from(one.epoch_days().wrapping_sub(two.epoch_days()).wrapping_abs() as i32);
+        let mut days = i64::from(
+            one.epoch_days()
+                .wrapping_sub(two.epoch_days())
+                .wrapping_abs() as i32,
+        );
         if latest_time < earliest_time && days > 0 {
             days -= 1;
         }
@@ -212,15 +224,20 @@ fn wall(old: &Time, interval: &RelTime, sign: i64) -> Time {
         }
         if interval.us == 0 {
             let secs = hms_to_seconds(interval.h, interval.i, interval.s);
-            t.sse = t.sse.wrapping_add(bias.wrapping_mul(sign).wrapping_mul(secs));
+            t.sse = t
+                .sse
+                .wrapping_add(bias.wrapping_mul(sign).wrapping_mul(secs));
             t.update_from_sse();
         } else {
             let mut temp = interval.clone();
             do_range_limit(0, 1_000_000, 1_000_000, &mut temp.us, &mut temp.s);
             let secs = hms_to_seconds(temp.h, temp.i, temp.s);
-            t.sse = t.sse.wrapping_add(bias.wrapping_mul(sign).wrapping_mul(secs));
+            t.sse = t
+                .sse
+                .wrapping_add(bias.wrapping_mul(sign).wrapping_mul(secs));
             t.update_from_sse();
-            t.us = t.us.wrapping_add(temp.us.wrapping_mul(bias).wrapping_mul(sign));
+            t.us =
+                t.us.wrapping_add(temp.us.wrapping_mul(bias).wrapping_mul(sign));
             t.do_normalize();
             t.update_ts(None);
         }
@@ -272,7 +289,10 @@ mod tests {
         let a = local(2000, 1, 1, 0, 0, 0, "UTC");
         let b = local(2001, 3, 4, 5, 6, 7, "UTC");
         let r = diff(&a, &b);
-        assert_eq!((r.y, r.m, r.d, r.h, r.i, r.s, r.days, r.invert), (1, 2, 3, 5, 6, 7, 428, false));
+        assert_eq!(
+            (r.y, r.m, r.d, r.h, r.i, r.s, r.days, r.invert),
+            (1, 2, 3, 5, 6, 7, 428, false)
+        );
         let r = diff(&b, &a);
         assert!(r.invert);
         assert_eq!(r.days, 428);
@@ -297,7 +317,13 @@ mod tests {
         assert_eq!((b.y, b.m, b.d), (2010, 3, 3));
         let c = sub(&b, &one_month);
         assert_eq!((c.y, c.m, c.d), (2010, 2, 3));
-        let w = add_wall(&a, &RelTime { h: 25, ..RelTime::default() });
+        let w = add_wall(
+            &a,
+            &RelTime {
+                h: 25,
+                ..RelTime::default()
+            },
+        );
         assert_eq!((w.m, w.d, w.h), (2, 1, 13));
     }
 }

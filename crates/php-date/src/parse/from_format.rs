@@ -169,7 +169,11 @@ pub fn parse_from_format(format: &[u8], string: &[u8]) -> (Time, Errors) {
                     t.relative.weekday = i32::try_from(rel.multiplier).unwrap_or(0);
                     t.relative.weekday_behavior = 1;
                 } else {
-                    p.err(code::ERR_NO_TEXTUAL_DAY, "A textual day could not be found", begin);
+                    p.err(
+                        code::ERR_NO_TEXTUAL_DAY,
+                        "A textual day could not be found",
+                        begin,
+                    );
                 }
             }
             Spec::Day => {
@@ -177,7 +181,11 @@ pub fn parse_from_format(format: &[u8], string: &[u8]) -> (Time, Errors) {
                 let d = get_nr(&mut c, 2);
                 p.st.time.d = d;
                 if d == UNSET {
-                    p.err(code::ERR_NO_TWO_DIGIT_DAY, "A two digit day could not be found", begin);
+                    p.err(
+                        code::ERR_NO_TWO_DIGIT_DAY,
+                        "A two digit day could not be found",
+                        begin,
+                    );
                 } else {
                     p.st.time.have_date = 1;
                 }
@@ -212,7 +220,11 @@ pub fn parse_from_format(format: &[u8], string: &[u8]) -> (Time, Errors) {
                 let m = get_nr(&mut c, 2);
                 p.st.time.m = m;
                 if m == UNSET {
-                    p.err(code::ERR_NO_TWO_DIGIT_MONTH, "A two digit month could not be found", begin);
+                    p.err(
+                        code::ERR_NO_TWO_DIGIT_MONTH,
+                        "A two digit month could not be found",
+                        begin,
+                    );
                 } else {
                     p.st.time.have_date = 1;
                 }
@@ -220,7 +232,11 @@ pub fn parse_from_format(format: &[u8], string: &[u8]) -> (Time, Errors) {
             Spec::TextualMonth => {
                 let tmp = lookup_month(&mut c);
                 if tmp == 0 {
-                    p.err(code::ERR_NO_TEXTUAL_MONTH, "A textual month could not be found", begin);
+                    p.err(
+                        code::ERR_NO_TEXTUAL_MONTH,
+                        "A textual month could not be found",
+                        begin,
+                    );
                 } else {
                     p.st.time.have_date = 1;
                     p.st.time.m = tmp;
@@ -231,7 +247,11 @@ pub fn parse_from_format(format: &[u8], string: &[u8]) -> (Time, Errors) {
                 let (mut y, len) = get_nr_ex(&mut c, 2);
                 if y == UNSET {
                     p.st.time.y = y;
-                    p.err(code::ERR_NO_TWO_DIGIT_YEAR, "A two digit year could not be found", begin);
+                    p.err(
+                        code::ERR_NO_TWO_DIGIT_YEAR,
+                        "A two digit year could not be found",
+                        begin,
+                    );
                 } else {
                     p.st.time.have_date = 1;
                     process_year(&mut y, len);
@@ -243,7 +263,11 @@ pub fn parse_from_format(format: &[u8], string: &[u8]) -> (Time, Errors) {
                 let y = get_nr(&mut c, 4);
                 p.st.time.y = y;
                 if y == UNSET {
-                    p.err(code::ERR_NO_FOUR_DIGIT_YEAR, "A four digit year could not be found", begin);
+                    p.err(
+                        code::ERR_NO_FOUR_DIGIT_YEAR,
+                        "A four digit year could not be found",
+                        begin,
+                    );
                 } else {
                     p.st.time.have_date = 1;
                 }
@@ -253,7 +277,11 @@ pub fn parse_from_format(format: &[u8], string: &[u8]) -> (Time, Errors) {
                 let y = p.st.get_signed_nr(&mut c, 19);
                 p.st.time.y = y;
                 if y == UNSET {
-                    p.err(code::ERR_NO_FOUR_DIGIT_YEAR, "An expanded digit year could not be found", begin);
+                    p.err(
+                        code::ERR_NO_FOUR_DIGIT_YEAR,
+                        "An expanded digit year could not be found",
+                        begin,
+                    );
                 } else {
                     p.st.time.have_date = 1;
                 }
@@ -263,9 +291,17 @@ pub fn parse_from_format(format: &[u8], string: &[u8]) -> (Time, Errors) {
                 let h = get_nr(&mut c, 2);
                 p.st.time.h = h;
                 if h == UNSET {
-                    p.err(code::ERR_NO_TWO_DIGIT_HOUR, "A two digit hour could not be found", begin);
+                    p.err(
+                        code::ERR_NO_TWO_DIGIT_HOUR,
+                        "A two digit hour could not be found",
+                        begin,
+                    );
                 } else if h > 12 {
-                    p.err(code::ERR_HOUR_LARGER_THAN_12, "Hour cannot be higher than 12", begin);
+                    p.err(
+                        code::ERR_HOUR_LARGER_THAN_12,
+                        "Hour cannot be higher than 12",
+                        begin,
+                    );
                 } else {
                     p.st.time.have_time = 1;
                 }
@@ -275,7 +311,11 @@ pub fn parse_from_format(format: &[u8], string: &[u8]) -> (Time, Errors) {
                 let h = get_nr(&mut c, 2);
                 p.st.time.h = h;
                 if h == UNSET {
-                    p.err(code::ERR_NO_TWO_DIGIT_HOUR, "A two digit hour could not be found", begin);
+                    p.err(
+                        code::ERR_NO_TWO_DIGIT_HOUR,
+                        "A two digit hour could not be found",
+                        begin,
+                    );
                 } else {
                     p.st.time.have_time = 1;
                 }
@@ -290,7 +330,11 @@ pub fn parse_from_format(format: &[u8], string: &[u8]) -> (Time, Errors) {
                 }
                 let tmp = meridian_with_check(&mut c, p.st.time.h);
                 if tmp == UNSET {
-                    p.err(code::ERR_NO_MERIDIAN, "A meridian could not be found", begin);
+                    p.err(
+                        code::ERR_NO_MERIDIAN,
+                        "A meridian could not be found",
+                        begin,
+                    );
                 } else {
                     p.st.time.have_time = 1;
                     if p.st.time.h != UNSET {
@@ -303,9 +347,17 @@ pub fn parse_from_format(format: &[u8], string: &[u8]) -> (Time, Errors) {
                 let (v, len) = get_nr_ex(&mut c, 2);
                 if v == UNSET || len != 2 {
                     if fc == b'i' {
-                        p.err(code::ERR_NO_TWO_DIGIT_MINUTE, "A two digit minute could not be found", begin);
+                        p.err(
+                            code::ERR_NO_TWO_DIGIT_MINUTE,
+                            "A two digit minute could not be found",
+                            begin,
+                        );
                     } else {
-                        p.err(code::ERR_NO_TWO_DIGIT_SECOND, "A two digit second could not be found", begin);
+                        p.err(
+                            code::ERR_NO_TWO_DIGIT_SECOND,
+                            "A two digit second could not be found",
+                            begin,
+                        );
                     }
                 } else {
                     p.st.time.have_time = 1;
@@ -368,7 +420,11 @@ pub fn parse_from_format(format: &[u8], string: &[u8]) -> (Time, Errors) {
                 if c.c() == fc {
                     c.adv();
                 } else {
-                    p.err(code::ERR_NO_SEP_SYMBOL, "The separation symbol could not be found", begin);
+                    p.err(
+                        code::ERR_NO_SEP_SYMBOL,
+                        "The separation symbol could not be found",
+                        begin,
+                    );
                 }
             }
             Spec::ResetAll => reset_fields(&mut p.st.time),
@@ -376,13 +432,21 @@ pub fn parse_from_format(format: &[u8], string: &[u8]) -> (Time, Errors) {
             Spec::RandomChar => c.adv(),
             Spec::Escape => {
                 if f.at(1) == 0 {
-                    p.err(code::ERR_EXPECTED_ESCAPE_CHAR, "Escaped character expected", begin);
+                    p.err(
+                        code::ERR_EXPECTED_ESCAPE_CHAR,
+                        "Escaped character expected",
+                        begin,
+                    );
                 } else {
                     f.adv();
                     if c.c() == f.c() {
                         c.adv();
                     } else {
-                        p.err(code::ERR_NO_ESCAPED_CHAR, "The escaped character could not be found", begin);
+                        p.err(
+                            code::ERR_NO_ESCAPED_CHAR,
+                            "The escaped character could not be found",
+                            begin,
+                        );
                     }
                 }
             }
@@ -411,7 +475,11 @@ pub fn parse_from_format(format: &[u8], string: &[u8]) -> (Time, Errors) {
             }
             Spec::Literal => {
                 if fc != c.c() {
-                    p.err(code::ERR_WRONG_FORMAT_SEP, "The format separator does not match", begin);
+                    p.err(
+                        code::ERR_WRONG_FORMAT_SEP,
+                        "The format separator does not match",
+                        begin,
+                    );
                 }
                 c.adv();
             }
@@ -495,7 +563,10 @@ mod tests {
         assert_eq!(e.errors[0].message, "Trailing data");
         assert_eq!(e.errors[0].position, 10);
         let (_, e) = pf("Y-m-d H", "2009-02-15");
-        assert_eq!(e.errors[0].message, "Not enough data available to satisfy format");
+        assert_eq!(
+            e.errors[0].message,
+            "Not enough data available to satisfy format"
+        );
         let (_, e) = pf("m", "x");
         assert_eq!(e.errors[0].message, "Unexpected data found.");
         assert_eq!(e.errors[1].message, "A two digit month could not be found");

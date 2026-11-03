@@ -100,8 +100,18 @@ pub struct RiseSet {
 /// `t_loc` at the given altitude (degrees; `upper_limb` corrects for the
 /// sun's radius). `t_loc` is normalised to local noon as a side effect,
 /// keeping its original `sse`, like timelib does.
-#[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss, clippy::similar_names)]
-pub fn rise_set_altitude(t_loc: &mut Time, lon: f64, lat: f64, mut altit: f64, upper_limb: bool) -> RiseSet {
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_precision_loss,
+    clippy::similar_names
+)]
+pub fn rise_set_altitude(
+    t_loc: &mut Time,
+    lon: f64,
+    lat: f64,
+    mut altit: f64,
+    upper_limb: bool,
+) -> RiseSet {
     let old_sse = t_loc.sse;
     t_loc.h = 12;
     t_loc.i = 0;

@@ -11,7 +11,7 @@ use super::Errors;
 use crate::time::{RelTime, Time, ZoneType};
 use crate::UNSET;
 
-const DEFS: &str = r##"
+const DEFS: &str = r#"
 any = [\000-\377];
 number = [0-9]+;
 
@@ -32,7 +32,7 @@ period   = "P" (number "Y")? (number "M")? (number "W")? (number "D")? ("T" (num
 combinedrep = "P" year4 "-" monthlzz "-" daylzz "T" hour24lz ':' minutelz ':' secondlz;
 
 recurrences = "R" number;
-"##;
+"#;
 
 #[derive(Debug, Clone, Copy)]
 enum Rule {
@@ -157,7 +157,9 @@ pub fn parse_iso_interval(s: &[u8]) -> IsoInterval {
             break;
         };
         let len = len.max(1);
-        let tok = input.get(cursor..(cursor + len).min(input.len())).unwrap_or(&[]);
+        let tok = input
+            .get(cursor..(cursor + len).min(input.len()))
+            .unwrap_or(&[]);
         cursor += len;
         let mut c = Cur::new(tok, 0);
         let tok_char = input.get(tok_pos).copied().unwrap_or(0);
@@ -192,7 +194,8 @@ pub fn parse_iso_interval(s: &[u8]) -> IsoInterval {
                         c.adv();
                     }
                     if c.c() == 0 {
-                        out.errors.add_error(0, tok_pos, tok_char, "Missing expected time part");
+                        out.errors
+                            .add_error(0, tok_pos, tok_char, "Missing expected time part");
                         break;
                     }
                     let nr = get_unsigned_nr(&mut c, 12);
@@ -209,7 +212,14 @@ pub fn parse_iso_interval(s: &[u8]) -> IsoInterval {
                                 period.m = nr;
                             }
                         }
-                        _ => out.errors.add_error(0, tok_pos, tok_char, "Undefined period specifier"),
+                        _ => {
+                            out.errors.add_error(
+                                0,
+                                tok_pos,
+                                tok_char,
+                                "Undefined period specifier",
+                            );
+                        }
                     }
                     c.adv();
                     if !out.errors.errors.is_empty() || c.c() == 0 {
@@ -233,7 +243,9 @@ pub fn parse_iso_interval(s: &[u8]) -> IsoInterval {
                 have_period = true;
             }
             Rule::Separator | Rule::Nul => {}
-            Rule::Any => out.errors.add_error(0, tok_pos, tok_char, "Unexpected character"),
+            Rule::Any => out
+                .errors
+                .add_error(0, tok_pos, tok_char, "Unexpected character"),
         }
     }
 
@@ -261,7 +273,10 @@ mod tests {
         let r = parse_iso_interval(b"P1Y2M3DT4H5M6S");
         assert!(r.errors.errors.is_empty());
         let p = r.period.unwrap();
-        assert_eq!((p.y, p.m, p.d, p.h, p.i, p.s, p.days), (1, 2, 3, 4, 5, 6, UNSET));
+        assert_eq!(
+            (p.y, p.m, p.d, p.h, p.i, p.s, p.days),
+            (1, 2, 3, 4, 5, 6, UNSET)
+        );
         let p = parse_iso_interval(b"P2W").period.unwrap();
         assert_eq!(p.d, 14);
         let p = parse_iso_interval(b"P0001-02-03T04:05:06").period.unwrap();
@@ -281,8 +296,17 @@ mod tests {
 
     #[test]
     fn errors() {
-        assert_eq!(parse_iso_interval(b"").errors.errors[0].message, "Empty string");
-        assert_eq!(parse_iso_interval(b"PT").errors.errors[0].message, "Missing expected time part");
-        assert_eq!(parse_iso_interval(b"X").errors.errors[0].message, "Unexpected character");
+        assert_eq!(
+            parse_iso_interval(b"").errors.errors[0].message,
+            "Empty string"
+        );
+        assert_eq!(
+            parse_iso_interval(b"PT").errors.errors[0].message,
+            "Missing expected time part"
+        );
+        assert_eq!(
+            parse_iso_interval(b"X").errors.errors[0].message,
+            "Unexpected character"
+        );
     }
 }

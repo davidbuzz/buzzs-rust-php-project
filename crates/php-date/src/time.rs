@@ -160,7 +160,9 @@ impl Default for Time {
 
 /// Seconds for `h:m:s`.
 pub fn hms_to_seconds(h: i64, m: i64, s: i64) -> i64 {
-    h.wrapping_mul(3600).wrapping_add(m.wrapping_mul(60)).wrapping_add(s)
+    h.wrapping_mul(3600)
+        .wrapping_add(m.wrapping_mul(60))
+        .wrapping_add(s)
 }
 
 /// Decimal hours from h/m/s/µs (`timelib_hmsf_to_decimal_hour`).
@@ -185,9 +187,14 @@ const HINNANT_EPOCH_SHIFT: i64 = 719_468;
 /// Converts days since 1970-01-01 to `(y, m, d)` (Hinnant's algorithm).
 pub fn date_from_epoch_days(epoch_days: i64) -> (i64, i64, i64) {
     let days = epoch_days.wrapping_add(HINNANT_EPOCH_SHIFT);
-    let era = if days >= 0 { days } else { days - DAYS_PER_ERA + 1 } / DAYS_PER_ERA;
+    let era = if days >= 0 {
+        days
+    } else {
+        days - DAYS_PER_ERA + 1
+    } / DAYS_PER_ERA;
     let day_of_era = days.wrapping_sub(era.wrapping_mul(DAYS_PER_ERA));
-    let year_of_era = (day_of_era - day_of_era / 1460 + day_of_era / 36524 - day_of_era / 146_096) / 365;
+    let year_of_era =
+        (day_of_era - day_of_era / 1460 + day_of_era / 36524 - day_of_era / 146_096) / 365;
     let mut y = year_of_era.wrapping_add(era.wrapping_mul(YEARS_PER_ERA));
     let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
     let month_portion = (5 * day_of_year + 2) / 153;
@@ -330,7 +337,10 @@ impl Time {
             ZoneType::Abbr | ZoneType::Offset => {
                 let z = self.z;
                 let dst = self.dst;
-                self.unixtime2gmt(ts.wrapping_add(self.z).wrapping_add(self.dst.wrapping_mul(3600)));
+                self.unixtime2gmt(
+                    ts.wrapping_add(self.z)
+                        .wrapping_add(self.dst.wrapping_mul(3600)),
+                );
                 self.sse = ts;
                 self.z = z;
                 self.dst = dst;
@@ -450,11 +460,16 @@ impl Time {
             if rel.weekday == 0 && current_dow != 0 {
                 rel.weekday = 7;
             }
-            self.d = self.d.wrapping_sub(current_dow).wrapping_add(i64::from(rel.weekday));
+            self.d = self
+                .d
+                .wrapping_sub(current_dow)
+                .wrapping_add(i64::from(rel.weekday));
             return;
         }
         let mut difference = i64::from(rel.weekday) - current_dow;
-        if (rel.d < 0 && difference < 0) || (rel.d >= 0 && difference <= -i64::from(rel.weekday_behavior)) {
+        if (rel.d < 0 && difference < 0)
+            || (rel.d >= 0 && difference <= -i64::from(rel.weekday_behavior))
+        {
             difference += 7;
         }
         if rel.weekday >= 0 {
@@ -671,7 +686,17 @@ impl Time {
         } else if self.us == UNSET {
             self.us = if now.us == UNSET { 0 } else { now.us };
         }
-        let pick = |v: i64, n: i64| if v == UNSET { if n == UNSET { 0 } else { n } } else { v };
+        let pick = |v: i64, n: i64| {
+            if v == UNSET {
+                if n == UNSET {
+                    0
+                } else {
+                    n
+                }
+            } else {
+                v
+            }
+        };
         self.y = pick(self.y, now.y);
         self.m = pick(self.m, now.m);
         self.d = pick(self.d, now.d);
@@ -732,7 +757,11 @@ fn month_len(year: i64, month: i64) -> i64 {
     } else {
         &DAYS_IN_MONTH
     };
-    usize::try_from(month).ok().and_then(|i| t.get(i)).copied().unwrap_or(31)
+    usize::try_from(month)
+        .ok()
+        .and_then(|i| t.get(i))
+        .copied()
+        .unwrap_or(31)
 }
 
 fn do_range_limit_days(y: &mut i64, m: &mut i64, d: &mut i64) -> bool {
@@ -744,7 +773,11 @@ fn do_range_limit_days(y: &mut i64, m: &mut i64, d: &mut i64) -> bool {
     let year = *y;
     let mut retval = false;
     while *d <= 0 && *m > 0 {
-        let (pm, py) = if *m - 1 < 1 { (*m - 1 + 12, y.wrapping_sub(1)) } else { (*m - 1, *y) };
+        let (pm, py) = if *m - 1 < 1 {
+            (*m - 1 + 12, y.wrapping_sub(1))
+        } else {
+            (*m - 1, *y)
+        };
         *d += month_len(py, pm);
         *m -= 1;
         retval = true;

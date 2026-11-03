@@ -8,10 +8,17 @@
 use std::sync::Arc;
 
 use crate::astro::rise_set_altitude;
-use crate::dow::{day_of_week, day_of_year, daynr_from_weeknr, days_in_month, is_leap, iso_day_of_week, isoweek_from_date};
-use crate::format::{format_date, offset_string, swatch_beat, time_offset, DAY_FULL_NAMES, MON_FULL_NAMES};
+use crate::dow::{
+    day_of_week, day_of_year, daynr_from_weeknr, days_in_month, is_leap, iso_day_of_week,
+    isoweek_from_date,
+};
+use crate::format::{
+    format_date, offset_string, swatch_beat, time_offset, DAY_FULL_NAMES, MON_FULL_NAMES,
+};
 use crate::interval;
-use crate::parse::{parse_from_format, parse_iso_interval, strtotime as parse_strtotime, Errors, TimezoneSpec};
+use crate::parse::{
+    parse_from_format, parse_iso_interval, strtotime as parse_strtotime, Errors, TimezoneSpec,
+};
 use crate::time::{RelTime, Time, ZoneType, FIRST_DAY_OF_MONTH, SPECIAL_WEEKDAY};
 use crate::tz::{self, TzInfo};
 use crate::UNSET;
@@ -51,7 +58,10 @@ impl Value {
     /// `zend_hash_str_update`.
     pub fn set(&mut self, key: &str, v: Value) {
         if let Self::Array(items) = self {
-            if let Some(slot) = items.iter_mut().find(|(k, _)| matches!(k, Key::Str(s) if s == key)) {
+            if let Some(slot) = items
+                .iter_mut()
+                .find(|(k, _)| matches!(k, Key::Str(s) if s == key))
+            {
                 slot.1 = v;
             } else {
                 items.push((Key::Str(key.to_string()), v));
@@ -75,7 +85,13 @@ impl Value {
         if let Self::Array(items) = self {
             let next = items
                 .iter()
-                .filter_map(|(k, _)| if let Key::Int(i) = k { Some(*i + 1) } else { None })
+                .filter_map(|(k, _)| {
+                    if let Key::Int(i) = k {
+                        Some(*i + 1)
+                    } else {
+                        None
+                    }
+                })
                 .max()
                 .unwrap_or(0)
                 .max(0);
@@ -304,13 +320,22 @@ pub fn add_errors(v: &mut Value, e: &Errors) {
     let list = |msgs: &[crate::parse::Message]| {
         let mut a = Value::assoc();
         for m in msgs {
-            a.set_index(i64::try_from(m.position).unwrap_or(0), Value::Str(m.message.to_string()));
+            a.set_index(
+                i64::try_from(m.position).unwrap_or(0),
+                Value::Str(m.message.to_string()),
+            );
         }
         a
     };
-    v.set("warning_count", Value::Int(i64::try_from(e.warnings.len()).unwrap_or(0)));
+    v.set(
+        "warning_count",
+        Value::Int(i64::try_from(e.warnings.len()).unwrap_or(0)),
+    );
     v.set("warnings", list(&e.warnings));
-    v.set("error_count", Value::Int(i64::try_from(e.errors.len()).unwrap_or(0)));
+    v.set(
+        "error_count",
+        Value::Int(i64::try_from(e.errors.len()).unwrap_or(0)),
+    );
     v.set("errors", list(&e.errors));
 }
 
@@ -433,7 +458,11 @@ pub fn date_sun_info(ts: i64, latitude: f64, longitude: f64, tz: &Arc<TzInfo>) -
     for (alt, begin, end) in [
         (-6.0, "civil_twilight_begin", "civil_twilight_end"),
         (-12.0, "nautical_twilight_begin", "nautical_twilight_end"),
-        (-18.0, "astronomical_twilight_begin", "astronomical_twilight_end"),
+        (
+            -18.0,
+            "astronomical_twilight_begin",
+            "astronomical_twilight_end",
+        ),
     ] {
         let r = rise_set_altitude(&mut t, longitude, latitude, alt, false);
         match r.rc {
@@ -482,7 +511,8 @@ pub fn date_sunrise_sunset(
         return Value::Bool(false);
     }
     #[allow(clippy::cast_precision_loss)]
-    let gmt_offset = gmt_offset.unwrap_or_else(|| tz.offset_info(0).map_or(0.0, |o| f64::from(o.0)) / 3600.0);
+    let gmt_offset =
+        gmt_offset.unwrap_or_else(|| tz.offset_info(0).map_or(0.0, |o| f64::from(o.0)) / 3600.0);
     let mut t = Time::from_timestamp_in(ts, tz);
     let r = rise_set_altitude(&mut t, longitude, latitude, altitude, true);
     if r.rc != 0 {
@@ -523,7 +553,10 @@ pub fn timezone_abbreviations_list() -> Value {
             e.tz_id.map_or(Value::Null, |s| Value::Str(s.to_string())),
         );
         if let Value::Array(items) = &mut v {
-            if let Some((_, arr)) = items.iter_mut().find(|(k, _)| matches!(k, Key::Str(s) if s == e.name)) {
+            if let Some((_, arr)) = items
+                .iter_mut()
+                .find(|(k, _)| matches!(k, Key::Str(s) if s == e.name))
+            {
                 arr.push(el);
                 continue;
             }
@@ -559,7 +592,9 @@ impl TimezoneSpec {
         match self {
             Self::Id(tz) => i64::from(tz.time_zone_info(t.sse).offset),
             Self::Offset(o) => *o,
-            Self::Abbr { utc_offset, dst, .. } => utc_offset + i64::from(*dst) * 3600,
+            Self::Abbr {
+                utc_offset, dst, ..
+            } => utc_offset + i64::from(*dst) * 3600,
         }
     }
 
@@ -603,7 +638,7 @@ impl TimezoneSpec {
     }
 
     /// Whether two zones compare equal (`DateTimeZone ==`); `None` when PHP
-    /// would throw "Cannot compare two different kinds of DateTimeZone objects".
+    /// would throw "Cannot compare two different kinds of `DateTimeZone` objects".
     pub fn equals(&self, other: &Self) -> Option<bool> {
         match (self, other) {
             (Self::Offset(a), Self::Offset(b)) => Some(a == b),
@@ -651,12 +686,15 @@ pub fn date_initialize(
     now_sec: i64,
     now_usec: i64,
 ) -> (Option<Time>, Errors) {
-    let (mut t, errors) = match format {
-        Some(f) => parse_from_format(f, time_str),
-        None => {
-            let s: &[u8] = if time_str.is_empty() { b"now" } else { time_str };
-            parse_strtotime(s)
-        }
+    let (mut t, errors) = if let Some(f) = format {
+        parse_from_format(f, time_str)
+    } else {
+        let s: &[u8] = if time_str.is_empty() {
+            b"now"
+        } else {
+            time_str
+        };
+        parse_strtotime(s)
     };
     if !errors.errors.is_empty() {
         return (None, errors);
@@ -674,7 +712,11 @@ pub fn date_initialize(
             now.zone_type = ZoneType::Offset;
             now.z = *o;
         }
-        Some(TimezoneSpec::Abbr { abbr, utc_offset, dst }) => {
+        Some(TimezoneSpec::Abbr {
+            abbr,
+            utc_offset,
+            dst,
+        }) => {
             now.zone_type = ZoneType::Abbr;
             now.z = *utc_offset;
             now.dst = i64::from(*dst);
@@ -726,7 +768,9 @@ pub fn from_timestamp_float(ts: f64) -> Result<Time, String> {
         )
     };
     let sec_dval = ts.trunc();
-    if sec_dval.is_nan() || !(sec_dval >= -9.223_372_036_854_776e18 && sec_dval < 9.223_372_036_854_776e18) {
+    if sec_dval.is_nan()
+        || !(-9.223_372_036_854_776e18..9.223_372_036_854_776e18).contains(&sec_dval)
+    {
         return Err(err());
     }
     let mut sec = sec_dval as i64;
@@ -746,6 +790,7 @@ pub fn from_timestamp_float(ts: f64) -> Result<Time, String> {
 }
 
 /// C's `%g` formatting (6 significant digits), used in a few messages.
+#[allow(clippy::cast_possible_truncation)]
 pub fn php_g(v: f64) -> String {
     if v.is_nan() {
         return "nan".into();
@@ -754,10 +799,14 @@ pub fn php_g(v: f64) -> String {
         return if v > 0.0 { "inf".into() } else { "-inf".into() };
     }
     if v == 0.0 {
-        return if v.is_sign_negative() { "-0".into() } else { "0".into() };
+        return if v.is_sign_negative() {
+            "-0".into()
+        } else {
+            "0".into()
+        };
     }
     let exp = v.abs().log10().floor() as i32;
-    let s = format!("{:.5e}", v);
+    let s = format!("{v:.5e}");
     let (mantissa, e) = s.split_once('e').unwrap_or((&s, "0"));
     let e: i32 = e.parse().unwrap_or(exp);
     if (-4..6).contains(&e) {
@@ -807,12 +856,12 @@ pub fn modify(t: &mut Time, modifier: &[u8]) -> Result<Errors, Errors> {
     }
     if tmp.h != UNSET {
         t.h = tmp.h;
-        if tmp.i != UNSET {
-            t.i = tmp.i;
-            t.s = if tmp.s != UNSET { tmp.s } else { 0 };
-        } else {
+        if tmp.i == UNSET {
             t.i = 0;
             t.s = 0;
+        } else {
+            t.i = tmp.i;
+            t.s = if tmp.s == UNSET { 0 } else { tmp.s };
         }
     }
     if tmp.us != UNSET {
@@ -870,7 +919,10 @@ impl Interval {
             v.set("from_string", Value::Bool(true));
             v.set(
                 "date_string",
-                Value::Str(String::from_utf8_lossy(self.date_string.as_deref().unwrap_or(b"")).into_owned()),
+                Value::Str(
+                    String::from_utf8_lossy(self.date_string.as_deref().unwrap_or(b""))
+                        .into_owned(),
+                ),
             );
             return v;
         }
@@ -980,7 +1032,8 @@ pub fn add(t: &Time, iv: &Interval) -> Time {
 }
 
 /// The message for subtracting special relative intervals.
-pub const SUB_SPECIAL_ERROR: &str = "Only non-special relative time specifications are supported for subtraction";
+pub const SUB_SPECIAL_ERROR: &str =
+    "Only non-special relative time specifications are supported for subtraction";
 
 /// `DateTime::sub($interval)`; `Err` carries [`SUB_SPECIAL_ERROR`].
 pub fn sub(t: &Time, iv: &Interval) -> Result<Time, &'static str> {
@@ -997,7 +1050,11 @@ pub fn sub(t: &Time, iv: &Interval) -> Result<Time, &'static str> {
 pub fn set_timezone(t: &mut Time, zone: &TimezoneSpec) {
     match zone {
         TimezoneSpec::Offset(o) => t.set_timezone_from_offset(*o),
-        TimezoneSpec::Abbr { abbr, utc_offset, dst } => t.set_timezone_from_abbr(abbr, *utc_offset, i64::from(*dst)),
+        TimezoneSpec::Abbr {
+            abbr,
+            utc_offset,
+            dst,
+        } => t.set_timezone_from_abbr(abbr, *utc_offset, i64::from(*dst)),
         TimezoneSpec::Id(tz) => t.set_timezone(tz),
     }
     let sse = t.sse;
@@ -1010,7 +1067,10 @@ pub fn offset(t: &Time) -> i64 {
         return 0;
     }
     match t.zone_type {
-        ZoneType::Id => t.tz_info.as_ref().map_or(0, |tz| i64::from(tz.time_zone_info(t.sse).offset)),
+        ZoneType::Id => t
+            .tz_info
+            .as_ref()
+            .map_or(0, |tz| i64::from(tz.time_zone_info(t.sse).offset)),
         ZoneType::Offset => t.z,
         ZoneType::Abbr => t.z + 3600 * t.dst,
         ZoneType::None => 0,
@@ -1087,7 +1147,11 @@ pub fn date_props(t: &Time) -> Value {
     if t.is_localtime {
         v.set("timezone_type", Value::Int(t.zone_type.as_i64()));
         let tz = match t.zone_type {
-            ZoneType::Id => t.tz_info.as_ref().map(|z| z.name.clone()).unwrap_or_default(),
+            ZoneType::Id => t
+                .tz_info
+                .as_ref()
+                .map(|z| z.name.clone())
+                .unwrap_or_default(),
             ZoneType::Offset => offset_string(t.z),
             ZoneType::Abbr => t.tz_abbr.clone().unwrap_or_default(),
             ZoneType::None => String::new(),
@@ -1141,7 +1205,13 @@ impl DatePeriod {
     /// `new DatePeriod($start, $interval, $end_or_recurrences, $options)`.
     /// Pass `end` or `recurrences` (0 when an end date is given).
     /// `Err` carries the message without the `DatePeriod::__construct(): ` prefix.
-    pub fn new(start: &Time, interval: &RelTime, end: Option<&Time>, recurrences: i64, options: i64) -> Result<Self, String> {
+    pub fn new(
+        start: &Time,
+        interval: &RelTime,
+        end: Option<&Time>,
+        recurrences: i64,
+        options: i64,
+    ) -> Result<Self, String> {
         let mut p = Self {
             start: start.clone(),
             current: None,
@@ -1164,7 +1234,8 @@ impl DatePeriod {
         }
         self.include_start_date = options & EXCLUDE_START_DATE == 0;
         self.include_end_date = options & INCLUDE_END_DATE != 0;
-        let recurrences = recurrences + i64::from(self.include_start_date) + i64::from(self.include_end_date);
+        let recurrences =
+            recurrences + i64::from(self.include_start_date) + i64::from(self.include_end_date);
         if recurrences > MAX_RECURRENCES {
             return Err(format!(
                 "Recurrence count must be greater or equal to 1 and lower than {} (including options)",
@@ -1186,10 +1257,14 @@ impl DatePeriod {
         }
         let recurrences = r.recurrences.unwrap_or(0);
         let Some(mut start) = r.begin else {
-            return Err(format!("ISO interval must contain a start date, \"{s}\" given"));
+            return Err(format!(
+                "ISO interval must contain a start date, \"{s}\" given"
+            ));
         };
         let Some(interval) = r.period else {
-            return Err(format!("ISO interval must contain an interval, \"{s}\" given"));
+            return Err(format!(
+                "ISO interval must contain an interval, \"{s}\" given"
+            ));
         };
         if r.end.is_none() && recurrences == 0 {
             return Err(format!(
@@ -1216,7 +1291,9 @@ impl DatePeriod {
 
     /// `DatePeriod::getRecurrences()`; `None` means `null`.
     pub fn get_recurrences(&self) -> Option<i64> {
-        let r = self.recurrences - i64::from(self.include_start_date) - i64::from(self.include_end_date);
+        let r = self.recurrences
+            - i64::from(self.include_start_date)
+            - i64::from(self.include_end_date);
         if r == 0 {
             None
         } else {
@@ -1248,7 +1325,11 @@ impl DatePeriod {
         };
         if let Some(end) = &self.end {
             if cur.sse == end.sse {
-                return if self.include_end_date { cur.us <= end.us } else { cur.us < end.us };
+                return if self.include_end_date {
+                    cur.us <= end.us
+                } else {
+                    cur.us < end.us
+                };
             }
             cur.sse < end.sse
         } else {
@@ -1296,19 +1377,43 @@ mod tests {
         assert_eq!(strtotime(b"tomorrow", now, &tz), Some(now + 86400));
         assert_eq!(strtotime(b"+1 week", now, &tz), Some(now + 7 * 86400));
         assert_eq!(strtotime(b"next monday", now, &tz), Some(now + 86400));
-        assert_eq!(strtotime(b"2005-07-14 22:30:41", now, &tz), Some(1_121_380_241));
+        assert_eq!(
+            strtotime(b"2005-07-14 22:30:41", now, &tz),
+            Some(1_121_380_241)
+        );
         assert_eq!(strtotime(b"garbage", now, &tz), None);
         assert_eq!(strtotime(b"", now, &tz), None);
         let ams = tz::get("Europe/Amsterdam").unwrap();
-        assert_eq!(strtotime(b"2005-07-14 22:30:41", now, &ams), Some(1_121_373_041));
+        assert_eq!(
+            strtotime(b"2005-07-14 22:30:41", now, &ams),
+            Some(1_121_373_041)
+        );
     }
 
     #[test]
     fn mktime_basics() {
         let tz = utc();
-        assert_eq!(mktime(0, Some(0), Some(0), Some(1), Some(1), Some(2000), 0, Some(&tz)), 946_684_800);
-        assert_eq!(mktime(0, Some(0), Some(0), Some(1), Some(1), Some(70), 0, None), 0);
-        assert_eq!(mktime(0, Some(0), Some(0), Some(13), Some(1), Some(1999), 0, None), 946_684_800);
+        assert_eq!(
+            mktime(
+                0,
+                Some(0),
+                Some(0),
+                Some(1),
+                Some(1),
+                Some(2000),
+                0,
+                Some(&tz)
+            ),
+            946_684_800
+        );
+        assert_eq!(
+            mktime(0, Some(0), Some(0), Some(1), Some(1), Some(70), 0, None),
+            0
+        );
+        assert_eq!(
+            mktime(0, Some(0), Some(0), Some(13), Some(1), Some(1999), 0, None),
+            946_684_800
+        );
     }
 
     #[test]
@@ -1362,7 +1467,8 @@ mod tests {
         let dates: Vec<Vec<u8>> = p.dates(100).iter().map(|t| format(t, b"Y-m-d")).collect();
         assert_eq!(dates.len(), 5);
         assert_eq!(dates[4], b"2012-07-29");
-        let mut p = DatePeriod::from_iso(b"R4/2012-07-01T00:00:00Z/P7D", EXCLUDE_START_DATE).unwrap();
+        let mut p =
+            DatePeriod::from_iso(b"R4/2012-07-01T00:00:00Z/P7D", EXCLUDE_START_DATE).unwrap();
         assert_eq!(p.dates(100).len(), 4);
         assert_eq!(p.get_recurrences(), Some(4));
     }

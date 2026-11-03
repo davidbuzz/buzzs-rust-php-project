@@ -1,11 +1,14 @@
 //! Hand-ported expectations from php-src `ext/date/tests/*.phpt`.
 
+use std::fmt::Write as _;
+
 use php_date::api::{self, Value};
 use php_date::parse::TimezoneSpec;
 use php_date::tz;
 
 fn show_transitions(tzid: &str, from: i64) -> String {
-    let to = from + (2.5 * 366.0 * 24.0 * 60.0 * 60.0) as i64;
+    // PHP: $from + ((2.5 * 366) * 24 * 60 * 60)
+    let to = from + 79_056_000;
     let z = TimezoneSpec::Id(tz::get(tzid).unwrap());
     let Some(Value::Array(items)) = z.transitions(from, to) else {
         panic!("no transitions");
@@ -29,10 +32,11 @@ fn show_transitions(tzid: &str, from: i64) -> String {
             Some(Value::Str(s)) => s.clone(),
             _ => String::new(),
         };
-        out.push_str(&format!(
-            "{ts:12} {time} {off:6} {} {abbr}\n",
+        let _ = writeln!(
+            out,
+            "{ts:12} {time} {off:6} {} {abbr}",
             if dst { "DST" } else { " x " }
-        ));
+        );
     }
     out
 }
@@ -89,7 +93,10 @@ fn get_transitions_basic1() {
     assert_eq!(items.len(), 18);
     let t = &items[6].1;
     assert_eq!(t.get("ts"), Some(&Value::Int(-213_228_000)));
-    assert_eq!(t.get("time"), Some(&Value::Str("1963-03-31T02:00:00+00:00".into())));
+    assert_eq!(
+        t.get("time"),
+        Some(&Value::Str("1963-03-31T02:00:00+00:00".into()))
+    );
     assert_eq!(t.get("offset"), Some(&Value::Int(3600)));
     assert_eq!(t.get("isdst"), Some(&Value::Bool(true)));
     assert_eq!(t.get("abbr"), Some(&Value::Str("BST".into())));
@@ -125,7 +132,10 @@ fn date_sun_info_001_002() {
                 api::Key::Str(s) => s.clone(),
                 api::Key::Int(i) => i.to_string(),
             };
-            format!("{} {k}", String::from_utf8_lossy(&api::date(b"Y-m-d H:i:s T", *ts, &oslo)))
+            format!(
+                "{} {k}",
+                String::from_utf8_lossy(&api::date(b"Y-m-d H:i:s T", *ts, &oslo))
+            )
         })
         .collect();
     assert_eq!(

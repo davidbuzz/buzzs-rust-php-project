@@ -4,7 +4,9 @@
 //! Each command mirrors a snippet of `tools/probe.php`; outputs use a
 //! canonical text form so they can be compared with `/usr/bin/php`.
 
-#![allow(dead_code)]
+#![allow(dead_code, clippy::too_many_lines)]
+
+use std::fmt::Write as _;
 
 use php_date::api::{self, Key, Value};
 use php_date::tz;
@@ -34,7 +36,9 @@ fn dump(v: &Value, out: &mut String) {
         Value::Null => out.push('N'),
         Value::Bool(b) => out.push(if *b { 'T' } else { 'F' }),
         Value::Int(i) => out.push_str(&i.to_string()),
-        Value::Float(f) => out.push_str(&format!("{f:.6}")),
+        Value::Float(f) => {
+            let _ = write!(out, "{f:.6}");
+        }
         Value::Str(s) => {
             out.push('"');
             out.push_str(s);
@@ -106,7 +110,8 @@ pub fn run(fields: &[Vec<u8>]) -> String {
             Some(t) => s(&api::format(&t, &f(3))),
             None => "ERR".into(),
         },
-        "cff" => match api::date_initialize(&f(3), Some(&f(2)), None, &zone(1), 1_136_073_600, 0).0 {
+        "cff" => match api::date_initialize(&f(3), Some(&f(2)), None, &zone(1), 1_136_073_600, 0).0
+        {
             Some(t) => s(&api::format(&t, &f(4))),
             None => "ERR".into(),
         },
@@ -134,7 +139,8 @@ pub fn run(fields: &[Vec<u8>]) -> String {
             Err(_) => "ERR".into(),
         },
         "add" | "sub" => {
-            let Some(t) = api::date_initialize(&f(2), None, None, &zone(1), 1_136_073_600, 0).0 else {
+            let Some(t) = api::date_initialize(&f(2), None, None, &zone(1), 1_136_073_600, 0).0
+            else {
                 return "ERR".into();
             };
             let iv = if f(3).first() == Some(&b'P') {
@@ -143,7 +149,11 @@ pub fn run(fields: &[Vec<u8>]) -> String {
                 api::interval_from_date_string(&f(3)).ok()
             };
             let Some(iv) = iv else { return "ERR".into() };
-            let r = if cmd == "add" { Ok(api::add(&t, &iv)) } else { api::sub(&t, &iv) };
+            let r = if cmd == "add" {
+                Ok(api::add(&t, &iv))
+            } else {
+                api::sub(&t, &iv)
+            };
             match r {
                 Ok(t) => s(&api::format(&t, &f(4))),
                 Err(_) => "ERR".into(),
@@ -152,7 +162,12 @@ pub fn run(fields: &[Vec<u8>]) -> String {
         "period" => {
             let opts: i64 = s(&f(2)).parse().unwrap_or(0);
             match api::DatePeriod::from_iso(&f(1), opts) {
-                Ok(mut p) => p.dates(50).iter().map(|t| s(&api::format(t, &f(3)))).collect::<Vec<_>>().join("|"),
+                Ok(mut p) => p
+                    .dates(50)
+                    .iter()
+                    .map(|t| s(&api::format(t, &f(3))))
+                    .collect::<Vec<_>>()
+                    .join("|"),
                 Err(e) => format!("ERR {e}"),
             }
         }
@@ -167,7 +182,8 @@ pub fn run(fields: &[Vec<u8>]) -> String {
         "abbr" => {
             let off: i64 = s(&f(2)).parse().unwrap_or(-1);
             let dst: i64 = s(&f(3)).parse().unwrap_or(-1);
-            tz::timezone_id_from_abbr(&s(&f(1)), off, dst).map_or_else(|| "F".to_string(), str::to_string)
+            tz::timezone_id_from_abbr(&s(&f(1)), off, dst)
+                .map_or_else(|| "F".to_string(), str::to_string)
         }
         "tzinit" => match php_date::parse::parse_timezone_spec(&s(&f(1))) {
             Ok(z) => format!("{} {}", z.zone_type(), z.name()),
@@ -176,7 +192,11 @@ pub fn run(fields: &[Vec<u8>]) -> String {
         "strftime" | "gmstrftime" => {
             let ts: i64 = s(&f(2)).parse().unwrap_or(0);
             let z = zone(1);
-            let r = php_date::format::strftime(&f(3), ts, if cmd == "strftime" { Some(&z) } else { None });
+            let r = php_date::format::strftime(
+                &f(3),
+                ts,
+                if cmd == "strftime" { Some(&z) } else { None },
+            );
             r.map_or_else(|| "F".to_string(), |b| s(&b))
         }
         "idate" => {
@@ -195,15 +215,30 @@ pub fn run(fields: &[Vec<u8>]) -> String {
             o
         }
         "mktime" | "gmmktime" => {
-            let n: Vec<Option<i64>> = (2..8).map(|i| {
-                let v = s(&f(i));
-                if v.is_empty() { None } else { v.parse().ok() }
-            }).collect();
+            let n: Vec<Option<i64>> = (2..8)
+                .map(|i| {
+                    let v = s(&f(i));
+                    if v.is_empty() {
+                        None
+                    } else {
+                        v.parse().ok()
+                    }
+                })
+                .collect();
             let z = zone(1);
             let now = 1_136_073_600;
-            api::mktime(n[0].unwrap_or(0), n[1], n[2], n[3], n[4], n[5], now, if cmd == "mktime" { Some(&z) } else { None }).to_string()
+            api::mktime(
+                n[0].unwrap_or(0),
+                n[1],
+                n[2],
+                n[3],
+                n[4],
+                n[5],
+                now,
+                if cmd == "mktime" { Some(&z) } else { None },
+            )
+            .to_string()
         }
         _ => "?".into(),
     }
 }
-

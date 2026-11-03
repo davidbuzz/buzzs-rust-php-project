@@ -12,12 +12,17 @@ fn split_tab(line: &[u8]) -> Vec<Vec<u8>> {
 }
 
 fn check(name: &str) {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data").join(format!("{name}.tsv"));
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/data")
+        .join(format!("{name}.tsv"));
     let data = fs::read(&path).expect("oracle table");
     let mut failures = Vec::new();
     let mut total = 0;
     for line in data.split(|&b| b == b'\n').filter(|l| !l.is_empty()) {
-        let sep = line.windows(4).position(|w| w == b"\t=>\t").expect("separator");
+        let sep = line
+            .windows(4)
+            .position(|w| w == b"\t=>\t")
+            .expect("separator");
         let fields = split_tab(&line[..sep]);
         let expected = common::unescape(&line[sep + 4..]);
         let got = common::run(&fields);
@@ -36,7 +41,12 @@ fn check(name: &str) {
         failures.is_empty(),
         "{} of {total} {name} cases differ:\n{}",
         failures.len(),
-        failures.iter().take(20).cloned().collect::<Vec<_>>().join("\n")
+        failures
+            .iter()
+            .take(20)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join("\n")
     );
 }
 

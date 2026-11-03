@@ -61,7 +61,10 @@ impl ExprParser<'_> {
             }
             if self.s.get(self.p..).is_some_and(|r| r.starts_with(b"/*")) {
                 let rest = &self.s[self.p + 2..];
-                let end = rest.windows(2).position(|w| w == b"*/").map_or(self.s.len(), |e| self.p + 2 + e + 2);
+                let end = rest
+                    .windows(2)
+                    .position(|w| w == b"*/")
+                    .map_or(self.s.len(), |e| self.p + 2 + e + 2);
                 self.p = end;
                 continue;
             }
@@ -239,7 +242,9 @@ impl ExprParser<'_> {
             }
             _ => {
                 let start = self.p;
-                while self.p < self.s.len() && (self.s[self.p].is_ascii_alphanumeric() || self.s[self.p] == b'_') {
+                while self.p < self.s.len()
+                    && (self.s[self.p].is_ascii_alphanumeric() || self.s[self.p] == b'_')
+                {
                     self.p += 1;
                 }
                 let name = std::str::from_utf8(&self.s[start..self.p]).unwrap_or("");
@@ -248,7 +253,10 @@ impl ExprParser<'_> {
                     self.p += 1;
                     return Node::Seq(Vec::new());
                 }
-                self.defs.get(name).cloned().unwrap_or(Node::Seq(Vec::new()))
+                self.defs
+                    .get(name)
+                    .cloned()
+                    .unwrap_or(Node::Seq(Vec::new()))
             }
         }
     }
@@ -260,7 +268,11 @@ pub(crate) fn parse_defs(src: &str) -> HashMap<String, Node> {
     let bytes = src.as_bytes();
     let mut p = 0;
     loop {
-        let mut ep = ExprParser { s: bytes, p, defs: &defs };
+        let mut ep = ExprParser {
+            s: bytes,
+            p,
+            defs: &defs,
+        };
         ep.skip_ws();
         p = ep.p;
         if p >= bytes.len() {
@@ -275,7 +287,11 @@ pub(crate) fn parse_defs(src: &str) -> HashMap<String, Node> {
             p += 1;
         }
         p += 1;
-        let mut ep = ExprParser { s: bytes, p, defs: &defs };
+        let mut ep = ExprParser {
+            s: bytes,
+            p,
+            defs: &defs,
+        };
         let node = ep.alt();
         p = ep.p;
         if ep.peek() == b';' {
@@ -377,7 +393,14 @@ impl Scanner {
         }
     }
 
-    fn add(&self, list: &mut Vec<usize>, marks: &mut [u32], gen: u32, s: usize, stack: &mut Vec<usize>) {
+    fn add(
+        &self,
+        list: &mut Vec<usize>,
+        marks: &mut [u32],
+        gen: u32,
+        s: usize,
+        stack: &mut Vec<usize>,
+    ) {
         stack.push(s);
         while let Some(s) = stack.pop() {
             if marks[s] == gen {
@@ -472,7 +495,10 @@ mod tests {
 
     #[test]
     fn comments_and_classes() {
-        let sc = scanner("/* c */ a = [+-]? \"x\" /* inner */; b = [.\\t-];", &["a", "b"]);
+        let sc = scanner(
+            "/* c */ a = [+-]? \"x\" /* inner */; b = [.\\t-];",
+            &["a", "b"],
+        );
         assert_eq!(sc.longest_match(b"-x", 0), Some((2, 0)));
         assert_eq!(sc.longest_match(b"-", 0), Some((1, 1)));
         assert_eq!(sc.longest_match(b"\t", 0), Some((1, 1)));

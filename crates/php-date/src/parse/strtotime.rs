@@ -15,7 +15,7 @@ use crate::time::{
 use crate::UNSET;
 
 /// The re2c definitions from `parse_date.re`, verbatim.
-const DEFS: &str = r##"
+const DEFS: &str = r#"
 any = [\000-\377];
 
 nbsp = [\302][\240];
@@ -133,7 +133,7 @@ relativetext = (reltextnumber|reltexttext) space reltextunit;
 relativetextweek = reltexttext space 'week';
 
 weekdayof        = (reltextnumber|reltexttext) space (dayfulls|dayfull|dayabbr) space 'of';
-"##;
+"#;
 
 /// The scanner actions, in re2c rule order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -203,11 +203,17 @@ const RULES: &[(&str, Rule)] = &[
     ("weekdayof", Rule::WeekdayOf),
     ("timetiny12 | timeshort12 | timelong12", Rule::Time12),
     ("mssqltime", Rule::MssqlTime),
-    ("timetiny24 | timeshort24 | timelong24 | iso8601long", Rule::Time24),
+    (
+        "timetiny24 | timeshort24 | timelong24 | iso8601long",
+        Rule::Time24,
+    ),
     ("gnunocolon", Rule::GnuNoColon),
     ("iso8601nocolon", Rule::Iso8601NoColon),
     ("americanshort | american", Rule::American),
-    ("iso8601date4 | iso8601dateslash | dateslash", Rule::IsoDate4),
+    (
+        "iso8601date4 | iso8601dateslash | dateslash",
+        Rule::IsoDate4,
+    ),
     ("iso8601date2", Rule::IsoDate2),
     ("iso8601datex", Rule::IsoDateX),
     ("gnudateshorter", Rule::GnuDateShorter),
@@ -234,7 +240,10 @@ const RULES: &[(&str, Rule)] = &[
     ("relativetext", Rule::RelativeText),
     ("monthfull | monthabbr", Rule::MonthText),
     ("tzcorrection | tz", Rule::Timezone),
-    ("dateshortwithtimeshort12 | dateshortwithtimelong12", Rule::DateShortWithTime12),
+    (
+        "dateshortwithtimeshort12 | dateshortwithtimelong12",
+        Rule::DateShortWithTime12,
+    ),
     (
         "dateshortwithtimeshort | dateshortwithtimelong | dateshortwithtimelongtz",
         Rule::DateShortWithTime24,
@@ -540,7 +549,13 @@ fn strtod(s: &[u8]) -> f64 {
     }
     std::str::from_utf8(&s[..end])
         .ok()
-        .and_then(|x| if x.is_empty() || x == "." { None } else { x.parse().ok() })
+        .and_then(|x| {
+            if x.is_empty() || x == "." {
+                None
+            } else {
+                x.parse().ok()
+            }
+        })
         .unwrap_or(0.0)
 }
 
@@ -725,12 +740,11 @@ impl State<'_> {
         if negative {
             v = -v;
         }
-        match i64::try_from(v) {
-            Ok(v) => v,
-            Err(_) => {
-                self.add_error(code::ERR_NUMBER_OUT_OF_RANGE, "Number out of range");
-                0
-            }
+        if let Ok(v) = i64::try_from(v) {
+            v
+        } else {
+            self.add_error(code::ERR_NUMBER_OUT_OF_RANGE, "Number out of range");
+            0
         }
     }
 
@@ -855,11 +869,18 @@ impl State<'_> {
         let (z, not_found) = parse_zone(c, &mut self.time);
         self.time.z = z;
         if not_found {
-            self.add_error(code::ERR_TZID_NOT_FOUND, "The timezone could not be found in the database");
+            self.add_error(
+                code::ERR_TZID_NOT_FOUND,
+                "The timezone could not be found in the database",
+            );
         }
     }
 
-    #[allow(clippy::too_many_lines, clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+    #[allow(
+        clippy::too_many_lines,
+        clippy::cast_possible_truncation,
+        clippy::cast_precision_loss
+    )]
     fn action(&mut self, rule: Rule, tok: &[u8]) {
         let mut c = Cur::new(tok, 0);
         let c = &mut c;
@@ -903,7 +924,11 @@ impl State<'_> {
                     let before = c.p;
                     let us = self.get_signed_nr(c, 6);
                     let scaled = (us as f64 * 10f64.powf(7.0 - (c.p - before) as f64)) as i64;
-                    self.time.relative.us = if is_negative { scaled.wrapping_neg() } else { scaled };
+                    self.time.relative.us = if is_negative {
+                        scaled.wrapping_neg()
+                    } else {
+                        scaled
+                    };
                 }
                 let t = &mut self.time;
                 t.is_localtime = true;
@@ -1178,7 +1203,11 @@ impl State<'_> {
                 self.time.have_relative = true;
                 self.time.y = get_nr(c, 4);
                 let w = get_nr(c, 2);
-                let d = if rule == Rule::IsoWeekDay { get_nr(c, 1) } else { 1 };
+                let d = if rule == Rule::IsoWeekDay {
+                    get_nr(c, 1)
+                } else {
+                    1
+                };
                 self.time.m = 1;
                 self.time.d = 1;
                 self.time.relative.d = daynr_from_weeknr(self.time.y, w, d);
@@ -1461,7 +1490,10 @@ mod tests {
         let (_, e) = strtotime(b"");
         assert_eq!(e.errors[0].message, "Empty string");
         let (_, e) = strtotime(b"foo");
-        assert_eq!(e.errors[0].message, "The timezone could not be found in the database");
+        assert_eq!(
+            e.errors[0].message,
+            "The timezone could not be found in the database"
+        );
         let (_, e) = strtotime(b"10:00 11:00");
         assert_eq!(e.errors[0].message, "Double time specification");
         assert_eq!(e.errors[0].position, 6);
