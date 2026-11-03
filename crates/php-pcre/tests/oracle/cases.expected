@@ -1,0 +1,4731 @@
+== 8
+Warning: Empty regular expression
+bool(false)
+last_error=1
+== 9
+Warning: Empty regular expression
+bool(false)
+last_error=1
+== 10
+int(1)
+last_error=0
+== 11
+Warning: Delimiter must not be alphanumeric, backslash, or NUL byte
+bool(false)
+last_error=1
+== 12
+int(1)
+last_error=0
+== 13
+Warning: No ending delimiter '~' found
+bool(false)
+last_error=1
+== 14
+int(1)
+last_error=0
+== 15
+Warning: Unknown modifier 'z'
+bool(false)
+last_error=1
+== 16
+Warning: No ending matching delimiter '}' found
+bool(false)
+last_error=1
+== 17
+Warning: Delimiter must not be alphanumeric, backslash, or NUL byte
+bool(false)
+last_error=1
+== 18
+Warning: Delimiter must not be alphanumeric, backslash, or NUL byte
+bool(false)
+last_error=1
+== 19
+int(0)
+last_error=0
+== 20
+int(1)
+last_error=0
+== 21
+Warning: NUL byte is not a valid modifier
+bool(false)
+last_error=1
+== 22
+Warning: NUL byte is not a valid modifier
+bool(false)
+last_error=1
+== 23
+int(0)
+last_error=0
+== 24
+int(1)
+last_error=0
+== 25
+Warning: Delimiter must not be alphanumeric, backslash, or NUL byte
+bool(false)
+last_error=1
+== 26
+int(0)
+last_error=0
+== 27
+int(1)
+last_error=0
+== 28
+Warning: NUL byte is not a valid modifier
+bool(false)
+last_error=1
+== 29
+Warning: NUL byte is not a valid modifier
+bool(false)
+last_error=1
+== 30
+int(0)
+last_error=0
+== 31
+int(1)
+last_error=0
+== 32
+int(0)
+last_error=0
+== 33
+int(1)
+last_error=0
+== 34
+int(0)
+last_error=0
+== 35
+int(0)
+last_error=0
+== 36
+int(1)
+last_error=0
+== 37
+int(0)
+last_error=0
+== 38
+Warning: No ending delimiter '/' found
+bool(false)
+last_error=1
+== 39
+Warning: Delimiter must not be alphanumeric, backslash, or NUL byte
+bool(false)
+last_error=1
+== 40
+Warning: No ending delimiter '/' found
+bool(false)
+last_error=1
+== 41
+Warning: Unknown modifier '/'
+bool(false)
+last_error=1
+== 42
+Warning: Unknown modifier 'F'
+bool(false)
+last_error=1
+== 43
+int(1)
+last_error=0
+== 44
+Warning: Unknown modifier 'e'
+bool(false)
+last_error=1
+== 45
+int(1)
+last_error=0
+== 46
+int(1)
+last_error=0
+== 47
+int(1)
+last_error=0
+== 48
+Warning: No ending matching delimiter ')' found
+bool(false)
+last_error=1
+== 49
+int(1)
+last_error=0
+== 50
+int(1)
+last_error=0
+== 51
+int(0)
+last_error=0
+== 52
+int(1)
+last_error=0
+== 53
+int(1)
+last_error=0
+== 54
+int(1)
+last_error=0
+== 55
+Warning: Compilation failed: unrecognized character follows \ at offset 1
+bool(false)
+last_error=1
+== 56
+Warning: Compilation failed: unrecognized character follows \ at offset 1
+bool(false)
+last_error=1
+== 57
+Warning: Compilation failed: subpattern name must start with a non-digit at offset 4
+bool(false)
+last_error=1
+== 58
+Warning: Compilation failed: missing closing parenthesis at offset 1
+bool(false)
+last_error=1
+== 59
+Warning: Compilation failed: unmatched closing parenthesis at offset 1
+bool(false)
+last_error=1
+== 60
+Warning: Compilation failed: missing terminating ] for character class at offset 2
+bool(false)
+last_error=1
+== 61
+Warning: Compilation failed: quantifier does not follow a repeatable item at offset 0
+bool(false)
+last_error=1
+== 62
+Warning: Compilation failed: two named subpatterns have the same name (PCRE2_DUPNAMES not set) at offset 12
+bool(false)
+last_error=1
+== 63
+int(1)
+last_error=0
+== 64
+Warning: Compilation failed: unknown property after \P or \p at offset 7
+bool(false)
+last_error=1
+== 65
+int(1)
+last_error=0
+== 66
+int(1)
+last_error=0
+== 67
+int(1)
+last_error=0
+== 68
+Warning: Unknown modifier 'q'
+bool(false)
+last_error=1
+== 69
+Warning: Unknown modifier '�'
+bool(false)
+last_error=1
+== 72
+int(1)
+array(3) {
+  [0]=>
+  string(5) "12-34"
+  [1]=>
+  string(2) "12"
+  [2]=>
+  string(2) "34"
+}
+last_error=0
+== 73
+int(1)
+array(2) {
+  [0]=>
+  array(2) {
+    [0]=>
+    string(2) "xa"
+    [1]=>
+    int(4)
+  }
+  [1]=>
+  array(2) {
+    [0]=>
+    string(1) "a"
+    [1]=>
+    int(5)
+  }
+}
+last_error=0
+== 74
+int(1)
+array(2) {
+  [0]=>
+  array(2) {
+    [0]=>
+    string(2) "ax"
+    [1]=>
+    int(5)
+  }
+  [1]=>
+  array(2) {
+    [0]=>
+    string(1) "a"
+    [1]=>
+    int(5)
+  }
+}
+last_error=0
+== 75
+int(1)
+array(6) {
+  [0]=>
+  array(2) {
+    [0]=>
+    string(4) "zxax"
+    [1]=>
+    int(3)
+  }
+  ["capt1"]=>
+  array(2) {
+    [0]=>
+    string(1) "z"
+    [1]=>
+    int(3)
+  }
+  [1]=>
+  array(2) {
+    [0]=>
+    string(1) "z"
+    [1]=>
+    int(3)
+  }
+  [2]=>
+  array(2) {
+    [0]=>
+    string(1) "x"
+    [1]=>
+    int(4)
+  }
+  ["letsmix"]=>
+  array(2) {
+    [0]=>
+    string(2) "ax"
+    [1]=>
+    int(5)
+  }
+  [3]=>
+  array(2) {
+    [0]=>
+    string(2) "ax"
+    [1]=>
+    int(5)
+  }
+}
+last_error=0
+== 76
+int(1)
+array(1) {
+  [0]=>
+  string(3) "789"
+}
+last_error=0
+== 77
+int(1)
+array(1) {
+  [0]=>
+  string(3) "123"
+}
+last_error=0
+== 78
+int(0)
+array(0) {
+}
+last_error=0
+== 79
+bool(false)
+array(0) {
+}
+last_error=1
+== 80
+bool(false)
+array(0) {
+}
+last_error=1
+== 81
+Warning: Empty regular expression
+bool(false)
+string(9) "untouched"
+last_error=1
+== 82
+ValueError: preg_match(): Argument #4 ($flags) must be a PREG_* constant
+last_error=1
+== 83
+ValueError: preg_match(): Argument #4 ($flags) must be a PREG_* constant
+last_error=1
+== 84
+int(1)
+array(1) {
+  [0]=>
+  array(2) {
+    [0]=>
+    string(1) "a"
+    [1]=>
+    int(0)
+  }
+}
+last_error=0
+== 85
+int(1)
+array(4) {
+  [0]=>
+  string(3) "123"
+  [1]=>
+  NULL
+  [2]=>
+  string(0) ""
+  [3]=>
+  string(3) "123"
+}
+last_error=0
+== 86
+int(1)
+array(3) {
+  [0]=>
+  string(2) "23"
+  [1]=>
+  NULL
+  [2]=>
+  string(1) "2"
+}
+last_error=0
+== 87
+int(1)
+array(3) {
+  [0]=>
+  array(2) {
+    [0]=>
+    string(2) "23"
+    [1]=>
+    int(0)
+  }
+  [1]=>
+  array(2) {
+    [0]=>
+    NULL
+    [1]=>
+    int(-1)
+  }
+  [2]=>
+  array(2) {
+    [0]=>
+    string(1) "2"
+    [1]=>
+    int(0)
+  }
+}
+last_error=0
+== 88
+int(1)
+array(3) {
+  [0]=>
+  array(2) {
+    [0]=>
+    string(2) "23"
+    [1]=>
+    int(0)
+  }
+  [1]=>
+  array(2) {
+    [0]=>
+    string(0) ""
+    [1]=>
+    int(-1)
+  }
+  [2]=>
+  array(2) {
+    [0]=>
+    string(1) "2"
+    [1]=>
+    int(0)
+  }
+}
+last_error=0
+== 89
+int(1)
+array(3) {
+  [0]=>
+  string(2) "23"
+  [1]=>
+  string(0) ""
+  [2]=>
+  string(1) "2"
+}
+last_error=0
+== 90
+int(1)
+array(5) {
+  [0]=>
+  string(2) "23"
+  ["a"]=>
+  NULL
+  [1]=>
+  NULL
+  ["b"]=>
+  string(1) "2"
+  [2]=>
+  string(1) "2"
+}
+last_error=0
+== 91
+int(1)
+array(5) {
+  [0]=>
+  array(2) {
+    [0]=>
+    string(2) "23"
+    [1]=>
+    int(0)
+  }
+  ["a"]=>
+  array(2) {
+    [0]=>
+    NULL
+    [1]=>
+    int(-1)
+  }
+  [1]=>
+  array(2) {
+    [0]=>
+    NULL
+    [1]=>
+    int(-1)
+  }
+  ["b"]=>
+  array(2) {
+    [0]=>
+    string(1) "2"
+    [1]=>
+    int(0)
+  }
+  [2]=>
+  array(2) {
+    [0]=>
+    string(1) "2"
+    [1]=>
+    int(0)
+  }
+}
+last_error=0
+== 92
+int(1)
+array(5) {
+  [0]=>
+  string(2) "23"
+  ["a"]=>
+  string(0) ""
+  [1]=>
+  string(0) ""
+  ["b"]=>
+  string(1) "2"
+  [2]=>
+  string(1) "2"
+}
+last_error=0
+== 93
+int(1)
+array(2) {
+  [0]=>
+  string(1) "a"
+  [1]=>
+  string(1) "a"
+}
+last_error=0
+== 94
+int(1)
+array(4) {
+  [0]=>
+  string(2) "ac"
+  [1]=>
+  string(1) "a"
+  [2]=>
+  string(0) ""
+  [3]=>
+  string(1) "c"
+}
+last_error=0
+== 95
+int(1)
+array(4) {
+  [0]=>
+  array(2) {
+    [0]=>
+    string(2) "ac"
+    [1]=>
+    int(0)
+  }
+  [1]=>
+  array(2) {
+    [0]=>
+    string(1) "a"
+    [1]=>
+    int(0)
+  }
+  [2]=>
+  array(2) {
+    [0]=>
+    string(0) ""
+    [1]=>
+    int(-1)
+  }
+  [3]=>
+  array(2) {
+    [0]=>
+    string(1) "c"
+    [1]=>
+    int(1)
+  }
+}
+last_error=0
+== 96
+int(1)
+array(3) {
+  [0]=>
+  string(3) "foo"
+  ["g"]=>
+  string(3) "foo"
+  [1]=>
+  string(3) "foo"
+}
+last_error=0
+== 97
+int(1)
+array(4) {
+  [0]=>
+  string(3) "foo"
+  ["g"]=>
+  string(3) "foo"
+  [1]=>
+  string(3) "foo"
+  [2]=>
+  NULL
+}
+last_error=0
+== 98
+int(1)
+array(3) {
+  [0]=>
+  array(2) {
+    [0]=>
+    string(3) "foo"
+    [1]=>
+    int(0)
+  }
+  ["g"]=>
+  array(2) {
+    [0]=>
+    string(3) "foo"
+    [1]=>
+    int(0)
+  }
+  [1]=>
+  array(2) {
+    [0]=>
+    string(3) "foo"
+    [1]=>
+    int(0)
+  }
+}
+last_error=0
+== 99
+int(1)
+array(4) {
+  [0]=>
+  array(2) {
+    [0]=>
+    string(3) "foo"
+    [1]=>
+    int(0)
+  }
+  ["g"]=>
+  array(2) {
+    [0]=>
+    string(3) "foo"
+    [1]=>
+    int(0)
+  }
+  [1]=>
+  array(2) {
+    [0]=>
+    string(3) "foo"
+    [1]=>
+    int(0)
+  }
+  [2]=>
+  array(2) {
+    [0]=>
+    NULL
+    [1]=>
+    int(-1)
+  }
+}
+last_error=0
+== 100
+int(1)
+array(6) {
+  [0]=>
+  string(6) "foobaz"
+  ["g"]=>
+  string(3) "foo"
+  [1]=>
+  string(3) "foo"
+  [2]=>
+  string(0) ""
+  ["h"]=>
+  string(3) "baz"
+  [3]=>
+  string(3) "baz"
+}
+last_error=0
+== 101
+int(1)
+array(6) {
+  [0]=>
+  string(6) "foobaz"
+  ["g"]=>
+  string(3) "foo"
+  [1]=>
+  string(3) "foo"
+  [2]=>
+  NULL
+  ["h"]=>
+  string(3) "baz"
+  [3]=>
+  string(3) "baz"
+}
+last_error=0
+== 102
+int(1)
+array(6) {
+  [0]=>
+  array(2) {
+    [0]=>
+    string(6) "foobaz"
+    [1]=>
+    int(0)
+  }
+  ["g"]=>
+  array(2) {
+    [0]=>
+    string(3) "foo"
+    [1]=>
+    int(0)
+  }
+  [1]=>
+  array(2) {
+    [0]=>
+    string(3) "foo"
+    [1]=>
+    int(0)
+  }
+  [2]=>
+  array(2) {
+    [0]=>
+    string(0) ""
+    [1]=>
+    int(-1)
+  }
+  ["h"]=>
+  array(2) {
+    [0]=>
+    string(3) "baz"
+    [1]=>
+    int(3)
+  }
+  [3]=>
+  array(2) {
+    [0]=>
+    string(3) "baz"
+    [1]=>
+    int(3)
+  }
+}
+last_error=0
+== 103
+int(1)
+array(6) {
+  [0]=>
+  array(2) {
+    [0]=>
+    string(6) "foobaz"
+    [1]=>
+    int(0)
+  }
+  ["g"]=>
+  array(2) {
+    [0]=>
+    string(3) "foo"
+    [1]=>
+    int(0)
+  }
+  [1]=>
+  array(2) {
+    [0]=>
+    string(3) "foo"
+    [1]=>
+    int(0)
+  }
+  [2]=>
+  array(2) {
+    [0]=>
+    NULL
+    [1]=>
+    int(-1)
+  }
+  ["h"]=>
+  array(2) {
+    [0]=>
+    string(3) "baz"
+    [1]=>
+    int(3)
+  }
+  [3]=>
+  array(2) {
+    [0]=>
+    string(3) "baz"
+    [1]=>
+    int(3)
+  }
+}
+last_error=0
+== 104
+int(1)
+array(4) {
+  [0]=>
+  string(3) "bar"
+  ["g"]=>
+  string(3) "bar"
+  [1]=>
+  string(0) ""
+  [2]=>
+  string(3) "bar"
+}
+last_error=0
+== 105
+int(1)
+array(1) {
+  [0]=>
+  string(1) "M"
+}
+last_error=0
+== 106
+int(1)
+array(3) {
+  [0]=>
+  string(1) "a"
+  ["MARK"]=>
+  string(5) "value"
+  [1]=>
+  string(1) "a"
+}
+last_error=0
+== 107
+int(1)
+array(2) {
+  [0]=>
+  string(1) "b"
+  ["MARK"]=>
+  string(1) "B"
+}
+last_error=0
+== 108
+int(1)
+array(2) {
+  [0]=>
+  array(2) {
+    [0]=>
+    string(1) "b"
+    [1]=>
+    int(0)
+  }
+  ["MARK"]=>
+  string(1) "B"
+}
+last_error=0
+== 109
+int(1)
+array(4) {
+  [0]=>
+  string(1) "a"
+  ["x"]=>
+  NULL
+  [1]=>
+  NULL
+  ["MARK"]=>
+  string(1) "m"
+}
+last_error=0
+== 110
+int(1)
+array(3) {
+  [0]=>
+  string(4) "blub"
+  ["name"]=>
+  string(4) "blub"
+  [1]=>
+  string(4) "blub"
+}
+last_error=0
+== 111
+int(1)
+array(4) {
+  [0]=>
+  string(10) "4294967295"
+  ["name"]=>
+  string(0) ""
+  [1]=>
+  string(0) ""
+  [2]=>
+  string(10) "4294967295"
+}
+last_error=0
+== 112
+int(0)
+array(0) {
+}
+last_error=0
+== 113
+int(1)
+array(3) {
+  [0]=>
+  string(7) "//abcde"
+  [1]=>
+  string(6) "/abcde"
+  [2]=>
+  string(5) "abcde"
+}
+last_error=0
+== 114
+int(1)
+array(2) {
+  [0]=>
+  string(7) "//abcde"
+  [1]=>
+  string(6) "/abcde"
+}
+last_error=0
+== 115
+int(1)
+array(3) {
+  [0]=>
+  string(8) "/a/abcde"
+  [1]=>
+  string(6) "/abcde"
+  [2]=>
+  string(5) "abcde"
+}
+last_error=0
+== 116
+int(1)
+array(3) {
+  [0]=>
+  string(17) "component_phase_1"
+  [1]=>
+  string(15) "component_phase"
+  [2]=>
+  string(1) "1"
+}
+last_error=0
+== 117
+int(1)
+array(2) {
+  [0]=>
+  string(29) "\SomethingRepositoryInterface"
+  [1]=>
+  string(28) "SomethingRepositoryInterface"
+}
+last_error=0
+== 118
+int(1)
+array(2) {
+  [0]=>
+  string(20) "<div id="S44_i89ew">"
+  [1]=>
+  string(2) "di"
+}
+last_error=0
+== 119
+int(0)
+array(0) {
+}
+last_error=0
+== 120
+int(0)
+array(0) {
+}
+last_error=0
+== 121
+int(1)
+array(1) {
+  [0]=>
+  string(5) "aeiou"
+}
+last_error=0
+== 122
+int(1)
+array(1) {
+  [0]=>
+  string(5) "aeiou"
+}
+last_error=0
+== 123
+int(1)
+array(1) {
+  [0]=>
+  string(3) "abc"
+}
+last_error=0
+== 124
+int(0)
+last_error=0
+== 125
+int(0)
+last_error=0
+== 126
+int(0)
+last_error=0
+== 127
+int(1)
+array(1) {
+  [0]=>
+  string(4) "a---"
+}
+last_error=0
+== 128
+int(1)
+array(1) {
+  [0]=>
+  string(5) "a----"
+}
+last_error=0
+== 129
+int(1)
+array(10) {
+  [0]=>
+  string(10) "2006-05-13"
+  ["date"]=>
+  string(10) "2006-05-13"
+  [1]=>
+  string(10) "2006-05-13"
+  ["year"]=>
+  string(4) "2006"
+  [2]=>
+  string(4) "2006"
+  [3]=>
+  string(2) "20"
+  ["month"]=>
+  string(2) "05"
+  [4]=>
+  string(2) "05"
+  ["day"]=>
+  string(2) "13"
+  [5]=>
+  string(2) "13"
+}
+last_error=0
+== 130
+int(1)
+array(1) {
+  [0]=>
+  string(1) "b"
+}
+last_error=0
+== 131
+int(1)
+array(2) {
+  [0]=>
+  string(1) "b"
+  [1]=>
+  NULL
+}
+last_error=0
+== 132
+int(1)
+array(1) {
+  [0]=>
+  array(2) {
+    [0]=>
+    string(1) "b"
+    [1]=>
+    int(0)
+  }
+}
+last_error=0
+== 133
+int(1)
+array(2) {
+  [0]=>
+  string(0) ""
+  [1]=>
+  string(0) ""
+}
+last_error=0
+== 134
+int(1)
+array(1) {
+  [0]=>
+  string(0) ""
+}
+last_error=0
+== 135
+int(1)
+array(1) {
+  [0]=>
+  string(0) ""
+}
+last_error=0
+== 136
+int(1)
+array(1) {
+  [0]=>
+  string(0) ""
+}
+last_error=0
+== 137
+int(1)
+array(1) {
+  [0]=>
+  string(1) "b"
+}
+last_error=0
+== 138
+int(0)
+array(0) {
+}
+last_error=0
+== 139
+int(1)
+array(1) {
+  [0]=>
+  string(1) "b"
+}
+last_error=0
+== 140
+int(1)
+array(1) {
+  [0]=>
+  string(0) ""
+}
+last_error=0
+== 141
+int(1)
+array(1) {
+  [0]=>
+  string(2) "ä"
+}
+last_error=0
+== 142
+int(0)
+array(0) {
+}
+last_error=0
+== 143
+int(1)
+array(1) {
+  [0]=>
+  string(3) "€"
+}
+last_error=0
+== 144
+int(1)
+array(1) {
+  [0]=>
+  string(1) "�"
+}
+last_error=0
+== 145
+int(1)
+array(1) {
+  [0]=>
+  string(3) "abc"
+}
+last_error=0
+== 146
+int(1)
+array(1) {
+  [0]=>
+  string(3) "abc"
+}
+last_error=0
+== 147
+int(1)
+array(1) {
+  [0]=>
+  string(3) "ABc"
+}
+last_error=0
+== 148
+int(1)
+array(1) {
+  [0]=>
+  string(1) "b"
+}
+last_error=0
+== 149
+int(0)
+array(0) {
+}
+last_error=0
+== 150
+int(1)
+array(1) {
+  [0]=>
+  string(3) "a
+c"
+}
+last_error=0
+== 151
+int(0)
+array(0) {
+}
+last_error=0
+== 152
+int(1)
+array(1) {
+  [0]=>
+  string(1) "a"
+}
+last_error=0
+== 153
+int(0)
+array(0) {
+}
+last_error=0
+== 154
+int(1)
+array(1) {
+  [0]=>
+  string(1) "a"
+}
+last_error=0
+== 155
+int(1)
+array(1) {
+  [0]=>
+  string(3) "aaa"
+}
+last_error=0
+== 156
+int(1)
+array(1) {
+  [0]=>
+  string(3) "abc"
+}
+last_error=0
+== 157
+int(1)
+array(3) {
+  [0]=>
+  string(2) "ab"
+  ["x"]=>
+  string(1) "a"
+  [1]=>
+  string(1) "a"
+}
+last_error=0
+== 158
+int(1)
+array(1) {
+  [0]=>
+  string(5) "AſkZ"
+}
+last_error=0
+== 159
+int(0)
+array(0) {
+}
+last_error=0
+== 160
+int(1)
+array(1) {
+  [0]=>
+  string(1) "c"
+}
+last_error=0
+== 161
+int(1)
+array(1) {
+  [0]=>
+  array(2) {
+    [0]=>
+    string(6) "Wasser"
+    [1]=>
+    int(61)
+  }
+}
+last_error=0
+== 164
+bool(false)
+array(0) {
+}
+last_error=5
+== 165
+int(0)
+array(0) {
+}
+last_error=0
+== 166
+bool(false)
+array(0) {
+}
+last_error=5
+== 167
+int(1)
+array(1) {
+  [0]=>
+  string(28) " uma string utf8 bem formada"
+}
+last_error=0
+== 168
+int(0)
+array(0) {
+}
+last_error=0
+== 169
+bool(false)
+array(0) {
+}
+last_error=5
+== 170
+int(1)
+array(1) {
+  [0]=>
+  string(0) ""
+}
+last_error=0
+== 171
+bool(false)
+array(0) {
+}
+last_error=4
+== 172
+bool(false)
+array(0) {
+}
+last_error=4
+== 173
+int(0)
+array(0) {
+}
+last_error=0
+== 174
+bool(false)
+array(1) {
+  [0]=>
+  array(0) {
+  }
+}
+last_error=4
+== 175
+int(2)
+array(1) {
+  [0]=>
+  array(2) {
+    [0]=>
+    array(2) {
+      [0]=>
+      string(0) ""
+      [1]=>
+      int(0)
+    }
+    [1]=>
+    array(2) {
+      [0]=>
+      string(0) ""
+      [1]=>
+      int(3)
+    }
+  }
+}
+last_error=0
+== 178
+int(2)
+array(2) {
+  [0]=>
+  array(2) {
+    [0]=>
+    string(2) "zx"
+    [1]=>
+    string(2) "ax"
+  }
+  [1]=>
+  array(2) {
+    [0]=>
+    string(1) "z"
+    [1]=>
+    string(1) "a"
+  }
+}
+last_error=0
+== 179
+int(2)
+array(2) {
+  [0]=>
+  array(2) {
+    [0]=>
+    string(2) "zx"
+    [1]=>
+    string(1) "z"
+  }
+  [1]=>
+  array(2) {
+    [0]=>
+    string(2) "yx"
+    [1]=>
+    string(1) "y"
+  }
+}
+last_error=0
+== 180
+int(2)
+array(2) {
+  [0]=>
+  array(2) {
+    [0]=>
+    array(2) {
+      [0]=>
+      string(2) "zx"
+      [1]=>
+      int(0)
+    }
+    [1]=>
+    array(2) {
+      [0]=>
+      string(2) "yx"
+      [1]=>
+      int(2)
+    }
+  }
+  [1]=>
+  array(2) {
+    [0]=>
+    array(2) {
+      [0]=>
+      string(1) "z"
+      [1]=>
+      int(0)
+    }
+    [1]=>
+    array(2) {
+      [0]=>
+      string(1) "y"
+      [1]=>
+      int(2)
+    }
+  }
+}
+last_error=0
+== 181
+int(2)
+array(2) {
+  [0]=>
+  array(2) {
+    [0]=>
+    array(2) {
+      [0]=>
+      string(2) "zx"
+      [1]=>
+      int(0)
+    }
+    [1]=>
+    array(2) {
+      [0]=>
+      string(1) "z"
+      [1]=>
+      int(0)
+    }
+  }
+  [1]=>
+  array(2) {
+    [0]=>
+    array(2) {
+      [0]=>
+      string(2) "yx"
+      [1]=>
+      int(2)
+    }
+    [1]=>
+    array(2) {
+      [0]=>
+      string(1) "y"
+      [1]=>
+      int(2)
+    }
+  }
+}
+last_error=0
+== 182
+ValueError: preg_match_all(): Argument #4 ($flags) must be a PREG_* constant
+last_error=0
+== 183
+ValueError: preg_match_all(): Argument #4 ($flags) must be a PREG_* constant
+last_error=0
+== 184
+int(2)
+array(2) {
+  [0]=>
+  array(2) {
+    [0]=>
+    string(2) "zx"
+    [1]=>
+    string(2) "yx"
+  }
+  [1]=>
+  array(2) {
+    [0]=>
+    string(1) "z"
+    [1]=>
+    string(1) "y"
+  }
+}
+last_error=0
+== 185
+int(4)
+array(3) {
+  [0]=>
+  array(4) {
+    [0]=>
+    string(1) "1"
+    [1]=>
+    string(2) "23"
+    [2]=>
+    string(2) "45"
+    [3]=>
+    string(1) "6"
+  }
+  [1]=>
+  array(4) {
+    [0]=>
+    NULL
+    [1]=>
+    NULL
+    [2]=>
+    string(1) "4"
+    [3]=>
+    NULL
+  }
+  [2]=>
+  array(4) {
+    [0]=>
+    NULL
+    [1]=>
+    string(1) "2"
+    [2]=>
+    NULL
+    [3]=>
+    NULL
+  }
+}
+last_error=0
+== 186
+int(4)
+array(3) {
+  [0]=>
+  array(4) {
+    [0]=>
+    array(2) {
+      [0]=>
+      string(1) "1"
+      [1]=>
+      int(0)
+    }
+    [1]=>
+    array(2) {
+      [0]=>
+      string(2) "23"
+      [1]=>
+      int(1)
+    }
+    [2]=>
+    array(2) {
+      [0]=>
+      string(2) "45"
+      [1]=>
+      int(3)
+    }
+    [3]=>
+    array(2) {
+      [0]=>
+      string(1) "6"
+      [1]=>
+      int(5)
+    }
+  }
+  [1]=>
+  array(4) {
+    [0]=>
+    array(2) {
+      [0]=>
+      NULL
+      [1]=>
+      int(-1)
+    }
+    [1]=>
+    array(2) {
+      [0]=>
+      NULL
+      [1]=>
+      int(-1)
+    }
+    [2]=>
+    array(2) {
+      [0]=>
+      string(1) "4"
+      [1]=>
+      int(3)
+    }
+    [3]=>
+    array(2) {
+      [0]=>
+      NULL
+      [1]=>
+      int(-1)
+    }
+  }
+  [2]=>
+  array(4) {
+    [0]=>
+    array(2) {
+      [0]=>
+      NULL
+      [1]=>
+      int(-1)
+    }
+    [1]=>
+    array(2) {
+      [0]=>
+      string(1) "2"
+      [1]=>
+      int(1)
+    }
+    [2]=>
+    array(2) {
+      [0]=>
+      NULL
+      [1]=>
+      int(-1)
+    }
+    [3]=>
+    array(2) {
+      [0]=>
+      NULL
+      [1]=>
+      int(-1)
+    }
+  }
+}
+last_error=0
+== 187
+int(4)
+array(4) {
+  [0]=>
+  array(3) {
+    [0]=>
+    string(1) "1"
+    [1]=>
+    NULL
+    [2]=>
+    NULL
+  }
+  [1]=>
+  array(3) {
+    [0]=>
+    string(2) "23"
+    [1]=>
+    NULL
+    [2]=>
+    string(1) "2"
+  }
+  [2]=>
+  array(3) {
+    [0]=>
+    string(2) "45"
+    [1]=>
+    string(1) "4"
+    [2]=>
+    NULL
+  }
+  [3]=>
+  array(3) {
+    [0]=>
+    string(1) "6"
+    [1]=>
+    NULL
+    [2]=>
+    NULL
+  }
+}
+last_error=0
+== 188
+int(4)
+array(4) {
+  [0]=>
+  array(3) {
+    [0]=>
+    array(2) {
+      [0]=>
+      string(1) "1"
+      [1]=>
+      int(0)
+    }
+    [1]=>
+    array(2) {
+      [0]=>
+      NULL
+      [1]=>
+      int(-1)
+    }
+    [2]=>
+    array(2) {
+      [0]=>
+      NULL
+      [1]=>
+      int(-1)
+    }
+  }
+  [1]=>
+  array(3) {
+    [0]=>
+    array(2) {
+      [0]=>
+      string(2) "23"
+      [1]=>
+      int(1)
+    }
+    [1]=>
+    array(2) {
+      [0]=>
+      NULL
+      [1]=>
+      int(-1)
+    }
+    [2]=>
+    array(2) {
+      [0]=>
+      string(1) "2"
+      [1]=>
+      int(1)
+    }
+  }
+  [2]=>
+  array(3) {
+    [0]=>
+    array(2) {
+      [0]=>
+      string(2) "45"
+      [1]=>
+      int(3)
+    }
+    [1]=>
+    array(2) {
+      [0]=>
+      string(1) "4"
+      [1]=>
+      int(3)
+    }
+    [2]=>
+    array(2) {
+      [0]=>
+      NULL
+      [1]=>
+      int(-1)
+    }
+  }
+  [3]=>
+  array(3) {
+    [0]=>
+    array(2) {
+      [0]=>
+      string(1) "6"
+      [1]=>
+      int(5)
+    }
+    [1]=>
+    array(2) {
+      [0]=>
+      NULL
+      [1]=>
+      int(-1)
+    }
+    [2]=>
+    array(2) {
+      [0]=>
+      NULL
+      [1]=>
+      int(-1)
+    }
+  }
+}
+last_error=0
+== 189
+int(4)
+array(3) {
+  [0]=>
+  array(4) {
+    [0]=>
+    string(1) "1"
+    [1]=>
+    string(2) "23"
+    [2]=>
+    string(2) "45"
+    [3]=>
+    string(1) "6"
+  }
+  [1]=>
+  array(4) {
+    [0]=>
+    string(0) ""
+    [1]=>
+    string(0) ""
+    [2]=>
+    string(1) "4"
+    [3]=>
+    string(0) ""
+  }
+  [2]=>
+  array(4) {
+    [0]=>
+    string(0) ""
+    [1]=>
+    string(1) "2"
+    [2]=>
+    string(0) ""
+    [3]=>
+    string(0) ""
+  }
+}
+last_error=0
+== 190
+int(4)
+array(4) {
+  [0]=>
+  array(1) {
+    [0]=>
+    string(1) "1"
+  }
+  [1]=>
+  array(3) {
+    [0]=>
+    string(2) "23"
+    [1]=>
+    string(0) ""
+    [2]=>
+    string(1) "2"
+  }
+  [2]=>
+  array(2) {
+    [0]=>
+    string(2) "45"
+    [1]=>
+    string(1) "4"
+  }
+  [3]=>
+  array(1) {
+    [0]=>
+    string(1) "6"
+  }
+}
+last_error=0
+== 191
+int(4)
+array(3) {
+  [0]=>
+  array(4) {
+    [0]=>
+    array(2) {
+      [0]=>
+      string(1) "1"
+      [1]=>
+      int(0)
+    }
+    [1]=>
+    array(2) {
+      [0]=>
+      string(2) "23"
+      [1]=>
+      int(1)
+    }
+    [2]=>
+    array(2) {
+      [0]=>
+      string(2) "45"
+      [1]=>
+      int(3)
+    }
+    [3]=>
+    array(2) {
+      [0]=>
+      string(1) "6"
+      [1]=>
+      int(5)
+    }
+  }
+  [1]=>
+  array(4) {
+    [0]=>
+    array(2) {
+      [0]=>
+      string(0) ""
+      [1]=>
+      int(-1)
+    }
+    [1]=>
+    array(2) {
+      [0]=>
+      string(0) ""
+      [1]=>
+      int(-1)
+    }
+    [2]=>
+    array(2) {
+      [0]=>
+      string(1) "4"
+      [1]=>
+      int(3)
+    }
+    [3]=>
+    array(2) {
+      [0]=>
+      string(0) ""
+      [1]=>
+      int(-1)
+    }
+  }
+  [2]=>
+  array(4) {
+    [0]=>
+    array(2) {
+      [0]=>
+      string(0) ""
+      [1]=>
+      int(-1)
+    }
+    [1]=>
+    array(2) {
+      [0]=>
+      string(1) "2"
+      [1]=>
+      int(1)
+    }
+    [2]=>
+    array(2) {
+      [0]=>
+      string(0) ""
+      [1]=>
+      int(-1)
+    }
+    [3]=>
+    array(2) {
+      [0]=>
+      string(0) ""
+      [1]=>
+      int(-1)
+    }
+  }
+}
+last_error=0
+== 192
+int(4)
+array(4) {
+  [0]=>
+  array(1) {
+    [0]=>
+    array(2) {
+      [0]=>
+      string(1) "1"
+      [1]=>
+      int(0)
+    }
+  }
+  [1]=>
+  array(3) {
+    [0]=>
+    array(2) {
+      [0]=>
+      string(2) "23"
+      [1]=>
+      int(1)
+    }
+    [1]=>
+    array(2) {
+      [0]=>
+      string(0) ""
+      [1]=>
+      int(-1)
+    }
+    [2]=>
+    array(2) {
+      [0]=>
+      string(1) "2"
+      [1]=>
+      int(1)
+    }
+  }
+  [2]=>
+  array(2) {
+    [0]=>
+    array(2) {
+      [0]=>
+      string(2) "45"
+      [1]=>
+      int(3)
+    }
+    [1]=>
+    array(2) {
+      [0]=>
+      string(1) "4"
+      [1]=>
+      int(3)
+    }
+  }
+  [3]=>
+  array(1) {
+    [0]=>
+    array(2) {
+      [0]=>
+      string(1) "6"
+      [1]=>
+      int(5)
+    }
+  }
+}
+last_error=0
+== 193
+int(4)
+array(5) {
+  [0]=>
+  array(4) {
+    [0]=>
+    string(1) "1"
+    [1]=>
+    string(2) "23"
+    [2]=>
+    string(2) "45"
+    [3]=>
+    string(1) "6"
+  }
+  ["a"]=>
+  array(4) {
+    [0]=>
+    NULL
+    [1]=>
+    NULL
+    [2]=>
+    string(1) "4"
+    [3]=>
+    NULL
+  }
+  [1]=>
+  array(4) {
+    [0]=>
+    NULL
+    [1]=>
+    NULL
+    [2]=>
+    string(1) "4"
+    [3]=>
+    NULL
+  }
+  ["b"]=>
+  array(4) {
+    [0]=>
+    NULL
+    [1]=>
+    string(1) "2"
+    [2]=>
+    NULL
+    [3]=>
+    NULL
+  }
+  [2]=>
+  array(4) {
+    [0]=>
+    NULL
+    [1]=>
+    string(1) "2"
+    [2]=>
+    NULL
+    [3]=>
+    NULL
+  }
+}
+last_error=0
+== 194
+int(4)
+array(5) {
+  [0]=>
+  array(4) {
+    [0]=>
+    array(2) {
+      [0]=>
+      string(1) "1"
+      [1]=>
+      int(0)
+    }
+    [1]=>
+    array(2) {
+      [0]=>
+      string(2) "23"
+      [1]=>
+      int(1)
+    }
+    [2]=>
+    array(2) {
+      [0]=>
+      string(2) "45"
+      [1]=>
+      int(3)
+    }
+    [3]=>
+    array(2) {
+      [0]=>
+      string(1) "6"
+      [1]=>
+      int(5)
+    }
+  }
+  ["a"]=>
+  array(4) {
+    [0]=>
+    array(2) {
+      [0]=>
+      NULL
+      [1]=>
+      int(-1)
+    }
+    [1]=>
+    array(2) {
+      [0]=>
+      NULL
+      [1]=>
+      int(-1)
+    }
+    [2]=>
+    array(2) {
+      [0]=>
+      string(1) "4"
+      [1]=>
+      int(3)
+    }
+    [3]=>
+    array(2) {
+      [0]=>
+      NULL
+      [1]=>
+      int(-1)
+    }
+  }
+  [1]=>
+  array(4) {
+    [0]=>
+    array(2) {
+      [0]=>
+      NULL
+      [1]=>
+      int(-1)
+    }
+    [1]=>
+    array(2) {
+      [0]=>
+      NULL
+      [1]=>
+      int(-1)
+    }
+    [2]=>
+    array(2) {
+      [0]=>
+      string(1) "4"
+      [1]=>
+      int(3)
+    }
+    [3]=>
+    array(2) {
+      [0]=>
+      NULL
+      [1]=>
+      int(-1)
+    }
+  }
+  ["b"]=>
+  array(4) {
+    [0]=>
+    array(2) {
+      [0]=>
+      NULL
+      [1]=>
+      int(-1)
+    }
+    [1]=>
+    array(2) {
+      [0]=>
+      string(1) "2"
+      [1]=>
+      int(1)
+    }
+    [2]=>
+    array(2) {
+      [0]=>
+      NULL
+      [1]=>
+      int(-1)
+    }
+    [3]=>
+    array(2) {
+      [0]=>
+      NULL
+      [1]=>
+      int(-1)
+    }
+  }
+  [2]=>
+  array(4) {
+    [0]=>
+    array(2) {
+      [0]=>
+      NULL
+      [1]=>
+      int(-1)
+    }
+    [1]=>
+    array(2) {
+      [0]=>
+      string(1) "2"
+      [1]=>
+      int(1)
+    }
+    [2]=>
+    array(2) {
+      [0]=>
+      NULL
+      [1]=>
+      int(-1)
+    }
+    [3]=>
+    array(2) {
+      [0]=>
+      NULL
+      [1]=>
+      int(-1)
+    }
+  }
+}
+last_error=0
+== 195
+int(4)
+array(4) {
+  [0]=>
+  array(5) {
+    [0]=>
+    string(1) "1"
+    ["a"]=>
+    NULL
+    [1]=>
+    NULL
+    ["b"]=>
+    NULL
+    [2]=>
+    NULL
+  }
+  [1]=>
+  array(5) {
+    [0]=>
+    string(2) "23"
+    ["a"]=>
+    NULL
+    [1]=>
+    NULL
+    ["b"]=>
+    string(1) "2"
+    [2]=>
+    string(1) "2"
+  }
+  [2]=>
+  array(5) {
+    [0]=>
+    string(2) "45"
+    ["a"]=>
+    string(1) "4"
+    [1]=>
+    string(1) "4"
+    ["b"]=>
+    NULL
+    [2]=>
+    NULL
+  }
+  [3]=>
+  array(5) {
+    [0]=>
+    string(1) "6"
+    ["a"]=>
+    NULL
+    [1]=>
+    NULL
+    ["b"]=>
+    NULL
+    [2]=>
+    NULL
+  }
+}
+last_error=0
+== 196
+int(4)
+array(4) {
+  [0]=>
+  array(5) {
+    [0]=>
+    array(2) {
+      [0]=>
+      string(1) "1"
+      [1]=>
+      int(0)
+    }
+    ["a"]=>
+    array(2) {
+      [0]=>
+      NULL
+      [1]=>
+      int(-1)
+    }
+    [1]=>
+    array(2) {
+      [0]=>
+      NULL
+      [1]=>
+      int(-1)
+    }
+    ["b"]=>
+    array(2) {
+      [0]=>
+      NULL
+      [1]=>
+      int(-1)
+    }
+    [2]=>
+    array(2) {
+      [0]=>
+      NULL
+      [1]=>
+      int(-1)
+    }
+  }
+  [1]=>
+  array(5) {
+    [0]=>
+    array(2) {
+      [0]=>
+      string(2) "23"
+      [1]=>
+      int(1)
+    }
+    ["a"]=>
+    array(2) {
+      [0]=>
+      NULL
+      [1]=>
+      int(-1)
+    }
+    [1]=>
+    array(2) {
+      [0]=>
+      NULL
+      [1]=>
+      int(-1)
+    }
+    ["b"]=>
+    array(2) {
+      [0]=>
+      string(1) "2"
+      [1]=>
+      int(1)
+    }
+    [2]=>
+    array(2) {
+      [0]=>
+      string(1) "2"
+      [1]=>
+      int(1)
+    }
+  }
+  [2]=>
+  array(5) {
+    [0]=>
+    array(2) {
+      [0]=>
+      string(2) "45"
+      [1]=>
+      int(3)
+    }
+    ["a"]=>
+    array(2) {
+      [0]=>
+      string(1) "4"
+      [1]=>
+      int(3)
+    }
+    [1]=>
+    array(2) {
+      [0]=>
+      string(1) "4"
+      [1]=>
+      int(3)
+    }
+    ["b"]=>
+    array(2) {
+      [0]=>
+      NULL
+      [1]=>
+      int(-1)
+    }
+    [2]=>
+    array(2) {
+      [0]=>
+      NULL
+      [1]=>
+      int(-1)
+    }
+  }
+  [3]=>
+  array(5) {
+    [0]=>
+    array(2) {
+      [0]=>
+      string(1) "6"
+      [1]=>
+      int(5)
+    }
+    ["a"]=>
+    array(2) {
+      [0]=>
+      NULL
+      [1]=>
+      int(-1)
+    }
+    [1]=>
+    array(2) {
+      [0]=>
+      NULL
+      [1]=>
+      int(-1)
+    }
+    ["b"]=>
+    array(2) {
+      [0]=>
+      NULL
+      [1]=>
+      int(-1)
+    }
+    [2]=>
+    array(2) {
+      [0]=>
+      NULL
+      [1]=>
+      int(-1)
+    }
+  }
+}
+last_error=0
+== 197
+int(4)
+array(4) {
+  [0]=>
+  array(1) {
+    [0]=>
+    string(1) "1"
+  }
+  [1]=>
+  array(5) {
+    [0]=>
+    string(2) "23"
+    ["a"]=>
+    string(0) ""
+    [1]=>
+    string(0) ""
+    ["b"]=>
+    string(1) "2"
+    [2]=>
+    string(1) "2"
+  }
+  [2]=>
+  array(3) {
+    [0]=>
+    string(2) "45"
+    ["a"]=>
+    string(1) "4"
+    [1]=>
+    string(1) "4"
+  }
+  [3]=>
+  array(1) {
+    [0]=>
+    string(1) "6"
+  }
+}
+last_error=0
+== 198
+int(4)
+array(3) {
+  [0]=>
+  array(4) {
+    [0]=>
+    string(3) "the"
+    [1]=>
+    string(3) "the"
+    [2]=>
+    string(3) "the"
+    [3]=>
+    string(3) "the"
+  }
+  ["word"]=>
+  array(4) {
+    [0]=>
+    string(3) "the"
+    [1]=>
+    string(3) "the"
+    [2]=>
+    string(3) "the"
+    [3]=>
+    string(3) "the"
+  }
+  [1]=>
+  array(4) {
+    [0]=>
+    string(3) "the"
+    [1]=>
+    string(3) "the"
+    [2]=>
+    string(3) "the"
+    [3]=>
+    string(3) "the"
+  }
+}
+last_error=0
+== 199
+int(3)
+array(3) {
+  [0]=>
+  array(5) {
+    [0]=>
+    string(2) "a1"
+    ["chr"]=>
+    string(1) "a"
+    [1]=>
+    string(1) "a"
+    ["num"]=>
+    string(1) "1"
+    [2]=>
+    string(1) "1"
+  }
+  [1]=>
+  array(6) {
+    [0]=>
+    string(1) "b"
+    ["chr"]=>
+    string(1) "b"
+    [1]=>
+    string(0) ""
+    ["num"]=>
+    string(0) ""
+    [2]=>
+    string(0) ""
+    [3]=>
+    string(1) "b"
+  }
+  [2]=>
+  array(5) {
+    [0]=>
+    string(2) "c3"
+    ["chr"]=>
+    string(1) "c"
+    [1]=>
+    string(1) "c"
+    ["num"]=>
+    string(1) "3"
+    [2]=>
+    string(1) "3"
+  }
+}
+last_error=0
+== 200
+int(3)
+array(3) {
+  [0]=>
+  array(5) {
+    [0]=>
+    string(2) "a1"
+    ["chr"]=>
+    string(1) "a"
+    [1]=>
+    string(1) "a"
+    ["num"]=>
+    string(1) "1"
+    [2]=>
+    string(1) "1"
+  }
+  [1]=>
+  array(6) {
+    [0]=>
+    string(1) "b"
+    ["chr"]=>
+    string(1) "b"
+    [1]=>
+    string(0) ""
+    ["num"]=>
+    string(0) ""
+    [2]=>
+    string(0) ""
+    [3]=>
+    string(1) "b"
+  }
+  [2]=>
+  array(5) {
+    [0]=>
+    string(2) "c3"
+    ["chr"]=>
+    string(1) "c"
+    [1]=>
+    string(1) "c"
+    ["num"]=>
+    string(1) "3"
+    [2]=>
+    string(1) "3"
+  }
+}
+last_error=0
+== 201
+int(3)
+array(6) {
+  [0]=>
+  array(3) {
+    [0]=>
+    string(2) "a1"
+    [1]=>
+    string(1) "b"
+    [2]=>
+    string(2) "c3"
+  }
+  ["chr"]=>
+  array(3) {
+    [0]=>
+    string(0) ""
+    [1]=>
+    string(1) "b"
+    [2]=>
+    string(0) ""
+  }
+  [1]=>
+  array(3) {
+    [0]=>
+    string(1) "a"
+    [1]=>
+    string(0) ""
+    [2]=>
+    string(1) "c"
+  }
+  ["num"]=>
+  array(3) {
+    [0]=>
+    string(1) "1"
+    [1]=>
+    string(0) ""
+    [2]=>
+    string(1) "3"
+  }
+  [2]=>
+  array(3) {
+    [0]=>
+    string(1) "1"
+    [1]=>
+    string(0) ""
+    [2]=>
+    string(1) "3"
+  }
+  [3]=>
+  array(3) {
+    [0]=>
+    string(0) ""
+    [1]=>
+    string(1) "b"
+    [2]=>
+    string(0) ""
+  }
+}
+last_error=0
+== 202
+int(2)
+array(1) {
+  [0]=>
+  array(2) {
+    [0]=>
+    string(3) "789"
+    [1]=>
+    string(3) "012"
+  }
+}
+last_error=0
+== 203
+int(2)
+array(1) {
+  [0]=>
+  array(2) {
+    [0]=>
+    array(2) {
+      [0]=>
+      string(0) ""
+      [1]=>
+      int(0)
+    }
+    [1]=>
+    array(2) {
+      [0]=>
+      string(0) ""
+      [1]=>
+      int(1)
+    }
+  }
+}
+last_error=0
+== 204
+int(4)
+array(1) {
+  [0]=>
+  array(4) {
+    [0]=>
+    string(0) ""
+    [1]=>
+    string(0) ""
+    [2]=>
+    string(0) ""
+    [3]=>
+    string(0) ""
+  }
+}
+last_error=0
+== 205
+int(4)
+array(1) {
+  [0]=>
+  array(4) {
+    [0]=>
+    array(2) {
+      [0]=>
+      string(0) ""
+      [1]=>
+      int(0)
+    }
+    [1]=>
+    array(2) {
+      [0]=>
+      string(0) ""
+      [1]=>
+      int(1)
+    }
+    [2]=>
+    array(2) {
+      [0]=>
+      string(0) ""
+      [1]=>
+      int(2)
+    }
+    [3]=>
+    array(2) {
+      [0]=>
+      string(0) ""
+      [1]=>
+      int(3)
+    }
+  }
+}
+last_error=0
+== 206
+int(5)
+array(1) {
+  [0]=>
+  array(5) {
+    [0]=>
+    string(0) ""
+    [1]=>
+    string(0) ""
+    [2]=>
+    string(0) ""
+    [3]=>
+    string(0) ""
+    [4]=>
+    string(0) ""
+  }
+}
+last_error=0
+== 207
+int(4)
+array(1) {
+  [0]=>
+  array(4) {
+    [0]=>
+    string(3) "€"
+    [1]=>
+    string(1) " "
+    [2]=>
+    string(1) "h"
+    [3]=>
+    string(1) "i"
+  }
+}
+last_error=0
+== 208
+int(2)
+array(1) {
+  [0]=>
+  array(2) {
+    [0]=>
+    string(3) "A£"
+    [1]=>
+    string(2) "BC"
+  }
+}
+last_error=0
+== 209
+int(1)
+array(1) {
+  [0]=>
+  array(1) {
+    [0]=>
+    string(4) "€ "
+  }
+}
+last_error=0
+== 210
+int(0)
+array(1) {
+  [0]=>
+  array(0) {
+  }
+}
+last_error=0
+== 211
+int(2)
+array(1) {
+  [0]=>
+  array(2) {
+    [0]=>
+    string(3) "aei"
+    [1]=>
+    string(2) "ou"
+  }
+}
+last_error=0
+== 212
+int(1)
+array(1) {
+  [0]=>
+  array(1) {
+    [0]=>
+    string(5) "aeiou"
+  }
+}
+last_error=0
+== 213
+int(0)
+array(1) {
+  [0]=>
+  array(0) {
+  }
+}
+last_error=0
+== 214
+int(1)
+array(1) {
+  [0]=>
+  array(1) {
+    [0]=>
+    string(6) "aeiou
+"
+  }
+}
+last_error=0
+== 215
+int(0)
+array(0) {
+}
+last_error=0
+== 216
+int(0)
+array(3) {
+  [0]=>
+  array(0) {
+  }
+  [1]=>
+  array(0) {
+  }
+  [2]=>
+  array(0) {
+  }
+}
+last_error=0
+== 217
+int(0)
+array(1) {
+  [0]=>
+  array(0) {
+  }
+}
+last_error=0
+== 218
+int(10)
+array(1) {
+  [0]=>
+  array(10) {
+    [0]=>
+    string(0) ""
+    [1]=>
+    string(0) ""
+    [2]=>
+    string(0) ""
+    [3]=>
+    string(0) ""
+    [4]=>
+    string(0) ""
+    [5]=>
+    string(0) ""
+    [6]=>
+    string(0) ""
+    [7]=>
+    string(0) ""
+    [8]=>
+    string(0) ""
+    [9]=>
+    string(0) ""
+  }
+}
+last_error=0
+== 219
+int(4)
+array(6) {
+  [0]=>
+  array(4) {
+    [0]=>
+    string(3) "_a_"
+    [1]=>
+    string(3) "_b_"
+    [2]=>
+    string(3) "_c_"
+    [3]=>
+    string(3) "_d_"
+  }
+  [1]=>
+  array(4) {
+    [0]=>
+    string(1) "a"
+    [1]=>
+    string(0) ""
+    [2]=>
+    string(0) ""
+    [3]=>
+    string(0) ""
+  }
+  [2]=>
+  array(4) {
+    [0]=>
+    string(0) ""
+    [1]=>
+    string(1) "b"
+    [2]=>
+    string(0) ""
+    [3]=>
+    string(0) ""
+  }
+  [3]=>
+  array(4) {
+    [0]=>
+    string(0) ""
+    [1]=>
+    string(0) ""
+    [2]=>
+    string(1) "c"
+    [3]=>
+    string(0) ""
+  }
+  [4]=>
+  array(4) {
+    [0]=>
+    string(0) ""
+    [1]=>
+    string(0) ""
+    [2]=>
+    string(0) ""
+    [3]=>
+    string(1) "d"
+  }
+  ["MARK"]=>
+  array(2) {
+    [0]=>
+    string(6) "A_MARK"
+    [2]=>
+    string(6) "C_MARK"
+  }
+}
+last_error=0
+== 220
+int(4)
+array(4) {
+  [0]=>
+  array(3) {
+    [0]=>
+    string(3) "_a_"
+    [1]=>
+    string(1) "a"
+    ["MARK"]=>
+    string(6) "A_MARK"
+  }
+  [1]=>
+  array(3) {
+    [0]=>
+    string(3) "_b_"
+    [1]=>
+    string(0) ""
+    [2]=>
+    string(1) "b"
+  }
+  [2]=>
+  array(5) {
+    [0]=>
+    string(3) "_c_"
+    [1]=>
+    string(0) ""
+    [2]=>
+    string(0) ""
+    [3]=>
+    string(1) "c"
+    ["MARK"]=>
+    string(6) "C_MARK"
+  }
+  [3]=>
+  array(5) {
+    [0]=>
+    string(3) "_d_"
+    [1]=>
+    string(0) ""
+    [2]=>
+    string(0) ""
+    [3]=>
+    string(0) ""
+    [4]=>
+    string(1) "d"
+  }
+}
+last_error=0
+== 221
+int(1)
+array(5) {
+  [0]=>
+  string(3) "_c_"
+  [1]=>
+  string(0) ""
+  [2]=>
+  string(0) ""
+  [3]=>
+  string(1) "c"
+  ["MARK"]=>
+  string(6) "C_MARK"
+}
+last_error=0
+== 222
+int(2)
+array(2) {
+  [0]=>
+  array(7) {
+    [0]=>
+    string(24) "unsigned int xpto = 124;"
+    [1]=>
+    string(12) "unsigned int"
+    [2]=>
+    string(0) ""
+    [3]=>
+    string(0) ""
+    [4]=>
+    string(4) "xpto"
+    [5]=>
+    string(1) "="
+    [6]=>
+    string(0) ""
+  }
+  [1]=>
+  array(7) {
+    [0]=>
+    string(11) "short a, b;"
+    [1]=>
+    string(5) "short"
+    [2]=>
+    string(0) ""
+    [3]=>
+    string(0) ""
+    [4]=>
+    string(1) "a"
+    [5]=>
+    string(0) ""
+    [6]=>
+    string(3) ", b"
+  }
+}
+last_error=0
+== 223
+int(1)
+array(1) {
+  [0]=>
+  array(3) {
+    [0]=>
+    array(2) {
+      [0]=>
+      string(46) "zend_parse_parameters( 0, "addd|s/", a, b, &c)"
+      [1]=>
+      int(0)
+    }
+    [1]=>
+    array(2) {
+      [0]=>
+      string(7) "addd|s/"
+      [1]=>
+      int(27)
+    }
+    [2]=>
+    array(2) {
+      [0]=>
+      string(9) "a, b, &c)"
+      [1]=>
+      int(37)
+    }
+  }
+}
+last_error=0
+== 224
+int(2)
+array(10) {
+  [0]=>
+  array(2) {
+    [0]=>
+    string(10) "2006-05-13"
+    [1]=>
+    string(9) "12-Aug-37"
+  }
+  ["date"]=>
+  array(2) {
+    [0]=>
+    string(10) "2006-05-13"
+    [1]=>
+    string(9) "12-Aug-37"
+  }
+  [1]=>
+  array(2) {
+    [0]=>
+    string(10) "2006-05-13"
+    [1]=>
+    string(9) "12-Aug-37"
+  }
+  ["year"]=>
+  array(2) {
+    [0]=>
+    string(4) "2006"
+    [1]=>
+    string(2) "12"
+  }
+  [2]=>
+  array(2) {
+    [0]=>
+    string(4) "2006"
+    [1]=>
+    string(2) "12"
+  }
+  [3]=>
+  array(2) {
+    [0]=>
+    string(2) "20"
+    [1]=>
+    string(0) ""
+  }
+  ["month"]=>
+  array(2) {
+    [0]=>
+    string(2) "05"
+    [1]=>
+    string(3) "Aug"
+  }
+  [4]=>
+  array(2) {
+    [0]=>
+    string(2) "05"
+    [1]=>
+    string(3) "Aug"
+  }
+  ["day"]=>
+  array(2) {
+    [0]=>
+    string(2) "13"
+    [1]=>
+    string(2) "37"
+  }
+  [5]=>
+  array(2) {
+    [0]=>
+    string(2) "13"
+    [1]=>
+    string(2) "37"
+  }
+}
+last_error=0
+== 225
+int(2)
+array(2) {
+  [0]=>
+  array(10) {
+    [0]=>
+    string(10) "2006-05-13"
+    ["date"]=>
+    string(10) "2006-05-13"
+    [1]=>
+    string(10) "2006-05-13"
+    ["year"]=>
+    string(4) "2006"
+    [2]=>
+    string(4) "2006"
+    [3]=>
+    string(2) "20"
+    ["month"]=>
+    string(2) "05"
+    [4]=>
+    string(2) "05"
+    ["day"]=>
+    string(2) "13"
+    [5]=>
+    string(2) "13"
+  }
+  [1]=>
+  array(10) {
+    [0]=>
+    string(9) "12-Aug-37"
+    ["date"]=>
+    string(9) "12-Aug-37"
+    [1]=>
+    string(9) "12-Aug-37"
+    ["year"]=>
+    string(2) "12"
+    [2]=>
+    string(2) "12"
+    [3]=>
+    string(0) ""
+    ["month"]=>
+    string(3) "Aug"
+    [4]=>
+    string(3) "Aug"
+    ["day"]=>
+    string(2) "37"
+    [5]=>
+    string(2) "37"
+  }
+}
+last_error=0
+== 226
+int(1)
+array(2) {
+  [0]=>
+  array(1) {
+    [0]=>
+    string(2) "à"
+  }
+  [1]=>
+  array(1) {
+    [0]=>
+    string(1) "�"
+  }
+}
+last_error=0
+== 227
+int(1)
+array(2) {
+  [0]=>
+  array(1) {
+    [0]=>
+    string(6) "123456"
+  }
+  [1]=>
+  array(1) {
+    [0]=>
+    string(1) "6"
+  }
+}
+last_error=0
+== 228
+bool(false)
+array(0) {
+}
+last_error=1
+== 229
+int(2)
+array(1) {
+  [0]=>
+  array(2) {
+    [0]=>
+    string(1) "a"
+    [1]=>
+    string(1) "a"
+  }
+}
+last_error=0
+== 230
+int(3)
+last_error=0
+== 231
+int(7)
+last_error=0
+== 232
+bool(false)
+last_error=4
+== 235
+ok
+== 236
+ok
+== 237
+bool(false)
+array(1) {
+  [0]=>
+  array(0) {
+  }
+}
+last_error=2
+== 238
+int(10)
+array(1) {
+  [0]=>
+  array(10) {
+    [0]=>
+    string(1) "0"
+    [1]=>
+    string(1) "1"
+    [2]=>
+    string(1) "2"
+    [3]=>
+    string(1) "3"
+    [4]=>
+    string(1) "4"
+    [5]=>
+    string(1) "5"
+    [6]=>
+    string(1) "6"
+    [7]=>
+    string(1) "7"
+    [8]=>
+    string(1) "8"
+    [9]=>
+    string(1) "9"
+  }
+}
+last_error=0
+== 239
+bool(false)
+last_error=2
+== 240
+NULL
+int(0)
+last_error=2
+== 241
+bool(false)
+last_error=2
+== 242
+bool(false)
+last_error=2
+== 243
+ok
+== 244
+ok
+== 245
+bool(false)
+array(4) {
+  [0]=>
+  array(0) {
+  }
+  [1]=>
+  array(0) {
+  }
+  [2]=>
+  array(0) {
+  }
+  [3]=>
+  array(0) {
+  }
+}
+last_error=3
+== 246
+int(1)
+array(1) {
+  [0]=>
+  array(1) {
+    [0]=>
+    string(4) "aeio"
+  }
+}
+last_error=0
+== 247
+ok
+== 248
+bool(false)
+last_error=3
+== 249
+bool(false)
+last_error=3
+== 250
+ok
+== 251
+ok
+== 252
+ok
+== 253
+bool(false)
+last_error=3
+== 254
+ok
+== 255
+int(1)
+last_error=0
+== 256
+int(0)
+last_error=0
+== 259
+string(12) "a${1b${1c${1"
+int(3)
+last_error=0
+== 260
+Warning: Compilation failed: missing terminating ] for character class at offset 8
+NULL
+int(0)
+last_error=1
+== 261
+Warning: Unknown modifier 'e'
+NULL
+int(0)
+last_error=1
+== 262
+string(1) "x"
+int(1)
+last_error=0
+== 263
+string(4) "abcd"
+int(0)
+last_error=0
+== 264
+string(8) "zaab2k3l"
+int(1)
+last_error=0
+== 265
+string(13) "One 111111111"
+int(1)
+last_error=0
+== 266
+string(40) "One One One One One One One One One One "
+int(10)
+last_error=0
+== 267
+string(10) "1111111111"
+int(0)
+last_error=0
+== 268
+string(40) "One One One One One One One One One One "
+int(10)
+last_error=0
+== 269
+string(56) "xxxx xxxx 1-a-3-4 1-2-a-4 1-2-3-a a-a-a-a xxxx xxxx-xxxx"
+int(5)
+last_error=0
+== 270
+string(41) "Hxxxx xxxx xxxx xxxx xxxx 42 xxxx 13 xxxx"
+int(7)
+last_error=0
+== 271
+string(25) "... ... ... ... v1c0d1/|/"
+int(4)
+last_error=0
+== 272
+string(42) "x[a|b||ab|ab|a|$1|$|\]y [a|||a|a|a|$1|$|\]"
+int(2)
+last_error=0
+== 273
+string(2) "\a"
+int(1)
+last_error=0
+== 274
+string(5) "  aa "
+int(1)
+last_error=0
+== 275
+string(3) "\ a"
+int(1)
+last_error=0
+== 276
+string(3) "${1"
+int(1)
+last_error=0
+== 277
+string(1) "\"
+int(1)
+last_error=0
+== 278
+string(2) "x\"
+int(1)
+last_error=0
+== 279
+string(1) "$"
+int(1)
+last_error=0
+== 280
+string(2) "$$"
+int(1)
+last_error=0
+== 281
+string(7) "-a-b-c-"
+int(4)
+last_error=0
+== 282
+string(5) "-a-bc"
+int(2)
+last_error=0
+== 283
+string(9) "a😒😒"
+int(4)
+last_error=0
+== 284
+string(9) "|é|t|é|"
+int(4)
+last_error=0
+== 285
+string(7) "|�|�|t|"
+int(4)
+last_error=0
+== 286
+string(4) "*ක"
+int(1)
+last_error=0
+== 287
+string(5) "*ම*"
+int(2)
+last_error=0
+== 288
+string(2) "*k"
+int(1)
+last_error=0
+== 289
+string(3) "*m*"
+int(2)
+last_error=0
+== 290
+NULL
+int(0)
+last_error=4
+== 291
+NULL
+int(0)
+last_error=4
+== 292
+string(10) "áéíóú"
+int(6)
+last_error=0
+== 293
+NULL
+int(0)
+last_error=4
+== 294
+NULL
+int(0)
+last_error=4
+== 295
+string(35) "1*2*3 a123 1*2*3*4*5*6*7 b123 1*2*3"
+int(10)
+last_error=0
+== 296
+string(11) "00000 00000"
+int(10)
+last_error=0
+== 297
+string(11) "lower0UPPER"
+int(1)
+last_error=0
+== 298
+string(58) "[CODE]&lt;td align=&quot;$stylevar[right]&quot;&gt;[/CODE]"
+int(0)
+last_error=0
+== 299
+string(2) "cc"
+int(3)
+last_error=0
+== 300
+string(0) ""
+int(4)
+last_error=0
+== 301
+string(2) "xx"
+int(2)
+last_error=0
+== 302
+Warning: Delimiter must not be alphanumeric, backslash, or NUL byte
+NULL
+int(1)
+last_error=1
+== 303
+string(18) "Happy Year of 2016"
+int(1)
+last_error=0
+== 304
+string(1) "c"
+int(2)
+last_error=0
+== 305
+string(103) "This test a string. It contains numbers * to 0* to 9* test well test parentheses and some other things*"
+int(8)
+last_error=0
+== 306
+string(14) "Eins-zwei-drei"
+int(2)
+last_error=0
+== 307
+string(0) ""
+int(0)
+last_error=0
+== 308
+string(1) "b"
+int(1)
+last_error=0
+== 309
+string(7) "a!
+b!
+!"
+int(3)
+last_error=0
+== 310
+string(7) "a|b|c|d"
+int(3)
+last_error=0
+== 311
+string(4) "aNbN"
+int(2)
+last_error=0
+== 312
+NULL
+int(0)
+last_error=0
+== 313
+string(3) "Nbc"
+int(1)
+last_error=0
+== 314
+string(4) "aNb2"
+int(1)
+last_error=0
+== 317
+callback:
+array(3) {
+  [0]=>
+  string(4) "blub"
+  ["name"]=>
+  string(4) "blub"
+  [1]=>
+  string(4) "blub"
+}
+string(12) "bla <3> blah"
+int(1)
+last_error=0
+== 318
+callback:
+array(4) {
+  [0]=>
+  string(5) "abcde"
+  [1]=>
+  string(2) "ab"
+  [2]=>
+  string(2) "cd"
+  [3]=>
+  string(1) "e"
+}
+string(3) "<4>"
+int(1)
+last_error=0
+== 319
+callback:
+array(1) {
+  [0]=>
+  string(3) "aaa"
+}
+callback:
+array(1) {
+  [0]=>
+  string(3) "aaa"
+}
+string(31) "<1> bbb ccc ddd eee ccc <1> bbb"
+int(2)
+last_error=0
+== 320
+callback:
+array(1) {
+  [0]=>
+  array(2) {
+    [0]=>
+    string(1) "a"
+    [1]=>
+    int(0)
+  }
+}
+callback:
+array(1) {
+  [0]=>
+  array(2) {
+    [0]=>
+    string(1) "b"
+    [1]=>
+    int(1)
+  }
+}
+callback:
+array(1) {
+  [0]=>
+  array(2) {
+    [0]=>
+    string(1) "c"
+    [1]=>
+    int(2)
+  }
+}
+string(9) "<1><1><1>"
+int(3)
+last_error=0
+== 321
+callback:
+array(3) {
+  [0]=>
+  string(1) "a"
+  [1]=>
+  string(1) "a"
+  [2]=>
+  NULL
+}
+callback:
+array(3) {
+  [0]=>
+  string(1) "b"
+  [1]=>
+  NULL
+  [2]=>
+  string(1) "b"
+}
+string(7) "<3><3>c"
+int(2)
+last_error=0
+== 322
+callback:
+array(3) {
+  [0]=>
+  array(2) {
+    [0]=>
+    string(1) "a"
+    [1]=>
+    int(0)
+  }
+  [1]=>
+  array(2) {
+    [0]=>
+    string(1) "a"
+    [1]=>
+    int(0)
+  }
+  [2]=>
+  array(2) {
+    [0]=>
+    NULL
+    [1]=>
+    int(-1)
+  }
+}
+callback:
+array(3) {
+  [0]=>
+  array(2) {
+    [0]=>
+    string(1) "b"
+    [1]=>
+    int(1)
+  }
+  [1]=>
+  array(2) {
+    [0]=>
+    NULL
+    [1]=>
+    int(-1)
+  }
+  [2]=>
+  array(2) {
+    [0]=>
+    string(1) "b"
+    [1]=>
+    int(1)
+  }
+}
+string(7) "<3><3>c"
+int(2)
+last_error=0
+== 323
+callback:
+array(2) {
+  [0]=>
+  string(1) "a"
+  [1]=>
+  string(1) "a"
+}
+callback:
+array(3) {
+  [0]=>
+  string(1) "b"
+  [1]=>
+  string(0) ""
+  [2]=>
+  string(1) "b"
+}
+string(7) "<2><3>c"
+int(2)
+last_error=0
+== 324
+callback:
+array(5) {
+  [0]=>
+  string(1) "a"
+  ["n"]=>
+  string(1) "a"
+  [1]=>
+  string(1) "a"
+  ["m"]=>
+  NULL
+  [2]=>
+  NULL
+}
+callback:
+array(5) {
+  [0]=>
+  string(1) "b"
+  ["n"]=>
+  NULL
+  [1]=>
+  NULL
+  ["m"]=>
+  string(1) "b"
+  [2]=>
+  string(1) "b"
+}
+string(7) "<5><5>c"
+int(2)
+last_error=0
+== 325
+callback:
+array(4) {
+  [0]=>
+  string(3) "bar"
+  ["g"]=>
+  string(3) "bar"
+  [1]=>
+  string(0) ""
+  [2]=>
+  string(3) "bar"
+}
+string(3) "<4>"
+int(1)
+last_error=0
+== 326
+callback:
+array(3) {
+  [0]=>
+  string(3) "_a_"
+  [1]=>
+  string(1) "a"
+  ["MARK"]=>
+  string(6) "A_MARK"
+}
+callback:
+array(3) {
+  [0]=>
+  string(3) "_b_"
+  [1]=>
+  string(0) ""
+  [2]=>
+  string(1) "b"
+}
+callback:
+array(5) {
+  [0]=>
+  string(3) "_c_"
+  [1]=>
+  string(0) ""
+  [2]=>
+  string(0) ""
+  [3]=>
+  string(1) "c"
+  ["MARK"]=>
+  string(6) "C_MARK"
+}
+callback:
+array(5) {
+  [0]=>
+  string(3) "_d_"
+  [1]=>
+  string(0) ""
+  [2]=>
+  string(0) ""
+  [3]=>
+  string(0) ""
+  [4]=>
+  string(1) "d"
+}
+string(12) "<3><3><5><5>"
+int(4)
+last_error=0
+== 327
+callback:
+array(1) {
+  [0]=>
+  string(0) ""
+}
+callback:
+array(1) {
+  [0]=>
+  string(0) ""
+}
+callback:
+array(1) {
+  [0]=>
+  string(0) ""
+}
+string(14) "<1>a<1>😒<1>"
+int(3)
+last_error=0
+== 328
+callback:
+array(1) {
+  [0]=>
+  string(0) ""
+}
+callback:
+array(1) {
+  [0]=>
+  string(0) ""
+}
+callback:
+array(1) {
+  [0]=>
+  string(0) ""
+}
+string(11) "<1>a<1>b<1>"
+int(3)
+last_error=0
+== 329
+callback:
+array(1) {
+  [0]=>
+  string(0) ""
+}
+string(5) "<1>ab"
+int(1)
+last_error=0
+== 330
+callback:
+array(1) {
+  [0]=>
+  string(1) "a"
+}
+callback:
+array(1) {
+  [0]=>
+  string(1) "a"
+}
+string(7) "<1><1>a"
+int(2)
+last_error=0
+== 331
+NULL
+int(0)
+last_error=4
+== 332
+string(3) "xyz"
+int(0)
+last_error=0
+== 333
+string(3) "aaa"
+int(0)
+last_error=0
+== 336
+Warning: Compilation failed: quantifier does not follow a repeatable item at offset 0
+bool(false)
+last_error=1
+== 337
+array(3) {
+  [0]=>
+  string(1) "x"
+  [1]=>
+  string(2) "yy"
+  [2]=>
+  string(3) "zzz"
+}
+last_error=0
+== 338
+array(3) {
+  [0]=>
+  string(1) "x"
+  [1]=>
+  string(2) "yy"
+  [2]=>
+  string(3) "zzz"
+}
+last_error=0
+== 339
+array(3) {
+  [0]=>
+  string(1) "x"
+  [1]=>
+  string(2) "yy"
+  [2]=>
+  string(3) "zzz"
+}
+last_error=0
+== 340
+array(1) {
+  [0]=>
+  string(8) "x yy,zzz"
+}
+last_error=0
+== 341
+array(2) {
+  [0]=>
+  string(1) "x"
+  [1]=>
+  string(6) "yy,zzz"
+}
+last_error=0
+== 342
+array(1) {
+  [0]=>
+  string(8) "x yy,zzz"
+}
+last_error=0
+== 343
+array(8) {
+  [0]=>
+  string(0) ""
+  [1]=>
+  string(1) "a"
+  [2]=>
+  string(1) "b"
+  [3]=>
+  string(0) ""
+  [4]=>
+  string(1) "c"
+  [5]=>
+  string(0) ""
+  [6]=>
+  string(1) "u"
+  [7]=>
+  string(0) ""
+}
+last_error=0
+== 344
+array(4) {
+  [0]=>
+  string(1) "a"
+  [1]=>
+  string(1) "b"
+  [2]=>
+  string(1) "c"
+  [3]=>
+  string(1) "u"
+}
+last_error=0
+== 345
+array(15) {
+  [0]=>
+  string(0) ""
+  [1]=>
+  string(0) ""
+  [2]=>
+  string(1) "a"
+  [3]=>
+  string(0) ""
+  [4]=>
+  string(1) "b"
+  [5]=>
+  string(1) "2"
+  [6]=>
+  string(0) ""
+  [7]=>
+  string(0) ""
+  [8]=>
+  string(1) "c"
+  [9]=>
+  string(1) "3"
+  [10]=>
+  string(0) ""
+  [11]=>
+  string(0) ""
+  [12]=>
+  string(1) "u"
+  [13]=>
+  string(0) ""
+  [14]=>
+  string(0) ""
+}
+last_error=0
+== 346
+array(8) {
+  [0]=>
+  array(2) {
+    [0]=>
+    string(0) ""
+    [1]=>
+    int(0)
+  }
+  [1]=>
+  array(2) {
+    [0]=>
+    string(1) "a"
+    [1]=>
+    int(0)
+  }
+  [2]=>
+  array(2) {
+    [0]=>
+    string(1) "b"
+    [1]=>
+    int(1)
+  }
+  [3]=>
+  array(2) {
+    [0]=>
+    string(0) ""
+    [1]=>
+    int(3)
+  }
+  [4]=>
+  array(2) {
+    [0]=>
+    string(1) "c"
+    [1]=>
+    int(3)
+  }
+  [5]=>
+  array(2) {
+    [0]=>
+    string(0) ""
+    [1]=>
+    int(5)
+  }
+  [6]=>
+  array(2) {
+    [0]=>
+    string(1) "u"
+    [1]=>
+    int(5)
+  }
+  [7]=>
+  array(2) {
+    [0]=>
+    string(0) ""
+    [1]=>
+    int(6)
+  }
+}
+last_error=0
+== 347
+array(6) {
+  [0]=>
+  string(1) "a"
+  [1]=>
+  string(1) "b"
+  [2]=>
+  string(1) "2"
+  [3]=>
+  string(1) "c"
+  [4]=>
+  string(1) "3"
+  [5]=>
+  string(1) "u"
+}
+last_error=0
+== 348
+array(4) {
+  [0]=>
+  array(2) {
+    [0]=>
+    string(1) "a"
+    [1]=>
+    int(0)
+  }
+  [1]=>
+  array(2) {
+    [0]=>
+    string(1) "b"
+    [1]=>
+    int(1)
+  }
+  [2]=>
+  array(2) {
+    [0]=>
+    string(1) "c"
+    [1]=>
+    int(3)
+  }
+  [3]=>
+  array(2) {
+    [0]=>
+    string(1) "u"
+    [1]=>
+    int(5)
+  }
+}
+last_error=0
+== 349
+array(15) {
+  [0]=>
+  array(2) {
+    [0]=>
+    string(0) ""
+    [1]=>
+    int(0)
+  }
+  [1]=>
+  array(2) {
+    [0]=>
+    string(0) ""
+    [1]=>
+    int(0)
+  }
+  [2]=>
+  array(2) {
+    [0]=>
+    string(1) "a"
+    [1]=>
+    int(0)
+  }
+  [3]=>
+  array(2) {
+    [0]=>
+    string(0) ""
+    [1]=>
+    int(1)
+  }
+  [4]=>
+  array(2) {
+    [0]=>
+    string(1) "b"
+    [1]=>
+    int(1)
+  }
+  [5]=>
+  array(2) {
+    [0]=>
+    string(1) "2"
+    [1]=>
+    int(2)
+  }
+  [6]=>
+  array(2) {
+    [0]=>
+    string(0) ""
+    [1]=>
+    int(3)
+  }
+  [7]=>
+  array(2) {
+    [0]=>
+    string(0) ""
+    [1]=>
+    int(3)
+  }
+  [8]=>
+  array(2) {
+    [0]=>
+    string(1) "c"
+    [1]=>
+    int(3)
+  }
+  [9]=>
+  array(2) {
+    [0]=>
+    string(1) "3"
+    [1]=>
+    int(4)
+  }
+  [10]=>
+  array(2) {
+    [0]=>
+    string(0) ""
+    [1]=>
+    int(5)
+  }
+  [11]=>
+  array(2) {
+    [0]=>
+    string(0) ""
+    [1]=>
+    int(5)
+  }
+  [12]=>
+  array(2) {
+    [0]=>
+    string(1) "u"
+    [1]=>
+    int(5)
+  }
+  [13]=>
+  array(2) {
+    [0]=>
+    string(0) ""
+    [1]=>
+    int(6)
+  }
+  [14]=>
+  array(2) {
+    [0]=>
+    string(0) ""
+    [1]=>
+    int(6)
+  }
+}
+last_error=0
+== 350
+array(6) {
+  [0]=>
+  array(2) {
+    [0]=>
+    string(1) "a"
+    [1]=>
+    int(0)
+  }
+  [1]=>
+  array(2) {
+    [0]=>
+    string(1) "b"
+    [1]=>
+    int(1)
+  }
+  [2]=>
+  array(2) {
+    [0]=>
+    string(1) "2"
+    [1]=>
+    int(2)
+  }
+  [3]=>
+  array(2) {
+    [0]=>
+    string(1) "c"
+    [1]=>
+    int(3)
+  }
+  [4]=>
+  array(2) {
+    [0]=>
+    string(1) "3"
+    [1]=>
+    int(4)
+  }
+  [5]=>
+  array(2) {
+    [0]=>
+    string(1) "u"
+    [1]=>
+    int(5)
+  }
+}
+last_error=0
+== 351
+array(7) {
+  [0]=>
+  string(2) "(#"
+  [1]=>
+  string(2) "11"
+  [2]=>
+  string(1) "/"
+  [3]=>
+  string(2) "19"
+  [4]=>
+  string(1) "/"
+  [5]=>
+  string(4) "2002"
+  [6]=>
+  string(2) "#)"
+}
+last_error=0
+== 352
+array(3) {
+  [0]=>
+  string(0) ""
+  [1]=>
+  string(1) "a"
+  [2]=>
+  string(1) "'"
+}
+last_error=0
+== 353
+array(3) {
+  [0]=>
+  array(2) {
+    [0]=>
+    string(0) ""
+    [1]=>
+    int(0)
+  }
+  [1]=>
+  array(2) {
+    [0]=>
+    string(1) "a"
+    [1]=>
+    int(0)
+  }
+  [2]=>
+  array(2) {
+    [0]=>
+    string(1) "'"
+    [1]=>
+    int(1)
+  }
+}
+last_error=0
+== 354
+array(2) {
+  [0]=>
+  string(1) "a"
+  [1]=>
+  string(1) "'"
+}
+last_error=0
+== 355
+array(2) {
+  [0]=>
+  array(2) {
+    [0]=>
+    string(1) "a"
+    [1]=>
+    int(0)
+  }
+  [1]=>
+  array(2) {
+    [0]=>
+    string(1) "'"
+    [1]=>
+    int(1)
+  }
+}
+last_error=0
+== 356
+array(10) {
+  [0]=>
+  string(3) "€"
+  [1]=>
+  string(1) " "
+  [2]=>
+  string(1) "h"
+  [3]=>
+  string(1) "i"
+  [4]=>
+  string(1) " "
+  [5]=>
+  string(1) "t"
+  [6]=>
+  string(1) "h"
+  [7]=>
+  string(1) "e"
+  [8]=>
+  string(1) "r"
+  [9]=>
+  string(1) "e"
+}
+last_error=0
+== 357
+array(2) {
+  [0]=>
+  string(1) ""
+  [1]=>
+  string(1) "
+"
+}
+last_error=0
+== 358
+array(5) {
+  [0]=>
+  string(0) ""
+  [1]=>
+  string(1) "a"
+  [2]=>
+  string(1) "b"
+  [3]=>
+  string(1) "c"
+  [4]=>
+  string(0) ""
+}
+last_error=0
+== 359
+array(2) {
+  [0]=>
+  string(0) ""
+  [1]=>
+  string(3) "abc"
+}
+last_error=0
+== 360
+array(2) {
+  [0]=>
+  string(1) "a"
+  [1]=>
+  string(2) "bc"
+}
+last_error=0
+== 361
+bool(false)
+last_error=4
+== 362
+array(3) {
+  [0]=>
+  string(3) "abc"
+  [1]=>
+  string(3) "def"
+  [2]=>
+  string(7) "ghijklm"
+}
+last_error=0
+== 363
+array(11) {
+  [0]=>
+  string(1) "1"
+  [1]=>
+  string(1) "2"
+  [2]=>
+  string(8) "3 a123 1"
+  [3]=>
+  string(1) "2"
+  [4]=>
+  string(1) "3"
+  [5]=>
+  string(1) "4"
+  [6]=>
+  string(1) "5"
+  [7]=>
+  string(1) "6"
+  [8]=>
+  string(8) "7 b123 1"
+  [9]=>
+  string(1) "2"
+  [10]=>
+  string(1) "3"
+}
+last_error=0
+== 364
+array(3) {
+  [0]=>
+  array(2) {
+    [0]=>
+    string(0) ""
+    [1]=>
+    int(0)
+  }
+  [1]=>
+  array(2) {
+    [0]=>
+    string(13) "s, preg_match"
+    [1]=>
+    int(13)
+  }
+  [2]=>
+  array(2) {
+    [0]=>
+    string(9) "
+{
+lalala"
+    [1]=>
+    int(27)
+  }
+}
+last_error=0
+== 365
+array(6) {
+  [0]=>
+  string(1) "x"
+  [1]=>
+  string(1) "a"
+  [2]=>
+  string(1) "y"
+  [3]=>
+  string(0) ""
+  [4]=>
+  string(1) "b"
+  [5]=>
+  string(1) "z"
+}
+last_error=0
+== 366
+array(5) {
+  [0]=>
+  string(1) "x"
+  [1]=>
+  string(1) "a"
+  [2]=>
+  string(1) "y"
+  [3]=>
+  string(1) "b"
+  [4]=>
+  string(1) "z"
+}
+last_error=0
+== 367
+array(6) {
+  [0]=>
+  array(2) {
+    [0]=>
+    string(1) "x"
+    [1]=>
+    int(0)
+  }
+  [1]=>
+  array(2) {
+    [0]=>
+    string(1) "a"
+    [1]=>
+    int(1)
+  }
+  [2]=>
+  array(2) {
+    [0]=>
+    string(1) "y"
+    [1]=>
+    int(2)
+  }
+  [3]=>
+  array(2) {
+    [0]=>
+    string(0) ""
+    [1]=>
+    int(-1)
+  }
+  [4]=>
+  array(2) {
+    [0]=>
+    string(1) "b"
+    [1]=>
+    int(3)
+  }
+  [5]=>
+  array(2) {
+    [0]=>
+    string(1) "z"
+    [1]=>
+    int(4)
+  }
+}
+last_error=0
+== 368
+array(2) {
+  [0]=>
+  string(1) "a"
+  [1]=>
+  string(1) "b"
+}
+last_error=0
+== 369
+array(2) {
+  [0]=>
+  string(1) "a"
+  [1]=>
+  string(1) "b"
+}
+last_error=0
+== 370
+array(1) {
+  [0]=>
+  string(0) ""
+}
+last_error=0
+== 371
+array(0) {
+}
+last_error=0
+== 372
+array(1) {
+  [0]=>
+  array(2) {
+    [0]=>
+    string(3) "abc"
+    [1]=>
+    int(0)
+  }
+}
+last_error=0
+== 375
+array(2) {
+  [1]=>
+  string(1) "1"
+  [2]=>
+  string(2) "q6"
+}
+last_error=0
+== 376
+array(2) {
+  [0]=>
+  string(1) "a"
+  [3]=>
+  string(3) "h20"
+}
+last_error=0
+== 377
+Warning: Compilation failed: quantifier does not follow a repeatable item at offset 0
+bool(false)
+last_error=1
+== 378
+array(3) {
+  [0]=>
+  string(1) "a"
+  [2]=>
+  string(2) "q6"
+  [3]=>
+  string(3) "h20"
+}
+last_error=0
+== 379
+array(1) {
+  [1]=>
+  string(1) "1"
+}
+last_error=0
+== 380
+bool(false)
+last_error=4
+== 381
+array(0) {
+}
+last_error=0
+== 384
+string(0) ""
+last_error=0
+== 385
+string(13) "\-oh really\?"
+last_error=0
+== 386
+string(2) "\#"
+last_error=0
+== 387
+string(12) "hello\#world"
+last_error=0
+== 388
+string(6) "a\000b"
+last_error=0
+== 389
+string(43) "\.\\\+\*\?\[\^\]\$\(\)\{\}\=\!\<\>\|\:\-\#/"
+last_error=0
+== 390
+string(4) "a\/b"
+last_error=0
+== 391
+string(4) "a\/b"
+last_error=0
+== 392
+string(3) "abc"
+last_error=0
+== 393
+string(5) "\�té"
+last_error=0
+== 394
+string(7) "nothing"
+last_error=0

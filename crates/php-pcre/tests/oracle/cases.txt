@@ -1,0 +1,394 @@
+# Oracle cases for php-pcre. Syntax: <op> <args...>
+# Strings: '...' (PHP single-quote rules) or "..." (\n \r \t \0 \xHH \\ \" escapes).
+# Flags: PREG_PATTERN_ORDER=1 PREG_SET_ORDER=2 PREG_OFFSET_CAPTURE=256 PREG_UNMATCHED_AS_NULL=512
+#        PREG_SPLIT_NO_EMPTY=1 PREG_SPLIT_DELIM_CAPTURE=2 PREG_SPLIT_OFFSET_CAPTURE=4 PREG_GREP_INVERT=1
+# Regenerate expectations with: php -n gen.php cases.txt > cases.expected
+
+# --- delimiters / modifiers (delimiters.phpt, null_bytes.phpt, errors) ---
+match_nocap '' ''
+match_nocap '      ' ''
+match_nocap '@@' ''
+match_nocap '12' ''
+match_nocap '<>' ''
+match_nocap '~a' ''
+match_nocap '@\@\@@' '@@'
+match_nocap '//z' '@@'
+match_nocap '{' ''
+match_nocap "\0\0" ''
+match_nocap "\0//i" ''
+match_nocap "/\0/i" ''
+match_nocap "/\0/i" "\0"
+match_nocap "//\0i" ''
+match_nocap "//i\0" ''
+match_nocap "/\\\0/i" ''
+match_nocap "/\\\0/i" "\\\0"
+match_nocap "\0[]i" ''
+match_nocap "[\0]i" ''
+match_nocap "[\0]i" "\0"
+match_nocap "[]\0i" ''
+match_nocap "[]i\0" ''
+match_nocap "[\\\0]i" ''
+match_nocap "[\\\0]i" "\\\0"
+match_nocap "/abc\0def/" 'abc'
+match_nocap "/abc\0def/" "abc\0def"
+match_nocap "/abc\0def/" "abc\0fed"
+match_nocap "[abc\0def]" 'abc'
+match_nocap "[abc\0def]" "abc\0def"
+match_nocap "[abc\0def]" "abc\0fed"
+match_nocap '/' 'Hello world'
+match_nocap 'abcdef' 'this is a test'
+match_nocap '/[a-zA-Z]' 'this is a test'
+match_nocap '[a-zA-Z]/' 'this is a test'
+match_nocap '/[a-zA-Z]/F' 'this is a test'
+match_nocap '/[a-zA-Z]/' 'this is a test'
+match_nocap '/(a)/e' 'abc'
+match_nocap "/foo/i\r" 'FOO'
+match_nocap "/foo/i \n" 'FOO'
+match_nocap '(a(b)c)' 'abc'
+match_nocap '(a(b)c' 'abc'
+match_nocap '{a{1,2}}' 'aa'
+match_nocap '<a<b>>' 'a<b>'
+match_nocap '[a\]]' ']'
+match_nocap '   /a/' 'a'
+match_nocap "\t\n/a/" 'a'
+match_nocap '/a/S' 'a'
+match_nocap '/\y/' '\y'
+match_nocap '/\y/X' '\y'
+match_nocap '/(?P<3>)/' ''
+match_nocap '/(/' ''
+match_nocap '/a)/' ''
+match_nocap '/[a/' ''
+match_nocap '/+/' ''
+match_nocap '/(?<n>a)(?<n>b)/' ''
+match_nocap '/(?<n>a)|(?<n>b)/J' 'b'
+match_nocap '/\p{Foo}/u' 'x'
+match_nocap '/a{1,3}b/U' 'ab'
+match_nocap "/\xe9/" "\xe9"
+match_nocap "\xa7a\xa7" 'a'
+match_nocap '/a/q' 'a'
+match_nocap "/a/\xe9" 'a'
+
+# --- preg_match basics ---
+match '/(\d+)-(\d+)/' 'tel 12-34 x'
+match '/x(.)/' 'fjszxax' 256
+match '/(.)x/' 'fjszxax' 256 4
+match '/(?P<capt1>.)(x)(?P<letsmix>\S+)/' 'fjszxax' 256
+match '/\d+/' '123 456 789 012' 0 -8
+match '/\d+/' '123 456 789 012' 0 -500
+match '/\d+/' '123 456 789 012' 0 15
+match '/\d+/' '123 456 789 012' 0 16
+match '/\d+/' '123 456 789 012' 0 99999
+match '' '' 4095
+match '/a/' 'a' 1
+match '/a/' 'a' 2
+match '/a/' 'a' 768
+match '/(a)?([a-z]*)(\d*)/' '123' 512
+match '/(4)?(2)?\d/' '23456' 512
+match '/(4)?(2)?\d/' '23456' 768
+match '/(4)?(2)?\d/' '23456' 256
+match '/(4)?(2)?\d/' '23456'
+match '/(?<a>4)?(?<b>2)?\d/' '23456' 512
+match '/(?<a>4)?(?<b>2)?\d/' '23456' 768
+match '/(?<a>4)?(?<b>2)?\d/' '23456'
+match '/(a)(b)?(c)?/' 'a'
+match '/(a)(b)?(c)/' 'ac'
+match '/(a)(b)?(c)/' 'ac' 256
+match '/(?J)(?:(?<g>foo)|(?<g>bar))/' 'foo'
+match '/(?J)(?:(?<g>foo)|(?<g>bar))/' 'foo' 512
+match '/(?J)(?:(?<g>foo)|(?<g>bar))/' 'foo' 256
+match '/(?J)(?:(?<g>foo)|(?<g>bar))/' 'foo' 768
+match '/(?J)(?:(?<g>foo)|(?<g>bar))(?<h>baz)/' 'foobaz'
+match '/(?J)(?:(?<g>foo)|(?<g>bar))(?<h>baz)/' 'foobaz' 512
+match '/(?J)(?:(?<g>foo)|(?<g>bar))(?<h>baz)/' 'foobaz' 256
+match '/(?J)(?:(?<g>foo)|(?<g>bar))(?<h>baz)/' 'foobaz' 768
+match '/(?J)(?:(?<g>foo)|(?<g>bar))/' 'bar'
+match '/(?P<size>\d+)m|M/' '4M'
+match '/(?P<MARK>[abc])(*MARK:value)/' 'abc'
+match '/(*MARK:A)a|(*MARK:B)b/' 'b'
+match '/(*MARK:A)a|(*MARK:B)b/' 'b' 768
+match '/a(*MARK:m)(?<x>b)?/' 'a' 512
+match '|(?P<name>blub)|' 'bla blub blah'
+match '|(?P<name>)(\d+)|' '4294967295'
+match '/(?<!\w)(0x[\p{N}]+[lL]?|[\p{Nd}]+(e[\p{Nd}]*)?[lLdDfF]?)(?!\w)/' 'bla bla bla'
+match '@^(/([a-z]*))*$@' '//abcde'
+match '@^(/(?:[a-z]*))*$@' '//abcde'
+match '@^(/([a-z]+))+$@' '/a/abcde'
+match '/([a-z]+_[a-z]+_*[a-z]+)_?(\d+)?/' 'component_phase_1'
+match '/\\\\([^\\\\]+)\s*$/' ' App\Domain\Repository\MetaData\SomethingRepositoryInterface'
+match '/<(\w+)[\s\w\-]+ id="S44_i89ew">/' '<br><div id="S44_i89ew">'
+match '~[^\p{Han}\p{Z}]~u' '     '
+match '/a e i o u/' 'aeiou'
+match '/a e i o u/x' 'aeiou'
+match "/a e\ni\to\ru/x" 'aeiou'
+match '/\PN+/' '123abc'
+match_nocap '/\P{N}+/A' '123abc'
+match_nocap '/^\P{N}+/' '123abc'
+match_nocap '/^\P{N}+/A' '123abc'
+match '/[a\-c]+/' 'a---b'
+match '/a\-{2,}/' 'a----a'
+match "~\n    (?P<date>\n    (?P<year>(\\d{2})?\\d\\d) -\n    (?P<month>(?:\\d\\d|[a-zA-Z]{2,3})) -\n    (?P<day>[0-3]?\\d))\n~x" '2006-05-13'
+match '/(a)|b/' 'b'
+match '/(a)|b/' 'b' 512
+match '/(a)|b/' 'b' 256
+match '/()/' 'x'
+match '/x*/' 'abc'
+match '/x*/' 'abc' 0 3
+match '/$/' 'abc' 0 1
+match '/\G\w/' 'ab' 0 1
+match '/^\w/' 'ab' 0 1
+match '/(?<=a)b/' 'ab' 0 1
+match '/^|\d{1,2}$/' '7'
+match '/\w/u' "\xc3\xa4"
+match '/\w/' "\xc3\xa4"
+match '/./u' "\xe2\x82\xac"
+match '/./' "\xe2\x82\xac"
+match '/[[:alpha:]]+/' 'abc123'
+match '/(?i)ABC/' 'xabcx'
+match '/abc/i' 'xABcx'
+match '/^b/m' "a\nb"
+match '/^b/' "a\nb"
+match '/a.c/s' "a\nc"
+match '/a.c/' "a\nc"
+match '/a$/' "a\n"
+match '/a$/D' "a\n"
+match '/a+/U' 'aaa'
+match '/a+?/U' 'aaa'
+match '/(a)(?:b)(c)/n' 'abc'
+match '/(?<x>a)(b)/n' 'ab'
+match '/AskZ/iu' "A\xc5\xbfkZ"
+match '/\d+/' 'abc' 0 -1
+match '/c/' 'abc' 0 -1
+match '/\bwasser/iu' 'Der ist ein Süßwasserpool Süsswasserpool ... verschiedene Wassersportmöglichkeiten bei ...' 256
+
+# --- UTF-8 checks ---
+match '/a/u' "\xE3\x82\xA2" 0 1
+match '/a/u' "\xE3\x82\xA2" 0 3
+match '~.*~u' "\xc3\xa9 uma string utf8 bem formada" 0 1
+match '~.*~u' "\xc3\xa9 uma string utf8 bem formada" 0 2
+match '/\b/u' "\xe2\x80\x99" 0 0
+match '/\b/u' "\xe2\x80\x99" 0 1
+match '/\b/u' "VA\xffLID" 0 4
+match '/\b/u' "VA\xffLID" 0 0
+match '/x/u' "\xff"
+match '/x/' "\xff"
+match_all '/(?<!\xe0\xb6\x9a)/u' "\xFC\xe0\xb6\xb8" 256
+match_all '/(?<!\xe0\xb6\x9a)/u' "\xe0\xb6\xb8" 256
+
+# --- preg_match_all ---
+match_all '/(.)x/' 'zxax' 1
+match_all '/(.)x/' 'zxyx' 2
+match_all '/(.)x/' 'zxyx' 256
+match_all '/(.)x/' 'zxyx' 258
+match_all '/(.)x/' 'zxyx' 3
+match_all '/(.)x/' 'zxyx' 57005
+match_all '/(.)x/' 'zxyx' 512
+match_all '/(4)?(2)?\d/' '123456' 512
+match_all '/(4)?(2)?\d/' '123456' 768
+match_all '/(4)?(2)?\d/' '123456' 514
+match_all '/(4)?(2)?\d/' '123456' 770
+match_all '/(4)?(2)?\d/' '123456'
+match_all '/(4)?(2)?\d/' '123456' 2
+match_all '/(4)?(2)?\d/' '123456' 256
+match_all '/(4)?(2)?\d/' '123456' 258
+match_all '/(?<a>4)?(?<b>2)?\d/' '123456' 512
+match_all '/(?<a>4)?(?<b>2)?\d/' '123456' 768
+match_all '/(?<a>4)?(?<b>2)?\d/' '123456' 514
+match_all '/(?<a>4)?(?<b>2)?\d/' '123456' 770
+match_all '/(?<a>4)?(?<b>2)?\d/' '123456' 2
+match_all '/(?P<word>the)/' 'what the word and the other word the'
+match_all '/(?J)(?<chr>[ac])(?<num>\d)|(?<chr>[b])/' 'a1bc3' 2
+match_all '/(?<chr>[ac])(?<num>\d)|(?<chr>[b])/J' 'a1bc3' 2
+match_all '/(?<chr>[ac])(?<num>\d)|(?<chr>[b])/J' 'a1bc3' 1
+match_all '/\d+/' '123 456 789 012' 0 -8
+match_all '/\b/' "a'" 256
+match_all '/x*/' 'abc'
+match_all '/x*/' 'abc' 256
+match_all '//u' "\xe2\x82\xac hi"
+match_all '/./u' "\xe2\x82\xac hi"
+match_all '/\S\S/u' "A\xc2\xa3BC"
+match_all '/\W{2}/u' "A\xe2\x82\xac "
+match_all '/^.{2,3}$/' "aei\nou"
+match_all '/^.{2,3}$/m' "aei\nou\n"
+match_all '/^\S+.+$/' "aeiou\n"
+match_all '/^\S+.+$/D' "aeiou\n"
+match_all '/^\S+\s$/D' "aeiou\n"
+match_all '|(\w+)://([^\s"<]*[\w+#?/&=])|' 'This is a text string' 2
+match_all '|(\w+)://([^\s"<]*[\w+#?/&=])|' 'This is a text string' 1
+match_all '/~(?: |\G)\d\B\K~/' '123 a123 1234567 b123 123'
+match_all '~(?: |\G)\d\B\K~' '123 a123 1234567 b123 123'
+match_all "/\n    _ (a) (*MARK:A_MARK) _\n  | _ (b) _\n  | _ (c) (*MARK:C_MARK) _\n  | _ (d) _\n/x" '_a__b__c__d_' 1
+match_all "/\n    _ (a) (*MARK:A_MARK) _\n  | _ (b) _\n  | _ (c) (*MARK:C_MARK) _\n  | _ (d) _\n/x" '_a__b__c__d_' 2
+match "/\n    _ (a) (*MARK:A_MARK) _\n  | _ (b) _\n  | _ (c) (*MARK:C_MARK) _\n  | _ (d) _\n/x" '_c_'
+match_all '/((?:(?:unsigned|struct)\s+)?\w+)(?:\s*(\*+)\s+|\s+(\**))(\w+(?:\[\s*\w*\s*\])?)\s*(?:(=)[^,;]+)?((?:\s*,\s*\**\s*\w+(?:\[\s*\w*\s*\])?\s*(?:=[^,;]+)?)*)\s*;/S' 'unsigned int xpto = 124; short a, b;' 2
+match_all '/zend_parse_parameters(?:_ex\s*\([^,]+,[^,]+|\s*\([^,]+),\s*"([^"]*)"\s*,\s*([^{;]*)/S' 'zend_parse_parameters( 0, "addd|s/", a, b, &c);' 258
+match_all "~\n    (?P<date>\n    (?P<year>(\\d{2})?\\d\\d) -\n    (?P<month>(?:\\d\\d|[a-zA-Z]{2,3})) -\n    (?P<day>[0-3]?\\d))\n    ~x" '2006-05-13 e outra data: "12-Aug-37"' 1
+match_all "~\n    (?P<date>\n    (?P<year>(\\d{2})?\\d\\d) -\n    (?P<month>(?:\\d\\d|[a-zA-Z]{2,3})) -\n    (?P<day>[0-3]?\\d))\n    ~x" '2006-05-13 e outra data: "12-Aug-37"' 2
+match_all '/(.*)\C/' "\xc3\xa0"
+match_all '/(\d)+/' 'foo123456bar'
+match_all '/a/' 'aaa' 0 4
+match_all '/a/' 'aaa' 0 -2
+match_all_nocap '/a/' 'banana'
+match_all_nocap '/x*/' 'banana'
+match_all_nocap '/a/u' "\xff"
+
+# --- limits (backtrack_limit.phpt, recursion_limit.phpt, errors0x) ---
+ini 'pcre.jit' 0
+ini 'pcre.backtrack_limit' 2
+match_all '/.*\p{N}/' '0123456789'
+match_all '/\p{Nd}/' '0123456789'
+match_nocap '/(?:\D+|<\d+>)*[!?]/' 'foobar foobar foobar'
+replace '/.*\p{N}/' 'x' '0123456789'
+split '/.*\p{N}/' '0123456789'
+grep '/.*\p{N}/' ['0123456789']
+ini 'pcre.backtrack_limit' 1000000
+ini 'pcre.recursion_limit' 2
+match_all '/\p{Ll}(\p{L}((\p{Ll}\p{Ll})))/' 'aeiou'
+match_all '/\p{Ll}\p{L}\p{Ll}\p{Ll}/' 'aeiou'
+ini 'pcre.recursion_limit' 1
+split '/(\d*)/' 'ab2c3u'
+grep '@^[a-z]+@' ['a', '1', 'q6', 'h20']
+ini 'pcre.recursion_limit' 100000
+ini 'pcre.jit' 1
+ini 'pcre.recursion_limit' 1
+split '/(\d*)/' 'ab2c3u'
+ini 'pcre.recursion_limit' 100000
+match_nocap '/(*NO_JIT)^(A{1,2}B)+$$/' 'ABABABABABABABABABABABABABABABABABABABAB'
+match_nocap '/((?1)?z)/' ''
+
+# --- preg_replace ---
+replace '/(.)/' '${1}${1' 'abc'
+replace '/.++\d*+[/' 'for ($' 'abc'
+replace '/(.)/e' 'for ($' 'abc'
+replace '{{\D+}}' 'x' '{abcd}'
+replace '{{\D+}}' 'ddd' 'abcd'
+replace '/(ab)(c)(d)(e)(f)(g)(h)(i)(j)(k)/' 'a${1}2$103' 'zabcdefghijkl'
+replace '/1/' 'One ' '1111111111' 1
+replace '/1/' 'One ' '1111111111' 10
+replace '/1/' 'One ' '1111111111' 0
+replace '/1/' 'One ' '1111111111' -5
+replace '/(([0-9a-z]+)-([0-9]+))-(([0-9]+)-([0-9]+))/' 'xxxx' '1-2-3-4 a-2-3-4 1-a-3-4 1-2-a-4 1-2-3-a a-a-a-a 4-3-2-1 100-200-300-400-500-600-700-800'
+replace '/([a-z]+)/' 'xxxx' 'Here must only number like 42 and 13 appear'
+replace '~((V(I|1)(4|A)GR(4|A))|(V(I|1)C(0|O)D(I|1)(N|\/\\\/)))~i' '...' 'Viagra V14GR4 Vicodin V1C0D1/\/ v1c0d1/|/'
+replace '/(a)(b)?/' '[\1|\2|\3|$0|${0}|\\1|\$1|$|\]' 'xaby a'
+replace '/(a)/' '\\\\\1' 'a'
+replace '/(a)/' '$11 ${11} $1a \11' 'a'
+replace '/(a)/' "\\\0\\0" 'a'
+replace '/(a)/' '${1' 'a'
+replace '/(a)/' "\\" 'a'
+replace '/(a)/' "x\\" 'a'
+replace '/(a)/' '$' 'a'
+replace '/(a)/' '\$\\$' 'a'
+replace '/x*/' '-' 'abc'
+replace '/x*/' '-' 'abc' 2
+replace '//u' '' "a\xf0\x9f\x98\x92\xf0\x9f\x98\x92"
+replace '//u' '|' "\xc3\xa9t\xc3\xa9"
+replace '//' '|' "\xc3\xa9t"
+replace "/(?<!\xe0\xb6\x9a)/u" '*' "\xe0\xb6\x9a"
+replace "/(?<!\xe0\xb6\x9a)/u" '*' "\xe0\xb6\xb8"
+replace '/(?<!k)/u' '*' 'k'
+replace '/(?<!k)/u' '*' 'm'
+replace "/(?<!\xe0\xb6\x9a)/u" '*' "\xFC\xe0\xb6\x9a"
+replace "/(?<!\xe0\xb6\x9a)/u" '*' "\xe0\xb6\x9a\xFC"
+replace '/[^\pL\pM]*/iu' '' "\xc3\xa1\xc3\xa9\xc3\xad\xc3\xb3\xc3\xba"
+replace '/[^\pL\pM]*/iu' '' "\xFC\xc3\xa1\xc3\xa9"
+replace '#(&\#x*)([0-9A-F]+);*#iu' '$1$2;' "search\xe4"
+replace '~(?: |\G)\d\B\K~' '*' '123 a123 1234567 b123 123'
+replace '/[\p{L}\p{Arabic}]/' '0' 'lower UPPER'
+replace '/[^\p{L}\p{Arabic}]/' '0' 'lower UPPER'
+replace '#\[(right)\](((?R)|[^[]+?|\[)*)\[/\\1\]#siU' '' '[CODE]&lt;td align=&quot;$stylevar[right]&quot;&gt;[/CODE]'
+replace ['/a/', '/b/'] ['b', 'c'] 'ab'
+replace ['/a/', '/b/', '/c/'] ['b'] 'abc'
+replace ['/a/', '/b/'] 'x' 'ab'
+replace ['/a/', 'bad', '/c/'] 'x' 'abc'
+replace ['/Monkey/'] ['2016'] 'Happy Year of Monkey'
+replace ['/\da(.)/ui', '@..@'] '$1' '12Abc'
+replace ['/\b\w{1}s/', '/(\d{1})*(\d{1})/', '/[\(!\)]/'] ['test', '$1 to $2', '*'] 'This is a string. It contains numbers (0*9) as well as parentheses and some other things!'
+replace '/\s/' '-' 'Eins zwei drei'
+replace '/a/' 'b' ''
+replace '/^/' 'b' ''
+replace '/$/m' '!' "a\nb\n"
+replace '/\R/' '|' "a\r\nb\nc\rd"
+filter '/\d/' 'N' 'a1b2'
+filter '/\d/' 'N' 'abc'
+filter ['/\d/', '/a/'] 'N' 'abc'
+filter '/\d/' 'N' 'a1b2' 1
+
+# --- preg_replace_callback ---
+callback '|(?P<name>blub)|' 'bla blub blah'
+callback '/(ab)(cd)(e)/' 'abcde'
+callback '`a+`' 'aaa bbb ccc ddd eee ccc aaa bbb'
+callback '/./' 'abc' -1 256
+callback '/(a)|(b)/' 'abc' -1 512
+callback '/(a)|(b)/' 'abc' -1 768
+callback '/(a)|(b)/' 'abc'
+callback '/(?<n>a)|(?<m>b)/' 'abc' -1 512
+callback '/(?J)(?:(?<g>foo)|(?<g>bar))/' 'bar'
+callback "/\n    _ (a) (*MARK:A_MARK) _\n  | _ (b) _\n  | _ (c) (*MARK:C_MARK) _\n  | _ (d) _\n/x" '_a__b__c__d_'
+callback '//u' "a\xf0\x9f\x98\x92"
+callback '/x*/' 'ab'
+callback '/x*/' 'ab' 1
+callback '/a/' 'aaa' 2
+callback '/a/u' "a\xff"
+callback '/(a)/' 'xyz'
+callback '/a/' 'aaa' 0
+
+# --- preg_split ---
+split '/*/' 'x'
+split '/[\s, ]+/' 'x yy,zzz'
+split '/[\s, ]+/' 'x yy,zzz' -1
+split '/[\s, ]+/' 'x yy,zzz' 0
+split '/[\s, ]+/' 'x yy,zzz' 1
+split '/[\s, ]+/' 'x yy,zzz' 2
+split '/[\s, ]+/' 'x yy,zzz' -2
+split '/\d*/' 'ab2c3u'
+split '/\d*/' 'ab2c3u' -1 1
+split '/(\d*)/' 'ab2c3u' -1 2
+split '/(\d*)/' 'ab2c3u' -1 4
+split '/(\d*)/' 'ab2c3u' -1 3
+split '/(\d*)/' 'ab2c3u' -1 5
+split '/(\d*)/' 'ab2c3u' -1 6
+split '/(\d*)/' 'ab2c3u' -1 7
+split '/\b/' '(#11/19/2002#)'
+split '/\b/' "a'"
+split '/\b/' "a'" -1 4
+split '/\b/' "a'" -1 1
+split '/\b/' "a'" -1 5
+split '//u' "\xe2\x82\xac hi there" -1 1
+split '//u' "\r\n" -1 1
+split '//' 'abc'
+split '//' 'abc' 2
+split '//' 'abc' 2 1
+split '/a/u' "a\xff"
+split '~.{3}\K~' 'abcdefghijklm' 3
+split '~(?: |\G)\d\B\K~' '123 a123 1234567 b123 123'
+split '/PHP_(?:NAMED_)?(?:FUNCTION|METHOD)\s*\((\w+(?:,\s*\w+)?)\)/S' "PHP_FUNCTION(s, preg_match)\n{\nlalala" -1 6
+split '/(a)|(b)/' 'xaybz' -1 2
+split '/(a)|(b)/' 'xaybz' -1 3
+split '/(a)|(b)/' 'xaybz' -1 6
+split '/,/' ',a,,b,' -1 1
+split '/,/' ',a,,b,' 3 1
+split '/,/' ''
+split '/,/' '' -1 1
+split '/x/' 'abc' 1 4
+
+# --- preg_grep ---
+grep '/^(\d|.\d)$/' ['a', '1', 'q6', 'h20']
+grep '/^(\d|.\d)$/' ['a', '1', 'q6', 'h20'] 1
+grep '/+/' []
+grep '@^[a-z]+@' ['a', '1', 'q6', 'h20']
+grep '@^[a-z]+@' ['a', '1', 'q6', 'h20'] 1
+grep '#\d#u' ['a', "1\xFF", 'c']
+grep '/do not match/' ['1', '2', '']
+
+# --- preg_quote ---
+quote ''
+quote '-oh really?'
+quote '#'
+quote 'hello#world' '~'
+quote "a\0b"
+quote '.\+*?[^]$(){}=!<>|:-#/'
+quote 'a/b' '/'
+quote 'a/b' '/x'
+quote 'abc' ''
+quote "\xe9t\xc3\xa9" "\xe9"
+quote 'nothing'

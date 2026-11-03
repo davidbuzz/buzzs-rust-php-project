@@ -182,11 +182,12 @@ impl Regex {
             tables.as_deref(),
         )
         .map_err(|e| {
-            let message = if e.code == ffi::PCRE2_ERROR_BACKSLASH_C_CALLER_DISABLED as i32 {
-                b"using \\C is incompatible with the 'u' modifier".to_vec()
-            } else {
-                ffi::error_message(e.code)
-            };
+            let message =
+                if u32::try_from(e.code) == Ok(ffi::PCRE2_ERROR_BACKSLASH_C_CALLER_DISABLED) {
+                    b"using \\C is incompatible with the 'u' modifier".to_vec()
+                } else {
+                    ffi::error_message(e.code)
+                };
             CompileError::Compilation {
                 message,
                 offset: e.offset,
