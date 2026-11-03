@@ -8,7 +8,7 @@
 //! * [`exec`] — `escapeshellarg`/`escapeshellcmd`, `exec`/`system`/
 //!   `passthru`/`shell_exec`, `proc_nice`.
 //! * [`process`] — `proc_open`/`proc_close`/`proc_get_status`/
-//!   `proc_terminate` (posix_spawn; pipes handed back as descriptors).
+//!   `proc_terminate` (`posix_spawn`; pipes handed back as descriptors).
 //! * [`net`] — `inet_*`, `ip2long`/`long2ip`, host/service/protocol
 //!   lookups, `net_get_interfaces`, `openlog`/`syslog`/`closelog`.
 //! * [`dns`] — `dns_get_record` (wire-format parser), `dns_get_mx`,
