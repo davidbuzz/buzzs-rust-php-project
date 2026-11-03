@@ -26,11 +26,14 @@ php-ext-pdo = { path = "../php-ext-pdo" }
 php-ext-date = { path = "../php-ext-date" }
 php-ext-session = { path = "../php-ext-session" }
 php-ext-openssl = { path = "../php-ext-openssl" }
+php-ext-sodium = { path = "../php-ext-sodium" }
 php-ext-posix = { path = "../php-ext-posix" }
 php-ext-iconv = { path = "../php-ext-iconv" }
 php-ext-intl = { path = "../php-ext-intl" }
 php-ext-exif = { path = "../php-ext-exif" }
 php-ext-zlib = { path = "../php-ext-zlib" }
+php-ext-zip = { path = "../php-ext-zip" }
+php-ext-phar = { path = "../php-ext-phar" }
 php-ext-gettext = { path = "../php-ext-gettext" }
 php-ext-sysv = { path = "../php-ext-sysv" }
 php-ext-calendar = { path = "../php-ext-calendar" }
