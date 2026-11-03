@@ -12,6 +12,7 @@
 //! | `exif_read_data`, `exif_thumbnail`, `exif_imagetype`, `exif_tagname` | [`exif`] |
 //! | `getimagesize`, `getimagesizefromstring`, `image_type_to_*`, `iptc*` | [`image`] |
 //! | `IMAGETYPE_*`, `EXIF_USE_MBSTRING`, `exif.*` INI | [`Exif::register`] |
+//! | `php_image_register_handler()` (image types of other modules) | [`register_image_handler`] |
 
 mod convert;
 mod exif;
@@ -24,6 +25,31 @@ use php_runtime::Value;
 use php_support::ini::{Access, IniDirective, ModifyHandler};
 use php_vm::ext::{Extension, InfoItem, ModuleBuilder, VmResult};
 use php_vm::Vm;
+
+pub use php_exif::handlers::{ImageHandler, ImageInput};
+pub use php_exif::GfxInfo;
+
+/// The constant counting the image types (built-in plus registered).
+const IMAGETYPE_COUNT: &str = "IMAGETYPE_COUNT";
+
+/// `php_image_register_handler()`, for another module's
+/// [`Extension::register`]: adds `handler` to the image type table used by
+/// `getimagesize()`, `exif_imagetype()` and `image_type_to_*()`, defines its
+/// `IMAGETYPE_*` constant and bumps `IMAGETYPE_COUNT`. Returns the type id.
+pub fn register_image_handler(m: &mut ModuleBuilder<'_>, handler: &'static ImageHandler) -> i64 {
+    let id = php_exif::handlers::register_handler(handler);
+    m.constant(handler.const_name, Value::Int(id));
+    // Defined already when this module registers after `exif`; otherwise
+    // `exif` picks the new count up when it registers.
+    if let Some(count) = m
+        .vm()
+        .constants
+        .get_mut(&php_runtime::ZStr::from(IMAGETYPE_COUNT))
+    {
+        *count = Value::Int(php_exif::handlers::image_type_count());
+    }
+    id
+}
 
 /// The `exif` extension (also providing ext/standard's image functions,
 /// which share its parsers).
@@ -130,7 +156,12 @@ impl Extension for Exif {
         m.info(info);
         m.constant("EXIF_USE_MBSTRING", Value::Int(php_exif::EXIF_USE_MBSTRING));
         for (name, value) in php_exif::imagetype::IMAGETYPE_CONSTANTS {
-            m.constant(name, Value::Int(*value));
+            let value = if *name == IMAGETYPE_COUNT {
+                php_exif::handlers::image_type_count()
+            } else {
+                *value
+            };
+            m.constant(name, Value::Int(value));
         }
         exif::register(m);
         image::register(m);

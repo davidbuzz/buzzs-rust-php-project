@@ -104,7 +104,9 @@ pub fn image_type_to_mime_type(image_type: i64) -> &'static str {
         IMAGETYPE_WEBP => "image/webp",
         IMAGETYPE_AVIF => "image/avif",
         IMAGETYPE_HEIF => "image/heif",
-        _ => "application/octet-stream",
+        _ => {
+            crate::handlers::handler(image_type).map_or("application/octet-stream", |h| h.mime_type)
+        }
     }
 }
 
@@ -129,9 +131,13 @@ pub fn image_type_to_extension(image_type: i64, include_dot: bool) -> Option<&'s
         IMAGETYPE_WEBP => ".webp",
         IMAGETYPE_AVIF => ".avif",
         IMAGETYPE_HEIF => ".heif",
-        _ => return None,
+        _ => crate::handlers::handler(image_type)?.extension,
     };
-    Some(if include_dot { ext } else { &ext[1..] })
+    Some(if include_dot {
+        ext
+    } else {
+        ext.get(1..).unwrap_or_default()
+    })
 }
 
 /// `php_sig_*` byte signatures.
@@ -275,7 +281,7 @@ pub(crate) fn getimagetype<R: Read + Seek>(
     if get_xbm(stream, budget).is_some() {
         return IMAGETYPE_XBM;
     }
-    IMAGETYPE_UNKNOWN
+    crate::handlers::identify(stream).unwrap_or(IMAGETYPE_UNKNOWN)
 }
 
 /// `exif_imagetype($filename)` on the opened stream: the `IMAGETYPE_*`

@@ -17,6 +17,7 @@
 //! | `image_type_to_mime_type()` / `image_type_to_extension()` | [`imagetype::image_type_to_mime_type`] / [`imagetype::image_type_to_extension`] |
 //! | `iptcparse()` / `iptcembed()` | [`iptc::iptcparse`] / [`iptc::iptcembed`] |
 //! | `IMAGETYPE_*` | [`imagetype::IMAGETYPE_CONSTANTS`] |
+//! | `php_image_register_handler()` | [`handlers::register_handler`] |
 //! | `EXIF_USE_MBSTRING` | [`EXIF_USE_MBSTRING`] |
 //! | `exif.*` INI | [`exif::ExifConfig`], [`exif::INI_ENTRIES`] |
 //!
@@ -47,6 +48,7 @@ pub mod diag;
 pub mod encoding;
 pub mod exif;
 pub mod fmt;
+pub mod handlers;
 pub mod imagesize;
 pub mod imagetype;
 mod inflate;

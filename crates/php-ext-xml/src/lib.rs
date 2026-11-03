@@ -18,6 +18,7 @@
 // infallible ones still return `VmResult`.
 #![allow(clippy::unnecessary_wraps)]
 
+mod image_svg;
 pub mod libxml;
 pub mod mime_sniff;
 pub mod xml;
@@ -36,6 +37,7 @@ impl Extension for Libxml {
 
     fn register(&self, m: &mut ModuleBuilder<'_>) {
         libxml::register(m);
+        php_ext_exif::register_image_handler(m, &image_svg::HANDLER);
     }
 }
 

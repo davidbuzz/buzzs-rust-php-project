@@ -12,6 +12,11 @@ php-runtime = { path = "../php-runtime" }
 php-libxml = { path = "../php-libxml" }
 php-streams = { path = "../php-streams" }
 php-ext-streams = { path = "../php-ext-streams" }
+php-ext-exif = { path = "../php-ext-exif" }
+php-xmlreader = { path = "../php-xmlreader" }
+
+[dev-dependencies]
+php-exif = { path = "../php-exif" }
 
 [lints]
 workspace = true

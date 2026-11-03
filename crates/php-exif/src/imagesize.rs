@@ -11,13 +11,18 @@ use crate::imagetype::{self, getimagetype, image_type_to_mime_type};
 use crate::inflate::{self, Outcome};
 use crate::stream::PhpStream;
 
-/// `struct php_gfxinfo` (units are always pixels for the built-in formats).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+/// `struct php_gfxinfo` (units are always pixels for the built-in formats;
+/// registered handlers may report others).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct GfxInfo {
-    /// Width in pixels.
+    /// Width (in `width_unit`).
     pub width: u32,
-    /// Height in pixels.
+    /// Height (in `height_unit`).
     pub height: u32,
+    /// The width's unit; `None` means pixels.
+    pub width_unit: Option<String>,
+    /// The height's unit; `None` means pixels.
+    pub height_unit: Option<String>,
     /// Bits per channel (0 = unknown, omitted from the result array).
     pub bits: u32,
     /// Number of channels (0 = unknown, omitted from the result array).
@@ -43,20 +48,23 @@ impl ImageSizeOutcome {
     /// The PHP return value: the 7-element array (`0`, `1`, `2`, `3`,
     /// `bits`?, `channels`?, `mime`, `width_unit`, `height_unit`) or `false`.
     pub fn to_value(&self) -> Value {
-        let Some(info) = self.info else {
+        let Some(info) = &self.info else {
             return Value::Bool(false);
         };
+        let is_px = |u: &Option<String>| u.as_deref().is_none_or(|u| u == "px");
         let mut ht = HashTable::new();
         ht.insert(0i64, Value::Int(i64::from(info.width)));
         ht.insert(1i64, Value::Int(i64::from(info.height)));
         ht.insert(2i64, Value::Int(self.image_type));
-        // "%d" of the unsigned fields.
-        #[allow(clippy::cast_possible_wrap)]
-        let html = format!(
-            "width=\"{}\" height=\"{}\"",
-            info.width as i32, info.height as i32
-        );
-        ht.insert(3i64, Value::string(html));
+        if is_px(&info.width_unit) && is_px(&info.height_unit) {
+            // "%d" of the unsigned fields.
+            #[allow(clippy::cast_possible_wrap)]
+            let html = format!(
+                "width=\"{}\" height=\"{}\"",
+                info.width as i32, info.height as i32
+            );
+            ht.insert(3i64, Value::string(html));
+        }
         if info.bits != 0 {
             ht.insert(key("bits"), Value::Int(i64::from(info.bits)));
         }
@@ -67,8 +75,14 @@ impl ImageSizeOutcome {
             key("mime"),
             Value::string(image_type_to_mime_type(self.image_type)),
         );
-        ht.insert(key("width_unit"), Value::string("px"));
-        ht.insert(key("height_unit"), Value::string("px"));
+        ht.insert(
+            key("width_unit"),
+            Value::string(info.width_unit.as_deref().unwrap_or("px")),
+        );
+        ht.insert(
+            key("height_unit"),
+            Value::string(info.height_unit.as_deref().unwrap_or("px")),
+        );
         Value::Array(ZArray::from_table(ht))
     }
 }
@@ -174,7 +188,7 @@ fn handle<R: Read + Seek>(
                 None
             }
         }
-        _ => None,
+        _ => crate::handlers::handler(itype).and_then(|h| (h.get_info)(s)),
     }
 }
 
@@ -214,6 +228,7 @@ fn handle_gif<R: Read + Seek>(s: &mut PhpStream<R>) -> Option<GfxInfo> {
             0
         },
         channels: 3,
+        ..GfxInfo::default()
     })
 }
 
@@ -242,6 +257,7 @@ fn handle_bmp<R: Read + Seek>(s: &mut PhpStream<R>) -> Option<GfxInfo> {
             height: le16(&d[6..]),
             bits: u32::from(d[11]),
             channels: 0,
+            ..GfxInfo::default()
         })
     } else if size > 12 && (size <= 64 || size == 108 || size == 124) {
         Some(GfxInfo {
@@ -249,6 +265,7 @@ fn handle_bmp<R: Read + Seek>(s: &mut PhpStream<R>) -> Option<GfxInfo> {
             height: (le32(&d[8..]) as i32).wrapping_abs() as u32,
             bits: le16(&d[14..]),
             channels: 0,
+            ..GfxInfo::default()
         })
     } else {
         None
@@ -358,6 +375,7 @@ fn handle_png<R: Read + Seek>(s: &mut PhpStream<R>) -> Option<GfxInfo> {
         height: be32(&d[4..]),
         bits: u32::from(d[8]),
         channels: 0,
+        ..GfxInfo::default()
     })
 }
 
@@ -457,6 +475,7 @@ fn handle_jpeg<R: Read + Seek>(
                         height,
                         bits,
                         channels,
+                        ..GfxInfo::default()
                     });
                     if info.is_none() || length < 8 {
                         return result;
@@ -523,6 +542,7 @@ fn handle_jpc<R: Read + Seek>(
         height,
         bits: highest as u32,
         channels,
+        ..GfxInfo::default()
     })
 }
 
@@ -654,6 +674,7 @@ fn handle_iff<R: Read + Seek>(s: &mut PhpStream<R>) -> Option<GfxInfo> {
                     height: height.unsigned_abs().into(),
                     bits: bits.unsigned_abs().into(),
                     channels: 0,
+                    ..GfxInfo::default()
                 });
             }
         } else if !s.seek_cur(i128::from(size)) {
@@ -847,6 +868,7 @@ fn handle_webp<R: Read + Seek>(s: &mut PhpStream<R>) -> Option<GfxInfo> {
         height,
         bits: 8,
         channels: 0,
+        ..GfxInfo::default()
     })
 }
 
@@ -856,6 +878,7 @@ fn handle_avif<R: Read + Seek>(s: &mut PhpStream<R>) -> Option<GfxInfo> {
         height: f.height,
         bits: f.bit_depth,
         channels: f.num_channels,
+        ..GfxInfo::default()
     })
 }
 
@@ -889,7 +912,8 @@ mod tests {
                 width: 2,
                 height: 3,
                 bits: 1,
-                channels: 3
+                channels: 3,
+                ..GfxInfo::default()
             })
         );
         let o = getimagesizefromstring(b"", true);
