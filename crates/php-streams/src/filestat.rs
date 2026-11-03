@@ -88,8 +88,6 @@ impl FsType {
 /// The result of [`php_stat`].
 #[derive(Debug, Clone, PartialEq)]
 pub enum StatResult {
-    /// `false`.
-    False,
     /// A boolean.
     Bool(bool),
     /// An integer.
@@ -104,7 +102,6 @@ impl StatResult {
     /// Converts to a [`Value`].
     pub fn to_value(&self) -> Value {
         match self {
-            StatResult::False => Value::Bool(false),
             StatResult::Bool(b) => Value::Bool(*b),
             StatResult::Int(i) => Value::Int(*i),
             StatResult::Str(s) => Value::str(*s),
@@ -121,7 +118,7 @@ fn getuid() -> i64 {
 #[allow(clippy::too_many_lines)]
 pub fn php_stat(filename: &[u8], ty: FsType) -> StatResult {
     if filename.is_empty() {
-        return StatResult::False;
+        return StatResult::Bool(false);
     }
     let mut located = None;
     if ty.is_able_check() || ty == FsType::Exists {
@@ -129,7 +126,7 @@ pub fn php_stat(filename: &[u8], ty: FsType) -> StatResult {
         if let Some(loc) = &located {
             if loc.wrapper.is_plain_files() {
                 if !paths::check_open_basedir(&loc.path) {
-                    return StatResult::False;
+                    return StatResult::Bool(false);
                 }
                 let mut check = loc.path.clone();
                 if wrapper::scheme_len(&check) > 0 {
@@ -164,7 +161,7 @@ pub fn php_stat(filename: &[u8], ty: FsType) -> StatResult {
             located = wrapper::locate(filename, 0);
             if let Some(loc) = &located {
                 if loc.wrapper.is_plain_files() && !paths::check_open_basedir(&loc.path) {
-                    return StatResult::False;
+                    return StatResult::Bool(false);
                 }
             }
         }
@@ -183,7 +180,7 @@ pub fn php_stat(filename: &[u8], ty: FsType) -> StatResult {
                     filename,
                 ]));
             }
-            return StatResult::False;
+            return StatResult::Bool(false);
         };
         if link {
             state::stat_cache_put(filename, true, sb);
