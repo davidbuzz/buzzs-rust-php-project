@@ -160,6 +160,23 @@ pub(crate) fn function_module(
     })
 }
 
+/// ext/standard classes the VM registers itself.
+const STANDARD_CLASSES: &[&[u8]] = &[
+    b"assertionerror",
+    b"directory",
+    b"__php_incomplete_class",
+    b"php_user_filter",
+    b"roundingmode",
+    b"sortdirection",
+    b"streambucket",
+    b"streamerror",
+    b"streamerrorcode",
+    b"streamerrormode",
+    b"streamerrorstore",
+    b"streamexception",
+    b"streampollhandle",
+];
+
 /// The extension of an internal class.
 pub(crate) fn class_module(vm: &Vm, c: &Rc<Class>) -> Option<String> {
     if c.flags & cflags::INTERNAL == 0 {
@@ -174,6 +191,9 @@ pub(crate) fn class_module(vm: &Vm, c: &Rc<Class>) -> Option<String> {
     let n = c.lc_name.as_bytes();
     if n.starts_with(b"reflect") || n == b"propertyhooktype" {
         return Some("Reflection".into());
+    }
+    if STANDARD_CLASSES.contains(&n) || n.starts_with(b"io\\") {
+        return Some("standard".into());
     }
     Some("Core".into())
 }
@@ -944,22 +964,32 @@ fn re_get_dependencies(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 /// name, plus `m.*` directives the VM registers under `Core` on behalf of
 /// bundled extensions (`pcre.*`, `date.*`, ...).
 fn module_ini(vm: &Vm, m: &str) -> Option<Vec<php_support::ini::IniEntryInfo>> {
-    let mut entries = vm.ini.ini_get_all(Some(m)).unwrap_or_default();
-    if !m.eq_ignore_ascii_case("Core") {
-        let prefix = format!("{}.", m.to_ascii_lowercase());
-        if let Ok(core) = vm.ini.ini_get_all(Some("Core")) {
-            entries.extend(
-                core.into_iter()
-                    .filter(|e| e.name.to_ascii_lowercase().starts_with(&prefix)),
-            );
-        }
-    }
-    entries.sort_by(|a, b| {
-        a.name
-            .to_ascii_lowercase()
-            .cmp(&b.name.to_ascii_lowercase())
-    });
-    Some(entries)
+    let own: Vec<String> = vm
+        .ini
+        .ini_entries_registered(Some(m))
+        .unwrap_or_default()
+        .into_iter()
+        .map(|e| e.name)
+        .collect();
+    let prefix = format!("{}.", m.to_ascii_lowercase());
+    let borrowed: Vec<String> = if m.eq_ignore_ascii_case("Core") {
+        Vec::new()
+    } else {
+        vm.ini
+            .ini_entries_registered(Some("Core"))
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|e| e.name.to_ascii_lowercase().starts_with(&prefix))
+            .map(|e| e.name)
+            .collect()
+    };
+    // Registration order (`EG(ini_directives)`).
+    let all = vm.ini.ini_entries_registered(None).unwrap_or_default();
+    Some(
+        all.into_iter()
+            .filter(|e| own.contains(&e.name) || borrowed.contains(&e.name))
+            .collect(),
+    )
 }
 
 /// `display_ini_entries()` (text mode) for module `m`.

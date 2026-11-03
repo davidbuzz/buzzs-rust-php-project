@@ -419,6 +419,45 @@ pub(crate) fn hook_doc_comment(file: &[u8], line: u32, end: u32) -> Option<Vec<u
     v.found
 }
 
+/// Collects `static $x = expr;` initializers within a line range.
+struct StaticInits {
+    start: u32,
+    end: u32,
+    found: Vec<(Vec<u8>, Expr)>,
+}
+
+impl php_parser::visit::Visitor for StaticInits {
+    fn visit_stmt(&mut self, s: &Stmt) {
+        if let StmtKind::Static(vars) = &s.kind {
+            if s.span.line >= self.start && s.span.line <= self.end {
+                for v in vars {
+                    if let Some(e) = &v.default {
+                        if !self.found.iter().any(|(n, _)| *n == v.name.name) {
+                            self.found.push((v.name.name.clone(), e.clone()));
+                        }
+                    }
+                }
+            }
+        }
+        php_parser::visit::walk_stmt(self, s);
+    }
+}
+
+/// The initializer expressions of the `static` variables of the function
+/// spanning `file:start-end`.
+pub(crate) fn static_initializers(file: &[u8], start: u32, end: u32) -> Vec<(Vec<u8>, Expr)> {
+    let Some(p) = program(file) else {
+        return Vec::new();
+    };
+    let mut v = StaticInits {
+        start,
+        end,
+        found: Vec::new(),
+    };
+    php_parser::visit::walk_stmts(&mut v, &p.statements);
+    v.found
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

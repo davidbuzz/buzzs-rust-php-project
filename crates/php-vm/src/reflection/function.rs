@@ -154,7 +154,9 @@ pub(crate) fn static_vars(vm: &Vm, f: &FnRef) -> Vec<(ZStr, Value)> {
             .unwrap_or_default();
         let v = match store.get(idx as usize).cloned().flatten() {
             Some(r) => Value::Reference(r),
-            None => lit.unwrap_or(Value::Null),
+            None => lit
+                .or_else(|| static_const_init(vm, f, u, &name))
+                .unwrap_or(Value::Null),
         };
         if let Some(e) = out.iter_mut().find(|(n, _)| *n == name) {
             e.1 = v;
@@ -163,6 +165,88 @@ pub(crate) fn static_vars(vm: &Vm, f: &FnRef) -> Vec<(ZStr, Value)> {
         }
     }
     out
+}
+
+/// The value of a constant-expression `static` initializer that has not
+/// run yet (php-src stores these as constant ASTs in `static_variables`).
+fn static_const_init(
+    vm: &Vm,
+    f: &FnRef,
+    u: &crate::func::UserFunction,
+    name: &ZStr,
+) -> Option<Value> {
+    let inits =
+        super::source::static_initializers(u.code.filename.as_bytes(), u.line_start, u.line_end);
+    let (_, e) = inits
+        .into_iter()
+        .find(|(n, _)| n.as_slice() == name.as_bytes())?;
+    let scope = f.scope(vm);
+    const_eval(vm, &e, scope.as_ref())
+}
+
+/// Evaluates a side-effect-free constant expression (literals, arrays,
+/// global and class constants) without running code.
+fn const_eval(vm: &Vm, e: &php_parser::ast::Expr, scope: Option<&Rc<Class>>) -> Option<Value> {
+    use php_parser::ast::{ClassRef, ExprKind, MemberName, NameKind};
+    if let Some(v) = super::source::literal_value(e) {
+        return Some(v);
+    }
+    match &e.kind {
+        ExprKind::Array { items, .. } => {
+            let mut t = HashTable::new();
+            for it in items {
+                let it = it.as_ref()?;
+                let v = const_eval(vm, &it.value, scope)?;
+                match &it.key {
+                    Some(k) => {
+                        let key = match const_eval(vm, k, scope)? {
+                            Value::Int(i) => ArrayKey::Int(i),
+                            Value::Str(s) => ArrayKey::from_zstr(&s),
+                            _ => return None,
+                        };
+                        t.insert(key, v);
+                    }
+                    None => {
+                        let _ = t.push(v);
+                    }
+                }
+            }
+            Some(Value::Array(ZArray::from_table(t)))
+        }
+        ExprKind::Const(n) => {
+            let key = ZStr::from(n.name.as_slice());
+            vm.constants.get(&key).cloned().or_else(|| {
+                let short = n.name.rsplit(|&c| c == b'\\').next()?;
+                (n.kind != NameKind::FullyQualified)
+                    .then(|| vm.constants.get(&ZStr::from(short)).cloned())
+                    .flatten()
+            })
+        }
+        ExprKind::ClassConst { class, name } => {
+            let ClassRef::Name(cn) = class.as_ref() else {
+                return None;
+            };
+            let MemberName::Ident(id) = name else {
+                return None;
+            };
+            let lc = cn.name.to_ascii_lowercase();
+            let cls = match lc.as_slice() {
+                b"self" | b"static" => scope.cloned()?,
+                b"parent" => scope?.parent.clone()?,
+                _ => vm.find_class(&cn.name)?,
+            };
+            let cc = cls.find_const(&id.name)?;
+            let v = cc.value.borrow().clone();
+            match v {
+                Some(v) => Some(v),
+                None => match &cc.expr {
+                    crate::class::ConstExpr::Value(v) => Some(v.clone()),
+                    crate::class::ConstExpr::Code(_) => None,
+                },
+            }
+        }
+        _ => None,
+    }
 }
 
 fn rf_construct(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
