@@ -101,7 +101,7 @@ impl OpenSsl {
         let (msg, is_error) = if fs_path.contains(&0) {
             ("must not contain any null bytes", true)
         } else if let Some(real) = expand_filepath(fs_path) {
-            return Ok(Some(real));
+            return Ok(self.check_open_basedir(&real).then_some(real));
         } else {
             ("must be a valid file path", false)
         };
@@ -130,6 +130,41 @@ impl OpenSsl {
             self.warn(text);
             Ok(None)
         }
+    }
+
+    /// `php_check_open_basedir`: `false` (with PHP's warning) when `path`
+    /// lies outside every `open_basedir` entry.
+    pub(crate) fn check_open_basedir(&mut self, path: &[u8]) -> bool {
+        let Some(dirs) = self.open_basedir.clone().filter(|d| !d.is_empty()) else {
+            return true;
+        };
+        let resolve = |p: &[u8]| -> Vec<u8> {
+            let s = String::from_utf8_lossy(p).into_owned();
+            std::fs::canonicalize(&s).map_or_else(
+                |_| expand_filepath(p).unwrap_or_else(|| p.to_vec()),
+                |c| c.to_string_lossy().into_owned().into_bytes(),
+            )
+        };
+        let target = resolve(path);
+        for dir in dirs.split(|&c| c == b':').filter(|d| !d.is_empty()) {
+            let mut base = resolve(dir);
+            if dir.ends_with(b"/") && !base.ends_with(b"/") {
+                base.push(b'/');
+            }
+            let mut t = target.clone();
+            if base.ends_with(b"/") && !t.ends_with(b"/") && t.len() + 1 == base.len() {
+                t.push(b'/');
+            }
+            if t.starts_with(&base) {
+                return true;
+            }
+        }
+        self.warn(format!(
+            "open_basedir restriction in effect. File({}) is not within the allowed path(s): ({})",
+            String::from_utf8_lossy(path),
+            String::from_utf8_lossy(&dirs)
+        ));
+        false
     }
 
     /// `php_openssl_check_path` (no `file://` prefix).

@@ -352,3 +352,99 @@ fn listings() {
     let loc = o.get_cert_locations();
     assert_eq!(loc.len(), 8);
 }
+
+fn unhex(s: &str) -> Vec<u8> {
+    (0..s.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
+        .collect()
+}
+
+/// The vectors of php-src `cipher_tests.inc` (GCM/CCM/OCB/SIV/ChaCha20).
+#[test]
+fn php_cipher_test_vectors() {
+    let text = std::fs::read_to_string(format!(
+        "{}/tests/fixtures/cipher_tests.txt",
+        env!("CARGO_MANIFEST_DIR")
+    ))
+    .unwrap();
+    let mut o = OpenSsl::new();
+    let mut count = 0;
+    for line in text.lines() {
+        let f: Vec<&str> = line.split('|').collect();
+        let (method, key, iv, aad, tag, pt, ct) = (
+            f[0].as_bytes(),
+            unhex(f[1]),
+            unhex(f[2]),
+            unhex(f[3]),
+            unhex(f[4]),
+            unhex(f[5]),
+            unhex(f[6]),
+        );
+        let a = EncryptArgs {
+            data: &pt,
+            method,
+            passphrase: &key,
+            options: 1,
+            iv: &iv,
+            tag_requested: true,
+            aad: Some(&aad),
+            tag_length: i64::try_from(tag.len()).unwrap(),
+        };
+        let r = o
+            .encrypt(&a)
+            .unwrap()
+            .unwrap_or_else(|| panic!("{line}: {:?}", o.take_diagnostics()));
+        assert_eq!(r.data, ct, "{line}");
+        assert_eq!(r.tag, TagOut::Tag(tag.clone()), "{line}");
+        let d = o
+            .decrypt(&DecryptArgs {
+                data: &ct,
+                method,
+                passphrase: &key,
+                options: 1,
+                iv: &iv,
+                tag: Some(&tag),
+                aad: Some(&aad),
+            })
+            .unwrap();
+        assert_eq!(d.as_deref(), Some(&pt[..]), "{line}");
+        count += 1;
+    }
+    assert_eq!(count, 20);
+    assert!(warnings(&mut o).is_empty());
+}
+
+#[test]
+fn siv_specifics() {
+    let mut o = OpenSsl::new();
+    let mk = |aad: Option<&'static [u8]>,
+              iv: &'static [u8],
+              tag_length: i64,
+              tag_requested: bool| EncryptArgs {
+        data: b"data",
+        method: b"aes-128-siv",
+        passphrase: b"password",
+        options: 0,
+        iv,
+        tag_requested,
+        aad,
+        tag_length,
+    };
+    let empty = o.encrypt(&mk(Some(b""), b"", 16, true)).unwrap().unwrap();
+    let null = o.encrypt(&mk(None, b"", 16, true)).unwrap().unwrap();
+    assert_ne!(empty, null);
+    assert!(o
+        .encrypt(&mk(Some(b""), &[b'x'; 32], 20, true))
+        .unwrap()
+        .is_none());
+    assert_eq!(warnings(&mut o), ["Retrieving verification tag failed"]);
+    assert!(o
+        .encrypt(&mk(Some(b""), &[b'x'; 32], 16, false))
+        .unwrap()
+        .is_none());
+    assert_eq!(
+        warnings(&mut o),
+        ["A tag should be provided when using AEAD mode"]
+    );
+}

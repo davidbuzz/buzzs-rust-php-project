@@ -118,7 +118,8 @@ pub fn expand_filepath(path: &[u8]) -> Option<Vec<u8>> {
         out.push(b'/');
     }
     full.clear();
-    Some(out)
+    // MAXPATHLEN
+    (out.len() < 4096).then_some(out)
 }
 
 /// Days before each month in a non-leap year.

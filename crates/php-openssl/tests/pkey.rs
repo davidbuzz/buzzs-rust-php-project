@@ -339,3 +339,35 @@ fn export_with_passphrase_and_file() {
         .unwrap());
     assert_eq!(std::fs::read(&path).unwrap(), pem);
 }
+
+#[test]
+fn open_basedir_and_long_oid_file() {
+    let mut o = OpenSsl::new();
+    o.open_basedir = Some(b"/nonexistent-basedir".to_vec());
+    let url = fixture_url("public.key");
+    assert!(o.pkey_get_public(&KeyArg::Str(&url)).unwrap().is_none());
+    let w = warnings(&mut o);
+    assert_eq!(w.len(), 1);
+    assert!(w[0].starts_with("open_basedir restriction in effect. File("));
+    assert!(w[0].ends_with(") is not within the allowed path(s): (/nonexistent-basedir)"));
+    o.open_basedir = Some(format!("{}/tests", env!("CARGO_MANIFEST_DIR")).into_bytes());
+    assert!(o.pkey_get_public(&KeyArg::Str(&url)).unwrap().is_some());
+
+    let mut o = OpenSsl::new();
+    let cnf = tmp("gh9339.cnf");
+    std::fs::write(
+        &cnf,
+        format!(
+            "oid_file = /{}\n[ req ]\ndefault_bits = 1024\n",
+            "a".repeat(9000)
+        ),
+    )
+    .unwrap();
+    let mut opts = PhpArray::new();
+    opts.set("config", PhpValue::str(&cnf));
+    let _ = o.pkey_new(Some(&opts)).unwrap();
+    assert_eq!(
+        warnings(&mut o),
+        ["Path for oid_file option must be a valid file path"]
+    );
+}

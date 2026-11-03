@@ -66,6 +66,9 @@ pub struct OpenSsl {
     pub ini_cafile: Vec<u8>,
     /// `openssl.capath` INI value.
     pub ini_capath: Vec<u8>,
+    /// The `open_basedir` INI value (`:`-separated), honoured by path
+    /// checks like `php_check_open_basedir`.
+    pub open_basedir: Option<Vec<u8>>,
 }
 
 impl Default for OpenSsl {
@@ -96,6 +99,7 @@ impl OpenSsl {
             default_conf,
             ini_cafile: Vec::new(),
             ini_capath: Vec::new(),
+            open_basedir: None,
         }
     }
 
