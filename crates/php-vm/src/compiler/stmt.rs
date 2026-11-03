@@ -645,7 +645,7 @@ impl Compiler {
                 self.emit_fast_call(fin);
             }
         }
-        if returns_ref && !is_gen && e.is_some() {
+        if returns_ref && !is_gen {
             // ZEND_RETURN_BY_REF of a value (not a variable).
             self.emit(Op::ReturnByRefValue { val });
         } else {

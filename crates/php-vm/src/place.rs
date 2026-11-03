@@ -464,12 +464,36 @@ pub(crate) fn descend(
 }
 
 /// Applies the final operation to a slot.
+thread_local! {
+    /// Assignments through references that were borrowed by the walk that
+    /// made them (see [`apply_final`]).
+    static DEFERRED_REF_ASSIGNS: std::cell::RefCell<Vec<(PhpRef, Value)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Performs deferred reference assignments; called once a write walk has
+/// dropped its borrows.
+pub(crate) fn flush_deferred_ref_assigns() {
+    let pending = DEFERRED_REF_ASSIGNS.with(|d| std::mem::take(&mut *d.borrow_mut()));
+    for (r, v) in pending {
+        let old = r.set(v);
+        drop(old);
+    }
+}
+
 pub(crate) fn apply_final(v: &mut Value, wop: &mut WOp) -> Step {
     match wop {
         WOp::Assign(val) => {
             let val = std::mem::take(val);
             match v {
                 Value::Reference(r) => {
+                    // The reference may be the container being walked
+                    // (`$a['k'] = null` where `$a['k']` is `&$a`): its value
+                    // is replaced once the walk has released it.
+                    if r.try_borrow_mut().is_none() {
+                        DEFERRED_REF_ASSIGNS.with(|d| d.borrow_mut().push((r.clone(), val.clone())));
+                        return Step::Done(val);
+                    }
                     let old = r.set(val.clone());
                     drop(old);
                 }
@@ -589,7 +613,13 @@ impl Vm {
 
     /// Runs a write operation on a place.
     #[allow(clippy::too_many_lines)]
-    pub(crate) fn write_place(
+    pub(crate) fn write_place(&mut self, base: RBase, segs: &[RSeg], wop: WOp) -> VmResult<Value> {
+        let r = self.write_place_inner(base, segs, wop);
+        flush_deferred_ref_assigns();
+        r
+    }
+
+    fn write_place_inner(
         &mut self,
         base: RBase,
         segs: &[RSeg],

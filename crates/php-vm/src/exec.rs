@@ -620,12 +620,13 @@ impl Vm {
                         self.op_return(v, base)?
                     }
                     Op::ReturnByRefValue { val } => {
-                        let raw = self.read_raw(*val)?;
+                        let unused = *val == Operand::Unused;
+                        let raw = if unused { Value::Null } else { self.read_raw(*val)? };
                         let v = match raw {
                             Value::Reference(r) => Value::Reference(r),
                             other => {
                                 self.notice("Only variable references should be returned by reference")?;
-                                let checked = self.verify_return(Some(other))?;
+                                let checked = self.verify_return((!unused).then_some(other))?;
                                 Value::Reference(php_runtime::PhpRef::new(checked))
                             }
                         };
@@ -1211,7 +1212,13 @@ impl Vm {
                 return Ok(());
             }
         }
-        self.call_method(o, &m, Vec::new()).map(|_| ())
+        self.call_method(o, &m, Vec::new())?;
+        // A native destructor hook also runs after a user `__destruct`
+        // (the internal free path of the native parent).
+        if let Some(f) = cls.hooks.as_ref().and_then(|h| h.destruct) {
+            f(self, o)?;
+        }
+        Ok(())
     }
 
     /// The type of `ZEND_RETURN`: finishes the current frame.

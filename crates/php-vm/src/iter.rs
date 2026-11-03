@@ -226,6 +226,16 @@ impl Vm {
         // Iterating properties initializes a lazy object (a proxy iterates
         // its real instance).
         let o = self.lazy_object_for(&o, None)?;
+        if !by_ref {
+            if let Some(f) = object::class_of(&o).hooks.as_ref().and_then(|h| h.get_properties) {
+                if let Some(t) = f(self, &o)? {
+                    if t.is_empty() {
+                        return Ok(ForeachIter::Empty);
+                    }
+                    return Ok(ForeachIter::Array { arr: t, pos: 0 });
+                }
+            }
+        }
         let keys = self.visible_props(&o);
         if keys.is_empty() {
             return Ok(ForeachIter::Empty);

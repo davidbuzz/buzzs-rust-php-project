@@ -575,9 +575,16 @@ impl Compiler {
             BodyKind::Stmts(stmts) => {
                 self.compile_stmts(stmts)?;
                 self.f().line = spec.line_end;
-                self.emit(Op::Return {
-                    val: Operand::Unused,
-                });
+                if spec.by_ref && !spec.is_generator {
+                    // ZEND_RETURN_BY_REF of the implicit null.
+                    self.emit(Op::ReturnByRefValue {
+                        val: Operand::Unused,
+                    });
+                } else {
+                    self.emit(Op::Return {
+                        val: Operand::Unused,
+                    });
+                }
             }
             BodyKind::Arrow(e) => {
                 self.f().line = e.span.line;

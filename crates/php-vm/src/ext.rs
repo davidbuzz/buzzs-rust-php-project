@@ -391,6 +391,10 @@ pub struct ClassHooks {
     /// `interface_gets_implemented` (set on an interface): called with
     /// each class that implements it, when the class is linked.
     pub interface_gets_implemented: Option<fn(&mut Vm, &Rc<Class>) -> VmResult<()>>,
+    /// `get_properties`: the property table seen by `get_object_vars()`
+    /// and `foreach` over the object (unlike `properties_for`, which
+    /// serves var_dump/(array)/serialize). `Ok(None)` falls back.
+    pub get_properties: Option<fn(&mut Vm, &Obj) -> VmResult<Option<ZArray>>>,
 }
 
 impl std::fmt::Debug for ClassHooks {
