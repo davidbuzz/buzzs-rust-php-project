@@ -134,7 +134,9 @@ fn mb_substitute_character(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         }),
         other => {
             let n = vm.value_to_int(&other)?;
-            call(vm, a, |st| st.mb_substitute_character_set(SubstituteArg::Int(n)))
+            call(vm, a, |st| {
+                st.mb_substitute_character_set(SubstituteArg::Int(n))
+            })
         }
     }
     .map(Value::Bool)
@@ -146,6 +148,7 @@ fn mb_preferred_mime_name(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     Ok(r.map_or(Value::Bool(false), Value::from))
 }
 
+#[allow(clippy::unnecessary_wraps)] // NativeFn signature
 fn mb_list_encodings(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
     Ok(Value::Array(state::all_encodings()))
 }
@@ -188,7 +191,10 @@ fn mb_str_split(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 fn mb_strlen(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let (s, enc) = (a.str(0), opt_str(a, 1));
-    call(vm, a, |st| st.mb_strlen(s.as_bytes(), opt_bytes(enc.as_ref()))).map(Value::Int)
+    call(vm, a, |st| {
+        st.mb_strlen(s.as_bytes(), opt_bytes(enc.as_ref()))
+    })
+    .map(Value::Int)
 }
 
 macro_rules! strpos_fn {
@@ -244,12 +250,10 @@ fn mb_substr_count(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let (h, n, enc) = (a.str(0), a.str(1), opt_str(a, 2));
     if n.as_bytes().len() > 64 * 1024 {
         // The needle is converted to UTF-8 first; model that buffer.
-        if let Some(e) = enc
-            .as_ref()
-            .map_or_else(|| Some(state::with(|st| st.internal_encoding())), |e| {
-                php_mbstring::encoding::by_cname(e.as_bytes())
-            })
-        {
+        if let Some(e) = enc.as_ref().map_or_else(
+            || Some(state::with(|st| st.internal_encoding())),
+            |e| php_mbstring::encoding::by_cname(e.as_bytes()),
+        ) {
             let conv = php_mbstring::convert::fast_convert(
                 n.as_bytes(),
                 e,
@@ -298,7 +302,10 @@ fn mb_strcut(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 fn mb_strwidth(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let (s, enc) = (a.str(0), opt_str(a, 1));
-    call(vm, a, |st| st.mb_strwidth(s.as_bytes(), opt_bytes(enc.as_ref()))).map(Value::Int)
+    call(vm, a, |st| {
+        st.mb_strwidth(s.as_bytes(), opt_bytes(enc.as_ref()))
+    })
+    .map(Value::Int)
 }
 
 fn mb_strimwidth(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -313,7 +320,11 @@ fn mb_strimwidth(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         )
     })
     .map(bytes)?;
-    mem::result(vm, mem::zstr(s.as_bytes().len()) + mem::zstr(marker.as_bytes().len()), v)
+    mem::result(
+        vm,
+        mem::zstr(s.as_bytes().len()) + mem::zstr(marker.as_bytes().len()),
+        v,
+    )
 }
 
 fn mb_convert_case(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -335,7 +346,13 @@ macro_rules! str_enc_fn {
     )*};
 }
 
-str_enc_fn!(mb_strtoupper, mb_strtolower, mb_ucfirst, mb_lcfirst, mb_scrub);
+str_enc_fn!(
+    mb_strtoupper,
+    mb_strtolower,
+    mb_ucfirst,
+    mb_lcfirst,
+    mb_scrub
+);
 
 macro_rules! trim_fn {
     ($($name:ident),* $(,)?) => {$(
@@ -360,19 +377,18 @@ fn mb_detect_encoding(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let strict = a.has(2).then(|| a.bool(2));
     let all = list.as_ref().is_some_and(OwnedList::is_all);
     let r = call(vm, a, |st| {
-        st.mb_detect_encoding(s.as_bytes(), list.as_ref().map(OwnedList::as_list), strict, all)
+        st.mb_detect_encoding(
+            s.as_bytes(),
+            list.as_ref().map(OwnedList::as_list),
+            strict,
+            all,
+        )
     })?;
     Ok(r.map_or(Value::Bool(false), Value::from))
 }
 
 fn mb_encode_mimeheader(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let (s, charset, te, nl, indent) = (
-        a.str(0),
-        opt_str(a, 1),
-        opt_str(a, 2),
-        a.str(3),
-        a.int(4),
-    );
+    let (s, charset, te, nl, indent) = (a.str(0), opt_str(a, 1), opt_str(a, 2), a.str(3), a.int(4));
     let v = call(vm, a, |st| {
         st.mb_encode_mimeheader(
             s.as_bytes(),

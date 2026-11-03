@@ -109,7 +109,9 @@ pub(crate) fn opt_str(a: &Args, n: usize) -> Option<ZStr> {
 /// A list of strings as a PHP array.
 pub(crate) fn str_list<S: AsRef<[u8]>>(items: impl IntoIterator<Item = S>) -> Value {
     Value::Array(ZArray::from_values(
-        items.into_iter().map(|s| Value::Str(ZStr::from(s.as_ref()))),
+        items
+            .into_iter()
+            .map(|s| Value::Str(ZStr::from(s.as_ref()))),
     ))
 }
 

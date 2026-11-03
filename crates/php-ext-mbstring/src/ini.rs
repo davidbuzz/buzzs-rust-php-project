@@ -75,12 +75,29 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
             Access::ALL,
             none,
         ),
-        ("mbstring.strict_detection", Some("0"), Access::ALL, ModifyHandler::Bool),
-        ("mbstring.regex_stack_limit", Some("100000"), Access::ALL, ModifyHandler::Long),
-        ("mbstring.regex_retry_limit", Some("1000000"), Access::ALL, ModifyHandler::Long),
+        (
+            "mbstring.strict_detection",
+            Some("0"),
+            Access::ALL,
+            ModifyHandler::Bool,
+        ),
+        (
+            "mbstring.regex_stack_limit",
+            Some("100000"),
+            Access::ALL,
+            ModifyHandler::Long,
+        ),
+        (
+            "mbstring.regex_retry_limit",
+            Some("1000000"),
+            Access::ALL,
+            ModifyHandler::Long,
+        ),
     ];
     for (name, default, access, handler) in dirs {
-        m.ini(IniDirective::new(name, default, access, handler, "mbstring"));
+        m.ini(IniDirective::new(
+            name, default, access, handler, "mbstring",
+        ));
     }
 }
 
@@ -164,7 +181,11 @@ fn ini_value(vm: &mut Vm, v: &Value) -> VmResult<Vec<u8>> {
     })
 }
 
-fn run_orig(cell: &'static std::thread::LocalKey<Cell<Option<NativeFn>>>, vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+fn run_orig(
+    cell: &'static std::thread::LocalKey<Cell<Option<NativeFn>>>,
+    vm: &mut Vm,
+    a: &mut Args,
+) -> VmResult<Value> {
     match cell.with(Cell::get) {
         Some(f) => f(vm, a),
         None => Ok(Value::Bool(false)),

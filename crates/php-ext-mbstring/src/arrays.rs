@@ -127,7 +127,11 @@ fn mb_convert_encoding(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             let s = vm.value_to_string(&other)?;
             let r = state::with(|st| st.convert_encoding_value(s.as_bytes(), to_enc, &from_list));
             state::flush_diagnostics(vm)?;
-            mem::result(vm, mem::zstr(s.as_bytes().len()), r.map_or(Value::Bool(false), bytes))
+            mem::result(
+                vm,
+                mem::zstr(s.as_bytes().len()),
+                r.map_or(Value::Bool(false), bytes),
+            )
         }
     }
 }
@@ -267,13 +271,20 @@ struct VarConverter {
 
 impl VarConverter {
     fn string(&self, s: &[u8]) -> Value {
-        bytes(state::with(|st: &mut MbState| st.convert_ex(s, self.to, self.from)))
+        bytes(state::with(|st: &mut MbState| {
+            st.convert_ex(s, self.to, self.from)
+        }))
     }
 
     /// Converts one slot in place. A slot holding a reference to a string
     /// is replaced by the converted string (as PHP does); references to
     /// arrays and objects are converted through the reference.
-    fn slot(&mut self, vm: &mut Vm, arg_num: usize, slot: &mut Value) -> VmResult<Result<(), Stop>> {
+    fn slot(
+        &mut self,
+        vm: &mut Vm,
+        arg_num: usize,
+        slot: &mut Value,
+    ) -> VmResult<Result<(), Stop>> {
         if let Value::Reference(r) = slot {
             let r = r.clone();
             if self.refs.iter().any(|x| php_runtime::PhpRef::ptr_eq(x, &r)) {
@@ -314,7 +325,13 @@ impl VarConverter {
         r
     }
 
-    fn value_inner(&mut self, vm: &mut Vm, arg_num: usize, v: Value) -> VmResult<Result<Value, Stop>> {
+    #[allow(clippy::many_single_char_names)]
+    fn value_inner(
+        &mut self,
+        vm: &mut Vm,
+        arg_num: usize,
+        v: Value,
+    ) -> VmResult<Result<Value, Stop>> {
         if self.depth > STACK_DEPTH {
             return Err(stack_limit_error(vm));
         }
@@ -420,6 +437,7 @@ fn stack_limit_error(vm: &mut Vm) -> php_vm::Throw {
     )
 }
 
+#[allow(clippy::many_single_char_names)]
 fn mb_convert_variables(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let to = a.str(0);
     let from = OwnedList::from_value(vm, &a.at(1))?;
@@ -439,7 +457,7 @@ fn mb_convert_variables(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             }
         }
     }
-    let refs: Vec<&[u8]> = strings.iter().map(ZStr::as_bytes).collect();
+    let string_refs: Vec<&[u8]> = strings.iter().map(ZStr::as_bytes).collect();
     let all = from.is_all();
     let r = state::with(|st| {
         if recursive {
@@ -447,7 +465,7 @@ fn mb_convert_variables(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             st.convert_variables_encodings(to.as_bytes(), from.as_list(), all, &[])
                 .map(|_| None)
         } else {
-            st.convert_variables_encodings(to.as_bytes(), from.as_list(), all, &refs)
+            st.convert_variables_encodings(to.as_bytes(), from.as_list(), all, &string_refs)
         }
     });
     let r = state::finish(vm, a, r)?;
@@ -470,9 +488,9 @@ fn mb_convert_variables(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             continue;
         };
         conv.refs.push(r.clone());
-        let old = r.get();
-        let live = mem::value_size(&old);
-        let res = conv.value(vm, i + 3, old)?;
+        let previous = r.get();
+        let live = mem::value_size(&previous);
+        let res = conv.value(vm, i + 3, previous)?;
         conv.refs.pop();
         match res {
             Ok(nv) => {

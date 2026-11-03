@@ -17,7 +17,11 @@ fn tokens<'a>(s: &'a [u8], seps: &'a [u8]) -> impl Iterator<Item = &'a [u8]> {
 fn mb_parse_str(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let input = a.str(0);
     // The C code works on a NUL-terminated copy.
-    let res = input.as_bytes().split(|&b| b == 0).next().unwrap_or_default();
+    let res = input
+        .as_bytes()
+        .split(|&b| b == 0)
+        .next()
+        .unwrap_or_default();
     let seps = vm
         .ini_string("arg_separator.input")
         .unwrap_or_else(|| b"&".to_vec());
@@ -38,15 +42,12 @@ fn mb_parse_str(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         // Split and url-decode into (name, value) pairs.
         let mut list: Vec<Vec<u8>> = Vec::new();
         for var in tokens(res, &seps) {
-            match var.iter().position(|&b| b == b'=') {
-                Some(i) => {
-                    list.push(url_decode(&var[..i], false));
-                    list.push(url_decode(&var[i + 1..], false));
-                }
-                None => {
-                    list.push(url_decode(var, false));
-                    list.push(Vec::new());
-                }
+            if let Some(i) = var.iter().position(|&b| b == b'=') {
+                list.push(url_decode(&var[..i], false));
+                list.push(url_decode(&var[i + 1..], false));
+            } else {
+                list.push(url_decode(var, false));
+                list.push(Vec::new());
             }
         }
         // val_list + len_list of the C implementation.

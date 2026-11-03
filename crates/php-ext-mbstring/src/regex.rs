@@ -27,8 +27,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use php_mbstring::mbregex::{
-    parse_options, Syntax, OPTION_EXTEND, OPTION_IGNORECASE, OPTION_MULTILINE,
-    OPTION_SINGLELINE,
+    parse_options, Syntax, OPTION_EXTEND, OPTION_IGNORECASE, OPTION_MULTILINE, OPTION_SINGLELINE,
 };
 use php_mbstring::strings::check_str_encoding;
 use php_mbstring::Encoding;
@@ -123,12 +122,16 @@ struct Subject {
 
 impl Subject {
     fn to_orig(&self, off: usize) -> usize {
-        self.back.as_ref().map_or(off, |m| m.get(off).copied().unwrap_or(off))
+        self.back
+            .as_ref()
+            .map_or(off, |m| m.get(off).copied().unwrap_or(off))
     }
 
     fn to_utf8(&self, off: usize) -> usize {
         self.fwd.as_ref().map_or(off, |m| {
-            m.get(off).copied().unwrap_or_else(|| *m.last().unwrap_or(&0))
+            m.get(off)
+                .copied()
+                .unwrap_or_else(|| *m.last().unwrap_or(&0))
         })
     }
 }
@@ -240,6 +243,7 @@ fn group_name(p: &[u8]) -> Option<&[u8]> {
 
 /// Rewrites Oniguruma Ruby syntax into PCRE2 syntax. `Err` carries an
 /// Oniguruma-style error message.
+#[allow(clippy::too_many_lines)]
 fn translate(p: &[u8], names: bool) -> Result<Vec<u8>, String> {
     let mut out = Vec::with_capacity(p.len() + 8);
     let mut i = 0;
@@ -302,7 +306,10 @@ fn translate(p: &[u8], names: bool) -> Result<Vec<u8>, String> {
             b'(' if class_depth == 0 => {
                 if p.get(i + 1) == Some(&b'?') {
                     if let Some(name) = group_name(&p[i + 2..]) {
-                        if !name.first().is_some_and(|b| b.is_ascii_alphabetic() || *b == b'_' || *b >= 0x80) {
+                        if !name
+                            .first()
+                            .is_some_and(|b| b.is_ascii_alphabetic() || *b == b'_' || *b >= 0x80)
+                        {
                             return Err(format!(
                                 "invalid group name <{}>",
                                 String::from_utf8_lossy(name)
@@ -394,18 +401,48 @@ fn from_basic(p: &[u8]) -> Vec<u8> {
 fn onig_message(pcre: &[u8]) -> String {
     let m = String::from_utf8_lossy(pcre);
     let table = [
-        ("missing closing parenthesis", "end pattern with unmatched parenthesis"),
-        ("unmatched closing parenthesis", "unmatched close parenthesis"),
-        ("quantifier does not follow a repeatable item", "target of repeat operator is not specified"),
-        ("missing terminating ] for character class", "premature end of char-class"),
+        (
+            "missing closing parenthesis",
+            "end pattern with unmatched parenthesis",
+        ),
+        (
+            "unmatched closing parenthesis",
+            "unmatched close parenthesis",
+        ),
+        (
+            "quantifier does not follow a repeatable item",
+            "target of repeat operator is not specified",
+        ),
+        (
+            "missing terminating ] for character class",
+            "premature end of char-class",
+        ),
         ("\\ at end of pattern", "end pattern at escape"),
-        ("reference to non-existent subpattern", "invalid backref number/name"),
-        ("range out of order in character class", "empty range in char class"),
-        ("numbers out of order in {} quantifier", "upper bound must be greater than lower bound"),
-        ("lookbehind assertion is not fixed length", "invalid pattern in look-behind"),
+        (
+            "reference to non-existent subpattern",
+            "invalid backref number/name",
+        ),
+        (
+            "range out of order in character class",
+            "empty range in char class",
+        ),
+        (
+            "numbers out of order in {} quantifier",
+            "upper bound must be greater than lower bound",
+        ),
+        (
+            "lookbehind assertion is not fixed length",
+            "invalid pattern in look-behind",
+        ),
         ("unknown property", "invalid character property name"),
-        ("unrecognized character after (? or (?-", "undefined group option"),
-        ("two named subpatterns have the same name", "multiplex defined name"),
+        (
+            "unrecognized character after (? or (?-",
+            "undefined group option",
+        ),
+        (
+            "two named subpatterns have the same name",
+            "multiplex defined name",
+        ),
     ];
     for (pcre_msg, onig) in table {
         if m.starts_with(pcre_msg) {
@@ -424,9 +461,7 @@ fn compile(
 ) -> VmResult<Option<Rc<Compiled>>> {
     let (enc, enc_name) = state::with(|s| (s.regex_encoding(), s.mb_regex_encoding_get()));
     if !check_str_encoding(pattern, enc) {
-        vm.php_warning(&format!(
-            "Pattern is not valid under {enc_name} encoding"
-        ))?;
+        vm.php_warning(&format!("Pattern is not valid under {enc_name} encoding"))?;
         return Ok(None);
     }
     let cached = GLOBALS.with(|g| g.borrow().cache.get(pattern).cloned());
@@ -500,7 +535,10 @@ fn compile(
                 g.search.regs = None;
             }
         }
-        g.cache.insert(pattern.to_vec(), (options, syntax as u8, enc.name, c.clone()));
+        g.cache.insert(
+            pattern.to_vec(),
+            (options, syntax as u8, enc.name, c.clone()),
+        );
     });
     Ok(Some(c))
 }
@@ -524,13 +562,7 @@ fn match_config(vm: &Vm) -> php_pcre::MatchConfig {
 }
 
 /// `onig_search` from original offset `start` (`anchored`: `onig_match`).
-fn search(
-    vm: &Vm,
-    c: &Compiled,
-    subj: &Subject,
-    start: usize,
-    anchored: bool,
-) -> Found {
+fn search(vm: &Vm, c: &Compiled, subj: &Subject, start: usize, anchored: bool) -> Found {
     let cfg = match_config(vm);
     let flags = php_pcre::PREG_OFFSET_CAPTURE | php_pcre::PREG_UNMATCHED_AS_NULL;
     let off = subj.to_utf8(start);
@@ -568,6 +600,7 @@ fn search(
 }
 
 /// Converts one PCRE match set (`[string|null, offset]` pairs) to registers.
+#[allow(clippy::many_single_char_names)]
 fn regs_from(c: &Compiled, subj: &Subject, m: &php_pcre::MatchArray) -> Regs {
     let n = c.num_regs();
     let mut regs = Vec::with_capacity(n);
@@ -589,9 +622,8 @@ fn regs_from(c: &Compiled, subj: &Subject, m: &php_pcre::MatchArray) -> Regs {
 /// operations; `Err` is a match-time error.
 fn search_all(vm: &Vm, c: &Compiled, subj: &Subject) -> Result<Vec<Regs>, String> {
     let cfg = match_config(vm);
-    let flags = php_pcre::PREG_SET_ORDER
-        | php_pcre::PREG_OFFSET_CAPTURE
-        | php_pcre::PREG_UNMATCHED_AS_NULL;
+    let flags =
+        php_pcre::PREG_SET_ORDER | php_pcre::PREG_OFFSET_CAPTURE | php_pcre::PREG_UNMATCHED_AS_NULL;
     let out = php_pcre::match_all(&c.re, &cfg, &subj.text, true, flags, 0);
     if out.result.is_err() {
         return match out.last_error {
@@ -615,6 +647,7 @@ fn search_all(vm: &Vm, c: &Compiled, subj: &Subject) -> Result<Vec<Regs>, String
 
 /// Numbered + named groups as `mb_ereg` reports them (`false` for empty or
 /// unmatched groups when `empty_is_false`).
+#[allow(clippy::many_single_char_names)]
 fn regs_array(c: &Compiled, regs: &Regs, s: &[u8], empty_is_false: bool) -> ZArray {
     let mut out = ZArray::with_capacity(regs.0.len());
     let t = out.make_mut();
@@ -631,6 +664,7 @@ fn regs_array(c: &Compiled, regs: &Regs, s: &[u8], empty_is_false: bool) -> ZArr
 
 /// `mb_regex_groups_iter`: named groups (non-empty match → string, else
 /// `false`).
+#[allow(clippy::many_single_char_names)]
 fn named_into(c: &Compiled, regs: &Regs, s: &[u8], t: &mut php_runtime::HashTable) {
     for (name, groups) in &c.names {
         let g = regs.name_group(groups);
@@ -641,7 +675,6 @@ fn named_into(c: &Compiled, regs: &Regs, s: &[u8], t: &mut php_runtime::HashTabl
         t.insert(php_runtime::ArrayKey::from_bytes(name), v);
     }
 }
-
 
 fn regex_encoding() -> &'static Encoding {
     state::with(|s| s.regex_encoding())
@@ -673,7 +706,10 @@ fn mb_regex_encoding(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 fn mb_regex_set_options(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let o = opt_str(a, 0);
-    state::call(vm, a, |s| s.mb_regex_set_options(o.as_ref().map(ZStr::as_bytes))).map(Value::from)
+    state::call(vm, a, |s| {
+        s.mb_regex_set_options(o.as_ref().map(ZStr::as_bytes))
+    })
+    .map(Value::from)
 }
 
 fn ereg_common(vm: &mut Vm, a: &mut Args, icase: bool) -> VmResult<Value> {
@@ -700,7 +736,10 @@ fn ereg_common(vm: &mut Vm, a: &mut Args, icase: bool) -> VmResult<Value> {
     match search(vm, &c, &subj, 0, false) {
         Found::Match(regs) => {
             if want {
-                a.set_ref(2, Value::Array(regs_array(&c, &regs, string.as_bytes(), true)));
+                a.set_ref(
+                    2,
+                    Value::Array(regs_array(&c, &regs, string.as_bytes(), true)),
+                );
             }
             Ok(Value::Bool(true))
         }
@@ -717,10 +756,24 @@ fn mb_eregi(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 }
 
 /// `mb_regex_substitute`: expands `\0`-`\9` and `\k<name>` references.
-fn substitute(out: &mut Vec<u8>, subject: &[u8], replace: &[u8], c: &Compiled, regs: &Regs, enc: &'static Encoding) {
+#[allow(clippy::too_many_lines)]
+fn substitute(
+    out: &mut Vec<u8>,
+    subject: &[u8],
+    replace: &[u8],
+    c: &Compiled,
+    regs: &Regs,
+    enc: &'static Encoding,
+) {
     let mut p = 0;
     let eos = replace.len();
-    let clen = |i: usize| -> usize { if i < eos { char_len(enc, replace, i) } else { 1 } };
+    let clen = |i: usize| -> usize {
+        if i < eos {
+            char_len(enc, replace, i)
+        } else {
+            1
+        }
+    };
     while p < eos {
         let l = clen(p);
         if l != 1 || replace[p] != b'\\' {
@@ -816,6 +869,7 @@ fn substitute(out: &mut Vec<u8>, subject: &[u8], replace: &[u8], c: &Compiled, r
     }
 }
 
+#[allow(clippy::many_single_char_names)]
 fn replace_common(vm: &mut Vm, a: &mut Args, base_opts: u32, callable: bool) -> VmResult<Value> {
     let pattern = a.str(0);
     let replacement = if callable { None } else { Some(a.str(1)) };
@@ -826,16 +880,8 @@ fn replace_common(vm: &mut Vm, a: &mut Args, base_opts: u32, callable: bool) -> 
     if !check_str_encoding(string.as_bytes(), enc) {
         return Ok(Value::Null);
     }
-    let (opts, syntax) = match &opt {
-        Some(_) => {
-            let (o, s) = options_arg(vm, opt.as_ref())?;
-            (o | base_opts, s)
-        }
-        None => {
-            let (o, s) = defaults();
-            (o | base_opts, s)
-        }
-    };
+    let (opts, syntax) = options_arg(vm, opt.as_ref())?;
+    let opts = opts | base_opts;
     let Some(c) = compile(vm, pattern.as_bytes(), opts, syntax)? else {
         return Ok(Value::Bool(false));
     };
@@ -907,13 +953,12 @@ fn mb_ereg_replace_callback(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     replace_common(vm, a, 0, true)
 }
 
+#[allow(clippy::many_single_char_names)]
 fn mb_split(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let (pattern, string) = (a.str(0), a.str(1));
     #[allow(clippy::cast_sign_loss)]
     let mut count = a.int(2) as u64;
-    if count > 0 {
-        count -= 1;
-    }
+    count = count.saturating_sub(1);
     let enc = regex_encoding();
     let s = string.as_bytes();
     if !check_str_encoding(s, enc) {
@@ -1018,9 +1063,7 @@ fn search_exec(vm: &mut Vm, a: &mut Args, mode: u8) -> VmResult<Value> {
             Ok(Value::Bool(false))
         }
         Found::Error(e) => {
-            vm.php_warning(&format!(
-                "mbregex search failure in mbregex_search(): {e}"
-            ))?;
+            vm.php_warning(&format!("mbregex search failure in mbregex_search(): {e}"))?;
             Ok(Value::Bool(false))
         }
         Found::Match(regs) => {
@@ -1079,10 +1122,15 @@ fn mb_ereg_search_init(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     Ok(Value::Bool(valid))
 }
 
+#[allow(clippy::unnecessary_wraps)] // NativeFn signature
 fn mb_ereg_search_getregs(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
     let (re, regs, string) = GLOBALS.with(|g| {
         let g = g.borrow();
-        (g.search.re.clone(), g.search.regs.clone(), g.search.string.clone())
+        (
+            g.search.re.clone(),
+            g.search.regs.clone(),
+            g.search.string.clone(),
+        )
     });
     match (re, regs, string) {
         (Some(re), Some(regs), Some(s)) => {
@@ -1092,6 +1140,7 @@ fn mb_ereg_search_getregs(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
     }
 }
 
+#[allow(clippy::unnecessary_wraps)] // NativeFn signature
 fn mb_ereg_search_getpos(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
     let pos = GLOBALS.with(|g| g.borrow().search.pos);
     Ok(Value::Int(i64::try_from(pos).unwrap_or(i64::MAX)))
@@ -1201,7 +1250,7 @@ mod tests {
     fn translates_ruby_syntax() {
         assert_eq!(tr(r"\h+"), "[0-9a-fA-F]+");
         assert_eq!(tr(r"[\h_]"), "[0-9a-fA-F_]");
-        assert_eq!(tr(r"é"), r"\x{00e9}");
+        assert_eq!(tr(r"\u00e9"), r"\x{00e9}");
         assert_eq!(tr("a{,2}"), "a{0,2}");
         assert_eq!(tr("(?m)a.b"), "(?s)a.b");
         assert_eq!(tr("(?mi:x)"), "(?si:x)");
@@ -1260,7 +1309,11 @@ mod tests {
 
     #[test]
     fn simple_match_is_caseless() {
-        assert!(simple_match(br"^(text/|application/xhtml\+xml)", b"TEXT/html", true));
+        assert!(simple_match(
+            br"^(text/|application/xhtml\+xml)",
+            b"TEXT/html",
+            true
+        ));
         assert!(!simple_match(b"^text/", b"image/png", true));
     }
 }

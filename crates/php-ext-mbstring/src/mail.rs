@@ -286,7 +286,12 @@ fn mb_send_mail(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     }
     if let Some(cte) = ht.get(&b"content-transfer-encoding"[..]) {
         match encoding::by_name(cte) {
-            Some(e) if matches!(e.no, EncodingNo::Base64 | EncodingNo::SevenBit | EncodingNo::EightBit) => {
+            Some(e)
+                if matches!(
+                    e.no,
+                    EncodingNo::Base64 | EncodingNo::SevenBit | EncodingNo::EightBit
+                ) =>
+            {
                 body_enc = e;
             }
             _ => {
@@ -445,7 +450,10 @@ mod tests {
             h.get(&b"content-type"[..]).map(Vec::as_slice),
             Some(&b"text/plain; charset=ISO-2022-JP"[..])
         );
-        assert_eq!(h.get(&b"mime-version"[..]).map(Vec::as_slice), Some(&b"1.0"[..]));
+        assert_eq!(
+            h.get(&b"mime-version"[..]).map(Vec::as_slice),
+            Some(&b"1.0"[..])
+        );
         assert!(h.contains_key(&b"x-foo"[..]));
     }
 
