@@ -461,6 +461,19 @@ pub trait RuntimeContext {
         )))
     }
 
+    /// `unserialize()` of `E:` while parsing: resolves `class::case`,
+    /// distinguishing the failures `var_unserializer.re` reports (each with
+    /// its own warning and error offset). The default delegates to
+    /// [`RuntimeContext::unserialize_enum`] and reports a found case.
+    fn unserialize_enum_case(
+        &mut self,
+        class: &ZStr,
+        case: &ZStr,
+    ) -> RtResult<crate::serialize::EnumCaseLookup> {
+        self.unserialize_enum(class, case)
+            .map(crate::serialize::EnumCaseLookup::Found)
+    }
+
     /// `unserialize()` of `C:` (`Serializable::unserialize`).
     fn unserialize_custom(&mut self, class: &ZStr, data: &[u8]) -> RtResult<Value> {
         let _ = data;
