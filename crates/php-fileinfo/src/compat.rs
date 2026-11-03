@@ -68,8 +68,10 @@ fn regex_char_ok(c: u8) -> bool {
 
 /// libmagic 5.45 rejects `regex` patterns containing non-printable bytes
 /// ("non-ascii characters in regex"), which PHP's PCRE-based copy accepts;
-/// such bytes are rewritten to `.` (any character).  Returns `None` when
-/// the line needs no change.
+/// such bytes are rewritten to `.` (any character).  A pattern that starts
+/// with a NUL is empty to POSIX `regcomp()` and would match everything,
+/// while PHP hands the NULs to PCRE (bug #79283); it becomes the
+/// never-matching `a^`.  Returns `None` when the line needs no change.
 #[allow(clippy::many_single_char_names)]
 fn sanitize_line(line: &[u8]) -> Option<Vec<u8>> {
     if line.first().is_none_or(|&c| c == b'#' || c == b'!') {
@@ -96,6 +98,16 @@ fn sanitize_line(line: &[u8]) -> Option<Vec<u8>> {
     }
     let mut out = line[..i].to_vec();
     let mut changed = false;
+    if starts_with_nul_escape(&line[i..]) {
+        let mut end = i;
+        while end < line.len() && !is_ws(line[end]) {
+            end += if line[end] == b'\\' { 2 } else { 1 };
+        }
+        let end = end.min(line.len());
+        out.extend_from_slice(b"a^");
+        out.extend_from_slice(&line[end..]);
+        return Some(out);
+    }
     while i < line.len() && !is_ws(line[i]) {
         let c = line[i];
         if c != b'\\' || i + 1 >= line.len() {
@@ -152,6 +164,25 @@ fn sanitize_line(line: &[u8]) -> Option<Vec<u8>> {
     }
     out.extend_from_slice(&line[i..]);
     changed.then_some(out)
+}
+
+/// Whether a magic test value begins with an escape decoding to NUL
+/// (`\0`, `\00`, `\000`, `\x0`, `\x00`).
+fn starts_with_nul_escape(value: &[u8]) -> bool {
+    let digits = |rest: &[u8], max: usize, ok: fn(&u8) -> bool| -> Option<bool> {
+        let run: Vec<u8> = rest
+            .iter()
+            .take(max)
+            .take_while(|c| ok(c))
+            .copied()
+            .collect();
+        (!run.is_empty()).then(|| run.iter().all(|&c| c == b'0'))
+    };
+    match value {
+        [b'\\', b'x', rest @ ..] => digits(rest, 2, u8::is_ascii_hexdigit) == Some(true),
+        [b'\\', rest @ ..] => digits(rest, 3, |c| (b'0'..=b'7').contains(c)) == Some(true),
+        _ => false,
+    }
 }
 
 /// The sanitized text of a magic file, if anything needed rewriting.
@@ -274,5 +305,14 @@ mod tests {
             b"a\n0 regex .b x\n"
         );
         assert!(sanitize(b"a\nb").is_none());
+        assert_eq!(
+            sanitize_line(b"0\tregex\t\\0\\0\\0\\0\tTest").unwrap(),
+            b"0\tregex\ta^\tTest"
+        );
+        assert!(sanitize_line(b"0\tregex\t\\040x\tT").is_none());
+        assert!(starts_with_nul_escape(b"\\x00a"));
+        assert!(starts_with_nul_escape(b"\\000"));
+        assert!(!starts_with_nul_escape(b"\\01"));
+        assert!(!starts_with_nul_escape(b"\\x"));
     }
 }
