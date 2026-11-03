@@ -11,7 +11,7 @@
 //!   (`timelib_parse_from_format`) and ISO 8601 intervals/periods.
 //! * [`time`] — broken-down time ↔ timestamps, relative time application.
 //! * [`interval`] — `diff()`, `add()`, `sub()`.
-//! * [`format`] — `date()`/`DateTime::format()` and `DateInterval::format()`.
+//! * [`format`](mod@format) — `date()`/`DateTime::format()` and `DateInterval::format()`.
 //! * [`astro`] — sunrise/sunset/twilight (`date_sun_info()`).
 //! * [`api`] — PHP-function-shaped helpers built on the above.
 //!
