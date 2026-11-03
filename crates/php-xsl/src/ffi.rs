@@ -8,7 +8,7 @@
 //! use `php-libxml`'s (layout-checked) `xmlNode`/`xmlDoc` declarations.
 //!
 //! Everything in here is a raw declaration; the safe surface is built in
-//! [`crate::raw`].
+//! the private `raw` module.
 
 #![allow(
     non_camel_case_types,

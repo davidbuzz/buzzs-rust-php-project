@@ -13,6 +13,10 @@
 //!   exactly like PHP's handlers do (buffered until a newline; stored in
 //!   the internal error list or displayed as warnings, with libxslt option
 //!   names rewritten to `$maxTemplateDepth`/`$maxTemplateVars`).
+//! * File I/O done by libxslt (`xsl:include`/`xsl:import`, `document()`,
+//!   `transformToUri()`, `xsl:document`) goes through libxml2's I/O
+//!   factories, i.e. through `php_libxml::io::StreamHooks` (PHP streams)
+//!   once the VM installed them.
 //! * [`class`] describes the class, constants and `phpinfo()` rows.
 //!
 //! All `unsafe` code is in [`ffi`] (declarations) and `raw`; the

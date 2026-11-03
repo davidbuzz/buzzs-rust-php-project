@@ -937,7 +937,7 @@ fn get_parameter_strings() {
                 .get_parameter(b"", b"foo")
                 .unwrap()
                 .map_or(Value::Bool(false), Value::Str),
-        )
+        );
     };
     proc.set_parameter(b"", b"foo", Some(b"bar")).unwrap();
     get();
