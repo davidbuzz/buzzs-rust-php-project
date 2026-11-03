@@ -60,6 +60,9 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
             ));
         }
     }
+    for (name, hook) in DIRECTIVES.into_iter().zip(HOOKS) {
+        m.ini_on_modify(name, hook);
+    }
     m.function(
         "output_add_rewrite_var(string $name, string $value): bool",
         output_add_rewrite_var,
@@ -194,43 +197,20 @@ fn output_reset_rewrite_vars(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
     Ok(Value::Bool(true))
 }
 
-/// `ini_set()` on a rewriter directive: the handler runs first (its
-/// deprecation precedes the store), then the VM stores the value.
-pub(crate) fn ini_set(
-    vm: &mut Vm,
-    name: &str,
-    value: &[u8],
-    store: impl FnOnce(&mut Vm) -> VmResult<Value>,
-) -> VmResult<Value> {
-    if let Some(msg) = deprecation(name, value) {
-        docref(vm, 8192, msg.as_bytes())?;
-    }
-    let r = store(vm)?;
-    set_modified(name, true);
-    if !matches!(r, Value::Bool(false)) {
-        let stored = vm.ini.raw(name).map(<[u8]>::to_vec).unwrap_or_default();
-        apply(name, &stored);
-    }
-    Ok(r)
+/// The modify hook of `DIRECTIVES[I]`: the handler (deprecation, table
+/// update) runs before `ini_set()` stores the value, and again with the
+/// restored value after `ini_restore()`.
+fn modify_hook<const I: usize>(vm: &mut Vm, value: &[u8]) -> VmResult<bool> {
+    let name = DIRECTIVES[I];
+    set_modified(name, !crate::ini::restoring());
+    on_modify(vm, name, value)?;
+    Ok(true)
 }
 
-/// `ini_restore()` on a rewriter directive.
-pub(crate) fn ini_restore(
-    vm: &mut Vm,
-    name: &str,
-    restore: impl FnOnce(&mut Vm) -> VmResult<Value>,
-) -> VmResult<Value> {
-    let before = vm.ini.raw(name).map(<[u8]>::to_vec).unwrap_or_default();
-    let r = restore(vm)?;
-    set_modified(name, false);
-    let after = vm.ini.raw(name).map(<[u8]>::to_vec).unwrap_or_default();
-    if after != before {
-        on_modify(vm, name, &after)?;
-    }
-    Ok(r)
-}
-
-/// Whether `name` is a rewriter directive.
-pub(crate) fn is_directive(name: &str) -> bool {
-    DIRECTIVES.contains(&name)
-}
+/// The hooks, in [`DIRECTIVES`] order.
+const HOOKS: [php_vm::ext::IniModifyFn; 4] = [
+    modify_hook::<0>,
+    modify_hook::<1>,
+    modify_hook::<2>,
+    modify_hook::<3>,
+];

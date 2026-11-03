@@ -22,6 +22,7 @@ mod classes;
 mod funcs;
 mod headers;
 mod host;
+mod info;
 mod ini;
 mod rewrite;
 mod shutdown;
@@ -44,20 +45,25 @@ impl Extension for Session {
     }
 
     fn register(&self, m: &mut ModuleBuilder<'_>) {
-        ini::normalize_config(m.vm());
         ini::register(m);
         funcs::register(m);
         classes::register(m);
         rewrite::register(m);
-        ini::install_hooks(m);
+        // `SID` is defined per request; registering it here attributes it
+        // to this module (`get_defined_constants(true)`), it is removed
+        // again at module startup.
+        m.constant("SID", Value::string(""));
+        m.info(info::module_info);
+        m.on_module_startup(module_startup);
+        m.on_request_startup(request_startup);
         m.on_request_shutdown(shutdown::request_shutdown);
-        startup(m.vm());
     }
 }
 
-/// `MINIT` (configuration values) followed by `RINIT`
-/// (`session.auto_start`).
-fn startup(vm: &mut Vm) {
+/// `MINIT`: applies the configuration values (`php.ini`/`-d`) to the
+/// session directives, then those of the URL rewriter.
+fn module_startup(vm: &mut Vm) {
+    vm.constants.remove(&php_runtime::ZStr::from("SID"));
     set_phase(Phase::Startup);
     let config: Vec<(&str, Option<Vec<u8>>)> = php_session::ini::DIRECTIVES
         .iter()
@@ -74,6 +80,14 @@ fn startup(vm: &mut Vm) {
         h.state().take_exception();
     });
     rewrite::startup(vm);
+    vm.pending_throw = None;
+    set_phase(Phase::Running);
+}
+
+/// `RINIT`: resolves the module/serializer and honours
+/// `session.auto_start`.
+fn request_startup(vm: &mut Vm) {
+    set_phase(Phase::RequestStartup);
     let err = with_host(vm, |h| {
         let r = php_session::request_startup(h);
         let late = h.state().take_exception();

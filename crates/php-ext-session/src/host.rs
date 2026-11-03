@@ -30,8 +30,10 @@ use php_vm::{Throw, Vm};
 /// when no PHP code is executing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Phase {
-    /// `MINIT`/`RINIT` (`"PHP Startup"`).
+    /// `MINIT` (`"PHP Startup"`).
     Startup,
+    /// `RINIT` (`"PHP Request Startup"`).
+    RequestStartup,
     /// The script is running.
     Running,
     /// `RSHUTDOWN` (`"PHP Request Shutdown"`).
@@ -144,6 +146,7 @@ pub(crate) fn docref(vm: &mut Vm, level: i64, message: &[u8]) -> Result<(), Thro
         || {
             match phase() {
                 Phase::Startup => "PHP Startup",
+                Phase::RequestStartup => "PHP Request Startup",
                 Phase::Shutdown => "PHP Request Shutdown",
                 Phase::Running => "Unknown",
             }
@@ -196,6 +199,20 @@ pub(crate) fn with_host<R>(vm: &mut Vm, f: impl FnOnce(&mut VmHost<'_>) -> R) ->
     };
     let r = f(&mut h);
     crate::ini::sync(&mut h);
+    if let Some(s) = h.state.take() {
+        put_parked(s);
+    }
+    r
+}
+
+/// [`with_host`] without the INI synchronisation (for the INI modify
+/// hooks: the VM stores the value itself afterwards).
+pub(crate) fn with_host_unsynced<R>(vm: &mut Vm, f: impl FnOnce(&mut VmHost<'_>) -> R) -> R {
+    let mut h = VmHost {
+        vm,
+        state: Some(take_parked()),
+    };
+    let r = f(&mut h);
     if let Some(s) = h.state.take() {
         put_parked(s);
     }
@@ -425,9 +442,20 @@ impl SessionHost for VmHost<'_> {
     }
 
     fn define_sid(&mut self, value: &[u8]) {
-        self.vm
+        // An existing `SID` (ours or a user constant) only gets its value
+        // replaced; a new one is `#[\Deprecated]`.
+        let name = ZStr::from("SID");
+        let existed = self
+            .vm
             .constants
-            .insert(ZStr::from("SID"), Value::Str(ZStr::from(value)));
+            .insert(name.clone(), Value::Str(ZStr::from(value)))
+            .is_some();
+        if !existed {
+            self.vm.deprecated_constants.insert(
+                name,
+                b" since 8.4, as GET/POST sessions were deprecated".to_vec(),
+            );
+        }
     }
 
     fn register_session_shutdown(&mut self) -> bool {

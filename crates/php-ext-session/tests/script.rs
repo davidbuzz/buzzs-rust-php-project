@@ -102,7 +102,7 @@ fn ini_values_are_shared_with_the_vm() {
     assert_eq!(out, expected);
     let out = run_with(
         r#"<?php var_dump(ini_get("session.cookie_secure"));"#,
-        &[("session.cookie_secure", "On")],
+        &[("session.cookie_secure", "1")],
     );
     assert_eq!(out, "string(1) \"1\"\n");
 }
