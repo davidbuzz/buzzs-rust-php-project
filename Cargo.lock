@@ -355,6 +355,7 @@ dependencies = [
  "php-ext-exif",
  "php-ext-fileinfo",
  "php-ext-filter",
+ "php-ext-ftp",
  "php-ext-gettext",
  "php-ext-gmp",
  "php-ext-hash",
