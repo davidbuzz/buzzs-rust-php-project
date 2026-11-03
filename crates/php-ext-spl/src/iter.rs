@@ -4,14 +4,14 @@
 //! `InternalIterator` class (`zend_create_internal_iterator_zval`).
 
 use crate::host::{rt_throw, VmHost};
+use php_runtime::ZStr;
 use php_runtime::{RtResult, Value};
 use php_spl::ObjectIterator;
-use php_runtime::ZStr;
 use php_vm::ext::{acc, class_flags, Args, ClassBuilder, NativeFn, NativeIterator, VmResult};
 use php_vm::func::Func;
+use php_vm::Vm;
 use std::cell::RefCell;
 use std::collections::HashMap;
-use php_vm::Vm;
 
 /// Runs `f` with a [`VmHost`] over `vm`, converting the error.
 pub fn with_host<T>(vm: &mut Vm, f: impl FnOnce(&mut VmHost<'_>) -> RtResult<T>) -> VmResult<T> {
@@ -218,5 +218,6 @@ pub fn register_internal_iterator(vm: &mut Vm) {
         .register(vm);
     // Replacing a class appends its name to the declaration order again.
     let mut seen = std::collections::HashSet::new();
-    vm.class_order.retain(|n| seen.insert(n.as_bytes().to_vec()));
+    vm.class_order
+        .retain(|n| seen.insert(n.as_bytes().to_vec()));
 }

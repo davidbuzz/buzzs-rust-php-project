@@ -351,7 +351,14 @@ fn collect_args(args: &Args, target: Target) -> Vec<Value> {
 /// `spl_array_method`: the `ArrayObject`/`ArrayIterator` sort methods
 /// call the array function of the same name, which may be disabled.
 fn disabled_sort(vm: &mut Vm, t: Target) -> Option<Throw> {
-    const SORTS: &[&str] = &["asort", "ksort", "uasort", "uksort", "natsort", "natcasesort"];
+    const SORTS: &[&str] = &[
+        "asort",
+        "ksort",
+        "uasort",
+        "uksort",
+        "natsort",
+        "natcasesort",
+    ];
     if !matches!(t.class, "ArrayObject" | "ArrayIterator") {
         return None;
     }
@@ -400,7 +407,10 @@ fn method_handler(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let args = collect_args(a, t);
     let this = a.this.clone();
     if t.class == "SplFixedArray" && t.def.name == "getIterator" && args.is_empty() {
-        if let Some((obj, st)) = this.as_ref().and_then(|o| Some((o.clone(), spl_state_of(o)?))) {
+        if let Some((obj, st)) = this
+            .as_ref()
+            .and_then(|o| Some((o.clone(), spl_state_of(o)?)))
+        {
             // `zend_create_internal_iterator_zval` over the class's own
             // iterator: `php-spl` resolves it through `get_iterator`, which
             // re-enters a user `getIterator()` override (infinite recursion).

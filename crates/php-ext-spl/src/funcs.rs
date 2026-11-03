@@ -17,7 +17,15 @@ fn call(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         vm.raise(8192, &msg)?;
     }
     let n = a.passed.iter().rposition(|&p| p).map_or(0, |i| i + 1);
-    let args: Vec<Value> = a.values.iter().take(n).cloned().collect();
+    let mut args: Vec<Value> = a.values.iter().take(n).cloned().collect();
+    if matches!(
+        name.as_str(),
+        "spl_autoload_register" | "spl_autoload_unregister"
+    ) {
+        if let Some(cb) = args.first_mut() {
+            *cb = static_method_callable(cb);
+        }
+    }
     let r = {
         let mut host = VmHost::new(vm);
         php_spl::call_function(&mut host, &name, &args)
@@ -29,6 +37,36 @@ fn call(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         vm.autoloaders = php_spl::functions::autoloaders();
     }
     crate::iter::finish(vm, r)
+}
+
+/// `[$object, 'staticMethod']` resolves to a function call without an
+/// object (`zend_is_callable_ex` leaves `fcc.object` NULL), so the
+/// autoload registry stores and compares it as `['Class', 'staticMethod']`.
+fn static_method_callable(cb: &Value) -> Value {
+    let Value::Array(arr) = cb.deref() else {
+        return cb.clone();
+    };
+    if arr.len() != 2 {
+        return cb.clone();
+    }
+    let (Some(Value::Object(o)), Some(Value::Str(m))) = (
+        arr.get_int(0).map(Value::deref),
+        arr.get_int(1).map(Value::deref),
+    ) else {
+        return cb.clone();
+    };
+    let cls = php_vm::object::class_of(&o).clone();
+    let is_static = cls
+        .find_method(m.to_ascii_lowercase().as_bytes())
+        .is_some_and(|meth| meth.flags & php_vm::func::flags::STATIC != 0);
+    if is_static {
+        Value::Array(php_runtime::ZArray::from_values(vec![
+            Value::Str(cls.name.clone()),
+            Value::Str(m),
+        ]))
+    } else {
+        cb.clone()
+    }
 }
 
 /// Resolves an include path for `spl_autoload()` (`zend_resolve_path`):
