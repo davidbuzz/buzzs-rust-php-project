@@ -18,4 +18,5 @@ pub mod unum;
 pub mod unumf;
 pub mod uplrules;
 pub mod ures;
+pub mod usearch;
 pub mod utext;

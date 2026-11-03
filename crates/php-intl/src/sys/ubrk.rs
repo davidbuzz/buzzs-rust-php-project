@@ -15,6 +15,8 @@ pub struct BreakIterator {
     bi: *mut UBreakIterator,
     /// Keeps the UTF-8 buffer referenced by ICU's (cloned) `UText` alive.
     text: Option<Arc<[u8]>>,
+    /// Keeps UTF-16 text set with `ubrk_setText` alive.
+    text16: Option<Arc<[u16]>>,
     /// Compiled rules ICU references (`ubrk_openBinaryRules`).
     binary: Option<Arc<[u8]>>,
 }
@@ -37,6 +39,7 @@ fn wrap(p: *mut UBreakIterator, st: UErrorCode) -> Result<BreakIterator, UErrorC
     Ok(BreakIterator {
         bi: p,
         text: None,
+        text16: None,
         binary: None,
     })
 }
@@ -50,6 +53,29 @@ impl BreakIterator {
         let p = unsafe { ffi::ubrk_open(ty, l.as_ptr(), std::ptr::null(), 0, &mut st) };
         let warn = st;
         wrap(p, st).map(|b| (b, warn))
+    }
+
+    /// `ubrk_open(type, NULL)` (ICU's default locale).
+    pub fn open_default(ty: i32) -> Result<Self, UErrorCode> {
+        let mut st = UErrorCode::ZERO;
+        // SAFETY: null locale and text are allowed.
+        let p = unsafe { ffi::ubrk_open(ty, std::ptr::null(), std::ptr::null(), 0, &mut st) };
+        wrap(p, st)
+    }
+
+    /// The raw handle (borrowed).
+    pub fn as_ptr(&self) -> *mut UBreakIterator {
+        self.bi
+    }
+
+    /// `ubrk_setText()` over UTF-16 text.
+    pub fn set_text_u16(&mut self, text: Arc<[u16]>) -> Result<(), UErrorCode> {
+        let mut st = UErrorCode::ZERO;
+        // SAFETY: the text is kept alive in self.text16 while ICU uses it.
+        unsafe { ffi::ubrk_setText(self.bi, text.as_ptr(), len32(&text), &mut st) };
+        st.check()?;
+        self.text16 = Some(text);
+        Ok(())
     }
 
     /// `ubrk_openRules(rules)`.
@@ -90,6 +116,7 @@ impl BreakIterator {
         let p = unsafe { ffi::ubrk_clone(self.bi, &mut st) };
         let mut b = wrap(p, st)?;
         b.text.clone_from(&self.text);
+        b.text16.clone_from(&self.text16);
         b.binary.clone_from(&self.binary);
         Ok(b)
     }
