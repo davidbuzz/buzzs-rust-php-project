@@ -352,6 +352,14 @@ impl<C: RuntimeContext + ?Sized> RuntimeContext for Quiet<'_, C> {
 /// own default `unserialize_max_depth` is 4096).
 const MAX_SCAN_DEPTH: usize = 4096;
 
+/// What [`Scanner::item`] consumed.
+enum Item {
+    /// A complete scalar, reference or `C:` record.
+    Complete,
+    /// The header of an `a:`/`O:` container with this many elements.
+    Open(usize),
+}
+
 /// A scanner over serialized data that copies one value while shifting
 /// `R:`/`r:` back-reference numbers by `delta`.
 struct Scanner<'a> {
@@ -437,7 +445,7 @@ impl<'a> Scanner<'a> {
         // Remaining items (keys and values) of each open container.
         let mut open: Vec<usize> = Vec::new();
         loop {
-            if let Some(n) = self.item(out)? {
+            if let Item::Open(n) = self.item(out)? {
                 if open.len() >= MAX_SCAN_DEPTH {
                     return None;
                 }
@@ -461,7 +469,7 @@ impl<'a> Scanner<'a> {
 
     /// Copies one token; for `a:`/`O:` only the header up to `{` is copied
     /// and the number of elements is returned.
-    fn item(&mut self, out: &mut Vec<u8>) -> Option<Option<usize>> {
+    fn item(&mut self, out: &mut Vec<u8>) -> Option<Item> {
         let tag = self.peek()?;
         match tag {
             b'N' => {
@@ -515,7 +523,7 @@ impl<'a> Scanner<'a> {
                 let n = self.uint(out)?;
                 self.expect(b':', out)?;
                 self.expect(b'{', out)?;
-                return Some(Some(n));
+                return Some(Item::Open(n));
             }
             b'O' | b'C' => {
                 self.raw(1, out)?;
@@ -528,14 +536,14 @@ impl<'a> Scanner<'a> {
                 self.expect(b':', out)?;
                 self.expect(b'{', out)?;
                 if tag == b'O' {
-                    return Some(Some(m));
+                    return Some(Item::Open(m));
                 }
                 self.raw(m, out)?;
                 self.expect(b'}', out)?;
             }
             _ => return None,
         }
-        Some(None)
+        Some(Item::Complete)
     }
 }
 
