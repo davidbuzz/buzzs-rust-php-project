@@ -25,7 +25,7 @@ fn key_out(k: Key) -> ArrayKey {
 fn table_in(vm: &mut Vm, t: &ZArray) -> VmResult<Vec<(Key, SValue)>> {
     let mut out = Vec::with_capacity(t.len());
     for (k, v) in t.iter() {
-        out.push((key_in(&k), to_svalue(vm, &v.deref())?));
+        out.push((key_in(k), to_svalue(vm, &v.deref())?));
     }
     Ok(out)
 }
