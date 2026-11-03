@@ -390,6 +390,8 @@ dependencies = [
  "php-ext-zip",
  "php-ext-zlib",
  "php-memlimit",
+ "php-runtime",
+ "php-support",
  "php-vm",
 ]
 
@@ -502,10 +504,12 @@ dependencies = [
  "php-dom",
  "php-ext-streams",
  "php-ext-xml",
+ "php-ext-xsl",
  "php-libxml",
  "php-runtime",
  "php-streams",
  "php-vm",
+ "php-xsl",
 ]
 
 [[package]]
@@ -537,6 +541,7 @@ name = "php-ext-filter"
 version = "0.1.0"
 dependencies = [
  "php-filter",
+ "php-memlimit",
  "php-pcre",
  "php-runtime",
  "php-support",
@@ -547,6 +552,7 @@ dependencies = [
 name = "php-ext-ftp"
 version = "0.1.0"
 dependencies = [
+ "php-ext-stdarr",
  "php-ext-streams",
  "php-ftp",
  "php-runtime",
