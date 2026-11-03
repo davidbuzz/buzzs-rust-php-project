@@ -235,7 +235,7 @@ pub(crate) fn starts_expr(k: T) -> bool {
 
 /// Tokens that can start a `variable` (fully dereferenceable expressions
 /// included).
-fn starts_variable(k: T) -> bool {
+pub(crate) fn starts_variable(k: T) -> bool {
     matches!(
         k,
         T::Variable
@@ -951,6 +951,8 @@ impl Parser<'_> {
                     self.bump();
                     let index = if self.peek() == T::RBracket {
                         None
+                    } else if !starts_expr(self.peek()) {
+                        return Err(self.unexpected(&[T::RBracket]));
                     } else {
                         let idx = self.parse_expr()?;
                         Some(bx(idx))

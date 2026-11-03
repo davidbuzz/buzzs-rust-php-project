@@ -1,0 +1,409 @@
+else;	Parse error: syntax error, unexpected token "else", expecting end of file on line 1
+catch	Parse error: syntax error, unexpected token "catch", expecting end of file on line 1
+}	Parse error: Unmatched '}' on line 1
+echo 1 2;	Parse error: syntax error, unexpected integer "2", expecting "," or ";" on line 1
+echo 1	Parse error: syntax error, unexpected end of file, expecting "," or ";" on line 1
+$a = 1 2;	Parse error: syntax error, unexpected integer "2" on line 1
+$a = ;	Parse error: syntax error, unexpected token ";" on line 1
+if ($a 2) {}	Parse error: syntax error, unexpected integer "2" on line 1
+if (	Parse error: Unclosed '(' on line 1
+if 1	Parse error: syntax error, unexpected integer "1", expecting "(" on line 1
+if (1): foo(); else foo(); endif;	Parse error: syntax error, unexpected identifier "foo", expecting ":" on line 1
+if (1): else foo(); endif;	Parse error: syntax error, unexpected identifier "foo", expecting ":" on line 1
+if (1): foo(); ) endif;	Parse error: Unmatched ')' on line 1
+if (1): foo(); endif	Parse error: syntax error, unexpected end of file, expecting ";" on line 1
+if (1) {} else: foo(); endif;	Parse error: syntax error, unexpected token ":" on line 1
+if (1): foo(); case 1: endif;	Parse error: syntax error, unexpected token "case", expecting "elseif" or "else" or "endif" on line 1
+while (1 2) {}	Parse error: syntax error, unexpected integer "2" on line 1
+while (1): foo(); endfor;	Parse error: syntax error, unexpected token "endfor" on line 1
+while 1	Parse error: syntax error, unexpected integer "1", expecting "(" on line 1
+do {} foo	Parse error: syntax error, unexpected identifier "foo", expecting "while" on line 1
+do {} while (1)	Parse error: syntax error, unexpected end of file, expecting ";" on line 1
+do {} while 1;	Parse error: syntax error, unexpected integer "1", expecting "(" on line 1
+for ($i = 0 $i < 1;) {}	Parse error: syntax error, unexpected variable "$i", expecting ";" on line 1
+for (;$a $b;) {}	Parse error: syntax error, unexpected variable "$b", expecting ";" on line 1
+for (;; $a $b) {}	Parse error: syntax error, unexpected variable "$b", expecting ")" on line 1
+for ($a; $b) {}	Parse error: syntax error, unexpected token ")", expecting ";" on line 1
+for (;;): endwhile;	Parse error: syntax error, unexpected token "endwhile" on line 1
+foreach ($a $b) {}	Parse error: syntax error, unexpected variable "$b" on line 1
+foreach ($a as) {}	Parse error: syntax error, unexpected token ")" on line 1
+foreach ($a as $b 1) {}	Parse error: syntax error, unexpected integer "1", expecting "->" or "?->" or "{" or "[" on line 1
+foreach ($a as $k => $b 1) {}	Parse error: syntax error, unexpected integer "1", expecting "->" or "?->" or "{" or "[" on line 1
+foreach ($a as $k => ) {}	Parse error: syntax error, unexpected token ")" on line 1
+foreach ($a as list($x) 1) {}	Parse error: syntax error, unexpected integer "1", expecting "=>" or ")" on line 1
+switch (1) { foo }	Parse error: syntax error, unexpected identifier "foo", expecting "case" or "default" or "}" on line 1
+switch (1): foo endswitch;	Parse error: syntax error, unexpected identifier "foo", expecting "endswitch" or "case" or "default" on line 1
+switch(1) x	Parse error: syntax error, unexpected identifier "x", expecting ":" or "{" on line 1
+switch (1) { case 1 2: }	Parse error: syntax error, unexpected integer "2" on line 1
+switch (1) { default 1: }	Parse error: syntax error, unexpected integer "1", expecting ":" or ";" on line 1
+switch (1) { case 1: foo(); else }	Parse error: syntax error, unexpected token "else", expecting "case" or "default" or "}" on line 1
+switch (1): case 1: foo(); } 	Parse error: Unmatched '}' on line 1
+break 1 2;	Parse error: syntax error, unexpected integer "2", expecting ";" on line 1
+continue 1 2;	Parse error: syntax error, unexpected integer "2", expecting ";" on line 1
+return 1 2;	Parse error: syntax error, unexpected integer "2", expecting ";" on line 1
+return	Parse error: syntax error, unexpected end of file, expecting ";" on line 1
+global C;	Parse error: syntax error, unexpected identifier "C", expecting variable or "$" on line 1
+global $a 1;	Parse error: syntax error, unexpected integer "1", expecting "," or ";" on line 1
+global $$;	Parse error: syntax error, unexpected token ";", expecting variable or "{" or "$" on line 1
+static $a 1;	Parse error: syntax error, unexpected integer "1", expecting "," or ";" on line 1
+static 1;	Parse error: syntax error, unexpected integer "1", expecting "::" on line 1
+static $a = 1 2;	Parse error: syntax error, unexpected integer "2", expecting "," or ";" on line 1
+unset($a 1);	Parse error: syntax error, unexpected integer "1", expecting "->" or "?->" or "{" or "[" on line 1
+unset(1);	Parse error: syntax error, unexpected integer "1" on line 1
+unset($a, 1);	Parse error: syntax error, unexpected integer "1", expecting ")" on line 1
+unset FOO;	Parse error: syntax error, unexpected identifier "FOO", expecting "(" on line 1
+unset(FOO);	Parse error: syntax error, unexpected token ")", expecting "->" or "?->" or "{" or "[" on line 1
+declare(ticks=1 2);	Parse error: syntax error, unexpected integer "2", expecting "," or ")" on line 1
+declare(1);	Parse error: syntax error, unexpected integer "1", expecting identifier on line 1
+declare(ticks=1) 1	Parse error: syntax error, unexpected end of file on line 1
+declare(ticks=1): foo(); endif;	Parse error: syntax error, unexpected token "endif" on line 1
+try {} catch (A 1) {}	Parse error: syntax error, unexpected integer "1", expecting ")" on line 1
+try {} catch (A $e 1) {}	Parse error: syntax error, unexpected integer "1", expecting ")" on line 1
+try {} catch (1) {}	Parse error: syntax error, unexpected integer "1" on line 1
+try {} catch {}	Parse error: syntax error, unexpected token "{", expecting "(" on line 1
+try foo();	Parse error: syntax error, unexpected identifier "foo", expecting "{" on line 1
+try {} finally 1	Parse error: syntax error, unexpected integer "1", expecting "{" on line 1
+goto 1;	Parse error: syntax error, unexpected integer "1", expecting identifier on line 1
+goto a 1;	Parse error: syntax error, unexpected integer "1", expecting ";" on line 1
+a: b: 1 2;	Parse error: syntax error, unexpected integer "2" on line 1
+__halt_compiler;	Parse error: syntax error, unexpected token ";", expecting "(" on line 1
+__halt_compiler(1);	Parse error: syntax error, unexpected integer "1", expecting ")" on line 1
+function f() { __halt_compiler(); }	Fatal error: __HALT_COMPILER() can only be used from the outermost scope on line 1
+const A;	Parse error: syntax error, unexpected token ";", expecting "=" on line 1
+const 1 = 2;	Parse error: syntax error, unexpected integer "1", expecting identifier on line 1
+const A = 1 2;	Parse error: syntax error, unexpected integer "2", expecting "," or ";" on line 1
+const A = 1, ;	Parse error: syntax error, unexpected token ";", expecting identifier on line 1
+function f() { const A = 1; }	Parse error: syntax error, unexpected token "const" on line 1
+function f() { use A; }	Parse error: syntax error, unexpected token "use" on line 1
+function f() { namespace A; }	Parse error: syntax error, unexpected token "namespace" on line 1
+namespace ;	Parse error: syntax error, unexpected token ";", expecting "{" on line 1
+namespace A	Parse error: syntax error, unexpected end of file, expecting "{" on line 1
+namespace A\\B {	Parse error: Unclosed '{' on line 1
+namespace A { use }	Parse error: syntax error, unexpected token "}" on line 1
+use ;	Parse error: syntax error, unexpected token ";" on line 1
+use A\\{};	Parse error: syntax error, unexpected token "}", expecting identifier or namespaced name or "function" or "const" on line 1
+use function ;	Parse error: syntax error, unexpected token ";", expecting identifier or fully qualified name or namespaced name on line 1
+use const 1;	Parse error: syntax error, unexpected integer "1", expecting identifier or fully qualified name or namespaced name on line 1
+use A as;	Parse error: syntax error, unexpected token ";", expecting identifier on line 1
+use A as 1;	Parse error: syntax error, unexpected integer "1", expecting identifier on line 1
+use A B;	Parse error: syntax error, unexpected identifier "B", expecting "," or ";" on line 1
+use A, ;	Parse error: syntax error, unexpected token ";", expecting identifier or fully qualified name or namespaced name on line 1
+use A\\{B, C {};	Parse error: syntax error, unexpected token "{", expecting "}" on line 1
+use A\\{B,,C};	Parse error: syntax error, unexpected token ",", expecting "}" on line 1
+use A\\{,B};	Parse error: syntax error, unexpected token ",", expecting identifier or namespaced name or "function" or "const" on line 1
+use function A\\{B, function C};	Parse error: syntax error, unexpected token "function", expecting "}" on line 1
+use A\\{function};	Parse error: syntax error, unexpected token "}", expecting identifier or namespaced name on line 1
+use \\A\\{B};	OK
+function f() ;	Parse error: syntax error, unexpected token ";", expecting "{" on line 1
+function f(1) {}	Parse error: syntax error, unexpected integer "1", expecting variable on line 1
+function 1() {}	Parse error: syntax error, unexpected integer "1", expecting "(" on line 1
+function f($a $b) {}	Parse error: syntax error, unexpected variable "$b", expecting ")" on line 1
+function f($a = 1 2) {}	Parse error: syntax error, unexpected integer "2", expecting ")" on line 1
+function f($a,,$b) {}	Parse error: syntax error, unexpected token ",", expecting variable on line 1
+function f(,) {}	Parse error: syntax error, unexpected token ",", expecting variable on line 1
+function f(int int $x) {}	Parse error: syntax error, unexpected identifier "int", expecting variable on line 1
+function f(int &1) {}	Parse error: syntax error, unexpected integer "1" on line 1
+function f(...1) {}	Parse error: syntax error, unexpected integer "1", expecting variable on line 1
+function f(): {}	Parse error: syntax error, unexpected token "{" on line 1
+function f(): ?1 {}	Parse error: syntax error, unexpected integer "1" on line 1
+function f(): A| {}	Parse error: syntax error, unexpected token "{" on line 1
+function f(): (A) {}	Parse error: syntax error, unexpected token ")", expecting amp on line 1
+function f(): (A&B) {}	Parse error: syntax error, unexpected token "{", expecting "|" on line 1
+function f() {	Parse error: Unclosed '{' on line 1
+function f() { return; 	Parse error: Unclosed '{' on line 1
+function &() {}	Parse error: syntax error, unexpected end of file on line 1
+function f() use ($a) {}	Parse error: syntax error, unexpected token "use", expecting "{" on line 1
+$f = function() ;	Parse error: syntax error, unexpected token ";", expecting "{" on line 1
+$f = function() use ($b 1) {};	Parse error: syntax error, unexpected integer "1", expecting ")" on line 1
+$f = function() use (1) {};	Parse error: syntax error, unexpected integer "1", expecting variable or "&" or amp on line 1
+$f = function() use () {};	Parse error: syntax error, unexpected token ")", expecting variable or "&" or amp on line 1
+$f = function() use ($a) ;	Parse error: syntax error, unexpected token ";", expecting "{" on line 1
+$f = fn() ;	Parse error: syntax error, unexpected token ";", expecting "=>" on line 1
+$f = fn() => ;	Parse error: syntax error, unexpected token ";" on line 1
+$f = fn($a 1) => 1;	Parse error: syntax error, unexpected integer "1", expecting ")" on line 1
+$f = static 1;	Parse error: syntax error, unexpected integer "1", expecting "::" on line 1
+$f = static function;	Parse error: syntax error, unexpected token ";", expecting "(" on line 1
+$f = #[A] 1;	Parse error: syntax error, unexpected integer "1", expecting "function" or "fn" or "static" or "#[" on line 1
+$f = #[A] static 1;	Parse error: syntax error, unexpected integer "1", expecting "function" or "fn" on line 1
+#[A 1] function f() {}	Parse error: syntax error, unexpected integer "1", expecting "]" on line 1
+#[A(] function f() {}	Parse error: Unclosed '(' does not match ']' on line 1
+#[A, ] function f() {}	OK
+#[A, 1] function f() {}	Parse error: syntax error, unexpected integer "1", expecting "]" on line 1
+#[] function f() {}	Parse error: syntax error, unexpected token "]" on line 1
+#[A] 1;	Parse error: syntax error, unexpected integer "1" on line 1
+#[A] echo 1;	Parse error: syntax error, unexpected token "echo" on line 1
+class { }	Parse error: syntax error, unexpected token "{", expecting identifier on line 1
+class A { foo }	Parse error: syntax error, unexpected identifier "foo", expecting "function" on line 1
+class A { public foo }	Parse error: syntax error, unexpected token "}", expecting variable on line 1
+class A { public 1 }	Parse error: syntax error, unexpected integer "1", expecting variable on line 1
+class A { public function }	Parse error: syntax error, unexpected token "}" on line 1
+class A { public function 1() {} }	Parse error: syntax error, unexpected integer "1" on line 1
+class A { function f() }	Parse error: syntax error, unexpected token "}", expecting ";" or "{" on line 1
+class A { function f(); }	Fatal error: Non-abstract method A::f() must contain body on line 1
+class A { function f() {} 	Parse error: Unclosed '{' on line 1
+class A { const }	Parse error: syntax error, unexpected token "}" on line 1
+class A { const X }	Parse error: syntax error, unexpected token "}" on line 1
+class A { const X = 1 2; }	Parse error: syntax error, unexpected integer "2", expecting "," or ";" on line 1
+class A { const X = 1, }	Parse error: syntax error, unexpected token "}" on line 1
+class A { const int }	Parse error: syntax error, unexpected token "}" on line 1
+class A { use }	Parse error: syntax error, unexpected token "}" on line 1
+class A { use B }	Parse error: syntax error, unexpected token "}", expecting "," or ";" or "{" on line 1
+class A { use B { } }	OK
+class A { use B { foo } }	Parse error: syntax error, unexpected token "}", expecting "::" on line 1
+class A { use B { foo as } }	Parse error: syntax error, unexpected token "}" on line 1
+class A { use B { foo as 1; } }	Parse error: syntax error, unexpected integer "1" on line 1
+class A { use B { foo as bar } }	Parse error: syntax error, unexpected token "}", expecting ";" on line 1
+class A { use B { A::foo } }	Parse error: syntax error, unexpected token "}", expecting "as" on line 1
+class A { use B { A::foo insteadof } }	Parse error: syntax error, unexpected token "}" on line 1
+class A { use B { A::foo insteadof C } }	Parse error: syntax error, unexpected token "}", expecting ";" on line 1
+class A { use B { A:: } }	Parse error: syntax error, unexpected token "}" on line 1
+class A { case }	Parse error: syntax error, unexpected token "}" on line 1
+class A { case A 1 }	Parse error: syntax error, unexpected integer "1", expecting ";" on line 1
+class A { case A = 1 2 }	Parse error: syntax error, unexpected integer "2", expecting ";" on line 1
+class A { var }	Parse error: syntax error, unexpected token "}", expecting variable on line 1
+class A { var $a 1 }	Parse error: syntax error, unexpected integer "1", expecting "," or ";" on line 1
+class A { public $a }	Parse error: syntax error, unexpected token "}", expecting "," or ";" on line 1
+class A { public $a, }	Parse error: syntax error, unexpected token "}", expecting variable on line 1
+class A { public $a = 1 2; }	Parse error: syntax error, unexpected integer "2", expecting "," or ";" on line 1
+class A { public $a, $b = 1 2; }	Parse error: syntax error, unexpected integer "2", expecting "," or ";" on line 1
+class A { public int }	Parse error: syntax error, unexpected token "}", expecting variable on line 1
+class A { #[A] }	Parse error: syntax error, unexpected token "}", expecting "function" on line 1
+class A { #[A] use B; }	Parse error: syntax error, unexpected token "use", expecting "function" on line 1
+class A extends {}	Parse error: syntax error, unexpected token "{" on line 1
+class A extends B C {}	Parse error: syntax error, unexpected identifier "C", expecting "{" on line 1
+class A implements {}	Parse error: syntax error, unexpected token "{" on line 1
+class A implements B, {}	Parse error: syntax error, unexpected token "{" on line 1
+class A implements B C {}	Parse error: syntax error, unexpected identifier "C", expecting "{" on line 1
+class A extends B implements C extends D {}	Parse error: syntax error, unexpected token "extends", expecting "{" on line 1
+class A	Parse error: syntax error, unexpected end of file, expecting "{" on line 1
+class A {	Parse error: Unclosed '{' on line 1
+interface A extends B C	Parse error: syntax error, unexpected identifier "C", expecting "{" on line 1
+interface A extends {}	Parse error: syntax error, unexpected token "{" on line 1
+enum A: int B	Parse error: syntax error, unexpected identifier "B", expecting "{" on line 1
+enum A: {}	Parse error: syntax error, unexpected token "{" on line 1
+enum A: int implements {}	Parse error: syntax error, unexpected token "{" on line 1
+trait A B	Parse error: syntax error, unexpected identifier "B", expecting "{" on line 1
+trait {}	Parse error: syntax error, unexpected token "{", expecting identifier on line 1
+abstract foo	Parse error: syntax error, unexpected identifier "foo", expecting "abstract" or "final" or "readonly" or "class" on line 1
+abstract function f() {}	Parse error: syntax error, unexpected token "function", expecting "abstract" or "final" or "readonly" or "class" on line 1
+final 1	Parse error: syntax error, unexpected integer "1", expecting "abstract" or "final" or "readonly" or "class" on line 1
+abstract final 1	Fatal error: Cannot use the final modifier on an abstract class on line 1
+final abstract class X {}	Fatal error: Cannot use the final modifier on an abstract class on line 1
+abstract abstract class X {}	Fatal error: Multiple abstract modifiers are not allowed on line 1
+final final class X {}	Fatal error: Multiple final modifiers are not allowed on line 1
+readonly readonly class X {}	Fatal error: Multiple readonly modifiers are not allowed on line 1
+readonly function f() {}	Parse error: syntax error, unexpected token "function", expecting "abstract" or "final" or "readonly" or "class" on line 1
+new class { foo };	Parse error: syntax error, unexpected identifier "foo", expecting "function" on line 1
+new class extends {};	Parse error: syntax error, unexpected token "{" on line 1
+new class(1 2) {};	Parse error: syntax error, unexpected integer "2", expecting ")" on line 1
+new class 1;	Parse error: syntax error, unexpected integer "1", expecting "{" on line 1
+new abstract class {};	Fatal error: Cannot use the abstract modifier on an anonymous class on line 1
+new final class {};	Fatal error: Cannot use the final modifier on an anonymous class on line 1
+class A { public public $a; }	Fatal error: Multiple access type modifiers are not allowed on line 1
+class A { public private $a; }	Fatal error: Multiple access type modifiers are not allowed on line 1
+class A { static static $a; }	Fatal error: Multiple static modifiers are not allowed on line 1
+class A { final abstract function f(); }	Fatal error: Cannot use the final modifier on an abstract method on line 1
+class A { abstract $a; }	Fatal error: Cannot use the abstract modifier on a property on line 1
+class A { abstract const X = 1; }	Fatal error: Cannot use the abstract modifier on a class constant on line 1
+class A { static const X = 1; }	Fatal error: Cannot use the static modifier on a class constant on line 1
+class A { readonly function f() {} }	Fatal error: Cannot use the readonly modifier on a method on line 1
+class A { readonly const X = 1; }	Fatal error: Cannot use the readonly modifier on a class constant on line 1
+class A { final final function f() {} }	Fatal error: Multiple final modifiers are not allowed on line 1
+class A { readonly readonly int $a; }	Fatal error: Multiple readonly modifiers are not allowed on line 1
+class A { function __construct(static $a) {} }	Fatal error: Cannot use the static modifier on a parameter on line 1
+class A { function __construct(abstract $a) {} }	Fatal error: Cannot use the abstract modifier on a parameter on line 1
+class A { function __construct(public public $a) {} }	Fatal error: Multiple access type modifiers are not allowed on line 1
+class A { use B { foo as static; } }	Fatal error: Cannot use "static" as method modifier in trait alias on line 1
+class A { use B { foo as abstract bar; } }	Fatal error: Cannot use "abstract" as method modifier in trait alias on line 1
+class A { use B { foo as readonly; } }	Fatal error: Cannot use the readonly modifier on a method on line 1
+$a->;	Parse error: syntax error, unexpected token ";", expecting identifier or variable or "{" or "$" on line 1
+$a->1;	Parse error: syntax error, unexpected integer "1", expecting identifier or variable or "{" or "$" on line 1
+$a?->;	Parse error: syntax error, unexpected token ";", expecting identifier or variable or "{" or "$" on line 1
+$a::;	Parse error: syntax error, unexpected token ";" on line 1
+A::1;	Parse error: syntax error, unexpected integer "1" on line 1
+A::$1;	Parse error: syntax error, unexpected integer "1", expecting variable or "{" or "$" on line 1
+$$;	Parse error: syntax error, unexpected token ";", expecting variable or "{" or "$" on line 1
+${;	Parse error: syntax error, unexpected token ";" on line 1
+${1 2};	Parse error: syntax error, unexpected integer "2" on line 1
+$a[1 2];	Parse error: syntax error, unexpected integer "2", expecting "]" on line 1
+$a[;	Parse error: syntax error, unexpected token ";", expecting "]" on line 1
+$a{1};	Fatal error: Array and string offset access syntax with curly braces is no longer supported on line 1
+$a = [1 2];	Parse error: syntax error, unexpected integer "2", expecting "]" on line 1
+$a = [;];	Parse error: syntax error, unexpected token ";", expecting "]" on line 1
+$a = array(;);	Parse error: syntax error, unexpected token ";", expecting ")" on line 1
+$a = array(1 2);	Parse error: syntax error, unexpected integer "2", expecting ")" on line 1
+$a = [1, 2;	Parse error: syntax error, unexpected token ";", expecting "]" on line 1
+$a = array;	Parse error: syntax error, unexpected token ";", expecting "(" on line 1
+$a = list;	Parse error: syntax error, unexpected token ";", expecting "(" on line 1
+list($a) 1;	Parse error: syntax error, unexpected integer "1", expecting "=" on line 1
+list($a, ) 1;	Parse error: syntax error, unexpected integer "1", expecting "=" on line 1
+list(1 2) = $a;	Parse error: syntax error, unexpected integer "2", expecting ")" on line 1
+[$a] 1;	Parse error: syntax error, unexpected integer "1" on line 1
+$a = &new A;	Parse error: syntax error, unexpected token "new" on line 1
+$a = & 1;	Parse error: syntax error, unexpected integer "1" on line 1
+$a =& $b 1;	Parse error: syntax error, unexpected integer "1" on line 1
+foo(1 2);	Parse error: syntax error, unexpected integer "2", expecting ")" on line 1
+foo(1, ;);	Parse error: syntax error, unexpected token ";", expecting ")" on line 1
+foo(1,,2);	Parse error: syntax error, unexpected token ",", expecting ")" on line 1
+foo(;);	Parse error: syntax error, unexpected token ";" on line 1
+foo(a: 1 2);	Parse error: syntax error, unexpected integer "2", expecting ")" on line 1
+foo(a: );	Parse error: syntax error, unexpected token ")" on line 1
+foo(new ;);	Parse error: syntax error, unexpected token ";", expecting ":" on line 1
+foo(static);	Parse error: syntax error, unexpected token ")", expecting ":" on line 1
+foo(print);	Parse error: syntax error, unexpected token ")", expecting ":" on line 1
+foo(array);	Parse error: syntax error, unexpected token "(array)" on line 1
+foo(list);	Parse error: syntax error, unexpected token ")", expecting ":" on line 1
+foo(isset);	Parse error: syntax error, unexpected token ")", expecting ":" on line 1
+foo(clone);	Parse error: syntax error, unexpected token ")", expecting ":" on line 1
+foo(throw);	Parse error: syntax error, unexpected token ")", expecting ":" on line 1
+foo(match);	Parse error: syntax error, unexpected token ")", expecting ":" on line 1
+foo(include);	Parse error: syntax error, unexpected token ")", expecting ":" on line 1
+foo(readonly);	Parse error: syntax error, unexpected token ")", expecting ":" on line 1
+foo(exit 1);	Parse error: syntax error, unexpected integer "1", expecting ")" on line 1
+foo(&$a);	Parse error: syntax error, unexpected token "&" on line 1
+foo(...);	OK
+foo(... 1 2);	Parse error: syntax error, unexpected integer "2", expecting ")" on line 1
+new;	Parse error: syntax error, unexpected token ";", expecting "class" on line 1
+new 1;	Parse error: syntax error, unexpected integer "1", expecting "class" on line 1
+new A 1;	Parse error: syntax error, unexpected integer "1" on line 1
+new A(1 2);	Parse error: syntax error, unexpected integer "2", expecting ")" on line 1
+new A->b;	Parse error: syntax error, unexpected token "->" on line 1
+new static 1;	Parse error: syntax error, unexpected integer "1" on line 1
+new $a->b 1;	Parse error: syntax error, unexpected integer "1" on line 1
+new (1 2);	Parse error: syntax error, unexpected integer "2" on line 1
+A::b(1 2);	Parse error: syntax error, unexpected integer "2", expecting ")" on line 1
+A::{1 2};	Parse error: syntax error, unexpected integer "2" on line 1
+A::{1}(1 2);	Parse error: syntax error, unexpected integer "2", expecting ")" on line 1
+isset($a 1);	Parse error: syntax error, unexpected integer "1", expecting ")" on line 1
+isset($a, ;);	Parse error: syntax error, unexpected token ";", expecting ")" on line 1
+isset();	Parse error: syntax error, unexpected token ")" on line 1
+isset 1;	Parse error: syntax error, unexpected integer "1", expecting "(" on line 1
+empty($a 1);	Parse error: syntax error, unexpected integer "1" on line 1
+empty();	Parse error: syntax error, unexpected token ")" on line 1
+eval(1 2);	Parse error: syntax error, unexpected integer "2" on line 1
+exit 1;	Parse error: syntax error, unexpected integer "1" on line 1
+exit(1 2);	Parse error: syntax error, unexpected integer "2", expecting ")" on line 1
+die(;);	Parse error: syntax error, unexpected token ";", expecting ")" on line 1
+print;	Parse error: syntax error, unexpected token ";" on line 1
+clone;	Parse error: syntax error, unexpected token ";" on line 1
+yield 1 2;	Parse error: syntax error, unexpected integer "2" on line 1
+yield 1 => ;	Parse error: syntax error, unexpected token ";" on line 1
+yield from;	Parse error: syntax error, unexpected token ";" on line 1
+throw;	Parse error: syntax error, unexpected token ";" on line 1
+include;	Parse error: syntax error, unexpected token ";" on line 1
+match;	Parse error: syntax error, unexpected token ";", expecting "(" on line 1
+match 1;	Parse error: syntax error, unexpected integer "1", expecting "(" on line 1
+match(1) 1;	Parse error: syntax error, unexpected integer "1", expecting "{" on line 1
+match(1) { ; };	Parse error: syntax error, unexpected token ";", expecting "}" on line 1
+match(1) { 1 2 };	Parse error: syntax error, unexpected integer "2", expecting "=>" on line 1
+match(1) { 1 => 2 3 };	Parse error: syntax error, unexpected integer "3", expecting "}" on line 1
+match(1) { 1, ; };	Parse error: syntax error, unexpected token ";", expecting "=>" on line 1
+match(1) { default 1 };	Parse error: syntax error, unexpected integer "1", expecting "=>" on line 1
+match(1) { default => };	Parse error: syntax error, unexpected token "}" on line 1
+match(1 2) {};	Parse error: syntax error, unexpected integer "2" on line 1
+1 ? 2;	Parse error: syntax error, unexpected token ";" on line 1
+1 ? 2 : ;	Parse error: syntax error, unexpected token ";" on line 1
+1 ?: ;	Parse error: syntax error, unexpected token ";" on line 1
+1 == 2 == 3;	Parse error: syntax error, unexpected token "==" on line 1
+1 < 2 > 3;	Parse error: syntax error, unexpected token ">" on line 1
+1 === 2 != 3;	Parse error: syntax error, unexpected token "!=" on line 1
+1 <= 2 >= 3;	Parse error: syntax error, unexpected token ">=" on line 1
+1 <=> 2 == 3;	Parse error: syntax error, unexpected token "==" on line 1
+1 instanceof;	Parse error: syntax error, unexpected token ";" on line 1
+$a instanceof 1;	Parse error: syntax error, unexpected integer "1" on line 1
+$a instanceof A 1;	Parse error: syntax error, unexpected integer "1" on line 1
+1 = 2;	Parse error: syntax error, unexpected token "=" on line 1
+FOO = 1;	Parse error: syntax error, unexpected token "=" on line 1
+foo() = 1;	Fatal error: Can't use function return value in write context on line 1
+($a) = 1;	Parse error: syntax error, unexpected token "=" on line 1
+$a++++;	Parse error: syntax error, unexpected token "++" on line 1
+++1;	Parse error: syntax error, unexpected integer "1" on line 1
+++$a++;	Parse error: syntax error, unexpected token "++" on line 1
+--FOO;	Parse error: syntax error, unexpected token ";", expecting "->" or "?->" or "{" or "[" on line 1
+(int);	Parse error: syntax error, unexpected token ";" on line 1
+(int) 1 2;	Parse error: syntax error, unexpected integer "2" on line 1
+@;	Parse error: syntax error, unexpected token ";" on line 1
+!;	Parse error: syntax error, unexpected token ";" on line 1
+-;	Parse error: syntax error, unexpected token ";" on line 1
+$a + ;	Parse error: syntax error, unexpected token ";" on line 1
+$a . ;	Parse error: syntax error, unexpected token ";" on line 1
+$a ?? ;	Parse error: syntax error, unexpected token ";" on line 1
+$a and ;	Parse error: syntax error, unexpected token ";" on line 1
+$a || ;	Parse error: syntax error, unexpected token ";" on line 1
+$a ** ;	Parse error: syntax error, unexpected token ";" on line 1
+$a = 1 +;	Parse error: syntax error, unexpected token ";" on line 1
+$a ? : ;	Parse error: syntax error, unexpected token ";" on line 1
+(1;	Parse error: syntax error, unexpected token ";" on line 1
+(1 2);	Parse error: syntax error, unexpected integer "2" on line 1
+();	Parse error: syntax error, unexpected token ")" on line 1
+[1, 2] = ;	Parse error: syntax error, unexpected token ";" on line 1
+__LINE__::foo();	Parse error: syntax error, unexpected token "::" on line 1
+__FILE__();	Parse error: syntax error, unexpected token "(" on line 1
+FOO::;	Parse error: syntax error, unexpected token ";" on line 1
+static::;	Parse error: syntax error, unexpected token ";" on line 1
+static;	Parse error: syntax error, unexpected token ";", expecting "::" on line 1
+1();	Parse error: syntax error, unexpected token "(" on line 1
+'a' 'b';	Parse error: syntax error, unexpected single-quoted string "b" on line 1
+"a" "b";	Parse error: syntax error, unexpected double-quoted string "b" on line 1
+"$a[1 2]";	Parse error: syntax error, unexpected string content "", expecting "]" on line 1
+"$a[]";	Parse error: syntax error, unexpected token "]", expecting "-" or identifier or variable or number on line 1
+"$a[-a]";	Parse error: syntax error, unexpected identifier "a", expecting number on line 1
+"${a 1}";	Parse error: syntax error, unexpected integer "1" on line 1
+"{$a 1}";	Parse error: syntax error, unexpected integer "1", expecting "->" or "?->" or "{" or "[" on line 1
+"{$a->b 1}";	Parse error: syntax error, unexpected integer "1", expecting "->" or "?->" or "{" or "[" on line 1
+"$a->1";	OK
+"${a[1 2]}";	Parse error: syntax error, unexpected integer "2" on line 1
+"$a" 1;	Parse error: syntax error, unexpected integer "1" on line 1
+<<<A\n$a\nA 1;	Parse error: syntax error, unexpected integer "1" on line 3
+<<<A\nfoo\nA 1;	Parse error: syntax error, unexpected integer "1" on line 3
+`$a` 1;	Parse error: syntax error, unexpected integer "1" on line 1
+$a = <<<A\n{$a 1}\nA;\n	Parse error: syntax error, unexpected integer "1", expecting "->" or "?->" or "{" or "[" on line 2
+$a = 0x;	Parse error: syntax error, unexpected identifier "x" on line 1
+$a = 1_;	Parse error: syntax error, unexpected identifier "_" on line 1
+$a = 08;	Parse error: Invalid numeric literal on line 1
+$a = 1.2.3;	Parse error: syntax error, unexpected floating-point number ".3" on line 1
+$a = '	Parse error: syntax error, unexpected string content "" on line 1
+$a = "	Parse error: syntax error, unexpected end of file, expecting variable or string content or "${" or "{$" on line 1
+$a = "$a	Parse error: syntax error, unexpected end of file on line 1
+/* unterminated	Parse error: Unterminated comment starting line 1 on line 1
+$a = (unset) 1;	Fatal error: The (unset) cast is no longer supported on line 1
+$a = (real) 1;	Parse error: The (real) cast has been removed, use (float) instead on line 1
+$a = (void) 1;	Parse error: syntax error, unexpected integer "1" on line 1
+echo <<<A\n  a\n b\n  A;\n	Parse error: Invalid body indentation level (expecting an indentation level of at least 2) on line 3
+echo "\\u{zz}";	Parse error: Invalid UTF-8 codepoint escape sequence on line 1
+$a ;	Parse error: syntax error, unexpected character 0x01 on line 1
+$a = 1 ;	Parse error: syntax error, unexpected character 0x7F on line 1
+$a \\ $b;	Parse error: syntax error, unexpected token "\" on line 1
+\\;	Parse error: syntax error, unexpected token "\", expecting end of file on line 1
+namespace\\;	Parse error: syntax error, unexpected token "\", expecting "{" on line 1
+A\\;	Parse error: syntax error, unexpected token "\" on line 1
+foo(1)(2) 3;	Parse error: syntax error, unexpected integer "3" on line 1
+$a->b(1 2);	Parse error: syntax error, unexpected integer "2", expecting ")" on line 1
+$a->b()->c 1;	Parse error: syntax error, unexpected integer "1" on line 1
+$a?->b 1;	Parse error: syntax error, unexpected integer "1" on line 1
+$a->{1 2};	Parse error: syntax error, unexpected integer "2" on line 1
+$a::$b 1;	Parse error: syntax error, unexpected integer "1" on line 1
+$a::b 1;	Parse error: syntax error, unexpected integer "1" on line 1
+$a::b() 1;	Parse error: syntax error, unexpected integer "1" on line 1
+$a = [1, 2][0] 1;	Parse error: syntax error, unexpected integer "1" on line 1
+$a = 'abc'[0] 1;	Parse error: syntax error, unexpected integer "1" on line 1
+$a = function() {} 1;	Parse error: syntax error, unexpected integer "1" on line 1
+$a = fn() => 1 2;	Parse error: syntax error, unexpected integer "2" on line 1
+$a = match(1) {} 1;	Parse error: syntax error, unexpected integer "1" on line 1
+$a = new class {} 1;	Parse error: syntax error, unexpected integer "1" on line 1
+$a = (new A) 1;	Parse error: syntax error, unexpected integer "1" on line 1
+list() = $a 1;	Parse error: syntax error, unexpected integer "1" on line 1
+[,] = $a;	Fatal error: Cannot use empty list on line 1
+$a = [...];	Parse error: syntax error, unexpected token "]" on line 1
+$a = [... 1 2];	Parse error: syntax error, unexpected integer "2", expecting "]" on line 1
+$a = [1 => &];	Parse error: syntax error, unexpected token "]" on line 1
+$a = [&1];	Parse error: syntax error, unexpected integer "1" on line 1
+$a = [&$b 1];	Parse error: syntax error, unexpected integer "1", expecting "->" or "?->" or "{" or "[" on line 1
+$a = [&$b => 1];	Parse error: syntax error, unexpected token "=>", expecting "->" or "?->" or "{" or "[" on line 1
+$a = [1 => list($b) 1];	Parse error: syntax error, unexpected integer "1", expecting "]" on line 1
+$x = 1 ? 2 : 3 ? 4 : 5;	Fatal error: Unparenthesized `a ? b : c ? d : e` is not supported. Use either `(a ? b : c) ? d : e` or `a ? b : (c ? d : e)` on line 1
+echo <?php	Parse error: syntax error, unexpected token "<" on line 1
+?><?= 1 2 ?>	Parse error: syntax error, unexpected integer "2", expecting "," or ";" on line 1
+?><?= ?>	Parse error: syntax error, unexpected token ";" on line 1
+<?php	Parse error: syntax error, unexpected token "<", expecting end of file on line 1
+$a = <<<'A'\nfoo\n	Parse error: syntax error, unexpected end of file, expecting variable or heredoc end or "${" or "{$" on line 3

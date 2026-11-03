@@ -857,11 +857,7 @@ impl Parser<'_> {
                 None
             };
             if self.peek() != T::Semicolon {
-                return Err(self.unexpected(if value.is_some() {
-                    &[]
-                } else {
-                    &[T::Equals, T::Semicolon]
-                }));
+                return Err(self.unexpected(&[T::Semicolon]));
             }
             self.bump();
             return Ok(ClassMember {
@@ -1190,6 +1186,7 @@ impl Parser<'_> {
 
     fn parse_trait_adaptation(&mut self) -> PResult<TraitAdaptation> {
         let start = self.cur_span();
+        let method_tok = self.peek();
         let method = self.parse_trait_method_ref()?;
         let absolute = method.trait_name.is_some();
         let adaptation = match self.peek() {
@@ -1234,11 +1231,13 @@ impl Parser<'_> {
                 }
             }
             _ => {
-                return Err(self.unexpected(if absolute {
-                    &[T::As, T::Insteadof]
+                // A bare T_STRING may still become a class name (`A::m`).
+                let expected: &[T] = if !absolute && method_tok == T::String {
+                    &[T::PaamayimNekudotayim]
                 } else {
                     &[T::As]
-                }))
+                };
+                return Err(self.unexpected(expected));
             }
         };
         if self.peek() != T::Semicolon {

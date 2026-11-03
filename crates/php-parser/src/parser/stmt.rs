@@ -1,6 +1,6 @@
 //! Statements and top-level declarations.
 
-use super::expr::starts_expr;
+use super::expr::{starts_expr, starts_variable};
 use super::{is_identifier_token, PResult, Parser};
 use crate::ast::{
     Catch, ConstElem, Expr, ExprKind, Ident, IfBranch, Name, NameKind, Span, StaticVar, Stmt,
@@ -400,7 +400,7 @@ impl Parser<'_> {
                             if self.peek() == T::RParen {
                                 break;
                             }
-                            if !starts_expr(self.peek()) {
+                            if !starts_variable(self.peek()) {
                                 return Err(self.unexpected(&[T::RParen]));
                             }
                         }
