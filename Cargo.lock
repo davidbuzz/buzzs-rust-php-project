@@ -351,14 +351,17 @@ dependencies = [
  "php-ext-calendar",
  "php-ext-date",
  "php-ext-exif",
+ "php-ext-fileinfo",
  "php-ext-filter",
  "php-ext-gettext",
+ "php-ext-gmp",
  "php-ext-hash",
  "php-ext-iconv",
  "php-ext-intl",
  "php-ext-json",
  "php-ext-mbstring",
  "php-ext-openssl",
+ "php-ext-pcntl",
  "php-ext-pcre",
  "php-ext-pdo",
  "php-ext-phar",
@@ -471,7 +474,10 @@ dependencies = [
 name = "php-ext-fileinfo"
 version = "0.1.0"
 dependencies = [
+ "php-ext-streams",
+ "php-fileinfo",
  "php-runtime",
+ "php-streams",
  "php-vm",
 ]
 
@@ -499,6 +505,7 @@ dependencies = [
 name = "php-ext-gmp"
 version = "0.1.0"
 dependencies = [
+ "php-gmp",
  "php-runtime",
  "php-vm",
 ]
@@ -559,6 +566,12 @@ dependencies = [
 [[package]]
 name = "php-ext-mysqli"
 version = "0.1.0"
+dependencies = [
+ "php-mysqlnd",
+ "php-runtime",
+ "php-support",
+ "php-vm",
+]
 
 [[package]]
 name = "php-ext-openssl"
@@ -577,6 +590,9 @@ dependencies = [
 name = "php-ext-pcntl"
 version = "0.1.0"
 dependencies = [
+ "libc",
+ "php-ext-posix",
+ "php-pcntl",
  "php-runtime",
  "php-vm",
 ]
@@ -754,6 +770,7 @@ name = "php-ext-uri"
 version = "0.1.0"
 dependencies = [
  "php-runtime",
+ "php-support",
  "php-uri",
  "php-vm",
 ]
@@ -762,7 +779,10 @@ dependencies = [
 name = "php-ext-xml"
 version = "0.1.0"
 dependencies = [
+ "php-ext-streams",
+ "php-libxml",
  "php-runtime",
+ "php-streams",
  "php-vm",
 ]
 

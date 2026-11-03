@@ -54,6 +54,7 @@ members = [
     "crates/php-fileinfo",
     "crates/php-sodium",
     "crates/php-xsl",
+    "crates/php-memlimit",
     "crates/php-ext-soap",
     "crates/php-ext-pcntl",
     "crates/php-ext-gettext",
