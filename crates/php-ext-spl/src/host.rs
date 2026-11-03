@@ -6,7 +6,7 @@ use php_runtime::{
     ArrayKey, BinaryOp, CastTarget, ErrorLevel, HashTable, Obj, ObjectDump, PropertyPurpose,
     RtResult, RuntimeContext, RuntimeError, Value, ZArray, ZStr,
 };
-use php_spl::{ClassInfo, ObjectIterator, SplHost, SplObject};
+use php_spl::{ClassInfo, MethodIterator, ObjectIterator, SplHost, SplObject};
 use php_stdarr::ArrayContext;
 use php_vm::class::Class;
 use php_vm::func::{flags, Func};
@@ -460,6 +460,26 @@ impl SplHost for VmHost<'_> {
         } else {
             Err(self.vm.callable_error_message(callable))
         }
+    }
+
+    fn foreign_iterator(&mut self, obj: &Obj) -> Option<RtResult<Box<dyn ObjectIterator>>> {
+        let cls = class_of(obj).clone();
+        let hook = cls.hooks.as_ref().and_then(|h| h.get_iterator)?;
+        // SPL classes (and their subclasses) iterate through php-spl; a
+        // user override of the iteration methods iterates through them
+        // (`zend_user_it_get_iterator`).
+        let is_spl = std::iter::successors(Some(cls.clone()), |c| c.parent.clone())
+            .any(|c| php_spl::classes::find_class(&c.name.to_string_lossy()).is_some());
+        let overridden = ["rewind", "valid", "current", "key", "next", "getiterator"]
+            .iter()
+            .any(|m| is_user_method(&cls, m));
+        if is_spl || overridden {
+            return None;
+        }
+        let r = hook(self.vm, obj, false)
+            .and_then(|it| crate::iter::native_proxy(self.vm, it))
+            .map(|proxy| Box::new(MethodIterator::new(proxy)) as Box<dyn ObjectIterator>);
+        Some(self.vm_rt(r))
     }
 
     fn is_overloaded_object(&mut self, obj: &Obj) -> bool {

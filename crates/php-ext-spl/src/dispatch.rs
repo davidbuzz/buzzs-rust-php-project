@@ -375,6 +375,67 @@ fn disabled_sort(vm: &mut Vm, t: Target) -> Option<Throw> {
     })
 }
 
+/// `new IteratorIterator($aggregate, 'Class')`: `spl_dual_it_construct`
+/// calls the *named* class's `getIterator()` (`zend_call_method` with an
+/// explicit scope), which `php-spl` cannot express through
+/// `SplHost::call_method` (normal dispatch would re-enter a subclass
+/// override that wraps `$this` again). Resolves the aggregate here and
+/// hands `php-spl` the resulting iterator.
+fn downcast_aggregate(vm: &mut Vm, args: &mut Vec<Value>) -> VmResult<()> {
+    let (Some(Value::Object(o)), Some(Value::Str(cn))) = (
+        args.first().map(Value::deref),
+        args.get(1).map(Value::deref),
+    ) else {
+        return Ok(());
+    };
+    let ocls = php_vm::object::class_of(&o).clone();
+    if ocls.instance_of_name(b"iterator") || !ocls.instance_of_name(b"iteratoraggregate") {
+        return Ok(());
+    }
+    let Some(named) = vm.find_class(cn.as_bytes()) else {
+        return Ok(());
+    };
+    if !named.instance_of_name(b"traversable") || !ocls.instance_of_name(named.lc_name.as_bytes()) {
+        // php-spl reports the downcast error.
+        return Ok(());
+    }
+    let Some(m) = named.find_method(b"getiterator") else {
+        return Ok(());
+    };
+    let decl = m.scope();
+    if Rc::ptr_eq(
+        &decl,
+        &ocls
+            .find_method(b"getiterator")
+            .map_or_else(|| decl.clone(), |x| x.scope()),
+    ) {
+        // No override between the object's class and the named class.
+        return Ok(());
+    }
+    let callable = Value::Array(php_runtime::ZArray::from_values(vec![
+        Value::Object(o),
+        Value::Str(ZStr::from(format!(
+            "{}::getIterator",
+            decl.name.to_string_lossy()
+        ))),
+    ]));
+    let it = vm.call_value(&callable, Vec::new())?;
+    match it.deref() {
+        Value::Object(i) if php_vm::object::class_of(&i).instance_of_name(b"traversable") => {
+            args.truncate(1);
+            args[0] = Value::Object(i);
+            Ok(())
+        }
+        _ => Err(vm.throw(
+            "LogicException",
+            &format!(
+                "{}::getIterator() must return an object that implements Traversable",
+                named.name.to_string_lossy()
+            ),
+        )),
+    }
+}
+
 /// The native handler of every SPL method.
 fn method_handler(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let Some(f) = a.func.clone() else {
@@ -404,8 +465,11 @@ fn method_handler(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         // because its `read_dimension` hook has no append form.
         return Err(vm.throw("Error", "[] operator not supported for SplFixedArray"));
     }
-    let args = collect_args(a, t);
+    let mut args = collect_args(a, t);
     let this = a.this.clone();
+    if t.class == "IteratorIterator" && t.def.name == "__construct" {
+        downcast_aggregate(vm, &mut args)?;
+    }
     if t.class == "SplFixedArray" && t.def.name == "getIterator" && args.is_empty() {
         if let Some((obj, st)) = this
             .as_ref()
