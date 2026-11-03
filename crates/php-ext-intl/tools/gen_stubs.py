@@ -79,6 +79,7 @@ def norm(s):
 
 
 classes = []   # dicts
+deprecated_consts = []  # (class or None, name, since, message)
 functions = []  # dicts
 
 for path in files:
@@ -173,6 +174,13 @@ for path in files:
             doc = ""
             continue
         if m.group(15):
+            if attr:
+                cname = re.search(r"const\s+(?:\w+\s+)?(\w+)\s*=", m.group(15))
+                since = re.search(r"since:\s*'([^']*)'", attr)
+                msg = re.search(r"message:\s*'([^']*)'", attr)
+                if cname:
+                    deprecated_consts.append((cls["name"] if cls else None, cname.group(1),
+                                              since.group(1) if since else "", msg.group(1) if msg else ""))
             doc = ""
             attr = ""
             continue
@@ -270,6 +278,12 @@ for c in ordered:
         out.append("            },")
     out.append("        ],")
     out.append("    },")
+out.append("];")
+out.append("")
+out.append("/// `#[\\Deprecated]` constants: `(class, name, since, message)`.")
+out.append("pub(crate) const DEPRECATED_CONSTANTS: &[(Option<&str>, &str, &str, &str)] = &[")
+for (c, n, si, me) in deprecated_consts:
+    out.append(f"    ({opt(c)}, {rs(n)}, {rs(si)}, {rs(me)}),")
 out.append("];")
 out.append("")
 out.append("/// Every procedural function.")

@@ -98,6 +98,13 @@ fn stristr(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 fn str_split(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     core::reset_global();
     let r = grapheme::str_split(a.str(0).as_bytes(), a.int(1));
+    // One string (header + data) and one array slot per element.
+    if let Ok(parts) = &r {
+        let bytes: usize = parts.iter().map(|p| 56 + p.len()).sum();
+        if !core::reserve(bytes) {
+            return Ok(Value::Bool(false));
+        }
+    }
     finish(
         vm,
         a,
@@ -110,6 +117,11 @@ fn str_split(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 fn levenshtein(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     core::reset_global();
     let loc = path(vm, a, 5)?;
+    // UTF-16 copies of both strings and two `zend_long` rows.
+    let (l1, l2) = (a.str(0).len(), a.str(1).len());
+    if !core::reserve(2 * (l1 + l2) + 16 * (l2 + 1)) {
+        return Ok(Value::Bool(false));
+    }
     let r = grapheme::levenshtein(
         a.str(0).as_bytes(),
         a.str(1).as_bytes(),
@@ -186,6 +198,10 @@ fn idn_to_utf8(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 fn normalize(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     core::reset_global();
+    // UTF-16 input and output buffers.
+    if !core::reserve(4 * a.str(0).len()) {
+        return Ok(Value::Bool(false));
+    }
     let r = normalizer::normalize(a.str(0).as_bytes(), a.int(1));
     finish(vm, a, r, s, Value::Bool(false))
 }

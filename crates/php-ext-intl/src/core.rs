@@ -368,6 +368,13 @@ pub(crate) fn not_implemented(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     ))
 }
 
+/// Reserves `bytes` against `memory_limit` for an allocation php-src
+/// makes; `false` means the limit is exceeded (the VM raises the fatal
+/// error once the handler returns).
+pub(crate) fn reserve(bytes: usize) -> bool {
+    php_memlimit::try_reserve(bytes).is_ok()
+}
+
 /// `ZEND_NUM_ARGS()`: the number of arguments actually passed.
 pub(crate) fn num_args(a: &Args) -> usize {
     a.passed.iter().rposition(|&p| p).map_or(0, |i| i + 1)
@@ -389,28 +396,14 @@ pub(crate) fn type_name(v: &Value) -> String {
     }
 }
 
-fn arg_error(vm: &mut Vm, class: &str, a: &Args, n: usize, msg: &str) -> Throw {
-    let fname = active_function(vm).unwrap_or_else(|| a.func_name());
-    let pname = a
-        .func
-        .as_ref()
-        .and_then(|f| {
-            f.params
-                .get(n.wrapping_sub(1))
-                .map(|p| p.name.to_string_lossy())
-        })
-        .unwrap_or_default();
-    vm.throw(class, &format!("{fname}(): Argument #{n} (${pname}) {msg}"))
-}
-
-/// `zend_argument_value_error(n, msg)` (`Class::method` aware).
+/// `zend_argument_value_error(n, msg)` (the VM prefixes `Class::method`).
 pub(crate) fn value_error(vm: &mut Vm, a: &Args, n: usize, msg: &str) -> Throw {
-    arg_error(vm, "ValueError", a, n, msg)
+    a.value_error(vm, n, msg)
 }
 
-/// `zend_argument_type_error(n, msg)` (`Class::method` aware).
+/// `zend_argument_type_error(n, msg)`.
 pub(crate) fn type_error(vm: &mut Vm, a: &Args, n: usize, msg: &str) -> Throw {
-    arg_error(vm, "TypeError", a, n, msg)
+    a.type_error(vm, n, msg)
 }
 
 #[cfg(test)]

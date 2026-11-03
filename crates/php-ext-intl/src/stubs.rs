@@ -3415,6 +3415,17 @@ pub(crate) const CLASSES: &[ClassStub] = &[
     },
 ];
 
+/// `#[\Deprecated]` constants: `(class, name, since, message)`.
+pub(crate) const DEPRECATED_CONSTANTS: &[(Option<&str>, &str, &str, &str)] = &[
+    (
+        None,
+        "U_MULTIPLE_DECIMAL_SEPERATORS",
+        "8.3",
+        "use U_MULTIPLE_DECIMAL_SEPARATORS instead",
+    ),
+    (Some("NumberFormatter"), "TYPE_CURRENCY", "8.3", ""),
+];
+
 /// Every procedural function.
 pub(crate) const FUNCTIONS: &[FuncStub] = &[
     FuncStub { sig: "intlcal_create_instance(object|string|null $timezone = null, ?string $locale = null): ?IntlCalendar", key: "IntlCalendar::createInstance", deprecated: None },

@@ -120,34 +120,25 @@ pub(crate) fn register(
     handlers: &HashMap<&'static str, NativeFn>,
     opts: &mut dyn FnMut(&str) -> ClassOpts,
 ) {
+    let deprecated = |class: Option<&str>, name: &str| {
+        crate::stubs::DEPRECATED_CONSTANTS
+            .iter()
+            .find(|d| d.0 == class && d.1 == name)
+            .map(|d| (d.2, d.3))
+    };
     for (name, v) in constants::GLOBAL {
-        m.constant(name, const_value(*v));
+        match deprecated(None, name) {
+            Some((since, msg)) => m.constant_deprecated(name, const_value(*v), since, msg),
+            None => m.constant(name, const_value(*v)),
+        };
     }
-    let mut enums = String::new();
     for c in crate::stubs::CLASSES {
         if c.kind == ClassKind::Enum {
-            enums.push_str("enum ");
-            enums.push_str(c.name);
-            enums.push_str(" {");
+            let mut b = ClassBuilder::new(c.name).unit_enum();
             for case in c.cases {
-                enums.push_str(" case ");
-                enums.push_str(case);
-                enums.push(';');
+                b = b.case(case, None);
             }
-            enums.push_str(" }\n");
-        }
-    }
-    if !enums.is_empty()
-        && m.vm()
-            .find_class(b"IntlRelativeDateTimeFormatterStyle")
-            .is_none()
-    {
-        // The extension API cannot build native enums yet.
-        let src = format!("<?php\n{enums}");
-        let _ = m.vm().run_main(src.as_bytes(), &ZStr::from("[ext/intl]"));
-    }
-    for c in crate::stubs::CLASSES {
-        if c.kind == ClassKind::Enum {
+            b.register(m.vm());
             continue;
         }
         let o = opts(c.name);
@@ -174,7 +165,10 @@ pub(crate) fn register(
         b = b.flags(fl);
         if let Some(cs) = constants::class_constants(c.name) {
             for (n, v) in cs {
-                b = b.constant(n, const_value(*v));
+                b = match deprecated(Some(c.name), n) {
+                    Some((since, msg)) => b.deprecated_constant(n, const_value(*v), since, msg),
+                    None => b.constant(n, const_value(*v)),
+                };
             }
         }
         for p in c.props {

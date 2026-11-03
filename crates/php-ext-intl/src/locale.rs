@@ -281,7 +281,10 @@ fn is_bogus_locale(name: &[u8]) -> bool {
     let name = String::from_utf8_lossy(name);
     match php_intl::sys::loc::name(&name) {
         Err(_) => true,
-        Ok(full) => full.split(['_', '-', '@', '.']).next().is_some_and(|l| l.len() >= 12),
+        Ok(full) => full
+            .split(['_', '-', '@', '.'])
+            .next()
+            .is_some_and(|l| l.len() >= 12),
     }
 }
 
@@ -291,9 +294,17 @@ fn accept_from_http(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     if let Some(Value::Array(arr)) = a.opt(1) {
         for v in arr.values() {
             match v.deref() {
-                Value::Str(z) if !z.as_bytes().contains(&0) && z.len() <= php_intl::common::INTL_MAX_LOCALE_LEN => {
+                Value::Str(z)
+                    if !z.as_bytes().contains(&0)
+                        && z.len() <= php_intl::common::INTL_MAX_LOCALE_LEN =>
+                {
                     if is_bogus_locale(z.as_bytes()) {
-                        return Err(core::value_error(vm, a, 2, "must only contain valid locales"));
+                        return Err(core::value_error(
+                            vm,
+                            a,
+                            2,
+                            "must only contain valid locales",
+                        ));
                     }
                 }
                 _ => break,

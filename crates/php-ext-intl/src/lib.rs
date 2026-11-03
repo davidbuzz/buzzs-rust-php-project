@@ -40,22 +40,15 @@ mod timezone;
 mod translit;
 mod vmbridge;
 
-use std::cell::Cell;
 use std::collections::HashMap;
 
-use php_runtime::Value;
 use php_support::ini::{Access, IniDirective, ModifyHandler};
-use php_vm::ext::{Args, Extension, ModuleBuilder, NativeFn, VmResult};
+use php_vm::ext::{Extension, InfoItem, ModuleBuilder, NativeFn, VmResult};
 use php_vm::Vm;
 
 /// The `intl` extension.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Intl;
-
-thread_local! {
-    static ORIG_INI_SET: Cell<Option<NativeFn>> = const { Cell::new(None) };
-    static ORIG_INI_RESTORE: Cell<Option<NativeFn>> = const { Cell::new(None) };
-}
 
 /// Stores `intl.default_locale` (`zend_alter_ini_entry` from
 /// `Locale::setDefault()`) and syncs the library's copy.
@@ -74,57 +67,50 @@ pub(crate) fn sync_default_locale(vm: &Vm) {
     php_intl::common::set_ini_default_locale(v.as_deref());
 }
 
-fn run_orig(
-    cell: &'static std::thread::LocalKey<Cell<Option<NativeFn>>>,
-    vm: &mut Vm,
-    a: &mut Args,
-) -> VmResult<Value> {
-    match cell.with(Cell::get) {
-        Some(f) => f(vm, a),
-        None => Ok(Value::Bool(false)),
+/// `OnUpdateStringUnempty` for `intl.default_locale`: the library keeps
+/// its own copy.
+fn on_update_default_locale(_vm: &mut Vm, value: &[u8]) -> VmResult<bool> {
+    if value.is_empty() {
+        return Ok(false);
     }
+    php_intl::common::set_ini_default_locale(Some(&String::from_utf8_lossy(value)));
+    Ok(true)
 }
 
-/// `ini_set()` wrapper: `OnUpdateErrorLevel`'s deprecation and the
-/// default-locale sync.
-fn ini_set_hook(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let name = a.str(0).to_string_lossy();
-    let r = run_orig(&ORIG_INI_SET, vm, a)?;
-    if name == "intl.error_level"
-        && !matches!(r, Value::Bool(false))
-        && vm.ini_long("intl.error_level") != 0
-    {
+/// `OnUpdateErrorLevel`: any non-zero level is deprecated.
+fn on_update_error_level(vm: &mut Vm, value: &[u8]) -> VmResult<bool> {
+    if php_intl::common::php_str_to_long(value) != 0 {
         vm.php_deprecated(php_intl::error::ERROR_LEVEL_DEPRECATION)?;
     }
-    if name == "intl.default_locale" {
-        sync_default_locale(vm);
-    }
-    Ok(r)
+    Ok(true)
 }
 
-fn ini_restore_hook(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let r = run_orig(&ORIG_INI_RESTORE, vm, a)?;
-    sync_default_locale(vm);
-    Ok(r)
-}
-
-fn install_ini_hooks(m: &mut ModuleBuilder<'_>) {
-    let vm = m.vm();
-    if let Some(b) = vm.native_function("ini_set") {
-        ORIG_INI_SET.with(|c| c.set(Some(b.handler)));
-        vm.register_function(
-            "ini_set(string $option, string|int|float|bool|null $value): string|false",
-            ini_set_hook,
-        );
-        vm.register_function(
-            "ini_alter(string $option, string|int|float|bool|null $value): string|false",
-            ini_set_hook,
-        );
-    }
-    if let Some(b) = vm.native_function("ini_restore") {
-        ORIG_INI_RESTORE.with(|c| c.set(Some(b.handler)));
-        vm.register_function("ini_restore(string $option): void", ini_restore_hook);
-    }
+/// `PHP_MINFO(intl)`.
+fn module_info(_vm: &mut Vm) -> Vec<InfoItem> {
+    let tz = php_intl::timezone::tz_data_version().unwrap_or_default();
+    let [major, minor, ..] = php_intl::intlchar::get_unicode_version();
+    vec![
+        InfoItem::TableStart,
+        InfoItem::Header(vec![
+            "Internationalization support".into(),
+            "enabled".into(),
+        ]),
+        InfoItem::Row(vec![
+            "ICU version".into(),
+            php_intl::common::ICU_VERSION.into(),
+        ]),
+        InfoItem::Row(vec![
+            "ICU Data version".into(),
+            php_intl::common::ICU_DATA_VERSION.into(),
+        ]),
+        InfoItem::Row(vec!["ICU TZData version".into(), tz]),
+        InfoItem::Row(vec![
+            "ICU Unicode version".into(),
+            format!("{major}.{minor}"),
+        ]),
+        InfoItem::TableEnd,
+        InfoItem::IniEntries,
+    ]
 }
 
 fn all_handlers() -> HashMap<&'static str, NativeFn> {
@@ -285,7 +271,9 @@ impl Extension for Intl {
         sync_default_locale(m.vm());
         let handlers = all_handlers();
         registry::register(m, &handlers, &mut class_opts);
-        install_ini_hooks(m);
+        m.ini_on_modify("intl.default_locale", on_update_default_locale);
+        m.ini_on_modify("intl.error_level", on_update_error_level);
+        m.info(module_info);
         m.on_request_startup(|vm| {
             core::reset_global();
             sync_default_locale(vm);

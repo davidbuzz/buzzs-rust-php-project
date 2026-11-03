@@ -295,6 +295,10 @@ fn convert(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     reset_obj(&o);
     let st = a.str(0);
     let reverse = a.bool(1);
+    // The intermediate UTF-16 buffer.
+    if !core::reserve(2 * st.len()) {
+        return Ok(Value::Bool(false));
+    }
     // The payload leaves the object while ICU (and PHP callbacks) run.
     let Some(mut boxed) = core::take_data(&o) else {
         return Ok(Value::Bool(false));
@@ -313,6 +317,9 @@ fn convert(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let errs = cnv.take_errors();
     core::set_boxed(&o, boxed);
     let r = r?;
+    if r.as_ref().is_some_and(|v| !core::reserve(v.len())) {
+        return Ok(Value::Bool(false));
+    }
     flush(vm, Some(&o), errs)?;
     Ok(r.map_or(Value::Bool(false), |v| Value::Str(ZStr::from(v))))
 }
@@ -337,6 +344,9 @@ fn transcode(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         }
     };
     let (fs, ts) = (get("from_subst"), get("to_subst"));
+    if !core::reserve(2 * a.str(0).len()) {
+        return Ok(Value::Bool(false));
+    }
     let r = lib::transcode(
         a.str(0).as_bytes(),
         &text(&a.str(1)),
@@ -346,6 +356,9 @@ fn transcode(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     );
     match r {
         Ok((v, notes)) => {
+            if !core::reserve(v.len()) {
+                return Ok(Value::Bool(false));
+            }
             flush(vm, None, notes)?;
             Ok(Value::Str(ZStr::from(v)))
         }

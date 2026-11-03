@@ -220,51 +220,14 @@ pub(crate) fn get_iterator(
     Ok(Box::new(make_iter(o)))
 }
 
-/// An `IterSource` adapter so `getIterator()` can return an iterator object.
-struct Source(Iter);
-
-impl crate::iter::IterSource for Source {
-    fn rewind(&mut self, vm: &mut Vm, _index: &mut i64) -> Option<VmResult<()>> {
-        Some(NativeIterator::rewind(&mut self.0, vm).and_then(|()| self.0.read(vm)))
-    }
-
-    fn valid(&self) -> bool {
-        self.0.i < self.0.len
-    }
-
-    fn current(&self) -> Value {
-        self.0
-            .current
-            .as_ref()
-            .map_or(Value::Null, |(_, v)| v.clone())
-    }
-
-    fn key(&self, _index: i64) -> Value {
-        match self.0.current.as_ref() {
-            Some((Some(k), _)) => s(k.clone()),
-            _ => Value::Int(self.0.i),
-        }
-    }
-
-    fn move_forward(&mut self, vm: &mut Vm, _index: &mut i64) -> VmResult<()> {
-        self.0.i += 1;
-        self.0.current = None;
-        self.0.read(vm)
-    }
-}
-
 fn get_iterator_method(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let o = a.this_obj();
     if !core::is_constructed::<ResourceBundle>(&o) {
         return Err(vm.throw("Error", "Found unconstructed ResourceBundle"));
     }
-    let mut it = make_iter(&o);
-    it.read(vm)?;
-    Ok(Value::Object(crate::iter::wrap(
-        vm,
-        "IntlIterator",
-        Box::new(Source(it)),
-    )?))
+    Ok(Value::Object(
+        vm.new_internal_iterator(Box::new(make_iter(&o)))?,
+    ))
 }
 
 /// `read_dimension`.
