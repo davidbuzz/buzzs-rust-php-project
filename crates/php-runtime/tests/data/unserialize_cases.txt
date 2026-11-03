@@ -1,0 +1,37 @@
+4f3a383a22737464436c617373223a303a7b7d ok
+4f3a383a22737464436c617373223a303a7b7d78797a unserialize(): Extra data starting at offset 19 of 22 bytes
+4f3a383a22737464436c617373223a313a7b733a313a2261223b693a313b7d747261696c696e67 unserialize(): Extra data starting at offset 31 of 39 bytes
+4f3a383a22737464436c617373223a313a7b733a313a2261223b613a313a7b693a303b693a783b7d7d unserialize(): Error at offset 35 of 41 bytes
+4f3a383a22737464436c617373223a313a7b733a313a2261223b4f3a383a22737464436c617373223a303a7b7d unserialize(): Error at offset 45 of 45 bytes
+613a313a7b693a303b4f3a383a22737464436c617373223a313a7b733a313a2262223b733a333a226162223b7d7d unserialize(): Error at offset 43 of 46 bytes
+613a323a7b693a303b693a313b693a313b693a323b7d ok
+613a323a7b693a303b693a313b693a313b693a323b7d7d unserialize(): Extra data starting at offset 22 of 23 bytes
+613a313a7b693a303b613a313a7b693a303b623a333b7d7d unserialize(): Error at offset 18 of 24 bytes
+613a313a7b733a313a2278223b4e3b unserialize(): Error at offset 15 of 15 bytes
+613a313a7b4e3b693a313b7d unserialize(): Error at offset 7 of 12 bytes
+613a313a7b643a312e353b693a313b7d unserialize(): Error at offset 11 of 16 bytes
+613a2d313a7b7d unserialize(): Error at offset 0 of 7 bytes
+613a313a7b693a303b523a353b7d unserialize(): Error at offset 13 of 14 bytes
+613a313a7b693a303b723a313b7d unserialize(): Error at offset 13 of 14 bytes
+4f3a383a22737464436c617373223a313a7b693a303b693a313b7d ok
+4f3a383a22737464436c617373223a323a7b733a313a2261223b693a313b733a313a2262227d unserialize(): Error at offset 37 of 38 bytes
+4f3a313a2241223a303a7b7d ok
+4f3a303a22223a303a7b7d unserialize(): Error at offset 2 of 11 bytes
+4f3a333a225c4142223a303a7b7d unserialize(): Error at offset 0 of 14 bytes
+4f3a383a22737464436c617373223a2d313a7b7d unserialize(): Error at offset 17 of 20 bytes
+4f3a383a22737464436c617373223a613a7b7d unserialize(): Error at offset 15 of 19 bytes
+733a333a2261626322 unserialize(): Error at offset 9 of 9 bytes
+733a333a2261626364223b unserialize(): Error at offset 8 of 11 bytes
+693a313b693a323b unserialize(): Extra data starting at offset 4 of 8 bytes
+4e3b4e3b unserialize(): Extra data starting at offset 2 of 4 bytes
+623a313b78 unserialize(): Extra data starting at offset 4 of 5 bytes
+643a302e353b79 unserialize(): Extra data starting at offset 6 of 7 bytes
+643a3b unserialize(): Error at offset 0 of 3 bytes
+693a3b unserialize(): Error at offset 0 of 3 bytes
+693a2d3b unserialize(): Error at offset 0 of 4 bytes
+613a313a7b693a303b733a313a226122787d unserialize(): Error at offset 16 of 18 bytes
+613a323a7b693a303b693a313b7d unserialize(): Error at offset 13 of 14 bytes
+613a313a7b693a303b693a313b693a313b693a323b7d unserialize(): Error at offset 13 of 22 bytes
+433a333a22466f6f223a333a7b6162637d78 unserialize(): Extra data starting at offset 17 of 18 bytes
+433a333a22466f6f223a333a7b61626378 unserialize(): Error at offset 16 of 17 bytes
+4f3a383a22737464436c617373223a313a7b733a313a2261223b523a313b7d ok

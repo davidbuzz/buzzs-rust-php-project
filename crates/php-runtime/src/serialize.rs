@@ -414,7 +414,8 @@ impl Parser<'_> {
                 Ok(self.push_node(Node::Scalar(Value::Str(ZStr::new(s.0))), slot))
             }
             (b'a', true) if !as_key => {
-                let end = self.iv_end(start + 2).ok_or(Fail)?;
+                // The rule is `"a:" uiv ":" "{"`: no sign allowed.
+                let (_, end) = self.uiv(start + 2).ok_or(Fail)?;
                 if self.at(end) != b':' || self.at(end + 1) != b'{' {
                     return Err(Fail);
                 }
@@ -573,6 +574,11 @@ impl Parser<'_> {
         }
         self.depth += 1;
         let mut items: Vec<(ArrayKey, usize)> = Vec::new();
+        // Position of each key in `items`, for O(1) duplicate handling. (The
+        // cached hash inside `ZStr` is interior mutability that does not
+        // affect `Hash`/`Eq`.)
+        #[allow(clippy::mutable_key_type)]
+        let mut index: HashMap<ArrayKey, usize> = HashMap::new();
         let mut remaining = elements;
         while remaining > 0 {
             remaining -= 1;
@@ -586,9 +592,10 @@ impl Parser<'_> {
                 _ => return Err(Fail),
             };
             let v = self.value(false, ctx)?;
-            if let Some(e) = items.iter_mut().find(|e| e.0 == key) {
-                e.1 = v;
+            if let Some(&pos) = index.get(&key) {
+                items[pos].1 = v;
             } else {
+                index.insert(key.clone(), items.len());
                 items.push((key, v));
             }
             if remaining > 0 {
@@ -675,10 +682,10 @@ impl Parser<'_> {
         }
         // O:len:"Class":n:{props}
         let (elements, n_end) = self.parse_iv2(end + 2);
+        self.pos = n_end;
         if elements < 0 {
             return Err(Fail);
         }
-        self.pos = n_end;
         if self.at(n_end) != b':' {
             return Err(Fail);
         }
@@ -694,15 +701,10 @@ impl Parser<'_> {
             },
             slot,
         );
+        // Keys keep symbol-table semantics (numeric strings are integers),
+        // which is what `__unserialize()` receives; the VM converts them to
+        // property names when filling properties.
         let props = self.nested(elements, ctx)?;
-        // Property tables keep string keys verbatim.
-        let props = props
-            .into_iter()
-            .map(|(k, v)| match k {
-                ArrayKey::Int(i) => (ArrayKey::Str(ZStr::from(i.to_string())), v),
-                ArrayKey::Str(s) => (ArrayKey::Str(s), v),
-            })
-            .collect();
         self.nodes[idx] = Node::Object { class, props };
         self.finish_nested()?;
         Ok(idx)

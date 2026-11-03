@@ -445,7 +445,10 @@ pub trait RuntimeContext {
 
     /// `unserialize()`: fills the properties of an object created by
     /// [`RuntimeContext::unserialize_object_create`] (calling `__unserialize`
-    /// or `__wakeup` as appropriate). Keys are mangled property names.
+    /// or `__wakeup` as appropriate). `props` has symbol-table keys exactly as
+    /// `__unserialize()` receives them (numeric keys are integers); for a plain
+    /// property fill convert them with [`crate::ArrayKey::to_zstr`] (string keys are
+    /// mangled property names).
     fn unserialize_object_finish(&mut self, obj: &Value, props: ZArray) -> RtResult<()> {
         let _ = (obj, props);
         Ok(())
