@@ -248,7 +248,11 @@ impl TlsOps {
         };
         self.timed_out = false;
         if let Some(buf) = read {
-            if blocked && !poll_fd(fd, libc::POLLIN | libc::POLLPRI, timeout) {
+            // `php_sockop_read`: no wait once this read returned data
+            // (`has_buffered_data`) or with a zero timeout; the descriptor
+            // is non-blocking, so the read then returns what is there.
+            let dont_wait = st.has_buffered_data || timeout.is_some_and(|t| t.is_zero());
+            if blocked && !dont_wait && !poll_fd(fd, libc::POLLIN | libc::POLLPRI, timeout) {
                 self.timed_out = true;
                 return Err(OpFailed);
             }
@@ -301,10 +305,17 @@ impl TlsOps {
             return Err(OpFailed);
         };
         let began_blocked = self.is_blocked;
-        let timeout = if began_blocked { self.timeout } else { None };
+        let is_read = read.is_some();
+        // Some data was already returned: just try to fill the buffer
+        // more, without retrying or blocking.
+        let supplemental = is_read && st.has_buffered_data;
+        let timeout = if began_blocked && !supplemental {
+            self.timeout
+        } else {
+            None
+        };
         let has_timeout = timeout.is_some_and(|t| !t.is_zero());
         let start = Instant::now();
-        let is_read = read.is_some();
         let mut rbuf = read;
         let Conn::Tls(ssl) = &mut self.conn else {
             return Err(OpFailed);
@@ -357,7 +368,7 @@ impl TlsOps {
                             && code != ErrorCode::WANT_WRITE
                             && ssl.ssl().pending() == 0;
                     }
-                    if !began_blocked {
+                    if !began_blocked || supplemental {
                         break;
                     }
                     if !retry {
@@ -371,6 +382,10 @@ impl TlsOps {
                     poll_fd(fd, ev, if has_timeout { left } else { None });
                 }
             }
+        }
+        // A supplemental read that found nothing is not WANT_READ.
+        if supplemental && nr == 0 && self.last_status == STATUS_WANT_READ {
+            self.last_status = 0;
         }
         Ok(nr)
     }

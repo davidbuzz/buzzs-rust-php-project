@@ -27,6 +27,7 @@ use openssl::ssl::{ErrorCode, Ssl, SslStream};
 use php_ext_streams::xport::{self, CryptoHooks, Transport, XportError, XportRequest};
 use php_runtime::{Value, ZArray, ZStr};
 use php_streams::diag::StreamErrorCode as Code;
+use php_streams::sockopts::{SockOpts, XportKind};
 use php_streams::stream::{flags, CastAs, Stream};
 use php_vm::ext::VmResult;
 use php_vm::Vm;
@@ -158,8 +159,28 @@ fn create(vm: &mut Vm, req: &XportRequest) -> VmResult<Result<Stream, XportError
         } else {
             format!("{}:{}", req.host, req.port)
         };
-        let listener = match TcpListener::bind(bind) {
-            Ok(l) => l,
+        // `php_network_bind_socket_to_local_addr()`: SO_REUSEADDR unless
+        // `so_reuseaddr` is false, `so_reuseport`, then `listen(backlog)`.
+        let sockopts = match SockOpts::from_context(req.context.as_ref(), XportKind::Tcp, true) {
+            Ok(o) => o,
+            Err(message) => return Ok(Err(XportError { errno: 0, message })),
+        };
+        let listener = std::net::ToSocketAddrs::to_socket_addrs(&bind)
+            .and_then(|mut it| {
+                it.next()
+                    .ok_or_else(|| std::io::Error::from_raw_os_error(libc::EINVAL))
+            })
+            .and_then(|addr| {
+                php_streams::sys::bind_ip_socket(
+                    &addr,
+                    libc::SOCK_STREAM,
+                    sockopts.backlog,
+                    &|fd| sockopts.apply_pre_bind(fd),
+                )
+                .map_err(std::io::Error::from_raw_os_error)
+            });
+        let listener = match listener {
+            Ok(fd) => TcpListener::from(fd),
             Err(e) => return Ok(Err(io_error(&e))),
         };
         let _ = listener.set_nonblocking(true);

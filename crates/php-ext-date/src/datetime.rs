@@ -7,7 +7,7 @@ use php_date::api;
 use php_date::parse::TimezoneSpec;
 use php_date::Time;
 use php_runtime::{ArrayKey, Obj, PropertyPurpose, Value, ZArray, ZStr};
-use php_vm::class::Class;
+use php_vm::class::{cflags, Class};
 use php_vm::ext::{
     acc, class_flags, Args, ClassBuilder, ClassHooks, ModuleBuilder, Throw, VmResult,
 };
@@ -793,6 +793,19 @@ fn hooks() -> ClassHooks {
     }
 }
 
+/// `implement_date_interface_handler`: only `DateTime` and
+/// `DateTimeImmutable` (and their subclasses) may implement
+/// `DateTimeInterface`.
+fn implement_date_interface(vm: &mut Vm, cls: &Rc<Class>) -> VmResult<()> {
+    if cls.flags & cflags::INTERNAL == 0
+        && !cls.instance_of_name(b"datetime")
+        && !cls.instance_of_name(b"datetimeimmutable")
+    {
+        return Err(vm.fatal("DateTimeInterface can't be implemented by user classes"));
+    }
+    Ok(())
+}
+
 /// Registers the interface and both classes.
 #[allow(clippy::too_many_lines)]
 pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
@@ -825,6 +838,10 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
         };
     }
     iface
+        .hooks(ClassHooks {
+            interface_gets_implemented: Some(implement_date_interface),
+            ..ClassHooks::default()
+        })
         .abstract_method("format(string $format): string", acc::PUBLIC)
         .abstract_method("getTimezone(): DateTimeZone|false", acc::PUBLIC)
         .abstract_method("getOffset(): int", acc::PUBLIC)
