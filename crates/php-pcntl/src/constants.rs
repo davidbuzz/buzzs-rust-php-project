@@ -1,0 +1,160 @@
+//! The constants ext/pcntl registers on Linux, with their Linux values.
+
+/// `(name, value)` for every constant, in `pcntl.stub.php` order.
+/// `SIGRTMIN`/`SIGRTMAX` are glibc's runtime values.
+pub fn constants() -> Vec<(&'static str, i64)> {
+    let mut v: Vec<(&'static str, i64)> = vec![
+        ("WNOHANG", libc::WNOHANG.into()),
+        ("WUNTRACED", libc::WUNTRACED.into()),
+        ("WCONTINUED", libc::WCONTINUED.into()),
+        ("WEXITED", libc::WEXITED.into()),
+        ("WSTOPPED", libc::WSTOPPED.into()),
+        ("WNOWAIT", libc::WNOWAIT.into()),
+        ("P_ALL", P_ALL),
+        ("P_PID", P_PID),
+        ("P_PGID", P_PGID),
+        ("P_PIDFD", P_PIDFD),
+        ("SIG_IGN", SIG_IGN),
+        ("SIG_DFL", SIG_DFL),
+        ("SIG_ERR", -1),
+    ];
+    let signals: [(&'static str, libc::c_int); 37] = [
+        ("SIGHUP", libc::SIGHUP),
+        ("SIGINT", libc::SIGINT),
+        ("SIGQUIT", libc::SIGQUIT),
+        ("SIGILL", libc::SIGILL),
+        ("SIGTRAP", libc::SIGTRAP),
+        ("SIGABRT", libc::SIGABRT),
+        ("SIGIOT", libc::SIGIOT),
+        ("SIGBUS", libc::SIGBUS),
+        ("SIGFPE", libc::SIGFPE),
+        ("SIGKILL", libc::SIGKILL),
+        ("SIGUSR1", libc::SIGUSR1),
+        ("SIGSEGV", libc::SIGSEGV),
+        ("SIGUSR2", libc::SIGUSR2),
+        ("SIGPIPE", libc::SIGPIPE),
+        ("SIGALRM", libc::SIGALRM),
+        ("SIGTERM", libc::SIGTERM),
+        ("SIGSTKFLT", libc::SIGSTKFLT),
+        ("SIGCLD", libc::SIGCHLD),
+        ("SIGCHLD", libc::SIGCHLD),
+        ("SIGCONT", libc::SIGCONT),
+        ("SIGSTOP", libc::SIGSTOP),
+        ("SIGTSTP", libc::SIGTSTP),
+        ("SIGTTIN", libc::SIGTTIN),
+        ("SIGTTOU", libc::SIGTTOU),
+        ("SIGURG", libc::SIGURG),
+        ("SIGXCPU", libc::SIGXCPU),
+        ("SIGXFSZ", libc::SIGXFSZ),
+        ("SIGVTALRM", libc::SIGVTALRM),
+        ("SIGPROF", libc::SIGPROF),
+        ("SIGWINCH", libc::SIGWINCH),
+        ("SIGPOLL", libc::SIGPOLL),
+        ("SIGIO", libc::SIGIO),
+        ("SIGPWR", libc::SIGPWR),
+        ("SIGSYS", libc::SIGSYS),
+        ("SIGBABY", libc::SIGSYS),
+        ("SIGRTMIN", libc::SIGRTMIN()),
+        ("SIGRTMAX", libc::SIGRTMAX()),
+    ];
+    v.extend(signals.iter().map(|&(n, s)| (n, i64::from(s))));
+    let rest: [(&'static str, i64); 63] = [
+        ("PRIO_PGRP", libc::PRIO_PGRP.into()),
+        ("PRIO_USER", libc::PRIO_USER.into()),
+        ("PRIO_PROCESS", libc::PRIO_PROCESS.into()),
+        ("SIG_BLOCK", libc::SIG_BLOCK.into()),
+        ("SIG_UNBLOCK", libc::SIG_UNBLOCK.into()),
+        ("SIG_SETMASK", libc::SIG_SETMASK.into()),
+        ("SI_USER", libc::SI_USER.into()),
+        ("SI_KERNEL", 0x80),
+        ("SI_QUEUE", libc::SI_QUEUE.into()),
+        ("SI_TIMER", libc::SI_TIMER.into()),
+        ("SI_MESGQ", libc::SI_MESGQ.into()),
+        ("SI_ASYNCIO", libc::SI_ASYNCIO.into()),
+        ("SI_SIGIO", libc::SI_SIGIO.into()),
+        ("SI_TKILL", libc::SI_TKILL.into()),
+        ("CLD_EXITED", libc::CLD_EXITED.into()),
+        ("CLD_KILLED", libc::CLD_KILLED.into()),
+        ("CLD_DUMPED", libc::CLD_DUMPED.into()),
+        ("CLD_TRAPPED", libc::CLD_TRAPPED.into()),
+        ("CLD_STOPPED", libc::CLD_STOPPED.into()),
+        ("CLD_CONTINUED", libc::CLD_CONTINUED.into()),
+        ("TRAP_BRKPT", 1),
+        ("TRAP_TRACE", 2),
+        ("POLL_IN", 1),
+        ("POLL_OUT", 2),
+        ("POLL_MSG", 3),
+        ("POLL_ERR", 4),
+        ("POLL_PRI", 5),
+        ("POLL_HUP", 6),
+        ("ILL_ILLOPC", 1),
+        ("ILL_ILLOPN", 2),
+        ("ILL_ILLADR", 3),
+        ("ILL_ILLTRP", 4),
+        ("ILL_PRVOPC", 5),
+        ("ILL_PRVREG", 6),
+        ("ILL_COPROC", 7),
+        ("ILL_BADSTK", 8),
+        ("FPE_INTDIV", 1),
+        ("FPE_INTOVF", 2),
+        ("FPE_FLTDIV", 3),
+        ("FPE_FLTOVF", 4),
+        ("FPE_FLTUND", 5),
+        ("FPE_FLTRES", 6),
+        ("FPE_FLTINV", 7),
+        ("FPE_FLTSUB", 8),
+        ("SEGV_MAPERR", 1),
+        ("SEGV_ACCERR", 2),
+        ("BUS_ADRALN", 1),
+        ("BUS_ADRERR", 2),
+        ("BUS_OBJERR", 3),
+        ("CLONE_NEWNS", libc::CLONE_NEWNS.into()),
+        ("CLONE_NEWIPC", libc::CLONE_NEWIPC.into()),
+        ("CLONE_NEWUTS", libc::CLONE_NEWUTS.into()),
+        ("CLONE_NEWNET", libc::CLONE_NEWNET.into()),
+        ("CLONE_NEWPID", libc::CLONE_NEWPID.into()),
+        ("CLONE_NEWUSER", libc::CLONE_NEWUSER.into()),
+        ("CLONE_NEWCGROUP", libc::CLONE_NEWCGROUP.into()),
+        ("PCNTL_EINTR", libc::EINTR.into()),
+        ("PCNTL_ECHILD", libc::ECHILD.into()),
+        ("PCNTL_EINVAL", libc::EINVAL.into()),
+        ("PCNTL_EAGAIN", libc::EAGAIN.into()),
+        ("PCNTL_ESRCH", libc::ESRCH.into()),
+        ("PCNTL_EACCES", libc::EACCES.into()),
+        ("PCNTL_EPERM", libc::EPERM.into()),
+    ];
+    v.extend(rest);
+    let errnos: [(&'static str, libc::c_int); 16] = [
+        ("PCNTL_ENOMEM", libc::ENOMEM),
+        ("PCNTL_E2BIG", libc::E2BIG),
+        ("PCNTL_EFAULT", libc::EFAULT),
+        ("PCNTL_EIO", libc::EIO),
+        ("PCNTL_EISDIR", libc::EISDIR),
+        ("PCNTL_ELIBBAD", libc::ELIBBAD),
+        ("PCNTL_ELOOP", libc::ELOOP),
+        ("PCNTL_EMFILE", libc::EMFILE),
+        ("PCNTL_ENAMETOOLONG", libc::ENAMETOOLONG),
+        ("PCNTL_ENFILE", libc::ENFILE),
+        ("PCNTL_ENOENT", libc::ENOENT),
+        ("PCNTL_ENOEXEC", libc::ENOEXEC),
+        ("PCNTL_ENOTDIR", libc::ENOTDIR),
+        ("PCNTL_ETXTBSY", libc::ETXTBSY),
+        ("PCNTL_ENOSPC", libc::ENOSPC),
+        ("PCNTL_EUSERS", libc::EUSERS),
+    ];
+    v.extend(errnos.iter().map(|&(n, e)| (n, i64::from(e))));
+    v
+}
+
+/// `SIG_DFL` as a PHP int.
+pub const SIG_DFL: i64 = 0;
+/// `SIG_IGN` as a PHP int.
+pub const SIG_IGN: i64 = 1;
+/// `P_ALL`.
+pub const P_ALL: i64 = 0;
+/// `P_PID`.
+pub const P_PID: i64 = 1;
+/// `P_PGID`.
+pub const P_PGID: i64 = 2;
+/// `P_PIDFD`.
+pub const P_PIDFD: i64 = 3;
