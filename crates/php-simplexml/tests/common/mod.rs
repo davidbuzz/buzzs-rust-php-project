@@ -637,3 +637,42 @@ impl T {
         }
     }
 }
+
+impl T {
+    /// `iterator_to_array(new RecursiveIteratorIterator($it, $mode))`-like
+    /// walk (0 = LEAVES_ONLY, 1 = SELF_FIRST, 2 = CHILD_FIRST) using the
+    /// `RecursiveIterator` methods.
+    pub fn rii(&mut self, it: &Value, mode: u8) -> Vec<(Value, Value)> {
+        let mut out = Vec::new();
+        self.rii_walk(it, mode, &mut out);
+        out
+    }
+
+    fn rii_walk(&mut self, it: &Value, mode: u8, out: &mut Vec<(Value, Value)>) {
+        let sx = self.sxe(it);
+        Sxe::rewind(&sx, &mut self.h).unwrap();
+        while Sxe::valid(&sx) {
+            let cur = Sxe::current(&sx).unwrap();
+            let key = Value::Str(ZStr::new(Sxe::key(&sx, &mut self.h).unwrap()));
+            let has = Sxe::has_children(&sx, &mut self.h).unwrap();
+            if mode == 1 || (mode == 0 && !has) {
+                out.push((key.clone(), cur.clone()));
+            }
+            if has {
+                let child = Sxe::get_children(&sx);
+                self.rii_walk(&child, mode, out);
+                if mode == 2 {
+                    out.push((key, cur));
+                }
+            }
+            Sxe::next(&sx, &mut self.h).unwrap();
+        }
+    }
+
+    pub fn class_of(v: &Value) -> String {
+        match v {
+            Value::Object(o) => o.class_name().to_string_lossy(),
+            _ => String::new(),
+        }
+    }
+}
