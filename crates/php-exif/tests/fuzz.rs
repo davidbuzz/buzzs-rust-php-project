@@ -66,7 +66,11 @@ fn mutate(rng: &mut Rng, data: &[u8]) -> Vec<u8> {
             5 => {
                 // Overwrite 4 bytes with an interesting 32-bit value.
                 let v: u32 = [0, 1, 8, 0xFFFF, 0x7FFF_FFFF, 0xFFFF_FFFF, 0x8000_0000][rng.below(7)];
-                let b = if rng.below(2) == 0 { v.to_le_bytes() } else { v.to_be_bytes() };
+                let b = if rng.below(2) == 0 {
+                    v.to_le_bytes()
+                } else {
+                    v.to_be_bytes()
+                };
                 for (i, x) in b.iter().enumerate() {
                     if pos + i < d.len() {
                         d[pos + i] = *x;
