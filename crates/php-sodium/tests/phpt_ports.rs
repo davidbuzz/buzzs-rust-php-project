@@ -265,7 +265,6 @@ fn crypto_stream_xchacha20() {
 }
 
 #[test]
-#[allow(clippy::many_single_char_names)]
 fn random_key_round_trips() {
     // crypto_box.phpt / crypto_sign.phpt / crypto_secretbox.phpt / crypto_aead.phpt
     let msg = b"a secret message";
@@ -357,6 +356,7 @@ fn utils_base64_round_trips() {
 }
 
 #[test]
+#[allow(clippy::many_single_char_names)]
 fn pwhash_scenarios() {
     // pwhash_argon2i.phpt / pwhash_scrypt.phpt essentials, with small limits.
     let mut warnings = Vec::new();
