@@ -573,6 +573,7 @@ impl Extension for SocketsExt {
 
     #[allow(clippy::too_many_lines)]
     fn register(&self, m: &mut ModuleBuilder<'_>) {
+        m.info(module_info);
         objects::register(m);
         for (name, value) in php_sockets::CONSTANTS {
             m.constant(name, Value::Int(*value));
@@ -691,4 +692,13 @@ impl Extension for SocketsExt {
             socket_addrinfo_explain,
         );
     }
+}
+
+/// `PHP_MINFO_FUNCTION`.
+fn module_info(_vm: &mut Vm) -> Vec<php_vm::ext::InfoItem> {
+    vec![
+        php_vm::ext::InfoItem::TableStart,
+        php_vm::ext::InfoItem::Row(vec!["Sockets Support".into(), "enabled".into()]),
+        php_vm::ext::InfoItem::TableEnd,
+    ]
 }

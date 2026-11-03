@@ -72,6 +72,24 @@ fn argument_errors() {
     );
 }
 
+fn async_signals_and_ticks() {
+    assert_eq!(
+        run(r#"pcntl_async_signals(true);
+            pcntl_signal(SIGUSR1, function ($s) { echo "async $s\n"; });
+            posix_kill(posix_getpid(), SIGUSR1);
+            echo "after kill\n";
+            pcntl_async_signals(false);
+            pcntl_signal(SIGUSR1, function ($s) { echo "tick $s\n"; });
+            declare(ticks = 1) {
+                posix_kill(posix_getpid(), SIGUSR1);
+                $x = 1;
+                echo "after tick\n";
+            }
+            pcntl_signal(SIGUSR1, SIG_DFL);"#),
+        "async 10\nafter kill\ntick 10\nafter tick\n"
+    );
+}
+
 fn sigprocmask_and_sigtimedwait() {
     assert_eq!(
         run(r"pcntl_sigprocmask(SIG_BLOCK, [SIGUSR2], $old);
@@ -84,12 +102,13 @@ fn sigprocmask_and_sigtimedwait() {
 }
 
 /// Signals are process-wide and a process-directed signal reaches any
-/// thread not blocking it, so the scenarios run sequentially on one test
-/// thread (the harness's main thread is isolated by the extension).
-#[test]
-fn scenarios() {
+/// thread not blocking it, so the scenarios run sequentially on the main
+/// thread (this test target has `harness = false`), like the PHP CLI.
+fn main() {
     status_macros();
     handlers_are_dispatched_with_siginfo();
     argument_errors();
     sigprocmask_and_sigtimedwait();
+    async_signals_and_ticks();
+    println!("pcntl script scenarios: ok");
 }

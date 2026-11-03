@@ -51,6 +51,7 @@ impl Extension for Sysvmsg {
     }
 
     fn register(&self, m: &mut ModuleBuilder<'_>) {
+        m.info(msg_info);
         msg::register(m);
     }
 }
@@ -61,6 +62,7 @@ impl Extension for Sysvsem {
     }
 
     fn register(&self, m: &mut ModuleBuilder<'_>) {
+        m.info(sem_info);
         sem::register(m);
     }
 }
@@ -71,6 +73,7 @@ impl Extension for Sysvshm {
     }
 
     fn register(&self, m: &mut ModuleBuilder<'_>) {
+        m.info(shm_info);
         shm::register(m);
     }
 }
@@ -81,6 +84,7 @@ impl Extension for Shmop {
     }
 
     fn register(&self, m: &mut ModuleBuilder<'_>) {
+        m.info(shmop_info);
         shmop::register(m);
     }
 }
@@ -120,4 +124,40 @@ pub(crate) fn throw(vm: &mut Vm, a: &Args, e: SysvError) -> Throw {
         SysvError::Error(m) | SysvError::Warning(m) => vm.throw("Error", &m),
         SysvError::Failed(errno) => vm.throw("Error", &php_sysv::strerror(errno)),
     }
+}
+
+/// `PHP_MINFO_FUNCTION`.
+fn msg_info(_vm: &mut Vm) -> Vec<php_vm::ext::InfoItem> {
+    vec![
+        php_vm::ext::InfoItem::TableStart,
+        php_vm::ext::InfoItem::Row(vec!["sysvmsg support".into(), "enabled".into()]),
+        php_vm::ext::InfoItem::TableEnd,
+    ]
+}
+
+/// `PHP_MINFO_FUNCTION`.
+fn sem_info(_vm: &mut Vm) -> Vec<php_vm::ext::InfoItem> {
+    vec![
+        php_vm::ext::InfoItem::TableStart,
+        php_vm::ext::InfoItem::Row(vec!["sysvsem support".into(), "enabled".into()]),
+        php_vm::ext::InfoItem::TableEnd,
+    ]
+}
+
+/// `PHP_MINFO_FUNCTION`.
+fn shm_info(_vm: &mut Vm) -> Vec<php_vm::ext::InfoItem> {
+    vec![
+        php_vm::ext::InfoItem::TableStart,
+        php_vm::ext::InfoItem::Row(vec!["sysvshm support".into(), "enabled".into()]),
+        php_vm::ext::InfoItem::TableEnd,
+    ]
+}
+
+/// `PHP_MINFO_FUNCTION`.
+fn shmop_info(_vm: &mut Vm) -> Vec<php_vm::ext::InfoItem> {
+    vec![
+        php_vm::ext::InfoItem::TableStart,
+        php_vm::ext::InfoItem::Row(vec!["shmop support".into(), "enabled".into()]),
+        php_vm::ext::InfoItem::TableEnd,
+    ]
 }

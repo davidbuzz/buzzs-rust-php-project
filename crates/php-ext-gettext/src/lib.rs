@@ -124,6 +124,7 @@ impl Extension for Gettext {
     }
 
     fn register(&self, m: &mut ModuleBuilder<'_>) {
+        m.info(module_info);
         m.function("textdomain(?string $domain = null): string", textdomain)
             .function("gettext(string $message): string", gettext)
             .function("_(string $message): string", gettext)
@@ -153,4 +154,13 @@ impl Extension for Gettext {
                 bind_textdomain_codeset,
             );
     }
+}
+
+/// `PHP_MINFO_FUNCTION`.
+fn module_info(_vm: &mut Vm) -> Vec<php_vm::ext::InfoItem> {
+    vec![
+        php_vm::ext::InfoItem::TableStart,
+        php_vm::ext::InfoItem::Row(vec!["GetText Support".into(), "enabled".into()]),
+        php_vm::ext::InfoItem::TableEnd,
+    ]
 }

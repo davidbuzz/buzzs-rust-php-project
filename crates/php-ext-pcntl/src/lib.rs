@@ -8,12 +8,12 @@
 //!
 //! # Signal dispatch
 //!
-//! Handlers run in `pcntl_signal_dispatch()`.  The VM has no tick or
-//! interrupt hook an extension could use, so with
-//! `pcntl_async_signals(true)` pending signals are additionally dispatched
-//! when any pcntl function is entered and left — a superset of what
-//! explicit dispatching code sees, but not PHP's dispatch after arbitrary
-//! opcodes.
+//! Handlers run in `pcntl_signal_dispatch()`, at `declare(ticks=N)` ticks
+//! (a VM tick handler) and — with `pcntl_async_signals(true)` — from the
+//! VM interrupt handler: every delivery of a signal with a PHP handler
+//! raises the VM interrupt (see [`host::chain_interrupt`]), and the
+//! interrupt handler dispatches when async signals are on.  Fiber
+//! switches are blocked while handlers run, as in PHP.
 
 // Native handlers share one signature (`fn(&mut Vm, &mut Args) ->
 // VmResult<Value>`), so infallible ones still return `VmResult`.
@@ -204,6 +204,7 @@ fn dispatch(vm: &mut Vm) -> VmResult<()> {
     let Some(mut batch) = with(Pcntl::begin_dispatch) else {
         return Ok(());
     };
+    vm.block_fiber_switch(true);
     let mut result = Ok(());
     while let Some(sig) = batch.next() {
         let handler = with(|p| p.handler(sig.signo).clone());
@@ -216,50 +217,27 @@ fn dispatch(vm: &mut Vm) -> VmResult<()> {
             }
         }
     }
+    vm.block_fiber_switch(false);
     with(|p| p.end_dispatch(batch));
+    if result.is_err() && php_pcntl::async_interrupt_pending() {
+        // Signals a throwing handler left behind are delivered at the next
+        // safe point once the exception is handled.
+        php_vm::interrupt::request_interrupt();
+    }
     result
 }
 
-/// Dispatches pending signals when `pcntl_async_signals(true)` is on —
-/// the stand-in for the VM interrupt check (see the crate docs).
-fn async_point(vm: &mut Vm) -> VmResult<()> {
+/// The VM interrupt handler (`pcntl_interrupt_function`).
+fn on_interrupt(vm: &mut Vm) -> VmResult<()> {
     if php_pcntl::async_interrupt_pending() {
         dispatch(vm)?;
     }
     Ok(())
 }
 
-/// Wraps a handler with the asynchronous dispatch points.
-macro_rules! pcntl_fns {
-    ($($name:ident => $imp:ident),* $(,)?) => {
-        $(fn $name(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-            async_point(vm)?;
-            let r = $imp(vm, a)?;
-            async_point(vm)?;
-            Ok(r)
-        })*
-    };
-}
-
-pcntl_fns! {
-    pcntl_fork => fork_impl,
-    pcntl_waitpid => waitpid_impl,
-    pcntl_waitid => waitid_impl,
-    pcntl_wait => wait_impl,
-    pcntl_signal => signal_impl,
-    pcntl_signal_get_handler => signal_get_handler_impl,
-    pcntl_sigprocmask => sigprocmask_impl,
-    pcntl_sigwaitinfo => sigwaitinfo_impl,
-    pcntl_sigtimedwait => sigtimedwait_impl,
-    pcntl_exec => exec_impl,
-    pcntl_alarm => alarm_impl,
-    pcntl_get_last_error => last_error_impl,
-    pcntl_getpriority => getpriority_impl,
-    pcntl_setpriority => setpriority_impl,
-    pcntl_unshare => unshare_impl,
-    pcntl_setns => setns_impl,
-    pcntl_getcpuaffinity => getcpuaffinity_impl,
-    pcntl_setcpuaffinity => setcpuaffinity_impl,
+/// The tick handler (`pcntl_signal_dispatch_tick_function`).
+fn on_tick(vm: &mut Vm, _ticks: i64) -> VmResult<()> {
+    dispatch(vm)
 }
 
 fn pcntl_signal_dispatch(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
@@ -271,13 +249,16 @@ fn pcntl_signal_dispatch(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
 // Processes
 // ---------------------------------------------------------------------------
 
-fn fork_impl(vm: &mut Vm, a: &Args) -> VmResult<Value> {
+fn pcntl_fork(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     // The CLI writes unbuffered in PHP: whatever we buffered so far
     // belongs to the parent alone.
     vm.flush_stdout();
+    let threaded = host::on_secondary_thread();
     match with(Pcntl::fork) {
         Ok(0) => {
-            ForkedChild::arm();
+            if threaded {
+                ForkedChild::arm();
+            }
             // php_child_init(): clear the stat cache.
             let _ = vm.call_value(
                 &Value::Str(ZStr::from("clearstatcache")),
@@ -299,21 +280,21 @@ fn wait_outputs(a: &Args, r: &WaitResult, status_arg: usize, rusage_arg: usize) 
     Value::Int(r.pid)
 }
 
-fn waitpid_impl(vm: &mut Vm, a: &Args) -> VmResult<Value> {
+fn pcntl_waitpid(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let status = vm.value_to_int(&a.at(1))?;
     let flags = a.int(2);
     let r = with(|p| p.waitpid(a.int(0), status, flags, a.has(3)));
     Ok(wait_outputs(a, &r, 1, 3))
 }
 
-fn wait_impl(vm: &mut Vm, a: &Args) -> VmResult<Value> {
+fn pcntl_wait(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let status = vm.value_to_int(&a.at(0))?;
     let flags = a.int(1);
     let r = with(|p| p.wait(status, flags, a.has(2)));
     Ok(wait_outputs(a, &r, 0, 2))
 }
 
-fn waitid_impl(_vm: &mut Vm, a: &Args) -> VmResult<Value> {
+fn pcntl_waitid(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let idtype = if a.has(0) { a.int(0) } else { php_pcntl::P_ALL };
     let flags = if a.has(3) {
         a.int(3)
@@ -341,7 +322,7 @@ fn waitid_impl(_vm: &mut Vm, a: &Args) -> VmResult<Value> {
     Ok(Value::Bool(true))
 }
 
-fn exec_impl(vm: &mut Vm, a: &Args) -> VmResult<Value> {
+fn pcntl_exec(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let path = a.str(0);
     let args = if a.has(1) {
         let arr = a.array(1);
@@ -376,8 +357,7 @@ fn exec_impl(vm: &mut Vm, a: &Args) -> VmResult<Value> {
     failure(vm, a, e, Value::Bool(false))
 }
 
-fn alarm_impl(vm: &mut Vm, a: &Args) -> VmResult<Value> {
-    host::route_signals_to_vm_thread();
+fn pcntl_alarm(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let r = with(|p| p.alarm(a.int(0)));
     match r {
         Ok(n) => Ok(Value::Int(n)),
@@ -385,7 +365,7 @@ fn alarm_impl(vm: &mut Vm, a: &Args) -> VmResult<Value> {
     }
 }
 
-fn last_error_impl(_vm: &mut Vm, _a: &Args) -> VmResult<Value> {
+fn pcntl_get_last_error(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
     Ok(Value::Int(with(|p| p.last_error())))
 }
 
@@ -430,8 +410,7 @@ status_int! {
 // Signals
 // ---------------------------------------------------------------------------
 
-fn signal_impl(vm: &mut Vm, a: &Args) -> VmResult<Value> {
-    host::route_signals_to_vm_thread();
+fn pcntl_signal(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let signo = a.int(0);
     let n = php_pcntl::num_signals();
     if signo < 1 {
@@ -463,11 +442,15 @@ fn signal_impl(vm: &mut Vm, a: &Args) -> VmResult<Value> {
         let e = with(|p| p.reject_handler(&handle.value_name()));
         return Err(throw(vm, a, e));
     };
+    let callable = matches!(handler, SignalHandler::Callable(_));
     let r = with(|p| p.signal(signo, handler, restart));
+    if r.is_ok() && callable {
+        host::chain_interrupt(signo);
+    }
     finish(vm, a, r, |()| Value::Bool(true))
 }
 
-fn signal_get_handler_impl(vm: &mut Vm, a: &Args) -> VmResult<Value> {
+fn pcntl_signal_get_handler(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let r = with(|p| {
         p.signal_get_handler(a.int(0)).map(|h| match h {
             SignalHandler::Callable(cb) => cb.clone(),
@@ -480,8 +463,7 @@ fn signal_get_handler_impl(vm: &mut Vm, a: &Args) -> VmResult<Value> {
     }
 }
 
-fn sigprocmask_impl(vm: &mut Vm, a: &Args) -> VmResult<Value> {
-    host::route_signals_to_vm_thread();
+fn pcntl_sigprocmask(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let arr = a.array(1);
     let (ints, names) = signal_args(&arr);
     let view = signal_view(&ints, &names);
@@ -507,8 +489,7 @@ fn waited(a: &Args, info_arg: usize, signo: i64, info: &SigInfo) -> Value {
     Value::Int(signo)
 }
 
-fn sigwaitinfo_impl(vm: &mut Vm, a: &Args) -> VmResult<Value> {
-    host::route_signals_to_vm_thread();
+fn pcntl_sigwaitinfo(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let arr = a.array(0);
     let (ints, names) = signal_args(&arr);
     let view = signal_view(&ints, &names);
@@ -516,8 +497,7 @@ fn sigwaitinfo_impl(vm: &mut Vm, a: &Args) -> VmResult<Value> {
     finish(vm, a, r, |(signo, info)| waited(a, 1, signo, &info))
 }
 
-fn sigtimedwait_impl(vm: &mut Vm, a: &Args) -> VmResult<Value> {
-    host::route_signals_to_vm_thread();
+fn pcntl_sigtimedwait(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let arr = a.array(0);
     let (ints, names) = signal_args(&arr);
     let view = signal_view(&ints, &names);
@@ -528,7 +508,6 @@ fn sigtimedwait_impl(vm: &mut Vm, a: &Args) -> VmResult<Value> {
 /// Not an asynchronous dispatch point: signals queued while async
 /// signals were off do not raise a VM interrupt in PHP either.
 fn pcntl_async_signals(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    host::route_signals_to_vm_thread();
     let enable = a.opt(0).map(|_| a.bool(0));
     Ok(Value::Bool(with(|p| p.async_signals(enable))))
 }
@@ -537,39 +516,45 @@ fn pcntl_async_signals(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 // Scheduling, namespaces, affinity
 // ---------------------------------------------------------------------------
 
-fn getpriority_impl(vm: &mut Vm, a: &Args) -> VmResult<Value> {
+fn pcntl_getpriority(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let mode = if a.has(1) { a.int(1) } else { 0 };
     let r = with(|p| p.getpriority(opt_int(a, 0), mode));
     finish(vm, a, r, Value::Int)
 }
 
-fn setpriority_impl(vm: &mut Vm, a: &Args) -> VmResult<Value> {
+fn pcntl_setpriority(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let mode = if a.has(2) { a.int(2) } else { 0 };
     let r = with(|p| p.setpriority(a.int(0), opt_int(a, 1), mode));
     finish(vm, a, r, |()| Value::Bool(true))
 }
 
-fn unshare_impl(vm: &mut Vm, a: &Args) -> VmResult<Value> {
+fn pcntl_unshare(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    if !host::on_secondary_thread() {
+        host::wait_single_threaded();
+    }
     let r = with(|p| p.unshare(a.int(0)));
     finish(vm, a, r, |()| Value::Bool(true))
 }
 
-fn setns_impl(vm: &mut Vm, a: &Args) -> VmResult<Value> {
+fn pcntl_setns(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let nstype = if a.has(1) {
         a.int(1)
     } else {
         i64::from(libc::CLONE_NEWNET)
     };
+    if !host::on_secondary_thread() {
+        host::wait_single_threaded();
+    }
     let r = with(|p| p.setns(opt_int(a, 0), nstype));
     finish(vm, a, r, |()| Value::Bool(true))
 }
 
-fn getcpuaffinity_impl(vm: &mut Vm, a: &Args) -> VmResult<Value> {
+fn pcntl_getcpuaffinity(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let r = with(|p| p.getcpuaffinity(opt_int(a, 0)));
     finish(vm, a, r, int_list)
 }
 
-fn setcpuaffinity_impl(vm: &mut Vm, a: &Args) -> VmResult<Value> {
+fn pcntl_setcpuaffinity(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let arr = if a.has(1) { a.array(1) } else { ZArray::new() };
     let values: Vec<Value> = arr.iter().map(|(_, v)| v.deref()).collect();
     let names: Vec<String> = values.iter().map(Value::value_name).collect();
@@ -609,11 +594,14 @@ impl Extension for PcntlExt {
     }
 
     fn register(&self, m: &mut ModuleBuilder<'_>) {
+        m.info(module_info);
         for (name, value) in php_pcntl::constants() {
             m.constant(name, Value::Int(value));
         }
         m.on_request_startup(request_startup)
             .on_request_shutdown(request_shutdown);
+        m.vm().register_interrupt_handler(on_interrupt);
+        m.vm().register_tick_handler(on_tick);
         m.function("pcntl_fork(): int", pcntl_fork)
             .function(
                 "pcntl_waitpid(int $process_id, &$status, int $flags = 0, &$resource_usage = []): int",
@@ -684,4 +672,13 @@ impl Extension for PcntlExt {
             )
             .function("pcntl_getcpu(): int", pcntl_getcpu);
     }
+}
+
+/// `PHP_MINFO_FUNCTION`.
+fn module_info(_vm: &mut Vm) -> Vec<php_vm::ext::InfoItem> {
+    vec![
+        php_vm::ext::InfoItem::TableStart,
+        php_vm::ext::InfoItem::Row(vec!["pcntl support".into(), "enabled".into()]),
+        php_vm::ext::InfoItem::TableEnd,
+    ]
 }
