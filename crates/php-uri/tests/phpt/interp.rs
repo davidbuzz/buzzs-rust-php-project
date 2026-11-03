@@ -143,12 +143,18 @@ impl Interp {
     }
 
     fn val_err(&mut self, e: &UrlValidationError) -> V {
+        // PHP creates the error object before fetching the enum case.
+        let id = self.next_id;
+        self.next_id += 1;
         let ty = self.enum_case("Uri\\WhatWg\\UrlValidationErrorType", e.error_type.name());
-        self.obj(Kind::ValErr {
-            context: e.context.clone(),
-            ty,
-            failure: e.failure,
-        })
+        V::Obj(Rc::new(RefCell::new(Obj {
+            id,
+            kind: Kind::ValErr {
+                context: e.context.clone(),
+                ty,
+                failure: e.failure,
+            },
+        })))
     }
 
     fn errors_array(&mut self, errs: &[UrlValidationError]) -> V {
@@ -317,6 +323,28 @@ impl Interp {
             out[idx] = Some(self.eval(&a.expr)?);
         }
         Ok(out)
+    }
+
+    fn has_ref(args: &[Arg], params: &[&str], param: usize) -> bool {
+        args.iter().enumerate().any(|(i, a)| match &a.name {
+            Some(n) => params.iter().position(|p| p == n) == Some(param),
+            None => i == param,
+        })
+    }
+
+    /// Converts validation errors and writes them to a by-reference argument.
+    fn write_errors(
+        &mut self,
+        args: &[Arg],
+        params: &[&str],
+        param: usize,
+        errs: &[UrlValidationError],
+    ) -> R<()> {
+        if !Self::has_ref(args, params, param) {
+            return Ok(());
+        }
+        let ev = self.errors_array(errs);
+        self.write_ref(args, params, param, ev)
     }
 
     /// Writes a by-reference argument back to its variable.
@@ -686,8 +714,7 @@ impl Interp {
                 let base = self.wh_of(a.get(1).and_then(Option::as_ref))?;
                 match WhatWgUrl::new(&s, base.as_ref()) {
                     Ok((u, errs)) => {
-                        let ev = self.errors_array(&errs);
-                        self.write_ref(args, &params, 2, ev)?;
+                        self.write_errors(args, &params, 2, &errs)?;
                         Ok(self.obj(Kind::Wh(Some(u))))
                     }
                     Err(e) => {
@@ -762,6 +789,12 @@ impl Interp {
                     self.out.extend(buf);
                 }
                 Ok(V::Null)
+            }
+            "die" | "exit" => {
+                if let Some(V::Str(m)) = arg(0) {
+                    self.out.extend_from_slice(&m);
+                }
+                unsupported("die")
             }
             "str_repeat" => {
                 let (Some(V::Str(s)), Some(V::Int(n))) = (arg(0), arg(1)) else {
@@ -916,13 +949,11 @@ impl Interp {
                 let base = self.wh_of(a.get(1).and_then(Option::as_ref))?;
                 match WhatWgUrl::parse(&s, base.as_ref()) {
                     Ok((u, errs)) => {
-                        let ev = self.errors_array(&errs);
-                        self.write_ref(args, &params, 2, ev)?;
+                        self.write_errors(args, &params, 2, &errs)?;
                         Ok(self.obj(Kind::Wh(Some(u))))
                     }
                     Err(f) => {
-                        let ev = self.errors_array(&f.errors);
-                        self.write_ref(args, &params, 2, ev)?;
+                        self.write_errors(args, &params, 2, &f.errors)?;
                         Ok(V::Null)
                     }
                 }
@@ -1133,8 +1164,7 @@ impl Interp {
                         let v = self.req_str(a.first().and_then(Option::as_ref))?;
                         match url.resolve(&v) {
                             Ok((u, errs)) => {
-                                let ev = self.errors_array(&errs);
-                                self.write_ref(args, &params, 1, ev)?;
+                                self.write_errors(args, &params, 1, &errs)?;
                                 Ok(self.obj(Kind::Wh(Some(u))))
                             }
                             Err(e) => {
@@ -1216,8 +1246,7 @@ impl Interp {
                     };
                     return match b.build(base.as_ref()) {
                         Ok((u, errs)) => {
-                            let ev = self.errors_array(&errs);
-                            self.write_ref(args, &params, 1, ev)?;
+                            self.write_errors(args, &params, 1, &errs)?;
                             Ok(self.obj(Kind::Wh(Some(u))))
                         }
                         Err(e) => {
@@ -1504,6 +1533,37 @@ fn loose_eq(a: &V, b: &V) -> bool {
         (V::Null, V::Null) => true,
         (V::Null, V::Bool(x)) | (V::Bool(x), V::Null) => !x,
         (V::Str(s), V::Null) | (V::Null, V::Str(s)) => s.is_empty(),
+        (V::Arr(x), V::Arr(y)) => {
+            x.len() == y.len()
+                && x.iter().all(|(k, v)| {
+                    y.iter()
+                        .find(|(k2, _)| key_eq(k, k2))
+                        .is_some_and(|(_, v2)| loose_eq(v, v2))
+                })
+        }
+        (V::Obj(x), V::Obj(y)) => {
+            if Rc::ptr_eq(x, y) {
+                return true;
+            }
+            let (x, y) = (x.borrow(), y.borrow());
+            match (&x.kind, &y.kind) {
+                (
+                    Kind::ValErr {
+                        context: c1,
+                        ty: t1,
+                        failure: f1,
+                    },
+                    Kind::ValErr {
+                        context: c2,
+                        ty: t2,
+                        failure: f2,
+                    },
+                ) => c1 == c2 && identical(t1, t2) && f1 == f2,
+                (Kind::Rfc(u1), Kind::Rfc(u2)) => u1 == u2,
+                (Kind::Wh(u1), Kind::Wh(u2)) => u1 == u2,
+                _ => false,
+            }
+        }
         _ => identical(a, b),
     }
 }

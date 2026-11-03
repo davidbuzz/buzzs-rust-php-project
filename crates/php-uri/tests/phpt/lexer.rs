@@ -9,6 +9,7 @@ pub enum Tok {
     Interp(Vec<Part>),
     Int(i64),
     Punct(&'static str),
+    Inline(Vec<u8>),
     End,
 }
 
@@ -39,7 +40,18 @@ pub fn lex(src: &[u8]) -> Result<Vec<Tok>, String> {
             continue;
         }
         if src[i..].starts_with(b"?>") {
-            break;
+            i += 2;
+            if src.get(i) == Some(&b'\n') {
+                i += 1;
+            }
+            let rest = &src[i..];
+            let end = find(rest, b"<?php").unwrap_or(rest.len());
+            if end > 0 {
+                out.push(Tok::Punct(";"));
+                out.push(Tok::Inline(rest[..end].to_vec()));
+            }
+            i += end + 5;
+            continue;
         }
         if src[i..].starts_with(b"//") || c == b'#' && !src[i..].starts_with(b"#[") {
             while i < src.len() && src[i] != b'\n' {

@@ -52,8 +52,42 @@ fn trim(s: &[u8]) -> &[u8] {
     &s[start..end.max(start)]
 }
 
+/// Replaces `%r...%r` sections made of literal characters and `\xHH`
+/// escapes by their literal bytes (the only regex form used by the suite).
+fn expand_regex_sections(pat: &[u8]) -> Option<Vec<u8>> {
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < pat.len() {
+        if pat[i..].starts_with(b"%r") {
+            let end = lexer::find(&pat[i + 2..], b"%r")? + i + 2;
+            let mut j = i + 2;
+            while j < end {
+                if pat[j] == b'\\' && pat.get(j + 1) == Some(&b'x') && j + 3 < end {
+                    let hex = std::str::from_utf8(&pat[j + 2..j + 4]).ok()?;
+                    out.push(u8::from_str_radix(hex, 16).ok()?);
+                    j += 4;
+                } else if pat[j].is_ascii_alphanumeric() {
+                    out.push(pat[j]);
+                    j += 1;
+                } else {
+                    return None;
+                }
+            }
+            i = end + 2;
+        } else {
+            out.push(pat[i]);
+            i += 1;
+        }
+    }
+    Some(out)
+}
+
 /// Matches `actual` against an EXPECTF pattern.
 pub fn expectf_match(pat: &[u8], s: &[u8]) -> bool {
+    let Some(pat) = expand_regex_sections(pat) else {
+        return false;
+    };
+    let pat = pat.as_slice();
     fn m(p: &[u8], s: &[u8]) -> bool {
         if p.is_empty() {
             return s.is_empty();
@@ -78,8 +112,8 @@ pub fn expectf_match(pat: &[u8], s: &[u8]) -> bool {
                 b'e' => {
                     return !s.is_empty() && s[0] == b'/' && m(rest, &s[1..]);
                 }
-                b'%' => {
-                    return !s.is_empty() && s[0] == b'%' && m(rest, &s[1..]);
+                b'0' => {
+                    return !s.is_empty() && s[0] == 0 && m(rest, &s[1..]);
                 }
                 _ => None,
             };

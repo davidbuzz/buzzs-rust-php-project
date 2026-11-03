@@ -135,6 +135,13 @@ impl Parser {
     }
 
     fn stmt(&mut self) -> R<Stmt> {
+        if let Tok::Inline(b) = self.peek().clone() {
+            self.next();
+            return Ok(Stmt::Echo(vec![Expr::Str(b)]));
+        }
+        if self.eat(";") {
+            return Ok(Stmt::Block(Vec::new()));
+        }
         if self.is_punct("{") {
             return Ok(Stmt::Block(self.block()?));
         }
@@ -298,8 +305,8 @@ impl Parser {
         let mut lhs = self.unary()?;
         loop {
             let (op, prec) = match self.peek() {
-                Tok::Punct(p @ ("||")) => (*p, 1),
-                Tok::Punct(p @ ("&&")) => (*p, 2),
+                Tok::Punct(p @ "||") => (*p, 1),
+                Tok::Punct(p @ "&&") => (*p, 2),
                 Tok::Punct(p @ ("===" | "!==" | "==" | "!=")) => (*p, 3),
                 Tok::Punct(p @ ("<" | ">" | "<=" | ">=")) => (*p, 4),
                 Tok::Punct(p @ ("." | "+" | "-")) => (*p, 5),
