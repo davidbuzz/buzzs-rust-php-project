@@ -372,7 +372,8 @@ impl StreamOps for PharDir {
         if n.len() >= 256 {
             return None;
         }
-        Some(n)
+        // `d_name` is a C string
+        Some(crate::util::cstr(&n).to_vec())
     }
 
     fn can_seek(&self) -> bool {

@@ -21,6 +21,7 @@
 //! (b) our writer, replaying the recipe at the same clock time, produces
 //! the very same bytes.
 
+#![allow(clippy::format_push_string, clippy::too_many_lines)]
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -104,7 +105,7 @@ fn metadata_value(serialized: &[u8]) -> php_runtime::Value {
 }
 
 /// Replays a recipe with this crate inside `dir`; returns the final path.
-#[allow(clippy::too_many_lines, clippy::many_single_char_names)]
+#[allow(clippy::many_single_char_names)]
 fn run_recipe(lines: &[String], dir: &Path) -> Vec<u8> {
     let mut obj = PharObject::new(false);
     let mut path = Vec::new();
@@ -264,7 +265,20 @@ fn md5hex(b: &[u8]) -> String {
 fn meta_string(m: &MetadataGet) -> String {
     match m {
         MetadataGet::None => "NONE".into(),
-        MetadataGet::Serialized(s) => String::from_utf8_lossy(s).into_owned(),
+        MetadataGet::Serialized(s) => {
+            // PHP prints serialize(getMetadata()): unserialize, then serialize
+            let mut ctx = php_runtime::CollectingContext::default();
+            let v = php_runtime::serialize::unserialize(
+                s,
+                &php_runtime::serialize::UnserializeOptions::default(),
+                &mut ctx,
+            )
+            .ok()
+            .flatten()
+            .unwrap_or(php_runtime::Value::Bool(false));
+            String::from_utf8_lossy(&php_runtime::serialize::serialize(&v, &mut ctx).unwrap())
+                .into_owned()
+        }
         MetadataGet::Value(v) => {
             let mut ctx = php_runtime::CollectingContext::default();
             String::from_utf8_lossy(&php_runtime::serialize::serialize(v, &mut ctx).unwrap())
@@ -338,6 +352,10 @@ fn listing(path: &[u8], is_data: bool) -> String {
             return Ok(());
         };
         while let Some(name) = d.readdir() {
+            if name.is_empty() {
+                // RecursiveDirectoryIterator::valid() stops at an empty d_name
+                break;
+            }
             if name == b"." || name == b".." {
                 continue;
             }
@@ -665,6 +683,255 @@ fn reads_php_src_archives_like_php() {
             }
         }
     }
+    assert!(
+        failures.is_empty(),
+        "{} of {checked} differ:\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
+}
+
+// ------------------------------------------------------------ corruption
+
+fn corrupt_dir() -> PathBuf {
+    fixtures().join("corrupt")
+}
+
+/// Builds corrupted variants of a few fixture archives.
+fn corrupt_variants() -> Vec<(String, Vec<u8>)> {
+    let mut out = Vec::new();
+    let read = |case: &str, name: &str| std::fs::read(case_dir(case).join(name)).unwrap();
+    let find = |h: &[u8], n: &[u8]| h.windows(n.len()).position(|w| w == n).unwrap();
+    // phar format: an unsigned copy (signature flag cleared) so that later
+    // checks are reachable with phar.require_hash=0
+    for (case, name) in [
+        ("simple_phar", "simple.phar"),
+        ("phar_gz", "gz.phar"),
+        ("phar_meta", "meta.phar"),
+        ("phar_dirs", "dirs.phar"),
+    ] {
+        let mut base = read(case, name);
+        let halt = find(&base, b"__HALT_COMPILER(); ?>") + 21;
+        let flags = halt + 4 + 4 + 2;
+        base[flags + 2] &= !1;
+        let stem = case.replace('_', "");
+        out.push((format!("{stem}-unsigned.phar"), base.clone()));
+        let mlen = u32::from_le_bytes(base[halt..halt + 4].try_into().unwrap()) as usize;
+        let end = (halt + 4 + mlen + 40).min(base.len());
+        for cut in (halt - 3..end).step_by(3) {
+            out.push((format!("{stem}-cut{cut}.phar"), base[..cut].to_vec()));
+        }
+        for pos in halt..(halt + 4 + mlen).min(base.len()) {
+            for val in [0x00u8, 0xFF, 0x7F] {
+                if base[pos] == val {
+                    continue;
+                }
+                let mut v = base.clone();
+                v[pos] = val;
+                out.push((format!("{stem}-set{pos}x{val:02x}.phar"), v));
+            }
+        }
+    }
+    // tar: truncations and header field damage
+    for (case, name) in [("tar_data", "data.tar"), ("tar_exec", "exec.phar.tar")] {
+        let base = read(case, name);
+        let stem = case.replace('_', "");
+        for cut in [
+            0,
+            100,
+            511,
+            512,
+            700,
+            1024,
+            1536,
+            2048,
+            base.len() - 1024,
+            base.len() - 512,
+        ] {
+            out.push((
+                format!("{stem}-cut{cut}.{}", name.split_once('.').unwrap().1),
+                base[..cut.min(base.len())].to_vec(),
+            ));
+        }
+        for (pos, val) in [
+            (148usize, b'9'),
+            (124, b'7'),
+            (124, 0x80),
+            (156, b'K'),
+            (156, b'x'),
+            (0, 0),
+            (257, b'X'),
+            (512 + 156, b'1'),
+            (512 + 124, b'7'),
+        ] {
+            let mut v = base.clone();
+            v[pos] = val;
+            out.push((
+                format!(
+                    "{stem}-set{pos}x{val:02x}.{}",
+                    name.split_once('.').unwrap().1
+                ),
+                v,
+            ));
+        }
+    }
+    // zip: EOCD / central directory damage
+    for (case, name) in [
+        ("zip_data", "data.zip"),
+        ("zip_gz", "gz.zip"),
+        ("zip_exec", "exec.phar.zip"),
+    ] {
+        let base = read(case, name);
+        let stem = case.replace('_', "");
+        let ext = name.split_once('.').unwrap().1;
+        let eocd = base.len() - 22;
+        let cdir = u32::from_le_bytes(base[eocd + 16..eocd + 20].try_into().unwrap()) as usize;
+        for cut in [10, cdir, cdir + 20, eocd, eocd + 10, base.len() - 1] {
+            out.push((format!("{stem}-cut{cut}.{ext}"), base[..cut].to_vec()));
+        }
+        let fields = [
+            eocd + 4,
+            eocd + 6,
+            eocd + 8,
+            eocd + 10,
+            eocd + 16,
+            eocd + 20,
+            cdir,
+            cdir + 8,
+            cdir + 10,
+            cdir + 28,
+            cdir + 30,
+            cdir + 32,
+            cdir + 42,
+            30 + 26,
+        ];
+        for pos in fields {
+            for val in [0x00u8, 0x01, 0x09, 0xFF] {
+                if base[pos] == val {
+                    continue;
+                }
+                let mut v = base.clone();
+                v[pos] = val;
+                out.push((format!("{stem}-set{pos}x{val:02x}.{ext}"), v));
+            }
+        }
+    }
+    out
+}
+
+fn corrupt_kind(name: &str) -> &'static str {
+    if name.contains(".phar")
+        && !name.starts_with("tardata")
+        && !name.starts_with("zipdata")
+        && !name.starts_with("zipgz")
+    {
+        "phar"
+    } else {
+        "data"
+    }
+}
+
+#[test]
+#[ignore = "regenerates corruption listings with /usr/bin/php"]
+fn regenerate_corruptions() {
+    let dir = corrupt_dir();
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut expected = String::new();
+    for (name, bytes) in corrupt_variants() {
+        let path = dir.join(&name);
+        std::fs::write(&path, &bytes).unwrap();
+        let l = php(&[
+            "-d",
+            "phar.require_hash=0",
+            "-d",
+            "display_errors=0",
+            "-d",
+            "log_errors=0",
+            oracle_dir().join("list.php").to_str().unwrap(),
+            path.to_str().unwrap(),
+            corrupt_kind(&name),
+        ]);
+        let text = String::from_utf8_lossy(&l.stdout).replace(dir.to_str().unwrap(), "%DIR%");
+        expected += &format!("### {name}\n{text}");
+        std::fs::remove_file(&path).unwrap();
+    }
+    std::fs::write(dir.join("expected.txt"), expected).unwrap();
+}
+
+/// Maps PHP 8.3's `(cannot create unknown filter while decompressing file
+/// "x")` to master's `(file "x" is compressed with an unknown compression
+/// algorithm)`.
+fn reword_unknown_filter(text: &str) -> String {
+    const OLD: &str = "(cannot create unknown filter while decompressing file \"";
+    let mut out = String::new();
+    let mut rest = text;
+    while let Some(i) = rest.find(OLD) {
+        out.push_str(&rest[..i]);
+        let after = &rest[i + OLD.len()..];
+        let end = after.find("\")").unwrap_or(after.len());
+        out.push_str(&format!(
+            "(file \"{}\" is compressed with an unknown compression algorithm)",
+            &after[..end]
+        ));
+        rest = &after[(end + 2).min(after.len())..];
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Tar archives truncated exactly at a block boundary: master stops at the
+/// end of the file (and detects 512-byte tars), PHP 8.3 reports truncation.
+fn master_differs_corrupt(name: &str) -> bool {
+    let Some(rest) = name
+        .strip_prefix("tardata-cut")
+        .or_else(|| name.strip_prefix("tarexec-cut"))
+    else {
+        return false;
+    };
+    let n: usize = rest.split('.').next().unwrap_or("").parse().unwrap_or(1);
+    n > 0 && n % 512 == 0
+}
+
+#[test]
+fn corrupted_archives_fail_like_php() {
+    php_phar::stub::set_flavor(php_phar::stub::Flavor::Php83);
+    registry::set_compression_support(true, false);
+    let Ok(expected) = std::fs::read_to_string(corrupt_dir().join("expected.txt")) else {
+        return;
+    };
+    let mut want = std::collections::HashMap::new();
+    for chunk in expected.split("### ").skip(1) {
+        let (name, body) = chunk.split_once('\n').unwrap();
+        want.insert(name.to_string(), body.to_string());
+    }
+    let work = scratch("corrupt");
+    let mut failures = Vec::new();
+    let mut checked = 0;
+    for (name, bytes) in corrupt_variants() {
+        let Some(exp) = want.get(&name) else { continue };
+        if master_differs_corrupt(&name) {
+            continue;
+        }
+        // reworded in master (e65a4b0f53b "Improve various error messages")
+        let exp = &reword_unknown_filter(exp);
+        let path = work.join(&name);
+        std::fs::write(&path, &bytes).unwrap();
+        registry::reset_request();
+        registry::set_ini("phar.require_hash", false, true);
+        let ours = listing(
+            path.to_str().unwrap().as_bytes(),
+            corrupt_kind(&name) == "data",
+        )
+        .replace(work.to_str().unwrap(), "%DIR%");
+        checked += 1;
+        if &ours != exp {
+            failures.push(format!("== {name}\n--- php\n{exp}--- ours\n{ours}"));
+        }
+    }
+    registry::set_ini("phar.require_hash", true, true);
+    registry::reset_request();
+    let _ = std::fs::remove_dir_all(&work);
     assert!(
         failures.is_empty(),
         "{} of {checked} differ:\n{}",
