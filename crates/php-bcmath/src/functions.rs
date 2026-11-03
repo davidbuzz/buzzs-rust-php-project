@@ -45,6 +45,7 @@ pub(crate) fn pow_error(func: &str, err: RaiseError, arg_num: u32, arg_name: &st
     const MSG: &str = "exponent is too large, the number of digits overflowed";
     match err {
         RaiseError::DivideByZero => BcError::division_by_zero("Negative power of zero"),
+        RaiseError::TooLarge(digits) => BcError::out_of_memory(digits.saturating_add(25)),
         RaiseError::LenOverflow | RaiseError::ScaleOverflow | RaiseError::FullLenOverflow => {
             if arg_num == 0 {
                 BcError::value(MSG)
@@ -52,32 +53,6 @@ pub(crate) fn pow_error(func: &str, err: RaiseError, arg_num: u32, arg_name: &st
                 BcError::argument_value(func, arg_num, arg_name, MSG)
             }
         }
-    }
-}
-
-/// Estimated number of digits of `base ** exponent` (`exponent > 0`), used
-/// to refuse computations PHP could never complete.
-pub(crate) fn power_size_hint(base: &BcNum, exponent: u64) -> usize {
-    let exp = usize::try_from(exponent).unwrap_or(usize::MAX);
-    let digits = base.digits();
-    let nonzero: Vec<usize> = digits
-        .iter()
-        .enumerate()
-        .filter(|(_, &d)| d != 0)
-        .map(|(i, _)| i)
-        .collect();
-    let scale_digits = base.scale().saturating_mul(exp);
-    match nonzero.as_slice() {
-        [] => 1,
-        // A power of ten (times its leading digit 1) grows by trailing zeros only.
-        [only] if digits[*only] == 1 => (digits.len() - 1 - only)
-            .saturating_mul(exp)
-            .max(scale_digits)
-            .saturating_add(1),
-        [first, ..] => (digits.len() - first)
-            .saturating_mul(exp)
-            .max(scale_digits)
-            .saturating_add(1),
     }
 }
 
@@ -294,9 +269,6 @@ impl BcMath {
             return Err(BcError::argument_value(F, 2, "exponent", "is too large"));
         }
         check_alloc(scale)?;
-        if e != 0 && !base.is_zero() {
-            check_alloc(power_size_hint(&base, e.unsigned_abs()))?;
-        }
         let r = BcNum::raise(&base, e, scale).map_err(|err| pow_error(F, err, 2, "exponent"))?;
         format_checked(&r, scale)
     }

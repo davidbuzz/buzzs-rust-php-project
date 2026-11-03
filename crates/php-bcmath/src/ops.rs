@@ -77,6 +77,9 @@ pub enum RaiseError {
     FullLenOverflow,
     /// `BC_RAISE_STATUS_DIVIDE_BY_ZERO`: zero raised to a negative power.
     DivideByZero,
+    /// The power would have more than [`crate::MAX_DIGITS`] digits; PHP
+    /// exhausts its memory limit computing it. Carries the digit estimate.
+    TooLarge(usize),
 }
 
 /// Failure modes of [`BcNum::raise_mod`] (`raise_mod_status`).
@@ -296,6 +299,10 @@ impl BcNum {
         power_len
             .checked_add(power_scale)
             .ok_or(RaiseError::FullLenOverflow)?;
+        let hint = power_size_hint(base, exp);
+        if hint > crate::MAX_DIGITS {
+            return Err(RaiseError::TooLarge(hint));
+        }
 
         let power_sign = if base.sign == Sign::Minus && exp & 1 == 1 {
             Sign::Minus
@@ -561,6 +568,24 @@ impl BcNum {
         }
         (result, scale)
     }
+}
+
+/// Estimated number of digits of `base ** exponent` (`exponent > 0`), used
+/// to refuse computations PHP could never complete.
+fn power_size_hint(base: &BcNum, exponent: u64) -> usize {
+    let exp = usize::try_from(exponent).unwrap_or(usize::MAX);
+    let digits = base.digits();
+    let scale_digits = base.scale().saturating_mul(exp);
+    let Some(first) = digits.iter().position(|&d| d != 0) else {
+        return 1;
+    };
+    let is_pow10 = digits[first] == 1 && digits[first + 1..].iter().all(|&d| d == 0);
+    let grow = if is_pow10 {
+        digits.len() - 1 - first
+    } else {
+        digits.len() - first
+    };
+    grow.saturating_mul(exp).max(scale_digits).saturating_add(1)
 }
 
 /// Builds `10^zeros` as a number with `power_scale` fractional digits

@@ -17,7 +17,7 @@ use std::cmp::Ordering;
 use crate::error::BcError;
 use crate::functions::{
     check_alloc, check_precision, check_round_alloc, check_scale, format_checked, ordering_to_int,
-    pow_error, power_size_hint, MAX_SCALE,
+    pow_error, MAX_SCALE,
 };
 use crate::num::{BcNum, Sign};
 use crate::ops::{RaiseModError, RoundingMode};
@@ -270,9 +270,6 @@ fn pow_internal(
         return Err(arg_err("exponent is too large"));
     }
     check_alloc(scale)?;
-    if exponent != 0 && !n1.is_zero() {
-        check_alloc(power_size_hint(n1, exponent.unsigned_abs()))?;
-    }
     let mut ret = BcNum::raise(n1, exponent, scale).map_err(|e| match ctx {
         PowContext::Method(func) => pow_error(func, e, 1, "exponent"),
         PowContext::Operator => pow_error("", e, 0, ""),
