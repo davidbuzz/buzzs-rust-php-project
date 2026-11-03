@@ -144,6 +144,11 @@ impl Vm {
     /// Reads `$o->name`.
     pub(crate) fn read_property(&mut self, o: &Obj, name: &ZStr, mode: FetchMode) -> VmResult<Value> {
         let cls = object::class_of(o).clone();
+        if let Some(f) = cls.hooks.as_ref().and_then(|h| h.read_property) {
+            if let Some(v) = f(self, o, name)? {
+                return Ok(v);
+            }
+        }
         let scope = self.scope();
         match self.lookup_prop(&cls, name, scope.as_ref()) {
             PropLookup::Found(pi) => {
@@ -284,6 +289,11 @@ impl Vm {
     /// Writes `$o->name = v`; returns the assigned value.
     pub(crate) fn write_property(&mut self, o: &Obj, name: &ZStr, v: Value) -> VmResult<Value> {
         let cls = object::class_of(o).clone();
+        if let Some(f) = cls.hooks.as_ref().and_then(|h| h.write_property) {
+            if f(self, o, name, &v)? {
+                return Ok(v);
+            }
+        }
         let scope = self.scope();
         match self.lookup_prop(&cls, name, scope.as_ref()) {
             PropLookup::Found(pi) => {
@@ -528,6 +538,11 @@ impl Vm {
     /// `unset($o->name)`.
     pub(crate) fn unset_property(&mut self, o: &Obj, name: &ZStr) -> VmResult<()> {
         let cls = object::class_of(o).clone();
+        if let Some(f) = cls.hooks.as_ref().and_then(|h| h.unset_property) {
+            if f(self, o, name)? {
+                return Ok(());
+            }
+        }
         let scope = self.scope();
         match self.lookup_prop(&cls, name, scope.as_ref()) {
             PropLookup::Found(pi) => {
@@ -635,6 +650,11 @@ impl Vm {
     /// `isset($o->name)` / `empty($o->name)`.
     pub(crate) fn has_property(&mut self, o: &Obj, name: &ZStr, empty: bool) -> VmResult<bool> {
         let cls = object::class_of(o).clone();
+        if let Some(f) = cls.hooks.as_ref().and_then(|h| h.has_property) {
+            if let Some(r) = f(self, o, name, empty)? {
+                return Ok(r);
+            }
+        }
         let scope = self.scope();
         let direct: Option<Option<Value>> = match self.lookup_prop(&cls, name, scope.as_ref()) {
             PropLookup::Found(pi) => {
@@ -739,6 +759,9 @@ impl Vm {
         let o = object::new_object(cls.clone(), slots);
         if cls.internal == InternalKind::Throwable {
             self.init_throwable(&o)?;
+        }
+        if let Some(f) = cls.hooks.as_ref().and_then(|h| h.create) {
+            f(self, &o)?;
         }
         Ok(o)
     }
@@ -850,6 +873,9 @@ impl Vm {
         let nd = object::data(&n);
         *nd.dynamic.borrow_mut() = d.dynamic.borrow().clone();
         self.clone_internal(&o, &n)?;
+        if let Some(f) = cls.hooks.as_ref().and_then(|h| h.clone) {
+            f(self, &o, &n)?;
+        }
         if let Some(m) = cls.magic.clone.clone() {
             nd.flags.set(nd.flags.get() | oflags::CLONING);
             let r = self.call_method(&n, &m, Vec::new());

@@ -22,6 +22,7 @@ mod enums;
 mod errors;
 mod exceptions;
 mod exec;
+pub mod ext;
 mod fiber;
 pub mod func;
 mod generator;
@@ -134,6 +135,8 @@ impl Vm {
             tick_functions: Vec::new(),
             headers_sent: false,
             fibers: Vec::new(),
+            loaded_extensions: Vec::new(),
+            shutdown_hooks: Vec::new(),
             pending_call_dst: None,
             empty_code,
             empty_vars: Rc::new(RefCell::new(vm::VarStore::default())),
@@ -269,6 +272,9 @@ impl Vm {
             self.in_shutdown = false;
         }
         object::set_destructors_enabled(false);
+        for h in self.shutdown_hooks.clone() {
+            h(self);
+        }
         php_support::output::request_shutdown(self);
         self.flush_stdout();
         self.exit_status

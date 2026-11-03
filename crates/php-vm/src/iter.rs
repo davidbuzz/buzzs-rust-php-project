@@ -143,6 +143,11 @@ impl Vm {
     }
 
     fn object_iter(&mut self, o: Obj, by_ref: bool) -> VmResult<ForeachIter> {
+        if let Some(f) = crate::ext::hooks_of(&o).and_then(|h| h.get_iterator) {
+            let mut it = f(self, &o, by_ref)?;
+            it.rewind(self)?;
+            return Ok(ForeachIter::Native(crate::vm::NativeIter(it), false));
+        }
         if object::has_internal::<crate::generator::GenData>(&o) {
             if by_ref
                 && !object::internal::<crate::generator::GenData, _>(&o, |d| {
@@ -320,6 +325,23 @@ impl Vm {
                     Ok(false)
                 }
             }
+            ForeachIter::Native(it, started) => {
+                if *started {
+                    it.0.next(self)?;
+                }
+                *started = true;
+                if it.0.valid(self)? {
+                    let v = it.0.current(self)?;
+                    self.set_tmp(val, v);
+                    if let Some(kt) = key {
+                        let k = it.0.key(self)?;
+                        self.set_tmp(kt, k);
+                    }
+                    Ok(true)
+                } else {
+                    Ok(false)
+                }
+            }
             ForeachIter::Empty => Ok(false),
         };
         if let Some(slot) = self.frame_mut().iters.get_mut(iter as usize) {
@@ -364,6 +386,17 @@ impl Vm {
             Value::Array(a) => Ok(a.iter().map(|(k, v)| (k.to_value(), v.deref())).collect()),
             Value::Object(o) => {
                 let mut out = Vec::new();
+                if let Some(f) = crate::ext::hooks_of(o).and_then(|h| h.get_iterator) {
+                    let mut it = f(self, o, false)?;
+                    it.rewind(self)?;
+                    while it.valid(self)? {
+                        let v = it.current(self)?;
+                        let k = it.key(self)?;
+                        out.push((k, v));
+                        it.next(self)?;
+                    }
+                    return Ok(out);
+                }
                 if object::has_internal::<crate::generator::GenData>(o) {
                     if self.gen_finished(o) {
                         return Err(self.make_throw("Exception", "Cannot traverse an already closed generator"));

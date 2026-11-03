@@ -222,8 +222,19 @@ pub enum ForeachIter {
         /// First fetch done.
         started: bool,
     },
+    /// A native iterator (extension `get_iterator` hook).
+    Native(NativeIter, bool),
     /// An empty iteration (non-iterable subject).
     Empty,
+}
+
+/// Wrapper for native iterators in `foreach`.
+pub struct NativeIter(pub Box<dyn crate::ext::NativeIterator>);
+
+impl std::fmt::Debug for NativeIter {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("NativeIter")
+    }
 }
 
 /// A call frame.
@@ -446,6 +457,10 @@ pub struct Vm {
     pub fibers: Vec<Obj>,
     /// Destination temporary of the builtin call in progress (fibers).
     pub pending_call_dst: Option<u32>,
+    /// Names of registered extensions.
+    pub loaded_extensions: Vec<String>,
+    /// Request shutdown hooks of extensions.
+    pub shutdown_hooks: Vec<fn(&mut Vm)>,
     /// Shared empty code for builtin frames.
     pub empty_code: Rc<OpArray>,
     /// Shared empty variable store for builtin frames.

@@ -10,8 +10,8 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::{Rc, Weak};
 
-/// A builder for internal classes.
-pub(crate) struct ClassBuilder {
+/// A builder for internal (native) classes.
+pub struct ClassBuilder {
     name: String,
     parent: Option<Rc<Class>>,
     interfaces: Vec<Rc<Class>>,
@@ -21,6 +21,7 @@ pub(crate) struct ClassBuilder {
     statics: Vec<(String, u32, Value)>,
     methods: Vec<(&'static str, u32, BuiltinFn)>,
     internal: InternalKind,
+    hooks: Option<Rc<crate::ext::ClassHooks>>,
 }
 
 fn abstract_stub(vm: &mut Vm, _a: &mut crate::func::Args) -> crate::vm::VmResult<php_runtime::Value> {
@@ -29,7 +30,7 @@ fn abstract_stub(vm: &mut Vm, _a: &mut crate::func::Args) -> crate::vm::VmResult
 
 impl ClassBuilder {
     /// Starts a class.
-    pub(crate) fn new(name: &str) -> Self {
+    pub fn new(name: &str) -> Self {
         ClassBuilder {
             name: name.to_string(),
             parent: None,
@@ -40,17 +41,18 @@ impl ClassBuilder {
             statics: Vec::new(),
             methods: Vec::new(),
             internal: InternalKind::None,
+            hooks: None,
         }
     }
 
     /// Sets the parent class (looked up in the VM).
-    pub(crate) fn extends(mut self, vm: &Vm, parent: &str) -> Self {
+    pub fn extends(mut self, vm: &Vm, parent: &str) -> Self {
         self.parent = vm.find_class(parent.as_bytes());
         self
     }
 
     /// Adds implemented interfaces.
-    pub(crate) fn implements(mut self, vm: &Vm, names: &[&str]) -> Self {
+    pub fn implements(mut self, vm: &Vm, names: &[&str]) -> Self {
         for n in names {
             if let Some(c) = vm.find_class(n.as_bytes()) {
                 self.interfaces.push(c);
@@ -60,8 +62,14 @@ impl ClassBuilder {
     }
 
     /// Adds class flags.
-    pub(crate) fn flags(mut self, f: u32) -> Self {
+    pub fn flags(mut self, f: u32) -> Self {
         self.flags |= f;
+        self
+    }
+
+    /// Sets native object handlers.
+    pub fn hooks(mut self, h: crate::ext::ClassHooks) -> Self {
+        self.hooks = Some(Rc::new(h));
         self
     }
 
@@ -72,39 +80,39 @@ impl ClassBuilder {
     }
 
     /// Adds a constant.
-    pub(crate) fn constant(mut self, name: &str, v: Value) -> Self {
+    pub fn constant(mut self, name: &str, v: Value) -> Self {
         self.consts.push((name.to_string(), v, flags::PUBLIC));
         self
     }
 
     /// Adds a property: `ty` is a stub type or `None`; `default` `None`
     /// leaves typed properties uninitialized.
-    pub(crate) fn prop(mut self, name: &str, fl: u32, ty: Option<&'static str>, default: Option<Value>) -> Self {
+    pub fn prop(mut self, name: &str, fl: u32, ty: Option<&'static str>, default: Option<Value>) -> Self {
         self.props.push((name.to_string(), fl, ty, default));
         self
     }
 
     /// Adds a static property.
-    pub(crate) fn static_prop(mut self, name: &str, fl: u32, v: Value) -> Self {
+    pub fn static_prop(mut self, name: &str, fl: u32, v: Value) -> Self {
         self.statics.push((name.to_string(), fl | flags::STATIC, v));
         self
     }
 
     /// Adds a method with a stub signature.
-    pub(crate) fn method(mut self, sig: &'static str, fl: u32, f: BuiltinFn) -> Self {
+    pub fn method(mut self, sig: &'static str, fl: u32, f: BuiltinFn) -> Self {
         self.methods.push((sig, fl, f));
         self
     }
 
     /// Adds an abstract (interface) method.
-    pub(crate) fn abstract_method(mut self, sig: &'static str, fl: u32) -> Self {
+    pub fn abstract_method(mut self, sig: &'static str, fl: u32) -> Self {
         self.methods.push((sig, fl | flags::ABSTRACT, abstract_stub));
         self
     }
 
     /// Builds and registers the class.
     #[allow(clippy::too_many_lines)]
-    pub(crate) fn register(self, vm: &mut Vm) -> Rc<Class> {
+    pub fn register(self, vm: &mut Vm) -> Rc<Class> {
         let parent = self.parent.clone();
         let mut interfaces: Vec<Rc<Class>> = parent.as_ref().map(|p| p.interfaces.clone()).unwrap_or_default();
         for i in &self.interfaces {
@@ -307,6 +315,7 @@ impl ClassBuilder {
                 line_end: 0,
                 doc_comment: None,
                 linked: Cell::new(true),
+                hooks: self.hooks.clone().or_else(|| parent.as_ref().and_then(|p| p.hooks.clone())),
             }
         });
         vm.register_class(cls.clone());

@@ -1241,6 +1241,7 @@ fn build_class(
         InternalKind::None
     };
     let _ = is_anon;
+    let hooks = parent.as_ref().and_then(|p| p.hooks.clone());
     Class {
         lc_name: ZStr::from(name.to_ascii_lowercase()),
         name,
@@ -1268,5 +1269,6 @@ fn build_class(
         line_end: decl.line_end,
         doc_comment: decl.doc_comment.clone(),
         linked: Cell::new(true),
+        hooks,
     }
 }

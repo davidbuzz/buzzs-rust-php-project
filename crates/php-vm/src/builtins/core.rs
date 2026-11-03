@@ -694,11 +694,17 @@ fn zend_version(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
 
 fn extension_loaded(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let e = s(a, 0).to_ascii_lowercase();
-    Ok(Value::Bool(crate::LOADED_EXTENSIONS.iter().any(|x| x.eq_ignore_ascii_case(&e.to_string_lossy()))))
+    let e = e.to_string_lossy();
+    Ok(Value::Bool(
+        crate::LOADED_EXTENSIONS.iter().any(|x| x.eq_ignore_ascii_case(&e))
+            || _vm.loaded_extensions.iter().any(|x| x.eq_ignore_ascii_case(&e)),
+    ))
 }
 
-fn get_loaded_extensions(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
-    Ok(Value::Array(ZArray::from_values(crate::LOADED_EXTENSIONS.iter().map(|e| sv(*e)))))
+fn get_loaded_extensions(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
+    let mut v: Vec<Value> = crate::LOADED_EXTENSIONS.iter().map(|e| sv(*e)).collect();
+    v.extend(vm.loaded_extensions.iter().map(|e| sv(e.as_str())));
+    Ok(Value::Array(ZArray::from_values(v)))
 }
 
 fn call_user_func(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {

@@ -1,0 +1,13 @@
+//! The native extensions linked into the `php` binary.
+//!
+//! Binding crates (`crates/php-ext-*`) add one line here (and a dependency
+//! in `crates/php-cli/Cargo.toml`); see `crates/php-vm/EXTENSIONS.md`.
+
+use php_vm::ext::Extension;
+
+/// All linked extensions, in registration order.
+pub fn all() -> Vec<Box<dyn Extension>> {
+    vec![
+        // Box::new(php_ext_ctype::Ctype),
+    ]
+}

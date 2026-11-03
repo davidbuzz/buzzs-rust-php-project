@@ -786,6 +786,66 @@ impl Vm {
                     RSeg::Dim(k) => k.clone(),
                     _ => Value::Null,
                 };
+                if let Some(h) = crate::ext::hooks_of(&obj) {
+                    let keyopt = match seg {
+                        RSeg::Dim(k) => Some(k),
+                        _ => None,
+                    };
+                    if last {
+                        match &wop {
+                            WOp::Assign(v) => {
+                                if let Some(f) = h.write_dimension {
+                                    if f(self, &obj, keyopt, v)? {
+                                        return Ok(v.clone());
+                                    }
+                                }
+                            }
+                            WOp::Unset => {
+                                if let (Some(f), Some(k)) = (h.unset_dimension, keyopt) {
+                                    if f(self, &obj, k)? {
+                                        return Ok(Value::Null);
+                                    }
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    if let (Some(f), Some(k)) = (h.read_dimension, keyopt) {
+                        if !last || matches!(wop, WOp::FetchRw | WOp::MakeRef) {
+                            if let Some(v) = f(self, &obj, k)? {
+                                if last {
+                                    return Ok(match wop {
+                                        WOp::MakeRef => Value::Reference(match v {
+                                            Value::Reference(r) => r,
+                                            o => PhpRef::new(o),
+                                        }),
+                                        _ => v.deref(),
+                                    });
+                                }
+                                return match v {
+                                    Value::Object(o2) => self.obj_walk(o2, segs, i + 1, wop),
+                                    Value::Reference(rf) => {
+                                        let mut diags = Vec::new();
+                                        let mut w = wop;
+                                        let s = {
+                                            let mut b = rf.borrow_mut();
+                                            descend(&mut b, segs, i + 1, &mut w, &mut diags, false)
+                                        };
+                                        self.flush_diags(diags)?;
+                                        self.finish_step(s, segs, w)
+                                    }
+                                    mut other => {
+                                        let mut diags = Vec::new();
+                                        let mut w = wop;
+                                        let s = descend(&mut other, segs, i + 1, &mut w, &mut diags, false);
+                                        self.flush_diags(diags)?;
+                                        self.finish_step(s, segs, w)
+                                    }
+                                };
+                            }
+                        }
+                    }
+                }
                 if !self.instance_of(&obj, b"arrayaccess") {
                     return Err(self.make_throw(
                         "Error",
@@ -1126,6 +1186,20 @@ impl Vm {
                 Ok(Value::Str(ZStr::from_byte(s.as_bytes()[usize::try_from(real).unwrap_or(0)])))
             }
             Value::Object(o) => {
+                if let Some(h) = crate::ext::hooks_of(&o) {
+                    if mode == FetchMode::Is {
+                        if let Some(f) = h.has_dimension {
+                            if let Some(false) = f(self, &o, k, false)? {
+                                return Ok(Value::Null);
+                            }
+                        }
+                    }
+                    if let Some(f) = h.read_dimension {
+                        if let Some(v) = f(self, &o, k)? {
+                            return Ok(v);
+                        }
+                    }
+                }
                 if !self.instance_of(&o, b"arrayaccess") {
                     return Err(self.make_throw(
                         "Error",
@@ -1266,6 +1340,11 @@ impl Vm {
                         }
                     }
                     Value::Object(o) => {
+                        if let Some(f) = crate::ext::hooks_of(&o).and_then(|h| h.has_dimension) {
+                            if let Some(r) = f(self, &o, k, empty)? {
+                                return Ok(if empty { !r } else { r });
+                            }
+                        }
                         if !self.instance_of(&o, b"arrayaccess") {
                             return Err(self.make_throw(
                                 "Error",

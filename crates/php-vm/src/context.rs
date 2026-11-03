@@ -61,6 +61,11 @@ impl Vm {
     /// The property table for a purpose (honouring `__debugInfo`).
     pub(crate) fn props_for(&mut self, o: &Obj, purpose: PropertyPurpose) -> VmResult<Option<ZArray>> {
         let cls = object::class_of(o).clone();
+        if let Some(f) = cls.hooks.as_ref().and_then(|h| h.properties_for) {
+            if let Some(t) = f(self, o, purpose)? {
+                return Ok(Some(t));
+            }
+        }
         if purpose == PropertyPurpose::Debug {
             if let Some(m) = cls.magic.debug_info.clone() {
                 let r = self.call_method(o, &m, Vec::new())?;
@@ -134,6 +139,13 @@ impl RuntimeContext for Vm {
     }
 
     fn cast_object(&mut self, obj: &Obj, target: CastTarget) -> RtResult<Option<Value>> {
+        if let Some(f) = crate::ext::hooks_of(obj).and_then(|h| h.cast) {
+            match f(self, obj, target) {
+                Ok(Some(v)) => return Ok(Some(v)),
+                Ok(None) => {}
+                Err(t) => return Err(self.to_rt(t)),
+            }
+        }
         match target {
             CastTarget::String => match self.object_to_string_opt(obj) {
                 Ok(Some(s)) => Ok(Some(Value::Str(s))),
@@ -150,11 +162,26 @@ impl RuntimeContext for Vm {
     }
 
     fn do_operation(&mut self, op: BinaryOp, op1: &Value, op2: &Value) -> RtResult<Option<Value>> {
-        let _ = (op, op1, op2);
+        for v in [op1, op2] {
+            if let Value::Object(o) = v {
+                if let Some(f) = crate::ext::hooks_of(o).and_then(|h| h.do_operation) {
+                    return f(self, op, op1, op2).map_err(|t| self.to_rt(t));
+                }
+            }
+        }
         Ok(None)
     }
 
     fn compare_objects(&mut self, op1: &Value, op2: &Value) -> RtResult<i32> {
+        for v in [op1, op2] {
+            if let Value::Object(o) = v {
+                if let Some(f) = crate::ext::hooks_of(o).and_then(|h| h.compare) {
+                    if let Some(r) = f(self, op1, op2).map_err(|t| self.to_rt(t))? {
+                        return Ok(r);
+                    }
+                }
+            }
+        }
         php_runtime::ops::std_compare_objects(self, op1, op2, |vm, a, b| {
             vm.std_compare(a, b).map_err(|t| vm.to_rt(t))
         })
@@ -261,6 +288,11 @@ impl RuntimeContext for Vm {
     }
 
     fn count_object(&mut self, obj: &Obj) -> RtResult<Option<i64>> {
+        if let Some(f) = crate::ext::hooks_of(obj).and_then(|h| h.count) {
+            if let Some(n) = f(self, obj).map_err(|t| self.to_rt(t))? {
+                return Ok(Some(n));
+            }
+        }
         if self.instance_of(obj, b"countable") {
             let r = self
                 .call_method_name(obj, "count", Vec::new())
@@ -335,6 +367,14 @@ impl Vm {
                 cls.name.to_string_lossy()
             };
             return Err(self.make_throw("Exception", &format!("Serialization of '{n}' is not allowed")));
+        }
+        if let Some(f) = cls.hooks.as_ref().and_then(|h| h.serialize) {
+            if let Some(props) = f(self, obj)? {
+                return Ok(SerializedObject::Object {
+                    class: cls.name.clone(),
+                    props,
+                });
+            }
         }
         if let Some(m) = cls.magic.serialize.clone() {
             let r = self.call_method(obj, &m, Vec::new())?;
@@ -460,6 +500,11 @@ impl Vm {
             return Ok(());
         };
         let cls = object::class_of(o).clone();
+        if let Some(f) = cls.hooks.as_ref().and_then(|h| h.unserialize) {
+            if f(self, o, props.clone())? {
+                return Ok(());
+            }
+        }
         if let Some(m) = cls.magic.unserialize.clone() {
             self.call_method(o, &m, vec![Value::Array(props)])?;
             return Ok(());

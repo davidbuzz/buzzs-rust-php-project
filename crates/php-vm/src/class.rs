@@ -382,6 +382,8 @@ pub struct Class {
     pub doc_comment: Option<ZStr>,
     /// Whether the class has been fully linked (constants checked).
     pub linked: Cell<bool>,
+    /// Native object handlers (inherited).
+    pub hooks: Option<Rc<crate::ext::ClassHooks>>,
 }
 
 impl fmt::Debug for Class {

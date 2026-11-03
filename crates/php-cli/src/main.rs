@@ -1,5 +1,7 @@
 //! The `php` command line interface (`sapi/cli/php_cli.c`).
 
+mod extensions;
+
 use php_vm::{Vm, VmOptions};
 use std::io::{Read, Write};
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
@@ -240,7 +242,9 @@ fn run(raw: &[Vec<u8>]) -> i32 {
         .spawn(move || {
             let stdout: Box<dyn Write> =
                 Box::new(std::io::BufWriter::with_capacity(1 << 16, std::io::stdout()));
-            let mut vm = Vm::new(&opts, stdout);
+            let exts = extensions::all();
+            let refs: Vec<&dyn php_vm::ext::Extension> = exts.iter().map(AsRef::as_ref).collect();
+            let mut vm = Vm::with_extensions(&opts, stdout, &refs);
             vm.set_cli_args(&script_name, &script_args);
             vm.run_script(&src, &p)
         })

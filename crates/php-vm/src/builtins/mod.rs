@@ -1,6 +1,6 @@
 //! Builtin functions and classes.
 
-pub(crate) mod classbuilder;
+pub mod classbuilder;
 mod core;
 pub(crate) use self::core::enum_methods;
 mod array;
@@ -8,7 +8,7 @@ mod classes;
 mod math;
 mod output;
 mod string;
-pub(crate) mod sig;
+pub mod sig;
 pub(crate) mod util;
 mod var;
 
