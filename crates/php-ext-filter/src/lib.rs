@@ -30,7 +30,7 @@ use std::cell::RefCell;
 use host::{rt_throw, VmFilterHost};
 use php_filter::constants::CONSTANTS;
 use php_filter::{FilterArgs, FilterInputs};
-use php_runtime::{RtResult, Value, ZArray};
+use php_runtime::{RtResult, Value, ZArray, ZStr};
 use php_support::ini::{Access, IniDirective, ModifyHandler};
 use php_vm::ext::{Args, ClassBuilder, Extension, ModuleBuilder, VmResult};
 use php_vm::Vm;
@@ -78,6 +78,55 @@ fn run(vm: &mut Vm, f: impl FnOnce(&mut VmFilterHost<'_>) -> RtResult<Value>) ->
     r.map_err(|e| rt_throw(vm, e))
 }
 
+/// What `memory_get_usage()` reports for an idle request (the VM does not
+/// track allocations), the baseline of [`check_memory`].
+const BASE_USAGE: u64 = 2 * 1024 * 1024;
+
+/// `memory_limit` in bytes (`None`: unlimited).
+fn memory_limit(vm: &Vm) -> Option<u64> {
+    let raw = vm.ini_string("memory_limit")?;
+    let s = String::from_utf8_lossy(&raw);
+    let s = s.trim();
+    let (digits, mult) = match s.as_bytes().last()? {
+        b'k' | b'K' => (&s[..s.len() - 1], 1u64 << 10),
+        b'm' | b'M' => (&s[..s.len() - 1], 1 << 20),
+        b'g' | b'G' => (&s[..s.len() - 1], 1 << 30),
+        _ => (s, 1),
+    };
+    let n: i64 = digits.trim().parse().ok()?;
+    u64::try_from(n)
+        .ok()
+        .filter(|&n| n > 0)
+        .map(|n| n.saturating_mul(mult))
+}
+
+/// Total string bytes of a (possibly nested) value.
+fn string_bytes(v: &Value) -> u64 {
+    match v {
+        Value::Str(s) => s.len() as u64,
+        Value::Array(a) => a.values().map(string_bytes).sum(),
+        _ => 0,
+    }
+}
+
+/// Models the `memory_limit` check of the buffers the filters allocate:
+/// the VM does not account memory, so input plus output (on top of
+/// [`BASE_USAGE`]) are compared with the limit and the engine's
+/// out-of-memory fatal error is raised when they would not fit.
+fn check_memory(vm: &mut Vm, input: &Value, output: VmResult<Value>) -> VmResult<Value> {
+    let output = output?;
+    let Some(limit) = memory_limit(vm) else {
+        return Ok(output);
+    };
+    let out = string_bytes(&output);
+    if BASE_USAGE + string_bytes(input) + out > limit {
+        return Err(vm.fatal(&format!(
+            "Allowed memory size of {limit} bytes exhausted (tried to allocate {out} bytes)"
+        )));
+    }
+    Ok(output)
+}
+
 /// The `array|int $options` argument (`default` when not passed).
 fn options(a: &Args, n: usize, default: i64) -> FilterArgs {
     match a.get(n) {
@@ -107,16 +156,18 @@ fn filter_var(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let value = a.at(0);
     let filter = int_or(a, 1, php_filter::constants::FILTER_DEFAULT);
     let opts = options(a, 2, 0);
-    run(vm, |h| php_filter::filter_var(h, &value, filter, &opts))
+    let r = run(vm, |h| php_filter::filter_var(h, &value, filter, &opts));
+    check_memory(vm, &value, r)
 }
 
 fn filter_var_array(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let arr = a.array(0);
     let opts = options(a, 1, php_filter::constants::FILTER_DEFAULT);
     let add_empty = bool_or(a, 2, true);
-    run(vm, |h| {
+    let r = run(vm, |h| {
         php_filter::filter_var_array(h, &arr, &opts, add_empty)
-    })
+    });
+    check_memory(vm, &Value::Array(arr), r)
 }
 
 fn filter_input(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -183,9 +234,12 @@ impl Extension for Filter {
         let default = m.vm().ini_string("filter.default").unwrap_or_default();
         if php_filter::parse_default_filter_ini(&default).1 {
             // UpdateDefaultFilter runs at startup: "in Unknown on line 0".
-            let _ = m
-                .vm()
-                .raise(E_DEPRECATED, "The filter.default ini setting is deprecated");
+            let _ = m.vm().error_at(
+                E_DEPRECATED,
+                "The filter.default ini setting is deprecated",
+                &ZStr::from("Unknown"),
+                0,
+            );
         }
         ClassBuilder::new(php_filter::FILTER_EXCEPTION_CLASS)
             .extends(m.vm(), "Exception")
