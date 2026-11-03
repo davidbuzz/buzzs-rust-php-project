@@ -4,6 +4,7 @@
 //! table (`mysqli_object_get_debug_info`).
 
 use php_runtime::{ArrayKey, HashTable, Obj, PropertyPurpose, Value, ZArray, ZStr};
+use php_vm::ext::PropCtx;
 use php_vm::object::{class_of, internal};
 use php_vm::{Vm, VmResult};
 
@@ -312,27 +313,30 @@ fn throw_fail(vm: &mut Vm, o: &Obj, f: &Fail) -> php_vm::Throw {
 /// `read_property` handler.
 pub fn read_property(vm: &mut Vm, o: &Obj, name: &ZStr) -> VmResult<Option<Value>> {
     crate::report::flush_diag_main(vm)?;
-    match read(vm, o, name, false)? {
+    // `BP_VAR_IS` reads (`??`, nested isset) fail quietly with null
+    let quiet = vm.property_context() == PropCtx::Isset;
+    match read(vm, o, name, quiet)? {
         None => Ok(None),
         Some(Ok(v)) => Ok(Some(v)),
+        Some(Err(_)) if quiet => Ok(Some(Value::Null)),
         Some(Err(f)) => Err(throw_fail(vm, o, &f)),
     }
 }
 
-/// `has_property` handler: the result of `isset()`, or of `empty()` when
-/// `check_empty` is set (the VM's convention).
-pub fn has_property(
-    vm: &mut Vm,
-    o: &Obj,
-    name: &ZStr,
-    check_empty: bool,
-) -> VmResult<Option<bool>> {
+/// `has_property` handler (`mysqli_object_has_property`): `isset()` is
+/// "readable and not null", `empty()` asks "readable and truthy",
+/// `property_exists()` only whether the property is in the table.
+pub fn has_property(vm: &mut Vm, o: &Obj, name: &ZStr, check_empty: bool) -> VmResult<Option<bool>> {
+    if vm.property_context() == PropCtx::Exists {
+        let known = kind_of(o).is_some_and(|k| table(k).contains(&name.to_string_lossy().as_str()));
+        return Ok(known.then_some(true));
+    }
     match read(vm, o, name, true)? {
         None => Ok(None),
-        Some(Err(_)) => Ok(Some(check_empty)),
+        Some(Err(_)) => Ok(Some(false)),
         Some(Ok(v)) => {
             if check_empty {
-                Ok(Some(!vm.value_to_bool(&v)?))
+                Ok(Some(vm.value_to_bool(&v)?))
             } else {
                 Ok(Some(!matches!(v, Value::Null)))
             }
