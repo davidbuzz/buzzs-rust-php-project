@@ -53,6 +53,7 @@ pub mod paths;
 pub mod php_wrapper;
 pub mod plain;
 pub mod poll;
+pub mod sockopts;
 pub mod stat;
 pub mod state;
 pub mod stream;

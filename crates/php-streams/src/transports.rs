@@ -8,7 +8,7 @@
 use std::io::{self, Read, Write};
 use std::net::{TcpStream, ToSocketAddrs, UdpSocket};
 use std::os::fd::{AsRawFd, RawFd};
-use std::os::unix::net::UnixStream;
+use std::os::unix::net::{UnixDatagram, UnixStream};
 use std::time::Duration;
 
 use crate::stream::{
@@ -27,6 +27,7 @@ enum Sock {
     Tcp(TcpStream),
     Udp(UdpSocket),
     Unix(UnixStream),
+    Udg(UnixDatagram),
 }
 
 impl Sock {
@@ -35,6 +36,7 @@ impl Sock {
             Sock::Tcp(s) => s.as_raw_fd(),
             Sock::Udp(s) => s.as_raw_fd(),
             Sock::Unix(s) => s.as_raw_fd(),
+            Sock::Udg(s) => s.as_raw_fd(),
         }
     }
 
@@ -43,6 +45,7 @@ impl Sock {
             Sock::Tcp(s) => s.set_read_timeout(t),
             Sock::Udp(s) => s.set_read_timeout(t),
             Sock::Unix(s) => s.set_read_timeout(t),
+            Sock::Udg(s) => s.set_read_timeout(t),
         }
     }
 
@@ -51,6 +54,7 @@ impl Sock {
             Sock::Tcp(s) => s.set_nonblocking(nb),
             Sock::Udp(s) => s.set_nonblocking(nb),
             Sock::Unix(s) => s.set_nonblocking(nb),
+            Sock::Udg(s) => s.set_nonblocking(nb),
         }
     }
 
@@ -59,6 +63,7 @@ impl Sock {
             Sock::Tcp(s) => s.read(buf),
             Sock::Udp(s) => s.recv(buf),
             Sock::Unix(s) => s.read(buf),
+            Sock::Udg(s) => s.recv(buf),
         }
     }
 
@@ -67,6 +72,7 @@ impl Sock {
             Sock::Tcp(s) => s.write(buf),
             Sock::Udp(s) => s.send(buf),
             Sock::Unix(s) => s.write(buf),
+            Sock::Udg(s) => s.send(buf),
         }
     }
 }
@@ -350,6 +356,12 @@ pub fn socket_client(remote: &[u8], timeout: Option<Duration>) -> Result<Stream,
                 Sock::Unix(UnixStream::connect_addr(&addr).map_err(|e| io_err(&e))?),
                 "unix_socket",
             )
+        }
+        "udg" => {
+            let addr = unix_socket_addr(&remote[n + 3..]).map_err(|e| io_err(&e))?;
+            let s = UnixDatagram::unbound().map_err(|e| io_err(&e))?;
+            s.connect_addr(&addr).map_err(|e| io_err(&e))?;
+            (Sock::Udg(s), "udg_socket")
         }
         other => {
             let shown: String = other.chars().take(31).collect();

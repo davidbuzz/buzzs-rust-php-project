@@ -8,6 +8,7 @@ use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd, OwnedFd, RawFd};
 use std::time::Duration;
 
 use php_runtime::{Value, ZArray};
+use php_streams::sockopts::{SockOpts, XportKind};
 use php_streams::stream::{
     flags, CastAs, OpFailed, Stream, StreamOps, StreamOption, StreamState, OPT_ERR, OPT_NOTIMPL,
     OPT_OK,
@@ -245,6 +246,49 @@ pub(crate) fn xport_create(
     ctx: Option<ContextRef>,
 ) -> VmResult<Result<Stream, XportError>> {
     let (scheme, rest) = xport::split_scheme(address);
+    let kind = XportKind::of_scheme(&scheme);
+    let opts = match SockOpts::from_context(ctx.as_ref(), kind, server) {
+        Ok(o) => o,
+        Err(message) => return Ok(Err(XportError { errno: 0, message })),
+    };
+    let r = xport_create_inner(
+        vm,
+        address,
+        &scheme,
+        rest,
+        timeout,
+        server,
+        flags,
+        persistent_id,
+        ctx,
+        &opts,
+    )?;
+    Ok(r.map(|mut s| {
+        // Options settable on the created socket (keepalive, linger,
+        // buffers); bind-time ones were applied before `bind()` where this
+        // module creates the socket.
+        if let Some(fd) = s.cast(CastAs::FdForSelect, false) {
+            opts.apply(fd);
+        }
+        s
+    }))
+}
+
+/// [`xport_create`] after the `socket` context options were validated.
+#[allow(clippy::too_many_arguments)]
+fn xport_create_inner(
+    vm: &mut Vm,
+    address: &str,
+    scheme: &str,
+    rest: &str,
+    timeout: Option<Duration>,
+    server: bool,
+    flags: i64,
+    persistent_id: Option<String>,
+    ctx: Option<ContextRef>,
+    opts: &SockOpts,
+) -> VmResult<Result<Stream, XportError>> {
+    let scheme = scheme.to_string();
     if let Some(t) = xport::find(&scheme) {
         let (host, port) = xport::parse_host_port(rest).unwrap_or_else(|| (rest.to_string(), 0));
         let req = XportRequest {
@@ -304,7 +348,7 @@ pub(crate) fn xport_create(
         }
     }
     if server {
-        let r = bridge::run(vm, || server_socket(&scheme, rest, address))?;
+        let r = bridge::run(vm, || server_socket(&scheme, rest, address, opts))?;
         return Ok(r.map(|mut s| {
             s.context = ctx;
             s
@@ -363,8 +407,10 @@ fn fsockopen_impl(vm: &mut Vm, a: &mut Args, persistent: bool) -> VmResult<Value
     match xport_create(vm, &target, timeout, false, 4, pid.clone(), ctx)? {
         Ok(s) => Ok(res::new_persistent(s, pid)),
         Err(e) => {
+            // `%s` stops at an embedded NUL.
+            let shown = host_s.split('\0').next().unwrap_or_default();
             vm.php_warning(&format!(
-                "Unable to connect to {host_s}:{port} ({})",
+                "Unable to connect to {shown}:{port} ({})",
                 e.message
             ))?;
             set_ref(a, 2, Value::Int(i64::from(e.errno)));
@@ -426,7 +472,12 @@ fn addslashes(s: &str) -> String {
 }
 
 /// A listening socket for the built-in transports.
-fn server_socket(scheme: &str, rest: &str, address: &str) -> Result<Stream, XportError> {
+fn server_socket(
+    scheme: &str,
+    rest: &str,
+    address: &str,
+    opts: &SockOpts,
+) -> Result<Stream, XportError> {
     let io_err = |e: &std::io::Error| XportError {
         errno: e.raw_os_error().unwrap_or(0),
         message: e
@@ -446,12 +497,27 @@ fn server_socket(scheme: &str, rest: &str, address: &str) -> Result<Stream, Xpor
             } else {
                 format!("{host}:{port}")
             };
-            if scheme == "tcp" {
-                std::net::TcpListener::bind(bind).map(|l| (OwnedFd::from(l), "tcp_socket"))
+            let (ty, label) = if scheme == "tcp" {
+                (libc::SOCK_STREAM, "tcp_socket")
             } else {
-                std::net::UdpSocket::bind(bind).map(|l| (OwnedFd::from(l), "udp_socket"))
-            }
+                (libc::SOCK_DGRAM, "udp_socket")
+            };
+            std::net::ToSocketAddrs::to_socket_addrs(&bind)
+                .and_then(|mut it| {
+                    it.next()
+                        .ok_or_else(|| std::io::Error::from_raw_os_error(libc::EINVAL))
+                })
+                .and_then(|addr| {
+                    php_streams::sys::bind_ip_socket(&addr, ty, opts.backlog, &|fd| {
+                        opts.apply_pre_bind(fd);
+                    })
+                    .map_err(std::io::Error::from_raw_os_error)
+                })
+                .map(|fd| (fd, label))
         }
+        "udg" => transports::unix_socket_addr(rest.as_bytes())
+            .and_then(|a| std::os::unix::net::UnixDatagram::bind_addr(&a))
+            .map(|l| (OwnedFd::from(l), "udg_socket")),
         "unix" => transports::unix_socket_addr(rest.as_bytes())
             .and_then(|a| std::os::unix::net::UnixListener::bind_addr(&a))
             .map(|l| (OwnedFd::from(l), "unix_socket")),
@@ -619,6 +685,12 @@ fn stream_socket_accept(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         let peer = sockaddr_name(nfd, true).map_or(Value::Null, |p| bytes(p.as_bytes()));
         a.set_ref(2, peer);
     }
+    let listener_ctx = cell.get().and_then(|s| s.context.clone());
+    if let Ok(o) = SockOpts::from_context(listener_ctx.as_ref(), XportKind::Tcp, true) {
+        if label.starts_with("tcp") {
+            o.for_accepted().apply(nfd);
+        }
+    }
     let mut conn = sock_stream(owned, label, Some(default_timeout(vm)));
     if let Some(hook) = xport::server_transport(cell.id()).and_then(|t| t.accept) {
         let Some(mut listener) = cell.take() else {
@@ -739,6 +811,20 @@ fn stream_socket_sendto(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let Some(fd) = fd else {
         return Ok(Value::Bool(false));
     };
+    let target = if a.has(3) { str_arg(a, 3) } else { Vec::new() };
+    if !target.is_empty() {
+        let Some(addr) = parse_network_address(&target) else {
+            vm.php_warning(&format!(
+                "Failed to parse `{}' into a valid network address",
+                String::from_utf8_lossy(&target)
+            ))?;
+            return Ok(Value::Bool(false));
+        };
+        let n = php_streams::sys::sendto(fd, &data, flags | libc::MSG_NOSIGNAL, &addr);
+        return Ok(n.map_or(Value::Bool(false), |n| {
+            Value::Int(i64::try_from(n).unwrap_or(0))
+        }));
+    }
     // SAFETY: `data` is valid for `data.len()` bytes.
     let n = unsafe {
         libc::send(
@@ -753,6 +839,30 @@ fn stream_socket_sendto(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     } else {
         Value::Int(i64::try_from(n).unwrap_or(0))
     })
+}
+
+/// `php_network_parse_network_address_with_port()`: `host:port` or
+/// `[v6]:port` with a port in `0..=65535` (`strtol`).
+fn parse_network_address(addr: &[u8]) -> Option<std::net::SocketAddr> {
+    let (host, port) = if addr.first() == Some(&b'[') {
+        let close = addr[1..].iter().position(|&c| c == b']')? + 1;
+        if addr.get(close + 1) != Some(&b':') {
+            return None;
+        }
+        (&addr[1..close], &addr[close + 2..])
+    } else {
+        let colon = addr.iter().position(|&c| c == b':')?;
+        (&addr[..colon], &addr[colon + 1..])
+    };
+    let (port, _) = php_streams::util::strtol(port);
+    let port = u16::try_from(port).ok()?;
+    let host = std::str::from_utf8(host).ok()?;
+    if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+        return Some(std::net::SocketAddr::new(ip, port));
+    }
+    std::net::ToSocketAddrs::to_socket_addrs(&(host, port))
+        .ok()?
+        .next()
 }
 
 /// Registers the functions and `STREAM_*` socket constants.

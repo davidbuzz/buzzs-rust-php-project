@@ -458,6 +458,165 @@ pub fn poll_fds(fds: &[(RawFd, i16)], timeout_ms: i32) -> Result<Vec<i16>, i32> 
     Ok(p.iter().map(|e| e.revents).collect())
 }
 
+/// `setsockopt(fd, level, name, &int)`; failures are ignored like PHP's
+/// unchecked calls.
+pub fn setsockopt_int(fd: RawFd, level: i32, name: i32, value: i32) {
+    let len = libc::socklen_t::try_from(std::mem::size_of::<i32>()).unwrap_or(4);
+    // SAFETY: `value` lives for the call and `len` is its size.
+    unsafe {
+        libc::setsockopt(fd, level, name, (&raw const value).cast(), len);
+    }
+}
+
+/// `setsockopt(fd, SOL_SOCKET, SO_LINGER, {onoff, secs})`.
+pub fn setsockopt_linger(fd: RawFd, onoff: bool, secs: i32) {
+    let l = libc::linger {
+        l_onoff: i32::from(onoff),
+        l_linger: secs,
+    };
+    let len = libc::socklen_t::try_from(std::mem::size_of::<libc::linger>()).unwrap_or(8);
+    // SAFETY: `l` lives for the call and `len` is its size.
+    unsafe {
+        libc::setsockopt(
+            fd,
+            libc::SOL_SOCKET,
+            libc::SO_LINGER,
+            (&raw const l).cast(),
+            len,
+        );
+    }
+}
+
+/// Creates an IP socket of `ty` (`SOCK_STREAM`/`SOCK_DGRAM`), runs `pre`
+/// on it (options that must precede `bind()`), binds it to `addr` and, for
+/// stream sockets, listens with `backlog`.
+///
+/// # Errors
+/// The `errno` of the failed call.
+pub fn bind_ip_socket(
+    addr: &std::net::SocketAddr,
+    ty: i32,
+    backlog: i32,
+    pre: &dyn Fn(RawFd),
+) -> Result<std::os::fd::OwnedFd, i32> {
+    let domain = if addr.is_ipv6() {
+        libc::AF_INET6
+    } else {
+        libc::AF_INET
+    };
+    // SAFETY: plain socket(2) call.
+    let fd = unsafe { libc::socket(domain, ty | libc::SOCK_CLOEXEC, 0) };
+    if fd < 0 {
+        return Err(last_errno());
+    }
+    // SAFETY: `fd` is a fresh descriptor owned by nobody else.
+    let owned = unsafe { std::os::fd::OwnedFd::from_raw_fd(fd) };
+    pre(fd);
+    let rc = match addr {
+        std::net::SocketAddr::V4(a) => {
+            let sin = libc::sockaddr_in {
+                sin_family: libc::sa_family_t::try_from(libc::AF_INET).unwrap_or(2),
+                sin_port: a.port().to_be(),
+                sin_addr: libc::in_addr {
+                    s_addr: u32::from_ne_bytes(a.ip().octets()),
+                },
+                sin_zero: [0; 8],
+            };
+            let len =
+                libc::socklen_t::try_from(std::mem::size_of::<libc::sockaddr_in>()).unwrap_or(16);
+            // SAFETY: `sin` is a valid sockaddr_in of `len` bytes.
+            unsafe { libc::bind(fd, (&raw const sin).cast(), len) }
+        }
+        std::net::SocketAddr::V6(a) => {
+            let sin6 = libc::sockaddr_in6 {
+                sin6_family: libc::sa_family_t::try_from(libc::AF_INET6).unwrap_or(10),
+                sin6_port: a.port().to_be(),
+                sin6_flowinfo: a.flowinfo(),
+                sin6_addr: libc::in6_addr {
+                    s6_addr: a.ip().octets(),
+                },
+                sin6_scope_id: a.scope_id(),
+            };
+            let len =
+                libc::socklen_t::try_from(std::mem::size_of::<libc::sockaddr_in6>()).unwrap_or(28);
+            // SAFETY: `sin6` is a valid sockaddr_in6 of `len` bytes.
+            unsafe { libc::bind(fd, (&raw const sin6).cast(), len) }
+        }
+    };
+    if rc < 0 {
+        return Err(last_errno());
+    }
+    if ty == libc::SOCK_STREAM {
+        // SAFETY: plain listen(2) on our descriptor.
+        if unsafe { libc::listen(fd, backlog) } < 0 {
+            return Err(last_errno());
+        }
+    }
+    Ok(owned)
+}
+
+/// `sendto(fd, buf, flags, addr)`.
+///
+/// # Errors
+/// The `errno` of the failed call.
+pub fn sendto(
+    fd: RawFd,
+    buf: &[u8],
+    flags: i32,
+    addr: &std::net::SocketAddr,
+) -> Result<usize, i32> {
+    let rc = match addr {
+        std::net::SocketAddr::V4(a) => {
+            let sin = libc::sockaddr_in {
+                sin_family: libc::sa_family_t::try_from(libc::AF_INET).unwrap_or(2),
+                sin_port: a.port().to_be(),
+                sin_addr: libc::in_addr {
+                    s_addr: u32::from_ne_bytes(a.ip().octets()),
+                },
+                sin_zero: [0; 8],
+            };
+            let len =
+                libc::socklen_t::try_from(std::mem::size_of::<libc::sockaddr_in>()).unwrap_or(16);
+            // SAFETY: `buf` and `sin` are valid for the given lengths.
+            unsafe {
+                libc::sendto(
+                    fd,
+                    buf.as_ptr().cast(),
+                    buf.len(),
+                    flags,
+                    (&raw const sin).cast(),
+                    len,
+                )
+            }
+        }
+        std::net::SocketAddr::V6(a) => {
+            let sin6 = libc::sockaddr_in6 {
+                sin6_family: libc::sa_family_t::try_from(libc::AF_INET6).unwrap_or(10),
+                sin6_port: a.port().to_be(),
+                sin6_flowinfo: a.flowinfo(),
+                sin6_addr: libc::in6_addr {
+                    s6_addr: a.ip().octets(),
+                },
+                sin6_scope_id: a.scope_id(),
+            };
+            let len =
+                libc::socklen_t::try_from(std::mem::size_of::<libc::sockaddr_in6>()).unwrap_or(28);
+            // SAFETY: `buf` and `sin6` are valid for the given lengths.
+            unsafe {
+                libc::sendto(
+                    fd,
+                    buf.as_ptr().cast(),
+                    buf.len(),
+                    flags,
+                    (&raw const sin6).cast(),
+                    len,
+                )
+            }
+        }
+    };
+    usize::try_from(rc).map_err(|_| last_errno())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
