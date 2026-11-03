@@ -9,6 +9,15 @@ Right now it is the TODO list. Once items are done, it becomes the itemised reco
 
 Keep rows when they reach 100%; they become the completion record. Add rows as gaps are found.
 
+In progress (4 Nov 2026): ext/zend_test (gates about 340 currently-skipped engine tests) and
+engine work on magic methods and class diagnostics. Landed after the 4 Nov headline run:
+typed references, trait linking/variance rewrite, property-hook inheritance, native
+stack-limit checks — 405 additional tests pass across Zend/tests, tests/, ext/standard,
+ext/date and ext/openssl (baseline refreshed: 1,628 → 1,221 known failures). Largest open
+Zend/tests failure clusters: type_declarations (112), partial_application (30),
+property_hooks (29), lazy_objects (28), deprecated_identifiers (23), attributes (21),
+magic_methods (19), enum (18).
+
 | Item | % | Pri | Description |
 |---|---|---|---|
 | **Infrastructure** | | | |

@@ -22,16 +22,9 @@ tests under out-of-scope directories ([phpt-scope.txt](phpt-scope.txt)) are not 
 | `sapi/` | 127 | 110 | 2 | 15 | 98.2% | 86.6% |
 | **in scope, total** | **21,414** | **18,378** | **1,627** | **1,399** | **91.8%** | **85.8%** |
 
-Per-extension rows (measured from the same run, with skips excluded) are in
-[FEATURE_GAP.md](FEATURE_GAP.md).
-
-In progress: ext/zend_test (gates about 340 currently-skipped engine tests) and engine
-work on magic methods and class diagnostics. Landed after the run above: typed references,
-trait linking/variance rewrite, property-hook inheritance, native stack-limit checks —
-405 additional tests pass across Zend/tests, tests/, ext/standard, ext/date and
-ext/openssl (baseline refreshed 4 Nov: 1,628 → 1,226 known failures). What is
-deliberately out of scope (opcache, FPM, pgsql,
-ffi, …) and the row-by-row detail are in [FEATURE_GAP.md](FEATURE_GAP.md).
+Per-extension rows (measured from the same run, with skips excluded) and what is currently
+in progress are in [FEATURE_GAP.md](FEATURE_GAP.md), along with what is deliberately out of
+scope (opcache, FPM, pgsql, ffi, …) and the row-by-row detail.
 
 ## Layout
 
