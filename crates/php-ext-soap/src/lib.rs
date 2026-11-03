@@ -225,7 +225,7 @@ impl Extension for Soap {
                 acc::PUBLIC,
                 methods::client_construct,
             )
-            .method("__call(string $name, array $args): mixed", acc::PUBLIC, methods::client_call)
+            .method("__call(mixed ...$args): mixed", acc::PUBLIC, methods::client_call)
             .method(
                 "__soapCall(string $name, array $args, ?array $options = null, $inputHeaders = null, &$outputHeaders = null): mixed",
                 acc::PUBLIC,

@@ -24,8 +24,20 @@ impl Write for Sink {
     }
 }
 
-/// Runs `code` (without `<?php`) and returns its output.
+/// Runs `code` (without `<?php`) and returns its output, on a thread with
+/// a large stack (the debug-build interpreter recurses deeply, like the CLI
+/// which raises its own stack limit).
 fn run(code: &str) -> String {
+    let code = code.to_owned();
+    std::thread::Builder::new()
+        .stack_size(256 * 1024 * 1024)
+        .spawn(move || run_on_this_thread(&code))
+        .expect("spawn")
+        .join()
+        .expect("script thread")
+}
+
+fn run_on_this_thread(code: &str) -> String {
     let sink = Sink::default();
     let stdstr = php_ext_stdstr::StdStr;
     let streams = php_ext_streams::Streams;
@@ -37,7 +49,9 @@ fn run(code: &str) -> String {
     let mut vm = Vm::with_extensions(&opts, Box::new(sink.clone()), &exts);
     let src = format!("<?php {code}");
     vm.run_script(src.as_bytes(), "test.php");
-    drop(vm);
+    // Dropping the VM releases the STDIN/STDOUT/STDERR stream resources,
+    // which closes the test harness's own descriptors.
+    std::mem::forget(vm);
     let out = sink.0.borrow().clone();
     String::from_utf8_lossy(&out).into_owned()
 }

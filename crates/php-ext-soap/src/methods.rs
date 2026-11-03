@@ -5,10 +5,11 @@
 
 use std::rc::Rc;
 
-use php_runtime::{Obj, Value};
+use php_runtime::{Obj, Value, ZArray, ZStr};
 use php_soap::objects::Actor;
 use php_vm::ext::{Args, VmResult};
 use php_vm::object::class_of;
+use php_vm::vm::FrameKind;
 use php_vm::Vm;
 
 use crate::host::VmHost;
@@ -306,14 +307,60 @@ pub(crate) fn client_construct(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 }
 
 /// `SoapClient::__call(string $name, array $args)`, also reached for every
-/// undefined method (`$client->someOperation(...)`).
+/// undefined method (`$client->someOperation(...)`): the VM then passes
+/// the call's own arguments and the name through
+/// [`Vm::magic_call_name`].
 pub(crate) fn client_call(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let this = a.this_obj();
-    let name = a.str(0);
-    let args = a.array(1);
+    let (name, args) = if let Some(n) = vm.magic_call_name() {
+        let args = ZArray::from_values(a.values.iter().map(Value::deref));
+        // Backtraces show the trampoline as `__call('name', Array)`.
+        if let Some(f) = vm.frames.last_mut() {
+            if f.kind == FrameKind::Builtin {
+                f.args = vec![
+                    Some(Value::Str(n.clone())),
+                    Some(Value::Array(args.clone())),
+                ];
+            }
+        }
+        (n, args)
+    } else {
+        direct_call_args(vm, a)?
+    };
     with_host(vm, |h| {
         php_soap::client::call(h, &this, name.as_bytes(), &args)
     })
+}
+
+/// ZPP of a direct `$client->__call($name, $args)` (the method is declared
+/// variadic so that magic dispatch reaches it with any arity).
+fn direct_call_args(vm: &mut Vm, a: &Args) -> VmResult<(ZStr, ZArray)> {
+    if a.values.len() != 2 {
+        let msg = format!(
+            "SoapClient::__call() expects exactly 2 arguments, {} given",
+            a.values.len()
+        );
+        return Err(vm.throw("ArgumentCountError", &msg));
+    }
+    let name = match a.values[0].deref() {
+        Value::Str(s) => s,
+        v @ (Value::Int(_) | Value::Float(_) | Value::Bool(_)) => vm.value_to_string(&v)?,
+        other => {
+            let msg = format!(
+                "SoapClient::__call(): Argument #1 ($name) must be of type string, {} given",
+                php_soap::client_type_name(&other)
+            );
+            return Err(vm.throw("TypeError", &msg));
+        }
+    };
+    let Value::Array(args) = a.values[1].deref() else {
+        let msg = format!(
+            "SoapClient::__call(): Argument #2 ($args) must be of type array, {} given",
+            php_soap::client_type_name(&a.values[1])
+        );
+        return Err(vm.throw("TypeError", &msg));
+    };
+    Ok((name, args))
 }
 
 /// `SoapClient::__soapCall(...)`.
