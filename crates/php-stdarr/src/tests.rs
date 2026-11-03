@@ -748,7 +748,7 @@ fn splice_extreme_arguments() {
     assert_eq!(lens, [0, 0, 0, 1]);
 }
 
-/// gh19926: the internal pointer after array_splice.
+/// gh19926: the internal pointer after `array_splice`.
 #[test]
 fn splice_resets_internal_pointer() {
     let mut ctx = Ctx::new();
@@ -769,7 +769,7 @@ fn splice_resets_internal_pointer() {
     );
 }
 
-/// gh23576: the next free key of array_keys() results.
+/// gh23576: the next free key of `array_keys()` results.
 #[test]
 fn array_keys_next_index() {
     let mut ctx = Ctx::new();
@@ -782,7 +782,7 @@ fn array_keys_next_index() {
     }
 }
 
-/// gh9244: multisort followed by array_shift.
+/// gh9244: multisort followed by `array_shift`.
 #[test]
 fn multisort_then_shift() {
     let mut ctx = Ctx::new();
@@ -797,4 +797,44 @@ fn multisort_then_shift() {
     )
     .unwrap();
     assert_eq!(stack::array_shift(&items).unwrap().as_int(), Some(2));
+}
+
+/// The frameless two-argument `min`/`max` break ties differently from the
+/// variadic forms.
+#[test]
+fn frameless_min_max() {
+    let mut ctx = Ctx::new();
+    let (i, f) = (Value::Int(1), Value::Float(1.0));
+    assert!(matches!(
+        basic::min2(&mut ctx, &i, &f).unwrap(),
+        Value::Float(_)
+    ));
+    assert!(matches!(
+        basic::min(&mut ctx, &[i.clone(), f.clone()]).unwrap(),
+        Value::Int(_)
+    ));
+    assert!(matches!(
+        basic::max2(&mut ctx, &i, &f).unwrap(),
+        Value::Int(_)
+    ));
+    assert!(matches!(
+        basic::max2(&mut ctx, &f, &i).unwrap(),
+        Value::Float(_)
+    ));
+    let a = Value::from("a");
+    let b = Value::from("b");
+    assert_eq!(
+        basic::min2(&mut ctx, &b, &a)
+            .unwrap()
+            .as_str()
+            .map(ZStr::as_bytes),
+        Some(&b"a"[..])
+    );
+    assert_eq!(
+        basic::max2(&mut ctx, &b, &a)
+            .unwrap()
+            .as_str()
+            .map(ZStr::as_bytes),
+        Some(&b"b"[..])
+    );
 }

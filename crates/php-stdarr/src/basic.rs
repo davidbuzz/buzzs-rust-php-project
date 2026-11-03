@@ -230,6 +230,55 @@ pub fn max<C: RuntimeContext + ?Sized>(ctx: &mut C, args: &[Value]) -> RtResult<
     minmax(ctx, "max", args, true)
 }
 
+/// The frameless two-argument `min($a, $b)` (`ZEND_FRAMELESS_FUNCTION(min, 2)`),
+/// used by the VM for direct calls with exactly two arguments. Unlike the
+/// variadic form, ties return the *second* argument.
+#[allow(clippy::cast_precision_loss)]
+pub fn min2<C: RuntimeContext + ?Sized>(ctx: &mut C, lhs: &Value, rhs: &Value) -> RtResult<Value> {
+    frameless_minmax(ctx, lhs, rhs, false)
+}
+
+/// The frameless two-argument `max($a, $b)`; ties return the first argument.
+pub fn max2<C: RuntimeContext + ?Sized>(ctx: &mut C, lhs: &Value, rhs: &Value) -> RtResult<Value> {
+    frameless_minmax(ctx, lhs, rhs, true)
+}
+
+#[allow(clippy::cast_precision_loss)]
+fn frameless_minmax<C: RuntimeContext + ?Sized>(
+    ctx: &mut C,
+    lhs: &Value,
+    rhs: &Value,
+    max: bool,
+) -> RtResult<Value> {
+    // `true` selects lhs.
+    let pick_f = |l: f64, r: f64| if max { l >= r } else { l < r };
+    let take_lhs = match (lhs, rhs) {
+        (Value::Int(l), Value::Int(r)) => {
+            if max {
+                l >= r
+            } else {
+                l < r
+            }
+        }
+        (Value::Int(l), Value::Float(r)) if dval_to_lval_silent(*l as f64) == *l => {
+            pick_f(*l as f64, *r)
+        }
+        (Value::Float(l), Value::Float(r)) => pick_f(*l, *r),
+        (Value::Float(l), Value::Int(r)) if dval_to_lval_silent(*r as f64) == *r => {
+            pick_f(*l, *r as f64)
+        }
+        _ => {
+            let c = ops::compare(lhs, rhs, ctx)?;
+            if max {
+                c >= 0
+            } else {
+                c < 0
+            }
+        }
+    };
+    Ok(if take_lhs { lhs.clone() } else { rhs.clone() })
+}
+
 // ---------------------------------------------------------------------------
 // Searching
 // ---------------------------------------------------------------------------
