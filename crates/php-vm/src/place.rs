@@ -615,6 +615,12 @@ impl Vm {
                 s
             }
             RBase::This(o) => match o {
+                Some(o) if segs.is_empty() => {
+                    return Ok(match wop {
+                        WOp::MakeRef => Value::Reference(PhpRef::new(Value::Object(o))),
+                        _ => Value::Object(o),
+                    });
+                }
                 Some(o) => Step::Obj(o, 0),
                 None => {
                     return Err(self.make_throw("Error", "Using $this when not in object context"))

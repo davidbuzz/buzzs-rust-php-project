@@ -34,13 +34,27 @@ fn class_of_name(vm: &Vm, n: &ZStr, scope: &Rc<Class>) -> Option<Rc<Class>> {
     }
 }
 
+fn resolve2(vm: &Vm, n: &ZStr, s1: &Rc<Class>, s2: &Rc<Class>) -> Option<Rc<Class>> {
+    class_of_name(vm, n, s1).or_else(|| {
+        if s2.lc_name.as_bytes() == n.to_ascii_lowercase().as_bytes() {
+            Some(s2.clone())
+        } else {
+            None
+        }
+    })
+}
+
 /// Whether class name `a` (in `a_scope`) is a subtype of class name `b`.
+/// Unresolvable classes are treated as compatible (PHP delays the check).
 fn class_subtype(vm: &Vm, a: &ZStr, a_scope: &Rc<Class>, b: &ZStr, b_scope: &Rc<Class>) -> bool {
-    let ca = class_of_name(vm, a, a_scope);
-    let cb = class_of_name(vm, b, b_scope);
+    if a.eq_ignore_ascii_case(b.as_bytes()) {
+        return true;
+    }
+    let ca = resolve2(vm, a, a_scope, b_scope);
+    let cb = resolve2(vm, b, b_scope, a_scope);
     match (ca, cb) {
         (Some(x), Some(y)) => x.is_subclass_of(&y),
-        _ => a.eq_ignore_ascii_case(b.as_bytes()),
+        _ => true,
     }
 }
 
@@ -57,7 +71,9 @@ pub(crate) fn covariant(vm: &Vm, fe_scope: &Rc<Class>, fe: &TypeDecl, proto_scop
     // static is a subtype of self/object/static.
     if fe_mask & mask::STATIC != 0 {
         let ok = pmask & (mask::STATIC | mask::OBJECT) != 0
-            || proto.classes.iter().any(|c| fe_scope.is_subclass_of_name(vm, c, proto_scope));
+            || proto.classes.iter().any(|c| {
+                resolve2(vm, c, proto_scope, fe_scope).is_none_or(|pc| fe_scope.is_subclass_of(&pc))
+            });
         if !ok {
             return false;
         }
@@ -86,7 +102,13 @@ pub(crate) fn covariant(vm: &Vm, fe_scope: &Rc<Class>, fe: &TypeDecl, proto_scop
         return false;
     }
     for c in &fe.classes {
+        let fc = resolve2(vm, c, fe_scope, proto_scope);
         let ok = pmask & mask::OBJECT != 0
+            || (pmask & mask::CALLABLE != 0
+                && fc.as_ref().is_some_and(|x| x.lc_name.as_bytes() == b"closure" || x.methods.contains_key(b"__invoke".as_slice())))
+            || (pmask & mask::STATIC != 0
+                && fe_scope.flags & cflags::FINAL != 0
+                && fc.as_ref().is_some_and(|x| Rc::ptr_eq(x, fe_scope)))
             || (p_iter && class_of_name(vm, c, fe_scope).is_some_and(|x| x.instance_of_name(b"traversable")))
             || proto.classes.iter().any(|pc| class_subtype(vm, c, fe_scope, pc, proto_scope))
             || proto.intersections.iter().any(|g| g.iter().all(|pc| class_subtype(vm, c, fe_scope, pc, proto_scope)))
@@ -111,11 +133,6 @@ pub(crate) fn covariant(vm: &Vm, fe_scope: &Rc<Class>, fe: &TypeDecl, proto_scop
     true
 }
 
-impl Class {
-    fn is_subclass_of_name(self: &Rc<Class>, vm: &Vm, name: &ZStr, scope: &Rc<Class>) -> bool {
-        class_of_name(vm, name, scope).is_some_and(|c| self.is_subclass_of(&c))
-    }
-}
 
 /// `zend_do_perform_implementation_check`.
 pub(crate) fn implementation_check(

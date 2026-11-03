@@ -1262,6 +1262,7 @@ impl Compiler {
                     };
                     let mut uf = self.compile_body(&spec, body)?;
                     uf.flags |= fl;
+                    self.check_magic_method(&cname, &md.name.as_str_lossy(), &uf, md.span.line)?;
                     if md.name.eq_ignore_case("__tostring") && uf.return_type.is_none() {
                         uf.return_type = Some(crate::types::TypeDecl::simple(crate::types::mask::STRING));
                     }
@@ -1624,6 +1625,185 @@ fn uses_backing(code: &crate::opcode::OpArray, prop: &[u8]) -> bool {
             && matches!(p.segs.first(), Some(crate::opcode::Seg::Prop(crate::opcode::Operand::Lit(i)))
                 if matches!(&code.literals[*i as usize], php_runtime::Value::Str(s) if s.as_bytes() == prop))
     })
+}
+
+impl Compiler {
+    /// `zend_check_magic_method_implementation`.
+    #[allow(clippy::too_many_lines)]
+    fn check_magic_method(&mut self, cname: &str, name: &str, uf: &UserFunction, line: u32) -> CResult<()> {
+        let lc = name.to_ascii_lowercase();
+        if !lc.starts_with("__") {
+            return Ok(());
+        }
+        let nargs = uf.params.iter().filter(|p| !p.variadic).count();
+        let is_static = uf.flags & flags::STATIC != 0;
+        let has_ret = uf.return_type.is_some();
+        let args = |c: &Compiler, n: usize| -> CResult<()> {
+            if nargs != n {
+                let msg = match n {
+                    0 => format!("Method {cname}::{name}() cannot take arguments"),
+                    1 => format!("Method {cname}::{name}() must take exactly 1 argument"),
+                    _ => format!("Method {cname}::{name}() must take exactly {n} arguments"),
+                };
+                return c.err(msg, line);
+            }
+            if uf.params.iter().take(n).any(|p| p.by_ref) {
+                return c.err(format!("Method {cname}::{name}() cannot take arguments by reference"), line);
+            }
+            Ok(())
+        };
+        let non_static = |c: &Compiler| -> CResult<()> {
+            if is_static {
+                return c.err(format!("Method {cname}::{name}() cannot be static"), line);
+            }
+            Ok(())
+        };
+        let must_static = |c: &Compiler| -> CResult<()> {
+            if !is_static {
+                return c.err(format!("Method {cname}::{name}() must be static"), line);
+            }
+            Ok(())
+        };
+        let arg_type = |c: &Compiler, i: usize, m: u32, tn: &str| -> CResult<()> {
+            if let Some(p) = uf.params.get(i) {
+                if let Some(t) = &p.ty {
+                    if t.mask & m == 0 && !t.is_mixed() {
+                        return c.err(
+                            format!("{cname}::{name}(): Parameter #{} (${}) must be of type {tn} when declared", i + 1, p.name),
+                            line,
+                        );
+                    }
+                }
+            }
+            Ok(())
+        };
+        let ret_type = |c: &Compiler, m: u32, tn: &str| -> CResult<()> {
+            let Some(t) = &uf.return_type else { return Ok(()) };
+            if t.mask & crate::types::mask::NEVER != 0 {
+                return Ok(());
+            }
+            let mut extra = t.mask & !m & !crate::types::mask::ITERABLE;
+            if t.mask & crate::types::mask::ITERABLE != 0 && m & crate::types::mask::ARRAY == 0 {
+                extra |= crate::types::mask::ARRAY;
+            }
+            let complex = t.has_classes() || extra & crate::types::mask::STATIC != 0;
+            extra &= !crate::types::mask::STATIC;
+            if extra != 0 || (complex && m != crate::types::mask::OBJECT) {
+                return c.err(format!("{cname}::{name}(): Return type must be {tn} when declared"), line);
+            }
+            Ok(())
+        };
+        let public = |c: &mut Compiler| {
+            if uf.flags & flags::PUBLIC == 0 {
+                c.warnings.push((2, format!("The magic method {cname}::{name}() must have public visibility"), line));
+            }
+        };
+        let no_ret = |c: &Compiler| -> CResult<()> {
+            if has_ret {
+                return c.err(format!("Method {cname}::{name}() cannot declare a return type"), line);
+            }
+            Ok(())
+        };
+        use crate::types::mask as m;
+        match lc.as_str() {
+            "__construct" => {
+                non_static(self)?;
+                no_ret(self)?;
+            }
+            "__destruct" => {
+                args(self, 0)?;
+                non_static(self)?;
+                no_ret(self)?;
+            }
+            "__clone" => {
+                args(self, 0)?;
+                non_static(self)?;
+                ret_type(self, m::VOID, "void")?;
+            }
+            "__get" => {
+                args(self, 1)?;
+                non_static(self)?;
+                public(self);
+                arg_type(self, 0, m::STRING, "string")?;
+            }
+            "__set" => {
+                args(self, 2)?;
+                non_static(self)?;
+                public(self);
+                arg_type(self, 0, m::STRING, "string")?;
+                ret_type(self, m::VOID, "void")?;
+            }
+            "__unset" => {
+                args(self, 1)?;
+                non_static(self)?;
+                public(self);
+                arg_type(self, 0, m::STRING, "string")?;
+                ret_type(self, m::VOID, "void")?;
+            }
+            "__isset" => {
+                args(self, 1)?;
+                non_static(self)?;
+                public(self);
+                arg_type(self, 0, m::STRING, "string")?;
+                ret_type(self, m::BOOL, "bool")?;
+            }
+            "__call" | "__callstatic" => {
+                args(self, 2)?;
+                if lc == "__call" {
+                    non_static(self)?;
+                } else {
+                    must_static(self)?;
+                }
+                public(self);
+                arg_type(self, 0, m::STRING, "string")?;
+                arg_type(self, 1, m::ARRAY, "array")?;
+            }
+            "__tostring" => {
+                args(self, 0)?;
+                non_static(self)?;
+                public(self);
+                ret_type(self, m::STRING, "string")?;
+            }
+            "__debuginfo" => {
+                args(self, 0)?;
+                non_static(self)?;
+                public(self);
+                ret_type(self, m::ARRAY | m::NULL, "?array")?;
+            }
+            "__serialize" | "__sleep" => {
+                args(self, 0)?;
+                non_static(self)?;
+                public(self);
+                ret_type(self, m::ARRAY, "array")?;
+            }
+            "__unserialize" => {
+                args(self, 1)?;
+                non_static(self)?;
+                public(self);
+                arg_type(self, 0, m::ARRAY, "array")?;
+                ret_type(self, m::VOID, "void")?;
+            }
+            "__set_state" => {
+                args(self, 1)?;
+                must_static(self)?;
+                public(self);
+                arg_type(self, 0, m::ARRAY, "array")?;
+                ret_type(self, m::OBJECT, "object")?;
+            }
+            "__invoke" => {
+                non_static(self)?;
+                public(self);
+            }
+            "__wakeup" => {
+                args(self, 0)?;
+                non_static(self)?;
+                public(self);
+                ret_type(self, m::VOID, "void")?;
+            }
+            _ => {}
+        }
+        Ok(())
+    }
 }
 
 /// `zend_declare_typed_property` set-visibility normalization.

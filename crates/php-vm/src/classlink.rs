@@ -548,6 +548,12 @@ impl Vm {
             }
         }
         let mut iface_names = decl.interfaces.clone();
+        if decl.methods.iter().any(|m| m.name.eq_ignore_ascii_case(b"__tostring"))
+            && !iface_names.iter().any(|i| i.eq_ignore_ascii_case(b"Stringable"))
+            && decl.kind != ClassKind::Trait
+        {
+            iface_names.push(ZStr::from("Stringable"));
+        }
         if decl.kind == ClassKind::Enum {
             iface_names.insert(0, ZStr::from("UnitEnum"));
             if decl.backing.is_some() {
@@ -1024,10 +1030,17 @@ fn build_class(
                 ));
             }
         }
+        let mut pflags = pd.flags;
+        if existing
+            .as_ref()
+            .is_some_and(|e| e.visibility() != flags::PRIVATE && !e.is_virtual())
+        {
+            pflags &= !flags::VIRTUAL;
+        }
         let pi = Rc::new(PropInfo {
             name: pd.name.clone(),
             slot,
-            flags: pd.flags,
+            flags: pflags,
             ty: pd.ty.clone(),
             class: owner,
             default: pd.default.clone(),
