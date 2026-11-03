@@ -19,7 +19,11 @@ pub fn float_repr(f: f64) -> String {
     }
     let s = format!("{f:?}");
     if let Some((m, e)) = s.split_once('e') {
-        let m = if m.contains('.') { m.to_string() } else { format!("{m}.0") };
+        let m = if m.contains('.') {
+            m.to_string()
+        } else {
+            format!("{m}.0")
+        };
         let e: i32 = e.parse().unwrap_or(0);
         return format!("{m}E{}{}", if e < 0 { '-' } else { '+' }, e.abs());
     }
@@ -29,7 +33,13 @@ pub fn float_repr(f: f64) -> String {
 pub fn to_bytes(v: &V) -> Vec<u8> {
     match v {
         V::Null => Vec::new(),
-        V::Bool(b) => if *b { b"1".to_vec() } else { Vec::new() },
+        V::Bool(b) => {
+            if *b {
+                b"1".to_vec()
+            } else {
+                Vec::new()
+            }
+        }
         V::Int(i) => i.to_string().into_bytes(),
         V::Float(f) => dispatch::float_to_string(*f).into_bytes(),
         V::Str(s) => s.clone(),
@@ -97,7 +107,15 @@ pub fn var_dump(out: &mut Vec<u8>, v: &V, level: usize) {
                 return;
             }
             let props = obj_props(o);
-            out.extend_from_slice(format!("object({})#{} ({}) {{\n", o.class.borrow(), o.id, props.len()).as_bytes());
+            out.extend_from_slice(
+                format!(
+                    "object({})#{} ({}) {{\n",
+                    o.class.borrow(),
+                    o.id,
+                    props.len()
+                )
+                .as_bytes(),
+            );
             for (k, v) in &props {
                 indent(out, level + 2);
                 out.extend_from_slice(b"[\"");
@@ -210,7 +228,9 @@ pub fn var_export(out: &mut Vec<u8>, v: &V, level: usize) {
                 out.extend_from_slice(format!("\\{c}::{case}").as_bytes());
                 return;
             }
-            out.extend_from_slice(format!("\\{}::__set_state(array(\n", o.class.borrow()).as_bytes());
+            out.extend_from_slice(
+                format!("\\{}::__set_state(array(\n", o.class.borrow()).as_bytes(),
+            );
             for (k, v) in obj_props(o) {
                 indent(out, level + 3);
                 out.push(b'\'');

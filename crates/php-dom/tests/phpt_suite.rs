@@ -9,6 +9,7 @@
 
 mod minphp;
 
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 use phpt_runner::expectf::{expectf_matches, regex_matches};
@@ -29,7 +30,11 @@ fn copy_dir(src: &Path, dst: &Path) {
 }
 
 fn collect(dir: &Path, out: &mut Vec<PathBuf>) {
-    let mut entries: Vec<_> = std::fs::read_dir(dir).expect("read_dir").flatten().map(|e| e.path()).collect();
+    let mut entries: Vec<_> = std::fs::read_dir(dir)
+        .expect("read_dir")
+        .flatten()
+        .map(|e| e.path())
+        .collect();
     entries.sort();
     for p in entries {
         if p.is_dir() {
@@ -150,7 +155,11 @@ fn phpt_dom_suite() {
             let mut report = String::new();
             let (mut pass, mut fail, mut skip) = (0, 0, 0);
             for f in &files {
-                let name = f.strip_prefix(&target_clone).unwrap_or(f).to_string_lossy().into_owned();
+                let name = f
+                    .strip_prefix(&target_clone)
+                    .unwrap_or(f)
+                    .to_string_lossy()
+                    .into_owned();
                 if let Some(flt) = &filter {
                     if !name.contains(flt.as_str()) {
                         continue;
@@ -171,29 +180,33 @@ fn phpt_dom_suite() {
                 match &r {
                     Outcome::Pass => {
                         pass += 1;
-                        report.push_str(&format!("PASS {name}\n"));
+                        let _ = writeln!(report, "PASS {name}");
                     }
                     Outcome::Fail(d) => {
                         fail += 1;
-                        report.push_str(&format!("FAIL {name}\n"));
-                        let _ = std::fs::write(format!("{}.diff", f.with_extension("").display()), d);
+                        let _ = writeln!(report, "FAIL {name}");
+                        let _ =
+                            std::fs::write(format!("{}.diff", f.with_extension("").display()), d);
                         if verbose {
                             eprintln!("FAIL {name}\n{d}");
                         }
                     }
                     Outcome::Skip(why) => {
                         skip += 1;
-                        report.push_str(&format!("SKIP {name} ({why})\n"));
+                        let _ = writeln!(report, "SKIP {name} ({why})");
                     }
                 }
             }
-            report.push_str(&format!("\nTOTAL pass={pass} fail={fail} skip={skip}\n"));
+            let _ = writeln!(report, "\nTOTAL pass={pass} fail={fail} skip={skip}");
             (report, pass, fail, skip)
         })
         .expect("spawn");
     let (report, pass, fail, skip) = handle.join().expect("runner thread");
     let _ = std::fs::write(manifest.join("../../target/phpt-dom-report.txt"), &report);
     eprintln!("phpt ext/dom: pass={pass} fail={fail} skip={skip}");
-    let min: usize = std::env::var("PHPT_MIN_PASS").ok().and_then(|v| v.parse().ok()).unwrap_or(0);
+    let min: usize = std::env::var("PHPT_MIN_PASS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0);
     assert!(pass >= min, "pass count {pass} below {min}");
 }

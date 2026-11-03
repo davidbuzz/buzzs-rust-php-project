@@ -2,11 +2,11 @@
 
 use std::ptr;
 
-use crate::error::{throw, throw_msg, DomError, DomExceptionCode as C, DomResult};
+use crate::error::{throw, DomError, DomExceptionCode as C, DomResult};
 use crate::ffi;
 use crate::ns;
-use crate::object::{free_list, node_list_unlink, set_old_ns, DocRef, Node};
-use crate::raw::{cs, str_eq, take, N, Ns};
+use crate::object::{node_list_unlink, set_old_ns, DocRef, Node};
+use crate::raw::{cs, str_eq, take, Ns, N};
 
 /// `php_dom_next_in_tree_order`.
 pub(crate) fn next_in_tree_order(node: N, base: Option<N>) -> Option<N> {
@@ -323,14 +323,13 @@ pub(crate) fn check_qname(qname: &[u8], uri_len: usize) -> Result<(Vec<u8>, Opti
     if qname.is_empty() {
         return Err(C::Namespace);
     }
-    let (local, prefix) = match split_qname2(qname) {
-        Some((l, p)) => (l, Some(p)),
-        None => {
-            if uri_len == 0 {
-                return Ok((qname.to_vec(), None));
-            }
-            (qname.to_vec(), None)
+    let (local, prefix) = if let Some((l, p)) = split_qname2(qname) {
+        (l, Some(p))
+    } else {
+        if uri_len == 0 {
+            return Ok((qname.to_vec(), None));
         }
+        (qname.to_vec(), None)
     };
     if !valid_qname(qname) {
         return Err(C::Namespace);
@@ -451,19 +450,33 @@ pub(crate) fn get_attribute_node(elem: N, name: &[u8]) -> Option<N> {
 }
 
 /// `dom_set_attribute_value`.
-pub(crate) fn set_attribute_value(element: N, ns: *mut ffi::xmlNs, name: &[u8], value: &[u8]) -> Option<N> {
+pub(crate) fn set_attribute_value(
+    element: N,
+    ns: *mut ffi::xmlNs,
+    name: &[u8],
+    value: &[u8],
+) -> Option<N> {
     let n = cs(name);
     let v = cs(value);
     // SAFETY: live element, valid strings.
     unsafe {
-        let href = if ns.is_null() { ptr::null() } else { (*ns).href };
+        let href = if ns.is_null() {
+            ptr::null()
+        } else {
+            (*ns).href
+        };
         let existing = ffi::xmlHasNsProp(element.p(), n.as_ptr().cast(), href);
         if let Some(e) = N::from_attr(existing) {
             if e.t() != ffi::XML_ATTRIBUTE_DECL {
                 node_list_unlink(e.children());
             }
         }
-        N::from_attr(ffi::xmlSetNsProp(element.p(), ns, n.as_ptr().cast(), v.as_ptr().cast()))
+        N::from_attr(ffi::xmlSetNsProp(
+            element.p(),
+            ns,
+            n.as_ptr().cast(),
+            v.as_ptr().cast(),
+        ))
     }
 }
 
@@ -517,7 +530,9 @@ fn fragment_common_check(node: N) -> DomResult<bool> {
     for c in node.child_iter() {
         if c.is_element() {
             if seen_element {
-                return Err(hierarchy_err("Cannot have more than one element child in a document"));
+                return Err(hierarchy_err(
+                    "Cannot have more than one element child in a document",
+                ));
             }
             seen_element = true;
         } else if c.is_text_like() {
@@ -531,11 +546,17 @@ fn fragment_common_check(node: N) -> DomResult<bool> {
 pub(crate) fn fragment_check_pre_insertion(parent: N, node: N, child: Option<N>) -> DomResult<()> {
     if fragment_common_check(node)? {
         if has_child_of_type(parent, ffi::XML_ELEMENT_NODE) {
-            return Err(hierarchy_err("Cannot have more than one element child in a document"));
+            return Err(hierarchy_err(
+                "Cannot have more than one element child in a document",
+            ));
         }
         if let Some(child) = child {
-            if child.t() == ffi::XML_DTD_NODE || has_following_sibling_of_type(child, ffi::XML_DTD_NODE) {
-                return Err(hierarchy_err("Document types must be the first child in a document"));
+            if child.t() == ffi::XML_DTD_NODE
+                || has_following_sibling_of_type(child, ffi::XML_DTD_NODE)
+            {
+                return Err(hierarchy_err(
+                    "Document types must be the first child in a document",
+                ));
             }
         }
     }
@@ -546,10 +567,14 @@ pub(crate) fn fragment_check_pre_insertion(parent: N, node: N, child: Option<N>)
 pub(crate) fn fragment_check_replace(parent: N, node: N, child: N) -> DomResult<()> {
     if fragment_common_check(node)? {
         if parent.child_iter().any(|c| c.is_element() && c != child) {
-            return Err(hierarchy_err("Cannot have more than one element child in a document"));
+            return Err(hierarchy_err(
+                "Cannot have more than one element child in a document",
+            ));
         }
         if has_following_sibling_of_type(child, ffi::XML_DTD_NODE) {
-            return Err(hierarchy_err("Document types must be the first child in a document"));
+            return Err(hierarchy_err(
+                "Document types must be the first child in a document",
+            ));
         }
     }
     Ok(())
@@ -697,7 +722,11 @@ fn new_text(doc: *mut ffi::xmlDoc, s: &[u8]) -> DomResult<N> {
 }
 
 /// `dom_zvals_to_single_node`.
-pub(crate) fn zvals_to_single_node(ctx: Ctx<'_>, context: N, nodes: &[NodeOrString]) -> DomResult<N> {
+pub(crate) fn zvals_to_single_node(
+    ctx: Ctx<'_>,
+    context: N,
+    nodes: &[NodeOrString],
+) -> DomResult<N> {
     let document = doc_from_context_node(context);
     if nodes.len() == 1 {
         return match &nodes[0] {
@@ -707,7 +736,8 @@ pub(crate) fn zvals_to_single_node(ctx: Ctx<'_>, context: N, nodes: &[NodeOrStri
         };
     }
     // SAFETY: document may be NULL.
-    let frag = N::new(unsafe { ffi::xmlNewDocFragment(document) }).ok_or_else(cannot_create_temp_nodes)?;
+    let frag =
+        N::new(unsafe { ffi::xmlNewDocFragment(document) }).ok_or_else(cannot_create_temp_nodes)?;
     let result = (|| {
         for item in nodes {
             match item {
@@ -773,7 +803,10 @@ pub(crate) fn sanity_check_node_list(nodes: &[NodeOrString], modern: bool) -> Do
                 }
             }
             NodeOrString::Invalid(ty) => {
-                return Err(DomError::arg_type(arg, format!("must be of type {ce}|string, {ty} given")));
+                return Err(DomError::arg_type(
+                    arg,
+                    format!("must be of type {ce}|string, {ty} given"),
+                ));
             }
         }
     }
@@ -831,7 +864,12 @@ pub(crate) fn insert_node_list_cleanup(node: N) {
 }
 
 /// `dom_insert_node_list_unchecked`.
-pub(crate) fn insert_node_list_unchecked(ctx: Ctx<'_>, node: N, parent: N, mut insertion_point: Option<N>) {
+pub(crate) fn insert_node_list_unchecked(
+    ctx: Ctx<'_>,
+    node: N,
+    parent: N,
+    mut insertion_point: Option<N>,
+) {
     if node.t() == ffi::XML_DOCUMENT_FRAG_NODE {
         if let (Some(newchild), Some(last)) = (node.children(), node.last()) {
             pre_insert_helper(insertion_point, parent, newchild, last);
@@ -874,7 +912,12 @@ pub(crate) fn insert_node_list_unchecked(ctx: Ctx<'_>, node: N, parent: N, mut i
 }
 
 /// `php_dom_pre_insert`.
-pub(crate) fn pre_insert(ctx: Ctx<'_>, node: N, parent: N, insertion_point: Option<N>) -> DomResult<()> {
+pub(crate) fn pre_insert(
+    ctx: Ctx<'_>,
+    node: N,
+    parent: N,
+    insertion_point: Option<N>,
+) -> DomResult<()> {
     match pre_insert_valid_without_step_1(ctx, parent, node, insertion_point, parent.doc_ptr()) {
         Ok(()) => {
             insert_node_list_unchecked(ctx, node, parent, insertion_point);
@@ -1042,9 +1085,4 @@ pub(crate) fn parent_node_replace_children(this: &Node, nodes: &[NodeOrString]) 
             Err(e)
         }
     }
-}
-
-/// Frees a list of handle-less nodes (helper used after failed parses).
-pub(crate) fn free_handleless_list(first: Option<N>) {
-    free_list(first);
 }

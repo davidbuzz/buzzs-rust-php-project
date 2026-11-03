@@ -10,12 +10,19 @@ use crate::node::C14nXPath;
 use crate::object::{Handlers, Node};
 use crate::raw::{cs, N};
 
-pub(crate) unsafe extern "C" fn write_vec(ctx: *mut c_void, buf: *const c_char, len: c_int) -> c_int {
+pub(crate) unsafe extern "C" fn write_vec(
+    ctx: *mut c_void,
+    buf: *const c_char,
+    len: c_int,
+) -> c_int {
     crate::parse::guard(-1, || {
         // SAFETY: ctx is the `Vec<u8>` passed at creation; buf is valid for len.
         unsafe {
             let v = &mut *ctx.cast::<Vec<u8>>();
-            v.extend_from_slice(std::slice::from_raw_parts(buf.cast::<u8>(), usize::try_from(len).unwrap_or(0)));
+            v.extend_from_slice(std::slice::from_raw_parts(
+                buf.cast::<u8>(),
+                usize::try_from(len).unwrap_or(0),
+            ));
         }
         len
     })
@@ -24,6 +31,7 @@ pub(crate) unsafe extern "C" fn write_vec(ctx: *mut c_void, buf: *const c_char, 
 /// An output buffer collecting into a `Vec<u8>`.
 pub(crate) struct VecOutput {
     pub(crate) buf: *mut ffi::xmlOutputBuffer,
+    #[allow(clippy::box_collection)]
     data: Box<Vec<u8>>,
 }
 
@@ -80,11 +88,17 @@ pub(crate) fn with_no_empty_tags<R>(on: bool, f: impl FnOnce() -> R) -> R {
 
 /// `php_libxml_default_dump_doc_to_str`.
 fn default_dump_doc_to_str(doc: N, options: c_int, encoding: *const c_char) -> Option<Vec<u8>> {
-    let mut data: Box<Vec<u8>> = Box::new(Vec::new());
+    let mut data: Box<Vec<u8>> = Box::default();
     crate::parse::with_generic_errors(|| {
         // SAFETY: save context writing into `data`.
         unsafe {
-            let ctxt = ffi::xmlSaveToIO(Some(write_vec), None, (&raw mut *data).cast(), encoding, options);
+            let ctxt = ffi::xmlSaveToIO(
+                Some(write_vec),
+                None,
+                (&raw mut *data).cast(),
+                encoding,
+                options,
+            );
             if ctxt.is_null() {
                 return None;
             }
@@ -100,24 +114,51 @@ fn default_dump_doc_to_str(doc: N, options: c_int, encoding: *const c_char) -> O
 }
 
 /// `php_libxml_default_dump_node_to_str`.
-fn default_dump_node_to_str(doc: N, node: N, format: bool, encoding: *const c_char) -> Option<Vec<u8>> {
+fn default_dump_node_to_str(
+    doc: N,
+    node: N,
+    format: bool,
+    encoding: *const c_char,
+) -> Option<Vec<u8>> {
     let out = VecOutput::new(ptr::null_mut())?;
     crate::parse::with_generic_errors(|| {
         // SAFETY: live nodes and output buffer.
-        unsafe { ffi::xmlNodeDumpOutput(out.buf, doc.as_doc(), node.p(), 0, c_int::from(format), encoding) };
+        unsafe {
+            ffi::xmlNodeDumpOutput(
+                out.buf,
+                doc.as_doc(),
+                node.p(),
+                0,
+                c_int::from(format),
+                encoding,
+            );
+        };
     });
     out.finish()
 }
 
 /// `xmlNodeDumpOutput` into a fresh buffer (used for internal subsets).
-pub(crate) fn node_dump_output(doc: *mut ffi::xmlDoc, node: N, level: c_int, format: bool, encoding: Option<&[u8]>) -> Vec<u8> {
+pub(crate) fn node_dump_output(
+    doc: *mut ffi::xmlDoc,
+    node: N,
+    level: c_int,
+    format: bool,
+    encoding: Option<&[u8]>,
+) -> Vec<u8> {
     let Some(out) = VecOutput::new(ptr::null_mut()) else {
         return Vec::new();
     };
     let e = encoding.map(cs);
     // SAFETY: live node and output buffer.
     unsafe {
-        ffi::xmlNodeDumpOutput(out.buf, doc, node.p(), level, c_int::from(format), e.as_ref().map_or(ptr::null(), |e| e.as_ptr()));
+        ffi::xmlNodeDumpOutput(
+            out.buf,
+            doc,
+            node.p(),
+            level,
+            c_int::from(format),
+            e.as_ref().map_or(ptr::null(), |e| e.as_ptr()),
+        );
     }
     out.finish().unwrap_or_default()
 }
@@ -127,7 +168,11 @@ fn doc_encoding(doc: N) -> *const c_char {
 }
 
 /// `handlers->dump_doc_to_str`.
-pub(crate) fn dump_doc_to_str(handlers: Handlers, doc: N, options: c_int) -> DomResult<Option<Vec<u8>>> {
+pub(crate) fn dump_doc_to_str(
+    handlers: Handlers,
+    doc: N,
+    options: c_int,
+) -> DomResult<Option<Vec<u8>>> {
     match handlers {
         Handlers::Default => Ok(default_dump_doc_to_str(doc, options, doc_encoding(doc))),
         Handlers::ModernXml => crate::xml_serializer::dump_node_to_str_ex(
@@ -140,47 +185,51 @@ pub(crate) fn dump_doc_to_str(handlers: Handlers, doc: N, options: c_int) -> Dom
 }
 
 /// `handlers->dump_node_to_str`.
-pub(crate) fn dump_node_to_str(handlers: Handlers, doc: N, node: N, format: bool) -> DomResult<Option<Vec<u8>>> {
+pub(crate) fn dump_node_to_str(
+    handlers: Handlers,
+    doc: N,
+    node: N,
+    format: bool,
+) -> DomResult<Option<Vec<u8>>> {
     match handlers {
-        Handlers::Default => Ok(default_dump_node_to_str(doc, node, format, doc_encoding(doc))),
-        Handlers::ModernXml => {
-            crate::xml_serializer::dump_node_to_str_ex(node, 0, format, crate::raw::opt_cstr(doc.d().encoding))
-        }
+        Handlers::Default => Ok(default_dump_node_to_str(
+            doc,
+            node,
+            format,
+            doc_encoding(doc),
+        )),
+        Handlers::ModernXml => crate::xml_serializer::dump_node_to_str_ex(
+            node,
+            0,
+            format,
+            crate::raw::opt_cstr(doc.d().encoding),
+        ),
     }
 }
 
 /// `handlers->dump_doc_to_file`.
-pub(crate) fn dump_doc_to_file(handlers: Handlers, filename: &[u8], doc: N, format: bool) -> DomResult<i64> {
+pub(crate) fn dump_doc_to_file(
+    handlers: Handlers,
+    filename: &[u8],
+    doc: N,
+    format: bool,
+) -> DomResult<i64> {
     match handlers {
         Handlers::Default => {
             let f = cs(filename);
             Ok(crate::parse::with_generic_errors(|| {
                 // SAFETY: live document.
-                i64::from(unsafe { ffi::xmlSaveFormatFileEnc(f.as_ptr(), doc.as_doc(), doc_encoding(doc), c_int::from(format)) })
+                i64::from(unsafe {
+                    ffi::xmlSaveFormatFileEnc(
+                        f.as_ptr(),
+                        doc.as_doc(),
+                        doc_encoding(doc),
+                        c_int::from(format),
+                    )
+                })
             }))
         }
         Handlers::ModernXml => crate::xml_serializer::dump_node_to_file(filename, doc, doc, format),
-    }
-}
-
-/// `handlers->dump_node_to_file` (used by `saveXmlFile`).
-pub(crate) fn dump_node_to_file(handlers: Handlers, filename: &[u8], doc: N, node: N, format: bool) -> DomResult<i64> {
-    match handlers {
-        Handlers::Default => {
-            let f = cs(filename);
-            Ok(crate::parse::with_generic_errors(|| {
-                // SAFETY: output buffer created and closed here.
-                unsafe {
-                    let out = ffi::xmlOutputBufferCreateFilename(f.as_ptr(), ptr::null_mut(), 0);
-                    if out.is_null() {
-                        return -1;
-                    }
-                    ffi::xmlNodeDumpOutput(out, doc.as_doc(), node.p(), 0, c_int::from(format), doc_encoding(doc));
-                    i64::from(ffi::xmlOutputBufferClose(out))
-                }
-            }))
-        }
-        Handlers::ModernXml => crate::xml_serializer::dump_node_to_file(filename, doc, node, format),
     }
 }
 
@@ -195,13 +244,25 @@ pub(crate) fn html_dump_node(doc: N, node: N, format: bool) -> Option<Vec<u8>> {
         unsafe {
             if node.t() == ffi::XML_DOCUMENT_FRAG_NODE {
                 for c in node.child_iter() {
-                    ffi::htmlNodeDumpFormatOutput(out.buf, doc.as_doc(), c.p(), ptr::null(), c_int::from(format));
+                    ffi::htmlNodeDumpFormatOutput(
+                        out.buf,
+                        doc.as_doc(),
+                        c.p(),
+                        ptr::null(),
+                        c_int::from(format),
+                    );
                     if out.error() != 0 {
                         break;
                     }
                 }
             } else {
-                ffi::htmlNodeDumpFormatOutput(out.buf, doc.as_doc(), node.p(), ptr::null(), c_int::from(format));
+                ffi::htmlNodeDumpFormatOutput(
+                    out.buf,
+                    doc.as_doc(),
+                    node.p(),
+                    ptr::null(),
+                    c_int::from(format),
+                );
             }
         }
     });
@@ -221,7 +282,14 @@ pub(crate) fn html_dump_doc(doc: N, format: bool) -> Option<Vec<u8>> {
     let mut size: c_int = 0;
     crate::parse::with_generic_errors(|| {
         // SAFETY: live document; mem receives a libxml2 allocation.
-        unsafe { ffi::htmlDocDumpMemoryFormat(doc.as_doc(), &raw mut mem, &raw mut size, c_int::from(format)) };
+        unsafe {
+            ffi::htmlDocDumpMemoryFormat(
+                doc.as_doc(),
+                &raw mut mem,
+                &raw mut size,
+                c_int::from(format),
+            );
+        };
     });
     if size == 0 || mem.is_null() {
         crate::raw::xml_free(mem.cast());
@@ -240,7 +308,12 @@ pub(crate) fn html_save_file(doc: N, filename: &[u8], format: bool) -> i64 {
         // SAFETY: live document.
         unsafe {
             let enc = ffi::htmlGetMetaEncoding(doc.as_doc());
-            i64::from(ffi::htmlSaveFileFormat(f.as_ptr(), doc.as_doc(), enc.cast(), c_int::from(format)))
+            i64::from(ffi::htmlSaveFileFormat(
+                f.as_ptr(),
+                doc.as_doc(),
+                enc.cast(),
+                c_int::from(format),
+            ))
         }
     })
 }
@@ -253,7 +326,11 @@ pub(crate) enum C14nOut {
     Failed,
 }
 
-unsafe extern "C" fn c14n_parent_lookup(user: *mut c_void, node: *mut ffi::xmlNode, parent: *mut ffi::xmlNode) -> c_int {
+unsafe extern "C" fn c14n_parent_lookup(
+    user: *mut c_void,
+    node: *mut ffi::xmlNode,
+    parent: *mut ffi::xmlNode,
+) -> c_int {
     let root = user.cast::<ffi::xmlNode>();
     if node == root {
         return 1;
@@ -270,6 +347,7 @@ unsafe extern "C" fn c14n_parent_lookup(user: *mut c_void, node: *mut ffi::xmlNo
 }
 
 /// `dom_canonicalization`.
+#[allow(clippy::too_many_lines)]
 pub(crate) fn canonicalize(
     this: &Node,
     file: Option<&[u8]>,
@@ -298,7 +376,9 @@ pub(crate) fn canonicalize(
             links.relink(re);
         }
     } else if docp.is_null() {
-        return Err(DomError::Error("Node must be associated with a document".into()));
+        return Err(DomError::Error(
+            "Node must be associated with a document".into(),
+        ));
     }
     let arg_base = if file.is_some() { 4 } else { 3 };
     let result = (|| -> DomResult<C14nOut> {
@@ -316,7 +396,10 @@ pub(crate) fn canonicalize(
                 let query = match &x.query {
                     None => return Err(DomError::arg_value(arg_base, "must have a \"query\" key")),
                     Some(Err(ty)) => {
-                        return Err(DomError::arg_type(arg_base, format!("\"query\" option must be a string, {ty} given")))
+                        return Err(DomError::arg_type(
+                            arg_base,
+                            format!("\"query\" option must be a string, {ty} given"),
+                        ))
                     }
                     Some(Ok(q)) => q.clone(),
                 };
@@ -330,7 +413,9 @@ pub(crate) fn canonicalize(
                         ffi::xmlXPathRegisterNs(ctxp, p.as_ptr().cast(), u.as_ptr().cast());
                     }
                     let q = cs(&query);
-                    xpathobjp = crate::parse::with_generic_errors(|| ffi::xmlXPathEvalExpression(q.as_ptr().cast(), ctxp));
+                    xpathobjp = crate::parse::with_generic_errors(|| {
+                        ffi::xmlXPathEvalExpression(q.as_ptr().cast(), ctxp)
+                    });
                     (*ctxp).node = ptr::null_mut();
                     if !xpathobjp.is_null() && (*xpathobjp).type_ == ffi::XPATH_NODESET {
                         nodeset = (*xpathobjp).nodesetval;
@@ -339,7 +424,9 @@ pub(crate) fn canonicalize(
                             ffi::xmlXPathFreeObject(xpathobjp);
                         }
                         ffi::xmlXPathFreeContext(ctxp);
-                        return Err(DomError::Error("XPath query did not return a nodeset".into()));
+                        return Err(DomError::Error(
+                            "XPath query did not return a nodeset".into(),
+                        ));
                     }
                 }
             }
@@ -350,11 +437,16 @@ pub(crate) fn canonicalize(
         if let Some(list) = ns_prefixes {
             if exclusive {
                 prefixes = list.iter().map(|p| cs(p)).collect();
-                prefix_ptrs = prefixes.iter().map(|c| c.as_ptr().cast_mut().cast()).collect();
+                prefix_ptrs = prefixes
+                    .iter()
+                    .map(|c| c.as_ptr().cast_mut().cast())
+                    .collect();
                 prefix_ptrs.push(ptr::null_mut());
                 use_prefixes = true;
             } else {
-                crate::error::notice("Inclusive namespace prefixes only allowed in exclusive mode.");
+                crate::error::notice(
+                    "Inclusive namespace prefixes only allowed in exclusive mode.",
+                );
             }
         }
         // SAFETY: buffers/contexts created and freed in this block.
@@ -368,12 +460,31 @@ pub(crate) fn canonicalize(
             };
             let mut ret = -1;
             if !buf.is_null() {
-                let pp = if use_prefixes { prefix_ptrs.as_mut_ptr() } else { ptr::null_mut() };
+                let pp = if use_prefixes {
+                    prefix_ptrs.as_mut_ptr()
+                } else {
+                    ptr::null_mut()
+                };
                 ret = crate::parse::with_generic_errors(|| {
                     if simple_callback {
-                        ffi::xmlC14NExecute(docp, Some(c14n_parent_lookup), nodep.p().cast(), c_int::from(exclusive), pp, c_int::from(with_comments), buf)
+                        ffi::xmlC14NExecute(
+                            docp,
+                            Some(c14n_parent_lookup),
+                            nodep.p().cast(),
+                            c_int::from(exclusive),
+                            pp,
+                            c_int::from(with_comments),
+                            buf,
+                        )
                     } else {
-                        ffi::xmlC14NDocSaveTo(docp, nodeset, c_int::from(exclusive), pp, c_int::from(with_comments), buf)
+                        ffi::xmlC14NDocSaveTo(
+                            docp,
+                            nodeset,
+                            c_int::from(exclusive),
+                            pp,
+                            c_int::from(with_comments),
+                            buf,
+                        )
                     }
                 });
             }

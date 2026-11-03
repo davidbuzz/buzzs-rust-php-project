@@ -46,6 +46,12 @@ fn add_content(n: N, s: &[u8]) {
     unsafe { ffi::xmlNodeAddContent(n.p(), c.as_ptr().cast()) };
 }
 
+/// C's `(int)` of an `unsigned int`.
+#[allow(clippy::cast_possible_wrap)]
+fn as_int(u: u32) -> i32 {
+    u as i32
+}
+
 fn int_ovfl(v: i64) -> bool {
     v > i64::from(i32::MAX)
 }
@@ -72,7 +78,7 @@ impl Node {
         cs(n.content())
     }
 
-    /// `$data` (CharacterData / ProcessingInstruction).
+    /// `$data` (`CharacterData` / `ProcessingInstruction`).
     pub fn data(&self) -> DomResult<Vec<u8>> {
         let n = self.prop_node()?;
         Ok(tree::get_content(n).unwrap_or_default())
@@ -112,11 +118,11 @@ impl Node {
             return Err(throw(C::IndexSize, self.strict_err()));
         }
         #[allow(clippy::cast_sign_loss)]
-        let rest = (length - offset.cast_signed()) as u32;
+        let rest = (length - as_int(offset)) as u32;
         if count > rest {
             count = rest;
         }
-        Ok(utf8_strsub(&cur, offset.cast_signed(), count.cast_signed()).unwrap_or_default())
+        Ok(utf8_strsub(&cur, as_int(offset), as_int(count)).unwrap_or_default())
     }
 
     /// `appendData($data)`.
@@ -140,7 +146,7 @@ impl Node {
         if offset > length as u32 {
             return Err(throw(C::IndexSize, self.strict_err()));
         }
-        let off = offset.cast_signed();
+        let off = as_int(offset);
         let first = utf8_strndup(&cur, off);
         let second = utf8_strsub(&cur, off, length - off);
         set_content(n, first.as_deref());
@@ -162,13 +168,17 @@ impl Node {
         let mut count = self.convert_unsigned(count)?;
         #[allow(clippy::cast_possible_truncation)]
         let off = offset as i32;
-        let mut substring = if off > 0 { utf8_strsub(&cur, 0, off) } else { None };
+        let mut substring = if off > 0 {
+            utf8_strsub(&cur, 0, off)
+        } else {
+            None
+        };
         #[allow(clippy::cast_sign_loss)]
         let rest = (length - off) as u32;
         if count > rest {
             count = rest;
         }
-        let second = utf8_strsub(&cur, off.wrapping_add(count.cast_signed()), length - off);
+        let second = utf8_strsub(&cur, off.wrapping_add(as_int(count)), length - off);
         let mut joined = substring.take().unwrap_or_default();
         if let Some(s) = second {
             joined.extend_from_slice(&s);
@@ -188,14 +198,18 @@ impl Node {
         let mut count = self.convert_unsigned(count)?;
         #[allow(clippy::cast_possible_truncation)]
         let off = offset as i32;
-        let substring = if off > 0 { utf8_strsub(&cur, 0, off) } else { None };
+        let substring = if off > 0 {
+            utf8_strsub(&cur, 0, off)
+        } else {
+            None
+        };
         #[allow(clippy::cast_sign_loss)]
         let rest = (length - off) as u32;
         if count > rest {
             count = rest;
         }
         let second = if off < length {
-            utf8_strsub(&cur, off.wrapping_add(count.cast_signed()), length - off)
+            utf8_strsub(&cur, off.wrapping_add(as_int(count)), length - off)
         } else {
             None
         };
@@ -212,8 +226,10 @@ impl Node {
     pub fn construct_text(&self, value: Option<&[u8]>) -> DomResult<()> {
         let c = value.map(cs);
         // SAFETY: valid C string or NULL.
-        let n = N::new(unsafe { ffi::xmlNewText(c.as_ref().map_or(ptr::null(), |c| c.as_ptr().cast())) })
-            .ok_or_else(|| DomError::dom(C::InvalidState))?;
+        let n = N::new(unsafe {
+            ffi::xmlNewText(c.as_ref().map_or(ptr::null(), |c| c.as_ptr().cast()))
+        })
+        .ok_or_else(|| DomError::dom(C::InvalidState))?;
         self.bind_constructed(n);
         Ok(())
     }
@@ -222,8 +238,10 @@ impl Node {
     pub fn construct_comment(&self, value: Option<&[u8]>) -> DomResult<()> {
         let c = value.map(cs);
         // SAFETY: valid C string or NULL.
-        let n = N::new(unsafe { ffi::xmlNewComment(c.as_ref().map_or(ptr::null(), |c| c.as_ptr().cast())) })
-            .ok_or_else(|| DomError::dom(C::InvalidState))?;
+        let n = N::new(unsafe {
+            ffi::xmlNewComment(c.as_ref().map_or(ptr::null(), |c| c.as_ptr().cast()))
+        })
+        .ok_or_else(|| DomError::dom(C::InvalidState))?;
         self.bind_constructed(n);
         Ok(())
     }
@@ -231,8 +249,10 @@ impl Node {
     /// `new DOMCdataSection($data)`.
     pub fn construct_cdata(&self, value: &[u8]) -> DomResult<()> {
         // SAFETY: value valid for its length.
-        let n = N::new(unsafe { ffi::xmlNewCDataBlock(ptr::null_mut(), value.as_ptr(), c_len(value.len())) })
-            .ok_or_else(|| DomError::dom(C::InvalidState))?;
+        let n = N::new(unsafe {
+            ffi::xmlNewCDataBlock(ptr::null_mut(), value.as_ptr(), c_len(value.len()))
+        })
+        .ok_or_else(|| DomError::dom(C::InvalidState))?;
         self.bind_constructed(n);
         Ok(())
     }
@@ -245,8 +265,13 @@ impl Node {
         let n = cs(name);
         let v = value.map(cs);
         // SAFETY: valid C strings.
-        let node = N::new(unsafe { ffi::xmlNewPI(n.as_ptr().cast(), v.as_ref().map_or(ptr::null(), |v| v.as_ptr().cast())) })
-            .ok_or_else(|| DomError::dom(C::InvalidState))?;
+        let node = N::new(unsafe {
+            ffi::xmlNewPI(
+                n.as_ptr().cast(),
+                v.as_ref().map_or(ptr::null(), |v| v.as_ptr().cast()),
+            )
+        })
+        .ok_or_else(|| DomError::dom(C::InvalidState))?;
         self.bind_constructed(node);
         Ok(())
     }
@@ -267,7 +292,8 @@ impl Node {
     /// `new DOMDocumentFragment()`.
     pub fn construct_fragment(&self) -> DomResult<()> {
         // SAFETY: plain allocation.
-        let node = N::new(unsafe { ffi::xmlNewDocFragment(ptr::null_mut()) }).ok_or_else(|| DomError::dom(C::InvalidState))?;
+        let node = N::new(unsafe { ffi::xmlNewDocFragment(ptr::null_mut()) })
+            .ok_or_else(|| DomError::dom(C::InvalidState))?;
         self.bind_constructed(node);
         Ok(())
     }
@@ -280,8 +306,10 @@ impl Node {
         let n = cs(name);
         let v = cs(value);
         // SAFETY: valid C strings.
-        let node = N::from_attr(unsafe { ffi::xmlNewProp(ptr::null_mut(), n.as_ptr().cast(), v.as_ptr().cast()) })
-            .ok_or_else(|| DomError::dom(C::InvalidState))?;
+        let node = N::from_attr(unsafe {
+            ffi::xmlNewProp(ptr::null_mut(), n.as_ptr().cast(), v.as_ptr().cast())
+        })
+        .ok_or_else(|| DomError::dom(C::InvalidState))?;
         self.bind_constructed(node);
         Ok(())
     }
@@ -323,13 +351,18 @@ impl Node {
         // SAFETY: n's content was released by xmlNodeSetContent(NULL); we
         // install libxml2-allocated copies.
         unsafe {
-            (*n.p()).content = first.as_deref().map_or(ptr::null_mut(), crate::raw::xml_strdup);
+            (*n.p()).content = first
+                .as_deref()
+                .map_or(ptr::null_mut(), crate::raw::xml_strdup);
         }
         // SAFETY: live document (may be NULL).
-        let nnode = N::new(unsafe { ffi::xmlNewDocText(n.doc_ptr(), ptr::null()) }).ok_or_else(|| DomError::dom(C::InvalidState))?;
+        let nnode = N::new(unsafe { ffi::xmlNewDocText(n.doc_ptr(), ptr::null()) })
+            .ok_or_else(|| DomError::dom(C::InvalidState))?;
         // SAFETY: fresh node.
         unsafe {
-            (*nnode.p()).content = second.as_deref().map_or(ptr::null_mut(), crate::raw::xml_strdup);
+            (*nnode.p()).content = second
+                .as_deref()
+                .map_or(ptr::null_mut(), crate::raw::xml_strdup);
         }
         if n.parent().is_some() {
             nnode.set_type(ffi::XML_ELEMENT_NODE);
@@ -362,7 +395,16 @@ impl Node {
         let mut lst: *mut ffi::xmlNode = ptr::null_mut();
         let err = crate::parse::with_generic_errors(|| {
             // SAFETY: live document (may be NULL); lst receives a new list.
-            unsafe { ffi::xmlParseBalancedChunkMemory(nodep.doc_ptr(), ptr::null_mut(), ptr::null_mut(), 0, c.as_ptr().cast(), &raw mut lst) }
+            unsafe {
+                ffi::xmlParseBalancedChunkMemory(
+                    nodep.doc_ptr(),
+                    ptr::null_mut(),
+                    ptr::null_mut(),
+                    0,
+                    c.as_ptr().cast(),
+                    &raw mut lst,
+                )
+            }
         });
         if err != 0 {
             if !lst.is_null() {
@@ -401,7 +443,8 @@ impl Node {
         remove_all_children(n);
         if self.is_modern() {
             // SAFETY: valid string/length.
-            let text = unsafe { ffi::xmlNewDocTextLen(n.doc_ptr(), value.as_ptr(), c_len(value.len())) };
+            let text =
+                unsafe { ffi::xmlNewDocTextLen(n.doc_ptr(), value.as_ptr(), c_len(value.len())) };
             // SAFETY: live attribute.
             unsafe { ffi::xmlAddChild(n.p(), text) };
         } else {
@@ -461,15 +504,31 @@ impl Node {
     /// `DOMDocumentType::$entities`.
     pub fn doctype_entities(&self) -> DomResult<crate::lists::NamedNodeMap> {
         self.prop_node()?;
-        let class = if self.family_is_modern() { "Dom\\DtdNamedNodeMap" } else { "DOMNamedNodeMap" };
-        Ok(crate::lists::new_map(class, Some(self.clone()), crate::lists::MapKind::Entities))
+        let class = if self.family_is_modern() {
+            "Dom\\DtdNamedNodeMap"
+        } else {
+            "DOMNamedNodeMap"
+        };
+        Ok(crate::lists::new_map(
+            class,
+            Some(self.clone()),
+            crate::lists::MapKind::Entities,
+        ))
     }
 
     /// `DOMDocumentType::$notations`.
     pub fn doctype_notations(&self) -> DomResult<crate::lists::NamedNodeMap> {
         self.prop_node()?;
-        let class = if self.family_is_modern() { "Dom\\DtdNamedNodeMap" } else { "DOMNamedNodeMap" };
-        Ok(crate::lists::new_map(class, Some(self.clone()), crate::lists::MapKind::Notations))
+        let class = if self.family_is_modern() {
+            "Dom\\DtdNamedNodeMap"
+        } else {
+            "DOMNamedNodeMap"
+        };
+        Ok(crate::lists::new_map(
+            class,
+            Some(self.clone()),
+            crate::lists::MapKind::Notations,
+        ))
     }
 
     /// `DOMDocumentType::$publicId`.

@@ -14,6 +14,7 @@ use crate::value::DomValue;
 
 const ASCII_WS: &[u8] = b"\x09\x0a\x0c\x0d\x20";
 
+#[allow(clippy::trivially_copy_pass_by_ref)]
 fn is_ws(b: &u8) -> bool {
     ASCII_WS.contains(b)
 }
@@ -23,7 +24,11 @@ pub(crate) fn ordered_set_parse(value: &[u8], to_lowercase: bool) -> Vec<Vec<u8>
     let value = &value[..value.iter().position(|&b| b == 0).unwrap_or(value.len())];
     let mut out: Vec<Vec<u8>> = Vec::new();
     for tok in value.split(is_ws).filter(|t| !t.is_empty()) {
-        let t = if to_lowercase { tok.to_ascii_lowercase() } else { tok.to_vec() };
+        let t = if to_lowercase {
+            tok.to_ascii_lowercase()
+        } else {
+            tok.to_vec()
+        };
         if !out.contains(&t) {
             out.push(t);
         }
@@ -45,7 +50,10 @@ struct TokenSet {
 impl TokenSet {
     fn parse(value: &[u8]) -> Self {
         Self {
-            buckets: ordered_set_parse(value, false).into_iter().map(Some).collect(),
+            buckets: ordered_set_parse(value, false)
+                .into_iter()
+                .map(Some)
+                .collect(),
         }
     }
     fn find(&self, t: &[u8]) -> Option<usize> {
@@ -175,7 +183,9 @@ impl TokenList {
     /// `$value = $v`.
     pub fn set_value(&self, v: &[u8]) -> DomResult<()> {
         if v.contains(&0) {
-            return Err(DomError::Value("Value must not contain any null bytes".into()));
+            return Err(DomError::Value(
+                "Value must not contain any null bytes".into(),
+            ));
         }
         if let Some(d) = self.0.element.doc_ref() {
             d.invalidate();
@@ -204,7 +214,10 @@ impl TokenList {
 
     fn validate_token(t: &[u8]) -> DomResult<()> {
         if t.is_empty() {
-            return Err(DomError::dom_msg(C::Syntax, "The empty string is not a valid token"));
+            return Err(DomError::dom_msg(
+                C::Syntax,
+                "The empty string is not a valid token",
+            ));
         }
         if t.iter().any(is_ws) {
             return Err(DomError::dom_msg(
@@ -220,7 +233,10 @@ impl TokenList {
         for (i, t) in tokens.iter().enumerate() {
             let arg = u32::try_from(i + 1).unwrap_or(u32::MAX);
             let DomValue::Str(s) = t else {
-                return Err(DomError::arg_type(arg, format!("must be of type string, {} given", t.type_name())));
+                return Err(DomError::arg_type(
+                    arg,
+                    format!("must be of type string, {} given", t.type_name()),
+                ));
             };
             if s.contains(&0) {
                 return Err(DomError::arg_value(arg, "must not contain any null bytes"));
@@ -298,10 +314,13 @@ impl TokenList {
 
     /// `supports($token)`: always a `TypeError` for `classList`.
     pub fn supports(&self, _token: &[u8]) -> DomResult<bool> {
-        Err(DomError::Type("Attribute \"class\" does not define any supported tokens".into()))
+        Err(DomError::Type(
+            "Attribute \"class\" does not define any supported tokens".into(),
+        ))
     }
 
     /// `foreach`.
+    #[allow(clippy::iter_not_returning_iterator)]
     pub fn iter(&self) -> TokenIter {
         self.ensure_up_to_date();
         let pos = self.0.set.borrow().valid_pos(0);
@@ -332,9 +351,13 @@ impl TokenList {
             _ => "int".into(),
         };
         if isset {
-            DomError::Type(format!("Cannot access offset of type {ty} in isset or empty"))
+            DomError::Type(format!(
+                "Cannot access offset of type {ty} in isset or empty"
+            ))
         } else {
-            DomError::Type(format!("Cannot access offset of type {ty} on Dom\\TokenList"))
+            DomError::Type(format!(
+                "Cannot access offset of type {ty} on Dom\\TokenList"
+            ))
         }
     }
 
@@ -414,12 +437,16 @@ impl TokenIter {
 }
 
 /// Method dispatch for `Dom\TokenList`.
+#[allow(clippy::many_single_char_names)]
 pub(crate) fn call(t: &TokenList, _func: &str, m: &str, args: &[DomValue]) -> DomResult<DomValue> {
     let s = |i: usize| -> DomResult<Vec<u8>> {
         match args.get(i) {
             Some(DomValue::Str(s)) => {
                 if s.contains(&0) {
-                    return Err(DomError::arg_value(u32::try_from(i + 1).unwrap_or(1), "must not contain any null bytes"));
+                    return Err(DomError::arg_value(
+                        u32::try_from(i + 1).unwrap_or(1),
+                        "must not contain any null bytes",
+                    ));
                 }
                 Ok(s.clone())
             }
@@ -441,10 +468,16 @@ pub(crate) fn call(t: &TokenList, _func: &str, m: &str, args: &[DomValue]) -> Do
                     v
                 }
                 Some(DomValue::Bool(b)) => i64::from(*b),
-                Some(DomValue::Str(s)) => std::str::from_utf8(s).ok().and_then(|t| t.trim().parse().ok()).ok_or_else(|| {
-                    DomError::arg_type(1, "must be of type int, string given")
-                })?,
-                Some(other) => return Err(DomError::arg_type(1, format!("must be of type int, {} given", other.type_name()))),
+                Some(DomValue::Str(s)) => std::str::from_utf8(s)
+                    .ok()
+                    .and_then(|t| t.trim().parse().ok())
+                    .ok_or_else(|| DomError::arg_type(1, "must be of type int, string given"))?,
+                Some(other) => {
+                    return Err(DomError::arg_type(
+                        1,
+                        format!("must be of type int, {} given", other.type_name()),
+                    ))
+                }
                 None => return Err(DomError::Error("Too few arguments".into())),
             };
             DomValue::opt_str(t.item(i))
@@ -476,6 +509,10 @@ pub(crate) fn call(t: &TokenList, _func: &str, m: &str, args: &[DomValue]) -> Do
         "getiterator" => DomValue::Iterator(crate::dispatch::IterHandle(Rc::new(RefCell::new(
             crate::dispatch::DomIterator::Tokens(t.iter()),
         )))),
-        _ => return Err(DomError::Error(format!("Call to undefined method Dom\\TokenList::{m}()"))),
+        _ => {
+            return Err(DomError::Error(format!(
+                "Call to undefined method Dom\\TokenList::{m}()"
+            )))
+        }
     })
 }

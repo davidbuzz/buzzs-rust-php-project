@@ -7,7 +7,7 @@ use crate::ffi;
 use crate::lists::{new_list, new_map, MapKind, NamedNodeMap, NodeList};
 use crate::ns::{self, ns_is_fast_ex, XMLNS_TOKEN};
 use crate::object::{free_resource, remove_all_children, DocRef, Node};
-use crate::raw::{cs, str_eq, take, N, Ns};
+use crate::raw::{cs, str_eq, take, Ns, N};
 use crate::tree::{self, children_valid, is_read_only, Ctx};
 
 /// `DOCUMENT_POSITION_*` constants.
@@ -130,7 +130,12 @@ fn insert_fragment(parent: N, prevsib: Option<N>, nextsib: Option<N>, fragment: 
 }
 
 /// `dom_node_check_legacy_insertion_validity`.
-fn check_legacy_insertion_validity(parent: N, child: N, strict: bool, warn_empty_fragment: bool) -> DomResult<()> {
+fn check_legacy_insertion_validity(
+    parent: N,
+    child: N,
+    strict: bool,
+    warn_empty_fragment: bool,
+) -> DomResult<()> {
     if is_read_only(parent) || child.parent().is_some_and(is_read_only) {
         return Err(throw(C::NoModificationAllowed, strict));
     }
@@ -140,7 +145,8 @@ fn check_legacy_insertion_validity(parent: N, child: N, strict: bool, warn_empty
     if child.doc_ptr() != parent.doc_ptr() && !child.doc_ptr().is_null() {
         return Err(throw(C::WrongDocument, strict));
     }
-    if warn_empty_fragment && child.t() == ffi::XML_DOCUMENT_FRAG_NODE && child.children().is_none() {
+    if warn_empty_fragment && child.t() == ffi::XML_DOCUMENT_FRAG_NODE && child.children().is_none()
+    {
         crate::error::warning("Document Fragment is empty");
         return Err(DomError::Silent);
     }
@@ -316,7 +322,11 @@ impl Node {
         if n.t() == ffi::XML_ENTITY_REF_NODE {
             entity_reference_sync(n);
         }
-        let class = if self.is_modern() { "Dom\\NodeList" } else { "DOMNodeList" };
+        let class = if self.is_modern() {
+            "Dom\\NodeList"
+        } else {
+            "DOMNodeList"
+        };
         Ok(new_list(class, Some(self.clone()), MapKind::ChildNodes))
     }
 
@@ -326,7 +336,11 @@ impl Node {
         if n.t() == ffi::XML_ENTITY_REF_NODE {
             return Ok(entity_reference_sync(n).map(Node::wrap));
         }
-        Ok(if children_valid(n) { n.children().map(Node::wrap) } else { None })
+        Ok(if children_valid(n) {
+            n.children().map(Node::wrap)
+        } else {
+            None
+        })
     }
 
     /// `$lastChild`.
@@ -335,7 +349,11 @@ impl Node {
         if n.t() == ffi::XML_ENTITY_REF_NODE {
             return Ok(entity_reference_sync(n).map(Node::wrap));
         }
-        Ok(if children_valid(n) { n.last().map(Node::wrap) } else { None })
+        Ok(if children_valid(n) {
+            n.last().map(Node::wrap)
+        } else {
+            None
+        })
     }
 
     /// `$previousSibling`.
@@ -381,7 +399,11 @@ impl Node {
             } else {
                 "DOMNamedNodeMap"
             };
-            Ok(Some(new_map(class, Some(self.clone()), MapKind::Attributes)))
+            Ok(Some(new_map(
+                class,
+                Some(self.clone()),
+                MapKind::Attributes,
+            )))
         } else {
             Ok(None)
         }
@@ -475,19 +497,22 @@ impl Node {
             }
             cur = c.next();
         }
-        let ns = match found {
-            Some(f) => f,
-            None => {
-                let p = prefix.map(cs);
-                // SAFETY: live element; uri valid.
-                let created = unsafe {
-                    ffi::xmlNewNs(nsnode.p(), uri, p.as_ref().map_or(ptr::null(), |p| p.as_ptr().cast()))
-                };
-                if created.is_null() {
-                    return Err(throw(C::Namespace, true));
-                }
-                created
+        let ns = if let Some(f) = found {
+            f
+        } else {
+            let p = prefix.map(cs);
+            // SAFETY: live element; uri valid.
+            let created = unsafe {
+                ffi::xmlNewNs(
+                    nsnode.p(),
+                    uri,
+                    p.as_ref().map_or(ptr::null(), |p| p.as_ptr().cast()),
+                )
+            };
+            if created.is_null() {
+                return Err(throw(C::Namespace, true));
             }
+            created
         };
         // SAFETY: live node, ns live.
         unsafe { ffi::xmlSetNs(n.p(), ns) };
@@ -498,7 +523,9 @@ impl Node {
     pub fn local_name(&self) -> DomResult<Option<Vec<u8>>> {
         let n = self.prop_node()?;
         Ok(match n.t() {
-            ffi::XML_ELEMENT_NODE | ffi::XML_ATTRIBUTE_NODE | ffi::XML_NAMESPACE_DECL => Some(n.name().to_vec()),
+            ffi::XML_ELEMENT_NODE | ffi::XML_ATTRIBUTE_NODE | ffi::XML_NAMESPACE_DECL => {
+                Some(n.name().to_vec())
+            }
             _ => None,
         })
     }
@@ -558,10 +585,15 @@ impl Node {
         self.invalidate();
         let s = value.unwrap_or_default();
         let t = n.t();
-        if t == ffi::XML_DOCUMENT_FRAG_NODE || t == ffi::XML_ELEMENT_NODE || t == ffi::XML_ATTRIBUTE_NODE {
+        if t == ffi::XML_DOCUMENT_FRAG_NODE
+            || t == ffi::XML_ELEMENT_NODE
+            || t == ffi::XML_ATTRIBUTE_NODE
+        {
             remove_all_children(n);
             // SAFETY: valid string/length; doc may be NULL.
-            let text = unsafe { ffi::xmlNewDocTextLen(n.doc_ptr(), s.as_ptr(), crate::raw::c_len(s.len())) };
+            let text = unsafe {
+                ffi::xmlNewDocTextLen(n.doc_ptr(), s.as_ptr(), crate::raw::c_len(s.len()))
+            };
             if let Some(text) = N::new(text) {
                 add_child(n, text);
             }
@@ -598,7 +630,12 @@ impl Node {
         self.insert_before_legacy(parentp, childp, child)
     }
 
-    fn insert_before_legacy(&self, parentp: N, mut child: N, refnode: Option<&Node>) -> DomResult<Node> {
+    fn insert_before_legacy(
+        &self,
+        parentp: N,
+        mut child: N,
+        refnode: Option<&Node>,
+    ) -> DomResult<Node> {
         if !children_valid(parentp) {
             return Err(DomError::Silent);
         }
@@ -635,7 +672,8 @@ impl Node {
         }
         let new_child;
         if child.t() == ffi::XML_TEXT_NODE
-            && (refp.t() == ffi::XML_TEXT_NODE || refp.prev().is_some_and(|p| p.t() == ffi::XML_TEXT_NODE))
+            && (refp.t() == ffi::XML_TEXT_NODE
+                || refp.prev().is_some_and(|p| p.t() == ffi::XML_TEXT_NODE))
         {
             new_child = child;
             new_child.set_parent(refp.parent());
@@ -653,16 +691,16 @@ impl Node {
         } else if child.t() == ffi::XML_ATTRIBUTE_NODE {
             if let Some(lastattr) = refp.parent().and_then(|p| has_ns_prop_for(p, child)) {
                 if lastattr.t() != ffi::XML_ATTRIBUTE_DECL {
-                    if lastattr != child {
-                        tree::unlink(lastattr);
-                        free_resource(lastattr);
-                    } else {
+                    if lastattr == child {
                         return Ok(Node::wrap(child));
                     }
+                    tree::unlink(lastattr);
+                    free_resource(lastattr);
                 }
             }
-            new_child = add_prev_sibling(refp, child)
-                .ok_or_else(|| DomError::Error("Cannot add newnode as the previous sibling of refnode".into()))?;
+            new_child = add_prev_sibling(refp, child).ok_or_else(|| {
+                DomError::Error("Cannot add newnode as the previous sibling of refnode".into())
+            })?;
         } else if child.t() == ffi::XML_DOCUMENT_FRAG_NODE {
             let last = child.last();
             let first = insert_fragment(parentp, refp.prev(), Some(refp), child);
@@ -672,55 +710,61 @@ impl Node {
             child = first.unwrap_or(child);
             return Ok(Node::wrap(child));
         } else {
-            new_child = add_prev_sibling(refp, child)
-                .ok_or_else(|| DomError::Error("Cannot add newnode as the previous sibling of refnode".into()))?;
+            new_child = add_prev_sibling(refp, child).ok_or_else(|| {
+                DomError::Error("Cannot add newnode as the previous sibling of refnode".into())
+            })?;
             tree::reconcile_ns(parentp.doc_ptr(), new_child);
         }
         Ok(Node::wrap(new_child))
     }
 
-    fn insert_before_append(&self, parentp: N, child: N, _strict: bool) -> DomResult<Node> {
+    fn insert_before_append(&self, parentp: N, child: N, strict: bool) -> DomResult<Node> {
         if child.doc_ptr().is_null() && !parentp.doc_ptr().is_null() {
             set_tree_doc(child, parentp.doc_ptr());
             set_document_ref_pointers(child, self.doc_ref().as_ref());
         }
         self.invalidate();
-        self.insert_before_append_linked(parentp, child, _strict)
+        self.insert_before_append_linked(parentp, child, strict)
     }
 
-    fn insert_before_append_linked(&self, parentp: N, mut child: N, _strict: bool) -> DomResult<Node> {
+    #[allow(clippy::unused_self)]
+    fn insert_before_append_linked(
+        &self,
+        parentp: N,
+        mut child: N,
+        _strict: bool,
+    ) -> DomResult<Node> {
         if child.parent().is_some() {
             tree::unlink(child);
         }
         let new_child;
-        if child.t() == ffi::XML_TEXT_NODE && parentp.last().is_some_and(|l| l.t() == ffi::XML_TEXT_NODE) {
+        if child.t() == ffi::XML_TEXT_NODE
+            && parentp.last().is_some_and(|l| l.t() == ffi::XML_TEXT_NODE)
+        {
             child.set_parent(Some(parentp));
             new_child = child;
-            match parentp.children() {
-                None => {
-                    parentp.set_children(Some(child));
-                    parentp.set_last(Some(child));
-                }
-                Some(_) => {
-                    let last = parentp.last().expect("checked above");
-                    last.set_next(Some(new_child));
-                    new_child.set_prev(Some(last));
-                    parentp.set_last(Some(new_child));
-                }
+            if parentp.children().is_none() {
+                parentp.set_children(Some(child));
+                parentp.set_last(Some(child));
+            } else {
+                let last = parentp.last().expect("checked above");
+                last.set_next(Some(new_child));
+                new_child.set_prev(Some(last));
+                parentp.set_last(Some(new_child));
             }
         } else if child.t() == ffi::XML_ATTRIBUTE_NODE {
             if let Some(lastattr) = has_ns_prop_for(parentp, child) {
                 if lastattr.t() != ffi::XML_ATTRIBUTE_DECL {
-                    if lastattr != child {
-                        tree::unlink(lastattr);
-                        free_resource(lastattr);
-                    } else {
+                    if lastattr == child {
                         return Ok(Node::wrap(child));
                     }
+                    tree::unlink(lastattr);
+                    free_resource(lastattr);
                 }
             }
-            new_child = add_child(parentp, child)
-                .ok_or_else(|| DomError::Error("Cannot add newnode as the previous sibling of refnode".into()))?;
+            new_child = add_child(parentp, child).ok_or_else(|| {
+                DomError::Error("Cannot add newnode as the previous sibling of refnode".into())
+            })?;
         } else if child.t() == ffi::XML_DOCUMENT_FRAG_NODE {
             let last = child.last();
             let first = insert_fragment(parentp, parentp.last(), None, child);
@@ -730,8 +774,9 @@ impl Node {
             child = first.unwrap_or(child);
             return Ok(Node::wrap(child));
         } else {
-            new_child = add_child(parentp, child)
-                .ok_or_else(|| DomError::Error("Cannot add newnode as the previous sibling of refnode".into()))?;
+            new_child = add_child(parentp, child).ok_or_else(|| {
+                DomError::Error("Cannot add newnode as the previous sibling of refnode".into())
+            })?;
             tree::reconcile_ns(parentp.doc_ptr(), new_child);
         }
         Ok(Node::wrap(new_child))
@@ -754,7 +799,9 @@ impl Node {
                 return Err(DomError::Silent);
             }
             check_legacy_insertion_validity(nodep, newchild, strict, false)?;
-            if (oldchild.t() == ffi::XML_ATTRIBUTE_NODE) != (newchild.t() == ffi::XML_ATTRIBUTE_NODE) {
+            if (oldchild.t() == ffi::XML_ATTRIBUTE_NODE)
+                != (newchild.t() == ffi::XML_ATTRIBUTE_NODE)
+            {
                 return Err(throw(C::HierarchyRequest, strict));
             }
             if oldchild.parent() != Some(nodep) {
@@ -844,7 +891,9 @@ impl Node {
             tree::unlink(child);
         }
         let new_child;
-        if child.t() == ffi::XML_TEXT_NODE && nodep.last().is_some_and(|l| l.t() == ffi::XML_TEXT_NODE) {
+        if child.t() == ffi::XML_TEXT_NODE
+            && nodep.last().is_some_and(|l| l.t() == ffi::XML_TEXT_NODE)
+        {
             child.set_parent(Some(nodep));
             new_child = child;
             if nodep.children().is_none() {
@@ -996,7 +1045,9 @@ impl Node {
         let lookupp = match n.t() {
             ffi::XML_ELEMENT_NODE => Some(n),
             // SAFETY: live document.
-            ffi::XML_DOCUMENT_NODE | ffi::XML_HTML_DOCUMENT_NODE => N::new(unsafe { ffi::xmlDocGetRootElement(n.as_doc()) }),
+            ffi::XML_DOCUMENT_NODE | ffi::XML_HTML_DOCUMENT_NODE => {
+                N::new(unsafe { ffi::xmlDocGetRootElement(n.as_doc()) })
+            }
             ffi::XML_ENTITY_NODE
             | ffi::XML_NOTATION_NODE
             | ffi::XML_DOCUMENT_FRAG_NODE
@@ -1004,13 +1055,17 @@ impl Node {
             | ffi::XML_DTD_NODE => return Ok(None),
             _ => n.parent(),
         };
-        let Some(lookupp) = lookupp else { return Ok(None) };
+        let Some(lookupp) = lookupp else {
+            return Ok(None);
+        };
         if self.family_is_modern() {
             return Ok(locate_a_namespace_prefix(lookupp, uri).map(<[u8]>::to_vec));
         }
         let u = cs(uri);
         // SAFETY: live node.
-        let nsptr = Ns::new(unsafe { ffi::xmlSearchNsByHref(lookupp.doc_ptr(), lookupp.p(), u.as_ptr().cast()) });
+        let nsptr = Ns::new(unsafe {
+            ffi::xmlSearchNsByHref(lookupp.doc_ptr(), lookupp.p(), u.as_ptr().cast())
+        });
         Ok(nsptr.and_then(Ns::prefix).map(<[u8]>::to_vec))
     }
 
@@ -1057,7 +1112,11 @@ impl Node {
         let p = prefix.map(cs);
         // SAFETY: live node.
         let nsptr = Ns::new(unsafe {
-            ffi::xmlSearchNs(n.doc_ptr(), n.p(), p.as_ref().map_or(ptr::null(), |p| p.as_ptr().cast()))
+            ffi::xmlSearchNs(
+                n.doc_ptr(),
+                n.p(),
+                p.as_ref().map_or(ptr::null(), |p| p.as_ptr().cast()),
+            )
         });
         Ok(nsptr
             .filter(|ns| !ns.href_ptr().is_null())
@@ -1079,7 +1138,7 @@ impl Node {
     pub fn get_line_no(&self) -> DomResult<i64> {
         let n = self.node()?;
         // SAFETY: live node.
-        Ok(i64::from(unsafe { ffi::xmlGetLineNo(n.p()) }))
+        Ok(unsafe { ffi::xmlGetLineNo(n.p()) })
     }
 
     /// `contains($other)`.
@@ -1108,8 +1167,11 @@ impl Node {
     }
 
     /// `compareDocumentPosition($other)`.
+    #[allow(clippy::too_many_lines)]
     pub fn compare_document_position(&self, other: &Node) -> DomResult<i64> {
-        use position::{CONTAINED_BY, CONTAINS, DISCONNECTED, FOLLOWING, IMPLEMENTATION_SPECIFIC, PRECEDING};
+        use position::{
+            CONTAINED_BY, CONTAINS, DISCONNECTED, FOLLOWING, IMPLEMENTATION_SPECIFIC, PRECEDING,
+        };
         let this = self.node()?;
         let otherp = other.node()?;
         if this == otherp {
@@ -1221,8 +1283,7 @@ impl Node {
     ) -> DomResult<Option<Vec<u8>>> {
         match crate::save::canonicalize(self, None, exclusive, with_comments, xpath, ns_prefixes)? {
             crate::save::C14nOut::Bytes(b) => Ok(Some(b)),
-            crate::save::C14nOut::Written(_) => Ok(None),
-            crate::save::C14nOut::Failed => Ok(None),
+            crate::save::C14nOut::Written(_) | crate::save::C14nOut::Failed => Ok(None),
         }
     }
 
@@ -1235,7 +1296,14 @@ impl Node {
         xpath: Option<&C14nXPath>,
         ns_prefixes: Option<&[Vec<u8>]>,
     ) -> DomResult<Option<i64>> {
-        match crate::save::canonicalize(self, Some(uri), exclusive, with_comments, xpath, ns_prefixes)? {
+        match crate::save::canonicalize(
+            self,
+            Some(uri),
+            exclusive,
+            with_comments,
+            xpath,
+            ns_prefixes,
+        )? {
             crate::save::C14nOut::Written(n) => Ok(Some(n)),
             _ => Ok(None),
         }
@@ -1272,10 +1340,11 @@ fn raw_addr(n: Option<N>) -> usize {
 
 /// `dom_has_feature`.
 pub(crate) fn has_feature(feature: &[u8], version: &[u8]) -> bool {
-    if version == b"1.0" || version == b"2.0" || version.is_empty() {
-        if feature.eq_ignore_ascii_case(b"XML") || (feature.eq_ignore_ascii_case(b"Core") && version == b"1.0") {
-            return true;
-        }
+    if (version == b"1.0" || version == b"2.0" || version.is_empty())
+        && (feature.eq_ignore_ascii_case(b"XML")
+            || (feature.eq_ignore_ascii_case(b"Core") && version == b"1.0"))
+    {
+        return true;
     }
     false
 }
@@ -1305,7 +1374,10 @@ fn replace_node_validity_checks(parent: N, node: N, child: N) -> DomResult<()> {
     }
     let parent_is_document = parent.is_doc();
     if parent_is_document && node.is_text_like() {
-        return Err(DomError::dom_msg(C::HierarchyRequest, "Cannot insert text as a child of a document"));
+        return Err(DomError::dom_msg(
+            C::HierarchyRequest,
+            "Cannot insert text as a child of a document",
+        ));
     }
     if !parent_is_document && node.t() == ffi::XML_DTD_NODE {
         return Err(DomError::dom_msg(
@@ -1457,7 +1529,10 @@ fn list_eq_ordered(a: Option<N>, b: Option<N>, spec: bool) -> bool {
 fn list_eq_unordered(a: Option<N>, b: Option<N>, spec: bool) -> bool {
     let la: Vec<N> = crate::raw::Siblings::from(a).collect();
     let lb: Vec<N> = crate::raw::Siblings::from(b).collect();
-    la.len() == lb.len() && la.iter().all(|x| lb.iter().any(|y| is_equal_node(*x, *y, spec)))
+    la.len() == lb.len()
+        && la
+            .iter()
+            .all(|x| lb.iter().any(|y| is_equal_node(*x, *y, spec)))
 }
 
 fn ns_list(mut cur: Option<Ns>) -> Vec<Ns> {
@@ -1497,24 +1572,40 @@ pub(crate) fn is_equal_node(a: N, b: N, spec: bool) -> bool {
         ffi::XML_DTD_NODE => {
             let (da, db) = (a.dtd(), b.dtd());
             str_eq(crate::raw::opt_cstr(da.name), crate::raw::opt_cstr(db.name))
-                && str_eq(crate::raw::opt_cstr(da.ExternalID), crate::raw::opt_cstr(db.ExternalID))
-                && str_eq(crate::raw::opt_cstr(da.SystemID), crate::raw::opt_cstr(db.SystemID))
+                && str_eq(
+                    crate::raw::opt_cstr(da.ExternalID),
+                    crate::raw::opt_cstr(db.ExternalID),
+                )
+                && str_eq(
+                    crate::raw::opt_cstr(da.SystemID),
+                    crate::raw::opt_cstr(db.SystemID),
+                )
         }
         ffi::XML_PI_NODE => {
             a.name() == b.name()
-                && str_eq(crate::raw::opt_cstr(a.content_ptr()), crate::raw::opt_cstr(b.content_ptr()))
+                && str_eq(
+                    crate::raw::opt_cstr(a.content_ptr()),
+                    crate::raw::opt_cstr(b.content_ptr()),
+                )
         }
-        ffi::XML_TEXT_NODE | ffi::XML_COMMENT_NODE | ffi::XML_CDATA_SECTION_NODE => {
-            str_eq(crate::raw::opt_cstr(a.content_ptr()), crate::raw::opt_cstr(b.content_ptr()))
-        }
+        ffi::XML_TEXT_NODE | ffi::XML_COMMENT_NODE | ffi::XML_CDATA_SECTION_NODE => str_eq(
+            crate::raw::opt_cstr(a.content_ptr()),
+            crate::raw::opt_cstr(b.content_ptr()),
+        ),
         ffi::XML_ATTRIBUTE_NODE => is_equal_attr(a, b),
         ffi::XML_ENTITY_REF_NODE => a.name() == b.name(),
         ffi::XML_ENTITY_DECL | ffi::XML_NOTATION_NODE | ffi::XML_ENTITY_NODE => {
             let (ea, eb) = (a.ent(), b.ent());
             ea.etype == eb.etype
                 && a.name() == b.name()
-                && str_eq(crate::raw::opt_cstr(ea.ExternalID), crate::raw::opt_cstr(eb.ExternalID))
-                && str_eq(crate::raw::opt_cstr(ea.SystemID), crate::raw::opt_cstr(eb.SystemID))
+                && str_eq(
+                    crate::raw::opt_cstr(ea.ExternalID),
+                    crate::raw::opt_cstr(eb.ExternalID),
+                )
+                && str_eq(
+                    crate::raw::opt_cstr(ea.SystemID),
+                    crate::raw::opt_cstr(eb.SystemID),
+                )
                 && content_equal(a, b)
         }
         ffi::XML_NAMESPACE_DECL => {
@@ -1543,7 +1634,10 @@ fn locate_a_namespace_prefix(mut elem: N, uri: &[u8]) -> Option<&'static [u8]> {
         }
         for attr in elem.attr_iter() {
             if let (Some(ans), Some(c)) = (attr.ns(), attr.children()) {
-                if ans.prefix() == Some(b"xmlns") && c.content() == uri && !c.content_ptr().is_null() {
+                if ans.prefix() == Some(b"xmlns")
+                    && c.content() == uri
+                    && !c.content_ptr().is_null()
+                {
                     return Some(attr.name());
                 }
             }
@@ -1610,7 +1704,11 @@ pub(crate) fn locate_a_namespace(node: N, prefix: Option<&[u8]>) -> Option<Vec<u
 }
 
 /// `dom_clone_container_helper`.
-fn clone_container_helper(mapper: &mut crate::ns::NsMapper, src: N, dst_doc: *mut ffi::xmlDoc) -> Option<N> {
+fn clone_container_helper(
+    mapper: &mut crate::ns::NsMapper,
+    src: N,
+    dst_doc: *mut ffi::xmlDoc,
+) -> Option<N> {
     // SAFETY: live source node; dst_doc may be NULL.
     let clone = N::new(unsafe { ffi::xmlDocCopyNode(src.p(), dst_doc, 0) })?;
     clone.set_ns(src.ns_ptr());
@@ -1630,7 +1728,8 @@ fn clone_container_helper(mapper: &mut crate::ns::NsMapper, src: N, dst_doc: *mu
         }
         for attr in src.attr_iter() {
             // SAFETY: live attribute.
-            let Some(new_attr) = N::new(unsafe { ffi::xmlDocCopyNode(attr.p(), dst_doc, 0) }) else {
+            let Some(new_attr) = N::new(unsafe { ffi::xmlDocCopyNode(attr.p(), dst_doc, 0) })
+            else {
                 tree::free_node(clone);
                 return None;
             };
@@ -1650,12 +1749,20 @@ fn clone_container_helper(mapper: &mut crate::ns::NsMapper, src: N, dst_doc: *mu
 }
 
 /// `dom_clone_helper`.
-fn clone_helper(mapper: &mut crate::ns::NsMapper, src_node: N, mut dst_doc: *mut ffi::xmlDoc, recursive: bool) -> Option<N> {
+fn clone_helper(
+    mapper: &mut crate::ns::NsMapper,
+    src_node: N,
+    mut dst_doc: *mut ffi::xmlDoc,
+    recursive: bool,
+) -> Option<N> {
     let outer = clone_container_helper(mapper, src_node, dst_doc)?;
     if !recursive
         || !matches!(
             src_node.t(),
-            ffi::XML_ELEMENT_NODE | ffi::XML_DOCUMENT_FRAG_NODE | ffi::XML_DOCUMENT_NODE | ffi::XML_HTML_DOCUMENT_NODE
+            ffi::XML_ELEMENT_NODE
+                | ffi::XML_DOCUMENT_FRAG_NODE
+                | ffi::XML_DOCUMENT_NODE
+                | ffi::XML_HTML_DOCUMENT_NODE
         )
     {
         return Some(outer);
@@ -1693,13 +1800,12 @@ fn clone_helper(mapper: &mut crate::ns::NsMapper, src_node: N, mut dst_doc: *mut
             N::new(unsafe { ffi::xmlDocCopyNode(s.p(), dst_doc, 1) })
         };
         if let Some(c) = cloned {
-            match cloned_parent.children() {
-                None => cloned_parent.set_children(Some(c)),
-                Some(_) => {
-                    let last = cloned_parent.last().expect("non-empty list");
-                    c.set_prev(Some(last));
-                    last.set_next(Some(c));
-                }
+            if cloned_parent.children().is_none() {
+                cloned_parent.set_children(Some(c));
+            } else {
+                let last = cloned_parent.last().expect("non-empty list");
+                c.set_prev(Some(last));
+                last.set_next(Some(c));
             }
             c.set_parent(Some(cloned_parent));
             cloned_parent.set_last(Some(c));
@@ -1743,30 +1849,31 @@ pub(crate) fn clone_node_raw(
         set_tree_doc(d, doc);
         return Some(d);
     }
-    match mapper {
-        Some(mapper) => {
-            let clone = clone_helper(mapper, node, doc, recursive)?;
-            if clone.doc_ptr() != node.doc_ptr() {
-                if matches!(
-                    clone.t(),
-                    ffi::XML_DOCUMENT_NODE | ffi::XML_HTML_DOCUMENT_NODE | ffi::XML_DOCUMENT_FRAG_NODE
-                ) {
-                    let mut c = clone.children();
-                    while let Some(ch) = c {
-                        crate::ns::reconcile_modern(mapper, ch);
-                        c = ch.next();
-                    }
-                } else {
-                    crate::ns::reconcile_modern(mapper, clone);
+    if let Some(mapper) = mapper {
+        let clone = clone_helper(mapper, node, doc, recursive)?;
+        if clone.doc_ptr() != node.doc_ptr() {
+            if matches!(
+                clone.t(),
+                ffi::XML_DOCUMENT_NODE | ffi::XML_HTML_DOCUMENT_NODE | ffi::XML_DOCUMENT_FRAG_NODE
+            ) {
+                let mut c = clone.children();
+                while let Some(ch) = c {
+                    crate::ns::reconcile_modern(mapper, ch);
+                    c = ch.next();
                 }
+            } else {
+                crate::ns::reconcile_modern(mapper, clone);
             }
-            Some(clone)
         }
-        None => {
-            let extended = if !recursive && node.is_element() { 2 } else { i32::from(recursive) };
-            // SAFETY: live node.
-            N::new(unsafe { ffi::xmlDocCopyNode(node.p(), doc, extended) })
-        }
+        Some(clone)
+    } else {
+        let extended = if !recursive && node.is_element() {
+            2
+        } else {
+            i32::from(recursive)
+        };
+        // SAFETY: live node.
+        N::new(unsafe { ffi::xmlDocCopyNode(node.p(), doc, extended) })
     }
 }
 
@@ -1776,7 +1883,8 @@ impl Node {
     pub fn clone_object(&self) -> DomResult<Node> {
         if let Some(n) = self.n() {
             if n.t() == ffi::XML_NAMESPACE_DECL {
-                let c = crate::xpath::clone_namespace_node(self).ok_or_else(|| DomError::dom(C::InvalidState))?;
+                let c = crate::xpath::clone_namespace_node(self)
+                    .ok_or_else(|| DomError::dom(C::InvalidState))?;
                 c.set_class_name(self.class_name());
                 return Ok(c);
             }

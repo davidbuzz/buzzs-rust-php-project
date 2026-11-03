@@ -15,7 +15,9 @@ pub(crate) fn builtin_class(n: N, modern: bool) -> Option<&'static str> {
     match n.t() {
         ffi::XML_DOCUMENT_NODE => pick("DOMDocument", "Dom\\XMLDocument"),
         ffi::XML_HTML_DOCUMENT_NODE => pick("DOMDocument", "Dom\\HTMLDocument"),
-        ffi::XML_DTD_NODE | ffi::XML_DOCUMENT_TYPE_NODE => pick("DOMDocumentType", "Dom\\DocumentType"),
+        ffi::XML_DTD_NODE | ffi::XML_DOCUMENT_TYPE_NODE => {
+            pick("DOMDocumentType", "Dom\\DocumentType")
+        }
         ffi::XML_ELEMENT_NODE => {
             if modern {
                 if ns::ns_is_fast(n, &ns::HTML_TOKEN) {
@@ -47,7 +49,12 @@ pub(crate) fn class_for_node(n: N, modern: bool, doc: Option<&DocRef>) -> Cow<'s
         return Cow::Borrowed("DOMNode");
     };
     if let Some(doc) = doc {
-        if let Some(map) = doc.props.borrow().as_ref().and_then(|p| p.classmap.as_ref()) {
+        if let Some(map) = doc
+            .props
+            .borrow()
+            .as_ref()
+            .and_then(|p| p.classmap.as_ref())
+        {
             if let Some((_, ext)) = map.iter().find(|(b, _)| b.eq_ignore_ascii_case(base)) {
                 return Cow::Owned(ext.clone());
             }
@@ -116,6 +123,7 @@ pub struct ParamInfo {
 
 /// A method.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct MethodInfo {
     /// Name.
     pub name: &'static str,
@@ -149,6 +157,7 @@ impl MethodInfo {
 
 /// A class, interface or enum of the DOM extension.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct ClassInfo {
     /// Fully qualified name.
     pub name: &'static str,
@@ -186,14 +195,20 @@ pub fn class_table() -> &'static [ClassInfo] {
 /// Looks a class up by (case-insensitive) name.
 pub fn find_class(name: &str) -> Option<&'static ClassInfo> {
     let name = name.strip_prefix('\\').unwrap_or(name);
-    table::CLASSES.iter().find(|c| c.name.eq_ignore_ascii_case(name))
+    table::CLASSES
+        .iter()
+        .find(|c| c.name.eq_ignore_ascii_case(name))
 }
 
 /// Finds a method on a class or its ancestors.
 pub fn find_method(class: &str, method: &str) -> Option<(&'static ClassInfo, &'static MethodInfo)> {
     let mut cur = find_class(class);
     while let Some(c) = cur {
-        if let Some(m) = c.methods.iter().find(|m| m.name.eq_ignore_ascii_case(method)) {
+        if let Some(m) = c
+            .methods
+            .iter()
+            .find(|m| m.name.eq_ignore_ascii_case(method))
+        {
             return Some((c, m));
         }
         cur = c.parent.and_then(find_class);
@@ -213,7 +228,9 @@ pub fn is_subclass(class: &str, base: &str) -> bool {
     let Some(c) = find_class(class) else {
         return false;
     };
-    if c.name.eq_ignore_ascii_case(base.strip_prefix('\\').unwrap_or(base)) {
+    if c.name
+        .eq_ignore_ascii_case(base.strip_prefix('\\').unwrap_or(base))
+    {
         return true;
     }
     if c.parent.is_some_and(|p| is_subclass(p, base)) {
@@ -224,6 +241,7 @@ pub fn is_subclass(class: &str, base: &str) -> bool {
 
 /// The property-handler set of a built-in class, in the order PHP
 /// registers them (this is the `var_dump()` order).
+#[allow(clippy::match_same_arms)]
 pub fn property_handlers(class: &str) -> &'static [&'static str] {
     let c = find_class(class).map_or(class, |c| c.name);
     match c {
@@ -235,7 +253,11 @@ pub fn property_handlers(class: &str) -> &'static [&'static str] {
         "Dom\\Document" | "Dom\\HTMLDocument" => ABSTRACT_BASE_DOCUMENT,
         "DOMDocument" => DOCUMENT,
         "Dom\\XMLDocument" => XML_DOCUMENT,
-        "DOMNodeList" | "Dom\\NodeList" | "Dom\\HTMLCollection" | "DOMNamedNodeMap" | "Dom\\NamedNodeMap"
+        "DOMNodeList"
+        | "Dom\\NodeList"
+        | "Dom\\HTMLCollection"
+        | "DOMNamedNodeMap"
+        | "Dom\\NamedNodeMap"
         | "Dom\\DtdNamedNodeMap" => LENGTH_ONLY,
         "DOMCharacterData" | "DOMComment" => CHARACTERDATA,
         "Dom\\CharacterData" | "Dom\\Comment" => MODERN_CHARACTERDATA,
@@ -285,44 +307,130 @@ macro_rules! cat {
 }
 
 const NODE: &[&str] = &[
-    "nodeName", "nodeValue", "nodeType", "parentNode", "parentElement", "childNodes", "firstChild", "lastChild",
-    "previousSibling", "nextSibling", "attributes", "isConnected", "ownerDocument", "namespaceURI", "prefix",
-    "localName", "baseURI", "textContent",
+    "nodeName",
+    "nodeValue",
+    "nodeType",
+    "parentNode",
+    "parentElement",
+    "childNodes",
+    "firstChild",
+    "lastChild",
+    "previousSibling",
+    "nextSibling",
+    "attributes",
+    "isConnected",
+    "ownerDocument",
+    "namespaceURI",
+    "prefix",
+    "localName",
+    "baseURI",
+    "textContent",
 ];
 const MODERN_NODE: &[&str] = &[
-    "nodeType", "nodeName", "baseURI", "isConnected", "ownerDocument", "parentNode", "parentElement", "childNodes",
-    "firstChild", "lastChild", "previousSibling", "nextSibling", "nodeValue", "textContent",
+    "nodeType",
+    "nodeName",
+    "baseURI",
+    "isConnected",
+    "ownerDocument",
+    "parentNode",
+    "parentElement",
+    "childNodes",
+    "firstChild",
+    "lastChild",
+    "previousSibling",
+    "nextSibling",
+    "nodeValue",
+    "textContent",
 ];
 const NAMESPACE_NODE: &[&str] = &[
-    "nodeName", "nodeValue", "nodeType", "prefix", "localName", "namespaceURI", "isConnected", "ownerDocument",
-    "parentNode", "parentElement",
+    "nodeName",
+    "nodeValue",
+    "nodeType",
+    "prefix",
+    "localName",
+    "namespaceURI",
+    "isConnected",
+    "ownerDocument",
+    "parentNode",
+    "parentElement",
 ];
 const PARENT3: &[&str] = &["firstElementChild", "lastElementChild", "childElementCount"];
 const DOCUMENTFRAGMENT: &[&str] = cat!(PARENT3, NODE);
 const MODERN_DOCUMENTFRAGMENT: &[&str] = cat!(&["children"], PARENT3, MODERN_NODE);
 const ABSTRACT_BASE_DOCUMENT: &[&str] = cat!(
-    &["implementation", "URL", "documentURI", "characterSet", "charset", "inputEncoding", "doctype", "documentElement", "children"],
+    &[
+        "implementation",
+        "URL",
+        "documentURI",
+        "characterSet",
+        "charset",
+        "inputEncoding",
+        "doctype",
+        "documentElement",
+        "children"
+    ],
     PARENT3,
     &["body", "head", "title"],
     MODERN_NODE
 );
 const DOCUMENT: &[&str] = cat!(
     &[
-        "doctype", "implementation", "documentElement", "actualEncoding", "encoding", "xmlEncoding", "standalone",
-        "xmlStandalone", "version", "xmlVersion", "strictErrorChecking", "documentURI", "config", "formatOutput",
-        "validateOnParse", "resolveExternals", "preserveWhiteSpace", "recover", "substituteEntities",
+        "doctype",
+        "implementation",
+        "documentElement",
+        "actualEncoding",
+        "encoding",
+        "xmlEncoding",
+        "standalone",
+        "xmlStandalone",
+        "version",
+        "xmlVersion",
+        "strictErrorChecking",
+        "documentURI",
+        "config",
+        "formatOutput",
+        "validateOnParse",
+        "resolveExternals",
+        "preserveWhiteSpace",
+        "recover",
+        "substituteEntities",
     ],
     PARENT3,
     NODE
 );
-const XML_DOCUMENT: &[&str] = cat!(&["xmlEncoding", "xmlStandalone", "xmlVersion", "formatOutput"], ABSTRACT_BASE_DOCUMENT);
+const XML_DOCUMENT: &[&str] = cat!(
+    &["xmlEncoding", "xmlStandalone", "xmlVersion", "formatOutput"],
+    ABSTRACT_BASE_DOCUMENT
+);
 const LENGTH_ONLY: &[&str] = &["length"];
-const CHARDATA4: &[&str] = &["data", "length", "previousElementSibling", "nextElementSibling"];
+const CHARDATA4: &[&str] = &[
+    "data",
+    "length",
+    "previousElementSibling",
+    "nextElementSibling",
+];
 const CHARACTERDATA: &[&str] = cat!(CHARDATA4, NODE);
 const MODERN_CHARACTERDATA: &[&str] = cat!(CHARDATA4, MODERN_NODE);
-const ATTR: &[&str] = cat!(&["name", "specified", "value", "ownerElement", "schemaTypeInfo"], NODE);
+const ATTR: &[&str] = cat!(
+    &[
+        "name",
+        "specified",
+        "value",
+        "ownerElement",
+        "schemaTypeInfo"
+    ],
+    NODE
+);
 const MODERN_ATTR: &[&str] = cat!(
-    &["namespaceURI", "prefix", "localName", "name", "value", "ownerElement", "specified"],
+    &[
+        "namespaceURI",
+        "prefix",
+        "localName",
+        "name",
+        "value",
+        "ownerElement",
+        "specified"
+    ],
     MODERN_NODE
 );
 const ELEMENT: &[&str] = cat!(
@@ -332,19 +440,49 @@ const ELEMENT: &[&str] = cat!(
     NODE
 );
 const MODERN_ELEMENT: &[&str] = cat!(
-    &["namespaceURI", "prefix", "localName", "tagName", "id", "className", "classList", "attributes", "children"],
+    &[
+        "namespaceURI",
+        "prefix",
+        "localName",
+        "tagName",
+        "id",
+        "className",
+        "classList",
+        "attributes",
+        "children"
+    ],
     PARENT3,
-    &["previousElementSibling", "nextElementSibling", "innerHTML", "outerHTML", "substitutedNodeValue"],
+    &[
+        "previousElementSibling",
+        "nextElementSibling",
+        "innerHTML",
+        "outerHTML",
+        "substitutedNodeValue"
+    ],
     MODERN_NODE
 );
 const TEXT: &[&str] = cat!(&["wholeText"], CHARACTERDATA);
 const MODERN_TEXT: &[&str] = cat!(&["wholeText"], MODERN_CHARACTERDATA);
-const DOCTYPE6: &[&str] = &["name", "entities", "notations", "publicId", "systemId", "internalSubset"];
+const DOCTYPE6: &[&str] = &[
+    "name",
+    "entities",
+    "notations",
+    "publicId",
+    "systemId",
+    "internalSubset",
+];
 const DOCUMENTTYPE: &[&str] = cat!(DOCTYPE6, NODE);
 const MODERN_DOCUMENTTYPE: &[&str] = cat!(DOCTYPE6, MODERN_NODE);
 const NOTATION: &[&str] = cat!(&["publicId", "systemId"], NODE);
 const ENTITY: &[&str] = cat!(
-    &["publicId", "systemId", "notationName", "actualEncoding", "encoding", "version"],
+    &[
+        "publicId",
+        "systemId",
+        "notationName",
+        "actualEncoding",
+        "encoding",
+        "version"
+    ],
     NODE
 );
 const MODERN_ENTITY: &[&str] = cat!(&["publicId", "systemId", "notationName"], MODERN_NODE);

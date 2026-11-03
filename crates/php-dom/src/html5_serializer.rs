@@ -3,7 +3,10 @@
 //! <https://html.spec.whatwg.org/multipage/parsing.html#serialising-html-fragments>
 
 use crate::ffi;
-use crate::ns::{ns_is_fast, PrivateData, HTML_TOKEN, MATHML_TOKEN, SVG_TOKEN, XLINK_TOKEN, XMLNS_TOKEN, XML_TOKEN};
+use crate::ns::{
+    ns_is_fast, PrivateData, HTML_TOKEN, MATHML_TOKEN, SVG_TOKEN, XLINK_TOKEN, XMLNS_TOKEN,
+    XML_TOKEN,
+};
 use crate::raw::N;
 
 /// Output sink (always UTF-8; encoding conversion happens afterwards).
@@ -12,11 +15,35 @@ pub(crate) struct Html5Serializer<'a> {
     private: Option<&'a PrivateData>,
 }
 
-const RAW_TEXT_PARENTS: &[&[u8]] = &[b"style", b"script", b"xmp", b"iframe", b"noembed", b"noframes", b"plaintext"];
+const RAW_TEXT_PARENTS: &[&[u8]] = &[
+    b"style",
+    b"script",
+    b"xmp",
+    b"iframe",
+    b"noembed",
+    b"noframes",
+    b"plaintext",
+];
 
 const VOID: &[&[u8]] = &[
-    b"area", b"base", b"br", b"col", b"embed", b"hr", b"img", b"input", b"link", b"meta", b"source", b"track", b"wbr",
-    b"basefont", b"bgsound", b"frame", b"keygen", b"param",
+    b"area",
+    b"base",
+    b"br",
+    b"col",
+    b"embed",
+    b"hr",
+    b"img",
+    b"input",
+    b"link",
+    b"meta",
+    b"source",
+    b"track",
+    b"wbr",
+    b"basefont",
+    b"bgsound",
+    b"frame",
+    b"keygen",
+    b"param",
 ];
 
 /// `dom_html5_serializes_as_void`.
@@ -75,7 +102,10 @@ impl<'a> Html5Serializer<'a> {
             return;
         }
         if let Some(parent) = node.parent() {
-            if parent.t() == ffi::XML_ELEMENT_NODE && ns_is_fast(parent, &HTML_TOKEN) && RAW_TEXT_PARENTS.contains(&parent.name()) {
+            if parent.t() == ffi::XML_ELEMENT_NODE
+                && ns_is_fast(parent, &HTML_TOKEN)
+                && RAW_TEXT_PARENTS.contains(&parent.name())
+            {
                 self.w(node.content());
                 return;
             }
@@ -85,7 +115,10 @@ impl<'a> Html5Serializer<'a> {
 
     fn tag_name(&mut self, node: N) {
         if let Some(p) = node.ns().and_then(crate::raw::Ns::prefix) {
-            if !(ns_is_fast(node, &HTML_TOKEN) || ns_is_fast(node, &MATHML_TOKEN) || ns_is_fast(node, &SVG_TOKEN)) {
+            if !(ns_is_fast(node, &HTML_TOKEN)
+                || ns_is_fast(node, &MATHML_TOKEN)
+                || ns_is_fast(node, &SVG_TOKEN))
+            {
                 self.w(p);
                 self.w(b":");
             }
@@ -226,7 +259,10 @@ impl<'a> Html5Serializer<'a> {
     pub(crate) fn serialize(&mut self, node: N) {
         if !matches!(
             node.t(),
-            ffi::XML_ELEMENT_NODE | ffi::XML_DOCUMENT_FRAG_NODE | ffi::XML_DOCUMENT_NODE | ffi::XML_HTML_DOCUMENT_NODE
+            ffi::XML_ELEMENT_NODE
+                | ffi::XML_DOCUMENT_FRAG_NODE
+                | ffi::XML_DOCUMENT_NODE
+                | ffi::XML_HTML_DOCUMENT_NODE
         ) {
             return;
         }
@@ -239,7 +275,10 @@ impl<'a> Html5Serializer<'a> {
 
     /// `dom_html5_serialize_outer`.
     pub(crate) fn serialize_outer(&mut self, node: N) {
-        if matches!(node.t(), ffi::XML_DOCUMENT_NODE | ffi::XML_HTML_DOCUMENT_NODE | ffi::XML_DOCUMENT_FRAG_NODE) {
+        if matches!(
+            node.t(),
+            ffi::XML_DOCUMENT_NODE | ffi::XML_HTML_DOCUMENT_NODE | ffi::XML_DOCUMENT_FRAG_NODE
+        ) {
             let Some(first) = node.children() else { return };
             self.serialize_node(Some(first), first.parent());
         } else {

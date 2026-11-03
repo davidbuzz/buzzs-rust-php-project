@@ -3,12 +3,12 @@
 
 use std::ptr;
 
-use crate::error::{throw, throw_msg, warning, DomError, DomExceptionCode as C, DomResult};
+use crate::error::{throw, warning, DomError, DomExceptionCode as C, DomResult};
 use crate::ffi;
 use crate::lists::NodeList;
 use crate::object::{ClassType, DocInner, DocRef, Handlers, Node};
 use crate::parse::{self, ParseFlags, ParseOutcome};
-use crate::raw::{c_len, cs, take, N, Ns};
+use crate::raw::{c_len, cs, Ns, N};
 use crate::tree::{self, NodeOrString};
 
 /// `dom_copy_document_ref`: copies properties, class map and class type.
@@ -82,7 +82,11 @@ fn transfer_document_ref(node: N, new_doc: &DocRef) {
     }
 }
 
-fn copy_dicted_string(src_dict: *mut ffi::xmlDict, dst_dict: *mut ffi::xmlDict, s: *const u8) -> *const u8 {
+fn copy_dicted_string(
+    src_dict: *mut ffi::xmlDict,
+    dst_dict: *mut ffi::xmlDict,
+    s: *const u8,
+) -> *const u8 {
     if s.is_null() {
         return s;
     }
@@ -105,9 +109,14 @@ fn fixup_name_and_content(src: *mut ffi::xmlDoc, dst: *mut ffi::xmlDoc, node: N)
     // SAFETY: live documents and node.
     unsafe {
         if !src.is_null() && !(*src).dict.is_null() {
-            let dst_dict = if dst.is_null() { ptr::null_mut() } else { (*dst).dict };
+            let dst_dict = if dst.is_null() {
+                ptr::null_mut()
+            } else {
+                (*dst).dict
+            };
             (*node.p()).name = copy_dicted_string((*src).dict, dst_dict, (*node.p()).name);
-            (*node.p()).content = copy_dicted_string((*src).dict, ptr::null_mut(), (*node.p()).content).cast_mut();
+            (*node.p()).content =
+                copy_dicted_string((*src).dict, ptr::null_mut(), (*node.p()).content).cast_mut();
         }
     }
 }
@@ -130,12 +139,18 @@ fn fixup_name_and_content_outer(src: *mut ffi::xmlDoc, dst: *mut ffi::xmlDoc, no
 }
 
 /// `php_dom_adopt_node` given the new document's reference object.
-pub(crate) fn adopt_node_raw(nodep: N, new_doc_ref: Option<&DocRef>, new_document: *mut ffi::xmlDoc) -> bool {
+pub(crate) fn adopt_node_raw(
+    nodep: N,
+    new_doc_ref: Option<&DocRef>,
+    new_document: *mut ffi::xmlDoc,
+) -> bool {
     let old_doc = nodep.doc_ptr();
     if let Some(old) = DocInner::lookup(old_doc) {
         old.invalidate();
     }
-    if old_doc != new_document {
+    if old_doc == new_document {
+        tree::unlink(nodep);
+    } else {
         if let Some(d) = new_doc_ref {
             d.invalidate();
         }
@@ -148,7 +163,14 @@ pub(crate) fn adopt_node_raw(nodep: N, new_doc_ref: Option<&DocRef>, new_documen
         } else {
             // SAFETY: live node and documents.
             let ret = unsafe {
-                ffi::xmlDOMWrapAdoptNode(ptr::null_mut(), old_doc, nodep.p(), new_document, ptr::null_mut(), 0)
+                ffi::xmlDOMWrapAdoptNode(
+                    ptr::null_mut(),
+                    old_doc,
+                    nodep.p(),
+                    new_document,
+                    ptr::null_mut(),
+                    0,
+                )
             };
             if ret != 0 {
                 return false;
@@ -158,8 +180,6 @@ pub(crate) fn adopt_node_raw(nodep: N, new_doc_ref: Option<&DocRef>, new_documen
         if let Some(d) = new_doc_ref {
             transfer_document_ref(nodep, d);
         }
-    } else {
-        tree::unlink(nodep);
     }
     true
 }
@@ -172,10 +192,6 @@ fn exceeds_int(v: i64) -> bool {
 impl Node {
     fn doc_node(&self) -> DomResult<N> {
         self.node()
-    }
-
-    fn props_doc(&self) -> Option<DocRef> {
-        self.doc_ref()
     }
 
     /// `new DOMDocument($version, $encoding)`.
@@ -230,7 +246,9 @@ impl Node {
     pub fn set_encoding(&self, value: Option<&[u8]>) -> DomResult<()> {
         let d = self.prop_node()?;
         let invalid = || DomError::Value("Invalid document encoding".into());
-        let Some(v) = value else { return Err(invalid()) };
+        let Some(v) = value else {
+            return Err(invalid());
+        };
         let c = cs(v);
         // SAFETY: handler lookup and release.
         unsafe {
@@ -349,20 +367,34 @@ impl Node {
     pub fn create_element(&self, name: &[u8], value: Option<&[u8]>) -> DomResult<Node> {
         let docp = self.doc_node()?;
         if !tree::valid_name(name) {
-            return Err(throw(C::InvalidCharacter, if self.is_modern() { true } else { self.strict_doc() }));
+            return Err(throw(
+                C::InvalidCharacter,
+                if self.is_modern() {
+                    true
+                } else {
+                    self.strict_doc()
+                },
+            ));
         }
         let node = if self.is_modern() && docp.t() == ffi::XML_HTML_DOCUMENT_NODE {
             let pd = self.private_data_or_err()?;
             let html_ns = pd.mapper.borrow_mut().ensure_html_ns();
             let lower = cs(&name.to_ascii_lowercase());
             // SAFETY: live document.
-            N::new(unsafe { ffi::xmlNewDocRawNode(docp.as_doc(), html_ns, lower.as_ptr().cast(), ptr::null()) })
+            N::new(unsafe {
+                ffi::xmlNewDocRawNode(docp.as_doc(), html_ns, lower.as_ptr().cast(), ptr::null())
+            })
         } else {
             let n = cs(name);
             let v = value.map(cs);
             // SAFETY: live document.
             N::new(unsafe {
-                ffi::xmlNewDocNode(docp.as_doc(), ptr::null_mut(), n.as_ptr().cast(), v.as_ref().map_or(ptr::null(), |v| v.as_ptr().cast()))
+                ffi::xmlNewDocNode(
+                    docp.as_doc(),
+                    ptr::null_mut(),
+                    n.as_ptr().cast(),
+                    v.as_ref().map_or(ptr::null(), |v| v.as_ptr().cast()),
+                )
             })
         };
         let node = node.ok_or_else(|| DomError::dom(C::InvalidState))?;
@@ -379,7 +411,8 @@ impl Node {
     pub fn create_document_fragment(&self) -> DomResult<Node> {
         let docp = self.doc_node()?;
         // SAFETY: live document.
-        let n = N::new(unsafe { ffi::xmlNewDocFragment(docp.as_doc()) }).ok_or_else(|| DomError::dom(C::InvalidState))?;
+        let n = N::new(unsafe { ffi::xmlNewDocFragment(docp.as_doc()) })
+            .ok_or_else(|| DomError::dom(C::InvalidState))?;
         Ok(Node::wrap_with_doc(n, self.doc_ref()))
     }
 
@@ -388,7 +421,8 @@ impl Node {
         let docp = self.doc_node()?;
         let c = cs(data);
         // SAFETY: live document.
-        let n = N::new(unsafe { ffi::xmlNewDocText(docp.as_doc(), c.as_ptr().cast()) }).ok_or_else(|| DomError::dom(C::InvalidState))?;
+        let n = N::new(unsafe { ffi::xmlNewDocText(docp.as_doc(), c.as_ptr().cast()) })
+            .ok_or_else(|| DomError::dom(C::InvalidState))?;
         Ok(Node::wrap_with_doc(n, self.doc_ref()))
     }
 
@@ -397,7 +431,8 @@ impl Node {
         let docp = self.doc_node()?;
         let c = cs(data);
         // SAFETY: live document.
-        let n = N::new(unsafe { ffi::xmlNewDocComment(docp.as_doc(), c.as_ptr().cast()) }).ok_or_else(|| DomError::dom(C::InvalidState))?;
+        let n = N::new(unsafe { ffi::xmlNewDocComment(docp.as_doc(), c.as_ptr().cast()) })
+            .ok_or_else(|| DomError::dom(C::InvalidState))?;
         Ok(Node::wrap_with_doc(n, self.doc_ref()))
     }
 
@@ -406,32 +441,51 @@ impl Node {
         let docp = self.doc_node()?;
         if self.is_modern() {
             if docp.t() == ffi::XML_HTML_DOCUMENT_NODE {
-                return Err(DomError::dom_msg(C::NotSupported, "This operation is not supported for HTML documents"));
+                return Err(DomError::dom_msg(
+                    C::NotSupported,
+                    "This operation is not supported for HTML documents",
+                ));
             }
             if data.windows(3).any(|w| w == b"]]>") {
-                return Err(DomError::dom_msg(C::InvalidCharacter, "Invalid character sequence \"]]>\" in CDATA section"));
+                return Err(DomError::dom_msg(
+                    C::InvalidCharacter,
+                    "Invalid character sequence \"]]>\" in CDATA section",
+                ));
             }
         }
         // SAFETY: live document; data valid for its length.
-        let n = N::new(unsafe { ffi::xmlNewCDataBlock(docp.as_doc(), data.as_ptr(), c_len(data.len())) })
-            .ok_or_else(|| DomError::dom(C::InvalidState))?;
+        let n = N::new(unsafe {
+            ffi::xmlNewCDataBlock(docp.as_doc(), data.as_ptr(), c_len(data.len()))
+        })
+        .ok_or_else(|| DomError::dom(C::InvalidState))?;
         Ok(Node::wrap_with_doc(n, self.doc_ref()))
     }
 
     /// `createProcessingInstruction($target, $data)`.
-    pub fn create_processing_instruction(&self, target: &[u8], data: Option<&[u8]>) -> DomResult<Node> {
+    pub fn create_processing_instruction(
+        &self,
+        target: &[u8],
+        data: Option<&[u8]>,
+    ) -> DomResult<Node> {
         let docp = self.doc_node()?;
         if !tree::valid_name(target) {
             return Err(throw(C::InvalidCharacter, self.strict_doc()));
         }
         if self.is_modern() && data.is_some_and(|d| d.windows(2).any(|w| w == b"?>")) {
-            return Err(DomError::dom_msg(C::InvalidCharacter, "Invalid character sequence \"?>\" in processing instruction"));
+            return Err(DomError::dom_msg(
+                C::InvalidCharacter,
+                "Invalid character sequence \"?>\" in processing instruction",
+            ));
         }
         let t = cs(target);
         let d = data.map(cs);
         // SAFETY: live document.
         let n = N::new(unsafe {
-            ffi::xmlNewDocPI(docp.as_doc(), t.as_ptr().cast(), d.as_ref().map_or(ptr::null(), |d| d.as_ptr().cast()))
+            ffi::xmlNewDocPI(
+                docp.as_doc(),
+                t.as_ptr().cast(),
+                d.as_ref().map_or(ptr::null(), |d| d.as_ptr().cast()),
+            )
         })
         .ok_or_else(|| DomError::dom(C::InvalidState))?;
         Ok(Node::wrap_with_doc(n, self.doc_ref()))
@@ -450,8 +504,10 @@ impl Node {
         };
         let c = cs(&nm);
         // SAFETY: live document.
-        let n = N::from_attr(unsafe { ffi::xmlNewDocProp(docp.as_doc(), c.as_ptr().cast(), ptr::null()) })
-            .ok_or_else(|| DomError::dom(C::InvalidState))?;
+        let n = N::from_attr(unsafe {
+            ffi::xmlNewDocProp(docp.as_doc(), c.as_ptr().cast(), ptr::null())
+        })
+        .ok_or_else(|| DomError::dom(C::InvalidState))?;
         Ok(Node::wrap_with_doc(n, self.doc_ref()))
     }
 
@@ -463,7 +519,8 @@ impl Node {
         }
         let c = cs(name);
         // SAFETY: live document.
-        let n = N::new(unsafe { ffi::xmlNewReference(docp.as_doc(), c.as_ptr().cast()) }).ok_or_else(|| DomError::dom(C::InvalidState))?;
+        let n = N::new(unsafe { ffi::xmlNewReference(docp.as_doc(), c.as_ptr().cast()) })
+            .ok_or_else(|| DomError::dom(C::InvalidState))?;
         Ok(Node::wrap_with_doc(n, self.doc_ref()))
     }
 
@@ -484,38 +541,47 @@ impl Node {
         }
         if modern {
             let pd = self.private_data_or_err()?;
-            let ret = crate::node::clone_node_raw(Some(&mut pd.mapper.borrow_mut()), nodep, docp.as_doc(), deep)
-                .ok_or_else(|| DomError::dom(C::InvalidState))?;
+            let ret = crate::node::clone_node_raw(
+                Some(&mut pd.mapper.borrow_mut()),
+                nodep,
+                docp.as_doc(),
+                deep,
+            )
+            .ok_or_else(|| DomError::dom(C::InvalidState))?;
             return Ok(Node::wrap_with_doc(ret, self.doc_ref()));
         }
-        let ret = crate::node::clone_node_raw(None, nodep, docp.as_doc(), deep).ok_or(DomError::Silent)?;
+        let ret = crate::node::clone_node_raw(None, nodep, docp.as_doc(), deep)
+            .ok_or(DomError::Silent)?;
         if ret.t() == ffi::XML_ATTRIBUTE_NODE {
             if let (Some(nns), None) = (nodep.ns(), ret.ns()) {
                 // SAFETY: live document.
                 let root = N::new(unsafe { ffi::xmlDocGetRootElement(docp.as_doc()) });
                 // SAFETY: live document; root may be NULL.
-                let mut nsptr = unsafe { ffi::xmlSearchNsByHref(docp.as_doc(), crate::raw::raw(root), nns.href_ptr()) };
+                let mut nsptr = unsafe {
+                    ffi::xmlSearchNsByHref(docp.as_doc(), crate::raw::raw(root), nns.href_ptr())
+                };
                 if Ns::new(nsptr).is_none_or(|x| x.prefix_ptr().is_null()) {
-                    nsptr = match root {
-                        Some(r) => tree::get_ns(r, nns.href(), nns.prefix()).unwrap_or(ptr::null_mut()),
-                        None => {
-                            // dom_get_ns(NULL, ...): xmlNewNs(NULL, ...) creates a free-standing ns.
-                            let p = nns.prefix();
-                            let bad = p.is_some_and(|p| {
-                                (p == b"xml" && nns.href() != ffi::XML_XML_NAMESPACE)
-                                    || (p == b"xmlns" && nns.href() != crate::ns::XMLNS_NS)
-                                    || (nns.href() == crate::ns::XMLNS_NS && p != b"xmlns")
-                            });
-                            if bad {
-                                ptr::null_mut()
-                            } else {
-                                // SAFETY: free-standing namespace record.
-                                let ns = unsafe { ffi::xmlNewNs(ptr::null_mut(), nns.href_ptr(), nns.prefix_ptr()) };
-                                if !ns.is_null() {
-                                    crate::object::set_old_ns(docp.as_doc(), ns);
-                                }
-                                ns
+                    nsptr = if let Some(r) = root {
+                        tree::get_ns(r, nns.href(), nns.prefix()).unwrap_or(ptr::null_mut())
+                    } else {
+                        // dom_get_ns(NULL, ...): xmlNewNs(NULL, ...) creates a free-standing ns.
+                        let p = nns.prefix();
+                        let bad = p.is_some_and(|p| {
+                            (p == b"xml" && nns.href() != ffi::XML_XML_NAMESPACE)
+                                || (p == b"xmlns" && nns.href() != crate::ns::XMLNS_NS)
+                                || (nns.href() == crate::ns::XMLNS_NS && p != b"xmlns")
+                        });
+                        if bad {
+                            ptr::null_mut()
+                        } else {
+                            // SAFETY: free-standing namespace record.
+                            let ns = unsafe {
+                                ffi::xmlNewNs(ptr::null_mut(), nns.href_ptr(), nns.prefix_ptr())
+                            };
+                            if !ns.is_null() {
+                                crate::object::set_old_ns(docp.as_doc(), ns);
                             }
+                            ns
                         }
                     };
                 }
@@ -526,17 +592,27 @@ impl Node {
     }
 
     /// `createElementNS($namespace, $qualifiedName, $value)`.
-    pub fn create_element_ns(&self, uri: Option<&[u8]>, name: &[u8], value: Option<&[u8]>) -> DomResult<Node> {
+    pub fn create_element_ns(
+        &self,
+        uri: Option<&[u8]>,
+        name: &[u8],
+        value: Option<&[u8]>,
+    ) -> DomResult<Node> {
         let docp = self.doc_node()?;
         if self.is_modern() {
-            let (local, prefix) = tree::validate_and_extract(uri, name).map_err(|c| throw(c, self.strict_doc()))?;
+            let (local, prefix) =
+                tree::validate_and_extract(uri, name).map_err(|c| throw(c, self.strict_doc()))?;
             let pd = self.private_data_or_err()?;
             let ns = pd.mapper.borrow_mut().get_ns(prefix.as_deref(), uri);
             let l = cs(&local);
             // SAFETY: live document; interned (or duplicated) local name.
             let n = unsafe {
                 let dict = docp.d().dict;
-                let interned = if dict.is_null() { ptr::null() } else { ffi::xmlDictLookup(dict, l.as_ptr().cast(), -1) };
+                let interned = if dict.is_null() {
+                    ptr::null()
+                } else {
+                    ffi::xmlDictLookup(dict, l.as_ptr().cast(), -1)
+                };
                 if interned.is_null() {
                     ffi::xmlNewDocNode(docp.as_doc(), ns, l.as_ptr().cast(), ptr::null())
                 } else {
@@ -557,13 +633,20 @@ impl Node {
                     let v = value.map(cs);
                     // SAFETY: live document.
                     let n = N::new(unsafe {
-                        ffi::xmlNewDocNode(docp.as_doc(), ptr::null_mut(), l.as_ptr().cast(), v.as_ref().map_or(ptr::null(), |v| v.as_ptr().cast()))
+                        ffi::xmlNewDocNode(
+                            docp.as_doc(),
+                            ptr::null_mut(),
+                            l.as_ptr().cast(),
+                            v.as_ref().map_or(ptr::null(), |v| v.as_ptr().cast()),
+                        )
                     })
                     .ok_or_else(|| DomError::dom(C::InvalidState))?;
                     if let Some(u) = uri {
                         let uc = cs(u);
                         // SAFETY: live node.
-                        let mut nsptr = unsafe { ffi::xmlSearchNsByHref(n.doc_ptr(), n.p(), uc.as_ptr().cast()) };
+                        let mut nsptr = unsafe {
+                            ffi::xmlSearchNsByHref(n.doc_ptr(), n.p(), uc.as_ptr().cast())
+                        };
                         if nsptr.is_null() {
                             match tree::get_ns(n, u, prefix.as_deref()) {
                                 Ok(p) => nsptr = p,
@@ -584,7 +667,10 @@ impl Node {
             }
             return Err(throw(e, self.strict_doc()));
         }
-        Ok(Node::wrap_with_doc(nodep.expect("created above"), self.doc_ref()))
+        Ok(Node::wrap_with_doc(
+            nodep.expect("created above"),
+            self.doc_ref(),
+        ))
     }
 
     /// `createAttributeNS($namespace, $qualifiedName)`.
@@ -606,8 +692,10 @@ impl Node {
         };
         let l = cs(&local);
         // SAFETY: live document.
-        let nodep = N::from_attr(unsafe { ffi::xmlNewDocProp(docp.as_doc(), l.as_ptr().cast(), ptr::null()) })
-            .ok_or_else(|| DomError::dom(C::InvalidState))?;
+        let nodep = N::from_attr(unsafe {
+            ffi::xmlNewDocProp(docp.as_doc(), l.as_ptr().cast(), ptr::null())
+        })
+        .ok_or_else(|| DomError::dom(C::InvalidState))?;
         let mut errorcode = None;
         if let Some(u) = uri.filter(|u| !u.is_empty()) {
             let nsptr = if modern {
@@ -617,12 +705,20 @@ impl Node {
             } else {
                 let uc = cs(u);
                 // SAFETY: live document; root may be NULL.
-                let mut nsptr = unsafe { ffi::xmlSearchNsByHref(docp.as_doc(), crate::raw::raw(root), uc.as_ptr().cast()) };
+                let mut nsptr = unsafe {
+                    ffi::xmlSearchNsByHref(docp.as_doc(), crate::raw::raw(root), uc.as_ptr().cast())
+                };
                 if name == b"xmlns" || prefix.as_deref() == Some(b"xml") {
                     if nsptr.is_null() {
                         let p = prefix.as_deref().map(cs);
                         // SAFETY: free-standing namespace moved to oldNs.
-                        nsptr = unsafe { ffi::xmlNewNs(ptr::null_mut(), uc.as_ptr().cast(), p.as_ref().map_or(ptr::null(), |p| p.as_ptr().cast())) };
+                        nsptr = unsafe {
+                            ffi::xmlNewNs(
+                                ptr::null_mut(),
+                                uc.as_ptr().cast(),
+                                p.as_ref().map_or(ptr::null(), |p| p.as_ptr().cast()),
+                            )
+                        };
                         crate::object::set_old_ns(docp.as_doc(), nsptr);
                     }
                 } else if Ns::new(nsptr).is_none_or(|x| x.prefix_ptr().is_null()) {
@@ -683,7 +779,10 @@ impl Node {
                 | ffi::XML_ENTITY_NODE
                 | ffi::XML_NOTATION_NODE
         ) {
-            return Err(throw(C::NotSupported, node.doc_ref().is_none_or(|d| d.strict())));
+            return Err(throw(
+                C::NotSupported,
+                node.doc_ref().is_none_or(|d| d.strict()),
+            ));
         }
         let docp = self.doc_node()?;
         if !adopt_node_raw(nodep, self.doc_ref().as_ref(), docp.as_doc()) {
@@ -811,7 +910,9 @@ impl Node {
         let docp = self.doc_node()?;
         let format = self.doc_flag(DocFlag::FormatOutput);
         let noempty = options & i64::from(crate::constants::LIBXML_SAVE_NOEMPTYTAG) != 0;
-        let handlers = self.doc_ref().map_or(Handlers::Default, |d| d.handlers.get());
+        let handlers = self
+            .doc_ref()
+            .map_or(Handlers::Default, |d| d.handlers.get());
         let bytes = crate::save::with_no_empty_tags(noempty, || {
             crate::save::dump_doc_to_file(handlers, filename, docp, format)
         })?;
@@ -822,14 +923,18 @@ impl Node {
     pub fn save_xml(&self, node: Option<&Node>, options: i64) -> DomResult<Option<Vec<u8>>> {
         let docp = self.doc_node()?;
         let format = self.doc_flag(DocFlag::FormatOutput);
-        let handlers = self.doc_ref().map_or(Handlers::Default, |d| d.handlers.get());
+        let handlers = self
+            .doc_ref()
+            .map_or(Handlers::Default, |d| d.handlers.get());
         let noempty = options & i64::from(crate::constants::LIBXML_SAVE_NOEMPTYTAG) != 0;
         let res = if let Some(node) = node {
             let n = node.node()?;
             if n.doc_ptr() != docp.as_doc() {
                 return Err(throw(C::WrongDocument, self.strict_doc()));
             }
-            crate::save::with_no_empty_tags(noempty, || crate::save::dump_node_to_str(handlers, docp, n, format))?
+            crate::save::with_no_empty_tags(noempty, || {
+                crate::save::dump_node_to_str(handlers, docp, n, format)
+            })?
         } else {
             let mut converted = ffi::XML_SAVE_AS_XML;
             #[allow(clippy::cast_possible_truncation)]
@@ -839,14 +944,15 @@ impl Node {
             if format {
                 converted |= ffi::XML_SAVE_FORMAT;
             }
-            crate::save::with_no_empty_tags(noempty, || crate::save::dump_doc_to_str(handlers, docp, converted))?
+            crate::save::with_no_empty_tags(noempty, || {
+                crate::save::dump_doc_to_str(handlers, docp, converted)
+            })?
         };
-        match res {
-            Some(s) => Ok(Some(s)),
-            None => {
-                warning("Could not save document");
-                Ok(None)
-            }
+        if let Some(s) = res {
+            Ok(Some(s))
+        } else {
+            warning("Could not save document");
+            Ok(None)
         }
     }
 
@@ -865,7 +971,9 @@ impl Node {
         #[allow(clippy::cast_possible_truncation)]
         let flags = flags as i32 | ffi::XML_PARSE_NOXINCNODE;
         // SAFETY: live document.
-        let err = parse::with_generic_errors(|| unsafe { ffi::xmlXIncludeProcessFlags(docp.as_doc(), flags) });
+        let err = parse::with_generic_errors(|| unsafe {
+            ffi::xmlXIncludeProcessFlags(docp.as_doc(), flags)
+        });
         if let Some(d) = self.doc_ref() {
             d.invalidate();
         }
@@ -878,6 +986,7 @@ impl Node {
         Ok(if err != 0 { Some(i64::from(err)) } else { None })
     }
 
+    #[allow(clippy::unused_self)]
     fn with_ns_guard<R>(&self, docp: N, f: impl FnOnce() -> R) -> R {
         let active = crate::lists::follow_spec_node(docp);
         let mut links = crate::ns::NsLinks::default();
@@ -992,7 +1101,8 @@ impl Node {
                 ffi::xmlRelaxNGFree(sptr);
                 return Err(DomError::Error("Invalid RelaxNG Validation Context".into()));
             }
-            let valid = self.with_ns_guard(docp, || ffi::xmlRelaxNGValidateDoc(vptr, docp.as_doc()));
+            let valid =
+                self.with_ns_guard(docp, || ffi::xmlRelaxNGValidateDoc(vptr, docp.as_doc()));
             ffi::xmlRelaxNGFree(sptr);
             ffi::xmlRelaxNGFreeValidCtxt(vptr);
             drop(scope);
@@ -1039,12 +1149,17 @@ impl Node {
         let modern = self.family_is_modern();
         let root = if modern { "Dom\\Node" } else { "DOMNode" };
         if !host.is_subclass_of(base, root) {
-            return Err(DomError::arg_type(1, format!("must be a class name derived from {root}, \"{base}\" given")));
+            return Err(DomError::arg_type(
+                1,
+                format!("must be a class name derived from {root}, \"{base}\" given"),
+            ));
         }
         if host.is_abstract(base) {
             return Err(DomError::arg_value(1, "must not be an abstract class"));
         }
-        let base_canon = host.canonical_name(base).unwrap_or_else(|| base.to_string());
+        let base_canon = host
+            .canonical_name(base)
+            .unwrap_or_else(|| base.to_string());
         match extended {
             None => {
                 if let Some(d) = self.doc_ref() {
@@ -1072,7 +1187,10 @@ impl Node {
                 if let Some(d) = self.doc_ref() {
                     d.with_props(|p| {
                         let map = p.classmap.get_or_insert_with(Vec::new);
-                        if let Some(e) = map.iter_mut().find(|(b, _)| b.eq_ignore_ascii_case(&base_canon)) {
+                        if let Some(e) = map
+                            .iter_mut()
+                            .find(|(b, _)| b.eq_ignore_ascii_case(&base_canon))
+                        {
                             e.1 = ext_canon;
                         } else {
                             map.push((base_canon, ext_canon));
@@ -1218,7 +1336,10 @@ pub fn xml_document_create_from(
         return Err(DomError::arg_value(1, "is too long"));
     }
     if from_file && source.windows(3).any(|w| w == b"%00") {
-        return Err(DomError::arg_value(1, "must not contain percent-encoded NUL bytes"));
+        return Err(DomError::arg_value(
+            1,
+            "must not contain percent-encoded NUL bytes",
+        ));
     }
     if from_file && source.contains(&0) {
         return Err(DomError::arg_value(1, "must not contain any null bytes"));
@@ -1251,7 +1372,10 @@ pub fn xml_document_create_from(
     let doc = match parse::document_parser(from_file, source, opts, flags, override_encoding) {
         ParseOutcome::Doc(d) => d,
         ParseOutcome::Malformed => {
-            return Err(DomError::dom_msg(C::Syntax, "XML fragment is not well-formed"));
+            return Err(DomError::dom_msg(
+                C::Syntax,
+                "XML fragment is not well-formed",
+            ));
         }
         ParseOutcome::Failed => {
             if from_file {
@@ -1271,7 +1395,9 @@ pub fn xml_document_create_from(
         let url = dn.d().URL;
         if let Some(u) = crate::raw::opt_cstr(url) {
             let is_stream = u.windows(3).position(|w| w == b"://").is_some_and(|p| {
-                u[..p].iter().all(|c| c.is_ascii_alphanumeric() || matches!(c, b'+' | b'-' | b'.'))
+                u[..p]
+                    .iter()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'+' | b'-' | b'.'))
             }) || u.starts_with(b"data:");
             if !is_stream && !u.starts_with(b"file:/") {
                 let mut v = b"file://".to_vec();
@@ -1284,14 +1410,4 @@ pub fn xml_document_create_from(
     let (obj, d) = instantiate_modern(doc);
     convert_to_modern(&d);
     Ok(obj)
-}
-
-/// Helper: the raw string of `take()`.
-pub(crate) fn take_str(p: *mut u8) -> Option<Vec<u8>> {
-    take(p)
-}
-
-/// Compile-time use of `throw_msg` (shared helper re-export).
-pub(crate) fn hierarchy_error(msg: &'static str) -> DomError {
-    throw_msg(C::HierarchyRequest, msg, true)
 }

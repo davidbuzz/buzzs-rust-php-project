@@ -22,7 +22,10 @@ impl Arr {
         self.items.iter().find(|(kk, _)| kk == k).map(|(_, v)| v)
     }
     pub fn get_mut(&mut self, k: &Key) -> Option<&mut V> {
-        self.items.iter_mut().find(|(kk, _)| kk == k).map(|(_, v)| v)
+        self.items
+            .iter_mut()
+            .find(|(kk, _)| kk == k)
+            .map(|(_, v)| v)
     }
     pub fn set(&mut self, k: Key, v: V) {
         if let Key::Int(i) = k {
@@ -141,7 +144,11 @@ impl std::fmt::Debug for Obj {
 
 impl Obj {
     pub fn prop(&self, name: &[u8]) -> Option<V> {
-        self.props.borrow().iter().find(|(k, _)| k == name).map(|(_, v)| v.clone())
+        self.props
+            .borrow()
+            .iter()
+            .find(|(k, _)| k == name)
+            .map(|(_, v)| v.clone())
     }
     pub fn set_prop(&self, name: &[u8], v: V) {
         let mut p = self.props.borrow_mut();

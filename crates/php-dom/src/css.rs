@@ -9,15 +9,17 @@ use crate::object::{Node, QuirksMode};
 use crate::raw::N;
 
 fn quirks(n: &Node) -> bool {
-    n.doc_ref().is_some_and(|d| d.quirks_mode.get() != QuirksMode::NoQuirks)
+    n.doc_ref()
+        .is_some_and(|d| d.quirks_mode.get() != QuirksMode::NoQuirks)
 }
 
 /// `dom_parse_selector`.
 fn parse(n: &Node, selectors: &[u8]) -> DomResult<CssQuery> {
     CssQuery::compile(selectors, true, quirks(n)).map_err(|e| match e {
-        CssCompileError::Message(m) => {
-            DomError::dom_msg(C::Syntax, format!("Invalid selector ({})", String::from_utf8_lossy(&m)))
-        }
+        CssCompileError::Message(m) => DomError::dom_msg(
+            C::Syntax,
+            format!("Invalid selector ({})", String::from_utf8_lossy(&m)),
+        ),
         CssCompileError::Unknown => DomError::dom_msg(C::Syntax, "Invalid selector"),
     })
 }
@@ -26,7 +28,11 @@ fn parse(n: &Node, selectors: &[u8]) -> DomResult<CssQuery> {
 /// into the PHP error.
 fn check(status: Result<(), ()>) -> DomResult<()> {
     if let Some((code, msg)) = take_exception() {
-        let code = if code == 9 { C::NotSupported } else { C::Syntax };
+        let code = if code == 9 {
+            C::NotSupported
+        } else {
+            C::Syntax
+        };
         return Err(DomError::dom_msg(code, msg));
     }
     status.map_err(|()| DomError::arg_value(1, "contains an unsupported selector"))

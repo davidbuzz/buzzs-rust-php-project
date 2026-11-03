@@ -115,7 +115,7 @@ pub enum DomError {
     },
     /// `Error("Couldn't fetch <class>")`: the object is not bound to a node.
     CouldntFetch,
-    /// An exception thrown by user code called back from DOM (XPath PHP
+    /// An exception thrown by user code called back from DOM (`XPath` PHP
     /// functions, node class constructors); the payload is the embedder's.
     Host(Box<dyn Any>),
     /// No exception: a warning was already emitted (non-strict error
@@ -301,7 +301,10 @@ pub(crate) fn throw_msg(code: DomExceptionCode, message: &'static str, strict: b
     if strict {
         DomError::dom_msg(code, message)
     } else {
-        php_libxml::error::issue_error(php_libxml::error::DiagnosticLevel::Warning, message.as_bytes());
+        php_libxml::error::issue_error(
+            php_libxml::error::DiagnosticLevel::Warning,
+            message.as_bytes(),
+        );
         DomError::Silent
     }
 }

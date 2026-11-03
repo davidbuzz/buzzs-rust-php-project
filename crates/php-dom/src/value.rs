@@ -35,7 +35,7 @@ pub enum DomValue {
     XPath(crate::xpath::XPath),
     /// An iterator object (`getIterator()`).
     Iterator(crate::dispatch::IterHandle),
-    /// A resolved PHP callable (argument of XPath callback registration).
+    /// A resolved PHP callable (argument of `XPath` callback registration).
     Callable(crate::host::HostCallable),
     /// An enum case (`Dom\\AdjacentPosition::*`): `(class, case name)`.
     Enum(&'static str, &'static str),

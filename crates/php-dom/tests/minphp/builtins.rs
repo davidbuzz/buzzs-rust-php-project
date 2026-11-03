@@ -86,7 +86,11 @@ impl Interp {
             }
             "trim" | "rtrim" | "ltrim" | "chop" => {
                 let v = s(&a, 0);
-                let chars: Vec<u8> = if a.len() > 1 { s(&a, 1) } else { b" \t\n\r\0\x0B".to_vec() };
+                let chars: Vec<u8> = if a.len() > 1 {
+                    s(&a, 1)
+                } else {
+                    b" \t\n\r\0\x0B".to_vec()
+                };
                 let mut start = 0;
                 let mut end = v.len();
                 if lname != "rtrim" && lname != "chop" {
@@ -144,7 +148,11 @@ impl Interp {
             "strpos" | "stripos" => {
                 let h = s(&a, 0);
                 let n = s(&a, 1);
-                let (h, n) = if lname == "stripos" { (h.to_ascii_lowercase(), n.to_ascii_lowercase()) } else { (h, n) };
+                let (h, n) = if lname == "stripos" {
+                    (h.to_ascii_lowercase(), n.to_ascii_lowercase())
+                } else {
+                    (h, n)
+                };
                 match h.windows(n.len().max(1)).position(|w| w == n.as_slice()) {
                     Some(p) if !n.is_empty() => V::Int(p as i64),
                     _ => V::Bool(false),
@@ -182,7 +190,13 @@ impl Interp {
                 }
                 V::Str(out)
             }
-            "bin2hex" => V::Str(s(&a, 0).iter().map(|b| format!("{b:02x}")).collect::<String>().into_bytes()),
+            "bin2hex" => V::Str(
+                s(&a, 0)
+                    .iter()
+                    .map(|b| format!("{b:02x}"))
+                    .collect::<String>()
+                    .into_bytes(),
+            ),
             "ord" => V::Int(i64::from(s(&a, 0).first().copied().unwrap_or(0))),
             "chr" => V::Str(vec![(to_int(&arg(&a, 0)) & 0xff) as u8]),
             "dechex" => V::Str(format!("{:x}", to_int(&arg(&a, 0))).into_bytes()),
@@ -235,7 +249,11 @@ impl Interp {
             }
             "str_split" => {
                 let v = s(&a, 0);
-                let n = if a.len() > 1 { to_int(&arg(&a, 1)).max(1) as usize } else { 1 };
+                let n = if a.len() > 1 {
+                    to_int(&arg(&a, 1)).max(1) as usize
+                } else {
+                    1
+                };
                 let mut arr = Arr::default();
                 for c in v.chunks(n) {
                     arr.push(V::Str(c.to_vec()));
@@ -268,7 +286,11 @@ impl Interp {
                 let mut arr = Arr::default();
                 if let V::Arr(x) = arg(&a, 1) {
                     for (k, v) in &x.items {
-                        let r = if matches!(f, V::Null) { v.clone() } else { self.call_value(&f, vec![v.clone()])? };
+                        let r = if matches!(f, V::Null) {
+                            v.clone()
+                        } else {
+                            self.call_value(&f, vec![v.clone()])?
+                        };
                         arr.set(k.clone(), r);
                     }
                 }
@@ -279,7 +301,11 @@ impl Interp {
                 let mut arr = Arr::default();
                 if let V::Arr(x) = arg(&a, 0) {
                     for (k, v) in &x.items {
-                        let keep = if matches!(f, V::Null) { v.truthy() } else { self.call_value(&f, vec![v.clone()])?.truthy() };
+                        let keep = if matches!(f, V::Null) {
+                            v.truthy()
+                        } else {
+                            self.call_value(&f, vec![v.clone()])?.truthy()
+                        };
                         if keep {
                             arr.set(k.clone(), v.clone());
                         }
@@ -317,7 +343,11 @@ impl Interp {
                 let mut arr = Arr::default();
                 if let V::Arr(x) = arg(&a, 0) {
                     let off = to_int(&arg(&a, 1)).max(0) as usize;
-                    let len = if matches!(arg(&a, 2), V::Null) { usize::MAX } else { to_int(&arg(&a, 2)).max(0) as usize };
+                    let len = if matches!(arg(&a, 2), V::Null) {
+                        usize::MAX
+                    } else {
+                        to_int(&arg(&a, 2)).max(0) as usize
+                    };
                     for (_, v) in x.items.iter().skip(off).take(len) {
                         arr.push(v.clone());
                     }
@@ -378,7 +408,13 @@ impl Interp {
             "in_array" => match arg(&a, 1) {
                 V::Arr(x) => {
                     let strict = arg(&a, 2).truthy();
-                    V::Bool(x.items.iter().any(|(_, v)| if strict { strict_eq(v, &arg(&a, 0)) } else { loose_eq(v, &arg(&a, 0)) }))
+                    V::Bool(x.items.iter().any(|(_, v)| {
+                        if strict {
+                            strict_eq(v, &arg(&a, 0))
+                        } else {
+                            loose_eq(v, &arg(&a, 0))
+                        }
+                    }))
                 }
                 _ => V::Bool(false),
             },
@@ -392,7 +428,9 @@ impl Interp {
             "is_object" => V::Bool(matches!(arg(&a, 0), V::Obj(_))),
             "is_numeric" => V::Bool(match arg(&a, 0) {
                 V::Int(_) | V::Float(_) => true,
-                V::Str(s) => std::str::from_utf8(&s).ok().is_some_and(|t| t.trim().parse::<f64>().is_ok()),
+                V::Str(s) => std::str::from_utf8(&s)
+                    .ok()
+                    .is_some_and(|t| t.trim().parse::<f64>().is_ok()),
                 _ => false,
             }),
             "is_callable" => V::Bool(matches!(arg(&a, 0), V::Obj(_) | V::Str(_) | V::Arr(_))),
@@ -431,15 +469,36 @@ impl Interp {
                 V::Obj(o) => o.prop(&s(&a, 1)).is_some(),
                 _ => false,
             }),
-            "class_exists" | "interface_exists" | "enum_exists" => V::Bool(self.class_exists(&path(&s(&a, 0)))),
+            "class_exists" | "interface_exists" | "enum_exists" => {
+                V::Bool(self.class_exists(&path(&s(&a, 0))))
+            }
             "function_exists" => V::Bool(true),
-            "extension_loaded" => V::Bool(matches!(s(&a, 0).as_slice(), b"dom" | b"libxml" | b"xml")),
+            "extension_loaded" => {
+                V::Bool(matches!(s(&a, 0).as_slice(), b"dom" | b"libxml" | b"xml"))
+            }
             "define" => V::Bool(true),
             "defined" => V::Bool(false),
-            "ini_set" | "ini_get" | "error_reporting" | "set_error_handler" | "restore_error_handler" | "gc_collect_cycles" | "gc_enable" | "gc_disable" | "assert_options" | "setlocale" | "mt_srand" | "srand" | "date_default_timezone_set" | "set_exception_handler" => V::Null,
+            "ini_set"
+            | "ini_get"
+            | "error_reporting"
+            | "set_error_handler"
+            | "restore_error_handler"
+            | "gc_collect_cycles"
+            | "gc_enable"
+            | "gc_disable"
+            | "assert_options"
+            | "setlocale"
+            | "mt_srand"
+            | "srand"
+            | "date_default_timezone_set"
+            | "set_exception_handler" => V::Null,
             "assert" => {
                 if !arg(&a, 0).truthy() {
-                    return Err(Flow::Throw(self.make_exception("AssertionError", b"assert(false)", 0)));
+                    return Err(Flow::Throw(self.make_exception(
+                        "AssertionError",
+                        b"assert(false)",
+                        0,
+                    )));
                 }
                 V::Bool(true)
             }
@@ -449,7 +508,14 @@ impl Interp {
                 match std::fs::read(&p) {
                     Ok(d) => V::Str(d),
                     Err(_) => {
-                        self.emit_diag("Warning", format!("{}: Failed to open stream: No such file or directory", String::from_utf8_lossy(&s(&a, 0))).as_bytes());
+                        self.emit_diag(
+                            "Warning",
+                            format!(
+                                "{}: Failed to open stream: No such file or directory",
+                                String::from_utf8_lossy(&s(&a, 0))
+                            )
+                            .as_bytes(),
+                        );
                         V::Bool(false)
                     }
                 }
@@ -462,26 +528,47 @@ impl Interp {
                     Err(_) => V::Bool(false),
                 }
             }
-            "file_exists" | "is_file" => V::Bool(std::path::Path::new(&self.resolve_path(&s(&a, 0))).exists()),
+            "file_exists" | "is_file" => {
+                V::Bool(std::path::Path::new(&self.resolve_path(&s(&a, 0))).exists())
+            }
             "unlink" => V::Bool(std::fs::remove_file(self.resolve_path(&s(&a, 0))).is_ok()),
             "is_dir" => V::Bool(std::path::Path::new(&self.resolve_path(&s(&a, 0))).is_dir()),
             "mkdir" => V::Bool(std::fs::create_dir_all(self.resolve_path(&s(&a, 0))).is_ok()),
             "rmdir" => V::Bool(std::fs::remove_dir(self.resolve_path(&s(&a, 0))).is_ok()),
             "dirname" => {
                 let p = path(&s(&a, 0));
-                V::Str(std::path::Path::new(&p).parent().map(|x| x.to_string_lossy().into_owned()).unwrap_or_else(|| ".".into()).into_bytes())
+                V::Str(
+                    std::path::Path::new(&p)
+                        .parent()
+                        .map(|x| x.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| ".".into())
+                        .into_bytes(),
+                )
             }
             "basename" => {
                 let p = path(&s(&a, 0));
-                V::Str(std::path::Path::new(&p).file_name().map(|x| x.to_string_lossy().into_owned()).unwrap_or_default().into_bytes())
+                V::Str(
+                    std::path::Path::new(&p)
+                        .file_name()
+                        .map(|x| x.to_string_lossy().into_owned())
+                        .unwrap_or_default()
+                        .into_bytes(),
+                )
             }
             "realpath" => match std::fs::canonicalize(self.resolve_path(&s(&a, 0))) {
                 Ok(p) => V::Str(p.to_string_lossy().into_owned().into_bytes()),
                 Err(_) => V::Bool(false),
             },
             "sys_get_temp_dir" => V::str("/tmp"),
-            "getenv" => std::env::var(path(&s(&a, 0))).map_or(V::Bool(false), |v| V::Str(v.into_bytes())),
-            "getcwd" => V::Str(std::env::current_dir().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default().into_bytes()),
+            "getenv" => {
+                std::env::var(path(&s(&a, 0))).map_or(V::Bool(false), |v| V::Str(v.into_bytes()))
+            }
+            "getcwd" => V::Str(
+                std::env::current_dir()
+                    .map(|p| p.to_string_lossy().into_owned())
+                    .unwrap_or_default()
+                    .into_bytes(),
+            ),
             "tempnam" => V::Str(format!("/tmp/phpdomtest{}", std::process::id()).into_bytes()),
             "json_encode" => V::Str(json_encode(&arg(&a, 0))),
             "libxml_use_internal_errors" => {
@@ -506,7 +593,9 @@ impl Interp {
                 php_libxml::error::clear_errors();
                 V::Null
             }
-            "libxml_disable_entity_loader" => V::Bool(php_libxml::io::disable_entity_loader(arg(&a, 0).truthy())),
+            "libxml_disable_entity_loader" => {
+                V::Bool(php_libxml::io::disable_entity_loader(arg(&a, 0).truthy()))
+            }
             "libxml_set_external_entity_loader" => V::Bool(true),
             "iterator_to_array" => {
                 let mut arr = Arr::default();
@@ -563,14 +652,18 @@ impl Interp {
                     [V::Arr(x)] => x.items.iter().map(|(_, v)| v.clone()).collect(),
                     _ => a.clone(),
                 };
-                vals.into_iter().reduce(|x, y| if compare(&y, &x) > 0 { y } else { x }).unwrap_or(V::Bool(false))
+                vals.into_iter()
+                    .reduce(|x, y| if compare(&y, &x) > 0 { y } else { x })
+                    .unwrap_or(V::Bool(false))
             }
             "min" => {
                 let vals: Vec<V> = match &a[..] {
                     [V::Arr(x)] => x.items.iter().map(|(_, v)| v.clone()).collect(),
                     _ => a.clone(),
                 };
-                vals.into_iter().reduce(|x, y| if compare(&y, &x) < 0 { y } else { x }).unwrap_or(V::Bool(false))
+                vals.into_iter()
+                    .reduce(|x, y| if compare(&y, &x) < 0 { y } else { x })
+                    .unwrap_or(V::Bool(false))
             }
             "abs" => match to_num(&arg(&a, 0)) {
                 V::Int(i) => V::Int(i.abs()),
@@ -595,10 +688,23 @@ impl Interp {
             "dom_import_simplexml" | "simplexml_import_dom" | "simplexml_load_string" => {
                 return Err(self.unsupported("simplexml"));
             }
-            "stream_wrapper_register" | "stream_context_create" | "fopen" | "fsockopen" | "stream_socket_server" => {
+            "stream_wrapper_register"
+            | "stream_context_create"
+            | "fopen"
+            | "fsockopen"
+            | "stream_socket_server" => {
                 return Err(self.unsupported("streams"));
             }
-            "preg_replace" | "preg_match" | "preg_split" | "preg_quote" | "iconv" | "mb_convert_encoding" | "serialize" | "unserialize" | "json_decode" | "array_walk" => {
+            "preg_replace"
+            | "preg_match"
+            | "preg_split"
+            | "preg_quote"
+            | "iconv"
+            | "mb_convert_encoding"
+            | "serialize"
+            | "unserialize"
+            | "json_decode"
+            | "array_walk" => {
                 return Err(self.unsupported(lname));
             }
             "debug_zval_refcount" | "debug_zval_dump" => return Err(self.unsupported(lname)),
@@ -612,7 +718,33 @@ impl Interp {
             "clone" => self.clone_value(&arg(&a, 0))?,
             "get_defined_constants" => {
                 let mut lib = Arr::default();
-                for n in ["LIBXML_NOENT", "LIBXML_DTDLOAD", "LIBXML_DTDATTR", "LIBXML_DTDVALID", "LIBXML_NOERROR", "LIBXML_NOWARNING", "LIBXML_NOBLANKS", "LIBXML_XINCLUDE", "LIBXML_NSCLEAN", "LIBXML_NOCDATA", "LIBXML_NONET", "LIBXML_PEDANTIC", "LIBXML_COMPACT", "LIBXML_NOXMLDECL", "LIBXML_PARSEHUGE", "LIBXML_BIGLINES", "LIBXML_NOEMPTYTAG", "LIBXML_SCHEMA_CREATE", "LIBXML_HTML_NOIMPLIED", "LIBXML_HTML_NODEFDTD", "LIBXML_ERR_NONE", "LIBXML_ERR_WARNING", "LIBXML_ERR_ERROR", "LIBXML_ERR_FATAL", "LIBXML_RECOVER"] {
+                for n in [
+                    "LIBXML_NOENT",
+                    "LIBXML_DTDLOAD",
+                    "LIBXML_DTDATTR",
+                    "LIBXML_DTDVALID",
+                    "LIBXML_NOERROR",
+                    "LIBXML_NOWARNING",
+                    "LIBXML_NOBLANKS",
+                    "LIBXML_XINCLUDE",
+                    "LIBXML_NSCLEAN",
+                    "LIBXML_NOCDATA",
+                    "LIBXML_NONET",
+                    "LIBXML_PEDANTIC",
+                    "LIBXML_COMPACT",
+                    "LIBXML_NOXMLDECL",
+                    "LIBXML_PARSEHUGE",
+                    "LIBXML_BIGLINES",
+                    "LIBXML_NOEMPTYTAG",
+                    "LIBXML_SCHEMA_CREATE",
+                    "LIBXML_HTML_NOIMPLIED",
+                    "LIBXML_HTML_NODEFDTD",
+                    "LIBXML_ERR_NONE",
+                    "LIBXML_ERR_WARNING",
+                    "LIBXML_ERR_ERROR",
+                    "LIBXML_ERR_FATAL",
+                    "LIBXML_RECOVER",
+                ] {
                     if let Ok(v) = self.const_by_name(n) {
                         lib.set(Key::Str(n.as_bytes().to_vec()), v);
                     }
@@ -625,10 +757,13 @@ impl Interp {
                 let mut arr = Arr::default();
                 if let V::Arr(x) = arg(&a, 0) {
                     for (k, v) in &x.items {
-                        arr.set(to_key(v), match k {
-                            Key::Int(i) => V::Int(*i),
-                            Key::Str(s) => V::Str(s.clone()),
-                        });
+                        arr.set(
+                            to_key(v),
+                            match k {
+                                Key::Int(i) => V::Int(*i),
+                                Key::Str(s) => V::Str(s.clone()),
+                            },
+                        );
                     }
                 }
                 V::arr(arr)
@@ -650,7 +785,9 @@ impl Interp {
                     for (_, v) in &x.items {
                         t = match (to_num(&t), to_num(v)) {
                             (V::Int(p), V::Int(q)) => V::Int(p + q),
-                            (p, q) => V::Float(super::interp::to_f_pub(&p) + super::interp::to_f_pub(&q)),
+                            (p, q) => {
+                                V::Float(super::interp::to_f_pub(&p) + super::interp::to_f_pub(&q))
+                            }
                         };
                     }
                 }
@@ -671,7 +808,12 @@ impl Interp {
                 _ => V::Null,
             },
             "array_pop" | "array_shift" => match arg(&a, 0) {
-                V::Arr(x) => (if lname == "array_pop" { x.items.last() } else { x.items.first() }).map_or(V::Null, |(_, v)| v.clone()),
+                V::Arr(x) => (if lname == "array_pop" {
+                    x.items.last()
+                } else {
+                    x.items.first()
+                })
+                .map_or(V::Null, |(_, v)| v.clone()),
                 _ => V::Null,
             },
             "chdir" => V::Bool(std::env::set_current_dir(self.resolve_path_pub(&s(&a, 0))).is_ok()),
@@ -686,12 +828,20 @@ impl Interp {
             }
             "ob_end_flush" | "ob_flush" | "flush" => V::Bool(true),
             "array_is_list" => V::Bool(match arg(&a, 0) {
-                V::Arr(x) => x.items.iter().enumerate().all(|(i, (k, _))| *k == Key::Int(i as i64)),
+                V::Arr(x) => x
+                    .items
+                    .iter()
+                    .enumerate()
+                    .all(|(i, (k, _))| *k == Key::Int(i as i64)),
                 _ => false,
             }),
             "str_contains_any" => V::Null,
             _ => {
-                return Err(Flow::Throw(self.make_exception("Error", format!("Call to undefined function {name}()").as_bytes(), 0)));
+                return Err(Flow::Throw(self.make_exception(
+                    "Error",
+                    format!("Call to undefined function {name}()").as_bytes(),
+                    0,
+                )));
             }
         })
     }
@@ -705,7 +855,13 @@ impl Interp {
         if s.starts_with('/') || s.contains("://") {
             s
         } else {
-            format!("{}/{}", std::env::current_dir().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default(), s)
+            format!(
+                "{}/{}",
+                std::env::current_dir()
+                    .map(|p| p.to_string_lossy().into_owned())
+                    .unwrap_or_default(),
+                s
+            )
         }
     }
 
@@ -811,7 +967,13 @@ fn replace_bytes(h: &[u8], n: &[u8], r: &[u8]) -> Vec<u8> {
 fn json_encode(v: &V) -> Vec<u8> {
     match v {
         V::Null => b"null".to_vec(),
-        V::Bool(b) => if *b { b"true".to_vec() } else { b"false".to_vec() },
+        V::Bool(b) => {
+            if *b {
+                b"true".to_vec()
+            } else {
+                b"false".to_vec()
+            }
+        }
         V::Int(i) => i.to_string().into_bytes(),
         V::Float(f) => super::output::float_repr(*f).into_bytes(),
         V::Str(s) => {
@@ -829,7 +991,11 @@ fn json_encode(v: &V) -> Vec<u8> {
             o
         }
         V::Arr(a) => {
-            let is_list = a.items.iter().enumerate().all(|(i, (k, _))| *k == Key::Int(i as i64));
+            let is_list = a
+                .items
+                .iter()
+                .enumerate()
+                .all(|(i, (k, _))| *k == Key::Int(i as i64));
             let mut o = Vec::new();
             o.push(if is_list { b'[' } else { b'{' });
             for (i, (k, v)) in a.items.iter().enumerate() {

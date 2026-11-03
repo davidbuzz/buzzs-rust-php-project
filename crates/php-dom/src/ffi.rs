@@ -23,7 +23,7 @@ pub use php_libxml::ffi::{
     XML_DOCUMENT_NODE, XML_DOCUMENT_TYPE_NODE, XML_DTD_NODE, XML_ELEMENT_DECL, XML_ELEMENT_NODE,
     XML_ENTITY_DECL, XML_ENTITY_NODE, XML_ENTITY_REF_NODE, XML_HTML_DOCUMENT_NODE,
     XML_INTERNAL_PREDEFINED_ENTITY, XML_LOCAL_NAMESPACE, XML_NAMESPACE_DECL, XML_NOTATION_NODE,
-    XML_PI_NODE, XML_TEXT_NODE, XML_XINCLUDE_END, XML_XINCLUDE_START,
+    XML_PI_NODE, XML_TEXT_NODE,
 };
 
 /// Opaque hash table.
@@ -56,9 +56,8 @@ pub struct xmlXPathObject {
 }
 
 pub type xmlXPathFunction = Option<unsafe extern "C" fn(*mut xmlXPathParserContext, c_int)>;
-pub type xmlXPathFuncLookupFunc = Option<
-    unsafe extern "C" fn(*mut c_void, *const xmlChar, *const xmlChar) -> xmlXPathFunction,
->;
+pub type xmlXPathFuncLookupFunc =
+    Option<unsafe extern "C" fn(*mut c_void, *const xmlChar, *const xmlChar) -> xmlXPathFunction>;
 
 /// `xmlXPathContext` (only the fields we touch are typed precisely).
 #[repr(C)]
@@ -270,7 +269,7 @@ pub const XML_EXTERNAL_PARAMETER_ENTITY: c_int = 5;
 pub use php_libxml::ffi::{
     XML_PARSE_DTDATTR, XML_PARSE_DTDLOAD, XML_PARSE_DTDVALID, XML_PARSE_HUGE, XML_PARSE_NOBLANKS,
     XML_PARSE_NOCDATA, XML_PARSE_NOENT, XML_PARSE_NOERROR, XML_PARSE_NONET, XML_PARSE_NOWARNING,
-    XML_PARSE_NOXINCNODE, XML_PARSE_NSCLEAN, XML_PARSE_RECOVER, XML_PARSE_XINCLUDE,
+    XML_PARSE_NOXINCNODE, XML_PARSE_NSCLEAN, XML_PARSE_RECOVER,
 };
 pub const XML_PARSE_BIG_LINES: c_int = 1 << 22;
 pub const XML_PARSE_COMPACT: c_int = 1 << 16;
@@ -386,8 +385,11 @@ extern "C" {
         name: *const xmlChar,
         value: *const xmlChar,
     ) -> *mut xmlAttr;
-    pub fn xmlNewProp(node: *mut xmlNode, name: *const xmlChar, value: *const xmlChar)
-        -> *mut xmlAttr;
+    pub fn xmlNewProp(
+        node: *mut xmlNode,
+        name: *const xmlChar,
+        value: *const xmlChar,
+    ) -> *mut xmlAttr;
     pub fn xmlNewNsProp(
         node: *mut xmlNode,
         ns: *mut xmlNs,
@@ -414,8 +416,11 @@ extern "C" {
     pub fn xmlFreeNs(ns: *mut xmlNs);
     pub fn xmlFreeNsList(ns: *mut xmlNs);
     pub fn xmlSearchNs(doc: *mut xmlDoc, node: *mut xmlNode, prefix: *const xmlChar) -> *mut xmlNs;
-    pub fn xmlSearchNsByHref(doc: *mut xmlDoc, node: *mut xmlNode, href: *const xmlChar)
-        -> *mut xmlNs;
+    pub fn xmlSearchNsByHref(
+        doc: *mut xmlDoc,
+        node: *mut xmlNode,
+        href: *const xmlChar,
+    ) -> *mut xmlNs;
     pub fn xmlGetNsList(doc: *const xmlDoc, node: *const xmlNode) -> *mut *mut xmlNs;
     pub fn xmlSetNs(node: *mut xmlNode, ns: *mut xmlNs);
     pub fn xmlReconciliateNs(doc: *mut xmlDoc, tree: *mut xmlNode) -> c_int;
@@ -445,22 +450,34 @@ extern "C" {
     pub fn xmlNodeSetContentLen(node: *mut xmlNode, content: *const xmlChar, len: c_int);
     pub fn xmlNodeAddContent(node: *mut xmlNode, content: *const xmlChar);
     pub fn xmlNodeAddContentLen(node: *mut xmlNode, content: *const xmlChar, len: c_int);
-    pub fn xmlNodeListGetString(doc: *mut xmlDoc, list: *const xmlNode, inline: c_int)
-        -> *mut xmlChar;
+    pub fn xmlNodeListGetString(
+        doc: *mut xmlDoc,
+        list: *const xmlNode,
+        inline: c_int,
+    ) -> *mut xmlChar;
     pub fn xmlStringGetNodeList(doc: *const xmlDoc, value: *const xmlChar) -> *mut xmlNode;
     pub fn xmlNodeGetBase(doc: *const xmlDoc, node: *const xmlNode) -> *mut xmlChar;
     pub fn xmlGetNodePath(node: *const xmlNode) -> *mut xmlChar;
     pub fn xmlGetLineNo(node: *const xmlNode) -> c_long;
     pub fn xmlIsBlankNode(node: *const xmlNode) -> c_int;
     pub fn xmlHasProp(node: *const xmlNode, name: *const xmlChar) -> *mut xmlAttr;
-    pub fn xmlHasNsProp(node: *const xmlNode, name: *const xmlChar, ns: *const xmlChar)
-        -> *mut xmlAttr;
+    pub fn xmlHasNsProp(
+        node: *const xmlNode,
+        name: *const xmlChar,
+        ns: *const xmlChar,
+    ) -> *mut xmlAttr;
     pub fn xmlGetProp(node: *const xmlNode, name: *const xmlChar) -> *mut xmlChar;
-    pub fn xmlGetNsProp(node: *const xmlNode, name: *const xmlChar, ns: *const xmlChar)
-        -> *mut xmlChar;
+    pub fn xmlGetNsProp(
+        node: *const xmlNode,
+        name: *const xmlChar,
+        ns: *const xmlChar,
+    ) -> *mut xmlChar;
     pub fn xmlGetNoNsProp(node: *const xmlNode, name: *const xmlChar) -> *mut xmlChar;
-    pub fn xmlSetProp(node: *mut xmlNode, name: *const xmlChar, value: *const xmlChar)
-        -> *mut xmlAttr;
+    pub fn xmlSetProp(
+        node: *mut xmlNode,
+        name: *const xmlChar,
+        value: *const xmlChar,
+    ) -> *mut xmlAttr;
     pub fn xmlSetNsProp(
         node: *mut xmlNode,
         ns: *mut xmlNs,
@@ -537,8 +554,10 @@ extern "C" {
 
     // HTML
     pub fn htmlCreateMemoryParserCtxt(buffer: *const c_char, size: c_int) -> *mut xmlParserCtxt;
-    pub fn htmlCreateFileParserCtxt(filename: *const c_char, encoding: *const c_char)
-        -> *mut xmlParserCtxt;
+    pub fn htmlCreateFileParserCtxt(
+        filename: *const c_char,
+        encoding: *const c_char,
+    ) -> *mut xmlParserCtxt;
     pub fn htmlCtxtUseOptions(ctxt: *mut xmlParserCtxt, options: c_int) -> c_int;
     pub fn htmlParseDocument(ctxt: *mut xmlParserCtxt) -> c_int;
     pub fn htmlFreeParserCtxt(ctxt: *mut xmlParserCtxt);
@@ -673,8 +692,10 @@ extern "C" {
         data: *mut c_void,
     );
     pub fn xmlXPathEval(expr: *const xmlChar, ctxt: *mut xmlXPathContext) -> *mut xmlXPathObject;
-    pub fn xmlXPathEvalExpression(expr: *const xmlChar, ctxt: *mut xmlXPathContext)
-        -> *mut xmlXPathObject;
+    pub fn xmlXPathEvalExpression(
+        expr: *const xmlChar,
+        ctxt: *mut xmlXPathContext,
+    ) -> *mut xmlXPathObject;
     pub fn xmlXPathFreeObject(obj: *mut xmlXPathObject);
     pub fn xmlXPathFreeNodeSet(obj: *mut xmlNodeSet);
     pub fn xmlXPathNodeSetCreate(val: *mut xmlNode) -> *mut xmlNodeSet;
@@ -697,8 +718,10 @@ extern "C" {
     pub fn xmlFreeValidCtxt(ctxt: *mut xmlValidCtxt);
     pub fn xmlValidateDocument(ctxt: *mut xmlValidCtxt, doc: *mut xmlDoc) -> c_int;
     pub fn xmlSchemaNewParserCtxt(url: *const c_char) -> *mut xmlSchemaParserCtxt;
-    pub fn xmlSchemaNewMemParserCtxt(buffer: *const c_char, size: c_int)
-        -> *mut xmlSchemaParserCtxt;
+    pub fn xmlSchemaNewMemParserCtxt(
+        buffer: *const c_char,
+        size: c_int,
+    ) -> *mut xmlSchemaParserCtxt;
     pub fn xmlSchemaParse(ctxt: *mut xmlSchemaParserCtxt) -> *mut xmlSchema;
     pub fn xmlSchemaFreeParserCtxt(ctxt: *mut xmlSchemaParserCtxt);
     pub fn xmlSchemaFree(schema: *mut xmlSchema);
@@ -707,8 +730,10 @@ extern "C" {
     pub fn xmlSchemaSetValidOptions(ctxt: *mut xmlSchemaValidCtxt, options: c_int) -> c_int;
     pub fn xmlSchemaValidateDoc(ctxt: *mut xmlSchemaValidCtxt, doc: *mut xmlDoc) -> c_int;
     pub fn xmlRelaxNGNewParserCtxt(url: *const c_char) -> *mut xmlRelaxNGParserCtxt;
-    pub fn xmlRelaxNGNewMemParserCtxt(buffer: *const c_char, size: c_int)
-        -> *mut xmlRelaxNGParserCtxt;
+    pub fn xmlRelaxNGNewMemParserCtxt(
+        buffer: *const c_char,
+        size: c_int,
+    ) -> *mut xmlRelaxNGParserCtxt;
     pub fn xmlRelaxNGParse(ctxt: *mut xmlRelaxNGParserCtxt) -> *mut xmlRelaxNG;
     pub fn xmlRelaxNGFreeParserCtxt(ctxt: *mut xmlRelaxNGParserCtxt);
     pub fn xmlRelaxNGFree(schema: *mut xmlRelaxNG);

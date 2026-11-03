@@ -8,7 +8,7 @@ use crate::object::Node;
 /// An opaque, already-validated PHP callable owned by the embedder.
 pub type HostCallable = Rc<dyn std::any::Any>;
 
-/// An argument passed to an XPath PHP function.
+/// An argument passed to an `XPath` PHP function.
 #[derive(Debug, Clone)]
 pub enum XPathArg {
     /// `string`.
@@ -21,7 +21,7 @@ pub enum XPathArg {
     Nodes(Vec<Node>),
 }
 
-/// The value returned by an XPath PHP function.
+/// The value returned by an `XPath` PHP function.
 #[derive(Debug, Clone)]
 pub enum XPathReturn {
     /// No value (the call produced nothing, e.g. after an exception).
@@ -91,7 +91,7 @@ pub trait DomHost {
         Ok(Rc::new(name.to_vec()))
     }
 
-    /// Calls a registered callable with XPath arguments.
+    /// Calls a registered callable with `XPath` arguments.
     fn call(&self, callable: &HostCallable, args: Vec<XPathArg>) -> Result<XPathReturn, DomError>;
 
     /// Calls a PHP function by name (`registerPhpFunctions()` without a
@@ -110,7 +110,10 @@ pub trait DomHost {
     /// default opens plain files.
     fn open_read_stream(&self, path: &[u8]) -> Result<Option<HostStream>, DomError> {
         let p = std::path::PathBuf::from(String::from_utf8_lossy(path).into_owned());
-        let p = p.strip_prefix("file://").map(std::path::Path::to_path_buf).unwrap_or(p);
+        let p = p
+            .strip_prefix("file://")
+            .map(std::path::Path::to_path_buf)
+            .unwrap_or(p);
         match std::fs::File::open(&p) {
             Ok(f) => {
                 let abs = std::fs::canonicalize(&p).unwrap_or(p);
@@ -149,7 +152,11 @@ impl DomHost for NoHost {
         class.eq_ignore_ascii_case(base)
     }
 
-    fn call(&self, _callable: &HostCallable, _args: Vec<XPathArg>) -> Result<XPathReturn, DomError> {
+    fn call(
+        &self,
+        _callable: &HostCallable,
+        _args: Vec<XPathArg>,
+    ) -> Result<XPathReturn, DomError> {
         Ok(XPathReturn::Undef)
     }
 

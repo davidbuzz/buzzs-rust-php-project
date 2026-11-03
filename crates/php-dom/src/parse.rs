@@ -59,6 +59,7 @@ impl ErrorScope {
     }
 
     /// Declares the parser context created inside this scope.
+    #[allow(clippy::unused_self)]
     pub(crate) fn set_ctxt(&self, ctxt: *mut ffi::xmlParserCtxt) {
         SCOPES.with(|s| {
             if let Some(top) = s.borrow_mut().last_mut() {
@@ -68,6 +69,7 @@ impl ErrorScope {
     }
 
     /// From now on errors of the owned context use the DOM context channels.
+    #[allow(clippy::unused_self)]
     pub(crate) fn install_ctx_handlers(&self) {
         SCOPES.with(|s| {
             if let Some(top) = s.borrow_mut().last_mut() {
@@ -96,7 +98,7 @@ fn is_parser_domain(domain: i32) -> bool {
 
 fn domain_label(domain: i32) -> &'static str {
     match domain {
-        1 => "parser ",
+        1 | 13 => "parser ",
         2 => "tree ",
         3 => "namespace ",
         4 | 23 => "validity ",
@@ -106,7 +108,6 @@ fn domain_label(domain: i32) -> &'static str {
         8 => "I/O ",
         11 => "XInclude ",
         12 => "XPath ",
-        13 => "parser ",
         14 => "regexp ",
         15 => "Schemas datatype ",
         16 => "Schemas parser ",
@@ -172,7 +173,9 @@ fn report_error_format(e: &ffi::xmlError, ctxt: *mut ffi::xmlParserCtxt) -> Vec<
         let input = unsafe {
             let mut input = (*ctxt).input;
             if !input.is_null() && (*input).filename.is_null() && (*ctxt).inputNr > 1 {
-                input = *(*ctxt).inputTab.add(usize::try_from((*ctxt).inputNr - 2).unwrap_or(0));
+                input = *(*ctxt)
+                    .inputTab
+                    .add(usize::try_from((*ctxt).inputNr - 2).unwrap_or(0));
             }
             input
         };
@@ -195,7 +198,9 @@ fn report_error_head(e: &ffi::xmlError, ctxt: *mut ffi::xmlParserCtxt) -> Vec<u8
         } else {
             let mut input = (*ctxt).input;
             if !input.is_null() && (*input).filename.is_null() && (*ctxt).inputNr > 1 {
-                input = *(*ctxt).inputTab.add(usize::try_from((*ctxt).inputNr - 2).unwrap_or(0));
+                input = *(*ctxt)
+                    .inputTab
+                    .add(usize::try_from((*ctxt).inputNr - 2).unwrap_or(0));
             }
             if !input.is_null() {
                 if !(*input).filename.is_null() {
@@ -219,8 +224,7 @@ fn report_error_head(e: &ffi::xmlError, ctxt: *mut ffi::xmlParserCtxt) -> Vec<u8
         2 | 3 => b"error : ",
         _ => b": ",
     });
-    // SAFETY: message is NULL or a valid C string.
-    let msg = unsafe { opt_cstr(e.message.cast()) }.unwrap_or(b"out of memory error");
+    let msg = opt_cstr(e.message.cast()).unwrap_or(b"out of memory error");
     let mut msg = msg.to_vec();
     while msg.last() == Some(&b'\n') {
         msg.pop();
@@ -309,13 +313,17 @@ unsafe fn trampoline_inner(err: *mut ffi::xmlError) {
         // SAFETY: ctxt is the live context owned by the scope.
         let silenced = unsafe {
             let sax = (*ctxt).sax;
-            !sax.is_null() && if e.level == 1 { (*sax).warning.is_none() } else { (*sax).error.is_none() }
+            !sax.is_null()
+                && if e.level == 1 {
+                    (*sax).warning.is_none()
+                } else {
+                    (*sax).error.is_none()
+                }
         };
         if silenced {
             return;
         }
-        // SAFETY: message is NULL or a valid C string.
-        let msg = unsafe { opt_cstr(e.message.cast()) }.unwrap_or_default().to_vec();
+        let msg = opt_cstr(e.message.cast()).unwrap_or_default().to_vec();
         let pos = parser_position(ctxt);
         if e.level == 1 {
             lxerr::ctx_warning(pos.as_ref(), &msg);
@@ -325,14 +333,23 @@ unsafe fn trampoline_inner(err: *mut ffi::xmlError) {
         return;
     }
     if from_parser_ctxt {
-        let c: *mut ffi::xmlParserCtxt = if e.ctxt.cast() == ctxt { ctxt } else { e.ctxt.cast() };
+        let c: *mut ffi::xmlParserCtxt = if e.ctxt.cast() == ctxt {
+            ctxt
+        } else {
+            e.ctxt.cast()
+        };
         // A context whose SAX error channel was cleared (LIBXML_NOERROR /
         // LIBXML_NOWARNING) reports nothing.
         // SAFETY: e.ctxt is the live parser context raising the error.
         let silenced = !matches!(e.domain, 4 | 23)
             && unsafe {
                 let sax = (*c).sax;
-                !sax.is_null() && if e.level == 1 { (*sax).warning.is_none() } else { (*sax).error.is_none() }
+                !sax.is_null()
+                    && if e.level == 1 {
+                        (*sax).warning.is_none()
+                    } else {
+                        (*sax).error.is_none()
+                    }
             };
         if silenced {
             return;
@@ -372,6 +389,7 @@ fn sanitize_ctxt(ctxt: *mut ffi::xmlParserCtxt) {
 
 /// Parse settings derived from the document properties.
 #[derive(Debug, Clone, Copy, Default)]
+#[allow(clippy::struct_excessive_bools)]
 pub(crate) struct ParseFlags {
     pub validate: bool,
     pub resolve_externals: bool,
@@ -400,7 +418,7 @@ pub(crate) fn valid_file_path(source: &[u8]) -> Option<Vec<u8>> {
         if uri.is_null() {
             return None;
         }
-        let esc = ffi::xmlURIEscapeStr(c.as_ptr().cast(), b":\0".as_ptr());
+        let esc = ffi::xmlURIEscapeStr(c.as_ptr().cast(), c":".as_ptr().cast());
         ffi::xmlParseURIReference(uri, esc.cast());
         crate::raw::xml_free(esc.cast());
         let scheme = (*uri.cast::<php_libxml::ffi::xmlURI>()).scheme;
@@ -488,7 +506,9 @@ pub(crate) fn document_parser(
         unsafe { ffi::xmlCreateFileParserCtxt(c.as_ptr()) }
     } else {
         // SAFETY: source valid for its length.
-        unsafe { ffi::xmlCreateMemoryParserCtxt(source.as_ptr().cast(), crate::raw::c_len(source.len())) }
+        unsafe {
+            ffi::xmlCreateMemoryParserCtxt(source.as_ptr().cast(), crate::raw::c_len(source.len()))
+        }
     };
     if ctxt.is_null() {
         return ParseOutcome::Failed;
@@ -573,7 +593,9 @@ pub(crate) fn load_html(from_file: bool, source: &[u8], options: i32) -> *mut ff
         unsafe { ffi::htmlCreateFileParserCtxt(c.as_ptr(), ptr::null()) }
     } else {
         // SAFETY: source valid for its length.
-        unsafe { ffi::htmlCreateMemoryParserCtxt(source.as_ptr().cast(), crate::raw::c_len(source.len())) }
+        unsafe {
+            ffi::htmlCreateMemoryParserCtxt(source.as_ptr().cast(), crate::raw::c_len(source.len()))
+        }
     };
     if ctxt.is_null() {
         return ptr::null_mut();

@@ -90,16 +90,15 @@ impl N {
         field!(self.type_)
     }
     #[inline]
-    pub fn is(self, t: c_int) -> bool {
-        self.t() == t
-    }
-    #[inline]
     pub fn is_element(self) -> bool {
         self.t() == ffi::XML_ELEMENT_NODE
     }
     #[inline]
     pub fn is_doc(self) -> bool {
-        matches!(self.t(), ffi::XML_DOCUMENT_NODE | ffi::XML_HTML_DOCUMENT_NODE)
+        matches!(
+            self.t(),
+            ffi::XML_DOCUMENT_NODE | ffi::XML_HTML_DOCUMENT_NODE
+        )
     }
     #[inline]
     pub fn is_text_like(self) -> bool {
@@ -168,10 +167,6 @@ impl N {
     #[inline]
     pub fn private(self) -> *mut c_void {
         field!(self._private)
-    }
-    #[inline]
-    pub fn line(self) -> u16 {
-        field!(self.line)
     }
 
     // ---- setters (raw link manipulation, mirrors the C code) ----

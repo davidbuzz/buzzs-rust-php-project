@@ -58,6 +58,7 @@ pub enum Handlers {
 
 /// `libxml_doc_props`.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct DocProps {
     /// `formatOutput`.
     pub format_output: bool,
@@ -147,11 +148,6 @@ impl DocInner {
         DOCS.with(|d| d.borrow().get(&(doc as usize)).and_then(Weak::upgrade))
     }
 
-    /// The owned document.
-    pub(crate) fn doc_ptr(&self) -> *mut ffi::xmlDoc {
-        self.ptr
-    }
-
     /// The document as a node.
     pub(crate) fn n(&self) -> N {
         N::from_doc(self.ptr).expect("document pointer is never NULL")
@@ -217,8 +213,7 @@ impl Drop for DocInner {
     fn drop(&mut self) {
         DOCS.with(|d| {
             let mut d = d.borrow_mut();
-            if d
-                .get(&(self.ptr as usize))
+            if d.get(&(self.ptr as usize))
                 .is_some_and(|w| w.strong_count() == 0)
             {
                 d.remove(&(self.ptr as usize));
@@ -246,6 +241,9 @@ pub(crate) struct NodeExtra {
     pub class_list: Option<crate::tokenlist::TokenList>,
     pub children: Option<crate::lists::NodeList>,
     pub implementation: Option<crate::implementation::Implementation>,
+    /// Objects kept alive for as long as the handle exists (see
+    /// [`Node::attach_keepalive`]); dropped after the node is released.
+    pub keepalive: Vec<Rc<dyn Any>>,
 }
 
 /// The payload of a PHP DOM node object.
@@ -262,6 +260,16 @@ pub struct NodeInner {
     pub(crate) ns_parent: RefCell<Option<Node>>,
     pub(crate) extra: RefCell<NodeExtra>,
     host: RefCell<Option<Box<dyn Any>>>,
+}
+
+impl std::fmt::Debug for NodeInner {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("NodeInner")
+            .field("ptr", &self.ptr.get())
+            .field("class", &self.class.borrow())
+            .field("modern", &self.modern.get())
+            .finish_non_exhaustive()
+    }
 }
 
 /// A handle to a DOM node object (cheap to clone; clones are the same
@@ -351,7 +359,10 @@ impl Node {
     ///
     /// `builtin` is the built-in DOM class the object's class derives from
     /// (e.g. `"DOMElement"` for `class Foo extends DOMElement`).
-    pub fn new_unbound(class: impl Into<std::borrow::Cow<'static, str>>, builtin: &'static str) -> Node {
+    pub fn new_unbound(
+        class: impl Into<std::borrow::Cow<'static, str>>,
+        builtin: &'static str,
+    ) -> Node {
         let modern = builtin.starts_with("Dom\\");
         Node(Rc::new(NodeInner {
             ptr: Cell::new(ptr::null_mut()),
@@ -428,11 +439,7 @@ impl Node {
 
     /// `php_dom_follow_spec_intern`.
     pub(crate) fn is_modern(&self) -> bool {
-        self.0
-            .doc
-            .borrow()
-            .as_ref()
-            .is_some_and(|d| d.is_modern())
+        self.0.doc.borrow().as_ref().is_some_and(|d| d.is_modern())
     }
 
     /// Whether two handles refer to the same object.
@@ -527,7 +534,11 @@ impl Drop for NodeInner {
 pub(crate) const NS_TAG_HOOK: usize = 1;
 
 /// `php_libxml_set_old_ns_list`.
-pub(crate) fn set_old_ns_list(doc: *mut ffi::xmlDoc, first: *mut ffi::xmlNs, last: *mut ffi::xmlNs) {
+pub(crate) fn set_old_ns_list(
+    doc: *mut ffi::xmlDoc,
+    first: *mut ffi::xmlNs,
+    last: *mut ffi::xmlNs,
+) {
     if doc.is_null() {
         return;
     }
@@ -679,18 +690,10 @@ pub(crate) fn node_free(n: N) {
                 let dtd = n.dtd();
                 if dtd._private.is_null() {
                     if !dtd.entities.is_null() {
-                        ffi::xmlHashScan(
-                            dtd.entities,
-                            Some(unlink_entity_scanner),
-                            dtd.entities,
-                        );
+                        ffi::xmlHashScan(dtd.entities, Some(unlink_entity_scanner), dtd.entities);
                     }
                     if !dtd.pentities.is_null() {
-                        ffi::xmlHashScan(
-                            dtd.pentities,
-                            Some(unlink_entity_scanner),
-                            dtd.pentities,
-                        );
+                        ffi::xmlHashScan(dtd.pentities, Some(unlink_entity_scanner), dtd.pentities);
                     }
                 }
                 ffi::xmlFreeDtd(n.as_dtd());

@@ -12,7 +12,7 @@ use crate::ffi;
 use crate::host::{DomHost, HostCallable, XPathArg, XPathReturn};
 use crate::lists::{new_list, MapKind, NodeList};
 use crate::object::{DocRef, Node};
-use crate::raw::{cs, opt_cstr, N, Ns};
+use crate::raw::{cs, opt_cstr, Ns, N};
 use crate::value::DomValue;
 
 /// `php_dom_create_fake_namespace_decl`.
@@ -21,17 +21,31 @@ pub(crate) fn create_fake_namespace_decl(parent: N, original: Ns, parent_obj: &N
     Node::wrap_namespace(n, Some(parent_obj.clone()))
 }
 
-fn fake_ns_node_ptr(parent: Option<N>, original: Ns, fallback_doc: *mut ffi::xmlDoc) -> N {
+pub(crate) fn fake_ns_node_ptr(
+    parent: Option<N>,
+    original: Ns,
+    fallback_doc: *mut ffi::xmlDoc,
+) -> N {
     let doc = parent.map_or(fallback_doc, N::doc_ptr);
     // SAFETY: fresh allocations; the node is owned by its handle and freed
     // through node_free (XML_NAMESPACE_DECL branch).
     unsafe {
         let curns = ffi::xmlNewNs(ptr::null_mut(), original.href_ptr(), ptr::null());
         let attrp = if original.prefix_ptr().is_null() {
-            ffi::xmlNewDocNode(doc, ptr::null_mut(), b"xmlns\0".as_ptr(), original.href_ptr())
+            ffi::xmlNewDocNode(
+                doc,
+                ptr::null_mut(),
+                c"xmlns".as_ptr().cast(),
+                original.href_ptr(),
+            )
         } else {
             (*curns).prefix = ffi::xmlStrdup(original.prefix_ptr());
-            ffi::xmlNewDocNode(doc, ptr::null_mut(), original.prefix_ptr(), original.href_ptr())
+            ffi::xmlNewDocNode(
+                doc,
+                ptr::null_mut(),
+                original.prefix_ptr(),
+                original.href_ptr(),
+            )
         };
         let n = N::new(attrp).expect("allocation");
         n.set_type(ffi::XML_NAMESPACE_DECL);
@@ -88,12 +102,11 @@ impl Callbacks {
         match ns {
             None => self.php_ns.get_or_insert_with(CallbackNs::default),
             Some(n) => {
-                let pos = match self.namespaces.iter().position(|(k, _)| k == n) {
-                    Some(p) => p,
-                    None => {
-                        self.namespaces.push((n.to_vec(), CallbackNs::default()));
-                        self.namespaces.len() - 1
-                    }
+                let pos = if let Some(p) = self.namespaces.iter().position(|(k, _)| k == n) {
+                    p
+                } else {
+                    self.namespaces.push((n.to_vec(), CallbackNs::default()));
+                    self.namespaces.len() - 1
                 };
                 &mut self.namespaces[pos].1
             }
@@ -164,7 +177,9 @@ pub struct XPath(Rc<XPathInner>);
 
 impl std::fmt::Debug for XPath {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("XPath").field("modern", &self.0.modern).finish_non_exhaustive()
+        f.debug_struct("XPath")
+            .field("modern", &self.0.modern)
+            .finish_non_exhaustive()
     }
 }
 
@@ -222,8 +237,18 @@ impl XPath {
         }
         // SAFETY: live context.
         unsafe {
-            ffi::xmlXPathRegisterFuncNS(ctx, b"functionString\0".as_ptr(), b"http://php.net/xpath\0".as_ptr(), Some(ext_function_string_php));
-            ffi::xmlXPathRegisterFuncNS(ctx, b"function\0".as_ptr(), b"http://php.net/xpath\0".as_ptr(), Some(ext_function_object_php));
+            ffi::xmlXPathRegisterFuncNS(
+                ctx,
+                c"functionString".as_ptr().cast(),
+                c"http://php.net/xpath".as_ptr().cast(),
+                Some(ext_function_string_php),
+            );
+            ffi::xmlXPathRegisterFuncNS(
+                ctx,
+                c"function".as_ptr().cast(),
+                c"http://php.net/xpath".as_ptr().cast(),
+                Some(ext_function_object_php),
+            );
         }
         Ok(XPath(Rc::new(XPathInner {
             ctx: Cell::new(ctx),
@@ -259,7 +284,11 @@ impl XPath {
     pub fn document(&self) -> DomResult<Node> {
         let ctx = self.0.ctx.get();
         // SAFETY: live context.
-        let doc = if ctx.is_null() { ptr::null_mut() } else { unsafe { (*ctx).doc } };
+        let doc = if ctx.is_null() {
+            ptr::null_mut()
+        } else {
+            unsafe { (*ctx).doc }
+        };
         let d = N::from_doc(doc).ok_or_else(|| DomError::dom(C::InvalidState))?;
         Ok(Node::wrap(d))
     }
@@ -287,6 +316,7 @@ impl XPath {
     }
 
     /// `query()` / `evaluate()`.
+    #[allow(clippy::too_many_lines)]
     pub fn eval(
         &self,
         expr: &[u8],
@@ -324,7 +354,8 @@ impl XPath {
             }
         }
         // SAFETY: live context; saved fields restored below.
-        let (old_node, old_ns, old_nr) = unsafe { ((*ctxp).node, (*ctxp).namespaces, (*ctxp).nsNr) };
+        let (saved_node, saved_namespaces, saved_count) =
+            unsafe { ((*ctxp).node, (*ctxp).namespaces, (*ctxp).nsNr) };
         let mut in_scope: Vec<*mut ffi::xmlNs> = Vec::new();
         // SAFETY: live context.
         unsafe { (*ctxp).node = crate::raw::raw(nodep) };
@@ -352,7 +383,9 @@ impl XPath {
             error: None,
         };
         EVAL.with(|s| s.borrow_mut().push((&raw mut eval_ctx).cast()));
-        self.0.evaluation_depth.set(self.0.evaluation_depth.get() + 1);
+        self.0
+            .evaluation_depth
+            .set(self.0.evaluation_depth.get() + 1);
         // SAFETY: live context; userData is only read by our callbacks
         // during this call.
         let obj = crate::parse::with_generic_errors(|| unsafe {
@@ -361,13 +394,15 @@ impl XPath {
             (*ctxp).userData = ptr::null_mut();
             o
         });
-        self.0.evaluation_depth.set(self.0.evaluation_depth.get() - 1);
+        self.0
+            .evaluation_depth
+            .set(self.0.evaluation_depth.get() - 1);
         EVAL.with(|s| s.borrow_mut().pop());
         // SAFETY: restoring context fields.
         unsafe {
-            (*ctxp).node = old_node;
-            (*ctxp).namespaces = old_ns;
-            (*ctxp).nsNr = old_nr;
+            (*ctxp).node = saved_node;
+            (*ctxp).namespaces = saved_namespaces;
+            (*ctxp).nsNr = saved_count;
         }
         drop(in_scope);
         crate::parse::resume_panic();
@@ -380,13 +415,19 @@ impl XPath {
         }
         if obj.is_null() {
             if modern {
-                return Err(DomError::Error("Could not evaluate XPath expression".into()));
+                return Err(DomError::Error(
+                    "Could not evaluate XPath expression".into(),
+                ));
             }
             return Ok(XPathResult::False);
         }
         // SAFETY: obj is a valid result object, freed at the end.
         let result = unsafe {
-            let t = if evaluate { (*obj).type_ } else { ffi::XPATH_NODESET };
+            let t = if evaluate {
+                (*obj).type_
+            } else {
+                ffi::XPATH_NODESET
+            };
             match t {
                 ffi::XPATH_NODESET => {
                     let mut items = Vec::new();
@@ -418,12 +459,18 @@ impl XPath {
                         ffi::xmlXPathFreeObject(obj);
                         return Err(e);
                     }
-                    let class = if modern { "Dom\\NodeList" } else { "DOMNodeList" };
+                    let class = if modern {
+                        "Dom\\NodeList"
+                    } else {
+                        "DOMNodeList"
+                    };
                     XPathResult::NodeList(new_list(class, None, MapKind::NodeSet(items)))
                 }
                 ffi::XPATH_BOOLEAN => XPathResult::Bool((*obj).boolval != 0),
                 ffi::XPATH_NUMBER => XPathResult::Float((*obj).floatval),
-                ffi::XPATH_STRING => XPathResult::Str(opt_cstr((*obj).stringval).unwrap_or_default().to_vec()),
+                ffi::XPATH_STRING => {
+                    XPathResult::Str(opt_cstr((*obj).stringval).unwrap_or_default().to_vec())
+                }
                 _ => XPathResult::Null,
             }
         };
@@ -440,14 +487,20 @@ impl XPath {
             Restrict::Array(items) => {
                 for item in items {
                     let callable = item.callable.map_err(|e| {
-                        DomError::arg_type(1, format!("must be an array with valid callbacks as values, {e}"))
+                        DomError::arg_type(
+                            1,
+                            format!("must be an array with valid callbacks as values, {e}"),
+                        )
                     })?;
                     let name = match item.key {
                         Some(k) => k,
                         None => item.value_string.unwrap_or_default(),
                     };
                     if name.is_empty() || name.contains(&0) {
-                        return Err(DomError::arg_value(1, "must be an array containing valid callback names"));
+                        return Err(DomError::arg_value(
+                            1,
+                            "must be an array containing valid callback names",
+                        ));
                     }
                     ns.insert(name, callable);
                 }
@@ -457,7 +510,8 @@ impl XPath {
                 if name.is_empty() || name.contains(&0) {
                     return Err(DomError::arg_value(1, "must be a valid callback name"));
                 }
-                let callable = callable.map_err(|e| DomError::arg_type(1, format!("must be a callable, {e}")))?;
+                let callable = callable
+                    .map_err(|e| DomError::arg_type(1, format!("must be a callable, {e}")))?;
                 ns.insert(name, callable);
                 ns.mode = Mode::Set;
             }
@@ -467,7 +521,12 @@ impl XPath {
     }
 
     /// `registerPhpFunctionNS($namespaceURI, $name, $callable)`.
-    pub fn register_php_function_ns(&self, namespace: &[u8], name: &[u8], callable: HostCallable) -> DomResult<()> {
+    pub fn register_php_function_ns(
+        &self,
+        namespace: &[u8],
+        name: &[u8],
+        callable: HostCallable,
+    ) -> DomResult<()> {
         if namespace == PHP_XPATH_NS {
             return Err(DomError::arg_value(
                 1,
@@ -485,7 +544,14 @@ impl XPath {
         let n = cs(name);
         let u = cs(namespace);
         // SAFETY: live context.
-        unsafe { ffi::xmlXPathRegisterFuncNS(ctx, n.as_ptr().cast(), u.as_ptr().cast(), Some(ext_function_trampoline)) };
+        unsafe {
+            ffi::xmlXPathRegisterFuncNS(
+                ctx,
+                n.as_ptr().cast(),
+                u.as_ptr().cast(),
+                Some(ext_function_trampoline),
+            )
+        };
         Ok(())
     }
 
@@ -552,7 +618,11 @@ fn clean_argument_stack(ctxt: *mut ffi::xmlXPathParserContext, n: c_int) {
     }
 }
 
-fn fetch_args(ctxt: *mut ffi::xmlXPathParserContext, count: usize, mode: NodesetMode) -> Vec<XPathArg> {
+fn fetch_args(
+    ctxt: *mut ffi::xmlXPathParserContext,
+    count: usize,
+    mode: NodesetMode,
+) -> Vec<XPathArg> {
     let mut params = vec![XPathArg::Str(Vec::new()); count];
     for slot in params.iter_mut().rev() {
         // SAFETY: libxml2 pushed `count` values for this call.
@@ -563,12 +633,16 @@ fn fetch_args(ctxt: *mut ffi::xmlXPathParserContext, count: usize, mode: Nodeset
         // SAFETY: obj is a valid XPath object owned by us now.
         unsafe {
             *slot = match (*obj).type_ {
-                ffi::XPATH_STRING => XPathArg::Str(opt_cstr((*obj).stringval).unwrap_or_default().to_vec()),
+                ffi::XPATH_STRING => {
+                    XPathArg::Str(opt_cstr((*obj).stringval).unwrap_or_default().to_vec())
+                }
                 ffi::XPATH_BOOLEAN => XPathArg::Bool((*obj).boolval != 0),
                 ffi::XPATH_NUMBER => XPathArg::Float((*obj).floatval),
                 ffi::XPATH_NODESET => {
                     if mode == NodesetMode::ToString {
-                        XPathArg::Str(crate::raw::take(ffi::xmlXPathCastToString(obj)).unwrap_or_default())
+                        XPathArg::Str(
+                            crate::raw::take(ffi::xmlXPathCastToString(obj)).unwrap_or_default(),
+                        )
                     } else {
                         let set = (*obj).nodesetval;
                         let mut nodes = Vec::new();
@@ -590,7 +664,9 @@ fn fetch_args(ctxt: *mut ffi::xmlXPathParserContext, count: usize, mode: Nodeset
                         XPathArg::Nodes(nodes)
                     }
                 }
-                _ => XPathArg::Str(crate::raw::take(ffi::xmlXPathCastToString(obj)).unwrap_or_default()),
+                _ => XPathArg::Str(
+                    crate::raw::take(ffi::xmlXPathCastToString(obj)).unwrap_or_default(),
+                ),
             };
             ffi::xmlXPathFreeObject(obj);
         }
@@ -609,7 +685,7 @@ fn keep_args_alive(ev: &EvalCtx<'_>, params: &[XPathArg]) {
 
 fn push_sentinel(ctxt: *mut ffi::xmlXPathParserContext) {
     // SAFETY: pushing a fresh string object.
-    unsafe { ffi::valuePush(ctxt, ffi::xmlXPathNewString(b"\0".as_ptr())) };
+    unsafe { ffi::valuePush(ctxt, ffi::xmlXPathNewString(c"".as_ptr().cast())) };
 }
 
 fn dispatch(
@@ -629,7 +705,10 @@ fn dispatch(
             None => (Mode::None, None),
             Some(ns) => (
                 ns.mode,
-                ns.functions.iter().find(|(n, _)| n == function_name).map(|(_, c)| c.clone()),
+                ns.functions
+                    .iter()
+                    .find(|(n, _)| n == function_name)
+                    .map(|(_, c)| c.clone()),
             ),
         }
     };
@@ -684,7 +763,9 @@ fn call_php_ns(ctxt: *mut ffi::xmlXPathParserContext, nargs: c_int, mode: Nodese
         return;
     }
     if nargs == 0 {
-        ev.error = Some(DomError::Error("Function name must be passed as the first argument".into()));
+        ev.error = Some(DomError::Error(
+            "Function name must be passed as the first argument".into(),
+        ));
         push_sentinel(ctxt);
         return;
     }
@@ -693,7 +774,13 @@ fn call_php_ns(ctxt: *mut ffi::xmlXPathParserContext, nargs: c_int, mode: Nodese
     // SAFETY: the function name is the last value on the stack.
     let obj = unsafe { ffi::valuePop(ctxt) };
     // SAFETY: obj is NULL or a valid object owned by us.
-    let name = unsafe { if obj.is_null() { None } else { opt_cstr((*obj).stringval).map(<[u8]>::to_vec) } };
+    let name = unsafe {
+        if obj.is_null() {
+            None
+        } else {
+            opt_cstr((*obj).stringval).map(<[u8]>::to_vec)
+        }
+    };
     let result = match name {
         None => Err(DomError::Type("Handler name must be a string".into())),
         Some(name) => {

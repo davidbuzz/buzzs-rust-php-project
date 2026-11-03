@@ -68,11 +68,18 @@ pub(crate) fn create_empty(encoding: &[u8]) -> DomResult<Node> {
     }
     let doc = create_html_doc().ok_or_else(|| DomError::dom(C::InvalidState))?;
     set_doc_encoding(doc, encoding);
-    Ok(instantiate(doc, PrivateData::create(), QuirksMode::NoQuirks))
+    Ok(instantiate(
+        doc,
+        PrivateData::create(),
+        QuirksMode::NoQuirks,
+    ))
 }
 
 fn check_options(options: i64) -> DomResult<()> {
-    let valid = HTML_PARSE_NOERROR | XML_PARSE_COMPACT | HTML_PARSE_NOIMPLIED | crate::constants::HTML_NO_DEFAULT_NS;
+    let valid = HTML_PARSE_NOERROR
+        | XML_PARSE_COMPACT
+        | HTML_PARSE_NOIMPLIED
+        | crate::constants::HTML_NO_DEFAULT_NS;
     if options & !valid != 0 {
         return Err(DomError::arg_value(
             2,
@@ -92,7 +99,10 @@ fn error_sink(input_name: Vec<u8>) -> crate::lexbor::ErrorSink<'static> {
         } else if len <= 1 {
             format!("tree error {code} in {name}, line: {line}, column: {column}\n")
         } else {
-            format!("tree error {code} in {name}, line: {line}, column: {column}-{}\n", column + len - 1)
+            format!(
+                "tree error {code} in {name}, line: {line}, column: {column}-{}\n",
+                column + len - 1
+            )
         };
         php_libxml::error::pretend_ctx_error(
             &input_name,
@@ -104,12 +114,16 @@ fn error_sink(input_name: Vec<u8>) -> crate::lexbor::ErrorSink<'static> {
 }
 
 fn search_child(parent: N, name: &[u8]) -> Option<N> {
-    parent.child_iter().find(|n| n.is_element() && n.name() == name)
+    parent
+        .child_iter()
+        .find(|n| n.is_element() && n.name() == name)
 }
 
 /// `dom_place_remove_element_and_hoist_children`.
 fn remove_element_and_hoist_children(parent: N, name: &[u8]) {
-    let Some(node) = search_child(parent, name) else { return };
+    let Some(node) = search_child(parent, name) else {
+        return;
+    };
     // SAFETY: nodes of a document only we hold so far.
     unsafe {
         ffi::xmlUnlinkNode(node.p());
@@ -122,7 +136,7 @@ fn remove_element_and_hoist_children(parent: N, name: &[u8]) {
 }
 
 /// `dom_post_process_html5_loading`.
-fn post_process(doc: N, options: i64, observations: &Observations) {
+fn post_process(doc: N, options: i64, observations: Observations) {
     if options & HTML_PARSE_NOIMPLIED != 0 {
         if let Some(html) = search_child(doc, b"html") {
             if !observations.has_explicit_head_tag {
@@ -138,7 +152,7 @@ fn post_process(doc: N, options: i64, observations: &Observations) {
     }
 }
 
-fn quirks_of(o: &Observations) -> QuirksMode {
+fn quirks_of(o: Observations) -> QuirksMode {
     match o.quirks_mode {
         1 => QuirksMode::LimitedQuirks,
         2 => QuirksMode::Quirks,
@@ -147,7 +161,11 @@ fn quirks_of(o: &Observations) -> QuirksMode {
 }
 
 /// Bridges, post-processes and instantiates a finished parse.
-fn finish(parser: &HtmlParser<'_>, options: i64, input_name: &[u8]) -> DomResult<(N, Rc<PrivateData>, QuirksMode)> {
+fn finish(
+    parser: &HtmlParser<'_>,
+    options: i64,
+    input_name: &[u8],
+) -> DomResult<(N, Rc<PrivateData>, QuirksMode)> {
     let private = PrivateData::create();
     let bridged = convert_document(
         parser.document_last_child(),
@@ -160,18 +178,28 @@ fn finish(parser: &HtmlParser<'_>, options: i64, input_name: &[u8]) -> DomResult
         Ok(d) => d,
         Err(status) => {
             private.destroy();
-            let msg = format!("{} in {}", status.message(), String::from_utf8_lossy(input_name));
+            let msg = format!(
+                "{} in {}",
+                status.message(),
+                String::from_utf8_lossy(input_name)
+            );
             php_libxml::error::ctx_error(None, msg.as_bytes());
             return Err(DomError::Silent);
         }
     };
-    post_process(doc, options, &observations);
+    post_process(doc, options, observations);
     set_doc_encoding(doc, &parser.encoding_name());
-    Ok((doc, private, quirks_of(&observations)))
+    Ok((doc, private, quirks_of(observations)))
 }
 
 /// `Dom\HTMLDocument::createFromString()` / `createFromFile()`.
-pub(crate) fn create_from(source: &[u8], options: i64, override_encoding: Option<&[u8]>, from_file: bool, host: &dyn DomHost) -> DomResult<Node> {
+pub(crate) fn create_from(
+    source: &[u8],
+    options: i64,
+    override_encoding: Option<&[u8]>,
+    from_file: bool,
+    host: &dyn DomHost,
+) -> DomResult<Node> {
     php_libxml::raw::ensure_init();
     if from_file {
         if source.is_empty() {
@@ -181,15 +209,25 @@ pub(crate) fn create_from(source: &[u8], options: i64, override_encoding: Option
             return Err(DomError::arg_value(1, "must not contain any null bytes"));
         }
         if source.windows(3).any(|w| w == b"%00") {
-            return Err(DomError::arg_value(1, "must not contain percent-encoded NUL bytes"));
+            return Err(DomError::arg_value(
+                1,
+                "must not contain percent-encoded NUL bytes",
+            ));
         }
     }
     check_options(options)?;
     let override_enc = match override_encoding {
-        Some(e) => Some(Encoding::by_name(e).ok_or_else(|| DomError::arg_value(3, "must be a valid document encoding"))?),
+        Some(e) => Some(
+            Encoding::by_name(e)
+                .ok_or_else(|| DomError::arg_value(3, "must be a valid document encoding"))?,
+        ),
         None => None,
     };
-    let input_name: Vec<u8> = if from_file { source.to_vec() } else { b"Entity".to_vec() };
+    let input_name: Vec<u8> = if from_file {
+        source.to_vec()
+    } else {
+        b"Entity".to_vec()
+    };
     let sink = (options & HTML_PARSE_NOERROR == 0).then(|| error_sink(input_name.clone()));
 
     if !from_file {
@@ -203,7 +241,10 @@ pub(crate) fn create_from(source: &[u8], options: i64, override_encoding: Option
     }
 
     let Some(mut stream) = host.open_read_stream(source)? else {
-        return Err(DomError::Exception(format!("Cannot open file '{}'", String::from_utf8_lossy(source))));
+        return Err(DomError::Exception(format!(
+            "Cannot open file '{}'",
+            String::from_utf8_lossy(source)
+        )));
     };
     let mut parser = HtmlParser::new(override_enc, options & HTML_PARSE_NOIMPLIED != 0, sink)
         .ok_or_else(|| DomError::dom(C::InvalidState))?;
@@ -231,7 +272,8 @@ pub(crate) fn create_from(source: &[u8], options: i64, override_encoding: Option
         Some(path) => {
             let p = cs(path);
             // SAFETY: valid C string; result owned by us.
-            let converted = crate::raw::take(unsafe { ffi::xmlPathToURI(p.as_ptr().cast()) }).unwrap_or_else(|| path.clone());
+            let converted = crate::raw::take(unsafe { ffi::xmlPathToURI(p.as_ptr().cast()) })
+                .unwrap_or_else(|| path.clone());
             if converted.starts_with(b"file:/") {
                 converted
             } else {
@@ -281,7 +323,11 @@ pub(crate) fn save_html(this: &Node, node: Option<&Node>) -> DomResult<Vec<u8>> 
 }
 
 /// `Dom\HTMLDocument::saveHtmlFile($filename)`.
-pub(crate) fn save_html_file(this: &Node, filename: &[u8], host: &dyn DomHost) -> DomResult<Option<i64>> {
+pub(crate) fn save_html_file(
+    this: &Node,
+    filename: &[u8],
+    host: &dyn DomHost,
+) -> DomResult<Option<i64>> {
     if filename.is_empty() {
         return Err(DomError::arg_value(1, "must not be empty"));
     }
@@ -339,9 +385,16 @@ pub(crate) fn head(n: &Node) -> DomResult<Option<Node>> {
 /// `$body = $value`.
 pub(crate) fn set_body(n: &Node, value: Option<&Node>) -> DomResult<()> {
     let doc = n.prop_node()?;
-    let fail = || DomError::dom_msg(C::HierarchyRequest, "The new body must either be a body or a frameset tag");
+    let fail = || {
+        DomError::dom_msg(
+            C::HierarchyRequest,
+            "The new body must either be a body or a frameset tag",
+        )
+    };
     let Some(v) = value else { return Err(fail()) };
-    let Some(newval) = v.n() else { return Err(fail()) };
+    let Some(newval) = v.n() else {
+        return Err(fail());
+    };
     if !accept_body(newval.name()) {
         return Err(fail());
     }
@@ -362,7 +415,10 @@ pub(crate) fn set_body(n: &Node, value: Option<&Node>) -> DomResult<()> {
         return Ok(());
     }
     let Some(root) = document_element(doc) else {
-        return Err(DomError::dom_msg(C::HierarchyRequest, "A body can only be set if there is a document element"));
+        return Err(DomError::dom_msg(
+            C::HierarchyRequest,
+            "A body can only be set if there is a document element",
+        ));
     };
     crate::document::adopt_node_raw(newval, doc_ref.as_ref(), doc.as_doc());
     // SAFETY: live nodes.
@@ -374,7 +430,9 @@ pub(crate) fn set_body(n: &Node, value: Option<&Node>) -> DomResult<()> {
 fn child_text_content(node: N) -> Vec<u8> {
     let mut out = Vec::new();
     for t in node.child_iter() {
-        if matches!(t.t(), ffi::XML_TEXT_NODE | ffi::XML_CDATA_SECTION_NODE) && !t.content_ptr().is_null() {
+        if matches!(t.t(), ffi::XML_TEXT_NODE | ffi::XML_CDATA_SECTION_NODE)
+            && !t.content_ptr().is_null()
+        {
             out.extend_from_slice(t.content());
         }
     }
@@ -415,11 +473,17 @@ pub(crate) fn strip_and_collapse_ascii_whitespace(input: &[u8]) -> Vec<u8> {
 /// `$title`.
 pub(crate) fn title(n: &Node) -> DomResult<Vec<u8>> {
     let doc = n.prop_node()?;
-    let Some(root) = document_element(doc) else { return Ok(Vec::new()) };
+    let Some(root) = document_element(doc) else {
+        return Ok(Vec::new());
+    };
     let value = if ns_is_fast(root, &SVG_TOKEN) && root.name() == b"svg" {
-        svg_title_element(root).map(child_text_content).unwrap_or_default()
+        svg_title_element(root)
+            .map(child_text_content)
+            .unwrap_or_default()
     } else {
-        title_element(doc).map(child_text_content).unwrap_or_default()
+        title_element(doc)
+            .map(child_text_content)
+            .unwrap_or_default()
     };
     Ok(strip_and_collapse_ascii_whitespace(&value))
 }
@@ -438,34 +502,39 @@ fn string_replace_all(doc: N, element: N, value: &[u8]) {
 /// `$title = $value`.
 pub(crate) fn set_title(n: &Node, value: &[u8]) -> DomResult<()> {
     let doc = n.prop_node()?;
-    let Some(root) = document_element(doc) else { return Ok(()) };
+    let Some(root) = document_element(doc) else {
+        return Ok(());
+    };
     let mapper_ns = |prefix: Option<&[u8]>, uri: &[u8]| -> *mut ffi::xmlNs {
         n.doc_ref()
             .and_then(|d| d.private_data())
-            .map_or(std::ptr::null_mut(), |p| p.mapper.borrow_mut().get_ns(prefix, Some(uri)))
+            .map_or(std::ptr::null_mut(), |p| {
+                p.mapper.borrow_mut().get_ns(prefix, Some(uri))
+            })
     };
     if ns_is_fast(root, &SVG_TOKEN) && root.name() == b"svg" {
-        let element = match svg_title_element(root) {
-            Some(e) => e,
-            None => {
-                let mut ns = root.ns_ptr();
-                if root.ns().and_then(crate::raw::Ns::prefix).is_some() {
-                    ns = mapper_ns(Some(b""), SVG_NS);
-                }
-                // SAFETY: live document; the name is a static C string.
-                let el = N::new(unsafe { ffi::xmlNewDocNode(doc.as_doc(), ns, c"title".as_ptr().cast(), std::ptr::null()) })
-                    .ok_or_else(|| DomError::dom(C::InvalidState))?;
-                match root.children() {
-                    None => root.set_last(Some(el)),
-                    Some(first) => {
-                        el.set_next(Some(first));
-                        first.set_prev(Some(el));
-                    }
-                }
-                root.set_children(Some(el));
-                el.set_parent(Some(root));
-                el
+        let element = if let Some(e) = svg_title_element(root) {
+            e
+        } else {
+            let mut ns = root.ns_ptr();
+            if root.ns().and_then(crate::raw::Ns::prefix).is_some() {
+                ns = mapper_ns(Some(b""), SVG_NS);
             }
+            // SAFETY: live document; the name is a static C string.
+            let el = N::new(unsafe {
+                ffi::xmlNewDocNode(doc.as_doc(), ns, c"title".as_ptr().cast(), std::ptr::null())
+            })
+            .ok_or_else(|| DomError::dom(C::InvalidState))?;
+            match root.children() {
+                None => root.set_last(Some(el)),
+                Some(first) => {
+                    el.set_next(Some(first));
+                    first.set_prev(Some(el));
+                }
+            }
+            root.set_children(Some(el));
+            el.set_parent(Some(root));
+            el
         };
         string_replace_all(doc, element, value);
     } else if ns_is_fast(root, &HTML_TOKEN) {
@@ -478,10 +547,19 @@ pub(crate) fn set_title(n: &Node, value: &[u8]) -> DomResult<()> {
                 let html_ns = n
                     .doc_ref()
                     .and_then(|d| d.private_data())
-                    .map_or(std::ptr::null_mut(), |p| p.mapper.borrow_mut().ensure_html_ns());
+                    .map_or(std::ptr::null_mut(), |p| {
+                        p.mapper.borrow_mut().ensure_html_ns()
+                    });
                 // SAFETY: live document.
-                let el = N::new(unsafe { ffi::xmlNewDocNode(doc.as_doc(), html_ns, c"title".as_ptr().cast(), std::ptr::null()) })
-                    .ok_or_else(|| DomError::dom(C::InvalidState))?;
+                let el = N::new(unsafe {
+                    ffi::xmlNewDocNode(
+                        doc.as_doc(),
+                        html_ns,
+                        c"title".as_ptr().cast(),
+                        std::ptr::null(),
+                    )
+                })
+                .ok_or_else(|| DomError::dom(C::InvalidState))?;
                 // SAFETY: live nodes.
                 unsafe { ffi::xmlAddChild(head.p(), el.p()) };
                 el
@@ -498,7 +576,10 @@ mod tests {
 
     #[test]
     fn strip_collapse() {
-        assert_eq!(strip_and_collapse_ascii_whitespace(b"  a \t\n b  c "), b"a b c");
+        assert_eq!(
+            strip_and_collapse_ascii_whitespace(b"  a \t\n b  c "),
+            b"a b c"
+        );
         assert_eq!(strip_and_collapse_ascii_whitespace(b""), b"");
         assert_eq!(strip_and_collapse_ascii_whitespace(b" \n "), b"");
     }

@@ -2,6 +2,8 @@
 //! serializers and CSS selectors, through the generic dispatch layer, plus
 //! a deterministic fuzz pass over the parsers/serializers.
 
+#![allow(clippy::cast_possible_truncation)]
+
 use php_dom::dispatch::{call, call_static, read_property, write_property, DomObject, PropRead};
 use php_dom::{DomValue, NoHost};
 
@@ -19,11 +21,21 @@ fn node_obj(v: DomValue) -> DomObject {
 fn html(src: &str, options: i64) -> DomObject {
     let errors = php_dom::error::take_diagnostics();
     drop(errors);
-    node_obj(call_static("Dom\\HTMLDocument", "createFromString", &[s(src), DomValue::Int(options)], &NoHost).expect("parse"))
+    node_obj(
+        call_static(
+            "Dom\\HTMLDocument",
+            "createFromString",
+            &[s(src), DomValue::Int(options)],
+            &NoHost,
+        )
+        .expect("parse"),
+    )
 }
 
 fn xml(src: &str) -> DomObject {
-    node_obj(call_static("Dom\\XMLDocument", "createFromString", &[s(src)], &NoHost).expect("parse"))
+    node_obj(
+        call_static("Dom\\XMLDocument", "createFromString", &[s(src)], &NoHost).expect("parse"),
+    )
 }
 
 fn string(v: DomValue) -> String {
@@ -49,7 +61,10 @@ const NOIMPLIED: i64 = 1 << 13;
 
 #[test]
 fn parses_and_serializes_html5() {
-    let doc = html("<!doctype html><title>T</title><p class=a>x&amp;y<br>z", NOERROR);
+    let doc = html(
+        "<!doctype html><title>T</title><p class=a>x&amp;y<br>z",
+        NOERROR,
+    );
     assert_eq!(
         save_html(&doc),
         "<!DOCTYPE html><html><head><title>T</title></head><body><p class=\"a\">x&amp;y<br>z</p></body></html>"
@@ -84,15 +99,26 @@ fn encoding_detection_and_output_encoding() {
 
 #[test]
 fn css_selectors() {
-    let doc = html("<div id=a><p class=x>1</p><p>2</p><span class=x>3</span></div>", NOERROR);
+    let doc = html(
+        "<div id=a><p class=x>1</p><p>2</p><span class=x>3</span></div>",
+        NOERROR,
+    );
     let list = call(&doc, "querySelectorAll", &[s(".x")], &NoHost).expect("qsa");
-    let DomValue::NodeList(list) = list else { panic!("list") };
+    let DomValue::NodeList(list) = list else {
+        panic!("list")
+    };
     assert_eq!(list.length(), 2);
     let first = call(&doc, "querySelector", &[s("div > p:nth-child(2)")], &NoHost).expect("qs");
-    let DomValue::Node(p) = first else { panic!("node") };
+    let DomValue::Node(p) = first else {
+        panic!("node")
+    };
     assert_eq!(string(prop(&DomObject::Node(p), "textContent")), "2");
     let err = call(&doc, "querySelector", &[s("p[")], &NoHost).expect_err("invalid selector");
-    assert!(err.message().starts_with("Invalid selector"), "{}", err.message());
+    assert!(
+        err.message().starts_with("Invalid selector"),
+        "{}",
+        err.message()
+    );
 }
 
 #[test]
@@ -101,7 +127,10 @@ fn inner_and_outer_html() {
     let div = node_obj(call(&doc, "getElementById", &[s("a")], &NoHost).expect("byid"));
     write_property(&div, "innerHTML", &s("<i>x</i><!--c-->")).expect("innerHTML");
     assert_eq!(string(prop(&div, "innerHTML")), "<i>x</i><!--c-->");
-    assert_eq!(string(prop(&div, "outerHTML")), "<div id=\"a\"><i>x</i><!--c--></div>");
+    assert_eq!(
+        string(prop(&div, "outerHTML")),
+        "<div id=\"a\"><i>x</i><!--c--></div>"
+    );
 }
 
 #[test]
@@ -128,7 +157,10 @@ fn xml_inner_html_requires_well_formedness() {
 struct Lcg(u64);
 impl Lcg {
     fn next(&mut self) -> u64 {
-        self.0 = self.0.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1_442_695_040_888_963_407);
+        self.0 = self
+            .0
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
         self.0 >> 33
     }
 }
@@ -136,11 +168,66 @@ impl Lcg {
 #[test]
 fn fuzz_html_and_css() {
     const PIECES: &[&str] = &[
-        "<", ">", "</", "p", "div", "template", "svg", "math", "table", "tr", "td", "<!--", "-->", "&amp;", "&", "\"",
-        "'", "=", " ", "\n", "a", "<!DOCTYPE html>", "\u{e9}", "\u{fffd}", "\0", "\u{c2}", "script", "<![CDATA[", "]]>",
-        "xmlns:x=\"urn:x\"", "x:y", "id", "class", "<br/>", "&#x110000;", "\u{a0}",
+        "<",
+        ">",
+        "</",
+        "p",
+        "div",
+        "template",
+        "svg",
+        "math",
+        "table",
+        "tr",
+        "td",
+        "<!--",
+        "-->",
+        "&amp;",
+        "&",
+        "\"",
+        "'",
+        "=",
+        " ",
+        "\n",
+        "a",
+        "<!DOCTYPE html>",
+        "\u{e9}",
+        "\u{fffd}",
+        "\0",
+        "\u{c2}",
+        "script",
+        "<![CDATA[",
+        "]]>",
+        "xmlns:x=\"urn:x\"",
+        "x:y",
+        "id",
+        "class",
+        "<br/>",
+        "&#x110000;",
+        "\u{a0}",
     ];
-    const SEL: &[&str] = &["p", "div", "*", " ", ">", "+", "~", ".a", "#b", "[id]", "[class~=x]", ":first-child", ":not(", ")", ",", ":nth-child(2n+1)", "svg|a", "::before", ":has(", "\\", "\""];
+    const SEL: &[&str] = &[
+        "p",
+        "div",
+        "*",
+        " ",
+        ">",
+        "+",
+        "~",
+        ".a",
+        "#b",
+        "[id]",
+        "[class~=x]",
+        ":first-child",
+        ":not(",
+        ")",
+        ",",
+        ":nth-child(2n+1)",
+        "svg|a",
+        "::before",
+        ":has(",
+        "\\",
+        "\"",
+    ];
     let mut rng = Lcg(0x5eed);
     for _ in 0..300 {
         let n = rng.next() % 40;
@@ -149,7 +236,12 @@ fn fuzz_html_and_css() {
             src.push_str(PIECES[(rng.next() % PIECES.len() as u64) as usize]);
         }
         let options = [0, NOERROR, NOERROR | NOIMPLIED][(rng.next() % 3) as usize];
-        let Ok(DomValue::Node(d)) = call_static("Dom\\HTMLDocument", "createFromString", &[s(&src), DomValue::Int(options)], &NoHost) else {
+        let Ok(DomValue::Node(d)) = call_static(
+            "Dom\\HTMLDocument",
+            "createFromString",
+            &[s(&src), DomValue::Int(options)],
+            &NoHost,
+        ) else {
             continue;
         };
         let doc = DomObject::Node(d);
@@ -168,4 +260,26 @@ fn fuzz_html_and_css() {
         let _ = php_dom::error::take_diagnostics();
         let _ = php_libxml::error::take_diagnostics();
     }
+}
+
+#[test]
+fn interop_raw_handles() {
+    let doc = xml("<root xmlns:a=\"urn:a\"><child/></root>");
+    let DomObject::Node(d) = &doc else {
+        panic!("node")
+    };
+    assert!(d.is_document_node());
+    let (ptr, keep) = d.raw_document().expect("document");
+    assert_eq!(Some(ptr), d.raw_node());
+    drop(keep);
+    let root = match prop(&doc, "documentElement") {
+        DomValue::Node(n) => n,
+        other => panic!("{other:?}"),
+    };
+    // SAFETY: the node belongs to the live document above.
+    let again = unsafe { php_dom::interop::wrap_raw_node(root.raw_node().expect("bound")) };
+    assert!(again.same(&root));
+    let ns = php_dom::interop::namespace_node(&root, Some(b"a"), b"urn:a").expect("ns node");
+    assert_eq!(ns.class_name(), "DOMNameSpaceNode");
+    assert!(d.document_shared(), "other handles reference the document");
 }

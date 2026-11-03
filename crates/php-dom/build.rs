@@ -12,19 +12,27 @@ use std::process::Command;
 
 /// Source files of ext/lexbor (from its `config.m4`, minus `php_lexbor.c`).
 fn lexbor_sources(lexbor_ext: &Path) -> Vec<PathBuf> {
-    let config = fs::read_to_string(lexbor_ext.join("config.m4")).expect("ext/lexbor/config.m4 is readable");
+    let config =
+        fs::read_to_string(lexbor_ext.join("config.m4")).expect("ext/lexbor/config.m4 is readable");
     config
         .lines()
         .map(str::trim)
         .filter_map(|l| l.strip_prefix("$LEXBOR_DIR/"))
-        .filter(|l| l.ends_with(".c"))
+        .filter(|l| {
+            Path::new(l)
+                .extension()
+                .is_some_and(|e| e.eq_ignore_ascii_case("c"))
+        })
         .map(|l| lexbor_ext.join("lexbor").join(l))
         .collect()
 }
 
 fn libxml2_includes() -> Vec<PathBuf> {
     let mut dirs = Vec::new();
-    if let Ok(out) = Command::new("pkg-config").args(["--cflags-only-I", "libxml-2.0"]).output() {
+    if let Ok(out) = Command::new("pkg-config")
+        .args(["--cflags-only-I", "libxml-2.0"])
+        .output()
+    {
         if out.status.success() {
             for flag in String::from_utf8_lossy(&out.stdout).split_whitespace() {
                 if let Some(d) = flag.strip_prefix("-I") {
@@ -40,7 +48,8 @@ fn libxml2_includes() -> Vec<PathBuf> {
 }
 
 fn main() {
-    let manifest = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").expect("cargo sets CARGO_MANIFEST_DIR"));
+    let manifest =
+        PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").expect("cargo sets CARGO_MANIFEST_DIR"));
     let out = PathBuf::from(std::env::var("OUT_DIR").expect("cargo sets OUT_DIR"));
     let php_src = manifest.join("../../modules/php-src");
     let lexbor_ext = php_src.join("ext/lexbor");
@@ -59,7 +68,15 @@ fn main() {
         fs::copy(adapted.join(f), sel_dir.join(f)).expect("copy selectors-adapted source");
     }
     let shim = "#include \"phpdom_shim.h\"\n";
-    for h in ["dom/php_dom.h", "dom/namespace_compat.h", "dom/domexception.h", "inc/php.h", "inc/Zend/zend.h", "inc/Zend/zend_operators.h", "inc/Zend/zend_API.h"] {
+    for h in [
+        "dom/php_dom.h",
+        "dom/namespace_compat.h",
+        "dom/domexception.h",
+        "inc/php.h",
+        "inc/Zend/zend.h",
+        "inc/Zend/zend_operators.h",
+        "inc/Zend/zend_API.h",
+    ] {
         fs::write(sel_root.join(h), shim).expect("write shim header");
     }
     // 3. Glue + selector engine in one archive (they reference each other),

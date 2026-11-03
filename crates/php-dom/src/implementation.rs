@@ -46,7 +46,12 @@ impl Implementation {
 
     /// `createDocumentType($qualifiedName, $publicId, $systemId)`; legacy
     /// `Err(Silent)` = false.
-    pub fn create_document_type(&self, name: &[u8], public_id: &[u8], system_id: &[u8]) -> DomResult<Node> {
+    pub fn create_document_type(
+        &self,
+        name: &[u8],
+        public_id: &[u8],
+        system_id: &[u8],
+    ) -> DomResult<Node> {
         php_libxml::raw::ensure_init();
         let pch1 = (!public_id.is_empty()).then(|| cs(public_id));
         let pch2 = (!system_id.is_empty()).then(|| cs(system_id));
@@ -68,14 +73,14 @@ impl Implementation {
             // SAFETY: URI parse of a valid C string; freed below.
             let opaque = unsafe {
                 let uri = php_libxml::ffi::xmlParseURI(n.as_ptr());
-                let o = if uri.is_null() {
+
+                if uri.is_null() {
                     None
                 } else {
                     let o = crate::raw::opt_cstr((*uri).opaque.cast()).map(<[u8]>::to_vec);
                     php_libxml::ffi::xmlFreeURI(uri);
                     o
-                };
-                o
+                }
             };
             match opaque {
                 Some(o) => {
@@ -107,7 +112,12 @@ impl Implementation {
     }
 
     /// `createDocument($namespace, $qualifiedName, $doctype)`.
-    pub fn create_document(&self, uri: Option<&[u8]>, name: &[u8], doctype: Option<&Node>) -> DomResult<Node> {
+    pub fn create_document(
+        &self,
+        uri: Option<&[u8]>,
+        name: &[u8],
+        doctype: Option<&Node>,
+    ) -> DomResult<Node> {
         php_libxml::raw::ensure_init();
         if self.modern {
             return self.create_document_modern(uri, name, doctype);
@@ -132,7 +142,11 @@ impl Implementation {
                 let pc = prefix.as_deref().map(cs);
                 // SAFETY: free-standing namespace (owned by the element below).
                 nsptr = unsafe {
-                    ffi::xmlNewNs(ptr::null_mut(), uc.as_ptr().cast(), pc.as_ref().map_or(ptr::null(), |p| p.as_ptr().cast()))
+                    ffi::xmlNewNs(
+                        ptr::null_mut(),
+                        uc.as_ptr().cast(),
+                        pc.as_ref().map_or(ptr::null(), |p| p.as_ptr().cast()),
+                    )
                 };
                 if nsptr.is_null() {
                     return Err(DomError::dom(C::Namespace));
@@ -153,8 +167,9 @@ impl Implementation {
         if let Some(l) = localname {
             let lc = cs(&l);
             // SAFETY: live document.
-            let nodep = N::new(unsafe { ffi::xmlNewDocNode(docp, nsptr, lc.as_ptr().cast(), ptr::null()) })
-                .ok_or_else(|| DomError::dom(C::InvalidState))?;
+            let nodep =
+                N::new(unsafe { ffi::xmlNewDocNode(docp, nsptr, lc.as_ptr().cast(), ptr::null()) })
+                    .ok_or_else(|| DomError::dom(C::InvalidState))?;
             nodep.set_ns_def(nsptr);
             // SAFETY: live document and detached element.
             unsafe { ffi::xmlDocSetRootElement(docp, nodep.p()) };
@@ -167,14 +182,20 @@ impl Implementation {
         Ok(obj)
     }
 
-    fn create_document_modern(&self, uri: Option<&[u8]>, name: &[u8], doctype: Option<&Node>) -> DomResult<Node> {
+    #[allow(clippy::unused_self)]
+    fn create_document_modern(
+        &self,
+        uri: Option<&[u8]>,
+        name: &[u8],
+        doctype: Option<&Node>,
+    ) -> DomResult<Node> {
         let dt = match doctype {
             Some(d) => Some(d.node()?),
             None => None,
         };
         let pd = crate::ns::PrivateData::create();
         // SAFETY: fresh document.
-        let docp = unsafe { ffi::xmlNewDoc(b"1.0\0".as_ptr()) };
+        let docp = unsafe { ffi::xmlNewDoc(c"1.0".as_ptr().cast()) };
         let dn = N::from_doc(docp).ok_or_else(|| DomError::dom(C::InvalidState))?;
         dn.d().encoding = crate::raw::xml_strdup(b"UTF-8");
         let mut element = None;
@@ -184,7 +205,9 @@ impl Implementation {
                     let ns = pd.mapper.borrow_mut().get_ns(prefix.as_deref(), uri);
                     let lc = cs(&local);
                     // SAFETY: live document.
-                    element = N::new(unsafe { ffi::xmlNewDocNode(docp, ns, lc.as_ptr().cast(), ptr::null()) });
+                    element = N::new(unsafe {
+                        ffi::xmlNewDocNode(docp, ns, lc.as_ptr().cast(), ptr::null())
+                    });
                 }
                 Err(e) => {
                     // SAFETY: freeing our fresh document.
@@ -219,22 +242,27 @@ impl Implementation {
         let docp = doc.as_doc();
         // SAFETY: live document; all created nodes are attached to it.
         unsafe {
-            ffi::xmlCreateIntSubset(docp, b"html\0".as_ptr(), ptr::null(), ptr::null());
+            ffi::xmlCreateIntSubset(docp, c"html".as_ptr().cast(), ptr::null(), ptr::null());
         }
         let pd = crate::ns::PrivateData::create();
         let html_ns = pd.mapper.borrow_mut().ensure_html_ns();
         // SAFETY: live document.
         unsafe {
-            let html = ffi::xmlNewDocRawNode(docp, html_ns, b"html\0".as_ptr(), ptr::null());
+            let html = ffi::xmlNewDocRawNode(docp, html_ns, c"html".as_ptr().cast(), ptr::null());
             ffi::xmlAddChild(docp.cast(), html);
-            let head = ffi::xmlNewDocRawNode(docp, html_ns, b"head\0".as_ptr(), ptr::null());
+            let head = ffi::xmlNewDocRawNode(docp, html_ns, c"head".as_ptr().cast(), ptr::null());
             ffi::xmlAddChild(html, head);
             if let Some(t) = title {
                 let tc = cs(t);
-                let te = ffi::xmlNewDocRawNode(docp, html_ns, b"title\0".as_ptr(), tc.as_ptr().cast());
+                let te = ffi::xmlNewDocRawNode(
+                    docp,
+                    html_ns,
+                    c"title".as_ptr().cast(),
+                    tc.as_ptr().cast(),
+                );
                 ffi::xmlAddChild(head, te);
             }
-            let body = ffi::xmlNewDocRawNode(docp, html_ns, b"body\0".as_ptr(), ptr::null());
+            let body = ffi::xmlNewDocRawNode(docp, html_ns, c"body".as_ptr().cast(), ptr::null());
             ffi::xmlAddChild(html, body);
         }
         let (obj, d) = crate::document::instantiate_modern(docp);
@@ -249,6 +277,11 @@ impl Node {
         if !self.family_is_modern() {
             return Implementation::new(false);
         }
-        self.0.extra.borrow_mut().implementation.get_or_insert_with(|| Implementation::new(true)).clone()
+        self.0
+            .extra
+            .borrow_mut()
+            .implementation
+            .get_or_insert_with(|| Implementation::new(true))
+            .clone()
     }
 }

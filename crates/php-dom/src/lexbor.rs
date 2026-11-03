@@ -8,7 +8,9 @@ use std::ptr::{self, NonNull};
 use std::sync::Once;
 
 use crate::ffi::xmlNode;
-use crate::ns::{ns_is_fast, HTML_TOKEN, MATHML_TOKEN, SVG_TOKEN, XLINK_TOKEN, XMLNS_TOKEN, XML_TOKEN};
+use crate::ns::{
+    ns_is_fast, HTML_TOKEN, MATHML_TOKEN, SVG_TOKEN, XLINK_TOKEN, XMLNS_TOKEN, XML_TOKEN,
+};
 use crate::raw::N;
 
 #[repr(C)]
@@ -55,14 +57,30 @@ extern "C" {
         err_cap: usize,
         err_len: *mut usize,
     ) -> *mut CssQueryRaw;
-    fn phpdom_css_find(q: *mut CssQueryRaw, root: *const xmlNode, cb: CssCb, ctx: *mut c_void) -> c_int;
-    fn phpdom_css_match_node(q: *mut CssQueryRaw, node: *const xmlNode, cb: CssCb, ctx: *mut c_void) -> c_int;
+    fn phpdom_css_find(
+        q: *mut CssQueryRaw,
+        root: *const xmlNode,
+        cb: CssCb,
+        ctx: *mut c_void,
+    ) -> c_int;
+    fn phpdom_css_match_node(
+        q: *mut CssQueryRaw,
+        node: *const xmlNode,
+        cb: CssCb,
+        ctx: *mut c_void,
+    ) -> c_int;
     fn phpdom_css_free(q: *mut CssQueryRaw);
 
     fn phpdom_encoding_by_name(name: *const c_char, len: usize) -> *const LxbEncodingData;
     fn phpdom_encoding_name(data: *const LxbEncodingData) -> *const c_char;
     fn phpdom_encoding_is_utf8(data: *const LxbEncodingData) -> bool;
-    fn phpdom_encode_from_utf8(data: *const LxbEncodingData, input: *const c_char, len: usize, write: WriteFn, ctx: *mut c_void);
+    fn phpdom_encode_from_utf8(
+        data: *const LxbEncodingData,
+        input: *const c_char,
+        len: usize,
+        write: WriteFn,
+        ctx: *mut c_void,
+    );
 
     fn phpdom_html_parser_new(
         override_encoding: *const LxbEncodingData,
@@ -73,12 +91,19 @@ extern "C" {
     ) -> *mut LxbHtmlParser;
     fn phpdom_html_parser_free(p: *mut LxbHtmlParser);
     fn phpdom_html_parse_string(p: *mut LxbHtmlParser, source: *const c_char, len: usize) -> bool;
-    fn phpdom_html_parse_file_chunk(p: *mut LxbHtmlParser, data: *const c_char, len: usize) -> bool;
+    fn phpdom_html_parse_file_chunk(p: *mut LxbHtmlParser, data: *const c_char, len: usize)
+        -> bool;
     fn phpdom_html_parser_set_encoding(p: *mut LxbHtmlParser, encoding: *const LxbEncodingData);
     fn phpdom_html_parse_file_finish(p: *mut LxbHtmlParser) -> bool;
     fn phpdom_html_parser_document_last_child(p: *mut LxbHtmlParser) -> *mut LxbNodeRaw;
     fn phpdom_html_parser_encoding_name(p: *mut LxbHtmlParser) -> *const c_char;
-    fn phpdom_html_parser_observations(p: *mut LxbHtmlParser, html: *mut bool, head: *mut bool, body: *mut bool, quirks: *mut c_int);
+    fn phpdom_html_parser_observations(
+        p: *mut LxbHtmlParser,
+        html: *mut bool,
+        head: *mut bool,
+        body: *mut bool,
+        quirks: *mut c_int,
+    );
 
     fn phpdom_html_fragment_parse(
         quirks_mode: c_int,
@@ -101,7 +126,10 @@ extern "C" {
     fn phpdom_lxb_node_ns(node: *const LxbNodeRaw) -> usize;
     fn phpdom_lxb_element_qname(node: *mut LxbNodeRaw, len: *mut usize) -> *const u8;
     fn phpdom_lxb_is_template(node: *mut LxbNodeRaw) -> bool;
-    fn phpdom_lxb_template_content_last_child(node: *mut LxbNodeRaw, has_content: *mut bool) -> *mut LxbNodeRaw;
+    fn phpdom_lxb_template_content_last_child(
+        node: *mut LxbNodeRaw,
+        has_content: *mut bool,
+    ) -> *mut LxbNodeRaw;
     fn phpdom_lxb_first_attr(node: *mut LxbNodeRaw) -> *mut LxbAttrRaw;
     fn phpdom_lxb_attr_next(attr: *const LxbAttrRaw) -> *mut LxbAttrRaw;
     fn phpdom_lxb_attr_qname(attr: *mut LxbAttrRaw, len: *mut usize) -> *const u8;
@@ -116,7 +144,9 @@ extern "C" {
 
 unsafe extern "C" fn cb_ns_is_fast(node: *const xmlNode, token: c_int) -> bool {
     crate::parse::guard(false, || {
-        let Some(n) = N::new(node.cast_mut()) else { return false };
+        let Some(n) = N::new(node.cast_mut()) else {
+            return false;
+        };
         let t = match token {
             1 => &HTML_TOKEN,
             2 => &MATHML_TOKEN,
@@ -131,7 +161,9 @@ unsafe extern "C" fn cb_ns_is_fast(node: *const xmlNode, token: c_int) -> bool {
 }
 
 unsafe extern "C" fn cb_ns_html_doc(node: *const xmlNode) -> bool {
-    crate::parse::guard(false, || N::new(node.cast_mut()).is_some_and(crate::ns::is_html_and_document_is_html))
+    crate::parse::guard(false, || {
+        N::new(node.cast_mut()).is_some_and(crate::ns::is_html_and_document_is_html)
+    })
 }
 
 /// Registers the namespace callbacks used by the selector engine.
@@ -175,7 +207,10 @@ impl Encoding {
     /// `lxb_encoding_data_by_name`.
     pub(crate) fn by_name(name: &[u8]) -> Option<Encoding> {
         // SAFETY: valid buffer; returns static data or NULL.
-        NonNull::new(unsafe { phpdom_encoding_by_name(name.as_ptr().cast(), name.len()) }.cast_mut()).map(Encoding)
+        NonNull::new(
+            unsafe { phpdom_encoding_by_name(name.as_ptr().cast(), name.len()) }.cast_mut(),
+        )
+        .map(Encoding)
     }
 
     /// The canonical name.
@@ -196,7 +231,13 @@ impl Encoding {
         let mut out: Vec<u8> = Vec::with_capacity(input.len());
         // SAFETY: valid input; the callback only appends to `out`.
         unsafe {
-            phpdom_encode_from_utf8(self.0.as_ptr(), input.as_ptr().cast(), input.len(), write, (&raw mut out).cast());
+            phpdom_encode_from_utf8(
+                self.0.as_ptr(),
+                input.as_ptr().cast(),
+                input.len(),
+                write,
+                (&raw mut out).cast(),
+            );
         }
         out
     }
@@ -368,7 +409,14 @@ pub(crate) type ErrorSink<'e> = Box<dyn FnMut(bool, &str, usize, usize, usize) +
 
 struct ErrorBox<'e>(ErrorSink<'e>);
 
-unsafe extern "C" fn error_trampoline(app: *mut c_void, is_tree: bool, code: *const c_char, line: usize, column: usize, len: usize) {
+unsafe extern "C" fn error_trampoline(
+    app: *mut c_void,
+    is_tree: bool,
+    code: *const c_char,
+    line: usize,
+    column: usize,
+    len: usize,
+) {
     crate::parse::guard((), || {
         // SAFETY: `app` is the ErrorBox owned by the HtmlParser; code is a static string.
         unsafe {
@@ -397,10 +445,16 @@ pub(crate) struct HtmlParser<'e> {
 
 impl<'e> HtmlParser<'e> {
     /// `None` on allocation failure.
-    pub(crate) fn new(override_encoding: Option<Encoding>, html_no_implied: bool, errors: Option<ErrorSink<'e>>) -> Option<Self> {
+    pub(crate) fn new(
+        override_encoding: Option<Encoding>,
+        html_no_implied: bool,
+        errors: Option<ErrorSink<'e>>,
+    ) -> Option<Self> {
         init();
         let mut boxed = errors.map(|e| Box::new(ErrorBox(e)));
-        let app: *mut c_void = boxed.as_mut().map_or(ptr::null_mut(), |b| (&raw mut **b).cast());
+        let app: *mut c_void = boxed
+            .as_mut()
+            .map_or(ptr::null_mut(), |b| (&raw mut **b).cast());
         // SAFETY: `app` outlives the parser (both owned by Self).
         let p = unsafe {
             phpdom_html_parser_new(
@@ -420,7 +474,9 @@ impl<'e> HtmlParser<'e> {
     /// Parses a whole string; `false` on failure.
     pub(crate) fn parse_string(&mut self, source: &[u8]) -> bool {
         // SAFETY: live parser and buffer.
-        let r = unsafe { phpdom_html_parse_string(self.p.as_ptr(), source.as_ptr().cast(), source.len()) };
+        let r = unsafe {
+            phpdom_html_parse_string(self.p.as_ptr(), source.as_ptr().cast(), source.len())
+        };
         crate::parse::resume_panic();
         r
     }
@@ -428,7 +484,9 @@ impl<'e> HtmlParser<'e> {
     /// Feeds one read (at most 4096 bytes) of a file.
     pub(crate) fn feed_file_chunk(&mut self, data: &[u8]) -> bool {
         // SAFETY: live parser and buffer.
-        let r = unsafe { phpdom_html_parse_file_chunk(self.p.as_ptr(), data.as_ptr().cast(), data.len()) };
+        let r = unsafe {
+            phpdom_html_parse_file_chunk(self.p.as_ptr(), data.as_ptr().cast(), data.len())
+        };
         crate::parse::resume_panic();
         r
     }
@@ -456,7 +514,9 @@ impl<'e> HtmlParser<'e> {
     /// The decoder's encoding name.
     pub(crate) fn encoding_name(&self) -> Vec<u8> {
         // SAFETY: static NUL-terminated name.
-        unsafe { CStr::from_ptr(phpdom_html_parser_encoding_name(self.p.as_ptr())) }.to_bytes().to_vec()
+        unsafe { CStr::from_ptr(phpdom_html_parser_encoding_name(self.p.as_ptr())) }
+            .to_bytes()
+            .to_vec()
     }
 
     pub(crate) fn observations(&self) -> Observations {
@@ -490,7 +550,12 @@ pub(crate) struct Fragment {
 
 impl Fragment {
     /// The HTML fragment parsing algorithm with the given context element.
-    pub(crate) fn parse(quirks_mode: c_int, context_name: &[u8], ns_uri: &[u8], input: &[u8]) -> Fragment {
+    pub(crate) fn parse(
+        quirks_mode: c_int,
+        context_name: &[u8],
+        ns_uri: &[u8],
+        input: &[u8],
+    ) -> Fragment {
         init();
         let mut root = ptr::null_mut();
         // SAFETY: valid buffers; the returned document is owned by Fragment.
@@ -554,7 +619,11 @@ unsafe extern "C" fn css_trampoline(node: *const xmlNode, ctx: *mut c_void) -> c
 }
 
 impl CssQuery {
-    pub(crate) fn compile(selectors: &[u8], match_first: bool, quirks: bool) -> Result<CssQuery, CssCompileError> {
+    pub(crate) fn compile(
+        selectors: &[u8],
+        match_first: bool,
+        quirks: bool,
+    ) -> Result<CssQuery, CssCompileError> {
         init();
         let mut err = [0u8; 1024];
         let mut err_len = usize::MAX;
@@ -573,7 +642,9 @@ impl CssQuery {
         match NonNull::new(q) {
             Some(q) => Ok(CssQuery(q)),
             None if err_len == usize::MAX => Err(CssCompileError::Unknown),
-            None => Err(CssCompileError::Message(err[..err_len.min(err.len())].to_vec())),
+            None => Err(CssCompileError::Message(
+                err[..err_len.min(err.len())].to_vec(),
+            )),
         }
     }
 
@@ -582,7 +653,14 @@ impl CssQuery {
     pub(crate) fn find(&self, root: N, f: &mut dyn FnMut(N) -> bool) -> Result<(), ()> {
         let mut st = CbState { f };
         // SAFETY: live query and node; the callback state outlives the call.
-        let r = unsafe { phpdom_css_find(self.0.as_ptr(), root.p(), css_trampoline, (&raw mut st).cast()) };
+        let r = unsafe {
+            phpdom_css_find(
+                self.0.as_ptr(),
+                root.p(),
+                css_trampoline,
+                (&raw mut st).cast(),
+            )
+        };
         crate::parse::resume_panic();
         if r == 0 {
             Ok(())
@@ -595,7 +673,14 @@ impl CssQuery {
     pub(crate) fn match_node(&self, node: N, f: &mut dyn FnMut(N) -> bool) -> Result<(), ()> {
         let mut st = CbState { f };
         // SAFETY: as in `find`.
-        let r = unsafe { phpdom_css_match_node(self.0.as_ptr(), node.p(), css_trampoline, (&raw mut st).cast()) };
+        let r = unsafe {
+            phpdom_css_match_node(
+                self.0.as_ptr(),
+                node.p(),
+                css_trampoline,
+                (&raw mut st).cast(),
+            )
+        };
         crate::parse::resume_panic();
         if r == 0 {
             Ok(())

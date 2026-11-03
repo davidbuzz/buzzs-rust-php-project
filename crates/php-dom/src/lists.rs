@@ -43,7 +43,10 @@ impl MapKind {
     fn use_cache(&self) -> bool {
         matches!(
             self,
-            Self::ByTagName { .. } | Self::ByClassName { .. } | Self::ChildNodes | Self::ChildElements
+            Self::ByTagName { .. }
+                | Self::ByClassName { .. }
+                | Self::ChildNodes
+                | Self::ChildElements
         )
     }
     fn nameless(&self) -> bool {
@@ -113,9 +116,14 @@ pub(crate) fn elements_by_tag_name_ns_raw(
         if nodep.is_element() {
             let name_ok = local_match_any || {
                 if match_qname {
-                    let use_lower = nodep.doc().is_some_and(|d| d.t() == ffi::XML_HTML_DOCUMENT_NODE)
+                    let use_lower = nodep
+                        .doc()
+                        .is_some_and(|d| d.t() == ffi::XML_HTML_DOCUMENT_NODE)
                         && crate::ns::ns_is_fast(nodep, &crate::ns::HTML_TOKEN);
-                    crate::tree::match_qualified_name(if use_lower { local_lower } else { local }, nodep)
+                    crate::tree::match_qualified_name(
+                        if use_lower { local_lower } else { local },
+                        nodep,
+                    )
                 } else {
                     nodep.name() == local
                 }
@@ -160,7 +168,11 @@ struct HashIter {
     node: *mut std::ffi::c_void,
 }
 
-unsafe extern "C" fn item_hash_scanner(payload: *mut std::ffi::c_void, data: *mut std::ffi::c_void, _name: *const u8) {
+unsafe extern "C" fn item_hash_scanner(
+    payload: *mut std::ffi::c_void,
+    data: *mut std::ffi::c_void,
+    _name: *const u8,
+) {
     // SAFETY: data is the HashIter passed to xmlHashScan.
     let it = unsafe { &mut *data.cast::<HashIter>() };
     if it.cur < it.index {
@@ -171,12 +183,18 @@ unsafe extern "C" fn item_hash_scanner(payload: *mut std::ffi::c_void, data: *mu
 }
 
 /// `php_dom_libxml_hash_iter`.
-pub(crate) fn hash_iter(ht: *mut ffi::xmlHashTable, index: i64) -> DomResult<*mut std::ffi::c_void> {
+pub(crate) fn hash_iter(
+    ht: *mut ffi::xmlHashTable,
+    index: i64,
+) -> DomResult<*mut std::ffi::c_void> {
     if index < 0 {
         return Ok(std::ptr::null_mut());
     }
     if index > i64::from(i32::MAX) {
-        return Err(DomError::Value(format!("must be between 0 and {}", i32::MAX)));
+        return Err(DomError::Value(format!(
+            "must be between 0 and {}",
+            i32::MAX
+        )));
     }
     let size = hash_size(ht);
     if size > 0 && index < size {
@@ -194,7 +212,12 @@ pub(crate) fn hash_iter(ht: *mut ffi::xmlHashTable, index: i64) -> DomResult<*mu
 }
 
 /// `create_notation`: a fake notation node (entity layout).
-pub(crate) fn create_notation(dtd: Option<N>, name: *const u8, public: *const u8, system: *const u8) -> Option<N> {
+pub(crate) fn create_notation(
+    dtd: Option<N>,
+    name: *const u8,
+    public: *const u8,
+    system: *const u8,
+) -> Option<N> {
     // SAFETY: allocation with libxml2's allocator, zeroed; strings
     // duplicated (xmlStrdup(NULL) returns NULL).
     unsafe {
@@ -241,6 +264,7 @@ impl ObjMap {
         self.base.as_ref().and_then(Node::n)
     }
 
+    #[allow(clippy::unused_self)]
     fn doc_nr(&self, n: N) -> Option<u64> {
         let obj = Node::existing(n)?;
         let doc = obj.doc_ref()?;
@@ -276,7 +300,9 @@ impl ObjMap {
         }
         let name = cs(b"class");
         // SAFETY: live element.
-        let attr = N::from_attr(unsafe { ffi::xmlHasNsProp(n.p(), name.as_ptr().cast(), std::ptr::null()) });
+        let attr = N::from_attr(unsafe {
+            ffi::xmlHasNsProp(n.p(), name.as_ptr().cast(), std::ptr::null())
+        });
         let Some(attr) = attr else { return false };
         let value = crate::tree::attr_value(attr);
         let quirks = self
@@ -298,9 +324,7 @@ impl ObjMap {
         match &self.kind {
             MapKind::Entities | MapKind::Notations => hash_size(self.ht()),
             MapKind::NodeSet(v) => i64::try_from(v.len()).unwrap_or(i64::MAX),
-            MapKind::Attributes => {
-                i64::try_from(nodep.attr_iter().count()).unwrap_or(i64::MAX)
-            }
+            MapKind::Attributes => i64::try_from(nodep.attr_iter().count()).unwrap_or(i64::MAX),
             MapKind::ChildNodes => {
                 let mut count = 0;
                 let mut c = iter_start_first_child(nodep);
@@ -321,7 +345,11 @@ impl ObjMap {
                 }
                 count
             }
-            MapKind::ByTagName { ns, local, local_lower } => {
+            MapKind::ByTagName {
+                ns,
+                local,
+                local_lower,
+            } => {
                 let mut count = 0;
                 elements_by_tag_name_ns_raw(
                     nodep,
@@ -396,6 +424,7 @@ impl ObjMap {
     }
 
     /// `handler->get_item`.
+    #[allow(clippy::too_many_lines)]
     pub(crate) fn item(&self, index: i64) -> DomResult<Option<Node>> {
         if let MapKind::NodeSet(v) = &self.kind {
             return Ok(usize::try_from(index).ok().and_then(|i| v.get(i).cloned()));
@@ -450,34 +479,30 @@ impl ObjMap {
                     return Ok(None);
                 }
                 let (start, mut rel) = self.start_point(nodep, index);
-                let mut item = match start {
-                    Some(s) => Some(s),
-                    None => {
-                        let mut c = nodep.children();
-                        while let Some(x) = c {
-                            if x.is_element() {
-                                break;
-                            }
-                            c = x.next();
+                let mut item = if let Some(s) = start {
+                    Some(s)
+                } else {
+                    let mut c = nodep.children();
+                    while let Some(x) = c {
+                        if x.is_element() {
+                            break;
                         }
-                        c
+                        c = x.next();
                     }
+                    c
                 };
                 while rel > 0 {
                     let Some(mut i) = item else { break };
                     loop {
-                        match i.next() {
-                            Some(nx) => {
-                                i = nx;
-                                if i.is_element() {
-                                    item = Some(i);
-                                    break;
-                                }
-                            }
-                            None => {
-                                item = None;
+                        if let Some(nx) = i.next() {
+                            i = nx;
+                            if i.is_element() {
+                                item = Some(i);
                                 break;
                             }
+                        } else {
+                            item = None;
+                            break;
                         }
                     }
                     rel -= 1;
@@ -485,14 +510,26 @@ impl ObjMap {
                 let item = item.filter(|i| i.is_element());
                 Ok(self.finish_item(item, index))
             }
-            MapKind::ByTagName { ns, local, local_lower } => {
+            MapKind::ByTagName {
+                ns,
+                local,
+                local_lower,
+            } => {
                 if index < 0 {
                     return Ok(None);
                 }
                 let (start, rel) = self.start_point(nodep, index);
                 let s = start.or_else(|| first_child_of_container(nodep));
                 let mut count = 0;
-                let item = elements_by_tag_name_ns_raw(nodep, s, ns.as_deref(), local, local_lower, &mut count, rel);
+                let item = elements_by_tag_name_ns_raw(
+                    nodep,
+                    s,
+                    ns.as_deref(),
+                    local,
+                    local_lower,
+                    &mut count,
+                    rel,
+                );
                 Ok(self.finish_item(item, index))
             }
             MapKind::ByClassName { classes } => {
@@ -500,18 +537,17 @@ impl ObjMap {
                     return Ok(None);
                 }
                 let (start, mut rel) = self.start_point(nodep, index);
-                let mut item = match start {
-                    Some(s) => Some(s),
-                    None => {
-                        let mut c = first_child_of_container(nodep);
-                        while let Some(x) = c {
-                            if self.matches_class_name(classes, x) {
-                                break;
-                            }
-                            c = next_in_tree_order(x, Some(nodep));
+                let mut item = if let Some(s) = start {
+                    Some(s)
+                } else {
+                    let mut c = first_child_of_container(nodep);
+                    while let Some(x) = c {
+                        if self.matches_class_name(classes, x) {
+                            break;
                         }
-                        c
+                        c = next_in_tree_order(x, Some(nodep));
                     }
+                    c
                 };
                 while rel > 0 {
                     let Some(i) = item else { break };
@@ -573,7 +609,9 @@ impl ObjMap {
             Some(ns) => {
                 let u = cs(ns);
                 // SAFETY: live element.
-                let item = N::from_attr(unsafe { ffi::xmlHasNsProp(nodep.p(), c.as_ptr().cast(), u.as_ptr().cast()) });
+                let item = N::from_attr(unsafe {
+                    ffi::xmlHasNsProp(nodep.p(), c.as_ptr().cast(), u.as_ptr().cast())
+                });
                 item.filter(|i| i.t() != ffi::XML_ATTRIBUTE_DECL)
             }
             None => {
@@ -619,12 +657,24 @@ impl ObjMap {
             MapKind::ChildElements => {
                 candidates.extend(basep.child_iter().filter(|c| c.is_element()));
             }
-            MapKind::ByTagName { ns, local, local_lower } => {
+            MapKind::ByTagName {
+                ns,
+                local,
+                local_lower,
+            } => {
                 let mut start = basep.children();
                 let mut cur = 0;
                 let mut next = 0;
                 loop {
-                    let found = elements_by_tag_name_ns_raw(basep, start, ns.as_deref(), local, local_lower, &mut cur, next);
+                    let found = elements_by_tag_name_ns_raw(
+                        basep,
+                        start,
+                        ns.as_deref(),
+                        local,
+                        local_lower,
+                        &mut cur,
+                        next,
+                    );
                     let Some(f) = found else { break };
                     candidates.push(f);
                     next = cur + 1;
@@ -713,7 +763,7 @@ pub(crate) fn handle_numeric(s: &[u8]) -> Option<i64> {
 
 /// `zend_dval_to_lval_safe`/cap-ish conversion.
 fn dval_to_lval(d: f64) -> i64 {
-    if !d.is_finite() || d >= 9.223_372_036_854_775_807e18 || d < -9.223_372_036_854_775_808e18 {
+    if !d.is_finite() || !(-9.223_372_036_854_776e18..9.223_372_036_854_776e18).contains(&d) {
         0
     } else {
         #[allow(clippy::cast_possible_truncation)]
@@ -728,11 +778,14 @@ pub(crate) fn dval_to_lval_safe(d: f64) -> i64 {
     let l = dval_to_lval(d);
     #[allow(clippy::cast_precision_loss)]
     let compatible = (l as f64 - d).abs() == 0.0;
-    let fits = d.is_finite() && d >= -9.223_372_036_854_775_808e18 && d < 9.223_372_036_854_775_807e18;
+    let fits = d.is_finite() && (-9.223_372_036_854_776e18..9.223_372_036_854_776e18).contains(&d);
     if !compatible && fits {
         crate::error::emit(
             crate::error::Level::Deprecated,
-            format!("Implicit conversion from float {} to int loses precision", crate::dispatch::float_to_repr(d)),
+            format!(
+                "Implicit conversion from float {} to int loses precision",
+                crate::dispatch::float_to_repr(d)
+            ),
         );
     }
     l
@@ -751,6 +804,7 @@ fn legacy_offset(off: &Offset) -> Result<i64, Vec<u8>> {
             Some(Numeric::Int(i)) => Ok(i),
             Some(Numeric::Float(f)) => Ok(if f.is_finite() {
                 #[allow(clippy::cast_possible_truncation)]
+                #[allow(clippy::cast_precision_loss)]
                 let v = f.clamp(i64::MIN as f64, i64::MAX as f64) as i64;
                 v
             } else {
@@ -927,6 +981,7 @@ impl NodeList {
     }
 
     /// `foreach` / `getIterator()`.
+    #[allow(clippy::iter_not_returning_iterator)]
     pub fn iter(&self) -> DomResult<CollectionIter> {
         CollectionIter::new(self.0.clone())
     }
@@ -942,7 +997,7 @@ impl NodeList {
         Rc::as_ptr(&self.0) as usize
     }
 
-    /// The node objects of a fixed list (XPath results), which PHP
+    /// The node objects of a fixed list (`XPath` results), which PHP
     /// materializes before the list object itself; `None` for live lists.
     pub fn fixed_nodes(&self) -> Option<Vec<Node>> {
         match &self.0.kind {
@@ -956,7 +1011,7 @@ impl NodeList {
         self.0.collection_named_item(key)
     }
 
-    /// `$list[$offset]` (read_dimension); `Err` for illegal offsets
+    /// `$list[$offset]` (`read_dimension`); `Err` for illegal offsets
     /// (modern lists).
     pub fn offset_get(&self, offset: &Offset) -> DomResult<Option<Node>> {
         if self.0.class == "DOMNodeList" {
@@ -982,7 +1037,9 @@ impl NodeList {
         }
         match modern_index(offset) {
             ModernIndex::Long(i) => Ok(i >= 0 && i < self.length()),
-            ModernIndex::Str(s) if self.0.class == "Dom\\HTMLCollection" => Ok(self.named_item(&s).is_some()),
+            ModernIndex::Str(s) if self.0.class == "Dom\\HTMLCollection" => {
+                Ok(self.named_item(&s).is_some())
+            }
             _ => Err(illegal_offset(self.0.class, offset, true)),
         }
     }
@@ -1017,7 +1074,9 @@ fn illegal_offset(class: &str, off: &Offset, isset: bool) -> DomError {
         Offset::Other(t) => t.clone(),
     };
     if isset {
-        DomError::Type(format!("Cannot access offset of type {ty} in isset or empty"))
+        DomError::Type(format!(
+            "Cannot access offset of type {ty} in isset or empty"
+        ))
     } else {
         DomError::Type(format!("Cannot access offset of type {ty} on {class}"))
     }
@@ -1037,7 +1096,10 @@ impl NamedNodeMap {
     /// `item($index)` (raises `ValueError` for out-of-range legacy indexes).
     pub fn item(&self, index: i64) -> DomResult<Option<Node>> {
         if self.0.class == "DOMNamedNodeMap" && (index < 0 || index > i64::from(i32::MAX)) {
-            return Err(DomError::arg_value(1, format!("must be between 0 and {}", i32::MAX)));
+            return Err(DomError::arg_value(
+                1,
+                format!("must be between 0 and {}", i32::MAX),
+            ));
         }
         self.0.item(index)
     }
@@ -1061,6 +1123,7 @@ impl NamedNodeMap {
     }
 
     /// `foreach` / `getIterator()`.
+    #[allow(clippy::iter_not_returning_iterator)]
     pub fn iter(&self) -> DomResult<CollectionIter> {
         CollectionIter::new(self.0.clone())
     }
@@ -1071,7 +1134,10 @@ impl NamedNodeMap {
             return match legacy_offset(offset) {
                 Ok(i) => {
                     if i < 0 || i > i64::from(i32::MAX) {
-                        return Err(DomError::Value(format!("must be between 0 and {}", i32::MAX)));
+                        return Err(DomError::Value(format!(
+                            "must be between 0 and {}",
+                            i32::MAX
+                        )));
                     }
                     self.0.item(i)
                 }

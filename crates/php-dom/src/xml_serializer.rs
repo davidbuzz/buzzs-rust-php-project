@@ -12,7 +12,9 @@ use std::rc::Rc;
 
 use crate::error::{DomError, DomExceptionCode, DomResult};
 use crate::ffi;
-use crate::ns::{ns_is_fast, ns_is_fast_ex, PrivateData, HTML_TOKEN, XMLNS_NS, XMLNS_TOKEN, XML_NS, XML_TOKEN};
+use crate::ns::{
+    ns_is_fast, ns_is_fast_ex, PrivateData, HTML_TOKEN, XMLNS_NS, XMLNS_TOKEN, XML_NS, XML_TOKEN,
+};
 use crate::object::DocInner;
 use crate::raw::{cs, N};
 use crate::save::write_vec;
@@ -34,10 +36,13 @@ fn eq_empty(a: Option<&[u8]>, b: Option<&[u8]>) -> bool {
     a.unwrap_or_default() == b.unwrap_or_default()
 }
 
+/// Namespace URI → candidate prefixes.
+type PrefixLists = HashMap<Vec<u8>, Rc<Vec<Vec<u8>>>>;
+
 /// `dom_xml_ns_prefix_map`: namespace → list of candidate prefixes, copy
 /// on write.
 #[derive(Clone, Default)]
-struct NsPrefixMap(Rc<HashMap<Vec<u8>, Rc<Vec<Vec<u8>>>>>);
+struct NsPrefixMap(Rc<PrefixLists>);
 
 impl NsPrefixMap {
     /// <https://w3c.github.io/DOM-Parsing/#dfn-add>.
@@ -75,7 +80,8 @@ impl LocalPrefixMap {
     }
 
     fn conflicts(&self, prefix: &[u8], ns: &[u8]) -> bool {
-        self.find(prefix).is_some_and(|r| !eq_empty(Some(r), Some(ns)))
+        self.find(prefix)
+            .is_some_and(|r| !eq_empty(Some(r), Some(ns)))
     }
 
     fn contains(&self, prefix: &[u8]) -> bool {
@@ -97,7 +103,11 @@ fn ns_prefix(n: N) -> Option<&'static [u8]> {
 }
 
 /// <https://w3c.github.io/DOM-Parsing/#dfn-recording-the-namespace-information>.
-fn record_namespace_information(map: &mut NsPrefixMap, local: &mut LocalPrefixMap, element: N) -> Option<&'static [u8]> {
+fn record_namespace_information(
+    map: &mut NsPrefixMap,
+    local: &mut LocalPrefixMap,
+    element: N,
+) -> Option<&'static [u8]> {
     let mut default_namespace_attr_value = None;
     for attr in element.attr_iter() {
         let Some(ans) = attr.ns() else { continue };
@@ -148,7 +158,12 @@ fn retrieve_preferred_prefix(
 }
 
 /// <https://w3c.github.io/DOM-Parsing/#dfn-generating-a-prefix>.
-fn generate_prefix(map: &mut NsPrefixMap, local: &mut LocalPrefixMap, ns: Option<&[u8]>, index: &mut u32) -> Vec<u8> {
+fn generate_prefix(
+    map: &mut NsPrefixMap,
+    local: &mut LocalPrefixMap,
+    ns: Option<&[u8]>,
+    index: &mut u32,
+) -> Vec<u8> {
     let generated = loop {
         let candidate = format!("ns{index}").into_bytes();
         *index = index.wrapping_add(1);
@@ -191,8 +206,25 @@ fn valid_ncname(name: &[u8]) -> bool {
 
 /// HTML void elements serialized as `<x />` (step 14).
 const VOID_ELEMENTS: &[&[u8]] = &[
-    b"area", b"base", b"basefont", b"bgsound", b"br", b"col", b"embed", b"frame", b"hr", b"img", b"input", b"keygen",
-    b"link", b"menuitem", b"meta", b"param", b"source", b"track", b"wbr",
+    b"area",
+    b"base",
+    b"basefont",
+    b"bgsound",
+    b"br",
+    b"col",
+    b"embed",
+    b"frame",
+    b"hr",
+    b"img",
+    b"input",
+    b"keygen",
+    b"link",
+    b"menuitem",
+    b"meta",
+    b"param",
+    b"source",
+    b"track",
+    b"wbr",
 ];
 
 /// `dom_xml_serialize_ctx`.
@@ -211,7 +243,8 @@ impl Ctx {
             return Err(Fail::Failed);
         };
         // SAFETY: live output buffer; `bytes` valid for `len`.
-        let r = unsafe { ffi::xmlOutputBufferWrite(self.out, len, bytes.as_ptr().cast::<c_char>()) };
+        let r =
+            unsafe { ffi::xmlOutputBufferWrite(self.out, len, bytes.as_ptr().cast::<c_char>()) };
         if r < 0 {
             Err(Fail::Failed)
         } else {
@@ -359,7 +392,8 @@ impl Ctx {
             let attribute_namespace = ns_href(attr);
             let mut candidate_prefix: Option<Vec<u8>> = None;
             if let (Some(attribute_namespace), Some(ans)) = (attribute_namespace, attr.ns()) {
-                candidate_prefix = retrieve_preferred_prefix(map, local, ans.prefix(), Some(attribute_namespace));
+                candidate_prefix =
+                    retrieve_preferred_prefix(map, local, ans.prefix(), Some(attribute_namespace));
                 if ns_is_fast_ex(ans, &XMLNS_TOKEN) {
                     let attr_value = attribute_value(attr);
                     if attr_value == XML_NS {
@@ -382,7 +416,10 @@ impl Ctx {
                         candidate_prefix = Some(b"xmlns".to_vec());
                     }
                     // 3.5.2.2 and 3.5.2.3.
-                    if well_formed && (attr_value == XMLNS_NS || (attr_value.is_empty() && candidate_prefix.is_some())) {
+                    if well_formed
+                        && (attr_value == XMLNS_NS
+                            || (attr_value.is_empty() && candidate_prefix.is_some()))
+                    {
                         return Err(Fail::Failed);
                     }
                 } else if candidate_prefix.is_none() {
@@ -408,7 +445,10 @@ impl Ctx {
                 self.w(p)?;
                 self.w(b":")?;
             }
-            if well_formed && (!valid_ncname(attr.name()) || (attr.name() == b"xmlns" && attribute_namespace.is_none())) {
+            if well_formed
+                && (!valid_ncname(attr.name())
+                    || (attr.name() == b"xmlns" && attribute_namespace.is_none()))
+            {
                 return Err(Fail::Failed);
             }
             self.attribute_node_value(attr)?;
@@ -434,7 +474,10 @@ impl Ctx {
         let should_format = indent >= 0
             && element.children().is_some()
             && element.child_iter().all(|c| {
-                !matches!(c.t(), ffi::XML_TEXT_NODE | ffi::XML_ENTITY_REF_NODE | ffi::XML_CDATA_SECTION_NODE)
+                !matches!(
+                    c.t(),
+                    ffi::XML_TEXT_NODE | ffi::XML_ENTITY_REF_NODE | ffi::XML_CDATA_SECTION_NODE
+                )
             });
 
         self.w(b"<")?;
@@ -459,7 +502,8 @@ impl Ctx {
         } else {
             let prefix: Option<&[u8]> = ns_prefix(element);
             // DOM-Parsing #52.
-            let mut candidate_prefix = if prefix.is_none() && eq_empty(ns, local_default_namespace) {
+            let mut candidate_prefix = if prefix.is_none() && eq_empty(ns, local_default_namespace)
+            {
                 None
             } else {
                 retrieve_preferred_prefix(&map, &local, prefix, ns)
@@ -544,7 +588,9 @@ impl Ctx {
                 indent = -1;
             }
             let first = if ns_is_fast(element, &HTML_TOKEN) && name == b"template" {
-                self.private.as_ref().and_then(|p| p.retrieve_template(element))
+                self.private
+                    .as_ref()
+                    .and_then(|p| p.retrieve_template(element))
             } else {
                 element.children()
             };
@@ -612,7 +658,9 @@ impl Ctx {
             return Err(Fail::Stack);
         }
         match node.t() {
-            ffi::XML_ELEMENT_NODE => self.element(namespace, map, node, prefix_index, indent, well_formed),
+            ffi::XML_ELEMENT_NODE => {
+                self.element(namespace, map, node, prefix_index, indent, well_formed)
+            }
             ffi::XML_DOCUMENT_FRAG_NODE => {
                 for child in node.child_iter() {
                     self.algorithm(map, child, namespace, prefix_index, indent, well_formed)?;
@@ -662,7 +710,14 @@ fn serialize(
     map.add(b"xml", Some(XML_NS));
     let mut prefix_index = 1u32;
     let ctx = Ctx { ctxt, out, private };
-    ctx.algorithm(&map, node, None, &mut prefix_index, if format { 0 } else { -1 }, well_formed)
+    ctx.algorithm(
+        &map,
+        node,
+        None,
+        &mut prefix_index,
+        if format { 0 } else { -1 },
+        well_formed,
+    )
 }
 
 fn private_data_of(node: N) -> Option<Rc<PrivateData>> {
@@ -686,7 +741,13 @@ fn serialize_to_vec(
         // SAFETY: the save context and output buffer both write into `data`,
         // which outlives them (they are closed here).
         unsafe {
-            let ctxt = ffi::xmlSaveToIO(Some(write_vec), None, data_ptr, enc_ptr, ffi::XML_SAVE_AS_XML | options);
+            let ctxt = ffi::xmlSaveToIO(
+                Some(write_vec),
+                None,
+                data_ptr,
+                enc_ptr,
+                ffi::XML_SAVE_AS_XML | options,
+            );
             if ctxt.is_null() {
                 return;
             }
@@ -720,9 +781,16 @@ fn stack_error() -> DomError {
 }
 
 /// `php_new_dom_dump_node_to_str_ex`.
-pub(crate) fn dump_node_to_str_ex(node: N, options: i32, format: bool, encoding: Option<&[u8]>) -> DomResult<Option<Vec<u8>>> {
+pub(crate) fn dump_node_to_str_ex(
+    node: N,
+    options: i32,
+    format: bool,
+    encoding: Option<&[u8]>,
+) -> DomResult<Option<Vec<u8>>> {
     let private = private_data_of(node);
-    match serialize_to_vec(options, encoding, |ctxt, out| serialize(ctxt, out, node, format, false, private)) {
+    match serialize_to_vec(options, encoding, |ctxt, out| {
+        serialize(ctxt, out, node, format, false, private)
+    }) {
         Ok(v) => Ok(Some(v)),
         Err(Fail::Failed) => Ok(None),
         Err(Fail::Stack) => Err(stack_error()),
@@ -733,7 +801,9 @@ pub(crate) fn dump_node_to_str_ex(node: N, options: i32, format: bool, encoding:
 pub(crate) fn dump_node_to_file(filename: &[u8], doc: N, node: N, format: bool) -> DomResult<i64> {
     let encoding = crate::raw::opt_cstr(doc.d().encoding);
     let private = private_data_of(node);
-    let data = match serialize_to_vec(0, encoding, |ctxt, out| serialize(ctxt, out, node, format, false, private)) {
+    let data = match serialize_to_vec(0, encoding, |ctxt, out| {
+        serialize(ctxt, out, node, format, false, private)
+    }) {
         Ok(v) => v,
         Err(Fail::Failed) => return Ok(-1),
         Err(Fail::Stack) => return Err(stack_error()),
@@ -807,11 +877,23 @@ mod tests {
         map.add(b"a", Some(b"urn:x"));
         map.add(b"b", Some(b"urn:x"));
         let mut local = LocalPrefixMap::default();
-        assert_eq!(retrieve_preferred_prefix(&map, &local, None, Some(b"urn:x")).as_deref(), Some(b"b".as_slice()));
-        assert_eq!(retrieve_preferred_prefix(&map, &local, Some(b"a"), Some(b"urn:x")).as_deref(), Some(b"a".as_slice()));
+        assert_eq!(
+            retrieve_preferred_prefix(&map, &local, None, Some(b"urn:x")).as_deref(),
+            Some(b"b".as_slice())
+        );
+        assert_eq!(
+            retrieve_preferred_prefix(&map, &local, Some(b"a"), Some(b"urn:x")).as_deref(),
+            Some(b"a".as_slice())
+        );
         local.add(b"b", Some(b"urn:other"));
-        assert_eq!(retrieve_preferred_prefix(&map, &local, None, Some(b"urn:x")).as_deref(), Some(b"a".as_slice()));
-        assert_eq!(retrieve_preferred_prefix(&map, &local, None, Some(b"urn:none")), None);
+        assert_eq!(
+            retrieve_preferred_prefix(&map, &local, None, Some(b"urn:x")).as_deref(),
+            Some(b"a".as_slice())
+        );
+        assert_eq!(
+            retrieve_preferred_prefix(&map, &local, None, Some(b"urn:none")),
+            None
+        );
     }
 
     #[test]
@@ -820,7 +902,10 @@ mod tests {
         let mut local = LocalPrefixMap::default();
         local.add(b"ns1", Some(b"urn:a"));
         let mut idx = 1;
-        assert_eq!(generate_prefix(&mut map, &mut local, Some(b"urn:b"), &mut idx), b"ns2");
+        assert_eq!(
+            generate_prefix(&mut map, &mut local, Some(b"urn:b"), &mut idx),
+            b"ns2"
+        );
         assert_eq!(idx, 3);
         assert!(map.found(b"ns2", b"urn:b"));
     }

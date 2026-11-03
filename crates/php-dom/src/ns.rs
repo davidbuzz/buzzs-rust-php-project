@@ -13,7 +13,7 @@ use std::ptr;
 
 use crate::ffi;
 use crate::object::{set_old_ns, NS_TAG_HOOK};
-use crate::raw::{cs, N, Ns};
+use crate::raw::{cs, Ns, N};
 
 /// `DOM_XHTML_NS_URI`.
 pub const XHTML_NS: &[u8] = b"http://www.w3.org/1999/xhtml";
@@ -70,7 +70,9 @@ pub(crate) fn ns_is_fast(n: N, token: &'static Token) -> bool {
 
 /// `php_dom_ns_is_html_and_document_is_html`.
 pub(crate) fn is_html_and_document_is_html(n: N) -> bool {
-    n.doc().is_some_and(|d| d.t() == ffi::XML_HTML_DOCUMENT_NODE) && ns_is_fast(n, &HTML_TOKEN)
+    n.doc()
+        .is_some_and(|d| d.t() == ffi::XML_HTML_DOCUMENT_NODE)
+        && ns_is_fast(n, &HTML_TOKEN)
 }
 
 struct OwnedNs {
@@ -143,8 +145,15 @@ impl NsMapper {
     }
 
     /// `php_dom_libxml_ns_mapper_get_ns_raw_strings_nullsafe`.
-    pub fn get_ns_nullsafe(&mut self, prefix: Option<&[u8]>, uri: Option<&[u8]>) -> *mut ffi::xmlNs {
-        self.get_ns(Some(prefix.unwrap_or_default()), Some(uri.unwrap_or_default()))
+    pub fn get_ns_nullsafe(
+        &mut self,
+        prefix: Option<&[u8]>,
+        uri: Option<&[u8]>,
+    ) -> *mut ffi::xmlNs {
+        self.get_ns(
+            Some(prefix.unwrap_or_default()),
+            Some(uri.unwrap_or_default()),
+        )
     }
 
     fn ensure_cached(&mut self, which: bool, uri: &[u8], token: &'static Token) -> *mut ffi::xmlNs {
@@ -208,7 +217,12 @@ impl PrivateData {
     /// `php_dom_private_data_destroy` (template fragments).
     pub(crate) fn destroy(&self) {
         LIVE_PRIVATE.with(|l| l.borrow_mut().remove(&(ptr::from_ref(self) as usize)));
-        let fragments: Vec<N> = self.templates.borrow_mut().drain().map(|(_, n)| n).collect();
+        let fragments: Vec<N> = self
+            .templates
+            .borrow_mut()
+            .drain()
+            .map(|(_, n)| n)
+            .collect();
         for f in fragments {
             // SAFETY: template fragments are owned by the private data and
             // never exposed with handles to userland.
@@ -218,7 +232,10 @@ impl PrivateData {
 
     /// `php_dom_retrieve_templated_content`.
     pub(crate) fn retrieve_template(&self, template: N) -> Option<N> {
-        self.templates.borrow().get(&(template.p() as usize)).copied()
+        self.templates
+            .borrow()
+            .get(&(template.p() as usize))
+            .copied()
     }
 
     /// `php_dom_add_templated_content`.
@@ -307,9 +324,15 @@ pub(crate) fn run_ns_hook(private_addr: usize, node: N) {
 /// `php_dom_ns_compat_mark_attribute`.
 pub(crate) fn mark_attribute(mapper: &mut NsMapper, node: N, ns: Ns) -> Option<N> {
     let (xmlns_ns, name): (*mut ffi::xmlNs, *const u8) = if ns.prefix_ptr().is_null() {
-        (mapper.ensure_prefixless_xmlns_ns(), b"xmlns\0".as_ptr())
+        (
+            mapper.ensure_prefixless_xmlns_ns(),
+            c"xmlns".as_ptr().cast(),
+        )
     } else {
-        (mapper.get_ns(Some(b"xmlns"), Some(XMLNS_NS)), ns.prefix_ptr())
+        (
+            mapper.get_ns(Some(b"xmlns"), Some(XMLNS_NS)),
+            ns.prefix_ptr(),
+        )
     };
     // SAFETY: node is a live element; strings are valid C strings.
     N::from_attr(unsafe { ffi::xmlSetNsProp(node.p(), xmlns_ns, name, ns.href_ptr()) })
@@ -441,7 +464,11 @@ pub(crate) fn reconcile_modern(mapper: &mut NsMapper, node: N) {
 
 /// `php_dom_get_in_scope_ns`: (prefix, namespace) pairs in scope of `node`
 /// for a modern document (first declaration found walking upwards wins).
-pub(crate) fn in_scope_ns(mapper: &mut NsMapper, node: N, ignore_elements: bool) -> Vec<*mut ffi::xmlNs> {
+pub(crate) fn in_scope_ns(
+    mapper: &mut NsMapper,
+    node: N,
+    ignore_elements: bool,
+) -> Vec<*mut ffi::xmlNs> {
     let mut seen: Vec<(Vec<u8>, *mut ffi::xmlNs)> = Vec::new();
     let mut add = |prefix: &[u8], ns: *mut ffi::xmlNs| {
         if !seen.iter().any(|(p, _)| p == prefix) {

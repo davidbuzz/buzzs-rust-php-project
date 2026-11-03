@@ -2,13 +2,13 @@
 
 use std::ptr;
 
-use crate::error::{throw, throw_msg, DomError, DomExceptionCode as C, DomResult};
+use crate::error::{throw, DomError, DomExceptionCode as C, DomResult};
 use crate::ffi;
 use crate::lists::{new_list, MapKind, NodeList};
 use crate::node::set_document_ref_pointers_attr;
 use crate::ns::{self, ns_is_fast, ns_is_fast_ex, HTML_TOKEN, XMLNS_TOKEN};
 use crate::object::{node_list_unlink, remove_all_children, set_old_ns, DocRef, Node};
-use crate::raw::{c_len, cs, str_eq, take, N, Ns};
+use crate::raw::{c_len, cs, str_eq, take, Ns, N};
 use crate::tree::{self, NodeOrString};
 use crate::value::{DomValue, NamespaceInfo};
 
@@ -18,7 +18,11 @@ pub(crate) fn has_ns_prop(node: N, name: &[u8], ns: Option<&[u8]>) -> Option<N> 
     let u = ns.map(cs);
     // SAFETY: live node; strings valid.
     N::from_attr(unsafe {
-        ffi::xmlHasNsProp(node.p(), n.as_ptr().cast(), u.as_ref().map_or(ptr::null(), |u| u.as_ptr().cast()))
+        ffi::xmlHasNsProp(
+            node.p(),
+            n.as_ptr().cast(),
+            u.as_ref().map_or(ptr::null(), |u| u.as_ptr().cast()),
+        )
     })
 }
 
@@ -98,7 +102,9 @@ pub(crate) fn check_register_attribute_id(attr: N, doc: Option<&DocRef>) {
         d.mark_modified_since_parsing();
     }
     if attr.atype() != ffi::XML_ATTRIBUTE_ID
-        && attr.doc().is_some_and(|d| d.t() == ffi::XML_HTML_DOCUMENT_NODE)
+        && attr
+            .doc()
+            .is_some_and(|d| d.t() == ffi::XML_HTML_DOCUMENT_NODE)
         && attr.ns().is_none()
         && attr.name() == b"id"
     {
@@ -130,7 +136,8 @@ fn create_attribute(node: N, name: &[u8], value: &[u8]) -> Option<AttrOrNs> {
     } else {
         let n = cs(name);
         // SAFETY: live element.
-        N::from_attr(unsafe { ffi::xmlSetProp(node.p(), n.as_ptr().cast(), v.as_ptr().cast()) }).map(AttrOrNs::Attr)
+        N::from_attr(unsafe { ffi::xmlSetProp(node.p(), n.as_ptr().cast(), v.as_ptr().cast()) })
+            .map(AttrOrNs::Attr)
     }
 }
 
@@ -141,7 +148,13 @@ fn deep_ns_redef(node: N, ns_to_redefine: Ns) {
         if cur.ns_ptr() == ns_to_redefine.p() {
             if defined.is_null() {
                 // SAFETY: live element; ns strings valid.
-                defined = unsafe { ffi::xmlNewNs(cur.p(), ns_to_redefine.href_ptr(), ns_to_redefine.prefix_ptr()) };
+                defined = unsafe {
+                    ffi::xmlNewNs(
+                        cur.p(),
+                        ns_to_redefine.href_ptr(),
+                        ns_to_redefine.prefix_ptr(),
+                    )
+                };
             }
             cur.set_ns(defined);
         }
@@ -149,7 +162,13 @@ fn deep_ns_redef(node: N, ns_to_redefine: Ns) {
             if attr.ns_ptr() == ns_to_redefine.p() {
                 if defined.is_null() {
                     // SAFETY: as above.
-                    defined = unsafe { ffi::xmlNewNs(cur.p(), ns_to_redefine.href_ptr(), ns_to_redefine.prefix_ptr()) };
+                    defined = unsafe {
+                        ffi::xmlNewNs(
+                            cur.p(),
+                            ns_to_redefine.href_ptr(),
+                            ns_to_redefine.prefix_ptr(),
+                        )
+                    };
                 }
                 attr.set_ns(defined);
             }
@@ -281,7 +300,9 @@ impl Node {
             }
             let prefix = cs(&name[..len]);
             // SAFETY: live element.
-            let ns = Ns::new(unsafe { ffi::xmlSearchNs(elem.doc_ptr(), elem.p(), prefix.as_ptr().cast()) });
+            let ns = Ns::new(unsafe {
+                ffi::xmlSearchNs(elem.doc_ptr(), elem.p(), prefix.as_ptr().cast())
+            });
             if let Some(ns) = ns {
                 return has_ns_prop(elem, &nq, Some(ns.href())).map(AttrOrNs::Attr);
             }
@@ -299,10 +320,16 @@ impl Node {
     }
 
     /// `new DOMElement($qualifiedName, $value, $namespace)`.
-    pub fn construct_element(&self, name: &[u8], value: Option<&[u8]>, uri: &[u8]) -> DomResult<()> {
+    pub fn construct_element(
+        &self,
+        name: &[u8],
+        value: Option<&[u8]>,
+        uri: &[u8],
+    ) -> DomResult<()> {
         if !tree::valid_name(name) {
             return Err(DomError::dom(C::InvalidCharacter));
         }
+        #[allow(clippy::needless_late_init)]
         let nodep;
         if uri.is_empty() {
             if tree::split_qname2(name).is_some() {
@@ -310,21 +337,33 @@ impl Node {
             }
             let n = cs(name);
             // SAFETY: valid C string.
-            nodep = N::new(unsafe { ffi::xmlNewDocNode(ptr::null_mut(), ptr::null_mut(), n.as_ptr().cast(), ptr::null()) });
+            nodep = N::new(unsafe {
+                ffi::xmlNewDocNode(
+                    ptr::null_mut(),
+                    ptr::null_mut(),
+                    n.as_ptr().cast(),
+                    ptr::null(),
+                )
+            });
         } else {
             let (local, prefix) = tree::check_qname(name, uri.len()).map_err(DomError::dom)?;
             let l = cs(&local);
             // SAFETY: valid C string.
-            let created = N::new(unsafe { ffi::xmlNewDocNode(ptr::null_mut(), ptr::null_mut(), l.as_ptr().cast(), ptr::null()) });
+            let created = N::new(unsafe {
+                ffi::xmlNewDocNode(
+                    ptr::null_mut(),
+                    ptr::null_mut(),
+                    l.as_ptr().cast(),
+                    ptr::null(),
+                )
+            });
             if let Some(c) = created {
-                match tree::get_ns(c, uri, prefix.as_deref()) {
-                    // SAFETY: live element.
-                    Ok(ns) => unsafe { ffi::xmlSetNs(c.p(), ns) },
-                    Err(()) => {
-                        tree::free_node(c);
-                        return Err(DomError::dom(C::Namespace));
-                    }
-                }
+                let Ok(ns) = tree::get_ns(c, uri, prefix.as_deref()) else {
+                    tree::free_node(c);
+                    return Err(DomError::dom(C::Namespace));
+                };
+                // SAFETY: live element.
+                unsafe { ffi::xmlSetNs(c.p(), ns) };
             }
             nodep = created;
         }
@@ -403,7 +442,11 @@ impl Node {
         if let Some(c) = &extra.children {
             return Ok(c.clone());
         }
-        let c = new_list("Dom\\HTMLCollection", Some(self.clone()), MapKind::ChildElements);
+        let c = new_list(
+            "Dom\\HTMLCollection",
+            Some(self.clone()),
+            MapKind::ChildElements,
+        );
         extra.children = Some(c.clone());
         Ok(c)
     }
@@ -439,7 +482,13 @@ impl Node {
         let value = match self.get_attribute_or_nsdecl(n, name) {
             Some(AttrOrNs::Attr(a)) if a.t() == ffi::XML_ATTRIBUTE_NODE => {
                 // SAFETY: live attribute.
-                take(unsafe { ffi::xmlNodeListGetString(a.doc_ptr(), a.children().map_or(ptr::null(), |c| c.p().cast_const()), 1) })
+                take(unsafe {
+                    ffi::xmlNodeListGetString(
+                        a.doc_ptr(),
+                        a.children().map_or(ptr::null(), |c| c.p().cast_const()),
+                        1,
+                    )
+                })
             }
             Some(AttrOrNs::Ns(ns)) => Some(ns.href().to_vec()),
             Some(AttrOrNs::Attr(decl)) => {
@@ -508,7 +557,14 @@ impl Node {
                 let p = cs(&processed);
                 let v = cs(value);
                 // SAFETY: live element.
-                let attr = N::from_attr(unsafe { ffi::xmlSetNsProp(nodep.p(), ptr::null_mut(), p.as_ptr().cast(), v.as_ptr().cast()) });
+                let attr = N::from_attr(unsafe {
+                    ffi::xmlSetNsProp(
+                        nodep.p(),
+                        ptr::null_mut(),
+                        p.as_ptr().cast(),
+                        v.as_ptr().cast(),
+                    )
+                });
                 if let Some(a) = attr {
                     check_register_attribute_id(a, self.doc_ref().as_ref());
                 }
@@ -549,7 +605,9 @@ impl Node {
         let nodep = self.node()?;
         match self.get_attribute_or_nsdecl(nodep, name) {
             None => Ok(None),
-            Some(AttrOrNs::Ns(ns)) => Ok(Some(crate::xpath::create_fake_namespace_decl(nodep, ns, self))),
+            Some(AttrOrNs::Ns(ns)) => Ok(Some(crate::xpath::create_fake_namespace_decl(
+                nodep, ns, self,
+            ))),
             Some(AttrOrNs::Attr(a)) => Ok(Some(Node::wrap(a))),
         }
     }
@@ -566,7 +624,10 @@ impl Node {
                 adopt_node(attrp, self, nodep.doc_ptr());
             }
         } else if !(attrp.doc_ptr().is_null() || attrp.doc_ptr() == nodep.doc_ptr()) {
-            return Err(throw(C::WrongDocument, self.doc_ref().is_none_or(|d| d.strict())));
+            return Err(throw(
+                C::WrongDocument,
+                self.doc_ref().is_none_or(|d| d.strict()),
+            ));
         }
         let nsp = attrp.ns();
         let mut existing = match (use_ns, nsp) {
@@ -619,7 +680,10 @@ impl Node {
         let nodep = self.node()?;
         let attrp = attr.node()?;
         if attrp.parent() != Some(nodep) {
-            return Err(throw(C::NotFound, self.doc_ref().is_none_or(|d| d.strict())));
+            return Err(throw(
+                C::NotFound,
+                self.doc_ref().is_none_or(|d| d.strict()),
+            ));
         }
         self.invalidate_doc();
         tree::unlink(attrp);
@@ -649,7 +713,11 @@ impl Node {
     }
 
     /// `getElementsByTagNameNS($namespace, $localName)`.
-    pub fn get_elements_by_tag_name_ns(&self, uri: Option<&[u8]>, name: &[u8]) -> DomResult<NodeList> {
+    pub fn get_elements_by_tag_name_ns(
+        &self,
+        uri: Option<&[u8]>,
+        name: &[u8],
+    ) -> DomResult<NodeList> {
         self.node()?;
         let class = if self.family_is_modern() {
             "Dom\\HTMLCollection"
@@ -684,12 +752,20 @@ impl Node {
 
     fn get_attribute_ns_raw(&self, elemp: N, uri: Option<&[u8]>, name: &[u8]) -> Option<Vec<u8>> {
         let follow = self.is_modern();
-        let uri = if follow && uri.is_some_and(<[u8]>::is_empty) { None } else { uri };
+        let uri = if follow && uri.is_some_and(<[u8]>::is_empty) {
+            None
+        } else {
+            uri
+        };
         let n = cs(name);
         let u = uri.map(cs);
         // SAFETY: live element.
         let strattr = take(unsafe {
-            ffi::xmlGetNsProp(elemp.p(), n.as_ptr().cast(), u.as_ref().map_or(ptr::null(), |u| u.as_ptr().cast()))
+            ffi::xmlGetNsProp(
+                elemp.p(),
+                n.as_ptr().cast(),
+                u.as_ref().map_or(ptr::null(), |u| u.as_ptr().cast()),
+            )
         });
         if strattr.is_some() {
             return strattr;
@@ -715,7 +791,10 @@ impl Node {
         let elemp = self.node()?;
         if self.is_modern() {
             let (local, prefix) = tree::validate_and_extract(uri, name).map_err(DomError::dom)?;
-            let pd = self.doc_ref().and_then(|d| d.private_data()).ok_or_else(|| DomError::dom(C::InvalidState))?;
+            let pd = self
+                .doc_ref()
+                .and_then(|d| d.private_data())
+                .ok_or_else(|| DomError::dom(C::InvalidState))?;
             let ns = pd.mapper.borrow_mut().get_ns(prefix.as_deref(), uri);
             match tree::set_attribute_value(elemp, ns, &local, value) {
                 None => Err(DomError::dom(C::InvalidState)),
@@ -729,7 +808,14 @@ impl Node {
         }
     }
 
-    fn set_attribute_ns_legacy(&self, elemp: N, uri: &[u8], name: &[u8], value: &[u8]) -> DomResult<()> {
+    #[allow(clippy::too_many_lines)]
+    fn set_attribute_ns_legacy(
+        &self,
+        elemp: N,
+        uri: &[u8],
+        name: &[u8],
+        value: &[u8],
+    ) -> DomResult<()> {
         if name.is_empty() {
             return Err(DomError::arg_value(2, "must not be empty"));
         }
@@ -762,7 +848,8 @@ impl Node {
                             node_list_unlink(a.children());
                         }
                     }
-                    let is_xmlns = (prefix.as_deref() == Some(b"xmlns") || (prefix.is_none() && local == b"xmlns"))
+                    let is_xmlns = (prefix.as_deref() == Some(b"xmlns")
+                        || (prefix.is_none() && local == b"xmlns"))
                         && uri == ns::XMLNS_NS;
                     let mut nsptr: *mut ffi::xmlNs;
                     if is_xmlns {
@@ -775,13 +862,18 @@ impl Node {
                     } else {
                         let u = cs(uri);
                         // SAFETY: live element.
-                        nsptr = unsafe { ffi::xmlSearchNsByHref(elemp.doc_ptr(), elemp.p(), u.as_ptr().cast()) };
+                        nsptr = unsafe {
+                            ffi::xmlSearchNsByHref(elemp.doc_ptr(), elemp.p(), u.as_ptr().cast())
+                        };
                         if let Some(found) = Ns::new(nsptr) {
                             if found.prefix_ptr().is_null() {
                                 let mut tmp = found.next();
                                 let mut replaced = false;
                                 while let Some(t) = tmp {
-                                    if !t.prefix_ptr().is_null() && !t.href_ptr().is_null() && t.href() == uri {
+                                    if !t.prefix_ptr().is_null()
+                                        && !t.href_ptr().is_null()
+                                        && t.href() == uri
+                                    {
                                         nsptr = t.p();
                                         replaced = true;
                                         break;
@@ -789,7 +881,8 @@ impl Node {
                                     tmp = t.next();
                                 }
                                 if !replaced {
-                                    nsptr = tree::get_ns_resolve_prefix_conflict(elemp, found.href());
+                                    nsptr =
+                                        tree::get_ns_resolve_prefix_conflict(elemp, found.href());
                                 }
                             }
                         }
@@ -797,10 +890,18 @@ impl Node {
                     if nsptr.is_null() {
                         if is_xmlns {
                             let v = cs(value);
-                            let p = if prefix.is_none() { None } else { Some(cs(&local)) };
+                            let p = if prefix.is_none() {
+                                None
+                            } else {
+                                Some(cs(&local))
+                            };
                             // SAFETY: live element.
                             unsafe {
-                                ffi::xmlNewNs(elemp.p(), v.as_ptr().cast(), p.as_ref().map_or(ptr::null(), |p| p.as_ptr().cast()));
+                                ffi::xmlNewNs(
+                                    elemp.p(),
+                                    v.as_ptr().cast(),
+                                    p.as_ref().map_or(ptr::null(), |p| p.as_ptr().cast()),
+                                );
                             }
                         } else {
                             match tree::get_ns(elemp, uri, prefix.as_deref()) {
@@ -823,7 +924,14 @@ impl Node {
                         let l = cs(&local);
                         let v = cs(value);
                         // SAFETY: live element.
-                        unsafe { ffi::xmlSetNsProp(elemp.p(), nsptr, l.as_ptr().cast(), v.as_ptr().cast()) };
+                        unsafe {
+                            ffi::xmlSetNsProp(
+                                elemp.p(),
+                                nsptr,
+                                l.as_ptr().cast(),
+                                v.as_ptr().cast(),
+                            )
+                        };
                     }
                 }
             }
@@ -838,7 +946,11 @@ impl Node {
     pub fn remove_attribute_ns(&self, uri: Option<&[u8]>, name: &[u8]) -> DomResult<()> {
         let nodep = self.node()?;
         let follow = self.is_modern();
-        let uri = if follow && uri.is_some_and(<[u8]>::is_empty) { None } else { uri };
+        let uri = if follow && uri.is_some_and(<[u8]>::is_empty) {
+            None
+        } else {
+            uri
+        };
         let attrp = has_ns_prop(nodep, name, uri);
         if !follow {
             if let Some(nsptr) = tree::get_nsdecl(nodep, Some(name)) {
@@ -865,15 +977,25 @@ impl Node {
     }
 
     /// `getAttributeNodeNS($namespace, $localName)`.
-    pub fn get_attribute_node_ns(&self, uri: Option<&[u8]>, name: &[u8]) -> DomResult<Option<Node>> {
+    pub fn get_attribute_node_ns(
+        &self,
+        uri: Option<&[u8]>,
+        name: &[u8],
+    ) -> DomResult<Option<Node>> {
         let elemp = self.node()?;
         let follow = self.is_modern();
-        let uri = if follow && uri.is_some_and(<[u8]>::is_empty) { None } else { uri };
+        let uri = if follow && uri.is_some_and(<[u8]>::is_empty) {
+            None
+        } else {
+            uri
+        };
         match has_ns_prop(elemp, name, uri) {
             None => {
                 if !follow && uri == Some(ns::XMLNS_NS) {
                     if let Some(nsptr) = tree::get_nsdecl(elemp, Some(name)) {
-                        return Ok(Some(crate::xpath::create_fake_namespace_decl(elemp, nsptr, self)));
+                        return Ok(Some(crate::xpath::create_fake_namespace_decl(
+                            elemp, nsptr, self,
+                        )));
                     }
                 }
                 Ok(None)
@@ -898,7 +1020,10 @@ impl Node {
     pub fn set_id_attribute(&self, name: &[u8], is_id: bool) -> DomResult<()> {
         let n = self.node()?;
         match has_ns_prop(n, name, None).filter(|a| a.t() != ffi::XML_ATTRIBUTE_DECL) {
-            None => Err(throw(C::NotFound, self.doc_ref().is_none_or(|d| d.strict()))),
+            None => Err(throw(
+                C::NotFound,
+                self.doc_ref().is_none_or(|d| d.strict()),
+            )),
             Some(a) => {
                 set_attribute_id(a, is_id, self.doc_ref().as_ref());
                 Ok(())
@@ -907,10 +1032,20 @@ impl Node {
     }
 
     /// `setIdAttributeNS($namespace, $qualifiedName, $isId)`.
-    pub fn set_id_attribute_ns(&self, uri: Option<&[u8]>, name: &[u8], is_id: bool) -> DomResult<()> {
+    pub fn set_id_attribute_ns(
+        &self,
+        uri: Option<&[u8]>,
+        name: &[u8],
+        is_id: bool,
+    ) -> DomResult<()> {
         let n = self.node()?;
-        match has_ns_prop(n, name, Some(uri.unwrap_or_default())).filter(|a| a.t() != ffi::XML_ATTRIBUTE_DECL) {
-            None => Err(throw(C::NotFound, self.doc_ref().is_none_or(|d| d.strict()))),
+        match has_ns_prop(n, name, Some(uri.unwrap_or_default()))
+            .filter(|a| a.t() != ffi::XML_ATTRIBUTE_DECL)
+        {
+            None => Err(throw(
+                C::NotFound,
+                self.doc_ref().is_none_or(|d| d.strict()),
+            )),
             Some(a) => {
                 set_attribute_id(a, is_id, self.doc_ref().as_ref());
                 Ok(())
@@ -923,7 +1058,10 @@ impl Node {
         let n = self.node()?;
         let a = attr.node()?;
         if a.parent() != Some(n) {
-            return Err(throw(C::NotFound, self.doc_ref().is_none_or(|d| d.strict())));
+            return Err(throw(
+                C::NotFound,
+                self.doc_ref().is_none_or(|d| d.strict()),
+            ));
         }
         set_attribute_id(a, is_id, self.doc_ref().as_ref());
         Ok(())
@@ -971,18 +1109,27 @@ impl Node {
         silent_ok(tree::parent_node_replace_children(self, nodes))
     }
 
-    fn insert_adjacent(&self, where_: AdjacentPosition, thisp: N, otherp: N) -> Result<Option<N>, DomError> {
+    fn insert_adjacent(
+        &self,
+        where_: AdjacentPosition,
+        thisp: N,
+        otherp: N,
+    ) -> Result<Option<N>, DomError> {
         let doc = self.doc_ref();
         let ctx = tree::Ctx { doc: doc.as_ref() };
         let (parent, before) = match where_ {
             AdjacentPosition::BeforeBegin => {
-                let Some(p) = thisp.parent() else { return Ok(None) };
+                let Some(p) = thisp.parent() else {
+                    return Ok(None);
+                };
                 (p, Some(thisp))
             }
             AdjacentPosition::AfterBegin => (thisp, thisp.children()),
             AdjacentPosition::BeforeEnd => (thisp, None),
             AdjacentPosition::AfterEnd => {
-                let Some(p) = thisp.parent() else { return Ok(None) };
+                let Some(p) = thisp.parent() else {
+                    return Ok(None);
+                };
                 (p, thisp.next())
             }
         };
@@ -996,7 +1143,11 @@ impl Node {
     /// `insertAdjacentElement($where, $element)` (legacy string positions
     /// are parsed by [`AdjacentPosition::parse`]; an unknown string is a
     /// `SyntaxError`).
-    pub fn insert_adjacent_element(&self, where_: Result<AdjacentPosition, ()>, element: &Node) -> DomResult<Option<Node>> {
+    pub fn insert_adjacent_element(
+        &self,
+        where_: Result<AdjacentPosition, ()>,
+        element: &Node,
+    ) -> DomResult<Option<Node>> {
         let thisp = self.node()?;
         let Ok(where_) = where_ else {
             return Err(throw(C::Syntax, self.doc_ref().is_none_or(|d| d.strict())));
@@ -1009,7 +1160,11 @@ impl Node {
     }
 
     /// `insertAdjacentText($where, $data)`.
-    pub fn insert_adjacent_text(&self, where_: Result<AdjacentPosition, ()>, data: &[u8]) -> DomResult<()> {
+    pub fn insert_adjacent_text(
+        &self,
+        where_: Result<AdjacentPosition, ()>,
+        data: &[u8],
+    ) -> DomResult<()> {
         let thisp = self.node()?;
         let Ok(where_) = where_ else {
             return Err(throw(C::Syntax, self.doc_ref().is_none_or(|d| d.strict())));
@@ -1018,8 +1173,10 @@ impl Node {
             return Err(DomError::arg_value(2, "is too long"));
         }
         // SAFETY: valid string/length.
-        let otherp = N::new(unsafe { ffi::xmlNewDocTextLen(thisp.doc_ptr(), data.as_ptr(), c_len(data.len())) })
-            .ok_or_else(|| DomError::dom(C::InvalidState))?;
+        let otherp = N::new(unsafe {
+            ffi::xmlNewDocTextLen(thisp.doc_ptr(), data.as_ptr(), c_len(data.len()))
+        })
+        .ok_or_else(|| DomError::dom(C::InvalidState))?;
         match self.insert_adjacent(where_, thisp, otherp) {
             Ok(None) | Err(DomError::Silent) => {
                 tree::free_node(otherp);
@@ -1044,12 +1201,24 @@ impl Node {
             _ => thisp,
         };
         let mut created = None;
-        if !context.is_element() || (ns::is_html_and_document_is_html(context) && context.name() == b"html") {
-            let pd = self.doc_ref().and_then(|d| d.private_data()).ok_or_else(|| DomError::dom(C::InvalidState))?;
+        if !context.is_element()
+            || (ns::is_html_and_document_is_html(context) && context.name() == b"html")
+        {
+            let pd = self
+                .doc_ref()
+                .and_then(|d| d.private_data())
+                .ok_or_else(|| DomError::dom(C::InvalidState))?;
             let html_ns = pd.mapper.borrow_mut().ensure_html_ns();
             // SAFETY: live document.
-            let c = N::new(unsafe { ffi::xmlNewDocNode(thisp.doc_ptr(), html_ns, b"body\0".as_ptr(), ptr::null()) })
-                .ok_or_else(|| DomError::dom(C::InvalidState))?;
+            let c = N::new(unsafe {
+                ffi::xmlNewDocNode(
+                    thisp.doc_ptr(),
+                    html_ns,
+                    c"body".as_ptr().cast(),
+                    ptr::null(),
+                )
+            })
+            .ok_or_else(|| DomError::dom(C::InvalidState))?;
             created = Some(c);
             context = c;
         }
@@ -1058,13 +1227,22 @@ impl Node {
             self.invalidate_doc();
             let doc = self.doc_ref();
             let ctx = tree::Ctx { doc: doc.as_ref() };
-            let r = match where_ {
-                AdjacentPosition::BeforeBegin => tree::pre_insert(ctx, fragment, thisp.parent().expect("checked"), Some(thisp)),
-                AdjacentPosition::AfterEnd => tree::pre_insert(ctx, fragment, thisp.parent().expect("checked"), thisp.next()),
-                AdjacentPosition::AfterBegin => tree::pre_insert(ctx, fragment, thisp, thisp.children()),
+
+            match where_ {
+                AdjacentPosition::BeforeBegin => {
+                    tree::pre_insert(ctx, fragment, thisp.parent().expect("checked"), Some(thisp))
+                }
+                AdjacentPosition::AfterEnd => tree::pre_insert(
+                    ctx,
+                    fragment,
+                    thisp.parent().expect("checked"),
+                    thisp.next(),
+                ),
+                AdjacentPosition::AfterBegin => {
+                    tree::pre_insert(ctx, fragment, thisp, thisp.children())
+                }
                 AdjacentPosition::BeforeEnd => tree::node_append(ctx, fragment, thisp),
-            };
-            r
+            }
         })();
         if let Some(c) = created {
             tree::free_node(c);
@@ -1080,8 +1258,11 @@ impl Node {
         }
         let follow = self.is_modern();
         let mut q = qname.to_vec();
-        if thisp.doc().is_some_and(|d| d.t() == ffi::XML_HTML_DOCUMENT_NODE)
-            && ((!follow && thisp.ns().is_none()) || thisp.ns().is_some_and(|ns| ns.href() == ns::XHTML_NS))
+        if thisp
+            .doc()
+            .is_some_and(|d| d.t() == ffi::XML_HTML_DOCUMENT_NODE)
+            && ((!follow && thisp.ns().is_none())
+                || thisp.ns().is_some_and(|ns| ns.href() == ns::XHTML_NS))
         {
             q.make_ascii_lowercase();
         }
@@ -1091,7 +1272,14 @@ impl Node {
                 if follow {
                     let c = cs(&q);
                     // SAFETY: live element.
-                    unsafe { ffi::xmlSetNsProp(thisp.p(), ptr::null_mut(), c.as_ptr().cast(), ptr::null()) };
+                    unsafe {
+                        ffi::xmlSetNsProp(
+                            thisp.p(),
+                            ptr::null_mut(),
+                            c.as_ptr().cast(),
+                            ptr::null(),
+                        )
+                    };
                 } else {
                     let c = cs(&q);
                     let mut len: i32 = 0;
@@ -1103,7 +1291,7 @@ impl Node {
                     } else {
                         let p = cs(&q[len + 1..]);
                         // SAFETY: live element.
-                        unsafe { ffi::xmlNewNs(thisp.p(), b"\0".as_ptr(), p.as_ptr().cast()) };
+                        unsafe { ffi::xmlNewNs(thisp.p(), c"".as_ptr().cast(), p.as_ptr().cast()) };
                     }
                 }
                 return Ok(true);
@@ -1111,7 +1299,11 @@ impl Node {
             return Ok(false);
         };
         if force.is_none_or(|f| !f) {
-            return Ok(!remove_attribute_raw(thisp, attribute, self.doc_ref().as_ref()));
+            return Ok(!remove_attribute_raw(
+                thisp,
+                attribute,
+                self.doc_ref().as_ref(),
+            ));
         }
         Ok(true)
     }
@@ -1132,7 +1324,13 @@ impl Node {
         Ok(())
     }
 
-    fn in_scope_namespace_info(&self, mapper: &mut ns::NsMapper, result: &mut Vec<NamespaceInfo>, nodep: N) {
+    #[allow(clippy::unused_self)]
+    fn in_scope_namespace_info(
+        &self,
+        mapper: &mut ns::NsMapper,
+        result: &mut Vec<NamespaceInfo>,
+        nodep: N,
+    ) {
         let mut table: Vec<(Vec<u8>, *mut ffi::xmlNs)> = Vec::new();
         let mut cur = Some(nodep);
         while let Some(c) = cur {
@@ -1143,11 +1341,17 @@ impl Node {
                     if !ns_is_fast_ex(ans, &XMLNS_TOKEN) {
                         continue;
                     }
-                    let Some(child) = attr.children() else { continue };
+                    let Some(child) = attr.children() else {
+                        continue;
+                    };
                     if child.content_ptr().is_null() {
                         continue;
                     }
-                    let prefix = if ans.prefix_ptr().is_null() { None } else { Some(attr.name()) };
+                    let prefix = if ans.prefix_ptr().is_null() {
+                        None
+                    } else {
+                        Some(attr.name())
+                    };
                     let key = prefix.unwrap_or_default().to_vec();
                     let ns = mapper.get_ns_nullsafe(prefix, Some(child.content()));
                     if !table.iter().any(|(k, _)| *k == key) {
@@ -1163,7 +1367,11 @@ impl Node {
                 continue;
             }
             result.push(NamespaceInfo {
-                prefix: if prefix.is_empty() { None } else { Some(prefix) },
+                prefix: if prefix.is_empty() {
+                    None
+                } else {
+                    Some(prefix)
+                },
                 namespace_uri: href.map(<[u8]>::to_vec),
                 element: Node::wrap(nodep),
             });
@@ -1173,7 +1381,10 @@ impl Node {
     /// `getInScopeNamespaces()`.
     pub fn get_in_scope_namespaces(&self) -> DomResult<Vec<NamespaceInfo>> {
         let n = self.node()?;
-        let pd = self.doc_ref().and_then(|d| d.private_data()).ok_or_else(|| DomError::dom(C::InvalidState))?;
+        let pd = self
+            .doc_ref()
+            .and_then(|d| d.private_data())
+            .ok_or_else(|| DomError::dom(C::InvalidState))?;
         let mut out = Vec::new();
         self.in_scope_namespace_info(&mut pd.mapper.borrow_mut(), &mut out, n);
         Ok(out)
@@ -1182,7 +1393,10 @@ impl Node {
     /// `getDescendantNamespaces()`.
     pub fn get_descendant_namespaces(&self) -> DomResult<Vec<NamespaceInfo>> {
         let n = self.node()?;
-        let pd = self.doc_ref().and_then(|d| d.private_data()).ok_or_else(|| DomError::dom(C::InvalidState))?;
+        let pd = self
+            .doc_ref()
+            .and_then(|d| d.private_data())
+            .ok_or_else(|| DomError::dom(C::InvalidState))?;
         let mut out = Vec::new();
         self.in_scope_namespace_info(&mut pd.mapper.borrow_mut(), &mut out, n);
         let mut cur = n.children();
@@ -1198,7 +1412,8 @@ impl Node {
     /// `rename($namespaceURI, $qualifiedName)` (`Dom\Element` and `Dom\Attr`).
     pub fn rename(&self, namespace_uri: Option<&[u8]>, qname: &[u8]) -> DomResult<()> {
         let nodep = self.node()?;
-        let (local, prefix) = tree::validate_and_extract(namespace_uri, qname).map_err(DomError::dom)?;
+        let (local, prefix) =
+            tree::validate_and_extract(namespace_uri, qname).map_err(DomError::dom)?;
         if nodep.t() == ffi::XML_ATTRIBUTE_NODE {
             let uri = namespace_uri.filter(|u| !u.is_empty());
             if let Some(parent) = nodep.parent() {
@@ -1232,8 +1447,14 @@ impl Node {
             }
         }
         self.invalidate_doc();
-        let pd = self.doc_ref().and_then(|d| d.private_data()).ok_or_else(|| DomError::dom(C::InvalidState))?;
-        let ns = pd.mapper.borrow_mut().get_ns(prefix.as_deref(), namespace_uri);
+        let pd = self
+            .doc_ref()
+            .and_then(|d| d.private_data())
+            .ok_or_else(|| DomError::dom(C::InvalidState))?;
+        let ns = pd
+            .mapper
+            .borrow_mut()
+            .get_ns(prefix.as_deref(), namespace_uri);
         nodep.set_ns(ns);
         // SAFETY: the old name is freed unless the dictionary owns it; the
         // new one is interned in the document dictionary when possible.
@@ -1265,9 +1486,4 @@ pub(crate) fn silent_ok(r: DomResult<()>) -> DomResult<()> {
         Err(DomError::Silent) => Ok(()),
         other => other,
     }
-}
-
-/// `throw_msg` re-export for sibling modules.
-pub(crate) fn hierarchy(msg: &'static str, strict: bool) -> DomError {
-    throw_msg(C::HierarchyRequest, msg, strict)
 }

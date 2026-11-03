@@ -9,7 +9,7 @@ use php_dom::lists::Offset;
 use php_dom::{ArrayKey, DomError, DomHost, DomValue, HostCallable, Node, XPathArg, XPathReturn};
 use php_parser::ast::*;
 
-use super::output::{print_r, to_bytes, var_dump, var_export};
+use super::output::to_bytes;
 use super::value::{new_obj, Arr, Callable, Key, Obj, ObjKind, UserFunc, V};
 
 pub enum Flow {
@@ -111,7 +111,10 @@ impl Interp {
             out: RefCell::new(Vec::new()),
             file: file.to_string(),
             dir,
-            frames: RefCell::new(vec![Frame { func: String::new(), ..Default::default() }]),
+            frames: RefCell::new(vec![Frame {
+                func: String::new(),
+                ..Default::default()
+            }]),
             functions: RefCell::new(HashMap::new()),
             classes: RefCell::new(HashMap::new()),
             constants: RefCell::new(HashMap::new()),
@@ -214,9 +217,24 @@ impl Interp {
         let mut out = self.out.borrow_mut();
         out.extend_from_slice(format!("\nFatal error: Uncaught {}: ", o.class.borrow()).as_bytes());
         out.extend_from_slice(&msg);
-        out.extend_from_slice(format!(" in {}:{}\nStack trace:\n", self.file, String::from_utf8_lossy(&line)).as_bytes());
+        out.extend_from_slice(
+            format!(
+                " in {}:{}\nStack trace:\n",
+                self.file,
+                String::from_utf8_lossy(&line)
+            )
+            .as_bytes(),
+        );
         out.extend_from_slice(&trace);
-        out.extend_from_slice(format!("#{} {{main}}\n  thrown in {} on line {}\n", trace.iter().filter(|&&b| b == b'\n').count(), self.file, String::from_utf8_lossy(&line)).as_bytes());
+        out.extend_from_slice(
+            format!(
+                "#{} {{main}}\n  thrown in {} on line {}\n",
+                trace.iter().filter(|&&b| b == b'\n').count(),
+                self.file,
+                String::from_utf8_lossy(&line)
+            )
+            .as_bytes(),
+        );
     }
 
     fn hoist(&self, stmts: &[Stmt]) {
@@ -246,7 +264,11 @@ impl Interp {
         let Some(name) = &c.name else { return };
         let name = String::from_utf8_lossy(&name.name).into_owned();
         let parent = c.extends.as_ref().map(|n| self.resolve_class_name(n));
-        let interfaces = c.implements.iter().map(|n| self.resolve_class_name(n)).collect();
+        let interfaces = c
+            .implements
+            .iter()
+            .map(|n| self.resolve_class_name(n))
+            .collect();
         let mut methods = HashMap::new();
         let mut props = Vec::new();
         let mut consts = Vec::new();
@@ -270,7 +292,11 @@ impl Interp {
                 }
                 ClassMemberKind::Property(pg) => {
                     for p in &pg.props {
-                        props.push((p.name.name.clone(), p.default.clone(), pg.modifiers.contains(Modifiers::STATIC)));
+                        props.push((
+                            p.name.name.clone(),
+                            p.default.clone(),
+                            pg.modifiers.contains(Modifiers::STATIC),
+                        ));
                     }
                 }
                 ClassMemberKind::Const(cg) => {
@@ -326,7 +352,9 @@ impl Interp {
     pub fn class_exists(&self, name: &str) -> bool {
         self.classes.borrow().contains_key(&lc(name))
             || php_dom::classes::find_class(name).is_some()
-            || BUILTIN_CLASSES.iter().any(|(c, _, _)| c.eq_ignore_ascii_case(name))
+            || BUILTIN_CLASSES
+                .iter()
+                .any(|(c, _, _)| c.eq_ignore_ascii_case(name))
     }
 
     fn canonical_class(&self, name: &str) -> String {
@@ -336,7 +364,10 @@ impl Interp {
         if let Some(c) = php_dom::classes::find_class(name) {
             return c.name.to_string();
         }
-        if let Some((c, _, _)) = BUILTIN_CLASSES.iter().find(|(c, _, _)| c.eq_ignore_ascii_case(name)) {
+        if let Some((c, _, _)) = BUILTIN_CLASSES
+            .iter()
+            .find(|(c, _, _)| c.eq_ignore_ascii_case(name))
+        {
             return (*c).to_string();
         }
         name.to_string()
@@ -361,7 +392,10 @@ impl Interp {
             }
             return v;
         }
-        if let Some((_, p, ifs)) = BUILTIN_CLASSES.iter().find(|(c, _, _)| c.eq_ignore_ascii_case(name)) {
+        if let Some((_, p, ifs)) = BUILTIN_CLASSES
+            .iter()
+            .find(|(c, _, _)| c.eq_ignore_ascii_case(name))
+        {
             let mut v: Vec<String> = ifs.iter().map(|s| (*s).to_string()).collect();
             if let Some(p) = p {
                 v.push((*p).to_string());
@@ -375,7 +409,9 @@ impl Interp {
         if class.eq_ignore_ascii_case(base) {
             return true;
         }
-        self.class_supers(class).iter().any(|s| self.is_subclass(s, base))
+        self.class_supers(class)
+            .iter()
+            .any(|s| self.is_subclass(s, base))
     }
 
     /// The built-in DOM class a class derives from.
@@ -385,7 +421,11 @@ impl Interp {
                 return Some(c.name);
             }
         }
-        let parent = self.classes.borrow().get(&lc(class)).and_then(|c| c.parent.clone());
+        let parent = self
+            .classes
+            .borrow()
+            .get(&lc(class))
+            .and_then(|c| c.parent.clone());
         parent.and_then(|p| self.dom_builtin(&p))
     }
 
@@ -409,12 +449,20 @@ impl Interp {
     fn static_key(&self, name: &[u8]) -> Option<(String, Vec<u8>)> {
         let f = self.frames.borrow();
         let fr = f.last()?;
-        fr.statics.iter().find(|(_, n)| n == name).map(|(k, n)| (k.clone(), n.clone()))
+        fr.statics
+            .iter()
+            .find(|(_, n)| n == name)
+            .map(|(k, n)| (k.clone(), n.clone()))
     }
 
     fn get_var(&self, name: &[u8]) -> V {
         if name == b"this" {
-            return self.frames.borrow().last().and_then(|f| f.this.clone()).unwrap_or(V::Null);
+            return self
+                .frames
+                .borrow()
+                .last()
+                .and_then(|f| f.this.clone())
+                .unwrap_or(V::Null);
         }
         if name == b"GLOBALS" {
             let mut a = Arr::default();
@@ -427,17 +475,26 @@ impl Interp {
             return self.statics.borrow().get(&k).cloned().unwrap_or(V::Null);
         }
         let f = self.frames.borrow();
-        f.last().and_then(|fr| fr.vars.get(name).cloned()).unwrap_or(V::Null)
+        f.last()
+            .and_then(|fr| fr.vars.get(name).cloned())
+            .unwrap_or(V::Null)
     }
 
     fn var_exists(&self, name: &[u8]) -> bool {
         if name == b"this" {
-            return self.frames.borrow().last().is_some_and(|f| f.this.is_some());
+            return self
+                .frames
+                .borrow()
+                .last()
+                .is_some_and(|f| f.this.is_some());
         }
         if name == b"GLOBALS" || self.static_key(name).is_some() {
             return true;
         }
-        self.frames.borrow().last().is_some_and(|f| f.vars.contains_key(name))
+        self.frames
+            .borrow()
+            .last()
+            .is_some_and(|f| f.vars.contains_key(name))
     }
 
     fn set_var(&self, name: &[u8], v: V) {
@@ -490,8 +547,11 @@ impl Interp {
     }
 
     fn dom_err(&self, e: DomError, func: &str, params: &[&str]) -> Flow {
-        let variadic_from = php_dom::classes::find_method(func.split("::").next().unwrap_or(""), func.split("::").nth(1).unwrap_or(""))
-            .and_then(|(_, m)| m.params.iter().position(|p| p.variadic));
+        let variadic_from = php_dom::classes::find_method(
+            func.split("::").next().unwrap_or(""),
+            func.split("::").nth(1).unwrap_or(""),
+        )
+        .and_then(|(_, m)| m.params.iter().position(|p| p.variadic));
         let arg_prefix = |arg: u32| {
             let idx = arg as usize - 1;
             if variadic_from.is_some_and(|v| idx >= v) {
@@ -501,17 +561,23 @@ impl Interp {
             format!("{func}(): Argument #{arg} (${pname}) ")
         };
         let v = match e {
-            DomError::Dom { code, message } => self.make_exception("DOMException", message.as_bytes(), code.code()),
+            DomError::Dom { code, message } => {
+                self.make_exception("DOMException", message.as_bytes(), code.code())
+            }
             DomError::Type(m) => self.make_exception("TypeError", m.as_bytes(), 0),
             DomError::Value(m) => self.make_exception("ValueError", m.as_bytes(), 0),
             DomError::Error(m) => self.make_exception("Error", m.as_bytes(), 0),
             DomError::Exception(m) => self.make_exception("Exception", m.as_bytes(), 0),
-            DomError::ArgType { arg, message } => {
-                self.make_exception("TypeError", format!("{}{message}", arg_prefix(arg)).as_bytes(), 0)
-            }
-            DomError::ArgValue { arg, message } => {
-                self.make_exception("ValueError", format!("{}{message}", arg_prefix(arg)).as_bytes(), 0)
-            }
+            DomError::ArgType { arg, message } => self.make_exception(
+                "TypeError",
+                format!("{}{message}", arg_prefix(arg)).as_bytes(),
+                0,
+            ),
+            DomError::ArgValue { arg, message } => self.make_exception(
+                "ValueError",
+                format!("{}{message}", arg_prefix(arg)).as_bytes(),
+                0,
+            ),
             DomError::CouldntFetch => self.make_exception("Error", b"Couldn't fetch DOMNode", 0),
             DomError::Host(b) => match b.downcast::<V>() {
                 Ok(v) => *v,
@@ -553,7 +619,10 @@ impl Interp {
                 self.eval(e)?;
                 Ok(())
             }
-            StmtKind::If { branches, else_branch } => {
+            StmtKind::If {
+                branches,
+                else_branch,
+            } => {
                 for b in branches {
                     if self.eval(&b.cond)?.truthy() {
                         return self.exec(&b.body);
@@ -605,7 +674,12 @@ impl Interp {
                 }
                 Ok(())
             }
-            StmtKind::For { init, cond, step, body } => {
+            StmtKind::For {
+                init,
+                cond,
+                step,
+                body,
+            } => {
                 for e in init {
                     self.eval(e)?;
                 }
@@ -640,7 +714,13 @@ impl Interp {
                 }
                 Ok(())
             }
-            StmtKind::Foreach { subject, key, value, body, .. } => self.exec_foreach(subject, key.as_ref(), value, body),
+            StmtKind::Foreach {
+                subject,
+                key,
+                value,
+                body,
+                ..
+            } => self.exec_foreach(subject, key.as_ref(), value, body),
             StmtKind::Switch { subject, cases } => {
                 let v = self.eval(subject)?;
                 let mut matched = false;
@@ -696,14 +776,26 @@ impl Interp {
             StmtKind::Global(vars) => {
                 for v in vars {
                     if let ExprKind::Var(VarName::Name(n)) = &v.kind {
-                        let g = self.frames.borrow()[0].vars.get(&n.name).cloned().unwrap_or(V::Null);
+                        let g = self.frames.borrow()[0]
+                            .vars
+                            .get(&n.name)
+                            .cloned()
+                            .unwrap_or(V::Null);
                         self.set_var(&n.name, g);
                     }
                 }
                 Ok(())
             }
             StmtKind::Static(vars) => {
-                let fkey = format!("{}#{}", self.frames.borrow().last().map(|f| f.func.clone()).unwrap_or_default(), s.span.start);
+                let fkey = format!(
+                    "{}#{}",
+                    self.frames
+                        .borrow()
+                        .last()
+                        .map(|f| f.func.clone())
+                        .unwrap_or_default(),
+                    s.span.start
+                );
                 for sv in vars {
                     let key = (fkey.clone(), sv.name.name.clone());
                     let exists = self.statics.borrow().contains_key(&key);
@@ -733,14 +825,21 @@ impl Interp {
                 Ok(())
             }
             StmtKind::Nop | StmtKind::Label(_) | StmtKind::HaltCompiler { .. } => Ok(()),
-            StmtKind::Try { body, catches, finally } => {
+            StmtKind::Try {
+                body,
+                catches,
+                finally,
+            } => {
                 let r = self.exec_block(body);
                 let r = match r {
                     Err(Flow::Throw(ex)) => {
                         let mut handled = None;
                         for c in catches {
                             let cls = ex_class(&ex);
-                            if c.types.iter().any(|t| self.is_subclass(&cls, &self.resolve_class_name(t))) {
+                            if c.types
+                                .iter()
+                                .any(|t| self.is_subclass(&cls, &self.resolve_class_name(t)))
+                            {
                                 if let Some(v) = &c.var {
                                     self.set_var(&v.name, ex.clone());
                                 }
@@ -766,7 +865,10 @@ impl Interp {
                 Ok(())
             }
             StmtKind::Namespace { name, body } => {
-                *self.namespace.borrow_mut() = name.as_ref().map(|n| String::from_utf8_lossy(&n.name).into_owned()).unwrap_or_default();
+                *self.namespace.borrow_mut() = name
+                    .as_ref()
+                    .map(|n| String::from_utf8_lossy(&n.name).into_owned())
+                    .unwrap_or_default();
                 if let Some(b) = body {
                     self.exec_block(b)?;
                 }
@@ -774,7 +876,9 @@ impl Interp {
             }
             StmtKind::Use { uses, .. } => {
                 for u in uses {
-                    let full = String::from_utf8_lossy(&u.name.name).trim_start_matches('\\').to_string();
+                    let full = String::from_utf8_lossy(&u.name.name)
+                        .trim_start_matches('\\')
+                        .to_string();
                     let alias = match &u.alias {
                         Some(a) => String::from_utf8_lossy(&a.name).into_owned(),
                         None => full.rsplit('\\').next().unwrap_or(&full).to_string(),
@@ -784,7 +888,9 @@ impl Interp {
                 Ok(())
             }
             StmtKind::GroupUse { prefix, uses, .. } => {
-                let p = String::from_utf8_lossy(&prefix.name).trim_start_matches('\\').to_string();
+                let p = String::from_utf8_lossy(&prefix.name)
+                    .trim_start_matches('\\')
+                    .to_string();
                 for u in uses {
                     let full = format!("{p}\\{}", String::from_utf8_lossy(&u.name.name));
                     let alias = match &u.alias {
@@ -811,7 +917,7 @@ impl Interp {
 
     fn exec_foreach(&self, subject: &Expr, key: Option<&Expr>, value: &Expr, body: &Stmt) -> R<()> {
         let s = self.eval(subject)?;
-        let mut run = |k: V, v: V| -> R<bool> {
+        let run = |k: V, v: V| -> R<bool> {
             if let Some(ke) = key {
                 self.assign(ke, k)?;
             }
@@ -863,7 +969,14 @@ impl Interp {
                 }
             }
             _ => {
-                self.emit_raw("Warning", format!("foreach() argument must be of type array|object, {} given", s.type_name()).as_bytes());
+                self.emit_raw(
+                    "Warning",
+                    format!(
+                        "foreach() argument must be of type array|object, {} given",
+                        s.type_name()
+                    )
+                    .as_bytes(),
+                );
             }
         }
         Ok(())
@@ -872,12 +985,21 @@ impl Interp {
     fn get_iterator(&self, o: &Rc<Obj>) -> R<V> {
         let kind_dom = o.dom();
         if let Some(d) = kind_dom {
-            if matches!(d, DomObject::NodeList(_) | DomObject::NamedNodeMap(_) | DomObject::TokenList(_)) {
+            if matches!(
+                d,
+                DomObject::NodeList(_) | DomObject::NamedNodeMap(_) | DomObject::TokenList(_)
+            ) {
                 let it = dispatch::iterate(&d).map_err(|e| self.dom_err(e, "", &[]))?;
-                return Ok(V::Obj(super::value::new_internal("InternalIterator", ObjKind::Iter(it))));
+                return Ok(V::Obj(super::value::new_internal(
+                    "InternalIterator",
+                    ObjKind::Iter(it),
+                )));
             }
         }
-        if matches!(&*o.kind.borrow(), ObjKind::Iter(_) | ObjKind::ArrayIter { .. }) {
+        if matches!(
+            &*o.kind.borrow(),
+            ObjKind::Iter(_) | ObjKind::ArrayIter { .. }
+        ) {
             return Ok(V::Obj(o.clone()));
         }
         let cls = o.class.borrow().clone();
@@ -897,17 +1019,34 @@ impl Interp {
             a.set(Key::Str(k.clone()), v.clone());
         }
         let arr = Rc::new(a);
-        Ok(V::Obj(super::value::new_internal("ArrayIterator", ObjKind::ArrayIter { arr, pos: 0 })))
+        Ok(V::Obj(super::value::new_internal(
+            "ArrayIterator",
+            ObjKind::ArrayIter { arr, pos: 0 },
+        )))
     }
 
     pub fn const_by_name(&self, n: &str) -> R<V> {
-        let name = Name { kind: NameKind::Unqualified, name: n.as_bytes().to_vec(), span: php_lexer::Span::new(0, 0, 0) };
+        let name = Name {
+            kind: NameKind::Unqualified,
+            name: n.as_bytes().to_vec(),
+            span: php_lexer::Span::new(0, 0, 0),
+        };
         self.constant(&name)
     }
 
     pub fn resolve_path_pub(&self, p: &[u8]) -> String {
         let s = String::from_utf8_lossy(p).into_owned();
-        if s.starts_with('/') { s } else { format!("{}/{}", std::env::current_dir().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default(), s) }
+        if s.starts_with('/') {
+            s
+        } else {
+            format!(
+                "{}/{}",
+                std::env::current_dir()
+                    .map(|p| p.to_string_lossy().into_owned())
+                    .unwrap_or_default(),
+                s
+            )
+        }
     }
 
     pub fn ob_start(&self) {
@@ -958,7 +1097,9 @@ impl Interp {
     }
 
     fn iter_state(&self, it: &V) -> R<(bool, V, V)> {
-        let V::Obj(o) = it else { return Ok((false, V::Null, V::Null)) };
+        let V::Obj(o) = it else {
+            return Ok((false, V::Null, V::Null));
+        };
         let k = &*o.kind.borrow();
         match k {
             ObjKind::Iter(h) => {
@@ -969,10 +1110,14 @@ impl Interp {
                 Ok((true, from_dom(i.current()), from_dom(i.key())))
             }
             ObjKind::ArrayIter { arr, pos } => match arr.items.get(*pos) {
-                Some((k, v)) => Ok((true, v.clone(), match k {
-                    Key::Int(i) => V::Int(*i),
-                    Key::Str(s) => V::Str(s.clone()),
-                })),
+                Some((k, v)) => Ok((
+                    true,
+                    v.clone(),
+                    match k {
+                        Key::Int(i) => V::Int(*i),
+                        Key::Str(s) => V::Str(s.clone()),
+                    },
+                )),
                 None => Ok((false, V::Null, V::Null)),
             },
             _ => {
@@ -1036,13 +1181,19 @@ impl Interp {
                 let n = self.var_name(vn)?;
                 self.unset_var(&n);
             }
-            ExprKind::Dim { base, index: Some(index) } => {
+            ExprKind::Dim {
+                base,
+                index: Some(index),
+            } => {
                 let k = to_key(&self.eval(index)?);
                 let bv = self.eval(base)?;
                 if let V::Obj(o) = &bv {
                     if let Some(d) = o.dom() {
                         let _ = d;
-                        return Err(self.throw_err("Error", &format!("Cannot unset offset in a non-array variable")));
+                        return Err(self.throw_err(
+                            "Error",
+                            &format!("Cannot unset offset in a non-array variable"),
+                        ));
                     }
                 }
                 self.write_lvalue(base, &mut |slot| {
@@ -1060,7 +1211,11 @@ impl Interp {
                         if dispatch::is_handled_property(&d, &String::from_utf8_lossy(&n)) {
                             return Err(self.throw_err(
                                 "Error",
-                                &format!("Cannot unset {}::${}", o.class.borrow(), String::from_utf8_lossy(&n)),
+                                &format!(
+                                    "Cannot unset {}::${}",
+                                    o.class.borrow(),
+                                    String::from_utf8_lossy(&n)
+                                ),
                             ));
                         }
                     }
@@ -1088,9 +1243,15 @@ impl Interp {
                     return Ok(o.prop(b"message").map(|m| to_bytes(&m)).unwrap_or_default());
                 }
                 if let ObjKind::Enum(..) = &*o.kind.borrow() {
-                    return Err(self.throw_err("Error", &format!("Object of class {cls} could not be converted to string")));
+                    return Err(self.throw_err(
+                        "Error",
+                        &format!("Object of class {cls} could not be converted to string"),
+                    ));
                 }
-                Err(self.throw_err("Error", &format!("Object of class {cls} could not be converted to string")))
+                Err(self.throw_err(
+                    "Error",
+                    &format!("Object of class {cls} could not be converted to string"),
+                ))
             }
             V::Arr(_) => {
                 self.emit_raw("Warning", b"Array to string conversion");
@@ -1148,8 +1309,22 @@ impl Interp {
                 MagicConst::Line => V::Int(i64::from(e.span.line)),
                 MagicConst::File => V::str(&self.file),
                 MagicConst::Dir => V::str(&self.dir),
-                MagicConst::Class => V::Str(self.frames.borrow().last().and_then(|f| f.class.clone()).unwrap_or_default().into_bytes()),
-                MagicConst::Function | MagicConst::Method => V::str(&self.frames.borrow().last().map(|f| f.func.clone()).unwrap_or_default()),
+                MagicConst::Class => V::Str(
+                    self.frames
+                        .borrow()
+                        .last()
+                        .and_then(|f| f.class.clone())
+                        .unwrap_or_default()
+                        .into_bytes(),
+                ),
+                MagicConst::Function | MagicConst::Method => V::str(
+                    &self
+                        .frames
+                        .borrow()
+                        .last()
+                        .map(|f| f.func.clone())
+                        .unwrap_or_default(),
+                ),
                 _ => V::str(""),
             }),
             ExprKind::ClassConst { class, name } => {
@@ -1164,7 +1339,10 @@ impl Interp {
             ExprKind::Var(vn) => {
                 let n = self.var_name(vn)?;
                 if !self.var_exists(&n) && n != b"GLOBALS" {
-                    self.emit_raw("Warning", format!("Undefined variable ${}", String::from_utf8_lossy(&n)).as_bytes());
+                    self.emit_raw(
+                        "Warning",
+                        format!("Undefined variable ${}", String::from_utf8_lossy(&n)).as_bytes(),
+                    );
                 }
                 Ok(self.get_var(&n))
             }
@@ -1174,7 +1352,11 @@ impl Interp {
                     if let V::Obj(o) = &b {
                         if o.dom().is_some() {
                             let c = o.class.borrow().clone();
-                            let verb = if c.starts_with("Dom\\") { format!("Cannot append to {c}") } else { format!("Cannot access {c} without offset") };
+                            let verb = if c.starts_with("Dom\\") {
+                                format!("Cannot append to {c}")
+                            } else {
+                                format!("Cannot access {c} without offset")
+                            };
                             return Err(self.throw_err("Error", &verb));
                         }
                     }
@@ -1183,7 +1365,11 @@ impl Interp {
                 let k = self.eval(index)?;
                 self.read_dim(&b, &k)
             }
-            ExprKind::Prop { object, name, nullsafe } => {
+            ExprKind::Prop {
+                object,
+                name,
+                nullsafe,
+            } => {
                 let o = self.eval(object)?;
                 if *nullsafe && matches!(o, V::Null) {
                     return Ok(V::Null);
@@ -1196,7 +1382,12 @@ impl Interp {
                 self.line.set(e.span.line);
                 self.eval_call(callee, args, e.span.line)
             }
-            ExprKind::MethodCall { object, name, args, nullsafe } => {
+            ExprKind::MethodCall {
+                object,
+                name,
+                args,
+                nullsafe,
+            } => {
                 let o = self.eval(object)?;
                 if *nullsafe && matches!(o, V::Null) {
                     return Ok(V::Null);
@@ -1216,7 +1407,11 @@ impl Interp {
                 let cname = match &**class {
                     NewClass::Name(n) => {
                         if n.is_special("static") || n.is_special("self") {
-                            self.frames.borrow().last().and_then(|f| f.class.clone()).unwrap_or_default()
+                            self.frames
+                                .borrow()
+                                .last()
+                                .and_then(|f| f.class.clone())
+                                .unwrap_or_default()
                         } else {
                             self.resolve_class_name(n)
                         }
@@ -1272,8 +1467,12 @@ impl Interp {
                 Ok(v)
             }
             ExprKind::Binary { op, left, right } => match op {
-                BinaryOp::BoolAnd => Ok(V::Bool(self.eval(left)?.truthy() && self.eval(right)?.truthy())),
-                BinaryOp::BoolOr => Ok(V::Bool(self.eval(left)?.truthy() || self.eval(right)?.truthy())),
+                BinaryOp::BoolAnd => Ok(V::Bool(
+                    self.eval(left)?.truthy() && self.eval(right)?.truthy(),
+                )),
+                BinaryOp::BoolOr => Ok(V::Bool(
+                    self.eval(left)?.truthy() || self.eval(right)?.truthy(),
+                )),
                 BinaryOp::Coalesce => {
                     let l = self.eval_quiet(left)?;
                     if matches!(l, V::Null) {
@@ -1308,16 +1507,40 @@ impl Interp {
             ExprKind::IncDec { op, var } => {
                 let cur = self.eval(var)?;
                 let new = match &cur {
-                    V::Int(i) => V::Int(if matches!(op, IncDecOp::PreInc | IncDecOp::PostInc) { i + 1 } else { i - 1 }),
-                    V::Float(f) => V::Float(if matches!(op, IncDecOp::PreInc | IncDecOp::PostInc) { f + 1.0 } else { f - 1.0 }),
-                    V::Null => if matches!(op, IncDecOp::PreInc | IncDecOp::PostInc) { V::Int(1) } else { V::Null },
+                    V::Int(i) => V::Int(if matches!(op, IncDecOp::PreInc | IncDecOp::PostInc) {
+                        i + 1
+                    } else {
+                        i - 1
+                    }),
+                    V::Float(f) => {
+                        V::Float(if matches!(op, IncDecOp::PreInc | IncDecOp::PostInc) {
+                            f + 1.0
+                        } else {
+                            f - 1.0
+                        })
+                    }
+                    V::Null => {
+                        if matches!(op, IncDecOp::PreInc | IncDecOp::PostInc) {
+                            V::Int(1)
+                        } else {
+                            V::Null
+                        }
+                    }
                     other => {
                         let n = to_int(other);
-                        V::Int(if matches!(op, IncDecOp::PreInc | IncDecOp::PostInc) { n + 1 } else { n - 1 })
+                        V::Int(if matches!(op, IncDecOp::PreInc | IncDecOp::PostInc) {
+                            n + 1
+                        } else {
+                            n - 1
+                        })
                     }
                 };
                 self.assign(var, new.clone())?;
-                Ok(if matches!(op, IncDecOp::PreInc | IncDecOp::PreDec) { new } else { cur })
+                Ok(if matches!(op, IncDecOp::PreInc | IncDecOp::PreDec) {
+                    new
+                } else {
+                    cur
+                })
             }
             ExprKind::Cast { kind, expr } => {
                 let v = self.eval(expr)?;
@@ -1391,7 +1614,11 @@ impl Interp {
             ExprKind::Include { expr, .. } => {
                 let p = to_bytes(&self.eval(expr)?);
                 let p = String::from_utf8_lossy(&p).into_owned();
-                let path = if p.starts_with('/') { p } else { format!("{}/{}", self.dir, p) };
+                let path = if p.starts_with('/') {
+                    p
+                } else {
+                    format!("{}/{}", self.dir, p)
+                };
                 match std::fs::read(&path) {
                     Ok(src) => {
                         let opts = php_parser::ParseOptions::default();
@@ -1418,7 +1645,9 @@ impl Interp {
                     _ => false,
                 }))
             }
-            ExprKind::Conditional { cond, then, else_, .. } => {
+            ExprKind::Conditional {
+                cond, then, else_, ..
+            } => {
                 let c = self.eval(cond)?;
                 if c.truthy() {
                     match then {
@@ -1441,20 +1670,59 @@ impl Interp {
                 let (this, scope) = {
                     let f = self.frames.borrow();
                     let fr = f.last();
-                    (fr.and_then(|f| f.this.clone()), fr.and_then(|f| f.class.clone()))
+                    (
+                        fr.and_then(|f| f.this.clone()),
+                        fr.and_then(|f| f.class.clone()),
+                    )
                 };
-                let func = Rc::new(UserFunc { name: b"{closure}".to_vec(), params: c.params.clone(), body: c.body.clone(), is_static: c.is_static });
-                Ok(V::Obj(new_obj("Closure", ObjKind::Closure(Rc::new(Callable::Closure { func, bound, this, scope, arrow: None })))))
+                let func = Rc::new(UserFunc {
+                    name: b"{closure}".to_vec(),
+                    params: c.params.clone(),
+                    body: c.body.clone(),
+                    is_static: c.is_static,
+                });
+                Ok(V::Obj(new_obj(
+                    "Closure",
+                    ObjKind::Closure(Rc::new(Callable::Closure {
+                        func,
+                        bound,
+                        this,
+                        scope,
+                        arrow: None,
+                    })),
+                )))
             }
             ExprKind::ArrowFn(af) => {
-                let bound: Vec<(Vec<u8>, V)> = self.frames.borrow().last().map(|f| f.vars.iter().map(|(k, v)| (k.clone(), v.clone())).collect()).unwrap_or_default();
+                let bound: Vec<(Vec<u8>, V)> = self
+                    .frames
+                    .borrow()
+                    .last()
+                    .map(|f| f.vars.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
+                    .unwrap_or_default();
                 let (this, scope) = {
                     let f = self.frames.borrow();
                     let fr = f.last();
-                    (fr.and_then(|f| f.this.clone()), fr.and_then(|f| f.class.clone()))
+                    (
+                        fr.and_then(|f| f.this.clone()),
+                        fr.and_then(|f| f.class.clone()),
+                    )
                 };
-                let func = Rc::new(UserFunc { name: b"{closure}".to_vec(), params: af.params.clone(), body: Vec::new(), is_static: af.is_static });
-                Ok(V::Obj(new_obj("Closure", ObjKind::Closure(Rc::new(Callable::Closure { func, bound, this, scope, arrow: Some(Rc::new((*af.body).clone())) })))))
+                let func = Rc::new(UserFunc {
+                    name: b"{closure}".to_vec(),
+                    params: af.params.clone(),
+                    body: Vec::new(),
+                    is_static: af.is_static,
+                });
+                Ok(V::Obj(new_obj(
+                    "Closure",
+                    ObjKind::Closure(Rc::new(Callable::Closure {
+                        func,
+                        bound,
+                        this,
+                        scope,
+                        arrow: Some(Rc::new((*af.body).clone())),
+                    })),
+                )))
             }
             ExprKind::Match { subject, arms } => {
                 let v = self.eval(subject)?;
@@ -1490,7 +1758,10 @@ impl Interp {
                 let n = self.var_name(vn)?;
                 Ok(self.get_var(&n))
             }
-            ExprKind::Dim { base, index: Some(i) } => {
+            ExprKind::Dim {
+                base,
+                index: Some(i),
+            } => {
                 let b = self.eval_isset(base)?;
                 let k = self.eval(i)?;
                 match &b {
@@ -1498,7 +1769,8 @@ impl Interp {
                     V::Obj(o) => {
                         if let Some(d) = o.dom() {
                             let off = to_offset(&k);
-                            let exists = dispatch::offset_exists(&d, &off).map_err(|e| self.dom_err(e, "", &[]))?;
+                            let exists = dispatch::offset_exists(&d, &off)
+                                .map_err(|e| self.dom_err(e, "", &[]))?;
                             if !exists {
                                 return Ok(V::Null);
                             }
@@ -1508,7 +1780,11 @@ impl Interp {
                     }
                     V::Str(s) => {
                         let i = to_int(&k);
-                        Ok(if i >= 0 && (i as usize) < s.len() { V::Str(vec![s[i as usize]]) } else { V::Null })
+                        Ok(if i >= 0 && (i as usize) < s.len() {
+                            V::Str(vec![s[i as usize]])
+                        } else {
+                            V::Null
+                        })
                     }
                     _ => Ok(V::Null),
                 }
@@ -1550,7 +1826,10 @@ impl Interp {
             return Ok(v.clone());
         }
         if name == "DOM_PHP_ERR" {
-            self.emit_raw("Deprecated", b"Constant DOM_PHP_ERR is deprecated since 8.4, as it is no longer used");
+            self.emit_raw(
+                "Deprecated",
+                b"Constant DOM_PHP_ERR is deprecated since 8.4, as it is no longer used",
+            );
             return Ok(V::Int(0));
         }
         if name == "PHP_MAXPATHLEN" {
@@ -1581,9 +1860,17 @@ impl Interp {
             _ => {
                 if let Some(v) = libxml_const(&name) {
                     V::Int(v)
-                } else if let Some((_, v)) = php_dom::constants::GLOBAL_CONSTANTS.iter().find(|(n, _)| *n == name) {
+                } else if let Some((_, v)) = php_dom::constants::GLOBAL_CONSTANTS
+                    .iter()
+                    .find(|(n, _)| *n == name)
+                {
                     V::Int(*v)
-                } else if let Some((_, v)) = php_dom::constants::DOM_NS_CONSTANTS.iter().find(|(n, _)| n.eq_ignore_ascii_case(&name) || (*n == format!("Dom\\{short}") && name.contains('\\'))) {
+                } else if let Some((_, v)) =
+                    php_dom::constants::DOM_NS_CONSTANTS.iter().find(|(n, _)| {
+                        n.eq_ignore_ascii_case(&name)
+                            || (*n == format!("Dom\\{short}") && name.contains('\\'))
+                    })
+                {
                     V::Int(*v)
                 } else {
                     return Err(self.throw_err("Error", &format!("Undefined constant \"{name}\"")));
@@ -1599,12 +1886,26 @@ impl Interp {
                 if n.is_special("self") || n.is_special("static") {
                     let f = self.frames.borrow();
                     let fr = f.last();
-                    let s = if n.is_special("static") { fr.and_then(|f| f.static_class.clone().or_else(|| f.class.clone())) } else { fr.and_then(|f| f.class.clone()) };
+                    let s = if n.is_special("static") {
+                        fr.and_then(|f| f.static_class.clone().or_else(|| f.class.clone()))
+                    } else {
+                        fr.and_then(|f| f.class.clone())
+                    };
                     return Ok(s.unwrap_or_default());
                 }
                 if n.is_special("parent") {
-                    let cls = self.frames.borrow().last().and_then(|f| f.class.clone()).unwrap_or_default();
-                    return Ok(self.classes.borrow().get(&lc(&cls)).and_then(|c| c.parent.clone()).unwrap_or_default());
+                    let cls = self
+                        .frames
+                        .borrow()
+                        .last()
+                        .and_then(|f| f.class.clone())
+                        .unwrap_or_default();
+                    return Ok(self
+                        .classes
+                        .borrow()
+                        .get(&lc(&cls))
+                        .and_then(|c| c.parent.clone())
+                        .unwrap_or_default());
                 }
                 Ok(self.resolve_class_name(n))
             }
@@ -1681,7 +1982,10 @@ impl Interp {
                 if i >= 0 && (i as usize) < s.len() {
                     Ok(V::Str(vec![s[i as usize]]))
                 } else {
-                    self.emit_raw("Warning", format!("Uninitialized string offset {i}").as_bytes());
+                    self.emit_raw(
+                        "Warning",
+                        format!("Uninitialized string offset {i}").as_bytes(),
+                    );
                     Ok(V::Str(Vec::new()))
                 }
             }
@@ -1691,7 +1995,10 @@ impl Interp {
                     let r = dispatch::offset_get(&d, &off).map_err(|e| self.dom_err(e, "", &[]))?;
                     return Ok(self.from_dom_value(r));
                 }
-                Err(self.throw_err("Error", &format!("Cannot use object of type {} as array", o.class.borrow())))
+                Err(self.throw_err(
+                    "Error",
+                    &format!("Cannot use object of type {} as array", o.class.borrow()),
+                ))
             }
             V::Null => Ok(V::Null),
             _ => Ok(V::Null),
@@ -1700,7 +2007,15 @@ impl Interp {
 
     pub fn read_prop(&self, o: &V, n: &[u8]) -> R<V> {
         let V::Obj(ob) = o else {
-            self.emit_raw("Warning", format!("Attempt to read property \"{}\" on {}", String::from_utf8_lossy(n), o.type_name()).as_bytes());
+            self.emit_raw(
+                "Warning",
+                format!(
+                    "Attempt to read property \"{}\" on {}",
+                    String::from_utf8_lossy(n),
+                    o.type_name()
+                )
+                .as_bytes(),
+            );
             return Ok(V::Null);
         };
         if let Some(d) = ob.dom() {
@@ -1725,7 +2040,15 @@ impl Interp {
                 if let Some(_) = self.find_user_method(&cls, "__get") {
                     return self.call_method(o, "__get", vec![V::Str(n.to_vec())]);
                 }
-                self.emit_raw("Warning", format!("Undefined property: {}::${}", cls, String::from_utf8_lossy(n)).as_bytes());
+                self.emit_raw(
+                    "Warning",
+                    format!(
+                        "Undefined property: {}::${}",
+                        cls,
+                        String::from_utf8_lossy(n)
+                    )
+                    .as_bytes(),
+                );
                 Ok(V::Null)
             }
         }
@@ -1745,18 +2068,32 @@ impl Interp {
                             Some(c) => format!("scope {c}"),
                             None => "global scope".into(),
                         };
-                        return Err(self.throw_err("Error", &format!("Cannot modify private(set) property {decl}::${ns} from {scope}")));
+                        return Err(self.throw_err(
+                            "Error",
+                            &format!(
+                                "Cannot modify private(set) property {decl}::${ns} from {scope}"
+                            ),
+                        ));
                     }
                     let typed = self.coerce_prop(&v, p.ty.unwrap_or("mixed"), decl, &ns)?;
                     let dv = self.to_dom_value(&typed);
-                    return dispatch::write_property(&d, &ns, &dv).map(|_| ()).map_err(|e| self.dom_err(e, "", &[]));
+                    return dispatch::write_property(&d, &ns, &dv)
+                        .map(|_| ())
+                        .map_err(|e| self.dom_err(e, "", &[]));
                 }
             }
         }
         if ob.dom().is_some() && ob.prop(n).is_none() {
             let cls = ob.class.borrow().clone();
             if php_dom::classes::find_class(&cls).is_some() {
-                self.emit_raw("Deprecated", format!("Creation of dynamic property {cls}::${} is deprecated", String::from_utf8_lossy(n)).as_bytes());
+                self.emit_raw(
+                    "Deprecated",
+                    format!(
+                        "Creation of dynamic property {cls}::${} is deprecated",
+                        String::from_utf8_lossy(n)
+                    )
+                    .as_bytes(),
+                );
             }
         }
         ob.set_prop(n, v);
@@ -1770,27 +2107,50 @@ impl Interp {
             if nullable || base.contains("null") || base == "mixed" {
                 return Ok(V::Null);
             }
-            return Err(self.throw_err("TypeError", &format!("Cannot assign null to property {class}::${name} of type {ty}")));
+            return Err(self.throw_err(
+                "TypeError",
+                &format!("Cannot assign null to property {class}::${name} of type {ty}"),
+            ));
         }
         if let V::Obj(o) = v {
             let cls = o.class.borrow().clone();
-            if (base == "string" || base.contains("string")) && self.find_user_method(&cls, "__toString").is_some() {
+            if (base == "string" || base.contains("string"))
+                && self.find_user_method(&cls, "__toString").is_some()
+            {
                 let s = self.call_method(v, "__toString", vec![])?;
                 return Ok(V::Str(to_bytes(&s)));
             }
         }
         match base {
             "string" => match v {
-                V::Arr(_) | V::Obj(_) => Err(self.throw_err("TypeError", &format!("Cannot assign {} to property {class}::${name} of type {ty}", v.type_name()))),
+                V::Arr(_) | V::Obj(_) => Err(self.throw_err(
+                    "TypeError",
+                    &format!(
+                        "Cannot assign {} to property {class}::${name} of type {ty}",
+                        v.type_name()
+                    ),
+                )),
                 other => Ok(V::Str(to_bytes(other))),
             },
             "bool" => match v {
-                V::Arr(_) | V::Obj(_) => Err(self.throw_err("TypeError", &format!("Cannot assign {} to property {class}::${name} of type {ty}", v.type_name()))),
+                V::Arr(_) | V::Obj(_) => Err(self.throw_err(
+                    "TypeError",
+                    &format!(
+                        "Cannot assign {} to property {class}::${name} of type {ty}",
+                        v.type_name()
+                    ),
+                )),
                 other => Ok(V::Bool(other.truthy())),
             },
             cls if cls.contains('\\') || cls.starts_with("DOM") => match v {
                 V::Obj(o) if self.is_subclass(&o.class.borrow().clone(), cls) => Ok(v.clone()),
-                _ => Err(self.throw_err("TypeError", &format!("Cannot assign {} to property {class}::${name} of type {ty}", v.type_name()))),
+                _ => Err(self.throw_err(
+                    "TypeError",
+                    &format!(
+                        "Cannot assign {} to property {class}::${name} of type {ty}",
+                        v.type_name()
+                    ),
+                )),
             },
             _ => Ok(v.clone()),
         }
@@ -1808,7 +2168,14 @@ impl Interp {
                 let n = self.member_name(name)?;
                 match &o {
                     V::Obj(ob) => self.write_prop(ob, &n, v),
-                    _ => Err(self.throw_err("Error", &format!("Attempt to assign property \"{}\" on {}", String::from_utf8_lossy(&n), o.type_name()))),
+                    _ => Err(self.throw_err(
+                        "Error",
+                        &format!(
+                            "Attempt to assign property \"{}\" on {}",
+                            String::from_utf8_lossy(&n),
+                            o.type_name()
+                        ),
+                    )),
                 }
             }
             ExprKind::Dim { base, index } => {
@@ -1819,7 +2186,10 @@ impl Interp {
                 let bv = self.eval_quiet(base)?;
                 if let V::Obj(o) = &bv {
                     if o.dom().is_some() {
-                        return Err(self.throw_err("Error", &format!("Cannot use object of type {} as array", o.class.borrow())));
+                        return Err(self.throw_err(
+                            "Error",
+                            &format!("Cannot use object of type {} as array", o.class.borrow()),
+                        ));
                     }
                 }
                 let mut v = Some(v);
@@ -1915,7 +2285,12 @@ impl Interp {
             BinaryOp::BitXor => V::Int(to_int(l) ^ to_int(r)),
             BinaryOp::ShiftLeft => V::Int(to_int(l).wrapping_shl(to_int(r) as u32)),
             BinaryOp::ShiftRight => V::Int(to_int(l).wrapping_shr(to_int(r) as u32)),
-            BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod | BinaryOp::Pow => {
+            BinaryOp::Add
+            | BinaryOp::Sub
+            | BinaryOp::Mul
+            | BinaryOp::Div
+            | BinaryOp::Mod
+            | BinaryOp::Pow => {
                 if let (BinaryOp::Add, V::Arr(a), V::Arr(b)) = (op, l, r) {
                     let mut out = (**a).clone();
                     for (k, v) in &b.items {
@@ -1991,8 +2366,14 @@ impl Interp {
                 return std::cmp::Ordering::Equal;
             }
             let r = match kind {
-                "usort" | "uasort" => cb.map(|f| self.call_value(f, vec![x.1.clone(), y.1.clone()]).map(|v| to_int(&v))),
-                "uksort" => cb.map(|f| self.call_value(f, vec![key_v(&x.0), key_v(&y.0)]).map(|v| to_int(&v))),
+                "usort" | "uasort" => cb.map(|f| {
+                    self.call_value(f, vec![x.1.clone(), y.1.clone()])
+                        .map(|v| to_int(&v))
+                }),
+                "uksort" => cb.map(|f| {
+                    self.call_value(f, vec![key_v(&x.0), key_v(&y.0)])
+                        .map(|v| to_int(&v))
+                }),
                 "ksort" => Some(Ok(i64::from(compare(&key_v(&x.0), &key_v(&y.0))))),
                 "krsort" => Some(Ok(-i64::from(compare(&key_v(&x.0), &key_v(&y.0))))),
                 "rsort" | "arsort" => Some(Ok(-i64::from(compare(&x.1, &y.1)))),
@@ -2011,7 +2392,10 @@ impl Interp {
             return Err(e);
         }
         let mut out = Arr::default();
-        let keep_keys = matches!(kind, "uasort" | "uksort" | "ksort" | "krsort" | "asort" | "arsort");
+        let keep_keys = matches!(
+            kind,
+            "uasort" | "uksort" | "ksort" | "krsort" | "asort" | "arsort"
+        );
         for (k, v) in items {
             if keep_keys {
                 out.set(k, v);
@@ -2050,7 +2434,9 @@ impl Interp {
                     }
                     _ => {}
                 },
-                ArgKind::Named { name, value } => named.push((name.name.clone(), self.eval(value)?)),
+                ArgKind::Named { name, value } => {
+                    named.push((name.name.clone(), self.eval(value)?))
+                }
                 _ => {}
             }
         }
@@ -2060,23 +2446,48 @@ impl Interp {
     fn eval_call(&self, callee: &Callee, args: &ArgList, line: u32) -> R<V> {
         if args.is_first_class_callable() {
             return match callee {
-                Callee::Name(n) => Ok(V::Obj(new_obj("Closure", ObjKind::Closure(Rc::new(Callable::Builtin(String::from_utf8_lossy(&n.name).into_owned())))))),
+                Callee::Name(n) => Ok(V::Obj(new_obj(
+                    "Closure",
+                    ObjKind::Closure(Rc::new(Callable::Builtin(
+                        String::from_utf8_lossy(&n.name).into_owned(),
+                    ))),
+                ))),
                 Callee::Expr(e) => self.eval(e),
             };
         }
         match callee {
             Callee::Name(n) => {
                 let raw = String::from_utf8_lossy(&n.name).into_owned();
-                let name = raw.trim_start_matches('\\').rsplit('\\').next().unwrap_or(&raw).to_string();
+                let name = raw
+                    .trim_start_matches('\\')
+                    .rsplit('\\')
+                    .next()
+                    .unwrap_or(&raw)
+                    .to_string();
                 // compact()/extract() etc. need raw args; handle isset-like builtins first.
                 let (a, named) = self.eval_args(args)?;
                 self.line.set(line);
-                let uf = self.functions.borrow().get(&name.to_ascii_lowercase().into_bytes()).cloned();
+                let uf = self
+                    .functions
+                    .borrow()
+                    .get(&name.to_ascii_lowercase().into_bytes())
+                    .cloned();
                 if let Some(f) = uf {
                     return self.call_user(&f, a, named, None, None, None, &[]);
                 }
                 let lname = name.to_ascii_lowercase();
-                if matches!(lname.as_str(), "usort" | "uasort" | "uksort" | "sort" | "rsort" | "ksort" | "krsort" | "asort" | "arsort") {
+                if matches!(
+                    lname.as_str(),
+                    "usort"
+                        | "uasort"
+                        | "uksort"
+                        | "sort"
+                        | "rsort"
+                        | "ksort"
+                        | "krsort"
+                        | "asort"
+                        | "arsort"
+                ) {
                     if let (Some(V::Arr(arr)), Some(first)) = (a.first(), args.args.first()) {
                         if let ArgKind::Positional(target) = &first.kind {
                             let sorted = self.sort_array(&lname, arr, a.get(1))?;
@@ -2104,7 +2515,10 @@ impl Interp {
                     let c = c.clone();
                     return self.call_callable(&c, args);
                 }
-                if self.find_user_method(&o.class.borrow(), "__invoke").is_some() {
+                if self
+                    .find_user_method(&o.class.borrow(), "__invoke")
+                    .is_some()
+                {
                     return self.call_method(f, "__invoke", args);
                 }
                 Err(self.throw_err("Error", "Object of type is not callable"))
@@ -2114,7 +2528,11 @@ impl Interp {
                 if let Some((c, m)) = name.split_once("::") {
                     return self.call_static_by_name(c, m, args);
                 }
-                let uf = self.functions.borrow().get(&name.to_ascii_lowercase().into_bytes()).cloned();
+                let uf = self
+                    .functions
+                    .borrow()
+                    .get(&name.to_ascii_lowercase().into_bytes())
+                    .cloned();
                 if let Some(uf) = uf {
                     return self.call_user(&uf, args, vec![], None, None, None, &[]);
                 }
@@ -2126,7 +2544,11 @@ impl Interp {
                 let m = String::from_utf8_lossy(&m).into_owned();
                 match target {
                     V::Obj(_) => self.call_method(&target, &m, args),
-                    other => self.call_static_by_name(&String::from_utf8_lossy(&to_bytes(&other)), &m, args),
+                    other => self.call_static_by_name(
+                        &String::from_utf8_lossy(&to_bytes(&other)),
+                        &m,
+                        args,
+                    ),
                 }
             }
             _ => Err(self.throw_err("Error", "Value not callable")),
@@ -2136,10 +2558,21 @@ impl Interp {
     fn call_callable(&self, c: &Callable, args: Vec<V>) -> R<V> {
         match c {
             Callable::Func(f) => self.call_user(f, args, vec![], None, None, None, &[]),
-            Callable::Closure { func, bound, this, scope, arrow } => {
+            Callable::Closure {
+                func,
+                bound,
+                this,
+                scope,
+                arrow,
+            } => {
                 if let Some(ex) = arrow {
                     // Arrow function: bind params on top of captured vars.
-                    let mut fr = Frame { func: "{closure}".into(), this: this.clone(), class: scope.clone(), ..Default::default() };
+                    let mut fr = Frame {
+                        func: "{closure}".into(),
+                        this: this.clone(),
+                        class: scope.clone(),
+                        ..Default::default()
+                    };
                     for (k, v) in bound {
                         fr.vars.insert(k.clone(), v.clone());
                     }
@@ -2155,11 +2588,19 @@ impl Interp {
             }
             Callable::Builtin(n) => self.builtin(n, args, vec![]),
             Callable::Method(o, m) => self.call_method(o, &String::from_utf8_lossy(m), args),
-            Callable::StaticMethod(c, m) => self.call_static_by_name(c, &String::from_utf8_lossy(m), args),
+            Callable::StaticMethod(c, m) => {
+                self.call_static_by_name(c, &String::from_utf8_lossy(m), args)
+            }
         }
     }
 
-    fn bind_params(&self, params: &[Param], mut args: Vec<V>, named: Vec<(Vec<u8>, V)>, fname: &str) -> R<()> {
+    fn bind_params(
+        &self,
+        params: &[Param],
+        mut args: Vec<V>,
+        named: Vec<(Vec<u8>, V)>,
+        fname: &str,
+    ) -> R<()> {
         let nargs = args.len();
         for (i, p) in params.iter().enumerate() {
             if p.variadic {
@@ -2191,7 +2632,16 @@ impl Interp {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn call_user(&self, f: &UserFunc, args: Vec<V>, named: Vec<(Vec<u8>, V)>, this: Option<V>, class: Option<String>, static_class: Option<String>, bound: &[(Vec<u8>, V)]) -> R<V> {
+    fn call_user(
+        &self,
+        f: &UserFunc,
+        args: Vec<V>,
+        named: Vec<(Vec<u8>, V)>,
+        this: Option<V>,
+        class: Option<String>,
+        static_class: Option<String>,
+        bound: &[(Vec<u8>, V)],
+    ) -> R<V> {
         if self.frames.borrow().len() > 200 {
             return Err(self.throw_err("Error", "Maximum function nesting level reached"));
         }
@@ -2199,7 +2649,13 @@ impl Interp {
             Some(c) => format!("{c}::{}", String::from_utf8_lossy(&f.name)),
             None => String::from_utf8_lossy(&f.name).into_owned(),
         };
-        let mut fr = Frame { func: String::from_utf8_lossy(&f.name).into_owned(), this: this.clone(), class: class.clone(), static_class, ..Default::default() };
+        let mut fr = Frame {
+            func: String::from_utf8_lossy(&f.name).into_owned(),
+            this: this.clone(),
+            class: class.clone(),
+            static_class,
+            ..Default::default()
+        };
         for (k, v) in bound {
             fr.vars.insert(k.clone(), v.clone());
         }
@@ -2271,7 +2727,10 @@ impl Interp {
 
     pub fn call_method(&self, o: &V, name: &str, args: Vec<V>) -> R<V> {
         let V::Obj(ob) = o else {
-            return Err(self.throw_err("Error", &format!("Call to a member function {name}() on {}", o.type_name())));
+            return Err(self.throw_err(
+                "Error",
+                &format!("Call to a member function {name}() on {}", o.type_name()),
+            ));
         };
         let cls = ob.class.borrow().clone();
         if let Some((c, f, _)) = self.find_user_method(&cls, name) {
@@ -2304,7 +2763,10 @@ impl Interp {
                         }
                         "valid" => Ok(V::Bool(i.valid())),
                         "rewind" => Ok(V::Null),
-                        _ => Err(self.throw_err("Error", &format!("Call to undefined method InternalIterator::{name}()"))),
+                        _ => Err(self.throw_err(
+                            "Error",
+                            &format!("Call to undefined method InternalIterator::{name}()"),
+                        )),
                     };
                 }
                 ObjKind::Enum(_, case) => {
@@ -2323,21 +2785,44 @@ impl Interp {
                 "gettraceasstring" => V::str("#0 {main}"),
                 "gettrace" => V::arr(Arr::default()),
                 "__tostring" => {
-                    let msg = ob.prop(b"message").map(|m| to_bytes(&m)).unwrap_or_default();
-                    V::Str(format!("{cls}: {} in {}:{}\nStack trace:\n#0 {{main}}", String::from_utf8_lossy(&msg), self.file, to_int(&ob.prop(b"line").unwrap_or(V::Int(0)))).into_bytes())
+                    let msg = ob
+                        .prop(b"message")
+                        .map(|m| to_bytes(&m))
+                        .unwrap_or_default();
+                    V::Str(
+                        format!(
+                            "{cls}: {} in {}:{}\nStack trace:\n#0 {{main}}",
+                            String::from_utf8_lossy(&msg),
+                            self.file,
+                            to_int(&ob.prop(b"line").unwrap_or(V::Int(0)))
+                        )
+                        .into_bytes(),
+                    )
                 }
-                _ => return Err(self.throw_err("Error", &format!("Call to undefined method {cls}::{name}()"))),
+                _ => {
+                    return Err(self.throw_err(
+                        "Error",
+                        &format!("Call to undefined method {cls}::{name}()"),
+                    ))
+                }
             });
         }
-        Err(self.throw_err("Error", &format!("Call to undefined method {cls}::{name}()")))
+        Err(self.throw_err(
+            "Error",
+            &format!("Call to undefined method {cls}::{name}()"),
+        ))
     }
 
     fn call_dom(&self, d: &DomObject, ob: &Rc<Obj>, name: &str, args: Vec<V>) -> R<V> {
         let builtin = d.builtin_class();
-        let (decl, params): (String, Vec<&'static str>) = match php_dom::classes::find_method(builtin, name) {
-            Some((c, m)) => (format!("{}::{}", c.name, m.name), m.params.iter().map(|p| p.name).collect()),
-            None => (format!("{builtin}::{name}"), Vec::new()),
-        };
+        let (decl, params): (String, Vec<&'static str>) =
+            match php_dom::classes::find_method(builtin, name) {
+                Some((c, m)) => (
+                    format!("{}::{}", c.name, m.name),
+                    m.params.iter().map(|p| p.name).collect(),
+                ),
+                None => (format!("{builtin}::{name}"), Vec::new()),
+            };
         if lc(name) == "__construct" {
             if let Some(err) = self.arity_error(builtin, name, args.len(), &decl) {
                 return Err(err);
@@ -2364,7 +2849,9 @@ impl Interp {
         *self.cur_fn.borrow_mut() = saved;
         match r {
             Ok(v) => Ok(self.from_dom_value(v)),
-            Err(DomError::CouldntFetch) => Err(self.throw_err("Error", &format!("Couldn't fetch {}", ob.class.borrow()))),
+            Err(DomError::CouldntFetch) => {
+                Err(self.throw_err("Error", &format!("Couldn't fetch {}", ob.class.borrow())))
+            }
             Err(DomError::Silent) => Ok(V::Bool(false)),
             Err(e) => {
                 let f = self.dom_err(e, &decl, &params);
@@ -2372,7 +2859,19 @@ impl Interp {
                     if ex.prop(b"__trace").is_none() {
                         let argstr: Vec<String> = args.iter().map(trace_arg).collect();
                         let callee = decl.replace("::", "->");
-                        ex.set_prop(b"__trace", V::Str(format!("#0 {}({}): {}({})\n", self.file, self.line.get(), callee, argstr.join(", ")).into_bytes()));
+                        ex.set_prop(
+                            b"__trace",
+                            V::Str(
+                                format!(
+                                    "#0 {}({}): {}({})\n",
+                                    self.file,
+                                    self.line.get(),
+                                    callee,
+                                    argstr.join(", ")
+                                )
+                                .into_bytes(),
+                            ),
+                        );
                     }
                 }
                 Err(f)
@@ -2386,25 +2885,49 @@ impl Interp {
         let variadic = m.params.iter().any(|p| p.variadic);
         let max = m.params.len();
         let (kind, cnt) = if n < min {
-            (if min == max && !variadic { "exactly" } else { "at least" }, min)
+            (
+                if min == max && !variadic {
+                    "exactly"
+                } else {
+                    "at least"
+                },
+                min,
+            )
         } else if !variadic && n > max {
             (if min == max { "exactly" } else { "at most" }, max)
         } else {
             return None;
         };
         let plural = if cnt == 1 { "argument" } else { "arguments" };
-        Some(self.throw_err("ArgumentCountError", &format!("{decl}() expects {kind} {cnt} {plural}, {n} given")))
+        Some(self.throw_err(
+            "ArgumentCountError",
+            &format!("{decl}() expects {kind} {cnt} {plural}, {n} given"),
+        ))
     }
 
-    fn static_call(&self, class: &ClassRef, name: &str, args: Vec<V>, named: Vec<(Vec<u8>, V)>) -> R<V> {
+    fn static_call(
+        &self,
+        class: &ClassRef,
+        name: &str,
+        args: Vec<V>,
+        named: Vec<(Vec<u8>, V)>,
+    ) -> R<V> {
         if let ClassRef::Name(n) = class {
             if n.is_special("parent") {
                 let (cur_class, this) = {
                     let f = self.frames.borrow();
                     let fr = f.last();
-                    (fr.and_then(|f| f.class.clone()).unwrap_or_default(), fr.and_then(|f| f.this.clone()))
+                    (
+                        fr.and_then(|f| f.class.clone()).unwrap_or_default(),
+                        fr.and_then(|f| f.this.clone()),
+                    )
                 };
-                let parent = self.classes.borrow().get(&lc(&cur_class)).and_then(|c| c.parent.clone()).unwrap_or_default();
+                let parent = self
+                    .classes
+                    .borrow()
+                    .get(&lc(&cur_class))
+                    .and_then(|c| c.parent.clone())
+                    .unwrap_or_default();
                 if let Some((c, f, _)) = self.find_user_method(&parent, name) {
                     let sc = this.as_ref().map(|t| t.type_name());
                     return self.call_user(&f, args, named, this, Some(c), sc, &[]);
@@ -2413,7 +2936,8 @@ impl Interp {
                     if let Some(d) = o.dom() {
                         return self.call_dom(&d, o, name, args);
                     }
-                    if self.is_subclass(&parent, "Exception") || self.is_subclass(&parent, "Error") {
+                    if self.is_subclass(&parent, "Exception") || self.is_subclass(&parent, "Error")
+                    {
                         if lc(name) == "__construct" {
                             if let Some(m) = args.first() {
                                 o.set_prop(b"message", m.clone());
@@ -2434,13 +2958,19 @@ impl Interp {
         }
         let cname = self.class_ref_name(class)?;
         if let Some((c, f, is_static)) = self.find_user_method(&cname, name) {
-            let this = if is_static { None } else { self.frames.borrow().last().and_then(|f| f.this.clone()) };
+            let this = if is_static {
+                None
+            } else {
+                self.frames.borrow().last().and_then(|f| f.this.clone())
+            };
             return self.call_user(&f, args, named, this, Some(c), Some(cname), &[]);
         }
         let mut args = args;
         if !named.is_empty() {
             let canon = self.canonical_class(&cname);
-            let dom_class = self.dom_builtin(&canon).map_or(canon.clone(), str::to_string);
+            let dom_class = self
+                .dom_builtin(&canon)
+                .map_or(canon.clone(), str::to_string);
             if let Some((_, m)) = php_dom::classes::find_method(&dom_class, name) {
                 for (i, p) in m.params.iter().enumerate().skip(args.len()) {
                     if let Some((_, v)) = named.iter().find(|(k, _)| k == p.name.as_bytes()) {
@@ -2485,21 +3015,38 @@ impl Interp {
                         if lc(name) == "tryfrom" {
                             return Ok(V::Null);
                         }
-                        return Err(self.throw_err("ValueError", &format!("\"{}\" is not a valid backing value for enum {}", String::from_utf8_lossy(&v), c.name)));
+                        return Err(self.throw_err(
+                            "ValueError",
+                            &format!(
+                                "\"{}\" is not a valid backing value for enum {}",
+                                String::from_utf8_lossy(&v),
+                                c.name
+                            ),
+                        ));
                     }
                     _ => {}
                 }
             }
         }
-        let (decl, params): (String, Vec<&'static str>) = match php_dom::classes::find_method(&dom_class, name) {
-            Some((c, m)) => {
-                if !m.is_static {
-                    return Err(self.throw_err("Error", &format!("Non-static method {}::{}() cannot be called statically", c.name, m.name)));
+        let (decl, params): (String, Vec<&'static str>) =
+            match php_dom::classes::find_method(&dom_class, name) {
+                Some((c, m)) => {
+                    if !m.is_static {
+                        return Err(self.throw_err(
+                            "Error",
+                            &format!(
+                                "Non-static method {}::{}() cannot be called statically",
+                                c.name, m.name
+                            ),
+                        ));
+                    }
+                    (
+                        format!("{}::{}", c.name, m.name),
+                        m.params.iter().map(|p| p.name).collect(),
+                    )
                 }
-                (format!("{}::{}", c.name, m.name), m.params.iter().map(|p| p.name).collect())
-            }
-            None => (format!("{dom_class}::{name}"), Vec::new()),
-        };
+                None => (format!("{dom_class}::{name}"), Vec::new()),
+            };
         let dargs: Vec<DomValue> = args.iter().map(|a| self.to_dom_value(a)).collect();
         let saved = self.cur_fn.replace(decl.clone());
         let r = dispatch::call_static(&dom_class, name, &dargs, self);
@@ -2512,7 +3059,19 @@ impl Interp {
                 if let Flow::Throw(V::Obj(ex)) = &f {
                     if ex.prop(b"__trace").is_none() {
                         let argstr: Vec<String> = args.iter().map(trace_arg).collect();
-                        ex.set_prop(b"__trace", V::Str(format!("#0 {}({}): {}({})\n", self.file, self.line.get(), decl, argstr.join(", ")).into_bytes()));
+                        ex.set_prop(
+                            b"__trace",
+                            V::Str(
+                                format!(
+                                    "#0 {}({}): {}({})\n",
+                                    self.file,
+                                    self.line.get(),
+                                    decl,
+                                    argstr.join(", ")
+                                )
+                                .into_bytes(),
+                            ),
+                        );
                     }
                 }
                 Err(f)
@@ -2531,13 +3090,20 @@ impl Interp {
                 // Create with a placeholder; the constructor replaces it.
                 new_obj(&cname, ObjKind::Plain)
             }
-            Some(b) if php_dom::classes::is_subclass(b, "DOMNode") || php_dom::classes::is_subclass(b, "Dom\\Node") || b == "DOMNameSpaceNode" => {
+            Some(b)
+                if php_dom::classes::is_subclass(b, "DOMNode")
+                    || php_dom::classes::is_subclass(b, "Dom\\Node")
+                    || b == "DOMNameSpaceNode" =>
+            {
                 let n = Node::new_unbound(cname.clone(), b);
                 let o = new_obj(&cname, ObjKind::Dom(DomObject::Node(n.clone())));
                 *n.host_data() = Some(Box::new(Rc::downgrade(&o)));
                 o
             }
-            Some(b) if dispatch::instantiate(b).is_some() => new_obj(&cname, ObjKind::Dom(dispatch::instantiate(b).expect("checked"))),
+            Some(b) if dispatch::instantiate(b).is_some() => new_obj(
+                &cname,
+                ObjKind::Dom(dispatch::instantiate(b).expect("checked")),
+            ),
             _ => new_obj(&cname, ObjKind::Plain),
         };
         // default props
@@ -2547,7 +3113,15 @@ impl Interp {
             if matches!(builtin, Some("DOMXPath" | "Dom\\XPath")) {
                 *obj.kind.borrow_mut() = ObjKind::Dom(DomObject::XPath(placeholder_xpath()));
             }
-            self.call_user(&f, args, named, Some(v.clone()), Some(c), Some(cname.clone()), &[])?;
+            self.call_user(
+                &f,
+                args,
+                named,
+                Some(v.clone()),
+                Some(c),
+                Some(cname.clone()),
+                &[],
+            )?;
             return Ok(v);
         }
         match builtin {
@@ -2558,23 +3132,40 @@ impl Interp {
                 };
                 let Some(DomObject::Node(docn)) = doc else {
                     let given = args.first().map_or("null".into(), V::type_name);
-                    let want = if b == "DOMXPath" { "DOMDocument" } else { "Dom\\Document" };
+                    let want = if b == "DOMXPath" {
+                        "DOMDocument"
+                    } else {
+                        "Dom\\Document"
+                    };
                     return Err(self.throw_err("TypeError", &format!("{b}::__construct(): Argument #1 ($document) must be of type {want}, {given} given")));
                 };
                 let reg = args.get(1).map_or(true, V::truthy);
-                let x = dispatch::new_xpath(&docn, reg).map_err(|e| self.dom_err(e, &format!("{b}::__construct"), &["document", "registerNodeNS"]))?;
+                let x = dispatch::new_xpath(&docn, reg).map_err(|e| {
+                    self.dom_err(
+                        e,
+                        &format!("{b}::__construct"),
+                        &["document", "registerNodeNS"],
+                    )
+                })?;
                 *obj.kind.borrow_mut() = ObjKind::Dom(DomObject::XPath(x));
             }
             Some(b) => {
                 if let Some(d) = obj.dom() {
                     if b.starts_with("Dom\\") && php_dom::classes::is_subclass(b, "Dom\\Node") {
-                        return Err(self.throw_err("Error", &format!("Cannot directly construct {cname}, use document methods instead")));
+                        return Err(self.throw_err(
+                            "Error",
+                            &format!(
+                                "Cannot directly construct {cname}, use document methods instead"
+                            ),
+                        ));
                     }
                     let mut a = args;
                     if !named.is_empty() {
                         if let Some((_, m)) = php_dom::classes::find_method(b, "__construct") {
                             for (i, p) in m.params.iter().enumerate().skip(a.len()) {
-                                if let Some((_, v)) = named.iter().find(|(k, _)| k == p.name.as_bytes()) {
+                                if let Some((_, v)) =
+                                    named.iter().find(|(k, _)| k == p.name.as_bytes())
+                                {
                                     while a.len() < i {
                                         let d = m.params[a.len()].default;
                                         a.push(self.default_value(d));
@@ -2668,7 +3259,12 @@ impl Interp {
                     .map(|n| self.from_dom_value(DomValue::Node(n)))
                     .collect();
                 let id = l.identity();
-                if let Some(existing) = self.list_objs.borrow().get(&id).and_then(std::rc::Weak::upgrade) {
+                if let Some(existing) = self
+                    .list_objs
+                    .borrow()
+                    .get(&id)
+                    .and_then(std::rc::Weak::upgrade)
+                {
                     return V::Obj(existing);
                 }
                 let o = new_obj(l.class_name(), ObjKind::Dom(DomObject::NodeList(l)));
@@ -2676,18 +3272,31 @@ impl Interp {
                 self.list_objs.borrow_mut().insert(id, Rc::downgrade(&o));
                 V::Obj(o)
             }
-            DomValue::NamedNodeMap(m) => V::Obj(new_obj(m.class_name(), ObjKind::Dom(DomObject::NamedNodeMap(m)))),
+            DomValue::NamedNodeMap(m) => V::Obj(new_obj(
+                m.class_name(),
+                ObjKind::Dom(DomObject::NamedNodeMap(m)),
+            )),
             DomValue::Implementation(i) => {
                 let id = i.identity();
-                if let Some(existing) = self.list_objs.borrow().get(&id).and_then(std::rc::Weak::upgrade) {
+                if let Some(existing) = self
+                    .list_objs
+                    .borrow()
+                    .get(&id)
+                    .and_then(std::rc::Weak::upgrade)
+                {
                     return V::Obj(existing);
                 }
                 let o = new_obj(i.class_name(), ObjKind::Dom(DomObject::Implementation(i)));
                 self.list_objs.borrow_mut().insert(id, Rc::downgrade(&o));
                 V::Obj(o)
             }
-            DomValue::TokenList(t) => V::Obj(new_obj("Dom\\TokenList", ObjKind::Dom(DomObject::TokenList(t)))),
-            DomValue::XPath(x) => V::Obj(new_obj(x.class_name(), ObjKind::Dom(DomObject::XPath(x)))),
+            DomValue::TokenList(t) => V::Obj(new_obj(
+                "Dom\\TokenList",
+                ObjKind::Dom(DomObject::TokenList(t)),
+            )),
+            DomValue::XPath(x) => {
+                V::Obj(new_obj(x.class_name(), ObjKind::Dom(DomObject::XPath(x))))
+            }
             DomValue::Iterator(i) => V::Obj(new_obj("InternalIterator", ObjKind::Iter(i))),
             DomValue::NamespaceInfo(ni) => {
                 let o = new_obj("Dom\\NamespaceInfo", ObjKind::Plain);
@@ -2767,7 +3376,13 @@ fn placeholder_xpath() -> php_dom::XPath {
 fn trace_arg(v: &V) -> String {
     match v {
         V::Null => "NULL".into(),
-        V::Bool(b) => if *b { "true".into() } else { "false".into() },
+        V::Bool(b) => {
+            if *b {
+                "true".into()
+            } else {
+                "false".into()
+            }
+        }
         V::Int(i) => i.to_string(),
         V::Float(f) => super::output::float_repr(*f),
         V::Str(s) => {
@@ -2851,7 +3466,10 @@ impl DomHost for Interp {
     }
 
     fn is_abstract(&self, class: &str) -> bool {
-        self.classes.borrow().get(&lc(class)).is_some_and(|c| c.is_abstract)
+        self.classes
+            .borrow()
+            .get(&lc(class))
+            .is_some_and(|c| c.is_abstract)
             || php_dom::classes::find_class(class).is_some_and(|c| c.is_abstract)
     }
 
@@ -2870,11 +3488,17 @@ impl DomHost for Interp {
             }
             return Err(format!("class {c} does not have a method \"{m}\""));
         }
-        let exists = self.functions.borrow().contains_key(&n.to_ascii_lowercase().into_bytes()) || is_builtin_fn(&n);
+        let exists = self
+            .functions
+            .borrow()
+            .contains_key(&n.to_ascii_lowercase().into_bytes())
+            || is_builtin_fn(&n);
         if exists {
             Ok(Rc::new(HostFn(V::Str(name.to_vec()))))
         } else {
-            Err(format!("function \"{n}\" not found or invalid function name"))
+            Err(format!(
+                "function \"{n}\" not found or invalid function name"
+            ))
         }
     }
 
@@ -2897,9 +3521,16 @@ impl DomHost for Interp {
     fn call_by_name(&self, name: &[u8], args: Vec<XPathArg>) -> Result<XPathReturn, DomError> {
         let a: Vec<V> = args.into_iter().map(|x| self.xpath_arg(x)).collect();
         let n = String::from_utf8_lossy(name).into_owned();
-        let exists = self.functions.borrow().contains_key(&n.to_ascii_lowercase().into_bytes()) || n.contains("::") || is_builtin_fn(&n);
+        let exists = self
+            .functions
+            .borrow()
+            .contains_key(&n.to_ascii_lowercase().into_bytes())
+            || n.contains("::")
+            || is_builtin_fn(&n);
         if !exists {
-            return Err(DomError::Error(format!("Invalid callback {n}, function \"{n}\" not found or invalid function name")));
+            return Err(DomError::Error(format!(
+                "Invalid callback {n}, function \"{n}\" not found or invalid function name"
+            )));
         }
         match self.call_value(&V::Str(name.to_vec()), a) {
             Ok(v) => Ok(self.xpath_ret(v)),
@@ -2941,7 +3572,20 @@ impl Interp {
 pub fn is_builtin_fn(n: &str) -> bool {
     matches!(
         lc(n).as_str(),
-        "strtoupper" | "strtolower" | "trim" | "strlen" | "str_repeat" | "ucfirst" | "var_dump" | "implode" | "count" | "strrev" | "md5" | "sprintf" | "str_replace" | "substr"
+        "strtoupper"
+            | "strtolower"
+            | "trim"
+            | "strlen"
+            | "str_repeat"
+            | "ucfirst"
+            | "var_dump"
+            | "implode"
+            | "count"
+            | "strrev"
+            | "md5"
+            | "sprintf"
+            | "str_replace"
+            | "substr"
     )
 }
 
@@ -2996,7 +3640,10 @@ pub fn to_num(v: &V) -> V {
             } else if let Ok(f) = t.parse::<f64>() {
                 V::Float(f)
             } else {
-                let lead: String = t.chars().take_while(|c| c.is_ascii_digit() || *c == '-' || *c == '.').collect();
+                let lead: String = t
+                    .chars()
+                    .take_while(|c| c.is_ascii_digit() || *c == '-' || *c == '.')
+                    .collect();
                 lead.parse::<i64>().map(V::Int).unwrap_or(V::Int(0))
             }
         }
@@ -3032,14 +3679,22 @@ pub fn strict_eq(a: &V, b: &V) -> bool {
         (V::Int(x), V::Int(y)) => x == y,
         (V::Float(x), V::Float(y)) => x == y,
         (V::Str(x), V::Str(y)) => x == y,
-        (V::Arr(x), V::Arr(y)) => x.items.len() == y.items.len() && x.items.iter().zip(y.items.iter()).all(|((k1, v1), (k2, v2))| k1 == k2 && strict_eq(v1, v2)),
+        (V::Arr(x), V::Arr(y)) => {
+            x.items.len() == y.items.len()
+                && x.items
+                    .iter()
+                    .zip(y.items.iter())
+                    .all(|((k1, v1), (k2, v2))| k1 == k2 && strict_eq(v1, v2))
+        }
         (V::Obj(x), V::Obj(y)) => Rc::ptr_eq(x, y),
         _ => false,
     }
 }
 
 fn is_numeric(s: &[u8]) -> bool {
-    std::str::from_utf8(s).ok().is_some_and(|t| t.trim().parse::<f64>().is_ok())
+    std::str::from_utf8(s)
+        .ok()
+        .is_some_and(|t| t.trim().parse::<f64>().is_ok())
 }
 
 pub fn loose_eq(a: &V, b: &V) -> bool {
@@ -3074,7 +3729,12 @@ pub fn loose_eq(a: &V, b: &V) -> bool {
             }
             false
         }
-        (V::Arr(x), V::Arr(y)) => x.items.len() == y.items.len() && x.items.iter().all(|(k, v)| y.get(k).is_some_and(|w| loose_eq(v, w))),
+        (V::Arr(x), V::Arr(y)) => {
+            x.items.len() == y.items.len()
+                && x.items
+                    .iter()
+                    .all(|(k, v)| y.get(k).is_some_and(|w| loose_eq(v, w)))
+        }
         _ => false,
     }
 }

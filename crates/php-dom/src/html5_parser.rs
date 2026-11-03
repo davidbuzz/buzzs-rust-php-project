@@ -6,8 +6,13 @@ use std::mem::size_of;
 use std::ptr;
 
 use crate::ffi;
-use crate::lexbor::{ns_ids, LxbNode, NsIds, LXB_COMMENT, LXB_DOCUMENT_TYPE, LXB_ELEMENT, LXB_TEXT};
-use crate::ns::{PrivateData, MATHML_NS, MATHML_TOKEN, SVG_NS, SVG_TOKEN, XLINK_NS, XLINK_TOKEN, XMLNS_NS, XMLNS_TOKEN, XML_NS, XML_TOKEN};
+use crate::lexbor::{
+    ns_ids, LxbNode, NsIds, LXB_COMMENT, LXB_DOCUMENT_TYPE, LXB_ELEMENT, LXB_TEXT,
+};
+use crate::ns::{
+    PrivateData, MATHML_NS, MATHML_TOKEN, SVG_NS, SVG_TOKEN, XLINK_NS, XLINK_TOKEN, XMLNS_NS,
+    XMLNS_TOKEN, XML_NS, XML_TOKEN,
+};
 use crate::raw::{Ns, N};
 
 /// `lexbor_libxml2_bridge_status`.
@@ -44,9 +49,9 @@ fn sanitize_line_nr(line: usize) -> c_ushort {
     c_ushort::try_from(line).unwrap_or(c_ushort::MAX)
 }
 
-fn xml_malloc(size: usize) -> *mut u8 {
-    // SAFETY: libxml2's allocator global.
-    unsafe { ffi::xmlMalloc.map_or(ptr::null_mut(), |m| m(size).cast()) }
+fn xml_malloc(size: usize) -> *mut std::ffi::c_void {
+    // SAFETY: libxml2's allocator global (returns suitably aligned memory).
+    unsafe { ffi::xmlMalloc.map_or(ptr::null_mut(), |m| m(size)) }
 }
 
 /// `lexbor_libxml2_bridge_new_text_node_fast`.
@@ -71,7 +76,13 @@ fn new_text_node_fast(doc: *mut ffi::xmlDoc, data: &[u8], compact: bool) -> *mut
         p
     } else {
         // SAFETY: valid buffer; length checked by callers.
-        unsafe { ffi::xmlNewDocTextLen(doc, data.as_ptr(), c_int::try_from(data.len()).unwrap_or(c_int::MAX)) }
+        unsafe {
+            ffi::xmlNewDocTextLen(
+                doc,
+                data.as_ptr(),
+                c_int::try_from(data.len()).unwrap_or(c_int::MAX),
+            )
+        }
     }
 }
 
@@ -122,7 +133,9 @@ fn convert(
             LXB_ELEMENT => {
                 let name = crate::raw::cs(node.qname());
                 // SAFETY: valid document and name.
-                let el = unsafe { ffi::xmlNewDocNode(doc, ptr::null_mut(), name.as_ptr().cast(), ptr::null()) };
+                let el = unsafe {
+                    ffi::xmlNewDocNode(doc, ptr::null_mut(), name.as_ptr().cast(), ptr::null())
+                };
                 let Some(el) = N::new(el) else {
                     status = BridgeStatus::Oom;
                     break;
@@ -138,13 +151,14 @@ fn convert(
                     if entering_namespace == ids.html {
                         current_lxml_ns = html_ns;
                     } else {
-                        let (token, href): (&'static crate::ns::Token, &[u8]) = if entering_namespace == ids.svg {
-                            (&SVG_TOKEN, SVG_NS)
-                        } else if entering_namespace == ids.math {
-                            (&MATHML_TOKEN, MATHML_NS)
-                        } else {
-                            (&crate::ns::HTML_TOKEN, crate::ns::XHTML_NS)
-                        };
+                        let (token, href): (&'static crate::ns::Token, &[u8]) =
+                            if entering_namespace == ids.svg {
+                                (&SVG_TOKEN, SVG_NS)
+                            } else if entering_namespace == ids.math {
+                                (&MATHML_TOKEN, MATHML_NS)
+                            } else {
+                                (&crate::ns::HTML_TOKEN, crate::ns::XHTML_NS)
+                            };
                         current_lxml_ns = mapper.get_ns(None, Some(href));
                         set_token(current_lxml_ns, token);
                     }
@@ -193,7 +207,8 @@ fn convert(
                         }
                     }
                     let value = a.value();
-                    if local_name.len() >= c_int::MAX as usize || value.len() >= c_int::MAX as usize {
+                    if local_name.len() >= c_int::MAX as usize || value.len() >= c_int::MAX as usize
+                    {
                         status = BridgeStatus::Overflow;
                         break;
                     }
@@ -208,7 +223,11 @@ fn convert(
                         ptr::write_bytes(la, 0, 1);
                         (*la).type_ = ffi::XML_ATTRIBUTE_NODE;
                         (*la).parent = el.p();
-                        (*la).name = ffi::xmlDictLookup((*doc).dict, local_name.as_ptr(), c_int::try_from(local_name.len()).unwrap_or(0));
+                        (*la).name = ffi::xmlDictLookup(
+                            (*doc).dict,
+                            local_name.as_ptr(),
+                            c_int::try_from(local_name.len()).unwrap_or(0),
+                        );
                         (*la).doc = doc;
                     }
                     let text = new_text_node_fast(doc, value, true);
@@ -232,7 +251,8 @@ fn convert(
                             ns_ptr = mapper.ensure_prefixless_xmlns_ns();
                         } else {
                             if prefixed_xmlns_ns.is_null() {
-                                prefixed_xmlns_ns = mapper.get_ns_nullsafe(Some(b"xmlns"), Some(XMLNS_NS));
+                                prefixed_xmlns_ns =
+                                    mapper.get_ns_nullsafe(Some(b"xmlns"), Some(XMLNS_NS));
                             }
                             ns_ptr = prefixed_xmlns_ns;
                         }
@@ -354,7 +374,15 @@ pub(crate) fn convert_document(
     private: &PrivateData,
 ) -> Result<N, BridgeStatus> {
     let doc = crate::html::create_html_doc().ok_or(BridgeStatus::Oom)?;
-    let status = convert(last_child, doc.as_doc(), doc, compact_text_nodes, create_default_ns, false, private);
+    let status = convert(
+        last_child,
+        doc.as_doc(),
+        doc,
+        compact_text_nodes,
+        create_default_ns,
+        false,
+        private,
+    );
     if status != BridgeStatus::Ok {
         private.remove_templates_in_subtree(doc);
         // SAFETY: our own document, never exposed.
@@ -375,7 +403,15 @@ pub(crate) fn convert_fragment(
 ) -> Result<N, BridgeStatus> {
     // SAFETY: valid document.
     let frag = N::new(unsafe { ffi::xmlNewDocFragment(doc) }).ok_or(BridgeStatus::Oom)?;
-    let status = convert(start, doc, frag, compact_text_nodes, create_default_ns, in_template_contents, private);
+    let status = convert(
+        start,
+        doc,
+        frag,
+        compact_text_nodes,
+        create_default_ns,
+        in_template_contents,
+        private,
+    );
     if status != BridgeStatus::Ok {
         private.remove_templates_in_subtree(frag);
         // SAFETY: our own fragment, never exposed.

@@ -6,7 +6,10 @@
 //! Scalar coercion follows PHP's coercive typing mode for internal
 //! functions.
 
+#![allow(clippy::many_single_char_names, clippy::too_many_lines)]
+
 use std::cell::RefCell;
+use std::fmt::Write as _;
 use std::rc::Rc;
 
 use crate::classes::{find_method, ParamInfo};
@@ -110,6 +113,7 @@ impl DomIterator {
     }
 
     /// Advances.
+    #[allow(clippy::should_implement_trait)]
     pub fn next(&mut self) -> DomResult<()> {
         match self {
             DomIterator::Collection(c) => c.move_forward(),
@@ -185,7 +189,7 @@ pub fn float_to_repr(f: f64) -> String {
         out.push_str(&digits[..1]);
         out.push('.');
         out.push_str(if digits.len() > 1 { &digits[1..] } else { "0" });
-        out.push_str(&format!("E{}{}", if exp < 0 { '-' } else { '+' }, exp.abs()));
+        let _ = write!(out, "E{}{}", if exp < 0 { '-' } else { '+' }, exp.abs());
     } else if exp < 0 {
         out.push_str("0.");
         for _ in 0..(-exp - 1) {
@@ -217,9 +221,13 @@ pub fn float_to_string(f: f64) -> String {
         return if f > 0.0 { "INF".into() } else { "-INF".into() };
     }
     if f == 0.0 {
-        return if f.is_sign_negative() { "-0".into() } else { "0".into() };
+        return if f.is_sign_negative() {
+            "-0".into()
+        } else {
+            "0".into()
+        };
     }
-    let s = format!("{:.13e}", f);
+    let s = format!("{f:.13e}");
     let (mant, exp) = s.split_once('e').unwrap_or((&s, "0"));
     let exp: i32 = exp.parse().unwrap_or(0);
     let neg = mant.starts_with('-');
@@ -238,7 +246,7 @@ pub fn float_to_string(f: f64) -> String {
         } else {
             out.push('0');
         }
-        out.push_str(&format!("E{}{}", if exp < 0 { '-' } else { '+' }, exp.abs()));
+        let _ = write!(out, "E{}{}", if exp < 0 { '-' } else { '+' }, exp.abs());
     } else if exp < 0 {
         out.push_str("0.");
         for _ in 0..(-exp - 1) {
@@ -269,8 +277,9 @@ struct Args<'a> {
 
 impl<'a> Args<'a> {
     fn new(class: &str, method: &str, v: &'a [DomValue]) -> Args<'a> {
-        let (c, m) = find_method(class, method)
-            .map_or((class.to_string(), &[][..]), |(c, m)| (c.name.to_string(), m.params));
+        let (c, m) = find_method(class, method).map_or((class.to_string(), &[][..]), |(c, m)| {
+            (c.name.to_string(), m.params)
+        });
         let mname = find_method(class, method).map_or(method, |(_, m)| m.name);
         Args {
             v,
@@ -292,8 +301,14 @@ impl<'a> Args<'a> {
     }
 
     fn type_err(&self, i: usize, expected: &str) -> DomError {
-        let given = self.v.get(i).map_or_else(|| "null".into(), DomValue::type_name);
-        DomError::arg_type(Self::arg_no(i), format!("must be of type {expected}, {given} given"))
+        let given = self
+            .v
+            .get(i)
+            .map_or_else(|| "null".into(), DomValue::type_name);
+        DomError::arg_type(
+            Self::arg_no(i),
+            format!("must be of type {expected}, {given} given"),
+        )
     }
 
     fn null_deprecation(&self, i: usize, ty: &str) {
@@ -318,7 +333,6 @@ impl<'a> Args<'a> {
                 self.null_deprecation(i, "string");
                 Ok(Vec::new())
             }
-            DomValue::Enum(..) | DomValue::Array(_) => Err(self.type_err(i, "string")),
             _ => Err(self.type_err(i, "string")),
         }
     }
@@ -351,7 +365,10 @@ impl<'a> Args<'a> {
     fn path(&self, i: usize) -> DomResult<Vec<u8>> {
         let s = self.str(i)?;
         if s.contains(&0) {
-            return Err(DomError::arg_value(Self::arg_no(i), "must not contain any null bytes"));
+            return Err(DomError::arg_value(
+                Self::arg_no(i),
+                "must not contain any null bytes",
+            ));
         }
         Ok(s)
     }
@@ -361,13 +378,19 @@ impl<'a> Args<'a> {
             DomValue::Int(n) => Ok(*n),
             DomValue::Bool(b) => Ok(i64::from(*b)),
             DomValue::Float(f) => {
-                if !f.is_finite() || f.fract() != 0.0 && false {
+                if !f.is_finite()
+                    || *f < -9.223_372_036_854_776e18
+                    || *f >= 9.223_372_036_854_776e18
+                {
                     return Err(self.type_err(i, "int"));
                 }
                 if f.fract() != 0.0 {
                     crate::error::emit(
                         Level::Deprecated,
-                        format!("Implicit conversion from float {} to int loses precision", float_to_string(*f)),
+                        format!(
+                            "Implicit conversion from float {} to int loses precision",
+                            float_to_string(*f)
+                        ),
                     );
                 }
                 #[allow(clippy::cast_possible_truncation)]
@@ -534,7 +557,11 @@ fn adjacent(v: Option<&DomValue>, legacy_arg: &[u8]) -> Result<AdjacentPosition,
     }
 }
 
-fn c14n_args(a: &Args<'_>, base: usize) -> DomResult<(bool, bool, Option<C14nXPath>, Option<Vec<Vec<u8>>>)> {
+#[allow(clippy::type_complexity)]
+fn c14n_args(
+    a: &Args<'_>,
+    base: usize,
+) -> DomResult<(bool, bool, Option<C14nXPath>, Option<Vec<Vec<u8>>>)> {
     let exclusive = a.bool_or(base, false)?;
     let with_comments = a.bool_or(base + 1, false)?;
     let xpath = match a.get(base + 2) {
@@ -588,7 +615,12 @@ fn c14n_args(a: &Args<'_>, base: usize) -> DomResult<(bool, bool, Option<C14nXPa
 /// Calls an instance method. `class` is the class the method was resolved
 /// on (any DOM class or a user subclass's built-in ancestor).
 #[allow(clippy::too_many_lines)]
-pub fn call(obj: &DomObject, method: &str, args: &[DomValue], host: &dyn DomHost) -> DomResult<DomValue> {
+pub fn call(
+    obj: &DomObject,
+    method: &str,
+    args: &[DomValue],
+    host: &dyn DomHost,
+) -> DomResult<DomValue> {
     let class = obj.builtin_class();
     let a = Args::new(class, method, args);
     let m = method.to_ascii_lowercase();
@@ -606,13 +638,18 @@ pub fn call(obj: &DomObject, method: &str, args: &[DomValue], host: &dyn DomHost
             "getnameditem" => Ok(opt_node_value(map.get_named_item(&a.str(0)?))),
             "getnameditemns" => {
                 let ns = a.opt_str(0)?;
-                Ok(opt_node_value(map.get_named_item_ns(ns.as_deref(), &a.str(1)?)))
+                Ok(opt_node_value(
+                    map.get_named_item_ns(ns.as_deref(), &a.str(1)?),
+                ))
             }
             "getiterator" => Ok(DomValue::Iterator(iterate(obj)?)),
             _ => Err(undefined(class, method)),
         },
         DomObject::Implementation(i) => match m.as_str() {
-            "hasfeature" => Ok(DomValue::Bool(Implementation::has_feature(&a.str(0)?, &a.str(1)?))),
+            "hasfeature" => Ok(DomValue::Bool(Implementation::has_feature(
+                &a.str(0)?,
+                &a.str(1)?,
+            ))),
             "createdocumenttype" => {
                 let name = a.str(0)?;
                 let (p, s) = if i.modern {
@@ -627,9 +664,17 @@ pub fn call(obj: &DomObject, method: &str, args: &[DomValue], host: &dyn DomHost
             }
             "createdocument" => {
                 let uri = a.opt_str(0)?;
-                let name = if i.modern { a.str(1)? } else { a.str_or(1, b"")? };
+                let name = if i.modern {
+                    a.str(1)?
+                } else {
+                    a.str_or(1, b"")?
+                };
                 let dt = a.opt_node(2)?;
-                Ok(DomValue::Node(i.create_document(uri.as_deref(), &name, dt.as_ref())?))
+                Ok(DomValue::Node(i.create_document(
+                    uri.as_deref(),
+                    &name,
+                    dt.as_ref(),
+                )?))
             }
             "createhtmldocument" => {
                 let t = a.opt_str(0)?;
@@ -656,9 +701,12 @@ fn call_xpath(x: &XPath, a: &Args<'_>, m: &str, host: &dyn DomHost) -> DomResult
                 None => None,
                 Some(v) => Some(a.coerce_bool(2, v)?),
             };
-            Ok(x.eval(&expr, ctx.as_ref(), reg, m == "evaluate", host)?.into_value())
+            Ok(x.eval(&expr, ctx.as_ref(), reg, m == "evaluate", host)?
+                .into_value())
         }
-        "registernamespace" => Ok(DomValue::Bool(x.register_namespace(&a.str(0)?, &a.str(1)?)?)),
+        "registernamespace" => Ok(DomValue::Bool(
+            x.register_namespace(&a.str(0)?, &a.str(1)?)?,
+        )),
         "quote" => Ok(DomValue::Str(XPath::quote(&a.path(0)?))),
         "registerphpfunctions" => {
             let r = match a.get(0) {
@@ -680,7 +728,9 @@ fn call_xpath(x: &XPath, a: &Args<'_>, m: &str, host: &dyn DomHost) -> DomResult
                                 DomValue::Callable(c) => Ok(c.clone()),
                                 DomValue::Str(s) => host_resolve(host, s),
                                 DomValue::Other(e) => Err(e.clone()),
-                                other => Err(format!("no array or string given ({})", other.type_name())),
+                                other => {
+                                    Err(format!("no array or string given ({})", other.type_name()))
+                                }
                             },
                         })
                         .collect(),
@@ -695,7 +745,8 @@ fn call_xpath(x: &XPath, a: &Args<'_>, m: &str, host: &dyn DomHost) -> DomResult
             let name = a.path(1)?;
             let c = match a.get(2) {
                 Some(DomValue::Callable(c)) => c.clone(),
-                Some(DomValue::Str(s)) => host_resolve(host, s).map_err(|e| DomError::arg_type(3, format!("must be a valid callback, {e}")))?,
+                Some(DomValue::Str(s)) => host_resolve(host, s)
+                    .map_err(|e| DomError::arg_type(3, format!("must be a valid callback, {e}")))?,
                 Some(DomValue::Array(items)) if items.len() == 2 => {
                     let mut key = Vec::new();
                     for (_, v) in items {
@@ -708,9 +759,16 @@ fn call_xpath(x: &XPath, a: &Args<'_>, m: &str, host: &dyn DomHost) -> DomResult
                             other => key.extend_from_slice(other.type_name().as_bytes()),
                         }
                     }
-                    host_resolve(host, &key).map_err(|e| DomError::arg_type(3, format!("must be a valid callback, {e}")))?
+                    host_resolve(host, &key).map_err(|e| {
+                        DomError::arg_type(3, format!("must be a valid callback, {e}"))
+                    })?
                 }
-                Some(DomValue::Other(e)) => return Err(DomError::arg_type(3, format!("must be a valid callback, {e}"))),
+                Some(DomValue::Other(e)) => {
+                    return Err(DomError::arg_type(
+                        3,
+                        format!("must be a valid callback, {e}"),
+                    ))
+                }
                 _ => return Err(a.type_err(2, "callable")),
             };
             x.register_php_function_ns(&ns, &name, c)?;
@@ -725,7 +783,12 @@ fn host_resolve(host: &dyn DomHost, name: &[u8]) -> Result<crate::host::HostCall
 }
 
 /// Static methods (`createFromString`, `quote`, …).
-pub fn call_static(class: &str, method: &str, args: &[DomValue], host: &dyn DomHost) -> DomResult<DomValue> {
+pub fn call_static(
+    class: &str,
+    method: &str,
+    args: &[DomValue],
+    host: &dyn DomHost,
+) -> DomResult<DomValue> {
     let _ = host;
     let a = Args::new(class, method, args);
     let c = crate::classes::find_class(class).map_or(class, |c| c.name);
@@ -738,7 +801,9 @@ pub fn call_static(class: &str, method: &str, args: &[DomValue], host: &dyn DomH
             if e.contains(&0) {
                 return Err(DomError::arg_value(2, "must not contain any null bytes"));
             }
-            Ok(DomValue::Node(crate::document::xml_document_create_empty(&v, &e)?))
+            Ok(DomValue::Node(crate::document::xml_document_create_empty(
+                &v, &e,
+            )?))
         }
         ("Dom\\XMLDocument", "createfromstring" | "createfromfile") => {
             let src = a.str(0)?;
@@ -759,14 +824,26 @@ pub fn call_static(class: &str, method: &str, args: &[DomValue], host: &dyn DomH
             let src = a.str(0)?;
             let opts = a.int_or(1, 0)?;
             let enc = a.opt_str(2)?;
-            Ok(DomValue::Node(crate::html::create_from(&src, opts, enc.as_deref(), m == "createfromfile", host)?))
+            Ok(DomValue::Node(crate::html::create_from(
+                &src,
+                opts,
+                enc.as_deref(),
+                m == "createfromfile",
+                host,
+            )?))
         }
-        _ => Err(DomError::Error(format!("Call to undefined method {class}::{method}()"))),
+        _ => Err(DomError::Error(format!(
+            "Call to undefined method {class}::{method}()"
+        ))),
     }
 }
 
 /// Runs a constructor on an object created (unbound) by the VM.
-pub fn construct(obj: &DomObject, args: &[DomValue], host: &dyn DomHost) -> DomResult<Option<DomObject>> {
+pub fn construct(
+    obj: &DomObject,
+    args: &[DomValue],
+    host: &dyn DomHost,
+) -> DomResult<Option<DomObject>> {
     let _ = host;
     let class = obj.builtin_class();
     let a = Args::new(class, "__construct", args);
@@ -818,9 +895,17 @@ pub fn new_xpath(document: &Node, register_node_ns: bool) -> DomResult<XPath> {
 }
 
 #[allow(clippy::too_many_lines)]
-fn call_node(n: &Node, class: &str, a: &Args<'_>, m: &str, method: &str, host: &dyn DomHost) -> DomResult<DomValue> {
+fn call_node(
+    n: &Node,
+    class: &str,
+    a: &Args<'_>,
+    m: &str,
+    method: &str,
+    host: &dyn DomHost,
+) -> DomResult<DomValue> {
     let modern = n.family_is_modern();
-    let is_doc = crate::classes::is_subclass(class, "DOMDocument") || crate::classes::is_subclass(class, "Dom\\Document");
+    let is_doc = crate::classes::is_subclass(class, "DOMDocument")
+        || crate::classes::is_subclass(class, "Dom\\Document");
     let v = match m {
         // ---- DOMNode / Dom\Node ----
         "appendchild" => {
@@ -866,17 +951,31 @@ fn call_node(n: &Node, class: &str, a: &Args<'_>, m: &str, method: &str, host: &
         "issupported" => DomValue::Bool(Node::is_supported(&a.str(0)?, &a.str(1)?)),
         "hasattributes" => DomValue::Bool(n.has_attributes()?),
         "issamenode" => {
-            let o = if modern { a.opt_node(0)? } else { Some(a.node(0)?) };
+            let o = if modern {
+                a.opt_node(0)?
+            } else {
+                Some(a.node(0)?)
+            };
             DomValue::Bool(n.is_same_node(o.as_ref())?)
         }
         "isequalnode" => DomValue::Bool(n.is_equal_node(a.opt_node(0)?.as_ref())?),
         "lookupprefix" => {
-            let u = if modern { a.opt_str(0)? } else { Some(a.str(0)?) };
+            let u = if modern {
+                a.opt_str(0)?
+            } else {
+                Some(a.str(0)?)
+            };
             DomValue::opt_str(n.lookup_prefix(u.as_deref())?)
         }
-        "lookupnamespaceuri" => DomValue::opt_str(n.lookup_namespace_uri(a.opt_str(0)?.as_deref())?),
+        "lookupnamespaceuri" => {
+            DomValue::opt_str(n.lookup_namespace_uri(a.opt_str(0)?.as_deref())?)
+        }
         "isdefaultnamespace" => {
-            let u = if modern { a.opt_str(0)? } else { Some(a.str(0)?) };
+            let u = if modern {
+                a.opt_str(0)?
+            } else {
+                Some(a.str(0)?)
+            };
             DomValue::Bool(n.is_default_namespace(u.as_deref())?)
         }
         "getnodepath" => DomValue::opt_str(n.get_node_path()?),
@@ -886,8 +985,15 @@ fn call_node(n: &Node, class: &str, a: &Args<'_>, m: &str, method: &str, host: &
                 None | Some(DomValue::Null) => None,
                 Some(DomValue::Node(o)) => Some(o.clone()),
                 Some(other) => {
-                    let expected = if modern { "?Dom\\Node" } else { "DOMNode|DOMNameSpaceNode|null" };
-                    return Err(DomError::arg_type(1, format!("must be of type {expected}, {} given", other.type_name())));
+                    let expected = if modern {
+                        "?Dom\\Node"
+                    } else {
+                        "DOMNode|DOMNameSpaceNode|null"
+                    };
+                    return Err(DomError::arg_type(
+                        1,
+                        format!("must be of type {expected}, {} given", other.type_name()),
+                    ));
                 }
             };
             DomValue::Bool(n.contains(o.as_ref())?)
@@ -901,7 +1007,10 @@ fn call_node(n: &Node, class: &str, a: &Args<'_>, m: &str, method: &str, host: &
         "c14nfile" => {
             let f = a.path(0)?;
             let (e, w, x, p) = c14n_args(a, 1)?;
-            false_on_none(n.c14n_file(&f, e, w, x.as_ref(), p.as_deref())?, DomValue::Int)
+            false_on_none(
+                n.c14n_file(&f, e, w, x.as_ref(), p.as_deref())?,
+                DomValue::Int,
+            )
         }
         "__sleep" => return Err(Node::sleep(&n.class_name())),
         "__wakeup" => return Err(Node::wakeup(&n.class_name())),
@@ -999,7 +1108,11 @@ fn call_node(n: &Node, class: &str, a: &Args<'_>, m: &str, method: &str, host: &
     Ok(v)
 }
 
-#[allow(clippy::too_many_arguments, clippy::too_many_lines, clippy::fn_params_excessive_bools)]
+#[allow(
+    clippy::too_many_arguments,
+    clippy::too_many_lines,
+    clippy::fn_params_excessive_bools
+)]
 fn call_node_2(
     n: &Node,
     class: &str,
@@ -1016,7 +1129,12 @@ fn call_node_2(
             let r = n.get_attribute(&a.str(0)?)?;
             DomValue::opt_str(r)
         }
-        "getattributenames" => DomValue::list(n.get_attribute_names()?.into_iter().map(DomValue::Str).collect()),
+        "getattributenames" => DomValue::list(
+            n.get_attribute_names()?
+                .into_iter()
+                .map(DomValue::Str)
+                .collect(),
+        ),
         "getattributens" => {
             let ns = a.opt_str(0)?;
             DomValue::opt_str(n.get_attribute_ns(ns.as_deref(), &a.str(1)?)?)
@@ -1101,7 +1219,9 @@ fn call_node_2(
             let ns = a.opt_str(0)?;
             silent_void(n.set_id_attribute_ns(ns.as_deref(), &a.str(1)?, a.bool_or(2, false)?))?
         }
-        "setidattributenode" => silent_void(n.set_id_attribute_node(&a.node(0)?, a.bool_or(1, false)?))?,
+        "setidattributenode" => {
+            silent_void(n.set_id_attribute_node(&a.node(0)?, a.bool_or(1, false)?))?
+        }
         "toggleattribute" => DomValue::Bool(n.toggle_attribute(&a.str(0)?, a.opt_bool(1)?)?),
         "insertadjacentelement" => {
             let legacy = if modern { Vec::new() } else { a.str(0)? };
@@ -1119,15 +1239,22 @@ fn call_node_2(
             silent_void(n.insert_adjacent_text(pos, &a.str(1)?))?
         }
         "insertadjacenthtml" => {
-            let pos = adjacent(a.get(0), b"").map_err(|()| a.type_err(0, "Dom\\AdjacentPosition"))?;
+            let pos =
+                adjacent(a.get(0), b"").map_err(|()| a.type_err(0, "Dom\\AdjacentPosition"))?;
             n.insert_adjacent_html(pos, &a.str(1)?)?;
             DomValue::Null
         }
         "getinscopenamespaces" => DomValue::list(
-            n.get_in_scope_namespaces()?.into_iter().map(DomValue::NamespaceInfo).collect(),
+            n.get_in_scope_namespaces()?
+                .into_iter()
+                .map(DomValue::NamespaceInfo)
+                .collect(),
         ),
         "getdescendantnamespaces" => DomValue::list(
-            n.get_descendant_namespaces()?.into_iter().map(DomValue::NamespaceInfo).collect(),
+            n.get_descendant_namespaces()?
+                .into_iter()
+                .map(DomValue::NamespaceInfo)
+                .collect(),
         ),
         _ if is_doc => return call_document(n, class, a, m, method, host, modern),
         _ => return Err(undefined(class, method)),
@@ -1148,7 +1275,11 @@ fn call_document(
     let v = match m {
         "createelement" => {
             let name = a.str(0)?;
-            let value = if modern { None } else { Some(a.str_or(1, b"")?) };
+            let value = if modern {
+                None
+            } else {
+                Some(a.str_or(1, b"")?)
+            };
             let value = value.filter(|v| !v.is_empty() || a.get(1).is_some());
             silent_false(n.create_element(&name, value.as_deref()))?
         }
@@ -1164,7 +1295,11 @@ fn call_document(
         "createcdatasection" => silent_false(n.create_cdata_section(&a.str(0)?))?,
         "createprocessinginstruction" => {
             let t = a.str(0)?;
-            let d = if modern { Some(a.str(1)?) } else { a.opt_str(1)? };
+            let d = if modern {
+                Some(a.str(1)?)
+            } else {
+                a.opt_str(1)?
+            };
             silent_false(n.create_processing_instruction(&t, d.as_deref()))?
         }
         "createattribute" => {
@@ -1198,7 +1333,10 @@ fn call_document(
             let node = a.opt_node(0)?;
             false_on_none(n.save_xml(node.as_ref(), a.int_or(1, 0)?)?, DomValue::Str)
         }
-        "savexmlfile" => false_on_none(crate::html::save_xml_file(n, &a.path(0)?, a.int_or(1, 0)?)?, DomValue::Int),
+        "savexmlfile" => false_on_none(
+            crate::html::save_xml_file(n, &a.path(0)?, a.int_or(1, 0)?)?,
+            DomValue::Int,
+        ),
         "savehtml" => {
             let node = a.opt_node(0)?;
             if modern {
@@ -1209,14 +1347,19 @@ fn call_document(
         }
         "savehtmlfile" => {
             if modern {
-                false_on_none(crate::html::save_html_file(n, &a.path(0)?, host)?, DomValue::Int)
+                false_on_none(
+                    crate::html::save_html_file(n, &a.path(0)?, host)?,
+                    DomValue::Int,
+                )
             } else {
                 false_on_none(n.save_html_file(&a.path(0)?)?, DomValue::Int)
             }
         }
         "validate" => DomValue::Bool(n.validate()?),
         "schemavalidate" => DomValue::Bool(n.schema_validate(&a.str(0)?, a.int_or(1, 0)?, true)?),
-        "schemavalidatesource" => DomValue::Bool(n.schema_validate(&a.str(0)?, a.int_or(1, 0)?, false)?),
+        "schemavalidatesource" => {
+            DomValue::Bool(n.schema_validate(&a.str(0)?, a.int_or(1, 0)?, false)?)
+        }
         "relaxngvalidate" => DomValue::Bool(n.relaxng_validate(&a.str(0)?, true)?),
         "relaxngvalidatesource" => DomValue::Bool(n.relaxng_validate(&a.str(0)?, false)?),
         "xinclude" => {
@@ -1295,7 +1438,8 @@ pub fn read_property(obj: &DomObject, name: &str) -> DomResult<PropRead> {
 fn read_node_property(n: &Node, name: &str) -> DomResult<PropRead> {
     let builtin = n.builtin_class();
     let modern = n.family_is_modern();
-    let is_doc = builtin == "DOMDocument" || builtin.starts_with("Dom\\") && builtin.ends_with("Document");
+    let is_doc =
+        builtin == "DOMDocument" || builtin.starts_with("Dom\\") && builtin.ends_with("Document");
     let is_attr = builtin == "DOMAttr" || builtin == "Dom\\Attr";
     let is_entity = builtin == "DOMEntity" || builtin == "Dom\\Entity";
     let is_notation = builtin == "DOMNotation";
@@ -1510,7 +1654,10 @@ fn write_node_property(n: &Node, name: &str, value: &DomValue) -> DomResult<bool
                 | "Dom\\HTMLElement"
         )
     {
-        return Err(DomError::Error(format!("Cannot modify readonly property {}::${name}", n.class_name())));
+        return Err(DomError::Error(format!(
+            "Cannot modify readonly property {}::${name}",
+            n.class_name()
+        )));
     }
     match name {
         "nodeValue" => n.set_node_value(want_opt_str(name, value)?.as_deref())?,
@@ -1524,7 +1671,9 @@ fn write_node_property(n: &Node, name: &str, value: &DomValue) -> DomResult<bool
         "outerHTML" => crate::inner_outer::set_outer_html(n, &want_str(name, value)?)?,
         "substitutedNodeValue" => n.set_substituted_node_value(&want_str(name, value)?)?,
         "encoding" => n.set_encoding(want_opt_str(name, value)?.as_deref())?,
-        "characterSet" | "charset" | "inputEncoding" => n.set_character_set(&want_str(name, value)?)?,
+        "characterSet" | "charset" | "inputEncoding" => {
+            n.set_character_set(&want_str(name, value)?)?;
+        }
         "standalone" | "xmlStandalone" => n.set_standalone(truthy(value))?,
         "version" | "xmlVersion" => n.set_version(want_opt_str(name, value)?.as_deref())?,
         "documentURI" | "URL" => n.set_document_uri(want_opt_str(name, value)?.as_deref())?,
@@ -1539,7 +1688,9 @@ fn write_node_property(n: &Node, name: &str, value: &DomValue) -> DomResult<bool
         "title" => crate::html::set_title(n, &want_str(name, value)?)?,
         _ => {
             let _ = modern;
-            return Err(DomError::Error(format!("Cannot modify readonly property {builtin}::${name}")));
+            return Err(DomError::Error(format!(
+                "Cannot modify readonly property {builtin}::${name}"
+            )));
         }
     }
     Ok(true)
@@ -1553,16 +1704,13 @@ pub fn debug_info(obj: &DomObject) -> Vec<(&'static str, DomValue)> {
     crate::error::suppressed(|| {
         let mut out = Vec::new();
         for name in names {
-            match read_property(obj, name) {
-                Ok(PropRead::Value(v)) => {
-                    let v = if v.is_object() {
-                        DomValue::Str(b"(object value omitted)".to_vec())
-                    } else {
-                        v
-                    };
-                    out.push((*name, v));
-                }
-                Ok(_) | Err(_) => {}
+            if let Ok(PropRead::Value(v)) = read_property(obj, name) {
+                let v = if v.is_object() {
+                    DomValue::Str(b"(object value omitted)".to_vec())
+                } else {
+                    v
+                };
+                out.push((*name, v));
             }
         }
         out
@@ -1593,8 +1741,12 @@ pub fn instantiate(builtin: &str) -> Option<DomObject> {
     use crate::lists::{new_list, new_map, MapKind};
     let c = crate::classes::find_class(builtin)?;
     Some(match c.name {
-        "DOMNodeList" | "Dom\\NodeList" | "Dom\\HTMLCollection" => DomObject::NodeList(new_list(c.name, None, MapKind::Noop)),
-        "DOMNamedNodeMap" | "Dom\\NamedNodeMap" | "Dom\\DtdNamedNodeMap" => DomObject::NamedNodeMap(new_map(c.name, None, MapKind::Noop)),
+        "DOMNodeList" | "Dom\\NodeList" | "Dom\\HTMLCollection" => {
+            DomObject::NodeList(new_list(c.name, None, MapKind::Noop))
+        }
+        "DOMNamedNodeMap" | "Dom\\NamedNodeMap" | "Dom\\DtdNamedNodeMap" => {
+            DomObject::NamedNodeMap(new_map(c.name, None, MapKind::Noop))
+        }
         "DOMImplementation" => DomObject::Implementation(Implementation::new(false)),
         "Dom\\Implementation" => DomObject::Implementation(Implementation::new(true)),
         _ => return None,
