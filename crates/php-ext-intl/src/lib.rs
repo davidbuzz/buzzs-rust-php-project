@@ -25,6 +25,7 @@ mod msgformat;
 mod newfmt;
 mod numfmt;
 mod registry;
+mod resbundle;
 mod stubs;
 mod text;
 mod timezone;
@@ -117,6 +118,7 @@ fn all_handlers() -> HashMap<&'static str, NativeFn> {
         collator::handlers(),
         breakiter::handlers(),
         converter::handlers(),
+        resbundle::handlers(),
         iter::handlers(),
         timezone::handlers(),
         calendar::handlers(),
@@ -138,8 +140,19 @@ fn class_opts(name: &str) -> registry::ClassOpts {
     use php_vm::ext::{class_flags, ClassHooks};
     let mut o = registry::ClassOpts::default();
     match name {
-        "Collator" | "IntlNumberFormatter" | "IntlListFormatter" | "IntlNumberRangeFormatter" | "ResourceBundle"
-        | "IntlRelativeDateTimeFormatter" => o.flags |= class_flags::NO_CLONE,
+        "Collator" | "IntlNumberFormatter" | "IntlListFormatter" | "IntlNumberRangeFormatter" | "IntlRelativeDateTimeFormatter" => {
+            o.flags |= class_flags::NO_CLONE;
+        }
+        "ResourceBundle" => {
+            o.flags |= class_flags::NO_CLONE;
+            o.hooks = ClassHooks {
+                read_dimension: Some(resbundle::read_dimension),
+                write_dimension: Some(resbundle::write_dimension),
+                count: Some(resbundle::count_elements),
+                get_iterator: Some(resbundle::get_iterator),
+                ..ClassHooks::default()
+            };
+        }
         "IntlIterator" | "IntlPartsIterator" => {
             o.flags |= class_flags::NO_CLONE;
             o.hooks = ClassHooks { get_iterator: Some(iter::get_iterator), ..ClassHooks::default() };
