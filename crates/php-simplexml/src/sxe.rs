@@ -303,6 +303,12 @@ impl Sxe {
         self.state.borrow_mut().modern = modern;
     }
 
+    /// Whether the object's document belongs to the modern DOM
+    /// ([`Sxe::set_modern_document`]).
+    pub fn is_modern_document(&self) -> bool {
+        self.state.borrow().modern
+    }
+
     /// The iteration mode (`sxe->iter.type`).
     pub fn iter_type(&self) -> IterType {
         self.state.borrow().iter.kind

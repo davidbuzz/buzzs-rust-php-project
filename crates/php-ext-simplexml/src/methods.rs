@@ -74,7 +74,46 @@ pub fn register_xpath_namespace(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 pub fn as_xml(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let st = this_sxe(vm, a)?;
     let filename = opt_bytes(a, 0);
+    let plain_path = filename.as_ref().is_none_or(|f| !f.contains(&0));
+    if st.is_modern_document() && plain_path {
+        if let Some(xml) = modern_xml(vm, &st)? {
+            return Ok(match filename {
+                None => str_value(xml),
+                Some(f) => {
+                    use std::os::unix::ffi::OsStrExt;
+                    let path = std::path::Path::new(std::ffi::OsStr::from_bytes(&f));
+                    Value::Bool(std::fs::write(path, xml).is_ok())
+                }
+            });
+        }
+    }
     lent(vm, a, |_| Sxe::as_xml(&st, filename.as_deref()))
+}
+
+/// `asXML()` of a tree imported from the modern DOM: PHP serializes it
+/// through the document's handlers, i.e. DOM's spec-compliant serializer
+/// (which reconciles namespace declarations). The root element stands
+/// for the whole document. `None` falls back to libxml2's serializer.
+fn modern_xml(vm: &mut Vm, st: &SxeRef) -> VmResult<Option<Vec<u8>>> {
+    let Some(node) = direct(vm, |_| Sxe::export_node(st))? else {
+        return Ok(None);
+    };
+    let doc = node.document();
+    let is_root = node
+        .parent()
+        .is_some_and(|p| p.node_type() == php_libxml::tree::NodeType::Document);
+    let ptr = if is_root {
+        doc.as_ptr().cast::<std::ffi::c_void>()
+    } else {
+        node.as_ptr().cast::<std::ffi::c_void>()
+    };
+    let Some(ptr) = std::ptr::NonNull::new(ptr) else {
+        return Ok(None);
+    };
+    let shared = doc.to_shared();
+    // SAFETY: `ptr` is the live node (or document node) of `shared`'s
+    // document, kept alive by `node`.
+    unsafe { php_ext_dom::interop::serialize_shared_node(vm, &shared, ptr) }
 }
 
 /// `SimpleXMLElement::getNamespaces()`.
