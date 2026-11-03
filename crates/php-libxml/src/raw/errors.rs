@@ -124,6 +124,154 @@ pub(crate) unsafe fn parser_position(ctxt: *mut ffi::xmlParserCtxt) -> Option<Pa
     }
 }
 
+fn domain_label(domain: i32) -> &'static [u8] {
+    match domain {
+        1 | 13 => b"parser ",
+        3 => b"namespace ",
+        4 | 23 => b"validity ",
+        5 => b"HTML parser ",
+        6 => b"memory ",
+        7 => b"output ",
+        8 => b"I/O ",
+        11 => b"XInclude ",
+        12 => b"XPath ",
+        14 => b"regexp ",
+        16 => b"Schemas parser ",
+        17 => b"Schemas validity ",
+        18 => b"Relax-NG parser ",
+        19 => b"Relax-NG validity ",
+        20 => b"Catalog ",
+        21 => b"C14N ",
+        22 => b"XSLT ",
+        26 => b"module ",
+        27 => b"encoding ",
+        28 => b"schematron ",
+        29 => b"internal buffer ",
+        30 => b"URI ",
+        _ => b"",
+    }
+}
+
+/// `xmlParserPrintFileContextInternal`: the source line and a caret line.
+///
+/// # Safety
+/// `input` must be NULL or a live parser input whose `base..cur` range is
+/// readable and NUL-terminated after `cur`.
+unsafe fn file_context(input: *const ffi::xmlParserInput, out: &mut Vec<Vec<u8>>) {
+    const SIZE: usize = 81;
+    // SAFETY: guaranteed by the caller.
+    unsafe {
+        if input.is_null() || (*input).cur.is_null() {
+            return;
+        }
+        let base = (*input).base;
+        let mut cur = (*input).cur;
+        while cur > base && (*cur == b'\n' || *cur == b'\r') {
+            cur = cur.sub(1);
+        }
+        let mut n = 0;
+        while n < SIZE - 1 && cur > base && *cur != b'\n' && *cur != b'\r' {
+            n += 1;
+            cur = cur.sub(1);
+        }
+        if *cur == b'\n' || *cur == b'\r' {
+            cur = cur.add(1);
+        }
+        let col = usize::try_from((*input).cur.offset_from(cur)).unwrap_or(0);
+        let mut content = Vec::new();
+        while *cur != 0 && *cur != b'\n' && *cur != b'\r' && content.len() < SIZE - 1 {
+            content.push(*cur);
+            cur = cur.add(1);
+        }
+        let mut line = content.clone();
+        line.push(b'\n');
+        out.push(line);
+        let mut caret = Vec::new();
+        let mut i = 0;
+        while i < col && i < SIZE - 2 && i < content.len() {
+            caret.push(if content[i] == b'\t' { b'\t' } else { b' ' });
+            i += 1;
+        }
+        caret.extend_from_slice(b"^\n");
+        out.push(caret);
+    }
+}
+
+/// `xmlReportError`'s output, split into the pieces handed to the
+/// generic error channel.
+///
+/// # Safety
+/// `ctxt` must be NULL or a live parser context.
+unsafe fn report_segments(e: &ffi::xmlError, ctxt: *mut ffi::xmlParserCtxt) -> Vec<Vec<u8>> {
+    let mut out = Vec::new();
+    if e.code == ffi::XML_ERR_OK {
+        return out;
+    }
+    // SAFETY: ctxt is live (or NULL); inputs and nodes are owned by it.
+    unsafe {
+        let mut input: *mut ffi::xmlParserInput = std::ptr::null_mut();
+        let mut cur: *mut ffi::xmlParserInput = std::ptr::null_mut();
+        if ctxt.is_null() {
+            if let Some(f) = opt_bytes(e.file) {
+                out.push(format!("{}:{}: ", String::from_utf8_lossy(&f), e.line).into_bytes());
+            } else if e.line != 0 && matches!(e.domain, 1 | 4 | 16 | 17 | 18 | 19) {
+                out.push(format!("Entity: line {}: ", e.line).into_bytes());
+            }
+        } else {
+            input = (*ctxt).input;
+            if !input.is_null() && (*input).filename.is_null() && (*ctxt).inputNr > 1 {
+                cur = input;
+                let idx = usize::try_from((*ctxt).inputNr - 2).unwrap_or(0);
+                input = *(*ctxt).inputTab.add(idx);
+            }
+            if !input.is_null() {
+                if let Some(f) = opt_bytes((*input).filename) {
+                    out.push(
+                        format!("{}:{}: ", String::from_utf8_lossy(&f), (*input).line).into_bytes(),
+                    );
+                } else if e.line != 0 && e.domain == ffi::XML_FROM_PARSER {
+                    out.push(format!("Entity: line {}: ", (*input).line).into_bytes());
+                }
+            }
+        }
+        let node = e.node.cast::<ffi::xmlNode>();
+        if !node.is_null() && (*node).type_ == ffi::XML_ELEMENT_NODE {
+            let mut seg = b"element ".to_vec();
+            seg.extend_from_slice(super::opt_slice((*node).name).unwrap_or_default());
+            seg.extend_from_slice(b": ");
+            out.push(seg);
+        }
+        out.push(domain_label(e.domain).to_vec());
+        out.push(
+            match e.level {
+                ffi::XML_ERR_WARNING => &b"warning : "[..],
+                ffi::XML_ERR_ERROR | ffi::XML_ERR_FATAL => b"error : ",
+                _ => b": ",
+            }
+            .to_vec(),
+        );
+        let mut msg = opt_bytes(e.message).unwrap_or_else(|| b"out of memory error".to_vec());
+        if msg.last() != Some(&b'\n') {
+            msg.push(b'\n');
+        }
+        out.push(msg);
+        if !ctxt.is_null() {
+            file_context(input, &mut out);
+            if !cur.is_null() {
+                if let Some(f) = opt_bytes((*cur).filename) {
+                    out.push(
+                        format!("{}:{}: \n", String::from_utf8_lossy(&f), (*cur).line).into_bytes(),
+                    );
+                } else if e.line != 0 && e.domain == ffi::XML_FROM_PARSER {
+                    out.push(format!("Entity: line {}: \n", (*cur).line).into_bytes());
+                }
+                file_context(cur, &mut out);
+            }
+        }
+    }
+    out
+}
+
 /// The structured error handler installed on every thread.
 pub(crate) unsafe extern "C" fn structured_trampoline(_user: *mut c_void, err: *mut ffi::xmlError) {
     if err.is_null() {
@@ -142,10 +290,10 @@ pub(crate) unsafe extern "C" fn structured_trampoline(_user: *mut c_void, err: *
                     channels,
                     position: parser_position(e.ctxt.cast()),
                 },
-                None => ErrorOrigin::Parser {
-                    channels: ParserChannels::SILENT,
-                    position: None,
-                },
+                // A context libxml2 created internally (e.g. for an
+                // external entity) with its default SAX handlers: PHP sees
+                // xmlReportError's output through the generic handler.
+                None => ErrorOrigin::Report(report_segments(e, e.ctxt.cast())),
             }
         } else {
             ErrorOrigin::Other

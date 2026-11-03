@@ -147,6 +147,9 @@ pub(crate) enum ErrorOrigin {
         channels: ParserChannels,
         position: Option<ParserPosition>,
     },
+    /// A parser context created internally by libxml2 (default SAX
+    /// handlers): the pieces `xmlReportError` writes to the generic channel.
+    Report(Vec<Vec<u8>>),
     /// Anything else (I/O, writer, tree, encoding…).
     Other,
 }
@@ -408,6 +411,11 @@ pub(crate) fn dispatch(error: LibXmlError, origin: ErrorOrigin) {
             };
             if let Some(channel) = channel {
                 internal_error_handler(channel, position.as_ref(), &error.message);
+            }
+        }
+        ErrorOrigin::Report(segments) => {
+            for segment in segments {
+                internal_error_handler(Channel::Generic, None, &segment);
             }
         }
         ErrorOrigin::Other => internal_error_handler(Channel::Generic, None, &error.message),

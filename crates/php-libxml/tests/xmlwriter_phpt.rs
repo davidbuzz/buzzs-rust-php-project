@@ -1,6 +1,10 @@
 //! Ports of php-src `ext/xmlwriter/tests/*.phpt`.
 
-#![allow(clippy::too_many_lines, clippy::format_push_string, clippy::type_complexity)]
+#![allow(
+    clippy::too_many_lines,
+    clippy::format_push_string,
+    clippy::type_complexity
+)]
 mod common;
 
 use std::cell::RefCell;
