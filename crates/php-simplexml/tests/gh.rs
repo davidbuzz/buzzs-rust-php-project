@@ -160,3 +160,70 @@ fn gh12231_xpath_non_nodeset() {
     t.var_dump(&Value::Int(i64::try_from(n).unwrap()));
     t.expect("gh12231.phpt");
 }
+
+#[test]
+fn gh14638_reconstruct_failure_keeps_state() {
+    let mut t = T::new("gh14638");
+    let root = t.load_string("<?xml version=\"1.0\" encoding=\"utf-8\" ?>\n<test>\n</test>");
+    let sx = t.sxe(&root);
+    t.func("SimpleXMLElement::__construct");
+    let r = Sxe::construct(&sx, b"malformed", 0, false, b"", false);
+    assert!(r.is_err());
+    t.func("main");
+    let st = t.str(&root);
+    t.echo(st);
+    t.expect("gh14638.phpt");
+}
+
+#[test]
+fn gh17040_unset_self_keeps_dom_node() {
+    let mut t = T::new("gh17040");
+    let dom = php_libxml::tree::Document::new(b"1.0").unwrap();
+    let tag = dom.create_element(b"style").unwrap();
+    dom.as_node().append_child(&tag).unwrap();
+    let html = Sxe::import_dom(&mut t.h, Some(tag.clone()), None).unwrap();
+    t.unset_dim(&html, Value::Int(0));
+    let text = dom.create_text(b"foo").unwrap();
+    tag.append_child(&text).unwrap();
+    let d = dom.dump(false, None);
+    t.echo(d);
+    t.echo("\n");
+    let d = tag.dump(false, None);
+    t.echo(d);
+    t.echo("\n");
+    t.var_dump(&html);
+    let out = t.output();
+    assert!(out.contains("<style>foo</style>"), "{out}");
+    assert!(out.ends_with("[0]=>\n  string(3) \"foo\"\n}\n"), "{out}");
+}
+
+#[test]
+fn gh18304_concat_dynamic_name() {
+    let mut t = T::new("gh18304");
+    let sxe = t.load_string("<root><abc/></root>");
+    let cur = t.prop(&sxe, "abc");
+    let v = t.str(&cur) + "hello";
+    drop(cur);
+    t.set_prop(&sxe, "abc", s(&v));
+    let v = t.prop(&sxe, "abc");
+    t.var_dump(&v);
+    t.expect("gh18304.phpt");
+}
+
+#[test]
+fn gh18597_invalid_utf8_value() {
+    let mut t = T::new("gh18597");
+    let sx1 = t.new_sxe("<root />");
+    let n = t.prop_w(&sx1, "node");
+    t.set_dim(&n, Some(Value::Int(0)), s("node1"));
+    let n = t.prop(&sx1, "node");
+    let node = t.dim(&n, Value::Int(0));
+    t.set_dim(
+        &node,
+        Some(Value::Int(0)),
+        Value::Str(php_runtime::ZStr::new(b"\xc1\xc1c".to_vec())),
+    );
+    let _ = t.as_xml(&sx1);
+    t.echo("Done\n");
+    t.expect("gh18597.phpt");
+}
