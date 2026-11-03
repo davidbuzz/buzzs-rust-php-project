@@ -440,7 +440,11 @@ mod tests {
 
     #[test]
     fn bison_order_is_complete() {
-        for &k in TokenKind::ALL {
+        // The scanner never returns a plain `&` (it is split in two tokens).
+        for &k in TokenKind::ALL
+            .iter()
+            .filter(|&&k| k != TokenKind::Ampersand)
+        {
             assert_ne!(bison_rank(k), usize::MAX, "{k:?}");
         }
     }

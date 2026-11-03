@@ -42,6 +42,8 @@ pub enum DiagnosticLevel {
     CompileWarning,
     /// `E_DEPRECATED`.
     Deprecated,
+    /// `E_WARNING` raised by the compiler.
+    Warning,
 }
 
 /// An identifier (function, class, constant, member, label or variable

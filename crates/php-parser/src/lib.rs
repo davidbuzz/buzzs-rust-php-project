@@ -12,6 +12,7 @@ pub mod ast;
 mod error;
 pub mod export;
 mod parser;
+pub mod validate;
 pub mod visit;
 
 pub use ast::Program;
@@ -32,15 +33,26 @@ pub fn parse(src: &[u8], opts: &ParseOptions) -> Result<Program, ParseError> {
         match std::thread::Builder::new()
             .name("php-parser".into())
             .stack_size(PARSER_STACK_SIZE)
-            .spawn_scoped(s, || parser::parse_program(src, opts))
+            .spawn_scoped(s, || parse_and_validate(src, opts))
         {
             Ok(handle) => match handle.join() {
                 Ok(r) => r,
                 Err(panic) => std::panic::resume_unwind(panic),
             },
-            Err(_) => parser::parse_program(src, opts),
+            Err(_) => parse_and_validate(src, opts),
         }
     })
+}
+
+fn parse_and_validate(src: &[u8], opts: &ParseOptions) -> Result<Program, ParseError> {
+    let mut program = parser::parse_program(src, opts)?;
+    if !opts.syntax_only {
+        if let Err(mut e) = validate::validate(&mut program) {
+            e.warnings = std::mem::take(&mut program.warnings);
+            return Err(e);
+        }
+    }
+    Ok(program)
 }
 
 /// Parses code passed to `eval()`: scanning starts in PHP mode (no `<?php`

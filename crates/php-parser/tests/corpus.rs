@@ -253,9 +253,16 @@ fn expected_of(cols: &[&str], runtime_code: bool) -> (Expected, bool) {
         "PARSE" => (Expected::Compile(fatal, parse_line(el)), false),
         "FATAL" => {
             let verified = fatal.iter().any(|m| wildcard_match(m, pmsg));
+            let line = if verified || fatal.is_empty() {
+                parse_line(pline)
+            } else {
+                parse_line(el)
+            };
             let mut msgs = fatal;
-            msgs.push(pmsg.to_owned());
-            (Expected::Compile(msgs, parse_line(pline)), verified)
+            if verified || msgs.is_empty() {
+                msgs.push(pmsg.to_owned());
+            }
+            (Expected::Compile(msgs, line), verified)
         }
         _ => (Expected::Ok(fatal), true),
     }
