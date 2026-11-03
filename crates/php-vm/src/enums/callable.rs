@@ -45,7 +45,11 @@ fn instance_of(a: &Rc<Class>, b: &Rc<Class>) -> bool {
 
 impl Vm {
     fn callable_frame_ctx(&self) -> FrameCtx {
-        let f = self.frames.iter().rev().find(|f| f.kind != FrameKind::Builtin);
+        let f = self
+            .frames
+            .iter()
+            .rev()
+            .find(|f| f.kind != FrameKind::Builtin);
         FrameCtx {
             scope: f.and_then(|f| f.scope.clone()),
             this: f.and_then(|f| f.this.clone()),
@@ -59,7 +63,11 @@ impl Vm {
     /// `zend_is_callable_ex`: resolves `v` in the current scope.
     /// Deprecations ("Use of \"self\" in callables …") are emitted unless
     /// `suppress_deprecations`.
-    pub(crate) fn zend_is_callable(&mut self, v: &Value, suppress_deprecations: bool) -> VmResult<Resolved> {
+    pub(crate) fn zend_is_callable(
+        &mut self,
+        v: &Value,
+        suppress_deprecations: bool,
+    ) -> VmResult<Resolved> {
         match v {
             Value::Reference(r) => {
                 let inner = r.get();
@@ -67,7 +75,11 @@ impl Vm {
             }
             Value::Str(s) => {
                 let name = s.as_bytes().strip_prefix(b"\\").unwrap_or(s.as_bytes());
-                if let Some(f) = self.functions.get(name.to_ascii_lowercase().as_slice()).cloned() {
+                if let Some(f) = self
+                    .functions
+                    .get(name.to_ascii_lowercase().as_slice())
+                    .cloned()
+                {
                     return Ok(Ok(PendingCall::new(f)));
                 }
                 let mut fcc = Fcc::default();
@@ -77,13 +89,17 @@ impl Vm {
                 if a.len() != 2 {
                     return Ok(Err("array callback must have exactly two members".into()));
                 }
-                let (Some(target), Some(method)) = (a.get(&ArrayKey::Int(0)), a.get(&ArrayKey::Int(1))) else {
+                let (Some(target), Some(method)) =
+                    (a.get(&ArrayKey::Int(0)), a.get(&ArrayKey::Int(1)))
+                else {
                     return Ok(Err("array callback has to contain indices 0 and 1".into()));
                 };
                 let target = target.deref();
                 let Value::Str(method) = method.deref() else {
                     if !matches!(target, Value::Str(_) | Value::Object(_)) {
-                        return Ok(Err("first array member is not a valid class name or object".into()));
+                        return Ok(Err(
+                            "first array member is not a valid class name or object".into(),
+                        ));
                     }
                     return Ok(Err("second array member is not a valid method".into()));
                 };
@@ -92,9 +108,13 @@ impl Vm {
                 match target {
                     Value::Str(cn) => {
                         let ctx = self.callable_frame_ctx();
-                        if let Err(e) =
-                            self.callable_check_class(&cn, &ctx, &mut fcc, &mut strict, suppress_deprecations)?
-                        {
+                        if let Err(e) = self.callable_check_class(
+                            &cn,
+                            &ctx,
+                            &mut fcc,
+                            &mut strict,
+                            suppress_deprecations,
+                        )? {
                             return Ok(Err(e));
                         }
                     }
@@ -102,7 +122,11 @@ impl Vm {
                         fcc.calling = Some(object::class_of(&o).clone());
                         fcc.object = Some(o);
                     }
-                    _ => return Ok(Err("first array member is not a valid class name or object".into())),
+                    _ => {
+                        return Ok(Err(
+                            "first array member is not a valid class name or object".into(),
+                        ))
+                    }
                 }
                 self.callable_check_func(&method, &mut fcc, strict, suppress_deprecations)
             }
@@ -139,12 +163,18 @@ impl Vm {
         match lc.as_slice() {
             b"self" => {
                 let Some(scope) = ctx.scope.clone() else {
-                    return Ok(Err("cannot access \"self\" when no class scope is active".into()));
+                    return Ok(Err(
+                        "cannot access \"self\" when no class scope is active".into()
+                    ));
                 };
                 if !suppress {
                     self.deprecated("Use of \"self\" in callables is deprecated")?;
                 }
-                fcc.called = ctx.called.clone().filter(|c| instance_of(c, &scope)).or_else(|| Some(scope.clone()));
+                fcc.called = ctx
+                    .called
+                    .clone()
+                    .filter(|c| instance_of(c, &scope))
+                    .or_else(|| Some(scope.clone()));
                 fcc.calling = Some(scope);
                 if fcc.object.is_none() {
                     fcc.object.clone_from(&ctx.this);
@@ -152,15 +182,23 @@ impl Vm {
             }
             b"parent" => {
                 let Some(scope) = ctx.scope.clone() else {
-                    return Ok(Err("cannot access \"parent\" when no class scope is active".into()));
+                    return Ok(Err(
+                        "cannot access \"parent\" when no class scope is active".into(),
+                    ));
                 };
                 let Some(parent) = scope.parent.clone() else {
-                    return Ok(Err("cannot access \"parent\" when current class scope has no parent".into()));
+                    return Ok(Err(
+                        "cannot access \"parent\" when current class scope has no parent".into(),
+                    ));
                 };
                 if !suppress {
                     self.deprecated("Use of \"parent\" in callables is deprecated")?;
                 }
-                fcc.called = ctx.called.clone().filter(|c| instance_of(c, &parent)).or_else(|| Some(parent.clone()));
+                fcc.called = ctx
+                    .called
+                    .clone()
+                    .filter(|c| instance_of(c, &parent))
+                    .or_else(|| Some(parent.clone()));
                 fcc.calling = Some(parent);
                 if fcc.object.is_none() {
                     fcc.object.clone_from(&ctx.this);
@@ -169,7 +207,9 @@ impl Vm {
             }
             b"static" => {
                 let Some(called) = ctx.called.clone() else {
-                    return Ok(Err("cannot access \"static\" when no class scope is active".into()));
+                    return Ok(Err(
+                        "cannot access \"static\" when no class scope is active".into(),
+                    ));
                 };
                 if !suppress {
                     self.deprecated("Use of \"static\" in callables is deprecated")?;
@@ -183,7 +223,10 @@ impl Vm {
             }
             _ => {
                 let Some(ce) = self.lookup_class(name)? else {
-                    return Ok(Err(format!("class \"{}\" not found", name.to_string_lossy())));
+                    return Ok(Err(format!(
+                        "class \"{}\" not found",
+                        name.to_string_lossy()
+                    )));
                 };
                 fcc.calling = Some(ce.clone());
                 match (&ctx.scope, &fcc.object) {
@@ -229,15 +272,22 @@ impl Vm {
             if ce_org.is_some() {
                 cctx.scope.clone_from(&ce_org);
             }
-            if let Err(e) =
-                self.callable_check_class(&class_name, &cctx, fcc, &mut strict, suppress || ce_org.is_some())?
-            {
+            if let Err(e) = self.callable_check_class(
+                &class_name,
+                &cctx,
+                fcc,
+                &mut strict,
+                suppress || ce_org.is_some(),
+            )? {
                 return Ok(Err(e));
             }
             let calling = fcc.calling.clone().expect("calling scope");
             if let Some(org) = &ce_org {
                 if !instance_of(org, &calling) {
-                    return Ok(Err(format!("class {} is not a subclass of {}", org.name, calling.name)));
+                    return Ok(Err(format!(
+                        "class {} is not a subclass of {}",
+                        org.name, calling.name
+                    )));
                 }
                 if !suppress {
                     self.deprecated(&format!(
@@ -257,20 +307,25 @@ impl Vm {
                 callable.to_string_lossy()
             )));
         };
-        let lm = ZStr::from(mname.to_ascii_lowercase());
+        let lm = mname.to_ascii_lowercase();
         let mut handler: Option<Handler> = None;
         let mut via_handler = false;
         let calling = fcc.calling.clone();
         let found = calling.as_ref().and_then(|c| c.methods.get(&lm).cloned());
         let mut need_handler = false;
         if strict && calling.is_some() && lm.as_bytes() == b"__construct" {
-            handler = calling.as_ref().and_then(|c| c.magic.construct.clone()).map(Handler::Method);
+            handler = calling
+                .as_ref()
+                .and_then(|c| c.magic.construct.clone())
+                .map(Handler::Method);
         } else if let Some(mut m) = found {
             if !strict {
                 if let Some(s) = &ctx.scope {
                     if instance_of(&m.scope(), s) {
                         if let Some(pm) = s.methods.get(&lm) {
-                            if pm.visibility() == crate::func::flags::PRIVATE && Rc::ptr_eq(&pm.scope(), s) {
+                            if pm.visibility() == crate::func::flags::PRIVATE
+                                && Rc::ptr_eq(&pm.scope(), s)
+                            {
                                 m = pm.clone();
                             }
                         }
@@ -278,8 +333,14 @@ impl Vm {
                 }
             }
             let cs = calling.as_ref().expect("calling scope");
-            let has_magic = if fcc.object.is_some() { cs.magic.call.is_some() } else { cs.magic.call_static.is_some() };
-            if m.visibility() != crate::func::flags::PUBLIC && has_magic && !self.can_access_method(&m, ctx.scope.as_ref())
+            let has_magic = if fcc.object.is_some() {
+                cs.magic.call.is_some()
+            } else {
+                cs.magic.call_static.is_some()
+            };
+            if m.visibility() != crate::func::flags::PUBLIC
+                && has_magic
+                && !self.can_access_method(&m, ctx.scope.as_ref())
             {
                 need_handler = true;
             } else {
@@ -296,9 +357,15 @@ impl Vm {
             if let (Some(obj), true) = (fcc.object.clone(), same_org) {
                 let org = ce_org.clone().expect("ce_org");
                 if strict && org.magic.call.is_some() {
-                    handler = org.magic.call.clone().map(|c| Handler::Magic(c, mname.clone()));
+                    handler = org
+                        .magic
+                        .call
+                        .clone()
+                        .map(|c| Handler::Magic(c, mname.clone()));
                     via_handler = true;
-                } else if lm.as_bytes() == b"__invoke" && object::has_internal::<crate::closure::ClosureData>(&obj) {
+                } else if lm.as_bytes() == b"__invoke"
+                    && object::has_internal::<crate::closure::ClosureData>(&obj)
+                {
                     if let Some(c) = self.closure_method_call(&obj, &lm) {
                         handler = Some(Handler::Invoke(c));
                         via_handler = true;
@@ -310,7 +377,9 @@ impl Vm {
             } else if let Some(cs) = &calling {
                 // zend_std_get_static_method.
                 let m = cs.methods.get(&lm).cloned();
-                let accessible = m.as_ref().is_some_and(|m| self.can_access_method(m, ctx.scope.as_ref()));
+                let accessible = m
+                    .as_ref()
+                    .is_some_and(|m| self.can_access_method(m, ctx.scope.as_ref()));
                 if let (Some(m), true) = (m.clone(), accessible) {
                     handler = Some(Handler::Method(m));
                 } else if m.is_some() && cs.magic.call_static.is_none() {
@@ -341,13 +410,20 @@ impl Vm {
         }
         let Some(handler) = handler else {
             return Ok(Err(match &fcc.calling {
-                Some(c) => format!("class {} does not have a method \"{}\"", c.name, mname.to_string_lossy()),
+                Some(c) => format!(
+                    "class {} does not have a method \"{}\"",
+                    c.name,
+                    mname.to_string_lossy()
+                ),
                 None => format!("function {}() does not exist", mname.to_string_lossy()),
             }));
         };
         if let (Some(cs), false, Handler::Method(m)) = (&fcc.calling, via_handler, &handler) {
             if m.is_abstract() {
-                return Ok(Err(format!("cannot call abstract method {}::{}()", cs.name, m.name)));
+                return Ok(Err(format!(
+                    "cannot call abstract method {}::{}()",
+                    cs.name, m.name
+                )));
             }
             if fcc.object.is_none() && !m.is_static() {
                 return Ok(Err(format!(
@@ -355,9 +431,18 @@ impl Vm {
                     cs.name, m.name
                 )));
             }
-            if m.visibility() != crate::func::flags::PUBLIC && !self.can_access_method(m, ctx.scope.as_ref()) {
-                let vis = if m.visibility() == crate::func::flags::PRIVATE { "private" } else { "protected" };
-                return Ok(Err(format!("cannot access {vis} method {}::{}()", cs.name, m.name)));
+            if m.visibility() != crate::func::flags::PUBLIC
+                && !self.can_access_method(m, ctx.scope.as_ref())
+            {
+                let vis = if m.visibility() == crate::func::flags::PRIVATE {
+                    "private"
+                } else {
+                    "protected"
+                };
+                return Ok(Err(format!(
+                    "cannot access {vis} method {}::{}()",
+                    cs.name, m.name
+                )));
             }
         }
         if let Some(o) = &fcc.object {
@@ -366,7 +451,11 @@ impl Vm {
         Ok(Ok(match handler {
             Handler::Invoke(c) => c,
             Handler::Method(m) => PendingCall {
-                this: if m.is_static() { None } else { fcc.object.clone() },
+                this: if m.is_static() {
+                    None
+                } else {
+                    fcc.object.clone()
+                },
                 scope: Some(m.scope()),
                 called: fcc.called.clone(),
                 ..PendingCall::new(m.func.clone())

@@ -9,6 +9,8 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 mod callable;
+#[cfg(test)]
+mod tests;
 
 thread_local! {
     /// Backed enums whose case table is being built (guards against
@@ -25,7 +27,11 @@ impl Vm {
         let Some(c) = cls.find_const(name.as_bytes()).cloned() else {
             return Err(self.make_throw(
                 "Error",
-                &format!("Undefined constant {}::{}", cls.name, name.to_string_lossy()),
+                &format!(
+                    "Undefined constant {}::{}",
+                    cls.name,
+                    name.to_string_lossy()
+                ),
             ));
         };
         if !c.is_case {
@@ -45,14 +51,18 @@ impl Vm {
         } else {
             None
         };
-        Ok(self.enum_create_case(cls, &c, value))
+        Ok(Self::enum_create_case(cls, &c, value))
     }
 
     /// Evaluates and type-checks the backing value of case `c`.
     fn enum_case_backing_value(&mut self, cls: &Rc<Class>, c: &ClassConst) -> VmResult<Value> {
         let v = self.eval_const_expr(&c.expr, Some(cls))?;
         let is_int = cls.backing == Some(mask::LONG);
-        let ok = if is_int { matches!(v, Value::Int(_)) } else { matches!(v, Value::Str(_)) };
+        let ok = if is_int {
+            matches!(v, Value::Int(_))
+        } else {
+            matches!(v, Value::Str(_))
+        };
         if !ok {
             let ty = if is_int { "int" } else { "string" };
             return Err(self.make_throw(
@@ -88,7 +98,7 @@ impl Vm {
         for c in &cases {
             let existing = cls.enum_cases.borrow().get(&c.name).cloned();
             let v = match existing {
-                Some(Value::Object(o)) => self.enum_case_value(&o).unwrap_or_default(),
+                Some(Value::Object(o)) => Self::enum_case_value(&o).unwrap_or_default(),
                 _ => self.enum_case_backing_value(cls, c)?,
             };
             if let Some(i) = values.iter().position(|x| backing_eq(x, &v)) {
@@ -104,14 +114,14 @@ impl Vm {
         }
         for (c, v) in cases.iter().zip(values) {
             if !cls.enum_cases.borrow().contains_key(&c.name) {
-                self.enum_create_case(cls, c, Some(v));
+                Self::enum_create_case(cls, c, Some(v));
             }
         }
         Ok(())
     }
 
     /// Creates (and caches) the object of case `c`.
-    fn enum_create_case(&mut self, cls: &Rc<Class>, c: &ClassConst, value: Option<Value>) -> Value {
+    fn enum_create_case(cls: &Rc<Class>, c: &ClassConst, value: Option<Value>) -> Value {
         let mut slots = vec![None; cls.props.len()];
         if let Some(pi) = cls.prop_map.get(&ZStr::from("name")) {
             slots[pi.slot as usize] = Some(Value::Str(c.name.clone()));
@@ -121,21 +131,86 @@ impl Vm {
         }
         let o = object::new_object(cls.clone(), slots);
         let d = object::data(&o);
-        d.flags.set(d.flags.get() | object::oflags::ENUM_CASE | object::oflags::DESTRUCTED);
+        d.flags
+            .set(d.flags.get() | object::oflags::ENUM_CASE | object::oflags::DESTRUCTED);
         let v = Value::Object(o);
-        cls.enum_cases.borrow_mut().insert(c.name.clone(), v.clone());
+        cls.enum_cases
+            .borrow_mut()
+            .insert(c.name.clone(), v.clone());
         *c.value.borrow_mut() = Some(v.clone());
         v
     }
 
     /// The backing value of an enum case object.
-    pub(crate) fn enum_case_value(&self, o: &Obj) -> Option<Value> {
+    pub(crate) fn enum_case_value(o: &Obj) -> Option<Value> {
         let cls = object::class_of(o);
         let pi = cls.prop_map.get(&ZStr::from("value"))?;
-        object::data(o).slots.borrow().get(pi.slot as usize).cloned().flatten()
+        object::data(o)
+            .slots
+            .borrow()
+            .get(pi.slot as usize)
+            .cloned()
+            .flatten()
+    }
+
+    /// `zend_verify_enum`: link-time checks of an enum declaration
+    /// (properties, forbidden magic methods, `Serializable`). Returns the
+    /// compile error message.
+    #[allow(clippy::unused_self)] // called as a link-time hook on the VM
+    pub(crate) fn verify_enum(&self, cls: &Rc<Class>) -> Option<String> {
+        let backed = cls.backing.is_some();
+        let has_prop = cls
+            .props
+            .iter()
+            .map(|p| &p.name)
+            .chain(cls.static_props.iter().map(|p| &p.name))
+            .any(|n| !(n.as_bytes() == b"name" || (backed && n.as_bytes() == b"value")));
+        if has_prop {
+            return Some(format!("Enum {} cannot include properties", cls.name));
+        }
+        let m = &cls.magic;
+        let magic = [
+            (m.construct.is_some(), "__construct"),
+            (m.destruct.is_some(), "__destruct"),
+            (m.clone.is_some(), "__clone"),
+            (m.get.is_some(), "__get"),
+            (m.set.is_some(), "__set"),
+            (m.unset.is_some(), "__unset"),
+            (m.isset.is_some(), "__isset"),
+            (m.to_string.is_some(), "__toString"),
+            (m.serialize.is_some(), "__serialize"),
+            (m.unserialize.is_some(), "__unserialize"),
+            (cls.methods.contains_key(&ZStr::from("__sleep")), "__sleep"),
+            (
+                cls.methods.contains_key(&ZStr::from("__wakeup")),
+                "__wakeup",
+            ),
+            (
+                cls.methods.contains_key(&ZStr::from("__set_state")),
+                "__set_state",
+            ),
+        ];
+        if let Some((_, name)) = magic.iter().find(|(has, _)| *has) {
+            return Some(format!(
+                "Enum {} cannot include magic method {name}",
+                cls.name
+            ));
+        }
+        if cls
+            .interfaces
+            .iter()
+            .any(|i| i.lc_name.as_bytes() == b"serializable")
+        {
+            return Some(format!(
+                "Enum {} cannot implement the Serializable interface",
+                cls.name
+            ));
+        }
+        None
     }
 
     /// The case name of an enum object.
+    #[allow(clippy::unused_self)] // method-style API used across the VM
     pub(crate) fn enum_case_name(&self, o: &Obj) -> Option<ZStr> {
         let cls = object::class_of(o);
         let pi = cls.prop_map.get(&ZStr::from("name"))?;
@@ -147,7 +222,12 @@ impl Vm {
 
     /// `Enum::cases()`.
     pub(crate) fn enum_cases_array(&mut self, cls: &Rc<Class>) -> VmResult<Value> {
-        let names: Vec<ZStr> = cls.consts.iter().filter(|c| c.is_case).map(|c| c.name.clone()).collect();
+        let names: Vec<ZStr> = cls
+            .consts
+            .iter()
+            .filter(|c| c.is_case)
+            .map(|c| c.name.clone())
+            .collect();
         let mut out = Vec::new();
         for n in names {
             out.push(self.enum_case(cls, &n)?);
@@ -161,7 +241,8 @@ impl Vm {
         let v = if is_int {
             match v {
                 Value::Str(s) => {
-                    let parsed = php_runtime::numeric::is_numeric_string_ex(s.as_bytes(), false).map(|n| n.value);
+                    let parsed = php_runtime::numeric::is_numeric_string_ex(s.as_bytes(), false)
+                        .map(|n| n.value);
                     match parsed {
                         Some(php_runtime::numeric::Number::Int(i)) => Value::Int(i),
                         #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
@@ -176,16 +257,14 @@ impl Vm {
                             }
                             Value::Int(f as i64)
                         }
-                        _ => {
-                            return Err(self.make_throw(
-                                "TypeError",
-                                &format!(
-                                    "{}::{}(): Argument #1 ($value) must be of type int, string given",
-                                    cls.name,
-                                    if try_ { "tryFrom" } else { "from" }
-                                ),
-                            ))
-                        }
+                        _ => return Err(self.make_throw(
+                            "TypeError",
+                            &format!(
+                                "{}::{}(): Argument #1 ($value) must be of type int, string given",
+                                cls.name,
+                                if try_ { "tryFrom" } else { "from" }
+                            ),
+                        )),
                     }
                 }
                 other => other,
@@ -197,11 +276,16 @@ impl Vm {
             }
         };
         self.enum_ensure_backed_table(cls)?;
-        let names: Vec<ZStr> = cls.consts.iter().filter(|c| c.is_case).map(|c| c.name.clone()).collect();
+        let names: Vec<ZStr> = cls
+            .consts
+            .iter()
+            .filter(|c| c.is_case)
+            .map(|c| c.name.clone())
+            .collect();
         for n in names {
             let case = self.enum_case(cls, &n)?;
             if let Value::Object(o) = &case {
-                if self.enum_case_value(o).is_some_and(|cv| backing_eq(&cv, &v)) {
+                if Self::enum_case_value(o).is_some_and(|cv| backing_eq(&cv, &v)) {
                     return Ok(case);
                 }
             }
@@ -221,6 +305,7 @@ impl Vm {
     }
 
     /// Custom property table of internal objects (closures).
+    #[allow(clippy::unnecessary_wraps)] // fallible hook signature used by the object handlers
     pub(crate) fn internal_object_array(&mut self, o: &Obj) -> VmResult<Option<ZArray>> {
         if self.closure_data(o).is_some() {
             return Ok(crate::closure::closure_debug_array(self, o));
@@ -229,41 +314,45 @@ impl Vm {
     }
 
     /// Whether an object has a custom property table.
+    #[allow(clippy::unused_self)] // method-style API used by the object handlers
     pub(crate) fn has_internal_array(&self, o: &Obj) -> bool {
-        self.closure_data(o).is_some()
+        object::has_internal::<crate::closure::ClosureData>(o)
     }
 
     /// Comparison of internal objects (`None`: default). Closures compare
     /// equal only when both are fake closures of the same function, scope,
     /// called scope and `$this` (`zend_closure_compare`).
+    #[allow(clippy::unnecessary_wraps)] // fallible hook signature used by the object handlers
     pub(crate) fn internal_compare(&mut self, a: &Obj, b: &Obj) -> VmResult<Option<i32>> {
-        let (Some(x), Some(y)) = (self.closure_data(a), self.closure_data(b)) else {
+        let (Some(lhs), Some(rhs)) = (self.closure_data(a), self.closure_data(b)) else {
             return Ok(None);
         };
-        let same_class = |p: Option<&Rc<Class>>, q: Option<&Rc<Class>>| match (p, q) {
-            (Some(p), Some(q)) => Rc::ptr_eq(p, q),
+        let same_class = |l: Option<&Rc<Class>>, r: Option<&Rc<Class>>| match (l, r) {
+            (Some(l), Some(r)) => Rc::ptr_eq(l, r),
             (None, None) => true,
             _ => false,
         };
-        let same = x.fake
-            && y.fake
-            && match (&x.this, &y.this) {
-                (Some(p), Some(q)) => Obj::ptr_eq(p, q),
+        let same = lhs.fake
+            && rhs.fake
+            && match (&lhs.this, &rhs.this) {
+                (Some(l), Some(r)) => Obj::ptr_eq(l, r),
                 (None, None) => true,
                 _ => false,
             }
-            && same_class(x.called.as_ref(), y.called.as_ref())
-            && same_class(x.scope.as_ref(), y.scope.as_ref())
+            && same_class(lhs.called.as_ref(), rhs.called.as_ref())
+            && same_class(lhs.scope.as_ref(), rhs.scope.as_ref())
             && matches!(
-                (&x.func, &y.func),
+                (&lhs.func, &rhs.func),
                 (crate::func::Func::User(_), crate::func::Func::User(_))
                     | (crate::func::Func::Builtin(_), crate::func::Func::Builtin(_))
             )
-            && crate::closure::closure_callable_name(&x) == crate::closure::closure_callable_name(&y);
+            && crate::closure::closure_callable_name(&lhs)
+                == crate::closure::closure_callable_name(&rhs);
         Ok(Some(i32::from(!same)))
     }
 
     /// Copies internal state when cloning.
+    #[allow(clippy::unnecessary_wraps)] // fallible hook signature used by the object handlers
     pub(crate) fn clone_internal(&mut self, old: &Obj, new: &Obj) -> VmResult<()> {
         if let Some(d) = self.closure_data(old) {
             object::set_internal(new, d);
