@@ -46,6 +46,7 @@ members = [
     "crates/php-pdo",
     "crates/php-soap",
     "crates/php-ext-filter",
+    "crates/php-ext-stdmisc",
     "crates/php-ext-stdarr",
     "crates/php-ext-mbstring",
     "crates/php-ext-random",

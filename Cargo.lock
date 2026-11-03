@@ -611,6 +611,7 @@ dependencies = [
 name = "php-simplexml"
 version = "0.1.0"
 dependencies = [
+ "php-json",
  "php-libxml",
  "php-runtime",
 ]
