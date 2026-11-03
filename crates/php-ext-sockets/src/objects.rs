@@ -2,7 +2,7 @@
 
 use php_runtime::{Obj, Value};
 use php_sockets::{AddressInfo, Socket};
-use php_vm::ext::{acc, class_flags, Args, ClassBuilder, ModuleBuilder, VmResult};
+use php_vm::ext::{acc, class_flags, Args, ClassBuilder, ClassHooks, ModuleBuilder, VmResult};
 use php_vm::{object, Vm};
 
 /// `ZEND_ACC_NO_DYNAMIC_PROPERTIES` (`@strict-properties`); not re-exported
@@ -36,6 +36,15 @@ fn ctor(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     Err(vm.throw("Error", msg))
 }
 
+/// `zend_objects_not_comparable`: an instance only equals itself.
+#[allow(clippy::unnecessary_wraps)] // object handler signature
+fn not_comparable(_vm: &mut Vm, a: &Value, b: &Value) -> VmResult<Option<i32>> {
+    Ok(Some(match (a, b) {
+        (Value::Object(x), Value::Object(y)) if Obj::ptr_eq(x, y) => 0,
+        _ => 1,
+    }))
+}
+
 /// Registers both classes.
 pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
     for name in ["Socket", "AddressInfo"] {
@@ -47,6 +56,10 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
                     | NO_DYNAMIC_PROPERTIES,
             )
             .method("__construct()", acc::PUBLIC, ctor)
+            .hooks(ClassHooks {
+                compare: Some(not_comparable),
+                ..Default::default()
+            })
             .register(m.vm());
     }
 }

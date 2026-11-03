@@ -438,10 +438,21 @@ fn socket_strerror(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 // ---------------------------------------------------------------------------
 
 fn socket_import_stream(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let cell = res::stream_arg(vm, a, 0)?;
-    let fd = res::with_stream(vm, &cell, |s| s.cast(CastAs::SocketFd, true))?.flatten();
-    let Some(fd) = fd else {
-        return Ok(Value::Bool(false));
+    // Z_PARAM_RESOURCE + php_stream_from_zval().
+    let r = res::resource_arg(vm, a, 0)?;
+    let cell = res::stream_of_resource(vm, a, &r)?;
+    let cast = res::with_stream(vm, &cell, |s| {
+        s.cast(CastAs::SocketFd, false).ok_or_else(|| s.ops_label())
+    })?;
+    let fd = match cast {
+        Some(Ok(fd)) => fd,
+        Some(Err(label)) => {
+            vm.php_warning(&format!(
+                "Cannot represent a stream of type {label} as a Socket Descriptor"
+            ))?;
+            return Ok(Value::Bool(false));
+        }
+        None => return Ok(Value::Bool(false)),
     };
     let r = with(|s| s.import_fd(fd));
     warn(vm)?;
