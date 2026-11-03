@@ -35,3 +35,6 @@ pub mod sys;
 pub mod tar_format;
 pub mod util;
 pub mod zip_format;
+pub mod error;
+pub mod object;
+pub mod wrapper;

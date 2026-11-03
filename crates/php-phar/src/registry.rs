@@ -1864,3 +1864,48 @@ mod tests {
         assert_eq!(detect_fname_ext(b"nodot", 1, 1, true), Err(ExtFail::NotFound(false)));
     }
 }
+
+// ---------------------------------------------------------- map helpers
+
+/// Removes an alias mapping.
+pub fn alias_map_remove(alias: &[u8]) {
+    with(|s| {
+        s.alias_map.remove(alias);
+    });
+}
+
+/// `zend_hash_add_ptr(alias_map)`; `false` when the alias exists.
+pub fn alias_map_add(alias: &[u8], ar: &ArchiveRef) -> bool {
+    with(|s| s.alias_map.add(alias.to_vec(), Rc::clone(ar)))
+}
+
+/// `zend_hash_update_ptr(alias_map)`.
+pub fn alias_map_update(alias: &[u8], ar: &ArchiveRef) {
+    with(|s| s.alias_map.update(alias.to_vec(), Rc::clone(ar)));
+}
+
+/// `zend_hash_update_ptr(fname_map)`.
+pub fn fname_map_update(fname: &[u8], ar: &ArchiveRef) {
+    with(|s| s.fname_map.update(fname.to_vec(), Rc::clone(ar)));
+}
+
+/// `zend_hash_del(fname_map)` (with alias cleanup).
+pub fn fname_map_remove(fname: &[u8]) -> bool {
+    fname_map_del(fname)
+}
+
+/// Whether `fname` is in the `phar.cache_list` cache.
+pub fn is_cached(fname: &[u8]) -> bool {
+    with(|s| s.manifest_cached && s.cached_phars.contains_key(fname))
+}
+
+/// The cached (persistent) archive for `fname`.
+pub fn cached(fname: &[u8]) -> Option<ArchiveRef> {
+    with(|s| {
+        if s.manifest_cached {
+            s.cached_phars.get(fname).cloned()
+        } else {
+            None
+        }
+    })
+}
