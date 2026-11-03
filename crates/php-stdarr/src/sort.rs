@@ -6,7 +6,7 @@
 //! (`stable_sort_fallback`), which [`HashTable::sort_by`] provides.
 
 use crate::compare::{compare_data_by, compare_keys_by, SortKind, UserCompare};
-use crate::util::{arg_type_error, arg_value_error, not_array_error, with_array, ErrSlot};
+use crate::util::{arg_type_error, arg_value_error, not_array_error, with_bound_array, ErrSlot};
 use crate::{ArrayContext, Callback, SORT_ASC, SORT_DESC, SORT_FLAG_CASE};
 use crate::{SORT_LOCALE_STRING, SORT_NATURAL, SORT_NUMERIC, SORT_REGULAR, SORT_STRING};
 use php_runtime::sort::zend_sort;
@@ -54,10 +54,10 @@ fn php_sort<C: ArrayContext + ?Sized>(
     reverse: bool,
     renumber: bool,
 ) -> RtResult<()> {
-    with_array(array, func, 1, "array", |a| {
+    with_bound_array(array, func, 1, "array", |a| {
         sort_table(
             ctx,
-            a.make_mut(),
+            a,
             by_key,
             reverse,
             SortKind::from_flags(flags),
@@ -333,7 +333,15 @@ pub fn array_multisort<C: ArrayContext + ?Sized>(ctx: &mut C, args: &[Value]) ->
         }
         out.set_next_free_element(i64::try_from(size).unwrap_or(i64::MAX));
         if let Value::Reference(r) = &args[argi] {
-            r.set(Value::Array(ZArray::from_table(out)));
+            // PHP restructures the original tables in place; when user code
+            // (an object comparison) replaced the variable meanwhile, the
+            // result is lost with the old table (gh22678).
+            let unchanged = r
+                .try_borrow()
+                .is_some_and(|v| matches!(&*v, Value::Array(a) if ZArray::ptr_eq(a, &tables[i])));
+            if unchanged {
+                r.set(Value::Array(ZArray::from_table(out)));
+            }
         }
     }
     Ok(())

@@ -1,6 +1,8 @@
 //! Small helpers shared by the array functions.
 
-use php_runtime::{ErrorLevel, PhpRef, RtResult, RuntimeContext, RuntimeError, Value, ZArray};
+use php_runtime::{
+    ErrorLevel, HashTable, PhpRef, RtResult, RuntimeContext, RuntimeError, Value, ZArray,
+};
 
 /// The value to store when copying an element into another array
 /// (`zval_add_ref` / the `Z_REFCOUNT == 1` unwrapping done by most array
@@ -108,6 +110,38 @@ pub fn with_array<R>(
     let mut a = take_array(r, func, n, name)?;
     let res = f(&mut a);
     put_array(r, a);
+    res
+}
+
+/// Runs `f` on the array held by a by-reference parameter while the
+/// variable stays bound to it, like `zend_array_sort` (which adds a
+/// reference to the table for the duration of the sort): user code running
+/// meanwhile (comparison callbacks, `__toString`, user random engines) sees
+/// the variable unchanged, and a self-referencing element still reaches the
+/// array. `f` works on a separated copy of the table; the result replaces
+/// the variable's array only if the variable still holds the original one —
+/// when user code wrote to the variable, the write separated it and PHP
+/// discards the sorted table (Zend/tests/gh16648.phpt).
+pub fn with_bound_array<R>(
+    r: &PhpRef,
+    func: &str,
+    n: usize,
+    name: &str,
+    f: impl FnOnce(&mut HashTable) -> RtResult<R>,
+) -> RtResult<R> {
+    let orig = match r.get() {
+        Value::Array(a) => a,
+        other => return Err(not_array_error(func, n, Some(name), &other)),
+    };
+    let mut work: HashTable = (*orig).clone();
+    let res = f(&mut work);
+    let unchanged = r
+        .try_borrow()
+        .is_some_and(|v| matches!(&*v, Value::Array(a) if ZArray::ptr_eq(a, &orig)));
+    drop(orig);
+    if unchanged {
+        r.set(Value::Array(ZArray::from_table(work)));
+    }
     res
 }
 

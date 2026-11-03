@@ -873,3 +873,149 @@ fn find_derefs_and_unique_propagates_errors() {
         Some("Object of class Foo could not be converted to string")
     );
 }
+
+// ---------------------------------------------------------------------------
+// Sorting keeps the variable bound; callbacks get their arguments by value;
+// array_walk() on objects
+// ---------------------------------------------------------------------------
+
+/// `natcasesort_variation7`: a self-referencing element still sees the array
+/// while it is sorted (it compares as "Array").
+#[test]
+fn sort_self_referencing_array_in_place() {
+    let mut ctx = Ctx::new();
+    let r = PhpRef::new(Value::Array(list([
+        Value::Int(1),
+        Value::Float(3.0),
+        Value::from("zero"),
+        Value::from("2"),
+    ])));
+    let me = Value::Reference(r.clone());
+    if let Value::Array(a) = &mut *r.borrow_mut() {
+        a.make_mut().push(me).unwrap();
+    }
+    sort::natcasesort(&mut ctx, &r).unwrap();
+    let out = arr_of(&r.get());
+    assert_eq!(keys(&out), ["0", "3", "1", "4", "2"]);
+    assert!(
+        matches!(out.get(&ArrayKey::Int(4)), Some(Value::Reference(x)) if PhpRef::ptr_eq(x, &r))
+    );
+}
+
+/// gh16648: user code writing to the variable during the sort separates it;
+/// the sorted table is discarded.
+#[test]
+fn sort_discards_result_when_variable_is_written() {
+    struct Ctx2 {
+        inner: CollectingContext,
+        target: PhpRef,
+    }
+    impl php_runtime::RuntimeContext for Ctx2 {
+        fn diagnostic(&mut self, l: php_runtime::ErrorLevel, m: &str) -> RtResult<()> {
+            self.inner.diagnostic(l, m)
+        }
+        fn cast_object(&mut self, _: &Obj, _: php_runtime::CastTarget) -> RtResult<Option<Value>> {
+            if let Value::Array(a) = &mut *self.target.borrow_mut() {
+                for i in 0..4 {
+                    a.make_mut().insert(i, Value::Int(i));
+                }
+            }
+            Ok(Some(Value::from("3")))
+        }
+    }
+    impl ArrayContext for Ctx2 {}
+    let r = PhpRef::new(Value::Array(ZArray::from_pairs([
+        ("a", Value::from("1")),
+        ("3", Value::Object(Obj::new(TestObj))),
+        ("2", Value::from("2")),
+    ])));
+    let mut ctx = Ctx2 {
+        inner: CollectingContext::new(),
+        target: r.clone(),
+    };
+    sort::asort(&mut ctx, &r, SORT_REGULAR).unwrap();
+    assert_eq!(keys(&arr_of(&r.get())), ["'a'", "3", "2", "0", "1"]);
+}
+
+/// `array_reduce_accumulator_refcount`: with by-value arguments the moved
+/// accumulator has no other holder.
+#[test]
+fn callbacks_receive_arguments_by_value() {
+    let mut ctx = Ctx::new();
+    let mut refcounts = Vec::new();
+    let mut cb = OwnedArgs(|_: &mut Ctx, mut args: Vec<Value>| {
+        let val = args.pop().unwrap_or_default();
+        let mut acc = match args.pop() {
+            Some(Value::Array(a)) => a,
+            _ => ZArray::new(),
+        };
+        refcounts.push(acc.refcount());
+        acc.make_mut().push(val).unwrap();
+        Ok(Value::Array(acc))
+    });
+    let input = arr_of(&ints(&[1, 2, 3]));
+    let out = callback::array_reduce(&mut ctx, &input, &mut cb, Some(&ints(&[0]))).unwrap();
+    assert_eq!(int_vals(&arr_of(&out)), [0, 1, 2, 3]);
+    // The initial value is still held by the caller; later ones are not.
+    assert_eq!(refcounts, [2, 1, 1]);
+}
+
+/// `array_walk()` on an object goes through the property hooks: bound slots
+/// are modified in place, detached ones are written back.
+#[test]
+fn walk_object_properties() {
+    struct ObjCtx {
+        inner: CollectingContext,
+        props: ZArray,
+        writes: Vec<(String, Value)>,
+    }
+    impl php_runtime::RuntimeContext for ObjCtx {
+        fn diagnostic(&mut self, l: php_runtime::ErrorLevel, m: &str) -> RtResult<()> {
+            self.inner.diagnostic(l, m)
+        }
+        fn object_properties(
+            &mut self,
+            _: &Obj,
+            _: php_runtime::PropertyPurpose,
+        ) -> RtResult<Option<ZArray>> {
+            Ok(Some(self.props.clone()))
+        }
+        fn property_write(&mut self, _: &Obj, name: &ZStr, value: Value) -> RtResult<()> {
+            self.writes.push((name.to_string_lossy(), value.clone()));
+            self.props
+                .make_mut()
+                .insert(ArrayKey::from_zstr(name), value);
+            Ok(())
+        }
+    }
+    impl ArrayContext for ObjCtx {}
+    let bound = PhpRef::new(Value::Int(1));
+    let mut ctx = ObjCtx {
+        inner: CollectingContext::new(),
+        props: ZArray::from_pairs([
+            ("a", Value::Reference(bound.clone())),
+            ("\0Foo\0b", Value::Int(2)),
+            ("c", Value::Int(3)),
+        ]),
+        writes: Vec::new(),
+    };
+    let obj = PhpRef::new(Value::Object(Obj::new(TestObj)));
+    let mut cb = |c: &mut ObjCtx, a: &[Value]| {
+        if let Value::Reference(r) = &a[0] {
+            if a[1].as_str().map(ZStr::as_bytes) != Some(&b"c"[..]) {
+                let v = php_runtime::ops::mul(&r.get(), &Value::Int(10), c)?;
+                r.set(v);
+            }
+        }
+        Ok(Value::Null)
+    };
+    callback::array_walk(&mut ctx, &obj, &mut cb, None).unwrap();
+    assert_eq!(bound.get().as_int(), Some(10));
+    assert_eq!(ctx.writes.len(), 1);
+    assert_eq!(ctx.writes[0].0, "\0Foo\0b");
+    assert_eq!(ctx.writes[0].1.as_int(), Some(20));
+    assert_eq!(
+        ctx.inner.messages(),
+        ["Deprecated: array_walk(): Passing an object for argument #1 $array to array_walk() is deprecated, call get_object_vars() first instead"]
+    );
+}

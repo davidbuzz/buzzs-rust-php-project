@@ -444,7 +444,7 @@ impl<'a, 'b, C: RuntimeContext + ?Sized> UserCompare<'a, 'b, C> {
     /// calls the callback with `(a, b)`; a `bool` result is deprecated, and
     /// `false` is retried with swapped operands.
     pub fn compare(&mut self, ctx: &mut C, a: &Value, b: &Value) -> RtResult<i32> {
-        let ret = (self.callback)(ctx, &[a.clone(), b.clone()])?;
+        let ret = self.callback.call(ctx, vec![a.clone(), b.clone()])?;
         let ret = crate::util::deref(&ret);
         if let Value::Bool(bv) = ret {
             if !self.warned {
@@ -456,7 +456,7 @@ impl<'a, 'b, C: RuntimeContext + ?Sized> UserCompare<'a, 'b, C> {
                 )?;
             }
             if !bv {
-                let ret2 = (self.callback)(ctx, &[b.clone(), a.clone()])?;
+                let ret2 = self.callback.call(ctx, vec![b.clone(), a.clone()])?;
                 let n = ret2.to_long(ctx)?;
                 return Ok(-crate::util::normalize(n));
             }
@@ -468,7 +468,7 @@ impl<'a, 'b, C: RuntimeContext + ?Sized> UserCompare<'a, 'b, C> {
     /// `zval_user_compare` (used by `array_udiff_assoc` and
     /// `array_uintersect_assoc`): no bool handling.
     pub fn compare_plain(&mut self, ctx: &mut C, a: &Value, b: &Value) -> RtResult<i32> {
-        let ret = (self.callback)(ctx, &[a.clone(), b.clone()])?;
+        let ret = self.callback.call(ctx, vec![a.clone(), b.clone()])?;
         let n = ret.to_long(ctx)?;
         Ok(crate::util::normalize(n))
     }

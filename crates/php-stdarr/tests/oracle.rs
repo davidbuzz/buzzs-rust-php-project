@@ -533,9 +533,9 @@ fn dispatch(ctx: &mut Ctx, func: &str, args: &[Value]) -> Outcome {
         "usort" | "uasort" | "uksort" => byref_fn(ctx, &|c, r, rest| {
             let mut cb = as_cb(&rest[0]).expect("cb");
             match func {
-                "usort" => sort::usort(c, r, &mut *cb),
-                "uasort" => sort::uasort(c, r, &mut *cb),
-                _ => sort::uksort(c, r, &mut *cb),
+                "usort" => sort::usort(c, r, &mut cb),
+                "uasort" => sort::uasort(c, r, &mut cb),
+                _ => sort::uksort(c, r, &mut cb),
             }
             .map(|()| t.clone())
         }),
@@ -558,9 +558,9 @@ fn dispatch(ctx: &mut Ctx, func: &str, args: &[Value]) -> Outcome {
             let mut cb = as_cb(&rest[0]).expect("cb");
             let ud = rest.get(1);
             if func == "array_walk" {
-                callback::array_walk(c, r, &mut *cb, ud)
+                callback::array_walk(c, r, &mut cb, ud)
             } else {
-                callback::array_walk_recursive(c, r, &mut *cb, ud)
+                callback::array_walk_recursive(c, r, &mut cb, ud)
             }
             .map(|()| t.clone())
         }),
@@ -655,29 +655,33 @@ fn dispatch(ctx: &mut Ctx, func: &str, args: &[Value]) -> Outcome {
         "array_combine" => simple(ok(basic::array_combine(ctx, &a0(), &arr(&args[1])))),
         "array_map" => {
             let mut cb = as_cb(&args[0]);
-            simple(ok(callback::array_map(ctx, cb.as_deref_mut(), &args[1..])))
+            simple(ok(callback::array_map(
+                ctx,
+                cb.as_mut().map(|b| b as &mut php_stdarr::Callback<'_, Ctx>),
+                &args[1..],
+            )))
         }
         "array_filter" => {
             let mut cb = args.get(1).and_then(as_cb);
             simple(ok(callback::array_filter(
                 ctx,
                 &a0(),
-                cb.as_deref_mut(),
+                cb.as_mut().map(|b| b as &mut php_stdarr::Callback<'_, Ctx>),
                 int(args.get(2), 0),
             )))
         }
         "array_reduce" => {
             let mut cb = as_cb(&args[1]).expect("cb");
-            simple(callback::array_reduce(ctx, &a0(), &mut *cb, args.get(2)))
+            simple(callback::array_reduce(ctx, &a0(), &mut cb, args.get(2)))
         }
         "array_find" | "array_find_key" | "array_any" | "array_all" => {
             let mut cb = as_cb(&args[1]).expect("cb");
             let a = a0();
             simple(match func {
-                "array_find" => callback::array_find(ctx, &a, &mut *cb),
-                "array_find_key" => callback::array_find_key(ctx, &a, &mut *cb),
-                "array_any" => callback::array_any(ctx, &a, &mut *cb).map(Value::Bool),
-                _ => callback::array_all(ctx, &a, &mut *cb).map(Value::Bool),
+                "array_find" => callback::array_find(ctx, &a, &mut cb),
+                "array_find_key" => callback::array_find_key(ctx, &a, &mut cb),
+                "array_any" => callback::array_any(ctx, &a, &mut cb).map(Value::Bool),
+                _ => callback::array_all(ctx, &a, &mut cb).map(Value::Bool),
             })
         }
         "range" => simple(ok(range::range(ctx, &args[0], &args[1], args.get(2)))),
@@ -700,7 +704,7 @@ fn dispatch(ctx: &mut Ctx, func: &str, args: &[Value]) -> Outcome {
         | "array_udiff_assoc"
         | "array_uintersect_assoc" => {
             let (arrays, mut cbs) = split_callbacks(args, 1);
-            let cb = &mut *cbs[0];
+            let cb = &mut cbs[0];
             simple(ok(match func {
                 "array_udiff" => setops::array_udiff(ctx, &arrays, cb),
                 "array_uintersect" => setops::array_uintersect(ctx, &arrays, cb),
@@ -717,9 +721,9 @@ fn dispatch(ctx: &mut Ctx, func: &str, args: &[Value]) -> Outcome {
             let mut k = cbs.pop().expect("key cb");
             let mut dcb = cbs.pop().expect("data cb");
             simple(ok(if func == "array_udiff_uassoc" {
-                setops::array_udiff_uassoc(ctx, &arrays, &mut *dcb, &mut *k)
+                setops::array_udiff_uassoc(ctx, &arrays, &mut dcb, &mut k)
             } else {
-                setops::array_uintersect_uassoc(ctx, &arrays, &mut *dcb, &mut *k)
+                setops::array_uintersect_uassoc(ctx, &arrays, &mut dcb, &mut k)
             }))
         }
         "extract" => {

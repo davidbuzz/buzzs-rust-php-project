@@ -131,7 +131,7 @@ fn key_based<C: RuntimeContext + ?Sized>(
                     DataCmp::None => true,
                     DataCmp::Internal => data_compare_string(ctx, &val, d)? == 0,
                     DataCmp::User(cb) => {
-                        let mut uc = UserCompare::new(func, cb);
+                        let mut uc = UserCompare::new(func, &mut **cb);
                         uc.compare_plain(ctx, &val, d)? == 0
                     }
                 },

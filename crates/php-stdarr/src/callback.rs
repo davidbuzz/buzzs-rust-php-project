@@ -3,11 +3,11 @@
 //! `array_find_key`, `array_any`, `array_all`.
 
 use crate::util::{arg_value_error, copy_elem, deprecated, deref, not_array_error, Guard};
-use crate::Callback;
+use crate::{ArrayContext, Callback, PropertyRef};
 use crate::{ARRAY_FILTER_USE_BOTH, ARRAY_FILTER_USE_KEY, ARRAY_FILTER_USE_VALUE};
 use php_runtime::{
-    ArrayKey, HashTable, IterId, PhpRef, PropertyPurpose, RtResult, RuntimeContext, RuntimeError,
-    Value, ZArray,
+    ops, ArrayKey, HashTable, IterId, Obj, PhpRef, PropertyPurpose, RtResult, RuntimeContext,
+    RuntimeError, Value, ZArray,
 };
 
 // ---------------------------------------------------------------------------
@@ -39,7 +39,49 @@ fn walk_fetch(target: &PhpRef, iter: IterId) -> RtResult<Option<(ArrayKey, PhpRe
     Ok(Some((key, r)))
 }
 
-fn walk_inner<C: RuntimeContext + ?Sized>(
+/// Processes one walked element: recurses into arrays (`array_walk_recursive`)
+/// or calls the callback with `(&$value, $key[, $arg])`.
+fn walk_element<C: ArrayContext + ?Sized>(
+    ctx: &mut C,
+    key: &ArrayKey,
+    elem: PhpRef,
+    callback: &mut Callback<'_, C>,
+    userdata: Option<&Value>,
+    recursive: bool,
+    guard: &mut Guard,
+) -> RtResult<()> {
+    let is_array = matches!(&*elem.borrow(), Value::Array(_));
+    if recursive && is_array {
+        let addr = {
+            let mut b = elem.borrow_mut();
+            match &mut *b {
+                Value::Array(a) => {
+                    a.make_mut();
+                    a.addr()
+                }
+                _ => 0,
+            }
+        };
+        if guard.contains(addr) {
+            return Err(RuntimeError::Error("Recursion detected".to_string()));
+        }
+        guard.push(addr);
+        let r = walk_inner(ctx, &elem, callback, userdata, recursive, guard);
+        guard.pop(addr);
+        return r;
+    }
+    // The reference is moved into the arguments: like PHP, the element slot
+    // and the callee's parameter are its only holders.
+    let mut args = Vec::with_capacity(3);
+    args.push(Value::Reference(elem));
+    args.push(key.to_value());
+    if let Some(u) = userdata {
+        args.push(u.clone());
+    }
+    callback.call(ctx, args).map(drop)
+}
+
+fn walk_inner<C: ArrayContext + ?Sized>(
     ctx: &mut C,
     target: &PhpRef,
     callback: &mut Callback<'_, C>,
@@ -69,47 +111,67 @@ fn walk_inner<C: RuntimeContext + ?Sized>(
                 break;
             }
         };
-        let is_array = matches!(&*elem.borrow(), Value::Array(_));
-        let step = if recursive && is_array {
-            let addr = {
-                let mut b = elem.borrow_mut();
-                match &mut *b {
-                    Value::Array(a) => {
-                        a.make_mut();
-                        a.addr()
-                    }
-                    _ => 0,
-                }
-            };
-            if guard.contains(addr) {
-                Err(RuntimeError::Error("Recursion detected".to_string()))
-            } else {
-                guard.push(addr);
-                let r = walk_inner(ctx, &elem, callback, userdata, recursive, guard);
-                guard.pop(addr);
-                r
-            }
-        } else {
-            let mut args = Vec::with_capacity(3);
-            args.push(Value::Reference(elem));
-            args.push(key.to_value());
-            if let Some(u) = userdata {
-                args.push(u.clone());
-            }
-            callback(ctx, &args).map(drop)
-        };
-        if let Err(e) = step {
+        if let Err(e) = walk_element(ctx, &key, elem, callback, userdata, recursive, guard) {
             result = Err(e);
             break;
         }
     }
-    if let Value::Array(a) = &mut *target.borrow_mut() {
-        a.make_mut().iterator_del(iter);
+    if let Some(mut slot) = target.try_borrow_mut() {
+        if let Value::Array(a) = &mut *slot {
+            a.make_mut().iterator_del(iter);
+        }
     }
     result
 }
 
-fn php_walk<C: RuntimeContext + ?Sized>(
+/// Walks the live property table of an object (`Z_OBJPROP`): each step
+/// re-reads the table (the callback may add or remove properties) and
+/// continues after the previously visited key; every property slot is
+/// bound to a reference through [`ArrayContext::property_reference`].
+fn walk_object<C: ArrayContext + ?Sized>(
+    ctx: &mut C,
+    obj: &Obj,
+    callback: &mut Callback<'_, C>,
+    userdata: Option<&Value>,
+    recursive: bool,
+    guard: &mut Guard,
+) -> RtResult<()> {
+    let mut last: Option<(ArrayKey, u32)> = None;
+    loop {
+        let table = ctx
+            .object_properties(obj, PropertyPurpose::ArrayCast)?
+            .unwrap_or_default();
+        let pos = match &last {
+            None => table.valid_pos(0),
+            Some((k, p)) => match table.position_of(k) {
+                Some(q) => table.valid_pos(q + 1),
+                None => table.valid_pos(p + 1),
+            },
+        };
+        let Some((key, _)) = table.at(pos) else {
+            return Ok(());
+        };
+        let key = key.clone();
+        drop(table);
+        last = Some((key.clone(), pos));
+        match ctx.property_reference(obj, &key)? {
+            None => {}
+            Some(PropertyRef::Bound(r)) => {
+                walk_element(ctx, &key, r, callback, userdata, recursive, guard)?;
+            }
+            Some(PropertyRef::Detached(r)) => {
+                let before = r.get();
+                walk_element(ctx, &key, r.clone(), callback, userdata, recursive, guard)?;
+                let after = r.get();
+                if !ops::is_identical(&before, &after)? {
+                    ctx.property_write(obj, &key.to_zstr(), after)?;
+                }
+            }
+        }
+    }
+}
+
+fn php_walk<C: ArrayContext + ?Sized>(
     ctx: &mut C,
     func: &str,
     array: &PhpRef,
@@ -117,8 +179,9 @@ fn php_walk<C: RuntimeContext + ?Sized>(
     userdata: Option<&Value>,
     recursive: bool,
 ) -> RtResult<()> {
-    let snapshot = match array.get() {
-        Value::Array(_) => None,
+    let mut guard = Guard::default();
+    match array.get() {
+        Value::Array(_) => walk_inner(ctx, array, callback, userdata, recursive, &mut guard),
         Value::Object(o) => {
             deprecated(
                 ctx,
@@ -127,22 +190,10 @@ fn php_walk<C: RuntimeContext + ?Sized>(
                     "Passing an object for argument #1 $array to {func}() is deprecated, call get_object_vars() first instead"
                 ),
             )?;
-            let props = ctx
-                .object_properties(&o, PropertyPurpose::ArrayCast)?
-                .unwrap_or_default();
-            Some(PhpRef::new(Value::Array(props)))
+            walk_object(ctx, &o, callback, userdata, recursive, &mut guard)
         }
-        other => return Err(not_array_error(func, 1, Some("array"), &other)),
-    };
-    let target = snapshot.as_ref().unwrap_or(array);
-    walk_inner(
-        ctx,
-        target,
-        callback,
-        userdata,
-        recursive,
-        &mut Guard::default(),
-    )
+        other => Err(not_array_error(func, 1, Some("array"), &other)),
+    }
 }
 
 /// `array_walk(array|object &$array, callable $callback, mixed $arg = UNKNOWN): true`.
@@ -150,7 +201,7 @@ fn php_walk<C: RuntimeContext + ?Sized>(
 /// The callback receives `(&$value, $key[, $arg])`; `$value` is passed as a
 /// [`Value::Reference`] to the element, so a by-reference parameter
 /// modifies the array.
-pub fn array_walk<C: RuntimeContext + ?Sized>(
+pub fn array_walk<C: ArrayContext + ?Sized>(
     ctx: &mut C,
     array: &PhpRef,
     callback: &mut Callback<'_, C>,
@@ -160,7 +211,7 @@ pub fn array_walk<C: RuntimeContext + ?Sized>(
 }
 
 /// `array_walk_recursive(array|object &$array, callable $callback, mixed $arg = UNKNOWN): true`.
-pub fn array_walk_recursive<C: RuntimeContext + ?Sized>(
+pub fn array_walk_recursive<C: ArrayContext + ?Sized>(
     ctx: &mut C,
     array: &PhpRef,
     callback: &mut Callback<'_, C>,
@@ -196,13 +247,13 @@ pub fn array_map<C: RuntimeContext + ?Sized>(
         if input.is_packed() {
             for pos in 0..input.used() {
                 if let Some((_, v)) = input.at(pos) {
-                    let r = cb(ctx, std::slice::from_ref(v))?;
+                    let r = cb.call(ctx, vec![v.clone()])?;
                     out.insert(i64::from(pos), r);
                 }
             }
         } else {
             for (k, v) in input.iter() {
-                let r = cb(ctx, std::slice::from_ref(v))?;
+                let r = cb.call(ctx, vec![v.clone()])?;
                 let _ = out.add(k.clone(), r);
             }
         }
@@ -235,7 +286,7 @@ pub fn array_map<C: RuntimeContext + ?Sized>(
             .collect();
         let v = match cb.as_deref_mut() {
             None => Value::Array(ZArray::from_values(params)),
-            Some(cb) => cb(ctx, &params)?,
+            Some(cb) => cb.call(ctx, params)?,
         };
         let _ = out.push(v);
     }
@@ -280,7 +331,7 @@ pub fn array_filter<C: RuntimeContext + ?Sized>(
                     ARRAY_FILTER_USE_BOTH => vec![v.clone(), k.to_value()],
                     _ => vec![v.clone()],
                 };
-                let r = cb(ctx, &args)?;
+                let r = cb.call(ctx, args)?;
                 r.to_bool(ctx)?
             }
             None => v.to_bool(ctx)?,
@@ -301,7 +352,7 @@ pub fn array_reduce<C: RuntimeContext + ?Sized>(
 ) -> RtResult<Value> {
     let mut acc = initial.cloned().unwrap_or(Value::Null);
     for v in array.values() {
-        let r = callback(ctx, &[acc, v.clone()])?;
+        let r = callback.call(ctx, vec![acc, v.clone()])?;
         acc = deref(&r);
     }
     Ok(acc)
@@ -320,7 +371,7 @@ pub fn php_array_find<C: RuntimeContext + ?Sized>(
     negate: bool,
 ) -> RtResult<Option<(ArrayKey, Value)>> {
     for (k, v) in array {
-        let r = callback(ctx, &[v.clone(), k.to_value()])?;
+        let r = callback.call(ctx, vec![v.clone(), k.to_value()])?;
         if r.to_bool(ctx)? ^ negate {
             return Ok(Some((k.clone(), deref(v))));
         }

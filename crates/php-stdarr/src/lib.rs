@@ -21,7 +21,9 @@
 //!   (`array_merge(...$arrays)`, the `array_diff` family, `array_map`,
 //!   `min`/`max`, `array_multisort`) take `&[Value]`, so the exact
 //!   "must be of type array, X given" errors are produced here;
-//! * user callbacks are [`Callback`]s: `FnMut(&mut C, &[Value]) -> RtResult<Value>`.
+//! * user callbacks are [`Callback`]s ([`ArrayCallback`] trait objects):
+//!   `FnMut(&mut C, &[Value]) -> RtResult<Value>` closures, or closures
+//!   taking the arguments by value wrapped in [`OwnedArgs`] (exact refcounts).
 //!   The context is handed back to the callback so the VM can run user code
 //!   while this crate holds no borrow of it. Arguments are passed exactly as
 //!   PHP passes them (array elements that are references stay
@@ -74,11 +76,53 @@ pub mod stack;
 pub mod symbols;
 pub mod util;
 
-use php_runtime::{CollectingContext, Obj, RtResult, RuntimeContext, Value, ZStr};
+use php_runtime::{
+    ArrayKey, CollectingContext, Obj, PhpRef, PropertyPurpose, RtResult, RuntimeContext, Value,
+    ZStr,
+};
+
+/// A user callback, as passed to the array functions: `&mut Callback<C>`.
+pub type Callback<'a, C> = dyn ArrayCallback<C> + 'a;
 
 /// A user callback: receives the context and the arguments, returns the
 /// callback's return value or the exception it threw.
-pub type Callback<'a, C> = dyn FnMut(&mut C, &[Value]) -> RtResult<Value> + 'a;
+///
+/// The arguments are handed over by value: they are the only extra holders
+/// of the values PHP passes (`ZVAL_COPY_VALUE` into the call frame), so an
+/// implementation that moves them into the callee's frame reproduces PHP's
+/// refcounts exactly (`debug_zval_dump()` inside callbacks, the moved
+/// `array_reduce()` accumulator). Wrap such closures in [`OwnedArgs`].
+///
+/// Any `FnMut(&mut C, &[Value]) -> RtResult<Value>` closure is also a
+/// callback; it borrows the arguments, so an implementation that copies
+/// them into a frame sees one extra reference.
+pub trait ArrayCallback<C: ?Sized> {
+    /// Calls the callback.
+    fn call(&mut self, ctx: &mut C, args: Vec<Value>) -> RtResult<Value>;
+}
+
+impl<C: ?Sized, F> ArrayCallback<C> for F
+where
+    F: FnMut(&mut C, &[Value]) -> RtResult<Value>,
+{
+    fn call(&mut self, ctx: &mut C, args: Vec<Value>) -> RtResult<Value> {
+        self(ctx, &args)
+    }
+}
+
+/// Adapts a closure taking its arguments by value
+/// (`FnMut(&mut C, Vec<Value>) -> RtResult<Value>`) to [`ArrayCallback`].
+#[derive(Debug, Clone, Copy)]
+pub struct OwnedArgs<F>(pub F);
+
+impl<C: ?Sized, F> ArrayCallback<C> for OwnedArgs<F>
+where
+    F: FnMut(&mut C, Vec<Value>) -> RtResult<Value>,
+{
+    fn call(&mut self, ctx: &mut C, args: Vec<Value>) -> RtResult<Value> {
+        (self.0)(ctx, args)
+    }
+}
 
 /// A random engine's `range(min, max)` (inclusive), e.g.
 /// `php_mt_rand_range` for the default engine. Errors model engine failures
@@ -119,6 +163,36 @@ pub trait ArrayContext: RuntimeContext {
     fn this_object(&mut self) -> Option<Value> {
         None
     }
+
+    /// `array_walk()` over an object: binds the live property slot `key` (a
+    /// property-table key, mangled for private/protected properties) to a
+    /// reference — `ZVAL_MAKE_REF` on the slot, adding the typed property's
+    /// type source so writes through the reference are type-checked — and
+    /// returns it as [`PropertyRef::Bound`]. `Ok(None)` skips the slot (gone,
+    /// or an uninitialized typed property).
+    ///
+    /// The default returns a [`PropertyRef::Detached`] reference to the value
+    /// in the `ArrayCast` property table; the walk writes a changed value
+    /// back with [`RuntimeContext::property_write`].
+    fn property_reference(&mut self, obj: &Obj, key: &ArrayKey) -> RtResult<Option<PropertyRef>> {
+        let table = self.object_properties(obj, PropertyPurpose::ArrayCast)?;
+        Ok(table.and_then(|t| {
+            t.get(key).map(|v| match v {
+                Value::Reference(r) => PropertyRef::Bound(r.clone()),
+                other => PropertyRef::Detached(PhpRef::new(other.clone())),
+            })
+        }))
+    }
+}
+
+/// A property slot handed to `array_walk()` (see
+/// [`ArrayContext::property_reference`]).
+#[derive(Debug, Clone)]
+pub enum PropertyRef {
+    /// The reference now bound into the object's property slot.
+    Bound(PhpRef),
+    /// A reference detached from the object; its final value is written back.
+    Detached(PhpRef),
 }
 
 impl ArrayContext for CollectingContext {}

@@ -3,7 +3,7 @@
 //! `Mt19937` engine's `php_mt_rand_range`), so the exact PHP sequences are
 //! reproduced when the VM plugs in `php-random`.
 
-use crate::util::{arg_value_error, with_array};
+use crate::util::{arg_value_error, with_bound_array};
 use crate::RangeFn;
 use php_runtime::{ArrayKey, HashTable, PhpRef, RtResult, RuntimeError, Value, ZArray};
 
@@ -55,11 +55,11 @@ pub fn shuffle_table(ht: &mut HashTable, rng: &mut RangeFn<'_>) -> RtResult<()> 
 
 /// `shuffle(array &$array): true`.
 pub fn shuffle(array: &PhpRef, rng: &mut RangeFn<'_>) -> RtResult<()> {
-    with_array(array, "shuffle", 1, "array", |a| {
+    with_bound_array(array, "shuffle", 1, "array", |a| {
         if a.is_empty() {
             return Ok(());
         }
-        shuffle_table(a.make_mut(), rng)
+        shuffle_table(a, rng)
     })
 }
 
