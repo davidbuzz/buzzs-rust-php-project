@@ -495,6 +495,39 @@ mod tests {
         assert_eq!(str_getcsv(b"a,", &opts()), Some(strs(&["a", ""])));
     }
 
+    /// Expectations from php-src master's `fgetcsv.phpt` / `str_getcsv_001.phpt`.
+    #[test]
+    fn phpt_expectations() {
+        let o = opts();
+        assert_eq!(
+            str_getcsv(b"aaa,\"bbb\n", &o),
+            Some(strs(&["aaa", "bbb\n"]))
+        );
+        assert_eq!(str_getcsv(b"aaa,\"bbb", &o), Some(strs(&["aaa", "bbb"])));
+        assert_eq!(
+            str_getcsv(b"aaa\"\\\"a\",\"bbb\"", &o),
+            Some(strs(&["aaa\"\\\"a\"", "bbb"]))
+        );
+        let o = CsvOptions {
+            delimiter: b'.',
+            enclosure: b'|',
+            escape: Some(b'-'),
+        };
+        assert_eq!(
+            str_getcsv(b"|f.|.|bar|.|-|-.|", &o),
+            Some(strs(&["f.", "bar", "-|-."]))
+        );
+        let o = CsvOptions {
+            delimiter: b' ',
+            enclosure: b'.',
+            escape: None,
+        };
+        assert_eq!(
+            str_getcsv(b".foo  . .  bar  .", &o),
+            Some(strs(&["foo  ", "  bar  "]))
+        );
+    }
+
     #[test]
     fn multi_line() {
         let mut lines = vec![b"c\"\n".to_vec(), b"x\n".to_vec()].into_iter();
