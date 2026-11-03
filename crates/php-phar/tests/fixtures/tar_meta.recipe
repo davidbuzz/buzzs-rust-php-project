@@ -1,0 +1,4 @@
+new data meta.tar
+add a.txt hello
+meta hex:693a34323b
+filemeta a.txt hex:623a313b

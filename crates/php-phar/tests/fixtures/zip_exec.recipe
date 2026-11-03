@@ -1,0 +1,3 @@
+new phar exec.phar.zip
+add index.php hex:3c3f706870
+add sub/x.txt xx

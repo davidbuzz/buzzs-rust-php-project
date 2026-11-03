@@ -1,0 +1,11 @@
+version: 1.1.0
+alias: '%DIR%/simple.phar'
+count: 2
+signature: SHA-256 77F5D9B0BF8CE5CDFD8F0F0BDDA2463B968ABDB0E49458B52BC9DEB791A9B060
+compressed: false
+format: phar
+metadata: NONE
+stub: f51304254cb98cd97c5a4de9dff96034 6641
+entry a.php dir=0 size=15 perms=100444 mtime=0 csize=15 gz=0 bz2=0 flags=0 crc=138923659 meta=NONE md5=a4527d8650c1e8d3fa8b153aad1ff708
+entry b dir=1 size=0 perms=40555 mtime=0 csize=0 gz=0 bz2=0 flags=0 crc=- meta=NONE md5=-
+entry b/c.txt dir=0 size=5 perms=100444 mtime=0 csize=5 gz=0 bz2=0 flags=0 crc=907060870 meta=NONE md5=5d41402abc4b2a76b9719d911017c592

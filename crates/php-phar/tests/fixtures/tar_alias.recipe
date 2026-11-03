@@ -1,0 +1,2 @@
+new phar alias.phar.tar alias=taralias
+add a.txt hello

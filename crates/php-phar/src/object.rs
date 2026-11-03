@@ -58,7 +58,7 @@ fn flush_err(ar: &ArchiveRef) -> PharResult<()> {
 }
 
 fn now() -> u32 {
-    crate::sys::now32()
+    crate::sys::entry_now32()
 }
 
 /// The archive behind a `Phar` / `PharData` object.

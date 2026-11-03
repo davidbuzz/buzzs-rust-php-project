@@ -1,0 +1,3 @@
+new phar defstub.phar
+add index.php x
+defaultstub start.php web.php

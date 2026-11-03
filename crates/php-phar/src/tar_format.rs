@@ -158,6 +158,7 @@ pub fn parse(
     ar.is_brandnew = false;
     ar.is_writeable = false;
     ar.is_tar = true;
+    ar.version = String::new();
     ar.flags = compression;
     let mut actual_alias: Option<Vec<u8>> = None;
     let mut last_was_longlink = false;

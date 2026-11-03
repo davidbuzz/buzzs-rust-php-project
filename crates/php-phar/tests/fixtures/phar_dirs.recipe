@@ -1,0 +1,6 @@
+new phar dirs.phar
+buffer start
+add dir/sub/file.txt contents
+dir emptydir
+add top.txt t
+buffer stop

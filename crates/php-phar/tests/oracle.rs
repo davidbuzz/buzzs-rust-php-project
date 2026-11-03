@@ -1,0 +1,514 @@
+//! Oracle tests against PHP's own phar implementation.
+//!
+//! Each `tests/fixtures/<case>.recipe` is a small script (one operation
+//! per line) that `tests/oracle/build.php` executes with real PHP and
+//! [`run_recipe`] executes with this crate:
+//!
+//! ```text
+//! new phar|data <file> [alias=<a>] [format=zip|tar]
+//! add <name> <content>        dir <name>          stub <content>
+//! defaultstub [<index> <web>] meta <serialized>   filemeta <name> <serialized>
+//! sig md5|sha1|sha256|sha512  compressfiles gz|bz2  decompressfiles
+//! fcompress <name> gz|bz2     compress gz|bz2|none  delete <name>
+//! unset <name>                chmod <name> <octal>  setalias <alias>
+//! buffer start|stop           copy <from> <to>      convert data|exec phar|tar|zip [gz|bz2|none]
+//! ```
+//!
+//! Arguments may be `hex:`-encoded. `regenerate_fixtures` (ignored; needs
+//! `/usr/bin/php`) stores PHP's archive, the build time and PHP's listing
+//! under `tests/fixtures/<case>/`. The regular tests then check that
+//! (a) our reader lists PHP's archive exactly like PHP does, and
+//! (b) our writer, replaying the recipe at the same clock time, produces
+//! the very same bytes.
+
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
+use php_phar::object::{MetadataGet, PharFileInfo, PharObject};
+use php_phar::registry;
+use php_streams::wrapper::Wrapper;
+
+fn fixtures() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
+}
+
+fn oracle_dir() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/oracle")
+}
+
+fn arg(s: &str) -> Vec<u8> {
+    match s.strip_prefix("hex:") {
+        Some(h) => (0..h.len() / 2)
+            .map(|i| u8::from_str_radix(&h[i * 2..i * 2 + 2], 16).unwrap())
+            .collect(),
+        None => s.as_bytes().to_vec(),
+    }
+}
+
+fn skip_write(case: &str) -> bool {
+    std::fs::read_to_string(fixtures().join(format!("{case}.recipe")))
+        .unwrap_or_default()
+        .lines()
+        .any(|l| l.starts_with("# skip-write"))
+}
+
+fn recipes() -> Vec<(String, Vec<String>)> {
+    let mut out = Vec::new();
+    for e in std::fs::read_dir(fixtures()).unwrap() {
+        let p = e.unwrap().path();
+        if p.extension().is_some_and(|x| x == "recipe") {
+            let name = p.file_stem().unwrap().to_string_lossy().into_owned();
+            let lines = std::fs::read_to_string(&p)
+                .unwrap()
+                .lines()
+                .filter(|l| !l.is_empty() && !l.starts_with('#'))
+                .map(str::to_string)
+                .collect();
+            out.push((name, lines));
+        }
+    }
+    out.sort();
+    out
+}
+
+/// Whether the final archive of a recipe is a `PharData`.
+fn final_is_data(lines: &[String]) -> bool {
+    let mut data = false;
+    for l in lines {
+        let w: Vec<&str> = l.split(' ').collect();
+        match w[0] {
+            "new" => data = w[1] == "data",
+            "convert" => data = w[1] == "data",
+            _ => {}
+        }
+    }
+    data
+}
+
+fn php(args: &[&str]) -> std::process::Output {
+    Command::new("/usr/bin/php")
+        .args(["-d", "memory_limit=1G"])
+        .args(args)
+        .output()
+        .expect("run php")
+}
+
+fn metadata_value(serialized: &[u8]) -> php_runtime::Value {
+    let mut ctx = php_runtime::CollectingContext::default();
+    php_runtime::serialize::unserialize(
+        serialized,
+        &php_runtime::serialize::UnserializeOptions::default(),
+        &mut ctx,
+    )
+    .unwrap()
+    .unwrap()
+}
+
+/// Replays a recipe with this crate inside `dir`; returns the final path.
+fn run_recipe(lines: &[String], dir: &Path) -> Vec<u8> {
+    let mut obj = PharObject::new(false);
+    let mut path = Vec::new();
+    let comp = |s: &str| match s {
+        "gz" => 0x1000,
+        "bz2" => 0x2000,
+        _ => 0,
+    };
+    let fmt = |s: &str| match s {
+        "phar" => 1,
+        "tar" => 2,
+        _ => 3,
+    };
+    let reopen = |obj: &mut PharObject, c: php_phar::object::Converted| -> Vec<u8> {
+        let mut n = PharObject::new(c.is_data);
+        n.construct(&c.fname, None, 0).unwrap();
+        obj.release();
+        *obj = n;
+        c.fname
+    };
+    for l in lines {
+        let w: Vec<&str> = l.split(' ').collect();
+        let a = |i: usize| arg(w.get(i).copied().unwrap_or(""));
+        match w[0] {
+            "new" => {
+                let mut p = dir.to_string_lossy().as_bytes().to_vec();
+                p.push(b'/');
+                p.extend_from_slice(w[2].as_bytes());
+                let mut alias = None;
+                let mut format = 0;
+                for o in &w[3..] {
+                    let (k, v) = o.split_once('=').unwrap();
+                    if k == "alias" {
+                        alias = Some(arg(v));
+                    }
+                    if k == "format" {
+                        format = fmt(v);
+                    }
+                }
+                obj = PharObject::new(w[1] == "data");
+                obj.construct(&p, alias.as_deref(), format).unwrap();
+                path = p;
+            }
+            "add" => obj.offset_set(&a(1), &a(2)).unwrap(),
+            "dir" => obj.add_empty_dir(&a(1)).unwrap(),
+            "stub" => {
+                obj.set_stub(&a(1)).unwrap();
+            }
+            "defaultstub" => {
+                if w.len() > 1 {
+                    obj.set_default_stub(Some(&a(1)), Some(&a(2))).unwrap();
+                } else {
+                    obj.set_default_stub(None, None).unwrap();
+                }
+            }
+            "meta" => {
+                let s = a(1);
+                obj.set_metadata(metadata_value(&s), s).unwrap();
+            }
+            "filemeta" => {
+                let s = a(2);
+                let info_path = obj.offset_get(&a(1)).unwrap();
+                let mut fi = PharFileInfo::new();
+                fi.construct(&info_path).unwrap();
+                fi.set_metadata(metadata_value(&s), s).unwrap();
+                fi.release();
+            }
+            "delmeta" => {
+                obj.del_metadata().unwrap();
+            }
+            "sig" => {
+                let algo = match w[1] {
+                    "md5" => 1,
+                    "sha1" => 2,
+                    "sha256" => 3,
+                    _ => 4,
+                };
+                obj.set_signature_algorithm(algo, None).unwrap();
+            }
+            "compressfiles" => obj.compress_files(comp(w[1])).unwrap(),
+            "decompressfiles" => {
+                obj.decompress_files().unwrap();
+            }
+            "fcompress" | "fdecompress" | "chmod" => {
+                let info_path = obj.offset_get(&a(1)).unwrap();
+                let mut fi = PharFileInfo::new();
+                fi.construct(&info_path).unwrap();
+                match w[0] {
+                    "fcompress" => {
+                        fi.compress(comp(w[2])).unwrap();
+                    }
+                    "fdecompress" => {
+                        fi.decompress().unwrap();
+                    }
+                    _ => fi.chmod(i64::from_str_radix(w[2], 8).unwrap()).unwrap(),
+                }
+                fi.release();
+            }
+            "compress" => {
+                let c = obj.compress(comp(w[1]), None).unwrap();
+                path = reopen(&mut obj, c);
+            }
+            "decompress" => {
+                let c = obj.decompress(None).unwrap();
+                path = reopen(&mut obj, c);
+            }
+            "delete" => {
+                obj.delete(&a(1)).unwrap();
+            }
+            "unset" => obj.offset_unset(&a(1)).unwrap(),
+            "setalias" => {
+                obj.set_alias(&a(1)).unwrap();
+            }
+            "buffer" => {
+                if w[1] == "start" {
+                    obj.start_buffering().unwrap();
+                } else {
+                    obj.stop_buffering().unwrap();
+                }
+            }
+            "copy" => {
+                obj.copy(&a(1), &a(2)).unwrap();
+            }
+            "convert" => {
+                let m = w.get(3).map(|m| comp(m));
+                let c = if w[1] == "data" {
+                    obj.convert_to_data(Some(fmt(w[2])), m, None).unwrap()
+                } else {
+                    obj.convert_to_executable(Some(fmt(w[2])), m, None).unwrap()
+                };
+                path = reopen(&mut obj, c);
+            }
+            other => panic!("unknown op {other}"),
+        }
+    }
+    obj.release();
+    path
+}
+
+fn var_export_str(s: &[u8]) -> String {
+    let mut out = String::from("'");
+    for &c in s {
+        match c {
+            b'\'' => out.push_str("\\'"),
+            b'\\' => out.push_str("\\\\"),
+            _ => out.push(char::from(c)),
+        }
+    }
+    out.push('\'');
+    out
+}
+
+fn md5hex(b: &[u8]) -> String {
+    php_hash::bin2hex(&php_hash::md5(b))
+}
+
+fn meta_string(m: &MetadataGet) -> String {
+    match m {
+        MetadataGet::None => "NONE".into(),
+        MetadataGet::Serialized(s) => String::from_utf8_lossy(s).into_owned(),
+        MetadataGet::Value(v) => {
+            let mut ctx = php_runtime::CollectingContext::default();
+            String::from_utf8_lossy(&php_runtime::serialize::serialize(v, &mut ctx).unwrap())
+                .into_owned()
+        }
+    }
+}
+
+/// The Rust counterpart of `tests/oracle/list.php`.
+fn listing(path: &[u8], is_data: bool) -> String {
+    let mut out = String::new();
+    let mut p = PharObject::new(is_data);
+    if let Err(e) = p.construct(path, None, 0) {
+        return format!("EXCEPTION {}: {}\n", e.class.name(), e.message);
+    }
+    out += &format!("version: {}\n", p.get_version().unwrap());
+    out += &format!(
+        "alias: {}\n",
+        p.get_alias()
+            .unwrap()
+            .map_or("NULL".to_string(), |a| var_export_str(&a))
+    );
+    out += &format!("count: {}\n", p.count().unwrap());
+    out += &format!(
+        "signature: {}\n",
+        p.get_signature().unwrap().map_or("none".to_string(), |s| format!(
+            "{} {}",
+            s.hash_type,
+            String::from_utf8_lossy(&s.hash)
+        ))
+    );
+    out += &format!(
+        "compressed: {}\n",
+        p.is_compressed().unwrap().map_or("false".to_string(), |c| c.to_string())
+    );
+    out += &format!(
+        "format: {}\n",
+        if p.is_file_format(3).unwrap() {
+            "zip"
+        } else if p.is_file_format(2).unwrap() {
+            "tar"
+        } else {
+            "phar"
+        }
+    );
+    out += &format!("metadata: {}\n", meta_string(&p.get_metadata(false).unwrap()));
+    let stub = p.get_stub().unwrap();
+    out += &format!("stub: {} {}\n", md5hex(&stub), stub.len());
+    let mut prefix = b"phar://".to_vec();
+    prefix.extend_from_slice(&p.get_path().unwrap());
+    let w = php_phar::wrapper::PharWrapper;
+    fn walk(w: &php_phar::wrapper::PharWrapper, dir: &[u8], prefix_len: usize, out: &mut String) {
+        let Ok(mut d) = w.opendir(dir, 0, None) else {
+            return;
+        };
+        while let Some(name) = d.readdir() {
+            let mut full = dir.to_vec();
+            full.push(b'/');
+            full.extend_from_slice(&name);
+            let sb = w.url_stat(&full, 0, None).unwrap().unwrap();
+            let is_dir = sb.is_dir();
+            let mut fi = PharFileInfo::new();
+            fi.construct(&full).unwrap();
+            let rel = String::from_utf8_lossy(&full[prefix_len + 1..]).into_owned();
+            let crc = if !is_dir && fi.is_crc_checked().unwrap() {
+                (fi.get_crc32().unwrap() & 0xFFFF_FFFF).to_string()
+            } else {
+                "-".into()
+            };
+            let content = if is_dir {
+                "-".to_string()
+            } else {
+                md5hex(&fi.get_content().unwrap())
+            };
+            out.push_str(&format!(
+                "entry {rel} dir={} size={} perms={:o} mtime={} csize={} gz={} bz2={} flags={} crc={crc} meta={} md5={content}\n",
+                i32::from(is_dir),
+                sb.size,
+                sb.mode,
+                sb.mtime,
+                fi.get_compressed_size().unwrap(),
+                i32::from(fi.is_compressed(Some(0x1000)).unwrap()),
+                i32::from(fi.is_compressed(Some(0x2000)).unwrap()),
+                fi.get_phar_flags().unwrap(),
+                meta_string(&fi.get_metadata(false).unwrap()),
+            ));
+            fi.release();
+            if is_dir {
+                walk(w, &full, prefix_len, out);
+            }
+        }
+    }
+    walk(&w, &prefix, prefix.len(), &mut out);
+    p.release();
+    out
+}
+
+fn case_dir(case: &str) -> PathBuf {
+    fixtures().join(case)
+}
+
+fn fixture_archive(case: &str) -> Option<(PathBuf, i64, String)> {
+    let dir = case_dir(case);
+    let name = std::fs::read_to_string(dir.join("name")).ok()?;
+    let time = std::fs::read_to_string(dir.join("time")).ok()?.trim().parse().ok()?;
+    let list = std::fs::read_to_string(dir.join("list.txt")).ok()?;
+    Some((dir.join(name.trim()), time, list))
+}
+
+fn scratch(case: &str) -> PathBuf {
+    let d = std::env::temp_dir().join(format!("php-phar-oracle-{}-{case}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&d);
+    std::fs::create_dir_all(&d).unwrap();
+    d
+}
+
+#[test]
+#[ignore = "regenerates fixtures with /usr/bin/php"]
+fn regenerate_fixtures() {
+    for (case, lines) in recipes() {
+        let dir = case_dir(&case);
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut done = false;
+        for _attempt in 0..10 {
+            let work = scratch(&case);
+            let t0 = php_phar::sys::now();
+            let recipe = fixtures().join(format!("{case}.recipe"));
+            let o = php(&[
+                "-d",
+                "phar.readonly=0",
+                oracle_dir().join("build.php").to_str().unwrap(),
+                recipe.to_str().unwrap(),
+                work.to_str().unwrap(),
+            ]);
+            let t1 = php_phar::sys::now();
+            assert!(o.status.success(), "{case}: {}", String::from_utf8_lossy(&o.stderr));
+            if t0 != t1 {
+                continue;
+            }
+            let built = String::from_utf8(o.stdout).unwrap().trim().to_string();
+            let name = Path::new(&built).file_name().unwrap().to_owned();
+            std::fs::copy(&built, dir.join(&name)).unwrap();
+            std::fs::write(dir.join("name"), name.to_string_lossy().as_bytes()).unwrap();
+            std::fs::write(dir.join("time"), t0.to_string()).unwrap();
+            let kind = if final_is_data(&lines) { "data" } else { "phar" };
+            let l = php(&[
+                oracle_dir().join("list.php").to_str().unwrap(),
+                dir.join(&name).to_str().unwrap(),
+                kind,
+            ]);
+            let list = String::from_utf8_lossy(&l.stdout).replace(dir.to_str().unwrap(), "%DIR%");
+            std::fs::write(dir.join("list.txt"), list).unwrap();
+            let _ = std::fs::remove_dir_all(&work);
+            done = true;
+            break;
+        }
+        assert!(done, "{case}: could not build within one second");
+    }
+}
+
+#[test]
+fn reads_php_archives_like_php() {
+    php_phar::stub::set_flavor(php_phar::stub::Flavor::Php83);
+    let mut failures = Vec::new();
+    for (case, lines) in recipes() {
+        let Some((archive, _, expected)) = fixture_archive(&case) else {
+            continue;
+        };
+        let ours = listing(archive.to_str().unwrap().as_bytes(), final_is_data(&lines))
+            .replace(case_dir(&case).to_str().unwrap(), "%DIR%");
+        if ours != expected {
+            failures.push(format!("== {case}\n--- php\n{expected}--- ours\n{ours}"));
+        }
+        registry::reset_request();
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+fn writes_archives_byte_identical_to_php() {
+    php_phar::stub::set_flavor(php_phar::stub::Flavor::Php83);
+    registry::set_ini("phar.readonly", false, true);
+    let mut failures = Vec::new();
+    for (case, lines) in recipes() {
+        let Some((archive, time, _)) = fixture_archive(&case) else {
+            continue;
+        };
+        if skip_write(&case) {
+            continue;
+        }
+        let work = scratch(&case);
+        // Ubuntu's PHP 8.3 build writes 0 for entry timestamps (a
+        // reproducible-build patch) but the real time for magic tar/zip
+        // entries.
+        php_phar::sys::set_time_override(Some(time));
+        php_phar::sys::set_entry_time_override(Some(0));
+        let built = run_recipe(&lines, &work);
+        php_phar::sys::set_time_override(None);
+        php_phar::sys::set_entry_time_override(None);
+        registry::reset_request();
+        let ours = std::fs::read(String::from_utf8(built).unwrap()).unwrap();
+        let theirs = std::fs::read(&archive).unwrap();
+        if ours != theirs {
+            if std::env::var_os("PHAR_ORACLE_KEEP").is_some() {
+                std::fs::write(case_dir(&case).join("ours.bin"), &ours).unwrap();
+            }
+            let first = ours.iter().zip(&theirs).position(|(a, b)| a != b);
+            failures.push(format!(
+                "{case}: {} vs {} bytes, first difference at {first:?}",
+                ours.len(),
+                theirs.len()
+            ));
+        }
+        let _ = std::fs::remove_dir_all(&work);
+    }
+    registry::set_ini("phar.readonly", true, true);
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+#[ignore = "runs /usr/bin/php on archives written by this crate"]
+fn php_reads_our_archives() {
+    php_phar::stub::set_flavor(php_phar::stub::Flavor::Php83);
+    php_phar::sys::set_entry_time_override(Some(0));
+    registry::set_ini("phar.readonly", false, true);
+    let mut failures = Vec::new();
+    for (case, lines) in recipes() {
+        let work = scratch(&case);
+        let built = run_recipe(&lines, &work);
+        registry::reset_request();
+        let path = String::from_utf8(built).unwrap();
+        let kind = if final_is_data(&lines) { "data" } else { "phar" };
+        let l = php(&[oracle_dir().join("list.php").to_str().unwrap(), &path, kind]);
+        registry::set_ini("phar.readonly", true, true);
+        let ours = listing(path.as_bytes(), kind == "data");
+        registry::set_ini("phar.readonly", false, true);
+        registry::reset_request();
+        let theirs = String::from_utf8_lossy(&l.stdout).into_owned();
+        if ours != theirs {
+            failures.push(format!("== {case}\n--- php\n{theirs}--- ours\n{ours}"));
+        }
+        let _ = std::fs::remove_dir_all(&work);
+    }
+    registry::set_ini("phar.readonly", true, true);
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}

@@ -492,7 +492,7 @@ pub fn flush(
     put32(&mut newfile, to_u32(main_meta.len()));
     newfile.extend_from_slice(&main_meta);
 
-    let mytime = crate::sys::now32();
+    let mytime = crate::sys::entry_now32();
     for key in &keys {
         let Some(e) = ar.manifest.get(key) else { continue };
         if e.is_deleted || e.is_mounted {

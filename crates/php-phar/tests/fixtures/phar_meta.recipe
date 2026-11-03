@@ -1,0 +1,4 @@
+new phar meta.phar
+add f.txt data
+meta hex:613a313a7b733a333a22666f6f223b733a333a22626172223b7d
+filemeta f.txt hex:733a353a2268656c6c6f223b

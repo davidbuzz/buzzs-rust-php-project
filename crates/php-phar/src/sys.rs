@@ -42,6 +42,28 @@ pub fn now32() -> u32 {
     (now() & 0xFFFF_FFFF) as u32
 }
 
+thread_local! {
+    static ENTRY_NOW: Cell<Option<i64>> = const { Cell::new(None) };
+}
+
+/// Pins the clock used for *entry* timestamps (new entries and the phar
+/// manifest's per-entry times) separately from [`now`]. Some distribution
+/// builds of PHP (e.g. Ubuntu's, for reproducible builds) write `0` there
+/// while still stamping magic tar/zip entries with the real time; this
+/// lets oracle tests reproduce such archives byte for byte.
+pub fn set_entry_time_override(t: Option<i64>) {
+    ENTRY_NOW.with(|n| n.set(t));
+}
+
+/// `time(NULL)` as used for entry timestamps (see
+/// [`set_entry_time_override`]).
+pub fn entry_now32() -> u32 {
+    match ENTRY_NOW.with(Cell::get) {
+        Some(t) => (t & 0xFFFF_FFFF) as u32,
+        None => now32(),
+    }
+}
+
 /// Broken-down local time (the fields phar uses).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Tm {

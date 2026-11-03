@@ -1,0 +1,5 @@
+new phar delete.phar
+add a x
+add b y
+add c z
+delete b

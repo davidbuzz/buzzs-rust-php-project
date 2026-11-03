@@ -1,0 +1,10 @@
+version: 1.1.0
+alias: '%DIR%/delete.phar'
+count: 2
+signature: SHA-256 F55FDFB6C97D13741E7C1AC0859E57A8BDF3D467A7E54703625BE34741E3F528
+compressed: false
+format: phar
+metadata: NONE
+stub: f51304254cb98cd97c5a4de9dff96034 6641
+entry a dir=0 size=1 perms=100444 mtime=0 csize=1 gz=0 bz2=0 flags=0 crc=2363233923 meta=NONE md5=9dd4e461268c8034f5c8564e155c67a6
+entry c dir=0 size=1 perms=100444 mtime=0 csize=1 gz=0 bz2=0 flags=0 crc=1657960367 meta=NONE md5=fbade9e36a3f36d3d676c1b808451dd7

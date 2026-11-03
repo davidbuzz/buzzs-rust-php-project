@@ -1,0 +1,2 @@
+new phar alias.phar alias=myalias
+add x.txt hex:78787878

@@ -1,0 +1,9 @@
+version: 1.1.0
+alias: '%DIR%/unset.phar'
+count: 1
+signature: SHA-256 A104C9C26128F2125407902A8B0BDB2AEF3743BFEEB9D363EC69FC0EF2000F6A
+compressed: false
+format: phar
+metadata: NONE
+stub: f51304254cb98cd97c5a4de9dff96034 6641
+entry b dir=0 size=1 perms=100444 mtime=0 csize=1 gz=0 bz2=0 flags=0 crc=4225443349 meta=NONE md5=415290769594460e2e485922904f345d

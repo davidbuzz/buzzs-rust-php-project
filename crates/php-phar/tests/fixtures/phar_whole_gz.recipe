@@ -1,0 +1,3 @@
+new phar whole.phar
+add a.txt hello
+compress gz

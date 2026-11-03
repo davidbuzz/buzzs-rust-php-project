@@ -1,0 +1,9 @@
+version: 1.1.0
+alias: '%DIR%/meta.phar'
+count: 1
+signature: SHA-256 263BE0B6830DD059F483D3C06419CB999E87BE00F8B6E8F25ECB0DE63A75906A
+compressed: false
+format: phar
+metadata: a:1:{s:3:"foo";s:3:"bar";}
+stub: f51304254cb98cd97c5a4de9dff96034 6641
+entry f.txt dir=0 size=4 perms=100444 mtime=0 csize=4 gz=0 bz2=0 flags=0 crc=2918445923 meta=s:5:"hello"; md5=8d777f385d3dfec8815d20f7496026dc

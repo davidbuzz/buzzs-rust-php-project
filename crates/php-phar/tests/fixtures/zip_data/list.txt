@@ -1,0 +1,12 @@
+version: 
+alias: '%DIR%/data.zip'
+count: 3
+signature: none
+compressed: false
+format: zip
+metadata: NONE
+stub: d41d8cd98f00b204e9800998ecf8427e 0
+entry a.txt dir=0 size=5 perms=100664 mtime=315496800 csize=5 gz=0 bz2=0 flags=0 crc=- meta=NONE md5=5d41402abc4b2a76b9719d911017c592
+entry d dir=1 size=0 perms=40777 mtime=0 csize=0 gz=0 bz2=0 flags=0 crc=- meta=NONE md5=-
+entry d/b.txt dir=0 size=5 perms=100664 mtime=315496800 csize=5 gz=0 bz2=0 flags=0 crc=- meta=NONE md5=7d793037a0760186574b0282f2f435e7
+entry empty dir=1 size=0 perms=40777 mtime=315496800 csize=0 gz=0 bz2=0 flags=0 crc=- meta=NONE md5=-

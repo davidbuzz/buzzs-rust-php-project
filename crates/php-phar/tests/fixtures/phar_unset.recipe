@@ -1,0 +1,4 @@
+new phar unset.phar
+add a x
+add b y
+unset a

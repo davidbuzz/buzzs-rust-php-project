@@ -1,0 +1,3 @@
+new phar chmod.phar
+add a.sh hex:2321
+chmod a.sh 755

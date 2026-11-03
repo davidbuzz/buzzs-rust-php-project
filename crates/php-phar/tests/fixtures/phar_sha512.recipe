@@ -1,0 +1,3 @@
+new phar sha512.phar
+add a hex:41
+sig sha512

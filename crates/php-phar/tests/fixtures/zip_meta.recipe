@@ -1,0 +1,4 @@
+new data meta.zip
+add a.txt hello
+meta hex:733a333a22616263223b
+filemeta a.txt hex:693a373b

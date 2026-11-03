@@ -1,0 +1,9 @@
+version: 1.1.0
+alias: '%DIR%/sha1.phar'
+count: 1
+signature: SHA-1 6176538830EE20CA5F5D08860B2D2A96F808D6EE
+compressed: false
+format: phar
+metadata: NONE
+stub: f51304254cb98cd97c5a4de9dff96034 6641
+entry a dir=0 size=1 perms=100444 mtime=0 csize=1 gz=0 bz2=0 flags=0 crc=3554254475 meta=NONE md5=7fc56270e7a70fa81a5935b72eacbe29

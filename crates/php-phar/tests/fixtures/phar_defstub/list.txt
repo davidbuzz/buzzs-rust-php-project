@@ -1,0 +1,9 @@
+version: 1.1.0
+alias: '%DIR%/defstub.phar'
+count: 1
+signature: SHA-256 5C2777828C277B1D86CF5CDA33963650C6950C47E0C11274B499D6E802BD443A
+compressed: false
+format: phar
+metadata: NONE
+stub: 8cf4f570fcac9fc3f7f1b6d82e59b073 6641
+entry index.php dir=0 size=1 perms=100444 mtime=0 csize=1 gz=0 bz2=0 flags=0 crc=2363233923 meta=NONE md5=9dd4e461268c8034f5c8564e155c67a6

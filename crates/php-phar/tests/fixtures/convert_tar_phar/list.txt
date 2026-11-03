@@ -1,0 +1,9 @@
+version: 1.1.0
+alias: '%DIR%/convt.phar'
+count: 2
+signature: SHA-256 8D3147C17A341EF695D62E6A8A6C2CCF687BE75581069F1D0CA2DC01D1777A6E
+compressed: false
+format: phar
+metadata: NONE
+stub: f51304254cb98cd97c5a4de9dff96034 6641
+entry a.txt dir=0 size=5 perms=100444 mtime=0 csize=5 gz=0 bz2=0 flags=0 crc=907060870 meta=NONE md5=5d41402abc4b2a76b9719d911017c592

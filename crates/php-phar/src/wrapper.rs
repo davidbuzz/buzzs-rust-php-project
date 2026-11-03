@@ -515,7 +515,7 @@ impl PharWrapper {
                 mode,
                 0,
                 true,
-                crate::sys::now32(),
+                crate::sys::entry_now32(),
             )
             .map_err(|e| {
                 OpenError::msg(e.unwrap_or_else(|| {

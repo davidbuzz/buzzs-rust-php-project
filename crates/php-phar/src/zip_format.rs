@@ -156,6 +156,7 @@ pub fn parse(image: Rc<Vec<u8>>, fname: &[u8], require_hash: bool) -> Result<Par
     ar.is_brandnew = false;
     ar.is_writeable = false;
     ar.is_zip = true;
+    ar.version = String::new();
     ar.metadata = Metadata::from_serialized(comment);
     let cdir_offset = get32(loc, 16) as usize;
     let mut pos = cdir_offset;

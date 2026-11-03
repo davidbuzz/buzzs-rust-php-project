@@ -1,0 +1,3 @@
+new phar setalias.phar
+add a.txt hello
+setalias newalias

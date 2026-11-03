@@ -1,0 +1,3 @@
+new phar convd.phar
+add a.txt hello
+convert data tar

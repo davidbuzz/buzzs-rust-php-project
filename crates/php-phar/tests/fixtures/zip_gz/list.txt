@@ -1,0 +1,10 @@
+version: 
+alias: '%DIR%/gz.zip'
+count: 2
+signature: none
+compressed: false
+format: zip
+metadata: NONE
+stub: d41d8cd98f00b204e9800998ecf8427e 0
+entry a.txt dir=0 size=270 perms=100664 mtime=315496800 csize=9 gz=1 bz2=0 flags=0 crc=- meta=NONE md5=3dca3f8badd4cd1b6d3b231ccbabdd82
+entry b.txt dir=0 size=5 perms=100664 mtime=315496800 csize=7 gz=1 bz2=0 flags=0 crc=- meta=NONE md5=5d41402abc4b2a76b9719d911017c592

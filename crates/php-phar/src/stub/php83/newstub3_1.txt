@@ -1,0 +1,97 @@
+ction tmpdir()
+{
+if (strpos(PHP_OS, 'WIN') !== false) {
+if ($var = getenv('TMP') ? getenv('TMP') : getenv('TEMP')) {
+return $var;
+}
+if (is_dir('/temp') || mkdir('/temp')) {
+return realpath('/temp');
+}
+return false;
+}
+if ($var = getenv('TMPDIR')) {
+return $var;
+}
+return realpath('/tmp');
+}
+
+static function _unpack($m)
+{
+$info = unpack('V', substr($m, 0, 4));
+ $l = unpack('V', substr($m, 10, 4));
+$m = substr($m, 14 + $l[1]);
+$s = unpack('V', substr($m, 0, 4));
+$o = 0;
+$start = 4 + $s[1];
+$ret['c'] = 0;
+
+for ($i = 0; $i < $info[1]; $i++) {
+ $len = unpack('V', substr($m, $start, 4));
+$start += 4;
+ $savepath = substr($m, $start, $len[1]);
+$start += $len[1];
+   $ret['m'][$savepath] = array_values(unpack('Va/Vb/Vc/Vd/Ve/Vf', substr($m, $start, 24)));
+$ret['m'][$savepath][3] = sprintf('%u', $ret['m'][$savepath][3]
+& 0xffffffff);
+$ret['m'][$savepath][7] = $o;
+$o += $ret['m'][$savepath][2];
+$start += 24 + $ret['m'][$savepath][5];
+$ret['c'] |= $ret['m'][$savepath][4] & self::MASK;
+}
+return $ret;
+}
+
+static function extractFile($path, $entry, $fp)
+{
+$data = '';
+$c = $entry[2];
+
+while ($c) {
+if ($c < 8192) {
+$data .= @fread($fp, $c);
+$c = 0;
+} else {
+$c -= 8192;
+$data .= @fread($fp, 8192);
+}
+}
+
+if ($entry[4] & self::GZ) {
+$data = gzinflate($data);
+} elseif ($entry[4] & self::BZ2) {
+$data = bzdecompress($data);
+}
+
+if (strlen($data) != $entry[0]) {
+die("Invalid internal .phar file (size error " . strlen($data) . " != " .
+$stat[7] . ")");
+}
+
+if ($entry[3] != sprintf("%u", crc32($data) & 0xffffffff)) {
+die("Invalid internal .phar file (checksum error)");
+}
+
+return $data;
+}
+
+static function _removeTmpFiles($temp, $origdir)
+{
+chdir($temp);
+
+foreach (glob('*') as $f) {
+if (file_exists($f)) {
+is_dir($f) ? @rmdir($f) : @unlink($f);
+if (file_exists($f) && is_dir($f)) {
+self::_removeTmpFiles($f, getcwd());
+}
+}
+}
+
+@rmdir($temp);
+clearstatcache();
+chdir($origdir);
+}
+}
+
+Extract_Phar::go();
+__HALT_COMPILER(); ?>

@@ -13,6 +13,38 @@ const NEWSTUB3_1: &[u8] = include_bytes!("stub/newstub3_1.txt");
 /// `newstub_len` in `stub.h`.
 const NEWSTUB_LEN: usize = 6641;
 
+/// The PHP 8.3 release-branch stub (differs from master in a few casts and
+/// an HTML typo fix). Only used through [`set_flavor`], for byte-exact
+/// comparisons against a PHP 8.3 binary.
+const PHP83: [&[u8]; 6] = [
+    include_bytes!("stub/php83/newstub0.txt"),
+    include_bytes!("stub/php83/newstub1_0.txt"),
+    include_bytes!("stub/php83/newstub1_1.txt"),
+    include_bytes!("stub/php83/newstub2.txt"),
+    include_bytes!("stub/php83/newstub3_0.txt"),
+    include_bytes!("stub/php83/newstub3_1.txt"),
+];
+const PHP83_LEN: usize = 6623;
+
+/// Which `stub.h` the default stub is generated from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Flavor {
+    /// php-src master (the reference implementation).
+    #[default]
+    Master,
+    /// The PHP 8.3 branch (for oracle tests against `/usr/bin/php` 8.3).
+    Php83,
+}
+
+thread_local! {
+    static FLAVOR: std::cell::Cell<Flavor> = const { std::cell::Cell::new(Flavor::Master) };
+}
+
+/// Selects the default stub text (testing aid).
+pub fn set_flavor(f: Flavor) {
+    FLAVOR.with(|c| c.set(f));
+}
+
 /// `phar_create_default_stub()`. `None` arguments mean `"index.php"`.
 /// Errors carry the `PharException` message.
 pub fn create_default_stub(index: Option<&[u8]>, web: Option<&[u8]>) -> Result<Vec<u8>, String> {
@@ -33,17 +65,24 @@ pub fn create_default_stub(index: Option<&[u8]>, web: Option<&[u8]>) -> Result<V
     // `%s` stops at an embedded NUL byte.
     let index = crate::util::cstr(index);
     let web = crate::util::cstr(web);
-    let total = index.len() + 1 + web.len() + 1 + NEWSTUB_LEN;
+    let (parts, base) = match FLAVOR.with(std::cell::Cell::get) {
+        Flavor::Master => (
+            [NEWSTUB0, NEWSTUB1_0, NEWSTUB1_1, NEWSTUB2, NEWSTUB3_0, NEWSTUB3_1],
+            NEWSTUB_LEN,
+        ),
+        Flavor::Php83 => (PHP83, PHP83_LEN),
+    };
+    let total = index.len() + 1 + web.len() + 1 + base;
     let mut out = Vec::with_capacity(total);
-    out.extend_from_slice(NEWSTUB0);
+    out.extend_from_slice(parts[0]);
     out.extend_from_slice(web);
-    out.extend_from_slice(NEWSTUB1_0);
-    out.extend_from_slice(NEWSTUB1_1);
+    out.extend_from_slice(parts[1]);
+    out.extend_from_slice(parts[2]);
     out.extend_from_slice(index);
-    out.extend_from_slice(NEWSTUB2);
+    out.extend_from_slice(parts[3]);
     out.extend_from_slice(total.to_string().as_bytes());
-    out.extend_from_slice(NEWSTUB3_0);
-    out.extend_from_slice(NEWSTUB3_1);
+    out.extend_from_slice(parts[4]);
+    out.extend_from_slice(parts[5]);
     // strpprintf() truncates at its size argument.
     out.truncate(total);
     Ok(out)
@@ -72,6 +111,15 @@ mod tests {
         assert!(crate::util::find(&s, b"const LEN = 6661;").is_some());
         let e = create_default_stub(Some(&[b'a'; 401]), None).unwrap_err();
         assert!(e.contains("was 401 characters long"));
+    }
+
+    #[test]
+    fn php83_flavor() {
+        set_flavor(Flavor::Php83);
+        let s = create_default_stub(None, None).unwrap();
+        set_flavor(Flavor::Master);
+        assert_eq!(s.len(), 6641);
+        assert!(crate::util::find(&s, b"const LEN = 6643;").is_some());
     }
 
     #[test]

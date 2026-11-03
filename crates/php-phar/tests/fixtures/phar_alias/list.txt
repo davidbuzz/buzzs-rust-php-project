@@ -1,0 +1,9 @@
+version: 1.1.0
+alias: 'myalias'
+count: 1
+signature: SHA-256 7A15EA6569CF4AE3942440B2C941B457ADB2AF8544A5F7C370B1B1BFF414D0A0
+compressed: false
+format: phar
+metadata: NONE
+stub: f51304254cb98cd97c5a4de9dff96034 6641
+entry x.txt dir=0 size=4 perms=100444 mtime=0 csize=4 gz=0 bz2=0 flags=0 crc=1813341303 meta=NONE md5=ea416ed0759d46a8de58f63a59077499

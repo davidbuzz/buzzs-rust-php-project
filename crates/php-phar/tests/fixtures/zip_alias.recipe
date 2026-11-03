@@ -1,0 +1,2 @@
+new phar alias.phar.zip alias=zipalias
+add a.txt hello

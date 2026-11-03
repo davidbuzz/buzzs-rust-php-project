@@ -1,0 +1,9 @@
+version: 
+alias: '%DIR%/convgz.phar.tar.gz'
+count: 2
+signature: SHA-256 37B0024B1A728FE864E14F493E2D4E80608B3B7BFC35D381A2123CE0B6C83AA7
+compressed: 4096
+format: tar
+metadata: NONE
+stub: f6a3e44876aa82b6ea1e2305fbfb330a 60
+entry a.txt dir=0 size=150 perms=100444 mtime=0 csize=150 gz=0 bz2=0 flags=0 crc=0 meta=NONE md5=891e9afd98ff572ce987c5eba6d17ca7

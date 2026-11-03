@@ -1,0 +1,9 @@
+version: 
+alias: '%DIR%/meta.tar'
+count: 3
+signature: none
+compressed: false
+format: tar
+metadata: i:42;
+stub: d41d8cd98f00b204e9800998ecf8427e 0
+entry a.txt dir=0 size=5 perms=100664 mtime=0 csize=5 gz=0 bz2=0 flags=0 crc=0 meta=b:1; md5=5d41402abc4b2a76b9719d911017c592

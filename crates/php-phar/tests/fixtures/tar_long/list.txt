@@ -1,0 +1,11 @@
+version: 
+alias: '%DIR%/long.tar'
+count: 2
+signature: none
+compressed: false
+format: tar
+metadata: NONE
+stub: d41d8cd98f00b204e9800998ecf8427e 0
+entry dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd dir=1 size=0 perms=40777 mtime=0 csize=0 gz=0 bz2=0 flags=0 crc=- meta=NONE md5=-
+entry dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd/ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff.txt dir=0 size=8 perms=100664 mtime=0 csize=8 gz=0 bz2=0 flags=0 crc=0 meta=NONE md5=f0da23360a85518e8ab11b460ae5840d
+entry nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn dir=0 size=3 perms=100664 mtime=0 csize=3 gz=0 bz2=0 flags=0 crc=0 meta=NONE md5=3b38947218d23e6df4b081c1138b79ba

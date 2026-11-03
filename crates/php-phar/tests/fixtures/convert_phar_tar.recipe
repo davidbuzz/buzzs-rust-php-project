@@ -1,0 +1,4 @@
+new phar conv.phar
+add a.txt hello
+add d/b.txt world
+convert exec tar

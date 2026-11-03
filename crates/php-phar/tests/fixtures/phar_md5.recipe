@@ -1,0 +1,3 @@
+new phar md5.phar
+add a hex:41
+sig md5

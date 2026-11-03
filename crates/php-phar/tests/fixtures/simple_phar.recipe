@@ -1,0 +1,3 @@
+new phar simple.phar
+add a.php hex:3c3f706870206563686f2022612223
+add b/c.txt hello
