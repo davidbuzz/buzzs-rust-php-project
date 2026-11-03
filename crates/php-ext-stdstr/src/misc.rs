@@ -2,8 +2,10 @@
 //! `soundex.c`, `metaphone.c` and `levenshtein.c`.
 
 use php_runtime::{Value, ZArray};
-use php_stdstr::error::{ErrorKind, Notices, StdError, StdResult};
-use php_stdstr::pack::{self, PackArg, PackValue, UnpackKey, UnpackValue};
+use std::cell::RefCell;
+
+use php_stdstr::error::{Notices, StdResult};
+use php_stdstr::pack::{self, PackValue, UnpackKey, UnpackValue};
 use php_stdstr::scanf::{self, ScanValue, SscanfResult};
 use php_stdstr::{analysis, quoted_printable, uuencode, versioning};
 use php_vm::ext::{Args, ModuleBuilder, VmResult};
@@ -11,15 +13,46 @@ use php_vm::Vm;
 
 use crate::{assoc, bytes, check, deprecated_function, emit, mem, opt_bytes, to_str};
 
-/// A `pack()` argument with its conversions computed up front (the
-/// library's [`PackValue`] has no access to the VM).
-struct VmPackArg {
-    long: i64,
-    double: f64,
-    bytes: StdResult<Vec<u8>>,
+/// The conversion `pack()` applies to an argument.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Conv {
+    Long,
+    Double,
+    Bytes,
 }
 
-impl PackValue for VmPackArg {
+/// First-pass `pack()` argument: records the conversions the format asks
+/// for (the library's [`PackValue`] has no access to the VM, and PHP's
+/// conversions may warn or call `__toString()`).
+struct PackRecorder<'a> {
+    idx: usize,
+    log: &'a RefCell<Vec<(usize, Conv)>>,
+}
+
+impl PackValue for PackRecorder<'_> {
+    fn to_long(&self) -> i64 {
+        self.log.borrow_mut().push((self.idx, Conv::Long));
+        0
+    }
+    fn to_double(&self) -> f64 {
+        self.log.borrow_mut().push((self.idx, Conv::Double));
+        0.0
+    }
+    fn to_bytes(&self) -> StdResult<Vec<u8>> {
+        self.log.borrow_mut().push((self.idx, Conv::Bytes));
+        Ok(Vec::new())
+    }
+}
+
+/// Second-pass `pack()` argument with the VM-converted values.
+#[derive(Default)]
+struct PackConverted {
+    long: i64,
+    double: f64,
+    bytes: Vec<u8>,
+}
+
+impl PackValue for PackConverted {
     fn to_long(&self) -> i64 {
         self.long
     }
@@ -27,58 +60,33 @@ impl PackValue for VmPackArg {
         self.double
     }
     fn to_bytes(&self) -> StdResult<Vec<u8>> {
-        self.bytes.clone()
-    }
-}
-
-impl VmPackArg {
-    fn from_scalar(p: &PackArg) -> Self {
-        Self {
-            long: p.to_long(),
-            double: p.to_double(),
-            bytes: p.to_bytes(),
-        }
-    }
-
-    fn new(vm: &mut Vm, v: &Value) -> VmResult<Self> {
-        Ok(match v {
-            Value::Null => Self::from_scalar(&PackArg::Null),
-            Value::Bool(b) => Self::from_scalar(&PackArg::Bool(*b)),
-            Value::Int(i) => Self::from_scalar(&PackArg::Int(*i)),
-            Value::Float(f) => Self::from_scalar(&PackArg::Float(*f)),
-            Value::Str(s) => Self::from_scalar(&PackArg::Str(s.as_bytes().to_vec())),
-            Value::Reference(r) => Self::new(vm, &r.get())?,
-            Value::Array(arr) => {
-                let n = i64::from(!arr.is_empty());
-                Self {
-                    long: n,
-                    #[allow(clippy::cast_precision_loss)]
-                    double: n as f64,
-                    bytes: Ok(b"Array".to_vec()),
-                }
-            }
-            other => {
-                let s = vm.value_to_string(other);
-                Self {
-                    long: 1,
-                    double: 1.0,
-                    bytes: s.map(|s| s.as_bytes().to_vec()).map_err(|_| {
-                        StdError::new(ErrorKind::Error, "Object could not be converted to string")
-                    }),
-                }
-            }
-        })
+        Ok(self.bytes.clone())
     }
 }
 
 fn pack_fn(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let format = a.str(0);
-    let mut args = Vec::with_capacity(a.values.len().saturating_sub(1));
-    for v in a.values.iter().skip(1) {
-        args.push(VmPackArg::new(vm, v)?);
+    let values: Vec<Value> = a.values.iter().skip(1).map(Value::deref).collect();
+    let log = RefCell::new(Vec::new());
+    {
+        let rec: Vec<PackRecorder<'_>> = (0..values.len())
+            .map(|idx| PackRecorder { idx, log: &log })
+            .collect();
+        let mut sink = Notices::new();
+        // Format errors are reported by the second pass.
+        let _ = pack::pack(format.as_bytes(), &rec, &mut sink);
+    }
+    let mut conv: Vec<PackConverted> = values.iter().map(|_| PackConverted::default()).collect();
+    for (idx, kind) in log.into_inner() {
+        let v = &values[idx];
+        match kind {
+            Conv::Long => conv[idx].long = vm.value_to_int(v)?,
+            Conv::Double => conv[idx].double = vm.value_to_float(v)?,
+            Conv::Bytes => conv[idx].bytes = to_str(vm, v)?.as_bytes().to_vec(),
+        }
     }
     let mut n = Notices::new();
-    let r = pack::pack(format.as_bytes(), &args, &mut n);
+    let r = pack::pack(format.as_bytes(), &conv, &mut n);
     emit(vm, n)?;
     Ok(bytes(check(vm, r)?))
 }
