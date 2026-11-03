@@ -1269,7 +1269,7 @@ impl TestHost {
 pub fn phpt_expect(dir: &str, file: &str) -> Option<(String, bool)> {
     let root = env!("CARGO_MANIFEST_DIR");
     let path = format!("{root}/../../modules/php-src/ext/{dir}/tests/{file}");
-    let text = std::fs::read_to_string(path).ok()?;
+    let text = String::from_utf8_lossy(&std::fs::read(path).ok()?).into_owned();
     let mut section = None;
     let mut out = String::new();
     for line in text.split_inclusive('\n') {
@@ -1389,6 +1389,12 @@ pub fn expectf_match(pattern: &str, text: &str) -> bool {
 /// printing a diff) when they differ.
 pub fn check_phpt(dir: &str, file: &str, output: &str) -> bool {
     let Some((expected, is_format)) = phpt_expect(dir, file) else {
+        let root = env!("CARGO_MANIFEST_DIR");
+        let tests = format!("{root}/../../modules/php-src/ext/{dir}/tests");
+        assert!(
+            !std::path::Path::new(&tests).exists(),
+            "{file}: no EXPECT section found"
+        );
         eprintln!("skip {file}: php-src tests not available");
         return true;
     };
