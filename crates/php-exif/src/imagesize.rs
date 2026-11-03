@@ -5,6 +5,7 @@ use std::io::{Cursor, Read, Seek};
 use php_runtime::{ArrayKey, HashTable, Value, ZArray};
 
 use crate::avif;
+use crate::budget::{Budget, MemoryLimit};
 use crate::diag::Diagnostic;
 use crate::imagetype::{self, getimagetype, image_type_to_mime_type};
 use crate::inflate::{self, Outcome};
@@ -79,11 +80,37 @@ fn key(s: &str) -> ArrayKey {
 /// `getimagesize($filename, &$image_info)` on an already opened stream.
 /// `input` is the file name used in "Error reading from %s!" notices.
 pub fn getimagesize<R: Read + Seek>(reader: R, input: &[u8], want_info: bool) -> ImageSizeOutcome {
+    getimagesize_limited(reader, input, want_info, None)
+}
+
+/// [`getimagesize`] under a `memory_limit`: the SWC decompression buffer
+/// and the XBM line buffers are accounted, and exceeding the limit yields
+/// `info == None` plus a final [`crate::diag::Level::Error`] diagnostic.
+pub fn getimagesize_limited<R: Read + Seek>(
+    reader: R,
+    input: &[u8],
+    want_info: bool,
+    memory: Option<MemoryLimit>,
+) -> ImageSizeOutcome {
     let mut stream = PhpStream::new(reader);
     let mut diags = Vec::new();
     let mut app = want_info.then(HashTable::new);
-    let image_type = getimagetype(&mut stream, input, &mut diags);
-    let info = handle(&mut stream, image_type, app.as_mut(), &mut diags);
+    let mut budget = Budget::new(memory);
+    let image_type = getimagetype(&mut stream, input, &mut diags, &mut budget);
+    let mut info = None;
+    if !budget.is_exhausted() {
+        info = handle(
+            &mut stream,
+            image_type,
+            app.as_mut(),
+            &mut diags,
+            &mut budget,
+        );
+    }
+    if let Some(fatal) = budget.exhausted.take() {
+        diags.push(fatal);
+        info = None;
+    }
     ImageSizeOutcome {
         image_type,
         info,
@@ -97,18 +124,29 @@ pub fn getimagesizefromstring(data: &[u8], want_info: bool) -> ImageSizeOutcome 
     getimagesize(Cursor::new(data), data, want_info)
 }
 
+/// [`getimagesizefromstring`] under a `memory_limit` (see
+/// [`getimagesize_limited`]).
+pub fn getimagesizefromstring_limited(
+    data: &[u8],
+    want_info: bool,
+    memory: Option<MemoryLimit>,
+) -> ImageSizeOutcome {
+    getimagesize_limited(Cursor::new(data), data, want_info, memory)
+}
+
 fn handle<R: Read + Seek>(
     s: &mut PhpStream<R>,
     itype: i64,
     app: Option<&mut HashTable>,
     diags: &mut Vec<Diagnostic>,
+    budget: &mut Budget,
 ) -> Option<GfxInfo> {
     match itype {
         imagetype::IMAGETYPE_GIF => handle_gif(s),
         imagetype::IMAGETYPE_JPEG => handle_jpeg(s, app, diags),
         imagetype::IMAGETYPE_PNG => handle_png(s),
         imagetype::IMAGETYPE_SWF => handle_swf(s),
-        imagetype::IMAGETYPE_SWC => handle_swc(s),
+        imagetype::IMAGETYPE_SWC => handle_swc(s, budget),
         imagetype::IMAGETYPE_PSD => handle_psd(s),
         imagetype::IMAGETYPE_BMP => handle_bmp(s),
         imagetype::IMAGETYPE_TIFF_II => handle_tiff(s, false),
@@ -121,7 +159,7 @@ fn handle<R: Read + Seek>(
             height,
             ..GfxInfo::default()
         }),
-        imagetype::IMAGETYPE_XBM => get_xbm(s).map(|(width, height)| GfxInfo {
+        imagetype::IMAGETYPE_XBM => get_xbm(s, budget).map(|(width, height)| GfxInfo {
             width,
             height,
             ..GfxInfo::default()
@@ -249,7 +287,7 @@ fn handle_swf<R: Read + Seek>(s: &mut PhpStream<R>) -> Option<GfxInfo> {
     })
 }
 
-fn handle_swc<R: Read + Seek>(s: &mut PhpStream<R>) -> Option<GfxInfo> {
+fn handle_swc<R: Read + Seek>(s: &mut PhpStream<R>, budget: &mut Budget) -> Option<GfxInfo> {
     if !s.seek_cur(5) {
         return None;
     }
@@ -270,8 +308,33 @@ fn handle_swc<R: Read + Seek>(s: &mut PhpStream<R>) -> Option<GfxInfo> {
                 return None;
             }
             let rest = s.read_to_end();
-            let limit = rest.len().saturating_mul(1 << 15);
-            matches!(inflate::uncompress(&rest, limit), Outcome::Ok(_))
+            if !budget.alloc(rest.len() as u64) {
+                return None;
+            }
+            // Retry with buffers of 2x .. 2^15x the input size while the
+            // output does not fit (Z_BUF_ERROR).
+            let mut factor: usize = 1;
+            let mut prev = 0u64;
+            let mut ok = false;
+            while factor < 1 << 15 {
+                factor <<= 1;
+                let size = rest.len().saturating_mul(factor);
+                budget.free(prev);
+                if !budget.alloc(size as u64) {
+                    return None;
+                }
+                prev = size as u64;
+                match inflate::uncompress(&rest, size) {
+                    Outcome::Ok(_) => {
+                        ok = true;
+                        break;
+                    }
+                    Outcome::BufError(_) => {}
+                    Outcome::DataError(_) => break,
+                }
+            }
+            budget.free(prev);
+            ok
         }
     };
     if !ok {
@@ -692,12 +755,21 @@ fn scan_define(line: &[u8]) -> Option<(&[u8], i32)> {
 
 /// `php_get_xbm()`: `Some((width, height))` when both `#define`s are found.
 #[allow(clippy::cast_sign_loss)]
-pub(crate) fn get_xbm<R: Read + Seek>(s: &mut PhpStream<R>) -> Option<(u32, u32)> {
+pub(crate) fn get_xbm<R: Read + Seek>(
+    s: &mut PhpStream<R>,
+    budget: &mut Budget,
+) -> Option<(u32, u32)> {
     if !s.rewind() {
         return None;
     }
     let (mut width, mut height) = (0u32, 0u32);
     while let Some(line) = s.gets() {
+        // The line buffer plus its estrdup()ed copy.
+        let n = 2 * (line.len() as u64 + 1);
+        if !budget.alloc(n) {
+            return None;
+        }
+        budget.free(n);
         // The line is a C string: it ends at the first NUL.
         let line = match line.iter().position(|&b| b == 0) {
             Some(p) => &line[..p],

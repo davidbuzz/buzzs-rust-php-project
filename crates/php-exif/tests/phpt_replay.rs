@@ -237,7 +237,11 @@ impl Out {
 
     fn diags(&mut self, func: &str, diags: &[Diagnostic]) {
         for d in diags {
-            self.echo(format!("\n{}: {func}(): ", d.level.label()));
+            if d.level == php_exif::diag::Level::Error {
+                self.echo(format!("\n{}: ", d.level.label()));
+            } else {
+                self.echo(format!("\n{}: {func}(): ", d.level.label()));
+            }
             self.echo(&d.message);
             let file = format!(" in /t/{}.php on line 2\n", self.1);
             self.echo(file);
@@ -277,6 +281,7 @@ fn read(
         required_sections: sections.map(|s| s.as_bytes().to_vec()),
         as_arrays: arrays,
         read_thumbnail: thumb,
+        memory: None,
     };
     let (v, d) = exif_read_data(
         File::open(&path).expect("open"),
@@ -309,6 +314,7 @@ fn thumb(out: &mut Out, rel: &str, dims: bool) -> Option<php_exif::exif::Thumbna
         File::open(&path).expect("open"),
         &file_origin(&path),
         dims,
+        None,
         &ExifConfig::default(),
         &BuiltinConverter,
     );
@@ -1199,4 +1205,181 @@ fn image_cases() -> Vec<(&'static str, Script)> {
         }),
     ));
     c
+}
+
+// ---------------------------------------------------------------------------
+// memory_limit emulation (oom_*.phpt).
+
+use php_exif::budget::MemoryLimit;
+
+const MIB: u64 = 1024 * 1024;
+
+#[allow(clippy::unnecessary_wraps)]
+fn limit(mb: u64) -> Option<MemoryLimit> {
+    // A fresh CLI script uses roughly half a megabyte.
+    Some(MemoryLimit {
+        limit: mb * MIB,
+        used: MIB / 2,
+    })
+}
+
+fn read_limited(o: &mut Out, data: &[u8], arrays: bool, mb: u64) -> Value {
+    let (v, d) = exif_read_data(
+        Cursor::new(data),
+        &StreamOrigin::Other,
+        &ReadOptions {
+            as_arrays: arrays,
+            memory: limit(mb),
+            ..ReadOptions::default()
+        },
+        &ExifConfig::default(),
+        &BuiltinConverter,
+    );
+    o.diags("exif_read_data", &d);
+    v
+}
+
+fn big_thumbnail_tiff(size: u32) -> Vec<u8> {
+    let ifd1_off: u32 = 8 + 2 + 2 * 12 + 4;
+    let payload_off = ifd1_off + 2 + 2 * 12 + 4;
+    let mut t = b"II*\x00".to_vec();
+    t.extend_from_slice(&8u32.to_le_bytes());
+    let entry = |t: &mut Vec<u8>, tag: u16, fmt: u16, n: u32, v: u32| {
+        t.extend_from_slice(&tag.to_le_bytes());
+        t.extend_from_slice(&fmt.to_le_bytes());
+        t.extend_from_slice(&n.to_le_bytes());
+        t.extend_from_slice(&v.to_le_bytes());
+    };
+    t.extend_from_slice(&2u16.to_le_bytes());
+    entry(&mut t, 0x0100, 4, 1, 1);
+    entry(&mut t, 0x0101, 4, 1, 1);
+    t.extend_from_slice(&ifd1_off.to_le_bytes());
+    t.extend_from_slice(&2u16.to_le_bytes());
+    entry(&mut t, 0x0111, 4, 1, payload_off);
+    entry(&mut t, 0x0117, 4, 1, size);
+    t.extend_from_slice(&0u32.to_le_bytes());
+    t.resize(t.len() + size as usize, 0xAB);
+    t
+}
+
+fn fatal_text(o: &Out) -> bool {
+    o.0.windows(14).any(|w| w == b"Fatal error: A")
+}
+
+#[test]
+fn oom_phpt_replays() {
+    let mut failures = Vec::new();
+    let mut run = |phpt: &'static str, f: &dyn Fn(&mut Out)| {
+        let mut o = Out(Vec::new(), phpt.trim_end_matches(".phpt").to_owned());
+        f(&mut o);
+        if let Err(e) = check(phpt, &o.0) {
+            failures.push(e);
+        }
+        assert!(fatal_text(&o) || phpt.contains("tiff"), "{phpt}");
+    };
+    run("oom_exif_read_data_tags.phpt", &|o| {
+        let n: u32 = 1000;
+        let payload_len: u32 = 256 * 1024;
+        let payload_off: u32 = 8 + 2 + n * 12 + 4;
+        let mut t = b"II*\x00".to_vec();
+        t.extend_from_slice(&8u32.to_le_bytes());
+        t.extend_from_slice(&u16::try_from(n).expect("n").to_le_bytes());
+        for i in 0..n {
+            t.extend_from_slice(&(0x9000 + u16::try_from(i & 0xFF).expect("tag")).to_le_bytes());
+            t.extend_from_slice(&1u16.to_le_bytes());
+            t.extend_from_slice(&payload_len.to_le_bytes());
+            t.extend_from_slice(&payload_off.to_le_bytes());
+        }
+        t.extend_from_slice(&0u32.to_le_bytes());
+        t.resize(t.len() + payload_len as usize, b'A');
+        let v = read_limited(o, &t, true, 8);
+        if !fatal_text(o) {
+            o.var_dump(&v);
+        }
+    });
+    run("oom_exif_scan_jpeg_header.phpt", &|o| {
+        let n = (2 * 1024 * 1024 - 4) / 4;
+        let mut j = b"\xFF\xD8".to_vec();
+        for _ in 0..n {
+            j.extend_from_slice(b"\xFF\xE9\x00\x02");
+        }
+        j.extend_from_slice(b"\xFF\xD9");
+        let v = read_limited(o, &j, false, 8);
+        if !fatal_text(o) {
+            o.var_dump(&v);
+        }
+    });
+    for (phpt, size) in [
+        ("oom_exif_thumbnail_large_file_001.phpt", 12 * 1024 * 1024),
+        ("oom_exif_thumbnail_large_file_002.phpt", 20 * 1024 * 1024),
+    ] {
+        run(phpt, &move |o| {
+            let t = big_thumbnail_tiff(size);
+            let (r, d) = exif_thumbnail(
+                Cursor::new(t),
+                &StreamOrigin::Other,
+                false,
+                limit(8),
+                &ExifConfig::default(),
+                &BuiltinConverter,
+            );
+            o.diags("exif_thumbnail", &d);
+            if !fatal_text(o) {
+                o.var_dump(&thumb_value(r.as_ref()));
+            }
+        });
+    }
+    run("oom_exif_thumbnail_tiff.phpt", &|o| {
+        let mut t = big_thumbnail_tiff(0);
+        // StripOffsets = 1, StripByteCounts = 0xFFFFFFFF
+        let off = 8 + 2 + 2 * 12 + 4 + 2;
+        t[off + 8..off + 12].copy_from_slice(&1u32.to_le_bytes());
+        t[off + 12 + 8..off + 12 + 12].copy_from_slice(&u32::MAX.to_le_bytes());
+        let (r, d) = exif_thumbnail(
+            Cursor::new(t),
+            &StreamOrigin::Other,
+            false,
+            limit(128),
+            &ExifConfig::default(),
+            &BuiltinConverter,
+        );
+        o.diags("exif_thumbnail", &d);
+        o.var_dump(&thumb_value(r.as_ref()));
+    });
+    run("oom_exif_numeric_metadata.phpt", &|o| {
+        let base = std::fs::read(fixtures().join("exif/image011.jpg")).expect("read");
+        let entry_count: u32 = 900;
+        let component_count: u32 = 12000;
+        let data_offset = 8 + 2 + entry_count * 12 + 4;
+        let mut tiff = b"II*\x00".to_vec();
+        tiff.extend_from_slice(&8u32.to_le_bytes());
+        tiff.extend_from_slice(&u16::try_from(entry_count).expect("n").to_le_bytes());
+        for i in 0..entry_count {
+            tiff.extend_from_slice(&(0xF000 + u16::try_from(i).expect("i")).to_le_bytes());
+            tiff.extend_from_slice(&3u16.to_le_bytes());
+            tiff.extend_from_slice(&component_count.to_le_bytes());
+            tiff.extend_from_slice(&data_offset.to_le_bytes());
+        }
+        tiff.extend_from_slice(&0u32.to_le_bytes());
+        tiff.resize(tiff.len() + component_count as usize * 2, 0);
+        let mut app1 = b"Exif\0\0".to_vec();
+        app1.extend_from_slice(&tiff);
+        let mut jpeg = b"\xff\xd8\xff\xe1".to_vec();
+        jpeg.extend_from_slice(&u16::try_from(app1.len() + 2).expect("len").to_be_bytes());
+        jpeg.extend_from_slice(&app1);
+        jpeg.extend_from_slice(&base[2..]);
+        read_limited(o, &jpeg, false, 128);
+    });
+    run("image_oom_getimagesize_xbm.phpt", &|o| {
+        let data = vec![b'x'; 12 * 1024 * 1024];
+        let r = php_exif::imagesize::getimagesize_limited(Cursor::new(data), b"x", false, limit(4));
+        o.diags("getimagesize", &r.diagnostics);
+        if !fatal_text(o) {
+            o.var_dump(&r.to_value());
+        }
+    });
+    for f in &failures {
+        eprintln!("=========== FAIL {f}\n");
+    }
+    assert!(failures.is_empty(), "{} oom replays failed", failures.len());
 }
