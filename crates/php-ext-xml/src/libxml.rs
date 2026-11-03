@@ -119,6 +119,23 @@ fn emit(vm: &mut Vm, d: &Diagnostic) -> VmResult<()> {
     }
 }
 
+/// The active function's name as `get_active_function_or_method_name()`
+/// prints it: `Class::method` (declaring class) for methods.
+pub fn qualified_function_name(a: &Args) -> String {
+    let name = a.func_name();
+    let class = a
+        .this
+        .as_ref()
+        .map(|o| php_vm::object::class_of(o).clone())
+        .or_else(|| a.called.clone());
+    if let Some(c) = class {
+        if let Some(m) = c.find_method(name.as_bytes()) {
+            return format!("{}::{name}", m.scope().name.to_string_lossy());
+        }
+    }
+    name
+}
+
 /// Runs a libxml2 operation of the native function described by `a`.
 ///
 /// The VM is reachable from stream wrappers and the user entity loader
@@ -126,7 +143,7 @@ fn emit(vm: &mut Vm, d: &Diagnostic) -> VmResult<()> {
 /// emitted and an exception thrown by a callback is returned as `Err`.
 pub fn run<R>(vm: &mut Vm, a: &Args, f: impl FnOnce() -> R) -> VmResult<R> {
     ensure_hooks();
-    ACTIVE.with(|s| s.borrow_mut().push(a.func_name()));
+    ACTIVE.with(|s| s.borrow_mut().push(qualified_function_name(a)));
     let r = bridge::run(vm, f);
     ACTIVE.with(|s| s.borrow_mut().pop());
     match r {
@@ -182,42 +199,60 @@ pub fn new_error_object(vm: &mut Vm, error: &LibXmlError) -> VmResult<Value> {
 // Stream hooks
 // ---------------------------------------------------------------------
 
-/// A `php-streams` stream read by libxml2 (closed when dropped).
-struct StreamReader(Stream);
+/// A stream opened for libxml2: registered as a PHP stream resource (as
+/// `php_stream_open_wrapper_ex` does, so `get_resources()` sees it) with
+/// `PHP_STREAM_FLAG_NO_FCLOSE`; closed when libxml2 drops it.
+struct LibxmlStream {
+    cell: Rc<res::StreamCell>,
+    res: Resource,
+}
 
-impl Read for StreamReader {
+impl LibxmlStream {
+    fn register(mut stream: Stream) -> Option<Self> {
+        stream.add_flags(php_streams::stream::flags::NO_FCLOSE);
+        let Value::Resource(res) = res::new_stream(stream, None) else {
+            return None;
+        };
+        let cell = res::cell_of(&res)?;
+        Some(Self { cell, res })
+    }
+}
+
+impl Read for LibxmlStream {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        self.0
-            .read(buf)
-            .map_err(|_| std::io::Error::other("stream read failed"))
+        match self.cell.get() {
+            Some(mut s) => s
+                .read(buf)
+                .map_err(|_| std::io::Error::other("stream read failed")),
+            None => Err(std::io::Error::other("stream closed")),
+        }
     }
 }
 
-impl Drop for StreamReader {
-    fn drop(&mut self) {
-        self.0.close();
-    }
-}
-
-/// A `php-streams` stream written by libxml2 (closed when dropped).
-struct StreamWriter(Stream);
-
-impl Write for StreamWriter {
+impl Write for LibxmlStream {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        self.0
-            .write(buf)
-            .map_err(|_| std::io::Error::other("stream write failed"))
+        match self.cell.get() {
+            Some(mut s) => s
+                .write(buf)
+                .map_err(|_| std::io::Error::other("stream write failed")),
+            None => Err(std::io::Error::other("stream closed")),
+        }
     }
 
     fn flush(&mut self) -> std::io::Result<()> {
-        self.0.flush();
+        if let Some(mut s) = self.cell.get() {
+            s.flush();
+        }
         Ok(())
     }
 }
 
-impl Drop for StreamWriter {
+impl Drop for LibxmlStream {
     fn drop(&mut self) {
-        self.0.close();
+        if let Some(mut s) = self.cell.take() {
+            self.res.close();
+            s.close();
+        }
     }
 }
 
@@ -253,7 +288,7 @@ fn open_read(path: &[u8]) -> Option<InputStream> {
     let stream =
         php_streams::open::open_wrapper(path, "rb", REPORT_ERRORS, &mut opened, ctx.as_ref())?;
     Some(InputStream {
-        reader: Box::new(StreamReader(stream)),
+        reader: Box::new(LibxmlStream::register(stream)?),
         charset: None,
     })
 }
@@ -264,7 +299,7 @@ fn open_write(path: &[u8]) -> Option<Box<dyn Write>> {
     let mut opened = None;
     let stream =
         php_streams::open::open_wrapper(path, "wb", REPORT_ERRORS, &mut opened, ctx.as_ref())?;
-    Some(Box::new(StreamWriter(stream)))
+    Some(Box::new(LibxmlStream::register(stream)?))
 }
 
 thread_local! {

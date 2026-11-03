@@ -8,8 +8,9 @@
 //! * [`xmlwriter`] — `ext/xmlwriter`: the `XMLWriter` class and the
 //!   procedural `xmlwriter_*()` functions.
 //!
-//! The single [`Xml`] extension registers all three modules and reports
-//! `libxml`, `xml` and `xmlwriter` as loaded extensions.
+//! Each module is its own [`Extension`] ([`Libxml`], [`Xml`],
+//! [`XmlWriter`]) so functions, classes and constants are attributed to the
+//! right module; [`Libxml`] must be registered first.
 
 // Native handlers have the fixed `NativeFn` / hook signatures, so many
 // infallible ones still return `VmResult`.
@@ -21,7 +22,21 @@ pub mod xmlwriter;
 
 use php_vm::ext::{Extension, ModuleBuilder};
 
-/// The `libxml` + `xml` + `xmlwriter` extensions.
+/// `ext/libxml` (register before every libxml-based extension).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Libxml;
+
+impl Extension for Libxml {
+    fn name(&self) -> &'static str {
+        "libxml"
+    }
+
+    fn register(&self, m: &mut ModuleBuilder<'_>) {
+        libxml::register(m);
+    }
+}
+
+/// `ext/xml`.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Xml;
 
@@ -31,22 +46,28 @@ impl Extension for Xml {
     }
 
     fn register(&self, m: &mut ModuleBuilder<'_>) {
+        // Hosts that register only `Xml` (e.g. other crates' test harnesses)
+        // still get the libxml module, attributed to `xml`.
+        if m.vm()
+            .native_function("libxml_use_internal_errors")
+            .is_none()
         {
-            let loaded = &mut m.vm().loaded_extensions;
-            let has = |l: &[String], n: &str| l.iter().any(|e| e.eq_ignore_ascii_case(n));
-            if !has(loaded, "libxml") {
-                let at = loaded
-                    .iter()
-                    .position(|e| e.eq_ignore_ascii_case("xml"))
-                    .unwrap_or(loaded.len());
-                loaded.insert(at, "libxml".to_owned());
-            }
-            if !has(loaded, "xmlwriter") {
-                loaded.push("xmlwriter".to_owned());
-            }
+            libxml::register(m);
         }
-        libxml::register(m);
         xml::register(m);
+    }
+}
+
+/// `ext/xmlwriter`.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct XmlWriter;
+
+impl Extension for XmlWriter {
+    fn name(&self) -> &'static str {
+        "xmlwriter"
+    }
+
+    fn register(&self, m: &mut ModuleBuilder<'_>) {
         xmlwriter::register(m);
     }
 }
