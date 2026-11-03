@@ -676,19 +676,23 @@ pub fn run(script: &str, dir: &Path, fix: &Path) -> String {
             }
             "unset" => {
                 let name = sname(0);
-                let var = {
+                let zip = {
+                    let s = st.borrow();
+                    s.vars.iter().find(|(n, _)| *n == name).and_then(|(_, v)| match v {
+                        Var::Zip(z) => Some(Rc::clone(z)),
+                        _ => None,
+                    })
+                };
+                st.borrow_mut().func = "main".into();
+                // The destructor runs while the variable is still reachable
+                // (PHP code in callbacks may use it through a WeakReference).
+                let failed = zip.as_ref().and_then(|z| z.destroy(&mut host).err());
+                drop(zip);
+                {
                     let mut s = st.borrow_mut();
                     let pos = s.vars.iter().position(|(n, _)| *n == name).unwrap();
-                    std::mem::replace(&mut s.vars[pos].1, Var::Gone)
-                };
-                st.borrow_mut().func = String::new();
-                let mut failed = None;
-                if let Var::Zip(z) = &var {
-                    if let Err(e) = z.destroy(&mut host) {
-                        failed = Some(e);
-                    }
+                    s.vars[pos].1 = Var::Gone;
                 }
-                drop(var);
                 match failed {
                     Some(e) => emit(&st, &err_line(&e)),
                     None => emit(&st, &format!("unset {name}")),

@@ -826,17 +826,27 @@ impl ZipArchive {
     /// `php_zip_object_dtor()`: run when the object is destroyed (before
     /// it is freed); releases the archive, closing it with callbacks.
     pub fn destroy(&self, host: &mut dyn ZipHost) -> RtResult<()> {
-        let archive = self.archive.borrow_mut().take();
-        if let Some(a) = archive {
-            let (bailout, exception) = Archive::release(a, Some(host));
-            if bailout {
-                return Err(exception.unwrap_or_else(|| RuntimeError::Fatal(String::new())));
-            }
-            if let Some(e) = exception {
-                return Err(e);
-            }
+        let Some(a) = self.archive() else {
+            return Ok(());
+        };
+        // Like the C code, the object keeps pointing at the archive while
+        // it is released, so callbacks re-entering the object see it as
+        // "being closed" rather than uninitialised.
+        let (bailout, exception) = if Rc::strong_count(&a) == 2 {
+            let bailout = a.finalize(Some(host));
+            (bailout, a.take_pending())
+        } else {
+            (false, None)
+        };
+        self.archive.borrow_mut().take();
+        drop(a);
+        if bailout {
+            return Err(exception.unwrap_or_else(|| RuntimeError::Fatal(String::new())));
         }
-        Ok(())
+        match exception {
+            Some(e) => Err(e),
+            None => Ok(()),
+        }
     }
 
     /// `php_zip_object_free_storage()` with the VM available: closes the

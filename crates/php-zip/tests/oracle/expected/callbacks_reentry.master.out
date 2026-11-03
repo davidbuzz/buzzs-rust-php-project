@@ -1,0 +1,109 @@
+# registering twice (gh18431)
+z->open = true
+z->registerProgressCallback = true
+z->registerProgressCallback = true
+z->addFromString = true
+progress 0.0
+progress 1.0
+z->close = true
+# cancel callback returning a non-int / throwing
+z->open = true
+z->registerCancelCallback = true
+z->addFromString = true
+[Warning] ZipArchive::close(): Operation cancelled
+! TypeError: Return value of callback provided to ZipArchive::registerCancelCallback() must be of type int, array returned
+z->status = 32
+z->getStatusString = "Operation cancelled"
+z->open = true
+z->registerCancelCallback = true
+z->addFromString = true
+[Warning] ZipArchive::close(): Operation cancelled
+! Exception: boom
+z->status = 32
+# re-entry from callbacks during close()
+z->open = true
+z->addFromString = true
+z->addFromString = true
+z->registerProgressCallback = true
+reenter deleteIndex ! Error: Already being closed
+z->close = true
+z->open = true
+z->addFromString = true
+z->registerProgressCallback = true
+reenter addFromString ! Error: Already being closed
+z->close = true
+z->open = true
+z->addFromString = true
+z->registerProgressCallback = true
+reenter close ! Error: Already being closed
+z->close = true
+z->open = true
+z->addFromString = true
+z->registerProgressCallback = true
+reenter setArchiveComment ! Error: Already being closed
+z->close = true
+z->open = true
+z->addFromString = true
+z->registerProgressCallback = true
+reenter open ! Error: Already being closed
+z->close = true
+z->open = true
+z->addFromString = true
+z->registerProgressCallback = true
+reenter count = 1
+z->close = true
+z->open = true
+z->addFromString = true
+z->registerProgressCallback = true
+reenter registerProgressCallback ! Error: Already being closed
+z->close = true
+z->open = true
+z->addFromString = true
+z->registerCancelCallback = true
+reenter deleteName ! Error: Already being closed
+z->close = true
+z->open = true
+z->addFromString = true
+z->registerCancelCallback = true
+reenter registerCancelCallback ! Error: Already being closed
+z->close = true
+z->open = true
+z->numFiles = 1
+z->getFromName = "aaaaa"
+z->close = true
+# re-entry during destruction
+d->open = true
+d->addFromString = true
+d->registerProgressCallback = true
+reenter close ! Error: Already being closed
+unset d
+size dtor.zip = 125
+d2->open = true
+d2->addFromString = true
+d2->registerProgressCallback = true
+progress start
+progress end
+unset d2
+d3->open = true
+d3->addFromString = true
+d3->registerCancelCallback = true
+[Warning] main(): Cannot destroy the zip context: Operation cancelled
+! Exception: boom
+exists dtor3.zip = false
+# close failure on reopen
+f->open = true
+f->addFile = true
+[Warning] ZipArchive::open(): Can't open file: No such file or directory
+f->open = true
+f->getFromName = hex:6261720a
+f->close = true
+f->open = true
+f->addFile = true
+[Warning] ZipArchive::close(): Can't open file: No such file or directory
+f->close = false
+f props = ["lastId"=>0,"status"=>11,"statusSys"=>2,"numFiles"=>0,"filename"=>"","comment"=>""]
+f->getStatusString = "Can't open file: No such file or directory"
+f->clearError = null
+f props = ["lastId"=>0,"status"=>0,"statusSys"=>0,"numFiles"=>0,"filename"=>"","comment"=>""]
+f->getStatusString = "No error"
+END

@@ -1,0 +1,50 @@
+# progress callback
+z->open = true
+z->registerProgressCallback = true
+z->addFromString = true
+progress start
+progress end
+z->close = true
+z->open = true
+z->registerProgressCallback = true
+z->addFromString = true
+progress 0.0
+progress 1.0
+z->close = true
+# progress callback with nothing to write
+z->open = true
+z->registerProgressCallback = true
+z->close = true
+# cancel callback
+z->open = true
+z->registerCancelCallback = true
+z->addFromString = true
+cancel?
+[Warning] ZipArchive::close(): Operation cancelled
+z->close = false
+z->status = 32
+z->getStatusString = "Operation cancelled"
+exists c.zip = false
+z->open = true
+z->registerCancelCallback = true
+z->addFromString = true
+cancel?
+cancel?
+cancel?
+z->close = true
+exists c2.zip = true
+z->open = true
+z->registerProgressCallback = true
+z->addFromString = true
+! Exception: boom
+z->status = 0
+exists c5.zip = true
+z->open = true
+z->registerProgressCallback = true
+z->registerCancelCallback = true
+z->addFromString = true
+progress start
+cancel?
+[Warning] ZipArchive::close(): Operation cancelled
+z->close = false
+END
