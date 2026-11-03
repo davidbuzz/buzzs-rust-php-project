@@ -117,3 +117,15 @@ pub fn rt_throw(vm: &mut Vm, e: RuntimeError) -> Throw {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn index_flags() {
+        assert_eq!(SERVER_QUERY_NO_GOOD_INDEX_USED, 16);
+        assert_eq!(SERVER_QUERY_NO_INDEX_USED, 32);
+        assert_eq!(REPORT_ERROR | REPORT_STRICT, 3);
+    }
+}

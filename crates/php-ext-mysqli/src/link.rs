@@ -374,7 +374,7 @@ fn link(vm: &mut Vm, a: &Args) -> VmResult<(Rc<RefCell<MyMysql>>, Connection, us
 }
 
 /// Runs a fallible mysqlnd command and reports its error.
-fn bool_cmd(vm: &mut Vm, conn: &Connection, r: php_mysqlnd::Result<()>) -> VmResult<Value> {
+fn bool_cmd(vm: &mut Vm, conn: &Connection, r: &php_mysqlnd::Result<()>) -> VmResult<Value> {
     if r.is_err() {
         report_conn_error(vm, conn)?;
         return Ok(Value::Bool(false));
@@ -394,7 +394,7 @@ pub fn autocommit(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let (_, c, b) = link(vm, a)?;
     let on = a.bool(b);
     let r = c.autocommit(on);
-    bool_cmd(vm, &c, r)
+    bool_cmd(vm, &c, &r)
 }
 
 fn tx_flags(a: &Args, n: usize) -> u32 {
@@ -410,11 +410,11 @@ pub fn begin_transaction(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         return Err(a.value_error(vm, pos(a, 2), "must be one of the MYSQLI_TRANS_* constants"));
     }
     let name = opt_str(a, b + 1);
-    if name.as_ref().is_some_and(|n| n.is_empty()) {
+    if name.as_ref().is_some_and(ZStr::is_empty) {
         return Err(a.value_error(vm, pos(a, 3), "cannot be empty"));
     }
     let r = c.begin_transaction(tx_flags(a, b), name.as_ref().map(ZStr::as_bytes));
-    bool_cmd(vm, &c, r)
+    bool_cmd(vm, &c, &r)
 }
 
 /// `mysqli_commit()`
@@ -422,7 +422,7 @@ pub fn commit(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let (_, c, b) = link(vm, a)?;
     let name = opt_str(a, b + 1);
     let r = c.commit(tx_flags(a, b), name.as_ref().map(ZStr::as_bytes));
-    bool_cmd(vm, &c, r)
+    bool_cmd(vm, &c, &r)
 }
 
 /// `mysqli_rollback()`
@@ -430,7 +430,7 @@ pub fn rollback(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let (_, c, b) = link(vm, a)?;
     let name = opt_str(a, b + 1);
     let r = c.rollback(tx_flags(a, b), name.as_ref().map(ZStr::as_bytes));
-    bool_cmd(vm, &c, r)
+    bool_cmd(vm, &c, &r)
 }
 
 /// `mysqli_savepoint()`
@@ -441,7 +441,7 @@ pub fn savepoint(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         return Err(a.value_error(vm, pos(a, 2), "cannot be empty"));
     }
     let r = c.savepoint(Some(name.as_bytes()));
-    bool_cmd(vm, &c, r)
+    bool_cmd(vm, &c, &r)
 }
 
 /// `mysqli_release_savepoint()`
@@ -452,7 +452,7 @@ pub fn release_savepoint(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         return Err(a.value_error(vm, pos(a, 2), "cannot be empty"));
     }
     let r = c.release_savepoint(Some(name.as_bytes()));
-    bool_cmd(vm, &c, r)
+    bool_cmd(vm, &c, &r)
 }
 
 /// `mysqli_change_user()`
@@ -626,7 +626,7 @@ pub fn kill(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let (_, c) = fetch_link(vm, &o, Status::Valid)?;
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let r = c.kill(pid as u32);
-    bool_cmd(vm, &c, r)
+    bool_cmd(vm, &c, &r)
 }
 
 /// `mysqli_more_results()`
@@ -638,16 +638,12 @@ pub fn more_results(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 /// `mysqli_next_result()`
 pub fn next_result(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let (_, c, _) = link(vm, a)?;
-    let r = c.next_result();
-    match r {
-        Ok(true) => {
-            flush_diag(vm)?;
-            Ok(Value::Bool(true))
-        }
-        Ok(false) | Err(_) => {
-            report_conn_error(vm, &c)?;
-            Ok(Value::Bool(false))
-        }
+    if let Ok(true) = c.next_result() {
+        flush_diag(vm)?;
+        Ok(Value::Bool(true))
+    } else {
+        report_conn_error(vm, &c)?;
+        Ok(Value::Bool(false))
     }
 }
 
@@ -887,7 +883,7 @@ pub fn select_db(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let (_, c, b) = link(vm, a)?;
     let db = a.str(b);
     let r = c.select_db(db.as_bytes());
-    bool_cmd(vm, &c, r)
+    bool_cmd(vm, &c, &r)
 }
 
 /// `mysqli_set_charset()`
@@ -895,7 +891,7 @@ pub fn set_charset(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let (_, c, b) = link(vm, a)?;
     let cs = a.str(b);
     let r = c.set_charset(&cs.to_string_lossy());
-    bool_cmd(vm, &c, r)
+    bool_cmd(vm, &c, &r)
 }
 
 /// `mysqli_ssl_set()`
@@ -1018,25 +1014,22 @@ pub fn poll(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     };
     let dont = res.as_ref().map(|p| p.dont_poll.clone()).unwrap_or_default();
     a.set_ref(2, if r_arr.is_some() { pick(&r, &dont) } else { Value::Array(ZArray::new()) });
-    match res {
-        Some(p) => {
-            if r_arr.is_some() {
-                a.set_ref(0, pick(&r, &p.read));
-            }
-            if e_arr.is_some() {
-                a.set_ref(1, pick(&e, &p.error));
-            }
-            Ok(Value::Int(i64::try_from(p.ready).unwrap_or(0)))
+    if let Some(p) = res {
+        if r_arr.is_some() {
+            a.set_ref(0, pick(&r, &p.read));
         }
-        None => {
-            if r_arr.is_some() {
-                a.set_ref(0, Value::Array(ZArray::new()));
-            }
-            if e_arr.is_some() {
-                a.set_ref(1, Value::Array(ZArray::new()));
-            }
-            Ok(Value::Bool(false))
+        if e_arr.is_some() {
+            a.set_ref(1, pick(&e, &p.error));
         }
+        Ok(Value::Int(i64::try_from(p.ready).unwrap_or(0)))
+    } else {
+        if r_arr.is_some() {
+            a.set_ref(0, Value::Array(ZArray::new()));
+        }
+        if e_arr.is_some() {
+            a.set_ref(1, Value::Array(ZArray::new()));
+        }
+        Ok(Value::Bool(false))
     }
 }
 

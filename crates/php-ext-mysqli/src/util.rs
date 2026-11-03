@@ -128,3 +128,37 @@ pub fn raw_prop(o: &Obj, name: &str) -> Option<Value> {
         .cloned()
         .flatten()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn long_or_string_boundaries() {
+        assert!(matches!(long_or_string(5), Value::Int(5)));
+        assert!(matches!(long_or_string(u64::MAX - 1), Value::Str(_)));
+        assert!(matches!(long_or_string(i64::MAX as u64), Value::Str(_)));
+        assert!(matches!(affected(u64::MAX), Value::Int(-1)));
+        assert!(matches!(affected(3), Value::Int(3)));
+    }
+
+    #[test]
+    fn error_list_shape() {
+        let v = error_list(&[php_mysqlnd::ErrorEntry {
+            errno: 1064,
+            sqlstate: "42000".into(),
+            error: b"syntax".to_vec(),
+        }]);
+        let Value::Array(a) = v else { panic!("array") };
+        assert_eq!(a.len(), 1);
+        let Some(Value::Array(row)) = a.get(&ArrayKey::Int(0)) else { panic!("row") };
+        assert!(matches!(row.get(&ArrayKey::from("errno")), Some(Value::Int(1064))));
+    }
+
+    #[test]
+    fn type_names() {
+        assert_eq!(type_name(&Value::Null), "null");
+        assert_eq!(type_name(&Value::Int(1)), "int");
+        assert_eq!(type_name(&Value::Bool(false)), "false");
+    }
+}

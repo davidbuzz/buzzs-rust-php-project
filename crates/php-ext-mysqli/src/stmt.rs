@@ -360,15 +360,12 @@ pub fn fetch(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 /// `mysqli_stmt_get_result()`
 pub fn get_result(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let (_, st, _) = stmt_of(vm, a, Status::Valid)?;
-    match st.get_result() {
-        Ok(Some(rs)) => {
-            flush_diag(vm)?;
-            new_result_object(vm, rs)
-        }
-        _ => {
-            report_stmt_error(vm, &st)?;
-            Ok(Value::Bool(false))
-        }
+    if let Ok(Some(rs)) = st.get_result() {
+        flush_diag(vm)?;
+        new_result_object(vm, rs)
+    } else {
+        report_stmt_error(vm, &st)?;
+        Ok(Value::Bool(false))
     }
 }
 
@@ -386,12 +383,11 @@ pub fn store_result(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 /// `mysqli_stmt_result_metadata()`
 pub fn result_metadata(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let (_, st, _) = stmt_of(vm, a, Status::Valid)?;
-    match st.result_metadata() {
-        Some(rs) => new_result_object(vm, rs),
-        None => {
-            report_stmt_error(vm, &st)?;
-            Ok(Value::Bool(false))
-        }
+    if let Some(rs) = st.result_metadata() {
+        new_result_object(vm, rs)
+    } else {
+        report_stmt_error(vm, &st)?;
+        Ok(Value::Bool(false))
     }
 }
 
@@ -566,15 +562,12 @@ pub fn more_results(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 /// `mysqli_stmt_next_result()`
 pub fn next_result(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let (_, st, _) = stmt_of(vm, a, Status::Valid)?;
-    match st.next_result() {
-        Ok(true) => {
-            flush_diag(vm)?;
-            Ok(Value::Bool(true))
-        }
-        _ => {
-            report_stmt_error(vm, &st)?;
-            Ok(Value::Bool(false))
-        }
+    if let Ok(true) = st.next_result() {
+        flush_diag(vm)?;
+        Ok(Value::Bool(true))
+    } else {
+        report_stmt_error(vm, &st)?;
+        Ok(Value::Bool(false))
     }
 }
 

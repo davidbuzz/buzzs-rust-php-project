@@ -137,11 +137,8 @@ pub fn fetch_all(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         return Err(a.value_error(vm, pos(a, 2), "must be one of MYSQLI_NUM, MYSQLI_ASSOC, or MYSQLI_BOTH"));
     }
     let mut rows = Vec::new();
-    loop {
-        match fetch_into(vm, &rs, mode)? {
-            v @ Value::Array(_) => rows.push(v),
-            _ => break,
-        }
+    while let v @ Value::Array(_) = fetch_into(vm, &rs, mode)? {
+        rows.push(v);
     }
     Ok(Value::Array(ZArray::from_values(rows)))
 }
@@ -151,13 +148,11 @@ pub fn fetch_object(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let (o, b) = recv(vm, a)?;
     let class = if a.has(b) {
         let name = a.str(b);
-        match vm.lookup_class(&name)? {
-            Some(c) => c,
-            None => {
-                let msg = format!("must be a valid class name, {} given", name.to_string_lossy());
-                return Err(a.type_error(vm, pos(a, 2), &msg));
-            }
-        }
+        let Some(c) = vm.lookup_class(&name)? else {
+            let msg = format!("must be a valid class name, {} given", name.to_string_lossy());
+            return Err(a.type_error(vm, pos(a, 2), &msg));
+        };
+        c
     } else {
         match vm.find_class(b"stdClass") {
             Some(c) => c,

@@ -10,6 +10,13 @@
 //! * report modes ([`report`]), persistent connections (`p:` hosts) and
 //!   `mysqli_poll()`.
 
+// Native handlers must match `NativeFn` (`fn(&mut Vm, &mut Args) -> VmResult<Value>`)
+// and object hooks their `ClassHooks` signatures, even when they cannot fail.
+#![allow(clippy::unnecessary_wraps)]
+// Handlers follow php-src's short names: `a` (args), `o` (object), `b`
+// (first remaining argument), `c` (connection).
+#![allow(clippy::many_single_char_names)]
+
 mod globals;
 mod link;
 mod objects;

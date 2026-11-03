@@ -187,7 +187,7 @@ fn result_read(o: &Obj, name: &str) -> Read {
             }
         }
         "num_rows" => long_or_string(r.num_rows()),
-        "type" => Value::Int(if r.is_buffered() { 0 } else { 1 }),
+        "type" => Value::Int(i64::from(!r.is_buffered())),
         _ => Value::Null,
     })
 }
@@ -288,14 +288,15 @@ pub fn read_property(vm: &mut Vm, o: &Obj, name: &ZStr) -> VmResult<Option<Value
     }
 }
 
-/// `has_property` handler (`isset()` / `empty()`).
+/// `has_property` handler: the result of `isset()`, or of `empty()` when
+/// `check_empty` is set (the VM's convention).
 pub fn has_property(vm: &mut Vm, o: &Obj, name: &ZStr, check_empty: bool) -> VmResult<Option<bool>> {
     match read(vm, o, name, true)? {
         None => Ok(None),
-        Some(Err(_)) => Ok(Some(false)),
+        Some(Err(_)) => Ok(Some(check_empty)),
         Some(Ok(v)) => {
             if check_empty {
-                Ok(Some(vm.value_to_bool(&v)?))
+                Ok(Some(!vm.value_to_bool(&v)?))
             } else {
                 Ok(Some(!matches!(v, Value::Null)))
             }
@@ -312,8 +313,21 @@ pub fn write_property(vm: &mut Vm, o: &Obj, name: &ZStr, v: &Value) -> VmResult<
         return Ok(false);
     }
     if k == Kind::Driver && n == "report_mode" {
+        let strict = vm
+            .frames
+            .iter()
+            .rev()
+            .find(|f| f.kind != php_vm::vm::FrameKind::Builtin)
+            .is_some_and(|f| f.code.strict_types);
         let mode = match v.deref() {
             Value::Int(i) => i,
+            other if strict => {
+                let msg = format!(
+                    "Cannot assign {} to property mysqli_driver::$report_mode of type int",
+                    crate::util::type_name(&other)
+                );
+                return Err(vm.throw("TypeError", &msg));
+            }
             Value::Bool(b) => i64::from(b),
             Value::Float(f) if f.fract() == 0.0 && f.is_finite() => {
                 #[allow(clippy::cast_possible_truncation)]
