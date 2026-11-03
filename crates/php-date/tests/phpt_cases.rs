@@ -151,3 +151,76 @@ fn date_sun_info_001_002() {
 2007-04-13 23:27:21 CEST astronomical_twilight_end"
     );
 }
+
+#[test]
+fn date_sunrise_variation7() {
+    let inputs: [(&str, f64, f64, f64); 9] = [
+        ("Pacific/Samoa", -14.24, -170.72, -11.0),
+        ("US/Alaska", 61.0, -150.0, -9.0),
+        ("America/Chicago", 41.85, -87.65, -5.0),
+        ("America/Montevideo", -34.88, -56.18, -3.0),
+        ("Africa/Casablanca", 33.65, -7.58, 0.0),
+        ("Europe/Moscow", 55.75, 37.58, 4.0),
+        ("Asia/Hong_Kong", 22.28, 114.15, 8.0),
+        ("Australia/Brisbane", -27.46, 153.2, 10.0),
+        ("Pacific/Wallis", -13.3, -176.16, 12.0),
+    ];
+    let expected = [
+        "06:42", "06:41", "05:07", "05:09", "05:58", "05:59", "07:31", "07:30", "05:52", "05:53",
+        "05:59", "06:01", "06:01", "06:02", "06:23", "06:22", "06:03", "06:02",
+    ];
+    let mut got = Vec::new();
+    for (zone, lat, lon, gmt) in inputs {
+        let z = tz::get(zone).unwrap();
+        for day in [11, 12] {
+            let t = api::mktime(
+                8,
+                Some(8),
+                Some(8),
+                Some(8),
+                Some(day),
+                Some(2008),
+                0,
+                Some(&z),
+            );
+            let v = api::date_sunrise_sunset(
+                t,
+                api::SUNFUNCS_RET_STRING,
+                lat,
+                lon,
+                90.0,
+                Some(gmt),
+                &z,
+                false,
+            );
+            let Value::Str(s) = v else { panic!("{v:?}") };
+            got.push(s);
+        }
+    }
+    assert_eq!(got, expected);
+}
+
+#[test]
+fn date_sunset_variation8_poles() {
+    let z = tz::get("Africa/Casablanca").unwrap();
+    let t = api::mktime(
+        8,
+        Some(8),
+        Some(8),
+        Some(8),
+        Some(12),
+        Some(2008),
+        0,
+        Some(&z),
+    );
+    for fmt in [
+        api::SUNFUNCS_RET_STRING,
+        api::SUNFUNCS_RET_DOUBLE,
+        api::SUNFUNCS_RET_TIMESTAMP,
+    ] {
+        for lat in [90.0, -90.0] {
+            let v = api::date_sunrise_sunset(t, fmt, lat, 0.0, 90.833_333, None, &z, true);
+            assert_eq!(v, Value::Bool(false));
+        }
+    }
+}
