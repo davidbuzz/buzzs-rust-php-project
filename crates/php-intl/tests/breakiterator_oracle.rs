@@ -38,7 +38,7 @@ fn vec_json(v: &[i64]) -> String {
     )
 }
 
-/// Mirrors the engine's foreach over an IntlPartsIterator.
+/// Mirrors the engine's foreach over an `IntlPartsIterator`.
 fn parts(bi: &mut IntlBreakIterator, key: PartsKey) -> String {
     let mut c = PartsCursor::new(key);
     c.rewind(bi);
