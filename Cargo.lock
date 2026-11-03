@@ -347,6 +347,7 @@ name = "php-cli"
 version = "0.1.0"
 dependencies = [
  "libc",
+ "php-cli-server",
  "php-ext-bcmath",
  "php-ext-calendar",
  "php-ext-date",
@@ -360,6 +361,7 @@ dependencies = [
  "php-ext-intl",
  "php-ext-json",
  "php-ext-mbstring",
+ "php-ext-mysqli",
  "php-ext-openssl",
  "php-ext-pcntl",
  "php-ext-pcre",
@@ -368,6 +370,7 @@ dependencies = [
  "php-ext-posix",
  "php-ext-random",
  "php-ext-session",
+ "php-ext-simplexml",
  "php-ext-sockets",
  "php-ext-sodium",
  "php-ext-spl",
@@ -376,8 +379,11 @@ dependencies = [
  "php-ext-stdstr",
  "php-ext-streams",
  "php-ext-sysv",
+ "php-ext-tokenizer",
  "php-ext-uri",
  "php-ext-xml",
+ "php-ext-xmlreader",
+ "php-ext-xsl",
  "php-ext-zip",
  "php-ext-zlib",
  "php-memlimit",
@@ -388,7 +394,14 @@ dependencies = [
 name = "php-cli-server"
 version = "0.1.0"
 dependencies = [
+ "libc",
+ "php-ext-streams",
+ "php-lexer",
+ "php-memlimit",
  "php-runtime",
+ "php-stdmisc",
+ "php-streams",
+ "php-support",
  "php-vm",
 ]
 
@@ -397,6 +410,13 @@ name = "php-ctype"
 version = "0.1.0"
 dependencies = [
  "php-runtime",
+]
+
+[[package]]
+name = "php-curl"
+version = "0.1.0"
+dependencies = [
+ "libc",
 ]
 
 [[package]]
@@ -447,6 +467,18 @@ version = "0.1.0"
 dependencies = [
  "php-ctype",
  "php-runtime",
+ "php-vm",
+]
+
+[[package]]
+name = "php-ext-curl"
+version = "0.1.0"
+dependencies = [
+ "php-curl",
+ "php-ext-streams",
+ "php-runtime",
+ "php-streams",
+ "php-support",
  "php-vm",
 ]
 
@@ -502,6 +534,10 @@ dependencies = [
  "php-support",
  "php-vm",
 ]
+
+[[package]]
+name = "php-ext-ftp"
+version = "0.1.0"
 
 [[package]]
 name = "php-ext-gettext"
@@ -589,10 +625,13 @@ name = "php-ext-openssl"
 version = "0.1.0"
 dependencies = [
  "foreign-types",
+ "libc",
  "openssl",
  "openssl-sys",
+ "php-ext-streams",
  "php-openssl",
  "php-runtime",
+ "php-streams",
  "php-support",
  "php-vm",
 ]
@@ -682,15 +721,25 @@ dependencies = [
 name = "php-ext-simplexml"
 version = "0.1.0"
 dependencies = [
+ "php-ext-streams",
+ "php-ext-xml",
+ "php-ext-xsl",
  "php-runtime",
+ "php-simplexml",
  "php-vm",
+ "php-xsl",
 ]
 
 [[package]]
 name = "php-ext-soap"
 version = "0.1.0"
 dependencies = [
+ "php-ext-streams",
+ "php-memlimit",
  "php-runtime",
+ "php-soap",
+ "php-streams",
+ "php-support",
  "php-vm",
 ]
 
@@ -816,16 +865,22 @@ dependencies = [
 name = "php-ext-xmlreader"
 version = "0.1.0"
 dependencies = [
+ "php-ext-streams",
+ "php-ext-xml",
  "php-runtime",
  "php-vm",
+ "php-xmlreader",
 ]
 
 [[package]]
 name = "php-ext-xsl"
 version = "0.1.0"
 dependencies = [
+ "php-ext-streams",
+ "php-ext-xml",
  "php-libxml",
  "php-runtime",
+ "php-streams",
  "php-vm",
  "php-xsl",
 ]
@@ -865,6 +920,13 @@ name = "php-filter"
 version = "0.1.0"
 dependencies = [
  "php-runtime",
+]
+
+[[package]]
+name = "php-ftp"
+version = "0.1.0"
+dependencies = [
+ "openssl",
 ]
 
 [[package]]
