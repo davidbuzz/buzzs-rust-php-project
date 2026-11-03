@@ -34,6 +34,7 @@ php-ext-zlib = { path = "../php-ext-zlib" }
 php-ext-gettext = { path = "../php-ext-gettext" }
 php-ext-sysv = { path = "../php-ext-sysv" }
 php-ext-calendar = { path = "../php-ext-calendar" }
+php-ext-bcmath = { path = "../php-ext-bcmath" }
 libc = "0.2"
 
 [lints]
