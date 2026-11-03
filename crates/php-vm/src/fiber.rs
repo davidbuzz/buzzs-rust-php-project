@@ -65,6 +65,9 @@ pub struct FiberData {
     pub base: usize,
     /// `vm.depth` of the fiber's native stack while suspended.
     depth: u32,
+    /// `EG(error_reporting)` of the fiber while suspended (part of the VM
+    /// state swapped by `zend_fiber_switch_context`).
+    error_reporting: i64,
     /// Value (or error) passed by the last switch in either direction.
     transfer: Option<VmResult<Value>>,
     /// Return value.
@@ -84,6 +87,7 @@ impl FiberData {
             frames: Vec::new(),
             base: 0,
             depth: 0,
+            error_reporting: 0,
             transfer: None,
             ret: Value::Null,
         }
@@ -109,6 +113,9 @@ const STACK_SCALE: usize = 4;
 /// turn the stack size into a nesting budget (`vm.depth`) so that deep
 /// recursion fails with an error instead of hitting the guard page.
 const BYTES_PER_LEVEL: usize = 64 * 1024;
+
+/// Default `error_reporting` (`E_ALL`).
+const E_ALL: i64 = 30719;
 
 /// Nesting limit enforced by `Vm::execute`.
 const MAX_DEPTH: u32 = 20000;
@@ -212,10 +219,10 @@ impl Vm {
     /// (the value `Fiber::suspend()` returns, or the error it throws), and
     /// returns what the fiber passes back when it suspends or terminates.
     fn fiber_switch_in(&mut self, fiber: &Obj, input: VmResult<Value>) -> VmResult<Value> {
-        let Some((co, base, frames, depth)) = with(fiber, |d| {
+        let Some((co, base, frames, depth, er)) = with(fiber, |d| {
             d.state = FiberState::Running;
             d.transfer = Some(input);
-            (d.co.clone(), d.base, std::mem::take(&mut d.frames), d.depth)
+            (d.co.clone(), d.base, std::mem::take(&mut d.frames), d.depth, d.error_reporting)
         }) else {
             return Ok(Value::Null);
         };
@@ -225,10 +232,12 @@ impl Vm {
         let prefix = self.fiber_install_prefix(base);
         self.frames.extend(frames);
         let saved_depth = std::mem::replace(&mut self.depth, depth);
+        let saved_er = std::mem::replace(&mut self.error_reporting, er);
         self.fibers.push(fiber.clone());
         let finished = co.resume();
         self.fibers.pop();
         let fiber_depth = std::mem::replace(&mut self.depth, saved_depth);
+        let fiber_er = std::mem::replace(&mut self.error_reporting, saved_er);
         let frames = if self.frames.len() > base {
             self.frames.split_off(base)
         } else {
@@ -243,6 +252,7 @@ impl Vm {
             } else {
                 d.frames = frames;
                 d.depth = fiber_depth;
+                d.error_reporting = fiber_er;
             }
             d.transfer.take()
         })
@@ -278,10 +288,20 @@ impl Vm {
             Ok(co) => {
                 let budget = u32::try_from(size / BYTES_PER_LEVEL).unwrap_or(MAX_DEPTH).min(MAX_DEPTH);
                 let base = self.frames.len() + SLACK;
+                // Fibers start with the INI error_reporting, not a value
+                // lowered by a `@` around `start()`.
+                let er = match self.ini.get("error_reporting") {
+                    Some(v) if !v.is_empty() => std::str::from_utf8(v)
+                        .ok()
+                        .and_then(|s| s.trim().parse::<i64>().ok())
+                        .unwrap_or(0),
+                    _ => E_ALL,
+                };
                 with(fiber, |d| {
                     d.co = Some(Rc::new(co));
                     d.base = base;
                     d.depth = MAX_DEPTH - budget;
+                    d.error_reporting = er;
                 });
                 Ok(())
             }
@@ -301,12 +321,15 @@ impl Vm {
 
 /// `zend_fiber_execute`: runs on the fiber's own stack.
 fn fiber_body(vm: &mut Vm, s: Suspender, cb: &Value, args: Vec<Value>, named: Vec<(ZStr, Value)>) {
+    // No strong reference to the fiber may live on its own stack, or an
+    // unreferenced suspended fiber would never be destroyed.
+    let Some(()) = vm.fibers.last().and_then(|f| with(f, |d| d.suspender = Some(s))) else {
+        return;
+    };
+    let r = vm.call_value_named(cb, args, named);
     let Some(fiber) = vm.fibers.last().cloned() else {
         return;
     };
-    with(&fiber, |d| d.suspender = Some(s));
-    // Fibers start with the INI error_reporting, not a silenced one.
-    let r = vm.call_value_named(cb, args, named);
     let destroyed = with(&fiber, |d| d.destroyed).unwrap_or(false);
     let out = match r {
         Ok(v) => {
@@ -418,8 +441,13 @@ fn fiber_suspend(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     .flatten() else {
         return Err(vm.fiber_error("Cannot switch fibers in current execution context"));
     };
+    // Do not keep the fiber alive from its own stack while suspended.
+    drop(fiber);
     s.suspend();
-    with(&fiber, |d| d.transfer.take()).flatten().unwrap_or(Ok(Value::Null))
+    vm.fibers
+        .last()
+        .and_then(|f| with(f, |d| d.transfer.take()).flatten())
+        .unwrap_or(Ok(Value::Null))
 }
 
 fn fiber_get_current(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
