@@ -530,3 +530,220 @@ fn bug53033_arithmetic() {
     t.var_dump(&v);
     t.expect("bug53033.phpt");
 }
+
+#[test]
+fn bug54973_big_numbers() {
+    let mut t = T::new("bug54973");
+    let xml = t.load_string("<xml><number>9223372036854775808</number></xml>");
+    let n = t.prop(&xml, "number");
+    t.var_dump(&n);
+    let mut v = n.clone();
+    for _ in 0..3 {
+        v = php_runtime::ops::div(&v, &Value::Int(1024), &mut t.h).unwrap();
+    }
+    t.var_dump(&v);
+    let mut f = Value::Float(n.to_double(&mut t.h).unwrap());
+    for _ in 0..3 {
+        f = php_runtime::ops::div(&f, &Value::Int(1024), &mut t.h).unwrap();
+    }
+    t.var_dump(&f);
+    t.expect("bug54973.phpt");
+}
+
+#[test]
+fn bug55098_iteration_with_side_calls() {
+    let mut t = T::new("bug55098");
+    let xml = t.load_string("<root><a><b>1</b><b>2</b><b>3</b></a></root>");
+    let nodes = t.path(&xml, &["a", "b"]);
+    type Cb = fn(&mut T, &Value);
+    let tests: [(&str, Cb); 7] = [
+        ("asXml", |t, n| {
+            let _ = t.as_xml(n);
+        }),
+        ("attributes", |t, n| {
+            let _ = t.attributes(n, None, false);
+        }),
+        ("children", |t, n| {
+            let _ = t.children(n, None, false);
+        }),
+        ("getNamespaces", |t, n| {
+            let sx = t.sxe(n);
+            let _ = php_simplexml::Sxe::get_namespaces(&sx, false);
+        }),
+        ("xpath", |t, n| {
+            let _ = t.xpath(n, "/root/a/b");
+        }),
+        ("var_dump", |t, n| t.var_dump(n)),
+        ("manipulation combined with querying", |t, n| {
+            t.add_attribute(n, "attr", "value", None);
+            let a = t.dim(n, s("attr"));
+            let _ = t.bool(&a);
+            t.add_child(n, "child", Some("value"), None);
+            let outer = t.prop_w(n, "outer");
+            let o = t.dim_mode(&outer, None, FetchMode::Write);
+            t.set_prop(&o, "inner", s("foo"));
+            let o = t.prop(n, "outer");
+            let _ = t.bool(&o);
+            let _ = t.bool(n);
+            let _ = t.isset_prop(n, "outer");
+            let _ = t.isset_dim(n, s("attr"));
+            t.unset_prop(n, "outer");
+            t.unset_dim(n, s("attr"));
+            t.unset_prop(n, "child");
+        }),
+    ];
+    for (name, cb) in tests {
+        t.echo(format!("--- {name} ---\n"));
+        let n2 = nodes.clone();
+        t.foreach(&nodes, |t, _, data| {
+            let line = format!("nodeData: {}\n", t.str(&data));
+            t.echo(line);
+            cb(t, &n2);
+        });
+    }
+    t.expect("bug55098.phpt");
+}
+
+#[test]
+fn bug61335_bool_of_element() {
+    let mut t = T::new("bug61335");
+    let rec1 = t.load_string("<foo><bar>aa</bar>\n</foo>");
+    let rec2 = t.load_string("<foo><bar>aa</bar></foo>");
+    let b = t.prop(&rec1, "bar");
+    let b0 = t.dim(&b, Value::Int(0));
+    if t.bool(&b0) {
+        t.echo("NONEMPTY1\n");
+    }
+    if !t.str(&b0).is_empty() {
+        t.echo("NONEMPTY2\n");
+    }
+    let b = t.prop(&rec2, "bar");
+    let b0 = t.dim(&b, Value::Int(0));
+    if t.bool(&b0) {
+        t.echo("NONEMPTY3\n");
+    }
+    t.expect("bug61335.phpt");
+}
+
+#[test]
+fn bug62639_children_dump() {
+    let mut t = T::new("bug62639");
+    let mut keep = Vec::new();
+    for xml in [
+        "<?xml version=\"1.0\"?>\n<a>\n    <b>\n        <c>\n            <value attr=\"Some Attr\">Some Value</value>\n        </c>\n    </b>\n</a>",
+        "<?xml version=\"1.0\"?>\n<a>\n    <b>\n        <c><value attr=\"Some Attr\">Some Value</value></c>\n    </b>\n</a>",
+    ] {
+        let a = t.new_sxe_ex("A", xml, 0, false, "", false).unwrap();
+        let c = t.path(&a, &["b", "c"]);
+        let ch = t.children(&c, None, false);
+        drop(c);
+        let mut last = Value::Null;
+        t.foreach(&ch, |t, _, v| {
+            t.var_dump(&v);
+            last = v;
+        });
+        keep.push(a);
+        keep.push(last);
+    }
+    t.expect("bug62639.phpt");
+}
+
+#[test]
+fn bug63575_clone_then_add() {
+    let mut t = T::new("bug63575");
+    let o1 = t.new_sxe("<a><b></b></a>");
+    let o2 = t.clone_obj(&o1);
+    let r = t.xpath(&o2, "/a");
+    let r0 = r.as_array().unwrap().values().next().cloned().unwrap();
+    let c = t.new_sxe("<c></c>");
+    let cv = t.str(&c);
+    t.add_child(&r0, "c", Some(&cv), None);
+    let x1 = t.as_xml(&o1);
+    let x2 = t.as_xml(&o2);
+    let line = format!("{}\n{}", t.str(&x1), t.str(&x2));
+    t.echo(line);
+    t.expect("bug63575.phpt");
+}
+
+#[test]
+fn bug66084_0_dumps() {
+    let mut t = T::new("bug66084_0");
+    for xml in [
+        "<a><b/><c><x/></c></a>",
+        "<a><b/><d/><c><x/></c></a>",
+        "<a><b/><c><d/><x/></c></a>",
+        "<a><b/><c><d><x/></d></c></a>",
+    ] {
+        let v = t.load_string(xml);
+        t.var_dump(&v);
+        drop(v);
+        t.echo("\n");
+    }
+    t.expect("bug66084_0.phpt");
+}
+
+#[test]
+fn bug66084_1_json() {
+    let mut t = T::new("bug66084_1");
+    let v = t.load_string("<a><b/><c><x/></c></a>");
+    let c = t.prop(&v, "c");
+    let j = t.json(&c);
+    t.echo(j + "\n");
+    for xml in [
+        "<a><b/><c><x/></c></a>",
+        "<a><b/><d/><c><x/></c></a>",
+        "<a><b/><c><d/><x/></c></a>",
+        "<a><b/><c><d><x/></d></c></a>",
+    ] {
+        let v = t.load_string(xml);
+        let j = t.json(&v);
+        t.echo(j + "\n");
+    }
+    t.expect("bug66084_1.phpt");
+}
+
+#[test]
+fn bug67116_print_r() {
+    let mut t = T::new("bug67116");
+    let sxe = t.load_string("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<aa>\n    <bs>\n        <b>b</b>\n    </bs>\n    <cs><c>b</c></cs>\n    <ds><d id=\"d\"></d></ds>\n    <es>\n        <e id=\"e\"></e>\n    </es>\n    <fs><f id=\"f\"></f><f id=\"f\"></f></fs>\n</aa>");
+    t.print_r(&sxe);
+    t.expect("bug67116.phpt");
+}
+
+#[test]
+fn bug67572_empty() {
+    let mut t = T::new("bug67572");
+    t.echo("regular string ... ");
+    t.var_dump(&Value::Bool(false));
+    let xml = t.load_string("<xml><something>somevalue</something></xml>");
+    let xml2 = t.load_string("<xml>\n<something>somevalue</something>\n</xml>");
+    for x in [&xml, &xml2] {
+        t.foreach(x, |t, k, v| {
+            let line = format!("{} = {} ... ", t.str(&k), t.str(&v));
+            t.echo(line);
+            let b = t.bool(&v);
+            t.var_dump(&Value::Bool(!b));
+            let eq = php_runtime::ops::is_equal(&v, &Value::Bool(false), &mut t.h).unwrap();
+            t.var_dump(&Value::Bool(eq));
+        });
+    }
+    t.expect("bug67572.phpt");
+}
+
+#[test]
+fn bug69169_print_r() {
+    let mut t = T::new("bug69169");
+    let a = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<root a=\"b\">\n    <row b=\"y\">\n        <item s=\"t\" />\n    </row>\n    <row p=\"c\">\n        <item y=\"n\" />\n    </row>\n</root>";
+    let b: String = a.chars().filter(|c| !matches!(c, '\n' | '\r' | '\t')).collect();
+    let x = t.load_string(&b);
+    t.print_r(&x);
+    t.expect("bug69169.phpt");
+}
+
+#[test]
+fn bug69491_dump() {
+    let mut t = T::new("bug69491");
+    let v = t.load_string("<a>\n  <b><c/></b>\n</a>");
+    t.var_dump(&v);
+    t.expect("bug69491.phpt");
+}

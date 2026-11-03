@@ -404,6 +404,8 @@ impl T {
     /// `foreach ($v as $k => $x) body($k, $x)`.
     pub fn foreach(&mut self, v: &Value, mut body: impl FnMut(&mut T, Value, Value)) {
         let s = self.sxe(v);
+        // zend_iterator_init: the foreach iterator takes an object handle.
+        let _iterator = new_object("InternalIterator", None);
         let r = Sxe::rewind(&s, &mut self.h);
         self.catch(r);
         while Sxe::valid(&s) {
@@ -621,5 +623,17 @@ impl T {
             out.push_str(&self.str(p));
         }
         out
+    }
+}
+
+impl php_json::JsonHost for Host {}
+
+impl T {
+    /// `json_encode($v)`.
+    pub fn json(&mut self, v: &Value) -> String {
+        match php_json::encode(v, 0, 512, &mut self.h) {
+            Ok(b) => String::from_utf8_lossy(&b).into_owned(),
+            Err(_) => "false".into(),
+        }
     }
 }
