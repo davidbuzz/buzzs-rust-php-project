@@ -3,9 +3,10 @@
 
 use crate::builtins::classbuilder::ClassBuilder;
 use crate::class::{cflags, Class, InternalKind};
-use crate::func::{flags, Args, Func, UserFunction};
+use crate::func::{flags, Args, Builtin, Func, UserFunction};
 use crate::object;
-use crate::vm::{Frame, PendingCall, Vm, VmResult};
+use crate::opcode::{Op, ParamInfo, PlaceBase};
+use crate::vm::{Frame, FrameKind, PendingCall, Vm, VmResult};
 use php_runtime::{ArrayKey, HashTable, Obj, PhpRef, Value, ZArray, ZStr};
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -61,29 +62,82 @@ impl Vm {
             }
         }
         let fr = self.frame();
-        let this = if f.flags & flags::STATIC != 0 {
-            None
-        } else {
-            fr.this.clone()
+        let is_static = f.flags & flags::STATIC != 0;
+        let this = if is_static { None } else { fr.this.clone() };
+        let called = match &fr.this {
+            Some(t) => Some(object::class_of(t).clone()),
+            None => fr.called.clone(),
         };
+        // Static closures without bound variables declared inside a function
+        // are cached per declaration for the first called scope
+        // (`ZEND_DECLARE_LAMBDA_FUNCTION` cache slot). A closure without
+        // static variables never uses its function's static slots, so slot 0
+        // holds the cached object.
+        let cacheable = is_static && f.uses.is_empty() && f.code.num_statics == 0 && fr.kind == FrameKind::Function;
+        let cached = if cacheable { f.statics.borrow().first().cloned().flatten() } else { None };
+        if let Some(r) = &cached {
+            if let Value::Object(o) = r.get() {
+                let same = object::internal::<ClosureData, _>(&o, |d| same_class(d.called.as_ref(), called.as_ref()));
+                if same == Some(true) {
+                    return Ok(Value::Object(o));
+                }
+            }
+        }
         let data = ClosureData {
             func: Func::User(f.clone()),
             this,
             scope: fr.scope.clone(),
-            called: fr.called.clone(),
+            called,
             vars,
             statics: Rc::new(RefCell::new(Vec::new())),
             fake: false,
             magic_name: None,
         };
-        Ok(Value::Object(self.new_closure_object(data)))
+        let o = self.new_closure_object(data);
+        if cacheable && cached.is_none() {
+            let mut st = f.statics.borrow_mut();
+            if st.is_empty() {
+                st.push(Some(PhpRef::new(Value::Object(o.clone()))));
+            }
+        }
+        Ok(Value::Object(o))
     }
 
-    /// First-class callable syntax: wraps a pending call in a closure.
+    /// First-class callable syntax (`ZEND_CALLABLE_CONVERT`): wraps a
+    /// pending call in a closure. Closures of plain functions are cached and
+    /// shared (`EG(callable_convert_cache)`).
     pub(crate) fn make_closure_from_call(&mut self, call: PendingCall) -> VmResult<Value> {
         if let Some(c) = &call.closure {
             return Ok(Value::Object(c.clone()));
         }
+        if let Some(t) = &call.this {
+            if is_invoke_trampoline(&call) && object::has_internal::<ClosureData>(t) {
+                return Ok(Value::Object(t.clone()));
+            }
+        }
+        let cacheable = call.this.is_none()
+            && call.scope.is_none()
+            && call.called.is_none()
+            && call.magic_name.is_none()
+            && !matches!(&call.func, Func::User(u) if u.is_closure());
+        let key = ZStr::from(format!("\0fcc\0{}", call.func.name().to_string_lossy().to_ascii_lowercase()));
+        let cls = if cacheable { self.find_class(b"Closure") } else { None };
+        if let Some(cls) = &cls {
+            if let Some(v) = cls.enum_cases.borrow().get(&key) {
+                return Ok(v.clone());
+            }
+        }
+        let v = self.fake_closure(call);
+        if let Some(cls) = &cls {
+            // The `Closure` class is never an enum: its case map serves as the
+            // per-request FCC cache.
+            cls.enum_cases.borrow_mut().insert(key, v.clone());
+        }
+        Ok(v)
+    }
+
+    /// `zend_create_fake_closure` from a resolved call.
+    pub(crate) fn fake_closure(&mut self, call: PendingCall) -> Value {
         let data = ClosureData {
             func: call.func,
             this: call.this,
@@ -94,7 +148,30 @@ impl Vm {
             fake: true,
             magic_name: call.magic_name,
         };
-        Ok(Value::Object(self.new_closure_object(data)))
+        Value::Object(self.new_closure_object(data))
+    }
+
+    /// `Closure::fromCallable()`.
+    pub(crate) fn closure_from_callable_value(&mut self, v: &Value) -> VmResult<Value> {
+        if let Value::Array(a) = v {
+            if let (Some(Value::Object(o)), Some(Value::Str(m))) = (
+                a.get(&ArrayKey::Int(0)).map(Value::deref),
+                a.get(&ArrayKey::Int(1)).map(Value::deref),
+            ) {
+                if a.len() == 2 && m.eq_ignore_ascii_case(b"__invoke") && object::has_internal::<ClosureData>(&o) {
+                    return Ok(Value::Object(o));
+                }
+            }
+        }
+        if !self.is_callable_value(v) {
+            let err = self.callable_error(v);
+            return Err(self.make_throw(
+                "TypeError",
+                &format!("Failed to create closure from callable: {err}"),
+            ));
+        }
+        let call = self.resolve_callable_for_call(v)?;
+        Ok(self.fake_closure(call))
     }
 
     /// The closure data of a `Closure` object.
@@ -115,12 +192,39 @@ impl Vm {
         })
     }
 
-    /// `$closure->__invoke(...)`.
+    /// `$closure->__invoke(...)` (`zend_get_closure_invoke_method`): a
+    /// `Closure::__invoke` trampoline with the closure's parameters.
     pub(crate) fn closure_method_call(&self, o: &Obj, lc: &ZStr) -> Option<PendingCall> {
-        if lc.as_bytes() == b"__invoke" {
-            return self.closure_call(o);
+        if lc.as_bytes() != b"__invoke" {
+            return None;
         }
-        None
+        let d = self.closure_data(o)?;
+        let params: Vec<ParamInfo> = d
+            .func
+            .params()
+            .iter()
+            .map(|p| ParamInfo {
+                ty: None,
+                has_default: true,
+                ..p.clone()
+            })
+            .collect();
+        let tramp = Builtin {
+            name: ZStr::from("__invoke"),
+            defaults: vec![None; params.len()],
+            params,
+            required: 0,
+            return_type: None,
+            flags: flags::PUBLIC | flags::VARIADIC | (d.func.flags() & flags::RETURN_REF),
+            handler: closure_invoke,
+        };
+        let cls = self.find_class(b"Closure");
+        Some(PendingCall {
+            this: Some(o.clone()),
+            scope: cls.clone(),
+            called: cls,
+            ..PendingCall::new(Func::Builtin(Rc::new(tramp)))
+        })
     }
 
     /// Binds captured variables and statics into a new frame.
@@ -182,91 +286,184 @@ impl Vm {
         r
     }
 
-    fn bind_closure(
+    /// `zend_valid_closure_binding`: whether `d` may be rebound to
+    /// `new_this`/`scope`; emits the warning and returns `false` otherwise.
+    fn valid_closure_binding(
         &mut self,
-        c: &Obj,
-        new_this: Option<Value>,
-        new_scope: Option<Value>,
-        scope_given: bool,
-    ) -> VmResult<Value> {
-        let Some(mut d) = self.closure_data(c) else {
-            return Ok(Value::Null);
-        };
-        let new_this = new_this.filter(|v| !v.is_null());
-        // Resolve the new scope.
-        let scope: Option<Rc<Class>> = if scope_given {
-            match new_scope {
-                Some(Value::Object(o)) => Some(object::class_of(&o).clone()),
-                Some(Value::Null) => None,
-                Some(Value::Str(s)) if s.as_bytes() == b"static" => d.scope.clone(),
-                Some(v) => {
-                    let s = self.to_zstr(&v)?;
-                    match self.lookup_class(&s)? {
-                        Some(c) => Some(c),
-                        None => {
-                            self.warning(&format!("Class \"{}\" not found", s.to_string_lossy()))?;
-                            return Ok(Value::Null);
-                        }
+        d: &ClosureData,
+        new_this: Option<&Obj>,
+        scope: Option<&Rc<Class>>,
+    ) -> VmResult<bool> {
+        let fflags = d.func.flags();
+        let is_fake = d.fake;
+        let func_scope = d.scope.as_ref();
+        if let Some(t) = new_this {
+            if fflags & flags::STATIC != 0 {
+                self.warning("Cannot bind an instance to a static closure, this will be an error in PHP 9")?;
+                return Ok(false);
+            }
+            if is_fake {
+                if let Some(fs) = func_scope {
+                    if !object::class_of(t).is_subclass_of(fs) {
+                        let msg = format!(
+                            "Cannot bind method {}::{}() to object of class {}, this will be an error in PHP 9",
+                            object::display_name(&fs.name),
+                            fake_function_name(d),
+                            object::display_name(&object::class_of(t).name)
+                        );
+                        self.warning(&msg)?;
+                        return Ok(false);
                     }
                 }
-                None => d.scope.clone(),
             }
-        } else {
-            d.scope.clone()
-        };
-        let is_static = d.func.flags() & flags::STATIC != 0;
-        if let Some(Value::Object(t)) = &new_this {
-            if is_static {
-                self.warning("Cannot bind an instance to a static closure, this will be an error in PHP 9")?;
-                return Ok(Value::Null);
-            }
-            let _ = t;
+        } else if is_fake && func_scope.is_some() && fflags & flags::STATIC == 0 {
+            self.warning("Cannot unbind $this of method, this will be an error in PHP 9")?;
+            return Ok(false);
+        } else if !is_fake && d.this.is_some() && uses_this(&d.func) {
+            self.warning("Cannot unbind $this of closure using $this, this will be an error in PHP 9")?;
+            return Ok(false);
         }
-        if let Some(s) = &scope {
-            if s.flags & cflags::INTERNAL != 0 && s.lc_name.as_bytes() != b"closure"
-                && !d.scope.as_ref().is_some_and(|ds| Rc::ptr_eq(ds, s))
-            {
-                self.warning(&format!("Cannot bind closure to scope of internal class {}", s.name))?;
-                return Ok(Value::Null);
+        if let Some(s) = scope {
+            if s.flags & cflags::INTERNAL != 0 && !same_class(Some(s), func_scope) {
+                self.warning(&format!(
+                    "Cannot bind closure to scope of internal class {}, this will be an error in PHP 9",
+                    s.name
+                ))?;
+                return Ok(false);
             }
         }
-        if d.fake {
-            // Rebinding a method closure to another scope is not allowed.
-            if scope_given && !match (&scope, &d.scope) {
-                (Some(a), Some(b)) => Rc::ptr_eq(a, b),
-                (None, None) => true,
-                _ => false,
-            } {
-                self.warning("Cannot rebind scope of closure created from method")?;
-                return Ok(Value::Null);
-            }
+        if is_fake && !same_class(scope, func_scope) {
+            self.warning(if func_scope.is_none() {
+                "Cannot rebind scope of closure created from function, this will be an error in PHP 9"
+            } else {
+                "Cannot rebind scope of closure created from method, this will be an error in PHP 9"
+            })?;
+            return Ok(false);
         }
-        if new_this.is_none() && d.this.is_some() && !is_static {
-            if let Func::User(u) = &d.func {
-                if u.code.ops.iter().any(|op| matches!(op, crate::opcode::Op::FetchThis { .. })) || d.fake {
-                    self.warning("Cannot unbind $this of closure using $this, this will be an error in PHP 9")?;
-                    return Ok(Value::Null);
-                }
-            }
+        Ok(true)
+    }
+
+    /// `zend_create_closure_ex` for a rebinding: a new closure object over
+    /// the same function with the given scope/called scope/`$this`.
+    fn rebound_closure(
+        &mut self,
+        d: &ClosureData,
+        scope: Option<Rc<Class>>,
+        called: Option<Rc<Class>>,
+        this: Option<Obj>,
+    ) -> ClosureData {
+        let mut scope = scope;
+        let mut this = this;
+        if scope.is_none() && this.is_some() {
+            // Dummy scope when binding an object without a scope.
+            scope = self.find_class(b"Closure");
         }
-        d.this = match new_this {
-            Some(Value::Object(o)) => Some(o),
-            _ => None,
-        };
-        d.called = match &d.this {
-            Some(t) => Some(object::class_of(t).clone()),
-            None => scope.clone(),
-        };
-        d.scope = scope;
-        // Statics are copied.
-        let copied: Vec<Option<PhpRef>> = d
+        if matches!(d.func, Func::Builtin(_)) && d.scope.is_none() {
+            // Free internal functions have no meaningful scope or $this.
+            scope = None;
+            this = None;
+        }
+        if scope.is_none() || d.func.flags() & flags::STATIC != 0 {
+            this = None;
+        }
+        // Real closures get a snapshot of the static variables; fake ones
+        // keep sharing the function's.
+        let statics: Vec<Option<PhpRef>> = d
             .statics
             .borrow()
             .iter()
             .map(|s| s.as_ref().map(|r| PhpRef::new(r.get())))
             .collect();
-        d.statics = Rc::new(RefCell::new(copied));
-        Ok(Value::Object(self.new_closure_object(d)))
+        ClosureData {
+            func: d.func.clone(),
+            this,
+            scope,
+            called,
+            vars: d.vars.clone(),
+            statics: Rc::new(RefCell::new(statics)),
+            fake: d.fake,
+            magic_name: d.magic_name.clone(),
+        }
+    }
+
+    /// `do_closure_bind` (`Closure::bind` / `Closure::bindTo`).
+    fn bind_closure(&mut self, c: &Obj, new_this: Option<Obj>, new_scope: &Value) -> VmResult<Value> {
+        let Some(d) = self.closure_data(c) else {
+            return Ok(Value::Null);
+        };
+        let scope: Option<Rc<Class>> = match new_scope {
+            Value::Object(o) => Some(object::class_of(o).clone()),
+            Value::Null => None,
+            Value::Str(s) if s.as_bytes() == b"static" => d.scope.clone(),
+            v => {
+                let s = self.to_zstr(v)?;
+                match self.lookup_class(&s)? {
+                    Some(c) => Some(c),
+                    None => {
+                        self.warning(&format!("Class \"{}\" not found", s.to_string_lossy()))?;
+                        return Ok(Value::Null);
+                    }
+                }
+            }
+        };
+        if !self.valid_closure_binding(&d, new_this.as_ref(), scope.as_ref())? {
+            return Ok(Value::Null);
+        }
+        let called = match &new_this {
+            Some(t) => Some(object::class_of(t).clone()),
+            None => scope.clone(),
+        };
+        let nd = self.rebound_closure(&d, scope, called, new_this);
+        Ok(Value::Object(self.new_closure_object(nd)))
+    }
+}
+
+/// Whether a pending call is the `Closure::__invoke` trampoline.
+fn is_invoke_trampoline(call: &PendingCall) -> bool {
+    matches!(&call.func, Func::Builtin(b) if b.name.as_bytes() == b"__invoke")
+        && call.scope.as_ref().is_some_and(|s| s.lc_name.as_bytes() == b"closure")
+}
+
+/// Whether two optional classes are the same class.
+fn same_class(a: Option<&Rc<Class>>, b: Option<&Rc<Class>>) -> bool {
+    match (a, b) {
+        (Some(x), Some(y)) => Rc::ptr_eq(x, y),
+        (None, None) => true,
+        _ => false,
+    }
+}
+
+/// `ZEND_ACC_USES_THIS`: whether a user function reads `$this`.
+fn uses_this(f: &Func) -> bool {
+    let Func::User(u) = f else { return false };
+    u.code.ops.iter().any(|op| matches!(op, Op::FetchThis { .. }))
+        || u.code.places.iter().any(|p| matches!(p.base, PlaceBase::This))
+}
+
+/// The function name of a fake closure (`__call` targets use the called
+/// method name).
+fn fake_function_name(d: &ClosureData) -> String {
+    match &d.magic_name {
+        Some(m) => m.to_string_lossy(),
+        None => d.func.name().to_string_lossy(),
+    }
+}
+
+/// The name of a closure as reported by `is_callable()` and debug output:
+/// `Class::method` for fake closures of methods, else the function name.
+pub(crate) fn closure_callable_name(d: &ClosureData) -> String {
+    let name = fake_function_name(d);
+    match (&d.scope, d.fake) {
+        (Some(s), true) => format!("{}::{name}", object::display_name(&s.name)),
+        _ => name,
+    }
+}
+
+fn scope_arg(a: &Args, n: usize) -> Value {
+    if a.has(n) {
+        a.at(n)
+    } else {
+        Value::Str(ZStr::from("static"))
     }
 }
 
@@ -274,98 +471,188 @@ fn closure_bind(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let Value::Object(c) = a.at(0) else {
         return Ok(Value::Null);
     };
-    let has_scope = a.has(2);
-    vm.bind_closure(&c, Some(a.at(1)), a.get(2), has_scope)
+    let this = match a.at(1) {
+        Value::Object(o) => Some(o),
+        _ => None,
+    };
+    vm.bind_closure(&c, this, &scope_arg(a, 2))
 }
 
 fn closure_bind_to(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let c = a.this_obj();
-    let has_scope = a.has(1);
-    vm.bind_closure(&c, Some(a.at(0)), a.get(1), has_scope)
+    let this = match a.at(0) {
+        Value::Object(o) => Some(o),
+        _ => None,
+    };
+    vm.bind_closure(&c, this, &scope_arg(a, 1))
 }
 
 fn closure_call_method(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let c = a.this_obj();
-    let Some(mut d) = vm.closure_data(&c) else {
+    let Some(d) = vm.closure_data(&c) else {
         return Ok(Value::Null);
     };
     let Value::Object(this) = a.at(0) else {
         return Ok(Value::Null);
     };
-    if d.func.flags() & flags::STATIC != 0 {
-        vm.warning("Cannot bind an instance to a static closure, this will be an error in PHP 9")?;
+    let cls = object::class_of(&this).clone();
+    if !vm.valid_closure_binding(&d, Some(&this), Some(&cls))? {
         return Ok(Value::Null);
     }
-    let cls = object::class_of(&this).clone();
-    d.scope = Some(cls.clone());
-    d.called = Some(cls);
-    d.this = Some(this);
-    let tmp = vm.new_closure_object(d);
+    // The call shares the static variables of the closure.
+    let tmp = ClosureData {
+        scope: Some(cls.clone()),
+        called: Some(cls),
+        this: Some(this),
+        ..d
+    };
+    let tmp = vm.new_closure_object(tmp);
     let args: Vec<Value> = a.values.iter().skip(1).cloned().collect();
     let named = std::mem::take(&mut a.named);
-    vm.call_value_named(&Value::Object(tmp), args, named)
+    let r = vm.call_value_named(&Value::Object(tmp), args, named)?;
+    Ok(r.deref())
 }
 
 fn closure_from_callable(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let v = a.at(0);
     if let Value::Object(o) = &v {
-        if vm.closure_data(o).is_some() {
+        if object::has_internal::<ClosureData>(o) {
             return Ok(v);
         }
     }
-    let call = vm.resolve_callable_for_call(&v)?;
-    vm.make_closure_from_call(call)
+    vm.closure_from_callable_value(&v)
 }
 
+fn closure_get_current(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
+    // The frame below this builtin's own frame.
+    let n = vm.frames.len();
+    let cur = n
+        .checked_sub(2)
+        .and_then(|i| vm.frames.get(i))
+        .filter(|f| f.kind == FrameKind::Function)
+        .and_then(|f| f.closure.clone());
+    match cur {
+        Some(c) => Ok(Value::Object(c)),
+        None => Err(vm.make_throw("Error", "Current function is not a closure")),
+    }
+}
+
+/// The `Closure::__invoke` trampoline: forwards to the closure.
 fn closure_invoke(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let c = a.this_obj();
-    let args = std::mem::take(&mut a.values);
+    let params: Vec<(bool, ZStr)> = a
+        .func
+        .as_ref()
+        .map(|b| b.params.iter().map(|p| (p.by_ref, p.name.clone())).collect())
+        .unwrap_or_default();
+    let mut args = Vec::with_capacity(a.values.len());
+    for (i, v) in std::mem::take(&mut a.values).into_iter().enumerate() {
+        if !a.passed.get(i).copied().unwrap_or(true) {
+            break;
+        }
+        let by_ref = params.get(i).is_some_and(|p| p.0);
+        if by_ref && !v.is_reference() {
+            let name = params.get(i).map_or_else(String::new, |p| p.1.to_string_lossy());
+            vm.warning(&format!(
+                "Closure::__invoke(): Argument #{} (${name}) must be passed by reference, value given",
+                i + 1
+            ))?;
+            args.push(Value::Reference(PhpRef::new(v)));
+        } else {
+            args.push(v);
+        }
+    }
     let named = std::mem::take(&mut a.named);
     vm.call_value_named(&Value::Object(c), args, named)
 }
 
-/// Debug information of a closure (`var_dump`).
-pub(crate) fn closure_debug_array(vm: &mut Vm, o: &Obj) -> Option<ZArray> {
-    let d = vm.closure_data(o)?;
+/// Debug information of a closure (`zend_closure_get_debug_info`).
+pub(crate) fn closure_debug_array(_vm: &mut Vm, o: &Obj) -> Option<ZArray> {
+    object::internal::<ClosureData, _>(o, |d| closure_debug_table(d)).map(ZArray::from_table)
+}
+
+fn str_key(s: &str) -> ArrayKey {
+    ArrayKey::Str(ZStr::from(s))
+}
+
+/// A static variable as shown by `var_dump` (references held only by the
+/// closure are shown as plain values).
+fn static_display(v: &Value) -> Value {
+    match v {
+        Value::Reference(r) if r.refcount() == 1 => r.get(),
+        other => other.clone(),
+    }
+}
+
+fn closure_debug_table(d: &ClosureData) -> HashTable {
     let mut t = HashTable::new();
-    let name = match &d.func {
-        Func::User(u) if !u.is_closure() => match &d.scope {
-            Some(s) => format!("{}::{}", s.name, u.name),
-            None => u.name.to_string_lossy(),
-        },
-        Func::Builtin(b) => match &d.scope {
-            Some(s) => format!("{}::{}", s.name, b.name),
-            None => b.name.to_string_lossy(),
-        },
-        Func::User(u) => u.name.to_string_lossy(),
-    };
-    t.insert(ArrayKey::Str(ZStr::from("name")), Value::Str(ZStr::from(name)));
+    if d.fake {
+        t.insert(str_key("function"), Value::Str(ZStr::from(closure_callable_name(d))));
+    } else {
+        t.insert(str_key("name"), Value::Str(d.func.name().clone()));
+        if let Func::User(u) = &d.func {
+            t.insert(str_key("file"), Value::Str(u.code.filename.clone()));
+            t.insert(str_key("line"), Value::Int(i64::from(u.line_start)));
+        }
+    }
     if let Func::User(u) = &d.func {
-        t.insert(ArrayKey::Str(ZStr::from("file")), Value::Str(u.code.filename.clone()));
-        t.insert(ArrayKey::Str(ZStr::from("line")), Value::Int(i64::from(u.line_start)));
-        if !d.vars.is_empty() {
-            let mut st = HashTable::new();
+        let mut st = HashTable::new();
+        if !d.fake {
             for (cv, v) in &d.vars {
                 let n = u.code.cv_names.get(*cv as usize).cloned().unwrap_or_default();
-                st.insert(ArrayKey::Str(n), v.clone());
+                st.insert(ArrayKey::Str(n), static_display(v));
             }
-            t.insert(ArrayKey::Str(ZStr::from("static")), Value::Array(ZArray::from_table(st)));
+        }
+        let names = static_var_names(u);
+        if !names.is_empty() {
+            let store = if d.fake { None } else { Some(d.statics.borrow()) };
+            let fstore = u.statics.borrow();
+            let slots: &Vec<Option<PhpRef>> = store.as_deref().unwrap_or(&fstore);
+            for (idx, name) in names {
+                let v = match slots.get(idx as usize).cloned().flatten() {
+                    Some(r) if r.refcount() == 1 => r.get(),
+                    Some(r) => Value::Reference(r),
+                    None => Value::Null,
+                };
+                st.insert(ArrayKey::Str(name), v);
+            }
+        }
+        if !st.is_empty() {
+            t.insert(str_key("static"), Value::Array(ZArray::from_table(st)));
         }
     }
     if let Some(this) = &d.this {
-        t.insert(ArrayKey::Str(ZStr::from("this")), Value::Object(this.clone()));
+        t.insert(str_key("this"), Value::Object(this.clone()));
     }
-    let params = d.func.params().to_vec();
-    if !params.is_empty() {
-        let mut pt = HashTable::new();
-        for p in &params {
-            let key = format!("{}${}", if p.by_ref { "&" } else { "" }, p.name);
-            let desc = if p.has_default || p.variadic { "<optional>" } else { "<required>" };
-            pt.insert(ArrayKey::Str(ZStr::from(key)), Value::Str(ZStr::from(desc)));
+    if d.magic_name.is_none() {
+        let params = d.func.params();
+        if !params.is_empty() {
+            let required = d.func.required() as usize;
+            let mut pt = HashTable::new();
+            for (i, p) in params.iter().enumerate() {
+                let key = format!("{}${}", if p.by_ref { "&" } else { "" }, p.name);
+                let desc = if i >= required { "<optional>" } else { "<required>" };
+                pt.insert(ArrayKey::Str(ZStr::from(key)), Value::Str(ZStr::from(desc)));
+            }
+            t.insert(str_key("parameter"), Value::Array(ZArray::from_table(pt)));
         }
-        t.insert(ArrayKey::Str(ZStr::from("parameter")), Value::Array(ZArray::from_table(pt)));
     }
-    Some(ZArray::from_table(t))
+    t
+}
+
+/// `static $x` declarations of a function: (slot, name) in slot order.
+fn static_var_names(u: &UserFunction) -> Vec<(u32, ZStr)> {
+    let mut out: Vec<(u32, ZStr)> = Vec::new();
+    for op in &u.code.ops {
+        if let Op::BindStatic { cv, idx, .. } | Op::InitStatic { cv, idx, .. } = op {
+            if !out.iter().any(|(i, _)| i == idx) {
+                let n = u.code.cv_names.get(*cv as usize).cloned().unwrap_or_default();
+                out.push((*idx, n));
+            }
+        }
+    }
+    out.sort_by_key(|(i, _)| *i);
+    out
 }
 
 /// Registers the `Closure` class.
@@ -384,11 +671,13 @@ pub(crate) fn register(vm: &mut Vm) {
             closure_bind_to,
         )
         .method("call(object $newThis, mixed ...$args): mixed", flags::PUBLIC, closure_call_method)
+        // Declared `callable`, but checked by the handler (zpp `Z_PARAM_ZVAL`)
+        // to report "Failed to create closure from callable".
         .method(
-            "fromCallable(callable $callback): Closure",
+            "fromCallable(mixed $callback): Closure",
             flags::PUBLIC | flags::STATIC,
             closure_from_callable,
         )
-        .method("__invoke(mixed ...$args): mixed", flags::PUBLIC, closure_invoke)
+        .method("getCurrent(): Closure", flags::PUBLIC | flags::STATIC, closure_get_current)
         .register(vm);
 }

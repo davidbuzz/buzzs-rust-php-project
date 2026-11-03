@@ -1,11 +1,18 @@
 //! Enums (`Zend/zend_enum.c`), internal object hooks and callable checks.
 
-use crate::class::Class;
+use crate::class::{Class, ClassConst};
 use crate::object;
 use crate::types::mask;
 use crate::vm::{Vm, VmResult};
 use php_runtime::{ArrayKey, Obj, Value, ZArray, ZStr};
+use std::cell::RefCell;
 use std::rc::Rc;
+
+thread_local! {
+    /// Backed enums whose case table is being built (guards against
+    /// re-entrance from case value expressions).
+    static BUILDING: RefCell<Vec<*const Class>> = const { RefCell::new(Vec::new()) };
+}
 
 impl Vm {
     /// The object for enum case `name`.
@@ -25,34 +32,105 @@ impl Vm {
                 &format!("{}::{} is not a case", cls.name, name.to_string_lossy()),
             ));
         }
-        let mut slots = vec![None; cls.props.len()];
-        if let Some(pi) = cls.prop_map.get(&ZStr::from("name")) {
-            slots[pi.slot as usize] = Some(Value::Str(name.clone()));
-        }
         if cls.backing.is_some() {
-            let v = self.eval_const_expr(&c.expr, Some(cls))?;
-            let ok = match cls.backing {
-                Some(m) if m == mask::LONG => matches!(v, Value::Int(_)),
-                _ => matches!(v, Value::Str(_)),
-            };
-            if !ok {
-                let ty = if cls.backing == Some(mask::LONG) { "int" } else { "string" };
-                return Err(self.fatal(&format!(
+            self.enum_ensure_backed_table(cls)?;
+            if let Some(v) = cls.enum_cases.borrow().get(name) {
+                return Ok(v.clone());
+            }
+        }
+        let value = if cls.backing.is_some() {
+            Some(self.enum_case_backing_value(cls, &c)?)
+        } else {
+            None
+        };
+        Ok(self.enum_create_case(cls, &c, value))
+    }
+
+    /// Evaluates and type-checks the backing value of case `c`.
+    fn enum_case_backing_value(&mut self, cls: &Rc<Class>, c: &ClassConst) -> VmResult<Value> {
+        let v = self.eval_const_expr(&c.expr, Some(cls))?;
+        let is_int = cls.backing == Some(mask::LONG);
+        let ok = if is_int { matches!(v, Value::Int(_)) } else { matches!(v, Value::Str(_)) };
+        if !ok {
+            let ty = if is_int { "int" } else { "string" };
+            return Err(self.make_throw(
+                "TypeError",
+                &format!(
                     "Enum case type {} does not match enum backing type {ty}",
                     crate::typecheck::given_type(&v)
-                )));
+                ),
+            ));
+        }
+        Ok(v)
+    }
+
+    /// Builds the backed-enum table unless all cases already exist (or it is
+    /// being built further up the stack).
+    fn enum_ensure_backed_table(&mut self, cls: &Rc<Class>) -> VmResult<()> {
+        let total = cls.consts.iter().filter(|c| c.is_case).count();
+        let ptr = Rc::as_ptr(cls);
+        if cls.enum_cases.borrow().len() >= total || BUILDING.with(|b| b.borrow().contains(&ptr)) {
+            return Ok(());
+        }
+        BUILDING.with(|b| b.borrow_mut().push(ptr));
+        let r = self.enum_build_backed_table(cls);
+        BUILDING.with(|b| b.borrow_mut().retain(|p| !std::ptr::eq(*p, ptr)));
+        r
+    }
+
+    /// `zend_enum_build_backed_enum_table`: evaluates every case value,
+    /// rejecting mismatched types and duplicates, then creates the cases.
+    fn enum_build_backed_table(&mut self, cls: &Rc<Class>) -> VmResult<()> {
+        let cases: Vec<Rc<ClassConst>> = cls.consts.iter().filter(|c| c.is_case).cloned().collect();
+        let mut values: Vec<Value> = Vec::with_capacity(cases.len());
+        for c in &cases {
+            let existing = cls.enum_cases.borrow().get(&c.name).cloned();
+            let v = match existing {
+                Some(Value::Object(o)) => self.enum_case_value(&o).unwrap_or_default(),
+                _ => self.enum_case_backing_value(cls, c)?,
+            };
+            if let Some(i) = values.iter().position(|x| backing_eq(x, &v)) {
+                return Err(self.make_throw(
+                    "Error",
+                    &format!(
+                        "Duplicate value in enum {} for cases {} and {}",
+                        cls.name, cases[i].name, c.name
+                    ),
+                ));
             }
-            if let Some(pi) = cls.prop_map.get(&ZStr::from("value")) {
-                slots[pi.slot as usize] = Some(v);
+            values.push(v);
+        }
+        for (c, v) in cases.iter().zip(values) {
+            if !cls.enum_cases.borrow().contains_key(&c.name) {
+                self.enum_create_case(cls, c, Some(v));
             }
+        }
+        Ok(())
+    }
+
+    /// Creates (and caches) the object of case `c`.
+    fn enum_create_case(&mut self, cls: &Rc<Class>, c: &ClassConst, value: Option<Value>) -> Value {
+        let mut slots = vec![None; cls.props.len()];
+        if let Some(pi) = cls.prop_map.get(&ZStr::from("name")) {
+            slots[pi.slot as usize] = Some(Value::Str(c.name.clone()));
+        }
+        if let (Some(v), Some(pi)) = (value, cls.prop_map.get(&ZStr::from("value"))) {
+            slots[pi.slot as usize] = Some(v);
         }
         let o = object::new_object(cls.clone(), slots);
         let d = object::data(&o);
         d.flags.set(d.flags.get() | object::oflags::ENUM_CASE | object::oflags::DESTRUCTED);
         let v = Value::Object(o);
-        cls.enum_cases.borrow_mut().insert(name.clone(), v.clone());
+        cls.enum_cases.borrow_mut().insert(c.name.clone(), v.clone());
         *c.value.borrow_mut() = Some(v.clone());
-        Ok(v)
+        v
+    }
+
+    /// The backing value of an enum case object.
+    pub(crate) fn enum_case_value(&self, o: &Obj) -> Option<Value> {
+        let cls = object::class_of(o);
+        let pi = cls.prop_map.get(&ZStr::from("value"))?;
+        object::data(o).slots.borrow().get(pi.slot as usize).cloned().flatten()
     }
 
     /// The case name of an enum object.
@@ -80,11 +158,23 @@ impl Vm {
         let is_int = cls.backing == Some(mask::LONG);
         let v = if is_int {
             match v {
-                Value::Int(_) => v,
-                Value::Str(s) => match php_runtime::numeric::is_numeric_string_ex(s.as_bytes(), false) {
-                    Some(n) => match n.value {
-                        php_runtime::numeric::Number::Int(i) => Value::Int(i),
-                        php_runtime::numeric::Number::Float(_) => {
+                Value::Str(s) => {
+                    let parsed = php_runtime::numeric::is_numeric_string_ex(s.as_bytes(), false).map(|n| n.value);
+                    match parsed {
+                        Some(php_runtime::numeric::Number::Int(i)) => Value::Int(i),
+                        #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+                        Some(php_runtime::numeric::Number::Float(f))
+                            if f.is_finite() && f >= i64::MIN as f64 && f < i64::MAX as f64 =>
+                        {
+                            if f.fract() != 0.0 {
+                                self.deprecated(&format!(
+                                    "Implicit conversion from float-string \"{}\" to int loses precision",
+                                    s.to_string_lossy()
+                                ))?;
+                            }
+                            Value::Int(f as i64)
+                        }
+                        _ => {
                             return Err(self.make_throw(
                                 "TypeError",
                                 &format!(
@@ -94,18 +184,8 @@ impl Vm {
                                 ),
                             ))
                         }
-                    },
-                    None => {
-                        return Err(self.make_throw(
-                            "TypeError",
-                            &format!(
-                                "{}::{}(): Argument #1 ($value) must be of type int, string given",
-                                cls.name,
-                                if try_ { "tryFrom" } else { "from" }
-                            ),
-                        ))
                     }
-                },
+                }
                 other => other,
             }
         } else {
@@ -114,16 +194,13 @@ impl Vm {
                 other => Value::Str(self.to_zstr(&other)?),
             }
         };
+        self.enum_ensure_backed_table(cls)?;
         let names: Vec<ZStr> = cls.consts.iter().filter(|c| c.is_case).map(|c| c.name.clone()).collect();
         for n in names {
             let case = self.enum_case(cls, &n)?;
             if let Value::Object(o) = &case {
-                let pi = cls.prop_map.get(&ZStr::from("value")).cloned();
-                if let Some(pi) = pi {
-                    let cv = object::data(o).slots.borrow()[pi.slot as usize].clone().unwrap_or_default();
-                    if php_runtime::ops::is_identical(&cv, &v).unwrap_or(false) {
-                        return Ok(case);
-                    }
+                if self.enum_case_value(o).is_some_and(|cv| backing_eq(&cv, &v)) {
+                    return Ok(case);
                 }
             }
         }
@@ -318,5 +395,14 @@ impl Vm {
             Value::Object(_) => "no array or string given".to_string(),
             _ => "no array or string given".to_string(),
         }
+    }
+}
+
+/// Equality of two backing values (both `int` or both `string`).
+fn backing_eq(a: &Value, b: &Value) -> bool {
+    match (a, b) {
+        (Value::Int(x), Value::Int(y)) => x == y,
+        (Value::Str(x), Value::Str(y)) => x.as_bytes() == y.as_bytes(),
+        _ => false,
     }
 }
