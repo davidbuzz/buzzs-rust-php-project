@@ -322,7 +322,7 @@ impl Node {
         if n.t() == ffi::XML_ENTITY_REF_NODE {
             entity_reference_sync(n);
         }
-        let class = if self.is_modern() {
+        let class = if self.family_is_modern() {
             "Dom\\NodeList"
         } else {
             "DOMNodeList"
@@ -394,7 +394,7 @@ impl Node {
     pub fn attributes(&self) -> DomResult<Option<NamedNodeMap>> {
         let n = self.prop_node()?;
         if n.is_element() {
-            let class = if self.is_modern() {
+            let class = if self.family_is_modern() {
                 "Dom\\NamedNodeMap"
             } else {
                 "DOMNamedNodeMap"
@@ -1309,16 +1309,16 @@ impl Node {
         }
     }
 
-    /// `__sleep()` / `serialize()`: always throws.
+    /// `__sleep()` / `serialize()`: always throws (a plain `Exception`).
     pub fn sleep(class: &str) -> DomError {
-        DomError::Error(format!(
+        DomError::Exception(format!(
             "Serialization of '{class}' is not allowed, unless serialization methods are implemented in a subclass"
         ))
     }
 
-    /// `__wakeup()`: always throws.
+    /// `__wakeup()`: always throws (a plain `Exception`).
     pub fn wakeup(class: &str) -> DomError {
-        DomError::Error(format!(
+        DomError::Exception(format!(
             "Unserialization of '{class}' is not allowed, unless unserialization methods are implemented in a subclass"
         ))
     }

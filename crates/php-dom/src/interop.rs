@@ -93,15 +93,17 @@ pub fn namespace_node(parent: &Node, prefix: Option<&[u8]>, href: &[u8]) -> Opti
     let parent_n = parent.n()?;
     let h = cs(href);
     let p = prefix.map(cs);
-    // SAFETY: a temporary unlinked namespace record, copied by
+    // SAFETY: a temporary unlinked namespace record (built by hand, as
+    // xmlNewNs() refuses the reserved `xml` prefix), copied by
     // fake_ns_node_ptr and freed right after.
     unsafe {
-        let tmp = ffi::xmlNewNs(
-            ptr::null_mut(),
-            h.as_ptr().cast(),
-            p.as_ref().map_or(ptr::null(), |c| c.as_ptr().cast()),
-        );
+        let tmp = crate::object::alloc_ns();
         let ns = Ns::new(tmp)?;
+        (*tmp).type_ = ffi::XML_LOCAL_NAMESPACE;
+        (*tmp).href = ffi::xmlStrdup(h.as_ptr().cast());
+        (*tmp).prefix = p
+            .as_ref()
+            .map_or(ptr::null(), |c| ffi::xmlStrdup(c.as_ptr().cast()));
         let fake = crate::xpath::fake_ns_node_ptr(Some(parent_n), ns, ptr::null_mut());
         ffi::xmlFreeNs(tmp);
         Some(Node::wrap_namespace(fake, Some(parent.clone())))

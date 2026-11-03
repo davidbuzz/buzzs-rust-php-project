@@ -283,3 +283,20 @@ fn interop_raw_handles() {
     assert_eq!(ns.class_name(), "DOMNameSpaceNode");
     assert!(d.document_shared(), "other handles reference the document");
 }
+
+#[test]
+fn interop_xml_prefixed_namespace_node() {
+    let doc = xml("<root/>");
+    let root = match prop(&doc, "documentElement") {
+        DomValue::Node(n) => n,
+        other => panic!("{other:?}"),
+    };
+    let ns = php_dom::interop::namespace_node(
+        &root,
+        Some(b"xml"),
+        b"http://www.w3.org/XML/1998/namespace",
+    )
+    .expect("xml: namespace node");
+    let o = DomObject::Node(ns);
+    assert_eq!(string(prop(&o, "prefix")), "xml");
+}

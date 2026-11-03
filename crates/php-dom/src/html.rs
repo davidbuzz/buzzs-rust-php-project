@@ -335,11 +335,29 @@ pub(crate) fn save_html_file(
         return Ok(None);
     };
     let doc = this.node()?;
-    let data = common_save(this, doc, doc);
-    if stream.write_all(&data).is_err() || stream.flush().is_err() {
+    // Streamed piece by piece, as PHP's write callbacks do: a failing
+    // stream stops the serialization at the first failed write.
+    let private = this.doc_ref().and_then(|d| d.private_data());
+    let enc = crate::raw::opt_cstr(doc.d().encoding).and_then(Encoding::by_name);
+    let mut written: usize = 0;
+    let mut s = Html5Serializer::streaming(
+        private.as_deref(),
+        Box::new(|piece: &[u8]| {
+            let data = match enc {
+                Some(e) => e.encode_from_utf8(piece),
+                None => piece.to_vec(),
+            };
+            written += data.len();
+            stream.write_all(&data).is_ok()
+        }),
+    );
+    s.serialize_outer(doc);
+    let failed = s.failed();
+    drop(s);
+    if failed || stream.flush().is_err() {
         return Ok(None);
     }
-    Ok(Some(i64::try_from(data.len()).unwrap_or(i64::MAX)))
+    Ok(Some(i64::try_from(written).unwrap_or(i64::MAX)))
 }
 
 /// `debugGetTemplateCount()`.

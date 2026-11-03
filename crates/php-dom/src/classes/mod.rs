@@ -201,7 +201,11 @@ impl std::hash::Hasher for Fnv {
         self.0
     }
     fn write(&mut self, bytes: &[u8]) {
-        let mut h = if self.0 == 0 { 0xcbf2_9ce4_8422_2325 } else { self.0 };
+        let mut h = if self.0 == 0 {
+            0xcbf2_9ce4_8422_2325
+        } else {
+            self.0
+        };
         for &b in bytes {
             h ^= u64::from(b);
             h = h.wrapping_mul(0x0100_0000_01b3);
@@ -231,17 +235,52 @@ fn class_index() -> &'static ClassIndex {
         }
         let subclass = table::CLASSES
             .iter()
-            .map(|c| table::CLASSES.iter().map(|b| is_subclass_uncached(c.name, b.name)).collect())
+            .map(|c| {
+                table::CLASSES
+                    .iter()
+                    .map(|b| is_subclass_uncached(c.name, b.name))
+                    .collect()
+            })
             .collect();
-        ClassIndex { exact, lower, subclass }
+        ClassIndex {
+            exact,
+            lower,
+            subclass,
+        }
     })
 }
 
 fn find_class_linear(name: &str) -> Option<&'static ClassInfo> {
-    table::CLASSES.iter().find(|c| c.name.eq_ignore_ascii_case(name))
+    table::CLASSES
+        .iter()
+        .find(|c| c.name.eq_ignore_ascii_case(name))
+}
+
+thread_local! {
+    /// Direct-mapped cache of recent lookups keyed by the name's address
+    /// (hits are re-validated by comparing the name).
+    static IDX_CACHE: [std::cell::Cell<(usize, u16)>; 64] = const { [const { std::cell::Cell::new((0, 0)) }; 64] };
 }
 
 fn class_idx(name: &str) -> Option<usize> {
+    let addr = name.as_ptr() as usize;
+    let slot = (addr >> 3) & 63;
+    let (cached_addr, cached_idx) = IDX_CACHE.with(|c| c[slot].get());
+    if cached_addr == addr {
+        let i = usize::from(cached_idx);
+        if table::CLASSES[i]
+            .name
+            .eq_ignore_ascii_case(name.strip_prefix('\\').unwrap_or(name))
+        {
+            return Some(i);
+        }
+    }
+    let found = class_idx_slow(name)?;
+    IDX_CACHE.with(|c| c[slot].set((addr, u16::try_from(found).unwrap_or(0))));
+    Some(found)
+}
+
+fn class_idx_slow(name: &str) -> Option<usize> {
     let name = name.strip_prefix('\\').unwrap_or(name);
     let idx = class_index();
     if let Some(&i) = idx.exact.get(name) {
@@ -259,7 +298,10 @@ pub fn find_class(name: &str) -> Option<&'static ClassInfo> {
     class_idx(name).map(|i| &table::CLASSES[i])
 }
 
-fn find_method_uncached(class: &str, method: &str) -> Option<(&'static ClassInfo, &'static MethodInfo)> {
+fn find_method_uncached(
+    class: &str,
+    method: &str,
+) -> Option<(&'static ClassInfo, &'static MethodInfo)> {
     let mut cur = find_class(class);
     while let Some(c) = cur {
         if let Some(m) = c

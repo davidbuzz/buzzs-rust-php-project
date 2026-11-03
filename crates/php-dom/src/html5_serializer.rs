@@ -9,10 +9,17 @@ use crate::ns::{
 };
 use crate::raw::N;
 
+/// Receives serialized pieces; `false` aborts the serialization.
+pub(crate) type Sink<'a> = Box<dyn FnMut(&[u8]) -> bool + 'a>;
+
 /// Output sink (always UTF-8; encoding conversion happens afterwards).
 pub(crate) struct Html5Serializer<'a> {
     out: Vec<u8>,
     private: Option<&'a PrivateData>,
+    /// Streaming mode: every write goes straight to the sink (like PHP's
+    /// `write_string` callbacks); `false` from the sink aborts.
+    sink: Option<Sink<'a>>,
+    failed: bool,
 }
 
 const RAW_TEXT_PARENTS: &[&[u8]] = &[
@@ -60,7 +67,27 @@ impl<'a> Html5Serializer<'a> {
         Html5Serializer {
             out: Vec::new(),
             private,
+            sink: None,
+            failed: false,
         }
+    }
+
+    /// A serializer that hands every piece to `sink` as it is produced.
+    pub(crate) fn streaming(
+        private: Option<&'a PrivateData>,
+        sink: Sink<'a>,
+    ) -> Self {
+        Html5Serializer {
+            out: Vec::new(),
+            private,
+            sink: Some(sink),
+            failed: false,
+        }
+    }
+
+    /// Whether a streaming write failed.
+    pub(crate) fn failed(&self) -> bool {
+        self.failed
     }
 
     pub(crate) fn finish(self) -> Vec<u8> {
@@ -68,7 +95,17 @@ impl<'a> Html5Serializer<'a> {
     }
 
     fn w(&mut self, b: &[u8]) {
-        self.out.extend_from_slice(b);
+        if self.failed || b.is_empty() {
+            return;
+        }
+        match &mut self.sink {
+            Some(sink) => {
+                if !sink(b) {
+                    self.failed = true;
+                }
+            }
+            None => self.out.extend_from_slice(b),
+        }
     }
 
     /// <https://html.spec.whatwg.org/multipage/parsing.html#escapingString>.
@@ -85,8 +122,8 @@ impl<'a> Html5Serializer<'a> {
                 _ => None,
             };
             if let Some(r) = rep {
-                self.out.extend_from_slice(&content[last..i]);
-                self.out.extend_from_slice(r);
+                self.w(&content[last..i]);
+                self.w(r);
                 if content[i] == 0xC2 {
                     i += 1;
                 }
@@ -94,7 +131,7 @@ impl<'a> Html5Serializer<'a> {
             }
             i += 1;
         }
-        self.out.extend_from_slice(&content[last..]);
+        self.w(&content[last..]);
     }
 
     fn text_node(&mut self, node: N) {
@@ -185,6 +222,9 @@ impl<'a> Html5Serializer<'a> {
     fn serialize_node(&mut self, start: Option<N>, bound: Option<N>) {
         let mut cur = start;
         while let Some(node) = cur {
+            if self.failed {
+                return;
+            }
             match node.t() {
                 ffi::XML_DTD_NODE => {
                     self.w(b"<!DOCTYPE ");
