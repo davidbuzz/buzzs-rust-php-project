@@ -181,6 +181,7 @@ fn clock_ns(clock: libc::clockid_t) -> i64 {
 /// the response cut off.
 fn hard_timeout(r: &dyn Backend, capture: Option<&StderrCapture>, secs: i64) -> ! {
     if let Some(c) = capture {
+        c.restore();
         forward_log(r, &c.snapshot());
     }
     let msg = format!(
@@ -193,13 +194,59 @@ fn hard_timeout(r: &dyn Backend, capture: Option<&StderrCapture>, secs: i64) -> 
     unsafe { libc::_exit(1) }
 }
 
-/// Sends captured stderr (the VM's error log when `error_log` is unset,
-/// and `error_log()` messages) to the httpd error log, one entry per PHP
-/// message (lines not starting with `PHP ` continue the previous one).
+/// Forwards captured stderr once stderr is restored: lines httpd itself
+/// logged during the request (the main server's error log *is* stderr)
+/// are written back verbatim; the rest (the VM's error log when
+/// `error_log` is unset) becomes `ap_log_rerror` entries, one per PHP
+/// message, at the level `php_error_cb` would use.
 fn forward_log(r: &dyn Backend, data: &[u8]) {
-    for msg in split_log_messages(data) {
-        r.log(LogLevel::Err, &msg);
+    use std::io::Write;
+    let mut pending: Vec<u8> = Vec::new();
+    let mut flush_pending = |pending: &mut Vec<u8>| {
+        for msg in split_log_messages(pending) {
+            r.log(log_level_of(&msg), &msg);
+        }
+        pending.clear();
+    };
+    for line in data.split_inclusive(|&c| c == b'\n') {
+        if is_httpd_log_line(line) {
+            flush_pending(&mut pending);
+            let mut line = line.to_vec();
+            if line.last() != Some(&b'\n') {
+                line.push(b'\n');
+            }
+            let _ = std::io::stderr().write_all(&line);
+        } else {
+            pending.extend_from_slice(line);
+        }
     }
+    flush_pending(&mut pending);
+}
+
+/// Whether a captured line was written by httpd's logger
+/// (`[date] [module:level] ...`).
+fn is_httpd_log_line(line: &[u8]) -> bool {
+    line.first() == Some(&b'[')
+        && line
+            .windows(3)
+            .take(64)
+            .any(|w| w == b"] [")
+}
+
+/// The httpd level `php_error_cb` uses for a logged PHP message.
+pub fn log_level_of(msg: &[u8]) -> LogLevel {
+    const LEVELS: &[(&[u8], LogLevel)] = &[
+        (b"PHP Fatal error:", LogLevel::Err),
+        (b"PHP Recoverable fatal error:", LogLevel::Err),
+        (b"PHP Parse error:", LogLevel::Err),
+        (b"PHP Warning:", LogLevel::Warning),
+        (b"PHP Notice:", LogLevel::Notice),
+        (b"PHP Deprecated:", LogLevel::Info),
+    ];
+    LEVELS
+        .iter()
+        .find(|(p, _)| msg.starts_with(p))
+        .map_or(LogLevel::Err, |(_, l)| *l)
 }
 
 /// Splits captured stderr into log messages.
@@ -279,12 +326,20 @@ impl StderrCapture {
         out
     }
 
-    /// Restores stderr and returns the captured bytes.
-    fn finish(self) -> Vec<u8> {
-        let data = self.snapshot();
-        // SAFETY: restoring the saved descriptor and closing ours.
+    /// Points stderr back at the original descriptor.
+    fn restore(&self) {
+        // SAFETY: `saved` is a descriptor we own (dup of the original 2).
         unsafe {
             libc::dup2(self.saved, 2);
+        }
+    }
+
+    /// Restores stderr and returns the captured bytes.
+    fn finish(self) -> Vec<u8> {
+        self.restore();
+        let data = self.snapshot();
+        // SAFETY: closing the descriptors we own.
+        unsafe {
             libc::close(self.saved);
             libc::close(self.memfd);
         }
@@ -336,6 +391,21 @@ mod tests {
             htaccess: true,
         });
         assert_eq!(handle(&m, Box::new(|| None)), DECLINED);
+    }
+
+    #[test]
+    fn httpd_lines_are_recognised() {
+        assert!(is_httpd_log_line(b"[Tue Nov 03 20:03:58.704347 2026] [php:notice] [pid 1] x\n"));
+        assert!(!is_httpd_log_line(b"PHP Warning:  x"));
+        assert!(!is_httpd_log_line(b"[just brackets]"));
+    }
+
+    #[test]
+    fn log_levels() {
+        assert_eq!(log_level_of(b"PHP Warning:  x"), LogLevel::Warning);
+        assert_eq!(log_level_of(b"PHP Deprecated:  x"), LogLevel::Info);
+        assert_eq!(log_level_of(b"PHP Fatal error:  x"), LogLevel::Err);
+        assert_eq!(log_level_of(b"other"), LogLevel::Err);
     }
 
     #[test]

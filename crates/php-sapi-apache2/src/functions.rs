@@ -25,6 +25,7 @@ const E_WARNING: i64 = 2;
 thread_local! {
     static ORIG_INI_SET: Cell<Option<NativeFn>> = const { Cell::new(None) };
     static ORIG_INI_RESTORE: Cell<Option<NativeFn>> = const { Cell::new(None) };
+    static ORIG_ERROR_LOG: Cell<Option<NativeFn>> = const { Cell::new(None) };
 }
 
 /// The `apache2handler` module: SAPI functions and INI entries.
@@ -290,6 +291,30 @@ fn ini_restore(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let r = orig(vm, a)?;
     after_ini_change(vm, name.as_bytes());
     Ok(r)
+}
+
+/// `error_log()`: types 0 (without an `error_log` file) and 4 go to the
+/// httpd error log (`php_apache_sapi_log_message`), the others to the
+/// standard implementation.
+fn error_log(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let ty = if a.has(1) { a.int(1) } else { 0 };
+    let level = match ty {
+        0 if vm.ini_string("error_log").is_none_or(|v| v.is_empty()) => {
+            Some(crate::backend::LogLevel::Notice)
+        }
+        4 => Some(crate::backend::LogLevel::Err),
+        _ => None,
+    };
+    if let Some(level) = level {
+        let msg = a.str(0);
+        if with_ctx(|c| c.backend.log(level, msg.as_bytes())).is_some() {
+            return Ok(Value::Bool(true));
+        }
+    }
+    match ORIG_ERROR_LOG.with(Cell::get) {
+        Some(orig) => orig(vm, a),
+        None => Ok(Value::Bool(false)),
+    }
 }
 
 #[allow(clippy::unnecessary_wraps)]
@@ -565,6 +590,9 @@ impl Extension for Apache2Handler {
             if let Some(b) = vm.native_function("ini_restore") {
                 ORIG_INI_RESTORE.with(|c| c.set(Some(b.handler)));
             }
+            if let Some(b) = vm.native_function("error_log") {
+                ORIG_ERROR_LOG.with(|c| c.set(Some(b.handler)));
+            }
         }
         m.constant("PHP_SAPI", str_value("apache2handler"))
             .function("header(string $header, bool $replace = true, int $response_code = 0): void", header)
@@ -587,6 +615,10 @@ impl Extension for Apache2Handler {
             .function("connection_status(): int", connection_status)
             .function("ignore_user_abort(?bool $enable = null): bool", ignore_user_abort)
             .function("set_time_limit(int $seconds): bool", set_time_limit)
+            .function(
+                "error_log(string $message, int $message_type = 0, ?string $destination = null, ?string $additional_headers = null): bool",
+                error_log,
+            )
             .function(
                 "ini_set(string $option, string|int|float|bool|null $value): string|false",
                 ini_set,
