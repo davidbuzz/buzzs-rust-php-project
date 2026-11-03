@@ -1522,6 +1522,7 @@ impl Interp {
             return Err(rt_err(format!("Call to a member function {n}() on {}", o.deref().value_name())));
         };
         let cls = tobj(&o).class.clone();
+        php_spl::handlers::before_method_call(self, &o)?;
         let m = cls.find_method(&n.to_ascii_lowercase());
         if args.is_first_class_callable() {
             let m = m.ok_or_else(|| rt_err(format!("Call to undefined method {}::{n}()", cls.name)))?;
@@ -1620,6 +1621,10 @@ impl Interp {
             if let Some(msg) = php_spl::classes::deprecation_message(&m.class, &m.name) {
                 self.emit(ErrorLevel::Deprecated, &msg)?;
             }
+        }
+        self.steps += 1;
+        if self.steps % 1024 == 0 && std::time::Instant::now() > self.deadline {
+            return Err(RuntimeError::Fatal("harness timeout".into()));
         }
         self.depth += 1;
         if self.depth > 3000 {

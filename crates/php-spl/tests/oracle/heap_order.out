@@ -1,0 +1,54 @@
+c:2
+i:2
+f:2
+e:1
+h:1
+b:1
+a:0
+d:0
+j:0
+g:0
+3=y
+2=x
+1=z
+0=w
+-1,0,1,2,3,3,3,5,7,8,9,10
+0
+object(SplMaxHeap)#3 (3) {
+  ["flags":"SplHeap":private]=>
+  int(0)
+  ["isCorrupted":"SplHeap":private]=>
+  bool(false)
+  ["heap":"SplHeap":private]=>
+  array(7) {
+    [0]=>
+    string(1) "b"
+    [1]=>
+    string(1) "a"
+    [2]=>
+    string(2) "10"
+    [3]=>
+    string(1) "9"
+    [4]=>
+    float(9.5)
+    [5]=>
+    bool(true)
+    [6]=>
+    NULL
+  }
+}
+string(1) "b"
+string(1) "a"
+bool(true)
+string(2) "10"
+float(9.5)
+string(1) "9"
+NULL
+RuntimeException: Can't peek at an empty heap
+boom
+bool(true)
+int(4)
+Heap is corrupted, heap properties are no longer ensured.
+bool(false)
+Must specify at least one extract flag
+int(3)

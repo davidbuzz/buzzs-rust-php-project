@@ -319,6 +319,21 @@ pub fn clone_state(
     Ok(Some(fresh))
 }
 
+/// The `get_method` check: must be called before dispatching an instance
+/// method call (`$obj->m()`) on an object with SPL state. Fails for
+/// `SplFileObject`/`GlobIterator` instances whose constructor did not run
+/// ("The parent constructor was not called: the object is in an invalid
+/// state").
+pub fn before_method_call(host: &mut dyn SplHost, obj: &Obj) -> RtResult<()> {
+    let Some((st, fam)) = state(host, obj)? else {
+        return Ok(());
+    };
+    if fam == Family::File {
+        crate::directory::check_method_call(host, obj, &st)?;
+    }
+    Ok(())
+}
+
 /// `get_method` fallback: dual iterators and `RecursiveIteratorIterator`
 /// forward calls of methods their class lacks to the inner (current
 /// sub-) iterator. Returns the object to call the method on instead.

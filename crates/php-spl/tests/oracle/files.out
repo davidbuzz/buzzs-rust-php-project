@@ -1,0 +1,80 @@
+int(0)
+string(6) "line1
+"
+int(1)
+string(6) "line2
+"
+int(2)
+string(1) "
+"
+int(3)
+string(5) "line4"
+int(0)
+string(5) "line1"
+int(1)
+string(5) "line2"
+int(2)
+string(5) "line4"
+string(5) "line2"
+int(1)
+array(3) {
+  [0]=>
+  string(1) "a"
+  [1]=>
+  string(1) "b"
+  [2]=>
+  string(1) "c"
+}
+array(3) {
+  [0]=>
+  string(1) "1"
+  [1]=>
+  string(3) "2,x"
+  [2]=>
+  string(1) "3"
+}
+array(1) {
+  [0]=>
+  NULL
+}
+int(12)
+int(12)
+string(6) "hello
+"
+string(1) "w"
+bool(false)
+string(3) "orl"
+string(10) "php://temp"
+string(10) "php://temp"
+string(5) "a.txt"
+string(3) "txt"
+string(1) "a"
+bool(true)
+bool(false)
+int(18)
+string(4) "/a/b"
+string(8) "c.tar.gz"
+string(2) "gz"
+string(13) "/a/b/c.tar.gz"
+string(4) "/a/b"
+SplFileObject::__construct(DIR/nope.txt): Failed to open stream: No such file or directory
+Cannot use SplFileObject with directories
+DirectoryIterator::__construct(DIR/nope): Failed to open directory: No such file or directory
+array(3) {
+  [0]=>
+  string(5) "a.txt"
+  [1]=>
+  string(5) "b.csv"
+  [2]=>
+  string(4) "sub/"
+}
+array(3) {
+  [0]=>
+  string(9) "DIR/a.txt"
+  [1]=>
+  string(9) "DIR/b.csv"
+  [2]=>
+  string(13) "DIR/sub/c.txt"
+}
+int(1)
+DIR/a.txt a.txt

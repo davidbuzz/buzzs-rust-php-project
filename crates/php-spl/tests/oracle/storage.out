@@ -1,0 +1,100 @@
+int(3)
+bool(true)
+bool(true)
+string(3) "one"
+bool(true)
+int(0)
+string(3) "one"
+int(1)
+array(1) {
+  [0]=>
+  int(2)
+}
+int(2)
+NULL
+object(SplObjectStorage)#1 (1) {
+  ["storage":"SplObjectStorage":private]=>
+  array(3) {
+    [0]=>
+    array(2) {
+      ["obj"]=>
+      object(stdClass)#2 (0) {
+      }
+      ["inf"]=>
+      string(4) "new0"
+    }
+    [1]=>
+    array(2) {
+      ["obj"]=>
+      object(stdClass)#3 (0) {
+      }
+      ["inf"]=>
+      string(4) "new1"
+    }
+    [2]=>
+    array(2) {
+      ["obj"]=>
+      object(stdClass)#4 (0) {
+      }
+      ["inf"]=>
+      string(4) "new2"
+    }
+  }
+}
+int(2)
+int(3)
+int(1)
+Object not found
+SplObjectStorage::offsetSet(): Argument #1 ($object) must be of type object, string given
+array(2) {
+  [0]=>
+  array(2) {
+    [0]=>
+    object(stdClass)#3 (0) {
+    }
+    [1]=>
+    string(1) "x"
+  }
+  [1]=>
+  array(0) {
+  }
+}
+array(2) {
+  ["a"]=>
+  int(0)
+  ["b"]=>
+  int(0)
+}
+array(2) {
+  ["a"]=>
+  int(1)
+  ["b"]=>
+  int(4)
+}
+array(2) {
+  ["a"]=>
+  int(1)
+  ["b"]=>
+  int(1)
+}
+array(2) {
+  ["a"]=>
+  int(2)
+  ["b"]=>
+  int(5)
+}
+array(2) {
+  ["a"]=>
+  int(2)
+  ["b"]=>
+  NULL
+}
+array(2) {
+  ["a"]=>
+  int(3)
+  ["b"]=>
+  NULL
+}
+Key duplication error
+bool(true)
+int(2)

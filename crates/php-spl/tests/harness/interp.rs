@@ -174,6 +174,9 @@ impl Class {
             if k.interfaces.iter().any(|i| i.eq_ignore_ascii_case(name)) {
                 return true;
             }
+            if k.internal && php_spl::classes::is_subclass_of(&k.name, name) {
+                return true;
+            }
             c = k.parent.clone();
         }
         false
@@ -277,6 +280,8 @@ pub struct Interp {
     pub depth: usize,
     pub tmpfiles: Vec<String>,
     pub pcre: php_pcre::Pcre,
+    pub deadline: std::time::Instant,
+    pub steps: u64,
 }
 
 pub fn rt_err(msg: impl Into<String>) -> RuntimeError {
@@ -314,6 +319,8 @@ impl Interp {
             depth: 0,
             tmpfiles: Vec::new(),
             pcre: php_pcre::Pcre::new(),
+            deadline: std::time::Instant::now() + std::time::Duration::from_secs(10),
+            steps: 0,
         };
         crate::harness::builtins::register_classes(&mut it);
         crate::harness::builtins::register_constants(&mut it);
@@ -877,6 +884,10 @@ impl Interp {
 
     pub fn exec(&mut self, st: &Stmt) -> RtResult<Flow> {
         self.line = st.span.line;
+        self.steps += 1;
+        if self.steps % 1024 == 0 && std::time::Instant::now() > self.deadline {
+            return Err(RuntimeError::Fatal("harness timeout".into()));
+        }
         match &st.kind {
             StmtKind::Block(b) => self.exec_block(b),
             StmtKind::Expr(e) => {

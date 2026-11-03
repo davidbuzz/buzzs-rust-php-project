@@ -1,0 +1,126 @@
+2=3 3=4 4=5 
+Cannot seek to 1 which is below the offset 2
+Cannot seek to 5 which is behind offset 2 plus count 3
+int(3)
+int(4)
+int(3)
+2=3 5=6 8=9 
+a,b,c
+|
+array(2) {
+  ["x"]=>
+  int(1)
+  ["y"]=>
+  int(2)
+}
+int(2)
+int(1)
+CachingIterator does not fetch string value (see CachingIterator::__construct)
+0:0=1 0:1=2 2:0=3 
+121212
+23
+array(2) {
+  [0]=>
+  string(5) "apple"
+  [3]=>
+  string(7) "avocado"
+}
+array(2) {
+  [0]=>
+  array(3) {
+    [0]=>
+    array(2) {
+      [0]=>
+      string(2) "a1"
+      [1]=>
+      string(2) "b2"
+    }
+    [1]=>
+    array(2) {
+      [0]=>
+      string(1) "a"
+      [1]=>
+      string(1) "b"
+    }
+    [2]=>
+    array(2) {
+      [0]=>
+      string(1) "1"
+      [1]=>
+      string(1) "2"
+    }
+  }
+  [1]=>
+  array(3) {
+    [0]=>
+    array(1) {
+      [0]=>
+      string(2) "c3"
+    }
+    [1]=>
+    array(1) {
+      [0]=>
+      string(1) "c"
+    }
+    [2]=>
+    array(1) {
+      [0]=>
+      string(1) "3"
+    }
+  }
+}
+array(1) {
+  [0]=>
+  array(2) {
+    [0]=>
+    string(1) "a"
+    [1]=>
+    string(1) "b"
+  }
+}
+array(2) {
+  [0]=>
+  string(2) "a#"
+  [1]=>
+  string(2) "b#"
+}
+array(1) {
+  ["z"]=>
+  string(1) "y"
+}
+[a] |-1
+[b] |-Array
+[c] | |-2
+[d] | \-Array
+[e] |   \-3
+[f] \-4
+[|-0] |-1
+[\-1] \-Array
+[  |-0]   |-2
+[  \-1]   \-3
+0:1 1:2 2:3 2:4 1:A 0:A 0:5 
+1 A 5 
+int(0)
+RecursiveIteratorIterator::setMaxDepth(): Argument #1 ($maxDepth) must be greater than or equal to -1
+int(3)
+int(10)
+Accessing the value of an EmptyIterator
+1 3 1 
+array(6) {
+  ["SeekableIterator"]=>
+  string(16) "SeekableIterator"
+  ["Traversable"]=>
+  string(11) "Traversable"
+  ["Iterator"]=>
+  string(8) "Iterator"
+  ["ArrayAccess"]=>
+  string(11) "ArrayAccess"
+  ["Serializable"]=>
+  string(12) "Serializable"
+  ["Countable"]=>
+  string(9) "Countable"
+}
+array(1) {
+  ["ArrayIterator"]=>
+  string(13) "ArrayIterator"
+}

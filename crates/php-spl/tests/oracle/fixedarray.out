@@ -1,0 +1,63 @@
+string(1) "a"
+string(1) "b"
+
+Deprecated: Implicit conversion from float 1.5 to int loses precision in /home/buzz/phprust/crates/php-spl/tests/oracle/fixedarray.php on line 7
+string(1) "b"
+string(1) "b"
+string(1) "a"
+TypeError: Cannot access offset of type string on SplFixedArray
+RuntimeException: Index invalid or out of range
+RuntimeException: Index invalid or out of range
+TypeError: Cannot access offset of type null on SplFixedArray
+TypeError: Cannot access offset of type array on SplFixedArray
+TypeError: Cannot access offset of type stdClass on SplFixedArray
+bool(true)
+bool(false)
+bool(false)
+array(5) {
+  [0]=>
+  string(1) "a"
+  [1]=>
+  string(1) "b"
+  [2]=>
+  string(1) "c"
+  [3]=>
+  NULL
+  [4]=>
+  NULL
+}
+int(5)
+object(SplFixedArray)#1 (1) {
+  [0]=>
+  string(1) "a"
+}
+[] operator not supported for SplFixedArray
+SplFixedArray::__construct(): Argument #1 ($size) must be greater than or equal to 0
+object(SplFixedArray)#3 (4) {
+  [0]=>
+  NULL
+  [1]=>
+  string(1) "y"
+  [2]=>
+  NULL
+  [3]=>
+  string(1) "x"
+}
+object(SplFixedArray)#3 (2) {
+  [0]=>
+  string(1) "x"
+  [1]=>
+  string(1) "y"
+}
+array must contain only positive integer keys
+array must contain only positive integer keys
+[1,2]
+O:13:"SplFixedArray":2:{i:0;i:1;i:1;s:1:"a";}
+object(SplFixedArray)#3 (2) {
+  [0]=>
+  int(5)
+  [1]=>
+  int(6)
+}
+0:1 1:2 2:3 
+3

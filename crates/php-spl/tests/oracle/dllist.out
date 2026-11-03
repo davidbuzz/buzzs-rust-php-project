@@ -1,0 +1,46 @@
+0=>0 1=>1 2=>x 3=>2 4=>3 5=>4 6=>end 
+6=>end 5=>4 4=>3 3=>2 2=>x 1=>1 0=>0 
+string(3) "end"
+bool(false)
+int(2)
+int(6)
+int(4)
+int(0)
+SplDoublyLinkedList::offsetGet(): Argument #1 ($index) is out of range
+SplDoublyLinkedList::add(): Argument #1 ($index) is out of range
+0=>0 0=>1 0=>x 0=>2 0=>3 0=>4 
+0
+Iterators' LIFO/FIFO modes for SplStack/SplQueue objects are frozen
+i:6;:i:1;:i:2;:i:3;
+object(SplStack)#2 (2) {
+  ["flags":"SplDoublyLinkedList":private]=>
+  int(6)
+  ["dllist":"SplDoublyLinkedList":private]=>
+  array(3) {
+    [0]=>
+    int(1)
+    [1]=>
+    int(2)
+    [2]=>
+    int(3)
+  }
+}
+O:8:"SplStack":3:{i:0;i:6;i:1;a:3:{i:0;i:1;i:1;i:2;i:2;i:3;}i:2;a:0:{}}
+a1
+bool(false)
+NULL
+int(1)
+bool(false)
+NULL
+object(SplDoublyLinkedList)#1 (2) {
+  ["flags":"SplDoublyLinkedList":private]=>
+  int(0)
+  ["dllist":"SplDoublyLinkedList":private]=>
+  array(2) {
+    [0]=>
+    int(1)
+    [1]=>
+    string(1) "a"
+  }
+}
+Error at offset 5 of 6 bytes
