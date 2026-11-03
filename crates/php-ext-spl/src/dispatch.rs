@@ -260,7 +260,7 @@ fn register_class(vm: &mut Vm, c: &'static ClassDef) {
         // `spl_dual_it_get_method` / `spl_recursive_it_get_method` forward
         // calls of unknown methods to the inner iterator; the VM has no
         // `get_method` hook, so this is modelled with `__call`.
-        b = b.method("__call(...$arguments)", acc::PUBLIC, forward_call);
+        b = b.method("__call($name, $arguments)", acc::PUBLIC, forward_call);
     }
     let cls = b.register(vm);
     METHODS.with(|m| {
@@ -592,11 +592,19 @@ pub fn current_op_is_assign_ref(vm: &Vm) -> bool {
 }
 
 /// Forwards an unknown method call to the inner (current sub-) iterator.
+/// The VM packs a native `__call`'s arguments as `($name, $arguments)`.
 fn forward_call(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let Some(this) = a.this.clone() else {
         return Ok(Value::Null);
     };
-    let name = pending_method_name(vm);
+    let name = match a.at(0) {
+        Value::Str(s) => Some(s),
+        _ => None,
+    };
+    let call_args: Vec<Value> = match a.at(1) {
+        Value::Array(arr) => arr.values().map(Value::deref).collect(),
+        _ => Vec::new(),
+    };
     let target = {
         let mut host = VmHost::new(vm);
         php_spl::handlers::method_target(&mut host, &this)
@@ -606,8 +614,7 @@ fn forward_call(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         let lc = name.to_ascii_lowercase();
         let icls = php_vm::object::class_of(&inner);
         if icls.find_method(lc.as_bytes()).is_some() || icls.magic.call.is_some() {
-            let args: Vec<Value> = a.values.iter().map(Value::deref).collect();
-            return vm.call_method_by_name(&inner, &name.to_string_lossy(), args);
+            return vm.call_method_by_name(&inner, &name.to_string_lossy(), call_args);
         }
     }
     let shown = name.map_or_else(|| "__call".to_string(), |n| n.to_string_lossy());

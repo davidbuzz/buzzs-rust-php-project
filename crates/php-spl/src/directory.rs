@@ -337,7 +337,9 @@ fn dir_open(fs: &mut FileState, func: &str, path: &[u8]) -> RtResult<()> {
         ZStr::from(path)
     });
     fs.index = 0;
-    if let Some(e) = diags_to_exception("UnexpectedValueException", func, &diags, Some(path)) {
+    // master's stream layer reports open failures without the path
+    // (`php_stream_display_wrapper_errors`).
+    if let Some(e) = diags_to_exception("UnexpectedValueException", func, &diags, None) {
         fs.entry.clear();
         return Err(e);
     }
@@ -373,7 +375,7 @@ fn file_open(fs: &mut FileState, func: &str, use_include_path: bool) -> RtResult
         .map_or_else(|| "r".to_string(), ZStr::to_string_lossy);
     let (stream, diags) =
         capture(|| php_streams::open::fopen(name.as_bytes(), &mode, use_include_path, None));
-    if let Some(e) = diags_to_exception("RuntimeException", func, &diags, Some(name.as_bytes())) {
+    if let Some(e) = diags_to_exception("RuntimeException", func, &diags, None) {
         fs.open_mode = None;
         fs.file_name = None;
         return Err(e);
