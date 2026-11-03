@@ -1,5 +1,5 @@
 //! JSON error codes (`php_json_error_code`), error details with location and
-//! the error types returned by [`crate::encode`] / [`crate::decode`].
+//! the error types returned by [`crate::encode()`] / [`crate::decode()`].
 
 use php_runtime::RuntimeError;
 use std::fmt;
@@ -189,7 +189,7 @@ impl From<ErrorCode> for JsonError {
     }
 }
 
-/// Why [`crate::encode`] failed.
+/// Why [`crate::encode()`] failed.
 #[derive(Debug, Clone)]
 pub enum EncodeError {
     /// A JSON error (`json_encode()` returns `false`, or the partial output
@@ -228,7 +228,7 @@ impl fmt::Display for EncodeError {
 
 impl std::error::Error for EncodeError {}
 
-/// Why [`crate::decode`] failed.
+/// Why [`crate::decode()`] failed.
 #[derive(Debug, Clone)]
 pub enum DecodeError {
     /// A JSON error (`json_decode()` returns `null`).

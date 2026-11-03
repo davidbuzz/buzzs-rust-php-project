@@ -403,3 +403,28 @@ fn collecting_context_is_a_host() {
         Ok(Value::Array(a)) if a.is_empty()
     ));
 }
+
+#[test]
+fn exceptions_leave_last_error() {
+    // json_exceptions_error_clearing.phpt
+    let mut h = TestHost::new();
+    let mut state = JsonState::new();
+    assert_eq!(json_last_error(&state), 0);
+    let _ = json_decode(&mut state, &mut h, b"\xFF", Some(false), 512, 0);
+    assert_eq!(json_last_error(&state), 5);
+    let r = json_decode(&mut state, &mut h, b"", Some(false), 512, THROW_ON_ERROR);
+    assert!(matches!(r, Err(RuntimeError::Error(m)) if m == "JsonException(4): Syntax error"));
+    assert_eq!(json_last_error(&state), 5);
+    let r = json_decode(&mut state, &mut h, b"{", Some(false), 512, THROW_ON_ERROR);
+    assert!(r.is_err());
+    assert_eq!(json_last_error(&state), 5);
+    let r = json_encode(
+        &mut state,
+        &mut h,
+        &Value::Float(f64::NAN),
+        THROW_ON_ERROR,
+        512,
+    );
+    assert!(matches!(r, Err(RuntimeError::Error(m)) if m.starts_with("JsonException(7)")));
+    assert_eq!(json_last_error(&state), 5);
+}

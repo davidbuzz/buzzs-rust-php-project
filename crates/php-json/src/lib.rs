@@ -8,7 +8,7 @@
 //!
 //! # Layers
 //!
-//! * [`encode`], [`decode`], [`validate`]: the engine entry points
+//! * [`encode()`], [`decode()`], [`validate`]: the engine entry points
 //!   (`php_json_encode_zval`, `php_json_decode_ex`, `php_json_validate_ex`),
 //!   returning [`JsonError`]s with php-src's exact codes and (for decoding)
 //!   error locations.
@@ -48,6 +48,15 @@ pub use functions::JsonState;
 pub use host::{GuardKey, JsonHost};
 
 impl JsonHost for php_runtime::CollectingContext {}
+
+/// The interface the VM must register (`json.stub.php`): `interface
+/// JsonSerializable { public function jsonSerialize(): mixed; }`.
+pub const JSON_SERIALIZABLE_INTERFACE: &str = "JsonSerializable";
+/// The exception class the VM must register: `class JsonException extends
+/// Exception {}`, thrown with `JSON_THROW_ON_ERROR` (see
+/// [`JsonHost::json_exception`]).
+pub const JSON_EXCEPTION_CLASS: &str = "JsonException";
+
 #[cfg(test)]
 mod object_tests;
 #[cfg(test)]
