@@ -21,12 +21,41 @@
 //! * [`web`] — `Phar::webPhar()` routing, the mime table and
 //!   `Phar::mungServer()`.
 //! * [`intercept`] — what `Phar::interceptFileFuncs()` replaces.
+//! * [`info`] — `phpinfo()` rows and INI entries.
+//!
+//! # Embedding
+//!
+//! The VM is expected to:
+//!
+//! * register [`wrapper::PharWrapper`] as the `phar` stream wrapper
+//!   (`php_streams::wrapper::register_global`);
+//! * forward `phar.readonly` / `phar.require_hash` to
+//!   [`registry::set_ini`] (startup and `ini_set()`), `phar.cache_list` to
+//!   [`registry::load_cache_list`], and call [`registry::reset_request`] at
+//!   request shutdown;
+//! * install an [`signature::OpenSslHook`] when ext/openssl is available
+//!   and call [`registry::set_compression_support`] to mirror ext/zlib and
+//!   ext/bz2 availability;
+//! * back `Phar`/`PharData` objects with [`object::PharObject`] and
+//!   `PharFileInfo` with [`object::PharFileInfo`] (calling `release()` on
+//!   destruction), throw the returned [`error::PharError`]s, construct the
+//!   objects described by [`object::Converted`] and the info-class paths
+//!   returned by `offset_get()`, and drive `buildFromIterator()` through
+//!   [`object::BuildState`];
+//! * route `Phar::webPhar()` through [`web::web_phar`] with a
+//!   [`web::WebHost`], and consult [`intercept`] from the intercepted file
+//!   functions once `Phar::interceptFileFuncs()` was called.
+//!
+//! Default stub text and on-disk bytes follow php-src master;
+//! [`stub::set_flavor`] and [`sys::set_entry_time_override`] exist so the
+//! tests can compare byte for byte against a PHP 8.3 build.
 
 pub mod archive;
 mod bz2;
 pub mod compress;
 pub mod consts;
 pub mod error;
+pub mod info;
 pub mod intercept;
 pub mod object;
 pub mod omap;
