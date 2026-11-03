@@ -9,7 +9,15 @@ use php_runtime::error::{RuntimeContext, RuntimeError};
 use php_runtime::{Value, ZStr};
 
 use crate::conn::{ConnState, Connection, Header, PacketKind, QueryType, UpsertStatus};
-use crate::consts::*;
+use crate::consts::{
+    Command, CR_COMMANDS_OUT_OF_SYNC, CR_INVALID_BUFFER_USE, CR_INVALID_PARAMETER_NO,
+    CR_NOT_IMPLEMENTED, CR_NO_PREPARE_STMT, CR_PARAMS_NOT_BOUND, CR_UNKNOWN_ERROR,
+    CURSOR_TYPE_NO_CURSOR, CURSOR_TYPE_READ_ONLY, MSG_NOT_BOUND_AS_BLOB, MSG_OUT_OF_SYNC,
+    MSG_STMT_NOT_PREPARED, MYSQL_TYPE_DOUBLE, MYSQL_TYPE_LONG, MYSQL_TYPE_LONGLONG,
+    MYSQL_TYPE_LONG_BLOB, MYSQL_TYPE_NULL, MYSQL_TYPE_TINY, MYSQL_TYPE_VAR_STRING,
+    SERVER_MORE_RESULTS_EXISTS, SERVER_PS_OUT_PARAMS, SERVER_STATUS_CURSOR_EXISTS,
+    STMT_ATTR_CURSOR_TYPE, STMT_ATTR_UPDATE_MAX_LENGTH,
+};
 use crate::error::{Error, ErrorInfo, Result};
 use crate::protocol::{self, RowPacket};
 use crate::result::{Metadata, ResultSet};
@@ -37,7 +45,7 @@ pub enum StmtState {
 #[derive(Debug, Clone)]
 pub struct ParamBind {
     /// `MYSQL_TYPE_*` (mysqli: `i` = LONGLONG, `d` = DOUBLE, `s` =
-    /// VAR_STRING, `b` = LONG_BLOB).
+    /// `VAR_STRING`, `b` = `LONG_BLOB`).
     pub type_: u8,
     /// The bound value; a [`Value::Reference`] is read at execute time.
     /// `None` = not bound (`IS_UNDEF`).
@@ -49,7 +57,11 @@ impl ParamBind {
     /// A bound parameter.
     #[must_use]
     pub fn new(type_: u8, value: Value) -> Self {
-        Self { type_, value: Some(value), blob_used: false }
+        Self {
+            type_,
+            value: Some(value),
+            blob_used: false,
+        }
     }
 }
 
@@ -68,7 +80,7 @@ pub fn param_type_from_char(c: u8) -> Option<u8> {
 /// Failure of [`Statement::execute`].
 #[derive(Debug)]
 pub enum ExecuteError {
-    /// A MySQL / client error (also recorded on the statement).
+    /// A `MySQL` / client error (also recorded on the statement).
     Mysql(Error),
     /// Converting a parameter raised a PHP exception.
     Runtime(RuntimeError),
@@ -88,6 +100,7 @@ enum RsetHandler {
 
 /// `MYSQLND_STMT_DATA`
 #[derive(Debug)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct StmtData {
     conn: Option<Connection>,
     stmt_id: u32,
@@ -174,8 +187,12 @@ impl StmtData {
 
     /// `mysqlnd_stmt::store_result`
     fn store_result(&mut self) -> bool {
-        let Some(conn) = self.conn() else { return false };
-        let Some(meta) = self.meta.clone() else { return false };
+        let Some(conn) = self.conn() else {
+            return false;
+        };
+        let Some(meta) = self.meta.clone() else {
+            return false;
+        };
         if self.field_count == 0 {
             return false;
         }
@@ -212,10 +229,16 @@ impl StmtData {
 
     /// `mysqlnd_stmt::use_result`
     fn use_result(&mut self) -> bool {
-        let Some(conn) = self.conn() else { return false };
-        let Some(meta) = self.meta.clone() else { return false };
+        let Some(conn) = self.conn() else {
+            return false;
+        };
+        let Some(meta) = self.meta.clone() else {
+            return false;
+        };
         if self.field_count == 0 || !self.check_state(&conn) {
-            conn.data().error_info.set_client(CR_COMMANDS_OUT_OF_SYNC, MSG_OUT_OF_SYNC);
+            conn.data()
+                .error_info
+                .set_client(CR_COMMANDS_OUT_OF_SYNC, MSG_OUT_OF_SYNC);
             return false;
         }
         self.error_info.reset();
@@ -231,18 +254,24 @@ impl StmtData {
     }
 
     fn more_results(&self) -> bool {
-        self.conn.as_ref().is_some_and(|c| c.data().upsert.server_status & SERVER_MORE_RESULTS_EXISTS != 0)
+        self.conn
+            .as_ref()
+            .is_some_and(|c| c.data().upsert.server_status & SERVER_MORE_RESULTS_EXISTS != 0)
     }
 
     /// `mysqlnd_stmt::next_result`
     fn next_result(&mut self) -> bool {
-        let Some(conn) = self.conn() else { return false };
+        let Some(conn) = self.conn() else {
+            return false;
+        };
         if self.meta.is_none() && self.result.is_none() {
             return false;
         }
         {
             let c = conn.data();
-            if c.state != ConnState::NextResultPending || c.upsert.server_status & SERVER_MORE_RESULTS_EXISTS == 0 {
+            if c.state != ConnState::NextResultPending
+                || c.upsert.server_status & SERVER_MORE_RESULTS_EXISTS == 0
+            {
                 return false;
             }
         }
@@ -287,7 +316,9 @@ impl StmtData {
 
     /// `mysqlnd_stmt_execute_parse_response`
     fn parse_execute_response(&mut self) -> bool {
-        let Some(conn) = self.conn() else { return false };
+        let Some(conn) = self.conn() else {
+            return false;
+        };
         conn.data().state = ConnState::QuerySent;
         let header = conn.data().read_result_set_header(true);
         let mut ret = match header {
@@ -353,7 +384,9 @@ impl StmtData {
 
     /// `mysqlnd_stmt::close_on_server`
     fn close_on_server(&mut self, implicit: bool) -> bool {
-        let Some(conn) = self.conn() else { return false };
+        let Some(conn) = self.conn() else {
+            return false;
+        };
         self.error_info.reset();
         conn.data().error_info.reset();
         loop {
@@ -372,10 +405,21 @@ impl StmtData {
         }
         let mut ret = true;
         if self.stmt_id != 0 {
-            inc_global(if implicit { Stat::FreeResultImplicit } else { Stat::FreeResultExplicit }, 1);
+            inc_global(
+                if implicit {
+                    Stat::FreeResultImplicit
+                } else {
+                    Stat::FreeResultExplicit
+                },
+                1,
+            );
             let ready = conn.data().state == ConnState::Ready;
             if ready {
-                ret = conn.data().send_command(Command::StmtClose, &self.stmt_id.to_le_bytes(), false);
+                ret = conn.data().send_command(
+                    Command::StmtClose,
+                    &self.stmt_id.to_le_bytes(),
+                    false,
+                );
             }
         }
         match self.execute_count {
@@ -390,14 +434,25 @@ impl StmtData {
 
     /// `mysqlnd_stmt::dtor`
     fn dtor(&mut self, implicit: bool) -> bool {
-        inc_global(if implicit { Stat::StmtCloseImplicit } else { Stat::StmtCloseExplicit }, 1);
+        inc_global(
+            if implicit {
+                Stat::StmtCloseImplicit
+            } else {
+                Stat::StmtCloseExplicit
+            },
+            1,
+        );
         self.closed = true;
         self.close_on_server(implicit)
     }
 
     /// `mysqlnd_stmt_execute_store_params` and friends: builds the
     /// `COM_STMT_EXECUTE` payload.
-    fn generate_request(&mut self, ctx: &mut dyn RuntimeContext) -> std::result::Result<Vec<u8>, RuntimeError> {
+    #[allow(clippy::too_many_lines)]
+    fn generate_request(
+        &mut self,
+        ctx: &mut dyn RuntimeContext,
+    ) -> std::result::Result<Vec<u8>, RuntimeError> {
         let mut out = Vec::with_capacity(64);
         out.extend_from_slice(&self.stmt_id.to_le_bytes());
         #[allow(clippy::cast_possible_truncation)]
@@ -424,7 +479,10 @@ impl StmtData {
         for (i, p) in params.iter().enumerate() {
             let v = &mut data[i];
             if !matches!(v, Value::Null)
-                && matches!(p.type_, MYSQL_TYPE_LONG | MYSQL_TYPE_LONGLONG | MYSQL_TYPE_TINY)
+                && matches!(
+                    p.type_,
+                    MYSQL_TYPE_LONG | MYSQL_TYPE_LONGLONG | MYSQL_TYPE_TINY
+                )
                 && !matches!(v, Value::Int(_))
             {
                 let d = v.to_double(ctx)?;
@@ -461,15 +519,11 @@ impl StmtData {
                 continue;
             }
             match p.type_ {
-                MYSQL_TYPE_LONGLONG | MYSQL_TYPE_LONG => {
-                    if !matches!(data[i], Value::Str(_)) {
-                        data[i] = Value::Int(data[i].to_long(ctx)?);
-                    }
+                MYSQL_TYPE_LONGLONG | MYSQL_TYPE_LONG if !matches!(data[i], Value::Str(_)) => {
+                    data[i] = Value::Int(data[i].to_long(ctx)?);
                 }
-                MYSQL_TYPE_VAR_STRING => {
-                    if !matches!(data[i], Value::Str(_)) {
-                        data[i] = Value::Str(data[i].to_zstr(ctx)?);
-                    }
+                MYSQL_TYPE_VAR_STRING if !matches!(data[i], Value::Str(_)) => {
+                    data[i] = Value::Str(data[i].to_zstr(ctx)?);
                 }
                 _ => {}
             }
@@ -601,7 +655,10 @@ impl Statement {
                 update_max_length: s.update_max_length,
                 field_count: 0,
                 param_count: 0,
-                upsert: UpsertStatus { affected_rows: u64::MAX, ..UpsertStatus::default() },
+                upsert: UpsertStatus {
+                    affected_rows: u64::MAX,
+                    ..UpsertStatus::default()
+                },
                 error_info: ErrorInfo::default(),
                 meta: None,
                 result: None,
@@ -619,7 +676,10 @@ impl Statement {
             return false;
         }
         // mysqlnd_stmt_read_prepare_response
-        let resp = conn.data().read_packet(PacketKind::Prepare).and_then(|b| protocol::parse_prepare_response(&b));
+        let resp = conn
+            .data()
+            .read_packet(PacketKind::Prepare)
+            .and_then(|b| protocol::parse_prepare_response(&b));
         let resp = match resp {
             None => return false,
             Some(Err(e)) => {
@@ -658,7 +718,11 @@ impl Statement {
     }
 
     fn prepare_read_eof(s: &mut StmtData, conn: &Connection) -> bool {
-        match conn.data().read_packet(PacketKind::Eof).and_then(|b| protocol::parse_eof(&b)) {
+        match conn
+            .data()
+            .read_packet(PacketKind::Eof)
+            .and_then(|b| protocol::parse_eof(&b))
+        {
             Some(Ok(e)) => {
                 s.upsert.server_status = e.server_status;
                 s.upsert.warning_count = u32::from(e.warning_count);
@@ -691,7 +755,14 @@ impl Statement {
         }
         if s.param_count > 0 {
             let mut params = params;
-            params.resize(s.param_count as usize, ParamBind { type_: MYSQL_TYPE_VAR_STRING, value: None, blob_used: false });
+            params.resize(
+                s.param_count as usize,
+                ParamBind {
+                    type_: MYSQL_TYPE_VAR_STRING,
+                    value: None,
+                    blob_used: false,
+                },
+            );
             for p in &mut params {
                 p.blob_used = false;
             }
@@ -720,7 +791,14 @@ impl Statement {
         }
         let n = s.param_count as usize;
         let params = s.params.get_or_insert_with(|| {
-            vec![ParamBind { type_: MYSQL_TYPE_NULL, value: None, blob_used: false }; n]
+            vec![
+                ParamBind {
+                    type_: MYSQL_TYPE_NULL,
+                    value: None,
+                    blob_used: false
+                };
+                n
+            ]
         });
         let p = &mut params[param_no as usize];
         p.value = Some(value);
@@ -770,7 +848,13 @@ impl Statement {
     pub fn send_long_data(&self, param_no: u32, data: &[u8]) -> Result<()> {
         let mut s = self.data();
         s.error_info.reset();
-        let Some(conn) = s.conn() else { return Err(Error { errno: 0, sqlstate: String::new(), message: Vec::new() }) };
+        let Some(conn) = s.conn() else {
+            return Err(Error {
+                errno: 0,
+                sqlstate: String::new(),
+                message: Vec::new(),
+            });
+        };
         conn.data().error_info.reset();
         if s.state < StmtState::Prepared {
             s.set_error(CR_NO_PREPARE_STMT, MSG_STMT_NOT_PREPARED);
@@ -787,7 +871,10 @@ impl Statement {
             drop(s);
             return self.fail();
         }
-        if s.params.as_ref().is_some_and(|p| p[param_no as usize].type_ != MYSQL_TYPE_LONG_BLOB) {
+        if s.params
+            .as_ref()
+            .is_some_and(|p| p[param_no as usize].type_ != MYSQL_TYPE_LONG_BLOB)
+        {
             s.set_error(CR_INVALID_BUFFER_USE, MSG_NOT_BOUND_AS_BLOB);
             drop(s);
             return self.fail();
@@ -802,7 +889,9 @@ impl Statement {
             #[allow(clippy::cast_possible_truncation)]
             buf.extend_from_slice(&(param_no as u16).to_le_bytes());
             buf.extend_from_slice(data);
-            ok = conn.data().send_command(Command::StmtSendLongData, &buf, false);
+            ok = conn
+                .data()
+                .send_command(Command::StmtSendLongData, &buf, false);
             if !ok {
                 copy_conn_error(&mut s);
             }
@@ -820,12 +909,19 @@ impl Statement {
     pub fn execute(&self, ctx: &mut dyn RuntimeContext) -> std::result::Result<(), ExecuteError> {
         let mut s = self.data();
         let Some(conn) = s.conn() else {
-            return Err(ExecuteError::Mysql(Error { errno: 0, sqlstate: String::new(), message: Vec::new() }));
+            return Err(ExecuteError::Mysql(Error {
+                errno: 0,
+                sqlstate: String::new(),
+                message: Vec::new(),
+            }));
         };
         // send_execute
         s.upsert.set_affected_rows_to_error();
         conn.data().upsert.set_affected_rows_to_error();
-        if (s.meta.is_some() || s.result.is_some()) && s.state >= StmtState::Prepared && s.field_count > 0 {
+        if (s.meta.is_some() || s.result.is_some())
+            && s.state >= StmtState::Prepared
+            && s.field_count > 0
+        {
             s.flush();
             if let Some(r) = &mut s.result {
                 r.release_buffers();
@@ -838,7 +934,10 @@ impl Statement {
         }
         if s.param_count > 0 {
             let Some(params) = &s.params else {
-                s.set_error(CR_PARAMS_NOT_BOUND, "No data supplied for parameters in prepared statement");
+                s.set_error(
+                    CR_PARAMS_NOT_BOUND,
+                    "No data supplied for parameters in prepared statement",
+                );
                 return Err(ExecuteError::Mysql(s.error_info.to_error()));
             };
             let not_bound = params.iter().filter(|p| p.value.is_none()).count();
@@ -854,11 +953,17 @@ impl Statement {
         let request = match s.generate_request(ctx) {
             Ok(r) => r,
             Err(e) => {
-                s.set_error(CR_UNKNOWN_ERROR, "Couldn't generate the request. Possibly OOM.");
+                s.set_error(
+                    CR_UNKNOWN_ERROR,
+                    "Couldn't generate the request. Possibly OOM.",
+                );
                 return Err(ExecuteError::Runtime(e));
             }
         };
-        if !conn.data().send_command(Command::StmtExecute, &request, false) {
+        if !conn
+            .data()
+            .send_command(Command::StmtExecute, &request, false)
+        {
             copy_conn_error(&mut s);
             return Err(ExecuteError::Mysql(s.error_info.to_error()));
         }
@@ -887,8 +992,12 @@ impl Statement {
     /// `mysqlnd_stmt::get_result`: a separate buffered result set.
     pub fn get_result(&self) -> Result<Option<ResultSet>> {
         let mut s = self.data();
-        let Some(conn) = s.conn() else { return Ok(None) };
-        let Some(meta) = s.meta.clone() else { return Ok(None) };
+        let Some(conn) = s.conn() else {
+            return Ok(None);
+        };
+        let Some(meta) = s.meta.clone() else {
+            return Ok(None);
+        };
         if s.field_count == 0 {
             return Ok(None);
         }
@@ -924,7 +1033,13 @@ impl Statement {
     /// `mysqlnd_stmt::fetch`: the next row (`Ok(None)` = `MYSQL_NO_DATA`).
     pub fn fetch(&self) -> Result<Option<Vec<Value>>> {
         let mut s = self.data();
-        let Some(conn) = s.conn() else { return Err(Error { errno: 0, sqlstate: String::new(), message: Vec::new() }) };
+        let Some(conn) = s.conn() else {
+            return Err(Error {
+                errno: 0,
+                sqlstate: String::new(),
+                message: Vec::new(),
+            });
+        };
         if s.meta.is_none() || s.state < StmtState::WaitingUseOrStore {
             s.set_error(CR_COMMANDS_OUT_OF_SYNC, MSG_OUT_OF_SYNC);
             drop(s);
@@ -935,7 +1050,10 @@ impl Statement {
         s.state = StmtState::UserFetching;
         s.error_info.reset();
         conn.data().error_info.reset();
-        if s.result.as_ref().is_some_and(|r| r.cursor_stmt_id.is_some()) {
+        if s.result
+            .as_ref()
+            .is_some_and(|r| r.cursor_stmt_id.is_some())
+        {
             return Self::fetch_cursor(&mut s, &conn);
         }
         let Some(r) = s.result.as_mut() else {
@@ -967,7 +1085,10 @@ impl Statement {
         let pkt = conn.data().read_row(true, &mut prev);
         let (out, status) = match pkt {
             RowPacket::Row(raw) => {
-                let r = s.result.as_mut().and_then(|r| r.cursor_row(Some(&raw), conn));
+                let r = s
+                    .result
+                    .as_mut()
+                    .and_then(|r| r.cursor_row(Some(&raw), conn));
                 // we asked for one row: the EOF follows
                 let eof = conn.data().read_row(true, &mut prev);
                 conn.data().inc(Stat::RowsFetchedFromClientPsCursor, 1);
@@ -977,7 +1098,14 @@ impl Statement {
                 };
                 match r {
                     Some(v) => (Ok(v), status),
-                    None => (Err(Error { errno: 0, sqlstate: String::new(), message: Vec::new() }), status),
+                    None => (
+                        Err(Error {
+                            errno: 0,
+                            sqlstate: String::new(),
+                            message: Vec::new(),
+                        }),
+                        status,
+                    ),
                 }
             }
             RowPacket::Eof(e) => {
@@ -1005,7 +1133,13 @@ impl Statement {
     /// `mysqlnd_stmt::reset` (`COM_STMT_RESET`).
     pub fn reset(&self) -> Result<()> {
         let mut s = self.data();
-        let Some(conn) = s.conn() else { return Err(Error { errno: 0, sqlstate: String::new(), message: Vec::new() }) };
+        let Some(conn) = s.conn() else {
+            return Err(Error {
+                errno: 0,
+                sqlstate: String::new(),
+                message: Vec::new(),
+            });
+        };
         s.error_info.reset();
         conn.data().error_info.reset();
         let mut ok = true;
@@ -1077,7 +1211,8 @@ impl Statement {
         let mut s = self.data();
         let pending = s.conn.as_ref().is_some_and(|c| {
             let d = c.data();
-            d.state == ConnState::NextResultPending && d.upsert.server_status & SERVER_MORE_RESULTS_EXISTS != 0
+            d.state == ConnState::NextResultPending
+                && d.upsert.server_status & SERVER_MORE_RESULTS_EXISTS != 0
         });
         if !pending || (s.meta.is_none() && s.result.is_none()) {
             return Ok(false);
@@ -1103,7 +1238,10 @@ impl Statement {
 
     /// `mysqlnd_stmt::data_seek` (buffered sets).
     pub fn data_seek(&self, row: u64) -> bool {
-        self.data().result.as_mut().is_some_and(|r| r.data_seek(row))
+        self.data()
+            .result
+            .as_mut()
+            .is_some_and(|r| r.data_seek(row))
     }
 
     /// `mysqlnd_stmt::attr_set`
@@ -1233,6 +1371,7 @@ impl Statement {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::consts::STMT_ATTR_PREFETCH_ROWS;
 
     #[test]
     fn type_chars() {

@@ -1,6 +1,14 @@
 //! Every column type through the text and binary protocols, with and
 //! without `MYSQLI_OPT_INT_AND_FLOAT_NATIVE`, plus field metadata —
 //! compared with `/usr/bin/php`'s mysqli on the same server.
+#![allow(
+    clippy::cast_possible_wrap,
+    clippy::cast_possible_truncation,
+    clippy::too_many_lines,
+    clippy::many_single_char_names,
+    clippy::doc_markdown,
+    clippy::format_collect
+)]
 
 mod common;
 
@@ -38,10 +46,13 @@ const ROWS: &[&str] = &[
 ];
 
 fn setup(c: &Connection, t: &str) {
-    c.query(format!("DROP TABLE IF EXISTS {t}").as_bytes()).unwrap();
-    c.query(format!("CREATE TABLE {t} ({COLUMNS}) CHARSET utf8mb4").as_bytes()).unwrap();
+    c.query(format!("DROP TABLE IF EXISTS {t}").as_bytes())
+        .unwrap();
+    c.query(format!("CREATE TABLE {t} ({COLUMNS}) CHARSET utf8mb4").as_bytes())
+        .unwrap();
     for r in ROWS {
-        c.query(format!("INSERT INTO {t} VALUES {r}").as_bytes()).unwrap_or_else(|e| panic!("{e}"));
+        c.query(format!("INSERT INTO {t} VALUES {r}").as_bytes())
+            .unwrap_or_else(|e| panic!("{e}"));
     }
 }
 
@@ -71,7 +82,10 @@ fn text_protocol_all_types() {
     setup(&c, &t);
     let mut out = Vec::new();
     for native in [false, true] {
-        c.set_option(opt::MYSQLND_OPT_INT_AND_FLOAT_NATIVE, OptionValue::Int(i64::from(native)));
+        c.set_option(
+            opt::MYSQLND_OPT_INT_AND_FLOAT_NATIVE,
+            OptionValue::Int(i64::from(native)),
+        );
         let mut r = query(&c, &format!("SELECT * FROM {t} ORDER BY id")).unwrap();
         while let Some(row) = r.fetch_array(FETCH_ASSOC).unwrap() {
             out.push(ra(&row));
@@ -101,7 +115,11 @@ fn text_protocol_all_types() {
         $m->query("DROP TABLE $t");
         echo implode("\n", $out);"#,
         cols = COLUMNS.replace('"', "\\\""),
-        rows = ROWS.iter().map(|r| format!("{:?}", r.replace('$', "\\$"))).collect::<Vec<_>>().join(",")
+        rows = ROWS
+            .iter()
+            .map(|r| format!("{:?}", r.replace('$', "\\$")))
+            .collect::<Vec<_>>()
+            .join(",")
     );
     assert_lines_eq(&mine, &php(&code));
 }
@@ -121,7 +139,8 @@ fn binary_protocol_all_types() {
     let mut out = Vec::new();
     // buffered via get_result
     let st = c.stmt_init();
-    st.prepare(format!("SELECT * FROM {t} ORDER BY id").as_bytes()).unwrap();
+    st.prepare(format!("SELECT * FROM {t} ORDER BY id").as_bytes())
+        .unwrap();
     assert_eq!(st.param_count(), 0);
     assert_eq!(st.field_count(), 36);
     st.execute(&mut Ctx).unwrap();
@@ -170,7 +189,11 @@ fn binary_protocol_all_types() {
         $s->close(); $m->query("DROP TABLE $t");
         echo implode("\n", $out);"#,
         cols = COLUMNS.replace('"', "\\\""),
-        rows = ROWS.iter().map(|r| format!("{:?}", r.replace('$', "\\$"))).collect::<Vec<_>>().join(",")
+        rows = ROWS
+            .iter()
+            .map(|r| format!("{:?}", r.replace('$', "\\$")))
+            .collect::<Vec<_>>()
+            .join(",")
     );
     assert_lines_eq(&mine, &php(&code));
 }

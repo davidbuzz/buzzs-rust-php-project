@@ -1,4 +1,4 @@
-//! Shared helpers for the live tests: connection parameters (MYSQL_TEST_*),
+//! Shared helpers for the live tests: connection parameters (`MYSQL_TEST`_*),
 //! graceful skipping when the server is down, an oracle runner for
 //! `/usr/bin/php` (mysqli) and a value renderer both sides agree on.
 #![allow(dead_code)]
@@ -60,7 +60,12 @@ pub fn connect() -> Option<Connection> {
 /// Whether the oracle `/usr/bin/php` with mysqli is available.
 pub fn have_php() -> bool {
     Command::new("/usr/bin/php")
-        .args(["-d", "memory_limit=1G", "-r", "echo extension_loaded('mysqli') ? 'y' : 'n';"])
+        .args([
+            "-d",
+            "memory_limit=1G",
+            "-r",
+            "echo extension_loaded('mysqli') ? 'y' : 'n';",
+        ])
         .output()
         .is_ok_and(|o| o.stdout == b"y")
 }
@@ -89,7 +94,14 @@ function conn($flags = 0) {
 pub fn php(code: &str) -> String {
     let script = format!("{PHP_PRELUDE}\n{code}");
     let out = Command::new("/usr/bin/php")
-        .args(["-d", "memory_limit=1G", "-d", "display_errors=stderr", "-r", &script])
+        .args([
+            "-d",
+            "memory_limit=1G",
+            "-d",
+            "display_errors=stderr",
+            "-r",
+            &script,
+        ])
         .output()
         .expect("run php");
     if !out.stderr.is_empty() {
@@ -132,13 +144,18 @@ pub fn ra(a: &ZArray) -> String {
 
 /// Renders a row of values as a PHP list.
 pub fn rrow(v: &[Value]) -> String {
-    let parts: Vec<String> = v.iter().enumerate().map(|(i, x)| format!("i:{i}=>{}", r(x))).collect();
+    let parts: Vec<String> = v
+        .iter()
+        .enumerate()
+        .map(|(i, x)| format!("i:{i}=>{}", r(x)))
+        .collect();
     format!("[{}]", parts.join(","))
 }
 
 /// Runs `sql` and returns the buffered result.
 pub fn query(c: &Connection, sql: &str) -> Option<ResultSet> {
-    c.query(sql.as_bytes()).unwrap_or_else(|e| panic!("{sql}: {e}"));
+    c.query(sql.as_bytes())
+        .unwrap_or_else(|e| panic!("{sql}: {e}"));
     c.store_result().unwrap()
 }
 
@@ -160,12 +177,17 @@ pub fn assert_lines_eq(mine: &str, theirs: &str) {
     let a: Vec<&str> = mine.lines().collect();
     let b: Vec<&str> = theirs.lines().collect();
     for i in 0..a.len().max(b.len()) {
-        let (x, y) = (a.get(i).copied().unwrap_or("<missing>"), b.get(i).copied().unwrap_or("<missing>"));
+        let (x, y) = (
+            a.get(i).copied().unwrap_or("<missing>"),
+            b.get(i).copied().unwrap_or("<missing>"),
+        );
         if x != y {
             // show the first differing item inside the line
             let xs: Vec<&str> = x.split(',').collect();
             let ys: Vec<&str> = y.split(',').collect();
-            let j = (0..xs.len().max(ys.len())).find(|&j| xs.get(j) != ys.get(j)).unwrap_or(0);
+            let j = (0..xs.len().max(ys.len()))
+                .find(|&j| xs.get(j) != ys.get(j))
+                .unwrap_or(0);
             panic!(
                 "line {i} differs at item {j}:\n mine:   {:?}\n oracle: {:?}\n(lines: mine {}, oracle {})",
                 xs.get(j),

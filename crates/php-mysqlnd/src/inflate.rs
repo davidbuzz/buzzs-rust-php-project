@@ -32,7 +32,11 @@ impl Bits<'_> {
         }
         self.bitbuf = if need >= 32 { 0 } else { val >> need };
         self.bitcnt -= need;
-        Ok(if need >= 32 { val } else { val & ((1 << need) - 1) })
+        Ok(if need >= 32 {
+            val
+        } else {
+            val & ((1 << need) - 1)
+        })
     }
 }
 
@@ -50,7 +54,10 @@ impl Huffman {
             count[usize::from(l)] += 1;
         }
         if usize::from(count[0]) == lengths.len() {
-            return Ok(Self { count, symbol: vec![0; lengths.len()] });
+            return Ok(Self {
+                count,
+                symbol: vec![0; lengths.len()],
+            });
         }
         let mut left: i32 = 1;
         for &c in &count[1..] {
@@ -101,24 +108,40 @@ impl Huffman {
     }
 }
 
-const LBASE: [u16; 29] =
-    [3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31, 35, 43, 51, 59, 67, 83, 99, 115, 131, 163, 195, 227, 258];
-const LEXT: [u8; 29] = [0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 0];
-const DBASE: [u16; 30] = [
-    1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193, 257, 385, 513, 769, 1025, 1537, 2049, 3073, 4097, 6145,
-    8193, 12289, 16385, 24577,
+const LBASE: [u16; 29] = [
+    3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31, 35, 43, 51, 59, 67, 83, 99, 115, 131,
+    163, 195, 227, 258,
 ];
-const DEXT: [u8; 30] = [0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13, 13];
+const LEXT: [u8; 29] = [
+    0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 0,
+];
+const DBASE: [u16; 30] = [
+    1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193, 257, 385, 513, 769, 1025, 1537,
+    2049, 3073, 4097, 6145, 8193, 12289, 16385, 24577,
+];
+const DEXT: [u8; 30] = [
+    0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13,
+    13,
+];
 
-fn codes(s: &mut Bits<'_>, out: &mut Vec<u8>, lencode: &Huffman, distcode: &Huffman) -> Result<(), InflateError> {
+fn codes(
+    s: &mut Bits<'_>,
+    out: &mut Vec<u8>,
+    lencode: &Huffman,
+    distcode: &Huffman,
+) -> Result<(), InflateError> {
     loop {
         let sym = lencode.decode(s)?;
-        if sym < 256 {
-            #[allow(clippy::cast_possible_truncation)]
-            out.push(sym as u8);
-        } else if sym == 256 {
-            return Ok(());
-        } else {
+        match sym.cmp(&256) {
+            std::cmp::Ordering::Less => {
+                #[allow(clippy::cast_possible_truncation)]
+                out.push(sym as u8);
+                continue;
+            }
+            std::cmp::Ordering::Equal => return Ok(()),
+            std::cmp::Ordering::Greater => {}
+        }
+        {
             let sym = usize::from(sym - 257);
             if sym >= 29 {
                 return Err(InflateError::Corrupt);
@@ -145,7 +168,6 @@ fn fixed_tables() -> Result<(Huffman, Huffman), InflateError> {
     let mut lengths = [0u8; 288];
     for (i, l) in lengths.iter_mut().enumerate() {
         *l = match i {
-            0..=143 => 8,
             144..=255 => 9,
             256..=279 => 7,
             _ => 8,
@@ -155,7 +177,9 @@ fn fixed_tables() -> Result<(Huffman, Huffman), InflateError> {
 }
 
 fn dynamic_tables(s: &mut Bits<'_>) -> Result<(Huffman, Huffman), InflateError> {
-    const ORDER: [usize; 19] = [16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15];
+    const ORDER: [usize; 19] = [
+        16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15,
+    ];
     let nlen = s.bits(5)? as usize + 257;
     let ndist = s.bits(5)? as usize + 1;
     let ncode = s.bits(4)? as usize + 4;
@@ -202,12 +226,20 @@ fn dynamic_tables(s: &mut Bits<'_>) -> Result<(Huffman, Huffman), InflateError> 
     if lengths[256] == 0 {
         return Err(InflateError::Corrupt);
     }
-    Ok((Huffman::new(&lengths[..nlen])?, Huffman::new(&lengths[nlen..nlen + ndist])?))
+    Ok((
+        Huffman::new(&lengths[..nlen])?,
+        Huffman::new(&lengths[nlen..nlen + ndist])?,
+    ))
 }
 
 /// Decodes a raw DEFLATE stream.
 pub fn inflate_raw(data: &[u8], size_hint: usize) -> Result<(Vec<u8>, usize), InflateError> {
-    let mut s = Bits { data, pos: 0, bitbuf: 0, bitcnt: 0 };
+    let mut s = Bits {
+        data,
+        pos: 0,
+        bitbuf: 0,
+        bitcnt: 0,
+    };
     let mut out = Vec::with_capacity(size_hint);
     loop {
         let last = s.bits(1)?;
@@ -223,7 +255,9 @@ pub fn inflate_raw(data: &[u8], size_hint: usize) -> Result<(Vec<u8>, usize), In
                     return Err(InflateError::Corrupt);
                 }
                 s.pos += 4;
-                let chunk = data.get(s.pos..s.pos + len).ok_or(InflateError::Truncated)?;
+                let chunk = data
+                    .get(s.pos..s.pos + len)
+                    .ok_or(InflateError::Truncated)?;
                 out.extend_from_slice(chunk);
                 s.pos += len;
             }
@@ -269,7 +303,9 @@ pub fn uncompress(data: &[u8], size_hint: usize) -> Result<Vec<u8>, InflateError
         return Err(InflateError::Corrupt);
     }
     let (out, used) = inflate_raw(&data[2..], size_hint)?;
-    let trailer = data.get(2 + used..2 + used + 4).ok_or(InflateError::Truncated)?;
+    let trailer = data
+        .get(2 + used..2 + used + 4)
+        .ok_or(InflateError::Truncated)?;
     if u32::from_be_bytes([trailer[0], trailer[1], trailer[2], trailer[3]]) != adler32(&out) {
         return Err(InflateError::Checksum);
     }
@@ -298,6 +334,7 @@ pub fn compress_stored(data: &[u8]) -> Vec<u8> {
 }
 
 #[cfg(test)]
+#[allow(clippy::cast_possible_truncation, clippy::format_collect)]
 mod tests {
     use super::*;
 
@@ -312,22 +349,38 @@ mod tests {
     #[test]
     fn fixed_huffman_known_vector() {
         // zlib.compress(b"hello hello hello hello") from CPython
-        let z = [0x78, 0x9c, 0xcb, 0x48, 0xcd, 0xc9, 0xc9, 0x57, 0xc8, 0x40, 0x27, 0x01, 0x68, 0x03, 0x08, 0xb1];
+        let z = [
+            0x78, 0x9c, 0xcb, 0x48, 0xcd, 0xc9, 0xc9, 0x57, 0xc8, 0x40, 0x27, 0x01, 0x68, 0x03,
+            0x08, 0xb1,
+        ];
         assert_eq!(uncompress(&z, 0).unwrap(), b"hello hello hello hello");
     }
 
     #[test]
     fn dynamic_huffman_known_vector() {
         let hex = "78da95965b56c3300c44ff598597604bb213b31b1ee50d814029b07a7ae2c902ee773b4791743da37539a57c99be1e0ee9e3f878f39caed7e5f496ee969ff4747c7dff4ccbf761dd7e7eb9fafb4db7cb7dca17e7bfa4c24465131913c5267226ea9b28e0e7b54d5599caeaa66a4ce5a3d6046731fa9a99aa8d1176a69ac7b60a04a364a141d930d583789418dd15a7cb1eb32c14923e36572826e2a4348a97ea41546c567f101637cdb353a0f5ba212f215e0cf212a17ad44ee6d19f415eaa8d791ae4a54e637f067969e2c5202f6daf077999f6fe202fd33e4f6a2fda9f435eba7871c84b179f4efd25eb41383598ac17e8d4618a9ebc576aa162c61b15cad41c42535c2eea33766d4d156253aa7222682e35811334989a923028399382372839b3723e7036e9ac081a4e59e4044da7a2a329683c59568f901cf3aca942722cf2d863cd3481454e85e458db2b42726c528fd569e86baa1592637d3f7e2139be9353e9015cc46a9df081a21ee965e37a8f959e367176807f784c731e";
-        let z: Vec<u8> = (0..hex.len()).step_by(2).map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap()).collect();
-        let expect: String = (0..60).map(|i| format!("row {i}: the quick brown fox jumps over the lazy dog {}\n", i * i)).collect();
+        let z: Vec<u8> = (0..hex.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap())
+            .collect();
+        let expect: String = (0..60)
+            .map(|i| {
+                format!(
+                    "row {i}: the quick brown fox jumps over the lazy dog {}\n",
+                    i * i
+                )
+            })
+            .collect();
         assert_eq!(uncompress(&z, 0).unwrap(), expect.as_bytes());
     }
 
     #[test]
     fn corrupt_inputs() {
         assert_eq!(uncompress(&[0x78], 0), Err(InflateError::Truncated));
-        assert_eq!(uncompress(&[0x79, 0x9c, 0, 0], 0), Err(InflateError::Corrupt));
+        assert_eq!(
+            uncompress(&[0x79, 0x9c, 0, 0], 0),
+            Err(InflateError::Corrupt)
+        );
         let mut z = compress_stored(b"abc");
         let n = z.len();
         z[n - 1] ^= 1;

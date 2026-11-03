@@ -5,7 +5,9 @@
 
 use std::fmt;
 
-use crate::consts::{CR_OUT_OF_MEMORY, ERRMSG_SIZE, MSG_OUT_OF_MEMORY, SQLSTATE_NULL, UNKNOWN_SQLSTATE};
+use crate::consts::{
+    CR_OUT_OF_MEMORY, ERRMSG_SIZE, MSG_OUT_OF_MEMORY, SQLSTATE_NULL, UNKNOWN_SQLSTATE,
+};
 
 /// One element of `mysqli_error_list()`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -32,7 +34,13 @@ pub struct Error {
 
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "({}/{}): {}", self.sqlstate, self.errno, String::from_utf8_lossy(&self.message))
+        write!(
+            f,
+            "({}/{}): {}",
+            self.sqlstate,
+            self.errno,
+            String::from_utf8_lossy(&self.message)
+        )
     }
 }
 
@@ -57,12 +65,21 @@ pub struct ErrorInfo {
 /// `strlcpy` into a `MYSQLND_ERRMSG_SIZE` buffer: stops at NUL, keeps at
 /// most 511 bytes.
 fn clamp_message(msg: &[u8]) -> Vec<u8> {
-    let end = msg.iter().position(|&b| b == 0).unwrap_or(msg.len()).min(ERRMSG_SIZE - 1);
+    let end = msg
+        .iter()
+        .position(|&b| b == 0)
+        .unwrap_or(msg.len())
+        .min(ERRMSG_SIZE - 1);
     msg[..end].to_vec()
 }
 
 fn clamp_sqlstate(s: &str) -> String {
-    let end = s.as_bytes().iter().position(|&b| b == 0).unwrap_or(s.len()).min(5);
+    let end = s
+        .as_bytes()
+        .iter()
+        .position(|&b| b == 0)
+        .unwrap_or(s.len())
+        .min(5);
     s[..end].to_string()
 }
 
@@ -84,7 +101,11 @@ impl ErrorInfo {
         self.errno = errno;
         self.sqlstate = clamp_sqlstate(sqlstate);
         self.error = clamp_message(error);
-        self.list.push(ErrorEntry { errno, sqlstate: self.sqlstate.clone(), error: self.error.clone() });
+        self.list.push(ErrorEntry {
+            errno,
+            sqlstate: self.sqlstate.clone(),
+            error: self.error.clone(),
+        });
     }
 
     /// Convenience: a client error with SQLSTATE HY000.
@@ -116,7 +137,11 @@ impl ErrorInfo {
     /// Snapshot as an [`Error`].
     #[must_use]
     pub fn to_error(&self) -> Error {
-        Error { errno: self.errno, sqlstate: self.sqlstate_or_null().to_string(), message: self.error.clone() }
+        Error {
+            errno: self.errno,
+            sqlstate: self.sqlstate_or_null().to_string(),
+            message: self.error.clone(),
+        }
     }
 }
 
@@ -157,7 +182,11 @@ impl ServerError {
                 message = buf[p..p + n].to_vec();
             }
         }
-        Self { errno, sqlstate, message }
+        Self {
+            errno,
+            sqlstate,
+            message,
+        }
     }
 
     /// Records this error into an [`ErrorInfo`].

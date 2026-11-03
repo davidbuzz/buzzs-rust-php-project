@@ -1,5 +1,13 @@
 //! Live tests against the local MariaDB: connection info, errors, simple
 //! queries, compared with `/usr/bin/php`'s mysqli on the same server.
+#![allow(
+    clippy::cast_possible_wrap,
+    clippy::cast_possible_truncation,
+    clippy::too_many_lines,
+    clippy::many_single_char_names,
+    clippy::doc_markdown,
+    clippy::format_collect
+)]
 
 mod common;
 
@@ -37,7 +45,9 @@ fn simple_select_text_protocol() {
     let mine = ra(&row);
     assert!(r.fetch_row().unwrap().is_none());
     if have_php() {
-        let theirs = php(r#"$m = conn(); $r = $m->query("SELECT 1 AS a, 'x' AS b, NULL AS c, 1.5 AS d"); echo r($r->fetch_array(MYSQLI_BOTH));"#);
+        let theirs = php(
+            r#"$m = conn(); $r = $m->query("SELECT 1 AS a, 'x' AS b, NULL AS c, 1.5 AS d"); echo r($r->fetch_array(MYSQLI_BOTH));"#,
+        );
         assert_eq!(mine, theirs);
     }
 }
@@ -47,17 +57,49 @@ fn connect_errors_match_oracle() {
     let p = params();
     let Some(_alive) = connect() else { return };
     let mut mine = Vec::new();
-    for (pass, db, port) in [("bad", p.db.as_str(), p.port), (p.passwd.as_str(), "nodb_xyz", p.port), (p.passwd.as_str(), p.db.as_str(), 1u32)] {
+    for (pass, db, port) in [
+        ("bad", p.db.as_str(), p.port),
+        (p.passwd.as_str(), "nodb_xyz", p.port),
+        (p.passwd.as_str(), p.db.as_str(), 1u32),
+    ] {
         let c = Connection::init();
         let e = c
-            .connect(Some(&p.host), Some(p.user.as_bytes()), Some(pass.as_bytes()), Some(db.as_bytes()), port, None, 0)
+            .connect(
+                Some(&p.host),
+                Some(p.user.as_bytes()),
+                Some(pass.as_bytes()),
+                Some(db.as_bytes()),
+                port,
+                None,
+                0,
+            )
             .unwrap_err();
-        mine.push(format!("{}|{}|{}", e.errno, e.sqlstate, String::from_utf8_lossy(&e.message)));
+        mine.push(format!(
+            "{}|{}|{}",
+            e.errno,
+            e.sqlstate,
+            String::from_utf8_lossy(&e.message)
+        ));
         assert_eq!(c.errno(), e.errno);
     }
     let c = Connection::init();
-    let e = c.connect(Some("localhost"), Some(b"x"), None, None, 0, Some("/nonexistent/mysql.sock"), 0).unwrap_err();
-    mine.push(format!("{}|{}|{}", e.errno, e.sqlstate, String::from_utf8_lossy(&e.message)));
+    let e = c
+        .connect(
+            Some("localhost"),
+            Some(b"x"),
+            None,
+            None,
+            0,
+            Some("/nonexistent/mysql.sock"),
+            0,
+        )
+        .unwrap_err();
+    mine.push(format!(
+        "{}|{}|{}",
+        e.errno,
+        e.sqlstate,
+        String::from_utf8_lossy(&e.message)
+    ));
     let mine = mine.join("\n");
     if !have_php() {
         return;
@@ -86,17 +128,29 @@ fn server_errors_and_sqlstate() {
     let e = c.query(b"SELEC 1").unwrap_err();
     assert_eq!(e.errno, 1064);
     assert_eq!(c.sqlstate(), "42000");
-    let mine = format!("{}|{}|{}", c.errno(), c.sqlstate(), String::from_utf8_lossy(&c.error()));
+    let mine = format!(
+        "{}|{}|{}",
+        c.errno(),
+        c.sqlstate(),
+        String::from_utf8_lossy(&c.error())
+    );
     assert_eq!(c.error_list().len(), 1);
     let e2 = c.query(b"SELECT * FROM no_such_table_xyz").unwrap_err();
-    let mine2 = format!("{}|{}|{}", e2.errno, c.sqlstate(), String::from_utf8_lossy(&e2.message));
+    let mine2 = format!(
+        "{}|{}|{}",
+        e2.errno,
+        c.sqlstate(),
+        String::from_utf8_lossy(&e2.message)
+    );
     c.query(b"SELECT 1").unwrap();
     assert_eq!(c.errno(), 0);
     assert_eq!(c.sqlstate(), "00000");
     let _ = c.store_result().unwrap();
     if have_php() {
-        let theirs = php(r#"$m = conn(); $m->query("SELEC 1"); echo $m->errno,"|",$m->sqlstate,"|",$m->error,"\n";
-            $m->query("SELECT * FROM no_such_table_xyz"); echo $m->errno,"|",$m->sqlstate,"|",$m->error;"#);
+        let theirs = php(
+            r#"$m = conn(); $m->query("SELEC 1"); echo $m->errno,"|",$m->sqlstate,"|",$m->error,"\n";
+            $m->query("SELECT * FROM no_such_table_xyz"); echo $m->errno,"|",$m->sqlstate,"|",$m->error;"#,
+        );
         assert_eq!(format!("{mine}\n{mine2}"), theirs);
     }
 }
@@ -123,14 +177,20 @@ fn upsert_status_matches_oracle() {
             r.free(false);
         }
         let aff = c.affected_rows();
-        let aff = if aff == u64::MAX { -1 } else { i64::try_from(aff).unwrap() };
+        let aff = if aff == u64::MAX {
+            -1
+        } else {
+            i64::try_from(aff).unwrap()
+        };
         mine.push(format!(
             "{}|{}|{}|{}|{}",
             u8::from(ok),
             aff,
             c.insert_id(),
             c.warning_count(),
-            c.info().map(|i| String::from_utf8_lossy(&i).into_owned()).unwrap_or_default()
+            c.info()
+                .map(|i| String::from_utf8_lossy(&i).into_owned())
+                .unwrap_or_default()
         ));
     }
     let mine = mine.join("\n");
@@ -177,7 +237,11 @@ fn ping_select_db_statistics_kill() {
     let e = c.select_db(b"nonexistent_db_xyz").unwrap_err();
     assert_eq!(e.errno, 1044);
     let s = c.statistics().unwrap();
-    assert!(s.starts_with(b"Uptime: "), "{}", String::from_utf8_lossy(&s));
+    assert!(
+        s.starts_with(b"Uptime: "),
+        "{}",
+        String::from_utf8_lossy(&s)
+    );
     // kill another connection
     let Some(other) = connect() else { return };
     #[allow(clippy::cast_possible_truncation)]

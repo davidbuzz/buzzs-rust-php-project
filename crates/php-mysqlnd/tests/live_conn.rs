@@ -1,6 +1,15 @@
 //! Connection-level features: multi statements, charsets and escaping,
-//! change_user, transactions, LOAD DATA LOCAL INFILE, init commands,
+//! `change_user`, transactions, LOAD DATA LOCAL INFILE, init commands,
 //! compression, async queries and statistics — compared with `/usr/bin/php`.
+#![allow(
+    clippy::cast_possible_wrap,
+    clippy::cast_possible_truncation,
+    clippy::too_many_lines,
+    clippy::many_single_char_names,
+    clippy::doc_markdown,
+    clippy::format_collect,
+    clippy::items_after_statements
+)]
 
 mod common;
 
@@ -11,7 +20,9 @@ use php_mysqlnd::{CloseType, Connection, OptionValue};
 
 #[test]
 fn multi_statements() {
-    let Some(c) = connect_flags(CLIENT_MULTI_STATEMENTS) else { return };
+    let Some(c) = connect_flags(CLIENT_MULTI_STATEMENTS) else {
+        return;
+    };
     let t = table("multi");
     let sql = format!(
         "DROP TABLE IF EXISTS {t}; CREATE TABLE {t} (a INT); INSERT INTO {t} VALUES (1),(2); SELECT * FROM {t}; UPDATE {t} SET a = a + 1; SELECT a * 10 AS x FROM {t}; SELEC broken; SELECT 'never'"
@@ -81,27 +92,42 @@ fn multi_statements() {
 #[test]
 fn charsets_and_escaping() {
     let Some(c) = connect() else { return };
-    let inputs: [&[u8]; 6] = [b"plain", b"it's \"q\" \\ \0 \n \r \x1a", "日本'語".as_bytes(), b"\xbf\x27 or 1=1", b"\xbf\x5c\x27", b"\x81\x27"];
+    let inputs: [&[u8]; 6] = [
+        b"plain",
+        b"it's \"q\" \\ \0 \n \r \x1a",
+        "日本'語".as_bytes(),
+        b"\xbf\x27 or 1=1",
+        b"\xbf\x5c\x27",
+        b"\x81\x27",
+    ];
     let mut out = Vec::new();
     for cs in ["utf8mb4", "latin1", "gbk", "sjis", "big5", "utf8", "binary"] {
         c.set_charset(cs).unwrap();
-        out.push(format!("{}|{}", c.character_set_name().unwrap(), c.charset().unwrap().collation));
+        out.push(format!(
+            "{}|{}",
+            c.character_set_name().unwrap(),
+            c.charset().unwrap().collation
+        ));
         for i in inputs {
             out.push(h(&c.escape_string(i)));
         }
     }
     let e = c.set_charset("nosuchcs").unwrap_err();
-    out.push(format!("{}|{}", e.errno, String::from_utf8_lossy(&e.message)));
+    out.push(format!(
+        "{}|{}",
+        e.errno,
+        String::from_utf8_lossy(&e.message)
+    ));
     // NO_BACKSLASH_ESCAPES switches to quote doubling
     c.set_charset("utf8mb4").unwrap();
-    c.query(b"SET SESSION sql_mode = 'NO_BACKSLASH_ESCAPES'").unwrap();
+    c.query(b"SET SESSION sql_mode = 'NO_BACKSLASH_ESCAPES'")
+        .unwrap();
     out.push(h(&c.escape_string(b"it's \\ ok")));
     let mine = out.join("\n");
     if !have_php() {
         return;
     }
-    let theirs = php(
-        r#"$m = conn(); $out = [];
+    let theirs = php(r#"$m = conn(); $out = [];
         $inputs = ["plain", "it's \"q\" \\ \0 \n \r \x1a", "日本'語", "\xbf\x27 or 1=1", "\xbf\x5c\x27", "\x81\x27"];
         foreach (["utf8mb4", "latin1", "gbk", "sjis", "big5", "utf8", "binary"] as $cs) {
             $m->set_charset($cs); $out[] = $m->character_set_name()."|".$m->get_charset()->collation;
@@ -111,8 +137,7 @@ fn charsets_and_escaping() {
         $out[] = $m->errno."|".$m->error;
         $m->set_charset("utf8mb4"); $m->query("SET SESSION sql_mode = 'NO_BACKSLASH_ESCAPES'");
         $out[] = bin2hex($m->real_escape_string("it's \\ ok"));
-        echo implode("\n", $out);"#,
-    );
+        echo implode("\n", $out);"#);
     assert_lines_eq(&mine, &theirs);
 }
 
@@ -122,12 +147,23 @@ fn charset_option_at_connect() {
     let Some(_alive) = connect() else { return };
     let c = Connection::init();
     assert!(c.set_option(opt::MYSQL_SET_CHARSET_NAME, OptionValue::Str(b"latin1")));
-    c.connect(Some(&p.host), Some(p.user.as_bytes()), Some(p.passwd.as_bytes()), Some(p.db.as_bytes()), p.port, None, 0)
-        .unwrap();
+    c.connect(
+        Some(&p.host),
+        Some(p.user.as_bytes()),
+        Some(p.passwd.as_bytes()),
+        Some(p.db.as_bytes()),
+        p.port,
+        None,
+        0,
+    )
+    .unwrap();
     assert_eq!(c.character_set_name(), Some("latin1"));
     let mut r = query(&c, "SELECT @@character_set_client, @@character_set_results").unwrap();
     let row = r.fetch_row().unwrap().unwrap();
-    assert_eq!(ra(&row), format!("[i:0=>s:{},i:1=>s:{}]", h(b"latin1"), h(b"latin1")));
+    assert_eq!(
+        ra(&row),
+        format!("[i:0=>s:{},i:1=>s:{}]", h(b"latin1"), h(b"latin1"))
+    );
 }
 
 #[test]
@@ -135,14 +171,30 @@ fn change_user_and_select_db() {
     let Some(c) = connect() else { return };
     let p = params();
     c.query(b"SET @v = 1").unwrap();
-    c.change_user(p.user.as_bytes(), p.passwd.as_bytes(), Some(p.db.as_bytes()), false).unwrap();
+    c.change_user(
+        p.user.as_bytes(),
+        p.passwd.as_bytes(),
+        Some(p.db.as_bytes()),
+        false,
+    )
+    .unwrap();
     let mut r = query(&c, "SELECT @v, DATABASE(), CURRENT_USER() LIKE 'phptest%'").unwrap();
-    assert_eq!(ra(&r.fetch_row().unwrap().unwrap()), format!("[i:0=>N,i:1=>s:{},i:2=>s:31]", h(p.db.as_bytes())));
+    assert_eq!(
+        ra(&r.fetch_row().unwrap().unwrap()),
+        format!("[i:0=>N,i:1=>s:{},i:2=>s:31]", h(p.db.as_bytes()))
+    );
     drop(r);
-    let e = c.change_user(p.user.as_bytes(), b"wrong", None, false).unwrap_err();
+    let e = c
+        .change_user(p.user.as_bytes(), b"wrong", None, false)
+        .unwrap_err();
     assert_eq!(e.errno, 1045);
     assert_eq!(e.sqlstate, "28000");
-    let mine = format!("{}|{}|{}", e.errno, e.sqlstate, String::from_utf8_lossy(&e.message));
+    let mine = format!(
+        "{}|{}|{}",
+        e.errno,
+        e.sqlstate,
+        String::from_utf8_lossy(&e.message)
+    );
     if have_php() {
         let theirs = php(&format!(
             r#"$m = conn(); @$m->change_user("{}", "wrong", null); echo $m->errno, "|", $m->sqlstate, "|", $m->error;"#,
@@ -156,18 +208,27 @@ fn change_user_and_select_db() {
 fn transactions() {
     let Some(c) = connect() else { return };
     let t = table("tx");
-    c.query(format!("DROP TABLE IF EXISTS {t}").as_bytes()).unwrap();
-    c.query(format!("CREATE TABLE {t} (a INT) ENGINE=InnoDB").as_bytes()).unwrap();
+    c.query(format!("DROP TABLE IF EXISTS {t}").as_bytes())
+        .unwrap();
+    c.query(format!("CREATE TABLE {t} (a INT) ENGINE=InnoDB").as_bytes())
+        .unwrap();
     c.autocommit(false).unwrap();
     assert_eq!(c.server_status() & SERVER_STATUS_AUTOCOMMIT, 0);
-    c.begin_transaction(TRANS_START_READ_WRITE, Some(b"my_tx")).unwrap();
-    c.query(format!("INSERT INTO {t} VALUES (1)").as_bytes()).unwrap();
+    c.begin_transaction(TRANS_START_READ_WRITE, Some(b"my_tx"))
+        .unwrap();
+    c.query(format!("INSERT INTO {t} VALUES (1)").as_bytes())
+        .unwrap();
     c.savepoint(Some(b"sp1")).unwrap();
-    c.query(format!("INSERT INTO {t} VALUES (2)").as_bytes()).unwrap();
+    c.query(format!("INSERT INTO {t} VALUES (2)").as_bytes())
+        .unwrap();
     c.query(b"ROLLBACK TO SAVEPOINT `sp1`").unwrap();
     c.release_savepoint(Some(b"sp1")).unwrap();
     c.commit(TRANS_COR_NO_OPT, Some(b"bad*name")).unwrap();
-    c.begin_transaction(TRANS_START_WITH_CONSISTENT_SNAPSHOT | TRANS_START_READ_ONLY, None).unwrap();
+    c.begin_transaction(
+        TRANS_START_WITH_CONSISTENT_SNAPSHOT | TRANS_START_READ_ONLY,
+        None,
+    )
+    .unwrap();
     c.rollback(TRANS_COR_AND_NO_CHAIN, None).unwrap();
     assert!(c.savepoint(None).is_err());
     c.autocommit(true).unwrap();
@@ -188,23 +249,45 @@ fn load_data_local_infile() {
     std::fs::write(&file, "1,one\n2,two\n3,three\n").unwrap();
     let f = file.to_string_lossy().into_owned();
     let d = dir.to_string_lossy().into_owned();
-    c.query(format!("DROP TABLE IF EXISTS {t}").as_bytes()).unwrap();
-    c.query(format!("CREATE TABLE {t} (id INT, v VARCHAR(10))").as_bytes()).unwrap();
+    c.query(format!("DROP TABLE IF EXISTS {t}").as_bytes())
+        .unwrap();
+    c.query(format!("CREATE TABLE {t} (id INT, v VARCHAR(10))").as_bytes())
+        .unwrap();
     let load = |c: &Connection, path: &str| {
-        let ok = c.query(format!("LOAD DATA LOCAL INFILE '{path}' INTO TABLE {t} FIELDS TERMINATED BY ','").as_bytes()).is_ok();
-        format!("{}|{}|{}|{}", u8::from(ok), c.errno(), String::from_utf8_lossy(&c.error()), c.affected_rows() as i64)
+        let ok = c
+            .query(
+                format!("LOAD DATA LOCAL INFILE '{path}' INTO TABLE {t} FIELDS TERMINATED BY ','")
+                    .as_bytes(),
+            )
+            .is_ok();
+        format!(
+            "{}|{}|{}|{}",
+            u8::from(ok),
+            c.errno(),
+            String::from_utf8_lossy(&c.error()),
+            c.affected_rows() as i64
+        )
     };
     let mut out = Vec::new();
     out.push(load(&c, &f)); // forbidden by default
     c.set_option(opt::MYSQL_OPT_LOCAL_INFILE, OptionValue::Int(1));
     out.push(load(&c, &f));
-    out.push(format!("info:{}", String::from_utf8_lossy(&c.info().unwrap_or_default())));
+    out.push(format!(
+        "info:{}",
+        String::from_utf8_lossy(&c.info().unwrap_or_default())
+    ));
     out.push(load(&c, "/nonexistent/x.csv"));
     c.set_option(opt::MYSQL_OPT_LOCAL_INFILE, OptionValue::Int(0));
-    c.set_option(opt::MYSQL_OPT_LOAD_DATA_LOCAL_DIR, OptionValue::Str(d.as_bytes()));
+    c.set_option(
+        opt::MYSQL_OPT_LOAD_DATA_LOCAL_DIR,
+        OptionValue::Str(d.as_bytes()),
+    );
     out.push(load(&c, &f));
     out.push(load(&c, "/etc/hostname"));
-    c.set_option(opt::MYSQL_OPT_LOAD_DATA_LOCAL_DIR, OptionValue::Str(b"/nonexistent-dir"));
+    c.set_option(
+        opt::MYSQL_OPT_LOAD_DATA_LOCAL_DIR,
+        OptionValue::Str(b"/nonexistent-dir"),
+    );
     out.push(load(&c, &f));
     let mut r = query(&c, &format!("SELECT COUNT(*) FROM {t}")).unwrap();
     out.push(ra(&r.fetch_row().unwrap().unwrap()));
@@ -241,9 +324,20 @@ fn init_commands_and_options() {
     let c = Connection::init();
     c.set_option(opt::MYSQL_INIT_COMMAND, OptionValue::Str(b"SET @a = 41"));
     c.set_option(opt::MYSQL_INIT_COMMAND, OptionValue::Str(b"SELECT 1"));
-    c.set_option(opt::MYSQL_INIT_COMMAND, OptionValue::Str(b"SET @a = @a + 1"));
-    c.connect(Some(&p.host), Some(p.user.as_bytes()), Some(p.passwd.as_bytes()), Some(p.db.as_bytes()), p.port, None, 0)
-        .unwrap();
+    c.set_option(
+        opt::MYSQL_INIT_COMMAND,
+        OptionValue::Str(b"SET @a = @a + 1"),
+    );
+    c.connect(
+        Some(&p.host),
+        Some(p.user.as_bytes()),
+        Some(p.passwd.as_bytes()),
+        Some(p.db.as_bytes()),
+        p.port,
+        None,
+        0,
+    )
+    .unwrap();
     let mut r = query(&c, "SELECT @a").unwrap();
     assert_eq!(ra(&r.fetch_row().unwrap().unwrap()), "[i:0=>s:3432]");
     drop(r);
@@ -253,7 +347,15 @@ fn init_commands_and_options() {
     let c2 = Connection::init();
     c2.set_option(opt::MYSQL_INIT_COMMAND, OptionValue::Str(b"SELEC 1"));
     let e = c2
-        .connect(Some(&p.host), Some(p.user.as_bytes()), Some(p.passwd.as_bytes()), Some(p.db.as_bytes()), p.port, None, 0)
+        .connect(
+            Some(&p.host),
+            Some(p.user.as_bytes()),
+            Some(p.passwd.as_bytes()),
+            Some(p.db.as_bytes()),
+            p.port,
+            None,
+            0,
+        )
         .unwrap_err();
     assert_eq!(e.errno, 1064);
     assert_eq!(c2.stats().get(Stat::InitCommandFailedCount), 1);
@@ -261,23 +363,38 @@ fn init_commands_and_options() {
 
 #[test]
 fn compressed_protocol() {
-    let Some(c) = connect_flags(CLIENT_COMPRESS) else { return };
+    let Some(c) = connect_flags(CLIENT_COMPRESS) else {
+        return;
+    };
     assert_ne!(c.client_flags() & CLIENT_COMPRESS, 0);
-    let mut r = query(&c, "SELECT REPEAT('abc', 100000) AS big, 42 AS n UNION ALL SELECT REPEAT('x', 10), 7").unwrap();
+    let mut r = query(
+        &c,
+        "SELECT REPEAT('abc', 100000) AS big, 42 AS n UNION ALL SELECT REPEAT('x', 10), 7",
+    )
+    .unwrap();
     let row = r.fetch_row().unwrap().unwrap();
-    let php_runtime::Value::Str(big) = row.get_int(0).unwrap() else { panic!() };
+    let php_runtime::Value::Str(big) = row.get_int(0).unwrap() else {
+        panic!()
+    };
     assert_eq!(big.len(), 300_000);
     assert!(big.as_bytes().starts_with(b"abcabc"));
     assert!(r.fetch_row().unwrap().is_some());
     // big statement sent through the compressed envelope
     let q = format!("SELECT LENGTH('{}')", "z".repeat(50_000));
     let mut r = query(&c, &q).unwrap();
-    assert_eq!(ra(&r.fetch_row().unwrap().unwrap()), format!("[i:0=>s:{}]", h(b"50000")));
+    assert_eq!(
+        ra(&r.fetch_row().unwrap().unwrap()),
+        format!("[i:0=>s:{}]", h(b"50000"))
+    );
     let st = c.stmt_init();
     st.prepare(b"SELECT REPEAT('q', 70000)").unwrap();
     struct Ctx;
     impl php_runtime::error::RuntimeContext for Ctx {
-        fn diagnostic(&mut self, _: php_runtime::error::ErrorLevel, _: &str) -> php_runtime::error::RtResult<()> {
+        fn diagnostic(
+            &mut self,
+            _: php_runtime::error::ErrorLevel,
+            _: &str,
+        ) -> php_runtime::error::RtResult<()> {
             Ok(())
         }
     }
@@ -291,10 +408,16 @@ fn async_send_and_reap() {
     let Some(c) = connect() else { return };
     c.send_query(b"SELECT SLEEP(0.1), 5").unwrap();
     assert_eq!(c.state(), php_mysqlnd::ConnState::QuerySent);
-    assert_eq!(c.query(b"SELECT 1").unwrap_err().errno, CR_COMMANDS_OUT_OF_SYNC);
+    assert_eq!(
+        c.query(b"SELECT 1").unwrap_err().errno,
+        CR_COMMANDS_OUT_OF_SYNC
+    );
     c.reap_query().unwrap();
     let mut r = c.store_result().unwrap().unwrap();
-    assert_eq!(ra(&r.fetch_row().unwrap().unwrap()), format!("[i:0=>s:{},i:1=>s:{}]", h(b"0"), h(b"5")));
+    assert_eq!(
+        ra(&r.fetch_row().unwrap().unwrap()),
+        format!("[i:0=>s:{},i:1=>s:{}]", h(b"0"), h(b"5"))
+    );
 }
 
 #[test]
@@ -302,7 +425,9 @@ fn big_packets_over_16mb() {
     let Some(c) = connect() else { return };
     let mut r = query(&c, "SELECT @@max_allowed_packet").unwrap();
     let row = r.fetch_row().unwrap().unwrap();
-    let php_runtime::Value::Str(m) = row.get_int(0).unwrap() else { panic!() };
+    let php_runtime::Value::Str(m) = row.get_int(0).unwrap() else {
+        panic!()
+    };
     let max: usize = m.to_string_lossy().parse().unwrap();
     if max < 40 * 1024 * 1024 {
         // the server can't return >16 MiB rows; still exercise a 16 MiB-1 boundary statement
@@ -322,9 +447,12 @@ fn statistics_match_oracle() {
     let Some(c) = connect() else { return };
     let t = table("stats");
     let ops = |c: &Connection| {
-        c.query(format!("DROP TABLE IF EXISTS {t}").as_bytes()).unwrap();
-        c.query(format!("CREATE TABLE {t} (a INT, b VARCHAR(5), d DOUBLE)").as_bytes()).unwrap();
-        c.query(format!("INSERT INTO {t} VALUES (1,'x',1.5),(2,NULL,2.5),(3,'z',NULL)").as_bytes()).unwrap();
+        c.query(format!("DROP TABLE IF EXISTS {t}").as_bytes())
+            .unwrap();
+        c.query(format!("CREATE TABLE {t} (a INT, b VARCHAR(5), d DOUBLE)").as_bytes())
+            .unwrap();
+        c.query(format!("INSERT INTO {t} VALUES (1,'x',1.5),(2,NULL,2.5),(3,'z',NULL)").as_bytes())
+            .unwrap();
         let mut r = query(c, &format!("SELECT * FROM {t}")).unwrap();
         while r.fetch_row().unwrap().is_some() {}
         r.free(false);
@@ -339,7 +467,15 @@ fn statistics_match_oracle() {
     let before = c.stats();
     ops(&c);
     let after = c.stats();
-    let skip = |n: &str| n.starts_with("bytes_") || n.starts_with("mem_") || n.contains("protocol_overhead") || n == "packets_sent" || n == "packets_received" || n == "connect_success" || n == "active_connections";
+    let skip = |n: &str| {
+        n.starts_with("bytes_")
+            || n.starts_with("mem_")
+            || n.contains("protocol_overhead")
+            || n == "packets_sent"
+            || n == "packets_received"
+            || n == "connect_success"
+            || n == "active_connections"
+    };
     let mut mine = Vec::new();
     for ((n, a), (_, b)) in after.to_pairs().into_iter().zip(before.to_pairs()) {
         if !skip(n) {
@@ -380,9 +516,14 @@ fn global_close_statistics() {
     let after = php_mysqlnd::stats::global();
     // the explicit close and the destructor both call send_close: -2 (wraps)
     assert_eq!(
-        after.get(Stat::OpenedConnections).wrapping_sub(before.get(Stat::OpenedConnections)),
+        after
+            .get(Stat::OpenedConnections)
+            .wrapping_sub(before.get(Stat::OpenedConnections)),
         u64::MAX
     );
-    assert_eq!(after.get(Stat::CloseExplicit) - before.get(Stat::CloseExplicit), 1);
+    assert_eq!(
+        after.get(Stat::CloseExplicit) - before.get(Stat::CloseExplicit),
+        1
+    );
     assert_eq!(after.get(Stat::ComQuit) - before.get(Stat::ComQuit), 1);
 }

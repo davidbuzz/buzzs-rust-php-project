@@ -51,7 +51,9 @@ fn sha1(d: &[u8]) -> [u8; 20] {
 
 fn sha256(parts: &[&[u8]]) -> [u8; 32] {
     let data: Vec<u8> = parts.concat();
-    let d = php_hash::hash(b"sha256", &data, &php_hash::HashOptions::default()).map(|d| d.bytes).unwrap_or_default();
+    let d = php_hash::hash(b"sha256", &data, &php_hash::HashOptions::default())
+        .map(|d| d.bytes)
+        .unwrap_or_default();
     let mut out = [0u8; 32];
     if d.len() == 32 {
         out.copy_from_slice(&d);
@@ -117,7 +119,11 @@ pub enum RsaError {
 
 /// `mysqlnd_sha256_public_encrypt` / `mysqlnd_caching_sha2_public_encrypt`:
 /// RSA-OAEP encrypts `xor_password(password, scramble)`.
-pub fn rsa_encrypt_password(key: &PKey<Public>, password: &[u8], scramble: &[u8]) -> Result<Vec<u8>, RsaError> {
+pub fn rsa_encrypt_password(
+    key: &PKey<Public>,
+    password: &[u8],
+    scramble: &[u8],
+) -> Result<Vec<u8>, RsaError> {
     let size = key.size();
     if size == 0 {
         return Err(RsaError::InvalidKeySize);
@@ -128,7 +134,9 @@ pub fn rsa_encrypt_password(key: &PKey<Public>, password: &[u8], scramble: &[u8]
     let rsa = key.rsa().map_err(|_| RsaError::Failed)?;
     let data = xor_password(password, scramble);
     let mut out = vec![0u8; rsa.size() as usize];
-    let n = rsa.public_encrypt(&data, &mut out, Padding::PKCS1_OAEP).map_err(|_| RsaError::Failed)?;
+    let n = rsa
+        .public_encrypt(&data, &mut out, Padding::PKCS1_OAEP)
+        .map_err(|_| RsaError::Failed)?;
     out.truncate(n);
     Ok(out)
 }
@@ -138,13 +146,16 @@ mod tests {
     use super::*;
 
     fn hex(b: &[u8]) -> String {
-        b.iter().map(|x| format!("{x:02x}")).collect()
+        php_hash::bin2hex(b)
     }
 
     #[test]
     fn native_known_answer() {
         let scr: Vec<u8> = (1..=20).collect();
-        assert_eq!(hex(&scramble_native(&scr, b"secret")), "b32bb3a583e1340c0a1108d58b1be49781ad8c2f");
+        assert_eq!(
+            hex(&scramble_native(&scr, b"secret")),
+            "b32bb3a583e1340c0a1108d58b1be49781ad8c2f"
+        );
     }
 
     #[test]
@@ -171,15 +182,23 @@ mod tests {
         let enc = rsa_encrypt_password(&key, b"secret", &scr).unwrap();
         assert_eq!(enc.len(), 256);
         let mut dec = vec![0u8; 256];
-        let n = rsa.private_decrypt(&enc, &mut dec, Padding::PKCS1_OAEP).unwrap();
+        let n = rsa
+            .private_decrypt(&enc, &mut dec, Padding::PKCS1_OAEP)
+            .unwrap();
         assert_eq!(&dec[..n], xor_password(b"secret", &scr).as_slice());
         let long = vec![b'x'; 300];
-        assert_eq!(rsa_encrypt_password(&key, &long, &scr), Err(RsaError::PasswordTooLong));
+        assert_eq!(
+            rsa_encrypt_password(&key, &long, &scr),
+            Err(RsaError::PasswordTooLong)
+        );
     }
 
     #[test]
     fn plugin_names() {
-        assert_eq!(Plugin::by_name("caching_sha2_password"), Some(Plugin::CachingSha2));
+        assert_eq!(
+            Plugin::by_name("caching_sha2_password"),
+            Some(Plugin::CachingSha2)
+        );
         assert_eq!(Plugin::by_name("client_ed25519"), None);
         assert_eq!(Plugin::Native.name(), "mysql_native_password");
     }

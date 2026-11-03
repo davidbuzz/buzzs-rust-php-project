@@ -10,11 +10,13 @@ use std::time::Duration;
 
 use openssl::ssl::{SslConnector, SslFiletype, SslMethod, SslStream, SslVerifyMode};
 
-use crate::consts::{Command, CR_CONNECTION_ERROR, CR_SERVER_GONE_ERROR, MAX_PACKET_SIZE, MSG_SERVER_GONE};
+use crate::consts::{
+    Command, CR_CONNECTION_ERROR, CR_SERVER_GONE_ERROR, MAX_PACKET_SIZE, MSG_SERVER_GONE,
+};
+use crate::diag;
 use crate::error::{ErrorInfo, ServerError};
 use crate::inflate;
 use crate::stats::{inc_conn, Stat, Stats};
-use crate::diag;
 
 /// Size of the packet header.
 pub const HEADER_SIZE: usize = 4;
@@ -154,12 +156,13 @@ fn parse_host_port(addr: &str) -> Option<(String, u16)> {
 fn atoi_port(s: &str) -> u16 {
     let digits: String = s.chars().take_while(char::is_ascii_digit).collect();
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    let p = digits.parse::<i64>().map(|v| v as u16).unwrap_or(0);
+    let p = digits.parse::<i64>().map_or(0, |v| v as u16);
     p
 }
 
 /// The transport + framing state of a connection (`MYSQLND_VIO` + `MYSQLND_PFC`).
 #[derive(Debug, Default)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct Net {
     stream: Option<Stream>,
     /// Expected next sequence number.
@@ -210,7 +213,12 @@ impl Net {
     }
 
     /// `mysqlnd_vio::connect` for a `tcp://` or `unix://` transport string.
-    pub fn connect(&mut self, scheme: &str, default_timeout: Duration, err: &mut ErrorInfo) -> bool {
+    pub fn connect(
+        &mut self,
+        scheme: &str,
+        default_timeout: Duration,
+        err: &mut ErrorInfo,
+    ) -> bool {
         self.close();
         let timeout = if self.opts.timeout_connect > 0 {
             Duration::from_secs(u64::from(self.opts.timeout_connect))
@@ -238,7 +246,9 @@ impl Net {
                 Ok(a) => a.collect(),
                 Err(e) => {
                     let msg = e.to_string();
-                    let msg = msg.strip_prefix("failed to lookup address information: ").unwrap_or(&msg);
+                    let msg = msg
+                        .strip_prefix("failed to lookup address information: ")
+                        .unwrap_or(&msg);
                     err.set_client(
                         CR_CONNECTION_ERROR,
                         &format!("php_network_getaddresses: getaddrinfo for {host} failed: {msg}"),
@@ -257,17 +267,17 @@ impl Net {
                     Err(e) => last_err = Some(e),
                 }
             }
-            match conn {
-                Some(s) => {
-                    let _ = s.set_nodelay(true);
-                    self.unix = false;
-                    Plain::Tcp(s)
-                }
-                None => {
-                    let msg = last_err.map_or_else(|| "Unknown error while connecting".to_string(), |e| strerror(&e));
-                    err.set_client(CR_CONNECTION_ERROR, &msg);
-                    return false;
-                }
+            if let Some(s) = conn {
+                let _ = s.set_nodelay(true);
+                self.unix = false;
+                Plain::Tcp(s)
+            } else {
+                let msg = last_err.map_or_else(
+                    || "Unknown error while connecting".to_string(),
+                    |e| strerror(&e),
+                );
+                err.set_client(CR_CONNECTION_ERROR, &msg);
+                return false;
             }
         } else {
             err.set_client(CR_CONNECTION_ERROR, "No handler for this scheme");
@@ -282,7 +292,9 @@ impl Net {
 
     /// `mysqlnd_vio::enable_ssl`
     pub fn enable_ssl(&mut self) -> bool {
-        let Some(Stream::Plain(plain)) = self.stream.take() else { return false };
+        let Some(Stream::Plain(plain)) = self.stream.take() else {
+            return false;
+        };
         match self.build_tls(plain) {
             Some(tls) => {
                 self.stream = Some(Stream::Tls(Box::new(tls)));
@@ -302,7 +314,11 @@ impl Net {
             || o.ssl_passphrase.is_some()
             || o.ssl_cipher.is_some();
         if o.ssl_verify_peer == SslPeer::Default {
-            o.ssl_verify_peer = if any_flag { SslPeer::Verify } else { SslPeer::DontVerify };
+            o.ssl_verify_peer = if any_flag {
+                SslPeer::Verify
+            } else {
+                SslPeer::DontVerify
+            };
         }
         let verify = o.ssl_verify_peer == SslPeer::Verify;
         let mut b = SslConnector::builder(SslMethod::tls_client()).ok()?;
@@ -328,7 +344,9 @@ impl Net {
         if let Some(key) = key_file {
             if let Some(pass) = &o.ssl_passphrase {
                 let pem = std::fs::read(&key).ok()?;
-                let pk = openssl::pkey::PKey::private_key_from_pem_passphrase(&pem, pass.as_bytes()).ok()?;
+                let pk =
+                    openssl::pkey::PKey::private_key_from_pem_passphrase(&pem, pass.as_bytes())
+                        .ok()?;
                 b.set_private_key(&pk).ok()?;
             } else {
                 b.set_private_key_file(&key, SslFiletype::PEM).ok()?;
@@ -343,14 +361,22 @@ impl Net {
         let connector = b.build();
         let mut cfg = connector.configure().ok()?;
         cfg.set_verify_hostname(verify);
-        cfg.set_use_server_name_indication(!self.peer_name.is_empty() && self.peer_name.parse::<std::net::IpAddr>().is_err());
-        let name = if self.peer_name.is_empty() { "localhost".to_string() } else { self.peer_name.clone() };
+        cfg.set_use_server_name_indication(
+            !self.peer_name.is_empty() && self.peer_name.parse::<std::net::IpAddr>().is_err(),
+        );
+        let name = if self.peer_name.is_empty() {
+            "localhost".to_string()
+        } else {
+            self.peer_name.clone()
+        };
         cfg.connect(&name, plain).ok()
     }
 
     /// `mysqlnd_vio::network_read`: reads exactly `buf.len()` bytes.
     pub fn network_read(&mut self, buf: &mut [u8], stats: &mut Stats) -> bool {
-        let Some(s) = self.stream.as_mut() else { return false };
+        let Some(s) = self.stream.as_mut() else {
+            return false;
+        };
         let mut done = 0;
         let mut ok = true;
         while done < buf.len() {
@@ -373,7 +399,9 @@ impl Net {
 
     /// `mysqlnd_vio::network_write`
     fn network_write(&mut self, buf: &[u8]) -> bool {
-        let Some(s) = self.stream.as_mut() else { return false };
+        let Some(s) = self.stream.as_mut() else {
+            return false;
+        };
         s.write_all(buf).and_then(|()| s.flush()).is_ok()
     }
 
@@ -449,7 +477,8 @@ impl Net {
                 ok = self.write_compressed(&frame);
             } else {
                 ok = self.network_write(&frame);
-                self.compressed_envelope_packet_no = self.compressed_envelope_packet_no.wrapping_add(1);
+                self.compressed_envelope_packet_no =
+                    self.compressed_envelope_packet_no.wrapping_add(1);
             }
             if ok {
                 sent += frame.len();
@@ -532,7 +561,13 @@ impl Net {
 
     /// Sends a command packet (`php_mysqlnd_cmd_write`): resets the
     /// sequence, counts `packets_sent_command`, frames `cmd + arg`.
-    pub fn send_command(&mut self, cmd: Command, arg: &[u8], stats: &mut Stats, err: &mut ErrorInfo) -> usize {
+    pub fn send_command(
+        &mut self,
+        cmd: Command,
+        arg: &[u8],
+        stats: &mut Stats,
+        err: &mut ErrorInfo,
+    ) -> usize {
         self.reset();
         inc_conn(stats, Stat::PacketsSentCmd, 1);
         let mut payload = Vec::with_capacity(arg.len() + 1);
@@ -551,7 +586,10 @@ mod tests {
 
     #[test]
     fn host_port_parsing() {
-        assert_eq!(parse_host_port("127.0.0.1:3306"), Some(("127.0.0.1".into(), 3306)));
+        assert_eq!(
+            parse_host_port("127.0.0.1:3306"),
+            Some(("127.0.0.1".into(), 3306))
+        );
         assert_eq!(parse_host_port("[::1]:3307"), Some(("::1".into(), 3307)));
         assert_eq!(parse_host_port("host:abc"), Some(("host".into(), 0)));
         assert_eq!(parse_host_port("nohost"), None);
@@ -573,7 +611,11 @@ mod tests {
         assert!(!n.connect("tcp://127.0.0.1:1", Duration::from_secs(2), &mut err));
         assert_eq!(err.errno, CR_CONNECTION_ERROR);
         assert_eq!(err.error, b"Connection refused");
-        assert!(!n.connect("unix:///nonexistent/mysql.sock", Duration::from_secs(2), &mut err));
+        assert!(!n.connect(
+            "unix:///nonexistent/mysql.sock",
+            Duration::from_secs(2),
+            &mut err
+        ));
         assert_eq!(err.error, b"No such file or directory");
         assert!(!n.connect("pipe://x", Duration::from_secs(2), &mut err));
         assert_eq!(err.error, b"No handler for this scheme");

@@ -23,12 +23,24 @@ thread_local! {
 
 /// Queues a `php_error_docref(NULL, E_WARNING, ...)`.
 pub fn warn(message: impl Into<String>) {
-    QUEUE.with(|q| q.borrow_mut().push(Diag { docref: true, fatal: false, message: message.into() }));
+    QUEUE.with(|q| {
+        q.borrow_mut().push(Diag {
+            docref: true,
+            fatal: false,
+            message: message.into(),
+        });
+    });
 }
 
 /// Queues a `php_error(E_WARNING, ...)` (no function prefix).
 pub fn warn_plain(message: impl Into<String>) {
-    QUEUE.with(|q| q.borrow_mut().push(Diag { docref: false, fatal: false, message: message.into() }));
+    QUEUE.with(|q| {
+        q.borrow_mut().push(Diag {
+            docref: false,
+            fatal: false,
+            message: message.into(),
+        });
+    });
 }
 
 /// Drains the queued diagnostics.

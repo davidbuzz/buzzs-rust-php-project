@@ -31,16 +31,56 @@ pub struct Entry {
 
 /// The `mysqlnd.*` directives in registration order.
 pub const ENTRIES: &[Entry] = &[
-    Entry { name: "mysqlnd.collect_statistics", default: Some("1"), modifiable: Modifiable::All },
-    Entry { name: "mysqlnd.collect_memory_statistics", default: Some("0"), modifiable: Modifiable::System },
-    Entry { name: "mysqlnd.debug", default: None, modifiable: Modifiable::System },
-    Entry { name: "mysqlnd.trace_alloc", default: None, modifiable: Modifiable::System },
-    Entry { name: "mysqlnd.net_cmd_buffer_size", default: Some("4096"), modifiable: Modifiable::All },
-    Entry { name: "mysqlnd.net_read_buffer_size", default: Some("32768"), modifiable: Modifiable::All },
-    Entry { name: "mysqlnd.net_read_timeout", default: Some("86400"), modifiable: Modifiable::All },
-    Entry { name: "mysqlnd.log_mask", default: Some("0"), modifiable: Modifiable::All },
-    Entry { name: "mysqlnd.mempool_default_size", default: Some("16000"), modifiable: Modifiable::All },
-    Entry { name: "mysqlnd.sha256_server_public_key", default: None, modifiable: Modifiable::PerDir },
+    Entry {
+        name: "mysqlnd.collect_statistics",
+        default: Some("1"),
+        modifiable: Modifiable::All,
+    },
+    Entry {
+        name: "mysqlnd.collect_memory_statistics",
+        default: Some("0"),
+        modifiable: Modifiable::System,
+    },
+    Entry {
+        name: "mysqlnd.debug",
+        default: None,
+        modifiable: Modifiable::System,
+    },
+    Entry {
+        name: "mysqlnd.trace_alloc",
+        default: None,
+        modifiable: Modifiable::System,
+    },
+    Entry {
+        name: "mysqlnd.net_cmd_buffer_size",
+        default: Some("4096"),
+        modifiable: Modifiable::All,
+    },
+    Entry {
+        name: "mysqlnd.net_read_buffer_size",
+        default: Some("32768"),
+        modifiable: Modifiable::All,
+    },
+    Entry {
+        name: "mysqlnd.net_read_timeout",
+        default: Some("86400"),
+        modifiable: Modifiable::All,
+    },
+    Entry {
+        name: "mysqlnd.log_mask",
+        default: Some("0"),
+        modifiable: Modifiable::All,
+    },
+    Entry {
+        name: "mysqlnd.mempool_default_size",
+        default: Some("16000"),
+        modifiable: Modifiable::All,
+    },
+    Entry {
+        name: "mysqlnd.sha256_server_public_key",
+        default: None,
+        modifiable: Modifiable::PerDir,
+    },
 ];
 
 /// Current values of the `mysqlnd.*` globals.
@@ -104,7 +144,10 @@ pub fn collect_statistics() -> bool {
 /// PHP's `zend_ini_parse_bool` for `OnUpdateBool`.
 fn parse_bool(v: &str) -> bool {
     let t = v.trim();
-    if t.eq_ignore_ascii_case("true") || t.eq_ignore_ascii_case("yes") || t.eq_ignore_ascii_case("on") {
+    if t.eq_ignore_ascii_case("true")
+        || t.eq_ignore_ascii_case("yes")
+        || t.eq_ignore_ascii_case("on")
+    {
         return true;
     }
     atol(t) != 0
@@ -156,11 +199,15 @@ pub fn set(name: &str, value: Option<&str>) -> bool {
                     _ => return false,
                 }
             }
-            "mysqlnd.net_read_buffer_size" => s.net_read_buffer_size = usize::try_from(atol(v)).unwrap_or(0),
+            "mysqlnd.net_read_buffer_size" => {
+                s.net_read_buffer_size = usize::try_from(atol(v)).unwrap_or(0);
+            }
             "mysqlnd.net_read_timeout" => s.net_read_timeout = atol(v),
             "mysqlnd.log_mask" => s.log_mask = atol(v),
             "mysqlnd.mempool_default_size" => s.mempool_default_size = atol(v),
-            "mysqlnd.sha256_server_public_key" => s.sha256_server_public_key = value.map(str::to_string),
+            "mysqlnd.sha256_server_public_key" => {
+                s.sha256_server_public_key = value.map(str::to_string);
+            }
             _ => return false,
         }
         true

@@ -357,7 +357,9 @@ pub struct Stats {
 
 impl Default for Stats {
     fn default() -> Self {
-        Self { values: [0; STAT_COUNT] }
+        Self {
+            values: [0; STAT_COUNT],
+        }
     }
 }
 
@@ -384,7 +386,11 @@ impl Stats {
     /// `mysqli_get_client_stats()`; values are strings in PHP.
     #[must_use]
     pub fn to_pairs(&self) -> Vec<(&'static str, String)> {
-        STAT_NAMES.iter().zip(self.values.iter()).map(|(n, v)| (*n, v.to_string())).collect()
+        STAT_NAMES
+            .iter()
+            .zip(self.values.iter())
+            .map(|(n, v)| (*n, v.to_string()))
+            .collect()
     }
 }
 
@@ -446,8 +452,14 @@ mod tests {
     fn names_line_up() {
         assert_eq!(STAT_NAMES[Stat::BytesSent as usize], "bytes_sent");
         assert_eq!(STAT_NAMES[Stat::ComQuit as usize], "com_quit");
-        assert_eq!(STAT_NAMES[Stat::OpenedConnections as usize], "active_connections");
-        assert_eq!(STAT_NAMES[Stat::BytesReceivedPureDataPs as usize], "bytes_received_real_data_ps");
+        assert_eq!(
+            STAT_NAMES[Stat::OpenedConnections as usize],
+            "active_connections"
+        );
+        assert_eq!(
+            STAT_NAMES[Stat::BytesReceivedPureDataPs as usize],
+            "bytes_received_real_data_ps"
+        );
         assert_eq!(STAT_NAMES.len(), 163);
     }
 

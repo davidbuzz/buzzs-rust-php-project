@@ -32,6 +32,8 @@ pub struct LazyInfo {
     pub instance: Option<Obj>,
     /// Re-entrancy guard.
     pub initializing: bool,
+    /// Declared property slots that are still lazy (`IS_PROP_LAZY`).
+    pub lazy_slots: Vec<bool>,
 }
 
 impl Vm {
@@ -40,20 +42,10 @@ impl Vm {
     /// property (or `None` for whole-object operations such as
     /// `get_object_vars`).
     pub(crate) fn lazy_object_for(&mut self, o: &Obj, name: Option<&ZStr>) -> VmResult<Obj> {
-        let _ = name;
-        let d = object::data(o);
-        let info = d.lazy.borrow().clone();
-        match info {
-            None => Ok(o.clone()),
-            Some(info) => {
-                if info.initialized {
-                    if let Some(inst) = info.instance {
-                        return Ok(inst);
-                    }
-                }
-                Ok(o.clone())
-            }
+        if object::data(o).lazy.borrow().is_none() {
+            return Ok(o.clone());
         }
+        crate::reflection::lazy::object_for(self, o, name)
     }
 
     /// Whether `o` is an uninitialized lazy object (`var_dump` prefix).

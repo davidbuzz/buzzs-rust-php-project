@@ -78,12 +78,14 @@ impl<'a> Reader<'a> {
 
     /// Reads a little-endian 3-byte integer.
     pub fn u24(&mut self) -> Option<u32> {
-        self.take(3).map(|s| u32::from_le_bytes([s[0], s[1], s[2], 0]))
+        self.take(3)
+            .map(|s| u32::from_le_bytes([s[0], s[1], s[2], 0]))
     }
 
     /// Reads a little-endian u32.
     pub fn u32(&mut self) -> Option<u32> {
-        self.take(4).map(|s| u32::from_le_bytes([s[0], s[1], s[2], s[3]]))
+        self.take(4)
+            .map(|s| u32::from_le_bytes([s[0], s[1], s[2], s[3]]))
     }
 
     /// Reads a little-endian u64.
@@ -117,7 +119,9 @@ impl<'a> Reader<'a> {
 
     fn lenenc(&mut self, full: bool) -> FieldLen {
         let rest = self.rest();
-        let Some(&b) = rest.first() else { return FieldLen::Invalid };
+        let Some(&b) = rest.first() else {
+            return FieldLen::Invalid;
+        };
         match b {
             0..=250 => {
                 self.pos += 1;
@@ -133,7 +137,9 @@ impl<'a> Reader<'a> {
             }
             253 if rest.len() >= 4 => {
                 self.pos += 4;
-                FieldLen::Len(u64::from(u32::from_le_bytes([rest[1], rest[2], rest[3], 0])))
+                FieldLen::Len(u64::from(u32::from_le_bytes([
+                    rest[1], rest[2], rest[3], 0,
+                ])))
             }
             254 | 255 if rest.len() >= 9 => {
                 self.pos += 9;
@@ -191,7 +197,16 @@ mod tests {
 
     #[test]
     fn lenenc_roundtrip() {
-        for v in [0u64, 250, 251, 65535, 65536, 16_777_215, 16_777_216, u64::from(u32::MAX) + 7] {
+        for v in [
+            0u64,
+            250,
+            251,
+            65535,
+            65536,
+            16_777_215,
+            16_777_216,
+            u64::from(u32::MAX) + 7,
+        ] {
             let mut out = Vec::new();
             put_lenenc(&mut out, v);
             assert_eq!(out.len(), lenenc_size(v));
@@ -210,7 +225,10 @@ mod tests {
         assert_eq!(Reader::new(&[251]).field_len(), FieldLen::Null);
         assert_eq!(Reader::new(&[]).field_len(), FieldLen::Invalid);
         assert_eq!(Reader::new(&[252, 1]).field_len(), FieldLen::Invalid);
-        assert_eq!(Reader::new(&[254, 1, 2, 3]).field_len_ll(), FieldLen::Invalid);
+        assert_eq!(
+            Reader::new(&[254, 1, 2, 3]).field_len_ll(),
+            FieldLen::Invalid
+        );
     }
 
     #[test]

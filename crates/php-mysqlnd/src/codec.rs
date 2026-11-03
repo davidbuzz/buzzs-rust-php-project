@@ -5,7 +5,15 @@
 
 use php_runtime::{Value, ZStr};
 
-use crate::consts::*;
+use crate::consts::{
+    MYSQL_TYPE_BIT, MYSQL_TYPE_BLOB, MYSQL_TYPE_DATE, MYSQL_TYPE_DATETIME, MYSQL_TYPE_DECIMAL,
+    MYSQL_TYPE_DOUBLE, MYSQL_TYPE_ENUM, MYSQL_TYPE_FLOAT, MYSQL_TYPE_GEOMETRY, MYSQL_TYPE_INT24,
+    MYSQL_TYPE_JSON, MYSQL_TYPE_LONG, MYSQL_TYPE_LONGLONG, MYSQL_TYPE_LONG_BLOB,
+    MYSQL_TYPE_MEDIUM_BLOB, MYSQL_TYPE_NEWDATE, MYSQL_TYPE_NEWDECIMAL, MYSQL_TYPE_NULL,
+    MYSQL_TYPE_SET, MYSQL_TYPE_SHORT, MYSQL_TYPE_STRING, MYSQL_TYPE_TIME, MYSQL_TYPE_TIMESTAMP,
+    MYSQL_TYPE_TINY, MYSQL_TYPE_TINY_BLOB, MYSQL_TYPE_VARCHAR, MYSQL_TYPE_VAR_STRING,
+    MYSQL_TYPE_VECTOR, MYSQL_TYPE_YEAR, UNSIGNED_FLAG, ZEROFILL_FLAG,
+};
 use crate::diag;
 use crate::protocol::Field;
 use crate::stats::{inc_conn, Stat, Stats};
@@ -50,14 +58,18 @@ fn text_stat(t: u8) -> Stat {
         MYSQL_TYPE_TIME => Stat::TextTypeFetchedTime,
         MYSQL_TYPE_DATETIME => Stat::TextTypeFetchedDatetime,
         MYSQL_TYPE_YEAR => Stat::TextTypeFetchedYear,
-        MYSQL_TYPE_VARCHAR | MYSQL_TYPE_VAR_STRING | MYSQL_TYPE_STRING => Stat::TextTypeFetchedString,
+        MYSQL_TYPE_VARCHAR | MYSQL_TYPE_VAR_STRING | MYSQL_TYPE_STRING => {
+            Stat::TextTypeFetchedString
+        }
         MYSQL_TYPE_BIT => Stat::TextTypeFetchedBit,
         MYSQL_TYPE_ENUM => Stat::TextTypeFetchedEnum,
         MYSQL_TYPE_SET => Stat::TextTypeFetchedSet,
         MYSQL_TYPE_JSON => Stat::TextTypeFetchedJson,
-        MYSQL_TYPE_TINY_BLOB | MYSQL_TYPE_MEDIUM_BLOB | MYSQL_TYPE_LONG_BLOB | MYSQL_TYPE_BLOB | MYSQL_TYPE_VECTOR => {
-            Stat::TextTypeFetchedBlob
-        }
+        MYSQL_TYPE_TINY_BLOB
+        | MYSQL_TYPE_MEDIUM_BLOB
+        | MYSQL_TYPE_LONG_BLOB
+        | MYSQL_TYPE_BLOB
+        | MYSQL_TYPE_VECTOR => Stat::TextTypeFetchedBlob,
         MYSQL_TYPE_GEOMETRY => Stat::TextTypeFetchedGeometry,
         _ => Stat::TextTypeFetchedOther,
     }
@@ -79,13 +91,17 @@ fn binary_stat(t: u8) -> Stat {
         MYSQL_TYPE_TIME => Stat::BinaryTypeFetchedTime,
         MYSQL_TYPE_DATETIME => Stat::BinaryTypeFetchedDatetime,
         MYSQL_TYPE_YEAR => Stat::BinaryTypeFetchedYear,
-        MYSQL_TYPE_VARCHAR | MYSQL_TYPE_VAR_STRING | MYSQL_TYPE_STRING => Stat::BinaryTypeFetchedString,
+        MYSQL_TYPE_VARCHAR | MYSQL_TYPE_VAR_STRING | MYSQL_TYPE_STRING => {
+            Stat::BinaryTypeFetchedString
+        }
         MYSQL_TYPE_BIT => Stat::BinaryTypeFetchedBit,
         MYSQL_TYPE_ENUM => Stat::BinaryTypeFetchedEnum,
         MYSQL_TYPE_SET => Stat::BinaryTypeFetchedSet,
-        MYSQL_TYPE_TINY_BLOB | MYSQL_TYPE_MEDIUM_BLOB | MYSQL_TYPE_LONG_BLOB | MYSQL_TYPE_BLOB | MYSQL_TYPE_VECTOR => {
-            Stat::BinaryTypeFetchedBlob
-        }
+        MYSQL_TYPE_TINY_BLOB
+        | MYSQL_TYPE_MEDIUM_BLOB
+        | MYSQL_TYPE_LONG_BLOB
+        | MYSQL_TYPE_BLOB
+        | MYSQL_TYPE_VECTOR => Stat::BinaryTypeFetchedBlob,
         MYSQL_TYPE_GEOMETRY => Stat::BinaryTypeFetchedGeometry,
         _ => Stat::BinaryTypeFetchedOther,
     }
@@ -112,7 +128,10 @@ pub fn strtoull(s: &[u8]) -> u64 {
     let (neg, digits) = split_sign(s);
     let mut v: u64 = 0;
     for &d in digits {
-        match v.checked_mul(10).and_then(|x| x.checked_add(u64::from(d - b'0'))) {
+        match v
+            .checked_mul(10)
+            .and_then(|x| x.checked_add(u64::from(d - b'0')))
+        {
             Some(x) => v = x,
             None => return u64::MAX,
         }
@@ -146,11 +165,13 @@ fn be_uint(b: &[u8]) -> u64 {
 }
 
 fn le_uint(b: &[u8]) -> u64 {
-    b.iter().rev().fold(0u64, |acc, &x| (acc << 8) | u64::from(x))
+    b.iter()
+        .rev()
+        .fold(0u64, |acc, &x| (acc << 8) | u64::from(x))
 }
 
 fn sign_extend(v: u64, bytes: usize) -> i64 {
-    let shift = 64 - 8 * bytes as u32;
+    let shift = 64 - 8 * u32::try_from(bytes).unwrap_or(8);
     #[allow(clippy::cast_possible_wrap)]
     let r = ((v << shift) as i64) >> shift;
     r
@@ -245,11 +266,14 @@ fn fmt_frac(decimals: u8, second_part: u64) -> Option<String> {
 }
 
 /// Decodes one binary-protocol column value at the reader's position.
+#[allow(clippy::many_single_char_names, clippy::too_many_lines)]
 fn binary_value(field: &Field, r: &mut Reader<'_>) -> Option<Value> {
     let pack_len = r.remaining();
     let fixed = |r: &mut Reader<'_>, n: usize| -> Option<Value> {
         if n > pack_len {
-            return malformed("Malformed server packet. Field length pointing after the end of packet");
+            return malformed(
+                "Malformed server packet. Field length pointing after the end of packet",
+            );
         }
         let b = r.take(n)?;
         Some(from_1_to_8_bytes(field, b))
@@ -262,7 +286,9 @@ fn binary_value(field: &Field, r: &mut Reader<'_>) -> Option<Value> {
         MYSQL_TYPE_LONGLONG => fixed(r, 8),
         MYSQL_TYPE_FLOAT => {
             if pack_len < 4 {
-                return malformed("Malformed server packet. Field length pointing after the end of packet");
+                return malformed(
+                    "Malformed server packet. Field length pointing after the end of packet",
+                );
             }
             let b = r.take(4)?;
             let f = f32::from_le_bytes([b[0], b[1], b[2], b[3]]);
@@ -270,7 +296,9 @@ fn binary_value(field: &Field, r: &mut Reader<'_>) -> Option<Value> {
         }
         MYSQL_TYPE_DOUBLE => {
             if pack_len < 8 {
-                return malformed("Malformed server packet. Field length pointing after the end of packet");
+                return malformed(
+                    "Malformed server packet. Field length pointing after the end of packet",
+                );
             }
             let b = r.take(8)?;
             let mut a = [0u8; 8];
@@ -319,7 +347,8 @@ fn binary_value(field: &Field, r: &mut Reader<'_>) -> Option<Value> {
                     format!("{y:04}-{mo:02}-{d:02}")
                 }
                 _ => {
-                    let (mut y, mut mo, mut d, mut h, mut mi, mut s, mut frac) = (0u32, 0u32, 0u32, 0u32, 0u32, 0u32, 0u64);
+                    let (mut y, mut mo, mut d, mut h, mut mi, mut s, mut frac) =
+                        (0u32, 0u32, 0u32, 0u32, 0u32, 0u32, 0u64);
                     if length > 0 {
                         if length < 4 {
                             return malformed("Malformed server packet. Field length is too short for the field type");
@@ -352,7 +381,9 @@ fn binary_value(field: &Field, r: &mut Reader<'_>) -> Option<Value> {
         MYSQL_TYPE_BIT => {
             let (b, len) = var_len(r, pack_len)?;
             if len > pack_len {
-                return malformed("Malformed server packet. Field length pointing after the end of packet");
+                return malformed(
+                    "Malformed server packet. Field length pointing after the end of packet",
+                );
             }
             Some(from_1_to_8_bytes(field, b))
         }
@@ -374,7 +405,9 @@ pub fn decode_binary_row(row: &[u8], fields: &[Field], stats: &mut Stats) -> Opt
     let mut out = Vec::with_capacity(n);
     for (i, f) in fields.iter().enumerate() {
         let bit = i + 2;
-        let is_null = nulls.get(bit / 8).is_some_and(|b| b & (1 << (bit % 8)) != 0);
+        let is_null = nulls
+            .get(bit / 8)
+            .is_some_and(|b| b & (1 << (bit % 8)) != 0);
         let before = r.pos();
         let (v, stat) = if is_null {
             (Value::Null, Stat::BinaryTypeFetchedNull)
@@ -398,7 +431,12 @@ pub fn decode_binary_row(row: &[u8], fields: &[Field], stats: &mut Stats) -> Opt
 
 /// `php_mysqlnd_rowp_read_text_protocol`. `as_int_or_float` is
 /// `MYSQLI_OPT_INT_AND_FLOAT_NATIVE`.
-pub fn decode_text_row(row: &[u8], fields: &[Field], as_int_or_float: bool, stats: &mut Stats) -> Option<Vec<Value>> {
+pub fn decode_text_row(
+    row: &[u8],
+    fields: &[Field],
+    as_int_or_float: bool,
+    stats: &mut Stats,
+) -> Option<Vec<Value>> {
     let mut r = Reader::new(row);
     let mut out = Vec::with_capacity(fields.len());
     for f in fields {
@@ -421,7 +459,9 @@ pub fn decode_text_row(row: &[u8], fields: &[Field], as_int_or_float: bool, stat
         let v = if f.type_ == MYSQL_TYPE_BIT {
             match from_1_to_8_bytes(f, data) {
                 #[allow(clippy::cast_sign_loss)]
-                Value::Int(i) if !as_int_or_float => Value::Str(ZStr::from((i as u64).to_string().into_bytes())),
+                Value::Int(i) if !as_int_or_float => {
+                    Value::Str(ZStr::from((i as u64).to_string().into_bytes()))
+                }
                 v => v,
             }
         } else if as_int_or_float && php_type == PhpType::Long && f.flags & ZEROFILL_FLAG == 0 {
@@ -447,11 +487,17 @@ pub fn decode_text_row(row: &[u8], fields: &[Field], as_int_or_float: bool, stat
 }
 
 #[cfg(test)]
+#[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
 
     fn field(t: u8, flags: u32) -> Field {
-        Field { type_: t, flags, length: 11, ..Field::default() }
+        Field {
+            type_: t,
+            flags,
+            length: 11,
+            ..Field::default()
+        }
     }
 
     fn text_row(vals: &[Option<&[u8]>]) -> Vec<u8> {
@@ -468,7 +514,11 @@ mod tests {
     #[test]
     fn text_strings_by_default() {
         let mut st = Stats::default();
-        let f = [field(MYSQL_TYPE_LONG, 0), field(MYSQL_TYPE_DOUBLE, 0), field(MYSQL_TYPE_VAR_STRING, 0)];
+        let f = [
+            field(MYSQL_TYPE_LONG, 0),
+            field(MYSQL_TYPE_DOUBLE, 0),
+            field(MYSQL_TYPE_VAR_STRING, 0),
+        ];
         let row = text_row(&[Some(b"42"), Some(b"1.5"), None]);
         let v = decode_text_row(&row, &f, false, &mut st).unwrap();
         assert_eq!(crate::render_all(&v), ["s:42", "s:1.5", "N"]);
@@ -496,7 +546,14 @@ mod tests {
         let v = decode_text_row(&row, &f, true, &mut st).unwrap();
         assert_eq!(
             crate::render_all(&v),
-            ["i:-42", "d:1.5", "s:18446744073709551615", "i:-9223372036854775808", "s:00007", "s:1.10"]
+            [
+                "i:-42",
+                "d:1.5",
+                "s:18446744073709551615",
+                "i:-9223372036854775808",
+                "s:00007",
+                "s:1.10"
+            ]
         );
     }
 
@@ -505,8 +562,14 @@ mod tests {
         let mut st = Stats::default();
         let f = [field(MYSQL_TYPE_BIT, UNSIGNED_FLAG)];
         let row = text_row(&[Some(&[0x01, 0x02])]);
-        assert_eq!(crate::render_all(&decode_text_row(&row, &f, false, &mut st).unwrap()), ["s:258"]);
-        assert_eq!(crate::render_all(&decode_text_row(&row, &f, true, &mut st).unwrap()), ["i:258"]);
+        assert_eq!(
+            crate::render_all(&decode_text_row(&row, &f, false, &mut st).unwrap()),
+            ["s:258"]
+        );
+        assert_eq!(
+            crate::render_all(&decode_text_row(&row, &f, true, &mut st).unwrap()),
+            ["i:258"]
+        );
     }
 
     #[test]
@@ -553,14 +616,17 @@ mod tests {
         let f = [field(MYSQL_TYPE_VAR_STRING, 0)];
         let _ = diag::take();
         assert!(decode_binary_row(&[0, 0, 0x05, b'a'], &f, &mut st).is_none());
-        assert_eq!(diag::take()[0].message, "Malformed server packet. Field length pointing after the end of packet");
+        assert_eq!(
+            diag::take()[0].message,
+            "Malformed server packet. Field length pointing after the end of packet"
+        );
     }
 
     #[test]
     fn float_conversion() {
         assert_eq!(float_to_double(1.1f32, 31), 1.1);
         assert_eq!(float_to_double(1.1f32, 2), 1.1);
-        assert_eq!(float_to_double(3.141_592_7_f32, 31), 3.14159);
+        assert_eq!(float_to_double(1.234_567_8_f32, 31), 1.23457);
         assert_eq!(float_to_double(0.333_333_34_f32, 4), 0.3333);
     }
 
@@ -576,6 +642,9 @@ mod tests {
     fn zerofill_binary() {
         let mut f = field(MYSQL_TYPE_LONG, UNSIGNED_FLAG | ZEROFILL_FLAG);
         f.length = 5;
-        assert_eq!(crate::render(&from_1_to_8_bytes(&f, &7u32.to_le_bytes())), "s:00007");
+        assert_eq!(
+            crate::render(&from_1_to_8_bytes(&f, &7u32.to_le_bytes())),
+            "s:00007"
+        );
     }
 }

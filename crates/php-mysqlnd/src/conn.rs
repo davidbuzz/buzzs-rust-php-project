@@ -11,7 +11,21 @@ use std::time::Duration;
 
 use crate::auth::{self, Plugin, RsaError};
 use crate::charset::{self, Charset, UTF8_MB3_DEFAULT_ID, UTF8_MB4_DEFAULT_ID};
-use crate::consts::*;
+use crate::consts::{
+    is_known_type, Command, ASSEMBLED_PACKET_MAX_SIZE, CLIENT_CAN_HANDLE_EXPIRED_PASSWORDS,
+    CLIENT_COMPRESS, CLIENT_CONNECT_ATTRS, CLIENT_CONNECT_WITH_DB, CLIENT_LOCAL_FILES,
+    CLIENT_SESSION_TRACK, CLIENT_SSL, CLIENT_SSL_DONT_VERIFY_SERVER_CERT,
+    CLIENT_SSL_VERIFY_SERVER_CERT, CR_CANT_FIND_CHARSET, CR_CLIENT_INTERACTION_TIMEOUT,
+    CR_COMMANDS_OUT_OF_SYNC, CR_CONNECTION_ERROR, CR_INVALID_BUFFER_USE,
+    CR_LOAD_DATA_LOCAL_INFILE_REJECTED, CR_MALFORMED_PACKET, CR_NOT_IMPLEMENTED,
+    CR_SERVER_GONE_ERROR, CR_SERVER_LOST, CR_UNKNOWN_ERROR, DEFAULT_AUTH_PROTOCOL, MAX_PACKET_SIZE,
+    MSG_OLD_PASSWD, MSG_OUT_OF_SYNC, MSG_SERVER_GONE, MYSQLND_CAPABILITIES,
+    NET_CMD_BUFFER_MIN_SIZE, SCRAMBLE_LENGTH, SERVER_MORE_RESULTS_EXISTS,
+    SERVER_QUERY_NO_GOOD_INDEX_USED, SERVER_QUERY_NO_INDEX_USED, SERVER_QUERY_WAS_SLOW,
+    SERVER_STATUS_NO_BACKSLASH_ESCAPES, TRANS_COR_AND_CHAIN, TRANS_COR_AND_NO_CHAIN,
+    TRANS_COR_NO_RELEASE, TRANS_COR_RELEASE, TRANS_START_READ_ONLY, TRANS_START_READ_WRITE,
+    TRANS_START_WITH_CONSISTENT_SNAPSHOT, UNKNOWN_SQLSTATE,
+};
 use crate::diag;
 use crate::error::{Error, ErrorEntry, ErrorInfo, Result, ServerError};
 use crate::infile::{self, FsInfile, LocalInfileHandler};
@@ -166,9 +180,17 @@ impl PacketKind {
     fn stats(self) -> Option<(Stat, Stat)> {
         match self {
             PacketKind::Greet | PacketKind::Ok => None,
-            PacketKind::Eof => Some((Stat::BytesReceivedRsetHeader, Stat::PacketsReceivedRsetHeader)),
-            PacketKind::RsetHeader => Some((Stat::BytesReceivedRsetRow, Stat::PacketsReceivedRsetRow)),
-            PacketKind::Field => Some((Stat::BytesReceivedPrepareResponse, Stat::PacketsReceivedPrepareResponse)),
+            PacketKind::Eof => Some((
+                Stat::BytesReceivedRsetHeader,
+                Stat::PacketsReceivedRsetHeader,
+            )),
+            PacketKind::RsetHeader => {
+                Some((Stat::BytesReceivedRsetRow, Stat::PacketsReceivedRsetRow))
+            }
+            PacketKind::Field => Some((
+                Stat::BytesReceivedPrepareResponse,
+                Stat::PacketsReceivedPrepareResponse,
+            )),
             PacketKind::Stats
             | PacketKind::Prepare
             | PacketKind::ChgUser
@@ -217,7 +239,7 @@ pub struct ConnData {
     pub(crate) client_api_capabilities: u32,
 }
 
-/// A handle on a MySQL connection (`MYSQLND`).
+/// A handle on a `MySQL` connection (`MYSQLND`).
 #[derive(Debug, Clone)]
 pub struct Connection(pub(crate) Rc<RefCell<ConnData>>);
 
@@ -281,11 +303,13 @@ impl ConnData {
         let Some(size) = self.net.read_header(&mut self.stats, &mut self.error_info) else {
             self.state = ConnState::QuitSent;
             if self.error_info.errno == 0 {
-                self.error_info.set_client(CR_SERVER_GONE_ERROR, MSG_SERVER_GONE);
+                self.error_info
+                    .set_client(CR_SERVER_GONE_ERROR, MSG_SERVER_GONE);
             }
             return None;
         };
-        if size > self.net.cmd_buffer_size.max(NET_CMD_BUFFER_MIN_SIZE) && kind != PacketKind::Greet {
+        if size > self.net.cmd_buffer_size.max(NET_CMD_BUFFER_MIN_SIZE) && kind != PacketKind::Greet
+        {
             self.error_info.set_client(
                 CR_INVALID_BUFFER_USE,
                 "Packet buffer wasn't big enough; as a workaround consider increasing value of net_cmd_buffer_size",
@@ -295,7 +319,8 @@ impl ConnData {
         let mut buf = vec![0u8; size];
         if !self.net.receive(&mut buf, &mut self.stats) {
             self.state = ConnState::QuitSent;
-            self.error_info.set_client(CR_SERVER_GONE_ERROR, MSG_SERVER_GONE);
+            self.error_info
+                .set_client(CR_SERVER_GONE_ERROR, MSG_SERVER_GONE);
             return None;
         }
         if let Some((b, p)) = kind.stats() {
@@ -308,11 +333,13 @@ impl ConnData {
     /// `php_mysqlnd_rowp_read` + `php_mysqlnd_read_row_ex`. `prev_size` is
     /// the stale `packet->header.size` mysqlnd uses for its byte statistic.
     pub(crate) fn read_row(&mut self, binary: bool, prev_size: &mut usize) -> RowPacket {
-        let gone = || RowPacket::Err(ServerError {
-            errno: CR_SERVER_GONE_ERROR,
-            sqlstate: UNKNOWN_SQLSTATE.to_string(),
-            message: MSG_SERVER_GONE.as_bytes().to_vec(),
-        });
+        let gone = || {
+            RowPacket::Err(ServerError {
+                errno: CR_SERVER_GONE_ERROR,
+                sqlstate: UNKNOWN_SQLSTATE.to_string(),
+                message: MSG_SERVER_GONE.as_bytes().to_vec(),
+            })
+        };
         let mut data: Vec<u8> = Vec::new();
         let mut scratch = ErrorInfo::default();
         loop {
@@ -338,12 +365,22 @@ impl ConnData {
                 break;
             }
         }
-        self.inc(Stat::BytesReceivedChangeUser, (HEADER_SIZE + *prev_size) as u64);
+        self.inc(
+            Stat::BytesReceivedChangeUser,
+            (HEADER_SIZE + *prev_size) as u64,
+        );
         self.inc(Stat::PacketsReceivedChangeUser, 1);
         *prev_size = data.len();
         let p = protocol::classify_row(data);
         if let RowPacket::Row(_) = p {
-            self.inc(if binary { Stat::RowsFetchedFromServerPs } else { Stat::RowsFetchedFromServerNormal }, 1);
+            self.inc(
+                if binary {
+                    Stat::RowsFetchedFromServerPs
+                } else {
+                    Stat::RowsFetchedFromServerNormal
+                },
+                1,
+            );
         }
         p
     }
@@ -353,20 +390,34 @@ impl ConnData {
         match self.state {
             ConnState::Ready => {}
             ConnState::QuitSent => {
-                self.error_info.set_client(CR_SERVER_GONE_ERROR, MSG_SERVER_GONE);
+                self.error_info
+                    .set_client(CR_SERVER_GONE_ERROR, MSG_SERVER_GONE);
                 return false;
             }
             _ => {
-                self.error_info.set_client(CR_COMMANDS_OUT_OF_SYNC, MSG_OUT_OF_SYNC);
+                self.error_info
+                    .set_client(CR_COMMANDS_OUT_OF_SYNC, MSG_OUT_OF_SYNC);
                 return false;
             }
         }
         self.upsert.set_affected_rows_to_error();
         self.error_info.reset();
-        inc_conn_index(&mut self.stats, Stat::ComQuit as usize + cmd as usize - 1, 1);
-        if self.net.send_command(cmd, arg, &mut self.stats, &mut self.error_info) == 0 {
+        inc_conn_index(
+            &mut self.stats,
+            Stat::ComQuit as usize + cmd as usize - 1,
+            1,
+        );
+        if self
+            .net
+            .send_command(cmd, arg, &mut self.stats, &mut self.error_info)
+            == 0
+        {
             if !silent && self.error_info.errno != CR_SERVER_GONE_ERROR {
-                diag::warn_plain(format!("Error while sending {} packet. PID={}", cmd.as_text(), diag::pid()));
+                diag::warn_plain(format!(
+                    "Error while sending {} packet. PID={}",
+                    cmd.as_text(),
+                    diag::pid()
+                ));
             }
             self.state = ConnState::QuitSent;
             self.send_close();
@@ -379,13 +430,15 @@ impl ConnData {
     fn handle_ok(&mut self, ignore_upsert: bool) -> bool {
         let Some(buf) = self.read_packet(PacketKind::Ok) else {
             if self.error_info.errno != CR_SERVER_GONE_ERROR {
-                self.error_info.set_client(CR_MALFORMED_PACKET, "Malformed packet");
+                self.error_info
+                    .set_client(CR_MALFORMED_PACKET, "Malformed packet");
             }
             return false;
         };
         match protocol::parse_ok(&buf, self.session_tracking()) {
             None => {
-                self.error_info.set_client(CR_MALFORMED_PACKET, "Malformed packet");
+                self.error_info
+                    .set_client(CR_MALFORMED_PACKET, "Malformed packet");
                 false
             }
             Some(Response::Err(e)) => {
@@ -395,7 +448,11 @@ impl ConnData {
                 false
             }
             Some(Response::Ok(ok)) => {
-                self.last_message = if ok.message.is_empty() { None } else { Some(ok.message.clone()) };
+                self.last_message = if ok.message.is_empty() {
+                    None
+                } else {
+                    Some(ok.message.clone())
+                };
                 if !ignore_upsert {
                     self.upsert.reset();
                     self.upsert.warning_count = u32::from(ok.warning_count);
@@ -413,12 +470,14 @@ impl ConnData {
     /// `send_command_handle_EOF`
     fn handle_eof(&mut self) -> bool {
         let Some(buf) = self.read_packet(PacketKind::Eof) else {
-            self.error_info.set_client(CR_MALFORMED_PACKET, "Malformed packet");
+            self.error_info
+                .set_client(CR_MALFORMED_PACKET, "Malformed packet");
             return false;
         };
         match protocol::parse_eof(&buf) {
             None => {
-                self.error_info.set_client(CR_MALFORMED_PACKET, "Malformed packet");
+                self.error_info
+                    .set_client(CR_MALFORMED_PACKET, "Malformed packet");
                 false
             }
             Some(Err(e)) => {
@@ -427,8 +486,12 @@ impl ConnData {
                 true
             }
             Some(Ok(e)) if e.field_count != protocol::EODATA_MARKER => {
-                self.error_info.set_client(CR_MALFORMED_PACKET, "Malformed packet");
-                diag::warn(format!("EOF packet expected, field count wasn't 0xFE but 0x{:2X}", e.field_count));
+                self.error_info
+                    .set_client(CR_MALFORMED_PACKET, "Malformed packet");
+                diag::warn(format!(
+                    "EOF packet expected, field count wasn't 0xFE but 0x{:2X}",
+                    e.field_count
+                ));
                 true
             }
             Some(Ok(_)) => true,
@@ -436,10 +499,24 @@ impl ConnData {
     }
 
     /// `send_command_handle_response`
-    fn handle_response(&mut self, eof: bool, silent: bool, cmd: Command, ignore_upsert: bool) -> bool {
-        let ret = if eof { self.handle_eof() } else { self.handle_ok(ignore_upsert) };
+    fn handle_response(
+        &mut self,
+        eof: bool,
+        silent: bool,
+        cmd: Command,
+        ignore_upsert: bool,
+    ) -> bool {
+        let ret = if eof {
+            self.handle_eof()
+        } else {
+            self.handle_ok(ignore_upsert)
+        };
         if !silent && self.error_info.errno == CR_MALFORMED_PACKET {
-            diag::warn(format!("Error while reading {}'s response packet. PID={}", cmd.as_text(), diag::pid()));
+            diag::warn(format!(
+                "Error while reading {}'s response packet. PID={}",
+                cmd.as_text(),
+                diag::pid()
+            ));
         }
         ret
     }
@@ -497,7 +574,9 @@ impl ConnData {
 
     /// `mysqlnd_conn_data::get_server_version`
     pub(crate) fn server_version_number(&self) -> u64 {
-        let Some(v) = &self.server_version else { return 0 };
+        let Some(v) = &self.server_version else {
+            return 0;
+        };
         let b = v.as_bytes();
         let mut p = 0;
         let mut parts = [0i64; 3];
@@ -530,7 +609,8 @@ impl ConnData {
             return (format!("tcp://[{host}]:{port}"), false);
         }
         let has_port = if host.starts_with('[') {
-            host.find(']').is_some_and(|i| host.as_bytes().get(i + 1) == Some(&b':'))
+            host.find(']')
+                .is_some_and(|i| host.as_bytes().get(i + 1) == Some(&b':'))
         } else {
             first.is_some()
         };
@@ -549,7 +629,12 @@ impl ConnData {
             flags |= CLIENT_COMPRESS;
         }
         let o = &self.net.opts;
-        if o.ssl_key.is_some() || o.ssl_cert.is_some() || o.ssl_ca.is_some() || o.ssl_capath.is_some() || o.ssl_cipher.is_some() {
+        if o.ssl_key.is_some()
+            || o.ssl_cert.is_some()
+            || o.ssl_ca.is_some()
+            || o.ssl_capath.is_some()
+            || o.ssl_cipher.is_some()
+        {
             flags |= CLIENT_SSL;
         }
         if !self.options.connect_attr.is_empty() {
@@ -636,7 +721,10 @@ impl ConnData {
         }
         if self.error_info.errno == 0 {
             let via = self.scheme.clone().unwrap_or(transport);
-            self.error_info.set_client(CR_CONNECTION_ERROR, &format!("Unknown error while trying to connect via {via}"));
+            self.error_info.set_client(
+                CR_CONNECTION_ERROR,
+                &format!("Unknown error while trying to connect via {via}"),
+            );
         }
         self.free_contents();
         self.inc(Stat::ConnectFailure, 1);
@@ -664,11 +752,12 @@ impl ConnData {
                                     self.upsert.reset();
                                     self.upsert.warning_count = u32::from(e.warning_count);
                                     self.upsert.server_status = e.server_status;
-                                    self.state = if e.server_status & SERVER_MORE_RESULTS_EXISTS != 0 {
-                                        ConnState::NextResultPending
-                                    } else {
-                                        ConnState::Ready
-                                    };
+                                    self.state =
+                                        if e.server_status & SERVER_MORE_RESULTS_EXISTS != 0 {
+                                            ConnState::NextResultPending
+                                        } else {
+                                            ConnState::Ready
+                                        };
                                     break;
                                 }
                                 RowPacket::Err(e) => {
@@ -700,14 +789,29 @@ impl ConnData {
     }
 
     /// `mysqlnd_conn_data::connect_handshake` + `mysqlnd_command::handshake`
-    fn connect_handshake(&mut self, transport: &str, user: &[u8], passwd: &[u8], db: &[u8], flags: u32) -> bool {
-        if !self.net.connect(transport, Duration::from_secs(60), &mut self.error_info) {
+    fn connect_handshake(
+        &mut self,
+        transport: &str,
+        user: &[u8],
+        passwd: &[u8],
+        db: &[u8],
+        flags: u32,
+    ) -> bool {
+        if !self
+            .net
+            .connect(transport, Duration::from_secs(60), &mut self.error_info)
+        {
             return false;
         }
         self.net.reset();
-        let greet = self.read_packet(PacketKind::Greet).and_then(|b| protocol::parse_greeting(&b));
+        let greet = self
+            .read_packet(PacketKind::Greet)
+            .and_then(|b| protocol::parse_greeting(&b));
         let Some(greet) = greet else {
-            diag::warn(format!("Error while reading greeting packet. PID={}", diag::pid()));
+            diag::warn(format!(
+                "Error while reading greeting packet. PID={}",
+                diag::pid()
+            ));
             self.server_capabilities = 0;
             return false;
         };
@@ -732,7 +836,11 @@ impl ConnData {
         if let Some(cs) = charset::find_by_nr(charset_no) {
             self.greet_charset = Some(cs);
         } else {
-            charset_no = if self.server_version_number() >= 50500 { UTF8_MB4_DEFAULT_ID } else { UTF8_MB3_DEFAULT_ID };
+            charset_no = if self.server_version_number() >= 50500 {
+                UTF8_MB4_DEFAULT_ID
+            } else {
+                UTF8_MB3_DEFAULT_ID
+            };
             self.greet_charset = charset::find_by_nr(charset_no);
         }
         self.server_capabilities = greet.server_capabilities;
@@ -758,8 +866,18 @@ impl ConnData {
     }
 
     /// `mysqlnd_switch_to_ssl_if_needed` + `mysqlnd_command::enable_ssl`
-    fn switch_to_ssl_if_needed(&mut self, mut charset_no: u32, server_caps: u32, flags: u32) -> bool {
-        if let Some(cs) = self.options.charset_name.as_deref().and_then(|n| charset::find_by_name(n.as_bytes())) {
+    fn switch_to_ssl_if_needed(
+        &mut self,
+        mut charset_no: u32,
+        server_caps: u32,
+        flags: u32,
+    ) -> bool {
+        if let Some(cs) = self
+            .options
+            .charset_name
+            .as_deref()
+            .and_then(|n| charset::find_by_name(n.as_bytes()))
+        {
             charset_no = cs.nr;
         }
         if flags & CLIENT_SSL == 0 {
@@ -768,7 +886,8 @@ impl ConnData {
         let close_conn = |c: &mut Self| {
             c.state = ConnState::QuitSent;
             c.send_close();
-            c.error_info.set_client(CR_SERVER_GONE_ERROR, MSG_SERVER_GONE);
+            c.error_info
+                .set_client(CR_SERVER_GONE_ERROR, MSG_SERVER_GONE);
             false
         };
         if server_caps & CLIENT_SSL == 0 {
@@ -781,8 +900,14 @@ impl ConnData {
             charset_no,
             ..AuthPacket::default()
         };
-        let Ok(payload) = protocol::encode_auth_packet(&pkt) else { return close_conn(self) };
-        if self.net.send(&payload, &mut self.stats, &mut self.error_info) == 0 {
+        let Ok(payload) = protocol::encode_auth_packet(&pkt) else {
+            return close_conn(self);
+        };
+        if self
+            .net
+            .send(&payload, &mut self.stats, &mut self.error_info)
+            == 0
+        {
             return close_conn(self);
         }
         self.net.opts.ssl_verify_peer = if flags & CLIENT_SSL_VERIFY_SERVER_CERT != 0 {
@@ -794,7 +919,8 @@ impl ConnData {
         };
         if !self.net.enable_ssl() {
             self.state = ConnState::QuitSent;
-            self.error_info.set_client(CR_CONNECTION_ERROR, "Cannot connect to MySQL using SSL");
+            self.error_info
+                .set_client(CR_CONNECTION_ERROR, "Cannot connect to MySQL using SSL");
             return false;
         }
         true
@@ -809,19 +935,29 @@ impl ConnData {
             .server_public_key
             .clone()
             .filter(|s| !s.is_empty())
-            .or_else(|| ini::settings().sha256_server_public_key.filter(|s| !s.is_empty()));
+            .or_else(|| {
+                ini::settings()
+                    .sha256_server_public_key
+                    .filter(|s| !s.is_empty())
+            });
         if let Some(f) = fname {
             return match std::fs::read(&f) {
                 Ok(pem) => auth::parse_public_key(&pem),
                 Err(e) => {
-                    diag::warn(format!("failed to open stream: {}", crate::net::strerror(&e)));
+                    diag::warn(format!(
+                        "failed to open stream: {}",
+                        crate::net::strerror(&e)
+                    ));
                     None
                 }
             };
         }
         let req: &[u8] = if caching { &[2] } else { &[1] };
         if self.net.send(req, &mut self.stats, &mut self.error_info) == 0 {
-            diag::warn_plain(format!("Error while sending public key request packet. PID={}", diag::pid()));
+            diag::warn_plain(format!(
+                "Error while sending public key request packet. PID={}",
+                diag::pid()
+            ));
             self.state = ConnState::QuitSent;
             return None;
         }
@@ -835,13 +971,15 @@ impl ConnData {
             }
             None => None,
         };
-        match key {
-            Some(pem) => auth::parse_public_key(&pem),
-            None => {
-                diag::warn_plain(format!("Error while receiving public key. PID={}", diag::pid()));
-                self.state = ConnState::QuitSent;
-                None
-            }
+        if let Some(pem) = key {
+            auth::parse_public_key(&pem)
+        } else {
+            diag::warn_plain(format!(
+                "Error while receiving public key. PID={}",
+                diag::pid()
+            ));
+            self.state = ConnState::QuitSent;
+            None
         }
     }
 
@@ -850,7 +988,10 @@ impl ConnData {
         match plugin {
             Plugin::Native => {
                 if data.len() < SCRAMBLE_LENGTH {
-                    self.error_info.set_client(CR_MALFORMED_PACKET, "The server sent wrong length for scramble");
+                    self.error_info.set_client(
+                        CR_MALFORMED_PACKET,
+                        "The server sent wrong length for scramble",
+                    );
                     return Vec::new();
                 }
                 if passwd.is_empty() {
@@ -866,7 +1007,10 @@ impl ConnData {
             }
             Plugin::CachingSha2 => {
                 if data.len() < SCRAMBLE_LENGTH {
-                    self.error_info.set_client(CR_MALFORMED_PACKET, "The server sent wrong length for scramble");
+                    self.error_info.set_client(
+                        CR_MALFORMED_PACKET,
+                        "The server sent wrong length for scramble",
+                    );
                     return Vec::new();
                 }
                 if passwd.is_empty() {
@@ -889,15 +1033,22 @@ impl ConnData {
         }
     }
 
-    fn rsa_encrypt(&mut self, key: &openssl::pkey::PKey<openssl::pkey::Public>, passwd: &[u8], data: &[u8]) -> Vec<u8> {
+    fn rsa_encrypt(
+        &mut self,
+        key: &openssl::pkey::PKey<openssl::pkey::Public>,
+        passwd: &[u8],
+        data: &[u8],
+    ) -> Vec<u8> {
         match auth::rsa_encrypt_password(key, passwd, data) {
             Ok(v) => v,
             Err(RsaError::PasswordTooLong) => {
-                self.error_info.set_client(CR_UNKNOWN_ERROR, "password is too long");
+                self.error_info
+                    .set_client(CR_UNKNOWN_ERROR, "password is too long");
                 Vec::new()
             }
             Err(RsaError::InvalidKeySize) => {
-                self.error_info.set_client(CR_UNKNOWN_ERROR, "invalid public key size");
+                self.error_info
+                    .set_client(CR_UNKNOWN_ERROR, "invalid public key size");
                 Vec::new()
             }
             Err(RsaError::Failed) => Vec::new(),
@@ -906,12 +1057,20 @@ impl ConnData {
 
     /// `mysqlnd_caching_sha2_handle_server_response`. Returns `Err(switch)`
     /// for an auth-switch request, `Ok(false)` for a hard failure.
-    fn caching_sha2_response(&mut self, data: &[u8], passwd: &[u8]) -> std::result::Result<bool, (String, Vec<u8>)> {
+    fn caching_sha2_response(
+        &mut self,
+        data: &[u8],
+        passwd: &[u8],
+    ) -> std::result::Result<bool, (String, Vec<u8>)> {
         if passwd.is_empty() {
             return Ok(true);
         }
-        let Some(buf) = self.read_packet(PacketKind::CachedSha2Result) else { return Ok(true) };
-        let Some(res) = protocol::parse_sha2_result(&buf) else { return Ok(true) };
+        let Some(buf) = self.read_packet(PacketKind::CachedSha2Result) else {
+            return Ok(true);
+        };
+        let Some(res) = protocol::parse_sha2_result(&buf) else {
+            return Ok(true);
+        };
         match res {
             Sha2Result::Err(e) => {
                 self.error_info.set(e.errno, UNKNOWN_SQLSTATE, &e.message);
@@ -930,7 +1089,8 @@ impl ConnData {
                         None => Vec::new(),
                     }
                 };
-                self.net.send(&payload, &mut self.stats, &mut self.error_info);
+                self.net
+                    .send(&payload, &mut self.stats, &mut self.error_info);
                 Ok(true)
             }
             Sha2Result::Code(c) => {
@@ -983,9 +1143,30 @@ impl ConnData {
                 return false;
             }
             let switch = if is_change_user {
-                self.auth_change_user(user, passwd, db, silent, first_call, &requested, plugin, &plugin_data, &scrambled)
+                self.auth_change_user(
+                    user,
+                    passwd,
+                    db,
+                    silent,
+                    first_call,
+                    &requested,
+                    plugin,
+                    &plugin_data,
+                    &scrambled,
+                )
             } else {
-                self.auth_handshake(user, passwd, db, flags, charset_no, first_call, &requested, plugin, &plugin_data, &scrambled)
+                self.auth_handshake(
+                    user,
+                    passwd,
+                    db,
+                    flags,
+                    charset_no,
+                    first_call,
+                    &requested,
+                    plugin,
+                    &plugin_data,
+                    &scrambled,
+                )
             };
             first_call = false;
             ret = switch.0;
@@ -1052,14 +1233,23 @@ impl ConnData {
                 );
                 return (false, None);
             };
-            if self.net.send(&payload, &mut self.stats, &mut self.error_info) == 0 {
+            if self
+                .net
+                .send(&payload, &mut self.stats, &mut self.error_info)
+                == 0
+            {
                 self.state = ConnState::QuitSent;
                 return (false, None);
             }
             self.charset = charset::find_by_nr(charset_no);
-        } else if self.net.send(auth_data, &mut self.stats, &mut self.error_info) == 0 {
+        } else if self
+            .net
+            .send(auth_data, &mut self.stats, &mut self.error_info)
+            == 0
+        {
             self.state = ConnState::QuitSent;
-            self.error_info.set_client(CR_SERVER_GONE_ERROR, MSG_SERVER_GONE);
+            self.error_info
+                .set_client(CR_SERVER_GONE_ERROR, MSG_SERVER_GONE);
             return (false, None);
         }
         if plugin == Some(Plugin::CachingSha2) {
@@ -1069,10 +1259,16 @@ impl ConnData {
                 Err(sw) => return (false, Some(sw)),
             }
         }
-        let resp = self.read_packet(PacketKind::Ok).and_then(|b| protocol::parse_auth_response(&b, false));
+        let resp = self
+            .read_packet(PacketKind::Ok)
+            .and_then(|b| protocol::parse_auth_response(&b, false));
         match resp {
             Some(Response::Ok(ok)) => {
-                self.last_message = if ok.message.is_empty() { None } else { Some(ok.message) };
+                self.last_message = if ok.message.is_empty() {
+                    None
+                } else {
+                    Some(ok.message)
+                };
                 (true, None)
             }
             Some(Response::AuthSwitch(name, data)) => (false, Some((name, data))),
@@ -1108,8 +1304,11 @@ impl ConnData {
             } else {
                 Vec::new()
             };
-            let charset_no =
-                if self.server_version_number() >= 50123 { self.charset.map_or(0, |c| c.nr) } else { 0 };
+            let charset_no = if self.server_version_number() >= 50123 {
+                self.charset.map_or(0, |c| c.nr)
+            } else {
+                0
+            };
             let pkt = AuthPacket {
                 is_change_user: true,
                 user,
@@ -1129,12 +1328,18 @@ impl ConnData {
             };
             if !self.send_command(Command::ChangeUser, &payload, silent) {
                 self.state = ConnState::QuitSent;
-                self.error_info.set_client(CR_SERVER_GONE_ERROR, MSG_SERVER_GONE);
+                self.error_info
+                    .set_client(CR_SERVER_GONE_ERROR, MSG_SERVER_GONE);
                 return (false, None);
             }
-        } else if self.net.send(auth_data, &mut self.stats, &mut self.error_info) == 0 {
+        } else if self
+            .net
+            .send(auth_data, &mut self.stats, &mut self.error_info)
+            == 0
+        {
             self.state = ConnState::QuitSent;
-            self.error_info.set_client(CR_SERVER_GONE_ERROR, MSG_SERVER_GONE);
+            self.error_info
+                .set_client(CR_SERVER_GONE_ERROR, MSG_SERVER_GONE);
             return (false, None);
         }
         if plugin == Some(Plugin::CachingSha2) {
@@ -1226,7 +1431,9 @@ impl ConnData {
     pub(crate) fn read_result_set_header(&mut self, ps: bool) -> std::result::Result<Header, ()> {
         self.upsert.set_affected_rows_to_error();
         let Some(buf) = self.read_packet(PacketKind::RsetHeader) else {
-            if self.error_info.errno != CR_SERVER_GONE_ERROR && self.error_info.errno != CR_CLIENT_INTERACTION_TIMEOUT {
+            if self.error_info.errno != CR_SERVER_GONE_ERROR
+                && self.error_info.errno != CR_CLIENT_INTERACTION_TIMEOUT
+            {
                 diag::warn("Error reading result set's header");
             }
             return Err(());
@@ -1248,7 +1455,11 @@ impl ConnData {
                 self.field_count = 0;
                 self.state = ConnState::SendingLoadData;
                 let (ok, is_warning) = self.handle_local_infile(&file);
-                self.state = if ok || is_warning { ConnState::Ready } else { ConnState::QuitSent };
+                self.state = if ok || is_warning {
+                    ConnState::Ready
+                } else {
+                    ConnState::QuitSent
+                };
                 self.inc(Stat::NonRsetQuery, 1);
                 if ok {
                     Ok(Header::NoResult)
@@ -1265,7 +1476,11 @@ impl ConnData {
                 self.upsert.server_status = ok.server_status;
                 self.upsert.affected_rows = ok.affected_rows;
                 self.upsert.last_insert_id = ok.last_insert_id;
-                self.last_message = if ok.message.is_empty() { None } else { Some(ok.message) };
+                self.last_message = if ok.message.is_empty() {
+                    None
+                } else {
+                    Some(ok.message)
+                };
                 self.session_track = ok.session_track;
                 self.state = if self.upsert.server_status & SERVER_MORE_RESULTS_EXISTS != 0 {
                     ConnState::NextResultPending
@@ -1286,7 +1501,10 @@ impl ConnData {
                 self.field_count = u32::try_from(n).unwrap_or(u32::MAX);
                 let _ = ps;
                 let meta = self.read_metadata(self.field_count)?;
-                let Some(eof) = self.read_packet(PacketKind::Eof).and_then(|b| protocol::parse_eof(&b)) else {
+                let Some(eof) = self
+                    .read_packet(PacketKind::Eof)
+                    .and_then(|b| protocol::parse_eof(&b))
+                else {
                     return Err(());
                 };
                 let eof = eof.unwrap_or_default();
@@ -1313,7 +1531,9 @@ impl ConnData {
     pub(crate) fn read_metadata(&mut self, n: u32) -> std::result::Result<Metadata, ()> {
         let mut fields = Vec::with_capacity(n as usize);
         for _ in 0..n {
-            let Some(buf) = self.read_packet(PacketKind::Field) else { return Err(()) };
+            let Some(buf) = self.read_packet(PacketKind::Field) else {
+                return Err(());
+            };
             match protocol::parse_field(&buf) {
                 None => return Err(()),
                 Some(Err(e)) => {
@@ -1378,7 +1598,10 @@ impl ConnData {
         }
         if let Some(d) = &dir {
             if !infile::dir_accessible(d) {
-                self.error_info.set_client(CR_LOAD_DATA_LOCAL_INFILE_REJECTED, "cannot open local_infile_directory");
+                self.error_info.set_client(
+                    CR_LOAD_DATA_LOCAL_INFILE_REJECTED,
+                    "cannot open local_infile_directory",
+                );
                 prerequisites_ok = false;
             }
         }
@@ -1419,7 +1642,11 @@ impl ConnData {
                 match reader.read(&mut buf) {
                     Ok(0) => break,
                     Ok(n) => {
-                        if self.net.send(&buf[..n], &mut self.stats, &mut self.error_info) == 0 {
+                        if self
+                            .net
+                            .send(&buf[..n], &mut self.stats, &mut self.error_info)
+                            == 0
+                        {
                             self.error_info.set_client(
                                 CR_SERVER_LOST,
                                 "Lost connection to MySQL server during LOAD DATA of a local file",
@@ -1435,13 +1662,16 @@ impl ConnData {
                 }
             }
             if self.net.send(&[], &mut self.stats, &mut self.error_info) == 0 {
-                self.error_info
-                    .set_client(CR_SERVER_LOST, "Lost connection to MySQL server during LOAD DATA of a local file");
+                self.error_info.set_client(
+                    CR_SERVER_LOST,
+                    "Lost connection to MySQL server during LOAD DATA of a local file",
+                );
                 break 'send;
             }
             if read_error {
                 is_warning = true;
-                self.error_info.set_client(infile::READ_ERROR.0, infile::READ_ERROR.1);
+                self.error_info
+                    .set_client(infile::READ_ERROR.0, infile::READ_ERROR.1);
                 break 'send;
             }
             result = true;
@@ -1455,7 +1685,10 @@ impl ConnData {
     /// Buffers every remaining row of the current result set
     /// (`mysqlnd_res::store_result_fetch_data`). On failure the error is
     /// returned (not yet copied to the connection).
-    pub(crate) fn fetch_all_rows(&mut self, binary: bool) -> std::result::Result<Vec<Vec<u8>>, ErrorEntry> {
+    pub(crate) fn fetch_all_rows(
+        &mut self,
+        binary: bool,
+    ) -> std::result::Result<Vec<Vec<u8>>, ErrorEntry> {
         let mut rows = Vec::new();
         let mut prev = 0;
         let mut err = None;
@@ -1469,13 +1702,21 @@ impl ConnData {
                     break;
                 }
                 RowPacket::Err(e) => {
-                    err = Some(ErrorEntry { errno: e.errno, sqlstate: e.sqlstate, error: e.message });
+                    err = Some(ErrorEntry {
+                        errno: e.errno,
+                        sqlstate: e.sqlstate,
+                        error: e.message,
+                    });
                     break;
                 }
             }
         }
         self.inc(
-            if binary { Stat::RowsBufferedFromClientPs } else { Stat::RowsBufferedFromClientNormal },
+            if binary {
+                Stat::RowsBufferedFromClientPs
+            } else {
+                Stat::RowsBufferedFromClientNormal
+            },
             rows.len() as u64,
         );
         if err.is_some() {
@@ -1495,7 +1736,8 @@ impl ConnData {
     /// `mysqlnd_conn_data::set_charset`
     fn set_charset(&mut self, name: &str) -> bool {
         let Some(cs) = charset::find_by_name(name.as_bytes()) else {
-            self.error_info.set_client(CR_CANT_FIND_CHARSET, "Invalid character set was provided");
+            self.error_info
+                .set_client(CR_CANT_FIND_CHARSET, "Invalid character set was provided");
             return false;
         };
         let q = format!("SET NAMES {name}");
@@ -1517,7 +1759,17 @@ impl ConnData {
             Some(n) => &db[..n],
             None => db,
         };
-        self.run_authentication(user, passwd, db, &data, proto.as_deref(), 0, caps, silent, true)
+        self.run_authentication(
+            user,
+            passwd,
+            db,
+            &data,
+            proto.as_deref(),
+            0,
+            caps,
+            silent,
+            true,
+        )
     }
 }
 
@@ -1543,7 +1795,9 @@ fn strtol(b: &[u8]) -> (i64, usize) {
 
 /// `mysqlnd_escape_string_for_tx_name_in_comment`
 fn tx_name_comment(name: Option<&[u8]>) -> String {
-    let Some(name) = name else { return String::new() };
+    let Some(name) = name else {
+        return String::new();
+    };
     let mut out = String::from(" /*");
     let mut warned = false;
     for &v in name {
@@ -1623,13 +1877,27 @@ impl Connection {
 
     /// `mysqlnd_conn_data::set_client_option` (`mysqli_options`). Returns
     /// `false` for unsupported options or rejected values.
+    #[allow(clippy::too_many_lines)]
     pub fn set_option(&self, option: u32, value: OptionValue<'_>) -> bool {
-        use crate::consts::opt::*;
+        use crate::consts::opt::{
+            MYSQLND_OPT_AUTH_PROTOCOL, MYSQLND_OPT_INT_AND_FLOAT_NATIVE,
+            MYSQLND_OPT_MAX_ALLOWED_PACKET, MYSQLND_OPT_NET_CMD_BUFFER_SIZE,
+            MYSQLND_OPT_NET_READ_BUFFER_SIZE, MYSQLND_OPT_SSL_CA, MYSQLND_OPT_SSL_CAPATH,
+            MYSQLND_OPT_SSL_CERT, MYSQLND_OPT_SSL_CIPHER, MYSQLND_OPT_SSL_KEY,
+            MYSQLND_OPT_SSL_PASSPHRASE, MYSQL_INIT_COMMAND, MYSQL_OPT_CAN_HANDLE_EXPIRED_PASSWORDS,
+            MYSQL_OPT_COMPRESS, MYSQL_OPT_CONNECT_ATTR_DELETE, MYSQL_OPT_CONNECT_ATTR_RESET,
+            MYSQL_OPT_CONNECT_TIMEOUT, MYSQL_OPT_LOAD_DATA_LOCAL_DIR, MYSQL_OPT_LOCAL_INFILE,
+            MYSQL_OPT_NAMED_PIPE, MYSQL_OPT_PROTOCOL, MYSQL_OPT_READ_TIMEOUT,
+            MYSQL_OPT_SSL_VERIFY_SERVER_CERT, MYSQL_READ_DEFAULT_FILE, MYSQL_READ_DEFAULT_GROUP,
+            MYSQL_SERVER_PUBLIC_KEY, MYSQL_SET_CHARSET_NAME,
+        };
         let mut c = self.data();
         match option {
             MYSQL_OPT_READ_TIMEOUT => c.net.opts.timeout_read = value.as_uint(),
             MYSQL_OPT_CONNECT_TIMEOUT => c.net.opts.timeout_connect = value.as_uint(),
-            MYSQLND_OPT_NET_READ_BUFFER_SIZE => c.net.opts.net_read_buffer_size = value.as_uint() as usize,
+            MYSQLND_OPT_NET_READ_BUFFER_SIZE => {
+                c.net.opts.net_read_buffer_size = value.as_uint() as usize;
+            }
             MYSQLND_OPT_SSL_KEY => c.net.opts.ssl_key = value.as_opt_string(),
             MYSQLND_OPT_SSL_CERT => c.net.opts.ssl_cert = value.as_opt_string(),
             MYSQLND_OPT_SSL_CA => c.net.opts.ssl_ca = value.as_opt_string(),
@@ -1652,7 +1920,9 @@ impl Connection {
             }
             MYSQL_OPT_COMPRESS => c.net.use_compression = true,
             MYSQL_SERVER_PUBLIC_KEY => c.net.server_public_key = value.as_opt_string(),
-            MYSQLND_OPT_INT_AND_FLOAT_NATIVE => c.options.int_and_float_native = value.as_uint() != 0,
+            MYSQLND_OPT_INT_AND_FLOAT_NATIVE => {
+                c.options.int_and_float_native = value.as_uint() != 0;
+            }
             MYSQL_OPT_LOCAL_INFILE => {
                 if value.as_uint() != 0 {
                     c.options.flags |= CLIENT_LOCAL_FILES;
@@ -1675,7 +1945,8 @@ impl Connection {
             MYSQL_SET_CHARSET_NAME => {
                 let name = value.as_opt_string().unwrap_or_default();
                 if charset::find_by_name(name.as_bytes()).is_none() {
-                    c.error_info.set_client(CR_CANT_FIND_CHARSET, "Unknown character set");
+                    c.error_info
+                        .set_client(CR_CANT_FIND_CHARSET, "Unknown character set");
                     return false;
                 }
                 c.options.charset_name = Some(name);
@@ -1718,7 +1989,9 @@ impl Connection {
         if let Some(slot) = c.options.connect_attr.iter_mut().find(|(k, _)| k == key) {
             slot.1 = value.to_string();
         } else {
-            c.options.connect_attr.push((key.to_string(), value.to_string()));
+            c.options
+                .connect_attr
+                .push((key.to_string(), value.to_string()));
         }
     }
 
@@ -1729,7 +2002,14 @@ impl Connection {
     }
 
     /// `mysqlnd_ssl_set` (`mysqli_ssl_set`).
-    pub fn ssl_set(&self, key: Option<&str>, cert: Option<&str>, ca: Option<&str>, capath: Option<&str>, cipher: Option<&str>) {
+    pub fn ssl_set(
+        &self,
+        key: Option<&str>,
+        cert: Option<&str>,
+        ca: Option<&str>,
+        capath: Option<&str>,
+        cipher: Option<&str>,
+    ) {
         let mut c = self.data();
         let o = &mut c.net.opts;
         o.ssl_key = key.map(str::to_string);
@@ -1784,7 +2064,9 @@ impl Connection {
         if let Some(h) = host.filter(|h| !h.is_empty()) {
             self.connect_attr_add("_server_host", h);
         }
-        let ok = self.data().connect(host, user, passwd, db, port, socket, flags);
+        let ok = self
+            .data()
+            .connect(host, user, passwd, db, port, socket, flags);
         self.check(ok)
     }
 
@@ -1921,7 +2203,8 @@ impl Connection {
     pub fn dump_debug_info(&self) -> Result<()> {
         let ok = {
             let mut c = self.data();
-            c.send_command(Command::Debug, &[], false) && c.handle_response(true, false, Command::Debug, true)
+            c.send_command(Command::Debug, &[], false)
+                && c.handle_response(true, false, Command::Debug, true)
         };
         self.check(ok)
     }
@@ -1933,8 +2216,16 @@ impl Connection {
     }
 
     /// `mysqlnd_conn_data::change_user` (`COM_CHANGE_USER`).
-    pub fn change_user(&self, user: &[u8], passwd: &[u8], db: Option<&[u8]>, silent: bool) -> Result<()> {
-        let ok = self.data().change_user(user, passwd, db.unwrap_or_default(), silent);
+    pub fn change_user(
+        &self,
+        user: &[u8],
+        passwd: &[u8],
+        db: Option<&[u8]>,
+        silent: bool,
+    ) -> Result<()> {
+        let ok = self
+            .data()
+            .change_user(user, passwd, db.unwrap_or_default(), silent);
         self.check(ok)
     }
 
@@ -1944,7 +2235,10 @@ impl Connection {
     #[must_use]
     pub fn escape_string(&self, s: &[u8]) -> Vec<u8> {
         let c = self.data();
-        let cs = c.charset.or_else(|| charset::find_by_nr(UTF8_MB4_DEFAULT_ID)).unwrap_or(&charset::CHARSETS[0]);
+        let cs = c
+            .charset
+            .or_else(|| charset::find_by_nr(UTF8_MB4_DEFAULT_ID))
+            .unwrap_or(&charset::CHARSETS[0]);
         if c.upsert.server_status & SERVER_STATUS_NO_BACKSLASH_ESCAPES != 0 {
             charset::escape_quotes(cs, s)
         } else {
@@ -1956,14 +2250,23 @@ impl Connection {
 
     /// `SET AUTOCOMMIT=0|1`
     pub fn autocommit(&self, on: bool) -> Result<()> {
-        self.query(if on { b"SET AUTOCOMMIT=1" } else { b"SET AUTOCOMMIT=0" })
+        self.query(if on {
+            b"SET AUTOCOMMIT=1"
+        } else {
+            b"SET AUTOCOMMIT=0"
+        })
     }
 
     /// `tx_commit_or_rollback`
     pub fn commit_or_rollback(&self, commit: bool, flags: u32, name: Option<&[u8]>) -> Result<()> {
         let opts = tx_cor_options(flags);
         let name = tx_name_comment(name);
-        let q = format!("{}{} {}", if commit { "COMMIT" } else { "ROLLBACK" }, name, opts);
+        let q = format!(
+            "{}{} {}",
+            if commit { "COMMIT" } else { "ROLLBACK" },
+            name,
+            opts
+        );
         self.query(q.as_bytes())
     }
 
@@ -1988,9 +2291,16 @@ impl Connection {
         } else if mode & TRANS_START_READ_ONLY != 0 {
             parts.push("READ ONLY");
         }
-        let q = format!("START TRANSACTION{} {}", tx_name_comment(name), parts.join(", "));
+        let q = format!(
+            "START TRANSACTION{} {}",
+            tx_name_comment(name),
+            parts.join(", ")
+        );
         let r = self.query(q.as_bytes());
-        if r.is_err() && mode & (TRANS_START_READ_WRITE | TRANS_START_READ_ONLY) != 0 && self.errno() == 1064 {
+        if r.is_err()
+            && mode & (TRANS_START_READ_WRITE | TRANS_START_READ_ONLY) != 0
+            && self.errno() == 1064
+        {
             self.data().error_info.set_client(
                 CR_NOT_IMPLEMENTED,
                 "This server version doesn't support 'READ WRITE' and 'READ ONLY'. Minimum 5.6.5 is required",
@@ -2012,7 +2322,9 @@ impl Connection {
 
     fn savepoint_cmd(&self, verb: &str, name: Option<&[u8]>) -> Result<()> {
         let Some(name) = name else {
-            self.data().error_info.set_client(CR_UNKNOWN_ERROR, "Savepoint name not provided");
+            self.data()
+                .error_info
+                .set_client(CR_UNKNOWN_ERROR, "Savepoint name not provided");
             return self.fail();
         };
         let mut q = format!("{verb} `").into_bytes();
@@ -2056,9 +2368,12 @@ impl Connection {
     pub fn store_result(&self) -> Result<Option<ResultSet>> {
         let meta = {
             let mut c = self.data();
-            let Some(meta) = c.current_result.clone() else { return Ok(None) };
+            let Some(meta) = c.current_result.clone() else {
+                return Ok(None);
+            };
             if c.last_query_type != QueryType::Select || c.state != ConnState::FetchingData {
-                c.error_info.set_client(CR_COMMANDS_OUT_OF_SYNC, MSG_OUT_OF_SYNC);
+                c.error_info
+                    .set_client(CR_COMMANDS_OUT_OF_SYNC, MSG_OUT_OF_SYNC);
                 return self.fail();
             }
             c.inc(Stat::BufferedSets, 1);
@@ -2070,7 +2385,12 @@ impl Connection {
             Ok(rows) => {
                 let n = rows.len() as u64;
                 self.data().upsert.affected_rows = n;
-                Ok(Some(ResultSet::buffered(Some(self.clone()), meta, rows, false)))
+                Ok(Some(ResultSet::buffered(
+                    Some(self.clone()),
+                    meta,
+                    rows,
+                    false,
+                )))
             }
             Err(e) => {
                 let mut c = self.data();
@@ -2085,9 +2405,12 @@ impl Connection {
     pub fn use_result(&self) -> Result<Option<ResultSet>> {
         let meta = {
             let mut c = self.data();
-            let Some(meta) = c.current_result.clone() else { return Ok(None) };
+            let Some(meta) = c.current_result.clone() else {
+                return Ok(None);
+            };
             if c.last_query_type != QueryType::Select || c.state != ConnState::FetchingData {
-                c.error_info.set_client(CR_COMMANDS_OUT_OF_SYNC, MSG_OUT_OF_SYNC);
+                c.error_info
+                    .set_client(CR_COMMANDS_OUT_OF_SYNC, MSG_OUT_OF_SYNC);
                 return self.fail();
             }
             c.inc(Stat::UnbufferedSets, 1);
@@ -2286,6 +2609,19 @@ impl Connection {
     }
 }
 
+impl ConnData {
+    /// Crate-visible wrapper of `send_command_handle_response`.
+    pub(crate) fn handle_response_pub(
+        &mut self,
+        eof: bool,
+        silent: bool,
+        cmd: Command,
+        ignore_upsert: bool,
+    ) -> bool {
+        self.handle_response(eof, silent, cmd, ignore_upsert)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2293,16 +2629,37 @@ mod tests {
     #[test]
     fn scheme_building() {
         let mut s = None;
-        assert_eq!(ConnData::get_scheme("localhost", &mut s, 0), ("unix:///tmp/mysql.sock".to_string(), true));
+        assert_eq!(
+            ConnData::get_scheme("localhost", &mut s, 0),
+            ("unix:///tmp/mysql.sock".to_string(), true)
+        );
         assert_eq!(s.as_deref(), Some("/tmp/mysql.sock"));
         let mut s = Some("/run/x.sock".to_string());
-        assert_eq!(ConnData::get_scheme("LocalHost", &mut s, 0).0, "unix:///run/x.sock");
+        assert_eq!(
+            ConnData::get_scheme("LocalHost", &mut s, 0).0,
+            "unix:///run/x.sock"
+        );
         let mut s = None;
-        assert_eq!(ConnData::get_scheme("127.0.0.1", &mut s, 0).0, "tcp://127.0.0.1:3306");
-        assert_eq!(ConnData::get_scheme("127.0.0.1:3307", &mut s, 5).0, "tcp://127.0.0.1:3307");
-        assert_eq!(ConnData::get_scheme("::1", &mut s, 3306).0, "tcp://[::1]:3306");
-        assert_eq!(ConnData::get_scheme("[::1]:3310", &mut s, 3306).0, "tcp://[::1]:3310");
-        assert_eq!(ConnData::get_scheme("[::1]", &mut s, 3306).0, "tcp://[::1]:3306");
+        assert_eq!(
+            ConnData::get_scheme("127.0.0.1", &mut s, 0).0,
+            "tcp://127.0.0.1:3306"
+        );
+        assert_eq!(
+            ConnData::get_scheme("127.0.0.1:3307", &mut s, 5).0,
+            "tcp://127.0.0.1:3307"
+        );
+        assert_eq!(
+            ConnData::get_scheme("::1", &mut s, 3306).0,
+            "tcp://[::1]:3306"
+        );
+        assert_eq!(
+            ConnData::get_scheme("[::1]:3310", &mut s, 3306).0,
+            "tcp://[::1]:3310"
+        );
+        assert_eq!(
+            ConnData::get_scheme("[::1]", &mut s, 3306).0,
+            "tcp://[::1]:3306"
+        );
     }
 
     #[test]
@@ -2316,8 +2673,14 @@ mod tests {
 
     #[test]
     fn tx_strings() {
-        assert_eq!(tx_cor_options(TRANS_COR_AND_CHAIN | TRANS_COR_NO_RELEASE), "AND CHAIN NO RELEASE");
-        assert_eq!(tx_cor_options(TRANS_COR_AND_CHAIN | TRANS_COR_AND_NO_CHAIN), "");
+        assert_eq!(
+            tx_cor_options(TRANS_COR_AND_CHAIN | TRANS_COR_NO_RELEASE),
+            "AND CHAIN NO RELEASE"
+        );
+        assert_eq!(
+            tx_cor_options(TRANS_COR_AND_CHAIN | TRANS_COR_AND_NO_CHAIN),
+            ""
+        );
         let _ = diag::take();
         assert_eq!(tx_name_comment(Some(b"my tx=1")), " /*my tx=1*/");
         assert_eq!(tx_name_comment(Some(b"a*/b")), " /*ab*/");
@@ -2349,12 +2712,5 @@ mod tests {
         let e = c.query(b"SELECT 1").unwrap_err();
         assert_eq!(e.errno, CR_COMMANDS_OUT_OF_SYNC);
         assert_eq!(c.affected_rows(), 0);
-    }
-}
-
-impl ConnData {
-    /// Crate-visible wrapper of `send_command_handle_response`.
-    pub(crate) fn handle_response_pub(&mut self, eof: bool, silent: bool, cmd: Command, ignore_upsert: bool) -> bool {
-        self.handle_response(eof, silent, cmd, ignore_upsert)
     }
 }

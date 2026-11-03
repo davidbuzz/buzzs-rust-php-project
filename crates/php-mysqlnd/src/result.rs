@@ -29,7 +29,10 @@ impl Metadata {
     /// Builds metadata, precomputing the fetch keys (`ZEND_HANDLE_NUMERIC`).
     #[must_use]
     pub fn new(fields: Vec<Field>) -> Self {
-        let keys = fields.iter().map(|f| ArrayKey::from_bytes(&f.name)).collect();
+        let keys = fields
+            .iter()
+            .map(|f| ArrayKey::from_bytes(&f.name))
+            .collect();
         Self { fields, keys }
     }
 }
@@ -41,11 +44,16 @@ enum Data {
     /// `store_result`: raw row packets, decoded lazily.
     Buffered { rows: Vec<Vec<u8>>, current: u64 },
     /// `use_result`: rows streamed from the connection.
-    Unbuffered { eof: bool, count: u64, has_row: bool },
+    Unbuffered {
+        eof: bool,
+        count: u64,
+        has_row: bool,
+    },
 }
 
 /// A result set (`MYSQLND_RES`).
 #[derive(Debug)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct ResultSet {
     conn: Option<Connection>,
     meta: Rc<Metadata>,
@@ -71,7 +79,12 @@ impl Drop for ResultSet {
 }
 
 impl ResultSet {
-    pub(crate) fn buffered(conn: Option<Connection>, meta: Rc<Metadata>, rows: Vec<Vec<u8>>, binary: bool) -> Self {
+    pub(crate) fn buffered(
+        conn: Option<Connection>,
+        meta: Rc<Metadata>,
+        rows: Vec<Vec<u8>>,
+        binary: bool,
+    ) -> Self {
         let n = meta.fields.len();
         Self {
             conn,
@@ -94,7 +107,11 @@ impl ResultSet {
             conn: Some(conn),
             meta,
             current_field: 0,
-            data: Data::Unbuffered { eof: false, count: 0, has_row: false },
+            data: Data::Unbuffered {
+                eof: false,
+                count: 0,
+                has_row: false,
+            },
             binary: ps.is_some(),
             ps: ps.is_some(),
             lengths: vec![0; n],
@@ -111,7 +128,11 @@ impl ResultSet {
             conn,
             meta,
             current_field: 0,
-            data: Data::Unbuffered { eof: true, count: 0, has_row: false },
+            data: Data::Unbuffered {
+                eof: true,
+                count: 0,
+                has_row: false,
+            },
             binary: true,
             ps: true,
             lengths: vec![0; n],
@@ -285,7 +306,11 @@ impl ResultSet {
     /// per-type statistics), as `skip_result` does.
     fn fetch_inner(&mut self, decode: bool) -> Result<Option<Vec<Value>>> {
         if self.cursor_stmt_id.is_some() {
-            return Err(Error { errno: 0, sqlstate: String::new(), message: Vec::new() });
+            return Err(Error {
+                errno: 0,
+                sqlstate: String::new(),
+                message: Vec::new(),
+            });
         }
         match &mut self.data {
             Data::None => Ok(None),
@@ -293,7 +318,11 @@ impl ResultSet {
                 if *current < rows.len() as u64 && !decode {
                     *current += 1;
                     inc_global(
-                        if self.ps { Stat::RowsFetchedFromClientPsBuf } else { Stat::RowsFetchedFromClientNormalBuf },
+                        if self.ps {
+                            Stat::RowsFetchedFromClientPsBuf
+                        } else {
+                            Stat::RowsFetchedFromClientNormalBuf
+                        },
                         1,
                     );
                     return Ok(Some(Vec::new()));
@@ -320,11 +349,19 @@ impl ResultSet {
                             rows[*current as usize] = raw;
                         }
                         let Some(row) = decoded else {
-                            return Err(Error { errno: 0, sqlstate: String::new(), message: Vec::new() });
+                            return Err(Error {
+                                errno: 0,
+                                sqlstate: String::new(),
+                                message: Vec::new(),
+                            });
                         };
                         *current += 1;
                         inc_global(
-                            if self.ps { Stat::RowsFetchedFromClientPsBuf } else { Stat::RowsFetchedFromClientNormalBuf },
+                            if self.ps {
+                                Stat::RowsFetchedFromClientPsBuf
+                            } else {
+                                Stat::RowsFetchedFromClientNormalBuf
+                            },
                             1,
                         );
                         return Ok(Some(row));
@@ -347,10 +384,13 @@ impl ResultSet {
     }
 
     fn fetch_unbuffered(&mut self, decode: bool) -> Result<Option<Vec<Value>>> {
-        let Some(conn) = self.conn.clone() else { return Ok(None) };
+        let Some(conn) = self.conn.clone() else {
+            return Ok(None);
+        };
         let mut c = conn.data();
         if c.state != ConnState::FetchingData {
-            c.error_info.set_client(CR_COMMANDS_OUT_OF_SYNC, MSG_OUT_OF_SYNC);
+            c.error_info
+                .set_client(CR_COMMANDS_OUT_OF_SYNC, MSG_OUT_OF_SYNC);
             return Err(c.error_info.to_error());
         }
         let binary = self.binary;
@@ -360,7 +400,11 @@ impl ResultSet {
         match pkt {
             RowPacket::Row(raw) => {
                 c.inc(
-                    if self.ps { Stat::RowsFetchedFromClientPsUnbuf } else { Stat::RowsFetchedFromClientNormalUnbuf },
+                    if self.ps {
+                        Stat::RowsFetchedFromClientPsUnbuf
+                    } else {
+                        Stat::RowsFetchedFromClientNormalUnbuf
+                    },
                     1,
                 );
                 if let Data::Unbuffered { count, has_row, .. } = &mut self.data {
@@ -376,7 +420,11 @@ impl ResultSet {
                 c.stats = stats;
                 match decoded {
                     Some(r) => Ok(Some(r)),
-                    None => Err(Error { errno: 0, sqlstate: String::new(), message: Vec::new() }),
+                    None => Err(Error {
+                        errno: 0,
+                        sqlstate: String::new(),
+                        message: Vec::new(),
+                    }),
                 }
             }
             RowPacket::Err(e) => {
@@ -417,7 +465,10 @@ impl ResultSet {
         let mut ht = HashTable::with_capacity(size);
         for (i, v) in row.into_iter().enumerate() {
             if flags & FETCH_NUM != 0 {
-                let _ = ht.add(ArrayKey::Int(i64::try_from(i).unwrap_or(i64::MAX)), v.clone());
+                let _ = ht.add(
+                    ArrayKey::Int(i64::try_from(i).unwrap_or(i64::MAX)),
+                    v.clone(),
+                );
             }
             if flags & FETCH_ASSOC != 0 {
                 ht.insert(self.meta.keys[i].clone(), v);
@@ -458,16 +509,38 @@ impl ResultSet {
 
     /// `mysqli_fetch_column`: column `n` of the next row.
     pub fn fetch_column(&mut self, n: usize) -> Result<Option<Value>> {
-        Ok(self.fetch_row_values()?.map(|mut r| if n < r.len() { r.swap_remove(n) } else { Value::Null }))
+        Ok(self.fetch_row_values()?.map(|mut r| {
+            if n < r.len() {
+                r.swap_remove(n)
+            } else {
+                Value::Null
+            }
+        }))
     }
 
     /// `mysqlnd_res::skip_result`: drains an unbuffered set.
     pub fn skip_result(&mut self) {
         if let Data::Unbuffered { eof: false, .. } = self.data {
-            let Some(conn) = self.conn.clone() else { return };
-            conn.data().inc(if self.ps { Stat::FlushedPsSets } else { Stat::FlushedNormalSets }, 1);
+            let Some(conn) = self.conn.clone() else {
+                return;
+            };
+            conn.data().inc(
+                if self.ps {
+                    Stat::FlushedPsSets
+                } else {
+                    Stat::FlushedNormalSets
+                },
+                1,
+            );
             while let Ok(Some(_)) = self.fetch_inner(false) {
-                conn.data().inc(if self.ps { Stat::RowsSkippedPs } else { Stat::RowsSkippedNormal }, 1);
+                conn.data().inc(
+                    if self.ps {
+                        Stat::RowsSkippedPs
+                    } else {
+                        Stat::RowsSkippedNormal
+                    },
+                    1,
+                );
             }
         }
     }
@@ -478,9 +551,23 @@ impl ResultSet {
             return;
         }
         if let Some(c) = &self.conn {
-            c.data().inc(if implicit { Stat::FreeResultImplicit } else { Stat::FreeResultExplicit }, 1);
+            c.data().inc(
+                if implicit {
+                    Stat::FreeResultImplicit
+                } else {
+                    Stat::FreeResultExplicit
+                },
+                1,
+            );
         } else {
-            inc_global(if implicit { Stat::FreeResultImplicit } else { Stat::FreeResultExplicit }, 1);
+            inc_global(
+                if implicit {
+                    Stat::FreeResultImplicit
+                } else {
+                    Stat::FreeResultExplicit
+                },
+                1,
+            );
         }
         self.skip_result();
         self.data = Data::None;
@@ -495,24 +582,26 @@ impl ResultSet {
     }
 
     /// Unbuffered-set bookkeeping for cursor fetches driven by a statement.
-    pub(crate) fn cursor_row(&mut self, raw: Option<&[u8]>, conn: &Connection) -> Option<Option<Vec<Value>>> {
-        match raw {
-            Some(raw) => {
-                let mut stats = std::mem::take(&mut conn.data().stats);
-                let r = codec::decode_binary_row(raw, &self.meta.fields, &mut stats);
-                conn.data().stats = stats;
-                if let Data::Unbuffered { count, has_row, .. } = &mut self.data {
-                    *count += 1;
-                    *has_row = true;
-                }
-                r.map(Some)
+    #[allow(clippy::option_option)]
+    pub(crate) fn cursor_row(
+        &mut self,
+        raw: Option<&[u8]>,
+        conn: &Connection,
+    ) -> Option<Option<Vec<Value>>> {
+        if let Some(raw) = raw {
+            let mut stats = std::mem::take(&mut conn.data().stats);
+            let r = codec::decode_binary_row(raw, &self.meta.fields, &mut stats);
+            conn.data().stats = stats;
+            if let Data::Unbuffered { count, has_row, .. } = &mut self.data {
+                *count += 1;
+                *has_row = true;
             }
-            None => {
-                if let Data::Unbuffered { eof, .. } = &mut self.data {
-                    *eof = true;
-                }
-                Some(None)
+            r.map(Some)
+        } else {
+            if let Data::Unbuffered { eof, .. } = &mut self.data {
+                *eof = true;
             }
+            Some(None)
         }
     }
 
@@ -530,7 +619,14 @@ mod tests {
 
     fn meta(names: &[&str]) -> Rc<Metadata> {
         Rc::new(Metadata::new(
-            names.iter().map(|n| Field { name: n.as_bytes().to_vec(), type_: MYSQL_TYPE_VAR_STRING, ..Field::default() }).collect(),
+            names
+                .iter()
+                .map(|n| Field {
+                    name: n.as_bytes().to_vec(),
+                    type_: MYSQL_TYPE_VAR_STRING,
+                    ..Field::default()
+                })
+                .collect(),
         ))
     }
 
@@ -544,7 +640,12 @@ mod tests {
 
     #[test]
     fn buffered_fetch_and_seek() {
-        let mut r = ResultSet::buffered(None, meta(&["a", "b"]), vec![row(&["1", "x"]), row(&["2", "y"])], false);
+        let mut r = ResultSet::buffered(
+            None,
+            meta(&["a", "b"]),
+            vec![row(&["1", "x"]), row(&["2", "y"])],
+            false,
+        );
         assert_eq!(r.num_rows(), 2);
         assert!(r.fetch_lengths().is_none());
         let a = r.fetch_assoc().unwrap().unwrap();
@@ -563,11 +664,20 @@ mod tests {
     #[test]
     fn numeric_column_names() {
         let r = ResultSet::buffered(None, meta(&["1", "x", "01"]), vec![], false);
-        let arr = r.row_to_array(vec![Value::string("a"), Value::string("b"), Value::string("c")], FETCH_BOTH);
+        let arr = r.row_to_array(
+            vec![Value::string("a"), Value::string("b"), Value::string("c")],
+            FETCH_BOTH,
+        );
         let keys: Vec<_> = arr.keys().cloned().collect();
         assert_eq!(
             keys,
-            vec![ArrayKey::Int(0), ArrayKey::Int(1), ArrayKey::from_bytes(b"x"), ArrayKey::Int(2), ArrayKey::from_bytes(b"01")]
+            vec![
+                ArrayKey::Int(0),
+                ArrayKey::Int(1),
+                ArrayKey::from_bytes(b"x"),
+                ArrayKey::Int(2),
+                ArrayKey::from_bytes(b"01")
+            ]
         );
         // assoc "1" overwrote index 1, then NUM add for index 1 kept it
         assert_eq!(crate::render(arr.get_int(1).unwrap()), "s:a");

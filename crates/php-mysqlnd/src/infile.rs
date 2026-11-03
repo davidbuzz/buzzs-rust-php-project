@@ -42,7 +42,11 @@ pub const READ_ERROR: (u32, &str) = (CR_UNKNOWN_ERROR, "Error reading file");
 /// Lexically normalises `p` against the current directory (no symlink
 /// resolution for the non-existing tail).
 fn absolutize(p: &Path) -> PathBuf {
-    let base = if p.is_absolute() { PathBuf::new() } else { std::env::current_dir().unwrap_or_default() };
+    let base = if p.is_absolute() {
+        PathBuf::new()
+    } else {
+        std::env::current_dir().unwrap_or_default()
+    };
     let joined = base.join(p);
     if let Ok(c) = std::fs::canonicalize(&joined) {
         return c;
@@ -82,11 +86,16 @@ mod tests {
     #[test]
     fn not_found() {
         let mut h = FsInfile;
-        let Err(e) = h.open(b"/nonexistent/file.csv") else { panic!("opened") };
+        let Err(e) = h.open(b"/nonexistent/file.csv") else {
+            panic!("opened")
+        };
         assert_eq!(e.0, MYSQLND_EE_FILENOTFOUND);
         assert_eq!(e.1, "Can't find file '/nonexistent/file.csv'.");
         let long = vec![b'a'; 100];
-        assert_eq!(not_found_message(&long).len(), "Can't find file ''.".len() + 64);
+        assert_eq!(
+            not_found_message(&long).len(),
+            "Can't find file ''.".len() + 64
+        );
     }
 
     #[test]

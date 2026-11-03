@@ -4,8 +4,9 @@
 //! failure), so they can be unit-tested from captured packets.
 
 use crate::consts::{
-    CLIENT_PLUGIN_AUTH, CLIENT_SECURE_CONNECTION, MAX_ALLOWED_DB_LEN, MAX_ALLOWED_USER_LEN, MYSQL_TYPE_INT24,
-    MYSQL_TYPE_TIMESTAMP, MYSQL_TYPE_YEAR, NUM_FLAG, SCRAMBLE_LENGTH, SCRAMBLE_LENGTH_323,
+    CLIENT_PLUGIN_AUTH, CLIENT_SECURE_CONNECTION, MAX_ALLOWED_DB_LEN, MAX_ALLOWED_USER_LEN,
+    MYSQL_TYPE_INT24, MYSQL_TYPE_TIMESTAMP, MYSQL_TYPE_YEAR, NUM_FLAG, SCRAMBLE_LENGTH,
+    SCRAMBLE_LENGTH_323,
 };
 use crate::diag;
 use crate::error::ServerError;
@@ -19,7 +20,9 @@ pub const EODATA_MARKER: u8 = 0xFE;
 const MARIADB_RPL_VERSION_HACK: &[u8] = b"5.5.5-";
 
 fn premature(line: u32) {
-    diag::warn(format!("Premature end of data (mysqlnd_wireprotocol.c:{line})"));
+    diag::warn(format!(
+        "Premature end of data (mysqlnd_wireprotocol.c:{line})"
+    ));
 }
 
 /// A decoded server greeting (protocol v10 handshake).
@@ -27,7 +30,7 @@ fn premature(line: u32) {
 pub struct Greeting {
     /// Protocol version (10), or 0xFF when the server sent an error.
     pub protocol_version: u8,
-    /// Server version string (MariaDB's `5.5.5-` prefix removed).
+    /// Server version string (`MariaDB`'s `5.5.5-` prefix removed).
     pub server_version: String,
     /// Connection id.
     pub thread_id: u32,
@@ -78,7 +81,8 @@ fn parse_greeting_inner(buf: &[u8]) -> Option<Greeting> {
         g.error = Some(e);
         return Some(g);
     }
-    if size - p >= MARIADB_RPL_VERSION_HACK.len() && buf[p..].starts_with(MARIADB_RPL_VERSION_HACK) {
+    if size - p >= MARIADB_RPL_VERSION_HACK.len() && buf[p..].starts_with(MARIADB_RPL_VERSION_HACK)
+    {
         p += MARIADB_RPL_VERSION_HACK.len();
     }
     let Some(nul) = buf[p..].iter().position(|&b| b == 0) else {
@@ -116,7 +120,8 @@ fn parse_greeting_inner(buf: &[u8]) -> Option<Greeting> {
     }
     if p < size {
         p -= 1;
-        g.server_capabilities |= u32::from(u16::from_le_bytes([buf[pad_start], buf[pad_start + 1]])) << 16;
+        g.server_capabilities |=
+            u32::from(u16::from_le_bytes([buf[pad_start], buf[pad_start + 1]])) << 16;
         scramble_len = usize::from(buf[pad_start + 2]);
         if scramble_len > SCRAMBLE_LENGTH {
             let extra = scramble_len - SCRAMBLE_LENGTH;
@@ -184,7 +189,8 @@ pub enum AuthPacketError {
 /// `php_mysqlnd_auth_write` (payload only, without the 4-byte header).
 pub fn encode_auth_packet(a: &AuthPacket<'_>) -> Result<Vec<u8>, AuthPacketError> {
     // AUTH_WRITE_BUFFER_LEN in the C code: header + user + scramble + db + 1 + 4096
-    const BUFFER_LEN: usize = 4 + MAX_ALLOWED_USER_LEN + SCRAMBLE_LENGTH + MAX_ALLOWED_DB_LEN + 1 + 4096;
+    const BUFFER_LEN: usize =
+        4 + MAX_ALLOWED_USER_LEN + SCRAMBLE_LENGTH + MAX_ALLOWED_DB_LEN + 1 + 4096;
     let mut out = Vec::with_capacity(128);
     if !a.is_change_user {
         out.extend_from_slice(&a.client_flags.to_le_bytes());
@@ -270,7 +276,12 @@ pub enum Response {
     OldAuthSwitch,
 }
 
-fn parse_ok_body(r: &mut Reader<'_>, session_track: bool, lines: (u32, u32, u32)) -> Option<OkPacket> {
+#[allow(clippy::many_single_char_names)]
+fn parse_ok_body(
+    r: &mut Reader<'_>,
+    session_track: bool,
+    lines: (u32, u32, u32),
+) -> Option<OkPacket> {
     let mut ok = OkPacket::default();
     let FieldLen::Len(a) = r.field_len_ll() else {
         premature(lines.0);
@@ -306,8 +317,12 @@ fn parse_ok_body(r: &mut Reader<'_>, session_track: bool, lines: (u32, u32, u32)
                 let mut t = Reader::new(r.take(total).unwrap_or_default());
                 while t.remaining() > 0 {
                     let Some(kind) = t.u8() else { break };
-                    let FieldLen::Len(l) = t.field_len() else { break };
-                    let Some(data) = t.take(usize::try_from(l).unwrap_or(usize::MAX)) else { break };
+                    let FieldLen::Len(l) = t.field_len() else {
+                        break;
+                    };
+                    let Some(data) = t.take(usize::try_from(l).unwrap_or(usize::MAX)) else {
+                        break;
+                    };
                     ok.session_track.push((kind, data.to_vec()));
                 }
             }
@@ -359,7 +374,10 @@ fn parse_auth_switch(rest: &[u8], line: u32) -> Option<Response> {
         premature(line);
         return None;
     };
-    Some(Response::AuthSwitch(String::from_utf8_lossy(&rest[..nul]).into_owned(), rest[nul + 1..].to_vec()))
+    Some(Response::AuthSwitch(
+        String::from_utf8_lossy(&rest[..nul]).into_owned(),
+        rest[nul + 1..].to_vec(),
+    ))
 }
 
 fn parse_auth_response_inner(buf: &[u8], session_track: bool) -> Option<Response> {
@@ -377,7 +395,7 @@ fn parse_auth_response_inner(buf: &[u8], session_track: bool) -> Option<Response
         _ => {
             let mut r = Reader::new(&buf[1..]);
             let ok = parse_ok_body(&mut r, session_track, (777, 787, 787))?;
-            if !ok.message.is_empty() && buf.len() > 0 {
+            if !ok.message.is_empty() && !buf.is_empty() {
                 // checked length already clamps; mysqlnd warns when past the end
             }
             Some(Response::Ok(ok))
@@ -398,13 +416,14 @@ pub fn parse_change_user_response(buf: &[u8], server_caps: u32) -> Option<Option
     }
     match buf[0] {
         ERROR_MARKER => Some(Some(Response::Err(ServerError::parse(&buf[1..])))),
-        0xFE if buf.len() > 1 => match parse_auth_switch(&buf[1..], 2034) {
-            Some(r) => Some(Some(r)),
-            None => {
+        0xFE if buf.len() > 1 => {
+            if let Some(r) = parse_auth_switch(&buf[1..], 2034) {
+                Some(Some(r))
+            } else {
                 diag::warn("CHANGE_USER packet shorter than expected");
                 None
             }
-        },
+        }
         0xFE => Some(Some(Response::OldAuthSwitch)),
         _ => {
             let mut r = Reader::new(&buf[1..]);
@@ -473,7 +492,10 @@ pub fn parse_eof(buf: &[u8]) -> Option<Result<EofPacket, ServerError>> {
     if buf[0] == ERROR_MARKER {
         return Some(Err(ServerError::parse(&buf[1..])));
     }
-    let mut e = EofPacket { field_count: buf[0], ..EofPacket::default() };
+    let mut e = EofPacket {
+        field_count: buf[0],
+        ..EofPacket::default()
+    };
     if buf.len() > 1 {
         if buf.len() < 5 {
             return fail(1032);
@@ -498,6 +520,7 @@ pub enum RsetHeader {
 }
 
 /// `php_mysqlnd_rset_header_read`
+#[allow(clippy::many_single_char_names)]
 pub fn parse_rset_header(buf: &[u8], session_track: bool) -> Option<RsetHeader> {
     let fail = |line: Option<u32>| {
         if let Some(l) = line {
@@ -521,8 +544,12 @@ pub fn parse_rset_header(buf: &[u8], session_track: bool) -> Option<RsetHeader> 
         FieldLen::Null => Some(RsetHeader::LocalInfile(buf[1..].to_vec())),
         FieldLen::Len(0) => {
             let mut ok = OkPacket::default();
-            let FieldLen::Len(a) = r.field_len_ll() else { return fail(Some(1182)) };
-            let FieldLen::Len(i) = r.field_len_ll() else { return fail(Some(1188)) };
+            let FieldLen::Len(a) = r.field_len_ll() else {
+                return fail(Some(1182));
+            };
+            let FieldLen::Len(i) = r.field_len_ll() else {
+                return fail(Some(1188));
+            };
             ok.affected_rows = a;
             ok.last_insert_id = i;
             if r.remaining() < 4 {
@@ -543,13 +570,18 @@ pub fn parse_rset_header(buf: &[u8], session_track: bool) -> Option<RsetHeader> 
                     ok.message = r.take(n).unwrap_or_default().to_vec();
                 }
             }
-            if session_track && ok.server_status & crate::consts::SERVER_SESSION_STATE_CHANGED != 0 {
+            if session_track && ok.server_status & crate::consts::SERVER_SESSION_STATE_CHANGED != 0
+            {
                 if let FieldLen::Len(total) = r.field_len() {
                     let total = usize::try_from(total).unwrap_or(0).min(r.remaining());
                     let mut t = Reader::new(r.take(total).unwrap_or_default());
                     while let Some(kind) = t.u8() {
-                        let FieldLen::Len(l) = t.field_len() else { break };
-                        let Some(data) = t.take(usize::try_from(l).unwrap_or(usize::MAX)) else { break };
+                        let FieldLen::Len(l) = t.field_len() else {
+                            break;
+                        };
+                        let Some(data) = t.take(usize::try_from(l).unwrap_or(usize::MAX)) else {
+                            break;
+                        };
                         ok.session_track.push((kind, data.to_vec()));
                     }
                 }
@@ -620,7 +652,10 @@ pub fn parse_field(buf: &[u8]) -> Option<Result<Field, ServerError>> {
                 return None;
             }
         };
-        *s = r.take(usize::try_from(len).unwrap_or(0)).unwrap_or_default().to_vec();
+        *s = r
+            .take(usize::try_from(len).unwrap_or(0))
+            .unwrap_or_default()
+            .to_vec();
     }
     let [catalog, db, table, org_table, name, org_name] = strs;
     if r.peek() != Some(12) {
@@ -632,14 +667,23 @@ pub fn parse_field(buf: &[u8]) -> Option<Result<Field, ServerError>> {
         return None;
     }
     r.skip(1);
-    let mut f = Field { catalog, db, table, org_table, name, org_name, ..Field::default() };
+    let mut f = Field {
+        name,
+        org_name,
+        table,
+        org_table,
+        db,
+        catalog,
+        ..Field::default()
+    };
     f.charsetnr = r.u16().unwrap_or(0);
     f.length = r.u32().unwrap_or(0);
     f.type_ = r.u8().unwrap_or(0);
     f.flags = u32::from(r.u16().unwrap_or(0));
     f.decimals = r.u8().unwrap_or(0);
     r.skip(2);
-    if (f.type_ <= MYSQL_TYPE_INT24 && (f.type_ != MYSQL_TYPE_TIMESTAMP || f.length == 14 || f.length == 8))
+    if (f.type_ <= MYSQL_TYPE_INT24
+        && (f.type_ != MYSQL_TYPE_TIMESTAMP || f.length == 14 || f.length == 8))
         || f.type_ == MYSQL_TYPE_YEAR
     {
         f.flags |= NUM_FLAG;
@@ -668,7 +712,10 @@ pub fn classify_row(buf: Vec<u8>) -> RowPacket {
     match buf.first() {
         Some(&ERROR_MARKER) => RowPacket::Err(ServerError::parse(&buf[1..])),
         Some(&EODATA_MARKER) if buf.len() < 8 => {
-            let mut e = EofPacket { field_count: EODATA_MARKER, ..EofPacket::default() };
+            let mut e = EofPacket {
+                field_count: EODATA_MARKER,
+                ..EofPacket::default()
+            };
             if buf.len() >= 5 {
                 e.warning_count = u16::from_le_bytes([buf[1], buf[2]]);
                 e.server_status = u16::from_le_bytes([buf[3], buf[4]]);
@@ -710,7 +757,9 @@ pub fn parse_prepare_response(buf: &[u8]) -> Option<Result<PrepareResponse, Serv
     }
     let data_size = buf.len();
     if data_size != 9 && data_size < 12 {
-        diag::warn_plain(format!("Wrong COM_STMT_PREPARE response size. Received {data_size}"));
+        diag::warn_plain(format!(
+            "Wrong COM_STMT_PREPARE response size. Received {data_size}"
+        ));
         return None;
     }
     let mut r = Reader::new(&buf[1..]);
@@ -728,6 +777,7 @@ pub fn parse_prepare_response(buf: &[u8]) -> Option<Result<PrepareResponse, Serv
 }
 
 #[cfg(test)]
+#[allow(clippy::cast_possible_truncation, clippy::doc_markdown)]
 mod tests {
     use super::*;
     use crate::consts::*;
@@ -778,7 +828,10 @@ mod tests {
         let _ = diag::take();
         assert!(parse_greeting(b"\x0a5.5\0\x01\x02").is_none());
         let d = diag::take();
-        assert_eq!(d[0].message, "Premature end of data (mysqlnd_wireprotocol.c:439)");
+        assert_eq!(
+            d[0].message,
+            "Premature end of data (mysqlnd_wireprotocol.c:439)"
+        );
         assert_eq!(d[1].message, "GREET packet shorter than expected");
     }
 
@@ -804,7 +857,12 @@ mod tests {
         assert_eq!(&b[37..41], &[3, 1, 2, 3]);
         assert_eq!(&b[41..46], b"test\0");
         assert!(b.ends_with(b"\x0c_client_name\x07mysqlnd"));
-        let cu = AuthPacket { is_change_user: true, user: b"u", charset_no: 45, ..AuthPacket::default() };
+        let cu = AuthPacket {
+            is_change_user: true,
+            user: b"u",
+            charset_no: 45,
+            ..AuthPacket::default()
+        };
         assert_eq!(encode_auth_packet(&cu).unwrap(), b"u\0\0\0\x2d\0".to_vec());
     }
 
@@ -812,9 +870,20 @@ mod tests {
     fn ok_and_error_packets() {
         let ok = parse_ok(b"\x00\x01\x05\x02\x00\x01\x00\x05hello", false).unwrap();
         let Response::Ok(ok) = ok else { panic!() };
-        assert_eq!((ok.affected_rows, ok.last_insert_id, ok.server_status, ok.warning_count), (1, 5, 2, 1));
+        assert_eq!(
+            (
+                ok.affected_rows,
+                ok.last_insert_id,
+                ok.server_status,
+                ok.warning_count
+            ),
+            (1, 5, 2, 1)
+        );
         assert_eq!(ok.message, b"hello");
-        let Response::Err(e) = parse_ok(b"\xff\x28\x04#42000You have an error", false).unwrap() else { panic!() };
+        let Response::Err(e) = parse_ok(b"\xff\x28\x04#42000You have an error", false).unwrap()
+        else {
+            panic!()
+        };
         assert_eq!((e.errno, e.sqlstate.as_str()), (1064, "42000"));
     }
 
@@ -830,15 +899,25 @@ mod tests {
         track.extend_from_slice(state);
         p.push(track.len() as u8);
         p.extend_from_slice(&track);
-        let Response::Ok(ok) = parse_ok(&p, true).unwrap() else { panic!() };
+        let Response::Ok(ok) = parse_ok(&p, true).unwrap() else {
+            panic!()
+        };
         assert_eq!(ok.session_track, vec![(0u8, state.to_vec())]);
     }
 
     #[test]
     fn rset_headers() {
-        assert_eq!(parse_rset_header(b"\x03", false), Some(RsetHeader::ResultSet(3)));
-        assert_eq!(parse_rset_header(b"\xfb/tmp/x.csv", false), Some(RsetHeader::LocalInfile(b"/tmp/x.csv".to_vec())));
-        let Some(RsetHeader::Upsert(ok)) = parse_rset_header(b"\x00\x02\x00\x02\x00\x00\x00\x03abc", false) else {
+        assert_eq!(
+            parse_rset_header(b"\x03", false),
+            Some(RsetHeader::ResultSet(3))
+        );
+        assert_eq!(
+            parse_rset_header(b"\xfb/tmp/x.csv", false),
+            Some(RsetHeader::LocalInfile(b"/tmp/x.csv".to_vec()))
+        );
+        let Some(RsetHeader::Upsert(ok)) =
+            parse_rset_header(b"\x00\x02\x00\x02\x00\x00\x00\x03abc", false)
+        else {
             panic!()
         };
         assert_eq!(ok.affected_rows, 2);
@@ -867,22 +946,37 @@ mod tests {
         b.push(0);
         let _ = diag::take();
         assert!(parse_field(&b).is_none());
-        assert!(diag::take()[0].message.starts_with("Protocol error. Server sent default"));
+        assert!(diag::take()[0]
+            .message
+            .starts_with("Protocol error. Server sent default"));
     }
 
     #[test]
     fn prepare_response() {
         let b = [0u8, 7, 0, 0, 0, 2, 0, 1, 0, 0, 3, 0];
         let p = parse_prepare_response(&b).unwrap().unwrap();
-        assert_eq!((p.stmt_id, p.field_count, p.param_count, p.warning_count), (7, 2, 1, 3));
+        assert_eq!(
+            (p.stmt_id, p.field_count, p.param_count, p.warning_count),
+            (7, 2, 1, 3)
+        );
         let _ = diag::take();
         assert!(parse_prepare_response(&[0u8, 1, 0, 0, 0, 0, 0, 0, 0, 0]).is_none());
-        assert_eq!(diag::take()[0].message, "Wrong COM_STMT_PREPARE response size. Received 10");
+        assert_eq!(
+            diag::take()[0].message,
+            "Wrong COM_STMT_PREPARE response size. Received 10"
+        );
     }
 
     #[test]
     fn rows_and_eof() {
-        assert_eq!(classify_row(vec![0xfe, 0, 0, 2, 0]), RowPacket::Eof(EofPacket { field_count: 0xfe, warning_count: 0, server_status: 2 }));
+        assert_eq!(
+            classify_row(vec![0xfe, 0, 0, 2, 0]),
+            RowPacket::Eof(EofPacket {
+                field_count: 0xfe,
+                warning_count: 0,
+                server_status: 2
+            })
+        );
         assert!(matches!(classify_row(vec![1, b'a']), RowPacket::Row(_)));
         assert!(matches!(classify_row(vec![0xff, 1, 0]), RowPacket::Err(_)));
         let e = parse_eof(&[0xfe, 1, 0, 8, 0]).unwrap().unwrap();
@@ -895,13 +989,19 @@ mod tests {
         assert_eq!(parse_sha2_result(&[1, 4]), Some(Sha2Result::Code(4)));
         assert_eq!(
             parse_sha2_result(b"\xfemysql_native_password\0abc"),
-            Some(Sha2Result::Switch("mysql_native_password".into(), b"abc".to_vec()))
+            Some(Sha2Result::Switch(
+                "mysql_native_password".into(),
+                b"abc".to_vec()
+            ))
         );
     }
 
     #[test]
     fn change_user_old_auth() {
-        assert_eq!(parse_change_user_response(&[0xfe], CLIENT_SECURE_CONNECTION), Some(None));
+        assert_eq!(
+            parse_change_user_response(&[0xfe], CLIENT_SECURE_CONNECTION),
+            Some(None)
+        );
         assert!(matches!(
             parse_change_user_response(b"\xfecaching_sha2_password\0xyz", CLIENT_SECURE_CONNECTION),
             Some(Some(Response::AuthSwitch(_, _)))

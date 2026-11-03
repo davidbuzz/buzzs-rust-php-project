@@ -1,4 +1,4 @@
-//! A pure-Rust MySQL / MariaDB client with the semantics of PHP's
+//! A pure-Rust `MySQL` / `MariaDB` client with the semantics of PHP's
 //! `ext/mysqlnd` — the driver underneath `ext/mysqli`.
 //!
 //! * [`Connection`] — connect (TCP / Unix socket / TLS, auth plugins
