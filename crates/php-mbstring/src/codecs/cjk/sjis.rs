@@ -2,6 +2,9 @@
 //!
 //! Ref: `libmbfl/filters/mbfilter_cjk.c` ("SJIS variants").
 
+// The ports keep the C code's short variable names (c, c2, w, s, p, e...).
+#![allow(clippy::many_single_char_names)]
+
 use crate::codecs::bisec_srch2;
 use crate::codecs::cjk::common::{
     binary_search_paired_sorted_table, nflags, sjis_emoji_docomo2unicode, sjis_emoji_kddi2unicode,
@@ -793,7 +796,7 @@ fn decode_mobile_pair(c: u8, c2: u8, carrier: Carrier, buf: &mut [u32], out: &mu
     0
 }
 
-/// Shared body of the DoCoMo and KDDI decoders.
+/// Shared body of the `DoCoMo` and KDDI decoders.
 fn sjis_mobile_to_wchar(input: &mut &[u8], buf: &mut [u32], carrier: Carrier) -> usize {
     let s = *input;
     let e = s.len();
@@ -965,74 +968,88 @@ struct MobileEnc {
 /// the (ku*94)+ten value, if any. Ranges are tested in order, exactly like the
 /// C `else if` chain (so a hit in a range with no match yields `None`).
 fn uni2emoji(carrier: Carrier, w: u32) -> Option<u32> {
-    let (k2, v2, min2, max2, k3, v3, min3, max3, k5, v5, min5, max5): (
-        &[u16],
-        &[u16],
-        i32,
-        i32,
-        &[u16],
-        &[u16],
-        i32,
-        i32,
-        &[u16],
-        &[u16],
-        i32,
-        i32,
-    ) = match carrier {
-        Carrier::Docomo => (
-            &em::MB_TBL_UNI_DOCOMO2CODE2_KEY,
-            &em::MB_TBL_UNI_DOCOMO2CODE2_VALUE,
-            em::MB_TBL_UNI_DOCOMO2CODE2_MIN,
-            em::MB_TBL_UNI_DOCOMO2CODE2_MAX,
-            &em::MB_TBL_UNI_DOCOMO2CODE3_KEY,
-            &em::MB_TBL_UNI_DOCOMO2CODE3_VALUE,
-            em::MB_TBL_UNI_DOCOMO2CODE3_MIN,
-            em::MB_TBL_UNI_DOCOMO2CODE3_MAX,
-            &em::MB_TBL_UNI_DOCOMO2CODE5_KEY,
-            &em::MB_TBL_UNI_DOCOMO2CODE5_VAL,
-            em::MB_TBL_UNI_DOCOMO2CODE5_MIN,
-            em::MB_TBL_UNI_DOCOMO2CODE5_MAX,
-        ),
-        Carrier::Kddi => (
-            &em::MB_TBL_UNI_KDDI2CODE2_KEY,
-            &em::MB_TBL_UNI_KDDI2CODE2_VALUE,
-            em::MB_TBL_UNI_KDDI2CODE2_MIN,
-            em::MB_TBL_UNI_KDDI2CODE2_MAX,
-            &em::MB_TBL_UNI_KDDI2CODE3_KEY,
-            &em::MB_TBL_UNI_KDDI2CODE3_VALUE,
-            em::MB_TBL_UNI_KDDI2CODE3_MIN,
-            em::MB_TBL_UNI_KDDI2CODE3_MAX,
-            &em::MB_TBL_UNI_KDDI2CODE5_KEY,
-            &em::MB_TBL_UNI_KDDI2CODE5_VAL,
-            em::MB_TBL_UNI_KDDI2CODE5_MIN,
-            em::MB_TBL_UNI_KDDI2CODE5_MAX,
-        ),
-        Carrier::Softbank => (
-            &em::MB_TBL_UNI_SB2CODE2_KEY,
-            &em::MB_TBL_UNI_SB2CODE2_VALUE,
-            em::MB_TBL_UNI_SB2CODE2_MIN,
-            em::MB_TBL_UNI_SB2CODE2_MAX,
-            &em::MB_TBL_UNI_SB2CODE3_KEY,
-            &em::MB_TBL_UNI_SB2CODE3_VALUE,
-            em::MB_TBL_UNI_SB2CODE3_MIN,
-            em::MB_TBL_UNI_SB2CODE3_MAX,
-            &em::MB_TBL_UNI_SB2CODE5_KEY,
-            &em::MB_TBL_UNI_SB2CODE5_VAL,
-            em::MB_TBL_UNI_SB2CODE5_MIN,
-            em::MB_TBL_UNI_SB2CODE5_MAX,
-        ),
+    let t = match carrier {
+        Carrier::Docomo => &DOCOMO_TABLES,
+        Carrier::Kddi => &KDDI_TABLES,
+        Carrier::Softbank => &SB_TABLES,
     };
     let w = i64::from(w);
-    if w >= i64::from(min2) && w <= i64::from(max2) {
-        bisec_srch2(w, k2).map(|i| u32::from(v2[i]))
-    } else if w >= i64::from(min3) && w <= i64::from(max3) {
-        bisec_srch2(w - 0x10000, k3).map(|i| u32::from(v3[i]))
-    } else if w >= i64::from(min5) && w <= i64::from(max5) {
-        bisec_srch2(w - 0xF0000, k5).map(|i| u32::from(v5[i]))
-    } else {
-        None
+    for (k, (key, val, min, max)) in t.iter().enumerate() {
+        if w >= i64::from(*min) && w <= i64::from(*max) {
+            let off = [0, 0x10000, 0xF0000][k];
+            return bisec_srch2(w - off, key).map(|i| u32::from(val[i]));
+        }
     }
+    None
 }
+
+/// One `mb_tbl_uni_*2code*` table: (keys, values, min, max).
+type UniEmojiTable = (&'static [u16], &'static [u16], i32, i32);
+
+/// The BMP (`code2`), SMP (`code3`, keys minus 0x10000) and plane 15 PUA
+/// (`code5`, keys minus 0xF0000) tables of one carrier.
+static DOCOMO_TABLES: [UniEmojiTable; 3] = [
+    (
+        &em::MB_TBL_UNI_DOCOMO2CODE2_KEY,
+        &em::MB_TBL_UNI_DOCOMO2CODE2_VALUE,
+        em::MB_TBL_UNI_DOCOMO2CODE2_MIN,
+        em::MB_TBL_UNI_DOCOMO2CODE2_MAX,
+    ),
+    (
+        &em::MB_TBL_UNI_DOCOMO2CODE3_KEY,
+        &em::MB_TBL_UNI_DOCOMO2CODE3_VALUE,
+        em::MB_TBL_UNI_DOCOMO2CODE3_MIN,
+        em::MB_TBL_UNI_DOCOMO2CODE3_MAX,
+    ),
+    (
+        &em::MB_TBL_UNI_DOCOMO2CODE5_KEY,
+        &em::MB_TBL_UNI_DOCOMO2CODE5_VAL,
+        em::MB_TBL_UNI_DOCOMO2CODE5_MIN,
+        em::MB_TBL_UNI_DOCOMO2CODE5_MAX,
+    ),
+];
+
+static KDDI_TABLES: [UniEmojiTable; 3] = [
+    (
+        &em::MB_TBL_UNI_KDDI2CODE2_KEY,
+        &em::MB_TBL_UNI_KDDI2CODE2_VALUE,
+        em::MB_TBL_UNI_KDDI2CODE2_MIN,
+        em::MB_TBL_UNI_KDDI2CODE2_MAX,
+    ),
+    (
+        &em::MB_TBL_UNI_KDDI2CODE3_KEY,
+        &em::MB_TBL_UNI_KDDI2CODE3_VALUE,
+        em::MB_TBL_UNI_KDDI2CODE3_MIN,
+        em::MB_TBL_UNI_KDDI2CODE3_MAX,
+    ),
+    (
+        &em::MB_TBL_UNI_KDDI2CODE5_KEY,
+        &em::MB_TBL_UNI_KDDI2CODE5_VAL,
+        em::MB_TBL_UNI_KDDI2CODE5_MIN,
+        em::MB_TBL_UNI_KDDI2CODE5_MAX,
+    ),
+];
+
+static SB_TABLES: [UniEmojiTable; 3] = [
+    (
+        &em::MB_TBL_UNI_SB2CODE2_KEY,
+        &em::MB_TBL_UNI_SB2CODE2_VALUE,
+        em::MB_TBL_UNI_SB2CODE2_MIN,
+        em::MB_TBL_UNI_SB2CODE2_MAX,
+    ),
+    (
+        &em::MB_TBL_UNI_SB2CODE3_KEY,
+        &em::MB_TBL_UNI_SB2CODE3_VALUE,
+        em::MB_TBL_UNI_SB2CODE3_MIN,
+        em::MB_TBL_UNI_SB2CODE3_MAX,
+    ),
+    (
+        &em::MB_TBL_UNI_SB2CODE5_KEY,
+        &em::MB_TBL_UNI_SB2CODE5_VAL,
+        em::MB_TBL_UNI_SB2CODE5_MIN,
+        em::MB_TBL_UNI_SB2CODE5_MAX,
+    ),
+];
 
 /// Unicode -> (ku*94)+ten emoji lookup for one carrier (the `mb_tbl_uni_*`
 /// tables): used by the mobile Shift-JIS, ISO-2022-JP-KDDI and mobile UTF-8
@@ -1399,10 +1416,400 @@ pub fn wchar_to_sjiswin(input: &[u32], buf: &mut ConvertBuf, _end: bool) {
 mod tests {
     use super::*;
     use crate::codecs::cjk::testutil as tu;
+    use std::collections::{BTreeMap, HashMap};
+
+    type Valid = BTreeMap<Vec<u8>, Vec<u32>>;
+    type FromUni = HashMap<Vec<u32>, Vec<u8>>;
+
+    /// `readConversionTable`-like loader: (bytes -> cps, cps -> bytes with the
+    /// last entry winning); `None` if the data file is missing.
+    #[allow(clippy::cast_possible_truncation)]
+    fn load(name: &str) -> Option<(Valid, FromUni, HashMap<Vec<u32>, usize>)> {
+        let text = tu::data_file(name)?;
+        let mut valid = Valid::new();
+        let mut from = FromUni::new();
+        let mut count = HashMap::new();
+        for toks in tu::mapping_lines(&text) {
+            if toks.len() < 2 || toks[1] == [0xFFFD] {
+                continue;
+            }
+            let bytes = tu::code_bytes(toks[0][0]);
+            let cps: Vec<u32> = toks[1].iter().map(|&c| c as u32).collect();
+            valid.insert(bytes.clone(), cps.clone());
+            *count.entry(cps.clone()).or_insert(0) += 1;
+            from.insert(cps, bytes);
+        }
+        Some((valid, from, count))
+    }
+
+    fn check_decode_all(enc: &'static Encoding, valid: &Valid) {
+        for (bytes, cps) in valid {
+            assert_eq!(
+                &tu::decode(enc, bytes),
+                cps,
+                "{} decoding {}",
+                enc.name,
+                tu::hex(bytes)
+            );
+        }
+        // Everything concatenated, decoded with the smallest buffer
+        let all: Vec<u8> = valid.keys().flatten().copied().collect();
+        let expected: Vec<u32> = valid.values().flatten().copied().collect();
+        assert_eq!(tu::decode_bufsize(enc, &all, 5), expected, "{}", enc.name);
+    }
+
+    fn check_encode(enc: &'static Encoding, cps: &[u32], bytes: &[u8]) {
+        let (out, errors) = tu::encode(enc, cps);
+        assert_eq!(
+            (tu::hex(&out), errors),
+            (tu::hex(bytes), 0),
+            "{} encoding {cps:X?}",
+            enc.name
+        );
+    }
+
+    /// Every 2-byte sequence starting with one of `leads` which is not a valid
+    /// character decodes to exactly one error marker (followed by the next
+    /// character), and a lone lead byte is an error.
+    fn check_invalid_pairs(enc: &'static Encoding, valid: &Valid, leads: &[u8]) {
+        for &lead in leads {
+            assert_eq!(
+                tu::decode(enc, &[lead]),
+                [BAD_INPUT],
+                "{} lone {lead:02X}",
+                enc.name
+            );
+            for trail in 0..=255u8 {
+                let pair = [lead, trail];
+                if valid.contains_key(&pair[..]) {
+                    continue;
+                }
+                assert_eq!(
+                    tu::decode(enc, &[lead, trail, b'A']),
+                    [BAD_INPUT, 0x41],
+                    "{} {lead:02X}{trail:02X}",
+                    enc.name
+                );
+            }
+        }
+    }
+
+    fn controls(valid: &mut Valid, from: &mut FromUni) {
+        for c in (0..0x20).chain([0x7F]) {
+            valid.insert(vec![c], vec![u32::from(c)]);
+            from.insert(vec![u32::from(c)], vec![c]);
+        }
+    }
+
+    #[test]
+    fn sjis_mapping_table() {
+        let Some((mut valid, mut from, _)) = load("SHIFTJIS.txt") else {
+            return;
+        };
+        controls(&mut valid, &mut from);
+        for (b, u) in [(&b"\x5C"[..], 0x5C), (b"\x7E", 0x7E), (b"\x81\x5F", 0xFF3C)] {
+            valid.insert(b.to_vec(), vec![u]);
+            from.insert(vec![u], b.to_vec());
+        }
+        for (u, b) in [
+            (0x203E, &b"\x81\x50"[..]),
+            (0xAF, b"\x81\x50"),
+            (0xA5, b"\x81\x8F"),
+            (0xFFE2, b"\x81\xCA"),
+            (0xFFE1, b"\x81\x92"),
+            (0xFFE0, b"\x81\x91"),
+            (0xFF5E, b"\x81\x60"),
+            (0xFF0D, b"\x81\x7C"),
+            (0x2225, b"\x81\x61"),
+        ] {
+            from.insert(vec![u], b.to_vec());
+        }
+        check_decode_all(&ENC_SJIS, &valid);
+        for (cps, bytes) in &from {
+            check_encode(&ENC_SJIS, cps, bytes);
+        }
+        let leads: Vec<u8> = (0x81..=0x9F).chain(0xE0..=0xEF).collect();
+        check_invalid_pairs(&ENC_SJIS, &valid, &leads);
+        // Unmappable code points
+        assert_eq!(
+            tu::encode(&ENC_SJIS, &[0x41, 0x1F600, 0x42]),
+            (b"A?B".to_vec(), 1)
+        );
+    }
+
+    fn cp932_valid() -> Option<(Valid, FromUni, HashMap<Vec<u32>, usize>)> {
+        let (mut valid, mut from, count) = load("CP932.txt")?;
+        let mut cp = 0xE000;
+        for i in 0xF0..=0xF9u8 {
+            for j in 0x40..=0xFCu8 {
+                if j != 0x7F {
+                    valid.insert(vec![i, j], vec![cp]);
+                    from.insert(vec![cp], vec![i, j]);
+                    cp += 1;
+                }
+            }
+        }
+        Some((valid, from, count))
+    }
+
+    #[test]
+    fn cp932_and_sjiswin_mapping_table() {
+        let Some((valid, from, count)) = cp932_valid() else {
+            return;
+        };
+        for (enc, yen, overline) in [
+            (&ENC_CP932, &b"\x5C"[..], &b"\x7E"[..]),
+            (&ENC_SJISWIN, b"\x81\x8F", b"\x81\x50"),
+        ] {
+            check_decode_all(enc, &valid);
+            // Code points with a unique mapping encode to it; ambiguous ones
+            // (NEC/IBM duplicates) at least round-trip
+            for (cps, bytes) in &from {
+                if matches!(cps[0], 0xA5 | 0x203E) {
+                    continue;
+                }
+                if count.get(cps).copied().unwrap_or(1) == 1 {
+                    check_encode(enc, cps, bytes);
+                } else {
+                    let (out, errors) = tu::encode(enc, cps);
+                    assert_eq!(errors, 0);
+                    assert_eq!(&tu::decode(enc, &out), cps);
+                }
+            }
+            for (u, b) in [
+                (0xA2, &b"\x81\x91"[..]),
+                (0xA3, b"\x81\x92"),
+                (0x301C, b"\x81\x60"),
+                (0x2212, b"\x81\x7C"),
+                (0x2016, b"\x81\x61"),
+                (0xAC, b"\x81\xCA"),
+                (0xAF, b"\x81\x50"),
+                (0xA5, yen),
+                (0x203E, overline),
+                // Duplicates: prefer 0x81, then 0x87, then 0xFA..
+                (0x2252, b"\x81\xE0"),
+                (0x2235, b"\x81\xE6"),
+                (0x2170, b"\xFA\x40"),
+                (0xFFE2, b"\x81\xCA"),
+            ] {
+                check_encode(enc, &[u], b);
+            }
+            let leads: Vec<u8> = (0x81..=0x9F).chain(0xE0..=0xFC).collect();
+            check_invalid_pairs(enc, &valid, &leads);
+        }
+        // SJIS-win reports errors through the CP932 encoder
+        assert_eq!(tu::encode(&ENC_SJISWIN, &[0x1F600]), (b"?".to_vec(), 1));
+    }
+
+    #[test]
+    fn sjismac_mapping_table() {
+        let Some((mut valid, mut from, _)) = load("MacJapanese-SJIS.txt") else {
+            return;
+        };
+        controls(&mut valid, &mut from);
+        for (u, b) in [
+            (0x2015, &b"\x81\x5C"[..]),
+            (0x203E, b"\x81\x50"),
+            (0xAF, b"\x81\x50"),
+            (0xFF5E, b"\x81\x60"),
+        ] {
+            from.insert(vec![u], b.to_vec());
+        }
+        check_decode_all(&ENC_SJIS_MAC, &valid);
+        for (cps, bytes) in &from {
+            check_encode(&ENC_SJIS_MAC, cps, bytes);
+            // Also when every code point arrives in a separate call (except
+            // for the C quirk tested in `sjismac_split_state_quirk`)
+            if cps[..] != [0xF860, 0x30, 0x2E] {
+                assert_eq!(&tu::encode_split(&ENC_SJIS_MAC, cps), bytes, "{cps:X?}");
+            }
+        }
+        let leads: Vec<u8> = (0x81..=0x9F).chain(0xE0..=0xED).collect();
+        check_invalid_pairs(&ENC_SJIS_MAC, &valid, &leads);
+
+        // From sjismac_encoding.phpt
+        let e = &ENC_SJIS_MAC;
+        check_encode(e, &[0x2026, 0x6BAA], b"\x81\x63\x9F\x6F");
+        assert_eq!(tu::encode(e, &[0x2010, 0xF87A]), (b"\x81\x5D?".to_vec(), 1));
+        assert_eq!(tu::encode(e, &[0x2010, 0x20DD]), (b"\x81\x5D?".to_vec(), 1));
+        assert_eq!(tu::encode(e, &[0x2010, 0xF87F]), (b"\x81\x5D?".to_vec(), 1));
+        assert_eq!(tu::encode(e, &[0x21E6, 0xF87E]), (b"\x86\xD0?".to_vec(), 1));
+        assert_eq!(tu::encode(e, &[0xF860, 0x30, 0x1234]), (b"???".to_vec(), 3));
+        assert_eq!(
+            tu::encode(e, &[0xF861, 0x46, 0x41, 0x1234]),
+            (b"????".to_vec(), 4)
+        );
+    }
+
+    #[test]
+    fn sjismac_split_state_quirk() {
+        // Row 0 of code_tbl_m gives a saved state with a zero top byte, so
+        // (as in C) the hint is restarted instead of resumed.
+        let cps = [0xF860, 0x30, 0x2E];
+        assert_eq!(tu::encode(&ENC_SJIS_MAC, &cps).0, b"\x85\x91");
+        assert_eq!(tu::encode_split(&ENC_SJIS_MAC, &cps), b"?.");
+        // Other rows resume properly
+        let cps = [0xF862, 0x58, 0x49, 0x49, 0x49];
+        assert_eq!(
+            tu::encode_split(&ENC_SJIS_MAC, &cps),
+            tu::encode(&ENC_SJIS_MAC, &cps).0
+        );
+    }
+
+    /// `EmojiSources.txt`: (unicode sequence, docomo, kddi, softbank codes).
+    #[allow(clippy::type_complexity)]
+    fn emoji_sources() -> Option<Vec<(Vec<u32>, [Option<u16>; 3])>> {
+        let text = tu::data_file("EmojiSources.txt")?;
+        let mut out = Vec::new();
+        for line in text.lines() {
+            if line.starts_with('#') {
+                continue;
+            }
+            let f: Vec<&str> = line.trim_end().split(';').collect();
+            if f.len() < 4 {
+                continue;
+            }
+            let cps: Vec<u32> = f[0]
+                .split(' ')
+                .filter_map(|h| u32::from_str_radix(h, 16).ok())
+                .collect();
+            let code = |s: &str| u16::from_str_radix(s, 16).ok();
+            out.push((cps, [code(f[1]), code(f[2]), code(f[3])]));
+        }
+        Some(out)
+    }
+
+    #[test]
+    fn mobile_mapping_tables() {
+        let Some((valid, _, _)) = cp932_valid() else {
+            return;
+        };
+        let Some(emoji) = emoji_sources() else {
+            return;
+        };
+        let encs = [&ENC_SJIS_DOCOMO, &ENC_SJIS_KDDI, &ENC_SJIS_SB];
+        let mut carrier_valid: Vec<Valid> = vec![Valid::new(); 3];
+        for (k, enc) in encs.iter().enumerate() {
+            // CP932 characters outside the emoji/user-defined area
+            for (bytes, cps) in &valid {
+                // (ESC starts an emoji escape sequence in SoftBank)
+                if bytes[0] < 0xF0 && !(k == 2 && bytes[..] == [0x1B]) {
+                    carrier_valid[k].insert(bytes.clone(), cps.clone());
+                    assert_eq!(
+                        &tu::decode(enc, bytes),
+                        cps,
+                        "{} {}",
+                        enc.name,
+                        tu::hex(bytes)
+                    );
+                }
+            }
+            for (cps, codes) in &emoji {
+                if let Some(code) = codes[k] {
+                    let bytes = code.to_be_bytes();
+                    carrier_valid[k].insert(bytes.to_vec(), cps.clone());
+                    assert_eq!(&tu::decode(enc, &bytes), cps, "{} {code:04X}", enc.name);
+                    // Encoding the Unicode sequence gives back an emoji which
+                    // decodes to the same sequence
+                    let (out, errors) = tu::encode(enc, cps);
+                    assert_eq!(errors, 0, "{} {cps:X?}", enc.name);
+                    assert_eq!(&tu::decode(enc, &out), cps, "{} {cps:X?}", enc.name);
+                    assert_eq!(tu::encode_split(enc, cps), out, "{} {cps:X?}", enc.name);
+                }
+            }
+            // Smallest buffers give the same result
+            let all: Vec<u8> = carrier_valid[k].keys().flatten().copied().collect();
+            assert_eq!(tu::decode_bufsize(enc, &all, 5), tu::decode(enc, &all));
+        }
+        // Lone lead bytes and invalid trail bytes
+        for enc in encs {
+            assert_eq!(tu::decode(enc, b"\x81"), [BAD_INPUT]);
+            assert_eq!(tu::decode(enc, b"\x81\x20A"), [BAD_INPUT, 0x41]);
+            assert_eq!(tu::decode(enc, b"\x80A"), [BAD_INPUT, 0x41]);
+            assert_eq!(tu::decode(enc, b"\xFD\x40"), [BAD_INPUT, 0x40]);
+        }
+    }
+
+    #[test]
+    fn mobile_keypad_flags_and_state() {
+        let cases: &[(&Encoding, &[u32], &[u8])] = &[
+            (&ENC_SJIS_DOCOMO, &[0x31, 0x20E3], b"\xF9\x87"),
+            (&ENC_SJIS_DOCOMO, &[0x23, 0x20E3], b"\xF9\x85"),
+            (&ENC_SJIS_DOCOMO, &[0x23], b"#"),
+            (&ENC_SJIS_KDDI, &[0x30, 0x20E3], b"\xF7\xC9"),
+            (&ENC_SJIS_KDDI, &[0x1F1EF, 0x1F1F5], b"\xF6\xA5"),
+            (
+                &ENC_SJIS_SB,
+                &[0x31, 0x20E3, 0x23, 0x20E3],
+                b"\xF7\xBC\xF7\xB0",
+            ),
+            (&ENC_SJIS_SB, &[0x1F1EF, 0x1F1F5], b"\xFB\xAB"),
+        ];
+        for &(enc, cps, bytes) in cases {
+            check_encode(enc, cps, bytes);
+            assert_eq!(tu::encode_split(enc, cps), bytes);
+        }
+        // A lone Regional Indicator is an error; a pending one is flushed at
+        // the end of input
+        assert_eq!(tu::encode(&ENC_SJIS_KDDI, &[0x1F1EF]), (b"?".to_vec(), 1));
+        assert_eq!(
+            tu::encode(&ENC_SJIS_SB, &[0x1F1EF, 0x41]),
+            (b"?A".to_vec(), 1)
+        );
+        assert_eq!(tu::encode_split(&ENC_SJIS_SB, &[0x1F1EF]), b"?");
+        // SoftBank escape sequences, also resumed across calls via `state`
+        let mut state = 0;
+        let mut buf = [0u32; 8];
+        let mut input: &[u8] = b"\x1B$E\"";
+        let n = sjis_sb_to_wchar(&mut input, &mut buf, &mut state);
+        assert_eq!(state, u32::from(b'E'));
+        let first = buf[..n].to_vec();
+        let mut input: &[u8] = b"\"\x0FA";
+        let n = sjis_sb_to_wchar(&mut input, &mut buf, &mut state);
+        assert_eq!(state, 0);
+        assert_eq!(first.len(), 1);
+        assert_eq!(&buf[..n], &[first[0], 0x41]);
+    }
+
+    /// Decoding with the minimal buffer size gives the same result as with
+    /// 128-code-point buffers, for every decoder input in the oracle fixture.
+    #[test]
+    fn small_buffers_match() {
+        let text = std::fs::read_to_string(tu::fixture_path("sjis_oracle.tsv")).unwrap_or_default();
+        for line in text.lines() {
+            let f: Vec<&str> = line.split('\t').collect();
+            if f[0] != "conv" || f[2] != "UTF-8" {
+                continue;
+            }
+            let enc = tu::enc(f[1]);
+            let input: Vec<u8> = (0..f[4].len())
+                .step_by(2)
+                .map(|i| u8::from_str_radix(&f[4][i..i + 2], 16).unwrap_or(0))
+                .collect();
+            for size in [5, 6, 8] {
+                assert_eq!(
+                    tu::decode_bufsize(enc, &input, size),
+                    tu::decode(enc, &input),
+                    "{} {} bufsize {size}",
+                    f[1],
+                    f[4]
+                );
+            }
+        }
+    }
 
     #[test]
     fn oracle_fixture() {
         let n = tu::replay_oracle("sjis_oracle.tsv");
         assert!(n > 1000);
+    }
+
+    #[test]
+    fn mblen_tables() {
+        assert_eq!(ENC_SJIS.mblen_table.map(|t| t[0x81]), Some(2));
+        assert_eq!(ENC_SJIS.mblen_table.map(|t| t[0xF0]), Some(1));
+        assert_eq!(ENC_SJIS_MAC.mblen_table.map(|t| t[0xEE]), Some(1));
+        assert_eq!(ENC_SJIS_DOCOMO.mblen_table.map(|t| t[0xFC]), Some(2));
+        assert_eq!(ENC_CP932.mblen_table.map(|t| t[0xFF]), Some(2));
     }
 }

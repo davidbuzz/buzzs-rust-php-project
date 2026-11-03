@@ -6,6 +6,9 @@
 //!
 //! Ref: `libmbfl/filters/mbfilter_utf8.c`.
 
+// The ports keep the C code's short variable names (c, c2, w, s, p, e...).
+#![allow(clippy::many_single_char_names)]
+
 use crate::codecs::cjk::common::{
     nflags, sjis_emoji_docomo2unicode, sjis_emoji_kddi2unicode, sjis_emoji_sb2unicode,
     NFLAGS_CODE_KDDI, NFLAGS_CODE_SB, NFLAGS_S,
@@ -325,13 +328,11 @@ fn wchar_to_mobile_utf8(input: &[u32], buf: &mut ConvertBuf, p: &MobileUtf8) {
                     idx -= 1;
                 }
             }
-            match found {
-                Some(code) => s = code,
-                None => {
-                    illegal_output(w, p.this, buf);
-                    continue;
-                }
-            }
+            let Some(code) = found else {
+                illegal_output(w, p.this, buf);
+                continue;
+            };
+            s = code;
         } else if w == 0xA9 {
             // Copyright sign
             s = p.copyright;
@@ -414,7 +415,185 @@ pub fn wchar_to_utf8_sb(input: &[u32], buf: &mut ConvertBuf, _end: bool) {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use crate::codecs::cjk::testutil as tu;
+
+    /// Parse a `UTF-8-*.txt` table: (code point, Some(UTF-8 bytes) or None
+    /// for `BAD`).
+    #[allow(clippy::cast_possible_truncation)]
+    fn table(name: &str) -> Option<Vec<(u32, Option<Vec<u8>>)>> {
+        let text = tu::data_file(name)?;
+        let mut out = Vec::new();
+        for line in text.lines() {
+            let mut f = line.split('\t');
+            let (Some(a), Some(b)) = (f.next(), f.next()) else {
+                continue;
+            };
+            let Ok(cp) = u32::from_str_radix(a.trim_start_matches("0x"), 16) else {
+                continue;
+            };
+            if b.starts_with("BAD") {
+                out.push((cp, None));
+            } else if let Ok(v) = u64::from_str_radix(b.trim().trim_start_matches("0x"), 16) {
+                out.push((cp, Some(tu::code_bytes(v))));
+            }
+        }
+        Some(out)
+    }
+
+    #[test]
+    fn mapping_tables() {
+        for (enc, file) in [
+            (&ENC_UTF8_DOCOMO, "UTF-8-DOCOMO.txt"),
+            (&ENC_UTF8_KDDI_A, "UTF-8-KDDI-A.txt"),
+            (&ENC_UTF8_KDDI_B, "UTF-8-KDDI-B.txt"),
+            (&ENC_UTF8_SB, "UTF-8-SOFTBANK.txt"),
+        ] {
+            let Some(tbl) = table(file) else {
+                return;
+            };
+            let mut mapped = std::collections::HashSet::new();
+            for (cp, bytes) in &tbl {
+                mapped.insert(*cp);
+                match bytes {
+                    Some(bytes) => {
+                        assert_eq!(
+                            tu::encode(enc, &[*cp]),
+                            (bytes.clone(), 0),
+                            "{} U+{cp:X}",
+                            enc.name
+                        );
+                        // U+FEE26..U+FEE28 and U+FEE2C are not reversible in DoCoMo
+                        let irreversible = enc.no == EncodingNo::Utf8Docomo
+                            && matches!(
+                                &bytes[..],
+                                b"\xEE\x9B\x80"
+                                    | b"\xEE\x9B\x81"
+                                    | b"\xEE\x9B\x82"
+                                    | b"\xEE\x9B\x86"
+                            );
+                        if !irreversible {
+                            assert_eq!(
+                                tu::decode(enc, bytes),
+                                [*cp],
+                                "{} {}",
+                                enc.name,
+                                tu::hex(bytes)
+                            );
+                        }
+                    }
+                    None => {
+                        assert_eq!(
+                            tu::encode(enc, &[*cp]),
+                            (b"?".to_vec(), 1),
+                            "{} U+{cp:X}",
+                            enc.name
+                        );
+                    }
+                }
+            }
+            // Other code points encode exactly as in UTF-8
+            let mut x = 12345u32;
+            for _ in 0..2000 {
+                x = x.wrapping_mul(1_103_515_245).wrapping_add(12345);
+                let cp = (x >> 8) % 0x11_0000;
+                if mapped.contains(&cp) || (0xD800..0xE000).contains(&cp) {
+                    continue;
+                }
+                let mut expected = Vec::new();
+                push_utf8(&mut expected, cp);
+                // (keypad starters are only special when followed by U+20E3)
+                assert_eq!(tu::encode(enc, &[cp]).0, expected, "{} U+{cp:X}", enc.name);
+            }
+            assert_eq!(tu::encode(enc, &[0x11_0000]), (b"?".to_vec(), 1));
+        }
+    }
+
+    #[test]
+    fn bad_utf8_like_phpt() {
+        let cases: &[(&[u8], &[u32])] = &[
+            (b"\xF4\x90\x80\x80", &[BAD_INPUT; 4]),
+            (b"\xF7\x80\x80\x80", &[BAD_INPUT; 4]),
+            (b"\xED\xA0\x80", &[BAD_INPUT; 3]),
+            (b"\xDF", &[BAD_INPUT]),
+            (b"\xEF\xBF", &[BAD_INPUT]),
+            (b"\xF0\xBF\xBF", &[BAD_INPUT]),
+            (b"\xF1\x96\x80", &[BAD_INPUT]),
+            (b"\xE0\x9F", &[BAD_INPUT, BAD_INPUT]),
+            (b"\xED\xA6", &[BAD_INPUT, BAD_INPUT]),
+            (b"\xDFA", &[BAD_INPUT, 0x41]),
+            (b"\xF0\xBF\xBFA", &[BAD_INPUT, 0x41]),
+            (b"\xEF\xBF\xDF\xBF", &[BAD_INPUT, 0x7FF]),
+            (b"A\x80", &[0x41, BAD_INPUT]),
+            (b"\xC1\xBF", &[BAD_INPUT; 2]),
+            (b"\xE0\x9F\xBF", &[BAD_INPUT; 3]),
+            (b"\xF0\x8F\xBF\xBF", &[BAD_INPUT; 4]),
+        ];
+        for enc in [
+            &ENC_UTF8_DOCOMO,
+            &ENC_UTF8_KDDI_A,
+            &ENC_UTF8_KDDI_B,
+            &ENC_UTF8_SB,
+        ] {
+            for &(input, expected) in cases {
+                assert_eq!(
+                    tu::decode(enc, input),
+                    expected,
+                    "{} {}",
+                    enc.name,
+                    tu::hex(input)
+                );
+                assert_eq!(tu::decode_bufsize(enc, input, 5), expected);
+            }
+        }
+    }
+
+    #[test]
+    fn keypad_and_flags() {
+        // DoCoMo has no flags; KDDI/SoftBank do
+        assert_eq!(
+            tu::encode(&ENC_UTF8_DOCOMO, &[0x31, 0x20E3]).0,
+            "\u{E6E2}".as_bytes()
+        );
+        assert_eq!(
+            tu::encode(&ENC_UTF8_KDDI_A, &[0x1F1EF, 0x1F1F5]).0,
+            "\u{E4CC}".as_bytes()
+        );
+        assert_eq!(
+            tu::encode(&ENC_UTF8_SB, &[0x1F1EF, 0x1F1F5]).0,
+            "\u{E50B}".as_bytes()
+        );
+        assert_eq!(
+            tu::encode(&ENC_UTF8_SB, &[0x1F1EF, 0x41]),
+            (b"?A".to_vec(), 1)
+        );
+        assert_eq!(
+            tu::decode(&ENC_UTF8_SB, "\u{E50B}".as_bytes()),
+            [0x1F1EF, 0x1F1F5]
+        );
+        assert_eq!(
+            tu::decode(&ENC_UTF8_DOCOMO, "\u{E6E2}".as_bytes()),
+            [0x31, 0x20E3]
+        );
+    }
+
+    #[test]
+    fn small_buffers_match() {
+        let text =
+            std::fs::read_to_string(tu::fixture_path("utf8mobile_oracle.tsv")).unwrap_or_default();
+        for line in text.lines() {
+            let f: Vec<&str> = line.split('\t').collect();
+            if f[0] != "conv" || f[2] != "UTF-8" {
+                continue;
+            }
+            let enc = tu::enc(f[1]);
+            let input: Vec<u8> = (0..f[4].len())
+                .step_by(2)
+                .map(|i| u8::from_str_radix(&f[4][i..i + 2], 16).unwrap_or(0))
+                .collect();
+            assert_eq!(tu::decode_bufsize(enc, &input, 5), tu::decode(enc, &input));
+        }
+    }
 
     #[test]
     fn oracle_fixture() {
