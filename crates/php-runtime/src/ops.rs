@@ -643,32 +643,71 @@ fn compare_double_to_string(
 }
 
 thread_local! {
-    /// Arrays/objects currently being compared (recursion protection).
-    static COMPARING: RefCell<Vec<usize>> = const { RefCell::new(Vec::new()) };
+    /// Arrays/objects currently protected, per guard kind.
+    static PROTECTED: RefCell<Vec<(GuardKind, usize)>> = const { RefCell::new(Vec::new()) };
 }
 
-struct RecursionGuard(usize);
+/// Which recursion protection a [`RecursionGuard`] uses. PHP keeps separate
+/// flags per purpose (`GC_PROTECT_RECURSION` for arrays and comparisons,
+/// object guards for debug/export/json), so nesting e.g. a comparison inside
+/// `json_encode` does not report false recursion.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum GuardKind {
+    /// Array/object comparison (`zend_hash_compare`, `zend_std_compare_objects`).
+    Compare,
+    /// `var_dump` / `print_r` / `debug_zval_dump`.
+    Debug,
+    /// `var_export`.
+    Export,
+    /// `json_encode`.
+    Json,
+    /// `serialize`.
+    Serialize,
+}
+
+/// RAII recursion protection keyed by an identity address (see
+/// [`crate::ZArray::addr`], [`Obj::addr`]); dropping the guard unprotects.
+#[derive(Debug)]
+pub struct RecursionGuard {
+    kind: GuardKind,
+    addr: usize,
+}
 
 impl RecursionGuard {
-    fn enter(addr: usize) -> RtResult<Self> {
-        COMPARING.with(|c| {
+    /// Protects `addr`, or returns `None` if it is already protected for
+    /// `kind` (i.e. recursion was detected).
+    #[must_use]
+    pub fn try_enter(kind: GuardKind, addr: usize) -> Option<Self> {
+        PROTECTED.with(|c| {
             let mut c = c.borrow_mut();
-            if c.contains(&addr) {
-                return Err(RuntimeError::Error(
-                    "Nesting level too deep - recursive dependency?".to_string(),
-                ));
+            if c.contains(&(kind, addr)) {
+                return None;
             }
-            c.push(addr);
-            Ok(RecursionGuard(addr))
+            c.push((kind, addr));
+            Some(RecursionGuard { kind, addr })
+        })
+    }
+
+    /// Whether `addr` is currently protected for `kind`.
+    #[must_use]
+    pub fn is_protected(kind: GuardKind, addr: usize) -> bool {
+        PROTECTED.with(|c| c.borrow().contains(&(kind, addr)))
+    }
+
+    /// Comparison variant: fails with "Nesting level too deep - recursive
+    /// dependency?" on recursion.
+    fn enter(addr: usize) -> RtResult<Self> {
+        Self::try_enter(GuardKind::Compare, addr).ok_or_else(|| {
+            RuntimeError::Error("Nesting level too deep - recursive dependency?".to_string())
         })
     }
 }
 
 impl Drop for RecursionGuard {
     fn drop(&mut self) {
-        COMPARING.with(|c| {
+        PROTECTED.with(|c| {
             let mut c = c.borrow_mut();
-            if let Some(p) = c.iter().rposition(|&a| a == self.0) {
+            if let Some(p) = c.iter().rposition(|e| *e == (self.kind, self.addr)) {
                 c.remove(p);
             }
         });
@@ -1359,6 +1398,17 @@ mod tests {
         let r = v.make_ref();
         increment(&mut v, &mut c).unwrap();
         assert_eq!(r.get().as_int(), Some(2));
+    }
+
+    #[test]
+    fn recursion_guard_kinds_are_independent() {
+        let g = RecursionGuard::try_enter(GuardKind::Json, 42).unwrap();
+        assert!(RecursionGuard::try_enter(GuardKind::Json, 42).is_none());
+        assert!(RecursionGuard::is_protected(GuardKind::Json, 42));
+        let other = RecursionGuard::try_enter(GuardKind::Debug, 42);
+        assert!(other.is_some());
+        drop(g);
+        assert!(!RecursionGuard::is_protected(GuardKind::Json, 42));
     }
 
     #[test]

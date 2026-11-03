@@ -38,6 +38,7 @@ pub mod error;
 pub mod float;
 pub mod numeric;
 pub mod ops;
+pub mod plain;
 pub mod serialize;
 pub mod sort;
 pub mod string;
@@ -48,5 +49,7 @@ pub use error::{
     BinaryOp, CastTarget, CollectingContext, Diagnostic, ErrorLevel, ObjectDump, ObjectKind,
     PropertyPurpose, PropertySlot, RtResult, RuntimeContext, RuntimeError,
 };
+pub use ops::{GuardKind, RecursionGuard};
+pub use plain::PlainObject;
 pub use string::ZStr;
 pub use value::{Obj, PhpObject, PhpRef, Resource, Value};

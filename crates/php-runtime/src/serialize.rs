@@ -260,6 +260,19 @@ impl Parser<'_> {
         Some(end)
     }
 
+    /// `parse_iv2(p, &q)`: optional sign and digits (possibly none) starting
+    /// at `i`; returns the value and the end position.
+    fn parse_iv2(&self, i: usize) -> (i64, usize) {
+        let mut j = i;
+        if matches!(self.at(j), b'+' | b'-') {
+            j += 1;
+        }
+        while j < self.data.len() && self.at(j).is_ascii_digit() {
+            j += 1;
+        }
+        (self.parse_iv(i, j).0, j)
+    }
+
     /// `parse_iv2` with saturation on overflow.
     fn parse_iv(&self, i: usize, end: usize) -> (i64, bool) {
         let text = &self.data[i..end];
@@ -631,9 +644,7 @@ impl Parser<'_> {
         self.pos = end;
         if custom {
             // C:len:"Class":datalen:{data}
-            let dl_start = self.pos + 1;
-            let dl_end = self.iv_end(dl_start).ok_or(Fail)?;
-            let (datalen, _) = self.parse_iv(dl_start, dl_end);
+            let (datalen, dl_end) = self.parse_iv2(end + 2);
             self.pos = dl_end;
             if self.data.len() - self.pos < 2 || self.at(self.pos) != b':' {
                 return Err(Fail);
@@ -663,16 +674,19 @@ impl Parser<'_> {
             return Ok(self.push_node(Node::Custom { class, data }, slot));
         }
         // O:len:"Class":n:{props}
-        let n_start = self.pos + 1;
-        let n_end = self.iv_end(n_start).ok_or(Fail)?;
-        if self.at(n_end) != b':' || self.at(n_end + 1) != b'{' {
-            return Err(Fail);
-        }
-        let (elements, _) = self.parse_iv(n_start, n_end);
-        self.pos = n_end + 2;
+        let (elements, n_end) = self.parse_iv2(end + 2);
         if elements < 0 {
             return Err(Fail);
         }
+        self.pos = n_end;
+        if self.at(n_end) != b':' {
+            return Err(Fail);
+        }
+        if self.at(n_end + 1) != b'{' {
+            self.pos = n_end + 1;
+            return Err(Fail);
+        }
+        self.pos = n_end + 2;
         let idx = self.push_node(
             Node::Object {
                 class: class.clone(),

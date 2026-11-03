@@ -6,6 +6,7 @@
 //! `Err(RuntimeError)`. Message texts match PHP byte for byte.
 
 use crate::array::ZArray;
+use crate::plain::PlainObject;
 use crate::value::{Obj, Value};
 use crate::ZStr;
 use std::fmt;
@@ -440,6 +441,19 @@ pub trait RuntimeContext {
         )))
     }
 
+    /// Writes a property on an object (`zend_update_property` /
+    /// `write_property`), in the order PHP would, e.g. while `json_decode` or
+    /// `unserialize` fill an object. `name` is the (possibly mangled)
+    /// property name. The default fails.
+    fn property_write(&mut self, obj: &Obj, name: &ZStr, value: Value) -> RtResult<()> {
+        let _ = value;
+        Err(RuntimeError::Error(format!(
+            "Cannot write property {}::${} without a VM",
+            obj.class_name(),
+            name
+        )))
+    }
+
     /// Creates a `stdClass` object whose properties are `props` (the
     /// `(object)` cast). The table already uses property-table (string) keys.
     fn create_std_object(&mut self, props: ZArray) -> RtResult<Value> {
@@ -452,6 +466,10 @@ pub trait RuntimeContext {
 
 /// A [`RuntimeContext`] that records diagnostics in a vector. Useful for tests
 /// and for constant evaluation.
+///
+/// Objects are supported through [`crate::plain::PlainObject`]: `(object)`
+/// casts, `unserialize()` (`O:` and `C:` records), property writes,
+/// property tables and dumps all work on plain objects; enums do not.
 #[derive(Debug, Default)]
 pub struct CollectingContext {
     /// All diagnostics emitted so far.
@@ -499,5 +517,91 @@ impl RuntimeContext for CollectingContext {
 
     fn serialize_precision(&self) -> i64 {
         self.serialize_precision.unwrap_or(-1)
+    }
+
+    fn object_properties(
+        &mut self,
+        obj: &Obj,
+        _purpose: PropertyPurpose,
+    ) -> RtResult<Option<ZArray>> {
+        Ok(obj.downcast_ref::<PlainObject>().map(PlainObject::props))
+    }
+
+    fn object_dump(&mut self, obj: &Obj, purpose: PropertyPurpose) -> RtResult<ObjectDump> {
+        let props = self.object_properties(obj, purpose)?;
+        let kind = if obj.class_name().eq_ignore_ascii_case(b"stdClass") {
+            ObjectKind::StdClass
+        } else {
+            ObjectKind::Regular { lazy_prefix: "" }
+        };
+        Ok(ObjectDump {
+            kind,
+            properties: props.map(|t| {
+                t.iter()
+                    .map(|(k, v)| (k.clone(), PropertySlot::Value(v.clone())))
+                    .collect()
+            }),
+        })
+    }
+
+    fn serialize_object(&mut self, obj: &Obj) -> RtResult<crate::serialize::SerializedObject> {
+        if let Some(data) = obj
+            .downcast_ref::<PlainObject>()
+            .and_then(PlainObject::custom_data)
+        {
+            return Ok(crate::serialize::SerializedObject::Custom {
+                class: obj.class_name(),
+                data,
+            });
+        }
+        let props = self
+            .object_properties(obj, PropertyPurpose::Serialize)?
+            .unwrap_or_default();
+        Ok(crate::serialize::SerializedObject::Object {
+            class: obj.class_name(),
+            props,
+        })
+    }
+
+    fn unserialize_object_create(&mut self, class: &ZStr) -> RtResult<Value> {
+        Ok(Value::Object(PlainObject::create(
+            class.clone(),
+            ZArray::new(),
+        )))
+    }
+
+    fn unserialize_object_finish(&mut self, obj: &Value, props: ZArray) -> RtResult<()> {
+        if let Value::Object(o) = obj {
+            for (k, v) in props.iter() {
+                self.property_write(o, &k.to_zstr(), v.clone())?;
+            }
+        }
+        Ok(())
+    }
+
+    fn unserialize_custom(&mut self, class: &ZStr, data: &[u8]) -> RtResult<Value> {
+        let o = PlainObject::create(class.clone(), ZArray::new());
+        if let Some(p) = o.downcast_ref::<PlainObject>() {
+            p.set_custom_data(Some(data.to_vec()));
+        }
+        Ok(Value::Object(o))
+    }
+
+    fn property_write(&mut self, obj: &Obj, name: &ZStr, value: Value) -> RtResult<()> {
+        match obj.downcast_ref::<PlainObject>() {
+            Some(p) => {
+                p.write(name, value);
+                Ok(())
+            }
+            None => Err(RuntimeError::Error(format!(
+                "Cannot write property {}::${}",
+                obj.class_name(),
+                name
+            ))),
+        }
+    }
+
+    fn create_std_object(&mut self, props: ZArray) -> RtResult<Value> {
+        Ok(Value::Object(PlainObject::create("stdClass", props)))
     }
 }
