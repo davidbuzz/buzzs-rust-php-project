@@ -287,6 +287,7 @@ fn register_class(vm: &mut Vm, c: &'static ClassDef) {
 /// interfaces first. Returns the names of the classes that were already
 /// registered (by the VM or another extension).
 pub fn register_classes(vm: &mut Vm) -> Vec<&'static str> {
+    crate::hooks::register_gc();
     let mut skipped = Vec::new();
     let mut pending: Vec<&'static ClassDef> = Vec::new();
     for c in php_spl::classes::class_table() {
@@ -461,8 +462,9 @@ fn method_handler(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         && a.at(0).is_null()
         && !is_direct_call(vm, "offsetGet")
     {
-        // `$fa[]` in a write context: the VM falls back to `offsetGet(null)`
-        // because its `read_dimension` hook has no append form.
+        // `$b = &$fa[]` / `f($fa[])`: the VM calls the `read_dimension`
+        // hook only for intermediate appends and falls back to
+        // `offsetGet(null)` for a final one.
         return Err(vm.throw("Error", "[] operator not supported for SplFixedArray"));
     }
     let mut args = collect_args(a, t);
@@ -551,44 +553,11 @@ fn pending_method_name(vm: &Vm) -> Option<ZStr> {
     }
 }
 
-/// The fetch type of the dimension access being executed (`BP_VAR_*`),
-/// recovered from the current instruction: the VM's `read_dimension`
-/// hook does not say whether it serves a read or a write fetch.
-#[must_use]
-pub fn current_dim_kind(vm: &Vm) -> php_spl::DimKind {
-    use php_spl::DimKind;
-    let Some(f) = vm
-        .frames
-        .iter()
-        .rev()
-        .find(|f| f.kind != FrameKind::Builtin)
-    else {
-        return DimKind::Read;
-    };
-    match f.ip.checked_sub(1).and_then(|i| f.code.ops.get(i)) {
-        Some(Op::Assign { .. } | Op::AssignRef { .. } | Op::MakeRef { .. }) => DimKind::Write,
-        Some(Op::AssignOp { .. } | Op::IncDec { .. }) => DimKind::ReadWrite,
-        Some(Op::Unset { .. }) => DimKind::Unset,
-        _ => DimKind::Read,
-    }
-}
-
 /// Whether `method` is being called directly by user code (`$o->m()`), as
 /// opposed to by the engine (`ArrayAccess` dispatch, `count()`,
 /// `foreach`) or through a constructor call.
 fn is_direct_call(vm: &Vm, method: &str) -> bool {
     pending_method_name(vm).is_some_and(|n| n.eq_ignore_ascii_case(method.as_bytes()))
-}
-
-/// Whether the instruction being executed is `$a = &$b`.
-#[must_use]
-pub fn current_op_is_assign_ref(vm: &Vm) -> bool {
-    vm.frames
-        .iter()
-        .rev()
-        .find(|f| f.kind != FrameKind::Builtin)
-        .and_then(|f| f.ip.checked_sub(1).and_then(|i| f.code.ops.get(i)))
-        .is_some_and(|op| matches!(op, Op::AssignRef { .. }))
 }
 
 /// Forwards an unknown method call to the inner (current sub-) iterator.
@@ -598,7 +567,7 @@ fn forward_call(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let Some(this) = a.this.clone() else {
         return Ok(Value::Null);
     };
-    let name = vm.magic_call_name().or_else(|| pending_method_name(vm));
+    let name = vm.magic_call_name();
     let call_args: Vec<Value> = a.values.iter().map(Value::deref).collect();
     let target = {
         let mut host = VmHost::new(vm);

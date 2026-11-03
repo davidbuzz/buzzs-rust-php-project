@@ -7,7 +7,7 @@ use php_runtime::{ArrayKey, HashTable, Obj, PropertyPurpose, Value, ZArray, ZStr
 use php_spl::handlers as h;
 use php_spl::DimKind;
 use php_vm::class::Class;
-use php_vm::ext::{ClassHooks, NativeIterator, VmResult};
+use php_vm::ext::{ClassHooks, DimensionCtx, NativeIterator, PropCtx, VmResult};
 use php_vm::Vm;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -54,6 +54,30 @@ fn stateful_base(cls: &Rc<Class>) -> Option<&'static str> {
     base
 }
 
+/// `get_gc` of the stateful SPL classes (`spl_array_get_gc`,
+/// `spl_object_storage_get_gc`, `spl_fixedarray_get_gc`, ...): reports the
+/// values the state owns to the cycle collector. State shared with a live
+/// native iterator is not reported (the iterator co-owns it).
+fn gc_traverse(st: &Rc<php_spl::SplObject>, v: &mut php_vm::gc::GcVisitor<'_>) {
+    if Rc::strong_count(st) != 1 {
+        return;
+    }
+    let r = st.with(|s| match s {
+        php_spl::SplState::Array(a) => v.value(&a.array),
+        php_spl::SplState::Storage(s) => v.table(&s.storage),
+        php_spl::SplState::FixedArray(f) => v.values(&f.elements),
+        _ => {}
+    });
+    if r.is_err() {
+        v.opaque();
+    }
+}
+
+/// Registers [`gc_traverse`] for the SPL state type.
+pub fn register_gc() {
+    php_vm::gc::register_traverse_with::<Rc<php_spl::SplObject>>(gc_traverse);
+}
+
 /// `create_object`: attaches the state of the nearest stateful SPL
 /// ancestor.
 #[allow(clippy::unnecessary_wraps)] // signature fixed by `ClassHooks::create`
@@ -80,14 +104,41 @@ fn properties_for(vm: &mut Vm, o: &Obj, purpose: PropertyPurpose) -> VmResult<Op
         // The VM calls `__debugInfo()` (native or a user override).
         return Ok(None);
     }
-    with_host(vm, |host| {
+    let table = with_host(vm, |host| {
         if purpose == PropertyPurpose::Debug {
             if let Some(t) = h::debug_info(host, o)? {
                 return Ok(Some(t));
             }
         }
         h::properties_for(host, o, purpose)
+    })?;
+    // `(array)` builds a symbol table: integer-like property names become
+    // integer keys (and replace elements with the same index).
+    Ok(match (purpose, table) {
+        (PropertyPurpose::ArrayCast, Some(t)) => Some(canonical_keys(&t)),
+        (_, t) => t,
     })
+}
+
+/// Rebuilds a table with integer-like string keys turned into integers.
+fn canonical_keys(t: &ZArray) -> ZArray {
+    if !t
+        .keys()
+        .any(|k| matches!(k, ArrayKey::Str(s) if handle_numeric_str(s.as_bytes()).is_some()))
+    {
+        return t.clone();
+    }
+    let mut out = HashTable::new();
+    for (k, v) in t.iter() {
+        let key = match k {
+            ArrayKey::Str(s) => {
+                handle_numeric_str(s.as_bytes()).map_or_else(|| k.clone(), ArrayKey::Int)
+            }
+            ArrayKey::Int(_) => k.clone(),
+        };
+        out.insert(key, v.clone());
+    }
+    ZArray::from_table(out)
 }
 
 fn compare(vm: &mut Vm, a: &Value, b: &Value) -> VmResult<Option<i32>> {
@@ -111,9 +162,11 @@ fn read_property(vm: &mut Vm, o: &Obj, name: &ZStr) -> VmResult<Option<Value>> {
     if spl_state_of(o).is_none() {
         return Ok(None);
     }
-    let kind = match crate::dispatch::current_dim_kind(vm) {
-        DimKind::Read => DimKind::Read,
-        _ => DimKind::Write,
+    let kind = match vm.property_context() {
+        PropCtx::Read | PropCtx::Isset | PropCtx::Exists => DimKind::Read,
+        PropCtx::Write | PropCtx::Ref => DimKind::Write,
+        PropCtx::ReadWrite => DimKind::ReadWrite,
+        PropCtx::Unset => DimKind::Unset,
     };
     with_host(vm, |host| h::read_property(host, o, name, kind))
 }
@@ -129,9 +182,13 @@ fn has_property(vm: &mut Vm, o: &Obj, name: &ZStr, check_empty: bool) -> VmResul
     if spl_state_of(o).is_none() {
         return Ok(None);
     }
-    with_host(vm, |host| {
-        h::has_property(host, o, name, i32::from(check_empty))
-    })
+    // 0 = isset, 1 = empty (truthy), 2 = exists (`property_exists()`).
+    let check = if vm.property_context() == PropCtx::Exists {
+        2
+    } else {
+        i32::from(check_empty)
+    };
+    with_host(vm, |host| h::has_property(host, o, name, check))
 }
 
 fn unset_property(vm: &mut Vm, o: &Obj, name: &ZStr) -> VmResult<bool> {
@@ -145,8 +202,16 @@ fn read_dimension(vm: &mut Vm, o: &Obj, k: &Value) -> VmResult<Option<Value>> {
     if spl_state_of(o).is_none() {
         return Ok(None);
     }
-    let kind = crate::dispatch::current_dim_kind(vm);
-    let v = with_host(vm, |host| h::read_dimension(host, o, Some(k), kind))?;
+    // The VM checks `has_dimension` before an `Is` read itself, so that
+    // read is a plain one here (no second `offsetExists()` call).
+    let (kind, offset) = match vm.dimension_context() {
+        DimensionCtx::Read | DimensionCtx::Is => (DimKind::Read, Some(k)),
+        DimensionCtx::Write => (DimKind::Write, Some(k)),
+        DimensionCtx::ReadWrite => (DimKind::ReadWrite, Some(k)),
+        DimensionCtx::Unset => (DimKind::Unset, Some(k)),
+        DimensionCtx::Append => (DimKind::Write, None),
+    };
+    let v = with_host(vm, |host| h::read_dimension(host, o, offset, kind))?;
     if let Some(v) = &v {
         if kind != DimKind::Read && !matches!(v, Value::Reference(_) | Value::Object(_)) {
             // `zend_fetch_dimension_address` on an object in a write
@@ -167,10 +232,9 @@ fn write_dimension(vm: &mut Vm, o: &Obj, k: Option<&Value>, v: &Value) -> VmResu
     if spl_state_of(o).is_none() {
         return Ok(false);
     }
-    if matches!(v, Value::Reference(_))
-        && crate::dispatch::current_dim_kind(vm) == DimKind::Write
-        && crate::dispatch::current_op_is_assign_ref(vm)
-    {
+    // The VM hands a reference to `write_dimension` only for
+    // `$obj[$k] = &$v`.
+    if matches!(v, Value::Reference(_)) {
         // `$obj[$k] = &$v`: FETCH_DIM_W yields a temporary, then
         // ASSIGN_REF fails.
         vm.raise(

@@ -14,7 +14,8 @@ pub mod hooks;
 pub mod host;
 pub mod iter;
 
-use php_vm::ext::{Extension, ModuleBuilder};
+use php_vm::ext::{Extension, InfoItem, ModuleBuilder};
+use php_vm::Vm;
 
 /// The `SPL` extension.
 #[derive(Debug, Clone, Copy, Default)]
@@ -29,5 +30,36 @@ impl Extension for Spl {
         iter::register_internal_iterator(m.vm());
         dispatch::register_classes(m.vm());
         funcs::register(m);
+        m.info(info);
     }
+}
+
+/// `PHP_MINFO_FUNCTION(spl)`: the interface and class lists in
+/// `spl_classes()` order.
+fn info(_vm: &mut Vm) -> Vec<InfoItem> {
+    let php_runtime::Value::Array(all) = php_spl::functions::spl_classes() else {
+        return Vec::new();
+    };
+    let (mut interfaces, mut classes) = (Vec::new(), Vec::new());
+    for name in all.values() {
+        let php_runtime::Value::Str(n) = name else {
+            continue;
+        };
+        let n = n.to_string_lossy();
+        let is_interface = php_spl::classes::find_class(&n)
+            .is_some_and(|c| c.kind == php_spl::classes::ClassKind::Interface);
+        if is_interface {
+            interfaces.push(n);
+        } else {
+            classes.push(n);
+        }
+    }
+    let row = |k: &str, v: String| InfoItem::Row(vec![k.to_string(), v]);
+    vec![
+        InfoItem::TableStart,
+        row("SPL support", "enabled".to_string()),
+        row("Interfaces", interfaces.join(", ")),
+        row("Classes", classes.join(", ")),
+        InfoItem::TableEnd,
+    ]
 }
