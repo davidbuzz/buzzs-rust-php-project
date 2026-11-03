@@ -1,0 +1,287 @@
+bin2hex: 3030303166656666
+hex2bin: 0001feff
+hex2bin_bad: EXC SodiumException: sodium_hex2bin(): Argument #1 ($string) must be a valid hexadecimal string
+hex2bin_odd: EXC SodiumException: sodium_hex2bin(): Argument #1 ($string) must be a valid hexadecimal string
+hex2bin_ignore_nul: abcd
+bin2base64_1: 2b2f2f2b5647686c4948463161574e7249474a796233647549475a76654342716457317763794276646d56794948526f5a53427359587035494752765a773d3d
+bin2base64_short_1: 2b2f383d
+base642bin_1: fbff54686520717569636b2062726f776e20666f78206a756d7073206f76657220746865206c617a7920646f67
+bin2base64_3: 2b2f2f2b5647686c4948463161574e7249474a796233647549475a76654342716457317763794276646d56794948526f5a53427359587035494752765a77
+bin2base64_short_3: 2b2f38
+base642bin_3: fbff54686520717569636b2062726f776e20666f78206a756d7073206f76657220746865206c617a7920646f67
+bin2base64_5: 2d5f5f2d5647686c4948463161574e7249474a796233647549475a76654342716457317763794276646d56794948526f5a53427359587035494752765a773d3d
+bin2base64_short_5: 2d5f383d
+base642bin_5: fbff54686520717569636b2062726f776e20666f78206a756d7073206f76657220746865206c617a7920646f67
+bin2base64_7: 2d5f5f2d5647686c4948463161574e7249474a796233647549475a76654342716457317763794276646d56794948526f5a53427359587035494752765a77
+bin2base64_short_7: 2d5f38
+base642bin_7: fbff54686520717569636b2062726f776e20666f78206a756d7073206f76657220746865206c617a7920646f67
+bin2base64_badvariant: EXC SodiumException: sodium_bin2base64(): Argument #2 ($id) must be a valid base64 variant identifier
+base642bin_badvariant: EXC SodiumException: sodium_base642bin(): Argument #2 ($id) must be a valid base64 variant identifier
+base642bin_bad: EXC SodiumException: sodium_base642bin(): Argument #1 ($string) must be a valid base64 string
+base642bin_ignore: 666f6f626172
+base642bin_nopad_given_pad: EXC SodiumException: sodium_base642bin(): Argument #1 ($string) must be a valid base64 string
+base642bin_pad_missing: EXC SodiumException: sodium_base642bin(): Argument #1 ($string) must be a valid base64 string
+pad_xyz_16: 78797a80000000000000000000000000
+pad_empty_1: 80
+pad_5_5: 61626364658000000000
+pad_7_3: 616263646566678000
+pad_bad: EXC SodiumException: sodium_pad(): Argument #2 ($block_size) must be greater than 0
+unpad: 61626364656667
+unpad_short: EXC SodiumException: sodium_unpad(): Argument #1 ($string) must be at least as long as the block size
+unpad_bad: EXC SodiumException: invalid padding
+unpad_neg: EXC SodiumException: sodium_unpad(): Argument #2 ($block_size) must be greater than 0
+compare: [int(1),int(-1),int(0)]
+compare_len: EXC SodiumException: sodium_compare(): Argument #1 ($string1) and argument #2 ($string_2) must have the same length
+memcmp: [int(0),int(-1)]
+increment: 00ff00
+add: 010002
+add_len: EXC SodiumException: sodium_add(): Argument #1 ($string1) and argument #2 ($string_2) must have the same length
+memzero: null
+aead_chacha20poly1305_enc: de6f277775210a55873bb3a1eee87c388dee2226d7cfbb4bf5306bd7cedf4cc5d338977af63f3eeac1bce1b1b3fdc21bff75d31cca153ea26fb190
+aead_chacha20poly1305_enc_empty: 567cac66dbbd656ba6a0864fe978171a
+aead_chacha20poly1305_dec: 54686520717569636b2062726f776e20666f78206a756d7073206f76657220746865206c617a7920646f67
+aead_chacha20poly1305_dec_badad: false
+aead_chacha20poly1305_dec_short: false
+aead_chacha20poly1305_badnonce: EXC SodiumException: sodium_crypto_aead_chacha20poly1305_encrypt(): Argument #3 ($nonce) must be SODIUM_CRYPTO_AEAD_CHACHA20POLY1305_NPUBBYTES bytes long
+aead_chacha20poly1305_badkey: EXC SodiumException: sodium_crypto_aead_chacha20poly1305_encrypt(): Argument #4 ($key) must be SODIUM_CRYPTO_AEAD_CHACHA20POLY1305_KEYBYTES bytes long
+aead_chacha20poly1305_dec_badnonce: EXC SodiumException: sodium_crypto_aead_chacha20poly1305_decrypt(): Argument #3 ($nonce) must be SODIUM_CRYPTO_AEAD_CHACHA20POLY1305_NPUBBYTES bytes long
+aead_chacha20poly1305_dec_badkey: EXC SodiumException: sodium_crypto_aead_chacha20poly1305_decrypt(): Argument #4 ($key) must be SODIUM_CRYPTO_AEAD_CHACHA20POLY1305_KEYBYTES bytes long
+aead_chacha20poly1305_keygen_len: int(32)
+aead_chacha20poly1305_ietf_enc: b1eef239544defeb3d34891f8ef36e1176df69b745124cb532e6be242a251d173eaf777794b4fef9ef7449ab0796eb7136e45892d3b3fa16502298
+aead_chacha20poly1305_ietf_enc_empty: 8f31c9f5c284baf61991a332eca66b99
+aead_chacha20poly1305_ietf_dec: 54686520717569636b2062726f776e20666f78206a756d7073206f76657220746865206c617a7920646f67
+aead_chacha20poly1305_ietf_dec_badad: false
+aead_chacha20poly1305_ietf_dec_short: false
+aead_chacha20poly1305_ietf_badnonce: EXC SodiumException: sodium_crypto_aead_chacha20poly1305_ietf_encrypt(): Argument #3 ($nonce) must be SODIUM_CRYPTO_AEAD_CHACHA20POLY1305_IETF_NPUBBYTES bytes long
+aead_chacha20poly1305_ietf_badkey: EXC SodiumException: sodium_crypto_aead_chacha20poly1305_ietf_encrypt(): Argument #4 ($key) must be SODIUM_CRYPTO_AEAD_CHACHA20POLY1305_IETF_KEYBYTES bytes long
+aead_chacha20poly1305_ietf_dec_badnonce: EXC SodiumException: sodium_crypto_aead_chacha20poly1305_ietf_decrypt(): Argument #3 ($nonce) must be SODIUM_CRYPTO_AEAD_CHACHA20POLY1305_IETF_NPUBBYTES bytes long
+aead_chacha20poly1305_ietf_dec_badkey: EXC SodiumException: sodium_crypto_aead_chacha20poly1305_ietf_decrypt(): Argument #4 ($key) must be SODIUM_CRYPTO_AEAD_CHACHA20POLY1305_IETF_KEYBYTES bytes long
+aead_chacha20poly1305_ietf_keygen_len: int(32)
+aead_xchacha20poly1305_ietf_enc: ffad3d5ee0d804071f62f0856c03e88a8d9a3fdde40fcfb8e1cd688454c8b72a2ebc60a10d5cdd06f26b4d58f5f93c8f5efee9cc6c91dc04b31928
+aead_xchacha20poly1305_ietf_enc_empty: 1d19295eb218882cd0dd35017adb54f2
+aead_xchacha20poly1305_ietf_dec: 54686520717569636b2062726f776e20666f78206a756d7073206f76657220746865206c617a7920646f67
+aead_xchacha20poly1305_ietf_dec_badad: false
+aead_xchacha20poly1305_ietf_dec_short: false
+aead_xchacha20poly1305_ietf_badnonce: EXC SodiumException: sodium_crypto_aead_xchacha20poly1305_ietf_encrypt(): Argument #3 ($nonce) must be SODIUM_CRYPTO_AEAD_XCHACHA20POLY1305_IETF_NPUBBYTES bytes long
+aead_xchacha20poly1305_ietf_badkey: EXC SodiumException: sodium_crypto_aead_xchacha20poly1305_ietf_encrypt(): Argument #4 ($key) must be SODIUM_CRYPTO_AEAD_XCHACHA20POLY1305_IETF_KEYBYTES bytes long
+aead_xchacha20poly1305_ietf_dec_badnonce: EXC SodiumException: sodium_crypto_aead_xchacha20poly1305_ietf_decrypt(): Argument #3 ($nonce) must be SODIUM_CRYPTO_AEAD_XCHACHA20POLY1305_IETF_NPUBBYTES bytes long
+aead_xchacha20poly1305_ietf_dec_badkey: EXC SodiumException: sodium_crypto_aead_xchacha20poly1305_ietf_decrypt(): Argument #4 ($key) must be SODIUM_CRYPTO_AEAD_XCHACHA20POLY1305_IETF_KEYBYTES bytes long
+aead_xchacha20poly1305_ietf_keygen_len: int(32)
+aead_aes256gcm_enc: 8bf9fff2a0e3e8ad043fc5db90bcee2615394842333560e8e13bd88b8b01b0e2d95da2ccd430644ae32596abb8812ee9546041fec0ecd00a7889af
+aead_aes256gcm_enc_empty: 9c7eea2a0b1ca179133a0f95149db797
+aead_aes256gcm_dec: 54686520717569636b2062726f776e20666f78206a756d7073206f76657220746865206c617a7920646f67
+aead_aes256gcm_dec_badad: false
+aead_aes256gcm_dec_short: false
+aead_aes256gcm_badnonce: EXC SodiumException: sodium_crypto_aead_aes256gcm_encrypt(): Argument #3 ($nonce) must be SODIUM_CRYPTO_AEAD_AES256GCM_NPUBBYTES bytes long
+aead_aes256gcm_badkey: EXC SodiumException: sodium_crypto_aead_aes256gcm_encrypt(): Argument #4 ($key) must be SODIUM_CRYPTO_AEAD_AES256GCM_KEYBYTES bytes long
+aead_aes256gcm_dec_badnonce: EXC SodiumException: sodium_crypto_aead_aes256gcm_decrypt(): Argument #3 ($nonce) must be SODIUM_CRYPTO_AEAD_AES256GCM_NPUBBYTES bytes long
+aead_aes256gcm_dec_badkey: EXC SodiumException: sodium_crypto_aead_aes256gcm_decrypt(): Argument #4 ($key) must be SODIUM_CRYPTO_AEAD_AES256GCM_KEYBYTES bytes long
+aead_aes256gcm_keygen_len: int(32)
+aes256gcm_available: true
+auth: 0623d51f882717efa360aa2217d0b554b57ea018eb518178b23045941a6ae244
+auth_badkey: EXC SodiumException: sodium_crypto_auth(): Argument #2 ($key) must be SODIUM_CRYPTO_AUTH_KEYBYTES bytes long
+auth_verify: [true,false]
+auth_verify_badmac: EXC SodiumException: sodium_crypto_auth_verify(): Argument #1 ($mac) must be SODIUM_CRYPTO_AUTH_BYTES bytes long
+auth_verify_badkey: EXC SodiumException: sodium_crypto_auth_verify(): Argument #3 ($key) must be SODIUM_CRYPTO_AUTH_KEYBYTES bytes long
+shorthash: e46f1fdc05612752
+shorthash_badkey: EXC SodiumException: sodium_crypto_shorthash(): Argument #2 ($key) must be SODIUM_CRYPTO_SHORTHASH_KEYBYTES bytes long
+generichash: 01718cec35cd3d796dd00020e0bfecb473ad23457d063b75eff29c0ffa2e58a9
+generichash_key: a44a52374dc66f94c213e25b2ee5b055c8aae43f17d975726c2452f5c2516504db62be4ccf58525f5dfc6819001a7c9a74400cc53897744e72407642f71e2bee
+generichash_key16_len16: fb80e606c7e3d993cbf7117a60f630a0
+generichash_badlen: EXC SodiumException: unsupported output length
+generichash_badlen2: EXC SodiumException: unsupported output length
+generichash_badkey: EXC SodiumException: unsupported key length
+generichash_stream: [cb5a00cd6327d26715eaf12e6ac34bac655684bf60b0c1002c21561a37991128f85c4e05337a3cd5b87ef8dd4848bdc8,cb5a00cd6327d26715eaf12e6ac34bac655684bf60b0c1002c21561a37991128f85c4e05337a3cd5b87ef8dd4848bdc8,null,null]
+generichash_init_len: int(384)
+generichash_update_badstate: EXC SodiumException: incorrect state length
+generichash_final_badstate: EXC SodiumException: incorrect state length
+generichash_final_badlen: EXC SodiumException: unsupported output length
+generichash_init_badlen: EXC SodiumException: unsupported output length
+kdf: 6ec3b369c73ab448f349a2f9be0f9eaaefbd1edd878f9d93bc2b9c781bc9770d
+kdf_64_max_id: bd9b029e1989e0ad01bd70917af0a88e0b7fbeb11083848fbb14a2be4a66793ac0a696326e3b138871af21dfae2f8978b2130577d207376472a8bd7b710df423
+kdf_short: EXC SodiumException: sodium_crypto_kdf_derive_from_key(): Argument #1 ($subkey_length) must be greater than or equal to SODIUM_CRYPTO_KDF_BYTES_MIN
+kdf_long: EXC SodiumException: sodium_crypto_kdf_derive_from_key(): Argument #1 ($subkey_length) must be less than or equal to SODIUM_CRYPTO_KDF_BYTES_MAX
+kdf_negid: EXC SodiumException: sodium_crypto_kdf_derive_from_key(): Argument #2 ($subkey_id) must be greater than or equal to 0
+kdf_badctx: EXC SodiumException: sodium_crypto_kdf_derive_from_key(): Argument #3 ($context) must be SODIUM_CRYPTO_KDF_CONTEXTBYTES bytes long
+kdf_badkey: EXC SodiumException: sodium_crypto_kdf_derive_from_key(): Argument #4 ($key) must be SODIUM_CRYPTO_KDF_BYTES_MIN bytes long
+box_seed_keypair: 3d94eea49c580aef816935762be049559d6d1440dede12e6a125f1841fff8e6f4701d08488451f545a409fb58ae3e58581ca40ac3f7f114698cd71deac73ca01
+box_seed_keypair_bad: EXC SodiumException: sodium_crypto_box_seed_keypair(): Argument #1 ($seed) must be SODIUM_CRYPTO_BOX_SEEDBYTES bytes long
+box_publickey_from_secretkey: 4701d08488451f545a409fb58ae3e58581ca40ac3f7f114698cd71deac73ca01
+scalarmult_base: 8f40c5adb68f25624ae5b214ea767a6ec94d829d3d7b5e1ad1ba6f3e2138285f
+scalarmult_base_bad: EXC SodiumException: sodium_crypto_scalarmult_base(): Argument #1 ($secret_key) must be SODIUM_CRYPTO_BOX_SECRETKEYBYTES bytes long
+box_publickey_from_secretkey_bad: EXC SodiumException: sodium_crypto_box_publickey_from_secretkey(): Argument #1 ($secret_key) must be SODIUM_CRYPTO_BOX_SECRETKEYBYTES bytes long
+box_publickey: 4701d08488451f545a409fb58ae3e58581ca40ac3f7f114698cd71deac73ca01
+box_secretkey_bad: EXC SodiumException: sodium_crypto_box_secretkey(): Argument #1 ($key_pair) must be SODIUM_CRYPTO_BOX_KEYPAIRBYTES bytes long
+box_publickey_bad: EXC SodiumException: sodium_crypto_box_publickey(): Argument #1 ($key_pair) must be SODIUM_CRYPTO_BOX_KEYPAIRBYTES bytes long
+box_kp_from_bad1: EXC SodiumException: sodium_crypto_box_keypair_from_secretkey_and_publickey(): Argument #1 ($secret_key) must be SODIUM_CRYPTO_BOX_SECRETKEYBYTES bytes long
+box_kp_from_bad2: EXC SodiumException: sodium_crypto_box_keypair_from_secretkey_and_publickey(): Argument #2 ($public_key) must be SODIUM_CRYPTO_BOX_PUBLICKEYBYTES bytes long
+box: c75e0463a9a03fbf17a48988a03871057cea660b459c3840c24ac52fb31dc2aab5b962ae8b7a38551ba736f429855775827a3faa6142058f1b9f96
+box_open: 54686520717569636b2062726f776e20666f78206a756d7073206f76657220746865206c617a7920646f67
+box_open_fail: false
+box_open_short: false
+box_badnonce: EXC SodiumException: sodium_crypto_box(): Argument #2 ($nonce) must be SODIUM_CRYPTO_BOX_NONCEBYTES bytes long
+box_badkp: EXC SodiumException: sodium_crypto_box(): Argument #3 ($key_pair) must be SODIUM_CRYPTO_BOX_KEYPAIRBYTES bytes long
+box_open_badnonce: EXC SodiumException: sodium_crypto_box_open(): Argument #2 ($nonce) must be SODIUM_CRYPTO_BOX_NONCEBYTES bytes long
+box_seal_len: int(91)
+box_seal_roundtrip: 54686520717569636b2062726f776e20666f78206a756d7073206f76657220746865206c617a7920646f67
+box_seal_open_fail: false
+box_seal_open_short: false
+box_seal_badpk: EXC SodiumException: sodium_crypto_box_seal(): Argument #2 ($public_key) must be SODIUM_CRYPTO_BOX_PUBLICKEYBYTES bytes long
+box_seal_open_badkp: EXC SodiumException: sodium_crypto_box_seal_open(): Argument #2 ($key_pair) must be SODIUM_CRYPTO_BOX_KEYPAIRBYTES bytes long
+scalarmult: 301f8aa8f6463cedd9d94bd588ab632b0a075f6b28ec9aa3f2800f6385d6246e
+scalarmult_zero: EXC SodiumException: internal error
+scalarmult_badn: EXC SodiumException: sodium_crypto_scalarmult(): Argument #1 ($n) must be SODIUM_CRYPTO_SCALARMULT_SCALARBYTES bytes long
+scalarmult_badp: EXC SodiumException: sodium_crypto_scalarmult(): Argument #2 ($p) must be SODIUM_CRYPTO_SCALARMULT_SCALARBYTES bytes long
+kx_seed_keypair: cb2f5160fc1f7e05a55ef49d340b48da2e5a78099d53393351cd579dd42503d60e0216223f147143d32615a91189c288c1728cba3cc5f9f621b1026e03d83129
+kx_seed_keypair_bad: EXC SodiumException: sodium_crypto_kx_seed_keypair(): Argument #1 ($seed) must be SODIUM_CRYPTO_KX_SEEDBYTES bytes long
+kx_secretkey: cb2f5160fc1f7e05a55ef49d340b48da2e5a78099d53393351cd579dd42503d6
+kx_publickey: 0e0216223f147143d32615a91189c288c1728cba3cc5f9f621b1026e03d83129
+kx_secretkey_bad: EXC SodiumException: sodium_crypto_kx_secretkey(): Argument #1 ($key_pair) must be SODIUM_CRYPTO_KX_KEYPAIRBYTES bytes long
+kx_publickey_bad: EXC SodiumException: sodium_crypto_kx_publickey(): Argument #1 ($key_pair) must be SODIUM_CRYPTO_KX_KEYPAIRBYTES bytes long
+kx_client: [0aaaf7745421d85782908b89ecc7e03ceb97a283a554cd7497edd0163c72d742,eb5aa71a01ae9838eb88c3bd31155a032c9857ed5af038b81c97f192d0b22d9e]
+kx_server: [eb5aa71a01ae9838eb88c3bd31155a032c9857ed5af038b81c97f192d0b22d9e,0aaaf7745421d85782908b89ecc7e03ceb97a283a554cd7497edd0163c72d742]
+kx_client_bad1: EXC SodiumException: sodium_crypto_kx_client_session_keys(): Argument #1 ($client_key_pair) must be SODIUM_CRYPTO_KX_KEYPAIRBYTES bytes long
+kx_client_bad2: EXC SodiumException: sodium_crypto_kx_client_session_keys(): Argument #2 ($server_key) must be SODIUM_CRYPTO_KX_PUBLICKEYBYTES bytes long
+kx_server_bad1: EXC SodiumException: sodium_crypto_kx_server_session_keys(): Argument #1 ($server_key_pair) must be SODIUM_CRYPTO_KX_KEYPAIRBYTES bytes long
+kx_server_bad2: EXC SodiumException: sodium_crypto_kx_server_session_keys(): Argument #2 ($client_key) must be SODIUM_CRYPTO_KX_PUBLICKEYBYTES bytes long
+kx_keypair_len: int(64)
+secretbox: 1f1a77e4f26c323e225e8b5c42f519d55500ac8cbda28dbdb08d92268bde1ea8b07964b09a4d55c0fc18e8228b84cbe1aee8ba503b0708d5e9bba5
+secretbox_open: 54686520717569636b2062726f776e20666f78206a756d7073206f76657220746865206c617a7920646f67
+secretbox_open_fail: false
+secretbox_open_short: false
+secretbox_badnonce: EXC SodiumException: sodium_crypto_secretbox(): Argument #2 ($nonce) must be SODIUM_CRYPTO_SECRETBOX_NONCEBYTES bytes long
+secretbox_badkey: EXC SodiumException: sodium_crypto_secretbox(): Argument #3 ($key) must be SODIUM_CRYPTO_SECRETBOX_KEYBYTES bytes long
+secretbox_open_badnonce: EXC SodiumException: sodium_crypto_secretbox_open(): Argument #2 ($nonce) must be SODIUM_CRYPTO_SECRETBOX_NONCEBYTES bytes long
+secretbox_open_badkey: EXC SodiumException: sodium_crypto_secretbox_open(): Argument #3 ($key) must be SODIUM_CRYPTO_SECRETBOX_KEYBYTES bytes long
+stream: 42206e9ffc5da39333a0ebc8b8474cddd29f520a323e48eaee76521e662d057b0168c9acccd7e4de
+stream_zero: EXC SodiumException: sodium_crypto_stream(): Argument #1 ($length) must be greater than 0
+stream_badnonce: EXC SodiumException: sodium_crypto_stream(): Argument #2 ($nonce) must be SODIUM_CRYPTO_STREAM_NONCEBYTES bytes long
+stream_badkey: EXC SodiumException: sodium_crypto_stream(): Argument #3 ($key) must be SODIUM_CRYPTO_STREAM_KEYBYTES bytes long
+stream_xor: 16480bbf8d28caf0588089bad73022fdb4f02a2a584b259a9d563d68035f250f690de9c0adad9dfebfc297
+stream_xor_badnonce: EXC SodiumException: sodium_crypto_stream_xor(): Argument #2 ($nonce) must be SODIUM_CRYPTO_STREAM_NONCEBYTES bytes long
+stream_xchacha20: d6803703543e6c1e22d7da17b6c62f6114b8235ac9ca801ae85064f71823d9f017fffbe4365494e1
+stream_xchacha20_neg: EXC SodiumException: sodium_crypto_stream_xchacha20(): Argument #1 ($length) must be greater than 0
+stream_xchacha20_badnonce: EXC SodiumException: sodium_crypto_stream_xchacha20(): Argument #2 ($nonce) must be SODIUM_CRYPTO_STREAM_XCHACHA20_NONCEBYTES bytes long
+stream_xchacha20_badkey: EXC SodiumException: sodium_crypto_stream_xchacha20(): Argument #3 ($key) must be SODIUM_CRYPTO_STREAM_XCHACHA20_KEYBYTES bytes long
+stream_xchacha20_xor: 82e85223254b057d49f7b865d9b1414172d75b7aa3bfed6a9b700b817d51f9847f9adb88572eedc1e67dc9
+stream_xchacha20_xor_badkey: EXC SodiumException: sodium_crypto_stream_xchacha20_xor(): Argument #3 ($key) must be SODIUM_CRYPTO_STREAM_XCHACHA20_KEYBYTES bytes long
+stream_xchacha20_xor_ic: 7e2d6b455d599f8e1fc8acd78a6f6ff76e1a61bc4418ef2cc07556b91cfc4e614ec4ad1a2aa0fed6b27af7
+stream_xchacha20_xor_ic_neg: 77fc43f62ae87cc27db40a4901f07a26e3b8aca73bdd8ed3b970abc52513c68fc1e38150ec5b3aa99008d7
+stream_xchacha20_xor_ic_badnonce: EXC SodiumException: sodium_crypto_stream_xchacha20_xor_ic(): Argument #2 ($nonce) must be SODIUM_CRYPTO_STREAM_XCHACHA20_NONCEBYTES bytes long
+stream_xchacha20_xor_ic_badkey: EXC SodiumException: sodium_crypto_stream_xchacha20_xor_ic(): Argument #3 ($counter) must be SODIUM_CRYPTO_STREAM_XCHACHA20_KEYBYTES bytes long
+sign_seed_keypair: 000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f03a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b803a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8
+sign_seed_keypair_bad: EXC SodiumException: sodium_crypto_sign_seed_keypair(): Argument #1 ($seed) must be SODIUM_CRYPTO_SIGN_SEEDBYTES bytes long
+sign_secretkey_bad: EXC SodiumException: sodium_crypto_sign_secretkey(): Argument #1 ($key_pair) must be SODIUM_CRYPTO_SIGN_KEYPAIRBYTES bytes long
+sign_publickey_bad: EXC SodiumException: sodium_crypto_sign_publickey(): Argument #1 ($key_pair) must be SODIUM_CRYPTO_SIGN_KEYPAIRBYTES bytes long
+sign_publickey_from_secretkey: 03a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8
+sign_publickey_from_secretkey_bad: EXC SodiumException: sodium_crypto_sign_publickey_from_secretkey(): Argument #1 ($secret_key) must be SODIUM_CRYPTO_SIGN_SECRETKEYBYTES bytes long
+sign_kp_from: 000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f03a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b803a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8
+sign_kp_from_bad1: EXC SodiumException: sodium_crypto_sign_keypair_from_secretkey_and_publickey(): Argument #1 ($secret_key) must be SODIUM_CRYPTO_SIGN_SECRETKEYBYTES bytes long
+sign_kp_from_bad2: EXC SodiumException: sodium_crypto_sign_keypair_from_secretkey_and_publickey(): Argument #2 ($public_key) must be SODIUM_CRYPTO_SIGN_PUBLICKEYBYTES bytes long
+sign: 2fd4e6cefe0d3acb46e556deecb67499c27baa573d5b9bf1394edfb9fa8edd8cece6c29f03a6b8279ea54e52eb735832a2d4079dcd379ba28b121fe365bfcb0454686520717569636b2062726f776e20666f78206a756d7073206f76657220746865206c617a7920646f67
+sign_badkey: EXC SodiumException: sodium_crypto_sign(): Argument #2 ($secret_key) must be SODIUM_CRYPTO_SIGN_SECRETKEYBYTES bytes long
+sign_open: 54686520717569636b2062726f776e20666f78206a756d7073206f76657220746865206c617a7920646f67
+sign_open_fail: false
+sign_open_short: false
+sign_open_badkey: EXC SodiumException: sodium_crypto_sign_open(): Argument #2 ($public_key) must be SODIUM_CRYPTO_SIGN_PUBLICKEYBYTES bytes long
+sign_detached: 2fd4e6cefe0d3acb46e556deecb67499c27baa573d5b9bf1394edfb9fa8edd8cece6c29f03a6b8279ea54e52eb735832a2d4079dcd379ba28b121fe365bfcb04
+sign_detached_badkey: EXC SodiumException: sodium_crypto_sign_detached(): Argument #2 ($secret_key) must be SODIUM_CRYPTO_SIGN_SECRETKEYBYTES bytes long
+sign_verify_detached: [true,false]
+sign_verify_detached_badsig: EXC SodiumException: sodium_crypto_sign_verify_detached(): Argument #1 ($signature) must be SODIUM_CRYPTO_SIGN_BYTES bytes long
+sign_verify_detached_badpk: EXC SodiumException: sodium_crypto_sign_verify_detached(): Argument #3 ($public_key) must be SODIUM_CRYPTO_SIGN_PUBLICKEYBYTES bytes long
+sign_sk_to_curve: 3894eea49c580aef816935762be049559d6d1440dede12e6a125f1841fff8e6f
+sign_pk_to_curve: 4701d08488451f545a409fb58ae3e58581ca40ac3f7f114698cd71deac73ca01
+sign_pk_to_curve_fail: EXC SodiumException: conversion failed
+sign_pk_to_curve_bad: EXC SodiumException: sodium_crypto_sign_ed25519_pk_to_curve25519(): Argument #1 ($public_key) must be SODIUM_CRYPTO_SIGN_PUBLICKEYBYTES bytes long
+sign_sk_to_curve_bad: EXC SodiumException: sodium_crypto_sign_ed25519_sk_to_curve25519(): Argument #1 ($secret_key) must be SODIUM_CRYPTO_SIGN_SECRETKEYBYTES bytes long
+sign_keypair_len: int(96)
+ss_init_push_bad: EXC SodiumException: sodium_crypto_secretstream_xchacha20poly1305_init_push(): Argument #1 ($key) must be SODIUM_CRYPTO_SECRETSTREAM_XCHACHA20POLY1305_KEYBYTES bytes long
+ss_init_pull_badheader: EXC SodiumException: sodium_crypto_secretstream_xchacha20poly1305_init_pull(): Argument #1 ($header) must be SODIUM_CRYPTO_SECRETSTREAM_XCHACHA20POLY1305_HEADERBYTES bytes long
+ss_init_pull_badkey: EXC SodiumException: sodium_crypto_secretstream_xchacha20poly1305_init_pull(): Argument #2 ($key) must be SODIUM_CRYPTO_SECRETSTREAM_XCHACHA20POLY1305_KEYBYTES bytes long
+ss_pull_fixed: [int(52),false]
+ss_push_badstate: EXC SodiumException: sodium_crypto_secretstream_xchacha20poly1305_push(): Argument #1 ($state) must have a correct length
+ss_push_badtag: EXC SodiumException: sodium_crypto_secretstream_xchacha20poly1305_push(): Argument #4 ($tag) must be in the range of 0-255
+ss_push_negtag: EXC SodiumException: sodium_crypto_secretstream_xchacha20poly1305_push(): Argument #4 ($tag) must be in the range of 0-255
+ss_pull_badstate: EXC SodiumException: incorrect state length
+ss_pull_short: false
+ss_rekey_badstate: EXC SodiumException: incorrect state length
+ss_rekey_fixed: 4d2b326350e639c9c2c1a718e28eb0965667b2d8ec08aac1f5f73422a54e2fcd010000006130736770d72b360000000000000000
+pwhash_i: e7a5f4e7f834e5cdc20cf174f4401a26aafa83cabcb01e53a40fc24f0249792b
+pwhash_id: 6deb08eb7caafe366f2f9ec06d8dbebd
+pwhash_default: f56ce95534919c9a246a39ab8184837c
+pwhash_i_ops2: EXC SodiumException: internal error
+pwhash_empty: 35858230a16f87fed2b29838c1fe2df6 [W: empty password]
+pwhash_len0: EXC SodiumException: sodium_crypto_pwhash(): Argument #1 ($length) must be greater than 0
+pwhash_lenbig: EXC SodiumException: sodium_crypto_pwhash(): Argument #1 ($length) is too large
+pwhash_ops0: EXC SodiumException: sodium_crypto_pwhash(): Argument #4 ($opslimit) must be greater than 0
+pwhash_mem0: EXC SodiumException: sodium_crypto_pwhash(): Argument #5 ($memlimit) must be greater than 0
+pwhash_alg: EXC SodiumException: unsupported password hashing algorithm
+pwhash_alg_empty: EXC SodiumException: unsupported password hashing algorithm
+pwhash_salt: EXC SodiumException: sodium_crypto_pwhash(): Argument #3 ($salt) must be SODIUM_CRYPTO_PWHASH_SALTBYTES bytes long [W: empty password]
+pwhash_mem_min: EXC SodiumException: internal error
+pwhash_str_prefix: 246172676f6e32696424763d3139246d3d382c743d312c703d3124
+pwhash_str_verify: [true,false]
+pwhash_str_verify_fixed: false
+pwhash_str_verify_garbage: false [W: empty password]
+pwhash_str_ops0: EXC SodiumException: sodium_crypto_pwhash_str(): Argument #2 ($opslimit) must be greater than 0
+pwhash_str_mem0: EXC SodiumException: sodium_crypto_pwhash_str(): Argument #3 ($memlimit) must be greater than 0
+pwhash_str_mem_min: EXC SodiumException: internal error
+pwhash_str_empty_len: int(93) [W: empty password]
+pwhash_needs_rehash: [false,true,true]
+scrypt: 42fa366219ca6b8997059907a4eb416cf8d911749572dfbcd167084b5807f524
+scrypt_len0: EXC SodiumException: sodium_crypto_pwhash_scryptsalsa208sha256(): Argument #1 ($length) must be greater than 0
+scrypt_ops0: EXC SodiumException: sodium_crypto_pwhash_scryptsalsa208sha256(): Argument #4 ($opslimit) must be greater than 0
+scrypt_mem0: EXC SodiumException: sodium_crypto_pwhash_scryptsalsa208sha256(): Argument #5 ($memlimit) must be greater than 0
+scrypt_salt: EXC SodiumException: sodium_crypto_pwhash_scryptsalsa208sha256(): Argument #3 ($salt) must be SODIUM_CRYPTO_PWHASH_SCRYPTSALSA208SHA256_SALTBYTES bytes long [W: empty password]
+scrypt_ops_min: EXC SodiumException: internal error
+scrypt_mem_min: EXC SodiumException: internal error
+scrypt_str: [int(101),243724,true,false]
+scrypt_str_ops0: EXC SodiumException: sodium_crypto_pwhash_scryptsalsa208sha256_str(): Argument #2 ($opslimit) must be greater than 0
+scrypt_str_mem0: EXC SodiumException: sodium_crypto_pwhash_scryptsalsa208sha256_str(): Argument #3 ($memlimit) must be greater than 0
+scrypt_str_ops_min: EXC SodiumException: sodium_crypto_pwhash_scryptsalsa208sha256_str(): Argument #2 ($opslimit) must be greater than or equal to 524288 [W: empty password]
+scrypt_str_mem_min: EXC SodiumException: sodium_crypto_pwhash_scryptsalsa208sha256_str(): Argument #3 ($memlimit) must be greater than or equal to 16777216
+scrypt_str_verify_size: false [W: empty password] [W: wrong size for the hashed password]
+r_from_hash: 38df4d4948f3fbb4f6872c6e501485548551680b6093005ec489c23a1751e96c
+r_from_hash_bad: EXC SodiumException: sodium_crypto_core_ristretto255_from_hash(): Argument #1 ($s) must be SODIUM_CRYPTO_CORE_RISTRETTO255_HASHBYTES bytes long
+r_is_valid: [true,false]
+r_is_valid_bad: EXC SodiumException: sodium_crypto_core_ristretto255_is_valid_point(): Argument #1 ($s) must be SODIUM_CRYPTO_CORE_RISTRETTO255_BYTES bytes long
+r_add: e83e214cdc615ad44efe5cccdfd7b1d6c8c945f0388a18679c14cf5a5dc40505
+r_add_invalid: EXC SodiumException: internal error
+r_add_bad1: EXC SodiumException: sodium_crypto_core_ristretto255_add(): Argument #1 ($p) must be SODIUM_CRYPTO_CORE_RISTRETTO255_BYTES bytes long
+r_add_bad2: EXC SodiumException: sodium_crypto_core_ristretto255_add(): Argument #2 ($q) must be SODIUM_CRYPTO_CORE_RISTRETTO255_BYTES bytes long
+r_sub: 0000000000000000000000000000000000000000000000000000000000000000
+r_sub_bad2: EXC SodiumException: sodium_crypto_core_ristretto255_sub(): Argument #2 ($q) must be SODIUM_CRYPTO_CORE_RISTRETTO255_BYTES bytes long
+r_scalar_reduce: 34a93fa609b0d95a89402bc88c07b8d527475c8988fb5a89f5fb32e6b4c46d0a
+r_scalar_reduce_bad: EXC SodiumException: sodium_crypto_core_ristretto255_scalar_reduce(): Argument #1 ($s) must be SODIUM_CRYPTO_CORE_RISTRETTO255_NONREDUCEDSCALARBYTES bytes long
+r_scalar_add: 7b7e89eff8fca05d3ce45eed3a1591964f8eb81211f7b512ebf765cc6989db04
+r_scalar_add_bad1: EXC SodiumException: sodium_crypto_core_ristretto255_scalar_add(): Argument #1 ($x) must be SODIUM_CRYPTO_CORE_RISTRETTO255_SCALARBYTES bytes long
+r_scalar_sub: 0000000000000000000000000000000000000000000000000000000000000000
+r_scalar_sub_bad2: EXC SodiumException: sodium_crypto_core_ristretto255_scalar_sub(): Argument #2 ($y) must be SODIUM_CRYPTO_CORE_RISTRETTO255_SCALARBYTES bytes long
+r_scalar_mul: 38d0a1984dfbbfe0ed89371935ebeb43e61deeddc8c5ef712517a0ad5e8ae001
+r_scalar_mul_bad2: EXC SodiumException: sodium_crypto_core_ristretto255_scalar_mul(): Argument #2 ($y) must be SODIUM_CRYPTO_CORE_RISTRETTO255_SCALARBYTES bytes long
+r_scalar_invert: a8fb9393fbf3ca10d4cd80490ba58ad5ff268eb56e3cf1e5e682d299c401030c
+r_scalar_invert_zero: EXC SodiumException: internal error
+r_scalar_invert_bad: EXC SodiumException: sodium_crypto_core_ristretto255_scalar_invert(): Argument #1 ($s) must be SODIUM_CRYPTO_CORE_RISTRETTO255_SCALARBYTES bytes long
+r_scalar_negate: b92ab6b610b338fd4c5cccda51f2263fd8b8a3767704a5760a04cd194b3b9205
+r_scalar_negate_bad: EXC SodiumException: sodium_crypto_core_ristretto255_scalar_negate(): Argument #1 ($s) must be SODIUM_CRYPTO_CORE_RISTRETTO255_SCALARBYTES bytes long
+r_scalar_complement: ba2ab6b610b338fd4c5cccda51f2263fd8b8a3767704a5760a04cd194b3b9205
+r_scalar_complement_bad: EXC SodiumException: sodium_crypto_core_ristretto255_scalar_complement(): Argument #1 ($s) must be SODIUM_CRYPTO_CORE_RISTRETTO255_SCALARBYTES bytes long
+r_random_valid: true
+r_scalar_random_len: int(32)
+r_scalarmult: 02ec909fbfd057821b65a44b440d9c57cccb2c77d9be70fca754c5e7729f9660
+r_scalarmult_identity: EXC SodiumException: Result is identity element
+r_scalarmult_bad1: EXC SodiumException: sodium_crypto_scalarmult_ristretto255(): Argument #1 ($n) must be SODIUM_CRYPTO_SCALARMULT_RISTRETTO255_SCALARBYTES bytes long
+r_scalarmult_bad2: EXC SodiumException: sodium_crypto_scalarmult_ristretto255(): Argument #2 ($p) must be SODIUM_CRYPTO_SCALARMULT_RISTRETTO255_BYTES bytes long
+r_scalarmult_base: ee2be5e80dbbffb9851f5888252cbca10a4bdca94033edac6efe043ade83e611
+r_scalarmult_base_zero: EXC SodiumException: sodium_crypto_scalarmult_ristretto255_base(): Argument #1 ($n) must not be zero
+r_scalarmult_base_bad: EXC SodiumException: sodium_crypto_scalarmult_ristretto255_base(): Argument #1 ($n) must be SODIUM_CRYPTO_SCALARMULT_RISTRETTO255_SCALARBYTES bytes long
+keygen_auth: int(32)
+keygen_generichash: int(32)
+keygen_kdf: int(32)
+keygen_secretbox: int(32)
+keygen_shorthash: int(16)
+keygen_stream: int(32)
+keygen_stream_xchacha20: int(32)
+keygen_secretstream_xchacha20poly1305: int(32)
+password_get_info: [int(1024),int(2),int(3)]
+password_get_info_partial: [int(77),int(4),int(1)]

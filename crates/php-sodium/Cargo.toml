@@ -1,9 +1,11 @@
 [package]
 name = "php-sodium"
+description = "PHP's ext/sodium (sodium_* functions, SodiumException texts, argon2 password hashing) bound to the system libsodium"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
+build = "build.rs"
 
 [dependencies]
 
