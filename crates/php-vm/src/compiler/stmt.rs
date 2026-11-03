@@ -14,9 +14,9 @@ impl Compiler {
                     if d.name.eq_ignore_case("strict_types") && i != 0 {
                         // Only the very first statement may declare strict_types
                         // (an opening inline HTML is not allowed either).
-                        let first_non_decl = stmts[..i].iter().any(|p| {
-                            !matches!(p.kind, StmtKind::Declare { .. })
-                        });
+                        let first_non_decl = stmts[..i]
+                            .iter()
+                            .any(|p| !matches!(p.kind, StmtKind::Declare { .. }));
                         if first_non_decl {
                             return self.err(
                                 "strict_types declaration must be the very first statement in the script",
@@ -161,7 +161,8 @@ impl Compiler {
                     match &v.kind {
                         ExprKind::Var(VarName::Name(id)) => {
                             if id.name == b"this" {
-                                return self.err("Cannot use $this as global variable", v.span.line);
+                                return self
+                                    .err("Cannot use $this as global variable", v.span.line);
                             }
                             let cv = self.cv(&id.name);
                             let name = self.lit_str(&id.name);
@@ -230,7 +231,8 @@ impl Compiler {
                         }
                     }
                     if let ExprKind::Prop { nullsafe: true, .. } = &v.kind {
-                        return self.err("Can't use nullsafe operator in write context", v.span.line);
+                        return self
+                            .err("Can't use nullsafe operator in write context", v.span.line);
                     }
                     let p = self.compile_place(v, true)?;
                     let pid = self.place(p);
@@ -300,13 +302,35 @@ impl Compiler {
             }
             StmtKind::Function(fd) => self.compile_function_decl(fd, false)?,
             StmtKind::Class(cd) => self.compile_class_stmt(cd, false)?,
-            StmtKind::Const { consts, .. } => {
+            StmtKind::Const { consts, attributes } => {
+                let mut attrs = u32::MAX;
+                if !attributes.is_empty() {
+                    if consts.len() > 1 {
+                        let line = consts.first().map_or(s.span.line, |c| c.span.line);
+                        return self.err(
+                            "Cannot apply attributes to multiple constants at once",
+                            line,
+                        );
+                    }
+                    let list = self.attributes(attributes)?;
+                    self.validate_attributes(
+                        &list,
+                        super::attrs::target::CONSTANT,
+                        0,
+                        None,
+                        false,
+                    )?;
+                    let mut t = self.decls.const_attributes.borrow_mut();
+                    t.push(std::rc::Rc::new(list));
+                    attrs = u32::try_from(t.len() - 1).unwrap_or(u32::MAX);
+                }
                 for c in consts {
                     self.f().line = c.span.line;
                     let full = self.ns_prefixed_pub(&c.name.name);
                     let name = self.lit_str(&full);
+                    self.check_const_expr(&c.value, true)?;
                     let val = self.compile_expr(&c.value)?;
-                    self.emit(Op::DeclareConst { name, val });
+                    self.emit(Op::DeclareConst { name, val, attrs });
                 }
             }
             StmtKind::Namespace { .. } => {
@@ -315,7 +339,12 @@ impl Compiler {
             }
             StmtKind::Use { kind, uses } => {
                 for u in uses {
-                    self.add_use(*kind, &u.name.name, u.alias.as_ref().map(|a| a.name.as_slice()), u.span.line)?;
+                    self.add_use(
+                        *kind,
+                        &u.name.name,
+                        u.alias.as_ref().map(|a| a.name.as_slice()),
+                        u.span.line,
+                    )?;
                 }
             }
             StmtKind::GroupUse { kind, prefix, uses } => {
@@ -324,7 +353,12 @@ impl Compiler {
                     full.push(b'\\');
                     full.extend_from_slice(&u.name.name);
                     let k = kind.unwrap_or(u.kind);
-                    self.add_use(k, &full, u.alias.as_ref().map(|a| a.name.as_slice()), u.span.line)?;
+                    self.add_use(
+                        k,
+                        &full,
+                        u.alias.as_ref().map(|a| a.name.as_slice()),
+                        u.span.line,
+                    )?;
                 }
             }
         }
@@ -350,12 +384,7 @@ impl Compiler {
         line: u32,
     ) -> CResult<()> {
         let short = alias.map_or_else(
-            || {
-                full.rsplit(|&c| c == b'\\')
-                    .next()
-                    .unwrap_or(full)
-                    .to_vec()
-            },
+            || full.rsplit(|&c| c == b'\\').next().unwrap_or(full).to_vec(),
             <[u8]>::to_vec,
         );
         match kind {
@@ -387,7 +416,8 @@ impl Compiler {
                 self.class_uses.insert(lc, full.to_vec());
             }
             ast::UseKind::Function => {
-                self.fn_uses.insert(short.to_ascii_lowercase(), full.to_vec());
+                self.fn_uses
+                    .insert(short.to_ascii_lowercase(), full.to_vec());
             }
             ast::UseKind::Const => {
                 self.const_uses.insert(short, full.to_vec());
@@ -474,7 +504,9 @@ impl Compiler {
             } else {
                 self.warnings.push((
                     128,
-                    format!("\"continue {depth}\" targeting switch is equivalent to \"break {depth}\""),
+                    format!(
+                        "\"continue {depth}\" targeting switch is equivalent to \"break {depth}\""
+                    ),
                     line,
                 ));
             }
@@ -500,7 +532,11 @@ impl Compiler {
         }
         // Finally blocks crossed.
         let fdepth = self.fref().loops[target_idx].finally_depth;
-        let fins: Vec<u32> = self.fref().finally_stack[fdepth..].iter().rev().copied().collect();
+        let fins: Vec<u32> = self.fref().finally_stack[fdepth..]
+            .iter()
+            .rev()
+            .copied()
+            .collect();
         for fin in fins {
             self.emit_fast_call(fin);
         }
@@ -527,10 +563,7 @@ impl Compiler {
         if let Some(rt) = &self.fref().return_type {
             if !is_gen {
                 if rt.is_void() && e.is_some() {
-                    return self.err(
-                        "A void function must not return a value",
-                        line,
-                    );
+                    return self.err("A void function must not return a value", line);
                 }
                 if rt.is_never() {
                     return self.err("A never-returning function must not return", line);
@@ -628,7 +661,13 @@ impl Compiler {
             }
         }
         let reset = if by_ref {
-            let p = if subject.is_variable() && !matches!(subject.kind, ExprKind::Call { .. } | ExprKind::MethodCall { .. } | ExprKind::StaticCall { .. }) {
+            let p = if subject.is_variable()
+                && !matches!(
+                    subject.kind,
+                    ExprKind::Call { .. }
+                        | ExprKind::MethodCall { .. }
+                        | ExprKind::StaticCall { .. }
+                ) {
                 self.compile_place(subject, false)?
             } else {
                 let op = self.compile_expr(subject)?;
@@ -912,7 +951,11 @@ impl Compiler {
                     self.free(Operand::Tmp(dst));
                 }
             }
-            ExprKind::VoidCast(inner) => self.compile_expr_discard(inner)?,
+            ExprKind::VoidCast(inner) => {
+                // The value counts as used (#[\NoDiscard]).
+                let op = self.compile_expr(inner)?;
+                self.free(op);
+            }
             _ => {
                 let op = self.compile_expr(e)?;
                 self.free(op);
@@ -928,7 +971,12 @@ impl Compiler {
     }
 
     /// Assigns `val` to the target expression (variable or place).
-    pub(crate) fn assign_to(&mut self, target: &Expr, val: Operand, dst: Option<u32>) -> CResult<()> {
+    pub(crate) fn assign_to(
+        &mut self,
+        target: &Expr,
+        val: Operand,
+        dst: Option<u32>,
+    ) -> CResult<()> {
         if let ExprKind::Var(VarName::Name(id)) = &target.kind {
             if id.name == b"this" {
                 return self.err("Cannot re-assign $this", target.span.line);
@@ -980,7 +1028,10 @@ impl Compiler {
 pub(crate) fn is_ref_expr(e: &Expr) -> bool {
     matches!(
         e.kind,
-        ExprKind::Var(_) | ExprKind::Dim { .. } | ExprKind::Prop { .. } | ExprKind::StaticProp { .. }
+        ExprKind::Var(_)
+            | ExprKind::Dim { .. }
+            | ExprKind::Prop { .. }
+            | ExprKind::StaticProp { .. }
     )
 }
 

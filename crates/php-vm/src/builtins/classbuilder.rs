@@ -1,7 +1,9 @@
 //! Construction of internal (builtin) classes.
 
 use super::sig::{parse_sig, parse_type};
-use crate::class::{cflags, Class, ClassConst, ConstExpr, InternalKind, PropInfo, StaticProp};
+use crate::class::{
+    cflags, AttributeInfo, Class, ClassConst, ConstExpr, InternalKind, PropInfo, StaticProp,
+};
 use crate::classlink::build_magic;
 use crate::func::{flags, Builtin, BuiltinFn, Func, Method};
 use crate::vm::Vm;
@@ -16,15 +18,21 @@ pub struct ClassBuilder {
     parent: Option<Rc<Class>>,
     interfaces: Vec<Rc<Class>>,
     flags: u32,
-    consts: Vec<(String, Value, u32)>,
+    consts: Vec<(String, Value, u32, Vec<AttributeInfo>)>,
     props: Vec<(String, u32, Option<&'static str>, Option<Value>)>,
     statics: Vec<(String, u32, Value)>,
     methods: Vec<(&'static str, u32, BuiltinFn)>,
     internal: InternalKind,
     hooks: Option<Rc<crate::ext::ClassHooks>>,
+    /// `Some(backing)` for enums (`None` backing: a unit enum).
+    enum_backing: Option<Option<u32>>,
+    cases: Vec<(String, Option<Value>)>,
 }
 
-fn abstract_stub(vm: &mut Vm, _a: &mut crate::func::Args) -> crate::vm::VmResult<php_runtime::Value> {
+fn abstract_stub(
+    vm: &mut Vm,
+    _a: &mut crate::func::Args,
+) -> crate::vm::VmResult<php_runtime::Value> {
     Err(vm.make_throw("Error", "Cannot call abstract method"))
 }
 
@@ -42,7 +50,35 @@ impl ClassBuilder {
             methods: Vec::new(),
             internal: InternalKind::None,
             hooks: None,
+            enum_backing: None,
+            cases: Vec::new(),
         }
+    }
+
+    /// Makes the class a unit enum (`enum Name { case A; }`): final,
+    /// implements `UnitEnum`, has `$name` and `cases()`.
+    pub fn unit_enum(mut self) -> Self {
+        self.enum_backing = Some(None);
+        self
+    }
+
+    /// Makes the class a backed enum (`enum Name: int|string`): adds
+    /// `BackedEnum`, `$value`, `from()`/`tryFrom()`. `backing` is
+    /// `"int"` or `"string"`.
+    pub fn backed_enum(mut self, backing: &str) -> Self {
+        let m = if backing.eq_ignore_ascii_case("int") {
+            crate::types::mask::LONG
+        } else {
+            crate::types::mask::STRING
+        };
+        self.enum_backing = Some(Some(m));
+        self
+    }
+
+    /// Adds an enum case (`value` is the backing value of a backed enum).
+    pub fn case(mut self, name: &str, value: Option<Value>) -> Self {
+        self.cases.push((name.to_string(), value));
+        self
     }
 
     /// Sets the parent class (looked up in the VM).
@@ -81,13 +117,47 @@ impl ClassBuilder {
 
     /// Adds a constant.
     pub fn constant(mut self, name: &str, v: Value) -> Self {
-        self.consts.push((name.to_string(), v, flags::PUBLIC));
+        self.consts
+            .push((name.to_string(), v, flags::PUBLIC, Vec::new()));
+        self
+    }
+
+    /// Adds a `#[\Deprecated]` constant: reading it emits
+    /// `Deprecated: Constant C::NAME is deprecated since X, message`
+    /// (`since`/`message` may be empty).
+    pub fn deprecated_constant(mut self, name: &str, v: Value, since: &str, message: &str) -> Self {
+        let mut args = Vec::new();
+        if !message.is_empty() {
+            args.push((
+                Some(ZStr::from("message")),
+                ConstExpr::Value(Value::Str(ZStr::from(message))),
+            ));
+        }
+        if !since.is_empty() {
+            args.push((
+                Some(ZStr::from("since")),
+                ConstExpr::Value(Value::Str(ZStr::from(since))),
+            ));
+        }
+        let attr = AttributeInfo {
+            name: ZStr::from("Deprecated"),
+            args,
+            line: 0,
+        };
+        self.consts
+            .push((name.to_string(), v, flags::PUBLIC, vec![attr]));
         self
     }
 
     /// Adds a property: `ty` is a stub type or `None`; `default` `None`
     /// leaves typed properties uninitialized.
-    pub fn prop(mut self, name: &str, fl: u32, ty: Option<&'static str>, default: Option<Value>) -> Self {
+    pub fn prop(
+        mut self,
+        name: &str,
+        fl: u32,
+        ty: Option<&'static str>,
+        default: Option<Value>,
+    ) -> Self {
         self.props.push((name.to_string(), fl, ty, default));
         self
     }
@@ -106,15 +176,56 @@ impl ClassBuilder {
 
     /// Adds an abstract (interface) method.
     pub fn abstract_method(mut self, sig: &'static str, fl: u32) -> Self {
-        self.methods.push((sig, fl | flags::ABSTRACT, abstract_stub));
+        self.methods
+            .push((sig, fl | flags::ABSTRACT, abstract_stub));
         self
     }
 
     /// Builds and registers the class.
     #[allow(clippy::too_many_lines)]
-    pub fn register(self, vm: &mut Vm) -> Rc<Class> {
+    pub fn register(mut self, vm: &mut Vm) -> Rc<Class> {
+        if let Some(backing) = self.enum_backing {
+            self.flags |= cflags::ENUM | cflags::FINAL;
+            let mut ifaces = Vec::new();
+            ifaces.extend(vm.find_class(b"UnitEnum"));
+            if backing.is_some() {
+                ifaces.extend(vm.find_class(b"BackedEnum"));
+            }
+            ifaces.append(&mut self.interfaces);
+            self.interfaces = ifaces;
+            let mut props = vec![(
+                "name".to_string(),
+                flags::PUBLIC | flags::READONLY,
+                Some("string"),
+                None,
+            )];
+            if let Some(b) = backing {
+                let ty = if b == crate::types::mask::LONG {
+                    "int"
+                } else {
+                    "string"
+                };
+                props.push((
+                    "value".to_string(),
+                    flags::PUBLIC | flags::READONLY,
+                    Some(ty),
+                    None,
+                ));
+            }
+            props.append(&mut self.props);
+            self.props = props;
+            for (i, (sig, fl, h)) in super::enum_methods().into_iter().enumerate() {
+                if i > 0 && backing.is_none() {
+                    break;
+                }
+                self.methods.push((sig, fl, h));
+            }
+        }
         let parent = self.parent.clone();
-        let mut interfaces: Vec<Rc<Class>> = parent.as_ref().map(|p| p.interfaces.clone()).unwrap_or_default();
+        let mut interfaces: Vec<Rc<Class>> = parent
+            .as_ref()
+            .map(|p| p.interfaces.clone())
+            .unwrap_or_default();
         for i in &self.interfaces {
             for sub in &i.interfaces {
                 if !interfaces.iter().any(|x| Rc::ptr_eq(x, sub)) {
@@ -139,7 +250,9 @@ impl ClassBuilder {
             // Constants.
             let mut consts: Vec<Rc<ClassConst>> = Vec::new();
             let mut const_map = HashMap::new();
-            let mut push_const = |c: Rc<ClassConst>, consts: &mut Vec<Rc<ClassConst>>, map: &mut HashMap<ZStr, usize>| {
+            let mut push_const = |c: Rc<ClassConst>,
+                                  consts: &mut Vec<Rc<ClassConst>>,
+                                  map: &mut HashMap<ZStr, usize>| {
                 if let Some(&i) = map.get(&c.name) {
                     consts[i] = c;
                 } else {
@@ -159,7 +272,7 @@ impl ClassBuilder {
                     }
                 }
             }
-            for (n, v, f) in &self.consts {
+            for (n, v, f, attrs) in &self.consts {
                 push_const(
                     Rc::new(ClassConst {
                         name: ZStr::from(n.as_str()),
@@ -171,6 +284,24 @@ impl ClassBuilder {
                         is_case: false,
                         evaluating: Cell::new(false),
                         doc_comment: None,
+                        attributes: attrs.clone(),
+                    }),
+                    &mut consts,
+                    &mut const_map,
+                );
+            }
+            for (n, v) in &self.cases {
+                push_const(
+                    Rc::new(ClassConst {
+                        name: ZStr::from(n.as_str()),
+                        value: RefCell::new(None),
+                        expr: ConstExpr::Value(v.clone().unwrap_or(Value::Null)),
+                        flags: flags::PUBLIC,
+                        class: name.clone(),
+                        ty: None,
+                        is_case: true,
+                        evaluating: Cell::new(false),
+                        doc_comment: None,
                         attributes: Vec::new(),
                     }),
                     &mut consts,
@@ -178,7 +309,8 @@ impl ClassBuilder {
                 );
             }
             // Properties.
-            let mut props: Vec<Rc<PropInfo>> = parent.as_ref().map(|p| p.props.clone()).unwrap_or_default();
+            let mut props: Vec<Rc<PropInfo>> =
+                parent.as_ref().map(|p| p.props.clone()).unwrap_or_default();
             let mut prop_map: HashMap<ZStr, Rc<PropInfo>> = HashMap::new();
             if let Some(p) = &parent {
                 for (k, v) in &p.prop_map {
@@ -211,8 +343,14 @@ impl ClassBuilder {
                 }
                 prop_map.insert(pn, pi);
             }
-            let mut static_props: Vec<StaticProp> = parent.as_ref().map(|p| p.static_props.clone()).unwrap_or_default();
-            let mut static_map: HashMap<ZStr, usize> = parent.as_ref().map(|p| p.static_map.clone()).unwrap_or_default();
+            let mut static_props: Vec<StaticProp> = parent
+                .as_ref()
+                .map(|p| p.static_props.clone())
+                .unwrap_or_default();
+            let mut static_map: HashMap<ZStr, usize> = parent
+                .as_ref()
+                .map(|p| p.static_map.clone())
+                .unwrap_or_default();
             for (n, f, v) in &self.statics {
                 let sp = StaticProp {
                     name: ZStr::from(n.as_str()),
@@ -306,7 +444,7 @@ impl ClassBuilder {
                 method_order: order,
                 magic,
                 defaults: RefCell::new(None),
-                backing: None,
+                backing: self.enum_backing.flatten(),
                 enum_cases: RefCell::new(HashMap::new()),
                 decl: None,
                 internal,
@@ -316,7 +454,10 @@ impl ClassBuilder {
                 line_end: 0,
                 doc_comment: None,
                 linked: Cell::new(true),
-                hooks: self.hooks.clone().or_else(|| parent.as_ref().and_then(|p| p.hooks.clone())),
+                hooks: self
+                    .hooks
+                    .clone()
+                    .or_else(|| parent.as_ref().and_then(|p| p.hooks.clone())),
             }
         });
         vm.register_class(cls.clone());

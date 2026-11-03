@@ -344,12 +344,14 @@ impl Vm {
     pub(crate) fn declare_constant(&mut self, name: ZStr, v: Value) -> VmResult<bool> {
         if self.constants.contains_key(&name) {
             self.warning(&format!(
-                "Constant {} already defined",
+                "Constant {} already defined, this will be an error in PHP 9",
                 name.to_string_lossy()
             ))?;
             return Ok(false);
         }
         self.user_constants.push(name.clone());
+        let (file, _) = self.current_location();
+        self.const_files.insert(name.clone(), file);
         self.constants.insert(name, v);
         Ok(true)
     }
@@ -357,16 +359,18 @@ impl Vm {
     /// Reads a global constant.
     pub(crate) fn fetch_constant(&mut self, name: u32, fallback: Option<u32>) -> VmResult<Value> {
         let n = self.lit_str(name);
-        if let Some(v) = self.constants.get(&n) {
-            return Ok(v.clone());
+        if let Some(v) = self.constants.get(&n).cloned() {
+            self.constant_deprecation(&n)?;
+            return Ok(v);
         }
         if let Some(v) = self.special_constant(n.as_bytes()) {
             return Ok(v);
         }
         if let Some(fb) = fallback {
             let f = self.lit_str(fb);
-            if let Some(v) = self.constants.get(&f) {
-                return Ok(v.clone());
+            if let Some(v) = self.constants.get(&f).cloned() {
+                self.constant_deprecation(&f)?;
+                return Ok(v);
             }
             if let Some(v) = self.special_constant(f.as_bytes()) {
                 return Ok(v);
@@ -700,6 +704,23 @@ impl Vm {
                     line,
                 ));
             }
+            if tc
+                .attributes
+                .iter()
+                .any(|a| a.name.eq_ignore_ascii_case(b"Deprecated"))
+            {
+                // `zend_use_of_deprecated_trait`.
+                let suffix = self.deprecation_suffix(&tc.attributes, Some(&tc))?;
+                let code = if tc.flags & cflags::INTERNAL != 0 {
+                    crate::errors::level::DEPRECATED
+                } else {
+                    crate::errors::level::USER_DEPRECATED
+                };
+                let mut msg =
+                    format!("Trait {} used by {display} is deprecated", tc.name).into_bytes();
+                msg.extend_from_slice(&suffix);
+                self.error_bytes(code, &msg)?;
+            }
             traits.push(tc);
         }
         let mut cflag = decl.flags;
@@ -795,6 +816,9 @@ impl Vm {
         for (w, l) in warnings {
             let file = decl.filename.clone();
             self.error_at(crate::errors::level::DEPRECATED, &w, &file, l)?;
+        }
+        if let Some((e, l)) = crate::attrs::check_override(&cls) {
+            return Err(self.fatal_at(&e, if l == 0 { line } else { l }));
         }
         Ok(cls)
     }
@@ -992,7 +1016,7 @@ fn build_class(
             &mut const_map,
         );
     }
-    for (cname, value, _line) in &decl.cases {
+    for (i, (cname, value, _line)) in decl.cases.iter().enumerate() {
         add_const(
             Rc::new(ClassConst {
                 name: cname.clone(),
@@ -1004,7 +1028,7 @@ fn build_class(
                 is_case: true,
                 evaluating: Cell::new(false),
                 doc_comment: None,
-                attributes: Vec::new(),
+                attributes: decl.case_attributes.get(i).cloned().unwrap_or_default(),
             }),
             &mut consts,
             &mut const_map,

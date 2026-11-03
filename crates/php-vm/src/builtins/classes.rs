@@ -38,21 +38,31 @@ fn sensitive_value_debug_info(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
     Ok(Value::Array(php_runtime::ZArray::new()))
 }
 
-fn deprecated_construct(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+fn deprecated_construct(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    // Deprecated::__construct / NoDiscard::__construct: readonly
+    // `$message` (and `$since`) set once.
     let o = a.this_obj();
     let d = crate::object::data(&o);
-    let mut slots = d.slots.borrow_mut();
-    if slots.len() >= 2 {
-        slots[0] = Some(a.get(0).unwrap_or(Value::Null));
-        slots[1] = Some(a.get(1).unwrap_or(Value::Null));
+    let n = d.slots.borrow().len();
+    for i in 0..n {
+        if d.slots.borrow()[i].is_some() {
+            let pname = if i == 0 { "message" } else { "since" };
+            let msg = format!("Cannot modify readonly property {}::${pname}", d.class.name);
+            return Err(vm.make_throw("Error", &msg));
+        }
+        d.slots.borrow_mut()[i] = Some(a.get(i).unwrap_or(Value::Null));
     }
     Ok(Value::Null)
 }
 
 /// Registers interfaces and core classes.
 pub(crate) fn register(vm: &mut Vm) {
-    ClassBuilder::new("stdClass").flags(cflags::ALLOW_DYNAMIC).register(vm);
-    ClassBuilder::new("Traversable").flags(cflags::INTERFACE).register(vm);
+    ClassBuilder::new("stdClass")
+        .flags(cflags::ALLOW_DYNAMIC)
+        .register(vm);
+    ClassBuilder::new("Traversable")
+        .flags(cflags::INTERFACE)
+        .register(vm);
     ClassBuilder::new("Iterator")
         .flags(cflags::INTERFACE)
         .implements(vm, &["Traversable"])
@@ -137,9 +147,18 @@ pub(crate) fn register(vm: &mut Vm) {
         .constant("TARGET_CONSTANT", Value::Int(64))
         .constant("TARGET_ALL", Value::Int(127))
         .constant("IS_REPEATABLE", Value::Int(128))
-        .method("__construct(int $flags = Attribute::TARGET_ALL)", PUB, attribute_construct)
+        .method(
+            "__construct(int $flags = Attribute::TARGET_ALL)",
+            PUB,
+            attribute_construct,
+        )
         .register(vm);
-    for n in ["ReturnTypeWillChange", "AllowDynamicProperties", "SensitiveParameter", "Override"] {
+    for n in [
+        "ReturnTypeWillChange",
+        "AllowDynamicProperties",
+        "SensitiveParameter",
+        "Override",
+    ] {
         ClassBuilder::new(n)
             .flags(cflags::FINAL)
             .method("__construct()", PUB, noop_construct)
@@ -149,12 +168,20 @@ pub(crate) fn register(vm: &mut Vm) {
         .flags(cflags::FINAL)
         .prop("message", PUB | flags::READONLY, Some("?string"), None)
         .prop("since", PUB | flags::READONLY, Some("?string"), None)
-        .method("__construct(?string $message = null, ?string $since = null)", PUB, deprecated_construct)
+        .method(
+            "__construct(?string $message = null, ?string $since = null)",
+            PUB,
+            deprecated_construct,
+        )
         .register(vm);
     ClassBuilder::new("NoDiscard")
         .flags(cflags::FINAL)
         .prop("message", PUB | flags::READONLY, Some("?string"), None)
-        .method("__construct(?string $message = null)", PUB, deprecated_construct)
+        .method(
+            "__construct(?string $message = null)",
+            PUB,
+            deprecated_construct,
+        )
         .register(vm);
     ClassBuilder::new("SensitiveParameterValue")
         .flags(cflags::FINAL | cflags::NOT_SERIALIZABLE)

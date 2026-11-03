@@ -14,6 +14,7 @@ php-random = { path = "../php-random" }
 php-stdarr = { path = "../php-stdarr" }
 php-stdstr = { path = "../php-stdstr" }
 php-hash = { path = "../php-hash" }
+php-memlimit = { path = "../php-memlimit" }
 
 [lints]
 workspace = true

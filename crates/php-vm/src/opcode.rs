@@ -232,19 +232,36 @@ pub enum Op {
     /// Copies (dereferenced) `src` into `dst`.
     Move { src: Operand, dst: u32 },
     /// Binary operation.
-    Bin { op: BinKind, a: Operand, b: Operand, dst: u32 },
+    Bin {
+        op: BinKind,
+        a: Operand,
+        b: Operand,
+        dst: u32,
+    },
     /// Unary operation.
     Unary { op: UnKind, a: Operand, dst: u32 },
     /// Cast.
-    Cast { kind: CastKind, a: Operand, dst: u32 },
+    Cast {
+        kind: CastKind,
+        a: Operand,
+        dst: u32,
+    },
     /// String interpolation: concatenates the parts.
     Rope { parts: Box<[Operand]>, dst: u32 },
     /// Starts an array literal in `dst`.
     InitArray { dst: u32 },
     /// Adds an element to the array in `arr`.
-    ArrayAdd { arr: u32, key: Option<Operand>, val: Operand },
+    ArrayAdd {
+        arr: u32,
+        key: Option<Operand>,
+        val: Operand,
+    },
     /// Adds a reference element to the array in `arr`.
-    ArrayAddRef { arr: u32, key: Option<Operand>, place: PlaceId },
+    ArrayAddRef {
+        arr: u32,
+        key: Option<Operand>,
+        place: PlaceId,
+    },
     /// Spreads `src` into the array in `arr` (`...$x`).
     ArrayUnpack { arr: u32, src: Operand },
 
@@ -266,19 +283,44 @@ pub enum Op {
     JmpNull { a: Operand, dst: u32, target: Label },
 
     /// `$cv = val`.
-    AssignCv { cv: u32, val: Operand, dst: Option<u32> },
+    AssignCv {
+        cv: u32,
+        val: Operand,
+        dst: Option<u32>,
+    },
     /// `place = val`.
-    Assign { place: PlaceId, val: Operand, dst: Option<u32> },
+    Assign {
+        place: PlaceId,
+        val: Operand,
+        dst: Option<u32>,
+    },
     /// `place op= val`.
-    AssignOp { place: PlaceId, op: BinaryOp, val: Operand, dst: Option<u32> },
+    AssignOp {
+        place: PlaceId,
+        op: BinaryOp,
+        val: Operand,
+        dst: Option<u32>,
+    },
     /// `++place` etc.
-    IncDec { place: PlaceId, kind: IncDecKind, dst: Option<u32> },
+    IncDec {
+        place: PlaceId,
+        kind: IncDecKind,
+        dst: Option<u32>,
+    },
     /// `place =& src` where `src` holds a reference.
-    AssignRef { place: PlaceId, src: Operand, dst: Option<u32> },
+    AssignRef {
+        place: PlaceId,
+        src: Operand,
+        dst: Option<u32>,
+    },
     /// Makes `place` a reference and stores it in `dst`.
     MakeRef { place: PlaceId, dst: u32 },
     /// Reads a place.
-    Fetch { place: PlaceId, mode: FetchMode, dst: u32 },
+    Fetch {
+        place: PlaceId,
+        mode: FetchMode,
+        dst: u32,
+    },
     /// `isset(place)`.
     Isset { place: PlaceId, dst: u32 },
     /// `empty(place)`.
@@ -297,7 +339,11 @@ pub enum Op {
 
     /// Starts a call to a named function (`name` and `fallback` are
     /// lower-cased literal names).
-    InitFCall { name: u32, fallback: Option<u32>, display: u32 },
+    InitFCall {
+        name: u32,
+        fallback: Option<u32>,
+        display: u32,
+    },
     /// Starts a call to a callable value.
     InitDynCall { callee: Operand },
     /// Starts a method call.
@@ -308,7 +354,11 @@ pub enum Op {
     InitParentHook { prop: u32, set: bool },
     /// Creates an object and starts its constructor call; jumps to `skip`
     /// if the class has no constructor.
-    New { class: ClassSpec, dst: u32, skip: Label },
+    New {
+        class: ClassSpec,
+        dst: u32,
+        skip: Label,
+    },
     /// Passes a positional argument.
     Send { src: ArgSrc },
     /// Passes `...$args`.
@@ -339,9 +389,17 @@ pub enum Op {
     /// Suspends the call frame into a new `Generator`.
     GeneratorCreate,
     /// `yield`.
-    Yield { key: Option<Operand>, val: Option<Operand>, dst: Option<u32> },
+    Yield {
+        key: Option<Operand>,
+        val: Option<Operand>,
+        dst: Option<u32>,
+    },
     /// `yield` of a reference (by-ref generators).
-    YieldRef { key: Option<Operand>, place: PlaceId, dst: Option<u32> },
+    YieldRef {
+        key: Option<Operand>,
+        place: PlaceId,
+        dst: Option<u32>,
+    },
     /// `yield from`.
     YieldFrom { src: Operand, dst: Option<u32> },
 
@@ -354,17 +412,31 @@ pub enum Op {
     /// Creates a closure object.
     MakeClosure { idx: u32, dst: u32 },
     /// `const NAME = val;`
-    DeclareConst { name: u32, val: Operand },
+    /// `attrs`: index into [`DeclTable::const_attributes`] (`u32::MAX`
+    /// without attributes).
+    DeclareConst { name: u32, val: Operand, attrs: u32 },
 
     /// Reads a constant; `fallback` is the global name for unqualified
     /// namespaced constants.
-    FetchConst { name: u32, fallback: Option<u32>, dst: u32 },
+    FetchConst {
+        name: u32,
+        fallback: Option<u32>,
+        dst: u32,
+    },
     /// `A::NAME`
-    FetchClassConst { class: ClassSpec, name: Operand, dst: u32 },
+    FetchClassConst {
+        class: ClassSpec,
+        name: Operand,
+        dst: u32,
+    },
     /// `A::class`
     FetchClassName { class: ClassSpec, dst: u32 },
     /// `a instanceof B`
-    InstanceOf { a: Operand, class: ClassSpec, dst: u32 },
+    InstanceOf {
+        a: Operand,
+        class: ClassSpec,
+        dst: u32,
+    },
     /// `clone a`
     Clone { a: Operand, dst: u32 },
 
@@ -379,7 +451,11 @@ pub enum Op {
     /// Starts a catch clause: if the pending exception is an instance of
     /// one of the classes (literal names), binds it to `cv` and continues;
     /// otherwise jumps to `next`.
-    Catch { classes: Box<[u32]>, cv: Option<u32>, next: Label },
+    Catch {
+        classes: Box<[u32]>,
+        cv: Option<u32>,
+        next: Label,
+    },
     /// Re-raises the pending exception (no catch clause matched).
     Rethrow,
     /// Runs finally block `fin` at `target`, then returns here.
@@ -394,12 +470,27 @@ pub enum Op {
     /// Ends `@`.
     EndSilence { saved: Operand },
     /// `include`/`require`/`eval`.
-    Include { kind: IncludeKind, a: Operand, dst: u32 },
+    Include {
+        kind: IncludeKind,
+        a: Operand,
+        dst: u32,
+    },
     /// Starts a foreach loop over `subject` (or the place, by reference);
     /// jumps to `end` when empty.
-    FeReset { subject: Operand, place: Option<PlaceId>, kind: ForeachKind, iter: u32, end: Label },
+    FeReset {
+        subject: Operand,
+        place: Option<PlaceId>,
+        kind: ForeachKind,
+        iter: u32,
+        end: Label,
+    },
     /// Fetches the next element; jumps to `end` when done.
-    FeFetch { iter: u32, end: Label, val: u32, key: Option<u32> },
+    FeFetch {
+        iter: u32,
+        end: Label,
+        val: u32,
+        key: Option<u32>,
+    },
     /// Releases a foreach iterator.
     FeFree { iter: u32 },
     /// Throws `UnhandledMatchError` for the subject.
@@ -430,6 +521,11 @@ pub struct TryEntry {
 
 /// A literal table entry.
 pub type Literal = Value;
+
+/// Bit in [`ParamInfo::promote`] of native parameters declared
+/// `@prefer-ref` (`ZEND_ARG_SEND_PREFER_REF`): sent by reference when the
+/// argument is a variable, by value otherwise.
+pub const PREFER_REF: u32 = 1 << 31;
 
 /// Information about one declared parameter.
 #[derive(Clone, Debug)]
@@ -494,6 +590,8 @@ pub struct DeclTable {
     pub functions: RefCell<Vec<Rc<crate::func::UserFunction>>>,
     /// Class declarations.
     pub classes: RefCell<Vec<Rc<crate::class::ClassDecl>>>,
+    /// Attributes of `const` statements (PHP 8.5).
+    pub const_attributes: RefCell<Vec<Rc<Vec<crate::class::AttributeInfo>>>>,
 }
 
 impl OpArray {

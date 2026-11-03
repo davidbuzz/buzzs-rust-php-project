@@ -463,11 +463,21 @@ pub struct Vm {
     pub shutdown_hooks: Vec<fn(&mut Vm)>,
     /// Request startup hooks of extensions (`RINIT`).
     pub startup_hooks: Vec<fn(&mut Vm)>,
+    /// Module startup hooks of extensions, run after registration.
+    pub module_startup_hooks: Vec<fn(&mut Vm)>,
+    /// Extension `on_modify` handlers by INI name (`ZEND_INI_MH`).
+    pub ini_modify_hooks: HashMap<String, crate::ext::IniModifyFn>,
     /// `#[\Deprecated]` suffixes (" since X, msg") of native functions,
     /// by lowercase name.
     pub builtin_deprecations: HashMap<ZStr, Vec<u8>>,
     /// Class constants whose `#[\Deprecated]` notice is being built.
     pub(crate) const_deprecation_guard: HashSet<usize>,
+    /// Attributes of user constants declared with `const` (by name).
+    pub const_attributes: HashMap<ZStr, Rc<Vec<crate::class::AttributeInfo>>>,
+    /// File that defined each user constant (`ReflectionConstant::getFileName`).
+    pub const_files: HashMap<ZStr, ZStr>,
+    /// Deprecated native constants: name → " since X, msg" suffix.
+    pub deprecated_constants: HashMap<ZStr, Vec<u8>>,
     /// Shared empty code for builtin frames.
     pub empty_code: Rc<OpArray>,
     /// Shared empty variable store for builtin frames.

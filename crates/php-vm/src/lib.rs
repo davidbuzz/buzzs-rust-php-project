@@ -94,7 +94,6 @@ fn extra_directives() -> Vec<IniDirective> {
         d("assert.callback", None, ModifyHandler::None),
         d("assert.exception", Some("1"), ModifyHandler::Bool),
         d("date.timezone", Some("UTC"), ModifyHandler::None),
-        d("session.save_path", Some(""), ModifyHandler::None),
         d("arg_separator", Some("&"), ModifyHandler::None),
         d("pcre.backtrack_limit", Some("1000000"), ModifyHandler::Long),
         d("pcre.recursion_limit", Some("100000"), ModifyHandler::Long),
@@ -161,8 +160,13 @@ impl Vm {
             loaded_extensions: Vec::new(),
             shutdown_hooks: Vec::new(),
             startup_hooks: Vec::new(),
+            module_startup_hooks: Vec::new(),
+            ini_modify_hooks: std::collections::HashMap::new(),
             builtin_deprecations: std::collections::HashMap::new(),
             const_deprecation_guard: std::collections::HashSet::new(),
+            const_attributes: std::collections::HashMap::new(),
+            const_files: std::collections::HashMap::new(),
+            deprecated_constants: std::collections::HashMap::new(),
             pending_call_dst: None,
             empty_code,
             empty_vars: Rc::new(RefCell::new(vm::VarStore::default())),
@@ -188,6 +192,10 @@ impl Vm {
                 };
             }
             "precision" => self.precision = self.ini.get_long("precision"),
+            "memory_limit" | "max_memory_limit" => {
+                let limit = u64::try_from(self.ini.get_long("memory_limit")).unwrap_or(u64::MAX);
+                php_memlimit::GLOBAL.force_limit(php_memlimit::limit_from_ini(limit));
+            }
             "serialize_precision" => {
                 self.serialize_precision = self.ini.get_long("serialize_precision")
             }
@@ -265,6 +273,11 @@ impl Vm {
         for hook in self.startup_hooks.clone() {
             hook(self);
         }
+        // memory_limit accounting starts with the request.
+        let limit = u64::try_from(self.ini.get_long("memory_limit")).unwrap_or(u64::MAX);
+        if php_memlimit::request_start(php_memlimit::limit_from_ini(limit)).is_err() {
+            php_memlimit::GLOBAL.force_limit(Some(php_memlimit::DEFAULT_LIMIT));
+        }
         let p = ZStr::from(path);
         let mut r = Ok(());
         let prepend = self
@@ -294,7 +307,14 @@ impl Vm {
     /// Request shutdown: shutdown functions, destructors, output flush.
     pub fn shutdown(&mut self, r: Result<(), Throw>) -> i32 {
         let fatal = matches!(r, Err(Throw::Fatal));
+        // `oom_after_main_script`: a violation recorded by the last
+        // statement is still reported.
+        if !fatal && php_memlimit::is_pending() {
+            let _ = self.raise_pending_oom();
+        }
         self.frames.clear();
+        // A shutdown function may raise its own OOM.
+        php_memlimit::clear();
         // Shutdown functions.
         let mut i = 0;
         while i < self.shutdown_functions.len() {
@@ -325,6 +345,7 @@ impl Vm {
         }
         php_support::output::request_shutdown(self);
         self.flush_stdout();
+        php_memlimit::request_end();
         self.exit_status
     }
 
@@ -392,5 +413,121 @@ impl Vm {
             Ok(_) => Ok(()),
             Err(e) => Err((e.message, e.line, e.kind == php_parser::ErrorKind::Parse)),
         }
+    }
+}
+
+/// Core constants usable in INI values before any extension starts
+/// (`zend_register_standard_constants`).
+fn startup_ini_constant(name: &[u8]) -> Option<Vec<u8>> {
+    let v: i64 = match name {
+        b"E_ERROR" => 1,
+        b"E_WARNING" => 2,
+        b"E_PARSE" => 4,
+        b"E_NOTICE" => 8,
+        b"E_CORE_ERROR" => 16,
+        b"E_CORE_WARNING" => 32,
+        b"E_COMPILE_ERROR" => 64,
+        b"E_COMPILE_WARNING" => 128,
+        b"E_USER_ERROR" => 256,
+        b"E_USER_WARNING" => 512,
+        b"E_USER_NOTICE" => 1024,
+        b"E_STRICT" => 2048,
+        b"E_RECOVERABLE_ERROR" => 4096,
+        b"E_DEPRECATED" => 8192,
+        b"E_USER_DEPRECATED" => 16384,
+        b"E_ALL" => 30719,
+        b"PHP_INT_MAX" => i64::MAX,
+        b"PHP_INT_SIZE" => 8,
+        _ => return None,
+    };
+    Some(v.to_string().into_bytes())
+}
+
+struct DefineCollector(Vec<(String, String)>);
+
+impl php_support::ini::IniParserCallback for DefineCollector {
+    fn section(&mut self, _name: &[u8]) {}
+    fn entry(&mut self, key: &[u8], value: Option<php_support::ini::IniScalar>) {
+        let v = value.map(|v| v.to_bytes()).unwrap_or_default();
+        self.0.push((
+            String::from_utf8_lossy(key).into_owned(),
+            String::from_utf8_lossy(&v).into_owned(),
+        ));
+    }
+    fn pop_entry(&mut self, key: &[u8], value: php_support::ini::IniScalar, _offset: &[u8]) {
+        self.entry(key, Some(value));
+    }
+}
+
+/// The CLI's `-d name=value` (`php_cli.c`): a value starting with a
+/// character that is neither alphanumeric nor a quote is quoted, then the
+/// line is parsed as INI (comments, constants such as `E_ALL`,
+/// expressions, quoting).
+pub fn parse_cli_define(arg: &[u8]) -> Vec<(String, String)> {
+    let mut line = Vec::with_capacity(arg.len() + 4);
+    match arg.iter().position(|&c| c == b'=') {
+        Some(p) => {
+            let val = &arg[p + 1..];
+            match val.first() {
+                Some(&c) if !c.is_ascii_alphanumeric() && c != b'"' && c != b'\'' => {
+                    line.extend_from_slice(&arg[..=p]);
+                    line.push(b'"');
+                    line.extend_from_slice(val);
+                    line.push(b'"');
+                }
+                _ => line.extend_from_slice(arg),
+            }
+        }
+        None => {
+            line.extend_from_slice(arg);
+            line.extend_from_slice(b"=1");
+        }
+    }
+    line.push(b'\n');
+    let mut hooks = php_support::ini::FnHooks {
+        constant: startup_ini_constant,
+        variable: |n: &[u8]| {
+            std::env::var_os(String::from_utf8_lossy(n).as_ref())
+                .map(|v| v.to_string_lossy().into_owned().into_bytes())
+        },
+    };
+    let mut out = DefineCollector(Vec::new());
+    let _ = php_support::ini::parse_ini(
+        &line,
+        "Unknown",
+        php_support::ini::ScannerMode::Normal,
+        &mut hooks,
+        &mut out,
+    );
+    out.0
+}
+
+#[cfg(test)]
+mod cli_define_tests {
+    use super::parse_cli_define;
+
+    fn one(s: &str) -> (String, String) {
+        parse_cli_define(s.as_bytes())
+            .into_iter()
+            .next()
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn defines() {
+        assert_eq!(
+            one("error_reporting=E_ALL"),
+            ("error_reporting".into(), "30719".into())
+        );
+        assert_eq!(
+            one("date.timezone=UTC;"),
+            ("date.timezone".into(), "UTC".into())
+        );
+        assert_eq!(one("display_errors"), ("display_errors".into(), "1".into()));
+        assert_eq!(one("x=\"a b\""), ("x".into(), "a b".into()));
+        assert_eq!(
+            one("error_reporting=E_ALL & ~E_DEPRECATED"),
+            ("error_reporting".into(), "22527".into())
+        );
     }
 }

@@ -1119,8 +1119,17 @@ impl Vm {
         if object::class_of(o).lc_name.as_bytes() == b"closure" {
             return Ok(ZArray::from_values([Value::Object(o.clone())]));
         }
-        let target = self.lazy_object_for(o, None)?;
-        let o = &target;
+        // Native `get_properties_for(ZEND_PROP_PURPOSE_ARRAY_CAST)`.
+        let hook = object::class_of(o)
+            .hooks
+            .as_ref()
+            .and_then(|h| h.properties_for);
+        if let Some(f) = hook {
+            if let Some(t) = f(self, o, php_runtime::PropertyPurpose::ArrayCast)? {
+                return Ok(t);
+            }
+        }
+        // `zend_get_properties_no_lazy_init`: no initialization here.
         if let Some(a) = self.internal_object_array(o)? {
             return Ok(a);
         }
@@ -1141,6 +1150,10 @@ impl Vm {
         let Value::Object(o) = v else {
             return Err(self.make_throw("Error", "__clone method called on non-object"));
         };
+        // Lazy objects initialize first; proxies clone the real instance.
+        if let Some(v) = crate::reflection::lazy::clone_lazy(self, &o)? {
+            return Ok(v);
+        }
         let cls = object::class_of(&o).clone();
         if cls.is_enum() {
             return Err(self.make_throw(

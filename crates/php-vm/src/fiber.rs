@@ -48,6 +48,8 @@ pub struct FiberData {
     /// The callable resolved by the constructor (`fci`/`fcc`: keeps the
     /// object a `[A::class, 'm']` callable bound to); taken by `start()`.
     call: Option<PendingCall>,
+    /// The callable as given to the constructor (`ReflectionFiber::getCallable`).
+    pub callable: Value,
     /// Status.
     pub state: FiberState,
     /// `ZEND_FIBER_FLAG_THREW`.
@@ -76,9 +78,10 @@ pub struct FiberData {
 }
 
 impl FiberData {
-    fn new(call: PendingCall) -> Self {
+    fn new(call: PendingCall, callable: Value) -> Self {
         FiberData {
             call: Some(call),
+            callable,
             state: FiberState::Init,
             threw: false,
             bailout: false,
@@ -449,8 +452,9 @@ fn fiber_construct(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     if object::has_internal::<FiberData>(&o) {
         return Err(vm.fiber_error("Cannot call constructor twice"));
     }
-    let call = vm.resolve_callable_for_call(&a.at(0))?;
-    object::set_internal(&o, FiberData::new(call));
+    let callable = a.at(0);
+    let call = vm.resolve_callable_for_call(&callable)?;
+    object::set_internal(&o, FiberData::new(call, callable));
     Ok(Value::Null)
 }
 
@@ -642,4 +646,9 @@ pub(crate) fn register(vm: &mut Vm) {
     vm.classes.remove(&cls.lc_name);
     vm.class_order.retain(|n| *n != cls.lc_name);
     GRACEFUL_EXIT.with(|g| *g.borrow_mut() = Some(cls));
+}
+
+/// The callable a fiber was constructed with (`None` for a non-fiber).
+pub(crate) fn fiber_callable(o: &Obj) -> Option<Value> {
+    object::internal::<FiberData, _>(o, |d| d.callable.clone())
 }

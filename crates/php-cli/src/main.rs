@@ -75,8 +75,20 @@ fn limit_memory() {
     }
 }
 
+php_memlimit::install_global_allocator!();
+
+/// An allocation crossed the hard ceiling above `memory_limit`: PHP's
+/// message on stderr, then exit 137 without unwinding.
+fn hard_limit(e: php_memlimit::HardLimitExceeded) -> ! {
+    let _ = std::io::stderr().write_all(format!("{e} in Unknown on line 0\n").as_bytes());
+    // SAFETY: `_exit` terminates the process immediately; nothing here
+    // relies on destructors or atexit handlers (PHP does the same).
+    unsafe { libc::_exit(137) }
+}
+
 fn main() {
     limit_memory();
+    php_memlimit::set_hard_limit_handler(hard_limit);
     let raw: Vec<Vec<u8>> = std::env::args_os()
         .skip(1)
         .map(OsStringExt::into_vec)
@@ -157,11 +169,7 @@ fn run(raw: &[Vec<u8>]) -> i32 {
                         eprintln!("Error in argument {}. Error: Missing argument to -d", i);
                         return 1;
                     };
-                    let v = String::from_utf8_lossy(&v).into_owned();
-                    match v.split_once('=') {
-                        Some((k, val)) => ini.push((k.trim().to_string(), strip_quotes(val))),
-                        None => ini.push((v.trim().to_string(), "1".to_string())),
-                    }
+                    ini.extend(php_vm::parse_cli_define(&v));
                 } else if let Some(rest) = opt.strip_prefix("-r") {
                     let Some(v) = take_val(&mut i, rest) else {
                         return 1;
@@ -281,12 +289,4 @@ fn run(raw: &[Vec<u8>]) -> i32 {
         })
         .map(|h| h.join().unwrap_or(255));
     r.unwrap_or(255)
-}
-
-fn strip_quotes(v: &str) -> String {
-    let v = v.trim();
-    if v.len() >= 2 && v.starts_with('"') && v.ends_with('"') {
-        return v[1..v.len() - 1].to_string();
-    }
-    v.to_string()
 }

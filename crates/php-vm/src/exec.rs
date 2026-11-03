@@ -84,7 +84,7 @@ impl Vm {
             Some(v) => Ok(v),
             None => {
                 let name = self.frame().code.cv_names[cv as usize].clone();
-                self.warning(&format!("Undefined variable ${name}"))?;
+                self.warning(&crate::exec::undefined_var_msg(&name))?;
                 Ok(Value::Null)
             }
         }
@@ -655,10 +655,16 @@ impl Vm {
                         self.set_tmp(*dst, c);
                         Flow::Next
                     }
-                    Op::DeclareConst { name, val } => {
+                    Op::DeclareConst { name, val, attrs } => {
                         let n = self.lit_str(*name);
                         let v = self.read(*val)?;
-                        self.declare_constant(n, v)?;
+                        if self.declare_constant(n.clone(), v)? && *attrs != u32::MAX {
+                            if let Some(a) =
+                                code.decls.const_attributes.borrow().get(*attrs as usize)
+                            {
+                                self.const_attributes.insert(n, a.clone());
+                            }
+                        }
                         Flow::Next
                     }
                     Op::FetchConst {
@@ -850,6 +856,10 @@ impl Vm {
                 };
                 if object::has_pending_destructors() {
                     self.run_pending_destructors()?;
+                }
+                // Delayed memory_limit violation (`zend_mm_delayed_error`).
+                if php_memlimit::is_pending() {
+                    self.raise_pending_oom()?;
                 }
                 match flow {
                     Flow::Next => {}
@@ -1243,5 +1253,29 @@ pub(crate) fn scope_display(scope: Option<&Rc<crate::class::Class>>) -> String {
     match scope {
         Some(c) => format!("scope {}", object::display_name(&c.name)),
         None => "global scope".to_string(),
+    }
+}
+
+/// "Undefined variable $x" — or "Undefined global variable $x" for the
+/// auto-globals, which php-src fetches with `ZEND_FETCH_GLOBAL_LOCK`.
+pub(crate) fn undefined_var_msg(name: &impl std::fmt::Display) -> String {
+    let n = name.to_string();
+    let global = matches!(
+        n.as_str(),
+        "_GET" | "_POST" | "_COOKIE" | "_SERVER" | "_ENV" | "_REQUEST" | "_FILES" | "_SESSION"
+    );
+    format!(
+        "Undefined {}variable ${n}",
+        if global { "global " } else { "" }
+    )
+}
+
+impl Vm {
+    /// Raises a recorded `memory_limit` violation as PHP's fatal error.
+    pub(crate) fn raise_pending_oom(&mut self) -> VmResult<()> {
+        if let Some(over) = php_memlimit::take() {
+            self.error(crate::errors::level::ERROR, &over.to_string())?;
+        }
+        Ok(())
     }
 }

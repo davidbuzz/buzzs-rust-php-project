@@ -59,7 +59,11 @@ impl Vm {
     }
 
     /// The property table for a purpose (honouring `__debugInfo`).
-    pub(crate) fn props_for(&mut self, o: &Obj, purpose: PropertyPurpose) -> VmResult<Option<ZArray>> {
+    pub(crate) fn props_for(
+        &mut self,
+        o: &Obj,
+        purpose: PropertyPurpose,
+    ) -> VmResult<Option<ZArray>> {
         let cls = object::class_of(o).clone();
         if let Some(f) = cls.hooks.as_ref().and_then(|h| h.properties_for) {
             if let Some(t) = f(self, o, purpose)? {
@@ -79,6 +83,18 @@ impl Vm {
                 };
             }
         }
+        // Serialization, export and JSON initialize lazy objects (and read
+        // a proxy's real instance); var_dump and (array) do not.
+        let target;
+        let o = if matches!(
+            purpose,
+            PropertyPurpose::Serialize | PropertyPurpose::VarExport | PropertyPurpose::Json
+        ) {
+            target = self.lazy_object_for(o, None)?;
+            &target
+        } else {
+            o
+        };
         if let Some(a) = self.internal_object_array(o)? {
             return Ok(Some(a));
         }
@@ -92,6 +108,10 @@ impl Vm {
     }
 
     fn std_compare(&mut self, a: &Obj, b: &Obj) -> VmResult<i32> {
+        let (a, b) = (
+            &self.lazy_object_for(a, None)?,
+            &self.lazy_object_for(b, None)?,
+        );
         let ca = object::class_of(a).clone();
         let cb = object::class_of(b).clone();
         if !std::rc::Rc::ptr_eq(&ca, &cb) {
@@ -187,7 +207,11 @@ impl RuntimeContext for Vm {
         })
     }
 
-    fn object_properties(&mut self, obj: &Obj, purpose: PropertyPurpose) -> RtResult<Option<ZArray>> {
+    fn object_properties(
+        &mut self,
+        obj: &Obj,
+        purpose: PropertyPurpose,
+    ) -> RtResult<Option<ZArray>> {
         self.props_for(obj, purpose).map_err(|t| self.to_rt(t))
     }
 
@@ -206,7 +230,11 @@ impl RuntimeContext for Vm {
             let properties = if purpose == PropertyPurpose::Debug && has_debug_info {
                 self.props_for(obj, purpose)
                     .map_err(|t| self.to_rt(t))?
-                    .map(|t| t.iter().map(|(k, v)| (k.clone(), PropertySlot::Value(v.clone()))).collect())
+                    .map(|t| {
+                        t.iter()
+                            .map(|(k, v)| (k.clone(), PropertySlot::Value(v.clone())))
+                            .collect()
+                    })
             } else {
                 None
             };
@@ -226,10 +254,26 @@ impl RuntimeContext for Vm {
                 lazy_prefix: self.lazy_prefix(obj),
             }
         };
+        // `zend_lazy_object_debug_info`: an initialized proxy shows its
+        // instance.
+        if purpose == PropertyPurpose::Debug {
+            if let Some(inst) = crate::reflection::lazy::proxy_instance(obj) {
+                return Ok(ObjectDump {
+                    kind,
+                    properties: Some(vec![(
+                        ArrayKey::from("instance"),
+                        PropertySlot::Value(Value::Object(inst)),
+                    )]),
+                });
+            }
+        }
         // Native `get_properties_for` / `get_debug_info` handlers.
         if let Some(f) = cls.hooks.as_ref().and_then(|h| h.properties_for) {
             if let Some(t) = f(self, obj, purpose).map_err(|t| self.to_rt(t))? {
-                let properties = t.iter().map(|(k, v)| (k.clone(), PropertySlot::Value(v.clone()))).collect();
+                let properties = t
+                    .iter()
+                    .map(|(k, v)| (k.clone(), PropertySlot::Value(v.clone())))
+                    .collect();
                 return Ok(ObjectDump {
                     kind,
                     properties: Some(properties),
@@ -284,15 +328,18 @@ impl RuntimeContext for Vm {
     }
 
     fn unserialize_object_finish(&mut self, obj: &Value, props: ZArray) -> RtResult<()> {
-        self.unserialize_finish(obj, props).map_err(|t| self.to_rt(t))
+        self.unserialize_finish(obj, props)
+            .map_err(|t| self.to_rt(t))
     }
 
     fn unserialize_enum(&mut self, class: &ZStr, case: &ZStr) -> RtResult<Value> {
-        self.unserialize_enum_vm(class, case).map_err(|t| self.to_rt(t))
+        self.unserialize_enum_vm(class, case)
+            .map_err(|t| self.to_rt(t))
     }
 
     fn unserialize_custom(&mut self, class: &ZStr, data: &[u8]) -> RtResult<Value> {
-        self.unserialize_custom_vm(class, data).map_err(|t| self.to_rt(t))
+        self.unserialize_custom_vm(class, data)
+            .map_err(|t| self.to_rt(t))
     }
 
     fn is_enum(&mut self, obj: &Obj) -> bool {
@@ -318,7 +365,9 @@ impl RuntimeContext for Vm {
     fn property_read(&mut self, obj: &Obj, name: &ZStr) -> RtResult<Option<Value>> {
         let (_, unmangled) = php_runtime::dump::unmangle_property_name(name.as_bytes());
         let n = ZStr::from(unmangled);
-        let has = self.has_property(obj, &n, false).map_err(|t| self.to_rt(t))?;
+        let has = self
+            .has_property(obj, &n, false)
+            .map_err(|t| self.to_rt(t))?;
         if !has {
             return Ok(None);
         }
@@ -349,11 +398,13 @@ impl Vm {
         let cls = object::class_of(obj).clone();
         let n = ZStr::from(unmangled);
         let target = match cls_part {
-            Some(c) if c != b"*" => cls
-                .props
-                .iter()
-                .find(|p| p.name == n && p.class.as_bytes() == c && p.visibility() == flags::PRIVATE),
-            _ => cls.prop_map.get(&n).filter(|p| p.flags & flags::STATIC == 0),
+            Some(c) if c != b"*" => cls.props.iter().find(|p| {
+                p.name == n && p.class.as_bytes() == c && p.visibility() == flags::PRIVATE
+            }),
+            _ => cls
+                .prop_map
+                .get(&n)
+                .filter(|p| p.flags & flags::STATIC == 0),
         };
         if let Some(pi) = target {
             object::data(obj).slots.borrow_mut()[pi.slot as usize] = Some(value);
@@ -378,7 +429,10 @@ impl Vm {
             } else {
                 cls.name.to_string_lossy()
             };
-            return Err(self.make_throw("Exception", &format!("Serialization of '{n}' is not allowed")));
+            return Err(self.make_throw(
+                "Exception",
+                &format!("Serialization of '{n}' is not allowed"),
+            ));
         }
         if let Some(f) = cls.hooks.as_ref().and_then(|h| h.serialize) {
             if let Some(props) = f(self, obj)? {
@@ -425,7 +479,9 @@ impl Vm {
                 )),
             };
         }
-        let table = self.props_for(obj, PropertyPurpose::Serialize)?.unwrap_or_default();
+        let table = self
+            .props_for(obj, PropertyPurpose::Serialize)?
+            .unwrap_or_default();
         if let Some(m) = cls.magic.sleep.clone() {
             let r = self.call_method(obj, &m, Vec::new())?;
             let Value::Array(names) = r else {
@@ -479,7 +535,11 @@ impl Vm {
                 match ic {
                     Some(ic) => {
                         let o = self.instantiate_unchecked(&ic)?;
-                        self.write_dynamic_prop(&o, ZStr::from("__PHP_Incomplete_Class_Name"), Value::Str(class.clone()));
+                        self.write_dynamic_prop(
+                            &o,
+                            ZStr::from("__PHP_Incomplete_Class_Name"),
+                            Value::Str(class.clone()),
+                        );
                         return Ok(Value::Object(o));
                     }
                     None => {
@@ -573,7 +633,10 @@ impl OutputHost for Vm {
 
     fn call_handler(&mut self, callback: &mut Value, buffer: &[u8], mode: i32) -> Option<Vec<u8>> {
         let cb = callback.clone();
-        let r = self.call_value(&cb, vec![Value::Str(ZStr::from(buffer)), Value::Int(i64::from(mode))]);
+        let r = self.call_value(
+            &cb,
+            vec![Value::Str(ZStr::from(buffer)), Value::Int(i64::from(mode))],
+        );
         match r {
             Ok(Value::Bool(false)) => None,
             Ok(Value::Bool(true)) => Some(Vec::new()),

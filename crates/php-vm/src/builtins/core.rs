@@ -126,8 +126,11 @@ fn constant_fn(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         .as_bytes()
         .strip_prefix(b"\\")
         .unwrap_or(name.as_bytes());
-    match vm.constants.get(n) {
-        Some(v) => Ok(v.clone()),
+    match vm.constants.get(n).cloned() {
+        Some(v) => {
+            vm.constant_deprecation(&ZStr::from(n))?;
+            Ok(v)
+        }
         None => Err(vm.make_throw(
             "Error",
             &format!("Undefined constant \"{}\"", name.to_string_lossy()),
@@ -200,6 +203,7 @@ fn get_object_vars(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let Value::Object(o) = a.at(0) else {
         return Ok(Value::Null);
     };
+    let o = vm.lazy_object_for(&o, None)?;
     let mut t = HashTable::new();
     for (k, name, _) in vm.visible_props(&o) {
         let v = vm.read_property(&o, &name, crate::opcode::FetchMode::Is)?;
@@ -591,6 +595,14 @@ fn ini_set(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         other => vm.to_zstr(other)?.as_bytes().to_vec(),
     };
     let mut sink = Vec::new();
+    if n == "memory_limit" || n == "max_memory_limit" {
+        vm.ini.memory_usage = u64::try_from(php_memlimit::real_usage()).unwrap_or(u64::MAX);
+    }
+    if let Some(h) = vm.ini_modify_hooks.get(n.as_str()).copied() {
+        if vm.ini.get(&n).is_some() && !h(vm, &val)? {
+            return Ok(Value::Bool(false));
+        }
+    }
     let r = vm.ini.ini_set(&n, &val, &mut sink);
     for d in sink {
         let lvl = i64::from(d.level.0);
@@ -610,8 +622,15 @@ fn ini_set(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 fn ini_restore(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let n = s(a, 0).to_string_lossy();
     let mut sink = Vec::new();
+    if n == "memory_limit" || n == "max_memory_limit" {
+        vm.ini.memory_usage = u64::try_from(php_memlimit::real_usage()).unwrap_or(u64::MAX);
+    }
     vm.ini.ini_restore(&n, &mut sink);
     vm.sync_ini(&n);
+    if let Some(h) = vm.ini_modify_hooks.get(n.as_str()).copied() {
+        let v = vm.ini.get(&n).map(<[u8]>::to_vec).unwrap_or_default();
+        h(vm, &v)?;
+    }
     Ok(Value::Null)
 }
 
@@ -825,8 +844,29 @@ fn ret_null(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
     Ok(Value::Null)
 }
 
-fn memory_get_usage(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
-    Ok(Value::Int(2 * 1024 * 1024))
+fn memory_get_usage(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let real = a.has(0) && a.bool(0);
+    Ok(Value::Int(
+        i64::try_from(php_memlimit::memory_get_usage(real)).unwrap_or(i64::MAX),
+    ))
+}
+
+fn memory_get_peak_usage(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let real = a.has(0) && a.bool(0);
+    Ok(Value::Int(
+        i64::try_from(php_memlimit::memory_get_peak_usage(real)).unwrap_or(i64::MAX),
+    ))
+}
+
+fn memory_reset_peak_usage(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
+    php_memlimit::reset_peak();
+    Ok(Value::Null)
+}
+
+fn gc_mem_caches(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
+    Ok(Value::Int(
+        i64::try_from(php_memlimit::gc_mem_caches()).unwrap_or(0),
+    ))
 }
 
 fn php_sapi_name(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
@@ -864,9 +904,13 @@ fn extension_loaded(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 }
 
 fn get_loaded_extensions(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
-    let mut v: Vec<Value> = crate::LOADED_EXTENSIONS.iter().map(|e| sv(*e)).collect();
-    v.extend(vm.loaded_extensions.iter().map(|e| sv(e.as_str())));
-    Ok(Value::Array(ZArray::from_values(v)))
+    let mut names: Vec<&str> = crate::LOADED_EXTENSIONS.to_vec();
+    for e in &vm.loaded_extensions {
+        if !names.iter().any(|n| n.eq_ignore_ascii_case(e)) {
+            names.push(e.as_str());
+        }
+    }
+    Ok(Value::Array(ZArray::from_values(names.into_iter().map(sv))))
 }
 
 fn call_user_func(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -1694,7 +1738,7 @@ pub(crate) fn register(vm: &mut Vm) {
     reg(vm, "gc_enabled(): bool", ret_true);
     reg(vm, "gc_enable(): void", ret_null);
     reg(vm, "gc_disable(): void", ret_null);
-    reg(vm, "gc_mem_caches(): int", ret_zero);
+    reg(vm, "gc_mem_caches(): int", gc_mem_caches);
     reg(vm, "gc_status(): array", gc_status);
     reg(
         vm,
@@ -1704,9 +1748,13 @@ pub(crate) fn register(vm: &mut Vm) {
     reg(
         vm,
         "memory_get_peak_usage(bool $real_usage = false): int",
-        memory_get_usage,
+        memory_get_peak_usage,
     );
-    reg(vm, "memory_reset_peak_usage(): void", ret_null);
+    reg(
+        vm,
+        "memory_reset_peak_usage(): void",
+        memory_reset_peak_usage,
+    );
     reg(vm, "set_time_limit(int $seconds): bool", ret_true);
     reg(vm, "ignore_user_abort(?bool $enable = null): int", ret_zero);
     reg(vm, "connection_status(): int", ret_zero);

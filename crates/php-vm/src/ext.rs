@@ -36,9 +36,16 @@ pub mod acc {
 /// Class flag bits for [`ClassBuilder::flags`].
 pub mod class_flags {
     pub use crate::class::cflags::{
-        ABSTRACT, ALLOW_DYNAMIC, FINAL, INTERFACE, NOT_SERIALIZABLE, NO_CLONE, NO_NEW,
+        ABSTRACT, ALLOW_DYNAMIC, FINAL, INTERFACE, NOT_SERIALIZABLE, NO_CLONE,
+        NO_DYNAMIC_PROPERTIES, NO_NEW, READONLY,
     };
 }
+
+/// An INI `on_modify` handler (`ZEND_INI_MH`): receives the new value
+/// before `ini_set()` applies it; `Ok(false)` rejects the change
+/// (`ini_set()` returns `false`). After `ini_restore()` it is called with
+/// the restored value (the result is ignored).
+pub type IniModifyFn = fn(&mut Vm, &[u8]) -> VmResult<bool>;
 
 /// A native extension module.
 pub trait Extension {
@@ -125,6 +132,24 @@ impl<'a> ModuleBuilder<'a> {
         self
     }
 
+    /// Defines a deprecated global constant: reading it emits
+    /// `Deprecated: Constant NAME is deprecated since X, message`
+    /// (`since`/`message` may be empty).
+    pub fn constant_deprecated(
+        &mut self,
+        name: &str,
+        value: Value,
+        since: &str,
+        message: &str,
+    ) -> &mut Self {
+        let n = ZStr::from(name);
+        self.vm.constants.insert(n.clone(), value);
+        let suffix =
+            crate::attrs::format_suffix(Some(&ZStr::from(since)), Some(&ZStr::from(message)));
+        self.vm.deprecated_constants.insert(n, suffix);
+        self
+    }
+
     /// Registers an INI directive. Values given with `-d` before startup
     /// apply.
     pub fn ini(&mut self, directive: IniDirective) -> &mut Self {
@@ -133,10 +158,24 @@ impl<'a> ModuleBuilder<'a> {
         self
     }
 
+    /// Registers an `on_modify` handler for INI directive `name` (validate
+    /// or react to `ini_set()`/`ini_restore()`; see [`IniModifyFn`]).
+    pub fn ini_on_modify(&mut self, name: &str, f: IniModifyFn) -> &mut Self {
+        self.vm.ini_modify_hooks.insert(name.to_string(), f);
+        self
+    }
+
     /// Registers a callback run at request shutdown, after shutdown
     /// functions and destructors, before output is flushed (`RSHUTDOWN`).
     pub fn on_request_shutdown(&mut self, f: fn(&mut Vm)) -> &mut Self {
         self.vm.shutdown_hooks.push(f);
+        self
+    }
+
+    /// Registers a callback run once all extensions are registered
+    /// (`MINIT` work that needs other modules' classes or functions).
+    pub fn on_module_startup(&mut self, f: fn(&mut Vm)) -> &mut Self {
+        self.vm.module_startup_hooks.push(f);
         self
     }
 
@@ -234,9 +273,22 @@ impl Vm {
     ) -> Vm {
         let mut vm = Vm::new(opts, stdout);
         for e in extensions {
-            vm.loaded_extensions.push(e.name().to_string());
+            if !vm
+                .loaded_extensions
+                .iter()
+                .any(|n| n.eq_ignore_ascii_case(e.name()))
+            {
+                vm.loaded_extensions.push(e.name().to_string());
+            }
+            // Attribute the functions/classes/constants it adds to it
+            // (ReflectionExtension, get_defined_constants(true)).
+            crate::reflection::record_module(&vm, e.name(), true);
             let mut m = ModuleBuilder::new(&mut vm, e.name());
             e.register(&mut m);
+            crate::reflection::record_module(&vm, e.name(), false);
+        }
+        for hook in std::mem::take(&mut vm.module_startup_hooks) {
+            hook(&mut vm);
         }
         vm.disable_functions();
         vm
@@ -261,6 +313,19 @@ impl Vm {
 
     /// Throws an exception of class `class` (any registered `Throwable`)
     /// with `message`. Use as `return Err(vm.throw(...))`.
+    /// `zend_parse_arg_long_weak`: loose int coercion for a non-strict
+    /// call (with its "Implicit conversion" deprecations); `None` when
+    /// the value is not acceptable as int.
+    pub fn parse_long_weak(&mut self, v: &Value) -> VmResult<Option<i64>> {
+        self.parse_arg_long_weak(v)
+    }
+
+    /// Wraps a native iterator in an `InternalIterator` object (what
+    /// `getIterator()` of a native `IteratorAggregate` returns).
+    pub fn new_internal_iterator(&mut self, it: Box<dyn NativeIterator>) -> VmResult<Obj> {
+        crate::weakref::new_internal_iterator(self, it)
+    }
+
     pub fn throw(&mut self, class: &str, message: &str) -> Throw {
         self.make_throw(class, message)
     }
@@ -361,6 +426,56 @@ impl Vm {
         self.write_property(o, &ZStr::from(name), v).map(|_| ())
     }
 
+    /// Writes a property as code in class `scope` would (private/protected
+    /// access, readonly initialization scope), e.g. PDO's fetch-into-class.
+    pub fn set_property_scoped(
+        &mut self,
+        o: &Obj,
+        name: &str,
+        v: Value,
+        scope: &Rc<Class>,
+    ) -> VmResult<()> {
+        let idx = self
+            .frames
+            .iter()
+            .rposition(|f| f.kind != crate::vm::FrameKind::Builtin);
+        let Some(idx) = idx else {
+            return self.set_property(o, name, v);
+        };
+        let saved = std::mem::replace(&mut self.frames[idx].scope, Some(scope.clone()));
+        let r = self.write_property(o, &ZStr::from(name), v).map(|_| ());
+        if let Some(f) = self.frames.get_mut(idx) {
+            f.scope = saved;
+        }
+        r
+    }
+
+    /// Instantiates `class` and calls its constructor with positional and
+    /// named arguments (`new C(...$args, name: $v)`).
+    pub fn new_object_named(
+        &mut self,
+        class: &Rc<Class>,
+        args: Vec<Value>,
+        named: Vec<(ZStr, Value)>,
+    ) -> VmResult<Obj> {
+        self.construct_with(class, args, named)
+    }
+
+    /// Calls a method with positional and named arguments.
+    pub fn call_method_named(
+        &mut self,
+        o: &Obj,
+        method: &str,
+        args: Vec<Value>,
+        named: Vec<(ZStr, Value)>,
+    ) -> VmResult<Value> {
+        let cb = Value::Array(php_runtime::ZArray::from_values([
+            Value::Object(o.clone()),
+            Value::Str(ZStr::from(method)),
+        ]));
+        self.call_value_named(&cb, args, named)
+    }
+
     /// Writes a declared or dynamic property directly (no visibility,
     /// readonly or type checks) — for initializing native objects.
     pub fn set_property_raw(&mut self, o: &Obj, name: &str, v: Value) {
@@ -457,4 +572,88 @@ pub fn check_signature(sig: &str) -> (String, usize) {
     let s = parse_sig(sig);
     let _ = flags::PUBLIC;
     (s.name, s.params.len())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Args, Extension, ModuleBuilder, VmResult};
+    use crate::{Vm, VmOptions};
+    use php_runtime::Value;
+    use std::cell::RefCell;
+    use std::io::Write;
+    use std::rc::Rc;
+
+    #[derive(Clone, Default)]
+    struct Sink(Rc<RefCell<Vec<u8>>>);
+
+    impl Write for Sink {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.borrow_mut().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn answer(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+        Ok(Value::Int(a.int(0) + i64::from(a.has(0))))
+    }
+
+    struct TestExt;
+
+    impl Extension for TestExt {
+        fn name(&self) -> &'static str {
+            "testext"
+        }
+        fn register(&self, m: &mut ModuleBuilder<'_>) {
+            m.function("old_fn(int $x = 41): int", answer)
+                .deprecated("8.4", "use new_fn()");
+            m.constant_deprecated("OLD_CONST", Value::Int(7), "", "gone soon");
+            let vm = m.vm();
+            crate::ext::ClassBuilder::new("Suit")
+                .backed_enum("string")
+                .case("Hearts", Some(Value::Str("H".into())))
+                .case("Spades", Some(Value::Str("S".into())))
+                .deprecated_constant("OLD", Value::Int(1), "", "")
+                .register(vm);
+            crate::ext::ClassBuilder::new("Unit")
+                .unit_enum()
+                .case("A", None)
+                .register(vm);
+        }
+    }
+
+    fn run(src: &str) -> String {
+        let sink = Sink::default();
+        let mut vm =
+            Vm::with_extensions(&VmOptions::default(), Box::new(sink.clone()), &[&TestExt]);
+        vm.run_script(src.as_bytes(), "test.php");
+        drop(vm);
+        let out = sink.0.borrow().clone();
+        String::from_utf8_lossy(&out).into_owned()
+    }
+
+    #[test]
+    fn native_enums() {
+        let out = run(
+            "<?php var_dump(Suit::from('S'), Suit::tryFrom('x'), Suit::Hearts->value, Suit::cases()[1]->name,\n\
+             Unit::A instanceof UnitEnum, Suit::Hearts instanceof BackedEnum, Unit::A->name);",
+        );
+        assert_eq!(
+            out,
+            "enum(Suit::Spades)\nNULL\nstring(1) \"H\"\nstring(6) \"Spades\"\nbool(true)\nbool(true)\nstring(1) \"A\"\n"
+        );
+    }
+
+    #[test]
+    fn deprecations() {
+        let out = run("<?php echo old_fn(), \"\\n\", OLD_CONST, \"\\n\", Suit::OLD, \"\\n\";");
+        assert_eq!(
+            out,
+            "\nDeprecated: Function old_fn() is deprecated since 8.4, use new_fn() in test.php on line 1\n41\n\
+             \nDeprecated: Constant OLD_CONST is deprecated, gone soon in test.php on line 1\n7\n\
+             \nDeprecated: Constant Suit::OLD is deprecated in test.php on line 1\n1\n"
+        );
+    }
 }

@@ -501,10 +501,18 @@ impl Vm {
             )
         };
         let _ = is_magic;
+        // ZEND_ARG_SEND_PREFER_REF: by reference when possible, else by
+        // value without complaint.
+        let prefer_ref = by_ref && {
+            let call = self.frame().calls.last().expect("pending call");
+            let ps = call.func.params();
+            pos.and_then(|p| ps.get(p).or_else(|| ps.last().filter(|l| l.variadic)))
+                .is_some_and(|x| x.promote & crate::opcode::PREFER_REF != 0)
+        };
         let value = match src {
             ArgSrc::Val(op) => {
                 let v = self.read(*op)?;
-                if by_ref {
+                if by_ref && !prefer_ref {
                     let p = pos.unwrap_or(0);
                     let call = self.frame().calls.last().expect("pending call").clone();
                     let pname = call
@@ -528,6 +536,7 @@ impl Vm {
                 if by_ref {
                     match v {
                         Value::Reference(r) => Value::Reference(r),
+                        other if prefer_ref => other,
                         other => {
                             self.notice("Only variables should be passed by reference")?;
                             Value::Reference(PhpRef::new(other))
@@ -657,9 +666,28 @@ impl Vm {
     pub(crate) fn op_do_call(&mut self, dst: Option<u32>) -> VmResult<bool> {
         let call = self.frame_mut().calls.pop().expect("pending call");
         let strict = self.frame().code.strict_types;
+        if dst.is_none() && call.func.flags() & flags::NODISCARD != 0 {
+            if call.func.flags() & flags::DEPRECATED != 0 && matches!(call.func, Func::User(_)) {
+                self.check_deprecated_call(&call)?;
+            }
+            self.check_nodiscard_call(&call)?;
+            return self.op_do_call_checked(call, dst, strict);
+        }
+        self.op_do_call_checked(call, dst, strict)
+    }
+
+    fn op_do_call_checked(
+        &mut self,
+        call: PendingCall,
+        dst: Option<u32>,
+        strict: bool,
+    ) -> VmResult<bool> {
+        let skip_deprecation = dst.is_none() && call.func.flags() & flags::NODISCARD != 0;
         match call.func.clone() {
             Func::User(uf) => {
-                self.check_deprecated_call(&call)?;
+                if !skip_deprecation {
+                    self.check_deprecated_call(&call)?;
+                }
                 let ret = dst.map_or(RetTarget::Discard, RetTarget::Tmp);
                 self.push_user_frame(&uf, call, ret, strict, false)?;
                 Ok(true)
@@ -673,6 +701,44 @@ impl Vm {
                 Ok(false)
             }
         }
+    }
+
+    /// `zend_nodiscard_function`.
+    fn check_nodiscard_call(&mut self, call: &PendingCall) -> VmResult<()> {
+        let (attrs, code) = match &call.func {
+            Func::User(uf) => (uf.attributes.clone(), crate::errors::level::USER_WARNING),
+            Func::Builtin(_) => (Vec::new(), crate::errors::level::WARNING),
+        };
+        let mut suffix = Vec::new();
+        if let Some(info) = attrs
+            .iter()
+            .find(|a| a.name.eq_ignore_ascii_case(b"NoDiscard"))
+        {
+            if !info.args.is_empty() {
+                if let Some(cls) = self.find_class(b"NoDiscard") {
+                    let info = info.clone();
+                    let o = self.attribute_object(&info, &cls, call.scope.as_ref())?;
+                    if let Ok(Value::Str(m)) = self.get_property(&o, "message") {
+                        if !m.is_empty() {
+                            suffix.extend_from_slice(b", ");
+                            suffix.extend_from_slice(m.as_bytes());
+                        }
+                    }
+                }
+            }
+        }
+        let name = self.func_display(&call.func, call.scope.as_ref());
+        let kind = if call.scope.is_some() {
+            "method"
+        } else {
+            "function"
+        };
+        let mut msg = format!(
+            "The return value of {kind} {name}() should either be used or intentionally ignored by casting it as (void)"
+        )
+        .into_bytes();
+        msg.extend_from_slice(&suffix);
+        self.error_bytes(code, &msg)
     }
 
     fn check_deprecated_call(&mut self, call: &PendingCall) -> VmResult<()> {
@@ -693,7 +759,17 @@ impl Vm {
                     (suffix, call.scope.clone(), crate::errors::level::DEPRECATED)
                 }
             };
-            let name = self.func_display(&call.func, scope.as_ref());
+            let name = match (&call.magic_name, &scope) {
+                // The __call/__callStatic trampoline carries the called name.
+                (Some(m), Some(sc)) => {
+                    format!(
+                        "{}::{}",
+                        crate::object::display_name(&sc.name),
+                        m.to_string_lossy()
+                    )
+                }
+                _ => self.func_display(&call.func, scope.as_ref()),
+            };
             let kind = if call.scope.is_some() {
                 "Method"
             } else {
@@ -774,13 +850,33 @@ impl Vm {
             // Before zpp, like ZEND_DO_ICALL.
             self.check_deprecated_call(&call)?;
         }
+        // Builtin frame (for backtraces and func_get_args of callers),
+        // pushed before zpp so arity and argument errors show it.
+        let mut f = Frame::with_vars(
+            self.empty_code.clone(),
+            FrameKind::Builtin,
+            self.empty_vars.clone(),
+            None,
+        );
+        f.func = Some(Func::Builtin(b.clone()));
+        f.builtin_name = Some(b.name.clone());
+        f.args.clone_from(&call.args);
+        f.this.clone_from(&call.this);
+        f.scope = call.scope.clone();
+        f.called.clone_from(&call.called);
+        self.frames.push(f);
+        let depth = self.frames.len();
         // Arity.
         let positional_count = call.args.iter().filter(|a| a.is_some()).count();
         if !call.has_named && npassed < b.required as usize {
-            return Err(self.arg_count_error_builtin(&fname, b, npassed));
+            let e = self.arg_count_error_builtin(&fname, b, npassed);
+            self.pop_frames_to(depth);
+            return Err(e);
         }
         if !variadic && npassed > nparams {
-            return Err(self.arg_count_error_builtin(&fname, b, npassed));
+            let e = self.arg_count_error_builtin(&fname, b, npassed);
+            self.pop_frames_to(depth);
+            return Err(e);
         }
         let _ = positional_count;
         for (i, a) in call.args.into_iter().enumerate() {
@@ -795,12 +891,14 @@ impl Vm {
                             .params
                             .get(i)
                             .map_or_else(String::new, |p| p.name.to_string_lossy());
-                        return Err(self.make_throw(
+                        let e = self.make_throw(
                             "ArgumentCountError",
                             &format!("{fname}(): Argument #{} (${pname}) not passed", i + 1),
-                        ));
+                        );
+                        self.pop_frames_to(depth);
+                        return Err(e);
                     }
-                    values.push(b.defaults.get(i).cloned().flatten().unwrap_or_default());
+                    values.push(self.builtin_default(b, i).unwrap_or_default());
                     passed.push(false);
                 }
             }
@@ -812,7 +910,7 @@ impl Vm {
             let upto = if variadic { nparams - 1 } else { nparams };
             while values.len() < upto {
                 let i = values.len();
-                match b.defaults.get(i).cloned().flatten() {
+                match self.builtin_default(b, i) {
                     Some(d) if i >= b.required as usize => {
                         values.push(d);
                         passed.push(false);
@@ -827,27 +925,16 @@ impl Vm {
                 .params
                 .get(i)
                 .map_or_else(String::new, |p| p.name.to_string_lossy());
-            return Err(self.make_throw(
+            let e = self.make_throw(
                 "ArgumentCountError",
                 &format!("{fname}(): Argument #{} (${pname}) not passed", i + 1),
-            ));
+            );
+            self.pop_frames_to(depth);
+            return Err(e);
         }
-        // Builtin frame (for backtraces and func_get_args of callers),
-        // pushed before zpp so argument errors show it in the trace.
-        let mut f = Frame::with_vars(
-            self.empty_code.clone(),
-            FrameKind::Builtin,
-            self.empty_vars.clone(),
-            None,
-        );
-        f.func = Some(Func::Builtin(b.clone()));
-        f.builtin_name = Some(b.name.clone());
-        f.args = values.iter().take(nframe_args).cloned().map(Some).collect();
-        f.this.clone_from(&call.this);
-        f.scope = call.scope.clone();
-        f.called.clone_from(&call.called);
-        self.frames.push(f);
-        let depth = self.frames.len();
+        if let Some(f) = self.frames.get_mut(depth - 1) {
+            f.args = values.iter().take(nframe_args).cloned().map(Some).collect();
+        }
         // Type coercion.
         for (i, v) in values.iter_mut().enumerate() {
             if !passed[i] {
@@ -919,6 +1006,30 @@ impl Vm {
             self.frames.truncate(depth - 1);
         }
         r
+    }
+
+    /// The default of native parameter `i`: a parsed literal, or a
+    /// constant (`SOME_CONST`, `Class::CONST`) resolved at call time.
+    fn builtin_default(&mut self, b: &Builtin, i: usize) -> Option<Value> {
+        if let Some(v) = b.defaults.get(i).cloned().flatten() {
+            return Some(v);
+        }
+        let text = b.params.get(i)?.default_text.as_deref()?.trim();
+        let text = text.strip_prefix('\\').unwrap_or(text);
+        if text.is_empty()
+            || !text
+                .bytes()
+                .all(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b':' || c == b'\\')
+        {
+            return None;
+        }
+        if let Some(p) = find_double_colon(text.as_bytes()) {
+            let cls = self.find_class(&text.as_bytes()[..p])?;
+            return self
+                .class_constant(&cls, &ZStr::from(&text.as_bytes()[p + 2..]))
+                .ok();
+        }
+        self.constants.get(text.as_bytes()).cloned()
     }
 
     /// Pops frames above `depth - 1` (the builtin frame pushed at `depth`).

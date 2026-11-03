@@ -61,6 +61,32 @@ pub(crate) fn parse_type(s: &str) -> TypeDecl {
     t
 }
 
+/// A PHP integer literal: decimal, `0x`, `0b`, `0o` or leading-`0` octal,
+/// optionally negative.
+fn parse_int_literal(s: &str) -> Option<i64> {
+    let (neg, body) = match s.strip_prefix('-') {
+        Some(b) => (true, b),
+        None => (false, s),
+    };
+    let body = body.replace('_', "");
+    let lower = body.to_ascii_lowercase();
+    let v = if let Some(h) = lower.strip_prefix("0x") {
+        i64::from_str_radix(h, 16).ok()?
+    } else if let Some(b) = lower.strip_prefix("0b") {
+        i64::from_str_radix(b, 2).ok()?
+    } else if let Some(o) = lower.strip_prefix("0o") {
+        i64::from_str_radix(o, 8).ok()?
+    } else if lower.len() > 1 && lower.starts_with('0') && lower.bytes().all(|c| c.is_ascii_digit())
+    {
+        i64::from_str_radix(&lower[1..], 8).ok()?
+    } else if !lower.is_empty() && lower.bytes().all(|c| c.is_ascii_digit()) {
+        lower.parse::<i64>().ok()?
+    } else {
+        return None;
+    };
+    Some(if neg { v.wrapping_neg() } else { v })
+}
+
 fn parse_default(s: &str) -> Option<Value> {
     let s = s.trim();
     match s.to_ascii_lowercase().as_str() {
@@ -79,13 +105,15 @@ fn parse_default(s: &str) -> Option<Value> {
         "ent_quotes | ent_substitute | ent_html401" => return Some(Value::Int(3 | 8)),
         _ => {}
     }
-    if let Ok(i) = s.parse::<i64>() {
+    if let Some(i) = parse_int_literal(s) {
         return Some(Value::Int(i));
     }
     if let Ok(f) = s.parse::<f64>() {
         return Some(Value::Float(f));
     }
-    if (s.starts_with('"') && s.ends_with('"') || s.starts_with('\'') && s.ends_with('\'')) && s.len() >= 2 {
+    if (s.starts_with('"') && s.ends_with('"') || s.starts_with('\'') && s.ends_with('\''))
+        && s.len() >= 2
+    {
         let inner = &s[1..s.len() - 1];
         let unescaped = inner
             .replace("\\n", "\n")
@@ -163,6 +191,24 @@ pub(crate) fn parse_sig(sig: &str) -> Sig {
             Some(eq) => (p[..eq].trim(), Some(p[eq + 1..].trim())),
             None => (p, None),
         };
+        // Native markers: `#[\SensitiveParameter]` and `@prefer-ref`.
+        let mut decl = decl.trim();
+        let mut sensitive = false;
+        let mut prefer_ref = false;
+        loop {
+            if let Some(r) = decl
+                .strip_prefix("#[\\SensitiveParameter]")
+                .or_else(|| decl.strip_prefix("#[SensitiveParameter]"))
+            {
+                sensitive = true;
+                decl = r.trim_start();
+            } else if let Some(r) = decl.strip_prefix("@prefer-ref") {
+                prefer_ref = true;
+                decl = r.trim_start();
+            } else {
+                break;
+            }
+        }
         let dollar = decl.find('$').expect("param has $");
         let mut before = decl[..dollar].trim();
         let pname = decl[dollar + 1..].trim();
@@ -198,8 +244,12 @@ pub(crate) fn parse_sig(sig: &str) -> Sig {
             ty,
             has_default: default.is_some(),
             default_text: default.map(str::to_string),
-            promote: 0,
-            sensitive: false,
+            promote: if prefer_ref {
+                crate::opcode::PREFER_REF
+            } else {
+                0
+            },
+            sensitive,
             default_expr: None,
             attributes: Vec::new(),
         });
@@ -213,5 +263,19 @@ pub(crate) fn parse_sig(sig: &str) -> Sig {
         ret,
         variadic,
         by_ref_return,
+    }
+}
+
+#[cfg(test)]
+mod int_literal_tests {
+    use super::parse_int_literal;
+
+    #[test]
+    fn literals() {
+        assert_eq!(parse_int_literal("0777"), Some(0o777));
+        assert_eq!(parse_int_literal("-1"), Some(-1));
+        assert_eq!(parse_int_literal("0x1F"), Some(31));
+        assert_eq!(parse_int_literal("0"), Some(0));
+        assert_eq!(parse_int_literal("1.5"), None);
     }
 }

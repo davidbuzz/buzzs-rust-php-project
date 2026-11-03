@@ -619,7 +619,7 @@ impl Vm {
                     if rw {
                         let name = st.names[idx].clone();
                         drop(st);
-                        self.warning(&format!("Undefined variable ${name}"))?;
+                        self.warning(&crate::exec::undefined_var_msg(&name))?;
                         st = store.borrow_mut();
                     }
                     st.slots[idx] = Some(Value::Null);
@@ -710,7 +710,7 @@ impl Vm {
                     Some(v) => Ok(v),
                     None => {
                         let name = store.borrow().names[idx].clone();
-                        self.warning(&format!("Undefined variable ${name}"))?;
+                        self.warning(&crate::exec::undefined_var_msg(&name))?;
                         Ok(Value::Null)
                     }
                 }
@@ -1111,7 +1111,7 @@ impl Vm {
                     None => {
                         if mode != FetchMode::Is {
                             let name = store.borrow().names[idx].clone();
-                            self.warning(&format!("Undefined variable ${name}"))?;
+                            self.warning(&crate::exec::undefined_var_msg(&name))?;
                         }
                         Value::Null
                     }
@@ -1133,7 +1133,7 @@ impl Vm {
             RBase::Value(v) => v.deref(),
             RBase::Undef(name) => {
                 if mode != FetchMode::Is {
-                    self.warning(&format!("Undefined variable ${name}"))?;
+                    self.warning(&crate::exec::undefined_var_msg(&name))?;
                 }
                 Value::Null
             }

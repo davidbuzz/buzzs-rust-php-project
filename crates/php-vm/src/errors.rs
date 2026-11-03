@@ -68,7 +68,8 @@ impl Vm {
             }
             return (f.code.filename.clone(), f.line());
         }
-        (self.script_path.clone(), 0)
+        // `php_error_cb` with nothing executing.
+        (ZStr::from("Unknown"), 0)
     }
 
     /// Whether code is executing.

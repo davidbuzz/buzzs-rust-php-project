@@ -329,7 +329,9 @@ impl Compiler {
                 Operand::Tmp(t)
             }
             ExprKind::VoidCast(inner) => {
-                self.compile_expr_discard(inner)?;
+                // ZEND_AST_CAST_VOID: the value counts as used (#[\NoDiscard]).
+                let op = self.compile_expr(inner)?;
+                self.free(op);
                 self.lit(Value::Null)
             }
             ExprKind::Isset(vars) => {

@@ -39,6 +39,16 @@ impl Vm {
         scope: Option<&Rc<Class>>,
     ) -> VmResult<Obj> {
         let (pos, named) = self.attribute_args(info, scope)?;
+        self.construct_with(cls, pos, named)
+    }
+
+    /// `new cls(...pos, ...named)`.
+    pub(crate) fn construct_with(
+        &mut self,
+        cls: &Rc<Class>,
+        pos: Vec<Value>,
+        named: Vec<(ZStr, Value)>,
+    ) -> VmResult<Obj> {
         let o = self.instantiate(cls)?;
         if let Some(m) = cls.magic.construct.clone() {
             let mut call = PendingCall {
@@ -175,4 +185,152 @@ mod tests {
         assert_eq!(format_suffix(Some(&s), Some(&m)), b" since 8.4, use x");
         assert_eq!(format_suffix(Some(&e), Some(&e)), b"");
     }
+}
+
+impl Vm {
+    /// `zend_deprecated_constant` for a global constant being read.
+    pub(crate) fn constant_deprecation(&mut self, name: &ZStr) -> VmResult<()> {
+        if let Some(suffix) = self.deprecated_constants.get(name).cloned() {
+            let mut msg = format!("Constant {} is deprecated", name.to_string_lossy()).into_bytes();
+            msg.extend_from_slice(&suffix);
+            return self.error_bytes(crate::errors::level::DEPRECATED, &msg);
+        }
+        let Some(attrs) = self.const_attributes.get(name).cloned() else {
+            return Ok(());
+        };
+        if !attrs
+            .iter()
+            .any(|a| a.name.eq_ignore_ascii_case(b"Deprecated"))
+        {
+            return Ok(());
+        }
+        let key = Rc::as_ptr(&attrs) as usize;
+        if !self.const_deprecation_guard.insert(key) {
+            return Ok(());
+        }
+        let r = self.deprecation_suffix(&attrs, None);
+        self.const_deprecation_guard.remove(&key);
+        let mut msg = format!("Constant {} is deprecated", name.to_string_lossy()).into_bytes();
+        msg.extend_from_slice(&r?);
+        self.error_bytes(crate::errors::level::USER_DEPRECATED, &msg)
+    }
+}
+
+fn has_attr(attrs: &[AttributeInfo], lc: &[u8]) -> bool {
+    attrs.iter().any(|a| {
+        let n = a.name.as_bytes();
+        n.strip_prefix(b"\\").unwrap_or(n).eq_ignore_ascii_case(lc)
+    })
+}
+
+/// `zend_inheritance_check_override`: members marked `#[\Override]` that
+/// override nothing (message, line).
+pub(crate) fn check_override(cls: &Rc<Class>) -> Option<(String, u32)> {
+    use crate::func::{flags, Func};
+    if cls.is_trait() {
+        return None;
+    }
+    let parent = cls.parent.as_ref();
+    let display = crate::object::display_name(&cls.name);
+    for lc in &cls.method_order {
+        let Some(m) = cls.methods.get(lc) else {
+            continue;
+        };
+        if !Rc::ptr_eq(&m.scope(), cls) {
+            continue;
+        }
+        let Func::User(uf) = &m.func else { continue };
+        if !has_attr(&uf.attributes, b"override") {
+            continue;
+        }
+        let in_parent = parent
+            .and_then(|p| p.find_method(lc.as_bytes()))
+            .is_some_and(|pm| pm.visibility() != flags::PRIVATE);
+        let in_iface = cls
+            .interfaces
+            .iter()
+            .any(|i| i.find_method(lc.as_bytes()).is_some());
+        // An abstract trait method implemented by the class counts too.
+        let in_trait = cls.traits.iter().any(|t| {
+            t.find_method(lc.as_bytes())
+                .is_some_and(|tm| tm.flags & flags::ABSTRACT != 0)
+        });
+        if !in_parent && !in_iface && !in_trait {
+            return Some((
+                format!("{display}::{}() has #[\\Override] attribute, but no matching parent method exists", m.name),
+                uf.line_start,
+            ));
+        }
+    }
+    for c in &cls.consts {
+        if c.class.as_bytes() != cls.name.as_bytes() || !has_attr(&c.attributes, b"override") {
+            continue;
+        }
+        let in_parent = parent
+            .and_then(|p| p.find_const(c.name.as_bytes()))
+            .is_some_and(|pc| pc.flags & flags::PRIVATE == 0);
+        let in_iface = cls
+            .interfaces
+            .iter()
+            .any(|i| i.find_const(c.name.as_bytes()).is_some());
+        if !in_parent && !in_iface {
+            return Some((
+                format!(
+                    "{display}::{} has #[\\Override] attribute, but no matching parent constant exists",
+                    c.name.to_string_lossy()
+                ),
+                0,
+            ));
+        }
+    }
+    for p in &cls.props {
+        if p.class.as_bytes() != cls.name.as_bytes() {
+            continue;
+        }
+        let parent_prop = parent
+            .and_then(|pc| pc.prop_map.get(&p.name))
+            .filter(|pp| pp.visibility() != flags::PRIVATE)
+            .cloned()
+            .or_else(|| {
+                cls.interfaces
+                    .iter()
+                    .find_map(|i| i.prop_map.get(&p.name).cloned())
+            });
+        if has_attr(&p.attributes, b"override") && parent_prop.is_none() {
+            return Some((
+                format!(
+                    "{display}::${} has #[\\Override] attribute, but no matching parent property exists",
+                    p.name.to_string_lossy()
+                ),
+                0,
+            ));
+        }
+        let Some(h) = &p.hooks else { continue };
+        for (kind, f) in [("get", &h.get), ("set", &h.set)] {
+            let Some(f) = f else { continue };
+            if !has_attr(&f.attributes, b"override") {
+                continue;
+            }
+            // `property_has_operation`.
+            let has_op = parent_prop.as_ref().is_some_and(|pp| {
+                let ph = pp.hooks.as_ref();
+                if kind == "get" {
+                    !pp.is_virtual() || ph.is_some_and(|x| x.get.is_some() || x.abstract_get)
+                } else {
+                    (!pp.is_virtual() && !pp.is_readonly())
+                        || ph.is_some_and(|x| x.set.is_some() || x.abstract_set)
+                }
+            });
+            if !has_op {
+                return Some((
+                    format!(
+                        "{display}::${}::{kind}() has #[\\Override] attribute, but no matching parent method exists",
+                        p.name.to_string_lossy()
+                    ),
+                    f.line_start,
+                ));
+            }
+        }
+    }
+    None
 }

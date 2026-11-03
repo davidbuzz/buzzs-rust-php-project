@@ -1,5 +1,7 @@
 //! AST → opcode compiler (`Zend/zend_compile.c`).
 
+mod attrs;
+mod constexpr;
 mod decl;
 mod expr;
 mod stmt;
@@ -7,9 +9,7 @@ mod stmt;
 use crate::ast::{self, Name, NameKind};
 use crate::class::{AttributeInfo, ClassDecl, ConstExpr};
 use crate::func::UserFunction;
-use crate::opcode::{
-    ClassSpec, DeclTable, Label, Op, OpArray, Operand, Place, PlaceId, TryEntry,
-};
+use crate::opcode::{ClassSpec, DeclTable, Label, Op, OpArray, Operand, Place, PlaceId, TryEntry};
 use crate::types::TypeDecl;
 use php_runtime::{Value, ZStr};
 use std::collections::HashMap;
@@ -409,16 +409,16 @@ impl Compiler {
         for (at, label, line, loops) in std::mem::take(&mut f.gotos) {
             let Some((target, label_loops)) = f.labels.get(&label) else {
                 return self.err(
-                    format!("'goto' to undefined label '{}'", String::from_utf8_lossy(&label)),
+                    format!(
+                        "'goto' to undefined label '{}'",
+                        String::from_utf8_lossy(&label)
+                    ),
                     line,
                 );
             };
             // A jump into a loop is not allowed.
             if !label_loops.iter().all(|l| loops.contains(l)) {
-                return self.err(
-                    "'goto' into loop or switch statement is disallowed",
-                    line,
-                );
+                return self.err("'goto' into loop or switch statement is disallowed", line);
             }
             if let Op::Jmp(t) = &mut f.ops[at] {
                 *t = *target;
@@ -594,15 +594,45 @@ impl Compiler {
         for g in groups {
             for a in &g.attributes {
                 let name = ZStr::from(self.resolve_class_name(&a.name));
-                let mut args = Vec::new();
+                let mut args: Vec<(Option<ZStr>, ConstExpr)> = Vec::new();
                 if let Some(al) = &a.args {
+                    if al.is_first_class_callable() {
+                        return self
+                            .err("Cannot create Closure as attribute argument", a.span.line);
+                    }
+                    let mut uses_named = false;
                     for arg in &al.args {
                         match &arg.kind {
                             ast::ArgKind::Positional(e) => {
+                                if uses_named {
+                                    return self.err(
+                                        "Cannot use positional argument after named argument",
+                                        arg.span.line,
+                                    );
+                                }
+                                self.check_const_expr(e, true)?;
                                 args.push((None, self.const_expr(e)?));
                             }
                             ast::ArgKind::Named { name, value } => {
-                                args.push((Some(ZStr::from(name.name.as_slice())), self.const_expr(value)?));
+                                uses_named = true;
+                                let n = ZStr::from(name.name.as_slice());
+                                if args.iter().any(|(k, _)| k.as_ref() == Some(&n)) {
+                                    return self.err(
+                                        format!(
+                                            "Duplicate named parameter ${}",
+                                            n.to_string_lossy()
+                                        ),
+                                        arg.span.line,
+                                    );
+                                }
+                                self.check_const_expr(value, true)?;
+                                args.push((Some(n), self.const_expr(value)?));
+                            }
+                            ast::ArgKind::Unpack(_) => {
+                                return self.err(
+                                    "Cannot use unpacking in attribute argument list",
+                                    arg.span.line,
+                                );
                             }
                             _ => {}
                         }

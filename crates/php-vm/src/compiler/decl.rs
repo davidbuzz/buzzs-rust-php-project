@@ -3,7 +3,8 @@
 use super::{CResult, ClassCtx, Compiler, FnCtx, FnKind};
 use crate::ast::{self, ClassMemberKind, Expr, ExprKind, Stmt, StmtKind, TypeKind};
 use crate::class::{
-    cflags, ClassDecl, ClassKind, ConstDecl, ConstExpr, MethodDecl, PropDecl, PropHooks, TraitRule,
+    cflags, AttributeInfo, ClassDecl, ClassKind, ConstDecl, ConstExpr, MethodDecl, PropDecl,
+    PropHooks, TraitRule,
 };
 use crate::func::{flags, ClosureUse, UserFunction};
 use crate::opcode::{Op, Operand, ParamInfo, Place, PlaceBase, Seg};
@@ -76,7 +77,11 @@ struct BodySpec<'a> {
 }
 
 impl Compiler {
-    pub(crate) fn compile_function_decl(&mut self, fd: &ast::FunctionDecl, top_level: bool) -> CResult<()> {
+    pub(crate) fn compile_function_decl(
+        &mut self,
+        fd: &ast::FunctionDecl,
+        top_level: bool,
+    ) -> CResult<()> {
         let name = self.ns_prefixed_pub(&fd.name.name);
         let lc = name.to_ascii_lowercase();
         if top_level {
@@ -147,7 +152,9 @@ impl Compiler {
                     u.span.line,
                 );
             }
-            if uses.iter().any(|(n, _, _, _): &(ZStr, bool, u32, bool)| n.as_bytes() == u.name.name.as_slice()) {
+            if uses.iter().any(|(n, _, _, _): &(ZStr, bool, u32, bool)| {
+                n.as_bytes() == u.name.name.as_slice()
+            }) {
                 return self.err(
                     format!("Cannot use variable ${} twice", u.name.as_str_lossy()),
                     u.span.line,
@@ -242,6 +249,42 @@ impl Compiler {
 
     #[allow(clippy::too_many_lines)]
     fn compile_body(&mut self, spec: &BodySpec<'_>, body: BodyKind<'_>) -> CResult<UserFunction> {
+        // Attributes first (`zend_compile_func_decl`).
+        let attributes = self.attributes(spec.attributes)?;
+        let tgt = if spec.kind == FnKind::Method {
+            super::attrs::target::METHOD
+        } else {
+            super::attrs::target::FUNCTION
+        };
+        let in_hook = self.hook_prop.is_some();
+        self.validate_attributes(&attributes, tgt, 0, None, in_hook)?;
+        let has = |n: &[u8]| attributes.iter().any(|a| a.name.eq_ignore_ascii_case(n));
+        let delayed = has(b"DelayedTargetValidation");
+        if has(b"NoDiscard") && !in_hook {
+            let what = if self.current_class().is_some() {
+                "method"
+            } else {
+                "function"
+            };
+            if let Some(rt) = spec.return_type {
+                let line = spec.line_start;
+                if matches!(&rt.kind, ast::TypeKind::Named(n) if n.name.eq_ignore_ascii_case(b"void"))
+                {
+                    return self.err(
+                        format!("A void {what} does not return a value, but #[\\NoDiscard] requires a return value"),
+                        line,
+                    );
+                }
+                if matches!(&rt.kind, ast::TypeKind::Named(n) if n.name.eq_ignore_ascii_case(b"never"))
+                {
+                    return self.err(
+                        format!("A never returning {what} does not return a value, but #[\\NoDiscard] requires a return value"),
+                        line,
+                    );
+                }
+            }
+        }
+        let _ = delayed;
         let mut f = FnCtx::new(spec.kind);
         f.line = spec.line_start;
         f.func_name = spec.name.clone();
@@ -273,11 +316,17 @@ impl Compiler {
         if !spec.has_body {
             fl |= flags::NO_BODY;
         }
-        let attributes = self.attributes(spec.attributes)?;
-        if attributes.iter().any(|a| a.name.eq_ignore_ascii_case(b"Deprecated")) {
+        if attributes
+            .iter()
+            .any(|a| a.name.eq_ignore_ascii_case(b"Deprecated"))
+        {
             fl |= flags::DEPRECATED;
         }
-        if attributes.iter().any(|a| a.name.eq_ignore_ascii_case(b"NoDiscard")) {
+        if attributes
+            .iter()
+            .any(|a| a.name.eq_ignore_ascii_case(b"NoDiscard"))
+            && self.hook_prop.is_none()
+        {
             fl |= flags::NODISCARD;
         }
         Ok(UserFunction {
@@ -310,7 +359,10 @@ impl Compiler {
             if p.name.name == b"this" {
                 return self.err("Cannot use $this as parameter", p.span.line);
             }
-            if params.iter().any(|q: &ParamInfo| q.name.as_bytes() == p.name.name.as_slice()) {
+            if params
+                .iter()
+                .any(|q: &ParamInfo| q.name.as_bytes() == p.name.name.as_slice())
+            {
                 return self.err(
                     format!("Redefinition of parameter ${}", p.name.as_str_lossy()),
                     p.span.line,
@@ -318,7 +370,10 @@ impl Compiler {
             }
             if is_superglobal_or_globals(&p.name.name) && p.name.name != b"GLOBALS" {
                 return self.err(
-                    format!("Cannot re-assign auto-global variable ${}", p.name.as_str_lossy()),
+                    format!(
+                        "Cannot re-assign auto-global variable ${}",
+                        p.name.as_str_lossy()
+                    ),
                     p.span.line,
                 );
             }
@@ -342,13 +397,19 @@ impl Compiler {
                 }
             }
             if p.variadic && p.default.is_some() {
-                return self.err("Variadic parameter cannot have a default value", p.span.line);
+                return self.err(
+                    "Variadic parameter cannot have a default value",
+                    p.span.line,
+                );
             }
             let promote = if p.modifiers.is_empty() {
                 0
             } else {
                 if !spec.is_ctor {
-                    return self.err("Cannot declare promoted property outside a constructor", p.span.line);
+                    return self.err(
+                        "Cannot declare promoted property outside a constructor",
+                        p.span.line,
+                    );
                 }
                 if p.variadic {
                     return self.err("Cannot declare variadic promoted property", p.span.line);
@@ -356,6 +417,18 @@ impl Compiler {
                 modifiers_to_flags(p.modifiers)
             };
             let attrs = self.attributes(&p.attributes)?;
+            let promoted_tgt = if promote == 0 {
+                0
+            } else {
+                super::attrs::target::PROPERTY
+            };
+            self.validate_attributes(
+                &attrs,
+                super::attrs::target::PARAMETER,
+                promoted_tgt,
+                None,
+                false,
+            )?;
             params.push(ParamInfo {
                 name: ZStr::from(p.name.name.as_slice()),
                 by_ref: p.by_ref,
@@ -371,7 +444,10 @@ impl Compiler {
                     .iter()
                     .any(|a| a.name.eq_ignore_ascii_case(b"SensitiveParameter")),
                 default_expr: match &p.default {
-                    Some(d) => Some(self.const_expr(d)?),
+                    Some(d) => {
+                        self.check_const_expr(d, true)?;
+                        Some(self.const_expr(d)?)
+                    }
                     None => None,
                 },
                 attributes: attrs,
@@ -552,10 +628,12 @@ impl Compiler {
                             return self.err("null cannot be marked as nullable", t.span.line);
                         }
                         if lc.as_slice() == b"void" {
-                            return self.err("Void can only be used as a standalone type", t.span.line);
+                            return self
+                                .err("Void can only be used as a standalone type", t.span.line);
                         }
                         if lc.as_slice() == b"never" {
-                            return self.err("never cannot be used as a parameter type", t.span.line);
+                            return self
+                                .err("never cannot be used as a parameter type", t.span.line);
                         }
                         if lc.as_slice() == b"mixed" {
                             return self.err(
@@ -585,7 +663,10 @@ impl Compiler {
                     return self.err("Void can only be used as a standalone type", t.span.line);
                 }
                 if out.is_mixed() {
-                    return self.err("Type mixed can only be used as a standalone type", t.span.line);
+                    return self.err(
+                        "Type mixed can only be used as a standalone type",
+                        t.span.line,
+                    );
                 }
             }
             TypeKind::Intersection(ts) => {
@@ -606,13 +687,22 @@ impl Compiler {
                             g.push(ZStr::from(self.resolve_type_class(n)));
                         }
                         TypeKind::Array => {
-                            return self.err("Type array cannot be part of an intersection type", p.span.line)
+                            return self.err(
+                                "Type array cannot be part of an intersection type",
+                                p.span.line,
+                            )
                         }
                         TypeKind::Static => {
-                            return self.err("Type static cannot be part of an intersection type", p.span.line)
+                            return self.err(
+                                "Type static cannot be part of an intersection type",
+                                p.span.line,
+                            )
                         }
                         TypeKind::Callable => {
-                            return self.err("Type callable cannot be part of an intersection type", p.span.line)
+                            return self.err(
+                                "Type callable cannot be part of an intersection type",
+                                p.span.line,
+                            )
                         }
                         _ => {}
                     }
@@ -668,7 +758,10 @@ impl Compiler {
                         self.add_class_type(out, resolved, t.span.line)?;
                         return Ok(());
                     }
-                    if matches!(lc.as_slice(), b"integer" | b"boolean" | b"double" | b"resource") {
+                    if matches!(
+                        lc.as_slice(),
+                        b"integer" | b"boolean" | b"double" | b"resource"
+                    ) {
                         let correct = match lc.as_slice() {
                             b"integer" => Some("int"),
                             b"boolean" => Some("bool"),
@@ -700,10 +793,7 @@ impl Compiler {
             .iter()
             .any(|c| c.eq_ignore_ascii_case(name.as_bytes()))
         {
-            return self.err(
-                format!("Duplicate type {name} is redundant"),
-                line,
-            );
+            return self.err(format!("Duplicate type {name} is redundant"), line);
         }
         out.classes.push(name);
         Ok(())
@@ -729,19 +819,30 @@ impl Compiler {
             return self.err(format!("Duplicate type {name} is redundant"), line);
         }
         if m == mask::BOOL && out.mask & (mask::FALSE | mask::TRUE) != 0 {
-            let other = if out.mask & mask::FALSE != 0 { "false" } else { "true" };
+            let other = if out.mask & mask::FALSE != 0 {
+                "false"
+            } else {
+                "true"
+            };
             return self.err(format!("Duplicate type {other} is redundant"), line);
         }
         if (m == mask::TRUE && out.mask & mask::FALSE != 0)
             || (m == mask::FALSE && out.mask & mask::TRUE != 0)
         {
-            return self.err("Type contains both true and false, bool must be used instead", line);
+            return self.err(
+                "Type contains both true and false, bool must be used instead",
+                line,
+            );
         }
         out.mask |= m;
         Ok(())
     }
 
-    pub(crate) fn compile_class_stmt(&mut self, cd: &ast::ClassDecl, top_level: bool) -> CResult<()> {
+    pub(crate) fn compile_class_stmt(
+        &mut self,
+        cd: &ast::ClassDecl,
+        top_level: bool,
+    ) -> CResult<()> {
         let idx = self.compile_class_decl(cd, false)?;
         if top_level {
             self.hoisted_classes.push(idx);
@@ -753,7 +854,11 @@ impl Compiler {
 
     /// Compiles a class-like declaration; returns its index.
     #[allow(clippy::too_many_lines)]
-    pub(crate) fn compile_class_decl(&mut self, cd: &ast::ClassDecl, is_anon: bool) -> CResult<u32> {
+    pub(crate) fn compile_class_decl(
+        &mut self,
+        cd: &ast::ClassDecl,
+        is_anon: bool,
+    ) -> CResult<u32> {
         let kind = match cd.kind {
             ast::ClassKind::Class => ClassKind::Class,
             ast::ClassKind::Interface => ClassKind::Interface,
@@ -778,7 +883,13 @@ impl Compiler {
             let mut v = format!("{prefix}@anonymous").into_bytes();
             v.push(0);
             v.extend_from_slice(
-                format!("{}:{}${:x}", self.filename, cd.span.line, self.anon_counter - 1).as_bytes(),
+                format!(
+                    "{}:{}${:x}",
+                    self.filename,
+                    cd.span.line,
+                    self.anon_counter - 1
+                )
+                .as_bytes(),
             );
             ZStr::from(v)
         } else {
@@ -827,6 +938,16 @@ impl Compiler {
             cflag |= cflags::ANON | cflags::FINAL;
         }
         let attributes = self.attributes(&cd.attributes)?;
+        self.validate_attributes(
+            &attributes,
+            super::attrs::target::CLASS,
+            0,
+            Some(super::attrs::AttrClass {
+                name: &name,
+                flags: cflag,
+            }),
+            false,
+        )?;
         if attributes
             .iter()
             .any(|a| a.name.eq_ignore_ascii_case(b"AllowDynamicProperties"))
@@ -850,7 +971,7 @@ impl Compiler {
         let r = self.compile_class_members(cd, &name, kind, cflag);
         self.closure_depth = saved_closure_depth;
         self.classes.pop();
-        let (consts, props, methods, traits, trait_rules, cases) = r?;
+        let (consts, props, methods, traits, trait_rules, cases, case_attributes) = r?;
         let backing = match &cd.backing_type {
             Some(t) => {
                 let ty = self.resolve_type(t)?;
@@ -882,6 +1003,7 @@ impl Compiler {
             props,
             methods,
             cases,
+            case_attributes,
             backing,
             attributes,
             doc_comment: cd.doc_comment.as_ref().map(|d| ZStr::from(d.as_slice())),
@@ -906,6 +1028,7 @@ impl Compiler {
         Vec<ZStr>,
         Vec<TraitRule>,
         Vec<(ZStr, Option<ConstExpr>, u32)>,
+        Vec<Vec<AttributeInfo>>,
     )> {
         let mut consts = Vec::new();
         let mut props: Vec<PropDecl> = Vec::new();
@@ -913,6 +1036,7 @@ impl Compiler {
         let mut traits = Vec::new();
         let mut rules = Vec::new();
         let mut cases = Vec::new();
+        let mut case_attrs = Vec::new();
         let display = |n: &ZStr| {
             let b = n.as_bytes();
             match b.iter().position(|&c| c == 0) {
@@ -925,21 +1049,35 @@ impl Compiler {
             match &m.kind {
                 ClassMemberKind::Property(pg) => {
                     let fl = modifiers_to_flags(pg.modifiers)
-                        | if cflag & cflags::READONLY != 0 && pg.modifiers.contains(ast::Modifiers::STATIC) == false {
+                        | if cflag & cflags::READONLY != 0
+                            && pg.modifiers.contains(ast::Modifiers::STATIC) == false
+                        {
                             flags::READONLY
                         } else {
                             0
                         };
-                    if kind == ClassKind::Interface && pg.modifiers.intersects(ast::Modifiers::PROTECTED | ast::Modifiers::PRIVATE) {
-                        return self.err("Property in interface cannot be protected or private", m.span.line);
+                    if kind == ClassKind::Interface
+                        && pg
+                            .modifiers
+                            .intersects(ast::Modifiers::PROTECTED | ast::Modifiers::PRIVATE)
+                    {
+                        return self.err(
+                            "Property in interface cannot be protected or private",
+                            m.span.line,
+                        );
                     }
-                    if kind == ClassKind::Interface && pg.modifiers.contains(ast::Modifiers::ABSTRACT) {
+                    if kind == ClassKind::Interface
+                        && pg.modifiers.contains(ast::Modifiers::ABSTRACT)
+                    {
                         return self.err("Property in interface cannot be explicitly abstract. All interface members are implicitly abstract", m.span.line);
                     }
-                    if kind == ClassKind::Interface && pg.modifiers.contains(ast::Modifiers::FINAL) {
+                    if kind == ClassKind::Interface && pg.modifiers.contains(ast::Modifiers::FINAL)
+                    {
                         return self.err("Property in interface cannot be final", m.span.line);
                     }
-                    if pg.modifiers.contains(ast::Modifiers::FINAL) && pg.modifiers.contains(ast::Modifiers::PRIVATE) {
+                    if pg.modifiers.contains(ast::Modifiers::FINAL)
+                        && pg.modifiers.contains(ast::Modifiers::PRIVATE)
+                    {
                         return self.err("Property cannot be both final and private", m.span.line);
                     }
                     if kind == ClassKind::Interface && pg.props.iter().all(|p| p.hooks.is_none()) {
@@ -951,10 +1089,14 @@ impl Compiler {
                             m.span.line,
                         );
                     }
-                    if pg.modifiers.contains(ast::Modifiers::ABSTRACT) && pg.props.iter().all(|p| p.hooks.is_none()) {
+                    if pg.modifiers.contains(ast::Modifiers::ABSTRACT)
+                        && pg.props.iter().all(|p| p.hooks.is_none())
+                    {
                         return self.err("Properties cannot be declared abstract", m.span.line);
                     }
-                    if pg.modifiers.contains(ast::Modifiers::FINAL) && pg.props.iter().all(|p| p.hooks.is_none()) {
+                    if pg.modifiers.contains(ast::Modifiers::FINAL)
+                        && pg.props.iter().all(|p| p.hooks.is_none())
+                    {
                         return self.err("Cannot declare property final, the final modifier is allowed only on methods, classes, and properties with hooks", m.span.line);
                     }
                     let ty = match &pg.ty {
@@ -962,19 +1104,28 @@ impl Compiler {
                             let ty = self.resolve_type(t)?;
                             if ty.mask & mask::VOID != 0 {
                                 return self.err(
-                                    format!("Property {cname}::${} cannot have type void", pg.props[0].name.as_str_lossy()),
+                                    format!(
+                                        "Property {cname}::${} cannot have type void",
+                                        pg.props[0].name.as_str_lossy()
+                                    ),
                                     t.span.line,
                                 );
                             }
                             if ty.mask & mask::NEVER != 0 {
                                 return self.err(
-                                    format!("Property {cname}::${} cannot have type never", pg.props[0].name.as_str_lossy()),
+                                    format!(
+                                        "Property {cname}::${} cannot have type never",
+                                        pg.props[0].name.as_str_lossy()
+                                    ),
                                     t.span.line,
                                 );
                             }
                             if ty.mask & mask::CALLABLE != 0 {
                                 return self.err(
-                                    format!("Property {cname}::${} cannot have type callable", pg.props[0].name.as_str_lossy()),
+                                    format!(
+                                        "Property {cname}::${} cannot have type callable",
+                                        pg.props[0].name.as_str_lossy()
+                                    ),
                                     t.span.line,
                                 );
                             }
@@ -983,14 +1134,21 @@ impl Compiler {
                         None => None,
                     };
                     let attrs = self.attributes(&pg.attributes)?;
+                    self.validate_attributes(
+                        &attrs,
+                        super::attrs::target::PROPERTY,
+                        0,
+                        None,
+                        false,
+                    )?;
                     for p in &pg.props {
                         self.f().line = p.span.line;
-                        if props.iter().any(|q| q.name.as_bytes() == p.name.name.as_slice()) {
+                        if props
+                            .iter()
+                            .any(|q| q.name.as_bytes() == p.name.name.as_slice())
+                        {
                             return self.err(
-                                format!(
-                                    "Cannot redeclare {cname}::${}",
-                                    p.name.as_str_lossy()
-                                ),
+                                format!("Cannot redeclare {cname}::${}", p.name.as_str_lossy()),
                                 p.span.line,
                             );
                         }
@@ -1024,7 +1182,10 @@ impl Compiler {
                             }
                         }
                         let default = match &p.default {
-                            Some(d) => Some(self.const_expr(d)?),
+                            Some(d) => {
+                                self.check_const_expr(d, false)?;
+                                Some(self.const_expr(d)?)
+                            }
                             None => {
                                 if ty.is_none() {
                                     Some(ConstExpr::Value(Value::Null))
@@ -1033,7 +1194,14 @@ impl Compiler {
                                 }
                             }
                         };
-                        let mut fl = normalize_set_visibility(self, fl, ty.is_some(), &cname, &p.name.as_str_lossy(), p.span.line)?;
+                        let mut fl = normalize_set_visibility(
+                            self,
+                            fl,
+                            ty.is_some(),
+                            &cname,
+                            &p.name.as_str_lossy(),
+                            p.span.line,
+                        )?;
                         let hooks = match &p.hooks {
                             Some(hs) => {
                                 let (h, virt) = self.compile_prop_hooks(
@@ -1080,6 +1248,13 @@ impl Compiler {
                         None => None,
                     };
                     let attrs = self.attributes(&cg.attributes)?;
+                    self.validate_attributes(
+                        &attrs,
+                        super::attrs::target::CLASS_CONST,
+                        0,
+                        None,
+                        false,
+                    )?;
                     for c in &cg.consts {
                         if c.name.eq_ignore_case("class") {
                             return self.err(
@@ -1087,7 +1262,10 @@ impl Compiler {
                                 c.span.line,
                             );
                         }
-                        if consts.iter().any(|q: &ConstDecl| q.name.as_bytes() == c.name.name.as_slice()) {
+                        if consts
+                            .iter()
+                            .any(|q: &ConstDecl| q.name.as_bytes() == c.name.name.as_slice())
+                        {
                             return self.err(
                                 format!(
                                     "Cannot redefine class constant {cname}::{}",
@@ -1103,6 +1281,7 @@ impl Compiler {
                             );
                         }
                         self.f().line = c.span.line;
+                        self.check_const_expr(&c.value, false)?;
                         let value = self.const_expr(&c.value)?;
                         consts.push(ConstDecl {
                             name: ZStr::from(c.name.name.as_slice()),
@@ -1122,15 +1301,15 @@ impl Compiler {
                         .iter()
                         .any(|q| q.name.eq_ignore_ascii_case(&md.name.name))
                     {
-                        return self.err(
-                            format!("Cannot redeclare {cname}::{mname}()"),
-                            md.span.line,
-                        );
+                        return self
+                            .err(format!("Cannot redeclare {cname}::{mname}()"), md.span.line);
                     }
                     if kind == ClassKind::Interface {
                         if md.body.is_some() {
                             return self.err(
-                                format!("Interface function {cname}::{mname}() cannot contain body"),
+                                format!(
+                                    "Interface function {cname}::{mname}() cannot contain body"
+                                ),
                                 md.span.line,
                             );
                         }
@@ -1172,7 +1351,10 @@ impl Compiler {
                                 md.span.line,
                             );
                         }
-                        if kind == ClassKind::Class && cflag & cflags::EXPLICIT_ABSTRACT == 0 && cflag & cflags::ANON == 0 {
+                        if kind == ClassKind::Class
+                            && cflag & cflags::EXPLICIT_ABSTRACT == 0
+                            && cflag & cflags::ANON == 0
+                        {
                             return self.err(
                                 format!("Class {cname} declares abstract method {mname}() and must therefore be declared abstract"),
                                 md.span.line,
@@ -1184,7 +1366,10 @@ impl Compiler {
                             md.span.line,
                         );
                     }
-                    if fl & flags::PRIVATE != 0 && fl & flags::FINAL != 0 && !md.name.eq_ignore_case("__construct") {
+                    if fl & flags::PRIVATE != 0
+                        && fl & flags::FINAL != 0
+                        && !md.name.eq_ignore_case("__construct")
+                    {
                         self.warnings.push((
                             128,
                             "Private methods cannot be final as they are never overridden by other classes".to_string(),
@@ -1193,7 +1378,10 @@ impl Compiler {
                     }
                     let is_ctor = md.name.eq_ignore_case("__construct");
                     if !is_ctor && md.params.iter().any(|p| !p.modifiers.is_empty()) {
-                        return self.err("Cannot declare promoted property outside a constructor", md.span.line);
+                        return self.err(
+                            "Cannot declare promoted property outside a constructor",
+                            md.span.line,
+                        );
                     }
                     if is_ctor {
                         for p in &md.params {
@@ -1201,28 +1389,55 @@ impl Compiler {
                                 continue;
                             }
                             if kind == ClassKind::Interface || fl & flags::ABSTRACT != 0 {
-                                return self.err("Cannot declare promoted property in an abstract constructor", p.span.line);
+                                return self.err(
+                                    "Cannot declare promoted property in an abstract constructor",
+                                    p.span.line,
+                                );
                             }
                             let pfl = modifiers_to_flags(p.modifiers)
-                                | if cflag & cflags::READONLY != 0 { flags::READONLY } else { 0 };
+                                | if cflag & cflags::READONLY != 0 {
+                                    flags::READONLY
+                                } else {
+                                    0
+                                };
                             let ty = match &p.ty {
                                 Some(t) => Some(self.resolve_type(t)?),
                                 None => None,
                             };
                             if pfl & flags::READONLY != 0 && ty.is_none() {
                                 return self.err(
-                                    format!("Readonly property {cname}::${} must have type", p.name.as_str_lossy()),
+                                    format!(
+                                        "Readonly property {cname}::${} must have type",
+                                        p.name.as_str_lossy()
+                                    ),
                                     p.span.line,
                                 );
                             }
-                            if props.iter().any(|q| q.name.as_bytes() == p.name.name.as_slice()) {
+                            if props
+                                .iter()
+                                .any(|q| q.name.as_bytes() == p.name.name.as_slice())
+                            {
                                 return self.err(
                                     format!("Cannot redeclare {cname}::${}", p.name.as_str_lossy()),
                                     p.span.line,
                                 );
                             }
                             let attrs = self.attributes(&p.attributes)?;
-                            let pfl = normalize_set_visibility(self, pfl, ty.is_some(), &cname, &p.name.as_str_lossy(), p.span.line)?;
+                            self.validate_attributes(
+                                &attrs,
+                                super::attrs::target::PROPERTY,
+                                super::attrs::target::PARAMETER,
+                                None,
+                                false,
+                            )?;
+                            let pfl = normalize_set_visibility(
+                                self,
+                                pfl,
+                                ty.is_some(),
+                                &cname,
+                                &p.name.as_str_lossy(),
+                                p.span.line,
+                            )?;
                             props.push(PropDecl {
                                 name: ZStr::from(p.name.name.as_slice()),
                                 default: if ty.is_none() {
@@ -1232,7 +1447,10 @@ impl Compiler {
                                 },
                                 flags: pfl,
                                 ty,
-                                doc_comment: p.doc_comment.as_ref().map(|d| ZStr::from(d.as_slice())),
+                                doc_comment: p
+                                    .doc_comment
+                                    .as_ref()
+                                    .map(|d| ZStr::from(d.as_slice())),
                                 attributes: attrs,
                                 line: p.span.line,
                                 hooks: None,
@@ -1264,7 +1482,8 @@ impl Compiler {
                     uf.flags |= fl;
                     self.check_magic_method(&cname, &md.name.as_str_lossy(), &uf, md.span.line)?;
                     if md.name.eq_ignore_case("__tostring") && uf.return_type.is_none() {
-                        uf.return_type = Some(crate::types::TypeDecl::simple(crate::types::mask::STRING));
+                        uf.return_type =
+                            Some(crate::types::TypeDecl::simple(crate::types::mask::STRING));
                     }
                     if is_ctor {
                         uf.flags |= flags::CTOR;
@@ -1278,7 +1497,10 @@ impl Compiler {
                 ClassMemberKind::TraitUse(tu) => {
                     if kind == ClassKind::Interface {
                         return self.err(
-                            format!("Cannot use traits inside of interfaces. {} is used in {cname}", String::from_utf8_lossy(&self.resolve_class_name(&tu.traits[0]))),
+                            format!(
+                                "Cannot use traits inside of interfaces. {} is used in {cname}",
+                                String::from_utf8_lossy(&self.resolve_class_name(&tu.traits[0]))
+                            ),
                             m.span.line,
                         );
                     }
@@ -1334,13 +1556,13 @@ impl Compiler {
                 }
                 ClassMemberKind::EnumCase(ec) => {
                     if kind != ClassKind::Enum {
-                        return self.err(
-                            format!("Case can only be used in enums"),
-                            m.span.line,
-                        );
+                        return self.err(format!("Case can only be used in enums"), m.span.line);
                     }
                     let v = match &ec.value {
-                        Some(e) => Some(self.const_expr(e)?),
+                        Some(e) => {
+                            self.check_const_expr(e, false)?;
+                            Some(self.const_expr(e)?)
+                        }
                         None => None,
                     };
                     match (&ec.value, &cd.backing_type) {
@@ -1364,8 +1586,14 @@ impl Compiler {
                         }
                         _ => {}
                     }
-                    if cases.iter().any(|(n, _, _): &(ZStr, Option<ConstExpr>, u32)| n.as_bytes() == ec.name.name.as_slice())
-                        || consts.iter().any(|c: &ConstDecl| c.name.as_bytes() == ec.name.name.as_slice())
+                    if cases
+                        .iter()
+                        .any(|(n, _, _): &(ZStr, Option<ConstExpr>, u32)| {
+                            n.as_bytes() == ec.name.name.as_slice()
+                        })
+                        || consts
+                            .iter()
+                            .any(|c: &ConstDecl| c.name.as_bytes() == ec.name.name.as_slice())
                     {
                         return self.err(
                             format!(
@@ -1375,11 +1603,20 @@ impl Compiler {
                             m.span.line,
                         );
                     }
+                    let attrs = self.attributes(&ec.attributes)?;
+                    self.validate_attributes(
+                        &attrs,
+                        super::attrs::target::CLASS_CONST,
+                        0,
+                        None,
+                        false,
+                    )?;
+                    case_attrs.push(attrs);
                     cases.push((ZStr::from(ec.name.name.as_slice()), v, m.span.line));
                 }
             }
         }
-        Ok((consts, props, methods, traits, rules, cases))
+        Ok((consts, props, methods, traits, rules, cases, case_attrs))
     }
 }
 
@@ -1408,7 +1645,10 @@ impl Compiler {
             return self.err("Cannot declare hooks for static property", line);
         }
         let mut out = PropHooks {
-            class: self.current_class().map(|c| c.name.clone()).unwrap_or_default(),
+            class: self
+                .current_class()
+                .map(|c| c.name.clone())
+                .unwrap_or_default(),
             ..PropHooks::default()
         };
         let mut is_virtual = true;
@@ -1433,7 +1673,10 @@ impl Compiler {
             let hm = modifiers_to_flags(h.modifiers);
             let is_final = h.modifiers.contains(ast::Modifiers::FINAL);
             if is_final && prop_flags & flags::PRIVATE != 0 {
-                return self.err("Property hook cannot be both final and private", h.span.line);
+                return self.err(
+                    "Property hook cannot be both final and private",
+                    h.span.line,
+                );
             }
             for (m, n) in [
                 (ast::Modifiers::PUBLIC, "public"),
@@ -1443,7 +1686,10 @@ impl Compiler {
                 (ast::Modifiers::READONLY, "readonly"),
             ] {
                 if h.modifiers.contains(m) {
-                    return self.err(format!("Cannot use the {n} modifier on a property hook"), h.span.line);
+                    return self.err(
+                        format!("Cannot use the {n} modifier on a property hook"),
+                        h.span.line,
+                    );
                 }
             }
             let _ = hm;
@@ -1454,17 +1700,26 @@ impl Compiler {
                     return self.err("Abstract property hook cannot have body", h.span.line);
                 }
                 if prop_flags & flags::PRIVATE != 0 {
-                    return self.err("Property hook cannot be both abstract and private", h.span.line);
+                    return self.err(
+                        "Property hook cannot be both abstract and private",
+                        h.span.line,
+                    );
                 }
                 if is_final {
-                    return self.err("Property hook cannot be both abstract and final", h.span.line);
+                    return self.err(
+                        "Property hook cannot be both abstract and final",
+                        h.span.line,
+                    );
                 }
             } else if !has_body {
                 return self.err("Non-abstract property hook must have a body", h.span.line);
             }
             if (is_get && out.get.is_some()) || (!is_get && out.set.is_some()) {
                 return self.err(
-                    format!("Cannot redeclare property hook \"{}\"", h.name.as_str_lossy()),
+                    format!(
+                        "Cannot redeclare property hook \"{}\"",
+                        h.name.as_str_lossy()
+                    ),
                     h.span.line,
                 );
             }
@@ -1473,7 +1728,9 @@ impl Compiler {
             let params: &[ast::Param] = if is_get {
                 if h.params.is_some() {
                     return self.err(
-                        format!("get hook of property {cname}::${pname} must not have a parameter list"),
+                        format!(
+                            "get hook of property {cname}::${pname} must not have a parameter list"
+                        ),
                         h.span.line,
                     );
                 }
@@ -1495,7 +1752,9 @@ impl Compiler {
                 }
                 if p.variadic {
                     return self.err(
-                        format!("Parameter ${n} of set hook {cname}::${pname} must not be variadic"),
+                        format!(
+                            "Parameter ${n} of set hook {cname}::${pname} must not be variadic"
+                        ),
                         h.span.line,
                     );
                 }
@@ -1535,13 +1794,19 @@ impl Compiler {
                 ast::HookBody::Expr(e) => {
                     let sp = e.span;
                     let st = if is_get {
-                        ast::Stmt { kind: ast::StmtKind::Return(Some((**e).clone())), span: sp }
+                        ast::Stmt {
+                            kind: ast::StmtKind::Return(Some((**e).clone())),
+                            span: sp,
+                        }
                     } else {
                         is_virtual = false;
                         let target = ast::Expr::new(
                             ast::ExprKind::Prop {
                                 object: Box::new(ast::Expr::new(
-                                    ast::ExprKind::Var(ast::VarName::Name(ast::Ident::new(b"this".to_vec(), sp))),
+                                    ast::ExprKind::Var(ast::VarName::Name(ast::Ident::new(
+                                        b"this".to_vec(),
+                                        sp,
+                                    ))),
                                     sp,
                                 )),
                                 name: ast::MemberName::Ident(ast::Ident::new(prop.to_vec(), sp)),
@@ -1551,7 +1816,10 @@ impl Compiler {
                         );
                         ast::Stmt {
                             kind: ast::StmtKind::Expr(ast::Expr::new(
-                                ast::ExprKind::Assign { target: Box::new(target), value: e.clone() },
+                                ast::ExprKind::Assign {
+                                    target: Box::new(target),
+                                    value: e.clone(),
+                                },
                                 sp,
                             )),
                             span: sp,
@@ -1598,8 +1866,14 @@ impl Compiler {
             self.hook_prop = saved;
             let mut uf = r?;
             uf.hook_prop = Some(ZStr::from(prop));
-            let vis = if prop_flags & flags::PRIVATE != 0 { flags::PRIVATE } else { flags::PUBLIC };
-            uf.flags |= vis | if is_final { flags::FINAL } else { 0 } | if is_abstract { flags::ABSTRACT } else { 0 };
+            let vis = if prop_flags & flags::PRIVATE != 0 {
+                flags::PRIVATE
+            } else {
+                flags::PUBLIC
+            };
+            uf.flags |= vis
+                | if is_final { flags::FINAL } else { 0 }
+                | if is_abstract { flags::ABSTRACT } else { 0 };
             // Backing store usage: `$this->prop` inside the hook body.
             if has_body && uses_backing(&uf.code, prop) {
                 is_virtual = false;
@@ -1630,7 +1904,13 @@ fn uses_backing(code: &crate::opcode::OpArray, prop: &[u8]) -> bool {
 impl Compiler {
     /// `zend_check_magic_method_implementation`.
     #[allow(clippy::too_many_lines)]
-    fn check_magic_method(&mut self, cname: &str, name: &str, uf: &UserFunction, line: u32) -> CResult<()> {
+    fn check_magic_method(
+        &mut self,
+        cname: &str,
+        name: &str,
+        uf: &UserFunction,
+        line: u32,
+    ) -> CResult<()> {
         let lc = name.to_ascii_lowercase();
         if !lc.starts_with("__") {
             return Ok(());
@@ -1648,7 +1928,10 @@ impl Compiler {
                 return c.err(msg, line);
             }
             if uf.params.iter().take(n).any(|p| p.by_ref) {
-                return c.err(format!("Method {cname}::{name}() cannot take arguments by reference"), line);
+                return c.err(
+                    format!("Method {cname}::{name}() cannot take arguments by reference"),
+                    line,
+                );
             }
             Ok(())
         };
@@ -1678,7 +1961,9 @@ impl Compiler {
             Ok(())
         };
         let ret_type = |c: &Compiler, m: u32, tn: &str| -> CResult<()> {
-            let Some(t) = &uf.return_type else { return Ok(()) };
+            let Some(t) = &uf.return_type else {
+                return Ok(());
+            };
             if t.mask & crate::types::mask::NEVER != 0 {
                 return Ok(());
             }
@@ -1689,18 +1974,28 @@ impl Compiler {
             let complex = t.has_classes() || extra & crate::types::mask::STATIC != 0;
             extra &= !crate::types::mask::STATIC;
             if extra != 0 || (complex && m != crate::types::mask::OBJECT) {
-                return c.err(format!("{cname}::{name}(): Return type must be {tn} when declared"), line);
+                return c.err(
+                    format!("{cname}::{name}(): Return type must be {tn} when declared"),
+                    line,
+                );
             }
             Ok(())
         };
         let public = |c: &mut Compiler| {
             if uf.flags & flags::PUBLIC == 0 {
-                c.warnings.push((2, format!("The magic method {cname}::{name}() must have public visibility"), line));
+                c.warnings.push((
+                    2,
+                    format!("The magic method {cname}::{name}() must have public visibility"),
+                    line,
+                ));
             }
         };
         let no_ret = |c: &Compiler| -> CResult<()> {
             if has_ret {
-                return c.err(format!("Method {cname}::{name}() cannot declare a return type"), line);
+                return c.err(
+                    format!("Method {cname}::{name}() cannot declare a return type"),
+                    line,
+                );
             }
             Ok(())
         };
@@ -1825,7 +2120,15 @@ fn normalize_set_visibility(
                 line,
             );
         }
-        let rank = |v: u32| if v & (flags::PUBLIC | flags::SET_PUBLIC) != 0 { 0 } else if v & (flags::PROTECTED | flags::SET_PROTECTED) != 0 { 1 } else { 2 };
+        let rank = |v: u32| {
+            if v & (flags::PUBLIC | flags::SET_PUBLIC) != 0 {
+                0
+            } else if v & (flags::PROTECTED | flags::SET_PROTECTED) != 0 {
+                1
+            } else {
+                2
+            }
+        };
         if rank(fl & flags::VISIBILITY) > rank(fl & flags::SET_MASK) {
             return c.err(
                 format!("Visibility of property {cname}::${pname} must not be weaker than set visibility"),
@@ -1862,17 +2165,44 @@ fn is_superglobal_or_globals(n: &[u8]) -> bool {
 fn is_builtin_type(lc: &[u8]) -> bool {
     matches!(
         lc,
-        b"int" | b"float" | b"string" | b"bool" | b"false" | b"true" | b"null" | b"void" | b"never"
-            | b"mixed" | b"object" | b"iterable" | b"array" | b"callable" | b"static"
+        b"int"
+            | b"float"
+            | b"string"
+            | b"bool"
+            | b"false"
+            | b"true"
+            | b"null"
+            | b"void"
+            | b"never"
+            | b"mixed"
+            | b"object"
+            | b"iterable"
+            | b"array"
+            | b"callable"
+            | b"static"
     )
 }
 
 fn is_reserved_class_name(lc: &[u8]) -> bool {
     matches!(
         lc,
-        b"self" | b"parent" | b"static" | b"int" | b"float" | b"bool" | b"string" | b"true"
-            | b"false" | b"null" | b"void" | b"never" | b"iterable" | b"object" | b"mixed"
-            | b"array" | b"callable"
+        b"self"
+            | b"parent"
+            | b"static"
+            | b"int"
+            | b"float"
+            | b"bool"
+            | b"string"
+            | b"true"
+            | b"false"
+            | b"null"
+            | b"void"
+            | b"never"
+            | b"iterable"
+            | b"object"
+            | b"mixed"
+            | b"array"
+            | b"callable"
     )
 }
 

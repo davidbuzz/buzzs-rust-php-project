@@ -208,6 +208,8 @@ pub struct ClassDecl {
     pub methods: Vec<MethodDecl>,
     /// Enum cases (name, value expression), in order.
     pub cases: Vec<(ZStr, Option<ConstExpr>, u32)>,
+    /// Attributes of each enum case (parallel to `cases`).
+    pub case_attributes: Vec<Vec<AttributeInfo>>,
     /// Enum backing type (`mask::LONG` or `mask::STRING`).
     pub backing: Option<u32>,
     /// Attributes.
@@ -447,7 +449,10 @@ impl Class {
             return true;
         }
         if other.is_interface() {
-            return self.interfaces.iter().any(|i| std::ptr::eq(Rc::as_ptr(i), other));
+            return self
+                .interfaces
+                .iter()
+                .any(|i| std::ptr::eq(Rc::as_ptr(i), other));
         }
         let mut c = self.parent.clone();
         while let Some(p) = c {
