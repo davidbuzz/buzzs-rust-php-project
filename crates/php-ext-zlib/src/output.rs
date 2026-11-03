@@ -224,3 +224,30 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
     );
     m.on_request_startup(request_startup);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn compression_values() {
+        assert_eq!(compression_value(b"On"), 1);
+        assert_eq!(compression_value(b"off"), 0);
+        assert_eq!(compression_value(b"4096"), 4096);
+        assert_eq!(compression_value(b"4K"), 4096);
+    }
+
+    #[test]
+    fn env_flags() {
+        let mut env = CliEnv {
+            started: Some(false),
+        };
+        assert_eq!(env.running_handler_flags(), Some(flags::STDFLAGS));
+        env.started = Some(true);
+        assert_eq!(
+            env.running_handler_flags(),
+            Some(flags::STDFLAGS | flags::STARTED)
+        );
+        assert!(!env.headers_sent());
+    }
+}

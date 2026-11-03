@@ -6,7 +6,9 @@
 use php_ext_streams::bridge;
 use php_runtime::{Obj, Value, ZStr};
 use php_streams::value::{Key, Value as SValue};
-use php_vm::ext::{acc, class_flags, Args, ClassBuilder, ModuleBuilder, VmResult};
+use std::cell::Cell;
+
+use php_vm::ext::{class_flags, Args, ClassBuilder, ClassHooks, ModuleBuilder, VmResult};
 use php_vm::{object, Vm};
 use php_zlib::context::{
     object_options_deprecation, DEFLATE_CONSTRUCT_ERROR, INFLATE_CONSTRUCT_ERROR,
@@ -46,12 +48,46 @@ fn options_arg(vm: &mut Vm, a: &Args, func: &str) -> VmResult<Vec<(Key, SValue)>
     })
 }
 
-/// Instantiates a context class without running its constructor.
+thread_local! {
+    /// Set while `deflate_init()`/`inflate_init()` create their object;
+    /// any other instantiation is refused (PHP's `get_constructor`
+    /// handler).
+    static CREATING: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Instantiates a context class from `deflate_init()`/`inflate_init()`.
 fn instantiate(vm: &mut Vm, class: &str) -> VmResult<Obj> {
     let Some(cls) = vm.find_class(class.as_bytes()) else {
         return Err(vm.throw("Error", &format!("Class \"{class}\" not found")));
     };
-    vm.new_object(&cls)
+    CREATING.with(|c| c.set(true));
+    let r = vm.new_object(&cls);
+    CREATING.with(|c| c.set(false));
+    r
+}
+
+/// `create_object` hook: refuses `new DeflateContext` / `new
+/// InflateContext`.
+fn create(vm: &mut Vm, o: &Obj) -> VmResult<()> {
+    if CREATING.with(Cell::get) {
+        return Ok(());
+    }
+    let deflate = object::class_of(o)
+        .name
+        .as_bytes()
+        .eq_ignore_ascii_case(b"DeflateContext");
+    let msg = if deflate {
+        DEFLATE_CONSTRUCT_ERROR
+    } else {
+        INFLATE_CONSTRUCT_ERROR
+    };
+    Err(vm.throw("Error", msg))
+}
+
+/// `zend_objects_not_comparable`.
+#[allow(clippy::unnecessary_wraps)]
+fn not_comparable(_vm: &mut Vm, _a: &Value, _b: &Value) -> VmResult<Option<i32>> {
+    Ok(Some(1))
 }
 
 fn deflate_init(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -74,6 +110,10 @@ fn deflate_add(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     };
     let data = a.str(1);
     let flush = int_or(a, 2, SYNC_FLUSH);
+    crate::mem::check(
+        vm,
+        crate::mem::zstr(data.len()) + crate::mem::zlib_guess(data.len()),
+    )?;
     let r = object::internal::<DeflateState, _>(&o, |s| s.0.add(data.as_bytes(), flush));
     match r {
         Some(Ok(v)) => Ok(bytes(v)),
@@ -126,25 +166,19 @@ fn inflate_get_read_len(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     Ok(Value::Int(with_inflate(vm, a, |c| c.read_len())?))
 }
 
-fn deflate_ctor(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
-    Err(vm.throw("Error", DEFLATE_CONSTRUCT_ERROR))
-}
-
-fn inflate_ctor(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
-    Err(vm.throw("Error", INFLATE_CONSTRUCT_ERROR))
-}
-
 /// Registers the classes and functions.
 pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
     let flags = class_flags::FINAL | class_flags::NOT_SERIALIZABLE | class_flags::NO_CLONE;
-    ClassBuilder::new("InflateContext")
-        .flags(flags)
-        .method("__construct()", acc::PUBLIC, inflate_ctor)
-        .register(m.vm());
-    ClassBuilder::new("DeflateContext")
-        .flags(flags)
-        .method("__construct()", acc::PUBLIC, deflate_ctor)
-        .register(m.vm());
+    for name in ["InflateContext", "DeflateContext"] {
+        ClassBuilder::new(name)
+            .flags(flags)
+            .hooks(ClassHooks {
+                create: Some(create),
+                compare: Some(not_comparable),
+                ..ClassHooks::default()
+            })
+            .register(m.vm());
+    }
     m.function(
         "deflate_init(int $encoding, array|object $options = []): DeflateContext|false",
         deflate_init,

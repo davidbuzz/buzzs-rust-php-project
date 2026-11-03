@@ -47,6 +47,12 @@ pub(crate) fn check(vm: &mut Vm, alloc: usize) -> VmResult<()> {
     Ok(())
 }
 
+/// `PHP_ZLIB_BUFFER_SIZE_GUESS()`: the output buffer the zlib encoders
+/// pre-allocate for `len` input bytes.
+pub(crate) fn zlib_guess(len: usize) -> usize {
+    len + len / 200 * 3 + 23
+}
+
 /// [`check`] for a string result.
 pub(crate) fn check_str(vm: &mut Vm, v: &Value) -> VmResult<()> {
     match v {
@@ -75,4 +81,24 @@ pub(crate) fn check_output(vm: &mut Vm, n: usize) -> VmResult<()> {
         check(vm, held.saturating_add(n))?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sizes() {
+        assert_eq!(zstr(0), 32);
+        assert_eq!(zstr(7), 32);
+        assert_eq!(zstr(8), 40);
+        assert_eq!(zlib_guess(1000), 1038);
+    }
+
+    #[test]
+    fn limits() {
+        assert!(!exceeds(None, usize::MAX));
+        assert!(exceeds(Some(1 << 20), 1 << 20));
+        assert!(!exceeds(Some(4 << 20), 1 << 20));
+    }
 }

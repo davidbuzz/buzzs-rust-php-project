@@ -1,0 +1,148 @@
+//! End-to-end tests: PHP scripts run on a VM with the streams and
+//! zlib/bz2 extensions. Expected values come from php-src
+//! (`/usr/bin/php`; bz2 results from the php-src test suite).
+
+use std::cell::RefCell;
+use std::io::Write;
+use std::rc::Rc;
+
+use php_vm::ext::Extension;
+use php_vm::{Vm, VmOptions};
+
+/// A `Write` sink shared with the test.
+#[derive(Clone, Default)]
+struct Sink(Rc<RefCell<Vec<u8>>>);
+
+impl Write for Sink {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0.borrow_mut().extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// Runs `code` (without `<?php`) and returns its output.
+fn run(code: &str) -> String {
+    let sink = Sink::default();
+    let streams = php_ext_streams::Streams;
+    let zlib = php_ext_zlib::Zlib;
+    let exts: [&dyn Extension; 2] = [&streams, &zlib];
+    let mut vm = Vm::with_extensions(&VmOptions::default(), Box::new(sink.clone()), &exts);
+    vm.run_script(format!("<?php {code}").as_bytes(), "test.php");
+    drop(vm);
+    let out = sink.0.borrow().clone();
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// A per-test temporary file path.
+fn tmp(name: &str) -> String {
+    let mut p = std::env::temp_dir();
+    p.push(format!("php-ext-zlib-{}-{name}", std::process::id()));
+    p.to_string_lossy().into_owned()
+}
+
+#[test]
+fn one_shot_codecs() {
+    assert_eq!(
+        run(
+            r#"echo bin2hex(gzcompress("hello")), "\n", bin2hex(gzdeflate("hello", 9)), "\n",
+            gzuncompress(gzcompress("abc")), gzinflate(gzdeflate("def")), gzdecode(gzencode("ghi")),
+            zlib_decode(zlib_encode("jkl", ZLIB_ENCODING_GZIP)), "\n";"#
+        ),
+        "789ccb48cdc9c90700062c0215\ncb48cdc9c90700\nabcdefghijkl\n"
+    );
+}
+
+#[test]
+fn codec_errors() {
+    assert_eq!(
+        run(r#"try { gzcompress("x", 10); } catch (ValueError $e) { echo $e->getMessage(), "\n"; }
+            var_dump(gzuncompress("garbage"));"#),
+        "gzcompress(): Argument #2 ($level) must be between -1 and 9\n\nWarning: gzuncompress(): data error in test.php on line 2\nbool(false)\n"
+    );
+}
+
+#[test]
+fn incremental_contexts() {
+    assert_eq!(
+        run(r#"$d = deflate_init(ZLIB_ENCODING_DEFLATE, ['level' => 9]);
+            $c = deflate_add($d, "abc", ZLIB_NO_FLUSH) . deflate_add($d, "def", ZLIB_FINISH);
+            $i = inflate_init(ZLIB_ENCODING_DEFLATE);
+            echo inflate_add($i, $c), " ", inflate_get_status($i), " ", inflate_get_read_len($i), "\n";
+            var_dump($d);
+            try { new InflateContext; } catch (Error $e) { echo $e->getMessage(), "\n"; }
+            try { deflate_init(42); } catch (ValueError $e) { echo $e->getMessage(), "\n"; }"#),
+        "abcdef 1 14\nobject(DeflateContext)#1 (0) {\n}\nCannot directly construct InflateContext, use inflate_init() instead\ndeflate_init(): Argument #1 ($encoding) must be one of ZLIB_ENCODING_RAW, ZLIB_ENCODING_GZIP, or ZLIB_ENCODING_DEFLATE\n"
+    );
+}
+
+#[test]
+fn gz_streams() {
+    let f = tmp("s.gz");
+    let out = run(&format!(
+        r#"$f = gzopen("{f}", "wb"); var_dump(gzwrite($f, "one\ntwo\n")); gzclose($f);
+        $f = gzopen("{f}", "rb"); echo gzgets($f); var_dump(gztell($f), gzeof($f));
+        echo gzread($f, 10); var_dump(gzeof($f)); gzrewind($f); echo gzgetc($f), "\n"; gzclose($f);
+        print_r(gzfile("{f}")); var_dump(readgzfile("{f}"));
+        echo file_get_contents("compress.zlib://{f}"); unlink("{f}");"#
+    ));
+    assert_eq!(
+        out,
+        "int(8)\none\nint(4)\nbool(false)\ntwo\nbool(true)\no\nArray\n(\n    [0] => one\n\n    [1] => two\n\n)\none\ntwo\nint(8)\none\ntwo\n"
+    );
+}
+
+#[test]
+fn gzopen_failures() {
+    assert_eq!(
+        run(
+            r#"try { gzopen("a\0b", "r"); } catch (ValueError $e) { echo $e->getMessage(), "\n"; }
+            var_dump(@gzopen("/nonexistent/x", "r"));"#
+        ),
+        "gzopen(): Argument #1 ($filename) must not contain any null bytes\nbool(false)\n"
+    );
+}
+
+#[test]
+fn bz2_functions() {
+    let f = tmp("s.bz2");
+    let out = run(&format!(
+        r#"echo bzdecompress(bzcompress("hello bz2")), "\n";
+        $b = bzopen("{f}", "w"); var_dump(bzwrite($b, "data")); bzclose($b);
+        $b = bzopen("{f}", "r"); var_dump(bzread($b), bzerrno($b), bzerrstr($b)); bzclose($b);
+        echo file_get_contents("compress.bzip2://{f}"), "\n";
+        try {{ bzopen("{f}", "x"); }} catch (ValueError $e) {{ echo $e->getMessage(), "\n"; }}
+        try {{ bzopen(1, "r"); }} catch (TypeError $e) {{ echo $e->getMessage(), "\n"; }}
+        var_dump(extension_loaded("bz2")); unlink("{f}");"#
+    ));
+    assert_eq!(
+        out,
+        "hello bz2\nint(4)\nstring(4) \"data\"\nint(0)\nstring(2) \"OK\"\ndata\nbzopen(): Argument #2 ($mode) must be either \"r\" or \"w\"\nbzopen(): Argument #1 ($file) must be of type string or file-resource, int given\nbool(true)\n"
+    );
+}
+
+#[test]
+fn filters_and_coding_type() {
+    assert_eq!(
+        run(r#"$fp = fopen("php://memory", "w+");
+            $f = stream_filter_append($fp, "zlib.deflate", STREAM_FILTER_WRITE);
+            fwrite($fp, "filtered"); stream_filter_remove($f); rewind($fp);
+            echo gzinflate(stream_get_contents($fp)), "\n";
+            var_dump(zlib_get_coding_type());
+            foreach (stream_get_filters() as $n) { if (str_contains($n, "*") && $n[0] != "s" && $n[0] != "c") echo $n, "\n"; }"#),
+        "filtered\nbool(false)\nzlib.*\nbzip2.*\n"
+    );
+}
+
+#[test]
+fn memory_limit_model() {
+    let out =
+        run(r#"ini_set("memory_limit", "4M"); gzdecode(gzencode(str_repeat("a", 8 << 20)));"#);
+    assert!(
+        out.contains("Fatal error: Allowed memory size of 4194304 bytes exhausted"),
+        "{out}"
+    );
+}

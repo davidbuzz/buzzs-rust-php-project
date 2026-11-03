@@ -45,6 +45,11 @@ fn bzcompress(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let data = a.str(0);
     let block = if a.has(1) { a.int(1) } else { 4 };
     let work = if a.has(2) { a.int(2) } else { 0 };
+    if (1..=9).contains(&block) && (0..=250).contains(&work) {
+        // The pre-allocated `source + 1% + 600` output buffer.
+        let len = data.len();
+        crate::mem::check(vm, crate::mem::zstr(len) + len + len / 100 + 600)?;
+    }
     let r = php_bz2::bzcompress(data.as_bytes(), block, work);
     output(vm, r)
 }
