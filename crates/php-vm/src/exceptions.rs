@@ -128,11 +128,70 @@ impl Vm {
     /// expression of a class scope is evaluated (and anything it calls),
     /// the executed location is the expression's declaration.
     pub(crate) fn filename_override(&self) -> Option<(ZStr, u32)> {
-        self.frames
+        for f in self.frames.iter().rev() {
+            // `zend_lookup_class` clears the override while autoloading.
+            if !self.autoloading.is_empty() && self.is_autoloader_frame(f) {
+                return None;
+            }
+            // A bare constant (`ZEND_AST_CONSTANT`) is resolved without
+            // `zend_ast_evaluate_ex`, so it sets no override.
+            if f.kind == FrameKind::ConstExpr && f.scope.is_some() && !is_bare_constant(&f.code) {
+                return Some((f.code.filename.clone(), f.line()));
+            }
+        }
+        None
+    }
+
+    /// Whether a constant expression is being evaluated for
+    /// `ReflectionAttribute::newInstance()`: php-src pushes a dummy frame at
+    /// the attribute's location there, so the executed location matches
+    /// the override and no "[constant expression]" frame is added.
+    fn in_attribute_instantiation(&self) -> bool {
+        let Some(ce) = self
+            .frames
             .iter()
-            .rev()
-            .find(|f| f.kind == FrameKind::ConstExpr && f.scope.is_some())
-            .map(|f| (f.code.filename.clone(), f.line()))
+            .rposition(|f| f.kind == FrameKind::ConstExpr)
+        else {
+            return false;
+        };
+        ce > 0 && {
+            let caller = &self.frames[ce - 1];
+            caller.kind == FrameKind::Builtin
+                && caller
+                    .func
+                    .as_ref()
+                    .is_some_and(|f| f.name().as_bytes().eq_ignore_ascii_case(b"newInstance"))
+                && caller
+                    .scope
+                    .as_ref()
+                    .is_some_and(|s| s.lc_name.as_bytes() == b"reflectionattribute")
+        }
+    }
+
+    /// Whether frame `f` runs one of the registered autoloaders.
+    fn is_autoloader_frame(&self, f: &crate::vm::Frame) -> bool {
+        if f.kind != FrameKind::Function {
+            return false;
+        }
+        let Some(func) = &f.func else { return false };
+        let name = func.name().as_bytes();
+        self.autoloaders.iter().any(|l| match l.deref() {
+            Value::Object(o) => {
+                f.closure.as_ref().is_some_and(|c| Obj::ptr_eq(c, &o))
+                    || f.this.as_ref().is_some_and(|t| Obj::ptr_eq(t, &o))
+            }
+            Value::Str(s) => {
+                let s = s.as_bytes();
+                let s = s.strip_prefix(b"\\").unwrap_or(s);
+                let method = s.rsplit(|&b| b == b':').next().unwrap_or(s);
+                f.closure.is_none() && method.eq_ignore_ascii_case(name)
+            }
+            Value::Array(a) => matches!(
+                a.get(&ArrayKey::Int(1)).map(Value::deref),
+                Some(Value::Str(m)) if m.as_bytes().eq_ignore_ascii_case(name)
+            ),
+            _ => false,
+        })
     }
 
     /// The executing user-code location ignoring the override.
@@ -147,9 +206,15 @@ impl Vm {
     /// Initializes file/line/trace of a new throwable.
     #[allow(clippy::unnecessary_wraps)]
     pub(crate) fn init_throwable(&mut self, o: &Obj) -> VmResult<()> {
-        let (file, line) = self
-            .filename_override()
-            .unwrap_or_else(|| self.current_location());
+        // `zend_get_executed_filename()`: "[no active file]" when no user
+        // code is running (e.g. `__toString()` of an uncaught exception).
+        let (file, line) = if let Some(o) = self.filename_override() {
+            o
+        } else if self.frames.iter().any(|f| f.kind != FrameKind::Builtin) {
+            self.current_location()
+        } else {
+            (ZStr::from("[no active file]"), 0)
+        };
         let ignore_args = self.ini.get_bool("zend.exception_ignore_args");
         let trace = self.backtrace(false, ignore_args, false, 0);
         set_base_prop(o, "file", Value::Str(file));
@@ -175,7 +240,7 @@ impl Vm {
         if let (Some(over), Some((file, line))) =
             (self.filename_override(), self.executed_location_raw())
         {
-            if over.0 != file || over.1 != line {
+            if (over.0 != file || over.1 != line) && !self.in_attribute_instantiation() {
                 let mut entry = HashTable::new();
                 entry.insert(ArrayKey::Str(ZStr::from("file")), Value::Str(file));
                 entry.insert(
@@ -605,6 +670,15 @@ impl Vm {
             &format!("Unhandled match case {desc}"),
         )
     }
+}
+
+/// Whether a constant-expression body is a single constant fetch.
+fn is_bare_constant(code: &crate::opcode::OpArray) -> bool {
+    use crate::opcode::Op;
+    matches!(
+        code.ops.as_slice(),
+        [Op::FetchConst { .. }, Op::Return { .. }]
+    )
 }
 
 /// `smart_str_append_escaped`.
