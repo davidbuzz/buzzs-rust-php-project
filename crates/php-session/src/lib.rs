@@ -23,6 +23,30 @@
 //! The embedder implements [`SessionHost`]; see its documentation for the
 //! re-entrancy model (user handlers call back into the module).
 //!
+//! # Embedding
+//!
+//! * `MINIT`: register [`class::CLASSES`], [`class::CONSTANTS`] and the
+//!   [`class::FUNCTIONS`]; the `$_SESSION` auto-global; then call
+//!   [`module_startup`] with a lookup of `php.ini`/`-d` values. Call
+//!   [`class::handler_interface_implemented`] whenever a class implements
+//!   `SessionHandlerInterface` and emit the returned warnings.
+//! * Before `RINIT`, a multipart POST body is parsed: forward its events to
+//!   [`rfc1867`] (with `PG(modules_activated)` still false).
+//! * `RINIT`: [`request_startup`] (honours `session.auto_start`).
+//! * `ini_set`/`ini_get`/`ini_restore`/`ini_get_all` on `session.*` names:
+//!   [`ini::ini_set`], [`ini::ini_get`], [`ini::ini_restore`],
+//!   [`ini::ini_get_all`] (they return `None` for names that are not ours).
+//! * The `session_*` functions map 1:1 onto [`api`]; `SessionHandler`
+//!   methods onto `class::session_handler_*`.
+//! * `RSHUTDOWN`: [`request_shutdown`] then [`ini::deactivate`]. The
+//!   `session_shutdown` shutdown function registered by
+//!   `session_set_save_handler($obj)` calls
+//!   [`api::session_register_shutdown`].
+//!
+//! The deprecated `SID` constant is defined through
+//! [`SessionHost::define_sid`]; reading it must raise "Constant SID is
+//! deprecated since 8.4, as GET/POST sessions were deprecated".
+//!
 //! Reference: `ext/session/{session.c,mod_files.c,mod_user.c,
 //! mod_user_class.c,session.stub.php}`.
 

@@ -181,3 +181,37 @@ fn truncated_data_fails_quietly() {
         );
     }
 }
+
+#[test]
+fn http_dates_match_gmdate() {
+    let mut n = 0;
+    for line in include_str!("fixtures/misc.tsv").lines() {
+        let f: Vec<&str> = line.split('\t').collect();
+        if f[0] == "date" {
+            let t: i64 = f[1].parse().unwrap();
+            assert_eq!(php_session::http::http_date(t), f[2], "{t}");
+            n += 1;
+        }
+    }
+    assert!(n > 200);
+}
+
+#[test]
+fn sid_alphabets_match_php() {
+    let all = b"0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ,-";
+    for line in include_str!("fixtures/misc.tsv").lines() {
+        let f: Vec<&str> = line.split('\t').collect();
+        if f[0] != "sidchars" {
+            continue;
+        }
+        let bits: u32 = f[1].parse().unwrap();
+        let mut ours: Vec<u8> = all[..1 << bits].to_vec();
+        ours.sort_unstable();
+        assert_eq!(String::from_utf8(ours).unwrap(), f[2], "bits {bits}");
+        // Every encoded byte stream maps into exactly that alphabet.
+        let bytes: Vec<u8> = (0..=255).collect();
+        let id =
+            php_session::sid::bin_to_readable(&bytes, 200, u8::try_from(bits).unwrap()).unwrap();
+        assert!(id.iter().all(|c| f[2].as_bytes().contains(c)));
+    }
+}

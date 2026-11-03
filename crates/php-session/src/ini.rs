@@ -881,6 +881,36 @@ pub fn ini_get(h: &mut dyn SessionHost, name: &str) -> Option<Vec<u8>> {
     h.session().ini.get(name).map(<[u8]>::to_vec)
 }
 
+/// One row of `ini_get_all("session")`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IniInfo {
+    /// Directive name.
+    pub name: &'static str,
+    /// `global_value` (the value before runtime changes).
+    pub global_value: Vec<u8>,
+    /// `local_value` (the current value).
+    pub local_value: Vec<u8>,
+    /// `access` mask.
+    pub access: u8,
+}
+
+/// Every directive with its values, sorted by name like `ini_get_all()`.
+pub fn ini_get_all(h: &mut dyn SessionHost) -> Vec<IniInfo> {
+    let store = &h.session().ini;
+    let mut v: Vec<IniInfo> = DIRECTIVES
+        .iter()
+        .zip(&store.entries)
+        .map(|(d, e)| IniInfo {
+            name: d.name,
+            global_value: e.orig.clone().unwrap_or_else(|| e.value.clone()),
+            local_value: e.value.clone(),
+            access: d.access,
+        })
+        .collect();
+    v.sort_by(|a, b| a.name.cmp(b.name));
+    v
+}
+
 /// `ini_restore(name)` (`zend_restore_ini_entry`, runtime stage). Returns
 /// `None` when `name` is not a session directive.
 pub fn ini_restore(h: &mut dyn SessionHost, name: &str) -> Option<()> {
@@ -957,5 +987,9 @@ mod tests {
         let store = IniStore::default();
         assert_eq!(store.get("session.cache_limiter"), Some(&b"nocache"[..]));
         assert_eq!(MAX_COOKIE_LIFETIME, 9_223_372_034_707_292_159);
+        let mut names: Vec<&str> = DIRECTIVES.iter().map(|d| d.name).collect();
+        names.sort_unstable();
+        names.dedup();
+        assert_eq!(names.len(), DIRECTIVES.len());
     }
 }
