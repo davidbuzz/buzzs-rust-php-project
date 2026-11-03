@@ -26,15 +26,15 @@ mod exec;
 pub mod ext;
 mod fiber;
 pub mod func;
-mod generator;
 pub mod gc;
+mod generator;
 mod include;
 pub mod interrupt;
-mod pfa;
 mod iter;
 mod lazy;
 pub mod object;
 pub mod opcode;
+mod pfa;
 mod place;
 mod props;
 mod reflection;
@@ -177,6 +177,8 @@ impl Vm {
             startup_diagnostics: Vec::new(),
             log_hook: None,
             main_return: Value::Null,
+            native_stack_base: 0,
+            native_stack_size: 8 << 20,
             output_handler_aliases: std::collections::HashMap::new(),
             include_opener: None,
             source_filter: None,

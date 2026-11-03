@@ -279,8 +279,10 @@ fn deprecate(vm: &mut Vm, name: &str, since: &str, message: &str) {
     if let Some(crate::func::Func::Builtin(b)) = vm.functions.get(&lc).cloned() {
         let mut nb = (*b).clone();
         nb.flags |= crate::func::flags::DEPRECATED;
-        vm.functions.insert(lc.clone(), crate::func::Func::Builtin(std::rc::Rc::new(nb)));
-        let suffix = crate::attrs::format_suffix(Some(&ZStr::from(since)), Some(&ZStr::from(message)));
+        vm.functions
+            .insert(lc.clone(), crate::func::Func::Builtin(std::rc::Rc::new(nb)));
+        let suffix =
+            crate::attrs::format_suffix(Some(&ZStr::from(since)), Some(&ZStr::from(message)));
         vm.builtin_deprecations.insert(lc, suffix);
     }
 }

@@ -453,7 +453,11 @@ impl Vm {
         let mut out = Vec::new();
         if f.kind == FrameKind::Builtin {
             // `#[\SensitiveParameter]` of native signatures.
-            let params = f.func.as_ref().map(|func| func.params().to_vec()).unwrap_or_default();
+            let params = f
+                .func
+                .as_ref()
+                .map(|func| func.params().to_vec())
+                .unwrap_or_default();
             for (i, a) in f.args.iter().enumerate() {
                 let Some(a) = a else { continue };
                 let sensitive = params

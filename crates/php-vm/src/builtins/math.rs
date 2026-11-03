@@ -13,7 +13,8 @@ fn num_arg(vm: &mut Vm, a: &Args, n: usize) -> VmResult<Value> {
     match v {
         Value::Int(_) | Value::Float(_) => Ok(v),
         other => {
-            let r = php_runtime::convert::try_convert_to_number(&other, vm).map_err(|e| vm.rt_throw(e))?;
+            let r = php_runtime::convert::try_convert_to_number(&other, vm)
+                .map_err(|e| vm.rt_throw(e))?;
             Ok(r.unwrap_or(Value::Int(0)))
         }
     }
@@ -181,7 +182,10 @@ fn mt_rand(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         return Ok(Value::Int(vm.random_globals().mt_rand()));
     }
     if !a.has(1) {
-        return Err(vm.make_throw("ArgumentCountError", "mt_rand() expects exactly 2 arguments, 1 given"));
+        return Err(vm.make_throw(
+            "ArgumentCountError",
+            "mt_rand() expects exactly 2 arguments, 1 given",
+        ));
     }
     let (min, max) = (i(a, 0), i(a, 1));
     match vm.random_globals().mt_rand_range(min, max) {
@@ -195,7 +199,10 @@ fn rand(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         return Ok(Value::Int(vm.random_globals().mt_rand()));
     }
     if !a.has(1) {
-        return Err(vm.make_throw("ArgumentCountError", "rand() expects exactly 2 arguments, 1 given"));
+        return Err(vm.make_throw(
+            "ArgumentCountError",
+            "rand() expects exactly 2 arguments, 1 given",
+        ));
     }
     let (min, max) = (i(a, 0), i(a, 1));
     Ok(Value::Int(vm.random_globals().rand_range(min, max)))
@@ -208,7 +215,12 @@ fn mt_getrandmax(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
 fn random_int(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let (min, max) = (i(a, 0), i(a, 1));
     if min > max {
-        return Err(super::util::value_error(vm, a, 1, "must be less than or equal to argument #2 ($max)"));
+        return Err(super::util::value_error(
+            vm,
+            a,
+            1,
+            "must be less than or equal to argument #2 ($max)",
+        ));
     }
     match php_random::csprng::random_int(min, max) {
         Ok(v) => Ok(Value::Int(v)),
@@ -232,7 +244,11 @@ pub(crate) fn register(vm: &mut Vm) {
     reg(vm, "abs(int|float $num): int|float", abs);
     reg(vm, "floor(int|float $num): float", floor);
     reg(vm, "ceil(int|float $num): float", ceil);
-    reg(vm, "round(int|float $num, int $precision = 0, $mode = PHP_ROUND_HALF_UP): float", round);
+    reg(
+        vm,
+        "round(int|float $num, int $precision = 0, $mode = PHP_ROUND_HALF_UP): float",
+        round,
+    );
     reg(vm, "sqrt(float $num): float", sqrt);
     reg(vm, "sin(float $num): float", sin);
     reg(vm, "cos(float $num): float", cos);
@@ -258,15 +274,35 @@ pub(crate) fn register(vm: &mut Vm) {
     reg(vm, "fmod(float $num1, float $num2): float", fmod);
     reg(vm, "fdiv(float $num1, float $num2): float", fdiv);
     reg(vm, "intdiv(int $num1, int $num2): int", intdiv);
-    reg(vm, "pow(mixed $num, mixed $exponent): object|int|float", pow);
+    reg(
+        vm,
+        "pow(mixed $num, mixed $exponent): object|int|float",
+        pow,
+    );
     reg(vm, "hypot(float $x, float $y): float", hypot);
     reg(vm, "is_nan(float $num): bool", is_nan);
     reg(vm, "is_finite(float $num): bool", is_finite);
     reg(vm, "is_infinite(float $num): bool", is_infinite);
-    reg(vm, "mt_srand(?int $seed = null, int $mode = MT_RAND_MT19937): void", mt_srand);
-    reg(vm, "srand(?int $seed = null, int $mode = MT_RAND_MT19937): void", mt_srand);
-    reg(vm, "mt_rand(int $min = UNKNOWN, int $max = UNKNOWN): int", mt_rand);
-    reg(vm, "rand(int $min = UNKNOWN, int $max = UNKNOWN): int", rand);
+    reg(
+        vm,
+        "mt_srand(?int $seed = null, int $mode = MT_RAND_MT19937): void",
+        mt_srand,
+    );
+    reg(
+        vm,
+        "srand(?int $seed = null, int $mode = MT_RAND_MT19937): void",
+        mt_srand,
+    );
+    reg(
+        vm,
+        "mt_rand(int $min = UNKNOWN, int $max = UNKNOWN): int",
+        mt_rand,
+    );
+    reg(
+        vm,
+        "rand(int $min = UNKNOWN, int $max = UNKNOWN): int",
+        rand,
+    );
     reg(vm, "mt_getrandmax(): int", mt_getrandmax);
     reg(vm, "getrandmax(): int", mt_getrandmax);
     reg(vm, "random_int(int $min, int $max): int", random_int);

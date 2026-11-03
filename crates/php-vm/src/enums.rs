@@ -257,14 +257,16 @@ impl Vm {
                             }
                             Value::Int(f as i64)
                         }
-                        _ => return Err(self.make_throw(
-                            "TypeError",
-                            &format!(
+                        _ => {
+                            return Err(self.make_throw(
+                                "TypeError",
+                                &format!(
                                 "{}::{}(): Argument #1 ($value) must be of type int, string given",
                                 cls.name,
                                 if try_ { "tryFrom" } else { "from" }
                             ),
-                        )),
+                            ))
+                        }
                     }
                 }
                 other => other,

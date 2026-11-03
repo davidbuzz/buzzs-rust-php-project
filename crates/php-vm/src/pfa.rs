@@ -102,8 +102,14 @@ impl Vm {
                     pfa.placeholders.resize(p + 1, false);
                 }
                 if call.args[p].is_some() || pfa.placeholders[p] {
-                    let n = name.as_ref().map_or_else(String::new, ZStr::to_string_lossy);
-                    let what = if pfa.placeholders[p] { "placeholder" } else { "argument" };
+                    let n = name
+                        .as_ref()
+                        .map_or_else(String::new, ZStr::to_string_lossy);
+                    let what = if pfa.placeholders[p] {
+                        "placeholder"
+                    } else {
+                        "argument"
+                    };
                     return Err(self.make_throw(
                         "Error",
                         &format!("Named parameter ${n} overwrites previous {what}"),
@@ -160,9 +166,17 @@ impl Vm {
         } else {
             params.len()
         };
-        let required = if magic.is_some() { 0 } else { func.required() as usize };
+        let required = if magic.is_some() {
+            0
+        } else {
+            func.required() as usize
+        };
         let fname = match (&magic, &call.scope) {
-            (Some(m), Some(sc)) => format!("{}::{}", object::display_name(&sc.name), m.to_string_lossy()),
+            (Some(m), Some(sc)) => format!(
+                "{}::{}",
+                object::display_name(&sc.name),
+                m.to_string_lossy()
+            ),
             _ => self.func_display(&func, call.scope.as_ref()),
         };
 
@@ -443,7 +457,11 @@ impl Vm {
             s.push_str(names.variadic.as_deref().unwrap_or("args"));
             param_src.push(s);
         }
-        let ret_ty = if magic.is_some() { None } else { func.return_type().cloned() };
+        let ret_ty = if magic.is_some() {
+            None
+        } else {
+            func.return_type().cloned()
+        };
         let is_void = ret_ty
             .as_ref()
             .is_some_and(|t| t.mask & crate::types::mask::VOID != 0);

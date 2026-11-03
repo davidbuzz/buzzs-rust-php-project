@@ -82,6 +82,11 @@ impl StreamOps for MemoryOps {
             return Err(OpFailed);
         };
         if end > self.data.len() {
+            let grow = end - self.data.len();
+            if !crate::util::reserve_more(&mut self.data, grow) {
+                // memory_limit: php://memory cannot grow.
+                return Err(OpFailed);
+            }
             self.data.resize(end, 0);
         }
         self.data[self.fpos..end].copy_from_slice(buf);

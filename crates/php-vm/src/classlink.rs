@@ -946,8 +946,12 @@ impl Vm {
         // `zend_implement_serializable`.
         if cls.flags & cflags::EXPLICIT_ABSTRACT == 0
             && !cls.is_interface()
-            && cls.interfaces.iter().any(|i| i.lc_name.as_bytes() == b"serializable")
-            && (cls.find_method(b"__serialize").is_none() || cls.find_method(b"__unserialize").is_none())
+            && cls
+                .interfaces
+                .iter()
+                .any(|i| i.lc_name.as_bytes() == b"serializable")
+            && (cls.find_method(b"__serialize").is_none()
+                || cls.find_method(b"__unserialize").is_none())
         {
             let msg = format!(
                 "{} implements the Serializable interface, which is deprecated. Implement __serialize() and __unserialize() instead (or in addition, if support for old PHP versions is necessary)",

@@ -502,7 +502,8 @@ pub(crate) fn apply_final(v: &mut Value, wop: &mut WOp) -> Step {
                     // (`$a['k'] = null` where `$a['k']` is `&$a`): its value
                     // is replaced once the walk has released it.
                     if r.try_borrow_mut().is_none() {
-                        DEFERRED_REF_ASSIGNS.with(|d| d.borrow_mut().push((r.clone(), val.clone())));
+                        DEFERRED_REF_ASSIGNS
+                            .with(|d| d.borrow_mut().push((r.clone(), val.clone())));
                         return Step::Done(val);
                     }
                     let old = r.set(val.clone());
@@ -630,12 +631,7 @@ impl Vm {
         r
     }
 
-    fn write_place_inner(
-        &mut self,
-        base: RBase,
-        segs: &[RSeg],
-        mut wop: WOp,
-    ) -> VmResult<Value> {
+    fn write_place_inner(&mut self, base: RBase, segs: &[RSeg], mut wop: WOp) -> VmResult<Value> {
         let mut diags = Vec::new();
         let step = match base {
             RBase::Var(store, idx) => {

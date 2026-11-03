@@ -59,7 +59,13 @@ fn class_subtype(vm: &Vm, a: &ZStr, a_scope: &Rc<Class>, b: &ZStr, b_scope: &Rc<
 }
 
 /// `zend_perform_covariant_type_check`: is `fe` a subtype of `proto`?
-pub(crate) fn covariant(vm: &Vm, fe_scope: &Rc<Class>, fe: &TypeDecl, proto_scope: &Rc<Class>, proto: &TypeDecl) -> bool {
+pub(crate) fn covariant(
+    vm: &Vm,
+    fe_scope: &Rc<Class>,
+    fe: &TypeDecl,
+    proto_scope: &Rc<Class>,
+    proto: &TypeDecl,
+) -> bool {
     if proto.is_mixed() && fe.mask & mask::VOID == 0 {
         return true;
     }
@@ -85,7 +91,10 @@ pub(crate) fn covariant(vm: &Vm, fe_scope: &Rc<Class>, fe: &TypeDecl, proto_scop
         let ok = p_iter
             || (pmask & mask::ARRAY != 0
                 && (pmask & mask::OBJECT != 0
-                    || proto.classes.iter().any(|c| c.eq_ignore_ascii_case(b"Traversable"))));
+                    || proto
+                        .classes
+                        .iter()
+                        .any(|c| c.eq_ignore_ascii_case(b"Traversable"))));
         if !ok {
             return false;
         }
@@ -95,7 +104,10 @@ pub(crate) fn covariant(vm: &Vm, fe_scope: &Rc<Class>, fe: &TypeDecl, proto_scop
     if p_iter {
         extra_ok |= mask::ARRAY;
     }
-    if fe_mask & !(pmask | extra_ok) & !mask::NULL != 0 && !(pmask & mask::BOOL == mask::BOOL && fe_mask & !(pmask | extra_ok) & !mask::NULL & !mask::BOOL == 0) {
+    if fe_mask & !(pmask | extra_ok) & !mask::NULL != 0
+        && !(pmask & mask::BOOL == mask::BOOL
+            && fe_mask & !(pmask | extra_ok) & !mask::NULL & !mask::BOOL == 0)
+    {
         return false;
     }
     if fe_mask & mask::NULL != 0 && pmask & mask::NULL == 0 {
@@ -105,13 +117,24 @@ pub(crate) fn covariant(vm: &Vm, fe_scope: &Rc<Class>, fe: &TypeDecl, proto_scop
         let fc = resolve2(vm, c, fe_scope, proto_scope);
         let ok = pmask & mask::OBJECT != 0
             || (pmask & mask::CALLABLE != 0
-                && fc.as_ref().is_some_and(|x| x.lc_name.as_bytes() == b"closure" || x.methods.contains_key(b"__invoke".as_slice())))
+                && fc.as_ref().is_some_and(|x| {
+                    x.lc_name.as_bytes() == b"closure"
+                        || x.methods.contains_key(b"__invoke".as_slice())
+                }))
             || (pmask & mask::STATIC != 0
                 && fe_scope.flags & cflags::FINAL != 0
                 && fc.as_ref().is_some_and(|x| Rc::ptr_eq(x, fe_scope)))
-            || (p_iter && class_of_name(vm, c, fe_scope).is_some_and(|x| x.instance_of_name(b"traversable")))
-            || proto.classes.iter().any(|pc| class_subtype(vm, c, fe_scope, pc, proto_scope))
-            || proto.intersections.iter().any(|g| g.iter().all(|pc| class_subtype(vm, c, fe_scope, pc, proto_scope)))
+            || (p_iter
+                && class_of_name(vm, c, fe_scope)
+                    .is_some_and(|x| x.instance_of_name(b"traversable")))
+            || proto
+                .classes
+                .iter()
+                .any(|pc| class_subtype(vm, c, fe_scope, pc, proto_scope))
+            || proto.intersections.iter().any(|g| {
+                g.iter()
+                    .all(|pc| class_subtype(vm, c, fe_scope, pc, proto_scope))
+            })
             || (pmask & mask::STATIC != 0 && false);
         if !ok {
             return false;
@@ -119,12 +142,15 @@ pub(crate) fn covariant(vm: &Vm, fe_scope: &Rc<Class>, fe: &TypeDecl, proto_scop
     }
     for g in &fe.intersections {
         let ok = pmask & mask::OBJECT != 0
-            || proto
-                .classes
-                .iter()
-                .any(|pc| g.iter().any(|c| class_subtype(vm, c, fe_scope, pc, proto_scope)))
+            || proto.classes.iter().any(|pc| {
+                g.iter()
+                    .any(|c| class_subtype(vm, c, fe_scope, pc, proto_scope))
+            })
             || proto.intersections.iter().any(|pg| {
-                pg.iter().all(|pc| g.iter().any(|c| class_subtype(vm, c, fe_scope, pc, proto_scope)))
+                pg.iter().all(|pc| {
+                    g.iter()
+                        .any(|c| class_subtype(vm, c, fe_scope, pc, proto_scope))
+                })
             });
         if !ok {
             return false;
@@ -132,7 +158,6 @@ pub(crate) fn covariant(vm: &Vm, fe_scope: &Rc<Class>, fe: &TypeDecl, proto_scop
     }
     true
 }
-
 
 /// `zend_do_perform_implementation_check`.
 pub(crate) fn implementation_check(
@@ -203,7 +228,10 @@ pub(crate) fn implementation_check(
 
 fn render_default(p: &ParamInfo, f: &Func) -> String {
     if !f.is_user() {
-        return p.default_text.clone().unwrap_or_else(|| "<default>".to_string());
+        return p
+            .default_text
+            .clone()
+            .unwrap_or_else(|| "<default>".to_string());
     }
     match &p.default_expr {
         Some(ConstExpr::Value(v)) => match v {
@@ -220,7 +248,13 @@ fn render_default(p: &ParamInfo, f: &Func) -> String {
                 out.push('\'');
                 out
             }
-            Value::Array(a) => if a.is_empty() { "[]".into() } else { "[...]".into() },
+            Value::Array(a) => {
+                if a.is_empty() {
+                    "[]".into()
+                } else {
+                    "[...]".into()
+                }
+            }
             Value::Int(i) => i.to_string(),
             Value::Float(f) => php_runtime::float::format_double(*f, 17, false),
             _ => "<expression>".into(),
@@ -228,7 +262,11 @@ fn render_default(p: &ParamInfo, f: &Func) -> String {
         _ => {
             let t = p.default_text.clone().unwrap_or_default();
             let t = t.trim();
-            let ident = |s: &str| !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '\\');
+            let ident = |s: &str| {
+                !s.is_empty()
+                    && s.chars()
+                        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '\\')
+            };
             if ident(t) {
                 t.trim_start_matches('\\').to_string()
             } else if let Some((a, b)) = t.split_once("::") {
@@ -328,7 +366,10 @@ pub(crate) fn check_class(vm: &Vm, cls: &Rc<Class>) -> (Option<(String, u32)>, V
         let parent = declaration(&pm.func, pm.flags, &ps);
         if st == Status::Warning {
             let rtwc = match &m.func {
-                Func::User(u) => u.attributes.iter().any(|a| a.name.eq_ignore_ascii_case(b"ReturnTypeWillChange")),
+                Func::User(u) => u
+                    .attributes
+                    .iter()
+                    .any(|a| a.name.eq_ignore_ascii_case(b"ReturnTypeWillChange")),
                 Func::Builtin(_) => true,
             };
             if !rtwc {
@@ -342,7 +383,13 @@ pub(crate) fn check_class(vm: &Vm, cls: &Rc<Class>) -> (Option<(String, u32)>, V
             continue;
         }
         let _ = cflags::INTERNAL;
-        return (Some((format!("Declaration of {child} must be compatible with {parent}"), line)), warnings);
+        return (
+            Some((
+                format!("Declaration of {child} must be compatible with {parent}"),
+                line,
+            )),
+            warnings,
+        );
     }
     (None, warnings)
 }

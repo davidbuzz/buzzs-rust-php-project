@@ -614,14 +614,21 @@ impl Vm {
             (Some(p), Some(n)) => {
                 call.has_named = true;
                 if call.args.len() > p && call.args[p].is_some() {
-                    let what = if call.pfa.as_ref().is_some_and(|x| x.placeholders.get(p).copied().unwrap_or(false)) {
+                    let what = if call
+                        .pfa
+                        .as_ref()
+                        .is_some_and(|x| x.placeholders.get(p).copied().unwrap_or(false))
+                    {
                         "placeholder"
                     } else {
                         "argument"
                     };
                     return Err(self.make_throw(
                         "Error",
-                        &format!("Named parameter ${} overwrites previous {what}", n.to_string_lossy()),
+                        &format!(
+                            "Named parameter ${} overwrites previous {what}",
+                            n.to_string_lossy()
+                        ),
                     ));
                 }
                 if call.args.len() <= p {
@@ -896,6 +903,11 @@ impl Vm {
         // A native `__call`/`__callStatic` gets the called name through
         // `vm.magic_call_name()`.
         self.magic_call_name = call.magic_name.take();
+        let ctor_this = if call.is_ctor {
+            call.this.clone()
+        } else {
+            None
+        };
         // The display name is only needed for error messages: build it lazily.
         let fname = |vm: &Self| vm.func_display(&Func::Builtin(b.clone()), call.scope.as_ref());
         let nparams = b.params.len();
@@ -1098,6 +1110,13 @@ impl Vm {
         }
         if self.frames.len() >= depth {
             self.frames.truncate(depth - 1);
+        }
+        // `zend_object_store_ctor_failed` for native constructors.
+        if r.is_err() {
+            if let Some(t) = &ctor_this {
+                let d = object::data(t);
+                d.flags.set(d.flags.get() | object::oflags::DESTRUCTED);
+            }
         }
         r
     }

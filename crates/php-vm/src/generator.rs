@@ -1084,7 +1084,11 @@ impl crate::ext::NativeIterator for GenIter {
 }
 
 /// `zend_generator_get_iterator`.
-fn gen_get_iterator(vm: &mut Vm, o: &Obj, by_ref: bool) -> VmResult<Box<dyn crate::ext::NativeIterator>> {
+fn gen_get_iterator(
+    vm: &mut Vm,
+    o: &Obj,
+    by_ref: bool,
+) -> VmResult<Box<dyn crate::ext::NativeIterator>> {
     if vm.gen_finished(o) {
         return Err(vm.make_throw("Exception", "Cannot traverse an already closed generator"));
     }

@@ -1920,7 +1920,10 @@ impl Vm {
     /// (a native `Serializable::unserialize()` called directly), and the
     /// delayed `__wakeup()`/`__unserialize()` calls run at the end. Inside
     /// an active `unserialize()` it only joins that call's context.
-    pub fn with_unserialize_context<R>(&mut self, f: impl FnOnce(&mut Vm) -> VmResult<R>) -> VmResult<R> {
+    pub fn with_unserialize_context<R>(
+        &mut self,
+        f: impl FnOnce(&mut Vm) -> VmResult<R>,
+    ) -> VmResult<R> {
         let (d, outermost) = unser_init(self);
         let r = f(self);
         let ok = r.is_ok();
@@ -1931,7 +1934,11 @@ impl Vm {
         }
     }
 
-    pub fn unserialize_nested(&mut self, data: &[u8], offset: usize) -> VmResult<Result<(Value, usize), usize>> {
+    pub fn unserialize_nested(
+        &mut self,
+        data: &[u8],
+        offset: usize,
+    ) -> VmResult<Result<(Value, usize), usize>> {
         let (d, outermost) = unser_init(self);
         let first_slot = d.borrow().slots.len();
         let mut u = Unserializer {

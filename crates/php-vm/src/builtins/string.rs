@@ -93,7 +93,9 @@ fn explode(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let limit = if a.has(2) { i(a, 2) } else { i64::MAX };
     let r = search::explode(d.as_bytes(), st.as_bytes(), limit);
     let parts = vm.std(r)?;
-    Ok(Value::Array(ZArray::from_values(parts.into_iter().map(bytes))))
+    Ok(Value::Array(ZArray::from_values(
+        parts.into_iter().map(bytes),
+    )))
 }
 
 fn substr(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -128,22 +130,43 @@ fn opt_bytes(v: Option<Vec<u8>>) -> Value {
 }
 
 fn strstr(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    Ok(opt_bytes(search::strstr(s(a, 0).as_bytes(), s(a, 1).as_bytes(), b(a, 2))))
+    Ok(opt_bytes(search::strstr(
+        s(a, 0).as_bytes(),
+        s(a, 1).as_bytes(),
+        b(a, 2),
+    )))
 }
 fn stristr(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    Ok(opt_bytes(search::stristr(s(a, 0).as_bytes(), s(a, 1).as_bytes(), b(a, 2))))
+    Ok(opt_bytes(search::stristr(
+        s(a, 0).as_bytes(),
+        s(a, 1).as_bytes(),
+        b(a, 2),
+    )))
 }
 fn strrchr(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    Ok(opt_bytes(search::strrchr(s(a, 0).as_bytes(), s(a, 1).as_bytes(), b(a, 2))))
+    Ok(opt_bytes(search::strrchr(
+        s(a, 0).as_bytes(),
+        s(a, 1).as_bytes(),
+        b(a, 2),
+    )))
 }
 fn str_contains(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    Ok(Value::Bool(search::str_contains(s(a, 0).as_bytes(), s(a, 1).as_bytes())))
+    Ok(Value::Bool(search::str_contains(
+        s(a, 0).as_bytes(),
+        s(a, 1).as_bytes(),
+    )))
 }
 fn str_starts_with(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    Ok(Value::Bool(search::str_starts_with(s(a, 0).as_bytes(), s(a, 1).as_bytes())))
+    Ok(Value::Bool(search::str_starts_with(
+        s(a, 0).as_bytes(),
+        s(a, 1).as_bytes(),
+    )))
 }
 fn str_ends_with(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    Ok(Value::Bool(search::str_ends_with(s(a, 0).as_bytes(), s(a, 1).as_bytes())))
+    Ok(Value::Bool(search::str_ends_with(
+        s(a, 0).as_bytes(),
+        s(a, 1).as_bytes(),
+    )))
 }
 
 fn substr_count(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -154,11 +177,21 @@ fn substr_count(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 fn strspn(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let len = opt(a, 3).map(|_| i(a, 3));
-    Ok(Value::Int(search::strspn(s(a, 0).as_bytes(), s(a, 1).as_bytes(), i(a, 2), len)))
+    Ok(Value::Int(search::strspn(
+        s(a, 0).as_bytes(),
+        s(a, 1).as_bytes(),
+        i(a, 2),
+        len,
+    )))
 }
 fn strcspn(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let len = opt(a, 3).map(|_| i(a, 3));
-    Ok(Value::Int(search::strcspn(s(a, 0).as_bytes(), s(a, 1).as_bytes(), i(a, 2), len)))
+    Ok(Value::Int(search::strcspn(
+        s(a, 0).as_bytes(),
+        s(a, 1).as_bytes(),
+        i(a, 2),
+        len,
+    )))
 }
 
 fn strpbrk(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -173,16 +206,26 @@ fn substr_replace(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let len = a.get(3).filter(|v| !v.is_null());
     let one = |vm: &mut Vm, st: &[u8], idx: usize| -> VmResult<Vec<u8>> {
         let r = match &rep {
-            Value::Array(ra) => ra.iter().nth(idx).map(|(_, v)| v.deref()).unwrap_or(Value::Str(ZStr::empty())),
+            Value::Array(ra) => ra
+                .iter()
+                .nth(idx)
+                .map(|(_, v)| v.deref())
+                .unwrap_or(Value::Str(ZStr::empty())),
             v => v.clone(),
         };
         let r = vm.to_zstr(&r)?;
         let o = match &off {
-            Value::Array(oa) => oa.iter().nth(idx).map_or(0, |(_, v)| v.deref().as_int().unwrap_or(0)),
+            Value::Array(oa) => oa
+                .iter()
+                .nth(idx)
+                .map_or(0, |(_, v)| v.deref().as_int().unwrap_or(0)),
             v => vm.to_long(v)?,
         };
         let l = match &len {
-            Some(Value::Array(la)) => la.iter().nth(idx).map(|(_, v)| v.deref().as_int().unwrap_or(0)),
+            Some(Value::Array(la)) => la
+                .iter()
+                .nth(idx)
+                .map(|(_, v)| v.deref().as_int().unwrap_or(0)),
             Some(v) => Some(vm.to_long(v)?),
             None => None,
         };
@@ -218,7 +261,11 @@ fn lcfirst(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     Ok(bytes(transform::lcfirst(s(a, 0).as_bytes())))
 }
 fn ucwords(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let d = if a.has(1) { s(a, 1) } else { ZStr::from(" \t\r\n\x0c\x0b") };
+    let d = if a.has(1) {
+        s(a, 1)
+    } else {
+        ZStr::from(" \t\r\n\x0c\x0b")
+    };
     let mut n = Notices::new();
     let r = transform::ucwords(s(a, 0).as_bytes(), d.as_bytes(), &mut n);
     vm.std_notices(n)?;
@@ -229,7 +276,13 @@ fn trim_impl(vm: &mut Vm, a: &Args, mode: transform::TrimMode) -> VmResult<Value
     let st = s(a, 0);
     let what = if a.has(1) { Some(s(a, 1)) } else { None };
     let mut n = Notices::new();
-    let r = transform::trim(st.as_bytes(), what.as_ref().map(ZStr::as_bytes), mode, &mut n).to_vec();
+    let r = transform::trim(
+        st.as_bytes(),
+        what.as_ref().map(ZStr::as_bytes),
+        mode,
+        &mut n,
+    )
+    .to_vec();
     vm.std_notices(n)?;
     Ok(bytes(r))
 }
@@ -259,7 +312,9 @@ fn str_split(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let len = if a.has(1) { i(a, 1) } else { 1 };
     let r = transform::str_split(s(a, 0).as_bytes(), len);
     let parts = vm.std(r)?;
-    Ok(Value::Array(ZArray::from_values(parts.into_iter().map(bytes))))
+    Ok(Value::Array(ZArray::from_values(
+        parts.into_iter().map(bytes),
+    )))
 }
 
 fn strrev(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -275,7 +330,11 @@ fn wordwrap(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 fn chunk_split(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let l = if a.has(1) { i(a, 1) } else { 76 };
-    let e = if a.has(2) { s(a, 2) } else { ZStr::from("\r\n") };
+    let e = if a.has(2) {
+        s(a, 2)
+    } else {
+        ZStr::from("\r\n")
+    };
     let r = transform::chunk_split(s(a, 0).as_bytes(), l, e.as_bytes());
     Ok(bytes(vm.std(r)?))
 }
@@ -288,10 +347,19 @@ fn nl2br(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 fn strtr(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let st = s(a, 0);
     if a.has(2) {
-        return Ok(bytes(transform::strtr(st.as_bytes(), s(a, 1).as_bytes(), s(a, 2).as_bytes())));
+        return Ok(bytes(transform::strtr(
+            st.as_bytes(),
+            s(a, 1).as_bytes(),
+            s(a, 2).as_bytes(),
+        )));
     }
     let Value::Array(pairs) = a.at(1) else {
-        return Err(super::util::type_error(vm, a, 2, "must be of type array, string given"));
+        return Err(super::util::type_error(
+            vm,
+            a,
+            2,
+            "must be of type array, string given",
+        ));
     };
     let mut ps: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
     for (k, v) in pairs.iter() {
@@ -319,7 +387,11 @@ fn str_replace_impl(vm: &mut Vm, a: &mut Args, ci: bool) -> VmResult<Value> {
         }
         _ => None,
     };
-    let search_one = if search_list.is_none() { vm.to_zstr(&search_v)? } else { ZStr::empty() };
+    let search_one = if search_list.is_none() {
+        vm.to_zstr(&search_v)?
+    } else {
+        ZStr::empty()
+    };
     let replace_list: Option<Vec<Vec<u8>>> = match &replace_v {
         Value::Array(x) => {
             let mut v = Vec::new();
@@ -330,7 +402,11 @@ fn str_replace_impl(vm: &mut Vm, a: &mut Args, ci: bool) -> VmResult<Value> {
         }
         _ => None,
     };
-    let replace_one = if replace_list.is_none() { vm.to_zstr(&replace_v)? } else { ZStr::empty() };
+    let replace_one = if replace_list.is_none() {
+        vm.to_zstr(&replace_v)?
+    } else {
+        ZStr::empty()
+    };
     let mut do_one = |vm: &mut Vm, subj: &[u8]| -> VmResult<Vec<u8>> {
         let sa = match &search_list {
             Some(l) => transform::ReplaceArg::Many(l.as_slice()),
@@ -411,10 +487,16 @@ fn str_rot13(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 }
 
 fn strcmp(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    Ok(Value::Int(compare::strcmp(s(a, 0).as_bytes(), s(a, 1).as_bytes())))
+    Ok(Value::Int(compare::strcmp(
+        s(a, 0).as_bytes(),
+        s(a, 1).as_bytes(),
+    )))
 }
 fn strcasecmp(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    Ok(Value::Int(compare::strcasecmp(s(a, 0).as_bytes(), s(a, 1).as_bytes())))
+    Ok(Value::Int(compare::strcasecmp(
+        s(a, 0).as_bytes(),
+        s(a, 1).as_bytes(),
+    )))
 }
 fn strncmp(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let r = compare::strncmp(s(a, 0).as_bytes(), s(a, 1).as_bytes(), i(a, 2));
@@ -425,10 +507,18 @@ fn strncasecmp(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     Ok(Value::Int(vm.std(r)?))
 }
 fn strnatcmp(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    Ok(Value::Int(compare::strnatcmp(s(a, 0).as_bytes(), s(a, 1).as_bytes(), false)))
+    Ok(Value::Int(compare::strnatcmp(
+        s(a, 0).as_bytes(),
+        s(a, 1).as_bytes(),
+        false,
+    )))
 }
 fn strnatcasecmp(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    Ok(Value::Int(compare::strnatcmp(s(a, 0).as_bytes(), s(a, 1).as_bytes(), true)))
+    Ok(Value::Int(compare::strnatcmp(
+        s(a, 0).as_bytes(),
+        s(a, 1).as_bytes(),
+        true,
+    )))
 }
 
 fn addslashes(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -455,7 +545,13 @@ fn htmlspecialchars(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let de = !a.has(3) || b(a, 3);
     let cs = opt(a, 2).map(|_| s(a, 2));
     let mut n = Notices::new();
-    let r = html::htmlspecialchars(s(a, 0).as_bytes(), fl, cs.as_ref().map(ZStr::as_bytes), de, &mut n);
+    let r = html::htmlspecialchars(
+        s(a, 0).as_bytes(),
+        fl,
+        cs.as_ref().map(ZStr::as_bytes),
+        de,
+        &mut n,
+    );
     vm.std_notices(n)?;
     Ok(bytes(r))
 }
@@ -477,7 +573,13 @@ fn levenshtein(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let ci = if a.has(2) { i(a, 2) } else { 1 };
     let cr = if a.has(3) { i(a, 3) } else { 1 };
     let cd = if a.has(4) { i(a, 4) } else { 1 };
-    Ok(Value::Int(analysis::levenshtein(s(a, 0).as_bytes(), s(a, 1).as_bytes(), ci, cr, cd)))
+    Ok(Value::Int(analysis::levenshtein(
+        s(a, 0).as_bytes(),
+        s(a, 1).as_bytes(),
+        ci,
+        cr,
+        cd,
+    )))
 }
 
 fn soundex(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -527,12 +629,20 @@ fn octdec(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 fn md5(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let d = php_hash::md5(s(a, 0).as_bytes());
-    Ok(if b(a, 1) { bytes(d.to_vec()) } else { bytes(transform::bin2hex(&d)) })
+    Ok(if b(a, 1) {
+        bytes(d.to_vec())
+    } else {
+        bytes(transform::bin2hex(&d))
+    })
 }
 
 fn sha1(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let d = php_hash::sha1(s(a, 0).as_bytes());
-    Ok(if b(a, 1) { bytes(d.to_vec()) } else { bytes(transform::bin2hex(&d)) })
+    Ok(if b(a, 1) {
+        bytes(d.to_vec())
+    } else {
+        bytes(transform::bin2hex(&d))
+    })
 }
 
 fn crc32(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -549,7 +659,12 @@ fn number_format(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         other => php_support::fmt::Number::Float(vm.to_double(&other)?),
     };
     let dec = i32::try_from(dec.clamp(i64::from(i32::MIN), i64::from(i32::MAX))).unwrap_or(0);
-    Ok(bytes(php_support::fmt::number_format(num, dec, dp.as_bytes(), ts.as_bytes())))
+    Ok(bytes(php_support::fmt::number_format(
+        num,
+        dec,
+        dp.as_bytes(),
+        ts.as_bytes(),
+    )))
 }
 
 fn lcg_value(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
@@ -566,12 +681,19 @@ fn str_word_count(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let fmt = i(a, 1);
     let chars = opt(a, 2).map(|_| s(a, 2));
     let mut n = Notices::new();
-    let r = analysis::str_word_count(s(a, 0).as_bytes(), fmt, chars.as_ref().map(ZStr::as_bytes), &mut n);
+    let r = analysis::str_word_count(
+        s(a, 0).as_bytes(),
+        fmt,
+        chars.as_ref().map(ZStr::as_bytes),
+        &mut n,
+    );
     vm.std_notices(n)?;
     let r = vm.std(r)?;
     Ok(match r {
         analysis::WordCount::Count(c) => Value::Int(c),
-        analysis::WordCount::Words(w) => Value::Array(ZArray::from_values(w.into_iter().map(bytes))),
+        analysis::WordCount::Words(w) => {
+            Value::Array(ZArray::from_values(w.into_iter().map(bytes)))
+        }
         analysis::WordCount::Positions(p) => {
             let mut t = HashTable::new();
             for (pos, w) in p {
@@ -591,7 +713,10 @@ fn base64_encode(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 }
 
 fn base64_decode(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    Ok(opt_bytes(php_stdstr::base64::base64_decode(s(a, 0).as_bytes(), b(a, 1))))
+    Ok(opt_bytes(php_stdstr::base64::base64_decode(
+        s(a, 0).as_bytes(),
+        b(a, 1),
+    )))
 }
 
 fn dirname(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -602,7 +727,10 @@ fn dirname(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 fn basename(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let suf = if a.has(1) { s(a, 1) } else { ZStr::empty() };
-    Ok(bytes(transform::basename(s(a, 0).as_bytes(), suf.as_bytes())))
+    Ok(bytes(transform::basename(
+        s(a, 0).as_bytes(),
+        suf.as_bytes(),
+    )))
 }
 
 fn implode_alias_array(a: &Args) -> ZArray {
@@ -614,41 +742,141 @@ pub(crate) fn register(vm: &mut Vm) {
     let _ = implode_alias_array;
     reg(vm, "implode($separator, $array = null): string", implode);
     alias(vm, "join", "implode");
-    reg(vm, "explode(string $separator, string $string, int $limit = PHP_INT_MAX): array", explode);
-    reg(vm, "substr(string $string, int $offset, ?int $length = null): string", substr);
-    reg(vm, "strpos(string $haystack, string $needle, int $offset = 0): int|false", strpos);
-    reg(vm, "stripos(string $haystack, string $needle, int $offset = 0): int|false", stripos);
-    reg(vm, "strrpos(string $haystack, string $needle, int $offset = 0): int|false", strrpos);
-    reg(vm, "strripos(string $haystack, string $needle, int $offset = 0): int|false", strripos);
-    reg(vm, "strstr(string $haystack, string $needle, bool $before_needle = false): string|false", strstr);
+    reg(
+        vm,
+        "explode(string $separator, string $string, int $limit = PHP_INT_MAX): array",
+        explode,
+    );
+    reg(
+        vm,
+        "substr(string $string, int $offset, ?int $length = null): string",
+        substr,
+    );
+    reg(
+        vm,
+        "strpos(string $haystack, string $needle, int $offset = 0): int|false",
+        strpos,
+    );
+    reg(
+        vm,
+        "stripos(string $haystack, string $needle, int $offset = 0): int|false",
+        stripos,
+    );
+    reg(
+        vm,
+        "strrpos(string $haystack, string $needle, int $offset = 0): int|false",
+        strrpos,
+    );
+    reg(
+        vm,
+        "strripos(string $haystack, string $needle, int $offset = 0): int|false",
+        strripos,
+    );
+    reg(
+        vm,
+        "strstr(string $haystack, string $needle, bool $before_needle = false): string|false",
+        strstr,
+    );
     alias(vm, "strchr", "strstr");
-    reg(vm, "stristr(string $haystack, string $needle, bool $before_needle = false): string|false", stristr);
-    reg(vm, "strrchr(string $haystack, string $needle, bool $before_needle = false): string|false", strrchr);
-    reg(vm, "str_contains(string $haystack, string $needle): bool", str_contains);
-    reg(vm, "str_starts_with(string $haystack, string $needle): bool", str_starts_with);
-    reg(vm, "str_ends_with(string $haystack, string $needle): bool", str_ends_with);
-    reg(vm, "substr_count(string $haystack, string $needle, int $offset = 0, ?int $length = null): int", substr_count);
-    reg(vm, "strspn(string $string, string $characters, int $offset = 0, ?int $length = null): int", strspn);
-    reg(vm, "strcspn(string $string, string $characters, int $offset = 0, ?int $length = null): int", strcspn);
-    reg(vm, "strpbrk(string $string, string $characters): string|false", strpbrk);
+    reg(
+        vm,
+        "stristr(string $haystack, string $needle, bool $before_needle = false): string|false",
+        stristr,
+    );
+    reg(
+        vm,
+        "strrchr(string $haystack, string $needle, bool $before_needle = false): string|false",
+        strrchr,
+    );
+    reg(
+        vm,
+        "str_contains(string $haystack, string $needle): bool",
+        str_contains,
+    );
+    reg(
+        vm,
+        "str_starts_with(string $haystack, string $needle): bool",
+        str_starts_with,
+    );
+    reg(
+        vm,
+        "str_ends_with(string $haystack, string $needle): bool",
+        str_ends_with,
+    );
+    reg(
+        vm,
+        "substr_count(string $haystack, string $needle, int $offset = 0, ?int $length = null): int",
+        substr_count,
+    );
+    reg(
+        vm,
+        "strspn(string $string, string $characters, int $offset = 0, ?int $length = null): int",
+        strspn,
+    );
+    reg(
+        vm,
+        "strcspn(string $string, string $characters, int $offset = 0, ?int $length = null): int",
+        strcspn,
+    );
+    reg(
+        vm,
+        "strpbrk(string $string, string $characters): string|false",
+        strpbrk,
+    );
     reg(vm, "substr_replace(array|string $string, array|string $replace, array|int $offset, array|int|null $length = null): string|array", substr_replace);
     reg(vm, "strtolower(string $string): string", strtolower);
     reg(vm, "strtoupper(string $string): string", strtoupper);
     reg(vm, "ucfirst(string $string): string", ucfirst);
     reg(vm, "lcfirst(string $string): string", lcfirst);
-    reg(vm, "ucwords(string $string, string $separators = \" \\t\\r\\n\\f\\v\"): string", ucwords);
-    reg(vm, "trim(string $string, string $characters = \" \\n\\r\\t\\v\\0\"): string", trim);
-    reg(vm, "ltrim(string $string, string $characters = \" \\n\\r\\t\\v\\0\"): string", ltrim);
-    reg(vm, "rtrim(string $string, string $characters = \" \\n\\r\\t\\v\\0\"): string", rtrim);
+    reg(
+        vm,
+        "ucwords(string $string, string $separators = \" \\t\\r\\n\\f\\v\"): string",
+        ucwords,
+    );
+    reg(
+        vm,
+        "trim(string $string, string $characters = \" \\n\\r\\t\\v\\0\"): string",
+        trim,
+    );
+    reg(
+        vm,
+        "ltrim(string $string, string $characters = \" \\n\\r\\t\\v\\0\"): string",
+        ltrim,
+    );
+    reg(
+        vm,
+        "rtrim(string $string, string $characters = \" \\n\\r\\t\\v\\0\"): string",
+        rtrim,
+    );
     alias(vm, "chop", "rtrim");
     reg(vm, "str_pad(string $string, int $length, string $pad_string = \" \", int $pad_type = STR_PAD_RIGHT): string", str_pad);
-    reg(vm, "str_repeat(string $string, int $times): string", str_repeat);
-    reg(vm, "str_split(string $string, int $length = 1): array", str_split);
+    reg(
+        vm,
+        "str_repeat(string $string, int $times): string",
+        str_repeat,
+    );
+    reg(
+        vm,
+        "str_split(string $string, int $length = 1): array",
+        str_split,
+    );
     reg(vm, "strrev(string $string): string", strrev);
     reg(vm, "wordwrap(string $string, int $width = 75, string $break = \"\\n\", bool $cut_long_words = false): string", wordwrap);
-    reg(vm, "chunk_split(string $string, int $length = 76, string $separator = \"\\r\\n\"): string", chunk_split);
-    reg(vm, "nl2br(string $string, bool $use_xhtml = true): string", nl2br);
-    reg(vm, "strtr(string $string, $from, ?string $to = null): string", strtr);
+    reg(
+        vm,
+        "chunk_split(string $string, int $length = 76, string $separator = \"\\r\\n\"): string",
+        chunk_split,
+    );
+    reg(
+        vm,
+        "nl2br(string $string, bool $use_xhtml = true): string",
+        nl2br,
+    );
+    reg(
+        vm,
+        "strtr(string $string, $from, ?string $to = null): string",
+        strtr,
+    );
     reg(vm, "str_replace(array|string $search, array|string $replace, string|array $subject, &$count = null): string|array", str_replace);
     reg(vm, "str_ireplace(array|string $search, array|string $replace, string|array $subject, &$count = null): string|array", str_ireplace);
     reg(vm, "chr(int $codepoint): string", chr);
@@ -657,23 +885,59 @@ pub(crate) fn register(vm: &mut Vm) {
     reg(vm, "hex2bin(string $string): string|false", hex2bin);
     reg(vm, "str_rot13(string $string): string", str_rot13);
     reg(vm, "strcmp(string $string1, string $string2): int", strcmp);
-    reg(vm, "strcasecmp(string $string1, string $string2): int", strcasecmp);
-    reg(vm, "strncmp(string $string1, string $string2, int $length): int", strncmp);
-    reg(vm, "strncasecmp(string $string1, string $string2, int $length): int", strncasecmp);
-    reg(vm, "strnatcmp(string $string1, string $string2): int", strnatcmp);
-    reg(vm, "strnatcasecmp(string $string1, string $string2): int", strnatcasecmp);
+    reg(
+        vm,
+        "strcasecmp(string $string1, string $string2): int",
+        strcasecmp,
+    );
+    reg(
+        vm,
+        "strncmp(string $string1, string $string2, int $length): int",
+        strncmp,
+    );
+    reg(
+        vm,
+        "strncasecmp(string $string1, string $string2, int $length): int",
+        strncasecmp,
+    );
+    reg(
+        vm,
+        "strnatcmp(string $string1, string $string2): int",
+        strnatcmp,
+    );
+    reg(
+        vm,
+        "strnatcasecmp(string $string1, string $string2): int",
+        strnatcasecmp,
+    );
     reg(vm, "strcoll(string $string1, string $string2): int", strcmp);
     reg(vm, "addslashes(string $string): string", addslashes);
     reg(vm, "stripslashes(string $string): string", stripslashes);
-    reg(vm, "addcslashes(string $string, string $characters): string", addcslashes);
+    reg(
+        vm,
+        "addcslashes(string $string, string $characters): string",
+        addcslashes,
+    );
     reg(vm, "stripcslashes(string $string): string", stripcslashes);
     reg(vm, "quotemeta(string $string): string", quotemeta);
     reg(vm, "htmlspecialchars(string $string, int $flags = 11, ?string $encoding = null, bool $double_encode = true): string", htmlspecialchars);
-    reg(vm, "htmlspecialchars_decode(string $string, int $flags = 11): string", htmlspecialchars_decode);
-    reg(vm, "similar_text(string $string1, string $string2, &$percent = null): int", similar_text);
+    reg(
+        vm,
+        "htmlspecialchars_decode(string $string, int $flags = 11): string",
+        htmlspecialchars_decode,
+    );
+    reg(
+        vm,
+        "similar_text(string $string1, string $string2, &$percent = null): int",
+        similar_text,
+    );
     reg(vm, "levenshtein(string $string1, string $string2, int $insertion_cost = 1, int $replacement_cost = 1, int $deletion_cost = 1): int", levenshtein);
     reg(vm, "soundex(string $string): string", soundex);
-    reg(vm, "metaphone(string $string, int $max_phonemes = 0): string", metaphone);
+    reg(
+        vm,
+        "metaphone(string $string, int $max_phonemes = 0): string",
+        metaphone,
+    );
     reg(vm, "dechex(int $num): string", dechex);
     reg(vm, "decbin(int $num): string", decbin);
     reg(vm, "decoct(int $num): string", decoct);
@@ -681,18 +945,56 @@ pub(crate) fn register(vm: &mut Vm) {
     reg(vm, "bindec(string $binary_string): int|float", bindec);
     reg(vm, "octdec(string $octal_string): int|float", octdec);
     reg(vm, "md5(string $string, bool $binary = false): string", md5);
-    reg(vm, "sha1(string $string, bool $binary = false): string", sha1);
+    reg(
+        vm,
+        "sha1(string $string, bool $binary = false): string",
+        sha1,
+    );
     reg(vm, "crc32(string $string): int", crc32);
     reg(vm, "number_format(float $num, int $decimals = 0, ?string $decimal_separator = \".\", ?string $thousands_separator = \",\"): string", number_format);
     reg(vm, "lcg_value(): float", lcg_value);
-    reg(vm, "uniqid(string $prefix = \"\", bool $more_entropy = false): string", uniqid);
-    reg(vm, "str_word_count(string $string, int $format = 0, ?string $characters = null): array|int", str_word_count);
+    reg(
+        vm,
+        "uniqid(string $prefix = \"\", bool $more_entropy = false): string",
+        uniqid,
+    );
+    reg(
+        vm,
+        "str_word_count(string $string, int $format = 0, ?string $characters = null): array|int",
+        str_word_count,
+    );
     reg(vm, "nl_langinfo(int $item): string|false", nl_langinfo);
-    reg(vm, "dirname(string $path, int $levels = 1): string", dirname);
-    reg(vm, "basename(string $path, string $suffix = \"\"): string", basename);
+    reg(
+        vm,
+        "dirname(string $path, int $levels = 1): string",
+        dirname,
+    );
+    reg(
+        vm,
+        "basename(string $path, string $suffix = \"\"): string",
+        basename,
+    );
     reg(vm, "base64_encode(string $string): string", base64_encode);
-    reg(vm, "base64_decode(string $string, bool $strict = false): string|false", base64_decode);
-    for (n, v) in [("STR_PAD_LEFT", 0), ("STR_PAD_RIGHT", 1), ("STR_PAD_BOTH", 2), ("ENT_QUOTES", 3), ("ENT_COMPAT", 2), ("ENT_NOQUOTES", 0), ("ENT_HTML401", 0), ("ENT_SUBSTITUTE", 8), ("ENT_IGNORE", 4), ("ENT_HTML5", 48), ("ENT_XML1", 16), ("ENT_XHTML", 32), ("ENT_DISALLOWED", 128)] {
+    reg(
+        vm,
+        "base64_decode(string $string, bool $strict = false): string|false",
+        base64_decode,
+    );
+    for (n, v) in [
+        ("STR_PAD_LEFT", 0),
+        ("STR_PAD_RIGHT", 1),
+        ("STR_PAD_BOTH", 2),
+        ("ENT_QUOTES", 3),
+        ("ENT_COMPAT", 2),
+        ("ENT_NOQUOTES", 0),
+        ("ENT_HTML401", 0),
+        ("ENT_SUBSTITUTE", 8),
+        ("ENT_IGNORE", 4),
+        ("ENT_HTML5", 48),
+        ("ENT_XML1", 16),
+        ("ENT_XHTML", 32),
+        ("ENT_DISALLOWED", 128),
+    ] {
         constant(vm, n, Value::Int(v));
     }
 }

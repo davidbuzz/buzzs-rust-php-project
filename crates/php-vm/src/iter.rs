@@ -237,7 +237,11 @@ impl Vm {
         // its real instance).
         let o = self.lazy_object_for(&o, None)?;
         if !by_ref {
-            if let Some(f) = object::class_of(&o).hooks.as_ref().and_then(|h| h.get_properties) {
+            if let Some(f) = object::class_of(&o)
+                .hooks
+                .as_ref()
+                .and_then(|h| h.get_properties)
+            {
                 if let Some(t) = f(self, &o)? {
                     if t.is_empty() {
                         return Ok(ForeachIter::Empty);

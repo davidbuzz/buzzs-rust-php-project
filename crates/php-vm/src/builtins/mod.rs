@@ -2,7 +2,7 @@
 
 pub mod classbuilder;
 mod core;
-mod dump;
+pub(crate) mod dump;
 pub(crate) mod headers;
 pub(crate) mod info;
 mod serial;
@@ -51,7 +51,11 @@ pub(crate) fn reg(vm: &mut Vm, sig: &str, f: BuiltinFn) -> ZStr {
         flags: fl,
         handler: f,
     };
-    if vm.functions.insert(lc.clone(), Func::Builtin(Rc::new(b))).is_none() {
+    if vm
+        .functions
+        .insert(lc.clone(), Func::Builtin(Rc::new(b)))
+        .is_none()
+    {
         crate::reflection::note_new(crate::reflection::Table::Function, lc.as_bytes());
     }
     lc
@@ -70,7 +74,11 @@ pub(crate) fn alias(vm: &mut Vm, alias: &str, target: &str) {
             handler: b.handler,
         };
         let lc = ZStr::from(alias.to_ascii_lowercase());
-        if vm.functions.insert(lc.clone(), Func::Builtin(Rc::new(nb))).is_none() {
+        if vm
+            .functions
+            .insert(lc.clone(), Func::Builtin(Rc::new(nb)))
+            .is_none()
+        {
             crate::reflection::note_new(crate::reflection::Table::Function, lc.as_bytes());
         }
     }

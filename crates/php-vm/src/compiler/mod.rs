@@ -136,6 +136,9 @@ pub(crate) struct FnCtx {
     pub labels: HashMap<Vec<u8>, (Label, Vec<usize>)>,
     pub gotos: Vec<(usize, Vec<u8>, u32, Vec<usize>)>,
     pub loop_ids: Vec<usize>,
+    /// FE_RESET op of each foreach iterator (exceptions thrown while a
+    /// `return` frees the loop are dispatched from the loop's position).
+    pub iter_starts: HashMap<u32, u32>,
     next_loop_id: usize,
     pub line: u32,
     pub is_generator: bool,
@@ -177,6 +180,7 @@ impl FnCtx {
             labels: HashMap::new(),
             gotos: Vec::new(),
             loop_ids: Vec::new(),
+            iter_starts: HashMap::new(),
             next_loop_id: 0,
             line: 1,
             is_generator: false,
@@ -426,6 +430,22 @@ impl Compiler {
                     line,
                 );
             };
+            // `zend_check_finally_breakout`.
+            let target_op = *target;
+            let at_op = u32::try_from(at).unwrap_or(u32::MAX);
+            for (e, _) in &f.try_table {
+                let Some((_, fs, fe)) = e.finally else {
+                    continue;
+                };
+                let last = fe.saturating_sub(1);
+                let in_fin = |op: u32| op >= fs && op <= last;
+                if !in_fin(at_op) && in_fin(target_op) {
+                    return self.err("jump into a finally block is disallowed", line);
+                }
+                if in_fin(at_op) && !in_fin(target_op) {
+                    return self.err("jump out of a finally block is disallowed", line);
+                }
+            }
             // A jump into a loop is not allowed.
             if !label_loops.iter().all(|l| loops.contains(l)) {
                 return self.err("'goto' into loop or switch statement is disallowed", line);

@@ -6,6 +6,10 @@ use crate::vm::{FinState, Frame, RetTarget, Throw, Vm, VmResult};
 use php_runtime::{ops, BinaryOp, ErrorLevel, PhpRef, Value, ZArray, ZStr};
 use std::rc::Rc;
 
+/// Upper bound on nested `execute()` runs (internal-to-user callbacks,
+/// destructors, `__clone`, magic methods); each one uses native stack.
+const MAX_NESTED_EXECUTIONS: u32 = 20000;
+
 /// What an instruction asks the loop to do next.
 pub(crate) enum Flow {
     /// Continue with the next instruction of the current frame.
@@ -174,12 +178,18 @@ impl Vm {
 
     /// Runs the frames from `base` until the base frame returns.
     pub fn execute(&mut self, base: usize) -> VmResult<Value> {
-        self.depth += 1;
-        if self.depth > 20000 {
-            self.depth -= 1;
-            let _ = self.fatal("Maximum function nesting level reached, aborting!");
-            return Err(Throw::Fatal);
+        // `zend_call_stack_overflowed()`: nested executions (callbacks,
+        // destructors, __clone, ...) use the native stack.
+        if self.native_stack_exhausted() {
+            self.frames.truncate(base);
+            return Err(crate::builtins::dump::stack_size_error(self));
         }
+        if self.depth >= MAX_NESTED_EXECUTIONS {
+            // A backstop for native stacks whose size we were not told.
+            self.frames.truncate(base);
+            return Err(crate::builtins::dump::stack_size_error(self));
+        }
+        self.depth += 1;
         let r = self.execute_inner(base);
         self.depth -= 1;
         r
@@ -206,6 +216,11 @@ impl Vm {
     /// `Ok(())` when execution can continue, or the throw that escapes.
     pub(crate) fn handle_exception(&mut self, exc: php_runtime::Obj, base: usize) -> VmResult<()> {
         loop {
+            if self.frames.len() <= base {
+                // Thrown after the frames of this execution were left
+                // (e.g. by a destructor run on the way out).
+                return Err(Throw::Exception(exc));
+            }
             let fidx = self.frames.len() - 1;
             let f = self.frames.last_mut().expect("frame");
             if !f.silence_saved.is_empty() {
@@ -246,6 +261,14 @@ impl Vm {
             if let Some(p) = &popped {
                 if let Some(g) = &p.generator {
                     crate::generator::mark_finished(g);
+                }
+                // `zend_object_store_ctor_failed`: an object whose
+                // constructor threw is never destructed.
+                if p.is_ctor {
+                    if let Some(t) = &p.this {
+                        let d = object::data(t);
+                        d.flags.set(d.flags.get() | object::oflags::DESTRUCTED);
+                    }
                 }
             }
             drop(popped);
@@ -633,11 +656,17 @@ impl Vm {
                     }
                     Op::ReturnByRefValue { val } => {
                         let unused = *val == Operand::Unused;
-                        let raw = if unused { Value::Null } else { self.read_raw(*val)? };
+                        let raw = if unused {
+                            Value::Null
+                        } else {
+                            self.read_raw(*val)?
+                        };
                         let v = match raw {
                             Value::Reference(r) => Value::Reference(r),
                             other => {
-                                self.notice("Only variable references should be returned by reference")?;
+                                self.notice(
+                                    "Only variable references should be returned by reference",
+                                )?;
                                 let checked = self.verify_return((!unused).then_some(other))?;
                                 Value::Reference(php_runtime::PhpRef::new(checked))
                             }
@@ -883,6 +912,18 @@ impl Vm {
                     }
                     Op::FeFree { iter } => {
                         self.op_fe_free(*iter);
+                        Flow::Next
+                    }
+                    Op::FeFreeOnReturn { iter, loop_at } => {
+                        self.op_fe_free(*iter);
+                        if object::has_pending_destructors() {
+                            if let Err(e) = self.run_pending_destructors() {
+                                if *loop_at != u32::MAX {
+                                    self.frame_mut().ip = *loop_at as usize + 1;
+                                }
+                                return Err(e);
+                            }
+                        }
                         Flow::Next
                     }
                     Op::MatchError { subject } => {
@@ -1347,5 +1388,41 @@ impl Vm {
             self.error(crate::errors::level::ERROR, &over.to_string())?;
         }
         Ok(())
+    }
+}
+
+impl Vm {
+    /// Whether the native stack used since the first execution exceeds the
+    /// usable budget (`zend.max_allowed_stack_size` minus
+    /// `zend.reserved_stack_size`, or the thread's stack minus a safety
+    /// margin for the interpreter's own frames).
+    fn native_stack_exhausted(&mut self) -> bool {
+        let marker = 0u8;
+        let here = std::ptr::addr_of!(marker) as usize;
+        if self.native_stack_base == 0 || here > self.native_stack_base {
+            self.native_stack_base = here;
+            return false;
+        }
+        let used = self.native_stack_base - here;
+        let max = self.ini.get_long("zend.max_allowed_stack_size");
+        if max < 0 {
+            return false;
+        }
+        let total = if max > 0 {
+            usize::try_from(max).unwrap_or(usize::MAX)
+        } else {
+            self.native_stack_size
+        };
+        let reserved =
+            usize::try_from(self.ini.get_long("zend.reserved_stack_size").max(0)).unwrap_or(0);
+        // Interpreter frames are much larger than php-src's: keep a margin.
+        let reserve = reserved.max(total / 8).max(256 << 10);
+        used + reserve > total
+    }
+
+    /// Declares the native stack size of the thread running the VM (the
+    /// CLI's large VM stack); the default assumes 8 MiB.
+    pub fn set_native_stack_size(&mut self, bytes: usize) {
+        self.native_stack_size = bytes;
     }
 }

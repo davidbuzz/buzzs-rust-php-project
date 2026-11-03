@@ -582,6 +582,7 @@ fn new_vm(cfg: &Config) -> Vm {
     let exts = extensions::all();
     let refs: Vec<&dyn php_vm::ext::Extension> = exts.iter().map(AsRef::as_ref).collect();
     let mut vm = Vm::with_extensions(&opts, stdout, &refs);
+    vm.set_native_stack_size(usize::try_from(VM_STACK).unwrap_or(usize::MAX));
     sapi::register(&mut vm, cfg);
     vm
 }

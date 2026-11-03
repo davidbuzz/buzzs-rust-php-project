@@ -515,6 +515,10 @@ pub struct Vm {
     pub log_hook: Option<Box<dyn FnMut(&[u8])>>,
     /// The value the main script `return`ed (a router's `false`).
     pub main_return: Value,
+    /// Native stack address at the first execution (stack-limit checks).
+    pub(crate) native_stack_base: usize,
+    /// Size of the native stack the VM runs on.
+    pub(crate) native_stack_size: usize,
     /// Named native output handlers (`ob_start('ob_gzhandler')`).
     pub output_handler_aliases: HashMap<ZStr, crate::ext::OutputHandlerFn>,
     /// `include` opener hook.

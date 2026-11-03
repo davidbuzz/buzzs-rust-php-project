@@ -508,6 +508,10 @@ pub enum Op {
     },
     /// Releases a foreach iterator.
     FeFree { iter: u32 },
+    /// FE_FREE emitted by `return` (`ZEND_FREE_ON_RETURN`): an exception
+    /// from the freed iterator is dispatched from the loop (`loop_at`),
+    /// not from inside the try blocks the `return` is in.
+    FeFreeOnReturn { iter: u32, loop_at: u32 },
     /// Throws `UnhandledMatchError` for the subject.
     MatchError { subject: Operand },
     /// `declare(ticks=N)` tick.

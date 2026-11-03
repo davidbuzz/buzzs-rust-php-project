@@ -918,8 +918,8 @@ mod tests {
         let out = run(
             "<?php class D { function __destruct() { echo \"dtor\\n\"; } }\n\
              $m = new WeakMap; $a = new stdClass; $b = new stdClass;\n\
-             $m[$a] = 1; $m[$b] = new D; echo count($m), \"\\n\";\n\
-             unset($b); echo count($m), \"\\n\";\n\
+             $m[$a] = 1; $m[$b] = new D; echo $m->count(), \"\\n\";\n\
+             unset($b); echo $m->count(), \"\\n\";\n\
              $c = new stdClass; var_dump(isset($m[$c]));",
         );
         assert_eq!(out, "2\ndtor\n1\nbool(false)\n");
@@ -952,7 +952,7 @@ mod tests {
     fn weakmap_clone_and_debug_dump() {
         let out = run(
             "<?php $m = new WeakMap; $o = new stdClass; $m[$o] = 1; $c = clone $m; unset($o);\n\
-             var_dump(count($m), count($c)); $p = new stdClass; $c[$p] = true; var_dump($c);",
+             var_dump($m->count(), $c->count()); $p = new stdClass; $c[$p] = true; var_dump($c);",
         );
         assert_eq!(
             out,

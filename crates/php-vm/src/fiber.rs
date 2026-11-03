@@ -258,7 +258,21 @@ impl Vm {
         let saved_depth = std::mem::replace(&mut self.depth, depth);
         let saved_er = std::mem::replace(&mut self.error_reporting, er);
         self.fibers.push(fiber.clone());
+        // The fiber runs on its own native stack: stack-limit checks
+        // measure from its first execution there (approximate on resume).
+        let fiber_stack = match self.ini.typed("fiber.stack_size") {
+            php_support::ini::IniTyped::Long(n) => usize::try_from(n).unwrap_or(DEFAULT_STACK),
+            _ => DEFAULT_STACK,
+        }
+        .saturating_mul(STACK_SCALE)
+        .max(1 << 20);
+        let saved_stack = (
+            std::mem::replace(&mut self.native_stack_base, 0),
+            std::mem::replace(&mut self.native_stack_size, fiber_stack),
+        );
         let finished = co.resume();
+        self.native_stack_base = saved_stack.0;
+        self.native_stack_size = saved_stack.1;
         self.fibers.pop();
         let fiber_depth = std::mem::replace(&mut self.depth, saved_depth);
         let fiber_er = std::mem::replace(&mut self.error_reporting, saved_er);

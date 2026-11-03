@@ -314,7 +314,11 @@ fn get_object_vars(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         return Ok(Value::Null);
     };
     let o = vm.lazy_object_for(&o, None)?;
-    if let Some(f) = object::class_of(&o).hooks.as_ref().and_then(|h| h.get_properties) {
+    if let Some(f) = object::class_of(&o)
+        .hooks
+        .as_ref()
+        .and_then(|h| h.get_properties)
+    {
         if let Some(t) = f(vm, &o)? {
             return Ok(Value::Array(t));
         }

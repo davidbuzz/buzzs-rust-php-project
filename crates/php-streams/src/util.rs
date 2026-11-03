@@ -80,6 +80,25 @@ pub fn lossy(s: &[u8]) -> String {
     String::from_utf8_lossy(s).into_owned()
 }
 
+/// Grows `v` for `additional` more bytes like PHP's `erealloc()` under
+/// `memory_limit`: the new block is reserved first and, when it does not
+/// fit, nothing is allocated and `false` is returned (the violation stays
+/// recorded, so the VM raises "Allowed memory size of N bytes exhausted").
+pub fn reserve_more(v: &mut Vec<u8>, additional: usize) -> bool {
+    let Some(needed) = v.len().checked_add(additional) else {
+        return false;
+    };
+    if needed <= v.capacity() {
+        return true;
+    }
+    let new_cap = needed.max(v.capacity().saturating_mul(2));
+    if php_memlimit::try_reserve(new_cap).is_err() {
+        return false;
+    }
+    v.reserve_exact(new_cap - v.len());
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

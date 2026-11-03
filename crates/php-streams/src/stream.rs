@@ -511,7 +511,11 @@ impl Stream {
             if self.state.eof || self.writepos - self.readpos >= to_read_now {
                 return Ok(());
             }
-            let mut chunk = vec![0u8; self.chunk_size];
+            let mut chunk = Vec::new();
+            if !crate::util::reserve_more(&mut chunk, self.chunk_size) {
+                return Err(OpFailed);
+            }
+            chunk.resize(self.chunk_size, 0);
             while !self.state.eof && self.writepos - self.readpos < to_read_now {
                 let justread = self.ops.read(&mut self.state, &mut chunk);
                 if let Ok(n) = justread {
@@ -564,6 +568,11 @@ impl Stream {
                 self.compact();
             }
             if self.readbuf.len() - self.writepos < self.chunk_size {
+                // The buffer grows by a whole chunk (a huge chunk size can
+                // exceed memory_limit).
+                if !crate::util::reserve_more(&mut self.readbuf, self.chunk_size) {
+                    return Err(OpFailed);
+                }
                 let newlen = self.readbuf.len() + self.chunk_size;
                 self.readbuf.resize(newlen, 0);
             }
@@ -1301,7 +1310,13 @@ impl Stream {
                 break;
             }
             match self.read(&mut buf[..want]) {
-                Ok(n) if n > 0 => result.extend_from_slice(&buf[..n]),
+                Ok(n) if n > 0 => {
+                    if !crate::util::reserve_more(&mut result, n) {
+                        // memory_limit: the result buffer cannot grow.
+                        return None;
+                    }
+                    result.extend_from_slice(&buf[..n]);
+                }
                 _ => break,
             }
         }

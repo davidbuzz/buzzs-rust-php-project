@@ -609,15 +609,13 @@ impl Compiler {
                 if is_ref_expr(ex) {
                     let p = self.compile_place(ex, false)?;
                     let pid = self.place(p);
-                    if fins.is_empty() {
+                    if fins.is_empty() && self.fref().loops.is_empty() {
                         self.emit(Op::ReturnRef { place: pid });
                         return Ok(());
                     }
                     let t = self.tmp();
                     self.emit(Op::MakeRef { place: pid, dst: t });
-                    for fin in fins {
-                        self.emit_fast_call(fin);
-                    }
+                    self.emit_return_unwind();
                     let tp = self.place(Place {
                         base: PlaceBase::Value(Operand::Tmp(t)),
                         segs: Vec::new(),
@@ -634,16 +632,16 @@ impl Compiler {
         if e.is_none() {
             val = Operand::Unused;
         }
-        if !fins.is_empty() {
-            // Keep the value in a temporary across the finally blocks.
+        // `zend_handle_loops_and_finally`: from the innermost construct
+        // out, finally blocks are called and loop variables freed.
+        if !fins.is_empty() || !self.fref().loops.is_empty() {
+            // Keep the value in a temporary across the unwinding.
             let t = self.tmp();
             if val != Operand::Unused {
                 self.emit(Op::Move { src: val, dst: t });
                 val = Operand::Tmp(t);
             }
-            for fin in fins {
-                self.emit_fast_call(fin);
-            }
+            self.emit_return_unwind();
         }
         if returns_ref && !is_gen {
             // ZEND_RETURN_BY_REF of a value (not a variable).
@@ -652,6 +650,55 @@ impl Compiler {
             self.emit(Op::Return { val });
         }
         Ok(())
+    }
+
+    /// `zend_handle_loops_and_finally` for `return`: innermost first,
+    /// finally blocks nested inside a loop run before the loop variable is
+    /// freed; the outermost finally blocks run last.
+    fn emit_return_unwind(&mut self) {
+        let finally_stack: Vec<u32> = self.fref().finally_stack.clone();
+        let loops: Vec<(usize, Cleanup)> = self
+            .fref()
+            .loops
+            .iter()
+            .rev()
+            .map(|l| (l.finally_depth, l.cleanup))
+            .collect();
+        let mut pending = finally_stack.len();
+        for (depth, cleanup) in loops {
+            while pending > depth {
+                pending -= 1;
+                self.emit_fast_call(finally_stack[pending]);
+            }
+            self.emit_cleanup_on_return(cleanup);
+        }
+        while pending > 0 {
+            pending -= 1;
+            self.emit_fast_call(finally_stack[pending]);
+        }
+    }
+
+    fn emit_cleanup_on_return(&mut self, c: Cleanup) {
+        self.emit_cleanups_of(&[c]);
+    }
+
+    /// Frees the given loop iterators/temporaries (`return` flavour).
+    fn emit_cleanups_of(&mut self, cleanups: &[Cleanup]) {
+        for &c in cleanups {
+            match c {
+                Cleanup::None => {}
+                Cleanup::FeFree(i) => {
+                    let at = self.fref().iter_starts.get(&i).copied().unwrap_or(u32::MAX);
+                    self.emit(Op::FeFreeOnReturn {
+                        iter: i,
+                        loop_at: at,
+                    });
+                }
+                Cleanup::FreeTmp(t) => {
+                    self.emit(Op::Free(Operand::Tmp(t)));
+                }
+            }
+        }
     }
 
     pub(crate) fn fn_display_name(&self) -> String {
@@ -722,6 +769,8 @@ impl Compiler {
             })
         };
         let fetch_at = self.here();
+        let reset_at = u32::try_from(reset).unwrap_or(u32::MAX);
+        self.f().iter_starts.insert(iter, reset_at);
         let vt = self.tmp();
         let kt = key.map(|_| self.tmp());
         let fetch = self.emit(Op::FeFetch {

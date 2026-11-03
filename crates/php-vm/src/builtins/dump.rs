@@ -198,7 +198,7 @@ impl Drop for Depth {
 }
 
 /// `zend_call_stack_size_error()`.
-pub(super) fn stack_size_error(vm: &mut Vm) -> crate::vm::Throw {
+pub(crate) fn stack_size_error(vm: &mut Vm) -> crate::vm::Throw {
     let size = stack_budget(vm);
     vm.make_throw(
         "Error",
