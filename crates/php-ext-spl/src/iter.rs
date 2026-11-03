@@ -15,6 +15,7 @@ use std::collections::HashMap;
 
 /// Runs `f` with a [`VmHost`] over `vm`, converting the error.
 pub fn with_host<T>(vm: &mut Vm, f: impl FnOnce(&mut VmHost<'_>) -> RtResult<T>) -> VmResult<T> {
+    let _entry = crate::files::enter();
     let r = {
         let mut host = VmHost::new(vm);
         f(&mut host)

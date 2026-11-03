@@ -9,6 +9,7 @@
 //! object handlers as [`ClassHooks`].
 
 pub mod dispatch;
+pub mod files;
 pub mod funcs;
 pub mod hooks;
 pub mod host;
@@ -27,10 +28,14 @@ impl Extension for Spl {
     }
 
     fn register(&self, m: &mut ModuleBuilder<'_>) {
+        files::install();
         iter::register_internal_iterator(m.vm());
         dispatch::register_classes(m.vm());
         funcs::register(m);
         m.info(info);
+        // Ahead of the stream layer's shutdown hook (which closes all
+        // resources): see `files::shutdown`.
+        m.vm().shutdown_hooks.insert(0, files::shutdown);
     }
 }
 

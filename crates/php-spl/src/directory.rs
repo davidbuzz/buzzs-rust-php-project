@@ -83,6 +83,12 @@ pub struct FileState {
     pub entry: Vec<u8>,
     /// The file stream.
     pub stream: Option<Stream>,
+    /// The host's resource for the file stream (`php_stream` registered
+    /// as a resource, flagged `NO_FCLOSE`); the host parks the stream in
+    /// it between calls. Opaque to SPL.
+    pub stream_res: Option<Value>,
+    /// The host's resource for the directory stream.
+    pub dir_res: Option<Value>,
     /// The open mode.
     pub open_mode: Option<ZStr>,
     /// The current line.
@@ -132,6 +138,8 @@ impl FileState {
             index: 0,
             entry: Vec::new(),
             stream: None,
+            stream_res: None,
+            dir_res: None,
             open_mode: None,
             current_line: None,
             current_zval: None,

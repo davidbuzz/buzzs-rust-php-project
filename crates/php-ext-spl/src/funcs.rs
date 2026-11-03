@@ -27,6 +27,7 @@ fn call(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         }
     }
     let r = {
+        let _entry = crate::files::enter();
         let mut host = VmHost::new(vm);
         php_spl::call_function(&mut host, &name, &args)
     };

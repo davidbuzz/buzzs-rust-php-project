@@ -543,6 +543,18 @@ fn method_handler(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     }
     // The "object not initialized" checks of `$obj->m()` run in the
     // `get_method` hook (see `hooks::get_method`).
+    let _entry = crate::files::enter();
+    let file_obj = this
+        .as_ref()
+        .and_then(spl_state_of)
+        .is_some_and(|st| crate::files::is_file_state(&st));
+    if file_obj {
+        // Streams of SplFileObject & co. may be user wrappers: run with
+        // the VM lent to the stream layer.
+        return crate::files::run_bridged(vm, |host| {
+            php_spl::call_method(host, t.class, t.def.name, this.as_ref(), &args)
+        });
+    }
     let r = {
         let mut host = VmHost::new(vm);
         php_spl::call_method(&mut host, t.class, t.def.name, this.as_ref(), &args)
@@ -620,6 +632,7 @@ fn forward_call(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let name = vm.magic_call_name();
     let call_args: Vec<Value> = a.values.iter().map(Value::deref).collect();
     let target = {
+        let _entry = crate::files::enter();
         let mut host = VmHost::new(vm);
         php_spl::handlers::method_target(&mut host, &this)
     };

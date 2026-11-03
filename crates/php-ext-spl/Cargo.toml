@@ -12,6 +12,8 @@ php-runtime = { path = "../php-runtime" }
 php-spl = { path = "../php-spl" }
 php-stdarr = { path = "../php-stdarr" }
 php-pcre = { path = "../php-pcre" }
+php-streams = { path = "../php-streams" }
+php-ext-streams = { path = "../php-ext-streams" }
 
 [lints]
 workspace = true

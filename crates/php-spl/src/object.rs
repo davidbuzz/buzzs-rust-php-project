@@ -103,7 +103,39 @@ accessor!(storage, Storage, crate::observer::ObjectStorage);
 accessor!(array, Array, crate::array::ArrayObject);
 accessor!(dual, DualIt, crate::iterators::DualIt);
 accessor!(recursive, RecursiveIt, crate::iterators::RecursiveIt);
-accessor!(file, File, crate::directory::FileState);
+thread_local! {
+    /// See [`set_file_access_hook`].
+    static FILE_ACCESS_HOOK: std::cell::Cell<Option<fn(&mut crate::directory::FileState)>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// Installs a function run on an `SplFileInfo`-family state every time SPL
+/// code accesses it (before the access). A host that keeps the file
+/// streams elsewhere between calls (as PHP stream resources) moves them
+/// back into the state here.
+pub fn set_file_access_hook(hook: Option<fn(&mut crate::directory::FileState)>) {
+    FILE_ACCESS_HOOK.with(|h| h.set(hook));
+}
+
+impl SplObject {
+    /// Runs `f` on the `SplFileInfo`-family state (error for other
+    /// variants), after the file access hook.
+    pub fn file<R>(&self, f: impl FnOnce(&mut crate::directory::FileState) -> R) -> RtResult<R> {
+        let mut b = self.state.try_borrow_mut().map_err(|_| reentrant())?;
+        match &mut *b {
+            SplState::File(x) => {
+                if let Some(hook) = FILE_ACCESS_HOOK.with(std::cell::Cell::get) {
+                    hook(x);
+                }
+                Ok(f(x))
+            }
+            _ => Err(RuntimeError::Error(format!(
+                "Internal error: {} has no File state",
+                self.base
+            ))),
+        }
+    }
+}
 
 /// The state of `obj`, or an error if it has none.
 pub fn state_of(host: &mut dyn SplHost, obj: &Obj) -> RtResult<Rc<SplObject>> {

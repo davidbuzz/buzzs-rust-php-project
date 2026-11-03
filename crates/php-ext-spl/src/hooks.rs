@@ -84,6 +84,7 @@ pub fn register_gc() {
 #[allow(clippy::unnecessary_wraps)] // signature fixed by `ClassHooks::create`
 fn create(_vm: &mut Vm, o: &Obj) -> VmResult<()> {
     if let Some(st) = stateful_base(php_vm::object::class_of(o)).and_then(php_spl::create_state) {
+        crate::files::track(&st);
         php_vm::object::set_internal(o, st);
     }
     Ok(())
@@ -92,6 +93,7 @@ fn create(_vm: &mut Vm, o: &Obj) -> VmResult<()> {
 fn clone(vm: &mut Vm, old: &Obj, new: &Obj) -> VmResult<()> {
     let st = with_host(vm, |host| h::clone_state(host, old, new))?;
     if let Some(st) = st {
+        crate::files::track(&st);
         php_vm::object::set_internal(new, st);
     }
     Ok(())

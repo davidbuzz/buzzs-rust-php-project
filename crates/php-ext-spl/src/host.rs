@@ -612,3 +612,213 @@ impl SplHost for VmHost<'_> {
         Ok(())
     }
 }
+
+/// The [`SplHost`] used while the VM is lent to the stream layer
+/// (`php_ext_streams::bridge`): every host call borrows the VM from the
+/// bridge for its own duration and delegates to a [`VmHost`], so stream
+/// operations made by SPL between host calls can reach the VM (user
+/// stream wrappers).
+pub struct BridgedHost {
+    pcre: Option<php_pcre::Pcre>,
+}
+
+impl std::fmt::Debug for BridgedHost {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("BridgedHost")
+    }
+}
+
+impl BridgedHost {
+    /// A host for code running inside `bridge::run`.
+    #[must_use]
+    pub fn new() -> Self {
+        BridgedHost { pcre: None }
+    }
+}
+
+impl Default for BridgedHost {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Drop for BridgedHost {
+    fn drop(&mut self) {
+        if let Some(p) = self.pcre.take() {
+            PCRE.with(|s| {
+                let mut s = s.borrow_mut();
+                if s.is_none() {
+                    *s = Some(p);
+                }
+            });
+        }
+    }
+}
+
+/// Runs `f` on a [`VmHost`] over the VM lent to the bridge.
+fn lent<R>(f: impl FnOnce(&mut VmHost<'_>) -> R) -> Option<R> {
+    php_ext_streams::bridge::with_vm(|vm| {
+        let mut h = VmHost::new(vm);
+        f(&mut h)
+    })
+}
+
+/// [`lent`] for fallible calls.
+fn lent_rt<R>(f: impl FnOnce(&mut VmHost<'_>) -> RtResult<R>) -> RtResult<R> {
+    lent(f).unwrap_or_else(|| Err(RuntimeError::Error("the VM is not available".to_string())))
+}
+
+impl RuntimeContext for BridgedHost {
+    fn diagnostic(&mut self, level: ErrorLevel, message: &str) -> RtResult<()> {
+        lent_rt(|h| h.diagnostic(level, message))
+    }
+    fn precision(&self) -> i64 {
+        lent(|h| h.precision()).unwrap_or(14)
+    }
+    fn serialize_precision(&self) -> i64 {
+        lent(|h| h.serialize_precision()).unwrap_or(-1)
+    }
+    fn cast_object(&mut self, obj: &Obj, target: CastTarget) -> RtResult<Option<Value>> {
+        lent_rt(|h| h.cast_object(obj, target))
+    }
+    fn do_operation(&mut self, op: BinaryOp, op1: &Value, op2: &Value) -> RtResult<Option<Value>> {
+        lent_rt(|h| h.do_operation(op, op1, op2))
+    }
+    fn compare_objects(&mut self, op1: &Value, op2: &Value) -> RtResult<i32> {
+        lent_rt(|h| h.compare_objects(op1, op2))
+    }
+    fn object_properties(
+        &mut self,
+        obj: &Obj,
+        purpose: PropertyPurpose,
+    ) -> RtResult<Option<ZArray>> {
+        lent_rt(|h| h.object_properties(obj, purpose))
+    }
+    fn object_dump(&mut self, obj: &Obj, purpose: PropertyPurpose) -> RtResult<ObjectDump> {
+        lent_rt(|h| h.object_dump(obj, purpose))
+    }
+    fn serialize_object(&mut self, obj: &Obj) -> RtResult<SerializedObject> {
+        lent_rt(|h| h.serialize_object(obj))
+    }
+    fn unserialize_object_create(&mut self, class: &ZStr) -> RtResult<Value> {
+        lent_rt(|h| h.unserialize_object_create(class))
+    }
+    fn unserialize_object_finish(&mut self, obj: &Value, props: ZArray) -> RtResult<()> {
+        lent_rt(|h| h.unserialize_object_finish(obj, props))
+    }
+    fn unserialize_enum(&mut self, class: &ZStr, case: &ZStr) -> RtResult<Value> {
+        lent_rt(|h| h.unserialize_enum(class, case))
+    }
+    fn unserialize_custom(&mut self, class: &ZStr, data: &[u8]) -> RtResult<Value> {
+        lent_rt(|h| h.unserialize_custom(class, data))
+    }
+    fn is_enum(&mut self, obj: &Obj) -> bool {
+        class_of(obj).is_enum()
+    }
+    fn count_object(&mut self, obj: &Obj) -> RtResult<Option<i64>> {
+        lent_rt(|h| RuntimeContext::count_object(h, obj))
+    }
+    fn property_read(&mut self, obj: &Obj, name: &ZStr) -> RtResult<Option<Value>> {
+        lent_rt(|h| h.property_read(obj, name))
+    }
+    fn property_write(&mut self, obj: &Obj, name: &ZStr, value: Value) -> RtResult<()> {
+        lent_rt(|h| h.property_write(obj, name, value))
+    }
+    fn create_std_object(&mut self, props: ZArray) -> RtResult<Value> {
+        lent_rt(|h| h.create_std_object(props))
+    }
+}
+
+impl ArrayContext for BridgedHost {
+    fn is_enum(&self, obj: &Obj) -> bool {
+        class_of(obj).is_enum()
+    }
+    fn count_object(&mut self, obj: &Obj) -> RtResult<Option<i64>> {
+        lent_rt(|h| ArrayContext::count_object(h, obj))
+    }
+    fn column_property(&mut self, obj: &Obj, name: &ZStr) -> RtResult<Option<Value>> {
+        lent_rt(|h| h.column_property(obj, name))
+    }
+    fn this_object(&mut self) -> Option<Value> {
+        lent(|h| h.this_object()).flatten()
+    }
+}
+
+impl SplHost for BridgedHost {
+    fn spl_state(&mut self, obj: &Obj) -> Option<Rc<SplObject>> {
+        spl_state_of(obj)
+    }
+    fn call_method(&mut self, obj: &Obj, name: &str, args: &[Value]) -> RtResult<Value> {
+        lent_rt(|h| h.call_method(obj, name, args))
+    }
+    fn has_user_method(&mut self, obj: &Obj, name: &str) -> bool {
+        is_user_method(class_of(obj), name)
+    }
+    fn has_method(&mut self, obj: &Obj, name: &str) -> bool {
+        let lc = name.to_ascii_lowercase();
+        class_of(obj).find_method(lc.as_bytes()).is_some()
+    }
+    fn instance_of(&mut self, obj: &Obj, class: &str) -> bool {
+        let lc = class.trim_start_matches('\\').to_ascii_lowercase();
+        class_of(obj).instance_of_name(lc.as_bytes())
+    }
+    fn create_object(&mut self, class: &ZStr) -> RtResult<Obj> {
+        lent_rt(|h| h.create_object(class))
+    }
+    fn instantiate(&mut self, class: &ZStr, args: &[Value]) -> RtResult<Obj> {
+        lent_rt(|h| h.instantiate(class, args))
+    }
+    fn class_is_a(&mut self, class: &ZStr, parent: &str) -> Option<bool> {
+        lent(|h| h.class_is_a(class, parent)).flatten()
+    }
+    fn call_callable(&mut self, callable: &Value, args: &[Value]) -> RtResult<Value> {
+        lent_rt(|h| h.call_callable(callable, args))
+    }
+    fn check_callable(&mut self, callable: &Value) -> Result<(), String> {
+        lent(|h| h.check_callable(callable)).unwrap_or(Ok(()))
+    }
+    fn foreign_iterator(&mut self, obj: &Obj) -> Option<RtResult<Box<dyn ObjectIterator>>> {
+        lent(|h| h.foreign_iterator(obj)).flatten()
+    }
+    fn is_overloaded_object(&mut self, obj: &Obj) -> bool {
+        lent(|h| h.is_overloaded_object(obj)).unwrap_or(false)
+    }
+    fn std_properties(&mut self, obj: &Obj) -> ZArray {
+        std_properties(obj)
+    }
+    fn std_has_property(&mut self, obj: &Obj, name: &ZStr) -> bool {
+        lent(|h| h.std_has_property(obj, name)).unwrap_or(false)
+    }
+    fn set_std_properties(&mut self, obj: &Obj, props: ZArray) -> RtResult<()> {
+        set_std_properties(obj, &props);
+        Ok(())
+    }
+    fn class_info(&mut self, name: &ZStr, autoload: bool) -> Option<ClassInfo> {
+        lent(|h| h.class_info(name, autoload)).flatten()
+    }
+    fn object_class_info(&mut self, obj: &Obj) -> ClassInfo {
+        class_info_of(class_of(obj))
+    }
+    fn new_internal_iterator(&mut self, it: Box<dyn ObjectIterator>) -> RtResult<Value> {
+        lent_rt(|h| h.new_internal_iterator(it))
+    }
+    fn autoload_include(&mut self, file: &ZStr) -> RtResult<bool> {
+        lent_rt(|h| h.autoload_include(file))
+    }
+    fn pcre(&mut self) -> &mut php_pcre::Pcre {
+        if self.pcre.is_none() {
+            let p = PCRE.with(|s| s.borrow_mut().take());
+            self.pcre = Some(p.unwrap_or_default());
+        }
+        self.pcre.get_or_insert_with(php_pcre::Pcre::new)
+    }
+    fn drive_native(&mut self, it: &mut dyn std::any::Any, op: NativeOp) -> RtResult<Value> {
+        lent_rt(|h| h.drive_native(it, op))
+    }
+    fn run_pending_destructors(&mut self) -> RtResult<()> {
+        lent_rt(|h| h.run_pending_destructors())
+    }
+    fn write_output(&mut self, bytes: &[u8]) -> RtResult<()> {
+        lent_rt(|h| h.write_output(bytes))
+    }
+}
