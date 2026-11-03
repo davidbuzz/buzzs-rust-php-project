@@ -498,7 +498,12 @@ dependencies = [
 name = "php-ext-dom"
 version = "0.1.0"
 dependencies = [
+ "php-dom",
+ "php-ext-streams",
+ "php-ext-xml",
+ "php-libxml",
  "php-runtime",
+ "php-streams",
  "php-vm",
 ]
 
@@ -730,6 +735,9 @@ dependencies = [
 name = "php-ext-simplexml"
 version = "0.1.0"
 dependencies = [
+ "php-ext-json",
+ "php-ext-spl",
+ "php-ext-stdarr",
  "php-ext-streams",
  "php-ext-xml",
  "php-ext-xsl",
