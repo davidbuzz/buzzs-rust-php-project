@@ -268,7 +268,11 @@ impl Exporter {
 
     /// `zend_ast_export_ns_name_or_expression`
     fn ns_name_or_expr(&mut self, e: &Expr, indent: usize) {
-        if is_zval(e) || matches!(e.kind, ExprKind::Var(_)) {
+        if let ExprKind::String(s) = &e.kind {
+            // A string literal zval has attr 0, which is `ZEND_NAME_FQ`.
+            self.c(b'\\');
+            self.b(s);
+        } else if is_zval(e) || matches!(e.kind, ExprKind::Var(_)) {
             self.expr(e, 0, indent);
         } else {
             self.c(b'(');
