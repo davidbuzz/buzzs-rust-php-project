@@ -111,7 +111,7 @@ Keep rows when they reach 100%; they become the completion record. Add rows as g
 | ext/soap | 0% | low | (663). |
 | **Databases** | | | |
 | ext/pdo (core) | 0% | med | PDO abstraction (137). |
-| ext/pdo_sqlite / ext/sqlite3 | 0% | med | SQLite support, self-contained so testable in CI (95 / 108). |
+| ext/pdo_sqlite / ext/sqlite3 | 70% | med | SQLite support, self-contained so testable in CI (95 / 108). `crates/php-sqlite` (system libsqlite3 3.45.1): SQLite3/SQLite3Stmt/SQLite3Result with all sqlite3.c messages, UDF/aggregate/collation/authorizer callbacks, blob streams (php-streams StreamOps), PDO driver (dbh/stmt method tables, SQLSTATE mapping, column meta, attributes, Pdo\Sqlite methods), pdo_sql_parser port + SQLSTATE table; 61 tests port the phpt logic. Remaining: VM class wiring, ZPP, PDO core (fetch modes, errmode handling). |
 | ext/mysqli, ext/mysqlnd, ext/pdo_mysql | 0% | low | Need a live MySQL server to test (495 / 0 / 169). |
 | ext/pgsql, ext/pdo_pgsql | 0% | low | Need a live PostgreSQL server to test (105 / 96). |
 | ext/odbc, pdo_odbc, pdo_dblib, pdo_firebird, dba | 0% | low | (54 / 26 / 33 / 51 / 61). |
