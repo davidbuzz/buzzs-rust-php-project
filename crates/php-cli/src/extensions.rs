@@ -46,5 +46,6 @@ pub fn all() -> Vec<Box<dyn Extension>> {
         Box::new(php_ext_gmp::Gmp),
         Box::new(php_ext_xml::Xml),
         Box::new(php_ext_xmlreader::XmlReaderExt),
+        Box::new(php_ext_simplexml::SimpleXml),
     ]
 }

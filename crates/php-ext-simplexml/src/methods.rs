@@ -1,0 +1,257 @@
+//! `SimpleXMLElement` methods and the `simplexml_*()` functions.
+
+use std::rc::Rc;
+
+use php_runtime::{RtResult, Value, ZStr};
+use php_simplexml::{Sxe, SxeRef};
+use php_vm::class::Class;
+use php_vm::ext::{Args, VmResult};
+use php_vm::Vm;
+
+use crate::hooks::{direct, property_for_write};
+use crate::host::{rt_throw, sxe_of, LentHost};
+
+/// Runs a library call inside [`php_ext_xml::libxml::run`] (stream hooks,
+/// entity loader, libxml2 diagnostics) with the lent VM as host.
+fn lent<R>(vm: &mut Vm, a: &Args, f: impl FnOnce(&mut LentHost) -> RtResult<R>) -> VmResult<R> {
+    let r = php_ext_xml::libxml::run(vm, a, || f(&mut LentHost))?;
+    r.map_err(|e| rt_throw(vm, e))
+}
+
+fn this_sxe(vm: &mut Vm, a: &Args) -> VmResult<SxeRef> {
+    match a.this.as_ref().and_then(sxe_of) {
+        Some(s) => Ok(s),
+        None => Err(vm.throw("Error", "SimpleXMLElement is not properly initialized")),
+    }
+}
+
+fn opt_bytes(a: &Args, n: usize) -> Option<Vec<u8>> {
+    a.opt(n).map(|v| match v {
+        Value::Str(s) => s.as_bytes().to_vec(),
+        _ => Vec::new(),
+    })
+}
+
+fn bytes(a: &Args, n: usize) -> Vec<u8> {
+    a.str(n).as_bytes().to_vec()
+}
+
+fn str_value(b: Vec<u8>) -> Value {
+    Value::Str(ZStr::from(b))
+}
+
+/// `SimpleXMLElement::__construct()`.
+pub fn construct(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let st = this_sxe(vm, a)?;
+    let data = bytes(a, 0);
+    let options = a.int(1);
+    let is_url = a.bool(2);
+    let ns = bytes(a, 3);
+    let is_prefix = a.bool(4);
+    lent(vm, a, |_| Sxe::construct(&st, &data, options, is_url, &ns, is_prefix))?;
+    Ok(Value::Null)
+}
+
+/// `SimpleXMLElement::xpath()`.
+pub fn xpath(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let st = this_sxe(vm, a)?;
+    let expr = bytes(a, 0);
+    lent(vm, a, |h| Sxe::xpath(&st, h, &expr))
+}
+
+/// `SimpleXMLElement::registerXPathNamespace()`.
+pub fn register_xpath_namespace(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let st = this_sxe(vm, a)?;
+    let (prefix, ns) = (bytes(a, 0), bytes(a, 1));
+    lent(vm, a, |_| Sxe::register_xpath_namespace(&st, &prefix, &ns)).map(Value::Bool)
+}
+
+/// `SimpleXMLElement::asXML()` / `saveXML()`.
+pub fn as_xml(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let st = this_sxe(vm, a)?;
+    let filename = opt_bytes(a, 0);
+    lent(vm, a, |_| Sxe::as_xml(&st, filename.as_deref()))
+}
+
+/// `SimpleXMLElement::getNamespaces()`.
+pub fn get_namespaces(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let st = this_sxe(vm, a)?;
+    let recursive = a.bool(0);
+    direct(vm, |_| Sxe::get_namespaces(&st, recursive)).map(Value::Array)
+}
+
+/// `SimpleXMLElement::getDocNamespaces()`.
+pub fn get_doc_namespaces(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let st = this_sxe(vm, a)?;
+    let (recursive, from_root) = (a.bool(0), a.bool(1));
+    direct(vm, |_| Sxe::get_doc_namespaces(&st, recursive, from_root))
+}
+
+/// `SimpleXMLElement::children()`.
+pub fn children(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let st = this_sxe(vm, a)?;
+    let ns = opt_bytes(a, 0);
+    let is_prefix = a.bool(1);
+    direct(vm, |h| Sxe::children(&st, h, ns.as_deref(), is_prefix))
+}
+
+/// `SimpleXMLElement::attributes()`.
+pub fn attributes(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let st = this_sxe(vm, a)?;
+    let ns = opt_bytes(a, 0);
+    let is_prefix = a.bool(1);
+    direct(vm, |h| Sxe::attributes(&st, h, ns.as_deref(), is_prefix))
+}
+
+/// `SimpleXMLElement::addChild()`.
+pub fn add_child(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let st = this_sxe(vm, a)?;
+    let qname = bytes(a, 0);
+    let value = opt_bytes(a, 1);
+    let ns = opt_bytes(a, 2);
+    lent(vm, a, |h| {
+        Sxe::add_child(&st, h, &qname, value.as_deref(), ns.as_deref())
+    })
+}
+
+/// `SimpleXMLElement::addAttribute()`.
+pub fn add_attribute(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let st = this_sxe(vm, a)?;
+    let qname = bytes(a, 0);
+    let value = bytes(a, 1);
+    let ns = opt_bytes(a, 2);
+    lent(vm, a, |h| Sxe::add_attribute(&st, h, &qname, &value, ns.as_deref()))?;
+    Ok(Value::Null)
+}
+
+/// `SimpleXMLElement::getName()`.
+pub fn get_name(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let st = this_sxe(vm, a)?;
+    direct(vm, |_| Sxe::get_name(&st)).map(str_value)
+}
+
+/// `SimpleXMLElement::__toString()`.
+pub fn to_string(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let st = this_sxe(vm, a)?;
+    direct(vm, |h| Sxe::to_string(&st, h)).map(Value::Str)
+}
+
+/// `SimpleXMLElement::__debugInfo()`.
+pub fn debug_info(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let st = this_sxe(vm, a)?;
+    direct(vm, |h| Sxe::properties(&st, h, true)).map(Value::Array)
+}
+
+/// `SimpleXMLElement::count()`.
+pub fn count(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let st = this_sxe(vm, a)?;
+    direct(vm, |_| Sxe::count(&st)).map(Value::Int)
+}
+
+/// `SimpleXMLElement::rewind()`.
+pub fn rewind(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let st = this_sxe(vm, a)?;
+    direct(vm, |h| Sxe::rewind(&st, h))?;
+    Ok(Value::Null)
+}
+
+/// `SimpleXMLElement::valid()`.
+pub fn valid(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let st = this_sxe(vm, a)?;
+    Ok(Value::Bool(Sxe::valid(&st)))
+}
+
+/// `SimpleXMLElement::current()`.
+pub fn current(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let st = this_sxe(vm, a)?;
+    direct(vm, |_| Sxe::current(&st))
+}
+
+/// `SimpleXMLElement::key()`.
+pub fn key(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let st = this_sxe(vm, a)?;
+    direct(vm, |h| Sxe::key(&st, h)).map(str_value)
+}
+
+/// `SimpleXMLElement::next()`.
+pub fn next(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let st = this_sxe(vm, a)?;
+    direct(vm, |h| Sxe::next(&st, h))?;
+    Ok(Value::Null)
+}
+
+/// `SimpleXMLElement::hasChildren()`.
+pub fn has_children(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let st = this_sxe(vm, a)?;
+    direct(vm, |h| Sxe::has_children(&st, h)).map(Value::Bool)
+}
+
+/// `SimpleXMLElement::getChildren()`.
+pub fn get_children(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let st = this_sxe(vm, a)?;
+    Ok(Sxe::get_children(&st))
+}
+
+/// The private `__get` the VM falls back to for intermediate property
+/// fetches in write context (see [`property_for_write`]).
+pub fn magic_get(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let Some(o) = a.this.clone() else {
+        return Ok(Value::Null);
+    };
+    let name = a.str(0);
+    property_for_write(vm, &o, &name)
+}
+
+/// `Z_PARAM_CLASS_OR_NULL` against `SimpleXMLElement`: argument `n`
+/// (0-based) as the class to instantiate.
+fn class_arg(vm: &mut Vm, a: &Args, n: usize) -> VmResult<Option<Rc<Class>>> {
+    let Some(v) = a.opt(n) else {
+        return Ok(None);
+    };
+    let name = vm.value_to_string(&v)?;
+    let base = vm.find_class(b"SimpleXMLElement");
+    let found = vm.lookup_class(&name)?;
+    match (found, base) {
+        (Some(c), Some(b)) if c.is_subclass_of(&b) => Ok(Some(c)),
+        _ => Err(a.type_error(
+            vm,
+            n + 1,
+            &format!(
+                "must be a class name derived from SimpleXMLElement, \"{}\" given",
+                name.to_string_lossy()
+            ),
+        )),
+    }
+}
+
+/// `simplexml_load_string()`.
+pub fn load_string(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let data = bytes(a, 0);
+    let class = class_arg(vm, a, 1)?.map(|c| c.name.clone());
+    let options = a.int(2);
+    let ns = bytes(a, 3);
+    let is_prefix = a.bool(4);
+    lent(vm, a, |h| {
+        Sxe::load_string(h, &data, class.as_ref(), options, &ns, is_prefix)
+    })
+}
+
+/// `simplexml_load_file()`.
+pub fn load_file(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let filename = bytes(a, 0);
+    let class = class_arg(vm, a, 1)?.map(|c| c.name.clone());
+    let options = a.int(2);
+    let ns = bytes(a, 3);
+    let is_prefix = a.bool(4);
+    lent(vm, a, |h| {
+        Sxe::load_file(h, &filename, class.as_ref(), options, &ns, is_prefix)
+    })
+}
+
+/// `simplexml_import_dom()`: the DOM binding does not expose its nodes
+/// yet, so every object is rejected as "not a valid XML node" (what PHP
+/// does for non-DOM objects).
+pub fn import_dom(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let class = class_arg(vm, a, 1)?.map(|c| c.name.clone());
+    lent(vm, a, |h| Sxe::import_dom(h, None, class.as_ref()))
+}
