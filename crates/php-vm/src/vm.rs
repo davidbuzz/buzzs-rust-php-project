@@ -374,7 +374,7 @@ pub struct LastError {
     /// Type bits.
     pub level: i64,
     /// Message.
-    pub message: String,
+    pub message: Vec<u8>,
     /// File.
     pub file: ZStr,
     /// Line.

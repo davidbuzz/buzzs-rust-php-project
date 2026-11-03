@@ -84,6 +84,11 @@ impl Vm {
 
     /// Reports a docref-style error (`func(): msg`) from a builtin.
     pub(crate) fn docref(&mut self, level: i64, msg: &str) -> VmResult<()> {
+        self.docref_bytes(level, msg.as_bytes())
+    }
+
+    /// Binary-safe [`Vm::docref`].
+    pub(crate) fn docref_bytes(&mut self, level: i64, msg: &[u8]) -> VmResult<()> {
         let name = self
             .frames
             .iter()
@@ -99,14 +104,35 @@ impl Vm {
                 })
             });
         match name {
-            Some(n) => self.error(level, &format!("{n}(): {msg}")),
-            None => self.error(level, msg),
+            Some(n) => {
+                let mut m = format!("{n}(): ").into_bytes();
+                m.extend_from_slice(msg);
+                self.error_bytes(level, &m)
+            }
+            None => self.error_bytes(level, msg),
         }
     }
 
     /// Reports an error at a given location.
-    #[allow(clippy::too_many_lines)]
     pub fn error_at(&mut self, level: i64, msg: &str, file: &ZStr, line: u32) -> VmResult<()> {
+        self.error_at_bytes(level, msg.as_bytes(), file, line)
+    }
+
+    /// Reports an error with a binary message at the current location.
+    pub fn error_bytes(&mut self, level: i64, msg: &[u8]) -> VmResult<()> {
+        let (file, line) = self.current_location();
+        self.error_at_bytes(level, msg, &file, line)
+    }
+
+    /// Reports an error (binary-safe message) at a given location.
+    #[allow(clippy::too_many_lines)]
+    pub fn error_at_bytes(
+        &mut self,
+        level: i64,
+        msg: &[u8],
+        file: &ZStr,
+        line: u32,
+    ) -> VmResult<()> {
         // User error handler.
         let handleable = level
             & (level::ERROR
@@ -140,11 +166,13 @@ impl Vm {
         }
         self.last_error = Some(LastError {
             level,
-            message: msg.to_string(),
+            message: msg.to_vec(),
             file: file.clone(),
             line,
         });
-        if self.error_reporting & level != 0 || level & (level::CORE_ERROR | level::CORE_WARNING) != 0 {
+        if self.error_reporting & level != 0
+            || level & (level::CORE_ERROR | level::CORE_WARNING) != 0
+        {
             self.display_error(level, msg, file, line);
         }
         if is_fatal(level) {
@@ -156,11 +184,14 @@ impl Vm {
     }
 
     /// Displays/logs an error according to the ini settings.
-    pub(crate) fn display_error(&mut self, level: i64, msg: &str, file: &ZStr, line: u32) {
+    pub(crate) fn display_error(&mut self, level: i64, msg: &[u8], file: &ZStr, line: u32) {
         let lbl = label(level);
         let file_s = file.to_string_lossy();
         if self.ini.get_bool("log_errors") {
-            let log = format!("PHP {lbl}:  {msg} in {file_s} on line {line}");
+            let log = format!(
+                "PHP {lbl}:  {} in {file_s} on line {line}",
+                String::from_utf8_lossy(msg)
+            );
             self.log_error(&log);
         }
         let de = self
@@ -173,7 +204,12 @@ impl Vm {
             b"stdout" | b"1" | b"on" | b"yes" | b"true" => Some(false),
             b"" | b"0" | b"off" | b"no" | b"false" | b"none" => None,
             _ => {
-                if std::str::from_utf8(&de).ok().and_then(|s| s.trim().parse::<i64>().ok()).unwrap_or(0) != 0 {
+                if std::str::from_utf8(&de)
+                    .ok()
+                    .and_then(|s| s.trim().parse::<i64>().ok())
+                    .unwrap_or(0)
+                    != 0
+                {
                     Some(false)
                 } else {
                     None
@@ -183,12 +219,22 @@ impl Vm {
         let Some(to_stderr) = display else {
             return;
         };
-        let prepend = self.ini.get("error_prepend_string").map(<[u8]>::to_vec).unwrap_or_default();
-        let append = self.ini.get("error_append_string").map(<[u8]>::to_vec).unwrap_or_default();
+        let prepend = self
+            .ini
+            .get("error_prepend_string")
+            .map(<[u8]>::to_vec)
+            .unwrap_or_default();
+        let append = self
+            .ini
+            .get("error_append_string")
+            .map(<[u8]>::to_vec)
+            .unwrap_or_default();
         if self.ini.get_bool("html_errors") {
             let mut out = prepend.clone();
+            out.extend_from_slice(format!("<br />\n<b>{lbl}</b>:  ").as_bytes());
+            out.extend_from_slice(msg);
             out.extend_from_slice(
-                format!("<br />\n<b>{lbl}</b>:  {msg} in <b>{file_s}</b> on line <b>{line}</b><br />\n").as_bytes(),
+                format!(" in <b>{file_s}</b> on line <b>{line}</b><br />\n").as_bytes(),
             );
             out.extend_from_slice(&append);
             self.echo(&out);
@@ -196,13 +242,15 @@ impl Vm {
         }
         if to_stderr {
             self.flush_stdout();
-            let s = format!("{lbl}: {msg} in {file_s} on line {line}\n");
-            let _ = std::io::Write::write_all(&mut std::io::stderr(), s.as_bytes());
+            let mut s = format!("{lbl}: ").into_bytes();
+            s.extend_from_slice(msg);
+            s.extend_from_slice(format!(" in {file_s} on line {line}\n").as_bytes());
+            let _ = std::io::Write::write_all(&mut std::io::stderr(), &s);
             return;
         }
         let mut out = prepend;
         out.extend_from_slice(format!("\n{lbl}: ").as_bytes());
-        out.extend_from_slice(msg.as_bytes());
+        out.extend_from_slice(msg);
         out.extend_from_slice(format!(" in {file_s} on line {line}\n").as_bytes());
         out.extend_from_slice(&append);
         self.echo(&out);
@@ -210,12 +258,21 @@ impl Vm {
 
     /// Writes to the error log (stderr in the CLI, or the `error_log` file).
     pub(crate) fn log_error(&mut self, msg: &str) {
-        let target = self.ini.get("error_log").map(<[u8]>::to_vec).unwrap_or_default();
+        let target = self
+            .ini
+            .get("error_log")
+            .map(<[u8]>::to_vec)
+            .unwrap_or_default();
         if !target.is_empty() && target != b"syslog" {
             if let Ok(path) = std::str::from_utf8(&target) {
-                if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+                if let Ok(mut f) = std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(path)
+                {
                     let now = crate::builtins::time_now_string();
-                    let _ = std::io::Write::write_all(&mut f, format!("[{now}] {msg}\n").as_bytes());
+                    let _ =
+                        std::io::Write::write_all(&mut f, format!("[{now}] {msg}\n").as_bytes());
                     return;
                 }
             }
@@ -235,12 +292,12 @@ impl Vm {
     pub(crate) fn report_fatal(&mut self, msg: &str, file: &ZStr, line: u32) {
         self.last_error = Some(LastError {
             level: level::ERROR,
-            message: msg.to_string(),
+            message: msg.as_bytes().to_vec(),
             file: file.clone(),
             line,
         });
         if self.error_reporting & level::ERROR != 0 {
-            self.display_error(level::ERROR, msg, file, line);
+            self.display_error(level::ERROR, msg.as_bytes(), file, line);
         }
         self.exit_status = 255;
         object::set_destructors_enabled(false);
@@ -248,15 +305,19 @@ impl Vm {
 
     /// Reports a compile error (`E_COMPILE_ERROR`).
     pub(crate) fn report_compile_error(&mut self, msg: &str, file: &ZStr, line: u32, parse: bool) {
-        let lv = if parse { level::PARSE } else { level::COMPILE_ERROR };
+        let lv = if parse {
+            level::PARSE
+        } else {
+            level::COMPILE_ERROR
+        };
         self.last_error = Some(LastError {
             level: lv,
-            message: msg.to_string(),
+            message: msg.as_bytes().to_vec(),
             file: file.clone(),
             line,
         });
         if self.error_reporting & lv != 0 {
-            self.display_error(lv, msg, file, line);
+            self.display_error(lv, msg.as_bytes(), file, line);
         }
         self.exit_status = 255;
         object::set_destructors_enabled(false);
@@ -303,22 +364,34 @@ impl Vm {
             Ok(Value::Str(s)) => s,
             Ok(_) => ZStr::from(""),
             Err(Throw::Exception(inner)) => {
-                let file = self.exc_prop(&inner, "file").as_str().cloned().unwrap_or_default();
-                let line = u32::try_from(self.exc_prop(&inner, "line").as_int().unwrap_or(0)).unwrap_or(0);
+                let file = self
+                    .exc_prop(&inner, "file")
+                    .as_str()
+                    .cloned()
+                    .unwrap_or_default();
+                let line =
+                    u32::try_from(self.exc_prop(&inner, "line").as_int().unwrap_or(0)).unwrap_or(0);
                 let msg = format!(
                     "Uncaught {} in exception handling during call to {}::__toString()",
                     object::class_of(&inner).name,
                     cls.name
                 );
                 let _ = self.error_at(level::WARNING, &msg, &file, line);
-                self.exc_prop(e, "string").as_str().cloned().unwrap_or_default()
+                self.exc_prop(e, "string")
+                    .as_str()
+                    .cloned()
+                    .unwrap_or_default()
             }
             Err(_) => ZStr::from(""),
         };
         if !s.is_empty() || true {
             self.set_exc_prop(e, "string", Value::Str(s.clone()));
         }
-        let file = self.exc_prop(e, "file").as_str().cloned().unwrap_or_default();
+        let file = self
+            .exc_prop(e, "file")
+            .as_str()
+            .cloned()
+            .unwrap_or_default();
         let line = u32::try_from(self.exc_prop(e, "line").as_int().unwrap_or(0)).unwrap_or(0);
         let msg = format!("Uncaught {}\n  thrown", s.to_string_lossy());
         self.report_fatal(&msg, &file, line);

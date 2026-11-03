@@ -83,9 +83,14 @@ name(type $param, ?type $opt = default, type &$byref = null, type ...$rest): ret
   unions (`array|string`), nullable (`?int`). An untyped parameter (`$x`) is
   passed through unchanged.
 * **Defaults**: a parameter with `= ...` is optional. Simple literals
-  (`0`, `"x"`, `null`, `true`, `[]`, `PHP_INT_MAX`) are filled in when the
-  argument was skipped by named arguments; anything else (`UNKNOWN`,
-  expressions) leaves `Value::Null` and the handler decides (`a.has(n)`).
+  (`0`, `-1`, `"x"`, `null`, `true`, `[]`, `PHP_INT_MAX`) are filled in
+  both when the argument was omitted and when it was skipped by named
+  arguments (`a.has(n)` stays `false`, `a.at(n)`/`a.int(n)` see the
+  default). Anything else (`UNKNOWN`, expressions) leaves `Value::Null`
+  and the handler decides with `a.has(n)`.
+* **`callable` parameters** produce PHP's ZPP text on failure:
+  `f(): Argument #1 ($cb) must be a valid callback, function "nope" not
+  found or invalid function name` (`?callable` adds "or null").
 * **By-reference** (`&$x`): the handler receives `Value::Reference`; write
   back with `a.set_ref(n, value)` or `a.reference(n)`.
 * **Variadic** (`...$rest`): all remaining arguments are in `a.values`
@@ -125,6 +130,7 @@ or the argument helpers `a.value_error(vm, n, "must be ...")` /
 | `vm.throw(class, msg) -> Throw` | `zend_throw_exception(ce, msg)` (any class name, incl. user/extension classes) |
 | `vm.php_warning(msg)` / `php_notice` / `php_deprecated` | `php_error_docref(NULL, E_*, ...)` — prefixed `func(): ` |
 | `vm.raise(level, msg)` | `zend_error(level, ...)` (no prefix) |
+| `vm.php_warning_bytes(&[u8])`, `php_error_bytes(level, &[u8])`, `raise_bytes` | binary-safe variants (messages are not UTF-8 converted) |
 | `vm.call_value(&callable, args)` | `call_user_function` |
 | `vm.is_callable(&v)` | `zend_is_callable` |
 | `vm.value_to_string/int/float/bool(&v)` | `zval_get_string/long/double`, `zend_is_true` |

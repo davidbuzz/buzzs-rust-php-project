@@ -41,7 +41,10 @@ pub(crate) fn build_magic(methods: &HashMap<ZStr, Rc<Method>>) -> Magic {
 impl Vm {
     /// Looks up a class, autoloading it if needed.
     pub fn lookup_class(&mut self, name: &ZStr) -> VmResult<Option<Rc<Class>>> {
-        let bytes = name.as_bytes().strip_prefix(b"\\").unwrap_or(name.as_bytes());
+        let bytes = name
+            .as_bytes()
+            .strip_prefix(b"\\")
+            .unwrap_or(name.as_bytes());
         let lc = ZStr::from(bytes.to_ascii_lowercase());
         if let Some(c) = self.classes.get(&lc) {
             return Ok(Some(c.clone()));
@@ -53,7 +56,9 @@ impl Vm {
     /// Looks up a class without autoloading.
     pub fn find_class(&self, name: &[u8]) -> Option<Rc<Class>> {
         let bytes = name.strip_prefix(b"\\").unwrap_or(name);
-        self.classes.get(&ZStr::from(bytes.to_ascii_lowercase())).cloned()
+        self.classes
+            .get(&ZStr::from(bytes.to_ascii_lowercase()))
+            .cloned()
     }
 
     fn autoload(&mut self, name: &ZStr, lc: &ZStr) -> VmResult<()> {
@@ -97,10 +102,13 @@ impl Vm {
                 let n = self.lit_str(*l);
                 self.lookup_class_or_error(&n)
             }
-            ClassSpec::SelfClass => match self.scope() {
-                Some(c) => Ok(c),
-                None => Err(self.make_throw("Error", "Cannot use \"self\" when no class scope is active")),
-            },
+            ClassSpec::SelfClass => {
+                match self.scope() {
+                    Some(c) => Ok(c),
+                    None => Err(self
+                        .make_throw("Error", "Cannot use \"self\" when no class scope is active")),
+                }
+            }
             ClassSpec::Parent => match self.scope() {
                 Some(c) => match &c.parent {
                     Some(p) => Ok(p.clone()),
@@ -109,7 +117,10 @@ impl Vm {
                         "Cannot use \"parent\" when current class scope has no parent",
                     )),
                 },
-                None => Err(self.make_throw("Error", "Cannot use \"parent\" when no class scope is active")),
+                None => Err(self.make_throw(
+                    "Error",
+                    "Cannot use \"parent\" when no class scope is active",
+                )),
             },
             ClassSpec::Static => {
                 let c = self
@@ -120,7 +131,10 @@ impl Vm {
                     .and_then(|f| f.called.clone());
                 match c {
                     Some(c) => Ok(c),
-                    None => Err(self.make_throw("Error", "Cannot use \"static\" when no class scope is active")),
+                    None => Err(self.make_throw(
+                        "Error",
+                        "Cannot use \"static\" when no class scope is active",
+                    )),
                 }
             }
             ClassSpec::Dyn(op) => {
@@ -128,7 +142,10 @@ impl Vm {
                 match v {
                     Value::Object(o) => Ok(object::class_of(&o).clone()),
                     Value::Str(s) => self.lookup_class_or_error(&s),
-                    _ => Err(self.make_throw("Error", "Class name must be a valid object or a string")),
+                    _ => {
+                        Err(self
+                            .make_throw("Error", "Class name must be a valid object or a string"))
+                    }
                 }
             }
         }
@@ -150,7 +167,9 @@ impl Vm {
             };
         }
         if let ClassSpec::SelfClass = spec {
-            return Ok(Value::Str(self.scope().map(|c| c.name.clone()).unwrap_or_default()));
+            return Ok(Value::Str(
+                self.scope().map(|c| c.name.clone()).unwrap_or_default(),
+            ));
         }
         let c = self.resolve_class_spec(spec)?;
         Ok(Value::Str(c.name.clone()))
@@ -175,7 +194,8 @@ impl Vm {
                         None => return Ok(false),
                     },
                     _ => {
-                        return Err(self.make_throw("Error", "Class name must be a valid object or a string"))
+                        return Err(self
+                            .make_throw("Error", "Class name must be a valid object or a string"))
                     }
                 }
             }
@@ -192,7 +212,11 @@ impl Vm {
     // ------------------------------------------------------------------
 
     /// Evaluates a constant expression in a class scope.
-    pub(crate) fn eval_const_expr(&mut self, e: &ConstExpr, scope: Option<&Rc<Class>>) -> VmResult<Value> {
+    pub(crate) fn eval_const_expr(
+        &mut self,
+        e: &ConstExpr,
+        scope: Option<&Rc<Class>>,
+    ) -> VmResult<Value> {
         match e {
             ConstExpr::Value(v) => Ok(v.clone()),
             ConstExpr::Code(code) => {
@@ -207,7 +231,11 @@ impl Vm {
     }
 
     /// `A::NAME`.
-    pub(crate) fn op_fetch_class_const(&mut self, spec: &ClassSpec, name: Value) -> VmResult<Value> {
+    pub(crate) fn op_fetch_class_const(
+        &mut self,
+        spec: &ClassSpec,
+        name: Value,
+    ) -> VmResult<Value> {
         let name = match name {
             Value::Str(s) => s,
             other => {
@@ -249,7 +277,11 @@ impl Vm {
                 _ => false,
             };
             if !ok {
-                let vis = if c.flags & flags::PRIVATE != 0 { "private" } else { "protected" };
+                let vis = if c.flags & flags::PRIVATE != 0 {
+                    "private"
+                } else {
+                    "protected"
+                };
                 return Err(self.make_throw(
                     "Error",
                     &format!(
@@ -277,7 +309,9 @@ impl Vm {
             ));
         }
         c.evaluating.set(true);
-        let decl = self.find_class(c.class.as_bytes()).unwrap_or_else(|| cls.clone());
+        let decl = self
+            .find_class(c.class.as_bytes())
+            .unwrap_or_else(|| cls.clone());
         let r = self.eval_const_expr(&c.expr, Some(&decl));
         c.evaluating.set(false);
         let mut v = r?;
@@ -309,7 +343,10 @@ impl Vm {
     /// Defines a global constant (`const X = ...;` / `define`).
     pub(crate) fn declare_constant(&mut self, name: ZStr, v: Value) -> VmResult<bool> {
         if self.constants.contains_key(&name) {
-            self.warning(&format!("Constant {} already defined", name.to_string_lossy()))?;
+            self.warning(&format!(
+                "Constant {} already defined",
+                name.to_string_lossy()
+            ))?;
             return Ok(false);
         }
         self.user_constants.push(name.clone());
@@ -365,7 +402,11 @@ impl Vm {
     // ------------------------------------------------------------------
 
     /// The storage slot of `A::$name`.
-    pub(crate) fn static_prop_cell(&mut self, cls: &Rc<Class>, name: &ZStr) -> VmResult<Rc<RefCell<Value>>> {
+    pub(crate) fn static_prop_cell(
+        &mut self,
+        cls: &Rc<Class>,
+        name: &ZStr,
+    ) -> VmResult<Rc<RefCell<Value>>> {
         let Some(sp) = cls.find_static(name.as_bytes()).cloned() else {
             return Err(self.make_throw(
                 "Error",
@@ -385,7 +426,11 @@ impl Vm {
                 _ => false,
             };
             if !ok {
-                let vis = if sp.flags & flags::PRIVATE != 0 { "private" } else { "protected" };
+                let vis = if sp.flags & flags::PRIVATE != 0 {
+                    "private"
+                } else {
+                    "protected"
+                };
                 return Err(self.make_throw(
                     "Error",
                     &format!(
@@ -399,7 +444,9 @@ impl Vm {
         if !sp.initialized.get() {
             sp.initialized.set(true);
             if let Some(d) = &sp.default {
-                let decl = self.find_class(sp.class.as_bytes()).unwrap_or_else(|| cls.clone());
+                let decl = self
+                    .find_class(sp.class.as_bytes())
+                    .unwrap_or_else(|| cls.clone());
                 let v = self.eval_const_expr(d, Some(&decl))?;
                 *sp.cell.borrow_mut() = v;
             }
@@ -434,7 +481,11 @@ impl Vm {
 
     /// Declares (links) a class from its compiled declaration.
     #[allow(clippy::too_many_lines)]
-    pub(crate) fn declare_class(&mut self, decl: &Rc<ClassDecl>, is_anon: bool) -> VmResult<Rc<Class>> {
+    pub(crate) fn declare_class(
+        &mut self,
+        decl: &Rc<ClassDecl>,
+        is_anon: bool,
+    ) -> VmResult<Rc<Class>> {
         let key = Rc::as_ptr(decl) as usize;
         if let Some(c) = self.bound_decls.get(&key) {
             return Ok(c.clone());
@@ -499,7 +550,11 @@ impl Vm {
         let parent = match &decl.parent {
             Some(p) => {
                 let Some(pc) = self.lookup_class(p)? else {
-                    let kind = if decl.kind == ClassKind::Interface { "Interface" } else { "Class" };
+                    let kind = if decl.kind == ClassKind::Interface {
+                        "Interface"
+                    } else {
+                        "Class"
+                    };
                     return Err(self.make_throw(
                         "Error",
                         &format!("{kind} \"{}\" not found", p.to_string_lossy()),
@@ -548,8 +603,13 @@ impl Vm {
             }
         }
         let mut iface_names = decl.interfaces.clone();
-        if decl.methods.iter().any(|m| m.name.eq_ignore_ascii_case(b"__tostring"))
-            && !iface_names.iter().any(|i| i.eq_ignore_ascii_case(b"Stringable"))
+        if decl
+            .methods
+            .iter()
+            .any(|m| m.name.eq_ignore_ascii_case(b"__tostring"))
+            && !iface_names
+                .iter()
+                .any(|i| i.eq_ignore_ascii_case(b"Stringable"))
             && decl.kind != ClassKind::Trait
         {
             iface_names.push(ZStr::from("Stringable"));
@@ -570,12 +630,18 @@ impl Vm {
             if !ic.is_interface() {
                 if decl.kind == ClassKind::Interface {
                     return Err(self.fatal_at(
-                        &format!("{display} cannot implement {} - it is not an interface", ic.name),
+                        &format!(
+                            "{display} cannot implement {} - it is not an interface",
+                            ic.name
+                        ),
                         line,
                     ));
                 }
                 return Err(self.fatal_at(
-                    &format!("{display} cannot implement {} - it is not an interface", ic.name),
+                    &format!(
+                        "{display} cannot implement {} - it is not an interface",
+                        ic.name
+                    ),
                     line,
                 ));
             }
@@ -583,7 +649,10 @@ impl Vm {
                 && (ic.lc_name.as_bytes() == b"unitenum" || ic.lc_name.as_bytes() == b"backedenum")
             {
                 return Err(self.fatal_at(
-                    &format!("Non-enum class {display} cannot implement interface {}", ic.name),
+                    &format!(
+                        "Non-enum class {display} cannot implement interface {}",
+                        ic.name
+                    ),
                     line,
                 ));
             }
@@ -599,11 +668,15 @@ impl Vm {
         }
         // Traversable must be implemented via Iterator or IteratorAggregate.
         if decl.kind == ClassKind::Class
-            && interfaces.iter().any(|i| i.lc_name.as_bytes() == b"traversable")
+            && interfaces
+                .iter()
+                .any(|i| i.lc_name.as_bytes() == b"traversable")
             && !interfaces
                 .iter()
                 .any(|i| matches!(i.lc_name.as_bytes(), b"iterator" | b"iteratoraggregate"))
-            && !parent.as_ref().is_some_and(|p| p.flags & cflags::INTERNAL != 0)
+            && !parent
+                .as_ref()
+                .is_some_and(|p| p.flags & cflags::INTERNAL != 0)
         {
             return Err(self.fatal_at(
                 &format!(
@@ -661,12 +734,20 @@ impl Vm {
             for lcname in &cls.method_order {
                 if let Some(m) = cls.methods.get(lcname) {
                     if m.is_abstract() {
-                        missing.push(format!("{}::{}", object::display_name(&m.scope().name), m.name));
+                        missing.push(format!(
+                            "{}::{}",
+                            object::display_name(&m.scope().name),
+                            m.name
+                        ));
                     }
                 }
             }
             for pi in &cls.props {
-                if !cls.prop_map.get(&pi.name).is_some_and(|x| Rc::ptr_eq(x, pi)) {
+                if !cls
+                    .prop_map
+                    .get(&pi.name)
+                    .is_some_and(|x| Rc::ptr_eq(x, pi))
+                {
                     continue;
                 }
                 if let Some(h) = &pi.hooks {
@@ -687,13 +768,20 @@ impl Vm {
                     list.push_str(", ...");
                 }
                 let what = if cls.is_enum() { "Enum" } else { "Class" };
-                return Err(self.fatal_at(
-                    &format!(
-                        "{what} {display} contains {n} abstract method{} and must therefore be declared abstract or implement the remaining methods ({list})",
-                        if n == 1 { "" } else { "s" }
-                    ),
-                    line,
-                ));
+                let s = if n == 1 { "" } else { "s" };
+                let msg = if cls.is_enum() || cls.flags & crate::class::cflags::ANON != 0 {
+                    format!("{what} {display} must implement {n} abstract method{s} ({list})")
+                } else {
+                    format!(
+                        "{what} {display} contains {n} abstract method{s} and must therefore be declared abstract or implement the remaining method{s} ({list})"
+                    )
+                };
+                return Err(self.fatal_at(&msg, line));
+            }
+        }
+        if cls.is_enum() {
+            if let Some(e) = self.verify_enum(&cls) {
+                return Err(self.fatal_at(&e, line));
             }
         }
         // Inheritance checks for overridden methods.
@@ -730,7 +818,9 @@ fn visibility_name(f: u32) -> &'static str {
 fn check_method_inheritance(cls: &Rc<Class>) -> Option<(String, u32)> {
     let parent = cls.parent.as_ref()?;
     for (lc, m) in &cls.methods {
-        let Some(pm) = parent.methods.get(lc) else { continue };
+        let Some(pm) = parent.methods.get(lc) else {
+            continue;
+        };
         if Rc::ptr_eq(m, pm) {
             continue;
         }
@@ -802,7 +892,11 @@ fn check_method_inheritance(cls: &Rc<Class>) -> Option<(String, u32)> {
                     m.name,
                     visibility_name(pv),
                     object::display_name(&pm.scope().name),
-                    if pv == flags::PROTECTED { " or weaker" } else { "" }
+                    if pv == flags::PROTECTED {
+                        " or weaker"
+                    } else {
+                        ""
+                    }
                 ),
                 line,
             ));
@@ -827,14 +921,15 @@ fn build_class(
     let display = object::display_name(&name);
     let mut consts: Vec<Rc<ClassConst>> = Vec::new();
     let mut const_map: HashMap<ZStr, usize> = HashMap::new();
-    let mut add_const = |c: Rc<ClassConst>, consts: &mut Vec<Rc<ClassConst>>, map: &mut HashMap<ZStr, usize>| {
-        if let Some(&i) = map.get(&c.name) {
-            consts[i] = c;
-        } else {
-            map.insert(c.name.clone(), consts.len());
-            consts.push(c);
-        }
-    };
+    let mut add_const =
+        |c: Rc<ClassConst>, consts: &mut Vec<Rc<ClassConst>>, map: &mut HashMap<ZStr, usize>| {
+            if let Some(&i) = map.get(&c.name) {
+                consts[i] = c;
+            } else {
+                map.insert(c.name.clone(), consts.len());
+                consts.push(c);
+            }
+        };
     if let Some(p) = &parent {
         for c in &p.consts {
             if c.flags & flags::PRIVATE == 0 {
@@ -946,7 +1041,13 @@ fn build_class(
             line: decl.line_start,
             hooks: None,
         };
-        all_props.push((mk("name", crate::types::TypeDecl::simple(crate::types::mask::STRING)), name.clone()));
+        all_props.push((
+            mk(
+                "name",
+                crate::types::TypeDecl::simple(crate::types::mask::STRING),
+            ),
+            name.clone(),
+        ));
         if let Some(b) = decl.backing {
             all_props.push((mk("value", crate::types::TypeDecl::simple(b)), name.clone()));
         }
@@ -997,11 +1098,16 @@ fn build_class(
                             pd.name,
                             visibility_name(e.flags),
                             object::display_name(&e.class),
-                            if e.visibility() == flags::PROTECTED { " or weaker" } else { "" }
+                            if e.visibility() == flags::PROTECTED {
+                                " or weaker"
+                            } else {
+                                ""
+                            }
                         ));
                     }
                     if e.flags & flags::READONLY != pd.flags & flags::READONLY && err.is_none() {
-                        *err = Some(format!(
+                        *err =
+                            Some(format!(
                             "Cannot redeclare {}readonly property {}::${} as {}readonly {}::${}",
                             if e.flags & flags::READONLY != 0 { "" } else { "non-" },
                             object::display_name(&e.class),
@@ -1060,7 +1166,10 @@ fn build_class(
     // Methods.
     let mut methods: HashMap<ZStr, Rc<Method>> = HashMap::new();
     let mut method_order: Vec<ZStr> = Vec::new();
-    let mut add_method = |lc: ZStr, m: Rc<Method>, methods: &mut HashMap<ZStr, Rc<Method>>, order: &mut Vec<ZStr>| {
+    let mut add_method = |lc: ZStr,
+                          m: Rc<Method>,
+                          methods: &mut HashMap<ZStr, Rc<Method>>,
+                          order: &mut Vec<ZStr>| {
         if !methods.contains_key(&lc) {
             order.push(lc.clone());
         }
@@ -1105,7 +1214,9 @@ fn build_class(
         }
         for t in &traits {
             for lcm in &t.method_order {
-                let Some(tm) = t.methods.get(lcm) else { continue };
+                let Some(tm) = t.methods.get(lcm) else {
+                    continue;
+                };
                 // Aliases.
                 for r in &decl.trait_rules {
                     if let TraitRule::Alias {
@@ -1160,7 +1271,9 @@ fn build_class(
                     } = r
                     {
                         if method.eq_ignore_ascii_case(lcm.as_bytes())
-                            && trait_name.as_ref().is_none_or(|tn| tn.eq_ignore_ascii_case(t.name.as_bytes()))
+                            && trait_name
+                                .as_ref()
+                                .is_none_or(|tn| tn.eq_ignore_ascii_case(t.name.as_bytes()))
                         {
                             if *f & flags::VISIBILITY != 0 {
                                 fl = (fl & !flags::VISIBILITY) | (*f & flags::VISIBILITY);
@@ -1182,7 +1295,11 @@ fn build_class(
                     {
                         let other = traits
                             .iter()
-                            .find(|tt| tt.methods.get(lcm).is_some_and(|mm| Func::ptr_eq(&mm.func, &ex_trait)))
+                            .find(|tt| {
+                                tt.methods
+                                    .get(lcm)
+                                    .is_some_and(|mm| Func::ptr_eq(&mm.func, &ex_trait))
+                            })
                             .map(|tt| tt.name.to_string_lossy())
                             .unwrap_or_default();
                         *err = Some(format!(
@@ -1272,7 +1389,10 @@ fn build_class(
         cflag |= cflags::ABSTRACT;
     }
     let magic = build_magic(&methods);
-    let internal = if parent.as_ref().is_some_and(|p| p.internal == InternalKind::Throwable) {
+    let internal = if parent
+        .as_ref()
+        .is_some_and(|p| p.internal == InternalKind::Throwable)
+    {
         InternalKind::Throwable
     } else {
         InternalKind::None

@@ -218,6 +218,21 @@ impl Vm {
         self.docref(crate::errors::level::WARNING, message)
     }
 
+    /// Binary-safe [`Vm::php_warning`].
+    pub fn php_warning_bytes(&mut self, message: &[u8]) -> VmResult<()> {
+        self.docref_bytes(crate::errors::level::WARNING, message)
+    }
+
+    /// Binary-safe docref error of any level.
+    pub fn php_error_bytes(&mut self, level: i64, message: &[u8]) -> VmResult<()> {
+        self.docref_bytes(level, message)
+    }
+
+    /// Binary-safe [`Vm::raise`].
+    pub fn raise_bytes(&mut self, level: i64, message: &[u8]) -> VmResult<()> {
+        self.error_bytes(level, message)
+    }
+
     /// Emits a notice prefixed with the running native function.
     pub fn php_notice(&mut self, message: &str) -> VmResult<()> {
         self.docref(crate::errors::level::NOTICE, message)
@@ -260,7 +275,12 @@ impl Vm {
     }
 
     /// Calls a method by name on an object.
-    pub fn call_method_by_name(&mut self, o: &Obj, name: &str, args: Vec<Value>) -> VmResult<Value> {
+    pub fn call_method_by_name(
+        &mut self,
+        o: &Obj,
+        name: &str,
+        args: Vec<Value>,
+    ) -> VmResult<Value> {
         self.call_method_name(o, name, args)
     }
 

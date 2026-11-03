@@ -30,7 +30,13 @@ impl Vm {
             Some(func) => {
                 let mut n = self.func_display(func, f.scope.as_ref());
                 if let Some(m) = &f.magic_name {
-                    n = format!("{}::{}", f.scope.as_ref().map_or_else(String::new, |c| c.name.to_string_lossy()), m);
+                    n = format!(
+                        "{}::{}",
+                        f.scope
+                            .as_ref()
+                            .map_or_else(String::new, |c| c.name.to_string_lossy()),
+                        m
+                    );
                 }
                 n
             }
@@ -42,7 +48,12 @@ impl Vm {
     // INIT
     // ------------------------------------------------------------------
 
-    pub(crate) fn op_init_fcall(&mut self, name: u32, fallback: Option<u32>, display: u32) -> VmResult<()> {
+    pub(crate) fn op_init_fcall(
+        &mut self,
+        name: u32,
+        fallback: Option<u32>,
+        display: u32,
+    ) -> VmResult<()> {
         let lc = self.lit_str(name);
         let mut f = self.functions.get(&lc).cloned();
         if f.is_none() {
@@ -90,10 +101,16 @@ impl Vm {
             }
             Value::Array(a) => {
                 if a.len() != 2 {
-                    return Err(self.make_throw("Error", "Array callback must have exactly two elements"));
+                    return Err(
+                        self.make_throw("Error", "Array callback must have exactly two elements")
+                    );
                 }
-                let (Some(target), Some(method)) = (a.get(&ArrayKey::Int(0)), a.get(&ArrayKey::Int(1))) else {
-                    return Err(self.make_throw("Error", "Array callback must have exactly two elements"));
+                let (Some(target), Some(method)) =
+                    (a.get(&ArrayKey::Int(0)), a.get(&ArrayKey::Int(1)))
+                else {
+                    return Err(
+                        self.make_throw("Error", "Array callback must have exactly two elements")
+                    );
                 };
                 let target = target.deref();
                 let method = method.deref();
@@ -123,7 +140,10 @@ impl Vm {
                         let cls = self.lookup_class_or_error(&cn)?;
                         self.static_method_call(&cls, &m, false)
                     }
-                    _ => Err(self.make_throw("Error", "First array member is not a valid class name or object")),
+                    _ => Err(self.make_throw(
+                        "Error",
+                        "First array member is not a valid class name or object",
+                    )),
                 }
             }
             Value::Object(o) => {
@@ -140,7 +160,10 @@ impl Vm {
                     }),
                     None => Err(self.make_throw(
                         "Error",
-                        &format!("Object of type {} is not callable", object::display_name(&cls.name)),
+                        &format!(
+                            "Object of type {} is not callable",
+                            object::display_name(&cls.name)
+                        ),
                     )),
                 }
             }
@@ -201,18 +224,30 @@ impl Vm {
                     && Rc::ptr_eq(&m.scope(), s)
                     && object::class_of(o).is_subclass_of(s)
                 {
-                    return Ok(self.pending_for_method(m, Some(o.clone()), object::class_of(o).clone()));
+                    return Ok(self.pending_for_method(
+                        m,
+                        Some(o.clone()),
+                        object::class_of(o).clone(),
+                    ));
                 }
             }
         }
         if let Some(m) = cls.methods.get(&lc).cloned() {
             if self.can_access_method(&m, scope.as_ref()) {
-                return Ok(self.pending_for_method(&m, Some(o.clone()), object::class_of(o).clone()));
+                return Ok(self.pending_for_method(
+                    &m,
+                    Some(o.clone()),
+                    object::class_of(o).clone(),
+                ));
             }
             if let Some(callm) = cls.magic.call.clone() {
                 return Ok(self.magic_call(&callm, Some(o.clone()), cls.clone(), name));
             }
-            let vis = if m.visibility() == flags::PRIVATE { "private" } else { "protected" };
+            let vis = if m.visibility() == flags::PRIVATE {
+                "private"
+            } else {
+                "protected"
+            };
             return Err(self.make_throw(
                 "Error",
                 &format!(
@@ -239,7 +274,12 @@ impl Vm {
         ))
     }
 
-    fn pending_for_method(&self, m: &Rc<Method>, this: Option<Obj>, called: Rc<Class>) -> PendingCall {
+    fn pending_for_method(
+        &self,
+        m: &Rc<Method>,
+        this: Option<Obj>,
+        called: Rc<Class>,
+    ) -> PendingCall {
         let is_static = m.is_static();
         PendingCall {
             this: if is_static { None } else { this },
@@ -249,7 +289,13 @@ impl Vm {
         }
     }
 
-    fn magic_call(&self, m: &Rc<Method>, this: Option<Obj>, called: Rc<Class>, name: &ZStr) -> PendingCall {
+    fn magic_call(
+        &self,
+        m: &Rc<Method>,
+        this: Option<Obj>,
+        called: Rc<Class>,
+        name: &ZStr,
+    ) -> PendingCall {
         PendingCall {
             this,
             scope: Some(m.scope()),
@@ -267,7 +313,12 @@ impl Vm {
         forward: bool,
     ) -> VmResult<PendingCall> {
         let scope = self.scope();
-        let this = self.frames.iter().rev().find(|f| f.kind != FrameKind::Builtin).and_then(|f| f.this.clone());
+        let this = self
+            .frames
+            .iter()
+            .rev()
+            .find(|f| f.kind != FrameKind::Builtin)
+            .and_then(|f| f.this.clone());
         let cur_called = self
             .frames
             .iter()
@@ -283,7 +334,12 @@ impl Vm {
                 if let Some(t) = &this {
                     if object::class_of(t).is_subclass_of(cls) {
                         if let Some(callm) = cls.magic.call.clone() {
-                            return Ok(self.magic_call(&callm, Some(t.clone()), object::class_of(t).clone(), name));
+                            return Ok(self.magic_call(
+                                &callm,
+                                Some(t.clone()),
+                                object::class_of(t).clone(),
+                                name,
+                            ));
                         }
                     }
                 }
@@ -292,7 +348,11 @@ impl Vm {
                 }
                 return Err(match other {
                     Some(m) => {
-                        let vis = if m.visibility() == flags::PRIVATE { "private" } else { "protected" };
+                        let vis = if m.visibility() == flags::PRIVATE {
+                            "private"
+                        } else {
+                            "protected"
+                        };
                         self.make_throw(
                             "Error",
                             &format!(
@@ -326,7 +386,9 @@ impl Vm {
         }
         if m.is_static() {
             let called = if forward {
-                cur_called.filter(|c| c.is_subclass_of(cls)).unwrap_or_else(|| cls.clone())
+                cur_called
+                    .filter(|c| c.is_subclass_of(cls))
+                    .unwrap_or_else(|| cls.clone())
             } else {
                 cls.clone()
             };
@@ -362,7 +424,10 @@ impl Vm {
         let Value::Str(name) = name else {
             return Err(self.make_throw("Error", "Method name must be a string"));
         };
-        let forward = matches!(class, ClassSpec::SelfClass | ClassSpec::Parent | ClassSpec::Static);
+        let forward = matches!(
+            class,
+            ClassSpec::SelfClass | ClassSpec::Parent | ClassSpec::Static
+        );
         let cls = self.resolve_class_spec(class)?;
         let call = self.static_method_call(&cls, &name, forward)?;
         self.frame_mut().calls.push(call);
@@ -379,7 +444,11 @@ impl Vm {
         };
         let scope = self.scope();
         if !self.can_access_method(&ctor, scope.as_ref()) {
-            let vis = if ctor.visibility() == flags::PRIVATE { "private" } else { "protected" };
+            let vis = if ctor.visibility() == flags::PRIVATE {
+                "private"
+            } else {
+                "protected"
+            };
             return Err(self.make_throw(
                 "Error",
                 &format!(
@@ -426,7 +495,8 @@ impl Vm {
             let call = self.frame().calls.last().expect("pending call");
             let magic = call.magic_name.is_some();
             (
-                !magic && pos.is_some_and(|p| call.func.arg_by_ref(p)) || (!magic && pos.is_none() && call.func.arg_by_ref(call.func.params().len())),
+                !magic && pos.is_some_and(|p| call.func.arg_by_ref(p))
+                    || (!magic && pos.is_none() && call.func.arg_by_ref(call.func.params().len())),
                 magic,
             )
         };
@@ -437,7 +507,11 @@ impl Vm {
                 if by_ref {
                     let p = pos.unwrap_or(0);
                     let call = self.frame().calls.last().expect("pending call").clone();
-                    let pname = call.func.params().get(p).map_or_else(String::new, |x| x.name.to_string_lossy());
+                    let pname = call
+                        .func
+                        .params()
+                        .get(p)
+                        .map_or_else(String::new, |x| x.name.to_string_lossy());
                     let fname = self.func_display(&call.func, call.scope.as_ref());
                     return Err(self.make_throw(
                         "Error",
@@ -482,7 +556,10 @@ impl Vm {
                 if call.args.len() > p && call.args[p].is_some() {
                     return Err(self.make_throw(
                         "Error",
-                        &format!("Named parameter ${} overwrites previous argument", n.to_string_lossy()),
+                        &format!(
+                            "Named parameter ${} overwrites previous argument",
+                            n.to_string_lossy()
+                        ),
                     ));
                 }
                 if call.args.len() <= p {
@@ -504,7 +581,10 @@ impl Vm {
                 if call.named.iter().any(|(k, _)| *k == n) {
                     return Err(self.make_throw(
                         "Error",
-                        &format!("Named parameter ${} overwrites previous argument", n.to_string_lossy()),
+                        &format!(
+                            "Named parameter ${} overwrites previous argument",
+                            n.to_string_lossy()
+                        ),
                     ));
                 }
                 call.named.push((n, value));
@@ -521,7 +601,10 @@ impl Vm {
             _ => {
                 return Err(self.make_throw(
                     "Error",
-                    &format!("Only arrays and Traversables can be unpacked, {} given", given_type(&v)),
+                    &format!(
+                        "Only arrays and Traversables can be unpacked, {} given",
+                        given_type(&v)
+                    ),
                 ))
             }
         };
@@ -595,7 +678,11 @@ impl Vm {
     fn check_deprecated_call(&mut self, call: &PendingCall) -> VmResult<()> {
         if call.func.flags() & flags::DEPRECATED != 0 {
             let name = self.func_display(&call.func, call.scope.as_ref());
-            let kind = if call.scope.is_some() { "Method" } else { "Function" };
+            let kind = if call.scope.is_some() {
+                "Method"
+            } else {
+                "Function"
+            };
             self.deprecated(&format!("{kind} {name}() is deprecated"))?;
         }
         Ok(())
@@ -629,7 +716,10 @@ impl Vm {
             for (k, v) in call.named {
                 arr.insert(ArrayKey::Str(k), v.deref());
             }
-            f.args = vec![Some(Value::Str(name.clone())), Some(Value::Array(ZArray::from_table(arr)))];
+            f.args = vec![
+                Some(Value::Str(name.clone())),
+                Some(Value::Array(ZArray::from_table(arr))),
+            ];
             f.magic_name = Some(name);
         } else {
             f.args = call.args;
@@ -640,14 +730,22 @@ impl Vm {
             f.closure = Some(c.clone());
         }
         if self.frames.len() > 50_000 {
-            return Err(self.make_throw("Error", "Maximum call stack size reached. Infinite recursion?"));
+            return Err(self.make_throw(
+                "Error",
+                "Maximum call stack size reached. Infinite recursion?",
+            ));
         }
         self.frames.push(f);
         Ok(())
     }
 
     /// Calls a builtin.
-    pub(crate) fn call_builtin(&mut self, b: &Rc<Builtin>, call: PendingCall, strict: bool) -> VmResult<Value> {
+    pub(crate) fn call_builtin(
+        &mut self,
+        b: &Rc<Builtin>,
+        call: PendingCall,
+        strict: bool,
+    ) -> VmResult<Value> {
         let fname = self.func_display(&Func::Builtin(b.clone()), call.scope.as_ref());
         let nparams = b.params.len();
         let variadic = b.flags & flags::VARIADIC != 0;
@@ -671,7 +769,10 @@ impl Vm {
                 }
                 None => {
                     if i < b.required as usize {
-                        let pname = b.params.get(i).map_or_else(String::new, |p| p.name.to_string_lossy());
+                        let pname = b
+                            .params
+                            .get(i)
+                            .map_or_else(String::new, |p| p.name.to_string_lossy());
                         return Err(self.make_throw(
                             "ArgumentCountError",
                             &format!("{fname}(): Argument #{} (${pname}) not passed", i + 1),
@@ -682,9 +783,28 @@ impl Vm {
                 }
             }
         }
+        // Omitted trailing optional parameters get their declared defaults
+        // (not marked as passed); backtraces only show the passed ones.
+        let nframe_args = values.len();
+        if !variadic || values.len() + 1 < nparams {
+            let upto = if variadic { nparams - 1 } else { nparams };
+            while values.len() < upto {
+                let i = values.len();
+                match b.defaults.get(i).cloned().flatten() {
+                    Some(d) if i >= b.required as usize => {
+                        values.push(d);
+                        passed.push(false);
+                    }
+                    _ => break,
+                }
+            }
+        }
         if call.has_named && values.len() < b.required as usize {
             let i = values.len();
-            let pname = b.params.get(i).map_or_else(String::new, |p| p.name.to_string_lossy());
+            let pname = b
+                .params
+                .get(i)
+                .map_or_else(String::new, |p| p.name.to_string_lossy());
             return Err(self.make_throw(
                 "ArgumentCountError",
                 &format!("{fname}(): Argument #{} (${pname}) not passed", i + 1),
@@ -715,12 +835,24 @@ impl Vm {
             };
             let ty = ty.clone();
             if !self.verify_type(&ty, v, &ctx)? {
-                let msg = format!(
-                    "{fname}(): Argument #{} (${pname}) must be of type {}, {} given",
-                    i + 1,
-                    ty.to_php_string(),
-                    given_type(v)
-                );
+                let msg = if ty.mask & crate::types::mask::CALLABLE != 0
+                    && !ty.has_classes()
+                    && ty.mask & !(crate::types::mask::CALLABLE | crate::types::mask::NULL) == 0
+                {
+                    let why = self.callable_error(v);
+                    let nul = if ty.allows_null() { " or null" } else { "" };
+                    format!(
+                        "{fname}(): Argument #{} (${pname}) must be a valid callback{nul}, {why}",
+                        i + 1
+                    )
+                } else {
+                    format!(
+                        "{fname}(): Argument #{} (${pname}) must be of type {}, {} given",
+                        i + 1,
+                        ty.to_php_string(),
+                        given_type(v)
+                    )
+                };
                 return Err(self.make_throw("TypeError", &msg));
             }
         }
@@ -736,10 +868,21 @@ impl Vm {
             func: Some(b.clone()),
         };
         // Builtin frame (for backtraces and func_get_args of callers).
-        let mut f = Frame::with_vars(self.empty_code.clone(), FrameKind::Builtin, self.empty_vars.clone(), None);
+        let mut f = Frame::with_vars(
+            self.empty_code.clone(),
+            FrameKind::Builtin,
+            self.empty_vars.clone(),
+            None,
+        );
         f.func = Some(Func::Builtin(b.clone()));
         f.builtin_name = Some(b.name.clone());
-        f.args = args.values.iter().cloned().map(Some).collect();
+        f.args = args
+            .values
+            .iter()
+            .take(nframe_args)
+            .cloned()
+            .map(Some)
+            .collect();
         f.this.clone_from(&args.this);
         f.scope = call.scope;
         f.called.clone_from(&args.called);
@@ -790,7 +933,11 @@ impl Vm {
         let (Some(func), Some(uf)) = (func, uf) else {
             return Throw::Fatal;
         };
-        let p = uf.params.get(n as usize).or_else(|| uf.params.last()).cloned();
+        let p = uf
+            .params
+            .get(n as usize)
+            .or_else(|| uf.params.last())
+            .cloned();
         let Some(p) = p else { return Throw::Fatal };
         let tyname = p.ty.as_ref().map_or_else(String::new, |t| {
             t.display(
@@ -809,7 +956,11 @@ impl Vm {
         if !internal && self.frames.len() >= 2 {
             let caller = &self.frames[self.frames.len() - 2];
             if caller.kind != FrameKind::Builtin {
-                msg.push_str(&format!(", called in {} on line {}", caller.code.filename, caller.line()));
+                msg.push_str(&format!(
+                    ", called in {} on line {}",
+                    caller.code.filename,
+                    caller.line()
+                ));
             }
         }
         self.make_throw("TypeError", &msg)
@@ -839,7 +990,11 @@ impl Vm {
     }
 
     pub(crate) fn op_recv(&mut self, n: u32, cv: u32) -> VmResult<()> {
-        let arg = self.frame_mut().args.get_mut(n as usize).and_then(Option::take);
+        let arg = self
+            .frame_mut()
+            .args
+            .get_mut(n as usize)
+            .and_then(Option::take);
         match arg {
             Some(v) => {
                 let v = self.recv_check(n, v)?;
@@ -871,7 +1026,11 @@ impl Vm {
         if !internal && self.frames.len() >= 2 {
             let caller = &self.frames[self.frames.len() - 2];
             if caller.kind != FrameKind::Builtin {
-                msg.push_str(&format!(" in {} on line {}", caller.code.filename, caller.line()));
+                msg.push_str(&format!(
+                    " in {} on line {}",
+                    caller.code.filename,
+                    caller.line()
+                ));
             }
         }
         msg.push_str(&format!(
@@ -883,7 +1042,11 @@ impl Vm {
     }
 
     pub(crate) fn op_recv_init(&mut self, n: u32, cv: u32) -> VmResult<bool> {
-        let arg = self.frame_mut().args.get_mut(n as usize).and_then(Option::take);
+        let arg = self
+            .frame_mut()
+            .args
+            .get_mut(n as usize)
+            .and_then(Option::take);
         match arg {
             Some(v) => {
                 let v = self.recv_check(n, v)?;
@@ -946,7 +1109,9 @@ impl Vm {
         if is_gen {
             return Ok(v.unwrap_or_default());
         }
-        let fname = func.as_ref().map_or_else(String::new, |f| self.func_display(f, scope.as_ref()));
+        let fname = func
+            .as_ref()
+            .map_or_else(String::new, |f| self.func_display(f, scope.as_ref()));
         if rt.is_void() {
             return Ok(Value::Null);
         }
@@ -997,10 +1162,15 @@ impl Vm {
                 for (i, a) in call.args.iter_mut().enumerate() {
                     if let Some(v) = a {
                         if uf.params.get(i).is_some_and(|p| p.by_ref)
-                            || (i >= uf.params.len() && uf.params.last().is_some_and(|p| p.variadic && p.by_ref))
+                            || (i >= uf.params.len()
+                                && uf.params.last().is_some_and(|p| p.variadic && p.by_ref))
                         {
                             if !v.is_reference() {
-                                let pname = uf.params.get(i).or_else(|| uf.params.last()).map_or_else(String::new, |p| p.name.to_string_lossy());
+                                let pname = uf
+                                    .params
+                                    .get(i)
+                                    .or_else(|| uf.params.last())
+                                    .map_or_else(String::new, |p| p.name.to_string_lossy());
                                 let fname = self.func_display(&call.func, call.scope.as_ref());
                                 self.warning(&format!(
                                     "{fname}(): Argument #{} (${pname}) must be passed by reference, value given",
@@ -1042,7 +1212,10 @@ impl Vm {
             let pos = if call.magic_name.is_some() {
                 None
             } else {
-                call.func.params().iter().position(|p| p.name == k && !p.variadic)
+                call.func
+                    .params()
+                    .iter()
+                    .position(|p| p.name == k && !p.variadic)
             };
             match pos {
                 Some(p) => {
@@ -1051,7 +1224,10 @@ impl Vm {
                     } else if call.args[p].is_some() {
                         return Err(self.make_throw(
                             "Error",
-                            &format!("Named parameter ${} overwrites previous argument", k.to_string_lossy()),
+                            &format!(
+                                "Named parameter ${} overwrites previous argument",
+                                k.to_string_lossy()
+                            ),
                         ));
                     }
                     call.args[p] = Some(v);
@@ -1072,7 +1248,12 @@ impl Vm {
     }
 
     /// Calls a method on an object.
-    pub(crate) fn call_method(&mut self, o: &Obj, m: &Rc<Method>, args: Vec<Value>) -> VmResult<Value> {
+    pub(crate) fn call_method(
+        &mut self,
+        o: &Obj,
+        m: &Rc<Method>,
+        args: Vec<Value>,
+    ) -> VmResult<Value> {
         let mut call = self.pending_for_method(m, Some(o.clone()), object::class_of(o).clone());
         call.args = args.into_iter().map(Some).collect();
         self.call_pending(call)
@@ -1080,12 +1261,22 @@ impl Vm {
 
     /// Calls a method by name (with `__call` fallback), dereferencing the
     /// result.
-    pub(crate) fn call_method_name(&mut self, o: &Obj, name: &str, args: Vec<Value>) -> VmResult<Value> {
+    pub(crate) fn call_method_name(
+        &mut self,
+        o: &Obj,
+        name: &str,
+        args: Vec<Value>,
+    ) -> VmResult<Value> {
         Ok(self.call_method_name_raw(o, name, args)?.deref())
     }
 
     /// Calls a method by name, keeping a returned reference.
-    pub(crate) fn call_method_name_raw(&mut self, o: &Obj, name: &str, args: Vec<Value>) -> VmResult<Value> {
+    pub(crate) fn call_method_name_raw(
+        &mut self,
+        o: &Obj,
+        name: &str,
+        args: Vec<Value>,
+    ) -> VmResult<Value> {
         let cls = object::class_of(o).clone();
         let lc = ZStr::from(name.to_ascii_lowercase());
         let call = match cls.methods.get(&lc).cloned() {
@@ -1098,7 +1289,12 @@ impl Vm {
     }
 
     /// Calls a static method by name.
-    pub(crate) fn call_static_method(&mut self, cls: &Rc<Class>, name: &str, args: Vec<Value>) -> VmResult<Value> {
+    pub(crate) fn call_static_method(
+        &mut self,
+        cls: &Rc<Class>,
+        name: &str,
+        args: Vec<Value>,
+    ) -> VmResult<Value> {
         let mut call = self.static_method_call(cls, &ZStr::from(name), false)?;
         call.args = args.into_iter().map(Some).collect();
         self.call_pending(call)
@@ -1106,7 +1302,10 @@ impl Vm {
 
     /// Calls a function by name.
     pub fn call_function(&mut self, name: &str, args: Vec<Value>) -> VmResult<Value> {
-        let f = self.functions.get(&ZStr::from(name.to_ascii_lowercase())).cloned();
+        let f = self
+            .functions
+            .get(&ZStr::from(name.to_ascii_lowercase()))
+            .cloned();
         let Some(f) = f else {
             return Err(self.make_throw("Error", &format!("Call to undefined function {name}()")));
         };
@@ -1120,4 +1319,3 @@ impl Vm {
 pub(crate) fn find_double_colon(s: &[u8]) -> Option<usize> {
     s.windows(2).position(|w| w == b"::")
 }
-
