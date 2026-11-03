@@ -53,6 +53,7 @@ pub(crate) struct Tok {
 }
 
 /// The parser state.
+#[allow(clippy::struct_excessive_bools)] // parser state flags
 pub(crate) struct Parser<'a> {
     pub src: &'a [u8],
     lexer: Lexer<'a>,
