@@ -480,6 +480,7 @@ impl Interp {
                 Err(_) => V::Bool(false),
             },
             "sys_get_temp_dir" => V::str("/tmp"),
+            "getenv" => std::env::var(path(&s(&a, 0))).map_or(V::Bool(false), |v| V::Str(v.into_bytes())),
             "getcwd" => V::Str(std::env::current_dir().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default().into_bytes()),
             "tempnam" => V::Str(format!("/tmp/phpdomtest{}", std::process::id()).into_bytes()),
             "json_encode" => V::Str(json_encode(&arg(&a, 0))),
@@ -608,6 +609,87 @@ impl Interp {
                 return Err(Flow::Exit);
             }
             "fn" => V::Null,
+            "clone" => self.clone_value(&arg(&a, 0))?,
+            "get_defined_constants" => {
+                let mut lib = Arr::default();
+                for n in ["LIBXML_NOENT", "LIBXML_DTDLOAD", "LIBXML_DTDATTR", "LIBXML_DTDVALID", "LIBXML_NOERROR", "LIBXML_NOWARNING", "LIBXML_NOBLANKS", "LIBXML_XINCLUDE", "LIBXML_NSCLEAN", "LIBXML_NOCDATA", "LIBXML_NONET", "LIBXML_PEDANTIC", "LIBXML_COMPACT", "LIBXML_NOXMLDECL", "LIBXML_PARSEHUGE", "LIBXML_BIGLINES", "LIBXML_NOEMPTYTAG", "LIBXML_SCHEMA_CREATE", "LIBXML_HTML_NOIMPLIED", "LIBXML_HTML_NODEFDTD", "LIBXML_ERR_NONE", "LIBXML_ERR_WARNING", "LIBXML_ERR_ERROR", "LIBXML_ERR_FATAL", "LIBXML_RECOVER"] {
+                    if let Ok(v) = self.const_by_name(n) {
+                        lib.set(Key::Str(n.as_bytes().to_vec()), v);
+                    }
+                }
+                let mut all = Arr::default();
+                all.set(Key::Str(b"libxml".to_vec()), V::arr(lib));
+                V::arr(all)
+            }
+            "array_flip" => {
+                let mut arr = Arr::default();
+                if let V::Arr(x) = arg(&a, 0) {
+                    for (k, v) in &x.items {
+                        arr.set(to_key(v), match k {
+                            Key::Int(i) => V::Int(*i),
+                            Key::Str(s) => V::Str(s.clone()),
+                        });
+                    }
+                }
+                V::arr(arr)
+            }
+            "array_intersect_key" => {
+                let mut arr = Arr::default();
+                if let (V::Arr(x), V::Arr(y)) = (arg(&a, 0), arg(&a, 1)) {
+                    for (k, v) in &x.items {
+                        if y.get(k).is_some() {
+                            arr.set(k.clone(), v.clone());
+                        }
+                    }
+                }
+                V::arr(arr)
+            }
+            "array_sum" => {
+                let mut t = V::Int(0);
+                if let V::Arr(x) = arg(&a, 0) {
+                    for (_, v) in &x.items {
+                        t = match (to_num(&t), to_num(v)) {
+                            (V::Int(p), V::Int(q)) => V::Int(p + q),
+                            (p, q) => V::Float(super::interp::to_f_pub(&p) + super::interp::to_f_pub(&q)),
+                        };
+                    }
+                }
+                t
+            }
+            "array_key_first" => match arg(&a, 0) {
+                V::Arr(x) => x.items.first().map_or(V::Null, |(k, _)| match k {
+                    Key::Int(i) => V::Int(*i),
+                    Key::Str(s) => V::Str(s.clone()),
+                }),
+                _ => V::Null,
+            },
+            "array_key_last" => match arg(&a, 0) {
+                V::Arr(x) => x.items.last().map_or(V::Null, |(k, _)| match k {
+                    Key::Int(i) => V::Int(*i),
+                    Key::Str(s) => V::Str(s.clone()),
+                }),
+                _ => V::Null,
+            },
+            "array_pop" | "array_shift" => match arg(&a, 0) {
+                V::Arr(x) => (if lname == "array_pop" { x.items.last() } else { x.items.first() }).map_or(V::Null, |(_, v)| v.clone()),
+                _ => V::Null,
+            },
+            "chdir" => V::Bool(std::env::set_current_dir(self.resolve_path_pub(&s(&a, 0))).is_ok()),
+            "ob_start" => {
+                self.ob_start();
+                V::Bool(true)
+            }
+            "ob_get_clean" | "ob_get_contents" => V::Str(self.ob_end(lname == "ob_get_clean")),
+            "ob_end_clean" => {
+                self.ob_end(true);
+                V::Bool(true)
+            }
+            "ob_end_flush" | "ob_flush" | "flush" => V::Bool(true),
+            "array_is_list" => V::Bool(match arg(&a, 0) {
+                V::Arr(x) => x.items.iter().enumerate().all(|(i, (k, _))| *k == Key::Int(i as i64)),
+                _ => false,
+            }),
+            "str_contains_any" => V::Null,
             _ => {
                 return Err(Flow::Throw(self.make_exception("Error", format!("Call to undefined function {name}()").as_bytes(), 0)));
             }

@@ -12,6 +12,7 @@ php-libxml = { path = "../php-libxml" }
 
 [dev-dependencies]
 php-parser = { path = "../php-parser" }
+php-lexer = { path = "../php-lexer" }
 phpt-runner = { path = "../phpt-runner" }
 
 [build-dependencies]

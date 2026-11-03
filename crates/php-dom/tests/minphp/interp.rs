@@ -25,6 +25,7 @@ pub type R<T> = Result<T, Flow>;
 #[derive(Default)]
 struct Frame {
     vars: HashMap<Vec<u8>, V>,
+    statics: Vec<(String, Vec<u8>)>,
     this: Option<V>,
     class: Option<String>,
     static_class: Option<String>,
@@ -56,6 +57,8 @@ pub struct Interp {
     silence: Cell<u32>,
     enum_cases: RefCell<HashMap<String, Rc<Obj>>>,
     shutdown_fns: RefCell<Vec<V>>,
+    ob_stack: RefCell<Vec<Vec<u8>>>,
+    statics: RefCell<HashMap<(String, Vec<u8>), V>>,
 }
 
 thread_local! {
@@ -118,6 +121,8 @@ impl Interp {
             silence: Cell::new(0),
             enum_cases: RefCell::new(HashMap::new()),
             shutdown_fns: RefCell::new(Vec::new()),
+            ob_stack: RefCell::new(Vec::new()),
+            statics: RefCell::new(HashMap::new()),
         });
         CURRENT.with(|c| *c.borrow_mut() = Some(Rc::downgrade(&i)));
         php_dom::error::set_diagnostic_handler(Some(Box::new(|d| {
@@ -399,9 +404,25 @@ impl Interp {
     // Variables
     // ------------------------------------------------------------------
 
+    fn static_key(&self, name: &[u8]) -> Option<(String, Vec<u8>)> {
+        let f = self.frames.borrow();
+        let fr = f.last()?;
+        fr.statics.iter().find(|(_, n)| n == name).map(|(k, n)| (k.clone(), n.clone()))
+    }
+
     fn get_var(&self, name: &[u8]) -> V {
         if name == b"this" {
             return self.frames.borrow().last().and_then(|f| f.this.clone()).unwrap_or(V::Null);
+        }
+        if name == b"GLOBALS" {
+            let mut a = Arr::default();
+            for (k, v) in &self.frames.borrow()[0].vars {
+                a.set(Key::Str(k.clone()), v.clone());
+            }
+            return V::arr(a);
+        }
+        if let Some(k) = self.static_key(name) {
+            return self.statics.borrow().get(&k).cloned().unwrap_or(V::Null);
         }
         let f = self.frames.borrow();
         f.last().and_then(|fr| fr.vars.get(name).cloned()).unwrap_or(V::Null)
@@ -411,10 +432,17 @@ impl Interp {
         if name == b"this" {
             return self.frames.borrow().last().is_some_and(|f| f.this.is_some());
         }
+        if name == b"GLOBALS" || self.static_key(name).is_some() {
+            return true;
+        }
         self.frames.borrow().last().is_some_and(|f| f.vars.contains_key(name))
     }
 
     fn set_var(&self, name: &[u8], v: V) {
+        if let Some(k) = self.static_key(name) {
+            self.statics.borrow_mut().insert(k, v);
+            return;
+        }
         let mut f = self.frames.borrow_mut();
         if let Some(fr) = f.last_mut() {
             fr.vars.insert(name.to_vec(), v);
@@ -460,8 +488,14 @@ impl Interp {
     }
 
     fn dom_err(&self, e: DomError, func: &str, params: &[&str]) -> Flow {
+        let variadic_from = php_dom::classes::find_method(func.split("::").next().unwrap_or(""), func.split("::").nth(1).unwrap_or(""))
+            .and_then(|(_, m)| m.params.iter().position(|p| p.variadic));
         let arg_prefix = |arg: u32| {
-            let pname = params.get(arg as usize - 1).copied().unwrap_or("");
+            let idx = arg as usize - 1;
+            if variadic_from.is_some_and(|v| idx >= v) {
+                return format!("{func}(): Argument #{arg} ");
+            }
+            let pname = params.get(idx).copied().unwrap_or("");
             format!("{func}(): Argument #{arg} (${pname}) ")
         };
         let v = match e {
@@ -666,13 +700,19 @@ impl Interp {
                 Ok(())
             }
             StmtKind::Static(vars) => {
+                let fkey = format!("{}#{}", self.frames.borrow().last().map(|f| f.func.clone()).unwrap_or_default(), s.span.start);
                 for sv in vars {
-                    if !self.var_exists(&sv.name.name) {
+                    let key = (fkey.clone(), sv.name.name.clone());
+                    let exists = self.statics.borrow().contains_key(&key);
+                    if !exists {
                         let v = match &sv.default {
                             Some(d) => self.eval(d)?,
                             None => V::Null,
                         };
-                        self.set_var(&sv.name.name, v);
+                        self.statics.borrow_mut().insert(key.clone(), v);
+                    }
+                    if let Some(f) = self.frames.borrow_mut().last_mut() {
+                        f.statics.push(key);
                     }
                 }
                 Ok(())
@@ -831,7 +871,7 @@ impl Interp {
         if let Some(d) = kind_dom {
             if matches!(d, DomObject::NodeList(_) | DomObject::NamedNodeMap(_) | DomObject::TokenList(_)) {
                 let it = dispatch::iterate(&d).map_err(|e| self.dom_err(e, "", &[]))?;
-                return Ok(V::Obj(new_obj("InternalIterator", ObjKind::Iter(it))));
+                return Ok(V::Obj(super::value::new_internal("InternalIterator", ObjKind::Iter(it))));
             }
         }
         if matches!(&*o.kind.borrow(), ObjKind::Iter(_) | ObjKind::ArrayIter { .. }) {
@@ -854,7 +894,54 @@ impl Interp {
             a.set(Key::Str(k.clone()), v.clone());
         }
         let arr = Rc::new(a);
-        Ok(V::Obj(new_obj("ArrayIterator", ObjKind::ArrayIter { arr, pos: 0 })))
+        Ok(V::Obj(super::value::new_internal("ArrayIterator", ObjKind::ArrayIter { arr, pos: 0 })))
+    }
+
+    pub fn const_by_name(&self, n: &str) -> R<V> {
+        let name = Name { kind: NameKind::Unqualified, name: n.as_bytes().to_vec(), span: php_lexer::Span::new(0, 0, 0) };
+        self.constant(&name)
+    }
+
+    pub fn resolve_path_pub(&self, p: &[u8]) -> String {
+        let s = String::from_utf8_lossy(p).into_owned();
+        if s.starts_with('/') { s } else { format!("{}/{}", std::env::current_dir().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default(), s) }
+    }
+
+    pub fn ob_start(&self) {
+        let cur = std::mem::take(&mut *self.out.borrow_mut());
+        self.ob_stack.borrow_mut().push(cur);
+    }
+
+    pub fn ob_end(&self, end: bool) -> Vec<u8> {
+        let contents = self.out.borrow().clone();
+        if end {
+            if let Some(prev) = self.ob_stack.borrow_mut().pop() {
+                *self.out.borrow_mut() = prev;
+            }
+        }
+        contents
+    }
+
+    pub fn clone_value(&self, v: &V) -> R<V> {
+        let V::Obj(o) = v else {
+            return Err(self.throw_err("Error", "__clone method called on non-object"));
+        };
+        if let Some(d) = o.dom() {
+            let c = dispatch::clone_object(&d).map_err(|e| self.dom_err(e, "", &[]))?;
+            let cls = o.class.borrow().clone();
+            let new = new_obj(&cls, ObjKind::Dom(c.clone()));
+            if let DomObject::Node(n) = &c {
+                *n.host_data() = Some(Box::new(Rc::downgrade(&new)));
+            }
+            *new.props.borrow_mut() = o.props.borrow().clone();
+            if self.find_user_method(&cls, "__clone").is_some() {
+                self.call_method(&V::Obj(new.clone()), "__clone", vec![])?;
+            }
+            return Ok(V::Obj(new));
+        }
+        let new = new_obj(&o.class.borrow(), ObjKind::Plain);
+        *new.props.borrow_mut() = o.props.borrow().clone();
+        Ok(V::Obj(new))
     }
 
     pub fn get_iter_pub(&self, o: &Rc<Obj>) -> R<V> {
@@ -1081,6 +1168,13 @@ impl Interp {
             ExprKind::Dim { base, index } => {
                 let b = self.eval(base)?;
                 let Some(index) = index else {
+                    if let V::Obj(o) = &b {
+                        if o.dom().is_some() {
+                            let c = o.class.borrow().clone();
+                            let verb = if c.starts_with("Dom\\") { format!("Cannot append to {c}") } else { format!("Cannot access {c} without offset") };
+                            return Err(self.throw_err("Error", &verb));
+                        }
+                    }
                     return Err(self.throw_err("Error", "Cannot use [] for reading"));
                 };
                 let k = self.eval(index)?;
@@ -1452,6 +1546,13 @@ impl Interp {
         if let Some(v) = self.constants.borrow().get(name.as_bytes()) {
             return Ok(v.clone());
         }
+        if name == "DOM_PHP_ERR" {
+            self.emit_raw("Deprecated", b"Constant DOM_PHP_ERR is deprecated since 8.4, as it is no longer used");
+            return Ok(V::Int(0));
+        }
+        if name == "PHP_MAXPATHLEN" {
+            return Ok(V::Int(4096));
+        }
         let v = match name.as_str() {
             "PHP_EOL" => V::str("\n"),
             "PHP_INT_MAX" => V::Int(i64::MAX),
@@ -1634,8 +1735,8 @@ impl Interp {
                 // Visibility check from the class table.
                 let builtin = d.builtin_class();
                 if let Some(p) = find_prop(builtin, &ns) {
+                    let decl = declaring_class(builtin, &ns).unwrap_or(builtin);
                     if p.set_visibility.is_some() || p.readonly {
-                        let decl = declaring_class(builtin, &ns).unwrap_or(builtin);
                         let in_scope = self.frames.borrow().last().and_then(|f| f.class.clone());
                         let scope = match in_scope {
                             Some(c) => format!("scope {c}"),
@@ -1643,7 +1744,7 @@ impl Interp {
                         };
                         return Err(self.throw_err("Error", &format!("Cannot modify private(set) property {decl}::${ns} from {scope}")));
                     }
-                    let typed = self.coerce_prop(&v, p.ty.unwrap_or("mixed"), &ob.class.borrow(), &ns)?;
+                    let typed = self.coerce_prop(&v, p.ty.unwrap_or("mixed"), decl, &ns)?;
                     let dv = self.to_dom_value(&typed);
                     return dispatch::write_property(&d, &ns, &dv).map(|_| ()).map_err(|e| self.dom_err(e, "", &[]));
                 }
@@ -1661,6 +1762,13 @@ impl Interp {
                 return Ok(V::Null);
             }
             return Err(self.throw_err("TypeError", &format!("Cannot assign null to property {class}::${name} of type {ty}")));
+        }
+        if let V::Obj(o) = v {
+            let cls = o.class.borrow().clone();
+            if (base == "string" || base.contains("string")) && self.find_user_method(&cls, "__toString").is_some() {
+                let s = self.call_method(v, "__toString", vec![])?;
+                return Ok(V::Str(to_bytes(&s)));
+            }
         }
         match base {
             "string" => match v {
@@ -1863,8 +1971,8 @@ impl Interp {
         for a in &args.args {
             match &a.kind {
                 ArgKind::Positional(e) => pos.push(self.eval(e)?),
-                ArgKind::Unpack(e) => {
-                    if let V::Arr(arr) = self.eval(e)? {
+                ArgKind::Unpack(e) => match self.eval(e)? {
+                    V::Arr(arr) => {
                         for (k, v) in &arr.items {
                             match k {
                                 Key::Int(_) => pos.push(v.clone()),
@@ -1872,7 +1980,19 @@ impl Interp {
                             }
                         }
                     }
-                }
+                    V::Obj(o) => {
+                        let it = self.get_iterator(&o)?;
+                        loop {
+                            let (valid, cur, _) = self.iter_state(&it)?;
+                            if !valid {
+                                break;
+                            }
+                            pos.push(cur);
+                            self.iter_next(&it)?;
+                        }
+                    }
+                    _ => {}
+                },
                 ArgKind::Named { name, value } => named.push((name.name.clone(), self.eval(value)?)),
                 _ => {}
             }
@@ -2055,7 +2175,8 @@ impl Interp {
                     for (i, p) in m.params.iter().enumerate().skip(a.len()) {
                         if let Some((_, v)) = named.iter().find(|(k, _)| k == p.name.as_bytes()) {
                             while a.len() < i {
-                                a.push(self.default_value(p.default));
+                                let d = m.params[a.len()].default;
+                                a.push(self.default_value(d));
                             }
                             a.push(v.clone());
                         }
@@ -2151,6 +2272,9 @@ impl Interp {
             None => (format!("{builtin}::{name}"), Vec::new()),
         };
         if lc(name) == "__construct" {
+            if let Some(err) = self.arity_error(builtin, name, args.len(), &decl) {
+                return Err(err);
+            }
             let dargs: Vec<DomValue> = args.iter().map(|a| self.to_dom_value(a)).collect();
             let saved = self.cur_fn.replace(decl.clone());
             let r = dispatch::construct(d, &dargs, self);
@@ -2163,6 +2287,9 @@ impl Interp {
                 Ok(None) => Ok(V::Null),
                 Err(e) => Err(self.dom_err(e, &decl, &params)),
             };
+        }
+        if let Some(err) = self.arity_error(builtin, name, args.len(), &decl) {
+            return Err(err);
         }
         let dargs: Vec<DomValue> = args.iter().map(|a| self.to_dom_value(a)).collect();
         let saved = self.cur_fn.replace(decl.clone());
@@ -2184,6 +2311,22 @@ impl Interp {
                 Err(f)
             }
         }
+    }
+
+    fn arity_error(&self, class: &str, method: &str, n: usize, decl: &str) -> Option<Flow> {
+        let (_, m) = php_dom::classes::find_method(class, method)?;
+        let min = m.required_args();
+        let variadic = m.params.iter().any(|p| p.variadic);
+        let max = m.params.len();
+        let (kind, cnt) = if n < min {
+            (if min == max && !variadic { "exactly" } else { "at least" }, min)
+        } else if !variadic && n > max {
+            (if min == max { "exactly" } else { "at most" }, max)
+        } else {
+            return None;
+        };
+        let plural = if cnt == 1 { "argument" } else { "arguments" };
+        Some(self.throw_err("ArgumentCountError", &format!("{decl}() expects {kind} {cnt} {plural}, {n} given")))
     }
 
     fn static_call(&self, class: &ClassRef, name: &str, args: Vec<V>, named: Vec<(Vec<u8>, V)>) -> R<V> {
@@ -2266,7 +2409,12 @@ impl Interp {
             }
         }
         let (decl, params): (String, Vec<&'static str>) = match php_dom::classes::find_method(&dom_class, name) {
-            Some((c, m)) => (format!("{}::{}", c.name, m.name), m.params.iter().map(|p| p.name).collect()),
+            Some((c, m)) => {
+                if !m.is_static {
+                    return Err(self.throw_err("Error", &format!("Non-static method {}::{}() cannot be called statically", c.name, m.name)));
+                }
+                (format!("{}::{}", c.name, m.name), m.params.iter().map(|p| p.name).collect())
+            }
             None => (format!("{dom_class}::{name}"), Vec::new()),
         };
         let dargs: Vec<DomValue> = args.iter().map(|a| self.to_dom_value(a)).collect();
@@ -2296,7 +2444,7 @@ impl Interp {
                 *n.host_data() = Some(Box::new(Rc::downgrade(&o)));
                 o
             }
-            Some("DOMImplementation") => new_obj(&cname, ObjKind::Dom(DomObject::Implementation(php_dom::Implementation { modern: false }))),
+            Some(b) if dispatch::instantiate(b).is_some() => new_obj(&cname, ObjKind::Dom(dispatch::instantiate(b).expect("checked"))),
             _ => new_obj(&cname, ObjKind::Plain),
         };
         // default props
@@ -2335,7 +2483,8 @@ impl Interp {
                             for (i, p) in m.params.iter().enumerate().skip(a.len()) {
                                 if let Some((_, v)) = named.iter().find(|(k, _)| k == p.name.as_bytes()) {
                                     while a.len() < i {
-                                        a.push(self.default_value(p.default));
+                                        let d = m.params[a.len()].default;
+                                        a.push(self.default_value(d));
                                     }
                                     a.push(v.clone());
                                 }
@@ -2577,6 +2726,25 @@ impl DomHost for Interp {
         Some(self.canonical_class(class))
     }
 
+    fn resolve_callable(&self, name: &[u8]) -> Result<HostCallable, String> {
+        let n = String::from_utf8_lossy(name).into_owned();
+        if let Some((c, m)) = n.split_once("::") {
+            if self.find_user_method(c, m).is_some() {
+                return Ok(Rc::new(HostFn(V::Str(name.to_vec()))));
+            }
+            if !self.class_exists(c) {
+                return Err(format!("class \"{c}\" not found"));
+            }
+            return Err(format!("class {c} does not have a method \"{m}\""));
+        }
+        let exists = self.functions.borrow().contains_key(&n.to_ascii_lowercase().into_bytes()) || is_builtin_fn(&n);
+        if exists {
+            Ok(Rc::new(HostFn(V::Str(name.to_vec()))))
+        } else {
+            Err(format!("function \"{n}\" not found or invalid function name"))
+        }
+    }
+
     fn call(&self, callable: &HostCallable, args: Vec<XPathArg>) -> Result<XPathReturn, DomError> {
         let f = match callable.downcast_ref::<HostFn>() {
             Some(h) => h.0.clone(),
@@ -2701,6 +2869,10 @@ pub fn to_num(v: &V) -> V {
         V::Arr(a) => V::Int(i64::from(a.len() > 0)),
         V::Obj(_) => V::Int(1),
     }
+}
+
+pub fn to_f_pub(v: &V) -> f64 {
+    to_f(v)
 }
 
 pub fn to_int(v: &V) -> i64 {

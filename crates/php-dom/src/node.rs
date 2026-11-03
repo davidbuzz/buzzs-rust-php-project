@@ -438,6 +438,8 @@ impl Node {
     /// `$prefix = $value` (legacy).
     pub fn set_prefix(&self, value: &[u8]) -> DomResult<()> {
         let n = self.prop_node()?;
+        // The C code works on the NUL-terminated view of the string.
+        let value = &value[..value.iter().position(|&b| b == 0).unwrap_or(value.len())];
         let t = n.t();
         if t != ffi::XML_ELEMENT_NODE && t != ffi::XML_ATTRIBUTE_NODE {
             return Ok(());
@@ -1753,5 +1755,56 @@ pub(crate) fn clone_node_raw(
             // SAFETY: live node.
             N::new(unsafe { ffi::xmlDocCopyNode(node.p(), doc, extended) })
         }
+    }
+}
+
+impl Node {
+    /// `clone $node` (`dom_objects_store_clone_obj`): a deep copy of the
+    /// node with the same PHP class. User properties are the embedder's.
+    pub fn clone_object(&self) -> DomResult<Node> {
+        if let Some(n) = self.n() {
+            if n.t() == ffi::XML_NAMESPACE_DECL {
+                let c = crate::xpath::clone_namespace_node(self).ok_or_else(|| DomError::dom(C::InvalidState))?;
+                c.set_class_name(self.class_name());
+                return Ok(c);
+            }
+        }
+        let Some(n) = self.n() else {
+            let c = Node::new_unbound(self.class_name(), self.builtin_class());
+            return Ok(c);
+        };
+        let mut private = None;
+        if self.is_modern() {
+            private = Some(if n.is_doc() {
+                crate::ns::PrivateData::create()
+            } else {
+                self.doc_ref()
+                    .and_then(|d| d.private_data())
+                    .unwrap_or_else(crate::ns::PrivateData::create)
+            });
+        }
+        let cloned = {
+            let mut mapper = private.as_ref().map(|p| p.mapper.borrow_mut());
+            clone_node_raw(mapper.as_deref_mut(), n, n.doc_ptr(), true)
+        };
+        let Some(c) = cloned else {
+            return Ok(Node::new_unbound(self.class_name(), self.builtin_class()));
+        };
+        let obj = if c.doc_ptr() == n.doc_ptr() && !c.is_doc() {
+            Node::wrap_with_doc(c, self.doc_ref())
+        } else {
+            let doc = crate::object::DocInner::new(c.doc_ptr());
+            if let Some(src) = self.doc_ref() {
+                crate::document::copy_document_ref(&src, &doc);
+            }
+            if c.is_doc() {
+                *doc.private.borrow_mut() = private;
+            }
+            Node::wrap_with_doc(c, Some(doc))
+        };
+        obj.set_class_name(self.class_name());
+        obj.set_builtin_class(self.builtin_class());
+        obj.set_family_modern(self.family_is_modern());
+        Ok(obj)
     }
 }

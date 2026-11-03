@@ -617,6 +617,7 @@ fn call_xpath(x: &XPath, a: &Args<'_>, m: &str, host: &dyn DomHost) -> DomResult
             Ok(x.eval(&expr, ctx.as_ref(), reg, m == "evaluate", host)?.into_value())
         }
         "registernamespace" => Ok(DomValue::Bool(x.register_namespace(&a.str(0)?, &a.str(1)?)?)),
+        "quote" => Ok(DomValue::Str(XPath::quote(&a.path(0)?))),
         "registerphpfunctions" => {
             let r = match a.get(0) {
                 None | Some(DomValue::Null) => Restrict::All,
@@ -653,6 +654,20 @@ fn call_xpath(x: &XPath, a: &Args<'_>, m: &str, host: &dyn DomHost) -> DomResult
             let c = match a.get(2) {
                 Some(DomValue::Callable(c)) => c.clone(),
                 Some(DomValue::Str(s)) => host_resolve(host, s).map_err(|e| DomError::arg_type(3, format!("must be a valid callback, {e}")))?,
+                Some(DomValue::Array(items)) if items.len() == 2 => {
+                    let mut key = Vec::new();
+                    for (_, v) in items {
+                        if !key.is_empty() {
+                            key.extend_from_slice(b"::");
+                        }
+                        match v {
+                            DomValue::Str(s) => key.extend_from_slice(s),
+                            DomValue::Node(n) => key.extend_from_slice(n.class_name().as_bytes()),
+                            other => key.extend_from_slice(other.type_name().as_bytes()),
+                        }
+                    }
+                    host_resolve(host, &key).map_err(|e| DomError::arg_type(3, format!("must be a valid callback, {e}")))?
+                }
                 Some(DomValue::Other(e)) => return Err(DomError::arg_type(3, format!("must be a valid callback, {e}"))),
                 _ => return Err(a.type_err(2, "callable")),
             };
@@ -664,9 +679,7 @@ fn call_xpath(x: &XPath, a: &Args<'_>, m: &str, host: &dyn DomHost) -> DomResult
 }
 
 fn host_resolve(host: &dyn DomHost, name: &[u8]) -> Result<crate::host::HostCallable, String> {
-    let _ = host;
-    let rc: crate::host::HostCallable = Rc::new(name.to_vec());
-    Ok(rc)
+    host.resolve_callable(name)
 }
 
 /// Static methods (`createFromString`, `quote`, …).
@@ -979,7 +992,7 @@ fn call_node_2(
             DomValue::opt_node(n.get_attribute_node_ns(ns.as_deref(), &a.str(1)?)?)
         }
         "getelementsbytagname" => {
-            let name = a.path(0).map_err(|_| a.type_err(0, "string"))?;
+            let name = a.path(0)?;
             DomValue::NodeList(n.get_elements_by_tag_name(&name)?)
         }
         "getelementsbytagnamens" => {
@@ -1497,4 +1510,30 @@ pub fn debug_info(obj: &DomObject) -> Vec<(&'static str, DomValue)> {
 #[allow(dead_code)]
 fn _codes() -> C {
     C::InvalidState
+}
+
+/// `clone $obj`.
+pub fn clone_object(obj: &DomObject) -> DomResult<DomObject> {
+    match obj {
+        DomObject::Node(n) => Ok(DomObject::Node(n.clone_object()?)),
+        DomObject::Implementation(i) if !i.modern => Ok(obj.clone()),
+        other => Err(DomError::Error(format!(
+            "Trying to clone an uncloneable object of class {}",
+            other.builtin_class()
+        ))),
+    }
+}
+
+/// Creates the native state for `new Class()` of a non-node DOM class
+/// (`new DOMNodeList()` and friends yield empty collections).
+pub fn instantiate(builtin: &str) -> Option<DomObject> {
+    use crate::lists::{new_list, new_map, MapKind};
+    let c = crate::classes::find_class(builtin)?;
+    Some(match c.name {
+        "DOMNodeList" | "Dom\\NodeList" | "Dom\\HTMLCollection" => DomObject::NodeList(new_list(c.name, None, MapKind::Noop)),
+        "DOMNamedNodeMap" | "Dom\\NamedNodeMap" | "Dom\\DtdNamedNodeMap" => DomObject::NamedNodeMap(new_map(c.name, None, MapKind::Noop)),
+        "DOMImplementation" => DomObject::Implementation(Implementation { modern: false }),
+        "Dom\\Implementation" => DomObject::Implementation(Implementation { modern: true }),
+        _ => return None,
+    })
 }

@@ -54,6 +54,12 @@ pub trait DomHost {
         Some(class.to_string())
     }
 
+    /// Resolves a callable given by name (`zend_is_callable`): the error
+    /// is the text PHP appends after "must be a callable, ".
+    fn resolve_callable(&self, name: &[u8]) -> Result<HostCallable, String> {
+        Ok(Rc::new(name.to_vec()))
+    }
+
     /// Calls a registered callable with XPath arguments.
     fn call(&self, callable: &HostCallable, args: Vec<XPathArg>) -> Result<XPathReturn, DomError>;
 

@@ -121,8 +121,67 @@ fn domain_label(domain: i32) -> &'static str {
     }
 }
 
-/// `xmlReportError`'s formatting (without the source-context lines).
-fn report_error_format(e: &ffi::xmlError, ctxt: *mut ffi::xmlParserCtxt) -> Vec<u8> {
+/// `xmlParserPrintFileContextInternal`: the source line and a caret line.
+fn file_context(input: *mut ffi::xmlParserInput) -> Vec<Vec<u8>> {
+    // SAFETY: input is NULL or a live parser input whose cur/base point
+    // into its NUL-terminated buffer.
+    unsafe {
+        if input.is_null() || (*input).cur.is_null() {
+            return Vec::new();
+        }
+        let base = (*input).base;
+        let mut cur = (*input).cur;
+        while cur > base && (*cur == b'\n' || *cur == b'\r') {
+            cur = cur.sub(1);
+        }
+        let mut n = 0;
+        loop {
+            let cont = n < 80 && cur > base && *cur != b'\n' && *cur != b'\r';
+            n += 1;
+            if !cont {
+                break;
+            }
+            cur = cur.sub(1);
+        }
+        if *cur == b'\n' || *cur == b'\r' {
+            cur = cur.add(1);
+        }
+        let col = usize::try_from((*input).cur.offset_from(cur)).unwrap_or(0);
+        let mut content = Vec::new();
+        let mut p = cur;
+        while *p != 0 && *p != b'\n' && *p != b'\r' && content.len() < 80 {
+            content.push(*p);
+            p = p.add(1);
+        }
+        let mut caret = Vec::new();
+        let mut i = 0;
+        while i < col && i < 79 && i < content.len() {
+            caret.push(if content[i] == b'\t' { b'\t' } else { b' ' });
+            i += 1;
+        }
+        caret.push(b'^');
+        vec![content, caret]
+    }
+}
+
+/// `xmlReportError`'s formatting: the message plus source-context lines.
+fn report_error_format(e: &ffi::xmlError, ctxt: *mut ffi::xmlParserCtxt) -> Vec<Vec<u8>> {
+    let mut lines = vec![report_error_head(e, ctxt)];
+    if !ctxt.is_null() {
+        // SAFETY: live context.
+        let input = unsafe {
+            let mut input = (*ctxt).input;
+            if !input.is_null() && (*input).filename.is_null() && (*ctxt).inputNr > 1 {
+                input = *(*ctxt).inputTab.add(usize::try_from((*ctxt).inputNr - 2).unwrap_or(0));
+            }
+            input
+        };
+        lines.extend(file_context(input));
+    }
+    lines
+}
+
+fn report_error_head(e: &ffi::xmlError, ctxt: *mut ffi::xmlParserCtxt) -> Vec<u8> {
     let mut out = Vec::new();
     // SAFETY: e is a valid error record; ctxt is NULL or a live context.
     unsafe {
@@ -246,6 +305,15 @@ unsafe fn trampoline_inner(err: *mut ffi::xmlError) {
     }
     let from_parser_ctxt = is_parser_domain(e.domain) && !e.ctxt.is_null();
     if from_parser_ctxt && e.ctxt.cast() == ctxt && installed {
+        // LIBXML_NOERROR / LIBXML_NOWARNING clear the SAX channels.
+        // SAFETY: ctxt is the live context owned by the scope.
+        let silenced = unsafe {
+            let sax = (*ctxt).sax;
+            !sax.is_null() && if e.level == 1 { (*sax).warning.is_none() } else { (*sax).error.is_none() }
+        };
+        if silenced {
+            return;
+        }
         // SAFETY: message is NULL or a valid C string.
         let msg = unsafe { opt_cstr(e.message.cast()) }.unwrap_or_default().to_vec();
         let pos = parser_position(ctxt);
@@ -258,8 +326,9 @@ unsafe fn trampoline_inner(err: *mut ffi::xmlError) {
     }
     if from_parser_ctxt {
         let c = if e.ctxt.cast() == ctxt { ctxt } else { e.ctxt.cast() };
-        let text = report_error_format(e, c);
-        lxerr::issue_error(DiagnosticLevel::Warning, &text);
+        for line in report_error_format(e, c) {
+            lxerr::issue_error(DiagnosticLevel::Warning, &line);
+        }
         return;
     }
     forward();

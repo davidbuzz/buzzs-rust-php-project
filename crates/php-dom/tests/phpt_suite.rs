@@ -54,6 +54,7 @@ enum Outcome {
 
 fn run_php(file: &Path, src: &[u8]) -> Vec<u8> {
     php_libxml::error::reset_request_state();
+    minphp::value::reset_ids();
     let i = minphp::interp::Interp::new(&file.to_string_lossy());
     i.run(src);
     let out = i.out.borrow().clone();
@@ -74,6 +75,14 @@ fn run_one(path: &Path) -> Outcome {
         }
     }
     let php_path = path.with_extension("php");
+    if let Some(env) = test.section("ENV") {
+        for line in String::from_utf8_lossy(env).lines() {
+            if let Some((k, v)) = line.split_once('=') {
+                // SAFETY-free: tests run on a single thread.
+                std::env::set_var(k.trim(), v.trim());
+            }
+        }
+    }
     if let Some(skip) = test.section("SKIPIF") {
         let out = run_php(&php_path, skip);
         let o = String::from_utf8_lossy(&out).trim().to_ascii_lowercase();
@@ -161,6 +170,7 @@ fn phpt_dom_suite() {
                     Outcome::Fail(d) => {
                         fail += 1;
                         report.push_str(&format!("FAIL {name}\n"));
+                        let _ = std::fs::write(format!("{}.diff", f.with_extension("").display()), d);
                         if verbose {
                             eprintln!("FAIL {name}\n{d}");
                         }

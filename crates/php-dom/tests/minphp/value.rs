@@ -125,6 +125,7 @@ pub enum ObjKind {
 
 pub struct Obj {
     pub id: usize,
+    pub gen: usize,
     pub class: RefCell<String>,
     pub kind: RefCell<ObjKind>,
     pub props: RefCell<Vec<(Vec<u8>, V)>>,
@@ -159,6 +160,14 @@ impl Obj {
 thread_local! {
     pub static NEXT_ID: std::cell::Cell<usize> = const { std::cell::Cell::new(1) };
     pub static FREE_IDS: RefCell<Vec<usize>> = const { RefCell::new(Vec::new()) };
+    pub static GEN: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Starts a fresh object-handle space (one per test script).
+pub fn reset_ids() {
+    GEN.with(|g| g.set(g.get() + 1));
+    NEXT_ID.with(|n| n.set(1));
+    FREE_IDS.with(|f| f.borrow_mut().clear());
 }
 
 pub fn new_obj(class: &str, kind: ObjKind) -> Rc<Obj> {
@@ -171,6 +180,7 @@ pub fn new_obj(class: &str, kind: ObjKind) -> Rc<Obj> {
     });
     Rc::new(Obj {
         id,
+        gen: GEN.with(std::cell::Cell::get),
         class: RefCell::new(class.to_string()),
         kind: RefCell::new(kind),
         props: RefCell::new(Vec::new()),
@@ -180,10 +190,19 @@ pub fn new_obj(class: &str, kind: ObjKind) -> Rc<Obj> {
 impl Drop for Obj {
     fn drop(&mut self) {
         let id = self.id;
-        FREE_IDS.with(|f| {
-            let mut f = f.borrow_mut();
-            f.push(id);
-            f.sort_unstable_by(|a, b| b.cmp(a));
-        });
+        if id != 0 && self.gen == GEN.with(std::cell::Cell::get) {
+            FREE_IDS.with(|f| f.borrow_mut().push(id));
+        }
     }
+}
+
+/// An object that does not consume an object handle (engine-internal).
+pub fn new_internal(class: &str, kind: ObjKind) -> Rc<Obj> {
+    Rc::new(Obj {
+        id: 0,
+        gen: 0,
+        class: RefCell::new(class.to_string()),
+        kind: RefCell::new(kind),
+        props: RefCell::new(Vec::new()),
+    })
 }
