@@ -21,7 +21,30 @@
 //! * Arrays travel as [`PhpArray`] / [`PhpValue`].
 //! * All `unsafe` lives in [`ffi`].
 //!
-//! The TLS stream transport is described (not implemented) in [`tls`].
+//! The TLS stream transport (option table, state machine and a client
+//! handshake over any `Read + Write`) lives in [`tls`].
+//!
+//! # Function map (for the VM bindings)
+//!
+//! | PHP | Rust |
+//! |---|---|
+//! | `openssl_encrypt` / `openssl_decrypt` | [`OpenSsl::encrypt`] / [`OpenSsl::decrypt`] |
+//! | `openssl_cipher_iv_length` / `_key_length` | [`OpenSsl::cipher_iv_length`] / [`OpenSsl::cipher_key_length`] |
+//! | `openssl_digest`, `openssl_pbkdf2`, `openssl_random_pseudo_bytes` | [`OpenSsl::digest`], [`OpenSsl::pbkdf2`], [`OpenSsl::random_pseudo_bytes`] |
+//! | `openssl_get_md_methods` / `_cipher_methods` / `_curve_names` / `openssl_get_cert_locations` | `get_*` methods |
+//! | `openssl_pkey_new` / `_export` / `_export_to_file` / `_get_public` (`openssl_get_publickey`) / `_get_private` (`openssl_get_privatekey`) / `_get_details` / `_free` (`openssl_free_key`) / `_derive`, `openssl_dh_compute_key` | `pkey_*`, [`OpenSsl::dh_compute_key`] |
+//! | `openssl_x509_*` | `x509_*` |
+//! | `openssl_csr_*` | `csr_*` |
+//! | `openssl_{private,public}_{encrypt,decrypt}`, `openssl_sign`, `openssl_verify`, `openssl_seal`, `openssl_open` | same names |
+//! | `openssl_pkcs7_*`, `openssl_cms_*`, `openssl_pkcs12_*`, `openssl_spki_*` | same names |
+//! | `openssl_error_string` | [`OpenSsl::error_string`] |
+//!
+//! Argument-count/type errors (`zpp`) are the VM's job, as is converting
+//! zvals into [`KeyArg`]/[`CertArg`]/[`CsrArg`] (objects with `__toString`
+//! become strings; non-string scalars become [`KeyArg::Other`] for keys and
+//! are stringified for certificates). The three classes are final, not
+//! serializable, not cloneable, not comparable, and their constructors throw
+//! `Error` with [`CONSTRUCT_ERRORS`].
 
 // The ports deliberately mirror php-src's C functions (one Rust function
 // per C function, same variable names such as `n`/`e`/`d`, `dmp1`/`dmq1`)
@@ -54,6 +77,22 @@ pub mod x509;
 pub use args::{AsymmetricKey, CertArg, Certificate, CertificateSigningRequest, CsrArg, KeyArg};
 pub use error::{Diagnostic, ErrorQueue, Level, PhpResult, Throw};
 pub use value::{BoolOrInt, Key, PhpArray, PhpValue};
+
+/// `Error` messages thrown by the class constructors, by class name.
+pub const CONSTRUCT_ERRORS: [(&str, &str); 3] = [
+    (
+        "OpenSSLCertificate",
+        "Cannot directly construct OpenSSLCertificate, use openssl_x509_read() instead",
+    ),
+    (
+        "OpenSSLCertificateSigningRequest",
+        "Cannot directly construct OpenSSLCertificateSigningRequest, use openssl_csr_new() instead",
+    ),
+    (
+        "OpenSSLAsymmetricKey",
+        "Cannot directly construct OpenSSLAsymmetricKey, use openssl_pkey_new() instead",
+    ),
+];
 
 /// Per-request state of the openssl extension.
 #[derive(Debug)]
