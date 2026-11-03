@@ -266,6 +266,21 @@ impl Vm {
             }
         };
         let cls = self.resolve_class_spec(spec)?;
+        // Trait constants are only reachable through a using class.
+        if cls.is_trait()
+            && cls
+                .find_const(name.as_bytes())
+                .is_some_and(|c| c.flags & flags::VISIBILITY == flags::PUBLIC)
+        {
+            return Err(self.make_throw(
+                "Error",
+                &format!(
+                    "Cannot access trait constant {}::{} directly",
+                    cls.name,
+                    name.to_string_lossy()
+                ),
+            ));
+        }
         // Inside a constant expression php-src goes through
         // `zend_get_class_constant_ex`, whose errors name the class as
         // written (`self::X`) and which marks the constant while evaluating
@@ -1059,6 +1074,21 @@ impl Vm {
         for w in &link_out.warnings {
             self.error_at(crate::errors::level::COMPILE_WARNING, w, &decl.filename, line)?;
         }
+        for (a, b, msg) in &link_out.value_checks {
+            // A failed evaluation makes the values incompatible.
+            let mut eval = |e: &ConstExpr| match self.eval_const_expr(e, Some(&cls)) {
+                Ok(v) => Ok(Some(v)),
+                Err(Throw::Exception(_)) => Ok(None),
+                Err(t) => Err(t),
+            };
+            let identical = match (eval(a)?, eval(b)?) {
+                (Some(x), Some(y)) => php_runtime::ops::is_identical(&x, &y).unwrap_or(false),
+                _ => false,
+            };
+            if !identical {
+                return Err(self.fatal_at(msg, line));
+            }
+        }
         // Inheritance checks for overridden methods.
         if let Some(e) = check_method_inheritance(&cls) {
             return Err(self.fatal_at(&e.0, e.1));
@@ -1176,6 +1206,10 @@ struct LinkOut {
     trait_checks: Vec<TraitAbstractCheck>,
     /// `E_COMPILE_WARNING`s raised while binding traits.
     warnings: Vec<String>,
+    /// Trait constant values and property defaults that must be identical
+    /// once evaluated (`check_trait_property_or_constant_value_compatibility`),
+    /// with the error to raise if they are not.
+    value_checks: Vec<(ConstExpr, ConstExpr, String)>,
 }
 
 /// An abstract trait method (`proto`, still scoped to its trait) that an
@@ -1397,6 +1431,64 @@ fn is_valid_class_name(n: &[u8]) -> bool {
             .all(|&c| c.is_ascii_alphanumeric() || c == b'_' || c == b'\\' || c >= 0x80)
 }
 
+/// `do_trait_constant_check` for trait constant `tc` of `traits[ti]` that
+/// meets `existing`, a constant the class already has (its own, an enum
+/// case or one of an earlier trait). Values that need evaluating are
+/// compared later by [`Vm::link_class`].
+fn trait_constant_conflict(
+    class: &ZStr,
+    traits: &[Rc<Class>],
+    ti: usize,
+    existing: &Rc<ClassConst>,
+    tc: &Rc<ClassConst>,
+    link_out: &mut LinkOut,
+) -> Option<String> {
+    if existing.is_case {
+        return Some(format!(
+            "Cannot use trait {t}, because {t}::{n} conflicts with enum case {class}::{n}",
+            t = tc.class,
+            n = tc.name
+        ));
+    }
+    // `find_first_constant_definition`.
+    let first = traits[..ti]
+        .iter()
+        .find(|t| t.consts.iter().any(|c| c.name == tc.name))
+        .map_or_else(|| class.clone(), |t| t.name.clone());
+    let msg = format!(
+        "{first} and {} define the same constant ({}) in the composition of {class}. However, the definition differs and is considered incompatible. Class was composed",
+        tc.class, tc.name
+    );
+    let mask = flags::VISIBILITY | flags::FINAL;
+    if existing.flags & mask != tc.flags & mask || existing.ty != tc.ty {
+        return Some(msg);
+    }
+    match (&existing.expr, &tc.expr) {
+        (ConstExpr::Value(a), ConstExpr::Value(b)) => {
+            (!php_runtime::ops::is_identical(a, b).unwrap_or(false)).then_some(msg)
+        }
+        (a, b) => {
+            link_out.value_checks.push((a.clone(), b.clone(), msg));
+            None
+        }
+    }
+}
+
+/// The property declarations of a trait, including those it got from the
+/// traits it uses (its `properties_info` after its own composition).
+fn trait_prop_decls(t: &Rc<Class>) -> Vec<crate::class::PropDecl> {
+    let mut out: Vec<crate::class::PropDecl> =
+        t.decl.as_ref().map(|d| d.props.clone()).unwrap_or_default();
+    for inner in &t.traits {
+        for p in trait_prop_decls(inner) {
+            if !out.iter().any(|q| q.name == p.name) {
+                out.push(p);
+            }
+        }
+    }
+    out
+}
+
 /// `zend_do_traits_property_binding`: the error for a property of trait
 /// `traits[ti]` that collides with an own (or earlier trait's) property of
 /// `class` in an incompatible way. Traits are bound before inheritance, so
@@ -1410,6 +1502,7 @@ fn trait_property_conflict(
     prop_map: &HashMap<ZStr, Rc<PropInfo>>,
     static_map: &HashMap<ZStr, usize>,
     static_props: &[StaticProp],
+    link_out: &mut LinkOut,
 ) -> Option<String> {
     let (cflags_, cty, cdefault, chooked) =
         if let Some(e) = prop_map.get(&pd.name).filter(|e| e.class == *class) {
@@ -1429,11 +1522,7 @@ fn trait_property_conflict(
     // `find_first_property_definition`.
     let first = traits[..ti]
         .iter()
-        .find(|t| {
-            t.decl
-                .as_ref()
-                .is_some_and(|d| d.props.iter().any(|p| p.name == pd.name))
-        })
+        .find(|t| trait_prop_decls(t).iter().any(|p| p.name == pd.name))
         .map_or_else(|| class.clone(), |t| t.name.clone());
     let tname = &traits[ti].name;
     if chooked || pd.hooks.is_some() {
@@ -1442,30 +1531,26 @@ fn trait_property_conflict(
             pd.name
         ));
     }
+    let msg = format!(
+        "{first} and {tname} define the same property (${}) in the composition of {class}. However, the definition differs and is considered incompatible. Class was composed",
+        pd.name
+    );
     let mask = flags::VISIBILITY | flags::STATIC | flags::READONLY;
-    let compatible = cflags_ & mask == pd.flags & mask
-        && cty == pd.ty.as_ref()
-        && trait_defaults_identical(cdefault, pd.default.as_ref());
-    (!compatible).then(|| {
-        format!(
-            "{first} and {tname} define the same property (${}) in the composition of {class}. However, the definition differs and is considered incompatible. Class was composed",
-            pd.name
-        )
-    })
-}
-
-/// `check_trait_property_or_constant_value_compatibility` for defaults
-/// known at link time; defaults that still need evaluation are assumed
-/// compatible.
-fn trait_defaults_identical(a: Option<&ConstExpr>, b: Option<&ConstExpr>) -> bool {
-    match (a, b) {
-        (None, None)
-        | (Some(ConstExpr::Code(_)), Some(_))
-        | (Some(_), Some(ConstExpr::Code(_))) => true,
+    if cflags_ & mask != pd.flags & mask || cty != pd.ty.as_ref() {
+        return Some(msg);
+    }
+    // `check_trait_property_or_constant_value_compatibility`; defaults that
+    // need evaluating are compared by `Vm::link_class`.
+    match (cdefault, pd.default.as_ref()) {
+        (None, None) => None,
         (Some(ConstExpr::Value(x)), Some(ConstExpr::Value(y))) => {
-            php_runtime::ops::is_identical(x, y).unwrap_or(false)
+            (!php_runtime::ops::is_identical(x, y).unwrap_or(false)).then_some(msg)
         }
-        _ => false,
+        (Some(a @ ConstExpr::Code(_)), Some(b)) | (Some(a), Some(b @ ConstExpr::Code(_))) => {
+            link_out.value_checks.push((a.clone(), b.clone(), msg));
+            None
+        }
+        _ => Some(msg),
     }
 }
 
@@ -1494,7 +1579,12 @@ fn check_method_inheritance(cls: &Rc<Class>) -> Option<(String, u32)> {
             Func::User(u) => u.line_start,
             Func::Builtin(_) => 0,
         };
-        if pm.visibility() == flags::PRIVATE {
+        // A private parent method imposes nothing unless it is abstract or
+        // the constructor (`do_inheritance_check_on_method`).
+        if pm.visibility() == flags::PRIVATE
+            && !pm.is_abstract()
+            && lc.as_bytes() != b"__construct"
+        {
             continue;
         }
         if pm.flags & flags::FINAL != 0 {
@@ -1617,20 +1707,6 @@ fn build_class(
             }
         }
     }
-    // Traits' constants.
-    for t in &traits {
-        for c in &t.consts {
-            if !const_map.contains_key(&c.name) {
-                let nc = ClassConst {
-                    class: name.clone(),
-                    value: RefCell::new(None),
-                    evaluating: Cell::new(false),
-                    ..(**c).clone()
-                };
-                add_const(Rc::new(nc), &mut consts, &mut const_map);
-            }
-        }
-    }
     for cd in &decl.consts {
         if let Some(&i) = const_map.get(&cd.name) {
             let existing = &consts[i];
@@ -1682,6 +1758,38 @@ fn build_class(
             &mut consts,
             &mut const_map,
         );
+    }
+
+    // `zend_do_traits_constant_binding` (traits are bound before
+    // inheritance, so a constant inherited from the parent or an interface
+    // is overridden, subject to `do_inherit_constant_check`).
+    for (ti, t) in traits.iter().enumerate() {
+        for c in &t.consts {
+            if let Some(&i) = const_map.get(&c.name) {
+                let existing = consts[i].clone();
+                if existing.class == name {
+                    if err.is_none() {
+                        *err = trait_constant_conflict(&name, &traits, ti, &existing, c, link_out);
+                    }
+                    continue;
+                }
+                if existing.flags & flags::FINAL != 0 && err.is_none() {
+                    *err = Some(format!(
+                        "{display}::{} cannot override final constant {}::{}",
+                        c.name,
+                        object::display_name(&existing.class),
+                        c.name
+                    ));
+                }
+            }
+            let nc = ClassConst {
+                class: name.clone(),
+                value: RefCell::new(None),
+                evaluating: Cell::new(false),
+                ..(**c).clone()
+            };
+            add_const(Rc::new(nc), &mut consts, &mut const_map);
+        }
     }
 
     // Properties.
@@ -1737,10 +1845,8 @@ fn build_class(
         all_props.push((p.clone(), name.clone(), None));
     }
     for (ti, t) in traits.iter().enumerate() {
-        if let Some(td) = &t.decl {
-            for p in &td.props {
-                all_props.push((p.clone(), name.clone(), Some(ti)));
-            }
+        for p in trait_prop_decls(t) {
+            all_props.push((p, name.clone(), Some(ti)));
         }
     }
     for (pd, owner, from_trait) in all_props {
@@ -1753,6 +1859,7 @@ fn build_class(
                 &prop_map,
                 &static_map,
                 &static_props,
+                link_out,
             ) {
                 if err.is_none() {
                     *err = Some(e);
