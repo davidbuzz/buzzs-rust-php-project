@@ -6,7 +6,7 @@ use super::util::{b, i, s, sv};
 use crate::func::Args;
 use crate::object;
 use crate::vm::{Vm, VmResult};
-use php_runtime::{serialize, Value, ZArray, ZStr};
+use php_runtime::{Value, ZArray, ZStr};
 
 fn var_dump(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     for i in 0..a.values.len() {
@@ -58,19 +58,6 @@ fn var_export(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     out.flush(vm);
     r?;
     Ok(Value::Null)
-}
-
-fn serialize_fn(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let v = a.at(0);
-    let out = serialize::serialize(&v, vm).map_err(|e| vm.rt_throw(e))?;
-    Ok(sv(out))
-}
-
-fn unserialize_fn(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let data = s(a, 0);
-    let opts = serialize::UnserializeOptions::default();
-    let r = serialize::unserialize(data.as_bytes(), &opts, vm).map_err(|e| vm.rt_throw(e))?;
-    Ok(r.unwrap_or(Value::Bool(false)))
 }
 
 fn gettype(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -146,7 +133,7 @@ fn settype(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             }
         },
         b"resource" => {
-            return Err(super::util::value_error(vm, a, 2, "must be a valid type"));
+            return Err(vm.make_throw("ValueError", "Cannot convert to resource type"));
         }
         _ => return Err(super::util::value_error(vm, a, 2, "must be a valid type")),
     };
@@ -301,12 +288,7 @@ pub(crate) fn register(vm: &mut Vm) {
         "var_export(mixed $value, bool $return = false): ?string",
         var_export,
     );
-    reg(vm, "serialize(mixed $value): string", serialize_fn);
-    reg(
-        vm,
-        "unserialize(string $data, array $options = []): mixed",
-        unserialize_fn,
-    );
+    super::serial::register(vm);
     reg(vm, "gettype(mixed $value): string", gettype);
     reg(vm, "get_debug_type(mixed $value): string", get_debug_type);
     reg(vm, "settype(mixed &$var, string $type): bool", settype);

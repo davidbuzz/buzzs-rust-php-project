@@ -1,0 +1,1903 @@
+//! `serialize()` / `unserialize()` (`ext/standard/var.c`,
+//! `ext/standard/var_unserializer.re`).
+//!
+//! Like php-src, nested calls share one serialization context: a
+//! `serialize()` made from `Serializable::serialize()` continues the outer
+//! numbering (back-references work across the boundary), and an
+//! `unserialize()` made from `Serializable::unserialize()` sees the outer
+//! `var_hash`; calls made from `__sleep()`, `__serialize()`, `__wakeup()`,
+//! `__unserialize()` and autoloaders get a fresh one (`serialize_lock`).
+//!
+//! Unserialization stores every value in a cell (a [`PhpRef`]) that its
+//! container holds as `Value::Reference`, so `R:` can turn any earlier slot
+//! into a reference; once the payload is complete, cells nobody else shares
+//! are unwrapped back into plain values.
+
+use super::util::{arr, s, sv};
+use crate::class::{cflags, Class, PropInfo};
+use crate::func::{flags, Args};
+use crate::object;
+use crate::typecheck::{given_type, TypeCtx};
+use crate::vm::{Vm, VmResult};
+use php_runtime::dump::unmangle_property_name;
+use php_runtime::float::zend_gcvt;
+use php_runtime::numeric::{handle_numeric_str, strtod};
+use php_runtime::{ArrayKey, HashTable, Obj, PhpRef, PropertyPurpose, Value, ZArray, ZStr};
+use std::cell::{Cell, RefCell};
+use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
+
+const E_WARNING: i64 = 2;
+const E_DEPRECATED: i64 = 8192;
+
+const INCOMPLETE_CLASS: &str = "__PHP_Incomplete_Class";
+const MAGIC_MEMBER: &str = "__PHP_Incomplete_Class_Name";
+/// `HT_MAX_SIZE` (64-bit).
+const HT_MAX_SIZE: i64 = 0x4000_0000;
+
+// ---------------------------------------------------------------------------
+// Shared state (`BG(serialize)`, `BG(unserialize)`, `BG(serialize_lock)`)
+// ---------------------------------------------------------------------------
+
+#[derive(Default)]
+struct SerData {
+    n: i64,
+    /// Identity → `n` of the first occurrence (-1: failed `Serializable`).
+    seen: HashMap<usize, i64>,
+    /// Keeps registered values alive so their addresses stay unique.
+    keep: Vec<Value>,
+}
+
+enum Dtor {
+    /// Kept alive until the end (overwritten values).
+    Keep(#[allow(dead_code)] Value),
+    /// Delayed `__wakeup()`.
+    Wakeup(Obj),
+    /// Delayed `__unserialize($data)`.
+    Unserialize(Obj, Value),
+}
+
+struct UnserData {
+    /// `var_hash` entries (`None`: invalidated after a failure).
+    slots: Vec<Option<PhpRef>>,
+    dtors: Vec<Dtor>,
+    /// Lowercase allowed class names (`None`: all classes).
+    allowed: Option<HashSet<Vec<u8>>>,
+    cur_depth: i64,
+    max_depth: i64,
+    /// Objects created, whose properties need their cells unwrapped.
+    objects: Vec<Obj>,
+    /// Cells targeted by `R:` (true references): an overwritten location
+    /// holding one is detached instead of reused.
+    shared: HashSet<usize>,
+    /// Every cell created by this context.
+    cells: HashSet<usize>,
+}
+
+type SerRc = Rc<RefCell<SerData>>;
+type UnserRc = Rc<RefCell<UnserData>>;
+
+thread_local! {
+    static LOCK: Cell<u32> = const { Cell::new(0) };
+    static SER: RefCell<(u32, Option<SerRc>)> = const { RefCell::new((0, None)) };
+    static UNSER: RefCell<(u32, Option<UnserRc>)> = const { RefCell::new((0, None)) };
+}
+
+/// Runs `f` with `BG(serialize_lock)` raised (user callbacks get a fresh
+/// context).
+fn locked<R>(f: impl FnOnce() -> R) -> R {
+    LOCK.with(|l| l.set(l.get() + 1));
+    let r = f();
+    LOCK.with(|l| l.set(l.get().saturating_sub(1)));
+    r
+}
+
+fn is_locked() -> bool {
+    LOCK.with(Cell::get) > 0
+}
+
+/// `php_var_serialize_init()`.
+fn ser_init() -> SerRc {
+    if is_locked() {
+        return Rc::default();
+    }
+    SER.with(|s| {
+        let mut s = s.borrow_mut();
+        if s.0 == 0 || s.1.is_none() {
+            let d: SerRc = Rc::default();
+            *s = (1, Some(d.clone()));
+            d
+        } else {
+            s.0 += 1;
+            s.1.clone().unwrap_or_default()
+        }
+    })
+}
+
+/// `php_var_serialize_destroy()`.
+fn ser_destroy() {
+    if is_locked() {
+        return;
+    }
+    SER.with(|s| {
+        let mut s = s.borrow_mut();
+        s.0 = s.0.saturating_sub(1);
+        if s.0 == 0 {
+            s.1 = None;
+        }
+    });
+}
+
+// ---------------------------------------------------------------------------
+// serialize
+// ---------------------------------------------------------------------------
+
+/// `php_add_var_hash()`: 0 for a first occurrence, else the earlier number.
+fn add_var_hash(d: &SerRc, var: &Value) -> i64 {
+    let mut d = d.borrow_mut();
+    d.n += 1;
+    let key = match var {
+        Value::Reference(r) => match &*r.borrow() {
+            Value::Object(o) => o.addr(),
+            _ => r.addr(),
+        },
+        Value::Object(o) => o.addr(),
+        _ => return 0,
+    };
+    if let Some(&id) = d.seen.get(&key) {
+        if matches!(var, Value::Reference(_)) && id != -1 {
+            d.n -= 1;
+        }
+        return id;
+    }
+    let n = d.n;
+    d.seen.insert(key, n);
+    d.keep.push(var.clone());
+    0
+}
+
+fn put_long(buf: &mut Vec<u8>, n: i64) {
+    buf.extend_from_slice(format!("i:{n};").as_bytes());
+}
+
+fn put_string(buf: &mut Vec<u8>, s: &[u8]) {
+    buf.extend_from_slice(format!("s:{}:\"", s.len()).as_bytes());
+    buf.extend_from_slice(s);
+    buf.extend_from_slice(b"\";");
+}
+
+fn put_key(buf: &mut Vec<u8>, k: &ArrayKey) {
+    match k {
+        ArrayKey::Int(i) => put_long(buf, *i),
+        ArrayKey::Str(s) => put_string(buf, s.as_bytes()),
+    }
+}
+
+fn put_class_header(buf: &mut Vec<u8>, name: &[u8]) {
+    buf.extend_from_slice(format!("O:{}:\"", name.len()).as_bytes());
+    buf.extend_from_slice(name);
+    buf.extend_from_slice(b"\":");
+}
+
+/// The class name an incomplete object stands for (`php_lookup_class_name`).
+fn incomplete_name(o: &Obj) -> Option<ZStr> {
+    let d = object::data(o);
+    let dynp = d.dynamic.borrow();
+    match dynp.as_ref()?.get(&ArrayKey::Str(ZStr::from(MAGIC_MEMBER))) {
+        Some(Value::Str(s)) => Some(s.clone()),
+        Some(Value::Reference(r)) => match r.get() {
+            Value::Str(s) => Some(s),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+fn is_incomplete(cls: &Class) -> bool {
+    cls.lc_name.as_bytes() == b"__php_incomplete_class"
+}
+
+/// The value written for an element: references nobody else holds are
+/// serialized as plain values.
+fn element(v: &Value) -> Value {
+    match v {
+        Value::Reference(r) if r.refcount() == 1 => r.get(),
+        other => other.clone(),
+    }
+}
+
+struct Serializer<'a> {
+    buf: Vec<u8>,
+    d: &'a SerRc,
+}
+
+impl Serializer<'_> {
+    /// `php_var_serialize_nested_data()`.
+    fn nested(
+        &mut self,
+        vm: &mut Vm,
+        parent: Option<&ZArray>,
+        t: &ZArray,
+        count: usize,
+        mut skip_magic: bool,
+    ) -> VmResult<()> {
+        self.buf.extend_from_slice(format!("{count}:{{").as_bytes());
+        if count > 0 {
+            for (k, v) in t.iter() {
+                if skip_magic
+                    && matches!(k, ArrayKey::Str(s) if s.as_bytes() == MAGIC_MEMBER.as_bytes())
+                {
+                    skip_magic = false;
+                    continue;
+                }
+                put_key(&mut self.buf, k);
+                let data = element(v);
+                if let (Some(p), Value::Array(a)) = (parent, &data) {
+                    if ZArray::ptr_eq(p, a) {
+                        add_var_hash(self.d, &Value::Array(p.clone()));
+                        self.buf.extend_from_slice(b"N;");
+                        continue;
+                    }
+                }
+                self.value(vm, &data)?;
+            }
+        }
+        self.buf.push(b'}');
+        Ok(())
+    }
+
+    /// `php_var_serialize_intern()`.
+    fn value(&mut self, vm: &mut Vm, v: &Value) -> VmResult<()> {
+        let Some(_depth) = super::dump::Depth::enter(vm) else {
+            return Err(super::dump::stack_size_error(vm));
+        };
+        let already = add_var_hash(self.d, v);
+        if already != 0 {
+            if already == -1 {
+                self.buf.extend_from_slice(b"N;");
+                return Ok(());
+            }
+            if matches!(v, Value::Reference(_)) {
+                self.buf
+                    .extend_from_slice(format!("R:{already};").as_bytes());
+                return Ok(());
+            }
+            if matches!(v, Value::Object(_)) {
+                self.buf
+                    .extend_from_slice(format!("r:{already};").as_bytes());
+                return Ok(());
+            }
+        }
+        match v.deref() {
+            Value::Bool(false) => self.buf.extend_from_slice(b"b:0;"),
+            Value::Bool(true) => self.buf.extend_from_slice(b"b:1;"),
+            Value::Null => self.buf.extend_from_slice(b"N;"),
+            Value::Int(i) => put_long(&mut self.buf, i),
+            Value::Float(f) => {
+                let p =
+                    i32::try_from(vm.ini_long("serialize_precision").clamp(-1, 1000)).unwrap_or(17);
+                self.buf.extend_from_slice(b"d:");
+                self.buf
+                    .extend_from_slice(zend_gcvt(f, p, b'.', b'E').as_bytes());
+                self.buf.push(b';');
+            }
+            Value::Str(s) => put_string(&mut self.buf, s.as_bytes()),
+            Value::Array(a) => {
+                self.buf.extend_from_slice(b"a:");
+                let a2 = a.clone();
+                self.nested(vm, Some(&a2), &a, a.len(), false)?;
+            }
+            Value::Object(o) => self.object(vm, &o)?,
+            Value::Resource(_) | Value::Reference(_) => self.buf.extend_from_slice(b"i:0;"),
+        }
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn object(&mut self, vm: &mut Vm, o: &Obj) -> VmResult<()> {
+        let cls = object::class_of(o).clone();
+        if not_serializable(&cls) {
+            return Err(vm.make_throw(
+                "Exception",
+                &format!(
+                    "Serialization of '{}' is not allowed",
+                    cls.name.to_string_lossy()
+                ),
+            ));
+        }
+        if cls.is_enum() {
+            let case = vm.enum_case_name(o).unwrap_or_default();
+            self.buf
+                .extend_from_slice(format!("E:{}:\"", cls.name.len() + 1 + case.len()).as_bytes());
+            self.buf.extend_from_slice(cls.name.as_bytes());
+            self.buf.push(b':');
+            self.buf.extend_from_slice(case.as_bytes());
+            self.buf.extend_from_slice(b"\";");
+            return Ok(());
+        }
+        // `__serialize()` (or a native equivalent).
+        let native = cls.hooks.as_ref().and_then(|h| h.serialize);
+        if native.is_some() || cls.magic.serialize.is_some() {
+            let data = if let Some(m) = cls.magic.serialize.clone() {
+                let r = locked(|| vm.call_method(o, &m, Vec::new()))?;
+                match r.deref() {
+                    Value::Array(a) => Some(a),
+                    _ => {
+                        return Err(vm.make_throw(
+                            "TypeError",
+                            &format!(
+                                "{}::__serialize() must return an array",
+                                object::display_name(&cls.name)
+                            ),
+                        ))
+                    }
+                }
+            } else if let Some(f) = native {
+                locked(|| f(vm, o))?
+            } else {
+                None
+            };
+            if let Some(data) = data {
+                put_class_header(&mut self.buf, cls.name.as_bytes());
+                self.buf
+                    .extend_from_slice(format!("{}:{{", data.len()).as_bytes());
+                for (k, v) in data.iter() {
+                    put_key(&mut self.buf, k);
+                    self.value(vm, &element(v))?;
+                }
+                self.buf.push(b'}');
+                return Ok(());
+            }
+        }
+        // `Serializable` (`zend_user_serialize`): no lock, nested
+        // `serialize()` calls share this context.
+        if cls.instance_of_name(b"serializable") && !is_incomplete(&cls) {
+            let r = vm.call_method_name(o, "serialize", Vec::new())?;
+            match r {
+                Value::Str(data) => {
+                    self.buf
+                        .extend_from_slice(format!("C:{}:\"", cls.name.len()).as_bytes());
+                    self.buf.extend_from_slice(cls.name.as_bytes());
+                    self.buf
+                        .extend_from_slice(format!("\":{}:{{", data.len()).as_bytes());
+                    self.buf.extend_from_slice(data.as_bytes());
+                    self.buf.push(b'}');
+                }
+                Value::Null => {
+                    // Later references to this object become `N;`.
+                    if let Some(id) = self.d.borrow_mut().seen.get_mut(&o.addr()) {
+                        *id = -1;
+                    }
+                    self.buf.extend_from_slice(b"N;");
+                }
+                _ => {
+                    return Err(vm.make_throw(
+                        "Exception",
+                        &format!("{}::serialize() must return a string or NULL", cls.name),
+                    ))
+                }
+            }
+            return Ok(());
+        }
+        if !is_incomplete(&cls) {
+            if let Some(m) = cls.magic.sleep.clone() {
+                let r = locked(|| vm.call_method(o, &m, Vec::new()))?;
+                let Value::Array(names) = r.deref() else {
+                    vm.docref(
+                        E_WARNING,
+                        &format!(
+                            "{}::__sleep() should return an array only containing the names of instance-variables to serialize",
+                            cls.name
+                        ),
+                    )?;
+                    self.buf.extend_from_slice(b"N;");
+                    return Ok(());
+                };
+                let props = Self::sleep_props(vm, o, &cls, &names)?;
+                put_class_header(&mut self.buf, cls.name.as_bytes());
+                let t = ZArray::from_table(props);
+                self.nested(vm, None, &t, t.len(), false)?;
+                return Ok(());
+            }
+        }
+        let (name, incomplete) = if is_incomplete(&cls) {
+            (
+                incomplete_name(o).unwrap_or_else(|| ZStr::from(INCOMPLETE_CLASS)),
+                true,
+            )
+        } else {
+            (cls.name.clone(), false)
+        };
+        put_class_header(&mut self.buf, name.as_bytes());
+        let t = serialize_table(vm, o)?;
+        let mut count = t.len();
+        if count > 0 && incomplete {
+            count -= 1;
+        }
+        self.nested(vm, None, &t, count, incomplete)
+    }
+
+    /// `php_var_serialize_get_sleep_props()`.
+    fn sleep_props(
+        vm: &mut Vm,
+        o: &Obj,
+        cls: &Rc<Class>,
+        names: &ZArray,
+    ) -> VmResult<HashTable> {
+        let props = serialize_table(vm, o)?;
+        let mut out = HashTable::new();
+        for (_, nv) in names.iter() {
+            let nv = nv.deref();
+            if !matches!(nv, Value::Str(_)) {
+                vm.docref(
+                    E_WARNING,
+                    &format!(
+                        "{}::__sleep() should return an array only containing the names of instance-variables to serialize",
+                        cls.name
+                    ),
+                )?;
+            }
+            let name = vm.to_zstr(&nv)?;
+            let mut priv_name = vec![0];
+            priv_name.extend_from_slice(cls.name.as_bytes());
+            priv_name.push(0);
+            priv_name.extend_from_slice(name.as_bytes());
+            let mut prot_name = b"\0*\0".to_vec();
+            prot_name.extend_from_slice(name.as_bytes());
+            let mut done = false;
+            for cand in [name.as_bytes().to_vec(), priv_name, prot_name] {
+                let key = ArrayKey::Str(ZStr::from(cand.as_slice()));
+                if let Some(v) = props.get(&key) {
+                    if out.get(&key).is_some() {
+                        vm.docref(
+                            E_WARNING,
+                            &format!(
+                                "\"{}\" is returned from __sleep() multiple times",
+                                name.to_string_lossy()
+                            ),
+                        )?;
+                    } else {
+                        out.insert(key, v.clone());
+                    }
+                    done = true;
+                    break;
+                }
+                if uninit_typed(o, cls, &cand) {
+                    done = true;
+                    break;
+                }
+            }
+            if !done {
+                vm.docref(
+                    E_WARNING,
+                    &format!(
+                        "\"{}\" returned as member variable from __sleep() but does not exist",
+                        name.to_string_lossy()
+                    ),
+                )?;
+            }
+        }
+        Ok(out)
+    }
+}
+
+/// `zend_get_properties_for(ZEND_PROP_PURPOSE_SERIALIZE)`: an uninitialized
+/// lazy object created with `SKIP_INITIALIZATION_ON_SERIALIZE` serializes
+/// its raw properties instead of being initialized.
+fn serialize_table(vm: &mut Vm, o: &Obj) -> VmResult<ZArray> {
+    const SKIP_INITIALIZATION_ON_SERIALIZE: i64 = 8;
+    let skip = object::data(o)
+        .lazy
+        .borrow()
+        .as_ref()
+        .is_some_and(|i| !i.initialized && i.options & SKIP_INITIALIZATION_ON_SERIALIZE != 0);
+    if skip {
+        let mut t = HashTable::new();
+        for (k, v, _) in vm.object_prop_table(o, false) {
+            if let Some(v) = v {
+                t.insert(k, v);
+            }
+        }
+        return Ok(ZArray::from_table(t));
+    }
+    Ok(vm
+        .props_for(o, PropertyPurpose::Serialize)?
+        .unwrap_or_default())
+}
+
+/// Whether the (mangled) name is a declared typed property that is
+/// uninitialized (silently skipped by `__sleep()`).
+fn uninit_typed(o: &Obj, cls: &Class, mangled: &[u8]) -> bool {
+    let Some(pi) = declared_exact(cls, mangled) else {
+        return false;
+    };
+    pi.ty.is_some()
+        && object::data(o)
+            .slots
+            .borrow()
+            .get(pi.slot as usize)
+            .is_none_or(Option::is_none)
+}
+
+/// The declared property whose mangled name is exactly `key`.
+fn declared_exact<'c>(cls: &'c Class, key: &[u8]) -> Option<&'c PropInfo> {
+    let (c, name) = unmangle_property_name(key);
+    cls.props.iter().map(|p| &**p).find(|p| {
+        if p.flags & flags::STATIC != 0 || p.name.as_bytes() != name {
+            return false;
+        }
+        let vis = p.visibility();
+        match c {
+            None => vis == flags::PUBLIC,
+            Some(b"*") => vis == flags::PROTECTED,
+            Some(cn) => vis == flags::PRIVATE && p.class.as_bytes() == cn,
+        }
+    })
+}
+
+#[allow(clippy::many_single_char_names)]
+fn serialize(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let v = a.values.first().cloned().unwrap_or_default();
+    let d = ser_init();
+    let mut s = Serializer {
+        buf: Vec::new(),
+        d: &d,
+    };
+    // The root: a by-value argument is never a reference.
+    let r = s.value(vm, &v.deref());
+    ser_destroy();
+    r?;
+    Ok(sv(s.buf))
+}
+
+// ---------------------------------------------------------------------------
+// unserialize
+// ---------------------------------------------------------------------------
+
+/// `zend_is_valid_class_name()`.
+fn valid_class_name(name: &[u8]) -> bool {
+    name.iter()
+        .all(|&c| c.is_ascii_alphanumeric() || c == b'_' || c == b'\\' || c >= 0x80)
+}
+
+struct Cursor<'a> {
+    data: &'a [u8],
+    pos: usize,
+}
+
+impl Cursor<'_> {
+    fn at(&self, i: usize) -> u8 {
+        self.data.get(i).copied().unwrap_or(0)
+    }
+
+    fn max(&self) -> usize {
+        self.data.len()
+    }
+
+    /// `uiv = [0-9]+` at `i`; (value, end).
+    fn uiv(&self, i: usize) -> Option<(u64, usize)> {
+        let mut j = i;
+        let mut v: u64 = 0;
+        while j < self.data.len() && self.data[j].is_ascii_digit() {
+            v = v
+                .wrapping_mul(10)
+                .wrapping_add(u64::from(self.data[j] - b'0'));
+            j += 1;
+        }
+        (j > i).then_some((v, j))
+    }
+
+    /// `parse_iv2()`: optional sign, digits; warns on overflow.
+    fn parse_iv2(&self, vm: &mut Vm, i: usize) -> VmResult<(i64, usize)> {
+        let mut j = i;
+        let neg = self.at(j) == b'-';
+        if matches!(self.at(j), b'+' | b'-') {
+            j += 1;
+        }
+        while self.at(j) == b'0' && j < self.data.len() {
+            j += 1;
+        }
+        let start = j;
+        let mut v: u128 = 0;
+        while j < self.data.len() && self.data[j].is_ascii_digit() {
+            v = (v * 10 + u128::from(self.data[j] - b'0')).min(u128::from(u64::MAX) + 1);
+            j += 1;
+        }
+        let limit: u128 = if neg { 1 << 63 } else { (1 << 63) - 1 };
+        // MAX_LENGTH_OF_LONG - 1 = 19 digits at most.
+        if j - start > 19 || v > limit {
+            vm.docref(E_WARNING, "Numerical result out of range")?;
+            return Ok((if neg { i64::MIN } else { i64::MAX }, j));
+        }
+        #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+        let r = if neg {
+            (v as u64).wrapping_neg() as i64
+        } else {
+            v as i64
+        };
+        Ok((r, j))
+    }
+
+    /// End of a `d:` payload matching `iv | nv | nvexp`.
+    fn float_end(&self, i: usize) -> Option<usize> {
+        let mut j = i;
+        if matches!(self.at(j), b'+' | b'-') {
+            j += 1;
+        }
+        let int_start = j;
+        while j < self.data.len() && self.data[j].is_ascii_digit() {
+            j += 1;
+        }
+        let int_digits = j - int_start;
+        let mut is_nv = false;
+        if self.at(j) == b'.' {
+            let f = j + 1;
+            let mut k = f;
+            while k < self.data.len() && self.data[k].is_ascii_digit() {
+                k += 1;
+            }
+            if int_digits == 0 && k == f {
+                return None;
+            }
+            j = k;
+            is_nv = true;
+        } else if int_digits == 0 {
+            return None;
+        }
+        let _ = is_nv;
+        if matches!(self.at(j), b'e' | b'E') {
+            let mut k = j + 1;
+            if matches!(self.at(k), b'+' | b'-') {
+                k += 1;
+            }
+            let (_, e) = self.uiv(k)?;
+            j = e;
+        }
+        Some(j)
+    }
+}
+
+/// What a parse step produced (`return 0` is `None`).
+type Step = VmResult<Option<Value>>;
+
+struct Unserializer<'a> {
+    cur: Cursor<'a>,
+    d: UnserRc,
+}
+
+fn warn_depth(vm: &mut Vm, max: i64) -> VmResult<()> {
+    vm.docref(
+        E_WARNING,
+        &format!(
+            "Maximum depth of {max} exceeded. The depth limit can be changed using the max_depth unserialize() option or the unserialize_max_depth ini setting"
+        ),
+    )
+}
+
+impl Unserializer<'_> {
+    fn push_dtor(&self, d: Dtor) {
+        self.d.borrow_mut().dtors.push(d);
+    }
+
+    /// Whether `c` is a cell of this unserialization.
+    fn own(&self, c: &PhpRef) -> bool {
+        self.d.borrow().cells.contains(&c.addr())
+    }
+
+    fn enter_depth(&self, vm: &mut Vm) -> VmResult<bool> {
+        let (cur, max) = {
+            let d = self.d.borrow();
+            (d.cur_depth, d.max_depth)
+        };
+        if max > 0 && cur >= max {
+            warn_depth(vm, max)?;
+            return Ok(false);
+        }
+        self.d.borrow_mut().cur_depth += 1;
+        Ok(true)
+    }
+
+    fn leave_depth(&self) {
+        self.d.borrow_mut().cur_depth -= 1;
+    }
+
+    /// An array/object key (`var_hash == NULL`): `i:`, `s:` or `S:` only.
+    fn key(&mut self, vm: &mut Vm) -> VmResult<Option<ArrayKey>> {
+        let start = self.cur.pos;
+        match self.cur.at(start) {
+            b'a' if self.cur.at(start + 1) == b':' => {
+                // `"a:" uiv ":" "{"` sets the cursor before `!var_hash` fails.
+                if let Some((_, end)) = self.cur.uiv(start + 2) {
+                    if self.cur.at(end) == b':' && self.cur.at(end + 1) == b'{' {
+                        self.cur.pos = end + 2;
+                    }
+                }
+                return Ok(None);
+            }
+            b'R' | b'r' if self.cur.at(start + 1) == b':' => {
+                if let Some((_, end)) = self.cur.uiv(start + 2) {
+                    if self.cur.at(end) == b';' {
+                        self.cur.pos = end + 1;
+                    }
+                }
+                return Ok(None);
+            }
+            b'}' => {
+                vm.docref(E_WARNING, "Unexpected end of serialized data")?;
+                return Ok(None);
+            }
+            _ => {}
+        }
+        Ok(match self.scalar(vm, true)? {
+            Some(Value::Int(i)) => Some(ArrayKey::Int(i)),
+            Some(Value::Str(s)) => Some(ArrayKey::Str(s)),
+            _ => None,
+        })
+    }
+
+    /// `N;`, `b:`, `i:`, `d:`, `s:`, `S:` (shared by keys and values).
+    #[allow(clippy::too_many_lines)]
+    fn scalar(&mut self, vm: &mut Vm, is_key: bool) -> Step {
+        let start = self.cur.pos;
+        let tag = self.cur.at(start);
+        let colon = self.cur.at(start + 1) == b':';
+        match tag {
+            b'N' if self.cur.at(start + 1) == b';' => {
+                self.cur.pos = start + 2;
+                Ok(Some(Value::Null))
+            }
+            b'b' if colon
+                && matches!(self.cur.at(start + 2), b'0' | b'1')
+                && self.cur.at(start + 3) == b';' =>
+            {
+                self.cur.pos = start + 4;
+                Ok(Some(Value::Bool(self.cur.at(start + 2) == b'1')))
+            }
+            b'i' if colon => {
+                let mut j = start + 2;
+                if matches!(self.cur.at(j), b'+' | b'-') {
+                    j += 1;
+                }
+                let Some((_, end)) = self.cur.uiv(j) else {
+                    return Ok(None);
+                };
+                if self.cur.at(end) != b';' {
+                    return Ok(None);
+                }
+                self.cur.pos = end + 1;
+                let (v, _) = self.cur.parse_iv2(vm, start + 2)?;
+                Ok(Some(Value::Int(v)))
+            }
+            b'd' if colon => {
+                let rest = &self.cur.data[(start + 2).min(self.cur.max())..];
+                for (lit, v) in [
+                    (&b"NAN;"[..], f64::NAN),
+                    (&b"INF;"[..], f64::INFINITY),
+                    (&b"-INF;"[..], f64::NEG_INFINITY),
+                ] {
+                    if rest.starts_with(lit) {
+                        self.cur.pos = start + 2 + lit.len();
+                        return Ok(Some(Value::Float(v)));
+                    }
+                }
+                let Some(end) = self.cur.float_end(start + 2) else {
+                    return Ok(None);
+                };
+                if self.cur.at(end) != b';' {
+                    return Ok(None);
+                }
+                self.cur.pos = end + 1;
+                let (v, _) = strtod(&self.cur.data[start + 2..end]);
+                Ok(Some(Value::Float(v)))
+            }
+            b's' | b'S' if colon => {
+                let Some((len, after)) = self.cur.uiv(start + 2) else {
+                    return Ok(None);
+                };
+                if self.cur.at(after) != b':' || self.cur.at(after + 1) != b'"' {
+                    return Ok(None);
+                }
+                let body = after + 2;
+                let maxlen = self.cur.max() - body.min(self.cur.max());
+                let len = usize::try_from(len).unwrap_or(usize::MAX);
+                if maxlen < len {
+                    self.cur.pos = start + 2;
+                    return Ok(None);
+                }
+                let (bytes, end) = if tag == b'S' {
+                    match unescape(self.cur.data, body, len) {
+                        Some(x) => x,
+                        None => return Ok(None),
+                    }
+                } else {
+                    (self.cur.data[body..body + len].to_vec(), body + len)
+                };
+                if self.cur.at(end) != b'"' {
+                    self.cur.pos = end;
+                    return Ok(None);
+                }
+                if self.cur.at(end + 1) != b';' {
+                    self.cur.pos = end + 1;
+                    return Ok(None);
+                }
+                self.cur.pos = end + 2;
+                if tag == b'S' {
+                    vm.docref(E_DEPRECATED, "Unserializing the 'S' format is deprecated")?;
+                }
+                let _ = is_key;
+                Ok(Some(Value::Str(ZStr::from(bytes))))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    /// `php_var_unserialize_internal()` with a `var_hash`: returns the
+    /// container value (`Value::Reference(cell)`). `loc` is the cell of the
+    /// location being overwritten (a duplicate key), which PHP reuses.
+    fn value(&mut self, vm: &mut Vm, loc: Option<PhpRef>) -> Step {
+        let start = self.cur.pos;
+        if start >= self.cur.max() {
+            return Ok(None);
+        }
+        let tag = self.cur.data[start];
+        let loc = loc.filter(|c| !self.d.borrow().shared.contains(&c.addr()));
+        if let Some(c) = &loc {
+            let old = c.set(Value::Null);
+            self.push_dtor(Dtor::Keep(old));
+        }
+        if tag == b'R' {
+            return Ok(self.back_ref(start, loc.as_ref()));
+        }
+        let cell = loc.unwrap_or_else(|| PhpRef::new(Value::Null));
+        {
+            let mut d = self.d.borrow_mut();
+            d.cells.insert(cell.addr());
+            d.slots.push(Some(cell.clone()));
+        }
+        let ok = match tag {
+            b'r' => self.obj_ref(start, &cell),
+            b'a' => self.array(vm, start, &cell)?,
+            b'O' | b'C' => self.object(vm, start, tag == b'C', &cell)?,
+            b'E' => self.enum_case(vm, start)?,
+            b'}' => {
+                vm.docref(E_WARNING, "Unexpected end of serialized data")?;
+                None
+            }
+            _ => self.scalar(vm, false)?,
+        };
+        Ok(ok.map(|v| {
+            if !matches!(tag, b'a' | b'O' | b'C') {
+                cell.set(v);
+            }
+            Value::Reference(cell)
+        }))
+    }
+
+    /// `"R:" uiv ";"`.
+    fn back_ref(&mut self, start: usize, loc: Option<&PhpRef>) -> Option<Value> {
+        if self.cur.at(start + 1) != b':' {
+            return None;
+        }
+        let (id, end) = self.cur.uiv(start + 2)?;
+        if self.cur.at(end) != b';' {
+            return None;
+        }
+        self.cur.pos = end + 1;
+        let target = {
+            let d = self.d.borrow();
+            usize::try_from(id)
+                .ok()
+                .filter(|&i| i >= 1)
+                .and_then(|i| d.slots.get(i - 1).cloned().flatten())
+        };
+        let target = target?;
+        // A reference to the location being written.
+        if loc.is_some_and(|l| PhpRef::ptr_eq(l, &target)) {
+            return None;
+        }
+        self.d.borrow_mut().shared.insert(target.addr());
+        Some(Value::Reference(target))
+    }
+
+    /// `"r:" uiv ";"`: the same object as an earlier slot.
+    fn obj_ref(&mut self, start: usize, cell: &PhpRef) -> Option<Value> {
+        if self.cur.at(start + 1) != b':' {
+            return None;
+        }
+        let (id, end) = self.cur.uiv(start + 2)?;
+        if self.cur.at(end) != b';' {
+            return None;
+        }
+        self.cur.pos = end + 1;
+        let target = {
+            let d = self.d.borrow();
+            usize::try_from(id)
+                .ok()
+                .filter(|&i| i >= 1)
+                .and_then(|i| d.slots.get(i - 1).cloned().flatten())
+        };
+        match target {
+            Some(t) if PhpRef::ptr_eq(&t, cell) => None,
+            Some(t) => match t.get() {
+                Value::Object(o) => Some(Value::Object(o)),
+                _ => None,
+            },
+            None => None,
+        }
+    }
+
+    /// `process_nested_array_data()` into an ordered key list.
+    fn nested_array(&mut self, vm: &mut Vm, elements: i64) -> VmResult<Option<HashTable>> {
+        if !self.enter_depth(vm)? {
+            return Ok(None);
+        }
+        let r = self.nested_array_inner(vm, elements);
+        self.leave_depth();
+        r
+    }
+
+    fn nested_array_inner(&mut self, vm: &mut Vm, elements: i64) -> VmResult<Option<HashTable>> {
+        let mut t = HashTable::new();
+        let mut remaining = elements;
+        while remaining > 0 {
+            remaining -= 1;
+            let Some(key) = self.key(vm)? else {
+                return Ok(None);
+            };
+            let key = match key {
+                ArrayKey::Str(s) => match handle_numeric_str(s.as_bytes()) {
+                    Some(i) => ArrayKey::Int(i),
+                    None => ArrayKey::Str(s),
+                },
+                k @ ArrayKey::Int(_) => k,
+            };
+            let loc = match t.get(&key) {
+                Some(Value::Reference(c)) => Some(c.clone()),
+                _ => None,
+            };
+            let Some(v) = self.value(vm, loc)? else {
+                return Ok(None);
+            };
+            t.insert(key, v);
+            if remaining > 0 {
+                let prev = self.cur.at(self.cur.pos.wrapping_sub(1));
+                if prev != b';' && prev != b'}' {
+                    self.cur.pos -= 1;
+                    return Ok(None);
+                }
+            }
+        }
+        Ok(Some(t))
+    }
+
+    fn finish_nested(&mut self) -> bool {
+        if self.cur.pos >= self.cur.max() || self.cur.data[self.cur.pos] != b'}' {
+            return false;
+        }
+        self.cur.pos += 1;
+        true
+    }
+
+    /// `"a:" uiv ":" "{"`.
+    fn array(&mut self, vm: &mut Vm, start: usize, cell: &PhpRef) -> Step {
+        if self.cur.at(start + 1) != b':' {
+            return Ok(None);
+        }
+        let Some((_, end)) = self.cur.uiv(start + 2) else {
+            return Ok(None);
+        };
+        if self.cur.at(end) != b':' || self.cur.at(end + 1) != b'{' {
+            return Ok(None);
+        }
+        let (elements, _) = self.cur.parse_iv2(vm, start + 2)?;
+        self.cur.pos = end + 2;
+        let remaining = i64::try_from(self.cur.max() - self.cur.pos).unwrap_or(i64::MAX);
+        if !(0..HT_MAX_SIZE).contains(&elements) || elements > remaining / 2 {
+            return Ok(None);
+        }
+        if elements == 0 {
+            cell.set(Value::Array(ZArray::new()));
+            return Ok(self.finish_nested().then_some(Value::Null));
+        }
+        let Some(t) = self.nested_array(vm, elements)? else {
+            return Ok(None);
+        };
+        cell.set(Value::Array(ZArray::from_table(t)));
+        Ok(self.finish_nested().then_some(Value::Null))
+    }
+
+    /// Resolves the class of an `O:`/`C:` entry; `(class, incomplete)`.
+    fn resolve_class(&mut self, vm: &mut Vm, name: &ZStr) -> VmResult<Option<(Rc<Class>, bool)>> {
+        let ic = || -> Option<Rc<Class>> { None };
+        let _ = ic;
+        let lc = name.as_bytes().to_ascii_lowercase();
+        let allowed = {
+            let d = self.d.borrow();
+            d.allowed.as_ref().map(|a| a.contains(&lc))
+        };
+        let incomplete = |vm: &mut Vm| {
+            vm.find_class(INCOMPLETE_CLASS.as_bytes())
+                .map(|c| (c, true))
+        };
+        if allowed == Some(false) {
+            if !valid_class_name(name.as_bytes()) {
+                return Ok(None);
+            }
+            return Ok(incomplete(vm));
+        }
+        if let Some(c) = vm.find_class(&lc) {
+            if c.flags & cflags::ANON == 0 {
+                return Ok(Some((c, false)));
+            }
+        }
+        if !valid_class_name(name.as_bytes()) {
+            return Ok(None);
+        }
+        if let Some(c) = locked(|| vm.lookup_class(name))? {
+            return Ok(Some((c, false)));
+        }
+        let func = vm
+            .ini_string("unserialize_callback_func")
+            .unwrap_or_default();
+        if func.is_empty() {
+            return Ok(incomplete(vm));
+        }
+        let f = Value::Str(ZStr::from(func.as_slice()));
+        if !vm.is_callable_value(&f) {
+            let err = vm.callable_error(&f);
+            return Err(vm.make_throw(
+                "Error",
+                &format!("Invalid callback {}, {err}", String::from_utf8_lossy(&func)),
+            ));
+        }
+        locked(|| vm.call_value(&f, vec![Value::Str(name.clone())]))?;
+        if let Some(c) = locked(|| vm.lookup_class(name))? {
+            Ok(Some((c, false)))
+        } else {
+            vm.docref(
+                E_WARNING,
+                &format!(
+                    "Function {}() hasn't defined the class it was called for",
+                    String::from_utf8_lossy(&func)
+                ),
+            )?;
+            Ok(incomplete(vm))
+        }
+    }
+
+    /// `object ":" uiv ":" ["]`.
+    #[allow(clippy::too_many_lines)]
+    fn object(&mut self, vm: &mut Vm, start: usize, custom: bool, cell: &PhpRef) -> Step {
+        if self.cur.at(start + 1) != b':' {
+            return Ok(None);
+        }
+        let Some((len, after)) = self.cur.uiv(start + 2) else {
+            return Ok(None);
+        };
+        if self.cur.at(after) != b':' || self.cur.at(after + 1) != b'"' {
+            return Ok(None);
+        }
+        let body = after + 2;
+        let len = usize::try_from(len).unwrap_or(usize::MAX);
+        let maxlen = self.cur.max().saturating_sub(body);
+        if maxlen < len || len == 0 {
+            self.cur.pos = start + 2;
+            return Ok(None);
+        }
+        let end = body + len;
+        if self.cur.at(end) != b'"' {
+            self.cur.pos = end;
+            return Ok(None);
+        }
+        if self.cur.at(end + 1) != b':' {
+            self.cur.pos = end + 1;
+            return Ok(None);
+        }
+        let name_bytes = &self.cur.data[body..end];
+        if name_bytes[0] == 0 || name_bytes[0] == b'\\' {
+            return Ok(None);
+        }
+        let name = ZStr::from(name_bytes);
+        let Some((cls, incomplete)) = self.resolve_class(vm, &name)? else {
+            return Ok(None);
+        };
+        self.cur.pos = end;
+        if not_serializable(&cls) {
+            return Err(vm.make_throw(
+                "Exception",
+                &format!("Unserialization of '{}' is not allowed", cls.name),
+            ));
+        }
+        if custom {
+            return self.object_custom(vm, &cls, incomplete, &name, cell);
+        }
+        if self.cur.pos >= self.cur.max().saturating_sub(2) {
+            vm.warning("Bad unserialize data")?;
+            return Ok(None);
+        }
+        let (elements, n_end) = self.cur.parse_iv2(vm, self.cur.pos + 2)?;
+        self.cur.pos = n_end;
+        let remaining = i64::try_from(self.cur.max().saturating_sub(end + 2)).unwrap_or(i64::MAX);
+        if elements < 0 || elements > remaining / 2 {
+            return Ok(None);
+        }
+        if self.cur.at(n_end) != b':' {
+            return Ok(None);
+        }
+        if self.cur.at(n_end + 1) != b'{' {
+            self.cur.pos = n_end + 1;
+            return Ok(None);
+        }
+        self.cur.pos = n_end + 2;
+        let has_unserialize = !incomplete
+            && (cls.magic.unserialize.is_some()
+                || cls.hooks.as_ref().is_some_and(|h| h.unserialize.is_some()));
+        if !incomplete && cls.instance_of_name(b"serializable") && !has_unserialize {
+            vm.warning(&format!(
+                "Erroneous data format for unserializing '{}'",
+                cls.name
+            ))?;
+            return Ok(None);
+        }
+        let o = vm.instantiate(&cls)?;
+        cell.set(Value::Object(o.clone()));
+        self.d.borrow_mut().objects.push(o.clone());
+        if incomplete {
+            vm.write_dynamic_prop(&o, ZStr::from(MAGIC_MEMBER), Value::Str(name));
+        }
+        self.object_common(vm, &o, elements, has_unserialize)
+    }
+
+    /// `object_common()`.
+    fn object_common(
+        &mut self,
+        vm: &mut Vm,
+        o: &Obj,
+        elements: i64,
+        has_unserialize: bool,
+    ) -> Step {
+        let cls = object::class_of(o).clone();
+        if has_unserialize {
+            if elements >= HT_MAX_SIZE {
+                return Ok(None);
+            }
+            let t = self.nested_array(vm, elements)?;
+            let ok = t.is_some() && self.finish_nested();
+            let ary = Value::Array(ZArray::from_table(t.unwrap_or_default()));
+            if !ok {
+                mark_destructed(o);
+                self.push_dtor(Dtor::Keep(ary));
+                return Ok(None);
+            }
+            self.push_dtor(Dtor::Unserialize(o.clone(), ary));
+            return Ok(Some(Value::Null));
+        }
+        let has_wakeup = !is_incomplete(&cls) && cls.magic.wakeup.is_some();
+        let ok = self.nested_object(vm, o, elements)? && self.finish_nested();
+        if !ok {
+            if has_wakeup {
+                mark_destructed(o);
+            }
+            return Ok(None);
+        }
+        if has_wakeup {
+            self.push_dtor(Dtor::Wakeup(o.clone()));
+        }
+        Ok(Some(Value::Null))
+    }
+
+    /// `process_nested_object_data()`.
+    fn nested_object(&mut self, vm: &mut Vm, o: &Obj, elements: i64) -> VmResult<bool> {
+        if !self.enter_depth(vm)? {
+            return Ok(false);
+        }
+        let r = self.nested_object_inner(vm, o, elements);
+        self.leave_depth();
+        r
+    }
+
+    #[allow(clippy::too_many_lines, clippy::many_single_char_names)]
+    fn nested_object_inner(&mut self, vm: &mut Vm, o: &Obj, elements: i64) -> VmResult<bool> {
+        let cls = object::class_of(o).clone();
+        let mut remaining = elements;
+        while remaining > 0 {
+            remaining -= 1;
+            let Some(key) = self.key(vm)? else {
+                return Ok(false);
+            };
+            let key = match key {
+                ArrayKey::Str(s) => s,
+                ArrayKey::Int(i) => ZStr::from(i.to_string()),
+            };
+            let Some(target) = Self::prop_target(vm, o, &cls, &key)? else {
+                return Ok(false);
+            };
+            let loc = match &target {
+                Target::Declared(pi) => {
+                    match object::data(o).slots.borrow().get(pi.slot as usize) {
+                        Some(Some(Value::Reference(c))) if self.own(c) => Some(c.clone()),
+                        _ => None,
+                    }
+                }
+                Target::Dynamic(k) => match object::data(o)
+                    .dynamic
+                    .borrow()
+                    .as_ref()
+                    .and_then(|t| t.get(&ArrayKey::Str(k.clone())).cloned())
+                {
+                    Some(Value::Reference(c)) if self.own(&c) => Some(c),
+                    _ => None,
+                },
+            };
+            let Some(v) = self.value(vm, loc)? else {
+                return Ok(false);
+            };
+            match &target {
+                Target::Declared(pi) => {
+                    if let Some(ty) = pi.ty.clone() {
+                        let mut inner = v.deref();
+                        let decl = vm.find_class(pi.class.as_bytes());
+                        let ctx = TypeCtx {
+                            scope: decl.as_ref(),
+                            called: Some(&cls),
+                            strict: true,
+                            internal_arg: None,
+                        };
+                        if !vm.verify_type(&ty, &mut inner, &ctx)? {
+                            let tyname = ty.display(
+                                decl.as_ref().map(|c| &c.name),
+                                decl.as_ref().and_then(|c| c.parent_name()),
+                                None,
+                            );
+                            return Err(vm.make_throw(
+                                "TypeError",
+                                &format!(
+                                    "Cannot assign {} to property {}::${} of type {tyname}",
+                                    given_type(&inner),
+                                    object::display_name(&pi.class),
+                                    pi.name
+                                ),
+                            ));
+                        }
+                    }
+                    let d = object::data(o);
+                    let mut slots = d.slots.borrow_mut();
+                    if let Some(s) = slots.get_mut(pi.slot as usize) {
+                        let old = s.replace(v);
+                        drop(slots);
+                        if let Some(old) = old.filter(|o| !matches!(o, Value::Reference(_))) {
+                            self.push_dtor(Dtor::Keep(old));
+                        }
+                    } else {
+                        drop(slots);
+                    }
+                    if let Some(r) = d.readonly_init.borrow_mut().get_mut(pi.slot as usize) {
+                        *r = true;
+                    }
+                }
+                Target::Dynamic(k) => {
+                    let d = object::data(o);
+                    let mut dynp = d.dynamic.borrow_mut();
+                    let t = dynp.get_or_insert_with(HashTable::new);
+                    let key = ArrayKey::Str(k.clone());
+                    let old = t.get(&key).cloned();
+                    t.insert(key, v);
+                    drop(dynp);
+                    if let Some(old) = old.filter(|o| !matches!(o, Value::Reference(_))) {
+                        self.push_dtor(Dtor::Keep(old));
+                    }
+                }
+            }
+            if remaining > 0 {
+                let prev = self.cur.at(self.cur.pos.wrapping_sub(1));
+                if prev != b';' && prev != b'}' {
+                    self.cur.pos -= 1;
+                    return Ok(false);
+                }
+            }
+        }
+        Ok(true)
+    }
+
+    /// Where a serialized property goes (`process_nested_object_data` +
+    /// `is_property_visibility_changed`); `None` fails the parse.
+    fn prop_target(
+        vm: &mut Vm,
+        o: &Obj,
+        cls: &Rc<Class>,
+        key: &ZStr,
+    ) -> VmResult<Option<Target>> {
+        if let Some(pi) = declared_exact(cls, key.as_bytes()) {
+            return Ok(Some(Target::Declared(pi.clone())));
+        }
+        // Visibility changed since serialization?
+        let (c, name) = unmangle_property_name(key.as_bytes());
+        let candidate = match c {
+            None => true,
+            Some(cn) => cn == b"*" || cn.eq_ignore_ascii_case(cls.name.as_bytes()),
+        };
+        if candidate {
+            let n = ZStr::from(name);
+            if let Some(pi) = cls
+                .prop_map
+                .get(&n)
+                .filter(|p| p.flags & flags::STATIC == 0)
+            {
+                if pi.is_virtual() {
+                    vm.docref(
+                        E_WARNING,
+                        &format!(
+                            "Cannot unserialize value for virtual property {}::${}",
+                            pi.class,
+                            key.to_string_lossy()
+                        ),
+                    )?;
+                    return Ok(None);
+                }
+                return Ok(Some(Target::Declared((**pi).clone())));
+            }
+        }
+        let exists = object::data(o)
+            .dynamic
+            .borrow()
+            .as_ref()
+            .is_some_and(|t| t.get(&ArrayKey::Str(key.clone())).is_some());
+        if !exists && !is_incomplete(cls) && cls.lc_name.as_bytes() != b"stdclass" {
+            let shown = String::from_utf8_lossy(name).into_owned();
+            if cls.flags & cflags::NO_DYNAMIC_PROPERTIES != 0 {
+                return Err(vm.make_throw(
+                    "Error",
+                    &format!("Cannot create dynamic property {}::${shown}", cls.name),
+                ));
+            }
+            if cls.flags & cflags::ALLOW_DYNAMIC == 0 {
+                vm.error(
+                    E_DEPRECATED,
+                    &format!(
+                        "Creation of dynamic property {}::${shown} is deprecated",
+                        cls.name
+                    ),
+                )?;
+            }
+        }
+        Ok(Some(Target::Dynamic(key.clone())))
+    }
+
+    /// `object_custom()` (`C:` entries).
+    fn object_custom(
+        &mut self,
+        vm: &mut Vm,
+        cls: &Rc<Class>,
+        incomplete: bool,
+        name: &ZStr,
+        cell: &PhpRef,
+    ) -> Step {
+        let (datalen, p) = self.cur.parse_iv2(vm, self.cur.pos + 2)?;
+        self.cur.pos = p;
+        if self.cur.max() - self.cur.pos.min(self.cur.max()) < 2 || self.cur.at(p) != b':' {
+            return Ok(None);
+        }
+        if self.cur.at(p + 1) != b'{' {
+            self.cur.pos += 1;
+            return Ok(None);
+        }
+        self.cur.pos += 2;
+        let avail = self.cur.max() - self.cur.pos;
+        let dlen = usize::try_from(datalen).unwrap_or(usize::MAX);
+        if datalen < 0 || avail <= dlen {
+            vm.warning(&format!(
+                "Insufficient data for unserializing - {datalen} required, {avail} present"
+            ))?;
+            return Ok(None);
+        }
+        if self.cur.data[self.cur.pos + dlen] != b'}' {
+            self.cur.pos += dlen;
+            return Ok(None);
+        }
+        let payload = ZStr::from(&self.cur.data[self.cur.pos..self.cur.pos + dlen]);
+        if incomplete || !cls.instance_of_name(b"serializable") {
+            vm.warning(&format!("Class {} has no unserializer", cls.name))?;
+            if !is_incomplete(cls) {
+                return Ok(None);
+            }
+            let o = vm.instantiate(cls)?;
+            cell.set(Value::Object(o.clone()));
+            self.d.borrow_mut().objects.push(o.clone());
+            if incomplete {
+                vm.write_dynamic_prop(&o, ZStr::from(MAGIC_MEMBER), Value::Str(name.clone()));
+            }
+        } else {
+            let o = vm.instantiate(cls)?;
+            cell.set(Value::Object(o.clone()));
+            self.d.borrow_mut().objects.push(o.clone());
+            // `zend_user_unserialize`: no lock, nested unserialize() calls
+            // share this context.
+            vm.call_method_name(&o, "unserialize", vec![Value::Str(payload)])?;
+        }
+        self.cur.pos += dlen + 1;
+        Ok(Some(Value::Null))
+    }
+
+    /// `"E:" uiv ":" ["]`.
+    fn enum_case(&mut self, vm: &mut Vm, start: usize) -> Step {
+        if self.cur.at(start + 1) != b':' {
+            return Ok(None);
+        }
+        let Some((len, after)) = self.cur.uiv(start + 2) else {
+            return Ok(None);
+        };
+        if self.cur.at(after) != b':' || self.cur.at(after + 1) != b'"' {
+            return Ok(None);
+        }
+        let body = after + 2;
+        let len = usize::try_from(len).unwrap_or(usize::MAX);
+        if self.cur.max().saturating_sub(body) < len || len == 0 {
+            self.cur.pos = start + 2;
+            return Ok(None);
+        }
+        let end = body + len;
+        if self.cur.at(end) != b'"' {
+            self.cur.pos = end;
+            return Ok(None);
+        }
+        if self.cur.at(end + 1) != b';' {
+            self.cur.pos = end + 1;
+            return Ok(None);
+        }
+        let text = &self.cur.data[body..end];
+        let Some(colon) = text.iter().position(|&c| c == b':') else {
+            vm.docref(
+                E_WARNING,
+                &format!(
+                    "Invalid enum name '{}' (missing colon)",
+                    String::from_utf8_lossy(text)
+                ),
+            )?;
+            return Ok(None);
+        };
+        let enum_name = ZStr::from(&text[..colon]);
+        let case = ZStr::from(&text[colon + 1..]);
+        if !valid_class_name(enum_name.as_bytes()) {
+            return Ok(None);
+        }
+        let Some(cls) = locked(|| vm.lookup_class(&enum_name))? else {
+            vm.docref(
+                E_WARNING,
+                &format!("Class '{}' not found", enum_name.to_string_lossy()),
+            )?;
+            return Ok(None);
+        };
+        if !cls.is_enum() {
+            vm.docref(
+                E_WARNING,
+                &format!("Class '{}' is not an enum", enum_name.to_string_lossy()),
+            )?;
+            return Ok(None);
+        }
+        self.cur.pos = end + 2;
+        let Some(c) = cls.find_const(case.as_bytes()).cloned() else {
+            vm.docref(
+                E_WARNING,
+                &format!(
+                    "Undefined constant {}::{}",
+                    enum_name.to_string_lossy(),
+                    case.to_string_lossy()
+                ),
+            )?;
+            return Ok(None);
+        };
+        if !c.is_case {
+            vm.docref(
+                E_WARNING,
+                &format!(
+                    "{}::{} is not an enum case",
+                    enum_name.to_string_lossy(),
+                    case.to_string_lossy()
+                ),
+            )?;
+            return Ok(None);
+        }
+        Ok(Some(locked(|| vm.enum_case(&cls, &case))?))
+    }
+}
+
+enum Target {
+    Declared(PropInfo),
+    Dynamic(ZStr),
+}
+
+/// `ZEND_ACC_NOT_SERIALIZABLE` (inherited; anonymous classes have it).
+fn not_serializable(cls: &Rc<Class>) -> bool {
+    let mut c = Some(cls);
+    while let Some(k) = c {
+        if k.flags & (cflags::NOT_SERIALIZABLE | cflags::ANON) != 0 {
+            return true;
+        }
+        c = k.parent.as_ref();
+    }
+    false
+}
+
+fn mark_destructed(o: &Obj) {
+    let d = object::data(o);
+    d.flags.set(d.flags.get() | object::oflags::DESTRUCTED);
+}
+
+/// Decodes the escaped `S:` format.
+fn unescape(data: &[u8], body: usize, len: usize) -> Option<(Vec<u8>, usize)> {
+    let mut out = Vec::with_capacity(len);
+    let mut i = body;
+    for _ in 0..len {
+        let c = *data.get(i)?;
+        if c == b'\\' {
+            let hi = char::from(*data.get(i + 1)?).to_digit(16)?;
+            let lo = char::from(*data.get(i + 2)?).to_digit(16)?;
+            out.push(u8::try_from(hi * 16 + lo).ok()?);
+            i += 3;
+        } else {
+            out.push(c);
+            i += 1;
+        }
+    }
+    Some((out, i))
+}
+
+// ---------------------------------------------------------------------------
+// Unwrapping cells
+// ---------------------------------------------------------------------------
+
+/// Replaces cells only their container holds (plus the `var_hash` entry)
+/// by their values, recursively.
+struct Unwrapper {
+    seen_refs: HashSet<usize>,
+    seen_objs: HashSet<usize>,
+    /// Handles each cell has in the `var_hash` (a reused location is
+    /// registered once per value parsed into it).
+    slot_counts: HashMap<usize, usize>,
+}
+
+impl Unwrapper {
+    fn value(&mut self, v: &mut Value) {
+        match v {
+            Value::Reference(r) => {
+                let in_table = self.slot_counts.get(&r.addr()).copied().unwrap_or(0);
+                if r.refcount() <= in_table + 1 {
+                    let mut inner = r.set(Value::Null);
+                    self.value(&mut inner);
+                    r.set(inner.clone());
+                    *v = inner;
+                } else if self.seen_refs.insert(r.addr()) {
+                    let mut inner = r.set(Value::Null);
+                    self.value(&mut inner);
+                    r.set(inner);
+                }
+            }
+            Value::Array(a) => {
+                let t = a.make_mut();
+                for (_, e) in t.iter_mut() {
+                    self.value(e);
+                }
+            }
+            Value::Object(o) => self.object(o),
+            _ => {}
+        }
+    }
+
+    fn object(&mut self, o: &Obj) {
+        if !self.seen_objs.insert(o.addr()) {
+            return;
+        }
+        let d = object::data(o);
+        let n = d.slots.borrow().len();
+        for i in 0..n {
+            let taken = d.slots.borrow_mut()[i].take();
+            if let Some(mut v) = taken {
+                self.value(&mut v);
+                d.slots.borrow_mut()[i] = Some(v);
+            }
+        }
+        let dynp = d.dynamic.borrow_mut().take();
+        if let Some(mut t) = dynp {
+            for (_, e) in t.iter_mut() {
+                self.value(e);
+            }
+            *d.dynamic.borrow_mut() = Some(t);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// unserialize()
+// ---------------------------------------------------------------------------
+
+/// `php_var_unserialize_init()`; `(data, is_outermost)`.
+fn unser_init(vm: &Vm) -> (UnserRc, bool) {
+    let fresh = || {
+        Rc::new(RefCell::new(UnserData {
+            slots: Vec::new(),
+            dtors: Vec::new(),
+            allowed: None,
+            cur_depth: 0,
+            max_depth: vm.ini_long("unserialize_max_depth"),
+            objects: Vec::new(),
+            shared: HashSet::new(),
+            cells: HashSet::new(),
+        }))
+    };
+    if is_locked() {
+        return (fresh(), true);
+    }
+    UNSER.with(|u| {
+        let mut u = u.borrow_mut();
+        if u.0 == 0 || u.1.is_none() {
+            let d = fresh();
+            *u = (1, Some(d.clone()));
+            (d, true)
+        } else {
+            u.0 += 1;
+            (u.1.clone().unwrap_or_else(fresh), false)
+        }
+    })
+}
+
+/// `php_var_unserialize_destroy()`: the outermost call runs the delayed
+/// `__wakeup()` / `__unserialize()` calls.
+fn unser_destroy(vm: &mut Vm, d: &UnserRc, outermost: bool, run: bool) -> VmResult<()> {
+    if !is_locked() {
+        UNSER.with(|u| {
+            let mut u = u.borrow_mut();
+            u.0 = u.0.saturating_sub(1);
+            if u.0 == 0 {
+                u.1 = None;
+            }
+        });
+    }
+    if !outermost {
+        return Ok(());
+    }
+    let dtors = std::mem::take(&mut d.borrow_mut().dtors);
+    d.borrow_mut().slots.clear();
+    // With an exception pending the calls do not run (and count as failed).
+    let mut failed = !run;
+    let mut result = Ok(());
+    for dt in dtors {
+        match dt {
+            Dtor::Keep(_) => {}
+            Dtor::Wakeup(o) => {
+                if failed {
+                    mark_destructed(&o);
+                    continue;
+                }
+                let cls = object::class_of(&o).clone();
+                if let Some(m) = cls.magic.wakeup.clone() {
+                    if let Err(t) = locked(|| vm.call_method(&o, &m, Vec::new())) {
+                        failed = true;
+                        mark_destructed(&o);
+                        result = Err(t);
+                    }
+                }
+            }
+            Dtor::Unserialize(o, data) => {
+                if failed {
+                    mark_destructed(&o);
+                    continue;
+                }
+                let cls = object::class_of(&o).clone();
+                let r = if let Some(m) = cls.magic.unserialize.clone() {
+                    locked(|| vm.call_method(&o, &m, vec![data])).map(|_| ())
+                } else if let Some(f) = cls.hooks.as_ref().and_then(|h| h.unserialize) {
+                    let Value::Array(a) = data else { continue };
+                    locked(|| f(vm, &o, a)).map(|_| ())
+                } else {
+                    Ok(())
+                };
+                if let Err(t) = r {
+                    failed = true;
+                    mark_destructed(&o);
+                    result = Err(t);
+                }
+            }
+        }
+    }
+    result
+}
+
+/// Parses `options` (`allowed_classes`, `max_depth`).
+fn apply_options(vm: &mut Vm, d: &UnserRc, opts: &ZArray) -> VmResult<()> {
+    if let Some(classes) = opts.get(&ArrayKey::Str(ZStr::from("allowed_classes"))) {
+        let classes = classes.deref();
+        match &classes {
+            Value::Array(list) => {
+                let mut set = HashSet::new();
+                for (_, e) in list.iter() {
+                    let e = e.deref();
+                    if !matches!(e, Value::Str(_) | Value::Object(_)) {
+                        return Err(vm.make_throw(
+                            "TypeError",
+                            &format!(
+                                "unserialize(): Option \"allowed_classes\" must be an array of class names, {} given",
+                                given_type(&e)
+                            ),
+                        ));
+                    }
+                    let n = vm.to_zstr(&e)?;
+                    if !valid_class_name(n.as_bytes()) {
+                        return Err(vm.make_throw(
+                            "ValueError",
+                            &format!(
+                                "unserialize(): Option \"allowed_classes\" must be an array of class names, \"{}\" given",
+                                n.to_string_lossy()
+                            ),
+                        ));
+                    }
+                    set.insert(n.as_bytes().to_ascii_lowercase());
+                }
+                d.borrow_mut().allowed = Some(set);
+            }
+            Value::Bool(true) => {}
+            Value::Bool(false) => d.borrow_mut().allowed = Some(HashSet::new()),
+            other => {
+                return Err(vm.make_throw(
+                    "TypeError",
+                    &format!(
+                        "unserialize(): Option \"allowed_classes\" must be of type array|bool, {} given",
+                        given_type(other)
+                    ),
+                ))
+            }
+        }
+    }
+    if let Some(md) = opts.get(&ArrayKey::Str(ZStr::from("max_depth"))) {
+        let Value::Int(n) = md.deref() else {
+            return Err(vm.make_throw(
+                "TypeError",
+                &format!(
+                    "unserialize(): Option \"max_depth\" must be of type int, {} given",
+                    given_type(&md.deref())
+                ),
+            ));
+        };
+        if n < 0 {
+            return Err(vm.make_throw(
+                "ValueError",
+                "unserialize(): Option \"max_depth\" must be greater than or equal to 0",
+            ));
+        }
+        let mut d = d.borrow_mut();
+        d.max_depth = n;
+        d.cur_depth = 0;
+    }
+    Ok(())
+}
+
+/// `php_unserialize_with_options()`.
+fn unserialize_with_options(vm: &mut Vm, buf: &[u8], opts: Option<&ZArray>) -> VmResult<Value> {
+    let (d, outermost) = unser_init(vm);
+    let prev = {
+        let b = d.borrow();
+        (b.allowed.clone(), b.max_depth, b.cur_depth)
+    };
+    let restore = |d: &UnserRc| {
+        let mut b = d.borrow_mut();
+        b.allowed.clone_from(&prev.0);
+        b.max_depth = prev.1;
+        b.cur_depth = prev.2;
+    };
+    if let Some(o) = opts {
+        if let Err(t) = apply_options(vm, &d, o) {
+            restore(&d);
+            let _ = unser_destroy(vm, &d, outermost, false);
+            return Err(t);
+        }
+    }
+    let first_slot = d.borrow().slots.len();
+    let mut u = Unserializer {
+        cur: Cursor { data: buf, pos: 0 },
+        d: d.clone(),
+    };
+    let parsed = u.value(vm, None);
+    let pos = u.cur.pos;
+    let result = match parsed {
+        Ok(Some(v)) => {
+            if pos < buf.len() {
+                vm.docref(
+                    E_WARNING,
+                    &format!("Extra data starting at offset {pos} of {} bytes", buf.len()),
+                )?;
+            }
+            Ok(Some(v))
+        }
+        Ok(None) => {
+            // Forbid later references to the slots of the failed part.
+            for s in d.borrow_mut().slots.iter_mut().skip(first_slot) {
+                *s = None;
+            }
+            vm.docref(
+                E_WARNING,
+                &format!("Error at offset {pos} of {} bytes", buf.len()),
+            )?;
+            Ok(None)
+        }
+        Err(t) => {
+            for s in d.borrow_mut().slots.iter_mut().skip(first_slot) {
+                *s = None;
+            }
+            Err(t)
+        }
+    };
+    restore(&d);
+    // Unwrap cells nobody shares, in the result and in everything the
+    // delayed calls will see.
+    let mut value = match result {
+        Ok(Some(v)) => Some(v),
+        Ok(None) => None,
+        Err(t) => {
+            let _ = unser_destroy(vm, &d, outermost, false);
+            return Err(t);
+        }
+    };
+    let mut slot_counts = HashMap::new();
+    for c in d.borrow().slots.iter().flatten() {
+        *slot_counts.entry(c.addr()).or_insert(0) += 1;
+    }
+    let mut uw = Unwrapper {
+        seen_refs: HashSet::new(),
+        seen_objs: HashSet::new(),
+        slot_counts,
+    };
+    if let Some(v) = value.as_mut() {
+        uw.value(v);
+    }
+    if outermost {
+        let objects = std::mem::take(&mut d.borrow_mut().objects);
+        for o in &objects {
+            uw.object(o);
+        }
+        let mut dtors = std::mem::take(&mut d.borrow_mut().dtors);
+        for dt in &mut dtors {
+            if let Dtor::Unserialize(_, data) = dt {
+                uw.value(data);
+            }
+        }
+        d.borrow_mut().dtors = dtors;
+    }
+    unser_destroy(vm, &d, outermost, true)?;
+    Ok(match value {
+        Some(v) => v.deref(),
+        None => Value::Bool(false),
+    })
+}
+
+fn unserialize(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let data = s(a, 0);
+    let opts = if a.has(1) { Some(arr(a, 1)) } else { None };
+    unserialize_with_options(vm, data.as_bytes(), opts.as_ref())
+}
+
+/// Registers `serialize()` / `unserialize()`.
+pub(crate) fn register(vm: &mut Vm) {
+    super::reg(vm, "serialize(mixed $value): string", serialize);
+    super::reg(
+        vm,
+        "unserialize(string $data, array $options = []): mixed",
+        unserialize,
+    );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{unescape, valid_class_name};
+
+    #[test]
+    fn class_names() {
+        assert!(valid_class_name(b"Foo\\Bar_1"));
+        assert!(!valid_class_name(b"Foo-Bar"));
+        assert!(!valid_class_name(b"a b"));
+    }
+
+    #[test]
+    fn s_format_escapes() {
+        assert_eq!(unescape(b"a\\41b", 0, 3), Some((b"aAb".to_vec(), 5)));
+        assert_eq!(unescape(b"\\4", 0, 1), None);
+    }
+}

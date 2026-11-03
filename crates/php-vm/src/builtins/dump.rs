@@ -116,10 +116,10 @@ fn stack_budget(vm: &Vm) -> i64 {
 
 /// One nesting level of a printer; `None` when PHP's C stack would have
 /// overflowed (`zend_call_stack_overflowed()`).
-struct Depth;
+pub(super) struct Depth;
 
 impl Depth {
-    fn enter(vm: &Vm) -> Option<Depth> {
+    pub(super) fn enter(vm: &Vm) -> Option<Depth> {
         let limit = usize::try_from(stack_budget(vm) / FRAME_BYTES).unwrap_or(usize::MAX);
         DEPTH.with(|d| {
             if d.get() >= limit {
@@ -138,7 +138,7 @@ impl Drop for Depth {
 }
 
 /// `zend_call_stack_size_error()`.
-fn stack_size_error(vm: &mut Vm) -> crate::vm::Throw {
+pub(super) fn stack_size_error(vm: &mut Vm) -> crate::vm::Throw {
     let size = stack_budget(vm);
     vm.make_throw(
         "Error",
@@ -203,6 +203,7 @@ fn rc(count: usize, z: Zval) -> usize {
 }
 
 /// `php_var_dump()` (`zv == None`) / `php_debug_zval_dump()` of one value.
+#[allow(clippy::too_many_lines)]
 pub(crate) fn var_dump(
     vm: &mut Vm,
     out: &mut Out,
@@ -314,7 +315,7 @@ pub(crate) fn var_dump(
                 // Resources do not expose their handle count: report the
                 // usual "variable + argument" (or "container") count.
                 Some(_) => {
-                    out.put(format!(") refcount({})\n", if level == 1 { 2 } else { 1 }).as_bytes())
+                    out.put(format!(") refcount({})\n", if level == 1 { 2 } else { 1 }).as_bytes());
                 }
                 None => out.put(b")\n"),
             }
@@ -389,7 +390,7 @@ fn var_dump_object(
         put_property_key(out, k, level);
         match slot {
             PropertySlot::Value(v) => {
-                var_dump(vm, out, v, level + 2, zv.map(|_| Zval { extra: 1 }))?
+                var_dump(vm, out, v, level + 2, zv.map(|_| Zval { extra: 1 }))?;
             }
             PropertySlot::Uninitialized(t) => {
                 out.spaces(level + 1);

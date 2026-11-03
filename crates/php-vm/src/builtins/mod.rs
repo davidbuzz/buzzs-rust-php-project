@@ -5,6 +5,7 @@ mod core;
 mod dump;
 pub(crate) mod headers;
 pub(crate) mod info;
+mod serial;
 pub(crate) use self::core::enum_methods;
 mod array;
 mod classes;

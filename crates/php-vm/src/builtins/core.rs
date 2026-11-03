@@ -83,16 +83,76 @@ fn strlen(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     Ok(Value::Int(i64::try_from(s(a, 0).len()).unwrap_or(0)))
 }
 
+/// `validate_constant_array_argument()` + `copy_constant_array()`:
+/// references are dropped; `None` for a recursive array.
+fn constant_array(a: &ZArray, path: &mut Vec<usize>) -> Option<ZArray> {
+    if path.contains(&a.addr()) {
+        return None;
+    }
+    path.push(a.addr());
+    let mut t = HashTable::new();
+    for (k, v) in a.iter() {
+        let v = match v.deref() {
+            Value::Array(inner) => Value::Array(constant_array(&inner, path)?),
+            other => other,
+        };
+        t.insert(k.clone(), v);
+    }
+    path.pop();
+    Some(ZArray::from_table(t))
+}
+
 fn define(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let name = s(a, 0);
-    if a.has(2) && b(a, 2) {
-        vm.warning("define(): Argument #3 ($case_insensitive) is ignored since declaration of case-insensitive constants is no longer supported")?;
+    if a.has(2) {
+        vm.deprecated("define(): Argument #3 ($case_insensitive) is ignored and treated as false since declaration of case-insensitive constants is no longer supported, passing the argument explicitly is unnecessary")?;
     }
-    if let Some(p) = crate::call::find_double_colon(name.as_bytes()) {
-        let _ = p;
+    if crate::call::find_double_colon(name.as_bytes()).is_some() {
         return Err(value_error(vm, a, 1, "cannot be a class constant"));
     }
-    let v = a.at(1);
+    if a.has(2) && b(a, 2) {
+        vm.warning("define(): Argument #3 ($case_insensitive) is ignored since declaration of case-insensitive constants is no longer supported, this will be an error in PHP 9.0")?;
+    }
+    let v = match a.at(1) {
+        Value::Array(arr) => match constant_array(&arr, &mut Vec::new()) {
+            Some(c) => Value::Array(c),
+            None => return Err(value_error(vm, a, 2, "cannot be a recursive array")),
+        },
+        other => other,
+    };
+    // `zend_register_constant()`: the namespace part is case-insensitive.
+    let bytes = name.as_bytes();
+    let name = match bytes.iter().rposition(|&c| c == b'\\') {
+        Some(p) => {
+            let mut n = bytes[..p].to_ascii_lowercase();
+            n.extend_from_slice(&bytes[p..]);
+            ZStr::from(n)
+        }
+        None => name,
+    };
+    let short = name
+        .as_bytes()
+        .rsplit(|&c| c == b'\\')
+        .next()
+        .unwrap_or_default();
+    if short == b"_" {
+        vm.deprecated("Calling a constant \"_\" is deprecated since 8.6")?;
+    } else if short.eq_ignore_ascii_case(b"let") {
+        vm.deprecated("Calling a constant \"let\" is deprecated since 8.6")?;
+    } else if short.eq_ignore_ascii_case(b"is") {
+        vm.deprecated("Calling a constant \"is\" is deprecated since 8.6")?;
+    }
+    let special = name.as_bytes() == b"__COMPILER_HALT_OFFSET__"
+        || [&b"true"[..], b"false", b"null"]
+            .iter()
+            .any(|k| name.as_bytes().eq_ignore_ascii_case(k));
+    if special {
+        vm.warning(&format!(
+            "Constant {} already defined, this will be an error in PHP 9",
+            name.to_string_lossy()
+        ))?;
+        return Ok(Value::Bool(false));
+    }
     let ok = vm.declare_constant(name, v)?;
     Ok(Value::Bool(ok))
 }
@@ -197,6 +257,31 @@ fn class_arg(vm: &mut Vm, v: &Value, autoload: bool) -> VmResult<Option<Rc<Class
         }
         _ => Ok(None),
     }
+}
+
+/// `get_mangled_object_vars()`: the raw property table (mangled names, no
+/// scope rules, no lazy initialization) as a symbol table.
+fn get_mangled_object_vars(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let Value::Object(o) = a.at(0) else {
+        return Ok(Value::Array(ZArray::new()));
+    };
+    let mut t = HashTable::new();
+    for (k, v, _) in vm.object_prop_table(&o, false) {
+        let Some(v) = v else { continue };
+        let k = match k {
+            ArrayKey::Str(s) => match php_runtime::numeric::handle_numeric_str(s.as_bytes()) {
+                Some(i) => ArrayKey::Int(i),
+                None => ArrayKey::Str(s),
+            },
+            k => k,
+        };
+        let v = match v {
+            Value::Reference(r) if r.refcount() == 1 => r.get(),
+            other => other,
+        };
+        t.insert(k, v);
+    }
+    Ok(Value::Array(ZArray::from_table(t)))
 }
 
 fn get_object_vars(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -1389,14 +1474,31 @@ fn hrtime(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     ])))
 }
 
+thread_local! {
+    /// Request start, for `gc_status()['application_time']`.
+    static REQUEST_START: std::time::Instant = std::time::Instant::now();
+}
+
 fn gc_status(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
+    let elapsed = REQUEST_START
+        .with(std::time::Instant::elapsed)
+        .as_secs_f64();
     let mut t = HashTable::new();
-    for k in ["runs", "collected", "threshold", "roots"] {
-        t.insert(
-            ArrayKey::Str(ZStr::from(k)),
-            Value::Int(if k == "threshold" { 10001 } else { 0 }),
-        );
-    }
+    let mut put = |k: &str, v: Value| {
+        t.insert(ArrayKey::Str(ZStr::from(k)), v);
+    };
+    put("running", Value::Bool(false));
+    put("protected", Value::Bool(false));
+    put("full", Value::Bool(false));
+    put("runs", Value::Int(0));
+    put("collected", Value::Int(0));
+    put("threshold", Value::Int(10001));
+    put("buffer_size", Value::Int(16384));
+    put("roots", Value::Int(0));
+    put("application_time", Value::Float(elapsed));
+    put("collector_time", Value::Float(0.0));
+    put("destructor_time", Value::Float(0.0));
+    put("free_time", Value::Float(0.0));
     Ok(Value::Array(ZArray::from_table(t)))
 }
 
@@ -1646,7 +1748,7 @@ pub(crate) fn register(vm: &mut Vm) {
     reg(
         vm,
         "get_mangled_object_vars(object $object): array",
-        get_object_vars,
+        get_mangled_object_vars,
     );
     reg(
         vm,

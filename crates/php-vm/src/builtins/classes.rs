@@ -5,7 +5,7 @@ use super::classbuilder::ClassBuilder;
 use crate::class::cflags;
 use crate::func::{flags, Args};
 use crate::vm::{Vm, VmResult};
-use php_runtime::{Value, ZStr};
+use php_runtime::{ArrayKey, Obj, Value, ZStr};
 
 const PUB: u32 = flags::PUBLIC;
 
@@ -17,6 +17,69 @@ fn attribute_construct(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         *slot = Some(f);
     }
     Ok(Value::Null)
+}
+
+/// `INCOMPLETE_CLASS_MSG` (`ext/standard/incomplete_class.c`).
+fn incomplete_msg(o: &Obj, what: &str) -> String {
+    let d = crate::object::data(o);
+    let name = d
+        .dynamic
+        .borrow()
+        .as_ref()
+        .and_then(|t| {
+            t.get(&ArrayKey::Str(ZStr::from("__PHP_Incomplete_Class_Name")))
+                .map(Value::deref)
+        })
+        .and_then(|v| match v {
+            Value::Str(s) => Some(s.to_string_lossy()),
+            _ => None,
+        })
+        .unwrap_or_else(|| "unknown".into());
+    format!(
+        "The script tried to {what} on an incomplete object. Please ensure that the class definition \"{name}\" of the object you are trying to operate on was loaded _before_ unserialize() gets called or provide an autoloader to load the class definition"
+    )
+}
+
+/// `php_error_docref()` from an object handler: prefixed with the active
+/// function (`main` at the top level).
+fn handler_warning(vm: &mut Vm, msg: &str) -> VmResult<()> {
+    use crate::vm::FrameKind;
+    let name = match vm.frames.last() {
+        Some(f) if f.kind == FrameKind::Builtin => return vm.docref(2, msg),
+        Some(f) if f.kind == FrameKind::Function => f
+            .func
+            .as_ref()
+            .map_or_else(|| "main".to_string(), |func| func.name().to_string_lossy()),
+        _ => "main".to_string(),
+    };
+    vm.warning(&format!("{name}(): {msg}"))
+}
+
+fn incomplete_read(vm: &mut Vm, o: &Obj, _name: &ZStr) -> VmResult<Option<Value>> {
+    let msg = incomplete_msg(o, "access a property");
+    handler_warning(vm, &msg)?;
+    Ok(Some(Value::Null))
+}
+
+fn incomplete_write(vm: &mut Vm, o: &Obj, _name: &ZStr, _v: &Value) -> VmResult<bool> {
+    let msg = incomplete_msg(o, "modify a property");
+    Err(vm.make_throw("Error", &msg))
+}
+
+fn incomplete_has(
+    vm: &mut Vm,
+    o: &Obj,
+    _name: &ZStr,
+    _check_empty: bool,
+) -> VmResult<Option<bool>> {
+    let msg = incomplete_msg(o, "access a property");
+    handler_warning(vm, &msg)?;
+    Ok(Some(false))
+}
+
+fn incomplete_unset(vm: &mut Vm, o: &Obj, _name: &ZStr) -> VmResult<bool> {
+    let msg = incomplete_msg(o, "modify a property");
+    Err(vm.make_throw("Error", &msg))
 }
 
 fn noop_construct(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
@@ -191,6 +254,13 @@ pub(crate) fn register(vm: &mut Vm) {
         .register(vm);
     ClassBuilder::new("__PHP_Incomplete_Class")
         .flags(cflags::FINAL | cflags::ALLOW_DYNAMIC)
+        .hooks(crate::ext::ClassHooks {
+            read_property: Some(incomplete_read),
+            write_property: Some(incomplete_write),
+            has_property: Some(incomplete_has),
+            unset_property: Some(incomplete_unset),
+            ..Default::default()
+        })
         .register(vm);
     let _ = ZStr::empty();
 }
