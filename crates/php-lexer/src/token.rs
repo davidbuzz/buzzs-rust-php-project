@@ -472,6 +472,68 @@ impl TokenKind {
     }
 }
 
+impl TokenKind {
+    /// How PHP describes this token when it is the unexpected token of a
+    /// syntax error (`zend_yytnamerr`), e.g. `identifier "foo"`,
+    /// `token ";"`, `double-quoted string "abc"` or `end of file`.
+    ///
+    /// `text` is the token's source text. The result is a byte string because
+    /// token text need not be UTF-8; PHP uses the raw bytes.
+    pub fn unexpected_description(self, text: &[u8]) -> Vec<u8> {
+        match self {
+            TokenKind::End => return b"end of file".to_vec(),
+            TokenKind::NsSeparator => return b"token \"\\\"".to_vec(),
+            TokenKind::AmpersandNotFollowedByVarOrVararg => return b"token \"&\"".to_vec(),
+            TokenKind::DoubleQuote => return b"double-quote mark".to_vec(),
+            TokenKind::BadCharacter if text.len() == 1 => {
+                return format!("character 0x{:02X}", text[0]).into_bytes();
+            }
+            _ => {}
+        }
+        let alias = self.grammar_alias();
+        let mut toktype = alias
+            .strip_prefix('"')
+            .and_then(|s| s.strip_suffix('"'))
+            .unwrap_or(alias);
+        if let Some(inner) = toktype
+            .strip_prefix('\'')
+            .and_then(|s| s.strip_suffix('\''))
+        {
+            let mut out = b"token \"".to_vec();
+            out.extend_from_slice(inner.as_bytes());
+            out.push(b'"');
+            return out;
+        }
+        let mut content = match text.iter().position(|&c| c == b'\n') {
+            Some(i) => &text[..i],
+            None => text,
+        };
+        if self == TokenKind::ConstantEncapsedString && !content.is_empty() {
+            match content[0] {
+                b'"' => toktype = "double-quoted string",
+                b'\'' => toktype = "single-quoted string",
+                _ => {}
+            }
+        }
+        if let [b'\'' | b'"', rest @ ..] = content {
+            content = rest;
+        }
+        if let [rest @ .., b'\'' | b'"'] = content {
+            content = rest;
+        }
+        let mut out = toktype.as_bytes().to_vec();
+        out.extend_from_slice(b" \"");
+        if content.len() > 30 + 3 {
+            out.extend_from_slice(&content[..30]);
+            out.extend_from_slice(b"...");
+        } else {
+            out.extend_from_slice(content);
+        }
+        out.push(b'"');
+        out
+    }
+}
+
 impl fmt::Display for TokenKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if let Some(name) = self.name() {
@@ -517,6 +579,65 @@ mod tests {
         );
         assert_eq!(TokenKind::Semicolon.id(), i64::from(b';'));
         assert_eq!(TokenKind::Semicolon.name(), None);
+    }
+
+    #[test]
+    fn unexpected_descriptions() {
+        use TokenKind as T;
+        let d = |k: TokenKind, t: &[u8]| String::from_utf8(k.unexpected_description(t)).unwrap();
+        assert_eq!(
+            d(T::ConstantEncapsedString, b"\"abc\""),
+            "double-quoted string \"abc\""
+        );
+        assert_eq!(
+            d(T::ConstantEncapsedString, b"'abc'"),
+            "single-quoted string \"abc\""
+        );
+        assert_eq!(
+            d(T::ConstantEncapsedString, b"b\"abc\""),
+            "quoted string \"b\"abc\""
+        );
+        assert_eq!(
+            d(T::ConstantEncapsedString, b"\"multi\nline\""),
+            "double-quoted string \"multi\""
+        );
+        assert_eq!(d(T::Variable, b"$x"), "variable \"$x\"");
+        assert_eq!(d(T::String, b"foo"), "identifier \"foo\"");
+        assert_eq!(
+            d(T::NameFullyQualified, b"\\Foo\\Bar"),
+            "fully qualified name \"\\Foo\\Bar\""
+        );
+        assert_eq!(
+            d(T::NameQualified, b"Foo\\Bar"),
+            "namespaced name \"Foo\\Bar\""
+        );
+        assert_eq!(
+            d(T::NameRelative, b"namespace\\Foo"),
+            "namespace-relative name \"namespace\\Foo\""
+        );
+        assert_eq!(d(T::DNumber, b"1.5"), "floating-point number \"1.5\"");
+        assert_eq!(d(T::LNumber, b"1"), "integer \"1\"");
+        assert_eq!(d(T::StartHeredoc, b"<<<A\n"), "heredoc start \"<<<A\"");
+        assert_eq!(d(T::DoubleQuote, b"\""), "double-quote mark");
+        assert_eq!(
+            d(T::String, &[b'a'; 45]),
+            format!("identifier \"{}...\"", "a".repeat(30))
+        );
+        assert_eq!(
+            d(T::String, &[b'a'; 33]),
+            format!("identifier \"{}\"", "a".repeat(33))
+        );
+        assert_eq!(d(T::NsSeparator, b"\\"), "token \"\\\"");
+        assert_eq!(d(T::Semicolon, b"?>"), "token \";\"");
+        assert_eq!(d(T::Backtick, b"`"), "token \"`\"");
+        assert_eq!(d(T::Echo, b"<?="), "token \"echo\"");
+        assert_eq!(d(T::Exit, b"die"), "token \"exit\"");
+        assert_eq!(d(T::BadCharacter, b"\x7f"), "character 0x7F");
+        assert_eq!(d(T::End, b""), "end of file");
+        assert_eq!(d(T::AmpersandNotFollowedByVarOrVararg, b"&"), "token \"&\"");
+        assert_eq!(d(T::AmpersandFollowedByVarOrVararg, b"&"), "token \"&\"");
+        assert_eq!(d(T::EncapsedAndWhitespace, b""), "string content \"\"");
+        assert_eq!(d(T::InlineHtml, b"html"), "T_INLINE_HTML \"html\"");
     }
 
     #[test]
