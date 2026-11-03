@@ -219,6 +219,29 @@ overloading), `count`, `read_property` / `write_property` /
 `get_iterator` (returns a `Box<dyn NativeIterator>` for `foreach`),
 `serialize` / `unserialize`.
 
+**Fetch contexts**: inside `read_property` / `read_dimension`,
+`vm.property_context()` (`PropCtx::Read/Isset/Write/ReadWrite/Unset/Ref/Exists`)
+and `vm.dimension_context()` (`DimensionCtx::Read/Is/Write/ReadWrite/Unset/Append`,
+the key is null for `$o[][..]`) tell why the hook runs. Intermediates of
+nested writes (`$o->a->b = v`, `$o->a[] = v`, `unset($o->a->b)`) call
+`read_property` with `Write`/`Unset`; returning an object or a reference
+continues the write there, anything else falls back to the declared
+property. `has_property(.., check_empty)` and `has_dimension` both answer
+"set and not null" / "set and not empty".
+
+**More handlers** (`ClassHooks`): `get_properties` (the table seen by
+`get_object_vars()`/`foreach`; `properties_for` stays for var_dump,
+`(array)` and serialize), `get_constructor` (runs on `new` before the
+constructor — throw "Cannot directly construct X" there), `destruct`
+(a destructor without a `__destruct` method; also runs after a user
+subclass's `__destruct`), `interface_gets_implemented` (set on an
+interface; called for every class implementing it). A native `__call`
+gets the called name from `vm.magic_call_name()`. `acc::STATIC_KEEPS_THIS`
+on a static method passes `$this` when it is called on an instance;
+`acc::VIRTUAL` marks virtual properties for Reflection.
+`m.output_handler("ob_gzhandler", f)` registers a named output handler
+for `ob_start('ob_gzhandler')`.
+
 ## 7. Engine hooks
 
 | API | PHP equivalent |
