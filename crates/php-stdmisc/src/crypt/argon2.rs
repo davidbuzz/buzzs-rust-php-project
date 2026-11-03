@@ -360,8 +360,35 @@ fn bytes_to_block(b: &[u8]) -> Block {
     out
 }
 
+/// Argon2's block array, allocated outside the global (memory-limit
+/// counting) allocator like libargon2's `malloc()`.
+struct Memory(crate::sys::UntrackedWords);
+
+impl Memory {
+    fn new(blocks: usize) -> Option<Self> {
+        crate::sys::UntrackedWords::zeroed(blocks.checked_mul(BLOCK_WORDS)?).map(Memory)
+    }
+}
+
+impl std::ops::Index<usize> for Memory {
+    type Output = Block;
+    fn index(&self, i: usize) -> &Block {
+        let w = &self.0[i * BLOCK_WORDS..(i + 1) * BLOCK_WORDS];
+        w.try_into()
+            .unwrap_or_else(|_| unreachable!("block slice has BLOCK_WORDS words"))
+    }
+}
+
+impl std::ops::IndexMut<usize> for Memory {
+    fn index_mut(&mut self, i: usize) -> &mut Block {
+        let w = &mut self.0[i * BLOCK_WORDS..(i + 1) * BLOCK_WORDS];
+        w.try_into()
+            .unwrap_or_else(|_| unreachable!("block slice has BLOCK_WORDS words"))
+    }
+}
+
 struct Instance {
-    memory: Vec<Block>,
+    memory: Memory,
     passes: u32,
     lanes: u32,
     lane_length: u32,
@@ -532,10 +559,7 @@ pub fn hash_raw(
     let memory_blocks = segment_length * lanes * SYNC_POINTS;
     let lane_length = segment_length * SYNC_POINTS;
 
-    let mut memory: Vec<Block> = Vec::new();
-    memory
-        .try_reserve_exact(memory_blocks as usize)
-        .map_err(|_| Argon2Error::MemoryAllocation)?;
+    let mut memory = Memory::new(memory_blocks as usize).ok_or(Argon2Error::MemoryAllocation)?;
 
     // H0
     let mut h = Blake2b::new(64);
@@ -553,7 +577,6 @@ pub fn hash_raw(
     h.update(&0u32.to_le_bytes());
     let h0 = h.finish();
 
-    memory.resize(memory_blocks as usize, [0u64; 128]);
     for l in 0..lanes {
         for i in 0..2u32 {
             let b = blake2b_long(1024, &[&h0, &i.to_le_bytes(), &l.to_le_bytes()]);

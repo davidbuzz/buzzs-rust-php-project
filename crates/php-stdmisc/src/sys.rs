@@ -1006,3 +1006,73 @@ pub fn strsignal(sig: i32) -> String {
 pub fn now() -> i64 {
     gettimeofday().0
 }
+
+/// A zero-initialised array of `u64` words allocated directly from the
+/// system allocator ([`std::alloc::System`]), bypassing the process's
+/// global allocator.
+///
+/// Argon2's working memory (`memory_cost` KiB, 64 MiB by default) is
+/// allocated with plain `malloc()` by libargon2, so Zend's `memory_limit`
+/// never sees it; the phprust binary installs a counting global allocator
+/// that enforces `memory_limit`, so this buffer must not go through it.
+pub struct UntrackedWords {
+    ptr: std::ptr::NonNull<u64>,
+    len: usize,
+}
+
+impl UntrackedWords {
+    /// Allocates `len` zeroed words; `None` if the allocation fails.
+    #[must_use]
+    pub fn zeroed(len: usize) -> Option<Self> {
+        use std::alloc::{GlobalAlloc, Layout, System};
+        if len == 0 {
+            return Some(UntrackedWords {
+                ptr: std::ptr::NonNull::dangling(),
+                len: 0,
+            });
+        }
+        let layout = Layout::array::<u64>(len).ok()?;
+        // SAFETY: `layout` has a non-zero size (len > 0); the returned
+        // pointer is checked for null and freed in `Drop` with the same
+        // allocator and layout. It is aligned for `u64` because `layout`
+        // was built with `u64`'s alignment.
+        let raw = unsafe { System.alloc_zeroed(layout) };
+        #[allow(clippy::cast_ptr_alignment)] // aligned by `layout`
+        std::ptr::NonNull::new(raw.cast::<u64>()).map(|ptr| UntrackedWords { ptr, len })
+    }
+}
+
+impl std::ops::Deref for UntrackedWords {
+    type Target = [u64];
+    fn deref(&self) -> &[u64] {
+        // SAFETY: `ptr` points to `len` initialised (zeroed) `u64`s owned by
+        // `self` (or is dangling with `len == 0`).
+        unsafe { std::slice::from_raw_parts(self.ptr.as_ptr(), self.len) }
+    }
+}
+
+impl std::ops::DerefMut for UntrackedWords {
+    fn deref_mut(&mut self) -> &mut [u64] {
+        // SAFETY: as in `deref`, and `&mut self` guarantees exclusivity.
+        unsafe { std::slice::from_raw_parts_mut(self.ptr.as_ptr(), self.len) }
+    }
+}
+
+impl Drop for UntrackedWords {
+    fn drop(&mut self) {
+        use std::alloc::{GlobalAlloc, Layout, System};
+        if self.len == 0 {
+            return;
+        }
+        if let Ok(layout) = Layout::array::<u64>(self.len) {
+            // SAFETY: allocated in `zeroed` by `System` with this layout.
+            unsafe { System.dealloc(self.ptr.as_ptr().cast::<u8>(), layout) };
+        }
+    }
+}
+
+impl std::fmt::Debug for UntrackedWords {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "UntrackedWords({} words)", self.len)
+    }
+}
