@@ -85,6 +85,20 @@ pub enum BinaryOp {
     Pow,
 }
 
+impl BinaryOp {
+    /// The PHP operator token.
+    pub fn symbol(self) -> &'static str {
+        match self {
+            Self::Add => "+",
+            Self::Sub => "-",
+            Self::Mul => "*",
+            Self::Div => "/",
+            Self::Mod => "%",
+            Self::Pow => "**",
+        }
+    }
+}
+
 /// The state of a `BcMath\Number` object: the number and its scale (the
 /// `scale` property). The `value` property is the number printed at that
 /// scale.

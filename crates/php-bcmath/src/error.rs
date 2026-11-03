@@ -88,6 +88,20 @@ impl BcError {
         )
     }
 
+    /// `Unsupported operand types: <lhs> <op> <rhs>` (`TypeError`), raised by
+    /// the engine when `do_operation` rejects an operand (null, arrays,
+    /// other objects). The type names are `zend_zval_value_name` values such
+    /// as `BcMath\Number`, `null`, `array` or a class name.
+    pub fn unsupported_operands(op: crate::BinaryOp, lhs_type: &str, rhs_type: &str) -> Self {
+        Self::new(
+            ErrorKind::TypeError,
+            format!(
+                "Unsupported operand types: {lhs_type} {} {rhs_type}",
+                op.symbol()
+            ),
+        )
+    }
+
     /// `Cannot modify readonly property BcMath\Number::$<prop>` (`Error`).
     pub fn readonly_modification(prop: &str) -> Self {
         Self::new(

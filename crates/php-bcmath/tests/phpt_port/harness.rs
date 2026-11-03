@@ -255,7 +255,6 @@ impl Php {
 
     /// `$a <op> $b` with at least one `BcMath\Number` operand.
     pub fn binop(&mut self, op: BinaryOp, a: &V, b: &V) -> Result<Number, BcError> {
-        let sym = op_symbol(op);
         let conv = |php: &mut Php, v: &V| -> Option<V> {
             match v {
                 V::F(f) => Some(V::I(php.float_to_int(*f))),
@@ -264,13 +263,10 @@ impl Php {
             }
         };
         let (Some(a2), Some(b2)) = (conv(self, a), conv(self, b)) else {
-            return Err(BcError::new(
-                ErrorKind::TypeError,
-                format!(
-                    "Unsupported operand types: {} {sym} {}",
-                    a.type_name(),
-                    b.type_name()
-                ),
+            return Err(BcError::unsupported_operands(
+                op,
+                a.type_name(),
+                b.type_name(),
             ));
         };
         Number::do_operation(op, operand(&a2), operand(&b2))
@@ -286,17 +282,6 @@ impl Php {
                 _ => None,
             },
         }
-    }
-}
-
-pub fn op_symbol(op: BinaryOp) -> &'static str {
-    match op {
-        BinaryOp::Add => "+",
-        BinaryOp::Sub => "-",
-        BinaryOp::Mul => "*",
-        BinaryOp::Div => "/",
-        BinaryOp::Mod => "%",
-        BinaryOp::Pow => "**",
     }
 }
 
