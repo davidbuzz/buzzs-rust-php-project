@@ -4,7 +4,7 @@ mod common;
 use common::*;
 use php_openssl::{BoolOrInt, CertArg, KeyArg, OpenSsl, PhpValue};
 
-/// Splits an oracle dump into (warnings, var_export body).
+/// Splits an oracle dump into (warnings, `var_export` body).
 fn expected(name: &str) -> (Vec<String>, Vec<u8>) {
     let text = std::fs::read(format!(
         "{}/tests/expected/{name}",
@@ -142,9 +142,9 @@ fn private_key_check_and_verify() {
             .unwrap(),
         1
     );
-    let pub2 = fixture_url("public_rsa_2048.key");
+    let other_pub = fixture_url("public_rsa_2048.key");
     assert_eq!(
-        o.x509_verify(CertArg::Str(&cert), &KeyArg::Str(&pub2))
+        o.x509_verify(CertArg::Str(&cert), &KeyArg::Str(&other_pub))
             .unwrap(),
         0
     );
@@ -161,7 +161,7 @@ fn checkpurpose() {
     let cert = read("cert.crt");
     let ca = fixture("cert.crt").into_bytes();
     let r = o
-        .x509_checkpurpose(CertArg::Str(&cert), 1, &[ca.clone()], None)
+        .x509_checkpurpose(CertArg::Str(&cert), 1, std::slice::from_ref(&ca), None)
         .unwrap();
     assert_eq!(r, BoolOrInt::Bool(false));
     let r = o
