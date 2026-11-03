@@ -607,6 +607,7 @@ name = "php-ext-intl"
 version = "0.1.0"
 dependencies = [
  "php-intl",
+ "php-memlimit",
  "php-runtime",
  "php-support",
  "php-vm",
@@ -639,6 +640,7 @@ version = "0.1.0"
 dependencies = [
  "php-mysqlnd",
  "php-runtime",
+ "php-streams",
  "php-support",
  "php-vm",
 ]
@@ -807,6 +809,7 @@ dependencies = [
 name = "php-ext-stdarr"
 version = "0.1.0"
 dependencies = [
+ "php-memlimit",
  "php-random",
  "php-runtime",
  "php-stdarr",
