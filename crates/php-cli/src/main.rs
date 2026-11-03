@@ -722,7 +722,7 @@ fn run_request(argv: &[Vec<u8>], optind: usize, req: &Request, cfg: &Config) -> 
                     } else {
                         php_self.clone()
                     };
-                    vm.run_script(&src, &lossy(&path))
+                    execute_script(&mut vm, &src, &path)
                 }
                 Mode::CliDirect => {
                     request_startup(&mut vm);
@@ -808,6 +808,52 @@ foreach ($all as $k => $v) {
     printf(\"%s: %s -> %s\\n\", $k, $d === null ? '(none)' : \"\\\"$d\\\"\", $l === null ? '(none)' : \"\\\"$l\\\"\");
 }
 ";
+
+/// `php_resolve_path()` for `auto_prepend_file`/`auto_append_file`:
+/// relative names are looked up in `include_path`, then the working
+/// directory.
+fn resolve_path(vm: &Vm, name: &[u8]) -> Option<Vec<u8>> {
+    let is_file = |p: &[u8]| std::path::Path::new(std::ffi::OsStr::from_bytes(p)).is_file();
+    if name.starts_with(b"/") || name.starts_with(b"./") || name.starts_with(b"../") {
+        return is_file(name).then(|| name.to_vec());
+    }
+    let include_path = vm.ini_string("include_path").unwrap_or_default();
+    for dir in include_path.split(|&c| c == b':').filter(|d| !d.is_empty()) {
+        let mut cand = dir.to_vec();
+        if !cand.ends_with(b"/") {
+            cand.push(b'/');
+        }
+        cand.extend_from_slice(name);
+        if is_file(&cand) {
+            return Some(cand);
+        }
+    }
+    is_file(name).then(|| name.to_vec())
+}
+
+/// `php_execute_script()`: `auto_prepend_file`, the primary script, then
+/// `auto_append_file`, and request shutdown.
+fn execute_script(vm: &mut Vm, src: &[u8], path: &[u8]) -> i32 {
+    request_startup(vm);
+    let extra = |vm: &mut Vm, directive: &str| -> Result<(), Throw> {
+        let name = vm.ini_string(directive).unwrap_or_default();
+        if name.is_empty() {
+            return Ok(());
+        }
+        match resolve_path(vm, &name) {
+            Some(full) => vm.include_file(&lossy(&full)),
+            None => Ok(()),
+        }
+    };
+    let mut r = extra(vm, "auto_prepend_file");
+    if r.is_ok() {
+        r = vm.run_main(src, &ZStr::from(path));
+    }
+    if r.is_ok() {
+        r = extra(vm, "auto_append_file");
+    }
+    vm.shutdown(r)
+}
 
 /// `zend_eval_string_ex(code, NULL, name, 1)`.
 fn eval_code(vm: &mut Vm, code: &[u8], name: &str) -> Result<(), Throw> {

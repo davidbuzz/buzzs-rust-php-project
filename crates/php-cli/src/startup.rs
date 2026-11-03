@@ -278,6 +278,15 @@ pub fn module_startup(cfg: &Config) -> Result<(), i32> {
         );
     }
     load_extensions(&r, cfg);
+    // `zend_disable_functions()`: these cannot be disabled.
+    if let Some(list) = cfg.get("disable_functions") {
+        for name in list
+            .split([',', ' '])
+            .filter(|n| matches!(*n, "exit" | "die" | "clone"))
+        {
+            r.report(2, &format!("Cannot disable function {name}()"));
+        }
+    }
     for d in DEPRECATED {
         if cfg_long(cfg, d) != 0 {
             r.report(8192, &format!("Directive '{d}' is deprecated"));

@@ -14,8 +14,6 @@ use std::os::unix::ffi::OsStrExt;
 type IniFiles = (Option<Vec<u8>>, Option<Vec<u8>>);
 
 thread_local! {
-    /// The `header_register_callback()` callable of the request.
-    static HEADER_CALLBACK: RefCell<Option<Value>> = const { RefCell::new(None) };
     static INI_FILES: RefCell<IniFiles> = const { RefCell::new((None, None)) };
 }
 
@@ -60,26 +58,6 @@ fn cli_get_process_title(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
     Ok(Value::Null)
 }
 
-/// `header_register_callback()`: the callable runs when the headers are
-/// sent — never once output has started (the CLI sends its empty header
-/// set with the first output), otherwise at the end of the request.
-#[allow(clippy::unnecessary_wraps)]
-fn header_register_callback(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let cb = a.values.first().cloned().unwrap_or(Value::Null);
-    HEADER_CALLBACK.with(|c| *c.borrow_mut() = Some(cb));
-    Ok(Value::Bool(true))
-}
-
-/// Request shutdown: `sapi_send_headers()` if nothing was output.
-fn send_headers(vm: &mut Vm) {
-    let cb = HEADER_CALLBACK.with(|c| c.borrow_mut().take());
-    if let Some(cb) = cb {
-        if !vm.headers_sent {
-            let _ = vm.call_value(&cb, Vec::new());
-        }
-    }
-}
-
 /// Registers the CLI functions and constants on a freshly created VM.
 pub fn register(vm: &mut Vm, cfg: &Config) {
     INI_FILES.with(|f| *f.borrow_mut() = (cfg.opened_path.clone(), cfg.scanned_files.clone()));
@@ -93,14 +71,6 @@ pub fn register(vm: &mut Vm, cfg: &Config) {
         cli_set_process_title,
     );
     vm.register_function("cli_get_process_title(): ?string", cli_get_process_title);
-    if vm.native_function("header_register_callback").is_none() {
-        vm.register_function(
-            "header_register_callback(callable $callback): true",
-            header_register_callback,
-        );
-        HEADER_CALLBACK.with(|c| *c.borrow_mut() = None);
-        vm.shutdown_hooks.insert(0, send_headers);
-    }
     vm.constants.insert(
         ZStr::from("PHP_CLI_PROCESS_TITLE"),
         Value::Bool(crate::proctitle::available()),
