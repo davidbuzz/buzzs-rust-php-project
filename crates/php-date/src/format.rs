@@ -457,6 +457,224 @@ pub fn format_interval(format: &[u8], t: &RelTime) -> Vec<u8> {
     out
 }
 
+/// The `struct tm` view `strftime()` works on.
+#[derive(Debug, Clone)]
+struct Tm {
+    year: i64,
+    mon: i64,
+    mday: i64,
+    hour: i64,
+    min: i64,
+    sec: i64,
+    wday: i64,
+    yday: i64,
+    gmtoff: i64,
+    zone: String,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Pad {
+    Default,
+    None,
+    Space,
+    Zero,
+}
+
+fn push_padded(out: &mut Vec<u8>, s: &[u8], width: usize, pad: Pad) {
+    let fill = if pad == Pad::Zero { b'0' } else { b' ' };
+    for _ in s.len()..width {
+        out.push(fill);
+    }
+    out.extend_from_slice(s);
+}
+
+/// glibc's `DO_NUMBER` / `DO_YEARISH` padding.
+fn push_number(out: &mut Vec<u8>, v: i64, digits: usize, width: Option<usize>, pad: Pad, default_pad: Pad) {
+    let pad = match pad {
+        Pad::Default if default_pad == Pad::None && width.is_some() => Pad::Zero,
+        Pad::Default => default_pad,
+        p => p,
+    };
+    let neg = v < 0;
+    let mag = v.unsigned_abs().to_string();
+    let (fill, min) = match (pad, width) {
+        (Pad::None, None) => (b'0', 0),
+        (Pad::None | Pad::Space, Some(w)) => (b' ', w),
+        (Pad::Space, None) => (b' ', digits),
+        (_, Some(w)) => (b'0', w),
+        (_, None) => (b'0', digits),
+    };
+    let len = mag.len() + usize::from(neg);
+    if fill == b'0' {
+        if neg {
+            out.push(b'-');
+        }
+        for _ in len..min {
+            out.push(b'0');
+        }
+    } else {
+        for _ in len..min {
+            out.push(b' ');
+        }
+        if neg {
+            out.push(b'-');
+        }
+    }
+    out.extend_from_slice(mag.as_bytes());
+}
+
+fn strftime_into(out: &mut Vec<u8>, format: &[u8], tm: &Tm) {
+    let mut i = 0;
+    while i < format.len() {
+        if format[i] != b'%' {
+            out.push(format[i]);
+            i += 1;
+            continue;
+        }
+        let start = i;
+        i += 1;
+        let mut pad = Pad::Default;
+        let (mut upcase, mut swapcase) = (false, false);
+        while let Some(&c) = format.get(i) {
+            match c {
+                b'_' => pad = Pad::Space,
+                b'-' => pad = Pad::None,
+                b'0' => pad = Pad::Zero,
+                b'^' => upcase = true,
+                b'#' => swapcase = true,
+                _ => break,
+            }
+            i += 1;
+        }
+        let mut width: Option<usize> = None;
+        while let Some(&c) = format.get(i).filter(|c| c.is_ascii_digit()) {
+            width = Some(width.unwrap_or(0) * 10 + usize::from(c - b'0'));
+            i += 1;
+        }
+        if matches!(format.get(i), Some(b'E' | b'O')) {
+            i += 1;
+        }
+        let Some(&conv) = format.get(i) else {
+            out.extend_from_slice(&format[start..]);
+            break;
+        };
+        i += 1;
+        let text = |out: &mut Vec<u8>, s: &str, lower_on_swap: bool| {
+            let mut b = s.as_bytes().to_vec();
+            if upcase || (swapcase && !lower_on_swap) {
+                b.make_ascii_uppercase();
+            } else if swapcase {
+                b.make_ascii_lowercase();
+            }
+            push_padded(out, &b, width.unwrap_or(0), if pad == Pad::Zero { Pad::Zero } else { Pad::Space });
+        };
+        let mon_idx = usize::try_from(tm.mon).ok().filter(|&m| m < 12);
+        let wday_idx = usize::try_from(tm.wday).ok().filter(|&d| d < 7);
+        let year = tm.year + 1900;
+        let hour12 = if tm.hour % 12 == 0 { 12 } else { tm.hour % 12 };
+        let iso = || {
+            let (w, y) = isoweek_from_date(year, tm.mon + 1, tm.mday);
+            (w, y)
+        };
+        let sub = |out: &mut Vec<u8>, f: &[u8]| {
+            let mut tmp = Vec::new();
+            strftime_into(&mut tmp, f, tm);
+            if upcase {
+                tmp.make_ascii_uppercase();
+            }
+            push_padded(out, &tmp, width.unwrap_or(0), if pad == Pad::Zero { Pad::Zero } else { Pad::Space });
+        };
+        match conv {
+            b'a' => text(out, wday_idx.map_or("?", |d| DAY_SHORT_NAMES[d]), false),
+            b'A' => text(out, wday_idx.map_or("?", |d| DAY_FULL_NAMES[d]), false),
+            b'b' | b'h' => text(out, mon_idx.map_or("?", |m| MON_SHORT_NAMES[m]), false),
+            b'B' => text(out, mon_idx.map_or("?", |m| MON_FULL_NAMES[m]), false),
+            b'p' => text(out, if tm.hour >= 12 { "PM" } else { "AM" }, true),
+            b'P' => text(out, if tm.hour >= 12 { "pm" } else { "am" }, false),
+            b'Z' => text(out, &tm.zone, true),
+            b'%' => text(out, "%", false),
+            b'n' => text(out, "\n", false),
+            b't' => text(out, "\t", false),
+            b'c' => sub(out, b"%a %b %e %H:%M:%S %Y"),
+            b'D' | b'x' => sub(out, b"%m/%d/%y"),
+            b'F' => sub(out, b"%Y-%m-%d"),
+            b'r' => sub(out, b"%I:%M:%S %p"),
+            b'R' => sub(out, b"%H:%M"),
+            b'T' | b'X' => sub(out, b"%H:%M:%S"),
+            b'C' => push_number(out, year.div_euclid(100), 1, width, pad, Pad::None),
+            b'Y' => push_number(out, year, 1, width, pad, Pad::None),
+            b'G' => push_number(out, iso().1, 1, width, pad, Pad::None),
+            b'y' => push_number(out, year.rem_euclid(100), 2, width, pad, Pad::Zero),
+            b'g' => push_number(out, iso().1.rem_euclid(100), 2, width, pad, Pad::Zero),
+            b'V' => push_number(out, iso().0, 2, width, pad, Pad::Zero),
+            b'd' => push_number(out, tm.mday, 2, width, pad, Pad::Zero),
+            b'e' => push_number(out, tm.mday, 2, width, pad, Pad::Space),
+            b'H' => push_number(out, tm.hour, 2, width, pad, Pad::Zero),
+            b'k' => push_number(out, tm.hour, 2, width, pad, Pad::Space),
+            b'I' => push_number(out, hour12, 2, width, pad, Pad::Zero),
+            b'l' => push_number(out, hour12, 2, width, pad, Pad::Space),
+            b'j' => push_number(out, tm.yday + 1, 3, width, pad, Pad::Zero),
+            b'm' => push_number(out, tm.mon + 1, 2, width, pad, Pad::Zero),
+            b'M' => push_number(out, tm.min, 2, width, pad, Pad::Zero),
+            b'S' => push_number(out, tm.sec, 2, width, pad, Pad::Zero),
+            b'u' => push_number(out, (tm.wday + 6) % 7 + 1, 1, width, pad, Pad::Zero),
+            b'w' => push_number(out, tm.wday, 1, width, pad, Pad::Zero),
+            b'U' => push_number(out, (tm.yday - tm.wday + 7) / 7, 2, width, pad, Pad::Zero),
+            b'W' => push_number(out, (tm.yday - (tm.wday + 6) % 7 + 7) / 7, 2, width, pad, Pad::Zero),
+            b's' => {
+                let v = crate::time::ymdhis_to_sse(year, tm.mon + 1, tm.mday, tm.hour, tm.min, tm.sec);
+                push_number(out, v, 1, width, pad, Pad::None);
+            }
+            b'z' => {
+                let diff = tm.gmtoff;
+                out.push(if diff < 0 { b'-' } else { b'+' });
+                let d = diff.abs();
+                let v = (d / 3600) * 100 + (d / 60) % 60;
+                push_number(out, v, 4, width.map(|w| w.saturating_sub(1)), Pad::Zero, Pad::Zero);
+            }
+            _ => out.extend_from_slice(&format[start..i]),
+        }
+    }
+}
+
+/// `strftime()` (`tz` = default zone) / `gmstrftime()` (`tz` = `None`) in
+/// the C locale, following glibc's conversions and flags. `None` means
+/// PHP returns `false` (empty format or empty result).
+///
+/// `%s` assumes the process timezone is UTC (glibc consults `TZ`).
+pub fn strftime(format: &[u8], ts: i64, tz: Option<&Arc<TzInfo>>) -> Option<Vec<u8>> {
+    if format.is_empty() {
+        return None;
+    }
+    let (t, gmtoff, zone) = match tz {
+        Some(tz) => {
+            let t = Time::from_timestamp_in(ts, tz);
+            let off = tz.time_zone_info(ts);
+            (t, i64::from(off.offset), off.abbr)
+        }
+        None => (Time::from_gmt(ts), 0, "GMT".to_string()),
+    };
+    let tm = Tm {
+        year: t.y - 1900,
+        mon: t.m - 1,
+        mday: t.d,
+        hour: t.h,
+        min: t.i,
+        sec: t.s,
+        wday: day_of_week(t.y, t.m, t.d),
+        yday: day_of_year(t.y, t.m, t.d),
+        gmtoff,
+        zone,
+    };
+    let mut out = Vec::new();
+    strftime_into(&mut out, format, &tm);
+    if out.is_empty() {
+        None
+    } else {
+        Some(out)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -498,6 +716,23 @@ mod tests {
         assert_eq!(english_suffix(11), "th");
         assert_eq!(english_suffix(22), "nd");
         assert_eq!(english_suffix(23), "rd");
+    }
+
+    #[test]
+    fn strftime_c_locale() {
+        let f = |fmt: &str, ts: i64| String::from_utf8(strftime(fmt.as_bytes(), ts, None).unwrap()).unwrap();
+        assert_eq!(
+            f("[%Y][%C][%y][%G][%g][%F][%D][%10Y][%_5m][%-d][%^a][%#B][%q][%Ec][%Oy][%+][%5%][%-5H][%P][%k][%l][%e][%U][%W][%V][%z][%Z]", -30_000_000_000),
+            "[1019][10][19][1019][19][1019-05-04][05/04/19][0000001019][    5][4][TUE][MAY][%q][Tue May  4 18:40:00 1019][19][%+][    %][   18][pm][18][ 6][ 4][18][18][18][+0000][GMT]"
+        );
+        assert_eq!(f("[%Y][%C][%y][%10Y]", -63_000_000_000), "[-27][-1][73][-000000027]");
+        assert_eq!(f("[%Y][%C][%y][%G][%g]", -62_000_000_000), "[5][0][05][5][05]");
+        assert!(strftime(b"", 0, None).is_none());
+        let tz = tz::get("America/New_York").unwrap();
+        assert_eq!(
+            String::from_utf8(strftime(b"%z %Z %H", 0, Some(&tz)).unwrap()).unwrap(),
+            "-0500 EST 19"
+        );
     }
 
     #[test]

@@ -23,6 +23,7 @@ function mk($tz, $str) {
 while (($line = fgets(STDIN)) !== false) {
     $line = rtrim($line, "\n");
     $f = array_map('unesc', explode("\t", $line));
+    ob_start();
     $cmd = $f[0];
     $tz = $f[1] ?? 'UTC';
     if (in_array($cmd, ['strtotime', 'date', 'create', 'cff', 'modify', 'diff'])) {
@@ -80,6 +81,30 @@ while (($line = fgets(STDIN)) !== false) {
             try { $z = new DateTimeZone($f[1]); $a = (array)$z; echo $a['timezone_type'], ' ', $z->getName(), "\n"; }
             catch (Throwable $e) { echo "ERR ", preg_replace('/^DateTimeZone::__construct\(\): /', '', $e->getMessage()), "\n"; }
             break;
+        case 'strftime': case 'gmstrftime':
+            date_default_timezone_set($f[1]);
+            $r = @$cmd($f[3], (int)$f[2]); echo $r === false ? 'F' : $r, "\n"; break;
+        case 'idate':
+            date_default_timezone_set($f[1]);
+            try { $r = @idate($f[3], (int)$f[2]); echo $r === false ? 'F' : $r, "\n"; } catch (Throwable $e) { echo "F\n"; }
+            break;
+        case 'getdate':
+            date_default_timezone_set($f[1]);
+            echo dump(getdate((int)$f[2])), '|', dump(localtime((int)$f[2], true)), "\n"; break;
+        case 'mktime': case 'gmmktime':
+            date_default_timezone_set($f[1]);
+            // Pin "now" by passing every argument we have; missing ones come from 2006-01-01 00:00:00.
+            $a = [];
+            for ($i = 2; $i < 8; $i++) $a[] = $f[$i] === '' ? null : (int)$f[$i];
+            $now = 1136073600;
+            $tz = $cmd === 'mktime' ? new DateTimeZone($f[1]) : new DateTimeZone('UTC');
+            $d = new DateTime('@' . $now); $d->setTimezone($tz);
+            $defs = [(int)$d->format('G'), (int)$d->format('i'), (int)$d->format('s'), (int)$d->format('n'), (int)$d->format('j'), (int)$d->format('Y')];
+            foreach ($a as $k => $v) if ($v === null) $a[$k] = $defs[$k];
+            echo $cmd(...$a), "\n"; break;
         default: echo "?\n";
     }
+    $r = ob_get_clean();
+    if (substr($r, -1) === "\n") $r = substr($r, 0, -1);
+    echo strtr($r, ["\\" => "\\\\", "\t" => "\\t", "\n" => "\\n", "\0" => "\\0"]), "\n";
 }

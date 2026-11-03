@@ -69,3 +69,8 @@ fn oracle_datetime_objects() {
 fn oracle_intervals_periods_zones() {
     check("misc");
 }
+
+#[test]
+fn oracle_functions() {
+    check("functions");
+}

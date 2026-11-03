@@ -173,6 +173,36 @@ pub fn run(fields: &[Vec<u8>]) -> String {
             Ok(z) => format!("{} {}", z.zone_type(), z.name()),
             Err(e) => format!("ERR {e}"),
         },
+        "strftime" | "gmstrftime" => {
+            let ts: i64 = s(&f(2)).parse().unwrap_or(0);
+            let z = zone(1);
+            let r = php_date::format::strftime(&f(3), ts, if cmd == "strftime" { Some(&z) } else { None });
+            r.map_or_else(|| "F".to_string(), |b| s(&b))
+        }
+        "idate" => {
+            let ts: i64 = s(&f(2)).parse().unwrap_or(0);
+            match api::idate(&f(3), ts, &zone(1)) {
+                Ok(v) => v.to_string(),
+                Err(_) => "F".into(),
+            }
+        }
+        "getdate" => {
+            let ts: i64 = s(&f(2)).parse().unwrap_or(0);
+            let mut o = String::new();
+            dump(&api::getdate(ts, &zone(1)), &mut o);
+            o.push('|');
+            dump(&api::localtime(ts, &zone(1), true), &mut o);
+            o
+        }
+        "mktime" | "gmmktime" => {
+            let n: Vec<Option<i64>> = (2..8).map(|i| {
+                let v = s(&f(i));
+                if v.is_empty() { None } else { v.parse().ok() }
+            }).collect();
+            let z = zone(1);
+            let now = 1_136_073_600;
+            api::mktime(n[0].unwrap_or(0), n[1], n[2], n[3], n[4], n[5], now, if cmd == "mktime" { Some(&z) } else { None }).to_string()
+        }
         _ => "?".into(),
     }
 }

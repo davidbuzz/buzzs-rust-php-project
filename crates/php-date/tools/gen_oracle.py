@@ -156,6 +156,20 @@ def commands(tests_dir):
               "America/Indiana/Indianapolis", "Europe/London ", "GMT", "+14:00", "-14:00", "+25:00", "UTC+1", "AbC"]:
         misc.append("tzinit\t%s" % z)
     out["misc"] = misc
+    fn = []
+    sfmts = ["%a %A %b %B %c %C %d %D %e %g %G %h %H %I %j %m %M %n %p %r %R %S %t %T %u %U %V %W %w %x %X %y %Y %Z %z %%",
+             "%5a|%-10B|%_3d|%03e|%^p|%#Z|%#p|%-y|%_y|%Ey|%Od|%P|%k|%l|%10Y|%-5H", "%%q %%a", "%", "%q", "x%"]
+    for _ in range(300):
+        z = rnd.choice(ZONES)
+        ts = rnd.randint(-5 * 10**9, 5 * 10**9)
+        fn.append("%s\t%s\t%d\t%s" % (rnd.choice(["strftime", "gmstrftime"]), z, ts, esc(rnd.choice(sfmts))))
+        fn.append("idate\t%s\t%d\t%s" % (z, ts, rnd.choice("BdhHiILmstUwWyYzZNjgGnoxYY")))
+        fn.append("getdate\t%s\t%d" % (z, ts))
+    for _ in range(400):
+        args = [str(rnd.randint(-30, 30))] + [str(rnd.randint(-30, 30)) if rnd.random() < 0.8 else "" for _ in range(4)]
+        args.append(rnd.choice(["", "0", "69", "70", "99", "100", "101", "1999", "2038", "1901", "-5", str(rnd.randint(1900, 2100))]))
+        fn.append("%s\t%s\t%s" % (rnd.choice(["mktime", "gmmktime"]), rnd.choice(ZONES), "\t".join(args)))
+    out["functions"] = fn
     return out
 
 
@@ -177,7 +191,7 @@ def main():
                              capture_output=True, check=True).stdout.decode("latin-1").split("\n")
         with open(os.path.join(DATA, name + ".tsv"), "w", encoding="latin-1", newline="\n") as f:
             for c, r in zip(cmds, res):
-                f.write("%s\t=>\t%s\n" % (c, esc(r)))
+                f.write("%s\t=>\t%s\n" % (c, r))
         print(name, len(cmds))
 
 
