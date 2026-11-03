@@ -203,6 +203,16 @@ impl HashTable {
         Self::with_capacity(0)
     }
 
+    /// Creates an empty hash-mode (non-packed) table sized for `n` elements
+    /// (`array_init_size` + `zend_hash_real_init_mixed`), as PHP's
+    /// unserializer and other internal builders do.
+    #[must_use]
+    pub fn with_capacity_mixed(n: usize) -> Self {
+        let mut t = Self::with_capacity(n);
+        t.real_init_mixed();
+        t
+    }
+
     /// Creates an empty table sized for `n` elements (`zend_new_array(n)`).
     #[must_use]
     pub fn with_capacity(n: usize) -> Self {
@@ -998,8 +1008,12 @@ impl HashTable {
         Some(p)
     }
 
-    /// `zend_hash_iterators_lower_pos`.
-    fn iterators_lower_pos(&self, start: u32) -> u32 {
+    /// `zend_hash_iterators_lower_pos`: the smallest registered iterator
+    /// position `>= start` (or [`HashTable::used`] if none). Use together
+    /// with [`HashTable::iterators_update`] to remap iterators while
+    /// rebuilding a table, exactly like `php_splice`/`array_shift` do.
+    #[must_use]
+    pub fn iterators_lower_pos(&self, start: u32) -> u32 {
         let mut res = self.used();
         for it in &self.iterators {
             if it.1 >= start && it.1 < res {
@@ -1009,13 +1023,33 @@ impl HashTable {
         res
     }
 
-    /// `zend_hash_iterators_update`.
-    fn iterators_update(&mut self, from: u32, to: u32) {
+    /// `zend_hash_iterators_update`: moves every iterator at `from` to `to`.
+    pub fn iterators_update(&mut self, from: u32, to: u32) {
         for it in &mut self.iterators {
             if it.1 == from {
                 it.1 = to;
             }
         }
+    }
+
+    /// `zend_hash_iterators_advance`: adds `step` to every iterator position
+    /// (used by `array_unshift`).
+    pub fn iterators_advance(&mut self, step: u32) {
+        for it in &mut self.iterators {
+            it.1 = it.1.wrapping_add(step);
+        }
+    }
+
+    /// Registered iterator positions as `(id, pos)` pairs.
+    #[must_use]
+    pub fn iterator_positions(&self) -> &[(IterId, u32)] {
+        &self.iterators
+    }
+
+    /// Moves the registered iterators of `other` into this table (used after
+    /// building a replacement table, like `HT_SET_ITERATORS_COUNT` swaps).
+    pub fn take_iterators_from(&mut self, other: &mut HashTable) {
+        self.iterators.append(&mut other.iterators);
     }
 
     // ------------------------------------------------------------------
@@ -1379,7 +1413,8 @@ impl HashTable {
 /// The value to store when copying an element into another array: references
 /// with refcount 1 are unwrapped (like `zend_array_dup`/`zend_array_to_list`),
 /// shared references stay shared.
-fn copy_for_insert(v: &Value) -> Value {
+#[must_use]
+pub fn copy_for_insert(v: &Value) -> Value {
     match v {
         Value::Reference(r) if r.refcount() == 1 => r.get(),
         other => other.clone(),
@@ -1856,6 +1891,29 @@ mod tests {
         assert_eq!(h.next_index(), 1);
         h.unshift(vec![Value::Int(7)]);
         assert_eq!(keys(&h), ["0", "\"s\"", "1"]);
+    }
+
+    #[test]
+    fn public_iterator_remapping() {
+        let mut t = HashTable::new();
+        for i in 0..4 {
+            t.push(Value::Int(i)).unwrap();
+        }
+        let id = t.iterator_add(2);
+        assert_eq!(t.iterators_lower_pos(0), 2);
+        t.iterators_update(2, 0);
+        assert_eq!(t.iterator_positions(), &[(id, 0)]);
+        t.iterators_advance(3);
+        assert_eq!(t.iterator_pos(id), 3);
+        let mut rebuilt = HashTable::with_capacity_mixed(4);
+        assert!(!rebuilt.is_packed());
+        rebuilt.take_iterators_from(&mut t);
+        assert!(!t.has_iterators());
+        assert_eq!(rebuilt.iterator_pos(id), 3);
+        let single = Value::Reference(crate::PhpRef::new(Value::Int(1)));
+        assert!(!copy_for_insert(&single).is_reference());
+        let shared = single.clone();
+        assert!(copy_for_insert(&shared).is_reference());
     }
 
     #[test]

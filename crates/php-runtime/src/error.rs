@@ -116,6 +116,16 @@ pub enum RuntimeError {
     ArithmeticError(String),
     /// `\DivisionByZeroError`.
     DivisionByZeroError(String),
+    /// `\ArgumentCountError`.
+    ArgumentCountError(String),
+    /// Any other exception class, named by its fully qualified name (e.g.
+    /// `Random\BrokenRandomEngineError`, `JsonException`).
+    Custom {
+        /// Fully qualified class name (without leading backslash).
+        class: ZStr,
+        /// Exception message.
+        message: String,
+    },
     /// An uncatchable fatal error (`E_ERROR`), e.g. during compile-time evaluation.
     Fatal(String),
     /// An exception object already thrown by user code.
@@ -132,7 +142,18 @@ impl RuntimeError {
             RuntimeError::ValueError(_) => Some("ValueError"),
             RuntimeError::ArithmeticError(_) => Some("ArithmeticError"),
             RuntimeError::DivisionByZeroError(_) => Some("DivisionByZeroError"),
-            RuntimeError::Fatal(_) | RuntimeError::Thrown(_) => None,
+            RuntimeError::ArgumentCountError(_) => Some("ArgumentCountError"),
+            RuntimeError::Fatal(_) | RuntimeError::Thrown(_) | RuntimeError::Custom { .. } => None,
+        }
+    }
+
+    /// The exception class name for every variant that names one, including
+    /// [`RuntimeError::Custom`] (`None` for `Fatal` and `Thrown`).
+    #[must_use]
+    pub fn exception_class(&self) -> Option<String> {
+        match self {
+            RuntimeError::Custom { class, .. } => Some(class.to_string_lossy()),
+            other => other.class_name().map(str::to_string),
         }
     }
 
@@ -145,6 +166,8 @@ impl RuntimeError {
             | RuntimeError::ValueError(m)
             | RuntimeError::ArithmeticError(m)
             | RuntimeError::DivisionByZeroError(m)
+            | RuntimeError::ArgumentCountError(m)
+            | RuntimeError::Custom { message: m, .. }
             | RuntimeError::Fatal(m) => Some(m),
             RuntimeError::Thrown(_) => None,
         }
@@ -159,7 +182,9 @@ impl fmt::Display for RuntimeError {
             other => write!(
                 f,
                 "{}: {}",
-                other.class_name().unwrap_or("Error"),
+                other
+                    .exception_class()
+                    .unwrap_or_else(|| "Error".to_string()),
                 other.message().unwrap_or("")
             ),
         }
@@ -441,6 +466,28 @@ pub trait RuntimeContext {
         )))
     }
 
+    /// Whether the object is an enum case (`ZEND_ACC_ENUM`). The default
+    /// returns `false`.
+    fn is_enum(&mut self, obj: &Obj) -> bool {
+        let _ = obj;
+        false
+    }
+
+    /// `count()` on an object: `Ok(Some(n))` for `Countable` objects (calling
+    /// `count()`), `Ok(None)` when the object is not countable.
+    fn count_object(&mut self, obj: &Obj) -> RtResult<Option<i64>> {
+        let _ = obj;
+        Ok(None)
+    }
+
+    /// Reads a property (`read_property`). `Ok(None)` means undefined. The
+    /// default looks the (possibly mangled) name up in the property table.
+    fn property_read(&mut self, obj: &Obj, name: &ZStr) -> RtResult<Option<Value>> {
+        Ok(self
+            .object_properties(obj, PropertyPurpose::Debug)?
+            .and_then(|t| t.get_str(name.as_bytes()).cloned()))
+    }
+
     /// Writes a property on an object (`zend_update_property` /
     /// `write_property`), in the order PHP would, e.g. while `json_decode` or
     /// `unserialize` fill an object. `name` is the (possibly mangled)
@@ -603,5 +650,33 @@ impl RuntimeContext for CollectingContext {
 
     fn create_std_object(&mut self, props: ZArray) -> RtResult<Value> {
         Ok(Value::Object(PlainObject::create("stdClass", props)))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn exception_classes() {
+        let e = RuntimeError::ArgumentCountError("x() expects exactly 1 argument, 0 given".into());
+        assert_eq!(e.class_name(), Some("ArgumentCountError"));
+        let c = RuntimeError::Custom {
+            class: ZStr::from("Random\\BrokenRandomEngineError"),
+            message: "A random engine must return a non-empty string".into(),
+        };
+        assert_eq!(c.class_name(), None);
+        assert_eq!(
+            c.exception_class().as_deref(),
+            Some("Random\\BrokenRandomEngineError")
+        );
+        assert_eq!(
+            c.message(),
+            Some("A random engine must return a non-empty string")
+        );
+        assert_eq!(
+            c.to_string(),
+            "Random\\BrokenRandomEngineError: A random engine must return a non-empty string"
+        );
     }
 }

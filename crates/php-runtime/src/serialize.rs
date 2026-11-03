@@ -800,7 +800,13 @@ impl Builder<'_> {
         items: &[(ArrayKey, usize)],
         ctx: &mut (impl RuntimeContext + ?Sized),
     ) -> RtResult<HashTable> {
-        let mut t = HashTable::with_capacity(items.len());
+        // PHP's unserializer uses `array_finit_size_mixed`: non-empty arrays
+        // are always hash tables, empty ones are the (packed) empty array.
+        let mut t = if items.is_empty() {
+            HashTable::new()
+        } else {
+            HashTable::with_capacity_mixed(items.len())
+        };
         for (k, v) in items {
             let val = self.build(*v, ctx)?;
             match k {
@@ -962,6 +968,11 @@ mod tests {
         );
         let (v, _) = unser("a:1:{s:1:\"5\";b:1;}");
         assert!(v.unwrap().as_array().unwrap().get_int(5).is_some());
+        // Unserialized arrays are hash tables, like PHP's.
+        let (v, _) = unser("a:2:{i:0;i:1;i:1;i:2;}");
+        let v = v.unwrap();
+        assert!(!v.as_array().unwrap().is_packed());
+        assert!(unser("a:0:{}").0.unwrap().as_array().unwrap().is_packed());
         let (v, _) = unser("d:1.5e3;");
         assert_eq!(v.and_then(|v| v.as_float()), Some(1500.0));
     }

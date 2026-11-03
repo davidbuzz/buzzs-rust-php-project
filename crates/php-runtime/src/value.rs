@@ -385,6 +385,12 @@ impl PhpRef {
         self.0.value.try_borrow().ok()
     }
 
+    /// Mutably borrows the referenced value unless it is currently borrowed.
+    #[must_use]
+    pub fn try_borrow_mut(&self) -> Option<RefMut<'_, Value>> {
+        self.0.value.try_borrow_mut().ok()
+    }
+
     /// Whether two handles denote the same reference.
     #[must_use]
     pub fn ptr_eq(a: &Self, b: &Self) -> bool {
@@ -664,6 +670,10 @@ mod tests {
         }
         a.unwrap_reference();
         assert!(!a.is_reference());
+        let guard = r.borrow();
+        assert!(r.try_borrow_mut().is_none());
+        drop(guard);
+        assert!(r.try_borrow_mut().is_some());
         // nested references are flattened
         let nested = PhpRef::new(Value::Reference(PhpRef::new(Value::Int(2))));
         assert_eq!(nested.get().as_int(), Some(2));
