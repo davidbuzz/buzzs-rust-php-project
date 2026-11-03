@@ -706,10 +706,42 @@ fn context_get_backend(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     enum_case(vm, "Backend", b.name())
 }
 
+/// `php_io_poll_watcher_get_gc`: the user data and the handle object. The
+/// state is the watcher object's own (the context only keeps the object
+/// and an `Rc` alias used for bookkeeping, which it does not report).
+fn watcher_gc(w: &Rc<RefCell<WatcherState>>, v: &mut php_vm::gc::GcVisitor<'_>) {
+    let Ok(s) = w.try_borrow() else {
+        v.opaque();
+        return;
+    };
+    v.value(&s.data);
+    if let Some(h) = &s.handle {
+        v.obj(h);
+    }
+}
+
+/// `php_io_poll_context_get_gc`: the watcher objects, when the context
+/// state is not shared.
+fn context_gc(c: &ContextData, v: &mut php_vm::gc::GcVisitor<'_>) {
+    let Some(ctx) = &c.0 else { return };
+    if Rc::strong_count(ctx) != 1 {
+        return;
+    }
+    let Ok(state) = ctx.try_borrow() else {
+        v.opaque();
+        return;
+    };
+    for (_, o, _) in &state.watchers {
+        v.obj(o);
+    }
+}
+
 /// Registers the classes and the stream close hook.
 #[allow(clippy::too_many_lines)] // the class table of io_poll.stub.php
 pub fn register(m: &mut ModuleBuilder<'_>) {
     php_streams::stream::set_close_hook(Some(Rc::new(notify_close)));
+    php_vm::gc::register_traverse_with::<Rc<RefCell<WatcherState>>>(watcher_gc);
+    php_vm::gc::register_traverse_with::<ContextData>(context_gc);
     let vm = m.vm();
     let io = ClassBuilder::new("Io\\IoException")
         .extends(vm, "Exception")
