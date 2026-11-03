@@ -1,0 +1,29 @@
+--- a/crates/php-vm/src/call.rs
++++ b/crates/php-vm/src/call.rs
+@@ -511,6 +511,26 @@
+     }
+ 
+     pub(crate) fn op_send(&mut self, src: &ArgSrc, name: Option<ZStr>) -> VmResult<()> {
++        // Fast path: a positional by-value argument of an ordinary call
++        // (the general path below computes the same thing in more steps).
++        if name.is_none() {
++            let by_val = {
++                let call = self.frame().calls.last().expect("pending call");
++                call.magic_name.is_none()
++                    && !call.has_named
++                    && !call.func.arg_by_ref(call.args.len())
++            };
++            if by_val {
++                let v = match src {
++                    ArgSrc::Val(op) => self.read(*op)?,
++                    ArgSrc::CallResult(op) => self.read_raw(*op)?.deref(),
++                    ArgSrc::Place(pid) => self.place_fetch(*pid, FetchMode::Read)?,
++                };
++                let call = self.frame_mut().calls.last_mut().expect("pending call");
++                call.args.push(Some(v));
++                return Ok(());
++            }
++        }
+         let pos = match &name {
+             Some(n) => self.arg_position(n)?,
+             None => Some(self.frame().calls.last().expect("pending call").args.len()),

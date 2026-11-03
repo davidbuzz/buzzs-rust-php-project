@@ -1,0 +1,46 @@
+--- a/crates/php-vm/src/place.rs
++++ b/crates/php-vm/src/place.rs
+@@ -1015,6 +1015,28 @@
+ 
+     /// `++place` etc.
+     pub(crate) fn place_incdec(&mut self, pid: PlaceId, kind: IncDecKind) -> VmResult<Value> {
++        // Fast path: `$i++` on a compiled variable holding an int (no
++        // overflow), before resolving the place generically.
++        {
++            let f = self.frame();
++            let p = &f.code.places[pid as usize];
++            if let (PlaceBase::Cv(cv), true) = (&p.base, p.segs.is_empty()) {
++                let idx = f.cv_idx(*cv);
++                let mut st = f.vars.borrow_mut();
++                if let Some(Some(Value::Int(i))) = st.slots.get_mut(idx) {
++                    let old = *i;
++                    let new = if kind.is_inc() {
++                        old.checked_add(1)
++                    } else {
++                        old.checked_sub(1)
++                    };
++                    if let Some(n) = new {
++                        *i = n;
++                        return Ok(Value::Int(if kind.is_post() { old } else { n }));
++                    }
++                }
++            }
++        }
+         let (base, segs) = self.resolve_place(pid, true)?;
+         let base2 = match &base {
+             RBase::Var(s, i) => RBase::Var(s.clone(), *i),
+@@ -1102,6 +1124,14 @@
+     /// Reads a place.
+     #[allow(clippy::too_many_lines)]
+     pub(crate) fn place_fetch(&mut self, pid: PlaceId, mode: FetchMode) -> VmResult<Value> {
++        // Fast path: reading a plain compiled variable (`f($x)`).
++        if mode == FetchMode::Read {
++            let p = &self.frame().code.places[pid as usize];
++            if let (PlaceBase::Cv(cv), true) = (&p.base, p.segs.is_empty()) {
++                let cv = *cv;
++                return self.read_cv(cv);
++            }
++        }
+         let (base, segs) = self.resolve_place(pid, false)?;
+         let mut cur = match base {
+             RBase::Var(store, idx) => {

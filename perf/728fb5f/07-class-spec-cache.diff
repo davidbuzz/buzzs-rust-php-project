@@ -1,0 +1,52 @@
+--- a/crates/php-vm/src/classlink.rs
++++ b/crates/php-vm/src/classlink.rs
+@@ -99,8 +99,25 @@
+     pub(crate) fn resolve_class_spec(&mut self, spec: &ClassSpec) -> VmResult<Rc<Class>> {
+         match spec {
+             ClassSpec::Named(l) => {
++                let slot = *l as usize;
++                let cached = self
++                    .frame()
++                    .code
++                    .class_cache
++                    .borrow()
++                    .get(slot)
++                    .and_then(Weak::upgrade);
++                if let Some(c) = cached {
++                    return Ok(c);
++                }
+                 let n = self.lit_str(*l);
+-                self.lookup_class_or_error(&n)
++                let c = self.lookup_class_or_error(&n)?;
++                let mut cache = self.frame().code.class_cache.borrow_mut();
++                if cache.len() <= slot {
++                    cache.resize(slot + 1, Weak::new());
++                }
++                cache[slot] = Rc::downgrade(&c);
++                Ok(c)
+             }
+             ClassSpec::SelfClass => {
+                 match self.scope() {
+--- a/crates/php-vm/src/opcode.rs
++++ b/crates/php-vm/src/opcode.rs
+@@ -489,6 +489,10 @@
+     /// name literal (like php-src's runtime cache slot: once a call site
+     /// resolved a function it keeps calling it).
+     pub fcall_cache: RefCell<Vec<Option<CachedFunc>>>,
++    /// Per-literal cache of resolved `ClassSpec::Named` classes (classes
++    /// are never unregistered once declared). Weak: a method's op array
++    /// naming its own class would otherwise form an `Rc` cycle.
++    pub class_cache: RefCell<Vec<std::rc::Weak<crate::class::Class>>>,
+ }
+ 
+ /// An [`OpArray::fcall_cache`] entry. User functions are held weakly: the
+--- a/crates/php-vm/src/compiler/mod.rs
++++ b/crates/php-vm/src/compiler/mod.rs
+@@ -441,6 +441,7 @@
+             strict_types: self.strict_types,
+             decls: self.decls.clone(),
+             fcall_cache: std::cell::RefCell::default(),
++            class_cache: std::cell::RefCell::default(),
+         })
+     }
+ 

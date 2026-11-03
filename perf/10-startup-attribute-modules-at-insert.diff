@@ -1,0 +1,183 @@
+--- a/crates/php-vm/src/classlink.rs
++++ b/crates/php-vm/src/classlink.rs
+@@ -527,7 +527,9 @@
+     pub(crate) fn register_class(&mut self, cls: Rc<Class>) {
+         let lc = cls.lc_name.clone();
+         self.class_order.push(lc.clone());
+-        self.classes.insert(lc, cls);
++        if self.classes.insert(lc.clone(), cls).is_none() {
++            crate::reflection::note_new(crate::reflection::Table::Class, lc.as_bytes());
++        }
+     }
+ 
+     /// Whether all dependencies of a declaration are available (for early
+--- a/crates/php-vm/src/ext.rs
++++ b/crates/php-vm/src/ext.rs
+@@ -238,7 +238,9 @@
+     pub fn constant(&mut self, name: &str, value: Value) -> &mut Self {
+         let n = ZStr::from(name);
+         crate::builtins::info::note_constant(&n, self.name);
+-        self.vm.constants.insert(n, value);
++        if self.vm.constants.insert(n.clone(), value).is_none() {
++            crate::reflection::note_new(crate::reflection::Table::Constant, n.as_bytes());
++        }
+         self
+     }
+ 
+@@ -254,7 +256,9 @@
+     ) -> &mut Self {
+         let n = ZStr::from(name);
+         crate::builtins::info::note_constant(&n, self.name);
+-        self.vm.constants.insert(n.clone(), value);
++        if self.vm.constants.insert(n.clone(), value).is_none() {
++            crate::reflection::note_new(crate::reflection::Table::Constant, n.as_bytes());
++        }
+         let suffix =
+             crate::attrs::format_suffix(Some(&ZStr::from(since)), Some(&ZStr::from(message)));
+         self.vm.deprecated_constants.insert(n, suffix);
+--- a/crates/php-vm/src/builtins/mod.rs
++++ b/crates/php-vm/src/builtins/mod.rs
+@@ -51,7 +51,9 @@
+         flags: fl,
+         handler: f,
+     };
+-    vm.functions.insert(lc.clone(), Func::Builtin(Rc::new(b)));
++    if vm.functions.insert(lc.clone(), Func::Builtin(Rc::new(b))).is_none() {
++        crate::reflection::note_new(crate::reflection::Table::Function, lc.as_bytes());
++    }
+     lc
+ }
+ 
+@@ -67,10 +69,10 @@
+             flags: b.flags,
+             handler: b.handler,
+         };
+-        vm.functions.insert(
+-            ZStr::from(alias.to_ascii_lowercase()),
+-            Func::Builtin(Rc::new(nb)),
+-        );
++        let lc = ZStr::from(alias.to_ascii_lowercase());
++        if vm.functions.insert(lc.clone(), Func::Builtin(Rc::new(nb))).is_none() {
++            crate::reflection::note_new(crate::reflection::Table::Function, lc.as_bytes());
++        }
+     }
+ }
+ 
+@@ -91,7 +93,9 @@
+ 
+ /// Defines a constant.
+ pub(crate) fn constant(vm: &mut Vm, name: &str, v: Value) {
+-    vm.constants.insert(ZStr::from(name), v);
++    if vm.constants.insert(ZStr::from(name), v).is_none() {
++        crate::reflection::note_new(crate::reflection::Table::Constant, name.as_bytes());
++    }
+ }
+ 
+ /// The current time formatted like PHP's error log (`d-M-Y H:i:s UTC`).
+--- a/crates/php-vm/src/reflection/misc.rs
++++ b/crates/php-vm/src/reflection/misc.rs
+@@ -12,63 +12,59 @@
+ use crate::vm::{Vm, VmResult};
+ use php_runtime::{ArrayKey, HashTable, Obj, Value, ZArray, ZStr};
+ use std::cell::{Cell, RefCell};
+-use std::collections::{HashMap, HashSet};
++use std::collections::HashMap;
+ use std::rc::Rc;
+ 
+ // ---------------------------------------------------------------------
+ // Extension attribution
+ // ---------------------------------------------------------------------
+ 
+-/// Snapshot of the function, class and constant tables.
+-type Tables = (HashSet<Vec<u8>>, HashSet<Vec<u8>>, HashSet<Vec<u8>>);
+-
+ #[derive(Default)]
+ struct Modules {
+     functions: HashMap<Vec<u8>, String>,
+     classes: HashMap<Vec<u8>, String>,
+     constants: HashMap<Vec<u8>, String>,
+-    #[allow(dead_code)]
+-    snapshot: Option<Tables>,
++    /// The extension whose `register` is running.
++    current: Option<String>,
+ }
+ 
+ thread_local! {
+     static MODULES: RefCell<Modules> = RefCell::new(Modules::default());
+ }
+ 
+-#[allow(dead_code)]
+-fn snapshot(vm: &Vm) -> Tables {
+-    (
+-        vm.functions.keys().map(|k| k.as_bytes().to_vec()).collect(),
+-        vm.classes.keys().map(|k| k.as_bytes().to_vec()).collect(),
+-        vm.constants.keys().map(|k| k.as_bytes().to_vec()).collect(),
+-    )
++/// Which table [`note_new`] records into.
++#[derive(Clone, Copy)]
++pub(crate) enum Table {
++    Function,
++    Class,
++    Constant,
++}
++
++/// Opens (`begin = true`) or closes the window in which every *new*
++/// function, class and constant is attributed to extension `name`
++/// (the insert sites call [`note_new`]).
++///
++/// This replaces comparing full snapshots of the three tables before and
++/// after each extension, which was O(extensions × symbols) and 70 % of
++/// debug-build startup.
++pub(crate) fn record_module(_vm: &Vm, name: &str, begin: bool) {
++    MODULES.with(|m| m.borrow_mut().current = begin.then(|| name.to_string()));
+ }
+ 
+-/// Records which functions, classes and constants extension `name`
+-/// registered (call with `begin = true` before and `false` after
+-/// `Extension::register`).
+-#[allow(dead_code)] // called from `Vm::with_extensions` once that hook lands
+-pub(crate) fn record_module(vm: &Vm, name: &str, begin: bool) {
+-    if begin {
+-        let s = snapshot(vm);
+-        MODULES.with(|m| m.borrow_mut().snapshot = Some(s));
+-        return;
+-    }
+-    let (f, c, k) = snapshot(vm);
++/// Attributes a key that was just added to `table` (the insert returned
++/// `None`) to the extension being registered, if any.
++pub(crate) fn note_new(table: Table, key: &[u8]) {
+     MODULES.with(|m| {
+         let mut m = m.borrow_mut();
+-        let Some((bf, bc, bk)) = m.snapshot.take() else {
++        let Some(name) = m.current.clone() else {
+             return;
+         };
+-        for x in f.difference(&bf) {
+-            m.functions.insert(x.clone(), name.to_string());
+-        }
+-        for x in c.difference(&bc) {
+-            m.classes.insert(x.clone(), name.to_string());
+-        }
+-        for x in k.difference(&bk) {
+-            m.constants.insert(x.clone(), name.to_string());
+-        }
++        let map = match table {
++            Table::Function => &mut m.functions,
++            Table::Class => &mut m.classes,
++            Table::Constant => &mut m.constants,
++        };
++        map.insert(key.to_vec(), name);
+     });
+ }
+ 
+--- a/crates/php-vm/src/reflection.rs
++++ b/crates/php-vm/src/reflection.rs
+@@ -57,7 +57,7 @@
+ use std::rc::Rc;
+ 
+ #[allow(unused_imports)]
+-pub(crate) use misc::record_module;
++pub(crate) use misc::{note_new, record_module, Table};
+ 
+ const PUB: u32 = flags::PUBLIC;
+ const STAT: u32 = flags::PUBLIC | flags::STATIC;

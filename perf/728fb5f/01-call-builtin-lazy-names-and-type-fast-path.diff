@@ -1,0 +1,113 @@
+--- a/crates/php-vm/src/call.rs
++++ b/crates/php-vm/src/call.rs
+@@ -764,7 +764,8 @@
+         call: PendingCall,
+         strict: bool,
+     ) -> VmResult<Value> {
+-        let fname = self.func_display(&Func::Builtin(b.clone()), call.scope.as_ref());
++        // The display name is only needed for error messages: build it lazily.
++        let fname = |vm: &Self| vm.func_display(&Func::Builtin(b.clone()), call.scope.as_ref());
+         let nparams = b.params.len();
+         let variadic = b.flags & flags::VARIADIC != 0;
+         let mut values: Vec<Value> = Vec::with_capacity(call.args.len());
+@@ -775,14 +776,14 @@
+             self.check_deprecated_call(&call)?;
+         }
+         // Arity.
+-        let positional_count = call.args.iter().filter(|a| a.is_some()).count();
+         if !call.has_named && npassed < b.required as usize {
++            let fname = fname(self);
+             return Err(self.arg_count_error_builtin(&fname, b, npassed));
+         }
+         if !variadic && npassed > nparams {
++            let fname = fname(self);
+             return Err(self.arg_count_error_builtin(&fname, b, npassed));
+         }
+-        let _ = positional_count;
+         for (i, a) in call.args.into_iter().enumerate() {
+             match a {
+                 Some(v) => {
+@@ -795,6 +796,7 @@
+                             .params
+                             .get(i)
+                             .map_or_else(String::new, |p| p.name.to_string_lossy());
++                        let fname = fname(self);
+                         return Err(self.make_throw(
+                             "ArgumentCountError",
+                             &format!("{fname}(): Argument #{} (${pname}) not passed", i + 1),
+@@ -827,6 +829,7 @@
+                 .params
+                 .get(i)
+                 .map_or_else(String::new, |p| p.name.to_string_lossy());
++            let fname = fname(self);
+             return Err(self.make_throw(
+                 "ArgumentCountError",
+                 &format!("{fname}(): Argument #{} (${pname}) not passed", i + 1),
+@@ -849,6 +852,7 @@
+         self.frames.push(f);
+         let depth = self.frames.len();
+         // Type coercion.
++        let mut coerced = false;
+         for (i, v) in values.iter_mut().enumerate() {
+             if !passed[i] {
+                 continue;
+@@ -864,6 +868,13 @@
+             if p.by_ref {
+                 continue;
+             }
++            // Fast path: the value already has an accepted type, so
++            // `verify_type` would accept it unchanged and without side effects.
++            if ty.is_mixed() || accepts_without_coercion(ty.mask, v) {
++                continue;
++            }
++            coerced = true;
++            let fname = fname(self);
+             let pname = p.name.to_string_lossy();
+             let ctx = TypeCtx {
+                 scope: call.scope.as_ref(),
+@@ -871,8 +882,7 @@
+                 strict,
+                 internal_arg: Some((&fname, i + 1, &pname)),
+             };
+-            let ty = ty.clone();
+-            let ok = match self.verify_type(&ty, v, &ctx) {
++            let ok = match self.verify_type(ty, v, &ctx) {
+                 Ok(ok) => ok,
+                 Err(e) => {
+                     self.pop_frames_to(depth);
+@@ -903,8 +913,10 @@
+                 return Err(e);
+             }
+         }
+-        if let Some(f) = self.frames.get_mut(depth - 1) {
+-            f.args = values.iter().take(nframe_args).cloned().map(Some).collect();
++        if coerced {
++            if let Some(f) = self.frames.get_mut(depth - 1) {
++                f.args = values.iter().take(nframe_args).cloned().map(Some).collect();
++            }
+         }
+         let mut args = Args {
+             values,
+@@ -1361,3 +1373,22 @@
+ pub(crate) fn find_double_colon(s: &[u8]) -> Option<usize> {
+     s.windows(2).position(|w| w == b"::")
+ }
++
++/// Whether `verify_type` would accept `v` for a type with mask `m` as-is:
++/// the side-effect-free subset of `type_accepts` (no callable/class checks).
++fn accepts_without_coercion(m: u32, v: &Value) -> bool {
++    use crate::types::mask;
++    let bit = match v {
++        Value::Null => mask::NULL,
++        Value::Bool(true) => mask::TRUE,
++        Value::Bool(false) => mask::FALSE,
++        Value::Int(_) => mask::LONG,
++        Value::Float(_) => mask::DOUBLE,
++        Value::Str(_) => mask::STRING,
++        Value::Array(_) => mask::ARRAY | mask::ITERABLE,
++        Value::Object(_) => mask::OBJECT,
++        Value::Resource(_) => mask::RESOURCE,
++        Value::Reference(_) => 0,
++    };
++    m & bit != 0
++}
