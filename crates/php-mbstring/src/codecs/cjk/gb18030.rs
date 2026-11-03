@@ -65,7 +65,10 @@ const fn umin(v: i32) -> u32 {
 #[inline]
 fn range_lookup(w: u32, tbl: &[u16], min: i32, max: i32) -> Option<u32> {
     if w >= umin(min) && w < umin(max) {
-        Some(tbl.get((w - umin(min)) as usize).map_or(0, |&s| u32::from(s)))
+        Some(
+            tbl.get((w - umin(min)) as usize)
+                .map_or(0, |&s| u32::from(s)),
+        )
     } else {
         None
     }
@@ -89,6 +92,7 @@ fn gb4_bmp(w: u32) -> u32 {
 /// Shared decoder for GB18030 (2000/2005) and GB18030-2022
 /// (`mb_gb18030_to_wchar` / `mb_gb18030_2022_to_wchar`).
 #[allow(clippy::too_many_lines)]
+#[allow(clippy::many_single_char_names)]
 fn gb18030_decode(input: &mut &[u8], buf: &mut [u32], is2022: bool) -> usize {
     let s = *input;
     let e = s.len();
@@ -188,7 +192,10 @@ fn gb18030_decode(input: &mut &[u8], buf: &mut [u32], is2022: bool) -> usize {
 
                 if w >= 0x192B {
                     if w <= 0x1EBE {
-                        if w != 0x1963 && w != 0x1DBF && !(0x1E49..=0x1E55).contains(&w) && w != 0x1E7F
+                        if w != 0x1963
+                            && w != 0x1DBF
+                            && !(0x1E49..=0x1E55).contains(&w)
+                            && w != 0x1E7F
                         {
                             let tbl1: &[u16] = if is2022 {
                                 &g::GB18030_2022_PUA_TBL1
@@ -416,10 +423,7 @@ fn gb18030_encode(input: &[u32], buf: &mut ConvertBuf, is2022: bool) {
         /* While GB18030 and CP936 are very similar, some mappings are different between
          * these encodings; do a binary search in a table of differing codepoints */
         let keys = &g::MBFL_GB18030_C_TBL_KEY;
-        if s == 0
-            && w >= u32::from(keys[0])
-            && w <= u32::from(keys[keys.len() - 1])
-        {
+        if s == 0 && w >= u32::from(keys[0]) && w <= u32::from(keys[keys.len() - 1]) {
             if let Some(i) = crate::codecs::bisec_srch2(i64::from(w), keys) {
                 s = u32::from(g::MBFL_GB18030_C_TBL_VAL[i]);
             }
@@ -465,6 +469,7 @@ pub fn wchar_to_gb18030_2022(input: &[u32], buf: &mut ConvertBuf, _end: bool) {
 }
 
 /// `mb_cp936_to_wchar`.
+#[allow(clippy::many_single_char_names)]
 pub fn cp936_to_wchar(input: &mut &[u8], buf: &mut [u32], _state: &mut u32) -> usize {
     let s = *input;
     let e = s.len();
@@ -488,20 +493,18 @@ pub fn cp936_to_wchar(input: &mut &[u8], buf: &mut [u32], _state: &mut u32) -> u
                 p += 1;
                 if c2 < 0x40 || c2 == 0x7F || c2 == 0xFF {
                     BAD_INPUT
-                } else if ((0xAA..=0xAF).contains(&c) || (0xF8..=0xFE).contains(&c)) && c2 >= 0xA1
-                {
+                } else if ((0xAA..=0xAF).contains(&c) || (0xF8..=0xFE).contains(&c)) && c2 >= 0xA1 {
                     /* UDA part 1, 2: U+E000-U+E4C5 */
                     let row = if c >= 0xF8 { c - 0xF2 } else { c - 0xAA };
                     94 * u32::from(row) + u32::from(c2 - 0xA1) + 0xE000
                 } else if (0xA1..=0xA7).contains(&c) && c2 < 0xA1 {
                     /* UDA part 3: U+E4C6-U+E765 */
-                    96 * u32::from(c - 0xA1) + u32::from(c2)
-                        - if c2 >= 0x80 { 0x41 } else { 0x40 }
+                    96 * u32::from(c - 0xA1) + u32::from(c2) - if c2 >= 0x80 { 0x41 } else { 0x40 }
                         + 0xE4C6
                 } else {
                     /* Convert c, c2 into GB 2312 table lookup index */
                     let w = u32::from(c - 0x81) * 192 + u32::from(c2) - 0x40;
-                    if w >= 0x192B && w <= 0x1EBE {
+                    if (0x192B..=0x1EBE).contains(&w) {
                         u32::from(t::CP936_PUA_TBL1[(w - 0x192B) as usize])
                     } else if (0x413A..=0x413E).contains(&w) {
                         u32::from(t::CP936_PUA_TBL2[(w - 0x413A) as usize])
@@ -686,6 +689,7 @@ pub(crate) mod exhaustive {
     /// Replay `name`; returns the number of lines checked.
     #[allow(clippy::cast_possible_truncation)]
     pub(crate) fn replay(name: &str) -> usize {
+        assert_eq!(fnv1a64(b"a"), "af63dc4c8601ec8c");
         let text = std::fs::read_to_string(fixture_path(name))
             .unwrap_or_else(|e| panic!("cannot read fixture {name}: {e}"));
         let mut failures = Vec::new();
@@ -746,8 +750,325 @@ pub(crate) mod exhaustive {
     }
 }
 
+/// Emulation of the checks in `encoding_tests.inc` (`readConversionTable`,
+/// `findInvalidChars`, `testAllValidChars`, `testAllInvalidChars`,
+/// `testTruncatedChars`, `convertAllInvalidChars`), shared with the BIG5 and
+/// HZ tests.
+#[cfg(test)]
+pub(crate) mod phpt {
+    use std::collections::{BTreeMap, BTreeSet};
+
+    use crate::codecs::cjk::testutil::{code_bytes, data_file, decode, encode, mapping_lines};
+    use crate::convert::BAD_INPUT;
+    use crate::encoding::Encoding;
+
+    /// Byte string -> code point, and code point -> byte string (last
+    /// mapping wins in both, like PHP's arrays).
+    pub(crate) type Maps = (BTreeMap<Vec<u8>, u32>, BTreeMap<u32, Vec<u8>>);
+
+    /// `readConversionTable`: `0xCODE 0xUNICODE` lines; `swap` for files
+    /// listing Unicode first (GB18030-2022). Skips U+FFFD. `None` if the
+    /// php-src checkout is missing.
+    #[allow(clippy::cast_possible_truncation)]
+    pub(crate) fn read_table(name: &str, swap: bool) -> Option<Maps> {
+        let text = data_file(name)?;
+        let mut to = BTreeMap::new();
+        let mut from = BTreeMap::new();
+        for line in mapping_lines(&text) {
+            if line.len() < 2 || line[0].len() != 1 || line[1].len() != 1 {
+                continue;
+            }
+            let (code, cp) = if swap {
+                (line[1][0], line[0][0])
+            } else {
+                (line[0][0], line[1][0])
+            };
+            if cp == 0xFFFD {
+                continue;
+            }
+            let bytes = code_bytes(code);
+            let bytes = if bytes.is_empty() { vec![0] } else { bytes };
+            to.insert(bytes.clone(), cp as u32);
+            from.insert(cp as u32, bytes);
+        }
+        Some((to, from))
+    }
+
+    /// Valid characters decode to their code point, individually and all
+    /// concatenated.
+    pub(crate) fn test_valid_decode(e: &'static Encoding, to: &BTreeMap<Vec<u8>, u32>) {
+        let mut all = Vec::new();
+        let mut expected = Vec::new();
+        for (bytes, &cp) in to {
+            assert_eq!(
+                decode(e, bytes),
+                vec![cp],
+                "{} decoding {bytes:02x?}",
+                e.name
+            );
+            all.extend(bytes);
+            expected.push(cp);
+        }
+        assert_eq!(decode(e, &all), expected, "{} decoding all", e.name);
+    }
+
+    /// Code points encode to their byte string, individually and all
+    /// concatenated.
+    pub(crate) fn test_valid_encode(e: &'static Encoding, from: &BTreeMap<u32, Vec<u8>>) {
+        let mut all = Vec::new();
+        let mut cps = Vec::new();
+        for (&cp, bytes) in from {
+            let (out, errors) = encode(e, &[cp]);
+            assert_eq!((&out, errors), (bytes, 0), "{} encoding U+{cp:04X}", e.name);
+            all.extend(bytes);
+            cps.push(cp);
+        }
+        assert_eq!(encode(e, &cps).0, all, "{} encoding all", e.name);
+    }
+
+    /// `findInvalidChars` (without start bytes) + `testAllInvalidChars` +
+    /// `testTruncatedChars`: every invalid byte string followed by a good
+    /// character decodes to an error marker plus that character; every
+    /// truncated prefix decodes to one error marker. `skip` filters the
+    /// candidates (the GB18030 tests exclude 4-byte codes).
+    pub(crate) fn test_invalid_decode(
+        e: &'static Encoding,
+        to: &BTreeMap<Vec<u8>, u32>,
+        skip: &dyn Fn(&[u8]) -> bool,
+    ) {
+        let prefixes: BTreeSet<Vec<u8>> = to
+            .keys()
+            .flat_map(|k| (1..k.len()).map(move |l| k[..l].to_vec()))
+            .collect();
+        let goods: Vec<(&Vec<u8>, &u32)> = to.iter().filter(|(k, _)| k.len() > 1).collect();
+        let mut invalid = Vec::new();
+        let mut truncated = Vec::new();
+        let mut stack: Vec<Vec<u8>> = vec![Vec::new()];
+        while let Some(prefix) = stack.pop() {
+            for b in 0..=255u8 {
+                let mut s = prefix.clone();
+                s.push(b);
+                if to.contains_key(&s) {
+                    continue;
+                }
+                if prefixes.contains(&s) {
+                    truncated.push(s.clone());
+                    stack.push(s);
+                } else {
+                    invalid.push(s);
+                }
+            }
+        }
+        for (i, bad) in invalid.iter().filter(|s| !skip(s)).enumerate() {
+            let (good, &cp) = goods[i % goods.len()];
+            let mut input = bad.clone();
+            input.extend(good);
+            assert_eq!(
+                decode(e, &input),
+                vec![BAD_INPUT, cp],
+                "{} decoding invalid {bad:02x?}",
+                e.name
+            );
+        }
+        for t in truncated.iter().filter(|s| !skip(s)) {
+            assert_eq!(
+                decode(e, t),
+                vec![BAD_INPUT],
+                "{} decoding truncated {t:02x?}",
+                e.name
+            );
+        }
+    }
+
+    /// `convertAllInvalidChars` for UTF-16BE input: every BMP code point
+    /// (other than U+0000) which is not in `from` fails to encode.
+    pub(crate) fn test_invalid_encode(e: &'static Encoding, from: &BTreeMap<u32, Vec<u8>>) {
+        for cp in 1..0x10000u32 {
+            if !from.contains_key(&cp) {
+                let (out, errors) = encode(e, &[cp, u32::from(b'A')]);
+                assert_eq!(
+                    (out, errors),
+                    (b"?A".to_vec(), 1),
+                    "{} encoding U+{cp:04X}",
+                    e.name
+                );
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::codecs::cjk::testutil::{decode, decode_bufsize, encode, encode_split};
+
+    fn not_four_byte_code(s: &[u8]) -> bool {
+        let lead = |b: u8| (0x81..=0x84).contains(&b) || (0x90..=0xE3).contains(&b);
+        !lead(s[0]) || (s.len() > 1 && !(0x30..=0x39).contains(&s[1]))
+    }
+
+    #[test]
+    fn gb18030_mapping_file() {
+        let Some((to, from)) = phpt::read_table("GB18030-2byte.txt", false) else {
+            return;
+        };
+        phpt::test_valid_decode(&ENC_GB18030, &to);
+        phpt::test_valid_encode(&ENC_GB18030, &from);
+        phpt::test_invalid_decode(&ENC_GB18030, &to, &|s| !not_four_byte_code(s));
+    }
+
+    #[test]
+    fn cp936_mapping_file() {
+        let Some((to, mut from)) = phpt::read_table("CP936.txt", false) else {
+            return;
+        };
+        phpt::test_valid_decode(&ENC_CP936, &to);
+        // One-way mappings accepted on input (cp936_encoding.phpt)
+        from.insert(0x223C, vec![0xA1, 0xAB]);
+        from.insert(0x2218, vec![0xA1, 0xE3]);
+        from.insert(0x203E, vec![0xA3, 0xFE]);
+        // ... and the CJK compatibility ideographs, from our own tables
+        for cp in 0xF900..0xFA2Eu32 {
+            if let Some(v) = range_lookup(
+                cp,
+                &t::UCS_CI_CP936_TABLE,
+                t::UCS_CI_CP936_TABLE_MIN,
+                t::UCS_CI_CP936_TABLE_MAX,
+            )
+            .filter(|&v| v != 0)
+            {
+                #[allow(clippy::cast_possible_truncation)]
+                from.entry(cp)
+                    .or_insert_with(|| vec![(v >> 8) as u8, v as u8]);
+            }
+        }
+        phpt::test_valid_encode(&ENC_CP936, &from);
+        phpt::test_invalid_decode(&ENC_CP936, &to, &|_| false);
+        phpt::test_invalid_encode(&ENC_CP936, &from);
+    }
+
+    fn gb4(index: u32) -> Vec<u8> {
+        gb4_pack(index, 0x81).to_be_bytes().to_vec()
+    }
+
+    #[test]
+    fn gb18030_2022_mapping_file() {
+        let Some((to, from)) = phpt::read_table("GB18030-2022MappingTableBMP.txt", true) else {
+            return;
+        };
+        assert!(to.len() > 60_000);
+        phpt::test_valid_decode(&ENC_GB18030_2022, &to);
+        phpt::test_valid_encode(&ENC_GB18030_2022, &from);
+        phpt::test_invalid_decode(&ENC_GB18030_2022, &to, &|s| !not_four_byte_code(s));
+    }
+
+    #[test]
+    fn gb18030_2022_updated_mappings() {
+        let updated: [(u16, u32); 10] = [
+            (0xA6D9, 0xFE10),
+            (0xA6DA, 0xFE12),
+            (0xA6DB, 0xFE11),
+            (0xA6EC, 0xFE17),
+            (0xA6F3, 0xFE19),
+            (0xA8BC, 0x1E3F),
+            (0xA8BF, 0x01F9),
+            (0xFE59, 0x9FB4),
+            (0xFE91, 0xE855),
+            (0xFEA0, 0x9FBB),
+        ];
+        for (gb, cp) in updated {
+            let b = gb.to_be_bytes();
+            assert_eq!(decode(&ENC_GB18030_2022, &b), vec![cp]);
+            assert_eq!(encode(&ENC_GB18030_2022, &[cp]).0, b.to_vec());
+        }
+        // GB18030 (2005) differs for some of these
+        assert_eq!(decode(&ENC_GB18030, &[0xFE, 0x59]), vec![0xE81E]);
+        assert_eq!(decode(&ENC_GB18030, &[0xA6, 0xD9]), vec![0xE78D]);
+        // PUA code points moved to 4-byte codes in 2022
+        assert_eq!(decode(&ENC_GB18030_2022, &gb4(0x98A4)), vec![0xE78D]);
+        assert_eq!(decode(&ENC_GB18030_2022, &gb4(0x4A78)), vec![0xE864]);
+        assert_eq!(encode(&ENC_GB18030_2022, &[0xE78D]).0, gb4(0x98A4));
+    }
+
+    #[test]
+    fn gb18030_2022_smp_and_invalid() {
+        let smp: [(u32, [u8; 4]); 4] = [
+            (0x10_0308, [0xDE, 0x30, 0xE6, 0x36]),
+            (0x1_252A, [0x90, 0x37, 0xC6, 0x34]),
+            (0x2_089A, [0x95, 0x33, 0xE0, 0x38]),
+            (0xF_F427, [0xDD, 0x37, 0xE3, 0x37]),
+        ];
+        for e in [&ENC_GB18030_2022, &ENC_GB18030] {
+            for (cp, b) in smp {
+                assert_eq!(decode(e, &b), vec![cp]);
+                assert_eq!(encode(e, &[cp]).0, b.to_vec());
+            }
+            let bad = BAD_INPUT;
+            for (input, expected) in [
+                (&b"\x81\x30\x81\xFF"[..], vec![bad]),
+                (b"\x84\x31\xA4\x40", vec![bad]),
+                (b"\x84\x31\xA5\x30", vec![bad]),
+                (b"\x84\x32\x81\x30", vec![bad]),
+                (b"\x85\x31\x81\x30", vec![bad, bad]),
+                (b"\x90\x30\x81\x30", vec![0x10000]),
+                (b"\xE3\x32\x9A\x35", vec![0x10_FFFF]),
+                (b"\x90\x30\x81\xFF", vec![bad]),
+                (b"\xE3\x32\x9A\x36", vec![bad]),
+                (b"\xE4\x30\x81\x35", vec![bad, bad]),
+                (b"\x90\x30\x80\x30", vec![bad, 0x30]),
+            ] {
+                assert_eq!(decode(e, input), expected, "{} {input:02x?}", e.name);
+            }
+            // Fuzzer regression: invalid code point must not become NUL
+            let (out, errors) = encode(e, &[0xAAB8_2D38, u32::from(b'#')]);
+            assert_eq!((out, errors), (b"?#".to_vec(), 1));
+        }
+    }
+
+    #[test]
+    fn small_buffers_and_split_encoding() {
+        let input: Vec<u8> = b"a\x81\x30\x81\x30\xB0\xA1\x90\x30\x81\x30\xFF\x81\x40z\x81".to_vec();
+        for e in [&ENC_GB18030, &ENC_GB18030_2022, &ENC_CP936] {
+            let full = decode(e, &input);
+            for size in [1, 2, 5, 8] {
+                assert_eq!(
+                    decode_bufsize(e, &input, size),
+                    full,
+                    "{} bufsize {size}",
+                    e.name
+                );
+            }
+            let cps = [0x41, 0x4E00, 0x80, 0x10000, 0xE000, 0x20AC];
+            assert_eq!(encode_split(e, &cps), encode(e, &cps).0);
+        }
+    }
+
+    #[test]
+    fn cut() {
+        assert_eq!(cut_gb18030(b"\x81\x30\x81\x30AB", 1, 3), b"");
+        assert_eq!(cut_gb18030(b"A\x81\x40B", 2, 2), b"\x81\x40");
+        assert_eq!(cut_gb18030(b"A\x81\x40B", 1, 2), b"\x81\x40");
+        assert_eq!(cut_gb18030(b"A\x81\x40B", 1, 1), b"");
+        assert_eq!(
+            cut_gb18030(b"AB\x90\x30\x81\x30", 1, 100),
+            b"B\x90\x30\x81\x30"
+        );
+        // `from` inside a character snaps back to its start; `len` is
+        // clamped to the bytes after `from`, then applied from the start
+        assert_eq!(
+            cut_gb18030(b"AB\x90\x30\x81\x30C", 3, 5),
+            b"\x90\x30\x81\x30"
+        );
+        assert_eq!(
+            cut_gb18030(b"AB\x90\x30\x81\x30CD", 3, 5),
+            b"\x90\x30\x81\x30C"
+        );
+        // A trailing lone lead byte is kept when the cut reaches the end
+        assert_eq!(cut_gb18030(b"AB\x81", 0, 3), b"AB\x81");
+        assert_eq!(cut_gb18030(b"AB\x81C", 0, 3), b"AB");
+        assert_eq!(cut_gb18030(b"", 0, 1), b"");
+    }
+
     #[test]
     fn detail_oracle() {
         assert!(crate::codecs::cjk::testutil::replay_oracle("gb_oracle.tsv") > 500);

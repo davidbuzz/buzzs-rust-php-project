@@ -82,6 +82,7 @@ fn big5_ucs(idx: i32) -> u32 {
 }
 
 /// `mb_big5_to_wchar`.
+#[allow(clippy::many_single_char_names)]
 pub fn big5_to_wchar(input: &mut &[u8], buf: &mut [u32], _state: &mut u32) -> usize {
     let s = *input;
     if s.is_empty() {
@@ -137,12 +138,36 @@ pub fn big5_to_wchar(input: &mut &[u8], buf: &mut [u32], _state: &mut u32) -> us
 fn big5_lookup(w: u32) -> u32 {
     #[allow(clippy::cast_sign_loss)]
     let ranges: [(&[u16], i32, i32); 6] = [
-        (&t::UCS_A1_BIG5_TABLE, t::UCS_A1_BIG5_TABLE_MIN, t::UCS_A1_BIG5_TABLE_MAX),
-        (&t::UCS_A2_BIG5_TABLE, t::UCS_A2_BIG5_TABLE_MIN, t::UCS_A2_BIG5_TABLE_MAX),
-        (&t::UCS_A3_BIG5_TABLE, t::UCS_A3_BIG5_TABLE_MIN, t::UCS_A3_BIG5_TABLE_MAX),
-        (&t::UCS_I_BIG5_TABLE, t::UCS_I_BIG5_TABLE_MIN, t::UCS_I_BIG5_TABLE_MAX),
-        (&t::UCS_R1_BIG5_TABLE, t::UCS_R1_BIG5_TABLE_MIN, t::UCS_R1_BIG5_TABLE_MAX),
-        (&t::UCS_R2_BIG5_TABLE, t::UCS_R2_BIG5_TABLE_MIN, t::UCS_R2_BIG5_TABLE_MAX),
+        (
+            &t::UCS_A1_BIG5_TABLE,
+            t::UCS_A1_BIG5_TABLE_MIN,
+            t::UCS_A1_BIG5_TABLE_MAX,
+        ),
+        (
+            &t::UCS_A2_BIG5_TABLE,
+            t::UCS_A2_BIG5_TABLE_MIN,
+            t::UCS_A2_BIG5_TABLE_MAX,
+        ),
+        (
+            &t::UCS_A3_BIG5_TABLE,
+            t::UCS_A3_BIG5_TABLE_MIN,
+            t::UCS_A3_BIG5_TABLE_MAX,
+        ),
+        (
+            &t::UCS_I_BIG5_TABLE,
+            t::UCS_I_BIG5_TABLE_MIN,
+            t::UCS_I_BIG5_TABLE_MAX,
+        ),
+        (
+            &t::UCS_R1_BIG5_TABLE,
+            t::UCS_R1_BIG5_TABLE_MIN,
+            t::UCS_R1_BIG5_TABLE_MAX,
+        ),
+        (
+            &t::UCS_R2_BIG5_TABLE,
+            t::UCS_R2_BIG5_TABLE_MIN,
+            t::UCS_R2_BIG5_TABLE_MAX,
+        ),
     ];
     for (tbl, min, max) in ranges {
         #[allow(clippy::cast_sign_loss)]
@@ -179,6 +204,7 @@ pub fn wchar_to_big5(input: &[u32], buf: &mut ConvertBuf, _end: bool) {
 }
 
 /// `mb_cp950_to_wchar`.
+#[allow(clippy::many_single_char_names)]
 pub fn cp950_to_wchar(input: &mut &[u8], buf: &mut [u32], _state: &mut u32) -> usize {
     let s = *input;
     let e = s.len();
@@ -321,6 +347,110 @@ pub fn wchar_to_cp950(input: &[u32], buf: &mut ConvertBuf, _end: bool) {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::codecs::cjk::gb18030::phpt;
+    use crate::codecs::cjk::testutil::{decode, decode_bufsize, encode, encode_split};
+
+    /// Non-reversible mappings (two different BIG5 codepoints map to the same
+    /// Unicode codepoint), from `big5_encoding.phpt`.
+    const NON_REVERSIBLE: [(u32, [u8; 2]); 8] = [
+        (0x2550, [0xA2, 0xA4]),
+        (0x255E, [0xA2, 0xA5]),
+        (0x2561, [0xA2, 0xA7]),
+        (0x256A, [0xA2, 0xA6]),
+        (0x256D, [0xA2, 0x7E]),
+        (0x256E, [0xA2, 0xA1]),
+        (0x256F, [0xA2, 0xA3]),
+        (0x2570, [0xA2, 0xA2]),
+    ];
+
+    #[test]
+    fn big5_mapping_file() {
+        let Some((to, mut from)) = phpt::read_table("BIG5.txt", false) else {
+            return;
+        };
+        for (cp, b) in NON_REVERSIBLE {
+            from.insert(cp, b.to_vec());
+        }
+        phpt::test_valid_decode(&ENC_BIG5, &to);
+        phpt::test_invalid_decode(&ENC_BIG5, &to, &|_| false);
+        phpt::test_valid_encode(&ENC_BIG5, &from);
+        phpt::test_invalid_encode(&ENC_BIG5, &from);
+    }
+
+    #[test]
+    #[allow(clippy::cast_possible_truncation)]
+    fn cp950_mapping_file() {
+        let Some((mut to, mut from)) = phpt::read_table("CP950.txt", false) else {
+            return;
+        };
+        for (cp, b) in NON_REVERSIBLE {
+            from.insert(cp, b.to_vec());
+        }
+        let mut add_pua = |hi: u32, lo: u32, unicode: u32| {
+            let b = vec![hi as u8, lo as u8];
+            from.insert(unicode, b.clone());
+            to.insert(b, unicode);
+        };
+        let rows: [(std::ops::RangeInclusive<u32>, u32, u32, bool); 4] = [
+            (0x81..=0x8D, 0xEEB8, 0x81, true),
+            (0x8E..=0xA0, 0xE311, 0x8E, true),
+            (0xC7..=0xC8, 0xF672, 0xC6, true),
+            (0xFA..=0xFE, 0xE000, 0xFA, true),
+        ];
+        for (his, base, first, _) in rows {
+            for hi in his {
+                for lo in 0x40..=0x7E {
+                    add_pua(hi, lo, base + 157 * (hi - first) + (lo - 0x40));
+                }
+                for lo in 0xA1..=0xFE {
+                    add_pua(hi, lo, base + 157 * (hi - first) + (lo - 0x62));
+                }
+            }
+        }
+        for lo in 0xA1..=0xFE {
+            add_pua(0xC6, lo, 0xF672 + (lo - 0x62));
+        }
+        phpt::test_valid_decode(&ENC_CP950, &to);
+        phpt::test_invalid_decode(&ENC_CP950, &to, &|_| false);
+        phpt::test_valid_encode(&ENC_CP950, &from);
+        phpt::test_invalid_encode(&ENC_CP950, &from);
+    }
+
+    #[test]
+    fn quirks() {
+        // 0xC8 lead with an unmapped trail: the trail byte is reprocessed
+        assert_eq!(decode(&ENC_BIG5, b"\xC8\x41A"), vec![BAD_INPUT, 0x41, 0x41]);
+        assert_eq!(decode(&ENC_BIG5, b"\xB0\x9F"), vec![BAD_INPUT]);
+        assert_eq!(decode(&ENC_BIG5, b"A\xA1"), vec![0x41, BAD_INPUT]);
+        assert_eq!(decode(&ENC_CP950, b"\xA1\x45"), vec![0x2027]);
+        assert_eq!(
+            decode(&ENC_CP950, b"\xF9\xFE"),
+            decode(&ENC_BIG5, b"\xF9\xFE")
+        );
+        // CP950 reports errors through the BIG5 encoder
+        assert_eq!(encode(&ENC_CP950, &[0x2609]), (b"?".to_vec(), 1));
+        assert_eq!(encode(&ENC_BIG5, &[0]), (vec![0], 0));
+    }
+
+    #[test]
+    fn small_buffers_and_split_encoding() {
+        let input = b"a\xA4\x40\xC8\x41\xF9\xFE\x80\xA1\x45\xFE\xFEz\xA1".to_vec();
+        for e in [&ENC_BIG5, &ENC_CP950] {
+            let full = decode(e, &input);
+            for size in [1, 2, 5, 8] {
+                assert_eq!(
+                    decode_bufsize(e, &input, size),
+                    full,
+                    "{} bufsize {size}",
+                    e.name
+                );
+            }
+            let cps = [0x41, 0x4E00, 0x2550, 0xE000, 0x2027, 0];
+            assert_eq!(encode_split(e, &cps), encode(e, &cps).0);
+        }
+    }
+
     #[test]
     fn detail_oracle() {
         assert!(crate::codecs::cjk::testutil::replay_oracle("big5_oracle.tsv") > 500);
