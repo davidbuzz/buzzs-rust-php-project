@@ -10,13 +10,19 @@ pub fn trim(s: &[u8]) -> &[u8] {
 
 /// PHP `ltrim()` with the default character list.
 pub fn trim_start(s: &[u8]) -> &[u8] {
-    let start = s.iter().position(|b| !TRIM_CHARS.contains(b)).unwrap_or(s.len());
+    let start = s
+        .iter()
+        .position(|b| !TRIM_CHARS.contains(b))
+        .unwrap_or(s.len());
     &s[start..]
 }
 
 /// PHP `rtrim()` with the default character list.
 pub fn trim_end(s: &[u8]) -> &[u8] {
-    let end = s.iter().rposition(|b| !TRIM_CHARS.contains(b)).map_or(0, |p| p + 1);
+    let end = s
+        .iter()
+        .rposition(|b| !TRIM_CHARS.contains(b))
+        .map_or(0, |p| p + 1);
     &s[..end]
 }
 

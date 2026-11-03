@@ -290,7 +290,10 @@ fn read_sections(path: &Path, content: &[u8]) -> Result<HashMap<String, Vec<u8>>
             continue;
         }
         if !secdone {
-            sections.entry(section.clone()).or_default().extend_from_slice(line);
+            sections
+                .entry(section.clone())
+                .or_default()
+                .extend_from_slice(line);
         }
         if secfile && is_done_marker(line) {
             secdone = true;
@@ -309,7 +312,7 @@ pub fn parse_conflicts(text: &[u8]) -> Vec<String> {
         .join("\n");
     stripped
         .trim()
-        .split('\n')
+        .lines()
         .map(|s| s.trim().to_string())
         .collect()
 }
@@ -344,7 +347,9 @@ mod tests {
         );
         assert!(parse("--TEST--\nx\n--FILE--\n--EXPECT--\na\n--EXPECTF--\nb\n").is_err());
         assert_eq!(
-            parse("--TEST--\nx\n--FILE--\na\n--FILE--\nb\n--EXPECT--\n").unwrap_err().0,
+            parse("--TEST--\nx\n--FILE--\na\n--FILE--\nb\n--EXPECT--\n")
+                .unwrap_err()
+                .0,
             "duplicated FILE section"
         );
         // An empty duplicate is tolerated, like in run-tests.php.
@@ -373,6 +378,9 @@ mod tests {
         assert!(t.is_cgi());
         let t = parse("--TEST--\nx\n--GET--\n--FILE--\n--EXPECT--\n").unwrap();
         assert!(!t.is_cgi());
-        assert_eq!(parse_conflicts(b"# comment\nall\n  foo # x\n"), vec!["all", "foo"]);
+        assert_eq!(
+            parse_conflicts(b"# comment\nall\n  foo # x\n"),
+            vec!["all", "foo"]
+        );
     }
 }

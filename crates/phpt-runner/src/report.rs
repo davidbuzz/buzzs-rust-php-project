@@ -82,7 +82,9 @@ pub fn dir_key(path: &str, depth: Option<usize>) -> String {
 pub fn by_dir(results: &[TestResult], depth: Option<usize>) -> BTreeMap<String, Counts> {
     let mut map: BTreeMap<String, Counts> = BTreeMap::new();
     for r in results {
-        map.entry(dir_key(&r.path, depth)).or_default().add(r.result);
+        map.entry(dir_key(&r.path, depth))
+            .or_default()
+            .add(r.result);
     }
     map
 }

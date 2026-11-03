@@ -83,6 +83,7 @@ impl Baseline {
 
     /// The baseline after this run: entries for tests that were not run are kept, entries for
     /// tests that ran are replaced by the current failures.
+    #[must_use]
     pub fn updated(&self, results: &[TestResult]) -> Baseline {
         let ran: BTreeSet<&str> = results.iter().map(|r| r.path.as_str()).collect();
         let mut entries: BTreeSet<String> = self
@@ -149,6 +150,9 @@ mod tests {
         assert_eq!(cmp.unexpected_passes, vec!["b.phpt"]);
         assert!(cmp.is_regression());
         let u = b.updated(&results);
-        assert_eq!(u.to_text().lines().skip(1).collect::<Vec<_>>(), ["a.phpt", "c.phpt", "z.phpt"]);
+        assert_eq!(
+            u.to_text().lines().skip(1).collect::<Vec<_>>(),
+            ["a.phpt", "c.phpt", "z.phpt"]
+        );
     }
 }

@@ -4,6 +4,7 @@
 //! PCRE2 in non-UTF (byte) mode with `DOTALL`, exactly like PHP.
 
 use std::collections::HashMap;
+use std::fmt::Write as _;
 use std::sync::Mutex;
 
 use pcre2::bytes::{Regex, RegexBuilder};
@@ -120,7 +121,7 @@ fn pattern_to_ascii(re: &[u8]) -> String {
         let b = re[i];
         if b == b'\\' && re.get(i + 1).is_some_and(|n| *n >= 0x80) {
             // An escaped high byte is just that literal byte.
-            out.push_str(&format!("\\x{{{:02x}}}", re[i + 1]));
+            let _ = write!(out, "\\x{{{:02x}}}", re[i + 1]);
             i += 2;
             continue;
         }
@@ -133,7 +134,7 @@ fn pattern_to_ascii(re: &[u8]) -> String {
             continue;
         }
         if b >= 0x80 {
-            out.push_str(&format!("\\x{{{b:02x}}}"));
+            let _ = write!(out, "\\x{{{b:02x}}}");
         } else {
             out.push(char::from(b));
         }
@@ -249,7 +250,10 @@ mod tests {
         assert!(regex_matches(b"a\\/b", b"a/b"));
         assert!(expectf_matches(b"caf\xe9 %s", b"caf\xe9 au lait"));
         assert!(regex_matches(b"[\x80-\xff]+", b"\xe9\xe8"));
-        assert!(regex_matches(b".*Division by zero.*", b"Fatal error: Division by zero in"));
+        assert!(regex_matches(
+            b".*Division by zero.*",
+            b"Fatal error: Division by zero in"
+        ));
     }
 
     #[test]

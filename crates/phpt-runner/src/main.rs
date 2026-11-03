@@ -22,8 +22,8 @@ use phpt_runner::schedule::{run_jobs, Job};
 #[command(name = "phpt-runner", version)]
 #[allow(clippy::struct_excessive_bools)]
 struct Cli {
-    /// PHP binary to test [default: target/<profile>/php next to this runner, or
-    /// $TEST_PHP_EXECUTABLE].
+    /// PHP binary to test [default: `$TEST_PHP_EXECUTABLE`, else `php` next to this
+    /// runner, e.g. target/debug/php].
     #[arg(long)]
     php: Option<PathBuf>,
     /// Number of parallel workers [default: number of CPUs].
@@ -67,7 +67,7 @@ struct Cli {
     /// Group the per-directory summary by the first N path components.
     #[arg(long, value_name = "N")]
     summary_depth: Option<usize>,
-    /// Set SKIP_SLOW_TESTS for the tests.
+    /// Set `SKIP_SLOW_TESTS` for the tests.
     #[arg(long)]
     skip_slow: bool,
     /// Disable coloured output.
@@ -101,10 +101,10 @@ impl SharedProbeCache {
         }
         let seed = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_nanos());
-        for attempt in 0..3u32 {
-            let tag = seed ^ (u128::from(std::process::id()) << 64) ^ u128::from(attempt);
-            let dir = std::env::temp_dir().join(format!("php-run-tests-{:016x}", tag as u64));
+            .map_or(0, |d| d.as_secs() ^ (u64::from(d.subsec_nanos()) << 30));
+        for attempt in 0..3u64 {
+            let tag = seed ^ (u64::from(std::process::id()) << 40) ^ attempt;
+            let dir = std::env::temp_dir().join(format!("php-run-tests-{tag:016x}"));
             let mut builder = std::fs::DirBuilder::new();
             std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
             if builder.create(&dir).is_ok() {
@@ -134,7 +134,10 @@ fn base_env(php: &Path, skip_slow: bool) -> Env {
     }
     let php_str = php.to_string_lossy();
     set("TEST_PHP_EXECUTABLE", php.as_os_str().to_owned());
-    set("TEST_PHP_EXECUTABLE_ESCAPED", escapeshellarg(&php_str).into());
+    set(
+        "TEST_PHP_EXECUTABLE_ESCAPED",
+        escapeshellarg(&php_str).into(),
+    );
     set("TEST_PHP_CGI_EXECUTABLE", OsString::new());
     set("TEST_PHP_CGI_EXECUTABLE_ESCAPED", "''".into());
     set("TEST_PHPDBG_EXECUTABLE", OsString::new());
@@ -181,12 +184,17 @@ fn print_result(r: &TestResult, cli: &Cli, color: bool, show_diff: bool) {
     );
     if show_diff && r.result == Status::Fail {
         if let Some(diff) = &r.diff {
-            let _ = writeln!(out, "\n========DIFF========\n{}\n========DONE========", diff.trim_end());
+            let _ = writeln!(
+                out,
+                "\n========DIFF========\n{}\n========DONE========",
+                diff.trim_end()
+            );
         }
     }
 }
 
-fn run(cli: &Cli) -> Result<ExitCode, String> {
+/// Resolve the selected tests and the php-src root.
+fn select_tests(cli: &Cli) -> Result<(Vec<PathBuf>, PathBuf), String> {
     let mut tests = collect(&cli.paths)?;
     let srcdir = match &cli.srcdir {
         Some(s) => s.canonicalize().map_err(|e| format!("--srcdir: {e}"))?,
@@ -196,32 +204,30 @@ fn run(cli: &Cli) -> Result<ExitCode, String> {
             .or_else(|| std::env::current_dir().ok())
             .ok_or("cannot determine php-src root; pass --srcdir")?,
     };
-    let shortname = |p: &Path| {
-        p.strip_prefix(&srcdir)
-            .unwrap_or(p)
-            .to_string_lossy()
-            .into_owned()
-    };
     if !cli.filter.is_empty() {
         tests.retain(|t| {
-            let s = shortname(t);
+            let s = shortname(t, &srcdir);
             cli.filter.iter().any(|f| s.contains(f.as_str()))
         });
     }
-    if cli.list {
-        for t in &tests {
-            println!("{}", shortname(t));
-        }
-        return Ok(ExitCode::SUCCESS);
-    }
-    if tests.is_empty() {
-        println!("No tests found.");
-        return Ok(ExitCode::SUCCESS);
-    }
+    Ok((tests, srcdir))
+}
 
-    let php = cli.php.clone().or_else(default_php).ok_or(
-        "no PHP binary found: build php-cli (target/debug/php) or pass --php <path>",
-    )?;
+fn shortname(path: &Path, srcdir: &Path) -> String {
+    path.strip_prefix(srcdir)
+        .unwrap_or(path)
+        .to_string_lossy()
+        .into_owned()
+}
+
+/// Locate the PHP binary, build the base environment and probe extensions. The returned probe
+/// cache directory must outlive the run.
+fn make_runner(cli: &Cli, srcdir: &Path) -> Result<(Runner, Option<SharedProbeCache>), String> {
+    let php = cli
+        .php
+        .clone()
+        .or_else(default_php)
+        .ok_or("no PHP binary found: build php-cli (target/debug/php) or pass --php <path>")?;
     let php = php
         .canonicalize()
         .map_err(|e| format!("invalid PHP executable {}: {e}", php.display()))?;
@@ -232,29 +238,36 @@ fn run(cli: &Cli) -> Result<ExitCode, String> {
     env.remove(&OsString::from("TEST_PHP_SHARED_CACHE_DIR"));
     let probe_cache = SharedProbeCache::create();
     if let Some(cache) = &probe_cache {
-        env.insert("TEST_PHP_SHARED_CACHE_DIR".into(), cache.0.clone().into_os_string());
+        env.insert(
+            "TEST_PHP_SHARED_CACHE_DIR".into(),
+            cache.0.clone().into_os_string(),
+        );
     }
     let mut probe_ini = IniSettings::new();
     probe_ini.apply_lines(ini_overwrites.iter().map(String::as_str));
-    let extensions = Extensions::probe(&php, &probe_ini.to_arguments(), &env, &srcdir)
+    let extensions = Extensions::probe(&php, &probe_ini.to_arguments(), &env, srcdir)
         .unwrap_or_else(|| {
             eprintln!(
-                "warning: could not query loaded extensions from {}; tests with --EXTENSIONS-- will be skipped",
+                "warning: could not query loaded extensions from {}; tests with --EXTENSIONS-- \
+                 will be skipped",
                 php.display()
             );
             Extensions::default()
         });
-
     let runner = Runner::new(Config {
-        php: php.clone(),
-        srcdir: srcdir.clone(),
+        php,
+        srcdir: srcdir.to_path_buf(),
         timeout: Duration::from_secs(cli.timeout),
         env,
         ini_overwrites,
         write_artifacts: !cli.no_artifacts,
         extensions,
     });
+    Ok((runner, probe_cache))
+}
 
+/// Run all tests in parallel, printing result lines as they complete.
+fn execute(cli: &Cli, runner: &Runner, tests: &[PathBuf]) -> Vec<TestResult> {
     let mut resolver = ConflictResolver::default();
     let jobs: Vec<Job> = tests
         .iter()
@@ -266,18 +279,18 @@ fn run(cli: &Cli) -> Result<ExitCode, String> {
     let workers = cli.jobs.unwrap_or_else(|| {
         std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get)
     });
-    let color = !cli.no_color && std::env::var_os("NO_COLOR").is_none() && std::io::stdout().is_terminal();
+    let color =
+        !cli.no_color && std::env::var_os("NO_COLOR").is_none() && std::io::stdout().is_terminal();
     let show_diff = cli.show_diff || tests.len() == 1;
-
+    let plural = |n: usize| if n == 1 { "" } else { "s" };
     println!(
         "Running {} test{} with {} using {} worker{}",
         tests.len(),
-        if tests.len() == 1 { "" } else { "s" },
-        php.display(),
+        plural(tests.len()),
+        runner.config().php.display(),
         workers,
-        if workers == 1 { "" } else { "s" }
+        plural(workers)
     );
-    let start = Instant::now();
     let mut results: Vec<TestResult> = Vec::with_capacity(tests.len());
     run_jobs(
         jobs,
@@ -290,25 +303,14 @@ fn run(cli: &Cli) -> Result<ExitCode, String> {
             }
         },
     );
-    let elapsed = start.elapsed().as_secs_f64();
+    results
+}
 
-    let total = totals(&results);
-    println!();
-    print!("{}", dir_table(&by_dir(&results, cli.summary_depth), &total));
-    print!("{}", summary(&total, elapsed));
-
-    if let Some(path) = &cli.json {
-        let report = JsonReport::new(
-            php.to_string_lossy().into_owned(),
-            srcdir.to_string_lossy().into_owned(),
-            &results,
-        );
-        let json = serde_json::to_string_pretty(&report).map_err(|e| e.to_string())?;
-        std::fs::write(path, json).map_err(|e| format!("cannot write {}: {e}", path.display()))?;
-    }
-
+/// Compare with (or update) the baseline and choose the exit code.
+fn check_baseline(cli: &Cli, results: &[TestResult]) -> Result<ExitCode, String> {
     let Some(baseline_path) = &cli.baseline else {
-        return Ok(if total.fail + total.bork > 0 {
+        let failed = results.iter().any(|r| r.result.is_failure());
+        return Ok(if failed {
             ExitCode::FAILURE
         } else {
             ExitCode::SUCCESS
@@ -317,7 +319,7 @@ fn run(cli: &Cli) -> Result<ExitCode, String> {
     let baseline = Baseline::load(baseline_path)
         .map_err(|e| format!("cannot read baseline {}: {e}", baseline_path.display()))?;
     if cli.update_baseline {
-        let updated = baseline.updated(&results);
+        let updated = baseline.updated(results);
         updated
             .save(baseline_path)
             .map_err(|e| format!("cannot write baseline {}: {e}", baseline_path.display()))?;
@@ -329,7 +331,7 @@ fn run(cli: &Cli) -> Result<ExitCode, String> {
         );
         return Ok(ExitCode::SUCCESS);
     }
-    let cmp = baseline.compare(&results);
+    let cmp = baseline.compare(results);
     for p in &cmp.new_failures {
         println!("NEW FAILURE {p}");
     }
@@ -346,6 +348,44 @@ fn run(cli: &Cli) -> Result<ExitCode, String> {
     } else {
         ExitCode::SUCCESS
     })
+}
+
+fn run(cli: &Cli) -> Result<ExitCode, String> {
+    let (tests, srcdir) = select_tests(cli)?;
+    if cli.list {
+        for t in &tests {
+            println!("{}", shortname(t, &srcdir));
+        }
+        return Ok(ExitCode::SUCCESS);
+    }
+    if tests.is_empty() {
+        println!("No tests found.");
+        return Ok(ExitCode::SUCCESS);
+    }
+    let (runner, _probe_cache) = make_runner(cli, &srcdir)?;
+
+    let start = Instant::now();
+    let results = execute(cli, &runner, &tests);
+    let elapsed = start.elapsed().as_secs_f64();
+
+    let total = totals(&results);
+    println!();
+    print!(
+        "{}",
+        dir_table(&by_dir(&results, cli.summary_depth), &total)
+    );
+    print!("{}", summary(&total, elapsed));
+
+    if let Some(path) = &cli.json {
+        let report = JsonReport::new(
+            runner.config().php.to_string_lossy().into_owned(),
+            srcdir.to_string_lossy().into_owned(),
+            &results,
+        );
+        let json = serde_json::to_string_pretty(&report).map_err(|e| e.to_string())?;
+        std::fs::write(path, json).map_err(|e| format!("cannot write {}: {e}", path.display()))?;
+    }
+    check_baseline(cli, &results)
 }
 
 fn main() -> ExitCode {

@@ -114,15 +114,18 @@ fn wait_until(child: &mut Child, deadline: Instant) -> Option<std::process::Exit
     }
 }
 
-/// Run a command, returning its captured output (stdout and stderr interleaved when both are
-/// captured). Errors only if the process cannot be spawned.
-pub fn run(inv: &Invocation<'_>) -> std::io::Result<RunOutput> {
+/// Build the command and wire up its standard streams. Returns the merged stdout+stderr pipe
+/// reader when both are captured.
+fn build_command(inv: &Invocation<'_>) -> std::io::Result<(Command, Option<os_pipe::PipeReader>)> {
     let (program, args) = inv
         .argv
         .split_first()
         .ok_or_else(|| std::io::Error::other("empty argv"))?;
     let mut cmd = Command::new(program);
-    cmd.args(args).current_dir(inv.cwd).env_clear().process_group(0);
+    cmd.args(args)
+        .current_dir(inv.cwd)
+        .env_clear()
+        .process_group(0);
     for (k, v) in inv.env {
         if !v.is_empty() {
             cmd.env(k, v);
@@ -134,32 +137,40 @@ pub fn run(inv: &Invocation<'_>) -> std::io::Result<RunOutput> {
         Stdio::inherit()
     });
 
-    let not_captured_stderr = || {
+    let uncaptured_stderr = || {
         if inv.discard_stderr {
             Stdio::null()
         } else {
             Stdio::inherit()
         }
     };
-    let mut reader: Option<Box<dyn Read + Send>> = None;
+    let mut merged = None;
     match (inv.capture.stdout, inv.capture.stderr) {
         (true, true) => {
-            let (r, w) = os_pipe::pipe()?;
-            let w2 = w.try_clone()?;
-            cmd.stdout(w).stderr(w2);
-            reader = Some(Box::new(r));
+            let (reader, writer) = os_pipe::pipe()?;
+            let writer2 = writer.try_clone()?;
+            cmd.stdout(writer).stderr(writer2);
+            merged = Some(reader);
         }
         (true, false) => {
-            cmd.stdout(Stdio::piped()).stderr(not_captured_stderr());
+            cmd.stdout(Stdio::piped()).stderr(uncaptured_stderr());
         }
         (false, true) => {
             cmd.stdout(Stdio::inherit()).stderr(Stdio::piped());
         }
         (false, false) => {
-            cmd.stdout(Stdio::inherit()).stderr(not_captured_stderr());
+            cmd.stdout(Stdio::inherit()).stderr(uncaptured_stderr());
         }
     }
+    Ok((cmd, merged))
+}
 
+/// Run a command, returning its captured output (stdout and stderr interleaved when both are
+/// captured). Errors only if the process cannot be spawned.
+pub fn run(inv: &Invocation<'_>) -> std::io::Result<RunOutput> {
+    let (mut cmd, merged) = build_command(inv)?;
+    let mut reader: Option<Box<dyn Read + Send>> =
+        merged.map(|r| Box::new(r) as Box<dyn Read + Send>);
     let mut child = cmd.spawn()?;
     // Close our copies of the pipe write ends so EOF is seen when the child exits.
     drop(cmd);
@@ -188,11 +199,22 @@ pub fn run(inv: &Invocation<'_>) -> std::io::Result<RunOutput> {
     }
 
     let take = |sink: &Arc<Mutex<Vec<u8>>>| {
-        std::mem::take(&mut *sink.lock().unwrap_or_else(std::sync::PoisonError::into_inner))
+        std::mem::take(
+            &mut *sink
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        )
     };
 
-    let eof = !reading || rx.recv_timeout(deadline.saturating_duration_since(Instant::now())).is_ok();
-    let status = if eof { wait_until(&mut child, deadline) } else { None };
+    let eof = !reading
+        || rx
+            .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+            .is_ok();
+    let status = if eof {
+        wait_until(&mut child, deadline)
+    } else {
+        None
+    };
     let Some(status) = status else {
         kill_group(&mut child);
         let _ = child.wait();
@@ -243,19 +265,34 @@ mod tests {
 
     #[test]
     fn merges_stdout_and_stderr_in_order() {
-        let out = sh("echo a; echo b >&2; echo c", Capture::ALL, None, Duration::from_secs(10));
+        let out = sh(
+            "echo a; echo b >&2; echo c",
+            Capture::ALL,
+            None,
+            Duration::from_secs(10),
+        );
         assert_eq!(out.data, b"a\nb\nc\n");
     }
 
     #[test]
     fn stdout_only_and_stdin() {
-        let out = sh("cat; echo err >&2", Capture::STDOUT_ONLY, Some(b"in"), Duration::from_secs(10));
+        let out = sh(
+            "cat; echo err >&2",
+            Capture::STDOUT_ONLY,
+            Some(b"in"),
+            Duration::from_secs(10),
+        );
         assert_eq!(out.data, b"in");
     }
 
     #[test]
     fn empty_env_values_are_unset() {
-        let out = sh("echo ${EMPTY-unset}", Capture::ALL, None, Duration::from_secs(10));
+        let out = sh(
+            "echo ${EMPTY-unset}",
+            Capture::ALL,
+            None,
+            Duration::from_secs(10),
+        );
         assert_eq!(out.data, b"unset\n");
     }
 
@@ -263,7 +300,12 @@ mod tests {
     fn signals_and_timeouts() {
         let out = sh("kill -SEGV $$", Capture::ALL, None, Duration::from_secs(10));
         assert_eq!(out.data, b"\nTermsig=11\n");
-        let out = sh("echo x; sleep 30", Capture::ALL, None, Duration::from_millis(300));
+        let out = sh(
+            "echo x; sleep 30",
+            Capture::ALL,
+            None,
+            Duration::from_millis(300),
+        );
         assert!(out.timed_out);
         assert_eq!(out.data, b"x\n\n ** ERROR: process timed out **\n");
     }

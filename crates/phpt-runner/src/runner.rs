@@ -1,7 +1,7 @@
 //! Running a single `.phpt` test (ref: `run-tests.php` `run_test()`).
 
 use std::collections::HashMap;
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock, PoisonError};
@@ -10,8 +10,8 @@ use std::time::{Duration, Instant};
 use pcre2::bytes::{Regex, RegexBuilder};
 
 use crate::bytes::{
-    contains, explode_lines, lossy, normalize_crlf, php_empty, replace, starts_with_ignore_case, trim,
-    trim_end, trim_start,
+    contains, explode_lines, lossy, normalize_crlf, php_empty, replace, starts_with_ignore_case,
+    trim, trim_end, trim_start,
 };
 use crate::diff::generate_diff;
 use crate::expectf::{expectf_to_regex, regex_matches, LineMatcher};
@@ -113,11 +113,14 @@ struct Redirect {
     env: Env,
 }
 
+/// SKIPIF cache key: directory, PHP arguments and code.
+type SkipKey = (PathBuf, Vec<OsString>, Vec<u8>);
+
 /// Runs tests; shareable across worker threads.
 #[derive(Debug)]
 pub struct Runner {
     config: Config,
-    skip_cache: Mutex<HashMap<(PathBuf, Vec<String>, Vec<u8>), Vec<u8>>>,
+    skip_cache: Mutex<HashMap<SkipKey, Vec<u8>>>,
     line_matcher: LineMatcher,
 }
 
@@ -125,6 +128,82 @@ enum Once {
     Done(TestResult),
     Many(Vec<TestResult>),
     Retry,
+}
+
+/// Output of SKIPIF that annotates the result (`info ...` / `warn ...`).
+#[derive(Debug, Default)]
+struct SkipInfo {
+    text: String,
+    warn: bool,
+}
+
+/// Environment and INI arguments for one test.
+struct Prepared {
+    env: Env,
+    extensions: Vec<String>,
+    /// INI arguments without the test's `--INI--` section (used for SKIPIF and CLEAN).
+    orig_ini_args: Vec<String>,
+    /// INI arguments including the `--INI--` section.
+    test_ini_args: Vec<String>,
+}
+
+/// One attempt at running a parsed test.
+struct Attempt<'a> {
+    file: &'a Path,
+    redirect: Option<&'a Redirect>,
+    paths: Paths,
+    shortname: String,
+    test: TestFile,
+    tested: String,
+}
+
+impl Attempt<'_> {
+    fn result(&self, status: Status, name: String, info: String) -> TestResult {
+        TestResult {
+            path: self.shortname.clone(),
+            name,
+            result: status,
+            info,
+            duration_ms: 0,
+            diff: None,
+        }
+    }
+
+    fn skip(&self, reason: &str) -> Once {
+        Once::Done(self.result(
+            Status::Skip,
+            self.tested.clone(),
+            format!("reason: {reason}"),
+        ))
+    }
+
+    fn bork(&self, message: String, info: &str) -> Once {
+        Once::Done(self.result(Status::Bork, message, info.to_string()))
+    }
+
+    /// Directory of the original test file (`{PWD}`).
+    fn pwd(&self) -> String {
+        self.file
+            .parent()
+            .unwrap_or(Path::new("."))
+            .to_string_lossy()
+            .into_owned()
+    }
+
+    /// `--CAPTURE_STDIO--`.
+    fn capture(&self) -> Capture {
+        match self.test.section("CAPTURE_STDIO") {
+            Some(c) => {
+                let c = lossy(c).to_uppercase();
+                Capture {
+                    stdin: c.contains("STDIN"),
+                    stdout: c.contains("STDOUT"),
+                    stderr: c.contains("STDERR"),
+                }
+            }
+            None => Capture::ALL,
+        }
+    }
 }
 
 struct Paths {
@@ -234,7 +313,12 @@ fn prefix_reason(rest: &[u8], require_space: bool) -> Option<String> {
 
 fn remove_request_vars(env: &Env) -> Env {
     let mut env = env.clone();
-    for k in ["REQUEST_METHOD", "QUERY_STRING", "PATH_TRANSLATED", "SCRIPT_FILENAME"] {
+    for k in [
+        "REQUEST_METHOD",
+        "QUERY_STRING",
+        "PATH_TRANSLATED",
+        "SCRIPT_FILENAME",
+    ] {
         env.remove(&os(k));
     }
     env
@@ -291,7 +375,23 @@ impl Runner {
         argv
     }
 
-    fn exec(&self, argv: &[OsString], env: &Env, stdin: Option<&[u8]>, capture: Capture) -> Vec<u8> {
+    /// `[php, -q, <ini args>, <extra>, <script>]`, the command line for SKIPIF, CLEAN and
+    /// REDIRECTTEST helper scripts.
+    fn helper_argv(&self, ini_args: &[String], extra: &[&str], script: &Path) -> Vec<OsString> {
+        let mut argv = vec![self.config.php.clone().into_os_string(), os("-q")];
+        argv.extend(ini_args.iter().map(OsString::from));
+        argv.extend(extra.iter().map(|a| os(a)));
+        argv.push(script.as_os_str().to_owned());
+        argv
+    }
+
+    fn exec(
+        &self,
+        argv: &[OsString],
+        env: &Env,
+        stdin: Option<&[u8]>,
+        capture: Capture,
+    ) -> Vec<u8> {
         let result = run(&Invocation {
             argv,
             env,
@@ -307,16 +407,80 @@ impl Runner {
         }
     }
 
-    #[allow(clippy::too_many_lines)]
     fn run_once(&self, file: &Path, redirect: Option<&Redirect>, retried: bool) -> Once {
-        let cfg = &self.config;
-        let file_dir = file.parent().unwrap_or(Path::new(".")).to_path_buf();
+        let mut attempt = match self.load(file, redirect) {
+            Ok(a) => a,
+            Err(once) => return once,
+        };
+        if attempt.test.is_cgi() {
+            return attempt.skip("CGI not available");
+        }
+        if attempt.test.has_section("PHPDBG") {
+            return attempt.skip("phpdbg not available");
+        }
+        for ext in [
+            "diff",
+            "log",
+            "exp",
+            "stdin",
+            "out",
+            "mem",
+            "sh",
+            "php",
+            "skip.php",
+            "post",
+            "clean.php",
+            "preload.php",
+        ] {
+            let _ = fs::remove_file(attempt.paths.file(ext));
+        }
+        let mut prepared = match self.prepare(&attempt) {
+            Ok(p) => p,
+            Err(once) => return once,
+        };
+        let skip_info = match self.evaluate_skipif(&mut attempt, &prepared) {
+            Ok(info) => info,
+            Err(once) => return once,
+        };
+        if let Some(code) = attempt.test.section("REDIRECTTEST") {
+            if redirect.is_some() {
+                return attempt.bork(
+                    "Redirected test did not contain redirection info".into(),
+                    "",
+                );
+            }
+            let tested = attempt.tested.clone();
+            return match self.run_redirect(
+                file,
+                code,
+                &tested,
+                &prepared.extensions,
+                &prepared.orig_ini_args,
+            ) {
+                Ok(results) => Once::Many(results),
+                Err(msg) => attempt.bork(msg, ""),
+            };
+        }
+        let (out, clean_output) = match self.execute(&attempt, &mut prepared) {
+            Ok(o) => o,
+            Err(once) => return once,
+        };
+        self.judge(&attempt, &out, &clean_output, retried, skip_info)
+    }
+
+    /// Parse the test file and work out where its generated files go.
+    fn load<'a>(
+        &self,
+        file: &'a Path,
+        redirect: Option<&'a Redirect>,
+    ) -> Result<Attempt<'a>, Once> {
         let base_name = file
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
+        let file_dir = file.parent().unwrap_or(Path::new(".")).to_path_buf();
         let paths = Paths {
-            test_dir: redirect.map_or_else(|| file_dir.clone(), |r| r.dir.clone()),
+            test_dir: redirect.map_or(file_dir, |r| r.dir.clone()),
             stem: base_name
                 .strip_suffix("phpt")
                 .unwrap_or(&base_name)
@@ -327,55 +491,38 @@ impl Runner {
         } else {
             self.shortname(file)
         };
-        let result = |status: Status, name: String, info: String| TestResult {
-            path: shortname.clone(),
-            name,
-            result: status,
-            info,
-            duration_ms: 0,
-            diff: None,
-        };
-
-        let mut test = match TestFile::load(file, redirect.is_some()) {
-            Ok(t) => t,
-            Err(e) => return Once::Done(result(Status::Bork, e.0, String::new())),
-        };
-        let mut tested = test.name();
-        if let Some(r) = redirect {
-            tested = format!("{} {tested}", r.prefix);
-        }
-        let skip = |reason: &str| Once::Done(result(Status::Skip, tested.clone(), format!("reason: {reason}")));
-
-        let capture = match test.section("CAPTURE_STDIO") {
-            Some(c) => {
-                let c = lossy(c).to_uppercase();
-                Capture {
-                    stdin: c.contains("STDIN"),
-                    stdout: c.contains("STDOUT"),
-                    stderr: c.contains("STDERR"),
+        match TestFile::load(file, redirect.is_some()) {
+            Ok(test) => {
+                let mut tested = test.name();
+                if let Some(r) = redirect {
+                    tested = format!("{} {tested}", r.prefix);
                 }
+                Ok(Attempt {
+                    file,
+                    redirect,
+                    paths,
+                    shortname,
+                    test,
+                    tested,
+                })
             }
-            None => Capture::ALL,
-        };
-        if test.is_cgi() {
-            return skip("CGI not available");
+            Err(e) => Err(Once::Done(TestResult {
+                path: shortname,
+                name: e.0,
+                result: Status::Bork,
+                info: String::new(),
+                duration_ms: 0,
+                diff: None,
+            })),
         }
-        if test.has_section("PHPDBG") {
-            return skip("phpdbg not available");
-        }
+    }
 
-        let test_file = paths.file("php");
-        let skip_file = paths.file("skip.php");
-        let clean_file = paths.file("clean.php");
-        for ext in [
-            "diff", "log", "exp", "stdin", "out", "mem", "sh", "php", "skip.php", "post",
-            "clean.php", "preload.php",
-        ] {
-            let _ = fs::remove_file(paths.file(ext));
-        }
-
-        // Environment.
-        let mut env = redirect.map_or_else(|| cfg.env.clone(), |r| r.env.clone());
+    /// Build the environment and INI settings (`--ENV--`, `--EXTENSIONS--`, `--INI--`).
+    fn prepare(&self, a: &Attempt<'_>) -> Result<Prepared, Once> {
+        let cfg = &self.config;
+        let mut env = a
+            .redirect
+            .map_or_else(|| cfg.env.clone(), |r| r.env.clone());
         for k in [
             "REDIRECT_STATUS",
             "QUERY_STRING",
@@ -388,12 +535,11 @@ impl Runner {
         ] {
             set_env(&mut env, k, "");
         }
-        let pwd = file_dir.to_string_lossy().into_owned();
-        if test.section_not_empty("ENV") {
-            let env_str = replace(test.section_or_empty("ENV"), b"{PWD}", pwd.as_bytes());
+        let pwd = a.pwd();
+        if a.test.section_not_empty("ENV") {
+            let env_str = replace(a.test.section_or_empty("ENV"), b"{PWD}", pwd.as_bytes());
             for line in env_str.split(|&b| b == b'\n') {
-                let line = trim(line);
-                let mut parts = line.splitn(2, |&b| b == b'=');
+                let mut parts = trim(line).splitn(2, |&b| b == b'=');
                 if let (Some(k), Some(v)) = (parts.next(), parts.next()) {
                     if !php_empty(k) {
                         env.insert(os_from_bytes(k), os_from_bytes(v));
@@ -402,9 +548,8 @@ impl Runner {
             }
         }
 
-        // Required extensions.
-        let mut ini = IniSettings::new();
-        let mut extensions: Vec<String> = test
+        let mut extensions: Vec<String> = a
+            .test
             .section("EXTENSIONS")
             .map(|s| {
                 lossy(trim(s))
@@ -414,16 +559,56 @@ impl Runner {
                     .collect()
             })
             .unwrap_or_default();
-        if let Some(r) = redirect {
+        if let Some(r) = a.redirect {
             extensions.extend(r.extensions.iter().cloned());
         }
+        let mut ini = self
+            .extension_settings(&extensions)
+            .map_err(|reason| a.skip(&reason))?;
+        ini.apply_lines(cfg.ini_overwrites.iter().map(String::as_str));
+        let orig_ini_args = ini.to_arguments();
+
+        if let Some(section) = a.test.section("INI") {
+            let text = lossy(section)
+                .replace("{PWD}", &pwd)
+                .replace("{TMP}", &std::env::temp_dir().to_string_lossy());
+            let text = replace_placeholders(&text, "MAIL", |f| format!("tee {f} >/dev/null"));
+            let mut missing_env = None;
+            let text = replace_placeholders(&text, "ENV", |name| {
+                std::env::var(name).unwrap_or_else(|_| {
+                    missing_env.get_or_insert_with(|| name.to_string());
+                    String::new()
+                })
+            });
+            if let Some(name) = missing_env {
+                return Err(a.skip(&format!("Environment variable {name} is not set")));
+            }
+            ini.apply_lines(text.split(['\n', '\r']));
+        }
+        set_env(
+            &mut env,
+            "TEST_PHP_EXTRA_ARGS",
+            format!(" {}", ini.to_params()),
+        );
+        Ok(Prepared {
+            env,
+            extensions,
+            orig_ini_args,
+            test_ini_args: ini.to_arguments(),
+        })
+    }
+
+    /// `-d extension=...` settings for required extensions that are available as shared
+    /// modules, or the skip reason if some are missing.
+    fn extension_settings(&self, extensions: &[String]) -> Result<IniSettings, String> {
+        let known = &self.config.extensions;
+        let mut ini = IniSettings::new();
         let mut missing = Vec::new();
-        for ext in &extensions {
-            if cfg.extensions.loaded.iter().any(|l| l == ext) {
+        for ext in extensions {
+            if known.loaded.iter().any(|l| l == ext) {
                 continue;
             }
-            let shared = cfg
-                .extensions
+            let shared = known
                 .ext_dir
                 .as_ref()
                 .map(|d| d.join(format!("{ext}.so")))
@@ -440,49 +625,29 @@ impl Runner {
                 None => missing.push(ext.clone()),
             }
         }
-        if !missing.is_empty() {
+        if missing.is_empty() {
+            Ok(ini)
+        } else {
             let plural = if missing.len() > 1 { "s" } else { "" };
-            return skip(&format!(
+            Err(format!(
                 "Required extension{plural} missing: {}",
                 missing.join(", ")
-            ));
+            ))
         }
+    }
 
-        ini.apply_lines(cfg.ini_overwrites.iter().map(String::as_str));
-        let orig_ini_args = ini.to_arguments();
-
-        if let Some(section) = test.section("INI") {
-            let text = lossy(section)
-                .replace("{PWD}", &pwd)
-                .replace("{TMP}", &std::env::temp_dir().to_string_lossy());
-            let text = replace_placeholders(&text, "MAIL", |f| format!("tee {f} >/dev/null"));
-            let mut missing_env = None;
-            let text = replace_placeholders(&text, "ENV", |name| {
-                if let Ok(v) = std::env::var(name) {
-                    v
-                } else {
-                    missing_env.get_or_insert_with(|| name.to_string());
-                    String::new()
-                }
-            });
-            if let Some(name) = missing_env {
-                return skip(&format!("Environment variable {name} is not set"));
-            }
-            ini.apply_lines(text.split(['\n', '\r']));
+    /// Run `--SKIPIF--` and act on its output.
+    fn evaluate_skipif(&self, a: &mut Attempt<'_>, p: &Prepared) -> Result<SkipInfo, Once> {
+        let mut info = SkipInfo::default();
+        if !a.test.section_not_empty("SKIPIF") {
+            return Ok(info);
         }
-        let test_ini_args = ini.to_arguments();
-        set_env(&mut env, "TEST_PHP_EXTRA_ARGS", format!(" {}", ini.to_params()));
-
-        // SKIPIF.
-        let mut info = String::new();
-        let mut warn = false;
-        if test.section_not_empty("SKIPIF") {
-            let code = test.section_or_empty("SKIPIF").to_vec();
-            let mut skip_env = remove_request_vars(&env);
-            set_env(&mut skip_env, "TEST_PHP_EVALUATING_SKIPIF", "1");
-            let mut args = vec!["-q".to_string()];
-            args.extend(orig_ini_args.iter().cloned());
-            for a in [
+        let code = a.test.section_or_empty("SKIPIF").to_vec();
+        let mut skip_env = remove_request_vars(&p.env);
+        set_env(&mut skip_env, "TEST_PHP_EVALUATING_SKIPIF", "1");
+        let argv = self.helper_argv(
+            &p.orig_ini_args,
+            &[
                 "-d",
                 "opcache.file_cache=",
                 "-d",
@@ -491,125 +656,120 @@ impl Runner {
                 "display_errors=1",
                 "-d",
                 "display_startup_errors=0",
-            ] {
-                args.push(a.to_string());
-            }
-            let output = self.check_skip(&args, &code, &skip_file, &skip_env);
+            ],
+            &a.paths.file("skip.php"),
+        );
+        let output = self.check_skip(&argv, &code, &skip_env);
 
-            if starts_with_ignore_case(&output, b"skip") {
-                let reason = prefix_reason(&output[4..], false)
-                    .map(|r| format!("reason: {r}"))
-                    .unwrap_or_default();
-                return Once::Done(result(Status::Skip, tested, reason));
-            }
-            if let Some(r) = starts_with_ignore_case(&output, b"info")
-                .then(|| prefix_reason(&output[4..], false))
-                .flatten()
-            {
-                info = format!(" (info: {r})");
-            } else if let Some(r) = starts_with_ignore_case(&output, b"warn")
-                .then(|| prefix_reason(&output[4..], true))
-                .flatten()
-            {
-                warn = true;
-                info = format!(" (warn: {r})");
-            } else if starts_with_ignore_case(&output, b"xfail") {
-                test.set_section("XFAIL", trim_start(&output[5..]).to_vec());
-            } else if starts_with_ignore_case(&output, b"xleak") {
-                test.set_section("XLEAK", trim_start(&output[5..]).to_vec());
-            } else if starts_with_ignore_case(&output, b"flaky") {
-                test.set_section("FLAKY", trim_start(&output[5..]).to_vec());
-            } else if !output.is_empty() {
-                return Once::Done(result(
-                    Status::Bork,
-                    lossy(&output),
-                    "reason: invalid output from SKIPIF".into(),
-                ));
-            }
+        if starts_with_ignore_case(&output, b"skip") {
+            let reason = prefix_reason(&output[4..], false)
+                .map(|r| format!("reason: {r}"))
+                .unwrap_or_default();
+            return Err(Once::Done(a.result(Status::Skip, a.tested.clone(), reason)));
         }
-
-        if let Some(code) = test.section("REDIRECTTEST") {
-            if redirect.is_none() {
-                return match self.run_redirect(file, code, &tested, &extensions, &orig_ini_args) {
-                    Ok(results) => Once::Many(results),
-                    Err(msg) => Once::Done(result(Status::Bork, msg, String::new())),
-                };
-            }
-            return Once::Done(result(
-                Status::Bork,
-                "Redirected test did not contain redirection info".into(),
-                String::new(),
-            ));
+        if let Some(r) = starts_with_ignore_case(&output, b"info")
+            .then(|| prefix_reason(&output[4..], false))
+            .flatten()
+        {
+            info.text = format!(" (info: {r})");
+        } else if let Some(r) = starts_with_ignore_case(&output, b"warn")
+            .then(|| prefix_reason(&output[4..], true))
+            .flatten()
+        {
+            info.warn = true;
+            info.text = format!(" (warn: {r})");
+        } else if let Some(section) = ["XFAIL", "XLEAK", "FLAKY"]
+            .into_iter()
+            .find(|s| starts_with_ignore_case(&output, s.as_bytes()))
+        {
+            a.test
+                .set_section(section, trim_start(&output[5..]).to_vec());
+        } else if !output.is_empty() {
+            return Err(a.bork(lossy(&output), "reason: invalid output from SKIPIF"));
         }
+        Ok(info)
+    }
 
-        // Write and run the test.
-        let Some(code) = test.section("FILE") else {
-            return Once::Done(result(Status::Bork, "missing section --FILE--".into(), String::new()));
+    /// Write the test script, run it, then run `--CLEAN--`. Returns (output, clean output).
+    fn execute(&self, a: &Attempt<'_>, p: &mut Prepared) -> Result<(Vec<u8>, Vec<u8>), Once> {
+        let Some(code) = a.test.section("FILE") else {
+            return Err(a.bork("missing section --FILE--".into(), ""));
         };
+        let test_file = a.paths.file("php");
         if let Err(e) = fs::write(&test_file, code) {
-            return Once::Done(result(
-                Status::Bork,
-                format!("cannot write {}: {e}", test_file.display()),
-                String::new(),
-            ));
+            return Err(a.bork(format!("cannot write {}: {e}", test_file.display()), ""));
         }
-        let test_file_os = test_file.clone().into_os_string();
-        set_env(&mut env, "REDIRECT_STATUS", "1");
-        if env.get(&os("PATH_TRANSLATED")).is_none_or(|v| v.is_empty()) {
-            set_env(&mut env, "PATH_TRANSLATED", test_file_os.clone());
+        let env = &mut p.env;
+        let test_file_os = test_file.into_os_string();
+        set_env(env, "REDIRECT_STATUS", "1");
+        for k in ["PATH_TRANSLATED", "SCRIPT_FILENAME"] {
+            if env.get(&os(k)).is_none_or(|v| v.is_empty()) {
+                set_env(env, k, test_file_os.clone());
+            }
         }
-        if env.get(&os("SCRIPT_FILENAME")).is_none_or(|v| v.is_empty()) {
-            set_env(&mut env, "SCRIPT_FILENAME", test_file_os.clone());
-        }
-        set_env(&mut env, "HTTP_COOKIE", "");
-        set_env(&mut env, "REQUEST_METHOD", "GET");
-        set_env(&mut env, "CONTENT_TYPE", "");
-        set_env(&mut env, "CONTENT_LENGTH", "");
-        if test.has_section("XLEAK") {
-            set_env(&mut env, "ZEND_ALLOC_PRINT_LEAKS", "0");
+        set_env(env, "HTTP_COOKIE", "");
+        set_env(env, "REQUEST_METHOD", "GET");
+        set_env(env, "CONTENT_TYPE", "");
+        set_env(env, "CONTENT_LENGTH", "");
+        if a.test.has_section("XLEAK") {
+            set_env(env, "ZEND_ALLOC_PRINT_LEAKS", "0");
         }
 
-        let mut argv = self.php_argv(&test_ini_args);
+        let mut argv = self.php_argv(&p.test_ini_args);
         argv.push(os("-f"));
         argv.push(test_file_os);
-        if let Some(args) = test.section("ARGS") {
+        if let Some(args) = a.test.section("ARGS") {
+            // run-tests.php hands the raw ARGS section to the shell.
             let mut shell = argv
                 .iter()
-                .map(|a| escapeshellarg(&a.to_string_lossy()))
+                .map(|arg| escapeshellarg(&arg.to_string_lossy()))
                 .collect::<Vec<_>>()
                 .join(" ");
             shell.push_str(" -- ");
             shell.push_str(&lossy(args));
             argv = vec![os("/bin/sh"), os("-c"), os(&format!("exec {shell}"))];
         }
-        let stdin = test.section("STDIN");
-        let out = self.exec(&argv, &env, stdin, capture);
+        let out = self.exec(&argv, env, a.test.section("STDIN"), a.capture());
 
-        // CLEAN.
         let mut clean_output = Vec::new();
-        if test.section_not_empty("CLEAN") {
-            if fs::write(&clean_file, trim(test.section_or_empty("CLEAN"))).is_ok() {
-                let mut args = vec!["-q".to_string()];
-                args.extend(orig_ini_args.iter().cloned());
-                for a in ["-d", "opcache.file_cache=", "-d", "opcache.file_cache_only=0"] {
-                    args.push(a.to_string());
-                }
-                let mut argv = self.php_argv(&args);
-                argv.push(clean_file.clone().into_os_string());
-                clean_output = self.exec(&argv, &remove_request_vars(&env), None, Capture::STDOUT_ONLY);
+        if a.test.section_not_empty("CLEAN") {
+            let clean_file = a.paths.file("clean.php");
+            if fs::write(&clean_file, trim(a.test.section_or_empty("CLEAN"))).is_ok() {
+                let argv = self.helper_argv(
+                    &p.orig_ini_args,
+                    &[
+                        "-d",
+                        "opcache.file_cache=",
+                        "-d",
+                        "opcache.file_cache_only=0",
+                    ],
+                    &clean_file,
+                );
+                clean_output =
+                    self.exec(&argv, &remove_request_vars(env), None, Capture::STDOUT_ONLY);
             }
             let _ = fs::remove_file(&clean_file);
         }
+        Ok((out, clean_output))
+    }
 
-        // Compare.
-        let output = normalize_crlf(trim(&out));
-        let Some((kind, expected)) = test.expectation() else {
-            return Once::Done(result(
-                Status::Bork,
+    /// Compare the output with the expectation and produce the result (writing `.exp`, `.out`
+    /// and `.diff` for failures).
+    fn judge(
+        &self,
+        a: &Attempt<'_>,
+        out: &[u8],
+        clean_output: &[u8],
+        retried: bool,
+        skip_info: SkipInfo,
+    ) -> Once {
+        let Some((kind, expected)) = a.test.expectation() else {
+            return a.bork(
                 "missing section --EXPECT--, --EXPECTF-- or --EXPECTREGEX--".into(),
-                String::new(),
-            ));
+                "",
+            );
         };
+        let output = normalize_crlf(trim(out));
         let wanted = normalize_crlf(trim(expected));
         let passed = match kind {
             ExpectKind::Exact => output == wanted,
@@ -617,64 +777,70 @@ impl Runner {
             ExpectKind::Regex => regex_matches(&wanted, &output),
         };
 
-        let timed_out = contains(&out, TIMEOUT_MARKER);
-        if !passed && !retried && !timed_out && (is_flaky_output(&output) || is_flaky(&test)) {
+        // Deviation from run-tests.php: a timeout is not retried even though its marker
+        // contains "timed out", so hanging tests cost one timeout instead of two.
+        let timed_out = contains(out, TIMEOUT_MARKER);
+        if !passed && !retried && !timed_out && (is_flaky_output(&output) || is_flaky(&a.test)) {
             return Once::Retry;
         }
 
+        let test_file = a.paths.file("php");
         if passed {
             let _ = fs::remove_file(&test_file);
-            if !php_empty(&clean_output) {
-                return Once::Done(result(
-                    Status::Bork,
-                    lossy(&output),
-                    "reason: invalid output from CLEAN".into(),
-                ));
+            if !php_empty(clean_output) {
+                return a.bork(lossy(&output), "reason: invalid output from CLEAN");
             }
-            let (status, info) = if test.has_section("XFAIL") {
-                (Status::Warn, " (warn: XFAIL section but test passes)".to_string())
+            let (status, info) = if a.test.has_section("XFAIL") {
+                (
+                    Status::Warn,
+                    " (warn: XFAIL section but test passes)".to_string(),
+                )
             } else if retried {
-                (Status::Warn, " (warn: Test passed on retry attempt)".to_string())
-            } else if warn {
-                (Status::Warn, info)
+                (
+                    Status::Warn,
+                    " (warn: Test passed on retry attempt)".to_string(),
+                )
+            } else if skip_info.warn {
+                (Status::Warn, skip_info.text)
             } else {
                 (Status::Pass, String::new())
             };
-            return Once::Done(result(status, tested, info));
+            return Once::Done(a.result(status, a.tested.clone(), info));
         }
 
-        let (status, info) = match test.section("XFAIL") {
+        let (status, info) = match a.test.section("XFAIL") {
             Some(reason) => (
                 Status::Xfail,
                 format!("  XFAIL REASON: {}", lossy(trim_end(reason))),
             ),
-            None => (Status::Fail, info),
+            None => (Status::Fail, skip_info.text),
         };
         let mut diff = match kind {
-            ExpectKind::Exact => generate_diff(&wanted, &output, &|a, b| a == b),
+            ExpectKind::Exact => generate_diff(&wanted, &output, &|e, o| e == o),
             ExpectKind::Format | ExpectKind::Regex => {
-                generate_diff(&wanted, &output, &|e, a| self.line_matcher.matches(e, a))
+                generate_diff(&wanted, &output, &|e, o| self.line_matcher.matches(e, o))
             }
         };
-        if redirect.is_some() {
-            diff = format!("# original source file: {}\n{diff}", self.shortname(file));
+        if a.redirect.is_some() {
+            diff = format!("# original source file: {}\n{diff}", self.shortname(a.file));
         }
-        if cfg.write_artifacts {
-            let _ = fs::write(paths.file("exp"), &wanted);
-            let _ = fs::write(paths.file("out"), &output);
-            let _ = fs::write(paths.file("diff"), &diff);
+        if self.config.write_artifacts {
+            let _ = fs::write(a.paths.file("exp"), &wanted);
+            let _ = fs::write(a.paths.file("out"), &output);
+            let _ = fs::write(a.paths.file("diff"), &diff);
         } else {
             let _ = fs::remove_file(&test_file);
         }
-        let mut res = result(status, tested, info);
+        let mut res = a.result(status, a.tested.clone(), info);
         res.diff = Some(diff);
         Once::Done(res)
     }
 
     /// Run a SKIPIF section, caching by directory and code (`SkipCache::checkSkip`).
-    fn check_skip(&self, args: &[String], code: &[u8], skip_file: &Path, env: &Env) -> Vec<u8> {
+    fn check_skip(&self, argv: &[OsString], code: &[u8], env: &Env) -> Vec<u8> {
+        let skip_file = Path::new(argv.last().map_or(OsStr::new(""), OsString::as_os_str));
         let dir = skip_file.parent().unwrap_or(Path::new(".")).to_path_buf();
-        let key = (dir, args.to_vec(), code.to_vec());
+        let key = (dir, argv.to_vec(), code.to_vec());
         if let Some(hit) = self
             .skip_cache
             .lock()
@@ -686,9 +852,7 @@ impl Runner {
         if let Err(e) = fs::write(skip_file, code) {
             return format!("cannot write {}: {e}", skip_file.display()).into_bytes();
         }
-        let mut argv = self.php_argv(args);
-        argv.push(skip_file.as_os_str().to_owned());
-        let out = self.exec(&argv, env, None, Capture::STDOUT_ONLY);
+        let out = self.exec(argv, env, None, Capture::STDOUT_ONLY);
         let _ = fs::remove_file(skip_file);
         let mut result = trim(&out).to_vec();
         if result.starts_with(b"nocache") {
@@ -734,10 +898,7 @@ impl Runner {
             .unwrap_or_default();
         let script_file = dir.join(format!("{stem}.redirect.php"));
         fs::write(&script_file, script).map_err(|e| e.to_string())?;
-        let mut args = vec!["-q".to_string()];
-        args.extend(ini_args.iter().cloned());
-        let mut argv = self.php_argv(&args);
-        argv.push(script_file.clone().into_os_string());
+        let argv = self.helper_argv(ini_args, &[], &script_file);
         let out = self.exec(&argv, &self.config.env, None, Capture::STDOUT_ONLY);
         let _ = fs::remove_file(&script_file);
 
@@ -786,7 +947,10 @@ mod tests {
         assert_eq!(s, "a=<FOO> b=<BAR>x");
         let s = replace_placeholders("{MAIL:/tmp/x}", "MAIL", |n| format!("tee {n}"));
         assert_eq!(s, "tee /tmp/x");
-        assert_eq!(replace_placeholders("{ENV:}", "ENV", |_| "!".into()), "{ENV:}");
+        assert_eq!(
+            replace_placeholders("{ENV:}", "ENV", |_| "!".into()),
+            "{ENV:}"
+        );
     }
 
     #[test]

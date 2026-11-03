@@ -1,6 +1,8 @@
 //! INI handling for test runs (ref: `run-tests.php` `$ini_overwrites`, `settings2array()`,
 //! `settings2arguments()`, `settings2params()`).
 
+use std::fmt::Write as _;
+
 /// `E_ALL` as defined by the php-src version the tests come from (no `E_STRICT`).
 pub const E_ALL: u32 = 30719;
 
@@ -115,7 +117,7 @@ impl IniSettings {
         let mut out = String::new();
         for (name, values) in &self.entries {
             for value in values {
-                out.push_str(&format!(" -d \"{name}={}\"", addslashes(value)));
+                let _ = write!(out, " -d \"{name}={}\"", addslashes(value));
             }
         }
         out
@@ -158,7 +160,16 @@ mod tests {
         ini.apply_lines(["a=1", "b = 2 ", "junk", "a=3", "extension=x", "extension=y"]);
         assert_eq!(
             ini.to_arguments(),
-            ["-d", "a=3", "-d", "b=2", "-d", "extension=x", "-d", "extension=y"]
+            [
+                "-d",
+                "a=3",
+                "-d",
+                "b=2",
+                "-d",
+                "extension=x",
+                "-d",
+                "extension=y"
+            ]
         );
         assert_eq!(ini.get("a"), Some("3"));
     }

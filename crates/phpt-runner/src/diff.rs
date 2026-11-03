@@ -106,7 +106,8 @@ impl Differ<'_> {
         let i = from.len() / 2;
         let (from_start, from_end) = from.split_at(i);
         let ll_b = self.subsequence_length(from_start.iter().copied(), to.iter().copied());
-        let ll_e = self.subsequence_length(from_end.iter().rev().copied(), to.iter().rev().copied());
+        let ll_e =
+            self.subsequence_length(from_end.iter().rev().copied(), to.iter().rev().copied());
         let mut j_max = 0;
         let mut max = 0;
         for j in 0..=to.len() {

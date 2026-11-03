@@ -75,6 +75,9 @@ pub struct TestResult {
 impl TestResult {
     /// The run-tests.php style result line, e.g. `FAIL Foo test [Zend/tests/foo.phpt] `.
     pub fn line(&self) -> String {
-        format!("{} {} [{}] {}", self.result, self.name, self.path, self.info)
+        format!(
+            "{} {} [{}] {}",
+            self.result, self.name, self.path, self.info
+        )
     }
 }
