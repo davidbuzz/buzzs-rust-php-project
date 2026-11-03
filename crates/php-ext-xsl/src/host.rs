@@ -101,7 +101,7 @@ impl<'a> BridgeHost<'a> {
     }
 
     /// `php_dom_xpath_callback_dispatch`'s handling of the return value.
-    fn convert_return(&self, vm: &mut Vm, value: Value, modern: bool) -> VmResult<CallbackReturn> {
+    fn convert_return(&self, vm: &mut Vm, value: &Value, modern: bool) -> VmResult<CallbackReturn> {
         Ok(match value.deref() {
             Value::Object(o) => match self.dom.and_then(|d| d.returned_node(vm, &o, modern)) {
                 Some(node) => CallbackReturn::Node(node),
@@ -128,7 +128,7 @@ impl<'a> BridgeHost<'a> {
             let args = self.convert_args(vm, args, ctx)?;
             libxml::flush_diagnostics(vm)?;
             let ret = vm.call_value(callable, args)?;
-            self.convert_return(vm, ret, ctx.modern)
+            self.convert_return(vm, &ret, ctx.modern)
         })
         .unwrap_or(CallbackReturn::Undef)
     }
@@ -141,6 +141,23 @@ impl XslHost<Value> for BridgeHost<'_> {
         args: Vec<CallbackArg<'_>>,
     ) -> CallbackReturn {
         let name = Value::Str(ZStr::from(ctx.function));
+        // zend_call_function() with an uncallable string: "Invalid callback
+        // f, function "f" not found or invalid function name". Static method
+        // names are left to the call itself, which autoloads the class first
+        // (and propagates an exception thrown by the autoloader).
+        if !ctx.function.windows(2).any(|w| w == b"::") {
+            let invalid = with_vm(|vm| -> VmResult<Option<String>> {
+                Ok((!vm.is_callable(&name)).then(|| vm.callable_error_message(&name)))
+            });
+            if let Some(Some(reason)) = invalid {
+                let msg = format!(
+                    "Invalid callback {}, {reason}",
+                    String::from_utf8_lossy(ctx.function)
+                );
+                throw("Error", &msg);
+                return CallbackReturn::Undef;
+            }
+        }
         self.invoke(&name, ctx, args)
     }
 

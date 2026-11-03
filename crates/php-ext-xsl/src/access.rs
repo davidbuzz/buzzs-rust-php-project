@@ -78,9 +78,7 @@ use php_libxml::tree::{Document, Node};
 use php_runtime::{Obj, Value};
 use php_vm::class::Class;
 use php_vm::{Vm, VmResult};
-use php_xsl::{
-    CallbackContext, NodeArg, RawDocument, ResultDocument, ReturnedNode, XmlDocument,
-};
+use php_xsl::{CallbackContext, NodeArg, RawDocument, ResultDocument, ReturnedNode, XmlDocument};
 
 /// The libxml2 document behind a PHP object.
 pub enum XmlSource {
@@ -263,10 +261,7 @@ pub fn provider(name: &str) -> Option<&'static dyn DomAccess> {
 }
 
 /// `php_libxml_import_node`: the first provider that recognises `obj`.
-pub fn import(
-    vm: &mut Vm,
-    obj: &Obj,
-) -> VmResult<Option<(&'static dyn DomAccess, ImportedNode)>> {
+pub fn import(vm: &mut Vm, obj: &Obj) -> VmResult<Option<(&'static dyn DomAccess, ImportedNode)>> {
     for p in providers() {
         if let Some(found) = p.import(vm, obj)? {
             return Ok(Some((p, found)));

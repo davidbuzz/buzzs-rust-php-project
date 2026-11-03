@@ -177,6 +177,7 @@ fn unset_property(vm: &mut Vm, _o: &Obj, name: &ZStr) -> VmResult<bool> {
 }
 
 /// `xsl_objects_new`: native state and the libxslt-derived defaults.
+#[allow(clippy::unnecessary_wraps)] // the `ClassHooks::create` signature
 fn create(vm: &mut Vm, o: &Obj) -> VmResult<()> {
     let p = Processor::new();
     let props = p.properties();
@@ -278,7 +279,9 @@ fn import_stylesheet(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let target = if is_document {
         obj.clone()
     } else {
-        provider.owner_document(vm, &obj)?.unwrap_or_else(|| obj.clone())
+        provider
+            .owner_document(vm, &obj)?
+            .unwrap_or_else(|| obj.clone())
     };
     let source = if object::class_of(&target).magic.clone.is_some() {
         drop(source);
@@ -287,7 +290,10 @@ fn import_stylesheet(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             drop(clone);
             return Err(throw_xsl(vm, &XslError::clone_retained()));
         }
-        match provider.import(vm, &clone)?.and_then(ImportedNode::into_source) {
+        match provider
+            .import(vm, &clone)?
+            .and_then(ImportedNode::into_source)
+        {
             Some(s) => s,
             None => return Err(throw_xsl(vm, &XslError::invalid_node(M))),
         }
@@ -328,18 +334,18 @@ fn transform_to_doc(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let return_class = match a.opt(1) {
         Some(name) => {
             let name = vm.value_to_string(&name)?;
-            match vm.lookup_class(&name)? {
-                Some(c) => Some(c),
-                None => {
-                    let e = XslError::unknown_return_class(&name.to_string_lossy());
-                    return Err(throw_xsl(vm, &e));
-                }
-            }
+            let Some(class) = vm.lookup_class(&name)? else {
+                let e = XslError::unknown_return_class(&name.to_string_lossy());
+                return Err(throw_xsl(vm, &e));
+            };
+            Some(class)
         }
         None => None,
     };
     let (input, provider, source) = input_document(vm, a, M)?;
-    let result = run(vm, a, &this, &p, &source, |p, h| p.transform_to_doc(&source, h))?;
+    let result = run(vm, a, &this, &p, &source, |p, h| {
+        p.transform_to_doc(&source, h)
+    })?;
     drop(source);
     let Some(doc) = result else {
         return Ok(Value::Bool(false));
@@ -386,7 +392,9 @@ fn transform_to_xml(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     const M: &str = "transformToXml";
     let (this, p) = processor(vm, a)?;
     let (_input, _provider, source) = input_document(vm, a, M)?;
-    let out = run(vm, a, &this, &p, &source, |p, h| p.transform_to_xml(&source, h))?;
+    let out = run(vm, a, &this, &p, &source, |p, h| {
+        p.transform_to_xml(&source, h)
+    })?;
     Ok(match out {
         XmlOutput::Str(s) => Value::Str(ZStr::from(s)),
         XmlOutput::Null => Value::Null,
@@ -450,6 +458,7 @@ fn remove_parameter(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     xsl(vm, r).map(Value::Bool)
 }
 
+#[allow(clippy::unnecessary_wraps)] // the native method signature
 fn has_exslt_support(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
     Ok(Value::Bool(Processor::has_exslt_support()))
 }
@@ -536,19 +545,34 @@ type Handler = fn(&mut Vm, &mut Args) -> VmResult<Value>;
 
 /// The methods, in stub order (`php_xsl.stub.php`).
 const METHODS: &[(&str, Handler)] = &[
-    ("importStylesheet(object $stylesheet): bool", import_stylesheet),
+    (
+        "importStylesheet(object $stylesheet): bool",
+        import_stylesheet,
+    ),
     (
         "transformToDoc(object $document, ?string $returnClass = null): object|false",
         transform_to_doc,
     ),
-    ("transformToUri(object $document, string $uri): int", transform_to_uri),
-    ("transformToXml(object $document): string|null|false", transform_to_xml),
+    (
+        "transformToUri(object $document, string $uri): int",
+        transform_to_uri,
+    ),
+    (
+        "transformToXml(object $document): string|null|false",
+        transform_to_xml,
+    ),
     (
         "setParameter(string $namespace, array|string $name, ?string $value = null): bool",
         set_parameter,
     ),
-    ("getParameter(string $namespace, string $name): string|false", get_parameter),
-    ("removeParameter(string $namespace, string $name): bool", remove_parameter),
+    (
+        "getParameter(string $namespace, string $name): string|false",
+        get_parameter,
+    ),
+    (
+        "removeParameter(string $namespace, string $name): bool",
+        remove_parameter,
+    ),
     ("hasExsltSupport(): bool", has_exslt_support),
     (
         "registerPHPFunctions(array|string|null $functions = null): void",
@@ -559,7 +583,10 @@ const METHODS: &[(&str, Handler)] = &[
         register_php_function_ns,
     ),
     ("setProfiling(?string $filename): true", set_profiling),
-    ("setSecurityPrefs(int $preferences): int", set_security_prefs),
+    (
+        "setSecurityPrefs(int $preferences): int",
+        set_security_prefs,
+    ),
     ("getSecurityPrefs(): int", get_security_prefs),
 ];
 
@@ -567,8 +594,18 @@ const METHODS: &[(&str, Handler)] = &[
 pub(crate) fn register_class(vm: &mut Vm) {
     let mut b = ClassBuilder::new("XSLTProcessor")
         .flags(php_vm::ext::class_flags::NO_CLONE)
-        .prop(PROPERTY_NAMES[0], acc::PUBLIC, Some("bool"), Some(Value::Bool(false)))
-        .prop(PROPERTY_NAMES[1], acc::PUBLIC, Some("bool"), Some(Value::Bool(false)))
+        .prop(
+            PROPERTY_NAMES[0],
+            acc::PUBLIC,
+            Some("bool"),
+            Some(Value::Bool(false)),
+        )
+        .prop(
+            PROPERTY_NAMES[1],
+            acc::PUBLIC,
+            Some("bool"),
+            Some(Value::Bool(false)),
+        )
         .prop(MAX_TEMPLATE_DEPTH, acc::PUBLIC, Some("int"), None)
         .prop(MAX_TEMPLATE_VARS, acc::PUBLIC, Some("int"), None);
     for (sig, handler) in METHODS {

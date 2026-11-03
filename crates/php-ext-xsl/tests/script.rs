@@ -5,12 +5,12 @@ use std::cell::RefCell;
 use std::io::Write;
 use std::rc::Rc;
 
+use php_ext_xsl::access::{self, DomAccess, ImportedNode, XmlSource};
 use php_libxml::tree::{Document, ParseOptions};
 use php_runtime::{Obj, Value, ZStr};
 use php_vm::class::Class;
 use php_vm::ext::{acc, Args, ClassBuilder, Extension, ModuleBuilder};
 use php_vm::{object, Vm, VmOptions, VmResult};
-use php_ext_xsl::access::{self, DomAccess, ImportedNode, XmlSource};
 use php_xsl::{CallbackContext, NodeArg, ResultDocument};
 
 /// A `Write` sink shared with the test.
@@ -41,6 +41,7 @@ fn ctor(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     }
 }
 
+#[allow(clippy::unnecessary_wraps)] // the native method signature
 fn save(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let s = object::internal::<TestDoc, _>(&a.this_obj(), |d| d.0.dump(false, None))
         .unwrap_or_default();
@@ -72,9 +73,7 @@ impl DomAccess for Provider {
     ) -> VmResult<Value> {
         let cls = match class {
             Some(c) => c.clone(),
-            None => vm
-                .find_class(b"testxml")
-                .expect("TestXml is registered"),
+            None => vm.find_class(b"testxml").expect("TestXml is registered"),
         };
         let o = vm.new_object(&cls)?;
         object::set_internal(&o, TestDoc(doc.into_document()));
@@ -187,8 +186,7 @@ fn transform_to_doc_and_uri() {
 
 #[test]
 fn errors_and_properties() {
-    let out = run(
-        r"$p = new XSLTProcessor;
+    let out = run(r"$p = new XSLTProcessor;
         try { $p->importStylesheet(new stdClass); } catch (TypeError $e) { echo $e->getMessage(), PHP_EOL; }
         try { $p->transformToXml(new TestXml); } catch (Error $e) { echo $e->getMessage(), PHP_EOL; }
         var_dump($p->importStylesheet(new TestXml('<container/>')));
@@ -196,8 +194,7 @@ fn errors_and_properties() {
         $p->maxTemplateVars = '7';
         try { unset($p->maxTemplateVars); } catch (Error $e) { echo $e->getMessage(), PHP_EOL; }
         var_dump($p->maxTemplateVars, $p->getSecurityPrefs(), $p->setSecurityPrefs(0), $p->hasExsltSupport());
-        try { clone $p; } catch (Error $e) { echo $e->getMessage(), PHP_EOL; }",
-    );
+        try { clone $p; } catch (Error $e) { echo $e->getMessage(), PHP_EOL; }");
     assert_eq!(
         out,
         "XSLTProcessor::importStylesheet(): Argument #1 ($stylesheet) must be a valid XML node\n\
@@ -209,5 +206,37 @@ fn errors_and_properties() {
          Cannot unset XSLTProcessor::$maxTemplateVars\n\
          int(7)\nint(44)\nint(44)\nbool(true)\n\
          Trying to clone an uncloneable object of class XSLTProcessor\n"
+    );
+}
+
+const CALL_SHEET: &str = r#"function sheet($expr) { return new TestXml('<xsl:stylesheet version="1.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform" xmlns:php="http://php.net/xsl" xmlns:my="urn:my"><xsl:output method="text"/><xsl:template match="/"><xsl:value-of select="' . $expr . '"/></xsl:template></xsl:stylesheet>'); }"#;
+
+#[test]
+fn callback_errors_propagate() {
+    let out = run(&format!(
+        r#"{CALL_SHEET}
+        spl_autoload_register(function ($c) {{ var_dump($c); throw new Exception("Autoload exception"); }});
+        function boom() {{ throw new RuntimeException("boom"); }}
+        function obj() {{ return new stdClass; }}
+        $in = new TestXml('<a/>');
+        foreach (["php:function('undefinedfunc')", "php:function('TeSt::dateLang')", "php:function('boom')", "php:function('obj')"] as $e) {{
+            $p = new XSLTProcessor;
+            $p->registerPHPFunctions();
+            $p->importStylesheet(sheet($e));
+            try {{ var_dump($p->transformToXml($in)); }} catch (Throwable $t) {{ echo get_class($t), ': ', $t->getMessage(), PHP_EOL; }}
+        }}
+        $p = new XSLTProcessor;
+        $p->importStylesheet(sheet("my:up('x')"));
+        $p->registerPHPFunctionNS('urn:my', 'up', fn ($s) => strtoupper($s) . '!');
+        var_dump($p->transformToXml($in));"#
+    ));
+    assert_eq!(
+        out,
+        "Error: Invalid callback undefinedfunc, function \"undefinedfunc\" not found or invalid function name\n\
+         string(4) \"TeSt\"\n\
+         Exception: Autoload exception\n\
+         RuntimeException: boom\n\
+         TypeError: Only objects that are instances of DOM nodes can be converted to an XPath expression\n\
+         string(2) \"X!\"\n"
     );
 }
