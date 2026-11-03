@@ -18,6 +18,7 @@ php-ext-pcre = { path = "../php-ext-pcre" }
 php-ext-json = { path = "../php-ext-json" }
 php-ext-spl = { path = "../php-ext-spl" }
 php-ext-hash = { path = "../php-ext-hash" }
+php-ext-random = { path = "../php-ext-random" }
 libc = "0.2"
 
 [lints]
