@@ -310,7 +310,7 @@ impl Vm {
                         );
                     }
                     if !ignore_args {
-                        let args = self.frame_args(idx);
+                        let args = self.trace_frame_args(idx);
                         entry.insert(ArrayKey::Str(ZStr::from("args")), Value::Array(args));
                     }
                 }
@@ -325,71 +325,114 @@ impl Vm {
         ZArray::from_table(out)
     }
 
-    /// The arguments of frame `idx` (current values for user functions).
+    /// The arguments of frame `idx` (current values for user functions),
+    /// as `func_get_args()` sees them.
     pub(crate) fn frame_args(&self, idx: usize) -> ZArray {
-        let f = &self.frames[idx];
         let mut t = HashTable::new();
-        match f.kind {
-            FrameKind::Builtin => {
-                for a in f.args.iter().flatten() {
-                    let _ = t.push(a.deref());
+        for (k, v, _) in self.frame_arg_list(idx) {
+            match k {
+                Some(k) => {
+                    t.insert(ArrayKey::Str(k), v);
                 }
-            }
-            _ => {
-                if let Some(uf) = &f.ufunc {
-                    let vars = f.vars.borrow();
-                    let nparams = uf.params.len();
-                    let passed = f.args.len();
-                    for (i, p) in uf.params.iter().enumerate() {
-                        if p.variadic {
-                            if let Some(Some(Value::Array(a))) =
-                                vars.slots.get(f.cv_idx(u32::try_from(i).unwrap_or(0)))
-                            {
-                                for (k, v) in a.iter() {
-                                    match k {
-                                        ArrayKey::Int(_) => {
-                                            let _ = t.push(v.deref());
-                                        }
-                                        ArrayKey::Str(_) => {
-                                            t.insert(k.clone(), v.deref());
-                                        }
-                                    }
-                                }
-                            }
-                            break;
-                        }
-                        if i >= passed && i >= nparams {
-                            break;
-                        }
-                        if i >= passed {
-                            break;
-                        }
-                        // Not yet received (RECV pending): the passed value.
-                        let v = vars
-                            .slots
-                            .get(f.cv_idx(u32::try_from(i).unwrap_or(0)))
-                            .cloned()
-                            .flatten()
-                            .or_else(|| f.args.get(i).cloned().flatten())
-                            .map(|v| v.deref())
-                            .unwrap_or_default();
-                        let v = if p.sensitive {
-                            Value::Str(ZStr::from("[SensitiveParameterValue]"))
-                        } else {
-                            v
-                        };
-                        let _ = t.push(v);
-                    }
-                    // Extra args beyond the declared parameters.
-                    if !uf.params.last().is_some_and(|p| p.variadic) {
-                        for a in f.args.iter().skip(nparams).flatten() {
-                            let _ = t.push(a.deref());
-                        }
-                    }
+                None => {
+                    let _ = t.push(v);
                 }
             }
         }
         ZArray::from_table(t)
+    }
+
+    /// The arguments of frame `idx` for a backtrace: `#[\SensitiveParameter]`
+    /// values are wrapped in `SensitiveParameterValue` objects.
+    fn trace_frame_args(&mut self, idx: usize) -> ZArray {
+        let list = self.frame_arg_list(idx);
+        let sensitive_cls = if list.iter().any(|(_, _, s)| *s) {
+            self.find_class(b"SensitiveParameterValue")
+        } else {
+            None
+        };
+        let mut t = HashTable::new();
+        for (k, v, sensitive) in list {
+            let v = match (&sensitive_cls, sensitive) {
+                (Some(cls), true) => match self.instantiate_unchecked(cls) {
+                    Ok(o) => {
+                        object::set_internal(&o, v);
+                        Value::Object(o)
+                    }
+                    Err(_) => Value::Null,
+                },
+                _ => v,
+            };
+            match k {
+                Some(k) => {
+                    t.insert(ArrayKey::Str(k), v);
+                }
+                None => {
+                    let _ = t.push(v);
+                }
+            }
+        }
+        ZArray::from_table(t)
+    }
+
+    /// `debug_backtrace_get_args`: (named key, value, sensitive) triples.
+    fn frame_arg_list(&self, idx: usize) -> Vec<(Option<ZStr>, Value, bool)> {
+        let f = &self.frames[idx];
+        let mut out = Vec::new();
+        if f.kind == FrameKind::Builtin {
+            for a in f.args.iter().flatten() {
+                out.push((None, a.deref(), false));
+            }
+            return out;
+        }
+        let Some(uf) = &f.ufunc else {
+            return out;
+        };
+        let vars = f.vars.borrow();
+        let nparams = uf.params.len();
+        let passed = f.args.len();
+        let cv = |i: usize| {
+            vars.slots
+                .get(f.cv_idx(u32::try_from(i).unwrap_or(0)))
+                .cloned()
+                .flatten()
+        };
+        for (i, p) in uf.params.iter().enumerate() {
+            if p.variadic {
+                match cv(i) {
+                    Some(Value::Array(a)) => {
+                        for (k, v) in a.iter() {
+                            let key = match k {
+                                ArrayKey::Int(_) => None,
+                                ArrayKey::Str(s) => Some(s.clone()),
+                            };
+                            out.push((key, v.deref(), p.sensitive));
+                        }
+                    }
+                    // Not yet received: the passed values.
+                    _ => {
+                        for a in f.args.iter().skip(i).flatten() {
+                            out.push((None, a.deref(), p.sensitive));
+                        }
+                    }
+                }
+                return out;
+            }
+            if i >= passed {
+                break;
+            }
+            // Not yet received (RECV pending): the passed value.
+            let v = cv(i)
+                .or_else(|| f.args.get(i).cloned().flatten())
+                .map(|v| v.deref())
+                .unwrap_or_default();
+            out.push((None, v, p.sensitive));
+        }
+        // Extra args beyond the declared parameters.
+        for a in f.args.iter().skip(nparams).flatten() {
+            out.push((None, a.deref(), false));
+        }
+        out
     }
 
     /// `zend_trace_to_string`.
