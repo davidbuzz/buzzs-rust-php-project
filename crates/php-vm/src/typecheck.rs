@@ -21,6 +21,7 @@ pub(crate) struct TypeCtx<'a> {
 }
 
 impl Vm {
+    #[allow(clippy::unused_self)]
     fn class_matches(&mut self, obj_class: &Rc<Class>, name: &ZStr, ctx: &TypeCtx<'_>) -> bool {
         let lc = name.to_ascii_lowercase();
         let resolved: Option<ZStr> = match lc.as_bytes() {
@@ -148,33 +149,18 @@ impl Vm {
         self.weak_scalar_coerce(m, v)
     }
 
-    /// `zend_verify_weak_scalar_type_hint`.
+    /// `zend_verify_weak_scalar_type_hint`: preference order
+    /// int → float → string → bool.
     fn weak_scalar_coerce(&mut self, m: u32, v: &mut Value) -> VmResult<bool> {
-        // Only scalars (and stringable objects) take part.
-        match v {
-            Value::Array(_) | Value::Resource(_) | Value::Null => return Ok(false),
-            Value::Object(o) => {
-                if m & mask::STRING != 0 {
-                    let o = o.clone();
-                    if let Some(s) = self.object_to_string_opt(&o)? {
-                        *v = Value::Str(s);
-                        return Ok(true);
-                    }
-                }
-                return Ok(false);
-            }
-            _ => {}
-        }
         if m & mask::LONG != 0 {
-            if m & mask::DOUBLE != 0 {
-                if let Value::Str(s) = v {
-                    if let Some(n) = is_numeric_string_ex(s.as_bytes(), false) {
-                        *v = match n.value {
-                            Number::Int(i) => Value::Int(i),
-                            Number::Float(f) => Value::Float(f),
-                        };
-                        return Ok(true);
-                    }
+            if let (true, Value::Str(s)) = (m & mask::DOUBLE != 0, &*v) {
+                // int|float with a string: is_numeric_string() decides.
+                if let Some(n) = is_numeric_string_ex(s.as_bytes(), false) {
+                    *v = match n.value {
+                        Number::Int(i) => Value::Int(i),
+                        Number::Float(f) => Value::Float(f),
+                    };
+                    return Ok(true);
                 }
             } else if let Some(l) = self.parse_arg_long_weak(v)? {
                 *v = Value::Int(l);
@@ -182,17 +168,7 @@ impl Vm {
             }
         }
         if m & mask::DOUBLE != 0 {
-            let d = match v {
-                Value::Int(i) => {
-                    #[allow(clippy::cast_precision_loss)]
-                    let f = *i as f64;
-                    Some(f)
-                }
-                Value::Str(s) => is_numeric_string_ex(s.as_bytes(), false).map(|n| n.value.to_f64()),
-                Value::Bool(b) => Some(if *b { 1.0 } else { 0.0 }),
-                _ => None,
-            };
-            if let Some(d) = d {
+            if let Some(d) = parse_arg_double_weak(v) {
                 *v = Value::Float(d);
                 return Ok(true);
             }
@@ -213,6 +189,13 @@ impl Vm {
                     *v = Value::Str(ZStr::from(if *b { "1" } else { "" }));
                     return Ok(true);
                 }
+                Value::Object(o) => {
+                    let o = o.clone();
+                    if let Some(s) = self.object_to_string_opt(&o)? {
+                        *v = Value::Str(s);
+                        return Ok(true);
+                    }
+                }
                 _ => {}
             }
         }
@@ -221,6 +204,7 @@ impl Vm {
                 Value::Int(i) => Some(*i != 0),
                 Value::Float(f) => Some(*f != 0.0),
                 Value::Str(s) => Some(!(s.is_empty() || s.as_bytes() == b"0")),
+                Value::Bool(b) => Some(*b),
                 _ => None,
             };
             if let Some(b) = b {
@@ -232,6 +216,7 @@ impl Vm {
     }
 
     /// `zend_parse_arg_long_weak` (with the precision-loss deprecations).
+    #[allow(clippy::many_single_char_names)]
     pub(crate) fn parse_arg_long_weak(&mut self, v: &Value) -> VmResult<Option<i64>> {
         Ok(match v {
             Value::Int(i) => Some(*i),
@@ -275,6 +260,17 @@ impl Vm {
             Value::Bool(b) => Some(i64::from(*b)),
             _ => None,
         })
+    }
+}
+
+/// `zend_parse_arg_double_weak` for non-null values (`None` = NAN).
+fn parse_arg_double_weak(v: &Value) -> Option<f64> {
+    match v {
+        #[allow(clippy::cast_precision_loss)]
+        Value::Int(i) => Some(*i as f64),
+        Value::Str(s) => is_numeric_string_ex(s.as_bytes(), false).map(|n| n.value.to_f64()),
+        Value::Bool(b) => Some(if *b { 1.0 } else { 0.0 }),
+        _ => None,
     }
 }
 
