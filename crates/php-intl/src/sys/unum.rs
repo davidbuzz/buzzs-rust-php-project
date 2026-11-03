@@ -57,6 +57,13 @@ impl NumberFormat {
         self.0
     }
 
+    /// Gives up ownership of the handle (for ICU APIs that adopt it).
+    pub fn into_raw(self) -> *mut UNumberFormat {
+        let p = self.0;
+        std::mem::forget(self);
+        p
+    }
+
     /// `unum_clone()`.
     pub fn try_clone(&self) -> Result<Self, UErrorCode> {
         let mut st = UErrorCode::ZERO;

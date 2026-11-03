@@ -28,6 +28,7 @@ pub mod normalizer;
 pub mod numberformatter;
 pub mod numfmt;
 pub mod rangeformatter;
+pub mod reldateformatter;
 pub mod resourcebundle;
 pub mod spoofchecker;
 pub mod sys;

@@ -20,6 +20,7 @@ pub mod unorm;
 pub mod unum;
 pub mod unumf;
 pub mod uplrules;
+pub mod ureldatefmt;
 pub mod ures;
 pub mod usearch;
 pub mod uspoof;

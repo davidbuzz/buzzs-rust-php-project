@@ -74,6 +74,7 @@ opaque!(
     UCharsetDetector,
     UNumberingSystem,
     UText,
+    UCaseMap,
 );
 
 /// `UParseError`.
@@ -1010,6 +1011,10 @@ icu! {
 // Declarations the generator cannot express (array parameters).
 icu! {
     fn uenum_openCharStringsEnumeration(strings: *const *const c_char, count: i32, ec: *mut UErrorCode) -> *mut UEnumeration;
+    fn ucasemap_open(locale: *const c_char, options: u32, pErrorCode: *mut UErrorCode) -> *mut UCaseMap;
+    fn ucasemap_close(csm: *mut UCaseMap);
+    fn ucasemap_setBreakIterator(csm: *mut UCaseMap, iterToAdopt: *mut UBreakIterator, pErrorCode: *mut UErrorCode);
+    fn ucasemap_toTitle(csm: *mut UCaseMap, dest: *mut UChar, destCapacity: i32, src: *const UChar, srcLength: i32, pErrorCode: *mut UErrorCode) -> i32;
     fn ulistfmt_format(listfmt: *const UListFormatter, strings: *const *const UChar, stringLengths: *const i32, stringCount: i32, result: *mut UChar, resultCapacity: i32, status: *mut UErrorCode) -> i32;
 }
 
