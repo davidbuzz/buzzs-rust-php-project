@@ -336,6 +336,15 @@ pub type MetaData = Vec<(String, Value)>;
 impl Stream {
     /// `php_stream_alloc()`.
     pub fn new(ops: Box<dyn StreamOps>, mode: &str) -> Self {
+        let detect = crate::state::settings().auto_detect_line_endings;
+        let mut s = Self::alloc(ops, mode);
+        if detect {
+            s.state.flags |= flags::DETECT_EOL;
+        }
+        s
+    }
+
+    fn alloc(ops: Box<dyn StreamOps>, mode: &str) -> Self {
         Stream {
             ops,
             state: StreamState {

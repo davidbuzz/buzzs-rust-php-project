@@ -329,3 +329,30 @@ fn fnmatch_and_umask() {
     assert_eq!(umask(Some(0o077)), old);
     assert_eq!(umask(Some(old)), 0o077);
 }
+
+#[test]
+fn filter_attach_by_mode() {
+    let mut m = crate::memory::memory_create(crate::mode::TempMode::Default);
+    // "w+b": both chains
+    let id = stream_filter_attach(&mut m, "string.toupper", 0, None, true).unwrap();
+    assert_eq!(m.read_filters.len(), 1);
+    assert_eq!(m.write_filters.len(), 1);
+    assert_eq!(m.filter_chain_of(id), Some(crate::filter::ChainKind::Write));
+    m.write(b"abc").unwrap();
+    m.rewind();
+    assert_eq!(m.copy_to_mem(None).unwrap(), b"ABC");
+    assert!(stream_filter_remove(&mut m, id));
+    let _ = diag::take();
+    assert!(stream_filter_attach(&mut m, "nonexistent", STREAM_FILTER_READ, None, false).is_none());
+    assert_eq!(msgs(), ["Unable to locate filter \"nonexistent\""]);
+}
+
+#[test]
+fn auto_detect_mac_line_endings() {
+    crate::state::update_settings(|s| s.auto_detect_line_endings = true);
+    let mut m = crate::memory::memory_open(crate::mode::TempMode::ReadOnly, b"a\rb\rc".to_vec());
+    crate::state::update_settings(|s| s.auto_detect_line_endings = false);
+    assert_eq!(m.get_line(None).unwrap(), b"a\r");
+    assert_eq!(m.get_line(None).unwrap(), b"b\r");
+    assert_eq!(m.get_line(None).unwrap(), b"c");
+}

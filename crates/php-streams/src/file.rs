@@ -725,6 +725,61 @@ pub fn fputcsv_write(stream: &mut Stream, record: &[u8]) -> Option<i64> {
         .map(|n| i64::try_from(n).unwrap_or(i64::MAX))
 }
 
+/// `PHP_STREAM_FILTER_READ`.
+pub const STREAM_FILTER_READ: i64 = 1;
+/// `PHP_STREAM_FILTER_WRITE`.
+pub const STREAM_FILTER_WRITE: i64 = 2;
+/// `PHP_STREAM_FILTER_ALL`.
+pub const STREAM_FILTER_ALL: i64 = 3;
+
+/// `stream_filter_append()` / `stream_filter_prepend()`: attaches
+/// `name` to the chains selected by `read_write` (or derived from the
+/// stream mode when 0). Returns the id of the last filter attached (the
+/// filter resource), or `None` (PHP `false`).
+pub fn stream_filter_attach(
+    stream: &mut Stream,
+    name: &str,
+    read_write: i64,
+    params: Option<&crate::value::Value>,
+    append: bool,
+) -> Option<crate::filter::FilterId> {
+    use crate::filter::ChainKind;
+    let mut rw = read_write;
+    if rw & STREAM_FILTER_ALL == 0 {
+        if stream.mode.contains(['r', '+']) {
+            rw |= STREAM_FILTER_READ;
+        }
+        if stream.mode.contains(['w', '+', 'a']) {
+            rw |= STREAM_FILTER_WRITE;
+        }
+    }
+    let mut last = None;
+    for (bit, kind) in [
+        (STREAM_FILTER_READ, ChainKind::Read),
+        (STREAM_FILTER_WRITE, ChainKind::Write),
+    ] {
+        if rw & bit == 0 {
+            continue;
+        }
+        let f = wrapper::create_filter(name, params, false)?;
+        last = Some(if append {
+            stream.append_filter(kind, f)?
+        } else {
+            stream.prepend_filter(kind, f)
+        });
+    }
+    last
+}
+
+/// `stream_filter_remove()`: flushes and detaches the filter.
+pub fn stream_filter_remove(stream: &mut Stream, id: crate::filter::FilterId) -> bool {
+    if !stream.remove_filter(id) {
+        diag::warning("Unable to flush filter, not removing");
+        return false;
+    }
+    true
+}
+
 /// `umask($mask)`: sets the mask (when given) and returns the old one.
 pub fn umask(mask: Option<i64>) -> i64 {
     let old = sys::current_umask();

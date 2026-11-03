@@ -34,6 +34,7 @@ pub mod sys;
 pub mod temp;
 #[cfg(test)]
 mod test_util;
+pub mod transports;
 pub mod user;
 pub mod util;
 pub mod value;
