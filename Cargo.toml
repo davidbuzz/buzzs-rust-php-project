@@ -143,3 +143,16 @@ opt-level = 2
 opt-level = 2
 [profile.dev.package.php-parser]
 opt-level = 2
+# The interpreter itself: at opt-level 0 every Option/Vec/RefCell helper is
+# an out-of-line call (≈4 000 instructions per empty loop iteration). Level 1
+# cuts per-call overhead 2–3× (with perf/0*.diff ≈4.6×) for ~20 s more per
+# php-vm edit-rebuild. See perf/README.md.
+[profile.dev.package.php-vm]
+opt-level = 1
+# php-cli is where `install_global_allocator!` monomorphises the counting
+# allocator (php-memlimit's generic code is compiled in the *using* crate),
+# so every allocation of the process runs at php-cli's opt-level.
+[profile.dev.package.php-cli]
+opt-level = 2
+[profile.dev.package.php-memlimit]
+opt-level = 3
