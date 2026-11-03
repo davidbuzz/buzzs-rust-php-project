@@ -376,6 +376,9 @@ dependencies = [
 [[package]]
 name = "php-gettext"
 version = "0.1.0"
+dependencies = [
+ "libc",
+]
 
 [[package]]
 name = "php-gmp"
@@ -472,6 +475,13 @@ name = "php-sockets"
 version = "0.1.0"
 
 [[package]]
+name = "php-spl"
+version = "0.1.0"
+dependencies = [
+ "php-runtime",
+]
+
+[[package]]
 name = "php-sqlite"
 version = "0.1.0"
 dependencies = [
@@ -514,10 +524,13 @@ version = "0.1.0"
 name = "php-vm"
 version = "0.1.0"
 dependencies = [
+ "php-hash",
  "php-lexer",
  "php-parser",
  "php-random",
  "php-runtime",
+ "php-stdarr",
+ "php-stdstr",
  "php-support",
 ]
 
