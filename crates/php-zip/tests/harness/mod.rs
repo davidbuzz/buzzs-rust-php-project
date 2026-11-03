@@ -283,6 +283,10 @@ fn subst(st: &Shared, s: &str) -> Vec<u8> {
             .map(|i| u8::from_str_radix(&h[i..i + 2], 16).unwrap())
             .collect();
     }
+    if let Some(f) = s.strip_prefix("file:") {
+        let path = String::from_utf8(subst(st, f)).unwrap();
+        return fs::read(path).unwrap();
+    }
     if let Some(r) = s.strip_prefix("rep:") {
         let (n, body) = r.split_once(':').unwrap();
         return body.repeat(n.parse().unwrap()).into_bytes();
@@ -418,7 +422,15 @@ fn dispatch(host: &mut Host, zip: &ZipArchive, method: &str, a: &[J]) -> RtResul
         "openString" => open_v(zip.open_string(host, &a.so(0, ""), a.i(1, 0))?),
         "setPassword" => V::Bool(zip.set_password(&a.s(0))?),
         "close" => V::Bool(zip.close(host)?),
-        "closeString" => V::opt_str(zip.close_string(host)?),
+        "closeString" => match zip.close_string(host)? {
+            // Archives are compared by length: entry mtimes vary.
+            Some(s) if a.a.first().is_some_and(|j| j == "len") => V::Int(s.len() as i64),
+            Some(s) if a.a.first().is_some_and(|j| j == "same") => {
+                V::Bool(s == subst(&st, a.a[1].as_str().unwrap()))
+            }
+            Some(s) => V::Str(s),
+            None => V::Bool(false),
+        },
         "count" => V::Int(zip.count()?),
         "getStatusString" => V::s(&zip.get_status_string()),
         "clearError" => {

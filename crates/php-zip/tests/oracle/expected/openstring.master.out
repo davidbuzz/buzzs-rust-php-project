@@ -1,0 +1,60 @@
+# ZipArchive_openString
+z->openString = true
+entry 0 = "foo"
+entry 1 = "bar"
+entry 2 = "foobar/"
+entry 3 = "foobar/baz"
+z->addFromString = false
+z->addEmptyDir = false
+z->close = true
+z->openString = true
+z->openString = 10
+z->getStatusString = "File already exists"
+z->openString = true
+z->openString = 21
+# closeString basic
+z->openString = true
+z props = ["lastId"=>-1,"status"=>0,"statusSys"=>0,"numFiles"=>0,"filename"=>"","comment"=>""]
+z->addFromString = true
+z->addFromString = true
+z->closeString = 196
+# closeString errors
+z->openString = true
+z->open = true
+! Error: ZipArchive::closeString can only be called on an archive opened with ZipArchive::openString
+z->openString = 19
+z->getStatusString = "Not a zip archive"
+z->status = 19
+! ValueError: Invalid or uninitialized Zip object
+z->openString = true
+z->closeString = true
+! ValueError: Invalid or uninitialized Zip object
+# closeString variations
+z->openString = true
+z->closeString = ""
+z->getStatusString = "No error"
+z->openString = true
+z->addFromString = true
+z->closeString = false
+z->openString = true
+z->setCompressionIndex = true
+[Warning] ZipArchive::closeString(): Zip archive inconsistent
+z->closeString = false
+z->getStatusString = "Zip archive inconsistent"
+z->openString = true
+z->openString = true
+z->open = true
+z->openString = true
+z->comment = "Zip archive comment"
+z->filename = ""
+z->close = true
+# round trip through closeString
+z->openString = true
+z->addFromString = true
+z->setArchiveComment = true
+z->registerProgressCallback = true
+progress start
+progress end
+z->closeString = 124
+z props = ["lastId"=>0,"status"=>0,"statusSys"=>0,"numFiles"=>0,"filename"=>"","comment"=>""]
+END

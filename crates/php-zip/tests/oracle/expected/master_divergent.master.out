@@ -134,4 +134,22 @@ zip_open = resource
 zip_read = resource
 [Deprecated] Function zip_entry_name() is deprecated since 8.0, use ZipArchive::statIndex() instead
 zip_entry_name = false
+# gh22649: comments on replaced entries
+z->open = true
+z->addFromString = true
+z->setCommentName = true
+z->addFromString = true
+z->setCommentIndex = true
+z->close = true
+z->open = true
+z->addFromString = true
+z->setCommentName = true
+z->addFromString = true
+z->setCommentIndex = true
+z->close = true
+z->open = true
+z->getCommentName = "dir/entry2d.txt"
+z->getCommentName = "dir/entry3d.txt"
+z->getFromName = "updated entry #3"
+z->close = true
 END
