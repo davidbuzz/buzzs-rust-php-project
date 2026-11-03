@@ -1,0 +1,16 @@
+[package]
+name = "php-ext-xsl"
+description = "ext/xsl binding for the phprust VM: XSLTProcessor over php-xsl"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+php-vm = { path = "../php-vm" }
+php-runtime = { path = "../php-runtime" }
+php-xsl = { path = "../php-xsl" }
+php-libxml = { path = "../php-libxml" }
+
+[lints]
+workspace = true
