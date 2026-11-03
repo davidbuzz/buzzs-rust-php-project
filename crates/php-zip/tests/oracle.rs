@@ -246,11 +246,28 @@ fn class_tables_match_reflection() {
         assert_eq!(m.params.len(), params.len(), "{}", m.name);
         for (p, tp) in m.params.iter().zip(params) {
             assert_eq!(p.name, tp[0].as_str().unwrap(), "{}", m.name);
-            assert_eq!(type_set(p.ty), type_set(tp[1].as_str().unwrap()), "{}::{}", m.name, p.name);
-            assert_eq!(p.default.is_some(), tp[2].as_bool().unwrap(), "{}::{}", m.name, p.name);
+            assert_eq!(
+                type_set(p.ty),
+                type_set(tp[1].as_str().unwrap()),
+                "{}::{}",
+                m.name,
+                p.name
+            );
+            assert_eq!(
+                p.default.is_some(),
+                tp[2].as_bool().unwrap(),
+                "{}::{}",
+                m.name,
+                p.name
+            );
             assert_eq!(p.by_ref, tp[3].as_bool().unwrap(), "{}::{}", m.name, p.name);
         }
-        assert_eq!(type_set(m.ret), type_set(t[3].as_str().unwrap()), "{}", m.name);
+        assert_eq!(
+            type_set(m.ret),
+            type_set(t[3].as_str().unwrap()),
+            "{}",
+            m.name
+        );
         assert_eq!(m.tentative, t[4].as_bool().unwrap(), "{}", m.name);
     }
 
@@ -263,7 +280,12 @@ fn class_tables_match_reflection() {
         assert_eq!(f.params.len(), params.len(), "{}", f.name);
         for (p, tp) in f.params.iter().zip(params) {
             assert_eq!(p.name, tp[0].as_str().unwrap(), "{}", f.name);
-            assert_eq!(type_set(p.ty), type_set(tp[1].as_str().unwrap()), "{}", f.name);
+            assert_eq!(
+                type_set(p.ty),
+                type_set(tp[1].as_str().unwrap()),
+                "{}",
+                f.name
+            );
             assert_eq!(p.default.is_some(), tp[2].as_bool().unwrap(), "{}", f.name);
         }
     }
