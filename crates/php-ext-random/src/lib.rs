@@ -67,13 +67,9 @@ pub(crate) fn throw_random(vm: &mut Vm, e: &RandomError, pending: Option<Throw>)
     }
 }
 
-/// Looks up element `i` of an `__unserialize()` payload. The VM currently
-/// hands over numeric keys as strings ("0", "1"), so both forms are
-/// accepted.
+/// Element `i` of an `__unserialize()` payload (dereferenced).
 pub(crate) fn payload_at(data: &ZArray, i: i64) -> Option<Value> {
-    data.get_int(i)
-        .or_else(|| data.get_str(i.to_string().as_bytes()))
-        .map(Value::deref)
+    data.get_int(i).map(Value::deref)
 }
 
 /// The own properties of an object as an array (`zend_std_get_properties`).
@@ -103,7 +99,6 @@ pub(crate) fn own_properties(o: &php_runtime::Obj) -> ZArray {
 // ------------------------------------------------------------ functions
 
 fn lcg_value(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
-    vm.raise(E_DEPRECATED, php_random::legacy::LCG_VALUE_DEPRECATION)?;
     Ok(Value::Float(globals(vm).lcg_value()))
 }
 
@@ -184,14 +179,13 @@ fn random_int(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 // --------------------------------------------------------- registration
 
-/// Declares `Random\IntervalBoundary`. The extension API has no way to
-/// build a native enum, so the declaration is compiled from PHP source.
-fn register_interval_boundary(vm: &mut Vm) {
-    if vm.find_class(b"Random\\IntervalBoundary").is_some() {
-        return;
+/// Declares the `Random\IntervalBoundary` unit enum.
+fn register_interval_boundary(m: &mut ModuleBuilder<'_>) {
+    let mut b = ClassBuilder::new("Random\\IntervalBoundary").unit_enum();
+    for case in ["ClosedOpen", "ClosedClosed", "OpenClosed", "OpenOpen"] {
+        b = b.case(case, None);
     }
-    let src = b"<?php namespace Random; enum IntervalBoundary { case ClosedOpen; case ClosedClosed; case OpenClosed; case OpenOpen; }";
-    let _ = vm.run_main(src, &ZStr::from("[ext/random]"));
+    b.register(m.vm());
 }
 
 fn register_classes(m: &mut ModuleBuilder<'_>) {
@@ -212,7 +206,7 @@ fn register_classes(m: &mut ModuleBuilder<'_>) {
         .flags(class_flags::INTERFACE)
         .implements(m.vm(), &["Random\\Engine"])
         .register(m.vm());
-    register_interval_boundary(m.vm());
+    register_interval_boundary(m);
     engines::register(m);
     randomizer::register(m);
 }
@@ -224,8 +218,14 @@ impl Extension for Random {
 
     fn register(&self, m: &mut ModuleBuilder<'_>) {
         m.constant("MT_RAND_MT19937", Value::Int(php_random::MT_RAND_MT19937))
-            .constant("MT_RAND_PHP", Value::Int(php_random::MT_RAND_PHP));
+            .constant_deprecated(
+                "MT_RAND_PHP",
+                Value::Int(php_random::MT_RAND_PHP),
+                "8.3",
+                "as it uses a biased non-standard variant of Mt19937",
+            );
         m.function("lcg_value(): float", lcg_value)
+            .deprecated("8.4", "use \\Random\\Randomizer::getFloat() instead")
             .function(
                 "mt_srand(?int $seed = null, int $mode = MT_RAND_MT19937): void",
                 mt_srand,

@@ -14,14 +14,11 @@
 //!
 //! The CLI has no GET/POST/COOKIE input, so those storages are
 //! uninitialised (`filter_input()` returns `null`). `INPUT_SERVER` and
-//! `INPUT_ENV` read a snapshot of `$_SERVER` / `$_ENV` taken the first time
-//! a filter function needs them (the VM fills the superglobals after the
-//! extensions are registered and offers no request-startup hook).
+//! `INPUT_ENV` read the raw `$_SERVER` / `$_ENV` snapshotted at request
+//! startup, before `filter.default` is applied to those superglobals.
 //!
-//! Known gaps: `filter.default` is not applied to the superglobals (no
-//! request-startup hook) nor to `parse_str()`, and the
-//! `FILTER_SANITIZE_STRING`/`STRIPPED` constants are not reported as
-//! deprecated (no deprecated-constant support in the extension API).
+//! Known gap: `parse_str()` (php-ext-stdmisc) does not apply
+//! `filter.default` (use [`php_filter::apply_default_filter`]).
 
 // Native handlers and object hooks must match the VM's fn-pointer
 // signatures (`NativeFn`, `ClassHooks`), even when they cannot fail.
@@ -61,6 +58,73 @@ fn superglobal(vm: &Vm, name: &[u8]) -> Option<ZArray> {
     }
 }
 
+/// Replaces a superglobal array.
+fn set_superglobal(vm: &Vm, name: &[u8], value: ZArray) {
+    let mut g = vm.globals.borrow_mut();
+    let i = g.find_or_add(name) as usize;
+    if let Some(slot) = g.slots.get_mut(i) {
+        *slot = Some(Value::Array(value));
+    }
+}
+
+/// `php_sapi_filter` over an already registered superglobal: string
+/// values are replaced by their `filter.default` result.
+fn filter_superglobal(vm: &mut Vm, name: &[u8], filter: i64, flags: i64) -> VmResult<()> {
+    let Some(arr) = superglobal(vm, name) else {
+        return Ok(());
+    };
+    let mut out = ZArray::new();
+    for (k, v) in arr.iter() {
+        let v = match v.deref() {
+            Value::Str(raw) => run(vm, |h| {
+                php_filter::apply_default_filter(h, raw.as_bytes(), filter, flags)
+            })?,
+            other => other,
+        };
+        out.make_mut().insert(k.clone(), v);
+    }
+    set_superglobal(vm, name, out);
+    Ok(())
+}
+
+/// `RINIT`: snapshots the raw `INPUT_SERVER`/`INPUT_ENV` storages and
+/// applies `filter.default` to the registered superglobals (the CLI
+/// registers `$_SERVER` and `$_ENV`; GET/POST/COOKIE stay uninitialised).
+fn request_startup(vm: &mut Vm) {
+    let raw = FilterInputs {
+        post: None,
+        get: None,
+        cookie: None,
+        env: superglobal(vm, b"_ENV"),
+        server: superglobal(vm, b"_SERVER"),
+    };
+    INPUTS.with(|i| *i.borrow_mut() = Some(raw));
+    let default = vm.ini_string("filter.default").unwrap_or_default();
+    let (filter, deprecated) = php_filter::parse_default_filter_ini(&default);
+    if deprecated {
+        // UpdateDefaultFilter runs at startup: "in Unknown on line 0".
+        let r = vm.error_at(
+            E_DEPRECATED,
+            "The filter.default ini setting is deprecated",
+            &ZStr::from("Unknown"),
+            0,
+        );
+        if r.is_err() {
+            return;
+        }
+    }
+    if filter == php_filter::constants::FILTER_UNSAFE_RAW {
+        return;
+    }
+    let flags =
+        php_filter::parse_default_flags_ini(vm.ini_string("filter.default_flags").as_deref());
+    for name in [b"_SERVER".as_slice(), b"_ENV"] {
+        if filter_superglobal(vm, name, filter, flags).is_err() {
+            break;
+        }
+    }
+}
+
 /// The request inputs (`IF_G(*_array)`).
 fn inputs(vm: &Vm) -> FilterInputs {
     INPUTS.with(|i| {
@@ -82,53 +146,50 @@ fn run(vm: &mut Vm, f: impl FnOnce(&mut VmFilterHost<'_>) -> RtResult<Value>) ->
     r.map_err(|e| rt_throw(vm, e))
 }
 
-/// What `memory_get_usage()` reports for an idle request (the VM does not
-/// track allocations), the baseline of [`check_memory`].
-const BASE_USAGE: u64 = 2 * 1024 * 1024;
+/// The sanitizing filters whose output can be several times its input.
+const EXPANDING: [i64; 3] = [
+    php_filter::constants::FILTER_SANITIZE_ENCODED,
+    php_filter::constants::FILTER_SANITIZE_SPECIAL_CHARS,
+    php_filter::constants::FILTER_SANITIZE_FULL_SPECIAL_CHARS,
+];
 
-/// `memory_limit` in bytes (`None`: unlimited).
-fn memory_limit(vm: &Vm) -> Option<u64> {
-    let raw = vm.ini_string("memory_limit")?;
-    let s = String::from_utf8_lossy(&raw);
-    let s = s.trim();
-    let (digits, mult) = match s.as_bytes().last()? {
-        b'k' | b'K' => (&s[..s.len() - 1], 1u64 << 10),
-        b'm' | b'M' => (&s[..s.len() - 1], 1 << 20),
-        b'g' | b'G' => (&s[..s.len() - 1], 1 << 30),
-        _ => (s, 1),
-    };
-    let n: i64 = digits.trim().parse().ok()?;
-    u64::try_from(n)
-        .ok()
-        .filter(|&n| n > 0)
-        .map(|n| n.saturating_mul(mult))
+/// Whether `filter`/`options` (any nesting) select an [`EXPANDING`] filter.
+fn uses_expanding(filter: Option<i64>, options: &FilterArgs) -> bool {
+    fn scan(v: &Value) -> bool {
+        match v.deref() {
+            Value::Int(i) => EXPANDING.contains(&i),
+            Value::Array(a) => a.values().any(scan),
+            _ => false,
+        }
+    }
+    filter.is_some_and(|f| EXPANDING.contains(&f))
+        || match options {
+            FilterArgs::Long(l) => EXPANDING.contains(l),
+            FilterArgs::Array(a) => a.values().any(scan),
+        }
 }
 
-/// Total string bytes of a (possibly nested) value.
-fn string_bytes(v: &Value) -> u64 {
-    match v {
-        Value::Str(s) => s.len() as u64,
-        Value::Array(a) => a.values().map(string_bytes).sum(),
+/// Upper bound of the encoded size of the strings in `v`: every byte that
+/// is not ASCII alphanumeric may become a 6-byte entity (`&#255;`).
+fn encoded_bound(v: &Value) -> usize {
+    match v.deref() {
+        Value::Str(s) => s
+            .as_bytes()
+            .iter()
+            .map(|b| if b.is_ascii_alphanumeric() { 1 } else { 6 })
+            .sum(),
+        Value::Array(a) => a.values().map(encoded_bound).sum(),
         _ => 0,
     }
 }
 
-/// Models the `memory_limit` check of the buffers the filters allocate:
-/// the VM does not account memory, so input plus output (on top of
-/// [`BASE_USAGE`]) are compared with the limit and the engine's
-/// out-of-memory fatal error is raised when they would not fit.
-fn check_memory(vm: &mut Vm, input: &Value, output: VmResult<Value>) -> VmResult<Value> {
-    let output = output?;
-    let Some(limit) = memory_limit(vm) else {
-        return Ok(output);
-    };
-    let out = string_bytes(&output);
-    if BASE_USAGE + string_bytes(input) + out > limit {
-        return Err(vm.fatal(&format!(
-            "Allowed memory size of {limit} bytes exhausted (tried to allocate {out} bytes)"
-        )));
-    }
-    Ok(output)
+/// Reserves the output of an expanding sanitizer before running it (PHP's
+/// `smart_str` growth hits `memory_limit` while building the result; the
+/// library would otherwise grow straight through the hard ceiling).
+/// `false` means the limit is exceeded: the VM raises the fatal after the
+/// call returns.
+fn reserve_output(value: &Value, filter: Option<i64>, options: &FilterArgs) -> bool {
+    !uses_expanding(filter, options) || php_memlimit::try_reserve(encoded_bound(value)).is_ok()
 }
 
 /// The `array|int $options` argument (`default` when not passed).
@@ -160,18 +221,22 @@ fn filter_var(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let value = a.at(0);
     let filter = int_or(a, 1, php_filter::constants::FILTER_DEFAULT);
     let opts = options(a, 2, 0);
-    let r = run(vm, |h| php_filter::filter_var(h, &value, filter, &opts));
-    check_memory(vm, &value, r)
+    if !reserve_output(&value, Some(filter), &opts) {
+        return Ok(Value::Null);
+    }
+    run(vm, |h| php_filter::filter_var(h, &value, filter, &opts))
 }
 
 fn filter_var_array(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let arr = a.array(0);
     let opts = options(a, 1, php_filter::constants::FILTER_DEFAULT);
     let add_empty = bool_or(a, 2, true);
-    let r = run(vm, |h| {
+    if !reserve_output(&Value::Array(arr.clone()), None, &opts) {
+        return Ok(Value::Null);
+    }
+    run(vm, |h| {
         php_filter::filter_var_array(h, &arr, &opts, add_empty)
-    });
-    check_memory(vm, &Value::Array(arr), r)
+    })
 }
 
 fn filter_input(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -218,9 +283,15 @@ impl Extension for Filter {
     }
 
     fn register(&self, m: &mut ModuleBuilder<'_>) {
-        for (name, value, _) in CONSTANTS {
-            m.constant(name, Value::Int(value));
+        for (name, value, deprecation) in CONSTANTS {
+            match deprecation {
+                Some((since, message)) => {
+                    m.constant_deprecated(name, Value::Int(value), since, message)
+                }
+                None => m.constant(name, Value::Int(value)),
+            };
         }
+        m.on_request_startup(request_startup);
         m.ini(IniDirective::new(
             "filter.default",
             Some("unsafe_raw"),
@@ -235,16 +306,6 @@ impl Extension for Filter {
             ModifyHandler::None,
             "filter",
         ));
-        let default = m.vm().ini_string("filter.default").unwrap_or_default();
-        if php_filter::parse_default_filter_ini(&default).1 {
-            // UpdateDefaultFilter runs at startup: "in Unknown on line 0".
-            let _ = m.vm().error_at(
-                E_DEPRECATED,
-                "The filter.default ini setting is deprecated",
-                &ZStr::from("Unknown"),
-                0,
-            );
-        }
         ClassBuilder::new(php_filter::FILTER_EXCEPTION_CLASS)
             .extends(m.vm(), "Exception")
             .register(m.vm());

@@ -15,8 +15,8 @@
 //! Files and stream resources go through `php-ext-streams` (see
 //! [`files`]).
 //!
-//! Known gap: the `MHASH_*` constants are not reported as deprecated (the
-//! extension API has no deprecated-constant flag).
+//! The `mhash*()` functions and `MHASH_*` constants carry their
+//! `#[\Deprecated]` notices.
 
 // Native handlers and object hooks must match the VM's fn-pointer
 // signatures (`NativeFn`, `ClassHooks`), even when they cannot fail.
@@ -35,9 +35,6 @@ use php_vm::Vm;
 /// The `hash` extension (also providing `md5`/`sha1`/`crc32`).
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Hash;
-
-/// `E_DEPRECATED`.
-const E_DEPRECATED: i64 = 8192;
 
 /// Builds the throwable PHP raises for a library error inside `func`.
 pub(crate) fn throw_error(vm: &mut Vm, func: &str, e: &HashError) -> Throw {
@@ -284,34 +281,13 @@ fn hash_hmac_algos(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
 
 // ------------------------------------------------------- derivation
 
-/// The `memory_limit` in bytes (`None`: unlimited).
-fn memory_limit(vm: &Vm) -> Option<u64> {
-    let raw = vm.ini_string("memory_limit")?;
-    let s = String::from_utf8_lossy(&raw);
-    let s = s.trim();
-    let (digits, mult) = match s.as_bytes().last()? {
-        b'k' | b'K' => (&s[..s.len() - 1], 1u64 << 10),
-        b'm' | b'M' => (&s[..s.len() - 1], 1 << 20),
-        b'g' | b'G' => (&s[..s.len() - 1], 1 << 30),
-        _ => (s, 1),
-    };
-    let n: i64 = digits.trim().parse().ok()?;
-    u64::try_from(n)
-        .ok()
-        .filter(|&n| n > 0)
-        .map(|n| n.saturating_mul(mult))
-}
-
 fn hash_pbkdf2(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    // The VM does not account memory: refuse outputs that could never fit
-    // instead of aborting on the allocation.
-    let want = u64::try_from(a.int(4)).unwrap_or(0);
-    if let Some(limit) = memory_limit(vm) {
-        if want > limit {
-            return Err(vm.fatal(&format!(
-                "Allowed memory size of {limit} bytes exhausted (tried to allocate {want} bytes)"
-            )));
-        }
+    // PHP allocates the `$length`-byte result up front; lengths close to
+    // PHP_INT_MAX overflow the library's capacity computation, so make the
+    // same allocation here (it ends in the hard memory limit like PHP).
+    if a.bool(5) && a.int(4) > i64::MAX - 1024 {
+        let huge: Vec<u8> = Vec::with_capacity(usize::try_from(isize::MAX).unwrap_or(usize::MAX));
+        drop(std::hint::black_box(huge));
     }
     match php_hash::hash_pbkdf2(
         a.str(0).as_bytes(),
@@ -358,15 +334,7 @@ fn hash_equals(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 // ------------------------------------------------------------- mhash
 
-fn mhash_deprecated(vm: &mut Vm, a: &Args) -> VmResult<()> {
-    vm.raise(
-        E_DEPRECATED,
-        &format!("Function {}() is deprecated since 8.1", a.func_name()),
-    )
-}
-
 fn mhash(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    mhash_deprecated(vm, a)?;
     let key = a.opt(2).map(|_| a.str(2));
     match php_hash::mhash(
         a.int(0),
@@ -379,13 +347,11 @@ fn mhash(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     }
 }
 
-fn mhash_get_hash_name(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    mhash_deprecated(vm, a)?;
+fn mhash_get_hash_name(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     Ok(php_hash::mhash_get_hash_name(a.int(0)).map_or(Value::Bool(false), Value::string))
 }
 
-fn mhash_get_block_size(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    mhash_deprecated(vm, a)?;
+fn mhash_get_block_size(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     Ok(
         php_hash::mhash_get_block_size(a.int(0)).map_or(Value::Bool(false), |n| {
             Value::Int(i64::try_from(n).unwrap_or(i64::MAX))
@@ -393,13 +359,11 @@ fn mhash_get_block_size(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     )
 }
 
-fn mhash_count(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    mhash_deprecated(vm, a)?;
+fn mhash_count(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
     Ok(Value::Int(php_hash::mhash_count()))
 }
 
 fn mhash_keygen_s2k(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    mhash_deprecated(vm, a)?;
     match php_hash::mhash_keygen_s2k(a.int(0), a.str(1).as_bytes(), a.str(2).as_bytes(), a.int(3)) {
         Ok(Some(d)) => Ok(bytes(d)),
         Ok(None) => Ok(Value::Bool(false)),
@@ -469,13 +433,18 @@ impl Extension for Hash {
         context::register(m);
         m.constant("HASH_HMAC", Value::Int(php_hash::HASH_HMAC));
         for (name, id) in php_hash::mhash_constants() {
-            m.constant(&format!("MHASH_{name}"), Value::Int(id));
+            m.constant_deprecated(
+                &format!("MHASH_{name}"),
+                Value::Int(id),
+                "8.5",
+                "as the mhash*() functions were deprecated",
+            );
         }
         m.function("hash(string $algo, string $data, bool $binary = false, array $options = []): string", hash)
             .function("hash_file(string $algo, string $filename, bool $binary = false, array $options = []): string|false", hash_file)
-            .function("hash_hmac(string $algo, string $data, string $key, bool $binary = false): string", hash_hmac)
-            .function("hash_hmac_file(string $algo, string $filename, string $key, bool $binary = false): string|false", hash_hmac_file)
-            .function("hash_init(string $algo, int $flags = 0, string $key = \"\", array $options = []): HashContext", hash_init)
+            .function("hash_hmac(string $algo, string $data, #[\\SensitiveParameter] string $key, bool $binary = false): string", hash_hmac)
+            .function("hash_hmac_file(string $algo, string $filename, #[\\SensitiveParameter] string $key, bool $binary = false): string|false", hash_hmac_file)
+            .function("hash_init(string $algo, int $flags = 0, #[\\SensitiveParameter] string $key = \"\", array $options = []): HashContext", hash_init)
             .function("hash_update(HashContext $context, string $data): true", hash_update)
             .function("hash_update_stream(HashContext $context, $stream, int $length = -1): int", hash_update_stream)
             .function("hash_update_file(HashContext $context, string $filename, $stream_context = null): bool", hash_update_file)
@@ -483,14 +452,19 @@ impl Extension for Hash {
             .function("hash_copy(HashContext $context): HashContext", hash_copy)
             .function("hash_algos(): array", hash_algos)
             .function("hash_hmac_algos(): array", hash_hmac_algos)
-            .function("hash_pbkdf2(string $algo, string $password, string $salt, int $iterations, int $length = 0, bool $binary = false, array $options = []): string", hash_pbkdf2)
-            .function("hash_equals($known_string, $user_string): bool", hash_equals)
-            .function("hash_hkdf(string $algo, string $key, int $length = 0, string $info = \"\", string $salt = \"\"): string", hash_hkdf)
+            .function("hash_pbkdf2(string $algo, #[\\SensitiveParameter] string $password, string $salt, int $iterations, int $length = 0, bool $binary = false, array $options = []): string", hash_pbkdf2)
+            .function("hash_equals(#[\\SensitiveParameter] $known_string, #[\\SensitiveParameter] $user_string): bool", hash_equals)
+            .function("hash_hkdf(string $algo, #[\\SensitiveParameter] string $key, int $length = 0, string $info = \"\", string $salt = \"\"): string", hash_hkdf)
             .function("mhash_get_block_size(int $algo): int|false", mhash_get_block_size)
+            .deprecated("8.1", "")
             .function("mhash_get_hash_name(int $algo): string|false", mhash_get_hash_name)
-            .function("mhash_keygen_s2k(int $algo, string $password, string $salt, int $length): string|false", mhash_keygen_s2k)
+            .deprecated("8.1", "")
+            .function("mhash_keygen_s2k(int $algo, #[\\SensitiveParameter] string $password, string $salt, int $length): string|false", mhash_keygen_s2k)
+            .deprecated("8.1", "")
             .function("mhash_count(): int", mhash_count)
-            .function("mhash(int $algo, string $data, ?string $key = null): string|false", mhash)
+            .deprecated("8.1", "")
+            .function("mhash(int $algo, string $data, #[\\SensitiveParameter] ?string $key = null): string|false", mhash)
+            .deprecated("8.1", "")
             .function("md5(string $string, bool $binary = false): string", md5)
             .function("md5_file(string $filename, bool $binary = false): string|false", md5_file)
             .function("sha1(string $string, bool $binary = false): string", sha1)
