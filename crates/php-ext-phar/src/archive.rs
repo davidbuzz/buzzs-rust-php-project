@@ -445,20 +445,26 @@ pub fn add_file(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         let mut ph = st.borrow_mut();
         ph.archive()?;
         let mut opened = None;
-        let stream = php_streams::open::open_wrapper(&file, "rb", 0, &mut opened, None);
-        let data = stream.map(|mut s| {
+        let mut stream = php_streams::open::open_wrapper(&file, "rb", 0, &mut opened, None);
+        // The source stays open while the entry is created, as in PHP
+        // (adding an entry from itself fails: "readable file pointers are
+        // open").
+        let data = stream.as_mut().map(|s| {
             let content = s.copy_to_mem(None).unwrap_or_default();
             let mode = s
                 .stat()
                 .and_then(|sb| u32::try_from(sb.mode & 0xFFFF_FFFF).ok());
-            s.close();
             (content, mode)
         });
-        ph.add_file(
+        let r = ph.add_file(
             &file,
             local.as_deref(),
             data.as_ref().map(|(c, m)| (c.as_slice(), *m)),
-        )
+        );
+        if let Some(mut s) = stream {
+            s.close();
+        }
+        r
     })?;
     Ok(Value::Null)
 }
