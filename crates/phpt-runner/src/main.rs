@@ -154,12 +154,38 @@ struct BinarySnapshot {
 }
 
 impl BinarySnapshot {
+    const PREFIX: &'static str = "phpt-runner-bin-";
+
+    /// Remove snapshot directories left behind by runners that were killed (their `Drop` never
+    /// ran), identified by the owner pid in the directory name no longer existing.
+    fn remove_stale() {
+        let Ok(entries) = std::fs::read_dir(std::env::temp_dir()) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let Some(rest) = name.to_str().and_then(|n| n.strip_prefix(Self::PREFIX)) else {
+                continue;
+            };
+            let Some(pid) = rest.split('-').next().and_then(|p| p.parse::<i32>().ok()) else {
+                continue;
+            };
+            let gone = nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None)
+                == Err(nix::errno::Errno::ESRCH);
+            if gone {
+                let _ = std::fs::remove_dir_all(entry.path());
+            }
+        }
+    }
+
     fn create(php: &Path) -> Result<Self, String> {
+        Self::remove_stale();
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.subsec_nanos());
         let dir = std::env::temp_dir().join(format!(
-            "phpt-runner-bin-{}-{nanos:08x}",
+            "{}{}-{nanos:08x}",
+            Self::PREFIX,
             std::process::id()
         ));
         std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
