@@ -25,8 +25,9 @@ tests under out-of-scope directories ([phpt-scope.txt](phpt-scope.txt)) are not 
 Per-extension rows (measured from the same run, with skips excluded) are in
 [FEATURE_GAP.md](FEATURE_GAP.md).
 
-In progress: ext/zend_test (gates about 340 currently-skipped engine tests) and typed
-references in the engine. What is deliberately out of scope (opcache, FPM, pgsql,
+In progress: ext/zend_test (gates about 340 currently-skipped engine tests) and engine
+work on traits/inheritance, property hooks, magic methods and class diagnostics (typed
+references landed after the run above: +39 type_declarations tests). What is deliberately out of scope (opcache, FPM, pgsql,
 ffi, …) and the row-by-row detail are in [FEATURE_GAP.md](FEATURE_GAP.md).
 
 ## Layout
