@@ -5,7 +5,7 @@
 //! that cannot fail still return `VmResult`.
 #![allow(clippy::unnecessary_wraps)]
 
-use crate::bridge::{by_ref, callback, check_callable, rest, rt, with_rng};
+use crate::bridge::{by_ref, callback, check_callable, rt, variadic, with_rng};
 use crate::memory;
 use crate::objptr;
 use crate::stack;
@@ -62,6 +62,12 @@ pub fn array_search(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 }
 
 pub fn array_keys(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    if a.has(2) && !a.has(1) {
+        return Err(vm.throw(
+            "ArgumentCountError",
+            "array_keys(): Argument #2 ($filter_value) must be passed explicitly, because the default value is not known",
+        ));
+    }
     let h = a.array(0);
     let f = a.get(1);
     let r = sa::basic::array_keys(vm, &h, f.as_ref(), a.bool(2));
@@ -226,7 +232,7 @@ pub fn array_product(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 }
 
 pub fn min(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let vals = rest(a, 0);
+    let vals = variadic(vm, a, 0)?;
     let r = match vals.as_slice() {
         [x, y] => sa::basic::min2(vm, x, y),
         _ => sa::basic::min(vm, &vals),
@@ -235,7 +241,7 @@ pub fn min(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 }
 
 pub fn max(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let vals = rest(a, 0);
+    let vals = variadic(vm, a, 0)?;
     let r = match vals.as_slice() {
         [x, y] => sa::basic::max2(vm, x, y),
         _ => sa::basic::max(vm, &vals),
@@ -339,6 +345,7 @@ usort_fn!(uasort, sa::sort::uasort);
 usort_fn!(uksort, sa::sort::uksort);
 
 pub fn array_multisort(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    variadic(vm, a, 0)?;
     let vals = a.values.clone();
     let r = sa::sort::array_multisort(vm, &vals);
     rt(vm, r)?;
@@ -351,7 +358,8 @@ pub fn array_multisort(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 pub fn array_push(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let arr = by_ref(a, 0);
-    let r = sa::stack::array_push(&arr, &rest(a, 1));
+    let vals = variadic(vm, a, 1)?;
+    let r = sa::stack::array_push(&arr, &vals);
     Ok(Value::Int(rt(vm, r)?))
 }
 
@@ -367,7 +375,8 @@ pub fn array_shift(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 pub fn array_unshift(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let arr = by_ref(a, 0);
-    let r = sa::stack::array_unshift(&arr, &rest(a, 1));
+    let vals = variadic(vm, a, 1)?;
+    let r = sa::stack::array_unshift(&arr, &vals);
     Ok(Value::Int(rt(vm, r)?))
 }
 
@@ -423,7 +432,7 @@ pub fn array_splice(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 macro_rules! args_fn {
     ($name:ident, $f:path) => {
         pub fn $name(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-            let vals = rest(a, 0);
+            let vals = variadic(vm, a, 0)?;
             let r = $f(vm, &vals);
             Ok(Value::Array(rt(vm, r)?))
         }
@@ -439,12 +448,13 @@ args_fn!(array_diff_key, sa::setops::array_diff_key);
 args_fn!(array_diff_assoc, sa::setops::array_diff_assoc);
 
 pub fn array_replace(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let r = sa::merge::array_replace(&rest(a, 0));
+    let vals = variadic(vm, a, 0)?;
+    let r = sa::merge::array_replace(&vals);
     Ok(Value::Array(rt(vm, r)?))
 }
 
 pub fn array_replace_recursive(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let args = rest(a, 0);
+    let args = variadic(vm, a, 0)?;
     if args.len() > 1 {
         // The recursion only follows keys holding arrays on both sides.
         stack::check_depth(vm, |cap| {
@@ -474,7 +484,7 @@ fn split_callbacks(vm: &mut Vm, a: &Args, ncb: usize) -> VmResult<(Vec<Value>, V
         );
         return Err(vm.throw("ArgumentCountError", &msg));
     }
-    let all = rest(a, 0);
+    let all = variadic(vm, a, 0)?;
     let (arrays, cbs) = all.split_at(n - ncb);
     for (i, cb) in cbs.iter().enumerate() {
         check_callable(vm, a, n - ncb + i + 1, false, false, cb)?;
@@ -564,7 +574,7 @@ fn walk(vm: &mut Vm, a: &Args, recursive: bool) -> VmResult<Value> {
 pub fn array_map(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let cbv = a.at(0);
     check_callable(vm, a, 1, true, true, &cbv)?;
-    let arrays = rest(a, 1);
+    let arrays = variadic(vm, a, 1)?;
     if cbv.is_null() && arrays.len() > 1 {
         let longest = arrays
             .iter()
@@ -722,7 +732,7 @@ pub fn extract(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 pub fn compact(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let mut sym = forbid_dynamic_call(vm, a)?;
-    let vals = rest(a, 0);
+    let vals = variadic(vm, a, 0)?;
     for v in &vals {
         stack::check_depth(vm, |cap| stack::nesting_depth(v, cap))?;
     }

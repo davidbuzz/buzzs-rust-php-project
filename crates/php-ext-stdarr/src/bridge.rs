@@ -63,9 +63,18 @@ pub fn by_ref(a: &Args, n: usize) -> PhpRef {
     a.reference(n).unwrap_or_else(|| PhpRef::new(a.at(n)))
 }
 
-/// All arguments from position `from` on, dereferenced.
-pub fn rest(a: &Args, from: usize) -> Vec<Value> {
-    a.values.iter().skip(from).map(Value::deref).collect()
+/// All arguments from position `from` on, dereferenced, for a variadic
+/// parameter: internal functions reject extra named arguments
+/// ("does not accept named variadic arguments").
+pub fn variadic(vm: &mut Vm, a: &Args, from: usize) -> VmResult<Vec<Value>> {
+    if !a.named.is_empty() {
+        let msg = format!(
+            "Internal function {}() does not accept named variadic arguments",
+            a.func_name()
+        );
+        return Err(vm.throw("ArgumentCountError", &msg));
+    }
+    Ok(a.values.iter().skip(from).map(Value::deref).collect())
 }
 
 /// Checks a `callable` parameter like `Z_PARAM_FUNC`:
