@@ -173,15 +173,12 @@ fn implode(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 fn strtok(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let mut n = Notices::new();
-    let r = match a.opt(1) {
-        Some(_) => {
-            let (s, tok) = (a.str(0), a.str(1));
-            STRTOK.with(|t| t.borrow_mut().start(s.as_bytes(), tok.as_bytes(), &mut n))
-        }
-        None => {
-            let tok = a.str(0);
-            STRTOK.with(|t| t.borrow_mut().next(tok.as_bytes(), &mut n))
-        }
+    let r = if a.opt(1).is_some() {
+        let (s, tok) = (a.str(0), a.str(1));
+        STRTOK.with(|t| t.borrow_mut().start(s.as_bytes(), tok.as_bytes(), &mut n))
+    } else {
+        let tok = a.str(0);
+        STRTOK.with(|t| t.borrow_mut().next(tok.as_bytes(), &mut n))
     };
     emit(vm, n)?;
     Ok(opt_bytes(r))

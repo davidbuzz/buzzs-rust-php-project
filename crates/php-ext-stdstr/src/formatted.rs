@@ -100,13 +100,16 @@ fn emit_diags(vm: &mut Vm, diags: Vec<Diagnostic>) -> VmResult<()> {
     Ok(())
 }
 
-/// `php_formatted_print()` with lazy, VM-performed argument conversions.
-pub(crate) fn format(
-    vm: &mut Vm,
-    fmt: &[u8],
-    values: &[Value],
-    source: ArgSource,
-) -> VmResult<Vec<u8>> {
+/// `php_formatted_print()` with lazy, VM-performed argument conversions:
+/// the engine behind `sprintf()` and friends, exported for `fprintf()` /
+/// `vfprintf()` in the stream binding (`source` is
+/// `ArgSource::Variadic(2)` / `ArgSource::Array` there).
+///
+/// # Errors
+///
+/// Throws `ValueError`/`ArgumentCountError` (or a fatal error) exactly
+/// like PHP, and propagates exceptions from argument conversions.
+pub fn format(vm: &mut Vm, fmt: &[u8], values: &[Value], source: ArgSource) -> VmResult<Vec<u8>> {
     let opts = FormatOptions {
         source,
         decimal_point: b'.',

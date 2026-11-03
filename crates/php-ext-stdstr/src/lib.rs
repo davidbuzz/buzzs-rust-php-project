@@ -9,6 +9,11 @@
 //! (`default_charset`) and the conversion of library errors/notices into
 //! thrown exceptions and emitted diagnostics.
 
+// Every handler has the fixed `NativeFn` signature, so infallible ones still
+// return `VmResult`, and the short names (`a` for the arguments, `s`, `n`,
+// `f`, `l`, `r` …) follow php-src's own variable names.
+#![allow(clippy::unnecessary_wraps, clippy::many_single_char_names)]
+
 mod formatted;
 mod html;
 mod math;
@@ -20,6 +25,8 @@ use php_runtime::{ArrayKey, HashTable, Value, ZArray, ZStr};
 use php_stdstr::error::{Level, Notices, StdError, StdResult};
 use php_vm::ext::{Extension, ModuleBuilder, Throw, VmResult};
 use php_vm::Vm;
+
+pub use formatted::format as formatted_print;
 
 /// The string/math/url part of `ext/standard`.
 #[derive(Debug, Clone, Copy, Default)]
@@ -175,5 +182,21 @@ pub(crate) mod mem {
             )));
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::mem;
+
+    #[test]
+    fn zend_string_sizes() {
+        assert_eq!(mem::zstr(0), 32);
+        assert_eq!(mem::zstr(7), 32);
+        assert_eq!(mem::zstr(8), 40);
+        assert_eq!(
+            mem::str_list(&[b"a".as_slice(), b"bc".as_slice()]),
+            2 * (mem::BUCKET + 32)
+        );
     }
 }

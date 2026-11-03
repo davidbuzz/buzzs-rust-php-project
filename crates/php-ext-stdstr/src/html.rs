@@ -12,11 +12,11 @@ use crate::{assoc, bytes, emit};
 /// The charset hint of an `?string $encoding` argument at index `n`:
 /// the argument if non-empty, else `internal_encoding`, else
 /// `default_charset` (`get_default_charset()`).
-fn charset_hint(vm: &Vm, arg: Option<ZStr>) -> Option<Vec<u8>> {
+fn charset_hint(vm: &Vm, arg: Option<&ZStr>) -> Option<Vec<u8>> {
     let internal = vm.ini_string("internal_encoding");
     let default = vm.ini_string("default_charset");
     html::effective_charset_hint(
-        arg.as_ref().map(ZStr::as_bytes),
+        arg.map(ZStr::as_bytes),
         internal.as_deref(),
         default.as_deref(),
     )
@@ -32,7 +32,8 @@ fn flags(a: &Args, n: usize) -> i64 {
 }
 
 fn htmlspecialchars(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let cs = charset_hint(vm, a.opt(2).map(|_| a.str(2)));
+    let enc = a.opt(2).map(|_| a.str(2));
+    let cs = charset_hint(vm, enc.as_ref());
     let double = !a.has(3) || a.bool(3);
     let mut n = Notices::new();
     let r = html::htmlspecialchars(
@@ -47,7 +48,8 @@ fn htmlspecialchars(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 }
 
 fn htmlentities(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let cs = charset_hint(vm, a.opt(2).map(|_| a.str(2)));
+    let enc = a.opt(2).map(|_| a.str(2));
+    let cs = charset_hint(vm, enc.as_ref());
     let double = !a.has(3) || a.bool(3);
     let mut n = Notices::new();
     let r = html::htmlentities(
@@ -69,7 +71,8 @@ fn htmlspecialchars_decode(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 }
 
 fn html_entity_decode(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let cs = charset_hint(vm, a.opt(2).map(|_| a.str(2)));
+    let enc = a.opt(2).map(|_| a.str(2));
+    let cs = charset_hint(vm, enc.as_ref());
     let mut n = Notices::new();
     let r = html::html_entity_decode(a.str(0).as_bytes(), flags(a, 1), cs.as_deref(), &mut n);
     emit(vm, n)?;
@@ -82,14 +85,12 @@ fn get_html_translation_table(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     } else {
         html::HTML_SPECIALCHARS
     };
-    let cs = charset_hint(
-        vm,
-        Some(if a.has(2) {
-            a.str(2)
-        } else {
-            ZStr::from("UTF-8")
-        }),
-    );
+    let enc = if a.has(2) {
+        a.str(2)
+    } else {
+        ZStr::from("UTF-8")
+    };
+    let cs = charset_hint(vm, Some(&enc));
     let mut n = Notices::new();
     let r = html::get_html_translation_table(table, flags(a, 1), cs.as_deref(), &mut n);
     emit(vm, n)?;
