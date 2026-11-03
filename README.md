@@ -6,20 +6,34 @@ The original PHP is written in C. This project ports it to idiomatic, best-pract
 (clippy-pedantic clean, `unsafe` only in audited FFI modules), matching PHP's observable
 behaviour byte for byte: error messages, line numbers, `var_dump` layout, float printing.
 
-## Status (3 Nov 2026, 18:30)
+## Status (3 Nov 2026, late evening)
 
-The engine runs real PHP. Measured with our own `php` binary against the php-src suite:
+The engine runs real PHP and every in-scope extension is bound to it. Pass rates below are
+over non-skipped tests, measured with our own `php` binary against the php-src suite. The
+engine rows are from the last full measurement earlier today; a resumable full in-scope run
+is in progress and will replace them (the owner's partial runs since then are around 76% for
+`tests/` + `Zend/tests` combined).
 
-| Suite | ran | pass | pass % |
-|---|---|---|---|
-| `tests/lang` | 282 | 248 | 88.6% |
-| `tests/` (all, 904 files) | 770 | 555 | 72.1% |
-| `Zend/tests` (5,725 files) | 5,558 | 2,961 | 53.3% |
+| Suite | pass % | detail |
+|---|---|---|
+| `tests/lang` | 88.6% | 248/282 |
+| `tests/` (all) | 72.1% | 555/770 |
+| `Zend/tests` | 53.3% | 2,961/5,558 (lazy objects now 81.6%, attributes 91.2%) |
+| ext/standard strings, arrays, files, dir | 95–100% | |
+| ext/date, json, random, bcmath, uri, iconv, tokenizer | 98–99% | |
+| ext/pcre, hash, mbstring, intl, gmp, openssl, sodium, zlib, filter | 95–98% | |
+| ext/pdo + pdo_sqlite + sqlite3 | 98.5% | 323/327 |
+| ext/dom | 97.4% | 876/899 |
+| ext/reflection | 94.2% | 536/569 |
+| ext/spl | 93.0% | 759/820 |
+| ext/simplexml, xmlreader, xmlwriter, xml, libxml, xsl, soap | 82–100% | |
+| ext/mysqli, session, curl, ftp, sockets, phar, zip, bz2, fileinfo | 90–98% | |
+| ext/exif, calendar, gettext, posix, sysv*, shmop, ctype, pcntl | 98–100% | |
+| sapi/cli | 88.3% | 98/111; the built-in server (`php -S`) 77% |
 
-Alongside the engine, 26 extension libraries are complete and oracle-verified against real PHP
-(hash, random, pcre, date, json, mbstring, filter, bcmath, gmp, zlib, sqlite, libxml, …) but not
-yet bound to the VM; binding them is the next phase. Row-by-row detail is in
-[FEATURE_GAP.md](FEATURE_GAP.md).
+Not yet started: ext/gd and ext/zend_test (both in progress; zend_test gates about 340
+currently-skipped engine tests). What is deliberately out of scope (opcache, FPM, pgsql,
+ffi, …) and the row-by-row detail are in [FEATURE_GAP.md](FEATURE_GAP.md).
 
 ## Layout
 
@@ -80,6 +94,6 @@ php-src master differ, the port follows master.
 
 ## Resource notes
 
-Many agents build concurrently on one machine, so `.cargo/config.toml` caps `cargo` at 4
+Many agents build concurrently on one machine, so `.cargo/config.toml` caps `cargo` at 2
 jobs, every oracle `php` invocation passes `-d memory_limit=1G`, and the `php` binary caps its
 own address space at 4 GB. See the "Resource limits" section of CLAUDE.md.
