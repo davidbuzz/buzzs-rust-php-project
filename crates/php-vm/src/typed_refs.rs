@@ -795,7 +795,7 @@ impl Vm {
         // After unset(), `__get()` takes over.
         let reinit = d.readonly_init.borrow().get(idx).copied().unwrap_or(false)
             && cls.magic.get.is_some();
-        if !uninit || reinit || self.lazy_object_for(o, Some(name))?.ne(o) {
+        if !uninit || reinit || d.lazy.borrow().is_some() {
             return Ok(None);
         }
         Ok(Some(pi))
@@ -907,6 +907,312 @@ impl Vm {
         };
         let msg = incdec_error_message(&src, is_inc, false);
         Err(self.make_throw("TypeError", &msg))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Typed static properties
+// ---------------------------------------------------------------------------
+
+/// A typed static property as seen through its storage cell.
+struct StaticInfo {
+    cell: Weak<RefCell<Value>>,
+    prop: Rc<PropInfo>,
+    /// Whether a value was ever stored (typed static properties without a
+    /// default start out uninitialized).
+    init: Cell<bool>,
+}
+
+thread_local! {
+    /// Typed static properties by cell address (the place walk only sees
+    /// the cell).
+    static STATIC_INFO: RefCell<std::collections::HashMap<usize, Rc<StaticInfo>>> =
+        RefCell::new(std::collections::HashMap::new());
+}
+
+fn cell_key(cell: &Rc<RefCell<Value>>) -> usize {
+    Rc::as_ptr(cell) as usize
+}
+
+/// Records a typed static property when its cell is fetched (so writes
+/// through the cell can be checked).
+pub(crate) fn note_static_prop(sp: &StaticProp) {
+    if !sp.ty.as_ref().is_some_and(|t| !t.is_mixed()) {
+        return;
+    }
+    let key = cell_key(&sp.cell);
+    STATIC_INFO.with(|m| {
+        let mut m = m.borrow_mut();
+        let fresh = m
+            .get(&key)
+            .is_none_or(|i| !i.cell.upgrade().is_some_and(|c| Rc::ptr_eq(&c, &sp.cell)));
+        if fresh {
+            let ty = sp.ty.clone().unwrap_or_default();
+            m.insert(
+                key,
+                Rc::new(StaticInfo {
+                    cell: Rc::downgrade(&sp.cell),
+                    prop: Rc::new(static_prop_info(sp, ty)),
+                    init: Cell::new(sp.default.is_some()),
+                }),
+            );
+        }
+    });
+}
+
+fn static_info(cell: &Rc<RefCell<Value>>) -> Option<Rc<StaticInfo>> {
+    let key = cell_key(cell);
+    STATIC_INFO.with(|m| {
+        m.borrow()
+            .get(&key)
+            .filter(|i| i.cell.upgrade().is_some_and(|c| Rc::ptr_eq(&c, cell)))
+            .cloned()
+    })
+}
+
+impl StaticInfo {
+    /// Uninitialized: never assigned, no default, and still `null`.
+    fn is_uninit(&self, cell: &RefCell<Value>) -> bool {
+        !self.init.get() && cell.try_borrow().is_ok_and(|v| matches!(*v, Value::Null))
+    }
+}
+
+/// Whether `cell` is an uninitialized typed static property (`isset()` is
+/// false).
+pub(crate) fn static_cell_uninit(cell: &Rc<RefCell<Value>>) -> bool {
+    static_info(cell).is_some_and(|i| i.is_uninit(cell))
+}
+
+/// Whether arrays may be auto-vivified in a property of this type
+/// (`check_type_array_assignable`; `iterable` includes `array`).
+fn type_allows_array(ty: Option<&TypeDecl>) -> bool {
+    ty.is_none_or(|t| t.mask & (mask::ARRAY | mask::ITERABLE) != 0)
+}
+
+/// `promotes_to_array`: `null`/`false` (or a reference to one).
+fn promotes_to_array(v: Option<&Value>) -> bool {
+    match v {
+        None | Some(Value::Null | Value::Bool(false)) => true,
+        Some(Value::Reference(r)) => {
+            matches!(r.try_borrow().as_deref(), Some(Value::Null | Value::Bool(false)))
+        }
+        Some(_) => false,
+    }
+}
+
+impl Vm {
+    fn source_of(&mut self, prop: &Rc<PropInfo>) -> SourceProp {
+        let decl = self.find_class(prop.class.as_bytes());
+        SourceProp {
+            prop: prop.clone(),
+            decl,
+        }
+    }
+
+    /// `zend_throw_auto_init_in_prop_error`.
+    fn auto_init_in_prop_error(&mut self, prop: &Rc<PropInfo>) -> Throw {
+        let src = self.source_of(prop);
+        let msg = format!(
+            "Cannot auto-initialize an array inside property {} of type {}",
+            src.qualified_name(),
+            src.type_string()
+        );
+        self.make_throw("TypeError", &msg)
+    }
+
+    fn uninit_static_error(&mut self, prop: &PropInfo) -> Throw {
+        let msg = format!(
+            "Typed static property {}::${} must not be accessed before initialization",
+            prop.class.to_string_lossy(),
+            prop.name.to_string_lossy()
+        );
+        self.make_throw("Error", &msg)
+    }
+
+    /// Reading a static property (`zend_fetch_static_property_address`,
+    /// `BP_VAR_R`): uninitialized typed ones throw (`isset` mode does not).
+    pub(crate) fn typed_static_read_check(
+        &mut self,
+        cell: &Rc<RefCell<Value>>,
+        mode: crate::opcode::FetchMode,
+    ) -> VmResult<()> {
+        if mode == crate::opcode::FetchMode::Is {
+            return Ok(());
+        }
+        match static_info(cell) {
+            Some(i) if i.is_uninit(cell) => Err(self.uninit_static_error(&i.prop)),
+            _ => Ok(()),
+        }
+    }
+
+    /// The type-checked part of a write walk starting at a static property
+    /// cell: assignments (`zend_verify_property_type`, then the typed
+    /// reference the cell may hold), `&Cls::$p` (type source),
+    /// `Cls::$p = &$x` (`zend_verify_prop_assignable_by_ref`), reads for
+    /// read-modify-write and array auto-vivification. Returns the result
+    /// when the operation was performed here, `None` to continue with the
+    /// regular walk.
+    pub(crate) fn typed_static_write(
+        &mut self,
+        cell: &Rc<RefCell<Value>>,
+        segs: &[crate::place::RSeg],
+        wop: &mut crate::place::WOp,
+    ) -> VmResult<Option<Value>> {
+        use crate::place::{RSeg, WOp};
+        let Some(info) = static_info(cell) else {
+            return Ok(None);
+        };
+        let uninit = info.is_uninit(cell);
+        if let Some(seg) = segs.first() {
+            if matches!(wop, WOp::Unset) {
+                return Ok(None);
+            }
+            if matches!(seg, RSeg::Dim(_) | RSeg::Append) {
+                let promotes = uninit || promotes_to_array(cell.try_borrow().ok().as_deref());
+                if promotes && !type_allows_array(info.prop.ty.as_ref()) {
+                    return Err(self.auto_init_in_prop_error(&info.prop));
+                }
+            } else if uninit {
+                return Err(self.uninit_static_error(&info.prop));
+            }
+            info.init.set(true);
+            return Ok(None);
+        }
+        match wop {
+            WOp::Assign(v) => {
+                let v = std::mem::take(v);
+                let typed_ref = cell_typed_ref(cell);
+                let v = if typed_ref.is_some() && incdec_overflow().is_some() {
+                    v
+                } else {
+                    self.incdec_prop_overflow(&info.prop, &v)?;
+                    let v = match v {
+                        Value::Reference(r) => r.get(),
+                        v => v,
+                    };
+                    self.coerce_prop(None, &info.prop, v)?
+                };
+                info.init.set(true);
+                if let Some(r) = typed_ref {
+                    return self.assign_ref(&r, v).map(Some);
+                }
+                let old = match cell.try_borrow_mut() {
+                    Ok(mut c) => match &mut *c {
+                        Value::Reference(r) => r.set(v.clone()),
+                        slot => std::mem::replace(slot, v.clone()),
+                    },
+                    Err(_) => return Ok(None),
+                };
+                drop(old);
+                Ok(Some(v))
+            }
+            WOp::FetchRw => {
+                if uninit {
+                    return Err(self.uninit_static_error(&info.prop));
+                }
+                Ok(None)
+            }
+            WOp::MakeRef => {
+                if uninit && !info.prop.ty.as_ref().is_some_and(TypeDecl::allows_null) {
+                    let msg = format!(
+                        "Cannot access uninitialized non-nullable property {}::${} by reference",
+                        info.prop.class.to_string_lossy(),
+                        info.prop.name.to_string_lossy()
+                    );
+                    return Err(self.make_throw("Error", &msg));
+                }
+                let Ok(mut c) = cell.try_borrow_mut() else {
+                    return Ok(None);
+                };
+                let r = c.make_ref();
+                drop(c);
+                info.init.set(true);
+                let decl = self.find_class(info.prop.class.as_bytes());
+                add_source(&r, Holder::Static(info.cell.clone()), info.prop.clone(), decl);
+                Ok(Some(Value::Reference(r)))
+            }
+            WOp::AssignRef(r) => {
+                let r = std::mem::take(r);
+                if let Value::Reference(x) = &r {
+                    self.verify_prop_assignable_by_ref(&info.prop, x)?;
+                    let decl = self.find_class(info.prop.class.as_bytes());
+                    add_source(x, Holder::Static(info.cell.clone()), info.prop.clone(), decl);
+                }
+                info.init.set(true);
+                let old = match cell.try_borrow_mut() {
+                    Ok(mut c) => std::mem::replace(&mut *c, r.clone()),
+                    Err(_) => return Ok(None),
+                };
+                drop(old);
+                Ok(Some(r))
+            }
+            WOp::Unset => Ok(None),
+        }
+    }
+
+    /// `$o->p[...] = v` on a declared typed property
+    /// (`zend_handle_fetch_obj_flags`, `ZEND_FETCH_DIM_WRITE`): auto-
+    /// vivifying `null`/`false`/uninitialized into an array needs a type
+    /// accepting arrays; an uninitialized property whose type does is
+    /// initialized to `null` first (the walk then creates the array).
+    /// `next` is the segment after the property.
+    pub(crate) fn typed_prop_dim_write_check(
+        &mut self,
+        o: &Obj,
+        name: &ZStr,
+        next: &crate::place::RSeg,
+        wop: &crate::place::WOp,
+    ) -> VmResult<()> {
+        use crate::place::{RSeg, WOp};
+        if matches!(wop, WOp::Unset) || matches!(next, RSeg::Prop(_)) {
+            return Ok(());
+        }
+        let cls = object::class_of(o).clone();
+        let Some(pi) = cls.prop_map.get(name).cloned() else {
+            return Ok(());
+        };
+        if pi.hooks.is_some() || pi.flags & crate::func::flags::STATIC != 0 || pi.ty.is_none() {
+            return Ok(());
+        }
+        let Some(d) = object_rc(o) else {
+            return Ok(());
+        };
+        let idx = pi.slot as usize;
+        let (promotes, uninit) = match d.slots.try_borrow() {
+            Ok(s) => match s.get(idx) {
+                Some(v) => (promotes_to_array(v.as_ref()), v.is_none()),
+                None => return Ok(()),
+            },
+            Err(_) => return Ok(()),
+        };
+        if !promotes {
+            return Ok(());
+        }
+        // Access checks, `__get()` and lazy objects: the regular path.
+        let scope = self.scope();
+        let accessible = matches!(
+            self.lookup_prop(&cls, name, scope.as_ref()),
+            crate::props::PropLookup::Found(p) if Rc::ptr_eq(&p, &pi)
+        );
+        let unset_since = d.readonly_init.borrow().get(idx).copied().unwrap_or(false);
+        if !accessible
+            || (uninit && (unset_since && cls.magic.get.is_some()))
+            || pi.flags & (crate::func::flags::READONLY | crate::func::flags::SET_MASK) != 0
+            || d.lazy.borrow().is_some()
+        {
+            return Ok(());
+        }
+        if !type_allows_array(pi.ty.as_ref()) {
+            return Err(self.auto_init_in_prop_error(&pi));
+        }
+        if uninit {
+            if let Ok(mut s) = d.slots.try_borrow_mut() {
+                if let Some(slot @ None) = s.get_mut(idx) {
+                    *slot = Some(Value::Null);
+                }
+            }
+        }
+        Ok(())
     }
 }
 
