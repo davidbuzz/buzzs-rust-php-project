@@ -68,7 +68,7 @@ fn zend_error(level: Level, message: &str) -> Notice {
 /// accepted for bases 16/8/2, any other non-digit byte is ignored with the
 /// `E_DEPRECATED` "Invalid characters passed for attempted conversion, these
 /// have been ignored", and values above `PHP_INT_MAX` continue as a float
-/// after the `E_NOTICE` "Input number is larger than PHP_INT_MAX, precision
+/// after the `E_NOTICE` "Input number is larger than `PHP_INT_MAX`, precision
 /// has been lost in conversion" (php-src master; PHP 8.3 is silent). Both
 /// are raised with `zend_error`, i.e. without a function-name prefix.
 ///
@@ -626,7 +626,7 @@ mod tests {
         assert_eq!(int_mod(1, 0).unwrap_err().to_string(), "Modulo by zero");
         assert_eq!(
             abs(Number::Int(i64::MIN)),
-            Number::Float(9.223_372_036_854_775_808E18)
+            Number::Float(9.223_372_036_854_776E18)
         );
         assert_eq!(abs(Number::Int(-3)), Number::Int(3));
         assert!(fmod(1.0, 0.0).is_nan());
