@@ -12,6 +12,7 @@ members = [
     "crates/php-random",
     "crates/php-date",
     "crates/php-pcre",
+    "crates/php-stdstr",
 ]
 
 [workspace.package]
