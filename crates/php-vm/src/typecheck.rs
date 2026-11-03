@@ -202,7 +202,12 @@ impl Vm {
         if m & mask::BOOL == mask::BOOL {
             let b = match v {
                 Value::Int(i) => Some(*i != 0),
-                Value::Float(f) => Some(*f != 0.0),
+                Value::Float(f) => {
+                    if f.is_nan() {
+                        self.warning("unexpected NAN value was coerced to bool")?;
+                    }
+                    Some(*f != 0.0)
+                }
                 Value::Str(s) => Some(!(s.is_empty() || s.as_bytes() == b"0")),
                 Value::Bool(b) => Some(*b),
                 _ => None,

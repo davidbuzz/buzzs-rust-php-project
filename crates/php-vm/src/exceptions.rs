@@ -202,7 +202,9 @@ impl Vm {
                 break;
             }
             let f = &self.frames[idx];
-            if idx == 0 {
+            if f.kind == FrameKind::Main
+                || (idx == 0 && !matches!(f.kind, FrameKind::Function | FrameKind::Builtin))
+            {
                 break;
             }
             if f.kind == FrameKind::ConstExpr {
@@ -213,15 +215,19 @@ impl Vm {
                 continue;
             }
             // The calling frame (constant expressions have no frame of
-            // their own in php-src).
-            let mut pidx = idx - 1;
-            while pidx > 0 && self.frames[pidx].kind == FrameKind::ConstExpr {
-                pidx -= 1;
-            }
-            let prev = &self.frames[pidx];
+            // their own in php-src). A function called with no caller
+            // (exception handler, shutdown function) is a top-level call
+            // shown as "[internal function]".
+            let prev = (idx > 0).then(|| {
+                let mut pidx = idx - 1;
+                while pidx > 0 && self.frames[pidx].kind == FrameKind::ConstExpr {
+                    pidx -= 1;
+                }
+                &self.frames[pidx]
+            });
             let mut entry = HashTable::new();
             // File/line of the call site.
-            if prev.kind != FrameKind::Builtin {
+            if let Some(prev) = prev.filter(|p| p.kind != FrameKind::Builtin) {
                 entry.insert(
                     ArrayKey::Str(ZStr::from("file")),
                     Value::Str(prev.code.filename.clone()),
@@ -269,6 +275,9 @@ impl Vm {
                 FrameKind::Main => break,
                 _ => {
                     let Some(func) = &f.func else {
+                        if idx == 0 {
+                            break;
+                        }
                         idx -= 1;
                         continue;
                     };
@@ -308,6 +317,9 @@ impl Vm {
             }
             let _ = out.push(Value::Array(ZArray::from_table(entry)));
             count += 1;
+            if idx == 0 {
+                break;
+            }
             idx -= 1;
         }
         ZArray::from_table(out)
@@ -516,28 +528,34 @@ impl Vm {
         }
     }
 
-    /// `UnhandledMatchError` for a subject.
-    #[allow(clippy::many_single_char_names)]
+    /// `UnhandledMatchError` for a subject (`zend_match_unhandled_error`).
     pub(crate) fn match_error(&mut self, v: &Value) -> Throw {
-        let desc = match v {
-            Value::Str(s) => {
-                let b = s.as_bytes();
-                let n = b.len().min(15);
-                let mut d = String::from("'");
-                d.push_str(&escape_bytes(&b[..n]));
-                if b.len() > 15 {
-                    d.push_str("...");
+        let v = v.deref();
+        let max_len = self.ini.get_long("zend.exception_string_param_max_len");
+        let ignore_args = self.ini.get_bool("zend.exception_ignore_args");
+        let renderable = match &v {
+            Value::Str(_) => max_len != 0,
+            Value::Object(o) => object::class_of(o).is_enum(),
+            Value::Array(_) | Value::Resource(_) => false,
+            _ => true,
+        };
+        let desc = if ignore_args || !renderable {
+            let ty = match &v {
+                Value::Object(o) => {
+                    object::display_name(&object::class_of(o).name).to_string_lossy()
                 }
-                d.push('\'');
-                d
-            }
-            Value::Object(o) => format!(
-                "of type {}",
-                object::display_name(&object::class_of(o).name)
-            ),
-            Value::Array(_) => "of type array".into(),
-            Value::Resource(_) => "of type resource".into(),
-            other => self.trace_arg(other),
+                Value::Null => "null".into(),
+                Value::Bool(_) => "bool".into(),
+                Value::Int(_) => "int".into(),
+                Value::Float(_) => "float".into(),
+                Value::Str(_) => "string".into(),
+                Value::Array(_) => "array".into(),
+                Value::Resource(_) => "resource".into(),
+                Value::Reference(_) => String::new(),
+            };
+            format!("of type {ty}")
+        } else {
+            self.trace_arg(&v)
         };
         self.make_throw(
             "UnhandledMatchError",
