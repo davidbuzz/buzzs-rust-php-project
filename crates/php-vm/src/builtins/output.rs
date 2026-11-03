@@ -9,6 +9,8 @@ use php_support::fmt::{php_formatted_print, ArgSource, FormatArg, FormatError, F
 use php_support::output::{self as ob, StartHandler};
 use std::borrow::Cow;
 
+const E_WARNING: i64 = 2;
+
 /// A pre-converted `sprintf` argument.
 struct FArg {
     int: i64,
@@ -151,7 +153,15 @@ fn ob_start(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         let name = handler_name(vm, &cb);
         StartHandler::User { name, callback: cb }
     } else {
-        StartHandler::Invalid(vm.callable_error(&cb))
+        let err = vm.callable_error(&cb);
+        if vm.output.status() & ob::status::LOCKED != 0 {
+            // `php_output_handler_create_user()` warns, then
+            // `php_output_handler_start()` hits the lock error (fatal).
+            vm.docref(E_WARNING, &err)?;
+            StartHandler::Default
+        } else {
+            StartHandler::Invalid(err)
+        }
     };
     let r = ob::ob_start(vm, handler, chunk, fl);
     vm.take_pending_throw()?;
