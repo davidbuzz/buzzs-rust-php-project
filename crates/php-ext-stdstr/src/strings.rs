@@ -61,9 +61,10 @@ fn strcspn(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 fn strcoll(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     deprecated_function(vm, "strcoll", "8.6", "use Collator::compare() instead")?;
-    // LC_COLLATE is "C" unless setlocale() changed it: byte comparison.
+    // LC_COLLATE is "C" unless setlocale() changed it: glibc strcoll() is
+    // then strcmp(), whose result is the byte difference.
     let r = compare::strcmp(a.str(0).as_bytes(), a.str(1).as_bytes());
-    Ok(Value::Int(r.signum()))
+    Ok(Value::Int(r))
 }
 
 fn trim_impl(vm: &mut Vm, a: &Args, mode: TrimMode) -> VmResult<Value> {
