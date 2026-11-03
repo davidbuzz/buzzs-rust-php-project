@@ -10,11 +10,62 @@ use php_runtime::{PhpRef, Value};
 use php_soap::host::{ConnectTarget, HttpStream};
 use php_vm::Vm;
 
+/// The largest single read.
+const READ_CHUNK: usize = 64 * 1024;
+
 /// A connected socket stream.
 struct SocketStream {
     /// The stream resource (kept alive while the connection is used).
     _resource: Value,
     cell: Rc<StreamCell>,
+    /// Response framing seen so far (see [`SocketStream::sniff`]).
+    in_headers: bool,
+    chunked: bool,
+}
+
+impl SocketStream {
+    /// Watches the response framing for sizes the peer announces: PHP
+    /// allocates the body (`Content-Length`) or chunk buffer up front, so a
+    /// size beyond `memory_limit` is the memory-limit fatal, not a huge
+    /// allocation. Returns `false` when the line must not be handed on.
+    fn sniff(&mut self, line: &[u8]) -> bool {
+        let text = String::from_utf8_lossy(line);
+        let t = text.trim();
+        let announced = if t.starts_with("HTTP/") {
+            self.in_headers = true;
+            self.chunked = false;
+            None
+        } else if self.in_headers {
+            if t.is_empty() {
+                self.in_headers = false;
+                None
+            } else if let Some((n, v)) = t.split_once(':') {
+                let v = v.trim();
+                if n.eq_ignore_ascii_case("transfer-encoding") && v.eq_ignore_ascii_case("chunked") {
+                    self.chunked = true;
+                    None
+                } else if n.eq_ignore_ascii_case("content-length") {
+                    v.parse::<usize>().ok()
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else if self.chunked {
+            let hex: String = t.chars().take_while(char::is_ascii_hexdigit).collect();
+            usize::from_str_radix(&hex, 16).ok()
+        } else {
+            None
+        };
+        match announced {
+            Some(n) if !php_memlimit::would_fit(n) => {
+                let _ = php_memlimit::try_reserve(n.saturating_add(25));
+                !out_of_memory()
+            }
+            _ => true,
+        }
+    }
 }
 
 impl HttpStream for SocketStream {
@@ -33,10 +84,19 @@ impl HttpStream for SocketStream {
     }
 
     fn read_line(&mut self) -> Option<Vec<u8>> {
-        self.cell.get()?.get_line(None)
+        if out_of_memory() {
+            return None;
+        }
+        let line = self.cell.get()?.get_line(None)?;
+        self.sniff(&line).then_some(line)
     }
 
     fn read(&mut self, n: usize) -> Vec<u8> {
+        if out_of_memory() {
+            return Vec::new();
+        }
+        // Short reads are allowed: never pre-allocate a peer-controlled size.
+        let n = n.min(READ_CHUNK);
         self.cell
             .get()
             .and_then(|mut s| s.read_vec(n))
@@ -44,8 +104,29 @@ impl HttpStream for SocketStream {
     }
 
     fn eof(&mut self) -> bool {
+        if out_of_memory() {
+            return true;
+        }
         self.cell.get().is_none_or(|mut s| s.eof())
     }
+}
+
+/// Whether `memory_limit` was crossed while reading: the response is cut
+/// short and the fatal is raised when the library returns.
+fn out_of_memory() -> bool {
+    // A response buffer grows by doubling: stop before the next growth
+    // could cross the hard ceiling (2x the limit).
+    let usage = php_memlimit::usage();
+    if !php_memlimit::is_pending() && !php_memlimit::would_fit(usage / 2) {
+        let _ = php_memlimit::try_reserve(usage);
+    }
+    if php_memlimit::is_pending() {
+        if let Some(over) = php_memlimit::take() {
+            let _ = crate::host::oom_error(over.to_string());
+        }
+        return true;
+    }
+    false
 }
 
 /// `php_stream_xport_create` for a SOAP connection (`http_connect`).
@@ -85,6 +166,8 @@ pub(crate) fn connect(vm: &mut Vm, t: &ConnectTarget) -> Option<Box<dyn HttpStre
     let mut stream = SocketStream {
         _resource: res.clone(),
         cell,
+        in_headers: false,
+        chunked: false,
     };
     if let Some((request, _method)) = &t.proxy_tunnel {
         let mut req = request.clone();

@@ -46,8 +46,27 @@ thread_local! {
     /// bailing out: the VM's `Throw::Fatal` then means "bailout" again when
     /// it unwinds back through the library.
     static BAILING_OUT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// An out-of-memory fatal raised inside the library.
+    static OOM: RefCell<Option<String>> = const { RefCell::new(None) };
     /// The method name of a `__call` dispatch started by this crate.
     static MAGIC_NAME: RefCell<Option<ZStr>> = const { RefCell::new(None) };
+}
+
+/// Records an out-of-memory fatal that must reach the VM unchanged and
+/// returns the error the library propagates meanwhile.
+pub(crate) fn oom_error(msg: String) -> RuntimeError {
+    OOM.with(|o| *o.borrow_mut() = Some(msg));
+    RuntimeError::Custom {
+        class: ZStr::from(BAILOUT_MARK),
+        message: String::new(),
+    }
+}
+
+/// Takes a pending out-of-memory fatal (see [`oom_error`]); also reports
+/// one the allocator recorded while native code ran.
+pub(crate) fn take_oom() -> Option<String> {
+    OOM.with(|o| o.borrow_mut().take())
+        .or_else(|| php_memlimit::take().map(|over| over.to_string()))
 }
 
 /// Takes the method name stored by [`VmHost::call_method`] for the native
@@ -91,6 +110,9 @@ pub(crate) fn to_rt(vm: &mut Vm, t: Throw) -> RuntimeError {
 pub(crate) fn to_throw(vm: &mut Vm, e: RuntimeError) -> Throw {
     if let Some(t) = vm.pending_throw.take() {
         return t;
+    }
+    if let Some(msg) = OOM.with(|o| o.borrow_mut().take()) {
+        return vm.fatal(&msg);
     }
     let class = e.class_name().unwrap_or("Error");
     match e {
@@ -670,19 +692,25 @@ impl SoapHost for VmHost<'_> {
         // The accounting allocator records crossing `memory_limit`; the VM
         // only notices at its next safe point, so long native loops poll
         // here (PHP raises the fatal inside the allocator).
-        if php_memlimit::is_pending() {
-            if let Some(over) = php_memlimit::take() {
-                return Err(RuntimeError::Fatal(over.to_string()));
+        let mut msg = php_memlimit::take().map(|over| over.to_string());
+        if msg.is_none() {
+            if let Some(limit) = php_memlimit::limit() {
+                if limit > 0 && bytes > limit {
+                    msg = Some(format!(
+                        "Allowed memory size of {limit} bytes exhausted (tried to allocate 65536 bytes)"
+                    ));
+                }
             }
         }
-        if let Some(limit) = php_memlimit::limit() {
-            if limit > 0 && bytes > limit {
-                return Err(RuntimeError::Fatal(format!(
-                    "Allowed memory size of {limit} bytes exhausted (tried to allocate 65536 bytes)"
-                )));
-            }
+        let Some(msg) = msg else {
+            return Ok(());
+        };
+        if server_context() {
+            // `soap_real_error_handler` turns it into a fault response.
+            return Err(RuntimeError::Fatal(msg));
         }
-        Ok(())
+        // Client: `ZEND_HAS_OOM()` bypasses the SoapFault conversion.
+        Err(oom_error(msg))
     }
 
     fn load_resource(&mut self, url: &str, context: Option<&Value>) -> Result<Vec<u8>, String> {

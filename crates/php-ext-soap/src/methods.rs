@@ -19,6 +19,9 @@ fn with_host<T>(
 ) -> VmResult<T> {
     let mut h = VmHost::new(vm);
     let r = f(&mut h);
+    if let Some(msg) = crate::host::take_oom() {
+        return Err(h.vm.fatal(&msg));
+    }
     h.vm_result(r)
 }
 
