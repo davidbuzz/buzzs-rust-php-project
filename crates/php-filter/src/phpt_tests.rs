@@ -632,3 +632,33 @@ fn objects_and_defaults() {
     .unwrap();
     assert_eq!(export(&v), "array (\n  0 => 'x',\n)");
 }
+
+#[test]
+fn throw_on_failure_with_non_string_scalars() {
+    // filter_throw_on_failure_leak.phpt: the quoted value is the string
+    // conversion of the input.
+    let mut h = TestHost::default();
+    let o = opts(&[("flags", Value::Int(FILTER_THROW_ON_FAILURE))]);
+    let e = filter_var(&mut h, &Value::Float(1.5), FILTER_VALIDATE_INT, &o).unwrap_err();
+    assert_eq!(
+        failed(&e),
+        "Filter\\FilterFailedException: filter validation failed: filter int not satisfied by '1.5'"
+    );
+    let v = filter_var(&mut h, &Value::Int(15), FILTER_VALIDATE_INT, &o).unwrap();
+    assert_eq!(export(&v), "15");
+    // 006.phpt: POST input through FILTER_SANITIZE_SPECIAL_CHARS.
+    let inputs = FilterInputs {
+        post: Some(arr(&[("foo", s("<b>abc</b>"))])),
+        ..FilterInputs::default()
+    };
+    let v = filter_input(
+        &mut h,
+        &inputs,
+        INPUT_POST,
+        b"foo",
+        FILTER_SANITIZE_SPECIAL_CHARS,
+        &FilterArgs::Long(0),
+    )
+    .unwrap();
+    assert_eq!(export(&v), "'&#60;b&#62;abc&#60;/b&#62;'");
+}
