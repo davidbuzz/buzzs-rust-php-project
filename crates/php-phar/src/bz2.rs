@@ -15,6 +15,9 @@ struct Stream {
 }
 
 impl Stream {
+    // Boxed so the stream keeps a stable address (libbz2 stores a back
+    // pointer in its state).
+    #[allow(clippy::unnecessary_box_returns)]
     fn new_stream() -> Box<bz::bz_stream> {
         Box::new(bz::bz_stream {
             next_in: std::ptr::null_mut(),
@@ -36,7 +39,7 @@ impl Stream {
         let mut strm = Self::new_stream();
         // SAFETY: `strm` is a valid, zeroed bz_stream with NULL allocators
         // (libbz2 then uses malloc/free); it stays boxed until `Drop`.
-        let rc = unsafe { bz::BZ2_bzCompressInit(&mut *strm, block_size, 0, work_factor) };
+        let rc = unsafe { bz::BZ2_bzCompressInit(&raw mut *strm, block_size, 0, work_factor) };
         (rc == bz::BZ_OK).then_some(Stream {
             strm,
             compress: true,
@@ -46,7 +49,7 @@ impl Stream {
     fn decompressor() -> Option<Self> {
         let mut strm = Self::new_stream();
         // SAFETY: as in `compressor`.
-        let rc = unsafe { bz::BZ2_bzDecompressInit(&mut *strm, 0, 0) };
+        let rc = unsafe { bz::BZ2_bzDecompressInit(&raw mut *strm, 0, 0) };
         (rc == bz::BZ_OK).then_some(Stream {
             strm,
             compress: false,
@@ -67,9 +70,9 @@ impl Stream {
         // next_in. The pointers are cleared again right after the call.
         let rc = unsafe {
             if self.compress {
-                bz::BZ2_bzCompress(&mut *self.strm, action)
+                bz::BZ2_bzCompress(&raw mut *self.strm, action)
             } else {
-                bz::BZ2_bzDecompress(&mut *self.strm)
+                bz::BZ2_bzDecompress(&raw mut *self.strm)
             }
         };
         let consumed = (in_len - self.strm.avail_in) as usize;
@@ -86,9 +89,9 @@ impl Drop for Stream {
         // mode (constructors only return initialised streams).
         unsafe {
             if self.compress {
-                bz::BZ2_bzCompressEnd(&mut *self.strm);
+                bz::BZ2_bzCompressEnd(&raw mut *self.strm);
             } else {
-                bz::BZ2_bzDecompressEnd(&mut *self.strm);
+                bz::BZ2_bzDecompressEnd(&raw mut *self.strm);
             }
         }
     }

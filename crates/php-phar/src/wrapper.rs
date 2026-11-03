@@ -84,7 +84,7 @@ pub fn parse_url(filename: &[u8], mode: &str, options: u32) -> Result<PharUrl, U
         }
         match reg::open_or_create_filename(&host, None, false, true) {
             Ok(ar) => {
-                if ar.borrow().is_persistent && reg::copy_on_write(&ar).is_err() {
+                if ar.borrow().is_persistent && reg::copy_on_write(&ar).is_none() {
                     return Err(None);
                 }
             }
@@ -175,14 +175,16 @@ impl PharStream {
             FpType::Mod | FpType::Ufp => src
                 .data
                 .as_ref()
-                .map(|b| b.borrow().get(zero..).map(<[u8]>::to_vec).unwrap_or_default())
+                .map(|b| {
+                    b.borrow()
+                        .get(zero..)
+                        .map(<[u8]>::to_vec)
+                        .unwrap_or_default()
+                })
                 .unwrap_or_default(),
             FpType::Tmp => {
                 if self.tmp_cache.is_none() {
-                    self.tmp_cache = src
-                        .tmp
-                        .as_ref()
-                        .and_then(|t| crate::sys::read_file(t).ok());
+                    self.tmp_cache = src.tmp.as_ref().and_then(|t| crate::sys::read_file(t).ok());
                 }
                 self.tmp_cache.clone().unwrap_or_default()
             }
@@ -379,7 +381,7 @@ impl StreamOps for PharDir {
 
     fn seek(&mut self, _st: &mut StreamState, offset: i64, whence: i32, newpos: &mut i64) -> bool {
         let (whence, offset) = if whence == SEEK_END {
-            (SEEK_SET, self.names.len() as i64 + offset)
+            (SEEK_SET, crate::util::to_i64(self.names.len()) + offset)
         } else {
             (whence, offset)
         };
@@ -423,25 +425,24 @@ pub fn make_dirstream(dir: &[u8], phar: &Archive) -> Vec<Vec<u8>> {
         if keylen <= dirlen && (keylen == 0 || keylen < dirlen || key.starts_with(dir)) {
             continue;
         }
-        let entry: &[u8];
-        if dir.first() == Some(&b'/') {
+        let entry: &[u8] = if dir.first() == Some(&b'/') {
             if is_magic_phar(key) {
                 continue;
             }
-            entry = match key.iter().position(|&c| c == b'/') {
+            match key.iter().position(|&c| c == b'/') {
                 Some(p) => &key[..p],
                 None => key,
-            };
+            }
         } else {
             if !key.starts_with(dir) || key.get(dirlen) != Some(&b'/') {
                 continue;
             }
             let rest = &key[dirlen + 1..];
-            entry = match rest.iter().position(|&c| c == b'/') {
+            match rest.iter().position(|&c| c == b'/') {
                 Some(p) => &rest[..p],
                 None => rest,
-            };
-        }
+            }
+        };
         if !entry.is_empty() {
             data.update(entry.to_vec(), ());
         }
@@ -494,6 +495,7 @@ fn serialize_context_value(v: &php_streams::value::Value) -> Option<(php_runtime
 pub struct PharWrapper;
 
 impl PharWrapper {
+    #[allow(clippy::too_many_lines)]
     fn open_url(
         path: &[u8],
         mode: &str,
@@ -537,7 +539,7 @@ impl PharWrapper {
                     if empty && comp & !i64::from(ENT_COMPRESSION_MASK) == 0 {
                         data.with_entry_mut(|e| {
                             e.flags &= !ENT_COMPRESSION_MASK;
-                            e.flags |= (comp & 0xFFFF_FFFF) as u32;
+                            e.flags |= crate::util::lo32(comp);
                         });
                     }
                 }
@@ -567,9 +569,12 @@ impl PharWrapper {
             ));
         }
         if internal.is_empty() && options & STREAM_OPEN_FOR_INCLUDE != 0 {
-            let phar = reg::get_archive(&url.host, None).ok().flatten().ok_or_else(|| {
-                OpenError::msg(format!("file {} is not a valid phar archive", s(&url.host)))
-            })?;
+            let phar = reg::get_archive(&url.host, None)
+                .ok()
+                .flatten()
+                .ok_or_else(|| {
+                    OpenError::msg(format!("file {} is not a valid phar archive", s(&url.host)))
+                })?;
             let (is_tz, fname) = {
                 let a = phar.borrow();
                 (a.is_tar || a.is_zip, a.fname.clone())
@@ -736,7 +741,12 @@ impl Wrapper for PharWrapper {
         Self::open_url(path, mode, options, opened_path, context)
     }
 
-    fn url_stat(&self, path: &[u8], flags: u32, _context: Option<&ContextRef>) -> Option<Result<StatBuf, ()>> {
+    fn url_stat(
+        &self,
+        path: &[u8],
+        flags: u32,
+        _context: Option<&ContextRef>,
+    ) -> Option<Result<StatBuf, ()>> {
         Some(Self::stat_url(path, flags).ok_or(()))
     }
 
@@ -744,7 +754,12 @@ impl Wrapper for PharWrapper {
         true
     }
 
-    fn opendir(&self, path: &[u8], options: u32, _context: Option<&ContextRef>) -> Result<Stream, OpenError> {
+    fn opendir(
+        &self,
+        path: &[u8],
+        options: u32,
+        _context: Option<&ContextRef>,
+    ) -> Result<Stream, OpenError> {
         let r = match parse_url(path, "r", options) {
             Ok(r) => r,
             Err(e) => {
@@ -861,7 +876,13 @@ impl Wrapper for PharWrapper {
     }
 
     #[allow(clippy::too_many_lines)]
-    fn rename(&self, from: &[u8], to: &[u8], options: u32, _context: Option<&ContextRef>) -> Option<bool> {
+    fn rename(
+        &self,
+        from: &[u8],
+        to: &[u8],
+        options: u32,
+        _context: Option<&ContextRef>,
+    ) -> Option<bool> {
         let (f, t) = (s(from), s(to));
         let Ok(rf) = parse_url(from, "wb", options | URL_STAT_QUIET) else {
             warn(
@@ -908,16 +929,24 @@ impl Wrapper for PharWrapper {
         let phar = match reg::get_archive(&rf.host, None) {
             Ok(Some(p)) => p,
             Ok(None) => {
-                warn(options, Code::RenameFailed, format!("phar error: cannot rename \"{f}\" to \"{t}\": "));
+                warn(
+                    options,
+                    Code::RenameFailed,
+                    format!("phar error: cannot rename \"{f}\" to \"{t}\": "),
+                );
                 return Some(false);
             }
             Err(e) => {
-                warn(options, Code::RenameFailed, format!("phar error: cannot rename \"{f}\" to \"{t}\": {e}"));
+                warn(
+                    options,
+                    Code::RenameFailed,
+                    format!("phar error: cannot rename \"{f}\" to \"{t}\": {e}"),
+                );
                 return Some(false);
             }
         };
         let phar = if phar.borrow().is_persistent {
-            if let Ok(p) = reg::copy_on_write(&phar) {
+            if let Some(p) = reg::copy_on_write(&phar) {
                 p
             } else {
                 warn(
@@ -971,7 +1000,11 @@ impl Wrapper for PharWrapper {
                     new.offset = 0;
                 }
                 Err(e) => {
-                    warn(options, Code::RenameFailed, format!("phar error: cannot rename \"{f}\" to \"{t}\": {e}"));
+                    warn(
+                        options,
+                        Code::RenameFailed,
+                        format!("phar error: cannot rename \"{f}\" to \"{t}\": {e}"),
+                    );
                     return Some(false);
                 }
             }
@@ -1006,7 +1039,7 @@ impl Wrapper for PharWrapper {
                 nk.extend_from_slice(&k[flen..]);
                 if a.manifest.rename(&k, nk.clone()) {
                     if let Some(e) = a.manifest.get_mut(&nk) {
-                        e.filename = nk.clone();
+                        e.filename.clone_from(&nk);
                         e.is_modified = true;
                     }
                     is_modified = true;
@@ -1029,14 +1062,24 @@ impl Wrapper for PharWrapper {
         }
         if is_modified {
             if let Err(e) = reg::flush(&phar) {
-                warn(options, Code::RenameFailed, format!("phar error: cannot rename \"{f}\" to \"{t}\": {e}"));
+                warn(
+                    options,
+                    Code::RenameFailed,
+                    format!("phar error: cannot rename \"{f}\" to \"{t}\": {e}"),
+                );
                 return Some(false);
             }
         }
         Some(true)
     }
 
-    fn mkdir(&self, url: &[u8], _mode: i64, options: u32, _context: Option<&ContextRef>) -> Option<bool> {
+    fn mkdir(
+        &self,
+        url: &[u8],
+        _mode: i64,
+        options: u32,
+        _context: Option<&ContextRef>,
+    ) -> Option<bool> {
         let u = s(url);
         let Ok((arch, _)) = reg::split_fname(url, 2, 2) else {
             warn(
@@ -1083,7 +1126,14 @@ impl Wrapper for PharWrapper {
                 return Some(false);
             }
             Err(Some(e)) => {
-                warn(options, Code::MkdirFailed, format!("phar error: cannot create directory \"{}\" in phar \"{host}\", {e}", s(&inner)));
+                warn(
+                    options,
+                    Code::MkdirFailed,
+                    format!(
+                        "phar error: cannot create directory \"{}\" in phar \"{host}\", {e}",
+                        s(&inner)
+                    ),
+                );
                 return Some(false);
             }
             Err(None) => {}
@@ -1094,7 +1144,14 @@ impl Wrapper for PharWrapper {
                 return Some(false);
             }
             Err(Some(e)) => {
-                warn(options, Code::MkdirFailed, format!("phar error: cannot create directory \"{}\" in phar \"{host}\", {e}", s(&inner)));
+                warn(
+                    options,
+                    Code::MkdirFailed,
+                    format!(
+                        "phar error: cannot create directory \"{}\" in phar \"{host}\", {e}",
+                        s(&inner)
+                    ),
+                );
                 return Some(false);
             }
             Err(None) => {}
@@ -1120,7 +1177,15 @@ impl Wrapper for PharWrapper {
             return Some(false);
         }
         if let Err(e) = reg::flush(&phar) {
-            warn(options, Code::MkdirFailed, format!("phar error: cannot create directory \"{}\" in phar \"{}\", {e}", s(&inner), s(&fname)));
+            warn(
+                options,
+                Code::MkdirFailed,
+                format!(
+                    "phar error: cannot create directory \"{}\" in phar \"{}\", {e}",
+                    s(&inner),
+                    s(&fname)
+                ),
+            );
             phar.borrow_mut().manifest.remove(&inner);
             return Some(false);
         }
@@ -1172,7 +1237,14 @@ impl Wrapper for PharWrapper {
         let entry = match reg::get_entry_info_dir(&phar, &inner, 2, true) {
             Ok(e) => e,
             Err(Some(e)) => {
-                warn(options, Code::RmdirFailed, format!("phar error: cannot remove directory \"{}\" in phar \"{host}\", {e}", s(&inner)));
+                warn(
+                    options,
+                    Code::RmdirFailed,
+                    format!(
+                        "phar error: cannot remove directory \"{}\" in phar \"{host}\", {e}",
+                        s(&inner)
+                    ),
+                );
                 return Some(false);
             }
             Err(None) => {
@@ -1180,16 +1252,22 @@ impl Wrapper for PharWrapper {
                 return Some(false);
             }
         };
-        let deleted = entry.with(&phar.borrow(), |e| e.is_deleted).unwrap_or(false);
+        let deleted = entry
+            .with(&phar.borrow(), |e| e.is_deleted)
+            .unwrap_or(false);
         if !deleted {
             let a = phar.borrow();
             let plen = inner.len();
             let has_child = |k: &[u8]| k.starts_with(&inner) && k.get(plen) == Some(&b'/');
             if a.manifest.iter().any(|(k, _)| has_child(k))
-                || a.virtual_dirs.iter().any(|(k, _)| has_child(k))
+                || a.virtual_dirs.iter().any(|(k, ())| has_child(k))
             {
                 drop(a);
-                warn(options, Code::RmdirFailed, "phar error: Directory not empty");
+                warn(
+                    options,
+                    Code::RmdirFailed,
+                    "phar error: Directory not empty",
+                );
                 return Some(false);
             }
         }
@@ -1204,7 +1282,15 @@ impl Wrapper for PharWrapper {
                     e.is_modified = true;
                 }
                 if let Err(e) = reg::flush(&phar) {
-                    warn(options, Code::RmdirFailed, format!("phar error: cannot remove directory \"{}\" in phar \"{}\", {e}", s(&k), s(&fname)));
+                    warn(
+                        options,
+                        Code::RmdirFailed,
+                        format!(
+                            "phar error: cannot remove directory \"{}\" in phar \"{}\", {e}",
+                            s(&k),
+                            s(&fname)
+                        ),
+                    );
                     return Some(false);
                 }
             }

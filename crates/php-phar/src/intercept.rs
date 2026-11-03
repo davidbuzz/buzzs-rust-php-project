@@ -284,7 +284,11 @@ pub fn file_stat(filename: &[u8], kind: StatKind, executed: Option<&[u8]>) -> In
     ))
 }
 
-fn lookup_flag(filename: &[u8], executed: Option<&[u8]>, f: impl Fn(&Entry) -> bool) -> Option<bool> {
+fn lookup_flag(
+    filename: &[u8],
+    executed: Option<&[u8]>,
+    f: impl Fn(&Entry) -> bool,
+) -> Option<bool> {
     if !active() || !relative(filename) {
         return None;
     }
@@ -318,7 +322,10 @@ mod tests {
 
     #[test]
     fn not_intercepted_by_default() {
-        assert_eq!(file_stat(b"a.php", StatKind::Stat, Some(b"phar:///x.phar/i.php")), InterceptStat::Skip);
+        assert_eq!(
+            file_stat(b"a.php", StatKind::Stat, Some(b"phar:///x.phar/i.php")),
+            InterceptStat::Skip
+        );
         assert_eq!(is_file(b"a.php", Some(b"phar:///x.phar/i.php")), None);
         assert_eq!(relative_path(b"a", false, None, b""), None);
         assert_eq!(INTERCEPTED_FUNCTIONS.len(), 22);

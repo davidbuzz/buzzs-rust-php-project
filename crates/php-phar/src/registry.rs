@@ -27,6 +27,7 @@ struct Last {
 
 /// The phar globals.
 #[derive(Debug)]
+#[allow(clippy::struct_excessive_bools)] // mirrors PHAR_G
 struct State {
     fname_map: OrderedMap<ArchiveRef>,
     alias_map: OrderedMap<ArchiveRef>,
@@ -334,6 +335,7 @@ pub fn delref(ar: &ArchiveRef) -> bool {
 /// `phar_get_archive()`: finds an open archive by file name or alias,
 /// binding `alias` to it when given. `Err` carries the "alias is already
 /// used" message.
+#[allow(clippy::too_many_lines)]
 pub fn get_archive(fname: &[u8], alias: Option<&[u8]>) -> Result<Option<ArchiveRef>, String> {
     let alias = alias.filter(|a| !a.is_empty());
     let overloaded = |a: &[u8], owner: &[u8]| {
@@ -529,29 +531,34 @@ fn analyze_path(fname: &[u8], ext_end: usize, for_create: i32) -> bool {
         Some(p) => &filename[..p],
         None => filename,
     };
-    match stat_path(dir) {
-        Some(sb) => sb.is_dir(),
-        None => {
-            if slash.is_some() {
-                return false;
-            }
-            let Some(mut real) = php_streams::paths::expand_filepath(dir) else {
-                return false;
-            };
-            if let Some(p) = find(&real, dir) {
-                real.truncate(p + ext_end);
-            }
-            let Some(p) = real.iter().rposition(|&c| c == b'/') else {
-                return false;
-            };
-            real.truncate(p);
-            stat_path(&real).is_some_and(|sb| sb.is_dir())
+    if let Some(sb) = stat_path(dir) {
+        sb.is_dir()
+    } else {
+        if slash.is_some() {
+            return false;
         }
+        let Some(mut real) = php_streams::paths::expand_filepath(dir) else {
+            return false;
+        };
+        if let Some(p) = find(&real, dir) {
+            real.truncate(p + ext_end);
+        }
+        let Some(p) = real.iter().rposition(|&c| c == b'/') else {
+            return false;
+        };
+        real.truncate(p);
+        stat_path(&real).is_some_and(|sb| sb.is_dir())
     }
 }
 
 /// `phar_check_str()`.
-fn check_str(fname: &[u8], ext_start: usize, ext_len: usize, executable: i32, for_create: i32) -> bool {
+fn check_str(
+    fname: &[u8],
+    ext_start: usize,
+    ext_len: usize,
+    executable: i32,
+    for_create: i32,
+) -> bool {
     if ext_len >= 50 {
         return false;
     }
@@ -652,7 +659,12 @@ pub fn detect_fname_ext(
             _ => Err(ExtFail::NotFound(true)),
         };
     }
-    let next_dot = |from: usize| filename[from..].iter().position(|&c| c == b'.').map(|p| p + from);
+    let next_dot = |from: usize| {
+        filename[from..]
+            .iter()
+            .position(|&c| c == b'.')
+            .map(|p| p + from)
+    };
     let mut pos = next_dot(1);
     let mut examined = false;
     while let Some(mut p) = pos {
@@ -732,7 +744,11 @@ pub fn split_fname(
 // --------------------------------------------------------------- opening
 
 /// `phar_open_parsed_phar()`.
-fn open_parsed(fname: &[u8], alias: Option<&[u8]>, is_data: bool) -> Result<Option<ArchiveRef>, String> {
+fn open_parsed(
+    fname: &[u8],
+    alias: Option<&[u8]>,
+    is_data: bool,
+) -> Result<Option<ArchiveRef>, String> {
     let phar = get_archive(fname, alias)?;
     let Some(phar) = phar else {
         return Ok(None);
@@ -758,7 +774,10 @@ fn open_parsed(fname: &[u8], alias: Option<&[u8]>, is_data: bool) -> Result<Opti
 }
 
 /// Registers a freshly parsed archive (format-specific alias rules).
-fn register_phar(parsed: crate::phar_format::ParsedPhar, fname: &[u8]) -> Result<ArchiveRef, String> {
+fn register_phar(
+    parsed: crate::phar_format::ParsedPhar,
+    fname: &[u8],
+) -> Result<ArchiveRef, String> {
     let ar = parsed.archive.into_ref();
     if parsed.register_alias {
         let alias = ar.borrow().alias_bytes().to_vec();
@@ -784,7 +803,11 @@ fn register_phar(parsed: crate::phar_format::ParsedPhar, fname: &[u8]) -> Result
     Ok(ar)
 }
 
-fn register_tar(parsed: crate::tar_format::ParsedTar, fname: &[u8], alias: Option<&[u8]>) -> Result<ArchiveRef, String> {
+fn register_tar(
+    parsed: crate::tar_format::ParsedTar,
+    fname: &[u8],
+    alias: Option<&[u8]>,
+) -> Result<ArchiveRef, String> {
     let ar = parsed.archive.into_ref();
     if !with(|s| s.fname_map.add(fname.to_vec(), Rc::clone(&ar))) {
         return Err(format!(
@@ -826,7 +849,11 @@ fn register_tar(parsed: crate::tar_format::ParsedTar, fname: &[u8], alias: Optio
     Ok(ar)
 }
 
-fn register_zip(parsed: crate::zip_format::ParsedZip, fname: &[u8], alias: Option<&[u8]>) -> Result<ArchiveRef, String> {
+fn register_zip(
+    parsed: crate::zip_format::ParsedZip,
+    fname: &[u8],
+    alias: Option<&[u8]>,
+) -> Result<ArchiveRef, String> {
     let ar = parsed.archive.into_ref();
     with(|s| s.fname_map.add(fname.to_vec(), Rc::clone(&ar)));
     if let Some(actual) = parsed.actual_alias {
@@ -873,7 +900,11 @@ fn register_zip(parsed: crate::zip_format::ParsedZip, fname: &[u8], alias: Optio
 
 /// `phar_open_from_fp()`: detects the format of `data` (decompressing
 /// whole-archive gzip/bzip2), parses and registers it.
-pub fn open_from_bytes(data: Vec<u8>, fname: &[u8], alias: Option<&[u8]>) -> Result<ArchiveRef, String> {
+pub fn open_from_bytes(
+    data: Vec<u8>,
+    fname: &[u8],
+    alias: Option<&[u8]>,
+) -> Result<ArchiveRef, String> {
     let f = s(fname);
     let mut data = data;
     let mut compression = 0u32;
@@ -948,7 +979,9 @@ pub fn open_from_filename(
         return Err(None);
     }
     let Ok(data) = crate::sys::read_file(fname) else {
-        return Err(report_errors.then(|| format!("unable to open phar for reading \"{}\"", s(fname))));
+        return Err(
+            report_errors.then(|| format!("unable to open phar for reading \"{}\"", s(fname)))
+        );
     };
     let actual = php_streams::paths::expand_filepath(fname).unwrap_or_else(|| fname.to_vec());
     open_from_bytes(data, &actual, alias).map_err(Some)
@@ -966,7 +999,8 @@ pub fn create_or_parse_filename(
     }
     if let Ok(data) = crate::sys::read_file(fname) {
         if crate::sys::path(fname).is_file() {
-            let actual = php_streams::paths::expand_filepath(fname).unwrap_or_else(|| fname.to_vec());
+            let actual =
+                php_streams::paths::expand_filepath(fname).unwrap_or_else(|| fname.to_vec());
             let ar = open_from_bytes(data, &actual, alias).map_err(Some)?;
             {
                 let mut a = ar.borrow_mut();
@@ -1093,7 +1127,11 @@ pub fn open_or_create_filename(
                         s(fname)
                     )));
                 }
-                if readonly() && !t.is_data && (t.is_tar || t.is_zip) && !t.manifest.contains_key(b".phar/stub.php") {
+                if readonly()
+                    && !t.is_data
+                    && (t.is_tar || t.is_zip)
+                    && !t.manifest.contains_key(b".phar/stub.php")
+                {
                     return Err(Some(format!(
                         "'{}' is not a phar archive. Use PharData::__construct() for a standard zip or tar archive",
                         s(fname)
@@ -1132,7 +1170,9 @@ pub fn open_executed_filename(
     halt_defined: bool,
 ) -> Result<(), Option<String>> {
     let Some(fname) = executed else {
-        return Err(Some("cannot initialize a phar outside of PHP execution".into()));
+        return Err(Some(
+            "cannot initialize a phar outside of PHP execution".into(),
+        ));
     };
     if let Ok(Some(_)) = open_parsed(fname, alias, false) {
         return Ok(());
@@ -1144,16 +1184,24 @@ pub fn open_executed_filename(
         return Err(None);
     }
     let Ok(data) = crate::sys::read_file(fname) else {
-        return Err(Some(format!("unable to open phar for reading \"{}\"", s(fname))));
+        return Err(Some(format!(
+            "unable to open phar for reading \"{}\"",
+            s(fname)
+        )));
     };
     let actual = php_streams::paths::expand_filepath(fname).unwrap_or_else(|| fname.to_vec());
-    open_from_bytes(data, &actual, alias).map(|_| ()).map_err(Some)
+    open_from_bytes(data, &actual, alias)
+        .map(|_| ())
+        .map_err(Some)
 }
 
 /// `phar.cache_list`: pre-parses the listed archives into the persistent
 /// manifest cache. Returns `false` (and caches nothing) when one fails.
 pub fn load_cache_list(list: &[u8]) -> bool {
-    let paths: Vec<&[u8]> = list.split(|&c| c == b':').filter(|p| !p.is_empty()).collect();
+    let paths: Vec<&[u8]> = list
+        .split(|&c| c == b':')
+        .filter(|p| !p.is_empty())
+        .collect();
     if paths.is_empty() {
         return true;
     }
@@ -1165,19 +1213,16 @@ pub fn load_cache_list(list: &[u8]) -> bool {
     });
     let mut ok = true;
     for p in &paths {
-        match open_from_filename(p, None, false) {
-            Ok(a) => {
-                let mut a = a.borrow_mut();
-                a.is_persistent = true;
-                a.fp = None;
-                for (_, e) in a.manifest.iter_mut() {
-                    e.is_persistent = true;
-                }
+        if let Ok(a) = open_from_filename(p, None, false) {
+            let mut a = a.borrow_mut();
+            a.is_persistent = true;
+            a.fp = None;
+            for (_, e) in a.manifest.iter_mut() {
+                e.is_persistent = true;
             }
-            Err(_) => {
-                ok = false;
-                break;
-            }
+        } else {
+            ok = false;
+            break;
         }
     }
     with(|s| {
@@ -1194,9 +1239,9 @@ pub fn load_cache_list(list: &[u8]) -> bool {
 
 /// `phar_copy_on_write()`: replaces a cached (persistent) archive by a
 /// writable per-request copy.
-pub fn copy_on_write(ar: &ArchiveRef) -> Result<ArchiveRef, ()> {
+pub fn copy_on_write(ar: &ArchiveRef) -> Option<ArchiveRef> {
     if !ar.borrow().is_persistent {
-        return Ok(Rc::clone(ar));
+        return Some(Rc::clone(ar));
     }
     let mut copy = ar.borrow().clone();
     copy.is_persistent = false;
@@ -1207,16 +1252,16 @@ pub fn copy_on_write(ar: &ArchiveRef) -> Result<ArchiveRef, ()> {
     let alias = copy.alias.clone();
     let new = copy.into_ref();
     if !with(|s| s.fname_map.add(fname.clone(), Rc::clone(&new))) {
-        return Err(());
+        return None;
     }
     invalidate_last();
     if let Some(a) = alias.filter(|a| !a.is_empty()) {
         if !with(|s| s.alias_map.add(a, Rc::clone(&new))) {
             fname_map_del(&fname);
-            return Err(());
+            return None;
         }
     }
-    Ok(new)
+    Some(new)
 }
 
 // --------------------------------------------------------------- flushing
@@ -1233,7 +1278,10 @@ fn write_out(fname: &[u8], image: &[u8], flags: u32) -> Result<(), String> {
         &mut opened,
         None,
     ) else {
-        return Err(format!("unable to open new phar \"{}\" for writing", s(fname)));
+        return Err(format!(
+            "unable to open new phar \"{}\" for writing",
+            s(fname)
+        ));
     };
     let data = if flags & FILE_COMPRESSED_GZ != 0 {
         crate::compress::gzip(image).unwrap_or_default()
@@ -1250,7 +1298,11 @@ fn write_out(fname: &[u8], image: &[u8], flags: u32) -> Result<(), String> {
 
 /// `phar_flush_ex()`: saves the archive (honouring `startBuffering()`).
 /// Silent no-ops (PHP's `EOF` without error) return `Ok`.
-pub fn flush_ex(ar_ref: &ArchiveRef, user_stub: Option<&[u8]>, is_default_stub: bool) -> Result<(), String> {
+pub fn flush_ex(
+    ar_ref: &ArchiveRef,
+    user_stub: Option<&[u8]>,
+    is_default_stub: bool,
+) -> Result<(), String> {
     let key = openssl_privatekey();
     {
         let a = ar_ref.borrow();
@@ -1372,7 +1424,7 @@ pub fn mount_entry(ar: &ArchiveRef, filename: &[u8], path: &[u8]) -> bool {
         is_crc_checked: true,
         fp_type: FpType::Tmp,
         tmp: Some(tmp),
-        flags: (sb.mode & 0xFFFF_FFFF) as u32,
+        flags: crate::util::lo32(sb.mode),
         ..Entry::default()
     };
     let mut a = ar.borrow_mut();
@@ -1392,6 +1444,7 @@ pub fn mount_entry(ar: &ArchiveRef, filename: &[u8], path: &[u8]) -> bool {
 /// `phar_get_entry_info_dir()`. `dir`: 0 files only, 1 files or
 /// directories (including implicit ones), 2 directories only. `Err(None)`
 /// means "not found" without message.
+#[allow(clippy::too_many_lines)]
 pub fn get_entry_info_dir(
     ar: &ArchiveRef,
     path: &[u8],
@@ -1401,11 +1454,14 @@ pub fn get_entry_info_dir(
     let is_dir = path.last() == Some(&b'/');
     if security && is_magic_phar(path) {
         return Err(Some(
-            "phar error: cannot directly access magic \".phar\" directory or files within it".into(),
+            "phar error: cannot directly access magic \".phar\" directory or files within it"
+                .into(),
         ));
     }
     if path.is_empty() && dir == 0 {
-        return Err(Some("phar error: invalid path \"\" must not be empty".into()));
+        return Err(Some(
+            "phar error: invalid path \"\" must not be empty".into(),
+        ));
     }
     let (check, p) = path_check(path);
     if let crate::util::PathCheck::Err(e) = check {
@@ -1428,7 +1484,10 @@ pub fn get_entry_info_dir(
                 return Err(None);
             }
             if e.is_dir && dir == 0 {
-                return Err(Some(format!("phar error: path \"{}\" is a directory", s(&p))));
+                return Err(Some(format!(
+                    "phar error: path \"{}\" is a directory",
+                    s(&p)
+                )));
             }
             if !e.is_dir && dir == 2 {
                 return Err(Some(format!(
@@ -1476,7 +1535,10 @@ pub fn get_entry_info_dir(
             return Err(None);
         };
         if sb.is_dir() && dir == 0 {
-            return Err(Some(format!("phar error: path \"{}\" is a directory", s(&p))));
+            return Err(Some(format!(
+                "phar error: path \"{}\" is a directory",
+                s(&p)
+            )));
         }
         if !sb.is_dir() && dir != 0 {
             return Err(Some(format!(
@@ -1545,6 +1607,7 @@ fn mode_flags(mode: &str) -> (bool, bool, bool, bool) {
 
 /// `phar_get_entry_data()`: opens an existing entry. `Ok(None)` means the
 /// entry does not exist but may be created.
+#[allow(clippy::too_many_lines)]
 pub fn get_entry_data(
     fname: &[u8],
     path: &[u8],
@@ -1588,11 +1651,11 @@ pub fn get_entry_data(
         };
         if for_write && phar.borrow().is_persistent {
             match copy_on_write(&phar) {
-                Ok(p) => {
+                Some(p) => {
                     phar = p;
                     continue;
                 }
-                Err(()) => {
+                None => {
                     return Err(Some(format!(
                         "phar error: file \"{}\" in phar \"{}\" cannot be opened for writing, could not make cached phar writeable",
                         s(path),
@@ -1605,7 +1668,13 @@ pub fn get_entry_data(
     };
     let (is_modified, fp_refcount, is_deleted, is_dir, fp_type) = entry
         .with(&phar.borrow(), |e| {
-            (e.is_modified, e.fp_refcount, e.is_deleted, e.is_dir, e.fp_type)
+            (
+                e.is_modified,
+                e.fp_refcount,
+                e.is_deleted,
+                e.is_dir,
+                e.fp_type,
+            )
         })
         .unwrap_or_default();
     if is_modified && !for_write {
@@ -1715,7 +1784,7 @@ pub fn get_or_create_entry_data(
     }
     let mut p = checked.to_vec();
     let phar = if phar.borrow().is_persistent {
-        copy_on_write(&phar).map_err(|()| {
+        copy_on_write(&phar).ok_or_else(|| {
             Some(format!(
                 "phar error: file \"{}\" in phar \"{}\" cannot be created, could not make cached phar writeable",
                 s(&p),
@@ -1799,7 +1868,11 @@ pub fn entry_remove(data: EntryData) -> Result<(), String> {
 
 /// `phar_find_in_include_path()`: resolves `filename` relative to the
 /// running phar (`executed` is the executing file name).
-pub fn find_in_include_path(filename: &[u8], executed: &[u8], include_path: &[u8]) -> Option<Vec<u8>> {
+pub fn find_in_include_path(
+    filename: &[u8],
+    executed: &[u8],
+    include_path: &[u8],
+) -> Option<Vec<u8>> {
     let cwd = cwd()?;
     if executed.len() < 7 || !executed[..7].eq_ignore_ascii_case(b"phar://") {
         return None;
@@ -1831,38 +1904,6 @@ pub fn find_in_include_path(filename: &[u8], executed: &[u8], include_path: &[u8
     path.push(b':');
     path.extend_from_slice(include_path);
     php_streams::paths::resolve_path(filename, &path)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn ini_semantics() {
-        assert!(set_ini("phar.readonly", true, true));
-        assert!(!set_ini("phar.readonly", false, false));
-        assert!(readonly());
-        assert!(set_ini("phar.readonly", false, true));
-        assert!(set_ini("phar.readonly", true, false));
-        assert!(set_ini("phar.readonly", false, false));
-        assert!(!readonly());
-        set_ini("phar.readonly", true, true);
-    }
-
-    #[test]
-    fn detect_extensions() {
-        let dir = std::env::temp_dir();
-        let mut p = dir.to_string_lossy().as_bytes().to_vec();
-        p.extend_from_slice(b"/phar_detect_test_nonexistent.phar");
-        assert!(detect_fname_ext(&p, 1, 1, true).is_ok());
-        assert!(detect_fname_ext(&p, 1, 0, true).is_err());
-        let mut t = dir.to_string_lossy().as_bytes().to_vec();
-        t.extend_from_slice(b"/x.tar");
-        assert!(detect_fname_ext(&t, 0, 1, true).is_ok());
-        assert!(detect_fname_ext(&t, 1, 1, true).is_err());
-        assert_eq!(detect_fname_ext(b"http://x/y.phar", 1, 1, true), Err(ExtFail::Url));
-        assert_eq!(detect_fname_ext(b"nodot", 1, 1, true), Err(ExtFail::NotFound(false)));
-    }
 }
 
 // ---------------------------------------------------------- map helpers
@@ -1908,4 +1949,42 @@ pub fn cached(fname: &[u8]) -> Option<ArchiveRef> {
             None
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ini_semantics() {
+        assert!(set_ini("phar.readonly", true, true));
+        assert!(!set_ini("phar.readonly", false, false));
+        assert!(readonly());
+        assert!(set_ini("phar.readonly", false, true));
+        assert!(set_ini("phar.readonly", true, false));
+        assert!(set_ini("phar.readonly", false, false));
+        assert!(!readonly());
+        set_ini("phar.readonly", true, true);
+    }
+
+    #[test]
+    fn detect_extensions() {
+        let dir = std::env::temp_dir();
+        let mut p = dir.to_string_lossy().as_bytes().to_vec();
+        p.extend_from_slice(b"/phar_detect_test_nonexistent.phar");
+        assert!(detect_fname_ext(&p, 1, 1, true).is_ok());
+        assert!(detect_fname_ext(&p, 1, 0, true).is_err());
+        let mut t = dir.to_string_lossy().as_bytes().to_vec();
+        t.extend_from_slice(b"/x.tar");
+        assert!(detect_fname_ext(&t, 0, 1, true).is_ok());
+        assert!(detect_fname_ext(&t, 1, 1, true).is_err());
+        assert_eq!(
+            detect_fname_ext(b"http://x/y.phar", 1, 1, true),
+            Err(ExtFail::Url)
+        );
+        assert_eq!(
+            detect_fname_ext(b"nodot", 1, 1, true),
+            Err(ExtFail::NotFound(false))
+        );
+    }
 }

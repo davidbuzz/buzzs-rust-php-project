@@ -7,9 +7,9 @@ use std::rc::Rc;
 use crate::archive::{Archive, Entry, FpType, Metadata};
 use crate::consts::{
     API_MIN_DIR, API_MIN_READ, API_VERSION, API_VERSION_NODIR, API_VER_MASK, ENT_COMPRESSED_BZ2,
-    ENT_COMPRESSED_GZ, ENT_COMPRESSION_MASK, ENT_PERM_DEF_DIR, FILE_COMPRESSION_MASK,
-    HALT_TOKEN, HDR_SIGNATURE, SIG_MD5, SIG_OPENSSL, SIG_OPENSSL_SHA256, SIG_OPENSSL_SHA512,
-    SIG_SHA1, SIG_SHA256, SIG_SHA512,
+    ENT_COMPRESSED_GZ, ENT_COMPRESSION_MASK, ENT_PERM_DEF_DIR, FILE_COMPRESSION_MASK, HALT_TOKEN,
+    HDR_SIGNATURE, SIG_MD5, SIG_OPENSSL, SIG_OPENSSL_SHA256, SIG_OPENSSL_SHA512, SIG_SHA1,
+    SIG_SHA256, SIG_SHA512,
 };
 use crate::util::{find_ci, get32, put32, s, to_u32};
 
@@ -116,9 +116,7 @@ pub fn parse(
         };
         if next == b'\r' {
             if data.get(halt + 1) != Some(&b'\n') {
-                return fail(
-                    "internal corruption of phar \"%s\" (truncated manifest at stub end)",
-                );
+                return fail("internal corruption of phar \"%s\" (truncated manifest at stub end)");
             }
             halt += 1;
             halt += 1;
@@ -176,14 +174,12 @@ pub fn parse(
             let Some(start) = end.checked_sub(len) else {
                 return Err(format!("phar \"{}\" has a broken signature", s(fname)));
             };
-            crate::signature::verify(flags, &data[..start], &data[start..end], fname).map_err(
-                |e| {
-                    format!(
-                        "phar \"{}\" {label} signature could not be verified: {e}",
-                        s(fname)
-                    )
-                },
-            )
+            crate::signature::verify(flags, &data[..start], &data[start..end], fname).map_err(|e| {
+                format!(
+                    "phar \"{}\" {label} signature could not be verified: {e}",
+                    s(fname)
+                )
+            })
         };
         signature = Some(match flags {
             SIG_OPENSSL | SIG_OPENSSL_SHA256 | SIG_OPENSSL_SHA512 => {
@@ -292,8 +288,10 @@ pub fn parse(
         if filename_len > m.len() - p - 24 {
             return fail("internal corruption of phar \"%s\" (truncated manifest entry)");
         }
-        let mut e = Entry::default();
-        e.is_dir = manifest_ver & API_VER_MASK >= API_MIN_DIR && m[p + filename_len - 1] == b'/';
+        let mut e = Entry {
+            is_dir: manifest_ver & API_VER_MASK >= API_MIN_DIR && m[p + filename_len - 1] == b'/',
+            ..Entry::default()
+        };
         ar.add_virtual_dirs(&m[p..p + filename_len]);
         let raw = p;
         p += filename_len;
@@ -329,7 +327,9 @@ pub fn parse(
             }
             ENT_COMPRESSED_BZ2 => {
                 if !crate::registry::has_bz2() {
-                    return fail("bz2 extension is required for bzip2 compressed .phar file \"%s\"");
+                    return fail(
+                        "bz2 extension is required for bzip2 compressed .phar file \"%s\"",
+                    );
                 }
             }
             _ => {
@@ -399,7 +399,9 @@ pub fn flush(
         ar.halt_offset = newfile.len() as u64;
     } else if ar.halt_offset > 0 && old.is_some() && !ar.is_brandnew {
         let old = old.map(|o| o.as_slice()).unwrap_or_default();
-        let n = usize::try_from(ar.halt_offset).unwrap_or(usize::MAX).min(old.len());
+        let n = usize::try_from(ar.halt_offset)
+            .unwrap_or(usize::MAX)
+            .min(old.len());
         newfile.extend_from_slice(&old[..n]);
         if n as u64 != ar.halt_offset {
             return Err(format!(
@@ -472,7 +474,11 @@ pub fn flush(
         let Some(compressed) = compressed else {
             return Err(format!(
                 "unable to {} compress file \"{}\" to new phar \"{fname}\"",
-                if e.flags & ENT_COMPRESSED_GZ != 0 { "gzip" } else { "bzip2" },
+                if e.flags & ENT_COMPRESSED_GZ != 0 {
+                    "gzip"
+                } else {
+                    "bzip2"
+                },
                 s(&e.filename)
             ));
         };
@@ -484,7 +490,11 @@ pub fn flush(
     }
     global_flags |= HDR_SIGNATURE;
 
-    let alias_len = if ar.is_temporary_alias { 0 } else { ar.alias_len() };
+    let alias_len = if ar.is_temporary_alias {
+        0
+    } else {
+        ar.alias_len()
+    };
     let mut manifest_len = to_u32(offset + alias_len + 18 + main_meta.len());
     let mut manifest_hack = false;
     if matches!(manifest_len & 0xFF, 0x0D | 0x0A) {
@@ -493,7 +503,11 @@ pub fn flush(
     }
     put32(&mut newfile, manifest_len);
     put32(&mut newfile, new_count);
-    let ver = if has_dirs { API_VERSION } else { API_VERSION_NODIR };
+    let ver = if has_dirs {
+        API_VERSION
+    } else {
+        API_VERSION_NODIR
+    };
     newfile.extend_from_slice(&ver.to_be_bytes());
     put32(&mut newfile, global_flags);
     put32(&mut newfile, to_u32(alias_len));
@@ -503,11 +517,16 @@ pub fn flush(
 
     let mytime = crate::sys::entry_now32();
     for key in &keys {
-        let Some(e) = ar.manifest.get(key) else { continue };
+        let Some(e) = ar.manifest.get(key) else {
+            continue;
+        };
         if e.is_deleted || e.is_mounted {
             continue;
         }
-        put32(&mut newfile, to_u32(e.filename.len() + usize::from(e.is_dir)));
+        put32(
+            &mut newfile,
+            to_u32(e.filename.len() + usize::from(e.is_dir)),
+        );
         newfile.extend_from_slice(&e.filename);
         if e.is_dir {
             newfile.push(b'/');
@@ -527,7 +546,10 @@ pub fn flush(
 
     for key in &keys {
         let (skip, csize) = match ar.manifest.get(key) {
-            Some(e) => (e.is_deleted || e.is_dir || e.is_mounted, e.compressed_filesize),
+            Some(e) => (
+                e.is_deleted || e.is_dir || e.is_mounted,
+                e.compressed_filesize,
+            ),
             None => continue,
         };
         if skip {
@@ -537,13 +559,12 @@ pub fn flush(
             cfp.swap_remove(pos).1
         } else {
             let e = ar.manifest.get(key).ok_or_else(String::new)?;
-            match e.fp_type {
-                FpType::Fp => ar.stored_bytes(key).unwrap_or_default(),
-                _ => {
-                    let mut c = ar.read_entry(key).unwrap_or_default();
-                    c.truncate(csize as usize);
-                    c
-                }
+            if e.fp_type == FpType::Fp {
+                ar.stored_bytes(key).unwrap_or_default()
+            } else {
+                let mut c = ar.read_entry(key).unwrap_or_default();
+                c.truncate(csize as usize);
+                c
             }
         };
         let pos = newfile.len() as u64;
@@ -584,10 +605,7 @@ mod tests {
     fn detect_halt() {
         let mut data = b"<?php echo 1; __HALT_COMPILER(); ?>\r\n".to_vec();
         data.extend_from_slice(&[0u8; 30]);
-        assert_eq!(
-            detect(&data, b"x.phar", true),
-            Ok(Detected::Phar(32))
-        );
+        assert_eq!(detect(&data, b"x.phar", true), Ok(Detected::Phar(32)));
         assert!(detect(b"blah", b"/x.phar", true)
             .unwrap_err()
             .contains("(truncated entry)"));
@@ -599,6 +617,9 @@ mod tests {
         big.extend_from_slice(b"__halt_compiler();");
         big.extend_from_slice(&[b'b'; 40]);
         assert_eq!(detect(&big, b"x", true), Ok(Detected::Phar(1033)));
-        assert_eq!(detect(b"\x1f\x8b\x08aaaaaaaaaaaaaaaaaaaaaa", b"x", true), Ok(Detected::Gzip));
+        assert_eq!(
+            detect(b"\x1f\x8b\x08aaaaaaaaaaaaaaaaaaaaaa", b"x", true),
+            Ok(Detected::Gzip)
+        );
     }
 }

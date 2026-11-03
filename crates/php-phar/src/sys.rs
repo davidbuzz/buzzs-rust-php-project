@@ -39,7 +39,7 @@ pub fn now() -> i64 {
 /// `time(NULL)` truncated to the 32-bit on-disk timestamp.
 pub fn now32() -> u32 {
     // Truncation is what the C code does when storing time_t into uint32_t.
-    (now() & 0xFFFF_FFFF) as u32
+    crate::util::lo32(now())
 }
 
 thread_local! {
@@ -59,7 +59,7 @@ pub fn set_entry_time_override(t: Option<i64>) {
 /// [`set_entry_time_override`]).
 pub fn entry_now32() -> u32 {
     match ENTRY_NOW.with(Cell::get) {
-        Some(t) => (t & 0xFFFF_FFFF) as u32,
+        Some(t) => crate::util::lo32(t),
         None => now32(),
     }
 }
@@ -89,7 +89,7 @@ pub fn localtime(t: i64) -> Tm {
     let mut tm: libc::tm = unsafe { std::mem::zeroed() };
     // SAFETY: both pointers reference live locals; localtime_r is the
     // reentrant variant and only writes into `tm`.
-    let ok = unsafe { !libc::localtime_r(&tt, &mut tm).is_null() };
+    let ok = unsafe { !libc::localtime_r(&raw const tt, &raw mut tm).is_null() };
     if !ok {
         return Tm::default();
     }
@@ -112,7 +112,7 @@ pub fn mktime_from_now(fields: Tm) -> i64 {
     let mut tm: libc::tm = unsafe { std::mem::zeroed() };
     // SAFETY: valid pointers to locals.
     unsafe {
-        libc::localtime_r(&now, &mut tm);
+        libc::localtime_r(&raw const now, &raw mut tm);
     }
     tm.tm_year = fields.year;
     tm.tm_mon = fields.mon;
@@ -121,7 +121,18 @@ pub fn mktime_from_now(fields: Tm) -> i64 {
     tm.tm_min = fields.min;
     tm.tm_sec = fields.sec;
     // SAFETY: `tm` is a fully initialised struct tm owned by this frame.
-    unsafe { libc::mktime(&mut tm) }
+    unsafe { libc::mktime(&raw mut tm) }
+}
+
+/// The process umask (`mask = umask(0); umask(mask)`).
+pub fn umask() -> u32 {
+    // SAFETY: umask has no preconditions; the second call restores the
+    // original mask immediately.
+    unsafe {
+        let m = libc::umask(0);
+        libc::umask(m);
+        m
+    }
 }
 
 #[cfg(test)]
@@ -139,16 +150,4 @@ mod tests {
         set_time_override(None);
         assert!(now() > 42);
     }
-}
-
-/// The process umask (`mask = umask(0); umask(mask)`).
-pub fn umask() -> u32 {
-    // SAFETY: umask has no preconditions; the second call restores the
-    // original mask immediately.
-    let mask = unsafe {
-        let m = libc::umask(0);
-        libc::umask(m);
-        m
-    };
-    mask as u32
 }

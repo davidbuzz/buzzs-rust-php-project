@@ -67,7 +67,9 @@ pub fn create_default_stub(index: Option<&[u8]>, web: Option<&[u8]>) -> Result<V
     let web = crate::util::cstr(web);
     let (parts, base) = match FLAVOR.with(std::cell::Cell::get) {
         Flavor::Master => (
-            [NEWSTUB0, NEWSTUB1_0, NEWSTUB1_1, NEWSTUB2, NEWSTUB3_0, NEWSTUB3_1],
+            [
+                NEWSTUB0, NEWSTUB1_0, NEWSTUB1_1, NEWSTUB2, NEWSTUB3_0, NEWSTUB3_1,
+            ],
             NEWSTUB_LEN,
         ),
         Flavor::Php83 => (PHP83, PHP83_LEN),

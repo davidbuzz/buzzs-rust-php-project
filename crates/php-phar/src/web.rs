@@ -166,12 +166,19 @@ pub enum WebResult {
 pub fn do_403(host: &mut dyn WebHost) {
     host.header(b"HTTP/1.0 403 Access Denied", Some(403));
     host.send_headers();
-    host.write(b"<html>\n <head>\n  <title>Access Denied</title>\n </head>\n <body>\n  <h1>403 - File ");
+    host.write(
+        b"<html>\n <head>\n  <title>Access Denied</title>\n </head>\n <body>\n  <h1>403 - File ",
+    );
     host.write(b"Access Denied</h1>\n </body>\n</html>");
 }
 
 /// `phar_do_404()`.
-fn do_404(host: &mut dyn WebHost, phar: Option<&ArchiveRef>, fname: &[u8], f404: Option<&[u8]>) -> PharResult<()> {
+fn do_404(
+    host: &mut dyn WebHost,
+    phar: Option<&ArchiveRef>,
+    fname: &[u8],
+    f404: Option<&[u8]>,
+) -> PharResult<()> {
     if let (Some(p), Some(f)) = (phar, f404.filter(|f| !f.is_empty())) {
         if let Ok(reg::EntryRef::Manifest(k)) = reg::get_entry_info_dir(p, f, 0, true) {
             file_action(host, p, &k, b"text/html", MIME_PHP, f, fname, None, 0)?;
@@ -180,13 +187,21 @@ fn do_404(host: &mut dyn WebHost, phar: Option<&ArchiveRef>, fname: &[u8], f404:
     }
     host.header(b"HTTP/1.0 404 Not Found", Some(404));
     host.send_headers();
-    host.write(b"<html>\n <head>\n  <title>File Not Found</title>\n </head>\n <body>\n  <h1>404 - File ");
+    host.write(
+        b"<html>\n <head>\n  <title>File Not Found</title>\n </head>\n <body>\n  <h1>404 - File ",
+    );
     host.write(b"Not Found</h1>\n </body>\n</html>");
     Ok(())
 }
 
 /// `phar_mung_server_vars()`.
-fn mung_server_vars(host: &mut dyn WebHost, fname: &[u8], entry: &[u8], basename: &[u8], request_uri_len: usize) {
+fn mung_server_vars(
+    host: &mut dyn WebHost,
+    fname: &[u8],
+    entry: &[u8],
+    basename: &[u8],
+    request_uri_len: usize,
+) {
     if !host.has_server() {
         return;
     }
@@ -266,7 +281,11 @@ fn file_action(
             Ok(true)
         }
         MIME_OTHER => {
-            let size = phar.borrow().manifest.get(key).map_or(0, |e| e.uncompressed_filesize);
+            let size = phar
+                .borrow()
+                .manifest
+                .get(key)
+                .map_or(0, |e| e.uncompressed_filesize);
             let mut l = b"Content-type: ".to_vec();
             l.extend_from_slice(mime_type);
             host.header(&l, None);
@@ -336,7 +355,9 @@ pub fn web_phar(
     }
     let method = host.request_method();
     let uri = host.request_uri();
-    let web_methods: [&[u8]; 7] = [b"GET", b"POST", b"DELETE", b"HEAD", b"OPTIONS", b"PATCH", b"PUT"];
+    let web_methods: [&[u8]; 7] = [
+        b"GET", b"POST", b"DELETE", b"HEAD", b"OPTIONS", b"PATCH", b"PUT",
+    ];
     match (&method, &uri) {
         (Some(m), Some(_)) if web_methods.contains(&m.as_slice()) => {}
         _ => return Ok(WebResult::Return),
@@ -418,7 +439,9 @@ pub fn web_phar(
                 if exception {
                     return Ok(WebResult::Return);
                 }
-                return Err(PharError::phar("phar error: failed to call rewrite callback"));
+                return Err(PharError::phar(
+                    "phar error: failed to call rewrite callback",
+                ));
             }
         }
     }
@@ -478,7 +501,12 @@ pub fn web_phar(
         None => None,
     };
     let (Some(phar), Some(key)) = (phar, key) else {
-        do_404(host, reg::get_archive(fname, None).ok().flatten().as_ref(), fname, args.f404)?;
+        do_404(
+            host,
+            reg::get_archive(fname, None).ok().flatten().as_ref(),
+            fname,
+            args.f404,
+        )?;
         return Ok(WebResult::Exit);
     };
     let mut mime: Option<(i64, Vec<u8>)> = None;
@@ -514,7 +542,11 @@ pub fn web_phar(
         Some(&pt),
         ru_len,
     )?;
-    Ok(if handled { WebResult::Exit } else { WebResult::Return })
+    Ok(if handled {
+        WebResult::Exit
+    } else {
+        WebResult::Return
+    })
 }
 
 /// `Phar::mungServer()`: `values` are the array elements (`None` for
@@ -562,14 +594,23 @@ mod tests {
         assert_eq!(file_type(b"/a.php"), (MIME_PHP, Vec::new()));
         assert_eq!(file_type(b"/a.phps").0, MIME_PHPS);
         assert_eq!(file_type(b"/a.jpg"), (MIME_OTHER, b"image/jpeg".to_vec()));
-        assert_eq!(file_type(b"/a.gronk"), (MIME_OTHER, b"application/octet-stream".to_vec()));
+        assert_eq!(
+            file_type(b"/a.gronk"),
+            (MIME_OTHER, b"application/octet-stream".to_vec())
+        );
         assert_eq!(file_type(b"/noext"), (MIME_OTHER, b"text/plain".to_vec()));
     }
 
     #[test]
     fn mung_errors() {
-        assert!(mung_server(&[]).unwrap_err().message.starts_with("No values"));
-        assert!(mung_server(&[None]).unwrap_err().message.starts_with("Non-string"));
+        assert!(mung_server(&[])
+            .unwrap_err()
+            .message
+            .starts_with("No values"));
+        assert!(mung_server(&[None])
+            .unwrap_err()
+            .message
+            .starts_with("Non-string"));
         assert!(mung_server(&[Some(b"FOO".to_vec())])
             .unwrap_err()
             .message

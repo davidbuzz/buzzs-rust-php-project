@@ -19,11 +19,10 @@ use php_runtime::Value;
 
 use crate::archive::{ArchiveRef, Entry, FpType, Metadata};
 use crate::consts::{
-    API_VERSION_STR, ENT_COMPRESSED_BZ2, ENT_COMPRESSED_GZ, ENT_COMPRESSION_MASK,
-    ENT_PERM_MASK, FILE_COMPRESSED_BZ2, FILE_COMPRESSED_GZ, FILE_COMPRESSED_NONE,
-    FILE_COMPRESSION_MASK, FORMAT_PHAR, FORMAT_SAME, FORMAT_TAR, FORMAT_ZIP, SIG_MD5,
-    SIG_OPENSSL, SIG_OPENSSL_SHA256, SIG_OPENSSL_SHA512, SIG_SHA1, SIG_SHA256, SIG_SHA512,
-    TAR_DIR, TAR_FILE,
+    API_VERSION_STR, ENT_COMPRESSED_BZ2, ENT_COMPRESSED_GZ, ENT_COMPRESSION_MASK, ENT_PERM_MASK,
+    FILE_COMPRESSED_BZ2, FILE_COMPRESSED_GZ, FILE_COMPRESSED_NONE, FILE_COMPRESSION_MASK,
+    FORMAT_PHAR, FORMAT_SAME, FORMAT_TAR, FORMAT_ZIP, SIG_MD5, SIG_OPENSSL, SIG_OPENSSL_SHA256,
+    SIG_OPENSSL_SHA512, SIG_SHA1, SIG_SHA256, SIG_SHA512, TAR_DIR, TAR_FILE,
 };
 use crate::error::{PharError, PharResult};
 use crate::registry::{self as reg, EntryRef};
@@ -121,9 +120,9 @@ impl PharObject {
 
     /// The archive (`PHAR_ARCHIVE_OBJECT()`).
     pub fn archive(&self) -> PharResult<ArchiveRef> {
-        self.archive
-            .clone()
-            .ok_or_else(|| PharError::bad_method("Cannot call method on an uninitialized Phar object"))
+        self.archive.clone().ok_or_else(|| {
+            PharError::bad_method("Cannot call method on an uninitialized Phar object")
+        })
     }
 
     /// Whether the constructor ran.
@@ -186,7 +185,7 @@ impl PharObject {
 
     /// `Phar::count()`.
     pub fn count(&self) -> PharResult<i64> {
-        Ok(self.archive()?.borrow().count() as i64)
+        Ok(crate::util::to_i64(self.archive()?.borrow().count()))
     }
 
     /// `Phar::isFileFormat()`.
@@ -308,7 +307,7 @@ impl PharObject {
         Ok(true)
     }
 
-    /// Checks `phar.readonly` (UnexpectedValueException `msg`) and makes a
+    /// Checks `phar.readonly` (`UnexpectedValueException` `msg`) and makes a
     /// cached archive writable.
     fn writable_archive(&mut self, msg: &str) -> PharResult<ArchiveRef> {
         let ar = self.archive()?;
@@ -323,7 +322,7 @@ impl PharObject {
         if !ar.borrow().is_persistent {
             return Ok(ar);
         }
-        let new = reg::copy_on_write(&ar).map_err(|()| {
+        let new = reg::copy_on_write(&ar).ok_or_else(|| {
             PharError::phar(format!(
                 "phar \"{}\" is persistent, unable to copy on write",
                 s(&ar.borrow().fname)
@@ -447,7 +446,11 @@ impl PharObject {
     }
 
     /// `Phar::setDefaultStub()`.
-    pub fn set_default_stub(&mut self, index: Option<&[u8]>, webindex: Option<&[u8]>) -> PharResult<bool> {
+    pub fn set_default_stub(
+        &mut self,
+        index: Option<&[u8]>,
+        webindex: Option<&[u8]>,
+    ) -> PharResult<bool> {
         let ar = self.archive()?;
         {
             let a = ar.borrow();
@@ -500,7 +503,9 @@ impl PharObject {
             SIG_OPENSSL_SHA512,
         ];
         let Some(&algo) = valid.iter().find(|&&v| i64::from(v) == algo) else {
-            return Err(PharError::unexpected("Unknown signature algorithm specified"));
+            return Err(PharError::unexpected(
+                "Unknown signature algorithm specified",
+            ));
         };
         let ar = self.cow()?;
         {
@@ -538,14 +543,18 @@ impl PharObject {
             let img = img.unwrap_or_default();
             let off = usize::try_from(stub.offset_abs).unwrap_or(usize::MAX);
             let data = if compressed {
-                let end = off.saturating_add(stub.compressed_filesize as usize).min(img.len());
+                let end = off
+                    .saturating_add(stub.compressed_filesize as usize)
+                    .min(img.len());
                 let raw = img.get(off..end).unwrap_or_default();
                 let out = if stub.flags & ENT_COMPRESSED_GZ != 0 {
                     crate::compress::inflate_raw(raw).unwrap_or_default()
                 } else {
                     crate::bz2::decompress(raw).0
                 };
-                out.into_iter().take(stub.uncompressed_filesize as usize).collect::<Vec<u8>>()
+                out.into_iter()
+                    .take(stub.uncompressed_filesize as usize)
+                    .collect::<Vec<u8>>()
             } else {
                 img.get(off..off.saturating_add(stub.uncompressed_filesize as usize))
                     .map(<[u8]>::to_vec)
@@ -577,7 +586,10 @@ impl PharObject {
 
     /// `Phar::getMetadata()`.
     pub fn get_metadata(&self, has_options: bool) -> PharResult<MetadataGet> {
-        Ok(metadata_get(&self.archive()?.borrow().metadata, has_options))
+        Ok(metadata_get(
+            &self.archive()?.borrow().metadata,
+            has_options,
+        ))
     }
 
     /// `Phar::setMetadata()`: `serialized` is `serialize($value)`.
@@ -710,7 +722,12 @@ impl PharObject {
 
     /// `Phar::offsetSet($name, resource $value)`: `content` is the stream's
     /// remaining data and `mode` its `fstat()` mode, if any.
-    pub fn offset_set_stream(&mut self, name: &[u8], content: &[u8], mode: Option<u32>) -> PharResult<()> {
+    pub fn offset_set_stream(
+        &mut self,
+        name: &[u8],
+        content: &[u8],
+        mode: Option<u32>,
+    ) -> PharResult<()> {
         self.set_checks(name)?;
         self.add_file_impl(name, None, Some((content, mode)))
     }
@@ -729,8 +746,8 @@ impl PharObject {
         }
         let ar = self.archive()?;
         let fname = ar.borrow().fname.clone();
-        let mut data = reg::get_or_create_entry_data(&fname, name, "w+b", 0, true, now())
-            .map_err(|e| {
+        let mut data =
+            reg::get_or_create_entry_data(&fname, name, "w+b", 0, true, now()).map_err(|e| {
                 PharError::bad_method(match e {
                     Some(e) => format!(
                         "Entry {} does not exist and cannot be created: {e}",
@@ -741,7 +758,10 @@ impl PharObject {
             })?;
         let is_dir = data.with_entry(|e| e.is_dir).unwrap_or(false);
         if !is_dir {
-            let bytes = content.or(stream.map(|(c, _)| c)).unwrap_or_default().to_vec();
+            let bytes = content
+                .or(stream.map(|(c, _)| c))
+                .unwrap_or_default()
+                .to_vec();
             data.with_entry_mut(|e| e.set_content(bytes));
         }
         let stat_mode = stream.and_then(|(_, m)| m);
@@ -787,15 +807,16 @@ impl PharObject {
             ));
         }
         let fname = ar.borrow().fname.clone();
-        let data = reg::get_or_create_entry_data(&fname, dir, "w+b", 2, true, now()).map_err(|e| {
-            PharError::bad_method(match e {
-                Some(e) => format!(
-                    "Directory {} does not exist and cannot be created: {e}",
-                    s(dir)
-                ),
-                None => format!("Directory {} does not exist and cannot be created", s(dir)),
-            })
-        })?;
+        let data =
+            reg::get_or_create_entry_data(&fname, dir, "w+b", 2, true, now()).map_err(|e| {
+                PharError::bad_method(match e {
+                    Some(e) => format!(
+                        "Directory {} does not exist and cannot be created: {e}",
+                        s(dir)
+                    ),
+                    None => format!("Directory {} does not exist and cannot be created", s(dir)),
+                })
+            })?;
         let phar = Rc::clone(&data.archive);
         self.archive = Some(Rc::clone(&phar));
         reg::entry_delref(data);
@@ -891,10 +912,7 @@ impl PharObject {
         newentry.fp_refcount = 0;
         newentry.fileinfo_lock_count = 0;
         if newentry.fp_type != FpType::Fp {
-            let content = ar
-                .borrow_mut()
-                .read_entry(old)
-                .map_err(PharError::phar)?;
+            let content = ar.borrow_mut().read_entry(old).map_err(PharError::phar)?;
             newentry.symlink = None;
             if newentry.is_tar {
                 newentry.tar_type = TAR_FILE;
@@ -921,7 +939,8 @@ impl PharObject {
         let a = ar.borrow();
         let bad = a.manifest.iter().any(|(_, e)| {
             !e.is_deleted
-                && ((!b && e.flags & ENT_COMPRESSED_BZ2 != 0) || (!z && e.flags & ENT_COMPRESSED_GZ != 0))
+                && ((!b && e.flags & ENT_COMPRESSED_BZ2 != 0)
+                    || (!z && e.flags & ENT_COMPRESSED_GZ != 0))
         });
         Ok(!bad)
     }
@@ -958,7 +977,9 @@ impl PharObject {
     pub fn compress_files(&mut self, method: i64) -> PharResult<()> {
         let ar = self.archive()?;
         if reg::readonly() && !ar.borrow().is_data {
-            return Err(PharError::bad_method("Phar is readonly, cannot change compression"));
+            return Err(PharError::bad_method(
+                "Phar is readonly, cannot change compression",
+            ));
         }
         let flags = match method {
             m if m == i64::from(ENT_COMPRESSED_GZ) => {
@@ -1003,7 +1024,9 @@ impl PharObject {
     pub fn decompress_files(&mut self) -> PharResult<bool> {
         let ar = self.archive()?;
         if reg::readonly() && !ar.borrow().is_data {
-            return Err(PharError::bad_method("Phar is readonly, cannot change compression"));
+            return Err(PharError::bad_method(
+                "Phar is readonly, cannot change compression",
+            ));
         }
         if !self.can_compress_all()? {
             return Err(PharError::bad_method("Cannot decompress all files, some are compressed as bzip2 or gzip and cannot be decompressed"));
@@ -1018,7 +1041,12 @@ impl PharObject {
         Ok(true)
     }
 
-    fn whole_method(method: Option<i64>, current: u32, format: i64, prefix: &str) -> PharResult<u32> {
+    fn whole_method(
+        method: Option<i64>,
+        current: u32,
+        format: i64,
+        prefix: &str,
+    ) -> PharResult<u32> {
         let _ = prefix;
         let Some(method) = method else {
             return Ok(current & FILE_COMPRESSION_MASK);
@@ -1167,7 +1195,13 @@ impl PharObject {
             let a = ar.borrow();
             (a.is_tar, a.is_data)
         };
-        convert_to_other(&ar, if is_tar { FORMAT_TAR } else { FORMAT_PHAR }, ext, flags, is_data)
+        convert_to_other(
+            &ar,
+            if is_tar { FORMAT_TAR } else { FORMAT_PHAR },
+            ext,
+            flags,
+            is_data,
+        )
     }
 
     /// `Phar::decompress()`.
@@ -1199,7 +1233,12 @@ impl PharObject {
     // ------------------------------------------------------- extraction
 
     /// `Phar::extractTo()`.
-    pub fn extract_to(&self, path_to: &[u8], files: &ExtractFiles, overwrite: bool) -> PharResult<bool> {
+    pub fn extract_to(
+        &self,
+        path_to: &[u8],
+        files: &ExtractFiles,
+        overwrite: bool,
+    ) -> PharResult<bool> {
         let ar = self.archive()?;
         let fname = ar.borrow().fname.clone();
         if !crate::sys::path(&fname).is_file() {
@@ -1261,9 +1300,8 @@ impl PharObject {
                             "Invalid argument, array of filenames to extract contains non-string value",
                         ));
                     };
-                    match extract_helper(&ar, Some(f), path_to, overwrite).map_err(fail)? {
-                        0 => return Err(missing(f)),
-                        _ => {}
+                    if extract_helper(&ar, Some(f), path_to, overwrite).map_err(fail)? == 0 {
+                        return Err(missing(f));
                     }
                 }
                 Ok(true)
@@ -1308,15 +1346,15 @@ impl PharObject {
     pub fn build_from_directory(
         &mut self,
         dir: &[u8],
-        filter: Option<&dyn Fn(&[u8]) -> bool>,
-    ) -> PharResult<Vec<(Vec<u8>, Vec<u8>)>> {
+        filter: Option<PathFilter<'_>>,
+    ) -> PharResult<BuildResult> {
         let ar = self.archive()?;
         if reg::readonly() && !ar.borrow().is_data {
             return Err(PharError::unexpected(
                 "Cannot write to archive - write operations restricted by INI setting",
             ));
         }
-        let entries = walk_directory(dir).map_err(|e| PharError::unexpected(e))?;
+        let entries = walk_directory(dir).map_err(PharError::unexpected)?;
         let ar = self.cow()?;
         let mut st = BuildState {
             archive: ar,
@@ -1332,7 +1370,7 @@ impl PharObject {
             st.add(
                 BuildItem::FileInfo {
                     pathname: path,
-                    mtime: None,
+                    mtime: MTime::Internal,
                 },
                 "RecursiveIteratorIterator",
             )?;
@@ -1405,18 +1443,37 @@ pub enum BuildItem {
         /// Mode.
         mode: Option<u32>,
     },
-    /// An `SplFileInfo` (its path name; `None` when a user override of
-    /// `getPathname()` did not return a string) and, for user classes, the
-    /// result of `getMTime()` (`Some(None)` when it did not return an int).
+    /// An `SplFileInfo`: its path name and, for user classes, the result
+    /// of `getMTime()`.
     FileInfo {
         /// `getPathname()`.
         pathname: Vec<u8>,
         /// `getMTime()` for user classes.
-        mtime: Option<Option<i64>>,
+        mtime: MTime,
     },
     /// Any other value.
     Invalid,
 }
+
+/// The `getMTime()` result of a user `SplFileInfo` subclass.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MTime {
+    /// Not a user class: the entry gets the current time.
+    Internal,
+    /// The returned integer.
+    Int(i64),
+    /// It did not return an int.
+    NotInt,
+}
+
+/// A `RegexIterator`-like path filter for `buildFromDirectory()`.
+pub type PathFilter<'a> = &'a dyn Fn(&[u8]) -> bool;
+
+/// The `entry => source path` array returned by the build methods.
+pub type BuildResult = Vec<(Vec<u8>, Vec<u8>)>;
+
+/// Source data of one built entry: (key, content, mode, opened path).
+type Resolved = (Vec<u8>, Vec<u8>, Option<u32>, Vec<u8>);
 
 /// State of a running `buildFromIterator()` / `buildFromDirectory()`.
 #[derive(Debug)]
@@ -1432,14 +1489,8 @@ impl BuildState {
     #[allow(clippy::too_many_lines)]
     pub fn add(&mut self, item: BuildItem, class: &str) -> PharResult<()> {
         let fname = self.archive.borrow().fname.clone();
-        let (mut fname_src, str_key, content, mode, opened, mtime): (
-            Vec<u8>,
-            Vec<u8>,
-            Vec<u8>,
-            Option<u32>,
-            Vec<u8>,
-            Option<Option<i64>>,
-        );
+        let (str_key, content, mode, opened): (Vec<u8>, Vec<u8>, Option<u32>, Vec<u8>);
+        let mtime: MTime;
         let invalid_key = || {
             PharError::unexpected(format!(
                 "Iterator {class} returned an invalid key (must return a string)"
@@ -1455,8 +1506,7 @@ impl BuildState {
                 content = c;
                 mode = m;
                 opened = b"[stream]".to_vec();
-                fname_src = Vec::new();
-                mtime = None;
+                mtime = MTime::Internal;
             }
             BuildItem::FileInfo { pathname, mtime: mt } => {
                 if self.base.is_empty() {
@@ -1465,63 +1515,60 @@ impl BuildState {
                 if crate::sys::path(&pathname).is_dir() {
                     return Ok(());
                 }
-                let Some(f) = php_streams::paths::expand_filepath(&pathname) else {
+                let Some(path) = php_streams::paths::expand_filepath(&pathname) else {
                     return Err(PharError::unexpected("Could not resolve file path"));
                 };
                 mtime = mt;
-                let (k, c, m, o) = self.resolve_path(&f, None, class)?;
+                let (k, c, m, o) = self.resolve_path(&path, None, class)?;
                 if k.is_empty() {
                     return Ok(());
                 }
-                fname_src = f;
                 str_key = k;
                 content = c;
                 mode = m;
                 opened = o;
             }
             BuildItem::Path { value, key } => {
-                mtime = None;
-                let (k, c, m, o) = self.resolve_path(&value, Some(key), class)?;
+                mtime = MTime::Internal;
+                let (k, c, m, o) = self.resolve_path(&value, key, class)?;
                 if k.is_empty() && !self.base.is_empty() {
                     return Ok(());
                 }
-                fname_src = value;
                 str_key = k;
                 content = c;
                 mode = m;
                 opened = o;
             }
         }
-        let _ = &mut fname_src;
         if is_magic_phar(&str_key) {
             return Ok(());
         }
         let timestamp = match mtime {
-            Some(Some(t)) => {
+            MTime::Int(t) => {
                 if !(0..=i64::from(u32::MAX)).contains(&t) {
                     return Err(PharError::bad_method(format!(
                         "Entry {} cannot be created: timestamp is limited to 32-bit",
                         s(&str_key)
                     )));
                 }
-                t as u32
+                crate::util::lo32(t)
             }
-            Some(None) => {
+            MTime::NotInt => {
                 return Err(PharError::bad_method(format!(
                     "Entry {} cannot be created: getMTime() must return an int",
                     s(&str_key)
                 )))
             }
-            None => now(),
+            MTime::Internal => now(),
         };
         let mut data = reg::get_or_create_entry_data(&fname, &str_key, "w+b", 0, true, timestamp)
             .map_err(|e| {
-                PharError::bad_method(format!(
-                    "Entry {} cannot be created: {}",
-                    s(&str_key),
-                    e.unwrap_or_default()
-                ))
-            })?;
+            PharError::bad_method(format!(
+                "Entry {} cannot be created: {}",
+                s(&str_key),
+                e.unwrap_or_default()
+            ))
+        })?;
         let len = crate::util::to_u32(content.len());
         data.with_entry_mut(|e| {
             e.data = Some(Rc::new(std::cell::RefCell::new(content)));
@@ -1542,18 +1589,17 @@ impl BuildState {
 
     /// Resolves a source path against the base directory and reads it.
     /// Returns (key, content, mode, opened path); an empty key means skip.
-    #[allow(clippy::type_complexity)]
     fn resolve_path(
         &self,
         fname: &[u8],
-        key: Option<Option<Vec<u8>>>,
+        key: Option<Vec<u8>>,
         class: &str,
-    ) -> PharResult<(Vec<u8>, Vec<u8>, Option<u32>, Vec<u8>)> {
+    ) -> PharResult<Resolved> {
         let str_key: Vec<u8>;
         if self.base.is_empty() {
             match key {
-                Some(Some(k)) => str_key = k,
-                _ => {
+                Some(k) => str_key = k,
+                None => {
                     return Err(PharError::unexpected(format!(
                         "Iterator {class} returned an invalid key (must return a string)"
                     )))
@@ -1567,7 +1613,10 @@ impl BuildState {
             let slash_adj = usize::from(base.last() == Some(&b'/'));
             let ok = fname.len() >= blen
                 && fname.starts_with(&base)
-                && matches!(fname.get(blen - slash_adj).copied().unwrap_or(0), 0 | b'/' | b'\\');
+                && matches!(
+                    fname.get(blen - slash_adj).copied().unwrap_or(0),
+                    0 | b'/' | b'\\'
+                );
             if !ok {
                 return Err(PharError::unexpected(format!(
                     "Iterator {class} returned a path \"{}\" that is not in the base directory \"{}\"",
@@ -1598,20 +1647,22 @@ impl BuildState {
         };
         let mode = php_streams::stat::stat_path(fname)
             .ok()
-            .map(|sb| (sb.mode & 0xFFFF_FFFF) as u32);
+            .map(|sb| crate::util::lo32(sb.mode));
         let opened = php_streams::paths::expand_filepath(fname).unwrap_or_else(|| fname.to_vec());
         Ok((str_key, content, mode, opened))
     }
 
     /// Finishes the build: flushes and returns `entry => source` pairs.
-    pub fn finish(self) -> PharResult<Vec<(Vec<u8>, Vec<u8>)>> {
+    pub fn finish(self) -> PharResult<BuildResult> {
         flush_err(&self.archive)?;
         Ok(self.result)
     }
 }
 
 /// `phar_extract_file()`.
+#[allow(clippy::too_many_lines)]
 fn extract_file(ar: &ArchiveRef, key: &[u8], dest: &[u8], overwrite: bool) -> Result<(), String> {
+    use std::os::unix::fs::PermissionsExt;
     let e = ar.borrow().manifest.get(key).cloned().unwrap_or_default();
     if e.is_mounted || is_magic_phar(&e.filename) {
         return Ok(());
@@ -1648,11 +1699,15 @@ fn extract_file(ar: &ArchiveRef, key: &[u8], dest: &[u8], overwrite: bool) -> Re
         ));
     }
     let dirpart = match filename.iter().rposition(|&c| c == b'/') {
-        Some(p) => fullpath[..dest.len() + p + 1].to_vec(),
+        Some(p) => fullpath[..=(dest.len() + p)].to_vec(),
         None => fullpath[..dest.len()].to_vec(),
     };
     if php_streams::stat::stat_path(&dirpart).is_err() {
-        let mode = if e.is_dir { e.flags & ENT_PERM_MASK } else { 0o777 };
+        let mode = if e.is_dir {
+            e.flags & ENT_PERM_MASK
+        } else {
+            0o777
+        };
         if !mkdir_recursive(&dirpart, mode) {
             return Err(format!(
                 "Cannot extract \"{name}\", could not create directory \"{}\"",
@@ -1682,7 +1737,6 @@ fn extract_file(ar: &ArchiveRef, key: &[u8], dest: &[u8], overwrite: bool) -> Re
     };
     let _ = out.write(&content[..(e.uncompressed_filesize as usize).min(content.len())]);
     out.close();
-    use std::os::unix::fs::PermissionsExt;
     if std::fs::set_permissions(
         crate::sys::path(&fullpath),
         std::fs::Permissions::from_mode(e.flags & ENT_PERM_MASK),
@@ -1697,7 +1751,12 @@ fn extract_file(ar: &ArchiveRef, key: &[u8], dest: &[u8], overwrite: bool) -> Re
 }
 
 /// `extract_helper()`: returns the number of extracted entries.
-fn extract_helper(ar: &ArchiveRef, search: Option<&[u8]>, dest: &[u8], overwrite: bool) -> Result<usize, String> {
+fn extract_helper(
+    ar: &ArchiveRef,
+    search: Option<&[u8]>,
+    dest: &[u8],
+    overwrite: bool,
+) -> Result<usize, String> {
     let keys = ar.borrow().manifest.keys();
     let mut n = 0;
     match search {
@@ -1709,7 +1768,11 @@ fn extract_helper(ar: &ArchiveRef, search: Option<&[u8]>, dest: &[u8], overwrite
         }
         Some(sr) if sr.last() == Some(&b'/') => {
             for k in keys {
-                let starts = ar.borrow().manifest.get(&k).is_some_and(|e| e.filename.starts_with(sr));
+                let starts = ar
+                    .borrow()
+                    .manifest
+                    .get(&k)
+                    .is_some_and(|e| e.filename.starts_with(sr));
                 if !starts {
                     continue;
                 }
@@ -1755,7 +1818,12 @@ fn convert_to_other(
     }
     let keys = source.borrow().manifest.keys();
     for k in keys {
-        let mut e: Entry = source.borrow().manifest.get(&k).cloned().unwrap_or_default();
+        let mut e: Entry = source
+            .borrow()
+            .manifest
+            .get(&k)
+            .cloned()
+            .unwrap_or_default();
         if e.symlink.is_none() && e.tmp.is_none() {
             let content = source.borrow_mut().read_entry(&k).map_err(|err| {
                 PharError::unexpected(format!(
@@ -1810,17 +1878,33 @@ fn rename_archive(mut phar: crate::archive::Archive, ext: Option<&[u8]>) -> Phar
     let ext: Vec<u8> = match ext {
         None => {
             let e: &[u8] = if phar.is_zip {
-                if phar.is_data { b"zip" } else { b"phar.zip" }
+                if phar.is_data {
+                    b"zip"
+                } else {
+                    b"phar.zip"
+                }
             } else if phar.is_tar {
                 match phar.flags {
                     FILE_COMPRESSED_GZ => {
-                        if phar.is_data { b"tar.gz" } else { b"phar.tar.gz" }
+                        if phar.is_data {
+                            b"tar.gz"
+                        } else {
+                            b"phar.tar.gz"
+                        }
                     }
                     FILE_COMPRESSED_BZ2 => {
-                        if phar.is_data { b"tar.bz2" } else { b"phar.tar.bz2" }
+                        if phar.is_data {
+                            b"tar.bz2"
+                        } else {
+                            b"phar.tar.bz2"
+                        }
                     }
                     _ => {
-                        if phar.is_data { b"tar" } else { b"phar.tar" }
+                        if phar.is_data {
+                            b"tar"
+                        } else {
+                            b"phar.tar"
+                        }
                     }
                 }
             } else {
@@ -1896,7 +1980,11 @@ fn rename_archive(mut phar: crate::archive::Archive, ext: Option<&[u8]>) -> Phar
             )));
         }
     }
-    let target_path = if reused.is_some() { old_path.clone() } else { newpath.clone() };
+    let target_path = if reused.is_some() {
+        old_path.clone()
+    } else {
+        newpath.clone()
+    };
     let unref = || {
         if let Some(r) = &reused {
             r.borrow_mut().refcount -= 1;
@@ -1928,19 +2016,17 @@ fn rename_archive(mut phar: crate::archive::Archive, ext: Option<&[u8]>) -> Phar
     ar.borrow_mut().ext_len = ext_len;
     if reused.is_none() {
         let mut a = ar.borrow_mut();
-        if !is_data {
-            if a.alias.is_some() {
-                if a.is_temporary_alias {
-                    a.alias = None;
-                } else {
-                    a.alias = Some(target_path.clone());
-                    a.is_temporary_alias = true;
-                    drop(a);
-                    reg::alias_map_update(&target_path, &ar);
-                }
-            }
-        } else {
+        if is_data {
             a.alias = None;
+        } else if a.alias.is_some() {
+            if a.is_temporary_alias {
+                a.alias = None;
+            } else {
+                a.alias = Some(target_path.clone());
+                a.is_temporary_alias = true;
+                drop(a);
+                reg::alias_map_update(&target_path, &ar);
+            }
         }
         reg::fname_map_update(&target_path, &ar);
     }
@@ -2010,7 +2096,11 @@ pub fn intercept_file_funcs() {
 
 /// `Phar::mapPhar()`: `executed` is the executing file,
 /// `halt_defined` whether `__COMPILER_HALT_OFFSET__` is defined.
-pub fn map_phar(executed: Option<&[u8]>, alias: Option<&[u8]>, halt_defined: bool) -> PharResult<bool> {
+pub fn map_phar(
+    executed: Option<&[u8]>,
+    alias: Option<&[u8]>,
+    halt_defined: bool,
+) -> PharResult<bool> {
     match reg::open_executed_filename(executed, alias, halt_defined) {
         Ok(()) => Ok(true),
         Err(Some(e)) => Err(PharError::phar(e)),
@@ -2069,7 +2159,7 @@ pub fn mount(executed: Option<&[u8]>, path: &[u8], actual: &[u8]) -> PharResult<
     let by_arch = |arch: &[u8], inner: &[u8]| -> PharResult<()> {
         let pphar = match reg::find_by_fname(arch) {
             Some(p) => p,
-            None => match reg::cached(arch).and_then(|c| reg::copy_on_write(&c).ok()) {
+            None => match reg::cached(arch).and_then(|c| reg::copy_on_write(&c)) {
                 Some(p) => p,
                 None => {
                     return Err(PharError::phar(format!(
@@ -2316,7 +2406,7 @@ impl PharFileInfo {
         }
         let ar = self.update(|e| {
             e.flags &= !ENT_PERM_MASK;
-            e.flags |= (perms & 0o777) as u32;
+            e.flags |= crate::util::lo32(perms & 0o777);
             e.old_flags = e.flags;
             e.is_modified = true;
         })?;
@@ -2406,7 +2496,11 @@ impl PharFileInfo {
             ))
         })?;
         let mut data = ar.borrow_mut().read_entry_raw(&link);
-        let size = ar.borrow().manifest.get(&link).map_or(0, |l| l.uncompressed_filesize);
+        let size = ar
+            .borrow()
+            .manifest
+            .get(&link)
+            .map_or(0, |l| l.uncompressed_filesize);
         data.truncate(size as usize);
         Ok(data)
     }
@@ -2427,15 +2521,21 @@ impl PharFileInfo {
             ));
         }
         if reg::readonly() && !ar.borrow().is_data {
-            return Err(PharError::bad_method("Phar is readonly, cannot change compression"));
+            return Err(PharError::bad_method(
+                "Phar is readonly, cannot change compression",
+            ));
         }
         if e.is_deleted {
             return Err(PharError::bad_method("Cannot compress deleted file"));
         }
         let key = er.key().unwrap_or_default().to_vec();
         let (target, other, other_name, this_name) = match method {
-            m if m == i64::from(ENT_COMPRESSED_GZ) => (ENT_COMPRESSED_GZ, ENT_COMPRESSED_BZ2, "bzip2", "gzip"),
-            m if m == i64::from(ENT_COMPRESSED_BZ2) => (ENT_COMPRESSED_BZ2, ENT_COMPRESSED_GZ, "gzip", "bzip2"),
+            m if m == i64::from(ENT_COMPRESSED_GZ) => {
+                (ENT_COMPRESSED_GZ, ENT_COMPRESSED_BZ2, "bzip2", "gzip")
+            }
+            m if m == i64::from(ENT_COMPRESSED_BZ2) => {
+                (ENT_COMPRESSED_BZ2, ENT_COMPRESSED_GZ, "gzip", "bzip2")
+            }
             _ => return Err(PharError::bad_method("Unknown compression type specified")),
         };
         if e.flags & target != 0 {

@@ -27,6 +27,21 @@ pub(crate) fn to_u32(v: usize) -> u32 {
     u32::try_from(v).unwrap_or(u32::MAX)
 }
 
+/// The low 16 bits of a length (C's implicit `uint16_t` truncation).
+pub(crate) fn lo16(v: usize) -> u16 {
+    u16::try_from(v & 0xFFFF).unwrap_or_default()
+}
+
+/// The low 32 bits of a value (C's implicit `uint32_t` truncation).
+pub(crate) fn lo32(v: i64) -> u32 {
+    u32::try_from(v & 0xFFFF_FFFF).unwrap_or_default()
+}
+
+/// `usize` → `i64`, saturating.
+pub(crate) fn to_i64(v: usize) -> i64 {
+    i64::try_from(v).unwrap_or(i64::MAX)
+}
+
 /// `zend_inline_hash_func()` (DJBX33A with the high bit forced on).
 pub fn zend_hash_func(data: &[u8]) -> u64 {
     let mut h: u64 = 5381;
@@ -45,8 +60,8 @@ pub fn entry_inode(fname: &[u8], filename: &[u8]) -> u16 {
     tmp.extend_from_slice(fname);
     tmp.extend_from_slice(filename);
     tmp.truncate(MAXPATHLEN);
-    // Truncation to 16 bits is what `(unsigned short)` does.
-    (zend_hash_func(&tmp) & 0xFFFF) as u16
+    // `(unsigned short)` keeps the low 16 bits.
+    u16::try_from(zend_hash_func(&tmp) & 0xFFFF).unwrap_or_default()
 }
 
 /// `phar_validate_alias()`: aliases may not contain `/ \ : ; \r \n`.
@@ -317,7 +332,10 @@ mod tests {
         assert_eq!(path_check(b"a\0b").0, PathCheck::Err("illegal character"));
         assert_eq!(path_check("é".as_bytes()).0, PathCheck::Ok);
         assert_eq!(path_check(b"\xff").0, PathCheck::Err("illegal character"));
-        assert_eq!(path_check(b"..").0, PathCheck::Err("upper directory reference"));
+        assert_eq!(
+            path_check(b"..").0,
+            PathCheck::Err("upper directory reference")
+        );
     }
 
     #[test]
@@ -344,6 +362,9 @@ mod tests {
         assert_eq!(archive_ext(b"/x/a"), None);
         assert_eq!(parent_dirs(b"a/b/c"), vec![&b"a/b"[..], &b"a"[..]]);
         assert_eq!(hex_upper(&[0xab, 0x01]), b"AB01");
-        assert_eq!(find_ci(b"xx__halt_compiler();", b"__HALT_COMPILER();"), Some(2));
+        assert_eq!(
+            find_ci(b"xx__halt_compiler();", b"__HALT_COMPILER();"),
+            Some(2)
+        );
     }
 }

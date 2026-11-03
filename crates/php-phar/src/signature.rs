@@ -53,7 +53,10 @@ pub fn openssl_algo(sig_type: u32) -> i64 {
 
 /// Whether `sig_type` is one of the OpenSSL signature types.
 pub fn is_openssl(sig_type: u32) -> bool {
-    matches!(sig_type, SIG_OPENSSL | SIG_OPENSSL_SHA256 | SIG_OPENSSL_SHA512)
+    matches!(
+        sig_type,
+        SIG_OPENSSL | SIG_OPENSSL_SHA256 | SIG_OPENSSL_SHA512
+    )
 }
 
 fn digest(algo: &[u8], data: &[u8]) -> Vec<u8> {
@@ -126,7 +129,12 @@ pub fn verify(sig_type: u32, data: &[u8], sig: &[u8], fname: &[u8]) -> Result<Ve
             "broken openssl signature",
             "broken openssl signature",
         ),
-        SIG_SHA256 => check(b"sha256", 32, "broken openssl signature", "broken signature"),
+        SIG_SHA256 => check(
+            b"sha256",
+            32,
+            "broken openssl signature",
+            "broken signature",
+        ),
         SIG_SHA1 => check(b"sha1", 20, "broken signature", "broken signature"),
         SIG_MD5 => check(b"md5", 16, "broken signature", "broken signature"),
         _ => Err("broken or unsupported signature".into()),
@@ -173,7 +181,10 @@ mod tests {
             verify(SIG_SHA1, b"abc", &sig, b"x").unwrap(),
             b"A9993E364706816ABA3E25717850C26C9CD0D89D"
         );
-        assert_eq!(verify(SIG_SHA1, b"abd", &sig, b"x").unwrap_err(), "broken signature");
+        assert_eq!(
+            verify(SIG_SHA1, b"abd", &sig, b"x").unwrap_err(),
+            "broken signature"
+        );
         let mut t = 0;
         let sig = create(&mut t, b"abc", b"", b"x").unwrap();
         assert_eq!(t, SIG_SHA256);

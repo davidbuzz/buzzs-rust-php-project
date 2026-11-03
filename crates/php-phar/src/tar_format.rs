@@ -37,7 +37,9 @@ fn tar_size(buf: &[u8]) -> Option<u32> {
     }
     let mut num: u64 = 0;
     while i < buf.len() && (b'0'..=b'7').contains(&buf[i]) {
-        num = num.saturating_mul(8).saturating_add(u64::from(buf[i] - b'0'));
+        num = num
+            .saturating_mul(8)
+            .saturating_add(u64::from(buf[i] - b'0'));
         i += 1;
     }
     while i < buf.len() && (buf[i] == b' ' || buf[i] == 0) {
@@ -68,7 +70,10 @@ fn tar_checksum(buf: &[u8]) -> u32 {
 }
 
 fn type_has_data(t: u8) -> bool {
-    !matches!(t, TAR_LINK | TAR_SYMLINK | TAR_CHAR | TAR_BLOCK | TAR_DIR | TAR_FIFO)
+    !matches!(
+        t,
+        TAR_LINK | TAR_SYMLINK | TAR_CHAR | TAR_BLOCK | TAR_DIR | TAR_FIFO
+    )
 }
 
 /// `phar_is_tar()`: checks the first header's checksum, or trusts a
@@ -149,7 +154,9 @@ pub fn parse(
     let totalsize = data.len();
     let truncated = || format!("phar error: \"{f}\" is a corrupted tar file (truncated)");
     if totalsize < 512 {
-        return Err(format!("phar error: \"{f}\" is not a tar file or is truncated"));
+        return Err(format!(
+            "phar error: \"{f}\" is not a tar file or is truncated"
+        ));
     }
     let mut buf = data[..512].to_vec();
     let mut cur = 512usize;
@@ -196,10 +203,7 @@ pub fn parse(
             size = (size + 511) & !511;
             skip_to_next = true;
         }
-        if !skip_to_next
-            && ((!old && prefix0 == 0) || old)
-            && cstr(&buf[..100]) == b".phar/signature.bin"
-        {
+        if !skip_to_next && (old || prefix0 == 0) && cstr(&buf[..100]) == b".phar/signature.bin" {
             if size > 511 {
                 return Err(format!(
                     "phar error: tar-based phar \"{f}\" has signature that is larger than 511 bytes, cannot process"
@@ -213,13 +217,16 @@ pub fn parse(
                 ));
             };
             // `PHAR_GET_32` on little-endian reads a single (signed) char.
-            let sig_flags = i32::from(sig[0] as i8) as u32;
+            let sig_flags = if sig[0] >= 0x80 {
+                0xFFFF_FF00 | u32::from(sig[0])
+            } else {
+                u32::from(sig[0])
+            };
             ar.sig_flags = sig_flags;
             let end = curloc - 512;
-            let hex = crate::signature::verify(sig_flags, &data[..end], &sig[8..], fname)
-                .map_err(|e| {
-                    format!("phar error: tar-based phar \"{f}\" signature cannot be verified: {e}")
-                })?;
+            let hex = crate::signature::verify(sig_flags, &data[..end], &sig[8..], fname).map_err(
+                |e| format!("phar error: tar-based phar \"{f}\" signature cannot be verified: {e}"),
+            )?;
             ar.signature = Some(hex);
             cur = curloc + 512;
             if (typeflag == 0 || typeflag == TAR_FILE) && size > 0 {
@@ -294,7 +301,11 @@ pub fn parse(
                 is_crc_checked: true,
                 uncompressed_filesize: size,
                 compressed_filesize: size,
-                tar_type: if old && typeflag == 0 { TAR_FILE } else { typeflag },
+                tar_type: if old && typeflag == 0 {
+                    TAR_FILE
+                } else {
+                    typeflag
+                },
                 offset: pos as u64,
                 offset_abs: pos as u64,
                 fp_type: FpType::Fp,
@@ -412,7 +423,12 @@ fn set_metadata(e: &mut Entry, meta: &Metadata) {
 
 /// Writes one ustar header (and content) — `phar_tar_writeheaders_int()`.
 /// Returns the error message on failure.
-fn write_header(out: &mut Vec<u8>, fname: &[u8], e: &mut Entry, content: &[u8]) -> Result<(), String> {
+fn write_header(
+    out: &mut Vec<u8>,
+    fname: &[u8],
+    e: &mut Entry,
+    content: &[u8],
+) -> Result<(), String> {
     let f = s(fname);
     let name = &e.filename;
     let mut h = [0u8; 512];
@@ -475,12 +491,13 @@ fn write_header(out: &mut Vec<u8>, fname: &[u8], e: &mut Entry, content: &[u8]) 
     }
     e.header_offset = out.len() as u64;
     out.extend_from_slice(&h);
-    let pos = out.len() as u64;
+    let start = out.len();
+    let pos = start as u64;
     if e.uncompressed_filesize > 0 {
         let n = (e.uncompressed_filesize as usize).min(content.len());
         out.extend_from_slice(&content[..n]);
         let total = (e.uncompressed_filesize as usize + 511) & !511;
-        out.resize(pos as usize + total, 0);
+        out.resize(start + total, 0);
     }
     e.is_modified = false;
     e.fp_type = FpType::Fp;
@@ -546,7 +563,9 @@ pub fn flush(
     let mut i = 0;
     loop {
         let keys = ar.manifest.keys();
-        let Some(key) = keys.get(i).cloned() else { break };
+        let Some(key) = keys.get(i).cloned() else {
+            break;
+        };
         i += 1;
         if key.starts_with(b".phar/.metadata") {
             if key == b".phar/.metadata.bin" {

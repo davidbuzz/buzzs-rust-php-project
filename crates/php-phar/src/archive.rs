@@ -14,7 +14,9 @@ use std::rc::Rc;
 
 use php_runtime::Value;
 
-use crate::consts::{ENT_COMPRESSED_BZ2, ENT_COMPRESSED_GZ, ENT_COMPRESSION_MASK, ENT_PERM_DEF_FILE};
+use crate::consts::{
+    ENT_COMPRESSED_BZ2, ENT_COMPRESSED_GZ, ENT_COMPRESSION_MASK, ENT_PERM_DEF_FILE,
+};
 use crate::omap::OrderedMap;
 use crate::util::{get16, get32, parent_dirs, s};
 
@@ -76,6 +78,7 @@ pub enum FpType {
 
 /// One manifest entry (`phar_entry_info`).
 #[derive(Debug, Clone, Default)]
+#[allow(clippy::struct_excessive_bools)] // mirrors the C bit-fields
 pub struct Entry {
     /// The path inside the archive (no leading or trailing `/`).
     pub filename: Vec<u8>,
@@ -170,6 +173,7 @@ impl Entry {
 
 /// An open archive (`phar_archive_data`).
 #[derive(Debug, Default, Clone)]
+#[allow(clippy::struct_excessive_bools)] // mirrors the C bit-fields
 pub struct Archive {
     /// Absolute path of the archive file.
     pub fname: Vec<u8>,
@@ -355,7 +359,11 @@ impl Archive {
     fn verify_zip_local(&mut self, key: &[u8]) -> Result<(), String> {
         let fname = s(&self.fname);
         let Some(img) = self.open_archive_fp() else {
-            let name = self.manifest.get(key).map(|e| s(&e.filename)).unwrap_or_default();
+            let name = self
+                .manifest
+                .get(key)
+                .map(|e| s(&e.filename))
+                .unwrap_or_default();
             return Err(format!(
                 "phar error: unable to open zip-based phar archive \"{fname}\" to verify local file header for file \"{name}\""
             ));
@@ -564,20 +572,29 @@ impl Archive {
         };
         let img = self.open_archive_fp()?;
         let start = usize::try_from(offset).ok()?;
-        img.get(start..start.checked_add(csize as usize)?).map(<[u8]>::to_vec)
+        img.get(start..start.checked_add(csize as usize)?)
+            .map(<[u8]>::to_vec)
     }
 
     /// `phar_separate_entry_fp()` / `phar_copy_entry_fp()`: gives the entry
     /// its own modifiable copy of its content.
     pub fn separate_entry(&mut self, key: &[u8]) -> Result<(), String> {
-        if self.manifest.get(key).is_some_and(|e| e.fp_type == FpType::Mod) {
+        if self
+            .manifest
+            .get(key)
+            .is_some_and(|e| e.fp_type == FpType::Mod)
+        {
             return Ok(());
         }
         let data = self.read_entry(key)?;
         let is_tar = self.is_tar;
         if let Some(e) = self.manifest.get_mut(key) {
             if e.symlink.take().is_some() {
-                e.tar_type = if e.is_tar || is_tar { crate::consts::TAR_FILE } else { 0 };
+                e.tar_type = if e.is_tar || is_tar {
+                    crate::consts::TAR_FILE
+                } else {
+                    0
+                };
             }
             e.data = Some(Rc::new(RefCell::new(data)));
             e.offset = 0;

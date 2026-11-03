@@ -12,6 +12,7 @@ use crate::consts::{
 use crate::util::{find_ci, get16, get32, put16, put32, s, to_u32};
 
 /// `phar_zip_d2u_time()`: DOS date/time to a Unix timestamp (local time).
+#[allow(clippy::similar_names)]
 pub fn d2u_time(dtime: u16, ddate: u16) -> u32 {
     let (dtime, ddate) = (i32::from(dtime), i32::from(ddate));
     let tm = crate::sys::Tm {
@@ -20,10 +21,10 @@ pub fn d2u_time(dtime: u16, ddate: u16) -> u32 {
         mday: ddate & 31,
         hour: (dtime >> 11) & 31,
         min: (dtime >> 5) & 63,
-        sec: (dtime << 1) & 62,
+        sec: (dtime << 1) & 0x3E,
     };
     // Stored in a uint32_t by the caller.
-    (crate::sys::mktime_from_now(tm) & 0xFFFF_FFFF) as u32
+    crate::util::lo32(crate::sys::mktime_from_now(tm))
 }
 
 /// `phar_zip_u2d_time()`: a Unix timestamp to DOS (time, date).
@@ -33,7 +34,8 @@ pub fn u2d_time(t: u32) -> (u16, u16) {
         let cdate = ((tm.year + 1900 - 1980) << 9) + ((tm.mon + 1) << 5) + tm.mday;
         let ctime = (tm.hour << 11) + (tm.min << 5) + (tm.sec >> 1);
         // Truncation to 16 bits as in the C code.
-        ((ctime & 0xFFFF) as u16, (cdate & 0xFFFF) as u16)
+        let lo = |v: i32| u16::try_from(v & 0xFFFF).unwrap_or_default();
+        (lo(ctime), lo(cdate))
     } else {
         (0, (1 << 5) + 1)
     }
@@ -279,11 +281,9 @@ pub fn parse(image: Rc<Vec<u8>>, fname: &[u8], require_hash: bool) -> Result<Par
             6 => return fail("unsupported compression method (Implode) used in this zip"),
             7 => return fail("unsupported compression method (Tokenize) used in this zip"),
             9 => return fail("unsupported compression method (Deflate64) used in this zip"),
-            10 => {
-                return fail(
-                    "unsupported compression method (PKWare Implode/old IBM TERSE) used in this zip",
-                )
-            }
+            10 => return fail(
+                "unsupported compression method (PKWare Implode/old IBM TERSE) used in this zip",
+            ),
             14 => return fail("unsupported compression method (LZMA) used in this zip"),
             18 => return fail("unsupported compression method (IBM TERSE) used in this zip"),
             19 => return fail("unsupported compression method (IBM LZ77) used in this zip"),
@@ -307,13 +307,19 @@ pub fn parse(image: Rc<Vec<u8>>, fname: &[u8], require_hash: bool) -> Result<Par
             {
                 return fail("phar error: internal corruption of zip-based phar (local header of alias does not match central directory)");
             }
-            let off = usize::try_from(e.offset).unwrap_or(usize::MAX).min(data.len());
+            let off = usize::try_from(e.offset)
+                .unwrap_or(usize::MAX)
+                .min(data.len());
             let want = e.uncompressed_filesize as usize;
             let raw = if e.flags & ENT_COMPRESSED_GZ != 0 {
-                let end = off.saturating_add(e.compressed_filesize as usize).min(data.len());
+                let end = off
+                    .saturating_add(e.compressed_filesize as usize)
+                    .min(data.len());
                 crate::compress::inflate_raw(&data[off..end]).unwrap_or_default()
             } else if e.flags & ENT_COMPRESSED_BZ2 != 0 {
-                let end = off.saturating_add(e.compressed_filesize as usize).min(data.len());
+                let end = off
+                    .saturating_add(e.compressed_filesize as usize)
+                    .min(data.len());
                 crate::bz2::decompress(&data[off..end]).0
             } else {
                 data[off..off.saturating_add(want).min(data.len())].to_vec()
@@ -347,7 +353,7 @@ struct Pass {
 }
 
 /// `phar_zip_changed_apply_int()` for one entry.
-#[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_lines, clippy::many_single_char_names)]
 fn write_entry(
     pass: &mut Pass,
     ar: &mut Archive,
@@ -405,7 +411,7 @@ fn write_entry(
         h[..2].copy_from_slice(&t.to_le_bytes());
         h[2..].copy_from_slice(&d.to_le_bytes());
     }
-    let fnlen = to_u32(e.filename.len() + usize::from(e.is_dir)) as u16;
+    let fnlen = crate::util::lo16(e.filename.len() + usize::from(e.is_dir));
     central[28..30].copy_from_slice(&fnlen.to_le_bytes());
     local[26..28].copy_from_slice(&fnlen.to_le_bytes());
     central[8..10].copy_from_slice(&0x0800u16.to_le_bytes());
@@ -432,21 +438,36 @@ fn write_entry(
         } else {
             let content = if let Some(k) = key {
                 ar.open_entry_fp(k, false).map_err(|_| {
-                    format!("unable to open file contents of file \"{name}\" in zip-based phar \"{f}\"")
+                    format!(
+                        "unable to open file contents of file \"{name}\" in zip-based phar \"{f}\""
+                    )
                 })?;
                 ar.read_entry_raw(k)
             } else {
-                e.data.as_ref().map(|d| d.borrow().clone()).unwrap_or_default()
+                e.data
+                    .as_ref()
+                    .map(|d| d.borrow().clone())
+                    .unwrap_or_default()
             };
             if e.flags & ENT_COMPRESSION_MASK != 0 && (e.old_flags == e.flags || e.old_flags == 0) {
                 not_really_modified = true;
-                set_sizes(&mut local, &mut central, e.compressed_filesize, e.uncompressed_filesize);
+                set_sizes(
+                    &mut local,
+                    &mut central,
+                    e.compressed_filesize,
+                    e.uncompressed_filesize,
+                );
             } else {
                 let content = &content[..(e.uncompressed_filesize as usize).min(content.len())];
                 e.crc32 = php_hash::crc32(content);
                 if e.flags & ENT_COMPRESSION_MASK == 0 {
                     e.compressed_filesize = e.uncompressed_filesize;
-                    set_sizes(&mut local, &mut central, e.uncompressed_filesize, e.uncompressed_filesize);
+                    set_sizes(
+                        &mut local,
+                        &mut central,
+                        e.uncompressed_filesize,
+                        e.uncompressed_filesize,
+                    );
                     payload = Some(content.to_vec());
                 } else {
                     let c = if e.flags & ENT_COMPRESSED_GZ != 0 {
@@ -457,11 +478,20 @@ fn write_entry(
                     let Some(c) = c else {
                         return Err(format!(
                             "unable to {} compress file \"{name}\" to zip-based phar \"{f}\"",
-                            if e.flags & ENT_COMPRESSED_GZ != 0 { "gzip" } else { "bzip2" }
+                            if e.flags & ENT_COMPRESSED_GZ != 0 {
+                                "gzip"
+                            } else {
+                                "bzip2"
+                            }
                         ));
                     };
                     e.compressed_filesize = to_u32(c.len());
-                    set_sizes(&mut local, &mut central, e.compressed_filesize, e.uncompressed_filesize);
+                    set_sizes(
+                        &mut local,
+                        &mut central,
+                        e.compressed_filesize,
+                        e.uncompressed_filesize,
+                    );
                     e.old_flags = e.flags;
                     e.is_modified = true;
                     payload = Some(c);
@@ -469,14 +499,19 @@ fn write_entry(
             }
         }
     } else {
-        set_sizes(&mut local, &mut central, e.compressed_filesize, e.uncompressed_filesize);
+        set_sizes(
+            &mut local,
+            &mut central,
+            e.compressed_filesize,
+            e.uncompressed_filesize,
+        );
     }
     if !is_dir_continue {
         central[16..20].copy_from_slice(&e.crc32.to_le_bytes());
         local[14..18].copy_from_slice(&e.crc32.to_le_bytes());
     }
     if e.metadata.has_data() {
-        central[32..34].copy_from_slice(&(e.metadata.bytes().len() as u16).to_le_bytes());
+        central[32..34].copy_from_slice(&crate::util::lo16(e.metadata.bytes().len()).to_le_bytes());
     }
     e.header_offset = pass.filefp.len() as u64;
     let offset = e.header_offset + 30 + e.filename.len() as u64 + u64::from(e.is_dir) + 18;
@@ -640,7 +675,7 @@ pub fn flush(
     put16(&mut out, count);
     put32(&mut out, cdir_size);
     put32(&mut out, cdir_offset);
-    put16(&mut out, meta.len() as u16);
+    put16(&mut out, crate::util::lo16(meta.len()));
     out.extend_from_slice(&meta);
     ar.is_brandnew = false;
     Ok(out)

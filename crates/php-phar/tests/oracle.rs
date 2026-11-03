@@ -77,8 +77,7 @@ fn final_is_data(lines: &[String]) -> bool {
     for l in lines {
         let w: Vec<&str> = l.split(' ').collect();
         match w[0] {
-            "new" => data = w[1] == "data",
-            "convert" => data = w[1] == "data",
+            "new" | "convert" => data = w[1] == "data",
             _ => {}
         }
     }
@@ -105,6 +104,7 @@ fn metadata_value(serialized: &[u8]) -> php_runtime::Value {
 }
 
 /// Replays a recipe with this crate inside `dir`; returns the final path.
+#[allow(clippy::too_many_lines, clippy::many_single_char_names)]
 fn run_recipe(lines: &[String], dir: &Path) -> Vec<u8> {
     let mut obj = PharObject::new(false);
     let mut path = Vec::new();
@@ -274,6 +274,11 @@ fn meta_string(m: &MetadataGet) -> String {
 }
 
 /// The Rust counterpart of `tests/oracle/list.php`.
+#[allow(
+    clippy::format_push_string,
+    clippy::items_after_statements,
+    clippy::too_many_lines
+)]
 fn listing(path: &[u8], is_data: bool) -> String {
     let mut out = String::new();
     let mut p = PharObject::new(is_data);
@@ -290,15 +295,19 @@ fn listing(path: &[u8], is_data: bool) -> String {
     out += &format!("count: {}\n", p.count().unwrap());
     out += &format!(
         "signature: {}\n",
-        p.get_signature().unwrap().map_or("none".to_string(), |s| format!(
-            "{} {}",
-            s.hash_type,
-            String::from_utf8_lossy(&s.hash)
-        ))
+        p.get_signature()
+            .unwrap()
+            .map_or("none".to_string(), |s| format!(
+                "{} {}",
+                s.hash_type,
+                String::from_utf8_lossy(&s.hash)
+            ))
     );
     out += &format!(
         "compressed: {}\n",
-        p.is_compressed().unwrap().map_or("false".to_string(), |c| c.to_string())
+        p.is_compressed()
+            .unwrap()
+            .map_or("false".to_string(), |c| c.to_string())
     );
     out += &format!(
         "format: {}\n",
@@ -310,14 +319,17 @@ fn listing(path: &[u8], is_data: bool) -> String {
             "phar"
         }
     );
-    out += &format!("metadata: {}\n", meta_string(&p.get_metadata(false).unwrap()));
+    out += &format!(
+        "metadata: {}\n",
+        meta_string(&p.get_metadata(false).unwrap())
+    );
     let stub = p.get_stub().unwrap();
     out += &format!("stub: {} {}\n", md5hex(&stub), stub.len());
     let mut prefix = b"phar://".to_vec();
     prefix.extend_from_slice(&p.get_path().unwrap());
     let w = php_phar::wrapper::PharWrapper;
     fn walk(
-        w: &php_phar::wrapper::PharWrapper,
+        w: php_phar::wrapper::PharWrapper,
         dir: &[u8],
         prefix_len: usize,
         out: &mut String,
@@ -367,7 +379,7 @@ fn listing(path: &[u8], is_data: bool) -> String {
         }
         Ok(())
     }
-    if let Err(e) = walk(&w, &prefix, prefix.len(), &mut out) {
+    if let Err(e) = walk(w, &prefix, prefix.len(), &mut out) {
         out += &format!("ITER EXCEPTION {}: {}\n", e.class.name(), e.message);
     }
     p.release();
@@ -381,7 +393,11 @@ fn case_dir(case: &str) -> PathBuf {
 fn fixture_archive(case: &str) -> Option<(PathBuf, i64, String)> {
     let dir = case_dir(case);
     let name = std::fs::read_to_string(dir.join("name")).ok()?;
-    let time = std::fs::read_to_string(dir.join("time")).ok()?.trim().parse().ok()?;
+    let time = std::fs::read_to_string(dir.join("time"))
+        .ok()?
+        .trim()
+        .parse()
+        .ok()?;
     let list = std::fs::read_to_string(dir.join("list.txt")).ok()?;
     Some((dir.join(name.trim()), time, list))
 }
@@ -413,7 +429,11 @@ fn regenerate_fixtures() {
                 work.to_str().unwrap(),
             ]);
             let t1 = php_phar::sys::now();
-            assert!(o.status.success(), "{case}: {}", String::from_utf8_lossy(&o.stderr));
+            assert!(
+                o.status.success(),
+                "{case}: {}",
+                String::from_utf8_lossy(&o.stderr)
+            );
             if t0 != t1 {
                 continue;
             }
@@ -422,7 +442,11 @@ fn regenerate_fixtures() {
             std::fs::copy(&built, dir.join(&name)).unwrap();
             std::fs::write(dir.join("name"), name.to_string_lossy().as_bytes()).unwrap();
             std::fs::write(dir.join("time"), t0.to_string()).unwrap();
-            let kind = if final_is_data(&lines) { "data" } else { "phar" };
+            let kind = if final_is_data(&lines) {
+                "data"
+            } else {
+                "phar"
+            };
             let l = php(&[
                 oracle_dir().join("list.php").to_str().unwrap(),
                 dir.join(&name).to_str().unwrap(),
@@ -509,7 +533,11 @@ fn php_reads_our_archives() {
         let built = run_recipe(&lines, &work);
         registry::reset_request();
         let path = String::from_utf8(built).unwrap();
-        let kind = if final_is_data(&lines) { "data" } else { "phar" };
+        let kind = if final_is_data(&lines) {
+            "data"
+        } else {
+            "phar"
+        };
         let l = php(&[oracle_dir().join("list.php").to_str().unwrap(), &path, kind]);
         registry::set_ini("phar.readonly", true, true);
         let ours = listing(path.as_bytes(), kind == "data");
@@ -578,7 +606,11 @@ fn regenerate_php_src_listings() {
                 kind,
             ]);
             let text = String::from_utf8_lossy(&l.stdout).replace(base.to_str().unwrap(), "%DIR%");
-            std::fs::write(dir.join(format!("{}.{kind}.txt", f.replace('/', "__"))), text).unwrap();
+            std::fs::write(
+                dir.join(format!("{}.{kind}.txt", f.replace('/', "__"))),
+                text,
+            )
+            .unwrap();
         }
     }
 }
@@ -627,9 +659,16 @@ fn reads_php_src_archives_like_php() {
             registry::reset_request();
             checked += 1;
             if ours != expected {
-                failures.push(format!("== {f} ({kind})\n--- php\n{expected}--- ours\n{ours}"));
+                failures.push(format!(
+                    "== {f} ({kind})\n--- php\n{expected}--- ours\n{ours}"
+                ));
             }
         }
     }
-    assert!(failures.is_empty(), "{} of {checked} differ:\n{}", failures.len(), failures.join("\n"));
+    assert!(
+        failures.is_empty(),
+        "{} of {checked} differ:\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
 }
