@@ -2361,7 +2361,17 @@ impl PharFileInfo {
                 s(&ar.borrow().fname)
             ))
         })?;
-        if let Some((a, _)) = self.inner.borrow_mut().as_mut() {
+        if let Some((a, er)) = self.inner.borrow_mut().as_mut() {
+            // Re-point at the copy and take the reference a non-cached
+            // entry holds (lock + archive refcount), so that release()
+            // stays balanced and the copy survives a temporary object.
+            if let EntryRef::Manifest(k) = er {
+                let mut c = new.borrow_mut();
+                if let Some(e) = c.manifest.get_mut(k.as_slice()) {
+                    e.fileinfo_lock_count += 1;
+                }
+                c.refcount += 1;
+            }
             *a = new;
         }
         Ok(())

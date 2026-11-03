@@ -79,6 +79,7 @@ pub(crate) fn register_all(vm: &mut Vm) {
     classes::register(vm);
     crate::weakref::register(vm);
     core::register(vm);
+    crate::gc::register(vm);
     headers::register(vm);
     var::register(vm);
     output::register(vm);

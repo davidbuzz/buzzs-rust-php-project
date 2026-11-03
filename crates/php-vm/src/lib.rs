@@ -27,6 +27,7 @@ pub mod ext;
 mod fiber;
 pub mod func;
 mod generator;
+pub mod gc;
 mod include;
 pub mod interrupt;
 mod iter;

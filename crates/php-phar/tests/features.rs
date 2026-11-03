@@ -853,3 +853,30 @@ fn rewritten_archive_files_are_seen_like_gh13833() {
     registry::set_ini("phar.require_hash", true, true);
     registry::reset_request();
 }
+
+#[test]
+fn temporary_file_info_keeps_the_copied_archive() {
+    // copyonwrite18-22: `$p["test.txt"]->chmod(0444)` on a temporary object
+    writable();
+    streams();
+    let d = workdir("cowtmp");
+    let p = path(&d, "c.phar");
+    let mut o = PharObject::new(false);
+    o.construct(&p, None, 0).unwrap();
+    o.offset_set(b"test.txt", b"x").unwrap();
+    o.release();
+    registry::reset_request();
+    writable();
+    assert!(registry::load_cache_list(&p));
+    let mut fi = PharFileInfo::new();
+    fi.construct(&url(&p, "test.txt")).unwrap();
+    fi.chmod(0o444).unwrap();
+    fi.release();
+    let copy = registry::find_by_fname(&p).expect("copy stays registered");
+    assert!(!copy.borrow().is_persistent);
+    assert_eq!(copy.borrow().refcount, 0);
+    let perms =
+        php_streams::filestat::php_stat(&url(&p, "test.txt"), php_streams::filestat::FsType::Perms);
+    assert_eq!(perms, php_streams::filestat::StatResult::Int(0o100_444));
+    registry::reset_request();
+}
