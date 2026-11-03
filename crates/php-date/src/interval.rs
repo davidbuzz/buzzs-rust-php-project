@@ -65,7 +65,7 @@ fn diff_with_tzid(one: &Time, two: &Time) -> RelTime {
     let mut one = one.clone();
     let mut two = two.clone();
     let mut rt = RelTime {
-        invert: sort_old_to_new(&mut one, &mut two),
+        invert: i32::from(sort_old_to_new(&mut one, &mut two)),
         ..RelTime::default()
     };
     let mut dst_corr = two.z - one.z;
@@ -86,10 +86,10 @@ fn diff_with_tzid(one: &Time, two: &Time) -> RelTime {
         rt.h = flipped / 3600;
         rt.i = (flipped - rt.h * 3600) / 60;
         rt.s = flipped % 60;
-        rt.invert = !rt.invert;
+        rt.invert = 1 - rt.invert;
     }
 
-    if rt.invert {
+    if rt.invert != 0 {
         do_rel_normalize(&mut one, &mut rt);
     } else {
         do_rel_normalize(&mut two, &mut rt);
@@ -134,7 +134,7 @@ pub fn diff(one: &Time, two: &Time) -> RelTime {
     let mut one = one.clone();
     let mut two = two.clone();
     let mut rt = RelTime {
-        invert: sort_old_to_new(&mut one, &mut two),
+        invert: i32::from(sort_old_to_new(&mut one, &mut two)),
         ..RelTime::default()
     };
     rt.y = two.y.wrapping_sub(one.y);
@@ -151,7 +151,7 @@ pub fn diff(one: &Time, two: &Time) -> RelTime {
     rt.s = two.s - one.s - two.z + one.z;
     rt.us = two.us - one.us;
     rt.days = diff_days(&one, &two);
-    if rt.invert {
+    if rt.invert != 0 {
         do_rel_normalize(&mut one, &mut rt);
     } else {
         do_rel_normalize(&mut two, &mut rt);
@@ -179,7 +179,7 @@ pub fn add(old: &Time, interval: &RelTime) -> Time {
     if interval.have_weekday_relative || interval.have_special_relative {
         t.relative = interval.clone();
     } else {
-        let bias = if interval.invert { -1 } else { 1 };
+        let bias = if interval.invert != 0 { -1 } else { 1 };
         t.relative = scaled(interval, bias);
     }
     t.have_relative = true;
@@ -193,7 +193,7 @@ pub fn add(old: &Time, interval: &RelTime) -> Time {
 /// `timelib_sub`: civil subtraction.
 pub fn sub(old: &Time, interval: &RelTime) -> Time {
     let mut t = old.clone();
-    let bias: i64 = if interval.invert { -1 } else { 1 };
+    let bias: i64 = if interval.invert != 0 { -1 } else { 1 };
     t.relative = scaled(interval, -bias);
     t.have_relative = true;
     t.sse_uptodate = false;
@@ -212,7 +212,7 @@ fn wall(old: &Time, interval: &RelTime, sign: i64) -> Time {
         t.update_ts(None);
         t.update_from_sse();
     } else {
-        let bias = if interval.invert { -1 } else { 1 };
+        let bias = if interval.invert != 0 { -1 } else { 1 };
         t.relative = RelTime {
             y: interval.y.wrapping_mul(bias).wrapping_mul(sign),
             m: interval.m.wrapping_mul(bias).wrapping_mul(sign),
@@ -290,11 +290,11 @@ mod tests {
         let b = local(2001, 3, 4, 5, 6, 7, "UTC");
         let r = diff(&a, &b);
         assert_eq!(
-            (r.y, r.m, r.d, r.h, r.i, r.s, r.days, r.invert),
+            (r.y, r.m, r.d, r.h, r.i, r.s, r.days, r.invert != 0),
             (1, 2, 3, 5, 6, 7, 428, false)
         );
         let r = diff(&b, &a);
-        assert!(r.invert);
+        assert_eq!(r.invert, 1);
         assert_eq!(r.days, 428);
     }
 

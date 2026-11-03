@@ -456,8 +456,8 @@ pub fn format_interval(format: &[u8], t: &RelTime) -> Vec<u8> {
                         format!("{}", int(t.days))
                     }
                 }
-                b'r' => (if t.invert { "-" } else { "" }).to_string(),
-                b'R' => (if t.invert { "-" } else { "+" }).to_string(),
+                b'r' => (if t.invert != 0 { "-" } else { "" }).to_string(),
+                b'R' => (if t.invert != 0 { "-" } else { "+" }).to_string(),
                 b'%' => "%".to_string(),
                 other => {
                     out.push(b'%');
@@ -820,7 +820,7 @@ mod tests {
             s: 6,
             us: 7,
             days: UNSET,
-            invert: true,
+            invert: 1,
             ..RelTime::default()
         };
         assert_eq!(

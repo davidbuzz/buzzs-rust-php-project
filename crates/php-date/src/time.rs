@@ -66,8 +66,9 @@ pub struct RelTime {
     pub weekday_behavior: i32,
     /// 0, [`FIRST_DAY_OF_MONTH`] or [`LAST_DAY_OF_MONTH`].
     pub first_last_day_of: i32,
-    /// Whether the interval is negative.
-    pub invert: bool,
+    /// Non-zero if the interval is negative (PHP stores whatever integer is
+    /// assigned to `$interval->invert`).
+    pub invert: i32,
     /// Total number of days for a `diff()` result, [`UNSET`] otherwise.
     pub days: i64,
     /// Special relative type (`SPECIAL_*`), 0 if none.
@@ -810,7 +811,7 @@ fn do_range_limit_days_relative(base_y: &mut i64, base_m: &mut i64, rt: &mut Rel
     do_range_limit(1, 13, 12, base_m, base_y);
     let mut year = *base_y;
     let mut month = *base_m;
-    if rt.invert {
+    if rt.invert != 0 {
         while rt.d < 0 {
             rt.d += month_len(year, month);
             rt.m -= 1;

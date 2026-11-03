@@ -743,6 +743,54 @@ pub fn date_initialize(
     (Some(t), errors)
 }
 
+/// `Failed to parse time string (%s) at position %d (%c): %s` — the message
+/// of `DateMalformedStringException` thrown by constructors and `modify()`
+/// (the VM prefixes `Class::method(): ` where PHP does).
+pub fn parse_failure_message(time_str: &[u8], errors: &Errors) -> Vec<u8> {
+    let mut m = b"Failed to parse time string (".to_vec();
+    m.extend_from_slice(time_str);
+    m.extend_from_slice(b") ");
+    m.extend_from_slice(&errors.first_error_description().unwrap_or_default());
+    m
+}
+
+/// `php_date_initialize_from_hash`: rebuild a date from its `date`,
+/// `timezone_type` and `timezone` properties (`__set_state`,
+/// `__unserialize`, `__wakeup`). `None` means "Invalid serialization data".
+pub fn date_from_hash(
+    date: &[u8],
+    timezone_type: i64,
+    timezone: &[u8],
+    default_tz: &Arc<TzInfo>,
+    now_sec: i64,
+    now_usec: i64,
+) -> Option<Time> {
+    match timezone_type {
+        1 | 2 => {
+            let mut s = date.to_vec();
+            s.push(b' ');
+            s.extend_from_slice(timezone);
+            date_initialize(&s, None, None, default_tz, now_sec, now_usec).0
+        }
+        3 => {
+            let name = std::str::from_utf8(timezone).ok()?;
+            let tz = tz::get(name)?;
+            let zone = TimezoneSpec::Id(tz);
+            date_initialize(date, None, Some(&zone), default_tz, now_sec, now_usec).0
+        }
+        _ => None,
+    }
+}
+
+/// `php_date_timezone_initialize_from_hash`: rebuild a `DateTimeZone`
+/// from its `timezone_type` / `timezone` properties.
+pub fn timezone_from_hash(timezone_type: i64, timezone: &[u8]) -> Option<TimezoneSpec> {
+    if !(1..=3).contains(&timezone_type) || timezone.contains(&0) {
+        return None;
+    }
+    crate::parse::parse_timezone_spec(std::str::from_utf8(timezone).ok()?).ok()
+}
+
 /// `DateTime::createFromTimestamp(int)` / `php_date_initialize_from_ts_long`.
 pub fn from_timestamp(sec: i64, usec: i64) -> Time {
     let mut t = Time {
@@ -946,6 +994,84 @@ impl Interval {
     }
 }
 
+impl Interval {
+    /// Reads a property the way `date_interval_read_property` does
+    /// (`None` for properties not handled specially).
+    #[allow(clippy::cast_precision_loss)]
+    pub fn read_prop(&self, name: &str) -> Option<Value> {
+        let r = &self.rel;
+        Some(match name {
+            "y" => Value::Int(r.y),
+            "m" => Value::Int(r.m),
+            "d" => Value::Int(r.d),
+            "h" => Value::Int(r.h),
+            "i" => Value::Int(r.i),
+            "s" => Value::Int(r.s),
+            "f" => Value::Float(r.us as f64 / 1_000_000.0),
+            "invert" => Value::Int(i64::from(r.invert)),
+            "days" => Value::long_or_false(r.days),
+            _ => return None,
+        })
+    }
+
+    /// Writes an integer property (`date_interval_write_property`, after
+    /// `zval_get_long`); returns `false` for names not handled specially
+    /// (`f` goes through [`Interval::write_f`]).
+    #[allow(clippy::cast_possible_truncation)]
+    pub fn write_prop(&mut self, name: &str, v: i64) -> bool {
+        let r = &mut self.rel;
+        match name {
+            "y" => r.y = v,
+            "m" => r.m = v,
+            "d" => r.d = v,
+            "h" => r.h = v,
+            "i" => r.i = v,
+            "s" => r.s = v,
+            "invert" => r.invert = v as i32,
+            _ => return false,
+        }
+        true
+    }
+
+    /// Writes `f` (seconds fraction, `zval_get_double` * 1e6, truncated).
+    #[allow(clippy::cast_possible_truncation)]
+    pub fn write_f(&mut self, f: f64) {
+        let v = f * 1_000_000.0;
+        self.rel.us = if v.is_finite() && v.abs() < 9.2e18 {
+            v as i64
+        } else {
+            0
+        };
+    }
+
+    /// Restores a `createFromDateString()` interval from its `date_string`
+    /// property (`__unserialize`/`__set_state`). `Err` carries PHP's
+    /// `Unknown or bad format (%s) at position %d (%c) while unserializing: %s`.
+    pub fn from_date_string_property(s: &[u8]) -> Result<Self, Vec<u8>> {
+        let (t, e) = parse_strtotime(s);
+        if let Some(first) = e.errors.first() {
+            let c = if first.character == 0 {
+                b' '
+            } else {
+                first.character
+            };
+            let mut m = b"Unknown or bad format (".to_vec();
+            m.extend_from_slice(s);
+            m.extend_from_slice(format!(") at position {} (", first.position).as_bytes());
+            m.push(c);
+            m.extend_from_slice(b") while unserializing: ");
+            m.extend_from_slice(first.message.as_bytes());
+            return Err(m);
+        }
+        Ok(Self {
+            rel: t.relative,
+            kind: IntervalKind::Civil,
+            from_string: true,
+            date_string: Some(s.to_vec()),
+        })
+    }
+}
+
 /// `new DateInterval($duration)`. On failure returns the
 /// `DateMalformedIntervalStringException` message.
 pub fn interval_from_iso(spec: &[u8]) -> Result<Interval, Vec<u8>> {
@@ -1013,7 +1139,7 @@ pub fn interval_from_date_string(s: &[u8]) -> Result<Interval, DateStringInterva
 pub fn diff(a: &Time, b: &Time, absolute: bool) -> Interval {
     let mut rel = interval::diff(a, b);
     if absolute {
-        rel.invert = false;
+        rel.invert = 0;
     }
     Interval {
         rel,
@@ -1471,6 +1597,41 @@ mod tests {
             DatePeriod::from_iso(b"R4/2012-07-01T00:00:00Z/P7D", EXCLUDE_START_DATE).unwrap();
         assert_eq!(p.dates(100).len(), 4);
         assert_eq!(p.get_recurrences(), Some(4));
+    }
+
+    #[test]
+    fn hash_roundtrips() {
+        let tz = utc();
+        let t = date_from_hash(
+            b"2010-01-01 10:00:00.500000",
+            3,
+            b"Europe/Amsterdam",
+            &tz,
+            0,
+            0,
+        )
+        .unwrap();
+        assert_eq!(
+            format(&t, b"Y-m-d H:i:s.u e"),
+            b"2010-01-01 10:00:00.500000 Europe/Amsterdam"
+        );
+        let t = date_from_hash(b"2010-01-01 10:00:00.000000", 1, b"+05:00", &tz, 0, 0).unwrap();
+        assert_eq!(format(&t, b"c"), b"2010-01-01T10:00:00+05:00");
+        assert!(date_from_hash(b"2010-01-01", 4, b"UTC", &tz, 0, 0).is_none());
+        assert_eq!(timezone_from_hash(2, b"EDT").unwrap().name(), "EDT");
+        assert!(timezone_from_hash(5, b"UTC").is_none());
+        let mut iv = interval_from_iso(b"P1D").unwrap();
+        assert!(iv.write_prop("invert", 5));
+        assert_eq!(iv.read_prop("invert"), Some(Value::Int(5)));
+        assert_eq!(iv.read_prop("days"), Some(Value::Bool(false)));
+        iv.write_f(0.25);
+        assert_eq!(iv.rel.us, 250_000);
+        assert!(Interval::from_date_string_property(b"foo").is_err());
+        let (_, e) = parse_strtotime(b"foo");
+        assert_eq!(
+            parse_failure_message(b"foo", &e),
+            b"Failed to parse time string (foo) at position 0 (f): The timezone could not be found in the database".to_vec()
+        );
     }
 
     #[test]
