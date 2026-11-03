@@ -141,6 +141,39 @@ impl Vm {
         ))
     }
 
+    /// Whether the current code is a hook of property `pi` on `o`.
+    fn in_hook(&self, pi: &PropInfo, o: &Obj) -> bool {
+        let Some(f) = self.frames.iter().rev().find(|f| f.kind != crate::vm::FrameKind::Builtin) else {
+            return false;
+        };
+        let Some(uf) = &f.ufunc else { return false };
+        match &uf.hook_prop {
+            Some(n) => *n == pi.name && f.this.as_ref().is_some_and(|t| Obj::ptr_eq(t, o)),
+            None => false,
+        }
+    }
+
+    fn call_hook(&mut self, o: &Obj, f: &Rc<crate::func::UserFunction>, pi: &PropInfo, args: Vec<Value>) -> VmResult<Value> {
+        let decl = self
+            .class_by_name(f.class_name.as_ref().unwrap_or(&pi.class))
+            .unwrap_or_else(|| object::class_of(o).clone());
+        let mut call = crate::vm::PendingCall {
+            this: Some(o.clone()),
+            scope: Some(decl),
+            called: Some(object::class_of(o).clone()),
+            ..crate::vm::PendingCall::new(crate::func::Func::User(f.clone()))
+        };
+        call.args = args.into_iter().map(Some).collect();
+        self.call_pending(call)
+    }
+
+    fn virtual_error(&mut self, o: &Obj, pi: &PropInfo, msg: &str) -> crate::vm::Throw {
+        self.make_throw(
+            "Error",
+            &format!("{msg} {}::${}", object::display_name(&object::class_of(o).name), pi.name),
+        )
+    }
+
     /// Reads `$o->name`.
     pub(crate) fn read_property(&mut self, o: &Obj, name: &ZStr, mode: FetchMode) -> VmResult<Value> {
         let lazy_target = self.lazy_object_for(o, Some(name))?;
@@ -154,6 +187,18 @@ impl Vm {
         let scope = self.scope();
         match self.lookup_prop(&cls, name, scope.as_ref()) {
             PropLookup::Found(pi) => {
+                if let Some(h) = pi.hooks.clone() {
+                    if !self.in_hook(&pi, o) {
+                        if let Some(g) = &h.get {
+                            return Ok(self.call_hook(o, g, &pi, Vec::new())?.deref());
+                        }
+                        if pi.is_virtual() {
+                            return Err(self.virtual_error(o, &pi, "Cannot read from set-only virtual property"));
+                        }
+                    } else if pi.is_virtual() {
+                        return Err(self.virtual_error(o, &pi, "Must not read from virtual property"));
+                    }
+                }
                 let v = object::data(o).slots.borrow()[pi.slot as usize].clone();
                 if let Some(v) = v {
                     return Ok(v.deref());
@@ -339,6 +384,23 @@ impl Vm {
         let scope = self.scope();
         match self.lookup_prop(&cls, name, scope.as_ref()) {
             PropLookup::Found(pi) => {
+                if let Some(h) = pi.hooks.clone() {
+                    if !self.in_hook(&pi, o) {
+                        if let Some(sh) = &h.set {
+                            if pi.flags & flags::SET_MASK != 0 && !self.has_set_access(&pi) {
+                                let cn = cls.name.clone();
+                                return Err(self.asym_error(&cn, &pi, "modify"));
+                            }
+                            self.call_hook(o, sh, &pi, vec![v.clone()])?;
+                            return Ok(v);
+                        }
+                        if pi.is_virtual() {
+                            return Err(self.virtual_error(o, &pi, "Cannot write to get-only virtual property"));
+                        }
+                    } else if pi.is_virtual() {
+                        return Err(self.virtual_error(o, &pi, "Must not write to virtual property"));
+                    }
+                }
                 let idx = pi.slot as usize;
                 let cur_defined = object::data(o).slots.borrow()[idx].is_some();
                 let magic_ok = !cur_defined
@@ -484,6 +546,53 @@ impl Vm {
         let scope = self.scope();
         match self.lookup_prop(&cls, name, scope.as_ref()) {
             PropLookup::Found(pi) => {
+                if let Some(h) = pi.hooks.clone() {
+                    if !self.in_hook(&pi, o) {
+                        let v = match &h.get {
+                            Some(g) => Some(self.call_hook(o, g, &pi, Vec::new())?),
+                            None => None,
+                        };
+                        let v = match v {
+                            Some(v) => Some(v),
+                            None if pi.is_virtual() => {
+                                return Err(self.virtual_error(o, &pi, "Cannot read from set-only virtual property"));
+                            }
+                            None if h.set.is_some() => None,
+                            None => None,
+                        };
+                        match v {
+                            Some(Value::Object(x)) => return Ok(PropContainer::Value(Value::Object(x))),
+                            Some(Value::Reference(r)) => return Ok(PropContainer::Value(Value::Reference(r))),
+                            Some(_) => {
+                                return Err(self.make_throw(
+                                    "Error",
+                                    &format!(
+                                        "Indirect modification of {}::${} is not allowed",
+                                        object::display_name(&object::class_of(o).name),
+                                        pi.name
+                                    ),
+                                ));
+                            }
+                            None => {
+                                if h.set.is_some() {
+                                    let cur = object::data(o).slots.borrow()[pi.slot as usize].clone();
+                                    if !matches!(cur.as_ref().map(Value::deref), Some(Value::Object(_))) {
+                                        return Err(self.make_throw(
+                                            "Error",
+                                            &format!(
+                                                "Indirect modification of {}::${} is not allowed",
+                                                object::display_name(&object::class_of(o).name),
+                                                pi.name
+                                            ),
+                                        ));
+                                    }
+                                }
+                            }
+                        }
+                    } else if pi.is_virtual() {
+                        return Err(self.virtual_error(o, &pi, "Must not read from virtual property"));
+                    }
+                }
                 let idx = pi.slot as usize;
                 let defined = object::data(o).slots.borrow()[idx].is_some();
                 if !defined && self.has_magic(o, name, G_GET) {
@@ -603,6 +712,9 @@ impl Vm {
         let scope = self.scope();
         match self.lookup_prop(&cls, name, scope.as_ref()) {
             PropLookup::Found(pi) => {
+                if pi.hooks.is_some() {
+                    return Err(self.virtual_error(o, &pi, "Cannot unset hooked property"));
+                }
                 let idx = pi.slot as usize;
                 let init = object::data(o).slots.borrow()[idx].is_some();
                 self.check_write_access(o, &pi, init, "unset")?;
@@ -700,6 +812,11 @@ impl Vm {
         }
         let scope = self.scope();
         let direct: Option<Option<Value>> = match self.lookup_prop(&cls, name, scope.as_ref()) {
+            PropLookup::Found(pi) if pi.hooks.as_ref().is_some_and(|h| h.get.is_some()) && !self.in_hook(&pi, o) => {
+                let g = pi.hooks.as_ref().and_then(|h| h.get.clone()).expect("get hook");
+                let v = self.call_hook(o, &g, &pi, Vec::new())?.deref();
+                return Ok(if empty { !self.to_bool(&v)? } else { !v.is_null() });
+            }
             PropLookup::Found(pi) => {
                 let v = object::data(o).slots.borrow()[pi.slot as usize].clone();
                 match v {
@@ -832,6 +949,9 @@ impl Vm {
         let slots = d.slots.borrow();
         let mut out = Vec::new();
         for pi in &cls.props {
+            if pi.is_virtual() {
+                continue;
+            }
             let v = slots.get(pi.slot as usize).cloned().flatten();
             if v.is_none() && !(include_uninit && pi.ty.is_some()) {
                 continue;
@@ -947,5 +1067,91 @@ pub(crate) fn mangle(pi: &PropInfo) -> ArrayKey {
             ArrayKey::Str(ZStr::from(v))
         }
         _ => ArrayKey::Str(pi.name.clone()),
+    }
+}
+
+fn parent_backing_get(vm: &mut Vm, a: &mut crate::func::Args) -> VmResult<Value> {
+    let o = a.this_obj();
+    let name = crate::builtins::util::s(a, 0);
+    let cls = object::class_of(&o).clone();
+    if let Some(pi) = cls.prop_map.get(&name).cloned() {
+        if pi.is_virtual() {
+            return Err(vm.virtual_error(&o, &pi, "Must not read from virtual property"));
+        }
+        let v = object::data(&o).slots.borrow()[pi.slot as usize].clone();
+        return match v {
+            Some(v) => Ok(v.deref()),
+            None => Err(vm.make_throw(
+                "Error",
+                &format!("Typed property {}::${} must not be accessed before initialization", pi.class, pi.name),
+            )),
+        };
+    }
+    Ok(Value::Null)
+}
+
+fn parent_backing_set(vm: &mut Vm, a: &mut crate::func::Args) -> VmResult<Value> {
+    let o = a.this_obj();
+    let name = crate::builtins::util::s(a, 0);
+    let v = a.at(1);
+    let cls = object::class_of(&o).clone();
+    if let Some(pi) = cls.prop_map.get(&name).cloned() {
+        if pi.is_virtual() {
+            return Err(vm.virtual_error(&o, &pi, "Must not write to virtual property"));
+        }
+        let v = vm.coerce_prop(Some(&o), &pi, v)?;
+        object::data(&o).slots.borrow_mut()[pi.slot as usize] = Some(v.clone());
+        return Ok(v);
+    }
+    Ok(Value::Null)
+}
+
+impl Vm {
+    /// `parent::$prop::get()` / `::set()`.
+    pub(crate) fn op_init_parent_hook(&mut self, prop: ZStr, set: bool) -> VmResult<()> {
+        let scope = self.scope();
+        let this = self.frame().this.clone();
+        let parent = scope.as_ref().and_then(|s| s.parent.clone());
+        let pi = parent.as_ref().and_then(|p| p.prop_map.get(&prop).cloned());
+        let Some(pi) = pi else {
+            return Err(self.make_throw(
+                "Error",
+                &format!("Undefined property {}::${}", parent.map(|p| p.name.to_string_lossy()).unwrap_or_default(), prop),
+            ));
+        };
+        let hook = pi.hooks.as_ref().and_then(|h| if set { h.set.clone() } else { h.get.clone() });
+        let call = match hook {
+            Some(f) => {
+                let decl = self.class_by_name(f.class_name.as_ref().unwrap_or(&pi.class));
+                crate::vm::PendingCall {
+                    this,
+                    scope: decl,
+                    called: self.frame().called.clone(),
+                    ..crate::vm::PendingCall::new(crate::func::Func::User(f))
+                }
+            }
+            None => {
+                let sig = if set { "set(string $name, mixed $value): mixed" } else { "get(string $name): mixed" };
+                let s = crate::builtins::sig::parse_sig(sig);
+                let b = crate::func::Builtin {
+                    name: ZStr::from(format!("${prop}::{}", if set { "set" } else { "get" })),
+                    params: s.params,
+                    defaults: s.defaults,
+                    required: s.required,
+                    return_type: None,
+                    flags: 0,
+                    handler: if set { parent_backing_set } else { parent_backing_get },
+                };
+                let mut c = crate::vm::PendingCall {
+                    this,
+                    scope: scope.clone(),
+                    ..crate::vm::PendingCall::new(crate::func::Func::Builtin(Rc::new(b)))
+                };
+                c.args.push(Some(Value::Str(prop)));
+                c
+            }
+        };
+        self.frame_mut().calls.push(call);
+        Ok(())
     }
 }

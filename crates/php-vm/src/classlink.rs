@@ -659,6 +659,20 @@ impl Vm {
                     }
                 }
             }
+            for pi in &cls.props {
+                if !cls.prop_map.get(&pi.name).is_some_and(|x| Rc::ptr_eq(x, pi)) {
+                    continue;
+                }
+                if let Some(h) = &pi.hooks {
+                    let dn = object::display_name(&h.class);
+                    if h.abstract_get {
+                        missing.push(format!("{dn}::${}::get", pi.name));
+                    }
+                    if h.abstract_set {
+                        missing.push(format!("{dn}::${}::set", pi.name));
+                    }
+                }
+            }
             if !missing.is_empty() {
                 let n = missing.len();
                 let shown: Vec<String> = missing.iter().take(3).cloned().collect();
@@ -916,6 +930,7 @@ fn build_class(
             doc_comment: None,
             attributes: Vec::new(),
             line: decl.line_start,
+            hooks: None,
         };
         all_props.push((mk("name", crate::types::TypeDecl::simple(crate::types::mask::STRING)), name.clone()));
         if let Some(b) = decl.backing {
@@ -1010,6 +1025,7 @@ fn build_class(
             default: pd.default.clone(),
             doc_comment: pd.doc_comment.clone(),
             attributes: pd.attributes.clone(),
+            hooks: pd.hooks.clone(),
         });
         if (slot as usize) < props.len() {
             props[slot as usize] = pi.clone();

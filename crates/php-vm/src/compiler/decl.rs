@@ -3,7 +3,7 @@
 use super::{CResult, ClassCtx, Compiler, FnCtx, FnKind};
 use crate::ast::{self, ClassMemberKind, Expr, ExprKind, Stmt, StmtKind, TypeKind};
 use crate::class::{
-    cflags, ClassDecl, ClassKind, ConstDecl, ConstExpr, MethodDecl, PropDecl, TraitRule,
+    cflags, ClassDecl, ClassKind, ConstDecl, ConstExpr, MethodDecl, PropDecl, PropHooks, TraitRule,
 };
 use crate::func::{flags, ClosureUse, UserFunction};
 use crate::opcode::{Op, Operand, ParamInfo, Place, PlaceBase, Seg};
@@ -294,6 +294,7 @@ impl Compiler {
             uses: ctx_uses,
             class_name: self.current_class().map(|c| c.name.clone()),
             attributes,
+            hook_prop: None,
         })
     }
 
@@ -929,6 +930,18 @@ impl Compiler {
                         } else {
                             0
                         };
+                    if kind == ClassKind::Interface && pg.modifiers.intersects(ast::Modifiers::PROTECTED | ast::Modifiers::PRIVATE) {
+                        return self.err("Property in interface cannot be protected or private", m.span.line);
+                    }
+                    if kind == ClassKind::Interface && pg.modifiers.contains(ast::Modifiers::ABSTRACT) {
+                        return self.err("Property in interface cannot be explicitly abstract. All interface members are implicitly abstract", m.span.line);
+                    }
+                    if kind == ClassKind::Interface && pg.modifiers.contains(ast::Modifiers::FINAL) {
+                        return self.err("Property in interface cannot be final", m.span.line);
+                    }
+                    if pg.modifiers.contains(ast::Modifiers::FINAL) && pg.modifiers.contains(ast::Modifiers::PRIVATE) {
+                        return self.err("Property cannot be both final and private", m.span.line);
+                    }
                     if kind == ClassKind::Interface && pg.props.iter().all(|p| p.hooks.is_none()) {
                         return self.err("Interfaces may not include properties", m.span.line);
                     }
@@ -1020,7 +1033,25 @@ impl Compiler {
                                 }
                             }
                         };
-                        let fl = normalize_set_visibility(self, fl, ty.is_some(), &cname, &p.name.as_str_lossy(), p.span.line)?;
+                        let mut fl = normalize_set_visibility(self, fl, ty.is_some(), &cname, &p.name.as_str_lossy(), p.span.line)?;
+                        let hooks = match &p.hooks {
+                            Some(hs) => {
+                                let (h, virt) = self.compile_prop_hooks(
+                                    &cname,
+                                    &p.name.name,
+                                    pg.ty.as_ref(),
+                                    hs,
+                                    kind == ClassKind::Interface,
+                                    fl,
+                                    p.span.line,
+                                )?;
+                                if virt {
+                                    fl |= flags::VIRTUAL;
+                                }
+                                Some(Rc::new(h))
+                            }
+                            None => None,
+                        };
                         props.push(PropDecl {
                             name: ZStr::from(p.name.name.as_slice()),
                             default,
@@ -1029,6 +1060,7 @@ impl Compiler {
                             doc_comment: p.doc_comment.as_ref().map(|d| ZStr::from(d.as_slice())),
                             attributes: attrs.clone(),
                             line: p.span.line,
+                            hooks,
                         });
                     }
                 }
@@ -1203,6 +1235,7 @@ impl Compiler {
                                 doc_comment: p.doc_comment.as_ref().map(|d| ZStr::from(d.as_slice())),
                                 attributes: attrs,
                                 line: p.span.line,
+                                hooks: None,
                             });
                         }
                     }
@@ -1344,6 +1377,250 @@ impl Compiler {
         }
         Ok((consts, props, methods, traits, rules, cases))
     }
+}
+
+impl Compiler {
+    /// Compiles the hooks of a property; returns the hooks and whether the
+    /// property is virtual.
+    #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+    pub(crate) fn compile_prop_hooks(
+        &mut self,
+        cname: &str,
+        prop: &[u8],
+        prop_ty: Option<&ast::Type>,
+        hooks: &[ast::PropertyHook],
+        is_interface: bool,
+        prop_flags: u32,
+        line: u32,
+    ) -> CResult<(PropHooks, bool)> {
+        let pname = String::from_utf8_lossy(prop).into_owned();
+        if prop_flags & flags::READONLY != 0 {
+            return self.err("Hooked properties cannot be readonly", line);
+        }
+        if hooks.is_empty() {
+            return self.err("Property hook list must not be empty", line);
+        }
+        if prop_flags & flags::STATIC != 0 {
+            return self.err("Cannot declare hooks for static property", line);
+        }
+        let mut out = PropHooks {
+            class: self.current_class().map(|c| c.name.clone()).unwrap_or_default(),
+            ..PropHooks::default()
+        };
+        let mut is_virtual = true;
+        if is_interface {
+            is_virtual = true;
+        }
+        for h in hooks {
+            let hname = h.name.name.to_ascii_lowercase();
+            let is_get = match hname.as_slice() {
+                b"get" => true,
+                b"set" => false,
+                _ => {
+                    return self.err(
+                        format!(
+                            "Unknown hook \"{}\" for property {cname}::${pname}, expected \"get\" or \"set\"",
+                            h.name.as_str_lossy()
+                        ),
+                        h.span.line,
+                    )
+                }
+            };
+            let hm = modifiers_to_flags(h.modifiers);
+            let is_final = h.modifiers.contains(ast::Modifiers::FINAL);
+            if is_final && prop_flags & flags::PRIVATE != 0 {
+                return self.err("Property hook cannot be both final and private", h.span.line);
+            }
+            for (m, n) in [
+                (ast::Modifiers::PUBLIC, "public"),
+                (ast::Modifiers::PROTECTED, "protected"),
+                (ast::Modifiers::PRIVATE, "private"),
+                (ast::Modifiers::STATIC, "static"),
+                (ast::Modifiers::READONLY, "readonly"),
+            ] {
+                if h.modifiers.contains(m) {
+                    return self.err(format!("Cannot use the {n} modifier on a property hook"), h.span.line);
+                }
+            }
+            let _ = hm;
+            let has_body = !matches!(h.body, ast::HookBody::None);
+            let is_abstract = is_interface || (prop_flags & flags::ABSTRACT != 0 && !has_body);
+            if is_abstract {
+                if has_body {
+                    return self.err("Abstract property hook cannot have body", h.span.line);
+                }
+                if prop_flags & flags::PRIVATE != 0 {
+                    return self.err("Property hook cannot be both abstract and private", h.span.line);
+                }
+                if is_final {
+                    return self.err("Property hook cannot be both abstract and final", h.span.line);
+                }
+            } else if !has_body {
+                return self.err("Non-abstract property hook must have a body", h.span.line);
+            }
+            if (is_get && out.get.is_some()) || (!is_get && out.set.is_some()) {
+                return self.err(
+                    format!("Cannot redeclare property hook \"{}\"", h.name.as_str_lossy()),
+                    h.span.line,
+                );
+            }
+            // Parameters.
+            let implicit_param;
+            let params: &[ast::Param] = if is_get {
+                if h.params.is_some() {
+                    return self.err(
+                        format!("get hook of property {cname}::${pname} must not have a parameter list"),
+                        h.span.line,
+                    );
+                }
+                &[]
+            } else if let Some(ps) = &h.params {
+                if ps.len() != 1 {
+                    return self.err(
+                        format!("set hook of property {cname}::${pname} must accept exactly one parameters"),
+                        h.span.line,
+                    );
+                }
+                let p = &ps[0];
+                let n = p.name.as_str_lossy();
+                if p.by_ref {
+                    return self.err(
+                        format!("Parameter ${n} of set hook {cname}::${pname} must not be pass-by-reference"),
+                        h.span.line,
+                    );
+                }
+                if p.variadic {
+                    return self.err(
+                        format!("Parameter ${n} of set hook {cname}::${pname} must not be variadic"),
+                        h.span.line,
+                    );
+                }
+                if p.default.is_some() {
+                    return self.err(
+                        format!("Parameter ${n} of set hook {cname}::${pname} must not have a default value"),
+                        h.span.line,
+                    );
+                }
+                if prop_ty.is_some() != p.ty.is_some() {
+                    return self.err(
+                        format!("Type of parameter ${n} of hook {cname}::${pname}::set must be compatible with property type"),
+                        h.span.line,
+                    );
+                }
+                ps
+            } else {
+                implicit_param = vec![ast::Param {
+                    attributes: Vec::new(),
+                    modifiers: ast::Modifiers::NONE,
+                    ty: prop_ty.cloned(),
+                    by_ref: false,
+                    variadic: false,
+                    name: ast::Ident::new(b"value".to_vec(), h.span),
+                    default: None,
+                    doc_comment: None,
+                    hooks: None,
+                    span: h.span,
+                }];
+                &implicit_param
+            };
+            // Body.
+            let body_stmts: Vec<ast::Stmt>;
+            let body = match &h.body {
+                ast::HookBody::None => BodyKind::None,
+                ast::HookBody::Block(b) => BodyKind::Stmts(b),
+                ast::HookBody::Expr(e) => {
+                    let sp = e.span;
+                    let st = if is_get {
+                        ast::Stmt { kind: ast::StmtKind::Return(Some((**e).clone())), span: sp }
+                    } else {
+                        is_virtual = false;
+                        let target = ast::Expr::new(
+                            ast::ExprKind::Prop {
+                                object: Box::new(ast::Expr::new(
+                                    ast::ExprKind::Var(ast::VarName::Name(ast::Ident::new(b"this".to_vec(), sp))),
+                                    sp,
+                                )),
+                                name: ast::MemberName::Ident(ast::Ident::new(prop.to_vec(), sp)),
+                                nullsafe: false,
+                            },
+                            sp,
+                        );
+                        ast::Stmt {
+                            kind: ast::StmtKind::Expr(ast::Expr::new(
+                                ast::ExprKind::Assign { target: Box::new(target), value: e.clone() },
+                                sp,
+                            )),
+                            span: sp,
+                        }
+                    };
+                    body_stmts = vec![st];
+                    BodyKind::Stmts(&body_stmts)
+                }
+            };
+            let void_ty;
+            let ret: Option<&ast::Type> = if is_get {
+                prop_ty
+            } else {
+                void_ty = ast::Type {
+                    kind: ast::TypeKind::Named(ast::Name {
+                        kind: ast::NameKind::Unqualified,
+                        name: b"void".to_vec(),
+                        span: h.span,
+                    }),
+                    span: h.span,
+                };
+                Some(&void_ty)
+            };
+            let fname = ZStr::from(format!("${pname}::{}", if is_get { "get" } else { "set" }));
+            let spec = BodySpec {
+                kind: FnKind::Method,
+                name: fname.clone(),
+                method_name: fname,
+                params,
+                return_type: ret,
+                by_ref: h.by_ref,
+                is_generator: h.is_generator,
+                is_static: false,
+                line_start: h.span.line,
+                line_end: h.end_line,
+                doc_comment: h.doc_comment.as_ref(),
+                attributes: &h.attributes,
+                is_ctor: false,
+                uses: Vec::new(),
+                has_body,
+            };
+            let saved = self.hook_prop.replace(prop.to_vec());
+            let r = self.compile_body(&spec, body);
+            self.hook_prop = saved;
+            let mut uf = r?;
+            uf.hook_prop = Some(ZStr::from(prop));
+            let vis = if prop_flags & flags::PRIVATE != 0 { flags::PRIVATE } else { flags::PUBLIC };
+            uf.flags |= vis | if is_final { flags::FINAL } else { 0 } | if is_abstract { flags::ABSTRACT } else { 0 };
+            // Backing store usage: `$this->prop` inside the hook body.
+            if has_body && uses_backing(&uf.code, prop) {
+                is_virtual = false;
+            }
+            let uf = Rc::new(uf);
+            if is_get {
+                out.get = Some(uf);
+                out.final_get = is_final;
+                out.abstract_get = is_abstract;
+            } else {
+                out.set = Some(uf);
+                out.final_set = is_final;
+                out.abstract_set = is_abstract;
+            }
+        }
+        Ok((out, is_virtual))
+    }
+}
+
+fn uses_backing(code: &crate::opcode::OpArray, prop: &[u8]) -> bool {
+    code.places.iter().any(|p| {
+        matches!(p.base, crate::opcode::PlaceBase::This)
+            && matches!(p.segs.first(), Some(crate::opcode::Seg::Prop(crate::opcode::Operand::Lit(i)))
+                if matches!(&code.literals[*i as usize], php_runtime::Value::Str(s) if s.as_bytes() == prop))
+    })
 }
 
 /// `zend_declare_typed_property` set-visibility normalization.

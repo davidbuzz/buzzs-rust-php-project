@@ -666,7 +666,7 @@ impl Compiler {
                     fname
                 }
             }
-            MagicConst::Property => Vec::new(),
+            MagicConst::Property => self.hook_prop.clone().unwrap_or_default(),
         };
         Ok(self.lit(Value::Str(ZStr::from(s))))
     }
@@ -1373,6 +1373,50 @@ impl Compiler {
                 let n = self.member_name(name)?;
                 self.f().line = line;
                 self.emit(Op::InitMethodCall { obj: o, name: n });
+                self.finish_call(args, line, need)
+            }
+            ExprKind::StaticCall { class, name, args } if class.is_parent_hook_call(name) => {
+                let ast::ClassRef::Expr(sp) = &**class else { unreachable!("parent hook call") };
+                let ExprKind::StaticProp { name: VarName::Name(prop), .. } = &sp.kind else {
+                    unreachable!("parent hook call")
+                };
+                let MemberName::Ident(kind) = name else { unreachable!("parent hook call") };
+                let is_set = kind.eq_ignore_case("set");
+                let kname = if is_set { "set" } else { "get" };
+                match self.hook_prop.clone() {
+                    None => {
+                        return self.err(
+                            format!("Must not use parent::${}::{kname}() outside a property hook", prop.as_str_lossy()),
+                            line,
+                        )
+                    }
+                    Some(hp) if hp != prop.name => {
+                        return self.err(
+                            format!(
+                                "Must not use parent::${}::{kname}() in a different property (${})",
+                                prop.as_str_lossy(),
+                                String::from_utf8_lossy(&hp)
+                            ),
+                            line,
+                        )
+                    }
+                    Some(_) => {
+                        let cur = self.fref().method_name.to_string_lossy();
+                        if !cur.ends_with(&format!("::{kname}")) {
+                            let other = if is_set { "get" } else { "set" };
+                            return self.err(
+                                format!(
+                                    "Must not use parent::${}::{kname}() in a different property hook ({other})",
+                                    prop.as_str_lossy()
+                                ),
+                                line,
+                            );
+                        }
+                    }
+                }
+                let p = self.lit_str(&prop.name);
+                self.f().line = line;
+                self.emit(Op::InitParentHook { prop: p, set: is_set });
                 self.finish_call(args, line, need)
             }
             ExprKind::StaticCall { class, name, args } => {

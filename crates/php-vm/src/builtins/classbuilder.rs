@@ -202,6 +202,7 @@ impl ClassBuilder {
                     default: def.clone().map(ConstExpr::Value),
                     doc_comment: None,
                     attributes: Vec::new(),
+                    hooks: None,
                 });
                 if (slot as usize) < props.len() {
                     props[slot as usize] = pi.clone();

@@ -518,6 +518,11 @@ impl Vm {
                         self.op_init_static_call(class, n)?;
                         Flow::Next
                     }
+                    Op::InitParentHook { prop, set } => {
+                        let p = self.lit_str(*prop);
+                        self.op_init_parent_hook(p, *set)?;
+                        Flow::Next
+                    }
                     Op::New { class, dst, skip } => {
                         let has_ctor = self.op_new(class, *dst)?;
                         if !has_ctor {

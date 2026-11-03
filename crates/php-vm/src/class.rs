@@ -90,6 +90,25 @@ pub struct ConstDecl {
     pub line: u32,
 }
 
+/// Property hooks (`get`/`set`).
+#[derive(Clone, Debug, Default)]
+pub struct PropHooks {
+    /// The `get` hook.
+    pub get: Option<Rc<UserFunction>>,
+    /// The `set` hook.
+    pub set: Option<Rc<UserFunction>>,
+    /// `final` flags of the hooks (get, set).
+    pub final_get: bool,
+    /// `final` on the set hook.
+    pub final_set: bool,
+    /// Whether the hooks are abstract (interface/abstract property).
+    pub abstract_get: bool,
+    /// Abstract set hook.
+    pub abstract_set: bool,
+    /// Class that declares the hooks.
+    pub class: ZStr,
+}
+
 /// A compiled property declaration.
 #[derive(Clone, Debug)]
 pub struct PropDecl {
@@ -108,6 +127,8 @@ pub struct PropDecl {
     pub attributes: Vec<AttributeInfo>,
     /// Line.
     pub line: u32,
+    /// Property hooks.
+    pub hooks: Option<Rc<PropHooks>>,
 }
 
 /// A compiled method declaration.
@@ -217,9 +238,15 @@ pub struct PropInfo {
     pub doc_comment: Option<ZStr>,
     /// Attributes.
     pub attributes: Vec<AttributeInfo>,
+    /// Property hooks.
+    pub hooks: Option<Rc<PropHooks>>,
 }
 
 impl PropInfo {
+    /// Whether the property is virtual (hooked, no backing store).
+    pub fn is_virtual(&self) -> bool {
+        self.flags & crate::func::flags::VIRTUAL != 0
+    }
     /// Visibility bits.
     pub fn visibility(&self) -> u32 {
         self.flags & crate::func::flags::VISIBILITY

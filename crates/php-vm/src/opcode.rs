@@ -304,6 +304,8 @@ pub enum Op {
     InitMethodCall { obj: Operand, name: Operand },
     /// Starts a static method call.
     InitStaticCall { class: ClassSpec, name: Operand },
+    /// `parent::$prop::get()` / `parent::$prop::set()`.
+    InitParentHook { prop: u32, set: bool },
     /// Creates an object and starts its constructor call; jumps to `skip`
     /// if the class has no constructor.
     New { class: ClassSpec, dst: u32, skip: Label },

@@ -206,6 +206,8 @@ pub(crate) struct Compiler {
     /// Names of functions declared in this file (for redeclare errors).
     pub declared_functions: HashMap<Vec<u8>, u32>,
     pub source: Rc<[u8]>,
+    /// Property name while compiling a property hook (`__PROPERTY__`).
+    pub hook_prop: Option<Vec<u8>>,
     pub closure_depth: u32,
 }
 
@@ -232,6 +234,7 @@ pub fn compile(
         opts,
         declared_functions: HashMap::new(),
         source,
+        hook_prop: None,
         closure_depth: 0,
     };
     for w in &program.warnings {
@@ -275,6 +278,7 @@ pub fn compile(
         uses: Vec::new(),
         class_name: None,
         attributes: Vec::new(),
+        hook_prop: None,
     });
     Ok(CompiledUnit {
         main,

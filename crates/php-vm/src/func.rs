@@ -55,6 +55,8 @@ pub mod flags {
     pub const SET_PROTECTED: u32 = 1 << 20;
     /// `private(set)`
     pub const SET_PRIVATE: u32 = 1 << 21;
+    /// Virtual (hooked, unbacked) property.
+    pub const VIRTUAL: u32 = 1 << 22;
     /// Set-visibility mask.
     pub const SET_MASK: u32 = SET_PUBLIC | SET_PROTECTED | SET_PRIVATE;
 }
@@ -103,6 +105,8 @@ pub struct UserFunction {
     pub class_name: Option<ZStr>,
     /// Attributes (name, args) for reflection.
     pub attributes: Vec<crate::class::AttributeInfo>,
+    /// For property hooks: the property name.
+    pub hook_prop: Option<ZStr>,
 }
 
 impl fmt::Debug for UserFunction {
