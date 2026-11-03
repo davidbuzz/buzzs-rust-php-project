@@ -297,11 +297,18 @@ pub fn socket_client(remote: &[u8], timeout: Option<Duration>) -> Result<Stream,
             let (host, port) = parse_host_port(name)?;
             let addrs: Vec<_> = (host.as_str(), port)
                 .to_socket_addrs()
-                .map_err(|e| ConnectError {
-                    errno: 0,
-                    message: format!(
-                        "php_network_getaddresses: getaddrinfo for {host} failed: {e}"
-                    ),
+                .map_err(|e| {
+                    // `gai_strerror()` text, without std's prefix.
+                    let e = e.to_string();
+                    let reason = e
+                        .strip_prefix("failed to lookup address information: ")
+                        .unwrap_or(&e);
+                    let message = format!(
+                        "php_network_getaddresses: getaddrinfo for {host} failed: {reason}"
+                    );
+                    // php_network_getaddresses() also warns directly.
+                    crate::diag::warning(message.clone());
+                    ConnectError { errno: 0, message }
                 })?
                 .collect();
             if proto == "tcp" {

@@ -259,7 +259,10 @@ pub(crate) fn xport_create(
             ssl_options: ssl_options(ctx.as_ref()),
             context: ctx.clone(),
         };
-        let r = (t.create)(vm, &req)?;
+        let r = (t.create)(vm, &req);
+        // Warnings the transport queued (php_network_getaddresses()).
+        bridge::flush_diags(vm);
+        let r = r?;
         if let Ok(s) = &r {
             if server {
                 xport::note_server(s.id(), &scheme);
