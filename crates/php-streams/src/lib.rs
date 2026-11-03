@@ -11,5 +11,11 @@
 //! filters are traits the VM implements, and warnings are reported through
 //! [`diag`].
 
+pub mod diag;
+pub mod filter;
 pub mod fnmatch;
 pub mod glob;
+pub mod stat;
+pub mod sys;
+pub mod util;
+pub mod value;
