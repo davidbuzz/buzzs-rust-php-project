@@ -27,6 +27,7 @@ php-ext-date = { path = "../php-ext-date" }
 php-ext-session = { path = "../php-ext-session" }
 php-ext-openssl = { path = "../php-ext-openssl" }
 php-ext-posix = { path = "../php-ext-posix" }
+php-ext-iconv = { path = "../php-ext-iconv" }
 php-ext-intl = { path = "../php-ext-intl" }
 php-ext-exif = { path = "../php-ext-exif" }
 php-ext-zlib = { path = "../php-ext-zlib" }
