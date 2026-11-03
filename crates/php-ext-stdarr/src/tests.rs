@@ -22,10 +22,21 @@ impl Write for Sink {
 
 /// Runs `code` (without the `<?php` tag) and returns its output.
 fn run(code: &str) -> String {
+    run_with(&[], code)
+}
+
+/// [`run`] with `-d` INI settings.
+fn run_with(ini: &[(&str, &str)], code: &str) -> String {
     let sink = Sink::default();
     let ext = StdArray;
     let exts: [&dyn Extension; 1] = [&ext];
-    let mut vm = Vm::with_extensions(&VmOptions::default(), Box::new(sink.clone()), &exts);
+    let opts = VmOptions {
+        ini: ini
+            .iter()
+            .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+            .collect(),
+    };
+    let mut vm = Vm::with_extensions(&opts, Box::new(sink.clone()), &exts);
     let src = format!("<?php\n{code}");
     vm.run_script(src.as_bytes(), "test.php");
     let out = sink.0.borrow().clone();
@@ -134,4 +145,50 @@ fn constants_and_misc() {
         "Cannot access offset of type array on array"
     );
     assert_eq!(run("echo implode(',', array_filter([1, 0, 2]));"), "1,2");
+}
+
+#[test]
+fn object_internal_pointer_persists() {
+    let out = run("class T { public int $a; public $b = 1; public $c = 2; }
+        $o = new T;
+        echo @reset($o), @next($o), @key($o), var_export(@next($o), true), var_export(@key($o), true);");
+    // master semantics (GH-16905): uninitialized properties are skipped.
+    assert_eq!(out, "12cfalseNULL");
+}
+
+#[test]
+fn array_splice_detects_destructor_modification() {
+    let out = run(
+        "class C { function __destruct() { global $arr; $arr[] = 0; } }
+        $arr = ['1', new C, '2'];
+        try { array_splice($arr, 1, 2); echo 'no'; } catch (Error $e) { echo $e->getMessage(); }",
+    );
+    assert_eq!(out, "Array was modified during array_splice operation");
+    assert_eq!(
+        run("$a = [1, 2, 3]; $r = array_splice($a, 1, 1); echo implode(',', $a), '|', implode(',', $r);"),
+        "1,3|2"
+    );
+}
+
+#[test]
+fn memory_and_stack_limits() {
+    assert!(
+        run("ini_set('memory_limit', '8M'); $x = range(1, 1000000);")
+            .contains("Allowed memory size of 8388608 bytes exhausted")
+    );
+    assert!(run("array_fill(0, 2147483647, 1);")
+        .contains("Possible integer overflow in memory allocation"));
+    let deep = "$a = []; for ($i = 0; $i < 1000; $i++) { $a = [$a, []]; }";
+    assert_eq!(
+        run(&format!("{deep} echo count($a, COUNT_RECURSIVE);")),
+        "2000"
+    );
+    let limited = run_with(
+        &[("zend.max_allowed_stack_size", "16K")],
+        &format!("{deep} try {{ count($a, COUNT_RECURSIVE); }} catch (Error $e) {{ echo $e->getMessage(); }}"),
+    );
+    assert!(
+        limited.starts_with("Maximum call stack size of"),
+        "{limited}"
+    );
 }

@@ -66,7 +66,7 @@ pub enum Op {
     Prev,
 }
 
-/// Runs `op` on an object's property table (after the "Calling X() on an
+/// Runs `op` on an object's property table (after the "Calling `X()` on an
 /// object is deprecated" deprecation) and remembers the new position.
 pub fn run(vm: &mut Vm, func: &str, obj: &Obj, op: Op) -> VmResult<Value> {
     vm.php_deprecated(&format!("Calling {func}() on an object is deprecated"))?;
