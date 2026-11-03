@@ -152,7 +152,10 @@ fn has_property(vm: &mut Vm, o: &Obj, name: &ZStr, check_empty: bool) -> VmResul
         IssetKind::Isset
     };
     let r = st.borrow().reader.has_property(p, kind);
-    r.map(Some).map_err(|e| throw(vm, &e))
+    // The VM expects "is empty" (not PHP's "is not empty") back for
+    // `empty()`.
+    r.map(|has| Some(if check_empty { !has } else { has }))
+        .map_err(|e| throw(vm, &e))
 }
 
 fn unset_property(vm: &mut Vm, o: &Obj, name: &ZStr) -> VmResult<bool> {
@@ -578,6 +581,12 @@ impl Extension for XmlReaderExt {
             .flags(class_flags::NOT_SERIALIZABLE | class_flags::NO_CLONE);
         for c in table.constants {
             cb = cb.constant(c.name, Value::Int(c.value));
+        }
+        // The virtual properties are declared (uninitialized, so they never
+        // appear in property tables) for `property_exists()` and
+        // reflection; every access goes through the hooks first.
+        for p in &table.properties {
+            cb = cb.prop(p.name, acc::PUBLIC, Some(p.type_), None);
         }
         cb.method("close(): true", pb, close)
             .method("getAttribute(string $name): ?string", pb, get_attribute)

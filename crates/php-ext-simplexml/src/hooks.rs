@@ -189,7 +189,10 @@ fn has_property(vm: &mut Vm, o: &Obj, name: &ZStr, check_empty: bool) -> VmResul
         return Ok(None);
     };
     let kind = check_kind(check_empty);
-    direct(vm, |h| Sxe::has_property(&st, h, name.as_bytes(), kind)).map(Some)
+    let has = direct(vm, |h| Sxe::has_property(&st, h, name.as_bytes(), kind))?;
+    // The VM expects "is empty" (not PHP's "is not empty") back for
+    // `empty()` on properties (unlike `has_dimension`).
+    Ok(Some(if check_empty { !has } else { has }))
 }
 
 fn unset_property(vm: &mut Vm, o: &Obj, name: &ZStr) -> VmResult<bool> {
@@ -204,12 +207,15 @@ fn read_dimension(vm: &mut Vm, o: &Obj, k: &Value) -> VmResult<Option<Value>> {
     let Some(st) = sxe_of(o) else {
         return Ok(None);
     };
-    let mode = fetch_mode(vm);
+    // Compound assignments on a dimension (`$sxe['a'] += 1`) read it with
+    // `BP_VAR_R` before writing (`zend_binary_assign_op_obj_dim`).
+    let mode = match fetch_mode(vm) {
+        FetchMode::ReadWrite => FetchMode::Read,
+        m => m,
+    };
     let key = k.deref();
     let v = direct(vm, |h| Sxe::read_dimension(&st, h, Some(&key), mode))?;
-    if matches!(mode, FetchMode::Write | FetchMode::ReadWrite)
-        && !matches!(v, Value::Object(_) | Value::Reference(_))
-    {
+    if mode == FetchMode::Write && !matches!(v, Value::Object(_) | Value::Reference(_)) {
         // `zend_fetch_dimension_address` on an object in a write context.
         vm.raise(
             8,
