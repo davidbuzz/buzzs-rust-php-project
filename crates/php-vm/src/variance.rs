@@ -2,7 +2,7 @@
 //! `zend_perform_covariant_type_check`) and the "Declaration of ... must be
 //! compatible with ..." diagnostics.
 
-use crate::class::{cflags, Class, ConstExpr};
+use crate::class::{cflags, Class, ClassDecl, ConstExpr};
 use crate::func::{flags, Func, Method};
 use crate::object::display_name;
 use crate::opcode::ParamInfo;
@@ -18,187 +18,466 @@ pub(crate) enum Status {
     Error,
     /// Missing return type on a tentative (internal) prototype.
     Warning,
+    /// A class needed for the check is not available (yet).
+    Unresolved,
 }
 
-fn class_of_name(vm: &Vm, n: &ZStr, scope: &Rc<Class>) -> Option<Rc<Class>> {
-    let lc = n.to_ascii_lowercase();
-    match lc.as_bytes() {
-        b"self" => Some(scope.clone()),
-        b"parent" => scope.parent.clone(),
-        _ => {
-            if scope.lc_name.as_bytes() == lc.as_bytes() {
-                return Some(scope.clone());
+/// A class-like member of a type: a class name or an intersection group.
+enum Member {
+    Class(ZStr),
+    Group(Vec<ZStr>),
+}
+
+/// A type as `zend_perform_covariant_type_check` sees it: `iterable` is
+/// `Traversable|array`.
+struct Ty {
+    mask: u32,
+    members: Vec<Member>,
+    is_intersection: bool,
+}
+
+impl Ty {
+    fn of(t: &TypeDecl) -> Self {
+        let mut mask = t.mask;
+        let mut members = Vec::new();
+        if t.pure_intersection {
+            if let Some(g) = t.intersections.first() {
+                members.extend(g.iter().cloned().map(Member::Class));
             }
-            vm.find_class(n.as_bytes())
+            return Ty {
+                mask,
+                members,
+                is_intersection: true,
+            };
+        }
+        members.extend(t.intersections.iter().cloned().map(Member::Group));
+        members.extend(t.classes.iter().cloned().map(Member::Class));
+        if mask & mask::ITERABLE != 0 {
+            mask = (mask & !mask::ITERABLE) | mask::ARRAY;
+            members.push(Member::Class(ZStr::from("Traversable")));
+        }
+        Ty {
+            mask,
+            members,
+            is_intersection: false,
+        }
+    }
+
+    fn group(g: &[ZStr]) -> Self {
+        Ty {
+            mask: 0,
+            members: g.iter().cloned().map(Member::Class).collect(),
+            is_intersection: true,
+        }
+    }
+
+    fn names(&self) -> impl Iterator<Item = &ZStr> + '_ {
+        self.members.iter().flat_map(|m| match m {
+            Member::Class(n) => std::slice::from_ref(n).iter(),
+            Member::Group(g) => g.iter(),
+        })
+    }
+}
+
+/// A class found by a variance check: linked, or still being linked (only
+/// its declaration is known; `ZEND_FETCH_CLASS_ALLOW_UNLINKED`).
+pub(crate) enum Found {
+    Linked(Rc<Class>),
+    Unlinked(Rc<ClassDecl>),
+}
+
+impl Found {
+    fn name(&self) -> &ZStr {
+        match self {
+            Found::Linked(c) => &c.name,
+            Found::Unlinked(d) => &d.name,
         }
     }
 }
 
-fn resolve2(vm: &Vm, n: &ZStr, s1: &Rc<Class>, s2: &Rc<Class>) -> Option<Rc<Class>> {
-    class_of_name(vm, n, s1).or_else(|| {
-        if s2.lc_name.as_bytes() == n.to_ascii_lowercase().as_bytes() {
-            Some(s2.clone())
+/// Class lookups of a variance check. Names that cannot be resolved yet
+/// are recorded in order (`register_unresolved_classes`, i.e.
+/// `CG(delayed_autoloads)`).
+pub(crate) struct Checker<'a> {
+    vm: &'a Vm,
+    /// The class being linked (not in the class table yet).
+    linking: &'a Rc<Class>,
+    /// Unresolved class names, in registration order.
+    pub(crate) unresolved: Vec<ZStr>,
+}
+
+impl<'a> Checker<'a> {
+    pub(crate) fn new(vm: &'a Vm, linking: &'a Rc<Class>) -> Self {
+        Checker {
+            vm,
+            linking,
+            unresolved: Vec::new(),
+        }
+    }
+
+    /// `resolve_class_name`: `self` / `parent` in `scope`.
+    fn resolve(scope: &Rc<Class>, n: &ZStr) -> ZStr {
+        if n.eq_ignore_ascii_case(b"self") {
+            scope.name.clone()
+        } else if n.eq_ignore_ascii_case(b"parent") {
+            scope.parent_name().cloned().unwrap_or_else(|| n.clone())
         } else {
-            None
+            n.clone()
         }
-    })
-}
+    }
 
-/// Whether class name `a` (in `a_scope`) is a subtype of class name `b`.
-/// Unresolvable classes are treated as compatible (PHP delays the check).
-fn class_subtype(vm: &Vm, a: &ZStr, a_scope: &Rc<Class>, b: &ZStr, b_scope: &Rc<Class>) -> bool {
-    if a.eq_ignore_ascii_case(b.as_bytes()) {
-        return true;
-    }
-    let ca = resolve2(vm, a, a_scope, b_scope);
-    let cb = resolve2(vm, b, b_scope, a_scope);
-    match (ca, cb) {
-        (Some(x), Some(y)) => x.is_subclass_of(&y),
-        _ => true,
-    }
-}
-
-/// `zend_perform_covariant_type_check`: is `fe` a subtype of `proto`?
-pub(crate) fn covariant(vm: &Vm, fe_scope: &Rc<Class>, fe: &TypeDecl, proto_scope: &Rc<Class>, proto: &TypeDecl) -> bool {
-    if proto.is_mixed() && fe.mask & mask::VOID == 0 {
-        return true;
-    }
-    if fe.mask & mask::NEVER != 0 && !fe.has_classes() && fe.mask == mask::NEVER {
-        return true;
-    }
-    let mut fe_mask = fe.mask;
-    let pmask = proto.mask;
-    // static is a subtype of self/object/static.
-    if fe_mask & mask::STATIC != 0 {
-        let ok = pmask & (mask::STATIC | mask::OBJECT) != 0
-            || proto.classes.iter().any(|c| {
-                resolve2(vm, c, proto_scope, fe_scope).is_none_or(|pc| fe_scope.is_subclass_of(&pc))
-            });
-        if !ok {
-            return false;
-        }
-        fe_mask &= !mask::STATIC;
-    }
-    // iterable = Traversable|array.
-    let p_iter = pmask & mask::ITERABLE != 0;
-    if fe_mask & mask::ITERABLE != 0 {
-        let ok = p_iter
-            || (pmask & mask::ARRAY != 0
-                && (pmask & mask::OBJECT != 0
-                    || proto.classes.iter().any(|c| c.eq_ignore_ascii_case(b"Traversable"))));
-        if !ok {
-            return false;
-        }
-        fe_mask &= !mask::ITERABLE;
-    }
-    let mut extra_ok = 0;
-    if p_iter {
-        extra_ok |= mask::ARRAY;
-    }
-    if fe_mask & !(pmask | extra_ok) & !mask::NULL != 0 && !(pmask & mask::BOOL == mask::BOOL && fe_mask & !(pmask | extra_ok) & !mask::NULL & !mask::BOOL == 0) {
-        return false;
-    }
-    if fe_mask & mask::NULL != 0 && pmask & mask::NULL == 0 {
-        return false;
-    }
-    for c in &fe.classes {
-        let fc = resolve2(vm, c, fe_scope, proto_scope);
-        let ok = pmask & mask::OBJECT != 0
-            || (pmask & mask::CALLABLE != 0
-                && fc.as_ref().is_some_and(|x| x.lc_name.as_bytes() == b"closure" || x.methods.contains_key(b"__invoke".as_slice())))
-            || (pmask & mask::STATIC != 0
-                && fe_scope.flags & cflags::FINAL != 0
-                && fc.as_ref().is_some_and(|x| Rc::ptr_eq(x, fe_scope)))
-            || (p_iter && class_of_name(vm, c, fe_scope).is_some_and(|x| x.instance_of_name(b"traversable")))
-            || proto.classes.iter().any(|pc| class_subtype(vm, c, fe_scope, pc, proto_scope))
-            || proto.intersections.iter().any(|g| g.iter().all(|pc| class_subtype(vm, c, fe_scope, pc, proto_scope)))
-            || (pmask & mask::STATIC != 0 && false);
-        if !ok {
-            return false;
-        }
-    }
-    for g in &fe.intersections {
-        let ok = pmask & mask::OBJECT != 0
-            || proto
-                .classes
-                .iter()
-                .any(|pc| g.iter().any(|c| class_subtype(vm, c, fe_scope, pc, proto_scope)))
-            || proto.intersections.iter().any(|pg| {
-                pg.iter().all(|pc| g.iter().any(|c| class_subtype(vm, c, fe_scope, pc, proto_scope)))
-            });
-        if !ok {
-            return false;
-        }
-    }
-    true
-}
-
-
-/// `zend_do_perform_implementation_check`.
-pub(crate) fn implementation_check(
-    vm: &Vm,
-    fe: &Func,
-    fe_flags: u32,
-    fe_scope: &Rc<Class>,
-    proto: &Func,
-    proto_flags: u32,
-    proto_scope: &Rc<Class>,
-) -> Status {
-    if proto.required() < fe.required() {
-        return Status::Error;
-    }
-    if returns_ref(proto, proto_flags) && !returns_ref(fe, fe_flags) {
-        return Status::Error;
-    }
-    let pv = proto.is_variadic();
-    let fv = fe.is_variadic();
-    if pv && !fv {
-        return Status::Error;
-    }
-    let pp = proto.params();
-    let fp = fe.params();
-    let n = pp.len().max(fp.len());
-    for i in 0..n {
-        let pa = pp.get(i).or_else(|| if pv { pp.last() } else { None });
-        let fa = fp.get(i).or_else(|| if fv { fp.last() } else { None });
-        let Some(pa) = pa else { continue };
-        let Some(fa) = fa else { return Status::Error };
-        // Contravariant parameter types.
-        if let Some(ft) = &fa.ty {
-            if !ft.is_mixed() {
-                match &pa.ty {
-                    None => return Status::Error,
-                    Some(pt) => {
-                        if !covariant(vm, proto_scope, pt, fe_scope, ft) {
-                            return Status::Error;
-                        }
-                    }
-                }
+    /// `lookup_class` (`ZEND_FETCH_CLASS_ALLOW_UNLINKED`, no autoloading;
+    /// the class being linked and the scopes involved count as available).
+    fn lookup(&self, scope: &Rc<Class>, n: &ZStr) -> Option<Found> {
+        for c in [self.linking, scope] {
+            if c.name.eq_ignore_ascii_case(n.as_bytes()) {
+                return Some(Found::Linked(c.clone()));
             }
         }
-        if fa.by_ref != pa.by_ref {
-            return Status::Error;
+        self.lookup_global(n)
+    }
+
+    fn lookup_global(&self, n: &ZStr) -> Option<Found> {
+        if self.linking.name.eq_ignore_ascii_case(n.as_bytes()) {
+            return Some(Found::Linked(self.linking.clone()));
+        }
+        self.vm
+            .find_class(n.as_bytes())
+            .map(Found::Linked)
+            .or_else(|| crate::classlink::unlinked_decl(n.as_bytes()).map(Found::Unlinked))
+    }
+
+    /// `unlinked_instanceof`.
+    fn instance_of(&self, a: &Found, b: &Found, depth: u32) -> bool {
+        if a.name().eq_ignore_ascii_case(b.name().as_bytes()) {
+            return true;
+        }
+        match (a, b) {
+            (Found::Linked(x), Found::Linked(y)) => x.is_subclass_of(y),
+            (Found::Linked(_), Found::Unlinked(_)) => false,
+            (Found::Unlinked(d), _) => {
+                if depth > 64 {
+                    return false;
+                }
+                d.parent
+                    .iter()
+                    .chain(d.interfaces.iter())
+                    .filter(|n| !n.eq_ignore_ascii_case(d.name.as_bytes()))
+                    .any(|n| {
+                        self.lookup_global(n)
+                            .is_some_and(|p| self.instance_of(&p, b, depth + 1))
+                    })
+            }
         }
     }
-    if let Some(prt) = proto.return_type() {
-        match fe.return_type() {
-            None => {
-                if !proto.is_user() {
-                    return Status::Warning;
-                }
+
+    fn register_unresolved(&mut self, scope: &Rc<Class>, t: &Ty) {
+        for n in t.names() {
+            let n = Self::resolve(scope, n);
+            if self.lookup(scope, &n).is_none()
+                && !self.unresolved.iter().any(|u| u.eq_ignore_ascii_case(n.as_bytes()))
+            {
+                self.unresolved.push(n);
+            }
+        }
+    }
+
+    /// `zend_type_permits_self`.
+    fn permits_self(&self, proto: &Ty, proto_scope: &Rc<Class>, fe_scope: &Rc<Class>) -> bool {
+        if proto.mask & mask::OBJECT != 0 {
+            return true;
+        }
+        proto.members.iter().any(|m| match m {
+            Member::Class(n) => self
+                .lookup(fe_scope, &Self::resolve(proto_scope, n))
+                .is_some_and(|c| self.instance_of(&Found::Linked(fe_scope.clone()), &c, 0)),
+            Member::Group(_) => false,
+        })
+    }
+
+    /// `zend_perform_covariant_type_check`: is `fe` a subtype of `proto`?
+    pub(crate) fn covariant(
+        &mut self,
+        fe_scope: &Rc<Class>,
+        fe: &TypeDecl,
+        proto_scope: &Rc<Class>,
+        proto: &TypeDecl,
+    ) -> Status {
+        let (fe, proto) = (Ty::of(fe), Ty::of(proto));
+        // Everything but void is trivially covariant to mixed.
+        if proto.mask & mask::ANY == mask::ANY && proto.members.is_empty() && fe.mask & mask::VOID == 0 {
+            return Status::Ok;
+        }
+        // Builtin types may be removed, but not added.
+        let mut added = fe.mask & !proto.mask;
+        if added != 0 {
+            if added & mask::STATIC != 0 && self.permits_self(&proto, proto_scope, fe_scope) {
+                added &= !mask::STATIC;
+            }
+            if added == mask::NEVER {
+                return Status::Ok;
+            }
+            if added != 0 {
                 return Status::Error;
             }
-            Some(frt) => {
-                if !covariant(vm, fe_scope, frt, proto_scope, prt) {
-                    if !proto.is_user() {
-                        return Status::Warning;
+        }
+        let mut have_unresolved = false;
+        let early = if fe.is_intersection {
+            let early = if proto.is_intersection {
+                Status::Error
+            } else {
+                Status::Ok
+            };
+            let st = self.intersection_subtype_of_type(fe_scope, &fe, proto_scope, &proto);
+            if st == early {
+                return st;
+            }
+            have_unresolved = st == Status::Unresolved;
+            early
+        } else {
+            for m in &fe.members {
+                let st = match m {
+                    Member::Group(g) => {
+                        self.intersection_subtype_of_type(fe_scope, &Ty::group(g), proto_scope, &proto)
                     }
-                    return Status::Error;
+                    Member::Class(n) => {
+                        let n = Self::resolve(fe_scope, n);
+                        self.class_subtype_of_type(fe_scope, &n, proto_scope, &proto)
+                    }
+                };
+                if st == Status::Error {
+                    return st;
+                }
+                have_unresolved |= st == Status::Unresolved;
+            }
+            Status::Error
+        };
+        if !have_unresolved {
+            return if early == Status::Error {
+                Status::Ok
+            } else {
+                Status::Error
+            };
+        }
+        self.register_unresolved(fe_scope, &fe);
+        self.register_unresolved(proto_scope, &proto);
+        Status::Unresolved
+    }
+
+    /// `zend_is_class_subtype_of_type`.
+    fn class_subtype_of_type(
+        &mut self,
+        fe_scope: &Rc<Class>,
+        fe_name: &ZStr,
+        proto_scope: &Rc<Class>,
+        proto: &Ty,
+    ) -> Status {
+        let fe_ce = self.lookup(fe_scope, fe_name);
+        let mut have_unresolved = false;
+        if proto.mask & mask::OBJECT != 0 {
+            if fe_ce.is_some() {
+                return Status::Ok;
+            }
+            have_unresolved = true;
+        }
+        if proto.mask & mask::CALLABLE != 0 {
+            match &fe_ce {
+                None => have_unresolved = true,
+                Some(c) if c.name().eq_ignore_ascii_case(b"closure") => return Status::Ok,
+                Some(_) => {}
+            }
+        }
+        if proto.mask & mask::STATIC != 0 && fe_scope.flags & cflags::FINAL != 0 {
+            match &fe_ce {
+                None => have_unresolved = true,
+                Some(Found::Linked(c)) if Rc::ptr_eq(c, fe_scope) => return Status::Ok,
+                Some(_) => {}
+            }
+        }
+        let inter = proto.is_intersection;
+        for m in &proto.members {
+            match m {
+                Member::Group(g) => {
+                    match self.class_subtype_of_type(fe_scope, fe_name, proto_scope, &Ty::group(g)) {
+                        Status::Error if inter => return Status::Error,
+                        Status::Unresolved => have_unresolved = true,
+                        Status::Ok if !inter => return Status::Ok,
+                        _ => {}
+                    }
+                }
+                Member::Class(n) => {
+                    let pn = Self::resolve(proto_scope, n);
+                    if pn.eq_ignore_ascii_case(fe_name.as_bytes()) {
+                        if !inter {
+                            return Status::Ok;
+                        }
+                        continue;
+                    }
+                    let proto_ce = self.lookup(proto_scope, &pn);
+                    let (Some(f), Some(p)) = (&fe_ce, &proto_ce) else {
+                        have_unresolved = true;
+                        continue;
+                    };
+                    if self.instance_of(f, p, 0) {
+                        if !inter {
+                            return Status::Ok;
+                        }
+                    } else if inter {
+                        return Status::Error;
+                    }
                 }
             }
         }
+        if have_unresolved {
+            Status::Unresolved
+        } else if inter {
+            Status::Ok
+        } else {
+            Status::Error
+        }
     }
-    Status::Ok
+
+    /// `zend_is_intersection_subtype_of_class`.
+    fn intersection_subtype_of_class(
+        &self,
+        fe_scope: &Rc<Class>,
+        fe: &Ty,
+        proto_scope: &Rc<Class>,
+        proto_name: &ZStr,
+    ) -> Status {
+        let mut have_unresolved = false;
+        let proto_ce = self.lookup(proto_scope, proto_name);
+        for n in fe.names() {
+            let n = Self::resolve(fe_scope, n);
+            if n.eq_ignore_ascii_case(proto_name.as_bytes()) {
+                return Status::Ok;
+            }
+            let (Some(f), Some(p)) = (self.lookup(fe_scope, &n), &proto_ce) else {
+                have_unresolved = true;
+                continue;
+            };
+            if self.instance_of(&f, p, 0) {
+                return Status::Ok;
+            }
+        }
+        if have_unresolved {
+            Status::Unresolved
+        } else {
+            Status::Error
+        }
+    }
+
+    /// `zend_is_intersection_subtype_of_type`.
+    fn intersection_subtype_of_type(
+        &mut self,
+        fe_scope: &Rc<Class>,
+        fe: &Ty,
+        proto_scope: &Rc<Class>,
+        proto: &Ty,
+    ) -> Status {
+        let mut have_unresolved = false;
+        if proto.mask & mask::OBJECT != 0 {
+            for n in fe.names() {
+                if self.lookup(fe_scope, &Self::resolve(fe_scope, n)).is_some() {
+                    return Status::Ok;
+                }
+                have_unresolved = true;
+            }
+        }
+        let early = if proto.is_intersection {
+            Status::Error
+        } else {
+            Status::Ok
+        };
+        for m in &proto.members {
+            let st = match m {
+                Member::Group(g) => self.intersection_subtype_of_type(fe_scope, fe, proto_scope, &Ty::group(g)),
+                Member::Class(n) => {
+                    let pn = Self::resolve(proto_scope, n);
+                    self.intersection_subtype_of_class(fe_scope, fe, proto_scope, &pn)
+                }
+            };
+            if st == early {
+                return st;
+            }
+            have_unresolved |= st == Status::Unresolved;
+        }
+        if have_unresolved {
+            Status::Unresolved
+        } else if early == Status::Error {
+            Status::Ok
+        } else {
+            Status::Error
+        }
+    }
+
+    /// `zend_do_perform_implementation_check`.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn implementation_check(
+        &mut self,
+        fe: &Func,
+        fe_flags: u32,
+        fe_scope: &Rc<Class>,
+        proto: &Func,
+        proto_flags: u32,
+        proto_scope: &Rc<Class>,
+    ) -> Status {
+        if proto.required() < fe.required() {
+            return Status::Error;
+        }
+        if returns_ref(proto, proto_flags) && !returns_ref(fe, fe_flags) {
+            return Status::Error;
+        }
+        let pv = proto.is_variadic();
+        let fv = fe.is_variadic();
+        if pv && !fv {
+            return Status::Error;
+        }
+        let pp = proto.params();
+        let fp = fe.params();
+        let mut status = Status::Ok;
+        for i in 0..pp.len().max(fp.len()) {
+            let pa = pp.get(i).or_else(|| if pv { pp.last() } else { None });
+            let fa = fp.get(i).or_else(|| if fv { fp.last() } else { None });
+            let Some(pa) = pa else { continue };
+            let Some(fa) = fa else { return Status::Error };
+            // Contravariant parameter types.
+            if let Some(ft) = fa.ty.as_ref().filter(|t| !t.is_mixed()) {
+                let Some(pt) = &pa.ty else {
+                    return Status::Error;
+                };
+                match self.covariant(proto_scope, pt, fe_scope, ft) {
+                    Status::Error => return Status::Error,
+                    Status::Unresolved => status = Status::Unresolved,
+                    _ => {}
+                }
+            }
+            if fa.by_ref != pa.by_ref {
+                return Status::Error;
+            }
+        }
+        // Return types are covariant; a tentative (internal) prototype
+        // return type only warns.
+        if let Some(prt) = proto.return_type() {
+            let tentative = !proto.is_user();
+            let Some(frt) = fe.return_type() else {
+                if !tentative {
+                    return Status::Error;
+                }
+                return if status == Status::Ok {
+                    Status::Warning
+                } else {
+                    status
+                };
+            };
+            match self.covariant(fe_scope, frt, proto_scope, prt) {
+                Status::Ok => {}
+                Status::Error if tentative => return Status::Warning,
+                st => return st,
+            }
+        }
+        status
+    }
 }
 
 /// Whether a method returns by reference (the flag is on the function).
@@ -322,13 +601,116 @@ pub(crate) fn declaration_as(f: &Func, fflags: u32, shown: &ZStr, scope: &Rc<Cla
     s
 }
 
-/// Checks the overriding methods of a freshly linked class; returns the
-/// fatal error (message, line) or deprecations to emit.
-pub(crate) fn check_class(
-    vm: &Vm,
-    cls: &Rc<Class>,
-) -> (Option<(String, ZStr, u32)>, Vec<(String, u32)>) {
-    let mut warnings = Vec::new();
+/// A method that must be compatible with a prototype, with the scopes
+/// its declaration is shown under (`common.scope`) and resolved in
+/// (`fixup_trait_scope`).
+pub(crate) struct Obligation {
+    pub(crate) child: Rc<Method>,
+    pub(crate) child_name: ZStr,
+    pub(crate) child_scope: Rc<Class>,
+    pub(crate) proto: Rc<Method>,
+    pub(crate) proto_name: ZStr,
+    pub(crate) proto_scope: Rc<Class>,
+}
+
+impl Obligation {
+    /// Runs the implementation check; unresolved class names are added to
+    /// `unresolved`.
+    pub(crate) fn check(&self, vm: &Vm, linking: &Rc<Class>, unresolved: &mut Vec<ZStr>) -> Status {
+        let mut c = Checker::new(vm, linking);
+        let st = c.implementation_check(
+            &self.child.func,
+            self.child.flags,
+            &self.child_scope,
+            &self.proto.func,
+            self.proto.flags,
+            &self.proto_scope,
+        );
+        for n in c.unresolved {
+            if !unresolved.iter().any(|u| u.eq_ignore_ascii_case(n.as_bytes())) {
+                unresolved.push(n);
+            }
+        }
+        st
+    }
+
+    /// `emit_incompatible_method_error` for a failed check: the fatal error
+    /// (message, file, line), or for `Status::Warning` the deprecation
+    /// message (`None` when `#[\ReturnTypeWillChange]` suppresses it).
+    pub(crate) fn message(&self, st: Status, unresolved: Option<&ZStr>) -> Option<(String, ZStr, u32)> {
+        let child = declaration_as(&self.child.func, self.child.flags, &self.child_name, &self.child_scope);
+        let parent = declaration_as(&self.proto.func, self.proto.flags, &self.proto_name, &self.proto_scope);
+        let (file, line) = func_location(&self.child.func);
+        let msg = match st {
+            Status::Ok => return None,
+            Status::Warning => {
+                let rtwc = match &self.child.func {
+                    Func::User(u) => u
+                        .attributes
+                        .iter()
+                        .any(|a| a.name.eq_ignore_ascii_case(b"ReturnTypeWillChange")),
+                    Func::Builtin(_) => true,
+                };
+                if rtwc {
+                    return None;
+                }
+                format!(
+                    "Return type of {child} should either be compatible with {parent}, or the #[\\ReturnTypeWillChange] attribute should be used to temporarily suppress the notice"
+                )
+            }
+            Status::Unresolved => format!(
+                "Could not check compatibility between {child} and {parent}, because class {} is not available",
+                unresolved.map(ZStr::to_string_lossy).unwrap_or_default()
+            ),
+            Status::Error => format!("Declaration of {child} must be compatible with {parent}"),
+        };
+        Some((msg, file, line))
+    }
+}
+
+/// The outcome of the signature checks of a freshly linked class.
+#[derive(Default)]
+pub(crate) struct ClassCheck {
+    /// The first fatal error (message, file, line).
+    pub(crate) error: Option<(String, ZStr, u32)>,
+    /// Deprecations (message, line).
+    pub(crate) warnings: Vec<(String, u32)>,
+    /// Checks that need classes which are not available yet
+    /// (`add_compatibility_obligation`).
+    pub(crate) pending: Vec<Obligation>,
+    /// The classes they need, in registration order.
+    pub(crate) unresolved: Vec<ZStr>,
+}
+
+impl ClassCheck {
+    /// Records the result of an obligation's first check
+    /// (`perform_delayable_implementation_check`); returns whether it
+    /// failed fatally.
+    pub(crate) fn record(&mut self, vm: &Vm, linking: &Rc<Class>, ob: Obligation) -> bool {
+        let st = ob.check(vm, linking, &mut self.unresolved);
+        match st {
+            Status::Ok => false,
+            Status::Unresolved => {
+                self.pending.push(ob);
+                false
+            }
+            Status::Warning => {
+                if let Some((m, _, l)) = ob.message(st, None) {
+                    self.warnings.push((m, l));
+                }
+                false
+            }
+            Status::Error => {
+                self.error = ob.message(st, None);
+                true
+            }
+        }
+    }
+}
+
+/// Checks the overriding methods of a freshly linked class against their
+/// parent and interface prototypes.
+pub(crate) fn check_class(vm: &Vm, cls: &Rc<Class>, out: &mut ClassCheck) {
     let mut protos: Vec<(Rc<Method>, Rc<Method>)> = Vec::new();
     for lc in &cls.method_order {
         let m = &cls.methods[lc];
@@ -369,33 +751,16 @@ pub(crate) fn check_class(
                 None => continue,
             }
         }
-        let st = implementation_check(vm, &m.func, m.flags, &m.scope(), &pm.func, pm.flags, &ps);
-        if st == Status::Ok {
-            continue;
+        let ob = Obligation {
+            child_name: display_name(&cls.name),
+            child_scope: cls.clone(),
+            child: m,
+            proto_name: display_name(&ps.name),
+            proto_scope: ps,
+            proto: pm,
+        };
+        if out.record(vm, cls, ob) {
+            break;
         }
-        let (file, line) = func_location(&m.func);
-        let child = declaration(&m.func, m.flags, &m.scope());
-        let parent = declaration(&pm.func, pm.flags, &ps);
-        if st == Status::Warning {
-            let rtwc = match &m.func {
-                Func::User(u) => u.attributes.iter().any(|a| a.name.eq_ignore_ascii_case(b"ReturnTypeWillChange")),
-                Func::Builtin(_) => true,
-            };
-            if !rtwc {
-                warnings.push((
-                    format!(
-                        "Return type of {child} should either be compatible with {parent}, or the #[\\ReturnTypeWillChange] attribute should be used to temporarily suppress the notice"
-                    ),
-                    line,
-                ));
-            }
-            continue;
-        }
-        let _ = cflags::INTERNAL;
-        return (
-            Some((format!("Declaration of {child} must be compatible with {parent}"), file, line)),
-            warnings,
-        );
     }
-    (None, warnings)
 }

@@ -593,7 +593,10 @@ impl Vm {
         }
         let (cls, recorded) = self.link_class(decl, is_anon)?;
         self.bound_decls.insert(key, cls.clone());
-        self.register_class(cls.clone());
+        // (Already declared if it waited for variance dependencies.)
+        if !self.classes.get(&lc).is_some_and(|c| Rc::ptr_eq(c, &cls)) {
+            self.register_class(cls.clone());
+        }
         // `zend_emit_recorded_errors`: warnings raised while linking are
         // emitted once the class is declared (an exception thrown by an
         // error handler then leaves the class declared).
@@ -786,12 +789,13 @@ impl Vm {
 
     /// `do_inheritance_check_on_method` (with `ZEND_INHERITANCE_CHECK_PROTO`
     /// but no visibility check) of the method satisfying an abstract trait
-    /// method; returns the fatal error (message, file, line).
+    /// method: the final/static errors (message, file, line), else the
+    /// signature check to perform.
     fn check_trait_abstract(
         &self,
         cls: &Rc<Class>,
         c: &TraitAbstractCheck,
-    ) -> Option<(String, ZStr, u32)> {
+    ) -> Result<crate::variance::Obligation, (String, ZStr, u32)> {
         let (child, proto) = (&c.child, &c.proto);
         // `fixup_trait_scope`: `self` in trait methods is the using class.
         let child_scope =
@@ -810,7 +814,7 @@ impl Vm {
             Func::Builtin(_) => (ZStr::from("Unknown"), 0),
         };
         if proto.flags & flags::FINAL != 0 {
-            return Some((
+            return Err((
                 format!(
                     "Cannot override final method {proto_name}::{}()",
                     child.name
@@ -831,34 +835,82 @@ impl Vm {
                     child.name
                 )
             };
-            return Some((msg, file, line));
+            return Err((msg, file, line));
         }
-        let st = crate::variance::implementation_check(
-            self,
-            &child.func,
-            child.flags,
-            &child_scope,
-            &proto.func,
-            proto.flags,
-            cls,
-        );
-        if st == crate::variance::Status::Ok {
-            return None;
+        Ok(crate::variance::Obligation {
+            child: child.clone(),
+            child_name,
+            child_scope,
+            proto: proto.clone(),
+            proto_name,
+            proto_scope: cls.clone(),
+        })
+    }
+
+    /// `load_delayed_classes`: autoloads the classes that pending variance
+    /// checks need (nested linking may take some of them first).
+    fn load_delayed_classes(&mut self) -> VmResult<()> {
+        loop {
+            let next = LINK_STATE.with(|st| {
+                let mut st = st.borrow_mut();
+                (!st.delayed.is_empty()).then(|| st.delayed.remove(0))
+            });
+            let Some(n) = next else {
+                return Ok(());
+            };
+            if self.find_class(n.as_bytes()).is_none() && unlinked_decl(n.as_bytes()).is_none() {
+                match self.lookup_class(&n) {
+                    Ok(_) => {}
+                    Err(Throw::Exception(e)) => {
+                        // php-src: "During inheritance of %s, while
+                        // autoloading %s: Uncaught ..." (the class cannot be
+                        // unlinked any more).
+                        self.report_uncaught(&e);
+                        return Err(Throw::Fatal);
+                    }
+                    Err(t) => return Err(t),
+                }
+            }
         }
-        Some((
-            format!(
-                "Declaration of {} must be compatible with {}",
-                crate::variance::declaration_as(
-                    &child.func,
-                    child.flags,
-                    &child_name,
-                    &child_scope
-                ),
-                crate::variance::declaration_as(&proto.func, proto.flags, &proto_name, cls)
-            ),
-            file,
-            line,
-        ))
+    }
+
+    /// `resolve_delayed_variance_obligations`: the dependencies are
+    /// resolved first, then the pending checks must succeed now.
+    /// Deprecations go to `recorded` (or are raised right away).
+    fn resolve_pending(
+        &mut self,
+        cls: &Rc<Class>,
+        mut recorded: Option<&mut Vec<(i64, String, u32)>>,
+    ) -> VmResult<()> {
+        let Some(p) = LINK_STATE.with(|st| {
+            let mut st = st.borrow_mut();
+            let i = st.pending.iter().position(|p| Rc::ptr_eq(&p.cls, cls))?;
+            Some(st.pending.remove(i))
+        }) else {
+            return Ok(());
+        };
+        for d in &p.deps {
+            if is_pending(d) {
+                self.resolve_pending(d, None)?;
+            }
+        }
+        for ob in &p.obligations {
+            let mut unresolved = Vec::new();
+            let st = ob.check(self, cls, &mut unresolved);
+            match ob.message(st, unresolved.first()) {
+                None => {}
+                Some((m, file, l)) if st == crate::variance::Status::Warning => match &mut recorded
+                {
+                    Some(r) => r.push((crate::errors::level::DEPRECATED, m, l)),
+                    None => self.error_at(crate::errors::level::DEPRECATED, &m, &file, l)?,
+                },
+                Some((m, file, l)) => {
+                    self.report_fatal(&m, &file, l);
+                    return Err(Throw::Fatal);
+                }
+            }
+        }
+        Ok(())
     }
 
     fn fatal_at(&mut self, msg: &str, line: u32) -> Throw {
@@ -875,6 +927,11 @@ impl Vm {
         decl: &Rc<ClassDecl>,
         is_anon: bool,
     ) -> VmResult<(Rc<Class>, Vec<(i64, String, u32)>)> {
+        // While it is linked, the class is visible (unlinked) to the
+        // variance checks of the classes its dependencies declare.
+        let guard = LinkingGuard::enter(decl);
+        // Nearly linked parent / interfaces (`add_dependency_obligation`).
+        let mut deps: Vec<Rc<Class>> = Vec::new();
         let name = decl.name.clone();
         let display = object::display_name(&name);
         // Messages formatted with `%pS` print the whole name, including the
@@ -923,6 +980,9 @@ impl Vm {
                     return Err(
                         self.fatal_at(&format!("{a} {full} cannot extend {b} {}", pc.name), line)
                     );
+                }
+                if is_pending(&pc) {
+                    deps.push(pc.clone());
                 }
                 Some(pc)
             }
@@ -989,6 +1049,9 @@ impl Vm {
                     ),
                     line,
                 ));
+            }
+            if is_pending(&ic) {
+                deps.push(ic.clone());
             }
             direct_ifaces.push(ic.clone());
             for sub in &ic.interfaces {
@@ -1138,18 +1201,28 @@ impl Vm {
         if let Some((e, l)) = check_method_inheritance(&cls) {
             return Err(self.fatal_at(&e, l));
         }
+        let mut cc = crate::variance::ClassCheck::default();
         for c in &link_out.trait_checks {
-            if let Some((e, file, l)) = self.check_trait_abstract(&cls, c) {
-                self.report_fatal(&e, &file, l);
-                return Err(Throw::Fatal);
+            match self.check_trait_abstract(&cls, c) {
+                Ok(ob) => {
+                    if cc.record(self, &cls, ob) {
+                        break;
+                    }
+                }
+                Err((e, file, l)) => {
+                    self.report_fatal(&e, &file, l);
+                    return Err(Throw::Fatal);
+                }
             }
         }
-        let (err, warnings) = crate::variance::check_class(self, &cls);
-        if let Some((e, file, l)) = err {
+        if cc.error.is_none() {
+            crate::variance::check_class(self, &cls, &mut cc);
+        }
+        if let Some((e, file, l)) = cc.error.take() {
             self.report_fatal(&e, &file, l);
             return Err(Throw::Fatal);
         }
-        for (w, l) in warnings {
+        for (w, l) in std::mem::take(&mut cc.warnings) {
             recorded.push((crate::errors::level::DEPRECATED, w, l));
         }
         // Abstract method check.
@@ -1243,7 +1316,127 @@ impl Vm {
             );
             recorded.push((crate::errors::level::DEPRECATED, msg, line));
         }
+        if !cc.pending.is_empty() || !deps.is_empty() {
+            // Nearly linked: declared, so that the classes the pending
+            // checks need can be autoloaded and refer back to it.
+            guard.declared();
+            if !self
+                .classes
+                .get(&cls.lc_name)
+                .is_some_and(|c| Rc::ptr_eq(c, &cls))
+            {
+                self.register_class(cls.clone());
+            }
+            LINK_STATE.with(|st| {
+                let mut st = st.borrow_mut();
+                for n in &cc.unresolved {
+                    if !st
+                        .delayed
+                        .iter()
+                        .any(|d| d.eq_ignore_ascii_case(n.as_bytes()))
+                    {
+                        st.delayed.push(n.clone());
+                    }
+                }
+                st.pending.push(PendingClass {
+                    cls: cls.clone(),
+                    deps,
+                    obligations: cc.pending,
+                });
+            });
+            self.load_delayed_classes()?;
+            if is_pending(&cls) {
+                self.resolve_pending(&cls, Some(&mut recorded))?;
+            }
+        }
         Ok((cls, recorded))
+    }
+}
+
+/// Linking state shared by nested class declarations: the classes being
+/// linked (in the class table but unlinked in php-src), the classes to
+/// autoload for pending variance checks (`CG(delayed_autoloads)`) and the
+/// nearly linked classes with pending checks
+/// (`CG(delayed_variance_obligations)`). (Thread-local rather than a `Vm`
+/// field so that it stays inside this file; it is empty between
+/// top-level declarations.)
+#[derive(Default)]
+struct LinkState {
+    /// Number of `link_class` calls in progress.
+    depth: usize,
+    linking: Vec<Rc<ClassDecl>>,
+    delayed: Vec<ZStr>,
+    pending: Vec<PendingClass>,
+}
+
+/// A nearly linked class (`ZEND_ACC_NEARLY_LINKED`).
+struct PendingClass {
+    cls: Rc<Class>,
+    /// Nearly linked parent/interfaces (`OBLIGATION_DEPENDENCY`).
+    deps: Vec<Rc<Class>>,
+    /// `OBLIGATION_COMPATIBILITY`.
+    obligations: Vec<crate::variance::Obligation>,
+}
+
+thread_local! {
+    static LINK_STATE: RefCell<LinkState> = RefCell::new(LinkState::default());
+}
+
+/// A class whose linking is in progress, by name.
+pub(crate) fn unlinked_decl(name: &[u8]) -> Option<Rc<ClassDecl>> {
+    LINK_STATE.with(|st| {
+        st.borrow()
+            .linking
+            .iter()
+            .rev()
+            .find(|d| d.name.eq_ignore_ascii_case(name))
+            .cloned()
+    })
+}
+
+/// Whether a declared class still waits for variance checks.
+fn is_pending(cls: &Rc<Class>) -> bool {
+    LINK_STATE.with(|st| st.borrow().pending.iter().any(|p| Rc::ptr_eq(&p.cls, cls)))
+}
+
+/// Keeps a declaration on the [`LinkState::linking`] stack while it is
+/// linked.
+struct LinkingGuard(Rc<ClassDecl>);
+
+impl LinkingGuard {
+    fn enter(decl: &Rc<ClassDecl>) -> Self {
+        LINK_STATE.with(|st| {
+            let mut st = st.borrow_mut();
+            if st.depth == 0 {
+                // A previous top-level declaration ended in a fatal error.
+                st.linking.clear();
+                st.delayed.clear();
+                st.pending.clear();
+            }
+            st.depth += 1;
+            st.linking.push(decl.clone());
+        });
+        LinkingGuard(decl.clone())
+    }
+
+    /// The class is declared (nearly linked): no longer unlinked.
+    fn declared(&self) {
+        LINK_STATE.with(|st| {
+            let mut st = st.borrow_mut();
+            if let Some(i) = st.linking.iter().rposition(|d| Rc::ptr_eq(d, &self.0)) {
+                st.linking.remove(i);
+            }
+        });
+    }
+}
+
+impl Drop for LinkingGuard {
+    fn drop(&mut self) {
+        self.declared();
+        LINK_STATE.with(|st| {
+            let mut st = st.borrow_mut();
+            st.depth = st.depth.saturating_sub(1);
+        });
     }
 }
 
