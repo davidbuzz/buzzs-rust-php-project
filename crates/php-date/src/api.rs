@@ -119,6 +119,46 @@ impl Value {
     }
 }
 
+/// Fixed message texts used by `php_date.c` that the VM emits itself
+/// (exceptions/warnings around the engine calls in this module).
+pub mod messages {
+    /// `E_NOTICE` from `date_default_timezone_set()` (format with the ID).
+    pub const INVALID_TIMEZONE_ID: &str = "Timezone ID '%s' is invalid";
+    /// `E_WARNING` when the `date.timezone` INI value is invalid.
+    pub const INVALID_INI_TIMEZONE: &str = "Invalid date.timezone value '%s', using '%s' instead";
+    /// `DateRangeError` from `getTimestamp()` / warning from `strtotime()`/`mktime()`.
+    pub const EPOCH_DOES_NOT_FIT: &str = "Epoch doesn't fit in a PHP integer";
+    /// `E_WARNING` when comparing intervals.
+    pub const CANNOT_COMPARE_INTERVALS: &str = "Cannot compare DateInterval objects";
+    /// `DateException` when comparing zones of different kinds.
+    pub const CANNOT_COMPARE_ZONE_KINDS: &str =
+        "Cannot compare two different kinds of DateTimeZone objects";
+    /// `Error` when comparing uninitialised zones.
+    pub const UNINITIALIZED_ZONE_COMPARE: &str =
+        "Trying to compare uninitialized DateTimeZone objects";
+    /// Warning when comparing incomplete dates.
+    pub const INCOMPLETE_DATE_COMPARE: &str =
+        "Trying to compare an incomplete DateTime or DateTimeImmutable object";
+    /// `Error` for `foreach` by reference over a `DatePeriod`.
+    pub const PERIOD_BY_REFERENCE: &str = "An iterator cannot be used with foreach by reference";
+    /// `E_DEPRECATED` for the string `DatePeriod` constructor.
+    pub const PERIOD_STRING_CTOR_DEPRECATED: &str =
+        "Calling DatePeriod::__construct(string $isostr, int $options = 0) is deprecated, use DatePeriod::createFromISO8601String() instead";
+    /// `TypeError` for bad `DatePeriod::__construct()` argument shapes.
+    pub const PERIOD_CTOR_SIGNATURES: &str = "DatePeriod::__construct() accepts (DateTimeInterface, DateInterval, int [, int]), or (DateTimeInterface, DateInterval, DateTime [, int]), or (string [, int]) as arguments";
+    /// `Error` when user classes implement `DateTimeInterface`.
+    pub const INTERFACE_NOT_IMPLEMENTABLE: &str =
+        "DateTimeInterface can't be implemented by user classes";
+    /// `Error` for objects whose constructor was skipped (`%s` = class).
+    pub const NOT_INITIALIZED: &str =
+        "Object of type %s has not been correctly initialized by calling parent::__construct() in its constructor";
+    /// `Error` when `__unserialize`/`__set_state`/`__wakeup` data is bad (`%s` = class).
+    pub const INVALID_SERIALIZATION: &str = "Invalid serialization data for %s object";
+    /// `Error` for a `DateTimeZone` whose constructor was skipped.
+    pub const ZONE_NOT_INITIALIZED: &str =
+        "The DateTimeZone object has not been correctly initialized by its constructor";
+}
+
 // ---------------------------------------------------------------------------
 // date(), gmdate(), idate()
 // ---------------------------------------------------------------------------
