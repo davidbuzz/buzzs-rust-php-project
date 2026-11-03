@@ -1327,8 +1327,15 @@ pub fn date_props(t: &Time) -> Value {
     v
 }
 
-/// Compare two date objects (`<=>`), by timestamp then microseconds.
-pub fn compare(a: &Time, b: &Time) -> std::cmp::Ordering {
+/// Compare two date objects (`date_object_compare_date`): brings stale
+/// timestamps up to date first, then orders by timestamp and microseconds.
+pub fn compare(a: &mut Time, b: &mut Time) -> std::cmp::Ordering {
+    for t in [&mut *a, &mut *b] {
+        if !t.sse_uptodate {
+            let tz = t.tz_info.clone();
+            t.update_ts(tz.as_ref());
+        }
+    }
     a.compare(b)
 }
 
