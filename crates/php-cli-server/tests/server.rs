@@ -1,0 +1,194 @@
+//! End-to-end test: starts `target/debug/php -S` on a free port and talks
+//! HTTP to it.  Ignored by default (needs `cargo build -p php-cli`):
+//!
+//! ```sh
+//! cargo build -p php-cli
+//! cargo test -p php-cli-server --test server -- --ignored
+//! ```
+
+use std::io::{BufRead, BufReader, Read, Write};
+use std::net::TcpStream;
+use std::path::{Path, PathBuf};
+use std::process::{Child, Command, Stdio};
+use std::time::{Duration, Instant};
+
+fn php_binary() -> PathBuf {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    std::env::var_os("TEST_PHP_EXECUTABLE")
+        .map_or_else(|| root.join("target/debug/php"), PathBuf::from)
+}
+
+struct ServerProc {
+    child: Child,
+    port: u16,
+    root: PathBuf,
+}
+
+impl Drop for ServerProc {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+        let _ = std::fs::remove_dir_all(&self.root);
+    }
+}
+
+fn start(name: &str, files: &[(&str, &str)], router: Option<&str>) -> ServerProc {
+    let root = std::env::temp_dir().join(format!("php-cli-server-it-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    for (f, content) in files {
+        let p = root.join(f);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, content).unwrap();
+    }
+    let mut cmd = Command::new(php_binary());
+    cmd.args(["-n", "-t"])
+        .arg(&root)
+        .args(["-S", "127.0.0.1:0"])
+        .current_dir(&root)
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped());
+    if let Some(r) = router {
+        cmd.arg(r);
+    }
+    let mut child = cmd.spawn().expect("spawn php -S");
+    let stderr = child.stderr.take().unwrap();
+    let mut lines = BufReader::new(stderr).lines();
+    let banner = lines.next().unwrap().unwrap();
+    let port: u16 = banner
+        .rsplit(':')
+        .next()
+        .and_then(|s| s.strip_suffix(") started"))
+        .and_then(|s| s.parse().ok())
+        .unwrap_or_else(|| panic!("bad banner {banner}"));
+    // Drain the log in the background.
+    std::thread::spawn(move || for _ in lines {});
+    ServerProc { child, port, root }
+}
+
+fn request(port: u16, raw: &str) -> String {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut s = loop {
+        match TcpStream::connect(("127.0.0.1", port)) {
+            Ok(s) => break s,
+            Err(e) if Instant::now() < deadline => {
+                let _ = e;
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            Err(e) => panic!("connect: {e}"),
+        }
+    };
+    s.set_read_timeout(Some(Duration::from_secs(30))).unwrap();
+    s.write_all(raw.as_bytes()).unwrap();
+    let mut out = Vec::new();
+    s.read_to_end(&mut out).unwrap();
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+fn split(resp: &str) -> (&str, &str) {
+    resp.split_once("\r\n\r\n").unwrap_or((resp, ""))
+}
+
+#[test]
+#[ignore = "needs target/debug/php"]
+fn scripts_static_files_and_errors() {
+    let srv = start(
+        "basic",
+        &[
+            (
+                "index.php",
+                "<?php header('X-Test: yes'); setcookie('c', 'v'); echo $_SERVER['REQUEST_METHOD'], ' ', $_GET['a'] ?? '-', ' ', $_POST['p'] ?? '-', ' ', $_COOKIE['k'] ?? '-', ' ', $_SERVER['PATH_INFO'] ?? '-';",
+            ),
+            ("status.php", "<?php http_response_code(418); echo 'tea';"),
+            ("hello.txt", "hello\n"),
+            ("style.css", "a{}"),
+        ],
+        None,
+    );
+    let r = request(srv.port, "GET /?a=1 HTTP/1.1\r\nHost: x\r\nCookie: k=v\r\n\r\n");
+    let (head, body) = split(&r);
+    assert!(head.starts_with("HTTP/1.1 200 OK\r\nDate: "), "{head}");
+    assert!(head.contains("\r\nConnection: close\r\nX-Powered-By: PHP/"));
+    assert!(head.contains("\r\nX-Test: yes\r\nSet-Cookie: c=v\r\nContent-type: text/html; charset=UTF-8"));
+    assert_eq!(body, "GET 1 - v -");
+
+    let r = request(
+        srv.port,
+        "POST /index.php/extra/path HTTP/1.0\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: 3\r\n\r\np=2",
+    );
+    let (head, body) = split(&r);
+    assert!(head.starts_with("HTTP/1.0 200 OK"), "{head}");
+    assert_eq!(body, "POST - 2 - /extra/path");
+
+    let r = request(srv.port, "GET /status.php HTTP/1.1\r\n\r\n");
+    assert!(r.starts_with("HTTP/1.1 418 I'm a teapot") || r.starts_with("HTTP/1.1 418 Unknown"), "{r}");
+    assert!(r.ends_with("tea"));
+
+    let r = request(srv.port, "GET /hello.txt HTTP/1.1\r\n\r\n");
+    let (head, body) = split(&r);
+    assert!(head.contains("Content-Type: text/plain; charset=UTF-8\r\nContent-Length: 6"), "{head}");
+    assert_eq!(body, "hello\n");
+
+    let r = request(srv.port, "HEAD /style.css HTTP/1.1\r\n\r\n");
+    let (head, body) = split(&r);
+    assert!(head.contains("Content-Type: text/css; charset=UTF-8\r\nContent-Length: 3"));
+    assert_eq!(body, "");
+
+    let r = request(srv.port, "DELETE /hello.txt HTTP/1.1\r\n\r\n");
+    assert!(r.starts_with("HTTP/1.1 405 Method Not Allowed"));
+    assert!(r.contains("Allow: GET, HEAD, POST\r\n"));
+
+    let r = request(srv.port, "SMURF / HTTP/1.1\r\n\r\n");
+    assert!(r.starts_with("HTTP/1.1 501 Not Implemented"));
+
+    // Falls back to index.php with PATH_INFO.
+    let r = request(srv.port, "GET /no/such HTTP/1.1\r\n\r\n");
+    assert!(split(&r).1.ends_with("/no/such"), "{r}");
+
+    // Malformed request: the connection is closed without a response.
+    let r = request(srv.port, "garbage\r\n\r\n");
+    assert_eq!(r, "");
+}
+
+#[test]
+#[ignore = "needs target/debug/php"]
+fn router_and_404() {
+    let srv = start(
+        "router",
+        &[
+            (
+                "router.php",
+                "<?php if (str_ends_with($_SERVER['REQUEST_URI'], '.txt')) return false; echo 'routed ', $_SERVER['SCRIPT_NAME'];",
+            ),
+            ("file.txt", "static"),
+            ("page.php", "<?php echo 'page';"),
+        ],
+        Some("router.php"),
+    );
+    let r = request(srv.port, "GET /anything HTTP/1.1\r\n\r\n");
+    assert_eq!(split(&r).1, "routed /anything");
+    let r = request(srv.port, "GET /file.txt HTTP/1.1\r\n\r\n");
+    assert!(r.starts_with("HTTP/1.1 200 OK"));
+    assert_eq!(split(&r).1, "static");
+    let r = request(srv.port, "GET /missing.txt HTTP/1.1\r\n\r\n");
+    assert!(r.starts_with("HTTP/1.1 404 Not Found"), "{r}");
+    assert!(r.contains("<code class=\"url\">/missing.txt</code>"));
+    let r = request(srv.port, "GET /page.php HTTP/1.1\r\n\r\n");
+    assert_eq!(split(&r).1, "routed /page.php");
+}
+
+#[test]
+#[ignore = "needs target/debug/php"]
+fn idle_connection_does_not_block_others() {
+    let srv = start("idle", &[("index.php", "<?php echo 'ok';")], None);
+    let idle = TcpStream::connect(("127.0.0.1", srv.port)).unwrap();
+    let r = request(srv.port, "GET / HTTP/1.1\r\n\r\n");
+    assert_eq!(split(&r).1, "ok");
+    drop(idle);
+    // Chunked request body.
+    let r = request(
+        srv.port,
+        "POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n3\r\nabc\r\n0\r\n\r\n",
+    );
+    assert_eq!(split(&r).1, "ok");
+}

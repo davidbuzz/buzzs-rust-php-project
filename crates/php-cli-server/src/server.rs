@@ -15,7 +15,11 @@ use std::os::fd::{AsRawFd, RawFd};
 use std::os::unix::ffi::OsStrExt;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{mpsc, Arc};
 use std::time::Duration;
+
+/// How many VMs are kept ready for upcoming requests.
+const PREPARED_VMS: usize = 4;
 
 /// Cleared by SIGINT (`php_cli_server_sigint_handler`).
 static RUNNING: AtomicBool = AtomicBool::new(true);
@@ -66,8 +70,9 @@ enum ReadResult {
 pub struct Server {
     listener: TcpListener,
     clients: BTreeMap<RawFd, Client>,
-    config: ServerConfig,
+    config: Arc<ServerConfig>,
     post_max_size: i64,
+    prepared: std::collections::VecDeque<Prepared>,
 }
 
 /// `php_cli_server_parse_addr()`: `host:port` or `[host]:port`.
@@ -157,17 +162,45 @@ pub fn install_sigint() {
 impl Server {
     /// A server on `listener`.
     pub fn new(listener: TcpListener, config: ServerConfig, post_max_size: i64) -> Self {
+        let config = Arc::new(config);
+        let prepared: std::collections::VecDeque<Prepared> =
+            Prepared::spawn(&config).into_iter().collect();
+        // Like PHP, be ready to serve when the banner appears.
+        let deadline = std::time::Instant::now() + Duration::from_millis(2500);
+        while prepared.front().is_some_and(|p| !p.ready.load(Ordering::SeqCst))
+            && std::time::Instant::now() < deadline
+        {
+            std::thread::sleep(Duration::from_millis(10));
+        }
         Server {
             listener,
             clients: BTreeMap::new(),
             config,
             post_max_size,
+            prepared,
         }
+    }
+
+    /// Keeps [`PREPARED_VMS`] VMs ready, preparing one at a time (they
+    /// would otherwise compete for the CPU).  Returns whether more are
+    /// still to be prepared.
+    fn top_up(&mut self) -> bool {
+        let busy = self
+            .prepared
+            .iter()
+            .any(|p| !p.ready.load(Ordering::SeqCst));
+        if !busy && self.prepared.len() < PREPARED_VMS {
+            if let Some(p) = Prepared::spawn(&self.config) {
+                self.prepared.push_back(p);
+            }
+        }
+        self.prepared.len() < PREPARED_VMS || busy
     }
 
     /// `php_cli_server_do_event_loop()`: returns the exit status.
     pub fn run(&mut self) -> i32 {
         while RUNNING.load(Ordering::SeqCst) {
+            let timeout = if self.top_up() { 50 } else { 1000 };
             let mut fds = vec![libc::pollfd {
                 fd: self.listener.as_raw_fd(),
                 events: libc::POLLIN,
@@ -185,7 +218,7 @@ impl Server {
                     revents: 0,
                 });
             }
-            match poll(&mut fds, 1000) {
+            match poll(&mut fds, timeout) {
                 Ok(0) => {}
                 Ok(_) => {
                     for p in &fds {
@@ -442,7 +475,12 @@ impl Server {
             self.begin_send_static(fd);
             return;
         }
-        let outcome = run_php(c, &self.config, is_static);
+        let prepared = self
+            .prepared
+            .pop_front()
+            .or_else(|| Prepared::spawn(&self.config));
+        let outcome = run_php(c, prepared, is_static);
+        self.top_up();
         match outcome {
             Outcome::Done => self.close(fd),
             Outcome::ServeStatic => self.begin_send_static(fd),
@@ -475,29 +513,75 @@ fn send_blocking(stream: &TcpStream, data: &[u8]) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Runs the PHP part of a request on a dedicated thread (fresh
-/// thread-locals, large stack) and waits for it.
-fn run_php(c: &mut Client, config: &ServerConfig, is_static: bool) -> Outcome {
+/// A request handed to a [`Prepared`] thread.
+struct Job {
+    request: crate::request::Request,
+    stream: TcpStream,
+    addr: String,
+    is_static: bool,
+}
+
+/// A thread holding a ready VM, waiting for its request (fresh
+/// thread-locals and a large stack per request).
+#[derive(Debug)]
+struct Prepared {
+    jobs: mpsc::Sender<Job>,
+    done: mpsc::Receiver<Outcome>,
+    ready: Arc<AtomicBool>,
+}
+
+impl Prepared {
+    fn spawn(config: &Arc<ServerConfig>) -> Option<Prepared> {
+        let (jtx, jrx) = mpsc::channel::<Job>();
+        let (dtx, drx) = mpsc::channel::<Outcome>();
+        let config = config.clone();
+        let ready = Arc::new(AtomicBool::new(false));
+        let ready_flag = ready.clone();
+        std::thread::Builder::new()
+            .name("php-request".to_string())
+            .stack_size(256 << 20)
+            .spawn(move || {
+                let vm = crate::sapi::prepare_vm(&config);
+                ready_flag.store(true, Ordering::SeqCst);
+                let Ok(job) = jrx.recv() else {
+                    return;
+                };
+                let ctx = Rc::new(RequestCtx::new(job.request, job.stream, job.addr));
+                let (outcome, vm) = crate::sapi::run_request(vm, &ctx, &config, job.is_static);
+                let _ = dtx.send(outcome);
+                drop(vm);
+                drop(ctx);
+            })
+            .ok()?;
+        Some(Prepared {
+            jobs: jtx,
+            done: drx,
+            ready,
+        })
+    }
+}
+
+/// Runs the PHP part of a request on the prepared thread and waits for it.
+fn run_php(c: &mut Client, prepared: Option<Prepared>, is_static: bool) -> Outcome {
     let Ok(stream) = c.stream.try_clone() else {
+        return Outcome::Done;
+    };
+    let Some(p) = prepared else {
         return Outcome::Done;
     };
     let _ = stream.set_nonblocking(false);
     let _ = stream.set_write_timeout(Some(Duration::from_secs(10)));
-    let request = c.reader.request.clone();
-    let addr = c.addr.clone();
-    let outcome = std::thread::scope(|scope| {
-        let h = std::thread::Builder::new()
-            .name("php-request".to_string())
-            .stack_size(256 << 20)
-            .spawn_scoped(scope, move || {
-                let ctx = Rc::new(RequestCtx::new(request, stream, addr));
-                crate::sapi::run_request(&ctx, config, is_static)
-            });
-        match h {
-            Ok(h) => h.join().unwrap_or(Outcome::Done),
-            Err(_) => Outcome::Done,
-        }
-    });
+    let job = Job {
+        request: c.reader.request.clone(),
+        stream,
+        addr: c.addr.clone(),
+        is_static,
+    };
+    let outcome = if p.jobs.send(job).is_ok() {
+        p.done.recv().unwrap_or(Outcome::Done)
+    } else {
+        Outcome::Done
+    };
     let _ = c.stream.set_nonblocking(true);
     outcome
 }

@@ -169,11 +169,15 @@ impl RequestCtx {
             h.render(self.request.protocol_version, crate::status::now())
         };
         self.send_through(&head);
+        if self.aborted.get() {
+            // SAPI_HEADER_SEND_FAILED resets SG(headers_sent).
+            self.headers.borrow_mut().sent = false;
+        }
     }
 
     /// `sapi_cli_server_ub_write()` after the output layer: headers first.
     pub fn write(&self, data: &[u8]) {
-        if data.is_empty() {
+        if data.is_empty() || self.aborted.get() {
             return;
         }
         self.send_headers();
@@ -227,9 +231,11 @@ impl RequestCtx {
     }
 }
 
-/// The VM's standard output: the client socket.  `flush()` is a no-op (the
-/// VM flushes internally; PHP's `flush()` is a SAPI function).
-pub struct ServerOutput(pub Rc<RequestCtx>);
+/// The VM's standard output: the client socket of the request the VM
+/// currently serves (the VM is created before its request is known).
+/// `flush()` is a no-op (the VM flushes internally; PHP's `flush()` is a
+/// SAPI function).
+pub struct ServerOutput(pub Rc<RefCell<Option<Rc<RequestCtx>>>>);
 
 impl std::fmt::Debug for ServerOutput {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -239,7 +245,10 @@ impl std::fmt::Debug for ServerOutput {
 
 impl Write for ServerOutput {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        self.0.write(buf);
+        let ctx = self.0.borrow().clone();
+        if let Some(ctx) = ctx {
+            ctx.write(buf);
+        }
         Ok(buf.len())
     }
 
@@ -736,38 +745,68 @@ fn finish(vm: &mut Vm, ctx: &RequestCtx, r: Result<(), Throw>) {
     ctx.uploaded.borrow_mut().clear();
 }
 
-/// Runs the PHP part of a request (`php_cli_server_dispatch` from request
-/// startup to `php_request_shutdown`) on the current thread.
-pub fn run_request(ctx: &Rc<RequestCtx>, cfg: &ServerConfig, is_static: bool) -> Outcome {
-    CURRENT.with(|c| *c.borrow_mut() = Some(ctx.clone()));
-    crate::capture::start();
-    let outcome = run_request_inner(ctx, cfg, is_static);
-    crate::capture::stop();
-    CURRENT.with(|c| *c.borrow_mut() = None);
-    outcome
+/// A VM created ahead of its request (module startup is the expensive
+/// part of a request, so the server prepares the next VM while idle).
+pub struct PreparedVm {
+    vm: Vm,
+    slot: Rc<RefCell<Option<Rc<RequestCtx>>>>,
 }
 
-fn run_request_inner(ctx: &Rc<RequestCtx>, cfg: &ServerConfig, is_static: bool) -> Outcome {
+impl std::fmt::Debug for PreparedVm {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("PreparedVm")
+    }
+}
+
+/// Creates the VM for the next request on the current thread (module
+/// startup).
+pub fn prepare_vm(cfg: &ServerConfig) -> PreparedVm {
     let opts = VmOptions {
         ini: cfg.ini.clone(),
     };
     let mut exts = (cfg.extensions)();
     exts.push(Box::new(CliServerModule));
     let refs: Vec<&dyn Extension> = exts.iter().map(AsRef::as_ref).collect();
-    let mut vm = Vm::with_extensions(&opts, Box::new(ServerOutput(ctx.clone())), &refs);
-    ctx.refresh_facts(&vm);
+    let slot = Rc::new(RefCell::new(None));
+    let vm = Vm::with_extensions(&opts, Box::new(ServerOutput(slot.clone())), &refs);
+    PreparedVm { vm, slot }
+}
+
+/// Runs the PHP part of a request (`php_cli_server_dispatch` from request
+/// startup to `php_request_shutdown`) on the thread that prepared `vm`.
+/// The VM is handed back so that the caller can report the outcome before
+/// paying for its destruction.
+pub fn run_request(
+    vm: PreparedVm,
+    ctx: &Rc<RequestCtx>,
+    cfg: &ServerConfig,
+    is_static: bool,
+) -> (Outcome, Vm) {
+    CURRENT.with(|c| *c.borrow_mut() = Some(ctx.clone()));
+    *vm.slot.borrow_mut() = Some(ctx.clone());
+    crate::capture::start();
+    let mut machine = vm.vm;
+    let outcome = run_request_inner(&mut machine, ctx, cfg, is_static);
+    crate::capture::stop();
+    *vm.slot.borrow_mut() = None;
+    CURRENT.with(|c| *c.borrow_mut() = None);
+    (outcome, machine)
+}
+
+fn run_request_inner(vm: &mut Vm, ctx: &Rc<RequestCtx>, cfg: &ServerConfig, is_static: bool) -> Outcome {
+    ctx.refresh_facts(vm);
 
     // php_cli_server_request_startup() + php_request_startup()
     let auth = crate::vars::auth_data(ctx.request.header(b"authorization"));
     let ob = vm.ini.get_long("output_buffering");
     let implicit_flush = vm.ini.get_bool("implicit_flush");
-    php_support::output::request_startup(&mut vm, None, ob, implicit_flush);
+    php_support::output::request_startup(vm, None, ob, implicit_flush);
     if vm.ini_bool("expose_php") {
         let line = format!("X-Powered-By: PHP/{}", php_vm::PHP_VERSION);
         let _ = ctx.header_op(HeaderOp::Replace(line.as_bytes(), 0));
     }
     for hook in vm.startup_hooks.clone() {
-        hook(&mut vm);
+        hook(vm);
     }
     let limit = u64::try_from(vm.ini.get_long("memory_limit")).unwrap_or(u64::MAX);
     if php_memlimit::request_start(php_memlimit::limit_from_ini(limit)).is_err() {
@@ -780,7 +819,7 @@ fn run_request_inner(ctx: &Rc<RequestCtx>, cfg: &ServerConfig, is_static: bool) 
         router: cfg.router.as_deref(),
         client_addr: &ctx.client_addr,
     };
-    crate::vars::populate(&mut vm, ctx, &facts, &auth);
+    crate::vars::populate(vm, ctx, &facts, &auth);
     install_input_hook(ctx);
     vm.script_path = ZStr::from("Unknown");
 
@@ -788,10 +827,10 @@ fn run_request_inner(ctx: &Rc<RequestCtx>, cfg: &ServerConfig, is_static: bool) 
     if let Some(router) = &cfg.router {
         let src = std::fs::read(std::ffi::OsStr::from_bytes(router)).unwrap_or_default();
         let src = crate::router::rewrite(&src).unwrap_or(src);
-        r = execute_script(&mut vm, &src, router);
+        r = execute_script(vm, &src, router);
         let declined = r.is_ok() && ctx.router_declined.get();
         if !declined {
-            finish(&mut vm, ctx, r);
+            finish(vm, ctx, r);
             return Outcome::Done;
         }
     }
@@ -803,7 +842,7 @@ fn run_request_inner(ctx: &Rc<RequestCtx>, cfg: &ServerConfig, is_static: bool) 
             let _ = std::env::set_current_dir(dir);
         }
         r = match std::fs::read(p) {
-            Ok(src) => execute_script(&mut vm, &src, &path),
+            Ok(src) => execute_script(vm, &src, &path),
             Err(_) => {
                 let msg = format!(
                     "Failed opening required '{}' (include_path='{}')",
@@ -814,13 +853,13 @@ fn run_request_inner(ctx: &Rc<RequestCtx>, cfg: &ServerConfig, is_static: bool) 
                 Err(Throw::Fatal)
             }
         };
-        apply_fatal_status(&vm, ctx);
+        apply_fatal_status(vm, ctx);
         let status = ctx.headers.borrow().response_code;
-        log_response(&ctx.client_addr, &ctx.request, status, None, Some(&vm));
+        log_response(&ctx.client_addr, &ctx.request, status, None, Some(vm));
         if status == 304 {
             ctx.headers.borrow_mut().send_default_content_type = false;
         }
-        finish(&mut vm, ctx, r);
+        finish(vm, ctx, r);
         return Outcome::Done;
     }
 
