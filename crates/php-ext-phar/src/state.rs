@@ -84,17 +84,17 @@ fn get_or_create<T: Release>(
             s.release_state();
         }
     }
-    let state = Rc::new(RefCell::new(make()));
+    let fresh = Rc::new(RefCell::new(make()));
     table.with(|t| {
         t.borrow_mut().insert(
             key,
             Slot {
                 weak: data_of(o).map_or_else(Weak::new, Rc::downgrade),
-                state: state.clone(),
+                state: fresh.clone(),
             },
         );
     });
-    state
+    fresh
 }
 
 fn remove<T: Release>(

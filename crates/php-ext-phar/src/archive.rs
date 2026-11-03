@@ -195,13 +195,12 @@ pub fn set_alias(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     })?))
 }
 
-/// Reads the rest of a stream resource: `(content, fstat mode)`, `None` if
-/// the value is not a stream.
-fn read_stream(
-    vm: &mut Vm,
-    v: &Value,
-    maxlen: Option<usize>,
-) -> VmResult<Option<(Option<Vec<u8>>, Option<u32>)>> {
+/// The rest of a stream (`None` when unreadable) and its `fstat()` mode.
+type StreamData = (Option<Vec<u8>>, Option<u32>);
+
+/// Reads the rest of a stream resource; `None` if the value is not a
+/// stream.
+fn read_stream(vm: &mut Vm, v: &Value, maxlen: Option<usize>) -> VmResult<Option<StreamData>> {
     let Value::Resource(r) = v else {
         return Ok(None);
     };
@@ -211,7 +210,9 @@ fn read_stream(
     let out = bridge::run(vm, || {
         let mut s = cell.get()?;
         let content = s.copy_to_mem(maxlen);
-        let mode = s.stat().map(|sb| (sb.mode & 0xFFFF_FFFF) as u32);
+        let mode = s
+            .stat()
+            .and_then(|sb| u32::try_from(sb.mode & 0xFFFF_FFFF).ok());
         Some((content, mode))
     })?;
     Ok(out)
@@ -447,7 +448,9 @@ pub fn add_file(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         let stream = php_streams::open::open_wrapper(&file, "rb", 0, &mut opened, None);
         let data = stream.map(|mut s| {
             let content = s.copy_to_mem(None).unwrap_or_default();
-            let mode = s.stat().map(|sb| (sb.mode & 0xFFFF_FFFF) as u32);
+            let mode = s
+                .stat()
+                .and_then(|sb| u32::try_from(sb.mode & 0xFFFF_FFFF).ok());
             s.close();
             (content, mode)
         });
@@ -644,9 +647,9 @@ fn build_item(
                 mode,
             }
         }
-        Value::Object(o) if php_vm::object::class_of(&o).instance_of_name(b"splfileinfo") => {
-            let user = php_vm::object::class_of(&o).decl.is_some();
-            let p = match vm.call_method_by_name(&o, "getPathname", vec![]) {
+        Value::Object(obj) if php_vm::object::class_of(&obj).instance_of_name(b"splfileinfo") => {
+            let user = php_vm::object::class_of(&obj).decl.is_some();
+            let pathname = match vm.call_method_by_name(&obj, "getPathname", vec![]) {
                 Ok(p) => p.deref(),
                 Err(t) => {
                     return Err(throw_chained(
@@ -657,13 +660,13 @@ fn build_item(
                     ))
                 }
             };
-            let Value::Str(p) = p else {
+            let Value::Str(pathname) = pathname else {
                 let e = PharError::unexpected("getPathname() must return a string");
                 return Ok((Err(e), None));
             };
             let mut prev = None;
             let mtime = if user {
-                match vm.call_method_by_name(&o, "getMTime", vec![]) {
+                match vm.call_method_by_name(&obj, "getMTime", vec![]) {
                     Ok(v) => match v.deref() {
                         Value::Int(t) => MTime::Int(t),
                         _ => MTime::NotInt,
@@ -678,7 +681,7 @@ fn build_item(
             };
             return Ok((
                 Ok(BuildItem::FileInfo {
-                    pathname: p.as_bytes().to_vec(),
+                    pathname: pathname.as_bytes().to_vec(),
                     mtime,
                 }),
                 prev,

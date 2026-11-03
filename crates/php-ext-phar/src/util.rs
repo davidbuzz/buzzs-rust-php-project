@@ -162,9 +162,8 @@ pub fn throw_chained(vm: &mut Vm, class: &str, message: &str, prev: Throw) -> Th
     let Throw::Exception(prev_obj) = prev else {
         return prev;
     };
-    let cls = match vm.find_class(class.as_bytes()) {
-        Some(c) => c,
-        None => return Throw::Exception(prev_obj),
+    let Some(cls) = vm.find_class(class.as_bytes()) else {
+        return Throw::Exception(prev_obj);
     };
     match vm.new_object_with_args(
         &cls,
