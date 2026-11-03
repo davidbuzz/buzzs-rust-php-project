@@ -450,6 +450,8 @@ impl Compiler {
             filename: self.filename.clone(),
             strict_types: self.strict_types,
             decls: self.decls.clone(),
+            fcall_cache: std::cell::RefCell::default(),
+            class_cache: std::cell::RefCell::default(),
         })
     }
 

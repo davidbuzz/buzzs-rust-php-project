@@ -99,8 +99,25 @@ impl Vm {
     pub(crate) fn resolve_class_spec(&mut self, spec: &ClassSpec) -> VmResult<Rc<Class>> {
         match spec {
             ClassSpec::Named(l) => {
+                let slot = *l as usize;
+                let cached = self
+                    .frame()
+                    .code
+                    .class_cache
+                    .borrow()
+                    .get(slot)
+                    .and_then(Weak::upgrade);
+                if let Some(c) = cached {
+                    return Ok(c);
+                }
                 let n = self.lit_str(*l);
-                self.lookup_class_or_error(&n)
+                let c = self.lookup_class_or_error(&n)?;
+                let mut cache = self.frame().code.class_cache.borrow_mut();
+                if cache.len() <= slot {
+                    cache.resize(slot + 1, Weak::new());
+                }
+                cache[slot] = Rc::downgrade(&c);
+                Ok(c)
             }
             ClassSpec::SelfClass => {
                 match self.scope() {
@@ -527,7 +544,9 @@ impl Vm {
     pub(crate) fn register_class(&mut self, cls: Rc<Class>) {
         let lc = cls.lc_name.clone();
         self.class_order.push(lc.clone());
-        self.classes.insert(lc, cls);
+        if self.classes.insert(lc.clone(), cls).is_none() {
+            crate::reflection::note_new(crate::reflection::Table::Class, lc.as_bytes());
+        }
     }
 
     /// Whether all dependencies of a declaration are available (for early

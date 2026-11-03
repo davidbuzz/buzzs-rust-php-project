@@ -51,7 +51,9 @@ pub(crate) fn reg(vm: &mut Vm, sig: &str, f: BuiltinFn) -> ZStr {
         flags: fl,
         handler: f,
     };
-    vm.functions.insert(lc.clone(), Func::Builtin(Rc::new(b)));
+    if vm.functions.insert(lc.clone(), Func::Builtin(Rc::new(b))).is_none() {
+        crate::reflection::note_new(crate::reflection::Table::Function, lc.as_bytes());
+    }
     lc
 }
 
@@ -67,10 +69,10 @@ pub(crate) fn alias(vm: &mut Vm, alias: &str, target: &str) {
             flags: b.flags,
             handler: b.handler,
         };
-        vm.functions.insert(
-            ZStr::from(alias.to_ascii_lowercase()),
-            Func::Builtin(Rc::new(nb)),
-        );
+        let lc = ZStr::from(alias.to_ascii_lowercase());
+        if vm.functions.insert(lc.clone(), Func::Builtin(Rc::new(nb))).is_none() {
+            crate::reflection::note_new(crate::reflection::Table::Function, lc.as_bytes());
+        }
     }
 }
 
@@ -91,7 +93,9 @@ pub(crate) fn register_all(vm: &mut Vm) {
 
 /// Defines a constant.
 pub(crate) fn constant(vm: &mut Vm, name: &str, v: Value) {
-    vm.constants.insert(ZStr::from(name), v);
+    if vm.constants.insert(ZStr::from(name), v).is_none() {
+        crate::reflection::note_new(crate::reflection::Table::Constant, name.as_bytes());
+    }
 }
 
 /// The current time formatted like PHP's error log (`d-M-Y H:i:s UTC`).

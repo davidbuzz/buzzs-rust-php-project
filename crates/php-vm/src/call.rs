@@ -54,8 +54,23 @@ impl Vm {
         fallback: Option<u32>,
         display: u32,
     ) -> VmResult<()> {
+        let cached = self
+            .frame()
+            .code
+            .fcall_cache
+            .borrow()
+            .get(name as usize)
+            .and_then(|c| c.as_ref().and_then(crate::opcode::CachedFunc::get));
+        if let Some(func) = cached {
+            self.frame_mut().calls.push(PendingCall::new(func));
+            return Ok(());
+        }
         let lc = self.lit_str(name);
         let mut f = self.functions.get(&lc).cloned();
+        // Only primary-name hits are cached: literals are shared between
+        // call sites, and a later `ns\foo` declaration must win over the
+        // global fallback at sites that have not run yet.
+        let cacheable = f.is_some();
         if f.is_none() {
             if let Some(fb) = fallback {
                 let fbn = self.lit_str(fb);
@@ -69,6 +84,14 @@ impl Vm {
                 &format!("Call to undefined function {}()", d.to_string_lossy()),
             ));
         };
+        if cacheable {
+            let mut cache = self.frame().code.fcall_cache.borrow_mut();
+            let slot = name as usize;
+            if cache.len() <= slot {
+                cache.resize(slot + 1, None);
+            }
+            cache[slot] = Some(crate::opcode::CachedFunc::new(&func));
+        }
         self.frame_mut().calls.push(PendingCall::new(func));
         Ok(())
     }
@@ -490,6 +513,26 @@ impl Vm {
     }
 
     pub(crate) fn op_send(&mut self, src: &ArgSrc, name: Option<ZStr>) -> VmResult<()> {
+        // Fast path: a positional by-value argument of an ordinary call
+        // (the general path below computes the same thing in more steps).
+        if name.is_none() {
+            let by_val = {
+                let call = self.frame().calls.last().expect("pending call");
+                call.magic_name.is_none()
+                    && !call.has_named
+                    && !call.func.arg_by_ref(call.args.len())
+            };
+            if by_val {
+                let v = match src {
+                    ArgSrc::Val(op) => self.read(*op)?,
+                    ArgSrc::CallResult(op) => self.read_raw(*op)?.deref(),
+                    ArgSrc::Place(pid) => self.place_fetch(*pid, FetchMode::Read)?,
+                };
+                let call = self.frame_mut().calls.last_mut().expect("pending call");
+                call.args.push(Some(v));
+                return Ok(());
+            }
+        }
         let pos = match &name {
             Some(n) => self.arg_position(n)?,
             None => Some(self.frame().calls.last().expect("pending call").args.len()),
@@ -848,7 +891,8 @@ impl Vm {
         // A native `__call`/`__callStatic` gets the called name through
         // `vm.magic_call_name()`.
         self.magic_call_name = call.magic_name.take();
-        let fname = self.func_display(&Func::Builtin(b.clone()), call.scope.as_ref());
+        // The display name is only needed for error messages: build it lazily.
+        let fname = |vm: &Self| vm.func_display(&Func::Builtin(b.clone()), call.scope.as_ref());
         let nparams = b.params.len();
         let variadic = b.flags & flags::VARIADIC != 0;
         let mut values: Vec<Value> = Vec::with_capacity(call.args.len());
@@ -875,18 +919,16 @@ impl Vm {
         self.frames.push(f);
         let depth = self.frames.len();
         // Arity.
-        let positional_count = call.args.iter().filter(|a| a.is_some()).count();
         if !call.has_named && npassed < b.required as usize {
-            let e = self.arg_count_error_builtin(&fname, b, npassed);
+            let e = self.arg_count_error_builtin(&fname(self), b, npassed);
             self.pop_frames_to(depth);
             return Err(e);
         }
         if !variadic && npassed > nparams {
-            let e = self.arg_count_error_builtin(&fname, b, npassed);
+            let e = self.arg_count_error_builtin(&fname(self), b, npassed);
             self.pop_frames_to(depth);
             return Err(e);
         }
-        let _ = positional_count;
         for (i, a) in call.args.into_iter().enumerate() {
             match a {
                 Some(v) => {
@@ -899,6 +941,7 @@ impl Vm {
                             .params
                             .get(i)
                             .map_or_else(String::new, |p| p.name.to_string_lossy());
+                        let fname = fname(self);
                         let e = self.make_throw(
                             "ArgumentCountError",
                             &format!("{fname}(): Argument #{} (${pname}) not passed", i + 1),
@@ -933,6 +976,7 @@ impl Vm {
                 .params
                 .get(i)
                 .map_or_else(String::new, |p| p.name.to_string_lossy());
+            let fname = fname(self);
             let e = self.make_throw(
                 "ArgumentCountError",
                 &format!("{fname}(): Argument #{} (${pname}) not passed", i + 1),
@@ -940,10 +984,15 @@ impl Vm {
             self.pop_frames_to(depth);
             return Err(e);
         }
-        if let Some(f) = self.frames.get_mut(depth - 1) {
-            f.args = values.iter().take(nframe_args).cloned().map(Some).collect();
+        // Only named-argument gaps (`None`s, now filled with defaults) can
+        // make `values` differ from the copy taken when the frame was pushed.
+        if call.has_named {
+            if let Some(f) = self.frames.get_mut(depth - 1) {
+                f.args = frame_args(&values[..nframe_args]);
+            }
         }
         // Type coercion.
+        let mut coerced = false;
         for (i, v) in values.iter_mut().enumerate() {
             if !passed[i] {
                 continue;
@@ -959,6 +1008,13 @@ impl Vm {
             if p.by_ref {
                 continue;
             }
+            // Fast path: the value already has an accepted type, so
+            // `verify_type` would accept it unchanged and without side effects.
+            if ty.is_mixed() || accepts_without_coercion(ty.mask, v) {
+                continue;
+            }
+            coerced = true;
+            let fname = fname(self);
             let pname = p.name.to_string_lossy();
             let ctx = TypeCtx {
                 scope: call.scope.as_ref(),
@@ -966,8 +1022,7 @@ impl Vm {
                 strict,
                 internal_arg: Some((&fname, i + 1, &pname)),
             };
-            let ty = ty.clone();
-            let ok = match self.verify_type(&ty, v, &ctx) {
+            let ok = match self.verify_type(ty, v, &ctx) {
                 Ok(ok) => ok,
                 Err(e) => {
                     self.pop_frames_to(depth);
@@ -998,8 +1053,10 @@ impl Vm {
                 return Err(e);
             }
         }
-        if let Some(f) = self.frames.get_mut(depth - 1) {
-            f.args = values.iter().take(nframe_args).cloned().map(Some).collect();
+        if coerced {
+            if let Some(f) = self.frames.get_mut(depth - 1) {
+                f.args = frame_args(&values[..nframe_args]);
+            }
         }
         let mut args = Args {
             values,
@@ -1142,6 +1199,19 @@ impl Vm {
     }
 
     fn recv_check(&mut self, n: u32, mut v: Value) -> VmResult<Value> {
+        // Fast path: untyped parameter, or a value accepted as-is.
+        {
+            let f = self.frame();
+            let uf = f.ufunc.as_ref().expect("user frame");
+            let p = uf.params.get(n as usize).or_else(|| uf.params.last());
+            match p.and_then(|p| p.ty.as_ref()) {
+                None => return Ok(v),
+                Some(ty) if ty.is_mixed() || accepts_without_coercion(ty.mask, &v) => {
+                    return Ok(v);
+                }
+                Some(_) => {}
+            }
+        }
         let (ty, strict) = {
             let f = self.frame();
             let uf = f.ufunc.as_ref().expect("user frame");
@@ -1273,6 +1343,26 @@ impl Vm {
 
     /// Verifies the return value of the current frame.
     pub(crate) fn verify_return(&mut self, v: Option<Value>) -> VmResult<Value> {
+        // Fast path: no return type, or a returned value accepted as-is
+        // (skips building the function/type display strings).
+        {
+            let f = self.frame();
+            let Some(uf) = &f.ufunc else {
+                return Ok(v.unwrap_or_default());
+            };
+            match (&uf.return_type, &v) {
+                (None, _) => return Ok(v.unwrap_or_default()),
+                (Some(rt), Some(val))
+                    if !uf.is_generator()
+                        && !rt.is_void()
+                        && !rt.is_never()
+                        && (rt.is_mixed() || accepts_without_coercion(rt.mask, val)) =>
+                {
+                    return Ok(v.unwrap_or_default());
+                }
+                _ => {}
+            }
+        }
         let (rt, strict, is_gen, func, scope, called) = {
             let f = self.frame();
             let Some(uf) = &f.ufunc else {
@@ -1505,4 +1595,33 @@ impl Vm {
 /// Finds `::` in a callable string.
 pub(crate) fn find_double_colon(s: &[u8]) -> Option<usize> {
     s.windows(2).position(|w| w == b"::")
+}
+
+/// Whether `verify_type` would accept `v` for a type with mask `m` as-is:
+/// the side-effect-free subset of `type_accepts` (no callable/class checks).
+fn accepts_without_coercion(m: u32, v: &Value) -> bool {
+    use crate::types::mask;
+    let bit = match v {
+        Value::Null => mask::NULL,
+        Value::Bool(true) => mask::TRUE,
+        Value::Bool(false) => mask::FALSE,
+        Value::Int(_) => mask::LONG,
+        Value::Float(_) => mask::DOUBLE,
+        Value::Str(_) => mask::STRING,
+        Value::Array(_) => mask::ARRAY | mask::ITERABLE,
+        Value::Object(_) => mask::OBJECT,
+        Value::Resource(_) => mask::RESOURCE,
+        Value::Reference(_) => 0,
+    };
+    m & bit != 0
+}
+
+/// The backtrace copy of a builtin's arguments (a plain loop: the iterator
+/// chain this replaces is a dozen non-inlined calls per element in debug).
+fn frame_args(values: &[Value]) -> Vec<Option<Value>> {
+    let mut out = Vec::with_capacity(values.len());
+    for v in values {
+        out.push(Some(v.clone()));
+    }
+    out
 }

@@ -597,6 +597,43 @@ pub struct OpArray {
     pub strict_types: bool,
     /// Nested functions/classes declared by this code.
     pub decls: Rc<DeclTable>,
+    /// Per-call-site cache of `InitFCall` resolutions, indexed by the
+    /// name literal (like php-src's runtime cache slot: once a call site
+    /// resolved a function it keeps calling it).
+    pub fcall_cache: RefCell<Vec<Option<CachedFunc>>>,
+    /// Per-literal cache of resolved `ClassSpec::Named` classes (classes
+    /// are never unregistered once declared). Weak: a method's op array
+    /// naming its own class would otherwise form an `Rc` cycle.
+    pub class_cache: RefCell<Vec<std::rc::Weak<crate::class::Class>>>,
+}
+
+/// An [`OpArray::fcall_cache`] entry. User functions are held weakly: the
+/// function's own op array may hold the entry (recursion), and a strong
+/// `Rc` would make an unfreeable cycle.
+#[derive(Debug, Clone)]
+pub enum CachedFunc {
+    /// A builtin.
+    Builtin(Rc<crate::func::Builtin>),
+    /// A user function.
+    User(std::rc::Weak<crate::func::UserFunction>),
+}
+
+impl CachedFunc {
+    /// The cache entry for `f`.
+    pub fn new(f: &crate::func::Func) -> Self {
+        match f {
+            crate::func::Func::Builtin(b) => CachedFunc::Builtin(b.clone()),
+            crate::func::Func::User(u) => CachedFunc::User(Rc::downgrade(u)),
+        }
+    }
+
+    /// The cached function, if it is still alive.
+    pub fn get(&self) -> Option<crate::func::Func> {
+        match self {
+            CachedFunc::Builtin(b) => Some(crate::func::Func::Builtin(b.clone())),
+            CachedFunc::User(w) => w.upgrade().map(crate::func::Func::User),
+        }
+    }
 }
 
 /// Functions, classes and closures declared inside a compiled unit.

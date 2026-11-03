@@ -238,7 +238,9 @@ impl<'a> ModuleBuilder<'a> {
     pub fn constant(&mut self, name: &str, value: Value) -> &mut Self {
         let n = ZStr::from(name);
         crate::builtins::info::note_constant(&n, self.name);
-        self.vm.constants.insert(n, value);
+        if self.vm.constants.insert(n.clone(), value).is_none() {
+            crate::reflection::note_new(crate::reflection::Table::Constant, n.as_bytes());
+        }
         self
     }
 
@@ -254,7 +256,9 @@ impl<'a> ModuleBuilder<'a> {
     ) -> &mut Self {
         let n = ZStr::from(name);
         crate::builtins::info::note_constant(&n, self.name);
-        self.vm.constants.insert(n.clone(), value);
+        if self.vm.constants.insert(n.clone(), value).is_none() {
+            crate::reflection::note_new(crate::reflection::Table::Constant, n.as_bytes());
+        }
         let suffix =
             crate::attrs::format_suffix(Some(&ZStr::from(since)), Some(&ZStr::from(message)));
         self.vm.deprecated_constants.insert(n, suffix);

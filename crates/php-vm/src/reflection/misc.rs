@@ -12,63 +12,59 @@ use crate::types::{mask, TypeDecl};
 use crate::vm::{Vm, VmResult};
 use php_runtime::{ArrayKey, HashTable, Obj, Value, ZArray, ZStr};
 use std::cell::{Cell, RefCell};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::rc::Rc;
 
 // ---------------------------------------------------------------------
 // Extension attribution
 // ---------------------------------------------------------------------
 
-/// Snapshot of the function, class and constant tables.
-type Tables = (HashSet<Vec<u8>>, HashSet<Vec<u8>>, HashSet<Vec<u8>>);
-
 #[derive(Default)]
 struct Modules {
     functions: HashMap<Vec<u8>, String>,
     classes: HashMap<Vec<u8>, String>,
     constants: HashMap<Vec<u8>, String>,
-    #[allow(dead_code)]
-    snapshot: Option<Tables>,
+    /// The extension whose `register` is running.
+    current: Option<String>,
 }
 
 thread_local! {
     static MODULES: RefCell<Modules> = RefCell::new(Modules::default());
 }
 
-#[allow(dead_code)]
-fn snapshot(vm: &Vm) -> Tables {
-    (
-        vm.functions.keys().map(|k| k.as_bytes().to_vec()).collect(),
-        vm.classes.keys().map(|k| k.as_bytes().to_vec()).collect(),
-        vm.constants.keys().map(|k| k.as_bytes().to_vec()).collect(),
-    )
+/// Which table [`note_new`] records into.
+#[derive(Clone, Copy)]
+pub(crate) enum Table {
+    Function,
+    Class,
+    Constant,
 }
 
-/// Records which functions, classes and constants extension `name`
-/// registered (call with `begin = true` before and `false` after
-/// `Extension::register`).
-#[allow(dead_code)] // called from `Vm::with_extensions` once that hook lands
-pub(crate) fn record_module(vm: &Vm, name: &str, begin: bool) {
-    if begin {
-        let s = snapshot(vm);
-        MODULES.with(|m| m.borrow_mut().snapshot = Some(s));
-        return;
-    }
-    let (f, c, k) = snapshot(vm);
+/// Opens (`begin = true`) or closes the window in which every *new*
+/// function, class and constant is attributed to extension `name`
+/// (the insert sites call [`note_new`]).
+///
+/// This replaces comparing full snapshots of the three tables before and
+/// after each extension, which was O(extensions × symbols) and 70 % of
+/// debug-build startup.
+pub(crate) fn record_module(_vm: &Vm, name: &str, begin: bool) {
+    MODULES.with(|m| m.borrow_mut().current = begin.then(|| name.to_string()));
+}
+
+/// Attributes a key that was just added to `table` (the insert returned
+/// `None`) to the extension being registered, if any.
+pub(crate) fn note_new(table: Table, key: &[u8]) {
     MODULES.with(|m| {
         let mut m = m.borrow_mut();
-        let Some((bf, bc, bk)) = m.snapshot.take() else {
+        let Some(name) = m.current.clone() else {
             return;
         };
-        for x in f.difference(&bf) {
-            m.functions.insert(x.clone(), name.to_string());
-        }
-        for x in c.difference(&bc) {
-            m.classes.insert(x.clone(), name.to_string());
-        }
-        for x in k.difference(&bk) {
-            m.constants.insert(x.clone(), name.to_string());
-        }
+        let map = match table {
+            Table::Function => &mut m.functions,
+            Table::Class => &mut m.classes,
+            Table::Constant => &mut m.constants,
+        };
+        map.insert(key.to_vec(), name);
     });
 }
 

@@ -323,9 +323,24 @@ impl Frame {
             ip: 0,
             vars,
             cv_map,
-            tmps: vec![Value::Null; ntmps],
-            iters: (0..niters).map(|_| None).collect(),
-            fins: vec![FinState::None; nfin],
+            // Empty vectors are built without the generic `from_elem` /
+            // `collect` machinery (builtin frames and most functions need
+            // no iterators or finally slots; this matters in debug builds).
+            tmps: if ntmps == 0 {
+                Vec::new()
+            } else {
+                vec![Value::Null; ntmps]
+            },
+            iters: if niters == 0 {
+                Vec::new()
+            } else {
+                (0..niters).map(|_| None).collect()
+            },
+            fins: if nfin == 0 {
+                Vec::new()
+            } else {
+                vec![FinState::None; nfin]
+            },
             calls: Vec::new(),
             this: None,
             scope: None,
