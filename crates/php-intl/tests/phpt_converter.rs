@@ -88,10 +88,7 @@ fn uconverter_oop_callback_return() {
     assert_eq!(c.convert("ñòóô".as_bytes(), false).unwrap(), b"ABC");
 }
 
-struct Trace(
-    Arc<Mutex<Vec<String>>>,
-    Arc<Mutex<Option<*const UConverter>>>,
-);
+struct Trace(Arc<Mutex<Vec<String>>>);
 
 impl PhpCallbacks for Trace {
     // Like `parent::toUCallback()`: substitute and clear the error.
@@ -124,10 +121,7 @@ impl PhpCallbacks for Trace {
 fn uconverter_oop_callback_sequence() {
     let log = Arc::new(Mutex::new(Vec::new()));
     {
-        let mut c = UConverter::new_empty(Some(Box::new(Trace(
-            log.clone(),
-            Arc::new(Mutex::new(None)),
-        ))));
+        let mut c = UConverter::new_empty(Some(Box::new(Trace(log.clone()))));
         c.construct(Some("ascii"), Some("utf-8")).unwrap();
         for w in [
             &b"regular"[..],
