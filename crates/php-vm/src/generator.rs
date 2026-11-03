@@ -783,7 +783,15 @@ impl Vm {
         for c in children_of(g) {
             detach(&c);
         }
-        detach(g);
+        // Releasing the delegate destroys it first when this was its last
+        // reference (`OBJ_RELEASE(&parent->std)`).
+        if let Some(p) = with(g, |d| d.parent.take()).flatten() {
+            remove_child(&p, g);
+            bump_epoch();
+            if Rc::strong_count(p.rc()) == 1 {
+                self.gen_destroy(&p)?;
+            }
+        }
         let in_finally_scope = with(g, |d| {
             d.frame.as_ref().is_some_and(|f| {
                 let ip = f.ip.saturating_sub(1) as u32;
@@ -801,10 +809,16 @@ impl Vm {
             close(g);
             return Ok(());
         };
-        with(g, |d| {
+        // zend_generator_cleanup_unfinished_execution: release pending
+        // calls and loop variables before entering `finally`.
+        let released = with(g, |d| {
             d.forced_close = true;
             d.pending_exc = Some(ge);
-        });
+            d.frame.as_mut().map(|f| (std::mem::take(&mut f.calls), f.iters.iter_mut().map(Option::take).collect::<Vec<_>>()))
+        })
+        .flatten();
+        drop(released);
+        self.run_pending_destructors()?;
         let r = self.gen_run(g);
         close(g);
         match r {
@@ -886,12 +900,17 @@ fn g_debug_info(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 /// The `dtor_obj` handler.
 fn g_destruct(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let g = gen_obj(a);
-    // php-src destroys without a call frame: hide ours from backtraces.
+    // php-src destroys without a call frame: the generator appears called
+    // from the code that released it (or from internal code at shutdown).
     let own = vm.frames.pop();
-    let hidden = Frame::with_vars(vm.empty_code.clone(), FrameKind::Builtin, vm.empty_vars.clone(), None);
-    vm.frames.push(hidden);
+    let hidden = vm.frames.is_empty();
+    if hidden {
+        vm.frames.push(Frame::with_vars(vm.empty_code.clone(), FrameKind::Builtin, vm.empty_vars.clone(), None));
+    }
     let r = vm.gen_destroy(&g);
-    vm.frames.pop();
+    if hidden {
+        vm.frames.pop();
+    }
     if let Some(f) = own {
         vm.frames.push(f);
     }
