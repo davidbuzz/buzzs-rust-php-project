@@ -747,3 +747,153 @@ fn bug69491_dump() {
     t.var_dump(&v);
     t.expect("bug69491.phpt");
 }
+
+#[test]
+fn bug72588_reference_offset() {
+    let mut t = T::new("bug72588");
+    let mut xml = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<templates>\n");
+    for i in 1..=10 {
+        xml += &format!("    <object type=\"obj_{i}\" label=\"Label for object {i}\"></object>\n");
+    }
+    xml += "</templates>";
+    let tpl = t.load_string(&xml);
+    let o = t.prop(&tpl, "object");
+    let r = php_runtime::PhpRef::new(Value::Int(5));
+    let v = t.dim(&o, Value::Reference(r));
+    t.var_dump(&v);
+    t.expect("bug72588.phpt");
+}
+
+#[test]
+fn bug72957_coalesce() {
+    let mut t = T::new("bug72957");
+    let xml = t.new_sxe("<root><elem>Text</elem></root>");
+    let v = t.prop_mode(&xml, "elem2", FetchMode::IsSet);
+    let st = if v.is_null() { "backup string".to_string() } else { t.str(&v) };
+    t.echo(format!("elem2 is: {st}\n"));
+    let st = if t.isset_prop(&xml, "elem2") {
+        let v = t.prop(&xml, "elem2");
+        t.str(&v)
+    } else {
+        "backup string".to_string()
+    };
+    t.echo(format!("elem2 is: {st}\n"));
+    t.expect("bug72957.phpt");
+}
+
+#[test]
+fn bug72971_namespaced_unset() {
+    let mut t = T::new("bug72971");
+    let xml = t.new_sxe("<root xmlns:ns=\"ns\"><foo>bar</foo><ns:foo>ns:bar</ns:foo><ns:foo2>ns:bar2</ns:foo2></root>");
+    let b = t.isset_prop(&xml, "foo2");
+    t.var_dump(&Value::Bool(b));
+    t.unset_prop(&xml, "foo");
+    let c = t.children(&xml, Some("ns"), false);
+    t.var_dump(&c);
+    t.expect("bug72971.phpt");
+}
+
+#[test]
+fn bug72971_2_namespaced_write() {
+    let mut t = T::new("bug72971_2");
+    let xml = t.new_sxe("<root xmlns:ns=\"ns\"><foo>bar</foo><ns:foo>ns:bar</ns:foo></root>");
+    t.set_prop(&xml, "foo", s("new-bar"));
+    let v = t.prop(&xml, "foo");
+    t.var_dump(&v);
+    drop(v);
+    let c = t.children(&xml, Some("ns"), false);
+    let v = t.prop(&c, "foo");
+    drop(c);
+    t.var_dump(&v);
+    drop(v);
+    let c = t.children(&xml, Some("ns"), false);
+    t.set_prop(&c, "foo", s("ns:new-bar"));
+    drop(c);
+    let v = t.prop(&xml, "foo");
+    t.var_dump(&v);
+    drop(v);
+    let c = t.children(&xml, Some("ns"), false);
+    let v = t.prop(&c, "foo");
+    drop(c);
+    t.var_dump(&v);
+    t.expect("bug72971_2.phpt");
+}
+
+#[test]
+fn bug74950_invalid_options() {
+    let mut t = T::new("bug74950");
+    let e = t.new_sxe_ex("SimpleXMLElement", "0", 9_000_000_000, false, "", false).unwrap_err();
+    assert_eq!(e.exception_class().as_deref(), Some("Exception"));
+    assert_eq!(
+        e.message(),
+        Some("SimpleXMLElement::__construct(): Argument #2 ($options) is invalid")
+    );
+}
+
+#[test]
+fn bug75245_whitespace_children() {
+    let mut t = T::new("bug75245");
+    let v = t.load_string("<test1><test2>    </test2><test3></test3></test1>");
+    t.var_dump(&v);
+    t.expect("bug75245.phpt");
+}
+
+#[test]
+fn bug76712_empty_values() {
+    let mut t = T::new("bug76712");
+    let sxe = t.new_sxe("<foo></foo>");
+    t.add_child(&sxe, "bar", Some(""), None);
+    let x = t.as_xml(&sxe);
+    let o = t.str(&x);
+    t.echo(o);
+    let sxe = t.new_sxe("<foo></foo>");
+    t.add_child(&sxe, "bar", None, None);
+    t.set_prop(&sxe, "bar", s(""));
+    let x = t.as_xml(&sxe);
+    let o = t.str(&x);
+    t.echo(o);
+    t.expect("bug76712.phpt");
+}
+
+#[test]
+fn bug81325_import_empty_document() {
+    let mut t = T::new("bug81325");
+    t.echo("\nWarning: DOMDocument::loadXML(): Start tag expected, '<' not found in Entity, line: 1 in /t/bug81325.php on line 1\n");
+    let doc = php_libxml::tree::Document::new(b"1.0").unwrap();
+    t.func("simplexml_import_dom");
+    let r = php_simplexml::Sxe::import_dom(&mut t.h, Some(doc.as_node()), None);
+    t.catch(r);
+    t.echo("Done\n");
+    t.expect("bug81325.phpt");
+}
+
+#[test]
+fn feature55218_doc_namespaces() {
+    let mut t = T::new("feature55218");
+    let x = t.new_sxe("<?xml version=\"1.0\" standalone=\"yes\"?>\n<people xmlns:p=\"http://example.org/p\" >\n    <person id=\"1\" xmlns:t=\"http://example.org/t\" >\n                <t:name>John Doe</t:name>\n        </person>\n    <person id=\"2\">Susie Q. Public</person>\n    <o>\n                <p:div>jdslkfjsldk jskdfjsmlkjfkldjkjflskj kljfslkjf sldk</p:div>\n        </o>\n</people>");
+    let persons = t.prop(&x, "person");
+    let p0 = t.dim(&persons, Value::Int(0));
+    let p1 = t.dim(&persons, Value::Int(1));
+    let dn = |t: &mut T, v: &Value, rec: bool, root: bool| {
+        let sx = t.sxe(v);
+        let r = php_simplexml::Sxe::get_doc_namespaces(&sx, rec, root).unwrap();
+        t.var_dump(&r);
+    };
+    t.echo("getDocNamespaces\n\nBackwards Compatibility:\nrecursion:\n");
+    for v in [&x, &p0, &p1] {
+        dn(&mut t, v, true, true);
+    }
+    t.echo("\nnon recursive:\n");
+    for v in [&x, &p0, &p1] {
+        dn(&mut t, v, false, true);
+    }
+    t.echo("\n\nUsing new 'from_root' bool set to false:\nrecursion:\n");
+    for v in [&x, &p0, &p1] {
+        dn(&mut t, v, true, false);
+    }
+    t.echo("\nnon recursive:\n");
+    for v in [&x, &p0, &p1] {
+        dn(&mut t, v, false, false);
+    }
+    t.expect("feature55218.phpt");
+}
