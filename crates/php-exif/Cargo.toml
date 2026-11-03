@@ -1,6 +1,6 @@
 [package]
 name = "php-exif"
-description = "PHP's ext/filter: filter_var/filter_var_array/filter_input engine with all validation and sanitizing filters"
+description = "PHP's ext/exif (exif_read_data, exif_thumbnail, exif_imagetype, exif_tagname) plus the shared image identification of ext/standard/image.c (getimagesize, image_type_to_mime_type, IMAGETYPE_*)"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
