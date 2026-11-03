@@ -448,6 +448,10 @@ pub struct ParamInfo {
     pub promote: u32,
     /// `#[SensitiveParameter]`
     pub sensitive: bool,
+    /// Default value expression (for Reflection).
+    pub default_expr: Option<crate::class::ConstExpr>,
+    /// Attributes.
+    pub attributes: Vec<crate::class::AttributeInfo>,
 }
 
 /// A compiled function body (also used for files and `eval`).

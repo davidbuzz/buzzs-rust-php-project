@@ -360,6 +360,11 @@ impl Compiler {
                 sensitive: attrs
                     .iter()
                     .any(|a| a.name.eq_ignore_ascii_case(b"SensitiveParameter")),
+                default_expr: match &p.default {
+                    Some(d) => Some(self.const_expr(d)?),
+                    None => None,
+                },
+                attributes: attrs,
             });
         }
         // Required count: up to the last required parameter.

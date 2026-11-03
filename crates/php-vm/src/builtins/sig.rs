@@ -200,6 +200,8 @@ pub(crate) fn parse_sig(sig: &str) -> Sig {
             default_text: default.map(str::to_string),
             promote: 0,
             sensitive: false,
+            default_expr: None,
+            attributes: Vec::new(),
         });
         defaults.push(default.and_then(parse_default));
     }

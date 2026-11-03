@@ -124,6 +124,7 @@ pub(crate) fn register(vm: &mut Vm) {
     crate::closure::register(vm);
     crate::generator::register(vm);
     crate::fiber::register(vm);
+    crate::reflection::register(vm);
     ClassBuilder::new("Attribute")
         .flags(cflags::FINAL)
         .prop("flags", PUB, Some("int"), None)

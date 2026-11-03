@@ -31,6 +31,7 @@ pub mod object;
 pub mod opcode;
 mod place;
 mod props;
+mod reflection;
 mod typecheck;
 pub mod types;
 pub mod vm;
