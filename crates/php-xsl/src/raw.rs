@@ -373,8 +373,15 @@ impl Stylesheet {
         ensure_init();
         // SAFETY: source is live; the copy is fresh and exclusively ours.
         let copy = NonNull::new(unsafe { ffi::xmlCopyDoc(source.as_ptr(), 1) })?;
+        if modern {
+            // xmlCopyDoc drops the namespace of modern-DOM xmlns attributes
+            // (their namespaces are not in nsDef): restore the declarations
+            // from the original instead of from the copy.
+            // SAFETY: both documents are live; the copy is exclusively ours.
+            unsafe { ffi::php_xsl_glue_add_ns_defs_from(source.as_ptr(), copy.as_ptr()) };
+        }
         // SAFETY: as above.
-        Self::compile_owned(unsafe { OwnedDocument::from_raw(copy) }, modern)
+        Self::compile_owned(unsafe { OwnedDocument::from_raw(copy) }, false)
     }
 
     /// Compiles a stylesheet document clone with PHP's parser globals,

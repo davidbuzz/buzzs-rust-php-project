@@ -299,6 +299,75 @@ void php_xsl_glue_add_ns_defs(xmlDocPtr doc)
 	}
 }
 
+/* The modern-DOM variant for a document copied with xmlCopyDoc(): modern
+ * documents keep their namespaces outside of nsDef, so the copy loses the
+ * namespace of every xmlns attribute (xmlCopyProp only finds namespaces
+ * through nsDef). Walks the original and the copy in parallel (xmlCopyDoc
+ * preserves the structure) and adds the declarations of the original's
+ * xmlns attributes to the copy, dropping the copied attributes that lost
+ * their namespace (they would otherwise appear as plain attributes). */
+static void php_xsl_add_ns_def_pair(xmlNodePtr orig, xmlNodePtr copy)
+{
+	static const xmlChar xmlns_uri[] = "http://www.w3.org/2000/xmlns/";
+	if (orig->type != XML_ELEMENT_NODE || copy->type != XML_ELEMENT_NODE) {
+		return;
+	}
+	xmlAttrPtr oa = orig->properties;
+	xmlAttrPtr ca = copy->properties;
+	while (oa != NULL && ca != NULL) {
+		xmlAttrPtr cnext = ca->next;
+		if (oa->ns != NULL && xmlStrEqual(oa->ns->href, xmlns_uri)) {
+			xmlNsPtr ns = xmlMalloc(sizeof(*ns));
+			if (!ns) {
+				return;
+			}
+			xmlChar *value = xmlNodeListGetString(orig->doc, oa->children, 1);
+			memset(ns, 0, sizeof(*ns));
+			ns->type = XML_LOCAL_NAMESPACE;
+			ns->href = value ? value : xmlStrdup((const xmlChar *) "");
+			ns->prefix = oa->ns->prefix ? xmlStrdup(oa->name) : NULL;
+			ns->next = copy->nsDef;
+			copy->nsDef = ns;
+			if (ca->ns == NULL) {
+				xmlUnlinkNode((xmlNodePtr) ca);
+				xmlFreeProp(ca);
+			}
+		}
+		oa = oa->next;
+		ca = cnext;
+	}
+}
+
+static xmlNodePtr php_xsl_next_in_tree(xmlNodePtr node, xmlNodePtr base)
+{
+	if (node->type == XML_ELEMENT_NODE && node->children) {
+		return node->children;
+	}
+	while (node != NULL && node != base) {
+		if (node->next) {
+			return node->next;
+		}
+		node = node->parent;
+	}
+	return NULL;
+}
+
+void php_xsl_glue_add_ns_defs_from(xmlDocPtr orig, xmlDocPtr copy)
+{
+	xmlNodePtr obase = (xmlNodePtr) orig;
+	xmlNodePtr cbase = (xmlNodePtr) copy;
+	xmlNodePtr o = obase->children;
+	xmlNodePtr c = cbase->children;
+	while (o != NULL && c != NULL) {
+		if (o->type != c->type) {
+			return; /* not a structural copy: give up */
+		}
+		php_xsl_add_ns_def_pair(o, c);
+		o = php_xsl_next_in_tree(o, obase);
+		c = php_xsl_next_in_tree(c, cbase);
+	}
+}
+
 /* Stops the transformation (after a Rust panic in a callback). */
 void php_xsl_glue_ctxt_stop(xsltTransformContextPtr ctxt)
 {

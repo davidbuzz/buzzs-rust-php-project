@@ -240,4 +240,5 @@ extern "C" {
     pub fn php_xsl_glue_nsnode_prefix(ns: *mut xmlNs) -> *const xmlChar;
     pub fn php_xsl_glue_nsnode_href(ns: *mut xmlNs) -> *const xmlChar;
     pub fn php_xsl_glue_add_ns_defs(doc: *mut xmlDoc);
+    pub fn php_xsl_glue_add_ns_defs_from(orig: *mut xmlDoc, copy: *mut xmlDoc);
 }
