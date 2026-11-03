@@ -82,6 +82,12 @@ pub(crate) fn register_all(vm: &mut Vm) {
     crate::weakref::register(vm);
     core::register(vm);
     crate::gc::register(vm);
+    crate::gc::add_root_provider(crate::gc::RootProvider {
+        take: php_runtime::ref_roots::take,
+        len: php_runtime::ref_roots::len,
+        set_recording: php_runtime::ref_roots::set_recording,
+    });
+    php_runtime::ref_roots::set_notify(Some(crate::gc::note_possible_root));
     headers::register(vm);
     var::register(vm);
     output::register(vm);
