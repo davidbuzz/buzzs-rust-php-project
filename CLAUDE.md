@@ -58,6 +58,7 @@ A Rust re-implementation of PHP whose goal is to pass the php-src `.phpt` test s
 - `crates/php-memlimit` — counting global allocator + memory_limit accounting for the "Allowed memory size exhausted" fatal (ref: Zend/zend_alloc.c semantics)
 - `crates/php-cli-server` — the CLI built-in web server (`php -S`) (ref: sapi/cli/php_cli_server.c)
 - `crates/php-curl` + `crates/php-ext-curl` — libcurl binding with ext/curl semantics (ref: ext/curl)
+- `crates/php-ftp` + `crates/php-ext-ftp` — FTP client protocol with ext/ftp semantics (ref: ext/ftp)
 - `crates/php-stdmisc`  — ext/standard: crypt/password, exec/proc_open, network/dns, env/info, highlight, getopt, http_build_query/parse_str, locale
 - `crates/php-phar`     — phar/tar/zip archive formats, manifest, signatures, stub, phar:// semantics (ref: ext/phar)
 - `crates/php-dom`      — ext/dom (legacy DOMDocument API + PHP 8.4 Dom\\* HTML5 API) over php-libxml (ref: ext/dom, ext/lexbor)
