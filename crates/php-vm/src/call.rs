@@ -566,12 +566,14 @@ impl Vm {
             (Some(p), Some(n)) => {
                 call.has_named = true;
                 if call.args.len() > p && call.args[p].is_some() {
+                    let what = if call.pfa.as_ref().is_some_and(|x| x.placeholders.get(p).copied().unwrap_or(false)) {
+                        "placeholder"
+                    } else {
+                        "argument"
+                    };
                     return Err(self.make_throw(
                         "Error",
-                        &format!(
-                            "Named parameter ${} overwrites previous argument",
-                            n.to_string_lossy()
-                        ),
+                        &format!("Named parameter ${} overwrites previous {what}", n.to_string_lossy()),
                     ));
                 }
                 if call.args.len() <= p {

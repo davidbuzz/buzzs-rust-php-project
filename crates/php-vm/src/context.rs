@@ -690,6 +690,10 @@ impl OutputHost for Vm {
         let _ = self.stdout.write_all(data);
     }
 
+    fn send_headers(&mut self) -> bool {
+        crate::builtins::headers::send_headers(self)
+    }
+
     fn sapi_flush(&mut self) {
         let _ = self.stdout.flush();
     }

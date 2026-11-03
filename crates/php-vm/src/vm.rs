@@ -492,6 +492,9 @@ pub struct Vm {
     pub(crate) ini_stage: crate::ext::IniStage,
     /// Method name of the native `__call`/`__callStatic` being run.
     pub(crate) magic_call_name: Option<ZStr>,
+    /// INI warnings raised while building the registry at startup (the
+    /// SAPI reports them as "PHP Startup: ...").
+    pub startup_diagnostics: Vec<php_support::Diagnostic>,
     /// Named native output handlers (`ob_start('ob_gzhandler')`).
     pub output_handler_aliases: HashMap<ZStr, crate::ext::OutputHandlerFn>,
     /// `include` opener hook.

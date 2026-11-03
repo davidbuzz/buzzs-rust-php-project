@@ -176,6 +176,7 @@ impl Vm {
             prop_ctx: crate::ext::PropCtx::Read,
             ini_stage: crate::ext::IniStage::Runtime,
             magic_call_name: None,
+            startup_diagnostics: Vec::new(),
             output_handler_aliases: std::collections::HashMap::new(),
             include_opener: None,
             source_filter: None,
@@ -192,6 +193,7 @@ impl Vm {
         for n in ["error_reporting", "precision", "serialize_precision"] {
             vm.sync_ini(n);
         }
+        vm.startup_diagnostics = sink;
         builtins::register_all(&mut vm);
         vm
     }
@@ -224,59 +226,18 @@ impl Vm {
         }
     }
 
-    /// Sets `$argv`, `$argc` and `$_SERVER` for a CLI script.
+    /// Sets `$argv` and `$argc` for a CLI script (the SAPI fills the
+    /// superglobals: `$_SERVER`, `$_ENV`, the request arrays).
     pub fn set_cli_args(&mut self, script: &str, args: &[Vec<u8>]) {
         let mut argv = vec![Value::Str(ZStr::from(script))];
         argv.extend(args.iter().map(|a| Value::Str(ZStr::from(a.as_slice()))));
         let argc = i64::try_from(argv.len()).unwrap_or(0);
         let argv_arr = Value::Array(ZArray::from_values(argv));
-        let mut server = HashTable::new();
-        for (k, v) in std::env::vars_os() {
-            use std::os::unix::ffi::OsStrExt;
-            server.insert(
-                ArrayKey::from_bytes(k.as_bytes()),
-                Value::Str(ZStr::from(v.as_bytes())),
-            );
-        }
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default();
-        let s = |x: &str| Value::Str(ZStr::from(x));
-        server.insert(ArrayKey::from("PHP_SELF"), s(script));
-        server.insert(ArrayKey::from("SCRIPT_NAME"), s(script));
-        server.insert(ArrayKey::from("SCRIPT_FILENAME"), s(script));
-        server.insert(ArrayKey::from("PATH_TRANSLATED"), s(script));
-        server.insert(ArrayKey::from("DOCUMENT_ROOT"), s(""));
-        server.insert(
-            ArrayKey::from("REQUEST_TIME_FLOAT"),
-            Value::Float(now.as_secs_f64()),
-        );
-        server.insert(
-            ArrayKey::from("REQUEST_TIME"),
-            Value::Int(i64::try_from(now.as_secs()).unwrap_or(0)),
-        );
-        server.insert(ArrayKey::from("argv"), argv_arr.clone());
-        server.insert(ArrayKey::from("argc"), Value::Int(argc));
-        let mut env = HashTable::new();
-        for (k, v) in std::env::vars_os() {
-            use std::os::unix::ffi::OsStrExt;
-            env.insert(
-                ArrayKey::from_bytes(k.as_bytes()),
-                Value::Str(ZStr::from(v.as_bytes())),
-            );
-        }
         let mut g = self.globals.borrow_mut();
         let mut set = |name: &str, v: Value| {
             let i = g.find_or_add(name.as_bytes()) as usize;
             g.slots[i] = Some(v);
         };
-        set("_GET", Value::Array(ZArray::new()));
-        set("_POST", Value::Array(ZArray::new()));
-        set("_COOKIE", Value::Array(ZArray::new()));
-        set("_FILES", Value::Array(ZArray::new()));
-        set("_ENV", Value::Array(ZArray::from_table(env)));
-        set("_REQUEST", Value::Array(ZArray::new()));
-        set("_SERVER", Value::Array(ZArray::from_table(server)));
         set("argv", argv_arr);
         set("argc", Value::Int(argc));
         drop(g);
@@ -367,6 +328,9 @@ impl Vm {
             h(self);
         }
         php_support::output::request_shutdown(self);
+        // `sapi_deactivate`: headers go out (and header_register_callback
+        // runs) even when the script produced no output.
+        crate::builtins::headers::send_headers(self);
         self.flush_stdout();
         php_memlimit::request_end();
         self.exit_status

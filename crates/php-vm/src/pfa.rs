@@ -137,15 +137,35 @@ impl Vm {
     ) -> VmResult<Value> {
         let pfa = call.pfa.take().map(|b| *b).unwrap_or_default();
         let func = call.func.clone();
-        let params: Vec<ParamInfo> = func.params().to_vec();
-        let fn_variadic = func.flags() & flags::VARIADIC != 0;
+        // A `__call`/`__callStatic` trampoline: one variadic `$arguments`.
+        let magic = call.magic_name.clone();
+        let params: Vec<ParamInfo> = if magic.is_some() {
+            vec![ParamInfo {
+                name: ZStr::from("arguments"),
+                by_ref: false,
+                variadic: true,
+                ty: None,
+                has_default: false,
+                default_text: None,
+                promote: 0,
+                sensitive: false,
+                default_expr: None,
+                attributes: Vec::new(),
+            }]
+        } else {
+            func.params().to_vec()
+        };
+        let fn_variadic = magic.is_some() || func.flags() & flags::VARIADIC != 0;
         let num_args = if fn_variadic {
             params.len().saturating_sub(1)
         } else {
             params.len()
         };
-        let required = func.required() as usize;
-        let fname = self.func_display(&func, call.scope.as_ref());
+        let required = if magic.is_some() { 0 } else { func.required() as usize };
+        let fname = match (&magic, &call.scope) {
+            (Some(m), Some(sc)) => format!("{}::{}", object::display_name(&sc.name), m.to_string_lossy()),
+            _ => self.func_display(&func, call.scope.as_ref()),
+        };
 
         // `zp_args_check`.
         if let Some(n) = pfa.unknown_named.first() {
@@ -379,7 +399,7 @@ impl Vm {
                         s.push_str(&type_src(t));
                         s.push(' ');
                     }
-                    if func.arg_by_ref(i) {
+                    if (magic.is_none() && func.arg_by_ref(i)) {
                         s.push('&');
                     }
                     s.push('$');
@@ -391,7 +411,7 @@ impl Vm {
                 }
                 Slot::Bound(_) => {
                     let n = names.params[i].clone().unwrap_or_default();
-                    uses.push(if func.arg_by_ref(i) {
+                    uses.push(if (magic.is_none() && func.arg_by_ref(i)) {
                         format!("&${n}")
                     } else {
                         format!("${n}")
@@ -422,7 +442,7 @@ impl Vm {
             s.push_str(names.variadic.as_deref().unwrap_or("args"));
             param_src.push(s);
         }
-        let ret_ty = func.return_type().cloned();
+        let ret_ty = if magic.is_some() { None } else { func.return_type().cloned() };
         let is_void = ret_ty
             .as_ref()
             .is_some_and(|t| t.mask & crate::types::mask::VOID != 0);
@@ -501,7 +521,10 @@ impl Vm {
                 }
             }
             let a = args.join(", ");
-            let fname_src = func.name().to_string_lossy();
+            let fname_src = match &magic {
+                Some(m) => m.to_string_lossy(),
+                None => func.name().to_string_lossy(),
+            };
             Ok(if is_assert {
                 format!("\\call_user_func({a})")
             } else if let Some(n) = &names.inner {
@@ -572,7 +595,7 @@ impl Vm {
             }
             for i in 0..new_argc {
                 if let Slot::Bound(v) = &slots[i] {
-                    let v = if func.arg_by_ref(i) {
+                    let v = if (magic.is_none() && func.arg_by_ref(i)) {
                         match v {
                             Value::Reference(r) => Value::Reference(r.clone()),
                             other => Value::Reference(php_runtime::PhpRef::new(other.clone())),
@@ -632,6 +655,24 @@ impl Vm {
         if let Func::Builtin(b) = func {
             if let Some(v) = b.defaults.get(i).cloned().flatten() {
                 return literal_src(self, &v);
+            }
+            // `zp_get_param_default_value` for internal functions: an
+            // UNKNOWN (or non-literal) default cannot be reproduced.
+            let known = p
+                .default_text
+                .as_deref()
+                .map(str::trim)
+                .is_some_and(|t| !t.is_empty() && t != "UNKNOWN");
+            if !known {
+                let fname = self.func_display(func, scope);
+                return Err(self.make_throw(
+                    "ArgumentCountError",
+                    &format!(
+                        "{fname}(): Argument #{} (${}) must be passed explicitly, because the default value is not known",
+                        i + 1,
+                        p.name.to_string_lossy()
+                    ),
+                ));
             }
         }
         Ok(p.default_text.clone().unwrap_or_else(|| "null".into()))
