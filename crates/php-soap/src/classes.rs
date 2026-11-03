@@ -72,7 +72,11 @@ pub struct ClassDef {
     pub methods: &'static [MethodDef],
 }
 
-const fn p(name: &'static str, ty: Option<&'static str>, default: Option<&'static str>) -> ParamDef {
+const fn p(
+    name: &'static str,
+    ty: Option<&'static str>,
+    default: Option<&'static str>,
+) -> ParamDef {
     ParamDef {
         name,
         ty,
@@ -91,7 +95,11 @@ const fn pub_prop(name: &'static str, ty: &'static str, default: Option<&'static
     }
 }
 
-const fn priv_prop(name: &'static str, ty: Option<&'static str>, default: Option<&'static str>) -> PropDef {
+const fn priv_prop(
+    name: &'static str,
+    ty: Option<&'static str>,
+    default: Option<&'static str>,
+) -> PropDef {
     PropDef {
         name,
         visibility: Visibility::Private,
@@ -100,7 +108,12 @@ const fn priv_prop(name: &'static str, ty: Option<&'static str>, default: Option
     }
 }
 
-const fn m(name: &'static str, params: &'static [ParamDef], ret: Option<&'static str>, tentative: bool) -> MethodDef {
+const fn m(
+    name: &'static str,
+    params: &'static [ParamDef],
+    ret: Option<&'static str>,
+    tentative: bool,
+) -> MethodDef {
     MethodDef {
         name,
         params,
@@ -147,7 +160,11 @@ pub const CLIENT_PROPERTIES: &[PropDef] = &[
     priv_prop("__last_request_headers", Some("?string"), Some("null")),
     priv_prop("__last_response_headers", Some("?string"), Some("null")),
     priv_prop("_keep_headers", Some("int"), Some("0")),
-    priv_prop("_follow_cross_origin_redirects", Some("bool"), Some("false")),
+    priv_prop(
+        "_follow_cross_origin_redirects",
+        Some("bool"),
+        Some("false"),
+    ),
 ];
 
 /// `SoapFault` own properties (after those of `Exception`).
@@ -188,7 +205,8 @@ pub const HEADER_PROPERTIES: &[PropDef] = &[
 ];
 
 /// `SoapServer` properties.
-pub const SERVER_PROPERTIES: &[PropDef] = &[priv_prop("__soap_fault", Some("?SoapFault"), Some("null"))];
+pub const SERVER_PROPERTIES: &[PropDef] =
+    &[priv_prop("__soap_fault", Some("?SoapFault"), Some("null"))];
 
 /// All classes.
 pub const CLASSES: &[ClassDef] = &[
@@ -214,7 +232,15 @@ pub const CLASSES: &[ClassDef] = &[
         is_final: false,
         opaque: false,
         properties: PARAM_PROPERTIES,
-        methods: &[m("__construct", &[p("data", Some("mixed"), None), p("name", Some("string"), None)], None, false)],
+        methods: &[m(
+            "__construct",
+            &[
+                p("data", Some("mixed"), None),
+                p("name", Some("string"), None),
+            ],
+            None,
+            false,
+        )],
     },
     ClassDef {
         name: "SoapHeader",
@@ -286,7 +312,15 @@ pub const CLASSES: &[ClassDef] = &[
         opaque: false,
         properties: SERVER_PROPERTIES,
         methods: &[
-            m("__construct", &[p("wsdl", Some("?string"), None), p("options", Some("array"), Some("[]"))], None, false),
+            m(
+                "__construct",
+                &[
+                    p("wsdl", Some("?string"), None),
+                    p("options", Some("array"), Some("[]")),
+                ],
+                None,
+                false,
+            ),
             m(
                 "fault",
                 &[
@@ -300,8 +334,18 @@ pub const CLASSES: &[ClassDef] = &[
                 Some("void"),
                 true,
             ),
-            m("addSoapHeader", &[p("header", Some("SoapHeader"), None)], Some("void"), true),
-            m("setPersistence", &[p("mode", Some("int"), None)], Some("void"), true),
+            m(
+                "addSoapHeader",
+                &[p("header", Some("SoapHeader"), None)],
+                Some("void"),
+                true,
+            ),
+            m(
+                "setPersistence",
+                &[p("mode", Some("int"), None)],
+                Some("void"),
+                true,
+            ),
             m(
                 "setClass",
                 &[
@@ -317,10 +361,25 @@ pub const CLASSES: &[ClassDef] = &[
                 Some("void"),
                 true,
             ),
-            m("setObject", &[p("object", Some("object"), None)], Some("void"), true),
+            m(
+                "setObject",
+                &[p("object", Some("object"), None)],
+                Some("void"),
+                true,
+            ),
             m("getFunctions", &[], Some("array"), true),
-            m("addFunction", &[p("functions", None, None)], Some("void"), true),
-            m("handle", &[p("request", Some("?string"), Some("null"))], Some("void"), true),
+            m(
+                "addFunction",
+                &[p("functions", None, None)],
+                Some("void"),
+                true,
+            ),
+            m(
+                "handle",
+                &[p("request", Some("?string"), Some("null"))],
+                Some("void"),
+                true,
+            ),
             m("__getLastResponse", &[], Some("?string"), false),
         ],
     },
@@ -331,8 +390,24 @@ pub const CLASSES: &[ClassDef] = &[
         opaque: false,
         properties: CLIENT_PROPERTIES,
         methods: &[
-            m("__construct", &[p("wsdl", Some("?string"), None), p("options", Some("array"), Some("[]"))], None, false),
-            m("__call", &[p("name", Some("string"), None), p("args", Some("array"), None)], Some("mixed"), true),
+            m(
+                "__construct",
+                &[
+                    p("wsdl", Some("?string"), None),
+                    p("options", Some("array"), Some("[]")),
+                ],
+                None,
+                false,
+            ),
+            m(
+                "__call",
+                &[
+                    p("name", Some("string"), None),
+                    p("args", Some("array"), None),
+                ],
+                Some("mixed"),
+                true,
+            ),
             m(
                 "__soapCall",
                 &[
@@ -370,18 +445,46 @@ pub const CLASSES: &[ClassDef] = &[
                 Some("?string"),
                 true,
             ),
-            m("__setCookie", &[p("name", Some("string"), None), p("value", Some("?string"), Some("null"))], Some("void"), true),
+            m(
+                "__setCookie",
+                &[
+                    p("name", Some("string"), None),
+                    p("value", Some("?string"), Some("null")),
+                ],
+                Some("void"),
+                true,
+            ),
             m("__getCookies", &[], Some("array"), true),
-            m("__setSoapHeaders", &[p("headers", None, Some("null"))], Some("bool"), true),
-            m("__setLocation", &[p("location", Some("?string"), Some("null"))], Some("?string"), true),
+            m(
+                "__setSoapHeaders",
+                &[p("headers", None, Some("null"))],
+                Some("bool"),
+                true,
+            ),
+            m(
+                "__setLocation",
+                &[p("location", Some("?string"), Some("null"))],
+                Some("?string"),
+                true,
+            ),
         ],
     },
 ];
 
 /// Global functions.
 pub const FUNCTIONS: &[MethodDef] = &[
-    m("use_soap_error_handler", &[p("enable", Some("bool"), Some("true"))], Some("bool"), false),
-    m("is_soap_fault", &[p("object", Some("mixed"), None)], Some("bool"), false),
+    m(
+        "use_soap_error_handler",
+        &[p("enable", Some("bool"), Some("true"))],
+        Some("bool"),
+        false,
+    ),
+    m(
+        "is_soap_fault",
+        &[p("object", Some("mixed"), None)],
+        Some("bool"),
+        false,
+    ),
 ];
 
 /// Looks a class up (case-insensitive).

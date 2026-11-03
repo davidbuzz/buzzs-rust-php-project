@@ -28,7 +28,12 @@ fn env_ns(version: i64) -> (&'static str, &'static str) {
 
 /// `get_param`.
 #[must_use]
-pub fn get_param<'f>(function: Option<&'f Function>, name: Option<&[u8]>, index: usize, response: bool) -> Option<&'f Param> {
+pub fn get_param<'f>(
+    function: Option<&'f Function>,
+    name: Option<&[u8]>,
+    index: usize,
+    response: bool,
+) -> Option<&'f Param> {
     let f = function?;
     let params = if response {
         f.response_params.as_ref()
@@ -57,8 +62,19 @@ fn new_envelope(version: i64) -> (Doc, NodeId, Ns) {
 }
 
 /// `set_soap_header_attributes`.
-fn set_soap_header_attributes(ctx: &mut EncodeCtx<'_>, doc: &mut Doc, h: NodeId, header: &Obj, version: i64) {
-    if matches!(ctx.host.read_slot(header, "mustUnderstand").map(|v| v.deref()), Some(Value::Bool(true))) {
+fn set_soap_header_attributes(
+    ctx: &mut EncodeCtx<'_>,
+    doc: &mut Doc,
+    h: NodeId,
+    header: &Obj,
+    version: i64,
+) {
+    if matches!(
+        ctx.host
+            .read_slot(header, "mustUnderstand")
+            .map(|v| v.deref()),
+        Some(Value::Bool(true))
+    ) {
         if version == SOAP_1_1 {
             doc.set_prop(h, b"SOAP-ENV:mustUnderstand", b"1");
         } else {
@@ -185,7 +201,10 @@ pub fn serialize_function_call(
     let head = soap_headers.map(|_| doc.new_child(envelope, Some(env_nsp.clone()), b"Header"));
     let body = doc.new_child(envelope, Some(env_nsp.clone()), b"Body");
     let sdl = ctx.sdl.clone();
-    let soap_fn = function.filter(|f| sdl.as_deref().is_some_and(|s| s.binding_of(f).binding_type == BindingType::Soap));
+    let soap_fn = function.filter(|f| {
+        sdl.as_deref()
+            .is_some_and(|s| s.binding_of(f).binding_type == BindingType::Soap)
+    });
     let mut method = None;
     let style;
     let mut use_;
@@ -212,7 +231,11 @@ pub fn serialize_function_call(
             };
             let name: Option<Vec<u8>> = function_name
                 .map(<[u8]>::to_vec)
-                .or_else(|| function.and_then(|f| f.request_name.clone()).map(String::into_bytes))
+                .or_else(|| {
+                    function
+                        .and_then(|f| f.request_name.clone())
+                        .map(String::into_bytes)
+                })
                 .or_else(|| function.map(|f| f.name.clone().into_bytes()));
             method = Some(match name {
                 Some(n) => doc.new_child(body, ns, &n),
@@ -228,7 +251,9 @@ pub fn serialize_function_call(
         };
     }
     let is_soap = soap_fn.is_some();
-    let n_req = function.and_then(|f| f.request_params.as_ref()).map_or(0, Vec::len);
+    let n_req = function
+        .and_then(|f| f.request_params.as_ref())
+        .map_or(0, Vec::len);
     for i in 0..args.len().max(n_req) {
         let parameter = get_param(function, None, i, false);
         let arg = args.get(i);
@@ -303,12 +328,26 @@ pub fn serialize_function_call(
     if use_ == SOAP_ENCODED {
         doc.new_ns(envelope, XSD_NAMESPACE.as_bytes(), Some(b"xsd"));
         if version == SOAP_1_1 {
-            doc.new_ns(envelope, SOAP_1_1_ENC_NAMESPACE.as_bytes(), Some(b"SOAP-ENC"));
-            doc.set_ns_prop(envelope, Some(env_nsp), b"encodingStyle", SOAP_1_1_ENC_NAMESPACE.as_bytes());
+            doc.new_ns(
+                envelope,
+                SOAP_1_1_ENC_NAMESPACE.as_bytes(),
+                Some(b"SOAP-ENC"),
+            );
+            doc.set_ns_prop(
+                envelope,
+                Some(env_nsp),
+                b"encodingStyle",
+                SOAP_1_1_ENC_NAMESPACE.as_bytes(),
+            );
         } else {
             doc.new_ns(envelope, SOAP_1_2_ENC_NAMESPACE.as_bytes(), Some(b"enc"));
             if let Some(m) = method {
-                doc.set_ns_prop(m, Some(env_nsp), b"encodingStyle", SOAP_1_2_ENC_NAMESPACE.as_bytes());
+                doc.set_ns_prop(
+                    m,
+                    Some(env_nsp),
+                    b"encodingStyle",
+                    SOAP_1_2_ENC_NAMESPACE.as_bytes(),
+                );
             }
         }
     }
@@ -332,19 +371,27 @@ fn fault(ctx: &mut EncodeCtx<'_>, this: &Obj, code: &str, msg: &str) -> SoapResu
 
 /// Checks the attributes of Envelope/Body/Header (shared by client and
 /// server); returns the fault message.
-fn check_env_attrs(doc: &Doc, node: NodeId, version: i64, what: &str, body: bool) -> Option<&'static str> {
+fn check_env_attrs(
+    doc: &Doc,
+    node: NodeId,
+    version: i64,
+    what: &str,
+    body: bool,
+) -> Option<&'static str> {
     for a in doc.attrs(node) {
         match &a.ns {
-            None => {
-                if !body || version == SOAP_1_2 {
-                    return Some(match what {
-                        "Envelope" => "A SOAP Envelope element cannot have non Namespace qualified attributes",
-                        "Body" => "A SOAP Body element cannot have non Namespace qualified attributes",
-                        _ => "A SOAP Header element cannot have non Namespace qualified attributes",
-                    });
-                }
+            None if (!body || version == SOAP_1_2) => {
+                return Some(match what {
+                    "Envelope" => {
+                        "A SOAP Envelope element cannot have non Namespace qualified attributes"
+                    }
+                    "Body" => "A SOAP Body element cannot have non Namespace qualified attributes",
+                    _ => "A SOAP Header element cannot have non Namespace qualified attributes",
+                });
             }
-            Some(ns) if a.name == b"encodingStyle" && ns.href == SOAP_1_2_ENV_NAMESPACE.as_bytes() => {
+            Some(ns)
+                if a.name == b"encodingStyle" && ns.href == SOAP_1_2_ENV_NAMESPACE.as_bytes() =>
+            {
                 if version == SOAP_1_2 {
                     return Some(match what {
                         "Envelope" => "encodingStyle cannot be specified on the Envelope",
@@ -397,7 +444,9 @@ pub fn parse_packet_soap(
         }
         if env.is_none() && response.node_is(t, Some("Envelope"), Some(SOAP_1_1_ENV_NAMESPACE)) {
             env = Some(t);
-        } else if env.is_none() && response.node_is(t, Some("Envelope"), Some(SOAP_1_2_ENV_NAMESPACE)) {
+        } else if env.is_none()
+            && response.node_is(t, Some("Envelope"), Some(SOAP_1_2_ENV_NAMESPACE))
+        {
             env = Some(t);
             envelope_ns = SOAP_1_2_ENV_NAMESPACE;
             version = SOAP_1_2;
@@ -406,7 +455,12 @@ pub fn parse_packet_soap(
         }
     }
     let Some(env) = env else {
-        return fault(ctx, this, "Client", "looks like we got XML without \"Envelope\" element");
+        return fault(
+            ctx,
+            this,
+            "Client",
+            "looks like we got XML without \"Envelope\" element",
+        );
     };
     if let Some(msg) = check_env_attrs(&response, env, version, "Envelope", false) {
         return fault(ctx, this, "Client", msg);
@@ -425,13 +479,23 @@ pub fn parse_packet_soap(
     }
     trav = skip_non_elements(&response, trav);
     let Some(body) = body else {
-        return fault(ctx, this, "Client", "Body must be present in a SOAP envelope");
+        return fault(
+            ctx,
+            this,
+            "Client",
+            "Body must be present in a SOAP envelope",
+        );
     };
     if let Some(msg) = check_env_attrs(&response, body, version, "Body", true) {
         return fault(ctx, this, "Client", msg);
     }
     if trav.is_some() && version == SOAP_1_2 {
-        return fault(ctx, this, "Client", "A SOAP 1.2 envelope can contain only Header and Body");
+        return fault(
+            ctx,
+            this,
+            "Client",
+            "A SOAP 1.2 envelope can contain only Header and Body",
+        );
     }
     if let Some(h) = head {
         if let Some(msg) = check_env_attrs(&response, h, version, "Header", false) {
@@ -505,9 +569,16 @@ pub fn parse_packet_soap(
     let sdl = ctx.sdl.clone();
     if let Some(resp) = resp {
         let soap_fn = function.filter(|f| {
-            f.soap.is_some() && sdl.as_deref().is_some_and(|s| s.binding_of(f).binding_type == BindingType::Soap)
+            f.soap.is_some()
+                && sdl
+                    .as_deref()
+                    .is_some_and(|s| s.binding_of(f).binding_type == BindingType::Soap)
         });
-        if let (Some(f), Some(fnb), Some(sdl)) = (soap_fn, soap_fn.and_then(|f| f.soap.as_ref()), sdl.as_deref()) {
+        if let (Some(f), Some(fnb), Some(sdl)) = (
+            soap_fn,
+            soap_fn.and_then(|f| f.soap.as_ref()),
+            sdl.as_deref(),
+        ) {
             hdrs = fnb.output.headers.as_ref();
             if let Some(params) = &f.response_params {
                 let res_count = params.len();
@@ -536,10 +607,12 @@ pub fn parse_packet_soap(
                             val = response.get_node(response.first_child(c), &pname, None);
                             if res_count == 1 {
                                 if val.is_none() {
-                                    val = response.get_node(response.first_child(c), "return", None);
+                                    val =
+                                        response.get_node(response.first_child(c), "return", None);
                                 }
                                 if val.is_none() {
-                                    val = response.get_node(response.first_child(c), "result", None);
+                                    val =
+                                        response.get_node(response.first_child(c), "result", None);
                                 }
                                 if val.is_none() {
                                     if let Some(only) = response.first_child(c) {
@@ -556,7 +629,8 @@ pub fn parse_packet_soap(
                         Some(v) => ctx.master_to_zval(param.encode, &response, v)?,
                     };
                     let key = param.name.clone().unwrap_or_default();
-                    ret.make_mut().insert(ArrayKey::from_bytes(key.as_bytes()), tmp);
+                    ret.make_mut()
+                        .insert(ArrayKey::from_bytes(key.as_bytes()), tmp);
                     param_count += 1;
                 }
             }
@@ -571,12 +645,21 @@ pub fn parse_packet_soap(
                     let name = response.name(v).to_vec();
                     if name.is_empty() {
                         let _ = ret.make_mut().push(tmp);
-                    } else if let Some(existing) = ret.make_mut().get_mut(&ArrayKey::Str(ZStr::from(name.as_slice()))) {
+                    } else if let Some(existing) = ret
+                        .make_mut()
+                        .get_mut(&ArrayKey::Str(ZStr::from(name.as_slice())))
+                    {
                         if let Value::Array(a) = existing {
                             let _ = a.make_mut().push(tmp);
                         }
-                    } else if response.next(v).is_some_and(|n| response.get_node(Some(n), &lossy(&name), None).is_some()) {
-                        ret.make_mut().insert(ArrayKey::from_bytes(&name), Value::Array(ZArray::from_values([tmp])));
+                    } else if response
+                        .next(v)
+                        .is_some_and(|n| response.get_node(Some(n), &lossy(&name), None).is_some())
+                    {
+                        ret.make_mut().insert(
+                            ArrayKey::from_bytes(&name),
+                            Value::Array(ZArray::from_values([tmp])),
+                        );
                     } else {
                         ret.make_mut().insert(ArrayKey::from_bytes(&name), tmp);
                     }
@@ -656,10 +739,18 @@ fn function_index(sdl: &Sdl, f: &Function) -> Option<usize> {
 }
 
 /// `get_doc_function`.
-fn get_doc_function<'s>(sdl: Option<&'s Sdl>, doc: &Doc, params: Option<NodeId>) -> Option<&'s Function> {
+fn get_doc_function<'s>(
+    sdl: Option<&'s Sdl>,
+    doc: &Doc,
+    params: Option<NodeId>,
+) -> Option<&'s Function> {
     let sdl = sdl?;
     for f in sdl.functions() {
-        let Some(fnb) = f.soap.as_ref().filter(|_| sdl.binding_of(f).binding_type == BindingType::Soap) else {
+        let Some(fnb) = f
+            .soap
+            .as_ref()
+            .filter(|_| sdl.binding_of(f).binding_type == BindingType::Soap)
+        else {
             continue;
         };
         if fnb.style != SOAP_DOCUMENT {
@@ -718,13 +809,18 @@ fn get_doc_function<'s>(sdl: Option<&'s Sdl>, doc: &Doc, params: Option<NodeId>)
 }
 
 /// `find_function`.
-fn find_function<'s>(sdl: Option<&'s Sdl>, doc: &Doc, func: NodeId) -> (Option<&'s Function>, Vec<u8>) {
+fn find_function<'s>(
+    sdl: Option<&'s Sdl>,
+    doc: &Doc,
+    func: NodeId,
+) -> (Option<&'s Function>, Vec<u8>) {
     let mut function = sdl.and_then(|s| s.get_function(doc.name(func)));
     if let (Some(f), Some(s)) = (function, sdl) {
         if s.binding_of(f).binding_type == BindingType::Soap {
             if let Some(fnb) = &f.soap {
                 if fnb.style == SOAP_DOCUMENT
-                    && (doc.first_child(func).is_some() || f.request_params.as_ref().is_some_and(|p| !p.is_empty()))
+                    && (doc.first_child(func).is_some()
+                        || f.request_params.as_ref().is_some_and(|p| !p.is_empty()))
                 {
                     function = None;
                 }
@@ -742,7 +838,10 @@ fn find_function<'s>(sdl: Option<&'s Sdl>, doc: &Doc, func: NodeId) -> (Option<&
 }
 
 /// `find_function_using_soap_action`.
-fn find_function_using_soap_action<'s>(sdl: Option<&'s Sdl>, soap_action: &[u8]) -> Option<&'s Function> {
+fn find_function_using_soap_action<'s>(
+    sdl: Option<&'s Sdl>,
+    soap_action: &[u8],
+) -> Option<&'s Function> {
     let sdl = sdl?;
     let mut action = soap_action;
     if action.first() == Some(&b'"') {
@@ -756,8 +855,7 @@ fn find_function_using_soap_action<'s>(sdl: Option<&'s Sdl>, soap_action: &[u8])
     }
     sdl.functions().find(|f| {
         sdl.binding_of(f).binding_type == BindingType::Soap
-            && f
-                .soap
+            && f.soap
                 .as_ref()
                 .and_then(|b| b.soap_action.as_ref())
                 .is_some_and(|a| a.as_bytes() == action)
@@ -796,10 +894,14 @@ fn deserialize_parameters(
     let mut out = Vec::new();
     let mut num = 0;
     if let Some(p) = params {
-        num = doc.siblings_from(Some(p)).filter(|&t| doc.is_element(t)).count();
+        num = doc
+            .siblings_from(Some(p))
+            .filter(|&t| doc.is_element(t))
+            .count();
         let doc_style_no_params = num == 1
             && function.is_some_and(|f| {
-                sdl.as_deref().is_some_and(|s| s.binding_of(f).binding_type == BindingType::Soap)
+                sdl.as_deref()
+                    .is_some_and(|s| s.binding_of(f).binding_type == BindingType::Soap)
                     && f.soap.as_ref().is_some_and(|b| b.style == SOAP_DOCUMENT)
                     && f.request_params.as_ref().is_none_or(Vec::is_empty)
                     && doc.name(p) == f.name.as_bytes()
@@ -868,7 +970,10 @@ pub fn deserialize_function_call(
         return Err(server_fault("VersionMismatch", "Wrong Version"));
     }
     let Some(env) = env else {
-        return Err(server_fault("Client", "looks like we got XML without \"Envelope\" element"));
+        return Err(server_fault(
+            "Client",
+            "looks like we got XML without \"Envelope\" element",
+        ));
     };
     for a in request.attrs(env) {
         match &a.ns {
@@ -878,9 +983,14 @@ pub fn deserialize_function_call(
                     "A SOAP Envelope element cannot have non Namespace qualified attributes",
                 ))
             }
-            Some(ns) if a.name == b"encodingStyle" && ns.href == SOAP_1_2_ENV_NAMESPACE.as_bytes() => {
+            Some(ns)
+                if a.name == b"encodingStyle" && ns.href == SOAP_1_2_ENV_NAMESPACE.as_bytes() =>
+            {
                 if version == SOAP_1_2 {
-                    return Err(server_fault("Client", "encodingStyle cannot be specified on the Envelope"));
+                    return Err(server_fault(
+                        "Client",
+                        "encodingStyle cannot be specified on the Envelope",
+                    ));
                 } else if a.value != SOAP_1_1_ENC_NAMESPACE.as_bytes() {
                     return Err(server_fault("Client", "Unknown data encoding style"));
                 }
@@ -902,21 +1012,27 @@ pub fn deserialize_function_call(
     }
     trav = skip_non_elements(request, trav);
     let Some(body) = body else {
-        return Err(server_fault("Client", "Body must be present in a SOAP envelope"));
+        return Err(server_fault(
+            "Client",
+            "Body must be present in a SOAP envelope",
+        ));
     };
     for a in request.attrs(body) {
         match &a.ns {
-            None => {
+            None if version == SOAP_1_2 => {
+                return Err(server_fault(
+                    "Client",
+                    "A SOAP Body element cannot have non Namespace qualified attributes",
+                ));
+            }
+            Some(ns)
+                if a.name == b"encodingStyle" && ns.href == SOAP_1_2_ENV_NAMESPACE.as_bytes() =>
+            {
                 if version == SOAP_1_2 {
                     return Err(server_fault(
                         "Client",
-                        "A SOAP Body element cannot have non Namespace qualified attributes",
+                        "encodingStyle cannot be specified on the Body",
                     ));
-                }
-            }
-            Some(ns) if a.name == b"encodingStyle" && ns.href == SOAP_1_2_ENV_NAMESPACE.as_bytes() => {
-                if version == SOAP_1_2 {
-                    return Err(server_fault("Client", "encodingStyle cannot be specified on the Body"));
                 } else if a.value != SOAP_1_1_ENC_NAMESPACE.as_bytes() {
                     return Err(server_fault("Client", "Unknown data encoding style"));
                 }
@@ -925,7 +1041,10 @@ pub fn deserialize_function_call(
         }
     }
     if trav.is_some() && version == SOAP_1_2 {
-        return Err(server_fault("Client", "A SOAP 1.2 envelope can contain only Header and Body"));
+        return Err(server_fault(
+            "Client",
+            "A SOAP 1.2 envelope can contain only Header and Body",
+        ));
     }
     let func = skip_non_elements(request, request.first_child(body));
     let mut function: Option<&Function> = None;
@@ -945,21 +1064,31 @@ pub fn deserialize_function_call(
                         function = Some(f);
                     }
                     None => {
-                        return Err(server_fault("Client", "looks like we got \"Body\" without function call"))
+                        return Err(server_fault(
+                            "Client",
+                            "looks like we got \"Body\" without function call",
+                        ))
                     }
                 }
             }
         }
         Some(fnode) => {
             if version == SOAP_1_1 {
-                if let Some(v) = request.attr_value(fnode, "encodingStyle", Some(SOAP_1_1_ENV_NAMESPACE)) {
+                if let Some(v) =
+                    request.attr_value(fnode, "encodingStyle", Some(SOAP_1_1_ENV_NAMESPACE))
+                {
                     if v != SOAP_1_1_ENC_NAMESPACE.as_bytes() {
                         return Err(server_fault("Client", "Unknown Data Encoding Style"));
                     }
                 }
-            } else if let Some(v) = request.attr_value(fnode, "encodingStyle", Some(SOAP_1_2_ENV_NAMESPACE)) {
+            } else if let Some(v) =
+                request.attr_value(fnode, "encodingStyle", Some(SOAP_1_2_ENV_NAMESPACE))
+            {
                 if v != SOAP_1_2_ENC_NAMESPACE.as_bytes() {
-                    return Err(server_fault("DataEncodingUnknown", "Unknown Data Encoding Style"));
+                    return Err(server_fault(
+                        "DataEncodingUnknown",
+                        "Unknown Data Encoding Style",
+                    ));
                 }
             }
             if function.is_none() {
@@ -969,9 +1098,15 @@ pub fn deserialize_function_call(
             }
             if sdl_ref.is_some() && function.is_none() {
                 if version == SOAP_1_2 {
-                    return Err(server_fault("rpc:ProcedureNotPresent", "Procedure not present"));
+                    return Err(server_fault(
+                        "rpc:ProcedureNotPresent",
+                        "Procedure not present",
+                    ));
                 }
-                return Err(SoapError::Fatal(format!("Procedure '{}' not present", lossy(request.name(fnode)))));
+                return Err(SoapError::Fatal(format!(
+                    "Procedure '{}' not present",
+                    lossy(request.name(fnode))
+                )));
             }
         }
     }
@@ -986,9 +1121,15 @@ pub fn deserialize_function_call(
                         "A SOAP Header element cannot have non Namespace qualified attributes",
                     ))
                 }
-                Some(ns) if a.name == b"encodingStyle" && ns.href == SOAP_1_2_ENV_NAMESPACE.as_bytes() => {
+                Some(ns)
+                    if a.name == b"encodingStyle"
+                        && ns.href == SOAP_1_2_ENV_NAMESPACE.as_bytes() =>
+                {
                     if version == SOAP_1_2 {
-                        return Err(server_fault("Client", "encodingStyle cannot be specified on the Header"));
+                        return Err(server_fault(
+                            "Client",
+                            "encodingStyle cannot be specified on the Header",
+                        ));
                     } else if a.value != SOAP_1_1_ENC_NAMESPACE.as_bytes() {
                         return Err(server_fault("Client", "Unknown data encoding style"));
                     }
@@ -1001,7 +1142,9 @@ pub fn deserialize_function_call(
                 continue;
             }
             if version == SOAP_1_1 {
-                if let Some(v) = request.attr_value(hdr_func, "encodingStyle", Some(SOAP_1_1_ENV_NAMESPACE)) {
+                if let Some(v) =
+                    request.attr_value(hdr_func, "encodingStyle", Some(SOAP_1_1_ENV_NAMESPACE))
+                {
                     if v != SOAP_1_1_ENC_NAMESPACE.as_bytes() {
                         return Err(server_fault("Client", "Unknown Data Encoding Style"));
                     }
@@ -1012,9 +1155,14 @@ pub fn deserialize_function_call(
                     }
                 }
             } else {
-                if let Some(v) = request.attr_value(hdr_func, "encodingStyle", Some(SOAP_1_2_ENV_NAMESPACE)) {
+                if let Some(v) =
+                    request.attr_value(hdr_func, "encodingStyle", Some(SOAP_1_2_ENV_NAMESPACE))
+                {
                     if v != SOAP_1_2_ENC_NAMESPACE.as_bytes() {
-                        return Err(server_fault("DataEncodingUnknown", "Unknown Data Encoding Style"));
+                        return Err(server_fault(
+                            "DataEncodingUnknown",
+                            "Unknown Data Encoding Style",
+                        ));
                     }
                 }
                 if let Some(v) = request.attr_value(hdr_func, "role", Some(envelope_ns)) {
@@ -1031,14 +1179,21 @@ pub fn deserialize_function_call(
                 match v {
                     b"1" | b"true" => must_understand = true,
                     b"0" | b"false" => {}
-                    _ => return Err(server_fault("Client", "mustUnderstand value is not boolean")),
+                    _ => {
+                        return Err(server_fault(
+                            "Client",
+                            "mustUnderstand value is not boolean",
+                        ))
+                    }
                 }
             }
             let (hfunction, hname) = find_function(sdl_ref, request, hdr_func);
             let mut hdr = None;
             if hfunction.is_none() {
                 if let (Some(_), Some(f)) = (sdl_ref, function) {
-                    if let Some(fnb) = f.soap.as_ref().filter(|_| sdl_ref.is_some_and(|s| s.binding_of(f).binding_type == BindingType::Soap)) {
+                    if let Some(fnb) = f.soap.as_ref().filter(|_| {
+                        sdl_ref.is_some_and(|s| s.binding_of(f).binding_type == BindingType::Soap)
+                    }) {
                         if let Some(ih) = &fnb.input.headers {
                             let mut key = String::new();
                             if let Some(href) = request.ns_href(hdr_func) {
@@ -1154,10 +1309,14 @@ fn serialize_response_call2(
         if style == SOAP_RPC {
             if let Some(m) = method {
                 if main && version == SOAP_1_2 {
-                    let rpc_ns = doc
-                        .new_ns(body, RPC_SOAP12_NAMESPACE.as_bytes(), Some(RPC_SOAP12_NS_PREFIX.as_bytes()));
+                    let rpc_ns = doc.new_ns(
+                        body,
+                        RPC_SOAP12_NAMESPACE.as_bytes(),
+                        Some(RPC_SOAP12_NS_PREFIX.as_bytes()),
+                    );
                     let rpc_result = doc.new_child(m, rpc_ns, b"result");
-                    let param = serialize_parameter(ctx, doc, parameter, ret, 0, Some(b"return"), use_, m)?;
+                    let param =
+                        serialize_parameter(ctx, doc, parameter, ret, 0, Some(b"return"), use_, m)?;
                     if let Some(p) = param {
                         let name = doc.name(p).to_vec();
                         doc.set_content(rpc_result, &name);
@@ -1167,7 +1326,8 @@ fn serialize_response_call2(
                 }
             }
         } else {
-            let param = serialize_parameter(ctx, doc, parameter, ret, 0, Some(b"return"), use_, body)?;
+            let param =
+                serialize_parameter(ctx, doc, parameter, ret, 0, Some(b"return"), use_, body)?;
             if let Some(param) = param {
                 if is_soap_fn {
                     if let (Some(p), Some(sdl)) = (parameter, sdl_ref) {
@@ -1193,8 +1353,7 @@ fn serialize_response_call2(
         }
     } else if param_count > 1 {
         if let Some(Value::Array(a)) = ret.map(Value::deref) {
-            let mut i = 0usize;
-            for (k, data) in a.iter() {
+            for (i, (k, data)) in a.iter().enumerate() {
                 let (pname, pidx) = match k {
                     ArrayKey::Str(s) => (Some(s.as_bytes().to_vec()), i),
                     ArrayKey::Int(n) => (None, usize::try_from(*n).unwrap_or(usize::MAX)),
@@ -1202,11 +1361,31 @@ fn serialize_response_call2(
                 let parameter = get_param(function, pname.as_deref(), pidx, true);
                 if style == SOAP_RPC {
                     if let Some(m) = method {
-                        serialize_parameter(ctx, doc, parameter, Some(data), i, pname.as_deref(), use_, m)?;
+                        serialize_parameter(
+                            ctx,
+                            doc,
+                            parameter,
+                            Some(data),
+                            i,
+                            pname.as_deref(),
+                            use_,
+                            m,
+                        )?;
                     }
                 } else {
-                    let param = serialize_parameter(ctx, doc, parameter, Some(data), i, pname.as_deref(), use_, body)?;
-                    if let (true, Some(p), Some(param), Some(sdl)) = (is_soap_fn, parameter, param, sdl_ref) {
+                    let param = serialize_parameter(
+                        ctx,
+                        doc,
+                        parameter,
+                        Some(data),
+                        i,
+                        pname.as_deref(),
+                        use_,
+                        body,
+                    )?;
+                    if let (true, Some(p), Some(param), Some(sdl)) =
+                        (is_soap_fn, parameter, param, sdl_ref)
+                    {
                         if let Some(e) = p.element {
                             let el = sdl.ty(e);
                             let ns = match &el.namens {
@@ -1218,14 +1397,18 @@ fn serialize_response_call2(
                         }
                     }
                 }
-                i += 1;
             }
         }
     }
     if use_ == SOAP_ENCODED && version == SOAP_1_2 {
         if let Some(m) = method {
             let body_ns = doc.ns(body).cloned();
-            doc.set_ns_prop(m, body_ns, b"encodingStyle", SOAP_1_2_ENC_NAMESPACE.as_bytes());
+            doc.set_ns_prop(
+                m,
+                body_ns,
+                b"encodingStyle",
+                SOAP_1_2_ENC_NAMESPACE.as_bytes(),
+            );
         }
     }
     Ok((use_, method))
@@ -1271,12 +1454,20 @@ pub fn serialize_response_call(
     let is_fault = matches!(ret, Value::Object(o) if ctx.host.instance_of(o, "SoapFault"));
     let fn_of = |idx: Option<usize>| idx.and_then(|i| sdl_ref.map(|s| &s.function_list[i]));
     if let (true, Value::Object(fault)) = (is_fault, ret) {
-        let headerfault = ctx.host.read_slot(fault, "headerfault").map(|v| v.deref()).filter(|v| !matches!(v, Value::Null));
+        let headerfault = ctx
+            .host
+            .read_slot(fault, "headerfault")
+            .map(|v| v.deref())
+            .filter(|v| !matches!(v, Value::Null));
         if let (Some(first), Some(hf)) = (headers.first(), headerfault) {
             let mut hdr_enc = None;
             let mut hdr_use = SOAP_LITERAL;
             let mut hdr_ret = Some(hf.clone());
-            let mut hdr_ns: Option<Vec<u8>> = first.hdr.as_ref().and_then(|h| h.ns.clone()).map(String::into_bytes);
+            let mut hdr_ns: Option<Vec<u8>> = first
+                .hdr
+                .as_ref()
+                .and_then(|h| h.ns.clone())
+                .map(String::into_bytes);
             let mut hdr_name: Option<Vec<u8>> = first.function_name.clone();
             let h = doc.new_child(envelope, Some(ns.clone()), b"Header");
             head = Some(h);
@@ -1293,7 +1484,12 @@ pub fn serialize_response_call(
                         key.push_str(&lossy(n.as_bytes()));
                         hdr_name = Some(n.as_bytes().to_vec());
                     }
-                    if let Some(hb) = first.hdr.as_ref().and_then(|h| h.headerfaults.as_ref()).and_then(|f| f.get(&key)) {
+                    if let Some(hb) = first
+                        .hdr
+                        .as_ref()
+                        .and_then(|h| h.headerfaults.as_ref())
+                        .and_then(|f| f.get(&key))
+                    {
                         hdr_enc = hb.encode;
                         hdr_use = hb.use_;
                     }
@@ -1314,7 +1510,13 @@ pub fn serialize_response_call(
                 )?;
                 // The use is reset to literal for the fault body below.
                 let _ = u;
-            } else if let Some(x) = ctx.master_to_xml(&mut doc, hdr_enc, &hdr_ret.unwrap_or(Value::Null), hdr_use, h)? {
+            } else if let Some(x) = ctx.master_to_xml(
+                &mut doc,
+                hdr_enc,
+                &hdr_ret.unwrap_or(Value::Null),
+                hdr_use,
+                h,
+            )? {
                 if let Some(n) = &hdr_name {
                     doc.set_name(x, n);
                 }
@@ -1326,14 +1528,18 @@ pub fn serialize_response_call(
         }
         body = doc.new_child(envelope, Some(ns.clone()), b"Body");
         let param = doc.new_child(body, Some(ns.clone()), b"Fault");
-        let mut fault_ns: Option<Vec<u8>> = match ctx.host.read_slot(fault, "faultcodens").map(|v| v.deref()) {
-            Some(Value::Str(s)) => Some(s.as_bytes().to_vec()),
-            _ => None,
-        };
+        let mut fault_ns: Option<Vec<u8>> =
+            match ctx.host.read_slot(fault, "faultcodens").map(|v| v.deref()) {
+                Some(Value::Str(s)) => Some(s.as_bytes().to_vec()),
+                _ => None,
+            };
         use_ = SOAP_LITERAL;
         let mut sfault: Option<&Fault> = None;
         if let Some(Value::Str(n)) = ctx.host.read_slot(fault, "_name").map(|v| v.deref()) {
-            if let Some(f) = function.and_then(|f| f.faults.as_ref()).and_then(|fs| fs.get(&lossy(n.as_bytes()))) {
+            if let Some(f) = function
+                .and_then(|f| f.faults.as_ref())
+                .and_then(|fs| fs.get(&lossy(n.as_bytes())))
+            {
                 sfault = Some(f);
                 if let Some(fb) = &f.binding {
                     use_ = fb.use_;
@@ -1342,7 +1548,10 @@ pub fn serialize_response_call(
                     }
                 }
             }
-        } else if let Some(fs) = function.and_then(|f| f.faults.as_ref()).filter(|fs| fs.len() == 1) {
+        } else if let Some(fs) = function
+            .and_then(|f| f.faults.as_ref())
+            .filter(|fs| fs.len() == 1)
+        {
             let f = fs.first();
             sfault = f;
             if let Some(fb) = f.and_then(|f| f.binding.as_ref()) {
@@ -1364,7 +1573,9 @@ pub fn serialize_response_call(
         let string_enc = conv(IS_STRING);
         let detail_name: &[u8];
         if version == SOAP_1_1 {
-            if let Some(Value::Str(code)) = ctx.host.read_slot(fault, "faultcode").map(|v| v.deref()) {
+            if let Some(Value::Str(code)) =
+                ctx.host.read_slot(fault, "faultcode").map(|v| v.deref())
+            {
                 let node = doc.add_element(param, b"faultcode");
                 let escaped = html_escape(code.as_bytes());
                 if let Some(fns) = &fault_ns {
@@ -1380,19 +1591,35 @@ pub fn serialize_response_call(
                     doc.set_content(node, &escaped);
                 }
             }
-            if let Some(s) = ctx.host.read_slot(fault, "faultstring").map(|v| v.deref()).filter(|v| matches!(v, Value::Str(_))) {
-                if let Some(n) = ctx.master_to_xml(&mut doc, Some(string_enc), &s, SOAP_LITERAL, param)? {
+            if let Some(s) = ctx
+                .host
+                .read_slot(fault, "faultstring")
+                .map(|v| v.deref())
+                .filter(|v| matches!(v, Value::Str(_)))
+            {
+                if let Some(n) =
+                    ctx.master_to_xml(&mut doc, Some(string_enc), &s, SOAP_LITERAL, param)?
+                {
                     doc.set_name(n, b"faultstring");
                 }
             }
-            if let Some(s) = ctx.host.read_slot(fault, "faultactor").map(|v| v.deref()).filter(|v| matches!(v, Value::Str(_))) {
-                if let Some(n) = ctx.master_to_xml(&mut doc, Some(string_enc), &s, SOAP_LITERAL, param)? {
+            if let Some(s) = ctx
+                .host
+                .read_slot(fault, "faultactor")
+                .map(|v| v.deref())
+                .filter(|v| matches!(v, Value::Str(_)))
+            {
+                if let Some(n) =
+                    ctx.master_to_xml(&mut doc, Some(string_enc), &s, SOAP_LITERAL, param)?
+                {
                     doc.set_name(n, b"faultactor");
                 }
             }
             detail_name = b"detail";
         } else {
-            if let Some(Value::Str(code)) = ctx.host.read_slot(fault, "faultcode").map(|v| v.deref()) {
+            if let Some(Value::Str(code)) =
+                ctx.host.read_slot(fault, "faultcode").map(|v| v.deref())
+            {
                 let c = doc.new_child(param, Some(ns.clone()), b"Code");
                 let node = doc.new_child(c, Some(ns.clone()), b"Value");
                 let escaped = html_escape(code.as_bytes());
@@ -1409,9 +1636,16 @@ pub fn serialize_response_call(
                     doc.set_content(node, &escaped);
                 }
             }
-            if let Some(s) = ctx.host.read_slot(fault, "faultstring").map(|v| v.deref()).filter(|v| matches!(v, Value::Str(_))) {
+            if let Some(s) = ctx
+                .host
+                .read_slot(fault, "faultstring")
+                .map(|v| v.deref())
+                .filter(|v| matches!(v, Value::Str(_)))
+            {
                 let reason = doc.new_child(param, Some(ns.clone()), b"Reason");
-                if let Some(n) = ctx.master_to_xml(&mut doc, Some(string_enc), &s, SOAP_LITERAL, reason)? {
+                if let Some(n) =
+                    ctx.master_to_xml(&mut doc, Some(string_enc), &s, SOAP_LITERAL, reason)?
+                {
                     doc.set_name(n, b"Text");
                     doc.set_ns(n, Some(ns.clone()));
                     let lang = match ctx.host.read_slot(fault, "lang").map(|v| v.deref()) {
@@ -1423,12 +1657,17 @@ pub fn serialize_response_call(
             }
             detail_name = b"env:Detail";
         }
-        let detail = ctx.host.read_slot(fault, "detail").map(|v| v.deref()).filter(|v| !matches!(v, Value::Null));
+        let detail = ctx
+            .host
+            .read_slot(fault, "detail")
+            .map(|v| v.deref())
+            .filter(|v| !matches!(v, Value::Null));
         if let Some(f) = sfault.filter(|f| f.details.len() == 1) {
             let node = doc.add_element(param, detail_name);
             let sparam = &f.details[0];
             let mut detail = detail;
-            if let (Some(Value::Object(o)), Some(e), Some(sdl)) = (&detail, sparam.element, sdl_ref) {
+            if let (Some(Value::Object(o)), Some(e), Some(sdl)) = (&detail, sparam.element, sdl_ref)
+            {
                 let props = ctx.host.property_table(o);
                 if props.len() == 1 {
                     if let Some(v) = props.get_str(sdl.ty(e).name_str().as_bytes()) {
@@ -1436,7 +1675,16 @@ pub fn serialize_response_call(
                     }
                 }
             }
-            let x = serialize_parameter(ctx, &mut doc, Some(sparam), detail.as_ref(), 1, None, use_, node)?;
+            let x = serialize_parameter(
+                ctx,
+                &mut doc,
+                Some(sparam),
+                detail.as_ref(),
+                1,
+                None,
+                use_,
+                node,
+            )?;
             if let Some(x) = x {
                 if let Some(fnb) = function.and_then(|f| f.soap.as_ref()) {
                     if fnb.style == SOAP_RPC && sparam.element.is_none() {
@@ -1455,7 +1703,12 @@ pub fn serialize_response_call(
                     }
                 }
                 if use_ == SOAP_ENCODED && version == SOAP_1_2 {
-                    doc.set_ns_prop(x, Some(ns.clone()), b"encodingStyle", SOAP_1_2_ENC_NAMESPACE.as_bytes());
+                    doc.set_ns_prop(
+                        x,
+                        Some(ns.clone()),
+                        b"encodingStyle",
+                        SOAP_1_2_ENC_NAMESPACE.as_bytes(),
+                    );
                 }
             }
         } else if let Some(d) = detail {
@@ -1472,7 +1725,11 @@ pub fn serialize_response_call(
                 let mut hdr_enc = None;
                 let mut hdr_use = SOAP_LITERAL;
                 let mut hdr_ret = Some(hdr.retval.clone());
-                let mut hdr_ns: Option<Vec<u8>> = hdr.hdr.as_ref().and_then(|h| h.ns.clone()).map(String::into_bytes);
+                let mut hdr_ns: Option<Vec<u8>> = hdr
+                    .hdr
+                    .as_ref()
+                    .and_then(|h| h.ns.clone())
+                    .map(String::into_bytes);
                 let mut hdr_name = hdr.function_name.clone();
                 let header_obj = match &hdr.retval {
                     Value::Object(o) if ctx.host.instance_of(o, "SoapHeader") => Some(o.clone()),
@@ -1516,7 +1773,13 @@ pub fn serialize_response_call(
                     if let (Some(ho), Some(x)) = (&header_obj, x) {
                         set_soap_header_attributes(ctx, &mut doc, x, ho, version);
                     }
-                } else if let Some(x) = ctx.master_to_xml(&mut doc, hdr_enc, &hdr_ret.unwrap_or(Value::Null), hdr_use, h)? {
+                } else if let Some(x) = ctx.master_to_xml(
+                    &mut doc,
+                    hdr_enc,
+                    &hdr_ret.unwrap_or(Value::Null),
+                    hdr_use,
+                    h,
+                )? {
                     if let Some(n) = &hdr_name {
                         doc.set_name(x, n);
                     }
@@ -1535,7 +1798,17 @@ pub fn serialize_response_call(
             }
         }
         body = doc.new_child(envelope, Some(ns.clone()), b"Body");
-        let (u, _) = serialize_response_call2(ctx, &mut doc, body, function, function_name, uri, Some(ret), version, true)?;
+        let (u, _) = serialize_response_call2(
+            ctx,
+            &mut doc,
+            body,
+            function,
+            function_name,
+            uri,
+            Some(ret),
+            version,
+            true,
+        )?;
         if u == SOAP_ENCODED {
             use_ = SOAP_ENCODED;
         }
@@ -1543,14 +1816,26 @@ pub fn serialize_response_call(
     if use_ == SOAP_ENCODED {
         doc.new_ns(envelope, XSD_NAMESPACE.as_bytes(), Some(b"xsd"));
         if version == SOAP_1_1 {
-            doc.new_ns(envelope, SOAP_1_1_ENC_NAMESPACE.as_bytes(), Some(b"SOAP-ENC"));
-            doc.set_ns_prop(envelope, Some(ns.clone()), b"encodingStyle", SOAP_1_1_ENC_NAMESPACE.as_bytes());
+            doc.new_ns(
+                envelope,
+                SOAP_1_1_ENC_NAMESPACE.as_bytes(),
+                Some(b"SOAP-ENC"),
+            );
+            doc.set_ns_prop(
+                envelope,
+                Some(ns.clone()),
+                b"encodingStyle",
+                SOAP_1_1_ENC_NAMESPACE.as_bytes(),
+            );
         } else {
             doc.new_ns(envelope, SOAP_1_2_ENC_NAMESPACE.as_bytes(), Some(b"enc"));
         }
     }
     ctx.finish();
-    if function.is_some_and(|f| f.response_name.is_none()) && doc.first_child(body).is_none() && head.is_none() {
+    if function.is_some_and(|f| f.response_name.is_none())
+        && doc.first_child(body).is_none()
+        && head.is_none()
+    {
         return Ok(None);
     }
     Ok(Some(doc))
@@ -1573,4 +1858,3 @@ fn html_escape(s: &[u8]) -> Vec<u8> {
     }
     out
 }
-

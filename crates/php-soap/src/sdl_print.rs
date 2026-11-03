@@ -112,7 +112,11 @@ fn type_to_string_into(sdl: &Sdl, t: TypeId, buf: &mut String, level: usize) {
                 None => buf.push_str("anyType "),
             }
             buf.push_str(ty.name_str());
-            if let Some(en) = ty.restrictions.as_ref().and_then(|r| r.enumeration.as_ref()) {
+            if let Some(en) = ty
+                .restrictions
+                .as_ref()
+                .and_then(|r| r.enumeration.as_ref())
+            {
                 buf.push_str(" {");
                 let mut first = true;
                 for (k, _) in en.iter() {
@@ -219,7 +223,10 @@ fn type_to_string_into(sdl: &Sdl, t: TypeId, buf: &mut String, level: usize) {
                             };
                             let st_ty = sdl.ty(st);
                             if Some(e) == st_ty.encode
-                                || matches!(st_ty.kind, TypeKind::Simple | TypeKind::List | TypeKind::Union)
+                                || matches!(
+                                    st_ty.kind,
+                                    TypeKind::Simple | TypeKind::List | TypeKind::Union
+                                )
                             {
                                 break;
                             }
@@ -261,7 +268,9 @@ fn type_to_string_into(sdl: &Sdl, t: TypeId, buf: &mut String, level: usize) {
 /// `__getFunctions()`.
 #[must_use]
 pub fn get_functions(sdl: &Sdl) -> Vec<String> {
-    sdl.functions().map(|f| function_to_string(sdl, f)).collect()
+    sdl.functions()
+        .map(|f| function_to_string(sdl, f))
+        .collect()
 }
 
 /// `__getTypes()`.

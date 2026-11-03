@@ -26,12 +26,16 @@ fn lossy(b: &[u8]) -> String {
     String::from_utf8_lossy(b).into_owned()
 }
 
-fn opt<'a>(options: Option<&'a ZArray>, key: &str) -> Option<Value> {
-    options.and_then(|o| o.get_str(key.as_bytes())).map(Value::deref)
+fn opt(options: Option<&ZArray>, key: &str) -> Option<Value> {
+    options
+        .and_then(|o| o.get_str(key.as_bytes()))
+        .map(Value::deref)
 }
 
 fn slot(host: &mut dyn SoapHost, this: &Obj, name: &str) -> Value {
-    host.read_slot(this, name).map(|v| v.deref()).unwrap_or_default()
+    host.read_slot(this, name)
+        .map(|v| v.deref())
+        .unwrap_or_default()
 }
 
 fn exceptions_enabled(host: &mut dyn SoapHost, this: &Obj) -> bool {
@@ -102,7 +106,12 @@ pub fn zend_type_name(v: &Value) -> &'static str {
 
 /// `SoapClient::__construct(?string $wsdl, array $options = [])`.
 #[allow(clippy::too_many_lines)]
-pub fn construct(host: &mut dyn SoapHost, this: &Obj, wsdl: Option<&[u8]>, options: Option<&ZArray>) -> RtResult<()> {
+pub fn construct(
+    host: &mut dyn SoapHost,
+    this: &Obj,
+    wsdl: Option<&[u8]>,
+    options: Option<&ZArray>,
+) -> RtResult<()> {
     if let Some(cm) = opt(options, "classmap") {
         match &cm {
             Value::Array(a) => {
@@ -129,7 +138,12 @@ pub fn construct(host: &mut dyn SoapHost, this: &Obj, wsdl: Option<&[u8]>, optio
             if wsdl.is_none() {
                 match opt(Some(options), "uri") {
                     Some(Value::Str(s)) => host.write_slot(this, "uri", Value::Str(s)),
-                    _ => return Err(docref_fatal("__construct", "'uri' option is required in nonWSDL mode")),
+                    _ => {
+                        return Err(docref_fatal(
+                            "__construct",
+                            "'uri' option is required in nonWSDL mode",
+                        ))
+                    }
                 }
                 if let Some(Value::Int(s)) = opt(Some(options), "style") {
                     if s == SOAP_RPC || s == SOAP_DOCUMENT {
@@ -146,7 +160,10 @@ pub fn construct(host: &mut dyn SoapHost, this: &Obj, wsdl: Option<&[u8]>, optio
                 Some(Value::Str(s)) => host.write_slot(this, "location", Value::Str(s)),
                 _ => {
                     if wsdl.is_none() {
-                        return Err(docref_fatal("__construct", "'location' option is required in nonWSDL mode"));
+                        return Err(docref_fatal(
+                            "__construct",
+                            "'location' option is required in nonWSDL mode",
+                        ));
                     }
                 }
             }
@@ -160,7 +177,9 @@ pub fn construct(host: &mut dyn SoapHost, this: &Obj, wsdl: Option<&[u8]>, optio
                 if let Some(Value::Str(p)) = opt(Some(options), "password") {
                     host.write_slot(this, "_password", Value::Str(p));
                 }
-                if let Some(Value::Int(SOAP_AUTHENTICATION_DIGEST)) = opt(Some(options), "authentication") {
+                if let Some(Value::Int(SOAP_AUTHENTICATION_DIGEST)) =
+                    opt(Some(options), "authentication")
+                {
                     host.write_slot(this, "_use_digest", Value::Bool(true));
                 }
             }
@@ -177,10 +196,16 @@ pub fn construct(host: &mut dyn SoapHost, this: &Obj, wsdl: Option<&[u8]>, optio
                     }
                 }
             }
-            if matches!(opt(Some(options), "trace"), Some(Value::Bool(true) | Value::Int(1))) {
+            if matches!(
+                opt(Some(options), "trace"),
+                Some(Value::Bool(true) | Value::Int(1))
+            ) {
                 host.write_slot(this, "trace", Value::Bool(true));
             }
-            if matches!(opt(Some(options), "exceptions"), Some(Value::Bool(false) | Value::Int(0))) {
+            if matches!(
+                opt(Some(options), "exceptions"),
+                Some(Value::Bool(false) | Value::Int(0))
+            ) {
                 host.write_slot(this, "_exceptions", Value::Bool(false));
                 globals::with(|g| {
                     if let Some(ErrorObject::Client(_, e)) = &mut g.error_object {
@@ -189,9 +214,15 @@ pub fn construct(host: &mut dyn SoapHost, this: &Obj, wsdl: Option<&[u8]>, optio
                 });
             }
             if let Some(Value::Int(c)) = opt(Some(options), "compression") {
-                let all = ["gzinflate", "gzdeflate", "gzuncompress", "gzcompress", "gzencode"]
-                    .iter()
-                    .all(|f| host.function_exists(f.as_bytes()).is_some());
+                let all = [
+                    "gzinflate",
+                    "gzdeflate",
+                    "gzuncompress",
+                    "gzcompress",
+                    "gzencode",
+                ]
+                .iter()
+                .all(|f| host.function_exists(f.as_bytes()).is_some());
                 if all {
                     host.write_slot(this, "compression", Value::Int(c));
                 }
@@ -241,7 +272,10 @@ pub fn construct(host: &mut dyn SoapHost, this: &Obj, wsdl: Option<&[u8]>, optio
             if let Some(Value::Str(ua)) = opt(Some(options), "user_agent") {
                 host.write_slot(this, "_user_agent", Value::Str(ua));
             }
-            if matches!(opt(Some(options), "keep_alive"), Some(Value::Bool(false) | Value::Int(0))) {
+            if matches!(
+                opt(Some(options), "keep_alive"),
+                Some(Value::Bool(false) | Value::Int(0))
+            ) {
                 host.write_slot(this, "_keep_alive", Value::Bool(false));
             }
             if matches!(
@@ -366,7 +400,10 @@ fn do_request(
         add_soap_fault(
             host,
             this,
-            &FaultSpec::en("Client", "SoapClient::__doRequest() returned non string value"),
+            &FaultSpec::en(
+                "Client",
+                "SoapClient::__doRequest() returned non string value",
+            ),
         )?;
     }
     if ret.is_some() && matches!(slot(host, this, "__soap_fault"), Value::Object(_)) {
@@ -409,10 +446,13 @@ pub fn do_soap_call(
         } else {
             SOAP_1_1
         };
-        let location: Option<Vec<u8>> = opts.location.clone().or_else(|| match slot(host, this, "location") {
-            Value::Str(s) => Some(s.as_bytes().to_vec()),
-            _ => None,
-        });
+        let location: Option<Vec<u8>> =
+            opts.location
+                .clone()
+                .or_else(|| match slot(host, this, "location") {
+                    Value::Str(s) => Some(s.as_bytes().to_vec()),
+                    _ => None,
+                });
         let sdl = client_sdl(host, this);
         let typemap = client_typemap(host, this);
         host.write_slot(this, "__soap_fault", Value::Null);
@@ -453,8 +493,12 @@ pub fn do_soap_call(
                 match sdl.get_function(function) {
                     Some(f) => {
                         let binding = sdl.binding_of(f);
-                        let one_way = f.response_name.is_none() && f.response_params.is_none() && opts.headers.is_none();
-                        let loc = location.clone().unwrap_or_else(|| binding.location.clone().into_bytes());
+                        let one_way = f.response_name.is_none()
+                            && f.response_params.is_none()
+                            && opts.headers.is_none();
+                        let loc = location
+                            .clone()
+                            .unwrap_or_else(|| binding.location.clone().into_bytes());
                         let (request, action) = {
                             let mut ctx = settings.make(host);
                             if binding.binding_type == BindingType::Soap {
@@ -514,7 +558,10 @@ pub fn do_soap_call(
                             this,
                             &FaultSpec::en(
                                 "Client",
-                                &format!("Function (\"{}\") is not a valid method for this service", lossy(function)),
+                                &format!(
+                                    "Function (\"{}\") is not a valid method for this service",
+                                    lossy(function)
+                                ),
                             ),
                         )?;
                     }
@@ -525,9 +572,17 @@ pub fn do_soap_call(
                     _ => None,
                 };
                 if uri.is_none() {
-                    add_soap_fault(host, this, &FaultSpec::en("Client", "Error finding \"uri\" property"))?;
+                    add_soap_fault(
+                        host,
+                        this,
+                        &FaultSpec::en("Client", "Error finding \"uri\" property"),
+                    )?;
                 } else if location.is_none() {
-                    add_soap_fault(host, this, &FaultSpec::en("Client", "Error could not find \"location\" property"))?;
+                    add_soap_fault(
+                        host,
+                        this,
+                        &FaultSpec::en("Client", "Error could not find \"location\" property"),
+                    )?;
                 } else {
                     let call_uri = opts.uri.clone().or(uri).unwrap_or_default();
                     let request = {
@@ -544,14 +599,13 @@ pub fn do_soap_call(
                         )?
                         .dump()
                     };
-                    let action = match &opts.soap_action {
-                        Some(a) => a.clone(),
-                        None => {
-                            let mut a = call_uri.clone();
-                            a.push(b'#');
-                            a.extend_from_slice(function);
-                            a
-                        }
+                    let action = if let Some(a) = &opts.soap_action {
+                        a.clone()
+                    } else {
+                        let mut a = call_uri.clone();
+                        a.push(b'#');
+                        a.extend_from_slice(function);
+                        a
                     };
                     let response = do_request(
                         host,
@@ -586,7 +640,11 @@ pub fn do_soap_call(
             value = if matches!(fault, Value::Object(_)) {
                 fault
             } else {
-                Value::Object(add_soap_fault(host, this, &FaultSpec::en("Client", "Unknown Error"))?)
+                Value::Object(add_soap_fault(
+                    host,
+                    this,
+                    &FaultSpec::en("Client", "Unknown Error"),
+                )?)
             };
         } else if matches!(fault, Value::Object(_)) {
             value = fault;
@@ -608,11 +666,19 @@ fn verify_soap_headers(host: &mut dyn SoapHost, a: &ZArray) -> bool {
 }
 
 /// Appends the default headers (`__default_headers`).
-fn with_default_headers(host: &mut dyn SoapHost, this: &Obj, headers: Option<Vec<Value>>) -> Option<Vec<Value>> {
+fn with_default_headers(
+    host: &mut dyn SoapHost,
+    this: &Obj,
+    headers: Option<Vec<Value>>,
+) -> Option<Vec<Value>> {
     match slot(host, this, "__default_headers") {
         Value::Array(d) => match headers {
             Some(mut h) => {
-                h.extend(d.values().map(Value::deref).filter(|v| matches!(v, Value::Object(_))));
+                h.extend(
+                    d.values()
+                        .map(Value::deref)
+                        .filter(|v| matches!(v, Value::Object(_))),
+                );
                 Some(h)
             }
             None => Some(d.values().map(Value::deref).collect()),
@@ -739,7 +805,11 @@ pub fn get_cookies(host: &mut dyn SoapHost, this: &Obj) -> Value {
 }
 
 /// `SoapClient::__setSoapHeaders($headers = null)`.
-pub fn set_soap_headers(host: &mut dyn SoapHost, this: &Obj, headers: Option<&Value>) -> RtResult<bool> {
+pub fn set_soap_headers(
+    host: &mut dyn SoapHost,
+    this: &Obj,
+    headers: Option<&Value>,
+) -> RtResult<bool> {
     match headers.map(Value::deref) {
         None | Some(Value::Null) => host.write_slot(this, "__default_headers", Value::Null),
         Some(Value::Array(a)) => {
@@ -786,7 +856,16 @@ pub fn do_request_method(
 ) -> RtResult<Value> {
     let features = globals::with(|g| g.features);
     let one_way = one_way && features & SOAP_WAIT_ONE_WAY_CALLS == 0;
-    let r = crate::http::make_http_soap_request(host, this, request, location, action, version, uri_parser_class, !one_way)?;
+    let r = crate::http::make_http_soap_request(
+        host,
+        this,
+        request,
+        location,
+        action,
+        version,
+        uri_parser_class,
+        !one_way,
+    )?;
     Ok(match r {
         Some(body) if !one_way => Value::from(body.as_slice()),
         Some(_) => Value::from(""),

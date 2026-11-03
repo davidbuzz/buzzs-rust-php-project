@@ -116,11 +116,17 @@ impl Service {
 }
 
 fn state(host: &mut dyn SoapHost, this: &Obj) -> Option<Rc<SoapObject>> {
-    host.soap_state(this).filter(|s| matches!(**s, SoapObject::Server(_)))
+    host.soap_state(this)
+        .filter(|s| matches!(**s, SoapObject::Server(_)))
 }
 
-fn with_service<R>(host: &mut dyn SoapHost, this: &Obj, f: impl FnOnce(&mut Service) -> R) -> RtResult<R> {
-    let st = state(host, this).ok_or_else(|| RuntimeError::Error("Cannot fetch SoapServer object".into()))?;
+fn with_service<R>(
+    host: &mut dyn SoapHost,
+    this: &Obj,
+    f: impl FnOnce(&mut Service) -> R,
+) -> RtResult<R> {
+    let st = state(host, this)
+        .ok_or_else(|| RuntimeError::Error("Cannot fetch SoapServer object".into()))?;
     let SoapObject::Server(cell) = &*st else {
         return Err(RuntimeError::Error("Cannot fetch SoapServer object".into()));
     };
@@ -136,16 +142,25 @@ fn service_snapshot(host: &mut dyn SoapHost, this: &Obj) -> RtResult<Service> {
 }
 
 fn opt(options: Option<&ZArray>, key: &str) -> Option<Value> {
-    options.and_then(|o| o.get_str(key.as_bytes())).map(Value::deref)
+    options
+        .and_then(|o| o.get_str(key.as_bytes()))
+        .map(Value::deref)
 }
 
-fn type_err(msg: String) -> RuntimeError {
-    RuntimeError::TypeError(format!("SoapServer::__construct(): Argument #2 ($options) {msg}"))
+fn type_err(msg: &str) -> RuntimeError {
+    RuntimeError::TypeError(format!(
+        "SoapServer::__construct(): Argument #2 ($options) {msg}"
+    ))
 }
 
 /// `SoapServer::__construct(?string $wsdl, array $options = [])`.
 #[allow(clippy::too_many_lines)]
-pub fn construct(host: &mut dyn SoapHost, this: &Obj, wsdl: Option<&[u8]>, options: Option<&ZArray>) -> RtResult<()> {
+pub fn construct(
+    host: &mut dyn SoapHost,
+    this: &Obj,
+    wsdl: Option<&[u8]>,
+    options: Option<&ZArray>,
+) -> RtResult<()> {
     let mut service = Service::new();
     let mut cache_wsdl = default_cache_mode(host);
     let mut typemap_ht = None;
@@ -158,7 +173,10 @@ pub fn construct(host: &mut dyn SoapHost, this: &Obj, wsdl: Option<&[u8]>, optio
     if let Some(options) = options {
         if let Some(v) = opt(Some(options), "soap_version") {
             let Value::Int(n) = v else {
-                return Err(type_err(format!("\"soap_version\" option must be of type int, {} given", zend_type_name(&v))));
+                return Err(type_err(&format!(
+                    "\"soap_version\" option must be of type int, {} given",
+                    zend_type_name(&v)
+                )));
             };
             if n != SOAP_1_1 && n != SOAP_1_2 {
                 return Err(RuntimeError::ValueError(
@@ -170,7 +188,10 @@ pub fn construct(host: &mut dyn SoapHost, this: &Obj, wsdl: Option<&[u8]>, optio
         match opt(Some(options), "uri") {
             Some(Value::Str(s)) => service.uri = Some(s.as_bytes().to_vec()),
             Some(other) => {
-                return Err(type_err(format!("\"uri\" option must be of type string, {} given", zend_type_name(&other))))
+                return Err(type_err(&format!(
+                    "\"uri\" option must be of type string, {} given",
+                    zend_type_name(&other)
+                )))
             }
             None => {
                 if wsdl.is_none() {
@@ -180,13 +201,19 @@ pub fn construct(host: &mut dyn SoapHost, this: &Obj, wsdl: Option<&[u8]>, optio
         }
         if let Some(v) = opt(Some(options), "actor") {
             let Value::Str(s) = v else {
-                return Err(type_err(format!("\"actor\" option must be of type string, {} given", zend_type_name(&v))));
+                return Err(type_err(&format!(
+                    "\"actor\" option must be of type string, {} given",
+                    zend_type_name(&v)
+                )));
             };
             service.actor = Some(s.as_bytes().to_vec());
         }
         if let Some(v) = opt(Some(options), "encoding") {
             let Value::Str(s) = v else {
-                return Err(type_err(format!("\"encoding\" option must be of type string, {} given", zend_type_name(&v))));
+                return Err(type_err(&format!(
+                    "\"encoding\" option must be of type string, {} given",
+                    zend_type_name(&v)
+                )));
             };
             match Charset::find(s.as_bytes()) {
                 Some(c) => service.charset = Some(c),
@@ -200,7 +227,10 @@ pub fn construct(host: &mut dyn SoapHost, this: &Obj, wsdl: Option<&[u8]>, optio
         }
         if let Some(v) = opt(Some(options), "classmap") {
             let Value::Array(a) = v else {
-                return Err(type_err(format!("\"classmap\" option must be of type array, {} given", zend_type_name(&v))));
+                return Err(type_err(&format!(
+                    "\"classmap\" option must be of type array, {} given",
+                    zend_type_name(&v)
+                )));
             };
             if !a.keys().all(|k| matches!(k, ArrayKey::Str(_))) {
                 return Err(RuntimeError::ValueError(
@@ -211,7 +241,10 @@ pub fn construct(host: &mut dyn SoapHost, this: &Obj, wsdl: Option<&[u8]>, optio
         }
         if let Some(v) = opt(Some(options), "typemap") {
             let Value::Array(a) = v else {
-                return Err(type_err(format!("\"typemap\" option must be of type array, {} given", zend_type_name(&v))));
+                return Err(type_err(&format!(
+                    "\"typemap\" option must be of type array, {} given",
+                    zend_type_name(&v)
+                )));
             };
             if !a.is_empty() {
                 typemap_ht = Some(a);
@@ -219,13 +252,19 @@ pub fn construct(host: &mut dyn SoapHost, this: &Obj, wsdl: Option<&[u8]>, optio
         }
         if let Some(v) = opt(Some(options), "features") {
             let Value::Int(f) = v else {
-                return Err(type_err(format!("\"features\" option must be of type int, {} given", zend_type_name(&v))));
+                return Err(type_err(&format!(
+                    "\"features\" option must be of type int, {} given",
+                    zend_type_name(&v)
+                )));
             };
             service.features = f;
         }
         if let Some(v) = opt(Some(options), "cache_wsdl") {
             let Value::Int(c) = v else {
-                return Err(type_err(format!("\"cache_wsdl\" option must be of type int, {} given", zend_type_name(&v))));
+                return Err(type_err(&format!(
+                    "\"cache_wsdl\" option must be of type int, {} given",
+                    zend_type_name(&v)
+                )));
             };
             cache_wsdl = c;
         }
@@ -234,7 +273,10 @@ pub fn construct(host: &mut dyn SoapHost, this: &Obj, wsdl: Option<&[u8]>, optio
                 Value::Bool(b) => b,
                 Value::Int(i) => i != 0,
                 other => {
-                    return Err(type_err(format!("\"send_errors\" option must be of type bool, {} given", zend_type_name(&other))))
+                    return Err(type_err(&format!(
+                        "\"send_errors\" option must be of type bool, {} given",
+                        zend_type_name(&other)
+                    )))
                 }
             };
         }
@@ -243,7 +285,10 @@ pub fn construct(host: &mut dyn SoapHost, this: &Obj, wsdl: Option<&[u8]>, optio
                 Value::Bool(b) => b,
                 Value::Int(i) => i != 0,
                 other => {
-                    return Err(type_err(format!("\"trace\" option must be of type bool, {} given", zend_type_name(&other))))
+                    return Err(type_err(&format!(
+                        "\"trace\" option must be of type bool, {} given",
+                        zend_type_name(&other)
+                    )))
                 }
             };
         }
@@ -313,7 +358,12 @@ pub fn set_persistence(host: &mut dyn SoapHost, this: &Obj, mode: i64) -> RtResu
 
 /// `SoapServer::setClass(string $class, mixed ...$args)` (`class` already
 /// resolved by the engine).
-pub fn set_class(host: &mut dyn SoapHost, this: &Obj, class: ZStr, args: Vec<Value>) -> RtResult<()> {
+pub fn set_class(
+    host: &mut dyn SoapHost,
+    this: &Obj,
+    class: ZStr,
+    args: Vec<Value>,
+) -> RtResult<()> {
     with_service(host, this, |s| {
         s.service_type = ServiceType::Class;
         s.class = Some(class);
@@ -336,21 +386,33 @@ pub fn get_functions(host: &mut dyn SoapHost, this: &Obj) -> RtResult<Value> {
     let names: Vec<ZStr> = match s.service_type {
         ServiceType::Object => {
             let class = s.object.as_ref().map(Obj::class_name).unwrap_or_default();
-            host.class_methods(&class).into_iter().filter(|(_, p)| *p).map(|(n, _)| n).collect()
+            host.class_methods(&class)
+                .into_iter()
+                .filter(|(_, p)| *p)
+                .map(|(n, _)| n)
+                .collect()
         }
         ServiceType::Class => {
             let class = s.class.clone().unwrap_or_default();
-            host.class_methods(&class).into_iter().filter(|(_, p)| *p).map(|(n, _)| n).collect()
+            host.class_methods(&class)
+                .into_iter()
+                .filter(|(_, p)| *p)
+                .map(|(n, _)| n)
+                .collect()
         }
         ServiceType::Functions => {
             if s.functions_all {
                 host.defined_functions()
             } else {
-                s.functions.map(|f| f.values().cloned().collect()).unwrap_or_default()
+                s.functions
+                    .map(|f| f.values().cloned().collect())
+                    .unwrap_or_default()
             }
         }
     };
-    Ok(Value::Array(ZArray::from_values(names.into_iter().map(Value::Str))))
+    Ok(Value::Array(ZArray::from_values(
+        names.into_iter().map(Value::Str),
+    )))
 }
 
 /// `SoapServer::addFunction($functions)`.
@@ -456,7 +518,9 @@ fn soap_server_fault_ex(
         Err(e) => return Err(RuntimeError::Fatal(e.to_string())),
     };
     let buf = doc.map(|d| d.dump()).unwrap_or_default();
-    let flash = host.server_var("HTTP_USER_AGENT").is_some_and(|a| a == b"Shockwave Flash");
+    let flash = host
+        .server_var("HTTP_USER_AGENT")
+        .is_some_and(|a| a == b"Shockwave Flash");
     if !flash {
         host.add_header("HTTP/1.1 500 Internal Server Error");
     }
@@ -483,7 +547,11 @@ fn zlib_output_compression(host: &mut dyn SoapHost) -> bool {
 
 /// `soap_server_fault`: writes a fault built from the arguments; the
 /// caller then bails out.
-fn soap_server_fault(host: &mut dyn SoapHost, service: Option<&Service>, spec: &FaultSpec) -> RtResult<()> {
+fn soap_server_fault(
+    host: &mut dyn SoapHost,
+    service: Option<&Service>,
+    spec: &FaultSpec,
+) -> RtResult<()> {
     let fault = set_soap_fault(host, None, spec)?;
     soap_server_fault_ex(host, service, None, &Value::Object(fault), None)
 }
@@ -498,17 +566,23 @@ fn server_error(
     _function: Option<&Function>,
 ) -> RuntimeError {
     let svc_owned;
-    let service = match service {
-        Some(s) => Some(s),
-        None => {
-            svc_owned = service_snapshot(host, this).ok();
-            svc_owned.as_ref()
-        }
+    let service = if let Some(s) = service {
+        Some(s)
+    } else {
+        svc_owned = service_snapshot(host, this).ok();
+        svc_owned.as_ref()
     };
     let r = match e {
         SoapError::Runtime(r) => return r,
-        SoapError::ServerFault(code, msg) => soap_server_fault(host, service, &FaultSpec::en(&code, &msg)),
-        SoapError::Fatal(msg) => fatal_fault(host, service, globals::error_code().unwrap_or("Server"), &msg),
+        SoapError::ServerFault(code, msg) => {
+            soap_server_fault(host, service, &FaultSpec::en(&code, &msg))
+        }
+        SoapError::Fatal(msg) => fatal_fault(
+            host,
+            service,
+            globals::error_code().unwrap_or("Server"),
+            &msg,
+        ),
         SoapError::Coded(code, msg) => fatal_fault(host, service, code, &msg),
     };
     match r {
@@ -517,7 +591,12 @@ fn server_error(
     }
 }
 
-fn fatal_fault(host: &mut dyn SoapHost, service: Option<&Service>, code: &str, msg: &str) -> RtResult<()> {
+fn fatal_fault(
+    host: &mut dyn SoapHost,
+    service: Option<&Service>,
+    code: &str,
+    msg: &str,
+) -> RtResult<()> {
     let send_errors = service.is_none_or(|s| s.send_errors);
     let mut spec = FaultSpec::en(code, msg);
     if send_errors {
@@ -532,7 +611,7 @@ fn fatal_fault(host: &mut dyn SoapHost, service: Option<&Service>, code: &str, m
 }
 
 /// `_soap_server_exception`: turns a pending exception into a fault
-/// response (SoapFault and Error); other exceptions propagate.
+/// response (`SoapFault` and Error); other exceptions propagate.
 fn server_exception(
     host: &mut dyn SoapHost,
     this: &Obj,
@@ -541,7 +620,13 @@ fn server_exception(
     err: RuntimeError,
 ) -> RtResult<()> {
     if let RuntimeError::Fatal(m) = err {
-        return Err(server_error(host, this, SoapError::Fatal(m), Some(service), function));
+        return Err(server_error(
+            host,
+            this,
+            SoapError::Fatal(m),
+            Some(service),
+            function,
+        ));
     }
     if host.is_unwind_exit(&err) {
         return Err(err);
@@ -559,7 +644,11 @@ fn server_exception(
         } else {
             b"Internal Error".to_vec()
         };
-        let fault = add_soap_fault(host, this, &FaultSpec::en("Server", &String::from_utf8_lossy(&msg)))?;
+        let fault = add_soap_fault(
+            host,
+            this,
+            &FaultSpec::en("Server", &String::from_utf8_lossy(&msg)),
+        )?;
         return soap_server_fault_ex(host, Some(service), function, &Value::Object(fault), None);
     }
     Err(err)
@@ -644,25 +733,38 @@ fn handle_inner(host: &mut dyn SoapHost, this: &Obj, request: Option<&[u8]>) -> 
     };
 
     let (method, query) = host.request_line();
-    if method.as_deref() == Some("GET") && query.as_deref().is_some_and(|q| q.eq_ignore_ascii_case("wsdl")) {
+    if method.as_deref() == Some("GET")
+        && query
+            .as_deref()
+            .is_some_and(|q| q.eq_ignore_ascii_case("wsdl"))
+    {
         if let Some(sdl) = &service.sdl {
             host.add_header("Content-Type: text/xml; charset=utf-8");
             match host.load_resource(&sdl.source, None) {
                 Ok(data) => host.write_output(&data),
                 Err(_) => {
-                    return Err(bail(host, SoapError::ServerFault("Server".into(), "Couldn't find WSDL".into()), None))
+                    return Err(bail(
+                        host,
+                        SoapError::ServerFault("Server".into(), "Couldn't find WSDL".into()),
+                        None,
+                    ))
                 }
             }
             return Ok(());
         }
         return Err(bail(
             host,
-            SoapError::ServerFault("Server".into(), "WSDL generation is not supported yet".into()),
+            SoapError::ServerFault(
+                "Server".into(),
+                "WSDL generation is not supported yet".into(),
+            ),
             None,
         ));
     }
     if !host.ob_start() {
-        return Err(RuntimeError::Fatal("SoapServer::handle(): ob_start failed".into()));
+        return Err(RuntimeError::Fatal(
+            "SoapServer::handle(): ob_start failed".into(),
+        ));
     }
     let mut soap_action = None;
     let parsed = if let Some(arg) = request {
@@ -674,12 +776,16 @@ fn handle_inner(host: &mut dyn SoapHost, this: &Obj, request: Option<&[u8]>) -> 
         let mut body = body;
         if let Some(enc) = host.server_var("HTTP_CONTENT_ENCODING") {
             if matches!(enc.as_slice(), b"gzip" | b"x-gzip" | b"deflate") {
-                match host.call_function(b"zlib_decode", &[Value::from(body.as_slice())])? {
-                    Some(Value::Str(s)) => body = s.as_bytes().to_vec(),
-                    _ => {
-                        host.diagnostic(ErrorLevel::Warning, "SoapServer::handle(): Can't uncompress compressed request")?;
-                        return Ok(());
-                    }
+                if let Some(Value::Str(s)) =
+                    host.call_function(b"zlib_decode", &[Value::from(body.as_slice())])?
+                {
+                    body = s.as_bytes().to_vec();
+                } else {
+                    host.diagnostic(
+                        ErrorLevel::Warning,
+                        "SoapServer::handle(): Can't uncompress compressed request",
+                    )?;
+                    return Ok(());
                 }
             } else {
                 host.diagnostic(
@@ -696,17 +802,29 @@ fn handle_inner(host: &mut dyn SoapHost, this: &Obj, request: Option<&[u8]>) -> 
         Doc::parse(&body)
     };
     let Ok(doc_request) = parsed else {
-        return Err(bail(host, SoapError::ServerFault("Client".into(), "Bad Request".into()), None));
+        return Err(bail(
+            host,
+            SoapError::ServerFault("Client".into(), "Bad Request".into()),
+            None,
+        ));
     };
     if doc_request.has_dtd() {
         if let Some(env) = doc_request.get_node(doc_request.first_top(), "Envelope", None) {
             match doc_request.ns_href(env) {
-                Some(h) if h == SOAP_1_1_ENV_NAMESPACE.as_bytes() => globals::set_soap_version(SOAP_1_1),
-                Some(h) if h == SOAP_1_2_ENV_NAMESPACE.as_bytes() => globals::set_soap_version(SOAP_1_2),
+                Some(h) if h == SOAP_1_1_ENV_NAMESPACE.as_bytes() => {
+                    globals::set_soap_version(SOAP_1_1);
+                }
+                Some(h) if h == SOAP_1_2_ENV_NAMESPACE.as_bytes() => {
+                    globals::set_soap_version(SOAP_1_2);
+                }
                 _ => {}
             }
         }
-        return Err(bail(host, SoapError::ServerFault("Server".into(), "DTD are not supported by SOAP".into()), None));
+        return Err(bail(
+            host,
+            SoapError::ServerFault("Server".into(), "DTD are not supported by SOAP".into()),
+            None,
+        ));
     }
     let old_features = globals::with(|g| std::mem::replace(&mut g.features, service.features));
     let r = dispatch(host, this, &service, &doc_request, soap_action.as_deref());
@@ -720,7 +838,13 @@ fn sdl_function(service: &Service, idx: Option<usize>) -> Option<&Function> {
 }
 
 #[allow(clippy::too_many_lines)]
-fn dispatch(host: &mut dyn SoapHost, this: &Obj, service: &Service, doc: &Doc, soap_action: Option<&[u8]>) -> RtResult<()> {
+fn dispatch(
+    host: &mut dyn SoapHost,
+    this: &Obj,
+    service: &Service,
+    doc: &Doc,
+    soap_action: Option<&[u8]>,
+) -> RtResult<()> {
     let version = globals::soap_version();
     let req = {
         let mut ctx = service.settings(version).make(host);
@@ -748,7 +872,10 @@ fn dispatch(host: &mut dyn SoapHost, this: &Obj, service: &Service, doc: &Doc, s
                     let class = service.class.clone().unwrap_or_default();
                     if o.class_name().eq_ignore_ascii_case(class.as_bytes()) {
                         soap_obj = Some(o);
-                    } else if o.class_name().eq_ignore_ascii_case(b"__PHP_Incomplete_Class") {
+                    } else if o
+                        .class_name()
+                        .eq_ignore_ascii_case(b"__PHP_Incomplete_Class")
+                    {
                         return Err(server_error(
                             host,
                             this,
@@ -814,7 +941,10 @@ fn dispatch(host: &mut dyn SoapHost, this: &Obj, service: &Service, doc: &Doc, s
                     return Err(server_error(
                         host,
                         this,
-                        SoapError::ServerFault("MustUnderstand".into(), "Header not understood".into()),
+                        SoapError::ServerFault(
+                            "MustUnderstand".into(),
+                            "Header not understood".into(),
+                        ),
                         Some(service),
                         function,
                     ));
@@ -826,7 +956,13 @@ fn dispatch(host: &mut dyn SoapHost, this: &Obj, service: &Service, doc: &Doc, s
                     if host.instance_of(o, "SoapFault") {
                         host.ob_discard();
                         let entry = headers.borrow()[i].clone();
-                        return soap_server_fault_ex(host, Some(service), function, &v, Some(&entry));
+                        return soap_server_fault_ex(
+                            host,
+                            Some(service),
+                            function,
+                            &v,
+                            Some(&entry),
+                        );
                     }
                 }
                 headers.borrow_mut()[i].retval = v;
@@ -877,13 +1013,12 @@ fn dispatch(host: &mut dyn SoapHost, this: &Obj, service: &Service, doc: &Doc, s
             return soap_server_fault_ex(host, Some(service), function, &retval, None);
         }
     }
-    let response_name = match function.and_then(|f| f.response_name.clone()) {
-        Some(n) => n.into_bytes(),
-        None => {
-            let mut n = fname.clone();
-            n.extend_from_slice(b"Response");
-            n
-        }
+    let response_name = if let Some(n) = function.and_then(|f| f.response_name.clone()) {
+        n.into_bytes()
+    } else {
+        let mut n = fname.clone();
+        n.extend_from_slice(b"Response");
+        n
     };
     let final_headers = headers.borrow().clone();
     let doc_return = {

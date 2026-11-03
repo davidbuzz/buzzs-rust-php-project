@@ -200,10 +200,34 @@ pub static DEFAULT_ENCODERS: &[DefaultEncoder] = &[
     def!(XSD_INT, Some("int"), XSD, Long, Long),
     def!(XSD_SHORT, Some("short"), XSD, Long, Long),
     def!(XSD_BYTE, Some("byte"), XSD, Long, Long),
-    def!(XSD_NONPOSITIVEINTEGER, Some("nonPositiveInteger"), XSD, Long, Long),
-    def!(XSD_POSITIVEINTEGER, Some("positiveInteger"), XSD, Long, Long),
-    def!(XSD_NONNEGATIVEINTEGER, Some("nonNegativeInteger"), XSD, Long, Long),
-    def!(XSD_NEGATIVEINTEGER, Some("negativeInteger"), XSD, Long, Long),
+    def!(
+        XSD_NONPOSITIVEINTEGER,
+        Some("nonPositiveInteger"),
+        XSD,
+        Long,
+        Long
+    ),
+    def!(
+        XSD_POSITIVEINTEGER,
+        Some("positiveInteger"),
+        XSD,
+        Long,
+        Long
+    ),
+    def!(
+        XSD_NONNEGATIVEINTEGER,
+        Some("nonNegativeInteger"),
+        XSD,
+        Long,
+        Long
+    ),
+    def!(
+        XSD_NEGATIVEINTEGER,
+        Some("negativeInteger"),
+        XSD,
+        Long,
+        Long
+    ),
     def!(XSD_UNSIGNEDBYTE, Some("unsignedByte"), XSD, Long, Long),
     def!(XSD_UNSIGNEDSHORT, Some("unsignedShort"), XSD, Long, Long),
     def!(XSD_UNSIGNEDINT, Some("unsignedInt"), XSD, Long, Long),
@@ -214,7 +238,13 @@ pub static DEFAULT_ENCODERS: &[DefaultEncoder] = &[
     def!(XSD_ANYURI, Some("anyURI"), XSD, StringC, String),
     def!(XSD_QNAME, Some("QName"), XSD, StringC, String),
     def!(XSD_NOTATION, Some("NOTATION"), XSD, StringC, String),
-    def!(XSD_NORMALIZEDSTRING, Some("normalizedString"), XSD, StringR, String),
+    def!(
+        XSD_NORMALIZEDSTRING,
+        Some("normalizedString"),
+        XSD,
+        StringR,
+        String
+    ),
     def!(XSD_TOKEN, Some("token"), XSD, StringC, String),
     def!(XSD_LANGUAGE, Some("language"), XSD, StringC, String),
     def!(XSD_NMTOKEN, Some("NMTOKEN"), XSD, StringC, String),
@@ -240,7 +270,13 @@ pub static DEFAULT_ENCODERS: &[DefaultEncoder] = &[
     def!(XSD_INT, Some("int"), X99, Long, Long),
     def!(XSD_SHORT, Some("short"), X99, Long, Long),
     def!(XSD_BYTE, Some("byte"), X99, Long, Long),
-    def!(XSD_1999_TIMEINSTANT, Some("timeInstant"), X99, StringC, String),
+    def!(
+        XSD_1999_TIMEINSTANT,
+        Some("timeInstant"),
+        X99,
+        StringC,
+        String
+    ),
     def!(XSD_ANYXML, Some("<anyXML>"), Some("<anyXML>"), Any, Any),
 ];
 
@@ -327,7 +363,10 @@ mod tests {
         assert_eq!(DEFAULT_ENCODERS[i as usize].type_id, IS_LONG);
         let a = default_by_nscat("http://schemas.xmlsoap.org/soap/encoding/:Array").unwrap();
         assert_eq!(DEFAULT_ENCODERS[a as usize].to_xml, ToXml::GuessArrayMap);
-        assert_eq!(DEFAULT_ENCODERS[default_by_type(SOAP_ENC_ARRAY).unwrap() as usize].to_xml, ToXml::Array);
+        assert_eq!(
+            DEFAULT_ENCODERS[default_by_type(SOAP_ENC_ARRAY).unwrap() as usize].to_xml,
+            ToXml::Array
+        );
         assert!(default_by_nscat("<anyXML>:<anyXML>").is_some());
         assert!(default_by_nscat("int").is_none());
         assert_eq!(default_ns_prefix(XSI_NAMESPACE.as_bytes()), Some("xsi"));

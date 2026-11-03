@@ -2,6 +2,12 @@
 //! requests handled by a `SoapServer` over `soap12-test.wsdl` with the
 //! `Soap12test` class; the response must match byte for byte.
 
+#![allow(
+    clippy::many_single_char_names,
+    clippy::too_many_arguments,
+    clippy::too_many_lines
+)]
+
 mod common;
 
 use std::rc::Rc;
@@ -18,13 +24,20 @@ fn arg(args: &[Value], i: usize) -> Value {
 
 fn prop(h: &mut TestHost, v: &Value, name: &str) -> Value {
     match v {
-        Value::Object(o) => h.read_property(o, name.as_bytes()).ok().flatten().unwrap_or_default(),
+        Value::Object(o) => h
+            .read_property(o, name.as_bytes())
+            .ok()
+            .flatten()
+            .unwrap_or_default(),
         Value::Array(a) => a.get_str(name.as_bytes()).cloned().unwrap_or_default(),
         _ => Value::Null,
     }
 }
 
-fn method(name: &str, f: impl Fn(&mut TestHost, &php_runtime::Obj, &[Value]) -> RtResult<Value> + 'static) -> (String, MethodFn) {
+fn method(
+    name: &str,
+    f: impl Fn(&mut TestHost, &php_runtime::Obj, &[Value]) -> RtResult<Value> + 'static,
+) -> (String, MethodFn) {
     (name.to_owned(), Rc::new(f))
 }
 
@@ -77,12 +90,16 @@ fn soap12_class() -> UserClass {
             _ => 1,
         }))
     }));
-    methods.push(method("isNil", |_, _, a| Ok(Value::Bool(matches!(arg(a, 0), Value::Null)))));
+    methods.push(method("isNil", |_, _, a| {
+        Ok(Value::Bool(matches!(arg(a, 0), Value::Null)))
+    }));
     methods.push(method("requiredHeader", |h, this, a| {
         h.write_property(this, b"header", arg(a, 0))?;
         Ok(Value::Null)
     }));
-    methods.push(method("echoHeader", |h, this, _| Ok(h.read_property(this, b"header")?.unwrap_or_default())));
+    methods.push(method("echoHeader", |h, this, _| {
+        Ok(h.read_property(this, b"header")?.unwrap_or_default())
+    }));
     methods.push(method("echoResolvedRef", |h, _, a| {
         let r = prop(h, &arg(a, 0), "RelativeReference");
         let base = prop(h, &r, "base").to_zstr(h)?;
@@ -91,7 +108,9 @@ fn soap12_class() -> UserClass {
     }));
     methods.push(method("validateCountryCode", |h, _, a| {
         let code = arg(a, 0).to_zstr(h)?;
-        if code.len() != 2 {
+        if code.len() == 2 {
+            Ok(Value::from("OK"))
+        } else {
             let hdr = h.new_object("SoapHeader");
             php_soap::objects::soap_header_construct(
                 h,
@@ -114,8 +133,6 @@ fn soap12_class() -> UserClass {
                 Some(&Value::Object(hdr)),
             )?;
             Ok(Value::Object(f))
-        } else {
-            Ok(Value::from("OK"))
         }
     }));
     UserClass {
@@ -148,7 +165,10 @@ fn run_one(dir: &std::path::Path, path: &std::path::Path) -> Result<(), String> 
     host.add_class(soap12_class());
     let opts = ZArray::from_pairs([
         (ArrayKey::from_bytes(b"soap_version"), Value::Int(2)),
-        (ArrayKey::from_bytes(b"actor"), Value::from("http://example.org/ts-tests/C")),
+        (
+            ArrayKey::from_bytes(b"actor"),
+            Value::from("http://example.org/ts-tests/C"),
+        ),
     ]);
     let run = |host: &mut TestHost| -> RtResult<()> {
         let server = host.new_server(Some(wsdl_path), &opts)?;
@@ -192,7 +212,10 @@ fn soap12_collection() {
         for p in &entries {
             match run_one(&dir, p) {
                 Ok(()) => passed += 1,
-                Err(e) => failures.push(format!("{}: {e}", p.file_name().unwrap_or_default().to_string_lossy())),
+                Err(e) => failures.push(format!(
+                    "{}: {e}",
+                    p.file_name().unwrap_or_default().to_string_lossy()
+                )),
             }
         }
         eprintln!("soap12: {passed}/{} passed", entries.len());
@@ -201,5 +224,9 @@ fn soap12_collection() {
     for f in &failures {
         eprintln!("FAIL {f}\n");
     }
-    assert!(failures.is_empty(), "{} soap12 tests failed", failures.len());
+    assert!(
+        failures.is_empty(),
+        "{} soap12 tests failed",
+        failures.len()
+    );
 }

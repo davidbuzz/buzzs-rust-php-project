@@ -40,8 +40,8 @@ impl Charset {
         let upper = String::from_utf8_lossy(name).to_ascii_uppercase();
         Some(match upper.as_str() {
             "UTF-8" | "UTF8" => Charset::Utf8,
-            "ISO-8859-1" | "ISO-LATIN-1" | "ISO LATIN 1" | "ISO8859-1" | "ISO_8859-1" | "LATIN1"
-            | "L1" | "CP819" | "IBM819" => Charset::Latin1,
+            "ISO-8859-1" | "ISO-LATIN-1" | "ISO LATIN 1" | "ISO8859-1" | "ISO_8859-1"
+            | "LATIN1" | "L1" | "CP819" | "IBM819" => Charset::Latin1,
             "ISO-8859-15" | "ISO8859-15" | "ISO_8859-15" | "LATIN-9" | "LATIN9" => Charset::Latin9,
             "WINDOWS-1252" | "CP1252" | "MS-ANSI" => Charset::Cp1252,
             "ASCII" | "US-ASCII" | "ANSI_X3.4-1968" | "646" => Charset::Ascii,
@@ -84,7 +84,10 @@ impl Charset {
                     .filter(|b| !LATIN9_DIFF.iter().any(|(x, _)| x == b))
             }
             Charset::Cp1252 => {
-                if let Some(p) = CP1252_HIGH.iter().position(|&u| u32::from(u) == c && u != 0xFFFD) {
+                if let Some(p) = CP1252_HIGH
+                    .iter()
+                    .position(|&u| u32::from(u) == c && u != 0xFFFD)
+                {
                     return u8::try_from(p + 0x80).ok();
                 }
                 u8::try_from(c).ok().filter(|&b| b >= 0xA0)

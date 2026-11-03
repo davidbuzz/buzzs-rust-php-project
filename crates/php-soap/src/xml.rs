@@ -1331,7 +1331,13 @@ fn parse_content(s: &[u8]) -> Vec<ContentPiece> {
 #[must_use]
 pub fn whitespace_replace(s: &[u8]) -> Vec<u8> {
     s.iter()
-        .map(|&c| if matches!(c, b'\t' | b'\n' | b'\r') { b' ' } else { c })
+        .map(|&c| {
+            if matches!(c, b'\t' | b'\n' | b'\r') {
+                b' '
+            } else {
+                c
+            }
+        })
         .collect()
 }
 
@@ -1340,9 +1346,9 @@ pub fn whitespace_replace(s: &[u8]) -> Vec<u8> {
 pub fn whitespace_collapse(s: &[u8]) -> Vec<u8> {
     let s = whitespace_replace(s);
     let mut out = Vec::with_capacity(s.len());
-    let mut iter = s.iter().copied().skip_while(|&c| c == b' ').peekable();
+    let iter = s.iter().copied().skip_while(|&c| c == b' ').peekable();
     let mut old = 0u8;
-    while let Some(c) = iter.next() {
+    for c in iter {
         if c != b' ' || old != b' ' {
             out.push(c);
         }
@@ -1389,7 +1395,10 @@ mod tests {
             d.dump(),
             b"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<E:Envelope xmlns:E=\"http://e/\"><E:Body><param E:attr=\"x&quot;&#10;&#9;&lt;\">a&lt;b&gt;&amp;&#13;\"\xc3\xa9</param><empty/><emptytext></emptytext></E:Body></E:Envelope>\n".to_vec()
         );
-        assert_eq!(d.dump_node(p), b"<param E:attr=\"x&quot;&#10;&#9;&lt;\">a&lt;b&gt;&amp;&#xD;\"&#xE9;</param>".to_vec());
+        assert_eq!(
+            d.dump_node(p),
+            b"<param E:attr=\"x&quot;&#10;&#9;&lt;\">a&lt;b&gt;&amp;&#xD;\"&#xE9;</param>".to_vec()
+        );
     }
 
     #[test]
@@ -1414,9 +1423,21 @@ mod tests {
         d.new_ns(c, b"urn:b", Some(b"a"));
         assert_eq!(d.search_ns(c, Some(b"a")).unwrap().href, b"urn:b");
         assert_eq!(d.search_ns(c, None).unwrap().href, b"urn:def");
-        assert!(d.search_ns_by_href(c, b"urn:a").is_none(), "shadowed prefix");
-        assert_eq!(d.search_ns_by_href(r, b"urn:a").unwrap().prefix.unwrap(), b"a");
-        assert_eq!(d.search_ns_by_href(c, XML_NAMESPACE.as_bytes()).unwrap().prefix.unwrap(), b"xml");
+        assert!(
+            d.search_ns_by_href(c, b"urn:a").is_none(),
+            "shadowed prefix"
+        );
+        assert_eq!(
+            d.search_ns_by_href(r, b"urn:a").unwrap().prefix.unwrap(),
+            b"a"
+        );
+        assert_eq!(
+            d.search_ns_by_href(c, XML_NAMESPACE.as_bytes())
+                .unwrap()
+                .prefix
+                .unwrap(),
+            b"xml"
+        );
         assert!(d.new_ns(r, b"urn:x", Some(b"a")).is_none());
     }
 
@@ -1429,13 +1450,19 @@ mod tests {
         let b = d.get_node(d.first_child(root), "B", Some("urn:s")).unwrap();
         let t = d.first_child(b).unwrap();
         assert_eq!(d.content(t), b"xz");
-        assert_eq!(d.find_by_attribute_recursive(d.first_top(), "id", b"q", None), d.last_child(b));
+        assert_eq!(
+            d.find_by_attribute_recursive(d.first_top(), "id", b"q", None),
+            d.last_child(b)
+        );
         assert_eq!(d.dump(), b"<?xml version=\"1.0\"?>\n<s:E xmlns:s=\"urn:s\"><s:B a=\"1\">xz<i id=\"q\"/></s:B><C/></s:E>\n".to_vec());
     }
 
     #[test]
     fn parse_failures() {
-        assert!(matches!(Doc::parse(b"not xml"), Err(ParseFailure::Malformed(_))));
+        assert!(matches!(
+            Doc::parse(b"not xml"),
+            Err(ParseFailure::Malformed(_))
+        ));
         let mut deep = Vec::new();
         for _ in 0..2100 {
             deep.extend_from_slice(b"<a>");

@@ -299,7 +299,12 @@ pub trait SoapHost: RuntimeContext {
     }
 
     /// `php_stream_context_get_option`.
-    fn context_get_option(&mut self, context: &Value, wrapper: &str, option: &str) -> Option<Value> {
+    fn context_get_option(
+        &mut self,
+        context: &Value,
+        wrapper: &str,
+        option: &str,
+    ) -> Option<Value> {
         None
     }
 

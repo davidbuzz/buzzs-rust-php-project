@@ -60,8 +60,11 @@ pub fn set_soap_fault(host: &mut dyn SoapHost, obj: Option<Obj>, f: &FaultSpec) 
             host.write_slot(&obj, "faultcode", Value::from(code.as_slice()));
             host.write_slot(&obj, "faultcodens", Value::from(ns.as_slice()));
         } else if version == SOAP_1_1 {
-            let ns = matches!(code.as_slice(), b"Client" | b"Server" | b"VersionMismatch" | b"MustUnderstand")
-                .then_some(SOAP_1_1_ENV_NAMESPACE);
+            let ns = matches!(
+                code.as_slice(),
+                b"Client" | b"Server" | b"VersionMismatch" | b"MustUnderstand"
+            )
+            .then_some(SOAP_1_1_ENV_NAMESPACE);
             set(host, code, ns);
         } else if version == SOAP_1_2 {
             match code.as_slice() {
@@ -109,7 +112,12 @@ pub fn construct(
 ) -> RtResult<()> {
     let mut code_ns = None;
     let mut fault_code: Option<Vec<u8>> = None;
-    if let Value::Object(_) | Value::Int(_) | Value::Float(_) | Value::Bool(_) | Value::Resource(_) = code.deref() {
+    if let Value::Object(_)
+    | Value::Int(_)
+    | Value::Float(_)
+    | Value::Bool(_)
+    | Value::Resource(_) = code.deref()
+    {
         let given = match code.deref() {
             Value::Object(o) => o.class_name().to_string_lossy(),
             other => crate::client_type_name(&other).to_owned(),
@@ -121,9 +129,10 @@ pub fn construct(
     match code.deref() {
         Value::Str(s) => fault_code = Some(s.as_bytes().to_vec()),
         Value::Array(a) if a.len() == 2 => {
-            if let (Some(Value::Str(ns)), Some(Value::Str(c))) =
-                (a.get_int(0).map(Value::deref), a.get_int(1).map(Value::deref))
-            {
+            if let (Some(Value::Str(ns)), Some(Value::Str(c))) = (
+                a.get_int(0).map(Value::deref),
+                a.get_int(1).map(Value::deref),
+            ) {
                 code_ns = Some(ns.as_bytes().to_vec());
                 fault_code = Some(c.as_bytes().to_vec());
             }
@@ -168,7 +177,9 @@ pub fn construct(
 /// `SoapFault::__toString`.
 pub fn to_string(host: &mut dyn SoapHost, this: &Obj) -> RtResult<Vec<u8>> {
     let code = host.read_property(this, b"faultcode")?.unwrap_or_default();
-    let string = host.read_property(this, b"faultstring")?.unwrap_or_default();
+    let string = host
+        .read_property(this, b"faultstring")?
+        .unwrap_or_default();
     let file = host.read_slot(this, "file").unwrap_or_default();
     let line = host.read_slot(this, "line").unwrap_or_default();
     let trace = match host.call_method(this, b"getTraceAsString", &[])? {

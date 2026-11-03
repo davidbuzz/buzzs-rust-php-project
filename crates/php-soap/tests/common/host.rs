@@ -9,11 +9,13 @@ use std::rc::Rc;
 
 use php_runtime::array::ArrayKey;
 use php_runtime::{
-    ErrorLevel, Obj, ObjectDump, ObjectKind, PhpObject, PropertyPurpose, PropertySlot, RtResult, RuntimeContext,
-    RuntimeError, Value, ZArray, ZStr,
+    ErrorLevel, Obj, ObjectDump, ObjectKind, PhpObject, PropertyPurpose, PropertySlot, RtResult,
+    RuntimeContext, RuntimeError, Value, ZArray, ZStr,
 };
 use php_soap::classes::{find_class, PropDef};
-use php_soap::host::{ConnectTarget, EnumKind, HttpConnector, HttpStream, LocalTime, MethodCall, SoapHost};
+use php_soap::host::{
+    ConnectTarget, EnumKind, HttpConnector, HttpStream, LocalTime, MethodCall, SoapHost,
+};
 use php_soap::state::{create_state, SoapObject};
 
 /// An object of the test engine.
@@ -149,7 +151,8 @@ impl TestHost {
             script: "test.php".into(),
             ..Self::default()
         };
-        h.ini.insert("soap.wsdl_cache_enabled".into(), b"0".to_vec());
+        h.ini
+            .insert("soap.wsdl_cache_enabled".into(), b"0".to_vec());
         h
     }
 
@@ -158,7 +161,11 @@ impl TestHost {
         self.write_output(data);
     }
 
-    pub fn add_function(&mut self, name: &str, f: impl Fn(&mut TestHost, &[Value]) -> RtResult<Value> + 'static) {
+    pub fn add_function(
+        &mut self,
+        name: &str,
+        f: impl Fn(&mut TestHost, &[Value]) -> RtResult<Value> + 'static,
+    ) {
         self.functions
             .insert(name.to_ascii_lowercase(), (name.to_owned(), Rc::new(f)));
     }
@@ -242,11 +249,15 @@ impl TestHost {
 
     /// Creates an object of `class` (declared props initialized).
     pub fn new_object(&mut self, class: &str) -> Obj {
-        let class = self.canonical_class(class).unwrap_or_else(|| class.to_owned());
+        let class = self
+            .canonical_class(class)
+            .unwrap_or_else(|| class.to_owned());
         let mut props = ZArray::new();
         for (n, v) in self.declared_props(&class) {
             if let Some(v) = v {
-                props.make_mut().insert(ArrayKey::Str(ZStr::from(n.as_str())), v);
+                props
+                    .make_mut()
+                    .insert(ArrayKey::Str(ZStr::from(n.as_str())), v);
             }
         }
         let mut base = class.clone();
@@ -277,7 +288,10 @@ impl TestHost {
 
     /// The `memory_limit` INI value in bytes (0 = unlimited).
     pub fn memory_limit(&self) -> usize {
-        let v = self.ini.get("memory_limit").map_or_else(|| "128M".to_owned(), |v| String::from_utf8_lossy(v).into_owned());
+        let v = self.ini.get("memory_limit").map_or_else(
+            || "128M".to_owned(),
+            |v| String::from_utf8_lossy(v).into_owned(),
+        );
         let v = v.trim();
         if v.starts_with('-') {
             return 0;
@@ -298,7 +312,8 @@ impl TestHost {
 
     /// The declared spelling of a class name.
     pub fn canonical(&self, name: &str) -> String {
-        self.canonical_class(name).unwrap_or_else(|| name.to_owned())
+        self.canonical_class(name)
+            .unwrap_or_else(|| name.to_owned())
     }
 
     /// A user method in the class chain.
@@ -310,7 +325,11 @@ impl TestHost {
         let mut cur = Some(class.to_owned());
         while let Some(c) = cur {
             if let Some(uc) = self.classes.get(&c.to_ascii_lowercase()) {
-                if let Some((_, f)) = uc.methods.iter().find(|(n, _)| n.eq_ignore_ascii_case(name)) {
+                if let Some((_, f)) = uc
+                    .methods
+                    .iter()
+                    .find(|(n, _)| n.eq_ignore_ascii_case(name))
+                {
                     return Some(Rc::clone(f));
                 }
             }
@@ -355,12 +374,20 @@ impl RuntimeContext for TestHost {
         Ok(())
     }
 
-    fn object_properties(&mut self, obj: &Obj, _purpose: PropertyPurpose) -> RtResult<Option<ZArray>> {
-        Ok(obj.downcast_ref::<TestObj>().map(|o| o.props.borrow().clone()))
+    fn object_properties(
+        &mut self,
+        obj: &Obj,
+        _purpose: PropertyPurpose,
+    ) -> RtResult<Option<ZArray>> {
+        Ok(obj
+            .downcast_ref::<TestObj>()
+            .map(|o| o.props.borrow().clone()))
     }
 
     fn object_dump(&mut self, obj: &Obj, _purpose: PropertyPurpose) -> RtResult<ObjectDump> {
-        let props = obj.downcast_ref::<TestObj>().map(|o| o.props.borrow().clone());
+        let props = obj
+            .downcast_ref::<TestObj>()
+            .map(|o| o.props.borrow().clone());
         let kind = if obj.class_name().eq_ignore_ascii_case(b"stdClass") {
             ObjectKind::StdClass
         } else {
@@ -368,18 +395,25 @@ impl RuntimeContext for TestHost {
         };
         Ok(ObjectDump {
             kind,
-            properties: props.map(|t| t.iter().map(|(k, v)| (k.clone(), PropertySlot::Value(v.clone()))).collect()),
+            properties: props.map(|t| {
+                t.iter()
+                    .map(|(k, v)| (k.clone(), PropertySlot::Value(v.clone())))
+                    .collect()
+            }),
         })
     }
 }
 
 impl SoapHost for TestHost {
     fn soap_state(&mut self, obj: &Obj) -> Option<Rc<SoapObject>> {
-        obj.downcast_ref::<TestObj>().and_then(|o| o.state.borrow().clone())
+        obj.downcast_ref::<TestObj>()
+            .and_then(|o| o.state.borrow().clone())
     }
 
     fn instance_of(&mut self, obj: &Obj, class: &str) -> bool {
-        if class.eq_ignore_ascii_case("Traversable") || class.eq_ignore_ascii_case("DateTimeInterface") {
+        if class.eq_ignore_ascii_case("Traversable")
+            || class.eq_ignore_ascii_case("DateTimeInterface")
+        {
             return false;
         }
         self.is_a(&obj.class_name().to_string_lossy(), class)
@@ -432,7 +466,10 @@ impl SoapHost for TestHost {
     }
 
     fn read_slot(&mut self, obj: &Obj, name: &str) -> Option<Value> {
-        Self::props_of(obj).borrow().get_str(name.as_bytes()).cloned()
+        Self::props_of(obj)
+            .borrow()
+            .get_str(name.as_bytes())
+            .cloned()
     }
 
     fn write_slot(&mut self, obj: &Obj, name: &str, value: Value) {
@@ -458,7 +495,10 @@ impl SoapHost for TestHost {
             RuntimeError::Error(m) => ("Error", m.clone()),
             RuntimeError::TypeError(m) => ("TypeError", m.clone()),
             RuntimeError::ValueError(m) => ("ValueError", m.clone()),
-            RuntimeError::Custom { class, message } => (&*Box::leak(class.to_string_lossy().into_boxed_str()), message.clone()),
+            RuntimeError::Custom { class, message } => (
+                &*Box::leak(class.to_string_lossy().into_boxed_str()),
+                message.clone(),
+            ),
             _ => return None,
         };
         let o = self.new_object(class);
@@ -468,8 +508,13 @@ impl SoapHost for TestHost {
 
     fn call_callable(&mut self, callable: &Value, args: &[Value]) -> RtResult<Value> {
         if let Value::Array(a) = callable.deref() {
-            if let (Some(Value::Object(o)), Some(Value::Str(m))) = (a.get_int(0).map(Value::deref), a.get_int(1).map(Value::deref)) {
-                if let Some(f) = self.find_method(&o.class_name().to_string_lossy(), &m.to_string_lossy()) {
+            if let (Some(Value::Object(o)), Some(Value::Str(m))) = (
+                a.get_int(0).map(Value::deref),
+                a.get_int(1).map(Value::deref),
+            ) {
+                if let Some(f) =
+                    self.find_method(&o.class_name().to_string_lossy(), &m.to_string_lossy())
+                {
                     return f(self, &o, args);
                 }
             }
@@ -501,12 +546,31 @@ impl SoapHost for TestHost {
         if let Some((n, _)) = self.functions.get(&key) {
             return Some(ZStr::from(n.as_str()));
         }
-        const BUILTINS: &[&str] = &["strlen", "count", "var_dump", "gzinflate", "gzdeflate", "gzuncompress", "gzcompress", "gzencode", "gzdecode", "str_repeat", "trim", "strtolower", "strtoupper", "base64_encode", "md5"];
+        const BUILTINS: &[&str] = &[
+            "strlen",
+            "count",
+            "var_dump",
+            "gzinflate",
+            "gzdeflate",
+            "gzuncompress",
+            "gzcompress",
+            "gzencode",
+            "gzdecode",
+            "str_repeat",
+            "trim",
+            "strtolower",
+            "strtoupper",
+            "base64_encode",
+            "md5",
+        ];
         BUILTINS.iter().find(|b| **b == key).map(|b| ZStr::from(*b))
     }
 
     fn defined_functions(&mut self) -> Vec<ZStr> {
-        self.functions.values().map(|(n, _)| ZStr::from(n.as_str())).collect()
+        self.functions
+            .values()
+            .map(|(n, _)| ZStr::from(n.as_str()))
+            .collect()
     }
 
     fn class_methods(&mut self, class: &ZStr) -> Vec<(ZStr, bool)> {
@@ -541,7 +605,16 @@ impl SoapHost for TestHost {
                 _ => 1,
             };
             let one_way = matches!(args.get(4), Some(Value::Bool(true)));
-            let r = php_soap::client::do_request_method(self, obj, &s(0), &s(1), &s(2), version, one_way, None)?;
+            let r = php_soap::client::do_request_method(
+                self,
+                obj,
+                &s(0),
+                &s(1),
+                &s(2),
+                version,
+                one_way,
+                None,
+            )?;
             return Ok(MethodCall::Returned(r));
         }
         if let Some(hook) = self.method_hook {
@@ -553,7 +626,8 @@ impl SoapHost for TestHost {
         }
         if let Some(m) = self.find_method(&class, "__call") {
             let a = ZArray::from_values(args.iter().cloned());
-            return m(self, obj, &[Value::from(n.as_str()), Value::Array(a)]).map(MethodCall::Returned);
+            return m(self, obj, &[Value::from(n.as_str()), Value::Array(a)])
+                .map(MethodCall::Returned);
         }
         if n.eq_ignore_ascii_case("getTraceAsString") {
             return Ok(MethodCall::Returned(Value::from("#0 {main}")));
@@ -585,7 +659,9 @@ impl SoapHost for TestHost {
             return Some(p);
         }
         let joined = self.base_dir.join(path);
-        std::fs::canonicalize(joined).ok().map(|p| p.to_string_lossy().into_owned())
+        std::fs::canonicalize(joined)
+            .ok()
+            .map(|p| p.to_string_lossy().into_owned())
     }
 
     fn memory_check(&mut self, bytes: usize) -> RtResult<()> {
@@ -670,7 +746,11 @@ impl TestHost {
 
     /// Prints an uncaught error like the CLI does.
     pub fn report(&mut self, e: &RuntimeError) {
-        let file = if self.script.is_empty() { "test.php".to_owned() } else { self.script.clone() };
+        let file = if self.script.is_empty() {
+            "test.php".to_owned()
+        } else {
+            self.script.clone()
+        };
         match e {
             RuntimeError::Fatal(m) => {
                 let s = format!("\nFatal error: {m} in {file} on line 1\n");
@@ -684,12 +764,20 @@ impl TestHost {
                         let class = o.class_name().to_string_lossy();
                         let msg = self
                             .read_slot(o, "message")
-                            .map(|m| m.to_zstr(self).map(|z| z.to_string_lossy()).unwrap_or_default())
+                            .map(|m| {
+                                m.to_zstr(self)
+                                    .map(|z| z.to_string_lossy())
+                                    .unwrap_or_default()
+                            })
                             .unwrap_or_default();
                         if self.is_a(&class, "SoapFault") {
                             let code = self
                                 .read_slot(o, "faultcode")
-                                .map(|m| m.to_zstr(self).map(|z| z.to_string_lossy()).unwrap_or_default())
+                                .map(|m| {
+                                    m.to_zstr(self)
+                                        .map(|z| z.to_string_lossy())
+                                        .unwrap_or_default()
+                                })
                                 .unwrap_or_default();
                             format!("SoapFault exception: [{code}] {msg} in {file}:1\nStack trace:\n#0 {{main}}")
                         } else {
@@ -698,7 +786,8 @@ impl TestHost {
                     }
                     None => format!("Error: {other:?} in {file}:1\nStack trace:\n#0 {{main}}"),
                 };
-                let s = format!("PHP Fatal error:  Uncaught {text}\n  thrown in {file} on line 1\n");
+                let s =
+                    format!("PHP Fatal error:  Uncaught {text}\n  thrown in {file} on line 1\n");
                 let _ = s;
                 let s = format!("\nFatal error: Uncaught {text}\n  thrown in {file} on line 1\n");
                 self.echo(s.as_bytes());
@@ -707,7 +796,12 @@ impl TestHost {
     }
 
     /// `new SoapClient($wsdl, $options)`.
-    pub fn new_client(&mut self, class: &str, wsdl: Option<&str>, options: &ZArray) -> RtResult<Obj> {
+    pub fn new_client(
+        &mut self,
+        class: &str,
+        wsdl: Option<&str>,
+        options: &ZArray,
+    ) -> RtResult<Obj> {
         let o = self.new_object(class);
         php_soap::client::construct(self, &o, wsdl.map(str::as_bytes), Some(options))?;
         Ok(o)

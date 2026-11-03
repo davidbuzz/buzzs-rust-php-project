@@ -47,7 +47,9 @@ struct RefMaps {
 
 /// Lower-case class comparison.
 pub(crate) fn is_class(obj: &Obj, name: &str) -> bool {
-    obj.class_name().as_bytes().eq_ignore_ascii_case(name.as_bytes())
+    obj.class_name()
+        .as_bytes()
+        .eq_ignore_ascii_case(name.as_bytes())
 }
 
 /// `Z_TYPE_P` as used to index the encoder table.
@@ -157,11 +159,23 @@ pub fn base64_encode(data: &[u8]) -> Vec<u8> {
     const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = Vec::with_capacity(data.len().div_ceil(3) * 4);
     for chunk in data.chunks(3) {
-        let b = [chunk[0], *chunk.get(1).unwrap_or(&0), *chunk.get(2).unwrap_or(&0)];
+        let b = [
+            chunk[0],
+            *chunk.get(1).unwrap_or(&0),
+            *chunk.get(2).unwrap_or(&0),
+        ];
         out.push(T[usize::from(b[0] >> 2)]);
         out.push(T[usize::from(((b[0] & 3) << 4) | (b[1] >> 4))]);
-        out.push(if chunk.len() > 1 { T[usize::from(((b[1] & 0x0f) << 2) | (b[2] >> 6))] } else { b'=' });
-        out.push(if chunk.len() > 2 { T[usize::from(b[2] & 0x3f)] } else { b'=' });
+        out.push(if chunk.len() > 1 {
+            T[usize::from(((b[1] & 0x0f) << 2) | (b[2] >> 6))]
+        } else {
+            b'='
+        });
+        out.push(if chunk.len() > 2 {
+            T[usize::from(b[2] & 0x3f)]
+        } else {
+            b'='
+        });
     }
     out
 }
@@ -486,7 +500,13 @@ impl<'h> EncodeCtx<'h> {
     }
 
     /// `get_type_str`.
-    fn get_type_str(&mut self, doc: &mut Doc, node: NodeId, ns: Option<&[u8]>, t: &[u8]) -> Vec<u8> {
+    fn get_type_str(
+        &mut self,
+        doc: &mut Doc,
+        node: NodeId,
+        ns: Option<&[u8]>,
+        t: &[u8],
+    ) -> Vec<u8> {
         let mut out = Vec::new();
         if let Some(mut ns) = ns {
             if self.soap_version == SOAP_1_2 && ns == SOAP_1_1_ENC_NAMESPACE.as_bytes() {
@@ -563,7 +583,11 @@ impl<'h> EncodeCtx<'h> {
     }
 
     /// `get_zval_property`.
-    pub(crate) fn get_property(&mut self, object: &Value, name: &[u8]) -> SoapResult<Option<Value>> {
+    pub(crate) fn get_property(
+        &mut self,
+        object: &Value,
+        name: &[u8],
+    ) -> SoapResult<Option<Value>> {
         match object {
             Value::Object(o) => Ok(self.host.read_property(o, name)?.map(|v| v.deref())),
             Value::Array(a) => Ok(a.get_str(name).map(Value::deref)),
@@ -623,33 +647,28 @@ impl<'h> EncodeCtx<'h> {
             return false;
         }
         if self.soap_version == SOAP_1_1 {
-            let id = match doc.attr_value(node_ptr, "id", None) {
-                Some(id) => {
-                    let mut s = b"#".to_vec();
-                    s.extend_from_slice(id);
-                    s
-                }
-                None => {
-                    self.cur_uniq_ref += 1;
-                    let s = format!("#ref{}", self.cur_uniq_ref).into_bytes();
-                    doc.set_prop(node_ptr, b"id", &s[1..]);
-                    s
-                }
+            let id = if let Some(id) = doc.attr_value(node_ptr, "id", None) {
+                let mut s = b"#".to_vec();
+                s.extend_from_slice(id);
+                s
+            } else {
+                self.cur_uniq_ref += 1;
+                let s = format!("#ref{}", self.cur_uniq_ref).into_bytes();
+                doc.set_prop(node_ptr, b"id", &s[1..]);
+                s
             };
             doc.set_prop(node, b"href", &id);
         } else {
-            let id = match doc.attr_value(node_ptr, "id", Some(SOAP_1_2_ENC_NAMESPACE)) {
-                Some(id) => {
-                    let mut s = b"#".to_vec();
-                    s.extend_from_slice(id);
-                    s
-                }
-                None => {
-                    self.cur_uniq_ref += 1;
-                    let s = format!("#ref{}", self.cur_uniq_ref).into_bytes();
-                    self.set_ns_prop(doc, node_ptr, SOAP_1_2_ENC_NAMESPACE, b"id", &s[1..]);
-                    s
-                }
+            let id = if let Some(id) = doc.attr_value(node_ptr, "id", Some(SOAP_1_2_ENC_NAMESPACE))
+            {
+                let mut s = b"#".to_vec();
+                s.extend_from_slice(id);
+                s
+            } else {
+                self.cur_uniq_ref += 1;
+                let s = format!("#ref{}", self.cur_uniq_ref).into_bytes();
+                self.set_ns_prop(doc, node_ptr, SOAP_1_2_ENC_NAMESPACE, b"id", &s[1..]);
+                s
             };
             self.set_ns_prop(doc, node, SOAP_1_2_ENC_NAMESPACE, b"ref", &id);
         }
@@ -681,16 +700,26 @@ impl<'h> EncodeCtx<'h> {
                 if let Some(id) = href.strip_prefix(b"#") {
                     return doc
                         .find_by_attribute_recursive(doc.first_top(), "id", id, None)
-                        .ok_or_else(|| soap_fatal(format!("Encoding: Unresolved reference '{}'", lossy(href))));
+                        .ok_or_else(|| {
+                            soap_fatal(format!("Encoding: Unresolved reference '{}'", lossy(href)))
+                        });
                 }
                 bail!("Encoding: External reference '{}'", lossy(href));
             }
             if let Some(href) = doc.attr_value(data, "ref", Some(SOAP_1_2_ENC_NAMESPACE)) {
                 let id = href.strip_prefix(b"#").unwrap_or(href);
-                match doc.find_by_attribute_recursive(doc.first_top(), "id", id, Some(SOAP_1_2_ENC_NAMESPACE)) {
+                match doc.find_by_attribute_recursive(
+                    doc.first_top(),
+                    "id",
+                    id,
+                    Some(SOAP_1_2_ENC_NAMESPACE),
+                ) {
                     None => bail!("Encoding: Unresolved reference '{}'", lossy(href)),
                     Some(r) if r == data => {
-                        bail!("Encoding: Violation of id and ref information items '{}'", lossy(href))
+                        bail!(
+                            "Encoding: Violation of id and ref information items '{}'",
+                            lossy(href)
+                        )
                     }
                     Some(r) => return Ok(r),
                 }
@@ -739,7 +768,11 @@ impl<'h> EncodeCtx<'h> {
                 let mut enc = None;
                 if let Some(stype) = &zstype {
                     enc = match &zns {
-                        Some(ns) => get_encoder(sdl.as_deref(), Some(&lossy(ns.as_bytes())), &lossy(stype.as_bytes())),
+                        Some(ns) => get_encoder(
+                            sdl.as_deref(),
+                            Some(&lossy(ns.as_bytes())),
+                            &lossy(stype.as_bytes()),
+                        ),
                         None => get_encoder_ex(sdl.as_deref(), &lossy(stype.as_bytes())),
                     };
                     if enc.is_none() && self.typemap.is_some() {
@@ -761,7 +794,12 @@ impl<'h> EncodeCtx<'h> {
                 if let Some(node) = node {
                     if style == SOAP_ENCODED || (sdl.is_some() && encode != Some(enc)) {
                         if let Some(stype) = &zstype {
-                            self.set_ns_and_type_ex(doc, node, zns.as_ref().map(ZStr::as_bytes), stype.as_bytes());
+                            self.set_ns_and_type_ex(
+                                doc,
+                                node,
+                                zns.as_ref().map(ZStr::as_bytes),
+                                stype.as_bytes(),
+                            );
                         }
                     }
                     if let Some(name) = str_of(self.soap_var_slot(o, "enc_name").as_ref()) {
@@ -793,8 +831,12 @@ impl<'h> EncodeCtx<'h> {
                         }
                         if let Some(sdl) = self.sdl.clone() {
                             let tn = lossy(type_name.as_bytes());
-                            let enc = get_encoder(Some(&sdl), Some(sdl.target_ns.as_deref().unwrap_or("")), &tn)
-                                .or_else(|| find_encoder_by_type_name(&sdl, &tn));
+                            let enc = get_encoder(
+                                Some(&sdl),
+                                Some(sdl.target_ns.as_deref().unwrap_or("")),
+                                &tn,
+                            )
+                            .or_else(|| find_encoder_by_type_name(&sdl, &tn));
                             if let Some(enc) = enc {
                                 if encode != Some(enc) && style == SOAP_LITERAL {
                                     add_type = true;
@@ -826,7 +868,12 @@ impl<'h> EncodeCtx<'h> {
     }
 
     /// `master_to_zval`.
-    pub fn master_to_zval(&mut self, encode: Option<EncRef>, doc: &Doc, data: NodeId) -> SoapResult<Value> {
+    pub fn master_to_zval(
+        &mut self,
+        encode: Option<EncRef>,
+        doc: &Doc,
+        data: NodeId,
+    ) -> SoapResult<Value> {
         let data = self.check_and_resolve_href(doc, data)?;
         let encode = match encode {
             None => conv(UNKNOWN_TYPE),
@@ -897,7 +944,14 @@ impl<'h> EncodeCtx<'h> {
         r
     }
 
-    fn to_xml(&mut self, doc: &mut Doc, encode: EncRef, data: &Value, style: i64, parent: NodeId) -> SoapResult<Option<NodeId>> {
+    fn to_xml(
+        &mut self,
+        doc: &mut Doc,
+        encode: EncRef,
+        data: &Value,
+        style: i64,
+        parent: NodeId,
+    ) -> SoapResult<Option<NodeId>> {
         let enc = self.enc(encode);
         Ok(Some(match enc.to_xml {
             ToXml::Guess => return self.guess_xml_convert(doc, data, style, parent),
@@ -908,7 +962,9 @@ impl<'h> EncodeCtx<'h> {
                 }
                 n
             }
-            ToXml::String | ToXml::Duration => self.to_xml_string(doc, &enc, data, style, parent)?,
+            ToXml::String | ToXml::Duration => {
+                self.to_xml_string(doc, &enc, data, style, parent)?
+            }
             ToXml::Long => self.to_xml_long(doc, &enc, data, style, parent)?,
             ToXml::Double => self.to_xml_double(doc, &enc, data, style, parent)?,
             ToXml::Bool => self.to_xml_bool(doc, &enc, data, style, parent)?,
@@ -925,14 +981,34 @@ impl<'h> EncodeCtx<'h> {
             ToXml::Map => return self.to_xml_map(doc, &enc, data, style, parent),
             ToXml::Base64 => self.to_xml_base64(doc, &enc, data, style, parent)?,
             ToXml::HexBin => self.to_xml_hexbin(doc, &enc, data, style, parent)?,
-            ToXml::DateTime => self.to_xml_datetime(doc, &enc, data, "%Y-%m-%dT%H:%M:%S", "Y-m-d\\TH:i:s.up", style, parent)?,
-            ToXml::Time => self.to_xml_datetime(doc, &enc, data, "%H:%M:%S", "H:i:s.up", style, parent)?,
-            ToXml::Date => self.to_xml_datetime(doc, &enc, data, "%Y-%m-%d", "Y-m-dp", style, parent)?,
-            ToXml::GYearMonth => self.to_xml_datetime(doc, &enc, data, "%Y-%m", "Y-mp", style, parent)?,
+            ToXml::DateTime => self.to_xml_datetime(
+                doc,
+                &enc,
+                data,
+                "%Y-%m-%dT%H:%M:%S",
+                "Y-m-d\\TH:i:s.up",
+                style,
+                parent,
+            )?,
+            ToXml::Time => {
+                self.to_xml_datetime(doc, &enc, data, "%H:%M:%S", "H:i:s.up", style, parent)?
+            }
+            ToXml::Date => {
+                self.to_xml_datetime(doc, &enc, data, "%Y-%m-%d", "Y-m-dp", style, parent)?
+            }
+            ToXml::GYearMonth => {
+                self.to_xml_datetime(doc, &enc, data, "%Y-%m", "Y-mp", style, parent)?
+            }
             ToXml::GYear => self.to_xml_datetime(doc, &enc, data, "%Y", "Yp", style, parent)?,
-            ToXml::GMonthDay => self.to_xml_datetime(doc, &enc, data, "--%m-%d", "--m-dp", style, parent)?,
-            ToXml::GDay => self.to_xml_datetime(doc, &enc, data, "---%d", "---dp", style, parent)?,
-            ToXml::GMonth => self.to_xml_datetime(doc, &enc, data, "--%m--", "--m--p", style, parent)?,
+            ToXml::GMonthDay => {
+                self.to_xml_datetime(doc, &enc, data, "--%m-%d", "--m-dp", style, parent)?
+            }
+            ToXml::GDay => {
+                self.to_xml_datetime(doc, &enc, data, "---%d", "---dp", style, parent)?
+            }
+            ToXml::GMonth => {
+                self.to_xml_datetime(doc, &enc, data, "--%m--", "--m--p", style, parent)?
+            }
             ToXml::List1 => self.to_xml_list(doc, encode, data, style, parent)?,
             ToXml::Any => return self.to_xml_any(doc, data, style, parent),
             ToXml::SdlGuess => return self.sdl_guess_convert_xml(doc, encode, data, style, parent),
@@ -969,7 +1045,13 @@ impl<'h> EncodeCtx<'h> {
     }
 
     /// `to_zval_string` (`mode` 0), `to_zval_stringr` (1), `to_zval_stringc` (2).
-    fn to_zval_string(&mut self, enc: &Encoder, doc: &Doc, data: NodeId, mode: u8) -> SoapResult<Value> {
+    fn to_zval_string(
+        &mut self,
+        enc: &Encoder,
+        doc: &Doc,
+        data: NodeId,
+        mode: u8,
+    ) -> SoapResult<Value> {
         if Self::is_nil(doc, data) {
             return Ok(Value::Null);
         }
@@ -992,7 +1074,10 @@ impl<'h> EncodeCtx<'h> {
                 Ok(Value::from(out.as_slice()))
             }
             Kind::CData if single => Ok(Value::from(doc.content(child))),
-            _ => bail!("Encoding: Type '{}' value must contain a single text or CDATA node", enc.type_name()),
+            _ => bail!(
+                "Encoding: Type '{}' value must contain a single text or CDATA node",
+                enc.type_name()
+            ),
         }
     }
 
@@ -1005,9 +1090,14 @@ impl<'h> EncodeCtx<'h> {
         };
         let single = doc.next(child).is_none();
         match doc.kind(child) {
-            Kind::Text if single => Ok(Value::from(base64_decode(&whitespace_collapse(doc.content(child))).as_slice())),
+            Kind::Text if single => Ok(Value::from(
+                base64_decode(&whitespace_collapse(doc.content(child))).as_slice(),
+            )),
             Kind::CData if single => Ok(Value::from(base64_decode(doc.content(child)).as_slice())),
-            _ => bail!("Encoding: Type '{}' value must contain a single text or CDATA node", enc.type_name()),
+            _ => bail!(
+                "Encoding: Type '{}' value must contain a single text or CDATA node",
+                enc.type_name()
+            ),
         }
     }
 
@@ -1022,7 +1112,10 @@ impl<'h> EncodeCtx<'h> {
         let content = match doc.kind(child) {
             Kind::Text if single => whitespace_collapse(doc.content(child)),
             Kind::CData if single => doc.content(child).to_vec(),
-            _ => bail!("Encoding: Type '{}' value must contain a single text or CDATA node", enc.type_name()),
+            _ => bail!(
+                "Encoding: Type '{}' value must contain a single text or CDATA node",
+                enc.type_name()
+            ),
         };
         let content: Vec<u8> = content.into_iter().take_while(|&c| c != 0).collect();
         if content.len() % 2 != 0 {
@@ -1036,7 +1129,10 @@ impl<'h> EncodeCtx<'h> {
                 b'0'..=b'9' => Ok(c - b'0'),
                 b'a'..=b'f' => Ok(c - b'a' + 10),
                 b'A'..=b'F' => Ok(c - b'A' + 10),
-                _ => Err(soap_fatal(format!("Encoding: Invalid value for type '{}'", enc.type_name()))),
+                _ => Err(soap_fatal(format!(
+                    "Encoding: Invalid value for type '{}'",
+                    enc.type_name()
+                ))),
             }
         };
         let mut out = Vec::with_capacity(content.len() / 2);
@@ -1047,7 +1143,13 @@ impl<'h> EncodeCtx<'h> {
     }
 
     /// `to_zval_long` / `to_zval_double`.
-    fn to_zval_number(&mut self, enc: &Encoder, doc: &Doc, data: NodeId, double: bool) -> SoapResult<Value> {
+    fn to_zval_number(
+        &mut self,
+        enc: &Encoder,
+        doc: &Doc,
+        data: NodeId,
+        double: bool,
+    ) -> SoapResult<Value> {
         if Self::is_nil(doc, data) {
             return Ok(Value::Null);
         }
@@ -1055,13 +1157,20 @@ impl<'h> EncodeCtx<'h> {
             return Ok(Value::Null);
         };
         if doc.kind(child) != Kind::Text || doc.next(child).is_some() {
-            bail!("Encoding: Type '{}' value must contain a single text or CDATA node", enc.type_name());
+            bail!(
+                "Encoding: Type '{}' value must contain a single text or CDATA node",
+                enc.type_name()
+            );
         }
         let s = whitespace_collapse(doc.content(child));
         let s: Vec<u8> = s.into_iter().take_while(|&c| c != 0).collect();
         #[allow(clippy::cast_precision_loss)]
         match is_numeric_string(&s, false) {
-            Some(Number::Int(i)) => Ok(if double { Value::Float(i as f64) } else { Value::Int(i) }),
+            Some(Number::Int(i)) => Ok(if double {
+                Value::Float(i as f64)
+            } else {
+                Value::Int(i)
+            }),
             Some(Number::Float(f)) => Ok(Value::Float(f)),
             None => {
                 if double {
@@ -1087,7 +1196,10 @@ impl<'h> EncodeCtx<'h> {
             return Ok(Value::Null);
         };
         if doc.kind(child) != Kind::Text || doc.next(child).is_some() {
-            bail!("Encoding: Type '{}' value must contain a single text or CDATA node", enc.type_name());
+            bail!(
+                "Encoding: Type '{}' value must contain a single text or CDATA node",
+                enc.type_name()
+            );
         }
         let s = whitespace_collapse(doc.content(child));
         let falsy = s.is_empty()
@@ -1099,7 +1211,14 @@ impl<'h> EncodeCtx<'h> {
 
     // ---- scalars: encoding ------------------------------------------------------------
 
-    fn to_xml_string(&mut self, doc: &mut Doc, enc: &Encoder, data: &Value, style: i64, parent: NodeId) -> SoapResult<NodeId> {
+    fn to_xml_string(
+        &mut self,
+        doc: &mut Doc,
+        enc: &Encoder,
+        data: &Value,
+        style: i64,
+        parent: NodeId,
+    ) -> SoapResult<NodeId> {
         let ret = Self::bogus(doc, parent);
         if matches!(data, Value::Null) {
             if style == SOAP_ENCODED {
@@ -1114,7 +1233,10 @@ impl<'h> EncodeCtx<'h> {
             }
         }
         if !check_utf8(&s) {
-            bail!("Encoding: string '{}' is not a valid utf-8 string", utf8_error_excerpt(&s));
+            bail!(
+                "Encoding: string '{}' is not a valid utf-8 string",
+                utf8_error_excerpt(&s)
+            );
         }
         doc.add_text(ret, &s);
         if style == SOAP_ENCODED {
@@ -1123,7 +1245,14 @@ impl<'h> EncodeCtx<'h> {
         Ok(ret)
     }
 
-    fn to_xml_base64(&mut self, doc: &mut Doc, enc: &Encoder, data: &Value, style: i64, parent: NodeId) -> SoapResult<NodeId> {
+    fn to_xml_base64(
+        &mut self,
+        doc: &mut Doc,
+        enc: &Encoder,
+        data: &Value,
+        style: i64,
+        parent: NodeId,
+    ) -> SoapResult<NodeId> {
         let ret = Self::bogus(doc, parent);
         if matches!(data, Value::Null) {
             if style == SOAP_ENCODED {
@@ -1139,7 +1268,14 @@ impl<'h> EncodeCtx<'h> {
         Ok(ret)
     }
 
-    fn to_xml_hexbin(&mut self, doc: &mut Doc, enc: &Encoder, data: &Value, style: i64, parent: NodeId) -> SoapResult<NodeId> {
+    fn to_xml_hexbin(
+        &mut self,
+        doc: &mut Doc,
+        enc: &Encoder,
+        data: &Value,
+        style: i64,
+        parent: NodeId,
+    ) -> SoapResult<NodeId> {
         const HEX: &[u8; 16] = b"0123456789ABCDEF";
         let ret = Self::bogus(doc, parent);
         if matches!(data, Value::Null) {
@@ -1164,7 +1300,14 @@ impl<'h> EncodeCtx<'h> {
         Ok(ret)
     }
 
-    fn to_xml_long(&mut self, doc: &mut Doc, enc: &Encoder, data: &Value, style: i64, parent: NodeId) -> SoapResult<NodeId> {
+    fn to_xml_long(
+        &mut self,
+        doc: &mut Doc,
+        enc: &Encoder,
+        data: &Value,
+        style: i64,
+        parent: NodeId,
+    ) -> SoapResult<NodeId> {
         let ret = Self::bogus(doc, parent);
         if matches!(data, Value::Null) {
             if style == SOAP_ENCODED {
@@ -1192,7 +1335,14 @@ impl<'h> EncodeCtx<'h> {
         Ok(ret)
     }
 
-    fn to_xml_double(&mut self, doc: &mut Doc, enc: &Encoder, data: &Value, style: i64, parent: NodeId) -> SoapResult<NodeId> {
+    fn to_xml_double(
+        &mut self,
+        doc: &mut Doc,
+        enc: &Encoder,
+        data: &Value,
+        style: i64,
+        parent: NodeId,
+    ) -> SoapResult<NodeId> {
         let ret = Self::bogus(doc, parent);
         if matches!(data, Value::Null) {
             if style == SOAP_ENCODED {
@@ -1211,7 +1361,14 @@ impl<'h> EncodeCtx<'h> {
         Ok(ret)
     }
 
-    fn to_xml_bool(&mut self, doc: &mut Doc, enc: &Encoder, data: &Value, style: i64, parent: NodeId) -> SoapResult<NodeId> {
+    fn to_xml_bool(
+        &mut self,
+        doc: &mut Doc,
+        enc: &Encoder,
+        data: &Value,
+        style: i64,
+        parent: NodeId,
+    ) -> SoapResult<NodeId> {
         let ret = Self::bogus(doc, parent);
         if matches!(data, Value::Null) {
             if style == SOAP_ENCODED {
@@ -1271,12 +1428,10 @@ impl<'h> EncodeCtx<'h> {
                 doc.set_content(ret, s.as_bytes());
             }
             Value::Str(s) => doc.set_content(ret, s.as_bytes()),
-            Value::Object(o) => {
-                if self.host.instance_of(o, "DateTimeInterface") {
-                    match self.host.format_date(o, ext_format) {
-                        Some(s) => doc.set_content(ret, &s),
-                        None => bail!("Encoding: Invalid DateTimeInterface"),
-                    }
+            Value::Object(o) if self.host.instance_of(o, "DateTimeInterface") => {
+                match self.host.format_date(o, ext_format) {
+                    Some(s) => doc.set_content(ret, &s),
+                    None => bail!("Encoding: Invalid DateTimeInterface"),
                 }
             }
             _ => {}
@@ -1288,14 +1443,24 @@ impl<'h> EncodeCtx<'h> {
     }
 
     /// `to_xml_list` (also used for unions).
-    fn to_xml_list(&mut self, doc: &mut Doc, encode: EncRef, data: &Value, style: i64, parent: NodeId) -> SoapResult<NodeId> {
+    fn to_xml_list(
+        &mut self,
+        doc: &mut Doc,
+        encode: EncRef,
+        data: &Value,
+        style: i64,
+        parent: NodeId,
+    ) -> SoapResult<NodeId> {
         let enc = self.enc(encode);
         let sdl = self.sdl.clone();
         let list_enc = enc.sdl_type.and_then(|t| {
             let sdl = sdl.as_deref()?;
             let ty = sdl.ty(t);
             if ty.kind == TypeKind::List {
-                ty.elements.as_ref()?.first().and_then(|&e| sdl.ty(e).encode)
+                ty.elements
+                    .as_ref()?
+                    .first()
+                    .and_then(|&e| sdl.ty(e).encode)
             } else {
                 None
             }
@@ -1327,22 +1492,21 @@ impl<'h> EncodeCtx<'h> {
             let mut list: Vec<u8> = Vec::new();
             for item in items {
                 let dummy = self.master_to_xml(doc, list_enc, &item, SOAP_LITERAL, ret)?;
-                let content = dummy.and_then(|d| doc.first_child(d)).map(|c| doc.content(c).to_vec());
-                match content {
-                    Some(c) => {
-                        if !list.is_empty() {
-                            list.push(b' ');
-                        }
-                        list.extend_from_slice(&c);
+                let content = dummy
+                    .and_then(|d| doc.first_child(d))
+                    .map(|c| doc.content(c).to_vec());
+                if let Some(c) = content {
+                    if !list.is_empty() {
+                        list.push(b' ');
                     }
-                    None => {
-                        let le = list_enc.map(|e| self.enc(e));
-                        bail!(
-                            "Encoding: Failed to encode list item of type '{}' for list type '{}'",
-                            le.as_ref().map_or("unknown", Encoder::type_name),
-                            enc.type_name()
-                        );
-                    }
+                    list.extend_from_slice(&c);
+                } else {
+                    let le = list_enc.map(|e| self.enc(e));
+                    bail!(
+                        "Encoding: Failed to encode list item of type '{}' for list type '{}'",
+                        le.as_ref().map_or("unknown", Encoder::type_name),
+                        enc.type_name()
+                    );
                 }
                 if let Some(d) = dummy {
                     doc.unlink(d);
@@ -1357,7 +1521,13 @@ impl<'h> EncodeCtx<'h> {
     }
 
     /// `to_xml_any`.
-    fn to_xml_any(&mut self, doc: &mut Doc, data: &Value, style: i64, parent: NodeId) -> SoapResult<Option<NodeId>> {
+    fn to_xml_any(
+        &mut self,
+        doc: &mut Doc,
+        data: &Value,
+        style: i64,
+        parent: NodeId,
+    ) -> SoapResult<Option<NodeId>> {
         if let Value::Array(a) = data {
             let mut ret = None;
             let any = conv(XSD_ANYXML);
@@ -1377,7 +1547,14 @@ impl<'h> EncodeCtx<'h> {
     }
 
     /// `to_xml_user`.
-    fn to_xml_user(&mut self, doc: &mut Doc, enc: &Encoder, data: &Value, style: i64, parent: NodeId) -> SoapResult<NodeId> {
+    fn to_xml_user(
+        &mut self,
+        doc: &mut Doc,
+        enc: &Encoder,
+        data: &Value,
+        style: i64,
+        parent: NodeId,
+    ) -> SoapResult<NodeId> {
         let mut ret = None;
         if let Some(cb) = enc.map.as_ref().and_then(|m| m.to_xml.clone()) {
             let r = self.host.call_callable(&cb, std::slice::from_ref(data))?;
@@ -1401,7 +1578,9 @@ impl<'h> EncodeCtx<'h> {
     fn to_zval_user(&mut self, enc: &Encoder, doc: &Doc, node: NodeId) -> SoapResult<Value> {
         if let Some(cb) = enc.map.as_ref().and_then(|m| m.to_zval.clone()) {
             let dump = doc.dump_node(node);
-            return Ok(self.host.call_callable(&cb, &[Value::from(dump.as_slice())])?);
+            return Ok(self
+                .host
+                .call_callable(&cb, &[Value::from(dump.as_slice())])?);
         }
         Ok(Value::Null)
     }
@@ -1452,7 +1631,12 @@ fn get_soap_enc_attribute<'d>(doc: &'d Doc, n: NodeId, name: &str) -> Option<&'d
         .filter(|v| !v.is_empty())
 }
 
-fn array_extra<'s>(sdl: &'s Sdl, t: TypeId, attr_key: &str, ext_key: &str) -> Option<&'s ExtraAttribute> {
+fn array_extra<'s>(
+    sdl: &'s Sdl,
+    t: TypeId,
+    attr_key: &str,
+    ext_key: &str,
+) -> Option<&'s ExtraAttribute> {
     sdl.ty(t)
         .attributes
         .as_ref()?
@@ -1481,7 +1665,11 @@ fn model_array_element(sdl: &Sdl, model: &Model) -> Option<TypeId> {
                 None
             }
         }
-        ModelKind::Group(g) => sdl.ty(*g).model.as_ref().and_then(|m| model_array_element(sdl, m)),
+        ModelKind::Group(g) => sdl
+            .ty(*g)
+            .model
+            .as_ref()
+            .and_then(|m| model_array_element(sdl, m)),
         _ => None,
     }
 }
@@ -1523,7 +1711,13 @@ impl EncodeCtx<'_> {
     }
 
     /// `guess_xml_convert`.
-    fn guess_xml_convert(&mut self, doc: &mut Doc, data: &Value, style: i64, parent: NodeId) -> SoapResult<Option<NodeId>> {
+    fn guess_xml_convert(
+        &mut self,
+        doc: &mut Doc,
+        data: &Value,
+        style: i64,
+        parent: NodeId,
+    ) -> SoapResult<Option<NodeId>> {
         let enc = self.get_conversion(type_code(data))?;
         self.master_to_xml_int(doc, Some(enc), data, style, parent, false)
     }
@@ -1548,12 +1742,24 @@ impl EncodeCtx<'_> {
                 Some(e) => e,
                 None => {
                     if get_soap_enc_attribute(doc, data, "arrayType").is_some()
-                        || doc.attr(data, "arrayType", Some(SOAP_1_1_ENC_NAMESPACE)).is_some()
-                        || doc.attr(data, "arrayType", Some(SOAP_1_2_ENC_NAMESPACE)).is_some()
-                        || doc.attr(data, "itemType", Some(SOAP_1_1_ENC_NAMESPACE)).is_some()
-                        || doc.attr(data, "itemType", Some(SOAP_1_2_ENC_NAMESPACE)).is_some()
-                        || doc.attr(data, "arraySize", Some(SOAP_1_1_ENC_NAMESPACE)).is_some()
-                        || doc.attr(data, "arraySize", Some(SOAP_1_2_ENC_NAMESPACE)).is_some()
+                        || doc
+                            .attr(data, "arrayType", Some(SOAP_1_1_ENC_NAMESPACE))
+                            .is_some()
+                        || doc
+                            .attr(data, "arrayType", Some(SOAP_1_2_ENC_NAMESPACE))
+                            .is_some()
+                        || doc
+                            .attr(data, "itemType", Some(SOAP_1_1_ENC_NAMESPACE))
+                            .is_some()
+                        || doc
+                            .attr(data, "itemType", Some(SOAP_1_2_ENC_NAMESPACE))
+                            .is_some()
+                        || doc
+                            .attr(data, "arraySize", Some(SOAP_1_1_ENC_NAMESPACE))
+                            .is_some()
+                        || doc
+                            .attr(data, "arraySize", Some(SOAP_1_2_ENC_NAMESPACE))
+                            .is_some()
                     {
                         conv(SOAP_ENC_ARRAY)
                     } else if doc.children(data).any(|c| doc.is_element(c)) {
@@ -1568,12 +1774,14 @@ impl EncodeCtx<'_> {
         let details = self.enc(enc);
         if let (Some(_), Some(tn), Some(_)) = (&self.sdl, &type_name, details.sdl_type) {
             let var = self.host.create_object(&ZStr::from("SoapVar"))?;
-            self.host.write_slot(&var, "enc_type", Value::Int(details.type_id));
+            self.host
+                .write_slot(&var, "enc_type", Value::Int(details.type_id));
             self.host.write_slot(&var, "enc_value", ret);
             let (prefix, local) = parse_qname(tn);
             self.host.write_slot(&var, "enc_stype", Value::from(local));
             if let Some(ns) = doc.search_ns(data, prefix) {
-                self.host.write_slot(&var, "enc_ns", Value::from(ns.href.as_slice()));
+                self.host
+                    .write_slot(&var, "enc_ns", Value::from(ns.href.as_slice()));
             }
             return Ok(Value::Object(var));
         }
@@ -1581,7 +1789,14 @@ impl EncodeCtx<'_> {
     }
 
     /// `sdl_guess_convert_xml`.
-    fn sdl_guess_convert_xml(&mut self, doc: &mut Doc, encode: EncRef, data: &Value, style: i64, parent: NodeId) -> SoapResult<Option<NodeId>> {
+    fn sdl_guess_convert_xml(
+        &mut self,
+        doc: &mut Doc,
+        encode: EncRef,
+        data: &Value,
+        style: i64,
+        parent: NodeId,
+    ) -> SoapResult<Option<NodeId>> {
         let enc = self.enc(encode);
         let Some(t) = enc.sdl_type else {
             let ret = self.guess_xml_convert(doc, data, style, parent)?;
@@ -1596,10 +1811,14 @@ impl EncodeCtx<'_> {
         let ty = sdl.ty(t);
         let ret = match ty.kind {
             TypeKind::Simple => match ty.encode {
-                Some(te) if te != encode => self.master_to_xml(doc, Some(te), data, style, parent)?,
+                Some(te) if te != encode => {
+                    self.master_to_xml(doc, Some(te), data, style, parent)?
+                }
                 _ => self.guess_xml_convert(doc, data, style, parent)?,
             },
-            TypeKind::List | TypeKind::Union => Some(self.to_xml_list(doc, encode, data, style, parent)?),
+            TypeKind::List | TypeKind::Union => {
+                Some(self.to_xml_list(doc, encode, data, style, parent)?)
+            }
             TypeKind::Complex | TypeKind::Restriction | TypeKind::Extension => {
                 let is_array = ty
                     .encode
@@ -1620,7 +1839,12 @@ impl EncodeCtx<'_> {
     }
 
     /// `sdl_guess_convert_zval`.
-    fn sdl_guess_convert_zval(&mut self, encode: EncRef, doc: &Doc, data: NodeId) -> SoapResult<Value> {
+    fn sdl_guess_convert_zval(
+        &mut self,
+        encode: EncRef,
+        doc: &Doc,
+        data: NodeId,
+    ) -> SoapResult<Value> {
         let enc = self.enc(encode);
         let Some(t) = enc.sdl_type else {
             return self.guess_zval_convert(encode, doc, data);
@@ -1654,7 +1878,10 @@ impl EncodeCtx<'_> {
             let Some(st) = self.sdl_type_of(e) else {
                 break;
             };
-            if matches!(sdl.ty(st).kind, TypeKind::Simple | TypeKind::List | TypeKind::Union) {
+            if matches!(
+                sdl.ty(st).kind,
+                TypeKind::Simple | TypeKind::List | TypeKind::Union
+            ) {
                 break;
             }
             enc = sdl.ty(st).encode;
@@ -1672,7 +1899,14 @@ impl EncodeCtx<'_> {
 
     /// `to_xml_object`.
     #[allow(clippy::too_many_lines)]
-    fn to_xml_object(&mut self, doc: &mut Doc, encode: EncRef, data: &Value, style: i64, parent: NodeId) -> SoapResult<NodeId> {
+    fn to_xml_object(
+        &mut self,
+        doc: &mut Doc,
+        encode: EncRef,
+        data: &Value,
+        style: i64,
+        parent: NodeId,
+    ) -> SoapResult<NodeId> {
         let enc = self.enc(encode);
         if matches!(data, Value::Null) {
             let n = Self::bogus(doc, parent);
@@ -1710,7 +1944,10 @@ impl EncodeCtx<'_> {
         };
         let sdl = self.sdl_rc();
         let ty = sdl.ty(t).clone();
-        let xml_param = if ty.kind == TypeKind::Restriction && ty.encode.is_some() && ty.encode != Some(encode) {
+        let xml_param = if ty.kind == TypeKind::Restriction
+            && ty.encode.is_some()
+            && ty.encode != Some(encode)
+        {
             if let Some(base) = self.simple_base(&sdl, ty.encode) {
                 if let Some(tmp) = self.get_property(data, b"_")? {
                     self.master_to_xml(doc, Some(base), &tmp, style, parent)?
@@ -1722,11 +1959,15 @@ impl EncodeCtx<'_> {
             } else {
                 Some(Self::bogus(doc, parent))
             }
-        } else if ty.kind == TypeKind::Extension && ty.encode.is_some() && ty.encode != Some(encode) {
+        } else if ty.kind == TypeKind::Extension && ty.encode.is_some() && ty.encode != Some(encode)
+        {
             let te = ty.encode;
-            let base_complex = te
-                .and_then(|e| self.sdl_type_of(e))
-                .is_some_and(|bt| !matches!(sdl.ty(bt).kind, TypeKind::Simple | TypeKind::List | TypeKind::Union));
+            let base_complex = te.and_then(|e| self.sdl_type_of(e)).is_some_and(|bt| {
+                !matches!(
+                    sdl.ty(bt).kind,
+                    TypeKind::Simple | TypeKind::List | TypeKind::Union
+                )
+            });
             if base_complex {
                 let id = identity(data);
                 if let Some(id) = id {
@@ -1795,7 +2036,13 @@ impl EncodeCtx<'_> {
         Ok(xml_param)
     }
 
-    fn attributes_to_xml(&mut self, doc: &mut Doc, xml_param: NodeId, attrs: &ZHash<SdlAttribute>, data: &Value) -> SoapResult<()> {
+    fn attributes_to_xml(
+        &mut self,
+        doc: &mut Doc,
+        xml_param: NodeId,
+        attrs: &ZHash<SdlAttribute>,
+        data: &Value,
+    ) -> SoapResult<()> {
         for attr in attrs.values() {
             let Some(name) = &attr.name else {
                 continue;
@@ -1803,7 +2050,9 @@ impl EncodeCtx<'_> {
             let Some(zattr) = self.get_property(data, name.as_bytes())? else {
                 continue;
             };
-            let Some(dummy) = self.master_to_xml(doc, attr.encode, &zattr, SOAP_LITERAL, xml_param)? else {
+            let Some(dummy) =
+                self.master_to_xml(doc, attr.encode, &zattr, SOAP_LITERAL, xml_param)?
+            else {
                 continue;
             };
             let content = doc
@@ -1838,7 +2087,9 @@ impl EncodeCtx<'_> {
 
     fn fixed_check(doc: &Doc, property: NodeId, el: &SdlType) -> SoapResult<()> {
         if let (Some(fixed), Some(c)) = (&el.fixed, doc.first_child(property)) {
-            if matches!(doc.kind(c), Kind::Text | Kind::CData | Kind::TextNoEnc) && doc.content(c) != fixed.as_bytes() {
+            if matches!(doc.kind(c), Kind::Text | Kind::CData | Kind::TextNoEnc)
+                && doc.content(c) != fixed.as_bytes()
+            {
                 bail!(
                     "Encoding: Element '{}' has fixed value '{fixed}' (value '{}' is not allowed)",
                     el.name_str(),
@@ -1890,7 +2141,8 @@ impl EncodeCtx<'_> {
                                     self.set_xsi_nil(doc, p);
                                     Some(p)
                                 } else {
-                                    let p = self.master_to_xml(doc, el.encode, &val, style, node)?;
+                                    let p =
+                                        self.master_to_xml(doc, el.encode, &val, style, node)?;
                                     if let Some(p) = p {
                                         Self::fixed_check(doc, p, el)?;
                                     }
@@ -1965,7 +2217,15 @@ impl EncodeCtx<'_> {
             ModelKind::Sequence(c) | ModelKind::All(c) => {
                 let mut strict = strict;
                 for tmp in c {
-                    let r = self.model_to_xml_object(doc, node, sdl, tmp, object, style, strict && tmp.min_occurs > 0)?;
+                    let r = self.model_to_xml_object(
+                        doc,
+                        node,
+                        sdl,
+                        tmp,
+                        object,
+                        style,
+                        strict && tmp.min_occurs > 0,
+                    )?;
                     if r == 0 && (!strict || tmp.min_occurs > 0) {
                         return Ok(0);
                     }
@@ -1986,7 +2246,15 @@ impl EncodeCtx<'_> {
                 Ok(ret)
             }
             ModelKind::Group(g) => match &sdl.ty(*g).model {
-                Some(m) => self.model_to_xml_object(doc, node, sdl, m, object, style, strict && model.min_occurs > 0),
+                Some(m) => self.model_to_xml_object(
+                    doc,
+                    node,
+                    sdl,
+                    m,
+                    object,
+                    style,
+                    strict && model.min_occurs > 0,
+                ),
                 None => Ok(1),
             },
             ModelKind::GroupRef(_) => Ok(1),
@@ -2001,7 +2269,13 @@ impl EncodeCtx<'_> {
         self.master_to_zval(encode, &d, n)
     }
 
-    fn element_value(&mut self, el: &SdlType, doc: &Doc, node: NodeId, content_node: NodeId) -> SoapResult<Value> {
+    fn element_value(
+        &mut self,
+        el: &SdlType,
+        doc: &Doc,
+        node: NodeId,
+        content_node: NodeId,
+    ) -> SoapResult<Value> {
         let content = doc
             .first_child(content_node)
             .filter(|&c| !doc.is_element(c))
@@ -2027,7 +2301,14 @@ impl EncodeCtx<'_> {
     }
 
     /// `model_to_zval_object`.
-    fn model_to_zval_object(&mut self, ret: &mut Value, sdl: &Sdl, model: &Model, doc: &Doc, data: NodeId) -> SoapResult<()> {
+    fn model_to_zval_object(
+        &mut self,
+        ret: &mut Value,
+        sdl: &Sdl,
+        model: &Model,
+        doc: &Doc,
+        data: NodeId,
+    ) -> SoapResult<()> {
         match &model.kind {
             ModelKind::Element(t) => {
                 let el = sdl.ty(*t);
@@ -2081,7 +2362,12 @@ impl EncodeCtx<'_> {
     }
 
     /// `model_to_zval_any`.
-    fn model_to_zval_any(&mut self, ret: &mut Value, doc: &Doc, start: Option<NodeId>) -> SoapResult<()> {
+    fn model_to_zval_any(
+        &mut self,
+        ret: &mut Value,
+        doc: &Doc,
+        start: Option<NodeId>,
+    ) -> SoapResult<()> {
         let mut any: Option<Value> = None;
         let mut name: Option<Vec<u8>> = None;
         let anyxml = conv(XSD_ANYXML);
@@ -2125,7 +2411,10 @@ impl EncodeCtx<'_> {
                 match any.as_mut() {
                     None => {
                         if let Some(nm) = name.take() {
-                            any = Some(Value::Array(ZArray::from_pairs([(ArrayKey::from_bytes(&nm), val)])));
+                            any = Some(Value::Array(ZArray::from_pairs([(
+                                ArrayKey::from_bytes(&nm),
+                                val,
+                            )])));
                         } else {
                             any = Some(val);
                         }
@@ -2160,14 +2449,22 @@ impl EncodeCtx<'_> {
     }
 
     /// `to_zval_object` / `to_zval_object_ex`.
-    #[allow(clippy::too_many_lines)]
-    fn to_zval_object(&mut self, encode: EncRef, doc: &Doc, data: NodeId, pce: Option<ZStr>) -> SoapResult<Value> {
+    #[allow(clippy::too_many_lines, clippy::needless_pass_by_value)]
+    fn to_zval_object(
+        &mut self,
+        encode: EncRef,
+        doc: &Doc,
+        data: NodeId,
+        pce: Option<ZStr>,
+    ) -> SoapResult<Value> {
         let enc = self.enc(encode);
         let std_class = ZStr::from("stdClass");
         let mut ce = pce.clone().unwrap_or_else(|| std_class.clone());
         if pce.is_none() {
             if let (Some(cm), Some(ts)) = (self.class_map.clone(), &enc.type_str) {
-                let mut classname = enc.clark_notation().and_then(|c| cm.get_str(c.as_bytes()).map(Value::deref));
+                let mut classname = enc
+                    .clark_notation()
+                    .and_then(|c| cm.get_str(c.as_bytes()).map(Value::deref));
                 if classname.is_none() {
                     classname = cm.get_str(ts.as_bytes()).map(Value::deref);
                 }
@@ -2199,12 +2496,17 @@ impl EncodeCtx<'_> {
                 match self.get_property(&ret, &name)? {
                     None => {
                         let later = doc.next(tr).and_then(|n| {
-                            doc.siblings_from(Some(n)).find(|&x| doc.name(x) == name.as_slice())
+                            doc.siblings_from(Some(n))
+                                .find(|&x| doc.name(x) == name.as_slice())
                         });
                         if later.is_none() {
                             self.set_property(&mut ret, &name, tmp_val)?;
                         } else {
-                            self.set_property(&mut ret, &name, Value::Array(ZArray::from_values([tmp_val])))?;
+                            self.set_property(
+                                &mut ret,
+                                &name,
+                                Value::Array(ZArray::from_values([tmp_val])),
+                            )?;
                         }
                     }
                     Some(prop) => {
@@ -2241,10 +2543,16 @@ impl EncodeCtx<'_> {
                 ret = self.new_object(&ce)?;
                 self.add_xml_ref(doc, data, &ret);
             }
-        } else if ty.kind == TypeKind::Extension && ty.encode.is_some() && ty.encode != Some(encode) {
+        } else if ty.kind == TypeKind::Extension && ty.encode.is_some() && ty.encode != Some(encode)
+        {
             let te = ty.encode.unwrap_or(encode);
             let base_t = self.sdl_type_of(te);
-            let base_complex = base_t.is_some_and(|bt| !matches!(sdl.ty(bt).kind, TypeKind::Simple | TypeKind::List | TypeKind::Union));
+            let base_complex = base_t.is_some_and(|bt| {
+                !matches!(
+                    sdl.ty(bt).kind,
+                    TypeKind::Simple | TypeKind::List | TypeKind::Union
+                )
+            });
             if base_complex {
                 if Self::is_nil(doc, data) {
                     return Ok(Value::Null);
@@ -2257,10 +2565,12 @@ impl EncodeCtx<'_> {
                     && base_enc.to_zval == ToZval::SdlGuess
                     && base_t.is_some_and(|bt| {
                         let bty = sdl.ty(bt);
-                        matches!(bty.kind, TypeKind::Complex | TypeKind::Restriction | TypeKind::Extension)
-                            && bty
-                                .encode
-                                .is_none_or(|e| !matches!(self.enc(e).type_id, IS_ARRAY | SOAP_ENC_ARRAY))
+                        matches!(
+                            bty.kind,
+                            TypeKind::Complex | TypeKind::Restriction | TypeKind::Extension
+                        ) && bty.encode.is_none_or(|e| {
+                            !matches!(self.enc(e).type_id, IS_ARRAY | SOAP_ENC_ARRAY)
+                        })
                     });
                 ret = if use_ex {
                     self.to_zval_object(te, doc, data, Some(ce.clone()))?
@@ -2341,7 +2651,13 @@ impl EncodeCtx<'_> {
     }
 
     /// `get_array_type`: the common item type of a PHP array.
-    fn get_array_type(&mut self, doc: &mut Doc, node: NodeId, array: &Value, out: &mut Vec<u8>) -> SoapResult<Option<EncRef>> {
+    fn get_array_type(
+        &mut self,
+        doc: &mut Doc,
+        node: NodeId,
+        array: &Value,
+        out: &mut Vec<u8>,
+    ) -> SoapResult<Option<EncRef>> {
         let Value::Array(a) = array else {
             out.extend_from_slice(b"xsd:anyType");
             return Ok(Some(conv(XSD_ANYTYPE)));
@@ -2360,7 +2676,8 @@ impl EncodeCtx<'_> {
                     };
                     cur_type = t;
                     if cur_type == UNKNOWN_TYPE {
-                        cur_type = type_code(&self.soap_var_slot(o, "enc_value").unwrap_or(Value::Null));
+                        cur_type =
+                            type_code(&self.soap_var_slot(o, "enc_value").unwrap_or(Value::Null));
                     }
                     cur_stype = str_of(self.soap_var_slot(o, "enc_stype").as_ref());
                     cur_ns = str_of(self.soap_var_slot(o, "enc_ns").as_ref());
@@ -2382,7 +2699,10 @@ impl EncodeCtx<'_> {
                     (None, Some(_)) => true,
                     _ => false,
                 };
-                if cur_type != prev_type || differs(&cur_stype, &prev_stype) || differs(&cur_ns, &prev_ns) {
+                if cur_type != prev_type
+                    || differs(&cur_stype, &prev_stype)
+                    || differs(&cur_ns, &prev_ns)
+                {
                     different = true;
                     break;
                 }
@@ -2399,7 +2719,10 @@ impl EncodeCtx<'_> {
         if let Some(stype) = cur_stype {
             let mut array_type = Vec::new();
             if let Some(ns) = &cur_ns {
-                if let Some(p) = self.encode_add_ns(doc, node, ns.as_bytes()).and_then(|n| n.prefix) {
+                if let Some(p) = self
+                    .encode_add_ns(doc, node, ns.as_bytes())
+                    .and_then(|n| n.prefix)
+                {
                     out.extend_from_slice(&p);
                 }
                 out.push(b':');
@@ -2414,13 +2737,26 @@ impl EncodeCtx<'_> {
             let e = self.get_conversion(cur_type)?;
             let enc = self.enc(e);
             let ts = enc.type_str.clone().unwrap_or_else(|| "".into());
-            let s = self.get_type_str(doc, node, enc.ns.as_deref().map(str::as_bytes), ts.as_bytes());
+            let s = self.get_type_str(
+                doc,
+                node,
+                enc.ns.as_deref().map(str::as_bytes),
+                ts.as_bytes(),
+            );
             out.extend_from_slice(&s);
             Ok(Some(e))
         }
     }
 
-    fn name_array_item(&self, doc: &mut Doc, x: NodeId, type_: Option<TypeId>, enc: Option<EncRef>, ns: Option<&Ns>, style: i64) {
+    fn name_array_item(
+        &self,
+        doc: &mut Doc,
+        x: NodeId,
+        type_: Option<TypeId>,
+        enc: Option<EncRef>,
+        ns: Option<&Ns>,
+        style: i64,
+    ) {
         if let Some(t) = type_ {
             let sdl = self.sdl_rc();
             doc.set_name(x, sdl.ty(t).name_str().as_bytes());
@@ -2470,11 +2806,22 @@ impl EncodeCtx<'_> {
                             Some(e) => e,
                             None => self.get_conversion(type_code(&zdata))?,
                         };
-                        if let Some(x) = self.master_to_xml(doc, Some(e), &zdata, style, xml_param)? {
+                        if let Some(x) =
+                            self.master_to_xml(doc, Some(e), &zdata, style, xml_param)?
+                        {
                             self.name_array_item(doc, x, type_, enc, ns, style);
                         }
                     } else {
-                        self.add_xml_array_elements(doc, xml_param, type_, enc, ns, &dims[1..], Some(&zdata), style)?;
+                        self.add_xml_array_elements(
+                            doc,
+                            xml_param,
+                            type_,
+                            enc,
+                            ns,
+                            &dims[1..],
+                            Some(&zdata),
+                            style,
+                        )?;
                     }
                     j += 1;
                 }
@@ -2487,7 +2834,16 @@ impl EncodeCtx<'_> {
                     let x = Self::bogus(doc, xml_param);
                     self.name_array_item(doc, x, type_, enc, ns, style);
                 } else {
-                    self.add_xml_array_elements(doc, xml_param, type_, enc, ns, &dims[1..], None, style)?;
+                    self.add_xml_array_elements(
+                        doc,
+                        xml_param,
+                        type_,
+                        enc,
+                        ns,
+                        &dims[1..],
+                        None,
+                        style,
+                    )?;
                 }
                 j += 1;
             }
@@ -2497,7 +2853,16 @@ impl EncodeCtx<'_> {
                     let x = Self::bogus(doc, xml_param);
                     self.name_array_item(doc, x, type_, enc, ns, style);
                 } else {
-                    self.add_xml_array_elements(doc, xml_param, type_, enc, ns, &dims[1..], None, style)?;
+                    self.add_xml_array_elements(
+                        doc,
+                        xml_param,
+                        type_,
+                        enc,
+                        ns,
+                        &dims[1..],
+                        None,
+                        style,
+                    )?;
                 }
             }
         }
@@ -2525,7 +2890,14 @@ impl EncodeCtx<'_> {
 
     /// `to_xml_array`.
     #[allow(clippy::too_many_lines)]
-    fn to_xml_array(&mut self, doc: &mut Doc, encode: EncRef, data: &Value, style: i64, parent: NodeId) -> SoapResult<NodeId> {
+    fn to_xml_array(
+        &mut self,
+        doc: &mut Doc,
+        encode: EncRef,
+        data: &Value,
+        style: i64,
+        parent: NodeId,
+    ) -> SoapResult<NodeId> {
         let enc_d = self.enc(encode);
         let sdl_type = enc_d.sdl_type;
         let xml_param = Self::bogus(doc, parent);
@@ -2567,15 +2939,27 @@ impl EncodeCtx<'_> {
             let w_item = format!("{WSDL_NAMESPACE}:itemType");
             let k_size = format!("{SOAP_1_2_ENC_NAMESPACE}:arraySize");
             let w_size = format!("{WSDL_NAMESPACE}:arraySize");
-            let join = |d: &[i32]| d.iter().map(ToString::to_string).collect::<Vec<_>>().join(",");
-            if let Some(ext) = sdl_type.and_then(|t| array_extra(&sdl, t, &k11, &w_at)).cloned() {
+            let join = |d: &[i32]| {
+                d.iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join(",")
+            };
+            if let Some(ext) = sdl_type
+                .and_then(|t| array_extra(&sdl, t, &k11, &w_at))
+                .cloned()
+            {
                 let (value, dimension) = match ext.val.rfind('[') {
-                    Some(p) => (ext.val[..p].to_owned(), calc_dimension(ext.val[p + 1..].as_bytes())),
+                    Some(p) => (
+                        ext.val[..p].to_owned(),
+                        calc_dimension(&ext.val.as_bytes()[p + 1..]),
+                    ),
                     None => (ext.val.clone(), 1),
                 };
                 if let Some(ns) = &ext.ns {
                     enc_el = get_encoder(Some(&sdl), Some(ns), &value);
-                    array_type = self.get_type_str(doc, xml_param, Some(ns.as_bytes()), value.as_bytes());
+                    array_type =
+                        self.get_type_str(doc, xml_param, Some(ns.as_bytes()), value.as_bytes());
                 } else {
                     enc_el = None;
                     array_type.extend_from_slice(value.as_bytes());
@@ -2598,15 +2982,22 @@ impl EncodeCtx<'_> {
                 }
                 array_size = join(&d);
                 dims = d;
-            } else if let Some(ext) = sdl_type.and_then(|t| array_extra(&sdl, t, &k_item, &w_item)).cloned() {
+            } else if let Some(ext) = sdl_type
+                .and_then(|t| array_extra(&sdl, t, &k_item, &w_item))
+                .cloned()
+            {
                 if let Some(ns) = &ext.ns {
                     enc_el = get_encoder(Some(&sdl), Some(ns), &ext.val);
-                    array_type = self.get_type_str(doc, xml_param, Some(ns.as_bytes()), ext.val.as_bytes());
+                    array_type =
+                        self.get_type_str(doc, xml_param, Some(ns.as_bytes()), ext.val.as_bytes());
                 } else {
                     enc_el = None;
                     array_type.extend_from_slice(ext.val.as_bytes());
                 }
-                if let Some(size) = sdl_type.and_then(|t| array_extra(&sdl, t, &k_size, &w_size)).cloned() {
+                if let Some(size) = sdl_type
+                    .and_then(|t| array_extra(&sdl, t, &k_size, &w_size))
+                    .cloned()
+                {
                     let dimension = calc_dimension_12(size.val.as_bytes())?;
                     let mut d = get_position_12(dimension, size.val.as_bytes())?;
                     if d[0] == 0 {
@@ -2618,7 +3009,10 @@ impl EncodeCtx<'_> {
                     dims = vec![0];
                     array_size = i.to_string();
                 }
-            } else if let Some(size) = sdl_type.and_then(|t| array_extra(&sdl, t, &k_size, &w_size)).cloned() {
+            } else if let Some(size) = sdl_type
+                .and_then(|t| array_extra(&sdl, t, &k_size, &w_size))
+                .cloned()
+            {
                 let dimension = calc_dimension_12(size.val.as_bytes())?;
                 let mut d = get_position_12(dimension, size.val.as_bytes())?;
                 if d[0] == 0 {
@@ -2626,27 +3020,40 @@ impl EncodeCtx<'_> {
                 }
                 array_size = join(&d);
                 dims = d;
-                let single = sdl_type
-                    .and_then(|t| single_element(&sdl, t))
-                    .filter(|&e| sdl.ty(e).encode.is_some_and(|x| self.enc(x).type_str.is_some()));
+                let single = sdl_type.and_then(|t| single_element(&sdl, t)).filter(|&e| {
+                    sdl.ty(e)
+                        .encode
+                        .is_some_and(|x| self.enc(x).type_str.is_some())
+                });
                 if let Some(et) = single {
                     element_type = Some(et);
                     enc_el = sdl.ty(et).encode;
                     let ee = self.enc(enc_el.unwrap_or(encode));
                     let ts = ee.type_str.clone().unwrap_or_else(|| "".into());
-                    array_type = self.get_type_str(doc, xml_param, ee.ns.as_deref().map(str::as_bytes), ts.as_bytes());
+                    array_type = self.get_type_str(
+                        doc,
+                        xml_param,
+                        ee.ns.as_deref().map(str::as_bytes),
+                        ts.as_bytes(),
+                    );
                 } else {
                     enc_el = self.get_array_type(doc, xml_param, data, &mut array_type)?;
                 }
-            } else if let Some(et) = sdl_type
-                .and_then(|t| single_element(&sdl, t))
-                .filter(|&e| sdl.ty(e).encode.is_some_and(|x| self.enc(x).type_str.is_some()))
-            {
+            } else if let Some(et) = sdl_type.and_then(|t| single_element(&sdl, t)).filter(|&e| {
+                sdl.ty(e)
+                    .encode
+                    .is_some_and(|x| self.enc(x).type_str.is_some())
+            }) {
                 element_type = Some(et);
                 enc_el = sdl.ty(et).encode;
                 let ee = self.enc(enc_el.unwrap_or(encode));
                 let ts = ee.type_str.clone().unwrap_or_else(|| "".into());
-                array_type = self.get_type_str(doc, xml_param, ee.ns.as_deref().map(str::as_bytes), ts.as_bytes());
+                array_type = self.get_type_str(
+                    doc,
+                    xml_param,
+                    ee.ns.as_deref().map(str::as_bytes),
+                    ts.as_bytes(),
+                );
                 array_size = i.to_string();
                 dims = vec![i];
             } else {
@@ -2662,11 +3069,29 @@ impl EncodeCtx<'_> {
                     array_type.push(b'[');
                     array_type.extend_from_slice(array_size.as_bytes());
                     array_type.push(b']');
-                    self.set_ns_prop(doc, xml_param, SOAP_1_1_ENC_NAMESPACE, b"arrayType", &array_type);
+                    self.set_ns_prop(
+                        doc,
+                        xml_param,
+                        SOAP_1_1_ENC_NAMESPACE,
+                        b"arrayType",
+                        &array_type,
+                    );
                 } else {
                     let size = array_size.replace(',', " ");
-                    self.set_ns_prop(doc, xml_param, SOAP_1_2_ENC_NAMESPACE, b"itemType", &array_type);
-                    self.set_ns_prop(doc, xml_param, SOAP_1_2_ENC_NAMESPACE, b"arraySize", size.as_bytes());
+                    self.set_ns_prop(
+                        doc,
+                        xml_param,
+                        SOAP_1_2_ENC_NAMESPACE,
+                        b"itemType",
+                        &array_type,
+                    );
+                    self.set_ns_prop(
+                        doc,
+                        xml_param,
+                        SOAP_1_2_ENC_NAMESPACE,
+                        b"arraySize",
+                        size.as_bytes(),
+                    );
                 }
             }
             let item_ns = match enc_el {
@@ -2676,7 +3101,16 @@ impl EncodeCtx<'_> {
                 },
                 None => None,
             };
-            self.add_xml_array_elements(doc, xml_param, element_type, enc_el, item_ns.as_ref(), &dims, Some(data), style)?;
+            self.add_xml_array_elements(
+                doc,
+                xml_param,
+                element_type,
+                enc_el,
+                item_ns.as_ref(),
+                &dims,
+                Some(data),
+                style,
+            )?;
         }
         if style == SOAP_ENCODED {
             if self.features & SOAP_USE_XSI_ARRAY_TYPE != 0 {
@@ -2776,12 +3210,11 @@ impl EncodeCtx<'_> {
                 }
             }
         }
-        let dims = match dims {
-            Some(d) => d,
-            None => {
-                dimension = 1;
-                vec![0]
-            }
+        let dims = if let Some(d) = dims {
+            d
+        } else {
+            dimension = 1;
+            vec![0]
         };
         let dimension = dimension.max(1).min(dims.len().max(1));
         let mut pos = vec![0i32; dimension];
@@ -2827,7 +3260,14 @@ impl EncodeCtx<'_> {
     }
 
     /// `to_xml_map`.
-    fn to_xml_map(&mut self, doc: &mut Doc, enc: &Encoder, data: &Value, style: i64, parent: NodeId) -> SoapResult<Option<NodeId>> {
+    fn to_xml_map(
+        &mut self,
+        doc: &mut Doc,
+        enc: &Encoder,
+        data: &Value,
+        style: i64,
+        parent: NodeId,
+    ) -> SoapResult<Option<NodeId>> {
         let xml_param = Self::bogus(doc, parent);
         if matches!(data, Value::Null) {
             if style == SOAP_ENCODED {
@@ -2906,7 +3346,9 @@ impl EncodeCtx<'_> {
                 Value::Int(i) => {
                     ret.make_mut().insert(i, v);
                 }
-                _ => bail!("Encoding: Can't decode apache map, only Strings or Longs are allowed as keys"),
+                _ => bail!(
+                    "Encoding: Can't decode apache map, only Strings or Longs are allowed as keys"
+                ),
             }
             trav = doc.next(item);
         }

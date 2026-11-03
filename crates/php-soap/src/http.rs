@@ -35,7 +35,9 @@ pub struct Url {
 }
 
 fn ctrl(s: &[u8]) -> Vec<u8> {
-    s.iter().map(|&c| if c.is_ascii_control() { b'_' } else { c }).collect()
+    s.iter()
+        .map(|&c| if c.is_ascii_control() { b'_' } else { c })
+        .collect()
 }
 
 fn strtol_prefix(s: &[u8]) -> Option<i64> {
@@ -75,23 +77,14 @@ pub fn parse_url(input: &[u8]) -> Option<Url> {
                     ret.scheme = Some(ctrl(&input[..e]));
                     return Some(ret);
                 }
-                if input[e + 1] != b'/' {
-                    let mut p = e + 1;
-                    while p < ue && input[p].is_ascii_digit() {
-                        p += 1;
-                    }
-                    if (p == ue || input[p] == b'/') && p - e < 7 {
-                        Next::ParsePort(e)
-                    } else {
-                        ret.scheme = Some(ctrl(&input[..e]));
-                        s = e + 1;
-                        Next::JustPath
-                    }
-                } else {
+                if input[e + 1] == b'/' {
                     ret.scheme = Some(ctrl(&input[..e]));
                     if e + 2 < ue && input[e + 2] == b'/' {
                         s = e + 3;
-                        if input[..e].eq_ignore_ascii_case(b"file") && e + 3 < ue && input[e + 3] == b'/' {
+                        if input[..e].eq_ignore_ascii_case(b"file")
+                            && e + 3 < ue
+                            && input[e + 3] == b'/'
+                        {
                             if e + 5 < ue && input[e + 5] == b':' {
                                 s = e + 4;
                             }
@@ -100,6 +93,18 @@ pub fn parse_url(input: &[u8]) -> Option<Url> {
                             Next::ParseHost
                         }
                     } else {
+                        s = e + 1;
+                        Next::JustPath
+                    }
+                } else {
+                    let mut p = e + 1;
+                    while p < ue && input[p].is_ascii_digit() {
+                        p += 1;
+                    }
+                    if (p == ue || input[p] == b'/') && p - e < 7 {
+                        Next::ParsePort(e)
+                    } else {
+                        ret.scheme = Some(ctrl(&input[..e]));
                         s = e + 1;
                         Next::JustPath
                     }
@@ -175,7 +180,9 @@ pub fn parse_url(input: &[u8]) -> Option<Url> {
                     return None;
                 } else if e > pstart {
                     match strtol_prefix(&input[pstart..e]) {
-                        Some(port) if (0..=65535).contains(&port) => ret.port = u16::try_from(port).unwrap_or(0),
+                        Some(port) if (0..=65535).contains(&port) => {
+                            ret.port = u16::try_from(port).unwrap_or(0);
+                        }
                         _ => return None,
                     }
                 }
@@ -211,7 +218,15 @@ pub fn parse_url(input: &[u8]) -> Option<Url> {
 
 fn md5_hex(parts: &[&[u8]]) -> String {
     let data: Vec<u8> = parts.concat();
-    php_hash::md5(&data).iter().map(|b| format!("{b:02x}")).collect()
+    hex_lower(&php_hash::md5(&data))
+}
+
+fn hex_lower(b: &[u8]) -> String {
+    use std::fmt::Write;
+    b.iter().fold(String::new(), |mut s, x| {
+        let _ = write!(s, "{x:02x}");
+        s
+    })
 }
 
 /// `get_http_header_value_nodup` (case-insensitive, at line starts).
@@ -220,12 +235,16 @@ pub fn header_value(headers: &[u8], name: &str) -> Option<Vec<u8>> {
     let nb = name.as_bytes();
     let mut pos = 0;
     loop {
-        if headers.len() >= pos + nb.len() && headers[pos..pos + nb.len()].eq_ignore_ascii_case(nb) {
+        if headers.len() >= pos + nb.len() && headers[pos..pos + nb.len()].eq_ignore_ascii_case(nb)
+        {
             let mut tmp = pos + nb.len();
             while tmp < headers.len() && (headers[tmp] == b' ' || headers[tmp] == b'\t') {
                 tmp += 1;
             }
-            let mut eol = headers[tmp..].iter().position(|&c| c == b'\n').map_or(headers.len(), |p| p + tmp);
+            let mut eol = headers[tmp..]
+                .iter()
+                .position(|&c| c == b'\n')
+                .map_or(headers.len(), |p| p + tmp);
             if eol < headers.len() || eol > tmp {
                 if eol > tmp && headers.get(eol - 1) == Some(&b'\r') && eol < headers.len() {
                     eol -= 1;
@@ -263,7 +282,12 @@ fn header_values(headers: &[u8], name: &str) -> Vec<Vec<u8>> {
             }
         }
         out.push(v);
-        match found.and_then(|f| rest[f..].iter().position(|&c| c == b'\n').map(|p| f + p + 1)) {
+        match found.and_then(|f| {
+            rest[f..]
+                .iter()
+                .position(|&c| c == b'\n')
+                .map(|p| f + p + 1)
+        }) {
             Some(n) => rest = &rest[n..],
             None => break,
         }
@@ -275,7 +299,11 @@ fn header_values(headers: &[u8], name: &str) -> Vec<Vec<u8>> {
 fn read_headers(stream: &mut dyn HttpStream) -> Option<Vec<u8>> {
     let mut out = Vec::new();
     while let Some(line) = stream.read_line() {
-        if line == b"\r\n" || line == b"\n" || line.starts_with(b"\r\n") || line.first() == Some(&b'\n') {
+        if line == b"\r\n"
+            || line == b"\n"
+            || line.starts_with(b"\r\n")
+            || line.first() == Some(&b'\n')
+        {
             return Some(out);
         }
         out.extend_from_slice(&line);
@@ -378,7 +406,9 @@ fn read_body(stream: &mut dyn HttpStream, close: bool, headers: &[u8]) -> Option
 }
 
 fn slot(host: &mut dyn SoapHost, this: &Obj, name: &str) -> Value {
-    host.read_slot(this, name).map(|v| v.deref()).unwrap_or_default()
+    host.read_slot(this, name)
+        .map(|v| v.deref())
+        .unwrap_or_default()
 }
 
 fn slot_bytes(host: &mut dyn SoapHost, this: &Obj, name: &str) -> Option<Vec<u8>> {
@@ -389,8 +419,16 @@ fn slot_bytes(host: &mut dyn SoapHost, this: &Obj, name: &str) -> Option<Vec<u8>
 }
 
 /// `soap_smart_str_append_header_value_ex`.
-fn append_header_value(host: &mut dyn SoapHost, out: &mut Vec<u8>, v: &[u8], name: &str) -> RtResult<()> {
-    let end = v.iter().position(|&c| c == b'\r' || c == b'\n').unwrap_or(v.len());
+fn append_header_value(
+    host: &mut dyn SoapHost,
+    out: &mut Vec<u8>,
+    v: &[u8],
+    name: &str,
+) -> RtResult<()> {
+    let end = v
+        .iter()
+        .position(|&c| c == b'\r' || c == b'\n')
+        .unwrap_or(v.len());
     out.extend_from_slice(&v[..end]);
     if end < v.len() {
         host.diagnostic(
@@ -408,7 +446,13 @@ fn http_fault(host: &mut dyn SoapHost, this: &Obj, msg: &str) -> RtResult<Option
 
 /// `http_context_add_header`: extra headers from the stream context,
 /// skipping the ones the client generates itself.
-fn context_headers(src: &[u8], has_auth: bool, has_proxy_auth: bool, has_cookies: bool, out: &mut Vec<u8>) {
+fn context_headers(
+    src: &[u8],
+    has_auth: bool,
+    has_proxy_auth: bool,
+    has_cookies: bool,
+    out: &mut Vec<u8>,
+) {
     let mut s = 0;
     while s < src.len() {
         while s < src.len() && matches!(src[s], b' ' | b'\t' | b'\r' | b'\n') {
@@ -458,7 +502,11 @@ fn is_allowed_redirect(from: &Url, to: &Url) -> bool {
     let (Some(ts), Some(th)) = (&to.scheme, &to.host) else {
         return true;
     };
-    if !from.host.as_deref().is_some_and(|fh| fh.eq_ignore_ascii_case(th)) {
+    if !from
+        .host
+        .as_deref()
+        .is_some_and(|fh| fh.eq_ignore_ascii_case(th))
+    {
         return false;
     }
     let to_port = if to.port == 0 {
@@ -473,7 +521,9 @@ fn is_allowed_redirect(from: &Url, to: &Url) -> bool {
     if from.scheme.as_deref() == Some(ts.as_slice()) {
         return from.port == to_port;
     }
-    from.scheme.as_deref() == Some(b"http".as_slice()) && ts.as_slice() == b"https" && to_port == 443
+    from.scheme.as_deref() == Some(b"http".as_slice())
+        && ts.as_slice() == b"https"
+        && to_port == 443
 }
 
 fn in_domain(host: &[u8], domain: &[u8]) -> bool {
@@ -517,10 +567,19 @@ pub fn make_http_soap_request(
             headers_z.extend_from_slice(b"Accept-Encoding: gzip, deflate\r\n");
         }
         if level > 0 {
-            let (func, args, hdr): (&[u8], Vec<Value>, &[u8]) = if kind == SOAP_COMPRESSION_DEFLATE {
-                (b"gzcompress", vec![Value::from(buf), Value::Int(level)], b"Content-Encoding: deflate\r\n")
+            let (func, args, hdr): (&[u8], Vec<Value>, &[u8]) = if kind == SOAP_COMPRESSION_DEFLATE
+            {
+                (
+                    b"gzcompress",
+                    vec![Value::from(buf), Value::Int(level)],
+                    b"Content-Encoding: deflate\r\n",
+                )
             } else {
-                (b"gzencode", vec![Value::from(buf), Value::Int(level), Value::Int(0x1f)], b"Content-Encoding: gzip\r\n")
+                (
+                    b"gzencode",
+                    vec![Value::from(buf), Value::Int(level), Value::Int(0x1f)],
+                    b"Content-Encoding: gzip\r\n",
+                )
             };
             headers_z.extend_from_slice(hdr);
             match host.call_function(func, &args)? {
@@ -529,7 +588,11 @@ pub fn make_http_soap_request(
             }
         }
     }
-    let mut uri = if location.is_empty() { None } else { parse_url(location) };
+    let mut uri = if location.is_empty() {
+        None
+    } else {
+        parse_url(location)
+    };
     let context = match slot(host, this, "_stream_context") {
         Value::Resource(r) => Some(Value::Resource(r)),
         _ => None,
@@ -560,7 +623,13 @@ pub fn make_http_soap_request(
         let use_ssl = match u.scheme.as_deref() {
             Some(b"https") => true,
             Some(b"http") => false,
-            _ => return http_fault(host, this, "Unknown protocol. Only http and https are allowed."),
+            _ => {
+                return http_fault(
+                    host,
+                    this,
+                    "Unknown protocol. Only http and https are allowed.",
+                )
+            }
         };
         if u.port == 0 {
             u.port = if use_ssl { 443 } else { 80 };
@@ -583,7 +652,10 @@ pub fn make_http_soap_request(
         };
         let host_name = String::from_utf8_lossy(u.host.as_deref().unwrap_or(b"")).into_owned();
         let (conn_host, conn_port) = match (&proxy_host, proxy_port) {
-            (Some(h), Some(p)) => (String::from_utf8_lossy(h).into_owned(), u16::try_from(p).unwrap_or(0)),
+            (Some(h), Some(p)) => (
+                String::from_utf8_lossy(h).into_owned(),
+                u16::try_from(p).unwrap_or(0),
+            ),
             _ => (host_name.clone(), u.port),
         };
         let timeout = match slot(host, this, "_connection_timeout") {
@@ -591,7 +663,11 @@ pub fn make_http_soap_request(
             _ => None,
         };
         let proxy_tunnel = (use_proxy && use_ssl).then(|| {
-            let mut c = format!("CONNECT {host_name}:{} HTTP/1.1\r\nHost: {host_name}", u.port).into_bytes();
+            let mut c = format!(
+                "CONNECT {host_name}:{} HTTP/1.1\r\nHost: {host_name}",
+                u.port
+            )
+            .into_bytes();
             if u.port != 80 {
                 c.extend_from_slice(format!(":{}", u.port).as_bytes());
             }
@@ -630,7 +706,11 @@ pub fn make_http_soap_request(
             h.push(b'#');
             h.extend_from_slice(f);
         }
-        h.extend_from_slice(if http_1_1 { b" HTTP/1.1\r\n" } else { b" HTTP/1.0\r\n" });
+        h.extend_from_slice(if http_1_1 {
+            b" HTTP/1.1\r\n"
+        } else {
+            b" HTTP/1.0\r\n"
+        });
         h.extend_from_slice(b"Host: ");
         h.extend_from_slice(host_name.as_bytes());
         if u.port != if use_ssl { 443 } else { 80 } {
@@ -660,7 +740,9 @@ pub fn make_http_soap_request(
                     h.extend_from_slice(b"\r\n");
                 }
             }
-            None => h.extend_from_slice(format!("User-Agent: PHP-SOAP/{}\r\n", crate::PHP_VERSION).as_bytes()),
+            None => h.extend_from_slice(
+                format!("User-Agent: PHP-SOAP/{}\r\n", crate::PHP_VERSION).as_bytes(),
+            ),
         }
         h.extend_from_slice(&headers_z);
         let ctx_ct = context
@@ -702,17 +784,18 @@ pub fn make_http_soap_request(
             if let Value::Array(digest) = slot(host, this, "_digest") {
                 let mut digest = digest;
                 let nonce = host.random_bytes(16)?;
-                let cnonce: String = nonce.iter().map(|b| format!("{b:02x}")).collect();
-                let nc = match digest.get_str(b"nc").map(Value::deref) {
-                    Some(Value::Int(n)) => {
-                        let n = n + 1;
-                        digest.make_mut().insert(ArrayKey::from_bytes(b"nc"), Value::Int(n));
-                        format!("{n:08}")
-                    }
-                    _ => {
-                        digest.make_mut().insert(ArrayKey::from_bytes(b"nc"), Value::Int(1));
-                        "00000001".to_owned()
-                    }
+                let cnonce: String = hex_lower(&nonce);
+                let nc = if let Some(Value::Int(n)) = digest.get_str(b"nc").map(Value::deref) {
+                    let n = n + 1;
+                    digest
+                        .make_mut()
+                        .insert(ArrayKey::from_bytes(b"nc"), Value::Int(n));
+                    format!("{n:08}")
+                } else {
+                    digest
+                        .make_mut()
+                        .insert(ArrayKey::from_bytes(b"nc"), Value::Int(1));
+                    "00000001".to_owned()
                 };
                 host.write_slot(this, "_digest", Value::Array(digest.clone()));
                 let dstr = |k: &str| match digest.get_str(k.as_bytes()).map(Value::deref) {
@@ -724,7 +807,13 @@ pub fn make_http_soap_request(
                 let mut ha1 = md5_hex(&[&login, b":", &realm, b":", &password]);
                 if dstr("algorithm").is_some_and(|a| a.eq_ignore_ascii_case(b"md5-sess")) {
                     let nonce_v = dstr("nonce").unwrap_or_default();
-                    ha1 = md5_hex(&[ha1.as_bytes(), b":", &nonce_v, b":", &cnonce.as_bytes()[..8]]);
+                    ha1 = md5_hex(&[
+                        ha1.as_bytes(),
+                        b":",
+                        &nonce_v,
+                        b":",
+                        &cnonce.as_bytes()[..8],
+                    ]);
                 }
                 let mut a2 = b"POST:".to_vec();
                 a2.extend_from_slice(u.path.as_deref().unwrap_or(b"/"));
@@ -851,7 +940,10 @@ pub fn make_http_soap_request(
             }
         }
         if let Some(ctx) = &context {
-            match host.context_get_option(ctx, "http", "header").map(|v| v.deref()) {
+            match host
+                .context_get_option(ctx, "http", "header")
+                .map(|v| v.deref())
+            {
                 Some(Value::Str(s)) if !s.is_empty() => {
                     context_headers(s.as_bytes(), has_auth, has_proxy_auth, has_cookies, &mut h);
                 }
@@ -859,7 +951,13 @@ pub fn make_http_soap_request(
                     for v in a.values() {
                         if let Value::Str(s) = v.deref() {
                             if !s.is_empty() {
-                                context_headers(s.as_bytes(), has_auth, has_proxy_auth, has_cookies, &mut h);
+                                context_headers(
+                                    s.as_bytes(),
+                                    has_auth,
+                                    has_proxy_auth,
+                                    has_cookies,
+                                    &mut h,
+                                );
                             }
                         }
                     }
@@ -918,7 +1016,8 @@ pub fn make_http_soap_request(
             let name = cookie[..eq].to_vec();
             let value_end = sem.unwrap_or(cookie.len());
             let mut zc = ZArray::new();
-            zc.make_mut().insert(0, Value::from(&cookie[eq + 1..value_end]));
+            zc.make_mut()
+                .insert(0, Value::from(&cookie[eq + 1..value_end]));
             if let Some(s) = sem {
                 let mut opts = &cookie[s + 1..];
                 loop {
@@ -953,21 +1052,29 @@ pub fn make_http_soap_request(
                 Value::Array(a) => a,
                 _ => ZArray::new(),
             };
-            cookies.make_mut().insert(ArrayKey::from_bytes(&name), Value::Array(zc));
+            cookies
+                .make_mut()
+                .insert(ArrayKey::from_bytes(&name), Value::Array(zc));
             host.write_slot(this, "_cookies", Value::Array(cookies));
         }
         let connection_is = |name: &str, what: &str| {
-            header_value(&http_headers, name)
-                .is_some_and(|c| c.len() >= what.len() && c[..what.len()].eq_ignore_ascii_case(what.as_bytes()))
+            header_value(&http_headers, name).is_some_and(|c| {
+                c.len() >= what.len() && c[..what.len()].eq_ignore_ascii_case(what.as_bytes())
+            })
         };
         let http_close = if resp_1_1 {
-            (use_proxy && !use_ssl && connection_is("Proxy-Connection:", "close")) || connection_is("Connection:", "close")
+            (use_proxy && !use_ssl && connection_is("Proxy-Connection:", "close"))
+                || connection_is("Connection:", "close")
         } else {
             !((use_proxy && !use_ssl && connection_is("Proxy-Connection:", "Keep-Alive"))
                 || connection_is("Connection:", "Keep-Alive"))
         };
         let Some(body) = read_body(stream.as_mut(), http_close, &http_headers) else {
-            return http_fault(host, this, "Error Fetching http body, No Content-Length, connection closed or chunked data");
+            return http_fault(
+                host,
+                this,
+                "Error Fetching http body, No Content-Length, connection closed or chunked data",
+            );
         };
         if (300..400).contains(&http_status) {
             if let Some(loc) = header_value(&http_headers, "Location:") {
@@ -992,10 +1099,16 @@ pub fn make_http_soap_request(
                             }
                         }
                     }
-                    if !matches!(slot(host, this, "_follow_cross_origin_redirects"), Value::Bool(true))
-                        && !is_allowed_redirect(&u, &new_uri)
+                    if !matches!(
+                        slot(host, this, "_follow_cross_origin_redirects"),
+                        Value::Bool(true)
+                    ) && !is_allowed_redirect(&u, &new_uri)
                     {
-                        return http_fault(host, this, "Redirection to a different origin is not allowed");
+                        return http_fault(
+                            host,
+                            this,
+                            "Redirection to a different origin is not allowed",
+                        );
                     }
                     redirect_max -= 1;
                     if redirect_max < 1 {
@@ -1057,7 +1170,9 @@ pub fn make_http_soap_request(
                                 }
                             }
                         }
-                        digest.make_mut().insert(ArrayKey::from_bytes(&name), Value::from(val.as_slice()));
+                        digest
+                            .make_mut()
+                            .insert(ArrayKey::from_bytes(&name), Value::from(val.as_slice()));
                         any = true;
                     }
                     if any {
@@ -1088,7 +1203,10 @@ pub fn make_http_soap_request(
             let error = if ret.is_empty() {
                 true
             } else if !content_type_xml {
-                let start = ret.iter().position(|&c| c >= b' ' || c == 0).unwrap_or(ret.len());
+                let start = ret
+                    .iter()
+                    .position(|&c| c >= b' ' || c == 0)
+                    .unwrap_or(ret.len());
                 !ret[start..].starts_with(b"<?xml")
             } else {
                 false
@@ -1127,6 +1245,9 @@ mod tests {
         let h = b"HTTP/1.1 200 OK\r\nContent-Type: text/xml\r\nset-cookie: a=1\r\nSet-Cookie: b=2; path=/x\r\n";
         assert_eq!(header_value(h, "content-type:").unwrap(), b"text/xml");
         assert_eq!(header_value(h, "HTTP/").unwrap(), b"1.1 200 OK");
-        assert_eq!(header_values(h, "Set-Cookie:"), vec![b"a=1".to_vec(), b"b=2; path=/x".to_vec()]);
+        assert_eq!(
+            header_values(h, "Set-Cookie:"),
+            vec![b"a=1".to_vec(), b"b=2; path=/x".to_vec()]
+        );
     }
 }

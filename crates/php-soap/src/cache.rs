@@ -27,7 +27,12 @@ pub const INI_ENTRIES: &[(&str, &str)] = &[
 fn ini_long(host: &mut dyn SoapHost, name: &str) -> i64 {
     let v = host
         .ini_get(name)
-        .or_else(|| INI_ENTRIES.iter().find(|(n, _)| *n == name).map(|(_, d)| d.as_bytes().to_vec()))
+        .or_else(|| {
+            INI_ENTRIES
+                .iter()
+                .find(|(n, _)| *n == name)
+                .map(|(_, d)| d.as_bytes().to_vec())
+        })
         .unwrap_or_default();
     let s = String::from_utf8_lossy(&v);
     let t = s.trim();
@@ -84,11 +89,12 @@ fn slot_str(host: &mut dyn SoapHost, obj: &Obj, name: &str) -> Option<Vec<u8>> {
 }
 
 /// Builds the stream context used to fetch the WSDL of a client.
-fn wsdl_context(host: &mut dyn SoapHost, client: Option<&Obj>, uri: &str) -> Option<Value> {
+fn wsdl_context(host: &mut dyn SoapHost, client: Option<&Obj>, uri: &str) -> Value {
     let mut headers: Vec<u8> = Vec::new();
     let mut context: Option<Value> = None;
     if let Some(this) = client {
-        if let Some(Value::Resource(r)) = host.read_slot(this, "_stream_context").map(|v| v.deref()) {
+        if let Some(Value::Resource(r)) = host.read_slot(this, "_stream_context").map(|v| v.deref())
+        {
             context = Some(Value::Resource(r));
         }
         if let Some(ua) = slot_str(host, this, "_user_agent").filter(|u| !u.is_empty()) {
@@ -115,7 +121,10 @@ fn wsdl_context(host: &mut dyn SoapHost, client: Option<&Obj>, uri: &str) -> Opt
                 headers.extend_from_slice(b"\r\n");
             }
         }
-        let use_digest = matches!(host.read_slot(this, "_use_digest").map(|v| v.deref()), Some(Value::Bool(true)));
+        let use_digest = matches!(
+            host.read_slot(this, "_use_digest").map(|v| v.deref()),
+            Some(Value::Bool(true))
+        );
         if let (Some(login), false) = (slot_str(host, this, "_login"), use_digest) {
             let pw = slot_str(host, this, "_password");
             headers.extend_from_slice(b"Authorization: Basic ");
@@ -124,7 +133,10 @@ fn wsdl_context(host: &mut dyn SoapHost, client: Option<&Obj>, uri: &str) -> Opt
         }
     }
     let ctx = context.unwrap_or_else(|| host.context_create());
-    if host.context_get_option(&ctx, "http", "protocol_version").is_none() {
+    if host
+        .context_get_option(&ctx, "http", "protocol_version")
+        .is_none()
+    {
         host.context_set_option(&ctx, "http", "protocol_version", Value::Float(1.1));
         headers.extend_from_slice(b"Connection: close\r\n");
     }
@@ -138,12 +150,17 @@ fn wsdl_context(host: &mut dyn SoapHost, client: Option<&Obj>, uri: &str) -> Opt
         }
         host.context_set_option(&ctx, "http", "header", Value::from(headers.as_slice()));
     }
-    Some(ctx)
+    ctx
 }
 
 /// `get_sdl`: loads (or fetches from the memory cache) the WSDL at `uri`.
 /// Errors carry the `"WSDL"` fault code.
-pub fn get_sdl(host: &mut dyn SoapHost, client: Option<&Obj>, uri: &str, cache_wsdl: i64) -> SoapResult<Rc<Sdl>> {
+pub fn get_sdl(
+    host: &mut dyn SoapHost,
+    client: Option<&Obj>,
+    uri: &str,
+    cache_wsdl: i64,
+) -> SoapResult<Rc<Sdl>> {
     let mut cache_wsdl = cache_wsdl;
     let mut uri = uri.to_owned();
     if !(uri.contains(':') || uri.starts_with('/')) {
@@ -167,7 +184,7 @@ pub fn get_sdl(host: &mut dyn SoapHost, client: Option<&Obj>, uri: &str, cache_w
             return Ok(sdl);
         }
     }
-    let context = wsdl_context(host, client, &uri);
+    let context = Some(wsdl_context(host, client, &uri));
     let old = globals::set_error_code(Some("WSDL"));
     let result = {
         let mut loader = HostLoader { host, context };

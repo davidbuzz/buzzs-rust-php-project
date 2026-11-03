@@ -110,7 +110,7 @@ fn get_create_encoder(sdl: &mut Sdl, cur_type: Option<TypeId>, ns: &str, type_: 
     get_encoder_mut(sdl, ns, type_).unwrap_or_else(|| create_encoder(sdl, cur_type, ns, type_))
 }
 
-/// Resolves the QName in attribute `value` of `node` to `(href, local)`.
+/// Resolves the `QName` in attribute `value` of `node` to `(href, local)`.
 fn resolve_qname(doc: &Doc, node: NodeId, value: &[u8]) -> Option<(String, String)> {
     let (prefix, local) = parse_qname(value);
     doc.search_ns(node, prefix)
@@ -234,11 +234,7 @@ pub fn build_uri(uri: &str, base: Option<&str>) -> String {
         let scheme_end = prefix.find(':').map_or(0, |p| p + 1);
         return format!("{}{uri}", &prefix[..scheme_end]);
     }
-    let base_path = base_path
-        .split(['?', '#'])
-        .next()
-        .unwrap_or("")
-        .to_owned();
+    let base_path = base_path.split(['?', '#']).next().unwrap_or("").to_owned();
     let merged = if uri.starts_with('/') {
         uri.to_owned()
     } else {
@@ -279,7 +275,11 @@ impl LoadCtx<'_> {
         let mut trav = doc.first_child(schema);
         while let Some(t) = trav {
             if is_xsd(doc, t, "include") || is_xsd(doc, t, "redefine") {
-                let what = if is_xsd(doc, t, "include") { "include" } else { "redefine" };
+                let what = if is_xsd(doc, t, "include") {
+                    "include"
+                } else {
+                    "redefine"
+                };
                 let Some(location) = doc.attr_value(t, "schemaLocation", None) else {
                     bail!("Parsing Schema: {what} has no 'schemaLocation' attribute");
                 };
@@ -319,7 +319,10 @@ impl LoadCtx<'_> {
             } else if is_xsd(doc, t, "attribute") {
                 self.attribute(&tns, doc, t, None)?;
             } else if !is_xsd(doc, t, "notation") && !is_xsd(doc, t, "annotation") {
-                bail!("Parsing Schema: unexpected <{}> in schema", lossy(doc.name(t)));
+                bail!(
+                    "Parsing Schema: unexpected <{}> in schema",
+                    lossy(doc.name(t))
+                );
             }
             trav = doc.next(t);
         }
@@ -327,6 +330,7 @@ impl LoadCtx<'_> {
     }
 
     /// `schema_load_file`.
+    #[allow(clippy::needless_pass_by_value)]
     fn schema_load_file(
         &mut self,
         ns: Option<String>,
@@ -378,7 +382,13 @@ impl LoadCtx<'_> {
     }
 
     /// `schema_simpleType`.
-    fn simple_type(&mut self, tns: &str, doc: &Doc, node: NodeId, cur_type: Option<TypeId>) -> SoapResult<()> {
+    fn simple_type(
+        &mut self,
+        tns: &str,
+        doc: &Doc,
+        node: NodeId,
+        cur_type: Option<TypeId>,
+    ) -> SoapResult<()> {
         let ns = attr(doc, node, "targetNamespace").unwrap_or_else(|| tns.to_owned());
         let name = attr(doc, node, "name");
         let cur = if let Some(ct) = cur_type {
@@ -394,7 +404,11 @@ impl LoadCtx<'_> {
                 ..SdlType::default()
             });
             self.sdl.types.get_or_insert_with(Vec::new).push(new_type);
-            let mut enc = Encoder::sdl(nns.as_deref().unwrap_or(""), n.as_deref().unwrap_or(""), Some(new_type));
+            let mut enc = Encoder::sdl(
+                nns.as_deref().unwrap_or(""),
+                n.as_deref().unwrap_or(""),
+                Some(new_type),
+            );
             if nns.is_none() {
                 enc.ns = None;
             }
@@ -432,10 +446,16 @@ impl LoadCtx<'_> {
             self.sdl.ty_mut(cur).kind = TypeKind::Union;
             self.union(tns, doc, t, cur)?;
         } else {
-            bail!("Parsing Schema: unexpected <{}> in simpleType", lossy(doc.name(t)));
+            bail!(
+                "Parsing Schema: unexpected <{}> in simpleType",
+                lossy(doc.name(t))
+            );
         }
         if let Some(t2) = doc.next(t) {
-            bail!("Parsing Schema: unexpected <{}> in simpleType", lossy(doc.name(t2)));
+            bail!(
+                "Parsing Schema: unexpected <{}> in simpleType",
+                lossy(doc.name(t2))
+            );
         }
         Ok(())
     }
@@ -481,7 +501,10 @@ impl LoadCtx<'_> {
             trav = doc.next(t);
         }
         if let Some(t) = trav {
-            bail!("Parsing Schema: unexpected <{}> in list", lossy(doc.name(t)));
+            bail!(
+                "Parsing Schema: unexpected <{}> in list",
+                lossy(doc.name(t))
+            );
         }
         Ok(())
     }
@@ -509,7 +532,10 @@ impl LoadCtx<'_> {
         }
         while let Some(t) = trav {
             if !is_xsd(doc, t, "simpleType") {
-                bail!("Parsing Schema: unexpected <{}> in union", lossy(doc.name(t)));
+                bail!(
+                    "Parsing Schema: unexpected <{}> in union",
+                    lossy(doc.name(t))
+                );
             }
             let new_type = self.sdl.new_type(SdlType {
                 name: Some(anonymous_name(&self.sdl)),
@@ -524,7 +550,13 @@ impl LoadCtx<'_> {
     }
 
     /// `schema_simpleContent`.
-    fn simple_content(&mut self, tns: &str, doc: &Doc, node: NodeId, cur: TypeId) -> SoapResult<()> {
+    fn simple_content(
+        &mut self,
+        tns: &str,
+        doc: &Doc,
+        node: NodeId,
+        cur: TypeId,
+    ) -> SoapResult<()> {
         let mut trav = doc.first_child(node);
         if trav.is_some_and(|t| is_xsd(doc, t, "annotation")) {
             trav = trav.and_then(|t| doc.next(t));
@@ -539,10 +571,16 @@ impl LoadCtx<'_> {
             self.sdl.ty_mut(cur).kind = TypeKind::Extension;
             self.extension_simple_content(tns, doc, t, cur)?;
         } else {
-            bail!("Parsing Schema: unexpected <{}> in simpleContent", lossy(doc.name(t)));
+            bail!(
+                "Parsing Schema: unexpected <{}> in simpleContent",
+                lossy(doc.name(t))
+            );
         }
         if let Some(t2) = doc.next(t) {
-            bail!("Parsing Schema: unexpected <{}> in simpleContent", lossy(doc.name(t2)));
+            bail!(
+                "Parsing Schema: unexpected <{}> in simpleContent",
+                lossy(doc.name(t2))
+            );
         }
         Ok(())
     }
@@ -594,7 +632,11 @@ impl LoadCtx<'_> {
             ];
             if int_facet.iter().any(|f| is_xsd(doc, t, f)) {
                 let v = restriction_int(doc, t)?;
-                let r = self.sdl.ty_mut(cur).restrictions.get_or_insert_with(Restrictions::default);
+                let r = self
+                    .sdl
+                    .ty_mut(cur)
+                    .restrictions
+                    .get_or_insert_with(Restrictions::default);
                 let slot = match facet.as_str() {
                     "minExclusive" => &mut r.min_exclusive,
                     "minInclusive" => &mut r.min_inclusive,
@@ -609,7 +651,11 @@ impl LoadCtx<'_> {
                 *slot = Some(v);
             } else if is_xsd(doc, t, "whiteSpace") || is_xsd(doc, t, "pattern") {
                 let v = restriction_char(doc, t)?;
-                let r = self.sdl.ty_mut(cur).restrictions.get_or_insert_with(Restrictions::default);
+                let r = self
+                    .sdl
+                    .ty_mut(cur)
+                    .restrictions
+                    .get_or_insert_with(Restrictions::default);
                 if facet == "whiteSpace" {
                     r.white_space = Some(v);
                 } else {
@@ -617,7 +663,11 @@ impl LoadCtx<'_> {
                 }
             } else if is_xsd(doc, t, "enumeration") {
                 let v = restriction_char(doc, t)?;
-                let r = self.sdl.ty_mut(cur).restrictions.get_or_insert_with(Restrictions::default);
+                let r = self
+                    .sdl
+                    .ty_mut(cur)
+                    .restrictions
+                    .get_or_insert_with(Restrictions::default);
                 let key = v.value.clone();
                 r.enumeration.get_or_insert_with(ZHash::new).add(&key, v);
             } else {
@@ -635,20 +685,34 @@ impl LoadCtx<'_> {
                     trav = doc.next(t);
                     break;
                 } else {
-                    bail!("Parsing Schema: unexpected <{}> in restriction", lossy(doc.name(t)));
+                    bail!(
+                        "Parsing Schema: unexpected <{}> in restriction",
+                        lossy(doc.name(t))
+                    );
                 }
                 trav = doc.next(t);
             }
         }
         if let Some(t) = trav {
-            bail!("Parsing Schema: unexpected <{}> in restriction", lossy(doc.name(t)));
+            bail!(
+                "Parsing Schema: unexpected <{}> in restriction",
+                lossy(doc.name(t))
+            );
         }
         Ok(())
     }
 
     /// The optional `(group | all | choice | sequence)` particle of a
     /// complex type definition; returns the next node.
-    fn particle(&mut self, tns: &str, doc: &Doc, t: NodeId, cur: TypeId) -> SoapResult<Option<Option<NodeId>>> {
+    #[allow(clippy::option_option)]
+    fn particle(
+        &mut self,
+        tns: &str,
+        doc: &Doc,
+        t: NodeId,
+        cur: TypeId,
+    ) -> SoapResult<Option<Option<NodeId>>> {
+        // Outer `None`: no particle; inner: the node after it.
         if is_xsd(doc, t, "group") {
             self.group(tns, doc, t, Some(cur), None)?;
         } else if is_xsd(doc, t, "all") {
@@ -684,18 +748,30 @@ impl LoadCtx<'_> {
                 trav = doc.next(t);
                 break;
             } else {
-                bail!("Parsing Schema: unexpected <{}> in {ctx_name}", lossy(doc.name(t)));
+                bail!(
+                    "Parsing Schema: unexpected <{}> in {ctx_name}",
+                    lossy(doc.name(t))
+                );
             }
             trav = doc.next(t);
         }
         if let Some(t) = trav {
-            bail!("Parsing Schema: unexpected <{}> in {ctx_name}", lossy(doc.name(t)));
+            bail!(
+                "Parsing Schema: unexpected <{}> in {ctx_name}",
+                lossy(doc.name(t))
+            );
         }
         Ok(())
     }
 
     /// `schema_restriction_complexContent`.
-    fn restriction_complex_content(&mut self, tns: &str, doc: &Doc, node: NodeId, cur: TypeId) -> SoapResult<()> {
+    fn restriction_complex_content(
+        &mut self,
+        tns: &str,
+        doc: &Doc,
+        node: NodeId,
+        cur: TypeId,
+    ) -> SoapResult<()> {
         let Some(base) = doc.attr_value(node, "base", None) else {
             bail!("Parsing Schema: restriction has no 'base' attribute");
         };
@@ -713,7 +789,13 @@ impl LoadCtx<'_> {
     }
 
     /// `schema_extension_simpleContent`.
-    fn extension_simple_content(&mut self, tns: &str, doc: &Doc, node: NodeId, cur: TypeId) -> SoapResult<()> {
+    fn extension_simple_content(
+        &mut self,
+        tns: &str,
+        doc: &Doc,
+        node: NodeId,
+        cur: TypeId,
+    ) -> SoapResult<()> {
         let Some(base) = doc.attr_value(node, "base", None) else {
             bail!("Parsing Schema: extension has no 'base' attribute");
         };
@@ -726,7 +808,13 @@ impl LoadCtx<'_> {
     }
 
     /// `schema_extension_complexContent`.
-    fn extension_complex_content(&mut self, tns: &str, doc: &Doc, node: NodeId, cur: TypeId) -> SoapResult<()> {
+    fn extension_complex_content(
+        &mut self,
+        tns: &str,
+        doc: &Doc,
+        node: NodeId,
+        cur: TypeId,
+    ) -> SoapResult<()> {
         let Some(base) = doc.attr_value(node, "base", None) else {
             bail!("Parsing Schema: extension has no 'base' attribute");
         };
@@ -744,7 +832,13 @@ impl LoadCtx<'_> {
     }
 
     /// `schema_all`.
-    fn all(&mut self, tns: &str, doc: &Doc, node: NodeId, cur: Option<TypeId>) -> SoapResult<Model> {
+    fn all(
+        &mut self,
+        tns: &str,
+        doc: &Doc,
+        node: NodeId,
+        cur: Option<TypeId>,
+    ) -> SoapResult<Model> {
         let (min, max) = min_max(doc, node)?;
         let mut content = Vec::new();
         let mut trav = doc.first_child(node);
@@ -851,13 +945,19 @@ impl LoadCtx<'_> {
                 model.kind = ModelKind::All(Vec::new());
                 m
             } else {
-                bail!("Parsing Schema: unexpected <{}> in group", lossy(doc.name(t)));
+                bail!(
+                    "Parsing Schema: unexpected <{}> in group",
+                    lossy(doc.name(t))
+                );
             };
             if let Some(c) = model.content_mut() {
                 c.push(inner);
             }
             if let Some(t2) = doc.next(t) {
-                bail!("Parsing Schema: unexpected <{}> in group", lossy(doc.name(t2)));
+                bail!(
+                    "Parsing Schema: unexpected <{}> in group",
+                    lossy(doc.name(t2))
+                );
             }
         }
         match parent {
@@ -900,7 +1000,10 @@ impl LoadCtx<'_> {
                     max_occurs: max,
                 });
             } else {
-                bail!("Parsing Schema: unexpected <{}> in {what}", lossy(doc.name(t)));
+                bail!(
+                    "Parsing Schema: unexpected <{}> in {what}",
+                    lossy(doc.name(t))
+                );
             }
             trav = doc.next(t);
         }
@@ -908,7 +1011,13 @@ impl LoadCtx<'_> {
     }
 
     /// `schema_choice`.
-    fn choice(&mut self, tns: &str, doc: &Doc, node: NodeId, cur: Option<TypeId>) -> SoapResult<Model> {
+    fn choice(
+        &mut self,
+        tns: &str,
+        doc: &Doc,
+        node: NodeId,
+        cur: Option<TypeId>,
+    ) -> SoapResult<Model> {
         let (min, max) = min_max(doc, node)?;
         let mut content = Vec::new();
         self.nested_particles(tns, doc, node, cur, &mut content, "choice")?;
@@ -920,7 +1029,13 @@ impl LoadCtx<'_> {
     }
 
     /// `schema_sequence`.
-    fn sequence(&mut self, tns: &str, doc: &Doc, node: NodeId, cur: Option<TypeId>) -> SoapResult<Model> {
+    fn sequence(
+        &mut self,
+        tns: &str,
+        doc: &Doc,
+        node: NodeId,
+        cur: Option<TypeId>,
+    ) -> SoapResult<Model> {
         let (min, max) = min_max(doc, node)?;
         let mut content = Vec::new();
         self.nested_particles(tns, doc, node, cur, &mut content, "sequence")?;
@@ -932,7 +1047,13 @@ impl LoadCtx<'_> {
     }
 
     /// `schema_complexContent`.
-    fn complex_content(&mut self, tns: &str, doc: &Doc, node: NodeId, cur: TypeId) -> SoapResult<()> {
+    fn complex_content(
+        &mut self,
+        tns: &str,
+        doc: &Doc,
+        node: NodeId,
+        cur: TypeId,
+    ) -> SoapResult<()> {
         let mut trav = doc.first_child(node);
         if trav.is_some_and(|t| is_xsd(doc, t, "annotation")) {
             trav = trav.and_then(|t| doc.next(t));
@@ -947,16 +1068,28 @@ impl LoadCtx<'_> {
             self.sdl.ty_mut(cur).kind = TypeKind::Extension;
             self.extension_complex_content(tns, doc, t, cur)?;
         } else {
-            bail!("Parsing Schema: unexpected <{}> in complexContent", lossy(doc.name(t)));
+            bail!(
+                "Parsing Schema: unexpected <{}> in complexContent",
+                lossy(doc.name(t))
+            );
         }
         if let Some(t2) = doc.next(t) {
-            bail!("Parsing Schema: unexpected <{}> in complexContent", lossy(doc.name(t2)));
+            bail!(
+                "Parsing Schema: unexpected <{}> in complexContent",
+                lossy(doc.name(t2))
+            );
         }
         Ok(())
     }
 
     /// `schema_complexType`.
-    fn complex_type(&mut self, tns: &str, doc: &Doc, node: NodeId, cur_type: Option<TypeId>) -> SoapResult<()> {
+    fn complex_type(
+        &mut self,
+        tns: &str,
+        doc: &Doc,
+        node: NodeId,
+        cur_type: Option<TypeId>,
+    ) -> SoapResult<()> {
         let ns = attr(doc, node, "targetNamespace").unwrap_or_else(|| tns.to_owned());
         let name = attr(doc, node, "name");
         let cur = if let Some(ct) = cur_type {
@@ -971,7 +1104,11 @@ impl LoadCtx<'_> {
                 ..SdlType::default()
             });
             self.sdl.types.get_or_insert_with(Vec::new).push(new_type);
-            let mut enc = Encoder::sdl(nns.as_deref().unwrap_or(""), n.as_deref().unwrap_or(""), Some(new_type));
+            let mut enc = Encoder::sdl(
+                nns.as_deref().unwrap_or(""),
+                n.as_deref().unwrap_or(""),
+                Some(new_type),
+            );
             if nns.is_none() {
                 enc.ns = None;
             }
@@ -1012,7 +1149,10 @@ impl LoadCtx<'_> {
             }
         }
         if let Some(t) = trav {
-            bail!("Parsing Schema: unexpected <{}> in complexType", lossy(doc.name(t)));
+            bail!(
+                "Parsing Schema: unexpected <{}> in complexType",
+                lossy(doc.name(t))
+            );
         }
         Ok(())
     }
@@ -1064,7 +1204,12 @@ impl LoadCtx<'_> {
             }
         } else {
             let key = format!("{key_ns}:{key_name}");
-            if !self.sdl.elements.get_or_insert_with(ZHash::new).add(&key, id) {
+            if !self
+                .sdl
+                .elements
+                .get_or_insert_with(ZHash::new)
+                .add(&key, id)
+            {
                 bail!("Parsing Schema: element '{key}' already defined");
             }
         }
@@ -1139,7 +1284,10 @@ impl LoadCtx<'_> {
         }
         while let Some(t) = trav {
             if !(is_xsd(doc, t, "unique") || is_xsd(doc, t, "key") || is_xsd(doc, t, "keyref")) {
-                bail!("Parsing Schema: unexpected <{}> in element", lossy(doc.name(t)));
+                bail!(
+                    "Parsing Schema: unexpected <{}> in element",
+                    lossy(doc.name(t))
+                );
             }
             trav = doc.next(t);
         }
@@ -1147,7 +1295,13 @@ impl LoadCtx<'_> {
     }
 
     /// `schema_attribute`.
-    fn attribute(&mut self, tns: &str, doc: &Doc, node: NodeId, cur_type: Option<TypeId>) -> SoapResult<()> {
+    fn attribute(
+        &mut self,
+        tns: &str,
+        doc: &Doc,
+        node: NodeId,
+        cur_type: Option<TypeId>,
+    ) -> SoapResult<()> {
         let name = doc.attr_value(node, "name", None);
         let ref_ = if name.is_none() {
             doc.attr_value(node, "ref", None)
@@ -1250,7 +1404,11 @@ impl LoadCtx<'_> {
         // inserts it into the table first).
         let table = match cur_type {
             None => self.attributes.get_or_insert_with(ZHash::new),
-            Some(ct) => self.sdl.ty_mut(ct).attributes.get_or_insert_with(ZHash::new),
+            Some(ct) => self
+                .sdl
+                .ty_mut(ct)
+                .attributes
+                .get_or_insert_with(ZHash::new),
         };
         if table.contains(&key) {
             bail!("Parsing Schema: attribute '{key}' already defined");
@@ -1266,20 +1424,33 @@ impl LoadCtx<'_> {
             let enc = self.sdl.ty(dummy).encode;
             let table = match cur_type {
                 None => self.attributes.get_or_insert_with(ZHash::new),
-                Some(ct) => self.sdl.ty_mut(ct).attributes.get_or_insert_with(ZHash::new),
+                Some(ct) => self
+                    .sdl
+                    .ty_mut(ct)
+                    .attributes
+                    .get_or_insert_with(ZHash::new),
             };
             if let Some(a) = table.get_mut(&key) {
                 a.encode = enc;
             }
         }
         if let Some(t) = trav {
-            bail!("Parsing Schema: unexpected <{}> in attribute", lossy(doc.name(t)));
+            bail!(
+                "Parsing Schema: unexpected <{}> in attribute",
+                lossy(doc.name(t))
+            );
         }
         Ok(())
     }
 
     /// `schema_attributeGroup`.
-    fn attribute_group(&mut self, tns: &str, doc: &Doc, node: NodeId, cur_type: Option<TypeId>) -> SoapResult<()> {
+    fn attribute_group(
+        &mut self,
+        tns: &str,
+        doc: &Doc,
+        node: NodeId,
+        cur_type: Option<TypeId>,
+    ) -> SoapResult<()> {
         let name = doc.attr_value(node, "name", None);
         let ref_ = if name.is_none() {
             doc.attr_value(node, "ref", None)
@@ -1299,7 +1470,11 @@ impl LoadCtx<'_> {
                 namens: Some(ns),
                 ..SdlType::default()
             });
-            if !self.attribute_groups.get_or_insert_with(ZHash::new).add(&key, t) {
+            if !self
+                .attribute_groups
+                .get_or_insert_with(ZHash::new)
+                .add(&key, t)
+            {
                 bail!("Parsing Schema: attributeGroup '{key}' already defined");
             }
             target = Some(t);
@@ -1329,9 +1504,14 @@ impl LoadCtx<'_> {
             trav = trav.and_then(|t| doc.next(t));
         }
         while let Some(t) = trav {
-            if is_xsd(doc, t, "attribute") || is_xsd(doc, t, "attributeGroup") || is_xsd(doc, t, "anyAttribute") {
+            if is_xsd(doc, t, "attribute")
+                || is_xsd(doc, t, "attributeGroup")
+                || is_xsd(doc, t, "anyAttribute")
+            {
                 if ref_.is_some() {
-                    bail!("Parsing Schema: attributeGroup has both 'ref' attribute and subattribute");
+                    bail!(
+                        "Parsing Schema: attributeGroup has both 'ref' attribute and subattribute"
+                    );
                 }
                 if is_xsd(doc, t, "attribute") {
                     self.attribute(tns, doc, t, target)?;
@@ -1342,12 +1522,18 @@ impl LoadCtx<'_> {
                     break;
                 }
             } else {
-                bail!("Parsing Schema: unexpected <{}> in attributeGroup", lossy(doc.name(t)));
+                bail!(
+                    "Parsing Schema: unexpected <{}> in attributeGroup",
+                    lossy(doc.name(t))
+                );
             }
             trav = doc.next(t);
         }
         if let Some(t) = trav {
-            bail!("Parsing Schema: unexpected <{}> in attributeGroup", lossy(doc.name(t)));
+            bail!(
+                "Parsing Schema: unexpected <{}> in attributeGroup",
+                lossy(doc.name(t))
+            );
         }
         Ok(())
     }
@@ -1361,7 +1547,7 @@ impl LoadCtx<'_> {
             // attributes: run it against a snapshot.
             let snapshot = attrs.clone();
             for a in attrs.values_mut() {
-                self.attribute_fixup_with(&snapshot, a);
+                Self::attribute_fixup_with(&snapshot, a);
             }
             self.attributes = Some(attrs);
         }
@@ -1401,13 +1587,13 @@ impl LoadCtx<'_> {
     }
 
     /// `schema_attribute_fixup` against the global attribute table.
-    fn attribute_fixup_with(&self, globals: &ZHash<SdlAttribute>, attr: &mut SdlAttribute) {
+    fn attribute_fixup_with(globals: &ZHash<SdlAttribute>, attr: &mut SdlAttribute) {
         let Some(r) = attr.ref_.clone() else {
             return;
         };
         if let Some(tmp) = find_by_ref(globals, &r) {
             let mut tmp = tmp.clone();
-            self.attribute_fixup_with(globals, &mut tmp);
+            Self::attribute_fixup_with(globals, &mut tmp);
             if attr.name.is_none() {
                 attr.name.clone_from(&tmp.name);
             }
@@ -1446,7 +1632,11 @@ impl LoadCtx<'_> {
 
     /// `schema_attributegroup_fixup`: copies the attributes of the referenced
     /// group into `out`.
-    fn attribute_group_fixup(&mut self, ref_: &str, out: &mut Vec<(String, SdlAttribute)>) -> SoapResult<()> {
+    fn attribute_group_fixup(
+        &mut self,
+        ref_: &str,
+        out: &mut Vec<(String, SdlAttribute)>,
+    ) -> SoapResult<()> {
         let Some(groups) = self.attribute_groups.as_ref() else {
             return Ok(());
         };
@@ -1460,23 +1650,24 @@ impl LoadCtx<'_> {
         let globals = self.global_attributes();
         let mut pos = 0;
         loop {
-            let entry = self
-                .sdl
-                .ty(tmp)
-                .attributes
-                .as_ref()
-                .and_then(|a| {
-                    // next live slot at or after pos
-                    (pos..a.slots()).find_map(|p| a.slot(p).map(|(k, v)| (p, k.clone(), v.clone())))
-                });
+            let entry = self.sdl.ty(tmp).attributes.as_ref().and_then(|a| {
+                // next live slot at or after pos
+                (pos..a.slots()).find_map(|p| a.slot(p).map(|(k, v)| (p, k.clone(), v.clone())))
+            });
             let Some((p, key, mut a)) = entry else {
                 break;
             };
             pos = p + 1;
             match key {
                 ZKey::Str(k) => {
-                    self.attribute_fixup_with(&globals, &mut a);
-                    if let Some(slot) = self.sdl.ty_mut(tmp).attributes.as_mut().and_then(|t| t.get_mut(&k)) {
+                    Self::attribute_fixup_with(&globals, &mut a);
+                    if let Some(slot) = self
+                        .sdl
+                        .ty_mut(tmp)
+                        .attributes
+                        .as_mut()
+                        .and_then(|t| t.get_mut(&k))
+                    {
                         slot.clone_from(&a);
                     }
                     out.push((k, a));
@@ -1589,8 +1780,14 @@ impl LoadCtx<'_> {
                 pos = p + 1;
                 match key {
                     ZKey::Str(k) => {
-                        self.attribute_fixup_with(&globals, &mut a);
-                        if let Some(slot) = self.sdl.ty_mut(t).attributes.as_mut().and_then(|tb| tb.get_mut(&k)) {
+                        Self::attribute_fixup_with(&globals, &mut a);
+                        if let Some(slot) = self
+                            .sdl
+                            .ty_mut(t)
+                            .attributes
+                            .as_mut()
+                            .and_then(|tb| tb.get_mut(&k))
+                        {
                             *slot = a;
                         }
                     }
@@ -1616,7 +1813,8 @@ impl LoadCtx<'_> {
 
 /// `schema_find_by_ref`: exact key, then the `:local` suffix.
 fn find_by_ref<'a, V>(ht: &'a ZHash<V>, r: &str) -> Option<&'a V> {
-    ht.get(r).or_else(|| r.rfind(':').and_then(|p| ht.get(&r[p..])))
+    ht.get(r)
+        .or_else(|| r.rfind(':').and_then(|p| ht.get(&r[p..])))
 }
 
 /// `schema_restriction_var_int`.
@@ -1692,8 +1890,14 @@ mod tests {
     fn uri_building() {
         assert_eq!(build_uri("b.xsd", Some("/tmp/x/a.wsdl")), "/tmp/x/b.xsd");
         assert_eq!(build_uri("../b.xsd", Some("/tmp/x/a.wsdl")), "/tmp/b.xsd");
-        assert_eq!(build_uri("b.xsd", Some("http://h/p/a.wsdl")), "http://h/p/b.xsd");
-        assert_eq!(build_uri("/b.xsd", Some("http://h/p/a.wsdl")), "http://h/b.xsd");
+        assert_eq!(
+            build_uri("b.xsd", Some("http://h/p/a.wsdl")),
+            "http://h/p/b.xsd"
+        );
+        assert_eq!(
+            build_uri("/b.xsd", Some("http://h/p/a.wsdl")),
+            "http://h/b.xsd"
+        );
         assert_eq!(build_uri("http://o/x", Some("/tmp/a")), "http://o/x");
         assert_eq!(build_uri("b.xsd", Some("a.wsdl")), "b.xsd");
         assert_eq!(build_uri("b.xsd", None), "b.xsd");

@@ -2,7 +2,22 @@
 //! reader, an `EXPECTF` matcher and a tiny evaluator for the PHP literals
 //! used as test parameters.
 
-#![allow(dead_code, clippy::missing_panics_doc, clippy::must_use_candidate)]
+#![allow(
+    dead_code,
+    clippy::missing_panics_doc,
+    clippy::must_use_candidate,
+    clippy::many_single_char_names,
+    clippy::too_many_lines,
+    clippy::cast_precision_loss,
+    clippy::similar_names,
+    clippy::match_same_arms,
+    clippy::type_complexity,
+    clippy::items_after_statements,
+    clippy::needless_pass_by_value,
+    clippy::unused_self,
+    clippy::format_collect,
+    clippy::assigning_clones
+)]
 
 pub mod host;
 pub mod php;
@@ -28,7 +43,13 @@ pub fn phpt_sections(src: &str) -> HashMap<String, String> {
     let mut buf = String::new();
     for line in src.split_inclusive('\n') {
         let t = line.trim_end_matches(['\n', '\r']);
-        if t.starts_with("--") && t.ends_with("--") && t.len() > 4 && t[2..t.len() - 2].chars().all(|c| c.is_ascii_uppercase() || c == '_') {
+        if t.starts_with("--")
+            && t.ends_with("--")
+            && t.len() > 4
+            && t[2..t.len() - 2]
+                .chars()
+                .all(|c| c.is_ascii_uppercase() || c == '_')
+        {
             if let Some(c) = cur.take() {
                 out.insert(c, std::mem::take(&mut buf));
             }
@@ -142,7 +163,8 @@ fn lex(src: &str) -> Vec<Tok> {
                         b't' => s.push(b'\t'),
                         b'r' => s.push(b'\r'),
                         b'x' => {
-                            let h = std::str::from_utf8(&b[i + 1..(i + 3).min(b.len())]).unwrap_or("0");
+                            let h =
+                                std::str::from_utf8(&b[i + 1..(i + 3).min(b.len())]).unwrap_or("0");
                             s.push(u8::from_str_radix(h, 16).unwrap_or(0));
                             i += 2;
                         }
@@ -155,14 +177,17 @@ fn lex(src: &str) -> Vec<Tok> {
             }
             i += 1;
             out.push(Tok::Str(s));
-        } else if c.is_ascii_digit() || (c == b'.' && b.get(i + 1).is_some_and(u8::is_ascii_digit)) {
+        } else if c.is_ascii_digit() || (c == b'.' && b.get(i + 1).is_some_and(u8::is_ascii_digit))
+        {
             let start = i;
             if c == b'0' && matches!(b.get(i + 1), Some(b'x' | b'X')) {
                 i += 2;
                 while i < b.len() && b[i].is_ascii_hexdigit() {
                     i += 1;
                 }
-                out.push(Tok::Int(i64::from_str_radix(&src[start + 2..i], 16).unwrap_or(0)));
+                out.push(Tok::Int(
+                    i64::from_str_radix(&src[start + 2..i], 16).unwrap_or(0),
+                ));
                 continue;
             }
             while i < b.len() && (b[i].is_ascii_digit() || matches!(b[i], b'.' | b'e' | b'E')) {
@@ -296,7 +321,9 @@ impl<'a> Eval<'a> {
             }
             Some(Tok::Punct("(")) => {
                 if let Some(Tok::Ident(c)) = self.peek().cloned() {
-                    if c.eq_ignore_ascii_case("object") && matches!(self.toks.get(self.pos + 1), Some(Tok::Punct(")"))) {
+                    if c.eq_ignore_ascii_case("object")
+                        && matches!(self.toks.get(self.pos + 1), Some(Tok::Punct(")")))
+                    {
                         self.pos += 2;
                         let v = self.expr()?;
                         let o = self.host.new_object("stdClass");
@@ -351,7 +378,10 @@ impl<'a> Eval<'a> {
                     self.expect(")")?;
                     return self.call(&lc, &args);
                 }
-                if let Some((_, v)) = php_soap::consts::php_constants().into_iter().find(|(n, _)| *n == id) {
+                if let Some((_, v)) = php_soap::consts::php_constants()
+                    .into_iter()
+                    .find(|(n, _)| *n == id)
+                {
                     return Ok(v);
                 }
                 Err(RuntimeError::Error(format!("unknown constant {id}")))
@@ -395,7 +425,9 @@ impl<'a> Eval<'a> {
             }
             "soapheader" => {
                 let actor = match args.get(4) {
-                    Some(Value::Str(s)) => Some(php_soap::objects::Actor::Uri(s.as_bytes().to_vec())),
+                    Some(Value::Str(s)) => {
+                        Some(php_soap::objects::Actor::Uri(s.as_bytes().to_vec()))
+                    }
                     Some(Value::Int(i)) => Some(php_soap::objects::Actor::Code(*i)),
                     _ => None,
                 };
@@ -424,7 +456,9 @@ impl<'a> Eval<'a> {
         match name {
             "gmmktime" => {
                 let (h, mi, s, mo, d, y) = (int(0), int(1), int(2), int(3), int(4), int(5));
-                Ok(Value::Int(days_from_civil(y, mo, d) * 86400 + h * 3600 + mi * 60 + s))
+                Ok(Value::Int(
+                    days_from_civil(y, mo, d) * 86400 + h * 3600 + mi * 60 + s,
+                ))
             }
             _ => Err(RuntimeError::Error(format!("unknown function {name}"))),
         }

@@ -8,7 +8,12 @@ use crate::encoders::default_by_type;
 use crate::host::SoapHost;
 
 /// `SoapParam::__construct(mixed $data, string $name)`.
-pub fn soap_param_construct(host: &mut dyn SoapHost, this: &Obj, data: &Value, name: &[u8]) -> RtResult<()> {
+pub fn soap_param_construct(
+    host: &mut dyn SoapHost,
+    this: &Obj,
+    data: &Value,
+    name: &[u8],
+) -> RtResult<()> {
     if name.is_empty() {
         return Err(RuntimeError::ValueError(
             "SoapParam::__construct(): Argument #2 ($name) must not be empty".into(),
@@ -65,7 +70,10 @@ pub fn soap_header_construct(
             }
         }
         Some(Actor::Code(c)) => {
-            if matches!(c, SOAP_ACTOR_NEXT | SOAP_ACTOR_NONE | SOAP_ACTOR_UNLIMATERECEIVER) {
+            if matches!(
+                c,
+                SOAP_ACTOR_NEXT | SOAP_ACTOR_NONE | SOAP_ACTOR_UNLIMATERECEIVER
+            ) {
                 host.write_slot(this, "actor", Value::Int(c));
             } else {
                 return Err(RuntimeError::ValueError(
@@ -97,7 +105,8 @@ pub fn soap_var_construct(
                 host.write_slot(this, "enc_type", Value::Int(t));
             } else {
                 return Err(RuntimeError::ValueError(
-                    "SoapVar::__construct(): Argument #2 ($encoding) is not a valid encoding".into(),
+                    "SoapVar::__construct(): Argument #2 ($encoding) is not a valid encoding"
+                        .into(),
                 ));
             }
         }

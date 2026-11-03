@@ -50,7 +50,9 @@ pub struct LoadCtx<'a> {
 
 impl std::fmt::Debug for LoadCtx<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("LoadCtx").field("source", &self.sdl.source).finish_non_exhaustive()
+        f.debug_struct("LoadCtx")
+            .field("source", &self.sdl.source)
+            .finish_non_exhaustive()
     }
 }
 
@@ -63,8 +65,14 @@ fn lossy(b: &[u8]) -> String {
 fn is_wsdl_element(doc: &Doc, n: NodeId) -> SoapResult<bool> {
     if let Some(ns) = doc.ns(n) {
         if ns.href != WSDL_NAMESPACE.as_bytes() {
-            if matches!(doc.attr_value(n, "required", Some(WSDL_NAMESPACE)), Some(b"1" | b"true")) {
-                bail!("Parsing WSDL: Unknown required WSDL extension '{}'", lossy(&ns.href));
+            if matches!(
+                doc.attr_value(n, "required", Some(WSDL_NAMESPACE)),
+                Some(b"1" | b"true")
+            ) {
+                bail!(
+                    "Parsing WSDL: Unknown required WSDL extension '{}'",
+                    lossy(&ns.href)
+                );
             }
             return Ok(false);
         }
@@ -196,8 +204,13 @@ impl<'a> LoadCtx<'a> {
                 for t2 in doc.children(t) {
                     if doc.node_is(t2, Some("schema"), Some(XSD_NAMESPACE)) {
                         self.load_schema(&doc, t2)?;
-                    } else if is_wsdl_element(&doc, t2)? && !doc.node_is(t2, Some("documentation"), None) {
-                        bail!("Parsing WSDL: Unexpected WSDL element <{}>", lossy(doc.name(t2)));
+                    } else if is_wsdl_element(&doc, t2)?
+                        && !doc.node_is(t2, Some("documentation"), None)
+                    {
+                        bail!(
+                            "Parsing WSDL: Unexpected WSDL element <{}>",
+                            lossy(doc.name(t2))
+                        );
                     }
                 }
             } else if doc.node_is(t, Some("import"), None) {
@@ -217,7 +230,10 @@ impl<'a> LoadCtx<'a> {
                 } else if doc.node_is(t, Some("documentation"), None) {
                     continue;
                 } else {
-                    bail!("Parsing WSDL: Unexpected WSDL element <{}>", lossy(doc.name(t)));
+                    bail!(
+                        "Parsing WSDL: Unexpected WSDL element <{}>",
+                        lossy(doc.name(t))
+                    );
                 };
                 let Some(name) = doc.attr_value(t, "name", None) else {
                     bail!("Parsing WSDL: <{what}> has no name attribute");
@@ -236,13 +252,22 @@ impl<'a> LoadCtx<'a> {
     }
 
     /// `wsdl_soap_binding_header`.
-    fn binding_header(&self, doc: &Doc, header: NodeId, soap_ns: &str, fault: bool) -> SoapResult<HeaderBinding> {
+    fn binding_header(
+        &self,
+        doc: &Doc,
+        header: NodeId,
+        soap_ns: &str,
+        fault: bool,
+    ) -> SoapResult<HeaderBinding> {
         let Some(msg_attr) = doc.attr_value(header, "message", None) else {
             bail!("Parsing WSDL: Missing message attribute for <header>");
         };
         let ctype = after_colon(msg_attr);
         let Some(message) = self.messages.get(&ctype) else {
-            bail!("Parsing WSDL: Missing <message> with name '{}'", lossy(msg_attr));
+            bail!(
+                "Parsing WSDL: Missing <message> with name '{}'",
+                lossy(msg_attr)
+            );
         };
         let Some(part_name) = doc.attr_value(header, "part", None) else {
             bail!("Parsing WSDL: Missing part attribute for <header>");
@@ -255,7 +280,10 @@ impl<'a> LoadCtx<'a> {
             "name",
             part_name,
         ) else {
-            bail!("Parsing WSDL: Missing part '{}' in <message>", lossy(part_name));
+            bail!(
+                "Parsing WSDL: Missing part '{}' in <message>",
+                lossy(part_name)
+            );
         };
         let mut h = HeaderBinding {
             name: lossy(part_name),
@@ -307,7 +335,10 @@ impl<'a> LoadCtx<'a> {
                     };
                     h.headerfaults.get_or_insert_with(ZHash::new).add(&key, hf);
                 } else if is_wsdl_element(doc, t)? && !doc.node_is(t, Some("documentation"), None) {
-                    bail!("Parsing WSDL: Unexpected WSDL element <{}>", lossy(doc.name(t)));
+                    bail!(
+                        "Parsing WSDL: Unexpected WSDL element <{}>",
+                        lossy(doc.name(t))
+                    );
                 }
             }
         }
@@ -363,7 +394,10 @@ impl<'a> LoadCtx<'a> {
                 };
                 binding.headers.get_or_insert_with(ZHash::new).add(&key, h);
             } else if is_wsdl_element(doc, t)? && !doc.node_is(t, Some("documentation"), None) {
-                bail!("Parsing WSDL: Unexpected WSDL element <{}>", lossy(doc.name(t)));
+                bail!(
+                    "Parsing WSDL: Unexpected WSDL element <{}>",
+                    lossy(doc.name(t))
+                );
             }
         }
         Ok(())
@@ -373,24 +407,36 @@ impl<'a> LoadCtx<'a> {
     fn message(&self, message_name: &[u8]) -> SoapResult<Vec<Param>> {
         let ctype = after_colon(message_name);
         let Some(message) = self.messages.get(&ctype) else {
-            bail!("Parsing WSDL: Missing <message> with name '{}'", lossy(message_name));
+            bail!(
+                "Parsing WSDL: Missing <message> with name '{}'",
+                lossy(message_name)
+            );
         };
         let doc = &message.doc;
         let mut params = Vec::new();
         for t in doc.children(message.node) {
             if let Some(ns) = doc.ns(t) {
                 if ns.href != WSDL_NAMESPACE.as_bytes() {
-                    bail!("Parsing WSDL: Unexpected extensibility element <{}>", lossy(doc.name(t)));
+                    bail!(
+                        "Parsing WSDL: Unexpected extensibility element <{}>",
+                        lossy(doc.name(t))
+                    );
                 }
             }
             if doc.node_is(t, Some("documentation"), None) {
                 continue;
             }
             if !doc.node_is(t, Some("part"), None) {
-                bail!("Parsing WSDL: Unexpected WSDL element <{}>", lossy(doc.name(t)));
+                bail!(
+                    "Parsing WSDL: Unexpected WSDL element <{}>",
+                    lossy(doc.name(t))
+                );
             }
             let Some(name) = doc.attr_value(t, "name", None) else {
-                bail!("Parsing WSDL: No name associated with <part> '{}'", lossy(doc.name(message.node)));
+                bail!(
+                    "Parsing WSDL: No name associated with <part> '{}'",
+                    lossy(doc.name(message.node))
+                );
             };
             let mut p = Param {
                 order: 0,
@@ -428,7 +474,10 @@ impl<'a> LoadCtx<'a> {
                     continue;
                 }
                 if !doc.node_is(port, Some("port"), None) {
-                    bail!("Parsing WSDL: Unexpected WSDL element <{}>", lossy(doc.name(port)));
+                    bail!(
+                        "Parsing WSDL: Unexpected WSDL element <{}>",
+                        lossy(doc.name(port))
+                    );
                 }
                 let Some(binding_attr) = doc.attr_value(port, "binding", None) else {
                     bail!("Parsing WSDL: No binding associated with <port>");
@@ -464,7 +513,10 @@ impl<'a> LoadCtx<'a> {
                         && is_wsdl_element(&doc, t2)?
                         && !doc.node_is(t2, Some("documentation"), None)
                     {
-                        bail!("Parsing WSDL: Unexpected WSDL element <{}>", lossy(doc.name(t2)));
+                        bail!(
+                            "Parsing WSDL: Unexpected WSDL element <{}>",
+                            lossy(doc.name(t2))
+                        );
                     }
                 }
                 if address.is_none() || btype == BindingType::Http {
@@ -491,7 +543,9 @@ impl<'a> LoadCtx<'a> {
                         style: SOAP_DOCUMENT,
                         transport_http: false,
                     };
-                    if let Some(node) = bdoc.get_node(bdoc.first_child(binding.node), "binding", Some(soap_ns_str)) {
+                    if let Some(node) =
+                        bdoc.get_node(bdoc.first_child(binding.node), "binding", Some(soap_ns_str))
+                    {
                         if bdoc.attr_value(node, "style", None) == Some(b"rpc") {
                             sb.style = SOAP_RPC;
                         }
@@ -527,21 +581,27 @@ impl<'a> LoadCtx<'a> {
                 let mut t2 = bdoc.first_child(binding.node);
                 while let Some(operation) = t2 {
                     t2 = bdoc.next(operation);
-                    if (btype == BindingType::Soap && bdoc.node_is(operation, Some("binding"), Some(soap_ns_str)))
+                    if (btype == BindingType::Soap
+                        && bdoc.node_is(operation, Some("binding"), Some(soap_ns_str)))
                         || !is_wsdl_element(&bdoc, operation)?
                         || bdoc.node_is(operation, Some("documentation"), None)
                     {
                         continue;
                     }
                     if !bdoc.node_is(operation, Some("operation"), None) {
-                        bail!("Parsing WSDL: Unexpected WSDL element <{}>", lossy(bdoc.name(operation)));
+                        bail!(
+                            "Parsing WSDL: Unexpected WSDL element <{}>",
+                            lossy(bdoc.name(operation))
+                        );
                     }
                     let Some(op_name) = bdoc.attr_value(operation, "name", None) else {
                         bail!("Parsing WSDL: Missing 'name' attribute for <operation>");
                     };
                     let op_name = op_name.to_vec();
                     for t3 in bdoc.children(operation) {
-                        if btype == BindingType::Soap && bdoc.node_is(t3, Some("operation"), Some(soap_ns_str)) {
+                        if btype == BindingType::Soap
+                            && bdoc.node_is(t3, Some("operation"), Some(soap_ns_str))
+                        {
                             continue;
                         }
                         if is_wsdl_element(&bdoc, t3)?
@@ -550,7 +610,10 @@ impl<'a> LoadCtx<'a> {
                             && !bdoc.node_is(t3, Some("fault"), None)
                             && !bdoc.node_is(t3, Some("documentation"), None)
                         {
-                            bail!("Parsing WSDL: Unexpected WSDL element <{}>", lossy(bdoc.name(t3)));
+                            bail!(
+                                "Parsing WSDL: Unexpected WSDL element <{}>",
+                                lossy(bdoc.name(t3))
+                            );
                         }
                     }
                     let pdoc = Rc::clone(&port_type.doc);
@@ -561,7 +624,10 @@ impl<'a> LoadCtx<'a> {
                         "name",
                         &op_name,
                     ) else {
-                        bail!("Parsing WSDL: Missing <portType>/<operation> with name '{}'", lossy(&op_name));
+                        bail!(
+                            "Parsing WSDL: Missing <portType>/<operation> with name '{}'",
+                            lossy(&op_name)
+                        );
                     };
                     let fname = lossy(&op_name);
                     let mut function = Function {
@@ -581,7 +647,11 @@ impl<'a> LoadCtx<'a> {
                             input: BodyBinding::default(),
                             output: BodyBinding::default(),
                         };
-                        if let Some(sop) = bdoc.get_node(bdoc.first_child(operation), "operation", Some(soap_ns_str)) {
+                        if let Some(sop) = bdoc.get_node(
+                            bdoc.first_child(operation),
+                            "operation",
+                            Some(soap_ns_str),
+                        ) {
                             if let Some(a) = bdoc.attr_value(sop, "soapAction", None) {
                                 fb.soap_action = Some(lossy(a));
                             }
@@ -593,30 +663,54 @@ impl<'a> LoadCtx<'a> {
                         }
                         function.soap = Some(fb);
                     }
-                    if let Some(input) = pdoc.get_node(pdoc.first_child(pt_op), "input", Some(WSDL_NAMESPACE)) {
+                    if let Some(input) =
+                        pdoc.get_node(pdoc.first_child(pt_op), "input", Some(WSDL_NAMESPACE))
+                    {
                         let Some(message) = pdoc.attr_value(input, "message", None) else {
                             bail!("Parsing WSDL: Missing name for <input> of '{fname}'");
                         };
                         function.request_params = Some(self.message(message)?);
                         function.request_name = Some(fname.clone());
                         if btype == BindingType::Soap {
-                            if let Some(binput) = bdoc.get_node(bdoc.first_child(operation), "input", Some(WSDL_NAMESPACE)) {
+                            if let Some(binput) = bdoc.get_node(
+                                bdoc.first_child(operation),
+                                "input",
+                                Some(WSDL_NAMESPACE),
+                            ) {
                                 if let Some(fb) = function.soap.as_mut() {
-                                    self.binding_body(&bdoc, binput, soap_ns_str, &mut fb.input, &mut function.request_params)?;
+                                    self.binding_body(
+                                        &bdoc,
+                                        binput,
+                                        soap_ns_str,
+                                        &mut fb.input,
+                                        &mut function.request_params,
+                                    )?;
                                 }
                             }
                         }
                     }
-                    if let Some(output) = pdoc.get_node(pdoc.first_child(pt_op), "output", Some(WSDL_NAMESPACE)) {
+                    if let Some(output) =
+                        pdoc.get_node(pdoc.first_child(pt_op), "output", Some(WSDL_NAMESPACE))
+                    {
                         let Some(message) = pdoc.attr_value(output, "message", None) else {
                             bail!("Parsing WSDL: Missing name for <output> of '{fname}'");
                         };
                         function.response_params = Some(self.message(message)?);
                         function.response_name = Some(format!("{fname}Response"));
                         if btype == BindingType::Soap {
-                            if let Some(boutput) = bdoc.get_node(bdoc.first_child(operation), "output", Some(WSDL_NAMESPACE)) {
+                            if let Some(boutput) = bdoc.get_node(
+                                bdoc.first_child(operation),
+                                "output",
+                                Some(WSDL_NAMESPACE),
+                            ) {
                                 if let Some(fb) = function.soap.as_mut() {
-                                    self.binding_body(&bdoc, boutput, soap_ns_str, &mut fb.output, &mut function.response_params)?;
+                                    self.binding_body(
+                                        &bdoc,
+                                        boutput,
+                                        soap_ns_str,
+                                        &mut fb.output,
+                                        &mut function.response_params,
+                                    )?;
                                 }
                             }
                         }
@@ -633,7 +727,10 @@ impl<'a> LoadCtx<'a> {
                         };
                         let details = self.message(message)?;
                         if details.len() > 1 {
-                            bail!("Parsing WSDL: The fault message '{}' must have a single part", lossy(message));
+                            bail!(
+                                "Parsing WSDL: The fault message '{}' must have a single part",
+                                lossy(message)
+                            );
                         }
                         let mut f = Fault {
                             name: lossy(fault_name),
@@ -650,33 +747,48 @@ impl<'a> LoadCtx<'a> {
                             ) {
                                 for fnode in bdoc.children(sfault) {
                                     if bdoc.node_is(fnode, Some("fault"), Some(soap_ns_str)) {
-                                        let use_ = if bdoc.attr_value(fnode, "use", None) == Some(b"encoded") {
+                                        let use_ = if bdoc.attr_value(fnode, "use", None)
+                                            == Some(b"encoded")
+                                        {
                                             SOAP_ENCODED
                                         } else {
                                             SOAP_LITERAL
                                         };
                                         let mut fbind = FaultBinding {
-                                            ns: bdoc.attr_value(fnode, "namespace", None).map(lossy),
+                                            ns: bdoc
+                                                .attr_value(fnode, "namespace", None)
+                                                .map(lossy),
                                             use_,
                                             encoding_style: EncodingStyle::Default,
                                         };
                                         if use_ == SOAP_ENCODED {
                                             match bdoc.attr_value(fnode, "encodingStyle", None) {
-                                                Some(es) => fbind.encoding_style = encoding_style(es)?,
-                                                None => bail!("Parsing WSDL: Unspecified encodingStyle"),
+                                                Some(es) => {
+                                                    fbind.encoding_style = encoding_style(es)?;
+                                                }
+                                                None => {
+                                                    bail!("Parsing WSDL: Unspecified encodingStyle")
+                                                }
                                             }
                                         }
                                         f.binding = Some(fbind);
                                     } else if is_wsdl_element(&bdoc, fnode)?
                                         && !bdoc.node_is(fnode, Some("documentation"), None)
                                     {
-                                        bail!("Parsing WSDL: Unexpected WSDL element <{}>", lossy(bdoc.name(fnode)));
+                                        bail!(
+                                            "Parsing WSDL: Unexpected WSDL element <{}>",
+                                            lossy(bdoc.name(fnode))
+                                        );
                                     }
                                 }
                             }
                         }
                         let fname_key = f.name.clone();
-                        if !function.faults.get_or_insert_with(ZHash::new).add(&fname_key, f) {
+                        if !function
+                            .faults
+                            .get_or_insert_with(ZHash::new)
+                            .add(&fname_key, f)
+                        {
                             bail!("Parsing WSDL: <fault> with name '{fname_key}' already defined in '{fname}'");
                         }
                     }
@@ -685,7 +797,10 @@ impl<'a> LoadCtx<'a> {
                         .request_name
                         .as_ref()
                         .is_some_and(|r| *r != function.name);
-                    let req_lc = function.request_name.as_ref().map(|r| r.to_ascii_lowercase());
+                    let req_lc = function
+                        .request_name
+                        .as_ref()
+                        .map(|r| r.to_ascii_lowercase());
                     let index = self.sdl.function_list.len();
                     self.sdl.function_list.push(function);
                     if !self.sdl.functions.add(&lc, index) {
@@ -693,7 +808,10 @@ impl<'a> LoadCtx<'a> {
                     }
                     if req_differs {
                         if let Some(r) = req_lc {
-                            self.sdl.requests.get_or_insert_with(ZHash::new).add(&r, index);
+                            self.sdl
+                                .requests
+                                .get_or_insert_with(ZHash::new)
+                                .add(&r, index);
                         }
                     }
                 }

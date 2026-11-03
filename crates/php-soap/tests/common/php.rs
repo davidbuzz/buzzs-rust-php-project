@@ -37,9 +37,10 @@ enum Part {
 }
 
 const OPS: &[&str] = &[
-    "<<=", ">>=", "**=", "...", "<=>", "===", "!==", "??=", "?->", "->", "=>", "::", "==", "!=", "<>", "<=", ">=", "&&", "||",
-    "++", "--", ".=", "+=", "-=", "*=", "/=", "%=", "??", "<<", ">>", "**", ";", ",", "(", ")", "{", "}", "[", "]", "=",
-    ".", "+", "-", "*", "/", "%", "!", "<", ">", "?", ":", "@", "&", "|", "^", "~",
+    "<<=", ">>=", "**=", "...", "<=>", "===", "!==", "??=", "?->", "->", "=>", "::", "==", "!=",
+    "<>", "<=", ">=", "&&", "||", "++", "--", ".=", "+=", "-=", "*=", "/=", "%=", "??", "<<", ">>",
+    "**", ";", ",", "(", ")", "{", "}", "[", "]", "=", ".", "+", "-", "*", "/", "%", "!", "<", ">",
+    "?", ":", "@", "&", "|", "^", "~",
 ];
 
 struct Lexer<'a> {
@@ -58,7 +59,11 @@ fn is_id(c: u8) -> bool {
 
 impl<'a> Lexer<'a> {
     fn lex(src: &'a [u8]) -> Vec<T> {
-        let mut l = Lexer { s: src, i: 0, out: Vec::new() };
+        let mut l = Lexer {
+            s: src,
+            i: 0,
+            out: Vec::new(),
+        };
         l.run();
         l.out
     }
@@ -68,26 +73,23 @@ impl<'a> Lexer<'a> {
         loop {
             let rest = &self.s[self.i..];
             let open = find(rest, b"<?php").or_else(|| find(rest, b"<?="));
-            match open {
-                Some(p) => {
-                    if p > 0 {
-                        self.out.push(T::Html(rest[..p].to_vec()));
-                    }
-                    let is_echo = rest[p..].starts_with(b"<?=");
-                    self.i += p + if is_echo { 3 } else { 5 };
-                    if is_echo {
-                        self.out.push(T::Id("echo".into()));
-                    }
-                    if !self.code() {
-                        return;
-                    }
+            if let Some(p) = open {
+                if p > 0 {
+                    self.out.push(T::Html(rest[..p].to_vec()));
                 }
-                None => {
-                    if !rest.is_empty() {
-                        self.out.push(T::Html(rest.to_vec()));
-                    }
+                let is_echo = rest[p..].starts_with(b"<?=");
+                self.i += p + if is_echo { 3 } else { 5 };
+                if is_echo {
+                    self.out.push(T::Id("echo".into()));
+                }
+                if !self.code() {
                     return;
                 }
+            } else {
+                if !rest.is_empty() {
+                    self.out.push(T::Html(rest.to_vec()));
+                }
+                return;
             }
         }
     }
@@ -139,7 +141,9 @@ impl<'a> Lexer<'a> {
                 while self.i < self.s.len() && is_id(self.s[self.i]) && self.s[self.i] != b'\\' {
                     self.i += 1;
                 }
-                self.out.push(T::Var(String::from_utf8_lossy(&self.s[start..self.i]).into_owned()));
+                self.out.push(T::Var(
+                    String::from_utf8_lossy(&self.s[start..self.i]).into_owned(),
+                ));
             } else if is_id_start(c) {
                 let start = self.i;
                 while self.i < self.s.len() && is_id(self.s[self.i]) {
@@ -147,13 +151,17 @@ impl<'a> Lexer<'a> {
                 }
                 let id = String::from_utf8_lossy(&self.s[start..self.i]).into_owned();
                 self.out.push(T::Id(id.trim_start_matches('\\').to_owned()));
-            } else if c.is_ascii_digit() || (c == b'.' && self.s.get(self.i + 1).is_some_and(u8::is_ascii_digit)) {
+            } else if c.is_ascii_digit()
+                || (c == b'.' && self.s.get(self.i + 1).is_some_and(u8::is_ascii_digit))
+            {
                 self.number();
             } else if c == b'\'' {
                 self.i += 1;
                 let mut v = Vec::new();
                 while self.i < self.s.len() && self.s[self.i] != b'\'' {
-                    if self.s[self.i] == b'\\' && matches!(self.s.get(self.i + 1), Some(b'\'' | b'\\')) {
+                    if self.s[self.i] == b'\\'
+                        && matches!(self.s.get(self.i + 1), Some(b'\'' | b'\\'))
+                    {
                         self.i += 1;
                     }
                     v.push(self.s[self.i]);
@@ -172,8 +180,15 @@ impl<'a> Lexer<'a> {
                 // casts
                 if *op == "(" {
                     if let Some(close) = rest.iter().position(|&x| x == b')') {
-                        let inner: String = String::from_utf8_lossy(&rest[1..close]).trim().to_ascii_lowercase();
-                        if ["object", "array", "string", "int", "integer", "float", "double", "bool", "boolean"].contains(&inner.as_str()) {
+                        let inner: String = String::from_utf8_lossy(&rest[1..close])
+                            .trim()
+                            .to_ascii_lowercase();
+                        if [
+                            "object", "array", "string", "int", "integer", "float", "double",
+                            "bool", "boolean",
+                        ]
+                        .contains(&inner.as_str())
+                        {
                             self.out.push(T::Op("(cast"));
                             self.out.push(T::Id(inner));
                             self.i += close + 1;
@@ -201,7 +216,9 @@ impl<'a> Lexer<'a> {
             let t: String = String::from_utf8_lossy(&s[start + 2..self.i]).replace('_', "");
             match i64::from_str_radix(&t, 16) {
                 Ok(v) => self.out.push(T::Int(v)),
-                Err(_) => self.out.push(T::Float(u64::from_str_radix(&t, 16).map_or(0.0, |v| v as f64))),
+                Err(_) => self.out.push(T::Float(
+                    u64::from_str_radix(&t, 16).map_or(0.0, |v| v as f64),
+                )),
             }
             return;
         }
@@ -210,10 +227,17 @@ impl<'a> Lexer<'a> {
             let c = s[self.i];
             if c.is_ascii_digit() || c == b'_' {
                 self.i += 1;
-            } else if c == b'.' && !is_float && s.get(self.i + 1).is_none_or(|n| n.is_ascii_digit() || !is_id_start(*n)) {
+            } else if c == b'.'
+                && !is_float
+                && s.get(self.i + 1)
+                    .is_none_or(|n| n.is_ascii_digit() || !is_id_start(*n))
+            {
                 is_float = true;
                 self.i += 1;
-            } else if (c == b'e' || c == b'E') && s.get(self.i + 1).is_some_and(|n| n.is_ascii_digit() || *n == b'-' || *n == b'+') {
+            } else if (c == b'e' || c == b'E')
+                && s.get(self.i + 1)
+                    .is_some_and(|n| n.is_ascii_digit() || *n == b'-' || *n == b'+')
+            {
                 is_float = true;
                 self.i += 2;
             } else {
@@ -268,7 +292,10 @@ impl<'a> Lexer<'a> {
                 return;
             }
             b'u' if s.get(self.i + 1) == Some(&b'{') => {
-                let end = s[self.i..].iter().position(|&x| x == b'}').map_or(s.len(), |p| self.i + p);
+                let end = s[self.i..]
+                    .iter()
+                    .position(|&x| x == b'}')
+                    .map_or(s.len(), |p| self.i + p);
                 let hex = String::from_utf8_lossy(&s[self.i + 2..end]).into_owned();
                 if let Some(ch) = u32::from_str_radix(&hex, 16).ok().and_then(char::from_u32) {
                     let mut b = [0u8; 4];
@@ -300,7 +327,10 @@ impl<'a> Lexer<'a> {
                     continue;
                 }
                 self.escape(&mut lit);
-            } else if c == b'$' && s.get(self.i + 1).is_some_and(|&n| is_id_start(n) && n != b'\\') {
+            } else if c == b'$'
+                && s.get(self.i + 1)
+                    .is_some_and(|&n| is_id_start(n) && n != b'\\')
+            {
                 if !lit.is_empty() {
                     parts.push(Part::Lit(std::mem::take(&mut lit)));
                 }
@@ -309,7 +339,9 @@ impl<'a> Lexer<'a> {
                 while self.i < s.len() && is_id(s[self.i]) && s[self.i] != b'\\' {
                     self.i += 1;
                 }
-                if s[self.i..].starts_with(b"->") && s.get(self.i + 2).is_some_and(|&n| is_id_start(n)) {
+                if s[self.i..].starts_with(b"->")
+                    && s.get(self.i + 2).is_some_and(|&n| is_id_start(n))
+                {
                     self.i += 2;
                     while self.i < s.len() && is_id(s[self.i]) && s[self.i] != b'\\' {
                         self.i += 1;
@@ -392,11 +424,19 @@ impl<'a> Lexer<'a> {
         let body_start = self.i;
         let mut pos = body_start;
         let (body_end, indent, after) = loop {
-            let line_end = s[pos..].iter().position(|&c| c == b'\n').map_or(s.len(), |p| pos + p);
+            let line_end = s[pos..]
+                .iter()
+                .position(|&c| c == b'\n')
+                .map_or(s.len(), |p| pos + p);
             let line = &s[pos..line_end];
-            let trimmed_start = line.iter().position(|&c| c != b' ' && c != b'\t').unwrap_or(line.len());
+            let trimmed_start = line
+                .iter()
+                .position(|&c| c != b' ' && c != b'\t')
+                .unwrap_or(line.len());
             if line[trimmed_start..].starts_with(&label)
-                && line.get(trimmed_start + label.len()).is_none_or(|c| !is_id(*c))
+                && line
+                    .get(trimmed_start + label.len())
+                    .is_none_or(|c| !is_id(*c))
             {
                 break (pos, trimmed_start, pos + trimmed_start + label.len());
             }
@@ -405,7 +445,11 @@ impl<'a> Lexer<'a> {
             }
             pos = line_end + 1;
         };
-        let raw_end = if body_end > body_start { body_end - 1 } else { body_start };
+        let raw_end = if body_end > body_start {
+            body_end - 1
+        } else {
+            body_start
+        };
         let body: Vec<u8> = s[body_start..raw_end].to_vec();
         // remove indentation
         let body: Vec<u8> = if indent > 0 {
@@ -414,7 +458,11 @@ impl<'a> Lexer<'a> {
                 if n > 0 {
                     out.push(b'\n');
                 }
-                let cut = line.iter().take(indent).take_while(|c| **c == b' ' || **c == b'\t').count();
+                let cut = line
+                    .iter()
+                    .take(indent)
+                    .take_while(|c| **c == b' ' || **c == b'\t')
+                    .count();
                 out.extend_from_slice(&line[cut..]);
             }
             out
@@ -425,7 +473,11 @@ impl<'a> Lexer<'a> {
         if nowdoc {
             self.out.push(T::Str(body));
         } else {
-            let mut sub = Lexer { s: &body, i: 0, out: Vec::new() };
+            let mut sub = Lexer {
+                s: &body,
+                i: 0,
+                out: Vec::new(),
+            };
             let parts = sub.interp(|_, _| false, false);
             self.out.push(T::IStr(parts));
         }
@@ -433,7 +485,11 @@ impl<'a> Lexer<'a> {
 }
 
 fn lex_code(code: &[u8]) -> Vec<T> {
-    let mut l = Lexer { s: code, i: 0, out: Vec::new() };
+    let mut l = Lexer {
+        s: code,
+        i: 0,
+        out: Vec::new(),
+    };
     l.code();
     l.out
 }
@@ -534,7 +590,11 @@ enum S {
     DoWhile(Vec<S>, E),
     For(Vec<E>, Vec<E>, Vec<E>, Vec<S>),
     Foreach(E, Option<E>, E, bool, Vec<S>),
-    Try(Vec<S>, Vec<(Vec<String>, Option<String>, Vec<S>)>, Option<Vec<S>>),
+    Try(
+        Vec<S>,
+        Vec<(Vec<String>, Option<String>, Vec<S>)>,
+        Option<Vec<S>>,
+    ),
     Class(Rc<ClassDecl>),
     Func(Rc<Func>),
     Global(Vec<String>),
@@ -588,7 +648,11 @@ impl Parser {
         if self.eat_op(o) {
             Ok(())
         } else {
-            Err(format!("expected '{o}' at token {} got {:?}", self.i, self.peek()))
+            Err(format!(
+                "expected '{o}' at token {} got {:?}",
+                self.i,
+                self.peek()
+            ))
         }
     }
     fn ident(&mut self) -> PResult<String> {
@@ -623,10 +687,20 @@ impl Parser {
         } else if self.eat_op(":") {
             // alternative syntax
             let mut out = Vec::new();
-            while !(self.is_id("endif") || self.is_id("endforeach") || self.is_id("endwhile") || self.is_id("endfor") || self.is_id("else") || self.is_id("elseif")) {
+            while !(self.is_id("endif")
+                || self.is_id("endforeach")
+                || self.is_id("endwhile")
+                || self.is_id("endfor")
+                || self.is_id("else")
+                || self.is_id("elseif"))
+            {
                 out.push(self.stmt()?);
             }
-            if self.is_id("endif") || self.is_id("endforeach") || self.is_id("endwhile") || self.is_id("endfor") {
+            if self.is_id("endif")
+                || self.is_id("endforeach")
+                || self.is_id("endwhile")
+                || self.is_id("endfor")
+            {
                 self.i += 1;
                 self.eat_op(";");
             }
@@ -686,7 +760,9 @@ impl Parser {
                                 let c = self.expr()?;
                                 self.expect(")")?;
                                 arms.push((c, self.block()?));
-                            } else if self.is_id("else") && matches!(self.peek_at(1), Some(T::Id(x)) if x.eq_ignore_ascii_case("if")) {
+                            } else if self.is_id("else")
+                                && matches!(self.peek_at(1), Some(T::Id(x)) if x.eq_ignore_ascii_case("if"))
+                            {
                                 self.i += 2;
                                 self.expect("(")?;
                                 let c = self.expr()?;
@@ -780,7 +856,8 @@ impl Parser {
                         }
                         Ok(S::Try(body, catches, fin))
                     }
-                    "abstract" | "final" | "readonly" if matches!(self.peek_at(1), Some(T::Id(x)) if x.eq_ignore_ascii_case("class")) => {
+                    "abstract" | "final" | "readonly" if matches!(self.peek_at(1), Some(T::Id(x)) if x.eq_ignore_ascii_case("class")) =>
+                    {
                         self.i += 1;
                         self.stmt()
                     }
@@ -792,7 +869,11 @@ impl Parser {
                         self.i += 1;
                         Ok(S::Class(Rc::new(self.class_decl()?)))
                     }
-                    "function" if matches!(self.peek_at(1), Some(T::Id(_))) || (matches!(self.peek_at(1), Some(T::Op("&"))) && matches!(self.peek_at(2), Some(T::Id(_)))) => {
+                    "function"
+                        if matches!(self.peek_at(1), Some(T::Id(_)))
+                            || (matches!(self.peek_at(1), Some(T::Op("&")))
+                                && matches!(self.peek_at(2), Some(T::Id(_)))) =>
+                    {
                         self.i += 1;
                         self.eat_op("&");
                         let name = self.ident()?;
@@ -816,7 +897,11 @@ impl Parser {
                         let mut v = Vec::new();
                         while let Some(T::Var(n)) = self.peek().cloned() {
                             self.i += 1;
-                            let d = if self.eat_op("=") { Some(self.expr()?) } else { None };
+                            let d = if self.eat_op("=") {
+                                Some(self.expr()?)
+                            } else {
+                                None
+                            };
                             v.push((n, d));
                             if !self.eat_op(",") {
                                 break;
@@ -886,7 +971,7 @@ impl Parser {
                 }
             }
             // type
-            while !matches!(self.peek(), Some(T::Var(_)) | Some(T::Op("&")) | Some(T::Op("..."))) {
+            while !matches!(self.peek(), Some(T::Var(_) | T::Op("&" | "..."))) {
                 if self.peek().is_none() {
                     return Err("bad param".into());
                 }
@@ -898,7 +983,11 @@ impl Parser {
                 return Err("param name".into());
             };
             self.i += 1;
-            let default = if self.eat_op("=") { Some(self.expr()?) } else { None };
+            let default = if self.eat_op("=") {
+                Some(self.expr()?)
+            } else {
+                None
+            };
             out.push(Param {
                 name,
                 default,
@@ -976,7 +1065,14 @@ impl Parser {
         while !self.eat_op("}") {
             let mut is_static = false;
             loop {
-                if self.eat_id("public") || self.eat_id("private") || self.eat_id("protected") || self.eat_id("var") || self.eat_id("abstract") || self.eat_id("final") || self.eat_id("readonly") {
+                if self.eat_id("public")
+                    || self.eat_id("private")
+                    || self.eat_id("protected")
+                    || self.eat_id("var")
+                    || self.eat_id("abstract")
+                    || self.eat_id("final")
+                    || self.eat_id("readonly")
+                {
                 } else if self.eat_id("static") {
                     is_static = true;
                 } else {
@@ -991,7 +1087,11 @@ impl Parser {
             }
             if self.eat_id("const") || self.eat_id("case") {
                 let n = self.ident()?;
-                let v = if self.eat_op("=") { self.expr()? } else { E::Lit(Value::Null) };
+                let v = if self.eat_op("=") {
+                    self.expr()?
+                } else {
+                    E::Lit(Value::Null)
+                };
                 self.semi();
                 c.consts.push((n, v));
                 continue;
@@ -1011,7 +1111,11 @@ impl Parser {
             }
             while let Some(T::Var(n)) = self.peek().cloned() {
                 self.i += 1;
-                let d = if self.eat_op("=") { Some(self.expr()?) } else { None };
+                let d = if self.eat_op("=") {
+                    Some(self.expr()?)
+                } else {
+                    None
+                };
                 c.props.push((n, d, is_static));
                 if !self.eat_op(",") {
                     break;
@@ -1032,13 +1136,19 @@ impl Parser {
             }
             let spread = self.eat_op("...");
             let mut name = None;
-            if let (Some(T::Id(n)), Some(T::Op(":"))) = (self.peek().cloned(), self.peek_at(1).cloned()) {
+            if let (Some(T::Id(n)), Some(T::Op(":"))) =
+                (self.peek().cloned(), self.peek_at(1).cloned())
+            {
                 if !matches!(self.peek_at(2), Some(T::Op(":"))) {
                     name = Some(n);
                     self.i += 2;
                 }
             }
-            out.push(Arg { e: self.expr()?, spread, name });
+            out.push(Arg {
+                e: self.expr()?,
+                spread,
+                name,
+            });
             self.eat_op(",");
         }
         self.i += 1;
@@ -1158,16 +1268,25 @@ impl Parser {
                 self.postfix_noncall()?
             } else if self.is_id("class") {
                 self.i += 1;
-                let args = if self.is_op("(") { self.args()? } else { Vec::new() };
+                let args = if self.is_op("(") {
+                    self.args()?
+                } else {
+                    Vec::new()
+                };
                 let c = self.class_decl_anon()?;
-                return Ok(E::New(Box::new(E::Lit(Value::from(c.name.as_str()))), args)).map(|e| {
-                    ANON.with(|a| a.borrow_mut().push(c));
-                    e
-                });
+                return Ok(E::New(Box::new(E::Lit(Value::from(c.name.as_str()))), args)).inspect(
+                    |_e| {
+                        ANON.with(|a| a.borrow_mut().push(c));
+                    },
+                );
             } else {
                 E::Lit(Value::from(self.ident()?.as_str()))
             };
-            let args = if self.is_op("(") { self.args()? } else { Vec::new() };
+            let args = if self.is_op("(") {
+                self.args()?
+            } else {
+                Vec::new()
+            };
             let e = E::New(Box::new(class), args);
             return self.postfix_ops(e);
         }
@@ -1180,7 +1299,11 @@ impl Parser {
         if self.eat_id("throw") {
             return Ok(E::Throw(Box::new(self.assignment()?)));
         }
-        if self.is_id("include") || self.is_id("require") || self.is_id("include_once") || self.is_id("require_once") {
+        if self.is_id("include")
+            || self.is_id("require")
+            || self.is_id("include_once")
+            || self.is_id("require_once")
+        {
             self.i += 1;
             return Ok(E::Include(Box::new(self.assignment()?)));
         }
@@ -1223,7 +1346,11 @@ impl Parser {
                 let name = self.member_name()?;
                 e = E::Prop(Box::new(e), Box::new(name));
             } else if self.eat_op("[") {
-                let idx = if self.is_op("]") { None } else { Some(Box::new(self.expr()?)) };
+                let idx = if self.is_op("]") {
+                    None
+                } else {
+                    Some(Box::new(self.expr()?))
+                };
                 self.expect("]")?;
                 e = E::Index(Box::new(e), idx);
             } else {
@@ -1270,21 +1397,37 @@ impl Parser {
                     e = E::Prop(Box::new(e), Box::new(name));
                 }
             } else if self.eat_op("[") {
-                let idx = if self.is_op("]") { None } else { Some(Box::new(self.expr()?)) };
+                let idx = if self.is_op("]") {
+                    None
+                } else {
+                    Some(Box::new(self.expr()?))
+                };
                 self.expect("]")?;
                 e = E::Index(Box::new(e), idx);
             } else if self.eat_op("{") {
                 let idx = self.expr()?;
                 self.expect("}")?;
                 e = E::Index(Box::new(e), Some(Box::new(idx)));
-            } else if self.is_op("(") && matches!(e, E::Var(_) | E::Index(..) | E::Prop(..) | E::Closure(_) | E::CallExpr(..)) {
+            } else if self.is_op("(")
+                && matches!(
+                    e,
+                    E::Var(_) | E::Index(..) | E::Prop(..) | E::Closure(_) | E::CallExpr(..)
+                )
+            {
                 let args = self.args()?;
                 e = E::CallExpr(Box::new(e), args);
             } else if self.is_op("::") && matches!(e, E::Var(_)) {
                 self.i += 1;
                 let m = self.ident()?;
                 if m.eq_ignore_ascii_case("class") {
-                    e = E::Call("get_class".into(), vec![Arg { e, spread: false, name: None }]);
+                    e = E::Call(
+                        "get_class".into(),
+                        vec![Arg {
+                            e,
+                            spread: false,
+                            name: None,
+                        }],
+                    );
                 } else if self.is_op("(") {
                     let args = self.args()?;
                     e = E::MCall(Box::new(e), Box::new(E::Lit(Value::from(m.as_str()))), args);
@@ -1408,7 +1551,9 @@ impl Parser {
                                 uses: vec![("*".into(), false)],
                             })));
                         }
-                        return Ok(E::Closure(Rc::new(self.func_rest("{closure}".into(), false)?)));
+                        return Ok(E::Closure(Rc::new(
+                            self.func_rest("{closure}".into(), false)?,
+                        )));
                     }
                     "static" if self.is_id("function") || self.is_id("fn") => {
                         return self.primary();
@@ -1514,14 +1659,26 @@ fn get_var(h: &mut TestHost, f: &Frame, n: &str) -> Value {
         return f.this.clone().map(Value::Object).unwrap_or_default();
     }
     if n == "GLOBALS" {
-        return Value::Array(ZArray::from_pairs(h.globals.iter().map(|(k, v)| (ArrayKey::from_bytes(k.as_bytes()), v.clone()))));
+        return Value::Array(ZArray::from_pairs(
+            h.globals
+                .iter()
+                .map(|(k, v)| (ArrayKey::from_bytes(k.as_bytes()), v.clone())),
+        ));
     }
-    let v = if is_global_var(f, n) { h.globals.get(n).cloned() } else { f.vars.get(n).cloned() };
+    let v = if is_global_var(f, n) {
+        h.globals.get(n).cloned()
+    } else {
+        f.vars.get(n).cloned()
+    };
     v.unwrap_or_default()
 }
 
 fn set_var(h: &mut TestHost, f: &mut Frame, n: &str, v: Value) {
-    let slot = if is_global_var(f, n) { h.globals.entry(n.to_owned()).or_default() } else { f.vars.entry(n.to_owned()).or_default() };
+    let slot = if is_global_var(f, n) {
+        h.globals.entry(n.to_owned()).or_default()
+    } else {
+        f.vars.entry(n.to_owned()).or_default()
+    };
     if let Value::Reference(r) = slot {
         r.set(v.deref());
     } else {
@@ -1577,9 +1734,14 @@ fn hoist(h: &mut TestHost, prog: &[S]) {
 }
 
 fn declare_function(h: &mut TestHost, f: &Rc<Func>) {
-    h.param_names.insert(f.name.to_ascii_lowercase(), f.params.iter().map(|p| p.name.clone()).collect());
+    h.param_names.insert(
+        f.name.to_ascii_lowercase(),
+        f.params.iter().map(|p| p.name.clone()).collect(),
+    );
     let fr = Rc::clone(f);
-    h.add_function(&f.name, move |h, args| call_user(h, &fr, None, None, args, &mut Vec::new()));
+    h.add_function(&f.name, move |h, args| {
+        call_user(h, &fr, None, None, args, &mut Vec::new())
+    });
 }
 
 fn declare_class(h: &mut TestHost, c: &Rc<ClassDecl>) {
@@ -1603,7 +1765,11 @@ fn declare_class(h: &mut TestHost, c: &Rc<ClassDecl>) {
     let mut methods: Vec<(String, MethodFn)> = Vec::new();
     for m in &c.methods {
         h.param_names.insert(
-            format!("{}::{}", c.name.to_ascii_lowercase(), m.name.to_ascii_lowercase()),
+            format!(
+                "{}::{}",
+                c.name.to_ascii_lowercase(),
+                m.name.to_ascii_lowercase()
+            ),
             m.params.iter().map(|p| p.name.clone()).collect(),
         );
         // promoted constructor parameters are declared properties
@@ -1619,7 +1785,11 @@ fn declare_class(h: &mut TestHost, c: &Rc<ClassDecl>) {
         methods.push((
             m.name.clone(),
             Rc::new(move |h: &mut TestHost, this: &Obj, args: &[Value]| {
-                let this_opt = if mr.is_static { None } else { Some(this.clone()) };
+                let this_opt = if mr.is_static {
+                    None
+                } else {
+                    Some(this.clone())
+                };
                 call_user(h, &mr, this_opt, Some(cname.clone()), args, &mut Vec::new())
             }),
         ));
@@ -1627,7 +1797,8 @@ fn declare_class(h: &mut TestHost, c: &Rc<ClassDecl>) {
     for (n, e) in &c.consts {
         let mut fr = Frame::global(PathBuf::new());
         let v = eval(h, &mut fr, e).unwrap_or_default();
-        h.globals.insert(format!("{}::{}", c.name.to_ascii_lowercase(), n), v);
+        h.globals
+            .insert(format!("{}::{}", c.name.to_ascii_lowercase(), n), v);
     }
     h.add_class(UserClass {
         name: c.name.clone(),
@@ -1637,10 +1808,19 @@ fn declare_class(h: &mut TestHost, c: &Rc<ClassDecl>) {
     });
 }
 
-fn call_user(h: &mut TestHost, f: &Func, this: Option<Obj>, class: Option<String>, args: &[Value], out_refs: &mut Vec<(usize, Value)>) -> RtResult<Value> {
+fn call_user(
+    h: &mut TestHost,
+    f: &Func,
+    this: Option<Obj>,
+    class: Option<String>,
+    args: &[Value],
+    out_refs: &mut Vec<(usize, Value)>,
+) -> RtResult<Value> {
     if h.depth > 2000 {
         let bytes = h.memory_limit();
-        return Err(RuntimeError::Fatal(format!("Allowed memory size of {bytes} bytes exhausted (tried to allocate 65536 bytes)")));
+        return Err(RuntimeError::Fatal(format!(
+            "Allowed memory size of {bytes} bytes exhausted (tried to allocate 65536 bytes)"
+        )));
     }
     h.depth += 1;
     let r = call_user_inner(h, f, this, class, args, out_refs);
@@ -1648,7 +1828,14 @@ fn call_user(h: &mut TestHost, f: &Func, this: Option<Obj>, class: Option<String
     r
 }
 
-fn call_user_inner(h: &mut TestHost, f: &Func, this: Option<Obj>, class: Option<String>, args: &[Value], out_refs: &mut Vec<(usize, Value)>) -> RtResult<Value> {
+fn call_user_inner(
+    h: &mut TestHost,
+    f: &Func,
+    this: Option<Obj>,
+    class: Option<String>,
+    args: &[Value],
+    out_refs: &mut Vec<(usize, Value)>,
+) -> RtResult<Value> {
     let mut frame = Frame {
         vars: HashMap::new(),
         globals: Vec::new(),
@@ -1660,26 +1847,33 @@ fn call_user_inner(h: &mut TestHost, f: &Func, this: Option<Obj>, class: Option<
     for (i, p) in f.params.iter().enumerate() {
         if p.variadic {
             let rest: Vec<Value> = args.iter().skip(i).cloned().collect();
-            frame.vars.insert(p.name.clone(), Value::Array(ZArray::from_values(rest)));
+            frame
+                .vars
+                .insert(p.name.clone(), Value::Array(ZArray::from_values(rest)));
             break;
         }
         let v = match args.get(i) {
             Some(v) => v.clone(),
-            None => match &p.default {
-                Some(d) => eval(h, &mut frame, d)?,
-                None => {
+            None => {
+                if let Some(d) = &p.default {
+                    eval(h, &mut frame, d)?
+                } else {
                     let fname = match &frame.class {
                         Some(c) => format!("{c}::{}", f.name),
                         None => f.name.clone(),
                     };
-                    let required = f.params.iter().filter(|p| p.default.is_none() && !p.variadic).count();
+                    let required = f
+                        .params
+                        .iter()
+                        .filter(|p| p.default.is_none() && !p.variadic)
+                        .count();
                     return Err(RuntimeError::ArgumentCountError(format!(
-                        "Too few arguments to function {fname}(), {} passed and {} {required} expected",
-                        args.len(),
-                        if required == f.params.len() { "exactly" } else { "at least" }
-                    )));
+                    "Too few arguments to function {fname}(), {} passed and {} {required} expected",
+                    args.len(),
+                    if required == f.params.len() { "exactly" } else { "at least" }
+                )));
                 }
-            },
+            }
         };
         if p.promote {
             if let Some(t) = &this {
@@ -1793,7 +1987,11 @@ fn exec(h: &mut TestHost, f: &mut Frame, s: &S) -> RtResult<Flow> {
             let sv = eval(h, f, subject)?.deref();
             let pairs: Vec<(Value, Value)> = match &sv {
                 Value::Array(a) => a.iter().map(|(k, v)| (k.to_value(), v.clone())).collect(),
-                Value::Object(o) => h.property_table(o).iter().map(|(k, v)| (k.to_value(), v.clone())).collect(),
+                Value::Object(o) => h
+                    .property_table(o)
+                    .iter()
+                    .map(|(k, v)| (k.to_value(), v.clone()))
+                    .collect(),
                 _ => Vec::new(),
             };
             for (kk, vv) in pairs {
@@ -1817,7 +2015,12 @@ fn exec(h: &mut TestHost, f: &mut Frame, s: &S) -> RtResult<Flow> {
                     if let Some(o) = &exc {
                         let class = o.class_name().to_string_lossy();
                         for (types, var, cbody) in catches {
-                            if types.iter().any(|t| h.is_a(&class, t) || t.eq_ignore_ascii_case("Throwable") || (t.eq_ignore_ascii_case("Exception") && h.is_a(&class, "Exception"))) {
+                            if types.iter().any(|t| {
+                                h.is_a(&class, t)
+                                    || t.eq_ignore_ascii_case("Throwable")
+                                    || (t.eq_ignore_ascii_case("Exception")
+                                        && h.is_a(&class, "Exception"))
+                            }) {
                                 if let Some(var) = var {
                                     set_var(h, f, var, Value::Object(o.clone()));
                                 }
@@ -1920,7 +2123,8 @@ fn assign(h: &mut TestHost, f: &mut Frame, target: &E, v: Value) -> RtResult<()>
             }
         }
         E::SProp(c, n) => {
-            h.globals.insert(format!("{}::${n}", c.to_ascii_lowercase()), v);
+            h.globals
+                .insert(format!("{}::${n}", c.to_ascii_lowercase()), v);
             Ok(())
         }
         E::Index(base, Some(idx)) if matches!(&**base, E::Var(n) if n == "GLOBALS") => {
@@ -1959,7 +2163,10 @@ fn assign(h: &mut TestHost, f: &mut Frame, target: &E, v: Value) -> RtResult<()>
             if let Value::Array(a) = v {
                 for (i, it) in items.iter().enumerate() {
                     if let Some(it) = it {
-                        let val = a.get_int(i64::try_from(i).unwrap_or(0)).cloned().unwrap_or_default();
+                        let val = a
+                            .get_int(i64::try_from(i).unwrap_or(0))
+                            .cloned()
+                            .unwrap_or_default();
                         assign(h, f, it, val)?;
                     }
                 }
@@ -1975,7 +2182,10 @@ fn assign(h: &mut TestHost, f: &mut Frame, target: &E, v: Value) -> RtResult<()>
                             let key = kv.to_array_key(h)?.unwrap_or(ArrayKey::Int(0));
                             a.get(&key).cloned().unwrap_or_default()
                         }
-                        None => a.get_int(i64::try_from(i).unwrap_or(0)).cloned().unwrap_or_default(),
+                        None => a
+                            .get_int(i64::try_from(i).unwrap_or(0))
+                            .cloned()
+                            .unwrap_or_default(),
                     };
                     assign(h, f, it, val)?;
                 }
@@ -1991,11 +2201,18 @@ fn callee_params(h: &TestHost, class: Option<&str>, name: &str) -> Vec<(String, 
     let lc = name.to_ascii_lowercase();
     let mut cur = class.map(str::to_owned);
     while let Some(c) = cur.clone() {
-        if let Some(p) = h.param_names.get(&format!("{}::{lc}", c.to_ascii_lowercase())) {
+        if let Some(p) = h
+            .param_names
+            .get(&format!("{}::{lc}", c.to_ascii_lowercase()))
+        {
             return p.iter().map(|n| (n.clone(), Value::Null)).collect();
         }
         if let Some(def) = php_soap::classes::find_class(&c) {
-            if let Some(m) = def.methods.iter().find(|m| m.name.eq_ignore_ascii_case(name)) {
+            if let Some(m) = def
+                .methods
+                .iter()
+                .find(|m| m.name.eq_ignore_ascii_case(name))
+            {
                 return m
                     .params
                     .iter()
@@ -2012,9 +2229,13 @@ fn callee_params(h: &TestHost, class: Option<&str>, name: &str) -> Vec<(String, 
                     .collect();
             }
         }
-        cur = h.classes.get(&c.to_ascii_lowercase()).and_then(|x| x.parent.clone()).or_else(|| {
-            php_soap::classes::find_class(&c).and_then(|d| d.parent.map(str::to_owned))
-        });
+        cur = h
+            .classes
+            .get(&c.to_ascii_lowercase())
+            .and_then(|x| x.parent.clone())
+            .or_else(|| {
+                php_soap::classes::find_class(&c).and_then(|d| d.parent.map(str::to_owned))
+            });
     }
     if class.is_none() {
         if let Some(p) = h.param_names.get(&lc) {
@@ -2024,7 +2245,13 @@ fn callee_params(h: &TestHost, class: Option<&str>, name: &str) -> Vec<(String, 
     Vec::new()
 }
 
-fn eval_args_for(h: &mut TestHost, f: &mut Frame, args: &[Arg], class: Option<&str>, name: &str) -> RtResult<Vec<Value>> {
+fn eval_args_for(
+    h: &mut TestHost,
+    f: &mut Frame,
+    args: &[Arg],
+    class: Option<&str>,
+    name: &str,
+) -> RtResult<Vec<Value>> {
     if !args.iter().any(|a| a.name.is_some()) {
         return eval_args(h, f, args);
     }
@@ -2048,7 +2275,9 @@ fn eval_args_for(h: &mut TestHost, f: &mut Frame, args: &[Arg], class: Option<&s
     Ok(out
         .into_iter()
         .enumerate()
-        .map(|(i, v)| v.unwrap_or_else(|| params.get(i).map(|(_, d)| d.clone()).unwrap_or_default()))
+        .map(|(i, v)| {
+            v.unwrap_or_else(|| params.get(i).map(|(_, d)| d.clone()).unwrap_or_default())
+        })
         .collect())
 }
 
@@ -2072,7 +2301,10 @@ fn class_of_name(h: &mut TestHost, f: &Frame, name: &str) -> String {
         "self" | "static" => f.class.clone().unwrap_or_default(),
         "parent" => {
             let c = f.class.clone().unwrap_or_default();
-            h.classes.get(&c.to_ascii_lowercase()).and_then(|c| c.parent.clone()).unwrap_or_default()
+            h.classes
+                .get(&c.to_ascii_lowercase())
+                .and_then(|c| c.parent.clone())
+                .unwrap_or_default()
         }
         _ => name.to_owned(),
     }
@@ -2106,12 +2338,18 @@ fn eval(h: &mut TestHost, f: &mut Frame, e: &E) -> RtResult<Value> {
                 Value::from(class_of_name(h, f, c).as_str())
             } else {
                 let cl = class_of_name(h, f, c);
-                h.globals.get(&format!("{}::{}", cl.to_ascii_lowercase(), n)).cloned().unwrap_or_default()
+                h.globals
+                    .get(&format!("{}::{}", cl.to_ascii_lowercase(), n))
+                    .cloned()
+                    .unwrap_or_default()
             }
         }
         E::SProp(c, n) => {
             let cl = class_of_name(h, f, c);
-            h.globals.get(&format!("{}::${n}", cl.to_ascii_lowercase())).cloned().unwrap_or_default()
+            h.globals
+                .get(&format!("{}::${n}", cl.to_ascii_lowercase()))
+                .cloned()
+                .unwrap_or_default()
         }
         E::Array(items) => {
             let mut a = ZArray::new();
@@ -2166,7 +2404,11 @@ fn eval(h: &mut TestHost, f: &mut Frame, e: &E) -> RtResult<Value> {
                 },
                 Value::Str(s) => {
                     let idx = k.to_long(h)?;
-                    let idx = if idx < 0 { i64::try_from(s.len()).unwrap_or(0) + idx } else { idx };
+                    let idx = if idx < 0 {
+                        i64::try_from(s.len()).unwrap_or(0) + idx
+                    } else {
+                        idx
+                    };
                     usize::try_from(idx)
                         .ok()
                         .and_then(|i| s.as_bytes().get(i).copied())
@@ -2177,10 +2419,7 @@ fn eval(h: &mut TestHost, f: &mut Frame, e: &E) -> RtResult<Value> {
         }
         E::Assign(t, v) => {
             let val = eval(h, f, v)?.deref();
-            let val = match val {
-                Value::Array(a) => Value::Array(a),
-                other => other,
-            };
+            let val = val;
             assign(h, f, t, val.clone())?;
             val
         }
@@ -2333,7 +2572,10 @@ fn eval(h: &mut TestHost, f: &mut Frame, e: &E) -> RtResult<Value> {
             let captured: Vec<(String, Value)> = if func.uses.iter().any(|(n, _)| n == "*") {
                 f.vars.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
             } else {
-                func.uses.iter().map(|(n, _)| (n.clone(), get_var(h, f, n))).collect()
+                func.uses
+                    .iter()
+                    .map(|(n, _)| (n.clone(), get_var(h, f, n)))
+                    .collect()
             };
             let this = f.this.clone();
             let class = f.class.clone();
@@ -2341,11 +2583,21 @@ fn eval(h: &mut TestHost, f: &mut Frame, e: &E) -> RtResult<Value> {
                 let mut func2 = (*fr).clone();
                 let mut pre = Vec::new();
                 for (n, v) in &captured {
-                    pre.push(S::Expr(E::Assign(Box::new(E::Var(n.clone())), Box::new(E::Lit(v.clone())))));
+                    pre.push(S::Expr(E::Assign(
+                        Box::new(E::Var(n.clone())),
+                        Box::new(E::Lit(v.clone())),
+                    )));
                 }
                 pre.extend(func2.body);
                 func2.body = pre;
-                call_user(h, &func2, this.clone(), class.clone(), args, &mut Vec::new())
+                call_user(
+                    h,
+                    &func2,
+                    this.clone(),
+                    class.clone(),
+                    args,
+                    &mut Vec::new(),
+                )
             });
             Value::from(name.as_str())
         }
@@ -2404,7 +2656,9 @@ fn eval(h: &mut TestHost, f: &mut Frame, e: &E) -> RtResult<Value> {
             let old = std::mem::replace(&mut h.current_file, path.clone());
             let toks = Lexer::lex(&code);
             let mut parser = Parser { t: toks, i: 0 };
-            let prog = parser.program().map_err(|e| err(format!("parse error in {p}: {e}")))?;
+            let prog = parser
+                .program()
+                .map_err(|e| err(format!("parse error in {p}: {e}")))?;
             hoist(h, &prog);
             let r = exec_block(h, f, &prog);
             h.current_file = old;
@@ -2452,7 +2706,10 @@ fn eval(h: &mut TestHost, f: &mut Frame, e: &E) -> RtResult<Value> {
             };
             let vals = eval_args_for(h, f, args, cls.as_deref(), &name)?;
             let Value::Object(obj) = ov else {
-                return Err(err(format!("Call to a member function {name}() on {}", ov.type_name())));
+                return Err(err(format!(
+                    "Call to a member function {name}() on {}",
+                    ov.type_name()
+                )));
             };
             let mut refs = Vec::new();
             let r = method_call(h, &obj, &name, &vals, &mut refs)?;
@@ -2521,7 +2778,13 @@ fn binop(h: &mut TestHost, op: &str, a: &Value, b: &Value) -> RtResult<Value> {
 
 fn constant(h: &mut TestHost, f: &Frame, c: &str) -> RtResult<Value> {
     Ok(match c {
-        "__DIR__" => Value::from(h.current_file.parent().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default().as_str()),
+        "__DIR__" => Value::from(
+            h.current_file
+                .parent()
+                .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or_default()
+                .as_str(),
+        ),
         "__FILE__" => Value::from(h.current_file.to_string_lossy().as_ref()),
         "__LINE__" => Value::Int(1),
         "__CLASS__" => Value::from(f.class.clone().unwrap_or_default().as_str()),
@@ -2540,7 +2803,10 @@ fn constant(h: &mut TestHost, f: &Frame, c: &str) -> RtResult<Value> {
         "INF" => Value::Float(f64::INFINITY),
         "M_PI" => Value::Float(std::f64::consts::PI),
         _ => {
-            if let Some((_, v)) = php_soap::consts::php_constants().into_iter().find(|(n, _)| *n == c) {
+            if let Some((_, v)) = php_soap::consts::php_constants()
+                .into_iter()
+                .find(|(n, _)| *n == c)
+            {
                 return Ok(v);
             }
             if let Some(v) = h.globals.get(&format!("const::{c}")) {
@@ -2566,7 +2832,12 @@ fn bytes(v: Option<&Value>) -> Option<Vec<u8>> {
 }
 
 /// Instantiates a class (internal constructors for SOAP classes).
-pub fn new_object(h: &mut TestHost, class: &str, args: &[Value], _exprs: &[Arg]) -> RtResult<Value> {
+pub fn new_object(
+    h: &mut TestHost,
+    class: &str,
+    args: &[Value],
+    _exprs: &[Arg],
+) -> RtResult<Value> {
     if !h.class_exists(class) {
         return Err(err(format!("Class \"{class}\" not found")));
     }
@@ -2584,31 +2855,49 @@ pub fn new_object(h: &mut TestHost, class: &str, args: &[Value], _exprs: &[Arg])
 }
 
 /// Dispatches a method call (user methods first, then internal ones).
-pub fn method_call(h: &mut TestHost, obj: &Obj, name: &str, args: &[Value], refs: &mut Vec<(usize, Value)>) -> RtResult<Value> {
+pub fn method_call(
+    h: &mut TestHost,
+    obj: &Obj,
+    name: &str,
+    args: &[Value],
+    refs: &mut Vec<(usize, Value)>,
+) -> RtResult<Value> {
     let class = obj.class_name().to_string_lossy();
     method_call_from(h, obj, &class, name, args, refs)
 }
 
-fn method_call_from(h: &mut TestHost, obj: &Obj, class: &str, name: &str, args: &[Value], refs: &mut Vec<(usize, Value)>) -> RtResult<Value> {
+fn method_call_from(
+    h: &mut TestHost,
+    obj: &Obj,
+    class: &str,
+    name: &str,
+    args: &[Value],
+    refs: &mut Vec<(usize, Value)>,
+) -> RtResult<Value> {
     if let Some(m) = h.find_user_method(class, name) {
         return m(h, obj, args);
     }
-    match internal_method(h, obj, name, args, refs)? {
-        Some(v) => Ok(v),
-        None => {
-            if let Some(m) = h.find_user_method(class, "__call") {
-                let a = ZArray::from_values(args.iter().cloned());
-                return m(h, obj, &[Value::from(name), Value::Array(a)]);
-            }
-            Err(err(format!("Call to undefined method {class}::{name}()")))
+    if let Some(v) = internal_method(h, obj, name, args, refs)? {
+        Ok(v)
+    } else {
+        if let Some(m) = h.find_user_method(class, "__call") {
+            let a = ZArray::from_values(args.iter().cloned());
+            return m(h, obj, &[Value::from(name), Value::Array(a)]);
         }
+        Err(err(format!("Call to undefined method {class}::{name}()")))
     }
 }
 
 /// Internal methods of the SOAP and exception classes; `None` when the
 /// method does not exist.
 #[allow(clippy::too_many_lines)]
-pub fn internal_method(h: &mut TestHost, o: &Obj, name: &str, a: &[Value], refs: &mut Vec<(usize, Value)>) -> RtResult<Option<Value>> {
+pub fn internal_method(
+    h: &mut TestHost,
+    o: &Obj,
+    name: &str,
+    a: &[Value],
+    refs: &mut Vec<(usize, Value)>,
+) -> RtResult<Option<Value>> {
     use php_soap::{client, fault, objects, server};
     let class = o.class_name().to_string_lossy();
     let lc = name.to_ascii_lowercase();
@@ -2636,7 +2925,15 @@ pub fn internal_method(h: &mut TestHost, o: &Obj, name: &str, a: &[Value], refs:
                 };
                 let mut out = Value::Null;
                 let want = a.len() > 4;
-                let r = client::soap_call(h, o, &fname, &args, opts.as_ref(), a.get(3), if want { Some(&mut out) } else { None });
+                let r = client::soap_call(
+                    h,
+                    o,
+                    &fname,
+                    &args,
+                    opts.as_ref(),
+                    a.get(3),
+                    if want { Some(&mut out) } else { None },
+                );
                 if want {
                     refs.push((4, out));
                 }
@@ -2663,7 +2960,12 @@ pub fn internal_method(h: &mut TestHost, o: &Obj, name: &str, a: &[Value], refs:
                 )?
             }
             "__setcookie" => {
-                client::set_cookie(h, o, &bytes(a.first()).unwrap_or_default(), bytes(a.get(1)).as_deref());
+                client::set_cookie(
+                    h,
+                    o,
+                    &bytes(a.first()).unwrap_or_default(),
+                    bytes(a.get(1)).as_deref(),
+                );
                 Value::Null
             }
             "__getcookies" => client::get_cookies(h, o),
@@ -2755,7 +3057,16 @@ pub fn internal_method(h: &mut TestHost, o: &Obj, name: &str, a: &[Value], refs:
     if h.is_a(&class, "SoapFault") && lc == "__construct" {
         let actor = bytes(a.get(2));
         let name = bytes(a.get(4));
-        fault::construct(h, o, a.first().unwrap_or(&Value::Null), &bytes(a.get(1)).unwrap_or_default(), actor.as_deref(), a.get(3), name.as_deref(), a.get(5))?;
+        fault::construct(
+            h,
+            o,
+            a.first().unwrap_or(&Value::Null),
+            &bytes(a.get(1)).unwrap_or_default(),
+            actor.as_deref(),
+            a.get(3),
+            name.as_deref(),
+            a.get(5),
+        )?;
         return Ok(Some(Value::Null));
     }
     if h.is_a(&class, "SoapFault") && lc == "__tostring" {
@@ -2779,7 +3090,12 @@ pub fn internal_method(h: &mut TestHost, o: &Obj, name: &str, a: &[Value], refs:
         return Ok(Some(Value::Null));
     }
     if h.is_a(&class, "SoapParam") && lc == "__construct" {
-        objects::soap_param_construct(h, o, a.first().unwrap_or(&Value::Null), &bytes(a.get(1)).unwrap_or_default())?;
+        objects::soap_param_construct(
+            h,
+            o,
+            a.first().unwrap_or(&Value::Null),
+            &bytes(a.get(1)).unwrap_or_default(),
+        )?;
         return Ok(Some(Value::Null));
     }
     if h.is_a(&class, "SoapHeader") && lc == "__construct" {
@@ -2792,7 +3108,15 @@ pub fn internal_method(h: &mut TestHost, o: &Obj, name: &str, a: &[Value], refs:
             Some(v) => v.to_bool(h)?,
             None => false,
         };
-        objects::soap_header_construct(h, o, &bytes(a.first()).unwrap_or_default(), &bytes(a.get(1)).unwrap_or_default(), a.get(2), mu, actor)?;
+        objects::soap_header_construct(
+            h,
+            o,
+            &bytes(a.first()).unwrap_or_default(),
+            &bytes(a.get(1)).unwrap_or_default(),
+            a.get(2),
+            mu,
+            actor,
+        )?;
         return Ok(Some(Value::Null));
     }
     if h.is_a(&class, "Exception") || h.is_a(&class, "Error") {
@@ -2816,7 +3140,13 @@ pub fn internal_method(h: &mut TestHost, o: &Obj, name: &str, a: &[Value], refs:
             "__tostring" => {
                 let m = h.read_slot(o, "message").unwrap_or_default();
                 let m = to_str(h, &m)?;
-                Value::from(format!("{class}: {} in %s:%d\nStack trace:\n#0 {{main}}", String::from_utf8_lossy(&m)).as_str())
+                Value::from(
+                    format!(
+                        "{class}: {} in %s:%d\nStack trace:\n#0 {{main}}",
+                        String::from_utf8_lossy(&m)
+                    )
+                    .as_str(),
+                )
             }
             _ => return Ok(None),
         };
@@ -2830,10 +3160,19 @@ pub fn internal_method(h: &mut TestHost, o: &Obj, name: &str, a: &[Value], refs:
 
 /// Builtin functions; `None` when unknown.
 #[allow(clippy::too_many_lines)]
-fn builtin(h: &mut TestHost, f: &mut Frame, name: &str, a: &[Value], exprs: &[Arg]) -> RtResult<Option<Value>> {
+fn builtin(
+    h: &mut TestHost,
+    f: &mut Frame,
+    name: &str,
+    a: &[Value],
+    exprs: &[Arg],
+) -> RtResult<Option<Value>> {
     let arg = |i: usize| a.get(i).map(Value::deref).unwrap_or_default();
-    let s = |h: &mut TestHost, i: usize| -> RtResult<Vec<u8>> { to_str(h, &a.get(i).map(Value::deref).unwrap_or_default()) };
-    let int = |h: &mut TestHost, i: usize| -> RtResult<i64> { a.get(i).map_or(Ok(0), |v| v.to_long(h)) };
+    let s = |h: &mut TestHost, i: usize| -> RtResult<Vec<u8>> {
+        to_str(h, &a.get(i).map(Value::deref).unwrap_or_default())
+    };
+    let int =
+        |h: &mut TestHost, i: usize| -> RtResult<i64> { a.get(i).map_or(Ok(0), |v| v.to_long(h)) };
     Ok(Some(match name {
         "var_dump" => {
             for v in a {
@@ -2902,7 +3241,10 @@ fn builtin(h: &mut TestHost, f: &mut Frame, name: &str, a: &[Value], exprs: &[Ar
         "is_int" | "is_integer" => Value::Bool(matches!(arg(0), Value::Int(_))),
         "is_float" => Value::Bool(matches!(arg(0), Value::Float(_))),
         "is_soap_fault" => Value::Bool(php_soap::objects::is_soap_fault(h, &arg(0))),
-        "use_soap_error_handler" => Value::Bool(php_soap::objects::use_soap_error_handler(a.first().is_none_or(|v| matches!(v.deref(), Value::Bool(true) | Value::Int(1))))),
+        "use_soap_error_handler" => Value::Bool(php_soap::objects::use_soap_error_handler(
+            a.first()
+                .is_none_or(|v| matches!(v.deref(), Value::Bool(true) | Value::Int(1))),
+        )),
         "gettype" => Value::from(match arg(0) {
             Value::Null => "NULL",
             Value::Bool(_) => "boolean",
@@ -2920,7 +3262,10 @@ fn builtin(h: &mut TestHost, f: &mut Frame, name: &str, a: &[Value], exprs: &[Ar
         "get_parent_class" => match arg(0) {
             Value::Object(o) => {
                 let c = o.class_name().to_string_lossy();
-                h.classes.get(&c.to_ascii_lowercase()).and_then(|c| c.parent.clone()).map_or(Value::Bool(false), |p| Value::from(p.as_str()))
+                h.classes
+                    .get(&c.to_ascii_lowercase())
+                    .and_then(|c| c.parent.clone())
+                    .map_or(Value::Bool(false), |p| Value::from(p.as_str()))
             }
             _ => Value::Bool(false),
         },
@@ -2930,7 +3275,10 @@ fn builtin(h: &mut TestHost, f: &mut Frame, name: &str, a: &[Value], exprs: &[Ar
                 Value::Object(o) => o.class_name().to_string_lossy(),
                 other => String::from_utf8_lossy(&to_str(h, &other)?).into_owned(),
             };
-            Value::Bool(h.find_user_method(&class, &String::from_utf8_lossy(&m)).is_some())
+            Value::Bool(
+                h.find_user_method(&class, &String::from_utf8_lossy(&m))
+                    .is_some(),
+            )
         }
         "function_exists" => {
             let n = s(h, 0)?;
@@ -2943,12 +3291,23 @@ fn builtin(h: &mut TestHost, f: &mut Frame, name: &str, a: &[Value], exprs: &[Ar
         "dirname" => {
             let p = s(h, 0)?;
             let p = String::from_utf8_lossy(&p).into_owned();
-            Value::from(Path::new(&p).parent().map(|x| x.to_string_lossy().into_owned()).unwrap_or_else(|| ".".into()).as_str())
+            Value::from(
+                Path::new(&p)
+                    .parent()
+                    .map_or_else(|| ".".into(), |x| x.to_string_lossy().into_owned())
+                    .as_str(),
+            )
         }
         "basename" => {
             let p = s(h, 0)?;
             let p = String::from_utf8_lossy(&p).into_owned();
-            Value::from(Path::new(&p).file_name().map(|x| x.to_string_lossy().into_owned()).unwrap_or_default().as_str())
+            Value::from(
+                Path::new(&p)
+                    .file_name()
+                    .map(|x| x.to_string_lossy().into_owned())
+                    .unwrap_or_default()
+                    .as_str(),
+            )
         }
         "realpath" => {
             let p = s(h, 0)?;
@@ -2966,9 +3325,26 @@ fn builtin(h: &mut TestHost, f: &mut Frame, name: &str, a: &[Value], exprs: &[Ar
         }
         "ini_get" => {
             let n = String::from_utf8_lossy(&s(h, 0)?).into_owned();
-            h.ini.get(&n).map_or(Value::Bool(false), |v| Value::from(v.as_slice()))
+            h.ini
+                .get(&n)
+                .map_or(Value::Bool(false), |v| Value::from(v.as_slice()))
         }
-        "error_reporting" | "set_error_handler" | "restore_error_handler" | "setlocale" | "putenv" | "date_default_timezone_set" | "gc_collect_cycles" | "header" | "http_response_code" | "libxml_disable_entity_loader" | "libxml_use_internal_errors" | "define" if name != "define" => Value::Null,
+        "error_reporting"
+        | "set_error_handler"
+        | "restore_error_handler"
+        | "setlocale"
+        | "putenv"
+        | "date_default_timezone_set"
+        | "gc_collect_cycles"
+        | "header"
+        | "http_response_code"
+        | "libxml_disable_entity_loader"
+        | "libxml_use_internal_errors"
+        | "define"
+            if name != "define" =>
+        {
+            Value::Null
+        }
         "define" => {
             let n = String::from_utf8_lossy(&s(h, 0)?).into_owned();
             h.globals.insert(format!("const::{n}"), arg(1));
@@ -2978,7 +3354,10 @@ fn builtin(h: &mut TestHost, f: &mut Frame, name: &str, a: &[Value], exprs: &[Ar
             h.ob_start();
             Value::Bool(true)
         }
-        "ob_get_contents" => h.ob.last().map_or(Value::Bool(false), |b| Value::from(b.as_slice())),
+        "ob_get_contents" => {
+            h.ob.last()
+                .map_or(Value::Bool(false), |b| Value::from(b.as_slice()))
+        }
         "ob_get_clean" => {
             let v = h.ob.pop();
             v.map_or(Value::Bool(false), |b| Value::from(b.as_slice()))
@@ -2997,7 +3376,9 @@ fn builtin(h: &mut TestHost, f: &mut Frame, name: &str, a: &[Value], exprs: &[Ar
             }
             Value::Bool(true)
         }
-        "ob_get_length" => h.ob.last().map_or(Value::Bool(false), |b| Value::Int(i64::try_from(b.len()).unwrap_or(0))),
+        "ob_get_length" => h.ob.last().map_or(Value::Bool(false), |b| {
+            Value::Int(i64::try_from(b.len()).unwrap_or(0))
+        }),
         "ob_end_flush" | "ob_get_flush" => {
             if let Some(b) = h.ob.pop() {
                 h.echo(&b);
@@ -3038,16 +3419,25 @@ fn builtin(h: &mut TestHost, f: &mut Frame, name: &str, a: &[Value], exprs: &[Ar
                 Some(Value::Null) | None => len - st,
                 Some(v) => {
                     let l = v.to_long(h)?;
-                    if l < 0 { (len - st + l).max(0) } else { l.min(len - st) }
+                    if l < 0 {
+                        (len - st + l).max(0)
+                    } else {
+                        l.min(len - st)
+                    }
                 }
             };
-            let (st, l) = (usize::try_from(st).unwrap_or(0), usize::try_from(l).unwrap_or(0));
+            let (st, l) = (
+                usize::try_from(st).unwrap_or(0),
+                usize::try_from(l).unwrap_or(0),
+            );
             Value::from(&x[st..st + l])
         }
         "strpos" => {
             let hay = s(h, 0)?;
             let n = s(h, 1)?;
-            find(&hay, &n).map_or(Value::Bool(false), |p| Value::Int(i64::try_from(p).unwrap_or(0)))
+            find(&hay, &n).map_or(Value::Bool(false), |p| {
+                Value::Int(i64::try_from(p).unwrap_or(0))
+            })
         }
         "str_contains" => {
             let hay = s(h, 0)?;
@@ -3057,8 +3447,16 @@ fn builtin(h: &mut TestHost, f: &mut Frame, name: &str, a: &[Value], exprs: &[Ar
         "trim" | "rtrim" | "ltrim" => {
             let x = s(h, 0)?;
             let ws = |c: &u8| matches!(c, b' ' | b'\t' | b'\n' | b'\r' | 0 | 0x0b);
-            let st = if name == "rtrim" { 0 } else { x.iter().position(|c| !ws(c)).unwrap_or(x.len()) };
-            let en = if name == "ltrim" { x.len() } else { x.iter().rposition(|c| !ws(c)).map_or(st, |p| p + 1) };
+            let st = if name == "rtrim" {
+                0
+            } else {
+                x.iter().position(|c| !ws(c)).unwrap_or(x.len())
+            };
+            let en = if name == "ltrim" {
+                x.len()
+            } else {
+                x.iter().rposition(|c| !ws(c)).map_or(st, |p| p + 1)
+            };
             Value::from(&x[st.min(en)..en])
         }
         "strtolower" => Value::from(s(h, 0)?.to_ascii_lowercase().as_slice()),
@@ -3108,7 +3506,7 @@ fn builtin(h: &mut TestHost, f: &mut Frame, name: &str, a: &[Value], exprs: &[Ar
                 }
             }
             Value::Array(out)
-        },
+        }
         "in_array" => match arg(1) {
             Value::Array(x) => {
                 let needle = arg(0);
@@ -3136,7 +3534,13 @@ fn builtin(h: &mut TestHost, f: &mut Frame, name: &str, a: &[Value], exprs: &[Ar
         }
         "base64_encode" => Value::from(php_soap::encoding::base64_encode(&s(h, 0)?).as_slice()),
         "base64_decode" => Value::from(php_soap::encoding::base64_decode(&s(h, 0)?).as_slice()),
-        "md5" => Value::from(php_hash::md5(&s(h, 0)?).iter().map(|b| format!("{b:02x}")).collect::<String>().as_str()),
+        "md5" => Value::from(
+            php_hash::md5(&s(h, 0)?)
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect::<String>()
+                .as_str(),
+        ),
         "chr" => Value::from(&[u8::try_from(int(h, 0)? & 0xff).unwrap_or(0)][..]),
         "ord" => Value::Int(i64::from(s(h, 0)?.first().copied().unwrap_or(0))),
         "intval" => Value::Int(arg(0).to_long(h)?),
@@ -3150,7 +3554,9 @@ fn builtin(h: &mut TestHost, f: &mut Frame, name: &str, a: &[Value], exprs: &[Ar
         "time" => Value::Int(h.now),
         "mktime" | "gmmktime" => {
             let v: Vec<i64> = (0..6).map(|i| int(h, i)).collect::<RtResult<_>>()?;
-            Value::Int(super::days_from_civil(v[5], v[3], v[4]) * 86400 + v[0] * 3600 + v[1] * 60 + v[2])
+            Value::Int(
+                super::days_from_civil(v[5], v[3], v[4]) * 86400 + v[0] * 3600 + v[1] * 60 + v[2],
+            )
         }
         "file_get_contents" => {
             let p = String::from_utf8_lossy(&s(h, 0)?).into_owned();

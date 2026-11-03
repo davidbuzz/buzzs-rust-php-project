@@ -5,15 +5,19 @@ use std::rc::Rc;
 use php_runtime::array::ArrayKey;
 use php_runtime::{RuntimeError, Value, ZArray};
 
+use crate::consts::UNKNOWN_TYPE;
 use crate::encoders::{conv, Mapping, ToXml, ToZval};
 use crate::encoding::Typemap;
 use crate::error::{SoapError, SoapResult};
 use crate::host::SoapHost;
 use crate::sdl::{get_encoder, get_encoder_ex, resolve_static, Sdl};
-use crate::consts::UNKNOWN_TYPE;
 
 /// Builds the typemap encoders from the option array.
-pub fn create_typemap(host: &mut dyn SoapHost, sdl: Option<&Sdl>, ht: &ZArray) -> SoapResult<Option<Typemap>> {
+pub fn create_typemap(
+    host: &mut dyn SoapHost,
+    sdl: Option<&Sdl>,
+    ht: &ZArray,
+) -> SoapResult<Option<Typemap>> {
     let _ = host;
     let mut typemap: Option<Typemap> = None;
     for tmp in ht.values() {
@@ -57,15 +61,14 @@ pub fn create_typemap(host: &mut dyn SoapHost, sdl: Option<&Sdl>, ht: &ZArray) -
             None => get_encoder_ex(sdl, &type_name),
         };
         let base = enc.and_then(|e| resolve_static(sdl, e));
-        let mut new_enc = match &base {
-            Some(b) => b.clone(),
-            None => {
-                let mut u = resolve_static(None, conv(UNKNOWN_TYPE)).unwrap_or_else(|| unreachable!());
-                u.type_id = UNKNOWN_TYPE;
-                u.ns = type_ns.as_deref().map(Rc::from);
-                u.type_str = Some(Rc::from(type_name.as_str()));
-                u
-            }
+        let mut new_enc = if let Some(b) = &base {
+            b.clone()
+        } else {
+            let mut u = resolve_static(None, conv(UNKNOWN_TYPE)).unwrap_or_else(|| unreachable!());
+            u.type_id = UNKNOWN_TYPE;
+            u.ns = type_ns.as_deref().map(Rc::from);
+            u.type_str = Some(Rc::from(type_name.as_str()));
+            u
         };
         let base_map = base.as_ref().and_then(|b| b.map.clone());
         let mut map = Mapping::default();

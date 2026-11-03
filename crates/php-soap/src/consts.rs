@@ -49,7 +49,7 @@ pub const SOAP_SSL_METHOD_SSLV3: i64 = 2;
 pub const SOAP_SSL_METHOD_SSLV23: i64 = 3;
 
 pub const SOAP_MAX_XML_DEPTH: usize = 2048;
-pub const SOAP_MAX_DECODE_DEPTH: u32 = (SOAP_MAX_XML_DEPTH * 2) as u32;
+pub const SOAP_MAX_DECODE_DEPTH: u32 = 4096;
 
 pub const WSDL_HEADER_KEEP_AUTHORIZATION: i64 = 1 << 0;
 pub const WSDL_HEADER_KEEP_PROXY_AUTHORIZATION: i64 = 1 << 1;
@@ -261,7 +261,9 @@ mod tests {
     fn constant_table_is_complete() {
         let c = php_constants();
         assert_eq!(c.len(), 81);
-        assert!(c.iter().any(|(n, v)| *n == "XSD_ANYXML" && matches!(v, Value::Int(147))));
+        assert!(c
+            .iter()
+            .any(|(n, v)| *n == "XSD_ANYXML" && matches!(v, Value::Int(147))));
         assert!(c.iter().any(|(n, _)| *n == "SOAP_SSL_METHOD_SSLv23"));
     }
 }

@@ -2,6 +2,12 @@
 //! regressions, client/server tests) with the test interpreter over the
 //! extension and compares their output with the expected one.
 
+#![allow(
+    clippy::many_single_char_names,
+    clippy::too_many_arguments,
+    clippy::too_many_lines
+)]
+
 mod common;
 
 use std::path::{Path, PathBuf};
@@ -83,19 +89,39 @@ fn run_phpt(path: &Path) -> Outcome {
     let Some(file) = sec.get("FILE") else {
         return Outcome::Skip("no FILE".into());
     };
-    for unsupported in ["POST", "POST_RAW", "GET", "CGI", "ARGS", "STDIN", "EXPECTREGEX", "FILE_EXTERNAL", "PHPDBG", "SKIPIF_EXT"] {
+    for unsupported in [
+        "POST",
+        "POST_RAW",
+        "GET",
+        "CGI",
+        "ARGS",
+        "STDIN",
+        "EXPECTREGEX",
+        "FILE_EXTERNAL",
+        "PHPDBG",
+        "SKIPIF_EXT",
+    ] {
         if sec.contains_key(unsupported) {
             return Outcome::Skip(format!("--{unsupported}--"));
         }
     }
     if let Some(skip) = sec.get("SKIPIF") {
-        for needle in ["php_cli_server", "getenv(\"SKIP_ONLINE", "SKIP_SLOW", "PHP_ZTS", "die(\"skip"] {
+        for needle in [
+            "php_cli_server",
+            "getenv(\"SKIP_ONLINE",
+            "SKIP_SLOW",
+            "PHP_ZTS",
+            "die(\"skip",
+        ] {
             if skip.contains(needle) {
                 return Outcome::Skip(format!("SKIPIF {needle}"));
             }
         }
     }
-    if file.contains("php_cli_server") || file.contains("stream_socket_server") || file.contains("proc_open") {
+    if file.contains("php_cli_server")
+        || file.contains("stream_socket_server")
+        || file.contains("proc_open")
+    {
         return Outcome::Skip("network server".into());
     }
     let (expected, fmt) = match (sec.get("EXPECT"), sec.get("EXPECTF")) {
@@ -107,19 +133,24 @@ fn run_phpt(path: &Path) -> Outcome {
     let dir = path.parent().map(Path::to_path_buf).unwrap_or_default();
     let script: PathBuf = path.with_extension("php");
     host.base_dir = dir;
-    host.current_file = script.clone();
     host.script = script.to_string_lossy().into_owned();
-    host.ini.insert("soap.wsdl_cache_enabled".into(), b"1".to_vec());
+    host.current_file.clone_from(&script);
+    host.ini
+        .insert("soap.wsdl_cache_enabled".into(), b"1".to_vec());
     if let Some(ini) = sec.get("INI") {
         for line in ini.lines() {
             if let Some((k, v)) = line.split_once('=') {
-                host.ini.insert(k.trim().to_owned(), v.trim().as_bytes().to_vec());
+                host.ini
+                    .insert(k.trim().to_owned(), v.trim().as_bytes().to_vec());
             }
         }
     }
     php_soap::globals::request_init();
     php_soap::globals::with(|g| g.mem_cache.clear());
-    let code: Vec<u8> = file.chars().map(|c| u8::try_from(u32::from(c)).unwrap_or(b'?')).collect();
+    let code: Vec<u8> = file
+        .chars()
+        .map(|c| u8::try_from(u32::from(c)).unwrap_or(b'?'))
+        .collect();
     if let Err(e) = run_file(&mut host, &script, &code) {
         host.report(&e);
     }
@@ -144,7 +175,9 @@ fn collect(dir: &Path, out: &mut Vec<PathBuf>) {
     for e in rd.filter_map(Result::ok) {
         let p = e.path();
         if p.is_dir() {
-            if p.file_name().is_some_and(|n| n != "schema" && n != "soap12") {
+            if p.file_name()
+                .is_some_and(|n| n != "schema" && n != "soap12")
+            {
                 collect(&p, out);
             }
         } else if p.extension().is_some_and(|x| x == "phpt") {
@@ -171,7 +204,11 @@ fn soap_phpt_suite() {
         let mut skip = 0;
         let mut fails = Vec::new();
         for f in &files {
-            let name = f.strip_prefix(&dir).unwrap_or(f).to_string_lossy().into_owned();
+            let name = f
+                .strip_prefix(&dir)
+                .unwrap_or(f)
+                .to_string_lossy()
+                .into_owned();
             if let Some(flt) = &filter {
                 if !name.contains(flt.as_str()) {
                     continue;
@@ -200,7 +237,10 @@ fn soap_phpt_suite() {
             eprintln!("FAIL {n}");
         }
     }
-    eprintln!("phpt: {pass} passed, {skip} skipped, {} failed", fails.len());
+    eprintln!(
+        "phpt: {pass} passed, {skip} skipped, {} failed",
+        fails.len()
+    );
     let unexpected: Vec<&String> = fails
         .iter()
         .map(|(n, _)| n)

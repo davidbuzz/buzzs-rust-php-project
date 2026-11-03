@@ -9,6 +9,7 @@ use crate::server::Service;
 
 /// State attached to objects of the SOAP classes.
 #[derive(Debug)]
+#[allow(clippy::large_enum_variant)] // one per object; boxing buys nothing
 pub enum SoapObject {
     /// `soap_client_object`: the typemap built by the constructor.
     Client(RefCell<Option<Rc<Typemap>>>),

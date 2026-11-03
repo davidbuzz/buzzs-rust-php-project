@@ -3,6 +3,12 @@
 //! it and the value decoded by the server are compared with the expected
 //! output.
 
+#![allow(
+    clippy::many_single_char_names,
+    clippy::too_many_arguments,
+    clippy::too_many_lines
+)]
+
 mod common;
 
 use common::host::UserClass;
@@ -55,9 +61,21 @@ fn wsdl(schema: &str, type_: &str, style: &str, use_: &str, attr_form_default: &
 
 /// The body of `test_schema()` from `test_schema.inc`.
 #[allow(clippy::too_many_arguments)]
-fn test_schema(host: &mut TestHost, schema: &str, type_: &str, param: Value, style: &str, use_: &str, afd: &str, features: i64) -> bool {
+fn test_schema(
+    host: &mut TestHost,
+    schema: &str,
+    type_: &str,
+    param: Value,
+    style: &str,
+    use_: &str,
+    afd: &str,
+    features: i64,
+) -> bool {
     let fname = "/tests/wsdl_schema_test";
-    host.files.insert(fname.into(), wsdl(schema, type_, style, use_, afd).into_bytes());
+    host.files.insert(
+        fname.into(),
+        wsdl(schema, type_, style, use_, afd).into_bytes(),
+    );
     let opts = ZArray::from_pairs([
         ("trace", Value::Int(1)),
         ("exceptions", Value::Int(0)),
@@ -70,7 +88,10 @@ fn test_schema(host: &mut TestHost, schema: &str, type_: &str, param: Value, sty
             return false;
         }
     };
-    let y = match host.new_server(Some(fname), &ZArray::from_pairs([("features", Value::Int(features))])) {
+    let y = match host.new_server(
+        Some(fname),
+        &ZArray::from_pairs([("features", Value::Int(features))]),
+    ) {
         Ok(y) => y,
         Err(e) => {
             host.report(&e);
@@ -115,7 +136,10 @@ fn parse_classes(file: &str, host: &mut TestHost) {
             let head: Vec<&str> = rest.trim_end_matches('{').split_whitespace().collect();
             let mut c = UserClass {
                 name: head[0].to_owned(),
-                parent: head.iter().position(|w| *w == "extends").map(|i| head[i + 1].to_owned()),
+                parent: head
+                    .iter()
+                    .position(|w| *w == "extends")
+                    .map(|i| head[i + 1].to_owned()),
                 ..UserClass::default()
             };
             for l2 in lines.by_ref() {
@@ -125,7 +149,9 @@ fn parse_classes(file: &str, host: &mut TestHost) {
                 }
                 if let Some(p) = t2.strip_prefix("public $") {
                     let p = p.trim_end_matches(';');
-                    let (n, v) = p.split_once('=').map_or((p, "null"), |(a, b)| (a.trim(), b.trim()));
+                    let (n, v) = p
+                        .split_once('=')
+                        .map_or((p, "null"), |(a, b)| (a.trim(), b.trim()));
                     let v = Eval::new(v, host).expr().unwrap_or_default();
                     c.props.push((n.to_owned(), v));
                 }
@@ -173,14 +199,17 @@ fn run_one(path: &std::path::Path) -> Result<(), String> {
     host.script = "/tests/test_schema.inc".into();
     parse_classes(file, &mut host);
     host.add_function("test", |h, args| {
-        h.globals.insert("val".into(), args.first().cloned().unwrap_or_default());
+        h.globals
+            .insert("val".into(), args.first().cloned().unwrap_or_default());
         Ok(Value::Null)
     });
     let mut vars = std::collections::HashMap::new();
     vars.insert("schema".to_owned(), Value::from(schema.as_str()));
     for line in file.lines() {
         if let Some(rest) = line.strip_prefix("$date = ") {
-            let v = Eval::new(rest.trim_end_matches(';'), &mut host).expr().map_err(|e| format!("{e:?}"))?;
+            let v = Eval::new(rest.trim_end_matches(';'), &mut host)
+                .expr()
+                .map_err(|e| format!("{e:?}"))?;
             vars.insert("date".into(), v);
         }
     }
@@ -245,7 +274,10 @@ fn schema_matrix() {
             }
             match run_one(p) {
                 Ok(()) => passed += 1,
-                Err(e) => failures.push(format!("{}: {e}", p.file_name().unwrap_or_default().to_string_lossy())),
+                Err(e) => failures.push(format!(
+                    "{}: {e}",
+                    p.file_name().unwrap_or_default().to_string_lossy()
+                )),
             }
         }
         eprintln!("schema: {passed}/{} passed", entries.len());
@@ -254,5 +286,9 @@ fn schema_matrix() {
     for f in &failures {
         eprintln!("FAIL {f}\n");
     }
-    assert!(failures.is_empty(), "{} schema tests failed", failures.len());
+    assert!(
+        failures.is_empty(),
+        "{} schema tests failed",
+        failures.len()
+    );
 }

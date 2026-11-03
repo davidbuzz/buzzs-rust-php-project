@@ -132,7 +132,7 @@ impl Model {
 /// `sdlExtraAttribute`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExtraAttribute {
-    /// Namespace of the QName value.
+    /// Namespace of the `QName` value.
     pub ns: Option<String>,
     /// Local part (or the whole value when unprefixed/unresolved).
     pub val: String,
@@ -457,7 +457,9 @@ impl Sdl {
 #[must_use]
 pub fn resolve_static(sdl: Option<&Sdl>, e: EncRef) -> Option<Encoder> {
     match e {
-        EncRef::Default(i) => DEFAULT_ENCODERS.get(i as usize).map(|d| d.to_encoder()),
+        EncRef::Default(i) => DEFAULT_ENCODERS
+            .get(i as usize)
+            .map(super::encoders::DefaultEncoder::to_encoder),
         EncRef::Alias(i, soap12) => DEFAULT_ENCODERS.get(i as usize).map(|d| {
             let mut enc = d.to_encoder();
             enc.ns = Some(
@@ -515,10 +517,15 @@ pub fn get_encoder_mut(sdl: &mut Sdl, ns: &str, type_: &str) -> Option<EncRef> {
     Some(e)
 }
 
-/// `get_encoder_from_prefix`: resolves the QName `type_` in the scope of
+/// `get_encoder_from_prefix`: resolves the `QName` `type_` in the scope of
 /// `node`.
 #[must_use]
-pub fn get_encoder_from_prefix(sdl: Option<&Sdl>, doc: &Doc, node: NodeId, type_: &[u8]) -> Option<EncRef> {
+pub fn get_encoder_from_prefix(
+    sdl: Option<&Sdl>,
+    doc: &Doc,
+    node: NodeId,
+    type_: &[u8],
+) -> Option<EncRef> {
     let (prefix, local) = parse_qname(type_);
     let local_s = String::from_utf8_lossy(local);
     if let Some(ns) = doc.search_ns(node, prefix) {
@@ -529,7 +536,7 @@ pub fn get_encoder_from_prefix(sdl: Option<&Sdl>, doc: &Doc, node: NodeId, type_
     }
 }
 
-/// `get_element`: looks a global element up by QName in the scope of
+/// `get_element`: looks a global element up by `QName` in the scope of
 /// `node`.
 #[must_use]
 pub fn get_element(sdl: &Sdl, doc: &Doc, node: NodeId, type_: &[u8]) -> Option<TypeId> {
