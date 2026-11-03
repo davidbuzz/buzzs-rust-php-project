@@ -1,16 +1,17 @@
 //! Native methods of the SOAP classes and the global functions.
 
+// Every handler has the `NativeFn` signature, fallible or not.
+#![allow(clippy::unnecessary_wraps)]
+
 use std::rc::Rc;
 
-use php_runtime::{Obj, Value, ZArray, ZStr};
+use php_runtime::{Obj, Value};
 use php_soap::objects::Actor;
 use php_vm::ext::{Args, VmResult};
 use php_vm::object::class_of;
-use php_vm::opcode::{Op, Operand};
-use php_vm::vm::FrameKind;
 use php_vm::Vm;
 
-use crate::host::{take_magic_name, VmHost};
+use crate::host::VmHost;
 
 /// Runs a library call with the VM as host and converts its result.
 fn with_host<T>(
@@ -44,7 +45,7 @@ pub(crate) fn create_state(_vm: &mut Vm, o: &Obj) -> VmResult<()> {
             php_vm::object::set_internal::<Rc<php_soap::state::SoapObject>>(o, s);
             break;
         }
-        cur = c.parent.clone();
+        cur = c.parent.as_ref().map(Rc::clone);
     }
     Ok(())
 }
@@ -239,7 +240,10 @@ pub(crate) fn server_set_class(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         return Err(a.type_error(
             vm,
             0,
-            &format!("must be a valid class name, {} given", name.to_string_lossy()),
+            &format!(
+                "must be a valid class name, {} given",
+                name.to_string_lossy()
+            ),
         ));
     };
     let args: Vec<Value> = a.values.iter().skip(1).map(Value::deref).collect();
@@ -276,7 +280,9 @@ pub(crate) fn server_add_function(vm: &mut Vm, a: &mut Args) -> VmResult<Value> 
 pub(crate) fn server_handle(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let this = a.this_obj();
     let request = opt_bytes(a, 0);
-    with_host(vm, |h| php_soap::server::handle(h, &this, request.as_deref()))?;
+    with_host(vm, |h| {
+        php_soap::server::handle(h, &this, request.as_deref())
+    })?;
     Ok(Value::Null)
 }
 
@@ -299,105 +305,12 @@ pub(crate) fn client_construct(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     Ok(Value::Null)
 }
 
-/// The method name of the call being dispatched to `__call`: the VM does
-/// not pass it to native `__call` handlers, so it is recovered from the
-/// calling frame's pending `InitMethodCall` (matched by call nesting).
-fn pending_method_name(vm: &Vm) -> Option<ZStr> {
-    let f = vm
-        .frames
-        .iter()
-        .rev()
-        .find(|f| f.kind != FrameKind::Builtin)?;
-    let ops = &f.code.ops;
-    // The interpreter advances `ip` before executing an instruction.
-    let mut i = f.ip.checked_sub(1)?;
-    if !matches!(ops.get(i)?, Op::DoCall { .. }) {
-        return None;
-    }
-    let mut depth = 0usize;
-    loop {
-        match &ops[i] {
-            Op::DoCall { .. } | Op::CallableConvert { .. } => depth += 1,
-            Op::InitMethodCall { name, .. } => {
-                depth = depth.checked_sub(1)?;
-                if depth == 0 {
-                    return match name {
-                        Operand::Lit(n) => match f.code.literals.get(*n as usize) {
-                            Some(Value::Str(s)) => Some(s.clone()),
-                            _ => None,
-                        },
-                        _ => None,
-                    };
-                }
-            }
-            Op::InitFCall { .. }
-            | Op::InitDynCall { .. }
-            | Op::InitStaticCall { .. }
-            | Op::InitParentHook { .. }
-            | Op::New { .. } => {
-                depth = depth.checked_sub(1)?;
-                if depth == 0 {
-                    return None;
-                }
-            }
-            _ => {}
-        }
-        i = i.checked_sub(1)?;
-    }
-}
-
 /// `SoapClient::__call(string $name, array $args)`, also reached for every
 /// undefined method (`$client->someOperation(...)`).
 pub(crate) fn client_call(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let this = a.this_obj();
-    let magic = take_magic_name().or_else(|| {
-        pending_method_name(vm).filter(|n| !n.eq_ignore_ascii_case(b"__call"))
-    });
-    let (name, args) = if let Some(n) = magic {
-        let args = ZArray::from_values(a.values.iter().map(Value::deref));
-        // Backtraces show the trampoline as `__call('name', Array)`.
-        if let Some(f) = vm.frames.last_mut() {
-            if f.kind == FrameKind::Builtin {
-                f.args = vec![Some(Value::Str(n.clone())), Some(Value::Array(args.clone()))];
-            }
-        }
-        (n, args)
-    } else {
-        if a.values.len() != 2 {
-            return Err(vm.throw(
-                "ArgumentCountError",
-                &format!(
-                    "SoapClient::__call() expects exactly 2 arguments, {} given",
-                    a.values.len()
-                ),
-            ));
-        }
-        let name = match a.values[0].deref() {
-            Value::Str(s) => s,
-            other @ (Value::Int(_) | Value::Float(_) | Value::Bool(_)) => {
-                vm.value_to_string(&other)?
-            }
-            other => {
-                return Err(vm.throw(
-                    "TypeError",
-                    &format!(
-                        "SoapClient::__call(): Argument #1 ($name) must be of type string, {} given",
-                        php_soap::client_type_name(&other)
-                    ),
-                ))
-            }
-        };
-        let Value::Array(args) = a.values[1].deref() else {
-            return Err(vm.throw(
-                "TypeError",
-                &format!(
-                    "SoapClient::__call(): Argument #2 ($args) must be of type array, {} given",
-                    php_soap::client_type_name(&a.values[1])
-                ),
-            ));
-        };
-        (name, args)
-    };
+    let name = a.str(0);
+    let args = a.array(1);
     with_host(vm, |h| {
         php_soap::client::call(h, &this, name.as_bytes(), &args)
     })

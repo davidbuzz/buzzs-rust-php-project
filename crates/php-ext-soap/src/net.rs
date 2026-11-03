@@ -41,7 +41,8 @@ impl SocketStream {
                 None
             } else if let Some((n, v)) = t.split_once(':') {
                 let v = v.trim();
-                if n.eq_ignore_ascii_case("transfer-encoding") && v.eq_ignore_ascii_case("chunked") {
+                if n.eq_ignore_ascii_case("transfer-encoding") && v.eq_ignore_ascii_case("chunked")
+                {
                     self.chunked = true;
                     None
                 } else if n.eq_ignore_ascii_case("content-length") {
@@ -152,12 +153,16 @@ pub(crate) fn connect(vm: &mut Vm, t: &ConnectTarget) -> Option<Box<dyn HttpStre
     let r = crate::host::silenced(vm, |vm| {
         vm.call_value(
             &Value::from("stream_socket_client"),
-            vec![Value::from(addr.as_str()), errno, errstr, Value::Float(timeout)],
+            vec![
+                Value::from(addr.as_str()),
+                errno,
+                errstr,
+                Value::Float(timeout),
+            ],
         )
     });
-    let res = match r {
-        Ok(v @ Value::Resource(_)) => v,
-        _ => return None,
+    let Ok(res @ Value::Resource(_)) = r else {
+        return None;
     };
     let Value::Resource(r) = &res else {
         return None;
@@ -217,9 +222,10 @@ pub(crate) fn has_wrapper(vm: &mut Vm, scheme: &str) -> bool {
 /// A `http` context option.
 fn ctx_option(vm: &mut Vm, context: Option<&Value>, name: &str) -> Option<Value> {
     let ctx = context?;
-    let Ok(Value::Array(opts)) =
-        vm.call_value(&Value::from("stream_context_get_options"), vec![ctx.clone()])
-    else {
+    let Ok(Value::Array(opts)) = vm.call_value(
+        &Value::from("stream_context_get_options"),
+        vec![ctx.clone()],
+    ) else {
         return None;
     };
     match opts.get_str(b"http").map(Value::deref) {
@@ -278,21 +284,19 @@ pub(crate) fn http_get(vm: &mut Vm, url: &str, context: Option<&Value>) -> Optio
     } else {
         (true, url.strip_prefix("https://")?)
     };
-    let (authority, path) = rest
-        .find(['/', '?'])
-        .map_or((rest, "/".to_owned()), |p| {
-            let path = &rest[p..];
-            let path = if path.starts_with('?') {
-                format!("/{path}")
-            } else {
-                path.to_owned()
-            };
-            (&rest[..p], path)
-        });
+    let (authority, path) = rest.find(['/', '?']).map_or((rest, "/".to_owned()), |p| {
+        let path = &rest[p..];
+        let path = if path.starts_with('?') {
+            format!("/{path}")
+        } else {
+            path.to_owned()
+        };
+        (&rest[..p], path)
+    });
     let path = path.split('#').next().unwrap_or("/").to_owned();
     let authority = authority.rsplit('@').next().unwrap_or(authority);
     let default_port = if tls { 443 } else { 80 };
-    let (host, port) = match authority.rsplit_once(':') {
+    let (host_name, port_no) = match authority.rsplit_once(':') {
         Some((h, p)) if !h.ends_with(']') || h.starts_with('[') => {
             (h.trim_matches(['[', ']']).to_owned(), p.parse().ok()?)
         }
@@ -307,10 +311,10 @@ pub(crate) fn http_get(vm: &mut Vm, url: &str, context: Option<&Value>) -> Optio
     let user = user_headers(vm, context);
     let mut req = format!("GET {path} HTTP/{protocol}\r\n").into_bytes();
     if !has_header(&user, "host") {
-        if port == default_port {
-            req.extend_from_slice(format!("Host: {host}\r\n").as_bytes());
+        if port_no == default_port {
+            req.extend_from_slice(format!("Host: {host_name}\r\n").as_bytes());
         } else {
-            req.extend_from_slice(format!("Host: {host}:{port}\r\n").as_bytes());
+            req.extend_from_slice(format!("Host: {host_name}:{port_no}\r\n").as_bytes());
         }
     }
     if !has_header(&user, "connection") {
@@ -323,8 +327,8 @@ pub(crate) fn http_get(vm: &mut Vm, url: &str, context: Option<&Value>) -> Optio
     req.extend_from_slice(b"\r\n");
     let target = ConnectTarget {
         protocol: if tls { "ssl" } else { "tcp" }.to_owned(),
-        host,
-        port,
+        host: host_name,
+        port: port_no,
         timeout: None,
         proxy_tunnel: None,
     };
@@ -349,12 +353,19 @@ pub(crate) fn http_get(vm: &mut Vm, url: &str, context: Option<&Value>) -> Optio
             let v = v.trim();
             if n.eq_ignore_ascii_case("content-length") {
                 length = v.parse::<usize>().ok();
-            } else if n.eq_ignore_ascii_case("transfer-encoding") && v.eq_ignore_ascii_case("chunked")
+            } else if n.eq_ignore_ascii_case("transfer-encoding")
+                && v.eq_ignore_ascii_case("chunked")
             {
                 chunked = true;
             }
         }
     }
+    read_body(s.as_mut(), chunked, length)
+}
+
+/// Reads a response body framed by `Transfer-Encoding: chunked`,
+/// `Content-Length` or the end of the connection.
+fn read_body(s: &mut dyn HttpStream, chunked: bool, length: Option<usize>) -> Option<Vec<u8>> {
     let mut body = Vec::new();
     if chunked {
         loop {
@@ -393,4 +404,19 @@ pub(crate) fn http_get(vm: &mut Vm, url: &str, context: Option<&Value>) -> Optio
         }
     }
     Some(body)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn header_detection_is_line_anchored_and_case_insensitive() {
+        let h = b"X-Foo: 1\r\n  host: example.org\r\nConnection-Thing: x";
+        assert!(has_header(h, "host"));
+        assert!(has_header(h, "HOST"));
+        assert!(!has_header(h, "connection"));
+        assert!(!has_header(b"", "host"));
+        assert!(!has_header(b"hostname: x", "host"));
+    }
 }

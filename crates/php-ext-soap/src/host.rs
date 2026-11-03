@@ -48,8 +48,6 @@ thread_local! {
     static BAILING_OUT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// An out-of-memory fatal raised inside the library.
     static OOM: RefCell<Option<String>> = const { RefCell::new(None) };
-    /// The method name of a `__call` dispatch started by this crate.
-    static MAGIC_NAME: RefCell<Option<ZStr>> = const { RefCell::new(None) };
 }
 
 /// Records an out-of-memory fatal that must reach the VM unchanged and
@@ -67,12 +65,6 @@ pub(crate) fn oom_error(msg: String) -> RuntimeError {
 pub(crate) fn take_oom() -> Option<String> {
     OOM.with(|o| o.borrow_mut().take())
         .or_else(|| php_memlimit::take().map(|over| over.to_string()))
-}
-
-/// Takes the method name stored by [`VmHost::call_method`] for the native
-/// `SoapClient::__call`.
-pub(crate) fn take_magic_name() -> Option<ZStr> {
-    MAGIC_NAME.with(|m| m.borrow_mut().take())
 }
 
 /// Converts a VM throw into a runtime error.
@@ -270,7 +262,7 @@ impl<'a> VmHost<'a> {
         call(vm, "rewind")?;
         loop {
             let valid = call(vm, "valid")?;
-            if !valid.to_bool(&mut *vm).map_err(|e| e)? {
+            if !valid.to_bool(&mut *vm)? {
                 break;
             }
             let v = call(vm, "current")?;
@@ -408,8 +400,7 @@ impl SoapHost for VmHost<'_> {
         };
         let args = args.to_vec();
         let vm = &mut *self.vm;
-        quiet_if_server(vm, |vm| vm.new_object_with_args(&cls, args))
-            .map_err(|t| to_rt(self.vm, t))
+        quiet_if_server(vm, |vm| vm.new_object_with_args(&cls, args)).map_err(|t| to_rt(self.vm, t))
     }
 
     fn set_object_class(&mut self, _obj: &Obj, _class: &ZStr) {
@@ -476,7 +467,7 @@ impl SoapHost for VmHost<'_> {
         }
         if let Some(d) = data(obj).dynamic.borrow().as_ref() {
             let t = out.make_mut();
-            for (k, v) in d.iter() {
+            for (k, v) in d {
                 t.insert(k.clone(), v.clone());
             }
         }
@@ -651,18 +642,19 @@ impl SoapHost for VmHost<'_> {
             return Vec::new();
         };
         let mut out = Vec::new();
-        let mut seen = std::collections::HashSet::new();
+        let mut seen: Vec<ZStr> = Vec::new();
         let mut cur = Some(cls);
         while let Some(c) = cur {
             for lc in &c.method_order {
                 if let Some(m) = c.methods.get(lc) {
-                    if seen.insert(lc.clone()) {
+                    if !seen.contains(lc) {
+                        seen.push(lc.clone());
                         let public = m.flags & (flags::PRIVATE | flags::PROTECTED) == 0;
                         out.push((m.name.clone(), public));
                     }
                 }
             }
-            cur = c.parent.clone();
+            cur = c.parent.as_ref().map(Rc::clone);
         }
         out
     }
@@ -679,12 +671,10 @@ impl SoapHost for VmHost<'_> {
                     php_vm::object::display_name(&cls.name).to_string_lossy()
                 )));
             }
-            MAGIC_NAME.with(|m| *m.borrow_mut() = Some(ZStr::from(name)));
         }
         let args = args.to_vec();
         let vm = &mut *self.vm;
         let r = quiet_if_server(vm, |vm| vm.call_method_by_name(obj, &n, args));
-        MAGIC_NAME.with(|m| m.borrow_mut().take());
         r.map(MethodCall::Returned).map_err(|t| to_rt(self.vm, t))
     }
 
@@ -716,7 +706,9 @@ impl SoapHost for VmHost<'_> {
     fn load_resource(&mut self, url: &str, context: Option<&Value>) -> Result<Vec<u8>, String> {
         let lower = url.to_ascii_lowercase();
         for scheme in ["http", "https"] {
-            if lower.starts_with(&format!("{scheme}://")) && !crate::net::has_wrapper(self.vm, scheme) {
+            if lower.starts_with(&format!("{scheme}://"))
+                && !crate::net::has_wrapper(self.vm, scheme)
+            {
                 return crate::net::http_get(self.vm, url, context)
                     .ok_or_else(|| format!("failed to load external entity \"{url}\"\n"));
             }
@@ -790,10 +782,9 @@ impl SoapHost for VmHost<'_> {
         let server = global_array(self.vm, b"_SERVER")?;
         match server.get_str(name.as_bytes()).map(Value::deref) {
             Some(Value::Str(s)) => Some(s.as_bytes().to_vec()),
-            Some(v @ (Value::Int(_) | Value::Float(_) | Value::Bool(_))) => v
-                .to_zstr(&mut *self.vm)
-                .ok()
-                .map(|s| s.as_bytes().to_vec()),
+            Some(v @ (Value::Int(_) | Value::Float(_) | Value::Bool(_))) => {
+                v.to_zstr(&mut *self.vm).ok().map(|s| s.as_bytes().to_vec())
+            }
             _ => None,
         }
     }
@@ -918,5 +909,48 @@ fn global_array(vm: &Vm, name: &[u8]) -> Option<ZArray> {
 impl HttpConnector for VmHost<'_> {
     fn connect(&mut self, target: &ConnectTarget) -> Option<Box<dyn HttpStream>> {
         crate::net::connect(self.vm, target)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn property_names_are_mangled_like_zend() {
+        let c = ZStr::from("SoapClient");
+        let n = ZStr::from("uri");
+        assert_eq!(
+            mangle(flags::PRIVATE, &c, &n).as_bytes(),
+            b"\0SoapClient\0uri"
+        );
+        assert_eq!(mangle(flags::PROTECTED, &c, &n).as_bytes(), b"\0*\0uri");
+        assert_eq!(mangle(flags::PUBLIC, &c, &n).as_bytes(), b"uri");
+    }
+
+    #[test]
+    fn internal_classes() {
+        assert!(is_internal_class(&ZStr::from("SoapFault")));
+        assert!(is_internal_class(&ZStr::from("exception")));
+        assert!(!is_internal_class(&ZStr::from("MyClient")));
+    }
+
+    #[test]
+    fn throws_round_trip_through_runtime_errors() {
+        let exit = RuntimeError::Custom {
+            class: ZStr::from(EXIT_MARK),
+            message: String::new(),
+        };
+        assert!(
+            matches!(&exit, RuntimeError::Custom { class, .. } if class.as_bytes() == EXIT_MARK)
+        );
+        let oom = oom_error("Allowed memory size of 1 bytes exhausted".into());
+        assert!(
+            matches!(oom, RuntimeError::Custom { class, .. } if class.as_bytes() == BAILOUT_MARK)
+        );
+        assert_eq!(
+            OOM.with(|o| o.borrow_mut().take()).as_deref(),
+            Some("Allowed memory size of 1 bytes exhausted")
+        );
     }
 }

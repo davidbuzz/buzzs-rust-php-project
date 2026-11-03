@@ -52,6 +52,8 @@ impl Extension for Soap {
         "soap"
     }
 
+    // One flat registration table, mirroring `soap.stub.php`.
+    #[allow(clippy::too_many_lines)]
     fn register(&self, m: &mut ModuleBuilder<'_>) {
         // INI (`PHP_INI_BEGIN` of soap.c).
         let ini: [(&str, &str, ModifyHandler); 5] = [
@@ -62,7 +64,13 @@ impl Extension for Soap {
             ("soap.wsdl_cache_limit", "5", ModifyHandler::Long),
         ];
         for (name, default, handler) in ini {
-            m.ini(IniDirective::new(name, Some(default), Access::ALL, handler, "soap"));
+            m.ini(IniDirective::new(
+                name,
+                Some(default),
+                Access::ALL,
+                handler,
+                "soap",
+            ));
         }
 
         // Constants.
@@ -96,22 +104,35 @@ impl Extension for Soap {
         let vm = m.vm();
 
         ClassBuilder::new("Soap\\Url")
-            .flags(class_flags::FINAL | class_flags::NOT_SERIALIZABLE | class_flags::NO_CLONE | class_flags::NO_DYNAMIC_PROPERTIES)
+            .flags(
+                class_flags::FINAL
+                    | class_flags::NOT_SERIALIZABLE
+                    | class_flags::NO_CLONE
+                    | class_flags::NO_DYNAMIC_PROPERTIES,
+            )
             .method("__construct()", acc::PUBLIC, methods::url_construct)
             .register(vm);
         ClassBuilder::new("Soap\\Sdl")
-            .flags(class_flags::FINAL | class_flags::NOT_SERIALIZABLE | class_flags::NO_CLONE | class_flags::NO_DYNAMIC_PROPERTIES)
+            .flags(
+                class_flags::FINAL
+                    | class_flags::NOT_SERIALIZABLE
+                    | class_flags::NO_CLONE
+                    | class_flags::NO_DYNAMIC_PROPERTIES,
+            )
             .method("__construct()", acc::PUBLIC, methods::sdl_construct)
             .hooks(state_hooks.clone())
             .register(vm);
 
-        with_props(ClassBuilder::new("SoapParam"), php_soap::classes::PARAM_PROPERTIES)
-            .method(
-                "__construct(mixed $data, string $name)",
-                acc::PUBLIC,
-                methods::param_construct,
-            )
-            .register(vm);
+        with_props(
+            ClassBuilder::new("SoapParam"),
+            php_soap::classes::PARAM_PROPERTIES,
+        )
+        .method(
+            "__construct(mixed $data, string $name)",
+            acc::PUBLIC,
+            methods::param_construct,
+        )
+        .register(vm);
 
         with_props(ClassBuilder::new("SoapHeader"), php_soap::classes::HEADER_PROPERTIES)
             .method(
@@ -204,7 +225,7 @@ impl Extension for Soap {
                 acc::PUBLIC,
                 methods::client_construct,
             )
-            .method("__call(...$args): mixed", acc::PUBLIC, methods::client_call)
+            .method("__call(string $name, array $args): mixed", acc::PUBLIC, methods::client_call)
             .method(
                 "__soapCall(string $name, array $args, ?array $options = null, $inputHeaders = null, &$outputHeaders = null): mixed",
                 acc::PUBLIC,
