@@ -76,13 +76,9 @@ pub fn wrap_object(vm: &mut Vm, class: &ZStr, sxe: SxeRef) -> Result<Value, Thro
 /// function — the running native function, else the user function
 /// (`Class::method`) or `main` for top-level code. The VM's own docref
 /// only knows native functions; object handlers run from user code need
-/// the user-function form. With `skip_native`, the innermost native frame
-/// (the private `__get` trampoline) is ignored.
-pub fn docref(vm: &mut Vm, level: i64, msg: &[u8], skip_native: bool) -> VmResult<()> {
-    let mut frames = vm.frames.iter().rev().peekable();
-    if skip_native && frames.peek().is_some_and(|f| f.kind == FrameKind::Builtin) {
-        frames.next();
-    }
+/// the user-function form.
+pub fn docref(vm: &mut Vm, level: i64, msg: &[u8]) -> VmResult<()> {
+    let mut frames = vm.frames.iter().rev();
     let prefix = match frames.next() {
         Some(f) if f.kind == FrameKind::Builtin => {
             let name = f.builtin_name.clone().unwrap_or_default();
@@ -115,18 +111,12 @@ pub fn docref(vm: &mut Vm, level: i64, msg: &[u8], skip_native: bool) -> VmResul
 pub struct VmHost<'a> {
     /// The VM.
     pub vm: &'a mut Vm,
-    /// Report diagnostics as if the innermost native frame (the `__get`
-    /// trampoline) were not there.
-    pub skip_native: bool,
 }
 
 impl<'a> VmHost<'a> {
     /// Wraps the VM.
     pub fn new(vm: &'a mut Vm) -> Self {
-        VmHost {
-            vm,
-            skip_native: false,
-        }
+        VmHost { vm }
     }
 }
 
@@ -138,7 +128,7 @@ impl std::fmt::Debug for VmHost<'_> {
 
 impl RuntimeContext for VmHost<'_> {
     fn diagnostic(&mut self, level: ErrorLevel, message: &str) -> RtResult<()> {
-        let r = docref(self.vm, level.bits(), message.as_bytes(), self.skip_native);
+        let r = docref(self.vm, level.bits(), message.as_bytes());
         r.map_err(|t| to_rt(self.vm, t))
     }
     fn precision(&self) -> i64 {

@@ -4,13 +4,11 @@
 //!
 //! * Every object carries its [`php_simplexml::Sxe`] state (attached by
 //!   the `create` hook, replaced when the library wraps a node).
-//! * All object handlers are [`php_vm::ext::ClassHooks`]
-//!   (see [`hooks`]); the fetch type the C handlers receive is recovered
-//!   from the executing instruction.
-//! * Intermediate property fetches in write context
-//!   (`$sxe->a->b = 'x'`) do not reach the `read_property` hook in the VM;
-//!   they fall back to `__get`, so the class has a private native `__get`
-//!   implementing `get_property_ptr_ptr` + `read_property(BP_VAR_W)`.
+//! * All object handlers are [`php_vm::ext::ClassHooks`] (see [`hooks`]);
+//!   the fetch type the C handlers receive comes from the VM's
+//!   property/dimension contexts. In write context `read_property`
+//!   implements `get_property_ptr_ptr` (creating missing elements) followed
+//!   by `read_property(BP_VAR_W)`.
 //! * Parsing, loading and saving run inside
 //!   [`php_ext_xml::libxml::run`] (stream hooks, entity loader, libxml2
 //!   diagnostics and the `libxml_use_internal_errors()` list).
@@ -88,7 +86,6 @@ impl Extension for SimpleXml {
             .method("next(): void", pb, m::next)
             .method("hasChildren(): bool", pb, m::has_children)
             .method("getChildren(): ?SimpleXMLElement", pb, m::get_children)
-            .method("__get(string $name): mixed", acc::PRIVATE, m::magic_get)
             .hooks(hooks::class_hooks())
             .register(mb.vm());
         let _ = sxe;

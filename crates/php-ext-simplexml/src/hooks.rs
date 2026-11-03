@@ -1,15 +1,12 @@
 //! The `SimpleXMLElement` object handlers as VM [`ClassHooks`].
 //!
-//! The VM's property/dimension hooks do not say which fetch they serve
-//! (`BP_VAR_R`/`W`/`RW`/`IS`); [`fetch_mode`] recovers it from the
-//! instruction being executed.
+//! The fetch type the C handlers receive (`BP_VAR_R`/`W`/`RW`/`IS`) comes
+//! from `Vm::property_context` / `Vm::dimension_context`.
 
 use php_runtime::{CastTarget, Obj, PropertyPurpose, RtResult, Value, ZArray, ZStr};
 use php_simplexml::{CheckKind, FetchMode, PropertyPtr, Sxe, SxeRef};
-use php_vm::ext::{ClassHooks, NativeIterator, VmResult};
+use php_vm::ext::{ClassHooks, DimensionCtx, NativeIterator, PropCtx, VmResult};
 use php_vm::func::Func;
-use php_vm::opcode::{FetchMode as OpFetch, Op};
-use php_vm::vm::FrameKind;
 use php_vm::Vm;
 
 use crate::host::{rt_throw, sxe_of, VmHost};
@@ -40,35 +37,6 @@ pub fn class_hooks() -> ClassHooks {
 pub fn direct<R>(vm: &mut Vm, f: impl FnOnce(&mut VmHost<'_>) -> RtResult<R>) -> VmResult<R> {
     let r = f(&mut VmHost::new(vm));
     r.map_err(|e| rt_throw(vm, e))
-}
-
-/// The fetch type of the property/dimension access being executed.
-pub fn fetch_mode(vm: &Vm) -> FetchMode {
-    let Some(f) = vm
-        .frames
-        .iter()
-        .rev()
-        .find(|f| f.kind != FrameKind::Builtin)
-    else {
-        return FetchMode::Read;
-    };
-    match f.ip.checked_sub(1).and_then(|i| f.code.ops.get(i)) {
-        Some(
-            Op::Assign { .. }
-            | Op::AssignRef { .. }
-            | Op::MakeRef { .. }
-            | Op::FeReset { place: Some(_), .. },
-        ) => FetchMode::Write,
-        Some(Op::AssignOp { .. } | Op::IncDec { .. }) => FetchMode::ReadWrite,
-        Some(
-            Op::Isset { .. }
-            | Op::Empty { .. }
-            | Op::Fetch {
-                mode: OpFetch::Is, ..
-            },
-        ) => FetchMode::IsSet,
-        _ => FetchMode::Read,
-    }
 }
 
 /// Whether `method` of the object's class is implemented in PHP code.
@@ -144,37 +112,23 @@ fn read_property(vm: &mut Vm, o: &Obj, name: &ZStr) -> VmResult<Option<Value>> {
     let Some(st) = sxe_of(o) else {
         return Ok(None);
     };
-    let mode = fetch_mode(vm);
-    direct(vm, |h| Sxe::read_property(&st, h, name.as_bytes(), mode)).map(Some)
-}
-
-/// The `__get` fallback the VM uses for intermediate property fetches in
-/// write context (`$sxe->a->b = 1`, `$sxe->a[] = 1`): PHP's
-/// `get_property_ptr_ptr` (creating a missing element) followed by
-/// `read_property(BP_VAR_W)`.
-pub fn property_for_write(vm: &mut Vm, o: &Obj, name: &ZStr) -> VmResult<Value> {
-    let Some(st) = sxe_of(o) else {
-        return Ok(Value::Null);
+    let name = name.as_bytes();
+    let mode = match vm.property_context() {
+        PropCtx::Read | PropCtx::Unset | PropCtx::Exists => FetchMode::Read,
+        PropCtx::Isset => FetchMode::IsSet,
+        ctx @ (PropCtx::Write | PropCtx::ReadWrite | PropCtx::Ref) => {
+            // `get_property_ptr_ptr` (`sxe_property_get_adr`) first: it
+            // creates a missing element, else the VM falls back to
+            // `read_property`.
+            match direct(vm, |h| Sxe::property_ptr(&st, h, name))? {
+                PropertyPtr::Value(v) => return Ok(Some(v)),
+                PropertyPtr::Error => return Ok(Some(Value::Null)),
+                PropertyPtr::Fallback if ctx == PropCtx::ReadWrite => FetchMode::Read,
+                PropertyPtr::Fallback => FetchMode::Write,
+            }
+        }
     };
-    let trampoline = |vm: &mut Vm, f: &dyn Fn(&mut VmHost<'_>) -> RtResult<Value>| {
-        let mut h = VmHost::new(vm);
-        h.skip_native = true;
-        let r = f(&mut h);
-        r.map_err(|e| rt_throw(vm, e))
-    };
-    let ptr = {
-        let mut h = VmHost::new(vm);
-        h.skip_native = true;
-        let r = Sxe::property_ptr(&st, &mut h, name.as_bytes());
-        r.map_err(|e| rt_throw(vm, e))?
-    };
-    match ptr {
-        PropertyPtr::Value(v) => Ok(v),
-        PropertyPtr::Error => Ok(Value::Null),
-        PropertyPtr::Fallback => trampoline(vm, &|h| {
-            Sxe::read_property(&st, h, name.as_bytes(), FetchMode::Write)
-        }),
-    }
+    direct(vm, |h| Sxe::read_property(&st, h, name, mode)).map(Some)
 }
 
 fn write_property(vm: &mut Vm, o: &Obj, name: &ZStr, v: &Value) -> VmResult<bool> {
@@ -199,11 +153,12 @@ fn has_property(vm: &mut Vm, o: &Obj, name: &ZStr, check_empty: bool) -> VmResul
     let Some(st) = sxe_of(o) else {
         return Ok(None);
     };
-    let kind = check_kind(check_empty);
-    let has = direct(vm, |h| Sxe::has_property(&st, h, name.as_bytes(), kind))?;
-    // The VM expects "is empty" (not PHP's "is not empty") back for
-    // `empty()` on properties (unlike `has_dimension`).
-    Ok(Some(if check_empty { !has } else { has }))
+    let kind = if vm.property_context() == PropCtx::Exists {
+        CheckKind::Exists
+    } else {
+        check_kind(check_empty)
+    };
+    direct(vm, |h| Sxe::has_property(&st, h, name.as_bytes(), kind)).map(Some)
 }
 
 fn unset_property(vm: &mut Vm, o: &Obj, name: &ZStr) -> VmResult<bool> {
@@ -220,12 +175,15 @@ fn read_dimension(vm: &mut Vm, o: &Obj, k: &Value) -> VmResult<Option<Value>> {
     };
     // Compound assignments on a dimension (`$sxe['a'] += 1`) read it with
     // `BP_VAR_R` before writing (`zend_binary_assign_op_obj_dim`).
-    let mode = match fetch_mode(vm) {
-        FetchMode::ReadWrite => FetchMode::Read,
-        m => m,
+    let ctx = vm.dimension_context();
+    let mode = match ctx {
+        DimensionCtx::Read | DimensionCtx::Unset | DimensionCtx::ReadWrite => FetchMode::Read,
+        DimensionCtx::Is => FetchMode::IsSet,
+        DimensionCtx::Write | DimensionCtx::Append => FetchMode::Write,
     };
     let key = k.deref();
-    let v = direct(vm, |h| Sxe::read_dimension(&st, h, Some(&key), mode))?;
+    let offset = (ctx != DimensionCtx::Append).then_some(&key);
+    let v = direct(vm, |h| Sxe::read_dimension(&st, h, offset, mode))?;
     if mode == FetchMode::Write && !matches!(v, Value::Object(_) | Value::Reference(_)) {
         // `zend_fetch_dimension_address` on an object in a write context.
         vm.raise(

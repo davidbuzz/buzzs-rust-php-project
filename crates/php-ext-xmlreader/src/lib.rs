@@ -10,15 +10,12 @@
 //!   `write_property`/`unset_property` and appended to the `var_dump()`
 //!   table by `properties_for`.
 //! * `open()`/`XML()` are static methods that PHP also lets you call on an
-//!   instance (`xmlreader_get_method`); the VM drops `$this` for static
-//!   methods, so the receiver is recovered from the calling instruction
-//!   (see the `receiver` module).
+//!   instance (`xmlreader_get_method`): they are registered with
+//!   `acc::STATIC_KEEPS_THIS`, so `$this` is set for instance calls.
 //! * Every libxml2-backed call runs inside [`php_ext_xml::libxml::run`],
 //!   which lends the VM to the stream layer and reports libxml2
 //!   diagnostics as `XMLReader::method(): ...` warnings (or records them
 //!   with `libxml_use_internal_errors(true)`).
-
-mod receiver;
 
 use std::cell::RefCell;
 use std::io::Read;
@@ -28,7 +25,8 @@ use php_ext_streams::res::{cell_of, StreamCell};
 use php_runtime::{ArrayKey, HashTable, Obj, PropertyPurpose, Resource, Value, ZArray, ZStr};
 use php_vm::class::Class;
 use php_vm::ext::{
-    acc, class_flags, Args, ClassBuilder, ClassHooks, Extension, ModuleBuilder, Throw, VmResult,
+    acc, class_flags, Args, ClassBuilder, ClassHooks, Extension, ModuleBuilder, PropCtx, Throw,
+    VmResult,
 };
 use php_vm::func::flags;
 use php_vm::object::{class_of, data};
@@ -148,16 +146,15 @@ fn has_property(vm: &mut Vm, o: &Obj, name: &ZStr, check_empty: bool) -> VmResul
     let Some((st, p)) = virtual_prop(o, name) else {
         return Ok(None);
     };
-    let kind = if check_empty {
+    let kind = if vm.property_context() == PropCtx::Exists {
+        IssetKind::Exists
+    } else if check_empty {
         IssetKind::NotEmpty
     } else {
         IssetKind::Isset
     };
     let r = st.borrow().reader.has_property(p, kind);
-    // The VM expects "is empty" (not PHP's "is not empty") back for
-    // `empty()`.
-    r.map(|has| Some(if check_empty { !has } else { has }))
-        .map_err(|e| throw(vm, &e))
+    r.map(Some).map_err(|e| throw(vm, &e))
 }
 
 fn unset_property(vm: &mut Vm, o: &Obj, name: &ZStr) -> VmResult<bool> {
@@ -443,7 +440,6 @@ type StaticLoad =
 fn legacy_load(
     vm: &mut Vm,
     a: &Args,
-    name: &str,
     on_obj: InstanceLoad,
     on_class: StaticLoad,
 ) -> VmResult<Value> {
@@ -451,7 +447,7 @@ fn legacy_load(
     let encoding = opt_bytes(a, 1);
     let flags_ = a.int(2);
     let mut host = CollectingHost::default();
-    if let Some(obj) = receiver::instance(vm, name) {
+    if let Some(obj) = a.this.clone() {
         let Some(st) = state_of(&obj) else {
             return Ok(Value::Bool(false));
         };
@@ -480,7 +476,6 @@ fn open(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     legacy_load(
         vm,
         a,
-        "open",
         |r, s, e, f, h| r.open(s, e, f, h),
         |s, e, f, h| XmlReader::open_static(s, e, f, h),
     )
@@ -490,7 +485,6 @@ fn xml(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     legacy_load(
         vm,
         a,
-        "XML",
         |r, s, e, f, h| r.xml(s, e, f, h),
         |s, e, f, h| XmlReader::xml_static(s, e, f, h),
     )
@@ -591,17 +585,17 @@ impl Extension for XmlReaderExt {
     fn register(&self, m: &mut ModuleBuilder<'_>) {
         let table = php_xmlreader::class::class_table();
         let pb = acc::PUBLIC;
-        let st = acc::PUBLIC | acc::STATIC;
+        let st = acc::PUBLIC | acc::STATIC | acc::STATIC_KEEPS_THIS;
         let mut cb = ClassBuilder::new("XMLReader")
             .flags(class_flags::NOT_SERIALIZABLE | class_flags::NO_CLONE);
         for c in table.constants {
             cb = cb.constant(c.name, Value::Int(c.value));
         }
-        // The virtual properties are declared (uninitialized, so they never
-        // appear in property tables) for `property_exists()` and
-        // reflection; every access goes through the hooks first.
+        // The virtual properties are declared virtual (no backing store) for
+        // `property_exists()` and reflection; every access goes through
+        // the hooks.
         for p in &table.properties {
-            cb = cb.prop(p.name, acc::PUBLIC, Some(p.type_), None);
+            cb = cb.prop(p.name, acc::PUBLIC | acc::VIRTUAL, Some(p.type_), None);
         }
         cb.method("close(): true", pb, close)
             .method("getAttribute(string $name): ?string", pb, get_attribute)

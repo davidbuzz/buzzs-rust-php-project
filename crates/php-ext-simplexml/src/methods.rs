@@ -5,12 +5,12 @@ use std::rc::Rc;
 use php_runtime::{RtResult, Value, ZStr};
 use php_simplexml::{Sxe, SxeRef};
 use php_vm::class::Class;
-use php_vm::ext::{Args, Throw, VmResult};
+use php_vm::ext::{Args, VmResult};
 use php_vm::Vm;
 
 use php_ext_xsl::access::{ImportedNode, XmlSource};
 
-use crate::hooks::{direct, property_for_write};
+use crate::hooks::direct;
 use crate::host::{rt_throw, sxe_of, LentHost};
 
 /// Runs a library call inside [`php_ext_xml::libxml::run`] (stream hooks,
@@ -196,47 +196,6 @@ pub fn has_children(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 pub fn get_children(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let st = this_sxe(vm, a)?;
     Ok(Sxe::get_children(&st))
-}
-
-/// The private `__get` the VM falls back to for intermediate property
-/// fetches in write context (see [`property_for_write`]).
-pub fn magic_get(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let Some(o) = a.this.clone() else {
-        return Ok(Value::Null);
-    };
-    let name = a.str(0);
-    let r = property_for_write(vm, &o, &name);
-    if let Err(Throw::Exception(e)) = &r {
-        // The trampoline is not a frame of PHP's: drop it from the trace
-        // of an exception thrown right here.
-        drop_trampoline_frame(e);
-    }
-    r
-}
-
-/// Removes the leading `SimpleXMLElement->__get()` frame from an
-/// exception's trace.
-fn drop_trampoline_frame(e: &php_runtime::Obj) {
-    let cls = php_vm::object::class_of(e).clone();
-    let Some(pi) = cls.props.iter().find(|p| p.name.as_bytes() == b"trace") else {
-        return;
-    };
-    let d = php_vm::object::data(e);
-    let mut slots = d.slots.borrow_mut();
-    let Some(Some(Value::Array(frames))) = slots.get(pi.slot as usize) else {
-        return;
-    };
-    let is_trampoline = frames.values().next().is_some_and(|f| match f {
-        Value::Array(f) => matches!(
-            f.get_str(b"function"),
-            Some(Value::Str(n)) if n.as_bytes() == b"__get"
-        ),
-        _ => false,
-    });
-    if is_trampoline {
-        let rest: Vec<Value> = frames.values().skip(1).cloned().collect();
-        slots[pi.slot as usize] = Some(Value::Array(php_runtime::ZArray::from_values(rest)));
-    }
 }
 
 /// `Z_PARAM_CLASS_OR_NULL` against `SimpleXMLElement`: argument `n`
