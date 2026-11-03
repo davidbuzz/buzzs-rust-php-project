@@ -250,3 +250,35 @@ foreach (['convert.iconv.UTF-8.UTF-16LE', 'convert.iconv.UTF-8/ISO-8859-1', 'con
 }
 filt('convert.iconv.UTF-16BE.UTF-8', ['test']);
 filt('convert.iconv.ucs-2/utf8//IGNORE', ['abc']);
+
+// ---- inputs lifted from ext/iconv/tests/*.phpt ----
+$T = __DIR__ . '/../../../modules/php-src/ext/iconv/tests/';
+$src = file_get_contents($T . 'iconv_mime_decode.phpt');
+preg_match_all('/do_single_test\(<<< HERE\n(.*?)\nHERE\n\);/s', $src, $m);
+foreach ($m[1] as $h) {
+    $h = str_replace('\t', "\t", $h);
+    foreach ([0, 1, 2, 3] as $mode) call('iconv_mime_decode', $h, $mode, 'UTF-8');
+}
+$src = file_get_contents($T . 'iconv_mime_encode.phpt');
+preg_match('/iconv_mime_encode\("From", "(.*?)", \$preference\)/s', $src, $m);
+for ($ll = 0; $ll < 80; $ll++) {
+    mime_enc('From', $m[1], ['scheme' => 'B', 'output-charset' => 'ISO-2022-JP', 'input-charset' => 'EUC-JP',
+        'line-break-chars' => "\n", 'line-length' => $ll]);
+    mime_enc('From', $m[1], ['scheme' => 'Q', 'output-charset' => 'ISO-2022-JP', 'input-charset' => 'EUC-JP',
+        'line-break-chars' => "\n", 'line-length' => $ll]);
+}
+$src = file_get_contents($T . 'iconv_mime_decode_headers.phpt');
+preg_match('/\$headers = <<<HERE\n(.*?)\nHERE;/s', $src, $m);
+foreach ([0, 1, 2, 3] as $mode) call('iconv_mime_decode_headers', $m[1], $mode);
+foreach (glob($T . '*.phpt') as $f) {
+    $src = file_get_contents($f);
+    if (preg_match_all('/iconv_mime_decode(?:_headers)?\((["\'])((?:\\\\.|(?!\1).)*)\1/s', $src, $mm)) {
+        foreach ($mm[2] as $k => $lit) {
+            $str = $mm[1][$k] === '"' ? stripcslashes($lit) : $lit;
+            foreach ([0, 1, 2, 3] as $mode) {
+                call('iconv_mime_decode', $str, $mode, 'UTF-8');
+                call('iconv_mime_decode_headers', $str, $mode, 'UTF-8');
+            }
+        }
+    }
+}

@@ -99,6 +99,7 @@ fn enc_int(o: &Outcome<i64>) -> String {
     o.value.map_or("F".into(), |v| format!("i:{v}"))
 }
 
+#[allow(clippy::too_many_lines)]
 fn run_line(ic: &Iconv, line: &str) -> Option<String> {
     let cols: Vec<&str> = line.split('\t').collect();
     let arrow = cols.iter().position(|c| *c == "=>").expect("=>");

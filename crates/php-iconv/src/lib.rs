@@ -512,7 +512,9 @@ impl Iconv {
                 let value = text[v..].to_vec();
                 insert_header(&mut out, name, value);
             }
-            rest = &rest[decoded.next_pos.min(rest.len())..];
+            // PHP always makes progress here (next_pos >= 1); guard anyway.
+            let advance = decoded.next_pos.clamp(1, rest.len());
+            rest = &rest[advance..];
         }
         Outcome::ok(out)
     }

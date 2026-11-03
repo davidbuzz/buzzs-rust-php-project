@@ -33,6 +33,8 @@ const QP_TABLE: [u8; 256] = {
     t
 };
 
+const HEX: &[u8; 16] = b"0123456789ABCDEF";
+
 const B64_CHARS: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
 /// `php_base64_encode()`.
@@ -106,63 +108,63 @@ fn hexval(c: u8) -> u32 {
 
 /// `php_quot_print_decode(str, len, replace_us_by_ws)`; `None` on
 /// malformed input.
-pub fn quot_print_decode(s: &[u8], replace_us_by_ws: bool) -> Option<Vec<u8>> {
-    let at = |k: usize| s.get(k).copied().unwrap_or(0);
-    let mut out = Vec::with_capacity(s.len());
-    let mut i = s.len();
-    let mut p = 0usize;
-    while i > 0 && at(p) != 0 {
-        if at(p) == b'=' {
-            i -= 1;
-            p += 1;
-            if i == 0 || at(p) == 0 {
+pub fn quot_print_decode(input: &[u8], replace_us_by_ws: bool) -> Option<Vec<u8>> {
+    let at = |k: usize| input.get(k).copied().unwrap_or(0);
+    let mut out = Vec::with_capacity(input.len());
+    let mut left = input.len();
+    let mut pos = 0usize;
+    while left > 0 && at(pos) != 0 {
+        if at(pos) == b'=' {
+            left -= 1;
+            pos += 1;
+            if left == 0 || at(pos) == 0 {
                 break;
             }
-            let mut h = hexval(at(p));
-            if h < 16 {
-                i -= 1;
-                if i == 0 {
+            let mut hi = hexval(at(pos));
+            if hi < 16 {
+                left -= 1;
+                if left == 0 {
                     return None;
                 }
-                p += 1;
-                let l = hexval(at(p));
-                if l >= 16 {
+                pos += 1;
+                let lo = hexval(at(pos));
+                if lo >= 16 {
                     return None;
                 }
                 #[allow(clippy::cast_possible_truncation)]
-                out.push(((h << 4) | l) as u8);
-                i -= 1;
-                p += 1;
-            } else if h < 64 {
-                while h == 32 {
-                    i -= 1;
-                    if i == 0 {
+                out.push(((hi << 4) | lo) as u8);
+                left -= 1;
+                pos += 1;
+            } else if hi < 64 {
+                while hi == 32 {
+                    left -= 1;
+                    if left == 0 {
                         return None;
                     }
-                    p += 1;
-                    h = hexval(at(p));
-                    if h == 64 {
+                    pos += 1;
+                    hi = hexval(at(pos));
+                    if hi == 64 {
                         return None;
                     }
                 }
-                if at(p) == b'\r' && i >= 2 && at(p + 1) == b'\n' {
-                    i -= 1;
-                    p += 1;
+                if at(pos) == b'\r' && left >= 2 && at(pos + 1) == b'\n' {
+                    left -= 1;
+                    pos += 1;
                 }
-                i -= 1;
-                p += 1;
+                left -= 1;
+                pos += 1;
             } else {
                 return None;
             }
         } else {
-            let c = at(p);
+            let c = at(pos);
             out.push(if replace_us_by_ws && c == b'_' {
                 b' '
             } else {
                 c
             });
-            i -= 1;
-            p += 1;
+            left -= 1;
+            pos += 1;
         }
     }
     Some(out)
@@ -339,10 +341,9 @@ pub fn mime_encode(
                         break;
                     }
                     out_size = out_size
-                        .saturating_sub((nbytes_required - char_cnt.wrapping_sub(2) + 2) / 3);
+                        .saturating_sub((nbytes_required - char_cnt.wrapping_sub(2)).div_ceil(3));
                     inp = ini_in;
                 }
-                const HEX: &[u8; 16] = b"0123456789ABCDEF";
                 for &b in &buf[..pos] {
                     if QP_TABLE[usize::from(b)] == 1 {
                         ret.push(b);
@@ -561,11 +562,9 @@ pub fn mime_decode(s: &[u8], enc: &[u8], mode: i64, limit: Limit) -> Result<Deco
                     return Err(IconvErr::Malformed);
                 }
             }
-            5 => {
-                if c == b'?' {
-                    encoded_text_len = p1 - encoded_text;
-                    scan_stat = 6;
-                }
+            5 if c == b'?' => {
+                encoded_text_len = p1 - encoded_text;
+                scan_stat = 6;
             }
             7 => {
                 if c == b'\n' {
@@ -670,11 +669,7 @@ pub fn mime_decode(s: &[u8], enc: &[u8], mode: i64, limit: Limit) -> Result<Deco
                     }
                 }
             }
-            10 => {
-                if c == b'?' {
-                    scan_stat = 3;
-                }
-            }
+            10 if c == b'?' => scan_stat = 3,
             11 => match c {
                 b'\r' => scan_stat = 7,
                 b'\n' => scan_stat = 8,
