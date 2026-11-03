@@ -102,6 +102,24 @@ pub(crate) fn register(vm: &mut Vm) {
         .abstract_method("tryFrom(int|string $value): ?static", PUB | flags::STATIC)
         .register(vm);
     crate::exceptions::register(vm);
+    for (name, parent) in [
+        ("LogicException", "Exception"),
+        ("BadFunctionCallException", "LogicException"),
+        ("BadMethodCallException", "BadFunctionCallException"),
+        ("DomainException", "LogicException"),
+        ("InvalidArgumentException", "LogicException"),
+        ("LengthException", "LogicException"),
+        ("OutOfRangeException", "LogicException"),
+        ("RuntimeException", "Exception"),
+        ("OutOfBoundsException", "RuntimeException"),
+        ("OverflowException", "RuntimeException"),
+        ("RangeException", "RuntimeException"),
+        ("UnderflowException", "RuntimeException"),
+        ("UnexpectedValueException", "RuntimeException"),
+        ("JsonException", "Exception"),
+    ] {
+        ClassBuilder::new(name).extends(vm, parent).register(vm);
+    }
     crate::closure::register(vm);
     crate::generator::register(vm);
     ClassBuilder::new("Attribute")
