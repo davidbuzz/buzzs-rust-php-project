@@ -479,7 +479,15 @@ fn split_callbacks(vm: &mut Vm, a: &Args, ncb: usize) -> VmResult<(Vec<Value>, V
     for (i, cb) in cbs.iter().enumerate() {
         check_callable(vm, a, n - ncb + i + 1, false, false, cb)?;
     }
-    Ok((arrays.to_vec(), cbs.to_vec()))
+    let mut arrays = arrays.to_vec();
+    // The result starts as `zend_array_dup()` of the first array, which
+    // unwraps references only that array holds. php-stdarr copies the
+    // elements for sorting first (raising their refcounts), so hand it an
+    // already duplicated first array.
+    if let Some(Value::Array(first)) = arrays.first_mut() {
+        *first = ZArray::from_table((**first).clone());
+    }
+    Ok((arrays, cbs.to_vec()))
 }
 
 macro_rules! ucb_fn {
