@@ -757,6 +757,7 @@ dependencies = [
  "php-ext-streams",
  "php-ext-xml",
  "php-ext-xsl",
+ "php-libxml",
  "php-runtime",
  "php-simplexml",
  "php-vm",
@@ -1043,6 +1044,7 @@ dependencies = [
 name = "php-parser"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "php-lexer",
 ]
 
