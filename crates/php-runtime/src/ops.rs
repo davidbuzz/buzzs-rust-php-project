@@ -1237,3 +1237,181 @@ pub fn binary_op(
         BinaryOp::BoolNot => bool_not(a, ctx),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::error::CollectingContext;
+
+    fn inc(v: Value) -> (Value, Vec<String>) {
+        let mut c = CollectingContext::new();
+        let mut v = v;
+        increment(&mut v, &mut c).unwrap();
+        (v, c.messages())
+    }
+
+    fn dec(v: Value) -> (Value, Vec<String>) {
+        let mut c = CollectingContext::new();
+        let mut v = v;
+        decrement(&mut v, &mut c).unwrap();
+        (v, c.messages())
+    }
+
+    #[test]
+    fn string_increment() {
+        for (from, to) in [
+            ("z", "aa"),
+            ("Az", "Ba"),
+            ("zz", "aaa"),
+            ("a9", "b0"),
+            ("Zz", "AAa"),
+            ("", "1"),
+            ("-", "-"),
+            ("a-z", "a-a"),
+            ("abc ", "abc "),
+            ("9z", "10a"),
+        ] {
+            let (v, msgs) = inc(Value::from(from));
+            assert_eq!(
+                v.as_str().map(ZStr::to_string_lossy).as_deref(),
+                Some(to),
+                "{from}"
+            );
+            assert_eq!(
+                msgs,
+                ["Deprecated: Increment on non-numeric string is deprecated, use str_increment() instead"]
+            );
+        }
+    }
+
+    #[test]
+    fn numeric_increment_decrement() {
+        assert_eq!(inc(Value::from("9")).0.as_int(), Some(10));
+        assert_eq!(inc(Value::from(" 1")).0.as_int(), Some(2));
+        assert_eq!(inc(Value::from("1.5")).0.as_float(), Some(2.5));
+        assert_eq!(inc(Value::from("1e2")).0.as_float(), Some(101.0));
+        assert_eq!(
+            inc(Value::Int(i64::MAX)).0.as_float(),
+            Some(9.223_372_036_854_775_807e18)
+        );
+        assert_eq!(inc(Value::Null).0.as_int(), Some(1));
+        assert_eq!(
+            dec(Value::Int(i64::MIN)).0.as_float(),
+            Some(-9.223_372_036_854_775_808e18)
+        );
+        assert_eq!(dec(Value::from("5")).0.as_int(), Some(4));
+        let (v, m) = dec(Value::from(""));
+        assert_eq!(v.as_int(), Some(-1));
+        assert_eq!(
+            m,
+            ["Deprecated: Decrement on empty string is deprecated as non-numeric"]
+        );
+        let (v, m) = dec(Value::from("abc"));
+        assert_eq!(
+            v.as_str().map(ZStr::to_string_lossy).as_deref(),
+            Some("abc")
+        );
+        assert_eq!(
+            m,
+            ["Deprecated: Decrement on non-numeric string has no effect and is deprecated"]
+        );
+        let (v, m) = dec(Value::Null);
+        assert!(v.is_null());
+        assert_eq!(
+            m,
+            ["Warning: Decrement on type null has no effect, this will change in the next major version of PHP"]
+        );
+        let (v, m) = inc(Value::Bool(false));
+        assert!(matches!(v, Value::Bool(false)));
+        assert_eq!(m.len(), 1);
+    }
+
+    #[test]
+    fn increment_errors() {
+        let mut c = CollectingContext::new();
+        let mut v = Value::empty_array();
+        let e = increment(&mut v, &mut c).unwrap_err();
+        assert_eq!(e.message(), Some("Cannot increment array"));
+        let e = decrement(&mut v, &mut c).unwrap_err();
+        assert_eq!(e.message(), Some("Cannot decrement array"));
+    }
+
+    #[test]
+    fn increment_through_reference() {
+        let mut c = CollectingContext::new();
+        let mut v = Value::Int(1);
+        let r = v.make_ref();
+        increment(&mut v, &mut c).unwrap();
+        assert_eq!(r.get().as_int(), Some(2));
+    }
+
+    #[test]
+    fn intdiv_and_shifts() {
+        assert_eq!(intdiv(7, 2).unwrap(), 3);
+        assert_eq!(
+            intdiv(1, 0).unwrap_err().message(),
+            Some("Division by zero")
+        );
+        assert_eq!(
+            intdiv(i64::MIN, -1).unwrap_err().message(),
+            Some("Division of PHP_INT_MIN by -1 is not an integer")
+        );
+        let mut c = CollectingContext::new();
+        let e = shift_left(&Value::Int(1), &Value::Int(-1), &mut c).unwrap_err();
+        assert_eq!(e.class_name(), Some("ArithmeticError"));
+        assert_eq!(e.message(), Some("Bit shift by negative number"));
+        assert_eq!(
+            shift_left(&Value::Int(1), &Value::Int(64), &mut c)
+                .unwrap()
+                .as_int(),
+            Some(0)
+        );
+        assert_eq!(
+            shift_right(&Value::Int(-8), &Value::Int(65), &mut c)
+                .unwrap()
+                .as_int(),
+            Some(-1)
+        );
+    }
+
+    #[test]
+    fn concat_assign_appends_in_place() {
+        let mut c = CollectingContext::new();
+        let mut v = Value::from("ab");
+        concat_assign(&mut v, &Value::Int(1), &mut c).unwrap();
+        concat_assign(&mut v, &Value::from("c"), &mut c).unwrap();
+        assert_eq!(
+            v.as_str().map(ZStr::to_string_lossy).as_deref(),
+            Some("ab1c")
+        );
+    }
+
+    fn self_referencing() -> Value {
+        // $a = []; $a[] = &$a;
+        let mut a = Value::empty_array();
+        let r = a.make_ref();
+        let mut inner = r.get();
+        if let Value::Array(arr) = &mut inner {
+            arr.make_mut().push(Value::Reference(r.clone())).unwrap();
+        }
+        r.set(inner);
+        r.get()
+    }
+
+    #[test]
+    fn recursive_array_comparison_throws() {
+        let mut c = CollectingContext::new();
+        let (a, b) = (self_referencing(), self_referencing());
+        assert!(is_equal(&a, &a, &mut c).unwrap());
+        let e = compare(&a, &b, &mut c).unwrap_err();
+        assert_eq!(
+            e.message(),
+            Some("Nesting level too deep - recursive dependency?")
+        );
+        let e = is_identical(&a, &b).unwrap_err();
+        assert_eq!(
+            e.message(),
+            Some("Nesting level too deep - recursive dependency?")
+        );
+    }
+}
