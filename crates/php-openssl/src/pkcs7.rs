@@ -368,7 +368,7 @@ impl OpenSsl {
 }
 
 /// The certificate zval reinterpreted as a key argument.
-pub(crate) fn cert_as_key<'a>(c: CertArg<'a>) -> KeyArg<'a> {
+pub(crate) fn cert_as_key(c: CertArg<'_>) -> KeyArg<'_> {
     match c {
         CertArg::Object(o) => KeyArg::Cert(o),
         CertArg::Str(s) => KeyArg::Str(s),

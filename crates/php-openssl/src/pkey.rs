@@ -458,6 +458,10 @@ impl OpenSsl {
             }))
     }
 
+    /// `openssl_pkey_free()` / `openssl_free_key()`: no-ops (deprecated;
+    /// the VM raises the `#[\Deprecated]` notice).
+    pub fn pkey_free(&mut self, _key: &AsymmetricKey) {}
+
     /// `openssl_pkey_get_details()`.
     pub fn pkey_get_details(&mut self, key: &AsymmetricKey) -> Option<PhpArray> {
         let pkey = &key.pkey;

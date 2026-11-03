@@ -23,8 +23,6 @@
 //!
 //! The TLS stream transport is described (not implemented) in [`tls`].
 
-// Work in progress: helpers are wired up family by family.
-#![allow(dead_code)]
 // The ports deliberately mirror php-src's C functions (one Rust function
 // per C function, same variable names such as `n`/`e`/`d`, `dmp1`/`dmq1`)
 // so they can be reviewed side by side with the reference.

@@ -4180,3 +4180,9 @@ impl Cms {
         }
     }
 }
+
+/// `X509_V_ERR_CERT_CHAIN_TOO_LONG` as the `openssl` crate's verify result.
+pub fn verify_result_chain_too_long() -> openssl::x509::X509VerifyResult {
+    // SAFETY: 22 is the documented X509_V_ERR_CERT_CHAIN_TOO_LONG code.
+    unsafe { openssl::x509::X509VerifyResult::from_raw(22) }
+}

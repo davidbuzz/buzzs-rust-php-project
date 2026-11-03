@@ -65,9 +65,9 @@ impl ConfigArgs {
 /// A parsed request configuration.
 #[derive(Debug)]
 pub(crate) struct ReqConfig {
-    pub global_config: Option<Conf>,
+    /// Loaded only for its error-queue side effects, as in PHP.
+    pub _global_config: Option<Conf>,
     pub req_config: Conf,
-    pub config_filename: Vec<u8>,
     pub section_name: Vec<u8>,
     pub digest: Option<Md>,
     pub extensions_section: Option<Vec<u8>>,
@@ -277,9 +277,8 @@ impl OpenSsl {
         }
 
         Ok(Some(ReqConfig {
-            global_config,
+            _global_config: global_config,
             req_config,
-            config_filename,
             section_name,
             digest,
             extensions_section,

@@ -1,5 +1,7 @@
 //! PKCS#7 and CMS S/MIME functions (php-src test expectations).
 
+#![allow(clippy::too_many_lines)]
+
 mod common;
 use common::*;
 use php_openssl::cms::CipherAlgo;
