@@ -2,7 +2,8 @@
 
 use crate::host::spl_state_of;
 use crate::iter::{with_host, SplNativeIter};
-use php_runtime::{Obj, PropertyPurpose, Value, ZArray, ZStr};
+use php_runtime::numeric::handle_numeric_str;
+use php_runtime::{ArrayKey, HashTable, Obj, PropertyPurpose, Value, ZArray, ZStr};
 use php_spl::handlers as h;
 use php_spl::DimKind;
 use php_vm::ext::{ClassHooks, NativeIterator, VmResult};
@@ -26,6 +27,7 @@ pub fn class_hooks() -> ClassHooks {
         has_dimension: Some(has_dimension),
         unset_dimension: Some(unset_dimension),
         get_iterator: Some(get_iterator),
+        unserialize: Some(unserialize),
         ..ClassHooks::default()
     }
 }
@@ -147,4 +149,27 @@ fn unset_dimension(vm: &mut Vm, o: &Obj, k: &Value) -> VmResult<bool> {
 fn get_iterator(vm: &mut Vm, o: &Obj, by_ref: bool) -> VmResult<Box<dyn NativeIterator>> {
     let it = with_host(vm, |host| php_spl::iter::get_iterator(host, o, by_ref))?;
     Ok(Box::new(SplNativeIter::new(it)))
+}
+
+/// Calls `__unserialize()` with the data array in canonical form: the
+/// runtime's object parser keeps integer-like keys as strings, while PHP
+/// hands `__unserialize()` an ordinary array (`zend_symtable_update`).
+fn unserialize(vm: &mut Vm, o: &Obj, data: ZArray) -> VmResult<bool> {
+    let cls = php_vm::object::class_of(o).clone();
+    if cls.magic.unserialize.is_none() {
+        return Ok(false);
+    }
+    let mut t = HashTable::new();
+    for (k, v) in data.iter() {
+        let key = match k {
+            ArrayKey::Str(s) => match handle_numeric_str(s.as_bytes()) {
+                Some(n) => ArrayKey::Int(n),
+                None => k.clone(),
+            },
+            ArrayKey::Int(_) => k.clone(),
+        };
+        t.insert(key, v.clone());
+    }
+    vm.call_method_by_name(o, "__unserialize", vec![Value::Array(ZArray::from_table(t))])?;
+    Ok(true)
 }

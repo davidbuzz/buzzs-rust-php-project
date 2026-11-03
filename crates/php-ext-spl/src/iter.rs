@@ -27,6 +27,12 @@ pub struct SplNativeIter {
     index: i64,
 }
 
+impl std::fmt::Debug for SplNativeIter {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "SplNativeIter({})", self.index)
+    }
+}
+
 impl SplNativeIter {
     /// Wraps an SPL iterator.
     #[must_use]

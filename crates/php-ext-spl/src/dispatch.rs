@@ -146,7 +146,9 @@ fn signature(d: &MethodDef) -> String {
         if i > 0 {
             s.push_str(", ");
         }
-        if let Some(t) = p.ty {
+        // Callable parameters are checked by `php-spl`, which produces
+        // PHP's "must be a valid callback, ..." messages.
+        if let Some(t) = p.ty.filter(|t| !t.contains("callable")) {
             s.push_str(t);
             s.push(' ');
         }
@@ -246,16 +248,41 @@ fn register_class(vm: &mut Vm, c: &'static ClassDef) {
     });
 }
 
-/// Registers every SPL class the VM does not provide yet. Returns the
-/// names of the classes that were already registered.
+/// Registers every SPL class the VM does not provide yet, parents and
+/// interfaces first. Returns the names of the classes that were already
+/// registered (by the VM or another extension).
 pub fn register_classes(vm: &mut Vm) -> Vec<&'static str> {
     let mut skipped = Vec::new();
+    let mut pending: Vec<&'static ClassDef> = Vec::new();
     for c in php_spl::classes::class_table() {
         if vm.find_class(c.name.as_bytes()).is_some() {
             skipped.push(c.name);
-            continue;
+        } else {
+            pending.push(c);
         }
-        register_class(vm, c);
+    }
+    while !pending.is_empty() {
+        let before = pending.len();
+        let mut rest = Vec::new();
+        for c in pending {
+            let ready = c
+                .parent
+                .iter()
+                .chain(c.interfaces.iter())
+                .all(|n| vm.find_class(n.as_bytes()).is_some());
+            if ready {
+                register_class(vm, c);
+            } else {
+                rest.push(c);
+            }
+        }
+        pending = rest;
+        if pending.len() == before {
+            // Unresolvable dependencies: register anyway.
+            for c in pending.drain(..) {
+                register_class(vm, c);
+            }
+        }
     }
     skipped
 }
@@ -309,7 +336,8 @@ fn method_handler(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         let mut host = VmHost::new(vm);
         let mut r = Ok(());
         if let Some(o) = &this {
-            if spl_state_of(o).is_some() {
+            // `get_method` checks do not apply to constructor calls.
+            if spl_state_of(o).is_some() && !t.def.name.eq_ignore_ascii_case("__construct") {
                 r = php_spl::handlers::before_method_call(&mut host, o);
             }
         }
@@ -323,3 +351,4 @@ fn method_handler(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 pub fn function_signature(d: &MethodDef) -> String {
     signature(d)
 }
+

@@ -13,9 +13,21 @@ use php_vm::func::{flags, Func};
 use php_vm::object::{class_of, data};
 use php_vm::{Throw, Vm};
 use std::cell::RefCell;
-use std::rc::Rc;
+use std::collections::HashMap;
+use std::rc::{Rc, Weak};
+
+/// The last property table handed out for a wrapped object, with the
+/// iterator positions `ArrayObject`/`ArrayIterator` registered on it.
+struct PropCache {
+    owner: Weak<dyn php_runtime::PhpObject>,
+    table: ZArray,
+}
 
 thread_local! {
+    /// Persistent property tables of objects wrapped by `ArrayObject` /
+    /// `ArrayIterator` (the VM rebuilds `zend_std_get_properties` on each
+    /// request, so iterator registrations are kept here), keyed by handle.
+    static PROP_CACHE: RefCell<HashMap<u32, PropCache>> = RefCell::new(HashMap::new());
     /// The `RegexIterator` PCRE state (pattern cache, last error). The
     /// `php-ext-pcre` state is private to that crate, so SPL keeps its own.
     static PCRE: RefCell<Option<php_pcre::Pcre>> = const { RefCell::new(None) };
@@ -97,9 +109,54 @@ fn demangle(key: &[u8]) -> (Option<&[u8]>, &[u8]) {
 }
 
 /// `zend_std_get_properties`: declared (initialized) properties in slot
-/// order with mangled names, then dynamic ones.
+/// order with mangled names, then dynamic ones. The table registered for
+/// the object is reused when its keys did not change, so iterator
+/// positions survive.
 #[must_use]
 pub fn std_properties(obj: &Obj) -> ZArray {
+    let fresh = build_properties(obj);
+    let cached = PROP_CACHE.with(|c| {
+        c.borrow()
+            .get(&obj.handle())
+            .filter(|e| e.owner.upgrade().is_some_and(|o| Rc::ptr_eq(&o, obj.rc())))
+            .map(|e| e.table.clone())
+    });
+    let Some(mut cached) = cached else {
+        remember(obj, &fresh);
+        return fresh;
+    };
+    if cached.len() == fresh.len() && cached.keys().zip(fresh.keys()).all(|(a, b)| a == b) {
+        let ht = cached.make_mut();
+        for (k, v) in fresh.iter() {
+            ht.insert(k.clone(), v.clone());
+        }
+        remember(obj, &cached);
+        return cached;
+    }
+    let mut fresh = fresh;
+    fresh.make_mut().take_iterators_from(cached.make_mut());
+    remember(obj, &fresh);
+    fresh
+}
+
+/// Records the table handed out for `obj`.
+fn remember(obj: &Obj, table: &ZArray) {
+    PROP_CACHE.with(|c| {
+        let mut c = c.borrow_mut();
+        if c.len() > 256 {
+            c.retain(|_, e| e.owner.strong_count() > 0);
+        }
+        c.insert(
+            obj.handle(),
+            PropCache {
+                owner: Rc::downgrade(obj.rc()),
+                table: table.clone(),
+            },
+        );
+    });
+}
+
+fn build_properties(obj: &Obj) -> ZArray {
     let cls = class_of(obj).clone();
     let d = data(obj);
     let mut t = HashTable::new();
@@ -127,6 +184,7 @@ pub fn std_properties(obj: &Obj) -> ZArray {
 
 /// Replaces an object's property table (inverse of [`std_properties`]).
 pub fn set_std_properties(obj: &Obj, props: &ZArray) {
+    remember(obj, props);
     let cls = class_of(obj).clone();
     let d = data(obj);
     let mut slots = d.slots.borrow_mut();
