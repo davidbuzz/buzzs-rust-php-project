@@ -193,7 +193,7 @@ struct Source(Iter);
 
 impl crate::iter::IterSource for Source {
     fn rewind(&mut self, vm: &mut Vm, _index: &mut i64) -> Option<VmResult<()>> {
-        Some(NativeIterator::rewind(&mut self.0, vm))
+        Some(NativeIterator::rewind(&mut self.0, vm).and_then(|()| self.0.read(vm)))
     }
 
     fn valid(&self) -> bool {

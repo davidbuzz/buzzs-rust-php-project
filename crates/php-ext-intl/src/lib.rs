@@ -26,6 +26,7 @@ mod newfmt;
 mod numfmt;
 mod registry;
 mod resbundle;
+mod spoof;
 mod stubs;
 mod text;
 mod timezone;
@@ -119,6 +120,7 @@ fn all_handlers() -> HashMap<&'static str, NativeFn> {
         breakiter::handlers(),
         converter::handlers(),
         resbundle::handlers(),
+        spoof::handlers(),
         iter::handlers(),
         timezone::handlers(),
         calendar::handlers(),
@@ -182,6 +184,9 @@ fn class_opts(name: &str) -> registry::ClassOpts {
         }
         "UConverter" => {
             o.hooks = ClassHooks { create: Some(converter::create), clone: Some(converter::clone), ..ClassHooks::default() };
+        }
+        "Spoofchecker" => {
+            o.hooks = ClassHooks { clone: Some(spoof::clone), ..ClassHooks::default() };
         }
         "Transliterator" => {
             o.hooks = ClassHooks { clone: Some(translit::clone), ..ClassHooks::default() };

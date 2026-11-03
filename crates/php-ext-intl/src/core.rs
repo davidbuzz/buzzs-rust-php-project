@@ -140,8 +140,20 @@ pub(crate) fn reset_both(o: &Obj) {
     with_obj_error(o, ErrorState::reset);
 }
 
-/// `get_active_function_or_method_name()`.
+/// `get_active_function_or_method_name()`: the running builtin, else the
+/// running user function, else `main`.
 pub(crate) fn active_function(vm: &Vm) -> Option<String> {
+    let top = vm.frames.last()?;
+    if top.kind != FrameKind::Builtin {
+        if top.kind != FrameKind::Function {
+            return Some("main".to_owned());
+        }
+        let name = top.ufunc.as_ref().map(|u| u.name.to_string_lossy()).unwrap_or_default();
+        return Some(match &top.scope {
+            Some(c) if !name.contains("{closure") => format!("{}::{name}", object::display_name(&c.name)),
+            _ => name,
+        });
+    }
     vm.frames
         .iter()
         .rev()
