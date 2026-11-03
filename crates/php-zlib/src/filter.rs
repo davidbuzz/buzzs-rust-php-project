@@ -65,7 +65,7 @@ impl InflateFilter {
 }
 
 impl StreamFilter for InflateFilter {
-    fn label(&self) -> &str {
+    fn label(&self) -> &'static str {
         "zlib.inflate"
     }
 
@@ -191,7 +191,7 @@ impl DeflateFilter {
 }
 
 impl StreamFilter for DeflateFilter {
-    fn label(&self) -> &str {
+    fn label(&self) -> &'static str {
         "zlib.deflate"
     }
 
@@ -306,12 +306,12 @@ impl FilterFactory for ZlibFilterFactory {
             if let Some(p @ (Value::Array(_) | Value::Object { .. })) = params {
                 if let Some(v) = crate::conv::find(options_of(p), "window") {
                     let tmp = v.to_long();
-                    if !(-i64::from(MAX_WBITS)..=i64::from(MAX_WBITS) + 32).contains(&tmp) {
+                    if (-i64::from(MAX_WBITS)..=i64::from(MAX_WBITS) + 32).contains(&tmp) {
+                        window_bits = i32::try_from(tmp).unwrap_or(-MAX_WBITS);
+                    } else {
                         warn_compression(format!(
                             "Invalid parameter given for window size ({tmp})"
                         ));
-                    } else {
-                        window_bits = i32::try_from(tmp).unwrap_or(-MAX_WBITS);
                     }
                 }
             }
@@ -325,9 +325,7 @@ impl FilterFactory for ZlibFilterFactory {
                 if (-1..=9).contains(&tmp) {
                     level = i32::try_from(tmp).unwrap_or(-1);
                 } else {
-                    warn_compression(format!(
-                        "Invalid compression level specified. ({tmp})"
-                    ));
+                    warn_compression(format!("Invalid compression level specified. ({tmp})"));
                 }
             };
             match params {
@@ -336,29 +334,31 @@ impl FilterFactory for ZlibFilterFactory {
                     let ht = options_of(p);
                     if let Some(v) = crate::conv::find(ht, "memory") {
                         let tmp = v.to_long();
-                        if !(1..=i64::from(MAX_MEM_LEVEL)).contains(&tmp) {
+                        if (1..=i64::from(MAX_MEM_LEVEL)).contains(&tmp) {
+                            mem_level = i32::try_from(tmp).unwrap_or(MAX_MEM_LEVEL);
+                        } else {
                             warn_compression(format!(
                                 "Invalid parameter given for memory level ({tmp})"
                             ));
-                        } else {
-                            mem_level = i32::try_from(tmp).unwrap_or(MAX_MEM_LEVEL);
                         }
                     }
                     if let Some(v) = crate::conv::find(ht, "window") {
                         let tmp = v.to_long();
-                        if !(-i64::from(MAX_WBITS)..=i64::from(MAX_WBITS) + 16).contains(&tmp) {
+                        if (-i64::from(MAX_WBITS)..=i64::from(MAX_WBITS) + 16).contains(&tmp) {
+                            window_bits = i32::try_from(tmp).unwrap_or(-MAX_WBITS);
+                        } else {
                             warn_compression(format!(
                                 "Invalid parameter given for window size ({tmp})"
                             ));
-                        } else {
-                            window_bits = i32::try_from(tmp).unwrap_or(-MAX_WBITS);
                         }
                     }
                     if let Some(v) = crate::conv::find(ht, "level") {
                         set_level(v.to_long());
                     }
                 }
-                Some(v @ (Value::Str(_) | Value::Float(_) | Value::Int(_))) => set_level(v.to_long()),
+                Some(v @ (Value::Str(_) | Value::Float(_) | Value::Int(_))) => {
+                    set_level(v.to_long());
+                }
                 Some(_) => warn_compression("Invalid filter parameter, ignored".into()),
             }
             DeflateFilter::new(level, window_bits, mem_level, write_seekable)
@@ -375,7 +375,11 @@ mod tests {
     use php_streams::filter::{ChainKind, FilterChain};
     use php_streams::value::Key;
 
-    fn run(f: &mut dyn StreamFilter, chunks: &[&[u8]], flags: FilterFlags) -> (FilterStatus, Vec<u8>) {
+    fn run(
+        f: &mut dyn StreamFilter,
+        chunks: &[&[u8]],
+        flags: FilterFlags,
+    ) -> (FilterStatus, Vec<u8>) {
         let mut env = FilterEnv::detached(ChainKind::Read);
         let mut input: Brigade = chunks.iter().map(|c| Bucket::new(*c)).collect();
         let mut out = Brigade::new();
@@ -403,7 +407,11 @@ mod tests {
             crate::codec::gzdeflate(text, -1, crate::constants::ZLIB_ENCODING_RAW).unwrap()
         );
         let mut i = create("ZLIB.INFLATE", None).unwrap();
-        let (st, plain) = run(i.as_mut(), &[&packed[..10], &packed[10..]], FilterFlags::Normal);
+        let (st, plain) = run(
+            i.as_mut(),
+            &[&packed[..10], &packed[10..]],
+            FilterFlags::Normal,
+        );
         assert_eq!(st, FilterStatus::PassOn);
         assert_eq!(plain, text);
     }
@@ -412,7 +420,11 @@ mod tests {
     fn inflate_error_notice() {
         let _ = diag::take();
         let mut i = create("zlib.inflate", None).unwrap();
-        let (st, _) = run(i.as_mut(), &[b"\xff\xff\xff\xff garbage"], FilterFlags::Normal);
+        let (st, _) = run(
+            i.as_mut(),
+            &[b"\xff\xff\xff\xff garbage"],
+            FilterFlags::Normal,
+        );
         assert_eq!(st, FilterStatus::ErrFatal);
         let d = diag::take();
         assert_eq!(d[0].text(), "zlib: data error");
@@ -475,9 +487,15 @@ mod tests {
         let packed = crate::codec::gzdeflate(b"hello world", -1, -15).unwrap();
         let mut i = create("zlib.inflate", None).unwrap();
         let mut env = FilterEnv::detached(ChainKind::Read);
-        assert_eq!(run(i.as_mut(), &[&packed], FilterFlags::Normal).1, b"hello world");
+        assert_eq!(
+            run(i.as_mut(), &[&packed], FilterFlags::Normal).1,
+            b"hello world"
+        );
         assert!(i.seek(&mut env, 0, 0));
-        assert_eq!(run(i.as_mut(), &[&packed], FilterFlags::Normal).1, b"hello world");
+        assert_eq!(
+            run(i.as_mut(), &[&packed], FilterFlags::Normal).1,
+            b"hello world"
+        );
         assert_eq!(i.read_seekable(), Seekable::Start);
         let mut d = create("zlib.deflate", None).unwrap();
         run(d.as_mut(), &[b"xxx"], FilterFlags::Normal);
@@ -494,8 +512,15 @@ mod tests {
         all.extend(run(d.as_mut(), &[], FilterFlags::FlushInc).1);
         all.extend(run(d.as_mut(), &[b"hello again"], FilterFlags::Normal).1);
         all.extend(run(d.as_mut(), &[], FilterFlags::FlushClose).1);
-        let hex: String = all.iter().map(|b| format!("{b:02x}")).collect();
-        assert_eq!(hex, "ca48cdc9c95728cf2fca495100000000ffffcb00b313d31333f300");
+        let hex: String = all.iter().fold(String::new(), |mut acc, b| {
+            use std::fmt::Write as _;
+            let _ = write!(acc, "{b:02x}");
+            acc
+        });
+        assert_eq!(
+            hex,
+            "ca48cdc9c95728cf2fca495100000000ffffcb00b313d31333f300"
+        );
     }
 
     #[test]
@@ -506,8 +531,17 @@ mod tests {
         chain.push_back(reg.create("zlib.deflate", None, false).unwrap());
         chain.push_back(reg.create("zlib.inflate", None, false).unwrap());
         let mut env = FilterEnv::detached(ChainKind::Write);
-        let (st, out) = chain.run(0, &mut env, Brigade::from(vec![Bucket::new("round trip")]), None, FilterFlags::FlushClose);
+        let (st, out) = chain.run(
+            0,
+            &mut env,
+            Brigade::from(vec![Bucket::new("round trip")]),
+            None,
+            FilterFlags::FlushClose,
+        );
         assert_eq!(st, FilterStatus::PassOn);
-        assert_eq!(out.into_iter().flat_map(|b| b.data).collect::<Vec<_>>(), b"round trip");
+        assert_eq!(
+            out.into_iter().flat_map(|b| b.data).collect::<Vec<_>>(),
+            b"round trip"
+        );
     }
 }

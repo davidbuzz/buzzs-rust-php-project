@@ -32,6 +32,7 @@ pub mod error;
 pub mod filter;
 pub mod gz;
 pub mod output;
+pub mod wrapper;
 
 pub use codec::{
     gzcompress, gzdecode, gzdeflate, gzencode, gzinflate, gzuncompress, zlib_decode, zlib_encode,

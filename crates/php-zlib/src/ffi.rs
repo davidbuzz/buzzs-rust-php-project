@@ -64,6 +64,8 @@ impl std::fmt::Debug for ZStream {
     }
 }
 
+// The stream must live at a stable address (zlib keeps a back pointer).
+#[allow(clippy::unnecessary_box_returns)]
 fn fresh_stream() -> Box<z::z_stream> {
     Box::new(z::z_stream {
         next_in: ptr::null_mut(),
@@ -104,7 +106,7 @@ impl ZStream {
         // allocator callbacks set; zlibVersion() returns a static string.
         let ret = unsafe {
             z::deflateInit2_(
-                &mut *strm,
+                &raw mut *strm,
                 level,
                 z::Z_DEFLATED,
                 window_bits,
@@ -130,7 +132,7 @@ impl ZStream {
         let mut strm = fresh_stream();
         // SAFETY: as for deflate_init.
         let ret = unsafe {
-            z::inflateInit2_(&mut *strm, window_bits, z::zlibVersion(), stream_size())
+            z::inflateInit2_(&raw mut *strm, window_bits, z::zlibVersion(), stream_size())
         };
         if ret == z::Z_OK {
             Ok(ZStream {
@@ -141,11 +143,6 @@ impl ZStream {
         } else {
             Err(ret)
         }
-    }
-
-    /// Whether the stream is initialised (not yet ended).
-    pub fn is_live(&self) -> bool {
-        self.live
     }
 
     /// Runs `deflate()` or `inflate()` once on the given buffers.
@@ -168,8 +165,8 @@ impl ZStream {
         // zlib never writes through next_in.
         let status = unsafe {
             match self.kind {
-                Kind::Deflate => z::deflate(&mut *self.strm, flush),
-                Kind::Inflate => z::inflate(&mut *self.strm, flush),
+                Kind::Deflate => z::deflate(&raw mut *self.strm, flush),
+                Kind::Inflate => z::inflate(&raw mut *self.strm, flush),
             }
         };
         let consumed = (avail_in - self.strm.avail_in) as usize;
@@ -206,8 +203,8 @@ impl ZStream {
         // SAFETY: the stream is initialised.
         unsafe {
             match self.kind {
-                Kind::Deflate => z::deflateReset(&mut *self.strm),
-                Kind::Inflate => z::inflateReset(&mut *self.strm),
+                Kind::Deflate => z::deflateReset(&raw mut *self.strm),
+                Kind::Inflate => z::inflateReset(&raw mut *self.strm),
             }
         }
     }
@@ -223,7 +220,7 @@ impl ZStream {
         self.strm.next_out = scratch.as_mut_ptr();
         self.strm.avail_out = 0;
         // SAFETY: the stream is initialised; next_out is valid for 0 bytes.
-        let ret = unsafe { z::deflateParams(&mut *self.strm, level, strategy) };
+        let ret = unsafe { z::deflateParams(&raw mut *self.strm, level, strategy) };
         self.strm.next_out = ptr::null_mut();
         ret
     }
@@ -238,8 +235,8 @@ impl ZStream {
         // bytes; zlib copies the dictionary.
         unsafe {
             match self.kind {
-                Kind::Deflate => z::deflateSetDictionary(&mut *self.strm, dict.as_ptr(), len),
-                Kind::Inflate => z::inflateSetDictionary(&mut *self.strm, dict.as_ptr(), len),
+                Kind::Deflate => z::deflateSetDictionary(&raw mut *self.strm, dict.as_ptr(), len),
+                Kind::Inflate => z::inflateSetDictionary(&raw mut *self.strm, dict.as_ptr(), len),
             }
         }
     }
@@ -254,8 +251,8 @@ impl ZStream {
         // is re-initialised.
         unsafe {
             match self.kind {
-                Kind::Deflate => z::deflateEnd(&mut *self.strm),
-                Kind::Inflate => z::inflateEnd(&mut *self.strm),
+                Kind::Deflate => z::deflateEnd(&raw mut *self.strm),
+                Kind::Inflate => z::inflateEnd(&raw mut *self.strm),
             }
         }
     }
@@ -268,7 +265,7 @@ impl ZStream {
         let mut strm = fresh_stream();
         // SAFETY: as for inflate_init.
         let ret = unsafe {
-            z::inflateInit2_(&mut *strm, window_bits, z::zlibVersion(), stream_size())
+            z::inflateInit2_(&raw mut *strm, window_bits, z::zlibVersion(), stream_size())
         };
         if ret == z::Z_OK {
             self.strm = strm;
@@ -280,12 +277,7 @@ impl ZStream {
 
     /// `total_in`.
     pub fn total_in(&self) -> u64 {
-        u64::from(self.strm.total_in)
-    }
-
-    /// `total_out`.
-    pub fn total_out(&self) -> u64 {
-        u64::from(self.strm.total_out)
+        self.strm.total_in
     }
 
     /// `strm->msg`, if zlib set one.
@@ -316,6 +308,7 @@ pub fn zlib_version() -> &'static str {
 }
 
 /// `crc32()` over `data`, continuing from `crc`.
+#[cfg(test)]
 pub fn crc32(crc: u32, data: &[u8]) -> u32 {
     let mut crc = z::uLong::from(crc);
     for chunk in data.chunks(c_uint::MAX as usize) {
@@ -323,6 +316,21 @@ pub fn crc32(crc: u32, data: &[u8]) -> u32 {
         crc = unsafe { z::crc32(crc, chunk.as_ptr(), clamp_len(chunk.len())) };
     }
     u32::try_from(crc).unwrap_or(0)
+}
+
+/// `dup(fd)` wrapped in a [`std::fs::File`] that owns the duplicate (zlib's
+/// `gzdopen(dup(fd), mode)`). Returns `None` when `dup()` fails.
+pub fn dup_fd(fd: i32) -> Option<std::fs::File> {
+    use std::os::fd::FromRawFd;
+    // SAFETY: dup() has no memory-safety preconditions; an invalid fd
+    // yields -1.
+    let d = unsafe { libc::dup(fd) };
+    if d < 0 {
+        return None;
+    }
+    // SAFETY: `d` is a freshly duplicated descriptor owned by nobody else;
+    // the File takes ownership and closes it on drop.
+    Some(unsafe { std::fs::File::from_raw_fd(d) })
 }
 
 /// `strerror(errno)`.
@@ -348,14 +356,16 @@ mod tests {
         let mut out = vec![0u8; 64];
         let st = d.deflate(b"hello", &mut out, z::Z_FINISH);
         assert_eq!(st.status, z::Z_STREAM_END);
-        assert_eq!(&out[..st.produced], &[0xcb, 0x48, 0xcd, 0xc9, 0xc9, 0x07, 0x00]);
+        assert_eq!(
+            &out[..st.produced],
+            &[0xcb, 0x48, 0xcd, 0xc9, 0xc9, 0x07, 0x00]
+        );
         let mut i = ZStream::inflate_init(-15).unwrap();
         let mut back = vec![0u8; 16];
         let st2 = i.inflate(&out[..st.produced], &mut back, z::Z_NO_FLUSH);
         assert_eq!(st2.status, z::Z_STREAM_END);
         assert_eq!(&back[..st2.produced], b"hello");
         assert_eq!(i.total_in(), st.produced as u64);
-        assert_eq!(i.total_out(), 5);
     }
 
     #[test]

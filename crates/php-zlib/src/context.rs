@@ -508,11 +508,20 @@ mod tests {
         let dict = |items: Vec<Value>| {
             arr(vec![(
                 "dictionary",
-                Value::Array(items.into_iter().enumerate().map(|(i, v)| (Key::Int(i as i64), v)).collect()),
+                Value::Array(
+                    items
+                        .into_iter()
+                        .enumerate()
+                        .map(|(i, v)| (Key::Int(i64::try_from(i).unwrap()), v))
+                        .collect(),
+                ),
             )])
         };
         assert_eq!(
-            err(DeflateContext::init(ZLIB_ENCODING_DEFLATE, &dict(vec![Value::str(" "), Value::str("")]))),
+            err(DeflateContext::init(
+                ZLIB_ENCODING_DEFLATE,
+                &dict(vec![Value::str(" "), Value::str("")])
+            )),
             "ValueError: deflate_init(): Argument #2 ($options) must not contain empty strings"
         );
         assert_eq!(
@@ -520,7 +529,16 @@ mod tests {
             "ValueError: deflate_init(): Argument #2 ($options) must not contain strings with null bytes"
         );
         assert_eq!(
-            err(DeflateContext::init(ZLIB_ENCODING_DEFLATE, &dict(vec![Value::str(" "), Value::Object { class: "stdClass".into(), string_value: None }]))),
+            err(DeflateContext::init(
+                ZLIB_ENCODING_DEFLATE,
+                &dict(vec![
+                    Value::str(" "),
+                    Value::Object {
+                        class: "stdClass".into(),
+                        string_value: None
+                    }
+                ])
+            )),
             "Error: Object of class stdClass could not be converted to string"
         );
         // Encoding is checked before the dictionary.
@@ -533,14 +551,23 @@ mod tests {
             "TypeError: inflate_init(): Argument #2 ($options) the value for option \"window\" must be of type int, array given"
         );
         assert_eq!(
-            err(InflateContext::init(ZLIB_ENCODING_DEFLATE, &arr(vec![("window", Value::Int(3))]))),
+            err(InflateContext::init(
+                ZLIB_ENCODING_DEFLATE,
+                &arr(vec![("window", Value::Int(3))])
+            )),
             "ValueError: zlib window size (logarithm) (3) must be within 8..15"
         );
     }
 
     #[test]
     fn deflate_add_flush_types_roundtrip() {
-        let flushes = [ZLIB_SYNC_FLUSH, ZLIB_PARTIAL_FLUSH, ZLIB_FULL_FLUSH, ZLIB_NO_FLUSH, ZLIB_BLOCK];
+        let flushes = [
+            ZLIB_SYNC_FLUSH,
+            ZLIB_PARTIAL_FLUSH,
+            ZLIB_FULL_FLUSH,
+            ZLIB_NO_FLUSH,
+            ZLIB_BLOCK,
+        ];
         for mode in [ZLIB_ENCODING_RAW, ZLIB_ENCODING_GZIP, ZLIB_ENCODING_DEFLATE] {
             for flush_size in [1usize, 4, 32768] {
                 for &flush in &flushes {
@@ -561,13 +588,15 @@ mod tests {
                 }
             }
         }
-        let mut ctx = DeflateContext::new(ZLIB_ENCODING_DEFLATE, &DeflateOptions::default()).unwrap();
+        let mut ctx =
+            DeflateContext::new(ZLIB_ENCODING_DEFLATE, &DeflateOptions::default()).unwrap();
         assert_eq!(err(ctx.add(b"test", 6789)), "ValueError: deflate_add(): Argument #3 ($flush_mode) must be one of ZLIB_NO_FLUSH, ZLIB_PARTIAL_FLUSH, ZLIB_SYNC_FLUSH, ZLIB_FULL_FLUSH, ZLIB_BLOCK, or ZLIB_FINISH");
     }
 
     #[test]
     fn deflate_reuse_after_finish() {
-        let mut ctx = DeflateContext::new(ZLIB_ENCODING_DEFLATE, &DeflateOptions::default()).unwrap();
+        let mut ctx =
+            DeflateContext::new(ZLIB_ENCODING_DEFLATE, &DeflateOptions::default()).unwrap();
         for c in b'a'..=b'z' {
             ctx.add(&[c], ZLIB_SYNC_FLUSH).unwrap();
         }
@@ -577,13 +606,21 @@ mod tests {
             compressed.extend(ctx.add(&[c], ZLIB_NO_FLUSH).unwrap());
         }
         compressed.extend(ctx.add(b"", Z_FINISH).unwrap());
-        assert_eq!(zlib_decode(&compressed, 0).unwrap(), (b'a'..=b'z').collect::<Vec<_>>());
+        assert_eq!(
+            zlib_decode(&compressed, 0).unwrap(),
+            (b'a'..=b'z').collect::<Vec<_>>()
+        );
     }
 
     #[test]
     fn buffer_full_ends_with_sync_marker() {
         let mut ctx = DeflateContext::new(ZLIB_ENCODING_RAW, &DeflateOptions::default()).unwrap();
-        let out = ctx.add(&[0x25, 0x50, 0x44, 0x46, 0x2d, 0x31, 0x2e, 0x32], ZLIB_SYNC_FLUSH).unwrap();
+        let out = ctx
+            .add(
+                &[0x25, 0x50, 0x44, 0x46, 0x2d, 0x31, 0x2e, 0x32],
+                ZLIB_SYNC_FLUSH,
+            )
+            .unwrap();
         assert_eq!(&out[out.len() - 4..], &[0, 0, 0xff, 0xff]);
     }
 
@@ -593,12 +630,14 @@ mod tests {
         assert_eq!(compressed.len(), 20);
         let mut junk = compressed.clone();
         junk.extend(b"qebsouesl".repeat(128));
-        let mut ctx = InflateContext::new(ZLIB_ENCODING_DEFLATE, &InflateOptions::default()).unwrap();
+        let mut ctx =
+            InflateContext::new(ZLIB_ENCODING_DEFLATE, &InflateOptions::default()).unwrap();
         assert_eq!(ctx.add(&junk, ZLIB_SYNC_FLUSH).unwrap(), b"Hello world.");
         assert_eq!(ctx.status(), 1);
         assert_eq!(ctx.read_len(), 20);
 
-        let mut ctx = InflateContext::new(ZLIB_ENCODING_DEFLATE, &InflateOptions::default()).unwrap();
+        let mut ctx =
+            InflateContext::new(ZLIB_ENCODING_DEFLATE, &InflateOptions::default()).unwrap();
         let mut buf = Vec::new();
         let mut i = 0;
         while ctx.status() == 0 {
@@ -629,22 +668,51 @@ mod tests {
     #[test]
     fn dictionaries() {
         let letters: Vec<Value> = (b'a'..=b'z').map(|c| Value::str(vec![c])).collect();
-        let as_arr = |v: &[Value]| Value::Array(v.iter().cloned().enumerate().map(|(i, v)| (Key::Int(i as i64), v)).collect());
-        let mut d = DeflateContext::init(ZLIB_ENCODING_DEFLATE, &arr(vec![("dictionary", as_arr(&letters))])).unwrap();
+        let as_arr = |v: &[Value]| {
+            Value::Array(
+                v.iter()
+                    .cloned()
+                    .enumerate()
+                    .map(|(i, v)| (Key::Int(i64::try_from(i).unwrap()), v))
+                    .collect(),
+            )
+        };
+        let mut d = DeflateContext::init(
+            ZLIB_ENCODING_DEFLATE,
+            &arr(vec![("dictionary", as_arr(&letters))]),
+        )
+        .unwrap();
         let a = d.add(b"abdcde", Z_FINISH).unwrap();
         let mut flat = Vec::new();
         for c in b'a'..=b'z' {
             flat.push(c);
             flat.push(0);
         }
-        let mut d2 = DeflateContext::init(ZLIB_ENCODING_DEFLATE, &arr(vec![("dictionary", Value::str(flat))])).unwrap();
+        let mut d2 = DeflateContext::init(
+            ZLIB_ENCODING_DEFLATE,
+            &arr(vec![("dictionary", Value::str(flat))]),
+        )
+        .unwrap();
         assert_eq!(d2.add(b"abdcde", Z_FINISH).unwrap(), a);
-        let mut i = InflateContext::init(ZLIB_ENCODING_DEFLATE, &arr(vec![("dictionary", as_arr(&letters))])).unwrap();
+        let mut i = InflateContext::init(
+            ZLIB_ENCODING_DEFLATE,
+            &arr(vec![("dictionary", as_arr(&letters))]),
+        )
+        .unwrap();
         assert_eq!(i.add(&a, Z_FINISH).unwrap(), b"abdcde");
         let mut wrong = vec![Value::str("8")];
         wrong.extend(letters.iter().skip(1).cloned());
-        let mut i = InflateContext::init(ZLIB_ENCODING_DEFLATE, &arr(vec![("dictionary", as_arr(&wrong))])).unwrap();
-        assert_eq!(i.add(&a, Z_FINISH).unwrap_err(), Error::Warning("Dictionary does not match expected dictionary (incorrect adler32 hash)".into()));
+        let mut i = InflateContext::init(
+            ZLIB_ENCODING_DEFLATE,
+            &arr(vec![("dictionary", as_arr(&wrong))]),
+        )
+        .unwrap();
+        assert_eq!(
+            i.add(&a, Z_FINISH).unwrap_err(),
+            Error::Warning(
+                "Dictionary does not match expected dictionary (incorrect adler32 hash)".into()
+            )
+        );
         let mut i = InflateContext::new(ZLIB_ENCODING_DEFLATE, &InflateOptions::default()).unwrap();
         assert_eq!(i.add(&a, ZLIB_SYNC_FLUSH).unwrap_err(), Error::Warning("Inflating this data requires a preset dictionary, please specify it in the options array of inflate_init()".into()));
     }
@@ -653,7 +721,10 @@ mod tests {
     fn raw_dictionary_small_window() {
         let dict = b"the quick brown fox jumps over the lazy dog";
         let data = [&dict[..], b" "].concat().repeat(8);
-        let opts = arr(vec![("window", Value::Int(10)), ("dictionary", Value::str(&dict[..]))]);
+        let opts = arr(vec![
+            ("window", Value::Int(10)),
+            ("dictionary", Value::str(&dict[..])),
+        ]);
         let mut d = DeflateContext::init(ZLIB_ENCODING_RAW, &opts).unwrap();
         let comp = d.add(&data, Z_FINISH).unwrap();
         let mut i = InflateContext::init(ZLIB_ENCODING_RAW, &opts).unwrap();
@@ -662,14 +733,32 @@ mod tests {
 
     #[test]
     fn oracle_bytes() {
-        let mut c = DeflateContext::init(ZLIB_ENCODING_GZIP, &arr(vec![("level", Value::Int(9)), ("window", Value::Int(9))])).unwrap();
-        assert_eq!(hex(&c.add(b"hello hello hello", Z_FINISH).unwrap()), "1f8b0800000000000203cb48cdc9c957c84090008088f9e511000000");
-        let mut c = DeflateContext::init(ZLIB_ENCODING_RAW, &arr(vec![("dictionary", Value::str("hello"))])).unwrap();
-        assert_eq!(hex(&c.add(b"hello hello hello", ZLIB_SYNC_FLUSH).unwrap()), "ca00110a4824000000ffff");
+        let mut c = DeflateContext::init(
+            ZLIB_ENCODING_GZIP,
+            &arr(vec![("level", Value::Int(9)), ("window", Value::Int(9))]),
+        )
+        .unwrap();
+        assert_eq!(
+            hex(&c.add(b"hello hello hello", Z_FINISH).unwrap()),
+            "1f8b0800000000000203cb48cdc9c957c84090008088f9e511000000"
+        );
+        let mut c = DeflateContext::init(
+            ZLIB_ENCODING_RAW,
+            &arr(vec![("dictionary", Value::str("hello"))]),
+        )
+        .unwrap();
+        assert_eq!(
+            hex(&c.add(b"hello hello hello", ZLIB_SYNC_FLUSH).unwrap()),
+            "ca00110a4824000000ffff"
+        );
         assert_eq!(hex(&c.add(b"", Z_FINISH).unwrap()), "0300");
     }
 
     fn hex(b: &[u8]) -> String {
-        b.iter().map(|x| format!("{x:02x}")).collect()
+        b.iter().fold(String::new(), |mut acc, x| {
+            use std::fmt::Write as _;
+            let _ = write!(acc, "{x:02x}");
+            acc
+        })
     }
 }

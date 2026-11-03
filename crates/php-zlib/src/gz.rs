@@ -49,6 +49,24 @@ pub const SEEK_CUR: i32 = 1;
 /// `SEEK_END`.
 pub const SEEK_END: i32 = 2;
 
+/// A failed `gzFile` operation (zlib's `-1`); details are available from
+/// [`GzStream::error`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GzError;
+
+impl std::fmt::Display for GzError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("gzip stream operation failed")
+    }
+}
+
+impl std::error::Error for GzError {}
+
+/// A byte count as a file offset.
+fn off(n: usize) -> i64 {
+    i64::try_from(n).unwrap_or(i64::MAX)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Mode {
     Read,
@@ -63,6 +81,8 @@ enum How {
 }
 
 /// A `gzFile`.
+// The flags mirror zlib's `gz_state` one to one.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Debug)]
 pub struct GzStream<F> {
     inner: F,
@@ -268,7 +288,7 @@ impl<F: Read + Write + Seek> GzStream<F> {
     // ---------------------------------------------------------------
 
     /// `gz_load()`: reads up to `len` bytes into `out[at..]` (or `inbuf`).
-    fn gz_load_into(&mut self, which: Buf, at: usize, len: usize) -> Result<usize, ()> {
+    fn gz_load_into(&mut self, which: Buf, at: usize, len: usize) -> Result<usize, GzError> {
         let mut have = 0usize;
         let mut last = 1usize;
         while have < len {
@@ -288,7 +308,7 @@ impl<F: Read + Write + Seek> GzStream<F> {
                 Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
                 Err(e) => {
                     self.io_error(&e);
-                    return Err(());
+                    return Err(GzError);
                 }
             }
         }
@@ -299,7 +319,7 @@ impl<F: Read + Write + Seek> GzStream<F> {
     }
 
     /// `gz_load()` straight into a caller buffer.
-    fn gz_load_user(&mut self, buf: &mut [u8]) -> Result<usize, ()> {
+    fn gz_load_user(&mut self, buf: &mut [u8]) -> Result<usize, GzError> {
         let mut have = 0usize;
         let mut last = 1usize;
         while have < buf.len() {
@@ -315,7 +335,7 @@ impl<F: Read + Write + Seek> GzStream<F> {
                 Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
                 Err(e) => {
                     self.io_error(&e);
-                    return Err(());
+                    return Err(GzError);
                 }
             }
         }
@@ -326,9 +346,9 @@ impl<F: Read + Write + Seek> GzStream<F> {
     }
 
     /// `gz_avail()`.
-    fn gz_avail(&mut self) -> Result<(), ()> {
+    fn gz_avail(&mut self) -> Result<(), GzError> {
         if self.err != Z_OK && self.err != Z_BUF_ERROR {
-            return Err(());
+            return Err(GzError);
         }
         if !self.eof {
             if self.in_avail > 0 {
@@ -343,18 +363,17 @@ impl<F: Read + Write + Seek> GzStream<F> {
     }
 
     /// `gz_look()`.
-    fn gz_look(&mut self) -> Result<(), ()> {
+    fn gz_look(&mut self) -> Result<(), GzError> {
         if self.size == 0 {
             self.inbuf = vec![0; self.want];
             self.out = vec![0; self.want << 1];
             self.size = self.want;
-            match ZStream::inflate_init(MAX_WBITS + 16) {
-                Ok(z) => self.z = Some(z),
-                Err(_) => {
-                    self.size = 0;
-                    self.gz_error(Z_MEM_ERROR, Some("out of memory"));
-                    return Err(());
-                }
+            if let Ok(z) = ZStream::inflate_init(MAX_WBITS + 16) {
+                self.z = Some(z);
+            } else {
+                self.size = 0;
+                self.gz_error(Z_MEM_ERROR, Some("out of memory"));
+                return Err(GzError);
             }
         }
         if self.in_avail < 2 {
@@ -393,7 +412,7 @@ impl<F: Read + Write + Seek> GzStream<F> {
 
     /// `gz_decomp()` into `target`; returns the bytes produced (which become
     /// `x.have`).
-    fn gz_decomp(&mut self, target: &mut [u8]) -> Result<usize, ()> {
+    fn gz_decomp(&mut self, target: &mut [u8]) -> Result<usize, GzError> {
         let mut ret = Z_OK;
         let mut produced = 0usize;
         loop {
@@ -405,7 +424,7 @@ impl<F: Read + Write + Seek> GzStream<F> {
                 break;
             }
             let Some(z) = self.z.as_mut() else {
-                return Err(());
+                return Err(GzError);
             };
             let step = z.inflate(
                 &self.inbuf[self.in_next..self.in_next + self.in_avail],
@@ -417,17 +436,20 @@ impl<F: Read + Write + Seek> GzStream<F> {
             produced += step.produced;
             ret = step.status;
             if ret == Z_STREAM_ERROR || ret == Z_NEED_DICT {
-                self.gz_error(Z_STREAM_ERROR, Some("internal error: inflate stream corrupt"));
-                return Err(());
+                self.gz_error(
+                    Z_STREAM_ERROR,
+                    Some("internal error: inflate stream corrupt"),
+                );
+                return Err(GzError);
             }
             if ret == Z_MEM_ERROR {
                 self.gz_error(Z_MEM_ERROR, Some("out of memory"));
-                return Err(());
+                return Err(GzError);
             }
             if ret == Z_DATA_ERROR {
                 let msg = z.msg().unwrap_or_else(|| "compressed data error".into());
                 self.gz_error(Z_DATA_ERROR, Some(&msg));
-                return Err(());
+                return Err(GzError);
             }
             if !(produced < target.len() && ret != Z_STREAM_END) {
                 break;
@@ -440,7 +462,7 @@ impl<F: Read + Write + Seek> GzStream<F> {
     }
 
     /// `gz_fetch()`.
-    fn gz_fetch(&mut self) -> Result<(), ()> {
+    fn gz_fetch(&mut self) -> Result<(), GzError> {
         loop {
             match self.how {
                 How::Look => {
@@ -470,14 +492,14 @@ impl<F: Read + Write + Seek> GzStream<F> {
     }
 
     /// `gz_skip()`.
-    fn gz_skip(&mut self, mut len: i64) -> Result<(), ()> {
+    fn gz_skip(&mut self, mut len: i64) -> Result<(), GzError> {
         while len > 0 {
             if self.x_have > 0 {
                 let n = usize::try_from(len).map_or(self.x_have, |l| l.min(self.x_have));
                 self.x_have -= n;
                 self.x_next += n;
-                self.x_pos += n as i64;
-                len -= n as i64;
+                self.x_pos += off(n);
+                len -= off(n);
             } else if self.eof && self.in_avail == 0 {
                 break;
             } else {
@@ -489,14 +511,14 @@ impl<F: Read + Write + Seek> GzStream<F> {
 
     /// `gzread()`: reads up to `buf.len()` uncompressed bytes. `Ok(0)` means
     /// end of file; `Err` corresponds to `gzread()` returning -1.
-    pub fn read(&mut self, buf: &mut [u8]) -> Result<usize, ()> {
+    pub fn read(&mut self, buf: &mut [u8]) -> Result<usize, GzError> {
         if self.mode != Mode::Read || (self.err != Z_OK && self.err != Z_BUF_ERROR) {
-            return Err(());
+            return Err(GzError);
         }
         let len = buf.len().min(i32::MAX as usize);
         let got = self.gz_read(&mut buf[..len]);
         if got == 0 && self.err != Z_OK && self.err != Z_BUF_ERROR {
-            return Err(());
+            return Err(GzError);
         }
         Ok(got)
     }
@@ -531,7 +553,7 @@ impl<F: Read + Write + Seek> GzStream<F> {
             } else if self.how == How::Copy {
                 match self.gz_load_user(&mut buf[got..got + n]) {
                     Ok(m) => n = m,
-                    Err(()) => return 0,
+                    Err(GzError) => return 0,
                 }
             } else {
                 match self.gz_decomp(&mut buf[got..got + n]) {
@@ -539,22 +561,22 @@ impl<F: Read + Write + Seek> GzStream<F> {
                         n = m;
                         self.x_have = 0;
                     }
-                    Err(()) => return 0,
+                    Err(GzError) => return 0,
                 }
             }
             got += n;
-            self.x_pos += n as i64;
+            self.x_pos += off(n);
         }
         got
     }
 
     /// `gzrewind()`.
-    pub fn rewind(&mut self) -> Result<(), ()> {
+    pub fn rewind(&mut self) -> Result<(), GzError> {
         if self.mode != Mode::Read || (self.err != Z_OK && self.err != Z_BUF_ERROR) {
-            return Err(());
+            return Err(GzError);
         }
         if self.inner.seek(SeekFrom::Start(self.start)).is_err() {
-            return Err(());
+            return Err(GzError);
         }
         self.gz_reset();
         Ok(())
@@ -574,12 +596,12 @@ impl<F: Read + Write + Seek> GzStream<F> {
     /// uncompressed position, or `Err` (zlib's -1). Seeking backwards while
     /// reading rewinds and re-reads; seeking forward while writing writes
     /// zeros (lazily, on the next write/flush/close).
-    pub fn seek(&mut self, offset: i64, whence: i32) -> Result<i64, ()> {
+    pub fn seek(&mut self, offset: i64, whence: i32) -> Result<i64, GzError> {
         if self.err != Z_OK && self.err != Z_BUF_ERROR {
-            return Err(());
+            return Err(GzError);
         }
         if whence != SEEK_SET && whence != SEEK_CUR {
-            return Err(());
+            return Err(GzError);
         }
         let mut offset = offset;
         if whence == SEEK_SET {
@@ -590,9 +612,9 @@ impl<F: Read + Write + Seek> GzStream<F> {
         self.seek = false;
 
         if self.mode == Mode::Read && self.how == How::Copy && self.x_pos + offset >= 0 {
-            let rel = offset - self.x_have as i64;
+            let rel = offset - off(self.x_have);
             if self.inner.seek(SeekFrom::Current(rel)).is_err() {
-                return Err(());
+                return Err(GzError);
             }
             self.x_have = 0;
             self.eof = false;
@@ -606,11 +628,11 @@ impl<F: Read + Write + Seek> GzStream<F> {
 
         if offset < 0 {
             if self.mode != Mode::Read {
-                return Err(());
+                return Err(GzError);
             }
             offset += self.x_pos;
             if offset < 0 {
-                return Err(());
+                return Err(GzError);
             }
             self.rewind()?;
         }
@@ -619,8 +641,8 @@ impl<F: Read + Write + Seek> GzStream<F> {
             let n = usize::try_from(offset).map_or(self.x_have, |o| o.min(self.x_have));
             self.x_have -= n;
             self.x_next += n;
-            self.x_pos += n as i64;
-            offset -= n as i64;
+            self.x_pos += off(n);
+            offset -= off(n);
         }
 
         if offset != 0 {
@@ -635,16 +657,17 @@ impl<F: Read + Write + Seek> GzStream<F> {
     // ---------------------------------------------------------------
 
     /// `gz_init()`.
-    fn gz_init(&mut self) -> Result<(), ()> {
+    fn gz_init(&mut self) -> Result<(), GzError> {
         self.inbuf = vec![0; self.want << 1];
         if !self.direct {
             self.out = vec![0; self.want];
-            match ZStream::deflate_init(self.level, MAX_WBITS + 16, DEF_MEM_LEVEL, self.strategy) {
-                Ok(z) => self.z = Some(z),
-                Err(_) => {
-                    self.gz_error(Z_MEM_ERROR, Some("out of memory"));
-                    return Err(());
-                }
+            if let Ok(z) =
+                ZStream::deflate_init(self.level, MAX_WBITS + 16, DEF_MEM_LEVEL, self.strategy)
+            {
+                self.z = Some(z);
+            } else {
+                self.gz_error(Z_MEM_ERROR, Some("out of memory"));
+                return Err(GzError);
             }
         }
         self.size = self.want;
@@ -655,7 +678,7 @@ impl<F: Read + Write + Seek> GzStream<F> {
         Ok(())
     }
 
-    fn write_all_inner(&mut self, from: Buf, start: usize, end: usize) -> Result<(), ()> {
+    fn write_all_inner(&mut self, from: Buf, start: usize, end: usize) -> Result<(), GzError> {
         let mut pos = start;
         while pos < end {
             let buf = match from {
@@ -666,13 +689,13 @@ impl<F: Read + Write + Seek> GzStream<F> {
                 Ok(0) => {
                     let e = io::Error::from(io::ErrorKind::WriteZero);
                     self.io_error(&e);
-                    return Err(());
+                    return Err(GzError);
                 }
                 Ok(n) => pos += n,
                 Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
                 Err(e) => {
                     self.io_error(&e);
-                    return Err(());
+                    return Err(GzError);
                 }
             }
         }
@@ -681,7 +704,7 @@ impl<F: Read + Write + Seek> GzStream<F> {
 
     /// `gz_comp()`. The input is `inbuf[in_next..in_next + in_avail]`, or
     /// `ext` when given (which is then consumed completely).
-    fn gz_comp(&mut self, flush: i32, mut ext: Option<&[u8]>) -> Result<(), ()> {
+    fn gz_comp(&mut self, flush: i32, mut ext: Option<&[u8]>) -> Result<(), GzError> {
         if self.size == 0 {
             self.gz_init()?;
         }
@@ -692,13 +715,13 @@ impl<F: Read + Write + Seek> GzStream<F> {
                     match self.inner.write(&data[pos..]) {
                         Ok(0) => {
                             self.io_error(&io::Error::from(io::ErrorKind::WriteZero));
-                            return Err(());
+                            return Err(GzError);
                         }
                         Ok(n) => pos += n,
                         Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
                         Err(e) => {
                             self.io_error(&e);
-                            return Err(());
+                            return Err(GzError);
                         }
                     }
                 }
@@ -710,10 +733,10 @@ impl<F: Read + Write + Seek> GzStream<F> {
             }
             return Ok(());
         }
-        let ext_len = |e: &Option<&[u8]>| e.map_or(0, <[u8]>::len);
+        let ext_len = |e: Option<&[u8]>| e.map_or(0, <[u8]>::len);
         if self.reset {
             let avail = if ext.is_some() {
-                ext_len(&ext)
+                ext_len(ext)
             } else {
                 self.in_avail
             };
@@ -739,7 +762,7 @@ impl<F: Read + Write + Seek> GzStream<F> {
                 }
             }
             let Some(z) = self.z.as_mut() else {
-                return Err(());
+                return Err(GzError);
             };
             let size = self.size;
             let step = if let Some(data) = ext {
@@ -759,8 +782,11 @@ impl<F: Read + Write + Seek> GzStream<F> {
             self.out_pos += step.produced;
             ret = step.status;
             if ret == Z_STREAM_ERROR {
-                self.gz_error(Z_STREAM_ERROR, Some("internal error: deflate stream corrupt"));
-                return Err(());
+                self.gz_error(
+                    Z_STREAM_ERROR,
+                    Some("internal error: deflate stream corrupt"),
+                );
+                return Err(GzError);
             }
             if step.produced == 0 {
                 break;
@@ -773,7 +799,7 @@ impl<F: Read + Write + Seek> GzStream<F> {
     }
 
     /// `gz_zero()`: compresses `len` zero bytes (a pending forward seek).
-    fn gz_zero(&mut self, mut len: i64) -> Result<(), ()> {
+    fn gz_zero(&mut self, mut len: i64) -> Result<(), GzError> {
         if self.in_avail > 0 {
             self.gz_comp(Z_NO_FLUSH, None)?;
         }
@@ -786,9 +812,9 @@ impl<F: Read + Write + Seek> GzStream<F> {
             }
             self.in_avail = n;
             self.in_next = 0;
-            self.x_pos += n as i64;
+            self.x_pos += off(n);
             self.gz_comp(Z_NO_FLUSH, None)?;
-            len -= n as i64;
+            len -= off(n);
         }
         Ok(())
     }
@@ -828,7 +854,7 @@ impl<F: Read + Write + Seek> GzStream<F> {
                 let copy = (self.size - have).min(rest.len());
                 self.inbuf[have..have + copy].copy_from_slice(&rest[..copy]);
                 self.in_avail += copy;
-                self.x_pos += copy as i64;
+                self.x_pos += off(copy);
                 rest = &rest[copy..];
                 if !rest.is_empty() && self.gz_comp(Z_NO_FLUSH, None).is_err() {
                     return 0;
@@ -842,7 +868,7 @@ impl<F: Read + Write + Seek> GzStream<F> {
                 return 0;
             }
             for chunk in data.chunks(u32::MAX as usize) {
-                self.x_pos += chunk.len() as i64;
+                self.x_pos += off(chunk.len());
                 if self.gz_comp(Z_NO_FLUSH, Some(chunk)).is_err() {
                     return 0;
                 }
@@ -973,7 +999,11 @@ mod tests {
     }
 
     fn hex(b: &[u8]) -> String {
-        b.iter().map(|x| format!("{x:02x}")).collect()
+        b.iter().fold(String::new(), |mut acc, x| {
+            use std::fmt::Write as _;
+            let _ = write!(acc, "{x:02x}");
+            acc
+        })
     }
 
     #[test]
@@ -1012,8 +1042,14 @@ mod tests {
 
     #[test]
     fn roundtrip_and_eof() {
-        let text: Vec<u8> = (0..20000u32).flat_map(|i| i.to_string().into_bytes()).collect();
-        let packed = write_gz(&[&text[..100], &text[100..9000], &text[9000..]], "wb", false);
+        let text: Vec<u8> = (0..20000u32)
+            .flat_map(|i| i.to_string().into_bytes())
+            .collect();
+        let packed = write_gz(
+            &[&text[..100], &text[100..9000], &text[9000..]],
+            "wb",
+            false,
+        );
         assert_eq!(crate::codec::gzdecode(&packed, 0).unwrap(), text);
         for chunk in [1usize, 7, 8192, 20000, 100_000] {
             let (back, eof) = read_all(packed.clone(), chunk);
@@ -1057,8 +1093,8 @@ mod tests {
         let mut big = [0u8; 10];
         assert_eq!(gz.read(&mut big), Ok(2));
         assert!(gz.eof());
-        assert_eq!(gz.seek(-1, SEEK_SET), Err(()));
-        assert_eq!(gz.seek(0, SEEK_END), Err(()));
+        assert_eq!(gz.seek(-1, SEEK_SET), Err(GzError));
+        assert_eq!(gz.seek(0, SEEK_END), Err(GzError));
         gz.rewind().unwrap();
         assert!(!gz.eof());
         assert_eq!(gz.read(&mut buf), Ok(5));
@@ -1093,7 +1129,7 @@ mod tests {
         assert_eq!(r.flush(2), Z_STREAM_ERROR);
         assert_eq!(r.set_params(9, 0), Z_STREAM_ERROR);
         let mut w = GzStream::open(Cursor::new(Vec::new()), "w", 3).unwrap();
-        assert_eq!(w.read(&mut [0u8; 4]), Err(()));
+        assert_eq!(w.read(&mut [0u8; 4]), Err(GzError));
         assert!(!w.eof());
         assert_eq!(w.set_params(1, 0), Z_OK);
     }
@@ -1117,7 +1153,8 @@ mod tests {
 
     #[test]
     fn truncated_stream() {
-        let packed = crate::codec::gzencode(&b"The quick brown fox jumps".repeat(3), -1, 31).unwrap();
+        let packed =
+            crate::codec::gzencode(&b"The quick brown fox jumps".repeat(3), -1, 31).unwrap();
         let cut = packed[..packed.len() - 10].to_vec();
         let (back, eof) = read_all(cut, 100);
         assert!(eof);
@@ -1136,6 +1173,51 @@ mod tests {
         assert_eq!(crate::codec::gzdecode(&v[6..], 0).unwrap(), b"data");
         // Level 9 sets XFL=2 in the gzip header.
         assert_eq!(v[6 + 8], 2);
+    }
+
+    fn crc32b(data: &[u8]) -> u32 {
+        crate::ffi::crc32(0, data)
+    }
+
+    #[test]
+    fn modes_match_oracle() {
+        let t: Vec<u8> = (0..3000)
+            .flat_map(|i| format!("{i},").into_bytes())
+            .collect();
+        for (mode, len, crc) in [
+            ("wb1", 5601, 0x5596_0304u32),
+            ("wf", 5864, 0xbd97_b108),
+            ("wh", 5861, 0xfa52_2ec7),
+            ("wR", 5861, 0x8788_f847),
+            ("wF", 10515, 0x9370_a55c),
+            ("wT", 13890, 0xdfed_a452),
+            ("w0", 13923, 0x2a11_9c3d),
+            ("w9", 6487, 0xbb09_f097),
+        ] {
+            let out = write_gz(&[&t[..5000], &t[5000..]], mode, true);
+            assert_eq!((out.len(), crc32b(&out)), (len, crc), "mode {mode}");
+        }
+        // gzwrite("abc"); gzseek(20000); gzwrite(9000 x "Q"); gzclose()
+        let mut gz = GzStream::open(Cursor::new(Vec::new()), "w", 3).unwrap();
+        gz.write(b"abc");
+        assert_eq!(gz.seek(20000, SEEK_SET), Ok(20000));
+        gz.write(&[b'Q'; 9000]);
+        gz.flush(2);
+        let (cur, _) = gz.close();
+        assert_eq!(
+            (cur.get_ref().len(), crc32b(cur.get_ref())),
+            (75, 0xc3e5_bdd3)
+        );
+        // compress.zlib:// with the "level" context option: gzsetparams(1, 0)
+        let mut gz = GzStream::open(Cursor::new(Vec::new()), "w", 3).unwrap();
+        assert_eq!(gz.set_params(1, 0), Z_OK);
+        gz.write(&t);
+        gz.flush(2);
+        let (cur, _) = gz.close();
+        assert_eq!(
+            (cur.get_ref().len(), crc32b(cur.get_ref())),
+            (5601, 0x5596_0304)
+        );
     }
 
     #[test]

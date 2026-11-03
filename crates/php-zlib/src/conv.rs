@@ -118,63 +118,72 @@ fn truncate(d: f64) -> i64 {
     d as i64
 }
 
+/// Whether converting `dval` to `lval` lost information
+/// (`!zend_is_long_compatible()`).
+#[allow(clippy::float_cmp, clippy::cast_precision_loss)]
+fn loses_precision(dval: f64, lval: i64) -> bool {
+    lval as f64 != dval
+}
+
+fn float_text(dval: f64) -> String {
+    String::from_utf8_lossy(&Value::Float(dval).to_bytes().unwrap_or_default()).into_owned()
+}
+
 /// `zval_try_get_long()`. Returns `None` when the value cannot be used as
 /// an integer (non-numeric strings, arrays, objects, resources).
-pub fn try_get_long(v: &Value) -> Option<i64> {
-    match v {
+pub fn try_get_long(value: &Value) -> Option<i64> {
+    match value {
         Value::Null | Value::Bool(false) => Some(0),
         Value::Bool(true) => Some(1),
         Value::Int(i) => Some(*i),
-        Value::Float(d) => {
-            let d = *d;
-            if !d.is_finite() || !fits_long(d) {
+        Value::Float(dval) => {
+            let dval = *dval;
+            if !dval.is_finite() || !fits_long(dval) {
                 diag::warning(format!(
                     "The float {} is not representable as an int, cast occurred",
-                    String::from_utf8_lossy(&Value::Float(d).to_bytes().unwrap_or_default())
+                    float_text(dval)
                 ));
                 return Some(0);
             }
-            let l = truncate(d);
-            #[allow(clippy::cast_precision_loss)]
-            if l as f64 != d {
+            let lval = truncate(dval);
+            if loses_precision(dval, lval) {
                 diag::emit(Diagnostic::new(
                     Severity::Deprecated,
                     format!(
                         "Implicit conversion from float {} to int loses precision",
-                        String::from_utf8_lossy(&Value::Float(d).to_bytes().unwrap_or_default())
+                        float_text(dval)
                     ),
                 ));
             }
-            Some(l)
+            Some(lval)
         }
-        Value::Str(s) => {
-            let (n, trailing) = numeric_prefix(s)?;
+        Value::Str(bytes) => {
+            let (num, trailing) = numeric_prefix(bytes)?;
             if trailing {
                 diag::warning("A non-numeric value encountered");
             }
-            match n {
-                Numeric::Long(l) => Some(l),
-                Numeric::Double(d) => {
-                    let l = if d.is_nan() {
+            match num {
+                Numeric::Long(lval) => Some(lval),
+                Numeric::Double(dval) => {
+                    let lval = if dval.is_nan() {
                         0
-                    } else if d >= 9.223_372_036_854_776e18 {
+                    } else if dval >= 9.223_372_036_854_776e18 {
                         i64::MAX
-                    } else if d < -9.223_372_036_854_776e18 {
+                    } else if dval < -9.223_372_036_854_776e18 {
                         i64::MIN
                     } else {
-                        truncate(d)
+                        truncate(dval)
                     };
-                    #[allow(clippy::cast_precision_loss)]
-                    if !d.is_finite() || l as f64 != d {
+                    if !dval.is_finite() || loses_precision(dval, lval) {
                         diag::emit(Diagnostic::new(
                             Severity::Deprecated,
                             format!(
                                 "Implicit conversion from float-string \"{}\" to int loses precision",
-                                String::from_utf8_lossy(s)
+                                String::from_utf8_lossy(bytes)
                             ),
                         ));
                     }
-                    Some(l)
+                    Some(lval)
                 }
             }
         }

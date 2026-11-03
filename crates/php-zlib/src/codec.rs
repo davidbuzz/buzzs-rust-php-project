@@ -245,9 +245,7 @@ mod tests {
     fn validation() {
         assert_eq!(
             gzcompress(b"", 10, ZLIB_ENCODING_DEFLATE).unwrap_err(),
-            Error::ValueError(
-                "gzcompress(): Argument #2 ($level) must be between -1 and 9".into()
-            )
+            Error::ValueError("gzcompress(): Argument #2 ($level) must be between -1 and 9".into())
         );
         assert_eq!(
             zlib_encode(b"", 1, 0).unwrap_err().message(),
