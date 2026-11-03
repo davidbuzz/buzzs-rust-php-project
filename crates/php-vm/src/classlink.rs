@@ -762,6 +762,74 @@ impl Vm {
         Ok(out)
     }
 
+    /// `do_inheritance_check_on_method` (with `ZEND_INHERITANCE_CHECK_PROTO`
+    /// but no visibility check) of the method satisfying an abstract trait
+    /// method; returns the fatal error (message, file, line).
+    fn check_trait_abstract(
+        &self,
+        cls: &Rc<Class>,
+        c: &TraitAbstractCheck,
+    ) -> Option<(String, ZStr, u32)> {
+        let (child, proto) = (&c.child, &c.proto);
+        // `fixup_trait_scope`: `self` in trait methods is the using class.
+        let child_scope = if c.child_trait.is_some() || Weak::ptr_eq(&child.scope, &Rc::downgrade(cls)) {
+            cls.clone()
+        } else {
+            child.scope()
+        };
+        let child_name = c
+            .child_trait
+            .clone()
+            .unwrap_or_else(|| object::display_name(&child_scope.name));
+        let proto_name = object::display_name(&proto.scope().name);
+        let (file, line) = match &child.func {
+            Func::User(u) => (u.code.filename.clone(), u.line_start),
+            Func::Builtin(_) => (ZStr::from("Unknown"), 0),
+        };
+        if proto.flags & flags::FINAL != 0 {
+            return Some((
+                format!("Cannot override final method {proto_name}::{}()", child.name),
+                file,
+                line,
+            ));
+        }
+        if child.is_static() != proto.is_static() {
+            let msg = if child.is_static() {
+                format!(
+                    "Cannot make non static method {proto_name}::{}() static in class {child_name}",
+                    child.name
+                )
+            } else {
+                format!(
+                    "Cannot make static method {proto_name}::{}() non static in class {child_name}",
+                    child.name
+                )
+            };
+            return Some((msg, file, line));
+        }
+        let st = crate::variance::implementation_check(
+            self,
+            &child.func,
+            child.flags,
+            &child_scope,
+            &proto.func,
+            proto.flags,
+            cls,
+        );
+        if st == crate::variance::Status::Ok {
+            return None;
+        }
+        Some((
+            format!(
+                "Declaration of {} must be compatible with {}",
+                crate::variance::declaration_as(&child.func, child.flags, &child_name, &child_scope),
+                crate::variance::declaration_as(&proto.func, proto.flags, &proto_name, cls)
+            ),
+            file,
+            line,
+        ))
+    }
+
     fn fatal_at(&mut self, msg: &str, line: u32) -> Throw {
         let (file, _) = self.current_location();
         self.report_fatal(msg, &file, line);
@@ -969,6 +1037,7 @@ impl Vm {
         let parent_c = parent.clone();
         let traits_c = traits.clone();
         let mut err: Option<String> = None;
+        let mut link_out = LinkOut::default();
         let interfaces_c = interfaces.clone();
         let cls = Rc::new_cyclic(|weak: &Weak<Class>| {
             build_class(
@@ -981,17 +1050,42 @@ impl Vm {
                 cflag,
                 is_anon,
                 &mut err,
+                &mut link_out,
             )
         });
         if let Some(e) = err {
             return Err(self.fatal_at(&e, line));
         }
+        for w in &link_out.warnings {
+            self.error_at(crate::errors::level::COMPILE_WARNING, w, &decl.filename, line)?;
+        }
+        // Inheritance checks for overridden methods.
+        if let Some(e) = check_method_inheritance(&cls) {
+            return Err(self.fatal_at(&e.0, e.1));
+        }
+        for c in &link_out.trait_checks {
+            if let Some((e, file, l)) = self.check_trait_abstract(&cls, c) {
+                self.report_fatal(&e, &file, l);
+                return Err(Throw::Fatal);
+            }
+        }
+        let (err, warnings) = crate::variance::check_class(self, &cls);
+        if let Some(e) = err {
+            return Err(self.fatal_at(&e.0, e.1));
+        }
+        for (w, l) in warnings {
+            let file = decl.filename.clone();
+            self.error_at(crate::errors::level::DEPRECATED, &w, &file, l)?;
+        }
         // Abstract method check.
-        if !cls.is_interface() && !cls.is_trait() && cls.flags & cflags::EXPLICIT_ABSTRACT == 0 {
+        // (`zend_verify_abstract_class`: an explicitly abstract class must
+        // still implement its private abstract methods.)
+        let explicit_abstract = cls.flags & cflags::EXPLICIT_ABSTRACT != 0;
+        if !cls.is_interface() && !cls.is_trait() {
             let mut missing: Vec<String> = Vec::new();
             for lcname in &cls.method_order {
                 if let Some(m) = cls.methods.get(lcname) {
-                    if m.is_abstract() {
+                    if m.is_abstract() && (!explicit_abstract || m.visibility() == flags::PRIVATE) {
                         missing.push(format!(
                             "{}::{}",
                             object::display_name(&m.scope().name),
@@ -1001,7 +1095,8 @@ impl Vm {
                 }
             }
             for pi in &cls.props {
-                if !cls
+                if explicit_abstract
+                    || !cls
                     .prop_map
                     .get(&pi.name)
                     .is_some_and(|x| Rc::ptr_eq(x, pi))
@@ -1027,7 +1122,10 @@ impl Vm {
                 }
                 let what = if cls.is_enum() { "Enum" } else { "Class" };
                 let s = if n == 1 { "" } else { "s" };
-                let msg = if cls.is_enum() || cls.flags & crate::class::cflags::ANON != 0 {
+                let msg = if explicit_abstract
+                    || cls.is_enum()
+                    || cls.flags & crate::class::cflags::ANON != 0
+                {
                     format!("{what} {full} must implement {n} abstract method{s} ({list})")
                 } else {
                     format!(
@@ -1041,18 +1139,6 @@ impl Vm {
             if let Some(e) = self.verify_enum(&cls) {
                 return Err(self.fatal_at(&e, line));
             }
-        }
-        // Inheritance checks for overridden methods.
-        if let Some(e) = check_method_inheritance(&cls) {
-            return Err(self.fatal_at(&e.0, e.1));
-        }
-        let (err, warnings) = crate::variance::check_class(self, &cls);
-        if let Some(e) = err {
-            return Err(self.fatal_at(&e.0, e.1));
-        }
-        for (w, l) in warnings {
-            let file = decl.filename.clone();
-            self.error_at(crate::errors::level::DEPRECATED, &w, &file, l)?;
         }
         if let Some((e, l)) = crate::attrs::check_override(&cls) {
             return Err(self.fatal_at(&e, if l == 0 { line } else { l }));
@@ -1079,6 +1165,217 @@ impl Vm {
             self.error_at(crate::errors::level::DEPRECATED, &msg, &decl.filename, line)?;
         }
         Ok(cls)
+    }
+}
+
+/// What [`build_class`] leaves for [`Vm::link_class`] to do with VM access.
+#[derive(Default)]
+struct LinkOut {
+    /// Abstract trait methods to check against the method that satisfies
+    /// them.
+    trait_checks: Vec<TraitAbstractCheck>,
+    /// `E_COMPILE_WARNING`s raised while binding traits.
+    warnings: Vec<String>,
+}
+
+/// An abstract trait method (`proto`, still scoped to its trait) that an
+/// existing method (`child`) of the class must be compatible with
+/// (`zend_add_trait_method` -> `do_inheritance_check_on_method`).
+struct TraitAbstractCheck {
+    child: Rc<Method>,
+    /// For a child that is itself a not yet fixed up trait method: the
+    /// trait it comes from (its scope in messages).
+    child_trait: Option<ZStr>,
+    proto: Rc<Method>,
+}
+
+/// A copy of a trait method for the using class: it gets its own static
+/// variables (`zend_add_trait_method` copies the op array).
+fn trait_method_copy(f: &Func) -> Func {
+    match f {
+        Func::User(u) => Func::User(Rc::new(UserFunction {
+            name: u.name.clone(),
+            params: u.params.clone(),
+            required: u.required,
+            return_type: u.return_type.clone(),
+            flags: u.flags,
+            code: u.code.clone(),
+            line_start: u.line_start,
+            line_end: u.line_end,
+            doc_comment: u.doc_comment.clone(),
+            statics: RefCell::new(Vec::new()),
+            uses: u.uses.clone(),
+            class_name: u.class_name.clone(),
+            attributes: u.attributes.clone(),
+            hook_prop: u.hook_prop.clone(),
+        })),
+        Func::Builtin(_) => f.clone(),
+    }
+}
+
+/// Whether two functions share their code (`existing_fn->op_array.opcodes
+/// == fn->op_array.opcodes`).
+fn same_code(a: &Func, b: &Func) -> bool {
+    match (a, b) {
+        (Func::User(x), Func::User(y)) => Rc::ptr_eq(&x.code, &y.code),
+        _ => Func::ptr_eq(a, b),
+    }
+}
+
+/// Applies the modifiers of an `as` rule to a trait method's flags.
+fn alias_flags(modifiers: u32, fn_flags: u32) -> u32 {
+    if modifiers & flags::VISIBILITY != 0 {
+        modifiers | (fn_flags & !flags::VISIBILITY)
+    } else {
+        modifiers | fn_flags
+    }
+}
+
+/// `zend_do_traits_method_binding` / `zend_traits_copy_functions` /
+/// `zend_add_trait_method` over the method table being built.
+struct TraitMethodBinder<'a> {
+    class: &'a ZStr,
+    weak: &'a Weak<Class>,
+    parent: Option<&'a Rc<Class>>,
+    traits: &'a [Rc<Class>],
+    rules: &'a TraitRules,
+    methods: &'a mut HashMap<ZStr, Rc<Method>>,
+    order: &'a mut Vec<ZStr>,
+    /// Methods copied from a trait whose scope has not been fixed up to
+    /// the class yet: lowercase name -> trait index.
+    unfixed: HashMap<ZStr, usize>,
+    checks: &'a mut Vec<TraitAbstractCheck>,
+    warnings: &'a mut Vec<String>,
+    err: &'a mut Option<String>,
+}
+
+impl TraitMethodBinder<'_> {
+    /// Binds the non-abstract (`abstract_pass == false`) or the abstract
+    /// methods of all used traits.
+    fn bind(&mut self, decl: &ClassDecl, abstract_pass: bool) {
+        for ti in 0..self.traits.len() {
+            let t = self.traits[ti].clone();
+            for lcm in &t.method_order {
+                let Some(tm) = t.methods.get(lcm) else {
+                    continue;
+                };
+                if tm.is_abstract() != abstract_pass {
+                    continue;
+                }
+                // Aliases with a new name.
+                for (ri, r) in decl.trait_rules.iter().enumerate() {
+                    let TraitRule::Alias {
+                        method,
+                        flags: f,
+                        alias: Some(a),
+                        ..
+                    } = r
+                    else {
+                        continue;
+                    };
+                    if self.rules.alias_trait.get(ri).copied().flatten() != Some(ti)
+                        || !method.eq_ignore_ascii_case(lcm.as_bytes())
+                    {
+                        continue;
+                    }
+                    let fl = alias_flags(*f, tm.flags);
+                    self.check_private_final(tm.flags, fl, a);
+                    self.add(a, ZStr::from(a.to_ascii_lowercase()), tm, fl, ti);
+                }
+                if self.rules.excluded.iter().any(|(i, ml)| *i == ti && ml == lcm) {
+                    continue;
+                }
+                // Aliases that only change the modifiers.
+                let mut fl = tm.flags;
+                for (ri, r) in decl.trait_rules.iter().enumerate() {
+                    if let TraitRule::Alias {
+                        method,
+                        flags: f,
+                        alias: None,
+                        ..
+                    } = r
+                    {
+                        if *f != 0
+                            && self.rules.alias_trait.get(ri).copied().flatten() == Some(ti)
+                            && method.eq_ignore_ascii_case(lcm.as_bytes())
+                        {
+                            fl = alias_flags(*f, tm.flags);
+                        }
+                    }
+                }
+                self.check_private_final(tm.flags, fl, lcm);
+                self.add(&tm.name, lcm.clone(), tm, fl, ti);
+            }
+        }
+    }
+
+    /// `zend_traits_check_private_final_inheritance`.
+    fn check_private_final(&mut self, orig: u32, fl: u32, name: &ZStr) {
+        if orig & flags::FINAL == 0
+            && fl & (flags::PRIVATE | flags::FINAL) == flags::PRIVATE | flags::FINAL
+            && !name.eq_ignore_ascii_case(b"__construct")
+        {
+            self.warnings.push(
+                "Private methods cannot be final as they are never overridden by other classes"
+                    .to_string(),
+            );
+        }
+    }
+
+    /// `zend_add_trait_method`.
+    fn add(&mut self, name: &ZStr, key: ZStr, tm: &Rc<Method>, fl: u32, ti: usize) {
+        if let Some(existing) = self.methods.get(&key) {
+            let ex_trait = self.unfixed.get(&key).copied();
+            if ex_trait.is_some()
+                && same_code(&existing.func, &tm.func)
+                && existing.visibility() == fl & flags::VISIBILITY
+            {
+                return;
+            }
+            if fl & flags::ABSTRACT != 0 {
+                // The requirement must be satisfied by the existing method.
+                self.checks.push(TraitAbstractCheck {
+                    child: existing.clone(),
+                    child_trait: ex_trait.map(|i| self.traits[i].name.clone()),
+                    proto: tm.clone(),
+                });
+                return;
+            }
+            match ex_trait {
+                // Members of the class itself override trait methods.
+                None if Weak::ptr_eq(&existing.scope, self.weak) => return,
+                Some(ei) if !existing.is_abstract() => {
+                    if self.err.is_none() {
+                        *self.err = Some(format!(
+                            "Trait method {}::{} has not been applied as {}::{name}, because of collision with {}::{}",
+                            self.traits[ti].name,
+                            tm.name,
+                            self.class,
+                            self.traits[ei].name,
+                            existing.name
+                        ));
+                    }
+                    return;
+                }
+                _ => {}
+            }
+        }
+        let proto = self
+            .parent
+            .and_then(|p| p.methods.get(&key))
+            .filter(|m| m.visibility() != flags::PRIVATE)
+            .map_or_else(|| self.weak.clone(), |m| m.proto_scope.clone());
+        let m = Rc::new(Method {
+            name: name.clone(),
+            func: trait_method_copy(&tm.func),
+            flags: fl | flags::FROM_TRAIT,
+            scope: self.weak.clone(),
+            proto_scope: proto,
+        });
+        if self.methods.insert(key.clone(), m).is_none() {
+            self.order.push(key.clone());
+        }
+        self.unfixed.insert(key, ti);
     }
 }
 
@@ -1291,6 +1588,7 @@ fn build_class(
     cflag: u32,
     is_anon: bool,
     err: &mut Option<String>,
+    link_out: &mut LinkOut,
 ) -> Class {
     let name = decl.name.clone();
     let display = object::display_name(&name);
@@ -1664,17 +1962,8 @@ fn build_class(
     // Methods.
     let mut methods: HashMap<ZStr, Rc<Method>> = HashMap::new();
     let mut method_order: Vec<ZStr> = Vec::new();
-    let mut add_method = |lc: ZStr,
-                          m: Rc<Method>,
-                          methods: &mut HashMap<ZStr, Rc<Method>>,
-                          order: &mut Vec<ZStr>| {
-        if !methods.contains_key(&lc) {
-            order.push(lc.clone());
-        }
-        methods.insert(lc, m);
-    };
-    // Own methods first (for get_class_methods order), then inherited.
-    let mut own: Vec<(ZStr, Rc<Method>)> = Vec::new();
+    // Own methods first (for get_class_methods order), then trait methods,
+    // then inherited ones.
     for md in &decl.methods {
         let lc = ZStr::from(md.name.to_ascii_lowercase());
         let proto = parent
@@ -1682,124 +1971,16 @@ fn build_class(
             .and_then(|p| p.methods.get(&lc))
             .filter(|m| m.visibility() != flags::PRIVATE)
             .map_or_else(|| weak.clone(), |m| m.proto_scope.clone());
-        own.push((
-            lc,
-            Rc::new(Method {
-                name: md.name.clone(),
-                func: Func::User(md.func.clone()),
-                flags: md.flags,
-                scope: weak.clone(),
-                proto_scope: proto,
-            }),
-        ));
-    }
-    // Trait methods.
-    let mut trait_methods: Vec<(ZStr, Rc<Method>)> = Vec::new();
-    if !traits.is_empty() {
-        for (ti, t) in traits.iter().enumerate() {
-            for lcm in &t.method_order {
-                let Some(tm) = t.methods.get(lcm) else {
-                    continue;
-                };
-                // Aliases.
-                for (ri, r) in decl.trait_rules.iter().enumerate() {
-                    if let TraitRule::Alias {
-                        method,
-                        flags: f,
-                        alias,
-                        ..
-                    } = r
-                    {
-                        if !method.eq_ignore_ascii_case(lcm.as_bytes())
-                            || rules.alias_trait.get(ri).copied().flatten() != Some(ti)
-                        {
-                            continue;
-                        }
-                        if let Some(a) = alias {
-                            let mut fl = tm.flags;
-                            if *f & flags::VISIBILITY != 0 {
-                                fl = (fl & !flags::VISIBILITY) | (*f & flags::VISIBILITY);
-                            }
-                            if *f & flags::FINAL != 0 {
-                                fl |= flags::FINAL;
-                            }
-                            trait_methods.push((
-                                ZStr::from(a.to_ascii_lowercase()),
-                                Rc::new(Method {
-                                    name: a.clone(),
-                                    func: tm.func.clone(),
-                                    flags: fl | flags::FROM_TRAIT,
-                                    scope: weak.clone(),
-                                    proto_scope: weak.clone(),
-                                }),
-                            ));
-                        }
-                    }
-                }
-                if rules.excluded.iter().any(|(i, ml)| *i == ti && ml == lcm) {
-                    continue;
-                }
-                let mut fl = tm.flags;
-                for (ri, r) in decl.trait_rules.iter().enumerate() {
-                    if let TraitRule::Alias {
-                        method,
-                        flags: f,
-                        alias: None,
-                        ..
-                    } = r
-                    {
-                        if method.eq_ignore_ascii_case(lcm.as_bytes())
-                            && rules.alias_trait.get(ri).copied().flatten() == Some(ti)
-                        {
-                            if *f & flags::VISIBILITY != 0 {
-                                fl = (fl & !flags::VISIBILITY) | (*f & flags::VISIBILITY);
-                            }
-                            if *f & flags::FINAL != 0 {
-                                fl |= flags::FINAL;
-                            }
-                        }
-                    }
-                }
-                if let Some((_, existing)) = trait_methods.iter().find(|(l, _)| l == lcm) {
-                    let ex_trait = existing.func.clone();
-                    let same = Func::ptr_eq(&ex_trait, &tm.func);
-                    if !same
-                        && !own.iter().any(|(l, _)| l == lcm)
-                        && !tm.is_abstract()
-                        && !existing.is_abstract()
-                        && err.is_none()
-                    {
-                        let other = traits
-                            .iter()
-                            .find(|tt| {
-                                tt.methods
-                                    .get(lcm)
-                                    .is_some_and(|mm| Func::ptr_eq(&mm.func, &ex_trait))
-                            })
-                            .map(|tt| tt.name.to_string_lossy())
-                            .unwrap_or_default();
-                        *err = Some(format!(
-                            "Trait method {}::{} has not been applied as {}::{}, because of collision with {}::{}",
-                            t.name, tm.name, display, tm.name, other, tm.name
-                        ));
-                    }
-                    continue;
-                }
-                trait_methods.push((
-                    lcm.clone(),
-                    Rc::new(Method {
-                        name: tm.name.clone(),
-                        func: tm.func.clone(),
-                        flags: fl | flags::FROM_TRAIT,
-                        scope: weak.clone(),
-                        proto_scope: weak.clone(),
-                    }),
-                ));
-            }
+        let m = Rc::new(Method {
+            name: md.name.clone(),
+            func: Func::User(md.func.clone()),
+            flags: md.flags,
+            scope: weak.clone(),
+            proto_scope: proto,
+        });
+        if methods.insert(lc.clone(), m).is_none() {
+            method_order.push(lc);
         }
-    }
-    for (lc, m) in own {
-        add_method(lc, m, &mut methods, &mut method_order);
     }
     if decl.kind == ClassKind::Enum {
         for (i, (sig, fl, h)) in crate::builtins::enum_methods().into_iter().enumerate() {
@@ -1820,7 +2001,8 @@ fn build_class(
                 flags: fl,
                 handler: h,
             };
-            add_method(
+            method_order.push(lc.clone());
+            methods.insert(
                 lc,
                 Rc::new(Method {
                     name: ZStr::from(s.name.as_str()),
@@ -1829,34 +2011,47 @@ fn build_class(
                     scope: weak.clone(),
                     proto_scope: weak.clone(),
                 }),
-                &mut methods,
-                &mut method_order,
             );
         }
     }
-    for (lc, m) in trait_methods {
-        if methods.contains_key(&lc) {
-            continue;
-        }
-        add_method(lc, m, &mut methods, &mut method_order);
-    }
+    // `zend_do_traits_method_binding`: non-abstract trait methods are bound
+    // before inheritance, abstract ones (requirements) after it.
+    let mut binder = TraitMethodBinder {
+        class: &name,
+        weak,
+        parent: parent.as_ref(),
+        traits: &traits,
+        rules,
+        methods: &mut methods,
+        order: &mut method_order,
+        unfixed: HashMap::new(),
+        checks: &mut link_out.trait_checks,
+        warnings: &mut link_out.warnings,
+        err,
+    };
+    binder.bind(decl, false);
+    // `zend_fixup_trait_method`: the copies now belong to the class.
+    binder.unfixed.clear();
     if let Some(p) = &parent {
         for lc in &p.method_order {
-            if methods.contains_key(lc) {
+            if binder.methods.contains_key(lc) {
                 continue;
             }
             if let Some(m) = p.methods.get(lc) {
-                add_method(lc.clone(), m.clone(), &mut methods, &mut method_order);
+                binder.order.push(lc.clone());
+                binder.methods.insert(lc.clone(), m.clone());
             }
         }
     }
+    binder.bind(decl, true);
     for i in &interfaces {
         for lc in &i.method_order {
             if methods.contains_key(lc) {
                 continue;
             }
             if let Some(m) = i.methods.get(lc) {
-                add_method(lc.clone(), m.clone(), &mut methods, &mut method_order);
+                method_order.push(lc.clone());
+                methods.insert(lc.clone(), m.clone());
             }
         }
     }

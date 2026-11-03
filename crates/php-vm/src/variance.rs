@@ -246,11 +246,18 @@ fn render_default(p: &ParamInfo, f: &Func) -> String {
 
 /// `zend_get_function_declaration`.
 pub(crate) fn declaration(f: &Func, fflags: u32, scope: &Rc<Class>) -> String {
+    declaration_as(f, fflags, &display_name(&scope.name), scope)
+}
+
+/// [`declaration`] of a function shown as a method of `shown` (its
+/// `common.scope`) whose `self`/`parent` types resolve in `scope` (which
+/// differs for trait methods).
+pub(crate) fn declaration_as(f: &Func, fflags: u32, shown: &ZStr, scope: &Rc<Class>) -> String {
     let mut s = String::new();
     if fflags & flags::RETURN_REF != 0 {
         s.push('&');
     }
-    s.push_str(&display_name(&scope.name).to_string_lossy());
+    s.push_str(&shown.to_string_lossy());
     s.push_str("::");
     s.push_str(&f.name().to_string_lossy());
     s.push('(');
