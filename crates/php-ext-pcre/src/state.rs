@@ -6,7 +6,7 @@
 //! `php-pcre` call — never across a call back into the VM — so user
 //! callbacks may freely re-enter the `preg_*` functions.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 
 use php_pcre::{MatchConfig, Pcre, PregError, Regex};
 use php_vm::ext::VmResult;
@@ -14,6 +14,14 @@ use php_vm::Vm;
 
 thread_local! {
     static STATE: RefCell<Pcre> = RefCell::new(Pcre::new());
+    /// Whether the `pcre.*` INI values must be re-read (set by the
+    /// on-modify handlers and at request boundaries).
+    static CONFIG_STALE: Cell<bool> = const { Cell::new(true) };
+}
+
+/// Marks the cached `pcre.*` settings stale (INI on-modify).
+pub(crate) fn invalidate_config() {
+    CONFIG_STALE.with(|c| c.set(true));
 }
 
 /// Runs `f` with the request's [`Pcre`] state.
@@ -31,15 +39,18 @@ pub(crate) fn last_error() -> PregError {
     with(|p| p.last_error())
 }
 
-/// `RSHUTDOWN`: drops the cache and resets the error state.
+/// `RINIT`/`RSHUTDOWN`: drops the cache and resets the error state.
 pub(crate) fn reset() {
     with(|p| *p = Pcre::new());
+    invalidate_config();
 }
 
-/// Re-reads the `pcre.*` INI settings (PHP applies them through on-modify
-/// handlers; reading them before each operation is equivalent) and
-/// returns the match configuration to use.
+/// Re-reads the `pcre.*` INI settings when they changed and returns the
+/// match configuration to use.
 pub(crate) fn sync_config(vm: &Vm) -> MatchConfig {
+    if !CONFIG_STALE.with(|c| c.replace(false)) {
+        return with(|p| p.config());
+    }
     let backtrack = vm.ini_long("pcre.backtrack_limit");
     let recursion = vm.ini_long("pcre.recursion_limit");
     let jit = vm.ini_bool("pcre.jit");

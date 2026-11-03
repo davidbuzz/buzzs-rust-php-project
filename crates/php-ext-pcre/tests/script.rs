@@ -24,9 +24,10 @@ impl Write for Sink {
 
 fn run(code: &str) -> String {
     let sink = Sink::default();
+    let opts = VmOptions::default();
     let ext = php_ext_pcre::Pcre;
     let exts: [&dyn Extension; 1] = [&ext];
-    let mut vm = Vm::with_extensions(&VmOptions::default(), Box::new(sink.clone()), &exts);
+    let mut vm = Vm::with_extensions(&opts, Box::new(sink.clone()), &exts);
     vm.run_script(format!("<?php {code}").as_bytes(), "test.php");
     drop(vm);
     let out = sink.0.borrow().clone();

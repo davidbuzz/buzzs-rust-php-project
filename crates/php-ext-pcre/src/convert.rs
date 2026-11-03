@@ -19,6 +19,9 @@ pub(crate) fn to_zarray(m: MatchArray) -> ZArray {
 /// Converts a single [`php_pcre::Value`].
 pub(crate) fn to_value(v: PValue) -> Value {
     match v {
+        // `zend_string_init_fast()`: empty and one-byte strings are the
+        // interned `ZSTR_EMPTY` / `ZSTR_CHAR` instances.
+        PValue::Str(s) if s.len() <= 1 => Value::Str(ZStr::intern(&s)),
         PValue::Str(s) => Value::Str(ZStr::from(s)),
         PValue::Null => Value::Null,
         PValue::Int(i) => Value::Int(i),

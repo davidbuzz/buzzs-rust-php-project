@@ -7,9 +7,9 @@
 //! [`state`]), and the `PREG_*` / `PCRE_*` constants. Pattern parsing,
 //! matching, replacement and splitting live in `php-pcre`.
 //!
-//! The `pcre.*` INI directives are registered by the VM core; they are
-//! re-read before each operation, which is equivalent to PHP's on-modify
-//! handlers. Locale-aware character tables follow the C library's current
+//! The `pcre.*` INI directives are registered with on-modify handlers
+//! that mark the cached match configuration stale (PHP's handlers update
+//! the shared match context instead). Locale-aware character tables follow the C library's current
 //! `LC_CTYPE`, which is what `setlocale()` changes.
 
 mod convert;
@@ -18,7 +18,9 @@ mod memory;
 mod state;
 
 use php_runtime::Value;
-use php_vm::ext::{Extension, ModuleBuilder};
+use php_support::ini::{Access, IniDirective, ModifyHandler};
+use php_vm::ext::{Extension, InfoItem, ModuleBuilder, VmResult};
+use php_vm::Vm;
 
 /// The `pcre` extension.
 #[derive(Debug, Clone, Copy, Default)]
@@ -32,8 +34,68 @@ impl Extension for Pcre {
     fn register(&self, m: &mut ModuleBuilder<'_>) {
         functions::register(m);
         register_constants(m);
+        register_ini(m);
+        m.info(module_info);
+        m.on_request_startup(|_| state::reset());
         m.on_request_shutdown(|_| state::reset());
     }
+}
+
+/// `PHP_INI_BEGIN()` of `php_pcre.c`. (Directives the VM core already
+/// registered keep their existing definition.)
+fn register_ini(m: &mut ModuleBuilder<'_>) {
+    let d = |name: &str, default: &str, handler| {
+        IniDirective::new(name, Some(default), Access::ALL, handler, "pcre")
+    };
+    m.ini(d("pcre.backtrack_limit", "1000000", ModifyHandler::Long))
+        .ini(d("pcre.recursion_limit", "100000", ModifyHandler::Long))
+        .ini(d("pcre.jit", "1", ModifyHandler::Bool));
+    for name in ["pcre.backtrack_limit", "pcre.recursion_limit", "pcre.jit"] {
+        m.ini_on_modify(name, on_modify);
+    }
+}
+
+/// `OnUpdateBacktrackLimit` / `OnUpdateRecursionLimit` / `OnUpdateJit`:
+/// the value itself is parsed by the registry; the cached match
+/// configuration is refreshed before the next operation.
+#[allow(clippy::unnecessary_wraps)] // the `IniModifyFn` signature
+fn on_modify(_vm: &mut Vm, _value: &[u8]) -> VmResult<bool> {
+    state::invalidate_config();
+    Ok(true)
+}
+
+/// `PHP_MINFO_FUNCTION(pcre)`.
+fn module_info(_vm: &mut Vm) -> Vec<InfoItem> {
+    info_items()
+}
+
+/// The rows of the `pcre` `phpinfo()` section.
+fn info_items() -> Vec<InfoItem> {
+    let row = |k: &str, v: String| InfoItem::Row(vec![k.to_string(), v]);
+    let mut items = vec![
+        InfoItem::TableStart,
+        row(
+            "PCRE (Perl Compatible Regular Expressions) Support",
+            "enabled".into(),
+        ),
+        row("PCRE Library Version", php_pcre::pcre_version()),
+        row("PCRE Unicode Version", php_pcre::unicode_version()),
+        row(
+            "PCRE JIT Support",
+            if php_pcre::jit_support() {
+                "enabled"
+            } else {
+                "disabled"
+            }
+            .into(),
+        ),
+    ];
+    if let Some(target) = php_pcre::jit_target() {
+        items.push(row("PCRE JIT Target", target));
+    }
+    items.push(InfoItem::TableEnd);
+    items.push(InfoItem::IniEntries);
+    items
 }
 
 fn register_constants(m: &mut ModuleBuilder<'_>) {
@@ -80,4 +142,25 @@ fn register_constants(m: &mut ModuleBuilder<'_>) {
         .constant("PCRE_VERSION_MAJOR", Value::Int(major))
         .constant("PCRE_VERSION_MINOR", Value::Int(minor))
         .constant("PCRE_JIT_SUPPORT", Value::Bool(php_pcre::jit_support()));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn phpinfo_rows() {
+        let items = info_items();
+        assert_eq!(items.first(), Some(&InfoItem::TableStart));
+        assert_eq!(items.last(), Some(&InfoItem::IniEntries));
+        let row = |k: &str| {
+            items
+                .iter()
+                .any(|i| matches!(i, InfoItem::Row(c) if c[0] == k))
+        };
+        assert!(row("PCRE (Perl Compatible Regular Expressions) Support"));
+        assert!(row("PCRE Library Version"));
+        assert!(row("PCRE Unicode Version"));
+        assert!(row("PCRE JIT Support"));
+    }
 }

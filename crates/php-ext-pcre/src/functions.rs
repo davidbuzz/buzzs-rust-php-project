@@ -28,7 +28,7 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
         preg_filter,
     )
     .function(
-        "preg_replace_callback(string|array $pattern, $callback, string|array $subject, int $limit = -1, &$count = null, int $flags = 0): string|array|null",
+        "preg_replace_callback(string|array $pattern, callable $callback, string|array $subject, int $limit = -1, &$count = null, int $flags = 0): string|array|null",
         preg_replace_callback,
     )
     .function(
@@ -49,15 +49,6 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
     )
     .function("preg_last_error(): int", preg_last_error)
     .function("preg_last_error_msg(): string", preg_last_error_msg);
-}
-
-/// Integer argument `n`, or `default` when it was not passed.
-fn int_or(a: &Args, n: usize, default: i64) -> i64 {
-    if a.has(n) {
-        a.int(n)
-    } else {
-        default
-    }
 }
 
 /// The configuration the last [`state::compile`] synchronised.
@@ -82,12 +73,15 @@ fn do_match(vm: &mut Vm, a: &Args, global: bool) -> VmResult<Value> {
     let pattern = a.str(0);
     let subject = a.str(1);
     let capture = a.has(2);
-    let flags = int_or(a, 3, 0);
-    let offset = int_or(a, 4, 0);
+    let flags = a.int(3);
+    let offset = a.int(4);
     let Some(re) = state::compile(vm, pattern.as_bytes())? else {
         return Ok(Value::Bool(false));
     };
     let cfg = config();
+    if global && capture {
+        memory::precheck_match_all(vm, &re, &cfg, subject.as_bytes())?;
+    }
     let out = if global {
         php_pcre::match_all(&re, &cfg, subject.as_bytes(), capture, flags, offset)
     } else {
@@ -132,7 +126,7 @@ fn replace_common(vm: &mut Vm, a: &Args, is_filter: bool) -> VmResult<Value> {
     let regex = a.at(0);
     let replacement = a.at(1);
     let subject = a.at(2);
-    let limit = limit_from_php(int_or(a, 3, -1));
+    let limit = limit_from_php(a.int(3));
     if matches!(replacement, Value::Array(_)) && !matches!(regex, Value::Array(_)) {
         return Err(a.type_error(
             vm,
@@ -155,7 +149,7 @@ fn replace_common(vm: &mut Vm, a: &Args, is_filter: bool) -> VmResult<Value> {
             let r = replace_in_subject(vm, &regex, &replacement, s.as_bytes(), limit, &mut count);
             if let Some(Some(r)) = pending.absorb(r)? {
                 if !is_filter || count > old {
-                    out.insert(key, Value::Str(ZStr::from(r)));
+                    out.insert(key, Value::Str(exact(r)));
                 }
             }
         }
@@ -163,7 +157,7 @@ fn replace_common(vm: &mut Vm, a: &Args, is_filter: bool) -> VmResult<Value> {
     } else {
         let s = vm.value_to_string(&subject)?;
         match replace_in_subject(vm, &regex, &replacement, s.as_bytes(), limit, &mut count)? {
-            Some(r) if !is_filter || count > 0 => Value::Str(ZStr::from(r)),
+            Some(r) if !is_filter || count > 0 => Value::Str(exact(r)),
             _ => Value::Null,
         }
     };
@@ -291,10 +285,19 @@ fn replace_one(
         return Ok(None);
     };
     let cfg = config();
-    let out = php_pcre::replace(&re, &cfg, subject, &Replacement::parse(replacement), limit);
+    let replacement = Replacement::parse(replacement);
+    memory::precheck_replace(vm, &re, &cfg, subject, &replacement, limit)?;
+    let out = php_pcre::replace(&re, &cfg, subject, &replacement, limit);
     *count += out.count;
     state::set_last_error(out.last_error());
     checked(vm, out.result.ok())
+}
+
+/// A PHP string from a result buffer, without its spare capacity (PHP
+/// strings are allocated at their exact size; `memory_get_usage()` sees it).
+fn exact(mut r: Vec<u8>) -> ZStr {
+    r.shrink_to_fit();
+    ZStr::from(r)
 }
 
 /// Applies the memory limit to a replacement result.
@@ -312,14 +315,9 @@ fn checked(vm: &mut Vm, result: Option<Vec<u8>>) -> VmResult<Option<Vec<u8>>> {
 fn preg_replace_callback(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let regex = a.at(0);
     let callback = a.at(1);
-    // `Z_PARAM_FUNC`: the error names the reason the value is not callable.
-    if !vm.is_callable(&callback) {
-        let reason = vm.callable_error_message(&callback);
-        return Err(a.type_error(vm, 2, &format!("must be a valid callback, {reason}")));
-    }
     let subject = a.at(2);
-    let limit = limit_from_php(int_or(a, 3, -1));
-    let flags = int_or(a, 5, 0);
+    let limit = limit_from_php(a.int(3));
+    let flags = a.int(5);
     let mut count = 0usize;
     let result = replace_func_impl(vm, &regex, &callback, &subject, limit, flags, &mut count)?;
     if a.has(4) {
@@ -331,8 +329,8 @@ fn preg_replace_callback(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 fn preg_replace_callback_array(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let patterns = a.array(0);
     let mut subject = a.at(1);
-    let limit = limit_from_php(int_or(a, 2, -1));
-    let flags = int_or(a, 4, 0);
+    let limit = limit_from_php(a.int(2));
+    let flags = a.int(4);
     let mut count = 0usize;
     for (key, callback) in entries(&patterns) {
         let ArrayKey::Str(pattern) = key else {
@@ -383,7 +381,7 @@ fn replace_func_impl(
             }
             let r = replace_func_in_subject(vm, regex, callback, s.as_bytes(), limit, flags, count);
             if let Some(Some(r)) = pending.absorb(r)? {
-                out.insert(key, Value::Str(ZStr::from(r)));
+                out.insert(key, Value::Str(exact(r)));
             }
         }
         return pending.finish(Value::Array(ZArray::from(out)));
@@ -391,7 +389,7 @@ fn replace_func_impl(
     let s = vm.value_to_string(subject)?;
     Ok(
         match replace_func_in_subject(vm, regex, callback, s.as_bytes(), limit, flags, count)? {
-            Some(r) => Value::Str(ZStr::from(r)),
+            Some(r) => Value::Str(exact(r)),
             None => Value::Null,
         },
     )
@@ -491,12 +489,14 @@ fn call_replacement(vm: &mut Vm, callback: &Value, m: php_pcre::MatchArray) -> V
 fn preg_split(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let pattern = a.str(0);
     let subject = a.str(1);
-    let limit = int_or(a, 2, -1);
-    let flags = int_or(a, 3, 0);
+    let limit = a.int(2);
+    let flags = a.int(3);
     let Some(re) = state::compile(vm, pattern.as_bytes())? else {
         return Ok(Value::Bool(false));
     };
     let cfg = config();
+    let no_empty = flags & php_pcre::PREG_SPLIT_NO_EMPTY != 0;
+    memory::precheck_split(vm, &re, &cfg, subject.as_bytes(), no_empty)?;
     match php_pcre::split(&re, &cfg, subject.as_bytes(), limit, flags) {
         Ok(parts) => {
             state::set_last_error(PregError::NoError);
@@ -513,7 +513,7 @@ fn preg_split(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 fn preg_grep(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let pattern = a.str(0);
     let input = a.array(1);
-    let invert = int_or(a, 2, 0) & php_pcre::PREG_GREP_INVERT != 0;
+    let invert = a.int(2) & php_pcre::PREG_GREP_INVERT != 0;
     let Some(re) = state::compile(vm, pattern.as_bytes())? else {
         return Ok(Value::Bool(false));
     };
