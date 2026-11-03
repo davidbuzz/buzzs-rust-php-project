@@ -146,7 +146,13 @@ fn unserialize(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             "HashContext::__unserialize called on initialized object",
         ));
     }
-    let get = |i: i64| data.get_int(i).map(Value::deref);
+    // The VM's unserialize() currently hands `__unserialize()` an array
+    // with numeric *string* keys ("0", "1", ...); accept both forms.
+    let get = |i: i64| {
+        data.get_int(i)
+            .or_else(|| data.get_str(i.to_string().as_bytes()))
+            .map(Value::deref)
+    };
     let (
         Some(Value::Str(algo)),
         Some(Value::Int(options)),

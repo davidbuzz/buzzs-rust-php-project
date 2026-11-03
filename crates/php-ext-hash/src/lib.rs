@@ -92,11 +92,17 @@ fn options(vm: &mut Vm, algo: &[u8], opts: Option<&ZArray>) -> VmResult<HashOpti
     if matches!(lower.as_slice(), b"xxh3" | b"xxh128") {
         if let Some(secret) = opts.get_str(b"secret") {
             let secret = secret.deref();
-            let was_string = matches!(secret, Value::Str(_));
+            // The library drops this deprecation when the (converted)
+            // secret is then rejected as too short, so emit it here.
+            if out.seed.is_none() && !matches!(secret, Value::Str(_)) {
+                vm.php_deprecated(
+                    "Passing a secret of a type other than string is deprecated because it implicitly converts to a string, potentially hiding bugs",
+                )?;
+            }
             let s = vm.value_to_string(&secret)?;
             out.secret = Some(SecretOption {
                 bytes: s.as_bytes().to_vec(),
-                was_string,
+                was_string: true,
             });
         }
     }
@@ -269,7 +275,35 @@ fn hash_hmac_algos(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
 
 // ------------------------------------------------------- derivation
 
+/// The `memory_limit` in bytes (`None`: unlimited).
+fn memory_limit(vm: &Vm) -> Option<u64> {
+    let raw = vm.ini_string("memory_limit")?;
+    let s = String::from_utf8_lossy(&raw);
+    let s = s.trim();
+    let (digits, mult) = match s.as_bytes().last()? {
+        b'k' | b'K' => (&s[..s.len() - 1], 1u64 << 10),
+        b'm' | b'M' => (&s[..s.len() - 1], 1 << 20),
+        b'g' | b'G' => (&s[..s.len() - 1], 1 << 30),
+        _ => (s, 1),
+    };
+    let n: i64 = digits.trim().parse().ok()?;
+    u64::try_from(n)
+        .ok()
+        .filter(|&n| n > 0)
+        .map(|n| n.saturating_mul(mult))
+}
+
 fn hash_pbkdf2(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    // The VM does not account memory: refuse outputs that could never fit
+    // instead of aborting on the allocation.
+    let want = u64::try_from(a.int(4)).unwrap_or(0);
+    if let Some(limit) = memory_limit(vm) {
+        if want > limit {
+            return Err(vm.fatal(&format!(
+                "Allowed memory size of {limit} bytes exhausted (tried to allocate {want} bytes)"
+            )));
+        }
+    }
     match php_hash::hash_pbkdf2(
         a.str(0).as_bytes(),
         a.str(1).as_bytes(),

@@ -85,7 +85,7 @@ pub(crate) fn read_path(
     mut sink: impl FnMut(&[u8]),
 ) -> VmResult<Option<bool>> {
     if path.is_empty() {
-        return Err(vm.throw("ValueError", "Path cannot be empty"));
+        return Err(vm.throw("ValueError", php_streams::open::EMPTY_PATH_ERROR));
     }
     sync_settings(vm);
     let mut opened = None;
