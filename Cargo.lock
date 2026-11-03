@@ -347,20 +347,34 @@ name = "php-cli"
 version = "0.1.0"
 dependencies = [
  "libc",
+ "php-ext-bcmath",
+ "php-ext-calendar",
  "php-ext-date",
+ "php-ext-exif",
  "php-ext-filter",
+ "php-ext-gettext",
  "php-ext-hash",
+ "php-ext-iconv",
+ "php-ext-intl",
  "php-ext-json",
  "php-ext-mbstring",
  "php-ext-openssl",
  "php-ext-pcre",
  "php-ext-pdo",
+ "php-ext-phar",
+ "php-ext-posix",
  "php-ext-random",
+ "php-ext-session",
+ "php-ext-sodium",
  "php-ext-spl",
  "php-ext-stdarr",
  "php-ext-stdmisc",
  "php-ext-stdstr",
  "php-ext-streams",
+ "php-ext-sysv",
+ "php-ext-uri",
+ "php-ext-zip",
+ "php-ext-zlib",
  "php-vm",
 ]
 
@@ -397,7 +411,9 @@ dependencies = [
 name = "php-ext-bcmath"
 version = "0.1.0"
 dependencies = [
+ "php-bcmath",
  "php-runtime",
+ "php-support",
  "php-vm",
 ]
 
@@ -405,6 +421,8 @@ dependencies = [
 name = "php-ext-calendar"
 version = "0.1.0"
 dependencies = [
+ "php-calendar",
+ "php-date",
  "php-runtime",
  "php-vm",
 ]
@@ -440,7 +458,12 @@ dependencies = [
 name = "php-ext-exif"
 version = "0.1.0"
 dependencies = [
+ "php-exif",
+ "php-ext-streams",
+ "php-mbstring",
  "php-runtime",
+ "php-streams",
+ "php-support",
  "php-vm",
 ]
 
@@ -467,6 +490,7 @@ dependencies = [
 name = "php-ext-gettext"
 version = "0.1.0"
 dependencies = [
+ "php-gettext",
  "php-runtime",
  "php-vm",
 ]
@@ -494,7 +518,10 @@ dependencies = [
 name = "php-ext-iconv"
 version = "0.1.0"
 dependencies = [
+ "php-iconv",
  "php-runtime",
+ "php-streams",
+ "php-support",
  "php-vm",
 ]
 
@@ -502,7 +529,9 @@ dependencies = [
 name = "php-ext-intl"
 version = "0.1.0"
 dependencies = [
+ "php-intl",
  "php-runtime",
+ "php-support",
  "php-vm",
 ]
 
@@ -579,7 +608,14 @@ dependencies = [
 name = "php-ext-phar"
 version = "0.1.0"
 dependencies = [
+ "php-ext-spl",
+ "php-ext-streams",
+ "php-openssl",
+ "php-phar",
  "php-runtime",
+ "php-spl",
+ "php-streams",
+ "php-support",
  "php-vm",
 ]
 
@@ -587,7 +623,10 @@ dependencies = [
 name = "php-ext-posix"
 version = "0.1.0"
 dependencies = [
+ "php-ext-streams",
+ "php-posix",
  "php-runtime",
+ "php-streams",
  "php-vm",
 ]
 
@@ -605,6 +644,10 @@ name = "php-ext-session"
 version = "0.1.0"
 dependencies = [
  "php-runtime",
+ "php-session",
+ "php-stdstr",
+ "php-streams",
+ "php-support",
  "php-vm",
 ]
 
@@ -637,6 +680,7 @@ name = "php-ext-sodium"
 version = "0.1.0"
 dependencies = [
  "php-runtime",
+ "php-sodium",
  "php-vm",
 ]
 
@@ -701,6 +745,7 @@ name = "php-ext-sysv"
 version = "0.1.0"
 dependencies = [
  "php-runtime",
+ "php-sysv",
  "php-vm",
 ]
 
@@ -709,6 +754,7 @@ name = "php-ext-uri"
 version = "0.1.0"
 dependencies = [
  "php-runtime",
+ "php-uri",
  "php-vm",
 ]
 
@@ -732,16 +778,25 @@ dependencies = [
 name = "php-ext-zip"
 version = "0.1.0"
 dependencies = [
+ "php-ext-streams",
+ "php-pcre",
  "php-runtime",
+ "php-streams",
  "php-vm",
+ "php-zip",
 ]
 
 [[package]]
 name = "php-ext-zlib"
 version = "0.1.0"
 dependencies = [
+ "php-bz2",
+ "php-ext-streams",
  "php-runtime",
+ "php-streams",
+ "php-support",
  "php-vm",
+ "php-zlib",
 ]
 
 [[package]]
@@ -932,6 +987,7 @@ dependencies = [
  "php-hash",
  "php-libxml",
  "php-runtime",
+ "php-zlib",
 ]
 
 [[package]]
