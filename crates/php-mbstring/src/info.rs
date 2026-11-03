@@ -54,11 +54,20 @@ impl MbState {
                 if let Some(e) = self.http_input_identify {
                     v.push(("http_input", InfoValue::Str(e.name.into())));
                 }
-                v.push(("http_output", InfoValue::Str(self.http_output_encoding().name.into())));
+                v.push((
+                    "http_output",
+                    InfoValue::Str(self.http_output_encoding().name.into()),
+                ));
                 v.push(("http_output_conv_mimetypes", InfoValue::Str(mimetypes)));
                 v.push(("mail_charset", InfoValue::Str(name(lang.mail_charset))));
-                v.push(("mail_header_encoding", InfoValue::Str(name(lang.mail_header_encoding))));
-                v.push(("mail_body_encoding", InfoValue::Str(name(lang.mail_body_encoding))));
+                v.push((
+                    "mail_header_encoding",
+                    InfoValue::Str(name(lang.mail_header_encoding)),
+                ));
+                v.push((
+                    "mail_body_encoding",
+                    InfoValue::Str(name(lang.mail_body_encoding)),
+                ));
                 v.push((
                     "illegal_chars",
                     InfoValue::Int(i64::try_from(self.illegalchars).unwrap_or(i64::MAX)),
@@ -130,7 +139,12 @@ pub const OUTPUT_HANDLER_END: i64 = 0x08;
 
 impl MbState {
     /// `mb_output_handler($string, $status)`.
-    pub fn mb_output_handler(&mut self, s: &[u8], status: i64, sapi: &mut dyn OutputSapi) -> Vec<u8> {
+    pub fn mb_output_handler(
+        &mut self,
+        s: &[u8],
+        status: i64,
+        sapi: &mut dyn OutputSapi,
+    ) -> Vec<u8> {
         let enc = self.http_output_encoding();
         if enc.no == EncodingNo::Pass {
             return s.to_vec();

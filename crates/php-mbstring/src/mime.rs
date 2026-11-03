@@ -20,7 +20,9 @@ fn transfer_encoded_size(tmp: &[u8], base64: bool) -> usize {
     if base64 {
         tmp.len().div_ceil(3) * 4
     } else {
-        tmp.iter().map(|&c| if needs_qencode(c) { 3 } else { 1 }).sum()
+        tmp.iter()
+            .map(|&c| if needs_qencode(c) { 3 } else { 1 })
+            .sum()
     }
 }
 
@@ -72,7 +74,11 @@ fn transfer_encode(tmp: &mut ConvertBuf, out: &mut Vec<u8>, base64: bool) {
 }
 
 /// `mb_mime_header_encode`.
-#[allow(clippy::too_many_lines, clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+#[allow(
+    clippy::too_many_lines,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss
+)]
 pub fn mime_header_encode(
     input: &[u8],
     incode: &'static Encoding,
@@ -84,7 +90,11 @@ pub fn mime_header_encode(
     if input.is_empty() {
         return Vec::new();
     }
-    let mut indent = if (0..74).contains(&indent) { indent as usize } else { 0 };
+    let mut indent = if (0..74).contains(&indent) {
+        indent as usize
+    } else {
+        0
+    };
     let mut linefeed = &linefeed[..linefeed.len().min(8)];
     if let Some(z) = linefeed.iter().position(|&b| b == 0) {
         linefeed = &linefeed[..z];
@@ -108,7 +118,11 @@ pub fn mime_header_encode(
                     }
                     leading = false;
                 }
-                if !(0x21..=0x7E).contains(&w) || w == u32::from(b'=') || w == u32::from(b'?') || w == u32::from(b'_') {
+                if !(0x21..=0x7E).contains(&w)
+                    || w == u32::from(b'=')
+                    || w == u32::from(b'?')
+                    || w == u32::from(b'_')
+                {
                     passthrough = false;
                     break 'scan;
                 }
@@ -145,7 +159,12 @@ pub fn mime_header_encode(
         while p < e {
             let w = wb[p];
             p += 1;
-            if w < 0x20 || w > 0x7E || w == u32::from(b'?') || w == u32::from(b'=') || w == u32::from(b'_') || (w == u32::from(b' ') && (p - word_start) > 74) {
+            if !(0x20..=0x7E).contains(&w)
+                || w == u32::from(b'?')
+                || w == u32::from(b'=')
+                || w == u32::from(b'_')
+                || (w == u32::from(b' ') && (p - word_start) > 74)
+            {
                 feed = true;
                 break;
             } else if w == u32::from(b' ') {
@@ -168,15 +187,7 @@ pub fn mime_header_encode(
             }
         }
         if !feed {
-            if !rest.is_empty() {
-                if word_start < MIN_WCHAR_BUFSIZE {
-                    feed = true;
-                } else {
-                    offset = e - word_start;
-                    wb.copy_within(word_start..e, 0);
-                    continue 'ascii;
-                }
-            } else {
+            if rest.is_empty() {
                 if word_start < e && !buf.is_empty() {
                     if buf.len() - line_start + (p - word_start) + indent > 74 {
                         buf.extend_from_slice(linefeed);
@@ -190,6 +201,12 @@ pub fn mime_header_encode(
                     word_start += 1;
                 }
                 return buf;
+            } else if word_start < MIN_WCHAR_BUFSIZE {
+                feed = true;
+            } else {
+                offset = e - word_start;
+                wb.copy_within(word_start..e, 0);
+                continue 'ascii;
             }
         }
         // feed_and_mime_encode:
@@ -237,7 +254,8 @@ pub fn mime_header_encode(
             let tmppos2 = tmp.len();
             let tmpstate2 = tmp.state;
             (outcode.from_wchar)(&[], &mut tmp, true);
-            if transfer_encoded_size(&tmp.out, base64) <= space_available || (n == 1 && tmppos == 0) {
+            if transfer_encoded_size(&tmp.out, base64) <= space_available || (n == 1 && tmppos == 0)
+            {
                 p += n;
                 if p == e {
                     transfer_encode(&mut tmp, &mut buf, base64);
@@ -296,7 +314,7 @@ fn qprint_val(c: u8) -> Option<u8> {
 
 /// `mime_header_decode_encoded_word`: `s[p..]` starts with `=?`; returns the
 /// position after the word, or `None` if it is not a valid encoded word.
-#[allow(clippy::cast_possible_truncation)]
+#[allow(clippy::cast_possible_truncation, clippy::many_single_char_names)]
 fn decode_encoded_word(
     s: &[u8],
     p: usize,
@@ -392,6 +410,7 @@ fn is_ws(c: u8) -> bool {
 }
 
 /// `mb_mime_header_decode`.
+#[allow(clippy::many_single_char_names)]
 pub fn mime_header_decode(input: &[u8], outcode: &'static Encoding) -> Vec<u8> {
     let s = input;
     let e = s.len();
@@ -514,10 +533,20 @@ mod tests {
     fn encode_and_decode() {
         let mut st = MbState::new();
         let enc = st
-            .mb_encode_mimeheader("Привет мир".as_bytes(), Some(b"UTF-8"), Some(b"B"), b"\r\n", 0)
+            .mb_encode_mimeheader(
+                "Привет мир".as_bytes(),
+                Some(b"UTF-8"),
+                Some(b"B"),
+                b"\r\n",
+                0,
+            )
             .unwrap();
         assert_eq!(enc, b"=?UTF-8?B?0J/RgNC40LLQtdGCINC80LjRgA==?=");
         assert_eq!(st.mb_decode_mimeheader(&enc), "Привет мир".as_bytes());
-        assert_eq!(st.mb_encode_mimeheader(b"plain ascii", None, None, b"\r\n", 0).unwrap(), b"plain ascii");
+        assert_eq!(
+            st.mb_encode_mimeheader(b"plain ascii", None, None, b"\r\n", 0)
+                .unwrap(),
+            b"plain ascii"
+        );
     }
 }

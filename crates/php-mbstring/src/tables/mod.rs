@@ -4,9 +4,9 @@
 #![allow(clippy::unreadable_literal)]
 
 pub mod cjk;
-pub mod html_entities;
-pub mod singlebyte;
 pub mod eaw;
-pub mod rare_cp;
-pub mod unicode_data;
+pub mod html_entities;
 pub mod qencode;
+pub mod rare_cp;
+pub mod singlebyte;
+pub mod unicode_data;

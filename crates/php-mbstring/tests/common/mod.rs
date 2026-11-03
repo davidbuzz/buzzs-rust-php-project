@@ -1,6 +1,14 @@
 //! Shared helpers for the oracle replay tests: value encoding (see
 //! `fixtures/strings/gen_oracle.php`) and dispatch of `mb_*` calls to
 //! `MbState` methods.
+#![allow(
+    clippy::too_many_lines,
+    clippy::match_same_arms,
+    clippy::only_used_in_recursion,
+    clippy::format_push_string,
+    clippy::default_trait_access,
+    clippy::many_single_char_names
+)]
 #![allow(dead_code)]
 
 use php_mbstring::state::SubstituteArg;
@@ -37,7 +45,11 @@ pub fn parse(s: &str) -> V {
         Some(b'A') if s.as_bytes().get(1) == Some(&b'[') => parse_keyed(&s[2..s.len() - 1]),
         Some(b'd') => V::D(String::from_utf8(unhex(&s[1..])).unwrap()),
         Some(b'O') => V::O,
-        Some(b'A') => V::A(if s.len() == 1 { vec![] } else { s[1..].split(',').map(parse).collect() }),
+        Some(b'A') => V::A(if s.len() == 1 {
+            vec![]
+        } else {
+            s[1..].split(',').map(parse).collect()
+        }),
         Some(b'E') => {
             let (cls, msg) = s[1..].split_once(':').unwrap();
             V::E(cls.to_string(), String::from_utf8(unhex(msg)).unwrap())
@@ -152,11 +164,18 @@ pub fn dispatch(st: &mut MbState, f: &str, a: &[V]) -> V {
         "mb_strwidth" => r!(st.mb_strwidth(s(&a[0]), os(a.get(1))), V::I),
         "mb_check_encoding" => r!(st.mb_check_encoding(s(&a[0]), os(a.get(1))), V::B),
         "mb_scrub" => r!(st.mb_scrub(s(&a[0]), os(a.get(1))), V::S),
-        "mb_substr" => r!(st.mb_substr(s(&a[0]), i(&a[1]), oi(a.get(2)), os(a.get(3))), V::S),
-        "mb_strcut" => r!(st.mb_strcut(s(&a[0]), i(&a[1]), oi(a.get(2)), os(a.get(3))), V::S),
-        "mb_str_split" => r!(st.mb_str_split(s(&a[0]), i(&a[1]), os(a.get(2))), |v: Vec<Vec<u8>>| V::A(
-            v.into_iter().map(V::S).collect()
-        )),
+        "mb_substr" => r!(
+            st.mb_substr(s(&a[0]), i(&a[1]), oi(a.get(2)), os(a.get(3))),
+            V::S
+        ),
+        "mb_strcut" => r!(
+            st.mb_strcut(s(&a[0]), i(&a[1]), oi(a.get(2)), os(a.get(3))),
+            V::S
+        ),
+        "mb_str_split" => r!(
+            st.mb_str_split(s(&a[0]), i(&a[1]), os(a.get(2))),
+            |v: Vec<Vec<u8>>| V::A(v.into_iter().map(V::S).collect())
+        ),
         "mb_strtoupper" => r!(st.mb_strtoupper(s(&a[0]), os(a.get(1))), V::S),
         "mb_strtolower" => r!(st.mb_strtolower(s(&a[0]), os(a.get(1))), V::S),
         "mb_convert_case" => r!(st.mb_convert_case(s(&a[0]), i(&a[1]), os(a.get(2))), V::S),
@@ -167,18 +186,39 @@ pub fn dispatch(st: &mut MbState, f: &str, a: &[V]) -> V {
                 (_, Some(x)) => Some(EncodingList::Str(x)),
                 _ => None,
             };
-            r!(st.mb_convert_encoding(s(&a[0]), s(&a[1]), from), bytes_or_false)
+            r!(
+                st.mb_convert_encoding(s(&a[0]), s(&a[1]), from),
+                bytes_or_false
+            )
         }
         "mb_ord" => r!(st.mb_ord(s(&a[0]), os(a.get(1))), int_or_false),
         "mb_chr" => r!(st.mb_chr(i(&a[0]), os(a.get(1))), bytes_or_false),
         "mb_strimwidth" => r!(
-            st.mb_strimwidth(s(&a[0]), i(&a[1]), i(&a[2]), a.get(3).map_or(&b""[..], s), os(a.get(4))),
+            st.mb_strimwidth(
+                s(&a[0]),
+                i(&a[1]),
+                i(&a[2]),
+                a.get(3).map_or(&b""[..], s),
+                os(a.get(4))
+            ),
             V::S
         ),
-        "mb_strpos" => r!(st.mb_strpos(s(&a[0]), s(&a[1]), i(&a[2]), os(a.get(3))), int_or_false),
-        "mb_strrpos" => r!(st.mb_strrpos(s(&a[0]), s(&a[1]), i(&a[2]), os(a.get(3))), int_or_false),
-        "mb_stripos" => r!(st.mb_stripos(s(&a[0]), s(&a[1]), i(&a[2]), os(a.get(3))), int_or_false),
-        "mb_strripos" => r!(st.mb_strripos(s(&a[0]), s(&a[1]), i(&a[2]), os(a.get(3))), int_or_false),
+        "mb_strpos" => r!(
+            st.mb_strpos(s(&a[0]), s(&a[1]), i(&a[2]), os(a.get(3))),
+            int_or_false
+        ),
+        "mb_strrpos" => r!(
+            st.mb_strrpos(s(&a[0]), s(&a[1]), i(&a[2]), os(a.get(3))),
+            int_or_false
+        ),
+        "mb_stripos" => r!(
+            st.mb_stripos(s(&a[0]), s(&a[1]), i(&a[2]), os(a.get(3))),
+            int_or_false
+        ),
+        "mb_strripos" => r!(
+            st.mb_strripos(s(&a[0]), s(&a[1]), i(&a[2]), os(a.get(3))),
+            int_or_false
+        ),
         "mb_strstr" | "mb_strrchr" | "mb_stristr" | "mb_strrichr" => {
             let v = match f {
                 "mb_strstr" => StrstrVariant::Strstr,
@@ -186,7 +226,10 @@ pub fn dispatch(st: &mut MbState, f: &str, a: &[V]) -> V {
                 "mb_stristr" => StrstrVariant::Stristr,
                 _ => StrstrVariant::Strrichr,
             };
-            r!(st.mb_strstr_variant(v, s(&a[0]), s(&a[1]), b(&a[2]), os(a.get(3))), bytes_or_false)
+            r!(
+                st.mb_strstr_variant(v, s(&a[0]), s(&a[1]), b(&a[2]), os(a.get(3))),
+                bytes_or_false
+            )
         }
         "mb_substr_count" => r!(st.mb_substr_count(s(&a[0]), s(&a[1]), os(a.get(2))), V::I),
         "mb_substitute_character" => match a.first() {
@@ -208,8 +251,10 @@ pub fn dispatch(st: &mut MbState, f: &str, a: &[V]) -> V {
                 _ => None,
             };
             let strict = a.get(2).map(b);
-            r!(st.mb_detect_encoding(s(&a[0]), l, strict, false), |x: Option<&str>| x
-                .map_or(V::B(false), |n| V::S(n.as_bytes().to_vec())))
+            r!(
+                st.mb_detect_encoding(s(&a[0]), l, strict, false),
+                |x: Option<&str>| x.map_or(V::B(false), |n| V::S(n.as_bytes().to_vec()))
+            )
         }
         "mb_encode_numericentity" | "mb_decode_numericentity" => {
             let map: Vec<Option<i64>> = values(&a[1])
@@ -223,18 +268,41 @@ pub fn dispatch(st: &mut MbState, f: &str, a: &[V]) -> V {
                 })
                 .collect();
             if f == "mb_encode_numericentity" {
-                r!(st.mb_encode_numericentity(s(&a[0]), &map, os(a.get(2)), a.get(3).is_some_and(b)), V::S)
+                r!(
+                    st.mb_encode_numericentity(
+                        s(&a[0]),
+                        &map,
+                        os(a.get(2)),
+                        a.get(3).is_some_and(b)
+                    ),
+                    V::S
+                )
             } else {
-                r!(st.mb_decode_numericentity(s(&a[0]), &map, os(a.get(2))), V::S)
+                r!(
+                    st.mb_decode_numericentity(s(&a[0]), &map, os(a.get(2))),
+                    V::S
+                )
             }
         }
         "mb_encode_mimeheader" => r!(
-            st.mb_encode_mimeheader(s(&a[0]), os(a.get(1)), os(a.get(2)), a.get(3).map_or(&b"\r\n"[..], s), a.get(4).map_or(0, i)),
+            st.mb_encode_mimeheader(
+                s(&a[0]),
+                os(a.get(1)),
+                os(a.get(2)),
+                a.get(3).map_or(&b"\r\n"[..], s),
+                a.get(4).map_or(0, i)
+            ),
             V::S
         ),
         "mb_decode_mimeheader" => V::S(st.mb_decode_mimeheader(s(&a[0]))),
-        "mb_str_pad" => r!(st.mb_str_pad(s(&a[0]), i(&a[1]), s(&a[2]), i(&a[3]), os(a.get(4))), V::S),
-        "mb_convert_kana" => r!(st.mb_convert_kana(s(&a[0]), os(a.get(1)), os(a.get(2))), V::S),
+        "mb_str_pad" => r!(
+            st.mb_str_pad(s(&a[0]), i(&a[1]), s(&a[2]), i(&a[3]), os(a.get(4))),
+            V::S
+        ),
+        "mb_convert_kana" => r!(
+            st.mb_convert_kana(s(&a[0]), os(a.get(1)), os(a.get(2))),
+            V::S
+        ),
         "mb_preferred_mime_name" => r!(st.mb_preferred_mime_name(s(&a[0])), |x: Option<&str>| x
             .map_or(V::B(false), |n| V::S(n.as_bytes().to_vec()))),
         "mb_encoding_aliases" => r!(st.mb_encoding_aliases(s(&a[0])), |x: Vec<&str>| V::A(
@@ -249,7 +317,12 @@ pub fn dispatch(st: &mut MbState, f: &str, a: &[V]) -> V {
             Some(x) => r!(st.mb_language_set(s(x)), V::B),
         },
         "mb_detect_order" => match a.first() {
-            None => V::A(st.mb_detect_order_get().into_iter().map(|n| V::S(n.as_bytes().to_vec())).collect()),
+            None => V::A(
+                st.mb_detect_order_get()
+                    .into_iter()
+                    .map(|n| V::S(n.as_bytes().to_vec()))
+                    .collect(),
+            ),
             Some(x) => {
                 let (arr, st_) = list_arg(x);
                 let l = match (&arr, &st_) {
@@ -267,7 +340,8 @@ pub fn dispatch(st: &mut MbState, f: &str, a: &[V]) -> V {
         "mb_http_input" => r!(st.mb_http_input(os(a.first())), |h| match h {
             HttpInput::False => V::B(false),
             HttpInput::Name(n) => V::S(n.into_bytes()),
-            HttpInput::List(l) => V::A(l.into_iter().map(|n| V::S(n.as_bytes().to_vec())).collect()),
+            HttpInput::List(l) =>
+                V::A(l.into_iter().map(|n| V::S(n.as_bytes().to_vec())).collect()),
         }),
         "mb_regex_encoding" => match a.first() {
             None => V::S(st.mb_regex_encoding_get().as_bytes().to_vec()),
@@ -283,7 +357,6 @@ pub fn dispatch(st: &mut MbState, f: &str, a: &[V]) -> V {
         _ => panic!("unknown function {f}"),
     }
 }
-
 
 /// Split a bracketed array body at top-level commas.
 fn split_top(s: &str) -> Vec<&str> {
@@ -333,7 +406,11 @@ fn info_to_v(v: php_mbstring::info::InfoValue) -> V {
         I::Str(s) => V::S(s.into_bytes()),
         I::Int(n) => V::I(n),
         I::List(l) => V::A(l.into_iter().map(|n| V::S(n.as_bytes().to_vec())).collect()),
-        I::Assoc(a) => V::K(a.into_iter().map(|(k, v)| (V::S(k.as_bytes().to_vec()), info_to_v(v))).collect()),
+        I::Assoc(a) => V::K(
+            a.into_iter()
+                .map(|(k, v)| (V::S(k.as_bytes().to_vec()), info_to_v(v)))
+                .collect(),
+        ),
         I::Null => V::N,
         I::False => V::B(false),
     }

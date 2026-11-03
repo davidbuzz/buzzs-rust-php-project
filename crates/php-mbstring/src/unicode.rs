@@ -519,7 +519,15 @@ mod tests {
 
     fn cc(mode: CaseMode, s: &str) -> String {
         let u = by_name(b"UTF-8").unwrap();
-        String::from_utf8(convert_case(mode, s.as_bytes(), u, u, ErrorMode::Char, 0x3F)).unwrap()
+        String::from_utf8(convert_case(
+            mode,
+            s.as_bytes(),
+            u,
+            u,
+            ErrorMode::Char,
+            0x3F,
+        ))
+        .unwrap()
     }
 
     #[test]

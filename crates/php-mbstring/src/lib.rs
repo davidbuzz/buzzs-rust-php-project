@@ -15,9 +15,9 @@ pub mod encoding;
 pub mod error;
 pub mod info;
 pub mod legacy;
-pub mod numericentity;
 pub mod mbregex;
 pub mod mime;
+pub mod numericentity;
 pub mod state;
 pub mod strcut;
 pub mod strings;
@@ -26,5 +26,5 @@ pub mod unicode;
 
 pub use convert::{ConvertBuf, ErrorMode, BAD_INPUT};
 pub use encoding::{Encoding, EncodingNo};
-pub use state::{EncodingList, HttpInput, Language, MbState, SubstituteArg, SubstituteChar};
 pub use error::{Diagnostic, Level, MbError, MbResult};
+pub use state::{EncodingList, HttpInput, Language, MbState, SubstituteArg, SubstituteChar};

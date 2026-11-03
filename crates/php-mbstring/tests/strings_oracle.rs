@@ -4,6 +4,14 @@
 //! Deprecations are not recorded (master adds several that 8.3 lacks).
 //! Known, deliberate differences from 8.3 (php-src master behaviour) are
 //! listed in `KNOWN_MASTER_DIFFS`.
+#![allow(
+    clippy::too_many_lines,
+    clippy::match_same_arms,
+    clippy::only_used_in_recursion,
+    clippy::format_push_string,
+    clippy::default_trait_access,
+    clippy::many_single_char_names
+)]
 
 mod common;
 use common::{dispatch, i, parse, s, unhex, V};
@@ -12,7 +20,13 @@ use std::fmt::Write as _;
 
 /// Cases where php-src master intentionally differs from PHP 8.3.
 fn known_master_diff(f: &str, a: &[V]) -> bool {
-    let enc = a.last().and_then(|v| if let V::S(x) = v { Some(x.as_slice()) } else { None });
+    let enc = a.last().and_then(|v| {
+        if let V::S(x) = v {
+            Some(x.as_slice())
+        } else {
+            None
+        }
+    });
     match f {
         // master's mb_strcut uses mb_cut_gb18030 / mb_cut_utf16* (with its
         // ineffective surrogate check) / mb_cut_utf8 (backs up over
@@ -27,8 +41,10 @@ fn known_master_diff(f: &str, a: &[V]) -> bool {
                 }
                 _ => false,
             };
-            len0 || matches!(enc, Some(b"GB18030" | b"UTF-16" | b"UTF-16LE" | b"UTF-16BE"))
-                || (enc == Some(b"UTF-8") && std::str::from_utf8(s(&a[0])).is_err())
+            len0 || matches!(
+                enc,
+                Some(b"GB18030" | b"UTF-16" | b"UTF-16LE" | b"UTF-16BE")
+            ) || (enc == Some(b"UTF-8") && std::str::from_utf8(s(&a[0])).is_err())
         }
         // 8.3 moved the search window by the needle's *byte* length.
         "mb_strrpos" => i(&a[2]) < 0 && enc != Some(b"UTF-8"),
@@ -51,7 +67,10 @@ fn show(v: &V) -> String {
 
 #[test]
 fn replay_string_function_oracle() {
-    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/strings/oracle.tsv");
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/strings/oracle.tsv"
+    );
     let data = std::fs::read_to_string(path).expect("fixture");
     let mut st = MbState::new();
     let mut failures = String::new();
@@ -62,13 +81,25 @@ fn replay_string_function_oracle() {
         let parts: Vec<&str> = line.split('\t').collect();
         let f = parts[0];
         let eq = parts.iter().position(|p| p.starts_with('=')).unwrap();
-        let args: Vec<V> = parts[1..eq].iter().filter(|p| !p.is_empty()).map(|p| parse(p)).collect();
-        let args = if parts[1..eq].len() == 1 && parts[1].is_empty() { vec![] } else { args };
+        let args: Vec<V> = parts[1..eq]
+            .iter()
+            .filter(|p| !p.is_empty())
+            .map(|p| parse(p))
+            .collect();
+        let args = if parts[1..eq].len() == 1 && parts[1].is_empty() {
+            vec![]
+        } else {
+            args
+        };
         let expected = parse(&parts[eq][1..]);
         let exp_diag: Vec<String> = parts
             .get(eq + 1)
             .filter(|d| !d.is_empty())
-            .map(|d| d.split(',').map(|h| String::from_utf8(unhex(h)).unwrap()).collect())
+            .map(|d| {
+                d.split(',')
+                    .map(|h| String::from_utf8(unhex(h)).unwrap())
+                    .collect()
+            })
             .unwrap_or_default();
         total += 1;
         let got = dispatch(&mut st, f, &args);
@@ -93,5 +124,8 @@ fn replay_string_function_oracle() {
             }
         }
     }
-    assert!(nfail == 0, "{nfail}/{total} oracle mismatches {per_func:?}:\n{failures}");
+    assert!(
+        nfail == 0,
+        "{nfail}/{total} oracle mismatches {per_func:?}:\n{failures}"
+    );
 }

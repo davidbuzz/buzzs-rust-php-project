@@ -81,7 +81,11 @@ fn start_string<'a>(array: &mut [Candidate<'a>], input: &'a [u8]) {
     }
 }
 
-#[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+#[allow(
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss
+)]
 fn count_demerits(array: &mut Vec<Candidate<'_>>, strict: bool) {
     let mut wchar_buf = [0u32; 128];
     let mut finished = array.iter().filter(|c| c.input.is_empty()).count();
@@ -117,7 +121,11 @@ fn count_demerits(array: &mut Vec<Candidate<'_>>, strict: bool) {
     }
     for c in array.iter_mut() {
         let d = c.demerits as f64 * f64::from(c.multiplier);
-        c.demerits = if d < u64::MAX as f64 { d as u64 } else { u64::MAX };
+        c.demerits = if d < u64::MAX as f64 {
+            d as u64
+        } else {
+            u64::MAX
+        };
     }
 }
 
@@ -238,14 +246,12 @@ impl MbState {
     ) -> Option<Vec<u8>> {
         let from_enc = if from.len() == 1 {
             from[0]
+        } else if let Some(e) = guess_encoding_for_strings(&[s], from, self.strict_detection, true)
+        {
+            e
         } else {
-            match guess_encoding_for_strings(&[s], from, self.strict_detection, true) {
-                Some(e) => e,
-                None => {
-                    self.warn("Unable to detect character encoding");
-                    return None;
-                }
-            }
+            self.warn("Unable to detect character encoding");
+            return None;
         };
         Some(self.convert_ex(s, to, from_enc))
     }
@@ -288,17 +294,16 @@ impl MbState {
         if elist.len() == 1 {
             return Ok(Some((elist[0], to_enc)));
         }
-        match guess_encoding_for_strings(
+        if let Some(e) = guess_encoding_for_strings(
             strings,
             &elist,
             self.strict_detection,
             !is_all_encodings_list,
         ) {
-            Some(e) => Ok(Some((e, to_enc))),
-            None => {
-                self.warn("Unable to detect encoding");
-                Ok(None)
-            }
+            Ok(Some((e, to_enc)))
+        } else {
+            self.warn("Unable to detect encoding");
+            Ok(None)
         }
     }
 }
@@ -309,13 +314,17 @@ mod tests {
     use crate::encoding::by_name;
 
     fn encs(names: &[&str]) -> Vec<&'static Encoding> {
-        names.iter().map(|n| by_name(n.as_bytes()).unwrap()).collect()
+        names
+            .iter()
+            .map(|n| by_name(n.as_bytes()).unwrap())
+            .collect()
     }
 
     #[test]
     fn detects_obvious_cases() {
         let l = encs(&["ASCII", "UTF-8", "ISO-8859-1"]);
-        let g = |s: &[u8], strict| guess_encoding_for_strings(&[s], &l, strict, true).map(|e| e.name);
+        let g =
+            |s: &[u8], strict| guess_encoding_for_strings(&[s], &l, strict, true).map(|e| e.name);
         assert_eq!(g(b"hello", true), Some("ASCII"));
         assert_eq!(g("héllo".as_bytes(), true), Some("UTF-8"));
         assert_eq!(g(b"h\xE9llo", true), Some("ISO-8859-1"));

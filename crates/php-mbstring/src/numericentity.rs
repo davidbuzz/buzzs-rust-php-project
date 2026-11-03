@@ -12,7 +12,11 @@ use crate::state::MbState;
 /// VM converted them with `zval_try_get_long` (`None` = not convertible).
 pub fn make_conversion_map(values: &[Option<i64>]) -> MbResult<Vec<u32>> {
     if values.len() % 4 != 0 {
-        return Err(MbError::arg_value(2, "map", "must have a multiple of 4 elements"));
+        return Err(MbError::arg_value(
+            2,
+            "map",
+            "must have a multiple of 4 elements",
+        ));
     }
     values
         .iter()
@@ -26,9 +30,9 @@ pub fn make_conversion_map(values: &[Option<i64>]) -> MbResult<Vec<u32>> {
 }
 
 fn entity_convert(w: u32, convmap: &[u32]) -> Option<u32> {
-    convmap.chunks_exact(4).find_map(|m| {
-        (w >= m[0] && w <= m[1]).then(|| w.wrapping_add(m[2]) & m[3])
-    })
+    convmap
+        .chunks_exact(4)
+        .find_map(|m| (w >= m[0] && w <= m[1]).then(|| w.wrapping_add(m[2]) & m[3]))
 }
 
 fn entity_deconvert(number: u32, convmap: &[u32]) -> Option<u32> {
@@ -191,7 +195,9 @@ pub fn decode(
                                 too_big = true;
                                 break;
                             }
-                            value = value.wrapping_mul(10).wrapping_add(w.wrapping_sub(u32::from(b'0')));
+                            value = value
+                                .wrapping_mul(10)
+                                .wrapping_add(w.wrapping_sub(u32::from(b'0')));
                         }
                         if too_big {
                             converted.extend_from_slice(&wb[p..p2]);
@@ -259,7 +265,14 @@ impl MbState {
     ) -> MbResult<Vec<u8>> {
         let enc = self.get_encoding(encoding, 3, "encoding")?;
         let convmap = make_conversion_map(map)?;
-        Ok(encode(s, enc, &convmap, hex, self.illegal_substchar(), self.illegal_mode()))
+        Ok(encode(
+            s,
+            enc,
+            &convmap,
+            hex,
+            self.illegal_substchar(),
+            self.illegal_mode(),
+        ))
     }
 
     /// `mb_decode_numericentity($string, $map, $encoding)`.
@@ -271,7 +284,13 @@ impl MbState {
     ) -> MbResult<Vec<u8>> {
         let enc = self.get_encoding(encoding, 3, "encoding")?;
         let convmap = make_conversion_map(map)?;
-        Ok(decode(s, enc, &convmap, self.illegal_substchar(), self.illegal_mode()))
+        Ok(decode(
+            s,
+            enc,
+            &convmap,
+            self.illegal_substchar(),
+            self.illegal_mode(),
+        ))
     }
 }
 
@@ -285,9 +304,23 @@ mod tests {
 
     #[test]
     fn encode_basic() {
-        let out = encode("aé€".as_bytes(), utf8(), &[0x80, 0x10_FFFF, 0, 0x1F_FFFF], false, 63, ErrorMode::Char);
+        let out = encode(
+            "aé€".as_bytes(),
+            utf8(),
+            &[0x80, 0x10_FFFF, 0, 0x1F_FFFF],
+            false,
+            63,
+            ErrorMode::Char,
+        );
         assert_eq!(out, b"a&#233;&#8364;");
-        let out = encode("é".as_bytes(), utf8(), &[0x80, 0x10_FFFF, 0, 0x1F_FFFF], true, 63, ErrorMode::Char);
+        let out = encode(
+            "é".as_bytes(),
+            utf8(),
+            &[0x80, 0x10_FFFF, 0, 0x1F_FFFF],
+            true,
+            63,
+            ErrorMode::Char,
+        );
         assert_eq!(out, b"&#xE9;");
     }
 

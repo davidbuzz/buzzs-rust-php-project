@@ -153,7 +153,9 @@ fn legacy_strcut(s: &[u8], from: usize, length: usize, enc: &'static Encoding) -
     // Search start position (output discarded).
     let mut p = 0usize;
     while p < from {
-        chain.encoder.feed(i32::from(s[p]), &mut crate::legacy::NullSink);
+        chain
+            .encoder
+            .feed(i32::from(s[p]), &mut crate::legacy::NullSink);
         p += 1;
     }
 

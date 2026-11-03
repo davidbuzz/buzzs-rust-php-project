@@ -8,6 +8,14 @@
 //! objects/floats, `mb_get_info`). Known master-vs-8.3 differences are
 //! listed in `MASTER_DIFF_TESTS`. The test fails if fewer tests reproduce
 //! than the recorded baseline `MIN_REPRODUCED`.
+#![allow(
+    clippy::too_many_lines,
+    clippy::match_same_arms,
+    clippy::only_used_in_recursion,
+    clippy::format_push_string,
+    clippy::default_trait_access,
+    clippy::many_single_char_names
+)]
 
 mod common;
 use common::{coerce_int, coerce_str, dispatch, parse, unhex, values, V};
@@ -16,15 +24,15 @@ use std::collections::BTreeMap;
 
 /// Tests whose 8.3 recording differs from php-src master behaviour.
 const MASTER_DIFF_TESTS: &[&str] = &[
-    "GHSA-74r9-qxhc-fx53",     // NUL inside encoding names is not ignored
+    "GHSA-74r9-qxhc-fx53",          // NUL inside encoding names is not ignored
     "mb_detect_order_with_ini_set", // runtime ini_set updates the detect order
-    "mb_get_info_errors",      // invalid type is a warning + false
-    "bug79149",                // %pS: message keeps bytes after NUL
+    "mb_get_info_errors",           // invalid type is a warning + false
+    "bug79149",                     // %pS: message keeps bytes after NUL
     "gh11476",
-    "gh16360",                 // mb_substr(PHP_INT_MIN) now a ValueError
-    "gh20674",                 // no space between adjacent encoded words
-    "gh22779",                 // mb_strrpos negative offset for non-UTF-8
-    "gh23106",                 // mb_strpos offset on invalid UTF-8
+    "gh16360",                        // mb_substr(PHP_INT_MIN) now a ValueError
+    "gh20674",                        // no space between adjacent encoded words
+    "gh22779",                        // mb_strrpos negative offset for non-UTF-8
+    "gh23106",                        // mb_strpos offset on invalid UTF-8
     "mb_decode_numericentity_errors", // non-int map entries are a ValueError
     "mb_encode_numericentity_errors",
     "mb_http_input_errors",    // multi-char type is a ValueError
@@ -38,7 +46,7 @@ const MASTER_DIFF_TESTS: &[&str] = &[
     "mb_strcut_negative_length",
     "mb_decode_mimeheader_variation4", // no space between adjacent encoded words
     "mb_decode_mimeheader_basic",
-    "gb18030_2022_encoding",   // encoding does not exist in 8.3
+    "gb18030_2022_encoding", // encoding does not exist in 8.3
 ];
 
 /// Tests whose remaining differences come from state only the VM/SAPI can
@@ -71,7 +79,8 @@ fn norm(v: V) -> V {
 fn arg_kinds(f: &str) -> &'static str {
     // s = string, i = int, b = bool, x = leave as is
     match f {
-        "mb_strlen" | "mb_strwidth" | "mb_scrub" | "mb_strtoupper" | "mb_strtolower" | "mb_ord" | "mb_ucfirst" | "mb_lcfirst" => "ss",
+        "mb_strlen" | "mb_strwidth" | "mb_scrub" | "mb_strtoupper" | "mb_strtolower" | "mb_ord"
+        | "mb_ucfirst" | "mb_lcfirst" => "ss",
         "mb_substr" | "mb_strcut" => "sixs",
         "mb_str_split" => "sis",
         "mb_convert_case" => "sis",
@@ -106,7 +115,12 @@ fn coerce_args(f: &str, args: &[V]) -> Option<Vec<V>> {
 }
 
 /// `php_mb_convert_encoding_recursive`, as the VM would implement it.
-fn convert_recursive(st: &mut MbState, arr: &[(V, V)], to: &'static php_mbstring::Encoding, from: &[&'static php_mbstring::Encoding]) -> V {
+fn convert_recursive(
+    st: &mut MbState,
+    arr: &[(V, V)],
+    to: &'static php_mbstring::Encoding,
+    from: &[&'static php_mbstring::Encoding],
+) -> V {
     let mut out = Vec::new();
     for (k, v) in arr {
         let key = match k {
@@ -173,10 +187,20 @@ fn collect_strings(v: &V, out: &mut Vec<Vec<u8>>) -> bool {
     true
 }
 
-fn convert_strings(st: &mut MbState, v: &V, from: &'static php_mbstring::Encoding, to: &'static php_mbstring::Encoding) -> V {
+fn convert_strings(
+    st: &mut MbState,
+    v: &V,
+    from: &'static php_mbstring::Encoding,
+    to: &'static php_mbstring::Encoding,
+) -> V {
     match v {
         V::S(x) => V::S(st.convert_ex(x, to, from)),
-        V::K(items) => V::K(items.iter().map(|(k, x)| (k.clone(), convert_strings(st, x, from, to))).collect()),
+        V::K(items) => V::K(
+            items
+                .iter()
+                .map(|(k, x)| (k.clone(), convert_strings(st, x, from, to)))
+                .collect(),
+        ),
         other => other.clone(),
     }
 }
@@ -194,7 +218,11 @@ fn convert_variables(st: &mut MbState, args: &[V]) -> Option<(V, V)> {
     let from = match args.get(1)? {
         V::S(x) => EncodingList::Str(x),
         v @ V::K(_) => {
-            from_vals = values(v).iter().filter_map(coerce_str).map(|x| common::s(&x).to_vec()).collect::<Vec<_>>();
+            from_vals = values(v)
+                .iter()
+                .filter_map(coerce_str)
+                .map(|x| common::s(&x).to_vec())
+                .collect::<Vec<_>>();
             EncodingList::Array(&from_vals)
         }
         _ => return None,
@@ -229,7 +257,11 @@ fn replay(st: &mut MbState, f: &str, args: &[V]) -> Option<V> {
             let from = match args.get(2) {
                 Some(V::S(x)) => Some(EncodingList::Str(x)),
                 Some(v @ (V::K(_) | V::A(_))) => {
-                    from_vals = values(v).iter().filter_map(coerce_str).map(|x| common::s(&x).to_vec()).collect::<Vec<_>>();
+                    from_vals = values(v)
+                        .iter()
+                        .filter_map(coerce_str)
+                        .map(|x| common::s(&x).to_vec())
+                        .collect::<Vec<_>>();
                     Some(EncodingList::Array(&from_vals))
                 }
                 _ => None,
@@ -247,10 +279,18 @@ fn replay(st: &mut MbState, f: &str, args: &[V]) -> Option<V> {
             });
         }
         ("mb_check_encoding", None | Some(V::N)) => {
-            return Some(match st.mb_check_encoding_noarg(args.get(1).and_then(|v| if let V::S(x) = v { Some(x.as_slice()) } else { None })) {
-                Ok(b) => V::B(b),
-                Err(e) => common::err(&e, f),
-            });
+            return Some(
+                match st.mb_check_encoding_noarg(args.get(1).and_then(|v| {
+                    if let V::S(x) = v {
+                        Some(x.as_slice())
+                    } else {
+                        None
+                    }
+                })) {
+                    Ok(b) => V::B(b),
+                    Err(e) => common::err(&e, f),
+                },
+            );
         }
         _ => {}
     }
@@ -268,13 +308,13 @@ fn replay(st: &mut MbState, f: &str, args: &[V]) -> Option<V> {
         _ => {}
     }
     let snapshot = st.clone();
-    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| dispatch(st, f, &args))) {
-        Ok(v) => Some(v),
-        Err(_) => {
-            // Argument shapes the dispatcher does not model (VM coercions).
-            *st = snapshot;
-            None
-        }
+    if let Ok(v) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| dispatch(st, f, &args)))
+    {
+        Some(v)
+    } else {
+        // Argument shapes the dispatcher does not model (VM coercions).
+        *st = snapshot;
+        None
     }
 }
 
@@ -303,13 +343,20 @@ fn replay_phpt_calls() {
             "#INI" => {
                 let v = unhex(parts.get(2).copied().unwrap_or(""));
                 // php-src's run-tests strips one level of quotes.
-                let v = if v.len() >= 2 && v[0] == b'"' && v[v.len() - 1] == b'"' { v[1..v.len() - 1].to_vec() } else { v };
+                let v = if v.len() >= 2 && v[0] == b'"' && v[v.len() - 1] == b'"' {
+                    v[1..v.len() - 1].to_vec()
+                } else {
+                    v
+                };
                 ini.push((parts[1].to_string(), v));
                 continue;
             }
             "#INISET" => {
                 if !started {
-                    let refs: Vec<(&str, &[u8])> = ini.iter().map(|(k, v)| (k.as_str(), v.as_slice())).collect();
+                    let refs: Vec<(&str, &[u8])> = ini
+                        .iter()
+                        .map(|(k, v)| (k.as_str(), v.as_slice()))
+                        .collect();
                     st = MbState::with_ini(&refs);
                     started = true;
                 }
@@ -322,14 +369,23 @@ fn replay_phpt_calls() {
             _ => {}
         }
         if !started {
-            let refs: Vec<(&str, &[u8])> = ini.iter().map(|(k, v)| (k.as_str(), v.as_slice())).collect();
+            let refs: Vec<(&str, &[u8])> = ini
+                .iter()
+                .map(|(k, v)| (k.as_str(), v.as_slice()))
+                .collect();
             st = MbState::with_ini(&refs);
             st.take_diagnostics();
             started = true;
         }
         let f = parts[0];
-        let Some(eq) = parts.iter().position(|p| p.starts_with('=')) else { continue };
-        let args: Vec<V> = parts[1..eq].iter().filter(|p| !p.is_empty()).map(|p| parse(p)).collect();
+        let Some(eq) = parts.iter().position(|p| p.starts_with('=')) else {
+            continue;
+        };
+        let args: Vec<V> = parts[1..eq]
+            .iter()
+            .filter(|p| !p.is_empty())
+            .map(|p| parse(p))
+            .collect();
         let expected = parse(&parts[eq][1..]);
         if let V::E(cls, _) = &expected {
             if cls == "TypeError" || cls == "ArgumentCountError" {
@@ -348,7 +404,9 @@ fn replay_phpt_calls() {
             .unwrap_or_default();
         let (got, extra_ok) = if f == "mb_convert_variables" {
             let snapshot = st.clone();
-            let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| convert_variables(&mut st, &args)));
+            let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                convert_variables(&mut st, &args)
+            }));
             let res = res.unwrap_or_else(|_| {
                 st = snapshot;
                 None
@@ -357,7 +415,9 @@ fn replay_phpt_calls() {
                 st.take_diagnostics();
                 continue;
             };
-            let ok = parts.get(eq + 2).is_none_or(|after| norm(parse(after)) == norm(vars));
+            let ok = parts
+                .get(eq + 2)
+                .is_none_or(|after| norm(parse(after)) == norm(vars));
             (Some(r), ok)
         } else {
             (replay(&mut st, f, &args), true)
@@ -384,7 +444,13 @@ fn replay_phpt_calls() {
                 };
                 entry.2 = format!(
                     "{f}({}) expected {} {exp_diag:?} got {} {got_diag:?}",
-                    args.iter().map(&show).collect::<Vec<_>>().join(", ").chars().take(300).collect::<String>(),
+                    args.iter()
+                        .map(&show)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                        .chars()
+                        .take(300)
+                        .collect::<String>(),
                     show(&expected),
                     show(&got)
                 );
@@ -415,5 +481,8 @@ fn replay_phpt_calls() {
         checked.len(),
         results.len()
     );
-    assert!(reproduced >= MIN_REPRODUCED, "regression: {reproduced} < {MIN_REPRODUCED}\n{report}");
+    assert!(
+        reproduced >= MIN_REPRODUCED,
+        "regression: {reproduced} < {MIN_REPRODUCED}\n{report}"
+    );
 }

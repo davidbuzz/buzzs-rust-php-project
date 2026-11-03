@@ -65,7 +65,10 @@ pub fn get_strwidth(s: &[u8], enc: &'static Encoding) -> usize {
     let mut width = 0;
     while !rest.is_empty() {
         let n = (enc.to_wchar)(&mut rest, &mut buf, &mut state);
-        width += buf[..n].iter().map(|&w| unicode::character_width(w)).sum::<usize>();
+        width += buf[..n]
+            .iter()
+            .map(|&w| unicode::character_width(w))
+            .sum::<usize>();
     }
     width
 }
@@ -241,7 +244,14 @@ pub fn stripos(
     enc: &'static Encoding,
 ) -> Result<usize, StrposError> {
     let u8 = encoding::utf8();
-    let h = unicode::convert_case(CaseMode::FoldSimple, haystack, enc, u8, ErrorMode::BadUtf8, 0);
+    let h = unicode::convert_case(
+        CaseMode::FoldSimple,
+        haystack,
+        enc,
+        u8,
+        ErrorMode::BadUtf8,
+        0,
+    );
     let n = unicode::convert_case(CaseMode::FoldSimple, needle, enc, u8, ErrorMode::BadUtf8, 0);
     find_strpos_utf8(&h, &n, offset, reverse)
 }
@@ -273,7 +283,14 @@ fn usize_from_i64(v: i64) -> usize {
 
 impl MbState {
     fn substr(&self, s: &[u8], from: usize, len: usize, enc: &'static Encoding) -> Vec<u8> {
-        get_substr(s, from, len, enc, self.illegal_substchar(), self.illegal_mode())
+        get_substr(
+            s,
+            from,
+            len,
+            enc,
+            self.illegal_substchar(),
+            self.illegal_mode(),
+        )
     }
 
     /// `mb_strlen($string, $encoding)`.
@@ -443,7 +460,7 @@ impl MbState {
             None => SUBSTR_UNTIL_END,
             Some(l) if l >= 0 => usize_from_i64(l),
             Some(l) => {
-                if real_from < mblen && (l.unsigned_abs() as u128) < (mblen - real_from) as u128 {
+                if real_from < mblen && u128::from(l.unsigned_abs()) < (mblen - real_from) as u128 {
                     (mblen - real_from) - usize::try_from(l.unsigned_abs()).unwrap_or(0)
                 } else {
                     0
@@ -570,7 +587,13 @@ impl MbState {
                 return Err(MbError::arg_value(3, "width", "is out of range"));
             }
         }
-        Ok(self.trim_string(s, trim_marker, enc, usize_from_i64(from), usize_from_i64(width)))
+        Ok(self.trim_string(
+            s,
+            trim_marker,
+            enc,
+            usize_from_i64(from),
+            usize_from_i64(width),
+        ))
     }
 
     /// `mb_trim_string`.
@@ -694,7 +717,14 @@ impl MbState {
     }
 
     fn convert_case(&self, mode: CaseMode, s: &[u8], enc: &'static Encoding) -> Vec<u8> {
-        unicode::convert_case(mode, s, enc, enc, self.illegal_mode(), self.illegal_substchar())
+        unicode::convert_case(
+            mode,
+            s,
+            enc,
+            enc,
+            self.illegal_mode(),
+            self.illegal_substchar(),
+        )
     }
 
     /// `mb_strtoupper`.
@@ -742,9 +772,9 @@ impl MbState {
         right: bool,
     ) -> MbResult<Vec<u8>> {
         const DEFAULT: [u32; 27] = [
-            0x20, 0x0C, 0x0A, 0x0D, 0x09, 0x0B, 0x00, 0xA0, 0x1680, 0x2000, 0x2001, 0x2002,
-            0x2003, 0x2004, 0x2005, 0x2006, 0x2007, 0x2008, 0x2009, 0x200A, 0x2028, 0x2029,
-            0x202F, 0x205F, 0x3000, 0x85, 0x180E,
+            0x20, 0x0C, 0x0A, 0x0D, 0x09, 0x0B, 0x00, 0xA0, 0x1680, 0x2000, 0x2001, 0x2002, 0x2003,
+            0x2004, 0x2005, 0x2006, 0x2007, 0x2008, 0x2009, 0x200A, 0x2028, 0x2029, 0x202F, 0x205F,
+            0x3000, 0x85, 0x180E,
         ];
         let enc = self.get_encoding(encoding, 3, "encoding")?;
         let set: Vec<u32> = match characters {
@@ -812,17 +842,32 @@ impl MbState {
     }
 
     /// `mb_trim`.
-    pub fn mb_trim(&mut self, s: &[u8], chars: Option<&[u8]>, encoding: Option<&[u8]>) -> MbResult<Vec<u8>> {
+    pub fn mb_trim(
+        &mut self,
+        s: &[u8],
+        chars: Option<&[u8]>,
+        encoding: Option<&[u8]>,
+    ) -> MbResult<Vec<u8>> {
         self.mb_trim_sides(s, chars, encoding, true, true)
     }
 
     /// `mb_ltrim`.
-    pub fn mb_ltrim(&mut self, s: &[u8], chars: Option<&[u8]>, encoding: Option<&[u8]>) -> MbResult<Vec<u8>> {
+    pub fn mb_ltrim(
+        &mut self,
+        s: &[u8],
+        chars: Option<&[u8]>,
+        encoding: Option<&[u8]>,
+    ) -> MbResult<Vec<u8>> {
         self.mb_trim_sides(s, chars, encoding, true, false)
     }
 
     /// `mb_rtrim`.
-    pub fn mb_rtrim(&mut self, s: &[u8], chars: Option<&[u8]>, encoding: Option<&[u8]>) -> MbResult<Vec<u8>> {
+    pub fn mb_rtrim(
+        &mut self,
+        s: &[u8],
+        chars: Option<&[u8]>,
+        encoding: Option<&[u8]>,
+    ) -> MbResult<Vec<u8>> {
         self.mb_trim_sides(s, chars, encoding, false, true)
     }
 
@@ -950,8 +995,14 @@ impl MbState {
 
     /// `php_mb_convert_encoding_ex`: convert with the current substitution
     /// settings, counting errors into `illegalchars`.
-    pub fn convert_ex(&mut self, s: &[u8], to: &'static Encoding, from: &'static Encoding) -> Vec<u8> {
-        let (out, errors) = fast_convert(s, from, to, self.illegal_substchar(), self.illegal_mode());
+    pub fn convert_ex(
+        &mut self,
+        s: &[u8],
+        to: &'static Encoding,
+        from: &'static Encoding,
+    ) -> Vec<u8> {
+        let (out, errors) =
+            fast_convert(s, from, to, self.illegal_substchar(), self.illegal_mode());
         self.illegalchars += u64::from(errors);
         out
     }

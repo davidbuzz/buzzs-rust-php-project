@@ -32,7 +32,14 @@ pub static ENC_NAME_MAP: &[&[&str]] = &[
     &["UTF-16LE"],
     &["UCS-4", "UTF-32", "UTF-32BE"],
     &["UCS-4LE", "UTF-32LE"],
-    &["SJIS", "CP932", "MS932", "SHIFT_JIS", "SJIS-WIN", "WINDOWS-31J"],
+    &[
+        "SJIS",
+        "CP932",
+        "MS932",
+        "SHIFT_JIS",
+        "SJIS-WIN",
+        "WINDOWS-31J",
+    ],
     &["BIG5", "BIG-5", "BIGFIVE", "CN-BIG5", "BIG-FIVE"],
     &["EUC-CN", "EUCCN", "EUC_CN", "GB-2312", "GB2312"],
     &["EUC-TW", "EUCTW", "EUC_TW"],
@@ -62,9 +69,11 @@ pub fn name2mbctype(name: &[u8]) -> Option<usize> {
     if name.is_empty() {
         return None;
     }
-    ENC_NAME_MAP
-        .iter()
-        .position(|names| names.iter().any(|n| n.as_bytes().eq_ignore_ascii_case(name)))
+    ENC_NAME_MAP.iter().position(|names| {
+        names
+            .iter()
+            .any(|n| n.as_bytes().eq_ignore_ascii_case(name))
+    })
 }
 
 /// Regex encoding state (`MBREX(default_mbctype)` / `current_mbctype`).

@@ -44,18 +44,114 @@ const ORDER_NEUT: &[EncodingNo] = &[N::Ascii, N::Utf8];
 
 /// `mbfl_language_ptr_table`, in lookup order.
 pub static LANGUAGES: [Language; 12] = [
-    Language { name: "uni", short_name: "uni", aliases: &["universal"], mail_charset: N::Utf8, mail_header_encoding: N::Base64, mail_body_encoding: N::Base64, detect_order: ORDER_NEUT },
-    Language { name: "Japanese", short_name: "ja", aliases: &[], mail_charset: N::Iso2022Jp, mail_header_encoding: N::Base64, mail_body_encoding: N::SevenBit, detect_order: ORDER_JA },
-    Language { name: "Korean", short_name: "ko", aliases: &[], mail_charset: N::Iso2022Kr, mail_header_encoding: N::Base64, mail_body_encoding: N::SevenBit, detect_order: ORDER_KR },
-    Language { name: "Simplified Chinese", short_name: "zh-cn", aliases: &[], mail_charset: N::Hz, mail_header_encoding: N::Base64, mail_body_encoding: N::SevenBit, detect_order: ORDER_CN },
-    Language { name: "Traditional Chinese", short_name: "zh-tw", aliases: &[], mail_charset: N::Big5, mail_header_encoding: N::Base64, mail_body_encoding: N::EightBit, detect_order: ORDER_TW },
-    Language { name: "English", short_name: "en", aliases: &[], mail_charset: N::Iso8859_1, mail_header_encoding: N::Qprint, mail_body_encoding: N::EightBit, detect_order: ORDER_NEUT },
-    Language { name: "German", short_name: "de", aliases: &["Deutsch"], mail_charset: N::Iso8859_15, mail_header_encoding: N::Qprint, mail_body_encoding: N::EightBit, detect_order: ORDER_NEUT },
-    Language { name: "Russian", short_name: "ru", aliases: &[], mail_charset: N::Koi8r, mail_header_encoding: N::Qprint, mail_body_encoding: N::EightBit, detect_order: ORDER_RU },
-    Language { name: "Ukrainian", short_name: "ua", aliases: &[], mail_charset: N::Koi8u, mail_header_encoding: N::Qprint, mail_body_encoding: N::EightBit, detect_order: ORDER_UA },
-    Language { name: "Armenian", short_name: "hy", aliases: &[], mail_charset: N::Armscii8, mail_header_encoding: N::Qprint, mail_body_encoding: N::EightBit, detect_order: ORDER_HY },
-    Language { name: "Turkish", short_name: "tr", aliases: &[], mail_charset: N::Iso8859_9, mail_header_encoding: N::Qprint, mail_body_encoding: N::EightBit, detect_order: ORDER_TR },
-    Language { name: "neutral", short_name: "neutral", aliases: &[], mail_charset: N::Utf8, mail_header_encoding: N::Base64, mail_body_encoding: N::Base64, detect_order: ORDER_NEUT },
+    Language {
+        name: "uni",
+        short_name: "uni",
+        aliases: &["universal"],
+        mail_charset: N::Utf8,
+        mail_header_encoding: N::Base64,
+        mail_body_encoding: N::Base64,
+        detect_order: ORDER_NEUT,
+    },
+    Language {
+        name: "Japanese",
+        short_name: "ja",
+        aliases: &[],
+        mail_charset: N::Iso2022Jp,
+        mail_header_encoding: N::Base64,
+        mail_body_encoding: N::SevenBit,
+        detect_order: ORDER_JA,
+    },
+    Language {
+        name: "Korean",
+        short_name: "ko",
+        aliases: &[],
+        mail_charset: N::Iso2022Kr,
+        mail_header_encoding: N::Base64,
+        mail_body_encoding: N::SevenBit,
+        detect_order: ORDER_KR,
+    },
+    Language {
+        name: "Simplified Chinese",
+        short_name: "zh-cn",
+        aliases: &[],
+        mail_charset: N::Hz,
+        mail_header_encoding: N::Base64,
+        mail_body_encoding: N::SevenBit,
+        detect_order: ORDER_CN,
+    },
+    Language {
+        name: "Traditional Chinese",
+        short_name: "zh-tw",
+        aliases: &[],
+        mail_charset: N::Big5,
+        mail_header_encoding: N::Base64,
+        mail_body_encoding: N::EightBit,
+        detect_order: ORDER_TW,
+    },
+    Language {
+        name: "English",
+        short_name: "en",
+        aliases: &[],
+        mail_charset: N::Iso8859_1,
+        mail_header_encoding: N::Qprint,
+        mail_body_encoding: N::EightBit,
+        detect_order: ORDER_NEUT,
+    },
+    Language {
+        name: "German",
+        short_name: "de",
+        aliases: &["Deutsch"],
+        mail_charset: N::Iso8859_15,
+        mail_header_encoding: N::Qprint,
+        mail_body_encoding: N::EightBit,
+        detect_order: ORDER_NEUT,
+    },
+    Language {
+        name: "Russian",
+        short_name: "ru",
+        aliases: &[],
+        mail_charset: N::Koi8r,
+        mail_header_encoding: N::Qprint,
+        mail_body_encoding: N::EightBit,
+        detect_order: ORDER_RU,
+    },
+    Language {
+        name: "Ukrainian",
+        short_name: "ua",
+        aliases: &[],
+        mail_charset: N::Koi8u,
+        mail_header_encoding: N::Qprint,
+        mail_body_encoding: N::EightBit,
+        detect_order: ORDER_UA,
+    },
+    Language {
+        name: "Armenian",
+        short_name: "hy",
+        aliases: &[],
+        mail_charset: N::Armscii8,
+        mail_header_encoding: N::Qprint,
+        mail_body_encoding: N::EightBit,
+        detect_order: ORDER_HY,
+    },
+    Language {
+        name: "Turkish",
+        short_name: "tr",
+        aliases: &[],
+        mail_charset: N::Iso8859_9,
+        mail_header_encoding: N::Qprint,
+        mail_body_encoding: N::EightBit,
+        detect_order: ORDER_TR,
+    },
+    Language {
+        name: "neutral",
+        short_name: "neutral",
+        aliases: &[],
+        mail_charset: N::Utf8,
+        mail_header_encoding: N::Base64,
+        mail_body_encoding: N::Base64,
+        detect_order: ORDER_NEUT,
+    },
 ];
 
 /// `mbfl_name2language`: by name, then short name, then alias
@@ -106,6 +202,7 @@ pub enum EncodingList<'a> {
 
 /// The per-request state of the mbstring extension.
 #[derive(Debug, Clone)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct MbState {
     language: &'static Language,
     detect_order_ini: Option<Vec<&'static Encoding>>,
@@ -209,7 +306,13 @@ impl MbState {
             regex: crate::mbregex::RegexState::default(),
             diagnostics: Vec::new(),
         };
-        let get = |k: &str| settings.iter().rev().find(|(n, _)| *n == k).map(|(_, v)| *v);
+        let get = |k: &str| {
+            settings
+                .iter()
+                .rev()
+                .find(|(n, _)| *n == k)
+                .map(|(_, v)| *v)
+        };
         // PHP core settings are registered before mbstring's MINIT.
         if let Some(v) = get("default_charset") {
             s.default_charset = v.to_vec();
@@ -289,11 +392,13 @@ impl MbState {
     }
 
     /// The current internal encoding.
+    #[allow(clippy::misnamed_getters)]
     pub fn internal_encoding(&self) -> &'static Encoding {
         self.current_internal_encoding
     }
 
     /// The current HTTP output encoding (may be `pass`).
+    #[allow(clippy::misnamed_getters)]
     pub fn http_output_encoding(&self) -> &'static Encoding {
         self.current_http_output_encoding
     }
@@ -337,17 +442,23 @@ impl MbState {
 
     /// `php_get_internal_encoding()`.
     fn php_internal(&self) -> Vec<u8> {
-        self.php_internal_encoding.clone().unwrap_or_else(|| self.default_charset.clone())
+        self.php_internal_encoding
+            .clone()
+            .unwrap_or_else(|| self.default_charset.clone())
     }
 
     /// `php_get_input_encoding()`.
     fn php_input(&self) -> Vec<u8> {
-        self.php_input_encoding.clone().unwrap_or_else(|| self.default_charset.clone())
+        self.php_input_encoding
+            .clone()
+            .unwrap_or_else(|| self.default_charset.clone())
     }
 
     /// `php_get_output_encoding()`.
     fn php_output(&self) -> Vec<u8> {
-        self.php_output_encoding.clone().unwrap_or_else(|| self.default_charset.clone())
+        self.php_output_encoding
+            .clone()
+            .unwrap_or_else(|| self.default_charset.clone())
     }
 
     fn internal_encoding_changed_hook(&mut self) {
@@ -429,15 +540,12 @@ impl MbState {
 
     /// `mbstring.language` INI handler; returns `false` on failure.
     pub fn ini_set_language(&mut self, value: &[u8]) -> bool {
-        match language_by_name(value) {
-            Some(l) => {
-                self.language = l;
-                true
-            }
-            None => {
-                self.language = &LANGUAGES[11];
-                false
-            }
+        if let Some(l) = language_by_name(value) {
+            self.language = l;
+            true
+        } else {
+            self.language = &LANGUAGES[11];
+            false
         }
     }
 
@@ -600,7 +708,7 @@ impl MbState {
 
     /// `php_mb_get_encoding`: resolve an optional encoding-name argument
     /// (argument `arg_num`, named `arg_name`), defaulting to the internal
-    /// encoding. Emits the master-branch deprecations for Base64, QPrint,
+    /// encoding. Emits the master-branch deprecations for Base64, `QPrint`,
     /// HTML-ENTITIES and UUENCODE.
     pub fn get_encoding(
         &mut self,
@@ -662,7 +770,9 @@ impl MbState {
         } else {
             value
         };
-        let size = 1 + tmp.iter().filter(|&&b| b == b',').count() + self.language.detect_order.len();
+        #[allow(clippy::naive_bytecount)]
+        let size =
+            1 + tmp.iter().filter(|&&b| b == b',').count() + self.language.detect_order.len();
         let mut list = Vec::new();
         let mut included_auto = false;
         let mut rest = tmp;
@@ -867,6 +977,7 @@ impl MbState {
     }
 
     /// `mb_substitute_character($substitute_character)` (setter).
+    #[allow(clippy::needless_pass_by_value)]
     pub fn mb_substitute_character_set(&mut self, arg: SubstituteArg<'_>) -> MbResult<bool> {
         match arg {
             SubstituteArg::Str(s) => {
@@ -910,15 +1021,14 @@ impl MbState {
         let Some(enc) = encoding::by_cname(name) else {
             return Err(MbError::invalid_encoding(1, "encoding", c_str(name)));
         };
-        match enc.preferred_mime_name() {
-            Some(m) => Ok(Some(m)),
-            None => {
-                self.warn(format!(
-                    "No MIME preferred name corresponding to \"{}\"",
-                    String::from_utf8_lossy(c_str(name))
-                ));
-                Ok(None)
-            }
+        if let Some(m) = enc.preferred_mime_name() {
+            Ok(Some(m))
+        } else {
+            self.warn(format!(
+                "No MIME preferred name corresponding to \"{}\"",
+                String::from_utf8_lossy(c_str(name))
+            ));
+            Ok(None)
         }
     }
 
@@ -981,6 +1091,7 @@ fn trim_spaces_tabs(mut s: &[u8]) -> &[u8] {
 }
 
 /// `strtol(s, &end, 0)` requiring the whole string to be consumed.
+#[allow(clippy::many_single_char_names)]
 fn c_strtol_whole(s: &[u8]) -> Option<i64> {
     let mut i = 0;
     while i < s.len() && matches!(s[i], b' ' | b'\t' | b'\n' | b'\r' | 0x0B | 0x0C) {
@@ -997,7 +1108,10 @@ fn c_strtol_whole(s: &[u8]) -> Option<i64> {
         }
         _ => false,
     };
-    let (radix, start) = if s.get(i) == Some(&b'0') && matches!(s.get(i + 1), Some(b'x' | b'X')) && s.get(i + 2).is_some_and(u8::is_ascii_hexdigit) {
+    let (radix, start) = if s.get(i) == Some(&b'0')
+        && matches!(s.get(i + 1), Some(b'x' | b'X'))
+        && s.get(i + 2).is_some_and(u8::is_ascii_hexdigit)
+    {
         (16, i + 2)
     } else if s.get(i) == Some(&b'0') {
         (8, i)
@@ -1007,8 +1121,12 @@ fn c_strtol_whole(s: &[u8]) -> Option<i64> {
     let mut j = start;
     let mut v: i64 = 0;
     while j < s.len() {
-        let Some(d) = char::from(s[j]).to_digit(radix) else { break };
-        v = v.saturating_mul(i64::from(radix)).saturating_add(i64::from(d));
+        let Some(d) = char::from(s[j]).to_digit(radix) else {
+            break;
+        };
+        v = v
+            .saturating_mul(i64::from(radix))
+            .saturating_add(i64::from(d));
         j += 1;
     }
     if j == start || j != s.len() {
@@ -1028,7 +1146,10 @@ mod tests {
         assert_eq!(s.mb_http_output_get(), "UTF-8");
         assert_eq!(s.mb_language_get(), "neutral");
         assert_eq!(s.mb_detect_order_get(), vec!["ASCII", "UTF-8"]);
-        assert_eq!(s.mb_http_input(Some(b"L")).unwrap(), HttpInput::Name("UTF-8".into()));
+        assert_eq!(
+            s.mb_http_input(Some(b"L")).unwrap(),
+            HttpInput::Name("UTF-8".into())
+        );
         assert_eq!(s.mb_http_input(None).unwrap(), HttpInput::False);
         assert_eq!(s.mb_substitute_character_get(), SubstituteChar::Char(63));
     }
@@ -1037,21 +1158,31 @@ mod tests {
     fn detect_order_parsing() {
         let mut s = MbState::new();
         s.mb_language_set(b"ja").unwrap();
-        s.mb_detect_order_set(EncodingList::Str(b" auto , UTF-8")).unwrap();
+        s.mb_detect_order_set(EncodingList::Str(b" auto , UTF-8"))
+            .unwrap();
         assert_eq!(
             s.mb_detect_order_get(),
             vec!["ASCII", "JIS", "UTF-8", "EUC-JP", "SJIS", "UTF-8"]
         );
-        let e = s.mb_detect_order_set(EncodingList::Str(b"UTF-8, BAD")).unwrap_err();
-        assert_eq!(e.to_string(), "Argument #1 ($encoding) contains invalid encoding \"BAD\"");
+        let e = s
+            .mb_detect_order_set(EncodingList::Str(b"UTF-8, BAD"))
+            .unwrap_err();
+        assert_eq!(
+            e.to_string(),
+            "Argument #1 ($encoding) contains invalid encoding \"BAD\""
+        );
     }
 
     #[test]
     fn substitute_character() {
         let mut s = MbState::new();
-        assert!(s.mb_substitute_character_set(SubstituteArg::Str(b"LONG")).unwrap());
+        assert!(s
+            .mb_substitute_character_set(SubstituteArg::Str(b"LONG"))
+            .unwrap());
         assert_eq!(s.mb_substitute_character_get(), SubstituteChar::Long);
-        assert!(s.mb_substitute_character_set(SubstituteArg::Int(0xD800)).is_err());
+        assert!(s
+            .mb_substitute_character_set(SubstituteArg::Int(0xD800))
+            .is_err());
         assert!(s.ini_set_substitute_character(Some(b"0x3013")));
         assert_eq!(s.illegal_substchar(), 0x3013);
     }
