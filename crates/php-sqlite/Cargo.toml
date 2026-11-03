@@ -1,6 +1,6 @@
 [package]
 name = "php-sqlite"
-description = "PHP's ext/filter: filter_var/filter_var_array/filter_input engine with all validation and sanitizing filters"
+description = "PHP's ext/sqlite3 and ext/pdo_sqlite: SQLite3/SQLite3Stmt/SQLite3Result semantics, the PDO SQLite driver and the PDO SQL placeholder parser"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -8,6 +8,8 @@ rust-version.workspace = true
 
 [dependencies]
 php-runtime = { path = "../php-runtime" }
+php-streams = { path = "../php-streams" }
+libsqlite3-sys = { version = "0.37", default-features = false, features = ["min_sqlite_version_3_34_1"] }
 
 [lints]
 workspace = true

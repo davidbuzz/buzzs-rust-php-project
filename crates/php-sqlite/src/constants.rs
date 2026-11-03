@@ -1,0 +1,174 @@
+//! Constants registered by `ext/sqlite3` and `ext/pdo_sqlite`, in stub
+//! declaration order (which `ReflectionClass::getConstants()` exposes).
+
+/// `SQLITE3_ASSOC`.
+pub const SQLITE3_ASSOC: i64 = 1;
+/// `SQLITE3_NUM`.
+pub const SQLITE3_NUM: i64 = 2;
+/// `SQLITE3_BOTH`.
+pub const SQLITE3_BOTH: i64 = 3;
+/// `SQLITE3_INTEGER`.
+pub const SQLITE3_INTEGER: i64 = 1;
+/// `SQLITE3_FLOAT`.
+pub const SQLITE3_FLOAT: i64 = 2;
+/// `SQLITE3_TEXT`.
+pub const SQLITE3_TEXT: i64 = 3;
+/// `SQLITE3_BLOB`.
+pub const SQLITE3_BLOB: i64 = 4;
+/// `SQLITE3_NULL`.
+pub const SQLITE3_NULL: i64 = 5;
+/// `SQLITE3_OPEN_READONLY`.
+pub const SQLITE3_OPEN_READONLY: i64 = 1;
+/// `SQLITE3_OPEN_READWRITE`.
+pub const SQLITE3_OPEN_READWRITE: i64 = 2;
+/// `SQLITE3_OPEN_CREATE`.
+pub const SQLITE3_OPEN_CREATE: i64 = 4;
+/// `SQLITE3_DETERMINISTIC`.
+pub const SQLITE3_DETERMINISTIC: i64 = 2048;
+
+/// Global constants of `ext/sqlite3`.
+pub const SQLITE3_GLOBAL_CONSTANTS: &[(&str, i64)] = &[
+    ("SQLITE3_ASSOC", SQLITE3_ASSOC),
+    ("SQLITE3_NUM", SQLITE3_NUM),
+    ("SQLITE3_BOTH", SQLITE3_BOTH),
+    ("SQLITE3_INTEGER", SQLITE3_INTEGER),
+    ("SQLITE3_FLOAT", SQLITE3_FLOAT),
+    ("SQLITE3_TEXT", SQLITE3_TEXT),
+    ("SQLITE3_BLOB", SQLITE3_BLOB),
+    ("SQLITE3_NULL", SQLITE3_NULL),
+    ("SQLITE3_OPEN_READONLY", SQLITE3_OPEN_READONLY),
+    ("SQLITE3_OPEN_READWRITE", SQLITE3_OPEN_READWRITE),
+    ("SQLITE3_OPEN_CREATE", SQLITE3_OPEN_CREATE),
+    ("SQLITE3_DETERMINISTIC", SQLITE3_DETERMINISTIC),
+];
+
+/// Class constants of `SQLite3` (authorizer results and actions).
+pub const SQLITE3_CLASS_CONSTANTS: &[(&str, i64)] = &[
+    ("OK", 0),
+    ("DENY", 1),
+    ("IGNORE", 2),
+    ("CREATE_INDEX", 1),
+    ("CREATE_TABLE", 2),
+    ("CREATE_TEMP_INDEX", 3),
+    ("CREATE_TEMP_TABLE", 4),
+    ("CREATE_TEMP_TRIGGER", 5),
+    ("CREATE_TEMP_VIEW", 6),
+    ("CREATE_TRIGGER", 7),
+    ("CREATE_VIEW", 8),
+    ("DELETE", 9),
+    ("DROP_INDEX", 10),
+    ("DROP_TABLE", 11),
+    ("DROP_TEMP_INDEX", 12),
+    ("DROP_TEMP_TABLE", 13),
+    ("DROP_TEMP_TRIGGER", 14),
+    ("DROP_TEMP_VIEW", 15),
+    ("DROP_TRIGGER", 16),
+    ("DROP_VIEW", 17),
+    ("INSERT", 18),
+    ("PRAGMA", 19),
+    ("READ", 20),
+    ("SELECT", 21),
+    ("TRANSACTION", 22),
+    ("UPDATE", 23),
+    ("ATTACH", 24),
+    ("DETACH", 25),
+    ("ALTER_TABLE", 26),
+    ("REINDEX", 27),
+    ("ANALYZE", 28),
+    ("CREATE_VTABLE", 29),
+    ("DROP_VTABLE", 30),
+    ("FUNCTION", 31),
+    ("SAVEPOINT", 32),
+    ("COPY", 0),
+    ("RECURSIVE", 33),
+];
+
+/// Class constants of `SQLite3Stmt`.
+pub const SQLITE3STMT_CLASS_CONSTANTS: &[(&str, i64)] = &[
+    ("EXPLAIN_MODE_PREPARED", 0),
+    ("EXPLAIN_MODE_EXPLAIN", 1),
+    ("EXPLAIN_MODE_EXPLAIN_QUERY_PLAN", 2),
+];
+
+/// `PDO_ATTR_DRIVER_SPECIFIC`.
+pub const PDO_ATTR_DRIVER_SPECIFIC: i64 = 1000;
+/// `Pdo\Sqlite::ATTR_OPEN_FLAGS`.
+pub const PDO_SQLITE_ATTR_OPEN_FLAGS: i64 = 1000;
+/// `Pdo\Sqlite::ATTR_READONLY_STATEMENT`.
+pub const PDO_SQLITE_ATTR_READONLY_STATEMENT: i64 = 1001;
+/// `Pdo\Sqlite::ATTR_EXTENDED_RESULT_CODES`.
+pub const PDO_SQLITE_ATTR_EXTENDED_RESULT_CODES: i64 = 1002;
+/// `Pdo\Sqlite::ATTR_BUSY_STATEMENT`.
+pub const PDO_SQLITE_ATTR_BUSY_STATEMENT: i64 = 1003;
+/// `Pdo\Sqlite::ATTR_EXPLAIN_STATEMENT`.
+pub const PDO_SQLITE_ATTR_EXPLAIN_STATEMENT: i64 = 1004;
+/// `Pdo\Sqlite::ATTR_TRANSACTION_MODE`.
+pub const PDO_SQLITE_ATTR_TRANSACTION_MODE: i64 = 1005;
+/// `Pdo\Sqlite::TRANSACTION_MODE_DEFERRED`.
+pub const PDO_SQLITE_TRANSACTION_MODE_DEFERRED: i64 = 0;
+/// `Pdo\Sqlite::TRANSACTION_MODE_IMMEDIATE`.
+pub const PDO_SQLITE_TRANSACTION_MODE_IMMEDIATE: i64 = 1;
+/// `Pdo\Sqlite::TRANSACTION_MODE_EXCLUSIVE`.
+pub const PDO_SQLITE_TRANSACTION_MODE_EXCLUSIVE: i64 = 2;
+
+/// Class constants of `Pdo\Sqlite`.
+pub const PDO_SQLITE_CLASS_CONSTANTS: &[(&str, i64)] = &[
+    ("DETERMINISTIC", 2048),
+    ("OPEN_READONLY", 1),
+    ("OPEN_READWRITE", 2),
+    ("OPEN_CREATE", 4),
+    ("ATTR_OPEN_FLAGS", PDO_SQLITE_ATTR_OPEN_FLAGS),
+    (
+        "ATTR_READONLY_STATEMENT",
+        PDO_SQLITE_ATTR_READONLY_STATEMENT,
+    ),
+    (
+        "ATTR_EXTENDED_RESULT_CODES",
+        PDO_SQLITE_ATTR_EXTENDED_RESULT_CODES,
+    ),
+    ("ATTR_BUSY_STATEMENT", PDO_SQLITE_ATTR_BUSY_STATEMENT),
+    ("ATTR_EXPLAIN_STATEMENT", PDO_SQLITE_ATTR_EXPLAIN_STATEMENT),
+    ("ATTR_TRANSACTION_MODE", PDO_SQLITE_ATTR_TRANSACTION_MODE),
+    (
+        "TRANSACTION_MODE_DEFERRED",
+        PDO_SQLITE_TRANSACTION_MODE_DEFERRED,
+    ),
+    (
+        "TRANSACTION_MODE_IMMEDIATE",
+        PDO_SQLITE_TRANSACTION_MODE_IMMEDIATE,
+    ),
+    (
+        "TRANSACTION_MODE_EXCLUSIVE",
+        PDO_SQLITE_TRANSACTION_MODE_EXCLUSIVE,
+    ),
+    ("EXPLAIN_MODE_PREPARED", 0),
+    ("EXPLAIN_MODE_EXPLAIN", 1),
+    ("EXPLAIN_MODE_EXPLAIN_QUERY_PLAN", 2),
+    ("OK", 0),
+    ("DENY", 1),
+    ("IGNORE", 2),
+];
+
+/// Deprecated (8.5) `PDO::SQLITE_*` aliases: `(PDO constant, Pdo\Sqlite
+/// constant, value)`.
+pub const PDO_SQLITE_DEPRECATED_ALIASES: &[(&str, &str, i64)] = &[
+    ("SQLITE_DETERMINISTIC", "DETERMINISTIC", 2048),
+    (
+        "SQLITE_ATTR_OPEN_FLAGS",
+        "ATTR_OPEN_FLAGS",
+        PDO_SQLITE_ATTR_OPEN_FLAGS,
+    ),
+    ("SQLITE_OPEN_READONLY", "OPEN_READONLY", 1),
+    ("SQLITE_OPEN_READWRITE", "OPEN_READWRITE", 2),
+    ("SQLITE_OPEN_CREATE", "OPEN_CREATE", 4),
+    (
+        "SQLITE_ATTR_READONLY_STATEMENT",
+        "ATTR_READONLY_STATEMENT",
+        PDO_SQLITE_ATTR_READONLY_STATEMENT,
+    ),
+    (
+        "SQLITE_ATTR_EXTENDED_RESULT_CODES",
+        "ATTR_EXTENDED_RESULT_CODES",
+        PDO_SQLITE_ATTR_EXTENDED_RESULT_CODES,
+    ),
+];
