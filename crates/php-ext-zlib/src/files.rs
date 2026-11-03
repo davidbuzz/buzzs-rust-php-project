@@ -18,7 +18,10 @@ use php_vm::Vm;
 use php_zlib::filter::ZlibFilterFactory;
 use php_zlib::wrapper::{gzopen as lib_gzopen, ZlibWrapper};
 
-use crate::bytes;
+use crate::{bytes, mem};
+
+/// `sizeof(zval)`: one element of a packed array.
+const PACKED_SLOT: usize = 16;
 
 /// `php_stream_gets()` buffer size used by `gzfile()` (`char buf[8192]`,
 /// read with `sizeof(buf) - 1`).
@@ -54,14 +57,28 @@ fn gzfile(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let Some(mut s) = open(vm, a, "rb", use_path)? else {
         return Ok(Value::Bool(false));
     };
-    let lines = bridge::run(vm, || {
+    // Stop once PHP's array would exceed memory_limit.
+    let limit = mem::limit(vm);
+    let (lines, oom) = bridge::run(vm, || {
         let mut lines = Vec::new();
+        let mut size = 0usize;
+        let mut oom = None;
         while let Some(l) = s.get_line(Some(GZFILE_LINE)) {
+            size = size.saturating_add(mem::zstr(l.len()) + PACKED_SLOT);
             lines.push(l);
+            if lines.len() % 1024 == 0 && mem::exceeds(limit, size) {
+                oom = Some(size);
+                break;
+            }
         }
         s.close();
-        lines
+        (lines, oom)
     })?;
+    if let Some(size) = oom {
+        drop(lines);
+        mem::check(vm, size)?;
+        return Ok(Value::Bool(false));
+    }
     let mut arr = ZArray::with_capacity(lines.len());
     for l in lines {
         let _ = arr.make_mut().push(bytes(l));
@@ -82,8 +99,34 @@ fn readgzfile(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         s.close();
         n
     })?;
+    mem::check_output(vm, out.len())?;
     vm.output(&out);
     Ok(Value::Int(i64::try_from(n).unwrap_or(i64::MAX)))
+}
+
+/// `gzpassthru()` (`fpassthru()`, with the buffered-output memory check).
+fn gzpassthru(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let cell = res::stream_arg(vm, a, 0)?;
+    let mut out = Vec::new();
+    let n = res::with_stream(vm, &cell, |s| {
+        s.passthru(&mut |d: &[u8]| out.extend_from_slice(d))
+            .unwrap_or(0)
+    })?;
+    mem::check_output(vm, out.len())?;
+    vm.output(&out);
+    Ok(Value::Int(
+        n.map_or(0, |n| i64::try_from(n).unwrap_or(i64::MAX)),
+    ))
+}
+
+/// `gzgets()` (`fgets()`, with the memory check on the line read).
+fn gzgets(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let Some(fgets) = vm.native_function("fgets") else {
+        return Ok(Value::Bool(false));
+    };
+    let v = (fgets.handler)(vm, a)?;
+    mem::check_str(vm, &v)?;
+    Ok(v)
 }
 
 /// Registers the wrapper, the filters and the stream functions.
@@ -101,7 +144,9 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
     .function(
         "readgzfile(string $filename, bool $use_include_path = false): int|false",
         readgzfile,
-    );
+    )
+    .function("gzpassthru($stream): int", gzpassthru)
+    .function("gzgets($stream, ?int $length = null): string|false", gzgets);
     for (sig, target) in [
         (
             "gzwrite($stream, string $data, ?int $length = null): int|false",
@@ -115,17 +160,12 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
         ("gzclose($stream): bool", "fclose"),
         ("gzeof($stream): bool", "feof"),
         ("gzgetc($stream): string|false", "fgetc"),
-        ("gzpassthru($stream): int", "fpassthru"),
         (
             "gzseek($stream, int $offset, int $whence = SEEK_SET): int",
             "fseek",
         ),
         ("gztell($stream): int|false", "ftell"),
         ("gzread($stream, int $length): string|false", "fread"),
-        (
-            "gzgets($stream, ?int $length = null): string|false",
-            "fgets",
-        ),
     ] {
         crate::falias(m, sig, target);
     }

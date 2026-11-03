@@ -17,6 +17,7 @@ pub mod bz2;
 pub mod codec;
 pub mod context;
 pub mod files;
+mod mem;
 pub mod output;
 
 use php_runtime::{Value, ZStr};

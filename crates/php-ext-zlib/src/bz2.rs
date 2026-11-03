@@ -31,7 +31,10 @@ fn bz2_error(vm: &mut Vm, e: &php_bz2::Error) -> VmResult<Value> {
 
 fn output(vm: &mut Vm, r: php_bz2::Result<Output>) -> VmResult<Value> {
     match r {
-        Ok(Output::Data(d)) => Ok(bytes(d)),
+        Ok(Output::Data(d)) => {
+            crate::mem::check(vm, crate::mem::zstr(d.len()))?;
+            Ok(bytes(d))
+        }
         Ok(Output::Code(c)) => Ok(Value::Int(c)),
         Ok(Output::False) => Ok(Value::Bool(false)),
         Err(e) => bz2_error(vm, &e),

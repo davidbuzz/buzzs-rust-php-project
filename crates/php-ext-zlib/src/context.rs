@@ -110,7 +110,10 @@ fn inflate_add(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let flush = int_or(a, 2, SYNC_FLUSH);
     let r = with_inflate(vm, a, |c| c.add(data.as_bytes(), flush))?;
     match r {
-        Ok(v) => Ok(bytes(v)),
+        Ok(v) => {
+            crate::mem::check(vm, crate::mem::zstr(v.len()))?;
+            Ok(bytes(v))
+        }
         Err(e) => zlib_error(vm, &e),
     }
 }

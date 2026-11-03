@@ -21,7 +21,10 @@ pub(crate) fn int_or(a: &Args, n: usize, default: i64) -> i64 {
 /// Converts a codec result to the PHP return value.
 fn result(vm: &mut Vm, r: php_zlib::Result<Vec<u8>>) -> VmResult<Value> {
     match r {
-        Ok(v) => Ok(bytes(v)),
+        Ok(v) => {
+            crate::mem::check(vm, crate::mem::zstr(v.len()))?;
+            Ok(bytes(v))
+        }
         Err(e) => zlib_error(vm, &e),
     }
 }
