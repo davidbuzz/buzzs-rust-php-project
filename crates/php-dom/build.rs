@@ -1,8 +1,9 @@
-//! Compiles the vendored lexbor sources (HTML5 tokenizer/tree builder,
-//! encodings, CSS selector parser) from the read-only php-src checkout,
-//! php-src's libxml2-adapted lexbor selector engine
-//! (`ext/dom/lexbor/selectors-adapted/selectors.c`, built against a small
-//! Zend shim), and this crate's C glue layer (`csrc/glue.c`).
+//! Compiles the vendored lexbor sources in `vendor/lexbor` (HTML5
+//! tokenizer/tree builder, encodings, CSS selector parser; override with
+//! `PHPRUST_LEXBOR_SRC`), php-src's libxml2-adapted lexbor selector engine
+//! (`vendor/selectors-adapted/selectors.c`, built against a small Zend
+//! shim), and this crate's C glue layer (`csrc/glue.c`). See
+//! `vendor/NOTICE` for provenance and licenses.
 //!
 //! libxml2 itself is linked through `php-libxml`.
 
@@ -10,21 +11,39 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-/// Source files of ext/lexbor (from its `config.m4`, minus `php_lexbor.c`).
-fn lexbor_sources(lexbor_ext: &Path) -> Vec<PathBuf> {
-    let config =
-        fs::read_to_string(lexbor_ext.join("config.m4")).expect("ext/lexbor/config.m4 is readable");
-    config
-        .lines()
-        .map(str::trim)
-        .filter_map(|l| l.strip_prefix("$LEXBOR_DIR/"))
-        .filter(|l| {
-            Path::new(l)
-                .extension()
-                .is_some_and(|e| e.eq_ignore_ascii_case("c"))
-        })
-        .map(|l| lexbor_ext.join("lexbor").join(l))
-        .collect()
+/// Modules of the lexbor tree the DOM does not use (WHATWG URL support).
+const UNUSED_MODULES: &[&str] = &["url", "unicode", "punycode"];
+
+/// Every `.c` file of the lexbor tree under `root/lexbor`, minus the
+/// unused modules, in a stable order.
+fn lexbor_sources(root: &Path) -> Vec<PathBuf> {
+    fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
+        let Ok(entries) = fs::read_dir(dir) else {
+            return;
+        };
+        for e in entries.flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                walk(&p, out);
+            } else if p.extension().is_some_and(|x| x.eq_ignore_ascii_case("c")) {
+                out.push(p);
+            }
+        }
+    }
+    let base = root.join("lexbor");
+    let mut out = Vec::new();
+    let Ok(entries) = fs::read_dir(&base) else {
+        panic!("lexbor sources not found in {}", base.display())
+    };
+    for e in entries.flatten() {
+        let p = e.path();
+        let name = e.file_name();
+        if p.is_dir() && !UNUSED_MODULES.iter().any(|m| name == *m) {
+            walk(&p, &mut out);
+        }
+    }
+    out.sort();
+    out
 }
 
 fn libxml2_includes() -> Vec<PathBuf> {
@@ -51,10 +70,13 @@ fn main() {
     let manifest =
         PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").expect("cargo sets CARGO_MANIFEST_DIR"));
     let out = PathBuf::from(std::env::var("OUT_DIR").expect("cargo sets OUT_DIR"));
-    let php_src = manifest.join("../../modules/php-src");
-    let lexbor_ext = php_src.join("ext/lexbor");
+    // A directory containing `lexbor/` (the vendored copy by default).
+    let lexbor_ext = std::env::var_os("PHPRUST_LEXBOR_SRC")
+        .map_or_else(|| manifest.join("vendor/lexbor"), PathBuf::from);
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=csrc");
+    println!("cargo:rerun-if-changed=vendor");
+    println!("cargo:rerun-if-env-changed=PHPRUST_LEXBOR_SRC");
     println!("cargo:rerun-if-env-changed=PKG_CONFIG_PATH");
 
     // 2. The adapted selector engine, copied next to shim headers so its
@@ -63,7 +85,7 @@ fn main() {
     let sel_dir = sel_root.join("dom/lexbor/selectors-adapted");
     fs::create_dir_all(&sel_dir).expect("create selectors dir");
     fs::create_dir_all(sel_root.join("inc/Zend")).expect("create shim dir");
-    let adapted = php_src.join("ext/dom/lexbor/selectors-adapted");
+    let adapted = manifest.join("vendor/selectors-adapted");
     for f in ["selectors.c", "selectors.h"] {
         fs::copy(adapted.join(f), sel_dir.join(f)).expect("copy selectors-adapted source");
     }

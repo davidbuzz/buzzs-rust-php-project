@@ -1,0 +1,25 @@
+Vendored third-party sources compiled by crates/php-dom/build.rs.
+
+lexbor/
+    The lexbor HTML/CSS/encoding library (https://github.com/lexbor/lexbor),
+    Apache License 2.0 (see lexbor/LICENSE and lexbor/NOTICE).
+    Copied from php-src (https://github.com/php/php-src) commit
+    0c7255dc521f3776d5627c0b8ac6cffd8f7c8951, path ext/lexbor/lexbor/,
+    which carries php-src's patches (ext/lexbor/patches/) on top of lexbor
+    upstream commit 5291cde0d40f77e7c4ea364b7cd726269e0bf1f9.
+    Only the subset php-dom compiles is kept: the .c files listed in
+    ext/lexbor/config.m4 minus url/, unicode/ and punycode/ (not used by
+    the DOM), plus the headers of the remaining modules and
+    selectors/base.h. No source file was modified.
+
+selectors-adapted/
+    php-src's libxml2-adapted lexbor selector engine, copied unmodified
+    from the same php-src commit, path
+    ext/dom/lexbor/selectors-adapted/{selectors.c,selectors.h}.
+    Based on lexbor (Apache License 2.0, Copyright (C) 2021-2026 Alexander
+    Borisov); adaptation by Nora Dossche for PHP, distributed under
+    php-src's BSD-3-Clause license (see selectors-adapted/LICENSE).
+    build.rs compiles it against the Zend shim in ../csrc/phpdom_shim.h.
+
+Set PHPRUST_LEXBOR_SRC to a directory containing a lexbor/ source tree
+(e.g. php-src's ext/lexbor) to build against it instead of lexbor/ here.
