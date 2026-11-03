@@ -315,6 +315,13 @@ pub fn pretend_ctx_error(file: &[u8], line: i32, column: i32, message: &[u8]) {
     });
 }
 
+/// `php_libxml_error_handler`: text libxml2 writes to its generic error
+/// channel (`xmlGenericError`), buffered until a newline, then appended to
+/// the error list (internal errors on) or emitted as a warning.
+pub(crate) fn generic_error(message: &[u8]) {
+    internal_error_handler(Channel::Generic, None, message);
+}
+
 /// `php_libxml_error_handler_va`: line/column come from the parser
 /// position for context channels.
 fn internal_error_handler(channel: Channel, position: Option<&ParserPosition>, message: &[u8]) {

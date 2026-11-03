@@ -323,3 +323,91 @@ pub fn reset_last_error() {
     // SAFETY: plain call into libxml2's per-thread state.
     unsafe { ffi::xmlResetLastError() }
 }
+
+/// The `fopencookie` write callback behind the generic error channel.
+pub(crate) unsafe extern "C" fn generic_write(
+    _cookie: *mut c_void,
+    buf: *const std::ffi::c_char,
+    size: usize,
+) -> isize {
+    super::guard::catch((), || {
+        if !buf.is_null() && size > 0 {
+            // SAFETY: libc passes `size` valid bytes.
+            let bytes = unsafe { std::slice::from_raw_parts(buf.cast::<u8>(), size) };
+            crate::error::generic_error(bytes);
+        }
+    });
+    isize::try_from(size).unwrap_or(isize::MAX)
+}
+
+/// Routes libxml2's generic error channel (`xmlGenericError`, used for
+/// messages outside the structured error path, e.g. "xmlXPathCompOpEval:
+/// function … not found") of the current thread into PHP's error model:
+/// the default handler `vfprintf`s into an unbuffered `FILE*` whose writes
+/// land in [`generic_write`].
+pub(crate) fn install_generic_channel() {
+    let funcs = ffi::cookie_io_functions_t {
+        read: None,
+        write: Some(generic_write),
+        seek: None,
+        close: None,
+    };
+    // SAFETY: a cookie stream with a valid write callback and no state; it
+    // lives for the rest of the thread (libxml2 keeps the pointer as the
+    // per-thread generic error context). A NULL handler selects libxml2's
+    // default handler, which writes to the context stream.
+    unsafe {
+        let file = ffi::fopencookie(std::ptr::null_mut(), c"w".as_ptr(), funcs);
+        if file.is_null() {
+            return;
+        }
+        ffi::setvbuf(file, std::ptr::null_mut(), ffi::IONBF, 0);
+        ffi::xmlSetGenericErrorFunc(file, None);
+    }
+}
+
+#[cfg(test)]
+mod generic_channel_tests {
+    use std::ffi::{c_char, c_int, c_void};
+
+    extern "C" {
+        fn __xmlGenericErrorContext() -> *mut *mut c_void;
+        fn fputs(s: *const c_char, stream: *mut c_void) -> c_int;
+    }
+
+    #[test]
+    fn generic_channel_reaches_the_error_model() {
+        crate::raw::ensure_init();
+        crate::error::reset_request_state();
+        crate::error::take_diagnostics();
+        crate::error::use_internal_errors(Some(false));
+        // What xmlGenericError() does with the default handler: write to the
+        // per-thread context stream.
+        // SAFETY: libxml2's per-thread context is our cookie stream.
+        unsafe {
+            let ctx = *__xmlGenericErrorContext();
+            assert!(!ctx.is_null());
+            fputs(c"xmlXPathCompOpEval: function ".as_ptr(), ctx);
+            fputs(c"test not found\n".as_ptr(), ctx);
+        }
+        let d = crate::error::take_diagnostics();
+        assert_eq!(d.len(), 1, "{d:?}");
+        assert_eq!(d[0].message, b"xmlXPathCompOpEval: function test not found");
+        assert_eq!(d[0].level, crate::error::DiagnosticLevel::Warning);
+
+        // Internal errors: collected instead of displayed.
+        crate::error::use_internal_errors(Some(true));
+        // SAFETY: as above.
+        unsafe {
+            fputs(c"generic message\n".as_ptr(), *__xmlGenericErrorContext());
+        }
+        assert!(crate::error::take_diagnostics().is_empty());
+        let errors = crate::error::get_errors();
+        assert_eq!(
+            errors.last().map(|e| e.message.clone()),
+            Some(b"generic message".to_vec())
+        );
+        crate::error::use_internal_errors(Some(false));
+        crate::error::reset_request_state();
+    }
+}

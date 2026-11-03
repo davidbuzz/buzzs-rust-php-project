@@ -75,6 +75,7 @@ pub fn ensure_init() {
                     std::ptr::null_mut(),
                     Some(errors::structured_trampoline),
                 );
+                errors::install_generic_channel();
                 ffi::xmlParserInputBufferCreateFilenameDefault(Some(io::input_buffer_trampoline));
                 ffi::xmlOutputBufferCreateFilenameDefault(Some(io::output_buffer_trampoline));
             }

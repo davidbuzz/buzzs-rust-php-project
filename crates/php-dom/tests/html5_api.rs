@@ -300,3 +300,25 @@ fn interop_xml_prefixed_namespace_node() {
     let o = DomObject::Node(ns);
     assert_eq!(string(prop(&o, "prefix")), "xml");
 }
+
+#[test]
+fn xpath_generic_channel_warning() {
+    let _ = php_libxml::error::take_diagnostics();
+    let doc = xml("<root/>");
+    let DomObject::Node(d) = &doc else {
+        panic!("doc")
+    };
+    let xpath = php_dom::dispatch::new_xpath(d, true).expect("xpath");
+    let xp = DomObject::XPath(xpath);
+    call(&xp, "registerNamespace", &[s("foo"), s("urn:foo")], &NoHost).expect("ns");
+    let _ = call(&xp, "query", &[s("//*[foo:test()]")], &NoHost);
+    let msgs: Vec<String> = php_libxml::error::take_diagnostics()
+        .into_iter()
+        .map(|d| String::from_utf8_lossy(&d.message).into_owned())
+        .collect();
+    assert!(
+        msgs.iter()
+            .any(|m| m == "xmlXPathCompOpEval: function test not found"),
+        "{msgs:?}"
+    );
+}

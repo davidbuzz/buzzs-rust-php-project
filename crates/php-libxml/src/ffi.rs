@@ -556,6 +556,35 @@ pub const XML_MAX_DICTIONARY_LIMIT: usize = 10_000_000;
 // Functions and globals
 // ---------------------------------------------------------------------------
 
+/// glibc `cookie_io_functions_t` (for `fopencookie`).
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct cookie_io_functions_t {
+    /// Read callback.
+    pub read: Option<unsafe extern "C" fn(*mut c_void, *mut c_char, usize) -> isize>,
+    /// Write callback.
+    pub write: Option<unsafe extern "C" fn(*mut c_void, *const c_char, usize) -> isize>,
+    /// Seek callback.
+    pub seek: Option<unsafe extern "C" fn(*mut c_void, *mut i64, c_int) -> c_int>,
+    /// Close callback.
+    pub close: Option<unsafe extern "C" fn(*mut c_void) -> c_int>,
+}
+
+/// `_IONBF` for `setvbuf`.
+pub const IONBF: c_int = 2;
+
+// libc (glibc): a FILE* whose writes call back into Rust, used as the
+// context of libxml2's default generic error handler (which `vfprintf`s to
+// it), since Rust cannot define the C-variadic handler itself.
+extern "C" {
+    pub fn fopencookie(
+        cookie: *mut c_void,
+        mode: *const c_char,
+        funcs: cookie_io_functions_t,
+    ) -> *mut c_void;
+    pub fn setvbuf(stream: *mut c_void, buf: *mut c_char, mode: c_int, size: usize) -> c_int;
+}
+
 #[link(name = "xml2")]
 extern "C" {
     // globals
