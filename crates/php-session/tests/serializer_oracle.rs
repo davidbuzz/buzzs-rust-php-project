@@ -76,7 +76,12 @@ fn encode_matches_php() {
         let vars = shape(row, &mut ctx);
 
         let whole = encode(Serializer::PhpSerialize, &vars, &mut ctx).unwrap();
-        assert_eq!(whole.data.as_deref(), Some(row.whole.as_slice()), "{}", row.name);
+        assert_eq!(
+            whole.data.as_deref(),
+            Some(row.whole.as_slice()),
+            "{}",
+            row.name
+        );
 
         let php = encode(Serializer::Php, &vars, &mut ctx).unwrap();
         assert_eq!(php.data, row.php, "php encode of {}", row.name);
@@ -90,9 +95,23 @@ fn encode_matches_php() {
         assert_eq!(php.warnings, expected, "php warnings of {}", row.name);
 
         let bin = encode(Serializer::PhpBinary, &vars, &mut ctx).unwrap();
-        assert_eq!(bin.data.as_deref(), Some(row.binary.as_slice()), "binary encode of {}", row.name);
-        assert_eq!(bin.warnings, row.binary_warnings, "binary warnings of {}", row.name);
-        assert!(ctx.diagnostics.is_empty(), "{}: {:?}", row.name, ctx.diagnostics);
+        assert_eq!(
+            bin.data.as_deref(),
+            Some(row.binary.as_slice()),
+            "binary encode of {}",
+            row.name
+        );
+        assert_eq!(
+            bin.warnings, row.binary_warnings,
+            "binary warnings of {}",
+            row.name
+        );
+        assert!(
+            ctx.diagnostics.is_empty(),
+            "{}: {:?}",
+            row.name,
+            ctx.diagnostics
+        );
     }
 }
 
@@ -110,7 +129,13 @@ fn decode_round_trips() {
             };
             assert!(ok, "{} {}", ser.name(), row.name);
             let again = encode(ser, &merge(entries), &mut ctx).unwrap();
-            assert_eq!(again.data.as_deref(), Some(data.as_slice()), "{} {}", ser.name(), row.name);
+            assert_eq!(
+                again.data.as_deref(),
+                Some(data.as_slice()),
+                "{} {}",
+                ser.name(),
+                row.name
+            );
         }
         let Decoded::Replace { value, ok } =
             decode(Serializer::PhpSerialize, &row.whole, &mut ctx).unwrap()
@@ -120,8 +145,18 @@ fn decode_round_trips() {
         assert!(ok);
         let Value::Array(a) = value else { panic!() };
         let again = encode(Serializer::PhpSerialize, &a, &mut ctx).unwrap();
-        assert_eq!(again.data.as_deref(), Some(row.whole.as_slice()), "{}", row.name);
-        assert!(ctx.diagnostics.is_empty(), "{}: {:?}", row.name, ctx.diagnostics);
+        assert_eq!(
+            again.data.as_deref(),
+            Some(row.whole.as_slice()),
+            "{}",
+            row.name
+        );
+        assert!(
+            ctx.diagnostics.is_empty(),
+            "{}: {:?}",
+            row.name,
+            ctx.diagnostics
+        );
     }
 }
 
@@ -138,6 +173,11 @@ fn truncated_data_fails_quietly() {
             panic!()
         };
         assert!(!ok, "{}", row.name);
-        assert!(ctx.diagnostics.is_empty(), "{}: {:?}", row.name, ctx.diagnostics);
+        assert!(
+            ctx.diagnostics.is_empty(),
+            "{}: {:?}",
+            row.name,
+            ctx.diagnostics
+        );
     }
 }
