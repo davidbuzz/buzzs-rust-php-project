@@ -52,7 +52,11 @@ fn enc_bool(b: bool) -> String {
 fn open_kind(kind: &str, path: &[u8], content: &[u8]) -> Stream {
     match kind {
         "memory" | "temp" => {
-            let url: &[u8] = if kind == "memory" { b"php://memory" } else { b"php://temp/maxmemory:16" };
+            let url: &[u8] = if kind == "memory" {
+                b"php://memory"
+            } else {
+                b"php://temp/maxmemory:16"
+            };
             let mut s = open::fopen(url, "w+", false, None).unwrap();
             s.write(content).ok();
             s.rewind();
@@ -116,11 +120,19 @@ fn read_ops_match_php() {
         let got = run(&mut s, SCRIPTS[si]).join(",");
         s.close();
         if got != f[3] {
-            failures.push(format!("content {ci} kind {} script {:?}\n  php:  {}\n  ours: {got}", f[1], SCRIPTS[si], f[3]));
+            failures.push(format!(
+                "content {ci} kind {} script {:?}\n  php:  {}\n  ours: {got}",
+                f[1], SCRIPTS[si], f[3]
+            ));
         }
         n += 1;
     }
     let _ = std::fs::remove_dir_all(&dir);
     assert_eq!(n, 270);
-    assert!(failures.is_empty(), "{} mismatches:\n{}", failures.len(), failures.join("\n"));
+    assert!(
+        failures.is_empty(),
+        "{} mismatches:\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
 }
