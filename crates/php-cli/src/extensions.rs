@@ -54,5 +54,6 @@ pub fn all() -> Vec<Box<dyn Extension>> {
         Box::new(php_ext_tokenizer::Tokenizer),
         Box::new(php_ext_ftp::Ftp),
         Box::new(php_ext_curl::Curl),
+        Box::new(php_cli_server::sapi::Rfc1867Constants),
     ]
 }
