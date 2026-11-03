@@ -4,10 +4,14 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
+description = "ext/session binding for the phprust VM"
 
 [dependencies]
 php-vm = { path = "../php-vm" }
 php-runtime = { path = "../php-runtime" }
+php-session = { path = "../php-session" }
+php-support = { path = "../php-support" }
+php-streams = { path = "../php-streams" }
 
 [lints]
 workspace = true

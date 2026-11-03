@@ -24,6 +24,7 @@ php-ext-mbstring = { path = "../php-ext-mbstring" }
 php-ext-filter = { path = "../php-ext-filter" }
 php-ext-pdo = { path = "../php-ext-pdo" }
 php-ext-date = { path = "../php-ext-date" }
+php-ext-session = { path = "../php-ext-session" }
 php-ext-openssl = { path = "../php-ext-openssl" }
 php-ext-intl = { path = "../php-ext-intl" }
 libc = "0.2"
