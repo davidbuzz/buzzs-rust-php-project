@@ -297,7 +297,27 @@ fn mb_strcut(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         st.mb_strcut(s.as_bytes(), start, len, opt_bytes(enc.as_ref()))
     })
     .map(bytes)?;
-    mem::result(vm, mem::zstr(s.as_bytes().len()), v)
+    // Encodings without a length table are cut through a filter chain
+    // into a growing memory device: the old and new device coexist.
+    let filtered = enc
+        .as_ref()
+        .and_then(|e| php_mbstring::encoding::by_cname(e.as_bytes()))
+        .filter(|e| e.mblen_table.is_none() && e.fixed_width().is_none() && !e.is_utf8());
+    let live = mem::zstr(s.as_bytes().len());
+    if let Some(e) = filtered.filter(|_| s.as_bytes().len() > 64 * 1024) {
+        // The whole input is re-encoded into the device before cutting.
+        let device = php_mbstring::convert::fast_convert(
+            s.as_bytes(),
+            e,
+            e,
+            u32::from(b'?'),
+            php_mbstring::ErrorMode::Char,
+        )
+        .0
+        .len();
+        mem::check(vm, live + device, device)?;
+    }
+    mem::result(vm, live, v)
 }
 
 fn mb_strwidth(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {

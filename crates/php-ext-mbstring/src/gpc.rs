@@ -123,6 +123,8 @@ fn register_all(
             crate::mem::check(vm, list.len() * 16, size)?;
         }
     }
+    let size = crate::mem::value_size(&Value::Array(track.clone()));
+    crate::mem::check(vm, list.len() * 16, size)?;
     Ok(Some(from_enc))
 }
 
