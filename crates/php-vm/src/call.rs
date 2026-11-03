@@ -1072,6 +1072,7 @@ impl Vm {
             func: Some(b.clone()),
         };
         let mut r = (b.handler)(self, &mut args);
+        r = self.flush_typed_arg_writes(r);
         // Blocking builtins (sleep, stream reads) return to a pending
         // interrupt.
         if r.is_ok() {

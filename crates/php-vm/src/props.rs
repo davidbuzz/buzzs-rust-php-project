@@ -273,7 +273,11 @@ impl Vm {
                     .copied()
                     .unwrap_or(false);
                 if (pi.ty.is_none() || was_unset) && self.has_magic(o, name, G_GET) {
-                    return self.magic_read(o, name, mode);
+                    let mut v = self.magic_read(o, name, mode)?;
+                    if mode != FetchMode::Is {
+                        self.verify_magic_get_result(&pi, &mut v)?;
+                    }
+                    return Ok(v);
                 }
                 if pi.ty.is_some() {
                     if mode == FetchMode::Is {
@@ -518,9 +522,12 @@ impl Vm {
                     return self.magic_write(o, name, v);
                 }
                 self.check_write_access(o, &pi, cur_defined, "modify")?;
-                let v = self.coerce_prop(Some(o), &pi, v)?;
+                let (typed_ref, v) = self.typed_prop_write(o, &pi, v)?;
                 if let Some(f) = object::data(o).readonly_init.borrow_mut().get_mut(idx) {
                     *f = false;
+                }
+                if let Some(r) = typed_ref {
+                    return self.assign_ref(&r, v);
                 }
                 let old = {
                     let d = object::data(o);
@@ -561,6 +568,9 @@ impl Vm {
                         return self.magic_write(o, name, v);
                     }
                     self.check_dynamic_creation(o, name)?;
+                }
+                if let Some(r) = crate::typed_refs::dynamic_typed_ref(o, &key) {
+                    return self.assign_ref(&r, v);
                 }
                 let old = {
                     let d = object::data(o);
@@ -632,12 +642,19 @@ impl Vm {
         {
             return Ok(r);
         }
+        if let Some(r) = self.uninit_typed_prop_ref(o, name)? {
+            return Ok(r);
+        }
         match self.property_container(o, name)? {
             PropContainer::Declared(idx) => {
-                let d = object::data(o);
-                let mut slots = d.slots.borrow_mut();
-                let slot = slots[idx].get_or_insert(Value::Null);
-                Ok(slot.make_ref())
+                let r = {
+                    let d = object::data(o);
+                    let mut slots = d.slots.borrow_mut();
+                    let slot = slots[idx].get_or_insert(Value::Null);
+                    slot.make_ref()
+                };
+                self.add_slot_type_source(o, idx, &r);
+                Ok(r)
             }
             PropContainer::Dynamic(key) => {
                 let d = object::data(o);
@@ -726,7 +743,11 @@ impl Vm {
                 let idx = pi.slot as usize;
                 let defined = object::data(o).slots.borrow()[idx].is_some();
                 if !defined && self.has_magic(o, name, G_GET) {
-                    return self.magic_container(o, name);
+                    let mut c = self.magic_container(o, name)?;
+                    if let PropContainer::Value(v) = &mut c {
+                        self.verify_magic_get_result(&pi, v)?;
+                    }
+                    return Ok(c);
                 }
                 if pi.flags & (flags::READONLY | flags::SET_MASK) != 0
                     && (pi.flags & flags::READONLY != 0 || !self.has_set_access(&pi))
@@ -818,8 +839,12 @@ impl Vm {
         name: &ZStr,
         r: Value,
     ) -> VmResult<Value> {
+        if let Some(r) = self.assign_uninit_typed_prop_ref(o, name, &r)? {
+            return Ok(r);
+        }
         match self.property_container(o, name)? {
             PropContainer::Declared(idx) => {
+                self.bind_slot_ref(o, idx, &r)?;
                 let d = object::data(o);
                 let old = d.slots.borrow_mut()[idx].replace(r.clone());
                 drop(old);
@@ -1237,6 +1262,7 @@ impl Vm {
             })
             .collect();
         let n = object::new_object(cls.clone(), slots);
+        self.add_object_type_sources(&n);
         let nd = object::data(&n);
         *nd.dynamic.borrow_mut() = d.dynamic.borrow().clone();
         self.clone_internal(&o, &n)?;

@@ -472,6 +472,7 @@ impl Vm {
                 *sp.cell.borrow_mut() = v;
             }
         }
+        crate::typed_refs::note_static_prop(&sp);
         Ok(sp.cell.clone())
     }
 

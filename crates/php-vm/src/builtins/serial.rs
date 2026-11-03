@@ -1907,6 +1907,59 @@ fn unserialize_with_options(vm: &mut Vm, buf: &[u8], opts: Option<&ZArray>) -> V
     })
 }
 
+impl Vm {
+    /// `php_var_unserialize()` of one value of `data` starting at
+    /// `offset`, sharing the active `unserialize()` call's `var_hash`
+    /// (back-references `R:`/`r:` cross into and out of a native
+    /// `Serializable::unserialize()` payload such as SplObjectStorage's)
+    /// and its options. Returns the value and the offset after it, or the
+    /// failure offset. Outside an `unserialize()` call a fresh context is
+    /// used (and its delayed `__wakeup()`/`__unserialize()` calls run).
+    pub fn unserialize_nested(&mut self, data: &[u8], offset: usize) -> VmResult<Result<(Value, usize), usize>> {
+        let (d, outermost) = unser_init(self);
+        let first_slot = d.borrow().slots.len();
+        let mut u = Unserializer {
+            cur: Cursor { data, pos: offset },
+            d: d.clone(),
+        };
+        let parsed = u.value(self, None);
+        let pos = u.cur.pos;
+        let mut value = match parsed {
+            Ok(Some(v)) => Some(v),
+            Ok(None) => {
+                for s in d.borrow_mut().slots.iter_mut().skip(first_slot) {
+                    *s = None;
+                }
+                None
+            }
+            Err(t) => {
+                for s in d.borrow_mut().slots.iter_mut().skip(first_slot) {
+                    *s = None;
+                }
+                let _ = unser_destroy(self, &d, outermost, false);
+                return Err(t);
+            }
+        };
+        if let Some(v) = value.as_mut() {
+            let mut slot_counts = HashMap::new();
+            for c in d.borrow().slots.iter().flatten() {
+                *slot_counts.entry(c.addr()).or_insert(0) += 1;
+            }
+            let mut uw = Unwrapper {
+                seen_refs: HashSet::new(),
+                seen_objs: HashSet::new(),
+                slot_counts,
+            };
+            uw.value(v);
+        }
+        unser_destroy(self, &d, outermost, true)?;
+        Ok(match value {
+            Some(v) => Ok((v.deref(), pos)),
+            None => Err(pos),
+        })
+    }
+}
+
 fn unserialize(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let data = s(a, 0);
     let opts = if a.has(1) { Some(arr(a, 1)) } else { None };

@@ -343,6 +343,10 @@ impl Args {
     /// Writes to by-ref argument `n`.
     pub fn set_ref(&self, n: usize, v: Value) {
         if let Some(r) = self.reference(n) {
+            if crate::typed_refs::has_type_sources(&r) {
+                crate::typed_refs::defer_typed_arg_write(r, v);
+                return;
+            }
             r.set(v);
         }
     }
