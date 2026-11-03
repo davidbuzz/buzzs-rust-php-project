@@ -12,18 +12,24 @@
 /// Sorts `v` with PHP's hybrid insertion sort (used for up to 16 elements).
 pub fn zend_insert_sort<T, F>(v: &mut [T], cmp: &mut F)
 where
-    F: FnMut(&T, &T) -> i32,
+    F: FnMut(&T, &T) -> i32 + ?Sized,
 {
     insert_sort_range(v, 0, v.len(), cmp);
 }
 
-fn sort2<T, F: FnMut(&T, &T) -> i32>(v: &mut [T], a: usize, b: usize, cmp: &mut F) {
+fn sort2<T, F: FnMut(&T, &T) -> i32 + ?Sized>(v: &mut [T], a: usize, b: usize, cmp: &mut F) {
     if cmp(&v[a], &v[b]) > 0 {
         v.swap(a, b);
     }
 }
 
-fn sort3<T, F: FnMut(&T, &T) -> i32>(v: &mut [T], a: usize, b: usize, c: usize, cmp: &mut F) {
+fn sort3<T, F: FnMut(&T, &T) -> i32 + ?Sized>(
+    v: &mut [T],
+    a: usize,
+    b: usize,
+    c: usize,
+    cmp: &mut F,
+) {
     if cmp(&v[a], &v[b]) <= 0 {
         if cmp(&v[b], &v[c]) <= 0 {
             return;
@@ -45,7 +51,7 @@ fn sort3<T, F: FnMut(&T, &T) -> i32>(v: &mut [T], a: usize, b: usize, c: usize, 
 }
 
 #[allow(clippy::many_single_char_names)]
-fn sort4<T, F: FnMut(&T, &T) -> i32>(v: &mut [T], idx: [usize; 4], cmp: &mut F) {
+fn sort4<T, F: FnMut(&T, &T) -> i32 + ?Sized>(v: &mut [T], idx: [usize; 4], cmp: &mut F) {
     let [a, b, c, d] = idx;
     sort3(v, a, b, c, cmp);
     if cmp(&v[c], &v[d]) > 0 {
@@ -60,7 +66,7 @@ fn sort4<T, F: FnMut(&T, &T) -> i32>(v: &mut [T], idx: [usize; 4], cmp: &mut F) 
 }
 
 #[allow(clippy::many_single_char_names)]
-fn sort5<T, F: FnMut(&T, &T) -> i32>(v: &mut [T], idx: [usize; 5], cmp: &mut F) {
+fn sort5<T, F: FnMut(&T, &T) -> i32 + ?Sized>(v: &mut [T], idx: [usize; 5], cmp: &mut F) {
     let [a, b, c, d, e] = idx;
     sort4(v, [a, b, c, d], cmp);
     if cmp(&v[d], &v[e]) > 0 {
@@ -78,7 +84,7 @@ fn sort5<T, F: FnMut(&T, &T) -> i32>(v: &mut [T], idx: [usize; 5], cmp: &mut F) 
 }
 
 /// `zend_insert_sort` on `v[start..start + nmemb]`.
-fn insert_sort_range<T, F: FnMut(&T, &T) -> i32>(
+fn insert_sort_range<T, F: FnMut(&T, &T) -> i32 + ?Sized>(
     v: &mut [T],
     start: usize,
     nmemb: usize,
@@ -157,12 +163,12 @@ fn insert_sort_range<T, F: FnMut(&T, &T) -> i32>(
 /// Sorts `v` exactly like PHP's `zend_sort` (same comparisons, same swaps).
 pub fn zend_sort<T, F>(v: &mut [T], cmp: &mut F)
 where
-    F: FnMut(&T, &T) -> i32,
+    F: FnMut(&T, &T) -> i32 + ?Sized,
 {
     sort_range(v, 0, v.len(), cmp);
 }
 
-fn sort_range<T, F: FnMut(&T, &T) -> i32>(
+fn sort_range<T, F: FnMut(&T, &T) -> i32 + ?Sized>(
     v: &mut [T],
     mut base: usize,
     mut nmemb: usize,
