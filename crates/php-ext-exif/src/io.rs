@@ -29,6 +29,16 @@ impl Read for StreamIo<'_> {
 
 impl Seek for StreamIo<'_> {
     fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
+        // The parsers' bookkeeping re-seeks to where the stream already is;
+        // the C code never seeks then, so pipes must not warn. (php-streams
+        // reports -1 for `popen()` pipes where C's
+        // `php_stream_fopen_from_pipe()` keeps position 0.)
+        if let SeekFrom::Start(n) = pos {
+            let cur = u64::try_from(self.0.tell()).unwrap_or(0);
+            if n == cur {
+                return Ok(cur);
+            }
+        }
         let (off, whence) = match pos {
             SeekFrom::Start(n) => (
                 i64::try_from(n).map_err(|_| io::Error::other("seek offset out of range"))?,
@@ -44,7 +54,7 @@ impl Seek for StreamIo<'_> {
     }
 
     fn stream_position(&mut self) -> io::Result<u64> {
-        u64::try_from(self.0.tell()).map_err(|_| io::Error::other("negative stream position"))
+        Ok(u64::try_from(self.0.tell()).unwrap_or(0))
     }
 }
 

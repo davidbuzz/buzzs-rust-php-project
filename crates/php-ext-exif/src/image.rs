@@ -15,7 +15,7 @@ use crate::{emit, memory_limit};
 
 /// Finishes `php_getimagesize_from_stream()`: fills `$image_info`, raises
 /// the diagnostics and returns the result array (or `false`).
-fn finish(vm: &mut Vm, a: &Args, out: ImageSizeOutcome) -> VmResult<Value> {
+fn finish(vm: &mut Vm, a: &Args, out: &ImageSizeOutcome) -> VmResult<Value> {
     if let Some(app) = &out.app_markers {
         a.set_ref(1, Value::Array(ZArray::from_table(app.clone())));
     }
@@ -49,7 +49,7 @@ fn getimagesize(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         Some(r)
     })?;
     match out {
-        Some(out) => finish(vm, a, out),
+        Some(out) => finish(vm, a, &out),
         None => Ok(Value::Bool(false)),
     }
 }
@@ -62,24 +62,25 @@ fn getimagesizefromstring(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         a.set_ref(1, Value::Array(ZArray::new()));
     }
     let out = getimagesizefromstring_limited(data.as_bytes(), want_info, memory_limit(vm));
-    finish(vm, a, out)
+    finish(vm, a, &out)
 }
 
 /// `image_type_to_mime_type(int $image_type): string`.
+#[allow(clippy::unnecessary_wraps)] // the native-function signature
 fn image_type_to_mime_type(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     Ok(Value::string(php_exif::image_type_to_mime_type(a.int(0))))
 }
 
 /// `image_type_to_extension(int $image_type, bool $include_dot = true):
 /// string|false`.
+#[allow(clippy::unnecessary_wraps)] // the native-function signature
 fn image_type_to_extension(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    Ok(
-        php_exif::image_type_to_extension(a.int(0), a.bool(1))
-            .map_or(Value::Bool(false), Value::string),
-    )
+    Ok(php_exif::image_type_to_extension(a.int(0), a.bool(1))
+        .map_or(Value::Bool(false), Value::string))
 }
 
 /// `iptcparse(string $iptc_block): array|false`.
+#[allow(clippy::unnecessary_wraps)] // the native-function signature
 fn iptcparse(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     Ok(php_exif::iptc::iptcparse(a.str(0).as_bytes()))
 }
@@ -94,25 +95,48 @@ fn iptcembed(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         return Ok(Value::Bool(false));
     }
     // `VCWD_FOPEN(jpeg_file, "rb")`: a plain file, no wrappers.
-    let jpeg = {
-        use std::os::unix::ffi::OsStrExt;
-        std::fs::read(std::ffi::OsStr::from_bytes(&path))
-    };
-    let Ok(jpeg) = jpeg else {
+    let Some((jpeg, st_size)) = read_plain_file(&path) else {
         let mut msg = b"Unable to open ".to_vec();
         msg.extend_from_slice(&path);
         vm.php_warning_bytes(&msg)?;
         return Ok(Value::Bool(false));
     };
-    let out = php_exif::iptc::iptcembed(data.as_bytes(), &jpeg, spool);
-    if !out.spooled.is_empty() {
-        vm.output(&out.spooled);
+    let mut out = php_exif::iptc::iptcembed(data.as_bytes(), &jpeg, spool);
+    // php-exif sizes the result buffer from the data it was given; C sizes
+    // it from `fstat()`, which is smaller for FIFOs and the like: reading
+    // then stops at the end of that buffer.
+    if spool < 2 && st_size < jpeg.len() {
+        let cap = data.len() + 29 + 1024 + 1 + st_size;
+        if let Ok(Some(bytes)) = out.result.as_mut() {
+            bytes.truncate(cap);
+        }
+    }
+    for b in &out.spooled {
+        // `PUTC()` writes byte by byte, so output handlers with a chunk
+        // size see every byte (and may re-enter).
+        vm.output(std::slice::from_ref(b));
     }
     Ok(match out.result {
         Ok(Some(bytes)) => Value::Str(ZStr::from(bytes)),
         Ok(None) => Value::Bool(true),
         Err(()) => Value::Bool(false),
     })
+}
+
+/// Reads a file with `fopen()` + `fstat()` semantics: the contents and
+/// `st_size`.
+fn read_plain_file(path: &[u8]) -> Option<(Vec<u8>, usize)> {
+    use std::io::Read;
+    use std::os::unix::ffi::OsStrExt;
+    let mut f = std::fs::File::open(std::ffi::OsStr::from_bytes(path)).ok()?;
+    let st_size = f
+        .metadata()
+        .ok()
+        .and_then(|m| usize::try_from(m.len()).ok())
+        .unwrap_or(0);
+    let mut buf = Vec::new();
+    f.read_to_end(&mut buf).ok()?;
+    Some((buf, st_size))
 }
 
 /// Registers the ext/standard image functions.

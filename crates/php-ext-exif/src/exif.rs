@@ -148,8 +148,7 @@ fn exif_imagetype(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     }
     let out = bridge::run(vm, || {
         let mut opened = None;
-        let mut s =
-            php_streams::open::open_wrapper(&path, "rb", REPORT_ERRORS, &mut opened, None)?;
+        let mut s = php_streams::open::open_wrapper(&path, "rb", REPORT_ERRORS, &mut opened, None)?;
         let r = php_exif::exif_imagetype(StreamIo(&mut s), &path);
         s.close();
         Some(r)
@@ -162,6 +161,7 @@ fn exif_imagetype(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 }
 
 /// `exif_tagname(int $index): string|false`.
+#[allow(clippy::unnecessary_wraps)] // the native-function signature
 fn exif_tagname(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     Ok(php_exif::exif_tagname(a.int(0)).map_or(Value::Bool(false), Value::string))
 }
