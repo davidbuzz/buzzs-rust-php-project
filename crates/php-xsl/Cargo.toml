@@ -1,11 +1,17 @@
 [package]
 name = "php-xsl"
+description = "PHP's ext/xsl: XSLTProcessor over the system libxslt/libexslt with PHP's callback, parameter, security and error semantics"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
+build = "build.rs"
 
 [dependencies]
+php-libxml = { path = "../php-libxml" }
+
+[build-dependencies]
+cc = "1"
 
 [lints]
 workspace = true
