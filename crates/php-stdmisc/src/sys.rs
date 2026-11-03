@@ -405,3 +405,369 @@ pub fn nl_langinfo(item: i32) -> Option<Vec<u8>> {
     // a string valid until the next locale change; it is copied at once.
     from_cstr(unsafe { libc::nl_langinfo(item) })
 }
+
+// ------------------------------------------------------------- network
+
+extern "C" {
+    fn inet_pton(af: libc::c_int, src: *const libc::c_char, dst: *mut libc::c_void) -> libc::c_int;
+    fn inet_ntop(
+        af: libc::c_int,
+        src: *const libc::c_void,
+        dst: *mut libc::c_char,
+        size: libc::socklen_t,
+    ) -> *const libc::c_char;
+    fn gethostbyname_r(
+        name: *const libc::c_char,
+        ret: *mut libc::hostent,
+        buf: *mut libc::c_char,
+        buflen: libc::size_t,
+        result: *mut *mut libc::hostent,
+        h_errnop: *mut libc::c_int,
+    ) -> libc::c_int;
+    fn getnameinfo(
+        sa: *const libc::sockaddr,
+        salen: libc::socklen_t,
+        host: *mut libc::c_char,
+        hostlen: libc::socklen_t,
+        serv: *mut libc::c_char,
+        servlen: libc::socklen_t,
+        flags: libc::c_int,
+    ) -> libc::c_int;
+    fn res_search(
+        dname: *const libc::c_char,
+        class: libc::c_int,
+        typ: libc::c_int,
+        answer: *mut u8,
+        anslen: libc::c_int,
+    ) -> libc::c_int;
+    fn __h_errno_location() -> *mut libc::c_int;
+}
+
+/// `inet_pton(af, src)`: the packed address (4 or 16 bytes).
+#[must_use]
+pub fn inet_pton_raw(af: i32, src: &[u8]) -> Option<Vec<u8>> {
+    let c = cstring(src);
+    let mut buf = [0u8; 16];
+    // SAFETY: `c` is NUL-terminated; `buf` has room for an in6_addr.
+    let r = unsafe { inet_pton(af, c.as_ptr(), buf.as_mut_ptr().cast()) };
+    if r <= 0 {
+        return None;
+    }
+    Some(buf[..if af == libc::AF_INET { 4 } else { 16 }].to_vec())
+}
+
+/// `inet_ntop(af, src)`: `src` must be 4 (`AF_INET`) or 16 bytes.
+#[must_use]
+pub fn inet_ntop_raw(af: i32, src: &[u8]) -> Option<String> {
+    let need = if af == libc::AF_INET { 4 } else { 16 };
+    if src.len() != need {
+        return None;
+    }
+    let mut buf = [0u8; 64];
+    // SAFETY: `src` holds a full address of the family; `buf` is writable
+    // for its stated length.
+    let r = unsafe { inet_ntop(af, src.as_ptr().cast(), buf.as_mut_ptr().cast(), 64) };
+    if r.is_null() {
+        return None;
+    }
+    let end = buf.iter().position(|&c| c == 0).unwrap_or(0);
+    Some(String::from_utf8_lossy(&buf[..end]).into_owned())
+}
+
+/// `gethostname()`.
+pub fn gethostname() -> Result<Vec<u8>, i32> {
+    let mut buf = [0u8; 256];
+    // SAFETY: `buf` is writable for `len` bytes (one spare for the NUL).
+    let r = unsafe { libc::gethostname(buf.as_mut_ptr().cast(), buf.len() - 1) };
+    if r != 0 {
+        return Err(errno());
+    }
+    let end = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
+    Ok(buf[..end].to_vec())
+}
+
+/// `gethostbyname(name)`: the IPv4 addresses of `h_addr_list`, or `None`.
+#[must_use]
+#[allow(clippy::many_single_char_names)]
+pub fn gethostbyname(name: &[u8]) -> Option<Vec<[u8; 4]>> {
+    let c = cstring(name);
+    let mut buf = vec![0u8; 16 * 1024];
+    loop {
+        // SAFETY: zeroed hostent is valid storage for the out-parameter.
+        let mut he: libc::hostent = unsafe { std::mem::zeroed() };
+        let mut result: *mut libc::hostent = ptr::null_mut();
+        let mut herr = 0;
+        // SAFETY: all pointers are valid; `buf` is writable for its length.
+        let r = unsafe {
+            gethostbyname_r(
+                c.as_ptr(),
+                &raw mut he,
+                buf.as_mut_ptr().cast(),
+                buf.len(),
+                &raw mut result,
+                &raw mut herr,
+            )
+        };
+        if r == libc::ERANGE && buf.len() < 1 << 20 {
+            buf.resize(buf.len() * 2, 0);
+            continue;
+        }
+        if r != 0 || result.is_null() || he.h_addrtype != libc::AF_INET || he.h_length != 4 {
+            return None;
+        }
+        let mut out = Vec::new();
+        let mut i = 0;
+        loop {
+            // SAFETY: h_addr_list is a NULL-terminated array of pointers
+            // to 4-byte addresses inside `buf`.
+            let p = unsafe { *he.h_addr_list.add(i) };
+            if p.is_null() {
+                break;
+            }
+            let mut a = [0u8; 4];
+            // SAFETY: each entry points to h_length (4) bytes.
+            unsafe { ptr::copy_nonoverlapping(p.cast::<u8>(), a.as_mut_ptr(), 4) };
+            out.push(a);
+            i += 1;
+        }
+        return Some(out);
+    }
+}
+
+/// Reverse lookup with `getnameinfo(..., NI_NAMEREQD)` of a packed IPv4
+/// (4 bytes) or IPv6 (16 bytes) address.
+#[must_use]
+pub fn reverse_lookup(addr: &[u8]) -> Option<Vec<u8>> {
+    let mut host = [0u8; 1025];
+    let r = match addr.len() {
+        4 => {
+            // SAFETY: zeroed sockaddr_in is a valid value.
+            let mut sa: libc::sockaddr_in = unsafe { std::mem::zeroed() };
+            sa.sin_family = libc::sa_family_t::try_from(libc::AF_INET).unwrap_or(2);
+            sa.sin_addr.s_addr = u32::from_ne_bytes([addr[0], addr[1], addr[2], addr[3]]);
+            // SAFETY: `sa` is a properly sized sockaddr_in; `host` is writable.
+            unsafe {
+                getnameinfo(
+                    (&raw const sa).cast(),
+                    libc::socklen_t::try_from(std::mem::size_of::<libc::sockaddr_in>())
+                        .unwrap_or(16),
+                    host.as_mut_ptr().cast(),
+                    1025,
+                    ptr::null_mut(),
+                    0,
+                    libc::NI_NAMEREQD,
+                )
+            }
+        }
+        16 => {
+            // SAFETY: zeroed sockaddr_in6 is a valid value.
+            let mut sa: libc::sockaddr_in6 = unsafe { std::mem::zeroed() };
+            sa.sin6_family = libc::sa_family_t::try_from(libc::AF_INET6).unwrap_or(10);
+            sa.sin6_addr.s6_addr.copy_from_slice(addr);
+            // SAFETY: as above for sockaddr_in6.
+            unsafe {
+                getnameinfo(
+                    (&raw const sa).cast(),
+                    libc::socklen_t::try_from(std::mem::size_of::<libc::sockaddr_in6>())
+                        .unwrap_or(28),
+                    host.as_mut_ptr().cast(),
+                    1025,
+                    ptr::null_mut(),
+                    0,
+                    libc::NI_NAMEREQD,
+                )
+            }
+        }
+        _ => return None,
+    };
+    if r != 0 {
+        return None;
+    }
+    let end = host.iter().position(|&c| c == 0).unwrap_or(0);
+    Some(host[..end].to_vec())
+}
+
+/// `getservbyname(name, proto)`: the port in host order.
+#[must_use]
+pub fn getservbyname(name: &[u8], proto: &[u8]) -> Option<u16> {
+    let (n, p) = (cstring(name), cstring(proto));
+    // SAFETY: valid C strings; the static result is read immediately.
+    let s = unsafe { libc::getservbyname(n.as_ptr(), p.as_ptr()) };
+    if s.is_null() {
+        return None;
+    }
+    // SAFETY: non-NULL servent from libc.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let port = unsafe { (*s).s_port } as u16;
+    Some(u16::from_be(port))
+}
+
+/// `getservbyport(htons(port), proto)`: the service name.
+#[must_use]
+pub fn getservbyport(port: u16, proto: &[u8]) -> Option<Vec<u8>> {
+    let p = cstring(proto);
+    // SAFETY: valid C string; the static result is copied immediately.
+    let s = unsafe { libc::getservbyport(i32::from(port.to_be()), p.as_ptr()) };
+    if s.is_null() {
+        return None;
+    }
+    // SAFETY: non-NULL servent from libc.
+    from_cstr(unsafe { (*s).s_name })
+}
+
+/// `getprotobyname(name)`.
+#[must_use]
+pub fn getprotobyname(name: &[u8]) -> Option<i64> {
+    let n = cstring(name);
+    // SAFETY: valid C string; the static result is read immediately.
+    let p = unsafe { libc::getprotobyname(n.as_ptr()) };
+    if p.is_null() {
+        return None;
+    }
+    // SAFETY: non-NULL protoent from libc.
+    Some(i64::from(unsafe { (*p).p_proto }))
+}
+
+/// `getprotobynumber(proto)`.
+#[must_use]
+pub fn getprotobynumber(proto: i32) -> Option<Vec<u8>> {
+    // SAFETY: no preconditions; the static result is copied immediately.
+    let p = unsafe { libc::getprotobynumber(proto) };
+    if p.is_null() {
+        return None;
+    }
+    // SAFETY: non-NULL protoent from libc.
+    from_cstr(unsafe { (*p).p_name })
+}
+
+/// A socket address from `getifaddrs()`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SockAddr {
+    /// IPv4 address bytes.
+    V4([u8; 4]),
+    /// IPv6 address bytes.
+    V6([u8; 16]),
+    /// Another family (only the family number is known).
+    Other(i64),
+}
+
+impl SockAddr {
+    /// The address family number.
+    #[must_use]
+    pub fn family(&self) -> i64 {
+        match self {
+            SockAddr::V4(_) => i64::from(libc::AF_INET),
+            SockAddr::V6(_) => i64::from(libc::AF_INET6),
+            SockAddr::Other(f) => *f,
+        }
+    }
+}
+
+/// One `struct ifaddrs` entry.
+#[derive(Debug, Clone)]
+pub struct IfAddr {
+    /// Interface name.
+    pub name: Vec<u8>,
+    /// `ifa_flags`.
+    pub flags: u32,
+    /// `ifa_addr`.
+    pub addr: Option<SockAddr>,
+    /// `ifa_netmask`.
+    pub netmask: Option<SockAddr>,
+    /// `ifa_broadaddr` / `ifa_dstaddr` (the union).
+    pub broad_or_dst: Option<SockAddr>,
+}
+
+fn sockaddr(p: *const libc::sockaddr) -> Option<SockAddr> {
+    if p.is_null() {
+        return None;
+    }
+    // SAFETY: non-NULL sockaddr from getifaddrs; the family tells which
+    // larger structure it really is.
+    let fam = i32::from(unsafe { (*p).sa_family });
+    Some(match fam {
+        libc::AF_INET => {
+            // SAFETY: AF_INET entries are sockaddr_in; read unaligned to
+            // not rely on the allocation's alignment.
+            #[allow(clippy::cast_ptr_alignment)]
+            let sa = unsafe { ptr::read_unaligned(p.cast::<libc::sockaddr_in>()) };
+            SockAddr::V4(sa.sin_addr.s_addr.to_ne_bytes())
+        }
+        libc::AF_INET6 => {
+            // SAFETY: AF_INET6 entries are sockaddr_in6 (read unaligned).
+            #[allow(clippy::cast_ptr_alignment)]
+            let sa = unsafe { ptr::read_unaligned(p.cast::<libc::sockaddr_in6>()) };
+            SockAddr::V6(sa.sin6_addr.s6_addr)
+        }
+        f => SockAddr::Other(i64::from(f)),
+    })
+}
+
+/// `getifaddrs()`.
+pub fn getifaddrs() -> Result<Vec<IfAddr>, i32> {
+    let mut addrs: *mut libc::ifaddrs = ptr::null_mut();
+    // SAFETY: out-pointer is valid.
+    if unsafe { libc::getifaddrs(&raw mut addrs) } != 0 {
+        return Err(errno());
+    }
+    let mut out = Vec::new();
+    let mut p = addrs;
+    while !p.is_null() {
+        // SAFETY: `p` walks the list returned by getifaddrs.
+        let ifa = unsafe { &*p };
+        out.push(IfAddr {
+            name: from_cstr(ifa.ifa_name).unwrap_or_default(),
+            flags: ifa.ifa_flags,
+            addr: sockaddr(ifa.ifa_addr),
+            netmask: sockaddr(ifa.ifa_netmask),
+            broad_or_dst: sockaddr(ifa.ifa_ifu),
+        });
+        p = ifa.ifa_next;
+    }
+    // SAFETY: `addrs` came from getifaddrs and is freed once.
+    unsafe { libc::freeifaddrs(addrs) };
+    Ok(out)
+}
+
+/// `res_search(name, C_IN, type)`: the raw answer, or the resolver's
+/// `h_errno` on failure.
+pub fn res_query(name: &[u8], rtype: i32) -> Result<Vec<u8>, i32> {
+    let c = cstring(name);
+    let mut buf = vec![0u8; 65536];
+    // SAFETY: `buf` is writable for 65536 bytes; `c` is NUL-terminated.
+    let n = unsafe { res_search(c.as_ptr(), 1, rtype, buf.as_mut_ptr(), 65536) };
+    if n < 0 {
+        // SAFETY: h_errno location is thread-local and always valid.
+        return Err(unsafe { *__h_errno_location() });
+    }
+    buf.truncate(usize::try_from(n).unwrap_or(0).min(65536));
+    Ok(buf)
+}
+
+// ------------------------------------------------------------- syslog
+
+/// `openlog(ident, option, facility)`; the identity string is kept alive.
+pub fn openlog(ident: &[u8], option: i32, facility: i32) {
+    static IDENT: std::sync::Mutex<Option<CString>> = std::sync::Mutex::new(None);
+    let c = cstring(ident);
+    let mut guard = IDENT
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    // SAFETY: the C string is stored in a static before and while syslog
+    // uses it; the previous one is replaced only after openlog switched.
+    unsafe { libc::openlog(c.as_ptr(), option, facility) };
+    *guard = Some(c);
+}
+
+/// `syslog(priority, "%s", message)` (cut at the first NUL).
+pub fn syslog(priority: i32, message: &[u8]) {
+    let m = cstring(message);
+    // SAFETY: "%s" with a valid C string argument.
+    unsafe { libc::syslog(priority, c"%s".as_ptr(), m.as_ptr()) };
+}
+
+/// `closelog()`.
+pub fn closelog() {
+    // SAFETY: no preconditions.
+    unsafe { libc::closelog() };
+}

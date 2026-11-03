@@ -17,10 +17,12 @@
 //! All `unsafe` code is confined to [`sys`].
 
 pub mod crypt;
+pub mod dns;
 pub mod exec;
 pub mod getopt;
 pub mod highlight;
 pub mod locale;
+pub mod net;
 pub mod process;
 pub mod query;
 pub mod sys;
