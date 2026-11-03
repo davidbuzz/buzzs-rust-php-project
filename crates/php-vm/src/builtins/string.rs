@@ -1,4 +1,8 @@
-//! String functions: bindings of `php-stdstr` plus VM-level helpers.
+//! String functions: minimal bindings of `php-stdstr` kept so the bare VM
+//! (and its unit tests) has the common string builtins. The `php` binary
+//! links `php-ext-stdstr`, which re-registers every one of these (and the
+//! rest of `ext/standard` string/html/url/pack/scanf) with full PHP
+//! semantics; fix behaviour there, not here.
 
 use super::util::{arr, b, i, opt, s, sv};
 use super::{alias, constant, reg};

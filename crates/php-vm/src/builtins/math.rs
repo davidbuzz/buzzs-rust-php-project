@@ -1,4 +1,6 @@
-//! Math functions (`ext/standard/math.c`) and random numbers.
+//! Math functions (`ext/standard/math.c`) and random numbers: fallback
+//! bindings for the bare VM. The `php` binary links `php-ext-stdstr`, which
+//! re-registers the math.c functions (all but `pow`) with full semantics.
 
 use super::util::{f, i, opt};
 use super::{constant, reg};
