@@ -605,3 +605,40 @@ fn web_phar_outside_web_returns() {
     assert_eq!(e.message, "__HALT_COMPILER(); must be declared in a phar");
     registry::reset_request();
 }
+
+#[test]
+fn including_phars_directly() {
+    use php_phar::include::{compile_source, CompileSource};
+    writable();
+    let d = workdir("include");
+    let t = path(&d, "t.phar.tar");
+    let mut o = PharObject::new(false);
+    o.construct(&t, None, 0).unwrap();
+    o.offset_set(b"a", b"x").unwrap();
+    o.release();
+    assert_eq!(
+        compile_source(&t),
+        CompileSource::Stub([b"phar://".as_slice(), &t, b"/.phar/stub.php"].concat())
+    );
+    let p = path(&d, "g.phar");
+    let mut o = PharObject::new(false);
+    o.construct(&p, None, 0).unwrap();
+    o.offset_set(b"a", b"x").unwrap();
+    let c = o.compress(0x1000, None).unwrap();
+    o.release();
+    registry::reset_request();
+    match compile_source(&c.fname) {
+        CompileSource::Bytes(b) => {
+            assert!(b.starts_with(b"<?php"));
+            assert!(b.windows(18).any(|w| w == b"__HALT_COMPILER();"));
+        }
+        other => panic!("{other:?}"),
+    }
+    let plain = path(&d, "plain.phar");
+    let mut o = PharObject::new(false);
+    o.construct(&plain, None, 0).unwrap();
+    o.offset_set(b"a", b"x").unwrap();
+    o.release();
+    assert_eq!(compile_source(&plain), CompileSource::Original);
+    registry::reset_request();
+}

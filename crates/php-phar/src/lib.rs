@@ -21,6 +21,8 @@
 //! * [`web`] — `Phar::webPhar()` routing, the mime table and
 //!   `Phar::mungServer()`.
 //! * [`intercept`] — what `Phar::interceptFileFuncs()` replaces.
+//! * [`include`] — the compile-file / resolve-path hooks for including
+//!   phars directly.
 //! * [`info`] — `phpinfo()` rows and INI entries.
 //!
 //! # Embedding
@@ -55,6 +57,7 @@ mod bz2;
 pub mod compress;
 pub mod consts;
 pub mod error;
+pub mod include;
 pub mod info;
 pub mod intercept;
 pub mod object;
