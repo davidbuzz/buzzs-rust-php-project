@@ -1,5 +1,6 @@
 [package]
 name = "php-ext-dom"
+description = "ext/dom binding for the phprust VM: DOMDocument & friends and the Dom\\ API over php-dom"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -8,6 +9,13 @@ rust-version.workspace = true
 [dependencies]
 php-vm = { path = "../php-vm" }
 php-runtime = { path = "../php-runtime" }
+php-dom = { path = "../php-dom" }
+php-libxml = { path = "../php-libxml" }
+php-ext-xml = { path = "../php-ext-xml" }
+php-ext-streams = { path = "../php-ext-streams" }
+php-streams = { path = "../php-streams" }
+php-ext-xsl = { path = "../php-ext-xsl" }
+php-xsl = { path = "../php-xsl" }
 
 [lints]
 workspace = true
