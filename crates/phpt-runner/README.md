@@ -29,6 +29,9 @@ target/debug/phpt-runner [OPTIONS] <PATHS>...
 | `--summary-depth <N>` | Group the summary table by the first N path components. |
 | `--skip-slow` | Export `SKIP_SLOW_TESTS=1`. |
 | `--no-color` | Plain output (also when `NO_COLOR` is set or stdout is not a terminal). |
+| `--scope <FILE>` | Out-of-scope prefixes (default: `phpt-scope.txt` in the php-src root or an ancestor, i.e. the repository root). |
+| `--no-scope` | Run and count every selected test. |
+| `--env KEY=VALUE` | Extra environment variable for every test (repeatable). |
 
 Examples:
 
@@ -49,15 +52,52 @@ and run-tests.php's summary block. For failing tests `<name>.out`, `<name>.exp`,
 are written next to the test and the generated `<name>.php` is kept (all gitignored, inside the
 php-src clone). Without a baseline the exit code is 1 if anything FAILs or BORKs.
 
+## Scope
+
+`phpt-scope.txt` at the repository root lists php-src path prefixes that are out of scope by
+project decision (FEATURE_GAP.md rows with Pri `out`: opcache/JIT, ffi, server-backed DB and
+protocol clients except mysqli, readline/tidy/enchant/com_dotnet/imap, php-src's test-helper
+extensions, non-CLI SAPIs except apache2handler). Tests under those prefixes are not run; they
+are reported as `OUT` (a separate count in the table, summary and JSON), excluded from every
+pass-rate denominator and never written to the baseline. `--no-scope` disables this.
+
+## Environment for service-backed suites
+
+The ext/mysqli tests need the local MariaDB (see CLAUDE.md, "Test services"); without these
+variables they skip:
+
+```
+target/debug/phpt-runner -q -j 4 \
+    --env MYSQL_TEST_HOST=127.0.0.1 --env MYSQL_TEST_USER=phptest \
+    --env MYSQL_TEST_PASSWD=phptest --env MYSQL_TEST_DB=test \
+    modules/php-src/ext/mysqli
+```
+
+(`--env` is a convenience; exported variables reach the tests too.)
+
+## Extension directory
+
+A binary that loads no php.ini (ours) gets `-d extension_dir=/nonexistent/phpt-runner-extension-dir`,
+so its built-in `extension_dir` (which may point at the system PHP's modules) cannot make
+`--EXTENSIONS--` lines or `dl()`-based SKIPIF checks pick up the system's `.so` files: tests
+needing an extension the binary lacks are SKIPPED. Binaries that load php.ini files (e.g.
+`/usr/bin/php`, whose `extension=` lines need the real directory) keep their own.
+`-d extension_dir=...` overrides either way.
+
 ## Baseline workflow
 
-`phpt-baseline.txt` at the repository root lists tests (paths relative to php-src) known to
-FAIL or BORK with our binary on `Zend/tests` and `tests/`:
+`phpt-baseline.txt` at the repository root lists the in-scope tests (paths relative to
+php-src) known to FAIL or BORK with our binary across the whole suite
+(`Zend`, `tests`, `ext`, `sapi`):
 
 ```
-target/debug/phpt-runner -q --no-artifacts --baseline phpt-baseline.txt \
-    modules/php-src/Zend/tests modules/php-src/tests
+target/debug/phpt-runner -q -j 4 --no-artifacts --baseline phpt-baseline.txt \
+    --env MYSQL_TEST_HOST=127.0.0.1 --env MYSQL_TEST_USER=phptest \
+    --env MYSQL_TEST_PASSWD=phptest --env MYSQL_TEST_DB=test \
+    modules/php-src/Zend modules/php-src/tests modules/php-src/ext modules/php-src/sapi
 ```
+
+A subset run (e.g. just `modules/php-src/Zend/tests`) can be checked against the same file.
 
 The run fails (exit 1) only if a test outside the baseline fails (`NEW FAILURE`) or a baseline
 test now passes (`UNEXPECTED PASS`, so the baseline can shrink). After making tests pass, rerun
@@ -70,11 +110,14 @@ run are kept, so updating from a partial run is safe.
 target/debug/phpt-runner -q --json /tmp/results.json modules/php-src/Zend/tests modules/php-src/tests
 scripts/update_feature_gap.py /tmp/results.json --dry-run      # show what would change
 scripts/update_feature_gap.py /tmp/results.json                # rewrite the % column
+scripts/update_feature_gap.py /tmp/results.json --summary      # headline table for README.md
 ```
 
 The script maps directory prefixes to row names (the `MAPPING` table in the script); rows
-without a mapping, or with no tests in the report, are left alone. The percentage is
-passed/total by default (`--denominator ran` excludes skipped/borked tests).
+without a mapping, with no tests in the report, or entirely out of scope are left alone.
+Out-of-scope tests are never counted. The percentage is passed/total by default
+(`--denominator ran` excludes skipped/borked tests). `--summary` prints in-scope
+total/pass/fail/skip and pass rates per suite (Zend/tests, tests/, ext/, sapi/) and overall.
 
 ## Fidelity notes
 
