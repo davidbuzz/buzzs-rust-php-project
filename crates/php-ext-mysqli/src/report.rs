@@ -4,6 +4,9 @@
 //! mode, and forwards the diagnostics queued by mysqlnd.
 
 use php_mysqlnd::consts::{SERVER_QUERY_NO_GOOD_INDEX_USED, SERVER_QUERY_NO_INDEX_USED};
+use std::cell::{Cell, RefCell};
+
+use php_mysqlnd::diag::Diag;
 use php_mysqlnd::{diag, Connection, Statement};
 use php_runtime::{RuntimeError, Value, ZStr};
 use php_vm::{Throw, Vm, VmResult};
@@ -17,10 +20,75 @@ pub const E_WARNING: i64 = 2;
 /// `E_DEPRECATED`
 pub const E_DEPRECATED: i64 = 8192;
 
+thread_local! {
+    /// The VM of the native call currently inside [`live`] (null outside).
+    static ACTIVE_VM: Cell<*mut Vm> = const { Cell::new(std::ptr::null_mut()) };
+    /// A throw raised by a warning emitted from the sink (user error handler).
+    static PENDING: RefCell<Option<Throw>> = const { RefCell::new(None) };
+    /// Diagnostics raised outside [`live`] (or after a pending throw).
+    static QUEUED: RefCell<Vec<Diag>> = const { RefCell::new(Vec::new()) };
+}
+
+/// The mysqlnd diagnostic sink: inside [`live`] the warning is emitted
+/// right away (interleaving with network traffic like PHP), otherwise it is
+/// queued for [`flush_diag`].
+fn sink(d: &Diag) {
+    let p = ACTIVE_VM.with(Cell::get);
+    let pending = PENDING.with(|p| p.borrow().is_some());
+    if p.is_null() || pending {
+        QUEUED.with(|q| q.borrow_mut().push(d.clone()));
+        return;
+    }
+    // SAFETY: `ACTIVE_VM` is only non-null while `live()` runs a closure
+    // that cannot touch the VM (it captures no `&mut Vm`); the pointer was
+    // derived from the `&mut Vm` that `live()` holds and does not use
+    // until the closure returns, so this is the only live access.
+    let vm = unsafe { &mut *p };
+    let level = if d.fatal { E_ERROR } else { E_WARNING };
+    let r = if d.docref {
+        vm.php_error_bytes(level, d.message.as_bytes())
+    } else {
+        vm.raise(level, &d.message)
+    };
+    if let Err(t) = r {
+        PENDING.with(|p| *p.borrow_mut() = Some(t));
+    }
+}
+
+/// Installs the immediate diagnostic sink (request startup).
+pub fn install_sink() {
+    let _ = diag::set_sink(Some(Box::new(sink)));
+}
+
+/// Removes the sink (request shutdown); later diagnostics are queued.
+pub fn uninstall_sink() {
+    let _ = diag::set_sink(None);
+}
+
+/// Runs a mysqlnd operation with warnings emitted the instant mysqlnd
+/// raises them (prefixed with the running function).
+pub fn live<R>(vm: &mut Vm, f: impl FnOnce() -> R) -> VmResult<R> {
+    struct Reset(*mut Vm);
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            ACTIVE_VM.with(|a| a.set(self.0));
+        }
+    }
+    let prev = ACTIVE_VM.with(|a| a.replace(std::ptr::from_mut(vm)));
+    let out = {
+        let _reset = Reset(prev);
+        f()
+    };
+    if let Some(t) = PENDING.with(|p| p.borrow_mut().take()) {
+        return Err(t);
+    }
+    Ok(out)
+}
+
 /// Emits queued diagnostics outside a native function (property
 /// handlers): `php_error_docref` then reports itself as `main()`.
 pub fn flush_diag_main(vm: &mut Vm) -> VmResult<()> {
-    for d in diag::take() {
+    for d in take_queued() {
         let level = if d.fatal { E_ERROR } else { E_WARNING };
         let mut m = if d.docref {
             b"main(): ".to_vec()
@@ -36,7 +104,10 @@ pub fn flush_diag_main(vm: &mut Vm) -> VmResult<()> {
 /// Emits the diagnostics mysqlnd queued (`php_error_docref` /
 /// `php_error` calls inside the driver).
 pub fn flush_diag(vm: &mut Vm) -> VmResult<()> {
-    for d in diag::take() {
+    if let Some(t) = PENDING.with(|p| p.borrow_mut().take()) {
+        return Err(t);
+    }
+    for d in take_queued() {
         let level = if d.fatal { E_ERROR } else { E_WARNING };
         if d.docref {
             vm.php_error_bytes(level, d.message.as_bytes())?;
@@ -45,6 +116,12 @@ pub fn flush_diag(vm: &mut Vm) -> VmResult<()> {
         }
     }
     Ok(())
+}
+
+fn take_queued() -> Vec<Diag> {
+    let mut v = QUEUED.with(|q| std::mem::take(&mut *q.borrow_mut()));
+    v.extend(diag::take());
+    v
 }
 
 /// `php_mysqli_throw_sql_exception`: a warning `(sqlstate/errno): msg`

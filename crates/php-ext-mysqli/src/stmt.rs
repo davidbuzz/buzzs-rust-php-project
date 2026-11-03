@@ -8,7 +8,7 @@ use php_mysqlnd::consts::{
     MYSQL_TYPE_VAR_STRING, STMT_ATTR_CURSOR_TYPE, STMT_ATTR_UPDATE_MAX_LENGTH,
 };
 use php_mysqlnd::stmt::param_type_from_char;
-use php_mysqlnd::{Connection, ExecuteError, ParamBind, Statement};
+use php_mysqlnd::{Connection, ErrorInfo, ExecuteError, ParamBind, Statement};
 use php_runtime::{Obj, PhpRef, Value, ZArray};
 use php_vm::ext::Args;
 use php_vm::object::{internal, set_internal};
@@ -22,38 +22,40 @@ use crate::objects::{
 use crate::report::{flush_diag, report_conn_error, report_index, report_stmt_error, rt_throw};
 use crate::util::{affected, bstr, error_list, long_or_string, opt_str, pos, recv};
 
-thread_local! {
-    /// Statements whose close is deferred so the connection keeps the
-    /// error they caused (mysqlnd's `stmt_close` resets the connection
-    /// error and offers no way to restore it).
-    static GRAVEYARD: RefCell<Vec<Statement>> = const { RefCell::new(Vec::new()) };
-}
-
-/// Parks a failed statement until request shutdown.
-fn bury(st: Statement) {
-    GRAVEYARD.with(|g| g.borrow_mut().push(st));
-}
-
-/// Closes the parked statements of `conn` (called before a command that
-/// resets the connection's error / affected rows anyway).
-pub fn flush_buried(conn: &Connection) {
-    let mine: Vec<Statement> = GRAVEYARD.with(|g| {
-        let mut g = g.borrow_mut();
-        let (mine, rest): (Vec<_>, Vec<_>) = std::mem::take(&mut *g)
-            .into_iter()
-            .partition(|s| s.connection().is_some_and(|c| Connection::ptr_eq(&c, conn)));
-        *g = rest;
-        mine
-    });
-    for s in mine {
-        s.close();
+/// The error state of a statement as a mysqlnd `ErrorInfo`.
+fn stmt_error_info(st: &Statement) -> ErrorInfo {
+    let errno = st.errno();
+    ErrorInfo {
+        errno,
+        sqlstate: if errno == 0 {
+            String::new()
+        } else {
+            st.sqlstate()
+        },
+        error: st.error(),
+        list: st.error_list(),
     }
 }
 
-/// Closes the parked statements (request shutdown).
-pub fn clear_graveyard() {
-    let v = GRAVEYARD.with(|g| std::mem::take(&mut *g.borrow_mut()));
-    drop(v);
+/// Reports a saved statement error (`MYSQLI_REPORT_STMT_ERROR` on a copy).
+fn report_saved(vm: &mut Vm, e: &ErrorInfo) -> VmResult<()> {
+    flush_diag(vm)?;
+    if globals::report_mode() & crate::globals::REPORT_ERROR != 0 && e.errno != 0 {
+        crate::report::report_error(vm, e.sqlstate_or_null(), e.errno, &e.error)?;
+    }
+    Ok(())
+}
+
+/// `close_stmt_and_copy_errors`: closes the statement, then gives the
+/// connection the statement's error and its own affected rows back
+/// (closing resets both). Returns the statement's error.
+fn close_and_copy(st: &Statement, c: &Connection) -> ErrorInfo {
+    let e = stmt_error_info(st);
+    let affected = c.affected_rows();
+    st.close();
+    c.restore_error(e.clone());
+    c.set_affected_rows(affected);
+    e
 }
 
 fn wrap_stmt(
@@ -93,10 +95,12 @@ pub fn prepare(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let (o, b) = recv(vm, a)?;
     let (_, c) = fetch_link(vm, &o, Status::Valid)?;
     let q = a.str(b);
-    flush_buried(&c);
     let st = c.stmt_init();
-    if st.prepare(q.as_bytes()).is_err() {
-        bury(st);
+    if crate::report::live(vm, || st.prepare(q.as_bytes()))?.is_err() {
+        // mysql_stmt_close() clears the connection's errors: keep them
+        let saved = c.error_info();
+        st.close();
+        c.restore_error(saved);
         report_conn_error(vm, &c)?;
         return Ok(Value::Bool(false));
     }
@@ -133,7 +137,7 @@ pub fn construct(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         })),
     );
     if let Some(q) = opt_str(a, 1) {
-        if st.prepare(q.as_bytes()).is_err() {
+        if crate::report::live(vm, || st.prepare(q.as_bytes()))?.is_err() {
             report_stmt_error(vm, &st)?;
             return Ok(Value::Null);
         }
@@ -152,7 +156,7 @@ pub fn construct(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 pub fn stmt_prepare(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let (o, st, b) = stmt_of(vm, a, Status::Initialized)?;
     let q = a.str(b);
-    if st.prepare(q.as_bytes()).is_err() {
+    if crate::report::live(vm, || st.prepare(q.as_bytes()))?.is_err() {
         report_stmt_error(vm, &st)?;
         return Ok(Value::Bool(false));
     }
@@ -289,23 +293,15 @@ pub fn execute(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     Ok(Value::Bool(ret))
 }
 
-/// `close_stmt_and_copy_errors`: closing would reset the connection's
-/// error and affected rows, so the statement is parked and closed before
-/// the next command on the connection.
-fn finish_stmt(st: Statement) {
-    bury(st);
-}
-
 /// `mysqli_execute_query()`
 pub fn execute_query(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let (o, b) = recv(vm, a)?;
     let (_, c) = fetch_link(vm, &o, Status::Valid)?;
     let q = a.str(b);
-    flush_buried(&c);
     let st = c.stmt_init();
-    if st.prepare(q.as_bytes()).is_err() {
-        bury(st.clone());
-        report_stmt_error(vm, &st)?;
+    if crate::report::live(vm, || st.prepare(q.as_bytes()))?.is_err() {
+        let e = close_and_copy(&st, &c);
+        report_saved(vm, &e)?;
         return Ok(Value::Bool(false));
     }
     let query = index_query(q.as_bytes());
@@ -317,7 +313,7 @@ pub fn execute_query(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
                 return Err(t);
             }
             Ok(Some(false)) => {
-                finish_stmt(st);
+                close_and_copy(&st, &c);
                 flush_diag(vm)?;
                 return Ok(Value::Bool(false));
             }
@@ -325,16 +321,17 @@ pub fn execute_query(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         }
     }
     if !run_execute(vm, &st)? {
-        bury(st.clone());
-        report_stmt_error(vm, &st)?;
+        let status = st.server_status();
+        let e = close_and_copy(&st, &c);
+        report_saved(vm, &e)?;
         if globals::report_mode() & REPORT_INDEX != 0 {
-            report_index(vm, query.as_deref().unwrap_or_default(), st.server_status())?;
+            report_index(vm, query.as_deref().unwrap_or_default(), status)?;
         }
         return Ok(Value::Bool(false));
     }
     flush_diag(vm)?;
     if st.field_count() == 0 {
-        finish_stmt(st);
+        close_and_copy(&st, &c);
         return Ok(Value::Bool(true));
     }
     if globals::report_mode() & REPORT_INDEX != 0 {
@@ -342,12 +339,12 @@ pub fn execute_query(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     }
     let r = st.get_result();
     let Ok(Some(rs)) = r else {
-        bury(st.clone());
-        report_stmt_error(vm, &st)?;
+        let e = close_and_copy(&st, &c);
+        report_saved(vm, &e)?;
         return Ok(Value::Bool(false));
     };
+    close_and_copy(&st, &c);
     let v = new_result_object(vm, rs)?;
-    finish_stmt(st);
     flush_diag(vm)?;
     Ok(v)
 }

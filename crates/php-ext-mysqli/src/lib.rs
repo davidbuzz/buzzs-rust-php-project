@@ -348,7 +348,7 @@ fn get_sql_state(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 }
 
 fn request_shutdown(_vm: &mut Vm) {
-    stmt::clear_graveyard();
+    report::uninstall_sink();
 }
 
 #[allow(clippy::too_many_lines)]
@@ -682,6 +682,7 @@ impl Extension for Mysqli {
         }
         vm.module_info.push(("mysqlnd".to_string(), mysqlnd_info));
         m.on_request_startup(globals::request_startup);
+        m.on_request_startup(|_| report::install_sink());
         m.on_request_shutdown(request_shutdown);
     }
 }

@@ -6,8 +6,7 @@ use std::rc::Rc;
 
 use php_mysqlnd::consts::opt::{MYSQL_OPT_LOAD_DATA_LOCAL_DIR, MYSQL_OPT_LOCAL_INFILE};
 use php_mysqlnd::consts::{
-    CLIENT_MULTI_RESULTS, CLIENT_MULTI_STATEMENTS, OPTION_MULTI_STATEMENTS_OFF,
-    OPTION_MULTI_STATEMENTS_ON,
+    CLIENT_MULTI_RESULTS, CLIENT_MULTI_STATEMENTS, OPTION_MULTI_STATEMENTS_ON,
 };
 use php_mysqlnd::{pool, CloseType, Connection, OptionValue};
 use php_runtime::{ArrayKey, Value, ZArray, ZStr};
@@ -20,7 +19,7 @@ use crate::objects::{
     close_link, fetch_link, new_object, new_result_object, LinkObj, LinkRes, MyMysql, Status,
 };
 use crate::report::{
-    flush_diag, report_conn_error, report_index, throw_sql_exception, E_DEPRECATED,
+    flush_diag, live, report_conn_error, report_index, throw_sql_exception, E_DEPRECATED,
 };
 use crate::util::{
     affected, bstr, error_list, is_method, long_or_string, opt_int, opt_str, pos, recv,
@@ -54,7 +53,7 @@ fn ini_opt(vm: &Vm, name: &str) -> Option<Vec<u8>> {
 pub fn disable_mq(my: &Rc<RefCell<MyMysql>>, conn: &Connection) {
     let on = my.borrow().multi_query;
     if on {
-        let _ = conn.set_server_option(OPTION_MULTI_STATEMENTS_OFF);
+        conn.exit_multi_statements();
         my.borrow_mut().multi_query = false;
     }
 }
@@ -221,14 +220,15 @@ fn common_connect(vm: &mut Vm, a: &Args, is_real_connect: bool, in_ctor: bool) -
                 }
                 if let Some(c) = pool::pool_take(&key) {
                     globals::with(|g| g.num_inactive_persistent -= 1);
-                    let ok = c
-                        .change_user(
+                    let ok = live(vm, || {
+                        c.change_user(
                             user.as_deref().unwrap_or_default(),
                             passwd.as_deref().unwrap_or_default(),
                             dbname.as_deref(),
                             true,
                         )
-                        .is_ok();
+                        .is_ok()
+                    })?;
                     flush_diag(vm)?;
                     if ok {
                         globals::with(|g| g.num_active_persistent += 1);
@@ -276,15 +276,17 @@ fn common_connect(vm: &mut Vm, a: &Args, is_real_connect: bool, in_ctor: bool) -
         .as_deref()
         .map(|h| String::from_utf8_lossy(h).into_owned());
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    let r = conn.connect(
-        host_str.as_deref(),
-        user.as_deref(),
-        passwd.as_deref(),
-        dbname.as_deref(),
-        port as u32,
-        socket_str.as_deref(),
-        flags,
-    );
+    let r = live(vm, || {
+        conn.connect(
+            host_str.as_deref(),
+            user.as_deref(),
+            passwd.as_deref(),
+            dbname.as_deref(),
+            port as u32,
+            socket_str.as_deref(),
+            flags,
+        )
+    })?;
     if r.is_err() {
         let (errno, err, st) = (conn.errno(), conn.error(), conn.sqlstate());
         globals::set_connect_error(errno, &err);
@@ -496,12 +498,14 @@ pub fn change_user(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let user = a.str(b);
     let pw = a.str(b + 1);
     let db = opt_str(a, b + 2);
-    let r = c.change_user(
-        user.as_bytes(),
-        pw.as_bytes(),
-        db.as_ref().map(ZStr::as_bytes),
-        false,
-    );
+    let r = live(vm, || {
+        c.change_user(
+            user.as_bytes(),
+            pw.as_bytes(),
+            db.as_ref().map(ZStr::as_bytes),
+            false,
+        )
+    })?;
     report_conn_error(vm, &c)?;
     Ok(Value::Bool(r.is_ok()))
 }
@@ -674,7 +678,7 @@ pub fn kill(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     }
     let (_, c) = fetch_link(vm, &o, Status::Valid)?;
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    let r = c.kill(pid as u32);
+    let r = live(vm, || c.kill(pid as u32))?;
     bool_cmd(vm, &c, &r)
 }
 
@@ -687,7 +691,7 @@ pub fn more_results(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 /// `mysqli_next_result()`
 pub fn next_result(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let (_, c, _) = link(vm, a)?;
-    if let Ok(true) = c.next_result() {
+    if let Ok(true) = live(vm, || c.next_result())? {
         flush_diag(vm)?;
         Ok(Value::Bool(true))
     } else {
@@ -700,16 +704,17 @@ pub fn next_result(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 pub fn multi_query(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let (my, c, b) = link(vm, a)?;
     let q = a.str(b);
-    crate::stmt::flush_buried(&c);
     if !my.borrow().multi_query {
-        let _ = c.set_server_option(OPTION_MULTI_STATEMENTS_ON);
+        let _ = live(vm, || c.set_server_option(OPTION_MULTI_STATEMENTS_ON))?;
         my.borrow_mut().multi_query = true;
     }
-    if c.query(q.as_bytes()).is_err() {
-        // MYSQLI_DISABLE_MQ would clear the error (mysqlnd offers no way
-        // to restore it), so multi statements are switched off lazily by
-        // the next mysqli_query()/real_query().
-        report_conn_error(vm, &c)?;
+    if live(vm, || c.query(q.as_bytes()))?.is_err() {
+        // MYSQLI_DISABLE_MQ resets the error: report it first, then restore
+        let saved = c.error_info();
+        let reported = report_conn_error(vm, &c);
+        disable_mq(&my, &c);
+        c.restore_error(saved);
+        reported?;
         return Ok(Value::Bool(false));
     }
     flush_diag(vm)?;
@@ -783,7 +788,7 @@ pub fn options(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 /// `mysqli_ping()`
 pub fn ping(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let (_, c, _) = link(vm, a)?;
-    let r = c.ping();
+    let r = live(vm, || c.ping())?;
     report_conn_error(vm, &c)?;
     Ok(Value::Bool(r.is_ok()))
 }
@@ -804,10 +809,9 @@ pub fn query(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         ));
     }
     let (my, c) = fetch_link(vm, &o, Status::Valid)?;
-    crate::stmt::flush_buried(&c);
     disable_mq(&my, &c);
     if mode & ASYNC != 0 {
-        if c.send_query(q.as_bytes()).is_err() {
+        if live(vm, || c.send_query(q.as_bytes()))?.is_err() {
             report_conn_error(vm, &c)?;
             return Ok(Value::Bool(false));
         }
@@ -815,7 +819,7 @@ pub fn query(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         my.borrow_mut().async_result_fetch_type = mode & !ASYNC;
         return Ok(Value::Bool(true));
     }
-    if c.query(q.as_bytes()).is_err() {
+    if live(vm, || c.query(q.as_bytes()))?.is_err() {
         report_conn_error(vm, &c)?;
         return Ok(Value::Bool(false));
     }
@@ -826,11 +830,13 @@ pub fn query(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         }
         return Ok(Value::Bool(true));
     }
-    let r = if mode & !(ASYNC | STORE_RESULT_COPY_DATA) == USE_RESULT {
-        c.use_result()
-    } else {
-        c.store_result()
-    };
+    let r = live(vm, || {
+        if mode & !(ASYNC | STORE_RESULT_COPY_DATA) == USE_RESULT {
+            c.use_result()
+        } else {
+            c.store_result()
+        }
+    })?;
     finish_result(vm, &c, r, Some(q.as_bytes()))
 }
 
@@ -858,9 +864,8 @@ fn finish_result(
 pub fn real_query(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let (my, c, b) = link(vm, a)?;
     let q = a.str(b);
-    crate::stmt::flush_buried(&c);
     disable_mq(&my, &c);
-    if c.query(q.as_bytes()).is_err() {
+    if live(vm, || c.query(q.as_bytes()))?.is_err() {
         report_conn_error(vm, &c)?;
         return Ok(Value::Bool(false));
     }
@@ -874,7 +879,7 @@ pub fn real_query(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 /// `mysqli_reap_async_query()`
 pub fn reap_async_query(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let (my, c, _) = link(vm, a)?;
-    if c.reap_query().is_err() {
+    if live(vm, || c.reap_query())?.is_err() {
         report_conn_error(vm, &c)?;
         return Ok(Value::Bool(false));
     }
@@ -883,11 +888,11 @@ pub fn reap_async_query(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         return Ok(Value::Bool(true));
     }
     let mode = my.borrow().async_result_fetch_type;
-    let r = match mode {
+    let r = live(vm, || match mode {
         STORE_RESULT => c.store_result(),
         USE_RESULT => c.use_result(),
         _ => Ok(None),
-    };
+    })?;
     finish_result(vm, &c, r, None)
 }
 
@@ -902,14 +907,14 @@ pub fn store_result(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         )?;
     }
     let (_, c) = fetch_link(vm, &o, Status::Valid)?;
-    let r = c.store_result();
+    let r = live(vm, || c.store_result())?;
     finish_result(vm, &c, r, Some(b"from previous query"))
 }
 
 /// `mysqli_use_result()`
 pub fn use_result(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let (_, c, _) = link(vm, a)?;
-    let r = c.use_result();
+    let r = live(vm, || c.use_result())?;
     finish_result(vm, &c, r, Some(b"from previous query"))
 }
 
@@ -934,7 +939,7 @@ pub fn quote_string(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 pub fn select_db(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let (_, c, b) = link(vm, a)?;
     let db = a.str(b);
-    let r = c.select_db(db.as_bytes());
+    let r = live(vm, || c.select_db(db.as_bytes()))?;
     bool_cmd(vm, &c, &r)
 }
 
@@ -942,7 +947,7 @@ pub fn select_db(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 pub fn set_charset(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let (_, c, b) = link(vm, a)?;
     let cs = a.str(b);
-    let r = c.set_charset(&cs.to_string_lossy());
+    let r = live(vm, || c.set_charset(&cs.to_string_lossy()))?;
     bool_cmd(vm, &c, &r)
 }
 
@@ -970,7 +975,7 @@ pub fn ssl_set(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 /// `mysqli_stat()`
 pub fn stat(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let (_, c, _) = link(vm, a)?;
-    let r = c.statistics();
+    let r = live(vm, || c.statistics())?;
     flush_diag(vm)?;
     Ok(r.map_or(Value::Bool(false), |s| bstr(&s)))
 }
