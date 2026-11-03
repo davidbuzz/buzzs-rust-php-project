@@ -153,7 +153,7 @@ pub(crate) fn has_to_string(o: &Obj) -> bool {
         .contains_key(&ZStr::from("__tostring"))
 }
 
-fn owned(vm: &mut Vm, v: &Value) -> VmResult<Owned> {
+fn owned(vm: &mut Vm, v: &Value, flags: i64) -> VmResult<Owned> {
     Ok(match v.deref() {
         Value::Null => Owned::Null,
         Value::Bool(b) => Owned::Bool(b),
@@ -161,7 +161,8 @@ fn owned(vm: &mut Vm, v: &Value) -> VmResult<Owned> {
         Value::Float(f) => Owned::Float(f),
         Value::Str(z) => Owned::Str(z),
         Value::Object(o) => {
-            if has_to_string(&o) {
+            if has_to_string(&o) || flags == php_intl::collator::sort_flags::STRING {
+                // `zval_get_string()`: throws for objects without `__toString`.
                 let z = vm.value_to_string(&Value::Object(o))?;
                 Owned::Object(Some(z))
             } else {
@@ -204,7 +205,7 @@ fn sort_impl(vm: &mut Vm, a: &Args, renumber: bool, with_keys: bool) -> VmResult
         arr.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
     let mut ops = Vec::with_capacity(entries.len());
     for (_, v) in &entries {
-        ops.push(owned(vm, v)?);
+        ops.push(owned(vm, v, flags)?);
     }
     let views: Vec<SortValue<'_>> = ops.iter().map(view).collect();
     let r = core::with::<Collator, _>(&o, |c| {

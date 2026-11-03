@@ -275,8 +275,31 @@ fn lookup(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     finish(vm, a, r, Value::Null, Value::Null)
 }
 
+/// `icu::Locale(name).isBogus()`: `uloc_getName()` fails or the language
+/// field does not fit ICU's 12-byte buffer.
+fn is_bogus_locale(name: &[u8]) -> bool {
+    let name = String::from_utf8_lossy(name);
+    match php_intl::sys::loc::name(&name) {
+        Err(_) => true,
+        Ok(full) => full.split(['_', '-', '@', '.']).next().is_some_and(|l| l.len() >= 12),
+    }
+}
+
 fn accept_from_http(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     core::reset_global();
+    // The per-element checks of php-src, including the bogus-locale one.
+    if let Some(Value::Array(arr)) = a.opt(1) {
+        for v in arr.values() {
+            match v.deref() {
+                Value::Str(z) if !z.as_bytes().contains(&0) && z.len() <= php_intl::common::INTL_MAX_LOCALE_LEN => {
+                    if is_bogus_locale(z.as_bytes()) {
+                        return Err(core::value_error(vm, a, 2, "must only contain valid locales"));
+                    }
+                }
+                _ => break,
+            }
+        }
+    }
     let avail = a.opt(1).map(|v| match v {
         Value::Array(arr) => entries(&arr),
         _ => Vec::new(),
