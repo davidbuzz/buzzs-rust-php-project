@@ -485,7 +485,7 @@ impl Vm {
     }
 
     fn fatal_at(&mut self, msg: &str, line: u32) -> Throw {
-        let file = self.frame().code.filename.clone();
+        let (file, _) = self.current_location();
         self.report_fatal(msg, &file, line);
         Throw::Fatal
     }
@@ -907,6 +907,21 @@ fn build_class(
         }
     }
     let mut all_props: Vec<(crate::class::PropDecl, ZStr)> = Vec::new();
+    if decl.kind == ClassKind::Enum {
+        let mk = |n: &str, ty: crate::types::TypeDecl| crate::class::PropDecl {
+            name: ZStr::from(n),
+            default: None,
+            flags: flags::PUBLIC | flags::READONLY,
+            ty: Some(ty),
+            doc_comment: None,
+            attributes: Vec::new(),
+            line: decl.line_start,
+        };
+        all_props.push((mk("name", crate::types::TypeDecl::simple(crate::types::mask::STRING)), name.clone()));
+        if let Some(b) = decl.backing {
+            all_props.push((mk("value", crate::types::TypeDecl::simple(b)), name.clone()));
+        }
+    }
     for t in &traits {
         if let Some(td) = &t.decl {
             for p in &td.props {
@@ -1155,6 +1170,39 @@ fn build_class(
     }
     for (lc, m) in own {
         add_method(lc, m, &mut methods, &mut method_order);
+    }
+    if decl.kind == ClassKind::Enum {
+        for (i, (sig, fl, h)) in crate::builtins::enum_methods().into_iter().enumerate() {
+            if i > 0 && decl.backing.is_none() {
+                break;
+            }
+            let s = crate::builtins::sig::parse_sig(sig);
+            let lc = ZStr::from(s.name.to_ascii_lowercase());
+            if methods.contains_key(&lc) {
+                continue;
+            }
+            let b = crate::func::Builtin {
+                name: ZStr::from(s.name.as_str()),
+                params: s.params,
+                defaults: s.defaults,
+                required: s.required,
+                return_type: s.ret,
+                flags: fl,
+                handler: h,
+            };
+            add_method(
+                lc,
+                Rc::new(Method {
+                    name: ZStr::from(s.name.as_str()),
+                    func: Func::Builtin(Rc::new(b)),
+                    flags: fl,
+                    scope: weak.clone(),
+                    proto_scope: weak.clone(),
+                }),
+                &mut methods,
+                &mut method_order,
+            );
+        }
     }
     for (lc, m) in trait_methods {
         if methods.contains_key(&lc) {

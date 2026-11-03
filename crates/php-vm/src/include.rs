@@ -118,7 +118,7 @@ impl Vm {
                 self.frames.truncate(saved.max(self.frames.len().min(saved)));
                 if let Err(e) = r {
                     match e {
-                        Throw::Fatal | Throw::Exit => return Err(e),
+                        Throw::Fatal | Throw::Exit | Throw::FiberSuspend => return Err(e),
                         Throw::Exception(_) => {}
                     }
                 }
@@ -150,15 +150,16 @@ impl Vm {
             Ok(CompileOutcome::Fatal) => return Err(Throw::Fatal),
             Err(t) => return self.handle_top_throw(t),
         };
-        if let Err(t) = self.declare_hoisted(&unit) {
-            return self.handle_top_throw(t);
-        }
         let globals = self.globals.clone();
         let map = self.cv_map_for(&unit.main.code, &globals);
         let mut f = Frame::with_vars(unit.main.code.clone(), FrameKind::Main, globals, Some(map));
         f.ufunc = None;
         self.frames.push(f);
         let base = self.frames.len() - 1;
+        if let Err(t) = self.declare_hoisted(&unit) {
+            self.frames.truncate(base);
+            return self.handle_top_throw(t);
+        }
         let r = self.execute(base);
         self.frames.truncate(base);
         match r {

@@ -22,6 +22,7 @@ mod enums;
 mod errors;
 mod exceptions;
 mod exec;
+mod fiber;
 pub mod func;
 mod generator;
 mod include;
@@ -131,7 +132,8 @@ impl Vm {
             once_flags: HashSet::new(),
             tick_functions: Vec::new(),
             headers_sent: false,
-            fiber_depth: 0,
+            fibers: Vec::new(),
+            pending_call_dst: None,
             empty_code,
             empty_vars: Rc::new(RefCell::new(vm::VarStore::default())),
             prop_guards: HashSet::new(),
@@ -254,7 +256,7 @@ impl Vm {
                     }
                 }
                 Err(Throw::Exit) => break,
-                Err(Throw::Fatal) => break,
+                Err(Throw::Fatal | Throw::FiberSuspend) => break,
             }
             self.frames.clear();
         }

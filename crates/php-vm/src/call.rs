@@ -582,6 +582,7 @@ impl Vm {
                 Ok(true)
             }
             Func::Builtin(b) => {
+                self.pending_call_dst = dst;
                 let v = self.call_builtin(&b, call, strict)?;
                 if let Some(d) = dst {
                     self.set_tmp(d, v);

@@ -1521,13 +1521,10 @@ impl Compiler {
                 let check = self.emit(Op::AssertCheck { dst: t, skip: 0 });
                 self.emit_init_fcall(n);
                 self.compile_args(args)?;
-                if args.args.len() == 1 {
-                    if let ArgKind::Positional(ex) = &args.args[0].kind {
-                        let text = crate::compiler::decl::export_expr_text(&self.source, ex);
-                        let msg = format!("assert({text})");
-                        let l = self.lit(Value::Str(ZStr::from(msg)));
-                        self.emit(Op::Send { src: ArgSrc::Val(l) });
-                    }
+                if args.args.len() == 1 && matches!(args.args[0].kind, ArgKind::Positional(_)) {
+                    let msg = php_parser::export::assert_message(&args.args[0]);
+                    let l = self.lit(Value::Str(ZStr::from(msg)));
+                    self.emit(Op::Send { src: ArgSrc::Val(l) });
                 }
                 self.f().line = line;
                 self.emit(Op::DoCall { dst: Some(t) });

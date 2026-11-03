@@ -546,6 +546,114 @@ fn debug_print_backtrace(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     Ok(Value::Null)
 }
 
+fn assert_fn(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let v = a.at(0);
+    if vm.to_bool(&v)? {
+        return Ok(Value::Bool(true));
+    }
+    let desc = a.get(1).unwrap_or(Value::Null);
+    if let Value::Object(o) = &desc {
+        if vm.instance_of(o, b"throwable") {
+            return Err(Throw::Exception(o.clone()));
+        }
+    }
+    let cb = vm.ini.get("assert.callback").map(<[u8]>::to_vec).unwrap_or_default();
+    if !cb.is_empty() {
+        let cbv = sv(cb);
+        let (file, line) = vm.current_location();
+        let mut args = vec![Value::Str(file), Value::Int(i64::from(line)), Value::Null];
+        if !desc.is_null() {
+            args.push(desc.clone());
+        }
+        vm.call_value(&cbv, args)?;
+    }
+    let msg = if desc.is_null() { None } else { Some(vm.to_zstr(&desc)?) };
+    if vm.ini.get_bool("assert.exception") {
+        let m = msg.map(|m| m.to_string_lossy()).unwrap_or_default();
+        return Err(vm.make_throw("AssertionError", &m));
+    }
+    if vm.ini.get_bool("assert.warning") {
+        let m = msg.map_or_else(|| "Assertion".to_string(), |m| format!("{}", m.to_string_lossy()));
+        vm.warning(&format!("assert(): {m} failed"))?;
+    }
+    if vm.ini.get_bool("assert.bail") {
+        vm.exit_status = 255;
+        return Err(Throw::Exit);
+    }
+    Ok(Value::Bool(false))
+}
+
+fn class_alias(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let orig = s(a, 0);
+    let alias = s(a, 1);
+    let autoload = !a.has(2) || b(a, 2);
+    let c = if autoload { vm.lookup_class(&orig)? } else { vm.find_class(orig.as_bytes()) };
+    let Some(c) = c else {
+        vm.warning(&format!("Class \"{}\" not found", orig.to_string_lossy()))?;
+        return Ok(Value::Bool(false));
+    };
+    if c.flags & cflags::INTERNAL != 0 {
+        return Err(super::util::value_error(vm, a, 1, "must be a user-defined class name, internal class name given"));
+    }
+    let an = alias.as_bytes().strip_prefix(b"\\").unwrap_or(alias.as_bytes());
+    let lc = ZStr::from(an.to_ascii_lowercase());
+    if vm.classes.contains_key(&lc) {
+        let existing = vm.classes[&lc].clone();
+        let kind = if existing.is_interface() { "interface" } else if existing.is_trait() { "trait" } else if existing.is_enum() { "enum" } else { "class" };
+        vm.warning(&format!(
+            "Cannot declare {kind} {}, because the name is already in use",
+            String::from_utf8_lossy(an)
+        ))?;
+        return Ok(Value::Bool(false));
+    }
+    if matches!(lc.as_bytes(), b"self" | b"parent" | b"static" | b"int" | b"float" | b"bool" | b"string" | b"true" | b"false" | b"null" | b"void" | b"never" | b"iterable" | b"object" | b"mixed" | b"array" | b"callable") {
+        return Err(vm.fatal(&format!("Cannot use '{}' as class name as it is reserved", String::from_utf8_lossy(an))));
+    }
+    vm.classes.insert(lc, c);
+    Ok(Value::Bool(true))
+}
+
+fn getcwd(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
+    Ok(match std::env::current_dir() {
+        Ok(p) => {
+            use std::os::unix::ffi::OsStrExt;
+            sv(p.as_os_str().as_bytes())
+        }
+        Err(_) => Value::Bool(false),
+    })
+}
+
+fn chdir(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let d = s(a, 0);
+    use std::os::unix::ffi::OsStrExt;
+    match std::env::set_current_dir(std::ffi::OsStr::from_bytes(d.as_bytes())) {
+        Ok(()) => Ok(Value::Bool(true)),
+        Err(e) => {
+            vm.docref(2, &format!("{} (errno {})", e.kind(), e.raw_os_error().unwrap_or(0)))?;
+            Ok(Value::Bool(false))
+        }
+    }
+}
+
+fn clone_fn(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let v = a.at(0);
+    let r = vm.clone_value(v)?;
+    if let (Value::Object(o), Some(Value::Array(props))) = (&r, a.get(1)) {
+        for (k, pv) in props.iter() {
+            let name = match k {
+                ArrayKey::Str(s) => s.clone(),
+                ArrayKey::Int(i) => ZStr::from(i.to_string()),
+            };
+            let d = crate::object::data(o);
+            d.flags.set(d.flags.get() | crate::object::oflags::CLONING);
+            let res = vm.write_property(o, &name, pv.deref());
+            d.flags.set(d.flags.get() & !crate::object::oflags::CLONING);
+            res?;
+        }
+    }
+    Ok(r)
+}
+
 fn ret_zero(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
     Ok(Value::Int(0))
 }
@@ -1157,6 +1265,11 @@ pub(crate) fn enum_methods() -> [(&'static str, u32, crate::func::BuiltinFn); 3]
 #[allow(clippy::too_many_lines)]
 pub(crate) fn register(vm: &mut Vm) {
     reg(vm, "zend_version(): string", zend_version);
+    reg(vm, "assert(mixed $assertion, Throwable|string|null $description = null): bool", assert_fn);
+    reg(vm, "class_alias(string $class, string $alias, bool $autoload = true): bool", class_alias);
+    reg(vm, "getcwd(): string|false", getcwd);
+    reg(vm, "chdir(string $directory): bool", chdir);
+    reg(vm, "clone(object $object, array $withProperties = []): object", clone_fn);
     reg(vm, "func_num_args(): int", func_num_args);
     reg(vm, "func_get_arg(int $position): mixed", func_get_arg);
     reg(vm, "func_get_args(): array", func_get_args);

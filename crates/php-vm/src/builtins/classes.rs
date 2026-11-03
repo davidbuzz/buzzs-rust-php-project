@@ -117,11 +117,13 @@ pub(crate) fn register(vm: &mut Vm) {
         ("UnderflowException", "RuntimeException"),
         ("UnexpectedValueException", "RuntimeException"),
         ("JsonException", "Exception"),
+        ("AssertionError", "Error"),
     ] {
         ClassBuilder::new(name).extends(vm, parent).register(vm);
     }
     crate::closure::register(vm);
     crate::generator::register(vm);
+    crate::fiber::register(vm);
     ClassBuilder::new("Attribute")
         .flags(cflags::FINAL)
         .prop("flags", PUB, Some("int"), None)

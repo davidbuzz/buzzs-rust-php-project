@@ -590,6 +590,17 @@ fn base64_decode(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     Ok(opt_bytes(php_stdstr::base64::base64_decode(s(a, 0).as_bytes(), b(a, 1))))
 }
 
+fn dirname(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let lv = if a.has(1) { i(a, 1) } else { 1 };
+    let r = transform::dirname(s(a, 0).as_bytes(), lv);
+    Ok(bytes(vm.std(r)?))
+}
+
+fn basename(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let suf = if a.has(1) { s(a, 1) } else { ZStr::empty() };
+    Ok(bytes(transform::basename(s(a, 0).as_bytes(), suf.as_bytes())))
+}
+
 fn implode_alias_array(a: &Args) -> ZArray {
     arr(a, 0)
 }
@@ -673,6 +684,8 @@ pub(crate) fn register(vm: &mut Vm) {
     reg(vm, "uniqid(string $prefix = \"\", bool $more_entropy = false): string", uniqid);
     reg(vm, "str_word_count(string $string, int $format = 0, ?string $characters = null): array|int", str_word_count);
     reg(vm, "nl_langinfo(int $item): string|false", nl_langinfo);
+    reg(vm, "dirname(string $path, int $levels = 1): string", dirname);
+    reg(vm, "basename(string $path, string $suffix = \"\"): string", basename);
     reg(vm, "base64_encode(string $string): string", base64_encode);
     reg(vm, "base64_decode(string $string, bool $strict = false): string|false", base64_decode);
     for (n, v) in [("STR_PAD_LEFT", 0), ("STR_PAD_RIGHT", 1), ("STR_PAD_BOTH", 2), ("ENT_QUOTES", 3), ("ENT_COMPAT", 2), ("ENT_NOQUOTES", 0), ("ENT_HTML401", 0), ("ENT_SUBSTITUTE", 8), ("ENT_IGNORE", 4), ("ENT_HTML5", 48), ("ENT_XML1", 16), ("ENT_XHTML", 32), ("ENT_DISALLOWED", 128)] {

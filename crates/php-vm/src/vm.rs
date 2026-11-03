@@ -21,6 +21,8 @@ pub enum Throw {
     Exit,
     /// A fatal error was reported: bail out.
     Fatal,
+    /// The running fiber suspended (unwinds to `Fiber::start`/`resume`).
+    FiberSuspend,
 }
 
 /// Result type of VM operations.
@@ -440,8 +442,10 @@ pub struct Vm {
     pub tick_functions: Vec<Value>,
     /// Whether output has been flushed to the SAPI at least once.
     pub headers_sent: bool,
-    /// Fiber support placeholder.
-    pub fiber_depth: u32,
+    /// Running fibers (innermost last).
+    pub fibers: Vec<Obj>,
+    /// Destination temporary of the builtin call in progress (fibers).
+    pub pending_call_dst: Option<u32>,
     /// Shared empty code for builtin frames.
     pub empty_code: Rc<OpArray>,
     /// Shared empty variable store for builtin frames.
