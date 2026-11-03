@@ -5,7 +5,7 @@ use crate::class::cflags;
 use crate::func::flags;
 use crate::object;
 use crate::vm::{Throw, Vm, VmResult};
-use php_runtime::serialize::SerializedObject;
+use php_runtime::serialize::{EnumCaseLookup, SerializedObject};
 use php_runtime::{
     ArrayKey, BinaryOp, CastTarget, ErrorLevel, HashTable, Obj, ObjectDump, ObjectKind,
     PropertyPurpose, PropertySlot, RtResult, RuntimeContext, RuntimeError, Value, ZArray, ZStr,
@@ -356,6 +356,11 @@ impl RuntimeContext for Vm {
             .map_err(|t| self.to_rt(t))
     }
 
+    fn unserialize_enum_case(&mut self, class: &ZStr, case: &ZStr) -> RtResult<EnumCaseLookup> {
+        self.unserialize_enum_case_vm(class, case)
+            .map_err(|t| self.to_rt(t))
+    }
+
     fn unserialize_custom(&mut self, class: &ZStr, data: &[u8]) -> RtResult<Value> {
         self.unserialize_custom_vm(class, data)
             .map_err(|t| self.to_rt(t))
@@ -631,6 +636,25 @@ impl Vm {
             ));
         }
         self.enum_case(&cls, case)
+    }
+
+    /// `E:` resolution for php-runtime's parser (session, SPL legacy
+    /// formats): each failure is reported by the parser with php-src's
+    /// warning and offset instead of an exception.
+    fn unserialize_enum_case_vm(&mut self, class: &ZStr, case: &ZStr) -> VmResult<EnumCaseLookup> {
+        let Some(cls) = self.lookup_class(class)? else {
+            return Ok(EnumCaseLookup::ClassNotFound);
+        };
+        if !cls.is_enum() {
+            return Ok(EnumCaseLookup::NotAnEnum);
+        }
+        let Some(c) = cls.find_const(case.as_bytes()).cloned() else {
+            return Ok(EnumCaseLookup::UndefinedCase);
+        };
+        if !c.is_case {
+            return Ok(EnumCaseLookup::NotACase);
+        }
+        Ok(EnumCaseLookup::Found(self.enum_case(&cls, case)?))
     }
 
     fn unserialize_custom_vm(&mut self, class: &ZStr, data: &[u8]) -> VmResult<Value> {

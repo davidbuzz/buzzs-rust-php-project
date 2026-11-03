@@ -88,10 +88,10 @@ impl Vm {
         self.docref_bytes(level, msg.as_bytes())
     }
 
-    /// Binary-safe [`Vm::docref`].
-    pub(crate) fn docref_bytes(&mut self, level: i64, msg: &[u8]) -> VmResult<()> {
-        let name = self
-            .frames
+    /// The function `php_error_docref()` names (`get_active_function_name()`):
+    /// the innermost builtin frame, as `Class::method` for methods.
+    pub(crate) fn docref_function_name(&self) -> Option<String> {
+        self.frames
             .iter()
             .rev()
             .find(|f| f.kind == FrameKind::Builtin)
@@ -103,8 +103,12 @@ impl Vm {
                     }
                     _ => n.to_string_lossy(),
                 })
-            });
-        match name {
+            })
+    }
+
+    /// Binary-safe [`Vm::docref`].
+    pub(crate) fn docref_bytes(&mut self, level: i64, msg: &[u8]) -> VmResult<()> {
+        match self.docref_function_name() {
             Some(n) => {
                 let mut m = format!("{n}(): ").into_bytes();
                 m.extend_from_slice(msg);

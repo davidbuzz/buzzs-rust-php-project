@@ -22,6 +22,7 @@ use crate::vm::{Vm, VmResult};
 use php_runtime::dump::unmangle_property_name;
 use php_runtime::float::zend_gcvt;
 use php_runtime::numeric::{handle_numeric_str, strtod};
+use php_runtime::serialize::{AllowedClasses, UnserializeOptions};
 use php_runtime::{ArrayKey, HashTable, Obj, PhpRef, PropertyPurpose, Value, ZArray, ZStr};
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
@@ -1635,6 +1636,47 @@ fn unser_init(vm: &Vm) -> (UnserRc, bool) {
             (u.1.clone().unwrap_or_else(fresh), false)
         }
     })
+}
+
+impl Vm {
+    /// The `var_hash` options a `php_var_unserialize()` made by native code
+    /// (a native `Serializable::unserialize()` such as `ArrayObject`'s legacy
+    /// format, `session_decode()`) runs with: those of the active
+    /// `unserialize()` call (`allowed_classes`, `max_depth`, and the depth
+    /// reached so far), or the `unserialize_max_depth` ini setting outside
+    /// one (or under the serialize lock, where a fresh context is used).
+    /// Diagnostics name the active builtin function, like
+    /// `php_error_docref()`.
+    #[must_use]
+    pub fn unserialize_options_in_effect(&self) -> UnserializeOptions {
+        let function: std::borrow::Cow<'static, str> =
+            std::borrow::Cow::Owned(self.docref_function_name().unwrap_or_default());
+        let active = if is_locked() {
+            None
+        } else {
+            UNSER.with(|u| {
+                let u = u.borrow();
+                let d = u.1.as_ref().filter(|_| u.0 > 0)?.borrow();
+                Some(UnserializeOptions {
+                    max_depth: UnserializeOptions::max_depth_from_ini(d.max_depth),
+                    allowed_classes: d
+                        .allowed
+                        .clone()
+                        .map_or(AllowedClasses::All, AllowedClasses::Only),
+                    depth: usize::try_from(d.cur_depth).unwrap_or(0),
+                    function: function.clone(),
+                    ..UnserializeOptions::default()
+                })
+            })
+        };
+        active.unwrap_or_else(|| UnserializeOptions {
+            max_depth: UnserializeOptions::max_depth_from_ini(
+                self.ini_long("unserialize_max_depth"),
+            ),
+            function,
+            ..UnserializeOptions::default()
+        })
+    }
 }
 
 /// `php_var_unserialize_destroy()`: the outermost call runs the delayed

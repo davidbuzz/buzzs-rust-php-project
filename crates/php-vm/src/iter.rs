@@ -56,7 +56,14 @@ impl Vm {
                     let name = pi.name.clone();
                     match self.lookup_prop(&cls, &name, scope.as_ref()) {
                         PropLookup::Found(found) if found.slot == pi.slot => {
-                            out.push((Value::Str(name.clone()), name, None));
+                            // A parent's private property seen from the
+                            // parent's scope is not in the object's own
+                            // property map: record its declaring class so
+                            // the fetch does not look it up there.
+                            let private_of = (pi.visibility() == flags::PRIVATE
+                                && !pi.class.eq_ignore_ascii_case(cls.name.as_bytes()))
+                            .then(|| pi.class.clone());
+                            out.push((Value::Str(name.clone()), name, private_of));
                         }
                         _ => {
                             // Private props of other classes / inaccessible.
