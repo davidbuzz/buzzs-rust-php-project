@@ -49,6 +49,9 @@ fn mb_parse_str(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
                 }
             }
         }
+        // val_list + len_list of the C implementation.
+        let seps_count = res.iter().filter(|b| seps.contains(b)).count();
+        crate::mem::check(vm, crate::mem::zstr(res.len()), (seps_count + 1) * 2 * 16)?;
         if i64::try_from(list.len()).unwrap_or(i64::MAX) > max_vars.saturating_mul(2) {
             vm.php_warning(&format!(
                 "Input variables exceeded {max_vars}. To increase the limit change max_input_vars in php.ini."
@@ -114,6 +117,10 @@ fn register_all(
         };
         register_variable_ex(&name, Value::Str(ZStr::new(val)), track, &opts, vm)
             .map_err(|e| state::rt_throw(vm, e))?;
+        if track.len().is_power_of_two() && track.len() >= 1024 {
+            let size = crate::mem::value_size(&Value::Array(track.clone()));
+            crate::mem::check(vm, list.len() * 16, size)?;
+        }
     }
     Ok(Some(from_enc))
 }

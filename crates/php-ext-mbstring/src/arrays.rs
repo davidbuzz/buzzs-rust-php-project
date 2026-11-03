@@ -10,6 +10,7 @@ use php_vm::ext::{Args, ModuleBuilder, VmResult};
 use php_vm::Vm;
 
 use crate::funcs::OwnedList;
+use crate::mem;
 use crate::state::{self, bytes, call, opt_str};
 
 /// Nesting limit standing in for `mb_check_stack_limit()`.
@@ -119,13 +120,14 @@ fn mb_convert_encoding(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
                 guard: Guard::default(),
             };
             let t = c.array(vm, &arr)?;
-            Ok(t.map_or(Value::Null, |t| Value::Array(ZArray::from_table(t))))
+            let v = t.map_or(Value::Null, |t| Value::Array(ZArray::from_table(t)));
+            mem::result(vm, mem::value_size(&Value::Array(arr)), v)
         }
         other => {
             let s = vm.value_to_string(&other)?;
             let r = state::with(|st| st.convert_encoding_value(s.as_bytes(), to_enc, &from_list));
             state::flush_diagnostics(vm)?;
-            Ok(r.map_or(Value::Bool(false), bytes))
+            mem::result(vm, mem::zstr(s.as_bytes().len()), r.map_or(Value::Bool(false), bytes))
         }
     }
 }
@@ -232,10 +234,35 @@ fn object_values(o: &php_runtime::Obj) -> Vec<Value> {
     vals
 }
 
+/// Why a conversion stopped (`mb_recursive_convert_variable` returning
+/// `true`).
+enum Stop {
+    /// Recursion detected (or an exception is pending).
+    Recursion,
+}
+
+/// Depth standing in for `mb_check_stack_limit()`.
+const STACK_DEPTH: usize = 10_000;
+
+fn zval_type_name(v: &Value) -> &'static str {
+    match v {
+        Value::Null => "null",
+        Value::Bool(_) => "bool",
+        Value::Int(_) => "int",
+        Value::Float(_) => "float",
+        Value::Resource(_) => "resource",
+        _ => "mixed",
+    }
+}
+
 struct VarConverter {
     from: &'static Encoding,
     to: &'static Encoding,
-    guard: Guard,
+    /// Arrays being walked (by identity).
+    arrays: Vec<usize>,
+    /// References being walked.
+    refs: Vec<php_runtime::PhpRef>,
+    depth: usize,
 }
 
 impl VarConverter {
@@ -243,59 +270,102 @@ impl VarConverter {
         bytes(state::with(|st: &mut MbState| st.convert_ex(s, self.to, self.from)))
     }
 
-    /// `mb_recursive_convert_variable` on a value: returns the converted
-    /// value (references inside are updated in place); `None` means
-    /// recursion was detected.
-    fn value(&mut self, vm: &mut Vm, arg_num: usize, v: &Value) -> VmResult<Option<Value>> {
-        if let Value::Reference(r) = v {
+    /// Converts one slot in place. A slot holding a reference to a string
+    /// is replaced by the converted string (as PHP does); references to
+    /// arrays and objects are converted through the reference.
+    fn slot(&mut self, vm: &mut Vm, arg_num: usize, slot: &mut Value) -> VmResult<Result<(), Stop>> {
+        if let Value::Reference(r) = slot {
+            let r = r.clone();
+            if self.refs.iter().any(|x| php_runtime::PhpRef::ptr_eq(x, &r)) {
+                return Ok(Err(Stop::Recursion));
+            }
             let inner = r.get();
-            let Some(nv) = self.value(vm, arg_num, &inner)? else {
-                return Ok(None);
-            };
-            r.set(nv);
-            return Ok(Some(v.clone()));
+            if let Value::Str(s) = &inner {
+                *slot = self.string(s.as_bytes());
+                return Ok(Ok(()));
+            }
+            self.refs.push(r.clone());
+            let res = self.value(vm, arg_num, inner)?;
+            self.refs.pop();
+            return Ok(match res {
+                Ok(nv) => {
+                    r.set(nv);
+                    Ok(())
+                }
+                Err(e) => Err(e),
+            });
+        }
+        let inner = std::mem::take(slot);
+        let res = self.value(vm, arg_num, inner)?;
+        Ok(match res {
+            Ok(nv) => {
+                *slot = nv;
+                Ok(())
+            }
+            Err(e) => Err(e),
+        })
+    }
+
+    /// Converts a dereferenced value.
+    fn value(&mut self, vm: &mut Vm, arg_num: usize, v: Value) -> VmResult<Result<Value, Stop>> {
+        self.depth += 1;
+        let r = self.value_inner(vm, arg_num, v);
+        self.depth -= 1;
+        r
+    }
+
+    fn value_inner(&mut self, vm: &mut Vm, arg_num: usize, v: Value) -> VmResult<Result<Value, Stop>> {
+        if self.depth > STACK_DEPTH {
+            return Err(stack_limit_error(vm));
         }
         match v {
-            Value::Str(s) => Ok(Some(self.string(s.as_bytes()))),
-            Value::Array(arr) => {
-                if !self.guard.enter(arr.addr()) {
-                    return Ok(None);
+            Value::Str(s) => Ok(Ok(self.string(s.as_bytes()))),
+            Value::Array(mut arr) => {
+                let addr = arr.addr();
+                if self.arrays.contains(&addr) {
+                    return Ok(Err(Stop::Recursion));
                 }
-                let mut out = arr.clone();
-                let t = out.make_mut();
+                self.arrays.push(addr);
+                let t = arr.make_mut();
                 let keys: Vec<ArrayKey> = t.keys().cloned().collect();
                 for k in keys {
-                    let Some(e) = t.get(&k).cloned() else {
+                    let Some(mut e) = t.get_mut(&k).map(std::mem::take) else {
                         continue;
                     };
-                    let Some(nv) = self.value(vm, arg_num, &e)? else {
-                        return Ok(None);
-                    };
-                    if let Some(slot) = t.get_mut(&k) {
-                        *slot = nv;
+                    let res = self.slot(vm, arg_num, &mut e);
+                    if let Some(s) = t.get_mut(&k) {
+                        *s = e;
+                    }
+                    if res?.is_err() {
+                        self.arrays.pop();
+                        return Ok(Err(Stop::Recursion));
                     }
                 }
-                self.guard.leave();
-                Ok(Some(Value::Array(out)))
+                self.arrays.pop();
+                Ok(Ok(Value::Array(arr)))
             }
             Value::Object(o) => {
                 vm.php_deprecated(&format!(
                     "Passing an object for argument #{arg_num} $vars to mb_convert_variables() is deprecated, call get_object_vars() first instead"
                 ))?;
-                if !self.guard.enter(o.handle() as usize | (1 << 62)) {
-                    return Ok(None);
+                let addr = o.handle() as usize | (1 << 62);
+                if self.arrays.contains(&addr) {
+                    return Ok(Err(Stop::Recursion));
                 }
-                let d = php_vm::object::data(o);
+                self.arrays.push(addr);
+                let d = php_vm::object::data(&o);
                 let n = d.slots.borrow().len();
                 for i in 0..n {
-                    let Some(e) = d.slots.borrow().get(i).cloned().flatten() else {
+                    let Some(mut e) = d.slots.borrow_mut().get_mut(i).and_then(Option::take) else {
                         continue;
                     };
-                    let Some(nv) = self.value(vm, arg_num, &e)? else {
-                        return Ok(None);
-                    };
-                    if let Some(slot) = d.slots.borrow_mut().get_mut(i) {
-                        *slot = Some(nv);
+                    let res = self.slot(vm, arg_num, &mut e);
+                    if let Some(s) = d.slots.borrow_mut().get_mut(i) {
+                        *s = Some(e);
+                    }
+                    if res?.is_err() {
+                        self.arrays.pop();
+                        return Ok(Err(Stop::Recursion));
                     }
                 }
                 let keys: Vec<ArrayKey> = d
@@ -305,25 +375,49 @@ impl VarConverter {
                     .map(|t| t.keys().cloned().collect())
                     .unwrap_or_default();
                 for k in keys {
-                    let Some(e) = d.dynamic.borrow().as_ref().and_then(|t| t.get(&k).cloned())
+                    let Some(mut e) = d
+                        .dynamic
+                        .borrow_mut()
+                        .as_mut()
+                        .and_then(|t| t.get_mut(&k).map(std::mem::take))
                     else {
                         continue;
                     };
-                    let Some(nv) = self.value(vm, arg_num, &e)? else {
-                        return Ok(None);
-                    };
+                    let res = self.slot(vm, arg_num, &mut e);
                     if let Some(t) = d.dynamic.borrow_mut().as_mut() {
-                        if let Some(slot) = t.get_mut(&k) {
-                            *slot = nv;
+                        if let Some(s) = t.get_mut(&k) {
+                            *s = e;
                         }
                     }
+                    if res?.is_err() {
+                        self.arrays.pop();
+                        return Ok(Err(Stop::Recursion));
+                    }
                 }
-                self.guard.leave();
-                Ok(Some(v.clone()))
+                self.arrays.pop();
+                Ok(Ok(Value::Object(o)))
             }
-            other => Ok(Some(other.clone())),
+            other => {
+                vm.php_warning(&format!(
+                    "Argument #{arg_num} must be of type string|array|object or only contain entries of type string|array|object, {} given",
+                    zval_type_name(&other)
+                ))?;
+                Ok(Ok(other))
+            }
         }
     }
+}
+
+/// The `Error` `zend_call_stack_size_error()` throws.
+fn stack_limit_error(vm: &mut Vm) -> php_vm::Throw {
+    let size = vm.ini_long("zend.max_allowed_stack_size").max(0)
+        - vm.ini_long("zend.reserved_stack_size").max(0);
+    vm.throw(
+        "Error",
+        &format!(
+            "Maximum call stack size of {size} bytes (zend.max_allowed_stack_size - zend.reserved_stack_size) reached. Infinite recursion?"
+        ),
+    )
 }
 
 fn mb_convert_variables(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -367,19 +461,28 @@ fn mb_convert_variables(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let mut conv = VarConverter {
         from: from_enc,
         to: to_enc,
-        guard: Guard::default(),
+        arrays: Vec::new(),
+        refs: Vec::new(),
+        depth: 0,
     };
     for (i, v) in vars.iter().enumerate() {
-        let target = match v {
-            Value::Reference(r) => r.get(),
-            other => other.clone(),
+        let Value::Reference(r) = v else {
+            continue;
         };
-        let Some(nv) = conv.value(vm, i + 3, &target)? else {
-            vm.php_warning("Cannot handle recursive references")?;
-            return Ok(Value::Bool(false));
-        };
-        if let Value::Reference(r) = v {
-            r.set(nv);
+        conv.refs.push(r.clone());
+        let old = r.get();
+        let live = mem::value_size(&old);
+        let res = conv.value(vm, i + 3, old)?;
+        conv.refs.pop();
+        match res {
+            Ok(nv) => {
+                mem::check(vm, live, mem::value_size(&nv))?;
+                r.set(nv);
+            }
+            Err(Stop::Recursion) => {
+                vm.php_warning("Cannot handle recursive references")?;
+                return Ok(Value::Bool(false));
+            }
         }
     }
     Ok(Value::from(from_enc.name))

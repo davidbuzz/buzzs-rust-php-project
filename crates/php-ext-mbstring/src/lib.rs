@@ -14,6 +14,7 @@ mod funcs;
 mod gpc;
 mod ini;
 mod mail;
+mod mem;
 mod output;
 pub mod regex;
 mod state;

@@ -41,8 +41,10 @@ use crate::state::{self, bytes, opt_str};
 /// The Oniguruma version reported by `MB_ONIGURUMA_VERSION`.
 pub const ONIGURUMA_VERSION: &str = "6.9.9";
 
-/// `E_DEPRECATED`.
-const E_DEPRECATED: i64 = 8192;
+/// `#[\Deprecated]` of every regex function (PHP 8.6).
+const SINCE: &str = "8.6";
+/// The deprecation message.
+const WHY: &str = "because the underlying library is no longer maintained";
 
 /// A compiled pattern.
 struct Compiled {
@@ -92,7 +94,8 @@ struct Search {
 
 #[derive(Default)]
 struct RegexGlobals {
-    cache: HashMap<(Vec<u8>, u32, u8, &'static str), Rc<Compiled>>,
+    /// `MBREX(ht_rc)`: keyed by pattern bytes only, like PHP.
+    cache: HashMap<Vec<u8>, (u32, u8, &'static str, Rc<Compiled>)>,
     search: Search,
 }
 
@@ -330,6 +333,44 @@ fn translate(p: &[u8], names: bool) -> Result<Vec<u8>, String> {
     Ok(out)
 }
 
+/// Rewrites the GNU/POSIX basic syntaxes (`b`, `g`, `c`), where `\(`,
+/// `\)`, `\{`, `\}` and `\|` are operators and the bare characters are
+/// literals, into Ruby-style syntax for [`translate`].
+fn from_basic(p: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(p.len() + 4);
+    let mut i = 0;
+    let mut class = false;
+    while i < p.len() {
+        let c = p[i];
+        if class {
+            if c == b']' {
+                class = false;
+            }
+            out.push(c);
+        } else if c == b'\\' && i + 1 < p.len() {
+            let n = p[i + 1];
+            if matches!(n, b'(' | b')' | b'{' | b'}' | b'|' | b'+' | b'?') {
+                out.push(n);
+            } else {
+                out.push(b'\\');
+                out.push(n);
+            }
+            i += 2;
+            continue;
+        } else if matches!(c, b'(' | b')' | b'{' | b'}' | b'|' | b'+' | b'?') {
+            out.push(b'\\');
+            out.push(c);
+        } else {
+            if c == b'[' {
+                class = true;
+            }
+            out.push(c);
+        }
+        i += 1;
+    }
+    out
+}
+
 /// Maps a PCRE2 compile error to Oniguruma's wording where known.
 fn onig_message(pcre: &[u8]) -> String {
     let m = String::from_utf8_lossy(pcre);
@@ -369,11 +410,16 @@ fn compile(
         ))?;
         return Ok(None);
     }
-    let key = (pattern.to_vec(), options, syntax as u8, enc.name);
-    if let Some(c) = GLOBALS.with(|g| g.borrow().cache.get(&key).cloned()) {
-        return Ok(Some(c));
+    let cached = GLOBALS.with(|g| g.borrow().cache.get(pattern).cloned());
+    if let Some((o, s, e, c)) = &cached {
+        if *o == options && *s == syntax as u8 && *e == enc.name {
+            return Ok(Some(c.clone()));
+        }
     }
-    let utf8 = to_subject(pattern, enc).text;
+    let mut utf8 = to_subject(pattern, enc).text;
+    if matches!(syntax, Syntax::PosixBasic | Syntax::Grep | Syntax::Emacs) {
+        utf8 = from_basic(&utf8);
+    }
     let names = has_named_groups(&utf8);
     let body = match translate(&utf8, names) {
         Ok(b) => b,
@@ -427,10 +473,15 @@ fn compile(
     });
     GLOBALS.with(|g| {
         let mut g = g.borrow_mut();
-        if g.cache.len() > 4096 {
-            g.cache.clear();
+        // Replacing the pattern the search functions use drops their
+        // state (bug #72399).
+        if let Some((.., old)) = &cached {
+            if g.search.re.as_ref().is_some_and(|r| Rc::ptr_eq(r, old)) {
+                g.search.re = None;
+                g.search.regs = None;
+            }
         }
-        g.cache.insert(key, c.clone());
+        g.cache.insert(pattern.to_vec(), (options, syntax as u8, enc.name, c.clone()));
     });
     Ok(Some(c))
 }
@@ -490,6 +541,15 @@ fn search(
     let Some(m) = out.matches else {
         return Found::NoMatch;
     };
+    let regs = regs_from(c, subj, &m);
+    if anchored && regs.get(0).map(|r| r.0) != Some(start) {
+        return Found::NoMatch;
+    }
+    Found::Match(regs)
+}
+
+/// Converts one PCRE match set (`[string|null, offset]` pairs) to registers.
+fn regs_from(c: &Compiled, subj: &Subject, m: &php_pcre::MatchArray) -> Regs {
     let n = c.num_regs();
     let mut regs = Vec::with_capacity(n);
     for g in 0..n {
@@ -503,10 +563,33 @@ fn search(
         });
         regs.push(r);
     }
-    if anchored && regs.first().copied().flatten().map(|r| r.0) != Some(start) {
-        return Found::NoMatch;
+    Regs(regs)
+}
+
+/// All successive matches (`preg_match_all` iteration), for the global
+/// operations; `Err` is a match-time error.
+fn search_all(vm: &Vm, c: &Compiled, subj: &Subject) -> Result<Vec<Regs>, String> {
+    let cfg = match_config(vm);
+    let flags = php_pcre::PREG_SET_ORDER
+        | php_pcre::PREG_OFFSET_CAPTURE
+        | php_pcre::PREG_UNMATCHED_AS_NULL;
+    let out = php_pcre::match_all(&c.re, &cfg, &subj.text, true, flags, 0);
+    if out.result.is_err() {
+        return match out.last_error {
+            Some(php_pcre::PregError::BacktrackLimit) => Err("retry-limit-in-match over".into()),
+            Some(php_pcre::PregError::RecursionLimit | php_pcre::PregError::JitStackLimit) => {
+                Err("match-stack limit over".into())
+            }
+            _ => Ok(Vec::new()),
+        };
     }
-    Found::Match(Regs(regs))
+    let Some(m) = out.matches else {
+        return Ok(Vec::new());
+    };
+    Ok(m.values()
+        .filter_map(php_pcre::Value::as_array)
+        .map(|set| regs_from(c, subj, set))
+        .collect())
 }
 
 // ---- result arrays ---------------------------------------------------------
@@ -540,15 +623,6 @@ fn named_into(c: &Compiled, regs: &Regs, s: &[u8], t: &mut php_runtime::HashTabl
     }
 }
 
-fn deprecated(vm: &mut Vm, a: &Args) -> VmResult<()> {
-    vm.raise(
-        E_DEPRECATED,
-        &format!(
-            "Function {}() is deprecated since 8.6, because the underlying library is no longer maintained",
-            state::func_name(a)
-        ),
-    )
-}
 
 fn regex_encoding() -> &'static Encoding {
     state::with(|s| s.regex_encoding())
@@ -572,7 +646,6 @@ fn options_arg(vm: &mut Vm, opt: Option<&ZStr>) -> VmResult<(u32, Syntax)> {
 // ---- functions ---------------------------------------------------------------
 
 fn mb_regex_encoding(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    deprecated(vm, a)?;
     match opt_str(a, 0) {
         None => Ok(Value::from(state::with(|s| s.mb_regex_encoding_get()))),
         Some(e) => state::call(vm, a, |s| s.mb_regex_encoding_set(e.as_bytes())).map(Value::Bool),
@@ -580,13 +653,11 @@ fn mb_regex_encoding(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 }
 
 fn mb_regex_set_options(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    deprecated(vm, a)?;
     let o = opt_str(a, 0);
     state::call(vm, a, |s| s.mb_regex_set_options(o.as_ref().map(ZStr::as_bytes))).map(Value::from)
 }
 
 fn ereg_common(vm: &mut Vm, a: &mut Args, icase: bool) -> VmResult<Value> {
-    deprecated(vm, a)?;
     let (pattern, string) = (a.str(0), a.str(1));
     if pattern.as_bytes().is_empty() {
         return Err(a.value_error(vm, 1, "must not be empty"));
@@ -727,7 +798,6 @@ fn substitute(out: &mut Vec<u8>, subject: &[u8], replace: &[u8], c: &Compiled, r
 }
 
 fn replace_common(vm: &mut Vm, a: &mut Args, base_opts: u32, callable: bool) -> VmResult<Value> {
-    deprecated(vm, a)?;
     let pattern = a.str(0);
     let replacement = if callable { None } else { Some(a.str(1)) };
     let callback = if callable { Some(a.at(1)) } else { None };
@@ -754,58 +824,56 @@ fn replace_common(vm: &mut Vm, a: &mut Args, base_opts: u32, callable: bool) -> 
     let subj = to_subject(s, enc);
     let mut out = Vec::with_capacity(s.len());
     let mut pos = 0usize;
-    loop {
-        match search(vm, &c, &subj, pos, false) {
-            Found::Match(regs) => {
-                let (beg, end) = regs.get(0).unwrap_or((pos, pos));
-                out.extend_from_slice(&s[pos.min(beg)..beg]);
-                if let Some(rep) = &replacement {
-                    substitute(&mut out, s, rep.as_bytes(), &c, &regs, enc);
-                }
-                if let Some(cb) = &callback {
-                    let mut subpats = ZArray::with_capacity(regs.0.len());
-                    let t = subpats.make_mut();
-                    for r in &regs.0 {
-                        let v = r.map_or_else(|| bytes(Vec::new()), |(b, e)| bytes(&s[b..e.max(b)]));
-                        let _ = t.push(v);
-                    }
-                    named_into(&c, &regs, s, t);
-                    let ret = vm.call_value(cb, vec![Value::Array(subpats)])?;
-                    let r = vm.value_to_string(&ret)?;
-                    out.extend_from_slice(r.as_bytes());
-                }
-                if pos < end {
-                    pos = end;
-                } else {
-                    if pos < s.len() {
-                        // Copy one whole character (the C code copies a
-                        // byte; for valid strings both agree at the end).
-                        let n = char_len(enc, s, pos);
-                        out.extend_from_slice(&s[pos..pos + n]);
-                        pos += n;
-                    } else {
-                        pos += 1;
-                    }
-                }
-                if pos > s.len() {
-                    break;
-                }
+    let mut next_check = s.len().max(1 << 16);
+    let matches = match search_all(vm, &c, &subj) {
+        Ok(m) => m,
+        Err(e) => {
+            vm.php_warning(&format!(
+                "mbregex search failure in php_mbereg_replace_exec(): {e}"
+            ))?;
+            return Ok(Value::Bool(false));
+        }
+    };
+    for regs in matches {
+        let (beg, end) = regs.get(0).unwrap_or((pos, pos));
+        if beg < pos {
+            continue;
+        }
+        out.extend_from_slice(&s[pos..beg]);
+        if let Some(rep) = &replacement {
+            substitute(&mut out, s, rep.as_bytes(), &c, &regs, enc);
+        }
+        if let Some(cb) = &callback {
+            let mut subpats = ZArray::with_capacity(regs.0.len());
+            let t = subpats.make_mut();
+            for r in &regs.0 {
+                let v = r.map_or_else(|| bytes(Vec::new()), |(b, e)| bytes(&s[b..e.max(b)]));
+                let _ = t.push(v);
             }
-            Found::NoMatch => {
-                if pos < s.len() {
-                    out.extend_from_slice(&s[pos..]);
-                }
-                break;
-            }
-            Found::Error(e) => {
-                vm.php_warning(&format!(
-                    "mbregex search failure in php_mbereg_replace_exec(): {e}"
-                ))?;
-                return Ok(Value::Bool(false));
-            }
+            named_into(&c, &regs, s, t);
+            let ret = vm.call_value(cb, vec![Value::Array(subpats)])?;
+            let r = vm.value_to_string(&ret)?;
+            out.extend_from_slice(r.as_bytes());
+        }
+        if pos < end {
+            pos = end;
+        } else if pos < s.len() {
+            let n = char_len(enc, s, pos);
+            out.extend_from_slice(&s[pos..pos + n]);
+            pos += n;
+        } else {
+            pos += 1;
+        }
+        if out.len() >= next_check {
+            // smart_str growth.
+            crate::mem::check(vm, crate::mem::zstr(s.len()), crate::mem::zstr(out.len()))?;
+            next_check = out.len() * 2;
         }
     }
-    Ok(bytes(out))
+    if pos < s.len() {
+        out.extend_from_slice(&s[pos..]);
+    }
+    crate::mem::result(vm, crate::mem::zstr(s.len()), bytes(out))
 }
 
 fn mb_ereg_replace(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -821,7 +889,6 @@ fn mb_ereg_replace_callback(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 }
 
 fn mb_split(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    deprecated(vm, a)?;
     let (pattern, string) = (a.str(0), a.str(1));
     #[allow(clippy::cast_sign_loss)]
     let mut count = a.int(2) as u64;
@@ -842,41 +909,43 @@ fn mb_split(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let t = out.make_mut();
     let mut pos = 0usize;
     let mut chunk = 0usize;
-    while count != 0 && pos < s.len() {
-        match search(vm, &c, &subj, pos, false) {
-            Found::Match(regs) => {
-                let (beg, end) = regs.get(0).unwrap_or((pos, pos));
-                if pos < end {
-                    if beg < s.len() && beg >= chunk {
-                        let _ = t.push(bytes(&s[chunk..beg]));
-                        count = count.wrapping_sub(1);
-                    } else {
-                        vm.php_warning("mbregex search failure in mbsplit(): ")?;
-                        return Ok(Value::Bool(false));
-                    }
-                    pos = end;
-                    chunk = end;
-                } else {
-                    pos += char_len(enc, s, pos);
-                }
-            }
-            Found::NoMatch => break,
-            Found::Error(e) => {
-                vm.php_warning(&format!("mbregex search failure in mbsplit(): {e}"))?;
-                return Ok(Value::Bool(false));
-            }
+    let matches = match search_all(vm, &c, &subj) {
+        Ok(m) => m,
+        Err(e) => {
+            vm.php_warning(&format!("mbregex search failure in mbsplit(): {e}"))?;
+            return Ok(Value::Bool(false));
         }
+    };
+    for regs in matches {
+        if count == 0 || pos >= s.len() {
+            break;
+        }
+        let (beg, end) = regs.get(0).unwrap_or((pos, pos));
+        if beg < pos || end <= pos {
+            continue;
+        }
+        if beg < s.len() && beg >= chunk {
+            let _ = t.push(bytes(&s[chunk..beg]));
+            count = count.wrapping_sub(1);
+            if t.len().is_power_of_two() && t.len() >= 1024 {
+                crate::mem::check(vm, crate::mem::zstr(s.len()), crate::mem::packed(t.len()))?;
+            }
+        } else {
+            vm.php_warning("mbregex search failure in mbsplit(): ")?;
+            return Ok(Value::Bool(false));
+        }
+        pos = end;
+        chunk = end;
     }
     if s.len() > chunk {
         let _ = t.push(bytes(&s[chunk..]));
     } else {
         let _ = t.push(bytes(Vec::new()));
     }
-    Ok(Value::Array(out))
+    crate::mem::result(vm, crate::mem::zstr(s.len()), Value::Array(out))
 }
 
 fn mb_ereg_match(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    deprecated(vm, a)?;
     let (pattern, string) = (a.str(0), a.str(1));
     let opt = opt_str(a, 2);
     let (opts, syntax) = options_arg(vm, opt.as_ref())?;
@@ -896,7 +965,6 @@ fn mb_ereg_match(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 /// `_php_mb_regex_ereg_search_exec`; `mode`: 0 bool, 1 pos, 2 regs.
 fn search_exec(vm: &mut Vm, a: &mut Args, mode: u8) -> VmResult<Value> {
-    deprecated(vm, a)?;
     let pattern = opt_str(a, 0);
     let opt = opt_str(a, 1);
     let (opts, syntax) = options_arg(vm, opt.as_ref())?;
@@ -969,7 +1037,6 @@ fn mb_ereg_search_regs(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 }
 
 fn mb_ereg_search_init(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    deprecated(vm, a)?;
     let string = a.str(0);
     let pattern = opt_str(a, 1);
     let opt = opt_str(a, 2);
@@ -993,8 +1060,7 @@ fn mb_ereg_search_init(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     Ok(Value::Bool(valid))
 }
 
-fn mb_ereg_search_getregs(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    deprecated(vm, a)?;
+fn mb_ereg_search_getregs(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
     let (re, regs, string) = GLOBALS.with(|g| {
         let g = g.borrow();
         (g.search.re.clone(), g.search.regs.clone(), g.search.string.clone())
@@ -1007,14 +1073,12 @@ fn mb_ereg_search_getregs(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     }
 }
 
-fn mb_ereg_search_getpos(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    deprecated(vm, a)?;
+fn mb_ereg_search_getpos(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
     let pos = GLOBALS.with(|g| g.borrow().search.pos);
     Ok(Value::Int(i64::try_from(pos).unwrap_or(i64::MAX)))
 }
 
 fn mb_ereg_search_setpos(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    deprecated(vm, a)?;
     let mut position = a.int(0);
     let len = GLOBALS.with(|g| {
         g.borrow()
@@ -1060,31 +1124,47 @@ pub(crate) fn simple_match(pattern: &[u8], subject: &[u8], caseless: bool) -> bo
 /// Registers the `mb_ereg*` functions.
 pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
     m.function("mb_regex_encoding(?string $encoding = null): string|bool", mb_regex_encoding)
+        .deprecated(SINCE, WHY)
         .function("mb_ereg(string $pattern, string $string, &$matches = null): bool", mb_ereg)
+        .deprecated(SINCE, WHY)
         .function("mb_eregi(string $pattern, string $string, &$matches = null): bool", mb_eregi)
+        .deprecated(SINCE, WHY)
         .function(
             "mb_ereg_replace(string $pattern, string $replacement, string $string, ?string $options = null): string|false|null",
             mb_ereg_replace,
         )
+        .deprecated(SINCE, WHY)
         .function(
             "mb_eregi_replace(string $pattern, string $replacement, string $string, ?string $options = null): string|false|null",
             mb_eregi_replace,
         )
+        .deprecated(SINCE, WHY)
         .function(
             "mb_ereg_replace_callback(string $pattern, callable $callback, string $string, ?string $options = null): string|false|null",
             mb_ereg_replace_callback,
         )
+        .deprecated(SINCE, WHY)
         .function("mb_split(string $pattern, string $string, int $limit = -1): array|false", mb_split)
+        .deprecated(SINCE, WHY)
         .function("mb_ereg_match(string $pattern, string $string, ?string $options = null): bool", mb_ereg_match)
+        .deprecated(SINCE, WHY)
         .function("mb_ereg_search(?string $pattern = null, ?string $options = null): bool", mb_ereg_search)
+        .deprecated(SINCE, WHY)
         .function("mb_ereg_search_pos(?string $pattern = null, ?string $options = null): array|false", mb_ereg_search_pos)
+        .deprecated(SINCE, WHY)
         .function("mb_ereg_search_regs(?string $pattern = null, ?string $options = null): array|false", mb_ereg_search_regs)
+        .deprecated(SINCE, WHY)
         .function(
             "mb_ereg_search_init(string $string, ?string $pattern = null, ?string $options = null): bool",
             mb_ereg_search_init,
         )
+        .deprecated(SINCE, WHY)
         .function("mb_ereg_search_getregs(): array|false", mb_ereg_search_getregs)
+        .deprecated(SINCE, WHY)
         .function("mb_ereg_search_getpos(): int", mb_ereg_search_getpos)
+        .deprecated(SINCE, WHY)
         .function("mb_ereg_search_setpos(int $offset): bool", mb_ereg_search_setpos)
-        .function("mb_regex_set_options(?string $options = null): string", mb_regex_set_options);
+        .deprecated(SINCE, WHY)
+        .function("mb_regex_set_options(?string $options = null): string", mb_regex_set_options)
+        .deprecated(SINCE, WHY);
 }
