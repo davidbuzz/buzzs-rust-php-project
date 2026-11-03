@@ -26,6 +26,8 @@ const E_DEPRECATED: i64 = 8192;
 
 /// The chunk size of the read loops (`char buf[1024]` in `hash.c`).
 const CHUNK: usize = 1024;
+/// [`CHUNK`] as a PHP integer.
+const CHUNK_I64: i64 = 1024;
 
 /// Copies the INI settings the streams layer consults (the same subset
 /// `php-ext-streams` keeps in sync).
@@ -119,9 +121,9 @@ pub(crate) fn read_stream(
     let mut did = 0i64;
     while length != 0 {
         let chunk = if length > 0 {
-            length.min(CHUNK as i64)
+            length.min(CHUNK_I64)
         } else {
-            CHUNK as i64
+            CHUNK_I64
         };
         let got = vm.call_value(&fread, vec![stream.clone(), Value::Int(chunk)])?;
         let Value::Str(s) = got else {

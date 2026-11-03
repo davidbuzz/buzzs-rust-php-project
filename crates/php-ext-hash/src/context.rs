@@ -35,15 +35,12 @@ fn clone(vm: &mut Vm, old: &Obj, new: &Obj) -> VmResult<()> {
             .and_then(|c| c.try_clone().ok())
     })
     .flatten();
-    match copy {
-        Some(c) => {
-            object::set_internal(new, HashObj { ctx: Some(c) });
-            Ok(())
-        }
-        None => {
-            object::set_internal(new, HashObj::default());
-            Err(vm.throw("ValueError", "Cannot clone a finalized HashContext"))
-        }
+    if let Some(c) = copy {
+        object::set_internal(new, HashObj { ctx: Some(c) });
+        Ok(())
+    } else {
+        object::set_internal(new, HashObj::default());
+        Err(vm.throw("ValueError", "Cannot clone a finalized HashContext"))
     }
 }
 
@@ -61,22 +58,20 @@ pub(crate) fn new_object(vm: &mut Vm, ctx: HashContext) -> VmResult<Value> {
 /// `n`, or throws `PHP_HASHCONTEXT_VERIFY`'s `TypeError`.
 pub(crate) fn with_live<R>(
     vm: &mut Vm,
-    a: &Args,
-    n: usize,
-    f: impl FnOnce(&mut HashContext) -> R,
+    args: &Args,
+    index: usize,
+    op: impl FnOnce(&mut HashContext) -> R,
 ) -> VmResult<R> {
-    let Value::Object(o) = a.at(n) else {
-        return Err(a.type_error(vm, n + 1, "must be a valid, non-finalized HashContext"));
+    const INVALID: &str = "must be a valid, non-finalized HashContext";
+    let Value::Object(obj) = args.at(index) else {
+        return Err(args.type_error(vm, index + 1, INVALID));
     };
-    let r = object::internal::<HashObj, _>(&o, |h| match &mut h.ctx {
-        Some(c) if !c.is_finalized() => Some(f(c)),
+    let result = object::internal::<HashObj, _>(&obj, |state| match &mut state.ctx {
+        Some(ctx) if !ctx.is_finalized() => Some(op(ctx)),
         _ => None,
     })
     .flatten();
-    match r {
-        Some(r) => Ok(r),
-        None => Err(a.type_error(vm, n + 1, "must be a valid, non-finalized HashContext")),
-    }
+    result.ok_or_else(|| args.type_error(vm, index + 1, INVALID))
 }
 
 fn ctor(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {

@@ -23,6 +23,10 @@
 //! `FILTER_SANITIZE_STRING`/`STRIPPED` constants are not reported as
 //! deprecated (no deprecated-constant support in the extension API).
 
+// Native handlers and object hooks must match the VM's fn-pointer
+// signatures (`NativeFn`, `ClassHooks`), even when they cannot fail.
+#![allow(clippy::unnecessary_wraps)]
+
 mod host;
 
 use std::cell::RefCell;

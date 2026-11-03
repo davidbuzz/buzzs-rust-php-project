@@ -24,6 +24,10 @@
 //! let picked = php_ext_random::globals(vm).array_rand(&slots, num);
 //! ```
 
+// Native handlers and object hooks must match the VM's fn-pointer
+// signatures (`NativeFn`, `ClassHooks`), even when they cannot fail.
+#![allow(clippy::unnecessary_wraps)]
+
 mod engines;
 mod randomizer;
 
@@ -88,7 +92,7 @@ pub(crate) fn own_properties(o: &php_runtime::Obj) -> ZArray {
             }
         }
         if let Some(dynamic) = d.dynamic.borrow().as_ref() {
-            for (k, v) in dynamic.iter() {
+            for (k, v) in dynamic {
                 t.insert(k.clone(), v.clone());
             }
         }

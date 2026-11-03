@@ -109,17 +109,16 @@ fn engine_initialized(o: &Obj) -> bool {
 
 fn construct(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let this = a.this_obj();
-    let engine = match a.opt(0) {
-        Some(Value::Object(o)) => o,
-        _ => {
-            if engine_initialized(&this) {
-                return Err(readonly_error(vm));
-            }
-            let Some(cls) = vm.find_class(SECURE.as_bytes()) else {
-                return Err(vm.throw("Error", "Class \"Random\\Engine\\Secure\" not found"));
-            };
-            vm.new_object(&cls)?
+    let engine = if let Some(Value::Object(o)) = a.opt(0) {
+        o
+    } else {
+        if engine_initialized(&this) {
+            return Err(readonly_error(vm));
         }
+        let Some(cls) = vm.find_class(SECURE.as_bytes()) else {
+            return Err(vm.throw("Error", "Class \"Random\\Engine\\Secure\" not found"));
+        };
+        vm.new_object(&cls)?
     };
     if engine_initialized(&this) {
         return Err(readonly_error(vm));

@@ -20,6 +20,10 @@
 //! `$stream_context` argument of `hash_update_file()` is not forwarded to
 //! the opener (the context resource payload belongs to `php-ext-streams`).
 
+// Native handlers and object hooks must match the VM's fn-pointer
+// signatures (`NativeFn`, `ClassHooks`), even when they cannot fail.
+#![allow(clippy::unnecessary_wraps)]
+
 mod context;
 mod files;
 
@@ -238,7 +242,7 @@ fn hash_update_file(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let func = a.func_name();
     let mut data = Vec::new();
     let read = files::read_path(vm, &func, path.as_bytes(), |chunk| {
-        data.extend_from_slice(chunk)
+        data.extend_from_slice(chunk);
     })?;
     let Some(ok) = read else {
         return Ok(Value::Bool(false));
