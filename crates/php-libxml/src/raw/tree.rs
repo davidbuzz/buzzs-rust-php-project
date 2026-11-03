@@ -561,6 +561,19 @@ impl Document {
         self.handle(ptr).ok_or(TreeError::Failed)
     }
 
+    /// A handle for a node of this document obtained from libxml2 directly
+    /// (e.g. an `XPath` result, an `xmlTextReaderExpand` node or an XSLT
+    /// output node). Returns `None` for NULL.
+    ///
+    /// # Safety
+    /// `ptr` must point to a live node (element, attribute, text, …) whose
+    /// `doc` is this document and that is either attached to this
+    /// document's tree or not referenced/freed by anything else; the usual
+    /// ownership rules of this module then apply to it.
+    pub unsafe fn node_handle(&self, ptr: *mut ffi::xmlNode) -> Option<Node> {
+        self.handle(ptr)
+    }
+
     /// The document node itself.
     pub fn as_node(&self) -> Node {
         let ptr = self.inner.ptr.cast::<ffi::xmlNode>();

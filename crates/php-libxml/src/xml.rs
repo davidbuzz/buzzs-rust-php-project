@@ -19,6 +19,7 @@
 //! self-contained implementation producing [`StructEntry`] values.
 
 use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 
 use crate::raw::sax::{slot, ExpatSink, PushParser};
 
@@ -724,12 +725,23 @@ impl StructSink for StructBuilder {
     }
 }
 
-/// Inserts or updates an attribute (`zend_hash_update`).
-fn attrs_update(attrs: &mut Vec<(Vec<u8>, Vec<u8>)>, key: Vec<u8>, value: Vec<u8>) {
-    match attrs.iter_mut().find(|(k, _)| *k == key) {
-        Some(slot) => slot.1 = value,
-        None => attrs.push((key, value)),
+/// Builds the PHP attribute array for one start-element event: keys are
+/// decoded (and case-folded), duplicates keep their first position with the
+/// last value (`zend_hash_update`). Linear in the number of attributes.
+fn decode_attrs(p: &XmlParser, attrs: &[(Vec<u8>, Vec<u8>)]) -> Vec<(Vec<u8>, Vec<u8>)> {
+    let mut out: Vec<(Vec<u8>, Vec<u8>)> = Vec::with_capacity(attrs.len());
+    let mut positions: HashMap<Vec<u8>, usize> = HashMap::with_capacity(attrs.len());
+    for (k, v) in attrs {
+        let key = p.decode_tag(k);
+        let value = p.decode(v);
+        if let Some(&i) = positions.get(&key) {
+            out[i].1 = value;
+        } else {
+            positions.insert(key.clone(), out.len());
+            out.push((key, value));
+        }
     }
+    out
 }
 
 /// An `XMLParser` object.
@@ -1035,16 +1047,14 @@ impl ExpatSink for Adapter<'_, '_, '_> {
         }
         p.level.set(p.level.get() + 1);
         let tag_name = p.decode_tag(name);
-        let decoded_attrs = || {
-            let mut out = Vec::new();
-            for (k, v) in attrs {
-                attrs_update(&mut out, p.decode_tag(k), p.decode(v));
-            }
-            out
-        };
+        // Decoded once and reused for the struct entry unless a callback
+        // changed the decoding options in between (PHP decodes twice).
+        let decoding = (p.case_folding.get(), p.target_encoding.get());
+        let mut decoded = None;
         if p.has_handler(HandlerKind::StartElement) {
-            self.handlers
-                .start_element(&p.stripped(&tag_name), &decoded_attrs());
+            let list = decode_attrs(p, attrs);
+            self.handlers.start_element(&p.stripped(&tag_name), &list);
+            decoded = Some(list);
         }
         if self.values.is_none() || self.handlers.aborted() {
             return;
@@ -1061,7 +1071,10 @@ impl ExpatSink for Adapter<'_, '_, '_> {
                 ltags[i] = Some(tag_name);
             }
             p.last_was_open.set(true);
-            let attributes = decoded_attrs();
+            let attributes = match decoded {
+                Some(list) if decoding == (p.case_folding.get(), p.target_encoding.get()) => list,
+                _ => decode_attrs(p, attrs),
+            };
             if !attributes.is_empty() {
                 entry.set("attributes", StructValue::Attributes(attributes));
             }

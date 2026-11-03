@@ -1000,3 +1000,76 @@ fn panics_in_handlers_propagate_and_parser_survives() {
     let q = XmlParser::new(None).unwrap();
     assert_eq!(q.parse(b"<a/>", true, &mut NoHandlers, None), Ok(1));
 }
+
+#[test]
+fn many_attributes_are_linear() {
+    // oom_xml_parse_attributes / oom_xml_parse_ns: 20k attributes used to
+    // take ~12 s because of per-attribute rescans in the attribute array.
+    // libxml2 2.9's SAX1 duplicate-attribute check is itself quadratic (PHP
+    // pays it too), so our overhead is bounded relative to a bare parse.
+    use std::fmt::Write as _;
+    use std::time::{Duration, Instant};
+    let mut xml = String::from("<root");
+    for i in 0..20_000 {
+        let _ = write!(xml, " a{i}=\"{i}\"");
+    }
+    xml.push_str("/>");
+    for ns in [false, true] {
+        let make = || {
+            if ns {
+                XmlParser::new_ns(None, b":").unwrap()
+            } else {
+                XmlParser::new(None).unwrap()
+            }
+        };
+        let bare = make();
+        let start = Instant::now();
+        assert_eq!(
+            bare.parse(xml.as_bytes(), true, &mut NoHandlers, None),
+            Ok(1)
+        );
+        let baseline = start.elapsed();
+
+        let p = make();
+        set_elements(&p, true, true);
+        let mut rec = Rec::default();
+        let mut b = StructBuilder::new(true);
+        let start = Instant::now();
+        assert_eq!(p.parse_into_struct(xml.as_bytes(), &mut rec, &mut b), Ok(1));
+        let full = start.elapsed();
+        assert!(
+            full < baseline * 3 + Duration::from_secs(2),
+            "ns={ns}: {full:?} vs bare {baseline:?}"
+        );
+        match &rec.events[0] {
+            Ev::Start(_, attrs, _) => {
+                assert_eq!(attrs.len(), 20_000);
+                assert_eq!(attrs[19_999], (b"A19999".to_vec(), b"19999".to_vec()));
+            }
+            other => panic!("{other:?}"),
+        }
+        match b.values[0].get("attributes") {
+            Some(php_libxml::xml::StructValue::Attributes(a)) => assert_eq!(a.len(), 20_000),
+            other => panic!("{other:?}"),
+        }
+    }
+}
+
+#[test]
+fn duplicate_attributes_after_case_folding_keep_first_position() {
+    let p = XmlParser::new(None).unwrap();
+    set_elements(&p, true, true);
+    let mut rec = Rec::default();
+    p.parse(b"<r a=\"1\" b=\"2\" A=\"3\"/>", true, &mut rec, None)
+        .unwrap();
+    match &rec.events[0] {
+        Ev::Start(_, attrs, _) => assert_eq!(
+            attrs,
+            &vec![
+                (b"A".to_vec(), b"3".to_vec()),
+                (b"B".to_vec(), b"2".to_vec())
+            ]
+        ),
+        other => panic!("{other:?}"),
+    }
+}
