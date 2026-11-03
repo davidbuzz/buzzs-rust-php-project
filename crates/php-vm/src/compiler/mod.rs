@@ -66,6 +66,12 @@ pub struct CompileOptions {
     pub eval_class: Option<ZStr>,
     /// `zend.assertions` value at compile time (`-1` drops asserts).
     pub assertions: i64,
+    /// Parent class for `parent` in eval'd class-scope code.
+    pub eval_parent: Option<ZStr>,
+    /// Name given to the top-level closure (partial applications).
+    pub closure_name: Option<ZStr>,
+    /// Initial `strict_types`.
+    pub strict_types: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -248,10 +254,11 @@ pub fn compile(
         };
         c.warnings.push((level, w.message.clone(), w.line));
     }
+    c.strict_types = c.opts.strict_types;
     if let Some(cls) = c.opts.eval_class.clone() {
         c.classes.push(ClassCtx {
             name: cls,
-            parent: None,
+            parent: c.opts.eval_parent.clone(),
             is_trait: false,
             is_interface: false,
             is_anon: false,

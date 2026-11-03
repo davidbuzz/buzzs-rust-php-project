@@ -560,6 +560,23 @@ impl Vm {
                             Flow::Next
                         }
                     }
+                    Op::SendPlaceholder { name } => {
+                        let n = name.map(|n| self.lit_str(n));
+                        self.op_send_placeholder(n)?;
+                        Flow::Next
+                    }
+                    Op::CallablePartial {
+                        dst,
+                        variadic,
+                        const_args,
+                        name,
+                    } => {
+                        let call = self.frame_mut().calls.pop().expect("pending call");
+                        let n = self.lit_str(*name);
+                        let c = self.make_partial(call, *variadic, *const_args, n)?;
+                        self.set_tmp(*dst, c);
+                        Flow::Next
+                    }
                     Op::CallableConvert { dst } => {
                         let call = self.frame_mut().calls.pop().expect("pending call");
                         let c = self.make_closure_from_call(call)?;
@@ -1148,6 +1165,10 @@ impl Vm {
     pub(crate) fn call_destructor(&mut self, o: &php_runtime::Obj) -> VmResult<()> {
         let cls = object::class_of(o).clone();
         let Some(m) = cls.magic.destruct.clone() else {
+            // Native destructor hook without a `__destruct` method.
+            if let Some(f) = cls.hooks.as_ref().and_then(|h| h.destruct) {
+                return f(self, o);
+            }
             return Ok(());
         };
         if m.visibility() != crate::func::flags::PUBLIC && !self.in_shutdown {

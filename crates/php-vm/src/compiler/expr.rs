@@ -1534,7 +1534,7 @@ impl Compiler {
                     dst: r,
                     skip: 0,
                 });
-                if args.is_first_class_callable() {
+                if args.is_partial() {
                     return self.err("Cannot create Closure for new expression", line);
                 }
                 self.compile_args(args)?;
@@ -1555,13 +1555,103 @@ impl Compiler {
             return Ok(Some(Operand::Tmp(t)));
         }
         if args.is_partial() {
-            return self.err("Partial function application is not supported", line);
+            let (variadic, const_args) = self.compile_partial_args(args)?;
+            let pfa = self.closure_name(line);
+            let pfa = ZStr::from(pfa.as_bytes().strip_prefix(b"{closure:").map_or_else(
+                || pfa.as_bytes().to_vec(),
+                |r| [b"{closure:pfa:".as_slice(), r].concat(),
+            ));
+            let name = self.lit_idx(Value::Str(pfa));
+            let t = self.tmp();
+            self.f().line = line;
+            self.emit(Op::CallablePartial {
+                dst: t,
+                variadic,
+                const_args,
+                name,
+            });
+            return Ok(Some(Operand::Tmp(t)));
         }
         self.compile_args(args)?;
         self.f().line = line;
         let dst = need.then(|| self.tmp());
         self.emit(Op::DoCall { dst });
         Ok(dst.map(Operand::Tmp))
+    }
+
+    /// Arguments of a partial application (`zend_compile_args_ex` with
+    /// `is_call_partial`): returns (uses `...`, literal-argument mask).
+    fn compile_partial_args(&mut self, args: &ArgList) -> CResult<(bool, u32)> {
+        let mut uses_named = false;
+        let mut variadic = false;
+        let mut const_args = 0u32;
+        let mut pos = 0u32;
+        for a in &args.args {
+            self.f().line = a.span.line;
+            let line = a.span.line;
+            match &a.kind {
+                ArgKind::Unpack(_) => {
+                    if uses_named {
+                        return self
+                            .err("Cannot use argument unpacking after named arguments", line);
+                    }
+                    return self.err("Cannot combine partial application and unpacking", line);
+                }
+                ArgKind::Named { .. } | ArgKind::NamedPlaceholder(_) => {
+                    uses_named = true;
+                    if variadic {
+                        return self.err("Variadic placeholder must be last", line);
+                    }
+                }
+                ArgKind::Positional(_) | ArgKind::Placeholder | ArgKind::VariadicPlaceholder => {
+                    let is_var = matches!(a.kind, ArgKind::VariadicPlaceholder);
+                    if uses_named && !is_var {
+                        return self
+                            .err("Cannot use positional argument after named argument", line);
+                    }
+                    if variadic {
+                        return self.err(
+                            if is_var {
+                                "Variadic placeholder may only appear once"
+                            } else {
+                                "Variadic placeholder must be last"
+                            },
+                            line,
+                        );
+                    }
+                }
+            }
+            match &a.kind {
+                ArgKind::Positional(ex) => {
+                    if pos < 32
+                        && self
+                            .try_fold(ex)
+                            .is_some_and(|v| !matches!(v, Value::Array(_)))
+                    {
+                        const_args |= 1 << pos;
+                    }
+                    let src = self.arg_src_for(ex)?;
+                    self.emit(Op::Send { src });
+                    pos += 1;
+                }
+                ArgKind::Named { name, value } => {
+                    let n = self.lit_str(&name.name);
+                    let src = self.arg_src_for(value)?;
+                    self.emit(Op::SendNamed { name: n, src });
+                }
+                ArgKind::Placeholder => {
+                    self.emit(Op::SendPlaceholder { name: None });
+                    pos += 1;
+                }
+                ArgKind::NamedPlaceholder(id) => {
+                    let n = self.lit_str(&id.name);
+                    self.emit(Op::SendPlaceholder { name: Some(n) });
+                }
+                ArgKind::VariadicPlaceholder => variadic = true,
+                ArgKind::Unpack(_) => {}
+            }
+        }
+        Ok((variadic, const_args))
     }
 
     pub(crate) fn compile_args(&mut self, args: &ArgList) -> CResult<()> {

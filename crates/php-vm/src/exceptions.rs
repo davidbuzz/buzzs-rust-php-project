@@ -450,8 +450,15 @@ impl Vm {
         let f = &self.frames[idx];
         let mut out = Vec::new();
         if f.kind == FrameKind::Builtin {
-            for a in f.args.iter().flatten() {
-                out.push((None, a.deref(), false));
+            // `#[\SensitiveParameter]` of native signatures.
+            let params = f.func.as_ref().map(|func| func.params().to_vec()).unwrap_or_default();
+            for (i, a) in f.args.iter().enumerate() {
+                let Some(a) = a else { continue };
+                let sensitive = params
+                    .get(i)
+                    .or_else(|| params.last().filter(|p| p.variadic))
+                    .is_some_and(|p| p.sensitive);
+                out.push((None, a.deref(), sensitive));
             }
             return out;
         }

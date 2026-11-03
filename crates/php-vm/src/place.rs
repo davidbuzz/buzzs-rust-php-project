@@ -740,7 +740,14 @@ impl Vm {
                 if last {
                     return match wop {
                         WOp::Assign(v) => self.write_property(&obj, name, v),
-                        WOp::FetchRw => self.read_property(&obj, name, FetchMode::Read),
+                        WOp::FetchRw => match self.native_read_property(
+                            &obj,
+                            name,
+                            crate::ext::PropCtx::ReadWrite,
+                        )? {
+                            Some(v) => Ok(v.deref()),
+                            None => self.read_property(&obj, name, FetchMode::Read),
+                        },
                         WOp::MakeRef => self.property_ref(&obj, name).map(Value::Reference),
                         WOp::AssignRef(r) => self.assign_property_ref(&obj, name, r),
                         WOp::Unset => {
@@ -749,7 +756,29 @@ impl Vm {
                         }
                     };
                 }
-                // Intermediate: need a container inside the property.
+                // Intermediate: native classes provide the container through
+                // read_property (`get_property_ptr_ptr` returning NULL).
+                let ctx = match wop {
+                    WOp::Unset => crate::ext::PropCtx::Unset,
+                    WOp::FetchRw => crate::ext::PropCtx::ReadWrite,
+                    _ => crate::ext::PropCtx::Write,
+                };
+                // Objects and references continue the walk; other values
+                // fall back to the standard property storage.
+                match self.native_read_property(&obj, name, ctx)? {
+                    Some(Value::Object(o2)) => return self.obj_walk(o2, segs, i + 1, wop),
+                    Some(Value::Reference(r)) => {
+                        let mut diags = Vec::new();
+                        let mut w = wop;
+                        let s = {
+                            let mut b = r.borrow_mut();
+                            descend(&mut b, segs, i + 1, &mut w, &mut diags, false)
+                        };
+                        self.flush_diags(diags)?;
+                        return self.finish_step(s, segs, w);
+                    }
+                    _ => {}
+                }
                 if matches!(wop, WOp::Unset) {
                     let v = self.read_property_for_unset(&obj, name)?;
                     return match v {

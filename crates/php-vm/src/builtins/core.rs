@@ -340,7 +340,10 @@ fn properties_info(c: &Rc<Class>, out: &mut Vec<InfoEntry>) {
         }
     };
     for p in c.props.iter().filter(|p| own(&p.class)) {
-        add(out, (p.name.clone(), p.class.clone(), p.flags, Some(p.slot)));
+        add(
+            out,
+            (p.name.clone(), p.class.clone(), p.flags, Some(p.slot)),
+        );
     }
     for sp in c.static_props.iter().filter(|p| own(&p.class)) {
         add(out, (sp.name.clone(), sp.class.clone(), sp.flags, None));
@@ -361,7 +364,10 @@ fn get_class_vars(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             vm,
             a,
             1,
-            &format!("must be a valid class name, \"{}\" given", name.to_string_lossy()),
+            &format!(
+                "must be a valid class name, \"{}\" given",
+                name.to_string_lossy()
+            ),
         ));
     };
     let scope = vm
@@ -377,7 +383,9 @@ fn get_class_vars(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         }
         let decl_cls = vm.find_class(decl.as_bytes());
         if fl & flags::PRIVATE != 0 {
-            return scope.as_ref().is_some_and(|s| s.name.eq_ignore_ascii_case(decl));
+            return scope
+                .as_ref()
+                .is_some_and(|s| s.name.eq_ignore_ascii_case(decl));
         }
         if fl & flags::PROTECTED != 0 {
             let (Some(s), Some(d)) = (scope.as_ref(), decl_cls.as_ref()) else {
@@ -387,12 +395,19 @@ fn get_class_vars(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         }
         true
     };
-    let shown: Vec<InfoEntry> = info.into_iter().filter(|(_, d, fl, _)| visible(d, *fl)).collect();
+    let shown: Vec<InfoEntry> = info
+        .into_iter()
+        .filter(|(_, d, fl, _)| visible(d, *fl))
+        .collect();
     let mut t = HashTable::new();
     for (n, _, _, slot) in &shown {
         if let Some(slot) = slot {
             // Uninitialized typed properties are reported as null.
-            let v = defaults.get(*slot as usize).cloned().flatten().unwrap_or_default();
+            let v = defaults
+                .get(*slot as usize)
+                .cloned()
+                .flatten()
+                .unwrap_or_default();
             t.insert(ArrayKey::Str(n.clone()), v);
         }
     }
@@ -505,6 +520,19 @@ fn property_exists(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         return Ok(Value::Bool(true));
     }
     if let Value::Object(o) = &v {
+        // `has_property(ZEND_PROPERTY_EXISTS)` of native classes.
+        if let Some(f) = object::class_of(o)
+            .hooks
+            .as_ref()
+            .and_then(|h| h.has_property)
+        {
+            let saved = std::mem::replace(&mut vm.prop_ctx, crate::ext::PropCtx::Exists);
+            let r = f(vm, o, &p, false);
+            vm.prop_ctx = saved;
+            if let Some(r) = r? {
+                return Ok(Value::Bool(r));
+            }
+        }
         let d = object::data(o).dynamic.borrow();
         if d.as_ref()
             .is_some_and(|t| t.contains_key(&ArrayKey::Str(p.clone())))
@@ -768,6 +796,7 @@ fn ini_set(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         vm.ini.memory_usage = u64::try_from(php_memlimit::real_usage()).unwrap_or(u64::MAX);
     }
     if let Some(h) = vm.ini_modify_hooks.get(n.as_str()).copied() {
+        vm.ini_stage = crate::ext::IniStage::Runtime;
         if vm.ini.get(&n).is_some() && !h(vm, &val)? {
             return Ok(Value::Bool(false));
         }
@@ -798,7 +827,10 @@ fn ini_restore(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     vm.sync_ini(&n);
     if let Some(h) = vm.ini_modify_hooks.get(n.as_str()).copied() {
         let v = vm.ini.get(&n).map(<[u8]>::to_vec).unwrap_or_default();
-        h(vm, &v)?;
+        vm.ini_stage = crate::ext::IniStage::Restore;
+        let r = h(vm, &v);
+        vm.ini_stage = crate::ext::IniStage::Runtime;
+        r?;
     }
     Ok(Value::Null)
 }
@@ -1127,7 +1159,10 @@ fn is_callable(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
                         x.get(&ArrayKey::Int(0)).map(Value::deref),
                         Some(Value::Object(_) | Value::Str(_))
                     )
-                    && matches!(x.get(&ArrayKey::Int(1)).map(Value::deref), Some(Value::Str(_)))
+                    && matches!(
+                        x.get(&ArrayKey::Int(1)).map(Value::deref),
+                        Some(Value::Str(_))
+                    )
             }
             _ => false,
         }

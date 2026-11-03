@@ -645,6 +645,24 @@ impl OutputHost for Vm {
 
     fn call_handler(&mut self, callback: &mut Value, buffer: &[u8], mode: i32) -> Option<Vec<u8>> {
         let cb = callback.clone();
+        // Named native handlers (`php_output_handler_alias`).
+        if let Value::Str(n) = &cb {
+            if let Some(f) = self
+                .output_handler_aliases
+                .get(&ZStr::from(n.as_bytes().to_ascii_lowercase()))
+                .copied()
+            {
+                return match f(self, buffer, mode) {
+                    Ok(r) => r,
+                    Err(t) => {
+                        if self.pending_throw.is_none() {
+                            self.pending_throw = Some(t);
+                        }
+                        None
+                    }
+                };
+            }
+        }
         let r = self.call_value(
             &cb,
             vec![Value::Str(ZStr::from(buffer)), Value::Int(i64::from(mode))],

@@ -126,7 +126,12 @@ impl Compiler {
         Ok(())
     }
 
-    fn closure_name(&self, line: u32) -> ZStr {
+    pub(crate) fn closure_name(&self, line: u32) -> ZStr {
+        if self.closure_depth == 0 {
+            if let Some(n) = &self.opts.closure_name {
+                return n.clone();
+            }
+        }
         let f = self.fref();
         let s = match f.kind {
             FnKind::Closure => format!("{{closure:{}:{}}}", f.func_name, line),

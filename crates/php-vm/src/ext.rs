@@ -30,7 +30,9 @@ pub use crate::vm::{Throw, VmResult};
 
 /// Method/property flag bits for [`ClassBuilder`].
 pub mod acc {
-    pub use crate::func::flags::{ABSTRACT, FINAL, PRIVATE, PROTECTED, PUBLIC, READONLY, STATIC};
+    pub use crate::func::flags::{
+        ABSTRACT, FINAL, PRIVATE, PROTECTED, PUBLIC, READONLY, STATIC, STATIC_KEEPS_THIS, VIRTUAL,
+    };
 }
 
 /// Class flag bits for [`ClassBuilder::flags`].
@@ -85,6 +87,29 @@ pub enum DimensionCtx {
     Append,
 }
 
+/// Why [`ClassHooks::read_property`] is being called (`BP_VAR_*` of
+/// `read_property`/`get_property_ptr_ptr`), read with
+/// [`Vm::property_context`] inside the hook.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PropCtx {
+    /// `$o->p` read.
+    #[default]
+    Read,
+    /// Quiet read: `isset($o->p->q)`, `$o->p ?? x`.
+    Isset,
+    /// Intermediate of a nested write (`$o->p->q = v`, `$o->p[] = v`).
+    Write,
+    /// Compound assignment / increment (`$o->p .= v`, `$o->p[k]++`).
+    ReadWrite,
+    /// Intermediate of a nested unset (`unset($o->p->q)`).
+    Unset,
+    /// Reference taken (`&$o->p`, by-ref argument, `foreach (... as &$v)`).
+    Ref,
+    /// `property_exists()` asking `has_property` (`ZEND_PROPERTY_EXISTS`):
+    /// answer whether the property exists at all, even if null.
+    Exists,
+}
+
 /// Result of an include opener hook.
 #[derive(Debug)]
 pub enum IncludeOpen {
@@ -110,8 +135,24 @@ pub type IncludeOpenerFn = fn(&mut Vm, &[u8], &str) -> VmResult<IncludeOpen>;
 /// includes), e.g. phar stubs (`zend_compile_file` override).
 pub type SourceFilterFn = fn(&mut Vm, &ZStr, Vec<u8>) -> VmResult<Vec<u8>>;
 
+/// A named native output handler (`php_output_handler_alias_ctor_t`):
+/// receives the buffer and the `PHP_OUTPUT_HANDLER_*` mode; `Ok(None)`
+/// means failure (the buffer passes through).
+pub type OutputHandlerFn = fn(&mut Vm, &[u8], i32) -> VmResult<Option<Vec<u8>>>;
+
 /// A `PHP_MINFO` callback.
 pub type ModuleInfoFn = fn(&mut Vm) -> Vec<InfoItem>;
+
+/// Why an [`IniModifyFn`] runs (`ZEND_INI_STAGE_*`), read with
+/// [`Vm::ini_modify_stage`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum IniStage {
+    /// `ini_set()` / `ini_alter()` (`ZEND_INI_STAGE_RUNTIME`).
+    #[default]
+    Runtime,
+    /// `ini_restore()` / request end (`ZEND_INI_STAGE_DEACTIVATE`).
+    Restore,
+}
 
 /// A native extension module.
 pub trait Extension {
@@ -160,6 +201,7 @@ impl<'a> ModuleBuilder<'a> {
     /// `...$rest` for variadics). Re-registering a name replaces it.
     pub fn function(&mut self, signature: &str, handler: NativeFn) -> &mut Self {
         let name = crate::builtins::reg(self.vm, signature, handler);
+        crate::builtins::info::note_function(&name, self.name);
         self.last_function = Some(name);
         self
     }
@@ -194,7 +236,9 @@ impl<'a> ModuleBuilder<'a> {
 
     /// Defines a global constant.
     pub fn constant(&mut self, name: &str, value: Value) -> &mut Self {
-        self.vm.constants.insert(ZStr::from(name), value);
+        let n = ZStr::from(name);
+        crate::builtins::info::note_constant(&n, self.name);
+        self.vm.constants.insert(n, value);
         self
     }
 
@@ -209,6 +253,7 @@ impl<'a> ModuleBuilder<'a> {
         message: &str,
     ) -> &mut Self {
         let n = ZStr::from(name);
+        crate::builtins::info::note_constant(&n, self.name);
         self.vm.constants.insert(n.clone(), value);
         let suffix =
             crate::attrs::format_suffix(Some(&ZStr::from(since)), Some(&ZStr::from(message)));
@@ -221,6 +266,16 @@ impl<'a> ModuleBuilder<'a> {
     pub fn ini(&mut self, directive: IniDirective) -> &mut Self {
         let mut sink: Vec<php_support::Diagnostic> = Vec::new();
         self.vm.ini.register(directive, &mut sink);
+        self
+    }
+
+    /// Registers a named output handler usable as `ob_start('name')`
+    /// without being a function (`ob_gzhandler`, `ob_iconv_handler`,
+    /// `mb_output_handler`).
+    pub fn output_handler(&mut self, name: &str, f: OutputHandlerFn) -> &mut Self {
+        self.vm
+            .output_handler_aliases
+            .insert(ZStr::from(name.to_ascii_lowercase()), f);
         self
     }
 
@@ -306,7 +361,9 @@ pub struct ClassHooks {
     pub read_property: Option<fn(&mut Vm, &Obj, &ZStr) -> VmResult<Option<Value>>>,
     /// `write_property`; returns `true` if handled.
     pub write_property: Option<fn(&mut Vm, &Obj, &ZStr, &Value) -> VmResult<bool>>,
-    /// `has_property`; `Ok(None)` falls back.
+    /// `has_property(check_empty)`: `Ok(Some(true))` means "set and not
+    /// null" (`isset`) or, with `check_empty`, "set and not empty" — the
+    /// same convention as `has_dimension`. `Ok(None)` falls back.
     pub has_property: Option<fn(&mut Vm, &Obj, &ZStr, bool) -> VmResult<Option<bool>>>,
     /// `unset_property`; returns `true` if handled.
     pub unset_property: Option<fn(&mut Vm, &Obj, &ZStr) -> VmResult<bool>>,
@@ -324,6 +381,16 @@ pub struct ClassHooks {
     pub serialize: Option<fn(&mut Vm, &Obj) -> VmResult<Option<ZArray>>>,
     /// Unserialization from the array produced by `serialize`.
     pub unserialize: Option<fn(&mut Vm, &Obj, ZArray) -> VmResult<bool>>,
+    /// `get_constructor`: runs before the constructor on `new`; throw
+    /// here for classes that cannot be constructed ("Cannot directly
+    /// construct X, use Y()").
+    pub get_constructor: Option<fn(&mut Vm, &Obj) -> VmResult<()>>,
+    /// `dtor_obj` without a PHP-visible `__destruct` method: runs when the
+    /// object is released (and at shutdown), like a destructor.
+    pub destruct: Option<fn(&mut Vm, &Obj) -> VmResult<()>>,
+    /// `interface_gets_implemented` (set on an interface): called with
+    /// each class that implements it, when the class is linked.
+    pub interface_gets_implemented: Option<fn(&mut Vm, &Rc<Class>) -> VmResult<()>>,
 }
 
 impl std::fmt::Debug for ClassHooks {
@@ -391,6 +458,29 @@ impl Vm {
     /// the value is not acceptable as int.
     pub fn parse_long_weak(&mut self, v: &Value) -> VmResult<Option<i64>> {
         self.parse_arg_long_weak(v)
+    }
+
+    /// The method name a native `__call`/`__callStatic` handler was
+    /// invoked for (its arguments are the call's arguments, unpacked).
+    pub fn magic_call_name(&self) -> Option<ZStr> {
+        self.magic_call_name.clone()
+    }
+
+    /// The stage of the running `ini_on_modify` handler.
+    pub fn ini_modify_stage(&self) -> IniStage {
+        self.ini_stage
+    }
+
+    /// Where output started (`php_output_get_start_filename/lineno`),
+    /// once anything was sent: for `headers_sent(&$file, &$line)` and
+    /// "headers already sent (output started at f:l)".
+    pub fn output_started(&self) -> Option<(ZStr, u32)> {
+        crate::builtins::headers::output_start()
+    }
+
+    /// The context of the running `read_property` hook call.
+    pub fn property_context(&self) -> PropCtx {
+        self.prop_ctx
     }
 
     /// The context of the running `read_dimension` hook call.

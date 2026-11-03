@@ -65,6 +65,9 @@ impl Vm {
             is_eval,
             eval_class: None,
             assertions: self.ini.get_long("zend.assertions"),
+            eval_parent: None,
+            closure_name: None,
+            strict_types: false,
         };
         let unit = match compiler::compile(&program, Rc::from(src), opts) {
             Ok(u) => u,
@@ -346,7 +349,7 @@ impl Vm {
             self.included.push(real_z);
         }
         let src = self.filter_source(&display_path, src)?;
-        let unit = match self.compile_source(&src, &display_path, false, false)? {
+        let unit = match self.compile_source(&src, &display_path, false, true)? {
             CompileOutcome::Ok(u) => u,
             CompileOutcome::ParseError(e) => return Err(Throw::Exception(e)),
             CompileOutcome::Fatal => return Err(Throw::Fatal),
@@ -376,7 +379,7 @@ impl Vm {
             self.included.push(path.clone());
         }
         let src = self.filter_source(&path, src)?;
-        let unit = match self.compile_source(&src, &path, false, false)? {
+        let unit = match self.compile_source(&src, &path, false, true)? {
             CompileOutcome::Ok(u) => u,
             CompileOutcome::ParseError(e) => return Err(Throw::Exception(e)),
             CompileOutcome::Fatal => return Err(Throw::Fatal),
@@ -453,7 +456,7 @@ impl Vm {
             Err(_) => return Ok(()),
         };
         let p = ZStr::from(path);
-        let unit = match self.compile_source(&src, &p, false, false)? {
+        let unit = match self.compile_source(&src, &p, false, true)? {
             CompileOutcome::Ok(u) => u,
             CompileOutcome::ParseError(e) => return self.handle_top_throw(Throw::Exception(e)),
             CompileOutcome::Fatal => return Err(Throw::Fatal),

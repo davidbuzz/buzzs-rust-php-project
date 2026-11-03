@@ -280,7 +280,7 @@ impl Vm {
         this: Option<Obj>,
         called: Rc<Class>,
     ) -> PendingCall {
-        let is_static = m.is_static();
+        let is_static = m.is_static() && m.flags & flags::STATIC_KEEPS_THIS == 0;
         PendingCall {
             this: if is_static { None } else { this },
             scope: Some(m.scope()),
@@ -439,6 +439,9 @@ impl Vm {
         let cls = self.resolve_class_spec(class)?;
         let o = self.instantiate(&cls)?;
         self.set_tmp(dst, Value::Object(o.clone()));
+        if let Some(f) = cls.hooks.as_ref().and_then(|h| h.get_constructor) {
+            f(self, &o)?;
+        }
         let Some(ctor) = cls.magic.construct.clone() else {
             return Ok(false);
         };
@@ -468,7 +471,7 @@ impl Vm {
     // SEND
     // ------------------------------------------------------------------
 
-    fn arg_position(&mut self, name: &ZStr) -> VmResult<Option<usize>> {
+    pub(crate) fn arg_position(&mut self, name: &ZStr) -> VmResult<Option<usize>> {
         let call = self.frame().calls.last().expect("pending call");
         if call.magic_name.is_some() {
             return Ok(None);
@@ -837,9 +840,12 @@ impl Vm {
     pub(crate) fn call_builtin(
         &mut self,
         b: &Rc<Builtin>,
-        call: PendingCall,
+        mut call: PendingCall,
         strict: bool,
     ) -> VmResult<Value> {
+        // A native `__call`/`__callStatic` gets the called name through
+        // `vm.magic_call_name()`.
+        self.magic_call_name = call.magic_name.take();
         let fname = self.func_display(&Func::Builtin(b.clone()), call.scope.as_ref());
         let nparams = b.params.len();
         let variadic = b.flags & flags::VARIADIC != 0;
@@ -1001,7 +1007,23 @@ impl Vm {
             called: call.called,
             func: Some(b.clone()),
         };
-        let r = (b.handler)(self, &mut args);
+        let mut r = (b.handler)(self, &mut args);
+        // Objects released by the builtin (e.g. by-ref outputs overwriting
+        // the last reference) are destructed while its frame is still
+        // active, so traces show `[internal function]` + the builtin.
+        drop(args);
+        if object::has_pending_destructors() && self.frames.len() == depth {
+            if let Err(e) = self.run_pending_destructors() {
+                r = match (r, e) {
+                    (Ok(_), e) => Err(e),
+                    (Err(Throw::Exception(old)), Throw::Exception(new)) => {
+                        crate::exceptions::chain_previous(&new, &old);
+                        Err(Throw::Exception(new))
+                    }
+                    (Err(old), _) => Err(old),
+                };
+            }
+        }
         if self.frames.len() >= depth {
             self.frames.truncate(depth - 1);
         }

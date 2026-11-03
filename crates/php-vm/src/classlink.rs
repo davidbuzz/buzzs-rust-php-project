@@ -820,6 +820,15 @@ impl Vm {
         if let Some((e, l)) = crate::attrs::check_override(&cls) {
             return Err(self.fatal_at(&e, if l == 0 { line } else { l }));
         }
+        for iface in cls.interfaces.clone() {
+            if let Some(f) = iface
+                .hooks
+                .as_ref()
+                .and_then(|h| h.interface_gets_implemented)
+            {
+                f(self, &cls)?;
+            }
+        }
         Ok(cls)
     }
 }

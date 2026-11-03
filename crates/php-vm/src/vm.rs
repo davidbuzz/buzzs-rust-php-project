@@ -160,6 +160,8 @@ pub struct PendingCall {
     pub has_named: bool,
     /// Whether this is a constructor call from `new`.
     pub is_ctor: bool,
+    /// Placeholders of a partial application.
+    pub pfa: Option<Box<crate::pfa::PfaArgs>>,
 }
 
 impl PendingCall {
@@ -176,6 +178,7 @@ impl PendingCall {
             magic_name: None,
             has_named: false,
             is_ctor: false,
+            pfa: None,
         }
     }
 }
@@ -483,6 +486,14 @@ pub struct Vm {
     pub module_info: Vec<(String, crate::ext::ModuleInfoFn)>,
     /// Context of the running `read_dimension` hook.
     pub(crate) dim_ctx: crate::ext::DimensionCtx,
+    /// Context of the running `read_property` hook.
+    pub(crate) prop_ctx: crate::ext::PropCtx,
+    /// Stage of the running INI `on_modify` handler.
+    pub(crate) ini_stage: crate::ext::IniStage,
+    /// Method name of the native `__call`/`__callStatic` being run.
+    pub(crate) magic_call_name: Option<ZStr>,
+    /// Named native output handlers (`ob_start('ob_gzhandler')`).
+    pub output_handler_aliases: HashMap<ZStr, crate::ext::OutputHandlerFn>,
     /// `include` opener hook.
     pub include_opener: Option<crate::ext::IncludeOpenerFn>,
     /// Source filter hook.

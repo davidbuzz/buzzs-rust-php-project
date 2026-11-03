@@ -201,6 +201,26 @@ impl Vm {
         )
     }
 
+    /// Calls a native `read_property` hook with fetch context `ctx`.
+    pub(crate) fn native_read_property(
+        &mut self,
+        o: &Obj,
+        name: &ZStr,
+        ctx: crate::ext::PropCtx,
+    ) -> VmResult<Option<Value>> {
+        let Some(f) = object::class_of(o)
+            .hooks
+            .as_ref()
+            .and_then(|h| h.read_property)
+        else {
+            return Ok(None);
+        };
+        let saved = std::mem::replace(&mut self.prop_ctx, ctx);
+        let r = f(self, o, name);
+        self.prop_ctx = saved;
+        r
+    }
+
     /// Reads `$o->name`.
     pub(crate) fn read_property(
         &mut self,
@@ -211,10 +231,13 @@ impl Vm {
         let lazy_target = self.lazy_object_for(o, Some(name))?;
         let o = &lazy_target;
         let cls = object::class_of(o).clone();
-        if let Some(f) = cls.hooks.as_ref().and_then(|h| h.read_property) {
-            if let Some(v) = f(self, o, name)? {
-                return Ok(v);
-            }
+        let ctx = if mode == FetchMode::Is {
+            crate::ext::PropCtx::Isset
+        } else {
+            crate::ext::PropCtx::Read
+        };
+        if let Some(v) = self.native_read_property(o, name, ctx)? {
+            return Ok(v);
         }
         let scope = self.scope();
         match self.lookup_prop(&cls, name, scope.as_ref()) {
@@ -604,6 +627,11 @@ impl Vm {
 
     /// Makes `$o->name` a reference and returns it.
     pub(crate) fn property_ref(&mut self, o: &Obj, name: &ZStr) -> VmResult<PhpRef> {
+        if let Some(Value::Reference(r)) =
+            self.native_read_property(o, name, crate::ext::PropCtx::Ref)?
+        {
+            return Ok(r);
+        }
         match self.property_container(o, name)? {
             PropContainer::Declared(idx) => {
                 let d = object::data(o);
@@ -922,8 +950,13 @@ impl Vm {
         let o = &lazy_target;
         let cls = object::class_of(o).clone();
         if let Some(f) = cls.hooks.as_ref().and_then(|h| h.has_property) {
-            if let Some(r) = f(self, o, name, empty)? {
-                return Ok(r);
+            // The hook answers "set / not empty"; callers want "is empty"
+            // for `empty()`.
+            let saved = std::mem::replace(&mut self.prop_ctx, crate::ext::PropCtx::Isset);
+            let r = f(self, o, name, empty);
+            self.prop_ctx = saved;
+            if let Some(r) = r? {
+                return Ok(if empty { !r } else { r });
             }
         }
         let scope = self.scope();

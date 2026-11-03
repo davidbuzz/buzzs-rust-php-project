@@ -369,6 +369,17 @@ pub enum Op {
     DoCall { dst: Option<u32> },
     /// Turns the pending call into a closure (`f(...)`).
     CallableConvert { dst: u32 },
+    /// `ZEND_SEND_PLACEHOLDER` (`?` or `name: ?`) of a partial application.
+    SendPlaceholder { name: Option<u32> },
+    /// `ZEND_CALLABLE_CONVERT_PARTIAL`: turns the pending call into a
+    /// Closure. `const_args`: bitmask of literal positional arguments;
+    /// `name`: literal index of the `{closure:pfa:...}` name.
+    CallablePartial {
+        dst: u32,
+        variadic: bool,
+        const_args: u32,
+        name: u32,
+    },
 
     /// Receives required argument `n` into `cv`.
     Recv { n: u32, cv: u32 },

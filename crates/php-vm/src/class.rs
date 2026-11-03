@@ -492,6 +492,12 @@ impl Class {
     }
 
     /// Finds a constant.
+    /// Whether objects of the class run a destructor (`__destruct` or a
+    /// native destruct hook).
+    pub fn has_destructor(&self) -> bool {
+        self.magic.destruct.is_some() || self.hooks.as_ref().is_some_and(|h| h.destruct.is_some())
+    }
+
     pub fn find_const(&self, name: &[u8]) -> Option<&Rc<ClassConst>> {
         self.const_map.get(name).map(|&i| &self.consts[i])
     }

@@ -30,6 +30,7 @@ mod generator;
 pub mod gc;
 mod include;
 pub mod interrupt;
+mod pfa;
 mod iter;
 mod lazy;
 pub mod object;
@@ -172,6 +173,10 @@ impl Vm {
             ini_modify_hooks: std::collections::HashMap::new(),
             module_info: Vec::new(),
             dim_ctx: crate::ext::DimensionCtx::Read,
+            prop_ctx: crate::ext::PropCtx::Read,
+            ini_stage: crate::ext::IniStage::Runtime,
+            magic_call_name: None,
+            output_handler_aliases: std::collections::HashMap::new(),
             include_opener: None,
             source_filter: None,
             builtin_deprecations: std::collections::HashMap::new(),
@@ -395,7 +400,7 @@ impl Vm {
         }
         // Remaining objects in creation order.
         for d in object::live_objects() {
-            if d.flags.get() & object::oflags::DESTRUCTED != 0 || d.class.magic.destruct.is_none() {
+            if d.flags.get() & object::oflags::DESTRUCTED != 0 || !d.class.has_destructor() {
                 continue;
             }
             d.flags.set(d.flags.get() | object::oflags::DESTRUCTED);

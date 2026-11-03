@@ -74,6 +74,13 @@ impl Drop for ObjectData {
         // `zend_weakrefs_notify`: purge WeakMap entries before the handle
         // can be reused.
         crate::weakref::object_freed(handle);
+        // `zend_object_std_dtor` releases the properties (and objects they
+        // hold) before `zend_objects_store_del` puts this handle on the
+        // free list, so this handle is the next one reused.
+        let slots = std::mem::take(self.slots.get_mut());
+        let dynamic = self.dynamic.get_mut().take();
+        let internal = self.internal.get_mut().take();
+        drop((slots, dynamic, internal));
         // `try_with`: the store may already be gone during thread teardown.
         let _ = STORE.try_with(|s| {
             if let Ok(mut s) = s.try_borrow_mut() {
@@ -110,7 +117,7 @@ impl PhpObject for ObjBox {
 impl Drop for ObjBox {
     fn drop(&mut self) {
         let data = &self.0;
-        if data.flags.get() & oflags::DESTRUCTED != 0 || data.class.magic.destruct.is_none() {
+        if data.flags.get() & oflags::DESTRUCTED != 0 || !data.class.has_destructor() {
             return;
         }
         if !DESTRUCTORS_ENABLED.with(Cell::get) {

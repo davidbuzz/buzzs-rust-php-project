@@ -55,7 +55,9 @@ fn convert_args(vm: &mut Vm, vals: &[Value]) -> VmResult<Vec<FArg>> {
                         let f = i as f64;
                         (i, f)
                     }
-                    Some(php_runtime::numeric::Number::Float(f)) => (php_runtime::convert::dval_to_lval_cap(f), f),
+                    Some(php_runtime::numeric::Number::Float(f)) => {
+                        (php_runtime::convert::dval_to_lval_cap(f), f)
+                    }
                     None => (0, 0.0),
                 }
             }
@@ -114,7 +116,12 @@ fn do_format(vm: &mut Vm, fmt: &[u8], vals: &[Value], source: ArgSource) -> VmRe
 fn sprintf(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let f = s(a, 0);
     let vals: Vec<Value> = a.values[1..].to_vec();
-    Ok(sv(do_format(vm, f.as_bytes(), &vals, ArgSource::Variadic(1))?))
+    Ok(sv(do_format(
+        vm,
+        f.as_bytes(),
+        &vals,
+        ArgSource::Variadic(1),
+    )?))
 }
 
 fn printf(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -147,9 +154,11 @@ fn ob_start(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let cb = a.at(0);
     let chunk = i(a, 1);
     let fl = if a.has(2) { i(a, 2) } else { 112 };
+    let is_alias = matches!(&cb, Value::Str(n)
+        if vm.output_handler_aliases.contains_key(&ZStr::from(n.as_bytes().to_ascii_lowercase())));
     let handler = if cb.is_null() {
         StartHandler::Default
-    } else if vm.is_callable_value(&cb) {
+    } else if is_alias || vm.is_callable_value(&cb) {
         let name = handler_name(vm, &cb);
         StartHandler::User { name, callback: cb }
     } else {
@@ -185,7 +194,9 @@ fn ob_get_contents(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
 }
 
 fn ob_get_length(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
-    Ok(ob::ob_get_length(vm).map_or(Value::Bool(false), |n| Value::Int(i64::try_from(n).unwrap_or(0))))
+    Ok(ob::ob_get_length(vm).map_or(Value::Bool(false), |n| {
+        Value::Int(i64::try_from(n).unwrap_or(0))
+    }))
 }
 
 fn ob_get_level(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
@@ -234,16 +245,27 @@ fn status_array(st: &php_support::output::HandlerStatus) -> Value {
     t.insert(k("type"), Value::Int(i64::from(st.kind)));
     t.insert(k("flags"), Value::Int(i64::from(st.flags)));
     t.insert(k("level"), Value::Int(i64::from(st.level)));
-    t.insert(k("chunk_size"), Value::Int(i64::try_from(st.chunk_size).unwrap_or(0)));
-    t.insert(k("buffer_size"), Value::Int(i64::try_from(st.buffer_size).unwrap_or(0)));
-    t.insert(k("buffer_used"), Value::Int(i64::try_from(st.buffer_used).unwrap_or(0)));
+    t.insert(
+        k("chunk_size"),
+        Value::Int(i64::try_from(st.chunk_size).unwrap_or(0)),
+    );
+    t.insert(
+        k("buffer_size"),
+        Value::Int(i64::try_from(st.buffer_size).unwrap_or(0)),
+    );
+    t.insert(
+        k("buffer_used"),
+        Value::Int(i64::try_from(st.buffer_used).unwrap_or(0)),
+    );
     Value::Array(ZArray::from_table(t))
 }
 
 fn ob_get_status(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     if b(a, 0) {
         let l = vm.output.full_status();
-        return Ok(Value::Array(ZArray::from_values(l.iter().map(status_array))));
+        return Ok(Value::Array(ZArray::from_values(
+            l.iter().map(status_array),
+        )));
     }
     Ok(match vm.output.active_status() {
         Some(st) => status_array(&st),
@@ -267,9 +289,17 @@ impl Vm {
 
 /// Registers the output functions.
 pub(crate) fn register(vm: &mut Vm) {
-    reg(vm, "sprintf(string $format, mixed ...$values): string", sprintf);
+    reg(
+        vm,
+        "sprintf(string $format, mixed ...$values): string",
+        sprintf,
+    );
     reg(vm, "printf(string $format, mixed ...$values): int", printf);
-    reg(vm, "vsprintf(string $format, array $values): string", vsprintf);
+    reg(
+        vm,
+        "vsprintf(string $format, array $values): string",
+        vsprintf,
+    );
     reg(vm, "vprintf(string $format, array $values): int", vprintf);
     reg(vm, "ob_start($callback = null, int $chunk_size = 0, int $flags = PHP_OUTPUT_HANDLER_STDFLAGS): bool", ob_start);
     reg(vm, "ob_get_clean(): string|false", ob_get_clean);
@@ -281,9 +311,25 @@ pub(crate) fn register(vm: &mut Vm) {
     reg(vm, "ob_end_flush(): bool", ob_end_flush);
     reg(vm, "ob_clean(): bool", ob_clean);
     reg(vm, "ob_flush(): bool", ob_flush);
-    reg(vm, "ob_implicit_flush(bool $enable = true): void", ob_implicit_flush);
+    reg(
+        vm,
+        "ob_implicit_flush(bool $enable = true): void",
+        ob_implicit_flush,
+    );
     reg(vm, "ob_list_handlers(): array", ob_list_handlers);
-    reg(vm, "ob_get_status(bool $full_status = false): array", ob_get_status);
-    reg(vm, "output_add_rewrite_var(string $name, string $value): bool", output_add_rewrite_var);
-    reg(vm, "output_reset_rewrite_vars(): bool", output_add_rewrite_var);
+    reg(
+        vm,
+        "ob_get_status(bool $full_status = false): array",
+        ob_get_status,
+    );
+    reg(
+        vm,
+        "output_add_rewrite_var(string $name, string $value): bool",
+        output_add_rewrite_var,
+    );
+    reg(
+        vm,
+        "output_reset_rewrite_vars(): bool",
+        output_add_rewrite_var,
+    );
 }

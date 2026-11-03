@@ -57,6 +57,9 @@ pub mod flags {
     pub const SET_PRIVATE: u32 = 1 << 21;
     /// Virtual (hooked, unbacked) property.
     pub const VIRTUAL: u32 = 1 << 22;
+    /// A static native method that still receives `$this` when called on
+    /// an instance (XMLReader::open's `get_method` override).
+    pub const STATIC_KEEPS_THIS: u32 = 1 << 23;
     /// Set-visibility mask.
     pub const SET_MASK: u32 = SET_PUBLIC | SET_PROTECTED | SET_PRIVATE;
 }
