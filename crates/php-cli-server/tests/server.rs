@@ -262,3 +262,63 @@ fn curl_server_inc_startup() {
     let _ = child.wait();
     let _ = std::fs::remove_dir_all(&root);
 }
+
+/// The banner reaches a piped stderr within 3 s (idle box), and the
+/// console log keeps working afterwards: module startup must not close
+/// descriptors 0-2 (the CLI's STDIN/STDOUT/STDERR resources own them).
+#[test]
+#[ignore = "needs target/debug/php"]
+fn banner_on_pipes_and_log_survives_startup() {
+    let root =
+        std::env::temp_dir().join(format!("php-cli-server-it-banner-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join("index.php"), "<?php echo 'up';").unwrap();
+    let mut child = Command::new(php_binary())
+        .arg("-n")
+        .arg("-t")
+        .arg(&root)
+        .args(["-S", "127.0.0.1:0"])
+        .current_dir(&root)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let stderr = child.stderr.take().unwrap();
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        for line in BufReader::new(stderr).lines() {
+            let Ok(line) = line else { break };
+            if tx.send(line).is_err() {
+                break;
+            }
+        }
+    });
+    let limit = std::env::var("PHP_CLI_SERVER_BANNER_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(3);
+    let banner = rx
+        .recv_timeout(Duration::from_secs(limit))
+        .expect("no startup banner on stderr");
+    assert!(
+        banner.contains("Development Server (http://127.0.0.1:"),
+        "{banner}"
+    );
+    let port: u16 = banner
+        .rsplit(':')
+        .next()
+        .and_then(|s| s.strip_suffix(") started"))
+        .and_then(|s| s.parse().ok())
+        .unwrap();
+    let r = request(port, "GET / HTTP/1.1\r\n\r\n");
+    assert!(r.ends_with("up"), "{r}");
+    let accepted = rx
+        .recv_timeout(Duration::from_secs(10))
+        .expect("no log line");
+    assert!(accepted.ends_with(" Accepted"), "{accepted}");
+    let _ = child.kill();
+    let _ = child.wait();
+    let _ = std::fs::remove_dir_all(&root);
+}
