@@ -379,3 +379,40 @@ fn debug_and_gc() {
     assert!(!GLOBAL.is_active(), "GLOBAL is not installed in unit tests");
     assert_eq!(usage(), PHP_BASELINE);
 }
+
+#[test]
+fn cross_thread_accounting_is_exact() {
+    let a = CountingAlloc::new(System);
+    a.bind_to_current_thread();
+    let mine = alloc(&a, 1000);
+    let handed_over: Vec<Block<'_>> = std::thread::scope(|s| {
+        let workers: Vec<_> = (0..4)
+            .map(|_| {
+                s.spawn(|| {
+                    for i in 1..2000 {
+                        drop(alloc(&a, i));
+                    }
+                    // Allocated here, freed by the owner thread below.
+                    let b = alloc(&a, 500);
+                    let b = std::mem::ManuallyDrop::new(b);
+                    (b.p.expose_provenance(), b.layout)
+                })
+            })
+            .collect();
+        for i in 1..2000 {
+            drop(alloc(&a, i));
+        }
+        workers
+            .into_iter()
+            .map(|w| {
+                let (addr, layout) = w.join().expect("worker");
+                let p = ptr::with_exposed_provenance_mut(addr);
+                Block { a: &a, p, layout }
+            })
+            .collect()
+    });
+    assert_eq!(a.raw_usage(), 1000 + 4 * 500);
+    drop(handed_over);
+    drop(mine);
+    assert_eq!(a.raw_usage(), 0);
+}

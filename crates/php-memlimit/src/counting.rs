@@ -27,6 +27,15 @@ const PENDING: u8 = 2;
 /// Sentinel for "no limit" in the `limit` and threshold atomics.
 const UNLIMITED: usize = usize::MAX;
 
+/// Increments a statistics counter with a plain load/store instead of a
+/// locked read-modify-write: concurrent bumps from several threads may be
+/// lost (the counts are informational), but the operation stays sound and
+/// keeps the allocation fast path down to a single locked instruction.
+#[inline]
+fn bump(counter: &AtomicUsize) {
+    counter.store(counter.load(Relaxed).wrapping_add(1), Relaxed);
+}
+
 thread_local! {
     /// Nesting depth of [`crate::fallible`] on this thread. Const-initialised
     /// and without a destructor, so reading it from inside the allocator
@@ -53,12 +62,21 @@ pub fn fallible<R>(f: impl FnOnce() -> R) -> R {
     f()
 }
 
+/// A non-zero value unique to each live thread: the address of this
+/// thread's (destructor-free, const-initialised) `FALLIBLE_DEPTH` slot.
+#[inline]
+fn thread_token() -> usize {
+    FALLIBLE_DEPTH.with(|d| ptr::from_ref(d).addr())
+}
+
 fn in_fallible_scope() -> bool {
     FALLIBLE_DEPTH.try_with(|d| d.get() > 0).unwrap_or(false)
 }
 
 /// Raw counter snapshot of a [`CountingAlloc`] (bytes are requested
-/// `Layout` sizes, not the inner allocator's usable sizes).
+/// `Layout` sizes, not the inner allocator's usable sizes). The byte counts
+/// are exact; the call counts may under-count when several threads allocate
+/// concurrently.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Stats {
     /// Live bytes.
@@ -78,9 +96,12 @@ pub struct Stats {
 ///
 /// # Accounting
 ///
-/// The hot path is one `fetch_add` on the live-byte counter, one on the
-/// call counter, a relaxed load of the precomputed soft threshold and a
-/// relaxed peak compare; everything about limits happens on a `#[cold]`
+/// The hot path on the request's thread (see
+/// [`bind_to_current_thread`](Self::bind_to_current_thread)) uses no locked
+/// instructions at all: a thread-local address compare, relaxed
+/// loads/stores of the live-byte and call counters, a relaxed load of the
+/// precomputed soft threshold and a relaxed peak compare. Other threads pay
+/// one `fetch_add`/`fetch_sub` on a separate counter; everything about limits happens on a `#[cold]`
 /// path. All atomics are `Relaxed` except the over-limit record, which is
 /// published with release/acquire so [`check`](Self::check) sees consistent
 /// fields.
@@ -118,7 +139,13 @@ pub struct Stats {
 /// that keeps a runaway builtin from taking the machine down.
 pub struct CountingAlloc<A> {
     inner: A,
-    current: AtomicUsize,
+    /// Live bytes allocated/freed by the owner thread (written only by it,
+    /// with plain load/store), and by every other thread (locked RMW). Both
+    /// wrap; their wrapping sum is the exact live-byte count.
+    owned: AtomicUsize,
+    shared: AtomicUsize,
+    /// [`thread_token`] of the owner thread, 0 for none.
+    owner: AtomicUsize,
     peak: AtomicUsize,
     allocs: AtomicUsize,
     frees: AtomicUsize,
@@ -144,7 +171,9 @@ impl<A> CountingAlloc<A> {
     pub const fn new(inner: A) -> Self {
         Self {
             inner,
-            current: AtomicUsize::new(0),
+            owned: AtomicUsize::new(0),
+            shared: AtomicUsize::new(0),
+            owner: AtomicUsize::new(0),
             peak: AtomicUsize::new(0),
             allocs: AtomicUsize::new(0),
             frees: AtomicUsize::new(0),
@@ -172,7 +201,7 @@ impl<A> CountingAlloc<A> {
     /// Raw counter snapshot.
     pub fn stats(&self) -> Stats {
         Stats {
-            current: self.current.load(Relaxed),
+            current: self.raw_usage(),
             peak: self.peak.load(Relaxed),
             allocs: self.allocs.load(Relaxed),
             frees: self.frees.load(Relaxed),
@@ -196,7 +225,7 @@ impl<A> CountingAlloc<A> {
     /// `memory_get_usage(false)`: live bytes since the baseline plus
     /// [`PHP_BASELINE`].
     pub fn usage(&self) -> usize {
-        self.reported(self.current.load(Relaxed))
+        self.reported(self.raw_usage())
     }
 
     /// `memory_get_usage(true)`: [`usage`](Self::usage) rounded up to 2 MiB
@@ -235,13 +264,13 @@ impl<A> CountingAlloc<A> {
 
     /// `memory_reset_peak_usage()`: the peak becomes the current usage.
     pub fn reset_peak(&self) {
-        self.peak.store(self.current.load(Relaxed), Relaxed);
+        self.peak.store(self.raw_usage(), Relaxed);
     }
 
     /// Makes the current raw usage the zero point of reported usage (which
     /// then equals [`PHP_BASELINE`]) and resets the peak.
     pub fn set_baseline(&self) {
-        let now = self.current.load(Relaxed);
+        let now = self.raw_usage();
         self.baseline.store(now, Relaxed);
         self.peak.store(now, Relaxed);
         self.update_thresholds();
@@ -440,6 +469,7 @@ impl<A> CountingAlloc<A> {
     ///
     /// [`DEFAULT_LIMIT`]: crate::DEFAULT_LIMIT
     pub fn request_start(&self, limit: Option<usize>) -> Result<(), SetLimitError> {
+        self.bind_to_current_thread();
         self.force_limit(None);
         self.set_baseline();
         self.clear();
@@ -461,9 +491,9 @@ impl<A> CountingAlloc<A> {
     /// Accounts `size` more live bytes; `false` if the allocation must fail.
     #[inline]
     fn admit(&self, size: usize) -> bool {
-        let new = self.current.fetch_add(size, Relaxed).wrapping_add(size);
+        let new = self.add_live(size);
         if new > self.soft_raw.load(Relaxed) && !self.admit_over_soft(new, size) {
-            self.current.fetch_sub(size, Relaxed);
+            self.release(size);
             return false;
         }
         if new > self.peak.load(Relaxed) {
@@ -499,8 +529,48 @@ impl<A> CountingAlloc<A> {
     }
 
     #[inline]
+    fn is_owner(&self) -> bool {
+        self.owner.load(Relaxed) == thread_token()
+    }
+
+    /// Adds `size` live bytes, returning the new total.
+    #[inline]
+    fn add_live(&self, size: usize) -> usize {
+        if self.is_owner() {
+            let owned = self.owned.load(Relaxed).wrapping_add(size);
+            self.owned.store(owned, Relaxed);
+            owned.wrapping_add(self.shared.load(Relaxed))
+        } else {
+            let shared = self.shared.fetch_add(size, Relaxed).wrapping_add(size);
+            shared.wrapping_add(self.owned.load(Relaxed))
+        }
+    }
+
+    #[inline]
     fn release(&self, size: usize) {
-        self.current.fetch_sub(size, Relaxed);
+        if self.is_owner() {
+            self.owned
+                .store(self.owned.load(Relaxed).wrapping_sub(size), Relaxed);
+        } else {
+            self.shared.fetch_sub(size, Relaxed);
+        }
+    }
+
+    /// Live bytes, exact.
+    pub fn raw_usage(&self) -> usize {
+        self.owned
+            .load(Relaxed)
+            .wrapping_add(self.shared.load(Relaxed))
+    }
+
+    /// Makes the calling thread the *owner*: its allocations and frees are
+    /// accounted with plain loads/stores instead of locked instructions
+    /// (PHP runs a request on one thread, so this is the fast path). Other
+    /// threads keep using atomic read-modify-writes, so totals stay exact.
+    /// [`request_start`](Self::request_start) calls this; do not move
+    /// ownership while the previous owner thread is still allocating.
+    pub fn bind_to_current_thread(&self) {
+        self.owner.store(thread_token(), Relaxed);
     }
 }
 
@@ -530,7 +600,7 @@ unsafe impl<A: GlobalAlloc> GlobalAlloc for CountingAlloc<A> {
         if p.is_null() {
             self.release(layout.size());
         } else {
-            self.allocs.fetch_add(1, Relaxed);
+            bump(&self.allocs);
         }
         p
     }
@@ -545,7 +615,7 @@ unsafe impl<A: GlobalAlloc> GlobalAlloc for CountingAlloc<A> {
         if p.is_null() {
             self.release(layout.size());
         } else {
-            self.allocs.fetch_add(1, Relaxed);
+            bump(&self.allocs);
         }
         p
     }
@@ -556,7 +626,7 @@ unsafe impl<A: GlobalAlloc> GlobalAlloc for CountingAlloc<A> {
         // (hence by `inner`) with `layout`.
         unsafe { self.inner.dealloc(ptr, layout) };
         self.release(layout.size());
-        self.frees.fetch_add(1, Relaxed);
+        bump(&self.frees);
     }
 
     #[inline]
@@ -572,7 +642,7 @@ unsafe impl<A: GlobalAlloc> GlobalAlloc for CountingAlloc<A> {
             if p.is_null() {
                 self.release(grow);
             } else {
-                self.reallocs.fetch_add(1, Relaxed);
+                bump(&self.reallocs);
             }
             p
         } else {
@@ -580,7 +650,7 @@ unsafe impl<A: GlobalAlloc> GlobalAlloc for CountingAlloc<A> {
             let p = unsafe { self.inner.realloc(ptr, layout, new_size) };
             if !p.is_null() {
                 self.release(old_size - new_size);
-                self.reallocs.fetch_add(1, Relaxed);
+                bump(&self.reallocs);
             }
             p
         }
