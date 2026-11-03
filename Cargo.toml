@@ -30,6 +30,7 @@ members = [
     "crates/php-openssl",
     "crates/php-sqlite",
     "crates/php-libxml",
+    "crates/php-intl",
 ]
 
 [workspace.package]
