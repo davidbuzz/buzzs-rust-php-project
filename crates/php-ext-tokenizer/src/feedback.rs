@@ -104,8 +104,8 @@ pub fn identifier_positions(kinds: &[TokenKind]) -> Vec<usize> {
     for (j, &(index, kind)) in sig.iter().enumerate() {
         let next = at(j + 1);
         let top = stack.last().copied();
-        let is_ident = kind.is_semi_reserved()
-            && is_identifier_position(kind, prev, prev2, next, top);
+        let is_ident =
+            kind.is_semi_reserved() && is_identifier_position(kind, prev, prev2, next, top);
         let eff = if is_ident {
             out.push(index);
             TokenKind::String
@@ -266,7 +266,10 @@ mod tests {
     fn trait_adaptations() {
         let src = "<?php class A { use T { list as foreach; T::new insteadof U; echo as protected print; exit as public; } }
             foreach ($a as list($b)) {}";
-        assert_eq!(converted(src), ["list", "foreach", "new", "echo", "print"]);
+        assert_eq!(
+            converted(src),
+            ["list", "foreach", "new", "echo", "print", "exit"]
+        );
     }
 
     #[test]

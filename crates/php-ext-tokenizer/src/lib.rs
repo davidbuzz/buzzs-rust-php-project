@@ -69,7 +69,10 @@ fn lexer_options(vm: &Vm) -> LexerOptions {
 fn tokenize_common<'a>(vm: &mut Vm, src: &'a [u8], flags: i64) -> VmResult<Vec<Tok<'a>>> {
     let opts = lexer_options(vm);
     if flags & TOKEN_PARSE == 0 {
-        return Ok(token_get_all_with(src, opts).iter().map(Tok::from).collect());
+        return Ok(token_get_all_with(src, opts)
+            .iter()
+            .map(Tok::from)
+            .collect());
     }
     let parse_opts = ParseOptions {
         short_open_tag: opts.short_tags,
@@ -148,6 +151,7 @@ fn token_get_all(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 }
 
 /// `token_name(int $id): string`
+#[allow(clippy::unnecessary_wraps)] // `NativeFn` signature
 fn token_name(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let name = token_type_name(a.int(0)).unwrap_or("UNKNOWN");
     Ok(Value::Str(ZStr::from(name)))
@@ -223,6 +227,7 @@ fn tokenize(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 }
 
 /// `PhpToken::__construct(int $id, string $text, int $line = -1, int $pos = -1)`
+#[allow(clippy::unnecessary_wraps)] // `NativeFn` signature
 fn construct(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let o = a.this_obj();
     vm.set_property_raw(&o, "id", Value::Int(a.int(0)));
@@ -265,7 +270,7 @@ fn is(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
                             "must only have elements of type string|int, {} given",
                             other.value_name()
                         );
-                        return Err(a.type_error(vm, 0, &msg));
+                        return Err(a.type_error(vm, 1, &msg));
                     }
                 }
             }
@@ -276,7 +281,7 @@ fn is(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
                 "must be of type string|int|array, {} given",
                 other.value_name()
             );
-            Err(a.type_error(vm, 0, &msg))
+            Err(a.type_error(vm, 1, &msg))
         }
     }
 }
@@ -329,8 +334,11 @@ impl Extension for Tokenizer {
             Value::Int(TokenKind::PaamayimNekudotayim.id()),
         );
         m.constant("TOKEN_PARSE", Value::Int(TOKEN_PARSE));
-        m.function("token_get_all(string $code, int $flags = 0): array", token_get_all)
-            .function("token_name(int $id): string", token_name);
+        m.function(
+            "token_get_all(string $code, int $flags = 0): array",
+            token_get_all,
+        )
+        .function("token_name(int $id): string", token_name);
 
         let vm = m.vm();
         php_vm::ext::ClassBuilder::new("PhpToken")
