@@ -807,6 +807,34 @@ pub fn run(script: &str, dir: &Path, fix: &Path) -> String {
                 fs::create_dir_all(p.parent().unwrap()).unwrap();
                 fs::copy(fix.join(rest[0].as_str().unwrap()), &p).unwrap();
             }
+            "poke" => {
+                let mut raw = fs::read(path(0)).unwrap();
+                let sig = subst(&st, rest[1].as_str().unwrap());
+                let off = rest[2].as_u64().unwrap() as usize;
+                let bytes = subst(&st, rest[3].as_str().unwrap());
+                let mut pos = 0;
+                while let Some(p) = raw[pos..].windows(sig.len()).position(|w| w == sig) {
+                    let at = pos + p + off;
+                    raw[at..at + bytes.len()].copy_from_slice(&bytes);
+                    pos += p + sig.len();
+                }
+                fs::write(path(0), raw).unwrap();
+            }
+            "sub" => {
+                let raw = fs::read(path(0)).unwrap();
+                let needle = subst(&st, rest[1].as_str().unwrap());
+                let rep = subst(&st, rest[2].as_str().unwrap());
+                let p = raw.windows(needle.len()).position(|w| w == needle).unwrap();
+                let out = [&raw[..p], &rep[..], &raw[p + needle.len()..]].concat();
+                fs::write(path(0), out).unwrap();
+            }
+            "entries" => {
+                let z = zip_var(&st, &sname(0));
+                for i in 0..z.num_files() {
+                    let n = z.get_name_index(i, 0).ok().flatten();
+                    emit(&st, &format!("entry {i} = {}", ex(&V::opt_str(n))));
+                }
+            }
             "mkdir" => fs::create_dir_all(path(0)).unwrap(),
             "chmod" => {
                 let mode = u32::from_str_radix(rest[1].as_str().unwrap(), 8).unwrap();

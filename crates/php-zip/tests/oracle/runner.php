@@ -24,7 +24,7 @@ function ex($v): string {
     if (is_int($v)) return (string)$v;
     if (is_float($v)) return var_export($v, true);
     if (is_string($v)) {
-        if (preg_match('/^[\x20-\x7e]*$/', $v)) return '"' . $v . '"';
+        if (preg_match('/^[\x20-\x7e]*$/D', $v)) return '"' . $v . '"';
         return 'hex:' . bin2hex($v);
     }
     if (is_array($v)) {
@@ -216,6 +216,29 @@ foreach (file($scenario, FILE_IGNORE_NEW_LINES) as $line) {
             case 'copy':
                 @mkdir(dirname(rel($cmd[1])), 0777, true);
                 copy($FIX . '/' . $cmd[0], rel($cmd[1]));
+                break;
+            case 'poke':
+                $raw = file_get_contents(rel($cmd[0]));
+                $sig = arg($cmd[1]);
+                $bytes = arg($cmd[3]);
+                $pos = 0;
+                while (($pos = strpos($raw, $sig, $pos)) !== false) {
+                    $raw = substr_replace($raw, $bytes, $pos + $cmd[2], strlen($bytes));
+                    $pos += strlen($sig);
+                }
+                file_put_contents(rel($cmd[0]), $raw);
+                break;
+            case 'sub':
+                $raw = file_get_contents(rel($cmd[0]));
+                $pos = strpos($raw, arg($cmd[1]));
+                $raw = substr_replace($raw, arg($cmd[2]), $pos, strlen(arg($cmd[1])));
+                file_put_contents(rel($cmd[0]), $raw);
+                break;
+            case 'entries':
+                $z = $vars[$cmd[0]];
+                for ($i = 0; $i < $z->numFiles; $i++) {
+                    echo "entry $i = ", ex($z->getNameIndex($i)), "\n";
+                }
                 break;
             case 'mkdir':
                 mkdir(rel($cmd[0]), 0777, true);

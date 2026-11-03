@@ -1,0 +1,170 @@
+# test.zip: stat/locate/names/contents
+z->open = true
+z props = ["lastId"=>-1,"status"=>0,"statusSys"=>0,"numFiles"=>4,"filename"=>"{FIX}/test.zip","comment"=>""]
+entry 0 = "bar"
+entry 1 = "foobar/"
+entry 2 = "foobar/baz"
+entry 3 = "entry1.txt"
+z->statIndex = ["name"=>"bar","index"=>0,"crc"=>77771753,"size"=>4,"mtime"=>1123135908,"comp_size"=>4,"comp_method"=>0,"encryption_method"=>0]
+z->statIndex = ["name"=>"foobar/","index"=>1,"crc"=>0,"size"=>0,"mtime"=>1123135948,"comp_size"=>0,"comp_method"=>0,"encryption_method"=>0]
+z->statIndex = ["name"=>"foobar/baz","index"=>2,"crc"=>499465816,"size"=>27,"mtime"=>1123135948,"comp_size"=>24,"comp_method"=>8,"encryption_method"=>0]
+z->statIndex = ["name"=>"entry1.txt","index"=>3,"crc"=>4094452955,"size"=>8,"mtime"=>1152180782,"comp_size"=>10,"comp_method"=>8,"encryption_method"=>0]
+z->statIndex = false
+z->statIndex = false
+z->statIndex = ["name"=>"bar","index"=>0,"crc"=>77771753,"size"=>4,"mtime"=>1123135908,"comp_size"=>4,"comp_method"=>0,"encryption_method"=>0]
+z->statName = ["name"=>"bar","index"=>0,"crc"=>77771753,"size"=>4,"mtime"=>1123135908,"comp_size"=>4,"comp_method"=>0,"encryption_method"=>0]
+z->statName = false
+z->statName = ["name"=>"bar","index"=>0,"crc"=>77771753,"size"=>4,"mtime"=>1123135908,"comp_size"=>4,"comp_method"=>0,"encryption_method"=>0]
+z->statName = ["name"=>"foobar/baz","index"=>2,"crc"=>499465816,"size"=>27,"mtime"=>1123135948,"comp_size"=>24,"comp_method"=>8,"encryption_method"=>0]
+z->statName = ["name"=>"foobar/baz","index"=>2,"crc"=>499465816,"size"=>27,"mtime"=>1123135948,"comp_size"=>24,"comp_method"=>8,"encryption_method"=>0]
+! ValueError: ZipArchive::statName(): Argument #1 ($name) must not be empty
+z->statName = false
+z->locateName = 0
+z->locateName = false
+z->locateName = 0
+z->locateName = 2
+z->locateName = 1
+z->locateName = false
+z->locateName = false
+z->getNameIndex = "bar"
+z->getNameIndex = "entry1.txt"
+z->getNameIndex = false
+z->getNameIndex = false
+z->getNameIndex = false
+z->getFromName = hex:6261720a
+z->getFromName = "ba"
+z->getFromName = hex:6261720a
+z->getFromName = hex:6261720a
+z->getFromName = hex:626c61626c61206c6162657220726162616265722073c3bc6c7a0a
+z->getFromName = ""
+z->getFromName = hex:4bcd2b29aa545036
+z->getFromName = false
+! ValueError: ZipArchive::getFromName(): Argument #1 ($name) must not be empty
+z->getFromName = hex:6261720a
+z->getFromIndex = hex:6261720a
+z->getFromIndex = "entry"
+z->getFromIndex = false
+z->getFromIndex = false
+z->getFromIndex = hex:4bcd2b29aa545036
+z->getCommentIndex = ""
+z->getCommentIndex = false
+z->getCommentName = ""
+z->getCommentName = false
+! ValueError: ZipArchive::getCommentName(): Argument #1 ($name) must not be empty
+z->getArchiveComment = ""
+z->getArchiveComment = ""
+z->count = 4
+z->getStatusString = "No such file"
+z->close = true
+# test_with_comment.zip
+z->open = true
+z props = ["lastId"=>-1,"status"=>0,"statusSys"=>0,"numFiles"=>4,"filename"=>"{FIX}/test_with_comment.zip","comment"=>"Zip archive comment"]
+entry 0 = "foo"
+entry 1 = "bar"
+entry 2 = "foobar/"
+entry 3 = "foobar/baz"
+z->getArchiveComment = "Zip archive comment"
+z->getArchiveComment = "Zip archive comment"
+z->getCommentIndex = "foo comment"
+z->getCommentIndex = ""
+z->getCommentIndex = ""
+z->getCommentIndex = ""
+z->getCommentName = "foo comment"
+z->getCommentName = ""
+z->getCommentName = ""
+z->getCommentIndex = "foo comment"
+z->close = true
+# binarynull / compression_methods / bug fixtures
+z->open = true
+entry 0 = "test.jpeg"
+z->statIndex = ["name"=>"test.jpeg","index"=>0,"crc"=>935112339,"size"=>695,"mtime"=>1143699596,"comp_size"=>506,"comp_method"=>8,"encryption_method"=>0]
+z->getFromIndex = hex:ffd8ffe000104a46494600010100000100010000fffe003e43524541544f523a2067642d6a7065672076312e3020287573696e6720494a47204a50454720763632292c2064656661756c74207175616c6974790affdb004300080606070605080707070909080a0c140d0c0b0b0c1912130f141d1a1f1e1d1a1c1c20242e2720222c231c1c2837292c30313434341f27393d38323c2e333432ffdb0043010909090c0b0c180d0d1832211c213232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232ffc00011080001000103012200021101031101ffc4001f0000010501010101010100000000000000000102030405060708090a0bffc400b5100002010303020403050504040000017d01020300041105122131410613516107227114328191a1082342b1c11552d1f02433627282090a161718191a25262728292a3435363738393a434445464748494a535455565758595a636465666768696a737475767778797a838485868788898a92939495969798999aa2a3a4a5a6a7a8a9aab2b3b4b5b6b7b8b9bac2c3c4c5c6c7c8c9cad2d3d4d5d6d7d8d9dae1e2e3e4e5e6e7e8e9eaf1f2f3f4f5f6f7f8f9faffc4001f0100030101010101010101010000000000000102030405060708090a0bffc400b51100020102040403040705040400010277000102031104052131061241510761711322328108144291a1b1c109233352f0156272d10a162434e125f11718191a262728292a35363738393a434445464748494a535455565758595a636465666768696a737475767778797a82838485868788898a92939495969798999aa2a3a4a5a6a7a8a9aab2b3b4b5b6b7b8b9bac2c3c4c5c6c7c8c9cad2d3d4d5d6d7d8d9dae2e3e4e5e6e7e8e9eaf2f3f4f5f6f7f8f9faffda000c03010002110311003f00f9fe8a28a00fffd9
+z->close = true
+z->open = true
+entry 0 = "lzma"
+entry 1 = "bzip2"
+entry 2 = "ppmd"
+entry 3 = "deflate"
+entry 4 = "deflate64"
+entry 5 = "store"
+z->statName = ["name"=>"store","index"=>5,"crc"=>2852144956,"size"=>591,"mtime"=>1437642720,"comp_size"=>591,"comp_method"=>0,"encryption_method"=>0]
+z->statName = ["name"=>"deflate","index"=>3,"crc"=>2852144956,"size"=>591,"mtime"=>1437642720,"comp_size"=>186,"comp_method"=>8,"encryption_method"=>0]
+z->statName = ["name"=>"deflate64","index"=>4,"crc"=>2852144956,"size"=>591,"mtime"=>1437642720,"comp_size"=>186,"comp_method"=>9,"encryption_method"=>0]
+z->statName = ["name"=>"bzip2","index"=>1,"crc"=>2852144956,"size"=>591,"mtime"=>1437642720,"comp_size"=>259,"comp_method"=>12,"encryption_method"=>0]
+z->statName = ["name"=>"lzma","index"=>0,"crc"=>2852144956,"size"=>591,"mtime"=>1437642720,"comp_size"=>236,"comp_method"=>14,"encryption_method"=>0]
+z->statName = ["name"=>"ppmd","index"=>2,"crc"=>2852144956,"size"=>591,"mtime"=>1437642720,"comp_size"=>182,"comp_method"=>98,"encryption_method"=>0]
+z->getFromName = "Lorem ipsum dolor sit amet, consetetur sadipscing elitr, sed diam nonumy eirmod tempor invidunt ut labore et dolore magna aliquyam erat, sed diam voluptua. At vero eos et accusam et justo duo dolores et ea rebum. Stet clita kasd gubergren, no sea takimata sanctus est Lorem ipsum dolor sit amet. Lorem ipsum dolor sit amet, consetetur sadipscing elitr, sed diam nonumy eirmod tempor invidunt ut labore et dolore magna aliquyam erat, sed diam voluptua. At vero eos et accusam et justo duo dolores et ea rebum. Stet clita kasd gubergren, no sea takimata sanctus est Lorem ipsum dolor sit amet."
+z->getFromName = "Lorem ipsum dolor sit amet, consetetur sadipscing elitr, sed diam nonumy eirmod tempor invidunt ut labore et dolore magna aliquyam erat, sed diam voluptua. At vero eos et accusam et justo duo dolores et ea rebum. Stet clita kasd gubergren, no sea takimata sanctus est Lorem ipsum dolor sit amet. Lorem ipsum dolor sit amet, consetetur sadipscing elitr, sed diam nonumy eirmod tempor invidunt ut labore et dolore magna aliquyam erat, sed diam voluptua. At vero eos et accusam et justo duo dolores et ea rebum. Stet clita kasd gubergren, no sea takimata sanctus est Lorem ipsum dolor sit amet."
+z->getFromName = "Lorem ipsum dolor sit amet, consetetur sadipscing elitr, sed diam nonumy eirmod tempor invidunt ut labore et dolore magna aliquyam erat, sed diam voluptua. At vero eos et accusam et justo duo dolores et ea rebum. Stet clita kasd gubergren, no sea takimata sanctus est Lorem ipsum dolor sit amet. Lorem ipsum dolor sit amet, consetetur sadipscing elitr, sed diam nonumy eirmod tempor invidunt ut labore et dolore magna aliquyam erat, sed diam voluptua. At vero eos et accusam et justo duo dolores et ea rebum. Stet clita kasd gubergren, no sea takimata sanctus est Lorem ipsum dolor sit amet."
+z->getStatusString = "No error"
+z->getFromName = false
+z->getFromName = false
+z->getStatusString = "Compression method not supported"
+z->getFromName = false
+z->close = true
+z->open = true
+entry 0 = "test/"
+entry 1 = "test/empty/"
+z->close = true
+z->open = true
+entry 0 = "file2"
+entry 1 = "file1"
+z->getFromName = false
+z->statIndex = ["name"=>"file2","index"=>0,"crc"=>1567898667,"size"=>30461,"mtime"=>1247967642,"comp_size"=>24503,"comp_method"=>8,"encryption_method"=>0]
+z->close = true
+z->open = true
+entry 0 = "1.txt"
+z->close = true
+z->open = true
+entry 0 = "bug70752.txt"
+z->getFromIndex = false
+z->close = true
+z->open = true
+z->close = true
+z->open = true
+entry 0 = "/../nt1/zzr_noharm.php"
+z->close = true
+z->open = 21
+! ValueError: Invalid or uninitialized Zip object
+z->open = true
+entry 0 = "foo"
+entry 1 = "bar"
+entry 2 = "foobar/"
+entry 3 = "foobar/baz"
+z->close = true
+z->open = true
+entry 0 = "test"
+z->statIndex = ["name"=>"test","index"=>0,"crc"=>3632233996,"size"=>255,"mtime"=>NOW,"comp_size"=>4,"comp_method"=>0,"encryption_method"=>0]
+z->close = true
+z->open = true
+z->close = true
+z->open = 21
+z->getStatusString = "No error"
+z props = ["lastId"=>-1,"status"=>0,"statusSys"=>0,"numFiles"=>0,"filename"=>"","comment"=>""]
+z->open = true
+entry 0 = "mimetype"
+entry 1 = "Configurations2/statusbar/"
+entry 2 = "Configurations2/accelerator/current.xml"
+entry 3 = "Configurations2/floater/"
+entry 4 = "Configurations2/popupmenu/"
+entry 5 = "Configurations2/progressbar/"
+entry 6 = "Configurations2/menubar/"
+entry 7 = "Configurations2/toolbar/"
+entry 8 = "Configurations2/images/Bitmaps/"
+entry 9 = "content.xml"
+entry 10 = "styles.xml"
+entry 11 = "meta.xml"
+entry 12 = "Thumbnails/thumbnail.png"
+entry 13 = "settings.xml"
+entry 14 = "META-INF/manifest.xml"
+z->close = true
+z->open = true
+entry 0 = "test/"
+entry 1 = "test/empty/"
+z props = ["lastId"=>-1,"status"=>0,"statusSys"=>0,"numFiles"=>2,"filename"=>hex:2f686f6d652f62757a7a2f706870727573742f6d6f64756c65732f7068702d7372632f6578742f7a69702f74657374732f6275673430323238e7a781e381afe382ace383a9e382b9e38292e9a39fe381b9e38289e3828ce381bee381992e7a6970,"comment"=>""]
+z->close = true
+z->open = 19
+z->open = 19
+z props = ["lastId"=>-1,"status"=>0,"statusSys"=>0,"numFiles"=>0,"filename"=>"","comment"=>""]
+z->getStatusString = "No error"
+END

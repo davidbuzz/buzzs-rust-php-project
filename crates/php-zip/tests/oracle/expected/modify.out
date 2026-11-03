@@ -1,0 +1,230 @@
+# add / delete / rename / comments / unchange on a copy of test.zip
+z->open = true
+z->lastId = -1
+z->addFile = true
+z->lastId = 4
+z->addFile = true
+z->lastId = 5
+z->addFile = true
+z->lastId = 6
+z->addFile = true
+z->addFile = true
+[Warning] ZipArchive::addFile(): No such file or directory
+z->addFile = false
+! ValueError: ZipArchive::addFile(): Argument #1 ($filepath) must not be empty
+z->addFile = false
+z->getStatusString = "File already exists"
+z->status = 10
+z->addFile = true
+z->lastId = 4
+z->addFromString = true
+z->addFromString = false
+z->getStatusString = "File already exists"
+z->addFromString = true
+z->lastId = 9
+z->addFromString = true
+z->getStatusString = "No error"
+z->addFromString = true
+z->addEmptyDir = true
+z->addEmptyDir = true
+z->addEmptyDir = false
+z->addEmptyDir = false
+z->addEmptyDir = true
+z->addEmptyDir = true
+z->addFromString = true
+z->addFromString = true
+z->numFiles = 18
+entry 0 = "bar"
+entry 1 = "foobar/"
+entry 2 = "foobar/baz"
+entry 3 = "entry1.txt"
+entry 4 = "test.php"
+entry 5 = "mini.txt"
+entry 6 = "other.txt"
+entry 7 = "deleted.txt"
+entry 8 = "{DIR}/src.txt"
+entry 9 = "str.txt"
+entry 10 = ""
+entry 11 = "nul"
+entry 12 = "emptydir/"
+entry 13 = "emptydir2/"
+entry 14 = hex:c3a92f
+entry 15 = hex:c3a82f
+entry 16 = hex:c3a6
+entry 17 = hex:e282ac
+z->getFromName = false
+z->getFromName = false
+z->getFromName = false
+z->getFromName = false
+z->statName = ["name"=>"str.txt","index"=>9,"crc"=>0,"size"=>5,"mtime"=>NOW,"comp_size"=>5,"comp_method"=>0,"encryption_method"=>0]
+z->statName = false
+z->deleteIndex = true
+z->deleteIndex = false
+z->getStatusString = "Entry has been deleted"
+z->deleteIndex = false
+z->getStatusString = "Invalid argument"
+z->deleteIndex = false
+z->deleteName = true
+z->deleteName = false
+z->deleteName = false
+z->statIndex = false
+z->getNameIndex = false
+z->getNameIndex = "bar"
+z->locateName = false
+z->locateName = 0
+z->renameIndex = true
+z->renameIndex = false
+z->getStatusString = "File already exists"
+z->renameIndex = false
+! ValueError: ZipArchive::renameIndex(): Argument #2 ($new_name) must not be empty
+z->renameName = true
+z->renameName = false
+! ValueError: ZipArchive::renameName(): Argument #2 ($new_name) must not be empty
+! ValueError: ZipArchive::renameName(): Argument #1 ($name) must not be empty
+z->getNameIndex = "renamed2.txt"
+z->getNameIndex = "entry1.txt"
+z->setArchiveComment = true
+z->getArchiveComment = "archive comment"
+z->getArchiveComment = ""
+z->comment = "archive comment"
+z->setCommentIndex = true
+z->setCommentIndex = false
+z->setCommentName = true
+z->setCommentName = false
+z->getCommentIndex = "comment one"
+z->getCommentName = "comment str"
+z->getCommentName = ""
+z->setCommentName = true
+z->setCommentName = true
+z->getCommentName = ""
+! ValueError: ZipArchive::setArchiveComment(): Argument #1 ($comment) must be less than 65535 bytes
+! ValueError: ZipArchive::setCommentName(): Argument #2 ($comment) must be less than 65535 bytes
+! ValueError: ZipArchive::setCommentIndex(): Argument #2 ($comment) must be less than 65535 bytes
+z->setCommentIndex = true
+z->unchangeIndex = true
+z->getCommentIndex = ""
+z->unchangeName = true
+z->unchangeName = false
+z->getNameIndex = "entry1.txt"
+z->unchangeArchive = true
+z->getArchiveComment = ""
+z->setMtimeName = true
+z->setMtimeIndex = true
+z->setMtimeName = false
+z->setMtimeIndex = false
+z->statName = ["name"=>"str.txt","index"=>9,"crc"=>0,"size"=>5,"mtime"=>1577232000,"comp_size"=>5,"comp_method"=>0,"encryption_method"=>0]
+z->setExternalAttributesName = true
+z->setExternalAttributesIndex = true
+z->setExternalAttributesIndex = false
+z->setExternalAttributesName = false
+! ValueError: ZipArchive::setExternalAttributesName(): Argument #1 ($name) must not be empty
+z->getExternalAttributesName = true opsys=3 attr=2175008768
+z->getExternalAttributesName = false opsys=null attr=null
+z->getExternalAttributesIndex = true opsys=14 attr=234
+z->getExternalAttributesIndex = false opsys=null attr=null
+z->getExternalAttributesName = false opsys=null attr=null
+! ValueError: ZipArchive::getExternalAttributesName(): Argument #1 ($name) must not be empty
+z->setCompressionName = true
+z->setCompressionName = true
+z->setCompressionIndex = true
+z->setCompressionName = false
+z->setCompressionIndex = false
+z->getStatusString = "Invalid argument"
+z->setCompressionIndex = false
+z->setArchiveComment = true
+z props = ["lastId"=>17,"status"=>16,"statusSys"=>0,"numFiles"=>18,"filename"=>"{DIR}/t.zip","comment"=>"final comment"]
+z->close = true
+z props = ["lastId"=>17,"status"=>0,"statusSys"=>0,"numFiles"=>0,"filename"=>"","comment"=>""]
+# reopen
+z->open = true
+z props = ["lastId"=>17,"status"=>0,"statusSys"=>0,"numFiles"=>16,"filename"=>"{DIR}/t.zip","comment"=>"final comment"]
+entry 0 = "foobar/"
+entry 1 = "entry1.txt"
+entry 2 = "test.php"
+entry 3 = "mini.txt"
+entry 4 = "other.txt"
+entry 5 = "deleted.txt"
+entry 6 = "{DIR}/src.txt"
+entry 7 = "str.txt"
+entry 8 = ""
+entry 9 = "nul"
+entry 10 = "emptydir/"
+entry 11 = "emptydir2/"
+entry 12 = hex:c3a92f
+entry 13 = hex:c3a82f
+entry 14 = hex:c3a6
+entry 15 = hex:e282ac
+z->statName = ["name"=>"str.txt","index"=>7,"crc"=>2476825596,"size"=>5,"mtime"=>1577232000,"comp_size"=>5,"comp_method"=>0,"encryption_method"=>0]
+z->statName = ["name"=>"test.php","index"=>2,"crc"=>4256519037,"size"=>36,"mtime"=>NOW,"comp_size"=>38,"comp_method"=>8,"encryption_method"=>0]
+z->statName = ["name"=>"mini.txt","index"=>3,"crc"=>3580410531,"size"=>10,"mtime"=>NOW,"comp_size"=>10,"comp_method"=>0,"encryption_method"=>0]
+z->getFromName = "cdefghijkl"
+z->getFromName = "foo"
+z->getFromName = "0123456789abcdefghijklmnopqrstuvwxyz"
+z->getCommentName = ""
+z->getExternalAttributesName = true opsys=3 attr=2175008768
+z->getExternalAttributesIndex = true opsys=0 attr=0
+z->setExternalAttributesName = true
+z->getExternalAttributesName = true opsys=0 attr=345
+z->getExternalAttributesName = true opsys=3 attr=2175008768
+z->deleteName = true
+z->statName = false
+z->statName = ["name"=>"str.txt","index"=>7,"crc"=>2476825596,"size"=>5,"mtime"=>1577232000,"comp_size"=>5,"comp_method"=>0,"encryption_method"=>0]
+z->getFromName = "again"
+z->unchangeAll = true
+z->statName = ["name"=>"str.txt","index"=>7,"crc"=>2476825596,"size"=>5,"mtime"=>1577232000,"comp_size"=>5,"comp_method"=>0,"encryption_method"=>0]
+z->replaceFile = false
+z->getStatusString = "Invalid argument"
+z->replaceFile = true
+z->replaceFile = true
+[Warning] ZipArchive::replaceFile(): No such file or directory
+z->replaceFile = false
+z->getFromIndex = false
+z->getFromIndex = false
+z->close = true
+z->open = true
+z->getFromIndex = "56789ab"
+z->close = true
+# read-only archives / archive flags
+z->open = true
+z->getArchiveFlag = 0
+z->setArchiveFlag = true
+z->status = 0
+z->getArchiveFlag = 1
+z->addFromString = false
+z->status = 25
+z->getStatusString = "Read-only archive"
+z->close = true
+z->open = true
+z->getArchiveFlag = 1
+z->getArchiveFlag = 1
+z->setArchiveFlag = false
+z->status = 25
+z->addEmptyDir = false
+z->status = 25
+z->deleteIndex = false
+z->setArchiveComment = false
+z->close = true
+z->status = 0
+# empty archive is not written
+z->open = true
+z->addFromString = true
+z->deleteName = true
+z->close = true
+exists new.zip = false
+z->open = true
+z->close = true
+exists touched.zip = false
+z->open = true
+z->addFromString = true
+z->addFromString = true
+z->addFromString = true
+z->close = true
+size new2.zip = 344
+z->open = true
+z->locateName = 0
+z->locateName = false
+z->locateName = 1
+z->locateName = 2
+z->locateName = 2
+z->close = true
+END
