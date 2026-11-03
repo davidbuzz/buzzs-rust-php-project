@@ -86,9 +86,32 @@ fn normalize(out: &str, dir: &Path, fix: &Path) -> String {
     s
 }
 
+const REFLECT: &str = r#"
+$r = new ReflectionClass("ZipArchive");
+$o = ["constants" => [], "methods" => [], "functions" => []];
+foreach ($r->getReflectionConstants() as $c) $o["constants"][] = [$c->getName(), $c->getValue()];
+foreach ($r->getMethods() as $m) {
+    $ps = [];
+    foreach ($m->getParameters() as $p) $ps[] = [$p->getName(), (string)$p->getType(), $p->isOptional(), $p->isPassedByReference()];
+    $o["methods"][] = [$m->getName(), $m->isStatic(), $ps, (string)($m->getReturnType() ?? $m->getTentativeReturnType()), $m->hasTentativeReturnType()];
+}
+foreach (get_extension_funcs("zip") as $f) {
+    $rf = new ReflectionFunction($f);
+    $ps = [];
+    foreach ($rf->getParameters() as $p) $ps[] = [$p->getName(), (string)$p->getType(), $p->isOptional(), $p->isPassedByReference()];
+    $o["functions"][] = [$f, false, $ps, (string)$rf->getReturnType()];
+}
+echo json_encode($o, JSON_PRETTY_PRINT), "\n";
+"#;
+
 #[test]
 #[ignore = "regenerates the oracle cache with /usr/bin/php"]
 fn regenerate() {
+    let out = Command::new("/usr/bin/php")
+        .args(["-d", "memory_limit=1G", "-r", REFLECT])
+        .output()
+        .unwrap();
+    fs::write(root().join("class.json"), &out.stdout).unwrap();
     let fix = fs::canonicalize(fixtures()).unwrap();
     for sc in scenarios() {
         let name = sc.file_stem().unwrap().to_string_lossy().to_string();
@@ -172,4 +195,76 @@ fn scenarios_match_oracle() {
         "scenario mismatches:\n{}",
         failures.join("\n")
     );
+}
+
+/// A type as a sorted set of its members (`?T` is `T|null`).
+fn type_set(ty: &str) -> Vec<String> {
+    let mut v: Vec<String> = match ty.strip_prefix('?') {
+        Some(t) => vec![t.to_string(), "null".to_string()],
+        None if ty.is_empty() => Vec::new(),
+        None => ty.split('|').map(str::to_string).collect(),
+    };
+    v.sort();
+    v
+}
+
+#[test]
+fn class_tables_match_reflection() {
+    let json: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(root().join("class.json")).unwrap()).unwrap();
+    // Constants: same names, values and order.
+    let ours: Vec<(String, serde_json::Value)> = php_zip::consts::class_constants()
+        .into_iter()
+        .map(|c| {
+            let v = match c.value {
+                php_zip::consts::ConstValue::Int(i) => serde_json::Value::from(i),
+                php_zip::consts::ConstValue::Str(s) => serde_json::Value::from(s),
+            };
+            (c.name.to_string(), v)
+        })
+        .collect();
+    let theirs: Vec<(String, serde_json::Value)> = json["constants"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| (c[0].as_str().unwrap().to_string(), c[1].clone()))
+        .collect();
+    assert_eq!(ours, theirs);
+
+    // Methods: PHP 8.3 lacks the master-only ones.
+    let master_only = ["openString", "closeString", "__serialize", "__unserialize"];
+    let theirs: Vec<&serde_json::Value> = json["methods"].as_array().unwrap().iter().collect();
+    let ours: Vec<&php_zip::class::Method> = php_zip::class::METHODS
+        .iter()
+        .filter(|m| !master_only.contains(&m.name))
+        .collect();
+    assert_eq!(ours.len(), theirs.len());
+    for (m, t) in ours.iter().zip(theirs) {
+        assert_eq!(m.name, t[0].as_str().unwrap());
+        assert_eq!(m.is_static, t[1].as_bool().unwrap(), "{}", m.name);
+        let params = t[2].as_array().unwrap();
+        assert_eq!(m.params.len(), params.len(), "{}", m.name);
+        for (p, tp) in m.params.iter().zip(params) {
+            assert_eq!(p.name, tp[0].as_str().unwrap(), "{}", m.name);
+            assert_eq!(type_set(p.ty), type_set(tp[1].as_str().unwrap()), "{}::{}", m.name, p.name);
+            assert_eq!(p.default.is_some(), tp[2].as_bool().unwrap(), "{}::{}", m.name, p.name);
+            assert_eq!(p.by_ref, tp[3].as_bool().unwrap(), "{}::{}", m.name, p.name);
+        }
+        assert_eq!(type_set(m.ret), type_set(t[3].as_str().unwrap()), "{}", m.name);
+        assert_eq!(m.tentative, t[4].as_bool().unwrap(), "{}", m.name);
+    }
+
+    // Functions.
+    let theirs = json["functions"].as_array().unwrap();
+    assert_eq!(php_zip::class::FUNCTIONS.len(), theirs.len());
+    for (f, t) in php_zip::class::FUNCTIONS.iter().zip(theirs) {
+        assert_eq!(f.name, t[0].as_str().unwrap());
+        let params = t[2].as_array().unwrap();
+        assert_eq!(f.params.len(), params.len(), "{}", f.name);
+        for (p, tp) in f.params.iter().zip(params) {
+            assert_eq!(p.name, tp[0].as_str().unwrap(), "{}", f.name);
+            assert_eq!(type_set(p.ty), type_set(tp[1].as_str().unwrap()), "{}", f.name);
+            assert_eq!(p.default.is_some(), tp[2].as_bool().unwrap(), "{}", f.name);
+        }
+    }
 }

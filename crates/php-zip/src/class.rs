@@ -28,6 +28,9 @@ pub struct Method {
     pub ret: &'static str,
     /// `static`.
     pub is_static: bool,
+    /// Whether the return type is tentative (`@tentative-return-type`):
+    /// reflection reports it through `getTentativeReturnType()`.
+    pub tentative: bool,
     /// `#[\Deprecated]`: `(since, message)`.
     pub deprecated: Option<(&'static str, Option<&'static str>)>,
 }
@@ -67,12 +70,26 @@ const fn s(mut param: Param) -> Param {
     param
 }
 
+/// A method with a tentative return type (most of `ZipArchive`).
 const fn m(name: &'static str, params: &'static [Param], ret: &'static str) -> Method {
     Method {
         name,
         params,
         ret,
         is_static: false,
+        tentative: !ret.is_empty(),
+        deprecated: None,
+    }
+}
+
+/// A method with a real return type.
+const fn mr(name: &'static str, params: &'static [Param], ret: &'static str) -> Method {
+    Method {
+        name,
+        params,
+        ret,
+        is_static: false,
+        tentative: false,
         deprecated: None,
     }
 }
@@ -88,6 +105,7 @@ const fn f(
         params,
         ret,
         is_static: false,
+        tentative: false,
         deprecated: Some(("8.0", message)),
     }
 }
@@ -166,19 +184,19 @@ pub const METHODS: &[Method] = &[
         &[p("filename", "string"), o("flags", "int", "0")],
         "bool|int",
     ),
-    m(
+    mr(
         "openString",
         &[o("data", "string", "''"), o("flags", "int", "0")],
         "bool|int",
     ),
     m("setPassword", &[s(p("password", "string"))], "bool"),
     m("close", &[], "bool"),
-    m("closeString", &[], "string|false"),
+    mr("closeString", &[], "string|false"),
     m("count", &[], "int"),
-    m("__serialize", &[], "array"),
-    m("__unserialize", &[p("data", "array")], "void"),
+    mr("__serialize", &[], "array"),
+    mr("__unserialize", &[p("data", "array")], "void"),
     m("getStatusString", &[], "string"),
-    m("clearError", &[], "void"),
+    mr("clearError", &[], "void"),
     m(
         "addEmptyDir",
         &[p("dirname", "string"), o("flags", "int", "0")],
@@ -249,12 +267,12 @@ pub const METHODS: &[Method] = &[
         &[o("flags", "int", "0")],
         "string|false",
     ),
-    m(
+    mr(
         "setArchiveFlag",
         &[p("flag", "int"), p("value", "int")],
         "bool",
     ),
-    m(
+    mr(
         "getArchiveFlag",
         &[p("flag", "int"), o("flags", "int", "0")],
         "int",
@@ -419,6 +437,7 @@ pub const METHODS: &[Method] = &[
         params: &[p("method", "int"), o("enc", "bool", "true")],
         ret: "bool",
         is_static: true,
+        tentative: false,
         deprecated: None,
     },
     Method {
@@ -426,6 +445,7 @@ pub const METHODS: &[Method] = &[
         params: &[p("method", "int"), o("enc", "bool", "true")],
         ret: "bool",
         is_static: true,
+        tentative: false,
         deprecated: None,
     },
 ];
