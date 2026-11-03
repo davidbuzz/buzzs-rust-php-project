@@ -771,3 +771,221 @@ pub fn closelog() {
     // SAFETY: no preconditions.
     unsafe { libc::closelog() };
 }
+
+// ------------------------------------------------------------- environment
+
+/// The raw `environ` entries, in order.
+#[must_use]
+pub fn environ_entries() -> Vec<Vec<u8>> {
+    let mut out = Vec::new();
+    // SAFETY: `environ` is a NULL-terminated array of C strings; each is
+    // copied immediately. The caller must not mutate the environment from
+    // another thread concurrently (same contract as PHP's tsrm_env_lock).
+    unsafe {
+        let mut p = environ_ptr();
+        while !p.is_null() && !(*p).is_null() {
+            out.push(CStr::from_ptr(*p).to_bytes().to_vec());
+            p = p.add(1);
+        }
+    }
+    out
+}
+
+/// `getenv(name)`.
+#[must_use]
+pub fn getenv(name: &[u8]) -> Option<Vec<u8>> {
+    let c = cstring(name);
+    // SAFETY: valid C string; the result is copied immediately.
+    from_cstr(unsafe { libc::getenv(c.as_ptr()) })
+}
+
+/// `setenv(name, value, 1) == 0`.
+#[must_use]
+pub fn setenv(name: &[u8], value: &[u8]) -> bool {
+    let (n, v) = (cstring(name), cstring(value));
+    // SAFETY: valid C strings; setenv copies them.
+    unsafe { libc::setenv(n.as_ptr(), v.as_ptr(), 1) == 0 }
+}
+
+/// `unsetenv(name)`.
+pub fn unsetenv(name: &[u8]) {
+    let n = cstring(name);
+    // SAFETY: valid C string.
+    unsafe {
+        libc::unsetenv(n.as_ptr());
+    }
+}
+
+/// `tzset()` (after `putenv("TZ=...")`).
+pub fn tzset() {
+    extern "C" {
+        fn tzset();
+    }
+    // SAFETY: no preconditions.
+    unsafe { tzset() };
+}
+
+// ------------------------------------------------------------- process info
+
+/// `uname()` fields: sysname, nodename, release, version, machine.
+#[must_use]
+pub fn uname() -> Option<[Vec<u8>; 5]> {
+    // SAFETY: zeroed utsname is valid storage for the out-parameter.
+    let mut u: libc::utsname = unsafe { std::mem::zeroed() };
+    // SAFETY: `u` is a valid utsname.
+    if unsafe { libc::uname(&raw mut u) } == -1 {
+        return None;
+    }
+    let f = |a: &[libc::c_char]| -> Vec<u8> {
+        #[allow(clippy::cast_sign_loss)]
+        a.iter()
+            .take_while(|&&c| c != 0)
+            .map(|&c| c as u8)
+            .collect()
+    };
+    Some([
+        f(&u.sysname),
+        f(&u.nodename),
+        f(&u.release),
+        f(&u.version),
+        f(&u.machine),
+    ])
+}
+
+/// `getloadavg()` of 3 samples.
+#[must_use]
+pub fn getloadavg() -> Option<[f64; 3]> {
+    let mut l = [0f64; 3];
+    // SAFETY: `l` has room for 3 doubles.
+    if unsafe { libc::getloadavg(l.as_mut_ptr(), 3) } == -1 {
+        return None;
+    }
+    Some(l)
+}
+
+/// `getrusage(who)` as `(name, value)` pairs in PHP's order.
+#[must_use]
+pub fn getrusage(children: bool) -> Option<Vec<(&'static str, i64)>> {
+    // SAFETY: zeroed rusage is valid storage.
+    let mut u: libc::rusage = unsafe { std::mem::zeroed() };
+    let who = if children {
+        libc::RUSAGE_CHILDREN
+    } else {
+        libc::RUSAGE_SELF
+    };
+    // SAFETY: `u` is valid storage.
+    if unsafe { libc::getrusage(who, &raw mut u) } == -1 {
+        return None;
+    }
+    Some(vec![
+        ("ru_oublock", u.ru_oublock),
+        ("ru_inblock", u.ru_inblock),
+        ("ru_msgsnd", u.ru_msgsnd),
+        ("ru_msgrcv", u.ru_msgrcv),
+        ("ru_maxrss", u.ru_maxrss),
+        ("ru_ixrss", u.ru_ixrss),
+        ("ru_idrss", u.ru_idrss),
+        ("ru_minflt", u.ru_minflt),
+        ("ru_majflt", u.ru_majflt),
+        ("ru_nsignals", u.ru_nsignals),
+        ("ru_nvcsw", u.ru_nvcsw),
+        ("ru_nivcsw", u.ru_nivcsw),
+        ("ru_nswap", u.ru_nswap),
+        ("ru_utime.tv_usec", u.ru_utime.tv_usec),
+        ("ru_utime.tv_sec", u.ru_utime.tv_sec),
+        ("ru_stime.tv_usec", u.ru_stime.tv_usec),
+        ("ru_stime.tv_sec", u.ru_stime.tv_sec),
+    ])
+}
+
+/// `getpid()`.
+#[must_use]
+pub fn getpid() -> i64 {
+    // SAFETY: no preconditions.
+    i64::from(unsafe { libc::getpid() })
+}
+
+/// `getuid()`/`getgid()`.
+#[must_use]
+pub fn getuid_gid() -> (i64, i64) {
+    // SAFETY: no preconditions.
+    unsafe { (i64::from(libc::getuid()), i64::from(libc::getgid())) }
+}
+
+/// `gettimeofday()` as `(sec, usec)`.
+#[must_use]
+pub fn gettimeofday() -> (i64, i64) {
+    let d = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
+    (
+        i64::try_from(d.as_secs()).unwrap_or(i64::MAX),
+        i64::from(d.subsec_micros()),
+    )
+}
+
+/// `clock_gettime(CLOCK_MONOTONIC)` in nanoseconds (`zend_hrtime()`).
+#[must_use]
+pub fn hrtime_ns() -> u64 {
+    // SAFETY: zeroed timespec is valid storage.
+    let mut ts: libc::timespec = unsafe { std::mem::zeroed() };
+    // SAFETY: `ts` is valid storage.
+    unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &raw mut ts) };
+    u64::try_from(ts.tv_sec).unwrap_or(0) * 1_000_000_000 + u64::try_from(ts.tv_nsec).unwrap_or(0)
+}
+
+/// `sleep(secs)`: the unslept seconds when interrupted.
+#[must_use]
+pub fn sleep(secs: u32) -> u32 {
+    // SAFETY: no preconditions.
+    unsafe { libc::sleep(secs) }
+}
+
+/// `usleep(usecs)`.
+pub fn usleep(usecs: u32) {
+    // SAFETY: no preconditions.
+    unsafe {
+        libc::usleep(usecs);
+    }
+}
+
+/// `nanosleep(req, &rem)`: `Ok(())`, `Err(Some(rem))` on EINTR, or
+/// `Err(None)` on other errors.
+pub fn nanosleep(sec: i64, nsec: i64) -> Result<(), Option<(i64, i64)>> {
+    let req = libc::timespec {
+        tv_sec: sec,
+        tv_nsec: nsec,
+    };
+    // SAFETY: zeroed timespec is valid storage.
+    let mut rem: libc::timespec = unsafe { std::mem::zeroed() };
+    // SAFETY: both pointers are valid.
+    if unsafe { libc::nanosleep(&raw const req, &raw mut rem) } == 0 {
+        return Ok(());
+    }
+    if errno() == libc::EINTR {
+        return Err(Some((rem.tv_sec, rem.tv_nsec)));
+    }
+    Err(None)
+}
+
+/// `stat(path)`: `(st_ino, st_mtime)`.
+#[must_use]
+pub fn stat_ino_mtime(path: &[u8]) -> Option<(i64, i64)> {
+    let c = cstring(path);
+    // SAFETY: zeroed stat is valid storage.
+    let mut st: libc::stat = unsafe { std::mem::zeroed() };
+    // SAFETY: valid path and storage.
+    if unsafe { libc::stat(c.as_ptr(), &raw mut st) } != 0 {
+        return None;
+    }
+    #[allow(clippy::cast_possible_wrap)]
+    Some((st.st_ino as i64, st.st_mtime))
+}
+
+/// `ftok(path, proj)`.
+#[must_use]
+pub fn ftok(path: &[u8], proj: u8) -> i64 {
+    let c = cstring(path);
+    // SAFETY: valid C string.
+    i64::from(unsafe { libc::ftok(c.as_ptr(), i32::from(proj)) })
+}

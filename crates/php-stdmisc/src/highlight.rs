@@ -76,6 +76,14 @@ fn html_puts(out: &mut Vec<u8>, s: &[u8]) {
     }
 }
 
+/// `zend_html_puts()` returning the escaped bytes.
+#[must_use]
+pub fn html_puts_public(s: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(s.len());
+    html_puts(&mut out, s);
+    out
+}
+
 /// Tokens for which the scanner produces a semantic value (they get the
 /// default colour instead of the keyword colour).
 fn has_value(kind: TokenKind) -> bool {
