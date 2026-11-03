@@ -29,6 +29,7 @@ pub fn all() -> Vec<Box<dyn Extension>> {
         Box::new(php_ext_iconv::IconvExt),
         Box::new(php_ext_intl::Intl),
         Box::new(php_ext_exif::Exif),
+        Box::new(php_ext_uri::Uri),
         Box::new(php_ext_zlib::Zlib),
         Box::new(php_ext_zip::Zip),
         Box::new(php_ext_phar::Phar),

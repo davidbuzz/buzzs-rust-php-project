@@ -31,6 +31,7 @@ php-ext-posix = { path = "../php-ext-posix" }
 php-ext-iconv = { path = "../php-ext-iconv" }
 php-ext-intl = { path = "../php-ext-intl" }
 php-ext-exif = { path = "../php-ext-exif" }
+php-ext-uri = { path = "../php-ext-uri" }
 php-ext-zlib = { path = "../php-ext-zlib" }
 php-ext-zip = { path = "../php-ext-zip" }
 php-ext-phar = { path = "../php-ext-phar" }
