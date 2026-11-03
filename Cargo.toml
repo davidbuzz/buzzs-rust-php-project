@@ -31,6 +31,7 @@ members = [
     "crates/php-sqlite",
     "crates/php-libxml",
     "crates/php-intl",
+    "crates/php-exif",
 ]
 
 [workspace.package]
