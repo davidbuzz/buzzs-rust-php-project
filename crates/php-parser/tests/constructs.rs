@@ -492,3 +492,65 @@ fn deep_nesting() {
     let e = php_parser::parse(src.as_bytes(), &ParseOptions::default()).unwrap_err();
     assert_eq!(e.message, "memory exhausted");
 }
+
+#[test]
+fn syntax_only_skips_compile_checks() {
+    let src = b"<?php foreach ($a as &$k => $v) {}";
+    let e = php_parser::parse(src, &ParseOptions::default()).unwrap_err();
+    assert_eq!(e.message, "Key element cannot be a reference");
+    assert_eq!(e.line, 1);
+    let opts = ParseOptions {
+        syntax_only: true,
+        ..ParseOptions::default()
+    };
+    let p = php_parser::parse(src, &opts).unwrap();
+    assert_eq!(p.foreach_ref_keys, vec![6]);
+}
+
+#[test]
+fn encoding_declare_warning() {
+    let opts = ParseOptions {
+        syntax_only: true,
+        ..ParseOptions::default()
+    };
+    let p = php_parser::parse(b"<?php declare(encoding='UTF-8'\n);", &opts).unwrap();
+    assert_eq!(p.warnings.len(), 1);
+    assert_eq!(
+        p.warnings[0].message,
+        "declare(encoding=...) ignored because Zend multibyte feature is turned off by settings"
+    );
+    assert_eq!(p.warnings[0].line, 2);
+    let e = php_parser::parse(b"<?php declare(encoding=FOO);", &opts).unwrap_err();
+    assert_eq!(e.message, "Encoding must be a literal");
+}
+
+#[test]
+fn identifier_tokens() {
+    let src = "<?php namespace list; class A { const FOR = 1; function list() {} use T { T::if as public; } } A::class; A::FOR; $a->list(); f(array: 1); readonly(1); enum E { case Default; } function readonly() {} $x?->foreach; f(new: 1);";
+    let opts = ParseOptions {
+        record_identifier_tokens: true,
+        ..ParseOptions::default()
+    };
+    let p = php_parser::parse(src.as_bytes(), &opts).unwrap();
+    let words: Vec<&str> = p
+        .identifier_tokens
+        .iter()
+        .map(|&o| {
+            let rest = &src[o..];
+            let end = rest
+                .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+                .unwrap_or(rest.len());
+            &rest[..end]
+        })
+        .collect();
+    assert_eq!(
+        words,
+        [
+            "list", "FOR", "list", "if", "class", "FOR", "array", "readonly", "Default",
+            "readonly", "new"
+        ]
+    );
+    // not recorded unless asked for
+    let p = php_parser::parse(src.as_bytes(), &ParseOptions::default()).unwrap();
+    assert!(p.identifier_tokens.is_empty());
+}

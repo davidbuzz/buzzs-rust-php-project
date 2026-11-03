@@ -27,6 +27,9 @@ pub struct ParseOptions {
     /// Skip the compile-time checks of [`crate::validate`] and only report
     /// errors the grammar itself raises.
     pub syntax_only: bool,
+    /// Record the tokens accepted as identifiers in
+    /// [`Program::identifier_tokens`](crate::ast::Program::identifier_tokens).
+    pub record_identifier_tokens: bool,
 }
 
 /// Result type of parser functions.
@@ -62,6 +65,10 @@ pub(crate) struct Parser<'a> {
     /// `yield`.
     pub generator_stack: Vec<bool>,
     pub warnings: Vec<Diagnostic>,
+    /// `Some` when identifier tokens are recorded.
+    pub identifier_tokens: Option<Vec<usize>>,
+    /// See [`Program::foreach_ref_keys`].
+    pub foreach_ref_keys: Vec<usize>,
     /// Current recursion depth (bounded like bison's stack).
     pub depth: u32,
     /// Start offset of a keyword that began a call argument (see
@@ -96,6 +103,8 @@ impl<'a> Parser<'a> {
             doc_comment: None,
             generator_stack: Vec::new(),
             warnings: Vec::new(),
+            identifier_tokens: opts.record_identifier_tokens.then(Vec::new),
+            foreach_ref_keys: Vec::new(),
             depth: 0,
             colon_hint: None,
         }
@@ -307,7 +316,17 @@ impl<'a> Parser<'a> {
                 line,
             ));
         }
+        if tok.kind != TokenKind::String {
+            self.record_identifier(tok.span.start);
+        }
         Ok(self.ident_of(tok))
+    }
+
+    /// Records a keyword token accepted as an identifier.
+    pub fn record_identifier(&mut self, offset: usize) {
+        if let Some(v) = &mut self.identifier_tokens {
+            v.push(offset);
+        }
     }
 
     /// Builds a [`Name`] from a name token.
@@ -367,11 +386,18 @@ pub(crate) fn is_identifier_token(k: TokenKind) -> bool {
 pub fn parse_program(src: &[u8], opts: &ParseOptions) -> Result<Program, ParseError> {
     let mut p = Parser::new(src, opts);
     match p.parse_top_level() {
-        Ok((statements, halt_compiler_offset)) => Ok(Program {
-            statements,
-            halt_compiler_offset,
-            warnings: p.warnings,
-        }),
+        Ok((statements, halt_compiler_offset)) => {
+            let mut identifier_tokens = p.identifier_tokens.unwrap_or_default();
+            identifier_tokens.sort_unstable();
+            identifier_tokens.dedup();
+            Ok(Program {
+                statements,
+                halt_compiler_offset,
+                warnings: p.warnings,
+                identifier_tokens,
+                foreach_ref_keys: p.foreach_ref_keys,
+            })
+        }
         Err(mut e) => {
             e.warnings = std::mem::take(&mut p.warnings);
             Err(e)

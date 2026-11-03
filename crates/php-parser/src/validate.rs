@@ -21,7 +21,10 @@ use std::collections::HashSet;
 /// error in compilation order; compile warnings are appended to
 /// `program.warnings`.
 pub fn validate(program: &mut Program) -> Result<(), ParseError> {
-    let mut v = Validator::default();
+    let mut v = Validator {
+        foreach_ref_keys: program.foreach_ref_keys.iter().copied().collect(),
+        ..Validator::default()
+    };
     let r = v.top_level(&program.statements);
     program.warnings.append(&mut v.warnings);
     r
@@ -84,6 +87,8 @@ struct Validator {
     /// Inside a constant expression (defaults, constant values): class
     /// references are resolved at runtime.
     in_const_expr: bool,
+    /// Statement starts of `foreach` loops with a by-reference key.
+    foreach_ref_keys: HashSet<usize>,
     /// `CG(zend_lineno)`: line of the node compiled last.
     cur_line: u32,
     /// Inside a property hook: (property name, hook name).
@@ -469,15 +474,20 @@ impl Validator {
                 by_ref,
                 body,
             } => {
+                if let Some(k) = key {
+                    // CG(zend_lineno) is the statement's line: its first child.
+                    let line = subject.span.line;
+                    if self.foreach_ref_keys.contains(&s.span.start) {
+                        return err("Key element cannot be a reference", line);
+                    }
+                    if matches!(k.kind, ExprKind::Array { .. }) {
+                        return err("Cannot use list as key element", line);
+                    }
+                }
                 if *by_ref && is_variable(subject) && can_write_to_variable(subject) {
                     self.var(subject, Mode::Write)?;
                 } else {
                     self.expr(subject)?;
-                }
-                if let Some(k) = key {
-                    if matches!(k.kind, ExprKind::Array { .. }) {
-                        return err("Cannot use list as key element", line);
-                    }
                 }
                 self.foreach_target(value, line)?;
                 if let Some(k) = key {

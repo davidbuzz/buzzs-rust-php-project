@@ -763,6 +763,7 @@ impl Parser<'_> {
                 if self.peek() != T::LParen {
                     return Err(self.unexpected(&[T::LParen]));
                 }
+                self.record_identifier(t.span.start);
                 let name = Name {
                     kind: NameKind::Unqualified,
                     name: self.text(&t).to_vec(),

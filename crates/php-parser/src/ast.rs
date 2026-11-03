@@ -22,6 +22,17 @@ pub struct Program {
     /// Non-fatal diagnostics raised while scanning and parsing, in source
     /// order.
     pub warnings: Vec<Diagnostic>,
+    /// Byte offsets of the tokens the grammar accepted as identifiers
+    /// although the scanner returned a keyword (`zend_lex_tstring()`:
+    /// `Foo::class`, `$a->list()`, `const FOR = 1`, `f(array: 1)`,
+    /// `readonly(...)`, ...), in ascending order. `ext/tokenizer` reports
+    /// these as `T_STRING` in `TOKEN_PARSE` mode. Only filled when
+    /// [`crate::ParseOptions::record_identifier_tokens`] is set.
+    pub identifier_tokens: Vec<usize>,
+    /// Byte offsets (statement span starts) of `foreach` statements whose
+    /// key was written by reference (`foreach ($a as &$k => $v)`), which the
+    /// compiler rejects ("Key element cannot be a reference").
+    pub foreach_ref_keys: Vec<usize>,
 }
 
 /// A non-fatal diagnostic (compile warning or deprecation).

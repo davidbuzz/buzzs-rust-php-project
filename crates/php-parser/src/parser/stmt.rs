@@ -648,10 +648,8 @@ impl Parser<'_> {
         let (first, first_ref) = self.parse_foreach_variable()?;
         let (key, value, by_ref) = if self.eat(T::DoubleArrow).is_some() {
             if first_ref {
-                return Err(crate::ParseError::compile(
-                    "Key element cannot be a reference",
-                    subject.span.line,
-                ));
+                // Rejected by the compiler (see `validate`), not the grammar.
+                self.foreach_ref_keys.push(start.start);
             }
             let (v, r) = self.parse_foreach_variable()?;
             if self.peek() != T::RParen {
@@ -787,14 +785,25 @@ impl Parser<'_> {
             }
         }
         self.bump(); // )
+                     // `zend_handle_encoding_declaration`, run as a parser action right
+                     // after the `)`.
+        let line = self.prev_end_line;
         for d in &directives {
-            if d.name.eq_ignore_case("encoding")
-                && !matches!(
+            if d.name.eq_ignore_case("encoding") {
+                if !matches!(
                     d.value.kind,
                     ExprKind::Int(_) | ExprKind::Float(_) | ExprKind::String(_)
-                )
-            {
-                return Err(self.action_error("Encoding must be a literal"));
+                ) {
+                    return Err(crate::ParseError::compile(
+                        "Encoding must be a literal",
+                        line,
+                    ));
+                }
+                self.warnings.push(crate::ast::Diagnostic {
+                    level: crate::ast::DiagnosticLevel::CompileWarning,
+                    message: "declare(encoding=...) ignored because Zend multibyte feature is turned off by settings".to_owned(),
+                    line,
+                });
             }
         }
         let body = match self.peek() {
@@ -918,6 +927,10 @@ impl Parser<'_> {
         let k = self.peek();
         let name = if k == T::NameQualified || is_identifier_token(k) {
             let t = self.bump();
+            if k != T::NameQualified {
+                // `namespace_declaration_name: identifier` (`zend_lex_tstring`)
+                self.ident_checked(&t)?;
+            }
             Some(Name {
                 kind: if k == T::NameQualified {
                     NameKind::Qualified
