@@ -602,3 +602,10 @@ pub fn getcpu() -> i32 {
     // SAFETY: no preconditions.
     unsafe { libc::sched_getcpu() }
 }
+
+/// `pause(2)` (tests: a child that waits to be killed).
+#[cfg(test)]
+pub fn pause() {
+    // SAFETY: no preconditions.
+    unsafe { libc::pause() };
+}

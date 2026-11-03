@@ -2,6 +2,7 @@
 
 /// `(name, value)` for every constant, in `pcntl.stub.php` order.
 /// `SIGRTMIN`/`SIGRTMAX` are glibc's runtime values.
+#[allow(clippy::too_many_lines)]
 pub fn constants() -> Vec<(&'static str, i64)> {
     let mut v: Vec<(&'static str, i64)> = vec![
         ("WNOHANG", libc::WNOHANG.into()),

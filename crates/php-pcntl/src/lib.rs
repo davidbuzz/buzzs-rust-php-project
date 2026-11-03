@@ -72,7 +72,7 @@ pub enum PcntlError {
     /// Emit `E_WARNING` and return the function's failure value (`false`,
     /// or `-1` for the fork functions).
     Warning(String),
-    /// Raise a fatal `E_ERROR` (zend_signal's "Error installing signal
+    /// Raise a fatal `E_ERROR` (`zend_signal`'s "Error installing signal
     /// handler for %d").
     Fatal(String),
     /// Return `false` without a diagnostic.
@@ -542,10 +542,10 @@ impl<C> Pcntl<C> {
         let Ok(cpath) = CString::new(path) else {
             return nul("Argument #1 ($path) must not contain any null bytes");
         };
-        let mut argv = vec![cpath.clone()];
+        let mut arg_list = vec![cpath.clone()];
         for a in args.unwrap_or_default() {
             match CString::new(a.as_slice()) {
-                Ok(c) => argv.push(c),
+                Ok(c) => arg_list.push(c),
                 Err(_) => {
                     return nul(
                         "Argument #2 ($args) individual argument must not contain null bytes",
@@ -572,7 +572,7 @@ impl<C> Pcntl<C> {
                 Some(out)
             }
         };
-        let e = sys::exec(&cpath, &argv, envp.as_deref());
+        let e = sys::exec(&cpath, &arg_list, envp.as_deref());
         self.fail(e);
         warning(format!(
             "Error has occurred: (errno {e}) {}",

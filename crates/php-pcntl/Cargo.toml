@@ -11,3 +11,7 @@ libc = "0.2"
 
 [lints]
 workspace = true
+
+[[test]]
+name = "process_signals"
+harness = false
