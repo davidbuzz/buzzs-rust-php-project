@@ -4,6 +4,8 @@
 //! * [`libxml`] — the `libxml_*()` functions, `LibXMLError`, the `LIBXML_*`
 //!   constants, the stream I/O hooks and the shared libxml state API used
 //!   by every libxml-based binding (DOM, `SimpleXML`, `XMLReader`, XSL, SOAP).
+//! * [`mime_sniff`] — `Content-Type` charset sniffing for documents loaded
+//!   over `http://` (used by the stream hooks; public for other bindings).
 //! * [`xml`] — `ext/xml`: `XMLParser` and the `xml_*()` functions.
 //! * [`xmlwriter`] — `ext/xmlwriter`: the `XMLWriter` class and the
 //!   procedural `xmlwriter_*()` functions.
@@ -17,6 +19,7 @@
 #![allow(clippy::unnecessary_wraps)]
 
 pub mod libxml;
+pub mod mime_sniff;
 pub mod xml;
 pub mod xmlwriter;
 

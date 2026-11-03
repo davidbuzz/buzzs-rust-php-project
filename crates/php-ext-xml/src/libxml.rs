@@ -287,9 +287,12 @@ fn open_read(path: &[u8]) -> Option<InputStream> {
     let mut opened = None;
     let stream =
         php_streams::open::open_wrapper(path, "rb", REPORT_ERRORS, &mut opened, ctx.as_ref())?;
+    // An external transport protocol may carry the encoding
+    // (`php_libxml_sniff_charset_from_stream`).
+    let charset = crate::mime_sniff::sniff_charset_from_stream(&stream);
     Some(InputStream {
         reader: Box::new(LibxmlStream::register(stream)?),
-        charset: None,
+        charset,
     })
 }
 
