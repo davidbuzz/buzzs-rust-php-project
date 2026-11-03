@@ -1408,8 +1408,13 @@ fn walk_directory(dir: &[u8]) -> Result<Vec<Vec<u8>>, String> {
                 p.push(b'/');
             }
             p.extend_from_slice(ent.file_name().as_bytes());
+            let is_link = ent.file_type().is_ok_and(|t| t.is_symlink());
             if crate::sys::path(&p).is_dir() {
-                walk(&p, out)?;
+                // RecursiveDirectoryIterator does not descend into linked
+                // directories; phar_build() then skips them as directories.
+                if !is_link {
+                    walk(&p, out)?;
+                }
             } else {
                 out.push(p);
             }

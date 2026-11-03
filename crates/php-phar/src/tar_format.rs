@@ -559,14 +559,12 @@ pub fn flush(
         }
     }
 
-    // phar_tar_setupmetadata
-    let mut i = 0;
-    loop {
-        let keys = ar.manifest.keys();
-        let Some(key) = keys.get(i).cloned() else {
-            break;
-        };
-        i += 1;
+    // phar_tar_setupmetadata: entries appended while iterating are
+    // magic metadata files of existing entries, which are kept.
+    for key in ar.manifest.keys() {
+        if !ar.manifest.contains_key(&key) {
+            continue;
+        }
         if key.starts_with(b".phar/.metadata") {
             if key == b".phar/.metadata.bin" {
                 let meta = ar.metadata.clone();
@@ -577,7 +575,6 @@ pub fn flush(
             }
             if key.len() >= 31 && !ar.manifest.contains_key(&key[16..key.len() - 14]) {
                 ar.manifest.remove(&key);
-                i -= 1;
             }
             continue;
         }
@@ -592,10 +589,7 @@ pub fn flush(
         lookfor.extend_from_slice(&key);
         lookfor.extend_from_slice(b"/.metadata.bin");
         if !meta.has_data() {
-            let before = ar.manifest.keys().iter().position(|k| *k == lookfor);
-            if ar.manifest.remove(&lookfor).is_some() && before.is_some_and(|b| b < i) {
-                i -= 1;
-            }
+            ar.manifest.remove(&lookfor);
             continue;
         }
         if let Some(m) = ar.manifest.get_mut(&lookfor) {
