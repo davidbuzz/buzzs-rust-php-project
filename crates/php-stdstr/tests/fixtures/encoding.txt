@@ -1,0 +1,777 @@
+=== base64_encode('')
+=> ''
+=== convert_uuencode('')
+=> '`
+'
+=== quoted_printable_encode('')
+=> ''
+=== bin2hex(quoted_printable_decode(quoted_printable_encode('')))
+=> ''
+=== bin2hex(convert_uudecode(convert_uuencode('')))
+=> ''
+=== base64_encode('a')
+=> 'YQ=='
+=== convert_uuencode('a')
+=> '!80``
+`
+'
+=== quoted_printable_encode('a')
+=> 'a'
+=== bin2hex(quoted_printable_decode(quoted_printable_encode('a')))
+=> '61'
+=== bin2hex(convert_uudecode(convert_uuencode('a')))
+=> '61'
+=== base64_encode('ab')
+=> 'YWI='
+=== convert_uuencode('ab')
+=> '"86(`
+`
+'
+=== quoted_printable_encode('ab')
+=> 'ab'
+=== bin2hex(quoted_printable_decode(quoted_printable_encode('ab')))
+=> '6162'
+=== bin2hex(convert_uudecode(convert_uuencode('ab')))
+=> '6162'
+=== base64_encode('abc')
+=> 'YWJj'
+=== convert_uuencode('abc')
+=> '#86)C
+`
+'
+=== quoted_printable_encode('abc')
+=> 'abc'
+=== bin2hex(quoted_printable_decode(quoted_printable_encode('abc')))
+=> '616263'
+=== bin2hex(convert_uudecode(convert_uuencode('abc')))
+=> '616263'
+=== base64_encode('abcd')
+=> 'YWJjZA=='
+=== convert_uuencode('abcd')
+=> '$86)C9```
+`
+'
+=== quoted_printable_encode('abcd')
+=> 'abcd'
+=== bin2hex(quoted_printable_decode(quoted_printable_encode('abcd')))
+=> '61626364'
+=== bin2hex(convert_uudecode(convert_uuencode('abcd')))
+=> '61626364'
+=== base64_encode('hello world')
+=> 'aGVsbG8gd29ybGQ='
+=== convert_uuencode('hello world')
+=> '+:&5L;&\\@=V]R;&0`
+`
+'
+=== quoted_printable_encode('hello world')
+=> 'hello world'
+=== bin2hex(quoted_printable_decode(quoted_printable_encode('hello world')))
+=> '68656c6c6f20776f726c64'
+=== bin2hex(convert_uudecode(convert_uuencode('hello world')))
+=> '68656c6c6f20776f726c64'
+=== base64_encode("test\x0atext text text\x0d\x0a")
+=> 'dGVzdAp0ZXh0IHRleHQgdGV4dA0K'
+=== convert_uuencode("test\x0atext text text\x0d\x0a")
+=> '5=&5S=`IT97AT(\'1E>\'0@=&5X=`T*
+`
+'
+=== quoted_printable_encode("test\x0atext text text\x0d\x0a")
+=> 'test=0Atext text text
+'
+=== bin2hex(quoted_printable_decode(quoted_printable_encode("test\x0atext text text\x0d\x0a")))
+=> '746573740a74657874207465787420746578740d0a'
+=== bin2hex(convert_uudecode(convert_uuencode("test\x0atext text text\x0d\x0a")))
+=> '746573740a74657874207465787420746578740d0a'
+=== base64_encode("\x00")
+=> 'AA=='
+=== convert_uuencode("\x00")
+=> '!````
+`
+'
+=== quoted_printable_encode("\x00")
+=> '=00'
+=== bin2hex(quoted_printable_decode(quoted_printable_encode("\x00")))
+=> '00'
+=== bin2hex(convert_uudecode(convert_uuencode("\x00")))
+=> '00'
+=== base64_encode("\x00\x00\x00")
+=> 'AAAA'
+=== convert_uuencode("\x00\x00\x00")
+=> '#````
+`
+'
+=== quoted_printable_encode("\x00\x00\x00")
+=> '=00=00=00'
+=== bin2hex(quoted_printable_decode(quoted_printable_encode("\x00\x00\x00")))
+=> '000000'
+=== bin2hex(convert_uudecode(convert_uuencode("\x00\x00\x00")))
+=> '000000'
+=== base64_encode("\xff\xfe\xfd")
+=> '//79'
+=== convert_uuencode("\xff\xfe\xfd")
+=> '#__[]
+`
+'
+=== quoted_printable_encode("\xff\xfe\xfd")
+=> '=FF=FE=FD'
+=== bin2hex(quoted_printable_decode(quoted_printable_encode("\xff\xfe\xfd")))
+=> 'fffefd'
+=== bin2hex(convert_uudecode(convert_uuencode("\xff\xfe\xfd")))
+=> 'fffefd'
+=== base64_encode('=')
+=> 'PQ=='
+=== convert_uuencode('=')
+=> '!/0``
+`
+'
+=== quoted_printable_encode('=')
+=> '=3D'
+=== bin2hex(quoted_printable_decode(quoted_printable_encode('=')))
+=> '3d'
+=== bin2hex(convert_uudecode(convert_uuencode('=')))
+=> '3d'
+=== base64_encode('a=b')
+=> 'YT1i'
+=== convert_uuencode('a=b')
+=> '#83UB
+`
+'
+=== quoted_printable_encode('a=b')
+=> 'a=3Db'
+=== bin2hex(quoted_printable_decode(quoted_printable_encode('a=b')))
+=> '613d62'
+=== bin2hex(convert_uudecode(convert_uuencode('a=b')))
+=> '613d62'
+=== base64_encode("a \x0d\x0ab")
+=> 'YSANCmI='
+=== convert_uuencode("a \x0d\x0ab")
+=> '%82`-"F(`
+`
+'
+=== quoted_printable_encode("a \x0d\x0ab")
+=> 'a=20
+b'
+=== bin2hex(quoted_printable_decode(quoted_printable_encode("a \x0d\x0ab")))
+=> '61200d0a62'
+=== bin2hex(convert_uudecode(convert_uuencode("a \x0d\x0ab")))
+=> '61200d0a62'
+=== base64_encode("trailing space \x0d")
+=> 'dHJhaWxpbmcgc3BhY2UgDQ=='
+=== convert_uuencode("trailing space \x0d")
+=> '0=\')A:6QI;F<@<W!A8V4@#0``
+`
+'
+=== quoted_printable_encode("trailing space \x0d")
+=> 'trailing space=20=0D'
+=== bin2hex(quoted_printable_decode(quoted_printable_encode("trailing space \x0d")))
+=> '747261696c696e67207370616365200d'
+=== bin2hex(convert_uudecode(convert_uuencode("trailing space \x0d")))
+=> '747261696c696e67207370616365200d'
+=== base64_encode(" \x0d")
+=> 'IA0='
+=== convert_uuencode(" \x0d")
+=> '"(`T`
+`
+'
+=== quoted_printable_encode(" \x0d")
+=> '=20=0D'
+=== bin2hex(quoted_printable_decode(quoted_printable_encode(" \x0d")))
+=> '200d'
+=== bin2hex(convert_uudecode(convert_uuencode(" \x0d")))
+=> '200d'
+=== base64_encode("\x0d")
+=> 'DQ=='
+=== convert_uuencode("\x0d")
+=> '!#0``
+`
+'
+=== quoted_printable_encode("\x0d")
+=> '=0D'
+=== bin2hex(quoted_printable_decode(quoted_printable_encode("\x0d")))
+=> '0d'
+=== bin2hex(convert_uudecode(convert_uuencode("\x0d")))
+=> '0d'
+=== base64_encode("\x0d\x0a")
+=> 'DQo='
+=== convert_uuencode("\x0d\x0a")
+=> '"#0H`
+`
+'
+=== quoted_printable_encode("\x0d\x0a")
+=> '
+'
+=== bin2hex(quoted_printable_decode(quoted_printable_encode("\x0d\x0a")))
+=> '0d0a'
+=== bin2hex(convert_uudecode(convert_uuencode("\x0d\x0a")))
+=> '0d0a'
+=== base64_encode("\x0a\x0a")
+=> 'Cgo='
+=== convert_uuencode("\x0a\x0a")
+=> '""@H`
+`
+'
+=== quoted_printable_encode("\x0a\x0a")
+=> '=0A=0A'
+=== bin2hex(quoted_printable_decode(quoted_printable_encode("\x0a\x0a")))
+=> '0a0a'
+=== bin2hex(convert_uudecode(convert_uuencode("\x0a\x0a")))
+=> '0a0a'
+=== base64_encode("caf\xc3\xa9 \xe2\x82\xac \xf0\x9f\x98\x80")
+=> 'Y2Fmw6kg4oKsIPCfmIA='
+=== convert_uuencode("caf\xc3\xa9 \xe2\x82\xac \xf0\x9f\x98\x80")
+=> '.8V%FPZD@XH*L(/"?F(``
+`
+'
+=== quoted_printable_encode("caf\xc3\xa9 \xe2\x82\xac \xf0\x9f\x98\x80")
+=> 'caf=C3=A9 =E2=82=AC =F0=9F=98=80'
+=== bin2hex(quoted_printable_decode(quoted_printable_encode("caf\xc3\xa9 \xe2\x82\xac \xf0\x9f\x98\x80")))
+=> '636166c3a920e282ac20f09f9880'
+=== bin2hex(convert_uudecode(convert_uuencode("caf\xc3\xa9 \xe2\x82\xac \xf0\x9f\x98\x80")))
+=> '636166c3a920e282ac20f09f9880'
+=== base64_encode("\x15\xce\xa0\x82c\xfe\xd7@U\xba\x04y\xaf\xd1\xb9\x19h\x98A\xa5&\xba|\xe1{\xc2}B\xe2i\xe4\x17w\xa1\xfduz^\x95\xe7\x82'\xa0\xd2")
+=> 'Fc6ggmP+10BVugR5r9G5GWiYQaUmunzhe8J9QuJp5Bd3of11el6V54InoNI='
+=== convert_uuencode("\x15\xce\xa0\x82c\xfe\xd7@U\xba\x04y\xaf\xd1\xb9\x19h\x98A\xa5&\xba|\xe1{\xc2}B\xe2i\xe4\x17w\xa1\xfduz^\x95\xe7\x82'\xa0\xd2")
+=> 'L%<Z@@F/^UT!5N@1YK]&Y&6B80:4FNGSA>\\)]0N)IY!=WH?UU>EZ5YX(GH-(`
+`
+'
+=== quoted_printable_encode("\x15\xce\xa0\x82c\xfe\xd7@U\xba\x04y\xaf\xd1\xb9\x19h\x98A\xa5&\xba|\xe1{\xc2}B\xe2i\xe4\x17w\xa1\xfduz^\x95\xe7\x82'\xa0\xd2")
+=> '=15=CE=A0=82c=FE=D7@U=BA=04y=AF=D1=B9=19h=98A=A5&=BA|=E1{=C2}B=E2i=E4=17w=
+=A1=FDuz^=95=E7=82\'=A0=D2'
+=== bin2hex(quoted_printable_decode(quoted_printable_encode("\x15\xce\xa0\x82c\xfe\xd7@U\xba\x04y\xaf\xd1\xb9\x19h\x98A\xa5&\xba|\xe1{\xc2}B\xe2i\xe4\x17w\xa1\xfduz^\x95\xe7\x82'\xa0\xd2")))
+=> '15cea08263fed74055ba0479afd1b919689841a526ba7ce17bc27d42e269e41777a1fd757a5e95e78227a0d2'
+=== bin2hex(convert_uudecode(convert_uuencode("\x15\xce\xa0\x82c\xfe\xd7@U\xba\x04y\xaf\xd1\xb9\x19h\x98A\xa5&\xba|\xe1{\xc2}B\xe2i\xe4\x17w\xa1\xfduz^\x95\xe7\x82'\xa0\xd2")))
+=> '15cea08263fed74055ba0479afd1b919689841a526ba7ce17bc27d42e269e41777a1fd757a5e95e78227a0d2'
+=== base64_encode("\xdbq\x1e\x89\x04\xda\x0c\x1eO\xd7\xdc\xac\x0f\xcf;\x8e\xf9\xde\x06\x86l,ry\x81\x0c\x00\xee\xd7\xd4\x1eE\x1b\x7f\x9d\xb7Z\x03\xd7\x11\x06s\x9c0\xca")
+=> '23EeiQTaDB5P19ysD887jvneBoZsLHJ5gQwA7tfUHkUbf523WgPXEQZznDDK'
+=== convert_uuencode("\xdbq\x1e\x89\x04\xda\x0c\x1eO\xd7\xdc\xac\x0f\xcf;\x8e\xf9\xde\x06\x86l,ry\x81\x0c\x00\xee\xd7\xd4\x1eE\x1b\x7f\x9d\xb7Z\x03\xd7\x11\x06s\x9c0\xca")
+=> 'MVW$>B03:#!Y/U]RL#\\\\[COG>!H9L+\')Y@0P`[M?4\'D4;?YVW6@/7$09SG##*
+`
+'
+=== quoted_printable_encode("\xdbq\x1e\x89\x04\xda\x0c\x1eO\xd7\xdc\xac\x0f\xcf;\x8e\xf9\xde\x06\x86l,ry\x81\x0c\x00\xee\xd7\xd4\x1eE\x1b\x7f\x9d\xb7Z\x03\xd7\x11\x06s\x9c0\xca")
+=> '=DBq=1E=89=04=DA=0C=1EO=D7=DC=AC=0F=CF;=8E=F9=DE=06=86l,ry=81=0C=00=
+=EE=D7=D4=1EE=1B=7F=9D=B7Z=03=D7=11=06s=9C0=CA'
+=== bin2hex(quoted_printable_decode(quoted_printable_encode("\xdbq\x1e\x89\x04\xda\x0c\x1eO\xd7\xdc\xac\x0f\xcf;\x8e\xf9\xde\x06\x86l,ry\x81\x0c\x00\xee\xd7\xd4\x1eE\x1b\x7f\x9d\xb7Z\x03\xd7\x11\x06s\x9c0\xca")))
+=> 'db711e8904da0c1e4fd7dcac0fcf3b8ef9de06866c2c7279810c00eed7d41e451b7f9db75a03d71106739c30ca'
+=== bin2hex(convert_uudecode(convert_uuencode("\xdbq\x1e\x89\x04\xda\x0c\x1eO\xd7\xdc\xac\x0f\xcf;\x8e\xf9\xde\x06\x86l,ry\x81\x0c\x00\xee\xd7\xd4\x1eE\x1b\x7f\x9d\xb7Z\x03\xd7\x11\x06s\x9c0\xca")))
+=> 'db711e8904da0c1e4fd7dcac0fcf3b8ef9de06866c2c7279810c00eed7d41e451b7f9db75a03d71106739c30ca'
+=== base64_encode("\xa2\x13\x9c\x8f\xa5\xb6B\xfbI\xf3\xb4\xdfp\xcd\xbd\x02\x8a%\xcag\xb2\x9fi\x12\x88U\x82\x9a\xcc>Ws\xbf]=\xf8:\xa9\x18;\x8b\xbf\x98\x8d\x13J")
+=> 'ohOcj6W2QvtJ87TfcM29Aoolymeyn2kSiFWCmsw+V3O/XT34OqkYO4u/mI0TSg=='
+=== convert_uuencode("\xa2\x13\x9c\x8f\xa5\xb6B\xfbI\xf3\xb4\xdfp\xcd\xbd\x02\x8a%\xcag\xb2\x9fi\x12\x88U\x82\x9a\xcc>Ws\xbf]=\xf8:\xa9\x18;\x8b\xbf\x98\x8d\x13J")
+=> 'MHA.<CZ6V0OM)\\[3?<,V]`HHERF>RGVD2B%6"FLP^5W._73WX.JD8.XN_F(T3
+!2@``
+`
+'
+=== quoted_printable_encode("\xa2\x13\x9c\x8f\xa5\xb6B\xfbI\xf3\xb4\xdfp\xcd\xbd\x02\x8a%\xcag\xb2\x9fi\x12\x88U\x82\x9a\xcc>Ws\xbf]=\xf8:\xa9\x18;\x8b\xbf\x98\x8d\x13J")
+=> '=A2=13=9C=8F=A5=B6B=FBI=F3=B4=DFp=CD=BD=02=8A%=CAg=B2=9Fi=12=88U=82=9A=
+=CC>Ws=BF]=3D=F8:=A9=18;=8B=BF=98=8D=13J'
+=== bin2hex(quoted_printable_decode(quoted_printable_encode("\xa2\x13\x9c\x8f\xa5\xb6B\xfbI\xf3\xb4\xdfp\xcd\xbd\x02\x8a%\xcag\xb2\x9fi\x12\x88U\x82\x9a\xcc>Ws\xbf]=\xf8:\xa9\x18;\x8b\xbf\x98\x8d\x13J")))
+=> 'a2139c8fa5b642fb49f3b4df70cdbd028a25ca67b29f69128855829acc3e5773bf5d3df83aa9183b8bbf988d134a'
+=== bin2hex(convert_uudecode(convert_uuencode("\xa2\x13\x9c\x8f\xa5\xb6B\xfbI\xf3\xb4\xdfp\xcd\xbd\x02\x8a%\xcag\xb2\x9fi\x12\x88U\x82\x9a\xcc>Ws\xbf]=\xf8:\xa9\x18;\x8b\xbf\x98\x8d\x13J")))
+=> 'a2139c8fa5b642fb49f3b4df70cdbd028a25ca67b29f69128855829acc3e5773bf5d3df83aa9183b8bbf988d134a'
+=== base64_encode("h\xb6\x19\x96F\x93w\xd9C\x0f\x8c\x12\xd0\xcc?w\x1ck\x8fH\xf9\x12`\xaa\x8e\x9f\x05F\xc2\xa9\x91\xa1c;\xdd9\x1aOYe\x0f\x0c\x94\xea\\\xbf\x89")
+=> 'aLYZlkaTd9lDD4wS0Mw/dxxrj0j5EmCqjp8FRsKpkaFjO905Gk9ZZQ8MlOpcv4k='
+=== convert_uuencode("h\xb6\x19\x96F\x93w\xd9C\x0f\x8c\x12\xd0\xcc?w\x1ck\x8fH\xf9\x12`\xaa\x8e\x9f\x05F\xc2\xa9\x91\xa1c;\xdd9\x1aOYe\x0f\x0c\x94\xea\\\xbf\x89")
+=> 'M:+89ED:3=]E##XP2T,P_=QQKCTCY$F"JCI\\%1L*ID:%C.]TY&D]990\\,E.I<
+"OXD`
+`
+'
+=== quoted_printable_encode("h\xb6\x19\x96F\x93w\xd9C\x0f\x8c\x12\xd0\xcc?w\x1ck\x8fH\xf9\x12`\xaa\x8e\x9f\x05F\xc2\xa9\x91\xa1c;\xdd9\x1aOYe\x0f\x0c\x94\xea\\\xbf\x89")
+=> 'h=B6=19=96F=93w=D9C=0F=8C=12=D0=CC?w=1Ck=8FH=F9=12`=AA=8E=9F=05F=C2=A9=
+=91=A1c;=DD9=1AOYe=0F=0C=94=EA\\=BF=89'
+=== bin2hex(quoted_printable_decode(quoted_printable_encode("h\xb6\x19\x96F\x93w\xd9C\x0f\x8c\x12\xd0\xcc?w\x1ck\x8fH\xf9\x12`\xaa\x8e\x9f\x05F\xc2\xa9\x91\xa1c;\xdd9\x1aOYe\x0f\x0c\x94\xea\\\xbf\x89")))
+=> '68b61996469377d9430f8c12d0cc3f771c6b8f48f91260aa8e9f0546c2a991a1633bdd391a4f59650f0c94ea5cbf89'
+=== bin2hex(convert_uudecode(convert_uuencode("h\xb6\x19\x96F\x93w\xd9C\x0f\x8c\x12\xd0\xcc?w\x1ck\x8fH\xf9\x12`\xaa\x8e\x9f\x05F\xc2\xa9\x91\xa1c;\xdd9\x1aOYe\x0f\x0c\x94\xea\\\xbf\x89")))
+=> '68b61996469377d9430f8c12d0cc3f771c6b8f48f91260aa8e9f0546c2a991a1633bdd391a4f59650f0c94ea5cbf89'
+=== base64_encode("\xf1c\xba\xa7\xbc\xb97@I\xb7\xfcx\xa3\x82\x96\x94\xf1\xfd\xda-\x82\xe7\xd6\xab\x9c\xb1x\x83\x04 \x000M\xa7'\xf2\xe1\x82\x0cI\xd1\x92\xe30\\\xfc\\\x1aA\x80\xd5\xae\xc4\x99?A\x82Y\xd0\x17\xf6\x03mZ\xc7f\xd6\xd6\xd7\xfc\x8fz\x0c\xc6\x92\x8f\xdc\xe5\xb6\xb5\x9b\xf8\xdd\xa2\x849\xe0\x9a\x89")
+=> '8WO6p7y5N0BJt/x4o4KWlPH92i2C59arnLF4gwQgADBNpyfy4YIMSdGS4zBc/FwaQYDVrsSZP0GCWdAX9gNtWsdm1tbX/I96DMaSj9zltrWb+N2ihDngmok='
+=== convert_uuencode("\xf1c\xba\xa7\xbc\xb97@I\xb7\xfcx\xa3\x82\x96\x94\xf1\xfd\xda-\x82\xe7\xd6\xab\x9c\xb1x\x83\x04 \x000M\xa7'\xf2\xe1\x82\x0cI\xd1\x92\xe30\\\xfc\\\x1aA\x80\xd5\xae\xc4\x99?A\x82Y\xd0\x17\xf6\x03mZ\xc7f\xd6\xd6\xd7\xfc\x8fz\x0c\xc6\x92\x8f\xdc\xe5\xb6\xb5\x9b\xf8\xdd\xa2\x849\xe0\x9a\x89")
+=> 'M\\6.ZI[RY-T!)M_QXHX*6E/\']VBV"Y]:KG+%X@P0@`#!-IR?RX8(,2=&2XS!<
+L_%P:08#5KL29/T&"6=`7]@-M6L=FUM;7_(]Z#,:2C]SEMK6;^-VBA#G@FHD`
+`
+'
+=== quoted_printable_encode("\xf1c\xba\xa7\xbc\xb97@I\xb7\xfcx\xa3\x82\x96\x94\xf1\xfd\xda-\x82\xe7\xd6\xab\x9c\xb1x\x83\x04 \x000M\xa7'\xf2\xe1\x82\x0cI\xd1\x92\xe30\\\xfc\\\x1aA\x80\xd5\xae\xc4\x99?A\x82Y\xd0\x17\xf6\x03mZ\xc7f\xd6\xd6\xd7\xfc\x8fz\x0c\xc6\x92\x8f\xdc\xe5\xb6\xb5\x9b\xf8\xdd\xa2\x849\xe0\x9a\x89")
+=> '=F1c=BA=A7=BC=B97@I=B7=FCx=A3=82=96=94=F1=FD=DA-=82=E7=D6=AB=9C=B1x=83=04 =
+=000M=A7\'=F2=E1=82=0CI=D1=92=E30\\=FC\\=1AA=80=D5=AE=C4=99?A=82Y=D0=17=F6=03m=
+Z=C7f=D6=D6=D7=FC=8Fz=0C=C6=92=8F=DC=E5=B6=B5=9B=F8=DD=A2=849=E0=9A=89'
+=== bin2hex(quoted_printable_decode(quoted_printable_encode("\xf1c\xba\xa7\xbc\xb97@I\xb7\xfcx\xa3\x82\x96\x94\xf1\xfd\xda-\x82\xe7\xd6\xab\x9c\xb1x\x83\x04 \x000M\xa7'\xf2\xe1\x82\x0cI\xd1\x92\xe30\\\xfc\\\x1aA\x80\xd5\xae\xc4\x99?A\x82Y\xd0\x17\xf6\x03mZ\xc7f\xd6\xd6\xd7\xfc\x8fz\x0c\xc6\x92\x8f\xdc\xe5\xb6\xb5\x9b\xf8\xdd\xa2\x849\xe0\x9a\x89")))
+=> 'f163baa7bcb9374049b7fc78a3829694f1fdda2d82e7d6ab9cb17883042000304da727f2e1820c49d192e3305cfc5c1a4180d5aec4993f418259d017f6036d5ac766d6d6d7fc8f7a0cc6928fdce5b6b59bf8dda28439e09a89'
+=== bin2hex(convert_uudecode(convert_uuencode("\xf1c\xba\xa7\xbc\xb97@I\xb7\xfcx\xa3\x82\x96\x94\xf1\xfd\xda-\x82\xe7\xd6\xab\x9c\xb1x\x83\x04 \x000M\xa7'\xf2\xe1\x82\x0cI\xd1\x92\xe30\\\xfc\\\x1aA\x80\xd5\xae\xc4\x99?A\x82Y\xd0\x17\xf6\x03mZ\xc7f\xd6\xd6\xd7\xfc\x8fz\x0c\xc6\x92\x8f\xdc\xe5\xb6\xb5\x9b\xf8\xdd\xa2\x849\xe0\x9a\x89")))
+=> 'f163baa7bcb9374049b7fc78a3829694f1fdda2d82e7d6ab9cb17883042000304da727f2e1820c49d192e3305cfc5c1a4180d5aec4993f418259d017f6036d5ac766d6d6d7fc8f7a0cc6928fdce5b6b59bf8dda28439e09a89'
+=== base64_encode("\xb7\x068\xad]\x96l\x1eC\xd3\xd4\xab\x04\x80\x18\x09\x82D\x9f\x0e\xc8Z\xccD\xa2\xfa\xfb/\xfa\x8b:^\xf1\x85\xc74\xc1(NtU\xde\xdf\x8e\xa5q\xb1\xab\xd3\xed\x99z\x07SH\xb8\x0b\x02G\x82\xa5\xe5\xb4Z\xb8]\xba\xfb\x19\xed\xd1\xdc2\xa8\xbb\x86Y[:\x96\xeez\x91\x917\xcb\xc1l\xfb\xd4")
+=> 'twY4rV2WbB5D09SrBIAYCYJEnw7IWsxEovr7L/qLOl7xhcc0wShOdFXe346lcbGr0+2ZegdTSLgLAkeCpeW0WrhduvsZ7dHcMqi7hllbOpbuepGRN8vBbPvU'
+=== convert_uuencode("\xb7\x068\xad]\x96l\x1eC\xd3\xd4\xab\x04\x80\x18\x09\x82D\x9f\x0e\xc8Z\xccD\xa2\xfa\xfb/\xfa\x8b:^\xf1\x85\xc74\xc1(NtU\xde\xdf\x8e\xa5q\xb1\xab\xd3\xed\x99z\x07SH\xb8\x0b\x02G\x82\xa5\xe5\xb4Z\xb8]\xba\xfb\x19\xed\xd1\xdc2\xa8\xbb\x86Y[:\x96\xeez\x91\x917\xcb\xc1l\xfb\xd4")
+=> 'MMP8XK5V6;!Y#T]2K!(`8"8)$GP[(6LQ$HOK[+_J+.E[QA<<TP2A.=%7>WXZE
+M<;&KT^V9>@=32+@+`D>"I>6T6KA=NOL9[=\'<,JB[AEE;.I;N>I&1-\\O!;/O4
+`
+'
+=== quoted_printable_encode("\xb7\x068\xad]\x96l\x1eC\xd3\xd4\xab\x04\x80\x18\x09\x82D\x9f\x0e\xc8Z\xccD\xa2\xfa\xfb/\xfa\x8b:^\xf1\x85\xc74\xc1(NtU\xde\xdf\x8e\xa5q\xb1\xab\xd3\xed\x99z\x07SH\xb8\x0b\x02G\x82\xa5\xe5\xb4Z\xb8]\xba\xfb\x19\xed\xd1\xdc2\xa8\xbb\x86Y[:\x96\xeez\x91\x917\xcb\xc1l\xfb\xd4")
+=> '=B7=068=AD]=96l=1EC=D3=D4=AB=04=80=18=09=82D=9F=0E=C8Z=CCD=A2=FA=FB/=FA=
+=8B:^=F1=85=C74=C1(NtU=DE=DF=8E=A5q=B1=AB=D3=ED=99z=07SH=B8=0B=02G=82=A5=
+=E5=B4Z=B8]=BA=FB=19=ED=D1=DC2=A8=BB=86Y[:=96=EEz=91=917=CB=C1l=FB=D4'
+=== bin2hex(quoted_printable_decode(quoted_printable_encode("\xb7\x068\xad]\x96l\x1eC\xd3\xd4\xab\x04\x80\x18\x09\x82D\x9f\x0e\xc8Z\xccD\xa2\xfa\xfb/\xfa\x8b:^\xf1\x85\xc74\xc1(NtU\xde\xdf\x8e\xa5q\xb1\xab\xd3\xed\x99z\x07SH\xb8\x0b\x02G\x82\xa5\xe5\xb4Z\xb8]\xba\xfb\x19\xed\xd1\xdc2\xa8\xbb\x86Y[:\x96\xeez\x91\x917\xcb\xc1l\xfb\xd4")))
+=> 'b70638ad5d966c1e43d3d4ab0480180982449f0ec85acc44a2fafb2ffa8b3a5ef185c734c1284e7455dedf8ea571b1abd3ed997a075348b80b024782a5e5b45ab85dbafb19edd1dc32a8bb86595b3a96ee7a919137cbc16cfbd4'
+=== bin2hex(convert_uudecode(convert_uuencode("\xb7\x068\xad]\x96l\x1eC\xd3\xd4\xab\x04\x80\x18\x09\x82D\x9f\x0e\xc8Z\xccD\xa2\xfa\xfb/\xfa\x8b:^\xf1\x85\xc74\xc1(NtU\xde\xdf\x8e\xa5q\xb1\xab\xd3\xed\x99z\x07SH\xb8\x0b\x02G\x82\xa5\xe5\xb4Z\xb8]\xba\xfb\x19\xed\xd1\xdc2\xa8\xbb\x86Y[:\x96\xeez\x91\x917\xcb\xc1l\xfb\xd4")))
+=> 'b70638ad5d966c1e43d3d4ab0480180982449f0ec85acc44a2fafb2ffa8b3a5ef185c734c1284e7455dedf8ea571b1abd3ed997a075348b80b024782a5e5b45ab85dbafb19edd1dc32a8bb86595b3a96ee7a919137cbc16cfbd4'
+=== base64_encode("~\xa8\xb6\xb4\xffr\xa1\xfc>\xf0\xac\xded~\x9a}\x13\x8ad\xef\x0f\xcc\xc3\xdc\xa9D~\xdb\xef\xf5s\x8c\x95chu\xa1\xcd\x8f\x9e\xda+\xdb\xeb\xee\xe6\x05<fZ]FJ\x0cQ/\x93\xab\xbe\xecU\xc8\xfa[\xa9U\x9e\x1f\\\xdf\x14?Y\x8b\xe4}\xd6\xd2\xbdxA\xfcF\x81\xe9]\xa2=mR\xc5")
+=> 'fqi2tP9yofw+8KzeZH6afROKZO8PzMPcqUR+2+/1c4yVY2h1oc2Pntor2+vu5gU8ZlpdRkoMUS+Tq77sVcj6W6lVnh9c3xQ/WYvkfdbSvXhB/EaB6V2iPW1SxQ=='
+=== convert_uuencode("~\xa8\xb6\xb4\xffr\xa1\xfc>\xf0\xac\xded~\x9a}\x13\x8ad\xef\x0f\xcc\xc3\xdc\xa9D~\xdb\xef\xf5s\x8c\x95chu\xa1\xcd\x8f\x9e\xda+\xdb\xeb\xee\xe6\x05<fZ]FJ\x0cQ/\x93\xab\xbe\xecU\xc8\xfa[\xa9U\x9e\x1f\\\xdf\x14?Y\x8b\xe4}\xd6\xd2\xbdxA\xfcF\x81\xe9]\xa2=mR\xc5")
+=> 'M?JBVM/]RH?P^\\*S>9\'Z:?1.*9.\\/S,/<J41^V^_U<XR58VAUH<V/GMHKV^ON
+MY@4\\9EI=1DH,42^3J[[L5<CZ6ZE5GA]<WQ0_68OD?=;2O7A!_$:!Z5VB/6U2
+!Q0``
+`
+'
+=== quoted_printable_encode("~\xa8\xb6\xb4\xffr\xa1\xfc>\xf0\xac\xded~\x9a}\x13\x8ad\xef\x0f\xcc\xc3\xdc\xa9D~\xdb\xef\xf5s\x8c\x95chu\xa1\xcd\x8f\x9e\xda+\xdb\xeb\xee\xe6\x05<fZ]FJ\x0cQ/\x93\xab\xbe\xecU\xc8\xfa[\xa9U\x9e\x1f\\\xdf\x14?Y\x8b\xe4}\xd6\xd2\xbdxA\xfcF\x81\xe9]\xa2=mR\xc5")
+=> '~=A8=B6=B4=FFr=A1=FC>=F0=AC=DEd~=9A}=13=8Ad=EF=0F=CC=C3=DC=A9D~=DB=EF=F5s=
+=8C=95chu=A1=CD=8F=9E=DA+=DB=EB=EE=E6=05<fZ]FJ=0CQ/=93=AB=BE=ECU=C8=FA[=
+=A9U=9E=1F\\=DF=14?Y=8B=E4}=D6=D2=BDxA=FCF=81=E9]=A2=3DmR=C5'
+=== bin2hex(quoted_printable_decode(quoted_printable_encode("~\xa8\xb6\xb4\xffr\xa1\xfc>\xf0\xac\xded~\x9a}\x13\x8ad\xef\x0f\xcc\xc3\xdc\xa9D~\xdb\xef\xf5s\x8c\x95chu\xa1\xcd\x8f\x9e\xda+\xdb\xeb\xee\xe6\x05<fZ]FJ\x0cQ/\x93\xab\xbe\xecU\xc8\xfa[\xa9U\x9e\x1f\\\xdf\x14?Y\x8b\xe4}\xd6\xd2\xbdxA\xfcF\x81\xe9]\xa2=mR\xc5")))
+=> '7ea8b6b4ff72a1fc3ef0acde647e9a7d138a64ef0fccc3dca9447edbeff5738c95636875a1cd8f9eda2bdbebeee6053c665a5d464a0c512f93abbeec55c8fa5ba9559e1f5cdf143f598be47dd6d2bd7841fc4681e95da23d6d52c5'
+=== bin2hex(convert_uudecode(convert_uuencode("~\xa8\xb6\xb4\xffr\xa1\xfc>\xf0\xac\xded~\x9a}\x13\x8ad\xef\x0f\xcc\xc3\xdc\xa9D~\xdb\xef\xf5s\x8c\x95chu\xa1\xcd\x8f\x9e\xda+\xdb\xeb\xee\xe6\x05<fZ]FJ\x0cQ/\x93\xab\xbe\xecU\xc8\xfa[\xa9U\x9e\x1f\\\xdf\x14?Y\x8b\xe4}\xd6\xd2\xbdxA\xfcF\x81\xe9]\xa2=mR\xc5")))
+=> '7ea8b6b4ff72a1fc3ef0acde647e9a7d138a64ef0fccc3dca9447edbeff5738c95636875a1cd8f9eda2bdbebeee6053c665a5d464a0c512f93abbeec55c8fa5ba9559e1f5cdf143f598be47dd6d2bd7841fc4681e95da23d6d52c5'
+=== base64_encode("\x93\x9bR\xd2\xb7Q\xcc\x1e8\xd0\xcc\xab\xf81\xf4\x84\x0b\xaa8\x96%\x87&\x0e\xc3\xe9\xf6p\x1cBVx\xc6\x8c\xf2\xb1)L\xc5\xd6\xa4J\"\xec\x81\x0d\x81\x1b\x99\x18\x0aP\xc7\xe7\xe3\x95\x0d\xa8:+\x88\xba\x11m\x16\xe6\xccd\xc1`|)\xf2|\xe9\xfeV0b+\x8fMD\x9a\x9b|K1\x05\xfb\x9b\xf3\xcd\x15\x8d\xd6\x18c:b\x98\xc4\xca\x0e\xb9\x1dzZ\x91\xd1n\xab\x85\xff<\xeb\xba\x7f4\xddB\x9aqA\x03\x8b\xa1\xabg\xb9\x94#\xc6\xb2\x85")
+=> 'k5tS0rdRzB440Myr+DH0hAuqOJYlhyYOw+n2cBxCVnjGjPKxKUzF1qRKIuyBDYEbmRgKUMfn45UNqDoriLoRbRbmzGTBYHwp8nzp/lYwYiuPTUSam3xLMQX7m/PNFY3WGGM6YpjEyg65HXpakdFuq4X/POu6fzTdQppxQQOLoatnuZQjxrKF'
+=== convert_uuencode("\x93\x9bR\xd2\xb7Q\xcc\x1e8\xd0\xcc\xab\xf81\xf4\x84\x0b\xaa8\x96%\x87&\x0e\xc3\xe9\xf6p\x1cBVx\xc6\x8c\xf2\xb1)L\xc5\xd6\xa4J\"\xec\x81\x0d\x81\x1b\x99\x18\x0aP\xc7\xe7\xe3\x95\x0d\xa8:+\x88\xba\x11m\x16\xe6\xccd\xc1`|)\xf2|\xe9\xfeV0b+\x8fMD\x9a\x9b|K1\x05\xfb\x9b\xf3\xcd\x15\x8d\xd6\x18c:b\x98\xc4\xca\x0e\xb9\x1dzZ\x91\xd1n\xab\x85\xff<\xeb\xba\x7f4\xddB\x9aqA\x03\x8b\xa1\xabg\xb9\x94#\xc6\xb2\x85")
+=> 'MDYM2TK=1S!XXT,RK^#\'TA`NJ.)8EAR8.P^GV<!Q"5GC&C/*Q*4S%UJ1*(NR!
+M#8$;F1@*4,?GXY4-J#HKB+H1;1;FS&3!8\'PI\\GSI_E8P8BN/342:FWQ+,07[
+MF_/-%8W6&&,Z8IC$R@ZY\'7I:D=%NJX7_/.NZ?S3=0IIQ00.+H:MGN90CQK*%
+`
+'
+=== quoted_printable_encode("\x93\x9bR\xd2\xb7Q\xcc\x1e8\xd0\xcc\xab\xf81\xf4\x84\x0b\xaa8\x96%\x87&\x0e\xc3\xe9\xf6p\x1cBVx\xc6\x8c\xf2\xb1)L\xc5\xd6\xa4J\"\xec\x81\x0d\x81\x1b\x99\x18\x0aP\xc7\xe7\xe3\x95\x0d\xa8:+\x88\xba\x11m\x16\xe6\xccd\xc1`|)\xf2|\xe9\xfeV0b+\x8fMD\x9a\x9b|K1\x05\xfb\x9b\xf3\xcd\x15\x8d\xd6\x18c:b\x98\xc4\xca\x0e\xb9\x1dzZ\x91\xd1n\xab\x85\xff<\xeb\xba\x7f4\xddB\x9aqA\x03\x8b\xa1\xabg\xb9\x94#\xc6\xb2\x85")
+=> '=93=9BR=D2=B7Q=CC=1E8=D0=CC=AB=F81=F4=84=0B=AA8=96%=87&=0E=C3=E9=F6p=1CBVx=
+=C6=8C=F2=B1)L=C5=D6=A4J"=EC=81=0D=81=1B=99=18=0AP=C7=E7=E3=95=0D=A8:+=
+=88=BA=11m=16=E6=CCd=C1`|)=F2|=E9=FEV0b+=8FMD=9A=9B|K1=05=FB=9B=F3=CD=15=
+=8D=D6=18c:b=98=C4=CA=0E=B9=1DzZ=91=D1n=AB=85=FF<=EB=BA=7F4=DDB=9AqA=03=
+=8B=A1=ABg=B9=94#=C6=B2=85'
+=== bin2hex(quoted_printable_decode(quoted_printable_encode("\x93\x9bR\xd2\xb7Q\xcc\x1e8\xd0\xcc\xab\xf81\xf4\x84\x0b\xaa8\x96%\x87&\x0e\xc3\xe9\xf6p\x1cBVx\xc6\x8c\xf2\xb1)L\xc5\xd6\xa4J\"\xec\x81\x0d\x81\x1b\x99\x18\x0aP\xc7\xe7\xe3\x95\x0d\xa8:+\x88\xba\x11m\x16\xe6\xccd\xc1`|)\xf2|\xe9\xfeV0b+\x8fMD\x9a\x9b|K1\x05\xfb\x9b\xf3\xcd\x15\x8d\xd6\x18c:b\x98\xc4\xca\x0e\xb9\x1dzZ\x91\xd1n\xab\x85\xff<\xeb\xba\x7f4\xddB\x9aqA\x03\x8b\xa1\xabg\xb9\x94#\xc6\xb2\x85")))
+=> '939b52d2b751cc1e38d0ccabf831f4840baa38962587260ec3e9f6701c425678c68cf2b1294cc5d6a44a22ec810d811b99180a50c7e7e3950da83a2b88ba116d16e6cc64c1607c29f27ce9fe5630622b8f4d449a9b7c4b3105fb9bf3cd158dd618633a6298c4ca0eb91d7a5a91d16eab85ff3cebba7f34dd429a7141038ba1ab67b99423c6b285'
+=== bin2hex(convert_uudecode(convert_uuencode("\x93\x9bR\xd2\xb7Q\xcc\x1e8\xd0\xcc\xab\xf81\xf4\x84\x0b\xaa8\x96%\x87&\x0e\xc3\xe9\xf6p\x1cBVx\xc6\x8c\xf2\xb1)L\xc5\xd6\xa4J\"\xec\x81\x0d\x81\x1b\x99\x18\x0aP\xc7\xe7\xe3\x95\x0d\xa8:+\x88\xba\x11m\x16\xe6\xccd\xc1`|)\xf2|\xe9\xfeV0b+\x8fMD\x9a\x9b|K1\x05\xfb\x9b\xf3\xcd\x15\x8d\xd6\x18c:b\x98\xc4\xca\x0e\xb9\x1dzZ\x91\xd1n\xab\x85\xff<\xeb\xba\x7f4\xddB\x9aqA\x03\x8b\xa1\xabg\xb9\x94#\xc6\xb2\x85")))
+=> '939b52d2b751cc1e38d0ccabf831f4840baa38962587260ec3e9f6701c425678c68cf2b1294cc5d6a44a22ec810d811b99180a50c7e7e3950da83a2b88ba116d16e6cc64c1607c29f27ce9fe5630622b8f4d449a9b7c4b3105fb9bf3cd158dd618633a6298c4ca0eb91d7a5a91d16eab85ff3cebba7f34dd429a7141038ba1ab67b99423c6b285'
+=== base64_encode("\xed\xe4?x\xabCVt\xb6\x04\xa3\xaau\xbf\xfa\x19\xed\x922\xb1\xff\xac\xc4\xc1e\x98(\$kJ\xf0+m\xea\xa1I\x14dT\x81O\xac\x11\x90\x13\xd2\xe6\xda\xd3\xc9\xcb\x15\xbe\xf76\xb7\xbc|| &B\xee\x87G\xc9\xaf\xa6\x97\xafW%\xb1\x02I\xc8\x19F\xd4W\xb0E\x0cQ\xf3\x99fO\xf7\xfa\x169%H),\xb5Wa'\xec~\xd4x\x14\xdeC\xe9@s;\xa9\xbc\xdc\xee\xfcV\xea\xcf\xa2P\xea\xef\x09 \xb3\x1a2\xeen\xb0c\xca(E\x91\xb1\x19\xf8\x8c>\xb2\x94\xe80hh\xaf\x9fC\xe6\xc8\xfd%\xfe&\xcf\xdb8\xb0)\xe5\x94\xf3\xeb\x05!\x8a\xbe\x8a_I\xccYV,A\xc0s\x02\x86\xfb%\xd98\x82<(\xea\x18\xfc\xbf\xa0\x94\x04o\x06n\xe1y")
+=> '7eQ/eKtDVnS2BKOqdb/6Ge2SMrH/rMTBZZgoJGtK8Ctt6qFJFGRUgU+sEZAT0uba08nLFb73Nre8fHwgJkLuh0fJr6aXr1clsQJJyBlG1FewRQxR85lmT/f6FjklSCkstVdhJ+x+1HgU3kPpQHM7qbzc7vxW6s+iUOrvCSCzGjLubrBjyihFkbEZ+Iw+spToMGhor59D5sj9Jf4mz9s4sCnllPPrBSGKvopfScxZVixBwHMChvsl2TiCPCjqGPy/oJQEbwZu4Xk='
+=== convert_uuencode("\xed\xe4?x\xabCVt\xb6\x04\xa3\xaau\xbf\xfa\x19\xed\x922\xb1\xff\xac\xc4\xc1e\x98(\$kJ\xf0+m\xea\xa1I\x14dT\x81O\xac\x11\x90\x13\xd2\xe6\xda\xd3\xc9\xcb\x15\xbe\xf76\xb7\xbc|| &B\xee\x87G\xc9\xaf\xa6\x97\xafW%\xb1\x02I\xc8\x19F\xd4W\xb0E\x0cQ\xf3\x99fO\xf7\xfa\x169%H),\xb5Wa'\xec~\xd4x\x14\xdeC\xe9@s;\xa9\xbc\xdc\xee\xfcV\xea\xcf\xa2P\xea\xef\x09 \xb3\x1a2\xeen\xb0c\xca(E\x91\xb1\x19\xf8\x8c>\xb2\x94\xe80hh\xaf\x9fC\xe6\xc8\xfd%\xfe&\xcf\xdb8\xb0)\xe5\x94\xf3\xeb\x05!\x8a\xbe\x8a_I\xccYV,A\xc0s\x02\x86\xfb%\xd98\x82<(\xea\x18\xfc\xbf\xa0\x94\x04o\x06n\xe1y")
+=> 'M[>0_>*M#5G2V!*.J=;_Z&>V2,K\'_K,3!99@H)&M*\\"MMZJ%)%&14@4^L$9`3
+MTN;:T\\G+%;[W-K>\\?\'P@)D+NAT?)KZ:7KU<EL0))R!E&U%>P10Q1\\YEF3_?Z
+M%CDE2"DLM5=A)^Q^U\'@4WD/I0\',[J;S<[OQ6ZL^B4.KO"2"S&C+N;K!CRBA%
+MD;$9^(P^LI3H,&AHKY]#YLC])?XFS]LXL"GEE//K!2&*OHI?2<Q95BQ!P\',"
+4AOLEV3B"/"CJ&/R_H)0$;P9NX7D`
+`
+'
+=== quoted_printable_encode("\xed\xe4?x\xabCVt\xb6\x04\xa3\xaau\xbf\xfa\x19\xed\x922\xb1\xff\xac\xc4\xc1e\x98(\$kJ\xf0+m\xea\xa1I\x14dT\x81O\xac\x11\x90\x13\xd2\xe6\xda\xd3\xc9\xcb\x15\xbe\xf76\xb7\xbc|| &B\xee\x87G\xc9\xaf\xa6\x97\xafW%\xb1\x02I\xc8\x19F\xd4W\xb0E\x0cQ\xf3\x99fO\xf7\xfa\x169%H),\xb5Wa'\xec~\xd4x\x14\xdeC\xe9@s;\xa9\xbc\xdc\xee\xfcV\xea\xcf\xa2P\xea\xef\x09 \xb3\x1a2\xeen\xb0c\xca(E\x91\xb1\x19\xf8\x8c>\xb2\x94\xe80hh\xaf\x9fC\xe6\xc8\xfd%\xfe&\xcf\xdb8\xb0)\xe5\x94\xf3\xeb\x05!\x8a\xbe\x8a_I\xccYV,A\xc0s\x02\x86\xfb%\xd98\x82<(\xea\x18\xfc\xbf\xa0\x94\x04o\x06n\xe1y")
+=> '=ED=E4?x=ABCVt=B6=04=A3=AAu=BF=FA=19=ED=922=B1=FF=AC=C4=C1e=98($kJ=
+=F0+m=EA=A1I=14dT=81O=AC=11=90=13=D2=E6=DA=D3=C9=CB=15=BE=F76=B7=BC|| &B=
+=EE=87G=C9=AF=A6=97=AFW%=B1=02I=C8=19F=D4W=B0E=0CQ=F3=99fO=F7=FA=169%H),=
+=B5Wa\'=EC~=D4x=14=DEC=E9@s;=A9=BC=DC=EE=FCV=EA=CF=A2P=EA=EF=09 =B3=1A2=
+=EEn=B0c=CA(E=91=B1=19=F8=8C>=B2=94=E80hh=AF=9FC=E6=C8=FD%=FE&=CF=DB8=B0)=
+=E5=94=F3=EB=05!=8A=BE=8A_I=CCYV,A=C0s=02=86=FB%=D98=82<(=EA=18=FC=BF=A0=
+=94=04o=06n=E1y'
+=== bin2hex(quoted_printable_decode(quoted_printable_encode("\xed\xe4?x\xabCVt\xb6\x04\xa3\xaau\xbf\xfa\x19\xed\x922\xb1\xff\xac\xc4\xc1e\x98(\$kJ\xf0+m\xea\xa1I\x14dT\x81O\xac\x11\x90\x13\xd2\xe6\xda\xd3\xc9\xcb\x15\xbe\xf76\xb7\xbc|| &B\xee\x87G\xc9\xaf\xa6\x97\xafW%\xb1\x02I\xc8\x19F\xd4W\xb0E\x0cQ\xf3\x99fO\xf7\xfa\x169%H),\xb5Wa'\xec~\xd4x\x14\xdeC\xe9@s;\xa9\xbc\xdc\xee\xfcV\xea\xcf\xa2P\xea\xef\x09 \xb3\x1a2\xeen\xb0c\xca(E\x91\xb1\x19\xf8\x8c>\xb2\x94\xe80hh\xaf\x9fC\xe6\xc8\xfd%\xfe&\xcf\xdb8\xb0)\xe5\x94\xf3\xeb\x05!\x8a\xbe\x8a_I\xccYV,A\xc0s\x02\x86\xfb%\xd98\x82<(\xea\x18\xfc\xbf\xa0\x94\x04o\x06n\xe1y")))
+=> 'ede43f78ab435674b604a3aa75bffa19ed9232b1ffacc4c1659828246b4af02b6deaa149146454814fac119013d2e6dad3c9cb15bef736b7bc7c7c202642ee8747c9afa697af5725b10249c81946d457b0450c51f399664ff7fa16392548292cb5576127ec7ed47814de43e940733ba9bcdceefc56eacfa250eaef0920b31a32ee6eb063ca284591b119f88c3eb294e8306868af9f43e6c8fd25fe26cfdb38b029e594f3eb05218abe8a5f49cc59562c41c0730286fb25d938823c28ea18fcbfa094046f066ee179'
+=== bin2hex(convert_uudecode(convert_uuencode("\xed\xe4?x\xabCVt\xb6\x04\xa3\xaau\xbf\xfa\x19\xed\x922\xb1\xff\xac\xc4\xc1e\x98(\$kJ\xf0+m\xea\xa1I\x14dT\x81O\xac\x11\x90\x13\xd2\xe6\xda\xd3\xc9\xcb\x15\xbe\xf76\xb7\xbc|| &B\xee\x87G\xc9\xaf\xa6\x97\xafW%\xb1\x02I\xc8\x19F\xd4W\xb0E\x0cQ\xf3\x99fO\xf7\xfa\x169%H),\xb5Wa'\xec~\xd4x\x14\xdeC\xe9@s;\xa9\xbc\xdc\xee\xfcV\xea\xcf\xa2P\xea\xef\x09 \xb3\x1a2\xeen\xb0c\xca(E\x91\xb1\x19\xf8\x8c>\xb2\x94\xe80hh\xaf\x9fC\xe6\xc8\xfd%\xfe&\xcf\xdb8\xb0)\xe5\x94\xf3\xeb\x05!\x8a\xbe\x8a_I\xccYV,A\xc0s\x02\x86\xfb%\xd98\x82<(\xea\x18\xfc\xbf\xa0\x94\x04o\x06n\xe1y")))
+=> 'ede43f78ab435674b604a3aa75bffa19ed9232b1ffacc4c1659828246b4af02b6deaa149146454814fac119013d2e6dad3c9cb15bef736b7bc7c7c202642ee8747c9afa697af5725b10249c81946d457b0450c51f399664ff7fa16392548292cb5576127ec7ed47814de43e940733ba9bcdceefc56eacfa250eaef0920b31a32ee6eb063ca284591b119f88c3eb294e8306868af9f43e6c8fd25fe26cfdb38b029e594f3eb05218abe8a5f49cc59562c41c0730286fb25d938823c28ea18fcbfa094046f066ee179'
+=== base64_encode('xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx')
+=> 'eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4'
+=== convert_uuencode('xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx')
+=> 'M>\'AX>\'AX>\'AX>\'AX>\'AX>\'AX>\'AX>\'AX>\'AX>\'AX>\'AX>\'AX>\'AX>\'AX>\'AX
+>>\'AX>\'AX>\'AX>\'AX>\'AX>\'AX>\'AX>\'AX>\'AX>\'AX
+`
+'
+=== quoted_printable_encode('xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx')
+=> 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'
+=== bin2hex(quoted_printable_decode(quoted_printable_encode('xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx')))
+=> '787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878'
+=== bin2hex(convert_uudecode(convert_uuencode('xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx')))
+=> '787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878'
+=== base64_encode('xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx')
+=> 'eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eA=='
+=== convert_uuencode('xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx')
+=> 'M>\'AX>\'AX>\'AX>\'AX>\'AX>\'AX>\'AX>\'AX>\'AX>\'AX>\'AX>\'AX>\'AX>\'AX>\'AX
+?>\'AX>\'AX>\'AX>\'AX>\'AX>\'AX>\'AX>\'AX>\'AX>\'AX>```
+`
+'
+=== quoted_printable_encode('xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx')
+=> 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx=
+x'
+=== bin2hex(quoted_printable_decode(quoted_printable_encode('xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx')))
+=> '78787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878'
+=== bin2hex(convert_uudecode(convert_uuencode('xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx')))
+=> '78787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878'
+=== base64_encode('xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx')
+=> 'eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHg='
+=== convert_uuencode('xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx')
+=> 'M>\'AX>\'AX>\'AX>\'AX>\'AX>\'AX>\'AX>\'AX>\'AX>\'AX>\'AX>\'AX>\'AX>\'AX>\'AX
+@>\'AX>\'AX>\'AX>\'AX>\'AX>\'AX>\'AX>\'AX>\'AX>\'AX>\'@`
+`
+'
+=== quoted_printable_encode('xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx')
+=> 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx=
+xx'
+=== bin2hex(quoted_printable_decode(quoted_printable_encode('xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx')))
+=> '7878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878'
+=== bin2hex(convert_uudecode(convert_uuencode('xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx')))
+=> '7878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878'
+=== base64_encode('xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx')
+=> 'eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eA=='
+=== convert_uuencode('xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx')
+=> 'M>\'AX>\'AX>\'AX>\'AX>\'AX>\'AX>\'AX>\'AX>\'AX>\'AX>\'AX>\'AX>\'AX>\'AX>\'AX
+M>\'AX>\'AX>\'AX>\'AX>\'AX>\'AX>\'AX>\'AX>\'AX>\'AX>\'AX>\'AX>\'AX>\'AX>\'AX
+M>\'AX>\'AX>\'AX>\'AX>\'AX>\'AX>\'AX>\'AX>\'AX>\'AX>\'AX>\'AX>\'AX>\'AX>\'AX
+9>\'AX>\'AX>\'AX>\'AX>\'AX>\'AX>\'AX>\'AX>```
+`
+'
+=== quoted_printable_encode('xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx')
+=> 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx=
+xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx=
+xxxxxxxxxx'
+=== bin2hex(quoted_printable_decode(quoted_printable_encode('xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx')))
+=> '78787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878'
+=== bin2hex(convert_uudecode(convert_uuencode('xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx')))
+=> '78787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878'
+=== base64_encode("\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85")
+=> 'xIXEhcSFxIXEhcSFxIXEhcSFxIXEhcSFxIXEhcSFxIXEhcSFxIXEhcSFxIXEhcSFxIXEhcSFxIXEhcSFxIXEhcSFxIXEhcSFxIXEhcSFxIXEhcSFxIXEhcSFxIXEhcSFxIXEhcSFxIXEhcSFxIXEhcSFxIXEhcSFxIXEhcSFxIXEhcSFxIXEhcSFxIXEhcSFxIXEhcSFxIXEhQ=='
+=== convert_uuencode("\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85")
+=> 'MQ(7$A<2%Q(7$A<2%Q(7$A<2%Q(7$A<2%Q(7$A<2%Q(7$A<2%Q(7$A<2%Q(7$
+MA<2%Q(7$A<2%Q(7$A<2%Q(7$A<2%Q(7$A<2%Q(7$A<2%Q(7$A<2%Q(7$A<2%
+MQ(7$A<2%Q(7$A<2%Q(7$A<2%Q(7$A<2%Q(7$A<2%Q(7$A<2%Q(7$A<2%Q(7$
+3A<2%Q(7$A<2%Q(7$A<2%Q(7$A0``
+`
+'
+=== quoted_printable_encode("\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85")
+=> '=C4=85=C4=85=C4=85=C4=85=C4=85=C4=85=C4=85=C4=85=C4=85=C4=85=C4=85=C4=85=
+=C4=85=C4=85=C4=85=C4=85=C4=85=C4=85=C4=85=C4=85=C4=85=C4=85=C4=85=C4=85=
+=C4=85=C4=85=C4=85=C4=85=C4=85=C4=85=C4=85=C4=85=C4=85=C4=85=C4=85=C4=85=
+=C4=85=C4=85=C4=85=C4=85=C4=85=C4=85=C4=85=C4=85=C4=85=C4=85=C4=85=C4=85=
+=C4=85=C4=85=C4=85=C4=85=C4=85=C4=85=C4=85=C4=85=C4=85=C4=85=C4=85=C4=85=
+=C4=85=C4=85=C4=85=C4=85=C4=85=C4=85=C4=85=C4=85=C4=85=C4=85=C4=85=C4=85=
+=C4=85=C4=85=C4=85=C4=85=C4=85'
+=== bin2hex(quoted_printable_decode(quoted_printable_encode("\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85")))
+=> 'c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485'
+=== bin2hex(convert_uudecode(convert_uuencode("\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85\xc4\x85")))
+=> 'c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485c485'
+=== base64_encode("\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac")
+=> '4oKs4oKs4oKs4oKs4oKs4oKs4oKs4oKs4oKs4oKs4oKs4oKs4oKs4oKs4oKs4oKs4oKs4oKs4oKs4oKs4oKs4oKs4oKs4oKs4oKs4oKs4oKs4oKs4oKs4oKs4oKs4oKs4oKs4oKs4oKs4oKs4oKs4oKs4oKs4oKs'
+=== convert_uuencode("\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac")
+=> 'MXH*LXH*LXH*LXH*LXH*LXH*LXH*LXH*LXH*LXH*LXH*LXH*LXH*LXH*LXH*L
+MXH*LXH*LXH*LXH*LXH*LXH*LXH*LXH*LXH*LXH*LXH*LXH*LXH*LXH*LXH*L
+>XH*LXH*LXH*LXH*LXH*LXH*LXH*LXH*LXH*LXH*L
+`
+'
+=== quoted_printable_encode("\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac")
+=> '=E2=82=AC=E2=82=AC=E2=82=AC=E2=82=AC=E2=82=AC=E2=82=AC=E2=82=AC=E2=82=AC=
+=E2=82=AC=E2=82=AC=E2=82=AC=E2=82=AC=E2=82=AC=E2=82=AC=E2=82=AC=E2=82=AC=
+=E2=82=AC=E2=82=AC=E2=82=AC=E2=82=AC=E2=82=AC=E2=82=AC=E2=82=AC=E2=82=AC=
+=E2=82=AC=E2=82=AC=E2=82=AC=E2=82=AC=E2=82=AC=E2=82=AC=E2=82=AC=E2=82=AC=
+=E2=82=AC=E2=82=AC=E2=82=AC=E2=82=AC=E2=82=AC=E2=82=AC=E2=82=AC=E2=82=AC'
+=== bin2hex(quoted_printable_decode(quoted_printable_encode("\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac")))
+=> 'e282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ac'
+=== bin2hex(convert_uudecode(convert_uuencode("\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac\xe2\x82\xac")))
+=> 'e282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ace282ac'
+=== base64_encode("\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80")
+=> '8J+YgPCfmIDwn5iA8J+YgPCfmIDwn5iA8J+YgPCfmIDwn5iA8J+YgPCfmIDwn5iA8J+YgPCfmIDwn5iA8J+YgPCfmIDwn5iA8J+YgPCfmIDwn5iA8J+YgPCfmIDwn5iA8J+YgPCfmIDwn5iA8J+YgPCfmIDwn5iA'
+=== convert_uuencode("\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80")
+=> 'M\\)^8@/"?F(#PGYB`\\)^8@/"?F(#PGYB`\\)^8@/"?F(#PGYB`\\)^8@/"?F(#P
+MGYB`\\)^8@/"?F(#PGYB`\\)^8@/"?F(#PGYB`\\)^8@/"?F(#PGYB`\\)^8@/"?
+>F(#PGYB`\\)^8@/"?F(#PGYB`\\)^8@/"?F(#PGYB`
+`
+'
+=== quoted_printable_encode("\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80")
+=> '=F0=9F=98=80=F0=9F=98=80=F0=9F=98=80=F0=9F=98=80=F0=9F=98=80=F0=9F=98=80=
+=F0=9F=98=80=F0=9F=98=80=F0=9F=98=80=F0=9F=98=80=F0=9F=98=80=F0=9F=98=80=
+=F0=9F=98=80=F0=9F=98=80=F0=9F=98=80=F0=9F=98=80=F0=9F=98=80=F0=9F=98=80=
+=F0=9F=98=80=F0=9F=98=80=F0=9F=98=80=F0=9F=98=80=F0=9F=98=80=F0=9F=98=80=
+=F0=9F=98=80=F0=9F=98=80=F0=9F=98=80=F0=9F=98=80=F0=9F=98=80=F0=9F=98=80'
+=== bin2hex(quoted_printable_decode(quoted_printable_encode("\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80")))
+=> 'f09f9880f09f9880f09f9880f09f9880f09f9880f09f9880f09f9880f09f9880f09f9880f09f9880f09f9880f09f9880f09f9880f09f9880f09f9880f09f9880f09f9880f09f9880f09f9880f09f9880f09f9880f09f9880f09f9880f09f9880f09f9880f09f9880f09f9880f09f9880f09f9880f09f9880'
+=== bin2hex(convert_uudecode(convert_uuencode("\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80")))
+=> 'f09f9880f09f9880f09f9880f09f9880f09f9880f09f9880f09f9880f09f9880f09f9880f09f9880f09f9880f09f9880f09f9880f09f9880f09f9880f09f9880f09f9880f09f9880f09f9880f09f9880f09f9880f09f9880f09f9880f09f9880f09f9880f09f9880f09f9880f09f9880f09f9880f09f9880'
+=== base64_encode("\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4")
+=> '9PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09A=='
+=== convert_uuencode("\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4")
+=> 'M]/3T]/3T]/3T]/3T]/3T]/3T]/3T]/3T]/3T]/3T]/3T]/3T]/3T]/3T]/3T
+M]/3T]/3T]/3T]/3T]/3T]/3T]/3T]/3T]/3T]/3T]/3T]/3T]/3T]/3T]/3T
+*]/3T]/3T]/3T]```
+`
+'
+=== quoted_printable_encode("\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4")
+=> '=F4=F4=F4=F4=F4=F4=F4=F4=F4=F4=F4=F4=F4=F4=F4=F4=F4=F4=F4=F4=F4=F4=
+=F4=F4=F4=F4=F4=F4=F4=F4=F4=F4=F4=F4=F4=F4=F4=F4=F4=F4=F4=F4=F4=F4=
+=F4=F4=F4=F4=F4=F4=F4=F4=F4=F4=F4=F4=F4=F4=F4=F4=F4=F4=F4=F4=F4=F4=
+=F4=F4=F4=F4=F4=F4=F4=F4=F4=F4=F4=F4=F4=F4=F4=F4=F4=F4=F4=F4=F4=F4=
+=F4=F4=F4=F4=F4=F4=F4=F4=F4=F4=F4=F4'
+=== bin2hex(quoted_printable_decode(quoted_printable_encode("\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4")))
+=> 'f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4'
+=== bin2hex(convert_uudecode(convert_uuencode("\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4\xf4")))
+=> 'f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4'
+=== base64_encode("\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f")
+=> 'f39/f39/f39/f39/f39/f39/f39/f39/f39/f39/'
+=== convert_uuencode("\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f")
+=> '>?W]_?W]_?W]_?W]_?W]_?W]_?W]_?W]_?W]_?W]_
+`
+'
+=== quoted_printable_encode("\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f")
+=> '=7F=7F=7F=7F=7F=7F=7F=7F=7F=7F=7F=7F=7F=7F=7F=7F=7F=7F=7F=7F=7F=7F=7F=7F=7F=
+=7F=7F=7F=7F=7F'
+=== bin2hex(quoted_printable_decode(quoted_printable_encode("\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f")))
+=> '7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f'
+=== bin2hex(convert_uudecode(convert_uuencode("\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f")))
+=> '7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f'
+=== base64_encode("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\xe2\x82\xac\xe2\x82\xac=  \x0d\x0aend")
+=> 'eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eOKCrOKCrD0gIA0KZW5k'
+=== convert_uuencode("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\xe2\x82\xac\xe2\x82\xac=  \x0d\x0aend")
+=> 'M>\'AX>\'AX>\'AX>\'AX>\'AX>\'AX>\'AX>\'AX>\'AX>\'AX>\'AX>\'AX>\'AX>\'AX>\'AX
+G>\'AX>\'AX>\'AX>\'AX>\'AX>\'AX>\'AX>\'AX>.*"K.*"K#T@(`T*96YD
+`
+'
+=== quoted_printable_encode("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\xe2\x82\xac\xe2\x82\xac=  \x0d\x0aend")
+=> 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx=
+=E2=82=AC=E2=82=AC=3D =20
+end'
+=== bin2hex(quoted_printable_decode(quoted_printable_encode("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\xe2\x82\xac\xe2\x82\xac=  \x0d\x0aend")))
+=> '78787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878e282ace282ac3d20200d0a656e64'
+=== bin2hex(convert_uudecode(convert_uuencode("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\xe2\x82\xac\xe2\x82\xac=  \x0d\x0aend")))
+=> '78787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878e282ace282ac3d20200d0a656e64'
+=== base64_encode("\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f !\"#\$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~\x7f\x80\x81\x82\x83\x84\x85\x86\x87\x88\x89\x8a\x8b\x8c\x8d\x8e\x8f\x90\x91\x92\x93\x94\x95\x96\x97\x98\x99\x9a\x9b\x9c\x9d\x9e\x9f\xa0\xa1\xa2\xa3\xa4\xa5\xa6\xa7\xa8\xa9\xaa\xab\xac\xad\xae\xaf\xb0\xb1\xb2\xb3\xb4\xb5\xb6\xb7\xb8\xb9\xba\xbb\xbc\xbd\xbe\xbf\xc0\xc1\xc2\xc3\xc4\xc5\xc6\xc7\xc8\xc9\xca\xcb\xcc\xcd\xce\xcf\xd0\xd1\xd2\xd3\xd4\xd5\xd6\xd7\xd8\xd9\xda\xdb\xdc\xdd\xde\xdf\xe0\xe1\xe2\xe3\xe4\xe5\xe6\xe7\xe8\xe9\xea\xeb\xec\xed\xee\xef\xf0\xf1\xf2\xf3\xf4\xf5\xf6\xf7\xf8\xf9\xfa\xfb\xfc\xfd\xfe\xff")
+=> 'AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8gISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0+P0BBQkNERUZHSElKS0xNTk9QUVJTVFVWV1hZWltcXV5fYGFiY2RlZmdoaWprbG1ub3BxcnN0dXZ3eHl6e3x9fn+AgYKDhIWGh4iJiouMjY6PkJGSk5SVlpeYmZqbnJ2en6ChoqOkpaanqKmqq6ytrq+wsbKztLW2t7i5uru8vb6/wMHCw8TFxsfIycrLzM3Oz9DR0tPU1dbX2Nna29zd3t/g4eLj5OXm5+jp6uvs7e7v8PHy8/T19vf4+fr7/P3+/w=='
+=== convert_uuencode("\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f !\"#\$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~\x7f\x80\x81\x82\x83\x84\x85\x86\x87\x88\x89\x8a\x8b\x8c\x8d\x8e\x8f\x90\x91\x92\x93\x94\x95\x96\x97\x98\x99\x9a\x9b\x9c\x9d\x9e\x9f\xa0\xa1\xa2\xa3\xa4\xa5\xa6\xa7\xa8\xa9\xaa\xab\xac\xad\xae\xaf\xb0\xb1\xb2\xb3\xb4\xb5\xb6\xb7\xb8\xb9\xba\xbb\xbc\xbd\xbe\xbf\xc0\xc1\xc2\xc3\xc4\xc5\xc6\xc7\xc8\xc9\xca\xcb\xcc\xcd\xce\xcf\xd0\xd1\xd2\xd3\xd4\xd5\xd6\xd7\xd8\xd9\xda\xdb\xdc\xdd\xde\xdf\xe0\xe1\xe2\xe3\xe4\xe5\xe6\xe7\xe8\xe9\xea\xeb\xec\xed\xee\xef\xf0\xf1\xf2\xf3\xf4\xf5\xf6\xf7\xf8\xf9\xfa\xfb\xfc\xfd\xfe\xff")
+=> 'M``$"`P0%!@<("0H+#`T.#Q`1$A,4%187&!D:&QP=\'A\\@(2(C)"4F)R@I*BLL
+M+2XO,#$R,S0U-C<X.3H[/#T^/T!!0D-$149\'2$E*2TQ-3D]045)35%565UA9
+M6EM<75Y?8&%B8V1E9F=H:6IK;&UN;W!Q<G-T=79W>\'EZ>WQ]?G^`@8*#A(6&
+MAXB)BHN,C8Z/D)&2DY25EI>8F9J;G)V>GZ"AHJ.DI::GJ*FJJZRMKJ^PL;*S
+MM+6VM[BYNKN\\O;Z_P,\'"P\\3%QL?(R<K+S,W.S]#1TM/4U=;7V-G:V]S=WM_@
+?X>+CY.7FY^CIZNOL[>[O\\/\'R\\_3U]O?X^?K[_/W^_P``
+`
+'
+=== quoted_printable_encode("\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f !\"#\$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~\x7f\x80\x81\x82\x83\x84\x85\x86\x87\x88\x89\x8a\x8b\x8c\x8d\x8e\x8f\x90\x91\x92\x93\x94\x95\x96\x97\x98\x99\x9a\x9b\x9c\x9d\x9e\x9f\xa0\xa1\xa2\xa3\xa4\xa5\xa6\xa7\xa8\xa9\xaa\xab\xac\xad\xae\xaf\xb0\xb1\xb2\xb3\xb4\xb5\xb6\xb7\xb8\xb9\xba\xbb\xbc\xbd\xbe\xbf\xc0\xc1\xc2\xc3\xc4\xc5\xc6\xc7\xc8\xc9\xca\xcb\xcc\xcd\xce\xcf\xd0\xd1\xd2\xd3\xd4\xd5\xd6\xd7\xd8\xd9\xda\xdb\xdc\xdd\xde\xdf\xe0\xe1\xe2\xe3\xe4\xe5\xe6\xe7\xe8\xe9\xea\xeb\xec\xed\xee\xef\xf0\xf1\xf2\xf3\xf4\xf5\xf6\xf7\xf8\xf9\xfa\xfb\xfc\xfd\xfe\xff")
+=> '=00=01=02=03=04=05=06=07=08=09=0A=0B=0C=0D=0E=0F=10=11=12=13=14=15=16=17=18=
+=19=1A=1B=1C=1D=1E=1F !"#$%&\'()*+,-./0123456789:;<=3D>?@ABCDEFGHIJKLMNOPQRS=
+TUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~=7F=80=81=82=83=84=85=86=87=
+=88=89=8A=8B=8C=8D=8E=8F=90=91=92=93=94=95=96=97=98=99=9A=9B=9C=9D=9E=9F=
+=A0=A1=A2=A3=A4=A5=A6=A7=A8=A9=AA=AB=AC=AD=AE=AF=B0=B1=B2=B3=B4=B5=B6=B7=
+=B8=B9=BA=BB=BC=BD=BE=BF=C0=C1=C2=C3=C4=C5=C6=C7=C8=C9=CA=CB=CC=CD=CE=CF=
+=D0=D1=D2=D3=D4=D5=D6=D7=D8=D9=DA=DB=DC=DD=DE=DF=E0=E1=E2=E3=E4=E5=E6=
+=E7=E8=E9=EA=EB=EC=ED=EE=EF=F0=F1=F2=F3=F4=F5=F6=F7=F8=F9=FA=FB=FC=FD=FE=FF'
+=== bin2hex(quoted_printable_decode(quoted_printable_encode("\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f !\"#\$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~\x7f\x80\x81\x82\x83\x84\x85\x86\x87\x88\x89\x8a\x8b\x8c\x8d\x8e\x8f\x90\x91\x92\x93\x94\x95\x96\x97\x98\x99\x9a\x9b\x9c\x9d\x9e\x9f\xa0\xa1\xa2\xa3\xa4\xa5\xa6\xa7\xa8\xa9\xaa\xab\xac\xad\xae\xaf\xb0\xb1\xb2\xb3\xb4\xb5\xb6\xb7\xb8\xb9\xba\xbb\xbc\xbd\xbe\xbf\xc0\xc1\xc2\xc3\xc4\xc5\xc6\xc7\xc8\xc9\xca\xcb\xcc\xcd\xce\xcf\xd0\xd1\xd2\xd3\xd4\xd5\xd6\xd7\xd8\xd9\xda\xdb\xdc\xdd\xde\xdf\xe0\xe1\xe2\xe3\xe4\xe5\xe6\xe7\xe8\xe9\xea\xeb\xec\xed\xee\xef\xf0\xf1\xf2\xf3\xf4\xf5\xf6\xf7\xf8\xf9\xfa\xfb\xfc\xfd\xfe\xff")))
+=> '000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff'
+=== bin2hex(convert_uudecode(convert_uuencode("\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f !\"#\$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~\x7f\x80\x81\x82\x83\x84\x85\x86\x87\x88\x89\x8a\x8b\x8c\x8d\x8e\x8f\x90\x91\x92\x93\x94\x95\x96\x97\x98\x99\x9a\x9b\x9c\x9d\x9e\x9f\xa0\xa1\xa2\xa3\xa4\xa5\xa6\xa7\xa8\xa9\xaa\xab\xac\xad\xae\xaf\xb0\xb1\xb2\xb3\xb4\xb5\xb6\xb7\xb8\xb9\xba\xbb\xbc\xbd\xbe\xbf\xc0\xc1\xc2\xc3\xc4\xc5\xc6\xc7\xc8\xc9\xca\xcb\xcc\xcd\xce\xcf\xd0\xd1\xd2\xd3\xd4\xd5\xd6\xd7\xd8\xd9\xda\xdb\xdc\xdd\xde\xdf\xe0\xe1\xe2\xe3\xe4\xe5\xe6\xe7\xe8\xe9\xea\xeb\xec\xed\xee\xef\xf0\xf1\xf2\xf3\xf4\xf5\xf6\xf7\xf8\xf9\xfa\xfb\xfc\xfd\xfe\xff")))
+=> '000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff'
+=== (($r = base64_decode('', false)) === false ? false : bin2hex($r))
+=> ''
+=== (($r = base64_decode('', true)) === false ? false : bin2hex($r))
+=> ''
+=== (($r = base64_decode('Zg==', false)) === false ? false : bin2hex($r))
+=> '66'
+=== (($r = base64_decode('Zg==', true)) === false ? false : bin2hex($r))
+=> '66'
+=== (($r = base64_decode('Zm8=', false)) === false ? false : bin2hex($r))
+=> '666f'
+=== (($r = base64_decode('Zm8=', true)) === false ? false : bin2hex($r))
+=> '666f'
+=== (($r = base64_decode('Zm9v', false)) === false ? false : bin2hex($r))
+=> '666f6f'
+=== (($r = base64_decode('Zm9v', true)) === false ? false : bin2hex($r))
+=> '666f6f'
+=== (($r = base64_decode('Zm9vYg', false)) === false ? false : bin2hex($r))
+=> '666f6f62'
+=== (($r = base64_decode('Zm9vYg', true)) === false ? false : bin2hex($r))
+=> '666f6f62'
+=== (($r = base64_decode('Zm9vYmE', false)) === false ? false : bin2hex($r))
+=> '666f6f6261'
+=== (($r = base64_decode('Zm9vYmE', true)) === false ? false : bin2hex($r))
+=> '666f6f6261'
+=== (($r = base64_decode('Zm9vY', false)) === false ? false : bin2hex($r))
+=> '666f6f'
+=== (($r = base64_decode('Zm9vY', true)) === false ? false : bin2hex($r))
+=> false
+=== (($r = base64_decode('Z', false)) === false ? false : bin2hex($r))
+=> ''
+=== (($r = base64_decode('Z', true)) === false ? false : bin2hex($r))
+=> false
+=== (($r = base64_decode('Zg=', false)) === false ? false : bin2hex($r))
+=> '66'
+=== (($r = base64_decode('Zg=', true)) === false ? false : bin2hex($r))
+=> false
+=== (($r = base64_decode('Zg===', false)) === false ? false : bin2hex($r))
+=> '66'
+=== (($r = base64_decode('Zg===', true)) === false ? false : bin2hex($r))
+=> false
+=== (($r = base64_decode("Zm9v\x0aYmFy", false)) === false ? false : bin2hex($r))
+=> '666f6f626172'
+=== (($r = base64_decode("Zm9v\x0aYmFy", true)) === false ? false : bin2hex($r))
+=> '666f6f626172'
+=== (($r = base64_decode(" Zm9v\x09YmFy\x0d\x0a", false)) === false ? false : bin2hex($r))
+=> '666f6f626172'
+=== (($r = base64_decode(" Zm9v\x09YmFy\x0d\x0a", true)) === false ? false : bin2hex($r))
+=> '666f6f626172'
+=== (($r = base64_decode('Zm9v YmFy', false)) === false ? false : bin2hex($r))
+=> '666f6f626172'
+=== (($r = base64_decode('Zm9v YmFy', true)) === false ? false : bin2hex($r))
+=> '666f6f626172'
+=== (($r = base64_decode('Zm9v!YmFy', false)) === false ? false : bin2hex($r))
+=> '666f6f626172'
+=== (($r = base64_decode('Zm9v!YmFy', true)) === false ? false : bin2hex($r))
+=> false
+=== (($r = base64_decode('Zm9vYg==Zg==', false)) === false ? false : bin2hex($r))
+=> '666f6f620660'
+=== (($r = base64_decode('Zm9vYg==Zg==', true)) === false ? false : bin2hex($r))
+=> false
+=== (($r = base64_decode("Zg==\x0a", false)) === false ? false : bin2hex($r))
+=> '66'
+=== (($r = base64_decode("Zg==\x0a", true)) === false ? false : bin2hex($r))
+=> '66'
+=== (($r = base64_decode('Zg= =', false)) === false ? false : bin2hex($r))
+=> '66'
+=== (($r = base64_decode('Zg= =', true)) === false ? false : bin2hex($r))
+=> '66'
+=== (($r = base64_decode('VV= =', false)) === false ? false : bin2hex($r))
+=> '55'
+=== (($r = base64_decode('VV= =', true)) === false ? false : bin2hex($r))
+=> '55'
+=== (($r = base64_decode('*', false)) === false ? false : bin2hex($r))
+=> ''
+=== (($r = base64_decode('*', true)) === false ? false : bin2hex($r))
+=> false
+=== (($r = base64_decode('=*', false)) === false ? false : bin2hex($r))
+=> ''
+=== (($r = base64_decode('=*', true)) === false ? false : bin2hex($r))
+=> false
+=== (($r = base64_decode('VVV=', false)) === false ? false : bin2hex($r))
+=> '5555'
+=== (($r = base64_decode('VVV=', true)) === false ? false : bin2hex($r))
+=> '5555'
+=== (($r = base64_decode('VVV=*', false)) === false ? false : bin2hex($r))
+=> '5555'
+=== (($r = base64_decode('VVV=*', true)) === false ? false : bin2hex($r))
+=> false
+=== (($r = base64_decode("\x00", false)) === false ? false : bin2hex($r))
+=> ''
+=== (($r = base64_decode("\x00", true)) === false ? false : bin2hex($r))
+=> false
+=== (($r = base64_decode("\x00VVVV", false)) === false ? false : bin2hex($r))
+=> '555555'
+=== (($r = base64_decode("\x00VVVV", true)) === false ? false : bin2hex($r))
+=> false
+=== (($r = base64_decode("VVVV\x00", false)) === false ? false : bin2hex($r))
+=> '555555'
+=== (($r = base64_decode("VVVV\x00", true)) === false ? false : bin2hex($r))
+=> false
+=== (($r = base64_decode('6Q==', false)) === false ? false : bin2hex($r))
+=> 'e9'
+=== (($r = base64_decode('6Q==', true)) === false ? false : bin2hex($r))
+=> 'e9'
+=== (($r = base64_decode('=', false)) === false ? false : bin2hex($r))
+=> ''
+=== (($r = base64_decode('=', true)) === false ? false : bin2hex($r))
+=> false
+=== (($r = base64_decode('==', false)) === false ? false : bin2hex($r))
+=> ''
+=== (($r = base64_decode('==', true)) === false ? false : bin2hex($r))
+=> false
+=== (($r = base64_decode('===', false)) === false ? false : bin2hex($r))
+=> ''
+=== (($r = base64_decode('===', true)) === false ? false : bin2hex($r))
+=> false
+=== (($r = base64_decode('====', false)) === false ? false : bin2hex($r))
+=> ''
+=== (($r = base64_decode('====', true)) === false ? false : bin2hex($r))
+=> false
+=== (($r = base64_decode('Zm9=v', false)) === false ? false : bin2hex($r))
+=> '666f6f'
+=== (($r = base64_decode('Zm9=v', true)) === false ? false : bin2hex($r))
+=> false
+=== (($r = base64_decode("\xf0\xffZm9v", false)) === false ? false : bin2hex($r))
+=> '666f6f'
+=== (($r = base64_decode("\xf0\xffZm9v", true)) === false ? false : bin2hex($r))
+=> false
+=== (($r = base64_decode('-_-_', false)) === false ? false : bin2hex($r))
+=> ''
+=== (($r = base64_decode('-_-_', true)) === false ? false : bin2hex($r))
+=> false
+=== (($r = base64_decode("YWJj\x80ZGVm", false)) === false ? false : bin2hex($r))
+=> '616263646566'
+=== (($r = base64_decode("YWJj\x80ZGVm", true)) === false ? false : bin2hex($r))
+=> false
+=== (($r = convert_uudecode('')) === false ? false : bin2hex($r))
+Warning: convert_uudecode(): Argument #1 ($data) is not a valid uuencoded string
+=> false
+=== (($r = convert_uudecode("`\x0a")) === false ? false : bin2hex($r))
+=> ''
+=== (($r = convert_uudecode("!80``\x0a`\x0a")) === false ? false : bin2hex($r))
+=> '61'
+=== (($r = convert_uudecode("#86)C\x0a`\x0a")) === false ? false : bin2hex($r))
+=> '616263'
+=== (($r = convert_uudecode('#86)C')) === false ? false : bin2hex($r))
+=> '616263'
+=== (($r = convert_uudecode('#86)')) === false ? false : bin2hex($r))
+Warning: convert_uudecode(): Argument #1 ($data) is not a valid uuencoded string
+=> false
+=== (($r = convert_uudecode('M86)C')) === false ? false : bin2hex($r))
+Warning: convert_uudecode(): Argument #1 ($data) is not a valid uuencoded string
+=> false
+=== (($r = convert_uudecode('!')) === false ? false : bin2hex($r))
+Warning: convert_uudecode(): Argument #1 ($data) is not a valid uuencoded string
+=> false
+=== (($r = convert_uudecode('!8')) === false ? false : bin2hex($r))
+Warning: convert_uudecode(): Argument #1 ($data) is not a valid uuencoded string
+=> false
+=== (($r = convert_uudecode('!80')) === false ? false : bin2hex($r))
+Warning: convert_uudecode(): Argument #1 ($data) is not a valid uuencoded string
+=> false
+=== (($r = convert_uudecode("\x80")) === false ? false : bin2hex($r))
+Warning: convert_uudecode(): Argument #1 ($data) is not a valid uuencoded string
+=> false
+=== (($r = convert_uudecode('~~~~')) === false ? false : bin2hex($r))
+Warning: convert_uudecode(): Argument #1 ($data) is not a valid uuencoded string
+=> false
+=== (($r = convert_uudecode("begin 644 x\x0a#86)C\x0a`\x0aend\x0a")) === false ? false : bin2hex($r))
+=> '1472'
+=== (($r = convert_uudecode("5=&5S=`IT97AT('1E>'0@=&5X=`T*\x0a`\x0a")) === false ? false : bin2hex($r))
+=> '746573740a74657874207465787420746578740d0a'
+=== (($r = convert_uudecode('5=&5S=`IT97AT(\'1E>\'0@=&5X=`T*')) === false ? false : bin2hex($r))
+=> '746573740a74657874207465787420746578740d0a'
+=== (($r = convert_uudecode(' ')) === false ? false : bin2hex($r))
+=> ''
+=== (($r = convert_uudecode('!!')) === false ? false : bin2hex($r))
+Warning: convert_uudecode(): Argument #1 ($data) is not a valid uuencoded string
+=> false
+=== (($r = convert_uudecode('%86)C9&4')) === false ? false : bin2hex($r))
+Warning: convert_uudecode(): Argument #1 ($data) is not a valid uuencoded string
+=> false
+=== bin2hex(quoted_printable_decode(''))
+=> ''
+=== bin2hex(quoted_printable_decode('=41=42=43'))
+=> '414243'
+=== bin2hex(quoted_printable_decode('=4a=4A=4'))
+=> '4a4a3d34'
+=== bin2hex(quoted_printable_decode('='))
+=> ''
+=== bin2hex(quoted_printable_decode('=='))
+=> '3d'
+=== bin2hex(quoted_printable_decode('=3D'))
+=> '3d'
+=== bin2hex(quoted_printable_decode('=3d='))
+=> '3d'
+=== bin2hex(quoted_printable_decode("a=\x0d\x0ab"))
+=> '6162'
+=== bin2hex(quoted_printable_decode("a=\x0ab"))
+=> '6162'
+=== bin2hex(quoted_printable_decode("a=\x0db"))
+=> '6162'
+=== bin2hex(quoted_printable_decode("a=  \x09 \x0d\x0ab"))
+=> '6162'
+=== bin2hex(quoted_printable_decode('a=  x'))
+=> '613d202078'
+=== bin2hex(quoted_printable_decode('a= '))
+=> '61'
+=== bin2hex(quoted_printable_decode('=zz'))
+=> '3d7a7a'
+=== bin2hex(quoted_printable_decode('=4z'))
+=> '3d347a'
+=== bin2hex(quoted_printable_decode("a\x00=41"))
+=> '61'
+=== bin2hex(quoted_printable_decode("=\x00=41"))
+=> ''
+=== bin2hex(quoted_printable_decode('=E4=F6=FC=DF'))
+=> 'e4f6fcdf'
+=== bin2hex(quoted_printable_decode('Hello=20World=0D=0A'))
+=> '48656c6c6f20576f726c640d0a'
+=== bin2hex(quoted_printable_decode('_under_score_'))
+=> '5f756e6465725f73636f72655f'
