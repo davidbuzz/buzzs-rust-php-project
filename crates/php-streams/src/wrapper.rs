@@ -114,6 +114,16 @@ impl OpenError {
     pub fn silent() -> Self {
         OpenError::default()
     }
+
+    /// A failure caused by an exception: no warning is displayed
+    /// (`php_stream_display_wrapper_errors` returns early when
+    /// `EG(exception)` is set).
+    pub fn exception() -> Self {
+        OpenError {
+            exception: true,
+            ..OpenError::default()
+        }
+    }
 }
 
 /// A stream wrapper (`php_stream_wrapper` with its `wops`).
@@ -325,7 +335,7 @@ pub fn register_global(protocol: &[u8], wrapper: Rc<dyn Wrapper>) -> bool {
     if !scheme_valid(protocol) {
         return false;
     }
-    REGISTRY.with(|r| r.borrow_mut().global.add(protocol, wrapper))
+    with_registry(|r| r.global.add(protocol, wrapper))
 }
 
 /// `php_register_url_stream_wrapper_volatile()` (`stream_wrapper_register`).
@@ -392,7 +402,7 @@ pub fn register_filter_global(
     pattern: &str,
     factory: Rc<dyn crate::filter::FilterFactory>,
 ) -> bool {
-    REGISTRY.with(|r| r.borrow_mut().filters_global.register(pattern, factory))
+    with_registry(|r| r.filters_global.register(pattern, factory))
 }
 
 /// `php_stream_filter_register_factory_volatile()` (`stream_filter_register`).

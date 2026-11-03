@@ -60,7 +60,9 @@ fn popen(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         return Ok(Value::Bool(false));
     };
     let mode_s = String::from_utf8_lossy(&mode).into_owned();
-    let stream = plain::stream_from_file(File::from(fd), &mode_s, true);
+    let mut stream = plain::stream_from_file(File::from(fd), &mode_s, true);
+    // _php_stream_fopen_from_pipe(): NO_SEEK, but the position stays 0.
+    stream.position = 0;
     CHILDREN.with(|m| m.borrow_mut().insert(stream.id(), child));
     Ok(res::new_stream(stream, None))
 }

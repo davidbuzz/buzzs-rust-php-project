@@ -295,7 +295,8 @@ fn xport_create(
         }
     }
     if server {
-        return Ok(server_socket(&scheme, rest, address).map(|mut s| {
+        let r = bridge::run(vm, || server_socket(&scheme, rest, address))?;
+        return Ok(r.map(|mut s| {
             s.context = ctx;
             s
         }));
@@ -347,8 +348,11 @@ fn fsockopen_impl(vm: &mut Vm, a: &mut Args, persistent: bool) -> VmResult<Value
     set_ref(a, 3, bytes(""));
     let ctx = None;
     let pid = persistent.then(|| format!("pfsockopen__{host_s}:{port}"));
-    match xport_create(vm, &target, timeout, false, 4, pid, ctx)? {
-        Ok(s) => Ok(res::new_stream_ex(s, None, persistent)),
+    if let Some(v) = pid.as_deref().and_then(res::persistent_stream) {
+        return Ok(v);
+    }
+    match xport_create(vm, &target, timeout, false, 4, pid.clone(), ctx)? {
+        Ok(s) => Ok(res::new_persistent(s, pid)),
         Err(e) => {
             vm.php_warning(&format!(
                 "Unable to connect to {host_s}:{port} ({})",
@@ -378,8 +382,11 @@ fn stream_socket_client(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     set_ref(a, 2, bytes(""));
     let persistent = flags & 1 != 0;
     let pid = persistent.then(|| format!("stream_socket_client__{addr}"));
-    match xport_create(vm, &addr, timeout, false, flags, pid, ctx)? {
-        Ok(s) => Ok(res::new_stream_ex(s, None, persistent)),
+    if let Some(v) = pid.as_deref().and_then(res::persistent_stream) {
+        return Ok(v);
+    }
+    match xport_create(vm, &addr, timeout, false, flags, pid.clone(), ctx)? {
+        Ok(s) => Ok(res::new_persistent(s, pid)),
         Err(e) => {
             vm.php_warning(&format!(
                 "Unable to connect to {} ({})",
@@ -436,9 +443,9 @@ fn server_socket(scheme: &str, rest: &str, address: &str) -> Result<Stream, Xpor
                 std::net::UdpSocket::bind(bind).map(|l| (OwnedFd::from(l), "udp_socket"))
             }
         }
-        "unix" => {
-            std::os::unix::net::UnixListener::bind(rest).map(|l| (OwnedFd::from(l), "unix_socket"))
-        }
+        "unix" => transports::unix_socket_addr(rest.as_bytes())
+            .and_then(|a| std::os::unix::net::UnixListener::bind_addr(&a))
+            .map(|l| (OwnedFd::from(l), "unix_socket")),
         _ => {
             let shown: String = scheme.chars().take(31).collect();
             return Err(XportError {

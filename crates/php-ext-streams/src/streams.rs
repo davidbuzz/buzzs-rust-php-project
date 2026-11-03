@@ -205,15 +205,7 @@ fn select_entries(arr: &ZArray) -> Vec<(ArrayKey, Value, Rc<res::StreamCell>)> {
 
 fn select_fd(cell: &res::StreamCell) -> Option<i32> {
     let mut s = cell.get()?;
-    let fd = s.cast(CastAs::FdForSelect, true).filter(|&fd| fd >= 0);
-    if fd.is_none() {
-        // php_stream_cast()'s generic failure report (missing in the library).
-        php_streams::diag::warning(format!(
-            "Cannot represent a stream of type {} as a select()able descriptor",
-            s.ops_label()
-        ));
-    }
-    fd
+    s.cast(CastAs::FdForSelect, true).filter(|&fd| fd >= 0)
 }
 
 #[allow(clippy::too_many_lines)]

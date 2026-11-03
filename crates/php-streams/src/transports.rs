@@ -202,6 +202,49 @@ fn io_err(e: &io::Error) -> ConnectError {
     }
 }
 
+/// `sizeof(((struct sockaddr_un *)0)->sun_path)`.
+const SUN_PATH_LEN: usize = 108;
+
+/// The address of a `unix://` socket name (`php_sockop_bind`/`connect`):
+/// a leading NUL selects Linux's abstract namespace; names that do not fit
+/// `sun_path` are truncated with PHP's notice.
+pub fn unix_socket_addr(name: &[u8]) -> io::Result<std::os::unix::net::SocketAddr> {
+    use std::os::linux::net::SocketAddrExt;
+    let abstract_ns = name.first() == Some(&0);
+    let max = if abstract_ns {
+        SUN_PATH_LEN
+    } else {
+        SUN_PATH_LEN - 1
+    };
+    let name = if name.len() > max {
+        crate::diag::emit(
+            crate::diag::Diagnostic::new(
+                crate::diag::Severity::Notice,
+                format!(
+                    "socket path exceeded the maximum allowed length of {max} bytes and was truncated"
+                ),
+            )
+            .with_code(crate::diag::StreamErrorCode::InvalidPath)
+            .terminating(false),
+        );
+        &name[..max]
+    } else {
+        name
+    };
+    if abstract_ns {
+        std::os::unix::net::SocketAddr::from_abstract_name(&name[1..])
+    } else {
+        std::os::unix::net::SocketAddr::from_pathname(crate::util::os_path(name))
+    }
+}
+
+/// `parse_port()`: `strtol()` semantics, rejecting values outside 0..=65535.
+fn parse_port(p: &str) -> Option<u16> {
+    let (v, _) = crate::util::strtol(p.as_bytes());
+    u16::try_from(v).ok()
+}
+
+/// `parse_ip_address_ex()`.
 fn parse_host_port(addr: &str) -> Result<(String, u16), ConnectError> {
     let fail = |m: String| ConnectError {
         errno: 0,
@@ -210,23 +253,23 @@ fn parse_host_port(addr: &str) -> Result<(String, u16), ConnectError> {
     if addr.contains('\0') {
         return Err(fail("The hostname must not contain null bytes".into()));
     }
-    if let Some(rest) = addr.strip_prefix('[') {
-        let Some(end) = rest.find(']') else {
+    let b = addr.as_bytes();
+    if b.first() == Some(&b'[') && b.len() > 1 {
+        // memchr(str + 1, ']', len - 2): the last byte is not searched.
+        let end = b[1..b.len() - 1].iter().position(|&c| c == b']').map(|e| e + 1);
+        let Some(end) = end.filter(|&e| b.get(e + 1) == Some(&b':')) else {
             return Err(fail(format!("Failed to parse IPv6 address \"{addr}\"")));
         };
-        let port = rest[end + 1..]
-            .strip_prefix(':')
-            .and_then(|p| p.parse::<u16>().ok())
+        let port = parse_port(&addr[end + 2..])
             .ok_or_else(|| fail(format!("Failed to parse port of address \"{addr}\"")))?;
-        return Ok((rest[..end].to_string(), port));
+        return Ok((addr[1..end].to_string(), port));
     }
-    let colon = addr[..addr.len().saturating_sub(1)].find(':');
+    let colon = b[..b.len().saturating_sub(1)].iter().position(|&c| c == b':');
     let Some(c) = colon else {
         return Err(fail(format!("Failed to parse address \"{addr}\"")));
     };
-    let port = addr[c + 1..]
-        .parse::<u16>()
-        .map_err(|_| fail(format!("Failed to parse port of address \"{addr}\"")))?;
+    let port = parse_port(&addr[c + 1..])
+        .ok_or_else(|| fail(format!("Failed to parse port of address \"{addr}\"")))?;
     Ok((addr[..c].to_string(), port))
 }
 
@@ -284,10 +327,18 @@ pub fn socket_client(remote: &[u8], timeout: Option<Duration>) -> Result<Stream,
                 (Sock::Udp(s), "udp_socket")
             }
         }
-        "unix" => (
-            Sock::Unix(UnixStream::connect(name).map_err(|e| io_err(&e))?),
-            "unix_socket",
-        ),
+        "unix" => {
+            let raw = if remote.get(n..n + 3) == Some(b"://") {
+                &remote[n + 3..]
+            } else {
+                remote
+            };
+            let addr = unix_socket_addr(raw).map_err(|e| io_err(&e))?;
+            (
+                Sock::Unix(UnixStream::connect_addr(&addr).map_err(|e| io_err(&e))?),
+                "unix_socket",
+            )
+        }
         other => {
             let shown: String = other.chars().take(31).collect();
             return Err(ConnectError {

@@ -332,7 +332,13 @@ impl Wrapper for PhpWrapper {
             let target = &pathdup[res + 10..];
             let mut stream = crate::open::open_wrapper(target, mode, options, opened_path, context)
                 .ok_or_else(OpenError::silent)?;
-            let spec = &pathdup[1..res];
+            // C NUL-terminates at "/resource="; when that is the first
+            // byte, strtok() starts after it and sees the rest.
+            let spec = if res == 0 {
+                &pathdup[1..]
+            } else {
+                &pathdup[1..res]
+            };
             let mut ok = true;
             for tok in spec.split(|&c| c == b'/').filter(|t| !t.is_empty()) {
                 ok = if starts_with_ci(tok, b"read=") {

@@ -488,6 +488,9 @@ impl Stream {
     pub fn fill_read_buffer(&mut self, size: usize) -> Result<(), OpFailed> {
         if !self.read_filters.is_empty() {
             let to_read_now = size.min(self.chunk_size);
+            if self.state.eof || self.writepos - self.readpos >= to_read_now {
+                return Ok(());
+            }
             let mut chunk = vec![0u8; self.chunk_size];
             while !self.state.eof && self.writepos - self.readpos < to_read_now {
                 let justread = self.ops.read(&mut self.state, &mut chunk);
@@ -1119,7 +1122,37 @@ impl Stream {
     /// Casts to a file descriptor (`php_stream_cast`). With
     /// `report_errors` false this is a capability check.
     pub fn cast(&mut self, kind: CastAs, report_errors: bool) -> Option<RawFd> {
-        self.ops.cast(&mut self.state, kind, report_errors)
+        if self.is_filtered() && kind != CastAs::FdForSelect {
+            if report_errors {
+                diag::warning("Cannot cast a filtered stream on this system");
+            }
+            return None;
+        }
+        let r = self.ops.cast(&mut self.state, kind, report_errors);
+        match r {
+            Some(_) => {
+                let unread = self.writepos - self.readpos;
+                if report_errors && unread > 0 && kind != CastAs::FdForSelect {
+                    diag::warning(format!(
+                        "{unread} bytes of buffered data lost during stream conversion!"
+                    ));
+                }
+            }
+            None if report_errors => {
+                let name = match kind {
+                    CastAs::Stdio => "STDIO FILE*",
+                    CastAs::Fd => "File Descriptor",
+                    CastAs::SocketFd => "Socket Descriptor",
+                    CastAs::FdForSelect => "select()able descriptor",
+                };
+                diag::warning(format!(
+                    "Cannot represent a stream of type {} as a {name}",
+                    self.ops.label()
+                ));
+            }
+            None => {}
+        }
+        r
     }
 
     /// `stream_isatty()` / `posix_isatty()` on the stream.

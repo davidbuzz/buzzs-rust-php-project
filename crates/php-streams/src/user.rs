@@ -283,7 +283,7 @@ impl Wrapper for UserWrapper {
             let mut obj = self
                 .class
                 .instantiate(context)
-                .ok_or_else(OpenError::silent)?;
+                .ok_or_else(OpenError::exception)?;
             let mut args = [Value::Str(path.to_vec()), Value::Int(i64::from(options))];
             match obj.call(methods::DIR_OPEN, &mut args) {
                 UserCall::NotImplemented => Err(OpenError::msg(format!(
@@ -395,7 +395,7 @@ impl UserWrapper {
         let mut obj = self
             .class
             .instantiate(context)
-            .ok_or_else(OpenError::silent)?;
+            .ok_or_else(OpenError::exception)?;
         let mut args = [
             Value::Str(path.to_vec()),
             Value::str(mode),
@@ -836,9 +836,8 @@ impl StreamOps for UserStreamOps {
             }
             UserCall::Threw | UserCall::Returned(Value::Bool(_)) => None,
             UserCall::Returned(v) => {
-                let mut name = v.to_bytes()?;
-                name.truncate(255);
-                Some(name)
+                // PHP >= 8.3.10 keeps the whole name (GH-14930).
+                v.to_bytes()
             }
         }
     }

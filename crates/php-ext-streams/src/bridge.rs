@@ -43,6 +43,12 @@ impl Drop for Restore {
 /// accessed through the pointer while the caller cannot touch it.
 pub fn enter<R>(vm: &mut Vm, f: impl FnOnce() -> R) -> R {
     sync_settings(vm);
+    enter_nosync(vm, f)
+}
+
+/// [`enter`] without re-reading the INI settings (operations on an open
+/// stream do not consult them).
+fn enter_nosync<R>(vm: &mut Vm, f: impl FnOnce() -> R) -> R {
     let ptr: *mut Vm = vm;
     let prev = VM_PTR.with(|p| p.replace(ptr));
     let _restore = Restore(prev);
@@ -116,8 +122,22 @@ pub fn flush_diags(vm: &mut Vm) {
 /// Runs a library call (see [`enter`]), emits its diagnostics and
 /// propagates an exception raised by a user callback.
 pub fn run<R>(vm: &mut Vm, f: impl FnOnce() -> R) -> VmResult<R> {
+    run_ex(vm, true, f)
+}
+
+/// [`run`] for operations on open streams (no INI synchronisation).
+pub fn run_stream<R>(vm: &mut Vm, f: impl FnOnce() -> R) -> VmResult<R> {
+    run_ex(vm, false, f)
+}
+
+fn run_ex<R>(vm: &mut Vm, sync: bool, f: impl FnOnce() -> R) -> VmResult<R> {
+    // Diagnostics queued by library calls made outside a bridge scope
+    // belong to their caller, which collects them with `take_diagnostics`.
+    if !has_vm() {
+        let _ = diag::take();
+    }
     let outer = take_pending();
-    let r = enter(vm, f);
+    let r = if sync { enter(vm, f) } else { enter_nosync(vm, f) };
     flush_diags(vm);
     let inner = take_pending();
     if let Some(t) = outer {
@@ -127,6 +147,12 @@ pub fn run<R>(vm: &mut Vm, f: impl FnOnce() -> R) -> VmResult<R> {
         Some(t) => Err(t),
         None => Ok(r),
     }
+}
+
+/// For other extensions calling the library directly (outside [`run`]):
+/// the queued diagnostic texts (without the `func(): ` prefix).
+pub fn take_diagnostics() -> Vec<String> {
+    diag::take().iter().map(php_streams::diag::Diagnostic::text).collect()
 }
 
 /// Copies the INI settings consulted by the streams layer.

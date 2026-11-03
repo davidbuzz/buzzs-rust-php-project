@@ -39,12 +39,6 @@ pub fn open_stream(
     if path.is_empty() {
         return Err(vm.throw("ValueError", open::EMPTY_PATH_ERROR));
     }
-    if trailing_slash_on_file(path) {
-        if options & REPORT_ERRORS != 0 {
-            vm.php_warning("Failed to open stream: No such file or directory")?;
-        }
-        return Ok(None);
-    }
     let mut opened = None;
     crate::userwrap::clear_last_object();
     let s = bridge::run(vm, || {
@@ -62,22 +56,6 @@ pub fn open_stream(
         None
     };
     Ok(Some((s, data)))
-}
-
-/// A plain path with a trailing slash whose prefix is not a directory:
-/// PHP's path expansion fails with `ENOENT` where the library strips the
-/// slash and opens the file.
-fn trailing_slash_on_file(path: &[u8]) -> bool {
-    if path.len() < 2 || !path.ends_with(b"/") {
-        return false;
-    }
-    let p = path.strip_prefix(b"file://").unwrap_or(path);
-    if php_streams::wrapper::scheme_len(p) > 0 && php_streams::util::find_bytes(p, b"://").is_some()
-    {
-        return false;
-    }
-    std::fs::metadata(php_streams::util::os_path(p))
-        .is_err_and(|e| e.raw_os_error() == Some(libc::ENOTDIR))
 }
 
 /// The exception for a failed `php://` open.

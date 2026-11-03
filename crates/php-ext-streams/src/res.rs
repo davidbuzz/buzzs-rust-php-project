@@ -155,6 +155,8 @@ thread_local! {
     static STREAMS: RefCell<HashMap<u64, Weak<StreamCell>>> = RefCell::new(HashMap::new());
     static CONTEXTS: RefCell<HashMap<usize, Weak<CtxCell>>> = RefCell::new(HashMap::new());
     static DEFERRED: RefCell<Vec<Stream>> = const { RefCell::new(Vec::new()) };
+    /// Persistent ids of open persistent streams.
+    static PERSISTENT: RefCell<HashMap<String, u64>> = RefCell::new(HashMap::new());
     static DEFAULT_CONTEXT: RefCell<Option<Resource>> = const { RefCell::new(None) };
 }
 
@@ -197,6 +199,27 @@ pub fn new_stream_ex(mut stream: Stream, wrapper_data: Option<Value>, persistent
     cell.handle.set(r.handle());
     STREAMS.with(|m| m.borrow_mut().insert(id, Rc::downgrade(&cell)));
     Value::Resource(r)
+}
+
+/// Wraps a socket stream; with a persistent id it becomes a `persistent
+/// stream` found again by [`persistent_stream`].
+pub fn new_persistent(stream: Stream, pid: Option<String>) -> Value {
+    let id = stream.id();
+    let v = new_stream_ex(stream, None, pid.is_some());
+    if let Some(p) = pid {
+        PERSISTENT.with(|m| m.borrow_mut().insert(p, id));
+    }
+    v
+}
+
+/// `php_stream_from_persistent_id()`: the live stream opened with `pid`.
+pub fn persistent_stream(pid: &str) -> Option<Value> {
+    let id = PERSISTENT.with(|m| m.borrow().get(pid).copied())?;
+    let v = stream_value_by_id(id);
+    if v.is_none() {
+        PERSISTENT.with(|m| m.borrow_mut().remove(pid));
+    }
+    v
 }
 
 /// Wraps a library stream in a resource with a fixed handle (`STDIN` & co.).
@@ -502,7 +525,7 @@ pub fn with_stream<R>(
     cell: &StreamCell,
     f: impl FnOnce(&mut Stream) -> R,
 ) -> VmResult<Option<R>> {
-    bridge::run(vm, || cell.get().map(|mut s| f(&mut s)))
+    bridge::run_stream(vm, || cell.get().map(|mut s| f(&mut s)))
 }
 
 #[cfg(test)]

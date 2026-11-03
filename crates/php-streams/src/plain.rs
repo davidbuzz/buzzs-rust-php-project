@@ -445,7 +445,20 @@ pub fn fopen(
             None => return Err(OpenError::errno(sys::last_errno())),
         }
     };
-    let file = open_with_flags(&realpath, fl).map_err(|e| OpenError::errno(sys::errno_of(&e)))?;
+    // virtual_file_ex() keeps the meaning of a trailing slash: "file/"
+    // names a directory, so a regular file does not match (ENOENT).
+    if filename.len() > 1
+        && filename.ends_with(b"/")
+        && std::fs::metadata(os_path(&realpath)).is_ok_and(|m| !m.is_dir())
+    {
+        return Err(OpenError::errno(libc::ENOENT));
+    }
+    let mut target = realpath.clone();
+    if filename.len() > 1 && filename.ends_with(b"/") && !target.ends_with(b"/") {
+        // Let the OS reject "x/" for anything but a directory.
+        target.push(b'/');
+    }
+    let file = open_with_flags(&target, fl).map_err(|e| OpenError::errno(sys::errno_of(&e)))?;
     state::clear_stat_cache();
     let append = fl.append;
     let mut s = if options & STREAM_OPEN_FOR_INCLUDE != 0 {
