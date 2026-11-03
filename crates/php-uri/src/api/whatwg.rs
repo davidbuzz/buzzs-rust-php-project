@@ -87,19 +87,17 @@ impl WhatWgUrl {
         base: Option<&WhatWgUrl>,
     ) -> Result<(Self, Vec<UrlValidationError>), ParseFailure> {
         let out = Url::parse(uri, base.map(|b| &b.url));
-        match out.url {
-            Some(url) => Ok((WhatWgUrl { url }, out.errors)),
-            None => {
-                let msg = format!(
-                    "The specified URI is malformed{}",
-                    reason_suffix(&out.errors)
-                );
-                Err(ParseFailure {
-                    error: UriError::invalid_url(msg, out.errors.clone()),
-                    errors: out.errors,
-                })
-            }
+        if let Some(url) = out.url {
+            return Ok((WhatWgUrl { url }, out.errors));
         }
+        let msg = format!(
+            "The specified URI is malformed{}",
+            reason_suffix(&out.errors)
+        );
+        Err(ParseFailure {
+            error: UriError::invalid_url(msg, out.errors.clone()),
+            errors: out.errors,
+        })
     }
 
     /// `getScheme()`.

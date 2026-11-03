@@ -103,19 +103,19 @@ mod tests {
 
     #[test]
     fn decode_forward_and_back() {
-        let s = "aé€😀".as_bytes();
-        let mut p = 0;
-        let mut v = Vec::new();
-        while p < s.len() {
-            v.push(decode_valid_utf8_single(s, &mut p));
+        let text = "aé€😀".as_bytes();
+        let mut pos = 0;
+        let mut forward = Vec::new();
+        while pos < text.len() {
+            forward.push(decode_valid_utf8_single(text, &mut pos));
         }
-        assert_eq!(v, vec![0x61, 0xE9, 0x20AC, 0x1F600]);
-        let mut e = s.len();
-        let mut r = Vec::new();
-        while e > 0 {
-            r.push(decode_valid_utf8_single_reverse(s, &mut e, 0));
+        assert_eq!(forward, vec![0x61, 0xE9, 0x20AC, 0x1F600]);
+        let mut end = text.len();
+        let mut backward = Vec::new();
+        while end > 0 {
+            backward.push(decode_valid_utf8_single_reverse(text, &mut end, 0));
         }
-        assert_eq!(r, vec![0x1F600, 0x20AC, 0xE9, 0x61]);
+        assert_eq!(backward, vec![0x1F600, 0x20AC, 0xE9, 0x61]);
     }
 
     #[test]

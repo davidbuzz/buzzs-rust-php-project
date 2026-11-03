@@ -168,19 +168,19 @@ def main():
     w("/// IDNA status: valid.")
     w("pub const IDNA_VALID: u8 = 5;")
     w("")
-    w("/// `(first code point, index into IDNA_ENTRIES)`; a run lasts until the next start.")
+    w("/// First code point and index into [`IDNA_ENTRIES`]; a run lasts until the next start.")
     w("pub static IDNA_RANGES: [(u32, u16); %d] = [" % len(idna_runs))
     for cp, idx in idna_runs:
         w("    (0x%X, %d)," % (cp, idx))
     w("];")
     w("")
-    w("/// `(status, mapping length, mapping offset into IDNA_MAP)`.")
+    w("/// Status, mapping length and mapping offset into [`IDNA_MAP`].")
     w("pub static IDNA_ENTRIES: [(u8, u8, u16); %d] = [" % len(idna_entries))
     for t, l, i in idna_entries:
         w("    (%d, %d, %d)," % (t, l, i))
     w("];")
     w("")
-    w("/// Mapping targets referenced by IDNA_ENTRIES.")
+    w("/// Mapping targets referenced by `IDNA_ENTRIES`.")
     w("pub static IDNA_MAP: [u32; %d] = [" % len(idna_cps))
     for i in range(0, len(idna_cps), 8):
         w("    " + " ".join("0x%X," % c for c in idna_cps[i:i + 8]))
@@ -192,13 +192,13 @@ def main():
         w("    (0x%X, 0x%X, %d)," % (a, b, c))
     w("];")
     w("")
-    w("/// `(code point, offset into DECOMP_CPS, length)` of full canonical decompositions.")
+    w("/// Code point, offset into [`DECOMP_CPS`] and length of full canonical decompositions.")
     w("pub static DECOMP_INDEX: [(u32, u16, u8); %d] = [" % len(decomp_index))
     for cp, off, l in decomp_index:
         w("    (0x%X, %d, %d)," % (cp, off, l))
     w("];")
     w("")
-    w("/// Decomposition targets referenced by DECOMP_INDEX.")
+    w("/// Decomposition targets referenced by `DECOMP_INDEX`.")
     w("pub static DECOMP_CPS: [u32; %d] = [" % len(decomp_out))
     for i in range(0, len(decomp_out), 8):
         w("    " + " ".join("0x%X," % c for c in decomp_out[i:i + 8]))

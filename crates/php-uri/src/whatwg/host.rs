@@ -165,8 +165,7 @@ fn parse_ipv4_number(s: &[u8]) -> Number {
     let mut n: u64 = 0;
     for &c in data {
         let d = match (radix, c) {
-            (10, b'0'..=b'9') => c - b'0',
-            (8, b'0'..=b'7') => c - b'0',
+            (10, b'0'..=b'9') | (8, b'0'..=b'7') => c - b'0',
             (16, _) => match hex(c) {
                 Some(v) => v,
                 None => return Number::Invalid,
@@ -234,6 +233,8 @@ fn is_ipv4(data: &[u8]) -> bool {
 
 /// `lxb_url_ipv4_parse` on a domain string.
 fn parse_ipv4(log: &mut Log, data: &[u8]) -> Result<u32, Fail> {
+    /// Multipliers for the last part, indexed by `5 - parts`.
+    const ST: [u64; 6] = [0, 256, 65_536, 16_777_216, 4_294_967_296, 0];
     if data.is_empty() {
         return Err(Fail);
     }
@@ -279,7 +280,6 @@ fn parse_ipv4(log: &mut Log, data: &[u8]) -> Result<u32, Fail> {
     } else if data[data.len() - 1] == b'.' {
         log.push(data, begin, E::Ipv4EmptyPart);
     }
-    const ST: [u64; 6] = [0, 256, 65_536, 16_777_216, 4_294_967_296, 0];
     if parts[i] >= ST[5 - i] {
         return Err(Fail);
     }
@@ -354,53 +354,7 @@ pub(crate) fn parse_ipv6(
                 if piece > 6 {
                     return fail(log, p, E::Ipv4InIpv6TooManyPieces);
                 }
-                // IPv4 in IPv6.
-                let mut seen = 0;
-                while p < end {
-                    let mut value: i32 = -1;
-                    if seen > 0 {
-                        if data[p] == b'.' && seen < 4 {
-                            p += 1;
-                            if p >= end {
-                                break;
-                            }
-                        } else {
-                            return fail(log, p, E::Ipv4InIpv6InvalidCodePoint);
-                        }
-                    }
-                    loop {
-                        let c = data[p];
-                        if !c.is_ascii_digit() {
-                            if value == -1 {
-                                return fail(log, p, E::Ipv4InIpv6InvalidCodePoint);
-                            }
-                            break;
-                        }
-                        if value == -1 {
-                            value = i32::from(c - b'0');
-                        } else if value == 0 {
-                            return fail(log, p, E::Ipv4InIpv6InvalidCodePoint);
-                        } else {
-                            value = value * 10 + i32::from(c - b'0');
-                        }
-                        if value > 255 {
-                            return fail(log, p, E::Ipv4InIpv6OutOfRangePart);
-                        }
-                        p += 1;
-                        if p >= end {
-                            break;
-                        }
-                    }
-                    let v = u16::try_from(value).unwrap_or(0);
-                    ipv6[piece] = ipv6[piece].wrapping_mul(0x100).wrapping_add(v);
-                    seen += 1;
-                    if seen == 2 || seen == 4 {
-                        piece += 1;
-                    }
-                }
-                if seen != 4 {
-                    return fail(log, p, E::Ipv4InIpv6TooFewParts);
-                }
+                p = parse_ipv4_in_ipv6(log, data, p, end, &mut ipv6, &mut piece)?;
                 break;
             }
             if data[p] == b':' {
@@ -427,6 +381,69 @@ pub(crate) fn parse_ipv6(
         return fail(log, p, E::Ipv6TooFewPieces);
     }
     Ok(ipv6)
+}
+
+/// `lxb_url_ipv4_in_ipv6_parse`: the dotted-decimal tail of an IPv6
+/// address, written into `ipv6[*piece..]`. Returns the position after it.
+fn parse_ipv4_in_ipv6(
+    log: &mut Log,
+    data: &[u8],
+    mut p: usize,
+    end: usize,
+    ipv6: &mut [u16; 8],
+    piece: &mut usize,
+) -> Result<usize, Fail> {
+    let mut fail = |p: usize, t: E| -> Result<usize, Fail> {
+        log.push(data, p, t);
+        Err(Fail)
+    };
+    let mut seen = 0;
+    while p < end {
+        let mut value: i32 = -1;
+        if seen > 0 {
+            if data[p] == b'.' && seen < 4 {
+                p += 1;
+                if p >= end {
+                    break;
+                }
+            } else {
+                return fail(p, E::Ipv4InIpv6InvalidCodePoint);
+            }
+        }
+        loop {
+            let c = data[p];
+            if !c.is_ascii_digit() {
+                if value == -1 {
+                    return fail(p, E::Ipv4InIpv6InvalidCodePoint);
+                }
+                break;
+            }
+            if value == -1 {
+                value = i32::from(c - b'0');
+            } else if value == 0 {
+                return fail(p, E::Ipv4InIpv6InvalidCodePoint);
+            } else {
+                value = value * 10 + i32::from(c - b'0');
+            }
+            if value > 255 {
+                return fail(p, E::Ipv4InIpv6OutOfRangePart);
+            }
+            p += 1;
+            if p >= end {
+                break;
+            }
+        }
+        let v = u16::try_from(value).unwrap_or(0);
+        ipv6[*piece] = ipv6[*piece].wrapping_mul(0x100).wrapping_add(v);
+        seen += 1;
+        if seen == 2 || seen == 4 {
+            *piece += 1;
+        }
+    }
+    if seen != 4 {
+        return fail(p, E::Ipv4InIpv6TooFewParts);
+    }
+    Ok(p)
 }
 
 /// Serializes an IPv4 address.

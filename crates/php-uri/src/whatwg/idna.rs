@@ -261,6 +261,7 @@ const DAMP: u32 = 700;
 const INITIAL_BIAS: u32 = 72;
 const INITIAL_N: u32 = 0x80;
 
+// The Punycode routines keep RFC 3492's variable names (n, i, h, b, k, t, q, w).
 fn adapt(delta: u32, numpoints: u32, first_time: bool) -> u32 {
     let mut delta = if first_time { delta / DAMP } else { delta >> 1 };
     delta += delta / numpoints;
@@ -292,6 +293,7 @@ fn decode_digit(cp: u32) -> u32 {
 
 /// Encodes a label; returns the encoded bytes and whether the label was all
 /// ASCII (in which case no `xn--` prefix is needed).
+#[allow(clippy::many_single_char_names)]
 pub fn punycode_encode(cps: &[u32]) -> Result<(Vec<u8>, bool), IdnaError> {
     let mut out: Vec<u8> = cps
         .iter()
@@ -358,6 +360,7 @@ pub fn punycode_encode(cps: &[u32]) -> Result<(Vec<u8>, bool), IdnaError> {
 }
 
 /// Decodes the part of a label after `xn--`.
+#[allow(clippy::many_single_char_names)]
 pub fn punycode_decode(input: &[u32]) -> Result<Vec<u32>, IdnaError> {
     let delimiter = input.iter().rposition(|&c| c == 0x2D);
     let mut out: Vec<u32> = Vec::new();

@@ -34,6 +34,8 @@ pub enum Expr {
     Clone(Box<Expr>),
     InstanceOf(Box<Expr>, String),
     Ternary(Box<Expr>, Box<Expr>, Box<Expr>),
+    Closure(String, Box<Expr>),
+    ArrayCast(Box<Expr>),
 }
 
 #[derive(Debug, Clone)]
@@ -57,6 +59,7 @@ pub enum Stmt {
 pub struct Parser {
     toks: Vec<Tok>,
     pos: usize,
+    aliases: std::collections::HashMap<String, String>,
 }
 
 type R<T> = Result<T, String>;
@@ -67,7 +70,11 @@ pub fn normalize_class(name: &str) -> String {
 
 impl Parser {
     pub fn new(toks: Vec<Tok>) -> Self {
-        Parser { toks, pos: 0 }
+        Parser {
+            toks,
+            pos: 0,
+            aliases: std::collections::HashMap::new(),
+        }
     }
 
     fn peek(&self) -> &Tok {
@@ -114,9 +121,25 @@ impl Parser {
     pub fn program(&mut self) -> R<Vec<Stmt>> {
         let mut out = Vec::new();
         while *self.peek() != Tok::End {
+            if self.is_ident("use") {
+                self.next();
+                let Tok::Ident(full) = self.next() else {
+                    return Err("use".into());
+                };
+                let full = normalize_class(&full);
+                let alias = full.rsplit('\\').next().unwrap_or(&full).to_string();
+                self.aliases.insert(alias, full);
+                self.expect(";")?;
+                continue;
+            }
             out.push(self.stmt()?);
         }
         Ok(out)
+    }
+
+    fn class(&self, name: &str) -> String {
+        let n = normalize_class(name);
+        self.aliases.get(&n).cloned().unwrap_or(n)
     }
 
     fn block(&mut self) -> R<Vec<Stmt>> {
@@ -166,7 +189,7 @@ impl Parser {
                     let mut types = Vec::new();
                     loop {
                         match self.next() {
-                            Tok::Ident(n) => types.push(normalize_class(&n)),
+                            Tok::Ident(n) => types.push(self.class(&n)),
                             t => return Err(format!("catch type {t:?}")),
                         }
                         if !self.eat("|") {
@@ -320,7 +343,7 @@ impl Parser {
             self.next();
             if op == "instanceof" {
                 let cls = match self.next() {
-                    Tok::Ident(c) => normalize_class(&c),
+                    Tok::Ident(c) => self.class(&c),
                     t => return Err(format!("instanceof {t:?}")),
                 };
                 lhs = Expr::InstanceOf(Box::new(lhs), cls);
@@ -411,6 +434,25 @@ impl Parser {
         Ok(e)
     }
 
+    /// `fn ([Type] $x)[: Type] => expr`.
+    fn arrow_fn(&mut self) -> R<Expr> {
+        self.expect("(")?;
+        if let Tok::Ident(_) = self.peek() {
+            self.next();
+        }
+        let param = match self.next() {
+            Tok::Var(v) => v,
+            t => return Err(format!("fn param {t:?}")),
+        };
+        self.expect(")")?;
+        if self.eat(":") {
+            self.next();
+        }
+        self.expect("=>")?;
+        let body = self.expr()?;
+        Ok(Expr::Closure(param, Box::new(body)))
+    }
+
     fn primary(&mut self) -> R<Expr> {
         match self.next() {
             Tok::Var(v) => Ok(Expr::Var(v)),
@@ -418,6 +460,13 @@ impl Parser {
             Tok::Interp(p) => Ok(Expr::Interp(p)),
             Tok::Int(i) => Ok(Expr::Int(i)),
             Tok::Punct("(") => {
+                if matches!(self.peek(), Tok::Ident(i) if i == "array")
+                    && matches!(self.peek_at(1), Tok::Punct(")"))
+                {
+                    self.next();
+                    self.next();
+                    return Ok(Expr::ArrayCast(Box::new(self.unary()?)));
+                }
                 let e = self.expr()?;
                 self.expect(")")?;
                 Ok(e)
@@ -447,7 +496,7 @@ impl Parser {
                     "false" => return Ok(Expr::Bool(false)),
                     "new" => {
                         let cls = match self.next() {
-                            Tok::Ident(c) => normalize_class(&c),
+                            Tok::Ident(c) => self.class(&c),
                             t => return Err(format!("new {t:?}")),
                         };
                         let a = if self.is_punct("(") {
@@ -457,13 +506,21 @@ impl Parser {
                         };
                         return Ok(Expr::New(cls, a));
                     }
-                    "fn" | "function" | "static" | "match" | "list" | "isset" | "empty" => {
+                    "static" if matches!(self.peek(), Tok::Ident(f) if f == "fn") => {
+                        self.next();
+                        return self.arrow_fn();
+                    }
+                    "fn" => return self.arrow_fn(),
+                    "php_int_max" => return Ok(Expr::Int(i64::MAX)),
+                    "php_int_min" => return Ok(Expr::Int(i64::MIN)),
+                    "php_int_size" => return Ok(Expr::Int(8)),
+                    "function" | "static" | "match" | "list" | "isset" | "empty" => {
                         return Err(format!("unsupported {id}"));
                     }
                     _ => {}
                 }
                 if self.eat("::") {
-                    let cls = normalize_class(&id);
+                    let cls = self.class(&id);
                     let member = match self.next() {
                         Tok::Ident(m) => m,
                         t => return Err(format!("static member {t:?}")),

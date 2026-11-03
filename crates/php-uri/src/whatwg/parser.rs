@@ -108,8 +108,7 @@ fn is_url_codepoint(cp: u32) -> bool {
 
 /// `lxb_url_path_map`: bytes the fast path cannot copy verbatim.
 fn path_needs_care(c: u8) -> bool {
-    c < 0x21
-        || c >= 0x7F
+    !(0x21..0x7F).contains(&c)
         || matches!(
             c,
             b'"' | b'#'
@@ -138,7 +137,7 @@ fn starts_with_windows_drive_letter(d: &[u8]) -> bool {
     if d.len() < 2 || !is_windows_letter(d[0]) || (d[1] != b':' && d[1] != b'|') {
         return false;
     }
-    !(d.len() > 2 && !matches!(d[2], b'/' | b'\\' | b'?' | b'#'))
+    d.len() == 2 || matches!(d[2], b'/' | b'\\' | b'?' | b'#')
 }
 
 fn is_windows_drive_letter(d: &[u8]) -> bool {
@@ -567,25 +566,19 @@ impl Parser<'_, '_> {
                         let c = self.data[p];
                         match c {
                             b'/' | b'?' | b'#' => break,
-                            b'\\' => {
-                                if url.is_special() {
-                                    break;
+                            b'\\' if url.is_special() => break,
+                            b':' if !inside_bracket => {
+                                if p == begin {
+                                    self.err(p, E::HostMissing);
+                                    return Err(Fail);
                                 }
-                            }
-                            b':' => {
-                                if !inside_bracket {
-                                    if p == begin {
-                                        self.err(p, E::HostMissing);
-                                        return Err(Fail);
-                                    }
-                                    if ov == Some(State::Hostname) {
-                                        return Err(Fail);
-                                    }
-                                    url.host = parse_host(self.log, self.data, begin, p, opt)?;
-                                    p += 1;
-                                    to_port = true;
-                                    break;
+                                if ov == Some(State::Hostname) {
+                                    return Err(Fail);
                                 }
+                                url.host = parse_host(self.log, self.data, begin, p, opt)?;
+                                p += 1;
+                                to_port = true;
+                                break;
                             }
                             b'[' => inside_bracket = true,
                             b']' => inside_bracket = false,
@@ -949,17 +942,9 @@ impl Parser<'_, '_> {
                     at_sign = true;
                     begin = p;
                 }
-                b':' => {
-                    if pswd.is_none() {
-                        pswd = Some(p + 1);
-                    }
-                }
+                b':' if pswd.is_none() => pswd = Some(p + 1),
                 b'/' | b'?' | b'#' => break,
-                b'\\' => {
-                    if url.is_special() {
-                        break;
-                    }
-                }
+                b'\\' if url.is_special() => break,
                 _ => {}
             }
             p += 1;

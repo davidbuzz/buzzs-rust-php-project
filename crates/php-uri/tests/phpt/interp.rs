@@ -25,6 +25,7 @@ pub enum V {
     Str(Vec<u8>),
     Arr(Vec<(Key, V)>),
     Obj(Rc<RefCell<Obj>>),
+    Closure(String, Rc<Expr>),
 }
 
 #[derive(Debug)]
@@ -303,7 +304,7 @@ impl Interp {
             V::Int(i) => i.to_string().into_bytes(),
             V::Str(s) => s.clone(),
             V::Arr(_) => b"Array".to_vec(),
-            V::Obj(_) => return unsupported("object to string"),
+            V::Obj(_) | V::Closure(..) => return unsupported("object to string"),
         })
     }
 
@@ -567,6 +568,12 @@ impl Interp {
                     _ => unsupported("index"),
                 }
             }
+            Expr::Closure(p, body) => Ok(V::Closure(p.clone(), Rc::new((**body).clone()))),
+            Expr::ArrayCast(e) => match self.eval(e)? {
+                V::Arr(a) => Ok(V::Arr(a)),
+                V::Obj(_) => Ok(V::Arr(Vec::new())),
+                _ => unsupported("array cast"),
+            },
             Expr::New(cls, args) => self.new_obj(cls, args),
             Expr::Call(name, args) => self.call(name, args),
             Expr::StaticCall(cls, m, args) => self.static_call(cls, m, args),
@@ -801,6 +808,43 @@ impl Interp {
                     return unsupported("str_repeat");
                 };
                 Ok(V::Str(s.repeat(usize::try_from(n).unwrap_or(0))))
+            }
+            "array_map" => {
+                let (Some(V::Closure(p, body)), Some(V::Arr(items))) = (arg(0), arg(1)) else {
+                    return unsupported("array_map");
+                };
+                let mut out = Vec::new();
+                for (k, v) in items {
+                    let saved = self.vars.insert(p.clone(), v);
+                    let r = self.eval(&body);
+                    match saved {
+                        Some(old) => {
+                            self.vars.insert(p.clone(), old);
+                        }
+                        None => {
+                            self.vars.remove(&p);
+                        }
+                    }
+                    out.push((k, r?));
+                }
+                Ok(V::Arr(out))
+            }
+            "substr" => {
+                let (Some(V::Str(st)), Some(V::Int(start))) = (arg(0), arg(1)) else {
+                    return unsupported("substr");
+                };
+                let len = st.len() as i64;
+                let from = if start < 0 {
+                    (len + start).max(0)
+                } else {
+                    start.min(len)
+                };
+                let to = match arg(2) {
+                    Some(V::Int(l)) if l >= 0 => (from + l).min(len),
+                    Some(V::Int(l)) => (len + l).max(from),
+                    _ => len,
+                };
+                Ok(V::Str(st[from as usize..to as usize].to_vec()))
             }
             "strlen" => match arg(0) {
                 Some(V::Str(s)) => Ok(V::Int(s.len() as i64)),
@@ -1380,6 +1424,7 @@ impl Interp {
                     .collect();
                 self.dump_props(&props, indent, out);
             }
+            V::Closure(..) => out.extend_from_slice(b"object(Closure)#0 (0) {\n}\n"),
             V::Obj(o) => {
                 let b = o.borrow();
                 let id = b.id;
@@ -1499,7 +1544,7 @@ fn truthy(v: &V) -> bool {
         V::Int(i) => *i != 0,
         V::Str(s) => !(s.is_empty() || s == b"0"),
         V::Arr(a) => !a.is_empty(),
-        V::Obj(_) => true,
+        V::Obj(_) | V::Closure(..) => true,
     }
 }
 

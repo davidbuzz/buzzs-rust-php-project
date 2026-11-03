@@ -4,6 +4,22 @@
 //! Set `PHP_URI_PHPT_VERBOSE=1` to print every failure, or
 //! `PHP_URI_PHPT_FILTER=substring` to run a subset.
 
+// The evaluator is test tooling that mirrors PHP's dynamic semantics; these
+// pedantic lints add noise without improving it.
+#![allow(
+    clippy::many_single_char_names,
+    clippy::unused_self,
+    clippy::cast_possible_wrap,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::too_many_lines,
+    clippy::match_same_arms,
+    clippy::manual_let_else,
+    clippy::single_match_else,
+    clippy::wrong_self_convention,
+    clippy::items_after_statements
+)]
+
 mod phpt;
 
 use std::path::{Path, PathBuf};
@@ -69,12 +85,15 @@ fn ext_uri_phpt_suite() {
         eprintln!("  failed: {f}");
     }
     if filter.is_none() {
+        assert_eq!(fail, 0, "phpt failures: {failures:?}");
         assert!(
-            fail == 0 || pass * 100 / (pass + fail) >= MIN_PASS_PERCENT,
-            "pass rate below {MIN_PASS_PERCENT}%"
+            pass >= MIN_PASSING,
+            "only {pass} tests evaluated successfully"
         );
     }
 }
 
-/// Minimum share of evaluated tests that must pass.
-const MIN_PASS_PERCENT: usize = 0;
+/// The number of tests the evaluator is known to run successfully (the
+/// rest need VM features such as class declarations, INI settings or
+/// `zend_test`).
+const MIN_PASSING: usize = 582;

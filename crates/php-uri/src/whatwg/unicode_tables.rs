@@ -14,7 +14,7 @@ pub const IDNA_MAPPED: u8 = 4;
 /// IDNA status: valid.
 pub const IDNA_VALID: u8 = 5;
 
-/// `(first code point, index into IDNA_ENTRIES)`; a run lasts until the next start.
+/// First code point and index into [`IDNA_ENTRIES`]; a run lasts until the next start.
 pub static IDNA_RANGES: [(u32, u16); 8210] = [
     (0x0, 1),
     (0x41, 196),
@@ -8228,7 +8228,7 @@ pub static IDNA_RANGES: [(u32, u16); 8210] = [
     (0x10FFFE, 0),
 ];
 
-/// `(status, mapping length, mapping offset into IDNA_MAP)`.
+/// Status, mapping length and mapping offset into [`IDNA_MAP`].
 pub static IDNA_ENTRIES: [(u8, u8, u16); 3951] = [
     (0, 0, 0),
     (5, 0, 0),
@@ -12183,7 +12183,7 @@ pub static IDNA_ENTRIES: [(u8, u8, u16); 3951] = [
     (4, 1, 4904),
 ];
 
-/// Mapping targets referenced by IDNA_ENTRIES.
+/// Mapping targets referenced by `IDNA_ENTRIES`.
 pub static IDNA_MAP: [u32; 5428] = [
     0x73, 0x73, 0x3C3, 0x61, 0x62, 0x63, 0x64, 0x65, 0x66, 0x67, 0x68, 0x69, 0x6A, 0x6B, 0x6C,
     0x6D, 0x6E, 0x6F, 0x70, 0x71, 0x72, 0x74, 0x75, 0x76, 0x77, 0x78, 0x79, 0x7A, 0x20, 0x20,
@@ -13027,7 +13027,7 @@ pub static CCC_RANGES: [(u32, u32, u8); 403] = [
     (0x1E94A, 0x1E94A, 7),
 ];
 
-/// `(code point, offset into DECOMP_CPS, length)` of full canonical decompositions.
+/// Code point, offset into [`DECOMP_CPS`] and length of full canonical decompositions.
 pub static DECOMP_INDEX: [(u32, u16, u8); 2081] = [
     (0xC0, 0, 2),
     (0xC1, 2, 2),
@@ -15112,7 +15112,7 @@ pub static DECOMP_INDEX: [(u32, u16, u8); 2081] = [
     (0x2FA1D, 3449, 1),
 ];
 
-/// Decomposition targets referenced by DECOMP_INDEX.
+/// Decomposition targets referenced by `DECOMP_INDEX`.
 pub static DECOMP_CPS: [u32; 3450] = [
     0x41, 0x300, 0x41, 0x301, 0x41, 0x302, 0x41, 0x303, 0x41, 0x308, 0x41, 0x30A, 0x43, 0x327,
     0x45, 0x300, 0x45, 0x301, 0x45, 0x302, 0x45, 0x308, 0x49, 0x300, 0x49, 0x301, 0x49, 0x302,
