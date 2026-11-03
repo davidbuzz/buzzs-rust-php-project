@@ -1,7 +1,11 @@
 //! Tests on real loopback/UNIX sockets, with `.phpt` expectations ported
 //! by hand and `/usr/bin/php` comparisons where behaviour is shared.
 
-#![allow(clippy::too_many_lines)]
+#![allow(
+    clippy::too_many_lines,
+    clippy::many_single_char_names,
+    clippy::items_after_statements
+)]
 
 use super::*;
 use crate::value::{Key, OutValue, Value};

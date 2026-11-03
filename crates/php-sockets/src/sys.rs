@@ -103,9 +103,18 @@ impl std::fmt::Debug for SockAddr {
         f.debug_struct("SockAddr")
             .field("family", &self.family())
             .field("len", &self.len)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
+
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+const AF_INET_U16: u16 = libc::AF_INET as u16;
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+const AF_INET6_U16: u16 = libc::AF_INET6 as u16;
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+const AF_UNIX_U16: u16 = libc::AF_UNIX as u16;
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+const AF_PACKET_U16: u16 = libc::AF_PACKET as u16;
 
 /// `offsetof(struct sockaddr_un, sun_path)`.
 pub const SUN_PATH_OFFSET: usize = 2;
@@ -165,7 +174,7 @@ impl SockAddr {
     pub fn inet(ip: [u8; 4], port: u16) -> Self {
         let mut a = Self::empty();
         let b = a.bytes_mut();
-        b[..2].copy_from_slice(&(libc::AF_INET as u16).to_ne_bytes());
+        b[..2].copy_from_slice(&AF_INET_U16.to_ne_bytes());
         b[2..4].copy_from_slice(&port.to_be_bytes());
         b[4..8].copy_from_slice(&ip);
         a.len = socklen(std::mem::size_of::<libc::sockaddr_in>());
@@ -176,7 +185,7 @@ impl SockAddr {
     pub fn inet6(ip: [u8; 16], port: u16, flowinfo: u32, scope_id: u32) -> Self {
         let mut a = Self::empty();
         let b = a.bytes_mut();
-        b[..2].copy_from_slice(&(libc::AF_INET6 as u16).to_ne_bytes());
+        b[..2].copy_from_slice(&AF_INET6_U16.to_ne_bytes());
         b[2..4].copy_from_slice(&port.to_be_bytes());
         b[4..8].copy_from_slice(&flowinfo.to_be_bytes());
         b[8..24].copy_from_slice(&ip);
@@ -190,7 +199,7 @@ impl SockAddr {
     pub fn unix(path: &[u8], len: usize) -> Self {
         let mut a = Self::empty();
         let b = a.bytes_mut();
-        b[..2].copy_from_slice(&(libc::AF_UNIX as u16).to_ne_bytes());
+        b[..2].copy_from_slice(&AF_UNIX_U16.to_ne_bytes());
         let n = path.len().min(SUN_PATH_LEN);
         b[SUN_PATH_OFFSET..SUN_PATH_OFFSET + n].copy_from_slice(&path[..n]);
         a.len = socklen(len);
@@ -201,7 +210,7 @@ impl SockAddr {
     pub fn packet(ifindex: i32) -> Self {
         let mut a = Self::empty();
         let b = a.bytes_mut();
-        b[..2].copy_from_slice(&(libc::AF_PACKET as u16).to_ne_bytes());
+        b[..2].copy_from_slice(&AF_PACKET_U16.to_ne_bytes());
         b[4..8].copy_from_slice(&ifindex.to_ne_bytes());
         a.len = socklen(std::mem::size_of::<libc::sockaddr_ll>());
         a
@@ -254,7 +263,7 @@ impl SockAddr {
         i32::from_ne_bytes([b[4], b[5], b[6], b[7]])
     }
 
-    /// Sets `sll_ifindex` (AF_PACKET bind keeps the rest from getsockname).
+    /// Sets `sll_ifindex` (`AF_PACKET` bind keeps the rest from `getsockname`).
     pub fn set_ll_ifindex(&mut self, ifindex: i32) {
         self.bytes_mut()[4..8].copy_from_slice(&ifindex.to_ne_bytes());
     }
@@ -487,8 +496,11 @@ pub fn addr4_to_if_index(ip: [u8; 4]) -> Result<Option<u32>, i32> {
             // SAFETY: ifa_addr points to a sockaddr of its family.
             let fam = i32::from(unsafe { (*ifa.ifa_addr).sa_family });
             if fam == libc::AF_INET {
-                // SAFETY: AF_INET → sockaddr_in.
-                let sin = unsafe { &*ifa.ifa_addr.cast::<libc::sockaddr_in>() };
+                // SAFETY: AF_INET → the sockaddr is a sockaddr_in; it is
+                // read unaligned since getifaddrs only guarantees sockaddr
+                // alignment.
+                let sin =
+                    unsafe { std::ptr::read_unaligned(ifa.ifa_addr.cast::<libc::sockaddr_in>()) };
                 if sin.sin_addr.s_addr.to_ne_bytes() == ip {
                     // SAFETY: ifa_name is a NUL-terminated string.
                     let idx = unsafe { libc::if_nametoindex(ifa.ifa_name) };
@@ -734,7 +746,9 @@ pub fn select(
             .iter()
             .copied()
             // SAFETY: the set is valid and fd is in range.
-            .filter(|&fd| (0..FD_SETSIZE).contains(&fd) && unsafe { libc::FD_ISSET(fd, &fds[i]) })
+            .filter(|&fd| {
+                (0..FD_SETSIZE).contains(&fd) && unsafe { libc::FD_ISSET(fd, &raw const fds[i]) }
+            })
             .collect();
     }
     Ok((n, out))
@@ -873,7 +887,7 @@ pub fn attach_reuseport_cbpf(fd: c_int, k: u32) -> Result<(), i32> {
             code: 0x20,
             jt: 0,
             jf: 0,
-            k: (libc::SKF_AD_OFF as u32).wrapping_add(k),
+            k: u32::from_ne_bytes(libc::SKF_AD_OFF.to_ne_bytes()).wrapping_add(k),
         },
         libc::sock_filter {
             code: 0x16,

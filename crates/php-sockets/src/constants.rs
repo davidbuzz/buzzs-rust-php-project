@@ -1,3 +1,4 @@
+#![allow(clippy::unreadable_literal)]
 //! The constants ext/sockets registers on Linux (x86-64 glibc), in
 //! `sockets_arginfo.h` registration order.
 //!

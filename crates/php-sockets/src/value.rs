@@ -310,7 +310,7 @@ pub fn dval_to_lval(d: f64) -> i64 {
     if !d.is_finite() {
         return 0;
     }
-    if d >= -9.223_372_036_854_775_808e18 && d < 9.223_372_036_854_775_808e18 {
+    if (-9.223_372_036_854_776e18..9.223_372_036_854_776e18).contains(&d) {
         return d as i64;
     }
     // zend_dval_to_lval_slow: modular arithmetic on the truncated value.
@@ -319,7 +319,7 @@ pub fn dval_to_lval(d: f64) -> i64 {
     if dmod < 0.0 {
         dmod += two64;
     }
-    if dmod >= 9.223_372_036_854_775_808e18 {
+    if dmod >= 9.223_372_036_854_776e18 {
         dmod -= two64;
     }
     dmod as i64
@@ -357,7 +357,7 @@ pub fn float_to_string(f: f64) -> String {
     let (neg, mant) = mant.strip_prefix('-').map_or((false, mant), |m| (true, m));
     let digits: String = mant.chars().filter(char::is_ascii_digit).collect();
     let sign = if neg { "-" } else { "" };
-    if exp < -5 || exp >= 15 {
+    if !(-5..15).contains(&exp) {
         let (first, rest) = digits.split_at(1);
         let rest = if rest.is_empty() { "0" } else { rest };
         let esign = if exp < 0 { '-' } else { '+' };

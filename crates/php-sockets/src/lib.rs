@@ -954,6 +954,7 @@ impl Sockets {
     /// `socket_recvfrom(Socket $socket, &$data, int $length, int $flags,
     /// &$address, &$port = null)`; `port_given` tells whether `$port` was
     /// passed.
+    #[allow(clippy::too_many_lines)]
     pub fn recvfrom(
         &mut self,
         socket: &mut Socket,
@@ -1472,7 +1473,7 @@ impl AddressInfo {
     }
 }
 
-/// `PHP_ETH_PROTO_CHECK`: AF_PACKET protocols are passed in network order.
+/// `PHP_ETH_PROTO_CHECK`: `AF_PACKET` protocols are passed in network order.
 fn eth_proto(protocol: i64, family: i64) -> i64 {
     if protocol <= i64::from(u16::MAX) && family == i64::from(libc::AF_PACKET) {
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]

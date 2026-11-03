@@ -219,7 +219,7 @@ impl Sockets {
         let bytes: Vec<u8> = match option {
             _ if skip_switch => c_int(value.to_long()).to_ne_bytes().to_vec(),
             SO_LINGER => {
-                let t = self.option_table(func, value, "SO_LINGER")?;
+                let t = Self::option_table(func, value, "SO_LINGER")?;
                 let onoff = crate::value::find(t, "l_onoff").ok_or_else(|| {
                     arg_value_error(func, 4, "value", "must have key \"l_onoff\"")
                 })?;
@@ -253,7 +253,7 @@ impl Sockets {
                 } else {
                     "SO_SNDTIMEO"
                 };
-                let t = self.option_table(func, value, name)?;
+                let t = Self::option_table(func, value, name)?;
                 let sec = crate::value::find(t, "sec")
                     .ok_or_else(|| arg_value_error(func, 4, "value", "must have key \"sec\""))?;
                 let usec = crate::value::find(t, "usec")
@@ -314,7 +314,6 @@ impl Sockets {
 
     /// The array (or object properties) of an option value.
     fn option_table<'v>(
-        &self,
         func: &str,
         value: &'v Value,
         name: &str,
@@ -421,9 +420,8 @@ impl Sockets {
         value: &Value,
     ) -> SocketResult<()> {
         let source_op = !matches!(option, MCAST_JOIN_GROUP | MCAST_LEAVE_GROUP);
-        let t = match value {
-            Value::Array(t) | Value::Object { props: t, .. } => t,
-            _ => {
+        let (Value::Array(t) | Value::Object { props: t, .. }) = value else {
+            {
                 let name = if source_op {
                     "MCAST_LEAVE_SOURCE_GROUP"
                 } else {

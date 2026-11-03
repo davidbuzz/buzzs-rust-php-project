@@ -296,6 +296,7 @@ impl Ser<'_> {
 
     // --------------------------------------------------------- sockaddr
 
+    #[allow(clippy::too_many_lines)]
     fn sockaddr(&mut self, container: &Value) -> Option<SockAddr> {
         let Value::Array(t) = container else {
             self.error("expected an array here");
@@ -471,8 +472,7 @@ impl Ser<'_> {
                     s.error("socket is already closed");
                     0
                 }
-                Value::Socket { fd } => *fd,
-                Value::Stream { fd: Some(fd) } => *fd,
+                Value::Socket { fd } | Value::Stream { fd: Some(fd) } => *fd,
                 Value::Stream { fd: None } => {
                     s.error("cast stream to file descriptor failed");
                     0
@@ -563,7 +563,7 @@ impl Ser<'_> {
                 break;
             }
             self.with_key(&format!("element #{i}"), |s| {
-                s.control_element(elem, &mut buf)
+                s.control_element(elem, &mut buf);
             });
         }
         buf
@@ -653,12 +653,11 @@ impl Res {
             ]),
             libc::AF_UNIX => {
                 let p = a.sun_path();
-                let path = match p.iter().position(|&b| b == 0) {
-                    Some(end) => OutValue::Str(p[..end].to_vec()),
-                    None => {
-                        self.with_key("path", |s| s.error("could not find a NUL in the path"));
-                        OutValue::Null
-                    }
+                let path = if let Some(end) = p.iter().position(|&b| b == 0) {
+                    OutValue::Str(p[..end].to_vec())
+                } else {
+                    self.with_key("path", |s| s.error("could not find a NUL in the path"));
+                    OutValue::Null
                 };
                 OutValue::assoc(vec![("family", family()), ("path", path)])
             }
@@ -692,19 +691,18 @@ impl Res {
                     ));
                     break;
                 }
-                Ok(true) => match st.import_fd(fd) {
-                    Ok(mut s) => {
+                Ok(true) => {
+                    if let Ok(mut s) = st.import_fd(fd) {
                         s.set_stream_owned(false);
                         OutValue::Socket(s)
-                    }
-                    Err(_) => {
+                    } else {
                         self.error(format!(
                             "error getting protocol descriptor {fd}: getsockopt() call failed with errno {}",
                             sys::errno()
                         ));
                         break;
                     }
-                },
+                }
                 Ok(false) => OutValue::StreamFd(fd),
             };
             out.push((Key::Int(i64::try_from(i).unwrap_or(0)), v));
@@ -853,6 +851,7 @@ impl Sockets {
     /// On success returns the byte count and the new value of `$message`
     /// ([`OutValue::False`] when converting the received data failed — a
     /// warning is then queued but the count is still returned).
+    #[allow(clippy::too_many_lines)]
     pub fn recvmsg(
         &mut self,
         socket: &mut Socket,
