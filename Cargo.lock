@@ -822,6 +822,7 @@ name = "php-ext-stdmisc"
 version = "0.1.0"
 dependencies = [
  "php-ext-streams",
+ "php-filter",
  "php-lexer",
  "php-runtime",
  "php-stdmisc",
