@@ -503,6 +503,7 @@ impl Interp {
             DomError::Type(m) => self.make_exception("TypeError", m.as_bytes(), 0),
             DomError::Value(m) => self.make_exception("ValueError", m.as_bytes(), 0),
             DomError::Error(m) => self.make_exception("Error", m.as_bytes(), 0),
+            DomError::Exception(m) => self.make_exception("Exception", m.as_bytes(), 0),
             DomError::ArgType { arg, message } => {
                 self.make_exception("TypeError", format!("{}{message}", arg_prefix(arg)).as_bytes(), 0)
             }
@@ -2370,6 +2371,22 @@ impl Interp {
             let this = if is_static { None } else { self.frames.borrow().last().and_then(|f| f.this.clone()) };
             return self.call_user(&f, args, named, this, Some(c), Some(cname), &[]);
         }
+        let mut args = args;
+        if !named.is_empty() {
+            let canon = self.canonical_class(&cname);
+            let dom_class = self.dom_builtin(&canon).map_or(canon.clone(), str::to_string);
+            if let Some((_, m)) = php_dom::classes::find_method(&dom_class, name) {
+                for (i, p) in m.params.iter().enumerate().skip(args.len()) {
+                    if let Some((_, v)) = named.iter().find(|(k, _)| k == p.name.as_bytes()) {
+                        while args.len() < i {
+                            let d = m.params[args.len()].default;
+                            args.push(self.default_value(d));
+                        }
+                        args.push(v.clone());
+                    }
+                }
+            }
+        }
         self.call_static_by_name(&cname, name, args)
     }
 
@@ -2423,7 +2440,17 @@ impl Interp {
         *self.cur_fn.borrow_mut() = saved;
         match r {
             Ok(v) => Ok(self.from_dom_value(v)),
-            Err(e) => Err(self.dom_err(e, &decl, &params)),
+            Err(DomError::Silent) => Ok(V::Bool(false)),
+            Err(e) => {
+                let f = self.dom_err(e, &decl, &params);
+                if let Flow::Throw(V::Obj(ex)) = &f {
+                    if ex.prop(b"__trace").is_none() {
+                        let argstr: Vec<String> = args.iter().map(trace_arg).collect();
+                        ex.set_prop(b"__trace", V::Str(format!("#0 {}({}): {}({})\n", self.file, self.line.get(), decl, argstr.join(", ")).into_bytes()));
+                    }
+                }
+                Err(f)
+            }
         }
     }
 
@@ -2567,7 +2594,17 @@ impl Interp {
             DomValue::Float(f) => V::Float(f),
             DomValue::Str(s) => V::Str(s),
             DomValue::Node(n) => self.node_obj(n),
-            DomValue::NodeList(l) => V::Obj(new_obj(l.class_name(), ObjKind::Dom(DomObject::NodeList(l)))),
+            DomValue::NodeList(l) => {
+                let keep: Vec<V> = l
+                    .fixed_nodes()
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|n| self.from_dom_value(DomValue::Node(n)))
+                    .collect();
+                let o = new_obj(l.class_name(), ObjKind::Dom(DomObject::NodeList(l)));
+                *o.keep.borrow_mut() = keep;
+                V::Obj(o)
+            }
             DomValue::NamedNodeMap(m) => V::Obj(new_obj(m.class_name(), ObjKind::Dom(DomObject::NamedNodeMap(m)))),
             DomValue::Implementation(i) => V::Obj(new_obj(i.class_name(), ObjKind::Dom(DomObject::Implementation(i)))),
             DomValue::TokenList(t) => V::Obj(new_obj("Dom\\TokenList", ObjKind::Dom(DomObject::TokenList(t)))),
@@ -2655,10 +2692,27 @@ fn trace_arg(v: &V) -> String {
         V::Int(i) => i.to_string(),
         V::Float(f) => super::output::float_repr(*f),
         V::Str(s) => {
+            let esc = |b: &[u8]| {
+                let mut o = String::new();
+                for &c in b {
+                    match c {
+                        b'\n' => o.push_str("\\n"),
+                        b'\r' => o.push_str("\\r"),
+                        b'\t' => o.push_str("\\t"),
+                        0x0c => o.push_str("\\f"),
+                        0x0b => o.push_str("\\v"),
+                        b'\\' => o.push_str("\\\\"),
+                        0x1b => o.push_str("\\e"),
+                        c if !(32..=126).contains(&c) => o.push_str(&format!("\\x{c:02X}")),
+                        c => o.push(char::from(c)),
+                    }
+                }
+                o
+            };
             if s.len() > 15 {
-                format!("'{}...'", String::from_utf8_lossy(&s[..15]))
+                format!("'{}...'", esc(&s[..15]))
             } else {
-                format!("'{}'", String::from_utf8_lossy(s))
+                format!("'{}'", esc(s))
             }
         }
         V::Arr(_) => "Array".into(),

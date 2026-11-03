@@ -32,6 +32,7 @@ pub mod object;
 pub(crate) mod parse;
 pub(crate) mod raw;
 pub(crate) mod save;
+pub mod stack;
 pub mod tokenlist;
 pub(crate) mod tree;
 pub mod value;

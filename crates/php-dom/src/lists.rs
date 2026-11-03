@@ -883,6 +883,15 @@ impl NodeList {
         self.iter()?.collect()
     }
 
+    /// The node objects of a fixed list (XPath results), which PHP
+    /// materializes before the list object itself; `None` for live lists.
+    pub fn fixed_nodes(&self) -> Option<Vec<Node>> {
+        match &self.0.kind {
+            MapKind::NodeSet(v) => Some(v.clone()),
+            _ => None,
+        }
+    }
+
     /// `Dom\HTMLCollection::namedItem($key)`.
     pub fn named_item(&self, key: &[u8]) -> Option<Node> {
         self.0.collection_named_item(key)

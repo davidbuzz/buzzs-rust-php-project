@@ -606,6 +606,7 @@ extern "C" {
     pub fn xmlSaveDoc(ctxt: *mut c_void, doc: *mut xmlDoc) -> c_long;
     pub fn xmlSaveTree(ctxt: *mut c_void, node: *mut xmlNode) -> c_long;
     pub fn xmlSaveClose(ctxt: *mut c_void) -> c_int;
+    pub fn xmlSaveFlush(ctxt: *mut c_void) -> c_int;
     pub fn xmlSaveFormatFileEnc(
         filename: *const c_char,
         cur: *mut xmlDoc,

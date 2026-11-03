@@ -96,6 +96,8 @@ pub enum DomError {
     Value(String),
     /// Plain `Error` with the full message.
     Error(String),
+    /// Plain `Exception` with the full message (`zend_throw_exception_ex(NULL, …)`).
+    Exception(String),
     /// `TypeError` about an argument: the VM prefixes
     /// `"Class::method(): Argument #N ($name) "`.
     ArgType {
@@ -167,7 +169,7 @@ impl DomError {
     pub fn message(&self) -> String {
         match self {
             Self::Dom { message, .. } => message.to_string(),
-            Self::Type(m) | Self::Value(m) | Self::Error(m) => m.clone(),
+            Self::Type(m) | Self::Value(m) | Self::Error(m) | Self::Exception(m) => m.clone(),
             Self::ArgType { message, .. } | Self::ArgValue { message, .. } => message.clone(),
             Self::CouldntFetch => "Couldn't fetch".into(),
             Self::Host(_) => "<host exception>".into(),

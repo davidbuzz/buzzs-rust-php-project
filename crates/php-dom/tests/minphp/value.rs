@@ -129,6 +129,8 @@ pub struct Obj {
     pub class: RefCell<String>,
     pub kind: RefCell<ObjKind>,
     pub props: RefCell<Vec<(Vec<u8>, V)>>,
+    /// Objects kept alive by this one (e.g. XPath result nodes).
+    pub keep: RefCell<Vec<V>>,
 }
 
 impl std::fmt::Debug for Obj {
@@ -184,6 +186,7 @@ pub fn new_obj(class: &str, kind: ObjKind) -> Rc<Obj> {
         class: RefCell::new(class.to_string()),
         kind: RefCell::new(kind),
         props: RefCell::new(Vec::new()),
+        keep: RefCell::new(Vec::new()),
     })
 }
 
@@ -204,5 +207,6 @@ pub fn new_internal(class: &str, kind: ObjKind) -> Rc<Obj> {
         class: RefCell::new(class.to_string()),
         kind: RefCell::new(kind),
         props: RefCell::new(Vec::new()),
+        keep: RefCell::new(Vec::new()),
     })
 }

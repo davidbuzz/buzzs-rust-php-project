@@ -813,7 +813,7 @@ impl Node {
         let handlers = self.doc_ref().map_or(Handlers::Default, |d| d.handlers.get());
         let bytes = crate::save::with_no_empty_tags(noempty, || {
             crate::save::dump_doc_to_file(handlers, filename, docp, format)
-        });
+        })?;
         Ok(if bytes == -1 { None } else { Some(bytes) })
     }
 
@@ -1254,7 +1254,7 @@ pub fn xml_document_create_from(
         }
         ParseOutcome::Failed => {
             if from_file {
-                return Err(DomError::Error(format!(
+                return Err(DomError::Exception(format!(
                     "Cannot open file '{}'",
                     String::from_utf8_lossy(source)
                 )));

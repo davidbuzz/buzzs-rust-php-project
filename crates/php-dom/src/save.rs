@@ -10,7 +10,7 @@ use crate::node::C14nXPath;
 use crate::object::{Handlers, Node};
 use crate::raw::{cs, N};
 
-unsafe extern "C" fn write_vec(ctx: *mut c_void, buf: *const c_char, len: c_int) -> c_int {
+pub(crate) unsafe extern "C" fn write_vec(ctx: *mut c_void, buf: *const c_char, len: c_int) -> c_int {
     crate::parse::guard(-1, || {
         // SAFETY: ctx is the `Vec<u8>` passed at creation; buf is valid for len.
         unsafe {
@@ -150,25 +150,25 @@ pub(crate) fn dump_node_to_str(handlers: Handlers, doc: N, node: N, format: bool
 }
 
 /// `handlers->dump_doc_to_file`.
-pub(crate) fn dump_doc_to_file(handlers: Handlers, filename: &[u8], doc: N, format: bool) -> i64 {
+pub(crate) fn dump_doc_to_file(handlers: Handlers, filename: &[u8], doc: N, format: bool) -> DomResult<i64> {
     match handlers {
         Handlers::Default => {
             let f = cs(filename);
-            crate::parse::with_generic_errors(|| {
+            Ok(crate::parse::with_generic_errors(|| {
                 // SAFETY: live document.
                 i64::from(unsafe { ffi::xmlSaveFormatFileEnc(f.as_ptr(), doc.as_doc(), doc_encoding(doc), c_int::from(format)) })
-            })
+            }))
         }
         Handlers::ModernXml => crate::xml_serializer::dump_node_to_file(filename, doc, doc, format),
     }
 }
 
 /// `handlers->dump_node_to_file` (used by `saveXmlFile`).
-pub(crate) fn dump_node_to_file(handlers: Handlers, filename: &[u8], doc: N, node: N, format: bool) -> i64 {
+pub(crate) fn dump_node_to_file(handlers: Handlers, filename: &[u8], doc: N, node: N, format: bool) -> DomResult<i64> {
     match handlers {
         Handlers::Default => {
             let f = cs(filename);
-            crate::parse::with_generic_errors(|| {
+            Ok(crate::parse::with_generic_errors(|| {
                 // SAFETY: output buffer created and closed here.
                 unsafe {
                     let out = ffi::xmlOutputBufferCreateFilename(f.as_ptr(), ptr::null_mut(), 0);
@@ -178,7 +178,7 @@ pub(crate) fn dump_node_to_file(handlers: Handlers, filename: &[u8], doc: N, nod
                     ffi::xmlNodeDumpOutput(out, doc.as_doc(), node.p(), 0, c_int::from(format), doc_encoding(doc));
                     i64::from(ffi::xmlOutputBufferClose(out))
                 }
-            })
+            }))
         }
         Handlers::ModernXml => crate::xml_serializer::dump_node_to_file(filename, doc, node, format),
     }
