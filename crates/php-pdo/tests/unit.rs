@@ -622,3 +622,29 @@ fn gc_values_report_bound_state() {
     // the PDO object, the bound variable and the fetch-into object
     assert_eq!(gc.len(), 3);
 }
+
+#[test]
+fn constructor_turns_warnings_into_exceptions() {
+    let mut h = TestHost::new();
+    let mut o = ZArray::new();
+    o.make_mut()
+        .insert(ArrayKey::Int(ATTR_PERSISTENT), Value::Bool(true));
+    o.make_mut()
+        .insert(ArrayKey::Int(ATTR_ERRMODE), i(ERRMODE_WARNING));
+    o.make_mut().insert(
+        ArrayKey::Int(ATTR_STATEMENT_CLASS),
+        Value::Array(arr(vec![s("PDOStatement")])),
+    );
+    let e = h.new_pdo("PDO", "sqlite::memory:", Some(o)).unwrap_err();
+    assert_eq!(TestHost::error_class(&e), "PDOException");
+    assert_eq!(
+        TestHost::error_message(&e),
+        "PDO::__construct(): SQLSTATE[HY000]: General error: PDO::ATTR_STATEMENT_CLASS cannot be used with persistent PDO instances"
+    );
+    assert!(matches!(
+        TestHost::error_prop(&e, "code"),
+        Some(Value::Int(0))
+    ));
+    // nothing was printed
+    assert_eq!(h.output(), "");
+}
