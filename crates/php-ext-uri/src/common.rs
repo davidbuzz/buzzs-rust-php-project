@@ -6,15 +6,13 @@ use std::rc::Rc;
 use php_runtime::{ArrayKey, HashTable, Obj, Value, ZArray, ZStr};
 use php_uri::{ErrorClass, UriComparisonMode, UriError, UrlValidationError};
 use php_vm::class::Class;
-use php_vm::ext::{Throw, VmResult};
+use php_vm::ext::{Args, Throw, VmResult};
 use php_vm::Vm;
 
 /// `Uri\WhatWg\UrlValidationError`.
 pub(crate) const VALIDATION_ERROR_CLASS: &str = "Uri\\WhatWg\\UrlValidationError";
 /// `Uri\WhatWg\UrlValidationErrorType`.
 pub(crate) const VALIDATION_ERROR_TYPE_ENUM: &str = "Uri\\WhatWg\\UrlValidationErrorType";
-/// `Uri\UriComparisonMode`.
-
 /// A registered class by name (`zend_lookup_class` without autoload).
 pub(crate) fn class(vm: &mut Vm, name: &str) -> VmResult<Rc<Class>> {
     match vm.find_class(name.as_bytes()) {
@@ -26,7 +24,10 @@ pub(crate) fn class(vm: &mut Vm, name: &str) -> VmResult<Rc<Class>> {
 /// `zend_enum_get_case_cstr(ce, case)`.
 pub(crate) fn enum_case(vm: &mut Vm, enum_name: &str, case: &str) -> VmResult<Value> {
     let constant = Value::string("constant");
-    vm.call_value(&constant, vec![Value::string(format!("{enum_name}::{case}"))])
+    vm.call_value(
+        &constant,
+        vec![Value::string(format!("{enum_name}::{case}"))],
+    )
 }
 
 /// The case name of an enum instance (`zend_enum_fetch_case_name`).
@@ -66,17 +67,17 @@ pub(crate) fn opt_int(v: Option<i64>) -> Value {
     v.map_or(Value::Null, Value::Int)
 }
 
-/// A `?string` argument as bytes.
-pub(crate) fn str_or_null(v: Option<Value>) -> Option<Vec<u8>> {
-    match v {
+/// The `?string` argument `n` as bytes.
+pub(crate) fn str_or_null(a: &Args, n: usize) -> Option<Vec<u8>> {
+    match a.opt(n) {
         Some(Value::Str(s)) => Some(s.as_bytes().to_vec()),
         _ => None,
     }
 }
 
-/// A `?int` argument.
-pub(crate) fn int_or_null(v: Option<Value>) -> Option<i64> {
-    match v {
+/// The `?int` argument `n`.
+pub(crate) fn int_or_null(a: &Args, n: usize) -> Option<i64> {
+    match a.opt(n) {
         Some(Value::Int(n)) => Some(n),
         _ => None,
     }
@@ -217,7 +218,7 @@ pub(crate) fn unserialize_uri(data: &ZArray) -> Option<Vec<u8>> {
     if data.len() != 2 {
         return None;
     }
-    let Some(Value::Array(state)) = data.get(&ArrayKey::Int(0)) else {
+    let Some(Value::Array(state)) = index(data, 0) else {
         return None;
     };
     if state.len() != 1 {
@@ -231,7 +232,15 @@ pub(crate) fn unserialize_uri(data: &ZArray) -> Option<Vec<u8>> {
 
 /// The second `__unserialize()` array must be an empty array.
 pub(crate) fn unserialize_props_ok(data: &ZArray) -> bool {
-    matches!(data.get(&ArrayKey::Int(1)), Some(Value::Array(a)) if a.len() == 0)
+    matches!(index(data, 1), Some(Value::Array(a)) if a.is_empty())
+}
+
+/// `zend_hash_index_find(data, i)`. php-runtime's unserializer currently
+/// hands `__unserialize()` the object's property table, whose integer keys
+/// were turned into numeric strings, so `"0"` is accepted as well.
+fn index(data: &ZArray, i: i64) -> Option<&Value> {
+    data.get(&ArrayKey::Int(i))
+        .or_else(|| data.get(&ArrayKey::Str(ZStr::from(i.to_string()))))
 }
 
 /// `__debugInfo()` from the library's ordered pairs.
@@ -247,4 +256,51 @@ pub(crate) fn debug_info(pairs: Vec<(&'static str, php_uri::api::DebugValue)>) -
         ht.insert(ArrayKey::from_bytes(k.as_bytes()), v);
     }
     Value::Array(ZArray::from_table(ht))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn arr(v: &Value) -> ZArray {
+        match v {
+            Value::Array(a) => a.clone(),
+            _ => panic!("not an array"),
+        }
+    }
+
+    #[test]
+    fn serialize_round_trip() {
+        let data = arr(&serialized(b"https://example.com".to_vec()));
+        assert_eq!(
+            unserialize_uri(&data).as_deref(),
+            Some(&b"https://example.com"[..])
+        );
+        assert!(unserialize_props_ok(&data));
+    }
+
+    #[test]
+    fn unserialize_rejects_bad_shapes() {
+        assert_eq!(unserialize_uri(&ZArray::new()), None);
+        let mut t = HashTable::new();
+        let _ = t.push(Value::Null);
+        let _ = t.push(Value::Array(ZArray::new()));
+        assert_eq!(unserialize_uri(&ZArray::from_table(t)), None);
+        // Numeric-string keys (property tables) are accepted.
+        let mut state = HashTable::new();
+        state.insert(ArrayKey::from_bytes(b"uri"), Value::string("/x"));
+        let mut t = HashTable::new();
+        t.insert_str_raw(ZStr::from("0"), Value::Array(ZArray::from_table(state)));
+        t.insert_str_raw(ZStr::from("1"), Value::Array(ZArray::new()));
+        let t = ZArray::from_table(t);
+        assert_eq!(unserialize_uri(&t).as_deref(), Some(&b"/x"[..]));
+        assert!(unserialize_props_ok(&t));
+    }
+
+    #[test]
+    fn value_helpers() {
+        assert!(matches!(opt_int(None), Value::Null));
+        assert!(matches!(opt_int(Some(3)), Value::Int(3)));
+        assert!(matches!(opt_bytes(Some(b"a".to_vec())), Value::Str(s) if s.as_bytes() == b"a"));
+    }
 }

@@ -9,6 +9,7 @@ rust-version.workspace = true
 php-vm = { path = "../php-vm" }
 php-runtime = { path = "../php-runtime" }
 php-uri = { path = "../php-uri" }
+php-support = { path = "../php-support" }
 
 [lints]
 workspace = true

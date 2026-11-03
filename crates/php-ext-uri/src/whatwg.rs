@@ -10,9 +10,8 @@ use php_vm::class::cflags;
 use php_vm::ext::{acc, class_flags, Args, ClassBuilder, ClassHooks, ModuleBuilder, VmResult};
 use php_vm::Vm;
 
-use crate::common::{
-    self, bytes, int_or_null, opt_bytes, opt_int, raw_prop, str_or_null, throw,
-};
+use crate::common::{self, bytes, int_or_null, opt_bytes, opt_int, raw_prop, str_or_null, throw};
+use crate::memory;
 
 /// `Uri\WhatWg\Url`.
 const URL_CLASS: &str = api::CLASS_NAME;
@@ -27,11 +26,13 @@ const HOST_TYPE_ENUM: &str = "Uri\\WhatWg\\UrlHostType";
 #[derive(Debug, Default)]
 struct State(Option<WhatWgUrl>);
 
+#[allow(clippy::unnecessary_wraps)] // the native hook/function signature
 fn create(_vm: &mut Vm, o: &Obj) -> VmResult<()> {
     php_vm::object::set_internal(o, State::default());
     Ok(())
 }
 
+#[allow(clippy::unnecessary_wraps)] // the native hook/function signature
 fn clone(_vm: &mut Vm, old: &Obj, new: &Obj) -> VmResult<()> {
     let url = state_of(old);
     php_vm::object::set_internal(new, State(url));
@@ -83,6 +84,7 @@ fn construct(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     if state_of(&this).is_some() {
         return Err(common::throw_reinit(vm, URL_CLASS));
     }
+    memory::check(vm, memory::whatwg(a.str(0).as_bytes()))?;
     let base = url_arg(a, 1);
     match WhatWgUrl::new(a.str(0).as_bytes(), base.as_ref()) {
         Ok((url, soft)) => {
@@ -101,6 +103,7 @@ fn construct(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 fn parse(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let cls = common::class(vm, URL_CLASS)?;
     let o = vm.new_object(&cls)?;
+    memory::check(vm, memory::whatwg(a.str(0).as_bytes()))?;
     let base = url_arg(a, 1);
     match WhatWgUrl::parse(a.str(0).as_bytes(), base.as_ref()) {
         Ok((url, soft)) => {
@@ -139,9 +142,16 @@ getters! {
     get_query => |u: &WhatWgUrl| opt_bytes(u.query());
     get_fragment => |u: &WhatWgUrl| opt_bytes(u.fragment());
     to_ascii_string => |u: &WhatWgUrl| bytes(u.to_ascii_string());
-    to_unicode_string => |u: &WhatWgUrl| bytes(u.to_unicode_string());
     debug_info => |u: &WhatWgUrl| common::debug_info(u.debug_info());
     serialize => |u: &WhatWgUrl| common::serialized(u.serialize());
+}
+
+fn to_unicode_string(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let u = this(vm, a)?;
+    // The host goes through IDNA ToUnicode.
+    let host = u.ascii_host().map_or(0, |h| h.len() as u64);
+    memory::check(vm, held(&u) + 8 * host)?;
+    Ok(bytes(u.to_unicode_string()))
 }
 
 fn get_host_type(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -154,6 +164,12 @@ fn get_host_type(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 // ------------------------------------------------------------ withers
 
+/// What `$this` holds (see [`memory`]).
+fn held(u: &WhatWgUrl) -> u64 {
+    u.serialize().len() as u64
+}
+
+#[allow(clippy::many_single_char_names)] // a: args, u: URL, o: object, ...
 fn with(
     vm: &mut Vm,
     a: &Args,
@@ -162,6 +178,11 @@ fn with(
     let u = this(vm, a)?;
     let cls = php_vm::object::class_of(&a.this_obj()).clone();
     let o = vm.new_object(&cls)?;
+    let extra = match a.at(0) {
+        Value::Str(s) => memory::whatwg(s.as_bytes()),
+        _ => 0,
+    };
+    memory::check(vm, 2 * held(&u) + extra)?;
     let new = lib(vm, f(&u))?;
     set_state(&o, new);
     Ok(Value::Object(o))
@@ -173,22 +194,22 @@ fn with_scheme(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 }
 
 fn with_username(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let v = str_or_null(a.opt(0));
+    let v = str_or_null(a, 0);
     with(vm, a, |u| u.with_username(v.as_deref()))
 }
 
 fn with_password(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let v = str_or_null(a.opt(0));
+    let v = str_or_null(a, 0);
     with(vm, a, |u| u.with_password(v.as_deref()))
 }
 
 fn with_host(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let v = str_or_null(a.opt(0));
+    let v = str_or_null(a, 0);
     with(vm, a, |u| u.with_host(v.as_deref()))
 }
 
 fn with_port(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let v = int_or_null(a.opt(0));
+    let v = int_or_null(a, 0);
     with(vm, a, |u| u.with_port(v))
 }
 
@@ -198,12 +219,12 @@ fn with_path(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 }
 
 fn with_query(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let v = str_or_null(a.opt(0));
+    let v = str_or_null(a, 0);
     with(vm, a, |u| u.with_query(v.as_deref()))
 }
 
 fn with_fragment(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let v = str_or_null(a.opt(0));
+    let v = str_or_null(a, 0);
     with(vm, a, |u| u.with_fragment(v.as_deref()))
 }
 
@@ -216,10 +237,12 @@ fn equals(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     Ok(Value::Bool(other.is_some_and(|o| u.equals(&o, mode))))
 }
 
+#[allow(clippy::many_single_char_names)] // a: args, u: URL, o: object, ...
 fn resolve(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let u = this(vm, a)?;
     let cls = php_vm::object::class_of(&a.this_obj()).clone();
     let o = vm.new_object(&cls)?;
+    memory::check(vm, held(&u) + memory::whatwg(a.str(0).as_bytes()))?;
     match u.resolve(a.str(0).as_bytes()) {
         Ok((url, soft)) => {
             pass_errors(vm, a, 1, &soft)?;
@@ -240,6 +263,9 @@ fn unserialize(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         return Err(common::throw_invalid_serialization(vm, URL_CLASS, true));
     }
     let data = a.array(0);
+    if let Some(s) = common::unserialize_uri(&data) {
+        memory::check(vm, memory::whatwg(&s))?;
+    }
     let url = common::unserialize_uri(&data)
         .and_then(|s| WhatWgUrl::unserialize(&s).ok())
         .filter(|_| common::unserialize_props_ok(&data));
@@ -256,6 +282,7 @@ fn builder_this(a: &Args) -> Value {
     Value::Object(a.this_obj())
 }
 
+#[allow(clippy::unnecessary_wraps)] // the native function signature
 fn b_reset(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let o = a.this_obj();
     for p in [
@@ -288,36 +315,44 @@ fn b_set_scheme(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     b_set(vm, a, "scheme", || api::validate_scheme(v.as_bytes()))
 }
 
+#[allow(clippy::unnecessary_wraps)] // the native hook/function signature
 fn b_set_username(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     b_set(vm, a, "username", || Ok(()))
 }
 
+#[allow(clippy::unnecessary_wraps)] // the native hook/function signature
 fn b_set_password(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     b_set(vm, a, "password", || Ok(()))
 }
 
 fn b_set_host(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let v = str_or_null(a.opt(0));
-    b_set(vm, a, "host", || v.as_deref().map_or(Ok(()), api::validate_host))
+    let v = str_or_null(a, 0);
+    b_set(vm, a, "host", || {
+        v.as_deref().map_or(Ok(()), api::validate_host)
+    })
 }
 
 fn b_set_port(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let v = int_or_null(a.opt(0));
+    let v = int_or_null(a, 0);
     b_set(vm, a, "port", || v.map_or(Ok(()), api::validate_port))
 }
 
+#[allow(clippy::unnecessary_wraps)] // the native hook/function signature
 fn b_set_path(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     b_set(vm, a, "path", || Ok(()))
 }
 
+#[allow(clippy::unnecessary_wraps)] // the native hook/function signature
 fn b_set_query(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     b_set(vm, a, "query", || Ok(()))
 }
 
+#[allow(clippy::unnecessary_wraps)] // the native hook/function signature
 fn b_set_fragment(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     b_set(vm, a, "fragment", || Ok(()))
 }
 
+#[allow(clippy::many_single_char_names)] // a: args, u: URL, o: object, ...
 fn b_build(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let o = a.this_obj();
     let s = |n: &str| match raw_prop(&o, n) {
@@ -338,6 +373,15 @@ fn b_build(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         _ => None,
     };
     let base = url_arg(a, 0);
+    let parts = [&scheme, &path];
+    let opt_parts = [&username, &password, &host, &query, &fragment];
+    let cost = parts.iter().map(|p| memory::whatwg(p)).sum::<u64>()
+        + opt_parts
+            .iter()
+            .filter_map(|p| p.as_deref())
+            .map(memory::whatwg)
+            .sum::<u64>();
+    memory::check(vm, cost)?;
     let c = api::Components {
         scheme: &scheme,
         username: username.as_deref(),
@@ -374,11 +418,11 @@ fn exception_construct(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     if a.has(0) {
         vm.set_property_raw(&o, "message", Value::Str(a.str(0)));
     }
-    if a.has(2) {
+    if a.has(2) && a.int(2) != 0 {
         vm.set_property_raw(&o, "code", Value::Int(a.int(2)));
     }
-    if a.has(3) {
-        vm.set_property_raw(&o, "previous", a.at(3));
+    if let Some(previous) = a.opt(3) {
+        vm.set_property_raw(&o, "previous", previous);
     }
     let errors = if a.has(1) {
         let errors = a.array(1);
@@ -412,6 +456,7 @@ fn validation_error_construct(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 /// `Uri\WhatWg\url_percent_encode(string $input, UrlPercentEncodingMode
 /// $mode): string`.
+#[allow(clippy::unnecessary_wraps)] // the native hook/function signature
 fn url_percent_encode(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let name = common::enum_case_name(vm, &a.at(1))?;
     let mode = name
@@ -437,14 +482,30 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
         .prop("query", p, Some("?string"), Some(Value::Null))
         .prop("fragment", p, Some("?string"), Some(Value::Null))
         .method("reset(): static", acc::PUBLIC, b_reset)
-        .method("setScheme(string $scheme): static", acc::PUBLIC, b_set_scheme)
-        .method("setUsername(?string $username): static", acc::PUBLIC, b_set_username)
-        .method("setPassword(?string $password): static", acc::PUBLIC, b_set_password)
+        .method(
+            "setScheme(string $scheme): static",
+            acc::PUBLIC,
+            b_set_scheme,
+        )
+        .method(
+            "setUsername(?string $username): static",
+            acc::PUBLIC,
+            b_set_username,
+        )
+        .method(
+            "setPassword(?string $password): static",
+            acc::PUBLIC,
+            b_set_password,
+        )
         .method("setHost(?string $host): static", acc::PUBLIC, b_set_host)
         .method("setPort(?int $port): static", acc::PUBLIC, b_set_port)
         .method("setPath(string $path): static", acc::PUBLIC, b_set_path)
         .method("setQuery(?string $query): static", acc::PUBLIC, b_set_query)
-        .method("setFragment(?string $fragment): static", acc::PUBLIC, b_set_fragment)
+        .method(
+            "setFragment(?string $fragment): static",
+            acc::PUBLIC,
+            b_set_fragment,
+        )
         .method(
             "build(?Uri\\WhatWg\\Url $baseUrl = null, &$softErrors = null): Uri\\WhatWg\\Url",
             acc::PUBLIC,
@@ -538,4 +599,3 @@ pub(crate) fn register_validation_error(m: &mut ModuleBuilder<'_>) {
         )
         .register(m.vm());
 }
-

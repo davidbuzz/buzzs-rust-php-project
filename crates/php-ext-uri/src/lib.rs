@@ -13,6 +13,7 @@
 //! `php-ext-random` does for `Random\IntervalBoundary`).
 
 mod common;
+mod memory;
 mod rfc3986;
 mod whatwg;
 
