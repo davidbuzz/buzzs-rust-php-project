@@ -13,8 +13,8 @@ use php_ext_xsl::access::{ImportedNode, XmlSource};
 use php_libxml::tree::Node;
 use php_xsl::XmlDocument;
 
-use crate::hooks::direct;
 use crate::foreign;
+use crate::hooks::direct;
 use crate::host::{rt_throw, sxe_of, LentHost};
 
 /// Runs a library call inside [`php_ext_xml::libxml::run`] (stream hooks,

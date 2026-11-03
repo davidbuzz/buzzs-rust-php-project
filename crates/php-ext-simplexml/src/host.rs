@@ -67,7 +67,9 @@ pub struct SxeState {
 
 /// Attaches `sxe` to `o`.
 pub fn set_sxe(o: &Obj, sxe: SxeRef) {
-    let keep = sxe.document().and_then(|d| crate::foreign::keepalive_for(&d));
+    let keep = sxe
+        .document()
+        .and_then(|d| crate::foreign::keepalive_for(&d));
     php_vm::object::set_internal(o, SxeState { sxe, _keep: keep });
 }
 

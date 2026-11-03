@@ -13,5 +13,8 @@ php-xmlreader = { path = "../php-xmlreader" }
 php-ext-xml = { path = "../php-ext-xml" }
 php-ext-streams = { path = "../php-ext-streams" }
 
+[dev-dependencies]
+libc = "0.2"
+
 [lints]
 workspace = true

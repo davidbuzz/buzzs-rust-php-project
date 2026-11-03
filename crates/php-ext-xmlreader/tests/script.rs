@@ -24,6 +24,32 @@ impl Write for Sink {
     }
 }
 
+/// Keeps the test process's descriptors 0-2 usable: dropping the VM
+/// closes the `STDIN`/`STDOUT`/`STDERR` stream resources, which really
+/// close their descriptors (GH-8827 semantics).
+struct StdioGuard([libc::c_int; 3]);
+
+impl StdioGuard {
+    fn save() -> Self {
+        // SAFETY: dup() of the standard descriptors has no memory effects.
+        Self([0, 1, 2].map(|fd| unsafe { libc::dup(fd) }))
+    }
+}
+
+impl Drop for StdioGuard {
+    fn drop(&mut self) {
+        for (fd, saved) in self.0.iter().enumerate() {
+            if *saved >= 0 {
+                // SAFETY: restores a descriptor we duplicated above.
+                unsafe {
+                    libc::dup2(*saved, libc::c_int::try_from(fd).unwrap_or(0));
+                    libc::close(*saved);
+                }
+            }
+        }
+    }
+}
+
 /// Runs `code` (without `<?php`) and returns its output.
 fn run(code: &str) -> String {
     let sink = Sink::default();
@@ -31,9 +57,11 @@ fn run(code: &str) -> String {
     let xml = php_ext_xml::Xml;
     let reader = php_ext_xmlreader::XmlReaderExt;
     let exts: [&dyn Extension; 3] = [&streams, &xml, &reader];
+    let saved = StdioGuard::save();
     let mut vm = Vm::with_extensions(&VmOptions::default(), Box::new(sink.clone()), &exts);
     vm.run_script(format!("<?php {code}").as_bytes(), "test.php");
     drop(vm);
+    drop(saved);
     let out = sink.0.borrow().clone();
     String::from_utf8_lossy(&out).into_owned()
 }

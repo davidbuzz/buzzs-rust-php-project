@@ -17,6 +17,7 @@ php-libxml = { path = "../php-libxml" }
 php-xsl = { path = "../php-xsl" }
 
 [dev-dependencies]
+libc = "0.2"
 php-ext-spl = { path = "../php-ext-spl" }
 php-ext-json = { path = "../php-ext-json" }
 php-ext-stdarr = { path = "../php-ext-stdarr" }
