@@ -51,7 +51,7 @@ mod traverse;
 #[cfg(test)]
 mod tests;
 
-pub use traverse::{register_traverse, GcTraverse, GcVisitor};
+pub use traverse::{register_traverse, register_traverse_with, GcTraverse, GcVisitor};
 
 use crate::object::ObjBox;
 use crate::vm::{Vm, VmResult};
@@ -103,11 +103,17 @@ impl std::fmt::Debug for RootProvider {
 struct RootBuffer {
     entries: Vec<Weak<dyn PhpObject>>,
     index: HashMap<usize, usize>,
+    /// Compact (drop dead entries) when `entries` grows past this, so that
+    /// the buffer stays bounded while no collection runs (GC disabled).
+    compact_at: usize,
 }
 
 impl RootBuffer {
     /// Buffers `o`; `false` if it already is.
     fn push(&mut self, o: &Obj) -> bool {
+        if self.entries.len() >= self.compact_at.max(4096) {
+            self.compact();
+        }
         let addr = o.addr();
         if let Some(&i) = self.index.get(&addr) {
             if let Some(e) = self.entries.get(i) {
@@ -124,6 +130,15 @@ impl RootBuffer {
         self.index.insert(addr, self.entries.len());
         self.entries.push(Rc::downgrade(o.rc()));
         true
+    }
+
+    fn compact(&mut self) {
+        self.entries.retain(|e| e.strong_count() > 0);
+        self.index.clear();
+        for (i, e) in self.entries.iter().enumerate() {
+            self.index.insert(e.as_ptr().cast::<u8>() as usize, i);
+        }
+        self.compact_at = self.entries.len() * 2;
     }
 
     fn live_len(&self) -> usize {

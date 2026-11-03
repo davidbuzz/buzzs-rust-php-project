@@ -1,0 +1,17 @@
+diff --git a/crates/php-vm/src/builtins/mod.rs b/crates/php-vm/src/builtins/mod.rs
+index 7fe6a5f..b31e853 100644
+--- a/crates/php-vm/src/builtins/mod.rs
++++ b/crates/php-vm/src/builtins/mod.rs
+@@ -80,6 +80,12 @@ pub(crate) fn register_all(vm: &mut Vm) {
+     crate::weakref::register(vm);
+     core::register(vm);
+     crate::gc::register(vm);
++    crate::gc::add_root_provider(crate::gc::RootProvider {
++        take: php_runtime::ref_roots::take,
++        len: php_runtime::ref_roots::len,
++        set_recording: php_runtime::ref_roots::set_recording,
++    });
++    php_runtime::ref_roots::set_notify(Some(crate::gc::note_possible_root));
+     headers::register(vm);
+     var::register(vm);
+     output::register(vm);

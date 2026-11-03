@@ -171,3 +171,49 @@ fn exceptions_from_destructors_are_chained() {
     );
     assert_eq!(out, "bool(true)\n");
 }
+
+#[test]
+#[ignore = "needs the php-runtime reference roots of gc-proposals"]
+fn reference_array_cycle() {
+    let out = run("<?php $a = []; $a[] = &$a; unset($a); var_dump(gc_collect_cycles());");
+    assert_eq!(out, "int(1)\n");
+}
+
+#[test]
+fn destructor_objects_freed_by_rerun() {
+    // php-src's gc_017: destructors unlink the nodes; only the root
+    // object is left for the re-run.
+    let out = run(
+        "<?php class N { public $name; public $children; public $parent;\n\
+         function __construct($n) { $this->name = $n; }\n\
+         function insert($c) { $c->parent = $this; $this->children[] = $c; }\n\
+         function __destruct() { echo $this->name; unset($this->name, $this->children, $this->parent); } }\n\
+         $a = new N('A'); $b = new N('B'); $c = new N('C'); $a->insert($b); $a->insert($c);\n\
+         unset($a, $b, $c); echo ' ', gc_collect_cycles(), \"\\n\";",
+    );
+    assert_eq!(out, " ABC1\n");
+}
+
+#[test]
+fn nested_data_of_destructor_object_survives_pass() {
+    // php-src's bug69446: the destructor resurrects its object; the cycle
+    // holding it is freed, the object and its data are kept.
+    let out = run(
+        "<?php class Bad { public $x; function __destruct() { $GLOBALS['bar'] = $this; } }\n\
+         $foo = new stdClass; $foo->foo = $foo; $foo->bad = new Bad; $foo->bad->x = new stdClass;\n\
+         unset($foo); var_dump(gc_collect_cycles()); var_dump($bar->x instanceof stdClass);",
+    );
+    assert_eq!(out, "int(1)\nbool(true)\n");
+}
+
+#[test]
+#[ignore = "needs the Fiber traversal of gc-proposals (fiber.rs)"]
+fn fiber_callback_cycle() {
+    // php-src's fibers/gc-cycle-callback.
+    let out = run(
+        "<?php $ref = new class { public $fiber; function __destruct() { echo \"DTOR\\n\"; } };\n\
+         $fiber = new Fiber(function () use ($ref) {}); $ref->fiber = $fiber;\n\
+         $fiber = null; $ref = null; echo \"COLLECT\\n\"; gc_collect_cycles(); echo \"DONE\\n\";",
+    );
+    assert_eq!(out, "COLLECT\nDTOR\nDONE\n");
+}

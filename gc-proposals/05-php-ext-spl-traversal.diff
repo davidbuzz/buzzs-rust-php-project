@@ -1,0 +1,47 @@
+diff --git a/crates/php-ext-spl/src/dispatch.rs b/crates/php-ext-spl/src/dispatch.rs
+index c6722d0..00e8587 100644
+--- a/crates/php-ext-spl/src/dispatch.rs
++++ b/crates/php-ext-spl/src/dispatch.rs
+@@ -287,6 +287,7 @@ fn register_class(vm: &mut Vm, c: &'static ClassDef) {
+ /// interfaces first. Returns the names of the classes that were already
+ /// registered (by the VM or another extension).
+ pub fn register_classes(vm: &mut Vm) -> Vec<&'static str> {
++    crate::hooks::register_gc();
+     let mut skipped = Vec::new();
+     let mut pending: Vec<&'static ClassDef> = Vec::new();
+     for c in php_spl::classes::class_table() {
+diff --git a/crates/php-ext-spl/src/hooks.rs b/crates/php-ext-spl/src/hooks.rs
+index bcb0e34..96c977e 100644
+--- a/crates/php-ext-spl/src/hooks.rs
++++ b/crates/php-ext-spl/src/hooks.rs
+@@ -54,6 +54,30 @@ fn stateful_base(cls: &Rc<Class>) -> Option<&'static str> {
+     base
+ }
+ 
++/// `get_gc` of the stateful SPL classes (`spl_array_get_gc`,
++/// `spl_object_storage_get_gc`, `spl_fixedarray_get_gc`, ...): reports the
++/// values the state owns to the cycle collector. State shared with a live
++/// native iterator is not reported (the iterator co-owns it).
++fn gc_traverse(st: &Rc<php_spl::SplObject>, v: &mut php_vm::gc::GcVisitor<'_>) {
++    if Rc::strong_count(st) != 1 {
++        return;
++    }
++    let r = st.with(|s| match s {
++        php_spl::SplState::Array(a) => v.value(&a.array),
++        php_spl::SplState::Storage(s) => v.table(&s.storage),
++        php_spl::SplState::FixedArray(f) => v.values(&f.elements),
++        _ => {}
++    });
++    if r.is_err() {
++        v.opaque();
++    }
++}
++
++/// Registers [`gc_traverse`] for the SPL state type.
++pub fn register_gc() {
++    php_vm::gc::register_traverse_with::<Rc<php_spl::SplObject>>(gc_traverse);
++}
++
+ /// `create_object`: attaches the state of the nearest stateful SPL
+ /// ancestor.
+ #[allow(clippy::unnecessary_wraps)] // signature fixed by `ClassHooks::create`

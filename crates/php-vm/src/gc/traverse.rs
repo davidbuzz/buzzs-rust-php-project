@@ -96,6 +96,17 @@ impl<'a> GcVisitor<'a> {
         self.graph.cond_edge(self.from, key, v);
     }
 
+    /// The values held by a suspended frame (generator or fiber) the
+    /// state owns.
+    pub fn frame(&mut self, f: &Frame) {
+        frame(self, f);
+    }
+
+    /// The values held by a prepared call the state owns.
+    pub fn pending_call(&mut self, c: &PendingCall) {
+        pending_call(self, c);
+    }
+
     /// Declares that the state holds references that cannot be reported
     /// (e.g. a native stack): the object is kept alive.
     pub fn opaque(&mut self) {
@@ -111,29 +122,44 @@ pub trait GcTraverse: Any {
     fn gc_traverse(&self, v: &mut GcVisitor<'_>);
 }
 
-type TraverseFn = fn(&dyn Any, &mut GcVisitor<'_>);
+type TraverseFn = Rc<dyn Fn(&dyn Any, &mut GcVisitor<'_>)>;
 
 thread_local! {
     static REGISTRY: RefCell<HashMap<TypeId, TraverseFn>> = RefCell::new(HashMap::new());
 }
 
-fn traverse_as<T: GcTraverse>(state: &dyn Any, v: &mut GcVisitor<'_>) {
-    if let Some(s) = state.downcast_ref::<T>() {
-        s.gc_traverse(v);
-    }
-}
-
 /// Registers `T` (stored with `object::set_internal`) as traversable.
 pub fn register_traverse<T: GcTraverse>() {
+    register_traverse_with::<T>(T::gc_traverse);
+}
+
+/// Registers a traversal function for native state of type `T` — for
+/// state types defined in another crate, which cannot implement
+/// [`GcTraverse`] there (orphan rule). Same contract as
+/// [`GcTraverse::gc_traverse`].
+pub fn register_traverse_with<T: Any>(f: fn(&T, &mut GcVisitor<'_>)) {
+    insert::<T>(f, true);
+}
+
+fn insert<T: Any>(f: fn(&T, &mut GcVisitor<'_>), replace: bool) {
+    let erased: TraverseFn = Rc::new(move |state: &dyn Any, v: &mut GcVisitor<'_>| {
+        if let Some(s) = state.downcast_ref::<T>() {
+            f(s, v);
+        }
+    });
     REGISTRY.with(|r| {
-        r.borrow_mut()
-            .insert(TypeId::of::<T>(), traverse_as::<T> as TraverseFn);
+        let mut r = r.borrow_mut();
+        if replace {
+            r.insert(TypeId::of::<T>(), erased);
+        } else {
+            r.entry(TypeId::of::<T>()).or_insert(erased);
+        }
     });
 }
 
 pub(super) fn lookup(t: TypeId) -> Option<TraverseFn> {
     REGISTRY
-        .try_with(|r| r.try_borrow().ok().and_then(|r| r.get(&t).copied()))
+        .try_with(|r| r.try_borrow().ok().and_then(|r| r.get(&t).cloned()))
         .ok()
         .flatten()
 }
@@ -144,10 +170,12 @@ pub(super) fn is_traversed(state: &dyn Any) -> bool {
     lookup(state.type_id()).is_some()
 }
 
+/// The engine's own state types. A module may register a more complete
+/// traversal for its type (before or after): it is kept.
 pub(super) fn register_engine_traversals() {
-    register_traverse::<ClosureData>();
-    register_traverse::<GenData>();
-    register_traverse::<FiberData>();
+    insert::<ClosureData>(ClosureData::gc_traverse, false);
+    insert::<GenData>(GenData::gc_traverse, false);
+    insert::<FiberData>(FiberData::gc_traverse, false);
 }
 
 /// Statics storage shared through an `Rc`: owned only when unshared.
@@ -250,9 +278,10 @@ impl GcTraverse for GenData {
     }
 }
 
-/// `zend_fiber_object_gc`: the callable, return value and the frames of a
-/// suspended fiber. (Rust temporaries on the fiber's native stack stay
-/// invisible, i.e. are treated as external references.)
+/// `zend_fiber_object_gc`, partially: the callable, return value and the
+/// frames of a suspended fiber (the resolved call is private to `fiber.rs`,
+/// which can register a complete traversal; Rust temporaries on the fiber's
+/// native stack stay invisible, i.e. are treated as external references).
 impl GcTraverse for FiberData {
     fn gc_traverse(&self, v: &mut GcVisitor<'_>) {
         v.value(&self.callable);

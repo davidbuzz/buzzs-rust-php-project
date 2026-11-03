@@ -108,7 +108,9 @@ impl Vm {
             };
             total += pass.count;
             with_state(|s| {
-                if pass.ran {
+                // The re-run after destructors always finds the destructor
+                // objects buffered as roots in php-src.
+                if pass.ran || rerun {
                     s.runs += 1;
                 }
                 s.collected += u64::try_from(pass.count).unwrap_or(0);
