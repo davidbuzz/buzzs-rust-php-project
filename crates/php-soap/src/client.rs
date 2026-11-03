@@ -316,7 +316,7 @@ pub fn client_sdl(host: &mut dyn SoapHost, this: &Obj) -> Option<Rc<Sdl>> {
     let state = host.soap_state(&o)?;
     match &*state {
         SoapObject::Sdl(cell) => cell.borrow().clone(),
-        SoapObject::Client(_) => None,
+        _ => None,
     }
 }
 
@@ -324,7 +324,7 @@ fn client_typemap(host: &mut dyn SoapHost, this: &Obj) -> Option<Rc<Typemap>> {
     let state = host.soap_state(this)?;
     match &*state {
         SoapObject::Client(cell) => cell.borrow().clone(),
-        SoapObject::Sdl(_) => None,
+        _ => None,
     }
 }
 

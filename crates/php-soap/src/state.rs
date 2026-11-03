@@ -5,6 +5,7 @@ use std::rc::Rc;
 
 use crate::encoding::Typemap;
 use crate::sdl::Sdl;
+use crate::server::Service;
 
 /// State attached to objects of the SOAP classes.
 #[derive(Debug)]
@@ -13,6 +14,8 @@ pub enum SoapObject {
     Client(RefCell<Option<Rc<Typemap>>>),
     /// `Soap\Sdl`: the loaded service description.
     Sdl(RefCell<Option<Rc<Sdl>>>),
+    /// `soap_server_object`: the service.
+    Server(RefCell<Option<Service>>),
 }
 
 /// Creates the state for a new object whose closest internal SOAP class is
@@ -22,6 +25,7 @@ pub fn create_state(class: &str) -> Option<Rc<SoapObject>> {
     match class.to_ascii_lowercase().as_str() {
         "soapclient" => Some(Rc::new(SoapObject::Client(RefCell::new(None)))),
         "soap\\sdl" => Some(Rc::new(SoapObject::Sdl(RefCell::new(None)))),
+        "soapserver" => Some(Rc::new(SoapObject::Server(RefCell::new(None)))),
         _ => None,
     }
 }

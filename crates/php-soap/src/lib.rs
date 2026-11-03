@@ -34,3 +34,6 @@ pub fn client_type_name(v: &php_runtime::Value) -> &'static str {
 
 /// The PHP version reported in the default `User-Agent`.
 pub const PHP_VERSION: &str = "8.5.0-dev";
+pub mod server;
+pub mod classes;
+pub mod objects;
