@@ -98,8 +98,7 @@ fn fopen(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 }
 
 fn fclose(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let r = res::resource_arg(vm, a, 0)?;
-    let cell = res::stream_of_resource(vm, a, &r)?;
+    let (r, cell) = res::stream_arg_res(vm, a, 0)?;
     let no_fclose = cell
         .get()
         .is_some_and(|s| s.has_flag(php_streams::stream::flags::NO_FCLOSE));
@@ -803,7 +802,7 @@ pub fn register(m: &mut ModuleBuilder<'_>) {
     .function("rename(string $from, string $to, $context = null): bool", rename)
     .function("copy(string $from, string $to, $context = null): bool", copy)
     .function(
-        "mkdir(string $directory, int $permissions = 0777, bool $recursive = false, $context = null): bool",
+        "mkdir(string $directory, int $permissions = 511, bool $recursive = false, $context = null): bool",
         mkdir,
     )
     .function("rmdir(string $directory, $context = null): bool", rmdir)
@@ -817,11 +816,11 @@ pub fn register(m: &mut ModuleBuilder<'_>) {
     .function("dirname(string $path, int $levels = 1): string", dirname)
     .function("pathinfo(string $path, int $flags = PATHINFO_ALL): array|string", pathinfo)
     .function(
-        "fgetcsv($stream, ?int $length = null, string $separator = \",\", string $enclosure = \"\\\"\", string $escape = \"\\\\\"): array|false",
+        "fgetcsv($stream, ?int $length = null, string $separator = UNKNOWN, string $enclosure = UNKNOWN, string $escape = UNKNOWN): array|false",
         fgetcsv,
     )
     .function(
-        "fputcsv($stream, array $fields, string $separator = \",\", string $enclosure = \"\\\"\", string $escape = \"\\\\\", string $eol = \"\\n\"): int|false",
+        "fputcsv($stream, array $fields, string $separator = UNKNOWN, string $enclosure = UNKNOWN, string $escape = UNKNOWN, string $eol = UNKNOWN): int|false",
         fputcsv,
     )
     .function(

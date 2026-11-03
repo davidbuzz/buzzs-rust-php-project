@@ -41,7 +41,9 @@ fn register_std_streams(m: &mut ModuleBuilder<'_>) {
     .into_iter()
     .enumerate()
     {
-        let s = php_streams::open::fopen(url.as_bytes(), mode, false, None);
+        let s = bridge::enter(m.vm(), || {
+            php_streams::open::fopen(url.as_bytes(), mode, false, None)
+        });
         let _ = php_streams::diag::take();
         if let Some(mut s) = s {
             s.add_flags(flags::NO_CLOSE);

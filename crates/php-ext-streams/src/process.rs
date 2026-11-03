@@ -72,8 +72,7 @@ fn exit_code(c: Option<Child>) -> i64 {
 }
 
 fn pclose(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let r = res::resource_arg(vm, a, 0)?;
-    let cell = res::stream_of_resource(vm, a, &r)?;
+    let (r, cell) = res::stream_arg_res(vm, a, 0)?;
     if let Some(mut s) = cell.take() {
         bridge::run(vm, || s.close())?;
     }

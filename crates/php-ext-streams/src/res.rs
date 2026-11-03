@@ -327,10 +327,22 @@ pub fn resource_arg(vm: &mut Vm, a: &Args, n: usize) -> VmResult<Resource> {
     }
 }
 
-/// `php_stream_from_zval`: argument `n` as an open stream.
+/// `PHP_Z_PARAM_STREAM`: argument `n` as an open stream.
 pub fn stream_arg(vm: &mut Vm, a: &Args, n: usize) -> VmResult<Rc<StreamCell>> {
     let r = resource_arg(vm, a, n)?;
-    stream_of_resource(vm, a, &r)
+    match cell_of(&r) {
+        Some(c) if !r.is_closed() && !c.is_closed() => Ok(c),
+        _ => Err(a.type_error(vm, n + 1, "must be an open stream resource")),
+    }
+}
+
+/// `PHP_Z_PARAM_STREAM` returning the resource too.
+pub fn stream_arg_res(vm: &mut Vm, a: &Args, n: usize) -> VmResult<(Resource, Rc<StreamCell>)> {
+    let r = resource_arg(vm, a, n)?;
+    match cell_of(&r) {
+        Some(c) if !r.is_closed() && !c.is_closed() => Ok((r, c)),
+        _ => Err(a.type_error(vm, n + 1, "must be an open stream resource")),
+    }
 }
 
 /// The open stream behind a resource, or the "not a valid stream

@@ -4,7 +4,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use php_runtime::{Obj, Resource, Value, ZArray};
+use php_runtime::{Resource, Value, ZArray};
 use php_streams::open::{self, ScandirSort};
 use php_streams::stream::flags;
 use php_streams::wrapper::REPORT_ERRORS;
@@ -81,9 +81,21 @@ fn dir_from_arg(vm: &mut Vm, a: &Args) -> VmResult<(Resource, Rc<StreamCell>)> {
                 None => return Err(vm.throw("TypeError", "No resource supplied")),
             }
         }
-        Some(_) => res::resource_arg(vm, a, 0)?,
+        Some(_) => {
+            let pair = res::stream_arg_res(vm, a, 0)?;
+            return dir_check(vm, a, pair);
+        }
     };
     let cell = res::stream_of_resource(vm, a, &r)?;
+    dir_check(vm, a, (r, cell))
+}
+
+/// Rejects streams that are not directory handles.
+fn dir_check(
+    vm: &mut Vm,
+    a: &Args,
+    (r, cell): (Resource, Rc<StreamCell>),
+) -> VmResult<(Resource, Rc<StreamCell>)> {
     let is_dir = cell.get().is_some_and(|s| s.has_flag(flags::IS_DIR));
     if !is_dir {
         return Err(a.type_error(vm, 1, "must be a valid Directory resource"));
@@ -245,6 +257,32 @@ fn glob_fn(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     }
 }
 
+fn chdir(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let path = path_arg(vm, a, 0)?;
+    let allowed = bridge::run(vm, || paths::check_open_basedir(&path))?;
+    if !allowed {
+        return Ok(Value::Bool(false));
+    }
+    if let Err(e) = std::env::set_current_dir(php_streams::util::os_path(&path)) {
+        let errno = e.raw_os_error().unwrap_or(0);
+        vm.php_warning(&format!(
+            "{} (errno {errno})",
+            php_streams::sys::strerror(errno)
+        ))?;
+        return Ok(Value::Bool(false));
+    }
+    state::clear_stat_cache();
+    Ok(Value::Bool(true))
+}
+
+fn realpath_cache_get(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
+    Ok(Value::Array(ZArray::new()))
+}
+
+fn realpath_cache_size(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
+    Ok(Value::Int(0))
+}
+
 /// Registers the functions, constants and the `Directory` class.
 pub fn register(m: &mut ModuleBuilder<'_>) {
     m.function("opendir(string $directory, $context = null)", opendir)
@@ -256,7 +294,10 @@ pub fn register(m: &mut ModuleBuilder<'_>) {
             "scandir(string $directory, int $sorting_order = SCANDIR_SORT_ASCENDING, $context = null): array|false",
             scandir,
         )
-        .function("glob(string $pattern, int $flags = 0): array|false", glob_fn);
+        .function("glob(string $pattern, int $flags = 0): array|false", glob_fn)
+        .function("chdir(string $directory): bool", chdir)
+        .function("realpath_cache_get(): array", realpath_cache_get)
+        .function("realpath_cache_size(): int", realpath_cache_size);
     for (name, v) in [
         ("GLOB_BRACE", glob::GLOB_BRACE),
         ("GLOB_ERR", glob::GLOB_ERR),
@@ -276,16 +317,10 @@ pub fn register(m: &mut ModuleBuilder<'_>) {
         .flags(class_flags::FINAL | class_flags::NOT_SERIALIZABLE | class_flags::NO_CLONE)
         .prop("path", acc::PUBLIC | acc::READONLY, Some("string"), None)
         .prop("handle", acc::PUBLIC | acc::READONLY, Some("mixed"), None)
-        .method("__construct()", acc::PRIVATE, m_construct)
+        .method("__construct()", acc::PUBLIC, m_construct)
         .method("close(): void", acc::PUBLIC, m_close)
         .method("rewind(): void", acc::PUBLIC, m_rewind)
         .method("read(): string|false", acc::PUBLIC, m_read)
         .register(m.vm());
     DIRECTORY_CLASS.with(|c| *c.borrow_mut() = Some(cls));
-}
-
-/// Whether `o` is a `Directory` instance (for tests).
-#[allow(dead_code)]
-fn is_directory(o: &Obj) -> bool {
-    o.class_name().as_bytes() == b"Directory"
 }

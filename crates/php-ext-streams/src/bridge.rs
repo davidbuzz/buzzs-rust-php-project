@@ -95,6 +95,11 @@ pub fn take_pending() -> Option<Throw> {
 /// Emits the queued library diagnostics through the VM.
 pub fn flush_diags(vm: &mut Vm) {
     for d in diag::take() {
+        // php_stream_display_wrapper_errors() stays silent when an
+        // exception has already been thrown.
+        if d.code == php_streams::diag::StreamErrorCode::OpenFailed && has_pending() {
+            continue;
+        }
         let text = d.text();
         let r = match d.severity {
             Severity::Warning => vm.php_warning(&text),
