@@ -347,6 +347,10 @@ name = "php-cli"
 version = "0.1.0"
 dependencies = [
  "libc",
+ "php-ext-json",
+ "php-ext-pcre",
+ "php-ext-stdarr",
+ "php-ext-stdstr",
  "php-vm",
 ]
 
@@ -367,6 +371,8 @@ version = "0.1.0"
 dependencies = [
  "cc",
  "php-libxml",
+ "php-parser",
+ "phpt-runner",
 ]
 
 [[package]]
@@ -389,7 +395,9 @@ dependencies = [
 name = "php-ext-date"
 version = "0.1.0"
 dependencies = [
+ "php-date",
  "php-runtime",
+ "php-support",
  "php-vm",
 ]
 
@@ -413,6 +421,7 @@ dependencies = [
 name = "php-ext-json"
 version = "0.1.0"
 dependencies = [
+ "php-json",
  "php-runtime",
  "php-vm",
 ]
@@ -429,6 +438,8 @@ dependencies = [
 name = "php-ext-pcre"
 version = "0.1.0"
 dependencies = [
+ "libc",
+ "php-pcre",
  "php-runtime",
  "php-vm",
 ]
@@ -453,6 +464,16 @@ dependencies = [
 name = "php-ext-stdarr"
 version = "0.1.0"
 dependencies = [
+ "php-random",
+ "php-runtime",
+ "php-stdarr",
+ "php-vm",
+]
+
+[[package]]
+name = "php-ext-stdmisc"
+version = "0.1.0"
+dependencies = [
  "php-runtime",
  "php-vm",
 ]
@@ -462,6 +483,8 @@ name = "php-ext-stdstr"
 version = "0.1.0"
 dependencies = [
  "php-runtime",
+ "php-stdstr",
+ "php-support",
  "php-vm",
 ]
 
@@ -469,7 +492,11 @@ dependencies = [
 name = "php-ext-streams"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "php-runtime",
+ "php-stdstr",
+ "php-streams",
+ "php-support",
  "php-vm",
 ]
 
@@ -637,8 +664,11 @@ name = "php-spl"
 version = "0.1.0"
 dependencies = [
  "php-parser",
+ "php-pcre",
  "php-runtime",
  "php-stdarr",
+ "php-stdstr",
+ "php-streams",
  "php-support",
 ]
 
