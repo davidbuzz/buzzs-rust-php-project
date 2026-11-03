@@ -450,6 +450,27 @@ impl<C: Clone> XsltProcessor<C> {
         Ok(result.map(|doc| (doc, style)))
     }
 
+    /// `transformToDoc($document, $returnClass)`'s class check: the
+    /// `$returnClass` must be an instance of the root of the input
+    /// object's class hierarchy (`DOMNode`/`Dom\Node`/`SimpleXMLElement`).
+    /// `input_class` is the input object's class, `input_root` the root of
+    /// its hierarchy, `is_subclass(a, b)` is `instanceof_function(a, b)`.
+    pub fn check_return_class(
+        input_class: &str,
+        input_root: &str,
+        return_class: &str,
+        is_subclass: impl Fn(&str, &str) -> bool,
+    ) -> XslResult<()> {
+        if is_subclass(return_class, input_root) {
+            Ok(())
+        } else {
+            Err(XslError::incompatible_return_class(
+                input_class,
+                return_class,
+            ))
+        }
+    }
+
     // ------------------------------------------------------------ parameters
 
     /// `setParameter($namespace, $name, $value)` with a string name.

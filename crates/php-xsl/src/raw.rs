@@ -675,10 +675,12 @@ pub(crate) fn save_to_string(
 ) -> (c_int, Option<Vec<u8>>) {
     let mut ptr: *mut u8 = std::ptr::null_mut();
     let mut len: c_int = 0;
+    let errors = GenericErrorScope::new();
     // SAFETY: live document and stylesheet; ptr receives a fresh buffer.
     let ret = unsafe {
         ffi::xsltSaveResultToString(&raw mut ptr, &raw mut len, result.as_ptr(), style.as_ptr())
     };
+    drop(errors);
     let text = if ptr.is_null() {
         None
     } else {

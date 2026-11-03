@@ -844,7 +844,8 @@ fn modern_dom_auto_registration() {
     // 'urn:test') is applied the way modern DOM stores it (an attribute in
     // the xmlns namespace, whose xmlNs lives outside the tree).
     // SAFETY: plain libxml2 tree construction on a fresh copy we own; the
-    // namespace struct is leaked on purpose (php-dom's ns mapper owns it).
+    // namespace struct is kept in the copy's oldNs list (php-dom's ns
+    // mapper owns it in PHP).
     let clone = unsafe {
         let copy = php_xsl::ffi::xmlCopyDoc(sheet.as_ptr(), 1);
         let root = php_libxml::ffi::xmlDocGetRootElement(copy);
@@ -859,6 +860,9 @@ fn modern_dom_auto_registration() {
             c"test".as_ptr().cast(),
             c"urn:test".as_ptr().cast(),
         );
+        // Freed with the document.
+        (*ns).next = (*copy).oldNs;
+        (*copy).oldNs = ns;
         php_xsl::OwnedDocument::from_raw(std::ptr::NonNull::new(copy).unwrap())
     };
     let input = load_sxe("<root>\n    <hello>World</hello>\n</root>");
@@ -921,4 +925,38 @@ fn processor_is_generic_over_callables() {
     let p: XsltProcessor<u32> = XsltProcessor::new();
     p.register_php_functions_name(b"f", |_| Ok(7)).unwrap();
     assert!(!p.has_stylesheet());
+}
+
+#[test]
+fn get_parameter_strings() {
+    setup(&fixtures());
+    let proc = Proc::new();
+    let get = || {
+        var_dump(
+            &proc
+                .get_parameter(b"", b"foo")
+                .unwrap()
+                .map_or(Value::Bool(false), Value::Str),
+        )
+    };
+    proc.set_parameter(b"", b"foo", Some(b"bar")).unwrap();
+    get();
+    proc.remove_parameter(b"", b"foo").unwrap();
+    get();
+    proc.set_parameter(b"", b"foo", Some("\"abcd\"".repeat(2).as_bytes()))
+        .unwrap();
+    get();
+    proc.remove_parameter(b"", b"foo").unwrap();
+    get();
+    expect("getParameter.phpt", &take_output());
+}
+
+#[test]
+fn phpinfo_section() {
+    setup(&fixtures());
+    // phpinfo() in text mode: "key => value" rows.
+    for (k, v) in php_xsl::class::info_rows() {
+        echo(format!("{k} => {v}\n"));
+    }
+    expect("xsl-phpinfo.phpt", &take_output());
 }
