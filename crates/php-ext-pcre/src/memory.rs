@@ -62,7 +62,9 @@ pub(crate) fn check(vm: &mut Vm, bytes: u64) -> VmResult<()> {
     }
     vm.raise(
         E_ERROR,
-        &format!("Allowed memory size of {limit} bytes exhausted (tried to allocate {bytes} bytes)"),
+        &format!(
+            "Allowed memory size of {limit} bytes exhausted (tried to allocate {bytes} bytes)"
+        ),
     )
 }
 

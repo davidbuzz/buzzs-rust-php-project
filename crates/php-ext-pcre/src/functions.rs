@@ -108,11 +108,9 @@ fn do_match(vm: &mut Vm, a: &Args, global: bool) -> VmResult<Value> {
     match out.result {
         Ok(n) => Ok(Value::Int(i64::try_from(n).unwrap_or(i64::MAX))),
         Err(MatchFailure::InvalidFlags) => Err(a.value_error(vm, 4, "must be a PREG_* constant")),
-        Err(MatchFailure::InvalidOffset) => Err(a.value_error(
-            vm,
-            5,
-            &format!("must be greater than {}", i64::MIN),
-        )),
+        Err(MatchFailure::InvalidOffset) => {
+            Err(a.value_error(vm, 5, &format!("must be greater than {}", i64::MIN)))
+        }
         Err(MatchFailure::Failed) => Ok(Value::Bool(false)),
     }
 }
@@ -235,7 +233,14 @@ fn replace_in_subject(
     let Value::Array(patterns) = regex else {
         let pattern = vm.value_to_string(regex)?;
         let rep = vm.value_to_string(replacement)?;
-        return replace_one(vm, pattern.as_bytes(), rep.as_bytes(), subject, limit, count);
+        return replace_one(
+            vm,
+            pattern.as_bytes(),
+            rep.as_bytes(),
+            subject,
+            limit,
+            count,
+        );
     };
     // php_pcre_replace_array()
     let replacements = match replacement {
@@ -258,7 +263,14 @@ fn replace_in_subject(
             (None, Some(s)) => s.clone(),
             (None, None) => ZStr::from(""),
         };
-        match replace_one(vm, pattern.as_bytes(), rep.as_bytes(), &current, limit, count)? {
+        match replace_one(
+            vm,
+            pattern.as_bytes(),
+            rep.as_bytes(),
+            &current,
+            limit,
+            count,
+        )? {
             Some(r) => current = r,
             None => return Ok(None),
         }
@@ -392,12 +404,28 @@ fn replace_func_in_subject(
 ) -> VmResult<Option<Vec<u8>>> {
     let Value::Array(patterns) = regex else {
         let pattern = vm.value_to_string(regex)?;
-        return replace_func(vm, pattern.as_bytes(), callback, subject, limit, flags, count);
+        return replace_func(
+            vm,
+            pattern.as_bytes(),
+            callback,
+            subject,
+            limit,
+            flags,
+            count,
+        );
     };
     let mut current = subject.to_vec();
     for (_, entry) in entries(patterns) {
         let pattern = vm.value_to_string(&entry)?;
-        match replace_func(vm, pattern.as_bytes(), callback, &current, limit, flags, count)? {
+        match replace_func(
+            vm,
+            pattern.as_bytes(),
+            callback,
+            &current,
+            limit,
+            flags,
+            count,
+        )? {
             Some(r) => current = r,
             None => return Ok(None),
         }
@@ -517,6 +545,7 @@ fn grep_impl(vm: &mut Vm, re: &Regex, input: &ZArray, invert: bool) -> VmResult<
     pending.finish(Value::Array(ZArray::from(out)))
 }
 
+#[allow(clippy::unnecessary_wraps)] // the `NativeFn` signature
 fn preg_quote(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let s = a.str(0);
     let delim = match a.opt(1) {
@@ -527,10 +556,12 @@ fn preg_quote(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     Ok(Value::Str(ZStr::from(out)))
 }
 
+#[allow(clippy::unnecessary_wraps)] // the `NativeFn` signature
 fn preg_last_error(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
     Ok(Value::Int(state::last_error().code()))
 }
 
+#[allow(clippy::unnecessary_wraps)] // the `NativeFn` signature
 fn preg_last_error_msg(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
     Ok(Value::from(state::last_error().message()))
 }

@@ -43,16 +43,34 @@ fn register_constants(m: &mut ModuleBuilder<'_>) {
         ("PREG_OFFSET_CAPTURE", php_pcre::PREG_OFFSET_CAPTURE),
         ("PREG_UNMATCHED_AS_NULL", php_pcre::PREG_UNMATCHED_AS_NULL),
         ("PREG_SPLIT_NO_EMPTY", php_pcre::PREG_SPLIT_NO_EMPTY),
-        ("PREG_SPLIT_DELIM_CAPTURE", php_pcre::PREG_SPLIT_DELIM_CAPTURE),
-        ("PREG_SPLIT_OFFSET_CAPTURE", php_pcre::PREG_SPLIT_OFFSET_CAPTURE),
+        (
+            "PREG_SPLIT_DELIM_CAPTURE",
+            php_pcre::PREG_SPLIT_DELIM_CAPTURE,
+        ),
+        (
+            "PREG_SPLIT_OFFSET_CAPTURE",
+            php_pcre::PREG_SPLIT_OFFSET_CAPTURE,
+        ),
         ("PREG_GREP_INVERT", php_pcre::PREG_GREP_INVERT),
         ("PREG_NO_ERROR", php_pcre::PREG_NO_ERROR),
         ("PREG_INTERNAL_ERROR", php_pcre::PREG_INTERNAL_ERROR),
-        ("PREG_BACKTRACK_LIMIT_ERROR", php_pcre::PREG_BACKTRACK_LIMIT_ERROR),
-        ("PREG_RECURSION_LIMIT_ERROR", php_pcre::PREG_RECURSION_LIMIT_ERROR),
+        (
+            "PREG_BACKTRACK_LIMIT_ERROR",
+            php_pcre::PREG_BACKTRACK_LIMIT_ERROR,
+        ),
+        (
+            "PREG_RECURSION_LIMIT_ERROR",
+            php_pcre::PREG_RECURSION_LIMIT_ERROR,
+        ),
         ("PREG_BAD_UTF8_ERROR", php_pcre::PREG_BAD_UTF8_ERROR),
-        ("PREG_BAD_UTF8_OFFSET_ERROR", php_pcre::PREG_BAD_UTF8_OFFSET_ERROR),
-        ("PREG_JIT_STACKLIMIT_ERROR", php_pcre::PREG_JIT_STACKLIMIT_ERROR),
+        (
+            "PREG_BAD_UTF8_OFFSET_ERROR",
+            php_pcre::PREG_BAD_UTF8_OFFSET_ERROR,
+        ),
+        (
+            "PREG_JIT_STACKLIMIT_ERROR",
+            php_pcre::PREG_JIT_STACKLIMIT_ERROR,
+        ),
     ];
     for (name, v) in ints {
         m.constant(name, Value::Int(v));
