@@ -13,8 +13,15 @@ use php_runtime::RuntimeError;
 /// An aborted operation.
 #[derive(Debug, Clone)]
 pub enum SoapError {
-    /// An `E_ERROR` with its full message (e.g. `"SOAP-ERROR: Encoding: …"`).
+    /// An `E_ERROR` with its full message (e.g. `"SOAP-ERROR: Encoding: …"`);
+    /// the SOAP error handler uses the fault code of the active context.
     Fatal(String),
+    /// An `E_ERROR` raised while `SOAP_GLOBAL(error_code)` was set to a
+    /// specific code (e.g. `"WSDL"` while loading a service description).
+    Coded(&'static str, String),
+    /// `soap_server_fault(code, string)`: a fault response written directly
+    /// by the server (no output capture), followed by a bailout.
+    ServerFault(String, String),
     /// An exception or engine error to propagate unchanged.
     Runtime(RuntimeError),
 }
@@ -31,7 +38,8 @@ impl From<RuntimeError> for SoapError {
 impl std::fmt::Display for SoapError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            SoapError::Fatal(m) => f.write_str(m),
+            SoapError::Fatal(m) | SoapError::Coded(_, m) => f.write_str(m),
+            SoapError::ServerFault(c, m) => write!(f, "[{c}] {m}"),
             SoapError::Runtime(e) => write!(f, "{e:?}"),
         }
     }
@@ -55,4 +63,10 @@ macro_rules! bail {
     ($($arg:tt)*) => {
         return Err($crate::error::soap_fatal(format_args!($($arg)*)))
     };
+}
+
+/// `soap_server_fault_en(code, string)`.
+#[must_use]
+pub fn server_fault(code: &str, msg: &str) -> SoapError {
+    SoapError::ServerFault(code.to_owned(), msg.to_owned())
 }

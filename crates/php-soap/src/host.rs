@@ -191,6 +191,17 @@ pub trait SoapHost: RuntimeContext {
         Some(LocalTime::utc(ts))
     }
 
+    /// The exception object carried by an error (`EG(exception)`): built-in
+    /// variants are instantiated; `None` for fatal errors and exit.
+    fn exception_object(&mut self, err: &php_runtime::RuntimeError) -> Option<Obj>;
+
+    /// Whether an error is the engine's `exit()` unwinding
+    /// (`zend_is_unwind_exit`).
+    fn is_unwind_exit(&mut self, err: &php_runtime::RuntimeError) -> bool {
+        let _ = err;
+        false
+    }
+
     // ---- calls -------------------------------------------------------------
 
     /// `call_user_function` with a callable value.

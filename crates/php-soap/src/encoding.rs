@@ -87,6 +87,37 @@ fn str_of(v: Option<&Value>) -> Option<ZStr> {
     }
 }
 
+/// The settings an [`EncodeCtx`] is created from.
+#[derive(Debug, Clone, Default)]
+pub struct CtxSettings {
+    /// SDL.
+    pub sdl: Option<Rc<Sdl>>,
+    /// Typemap.
+    pub typemap: Option<Rc<Typemap>>,
+    /// Class map.
+    pub class_map: Option<ZArray>,
+    /// Features.
+    pub features: i64,
+    /// SOAP version.
+    pub soap_version: i64,
+    /// Charset.
+    pub charset: Option<Charset>,
+}
+
+impl CtxSettings {
+    /// Creates a context.
+    pub fn make<'h>(&self, host: &'h mut dyn SoapHost) -> EncodeCtx<'h> {
+        let mut ctx = EncodeCtx::new(host);
+        ctx.sdl.clone_from(&self.sdl);
+        ctx.typemap.clone_from(&self.typemap);
+        ctx.class_map.clone_from(&self.class_map);
+        ctx.features = self.features;
+        ctx.soap_version = self.soap_version;
+        ctx.charset = self.charset;
+        ctx
+    }
+}
+
 /// The encoding context (the `SOAP_GLOBAL(...)` state of one call).
 pub struct EncodeCtx<'h> {
     /// The engine.
