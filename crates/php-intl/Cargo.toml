@@ -1,13 +1,16 @@
 [package]
 name = "php-intl"
-description = "PHP's ext/filter: filter_var/filter_var_array/filter_input engine with all validation and sanitizing filters"
+description = "PHP's ext/intl: NumberFormatter, IntlDateFormatter, MessageFormatter, Locale, Collator, IntlCalendar, IntlTimeZone, break iterators, grapheme_*, IDN, Normalizer, Transliterator, IntlChar, UConverter, ResourceBundle, Spoofchecker and friends, bound to the system ICU C API"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
+build = "build.rs"
 
 [dependencies]
-php-runtime = { path = "../php-runtime" }
+
+[build-dependencies]
+pkg-config = "0.3"
 
 [lints]
 workspace = true
