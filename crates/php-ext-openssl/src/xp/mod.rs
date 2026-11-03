@@ -11,11 +11,15 @@
 #![allow(clippy::similar_names)]
 
 mod ctx;
+mod early;
 mod opts;
+mod psk;
+mod reneg;
+mod sess;
 mod sock;
 
-use std::net::{TcpListener, TcpStream, ToSocketAddrs};
-use std::os::fd::BorrowedFd;
+use std::net::{TcpListener, TcpStream};
+use std::os::fd::{BorrowedFd, FromRawFd};
 use std::time::{Duration, Instant};
 
 use openssl::ssl::{ErrorCode, Ssl, SslStream};
@@ -29,6 +33,8 @@ use php_vm::Vm;
 use opts::SslOpts;
 use sock::{handle_ssl_error, poll_fd, warn, Conn, TlsOps};
 
+/// `STREAM_CLIENT_CONNECT`.
+const STREAM_CLIENT_CONNECT: i64 = 4;
 /// `STREAM_CRYPTO_IS_CLIENT`.
 const IS_CLIENT: i64 = 1;
 /// `STREAM_CRYPTO_METHOD_TLS_ANY_CLIENT`.
@@ -36,7 +42,12 @@ const TLS_ANY_CLIENT: i64 = (1 << 3) | (1 << 4) | (1 << 5) | (1 << 6) | 1;
 
 /// Registers the transports and crypto hooks.
 pub(crate) fn register() {
-    for scheme in ["ssl", "tls", "tlsv1.0", "tlsv1.1", "tlsv1.2", "tlsv1.3"] {
+    // Like ext/openssl, take over `tcp` too: plain TCP sockets are
+    // `tcp_socket/ssl` streams that can be upgraded in place, and accepted
+    // connections inherit the listener's context.
+    for scheme in [
+        "tcp", "ssl", "tls", "tlsv1.0", "tlsv1.1", "tlsv1.2", "tlsv1.3",
+    ] {
         xport::register_transport(
             scheme,
             Transport {
@@ -81,27 +92,34 @@ fn crypto_method(vm: &mut Vm, opts: &SslOpts, default: i64) -> VmResult<i64> {
     })
 }
 
-/// Connects a TCP client socket (`php_network_connect_socket_to_host`).
-fn connect(host: &str, port: u16, timeout: Option<Duration>) -> Result<TcpStream, XportError> {
-    let addrs: Vec<_> = (host, port)
-        .to_socket_addrs()
+/// Connects a TCP client socket through the streams library (same error
+/// texts as plain `tcp://`) and takes over its descriptor.
+fn connect(req: &XportRequest) -> Result<TcpStream, XportError> {
+    let (_, rest) = xport::split_scheme(&req.address);
+    let target = format!("tcp://{rest}");
+    let mut plain = php_streams::transports::socket_client(target.as_bytes(), req.timeout)
         .map_err(|e| XportError {
-            errno: 0,
-            message: format!("php_network_getaddresses: getaddrinfo for {host} failed: {e}"),
-        })?
-        .collect();
-    let mut last = std::io::Error::from_raw_os_error(libc::ECONNREFUSED);
-    for a in addrs {
-        let r = match timeout {
-            Some(t) if !t.is_zero() => TcpStream::connect_timeout(&a, t),
-            _ => TcpStream::connect(a),
-        };
-        match r {
-            Ok(s) => return Ok(s),
-            Err(e) => last = e,
-        }
+            errno: e.errno,
+            message: e.message,
+        })?;
+    let tcp = dup_socket(&mut plain).ok_or_else(|| XportError {
+        errno: 0,
+        message: "Unknown error".into(),
+    })?;
+    drop(plain);
+    Ok(tcp)
+}
+
+/// `socket(AF_INET, SOCK_STREAM)` without connecting.
+fn unconnected_socket() -> Option<TcpStream> {
+    // SAFETY: plain socket(2) call.
+    let fd = unsafe { libc::socket(libc::AF_INET, libc::SOCK_STREAM, 0) };
+    if fd < 0 {
+        return None;
     }
-    Err(io_error(&last))
+    // SAFETY: `fd` is a fresh descriptor owned by nobody else.
+    let owned = unsafe { std::os::fd::OwnedFd::from_raw_fd(fd) };
+    Some(TcpStream::from(owned))
 }
 
 /// Builds the stream around socket ops.
@@ -112,9 +130,12 @@ fn new_stream(ops: TlsOps) -> Stream {
 }
 
 /// `php_openssl_ssl_socket_factory` + connect/listen.
+#[allow(clippy::too_many_lines)]
 fn create(vm: &mut Vm, req: &XportRequest) -> VmResult<Result<Stream, XportError>> {
     let opts = SslOpts::from_context(req.context.as_ref());
+    let plain_tcp = req.scheme == "tcp";
     let method = match req.scheme.as_str() {
+        "tcp" => 0,
         "tlsv1.0" => (1 << 3) | IS_CLIENT,
         "tlsv1.1" => (1 << 4) | IS_CLIENT,
         "tlsv1.2" => (1 << 5) | IS_CLIENT,
@@ -124,6 +145,13 @@ fn create(vm: &mut Vm, req: &XportRequest) -> VmResult<Result<Stream, XportError
     let host = req.host.trim_end_matches('.');
     let url_name = (!host.is_empty()).then(|| host.to_string());
     if req.server {
+        let (_, rest) = xport::split_scheme(&req.address);
+        if xport::parse_host_port(rest).is_none() {
+            return Ok(Err(XportError {
+                errno: 0,
+                message: format!("Failed to parse address \"{rest}\""),
+            }));
+        }
         let bind = if req.host.contains(':') {
             format!("[{}]:{}", req.host, req.port)
         } else {
@@ -135,40 +163,95 @@ fn create(vm: &mut Vm, req: &XportRequest) -> VmResult<Result<Stream, XportError
         };
         let _ = listener.set_nonblocking(true);
         let mut ops = TlsOps::new(Conn::Listener(listener), Some(default_timeout(vm)));
-        ops.enable_on_connect = true;
+        ops.enable_on_connect = !plain_tcp;
         ops.method = method;
         ops.url_name = url_name;
+        ops.persistent = req.persistent_id.is_some();
+        // Share one SSL_CTX between accepted connections when a session
+        // cache is configured (`STREAM_XPORT_OP_LISTEN`).
+        if !plain_tcp
+            && (sess::cache_enabled(vm, &opts, false)? || early::server_enabled(vm, &opts)?)
+        {
+            ops.ctx = ctx::create_ctx(vm, &opts, false, method & !IS_CLIENT, ops.persistent)?;
+            flush(vm);
+            if let Some(t) = take_exception() {
+                return Err(t);
+            }
+            if ops.ctx.is_none() {
+                return Ok(Err(XportError {
+                    errno: 0,
+                    message: "Unknown error".into(),
+                }));
+            }
+        }
         let mut s = new_stream(ops);
         s.orig_path = Some(req.address.as_bytes().to_vec());
         s.context.clone_from(&req.context);
         return Ok(Ok(s));
     }
-    let tcp = match connect(&req.host, req.port, req.timeout) {
+    if req.flags & STREAM_CLIENT_CONNECT == 0 {
+        // No STREAM_CLIENT_CONNECT: an unconnected socket.
+        let Some(tcp) = unconnected_socket() else {
+            return Ok(Err(io_error(&std::io::Error::last_os_error())));
+        };
+        let mut ops = TlsOps::new(Conn::Plain(tcp), Some(default_timeout(vm)));
+        ops.method = method;
+        ops.url_name = url_name;
+        let mut s = new_stream(ops);
+        s.context.clone_from(&req.context);
+        return Ok(Ok(s));
+    }
+    let tcp = match connect(req) {
         Ok(t) => t,
         Err(e) => return Ok(Err(e)),
     };
     let _ = tcp.set_nonblocking(true);
     let mut ops = TlsOps::new(Conn::Plain(tcp), Some(default_timeout(vm)));
     ops.connect_timeout = req.timeout;
-    ops.enable_on_connect = true;
+    ops.enable_on_connect = !plain_tcp;
     ops.method = method;
     ops.url_name = url_name;
+    ops.persistent = req.persistent_id.is_some();
+    if plain_tcp {
+        let mut s = new_stream(ops);
+        s.orig_path = Some(req.address.as_bytes().to_vec());
+        s.context.clone_from(&req.context);
+        return Ok(Ok(s));
+    }
+    sess::set_current(0);
     let session = session_stream(&opts);
     let ok = setup(vm, &mut ops, &opts, method, session.as_ref())?
         && enable(vm, &mut ops, &opts, true)? >= 0;
     if !ok {
         warn(Code::ProtocolError, "Failed to enable crypto");
         flush(vm);
+        if let Some(t) = take_exception() {
+            // C reports the connect failure before the exception surfaces.
+            vm.php_warning(&format!(
+                "Unable to connect to {} (Unknown error)",
+                req.address
+            ))?;
+            return Err(t);
+        }
         return Ok(Err(XportError {
             errno: 0,
             message: "Unknown error".into(),
         }));
     }
     flush(vm);
+    if let Some(t) = take_exception() {
+        return Err(t);
+    }
     let mut s = new_stream(ops);
     s.orig_path = Some(req.address.as_bytes().to_vec());
     s.context.clone_from(&req.context);
     Ok(Ok(s))
+}
+
+/// An exception raised by configuration or by a PHP callback during the
+/// handshake (`EG(exception)` once the function returns).
+fn take_exception() -> Option<php_vm::ext::Throw> {
+    sess::take_pending().or_else(php_ext_streams::bridge::take_pending)
 }
 
 /// The `session_stream` context option's TLS state (cloned context only).
@@ -217,6 +300,7 @@ fn attach(ops: &mut TlsOps, ssl: Ssl) -> bool {
         return false;
     };
     if let Ok(s) = SslStream::new(ssl, tcp) {
+        ops.early_state = early::initial_state(&s, ops.is_client, ops.early_send.is_some());
         ops.conn = Conn::Tls(s);
         true
     } else {
@@ -227,8 +311,11 @@ fn attach(ops: &mut TlsOps, ssl: Ssl) -> bool {
 
 /// Prepares a fresh `SSL` handle: client SNI and connect/accept state
 /// (`state_set` in `php_openssl_enable_crypto`).
-fn prepare_ssl(vm: &mut Vm, ops: &TlsOps, opts: &SslOpts, ssl: &mut Ssl) -> VmResult<()> {
+fn prepare_ssl(vm: &mut Vm, ops: &TlsOps, opts: &SslOpts, ssl: &mut Ssl) -> VmResult<bool> {
     if ops.is_client {
+        if !sess::apply_client_data(vm, ssl, opts)? {
+            return Ok(false);
+        }
         if opts.bool(vm, "SNI_enabled")? != Some(false) {
             let name = opts
                 .string(vm, "peer_name")?
@@ -239,9 +326,10 @@ fn prepare_ssl(vm: &mut Vm, ops: &TlsOps, opts: &SslOpts, ssl: &mut Ssl) -> VmRe
         }
         ssl.set_connect_state();
     } else {
+        reneg::init(vm, ssl, opts)?;
         ssl.set_accept_state();
     }
-    Ok(())
+    Ok(true)
 }
 
 /// `php_openssl_setup_crypto`.
@@ -293,19 +381,29 @@ fn setup(
                     ),
                 }
             }
-            prepare_ssl(vm, ops, opts, &mut ssl)?;
+            if !prepare_ssl(vm, ops, opts, &mut ssl)? {
+                return Ok(false);
+            }
             ops.ctx = Some(ctx.clone());
             return Ok(attach(ops, ssl));
         }
     }
-    let Some(ctx) = ctx::create_ctx(vm, opts, ops.is_client, method_flags)? else {
+    let Some(ctx) = ctx::create_ctx(vm, opts, ops.is_client, method_flags, ops.persistent)? else {
         return Ok(false);
     };
+    if ops.is_client {
+        match early::client_payload(vm, opts) {
+            Ok(p) => ops.early_send = p,
+            Err(()) => return Ok(false),
+        }
+    }
     let Ok(mut ssl) = Ssl::new(&ctx) else {
         warn(Code::CreateFailed, "SSL handle creation failure");
         return Ok(false);
     };
-    prepare_ssl(vm, ops, opts, &mut ssl)?;
+    if !prepare_ssl(vm, ops, opts, &mut ssl)? {
+        return Ok(false);
+    }
     ops.ctx = Some(ctx);
     Ok(attach(ops, ssl))
 }
@@ -332,7 +430,12 @@ fn enable(vm: &mut Vm, ops: &mut TlsOps, opts: &SslOpts, activate: bool) -> VmRe
             let Conn::Tls(ssl) = &mut ops.conn else {
                 return Ok(-1);
             };
-            let r = ssl.do_handshake();
+            let is_client = ops.is_client;
+            let payload = ops.early_send.as_deref().unwrap_or_default();
+            let (state, offset) = (&mut ops.early_state, &mut ops.early_offset);
+            let r = php_ext_streams::bridge::enter(vm, || {
+                early::handshake(ssl, is_client, state, payload, offset)
+            });
             let elapsed = start.elapsed();
             if has_timeout && timeout.is_some_and(|t| elapsed > t) {
                 warn(Code::TimeOut, "SSL: Handshake timed out");
@@ -417,6 +520,12 @@ fn accept(
         return Ok(Ok(conn));
     };
     let (enable_on_connect, method, timeout) = (lops.enable_on_connect, lops.method, lops.timeout);
+    let parent = lops.ctx.clone().map(|ctx| SessionParent {
+        is_tls: true,
+        ctx: Some(ctx),
+        session: None,
+        has_handle: true,
+    });
     let mut conn = conn;
     let Some(tcp) = dup_socket(&mut conn) else {
         return Ok(Err(XportError {
@@ -431,11 +540,15 @@ fn accept(
     if enable_on_connect {
         let method = method & !IS_CLIENT;
         ops.method = method;
-        let ok =
-            setup(vm, &mut ops, &opts, method, None)? && enable(vm, &mut ops, &opts, true)? >= 0;
+        sess::set_current(0);
+        let ok = setup(vm, &mut ops, &opts, method, parent.as_ref())?
+            && enable(vm, &mut ops, &opts, true)? >= 0;
         if !ok {
             warn(Code::ProtocolError, "Failed to enable crypto");
             flush(vm);
+            if let Some(t) = take_exception() {
+                return Err(t);
+            }
             return Ok(Err(XportError {
                 errno: 0,
                 message: "Cannot enable crypto".into(),
@@ -443,6 +556,9 @@ fn accept(
         }
     }
     flush(vm);
+    if let Some(t) = take_exception() {
+        return Err(t);
+    }
     let mut s = new_stream(ops);
     s.context.clone_from(&listener.context);
     Ok(Ok(s))
@@ -492,6 +608,7 @@ fn enable_hook(
         None => None,
     };
     let parent = session.map(|s| SessionParent::of(s));
+    sess::set_current(stream.id());
     let ret = |n: i32| match n {
         -1 => Value::Bool(false),
         0 => Value::Int(0),
@@ -508,6 +625,9 @@ fn enable_hook(
             n = enable(vm, ops, &opts, false)?;
         }
         flush(vm);
+        if let Some(t) = take_exception() {
+            return Err(t);
+        }
         return Ok((ret(n), None));
     }
     if !is_socket_stream(stream) {
@@ -538,6 +658,9 @@ fn enable_hook(
         n = enable(vm, &mut ops, &opts, true)?;
     }
     flush(vm);
+    if let Some(t) = take_exception() {
+        return Err(t);
+    }
     if n < 0 {
         return Ok((Value::Bool(false), None));
     }
@@ -578,6 +701,11 @@ fn meta(s: &Stream) -> Option<Value> {
         ZStr::from("session_reused"),
         Value::Bool(ssl.session_reused()),
     );
+    if ops.early_state == early::State::Done {
+        if let Some(tls) = ops.tls() {
+            t.insert(ZStr::from("early_data"), Value::string(early::status(tls)));
+        }
+    }
     if let Some(p) = ssl.selected_alpn_protocol() {
         t.insert(ZStr::from("alpn_protocol"), Value::Str(ZStr::from(p)));
     }

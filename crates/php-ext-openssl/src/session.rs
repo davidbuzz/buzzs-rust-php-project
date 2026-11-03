@@ -148,6 +148,27 @@ fn init(vm: &mut Vm, o: &Obj, session: SslSession) {
     vm.set_property_raw(o, "id", id);
 }
 
+/// A new `Openssl\\Session` object wrapping `session`
+/// (`php_openssl_session_object_init`).
+pub(crate) fn session_value(vm: &mut Vm, session: SslSession) -> VmResult<Value> {
+    let Some(cls) = vm.find_class(SESSION.as_bytes()) else {
+        return Err(vm.throw("Error", "Class \"Openssl\\Session\" not found"));
+    };
+    let o = vm.new_object(&cls)?;
+    init(vm, &o, session);
+    Ok(Value::Object(o))
+}
+
+/// For an `Openssl\\Session` object: its session (`None` when the object
+/// was never initialised). `None` for any other value.
+#[allow(clippy::option_option)]
+pub(crate) fn session_of(v: &Value) -> Option<Option<SslSession>> {
+    let Value::Object(o) = v else {
+        return None;
+    };
+    object::internal::<SessionObj, _>(o, |s| s.0.clone())
+}
+
 fn session_ctor(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
     Err(vm.throw(
         "Error",

@@ -118,19 +118,94 @@ fn select_alpn<'c>(server: &[u8], client: &'c [u8]) -> Option<&'c [u8]> {
         .find_map(|s| offered.iter().copied().find(|c| *c == s))
 }
 
-/// `php_openssl_check_path_ex` for context option paths: expands the
-/// path (relative to the working directory).
-fn resolve_path(p: &str) -> Option<String> {
-    if p.as_bytes().contains(&0) {
-        return None;
+/// The part of a string a C `%s` prints.
+fn c_str(s: &str) -> &str {
+    s.split('\0').next().unwrap_or("")
+}
+
+/// `open_basedir` as configured (`None` when unrestricted).
+fn open_basedir(vm: &Vm) -> Option<Vec<u8>> {
+    vm.ini_string("open_basedir").filter(|d| !d.is_empty())
+}
+
+/// `php_check_open_basedir` with its warning.
+fn check_open_basedir(dirs: &[u8], path: &[u8]) -> bool {
+    let resolve = |p: &[u8]| -> Vec<u8> {
+        let s = String::from_utf8_lossy(p).into_owned();
+        std::fs::canonicalize(&s).map_or_else(
+            |_| php_openssl::util::expand_filepath(p).unwrap_or_else(|| p.to_vec()),
+            |c| c.to_string_lossy().into_owned().into_bytes(),
+        )
+    };
+    let target = resolve(path);
+    for dir in dirs.split(|&c| c == b':').filter(|d| !d.is_empty()) {
+        let mut base = resolve(dir);
+        if dir.ends_with(b"/") && !base.ends_with(b"/") {
+            base.push(b'/');
+        }
+        let mut t = target.clone();
+        if base.ends_with(b"/") && !t.ends_with(b"/") && t.len() + 1 == base.len() {
+            t.push(b'/');
+        }
+        if t.starts_with(&base)
+            && (t.len() == base.len() || base.ends_with(b"/") || t[base.len()] == b'/')
+        {
+            return true;
+        }
     }
-    php_openssl::util::expand_filepath(p.as_bytes())
-        .map(|v| String::from_utf8_lossy(&v).into_owned())
+    warn(
+        Code::PermissionDenied,
+        format!(
+            "open_basedir restriction in effect. File({}) is not within the allowed path(s): ({})",
+            String::from_utf8_lossy(path),
+            String::from_utf8_lossy(dirs)
+        ),
+    );
+    false
+}
+
+/// `php_openssl_check_path_ex(path, ..., arg_num = 0, option_name)` for
+/// context option paths: NUL bytes, path expansion, `open_basedir`.
+fn resolve_path(vm: &Vm, p: &str, option: &str) -> Option<String> {
+    if p.is_empty() {
+        return Some(String::new());
+    }
+    let (msg, ok) = if p.as_bytes().contains(&0) {
+        ("must not contain any null bytes", None)
+    } else {
+        match php_openssl::util::expand_filepath(p.as_bytes()) {
+            Some(real) => ("", Some(real)),
+            None => ("must be a valid file path", None),
+        }
+    };
+    let Some(real) = ok else {
+        warn(Code::InvalidPath, format!("Path for {option} option {msg}"));
+        return None;
+    };
+    if let Some(dirs) = open_basedir(vm) {
+        if !check_open_basedir(&dirs, &real) {
+            return None;
+        }
+    }
+    Some(String::from_utf8_lossy(&real).into_owned())
 }
 
 /// `php_openssl_load_stream_cafile`: adds the PEM certificates of a file.
 fn load_stream_cafile(b: &mut SslContextBuilder, cafile: &str) -> bool {
-    let Ok(data) = std::fs::read(cafile) else {
+    let path = cafile.strip_prefix("file://").unwrap_or(cafile);
+    if let Some(i) = path.find("://") {
+        if path[..i]
+            .bytes()
+            .all(|c| c.is_ascii_alphanumeric() || b"+-.".contains(&c))
+        {
+            warn(
+                Code::PermissionDenied,
+                "remote cafile streams are disabled for security purposes",
+            );
+            return false;
+        }
+    }
+    let Ok(data) = std::fs::read(path) else {
         warn(
             Code::OpenFailed,
             format!("failed loading cafile stream: `{cafile}'"),
@@ -244,13 +319,14 @@ fn use_private_key(b: &mut SslContextBuilder, path: &str, passphrase: Option<&st
 
 /// `php_openssl_set_local_cert`.
 fn set_local_cert(vm: &mut Vm, b: &mut SslContextBuilder, opts: &SslOpts) -> VmResult<bool> {
-    let Some(certfile) = opts.string(vm, "local_cert")? else {
+    let Some(certfile) = opts.string_raw(vm, "local_cert")? else {
         return Ok(true);
     };
-    let Some(mut resolved) = resolve_path(&certfile) else {
+    let shown = c_str(&certfile);
+    let Some(mut resolved) = resolve_path(vm, &certfile, "local_cert in ssl stream context") else {
         warn(
             Code::NotFound,
-            format!("Unable to get real path of certificate file `{certfile}'"),
+            format!("Unable to get real path of certificate file `{shown}'"),
         );
         return Ok(false);
     };
@@ -258,16 +334,19 @@ fn set_local_cert(vm: &mut Vm, b: &mut SslContextBuilder, opts: &SslOpts) -> VmR
         warn(
             Code::WriteFailed,
             format!(
-                "Unable to set local cert chain file `{certfile}'; Check that your cafile/capath settings include details of your certificate and its issuer"
+                "Unable to set local cert chain file `{shown}'; Check that your cafile/capath settings include details of your certificate and its issuer"
             ),
         );
         return Ok(false);
     }
-    if let Some(pk) = opts.string(vm, "local_pk")? {
-        let Some(r) = resolve_path(&pk) else {
+    if let Some(pk) = opts.string_raw(vm, "local_pk")? {
+        let Some(r) = resolve_path(vm, &pk, "local_pk in ssl stream context") else {
             warn(
                 Code::NotFound,
-                format!("Unable to get real path of private key file `{pk}'"),
+                format!(
+                    "Unable to get real path of private key file `{}'",
+                    c_str(&pk)
+                ),
             );
             return Ok(false);
         };
@@ -405,11 +484,16 @@ fn enable_server_sni(
                     return Ok(false);
                 };
                 let cert = vm.value_to_string(&local_cert)?.to_string_lossy();
-                let Some(cert_path) = resolve_path(&cert) else {
+                let Some(cert_path) = resolve_path(
+                    vm,
+                    &cert,
+                    "SNI_server_certs local_cert in ssl stream context",
+                ) else {
                     warn(
                         Code::OpenFailed,
                         format!(
-                            "Failed setting local cert chain file `{cert}'; could not open file"
+                            "Failed setting local cert chain file `{}'; could not open file",
+                            c_str(&cert)
                         ),
                     );
                     return Ok(false);
@@ -419,11 +503,14 @@ fn enable_server_sni(
                     return Ok(false);
                 };
                 let pk = vm.value_to_string(&local_pk)?.to_string_lossy();
-                let Some(pk_path) = resolve_path(&pk) else {
+                let Some(pk_path) =
+                    resolve_path(vm, &pk, "SNI_server_certs local_pk in ssl stream context")
+                else {
                     warn(
                         Code::OpenFailed,
                         format!(
-                            "Failed setting local private key file `{pk}';  could not open file"
+                            "Failed setting local private key file `{}';  could not open file",
+                            c_str(&pk)
                         ),
                     );
                     return Ok(false);
@@ -432,7 +519,7 @@ fn enable_server_sni(
             }
             Value::Str(s) => {
                 let p = s.to_string_lossy();
-                if let Some(r) = resolve_path(&p) {
+                if let Some(r) = resolve_path(vm, &p, "SNI_server_certs in ssl stream context") {
                     sni_ctx(&r, &r)
                 } else {
                     warn(
@@ -481,6 +568,7 @@ pub(crate) fn create_ctx(
     opts: &SslOpts,
     is_client: bool,
     method_flags: i64,
+    persistent: bool,
 ) -> VmResult<Option<SslContext>> {
     let method = if is_client {
         SslMethod::tls_client()
@@ -557,6 +645,19 @@ pub(crate) fn create_ctx(
     b.set_options(o);
     let _ = b.set_min_proto_version(Some(map_proto(min_proto_flag(flags))));
     let _ = b.set_max_proto_version(Some(map_proto(max_proto_flag(flags))));
+    if is_client {
+        if !super::sess::setup_client(vm, &mut b, opts, persistent)?
+            || !super::psk::setup_client(vm, &mut b, opts, persistent)?
+        {
+            return Ok(None);
+        }
+    } else if opts.has_context()
+        && (!super::sess::setup_server(vm, &mut b, opts, persistent, verify_peer)?
+            || !super::psk::setup_server(vm, &mut b, opts, persistent)?
+            || !super::early::setup_server(vm, &mut b, opts, persistent)?)
+    {
+        return Ok(None);
+    }
     if !is_client && opts.has_context() && !set_server_specific_opts(vm, &mut b, opts)? {
         return Ok(None);
     }

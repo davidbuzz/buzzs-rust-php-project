@@ -82,6 +82,14 @@ pub(crate) struct TlsOps {
     pub(crate) connect_timeout: Option<Duration>,
     /// `s.timeout_event`.
     pub(crate) timed_out: bool,
+    /// `persistent_id != NULL`.
+    pub(crate) persistent: bool,
+    /// `early_data_state`.
+    pub(crate) early_state: super::early::State,
+    /// `early_data_send`.
+    pub(crate) early_send: Option<Vec<u8>>,
+    /// `early_data_offset`.
+    pub(crate) early_offset: usize,
 }
 
 impl std::fmt::Debug for TlsOps {
@@ -199,6 +207,10 @@ impl TlsOps {
             timeout,
             connect_timeout: timeout,
             timed_out: false,
+            persistent: false,
+            early_state: super::early::State::None,
+            early_send: None,
+            early_offset: 0,
         }
     }
 
@@ -298,6 +310,7 @@ impl TlsOps {
             return Err(OpFailed);
         };
         let mut nr: usize = 0;
+        super::sess::set_current(st.id);
         loop {
             let elapsed = start.elapsed();
             if has_timeout && timeout.is_some_and(|t| elapsed > t) {
@@ -306,7 +319,17 @@ impl TlsOps {
             }
             self.last_status = 0;
             let r = match rbuf.as_deref_mut() {
-                Some(buf) => ssl.ssl_read(buf),
+                Some(buf) => {
+                    let r = ssl.ssl_read(buf);
+                    if super::reneg::should_close(ssl.ssl()) {
+                        // Renegotiation rate limiting triggered.
+                        let _ = ssl.get_ref().shutdown(std::net::Shutdown::Both);
+                        st.eof = true;
+                        nr = 0;
+                        break;
+                    }
+                    r
+                }
                 None => ssl.ssl_write(write),
             };
             let left = timeout.map(|t| t.saturating_sub(elapsed));
@@ -415,6 +438,9 @@ impl StreamOps for TlsOps {
     }
 
     fn close(&mut self, _st: &mut StreamState, _preserve: bool) -> i32 {
+        if let Conn::Tls(s) = &self.conn {
+            super::reneg::forget(s.ssl());
+        }
         if self.ssl_active {
             if let Conn::Tls(s) = &mut self.conn {
                 let _ = s.shutdown();

@@ -80,6 +80,14 @@ impl SslOpts {
         }
     }
 
+    /// `GET_VER_OPT_STRINGL`: the whole string, NUL bytes included.
+    pub(crate) fn string_raw(&self, vm: &mut Vm, name: &str) -> VmResult<Option<String>> {
+        match self.get(name) {
+            Some(v) => Ok(Some(vm.value_to_string(&v)?.to_string_lossy())),
+            None => Ok(None),
+        }
+    }
+
     /// `php_stream_context_set_option(ctx, "ssl", name, value)`.
     pub(crate) fn set(&self, name: &str, value: Value) {
         let Some(cell) = self.ctx.as_ref().and_then(ctx_cell_of_lib) else {
