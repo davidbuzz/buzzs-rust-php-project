@@ -48,7 +48,54 @@ pub(crate) fn throw_error(vm: &mut Vm, func: &str, e: &HashError) -> Throw {
 }
 
 fn fail(vm: &mut Vm, a: &Args, e: &HashError) -> Throw {
+    // Diagnostics PHP emits before throwing (none for most errors).
+    if let Err(t) = emit(vm, e.diagnostics.clone()) {
+        return t;
+    }
+    if let Some(bytes) = e.out_of_memory {
+        return out_of_memory(vm, bytes);
+    }
     throw_error(vm, &a.func_name(), e)
+}
+
+/// Raises PHP's fatal error for an allocation of `bytes` that does not fit
+/// in `memory_limit`.
+fn out_of_memory(vm: &mut Vm, bytes: usize) -> Throw {
+    let msg = match php_memlimit::try_reserve(bytes) {
+        Err(over) => over.to_string(),
+        // No limit configured (or it fits by accounting but the OS refused).
+        Ok(()) => format!("Out of memory (tried to allocate {bytes} bytes)"),
+    };
+    // Handled here, so the VM's post-call poll does not raise it again.
+    let _ = php_memlimit::take();
+    vm.fatal(&msg)
+}
+
+/// Emulates a non-fallible `emalloc(bytes)` before the library does the
+/// work. Beyond the hard memory ceiling a real allocation is attempted, so
+/// the CLI's hard-limit handler reports `Hard memory limit of N bytes
+/// exhausted` and terminates, as PHP does; below it, a size that does not
+/// fit in `memory_limit` raises the `Allowed memory size` fatal right away
+/// (PHP grants the block and raises the same fatal at its next check, after
+/// doing the doomed work).
+fn emalloc_check(vm: &mut Vm, bytes: usize) -> VmResult<()> {
+    let beyond_hard = php_memlimit::hard_limit()
+        .is_some_and(|hard| bytes > hard.saturating_sub(php_memlimit::usage()));
+    if beyond_hard {
+        // Rust refuses capacities above `isize::MAX` without asking the
+        // allocator, but any such size is far beyond every hard ceiling.
+        let probe_size = bytes.min(isize::MAX.unsigned_abs());
+        let mut probe: Vec<u8> = Vec::new();
+        if probe.try_reserve_exact(probe_size).is_err() {
+            return Err(out_of_memory(vm, bytes));
+        }
+        drop(std::hint::black_box(probe));
+    }
+    if let Err(over) = php_memlimit::try_reserve(bytes) {
+        let _ = php_memlimit::take();
+        return Err(vm.fatal(&over.to_string()));
+    }
+    Ok(())
 }
 
 fn emit(vm: &mut Vm, diags: Vec<Diagnostic>) -> VmResult<()> {
@@ -91,9 +138,20 @@ fn options(vm: &mut Vm, algo: &[u8], opts: Option<&ZArray>) -> VmResult<HashOpti
     if matches!(lower.as_slice(), b"xxh3" | b"xxh128") {
         if let Some(secret) = opts.get_str(b"secret") {
             let secret = secret.deref();
-            // The library drops this deprecation when the (converted)
-            // secret is then rejected as too short, so emit it here.
-            if out.seed.is_none() && !matches!(secret, Value::Str(_)) {
+            if out.seed.is_some() {
+                // PHP rejects seed + secret before looking at the secret
+                // (no deprecation, no string conversion); the library
+                // raises that Error from the presence of both.
+                out.secret = Some(SecretOption {
+                    bytes: Vec::new(),
+                    was_string: true,
+                });
+                return Ok(out);
+            }
+            // PHP emits this deprecation *before* converting the value (whose
+            // `__toString()` may throw), so it is emitted here, exactly once,
+            // and the library is told the value was a string.
+            if !matches!(secret, Value::Str(_)) {
                 vm.php_deprecated(
                     "Passing a secret of a type other than string is deprecated because it implicitly converts to a string, potentially hiding bugs",
                 )?;
@@ -282,12 +340,14 @@ fn hash_hmac_algos(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
 // ------------------------------------------------------- derivation
 
 fn hash_pbkdf2(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    // PHP allocates the `$length`-byte result up front; lengths close to
-    // PHP_INT_MAX overflow the library's capacity computation, so make the
-    // same allocation here (it ends in the hard memory limit like PHP).
-    if a.bool(5) && a.int(4) > i64::MAX - 1024 {
-        let huge: Vec<u8> = Vec::with_capacity(usize::try_from(isize::MAX).unwrap_or(usize::MAX));
-        drop(std::hint::black_box(huge));
+    // PHP's first large allocation is `safe_emalloc(loops, digest_size, 0)`
+    // (after argument validation, which the library repeats below).
+    if a.int(3) > 0 {
+        if let Some(size) =
+            php_hash::hash_pbkdf2_alloc_size(a.str(0).as_bytes(), a.int(4), a.bool(5))
+        {
+            emalloc_check(vm, size)?;
+        }
     }
     match php_hash::hash_pbkdf2(
         a.str(0).as_bytes(),
