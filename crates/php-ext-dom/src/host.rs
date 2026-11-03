@@ -199,9 +199,11 @@ impl DomHost for VmHost {
         } else {
             None
         };
+        // `php_libxml_sniff_charset_from_stream`: HTTP `Content-Type`.
+        let charset = php_ext_xml::mime_sniff::sniff_charset_from_stream(&stream);
         Ok(Some(HostStream {
             reader: Box::new(StreamReader(stream)),
-            charset: None,
+            charset,
             plain_file_path,
         }))
     }
