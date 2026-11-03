@@ -124,7 +124,14 @@ pub(crate) fn set_interval(o: &Obj, iv: Option<Interval>) {
         } else {
             // `date_interval_object_to_hash()`, without the intermediate tree.
             let r = &iv.rel;
-            for (k, v) in [("y", r.y), ("m", r.m), ("d", r.d), ("h", r.h), ("i", r.i), ("s", r.s)] {
+            for (k, v) in [
+                ("y", r.y),
+                ("m", r.m),
+                ("d", r.d),
+                ("h", r.h),
+                ("i", r.i),
+                ("s", r.s),
+            ] {
                 write_table_prop(o, k, Value::Int(v));
             }
             #[allow(clippy::cast_precision_loss)]
