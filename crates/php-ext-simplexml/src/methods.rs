@@ -1,6 +1,5 @@
 //! `SimpleXMLElement` methods and the `simplexml_*()` functions.
 
-use std::ptr::NonNull;
 use std::rc::Rc;
 
 use php_runtime::{RtResult, Value, ZStr};
@@ -9,11 +8,8 @@ use php_vm::class::Class;
 use php_vm::ext::{Args, VmResult};
 use php_vm::Vm;
 
-use php_ext_xsl::access::{ImportedNode, XmlSource};
 use php_libxml::tree::Node;
-use php_xsl::XmlDocument;
 
-use crate::foreign;
 use crate::hooks::direct;
 use crate::host::{rt_throw, sxe_of, LentHost};
 
@@ -254,43 +250,32 @@ pub fn load_file(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 /// node".
 pub fn import_dom(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let class = class_arg(vm, a, 1)?.map(|c| c.name.clone());
-    let node = match a.at(0) {
-        Value::Object(o) => imported_node(vm, &o)?,
-        _ => None,
+    let (node, modern) = match a.at(0) {
+        Value::Object(o) => imported_node(&o).map_or((None, false), |(n, m)| (Some(n), m)),
+        _ => (None, false),
     };
-    lent(vm, a, |h| Sxe::import_dom(h, node, class.as_ref()))
+    let v = lent(vm, a, |h| Sxe::import_dom(h, node, class.as_ref()))?;
+    if let Value::Object(o) = &v {
+        if let Some(st) = sxe_of(o) {
+            st.set_modern_document(modern);
+        }
+    }
+    Ok(v)
 }
 
-/// The libxml node behind a DOM (or other provider's) object.
-fn imported_node(vm: &mut Vm, o: &php_runtime::Obj) -> VmResult<Option<Node>> {
-    let Some((_, found)) = php_ext_xsl::access::import(vm, o)? else {
-        return Ok(None);
+/// The libxml node behind a DOM object (`php_libxml_import_node`): the
+/// DOM document switches to shared ownership and the node is pinned for
+/// `SimpleXML`, so both object models reference (and may edit) the same
+/// tree. Returns the node and whether it belongs to the modern DOM.
+fn imported_node(o: &php_runtime::Obj) -> Option<(Node, bool)> {
+    let info = php_ext_dom::interop::import_node(o)?;
+    let (shared, ptr) = php_ext_dom::interop::share_node(o)?;
+    let node = if info.is_document {
+        shared.document().as_node()
+    } else {
+        // SAFETY: `ptr` is the DOM object's node, a node of `shared`'s
+        // document; pinning gives SimpleXML its own reference.
+        unsafe { shared.pin(ptr.as_ptr().cast()) }?
     };
-    let (src, is_doc) = match found {
-        ImportedNode::Document(s) => (s, true),
-        ImportedNode::Node(s) => (s, false),
-        ImportedNode::Detached => return Ok(None),
-    };
-    let doc = match src {
-        XmlSource::Document(d) => return Ok(if is_doc { Some(d.as_node()) } else { None }),
-        XmlSource::Node(n) => return Ok(Some(n)),
-        XmlSource::Raw { doc, keepalive } => {
-            let Some(ptr) = NonNull::new(doc.xml_doc().as_ptr().cast()) else {
-                return Ok(None);
-            };
-            // SAFETY: the provider guarantees the document lives while
-            // `keepalive` does; every SimpleXML object on it holds it.
-            unsafe { foreign::document(ptr, &keepalive) }
-        }
-    };
-    if is_doc {
-        return Ok(Some(doc.as_node()));
-    }
-    // The provider exposes only the document: locate the node by its
-    // `getNodePath()`.
-    let path = vm.call_method_by_name(o, "getNodePath", Vec::new())?;
-    Ok(match path {
-        Value::Str(p) => foreign::node_by_path(&doc, p.as_bytes()),
-        _ => None,
-    })
+    Some((node, info.modern))
 }

@@ -18,6 +18,21 @@ fn c_string(bytes: &[u8]) -> CString {
     CString::new(&bytes[..end]).unwrap_or_default()
 }
 
+/// Reserves the PHP string a libxml2 string of `len` bytes becomes
+/// (`ZEND_MM_ALIGNED_SIZE(24 + len + 1)`; 0/1-byte strings are
+/// interned) against `memory_limit` before copying it, like PHP's
+/// `RETVAL_STRING` allocation. `false` means the limit was hit: the
+/// violation is recorded and the VM raises "Allowed memory size of N
+/// bytes exhausted" right after the call, so the caller returns an empty
+/// value instead of allocating.
+pub(crate) fn reserve_string(len: usize) -> bool {
+    if len <= 1 {
+        return true;
+    }
+    let size = len.saturating_add(24 + 1 + 7) & !7;
+    php_memlimit::try_reserve(size).is_ok()
+}
+
 /// Copies and frees a libxml2-allocated string.
 ///
 /// # Safety
@@ -28,9 +43,12 @@ unsafe fn take_xml_string(p: *mut u8) -> Option<Vec<u8>> {
         return None;
     }
     // SAFETY: valid C string per the contract.
-    let bytes = unsafe { CStr::from_ptr(p.cast::<c_char>()) }
-        .to_bytes()
-        .to_vec();
+    let raw = unsafe { CStr::from_ptr(p.cast::<c_char>()) }.to_bytes();
+    let bytes = if reserve_string(raw.len()) {
+        raw.to_vec()
+    } else {
+        Vec::new()
+    };
     // SAFETY: allocated by libxml2, released exactly once.
     unsafe {
         if let Some(free) = lx::xmlFree {
@@ -49,11 +67,12 @@ unsafe fn const_string(p: *const u8) -> Option<Vec<u8>> {
         None
     } else {
         // SAFETY: guaranteed by the caller.
-        Some(
-            unsafe { CStr::from_ptr(p.cast::<c_char>()) }
-                .to_bytes()
-                .to_vec(),
-        )
+        let raw = unsafe { CStr::from_ptr(p.cast::<c_char>()) }.to_bytes();
+        Some(if reserve_string(raw.len()) {
+            raw.to_vec()
+        } else {
+            Vec::new()
+        })
     }
 }
 
@@ -1105,6 +1124,39 @@ impl XmlReader {
             host.notice("Cannot expand this node type");
             Ok(None)
         }
+    }
+
+    /// `XMLReader::expand()` for a host object model that owns the result:
+    /// `xmlDocCopyNode(node, doc, 1)` of the current node, `doc` being the
+    /// base node's document or null (a document-less copy). The caller
+    /// takes ownership of the returned detached node.
+    ///
+    /// `Ok(None)` means `false` after the warning "An Error Occurred while
+    /// expanding" or the notice "Cannot expand this node type".
+    ///
+    /// # Safety
+    /// `doc` must be null or a live `xmlDoc`.
+    pub unsafe fn expand_raw(
+        &mut self,
+        doc: *mut lx::xmlDoc,
+        host: &mut dyn ReaderHost,
+    ) -> Result<Option<NonNull<lx::xmlNode>>, ReaderError> {
+        let ptr = self
+            .ptr()
+            .ok_or_else(|| ReaderError::error("Data must be loaded before expanding"))?;
+        // SAFETY: live reader; the node belongs to the reader's document.
+        let node = unsafe { fx::xmlTextReaderExpand(ptr) };
+        if node.is_null() {
+            host.warning("An Error Occurred while expanding");
+            return Ok(None);
+        }
+        // SAFETY: node is live; doc is null or live (caller).
+        let copy = unsafe { lx::xmlDocCopyNode(node, doc, 1) };
+        let copy = NonNull::new(copy);
+        if copy.is_none() {
+            host.notice("Cannot expand this node type");
+        }
+        Ok(copy)
     }
 
     /// Reads a virtual property (`xmlreader_property_reader`). Without

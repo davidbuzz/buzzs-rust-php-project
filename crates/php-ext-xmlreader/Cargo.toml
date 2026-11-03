@@ -12,6 +12,7 @@ php-runtime = { path = "../php-runtime" }
 php-xmlreader = { path = "../php-xmlreader" }
 php-ext-xml = { path = "../php-ext-xml" }
 php-ext-streams = { path = "../php-ext-streams" }
+php-ext-dom = { path = "../php-ext-dom" }
 
 [dev-dependencies]
 libc = "0.2"

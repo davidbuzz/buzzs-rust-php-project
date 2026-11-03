@@ -9,6 +9,7 @@ rust-version.workspace = true
 [dependencies]
 php-libxml = { path = "../php-libxml" }
 php-runtime = { path = "../php-runtime" }
+php-memlimit = { path = "../php-memlimit" }
 
 [lints]
 workspace = true

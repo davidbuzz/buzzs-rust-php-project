@@ -47,8 +47,8 @@ impl DomAccess for SimpleXmlAccess {
     ) -> VmResult<Value> {
         let doc = doc.into_document();
         let class = class.map(|c| c.name.clone());
-        let root = doc.root();
-        direct(vm, |h| Sxe::import_dom(h, root, class.as_ref()))
+        // PHP attaches the object to the result document node itself.
+        direct(vm, |h| Sxe::from_document_node(h, doc, class.as_ref()))
     }
 }
 

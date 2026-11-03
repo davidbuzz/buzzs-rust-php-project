@@ -75,6 +75,9 @@ struct State {
     node: Option<XNode>,
     document: Option<Document>,
     iter: Iter,
+    /// The document belongs to the modern DOM (`Dom\XMLDocument`, PHP's
+    /// `PHP_LIBXML_CLASS_MODERN`); inherited by derived objects.
+    modern: bool,
 }
 
 /// The state of one `SimpleXMLElement` object.
@@ -144,6 +147,13 @@ enum Member {
 enum Access {
     Elements,
     Attribs,
+}
+
+/// Whether a `memory_limit` violation is pending (PHP's delayed OOM):
+/// loops building large results stop early instead of running into the
+/// hard limit.
+fn out_of_memory() -> bool {
+    php_memlimit::is_pending()
 }
 
 /// `"SimpleXMLElement is not properly initialized"`.
@@ -287,6 +297,12 @@ impl Sxe {
         self.state.borrow().document.clone()
     }
 
+    /// Marks the object's document as a modern-DOM document (set by the
+    /// binding after `simplexml_import_dom()` of a `Dom\Node`).
+    pub fn set_modern_document(&self, modern: bool) {
+        self.state.borrow_mut().modern = modern;
+    }
+
     /// The iteration mode (`sxe->iter.type`).
     pub fn iter_type(&self) -> IterType {
         self.state.borrow().iter.kind
@@ -357,6 +373,7 @@ fn wrap(
             node,
             document,
             iter,
+            modern: this.state.borrow().modern,
             ..State::default()
         }),
     });
@@ -1375,6 +1392,11 @@ impl Sxe {
             }
         };
         while let Some(n) = cur {
+            if out_of_memory() {
+                // Stop building: the VM raises the pending "Allowed memory
+                // size" fatal error at its next check.
+                break;
+            }
             let mut process = true;
             if n.has_children() || n.has_prev() || n.has_next() || n.is_blank() {
                 if n.is_text() {
@@ -1479,6 +1501,7 @@ impl Sxe {
             out.document = Some(copy);
         } else {
             out.document = this.document();
+            out.modern = this.state.borrow().modern;
             if let (Some(n), Some(doc)) = (node, &out.document) {
                 out.node = n
                     .node()
@@ -1642,6 +1665,26 @@ impl Sxe {
         host.sxe_wrap(&class, sxe)
     }
 
+    /// An object of class `class` attached to the document node itself
+    /// (what `XSLTProcessor::transformToDoc($doc, $returnClass)` creates:
+    /// `getName()` is `""` and the root element is a child).
+    pub fn from_document_node(
+        host: &mut dyn SxeHost,
+        doc: Document,
+        class: Option<&ZStr>,
+    ) -> RtResult<Value> {
+        let class = class
+            .cloned()
+            .unwrap_or_else(|| ZStr::from("SimpleXMLElement"));
+        let sxe = Sxe::new(class.clone());
+        {
+            let mut st = sxe.state.borrow_mut();
+            st.node = Some(XNode::from_node(doc.as_node()));
+            st.document = Some(doc);
+        }
+        host.sxe_wrap(&class, sxe)
+    }
+
     /// `simplexml_import_dom($node, $class)`. `node` is the libxml node of
     /// the DOM object (`None` when the object is not a valid XML node).
     pub fn import_dom(
@@ -1719,8 +1762,19 @@ impl Sxe {
                 return Ok(Value::Bool(false));
             }
         };
+        // `array_init_size(return_value, nodeset->nodeNr)`: a packed array
+        // of 16-byte slots behind a 56-byte header.
+        let table = hits.len().saturating_mul(16).saturating_add(56);
+        if php_memlimit::try_reserve(table).is_err() {
+            // The VM raises "Allowed memory size ... exhausted" after the
+            // call.
+            return Ok(Value::Null);
+        }
         let mut out = HashTable::new();
         for hit in hits {
+            if out_of_memory() {
+                break;
+            }
             let v = match hit {
                 Hit::Node(n) => wrap(this, host, Some(n), IterType::None, None, None, false)?,
                 Hit::Attr(parent, name, href) => wrap(
@@ -1850,7 +1904,11 @@ impl Sxe {
 
     /// `SimpleXMLElement::getDocNamespaces($recursive, $fromRoot)`: an
     /// array, or `false` without a root.
+    ///
+    /// For documents of the modern DOM ([`Sxe::set_modern_document`]),
+    /// attributes in the `xmlns` namespace count as declarations too.
     pub fn get_doc_namespaces(this: &SxeRef, recursive: bool, from_root: bool) -> RtResult<Value> {
+        let include_xmlns_attributes = this.state.borrow().modern;
         let node = if from_root {
             let doc = this.document().ok_or_else(not_initialized)?;
             doc.root().map(XNode::from_node)
@@ -1861,7 +1919,7 @@ impl Sxe {
             return Ok(Value::Bool(false));
         };
         let mut out = HashTable::new();
-        add_registered_namespaces(&node, recursive, &mut out);
+        add_registered_namespaces(&node, recursive, include_xmlns_attributes, &mut out);
         Ok(Value::Array(ZArray::from_table(out)))
     }
 
@@ -2155,17 +2213,42 @@ fn add_namespaces(node: &XNode, recursive: bool, out: &mut HashTable) {
 
 /// `sxe_add_registered_namespaces` (legacy documents: `xmlns` attributes
 /// are not considered).
-fn add_registered_namespaces(node: &XNode, recursive: bool, out: &mut HashTable) {
+fn add_registered_namespaces(
+    node: &XNode,
+    recursive: bool,
+    include_xmlns_attributes: bool,
+    out: &mut HashTable,
+) {
+    const XMLNS: &[u8] = b"http://www.w3.org/2000/xmlns/";
     if !node.is_element() {
         return;
     }
     for (prefix, href) in node.ns_defs() {
         add_ns_name(out, prefix.as_deref(), &href);
     }
+    if include_xmlns_attributes {
+        // Attributes in the xmlns namespace are declarations too.
+        let mut attr = node.properties();
+        while let Some(a) = attr {
+            if let Some(ns) = a.ns().filter(|ns| ns.href == XMLNS) {
+                let prefix = if ns.prefix.is_some() {
+                    a.name().unwrap_or_default()
+                } else {
+                    Vec::new()
+                };
+                let href = a
+                    .children()
+                    .and_then(|c| c.list_get_string())
+                    .unwrap_or_default();
+                add_ns_name(out, Some(&prefix), &href);
+            }
+            attr = a.next();
+        }
+    }
     if recursive {
         let mut c = node.children();
         while let Some(child) = c {
-            add_registered_namespaces(&child, recursive, out);
+            add_registered_namespaces(&child, recursive, include_xmlns_attributes, out);
             c = child.next();
         }
     }

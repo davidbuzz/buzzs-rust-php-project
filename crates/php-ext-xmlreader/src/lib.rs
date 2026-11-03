@@ -397,15 +397,28 @@ fn expand(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     if vm.find_class(b"DOMNode").is_none() {
         return Err(vm.throw("Error", NO_DOM));
     }
+    // The copy goes into the base node's document (or none).
+    let base = match a.opt(0) {
+        Some(Value::Object(o)) => php_ext_dom::interop::import_node(&o),
+        _ => None,
+    };
+    let doc = base
+        .as_ref()
+        .and_then(|b| b.document)
+        .map_or(std::ptr::null_mut(), |d| d.as_ptr().cast());
     let mut host = CollectingHost::default();
-    let r = with_reader(vm, a, &st, |r| r.expand(None, &mut host))?;
+    // SAFETY: `doc` is null or the live document of the base node, kept
+    // alive by `base`'s keep-alive.
+    let r = with_reader(vm, a, &st, |r| unsafe { r.expand_raw(doc, &mut host) })?;
     let node = r.map_err(|e| throw(vm, &e))?;
     flush_host(vm, host)?;
     match node {
         None => Ok(Value::Bool(false)),
-        // Handing a libxml2 node to the DOM binding as a PHP object needs
-        // an API php-ext-dom does not expose yet.
-        Some(_) => Err(vm.throw("Error", NO_DOM)),
+        // SAFETY: a fresh detached copy whose ownership passes to the DOM
+        // extension; its document (if any) is kept alive by `base`.
+        Some(p) => unsafe {
+            php_ext_dom::interop::node_object(vm, p.cast(), base.map(|b| b.keepalive))
+        },
     }
 }
 

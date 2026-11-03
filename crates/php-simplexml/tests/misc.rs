@@ -558,3 +558,53 @@ fn bug79971_1_nul_in_uri() {
         "{out}"
     );
 }
+
+#[test]
+fn from_document_node_sits_on_the_document() {
+    let mut t = T::new("from_document_node");
+    let doc = php_libxml::tree::Document::parse_memory(
+        b"<h1>a</h1>",
+        &php_libxml::tree::ParseOptions::default(),
+    )
+    .expect("parse");
+    let v = Sxe::from_document_node(&mut t.h, doc, None).unwrap();
+    let sx = t.sxe(&v);
+    assert_eq!(Sxe::get_name(&sx).unwrap(), b"");
+    let children = Sxe::properties(&sx, &mut t.h, true).unwrap();
+    assert!(children.get_str(b"h1").is_some());
+}
+
+#[test]
+fn modern_documents_count_xmlns_attributes() {
+    let mut t = T::new("modern_xmlns_attributes");
+    let doc = php_libxml::tree::Document::parse_memory(
+        b"<root/>",
+        &php_libxml::tree::ParseOptions::default(),
+    )
+    .expect("parse");
+    let root = doc.root().expect("root");
+    // A modern-DOM style declaration: an attribute in the xmlns namespace.
+    let attr = root.set_attribute(b"d", b"urn:d").expect("attribute");
+    // SAFETY: root and attr are live nodes of `doc`; the namespace is
+    // owned by root (nsDef) and outlives the attribute.
+    unsafe {
+        let ns = php_libxml::ffi::xmlNewNs(
+            root.as_ptr(),
+            c"http://www.w3.org/2000/xmlns/".as_ptr().cast(),
+            c"xmlns".as_ptr().cast(),
+        );
+        assert!(!ns.is_null());
+        (*attr.as_ptr()).ns = ns;
+    }
+    let v = Sxe::import_dom(&mut t.h, Some(root), None).unwrap();
+    let sx = t.sxe(&v);
+    let legacy = Sxe::get_doc_namespaces(&sx, false, true).unwrap();
+    sx.set_modern_document(true);
+    let modern = Sxe::get_doc_namespaces(&sx, false, true).unwrap();
+    let has_d = |v: &Value| match v {
+        Value::Array(a) => a.get_str(b"d").is_some(),
+        _ => false,
+    };
+    assert!(!has_d(&legacy));
+    assert!(has_d(&modern));
+}
