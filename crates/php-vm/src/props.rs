@@ -642,6 +642,9 @@ impl Vm {
         {
             return Ok(r);
         }
+        // The slot of the real instance (a lazy proxy forwards).
+        let lazy_target = self.lazy_object_for(o, Some(name))?;
+        let o = &lazy_target;
         if let Some(r) = self.uninit_typed_prop_ref(o, name)? {
             return Ok(r);
         }
@@ -839,6 +842,8 @@ impl Vm {
         name: &ZStr,
         r: Value,
     ) -> VmResult<Value> {
+        let lazy_target = self.lazy_object_for(o, Some(name))?;
+        let o = &lazy_target;
         if let Some(r) = self.assign_uninit_typed_prop_ref(o, name, &r)? {
             return Ok(r);
         }
