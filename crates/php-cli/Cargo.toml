@@ -23,6 +23,7 @@ php-ext-random = { path = "../php-ext-random" }
 php-ext-filter = { path = "../php-ext-filter" }
 php-ext-pdo = { path = "../php-ext-pdo" }
 php-ext-date = { path = "../php-ext-date" }
+php-ext-openssl = { path = "../php-ext-openssl" }
 libc = "0.2"
 
 [lints]

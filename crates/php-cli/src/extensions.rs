@@ -21,5 +21,6 @@ pub fn all() -> Vec<Box<dyn Extension>> {
         Box::new(php_ext_stdmisc::StdMisc),
         Box::new(php_ext_spl::Spl),
         Box::new(php_ext_pdo::Pdo),
+        Box::new(php_ext_openssl::OpenSsl),
     ]
 }

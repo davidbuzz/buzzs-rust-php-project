@@ -1,5 +1,6 @@
 [package]
 name = "php-ext-openssl"
+description = "ext/openssl binding for the phprust VM over the php-openssl library"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -8,6 +9,8 @@ rust-version.workspace = true
 [dependencies]
 php-vm = { path = "../php-vm" }
 php-runtime = { path = "../php-runtime" }
+php-openssl = { path = "../php-openssl" }
+php-support = { path = "../php-support" }
 
 [lints]
 workspace = true
