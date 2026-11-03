@@ -161,12 +161,16 @@ pub(crate) fn to_value(vm: &mut Vm, v: DomValue) -> VmResult<Value> {
             cache(id, &o);
             Value::Object(o)
         }
-        DomValue::TokenList(t) => Value::Object(new_dom_object(
-            vm,
-            "Dom\\TokenList",
-            "Dom\\TokenList",
-            DomObject::TokenList(t),
-        )?),
+        DomValue::TokenList(t) => {
+            // `classList` is cached per element: key by the element handle.
+            let id = t.element().object_id() | 1;
+            if let Some(o) = cached(id) {
+                return Ok(Value::Object(o));
+            }
+            let o = new_dom_object(vm, "Dom\\TokenList", "Dom\\TokenList", DomObject::TokenList(t))?;
+            cache(id, &o);
+            Value::Object(o)
+        }
         DomValue::XPath(x) => {
             let class = x.class_name();
             Value::Object(new_dom_object(vm, class, class, DomObject::XPath(x))?)
@@ -176,6 +180,7 @@ pub(crate) fn to_value(vm: &mut Vm, v: DomValue) -> VmResult<Value> {
                 source: None,
                 handle: Some(h),
                 started: false,
+                rewindable: false,
             };
             Value::Object(vm.new_internal_iterator(Box::new(it))?)
         }
@@ -276,6 +281,9 @@ pub(crate) struct DomIter {
     pub handle: Option<IterHandle>,
     /// Whether `rewind()` was called once already.
     pub started: bool,
+    /// Whether a second `rewind()` restarts (token lists) or throws
+    /// "Iterator does not support rewinding" (node collections).
+    pub rewindable: bool,
 }
 
 impl DomIter {
@@ -293,8 +301,13 @@ impl DomIter {
 
 impl NativeIterator for DomIter {
     fn rewind(&mut self, vm: &mut Vm) -> VmResult<()> {
-        if self.started && self.source.is_some() {
-            self.handle = None;
+        if self.started {
+            if !self.rewindable {
+                return Err(vm.throw("Error", "Iterator does not support rewinding"));
+            }
+            if self.source.is_some() {
+                self.handle = None;
+            }
         }
         self.started = true;
         self.ensure(vm)

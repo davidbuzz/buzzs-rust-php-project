@@ -37,7 +37,7 @@ fn method_ctx(builtin: &str, method: &str, class: String) -> Ctx {
 
 /// Converts the passed arguments (trailing omitted optional arguments are
 /// left out so php-dom can tell them from explicit values).
-fn convert_args(vm: &mut Vm, a: &Args, builtin: &str, method: &str) -> Vec<DomValue> {
+fn convert_args(vm: &mut Vm, a: &Args, builtin: &str, method: &str) -> VmResult<Vec<DomValue>> {
     let params = find_method(builtin, method).map_or(&[][..], |(_, m)| m.params);
     let n = a
         .passed
@@ -60,26 +60,35 @@ fn convert_args(vm: &mut Vm, a: &Args, builtin: &str, method: &str) -> Vec<DomVa
             DomValue::Callable(Rc::new(v.clone()))
         } else if reg_fns {
             match &v {
-                Value::Array(arr) => DomValue::Array(
-                    arr.iter()
-                        .map(|(k, e)| {
-                            let key = match k {
-                                php_runtime::ArrayKey::Int(i) => DomKey::Int(*i),
-                                php_runtime::ArrayKey::Str(s) => DomKey::Str(s.as_bytes().to_vec()),
-                            };
-                            let e = e.deref();
-                            let ev = match &e {
-                                Value::Str(s) => DomValue::Str(s.as_bytes().to_vec()),
-                                _ if vm.is_callable(&e) => DomValue::Callable(Rc::new(e.clone())),
-                                Value::Array(_) | Value::Object(_) => {
-                                    DomValue::Other(vm.callable_error_message(&e))
-                                }
-                                other => to_dom(vm, other),
-                            };
-                            (key, ev)
-                        })
-                        .collect(),
-                ),
+                Value::Array(arr) => {
+                    let mut items = Vec::with_capacity(arr.len());
+                    for (k, e) in arr.iter() {
+                        let e = e.deref();
+                        let (key, ev) = match k {
+                            php_runtime::ArrayKey::Int(i) => {
+                                // List entries are function names
+                                // (`zval_try_get_string`).
+                                let s = vm.value_to_string(&e)?;
+                                (DomKey::Int(*i), DomValue::Str(s.as_bytes().to_vec()))
+                            }
+                            php_runtime::ArrayKey::Str(s) => {
+                                let ev = match &e {
+                                    Value::Str(s) => DomValue::Str(s.as_bytes().to_vec()),
+                                    _ if vm.is_callable(&e) => {
+                                        DomValue::Callable(Rc::new(e.clone()))
+                                    }
+                                    Value::Array(_) | Value::Object(_) => {
+                                        DomValue::Other(vm.callable_error_message(&e))
+                                    }
+                                    other => to_dom(vm, other),
+                                };
+                                (DomKey::Str(s.as_bytes().to_vec()), ev)
+                            }
+                        };
+                        items.push((key, ev));
+                    }
+                    DomValue::Array(items)
+                }
                 other => to_dom(vm, other),
             }
         } else {
@@ -87,7 +96,7 @@ fn convert_args(vm: &mut Vm, a: &Args, builtin: &str, method: &str) -> Vec<DomVa
         };
         out.push(dv);
     }
-    out
+    Ok(out)
 }
 
 /// Finds the built-in DOM class of a (possibly user) class.
@@ -117,14 +126,9 @@ fn static_method(vm: &mut Vm, a: &Args, name: &str) -> VmResult<Value> {
         .called
         .as_ref()
         .and_then(builtin_of_class)
-        .or_else(|| {
-            a.func
-                .as_ref()
-                .and_then(|_| None::<&'static str>)
-        })
         .unwrap_or("DOMNode");
     let ctx = method_ctx(builtin, name, builtin.to_string());
-    let dargs = convert_args(vm, a, builtin, name);
+    let dargs = convert_args(vm, a, builtin, name)?;
     let r = run::call(vm, a, || dispatch::call_static(builtin, name, &dargs, &VmHost))?;
     finish(vm, r, &ctx)
 }
@@ -132,7 +136,7 @@ fn static_method(vm: &mut Vm, a: &Args, name: &str) -> VmResult<Value> {
 /// `__construct`.
 fn construct(vm: &mut Vm, a: &Args, this: &Obj, builtin: &'static str) -> VmResult<Value> {
     let ctx = method_ctx(builtin, "__construct", display_name(&class_of(this).name).to_string_lossy());
-    let dargs = convert_args(vm, a, builtin, "__construct");
+    let dargs = convert_args(vm, a, builtin, "__construct")?;
     match dom_object(this) {
         Some(d) => {
             let r = run::call(vm, a, || dispatch::construct(&d, &dargs, &VmHost))?;
@@ -173,9 +177,16 @@ pub(crate) fn method(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let class = display_name(&class_of(&this).name).to_string_lossy();
     let ctx = method_ctx(builtin, &name, class.clone());
     let Some(d) = dom_object(&this) else {
+        if crate::hooks::is_xpath_class(builtin) {
+            return Err(crate::hooks::invalid_state(vm));
+        }
         return Err(vm.throw("Error", &format!("Couldn't fetch {class}")));
     };
-    let dargs = convert_args(vm, a, builtin, &name);
+    if name.eq_ignore_ascii_case("getIterator") {
+        let it = crate::hooks::new_iter(Some(d));
+        return Ok(Value::Object(vm.new_internal_iterator(it)?));
+    }
+    let dargs = convert_args(vm, a, builtin, &name)?;
     let r = run::call(vm, a, || dispatch::call(&d, &name, &dargs, &VmHost))?;
     finish(vm, r, &ctx)
 }

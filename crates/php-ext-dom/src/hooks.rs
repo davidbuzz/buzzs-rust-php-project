@@ -4,11 +4,11 @@
 use php_dom::classes::{find_class, is_subclass, PropInfo};
 use php_dom::dispatch::{self, DomObject, PropRead};
 use php_dom::lists::Offset;
-use php_dom::{DomValue, Node};
+use php_dom::Node;
 use php_runtime::{ArrayKey, HashTable, Obj, PropertyPurpose, Value, ZArray, ZStr};
-use php_vm::ext::{ClassHooks, NativeIterator, VmResult};
+use php_vm::ext::{ClassHooks, DimensionCtx, NativeIterator, PropCtx, VmResult};
 use php_vm::func::flags;
-use php_vm::object::{class_of, data, display_name, internal, set_internal};
+use php_vm::object::{class_of, data, display_name, set_internal};
 use php_vm::Vm;
 
 use crate::errors::{check, Ctx};
@@ -93,8 +93,30 @@ fn name_str(name: &ZStr) -> String {
     name.to_string_lossy()
 }
 
+/// Whether a built-in class is `DOMXPath` / `Dom\XPath`.
+pub(crate) fn is_xpath_class(b: &str) -> bool {
+    b == "DOMXPath" || b == "Dom\\XPath"
+}
+
+/// `DOMException(Invalid State Error)` for an unconstructed object.
+pub(crate) fn invalid_state(vm: &mut Vm) -> php_vm::ext::Throw {
+    crate::errors::throw(
+        vm,
+        php_dom::DomError::dom(php_dom::DomExceptionCode::InvalidState),
+        None,
+    )
+    .unwrap_or_else(|| vm.throw("Error", "Invalid State Error"))
+}
+
 fn read_property(vm: &mut Vm, o: &Obj, name: &ZStr) -> VmResult<Option<Value>> {
     let Some(d) = dom_object(o) else {
+        if builtin_of(o).is_some_and(is_xpath_class) {
+            match name.as_bytes() {
+                b"registerNodeNamespaces" => return Ok(Some(Value::Bool(true))),
+                b"document" => return Err(invalid_state(vm)),
+                _ => {}
+            }
+        }
         return Ok(None);
     };
     let n = name_str(name);
@@ -228,17 +250,19 @@ fn has_property(vm: &mut Vm, o: &Obj, name: &ZStr, check_empty: bool) -> VmResul
     if !dispatch::is_handled_property(&d, &n) {
         return Ok(None);
     }
+    if vm.property_context() == PropCtx::Exists {
+        return Ok(Some(true));
+    }
     let ctx = obj_ctx(o);
     let r = run::lib(vm, || dispatch::read_property(&d, &n))?;
     let v = match check(vm, r, Some(&ctx))? {
         Some(PropRead::Value(v)) => to_value(vm, v)?,
         Some(PropRead::NotHandled) => return Ok(None),
-        _ => {
-            return Ok(Some(check_empty));
-        }
+        _ => return Ok(Some(false)),
     };
+    // The hook answers "set" (isset) or "not empty" (empty()).
     if check_empty {
-        Ok(Some(!vm.value_to_bool(&v)?))
+        Ok(Some(vm.value_to_bool(&v)?))
     } else {
         Ok(Some(!v.is_null()))
     }
@@ -304,10 +328,15 @@ fn std_properties(o: &Obj) -> HashTable {
 
 /// `dom_get_debug_info`.
 fn properties_for(vm: &mut Vm, o: &Obj, purpose: PropertyPurpose) -> VmResult<Option<ZArray>> {
-    if purpose != PropertyPurpose::Debug {
+    if purpose != PropertyPurpose::Debug || class_of(o).magic.debug_info.is_some() {
         return Ok(None);
     }
     let Some(d) = dom_object(o) else {
+        if builtin_of(o).is_some_and(is_xpath_class) {
+            let mut t = std_properties(o);
+            t.insert(ArrayKey::Str(ZStr::from("registerNodeNamespaces")), Value::Bool(true));
+            return Ok(Some(ZArray::from_table(t)));
+        }
         return Ok(None);
     };
     let mut t = std_properties(o);
@@ -319,8 +348,19 @@ fn properties_for(vm: &mut Vm, o: &Obj, purpose: PropertyPurpose) -> VmResult<Op
     Ok(Some(ZArray::from_table(t)))
 }
 
-fn to_offset(v: &Value) -> Offset {
-    match v.deref() {
+/// `E_WARNING`.
+const E_WARNING: i64 = 2;
+
+fn to_offset(vm: &mut Vm, v: &Value) -> VmResult<Offset> {
+    Ok(match v.deref() {
+        Value::Resource(r) => {
+            let id = r.handle();
+            vm.raise(
+                E_WARNING,
+                &format!("Resource ID#{id} used as offset, casting to integer ({id})"),
+            )?;
+            Offset::Int(id)
+        }
         Value::Int(i) => Offset::Int(i),
         Value::Float(f) => Offset::Float(f),
         Value::Str(s) => Offset::Str(s.as_bytes().to_vec()),
@@ -328,14 +368,23 @@ fn to_offset(v: &Value) -> Offset {
         Value::Bool(b) => Offset::Bool(b),
         Value::Array(a) => Offset::Array(!a.is_empty()),
         other => Offset::Other(type_name(&other)),
-    }
+    })
 }
 
 fn read_dimension(vm: &mut Vm, o: &Obj, k: &Value) -> VmResult<Option<Value>> {
     let Some(d) = dom_object(o) else {
         return Ok(None);
     };
-    let off = to_offset(k);
+    if vm.dimension_context() == DimensionCtx::Append {
+        let class = display_name(&class_of(o).name).to_string_lossy();
+        let msg = if d.builtin_class().starts_with("Dom\\") {
+            format!("Cannot append to {class}")
+        } else {
+            format!("Cannot access {class} without offset")
+        };
+        return Err(vm.throw("Error", &msg));
+    }
+    let off = to_offset(vm, k)?;
     let ctx = obj_ctx(o);
     let r = run::lib(vm, || dispatch::offset_get(&d, &off))?;
     match check(vm, r, Some(&ctx))? {
@@ -344,14 +393,22 @@ fn read_dimension(vm: &mut Vm, o: &Obj, k: &Value) -> VmResult<Option<Value>> {
     }
 }
 
-fn has_dimension(vm: &mut Vm, o: &Obj, k: &Value, _check_empty: bool) -> VmResult<Option<bool>> {
+fn has_dimension(vm: &mut Vm, o: &Obj, k: &Value, check_empty: bool) -> VmResult<Option<bool>> {
     let Some(d) = dom_object(o) else {
         return Ok(None);
     };
-    let off = to_offset(k);
+    let off = to_offset(vm, k)?;
     let ctx = obj_ctx(o);
     let r = run::lib(vm, || dispatch::offset_exists(&d, &off))?;
-    Ok(Some(check(vm, r, Some(&ctx))?.unwrap_or(false)))
+    let exists = check(vm, r, Some(&ctx))?.unwrap_or(false);
+    if exists && check_empty && matches!(d, DomObject::TokenList(_)) {
+        // Tokens are strings: "0" is empty.
+        let r = run::lib(vm, || dispatch::offset_get(&d, &off))?;
+        let v = check(vm, r, Some(&ctx))?.unwrap_or(php_dom::DomValue::Null);
+        let v = to_value(vm, v)?;
+        return Ok(Some(vm.value_to_bool(&v)?));
+    }
+    Ok(Some(exists))
 }
 
 #[allow(clippy::unnecessary_wraps)] // signature fixed by `ClassHooks::count`
@@ -359,13 +416,25 @@ fn count(_vm: &mut Vm, o: &Obj) -> VmResult<Option<i64>> {
     Ok(dom_object(o).and_then(|d| dispatch::count(&d)))
 }
 
-#[allow(clippy::unnecessary_wraps)] // signature fixed by `ClassHooks::get_iterator`
-fn get_iterator(_vm: &mut Vm, o: &Obj, _by_ref: bool) -> VmResult<Box<dyn NativeIterator>> {
-    Ok(Box::new(DomIter {
-        source: dom_object(o),
+fn get_iterator(vm: &mut Vm, o: &Obj, by_ref: bool) -> VmResult<Box<dyn NativeIterator>> {
+    if by_ref {
+        return Err(vm.throw(
+            "Error",
+            "An iterator cannot be used with foreach by reference",
+        ));
+    }
+    Ok(new_iter(dom_object(o)))
+}
+
+/// An iterator over a collection object.
+pub(crate) fn new_iter(d: Option<DomObject>) -> Box<DomIter> {
+    let rewindable = matches!(d, Some(DomObject::TokenList(_)));
+    Box::new(DomIter {
+        source: d,
         handle: None,
         started: false,
-    }))
+        rewindable,
+    })
 }
 
 /// Handlers of every DOM class.
@@ -391,14 +460,4 @@ pub(crate) fn collection_hooks() -> ClassHooks {
         get_iterator: Some(get_iterator),
         ..object_hooks()
     }
-}
-
-/// Unused-value guard for `DomValue` in this module.
-#[allow(dead_code)]
-fn _unused(_: DomValue) {}
-
-/// Keeps `internal` in use for future handlers.
-#[allow(dead_code)]
-fn _state(o: &Obj) -> bool {
-    internal::<DomState, _>(o, |_| ()).is_some()
 }

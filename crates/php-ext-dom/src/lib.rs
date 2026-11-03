@@ -74,15 +74,16 @@ fn leak(s: String) -> &'static str {
     Box::leak(s.into_boxed_str())
 }
 
-/// The stub signature of a method.
-fn signature(m: &MethodInfo) -> &'static str {
+/// The stub signature of a method. `untyped` drops parameter types (for
+/// methods whose C implementation checks types itself, `Z_PARAM_VARIADIC('*')`).
+fn signature(m: &MethodInfo, untyped: bool) -> &'static str {
     let mut s = String::from(m.name);
     s.push('(');
     for (i, p) in m.params.iter().enumerate() {
         if i > 0 {
             s.push_str(", ");
         }
-        if let Some(t) = p.ty {
+        if let Some(t) = p.ty.filter(|_| !untyped) {
             s.push_str(t);
             s.push(' ');
         }
@@ -197,7 +198,8 @@ fn register_class(vm: &mut Vm, c: &ClassInfo) {
         if m.is_final {
             mf |= acc::FINAL;
         }
-        let sig = signature(m);
+        let untyped = c.name == "Dom\\TokenList" && matches!(m.name, "add" | "remove");
+        let sig = signature(m, untyped);
         if m.is_abstract || c.kind == ClassKind::Interface {
             b = b.abstract_method(sig, mf);
         } else {
@@ -272,6 +274,10 @@ impl Extension for Dom {
             "dom_import_simplexml(object $node): DOMAttr|DOMElement",
             import_simplexml,
         );
+        m.function(
+            "Dom\\import_simplexml(object $node): Dom\\Attr|Dom\\Element",
+            import_simplexml,
+        );
         php_ext_xsl::access::register(&xsl::ACCESS);
     }
 }
@@ -284,7 +290,7 @@ mod tests {
     fn signatures_are_stub_like() {
         let (_, m) = php_dom::classes::find_method("DOMDocument", "createElement").expect("m");
         assert_eq!(
-            signature(m),
+            signature(m, false),
             "createElement(string $localName, string $value = \"\"): DOMElement|false"
         );
     }
