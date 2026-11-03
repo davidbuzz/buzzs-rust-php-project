@@ -237,7 +237,9 @@ fn cases() -> Vec<Case> {
     }
     for w in METAPHONE {
         for m in [0i64, 1, 2, 3, 5, -1] {
-            v.push(case(&format!("metaphone({}, {m})", lit(w)), |_| metaphone(w, m)));
+            v.push(case(&format!("metaphone({}, {m})", lit(w)), |_| {
+                metaphone(w, m)
+            }));
         }
     }
     for s in WC_STRS {

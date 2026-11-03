@@ -1,0 +1,2347 @@
+=== addslashes('')
+=> ''
+=== stripslashes('')
+=> ''
+=== stripcslashes('')
+=> ''
+=== quotemeta('')
+=> ''
+=== stripslashes(addslashes(''))
+=> ''
+=== addcslashes('', '')
+=> ''
+=== stripcslashes(addcslashes('', ''))
+=> ''
+=== addcslashes('', 'A..Z')
+=> ''
+=== stripcslashes(addcslashes('', 'A..Z'))
+=> ''
+=== addcslashes('', 'a..z')
+=> ''
+=== stripcslashes(addcslashes('', 'a..z'))
+=> ''
+=== addcslashes('', 'A..z')
+=> ''
+=== stripcslashes(addcslashes('', 'A..z'))
+=> ''
+=== addcslashes('', "\x00..\x1f")
+=> ''
+=== stripcslashes(addcslashes('', "\x00..\x1f"))
+=> ''
+=== addcslashes('', "\x00..\xff")
+=> ''
+=== stripcslashes(addcslashes('', "\x00..\xff"))
+=> ''
+=== addcslashes('', "\x7f..\xff")
+=> ''
+=== stripcslashes(addcslashes('', "\x7f..\xff"))
+=> ''
+=== addcslashes('', '[]\'"\\')
+=> ''
+=== stripcslashes(addcslashes('', '[]\'"\\'))
+=> ''
+=== addcslashes('', 'z..a')
+=> ''
+=== stripcslashes(addcslashes('', 'z..a'))
+=> ''
+=== addcslashes('', '..a')
+=> ''
+=== stripcslashes(addcslashes('', '..a'))
+=> ''
+=== addcslashes('', 'a..')
+=> ''
+=== stripcslashes(addcslashes('', 'a..'))
+=> ''
+=== addcslashes('', 'a..b..c')
+=> ''
+=== stripcslashes(addcslashes('', 'a..b..c'))
+=> ''
+=== addcslashes('', '..')
+=> ''
+=== stripcslashes(addcslashes('', '..'))
+=> ''
+=== addcslashes('', '...')
+=> ''
+=== stripcslashes(addcslashes('', '...'))
+=> ''
+=== addcslashes('', "\x0a\x09\x0d")
+=> ''
+=== stripcslashes(addcslashes('', "\x0a\x09\x0d"))
+=> ''
+=== addcslashes('', 'o')
+=> ''
+=== stripcslashes(addcslashes('', 'o'))
+=> ''
+=== addcslashes('', '0..9')
+=> ''
+=== stripcslashes(addcslashes('', '0..9'))
+=> ''
+=== addslashes('plain')
+=> 'plain'
+=== stripslashes('plain')
+=> 'plain'
+=== stripcslashes('plain')
+=> 'plain'
+=== quotemeta('plain')
+=> 'plain'
+=== stripslashes(addslashes('plain'))
+=> 'plain'
+=== addcslashes('plain', '')
+=> 'plain'
+=== stripcslashes(addcslashes('plain', ''))
+=> 'plain'
+=== addcslashes('plain', 'A..Z')
+=> 'plain'
+=== stripcslashes(addcslashes('plain', 'A..Z'))
+=> 'plain'
+=== addcslashes('plain', 'a..z')
+=> '\\p\\l\\a\\i\\n'
+=== stripcslashes(addcslashes('plain', 'a..z'))
+=> 'pli
+'
+=== addcslashes('plain', 'A..z')
+=> '\\p\\l\\a\\i\\n'
+=== stripcslashes(addcslashes('plain', 'A..z'))
+=> 'pli
+'
+=== addcslashes('plain', "\x00..\x1f")
+=> 'plain'
+=== stripcslashes(addcslashes('plain', "\x00..\x1f"))
+=> 'plain'
+=== addcslashes('plain', "\x00..\xff")
+=> '\\p\\l\\a\\i\\n'
+=== stripcslashes(addcslashes('plain', "\x00..\xff"))
+=> 'pli
+'
+=== addcslashes('plain', "\x7f..\xff")
+=> 'plain'
+=== stripcslashes(addcslashes('plain', "\x7f..\xff"))
+=> 'plain'
+=== addcslashes('plain', '[]\'"\\')
+=> 'plain'
+=== stripcslashes(addcslashes('plain', '[]\'"\\'))
+=> 'plain'
+=== addcslashes('plain', 'z..a')
+Warning: addcslashes(): Invalid '..'-range, '..'-range needs to be incrementing
+=> 'pl\\ain'
+=== stripcslashes(addcslashes('plain', 'z..a'))
+Warning: addcslashes(): Invalid '..'-range, '..'-range needs to be incrementing
+=> 'plin'
+=== addcslashes('plain', '..a')
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+=> 'pl\\ain'
+=== stripcslashes(addcslashes('plain', '..a'))
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+=> 'plin'
+=== addcslashes('plain', 'a..')
+Warning: addcslashes(): Invalid '..'-range, no character to the right of '..'
+=> 'pl\\ain'
+=== stripcslashes(addcslashes('plain', 'a..'))
+Warning: addcslashes(): Invalid '..'-range, no character to the right of '..'
+=> 'plin'
+=== addcslashes('plain', 'a..b..c')
+Warning: addcslashes(): Invalid '..'-range
+=> 'pl\\ain'
+=== stripcslashes(addcslashes('plain', 'a..b..c'))
+Warning: addcslashes(): Invalid '..'-range
+=> 'plin'
+=== addcslashes('plain', '..')
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+=> 'plain'
+=== stripcslashes(addcslashes('plain', '..'))
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+=> 'plain'
+=== addcslashes('plain', '...')
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+Warning: addcslashes(): Invalid '..'-range, no character to the right of '..'
+=> 'plain'
+=== stripcslashes(addcslashes('plain', '...'))
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+Warning: addcslashes(): Invalid '..'-range, no character to the right of '..'
+=> 'plain'
+=== addcslashes('plain', "\x0a\x09\x0d")
+=> 'plain'
+=== stripcslashes(addcslashes('plain', "\x0a\x09\x0d"))
+=> 'plain'
+=== addcslashes('plain', 'o')
+=> 'plain'
+=== stripcslashes(addcslashes('plain', 'o'))
+=> 'plain'
+=== addcslashes('plain', '0..9')
+=> 'plain'
+=== stripcslashes(addcslashes('plain', '0..9'))
+=> 'plain'
+=== addslashes('O\'Reilly')
+=> 'O\\\'Reilly'
+=== stripslashes('O\'Reilly')
+=> 'O\'Reilly'
+=== stripcslashes('O\'Reilly')
+=> 'O\'Reilly'
+=== quotemeta('O\'Reilly')
+=> 'O\'Reilly'
+=== stripslashes(addslashes('O\'Reilly'))
+=> 'O\'Reilly'
+=== addcslashes('O\'Reilly', '')
+=> 'O\'Reilly'
+=== stripcslashes(addcslashes('O\'Reilly', ''))
+=> 'O\'Reilly'
+=== addcslashes('O\'Reilly', 'A..Z')
+=> '\\O\'\\Reilly'
+=== stripcslashes(addcslashes('O\'Reilly', 'A..Z'))
+=> 'O\'Reilly'
+=== addcslashes('O\'Reilly', 'a..z')
+=> 'O\'R\\e\\i\\l\\l\\y'
+=== stripcslashes(addcslashes('O\'Reilly', 'a..z'))
+=> 'O\'Reilly'
+=== addcslashes('O\'Reilly', 'A..z')
+=> '\\O\'\\R\\e\\i\\l\\l\\y'
+=== stripcslashes(addcslashes('O\'Reilly', 'A..z'))
+=> 'O\'Reilly'
+=== addcslashes('O\'Reilly', "\x00..\x1f")
+=> 'O\'Reilly'
+=== stripcslashes(addcslashes('O\'Reilly', "\x00..\x1f"))
+=> 'O\'Reilly'
+=== addcslashes('O\'Reilly', "\x00..\xff")
+=> '\\O\\\'\\R\\e\\i\\l\\l\\y'
+=== stripcslashes(addcslashes('O\'Reilly', "\x00..\xff"))
+=> 'O\'Reilly'
+=== addcslashes('O\'Reilly', "\x7f..\xff")
+=> 'O\'Reilly'
+=== stripcslashes(addcslashes('O\'Reilly', "\x7f..\xff"))
+=> 'O\'Reilly'
+=== addcslashes('O\'Reilly', '[]\'"\\')
+=> 'O\\\'Reilly'
+=== stripcslashes(addcslashes('O\'Reilly', '[]\'"\\'))
+=> 'O\'Reilly'
+=== addcslashes('O\'Reilly', 'z..a')
+Warning: addcslashes(): Invalid '..'-range, '..'-range needs to be incrementing
+=> 'O\'Reilly'
+=== stripcslashes(addcslashes('O\'Reilly', 'z..a'))
+Warning: addcslashes(): Invalid '..'-range, '..'-range needs to be incrementing
+=> 'O\'Reilly'
+=== addcslashes('O\'Reilly', '..a')
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+=> 'O\'Reilly'
+=== stripcslashes(addcslashes('O\'Reilly', '..a'))
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+=> 'O\'Reilly'
+=== addcslashes('O\'Reilly', 'a..')
+Warning: addcslashes(): Invalid '..'-range, no character to the right of '..'
+=> 'O\'Reilly'
+=== stripcslashes(addcslashes('O\'Reilly', 'a..'))
+Warning: addcslashes(): Invalid '..'-range, no character to the right of '..'
+=> 'O\'Reilly'
+=== addcslashes('O\'Reilly', 'a..b..c')
+Warning: addcslashes(): Invalid '..'-range
+=> 'O\'Reilly'
+=== stripcslashes(addcslashes('O\'Reilly', 'a..b..c'))
+Warning: addcslashes(): Invalid '..'-range
+=> 'O\'Reilly'
+=== addcslashes('O\'Reilly', '..')
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+=> 'O\'Reilly'
+=== stripcslashes(addcslashes('O\'Reilly', '..'))
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+=> 'O\'Reilly'
+=== addcslashes('O\'Reilly', '...')
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+Warning: addcslashes(): Invalid '..'-range, no character to the right of '..'
+=> 'O\'Reilly'
+=== stripcslashes(addcslashes('O\'Reilly', '...'))
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+Warning: addcslashes(): Invalid '..'-range, no character to the right of '..'
+=> 'O\'Reilly'
+=== addcslashes('O\'Reilly', "\x0a\x09\x0d")
+=> 'O\'Reilly'
+=== stripcslashes(addcslashes('O\'Reilly', "\x0a\x09\x0d"))
+=> 'O\'Reilly'
+=== addcslashes('O\'Reilly', 'o')
+=> 'O\'Reilly'
+=== stripcslashes(addcslashes('O\'Reilly', 'o'))
+=> 'O\'Reilly'
+=== addcslashes('O\'Reilly', '0..9')
+=> 'O\'Reilly'
+=== stripcslashes(addcslashes('O\'Reilly', '0..9'))
+=> 'O\'Reilly'
+=== addslashes('say "hi"')
+=> 'say \\"hi\\"'
+=== stripslashes('say "hi"')
+=> 'say "hi"'
+=== stripcslashes('say "hi"')
+=> 'say "hi"'
+=== quotemeta('say "hi"')
+=> 'say "hi"'
+=== stripslashes(addslashes('say "hi"'))
+=> 'say "hi"'
+=== addcslashes('say "hi"', '')
+=> 'say "hi"'
+=== stripcslashes(addcslashes('say "hi"', ''))
+=> 'say "hi"'
+=== addcslashes('say "hi"', 'A..Z')
+=> 'say "hi"'
+=== stripcslashes(addcslashes('say "hi"', 'A..Z'))
+=> 'say "hi"'
+=== addcslashes('say "hi"', 'a..z')
+=> '\\s\\a\\y "\\h\\i"'
+=== stripcslashes(addcslashes('say "hi"', 'a..z'))
+=> 'sy "hi"'
+=== addcslashes('say "hi"', 'A..z')
+=> '\\s\\a\\y "\\h\\i"'
+=== stripcslashes(addcslashes('say "hi"', 'A..z'))
+=> 'sy "hi"'
+=== addcslashes('say "hi"', "\x00..\x1f")
+=> 'say "hi"'
+=== stripcslashes(addcslashes('say "hi"', "\x00..\x1f"))
+=> 'say "hi"'
+=== addcslashes('say "hi"', "\x00..\xff")
+=> '\\s\\a\\y\\ \\"\\h\\i\\"'
+=== stripcslashes(addcslashes('say "hi"', "\x00..\xff"))
+=> 'sy "hi"'
+=== addcslashes('say "hi"', "\x7f..\xff")
+=> 'say "hi"'
+=== stripcslashes(addcslashes('say "hi"', "\x7f..\xff"))
+=> 'say "hi"'
+=== addcslashes('say "hi"', '[]\'"\\')
+=> 'say \\"hi\\"'
+=== stripcslashes(addcslashes('say "hi"', '[]\'"\\'))
+=> 'say "hi"'
+=== addcslashes('say "hi"', 'z..a')
+Warning: addcslashes(): Invalid '..'-range, '..'-range needs to be incrementing
+=> 's\\ay "hi"'
+=== stripcslashes(addcslashes('say "hi"', 'z..a'))
+Warning: addcslashes(): Invalid '..'-range, '..'-range needs to be incrementing
+=> 'sy "hi"'
+=== addcslashes('say "hi"', '..a')
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+=> 's\\ay "hi"'
+=== stripcslashes(addcslashes('say "hi"', '..a'))
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+=> 'sy "hi"'
+=== addcslashes('say "hi"', 'a..')
+Warning: addcslashes(): Invalid '..'-range, no character to the right of '..'
+=> 's\\ay "hi"'
+=== stripcslashes(addcslashes('say "hi"', 'a..'))
+Warning: addcslashes(): Invalid '..'-range, no character to the right of '..'
+=> 'sy "hi"'
+=== addcslashes('say "hi"', 'a..b..c')
+Warning: addcslashes(): Invalid '..'-range
+=> 's\\ay "hi"'
+=== stripcslashes(addcslashes('say "hi"', 'a..b..c'))
+Warning: addcslashes(): Invalid '..'-range
+=> 'sy "hi"'
+=== addcslashes('say "hi"', '..')
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+=> 'say "hi"'
+=== stripcslashes(addcslashes('say "hi"', '..'))
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+=> 'say "hi"'
+=== addcslashes('say "hi"', '...')
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+Warning: addcslashes(): Invalid '..'-range, no character to the right of '..'
+=> 'say "hi"'
+=== stripcslashes(addcslashes('say "hi"', '...'))
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+Warning: addcslashes(): Invalid '..'-range, no character to the right of '..'
+=> 'say "hi"'
+=== addcslashes('say "hi"', "\x0a\x09\x0d")
+=> 'say "hi"'
+=== stripcslashes(addcslashes('say "hi"', "\x0a\x09\x0d"))
+=> 'say "hi"'
+=== addcslashes('say "hi"', 'o')
+=> 'say "hi"'
+=== stripcslashes(addcslashes('say "hi"', 'o'))
+=> 'say "hi"'
+=== addcslashes('say "hi"', '0..9')
+=> 'say "hi"'
+=== stripcslashes(addcslashes('say "hi"', '0..9'))
+=> 'say "hi"'
+=== addslashes('back\\slash')
+=> 'back\\\\slash'
+=== stripslashes('back\\slash')
+=> 'backslash'
+=== stripcslashes('back\\slash')
+=> 'backslash'
+=== quotemeta('back\\slash')
+=> 'back\\\\slash'
+=== stripslashes(addslashes('back\\slash'))
+=> 'back\\slash'
+=== addcslashes('back\\slash', '')
+=> 'back\\slash'
+=== stripcslashes(addcslashes('back\\slash', ''))
+=> 'backslash'
+=== addcslashes('back\\slash', 'A..Z')
+=> 'back\\slash'
+=== stripcslashes(addcslashes('back\\slash', 'A..Z'))
+=> 'backslash'
+=== addcslashes('back\\slash', 'a..z')
+=> '\\b\\a\\c\\k\\\\s\\l\\a\\s\\h'
+=== stripcslashes(addcslashes('back\\slash', 'a..z'))
+=> 'ck\\slsh'
+=== addcslashes('back\\slash', 'A..z')
+=> '\\b\\a\\c\\k\\\\\\s\\l\\a\\s\\h'
+=== stripcslashes(addcslashes('back\\slash', 'A..z'))
+=> 'ck\\slsh'
+=== addcslashes('back\\slash', "\x00..\x1f")
+=> 'back\\slash'
+=== stripcslashes(addcslashes('back\\slash', "\x00..\x1f"))
+=> 'backslash'
+=== addcslashes('back\\slash', "\x00..\xff")
+=> '\\b\\a\\c\\k\\\\\\s\\l\\a\\s\\h'
+=== stripcslashes(addcslashes('back\\slash', "\x00..\xff"))
+=> 'ck\\slsh'
+=== addcslashes('back\\slash', "\x7f..\xff")
+=> 'back\\slash'
+=== stripcslashes(addcslashes('back\\slash', "\x7f..\xff"))
+=> 'backslash'
+=== addcslashes('back\\slash', '[]\'"\\')
+=> 'back\\\\slash'
+=== stripcslashes(addcslashes('back\\slash', '[]\'"\\'))
+=> 'back\\slash'
+=== addcslashes('back\\slash', 'z..a')
+Warning: addcslashes(): Invalid '..'-range, '..'-range needs to be incrementing
+=> 'b\\ack\\sl\\ash'
+=== stripcslashes(addcslashes('back\\slash', 'z..a'))
+Warning: addcslashes(): Invalid '..'-range, '..'-range needs to be incrementing
+=> 'bckslsh'
+=== addcslashes('back\\slash', '..a')
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+=> 'b\\ack\\sl\\ash'
+=== stripcslashes(addcslashes('back\\slash', '..a'))
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+=> 'bckslsh'
+=== addcslashes('back\\slash', 'a..')
+Warning: addcslashes(): Invalid '..'-range, no character to the right of '..'
+=> 'b\\ack\\sl\\ash'
+=== stripcslashes(addcslashes('back\\slash', 'a..'))
+Warning: addcslashes(): Invalid '..'-range, no character to the right of '..'
+=> 'bckslsh'
+=== addcslashes('back\\slash', 'a..b..c')
+Warning: addcslashes(): Invalid '..'-range
+=> '\\b\\a\\ck\\sl\\ash'
+=== stripcslashes(addcslashes('back\\slash', 'a..b..c'))
+Warning: addcslashes(): Invalid '..'-range
+=> 'ckslsh'
+=== addcslashes('back\\slash', '..')
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+=> 'back\\slash'
+=== stripcslashes(addcslashes('back\\slash', '..'))
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+=> 'backslash'
+=== addcslashes('back\\slash', '...')
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+Warning: addcslashes(): Invalid '..'-range, no character to the right of '..'
+=> 'back\\slash'
+=== stripcslashes(addcslashes('back\\slash', '...'))
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+Warning: addcslashes(): Invalid '..'-range, no character to the right of '..'
+=> 'backslash'
+=== addcslashes('back\\slash', "\x0a\x09\x0d")
+=> 'back\\slash'
+=== stripcslashes(addcslashes('back\\slash', "\x0a\x09\x0d"))
+=> 'backslash'
+=== addcslashes('back\\slash', 'o')
+=> 'back\\slash'
+=== stripcslashes(addcslashes('back\\slash', 'o'))
+=> 'backslash'
+=== addcslashes('back\\slash', '0..9')
+=> 'back\\slash'
+=== stripcslashes(addcslashes('back\\slash', '0..9'))
+=> 'backslash'
+=== addslashes("nul\x00byte")
+=> 'nul\\0byte'
+=== stripslashes("nul\x00byte")
+=> 'nul' . "\0" . 'byte'
+=== stripcslashes("nul\x00byte")
+=> 'nul' . "\0" . 'byte'
+=== quotemeta("nul\x00byte")
+=> 'nul' . "\0" . 'byte'
+=== stripslashes(addslashes("nul\x00byte"))
+=> 'nul' . "\0" . 'byte'
+=== addcslashes("nul\x00byte", '')
+=> 'nul' . "\0" . 'byte'
+=== stripcslashes(addcslashes("nul\x00byte", ''))
+=> 'nul' . "\0" . 'byte'
+=== addcslashes("nul\x00byte", 'A..Z')
+=> 'nul' . "\0" . 'byte'
+=== stripcslashes(addcslashes("nul\x00byte", 'A..Z'))
+=> 'nul' . "\0" . 'byte'
+=== addcslashes("nul\x00byte", 'a..z')
+=> '\\n\\u\\l' . "\0" . '\\b\\y\\t\\e'
+=== stripcslashes(addcslashes("nul\x00byte", 'a..z'))
+=> '
+ul' . "\0" . 'y	e'
+=== addcslashes("nul\x00byte", 'A..z')
+=> '\\n\\u\\l' . "\0" . '\\b\\y\\t\\e'
+=== stripcslashes(addcslashes("nul\x00byte", 'A..z'))
+=> '
+ul' . "\0" . 'y	e'
+=== addcslashes("nul\x00byte", "\x00..\x1f")
+=> 'nul\\000byte'
+=== stripcslashes(addcslashes("nul\x00byte", "\x00..\x1f"))
+=> 'nul' . "\0" . 'byte'
+=== addcslashes("nul\x00byte", "\x00..\xff")
+=> '\\n\\u\\l\\000\\b\\y\\t\\e'
+=== stripcslashes(addcslashes("nul\x00byte", "\x00..\xff"))
+=> '
+ul' . "\0" . 'y	e'
+=== addcslashes("nul\x00byte", "\x7f..\xff")
+=> 'nul' . "\0" . 'byte'
+=== stripcslashes(addcslashes("nul\x00byte", "\x7f..\xff"))
+=> 'nul' . "\0" . 'byte'
+=== addcslashes("nul\x00byte", '[]\'"\\')
+=> 'nul' . "\0" . 'byte'
+=== stripcslashes(addcslashes("nul\x00byte", '[]\'"\\'))
+=> 'nul' . "\0" . 'byte'
+=== addcslashes("nul\x00byte", 'z..a')
+Warning: addcslashes(): Invalid '..'-range, '..'-range needs to be incrementing
+=> 'nul' . "\0" . 'byte'
+=== stripcslashes(addcslashes("nul\x00byte", 'z..a'))
+Warning: addcslashes(): Invalid '..'-range, '..'-range needs to be incrementing
+=> 'nul' . "\0" . 'byte'
+=== addcslashes("nul\x00byte", '..a')
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+=> 'nul' . "\0" . 'byte'
+=== stripcslashes(addcslashes("nul\x00byte", '..a'))
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+=> 'nul' . "\0" . 'byte'
+=== addcslashes("nul\x00byte", 'a..')
+Warning: addcslashes(): Invalid '..'-range, no character to the right of '..'
+=> 'nul' . "\0" . 'byte'
+=== stripcslashes(addcslashes("nul\x00byte", 'a..'))
+Warning: addcslashes(): Invalid '..'-range, no character to the right of '..'
+=> 'nul' . "\0" . 'byte'
+=== addcslashes("nul\x00byte", 'a..b..c')
+Warning: addcslashes(): Invalid '..'-range
+=> 'nul' . "\0" . '\\byte'
+=== stripcslashes(addcslashes("nul\x00byte", 'a..b..c'))
+Warning: addcslashes(): Invalid '..'-range
+=> 'nul' . "\0" . 'yte'
+=== addcslashes("nul\x00byte", '..')
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+=> 'nul' . "\0" . 'byte'
+=== stripcslashes(addcslashes("nul\x00byte", '..'))
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+=> 'nul' . "\0" . 'byte'
+=== addcslashes("nul\x00byte", '...')
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+Warning: addcslashes(): Invalid '..'-range, no character to the right of '..'
+=> 'nul' . "\0" . 'byte'
+=== stripcslashes(addcslashes("nul\x00byte", '...'))
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+Warning: addcslashes(): Invalid '..'-range, no character to the right of '..'
+=> 'nul' . "\0" . 'byte'
+=== addcslashes("nul\x00byte", "\x0a\x09\x0d")
+=> 'nul' . "\0" . 'byte'
+=== stripcslashes(addcslashes("nul\x00byte", "\x0a\x09\x0d"))
+=> 'nul' . "\0" . 'byte'
+=== addcslashes("nul\x00byte", 'o')
+=> 'nul' . "\0" . 'byte'
+=== stripcslashes(addcslashes("nul\x00byte", 'o'))
+=> 'nul' . "\0" . 'byte'
+=== addcslashes("nul\x00byte", '0..9')
+=> 'nul' . "\0" . 'byte'
+=== stripcslashes(addcslashes("nul\x00byte", '0..9'))
+=> 'nul' . "\0" . 'byte'
+=== addslashes("\x00")
+=> '\\0'
+=== stripslashes("\x00")
+=> '' . "\0" . ''
+=== stripcslashes("\x00")
+=> '' . "\0" . ''
+=== quotemeta("\x00")
+=> '' . "\0" . ''
+=== stripslashes(addslashes("\x00"))
+=> '' . "\0" . ''
+=== addcslashes("\x00", '')
+=> '' . "\0" . ''
+=== stripcslashes(addcslashes("\x00", ''))
+=> '' . "\0" . ''
+=== addcslashes("\x00", 'A..Z')
+=> '' . "\0" . ''
+=== stripcslashes(addcslashes("\x00", 'A..Z'))
+=> '' . "\0" . ''
+=== addcslashes("\x00", 'a..z')
+=> '' . "\0" . ''
+=== stripcslashes(addcslashes("\x00", 'a..z'))
+=> '' . "\0" . ''
+=== addcslashes("\x00", 'A..z')
+=> '' . "\0" . ''
+=== stripcslashes(addcslashes("\x00", 'A..z'))
+=> '' . "\0" . ''
+=== addcslashes("\x00", "\x00..\x1f")
+=> '\\000'
+=== stripcslashes(addcslashes("\x00", "\x00..\x1f"))
+=> '' . "\0" . ''
+=== addcslashes("\x00", "\x00..\xff")
+=> '\\000'
+=== stripcslashes(addcslashes("\x00", "\x00..\xff"))
+=> '' . "\0" . ''
+=== addcslashes("\x00", "\x7f..\xff")
+=> '' . "\0" . ''
+=== stripcslashes(addcslashes("\x00", "\x7f..\xff"))
+=> '' . "\0" . ''
+=== addcslashes("\x00", '[]\'"\\')
+=> '' . "\0" . ''
+=== stripcslashes(addcslashes("\x00", '[]\'"\\'))
+=> '' . "\0" . ''
+=== addcslashes("\x00", 'z..a')
+Warning: addcslashes(): Invalid '..'-range, '..'-range needs to be incrementing
+=> '' . "\0" . ''
+=== stripcslashes(addcslashes("\x00", 'z..a'))
+Warning: addcslashes(): Invalid '..'-range, '..'-range needs to be incrementing
+=> '' . "\0" . ''
+=== addcslashes("\x00", '..a')
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+=> '' . "\0" . ''
+=== stripcslashes(addcslashes("\x00", '..a'))
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+=> '' . "\0" . ''
+=== addcslashes("\x00", 'a..')
+Warning: addcslashes(): Invalid '..'-range, no character to the right of '..'
+=> '' . "\0" . ''
+=== stripcslashes(addcslashes("\x00", 'a..'))
+Warning: addcslashes(): Invalid '..'-range, no character to the right of '..'
+=> '' . "\0" . ''
+=== addcslashes("\x00", 'a..b..c')
+Warning: addcslashes(): Invalid '..'-range
+=> '' . "\0" . ''
+=== stripcslashes(addcslashes("\x00", 'a..b..c'))
+Warning: addcslashes(): Invalid '..'-range
+=> '' . "\0" . ''
+=== addcslashes("\x00", '..')
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+=> '' . "\0" . ''
+=== stripcslashes(addcslashes("\x00", '..'))
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+=> '' . "\0" . ''
+=== addcslashes("\x00", '...')
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+Warning: addcslashes(): Invalid '..'-range, no character to the right of '..'
+=> '' . "\0" . ''
+=== stripcslashes(addcslashes("\x00", '...'))
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+Warning: addcslashes(): Invalid '..'-range, no character to the right of '..'
+=> '' . "\0" . ''
+=== addcslashes("\x00", "\x0a\x09\x0d")
+=> '' . "\0" . ''
+=== stripcslashes(addcslashes("\x00", "\x0a\x09\x0d"))
+=> '' . "\0" . ''
+=== addcslashes("\x00", 'o')
+=> '' . "\0" . ''
+=== stripcslashes(addcslashes("\x00", 'o'))
+=> '' . "\0" . ''
+=== addcslashes("\x00", '0..9')
+=> '' . "\0" . ''
+=== stripcslashes(addcslashes("\x00", '0..9'))
+=> '' . "\0" . ''
+=== addslashes('\\')
+=> '\\\\'
+=== stripslashes('\\')
+=> ''
+=== stripcslashes('\\')
+=> '\\'
+=== quotemeta('\\')
+=> '\\\\'
+=== stripslashes(addslashes('\\'))
+=> '\\'
+=== addcslashes('\\', '')
+=> '\\'
+=== stripcslashes(addcslashes('\\', ''))
+=> '\\'
+=== addcslashes('\\', 'A..Z')
+=> '\\'
+=== stripcslashes(addcslashes('\\', 'A..Z'))
+=> '\\'
+=== addcslashes('\\', 'a..z')
+=> '\\'
+=== stripcslashes(addcslashes('\\', 'a..z'))
+=> '\\'
+=== addcslashes('\\', 'A..z')
+=> '\\\\'
+=== stripcslashes(addcslashes('\\', 'A..z'))
+=> '\\'
+=== addcslashes('\\', "\x00..\x1f")
+=> '\\'
+=== stripcslashes(addcslashes('\\', "\x00..\x1f"))
+=> '\\'
+=== addcslashes('\\', "\x00..\xff")
+=> '\\\\'
+=== stripcslashes(addcslashes('\\', "\x00..\xff"))
+=> '\\'
+=== addcslashes('\\', "\x7f..\xff")
+=> '\\'
+=== stripcslashes(addcslashes('\\', "\x7f..\xff"))
+=> '\\'
+=== addcslashes('\\', '[]\'"\\')
+=> '\\\\'
+=== stripcslashes(addcslashes('\\', '[]\'"\\'))
+=> '\\'
+=== addcslashes('\\', 'z..a')
+Warning: addcslashes(): Invalid '..'-range, '..'-range needs to be incrementing
+=> '\\'
+=== stripcslashes(addcslashes('\\', 'z..a'))
+Warning: addcslashes(): Invalid '..'-range, '..'-range needs to be incrementing
+=> '\\'
+=== addcslashes('\\', '..a')
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+=> '\\'
+=== stripcslashes(addcslashes('\\', '..a'))
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+=> '\\'
+=== addcslashes('\\', 'a..')
+Warning: addcslashes(): Invalid '..'-range, no character to the right of '..'
+=> '\\'
+=== stripcslashes(addcslashes('\\', 'a..'))
+Warning: addcslashes(): Invalid '..'-range, no character to the right of '..'
+=> '\\'
+=== addcslashes('\\', 'a..b..c')
+Warning: addcslashes(): Invalid '..'-range
+=> '\\'
+=== stripcslashes(addcslashes('\\', 'a..b..c'))
+Warning: addcslashes(): Invalid '..'-range
+=> '\\'
+=== addcslashes('\\', '..')
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+=> '\\'
+=== stripcslashes(addcslashes('\\', '..'))
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+=> '\\'
+=== addcslashes('\\', '...')
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+Warning: addcslashes(): Invalid '..'-range, no character to the right of '..'
+=> '\\'
+=== stripcslashes(addcslashes('\\', '...'))
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+Warning: addcslashes(): Invalid '..'-range, no character to the right of '..'
+=> '\\'
+=== addcslashes('\\', "\x0a\x09\x0d")
+=> '\\'
+=== stripcslashes(addcslashes('\\', "\x0a\x09\x0d"))
+=> '\\'
+=== addcslashes('\\', 'o')
+=> '\\'
+=== stripcslashes(addcslashes('\\', 'o'))
+=> '\\'
+=== addcslashes('\\', '0..9')
+=> '\\'
+=== stripcslashes(addcslashes('\\', '0..9'))
+=> '\\'
+=== addslashes('\\\\')
+=> '\\\\\\\\'
+=== stripslashes('\\\\')
+=> '\\'
+=== stripcslashes('\\\\')
+=> '\\'
+=== quotemeta('\\\\')
+=> '\\\\\\\\'
+=== stripslashes(addslashes('\\\\'))
+=> '\\\\'
+=== addcslashes('\\\\', '')
+=> '\\\\'
+=== stripcslashes(addcslashes('\\\\', ''))
+=> '\\'
+=== addcslashes('\\\\', 'A..Z')
+=> '\\\\'
+=== stripcslashes(addcslashes('\\\\', 'A..Z'))
+=> '\\'
+=== addcslashes('\\\\', 'a..z')
+=> '\\\\'
+=== stripcslashes(addcslashes('\\\\', 'a..z'))
+=> '\\'
+=== addcslashes('\\\\', 'A..z')
+=> '\\\\\\\\'
+=== stripcslashes(addcslashes('\\\\', 'A..z'))
+=> '\\\\'
+=== addcslashes('\\\\', "\x00..\x1f")
+=> '\\\\'
+=== stripcslashes(addcslashes('\\\\', "\x00..\x1f"))
+=> '\\'
+=== addcslashes('\\\\', "\x00..\xff")
+=> '\\\\\\\\'
+=== stripcslashes(addcslashes('\\\\', "\x00..\xff"))
+=> '\\\\'
+=== addcslashes('\\\\', "\x7f..\xff")
+=> '\\\\'
+=== stripcslashes(addcslashes('\\\\', "\x7f..\xff"))
+=> '\\'
+=== addcslashes('\\\\', '[]\'"\\')
+=> '\\\\\\\\'
+=== stripcslashes(addcslashes('\\\\', '[]\'"\\'))
+=> '\\\\'
+=== addcslashes('\\\\', 'z..a')
+Warning: addcslashes(): Invalid '..'-range, '..'-range needs to be incrementing
+=> '\\\\'
+=== stripcslashes(addcslashes('\\\\', 'z..a'))
+Warning: addcslashes(): Invalid '..'-range, '..'-range needs to be incrementing
+=> '\\'
+=== addcslashes('\\\\', '..a')
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+=> '\\\\'
+=== stripcslashes(addcslashes('\\\\', '..a'))
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+=> '\\'
+=== addcslashes('\\\\', 'a..')
+Warning: addcslashes(): Invalid '..'-range, no character to the right of '..'
+=> '\\\\'
+=== stripcslashes(addcslashes('\\\\', 'a..'))
+Warning: addcslashes(): Invalid '..'-range, no character to the right of '..'
+=> '\\'
+=== addcslashes('\\\\', 'a..b..c')
+Warning: addcslashes(): Invalid '..'-range
+=> '\\\\'
+=== stripcslashes(addcslashes('\\\\', 'a..b..c'))
+Warning: addcslashes(): Invalid '..'-range
+=> '\\'
+=== addcslashes('\\\\', '..')
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+=> '\\\\'
+=== stripcslashes(addcslashes('\\\\', '..'))
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+=> '\\'
+=== addcslashes('\\\\', '...')
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+Warning: addcslashes(): Invalid '..'-range, no character to the right of '..'
+=> '\\\\'
+=== stripcslashes(addcslashes('\\\\', '...'))
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+Warning: addcslashes(): Invalid '..'-range, no character to the right of '..'
+=> '\\'
+=== addcslashes('\\\\', "\x0a\x09\x0d")
+=> '\\\\'
+=== stripcslashes(addcslashes('\\\\', "\x0a\x09\x0d"))
+=> '\\'
+=== addcslashes('\\\\', 'o')
+=> '\\\\'
+=== stripcslashes(addcslashes('\\\\', 'o'))
+=> '\\'
+=== addcslashes('\\\\', '0..9')
+=> '\\\\'
+=== stripcslashes(addcslashes('\\\\', '0..9'))
+=> '\\'
+=== addslashes('\\0')
+=> '\\\\0'
+=== stripslashes('\\0')
+=> '' . "\0" . ''
+=== stripcslashes('\\0')
+=> '' . "\0" . ''
+=== quotemeta('\\0')
+=> '\\\\0'
+=== stripslashes(addslashes('\\0'))
+=> '\\0'
+=== addcslashes('\\0', '')
+=> '\\0'
+=== stripcslashes(addcslashes('\\0', ''))
+=> '' . "\0" . ''
+=== addcslashes('\\0', 'A..Z')
+=> '\\0'
+=== stripcslashes(addcslashes('\\0', 'A..Z'))
+=> '' . "\0" . ''
+=== addcslashes('\\0', 'a..z')
+=> '\\0'
+=== stripcslashes(addcslashes('\\0', 'a..z'))
+=> '' . "\0" . ''
+=== addcslashes('\\0', 'A..z')
+=> '\\\\0'
+=== stripcslashes(addcslashes('\\0', 'A..z'))
+=> '\\0'
+=== addcslashes('\\0', "\x00..\x1f")
+=> '\\0'
+=== stripcslashes(addcslashes('\\0', "\x00..\x1f"))
+=> '' . "\0" . ''
+=== addcslashes('\\0', "\x00..\xff")
+=> '\\\\\\0'
+=== stripcslashes(addcslashes('\\0', "\x00..\xff"))
+=> '\\' . "\0" . ''
+=== addcslashes('\\0', "\x7f..\xff")
+=> '\\0'
+=== stripcslashes(addcslashes('\\0', "\x7f..\xff"))
+=> '' . "\0" . ''
+=== addcslashes('\\0', '[]\'"\\')
+=> '\\\\0'
+=== stripcslashes(addcslashes('\\0', '[]\'"\\'))
+=> '\\0'
+=== addcslashes('\\0', 'z..a')
+Warning: addcslashes(): Invalid '..'-range, '..'-range needs to be incrementing
+=> '\\0'
+=== stripcslashes(addcslashes('\\0', 'z..a'))
+Warning: addcslashes(): Invalid '..'-range, '..'-range needs to be incrementing
+=> '' . "\0" . ''
+=== addcslashes('\\0', '..a')
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+=> '\\0'
+=== stripcslashes(addcslashes('\\0', '..a'))
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+=> '' . "\0" . ''
+=== addcslashes('\\0', 'a..')
+Warning: addcslashes(): Invalid '..'-range, no character to the right of '..'
+=> '\\0'
+=== stripcslashes(addcslashes('\\0', 'a..'))
+Warning: addcslashes(): Invalid '..'-range, no character to the right of '..'
+=> '' . "\0" . ''
+=== addcslashes('\\0', 'a..b..c')
+Warning: addcslashes(): Invalid '..'-range
+=> '\\0'
+=== stripcslashes(addcslashes('\\0', 'a..b..c'))
+Warning: addcslashes(): Invalid '..'-range
+=> '' . "\0" . ''
+=== addcslashes('\\0', '..')
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+=> '\\0'
+=== stripcslashes(addcslashes('\\0', '..'))
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+=> '' . "\0" . ''
+=== addcslashes('\\0', '...')
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+Warning: addcslashes(): Invalid '..'-range, no character to the right of '..'
+=> '\\0'
+=== stripcslashes(addcslashes('\\0', '...'))
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+Warning: addcslashes(): Invalid '..'-range, no character to the right of '..'
+=> '' . "\0" . ''
+=== addcslashes('\\0', "\x0a\x09\x0d")
+=> '\\0'
+=== stripcslashes(addcslashes('\\0', "\x0a\x09\x0d"))
+=> '' . "\0" . ''
+=== addcslashes('\\0', 'o')
+=> '\\0'
+=== stripcslashes(addcslashes('\\0', 'o'))
+=> '' . "\0" . ''
+=== addcslashes('\\0', '0..9')
+=> '\\\\0'
+=== stripcslashes(addcslashes('\\0', '0..9'))
+=> '\\0'
+=== addslashes('\\00')
+=> '\\\\00'
+=== stripslashes('\\00')
+=> '' . "\0" . '0'
+=== stripcslashes('\\00')
+=> '' . "\0" . ''
+=== quotemeta('\\00')
+=> '\\\\00'
+=== stripslashes(addslashes('\\00'))
+=> '\\00'
+=== addcslashes('\\00', '')
+=> '\\00'
+=== stripcslashes(addcslashes('\\00', ''))
+=> '' . "\0" . ''
+=== addcslashes('\\00', 'A..Z')
+=> '\\00'
+=== stripcslashes(addcslashes('\\00', 'A..Z'))
+=> '' . "\0" . ''
+=== addcslashes('\\00', 'a..z')
+=> '\\00'
+=== stripcslashes(addcslashes('\\00', 'a..z'))
+=> '' . "\0" . ''
+=== addcslashes('\\00', 'A..z')
+=> '\\\\00'
+=== stripcslashes(addcslashes('\\00', 'A..z'))
+=> '\\00'
+=== addcslashes('\\00', "\x00..\x1f")
+=> '\\00'
+=== stripcslashes(addcslashes('\\00', "\x00..\x1f"))
+=> '' . "\0" . ''
+=== addcslashes('\\00', "\x00..\xff")
+=> '\\\\\\0\\0'
+=== stripcslashes(addcslashes('\\00', "\x00..\xff"))
+=> '\\' . "\0" . '' . "\0" . ''
+=== addcslashes('\\00', "\x7f..\xff")
+=> '\\00'
+=== stripcslashes(addcslashes('\\00', "\x7f..\xff"))
+=> '' . "\0" . ''
+=== addcslashes('\\00', '[]\'"\\')
+=> '\\\\00'
+=== stripcslashes(addcslashes('\\00', '[]\'"\\'))
+=> '\\00'
+=== addcslashes('\\00', 'z..a')
+Warning: addcslashes(): Invalid '..'-range, '..'-range needs to be incrementing
+=> '\\00'
+=== stripcslashes(addcslashes('\\00', 'z..a'))
+Warning: addcslashes(): Invalid '..'-range, '..'-range needs to be incrementing
+=> '' . "\0" . ''
+=== addcslashes('\\00', '..a')
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+=> '\\00'
+=== stripcslashes(addcslashes('\\00', '..a'))
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+=> '' . "\0" . ''
+=== addcslashes('\\00', 'a..')
+Warning: addcslashes(): Invalid '..'-range, no character to the right of '..'
+=> '\\00'
+=== stripcslashes(addcslashes('\\00', 'a..'))
+Warning: addcslashes(): Invalid '..'-range, no character to the right of '..'
+=> '' . "\0" . ''
+=== addcslashes('\\00', 'a..b..c')
+Warning: addcslashes(): Invalid '..'-range
+=> '\\00'
+=== stripcslashes(addcslashes('\\00', 'a..b..c'))
+Warning: addcslashes(): Invalid '..'-range
+=> '' . "\0" . ''
+=== addcslashes('\\00', '..')
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+=> '\\00'
+=== stripcslashes(addcslashes('\\00', '..'))
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+=> '' . "\0" . ''
+=== addcslashes('\\00', '...')
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+Warning: addcslashes(): Invalid '..'-range, no character to the right of '..'
+=> '\\00'
+=== stripcslashes(addcslashes('\\00', '...'))
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+Warning: addcslashes(): Invalid '..'-range, no character to the right of '..'
+=> '' . "\0" . ''
+=== addcslashes('\\00', "\x0a\x09\x0d")
+=> '\\00'
+=== stripcslashes(addcslashes('\\00', "\x0a\x09\x0d"))
+=> '' . "\0" . ''
+=== addcslashes('\\00', 'o')
+=> '\\00'
+=== stripcslashes(addcslashes('\\00', 'o'))
+=> '' . "\0" . ''
+=== addcslashes('\\00', '0..9')
+=> '\\\\0\\0'
+=== stripcslashes(addcslashes('\\00', '0..9'))
+=> '\\0' . "\0" . ''
+=== addslashes('\\\'\\"')
+=> '\\\\\\\'\\\\\\"'
+=== stripslashes('\\\'\\"')
+=> '\'"'
+=== stripcslashes('\\\'\\"')
+=> '\'"'
+=== quotemeta('\\\'\\"')
+=> '\\\\\'\\\\"'
+=== stripslashes(addslashes('\\\'\\"'))
+=> '\\\'\\"'
+=== addcslashes('\\\'\\"', '')
+=> '\\\'\\"'
+=== stripcslashes(addcslashes('\\\'\\"', ''))
+=> '\'"'
+=== addcslashes('\\\'\\"', 'A..Z')
+=> '\\\'\\"'
+=== stripcslashes(addcslashes('\\\'\\"', 'A..Z'))
+=> '\'"'
+=== addcslashes('\\\'\\"', 'a..z')
+=> '\\\'\\"'
+=== stripcslashes(addcslashes('\\\'\\"', 'a..z'))
+=> '\'"'
+=== addcslashes('\\\'\\"', 'A..z')
+=> '\\\\\'\\\\"'
+=== stripcslashes(addcslashes('\\\'\\"', 'A..z'))
+=> '\\\'\\"'
+=== addcslashes('\\\'\\"', "\x00..\x1f")
+=> '\\\'\\"'
+=== stripcslashes(addcslashes('\\\'\\"', "\x00..\x1f"))
+=> '\'"'
+=== addcslashes('\\\'\\"', "\x00..\xff")
+=> '\\\\\\\'\\\\\\"'
+=== stripcslashes(addcslashes('\\\'\\"', "\x00..\xff"))
+=> '\\\'\\"'
+=== addcslashes('\\\'\\"', "\x7f..\xff")
+=> '\\\'\\"'
+=== stripcslashes(addcslashes('\\\'\\"', "\x7f..\xff"))
+=> '\'"'
+=== addcslashes('\\\'\\"', '[]\'"\\')
+=> '\\\\\\\'\\\\\\"'
+=== stripcslashes(addcslashes('\\\'\\"', '[]\'"\\'))
+=> '\\\'\\"'
+=== addcslashes('\\\'\\"', 'z..a')
+Warning: addcslashes(): Invalid '..'-range, '..'-range needs to be incrementing
+=> '\\\'\\"'
+=== stripcslashes(addcslashes('\\\'\\"', 'z..a'))
+Warning: addcslashes(): Invalid '..'-range, '..'-range needs to be incrementing
+=> '\'"'
+=== addcslashes('\\\'\\"', '..a')
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+=> '\\\'\\"'
+=== stripcslashes(addcslashes('\\\'\\"', '..a'))
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+=> '\'"'
+=== addcslashes('\\\'\\"', 'a..')
+Warning: addcslashes(): Invalid '..'-range, no character to the right of '..'
+=> '\\\'\\"'
+=== stripcslashes(addcslashes('\\\'\\"', 'a..'))
+Warning: addcslashes(): Invalid '..'-range, no character to the right of '..'
+=> '\'"'
+=== addcslashes('\\\'\\"', 'a..b..c')
+Warning: addcslashes(): Invalid '..'-range
+=> '\\\'\\"'
+=== stripcslashes(addcslashes('\\\'\\"', 'a..b..c'))
+Warning: addcslashes(): Invalid '..'-range
+=> '\'"'
+=== addcslashes('\\\'\\"', '..')
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+=> '\\\'\\"'
+=== stripcslashes(addcslashes('\\\'\\"', '..'))
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+=> '\'"'
+=== addcslashes('\\\'\\"', '...')
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+Warning: addcslashes(): Invalid '..'-range, no character to the right of '..'
+=> '\\\'\\"'
+=== stripcslashes(addcslashes('\\\'\\"', '...'))
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+Warning: addcslashes(): Invalid '..'-range, no character to the right of '..'
+=> '\'"'
+=== addcslashes('\\\'\\"', "\x0a\x09\x0d")
+=> '\\\'\\"'
+=== stripcslashes(addcslashes('\\\'\\"', "\x0a\x09\x0d"))
+=> '\'"'
+=== addcslashes('\\\'\\"', 'o')
+=> '\\\'\\"'
+=== stripcslashes(addcslashes('\\\'\\"', 'o'))
+=> '\'"'
+=== addcslashes('\\\'\\"', '0..9')
+=> '\\\'\\"'
+=== stripcslashes(addcslashes('\\\'\\"', '0..9'))
+=> '\'"'
+=== addslashes('trailing\\')
+=> 'trailing\\\\'
+=== stripslashes('trailing\\')
+=> 'trailing'
+=== stripcslashes('trailing\\')
+=> 'trailing\\'
+=== quotemeta('trailing\\')
+=> 'trailing\\\\'
+=== stripslashes(addslashes('trailing\\'))
+=> 'trailing\\'
+=== addcslashes('trailing\\', '')
+=> 'trailing\\'
+=== stripcslashes(addcslashes('trailing\\', ''))
+=> 'trailing\\'
+=== addcslashes('trailing\\', 'A..Z')
+=> 'trailing\\'
+=== stripcslashes(addcslashes('trailing\\', 'A..Z'))
+=> 'trailing\\'
+=== addcslashes('trailing\\', 'a..z')
+=> '\\t\\r\\a\\i\\l\\i\\n\\g\\'
+=== stripcslashes(addcslashes('trailing\\', 'a..z'))
+=> '	ili
+g\\'
+=== addcslashes('trailing\\', 'A..z')
+=> '\\t\\r\\a\\i\\l\\i\\n\\g\\\\'
+=== stripcslashes(addcslashes('trailing\\', 'A..z'))
+=> '	ili
+g\\'
+=== addcslashes('trailing\\', "\x00..\x1f")
+=> 'trailing\\'
+=== stripcslashes(addcslashes('trailing\\', "\x00..\x1f"))
+=> 'trailing\\'
+=== addcslashes('trailing\\', "\x00..\xff")
+=> '\\t\\r\\a\\i\\l\\i\\n\\g\\\\'
+=== stripcslashes(addcslashes('trailing\\', "\x00..\xff"))
+=> '	ili
+g\\'
+=== addcslashes('trailing\\', "\x7f..\xff")
+=> 'trailing\\'
+=== stripcslashes(addcslashes('trailing\\', "\x7f..\xff"))
+=> 'trailing\\'
+=== addcslashes('trailing\\', '[]\'"\\')
+=> 'trailing\\\\'
+=== stripcslashes(addcslashes('trailing\\', '[]\'"\\'))
+=> 'trailing\\'
+=== addcslashes('trailing\\', 'z..a')
+Warning: addcslashes(): Invalid '..'-range, '..'-range needs to be incrementing
+=> 'tr\\ailing\\'
+=== stripcslashes(addcslashes('trailing\\', 'z..a'))
+Warning: addcslashes(): Invalid '..'-range, '..'-range needs to be incrementing
+=> 'triling\\'
+=== addcslashes('trailing\\', '..a')
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+=> 'tr\\ailing\\'
+=== stripcslashes(addcslashes('trailing\\', '..a'))
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+=> 'triling\\'
+=== addcslashes('trailing\\', 'a..')
+Warning: addcslashes(): Invalid '..'-range, no character to the right of '..'
+=> 'tr\\ailing\\'
+=== stripcslashes(addcslashes('trailing\\', 'a..'))
+Warning: addcslashes(): Invalid '..'-range, no character to the right of '..'
+=> 'triling\\'
+=== addcslashes('trailing\\', 'a..b..c')
+Warning: addcslashes(): Invalid '..'-range
+=> 'tr\\ailing\\'
+=== stripcslashes(addcslashes('trailing\\', 'a..b..c'))
+Warning: addcslashes(): Invalid '..'-range
+=> 'triling\\'
+=== addcslashes('trailing\\', '..')
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+=> 'trailing\\'
+=== stripcslashes(addcslashes('trailing\\', '..'))
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+=> 'trailing\\'
+=== addcslashes('trailing\\', '...')
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+Warning: addcslashes(): Invalid '..'-range, no character to the right of '..'
+=> 'trailing\\'
+=== stripcslashes(addcslashes('trailing\\', '...'))
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+Warning: addcslashes(): Invalid '..'-range, no character to the right of '..'
+=> 'trailing\\'
+=== addcslashes('trailing\\', "\x0a\x09\x0d")
+=> 'trailing\\'
+=== stripcslashes(addcslashes('trailing\\', "\x0a\x09\x0d"))
+=> 'trailing\\'
+=== addcslashes('trailing\\', 'o')
+=> 'trailing\\'
+=== stripcslashes(addcslashes('trailing\\', 'o'))
+=> 'trailing\\'
+=== addcslashes('trailing\\', '0..9')
+=> 'trailing\\'
+=== stripcslashes(addcslashes('trailing\\', '0..9'))
+=> 'trailing\\'
+=== addslashes('\\x41\\x4a\\x4G\\x\\xg')
+=> '\\\\x41\\\\x4a\\\\x4G\\\\x\\\\xg'
+=== stripslashes('\\x41\\x4a\\x4G\\x\\xg')
+=> 'x41x4ax4Gxxg'
+=== stripcslashes('\\x41\\x4a\\x4G\\x\\xg')
+=> 'AJGxxg'
+=== quotemeta('\\x41\\x4a\\x4G\\x\\xg')
+=> '\\\\x41\\\\x4a\\\\x4G\\\\x\\\\xg'
+=== stripslashes(addslashes('\\x41\\x4a\\x4G\\x\\xg'))
+=> '\\x41\\x4a\\x4G\\x\\xg'
+=== addcslashes('\\x41\\x4a\\x4G\\x\\xg', '')
+=> '\\x41\\x4a\\x4G\\x\\xg'
+=== stripcslashes(addcslashes('\\x41\\x4a\\x4G\\x\\xg', ''))
+=> 'AJGxxg'
+=== addcslashes('\\x41\\x4a\\x4G\\x\\xg', 'A..Z')
+=> '\\x41\\x4a\\x4\\G\\x\\xg'
+=== stripcslashes(addcslashes('\\x41\\x4a\\x4G\\x\\xg', 'A..Z'))
+=> 'AJGxxg'
+=== addcslashes('\\x41\\x4a\\x4G\\x\\xg', 'a..z')
+=> '\\\\x41\\\\x4\\a\\\\x4G\\\\x\\\\x\\g'
+=== stripcslashes(addcslashes('\\x41\\x4a\\x4G\\x\\xg', 'a..z'))
+=> '\\x41\\x4\\x4G\\x\\xg'
+=== addcslashes('\\x41\\x4a\\x4G\\x\\xg', 'A..z')
+=> '\\\\\\x41\\\\\\x4\\a\\\\\\x4\\G\\\\\\x\\\\\\x\\g'
+=== stripcslashes(addcslashes('\\x41\\x4a\\x4G\\x\\xg', 'A..z'))
+=> '\\A\\\\G\\x\\xg'
+=== addcslashes('\\x41\\x4a\\x4G\\x\\xg', "\x00..\x1f")
+=> '\\x41\\x4a\\x4G\\x\\xg'
+=== stripcslashes(addcslashes('\\x41\\x4a\\x4G\\x\\xg', "\x00..\x1f"))
+=> 'AJGxxg'
+=== addcslashes('\\x41\\x4a\\x4G\\x\\xg', "\x00..\xff")
+=> '\\\\\\x\\4\\1\\\\\\x\\4\\a\\\\\\x\\4\\G\\\\\\x\\\\\\x\\g'
+=== stripcslashes(addcslashes('\\x41\\x4a\\x4G\\x\\xg', "\x00..\xff"))
+=> '\\x\\x\\xG\\x\\xg'
+=== addcslashes('\\x41\\x4a\\x4G\\x\\xg', "\x7f..\xff")
+=> '\\x41\\x4a\\x4G\\x\\xg'
+=== stripcslashes(addcslashes('\\x41\\x4a\\x4G\\x\\xg', "\x7f..\xff"))
+=> 'AJGxxg'
+=== addcslashes('\\x41\\x4a\\x4G\\x\\xg', '[]\'"\\')
+=> '\\\\x41\\\\x4a\\\\x4G\\\\x\\\\xg'
+=== stripcslashes(addcslashes('\\x41\\x4a\\x4G\\x\\xg', '[]\'"\\'))
+=> '\\x41\\x4a\\x4G\\x\\xg'
+=== addcslashes('\\x41\\x4a\\x4G\\x\\xg', 'z..a')
+Warning: addcslashes(): Invalid '..'-range, '..'-range needs to be incrementing
+=> '\\x41\\x4\\a\\x4G\\x\\xg'
+=== stripcslashes(addcslashes('\\x41\\x4a\\x4G\\x\\xg', 'z..a'))
+Warning: addcslashes(): Invalid '..'-range, '..'-range needs to be incrementing
+=> 'AGxxg'
+=== addcslashes('\\x41\\x4a\\x4G\\x\\xg', '..a')
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+=> '\\x41\\x4\\a\\x4G\\x\\xg'
+=== stripcslashes(addcslashes('\\x41\\x4a\\x4G\\x\\xg', '..a'))
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+=> 'AGxxg'
+=== addcslashes('\\x41\\x4a\\x4G\\x\\xg', 'a..')
+Warning: addcslashes(): Invalid '..'-range, no character to the right of '..'
+=> '\\x41\\x4\\a\\x4G\\x\\xg'
+=== stripcslashes(addcslashes('\\x41\\x4a\\x4G\\x\\xg', 'a..'))
+Warning: addcslashes(): Invalid '..'-range, no character to the right of '..'
+=> 'AGxxg'
+=== addcslashes('\\x41\\x4a\\x4G\\x\\xg', 'a..b..c')
+Warning: addcslashes(): Invalid '..'-range
+=> '\\x41\\x4\\a\\x4G\\x\\xg'
+=== stripcslashes(addcslashes('\\x41\\x4a\\x4G\\x\\xg', 'a..b..c'))
+Warning: addcslashes(): Invalid '..'-range
+=> 'AGxxg'
+=== addcslashes('\\x41\\x4a\\x4G\\x\\xg', '..')
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+=> '\\x41\\x4a\\x4G\\x\\xg'
+=== stripcslashes(addcslashes('\\x41\\x4a\\x4G\\x\\xg', '..'))
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+=> 'AJGxxg'
+=== addcslashes('\\x41\\x4a\\x4G\\x\\xg', '...')
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+Warning: addcslashes(): Invalid '..'-range, no character to the right of '..'
+=> '\\x41\\x4a\\x4G\\x\\xg'
+=== stripcslashes(addcslashes('\\x41\\x4a\\x4G\\x\\xg', '...'))
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+Warning: addcslashes(): Invalid '..'-range, no character to the right of '..'
+=> 'AJGxxg'
+=== addcslashes('\\x41\\x4a\\x4G\\x\\xg', "\x0a\x09\x0d")
+=> '\\x41\\x4a\\x4G\\x\\xg'
+=== stripcslashes(addcslashes('\\x41\\x4a\\x4G\\x\\xg', "\x0a\x09\x0d"))
+=> 'AJGxxg'
+=== addcslashes('\\x41\\x4a\\x4G\\x\\xg', 'o')
+=> '\\x41\\x4a\\x4G\\x\\xg'
+=== stripcslashes(addcslashes('\\x41\\x4a\\x4G\\x\\xg', 'o'))
+=> 'AJGxxg'
+=== addcslashes('\\x41\\x4a\\x4G\\x\\xg', '0..9')
+=> '\\x\\4\\1\\x\\4a\\x\\4G\\x\\xg'
+=== stripcslashes(addcslashes('\\x41\\x4a\\x4G\\x\\xg', '0..9'))
+=> 'xxaxGxxg'
+=== addslashes('\\101\\60\\7\\777\\400\\8\\9')
+=> '\\\\101\\\\60\\\\7\\\\777\\\\400\\\\8\\\\9'
+=== stripslashes('\\101\\60\\7\\777\\400\\8\\9')
+=> '10160777740089'
+=== stripcslashes('\\101\\60\\7\\777\\400\\8\\9')
+=> 'A0ÿ' . "\0" . '89'
+=== quotemeta('\\101\\60\\7\\777\\400\\8\\9')
+=> '\\\\101\\\\60\\\\7\\\\777\\\\400\\\\8\\\\9'
+=== stripslashes(addslashes('\\101\\60\\7\\777\\400\\8\\9'))
+=> '\\101\\60\\7\\777\\400\\8\\9'
+=== addcslashes('\\101\\60\\7\\777\\400\\8\\9', '')
+=> '\\101\\60\\7\\777\\400\\8\\9'
+=== stripcslashes(addcslashes('\\101\\60\\7\\777\\400\\8\\9', ''))
+=> 'A0ÿ' . "\0" . '89'
+=== addcslashes('\\101\\60\\7\\777\\400\\8\\9', 'A..Z')
+=> '\\101\\60\\7\\777\\400\\8\\9'
+=== stripcslashes(addcslashes('\\101\\60\\7\\777\\400\\8\\9', 'A..Z'))
+=> 'A0ÿ' . "\0" . '89'
+=== addcslashes('\\101\\60\\7\\777\\400\\8\\9', 'a..z')
+=> '\\101\\60\\7\\777\\400\\8\\9'
+=== stripcslashes(addcslashes('\\101\\60\\7\\777\\400\\8\\9', 'a..z'))
+=> 'A0ÿ' . "\0" . '89'
+=== addcslashes('\\101\\60\\7\\777\\400\\8\\9', 'A..z')
+=> '\\\\101\\\\60\\\\7\\\\777\\\\400\\\\8\\\\9'
+=== stripcslashes(addcslashes('\\101\\60\\7\\777\\400\\8\\9', 'A..z'))
+=> '\\101\\60\\7\\777\\400\\8\\9'
+=== addcslashes('\\101\\60\\7\\777\\400\\8\\9', "\x00..\x1f")
+=> '\\101\\60\\7\\777\\400\\8\\9'
+=== stripcslashes(addcslashes('\\101\\60\\7\\777\\400\\8\\9', "\x00..\x1f"))
+=> 'A0ÿ' . "\0" . '89'
+=== addcslashes('\\101\\60\\7\\777\\400\\8\\9', "\x00..\xff")
+=> '\\\\\\1\\0\\1\\\\\\6\\0\\\\\\7\\\\\\7\\7\\7\\\\\\4\\0\\0\\\\\\8\\\\\\9'
+=== stripcslashes(addcslashes('\\101\\60\\7\\777\\400\\8\\9', "\x00..\xff"))
+=> '\\' . "\0" . '\\' . "\0" . '\\\\\\' . "\0" . '' . "\0" . '\\8\\9'
+=== addcslashes('\\101\\60\\7\\777\\400\\8\\9', "\x7f..\xff")
+=> '\\101\\60\\7\\777\\400\\8\\9'
+=== stripcslashes(addcslashes('\\101\\60\\7\\777\\400\\8\\9', "\x7f..\xff"))
+=> 'A0ÿ' . "\0" . '89'
+=== addcslashes('\\101\\60\\7\\777\\400\\8\\9', '[]\'"\\')
+=> '\\\\101\\\\60\\\\7\\\\777\\\\400\\\\8\\\\9'
+=== stripcslashes(addcslashes('\\101\\60\\7\\777\\400\\8\\9', '[]\'"\\'))
+=> '\\101\\60\\7\\777\\400\\8\\9'
+=== addcslashes('\\101\\60\\7\\777\\400\\8\\9', 'z..a')
+Warning: addcslashes(): Invalid '..'-range, '..'-range needs to be incrementing
+=> '\\101\\60\\7\\777\\400\\8\\9'
+=== stripcslashes(addcslashes('\\101\\60\\7\\777\\400\\8\\9', 'z..a'))
+Warning: addcslashes(): Invalid '..'-range, '..'-range needs to be incrementing
+=> 'A0ÿ' . "\0" . '89'
+=== addcslashes('\\101\\60\\7\\777\\400\\8\\9', '..a')
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+=> '\\101\\60\\7\\777\\400\\8\\9'
+=== stripcslashes(addcslashes('\\101\\60\\7\\777\\400\\8\\9', '..a'))
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+=> 'A0ÿ' . "\0" . '89'
+=== addcslashes('\\101\\60\\7\\777\\400\\8\\9', 'a..')
+Warning: addcslashes(): Invalid '..'-range, no character to the right of '..'
+=> '\\101\\60\\7\\777\\400\\8\\9'
+=== stripcslashes(addcslashes('\\101\\60\\7\\777\\400\\8\\9', 'a..'))
+Warning: addcslashes(): Invalid '..'-range, no character to the right of '..'
+=> 'A0ÿ' . "\0" . '89'
+=== addcslashes('\\101\\60\\7\\777\\400\\8\\9', 'a..b..c')
+Warning: addcslashes(): Invalid '..'-range
+=> '\\101\\60\\7\\777\\400\\8\\9'
+=== stripcslashes(addcslashes('\\101\\60\\7\\777\\400\\8\\9', 'a..b..c'))
+Warning: addcslashes(): Invalid '..'-range
+=> 'A0ÿ' . "\0" . '89'
+=== addcslashes('\\101\\60\\7\\777\\400\\8\\9', '..')
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+=> '\\101\\60\\7\\777\\400\\8\\9'
+=== stripcslashes(addcslashes('\\101\\60\\7\\777\\400\\8\\9', '..'))
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+=> 'A0ÿ' . "\0" . '89'
+=== addcslashes('\\101\\60\\7\\777\\400\\8\\9', '...')
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+Warning: addcslashes(): Invalid '..'-range, no character to the right of '..'
+=> '\\101\\60\\7\\777\\400\\8\\9'
+=== stripcslashes(addcslashes('\\101\\60\\7\\777\\400\\8\\9', '...'))
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+Warning: addcslashes(): Invalid '..'-range, no character to the right of '..'
+=> 'A0ÿ' . "\0" . '89'
+=== addcslashes('\\101\\60\\7\\777\\400\\8\\9', "\x0a\x09\x0d")
+=> '\\101\\60\\7\\777\\400\\8\\9'
+=== stripcslashes(addcslashes('\\101\\60\\7\\777\\400\\8\\9', "\x0a\x09\x0d"))
+=> 'A0ÿ' . "\0" . '89'
+=== addcslashes('\\101\\60\\7\\777\\400\\8\\9', 'o')
+=> '\\101\\60\\7\\777\\400\\8\\9'
+=== stripcslashes(addcslashes('\\101\\60\\7\\777\\400\\8\\9', 'o'))
+=> 'A0ÿ' . "\0" . '89'
+=== addcslashes('\\101\\60\\7\\777\\400\\8\\9', '0..9')
+=> '\\\\1\\0\\1\\\\6\\0\\\\7\\\\7\\7\\7\\\\4\\0\\0\\\\8\\\\9'
+=== stripcslashes(addcslashes('\\101\\60\\7\\777\\400\\8\\9', '0..9'))
+=> '\\1' . "\0" . '\\6' . "\0" . '\\7\\7\\4' . "\0" . '' . "\0" . '\\8\\9'
+=== addslashes('\\n\\r\\t\\v\\f\\a\\b\\e\\q\\\\')
+=> '\\\\n\\\\r\\\\t\\\\v\\\\f\\\\a\\\\b\\\\e\\\\q\\\\\\\\'
+=== stripslashes('\\n\\r\\t\\v\\f\\a\\b\\e\\q\\\\')
+=> 'nrtvfabeq\\'
+=== stripcslashes('\\n\\r\\t\\v\\f\\a\\b\\e\\q\\\\')
+=> '
+	eq\\'
+=== quotemeta('\\n\\r\\t\\v\\f\\a\\b\\e\\q\\\\')
+=> '\\\\n\\\\r\\\\t\\\\v\\\\f\\\\a\\\\b\\\\e\\\\q\\\\\\\\'
+=== stripslashes(addslashes('\\n\\r\\t\\v\\f\\a\\b\\e\\q\\\\'))
+=> '\\n\\r\\t\\v\\f\\a\\b\\e\\q\\\\'
+=== addcslashes('\\n\\r\\t\\v\\f\\a\\b\\e\\q\\\\', '')
+=> '\\n\\r\\t\\v\\f\\a\\b\\e\\q\\\\'
+=== stripcslashes(addcslashes('\\n\\r\\t\\v\\f\\a\\b\\e\\q\\\\', ''))
+=> '
+	eq\\'
+=== addcslashes('\\n\\r\\t\\v\\f\\a\\b\\e\\q\\\\', 'A..Z')
+=> '\\n\\r\\t\\v\\f\\a\\b\\e\\q\\\\'
+=== stripcslashes(addcslashes('\\n\\r\\t\\v\\f\\a\\b\\e\\q\\\\', 'A..Z'))
+=> '
+	eq\\'
+=== addcslashes('\\n\\r\\t\\v\\f\\a\\b\\e\\q\\\\', 'a..z')
+=> '\\\\n\\\\r\\\\t\\\\v\\\\f\\\\a\\\\b\\\\e\\\\q\\\\'
+=== stripcslashes(addcslashes('\\n\\r\\t\\v\\f\\a\\b\\e\\q\\\\', 'a..z'))
+=> '\\n\\r\\t\\v\\f\\a\\b\\e\\q\\'
+=== addcslashes('\\n\\r\\t\\v\\f\\a\\b\\e\\q\\\\', 'A..z')
+=> '\\\\\\n\\\\\\r\\\\\\t\\\\\\v\\\\\\f\\\\\\a\\\\\\b\\\\\\e\\\\\\q\\\\\\\\'
+=== stripcslashes(addcslashes('\\n\\r\\t\\v\\f\\a\\b\\e\\q\\\\', 'A..z'))
+=> '\\
+\\\\	\\\\\\\\\\e\\q\\\\'
+=== addcslashes('\\n\\r\\t\\v\\f\\a\\b\\e\\q\\\\', "\x00..\x1f")
+=> '\\n\\r\\t\\v\\f\\a\\b\\e\\q\\\\'
+=== stripcslashes(addcslashes('\\n\\r\\t\\v\\f\\a\\b\\e\\q\\\\', "\x00..\x1f"))
+=> '
+	eq\\'
+=== addcslashes('\\n\\r\\t\\v\\f\\a\\b\\e\\q\\\\', "\x00..\xff")
+=> '\\\\\\n\\\\\\r\\\\\\t\\\\\\v\\\\\\f\\\\\\a\\\\\\b\\\\\\e\\\\\\q\\\\\\\\'
+=== stripcslashes(addcslashes('\\n\\r\\t\\v\\f\\a\\b\\e\\q\\\\', "\x00..\xff"))
+=> '\\
+\\\\	\\\\\\\\\\e\\q\\\\'
+=== addcslashes('\\n\\r\\t\\v\\f\\a\\b\\e\\q\\\\', "\x7f..\xff")
+=> '\\n\\r\\t\\v\\f\\a\\b\\e\\q\\\\'
+=== stripcslashes(addcslashes('\\n\\r\\t\\v\\f\\a\\b\\e\\q\\\\', "\x7f..\xff"))
+=> '
+	eq\\'
+=== addcslashes('\\n\\r\\t\\v\\f\\a\\b\\e\\q\\\\', '[]\'"\\')
+=> '\\\\n\\\\r\\\\t\\\\v\\\\f\\\\a\\\\b\\\\e\\\\q\\\\\\\\'
+=== stripcslashes(addcslashes('\\n\\r\\t\\v\\f\\a\\b\\e\\q\\\\', '[]\'"\\'))
+=> '\\n\\r\\t\\v\\f\\a\\b\\e\\q\\\\'
+=== addcslashes('\\n\\r\\t\\v\\f\\a\\b\\e\\q\\\\', 'z..a')
+Warning: addcslashes(): Invalid '..'-range, '..'-range needs to be incrementing
+=> '\\n\\r\\t\\v\\f\\\\a\\b\\e\\q\\\\'
+=== stripcslashes(addcslashes('\\n\\r\\t\\v\\f\\a\\b\\e\\q\\\\', 'z..a'))
+Warning: addcslashes(): Invalid '..'-range, '..'-range needs to be incrementing
+=> '
+	\\aeq\\'
+=== addcslashes('\\n\\r\\t\\v\\f\\a\\b\\e\\q\\\\', '..a')
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+=> '\\n\\r\\t\\v\\f\\\\a\\b\\e\\q\\\\'
+=== stripcslashes(addcslashes('\\n\\r\\t\\v\\f\\a\\b\\e\\q\\\\', '..a'))
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+=> '
+	\\aeq\\'
+=== addcslashes('\\n\\r\\t\\v\\f\\a\\b\\e\\q\\\\', 'a..')
+Warning: addcslashes(): Invalid '..'-range, no character to the right of '..'
+=> '\\n\\r\\t\\v\\f\\\\a\\b\\e\\q\\\\'
+=== stripcslashes(addcslashes('\\n\\r\\t\\v\\f\\a\\b\\e\\q\\\\', 'a..'))
+Warning: addcslashes(): Invalid '..'-range, no character to the right of '..'
+=> '
+	\\aeq\\'
+=== addcslashes('\\n\\r\\t\\v\\f\\a\\b\\e\\q\\\\', 'a..b..c')
+Warning: addcslashes(): Invalid '..'-range
+=> '\\n\\r\\t\\v\\f\\\\a\\\\b\\e\\q\\\\'
+=== stripcslashes(addcslashes('\\n\\r\\t\\v\\f\\a\\b\\e\\q\\\\', 'a..b..c'))
+Warning: addcslashes(): Invalid '..'-range
+=> '
+	\\a\\beq\\'
+=== addcslashes('\\n\\r\\t\\v\\f\\a\\b\\e\\q\\\\', '..')
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+=> '\\n\\r\\t\\v\\f\\a\\b\\e\\q\\\\'
+=== stripcslashes(addcslashes('\\n\\r\\t\\v\\f\\a\\b\\e\\q\\\\', '..'))
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+=> '
+	eq\\'
+=== addcslashes('\\n\\r\\t\\v\\f\\a\\b\\e\\q\\\\', '...')
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+Warning: addcslashes(): Invalid '..'-range, no character to the right of '..'
+=> '\\n\\r\\t\\v\\f\\a\\b\\e\\q\\\\'
+=== stripcslashes(addcslashes('\\n\\r\\t\\v\\f\\a\\b\\e\\q\\\\', '...'))
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+Warning: addcslashes(): Invalid '..'-range, no character to the right of '..'
+=> '
+	eq\\'
+=== addcslashes('\\n\\r\\t\\v\\f\\a\\b\\e\\q\\\\', "\x0a\x09\x0d")
+=> '\\n\\r\\t\\v\\f\\a\\b\\e\\q\\\\'
+=== stripcslashes(addcslashes('\\n\\r\\t\\v\\f\\a\\b\\e\\q\\\\', "\x0a\x09\x0d"))
+=> '
+	eq\\'
+=== addcslashes('\\n\\r\\t\\v\\f\\a\\b\\e\\q\\\\', 'o')
+=> '\\n\\r\\t\\v\\f\\a\\b\\e\\q\\\\'
+=== stripcslashes(addcslashes('\\n\\r\\t\\v\\f\\a\\b\\e\\q\\\\', 'o'))
+=> '
+	eq\\'
+=== addcslashes('\\n\\r\\t\\v\\f\\a\\b\\e\\q\\\\', '0..9')
+=> '\\n\\r\\t\\v\\f\\a\\b\\e\\q\\\\'
+=== stripcslashes(addcslashes('\\n\\r\\t\\v\\f\\a\\b\\e\\q\\\\', '0..9'))
+=> '
+	eq\\'
+=== addslashes('\\1234')
+=> '\\\\1234'
+=== stripslashes('\\1234')
+=> '1234'
+=== stripcslashes('\\1234')
+=> 'S4'
+=== quotemeta('\\1234')
+=> '\\\\1234'
+=== stripslashes(addslashes('\\1234'))
+=> '\\1234'
+=== addcslashes('\\1234', '')
+=> '\\1234'
+=== stripcslashes(addcslashes('\\1234', ''))
+=> 'S4'
+=== addcslashes('\\1234', 'A..Z')
+=> '\\1234'
+=== stripcslashes(addcslashes('\\1234', 'A..Z'))
+=> 'S4'
+=== addcslashes('\\1234', 'a..z')
+=> '\\1234'
+=== stripcslashes(addcslashes('\\1234', 'a..z'))
+=> 'S4'
+=== addcslashes('\\1234', 'A..z')
+=> '\\\\1234'
+=== stripcslashes(addcslashes('\\1234', 'A..z'))
+=> '\\1234'
+=== addcslashes('\\1234', "\x00..\x1f")
+=> '\\1234'
+=== stripcslashes(addcslashes('\\1234', "\x00..\x1f"))
+=> 'S4'
+=== addcslashes('\\1234', "\x00..\xff")
+=> '\\\\\\1\\2\\3\\4'
+=== stripcslashes(addcslashes('\\1234', "\x00..\xff"))
+=> '\\'
+=== addcslashes('\\1234', "\x7f..\xff")
+=> '\\1234'
+=== stripcslashes(addcslashes('\\1234', "\x7f..\xff"))
+=> 'S4'
+=== addcslashes('\\1234', '[]\'"\\')
+=> '\\\\1234'
+=== stripcslashes(addcslashes('\\1234', '[]\'"\\'))
+=> '\\1234'
+=== addcslashes('\\1234', 'z..a')
+Warning: addcslashes(): Invalid '..'-range, '..'-range needs to be incrementing
+=> '\\1234'
+=== stripcslashes(addcslashes('\\1234', 'z..a'))
+Warning: addcslashes(): Invalid '..'-range, '..'-range needs to be incrementing
+=> 'S4'
+=== addcslashes('\\1234', '..a')
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+=> '\\1234'
+=== stripcslashes(addcslashes('\\1234', '..a'))
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+=> 'S4'
+=== addcslashes('\\1234', 'a..')
+Warning: addcslashes(): Invalid '..'-range, no character to the right of '..'
+=> '\\1234'
+=== stripcslashes(addcslashes('\\1234', 'a..'))
+Warning: addcslashes(): Invalid '..'-range, no character to the right of '..'
+=> 'S4'
+=== addcslashes('\\1234', 'a..b..c')
+Warning: addcslashes(): Invalid '..'-range
+=> '\\1234'
+=== stripcslashes(addcslashes('\\1234', 'a..b..c'))
+Warning: addcslashes(): Invalid '..'-range
+=> 'S4'
+=== addcslashes('\\1234', '..')
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+=> '\\1234'
+=== stripcslashes(addcslashes('\\1234', '..'))
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+=> 'S4'
+=== addcslashes('\\1234', '...')
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+Warning: addcslashes(): Invalid '..'-range, no character to the right of '..'
+=> '\\1234'
+=== stripcslashes(addcslashes('\\1234', '...'))
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+Warning: addcslashes(): Invalid '..'-range, no character to the right of '..'
+=> 'S4'
+=== addcslashes('\\1234', "\x0a\x09\x0d")
+=> '\\1234'
+=== stripcslashes(addcslashes('\\1234', "\x0a\x09\x0d"))
+=> 'S4'
+=== addcslashes('\\1234', 'o')
+=> '\\1234'
+=== stripcslashes(addcslashes('\\1234', 'o'))
+=> 'S4'
+=== addcslashes('\\1234', '0..9')
+=> '\\\\1\\2\\3\\4'
+=== stripcslashes(addcslashes('\\1234', '0..9'))
+=> '\\1'
+=== addslashes('\\x123')
+=> '\\\\x123'
+=== stripslashes('\\x123')
+=> 'x123'
+=== stripcslashes('\\x123')
+=> '3'
+=== quotemeta('\\x123')
+=> '\\\\x123'
+=== stripslashes(addslashes('\\x123'))
+=> '\\x123'
+=== addcslashes('\\x123', '')
+=> '\\x123'
+=== stripcslashes(addcslashes('\\x123', ''))
+=> '3'
+=== addcslashes('\\x123', 'A..Z')
+=> '\\x123'
+=== stripcslashes(addcslashes('\\x123', 'A..Z'))
+=> '3'
+=== addcslashes('\\x123', 'a..z')
+=> '\\\\x123'
+=== stripcslashes(addcslashes('\\x123', 'a..z'))
+=> '\\x123'
+=== addcslashes('\\x123', 'A..z')
+=> '\\\\\\x123'
+=== stripcslashes(addcslashes('\\x123', 'A..z'))
+=> '\\3'
+=== addcslashes('\\x123', "\x00..\x1f")
+=> '\\x123'
+=== stripcslashes(addcslashes('\\x123', "\x00..\x1f"))
+=> '3'
+=== addcslashes('\\x123', "\x00..\xff")
+=> '\\\\\\x\\1\\2\\3'
+=== stripcslashes(addcslashes('\\x123', "\x00..\xff"))
+=> '\\x'
+=== addcslashes('\\x123', "\x7f..\xff")
+=> '\\x123'
+=== stripcslashes(addcslashes('\\x123', "\x7f..\xff"))
+=> '3'
+=== addcslashes('\\x123', '[]\'"\\')
+=> '\\\\x123'
+=== stripcslashes(addcslashes('\\x123', '[]\'"\\'))
+=> '\\x123'
+=== addcslashes('\\x123', 'z..a')
+Warning: addcslashes(): Invalid '..'-range, '..'-range needs to be incrementing
+=> '\\x123'
+=== stripcslashes(addcslashes('\\x123', 'z..a'))
+Warning: addcslashes(): Invalid '..'-range, '..'-range needs to be incrementing
+=> '3'
+=== addcslashes('\\x123', '..a')
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+=> '\\x123'
+=== stripcslashes(addcslashes('\\x123', '..a'))
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+=> '3'
+=== addcslashes('\\x123', 'a..')
+Warning: addcslashes(): Invalid '..'-range, no character to the right of '..'
+=> '\\x123'
+=== stripcslashes(addcslashes('\\x123', 'a..'))
+Warning: addcslashes(): Invalid '..'-range, no character to the right of '..'
+=> '3'
+=== addcslashes('\\x123', 'a..b..c')
+Warning: addcslashes(): Invalid '..'-range
+=> '\\x123'
+=== stripcslashes(addcslashes('\\x123', 'a..b..c'))
+Warning: addcslashes(): Invalid '..'-range
+=> '3'
+=== addcslashes('\\x123', '..')
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+=> '\\x123'
+=== stripcslashes(addcslashes('\\x123', '..'))
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+=> '3'
+=== addcslashes('\\x123', '...')
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+Warning: addcslashes(): Invalid '..'-range, no character to the right of '..'
+=> '\\x123'
+=== stripcslashes(addcslashes('\\x123', '...'))
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+Warning: addcslashes(): Invalid '..'-range, no character to the right of '..'
+=> '3'
+=== addcslashes('\\x123', "\x0a\x09\x0d")
+=> '\\x123'
+=== stripcslashes(addcslashes('\\x123', "\x0a\x09\x0d"))
+=> '3'
+=== addcslashes('\\x123', 'o')
+=> '\\x123'
+=== stripcslashes(addcslashes('\\x123', 'o'))
+=> '3'
+=== addcslashes('\\x123', '0..9')
+=> '\\x\\1\\2\\3'
+=== stripcslashes(addcslashes('\\x123', '0..9'))
+=> 'x'
+=== addslashes('\\X41')
+=> '\\\\X41'
+=== stripslashes('\\X41')
+=> 'X41'
+=== stripcslashes('\\X41')
+=> 'X41'
+=== quotemeta('\\X41')
+=> '\\\\X41'
+=== stripslashes(addslashes('\\X41'))
+=> '\\X41'
+=== addcslashes('\\X41', '')
+=> '\\X41'
+=== stripcslashes(addcslashes('\\X41', ''))
+=> 'X41'
+=== addcslashes('\\X41', 'A..Z')
+=> '\\\\X41'
+=== stripcslashes(addcslashes('\\X41', 'A..Z'))
+=> '\\X41'
+=== addcslashes('\\X41', 'a..z')
+=> '\\X41'
+=== stripcslashes(addcslashes('\\X41', 'a..z'))
+=> 'X41'
+=== addcslashes('\\X41', 'A..z')
+=> '\\\\\\X41'
+=== stripcslashes(addcslashes('\\X41', 'A..z'))
+=> '\\X41'
+=== addcslashes('\\X41', "\x00..\x1f")
+=> '\\X41'
+=== stripcslashes(addcslashes('\\X41', "\x00..\x1f"))
+=> 'X41'
+=== addcslashes('\\X41', "\x00..\xff")
+=> '\\\\\\X\\4\\1'
+=== stripcslashes(addcslashes('\\X41', "\x00..\xff"))
+=> '\\X'
+=== addcslashes('\\X41', "\x7f..\xff")
+=> '\\X41'
+=== stripcslashes(addcslashes('\\X41', "\x7f..\xff"))
+=> 'X41'
+=== addcslashes('\\X41', '[]\'"\\')
+=> '\\\\X41'
+=== stripcslashes(addcslashes('\\X41', '[]\'"\\'))
+=> '\\X41'
+=== addcslashes('\\X41', 'z..a')
+Warning: addcslashes(): Invalid '..'-range, '..'-range needs to be incrementing
+=> '\\X41'
+=== stripcslashes(addcslashes('\\X41', 'z..a'))
+Warning: addcslashes(): Invalid '..'-range, '..'-range needs to be incrementing
+=> 'X41'
+=== addcslashes('\\X41', '..a')
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+=> '\\X41'
+=== stripcslashes(addcslashes('\\X41', '..a'))
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+=> 'X41'
+=== addcslashes('\\X41', 'a..')
+Warning: addcslashes(): Invalid '..'-range, no character to the right of '..'
+=> '\\X41'
+=== stripcslashes(addcslashes('\\X41', 'a..'))
+Warning: addcslashes(): Invalid '..'-range, no character to the right of '..'
+=> 'X41'
+=== addcslashes('\\X41', 'a..b..c')
+Warning: addcslashes(): Invalid '..'-range
+=> '\\X41'
+=== stripcslashes(addcslashes('\\X41', 'a..b..c'))
+Warning: addcslashes(): Invalid '..'-range
+=> 'X41'
+=== addcslashes('\\X41', '..')
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+=> '\\X41'
+=== stripcslashes(addcslashes('\\X41', '..'))
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+=> 'X41'
+=== addcslashes('\\X41', '...')
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+Warning: addcslashes(): Invalid '..'-range, no character to the right of '..'
+=> '\\X41'
+=== stripcslashes(addcslashes('\\X41', '...'))
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+Warning: addcslashes(): Invalid '..'-range, no character to the right of '..'
+=> 'X41'
+=== addcslashes('\\X41', "\x0a\x09\x0d")
+=> '\\X41'
+=== stripcslashes(addcslashes('\\X41', "\x0a\x09\x0d"))
+=> 'X41'
+=== addcslashes('\\X41', 'o')
+=> '\\X41'
+=== stripcslashes(addcslashes('\\X41', 'o'))
+=> 'X41'
+=== addcslashes('\\X41', '0..9')
+=> '\\X\\4\\1'
+=== stripcslashes(addcslashes('\\X41', '0..9'))
+=> 'X'
+=== addslashes("a\x0ab\x09c\x0dd\x07e\x0bf\x08g\x0ch\x01i\x7fj\x80k\xffl")
+=> 'a
+b	cdefghij€kÿl'
+=== stripslashes("a\x0ab\x09c\x0dd\x07e\x0bf\x08g\x0ch\x01i\x7fj\x80k\xffl")
+=> 'a
+b	cdefghij€kÿl'
+=== stripcslashes("a\x0ab\x09c\x0dd\x07e\x0bf\x08g\x0ch\x01i\x7fj\x80k\xffl")
+=> 'a
+b	cdefghij€kÿl'
+=== quotemeta("a\x0ab\x09c\x0dd\x07e\x0bf\x08g\x0ch\x01i\x7fj\x80k\xffl")
+=> 'a
+b	cdefghij€kÿl'
+=== stripslashes(addslashes("a\x0ab\x09c\x0dd\x07e\x0bf\x08g\x0ch\x01i\x7fj\x80k\xffl"))
+=> 'a
+b	cdefghij€kÿl'
+=== addcslashes("a\x0ab\x09c\x0dd\x07e\x0bf\x08g\x0ch\x01i\x7fj\x80k\xffl", '')
+=> 'a
+b	cdefghij€kÿl'
+=== stripcslashes(addcslashes("a\x0ab\x09c\x0dd\x07e\x0bf\x08g\x0ch\x01i\x7fj\x80k\xffl", ''))
+=> 'a
+b	cdefghij€kÿl'
+=== addcslashes("a\x0ab\x09c\x0dd\x07e\x0bf\x08g\x0ch\x01i\x7fj\x80k\xffl", 'A..Z')
+=> 'a
+b	cdefghij€kÿl'
+=== stripcslashes(addcslashes("a\x0ab\x09c\x0dd\x07e\x0bf\x08g\x0ch\x01i\x7fj\x80k\xffl", 'A..Z'))
+=> 'a
+b	cdefghij€kÿl'
+=== addcslashes("a\x0ab\x09c\x0dd\x07e\x0bf\x08g\x0ch\x01i\x7fj\x80k\xffl", 'a..z')
+=> '\\a
+\\b	\\c\\d\\e\\f\\g\\h\\i\\j€\\kÿ\\l'
+=== stripcslashes(addcslashes("a\x0ab\x09c\x0dd\x07e\x0bf\x08g\x0ch\x01i\x7fj\x80k\xffl", 'a..z'))
+=> '
+	cdeghij€kÿl'
+=== addcslashes("a\x0ab\x09c\x0dd\x07e\x0bf\x08g\x0ch\x01i\x7fj\x80k\xffl", 'A..z')
+=> '\\a
+\\b	\\c\\d\\e\\f\\g\\h\\i\\j€\\kÿ\\l'
+=== stripcslashes(addcslashes("a\x0ab\x09c\x0dd\x07e\x0bf\x08g\x0ch\x01i\x7fj\x80k\xffl", 'A..z'))
+=> '
+	cdeghij€kÿl'
+=== addcslashes("a\x0ab\x09c\x0dd\x07e\x0bf\x08g\x0ch\x01i\x7fj\x80k\xffl", "\x00..\x1f")
+=> 'a\\nb\\tc\\rd\\ae\\vf\\bg\\fh\\001ij€kÿl'
+=== stripcslashes(addcslashes("a\x0ab\x09c\x0dd\x07e\x0bf\x08g\x0ch\x01i\x7fj\x80k\xffl", "\x00..\x1f"))
+=> 'a
+b	cdefghij€kÿl'
+=== addcslashes("a\x0ab\x09c\x0dd\x07e\x0bf\x08g\x0ch\x01i\x7fj\x80k\xffl", "\x00..\xff")
+=> '\\a\\n\\b\\t\\c\\r\\d\\a\\e\\v\\f\\b\\g\\f\\h\\001\\i\\177\\j\\200\\k\\377\\l'
+=== stripcslashes(addcslashes("a\x0ab\x09c\x0dd\x07e\x0bf\x08g\x0ch\x01i\x7fj\x80k\xffl", "\x00..\xff"))
+=> '
+	cdeghij€kÿl'
+=== addcslashes("a\x0ab\x09c\x0dd\x07e\x0bf\x08g\x0ch\x01i\x7fj\x80k\xffl", "\x7f..\xff")
+=> 'a
+b	cdefghi\\177j\\200k\\377l'
+=== stripcslashes(addcslashes("a\x0ab\x09c\x0dd\x07e\x0bf\x08g\x0ch\x01i\x7fj\x80k\xffl", "\x7f..\xff"))
+=> 'a
+b	cdefghij€kÿl'
+=== addcslashes("a\x0ab\x09c\x0dd\x07e\x0bf\x08g\x0ch\x01i\x7fj\x80k\xffl", '[]\'"\\')
+=> 'a
+b	cdefghij€kÿl'
+=== stripcslashes(addcslashes("a\x0ab\x09c\x0dd\x07e\x0bf\x08g\x0ch\x01i\x7fj\x80k\xffl", '[]\'"\\'))
+=> 'a
+b	cdefghij€kÿl'
+=== addcslashes("a\x0ab\x09c\x0dd\x07e\x0bf\x08g\x0ch\x01i\x7fj\x80k\xffl", 'z..a')
+Warning: addcslashes(): Invalid '..'-range, '..'-range needs to be incrementing
+=> '\\a
+b	cdefghij€kÿl'
+=== stripcslashes(addcslashes("a\x0ab\x09c\x0dd\x07e\x0bf\x08g\x0ch\x01i\x7fj\x80k\xffl", 'z..a'))
+Warning: addcslashes(): Invalid '..'-range, '..'-range needs to be incrementing
+=> '
+b	cdefghij€kÿl'
+=== addcslashes("a\x0ab\x09c\x0dd\x07e\x0bf\x08g\x0ch\x01i\x7fj\x80k\xffl", '..a')
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+=> '\\a
+b	cdefghij€kÿl'
+=== stripcslashes(addcslashes("a\x0ab\x09c\x0dd\x07e\x0bf\x08g\x0ch\x01i\x7fj\x80k\xffl", '..a'))
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+=> '
+b	cdefghij€kÿl'
+=== addcslashes("a\x0ab\x09c\x0dd\x07e\x0bf\x08g\x0ch\x01i\x7fj\x80k\xffl", 'a..')
+Warning: addcslashes(): Invalid '..'-range, no character to the right of '..'
+=> '\\a
+b	cdefghij€kÿl'
+=== stripcslashes(addcslashes("a\x0ab\x09c\x0dd\x07e\x0bf\x08g\x0ch\x01i\x7fj\x80k\xffl", 'a..'))
+Warning: addcslashes(): Invalid '..'-range, no character to the right of '..'
+=> '
+b	cdefghij€kÿl'
+=== addcslashes("a\x0ab\x09c\x0dd\x07e\x0bf\x08g\x0ch\x01i\x7fj\x80k\xffl", 'a..b..c')
+Warning: addcslashes(): Invalid '..'-range
+=> '\\a
+\\b	\\cdefghij€kÿl'
+=== stripcslashes(addcslashes("a\x0ab\x09c\x0dd\x07e\x0bf\x08g\x0ch\x01i\x7fj\x80k\xffl", 'a..b..c'))
+Warning: addcslashes(): Invalid '..'-range
+=> '
+	cdefghij€kÿl'
+=== addcslashes("a\x0ab\x09c\x0dd\x07e\x0bf\x08g\x0ch\x01i\x7fj\x80k\xffl", '..')
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+=> 'a
+b	cdefghij€kÿl'
+=== stripcslashes(addcslashes("a\x0ab\x09c\x0dd\x07e\x0bf\x08g\x0ch\x01i\x7fj\x80k\xffl", '..'))
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+=> 'a
+b	cdefghij€kÿl'
+=== addcslashes("a\x0ab\x09c\x0dd\x07e\x0bf\x08g\x0ch\x01i\x7fj\x80k\xffl", '...')
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+Warning: addcslashes(): Invalid '..'-range, no character to the right of '..'
+=> 'a
+b	cdefghij€kÿl'
+=== stripcslashes(addcslashes("a\x0ab\x09c\x0dd\x07e\x0bf\x08g\x0ch\x01i\x7fj\x80k\xffl", '...'))
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+Warning: addcslashes(): Invalid '..'-range, no character to the right of '..'
+=> 'a
+b	cdefghij€kÿl'
+=== addcslashes("a\x0ab\x09c\x0dd\x07e\x0bf\x08g\x0ch\x01i\x7fj\x80k\xffl", "\x0a\x09\x0d")
+=> 'a\\nb\\tc\\rdefghij€kÿl'
+=== stripcslashes(addcslashes("a\x0ab\x09c\x0dd\x07e\x0bf\x08g\x0ch\x01i\x7fj\x80k\xffl", "\x0a\x09\x0d"))
+=> 'a
+b	cdefghij€kÿl'
+=== addcslashes("a\x0ab\x09c\x0dd\x07e\x0bf\x08g\x0ch\x01i\x7fj\x80k\xffl", 'o')
+=> 'a
+b	cdefghij€kÿl'
+=== stripcslashes(addcslashes("a\x0ab\x09c\x0dd\x07e\x0bf\x08g\x0ch\x01i\x7fj\x80k\xffl", 'o'))
+=> 'a
+b	cdefghij€kÿl'
+=== addcslashes("a\x0ab\x09c\x0dd\x07e\x0bf\x08g\x0ch\x01i\x7fj\x80k\xffl", '0..9')
+=> 'a
+b	cdefghij€kÿl'
+=== stripcslashes(addcslashes("a\x0ab\x09c\x0dd\x07e\x0bf\x08g\x0ch\x01i\x7fj\x80k\xffl", '0..9'))
+=> 'a
+b	cdefghij€kÿl'
+=== addslashes('1+1=2? [a-z]* ^x$ (y) .\\')
+=> '1+1=2? [a-z]* ^x$ (y) .\\\\'
+=== stripslashes('1+1=2? [a-z]* ^x$ (y) .\\')
+=> '1+1=2? [a-z]* ^x$ (y) .'
+=== stripcslashes('1+1=2? [a-z]* ^x$ (y) .\\')
+=> '1+1=2? [a-z]* ^x$ (y) .\\'
+=== quotemeta('1+1=2? [a-z]* ^x$ (y) .\\')
+=> '1\\+1=2\\? \\[a-z\\]\\* \\^x\\$ \\(y\\) \\.\\\\'
+=== stripslashes(addslashes('1+1=2? [a-z]* ^x$ (y) .\\'))
+=> '1+1=2? [a-z]* ^x$ (y) .\\'
+=== addcslashes('1+1=2? [a-z]* ^x$ (y) .\\', '')
+=> '1+1=2? [a-z]* ^x$ (y) .\\'
+=== stripcslashes(addcslashes('1+1=2? [a-z]* ^x$ (y) .\\', ''))
+=> '1+1=2? [a-z]* ^x$ (y) .\\'
+=== addcslashes('1+1=2? [a-z]* ^x$ (y) .\\', 'A..Z')
+=> '1+1=2? [a-z]* ^x$ (y) .\\'
+=== stripcslashes(addcslashes('1+1=2? [a-z]* ^x$ (y) .\\', 'A..Z'))
+=> '1+1=2? [a-z]* ^x$ (y) .\\'
+=== addcslashes('1+1=2? [a-z]* ^x$ (y) .\\', 'a..z')
+=> '1+1=2? [\\a-\\z]* ^\\x$ (\\y) .\\'
+=== stripcslashes(addcslashes('1+1=2? [a-z]* ^x$ (y) .\\', 'a..z'))
+=> '1+1=2? [-z]* ^x$ (y) .\\'
+=== addcslashes('1+1=2? [a-z]* ^x$ (y) .\\', 'A..z')
+=> '1+1=2? \\[\\a-\\z\\]* \\^\\x$ (\\y) .\\\\'
+=== stripcslashes(addcslashes('1+1=2? [a-z]* ^x$ (y) .\\', 'A..z'))
+=> '1+1=2? [-z]* ^x$ (y) .\\'
+=== addcslashes('1+1=2? [a-z]* ^x$ (y) .\\', "\x00..\x1f")
+=> '1+1=2? [a-z]* ^x$ (y) .\\'
+=== stripcslashes(addcslashes('1+1=2? [a-z]* ^x$ (y) .\\', "\x00..\x1f"))
+=> '1+1=2? [a-z]* ^x$ (y) .\\'
+=== addcslashes('1+1=2? [a-z]* ^x$ (y) .\\', "\x00..\xff")
+=> '\\1\\+\\1\\=\\2\\?\\ \\[\\a\\-\\z\\]\\*\\ \\^\\x\\$\\ \\(\\y\\)\\ \\.\\\\'
+=== stripcslashes(addcslashes('1+1=2? [a-z]* ^x$ (y) .\\', "\x00..\xff"))
+=> '+=? [-z]* ^x$ (y) .\\'
+=== addcslashes('1+1=2? [a-z]* ^x$ (y) .\\', "\x7f..\xff")
+=> '1+1=2? [a-z]* ^x$ (y) .\\'
+=== stripcslashes(addcslashes('1+1=2? [a-z]* ^x$ (y) .\\', "\x7f..\xff"))
+=> '1+1=2? [a-z]* ^x$ (y) .\\'
+=== addcslashes('1+1=2? [a-z]* ^x$ (y) .\\', '[]\'"\\')
+=> '1+1=2? \\[a-z\\]* ^x$ (y) .\\\\'
+=== stripcslashes(addcslashes('1+1=2? [a-z]* ^x$ (y) .\\', '[]\'"\\'))
+=> '1+1=2? [a-z]* ^x$ (y) .\\'
+=== addcslashes('1+1=2? [a-z]* ^x$ (y) .\\', 'z..a')
+Warning: addcslashes(): Invalid '..'-range, '..'-range needs to be incrementing
+=> '1+1=2? [\\a-\\z]* ^x$ (y) \\.\\'
+=== stripcslashes(addcslashes('1+1=2? [a-z]* ^x$ (y) .\\', 'z..a'))
+Warning: addcslashes(): Invalid '..'-range, '..'-range needs to be incrementing
+=> '1+1=2? [-z]* ^x$ (y) .\\'
+=== addcslashes('1+1=2? [a-z]* ^x$ (y) .\\', '..a')
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+=> '1+1=2? [\\a-z]* ^x$ (y) \\.\\'
+=== stripcslashes(addcslashes('1+1=2? [a-z]* ^x$ (y) .\\', '..a'))
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+=> '1+1=2? [-z]* ^x$ (y) .\\'
+=== addcslashes('1+1=2? [a-z]* ^x$ (y) .\\', 'a..')
+Warning: addcslashes(): Invalid '..'-range, no character to the right of '..'
+=> '1+1=2? [\\a-z]* ^x$ (y) \\.\\'
+=== stripcslashes(addcslashes('1+1=2? [a-z]* ^x$ (y) .\\', 'a..'))
+Warning: addcslashes(): Invalid '..'-range, no character to the right of '..'
+=> '1+1=2? [-z]* ^x$ (y) .\\'
+=== addcslashes('1+1=2? [a-z]* ^x$ (y) .\\', 'a..b..c')
+Warning: addcslashes(): Invalid '..'-range
+=> '1+1=2? [\\a-z]* ^x$ (y) \\.\\'
+=== stripcslashes(addcslashes('1+1=2? [a-z]* ^x$ (y) .\\', 'a..b..c'))
+Warning: addcslashes(): Invalid '..'-range
+=> '1+1=2? [-z]* ^x$ (y) .\\'
+=== addcslashes('1+1=2? [a-z]* ^x$ (y) .\\', '..')
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+=> '1+1=2? [a-z]* ^x$ (y) \\.\\'
+=== stripcslashes(addcslashes('1+1=2? [a-z]* ^x$ (y) .\\', '..'))
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+=> '1+1=2? [a-z]* ^x$ (y) .\\'
+=== addcslashes('1+1=2? [a-z]* ^x$ (y) .\\', '...')
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+Warning: addcslashes(): Invalid '..'-range, no character to the right of '..'
+=> '1+1=2? [a-z]* ^x$ (y) \\.\\'
+=== stripcslashes(addcslashes('1+1=2? [a-z]* ^x$ (y) .\\', '...'))
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+Warning: addcslashes(): Invalid '..'-range, no character to the right of '..'
+=> '1+1=2? [a-z]* ^x$ (y) .\\'
+=== addcslashes('1+1=2? [a-z]* ^x$ (y) .\\', "\x0a\x09\x0d")
+=> '1+1=2? [a-z]* ^x$ (y) .\\'
+=== stripcslashes(addcslashes('1+1=2? [a-z]* ^x$ (y) .\\', "\x0a\x09\x0d"))
+=> '1+1=2? [a-z]* ^x$ (y) .\\'
+=== addcslashes('1+1=2? [a-z]* ^x$ (y) .\\', 'o')
+=> '1+1=2? [a-z]* ^x$ (y) .\\'
+=== stripcslashes(addcslashes('1+1=2? [a-z]* ^x$ (y) .\\', 'o'))
+=> '1+1=2? [a-z]* ^x$ (y) .\\'
+=== addcslashes('1+1=2? [a-z]* ^x$ (y) .\\', '0..9')
+=> '\\1+\\1=\\2? [a-z]* ^x$ (y) .\\'
+=== stripcslashes(addcslashes('1+1=2? [a-z]* ^x$ (y) .\\', '0..9'))
+=> '+=? [a-z]* ^x$ (y) .\\'
+=== addslashes('zoo[\'.\']')
+=> 'zoo[\\\'.\\\']'
+=== stripslashes('zoo[\'.\']')
+=> 'zoo[\'.\']'
+=== stripcslashes('zoo[\'.\']')
+=> 'zoo[\'.\']'
+=== quotemeta('zoo[\'.\']')
+=> 'zoo\\[\'\\.\'\\]'
+=== stripslashes(addslashes('zoo[\'.\']'))
+=> 'zoo[\'.\']'
+=== addcslashes('zoo[\'.\']', '')
+=> 'zoo[\'.\']'
+=== stripcslashes(addcslashes('zoo[\'.\']', ''))
+=> 'zoo[\'.\']'
+=== addcslashes('zoo[\'.\']', 'A..Z')
+=> 'zoo[\'.\']'
+=== stripcslashes(addcslashes('zoo[\'.\']', 'A..Z'))
+=> 'zoo[\'.\']'
+=== addcslashes('zoo[\'.\']', 'a..z')
+=> '\\z\\o\\o[\'.\']'
+=== stripcslashes(addcslashes('zoo[\'.\']', 'a..z'))
+=> 'zoo[\'.\']'
+=== addcslashes('zoo[\'.\']', 'A..z')
+=> '\\z\\o\\o\\[\'.\'\\]'
+=== stripcslashes(addcslashes('zoo[\'.\']', 'A..z'))
+=> 'zoo[\'.\']'
+=== addcslashes('zoo[\'.\']', "\x00..\x1f")
+=> 'zoo[\'.\']'
+=== stripcslashes(addcslashes('zoo[\'.\']', "\x00..\x1f"))
+=> 'zoo[\'.\']'
+=== addcslashes('zoo[\'.\']', "\x00..\xff")
+=> '\\z\\o\\o\\[\\\'\\.\\\'\\]'
+=== stripcslashes(addcslashes('zoo[\'.\']', "\x00..\xff"))
+=> 'zoo[\'.\']'
+=== addcslashes('zoo[\'.\']', "\x7f..\xff")
+=> 'zoo[\'.\']'
+=== stripcslashes(addcslashes('zoo[\'.\']', "\x7f..\xff"))
+=> 'zoo[\'.\']'
+=== addcslashes('zoo[\'.\']', '[]\'"\\')
+=> 'zoo\\[\\\'.\\\'\\]'
+=== stripcslashes(addcslashes('zoo[\'.\']', '[]\'"\\'))
+=> 'zoo[\'.\']'
+=== addcslashes('zoo[\'.\']', 'z..a')
+Warning: addcslashes(): Invalid '..'-range, '..'-range needs to be incrementing
+=> '\\zoo[\'\\.\']'
+=== stripcslashes(addcslashes('zoo[\'.\']', 'z..a'))
+Warning: addcslashes(): Invalid '..'-range, '..'-range needs to be incrementing
+=> 'zoo[\'.\']'
+=== addcslashes('zoo[\'.\']', '..a')
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+=> 'zoo[\'\\.\']'
+=== stripcslashes(addcslashes('zoo[\'.\']', '..a'))
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+=> 'zoo[\'.\']'
+=== addcslashes('zoo[\'.\']', 'a..')
+Warning: addcslashes(): Invalid '..'-range, no character to the right of '..'
+=> 'zoo[\'\\.\']'
+=== stripcslashes(addcslashes('zoo[\'.\']', 'a..'))
+Warning: addcslashes(): Invalid '..'-range, no character to the right of '..'
+=> 'zoo[\'.\']'
+=== addcslashes('zoo[\'.\']', 'a..b..c')
+Warning: addcslashes(): Invalid '..'-range
+=> 'zoo[\'\\.\']'
+=== stripcslashes(addcslashes('zoo[\'.\']', 'a..b..c'))
+Warning: addcslashes(): Invalid '..'-range
+=> 'zoo[\'.\']'
+=== addcslashes('zoo[\'.\']', '..')
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+=> 'zoo[\'\\.\']'
+=== stripcslashes(addcslashes('zoo[\'.\']', '..'))
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+=> 'zoo[\'.\']'
+=== addcslashes('zoo[\'.\']', '...')
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+Warning: addcslashes(): Invalid '..'-range, no character to the right of '..'
+=> 'zoo[\'\\.\']'
+=== stripcslashes(addcslashes('zoo[\'.\']', '...'))
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+Warning: addcslashes(): Invalid '..'-range, no character to the right of '..'
+=> 'zoo[\'.\']'
+=== addcslashes('zoo[\'.\']', "\x0a\x09\x0d")
+=> 'zoo[\'.\']'
+=== stripcslashes(addcslashes('zoo[\'.\']', "\x0a\x09\x0d"))
+=> 'zoo[\'.\']'
+=== addcslashes('zoo[\'.\']', 'o')
+=> 'z\\o\\o[\'.\']'
+=== stripcslashes(addcslashes('zoo[\'.\']', 'o'))
+=> 'zoo[\'.\']'
+=== addcslashes('zoo[\'.\']', '0..9')
+=> 'zoo[\'.\']'
+=== stripcslashes(addcslashes('zoo[\'.\']', '0..9'))
+=> 'zoo[\'.\']'
+=== addslashes('foo[bar]')
+=> 'foo[bar]'
+=== stripslashes('foo[bar]')
+=> 'foo[bar]'
+=== stripcslashes('foo[bar]')
+=> 'foo[bar]'
+=== quotemeta('foo[bar]')
+=> 'foo\\[bar\\]'
+=== stripslashes(addslashes('foo[bar]'))
+=> 'foo[bar]'
+=== addcslashes('foo[bar]', '')
+=> 'foo[bar]'
+=== stripcslashes(addcslashes('foo[bar]', ''))
+=> 'foo[bar]'
+=== addcslashes('foo[bar]', 'A..Z')
+=> 'foo[bar]'
+=== stripcslashes(addcslashes('foo[bar]', 'A..Z'))
+=> 'foo[bar]'
+=== addcslashes('foo[bar]', 'a..z')
+=> '\\f\\o\\o[\\b\\a\\r]'
+=== stripcslashes(addcslashes('foo[bar]', 'a..z'))
+=> 'oo[]'
+=== addcslashes('foo[bar]', 'A..z')
+=> '\\f\\o\\o\\[\\b\\a\\r\\]'
+=== stripcslashes(addcslashes('foo[bar]', 'A..z'))
+=> 'oo[]'
+=== addcslashes('foo[bar]', "\x00..\x1f")
+=> 'foo[bar]'
+=== stripcslashes(addcslashes('foo[bar]', "\x00..\x1f"))
+=> 'foo[bar]'
+=== addcslashes('foo[bar]', "\x00..\xff")
+=> '\\f\\o\\o\\[\\b\\a\\r\\]'
+=== stripcslashes(addcslashes('foo[bar]', "\x00..\xff"))
+=> 'oo[]'
+=== addcslashes('foo[bar]', "\x7f..\xff")
+=> 'foo[bar]'
+=== stripcslashes(addcslashes('foo[bar]', "\x7f..\xff"))
+=> 'foo[bar]'
+=== addcslashes('foo[bar]', '[]\'"\\')
+=> 'foo\\[bar\\]'
+=== stripcslashes(addcslashes('foo[bar]', '[]\'"\\'))
+=> 'foo[bar]'
+=== addcslashes('foo[bar]', 'z..a')
+Warning: addcslashes(): Invalid '..'-range, '..'-range needs to be incrementing
+=> 'foo[b\\ar]'
+=== stripcslashes(addcslashes('foo[bar]', 'z..a'))
+Warning: addcslashes(): Invalid '..'-range, '..'-range needs to be incrementing
+=> 'foo[br]'
+=== addcslashes('foo[bar]', '..a')
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+=> 'foo[b\\ar]'
+=== stripcslashes(addcslashes('foo[bar]', '..a'))
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+=> 'foo[br]'
+=== addcslashes('foo[bar]', 'a..')
+Warning: addcslashes(): Invalid '..'-range, no character to the right of '..'
+=> 'foo[b\\ar]'
+=== stripcslashes(addcslashes('foo[bar]', 'a..'))
+Warning: addcslashes(): Invalid '..'-range, no character to the right of '..'
+=> 'foo[br]'
+=== addcslashes('foo[bar]', 'a..b..c')
+Warning: addcslashes(): Invalid '..'-range
+=> 'foo[\\b\\ar]'
+=== stripcslashes(addcslashes('foo[bar]', 'a..b..c'))
+Warning: addcslashes(): Invalid '..'-range
+=> 'foo[r]'
+=== addcslashes('foo[bar]', '..')
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+=> 'foo[bar]'
+=== stripcslashes(addcslashes('foo[bar]', '..'))
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+=> 'foo[bar]'
+=== addcslashes('foo[bar]', '...')
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+Warning: addcslashes(): Invalid '..'-range, no character to the right of '..'
+=> 'foo[bar]'
+=== stripcslashes(addcslashes('foo[bar]', '...'))
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+Warning: addcslashes(): Invalid '..'-range, no character to the right of '..'
+=> 'foo[bar]'
+=== addcslashes('foo[bar]', "\x0a\x09\x0d")
+=> 'foo[bar]'
+=== stripcslashes(addcslashes('foo[bar]', "\x0a\x09\x0d"))
+=> 'foo[bar]'
+=== addcslashes('foo[bar]', 'o')
+=> 'f\\o\\o[bar]'
+=== stripcslashes(addcslashes('foo[bar]', 'o'))
+=> 'foo[bar]'
+=== addcslashes('foo[bar]', '0..9')
+=> 'foo[bar]'
+=== stripcslashes(addcslashes('foo[bar]', '0..9'))
+=> 'foo[bar]'
+=== addslashes("Hello World! \xe4\xf6\xfc")
+=> 'Hello World! äöü'
+=== stripslashes("Hello World! \xe4\xf6\xfc")
+=> 'Hello World! äöü'
+=== stripcslashes("Hello World! \xe4\xf6\xfc")
+=> 'Hello World! äöü'
+=== quotemeta("Hello World! \xe4\xf6\xfc")
+=> 'Hello World! äöü'
+=== stripslashes(addslashes("Hello World! \xe4\xf6\xfc"))
+=> 'Hello World! äöü'
+=== addcslashes("Hello World! \xe4\xf6\xfc", '')
+=> 'Hello World! äöü'
+=== stripcslashes(addcslashes("Hello World! \xe4\xf6\xfc", ''))
+=> 'Hello World! äöü'
+=== addcslashes("Hello World! \xe4\xf6\xfc", 'A..Z')
+=> '\\Hello \\World! äöü'
+=== stripcslashes(addcslashes("Hello World! \xe4\xf6\xfc", 'A..Z'))
+=> 'Hello World! äöü'
+=== addcslashes("Hello World! \xe4\xf6\xfc", 'a..z')
+=> 'H\\e\\l\\l\\o W\\o\\r\\l\\d! äöü'
+=== stripcslashes(addcslashes("Hello World! \xe4\xf6\xfc", 'a..z'))
+=> 'Hello Wold! äöü'
+=== addcslashes("Hello World! \xe4\xf6\xfc", 'A..z')
+=> '\\H\\e\\l\\l\\o \\W\\o\\r\\l\\d! äöü'
+=== stripcslashes(addcslashes("Hello World! \xe4\xf6\xfc", 'A..z'))
+=> 'Hello Wold! äöü'
+=== addcslashes("Hello World! \xe4\xf6\xfc", "\x00..\x1f")
+=> 'Hello World! äöü'
+=== stripcslashes(addcslashes("Hello World! \xe4\xf6\xfc", "\x00..\x1f"))
+=> 'Hello World! äöü'
+=== addcslashes("Hello World! \xe4\xf6\xfc", "\x00..\xff")
+=> '\\H\\e\\l\\l\\o\\ \\W\\o\\r\\l\\d\\!\\ \\344\\366\\374'
+=== stripcslashes(addcslashes("Hello World! \xe4\xf6\xfc", "\x00..\xff"))
+=> 'Hello Wold! äöü'
+=== addcslashes("Hello World! \xe4\xf6\xfc", "\x7f..\xff")
+=> 'Hello World! \\344\\366\\374'
+=== stripcslashes(addcslashes("Hello World! \xe4\xf6\xfc", "\x7f..\xff"))
+=> 'Hello World! äöü'
+=== addcslashes("Hello World! \xe4\xf6\xfc", '[]\'"\\')
+=> 'Hello World! äöü'
+=== stripcslashes(addcslashes("Hello World! \xe4\xf6\xfc", '[]\'"\\'))
+=> 'Hello World! äöü'
+=== addcslashes("Hello World! \xe4\xf6\xfc", 'z..a')
+Warning: addcslashes(): Invalid '..'-range, '..'-range needs to be incrementing
+=> 'Hello World! äöü'
+=== stripcslashes(addcslashes("Hello World! \xe4\xf6\xfc", 'z..a'))
+Warning: addcslashes(): Invalid '..'-range, '..'-range needs to be incrementing
+=> 'Hello World! äöü'
+=== addcslashes("Hello World! \xe4\xf6\xfc", '..a')
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+=> 'Hello World! äöü'
+=== stripcslashes(addcslashes("Hello World! \xe4\xf6\xfc", '..a'))
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+=> 'Hello World! äöü'
+=== addcslashes("Hello World! \xe4\xf6\xfc", 'a..')
+Warning: addcslashes(): Invalid '..'-range, no character to the right of '..'
+=> 'Hello World! äöü'
+=== stripcslashes(addcslashes("Hello World! \xe4\xf6\xfc", 'a..'))
+Warning: addcslashes(): Invalid '..'-range, no character to the right of '..'
+=> 'Hello World! äöü'
+=== addcslashes("Hello World! \xe4\xf6\xfc", 'a..b..c')
+Warning: addcslashes(): Invalid '..'-range
+=> 'Hello World! äöü'
+=== stripcslashes(addcslashes("Hello World! \xe4\xf6\xfc", 'a..b..c'))
+Warning: addcslashes(): Invalid '..'-range
+=> 'Hello World! äöü'
+=== addcslashes("Hello World! \xe4\xf6\xfc", '..')
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+=> 'Hello World! äöü'
+=== stripcslashes(addcslashes("Hello World! \xe4\xf6\xfc", '..'))
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+=> 'Hello World! äöü'
+=== addcslashes("Hello World! \xe4\xf6\xfc", '...')
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+Warning: addcslashes(): Invalid '..'-range, no character to the right of '..'
+=> 'Hello World! äöü'
+=== stripcslashes(addcslashes("Hello World! \xe4\xf6\xfc", '...'))
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+Warning: addcslashes(): Invalid '..'-range, no character to the right of '..'
+=> 'Hello World! äöü'
+=== addcslashes("Hello World! \xe4\xf6\xfc", "\x0a\x09\x0d")
+=> 'Hello World! äöü'
+=== stripcslashes(addcslashes("Hello World! \xe4\xf6\xfc", "\x0a\x09\x0d"))
+=> 'Hello World! äöü'
+=== addcslashes("Hello World! \xe4\xf6\xfc", 'o')
+=> 'Hell\\o W\\orld! äöü'
+=== stripcslashes(addcslashes("Hello World! \xe4\xf6\xfc", 'o'))
+=> 'Hello World! äöü'
+=== addcslashes("Hello World! \xe4\xf6\xfc", '0..9')
+=> 'Hello World! äöü'
+=== stripcslashes(addcslashes("Hello World! \xe4\xf6\xfc", '0..9'))
+=> 'Hello World! äöü'
+=== addslashes('0123456789abcdefABCDEF~!@#$%^&*()_+`-=')
+=> '0123456789abcdefABCDEF~!@#$%^&*()_+`-='
+=== stripslashes('0123456789abcdefABCDEF~!@#$%^&*()_+`-=')
+=> '0123456789abcdefABCDEF~!@#$%^&*()_+`-='
+=== stripcslashes('0123456789abcdefABCDEF~!@#$%^&*()_+`-=')
+=> '0123456789abcdefABCDEF~!@#$%^&*()_+`-='
+=== quotemeta('0123456789abcdefABCDEF~!@#$%^&*()_+`-=')
+=> '0123456789abcdefABCDEF~!@#\\$%\\^&\\*\\(\\)_\\+`-='
+=== stripslashes(addslashes('0123456789abcdefABCDEF~!@#$%^&*()_+`-='))
+=> '0123456789abcdefABCDEF~!@#$%^&*()_+`-='
+=== addcslashes('0123456789abcdefABCDEF~!@#$%^&*()_+`-=', '')
+=> '0123456789abcdefABCDEF~!@#$%^&*()_+`-='
+=== stripcslashes(addcslashes('0123456789abcdefABCDEF~!@#$%^&*()_+`-=', ''))
+=> '0123456789abcdefABCDEF~!@#$%^&*()_+`-='
+=== addcslashes('0123456789abcdefABCDEF~!@#$%^&*()_+`-=', 'A..Z')
+=> '0123456789abcdef\\A\\B\\C\\D\\E\\F~!@#$%^&*()_+`-='
+=== stripcslashes(addcslashes('0123456789abcdefABCDEF~!@#$%^&*()_+`-=', 'A..Z'))
+=> '0123456789abcdefABCDEF~!@#$%^&*()_+`-='
+=== addcslashes('0123456789abcdefABCDEF~!@#$%^&*()_+`-=', 'a..z')
+=> '0123456789\\a\\b\\c\\d\\e\\fABCDEF~!@#$%^&*()_+`-='
+=== stripcslashes(addcslashes('0123456789abcdefABCDEF~!@#$%^&*()_+`-=', 'a..z'))
+=> '0123456789cdeABCDEF~!@#$%^&*()_+`-='
+=== addcslashes('0123456789abcdefABCDEF~!@#$%^&*()_+`-=', 'A..z')
+=> '0123456789\\a\\b\\c\\d\\e\\f\\A\\B\\C\\D\\E\\F~!@#$%\\^&*()\\_+\\`-='
+=== stripcslashes(addcslashes('0123456789abcdefABCDEF~!@#$%^&*()_+`-=', 'A..z'))
+=> '0123456789cdeABCDEF~!@#$%^&*()_+`-='
+=== addcslashes('0123456789abcdefABCDEF~!@#$%^&*()_+`-=', "\x00..\x1f")
+=> '0123456789abcdefABCDEF~!@#$%^&*()_+`-='
+=== stripcslashes(addcslashes('0123456789abcdefABCDEF~!@#$%^&*()_+`-=', "\x00..\x1f"))
+=> '0123456789abcdefABCDEF~!@#$%^&*()_+`-='
+=== addcslashes('0123456789abcdefABCDEF~!@#$%^&*()_+`-=', "\x00..\xff")
+=> '\\0\\1\\2\\3\\4\\5\\6\\7\\8\\9\\a\\b\\c\\d\\e\\f\\A\\B\\C\\D\\E\\F\\~\\!\\@\\#\\$\\%\\^\\&\\*\\(\\)\\_\\+\\`\\-\\='
+=== stripcslashes(addcslashes('0123456789abcdefABCDEF~!@#$%^&*()_+`-=', "\x00..\xff"))
+=> '' . "\0" . '89cdeABCDEF~!@#$%^&*()_+`-='
+=== addcslashes('0123456789abcdefABCDEF~!@#$%^&*()_+`-=', "\x7f..\xff")
+=> '0123456789abcdefABCDEF~!@#$%^&*()_+`-='
+=== stripcslashes(addcslashes('0123456789abcdefABCDEF~!@#$%^&*()_+`-=', "\x7f..\xff"))
+=> '0123456789abcdefABCDEF~!@#$%^&*()_+`-='
+=== addcslashes('0123456789abcdefABCDEF~!@#$%^&*()_+`-=', '[]\'"\\')
+=> '0123456789abcdefABCDEF~!@#$%^&*()_+`-='
+=== stripcslashes(addcslashes('0123456789abcdefABCDEF~!@#$%^&*()_+`-=', '[]\'"\\'))
+=> '0123456789abcdefABCDEF~!@#$%^&*()_+`-='
+=== addcslashes('0123456789abcdefABCDEF~!@#$%^&*()_+`-=', 'z..a')
+Warning: addcslashes(): Invalid '..'-range, '..'-range needs to be incrementing
+=> '0123456789\\abcdefABCDEF~!@#$%^&*()_+`-='
+=== stripcslashes(addcslashes('0123456789abcdefABCDEF~!@#$%^&*()_+`-=', 'z..a'))
+Warning: addcslashes(): Invalid '..'-range, '..'-range needs to be incrementing
+=> '0123456789bcdefABCDEF~!@#$%^&*()_+`-='
+=== addcslashes('0123456789abcdefABCDEF~!@#$%^&*()_+`-=', '..a')
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+=> '0123456789\\abcdefABCDEF~!@#$%^&*()_+`-='
+=== stripcslashes(addcslashes('0123456789abcdefABCDEF~!@#$%^&*()_+`-=', '..a'))
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+=> '0123456789bcdefABCDEF~!@#$%^&*()_+`-='
+=== addcslashes('0123456789abcdefABCDEF~!@#$%^&*()_+`-=', 'a..')
+Warning: addcslashes(): Invalid '..'-range, no character to the right of '..'
+=> '0123456789\\abcdefABCDEF~!@#$%^&*()_+`-='
+=== stripcslashes(addcslashes('0123456789abcdefABCDEF~!@#$%^&*()_+`-=', 'a..'))
+Warning: addcslashes(): Invalid '..'-range, no character to the right of '..'
+=> '0123456789bcdefABCDEF~!@#$%^&*()_+`-='
+=== addcslashes('0123456789abcdefABCDEF~!@#$%^&*()_+`-=', 'a..b..c')
+Warning: addcslashes(): Invalid '..'-range
+=> '0123456789\\a\\b\\cdefABCDEF~!@#$%^&*()_+`-='
+=== stripcslashes(addcslashes('0123456789abcdefABCDEF~!@#$%^&*()_+`-=', 'a..b..c'))
+Warning: addcslashes(): Invalid '..'-range
+=> '0123456789cdefABCDEF~!@#$%^&*()_+`-='
+=== addcslashes('0123456789abcdefABCDEF~!@#$%^&*()_+`-=', '..')
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+=> '0123456789abcdefABCDEF~!@#$%^&*()_+`-='
+=== stripcslashes(addcslashes('0123456789abcdefABCDEF~!@#$%^&*()_+`-=', '..'))
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+=> '0123456789abcdefABCDEF~!@#$%^&*()_+`-='
+=== addcslashes('0123456789abcdefABCDEF~!@#$%^&*()_+`-=', '...')
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+Warning: addcslashes(): Invalid '..'-range, no character to the right of '..'
+=> '0123456789abcdefABCDEF~!@#$%^&*()_+`-='
+=== stripcslashes(addcslashes('0123456789abcdefABCDEF~!@#$%^&*()_+`-=', '...'))
+Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'
+Warning: addcslashes(): Invalid '..'-range, no character to the right of '..'
+=> '0123456789abcdefABCDEF~!@#$%^&*()_+`-='
+=== addcslashes('0123456789abcdefABCDEF~!@#$%^&*()_+`-=', "\x0a\x09\x0d")
+=> '0123456789abcdefABCDEF~!@#$%^&*()_+`-='
+=== stripcslashes(addcslashes('0123456789abcdefABCDEF~!@#$%^&*()_+`-=', "\x0a\x09\x0d"))
+=> '0123456789abcdefABCDEF~!@#$%^&*()_+`-='
+=== addcslashes('0123456789abcdefABCDEF~!@#$%^&*()_+`-=', 'o')
+=> '0123456789abcdefABCDEF~!@#$%^&*()_+`-='
+=== stripcslashes(addcslashes('0123456789abcdefABCDEF~!@#$%^&*()_+`-=', 'o'))
+=> '0123456789abcdefABCDEF~!@#$%^&*()_+`-='
+=== addcslashes('0123456789abcdefABCDEF~!@#$%^&*()_+`-=', '0..9')
+=> '\\0\\1\\2\\3\\4\\5\\6\\7\\8\\9abcdefABCDEF~!@#$%^&*()_+`-='
+=== stripcslashes(addcslashes('0123456789abcdefABCDEF~!@#$%^&*()_+`-=', '0..9'))
+=> '' . "\0" . '89abcdefABCDEF~!@#$%^&*()_+`-='

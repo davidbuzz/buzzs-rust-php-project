@@ -2,9 +2,7 @@
 //! and `substr_compare()`.
 mod common;
 use common::{case, check, lit, pure, regenerate, Case};
-use php_stdstr::compare::{
-    strcasecmp, strcmp, strncasecmp, strncmp, strnatcmp, substr_compare,
-};
+use php_stdstr::compare::{strcasecmp, strcmp, strnatcmp, strncasecmp, strncmp, substr_compare};
 
 const STRS: &[&[u8]] = &[
     b"",
@@ -77,6 +75,7 @@ const NAT_EXTRA: &[(&[u8], &[u8])] = &[
     (b"Abc", b"aBD"),
 ];
 
+#[allow(clippy::too_many_lines)]
 fn cases() -> Vec<Case> {
     let mut v = Vec::new();
     for a in STRS {
@@ -90,7 +89,10 @@ fn cases() -> Vec<Case> {
                 strcmp(a, b).signum(),
             ));
             v.push(pure(&format!("strcasecmp({la}, {lb})"), strcasecmp(a, b)));
-            v.push(pure(&format!("strnatcmp({la}, {lb})"), strnatcmp(a, b, false)));
+            v.push(pure(
+                &format!("strnatcmp({la}, {lb})"),
+                strnatcmp(a, b, false),
+            ));
             v.push(pure(
                 &format!("strnatcasecmp({la}, {lb})"),
                 strnatcmp(a, b, true),
@@ -100,7 +102,10 @@ fn cases() -> Vec<Case> {
     for (a, b) in NAT_EXTRA {
         for (x, y) in [(a, b), (b, a)] {
             let (lx, ly) = (lit(x), lit(y));
-            v.push(pure(&format!("strnatcmp({lx}, {ly})"), strnatcmp(x, y, false)));
+            v.push(pure(
+                &format!("strnatcmp({lx}, {ly})"),
+                strnatcmp(x, y, false),
+            ));
             v.push(pure(
                 &format!("strnatcasecmp({lx}, {ly})"),
                 strnatcmp(x, y, true),
@@ -128,7 +133,9 @@ fn cases() -> Vec<Case> {
         }
     }
     let hay: &[&[u8]] = &[b"abcde", b"", b"ABCde", b"a\0cde"];
-    let needles: &[&[u8]] = &[b"", b"bc", b"BC", b"df", b"abc", b"abcdef", b"de", b"e", b"\0c"];
+    let needles: &[&[u8]] = &[
+        b"", b"bc", b"BC", b"df", b"abc", b"abcdef", b"de", b"e", b"\0c",
+    ];
     let offsets = [0i64, 1, 2, 4, 5, 6, -1, -2, -5, -6, -10, i64::MIN];
     let lengths = [None, Some(0), Some(1), Some(2), Some(3), Some(10), Some(-1)];
     for h in hay {
@@ -167,13 +174,18 @@ fn cases() -> Vec<Case> {
         (b"abcdefghijklmnop", b"abcdefghijklmnopq"),
     ];
     for (a, b) in exact {
-        v.push(pure(&format!("strcmp({}, {})", lit(a), lit(b)), strcmp(a, b)));
-        v.push(case(&format!("substr_compare({}, {}, 0)", lit(a), lit(b)), |_| {
-            substr_compare(a, b, 0, None, false)
-        }));
-        v.push(case(&format!("substr_compare({}, {}, 0, null, true)", lit(a), lit(b)), |_| {
-            substr_compare(a, b, 0, None, true)
-        }));
+        v.push(pure(
+            &format!("strcmp({}, {})", lit(a), lit(b)),
+            strcmp(a, b),
+        ));
+        v.push(case(
+            &format!("substr_compare({}, {}, 0)", lit(a), lit(b)),
+            |_| substr_compare(a, b, 0, None, false),
+        ));
+        v.push(case(
+            &format!("substr_compare({}, {}, 0, null, true)", lit(a), lit(b)),
+            |_| substr_compare(a, b, 0, None, true),
+        ));
     }
     v
 }

@@ -63,23 +63,24 @@ pub fn addcslashes(s: &[u8], characters: &[u8], notices: &mut Notices) -> Vec<u8
             continue;
         }
         out.push(b'\\');
-        if c < 32 || c > 126 {
-            match c {
-                b'\n' => out.push(b'n'),
-                b'\t' => out.push(b't'),
-                b'\r' => out.push(b'r'),
-                0x07 => out.push(b'a'),
-                0x0b => out.push(b'v'),
-                0x08 => out.push(b'b'),
-                0x0c => out.push(b'f'),
-                _ => {
-                    out.push((c >> 6) + b'0');
-                    out.push(((c >> 3) & 7) + b'0');
-                    out.push((c & 7) + b'0');
-                }
-            }
-        } else {
+        if (32..=126).contains(&c) {
             out.push(c);
+            continue;
+        }
+        match c {
+            b'\n' => out.push(b'n'),
+            b'\t' => out.push(b't'),
+            b'\r' => out.push(b'r'),
+            0x07 => out.push(b'a'),
+            0x0b => out.push(b'v'),
+            0x08 => out.push(b'b'),
+            0x0c => out.push(b'f'),
+            _ => {
+                // Three octal digits, including leading zeros.
+                out.push((c >> 6) + b'0');
+                out.push(((c >> 3) & 7) + b'0');
+                out.push((c & 7) + b'0');
+            }
         }
     }
     out
@@ -113,31 +114,32 @@ pub fn stripcslashes(s: &[u8]) -> Vec<u8> {
             b'\\' => Some(b'\\'),
             _ => None,
         };
-        if let Some(b) = simple {
-            out.push(b);
+        if let Some(byte) = simple {
+            out.push(byte);
             i += 1;
             continue;
         }
         if c == b'x' && i + 1 < end && s[i + 1].is_ascii_hexdigit() {
-            let mut v = hex_val(s[i + 1]);
+            let mut hex = hex_val(s[i + 1]);
             i += 1;
             if i + 1 < end && s[i + 1].is_ascii_hexdigit() {
-                v = v * 16 + hex_val(s[i + 1]);
+                hex = hex * 16 + hex_val(s[i + 1]);
                 i += 1;
             }
-            out.push(v);
+            out.push(hex);
             i += 1;
             continue;
         }
-        let mut n = 0;
-        let mut v: u32 = 0;
-        while i < end && (b'0'..=b'7').contains(&s[i]) && n < 3 {
-            v = v * 8 + u32::from(s[i] - b'0');
+        let mut digits = 0;
+        let mut octal: u32 = 0;
+        while i < end && (b'0'..=b'7').contains(&s[i]) && digits < 3 {
+            octal = octal * 8 + u32::from(s[i] - b'0');
             i += 1;
-            n += 1;
+            digits += 1;
         }
-        if n > 0 {
-            out.push(v.to_le_bytes()[0]);
+        if digits > 0 {
+            // `(char)strtol(...)`: keep the low byte.
+            out.push(octal.to_le_bytes()[0]);
         } else {
             out.push(c);
             i += 1;
@@ -179,10 +181,15 @@ mod tests {
         assert_eq!(addslashes(b"O'Re\"il\\ly\0"), b"O\\'Re\\\"il\\\\ly\\0");
         assert_eq!(stripslashes(b"O\\'Re\\\\x\\0y\\"), b"O'Re\\x\0y");
         let mut n = Vec::new();
-        assert_eq!(addcslashes(b"foo[bar]\n\x01\xff", b"A..Z\0..\x1f\x7f..\xff[]", &mut n),
-            b"foo\\[bar\\]\\n\\001\\377");
+        assert_eq!(
+            addcslashes(b"foo[bar]\n\x01\xff", b"A..Z\0..\x1f\x7f..\xff[]", &mut n),
+            b"foo\\[bar\\]\\n\\001\\377"
+        );
         assert!(n.is_empty());
-        assert_eq!(stripcslashes(b"\\x41\\101\\n\\q\\x\\777\\"), b"AA\nqx\xff\\");
+        assert_eq!(
+            stripcslashes(b"\\x41\\101\\n\\q\\x\\777\\"),
+            b"AA\nqx\xff\\"
+        );
         assert_eq!(quotemeta(b"1+1=2?"), b"1\\+1=2\\?");
     }
 }

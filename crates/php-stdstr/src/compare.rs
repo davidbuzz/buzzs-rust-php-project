@@ -6,6 +6,11 @@
 //! differ at some byte, the result is the difference of those (possibly
 //! ASCII-lowercased) bytes, as glibc's `memcmp` returns it; when one is a
 //! prefix of the other the result is `-1`/`1` (PHP ≥ 8.2).
+//!
+//! The magnitude of a `memcmp`-based result (`strcmp`, `strncmp`,
+//! case-sensitive `substr_compare`) is implementation-defined in C; glibc's
+//! vectorised `memcmp` returns other non-zero values for some short
+//! inputs.  The sign always agrees, and PHP's tests only rely on the sign.
 
 use std::cmp::Ordering;
 
@@ -56,9 +61,8 @@ pub fn binary_strncasecmp(s1: &[u8], s2: &[u8], length: usize) -> i64 {
 }
 
 fn check_length(func: &'static str, length: i64) -> StdResult<usize> {
-    usize::try_from(length).map_err(|_| {
-        StdError::arg_value(func, 3, "length", "must be greater than or equal to 0")
-    })
+    usize::try_from(length)
+        .map_err(|_| StdError::arg_value(func, 3, "length", "must be greater than or equal to 0"))
 }
 
 /// Backs `strncmp(string $string1, string $string2, int $length): int`.

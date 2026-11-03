@@ -204,6 +204,10 @@ fn no_gh_to_f(c: u8) -> bool {
 ///
 /// Throws `ValueError` for a negative `max_phonemes`.  The input is treated
 /// as a C string: processing stops at the first NUL byte.
+///
+/// php-src master marks the function `#[\Deprecated(since: '8.6')]`; the
+/// VM (not this function) emits `Function metaphone() is deprecated since
+/// 8.6, use a userland phonetic matching library instead` on each call.
 pub fn metaphone(word: &[u8], max_phonemes: i64) -> StdResult<Vec<u8>> {
     if max_phonemes < 0 {
         return Err(StdError::arg_value(
@@ -218,7 +222,8 @@ pub fn metaphone(word: &[u8], max_phonemes: i64) -> StdResult<Vec<u8>> {
 }
 
 /// The metaphone state machine; `max_phonemes == 0` means unlimited.
-#[allow(clippy::too_many_lines)]
+// The `match` arms deliberately mirror the C `switch` cases one to one.
+#[allow(clippy::too_many_lines, clippy::collapsible_match)]
 fn metaphone_impl(word: &[u8], max_phonemes: usize, traditional: bool) -> Vec<u8> {
     const SH: u8 = b'X';
     const TH: u8 = b'0';

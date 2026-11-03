@@ -82,7 +82,8 @@ fn is_c_space(c: u8) -> bool {
 
 /// `php_strip_tags_ex()` with the `allow_tag_spaces` flag (`false` for
 /// `strip_tags()`: a `<` followed by whitespace is kept as text).
-#[allow(clippy::too_many_lines)]
+// The `match` arms deliberately mirror the C `switch` cases one to one.
+#[allow(clippy::too_many_lines, clippy::collapsible_match)]
 pub fn strip_tags_ex(buf: &[u8], allow: Option<&[u8]>, allow_tag_spaces: bool) -> Vec<u8> {
     // `zend_str_tolower_dup_ex` + C-string semantics of `strstr`.
     let allow: Option<Vec<u8>> = allow.map(|a| {
@@ -204,12 +205,7 @@ pub fn strip_tags_ex(buf: &[u8], allow: Option<&[u8]>, allow_tag_spaces: bool) -
                 b'>' => {
                     if depth != 0 {
                         depth -= 1;
-                    } else if in_q == 0
-                        && br == 0
-                        && p >= 1
-                        && lc != b'"'
-                        && buf[p - 1] == b'?'
-                    {
+                    } else if in_q == 0 && br == 0 && p >= 1 && lc != b'"' && buf[p - 1] == b'?' {
                         in_q = 0;
                         state = 0;
                         tbuf.clear();
@@ -268,8 +264,7 @@ pub fn strip_tags_ex(buf: &[u8], allow: Option<&[u8]>, allow_tag_spaces: bool) -
                 _ => {}
             },
             _ => {
-                if c == b'>' && in_q == 0 && p >= 2 && buf[p - 1] == b'-' && buf[p - 2] == b'-'
-                {
+                if c == b'>' && in_q == 0 && p >= 2 && buf[p - 1] == b'-' && buf[p - 2] == b'-' {
                     in_q = 0;
                     state = 0;
                     tbuf.clear();

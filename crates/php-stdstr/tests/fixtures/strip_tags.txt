@@ -1,0 +1,5914 @@
+=== strip_tags('', null)
+=> ''
+=== strip_tags('', '')
+=> ''
+=== strip_tags('', '<a>')
+=> ''
+=== strip_tags('', '<b>')
+=> ''
+=== strip_tags('', '<a><b>')
+=> ''
+=== strip_tags('', '<p><a><?php<html>')
+=> ''
+=== strip_tags('', '<br>')
+=> ''
+=== strip_tags('', '<BR><P>')
+=> ''
+=== strip_tags('', '<abbr>')
+=> ''
+=== strip_tags('', '<root>')
+=> ''
+=== strip_tags('', '<!doctype>')
+=> ''
+=== strip_tags('', 'a')
+=> ''
+=== strip_tags('', "<a\x00><b>")
+=> ''
+=== strip_tags('', '<scr>')
+=> ''
+=== strip_tags('', '<script>')
+=> ''
+=== strip_tags('', '<html><nnn>')
+=> ''
+=== strip_tags('', ['a', 'BR'])
+=> ''
+=== strip_tags('', [])
+=> ''
+=== strip_tags('NEAT <? cool < blah ?> STUFF', null)
+=> 'NEAT  STUFF'
+=== strip_tags('NEAT <? cool < blah ?> STUFF', '')
+=> 'NEAT  STUFF'
+=== strip_tags('NEAT <? cool < blah ?> STUFF', '<a>')
+=> 'NEAT  STUFF'
+=== strip_tags('NEAT <? cool < blah ?> STUFF', '<b>')
+=> 'NEAT  STUFF'
+=== strip_tags('NEAT <? cool < blah ?> STUFF', '<a><b>')
+=> 'NEAT  STUFF'
+=== strip_tags('NEAT <? cool < blah ?> STUFF', '<p><a><?php<html>')
+=> 'NEAT  STUFF'
+=== strip_tags('NEAT <? cool < blah ?> STUFF', '<br>')
+=> 'NEAT  STUFF'
+=== strip_tags('NEAT <? cool < blah ?> STUFF', '<BR><P>')
+=> 'NEAT  STUFF'
+=== strip_tags('NEAT <? cool < blah ?> STUFF', '<abbr>')
+=> 'NEAT  STUFF'
+=== strip_tags('NEAT <? cool < blah ?> STUFF', '<root>')
+=> 'NEAT  STUFF'
+=== strip_tags('NEAT <? cool < blah ?> STUFF', '<!doctype>')
+=> 'NEAT  STUFF'
+=== strip_tags('NEAT <? cool < blah ?> STUFF', 'a')
+=> 'NEAT  STUFF'
+=== strip_tags('NEAT <? cool < blah ?> STUFF', "<a\x00><b>")
+=> 'NEAT  STUFF'
+=== strip_tags('NEAT <? cool < blah ?> STUFF', '<scr>')
+=> 'NEAT  STUFF'
+=== strip_tags('NEAT <? cool < blah ?> STUFF', '<script>')
+=> 'NEAT  STUFF'
+=== strip_tags('NEAT <? cool < blah ?> STUFF', '<html><nnn>')
+=> 'NEAT  STUFF'
+=== strip_tags('NEAT <? cool < blah ?> STUFF', ['a', 'BR'])
+=> 'NEAT  STUFF'
+=== strip_tags('NEAT <? cool < blah ?> STUFF', [])
+=> 'NEAT  STUFF'
+=== strip_tags('NEAT <? cool > blah ?> STUFF', null)
+=> 'NEAT  STUFF'
+=== strip_tags('NEAT <? cool > blah ?> STUFF', '')
+=> 'NEAT  STUFF'
+=== strip_tags('NEAT <? cool > blah ?> STUFF', '<a>')
+=> 'NEAT  STUFF'
+=== strip_tags('NEAT <? cool > blah ?> STUFF', '<b>')
+=> 'NEAT  STUFF'
+=== strip_tags('NEAT <? cool > blah ?> STUFF', '<a><b>')
+=> 'NEAT  STUFF'
+=== strip_tags('NEAT <? cool > blah ?> STUFF', '<p><a><?php<html>')
+=> 'NEAT  STUFF'
+=== strip_tags('NEAT <? cool > blah ?> STUFF', '<br>')
+=> 'NEAT  STUFF'
+=== strip_tags('NEAT <? cool > blah ?> STUFF', '<BR><P>')
+=> 'NEAT  STUFF'
+=== strip_tags('NEAT <? cool > blah ?> STUFF', '<abbr>')
+=> 'NEAT  STUFF'
+=== strip_tags('NEAT <? cool > blah ?> STUFF', '<root>')
+=> 'NEAT  STUFF'
+=== strip_tags('NEAT <? cool > blah ?> STUFF', '<!doctype>')
+=> 'NEAT  STUFF'
+=== strip_tags('NEAT <? cool > blah ?> STUFF', 'a')
+=> 'NEAT  STUFF'
+=== strip_tags('NEAT <? cool > blah ?> STUFF', "<a\x00><b>")
+=> 'NEAT  STUFF'
+=== strip_tags('NEAT <? cool > blah ?> STUFF', '<scr>')
+=> 'NEAT  STUFF'
+=== strip_tags('NEAT <? cool > blah ?> STUFF', '<script>')
+=> 'NEAT  STUFF'
+=== strip_tags('NEAT <? cool > blah ?> STUFF', '<html><nnn>')
+=> 'NEAT  STUFF'
+=== strip_tags('NEAT <? cool > blah ?> STUFF', ['a', 'BR'])
+=> 'NEAT  STUFF'
+=== strip_tags('NEAT <? cool > blah ?> STUFF', [])
+=> 'NEAT  STUFF'
+=== strip_tags('NEAT <!-- cool < blah --> STUFF', null)
+=> 'NEAT  STUFF'
+=== strip_tags('NEAT <!-- cool < blah --> STUFF', '')
+=> 'NEAT  STUFF'
+=== strip_tags('NEAT <!-- cool < blah --> STUFF', '<a>')
+=> 'NEAT  STUFF'
+=== strip_tags('NEAT <!-- cool < blah --> STUFF', '<b>')
+=> 'NEAT  STUFF'
+=== strip_tags('NEAT <!-- cool < blah --> STUFF', '<a><b>')
+=> 'NEAT  STUFF'
+=== strip_tags('NEAT <!-- cool < blah --> STUFF', '<p><a><?php<html>')
+=> 'NEAT  STUFF'
+=== strip_tags('NEAT <!-- cool < blah --> STUFF', '<br>')
+=> 'NEAT  STUFF'
+=== strip_tags('NEAT <!-- cool < blah --> STUFF', '<BR><P>')
+=> 'NEAT  STUFF'
+=== strip_tags('NEAT <!-- cool < blah --> STUFF', '<abbr>')
+=> 'NEAT  STUFF'
+=== strip_tags('NEAT <!-- cool < blah --> STUFF', '<root>')
+=> 'NEAT  STUFF'
+=== strip_tags('NEAT <!-- cool < blah --> STUFF', '<!doctype>')
+=> 'NEAT  STUFF'
+=== strip_tags('NEAT <!-- cool < blah --> STUFF', 'a')
+=> 'NEAT  STUFF'
+=== strip_tags('NEAT <!-- cool < blah --> STUFF', "<a\x00><b>")
+=> 'NEAT  STUFF'
+=== strip_tags('NEAT <!-- cool < blah --> STUFF', '<scr>')
+=> 'NEAT  STUFF'
+=== strip_tags('NEAT <!-- cool < blah --> STUFF', '<script>')
+=> 'NEAT  STUFF'
+=== strip_tags('NEAT <!-- cool < blah --> STUFF', '<html><nnn>')
+=> 'NEAT  STUFF'
+=== strip_tags('NEAT <!-- cool < blah --> STUFF', ['a', 'BR'])
+=> 'NEAT  STUFF'
+=== strip_tags('NEAT <!-- cool < blah --> STUFF', [])
+=> 'NEAT  STUFF'
+=== strip_tags('NEAT <!-- cool > blah --> STUFF', null)
+=> 'NEAT  STUFF'
+=== strip_tags('NEAT <!-- cool > blah --> STUFF', '')
+=> 'NEAT  STUFF'
+=== strip_tags('NEAT <!-- cool > blah --> STUFF', '<a>')
+=> 'NEAT  STUFF'
+=== strip_tags('NEAT <!-- cool > blah --> STUFF', '<b>')
+=> 'NEAT  STUFF'
+=== strip_tags('NEAT <!-- cool > blah --> STUFF', '<a><b>')
+=> 'NEAT  STUFF'
+=== strip_tags('NEAT <!-- cool > blah --> STUFF', '<p><a><?php<html>')
+=> 'NEAT  STUFF'
+=== strip_tags('NEAT <!-- cool > blah --> STUFF', '<br>')
+=> 'NEAT  STUFF'
+=== strip_tags('NEAT <!-- cool > blah --> STUFF', '<BR><P>')
+=> 'NEAT  STUFF'
+=== strip_tags('NEAT <!-- cool > blah --> STUFF', '<abbr>')
+=> 'NEAT  STUFF'
+=== strip_tags('NEAT <!-- cool > blah --> STUFF', '<root>')
+=> 'NEAT  STUFF'
+=== strip_tags('NEAT <!-- cool > blah --> STUFF', '<!doctype>')
+=> 'NEAT  STUFF'
+=== strip_tags('NEAT <!-- cool > blah --> STUFF', 'a')
+=> 'NEAT  STUFF'
+=== strip_tags('NEAT <!-- cool > blah --> STUFF', "<a\x00><b>")
+=> 'NEAT  STUFF'
+=== strip_tags('NEAT <!-- cool > blah --> STUFF', '<scr>')
+=> 'NEAT  STUFF'
+=== strip_tags('NEAT <!-- cool > blah --> STUFF', '<script>')
+=> 'NEAT  STUFF'
+=== strip_tags('NEAT <!-- cool > blah --> STUFF', '<html><nnn>')
+=> 'NEAT  STUFF'
+=== strip_tags('NEAT <!-- cool > blah --> STUFF', ['a', 'BR'])
+=> 'NEAT  STUFF'
+=== strip_tags('NEAT <!-- cool > blah --> STUFF', [])
+=> 'NEAT  STUFF'
+=== strip_tags('NEAT <? echo \\"\\\\\\"\\"?> STUFF', null)
+=> 'NEAT  STUFF'
+=== strip_tags('NEAT <? echo \\"\\\\\\"\\"?> STUFF', '')
+=> 'NEAT  STUFF'
+=== strip_tags('NEAT <? echo \\"\\\\\\"\\"?> STUFF', '<a>')
+=> 'NEAT  STUFF'
+=== strip_tags('NEAT <? echo \\"\\\\\\"\\"?> STUFF', '<b>')
+=> 'NEAT  STUFF'
+=== strip_tags('NEAT <? echo \\"\\\\\\"\\"?> STUFF', '<a><b>')
+=> 'NEAT  STUFF'
+=== strip_tags('NEAT <? echo \\"\\\\\\"\\"?> STUFF', '<p><a><?php<html>')
+=> 'NEAT  STUFF'
+=== strip_tags('NEAT <? echo \\"\\\\\\"\\"?> STUFF', '<br>')
+=> 'NEAT  STUFF'
+=== strip_tags('NEAT <? echo \\"\\\\\\"\\"?> STUFF', '<BR><P>')
+=> 'NEAT  STUFF'
+=== strip_tags('NEAT <? echo \\"\\\\\\"\\"?> STUFF', '<abbr>')
+=> 'NEAT  STUFF'
+=== strip_tags('NEAT <? echo \\"\\\\\\"\\"?> STUFF', '<root>')
+=> 'NEAT  STUFF'
+=== strip_tags('NEAT <? echo \\"\\\\\\"\\"?> STUFF', '<!doctype>')
+=> 'NEAT  STUFF'
+=== strip_tags('NEAT <? echo \\"\\\\\\"\\"?> STUFF', 'a')
+=> 'NEAT  STUFF'
+=== strip_tags('NEAT <? echo \\"\\\\\\"\\"?> STUFF', "<a\x00><b>")
+=> 'NEAT  STUFF'
+=== strip_tags('NEAT <? echo \\"\\\\\\"\\"?> STUFF', '<scr>')
+=> 'NEAT  STUFF'
+=== strip_tags('NEAT <? echo \\"\\\\\\"\\"?> STUFF', '<script>')
+=> 'NEAT  STUFF'
+=== strip_tags('NEAT <? echo \\"\\\\\\"\\"?> STUFF', '<html><nnn>')
+=> 'NEAT  STUFF'
+=== strip_tags('NEAT <? echo \\"\\\\\\"\\"?> STUFF', ['a', 'BR'])
+=> 'NEAT  STUFF'
+=== strip_tags('NEAT <? echo \\"\\\\\\"\\"?> STUFF', [])
+=> 'NEAT  STUFF'
+=== strip_tags('NEAT <? echo \'\\\'\'?> STUFF', null)
+=> 'NEAT  STUFF'
+=== strip_tags('NEAT <? echo \'\\\'\'?> STUFF', '')
+=> 'NEAT  STUFF'
+=== strip_tags('NEAT <? echo \'\\\'\'?> STUFF', '<a>')
+=> 'NEAT  STUFF'
+=== strip_tags('NEAT <? echo \'\\\'\'?> STUFF', '<b>')
+=> 'NEAT  STUFF'
+=== strip_tags('NEAT <? echo \'\\\'\'?> STUFF', '<a><b>')
+=> 'NEAT  STUFF'
+=== strip_tags('NEAT <? echo \'\\\'\'?> STUFF', '<p><a><?php<html>')
+=> 'NEAT  STUFF'
+=== strip_tags('NEAT <? echo \'\\\'\'?> STUFF', '<br>')
+=> 'NEAT  STUFF'
+=== strip_tags('NEAT <? echo \'\\\'\'?> STUFF', '<BR><P>')
+=> 'NEAT  STUFF'
+=== strip_tags('NEAT <? echo \'\\\'\'?> STUFF', '<abbr>')
+=> 'NEAT  STUFF'
+=== strip_tags('NEAT <? echo \'\\\'\'?> STUFF', '<root>')
+=> 'NEAT  STUFF'
+=== strip_tags('NEAT <? echo \'\\\'\'?> STUFF', '<!doctype>')
+=> 'NEAT  STUFF'
+=== strip_tags('NEAT <? echo \'\\\'\'?> STUFF', 'a')
+=> 'NEAT  STUFF'
+=== strip_tags('NEAT <? echo \'\\\'\'?> STUFF', "<a\x00><b>")
+=> 'NEAT  STUFF'
+=== strip_tags('NEAT <? echo \'\\\'\'?> STUFF', '<scr>')
+=> 'NEAT  STUFF'
+=== strip_tags('NEAT <? echo \'\\\'\'?> STUFF', '<script>')
+=> 'NEAT  STUFF'
+=== strip_tags('NEAT <? echo \'\\\'\'?> STUFF', '<html><nnn>')
+=> 'NEAT  STUFF'
+=== strip_tags('NEAT <? echo \'\\\'\'?> STUFF', ['a', 'BR'])
+=> 'NEAT  STUFF'
+=== strip_tags('NEAT <? echo \'\\\'\'?> STUFF', [])
+=> 'NEAT  STUFF'
+=== strip_tags('TESTS ?!!?!?!!!?!!', null)
+=> 'TESTS ?!!?!?!!!?!!'
+=== strip_tags('TESTS ?!!?!?!!!?!!', '')
+=> 'TESTS ?!!?!?!!!?!!'
+=== strip_tags('TESTS ?!!?!?!!!?!!', '<a>')
+=> 'TESTS ?!!?!?!!!?!!'
+=== strip_tags('TESTS ?!!?!?!!!?!!', '<b>')
+=> 'TESTS ?!!?!?!!!?!!'
+=== strip_tags('TESTS ?!!?!?!!!?!!', '<a><b>')
+=> 'TESTS ?!!?!?!!!?!!'
+=== strip_tags('TESTS ?!!?!?!!!?!!', '<p><a><?php<html>')
+=> 'TESTS ?!!?!?!!!?!!'
+=== strip_tags('TESTS ?!!?!?!!!?!!', '<br>')
+=> 'TESTS ?!!?!?!!!?!!'
+=== strip_tags('TESTS ?!!?!?!!!?!!', '<BR><P>')
+=> 'TESTS ?!!?!?!!!?!!'
+=== strip_tags('TESTS ?!!?!?!!!?!!', '<abbr>')
+=> 'TESTS ?!!?!?!!!?!!'
+=== strip_tags('TESTS ?!!?!?!!!?!!', '<root>')
+=> 'TESTS ?!!?!?!!!?!!'
+=== strip_tags('TESTS ?!!?!?!!!?!!', '<!doctype>')
+=> 'TESTS ?!!?!?!!!?!!'
+=== strip_tags('TESTS ?!!?!?!!!?!!', 'a')
+=> 'TESTS ?!!?!?!!!?!!'
+=== strip_tags('TESTS ?!!?!?!!!?!!', "<a\x00><b>")
+=> 'TESTS ?!!?!?!!!?!!'
+=== strip_tags('TESTS ?!!?!?!!!?!!', '<scr>')
+=> 'TESTS ?!!?!?!!!?!!'
+=== strip_tags('TESTS ?!!?!?!!!?!!', '<script>')
+=> 'TESTS ?!!?!?!!!?!!'
+=== strip_tags('TESTS ?!!?!?!!!?!!', '<html><nnn>')
+=> 'TESTS ?!!?!?!!!?!!'
+=== strip_tags('TESTS ?!!?!?!!!?!!', ['a', 'BR'])
+=> 'TESTS ?!!?!?!!!?!!'
+=== strip_tags('TESTS ?!!?!?!!!?!!', [])
+=> 'TESTS ?!!?!?!!!?!!'
+=== strip_tags('<html>hello</html>', null)
+=> 'hello'
+=== strip_tags('<html>hello</html>', '')
+=> 'hello'
+=== strip_tags('<html>hello</html>', '<a>')
+=> 'hello'
+=== strip_tags('<html>hello</html>', '<b>')
+=> 'hello'
+=== strip_tags('<html>hello</html>', '<a><b>')
+=> 'hello'
+=== strip_tags('<html>hello</html>', '<p><a><?php<html>')
+=> '<html>hello</html>'
+=== strip_tags('<html>hello</html>', '<br>')
+=> 'hello'
+=== strip_tags('<html>hello</html>', '<BR><P>')
+=> 'hello'
+=== strip_tags('<html>hello</html>', '<abbr>')
+=> 'hello'
+=== strip_tags('<html>hello</html>', '<root>')
+=> 'hello'
+=== strip_tags('<html>hello</html>', '<!doctype>')
+=> 'hello'
+=== strip_tags('<html>hello</html>', 'a')
+=> 'hello'
+=== strip_tags('<html>hello</html>', "<a\x00><b>")
+=> 'hello'
+=== strip_tags('<html>hello</html>', '<scr>')
+=> 'hello'
+=== strip_tags('<html>hello</html>', '<script>')
+=> 'hello'
+=== strip_tags('<html>hello</html>', '<html><nnn>')
+=> '<html>hello</html>'
+=== strip_tags('<html>hello</html>', ['a', 'BR'])
+=> 'hello'
+=== strip_tags('<html>hello</html>', [])
+=> 'hello'
+=== strip_tags('<?php echo hello ?>', null)
+=> ''
+=== strip_tags('<?php echo hello ?>', '')
+=> ''
+=== strip_tags('<?php echo hello ?>', '<a>')
+=> ''
+=== strip_tags('<?php echo hello ?>', '<b>')
+=> ''
+=== strip_tags('<?php echo hello ?>', '<a><b>')
+=> ''
+=== strip_tags('<?php echo hello ?>', '<p><a><?php<html>')
+=> ''
+=== strip_tags('<?php echo hello ?>', '<br>')
+=> ''
+=== strip_tags('<?php echo hello ?>', '<BR><P>')
+=> ''
+=== strip_tags('<?php echo hello ?>', '<abbr>')
+=> ''
+=== strip_tags('<?php echo hello ?>', '<root>')
+=> ''
+=== strip_tags('<?php echo hello ?>', '<!doctype>')
+=> ''
+=== strip_tags('<?php echo hello ?>', 'a')
+=> ''
+=== strip_tags('<?php echo hello ?>', "<a\x00><b>")
+=> ''
+=== strip_tags('<?php echo hello ?>', '<scr>')
+=> ''
+=== strip_tags('<?php echo hello ?>', '<script>')
+=> ''
+=== strip_tags('<?php echo hello ?>', '<html><nnn>')
+=> ''
+=== strip_tags('<?php echo hello ?>', ['a', 'BR'])
+=> ''
+=== strip_tags('<?php echo hello ?>', [])
+=> ''
+=== strip_tags('<% echo hello %>', null)
+=> ''
+=== strip_tags('<% echo hello %>', '')
+=> ''
+=== strip_tags('<% echo hello %>', '<a>')
+=> ''
+=== strip_tags('<% echo hello %>', '<b>')
+=> ''
+=== strip_tags('<% echo hello %>', '<a><b>')
+=> ''
+=== strip_tags('<% echo hello %>', '<p><a><?php<html>')
+=> ''
+=== strip_tags('<% echo hello %>', '<br>')
+=> ''
+=== strip_tags('<% echo hello %>', '<BR><P>')
+=> ''
+=== strip_tags('<% echo hello %>', '<abbr>')
+=> ''
+=== strip_tags('<% echo hello %>', '<root>')
+=> ''
+=== strip_tags('<% echo hello %>', '<!doctype>')
+=> ''
+=== strip_tags('<% echo hello %>', 'a')
+=> ''
+=== strip_tags('<% echo hello %>', "<a\x00><b>")
+=> ''
+=== strip_tags('<% echo hello %>', '<scr>')
+=> ''
+=== strip_tags('<% echo hello %>', '<script>')
+=> ''
+=== strip_tags('<% echo hello %>', '<html><nnn>')
+=> ''
+=== strip_tags('<% echo hello %>', ['a', 'BR'])
+=> ''
+=== strip_tags('<% echo hello %>', [])
+=> ''
+=== strip_tags('<script language="PHP"> echo hello </script>', null)
+=> ' echo hello '
+=== strip_tags('<script language="PHP"> echo hello </script>', '')
+=> ' echo hello '
+=== strip_tags('<script language="PHP"> echo hello </script>', '<a>')
+=> ' echo hello '
+=== strip_tags('<script language="PHP"> echo hello </script>', '<b>')
+=> ' echo hello '
+=== strip_tags('<script language="PHP"> echo hello </script>', '<a><b>')
+=> ' echo hello '
+=== strip_tags('<script language="PHP"> echo hello </script>', '<p><a><?php<html>')
+=> ' echo hello '
+=== strip_tags('<script language="PHP"> echo hello </script>', '<br>')
+=> ' echo hello '
+=== strip_tags('<script language="PHP"> echo hello </script>', '<BR><P>')
+=> ' echo hello '
+=== strip_tags('<script language="PHP"> echo hello </script>', '<abbr>')
+=> ' echo hello '
+=== strip_tags('<script language="PHP"> echo hello </script>', '<root>')
+=> ' echo hello '
+=== strip_tags('<script language="PHP"> echo hello </script>', '<!doctype>')
+=> ' echo hello '
+=== strip_tags('<script language="PHP"> echo hello </script>', 'a')
+=> ' echo hello '
+=== strip_tags('<script language="PHP"> echo hello </script>', "<a\x00><b>")
+=> ' echo hello '
+=== strip_tags('<script language="PHP"> echo hello </script>', '<scr>')
+=> ' echo hello '
+=== strip_tags('<script language="PHP"> echo hello </script>', '<script>')
+=> '<script language="PHP"> echo hello </script>'
+=== strip_tags('<script language="PHP"> echo hello </script>', '<html><nnn>')
+=> ' echo hello '
+=== strip_tags('<script language="PHP"> echo hello </script>', ['a', 'BR'])
+=> ' echo hello '
+=== strip_tags('<script language="PHP"> echo hello </script>', [])
+=> ' echo hello '
+=== strip_tags('<html><b>hello</b><p>world</p></html>', null)
+=> 'helloworld'
+=== strip_tags('<html><b>hello</b><p>world</p></html>', '')
+=> 'helloworld'
+=== strip_tags('<html><b>hello</b><p>world</p></html>', '<a>')
+=> 'helloworld'
+=== strip_tags('<html><b>hello</b><p>world</p></html>', '<b>')
+=> '<b>hello</b>world'
+=== strip_tags('<html><b>hello</b><p>world</p></html>', '<a><b>')
+=> '<b>hello</b>world'
+=== strip_tags('<html><b>hello</b><p>world</p></html>', '<p><a><?php<html>')
+=> '<html>hello<p>world</p></html>'
+=== strip_tags('<html><b>hello</b><p>world</p></html>', '<br>')
+=> 'helloworld'
+=== strip_tags('<html><b>hello</b><p>world</p></html>', '<BR><P>')
+=> 'hello<p>world</p>'
+=== strip_tags('<html><b>hello</b><p>world</p></html>', '<abbr>')
+=> 'helloworld'
+=== strip_tags('<html><b>hello</b><p>world</p></html>', '<root>')
+=> 'helloworld'
+=== strip_tags('<html><b>hello</b><p>world</p></html>', '<!doctype>')
+=> 'helloworld'
+=== strip_tags('<html><b>hello</b><p>world</p></html>', 'a')
+=> 'helloworld'
+=== strip_tags('<html><b>hello</b><p>world</p></html>', "<a\x00><b>")
+=> 'helloworld'
+=== strip_tags('<html><b>hello</b><p>world</p></html>', '<scr>')
+=> 'helloworld'
+=== strip_tags('<html><b>hello</b><p>world</p></html>', '<script>')
+=> 'helloworld'
+=== strip_tags('<html><b>hello</b><p>world</p></html>', '<html><nnn>')
+=> '<html>helloworld</html>'
+=== strip_tags('<html><b>hello</b><p>world</p></html>', ['a', 'BR'])
+=> 'helloworld'
+=== strip_tags('<html><b>hello</b><p>world</p></html>', [])
+=> 'helloworld'
+=== strip_tags('<html><!-- COMMENT --></html>', null)
+=> ''
+=== strip_tags('<html><!-- COMMENT --></html>', '')
+=> ''
+=== strip_tags('<html><!-- COMMENT --></html>', '<a>')
+=> ''
+=== strip_tags('<html><!-- COMMENT --></html>', '<b>')
+=> ''
+=== strip_tags('<html><!-- COMMENT --></html>', '<a><b>')
+=> ''
+=== strip_tags('<html><!-- COMMENT --></html>', '<p><a><?php<html>')
+=> '<html></html>'
+=== strip_tags('<html><!-- COMMENT --></html>', '<br>')
+=> ''
+=== strip_tags('<html><!-- COMMENT --></html>', '<BR><P>')
+=> ''
+=== strip_tags('<html><!-- COMMENT --></html>', '<abbr>')
+=> ''
+=== strip_tags('<html><!-- COMMENT --></html>', '<root>')
+=> ''
+=== strip_tags('<html><!-- COMMENT --></html>', '<!doctype>')
+=> ''
+=== strip_tags('<html><!-- COMMENT --></html>', 'a')
+=> ''
+=== strip_tags('<html><!-- COMMENT --></html>', "<a\x00><b>")
+=> ''
+=== strip_tags('<html><!-- COMMENT --></html>', '<scr>')
+=> ''
+=== strip_tags('<html><!-- COMMENT --></html>', '<script>')
+=> ''
+=== strip_tags('<html><!-- COMMENT --></html>', '<html><nnn>')
+=> '<html></html>'
+=== strip_tags('<html><!-- COMMENT --></html>', ['a', 'BR'])
+=> ''
+=== strip_tags('<html><!-- COMMENT --></html>', [])
+=> ''
+=== strip_tags('<html><a>hello</a></html><p>world</p><!-- COMMENT --><?php echo hello ?>', null)
+=> 'helloworld'
+=== strip_tags('<html><a>hello</a></html><p>world</p><!-- COMMENT --><?php echo hello ?>', '')
+=> 'helloworld'
+=== strip_tags('<html><a>hello</a></html><p>world</p><!-- COMMENT --><?php echo hello ?>', '<a>')
+=> '<a>hello</a>world'
+=== strip_tags('<html><a>hello</a></html><p>world</p><!-- COMMENT --><?php echo hello ?>', '<b>')
+=> 'helloworld'
+=== strip_tags('<html><a>hello</a></html><p>world</p><!-- COMMENT --><?php echo hello ?>', '<a><b>')
+=> '<a>hello</a>world'
+=== strip_tags('<html><a>hello</a></html><p>world</p><!-- COMMENT --><?php echo hello ?>', '<p><a><?php<html>')
+=> '<html><a>hello</a></html><p>world</p>'
+=== strip_tags('<html><a>hello</a></html><p>world</p><!-- COMMENT --><?php echo hello ?>', '<br>')
+=> 'helloworld'
+=== strip_tags('<html><a>hello</a></html><p>world</p><!-- COMMENT --><?php echo hello ?>', '<BR><P>')
+=> 'hello<p>world</p>'
+=== strip_tags('<html><a>hello</a></html><p>world</p><!-- COMMENT --><?php echo hello ?>', '<abbr>')
+=> 'helloworld'
+=== strip_tags('<html><a>hello</a></html><p>world</p><!-- COMMENT --><?php echo hello ?>', '<root>')
+=> 'helloworld'
+=== strip_tags('<html><a>hello</a></html><p>world</p><!-- COMMENT --><?php echo hello ?>', '<!doctype>')
+=> 'helloworld'
+=== strip_tags('<html><a>hello</a></html><p>world</p><!-- COMMENT --><?php echo hello ?>', 'a')
+=> 'helloworld'
+=== strip_tags('<html><a>hello</a></html><p>world</p><!-- COMMENT --><?php echo hello ?>', "<a\x00><b>")
+=> 'helloworld'
+=== strip_tags('<html><a>hello</a></html><p>world</p><!-- COMMENT --><?php echo hello ?>', '<scr>')
+=> 'helloworld'
+=== strip_tags('<html><a>hello</a></html><p>world</p><!-- COMMENT --><?php echo hello ?>', '<script>')
+=> 'helloworld'
+=== strip_tags('<html><a>hello</a></html><p>world</p><!-- COMMENT --><?php echo hello ?>', '<html><nnn>')
+=> '<html>hello</html>world'
+=== strip_tags('<html><a>hello</a></html><p>world</p><!-- COMMENT --><?php echo hello ?>', ['a', 'BR'])
+=> '<a>hello</a>world'
+=== strip_tags('<html><a>hello</a></html><p>world</p><!-- COMMENT --><?php echo hello ?>', [])
+=> 'helloworld'
+=== strip_tags("<abc>hello</abc> \x09\x09world... <ppp>strip_tags_test</ppp>", null)
+=> 'hello 		world... strip_tags_test'
+=== strip_tags("<abc>hello</abc> \x09\x09world... <ppp>strip_tags_test</ppp>", '')
+=> 'hello 		world... strip_tags_test'
+=== strip_tags("<abc>hello</abc> \x09\x09world... <ppp>strip_tags_test</ppp>", '<a>')
+=> 'hello 		world... strip_tags_test'
+=== strip_tags("<abc>hello</abc> \x09\x09world... <ppp>strip_tags_test</ppp>", '<b>')
+=> 'hello 		world... strip_tags_test'
+=== strip_tags("<abc>hello</abc> \x09\x09world... <ppp>strip_tags_test</ppp>", '<a><b>')
+=> 'hello 		world... strip_tags_test'
+=== strip_tags("<abc>hello</abc> \x09\x09world... <ppp>strip_tags_test</ppp>", '<p><a><?php<html>')
+=> 'hello 		world... strip_tags_test'
+=== strip_tags("<abc>hello</abc> \x09\x09world... <ppp>strip_tags_test</ppp>", '<br>')
+=> 'hello 		world... strip_tags_test'
+=== strip_tags("<abc>hello</abc> \x09\x09world... <ppp>strip_tags_test</ppp>", '<BR><P>')
+=> 'hello 		world... strip_tags_test'
+=== strip_tags("<abc>hello</abc> \x09\x09world... <ppp>strip_tags_test</ppp>", '<abbr>')
+=> 'hello 		world... strip_tags_test'
+=== strip_tags("<abc>hello</abc> \x09\x09world... <ppp>strip_tags_test</ppp>", '<root>')
+=> 'hello 		world... strip_tags_test'
+=== strip_tags("<abc>hello</abc> \x09\x09world... <ppp>strip_tags_test</ppp>", '<!doctype>')
+=> 'hello 		world... strip_tags_test'
+=== strip_tags("<abc>hello</abc> \x09\x09world... <ppp>strip_tags_test</ppp>", 'a')
+=> 'hello 		world... strip_tags_test'
+=== strip_tags("<abc>hello</abc> \x09\x09world... <ppp>strip_tags_test</ppp>", "<a\x00><b>")
+=> 'hello 		world... strip_tags_test'
+=== strip_tags("<abc>hello</abc> \x09\x09world... <ppp>strip_tags_test</ppp>", '<scr>')
+=> 'hello 		world... strip_tags_test'
+=== strip_tags("<abc>hello</abc> \x09\x09world... <ppp>strip_tags_test</ppp>", '<script>')
+=> 'hello 		world... strip_tags_test'
+=== strip_tags("<abc>hello</abc> \x09\x09world... <ppp>strip_tags_test</ppp>", '<html><nnn>')
+=> 'hello 		world... strip_tags_test'
+=== strip_tags("<abc>hello</abc> \x09\x09world... <ppp>strip_tags_test</ppp>", ['a', 'BR'])
+=> 'hello 		world... strip_tags_test'
+=== strip_tags("<abc>hello</abc> \x09\x09world... <ppp>strip_tags_test</ppp>", [])
+=> 'hello 		world... strip_tags_test'
+=== strip_tags("<%?php hello\x09 world?%>", null)
+=> ''
+=== strip_tags("<%?php hello\x09 world?%>", '')
+=> ''
+=== strip_tags("<%?php hello\x09 world?%>", '<a>')
+=> ''
+=== strip_tags("<%?php hello\x09 world?%>", '<b>')
+=> ''
+=== strip_tags("<%?php hello\x09 world?%>", '<a><b>')
+=> ''
+=== strip_tags("<%?php hello\x09 world?%>", '<p><a><?php<html>')
+=> ''
+=== strip_tags("<%?php hello\x09 world?%>", '<br>')
+=> ''
+=== strip_tags("<%?php hello\x09 world?%>", '<BR><P>')
+=> ''
+=== strip_tags("<%?php hello\x09 world?%>", '<abbr>')
+=> ''
+=== strip_tags("<%?php hello\x09 world?%>", '<root>')
+=> ''
+=== strip_tags("<%?php hello\x09 world?%>", '<!doctype>')
+=> ''
+=== strip_tags("<%?php hello\x09 world?%>", 'a')
+=> ''
+=== strip_tags("<%?php hello\x09 world?%>", "<a\x00><b>")
+=> ''
+=== strip_tags("<%?php hello\x09 world?%>", '<scr>')
+=> ''
+=== strip_tags("<%?php hello\x09 world?%>", '<script>')
+=> ''
+=== strip_tags("<%?php hello\x09 world?%>", '<html><nnn>')
+=> ''
+=== strip_tags("<%?php hello\x09 world?%>", ['a', 'BR'])
+=> ''
+=== strip_tags("<%?php hello\x09 world?%>", [])
+=> ''
+=== strip_tags('<<htmL>>hello<</htmL>>', null)
+=> 'hello'
+=== strip_tags('<<htmL>>hello<</htmL>>', '')
+=> 'hello'
+=== strip_tags('<<htmL>>hello<</htmL>>', '<a>')
+=> 'hello'
+=== strip_tags('<<htmL>>hello<</htmL>>', '<b>')
+=> 'hello'
+=== strip_tags('<<htmL>>hello<</htmL>>', '<a><b>')
+=> 'hello'
+=== strip_tags('<<htmL>>hello<</htmL>>', '<p><a><?php<html>')
+=> '<htmL>hello</htmL>'
+=== strip_tags('<<htmL>>hello<</htmL>>', '<br>')
+=> 'hello'
+=== strip_tags('<<htmL>>hello<</htmL>>', '<BR><P>')
+=> 'hello'
+=== strip_tags('<<htmL>>hello<</htmL>>', '<abbr>')
+=> 'hello'
+=== strip_tags('<<htmL>>hello<</htmL>>', '<root>')
+=> 'hello'
+=== strip_tags('<<htmL>>hello<</htmL>>', '<!doctype>')
+=> 'hello'
+=== strip_tags('<<htmL>>hello<</htmL>>', 'a')
+=> 'hello'
+=== strip_tags('<<htmL>>hello<</htmL>>', "<a\x00><b>")
+=> 'hello'
+=== strip_tags('<<htmL>>hello<</htmL>>', '<scr>')
+=> 'hello'
+=== strip_tags('<<htmL>>hello<</htmL>>', '<script>')
+=> 'hello'
+=== strip_tags('<<htmL>>hello<</htmL>>', '<html><nnn>')
+=> '<htmL>hello</htmL>'
+=== strip_tags('<<htmL>>hello<</htmL>>', ['a', 'BR'])
+=> 'hello'
+=== strip_tags('<<htmL>>hello<</htmL>>', [])
+=> 'hello'
+=== strip_tags('<a.>HtMl text</.a>', null)
+=> 'HtMl text'
+=== strip_tags('<a.>HtMl text</.a>', '')
+=> 'HtMl text'
+=== strip_tags('<a.>HtMl text</.a>', '<a>')
+=> 'HtMl text'
+=== strip_tags('<a.>HtMl text</.a>', '<b>')
+=> 'HtMl text'
+=== strip_tags('<a.>HtMl text</.a>', '<a><b>')
+=> 'HtMl text'
+=== strip_tags('<a.>HtMl text</.a>', '<p><a><?php<html>')
+=> 'HtMl text'
+=== strip_tags('<a.>HtMl text</.a>', '<br>')
+=> 'HtMl text'
+=== strip_tags('<a.>HtMl text</.a>', '<BR><P>')
+=> 'HtMl text'
+=== strip_tags('<a.>HtMl text</.a>', '<abbr>')
+=> 'HtMl text'
+=== strip_tags('<a.>HtMl text</.a>', '<root>')
+=> 'HtMl text'
+=== strip_tags('<a.>HtMl text</.a>', '<!doctype>')
+=> 'HtMl text'
+=== strip_tags('<a.>HtMl text</.a>', 'a')
+=> 'HtMl text'
+=== strip_tags('<a.>HtMl text</.a>', "<a\x00><b>")
+=> 'HtMl text'
+=== strip_tags('<a.>HtMl text</.a>', '<scr>')
+=> 'HtMl text'
+=== strip_tags('<a.>HtMl text</.a>', '<script>')
+=> 'HtMl text'
+=== strip_tags('<a.>HtMl text</.a>', '<html><nnn>')
+=> 'HtMl text'
+=== strip_tags('<a.>HtMl text</.a>', ['a', 'BR'])
+=> 'HtMl text'
+=== strip_tags('<a.>HtMl text</.a>', [])
+=> 'HtMl text'
+=== strip_tags('<nnn>I am a quoted (") string with special chars like $,!,@,%,&</nnn>', null)
+=> 'I am a quoted (") string with special chars like $,!,@,%,&'
+=== strip_tags('<nnn>I am a quoted (") string with special chars like $,!,@,%,&</nnn>', '')
+=> 'I am a quoted (") string with special chars like $,!,@,%,&'
+=== strip_tags('<nnn>I am a quoted (") string with special chars like $,!,@,%,&</nnn>', '<a>')
+=> 'I am a quoted (") string with special chars like $,!,@,%,&'
+=== strip_tags('<nnn>I am a quoted (") string with special chars like $,!,@,%,&</nnn>', '<b>')
+=> 'I am a quoted (") string with special chars like $,!,@,%,&'
+=== strip_tags('<nnn>I am a quoted (") string with special chars like $,!,@,%,&</nnn>', '<a><b>')
+=> 'I am a quoted (") string with special chars like $,!,@,%,&'
+=== strip_tags('<nnn>I am a quoted (") string with special chars like $,!,@,%,&</nnn>', '<p><a><?php<html>')
+=> 'I am a quoted (") string with special chars like $,!,@,%,&'
+=== strip_tags('<nnn>I am a quoted (") string with special chars like $,!,@,%,&</nnn>', '<br>')
+=> 'I am a quoted (") string with special chars like $,!,@,%,&'
+=== strip_tags('<nnn>I am a quoted (") string with special chars like $,!,@,%,&</nnn>', '<BR><P>')
+=> 'I am a quoted (") string with special chars like $,!,@,%,&'
+=== strip_tags('<nnn>I am a quoted (") string with special chars like $,!,@,%,&</nnn>', '<abbr>')
+=> 'I am a quoted (") string with special chars like $,!,@,%,&'
+=== strip_tags('<nnn>I am a quoted (") string with special chars like $,!,@,%,&</nnn>', '<root>')
+=> 'I am a quoted (") string with special chars like $,!,@,%,&'
+=== strip_tags('<nnn>I am a quoted (") string with special chars like $,!,@,%,&</nnn>', '<!doctype>')
+=> 'I am a quoted (") string with special chars like $,!,@,%,&'
+=== strip_tags('<nnn>I am a quoted (") string with special chars like $,!,@,%,&</nnn>', 'a')
+=> 'I am a quoted (") string with special chars like $,!,@,%,&'
+=== strip_tags('<nnn>I am a quoted (") string with special chars like $,!,@,%,&</nnn>', "<a\x00><b>")
+=> 'I am a quoted (") string with special chars like $,!,@,%,&'
+=== strip_tags('<nnn>I am a quoted (") string with special chars like $,!,@,%,&</nnn>', '<scr>')
+=> 'I am a quoted (") string with special chars like $,!,@,%,&'
+=== strip_tags('<nnn>I am a quoted (") string with special chars like $,!,@,%,&</nnn>', '<script>')
+=> 'I am a quoted (") string with special chars like $,!,@,%,&'
+=== strip_tags('<nnn>I am a quoted (") string with special chars like $,!,@,%,&</nnn>', '<html><nnn>')
+=> '<nnn>I am a quoted (") string with special chars like $,!,@,%,&</nnn>'
+=== strip_tags('<nnn>I am a quoted (") string with special chars like $,!,@,%,&</nnn>', ['a', 'BR'])
+=> 'I am a quoted (") string with special chars like $,!,@,%,&'
+=== strip_tags('<nnn>I am a quoted (") string with special chars like $,!,@,%,&</nnn>', [])
+=> 'I am a quoted (") string with special chars like $,!,@,%,&'
+=== strip_tags("<html> I am html string </html>\x00<?php I am php string ?>", null)
+=> ' I am html string '
+=== strip_tags("<html> I am html string </html>\x00<?php I am php string ?>", '')
+=> ' I am html string '
+=== strip_tags("<html> I am html string </html>\x00<?php I am php string ?>", '<a>')
+=> ' I am html string '
+=== strip_tags("<html> I am html string </html>\x00<?php I am php string ?>", '<b>')
+=> ' I am html string '
+=== strip_tags("<html> I am html string </html>\x00<?php I am php string ?>", '<a><b>')
+=> ' I am html string '
+=== strip_tags("<html> I am html string </html>\x00<?php I am php string ?>", '<p><a><?php<html>')
+=> '<html> I am html string </html>'
+=== strip_tags("<html> I am html string </html>\x00<?php I am php string ?>", '<br>')
+=> ' I am html string '
+=== strip_tags("<html> I am html string </html>\x00<?php I am php string ?>", '<BR><P>')
+=> ' I am html string '
+=== strip_tags("<html> I am html string </html>\x00<?php I am php string ?>", '<abbr>')
+=> ' I am html string '
+=== strip_tags("<html> I am html string </html>\x00<?php I am php string ?>", '<root>')
+=> ' I am html string '
+=== strip_tags("<html> I am html string </html>\x00<?php I am php string ?>", '<!doctype>')
+=> ' I am html string '
+=== strip_tags("<html> I am html string </html>\x00<?php I am php string ?>", 'a')
+=> ' I am html string '
+=== strip_tags("<html> I am html string </html>\x00<?php I am php string ?>", "<a\x00><b>")
+=> ' I am html string '
+=== strip_tags("<html> I am html string </html>\x00<?php I am php string ?>", '<scr>')
+=> ' I am html string '
+=== strip_tags("<html> I am html string </html>\x00<?php I am php string ?>", '<script>')
+=> ' I am html string '
+=== strip_tags("<html> I am html string </html>\x00<?php I am php string ?>", '<html><nnn>')
+=> '<html> I am html string </html>'
+=== strip_tags("<html> I am html string </html>\x00<?php I am php string ?>", ['a', 'BR'])
+=> ' I am html string '
+=== strip_tags("<html> I am html string </html>\x00<?php I am php string ?>", [])
+=> ' I am html string '
+=== strip_tags("<html> I am html string\x00 </html><?php I am php string ?>", null)
+=> ' I am html string '
+=== strip_tags("<html> I am html string\x00 </html><?php I am php string ?>", '')
+=> ' I am html string '
+=== strip_tags("<html> I am html string\x00 </html><?php I am php string ?>", '<a>')
+=> ' I am html string '
+=== strip_tags("<html> I am html string\x00 </html><?php I am php string ?>", '<b>')
+=> ' I am html string '
+=== strip_tags("<html> I am html string\x00 </html><?php I am php string ?>", '<a><b>')
+=> ' I am html string '
+=== strip_tags("<html> I am html string\x00 </html><?php I am php string ?>", '<p><a><?php<html>')
+=> '<html> I am html string </html>'
+=== strip_tags("<html> I am html string\x00 </html><?php I am php string ?>", '<br>')
+=> ' I am html string '
+=== strip_tags("<html> I am html string\x00 </html><?php I am php string ?>", '<BR><P>')
+=> ' I am html string '
+=== strip_tags("<html> I am html string\x00 </html><?php I am php string ?>", '<abbr>')
+=> ' I am html string '
+=== strip_tags("<html> I am html string\x00 </html><?php I am php string ?>", '<root>')
+=> ' I am html string '
+=== strip_tags("<html> I am html string\x00 </html><?php I am php string ?>", '<!doctype>')
+=> ' I am html string '
+=== strip_tags("<html> I am html string\x00 </html><?php I am php string ?>", 'a')
+=> ' I am html string '
+=== strip_tags("<html> I am html string\x00 </html><?php I am php string ?>", "<a\x00><b>")
+=> ' I am html string '
+=== strip_tags("<html> I am html string\x00 </html><?php I am php string ?>", '<scr>')
+=> ' I am html string '
+=== strip_tags("<html> I am html string\x00 </html><?php I am php string ?>", '<script>')
+=> ' I am html string '
+=== strip_tags("<html> I am html string\x00 </html><?php I am php string ?>", '<html><nnn>')
+=> '<html> I am html string </html>'
+=== strip_tags("<html> I am html string\x00 </html><?php I am php string ?>", ['a', 'BR'])
+=> ' I am html string '
+=== strip_tags("<html> I am html string\x00 </html><?php I am php string ?>", [])
+=> ' I am html string '
+=== strip_tags('<html>I am html string</html>1000001<?php I am php string?>', null)
+=> 'I am html string1000001'
+=== strip_tags('<html>I am html string</html>1000001<?php I am php string?>', '')
+=> 'I am html string1000001'
+=== strip_tags('<html>I am html string</html>1000001<?php I am php string?>', '<a>')
+=> 'I am html string1000001'
+=== strip_tags('<html>I am html string</html>1000001<?php I am php string?>', '<b>')
+=> 'I am html string1000001'
+=== strip_tags('<html>I am html string</html>1000001<?php I am php string?>', '<a><b>')
+=> 'I am html string1000001'
+=== strip_tags('<html>I am html string</html>1000001<?php I am php string?>', '<p><a><?php<html>')
+=> '<html>I am html string</html>1000001'
+=== strip_tags('<html>I am html string</html>1000001<?php I am php string?>', '<br>')
+=> 'I am html string1000001'
+=== strip_tags('<html>I am html string</html>1000001<?php I am php string?>', '<BR><P>')
+=> 'I am html string1000001'
+=== strip_tags('<html>I am html string</html>1000001<?php I am php string?>', '<abbr>')
+=> 'I am html string1000001'
+=== strip_tags('<html>I am html string</html>1000001<?php I am php string?>', '<root>')
+=> 'I am html string1000001'
+=== strip_tags('<html>I am html string</html>1000001<?php I am php string?>', '<!doctype>')
+=> 'I am html string1000001'
+=== strip_tags('<html>I am html string</html>1000001<?php I am php string?>', 'a')
+=> 'I am html string1000001'
+=== strip_tags('<html>I am html string</html>1000001<?php I am php string?>', "<a\x00><b>")
+=> 'I am html string1000001'
+=== strip_tags('<html>I am html string</html>1000001<?php I am php string?>', '<scr>')
+=> 'I am html string1000001'
+=== strip_tags('<html>I am html string</html>1000001<?php I am php string?>', '<script>')
+=> 'I am html string1000001'
+=== strip_tags('<html>I am html string</html>1000001<?php I am php string?>', '<html><nnn>')
+=> '<html>I am html string</html>1000001'
+=== strip_tags('<html>I am html string</html>1000001<?php I am php string?>', ['a', 'BR'])
+=> 'I am html string1000001'
+=== strip_tags('<html>I am html string</html>1000001<?php I am php string?>', [])
+=> 'I am html string1000001'
+=== strip_tags('a < b and c > d', null)
+=> 'a < b and c > d'
+=== strip_tags('a < b and c > d', '')
+=> 'a < b and c > d'
+=== strip_tags('a < b and c > d', '<a>')
+=> 'a < b and c > d'
+=== strip_tags('a < b and c > d', '<b>')
+=> 'a < b and c > d'
+=== strip_tags('a < b and c > d', '<a><b>')
+=> 'a < b and c > d'
+=== strip_tags('a < b and c > d', '<p><a><?php<html>')
+=> 'a < b and c > d'
+=== strip_tags('a < b and c > d', '<br>')
+=> 'a < b and c > d'
+=== strip_tags('a < b and c > d', '<BR><P>')
+=> 'a < b and c > d'
+=== strip_tags('a < b and c > d', '<abbr>')
+=> 'a < b and c > d'
+=== strip_tags('a < b and c > d', '<root>')
+=> 'a < b and c > d'
+=== strip_tags('a < b and c > d', '<!doctype>')
+=> 'a < b and c > d'
+=== strip_tags('a < b and c > d', 'a')
+=> 'a < b and c > d'
+=== strip_tags('a < b and c > d', "<a\x00><b>")
+=> 'a < b and c > d'
+=== strip_tags('a < b and c > d', '<scr>')
+=> 'a < b and c > d'
+=== strip_tags('a < b and c > d', '<script>')
+=> 'a < b and c > d'
+=== strip_tags('a < b and c > d', '<html><nnn>')
+=> 'a < b and c > d'
+=== strip_tags('a < b and c > d', ['a', 'BR'])
+=> 'a < b and c > d'
+=== strip_tags('a < b and c > d', [])
+=> 'a < b and c > d'
+=== strip_tags('a <b and c> d', null)
+=> 'a  d'
+=== strip_tags('a <b and c> d', '')
+=> 'a  d'
+=== strip_tags('a <b and c> d', '<a>')
+=> 'a  d'
+=== strip_tags('a <b and c> d', '<b>')
+=> 'a <b and c> d'
+=== strip_tags('a <b and c> d', '<a><b>')
+=> 'a <b and c> d'
+=== strip_tags('a <b and c> d', '<p><a><?php<html>')
+=> 'a  d'
+=== strip_tags('a <b and c> d', '<br>')
+=> 'a  d'
+=== strip_tags('a <b and c> d', '<BR><P>')
+=> 'a  d'
+=== strip_tags('a <b and c> d', '<abbr>')
+=> 'a  d'
+=== strip_tags('a <b and c> d', '<root>')
+=> 'a  d'
+=== strip_tags('a <b and c> d', '<!doctype>')
+=> 'a  d'
+=== strip_tags('a <b and c> d', 'a')
+=> 'a  d'
+=== strip_tags('a <b and c> d', "<a\x00><b>")
+=> 'a  d'
+=== strip_tags('a <b and c> d', '<scr>')
+=> 'a  d'
+=== strip_tags('a <b and c> d', '<script>')
+=> 'a  d'
+=== strip_tags('a <b and c> d', '<html><nnn>')
+=> 'a  d'
+=== strip_tags('a <b and c> d', ['a', 'BR'])
+=> 'a  d'
+=== strip_tags('a <b and c> d', [])
+=> 'a  d'
+=== strip_tags('<a href=\'x>y\'>link</a>', null)
+=> 'link'
+=== strip_tags('<a href=\'x>y\'>link</a>', '')
+=> 'link'
+=== strip_tags('<a href=\'x>y\'>link</a>', '<a>')
+=> '<a href=\'xy\'>link</a>'
+=== strip_tags('<a href=\'x>y\'>link</a>', '<b>')
+=> 'link'
+=== strip_tags('<a href=\'x>y\'>link</a>', '<a><b>')
+=> '<a href=\'xy\'>link</a>'
+=== strip_tags('<a href=\'x>y\'>link</a>', '<p><a><?php<html>')
+=> '<a href=\'xy\'>link</a>'
+=== strip_tags('<a href=\'x>y\'>link</a>', '<br>')
+=> 'link'
+=== strip_tags('<a href=\'x>y\'>link</a>', '<BR><P>')
+=> 'link'
+=== strip_tags('<a href=\'x>y\'>link</a>', '<abbr>')
+=> 'link'
+=== strip_tags('<a href=\'x>y\'>link</a>', '<root>')
+=> 'link'
+=== strip_tags('<a href=\'x>y\'>link</a>', '<!doctype>')
+=> 'link'
+=== strip_tags('<a href=\'x>y\'>link</a>', 'a')
+=> 'link'
+=== strip_tags('<a href=\'x>y\'>link</a>', "<a\x00><b>")
+=> 'link'
+=== strip_tags('<a href=\'x>y\'>link</a>', '<scr>')
+=> 'link'
+=== strip_tags('<a href=\'x>y\'>link</a>', '<script>')
+=> 'link'
+=== strip_tags('<a href=\'x>y\'>link</a>', '<html><nnn>')
+=> 'link'
+=== strip_tags('<a href=\'x>y\'>link</a>', ['a', 'BR'])
+=> '<a href=\'xy\'>link</a>'
+=== strip_tags('<a href=\'x>y\'>link</a>', [])
+=> 'link'
+=== strip_tags('<a href="x>y">link</a>', null)
+=> 'link'
+=== strip_tags('<a href="x>y">link</a>', '')
+=> 'link'
+=== strip_tags('<a href="x>y">link</a>', '<a>')
+=> '<a href="xy">link</a>'
+=== strip_tags('<a href="x>y">link</a>', '<b>')
+=> 'link'
+=== strip_tags('<a href="x>y">link</a>', '<a><b>')
+=> '<a href="xy">link</a>'
+=== strip_tags('<a href="x>y">link</a>', '<p><a><?php<html>')
+=> '<a href="xy">link</a>'
+=== strip_tags('<a href="x>y">link</a>', '<br>')
+=> 'link'
+=== strip_tags('<a href="x>y">link</a>', '<BR><P>')
+=> 'link'
+=== strip_tags('<a href="x>y">link</a>', '<abbr>')
+=> 'link'
+=== strip_tags('<a href="x>y">link</a>', '<root>')
+=> 'link'
+=== strip_tags('<a href="x>y">link</a>', '<!doctype>')
+=> 'link'
+=== strip_tags('<a href="x>y">link</a>', 'a')
+=> 'link'
+=== strip_tags('<a href="x>y">link</a>', "<a\x00><b>")
+=> 'link'
+=== strip_tags('<a href="x>y">link</a>', '<scr>')
+=> 'link'
+=== strip_tags('<a href="x>y">link</a>', '<script>')
+=> 'link'
+=== strip_tags('<a href="x>y">link</a>', '<html><nnn>')
+=> 'link'
+=== strip_tags('<a href="x>y">link</a>', ['a', 'BR'])
+=> '<a href="xy">link</a>'
+=== strip_tags('<a href="x>y">link</a>', [])
+=> 'link'
+=== strip_tags('<a title=\'it"s\'>x</a>', null)
+=> 'x'
+=== strip_tags('<a title=\'it"s\'>x</a>', '')
+=> 'x'
+=== strip_tags('<a title=\'it"s\'>x</a>', '<a>')
+=> '<a title=\'it"s\'>x</a>'
+=== strip_tags('<a title=\'it"s\'>x</a>', '<b>')
+=> 'x'
+=== strip_tags('<a title=\'it"s\'>x</a>', '<a><b>')
+=> '<a title=\'it"s\'>x</a>'
+=== strip_tags('<a title=\'it"s\'>x</a>', '<p><a><?php<html>')
+=> '<a title=\'it"s\'>x</a>'
+=== strip_tags('<a title=\'it"s\'>x</a>', '<br>')
+=> 'x'
+=== strip_tags('<a title=\'it"s\'>x</a>', '<BR><P>')
+=> 'x'
+=== strip_tags('<a title=\'it"s\'>x</a>', '<abbr>')
+=> 'x'
+=== strip_tags('<a title=\'it"s\'>x</a>', '<root>')
+=> 'x'
+=== strip_tags('<a title=\'it"s\'>x</a>', '<!doctype>')
+=> 'x'
+=== strip_tags('<a title=\'it"s\'>x</a>', 'a')
+=> 'x'
+=== strip_tags('<a title=\'it"s\'>x</a>', "<a\x00><b>")
+=> 'x'
+=== strip_tags('<a title=\'it"s\'>x</a>', '<scr>')
+=> 'x'
+=== strip_tags('<a title=\'it"s\'>x</a>', '<script>')
+=> 'x'
+=== strip_tags('<a title=\'it"s\'>x</a>', '<html><nnn>')
+=> 'x'
+=== strip_tags('<a title=\'it"s\'>x</a>', ['a', 'BR'])
+=> '<a title=\'it"s\'>x</a>'
+=== strip_tags('<a title=\'it"s\'>x</a>', [])
+=> 'x'
+=== strip_tags('<br/><br /><BR>< br>', null)
+=> '< br>'
+=== strip_tags('<br/><br /><BR>< br>', '')
+=> '< br>'
+=== strip_tags('<br/><br /><BR>< br>', '<a>')
+=> '< br>'
+=== strip_tags('<br/><br /><BR>< br>', '<b>')
+=> '< br>'
+=== strip_tags('<br/><br /><BR>< br>', '<a><b>')
+=> '< br>'
+=== strip_tags('<br/><br /><BR>< br>', '<p><a><?php<html>')
+=> '< br>'
+=== strip_tags('<br/><br /><BR>< br>', '<br>')
+=> '<br/><br /><BR>< br>'
+=== strip_tags('<br/><br /><BR>< br>', '<BR><P>')
+=> '<br/><br /><BR>< br>'
+=== strip_tags('<br/><br /><BR>< br>', '<abbr>')
+=> '< br>'
+=== strip_tags('<br/><br /><BR>< br>', '<root>')
+=> '< br>'
+=== strip_tags('<br/><br /><BR>< br>', '<!doctype>')
+=> '< br>'
+=== strip_tags('<br/><br /><BR>< br>', 'a')
+=> '< br>'
+=== strip_tags('<br/><br /><BR>< br>', "<a\x00><b>")
+=> '< br>'
+=== strip_tags('<br/><br /><BR>< br>', '<scr>')
+=> '< br>'
+=== strip_tags('<br/><br /><BR>< br>', '<script>')
+=> '< br>'
+=== strip_tags('<br/><br /><BR>< br>', '<html><nnn>')
+=> '< br>'
+=== strip_tags('<br/><br /><BR>< br>', ['a', 'BR'])
+=> '<br/><br /><BR>< br>'
+=== strip_tags('<br/><br /><BR>< br>', [])
+=> '< br>'
+=== strip_tags('<p>Hi <a href=\'x\'>l</a><br/></p>', null)
+=> 'Hi l'
+=== strip_tags('<p>Hi <a href=\'x\'>l</a><br/></p>', '')
+=> 'Hi l'
+=== strip_tags('<p>Hi <a href=\'x\'>l</a><br/></p>', '<a>')
+=> 'Hi <a href=\'x\'>l</a>'
+=== strip_tags('<p>Hi <a href=\'x\'>l</a><br/></p>', '<b>')
+=> 'Hi l'
+=== strip_tags('<p>Hi <a href=\'x\'>l</a><br/></p>', '<a><b>')
+=> 'Hi <a href=\'x\'>l</a>'
+=== strip_tags('<p>Hi <a href=\'x\'>l</a><br/></p>', '<p><a><?php<html>')
+=> '<p>Hi <a href=\'x\'>l</a></p>'
+=== strip_tags('<p>Hi <a href=\'x\'>l</a><br/></p>', '<br>')
+=> 'Hi l<br/>'
+=== strip_tags('<p>Hi <a href=\'x\'>l</a><br/></p>', '<BR><P>')
+=> '<p>Hi l<br/></p>'
+=== strip_tags('<p>Hi <a href=\'x\'>l</a><br/></p>', '<abbr>')
+=> 'Hi l'
+=== strip_tags('<p>Hi <a href=\'x\'>l</a><br/></p>', '<root>')
+=> 'Hi l'
+=== strip_tags('<p>Hi <a href=\'x\'>l</a><br/></p>', '<!doctype>')
+=> 'Hi l'
+=== strip_tags('<p>Hi <a href=\'x\'>l</a><br/></p>', 'a')
+=> 'Hi l'
+=== strip_tags('<p>Hi <a href=\'x\'>l</a><br/></p>', "<a\x00><b>")
+=> 'Hi l'
+=== strip_tags('<p>Hi <a href=\'x\'>l</a><br/></p>', '<scr>')
+=> 'Hi l'
+=== strip_tags('<p>Hi <a href=\'x\'>l</a><br/></p>', '<script>')
+=> 'Hi l'
+=== strip_tags('<p>Hi <a href=\'x\'>l</a><br/></p>', '<html><nnn>')
+=> 'Hi l'
+=== strip_tags('<p>Hi <a href=\'x\'>l</a><br/></p>', ['a', 'BR'])
+=> 'Hi <a href=\'x\'>l</a><br/>'
+=== strip_tags('<p>Hi <a href=\'x\'>l</a><br/></p>', [])
+=> 'Hi l'
+=== strip_tags('<?xml version="1.0"?><root>t</root>', null)
+=> 't'
+=== strip_tags('<?xml version="1.0"?><root>t</root>', '')
+=> 't'
+=== strip_tags('<?xml version="1.0"?><root>t</root>', '<a>')
+=> 't'
+=== strip_tags('<?xml version="1.0"?><root>t</root>', '<b>')
+=> 't'
+=== strip_tags('<?xml version="1.0"?><root>t</root>', '<a><b>')
+=> 't'
+=== strip_tags('<?xml version="1.0"?><root>t</root>', '<p><a><?php<html>')
+=> 't'
+=== strip_tags('<?xml version="1.0"?><root>t</root>', '<br>')
+=> 't'
+=== strip_tags('<?xml version="1.0"?><root>t</root>', '<BR><P>')
+=> 't'
+=== strip_tags('<?xml version="1.0"?><root>t</root>', '<abbr>')
+=> 't'
+=== strip_tags('<?xml version="1.0"?><root>t</root>', '<root>')
+=> '<root>t</root>'
+=== strip_tags('<?xml version="1.0"?><root>t</root>', '<!doctype>')
+=> 't'
+=== strip_tags('<?xml version="1.0"?><root>t</root>', 'a')
+=> 't'
+=== strip_tags('<?xml version="1.0"?><root>t</root>', "<a\x00><b>")
+=> 't'
+=== strip_tags('<?xml version="1.0"?><root>t</root>', '<scr>')
+=> 't'
+=== strip_tags('<?xml version="1.0"?><root>t</root>', '<script>')
+=> 't'
+=== strip_tags('<?xml version="1.0"?><root>t</root>', '<html><nnn>')
+=> 't'
+=== strip_tags('<?xml version="1.0"?><root>t</root>', ['a', 'BR'])
+=> 't'
+=== strip_tags('<?xml version="1.0"?><root>t</root>', [])
+=> 't'
+=== strip_tags('<?xml version="1.0"--><root>t</root>', null)
+=> ''
+=== strip_tags('<?xml version="1.0"--><root>t</root>', '')
+=> ''
+=== strip_tags('<?xml version="1.0"--><root>t</root>', '<a>')
+=> ''
+=== strip_tags('<?xml version="1.0"--><root>t</root>', '<b>')
+=> ''
+=== strip_tags('<?xml version="1.0"--><root>t</root>', '<a><b>')
+=> ''
+=== strip_tags('<?xml version="1.0"--><root>t</root>', '<p><a><?php<html>')
+=> ''
+=== strip_tags('<?xml version="1.0"--><root>t</root>', '<br>')
+=> ''
+=== strip_tags('<?xml version="1.0"--><root>t</root>', '<BR><P>')
+=> ''
+=== strip_tags('<?xml version="1.0"--><root>t</root>', '<abbr>')
+=> ''
+=== strip_tags('<?xml version="1.0"--><root>t</root>', '<root>')
+=> ''
+=== strip_tags('<?xml version="1.0"--><root>t</root>', '<!doctype>')
+=> ''
+=== strip_tags('<?xml version="1.0"--><root>t</root>', 'a')
+=> ''
+=== strip_tags('<?xml version="1.0"--><root>t</root>', "<a\x00><b>")
+=> ''
+=== strip_tags('<?xml version="1.0"--><root>t</root>', '<scr>')
+=> ''
+=== strip_tags('<?xml version="1.0"--><root>t</root>', '<script>')
+=> ''
+=== strip_tags('<?xml version="1.0"--><root>t</root>', '<html><nnn>')
+=> ''
+=== strip_tags('<?xml version="1.0"--><root>t</root>', ['a', 'BR'])
+=> ''
+=== strip_tags('<?xml version="1.0"--><root>t</root>', [])
+=> ''
+=== strip_tags('<!DOCTYPE html><html>x</html>', null)
+=> 'x'
+=== strip_tags('<!DOCTYPE html><html>x</html>', '')
+=> 'x'
+=== strip_tags('<!DOCTYPE html><html>x</html>', '<a>')
+=> 'x'
+=== strip_tags('<!DOCTYPE html><html>x</html>', '<b>')
+=> 'x'
+=== strip_tags('<!DOCTYPE html><html>x</html>', '<a><b>')
+=> 'x'
+=== strip_tags('<!DOCTYPE html><html>x</html>', '<p><a><?php<html>')
+=> '< html><html>x</html>'
+=== strip_tags('<!DOCTYPE html><html>x</html>', '<br>')
+=> 'x'
+=== strip_tags('<!DOCTYPE html><html>x</html>', '<BR><P>')
+=> 'x'
+=== strip_tags('<!DOCTYPE html><html>x</html>', '<abbr>')
+=> 'x'
+=== strip_tags('<!DOCTYPE html><html>x</html>', '<root>')
+=> 'x'
+=== strip_tags('<!DOCTYPE html><html>x</html>', '<!doctype>')
+=> 'x'
+=== strip_tags('<!DOCTYPE html><html>x</html>', 'a')
+=> 'x'
+=== strip_tags('<!DOCTYPE html><html>x</html>', "<a\x00><b>")
+=> 'x'
+=== strip_tags('<!DOCTYPE html><html>x</html>', '<scr>')
+=> 'x'
+=== strip_tags('<!DOCTYPE html><html>x</html>', '<script>')
+=> 'x'
+=== strip_tags('<!DOCTYPE html><html>x</html>', '<html><nnn>')
+=> '< html><html>x</html>'
+=== strip_tags('<!DOCTYPE html><html>x</html>', ['a', 'BR'])
+=> 'x'
+=== strip_tags('<!DOCTYPE html><html>x</html>', [])
+=> 'x'
+=== strip_tags('<!doctype html PUBLIC "-//W3C"><b>x</b>', null)
+=> 'x'
+=== strip_tags('<!doctype html PUBLIC "-//W3C"><b>x</b>', '')
+=> 'x'
+=== strip_tags('<!doctype html PUBLIC "-//W3C"><b>x</b>', '<a>')
+=> 'x'
+=== strip_tags('<!doctype html PUBLIC "-//W3C"><b>x</b>', '<b>')
+=> '<b>x</b>'
+=== strip_tags('<!doctype html PUBLIC "-//W3C"><b>x</b>', '<a><b>')
+=> '<b>x</b>'
+=== strip_tags('<!doctype html PUBLIC "-//W3C"><b>x</b>', '<p><a><?php<html>')
+=> '< html PUBLIC "-//W3C">x'
+=== strip_tags('<!doctype html PUBLIC "-//W3C"><b>x</b>', '<br>')
+=> 'x'
+=== strip_tags('<!doctype html PUBLIC "-//W3C"><b>x</b>', '<BR><P>')
+=> 'x'
+=== strip_tags('<!doctype html PUBLIC "-//W3C"><b>x</b>', '<abbr>')
+=> 'x'
+=== strip_tags('<!doctype html PUBLIC "-//W3C"><b>x</b>', '<root>')
+=> 'x'
+=== strip_tags('<!doctype html PUBLIC "-//W3C"><b>x</b>', '<!doctype>')
+=> 'x'
+=== strip_tags('<!doctype html PUBLIC "-//W3C"><b>x</b>', 'a')
+=> 'x'
+=== strip_tags('<!doctype html PUBLIC "-//W3C"><b>x</b>', "<a\x00><b>")
+=> 'x'
+=== strip_tags('<!doctype html PUBLIC "-//W3C"><b>x</b>', '<scr>')
+=> 'x'
+=== strip_tags('<!doctype html PUBLIC "-//W3C"><b>x</b>', '<script>')
+=> 'x'
+=== strip_tags('<!doctype html PUBLIC "-//W3C"><b>x</b>', '<html><nnn>')
+=> '< html PUBLIC "-//W3C">x'
+=== strip_tags('<!doctype html PUBLIC "-//W3C"><b>x</b>', ['a', 'BR'])
+=> 'x'
+=== strip_tags('<!doctype html PUBLIC "-//W3C"><b>x</b>', [])
+=> 'x'
+=== strip_tags('<!-->x-->y', null)
+=> 'x-->y'
+=== strip_tags('<!-->x-->y', '')
+=> 'x-->y'
+=== strip_tags('<!-->x-->y', '<a>')
+=> 'x-->y'
+=== strip_tags('<!-->x-->y', '<b>')
+=> 'x-->y'
+=== strip_tags('<!-->x-->y', '<a><b>')
+=> 'x-->y'
+=== strip_tags('<!-->x-->y', '<p><a><?php<html>')
+=> 'x-->y'
+=== strip_tags('<!-->x-->y', '<br>')
+=> 'x-->y'
+=== strip_tags('<!-->x-->y', '<BR><P>')
+=> 'x-->y'
+=== strip_tags('<!-->x-->y', '<abbr>')
+=> 'x-->y'
+=== strip_tags('<!-->x-->y', '<root>')
+=> 'x-->y'
+=== strip_tags('<!-->x-->y', '<!doctype>')
+=> 'x-->y'
+=== strip_tags('<!-->x-->y', 'a')
+=> 'x-->y'
+=== strip_tags('<!-->x-->y', "<a\x00><b>")
+=> 'x-->y'
+=== strip_tags('<!-->x-->y', '<scr>')
+=> 'x-->y'
+=== strip_tags('<!-->x-->y', '<script>')
+=> 'x-->y'
+=== strip_tags('<!-->x-->y', '<html><nnn>')
+=> 'x-->y'
+=== strip_tags('<!-->x-->y', ['a', 'BR'])
+=> 'x-->y'
+=== strip_tags('<!-->x-->y', [])
+=> 'x-->y'
+=== strip_tags('<!--->x-->y', null)
+=> 'x-->y'
+=== strip_tags('<!--->x-->y', '')
+=> 'x-->y'
+=== strip_tags('<!--->x-->y', '<a>')
+=> 'x-->y'
+=== strip_tags('<!--->x-->y', '<b>')
+=> 'x-->y'
+=== strip_tags('<!--->x-->y', '<a><b>')
+=> 'x-->y'
+=== strip_tags('<!--->x-->y', '<p><a><?php<html>')
+=> 'x-->y'
+=== strip_tags('<!--->x-->y', '<br>')
+=> 'x-->y'
+=== strip_tags('<!--->x-->y', '<BR><P>')
+=> 'x-->y'
+=== strip_tags('<!--->x-->y', '<abbr>')
+=> 'x-->y'
+=== strip_tags('<!--->x-->y', '<root>')
+=> 'x-->y'
+=== strip_tags('<!--->x-->y', '<!doctype>')
+=> 'x-->y'
+=== strip_tags('<!--->x-->y', 'a')
+=> 'x-->y'
+=== strip_tags('<!--->x-->y', "<a\x00><b>")
+=> 'x-->y'
+=== strip_tags('<!--->x-->y', '<scr>')
+=> 'x-->y'
+=== strip_tags('<!--->x-->y', '<script>')
+=> 'x-->y'
+=== strip_tags('<!--->x-->y', '<html><nnn>')
+=> 'x-->y'
+=== strip_tags('<!--->x-->y', ['a', 'BR'])
+=> 'x-->y'
+=== strip_tags('<!--->x-->y', [])
+=> 'x-->y'
+=== strip_tags('<!- not comment ->z', null)
+=> 'z'
+=== strip_tags('<!- not comment ->z', '')
+=> 'z'
+=== strip_tags('<!- not comment ->z', '<a>')
+=> 'z'
+=== strip_tags('<!- not comment ->z', '<b>')
+=> 'z'
+=== strip_tags('<!- not comment ->z', '<a><b>')
+=> 'z'
+=== strip_tags('<!- not comment ->z', '<p><a><?php<html>')
+=> 'z'
+=== strip_tags('<!- not comment ->z', '<br>')
+=> 'z'
+=== strip_tags('<!- not comment ->z', '<BR><P>')
+=> 'z'
+=== strip_tags('<!- not comment ->z', '<abbr>')
+=> 'z'
+=== strip_tags('<!- not comment ->z', '<root>')
+=> 'z'
+=== strip_tags('<!- not comment ->z', '<!doctype>')
+=> 'z'
+=== strip_tags('<!- not comment ->z', 'a')
+=> 'z'
+=== strip_tags('<!- not comment ->z', "<a\x00><b>")
+=> 'z'
+=== strip_tags('<!- not comment ->z', '<scr>')
+=> 'z'
+=== strip_tags('<!- not comment ->z', '<script>')
+=> 'z'
+=== strip_tags('<!- not comment ->z', '<html><nnn>')
+=> 'z'
+=== strip_tags('<!- not comment ->z', ['a', 'BR'])
+=> 'z'
+=== strip_tags('<!- not comment ->z', [])
+=> 'z'
+=== strip_tags('<?php if (a > b) { echo "?>"; } ?>after', null)
+=> 'after'
+=== strip_tags('<?php if (a > b) { echo "?>"; } ?>after', '')
+=> 'after'
+=== strip_tags('<?php if (a > b) { echo "?>"; } ?>after', '<a>')
+=> 'after'
+=== strip_tags('<?php if (a > b) { echo "?>"; } ?>after', '<b>')
+=> 'after'
+=== strip_tags('<?php if (a > b) { echo "?>"; } ?>after', '<a><b>')
+=> 'after'
+=== strip_tags('<?php if (a > b) { echo "?>"; } ?>after', '<p><a><?php<html>')
+=> 'after'
+=== strip_tags('<?php if (a > b) { echo "?>"; } ?>after', '<br>')
+=> 'after'
+=== strip_tags('<?php if (a > b) { echo "?>"; } ?>after', '<BR><P>')
+=> 'after'
+=== strip_tags('<?php if (a > b) { echo "?>"; } ?>after', '<abbr>')
+=> 'after'
+=== strip_tags('<?php if (a > b) { echo "?>"; } ?>after', '<root>')
+=> 'after'
+=== strip_tags('<?php if (a > b) { echo "?>"; } ?>after', '<!doctype>')
+=> 'after'
+=== strip_tags('<?php if (a > b) { echo "?>"; } ?>after', 'a')
+=> 'after'
+=== strip_tags('<?php if (a > b) { echo "?>"; } ?>after', "<a\x00><b>")
+=> 'after'
+=== strip_tags('<?php if (a > b) { echo "?>"; } ?>after', '<scr>')
+=> 'after'
+=== strip_tags('<?php if (a > b) { echo "?>"; } ?>after', '<script>')
+=> 'after'
+=== strip_tags('<?php if (a > b) { echo "?>"; } ?>after', '<html><nnn>')
+=> 'after'
+=== strip_tags('<?php if (a > b) { echo "?>"; } ?>after', ['a', 'BR'])
+=> 'after'
+=== strip_tags('<?php if (a > b) { echo "?>"; } ?>after', [])
+=> 'after'
+=== strip_tags('<?php f(")"); ?>after', null)
+=> 'after'
+=== strip_tags('<?php f(")"); ?>after', '')
+=> 'after'
+=== strip_tags('<?php f(")"); ?>after', '<a>')
+=> 'after'
+=== strip_tags('<?php f(")"); ?>after', '<b>')
+=> 'after'
+=== strip_tags('<?php f(")"); ?>after', '<a><b>')
+=> 'after'
+=== strip_tags('<?php f(")"); ?>after', '<p><a><?php<html>')
+=> 'after'
+=== strip_tags('<?php f(")"); ?>after', '<br>')
+=> 'after'
+=== strip_tags('<?php f(")"); ?>after', '<BR><P>')
+=> 'after'
+=== strip_tags('<?php f(")"); ?>after', '<abbr>')
+=> 'after'
+=== strip_tags('<?php f(")"); ?>after', '<root>')
+=> 'after'
+=== strip_tags('<?php f(")"); ?>after', '<!doctype>')
+=> 'after'
+=== strip_tags('<?php f(")"); ?>after', 'a')
+=> 'after'
+=== strip_tags('<?php f(")"); ?>after', "<a\x00><b>")
+=> 'after'
+=== strip_tags('<?php f(")"); ?>after', '<scr>')
+=> 'after'
+=== strip_tags('<?php f(")"); ?>after', '<script>')
+=> 'after'
+=== strip_tags('<?php f(")"); ?>after', '<html><nnn>')
+=> 'after'
+=== strip_tags('<?php f(")"); ?>after', ['a', 'BR'])
+=> 'after'
+=== strip_tags('<?php f(")"); ?>after', [])
+=> 'after'
+=== strip_tags('<?php (( ?> x ?>', null)
+=> ''
+=== strip_tags('<?php (( ?> x ?>', '')
+=> ''
+=== strip_tags('<?php (( ?> x ?>', '<a>')
+=> ''
+=== strip_tags('<?php (( ?> x ?>', '<b>')
+=> ''
+=== strip_tags('<?php (( ?> x ?>', '<a><b>')
+=> ''
+=== strip_tags('<?php (( ?> x ?>', '<p><a><?php<html>')
+=> ''
+=== strip_tags('<?php (( ?> x ?>', '<br>')
+=> ''
+=== strip_tags('<?php (( ?> x ?>', '<BR><P>')
+=> ''
+=== strip_tags('<?php (( ?> x ?>', '<abbr>')
+=> ''
+=== strip_tags('<?php (( ?> x ?>', '<root>')
+=> ''
+=== strip_tags('<?php (( ?> x ?>', '<!doctype>')
+=> ''
+=== strip_tags('<?php (( ?> x ?>', 'a')
+=> ''
+=== strip_tags('<?php (( ?> x ?>', "<a\x00><b>")
+=> ''
+=== strip_tags('<?php (( ?> x ?>', '<scr>')
+=> ''
+=== strip_tags('<?php (( ?> x ?>', '<script>')
+=> ''
+=== strip_tags('<?php (( ?> x ?>', '<html><nnn>')
+=> ''
+=== strip_tags('<?php (( ?> x ?>', ['a', 'BR'])
+=> ''
+=== strip_tags('<?php (( ?> x ?>', [])
+=> ''
+=== strip_tags('<? \' ?> \' ?>tail', null)
+=> 'tail'
+=== strip_tags('<? \' ?> \' ?>tail', '')
+=> 'tail'
+=== strip_tags('<? \' ?> \' ?>tail', '<a>')
+=> 'tail'
+=== strip_tags('<? \' ?> \' ?>tail', '<b>')
+=> 'tail'
+=== strip_tags('<? \' ?> \' ?>tail', '<a><b>')
+=> 'tail'
+=== strip_tags('<? \' ?> \' ?>tail', '<p><a><?php<html>')
+=> 'tail'
+=== strip_tags('<? \' ?> \' ?>tail', '<br>')
+=> 'tail'
+=== strip_tags('<? \' ?> \' ?>tail', '<BR><P>')
+=> 'tail'
+=== strip_tags('<? \' ?> \' ?>tail', '<abbr>')
+=> 'tail'
+=== strip_tags('<? \' ?> \' ?>tail', '<root>')
+=> 'tail'
+=== strip_tags('<? \' ?> \' ?>tail', '<!doctype>')
+=> 'tail'
+=== strip_tags('<? \' ?> \' ?>tail', 'a')
+=> 'tail'
+=== strip_tags('<? \' ?> \' ?>tail', "<a\x00><b>")
+=> 'tail'
+=== strip_tags('<? \' ?> \' ?>tail', '<scr>')
+=> 'tail'
+=== strip_tags('<? \' ?> \' ?>tail', '<script>')
+=> 'tail'
+=== strip_tags('<? \' ?> \' ?>tail', '<html><nnn>')
+=> 'tail'
+=== strip_tags('<? \' ?> \' ?>tail', ['a', 'BR'])
+=> 'tail'
+=== strip_tags('<? \' ?> \' ?>tail', [])
+=> 'tail'
+=== strip_tags('x<y<z>>w', null)
+=> 'xw'
+=== strip_tags('x<y<z>>w', '')
+=> 'xw'
+=== strip_tags('x<y<z>>w', '<a>')
+=> 'xw'
+=== strip_tags('x<y<z>>w', '<b>')
+=> 'xw'
+=== strip_tags('x<y<z>>w', '<a><b>')
+=> 'xw'
+=== strip_tags('x<y<z>>w', '<p><a><?php<html>')
+=> 'xw'
+=== strip_tags('x<y<z>>w', '<br>')
+=> 'xw'
+=== strip_tags('x<y<z>>w', '<BR><P>')
+=> 'xw'
+=== strip_tags('x<y<z>>w', '<abbr>')
+=> 'xw'
+=== strip_tags('x<y<z>>w', '<root>')
+=> 'xw'
+=== strip_tags('x<y<z>>w', '<!doctype>')
+=> 'xw'
+=== strip_tags('x<y<z>>w', 'a')
+=> 'xw'
+=== strip_tags('x<y<z>>w', "<a\x00><b>")
+=> 'xw'
+=== strip_tags('x<y<z>>w', '<scr>')
+=> 'xw'
+=== strip_tags('x<y<z>>w', '<script>')
+=> 'xw'
+=== strip_tags('x<y<z>>w', '<html><nnn>')
+=> 'xw'
+=== strip_tags('x<y<z>>w', ['a', 'BR'])
+=> 'xw'
+=== strip_tags('x<y<z>>w', [])
+=> 'xw'
+=== strip_tags('x<y<z>w>v', null)
+=> 'xv'
+=== strip_tags('x<y<z>w>v', '')
+=> 'xv'
+=== strip_tags('x<y<z>w>v', '<a>')
+=> 'xv'
+=== strip_tags('x<y<z>w>v', '<b>')
+=> 'xv'
+=== strip_tags('x<y<z>w>v', '<a><b>')
+=> 'xv'
+=== strip_tags('x<y<z>w>v', '<p><a><?php<html>')
+=> 'xv'
+=== strip_tags('x<y<z>w>v', '<br>')
+=> 'xv'
+=== strip_tags('x<y<z>w>v', '<BR><P>')
+=> 'xv'
+=== strip_tags('x<y<z>w>v', '<abbr>')
+=> 'xv'
+=== strip_tags('x<y<z>w>v', '<root>')
+=> 'xv'
+=== strip_tags('x<y<z>w>v', '<!doctype>')
+=> 'xv'
+=== strip_tags('x<y<z>w>v', 'a')
+=> 'xv'
+=== strip_tags('x<y<z>w>v', "<a\x00><b>")
+=> 'xv'
+=== strip_tags('x<y<z>w>v', '<scr>')
+=> 'xv'
+=== strip_tags('x<y<z>w>v', '<script>')
+=> 'xv'
+=== strip_tags('x<y<z>w>v', '<html><nnn>')
+=> 'xv'
+=== strip_tags('x<y<z>w>v', ['a', 'BR'])
+=> 'xv'
+=== strip_tags('x<y<z>w>v', [])
+=> 'xv'
+=== strip_tags('<a <b>>text', null)
+=> 'text'
+=== strip_tags('<a <b>>text', '')
+=> 'text'
+=== strip_tags('<a <b>>text', '<a>')
+=> '<a b>text'
+=== strip_tags('<a <b>>text', '<b>')
+=> 'text'
+=== strip_tags('<a <b>>text', '<a><b>')
+=> '<a b>text'
+=== strip_tags('<a <b>>text', '<p><a><?php<html>')
+=> '<a b>text'
+=== strip_tags('<a <b>>text', '<br>')
+=> 'text'
+=== strip_tags('<a <b>>text', '<BR><P>')
+=> 'text'
+=== strip_tags('<a <b>>text', '<abbr>')
+=> 'text'
+=== strip_tags('<a <b>>text', '<root>')
+=> 'text'
+=== strip_tags('<a <b>>text', '<!doctype>')
+=> 'text'
+=== strip_tags('<a <b>>text', 'a')
+=> 'text'
+=== strip_tags('<a <b>>text', "<a\x00><b>")
+=> 'text'
+=== strip_tags('<a <b>>text', '<scr>')
+=> 'text'
+=== strip_tags('<a <b>>text', '<script>')
+=> 'text'
+=== strip_tags('<a <b>>text', '<html><nnn>')
+=> 'text'
+=== strip_tags('<a <b>>text', ['a', 'BR'])
+=> '<a b>text'
+=== strip_tags('<a <b>>text', [])
+=> 'text'
+=== strip_tags('>>text<<', null)
+=> '>>text'
+=== strip_tags('>>text<<', '')
+=> '>>text'
+=== strip_tags('>>text<<', '<a>')
+=> '>>text'
+=== strip_tags('>>text<<', '<b>')
+=> '>>text'
+=== strip_tags('>>text<<', '<a><b>')
+=> '>>text'
+=== strip_tags('>>text<<', '<p><a><?php<html>')
+=> '>>text'
+=== strip_tags('>>text<<', '<br>')
+=> '>>text'
+=== strip_tags('>>text<<', '<BR><P>')
+=> '>>text'
+=== strip_tags('>>text<<', '<abbr>')
+=> '>>text'
+=== strip_tags('>>text<<', '<root>')
+=> '>>text'
+=== strip_tags('>>text<<', '<!doctype>')
+=> '>>text'
+=== strip_tags('>>text<<', 'a')
+=> '>>text'
+=== strip_tags('>>text<<', "<a\x00><b>")
+=> '>>text'
+=== strip_tags('>>text<<', '<scr>')
+=> '>>text'
+=== strip_tags('>>text<<', '<script>')
+=> '>>text'
+=== strip_tags('>>text<<', '<html><nnn>')
+=> '>>text'
+=== strip_tags('>>text<<', ['a', 'BR'])
+=> '>>text'
+=== strip_tags('>>text<<', [])
+=> '>>text'
+=== strip_tags('<', null)
+=> ''
+=== strip_tags('<', '')
+=> ''
+=== strip_tags('<', '<a>')
+=> ''
+=== strip_tags('<', '<b>')
+=> ''
+=== strip_tags('<', '<a><b>')
+=> ''
+=== strip_tags('<', '<p><a><?php<html>')
+=> ''
+=== strip_tags('<', '<br>')
+=> ''
+=== strip_tags('<', '<BR><P>')
+=> ''
+=== strip_tags('<', '<abbr>')
+=> ''
+=== strip_tags('<', '<root>')
+=> ''
+=== strip_tags('<', '<!doctype>')
+=> ''
+=== strip_tags('<', 'a')
+=> ''
+=== strip_tags('<', "<a\x00><b>")
+=> ''
+=== strip_tags('<', '<scr>')
+=> ''
+=== strip_tags('<', '<script>')
+=> ''
+=== strip_tags('<', '<html><nnn>')
+=> ''
+=== strip_tags('<', ['a', 'BR'])
+=> ''
+=== strip_tags('<', [])
+=> ''
+=== strip_tags('>', null)
+=> '>'
+=== strip_tags('>', '')
+=> '>'
+=== strip_tags('>', '<a>')
+=> '>'
+=== strip_tags('>', '<b>')
+=> '>'
+=== strip_tags('>', '<a><b>')
+=> '>'
+=== strip_tags('>', '<p><a><?php<html>')
+=> '>'
+=== strip_tags('>', '<br>')
+=> '>'
+=== strip_tags('>', '<BR><P>')
+=> '>'
+=== strip_tags('>', '<abbr>')
+=> '>'
+=== strip_tags('>', '<root>')
+=> '>'
+=== strip_tags('>', '<!doctype>')
+=> '>'
+=== strip_tags('>', 'a')
+=> '>'
+=== strip_tags('>', "<a\x00><b>")
+=> '>'
+=== strip_tags('>', '<scr>')
+=> '>'
+=== strip_tags('>', '<script>')
+=> '>'
+=== strip_tags('>', '<html><nnn>')
+=> '>'
+=== strip_tags('>', ['a', 'BR'])
+=> '>'
+=== strip_tags('>', [])
+=> '>'
+=== strip_tags('<a', null)
+=> ''
+=== strip_tags('<a', '')
+=> ''
+=== strip_tags('<a', '<a>')
+=> ''
+=== strip_tags('<a', '<b>')
+=> ''
+=== strip_tags('<a', '<a><b>')
+=> ''
+=== strip_tags('<a', '<p><a><?php<html>')
+=> ''
+=== strip_tags('<a', '<br>')
+=> ''
+=== strip_tags('<a', '<BR><P>')
+=> ''
+=== strip_tags('<a', '<abbr>')
+=> ''
+=== strip_tags('<a', '<root>')
+=> ''
+=== strip_tags('<a', '<!doctype>')
+=> ''
+=== strip_tags('<a', 'a')
+=> ''
+=== strip_tags('<a', "<a\x00><b>")
+=> ''
+=== strip_tags('<a', '<scr>')
+=> ''
+=== strip_tags('<a', '<script>')
+=> ''
+=== strip_tags('<a', '<html><nnn>')
+=> ''
+=== strip_tags('<a', ['a', 'BR'])
+=> ''
+=== strip_tags('<a', [])
+=> ''
+=== strip_tags('<!--', null)
+=> ''
+=== strip_tags('<!--', '')
+=> ''
+=== strip_tags('<!--', '<a>')
+=> ''
+=== strip_tags('<!--', '<b>')
+=> ''
+=== strip_tags('<!--', '<a><b>')
+=> ''
+=== strip_tags('<!--', '<p><a><?php<html>')
+=> ''
+=== strip_tags('<!--', '<br>')
+=> ''
+=== strip_tags('<!--', '<BR><P>')
+=> ''
+=== strip_tags('<!--', '<abbr>')
+=> ''
+=== strip_tags('<!--', '<root>')
+=> ''
+=== strip_tags('<!--', '<!doctype>')
+=> ''
+=== strip_tags('<!--', 'a')
+=> ''
+=== strip_tags('<!--', "<a\x00><b>")
+=> ''
+=== strip_tags('<!--', '<scr>')
+=> ''
+=== strip_tags('<!--', '<script>')
+=> ''
+=== strip_tags('<!--', '<html><nnn>')
+=> ''
+=== strip_tags('<!--', ['a', 'BR'])
+=> ''
+=== strip_tags('<!--', [])
+=> ''
+=== strip_tags('<?', null)
+=> ''
+=== strip_tags('<?', '')
+=> ''
+=== strip_tags('<?', '<a>')
+=> ''
+=== strip_tags('<?', '<b>')
+=> ''
+=== strip_tags('<?', '<a><b>')
+=> ''
+=== strip_tags('<?', '<p><a><?php<html>')
+=> ''
+=== strip_tags('<?', '<br>')
+=> ''
+=== strip_tags('<?', '<BR><P>')
+=> ''
+=== strip_tags('<?', '<abbr>')
+=> ''
+=== strip_tags('<?', '<root>')
+=> ''
+=== strip_tags('<?', '<!doctype>')
+=> ''
+=== strip_tags('<?', 'a')
+=> ''
+=== strip_tags('<?', "<a\x00><b>")
+=> ''
+=== strip_tags('<?', '<scr>')
+=> ''
+=== strip_tags('<?', '<script>')
+=> ''
+=== strip_tags('<?', '<html><nnn>')
+=> ''
+=== strip_tags('<?', ['a', 'BR'])
+=> ''
+=== strip_tags('<?', [])
+=> ''
+=== strip_tags('\'quoted\' "text" outside', null)
+=> '\'quoted\' "text" outside'
+=== strip_tags('\'quoted\' "text" outside', '')
+=> '\'quoted\' "text" outside'
+=== strip_tags('\'quoted\' "text" outside', '<a>')
+=> '\'quoted\' "text" outside'
+=== strip_tags('\'quoted\' "text" outside', '<b>')
+=> '\'quoted\' "text" outside'
+=== strip_tags('\'quoted\' "text" outside', '<a><b>')
+=> '\'quoted\' "text" outside'
+=== strip_tags('\'quoted\' "text" outside', '<p><a><?php<html>')
+=> '\'quoted\' "text" outside'
+=== strip_tags('\'quoted\' "text" outside', '<br>')
+=> '\'quoted\' "text" outside'
+=== strip_tags('\'quoted\' "text" outside', '<BR><P>')
+=> '\'quoted\' "text" outside'
+=== strip_tags('\'quoted\' "text" outside', '<abbr>')
+=> '\'quoted\' "text" outside'
+=== strip_tags('\'quoted\' "text" outside', '<root>')
+=> '\'quoted\' "text" outside'
+=== strip_tags('\'quoted\' "text" outside', '<!doctype>')
+=> '\'quoted\' "text" outside'
+=== strip_tags('\'quoted\' "text" outside', 'a')
+=> '\'quoted\' "text" outside'
+=== strip_tags('\'quoted\' "text" outside', "<a\x00><b>")
+=> '\'quoted\' "text" outside'
+=== strip_tags('\'quoted\' "text" outside', '<scr>')
+=> '\'quoted\' "text" outside'
+=== strip_tags('\'quoted\' "text" outside', '<script>')
+=> '\'quoted\' "text" outside'
+=== strip_tags('\'quoted\' "text" outside', '<html><nnn>')
+=> '\'quoted\' "text" outside'
+=== strip_tags('\'quoted\' "text" outside', ['a', 'BR'])
+=> '\'quoted\' "text" outside'
+=== strip_tags('\'quoted\' "text" outside', [])
+=> '\'quoted\' "text" outside'
+=== strip_tags('<p class="a" id=\'b\'>t</p>', null)
+=> 't'
+=== strip_tags('<p class="a" id=\'b\'>t</p>', '')
+=> 't'
+=== strip_tags('<p class="a" id=\'b\'>t</p>', '<a>')
+=> 't'
+=== strip_tags('<p class="a" id=\'b\'>t</p>', '<b>')
+=> 't'
+=== strip_tags('<p class="a" id=\'b\'>t</p>', '<a><b>')
+=> 't'
+=== strip_tags('<p class="a" id=\'b\'>t</p>', '<p><a><?php<html>')
+=> '<p class="a" id=\'b\'>t</p>'
+=== strip_tags('<p class="a" id=\'b\'>t</p>', '<br>')
+=> 't'
+=== strip_tags('<p class="a" id=\'b\'>t</p>', '<BR><P>')
+=> '<p class="a" id=\'b\'>t</p>'
+=== strip_tags('<p class="a" id=\'b\'>t</p>', '<abbr>')
+=> 't'
+=== strip_tags('<p class="a" id=\'b\'>t</p>', '<root>')
+=> 't'
+=== strip_tags('<p class="a" id=\'b\'>t</p>', '<!doctype>')
+=> 't'
+=== strip_tags('<p class="a" id=\'b\'>t</p>', 'a')
+=> 't'
+=== strip_tags('<p class="a" id=\'b\'>t</p>', "<a\x00><b>")
+=> 't'
+=== strip_tags('<p class="a" id=\'b\'>t</p>', '<scr>')
+=> 't'
+=== strip_tags('<p class="a" id=\'b\'>t</p>', '<script>')
+=> 't'
+=== strip_tags('<p class="a" id=\'b\'>t</p>', '<html><nnn>')
+=> 't'
+=== strip_tags('<p class="a" id=\'b\'>t</p>', ['a', 'BR'])
+=> 't'
+=== strip_tags('<p class="a" id=\'b\'>t</p>', [])
+=> 't'
+=== strip_tags('<P>Upper</P><Br/>', null)
+=> 'Upper'
+=== strip_tags('<P>Upper</P><Br/>', '')
+=> 'Upper'
+=== strip_tags('<P>Upper</P><Br/>', '<a>')
+=> 'Upper'
+=== strip_tags('<P>Upper</P><Br/>', '<b>')
+=> 'Upper'
+=== strip_tags('<P>Upper</P><Br/>', '<a><b>')
+=> 'Upper'
+=== strip_tags('<P>Upper</P><Br/>', '<p><a><?php<html>')
+=> '<P>Upper</P>'
+=== strip_tags('<P>Upper</P><Br/>', '<br>')
+=> 'Upper<Br/>'
+=== strip_tags('<P>Upper</P><Br/>', '<BR><P>')
+=> '<P>Upper</P><Br/>'
+=== strip_tags('<P>Upper</P><Br/>', '<abbr>')
+=> 'Upper'
+=== strip_tags('<P>Upper</P><Br/>', '<root>')
+=> 'Upper'
+=== strip_tags('<P>Upper</P><Br/>', '<!doctype>')
+=> 'Upper'
+=== strip_tags('<P>Upper</P><Br/>', 'a')
+=> 'Upper'
+=== strip_tags('<P>Upper</P><Br/>', "<a\x00><b>")
+=> 'Upper'
+=== strip_tags('<P>Upper</P><Br/>', '<scr>')
+=> 'Upper'
+=== strip_tags('<P>Upper</P><Br/>', '<script>')
+=> 'Upper'
+=== strip_tags('<P>Upper</P><Br/>', '<html><nnn>')
+=> 'Upper'
+=== strip_tags('<P>Upper</P><Br/>', ['a', 'BR'])
+=> 'Upper<Br/>'
+=== strip_tags('<P>Upper</P><Br/>', [])
+=> 'Upper'
+=== strip_tags('<abbr>a</abbr><b>b</b>', null)
+=> 'ab'
+=== strip_tags('<abbr>a</abbr><b>b</b>', '')
+=> 'ab'
+=== strip_tags('<abbr>a</abbr><b>b</b>', '<a>')
+=> 'ab'
+=== strip_tags('<abbr>a</abbr><b>b</b>', '<b>')
+=> 'a<b>b</b>'
+=== strip_tags('<abbr>a</abbr><b>b</b>', '<a><b>')
+=> 'a<b>b</b>'
+=== strip_tags('<abbr>a</abbr><b>b</b>', '<p><a><?php<html>')
+=> 'ab'
+=== strip_tags('<abbr>a</abbr><b>b</b>', '<br>')
+=> 'ab'
+=== strip_tags('<abbr>a</abbr><b>b</b>', '<BR><P>')
+=> 'ab'
+=== strip_tags('<abbr>a</abbr><b>b</b>', '<abbr>')
+=> '<abbr>a</abbr>b'
+=== strip_tags('<abbr>a</abbr><b>b</b>', '<root>')
+=> 'ab'
+=== strip_tags('<abbr>a</abbr><b>b</b>', '<!doctype>')
+=> 'ab'
+=== strip_tags('<abbr>a</abbr><b>b</b>', 'a')
+=> 'ab'
+=== strip_tags('<abbr>a</abbr><b>b</b>', "<a\x00><b>")
+=> 'ab'
+=== strip_tags('<abbr>a</abbr><b>b</b>', '<scr>')
+=> 'ab'
+=== strip_tags('<abbr>a</abbr><b>b</b>', '<script>')
+=> 'ab'
+=== strip_tags('<abbr>a</abbr><b>b</b>', '<html><nnn>')
+=> 'ab'
+=== strip_tags('<abbr>a</abbr><b>b</b>', ['a', 'BR'])
+=> 'ab'
+=== strip_tags('<abbr>a</abbr><b>b</b>', [])
+=> 'ab'
+=== strip_tags("<a\x0a href=x>multi\x0aline</a>", null)
+=> 'multi
+line'
+=== strip_tags("<a\x0a href=x>multi\x0aline</a>", '')
+=> 'multi
+line'
+=== strip_tags("<a\x0a href=x>multi\x0aline</a>", '<a>')
+=> '<a
+ href=x>multi
+line</a>'
+=== strip_tags("<a\x0a href=x>multi\x0aline</a>", '<b>')
+=> 'multi
+line'
+=== strip_tags("<a\x0a href=x>multi\x0aline</a>", '<a><b>')
+=> '<a
+ href=x>multi
+line</a>'
+=== strip_tags("<a\x0a href=x>multi\x0aline</a>", '<p><a><?php<html>')
+=> '<a
+ href=x>multi
+line</a>'
+=== strip_tags("<a\x0a href=x>multi\x0aline</a>", '<br>')
+=> 'multi
+line'
+=== strip_tags("<a\x0a href=x>multi\x0aline</a>", '<BR><P>')
+=> 'multi
+line'
+=== strip_tags("<a\x0a href=x>multi\x0aline</a>", '<abbr>')
+=> 'multi
+line'
+=== strip_tags("<a\x0a href=x>multi\x0aline</a>", '<root>')
+=> 'multi
+line'
+=== strip_tags("<a\x0a href=x>multi\x0aline</a>", '<!doctype>')
+=> 'multi
+line'
+=== strip_tags("<a\x0a href=x>multi\x0aline</a>", 'a')
+=> 'multi
+line'
+=== strip_tags("<a\x0a href=x>multi\x0aline</a>", "<a\x00><b>")
+=> 'multi
+line'
+=== strip_tags("<a\x0a href=x>multi\x0aline</a>", '<scr>')
+=> 'multi
+line'
+=== strip_tags("<a\x0a href=x>multi\x0aline</a>", '<script>')
+=> 'multi
+line'
+=== strip_tags("<a\x0a href=x>multi\x0aline</a>", '<html><nnn>')
+=> 'multi
+line'
+=== strip_tags("<a\x0a href=x>multi\x0aline</a>", ['a', 'BR'])
+=> '<a
+ href=x>multi
+line</a>'
+=== strip_tags("<a\x0a href=x>multi\x0aline</a>", [])
+=> 'multi
+line'
+=== strip_tags("<a\x09href=x>tab</a>", null)
+=> 'tab'
+=== strip_tags("<a\x09href=x>tab</a>", '')
+=> 'tab'
+=== strip_tags("<a\x09href=x>tab</a>", '<a>')
+=> '<a	href=x>tab</a>'
+=== strip_tags("<a\x09href=x>tab</a>", '<b>')
+=> 'tab'
+=== strip_tags("<a\x09href=x>tab</a>", '<a><b>')
+=> '<a	href=x>tab</a>'
+=== strip_tags("<a\x09href=x>tab</a>", '<p><a><?php<html>')
+=> '<a	href=x>tab</a>'
+=== strip_tags("<a\x09href=x>tab</a>", '<br>')
+=> 'tab'
+=== strip_tags("<a\x09href=x>tab</a>", '<BR><P>')
+=> 'tab'
+=== strip_tags("<a\x09href=x>tab</a>", '<abbr>')
+=> 'tab'
+=== strip_tags("<a\x09href=x>tab</a>", '<root>')
+=> 'tab'
+=== strip_tags("<a\x09href=x>tab</a>", '<!doctype>')
+=> 'tab'
+=== strip_tags("<a\x09href=x>tab</a>", 'a')
+=> 'tab'
+=== strip_tags("<a\x09href=x>tab</a>", "<a\x00><b>")
+=> 'tab'
+=== strip_tags("<a\x09href=x>tab</a>", '<scr>')
+=> 'tab'
+=== strip_tags("<a\x09href=x>tab</a>", '<script>')
+=> 'tab'
+=== strip_tags("<a\x09href=x>tab</a>", '<html><nnn>')
+=> 'tab'
+=== strip_tags("<a\x09href=x>tab</a>", ['a', 'BR'])
+=> '<a	href=x>tab</a>'
+=== strip_tags("<a\x09href=x>tab</a>", [])
+=> 'tab'
+=== strip_tags('</ a>x</a >', null)
+=> 'x'
+=== strip_tags('</ a>x</a >', '')
+=> 'x'
+=== strip_tags('</ a>x</a >', '<a>')
+=> 'x</a >'
+=== strip_tags('</ a>x</a >', '<b>')
+=> 'x'
+=== strip_tags('</ a>x</a >', '<a><b>')
+=> 'x</a >'
+=== strip_tags('</ a>x</a >', '<p><a><?php<html>')
+=> 'x</a >'
+=== strip_tags('</ a>x</a >', '<br>')
+=> 'x'
+=== strip_tags('</ a>x</a >', '<BR><P>')
+=> 'x'
+=== strip_tags('</ a>x</a >', '<abbr>')
+=> 'x'
+=== strip_tags('</ a>x</a >', '<root>')
+=> 'x'
+=== strip_tags('</ a>x</a >', '<!doctype>')
+=> 'x'
+=== strip_tags('</ a>x</a >', 'a')
+=> 'x'
+=== strip_tags('</ a>x</a >', "<a\x00><b>")
+=> 'x'
+=== strip_tags('</ a>x</a >', '<scr>')
+=> 'x'
+=== strip_tags('</ a>x</a >', '<script>')
+=> 'x'
+=== strip_tags('</ a>x</a >', '<html><nnn>')
+=> 'x'
+=== strip_tags('</ a>x</a >', ['a', 'BR'])
+=> 'x</a >'
+=== strip_tags('</ a>x</a >', [])
+=> 'x'
+=== strip_tags('<scr<script>ipt>alert(1)</script>', null)
+=> 'alert(1)'
+=== strip_tags('<scr<script>ipt>alert(1)</script>', '')
+=> 'alert(1)'
+=== strip_tags('<scr<script>ipt>alert(1)</script>', '<a>')
+=> 'alert(1)'
+=== strip_tags('<scr<script>ipt>alert(1)</script>', '<b>')
+=> 'alert(1)'
+=== strip_tags('<scr<script>ipt>alert(1)</script>', '<a><b>')
+=> 'alert(1)'
+=== strip_tags('<scr<script>ipt>alert(1)</script>', '<p><a><?php<html>')
+=> 'alert(1)'
+=== strip_tags('<scr<script>ipt>alert(1)</script>', '<br>')
+=> 'alert(1)'
+=== strip_tags('<scr<script>ipt>alert(1)</script>', '<BR><P>')
+=> 'alert(1)'
+=== strip_tags('<scr<script>ipt>alert(1)</script>', '<abbr>')
+=> 'alert(1)'
+=== strip_tags('<scr<script>ipt>alert(1)</script>', '<root>')
+=> 'alert(1)'
+=== strip_tags('<scr<script>ipt>alert(1)</script>', '<!doctype>')
+=> 'alert(1)'
+=== strip_tags('<scr<script>ipt>alert(1)</script>', 'a')
+=> 'alert(1)'
+=== strip_tags('<scr<script>ipt>alert(1)</script>', "<a\x00><b>")
+=> 'alert(1)'
+=== strip_tags('<scr<script>ipt>alert(1)</script>', '<scr>')
+=> 'alert(1)'
+=== strip_tags('<scr<script>ipt>alert(1)</script>', '<script>')
+=> 'alert(1)</script>'
+=== strip_tags('<scr<script>ipt>alert(1)</script>', '<html><nnn>')
+=> 'alert(1)'
+=== strip_tags('<scr<script>ipt>alert(1)</script>', ['a', 'BR'])
+=> 'alert(1)'
+=== strip_tags('<scr<script>ipt>alert(1)</script>', [])
+=> 'alert(1)'
+=== strip_tags("\xe4<b>\xf6</b>\xfc", null)
+=> 'הצü'
+=== strip_tags("\xe4<b>\xf6</b>\xfc", '')
+=> 'הצü'
+=== strip_tags("\xe4<b>\xf6</b>\xfc", '<a>')
+=> 'הצü'
+=== strip_tags("\xe4<b>\xf6</b>\xfc", '<b>')
+=> 'ה<b>צ</b>ü'
+=== strip_tags("\xe4<b>\xf6</b>\xfc", '<a><b>')
+=> 'ה<b>צ</b>ü'
+=== strip_tags("\xe4<b>\xf6</b>\xfc", '<p><a><?php<html>')
+=> 'הצü'
+=== strip_tags("\xe4<b>\xf6</b>\xfc", '<br>')
+=> 'הצü'
+=== strip_tags("\xe4<b>\xf6</b>\xfc", '<BR><P>')
+=> 'הצü'
+=== strip_tags("\xe4<b>\xf6</b>\xfc", '<abbr>')
+=> 'הצü'
+=== strip_tags("\xe4<b>\xf6</b>\xfc", '<root>')
+=> 'הצü'
+=== strip_tags("\xe4<b>\xf6</b>\xfc", '<!doctype>')
+=> 'הצü'
+=== strip_tags("\xe4<b>\xf6</b>\xfc", 'a')
+=> 'הצü'
+=== strip_tags("\xe4<b>\xf6</b>\xfc", "<a\x00><b>")
+=> 'הצü'
+=== strip_tags("\xe4<b>\xf6</b>\xfc", '<scr>')
+=> 'הצü'
+=== strip_tags("\xe4<b>\xf6</b>\xfc", '<script>')
+=> 'הצü'
+=== strip_tags("\xe4<b>\xf6</b>\xfc", '<html><nnn>')
+=> 'הצü'
+=== strip_tags("\xe4<b>\xf6</b>\xfc", ['a', 'BR'])
+=> 'הצü'
+=== strip_tags("\xe4<b>\xf6</b>\xfc", [])
+=> 'הצü'
+=== strip_tags(')?<-\\tx-)b<-<">(C?=<m"', null)
+=> ')?'
+=== strip_tags(')?<-\\tx-)b<-<">(C?=<m"', '<a><b>')
+=> ')?'
+=== strip_tags(')?<-\\tx-)b<-<">(C?=<m"', '<x>')
+=> ')?'
+=== strip_tags('\\C-\'c-C ', null)
+=> '\\C-\'c-C '
+=== strip_tags('\\C-\'c-C ', '<a><b>')
+=> '\\C-\'c-C '
+=== strip_tags('\\C-\'c-C ', '<x>')
+=> '\\C-\'c-C '
+=== strip_tags('PT', null)
+=> 'PT'
+=== strip_tags('PT', '<a><b>')
+=> 'PT'
+=== strip_tags('PT', '<x>')
+=> 'PT'
+=== strip_tags('T?', null)
+=> 'T?'
+=== strip_tags('T?', '<a><b>')
+=> 'T?'
+=== strip_tags('T?', '<x>')
+=> 'T?'
+=== strip_tags('Y\\-d\' x-O<TO<!/-tOD-m!', null)
+=> 'Y\\-d\' x-O'
+=== strip_tags('Y\\-d\' x-O<TO<!/-tOD-m!', '<a><b>')
+=> 'Y\\-d\' x-O'
+=== strip_tags('Y\\-d\' x-O<TO<!/-tOD-m!', '<x>')
+=> 'Y\\-d\' x-O'
+=== strip_tags('D=pT<a-</p', null)
+=> 'D=pT'
+=== strip_tags('D=pT<a-</p', '<a><b>')
+=> 'D=pT'
+=== strip_tags('D=pT<a-</p', '<x>')
+=> 'D=pT'
+=== strip_tags('xxlMmx\\E!T\\l(t"Mp', null)
+=> 'xxlMmx\\E!T\\l(t"Mp'
+=== strip_tags('xxlMmx\\E!T\\l(t"Mp', '<a><b>')
+=> 'xxlMmx\\E!T\\l(t"Mp'
+=== strip_tags('xxlMmx\\E!T\\l(t"Mp', '<x>')
+=> 'xxlMmx\\E!T\\l(t"Mp'
+=== strip_tags('Pt', null)
+=> 'Pt'
+=== strip_tags('Pt', '<a><b>')
+=> 'Pt'
+=== strip_tags('Pt', '<x>')
+=> 'Pt'
+=== strip_tags("= \x0a<Y?T<>p!(Pp-ye", null)
+=> '= 
+'
+=== strip_tags("= \x0a<Y?T<>p!(Pp-ye", '<a><b>')
+=> '= 
+'
+=== strip_tags("= \x0a<Y?T<>p!(Pp-ye", '<x>')
+=> '= 
+'
+=== strip_tags('!odY"bt<M"', null)
+=> '!odY"bt'
+=== strip_tags('!odY"bt<M"', '<a><b>')
+=> '!odY"bt'
+=== strip_tags('!odY"bt<M"', '<x>')
+=> '!odY"bt'
+=== strip_tags("Yee \x00M!\\!O", null)
+=> 'Yee M!\\!O'
+=== strip_tags("Yee \x00M!\\!O", '<a><b>')
+=> 'Yee M!\\!O'
+=== strip_tags("Yee \x00M!\\!O", '<x>')
+=> 'Yee M!\\!O'
+=== strip_tags('l \\Pa>dbOo-y)', null)
+=> 'l \\Pa>dbOo-y)'
+=== strip_tags('l \\Pa>dbOo-y)', '<a><b>')
+=> 'l \\Pa>dbOo-y)'
+=== strip_tags('l \\Pa>dbOo-y)', '<x>')
+=> 'l \\Pa>dbOo-y)'
+=== strip_tags("P\x0a\\<-Ola t ", null)
+=> 'P
+\\'
+=== strip_tags("P\x0a\\<-Ola t ", '<a><b>')
+=> 'P
+\\'
+=== strip_tags("P\x0a\\<-Ola t ", '<x>')
+=> 'P
+\\'
+=== strip_tags('a-- b"d!b=PL e- tCo>', null)
+=> 'a-- b"d!b=PL e- tCo>'
+=== strip_tags('a-- b"d!b=PL e- tCo>', '<a><b>')
+=> 'a-- b"d!b=PL e- tCo>'
+=== strip_tags('a-- b"d!b=PL e- tCo>', '<x>')
+=> 'a-- b"d!b=PL e- tCo>'
+=== strip_tags('L!b)Y"<C\\!<', null)
+=> 'L!b)Y"'
+=== strip_tags('L!b)Y"<C\\!<', '<a><b>')
+=> 'L!b)Y"'
+=== strip_tags('L!b)Y"<C\\!<', '<x>')
+=> 'L!b)Y"'
+=== strip_tags("EY\x0a->>O 'yyy-\x0a!o<=<a'", null)
+=> 'EY
+->>O \'yyy-
+!o'
+=== strip_tags("EY\x0a->>O 'yyy-\x0a!o<=<a'", '<a><b>')
+=> 'EY
+->>O \'yyy-
+!o'
+=== strip_tags("EY\x0a->>O 'yyy-\x0a!o<=<a'", '<x>')
+=> 'EY
+->>O \'yyy-
+!o'
+=== strip_tags("\x00Dox->\\<", null)
+=> 'Dox->\\'
+=== strip_tags("\x00Dox->\\<", '<a><b>')
+=> 'Dox->\\'
+=== strip_tags("\x00Dox->\\<", '<x>')
+=> 'Dox->\\'
+=== strip_tags('-Mey/!>pm', null)
+=> '-Mey/!>pm'
+=== strip_tags('-Mey/!>pm', '<a><b>')
+=> '-Mey/!>pm'
+=== strip_tags('-Mey/!>pm', '<x>')
+=> '-Mey/!>pm'
+=== strip_tags("d!?!dE<\x00\\!CO(", null)
+=> 'd!?!dE'
+=== strip_tags("d!?!dE<\x00\\!CO(", '<a><b>')
+=> 'd!?!dE'
+=== strip_tags("d!?!dE<\x00\\!CO(", '<x>')
+=> 'd!?!dE'
+=== strip_tags("\x0a'm=b)=DE>!t\"ba", null)
+=> '
+\'m=b)=DE>!t"ba'
+=== strip_tags("\x0a'm=b)=DE>!t\"ba", '<a><b>')
+=> '
+\'m=b)=DE>!t"ba'
+=== strip_tags("\x0a'm=b)=DE>!t\"ba", '<x>')
+=> '
+\'m=b)=DE>!t"ba'
+=== strip_tags('<De\\ TYYp', null)
+=> ''
+=== strip_tags('<De\\ TYYp', '<a><b>')
+=> ''
+=== strip_tags('<De\\ TYYp', '<x>')
+=> ''
+=== strip_tags("-\"e\"E'tCy-E\x0am\"!MyaTeC-m", null)
+=> '-"e"E\'tCy-E
+m"!MyaTeC-m'
+=== strip_tags("-\"e\"E'tCy-E\x0am\"!MyaTeC-m", '<a><b>')
+=> '-"e"E\'tCy-E
+m"!MyaTeC-m'
+=== strip_tags("-\"e\"E'tCy-E\x0am\"!MyaTeC-m", '<x>')
+=> '-"e"E\'tCy-E
+m"!MyaTeC-m'
+=== strip_tags('/o>LP\\"DpO-"L', null)
+=> '/o>LP\\"DpO-"L'
+=== strip_tags('/o>LP\\"DpO-"L', '<a><b>')
+=> '/o>LP\\"DpO-"L'
+=== strip_tags('/o>LP\\"DpO-"L', '<x>')
+=> '/o>LP\\"DpO-"L'
+=== strip_tags(">)D\"bLCO)c/ab'\x0adP'e(!", null)
+=> '>)D"bLCO)c/ab\'
+dP\'e(!'
+=== strip_tags(">)D\"bLCO)c/ab'\x0adP'e(!", '<a><b>')
+=> '>)D"bLCO)c/ab\'
+dP\'e(!'
+=== strip_tags(">)D\"bLCO)c/ab'\x0adP'e(!", '<x>')
+=> '>)D"bLCO)c/ab\'
+dP\'e(!'
+=== strip_tags('xm?cP <)l-', null)
+=> 'xm?cP '
+=== strip_tags('xm?cP <)l-', '<a><b>')
+=> 'xm?cP '
+=== strip_tags('xm?cP <)l-', '<x>')
+=> 'xm?cP '
+=== strip_tags('L', null)
+=> 'L'
+=== strip_tags('L', '<a><b>')
+=> 'L'
+=== strip_tags('L', '<x>')
+=> 'L'
+=== strip_tags("?<?\\ -ec!-a-\x0am", null)
+=> '?'
+=== strip_tags("?<?\\ -ec!-a-\x0am", '<a><b>')
+=> '?'
+=== strip_tags("?<?\\ -ec!-a-\x0am", '<x>')
+=> '?'
+=== strip_tags('>C<oY<x\\=y" ?\'yPx>O?', null)
+=> '>C'
+=== strip_tags('>C<oY<x\\=y" ?\'yPx>O?', '<a><b>')
+=> '>C'
+=== strip_tags('>C<oY<x\\=y" ?\'yPx>O?', '<x>')
+=> '>C'
+=== strip_tags("<ML''EDMPlTbT \x00(><>-!\\<", null)
+=> '-!\\'
+=== strip_tags("<ML''EDMPlTbT \x00(><>-!\\<", '<a><b>')
+=> '-!\\'
+=== strip_tags("<ML''EDMPlTbT \x00(><>-!\\<", '<x>')
+=> '-!\\'
+=== strip_tags('=aY/" MpdmmC)b?<)<-', null)
+=> '=aY/" MpdmmC)b?'
+=== strip_tags('=aY/" MpdmmC)b?<)<-', '<a><b>')
+=> '=aY/" MpdmmC)b?'
+=== strip_tags('=aY/" MpdmmC)b?<)<-', '<x>')
+=> '=aY/" MpdmmC)b?'
+=== strip_tags('pa-</', null)
+=> 'pa-'
+=== strip_tags('pa-</', '<a><b>')
+=> 'pa-'
+=== strip_tags('pa-</', '<x>')
+=> 'pa-'
+=== strip_tags('"', null)
+=> '"'
+=== strip_tags('"', '<a><b>')
+=> '"'
+=== strip_tags('"', '<x>')
+=> '"'
+=== strip_tags(")lMmTO?\\\x0a>-!", null)
+=> ')lMmTO?\\
+>-!'
+=== strip_tags(")lMmTO?\\\x0a>-!", '<a><b>')
+=> ')lMmTO?\\
+>-!'
+=== strip_tags(")lMmTO?\\\x0a>-!", '<x>')
+=> ')lMmTO?\\
+>-!'
+=== strip_tags('d->y<(caa', null)
+=> 'd->y'
+=== strip_tags('d->y<(caa', '<a><b>')
+=> 'd->y'
+=== strip_tags('d->y<(caa', '<x>')
+=> 'd->y'
+=== strip_tags("?aEa!C?\\p\x00O ", null)
+=> '?aEa!C?\\pO '
+=== strip_tags("?aEa!C?\\p\x00O ", '<a><b>')
+=> '?aEa!C?\\pO '
+=== strip_tags("?aEa!C?\\p\x00O ", '<x>')
+=> '?aEa!C?\\pO '
+=== strip_tags('p<>-', null)
+=> 'p-'
+=== strip_tags('p<>-', '<a><b>')
+=> 'p-'
+=== strip_tags('p<>-', '<x>')
+=> 'p-'
+=== strip_tags('\'\\x pm">pP<', null)
+=> '\'\\x pm">pP'
+=== strip_tags('\'\\x pm">pP<', '<a><b>')
+=> '\'\\x pm">pP'
+=== strip_tags('\'\\x pm">pP<', '<x>')
+=> '\'\\x pm">pP'
+=== strip_tags('MePTl --DP/p>- -P"xLC<', null)
+=> 'MePTl --DP/p>- -P"xLC'
+=== strip_tags('MePTl --DP/p>- -P"xLC<', '<a><b>')
+=> 'MePTl --DP/p>- -P"xLC'
+=== strip_tags('MePTl --DP/p>- -P"xLC<', '<x>')
+=> 'MePTl --DP/p>- -P"xLC'
+=== strip_tags("/<e/x>\x00<?opOa", null)
+=> '/'
+=== strip_tags("/<e/x>\x00<?opOa", '<a><b>')
+=> '/'
+=== strip_tags("/<e/x>\x00<?opOa", '<x>')
+=> '/'
+=== strip_tags("e' =\x00Oy!\x00\\d?eP)T\x0a\")O", null)
+=> 'e\' =Oy!\\d?eP)T
+")O'
+=== strip_tags("e' =\x00Oy!\x00\\d?eP)T\x0a\")O", '<a><b>')
+=> 'e\' =Oy!\\d?eP)T
+")O'
+=== strip_tags("e' =\x00Oy!\x00\\d?eP)T\x0a\")O", '<x>')
+=> 'e\' =Oy!\\d?eP)T
+")O'
+=== strip_tags('T', null)
+=> 'T'
+=== strip_tags('T', '<a><b>')
+=> 'T'
+=== strip_tags('T', '<x>')
+=> 'T'
+=== strip_tags("!\">/\x00<>\\\\\\P/>Tp<", null)
+=> '!">/\\\\\\P/>Tp'
+=== strip_tags("!\">/\x00<>\\\\\\P/>Tp<", '<a><b>')
+=> '!">/\\\\\\P/>Tp'
+=== strip_tags("!\">/\x00<>\\\\\\P/>Tp<", '<x>')
+=> '!">/\\\\\\P/>Tp'
+=== strip_tags('"cyCE=aCE<cb)-', null)
+=> '"cyCE=aCE'
+=== strip_tags('"cyCE=aCE<cb)-', '<a><b>')
+=> '"cyCE=aCE'
+=== strip_tags('"cyCE=aCE<cb)-', '<x>')
+=> '"cyCE=aCE'
+=== strip_tags("?<\x00Pet\"y'a-OT<< <\\\\", null)
+=> '?'
+=== strip_tags("?<\x00Pet\"y'a-OT<< <\\\\", '<a><b>')
+=> '?'
+=== strip_tags("?<\x00Pet\"y'a-OT<< <\\\\", '<x>')
+=> '?'
+=== strip_tags('!( <o y-Lmo"-LML', null)
+=> '!( '
+=== strip_tags('!( <o y-Lmo"-LML', '<a><b>')
+=> '!( '
+=== strip_tags('!( <o y-Lmo"-LML', '<x>')
+=> '!( '
+=== strip_tags('<\\- Y=!dc!', null)
+=> ''
+=== strip_tags('<\\- Y=!dc!', '<a><b>')
+=> ''
+=== strip_tags('<\\- Y=!dc!', '<x>')
+=> ''
+=== strip_tags("!cPYT\x0ad'e'()YeYy\"\"", null)
+=> '!cPYT
+d\'e\'()YeYy""'
+=== strip_tags("!cPYT\x0ad'e'()YeYy\"\"", '<a><b>')
+=> '!cPYT
+d\'e\'()YeYy""'
+=== strip_tags("!cPYT\x0ad'e'()YeYy\"\"", '<x>')
+=> '!cPYT
+d\'e\'()YeYy""'
+=== strip_tags("\x0aEp\"?e '!e?d\\t>m''\x0a'\x00", null)
+=> '
+Ep"?e \'!e?d\\t>m\'\'
+\''
+=== strip_tags("\x0aEp\"?e '!e?d\\t>m''\x0a'\x00", '<a><b>')
+=> '
+Ep"?e \'!e?d\\t>m\'\'
+\''
+=== strip_tags("\x0aEp\"?e '!e?d\\t>m''\x0a'\x00", '<x>')
+=> '
+Ep"?e \'!e?d\\t>m\'\'
+\''
+=== strip_tags("\\yT\\C'-a<O-\x0a)", null)
+=> '\\yT\\C\'-a'
+=== strip_tags("\\yT\\C'-a<O-\x0a)", '<a><b>')
+=> '\\yT\\C\'-a'
+=== strip_tags("\\yT\\C'-a<O-\x0a)", '<x>')
+=> '\\yT\\C\'-a'
+=== strip_tags("<\x0aedc <a\x0a ", null)
+=> '<
+edc '
+=== strip_tags("<\x0aedc <a\x0a ", '<a><b>')
+=> '<
+edc '
+=== strip_tags("<\x0aedc <a\x0a ", '<x>')
+=> '<
+edc '
+=== strip_tags('\'m?(l<\\O<T', null)
+=> '\'m?(l'
+=== strip_tags('\'m?(l<\\O<T', '<a><b>')
+=> '\'m?(l'
+=== strip_tags('\'m?(l<\\O<T', '<x>')
+=> '\'m?(l'
+=== strip_tags(' y""?"// O', null)
+=> ' y""?"// O'
+=== strip_tags(' y""?"// O', '<a><b>')
+=> ' y""?"// O'
+=== strip_tags(' y""?"// O', '<x>')
+=> ' y""?"// O'
+=== strip_tags("l?TLP'\x0a?? Llm", null)
+=> 'l?TLP\'
+?? Llm'
+=== strip_tags("l?TLP'\x0a?? Llm", '<a><b>')
+=> 'l?TLP\'
+?? Llm'
+=== strip_tags("l?TLP'\x0a?? Llm", '<x>')
+=> 'l?TLP\'
+?? Llm'
+=== strip_tags("lC\"\"/y>\x00Ex=d\">/ b\x00LE)M", null)
+=> 'lC""/y>Ex=d">/ bLE)M'
+=== strip_tags("lC\"\"/y>\x00Ex=d\">/ b\x00LE)M", '<a><b>')
+=> 'lC""/y>Ex=d">/ bLE)M'
+=== strip_tags("lC\"\"/y>\x00Ex=d\">/ b\x00LE)M", '<x>')
+=> 'lC""/y>Ex=d">/ bLE)M'
+=== strip_tags('Ypo<P<(Cxb\\? <M', null)
+=> 'Ypo'
+=== strip_tags('Ypo<P<(Cxb\\? <M', '<a><b>')
+=> 'Ypo'
+=== strip_tags('Ypo<P<(Cxb\\? <M', '<x>')
+=> 'Ypo'
+=== strip_tags('\\mO>mt>', null)
+=> '\\mO>mt>'
+=== strip_tags('\\mO>mt>', '<a><b>')
+=> '\\mO>mt>'
+=== strip_tags('\\mO>mt>', '<x>')
+=> '\\mO>mt>'
+=== strip_tags('Y!-y(>?O?Eey<(x-', null)
+=> 'Y!-y(>?O?Eey'
+=== strip_tags('Y!-y(>?O?Eey<(x-', '<a><b>')
+=> 'Y!-y(>?O?Eey'
+=== strip_tags('Y!-y(>?O?Eey<(x-', '<x>')
+=> 'Y!-y(>?O?Eey'
+=== strip_tags('laET-etDy!?>eyba>=/', null)
+=> 'laET-etDy!?>eyba>=/'
+=== strip_tags('laET-etDy!?>eyba>=/', '<a><b>')
+=> 'laET-etDy!?>eyba>=/'
+=== strip_tags('laET-etDy!?>eyba>=/', '<x>')
+=> 'laET-etDy!?>eyba>=/'
+=== strip_tags('T<l/(T-ecd\\/xY-\\=< D', null)
+=> 'T'
+=== strip_tags('T<l/(T-ecd\\/xY-\\=< D', '<a><b>')
+=> 'T'
+=== strip_tags('T<l/(T-ecd\\/xY-\\=< D', '<x>')
+=> 'T'
+=== strip_tags('<o>=dxpx\\byEa!\'E)pom', null)
+=> '=dxpx\\byEa!\'E)pom'
+=== strip_tags('<o>=dxpx\\byEa!\'E)pom', '<a><b>')
+=> '=dxpx\\byEa!\'E)pom'
+=== strip_tags('<o>=dxpx\\byEa!\'E)pom', '<x>')
+=> '=dxpx\\byEa!\'E)pom'
+=== strip_tags('', '<x>')
+=> ''
+=== strip_tags("(\x0a", null)
+=> '(
+'
+=== strip_tags("(\x0a", '<a><b>')
+=> '(
+'
+=== strip_tags("(\x0a", '<x>')
+=> '(
+'
+=== strip_tags(">\x0a=o-Mo)E<<?<-PP\x0a", null)
+=> '>
+=o-Mo)E'
+=== strip_tags(">\x0a=o-Mo)E<<?<-PP\x0a", '<a><b>')
+=> '>
+=o-Mo)E'
+=== strip_tags(">\x0a=o-Mo)E<<?<-PP\x0a", '<x>')
+=> '>
+=o-Mo)E'
+=== strip_tags('edC>', null)
+=> 'edC>'
+=== strip_tags('edC>', '<a><b>')
+=> 'edC>'
+=== strip_tags('edC>', '<x>')
+=> 'edC>'
+=== strip_tags('<', '<x>')
+=> ''
+=== strip_tags("eo>-\"\" ?oal>>d\\oy\\m\x0aD'", null)
+=> 'eo>-"" ?oal>>d\\oy\\m
+D\''
+=== strip_tags("eo>-\"\" ?oal>>d\\oy\\m\x0aD'", '<a><b>')
+=> 'eo>-"" ?oal>>d\\oy\\m
+D\''
+=== strip_tags("eo>-\"\" ?oal>>d\\oy\\m\x0aD'", '<x>')
+=> 'eo>-"" ?oal>>d\\oy\\m
+D\''
+=== strip_tags('>/(Ebl<<C(\\txl\\', null)
+=> '>/(Ebl'
+=== strip_tags('>/(Ebl<<C(\\txl\\', '<a><b>')
+=> '>/(Ebl'
+=== strip_tags('>/(Ebl<<C(\\txl\\', '<x>')
+=> '>/(Ebl'
+=== strip_tags('"/a"a', null)
+=> '"/a"a'
+=== strip_tags('"/a"a', '<a><b>')
+=> '"/a"a'
+=== strip_tags('"/a"a', '<x>')
+=> '"/a"a'
+=== strip_tags('T" --t', null)
+=> 'T" --t'
+=== strip_tags('T" --t', '<a><b>')
+=> 'T" --t'
+=== strip_tags('T" --t', '<x>')
+=> 'T" --t'
+=== strip_tags('CP?mMl?M"omd', null)
+=> 'CP?mMl?M"omd'
+=== strip_tags('CP?mMl?M"omd', '<a><b>')
+=> 'CP?mMl?M"omd'
+=== strip_tags('CP?mMl?M"omd', '<x>')
+=> 'CP?mMl?M"omd'
+=== strip_tags(")o<\x00M\")yE?cTMdlx/>=<", null)
+=> ')o'
+=== strip_tags(")o<\x00M\")yE?cTMdlx/>=<", '<a><b>')
+=> ')o'
+=== strip_tags(")o<\x00M\")yE?cTMdlx/>=<", '<x>')
+=> ')o'
+=== strip_tags('>"Pb?CDcc <ad/)c?My-<>!', null)
+=> '>"Pb?CDcc '
+=== strip_tags('>"Pb?CDcc <ad/)c?My-<>!', '<a><b>')
+=> '>"Pb?CDcc '
+=== strip_tags('>"Pb?CDcc <ad/)c?My-<>!', '<x>')
+=> '>"Pb?CDcc '
+=== strip_tags('M?', null)
+=> 'M?'
+=== strip_tags('M?', '<a><b>')
+=> 'M?'
+=== strip_tags('M?', '<x>')
+=> 'M?'
+=== strip_tags("mmm\"m?!P-\x00/mmlTao!M<d-", null)
+=> 'mmm"m?!P-/mmlTao!M'
+=== strip_tags("mmm\"m?!P-\x00/mmlTao!M<d-", '<a><b>')
+=> 'mmm"m?!P-/mmlTao!M'
+=== strip_tags("mmm\"m?!P-\x00/mmlTao!M<d-", '<x>')
+=> 'mmm"m?!P-/mmlTao!M'
+=== strip_tags('<T-YL/', null)
+=> ''
+=== strip_tags('<T-YL/', '<a><b>')
+=> ''
+=== strip_tags('<T-YL/', '<x>')
+=> ''
+=== strip_tags('C"C"\\P<->\\?Tp', null)
+=> 'C"C"\\P\\?Tp'
+=== strip_tags('C"C"\\P<->\\?Tp', '<a><b>')
+=> 'C"C"\\P\\?Tp'
+=== strip_tags('C"C"\\P<->\\?Tp', '<x>')
+=> 'C"C"\\P\\?Tp'
+=== strip_tags('<l(- T<mO\\\'L-t-)o', null)
+=> ''
+=== strip_tags('<l(- T<mO\\\'L-t-)o', '<a><b>')
+=> ''
+=== strip_tags('<l(- T<mO\\\'L-t-)o', '<x>')
+=> ''
+=== strip_tags("T=!pT=oP\">\x0aO/<\\ -Dm\"", null)
+=> 'T=!pT=oP">
+O/'
+=== strip_tags("T=!pT=oP\">\x0aO/<\\ -Dm\"", '<a><b>')
+=> 'T=!pT=oP">
+O/'
+=== strip_tags("T=!pT=oP\">\x0aO/<\\ -Dm\"", '<x>')
+=> 'T=!pT=oP">
+O/'
+=== strip_tags('/e', null)
+=> '/e'
+=== strip_tags('/e', '<a><b>')
+=> '/e'
+=== strip_tags('/e', '<x>')
+=> '/e'
+=== strip_tags("\x0al'->", null)
+=> '
+l\'->'
+=== strip_tags("\x0al'->", '<a><b>')
+=> '
+l\'->'
+=== strip_tags("\x0al'->", '<x>')
+=> '
+l\'->'
+=== strip_tags('>lex\'\\', null)
+=> '>lex\'\\'
+=== strip_tags('>lex\'\\', '<a><b>')
+=> '>lex\'\\'
+=== strip_tags('>lex\'\\', '<x>')
+=> '>lex\'\\'
+=== strip_tags('CO\\l"\'>L>\\O', null)
+=> 'CO\\l"\'>L>\\O'
+=== strip_tags('CO\\l"\'>L>\\O', '<a><b>')
+=> 'CO\\l"\'>L>\\O'
+=== strip_tags('CO\\l"\'>L>\\O', '<x>')
+=> 'CO\\l"\'>L>\\O'
+=== strip_tags('c-\'-MObe(', null)
+=> 'c-\'-MObe('
+=== strip_tags('c-\'-MObe(', '<a><b>')
+=> 'c-\'-MObe('
+=== strip_tags('c-\'-MObe(', '<x>')
+=> 'c-\'-MObe('
+=== strip_tags('eOat', null)
+=> 'eOat'
+=== strip_tags('eOat', '<a><b>')
+=> 'eOat'
+=== strip_tags('eOat', '<x>')
+=> 'eOat'
+=== strip_tags('>', '<x>')
+=> '>'
+=== strip_tags("= o<M'M>\x0a!b ", null)
+=> '= o'
+=== strip_tags("= o<M'M>\x0a!b ", '<a><b>')
+=> '= o'
+=== strip_tags("= o<M'M>\x0a!b ", '<x>')
+=> '= o'
+=== strip_tags('ee\\!cE ', null)
+=> 'ee\\!cE '
+=== strip_tags('ee\\!cE ', '<a><b>')
+=> 'ee\\!cE '
+=== strip_tags('ee\\!cE ', '<x>')
+=> 'ee\\!cE '
+=== strip_tags("T'\"MEy\"t\">p>-\x00Y<", null)
+=> 'T\'"MEy"t">p>-Y'
+=== strip_tags("T'\"MEy\"t\">p>-\x00Y<", '<a><b>')
+=> 'T\'"MEy"t">p>-Y'
+=== strip_tags("T'\"MEy\"t\">p>-\x00Y<", '<x>')
+=> 'T\'"MEy"t">p>-Y'
+=== strip_tags('o=>\')T-by\'!!? Dt<', null)
+=> 'o=>\')T-by\'!!? Dt'
+=== strip_tags('o=>\')T-by\'!!? Dt<', '<a><b>')
+=> 'o=>\')T-by\'!!? Dt'
+=== strip_tags('o=>\')T-by\'!!? Dt<', '<x>')
+=> 'o=>\')T-by\'!!? Dt'
+=== strip_tags("\x0a\x00", null)
+=> '
+'
+=== strip_tags("\x0a\x00", '<a><b>')
+=> '
+'
+=== strip_tags("\x0a\x00", '<x>')
+=> '
+'
+=== strip_tags(" \x0adE>y\\E 'o\\a? -Eb-T", null)
+=> ' 
+dE>y\\E \'o\\a? -Eb-T'
+=== strip_tags(" \x0adE>y\\E 'o\\a? -Eb-T", '<a><b>')
+=> ' 
+dE>y\\E \'o\\a? -Eb-T'
+=== strip_tags(" \x0adE>y\\E 'o\\a? -Eb-T", '<x>')
+=> ' 
+dE>y\\E \'o\\a? -Eb-T'
+=== strip_tags('Yp">"cE\'<D>)!dTe>d"d-m', null)
+=> 'Yp">"cE\')!dTe>d"d-m'
+=== strip_tags('Yp">"cE\'<D>)!dTe>d"d-m', '<a><b>')
+=> 'Yp">"cE\')!dTe>d"d-m'
+=== strip_tags('Yp">"cE\'<D>)!dTe>d"d-m', '<x>')
+=> 'Yp">"cE\')!dTe>d"d-m'
+=== strip_tags(">d\x0a'p l>'e ca \"M", null)
+=> '>d
+\'p l>\'e ca "M'
+=== strip_tags(">d\x0a'p l>'e ca \"M", '<a><b>')
+=> '>d
+\'p l>\'e ca "M'
+=== strip_tags(">d\x0a'p l>'e ca \"M", '<x>')
+=> '>d
+\'p l>\'e ca "M'
+=== strip_tags('=moLT")', null)
+=> '=moLT")'
+=== strip_tags('=moLT")', '<a><b>')
+=> '=moLT")'
+=== strip_tags('=moLT")', '<x>')
+=> '=moLT")'
+=== strip_tags(')Y>', null)
+=> ')Y>'
+=== strip_tags(')Y>', '<a><b>')
+=> ')Y>'
+=== strip_tags(')Y>', '<x>')
+=> ')Y>'
+=== strip_tags('>Me', null)
+=> '>Me'
+=== strip_tags('>Me', '<a><b>')
+=> '>Me'
+=== strip_tags('>Me', '<x>')
+=> '>Me'
+=== strip_tags('<ee\\b?Mt>t/<p>(d>', null)
+=> 't/(d>'
+=== strip_tags('<ee\\b?Mt>t/<p>(d>', '<a><b>')
+=> 't/(d>'
+=== strip_tags('<ee\\b?Mt>t/<p>(d>', '<x>')
+=> 't/(d>'
+=== strip_tags('?xDYPE<!>M', null)
+=> '?xDYPEM'
+=== strip_tags('?xDYPE<!>M', '<a><b>')
+=> '?xDYPEM'
+=== strip_tags('?xDYPE<!>M', '<x>')
+=> '?xDYPEM'
+=== strip_tags('O', null)
+=> 'O'
+=== strip_tags('O', '<a><b>')
+=> 'O'
+=== strip_tags('O', '<x>')
+=> 'O'
+=== strip_tags('=-eM )!>l!\'-=<', null)
+=> '=-eM )!>l!\'-='
+=== strip_tags('=-eM )!>l!\'-=<', '<a><b>')
+=> '=-eM )!>l!\'-='
+=== strip_tags('=-eM )!>l!\'-=<', '<x>')
+=> '=-eM )!>l!\'-='
+=== strip_tags('/ \'d"x?\'o x?>xp-)t', null)
+=> '/ \'d"x?\'o x?>xp-)t'
+=== strip_tags('/ \'d"x?\'o x?>xp-)t', '<a><b>')
+=> '/ \'d"x?\'o x?>xp-)t'
+=== strip_tags('/ \'d"x?\'o x?>xp-)t', '<x>')
+=> '/ \'d"x?\'o x?>xp-)t'
+=== strip_tags('<Pm<T<- l>t e=C\\M\'e', null)
+=> ''
+=== strip_tags('<Pm<T<- l>t e=C\\M\'e', '<a><b>')
+=> ''
+=== strip_tags('<Pm<T<- l>t e=C\\M\'e', '<x>')
+=> ''
+=== strip_tags('>o\'ctc\'\\Mb> ', null)
+=> '>o\'ctc\'\\Mb> '
+=== strip_tags('>o\'ctc\'\\Mb> ', '<a><b>')
+=> '>o\'ctc\'\\Mb> '
+=== strip_tags('>o\'ctc\'\\Mb> ', '<x>')
+=> '>o\'ctc\'\\Mb> '
+=== strip_tags('/- <C!ty<(t', null)
+=> '/- '
+=== strip_tags('/- <C!ty<(t', '<a><b>')
+=> '/- '
+=== strip_tags('/- <C!ty<(t', '<x>')
+=> '/- '
+=== strip_tags("\"\x00'!\x00\"<<lmdt'", null)
+=> '"\'!"'
+=== strip_tags("\"\x00'!\x00\"<<lmdt'", '<a><b>')
+=> '"\'!"'
+=== strip_tags("\"\x00'!\x00\"<<lmdt'", '<x>')
+=> '"\'!"'
+=== strip_tags("bEx>?E!a'\\t-\"m-y\x0a-\\/>!", null)
+=> 'bEx>?E!a\'\\t-"m-y
+-\\/>!'
+=== strip_tags("bEx>?E!a'\\t-\"m-y\x0a-\\/>!", '<a><b>')
+=> 'bEx>?E!a\'\\t-"m-y
+-\\/>!'
+=== strip_tags("bEx>?E!a'\\t-\"m-y\x0a-\\/>!", '<x>')
+=> 'bEx>?E!a\'\\t-"m-y
+-\\/>!'
+=== strip_tags("?ct>d<O\x0a>o(EP-Lp\x00Y ?>b'", null)
+=> '?ct>do(EP-LpY ?>b\''
+=== strip_tags("?ct>d<O\x0a>o(EP-Lp\x00Y ?>b'", '<a><b>')
+=> '?ct>do(EP-LpY ?>b\''
+=== strip_tags("?ct>d<O\x0a>o(EP-Lp\x00Y ?>b'", '<x>')
+=> '?ct>do(EP-LpY ?>b\''
+=== strip_tags('?a>" \\"\'?t=c)<', null)
+=> '?a>" \\"\'?t=c)'
+=== strip_tags('?a>" \\"\'?t=c)<', '<a><b>')
+=> '?a>" \\"\'?t=c)'
+=== strip_tags('?a>" \\"\'?t=c)<', '<x>')
+=> '?a>" \\"\'?t=c)'
+=== strip_tags('\\\')?T', null)
+=> '\\\')?T'
+=== strip_tags('\\\')?T', '<a><b>')
+=> '\\\')?T'
+=== strip_tags('\\\')?T', '<x>')
+=> '\\\')?T'
+=== strip_tags('< <l<?>o\'b=', null)
+=> '< '
+=== strip_tags('< <l<?>o\'b=', '<a><b>')
+=> '< '
+=== strip_tags('< <l<?>o\'b=', '<x>')
+=> '< '
+=== strip_tags('Tpe', null)
+=> 'Tpe'
+=== strip_tags('Tpe', '<a><b>')
+=> 'Tpe'
+=== strip_tags('Tpe', '<x>')
+=> 'Tpe'
+=== strip_tags('!', null)
+=> '!'
+=== strip_tags('!', '<a><b>')
+=> '!'
+=== strip_tags('!', '<x>')
+=> '!'
+=== strip_tags("-DO\"l'\x0aY/m?E' C", null)
+=> '-DO"l\'
+Y/m?E\' C'
+=== strip_tags("-DO\"l'\x0aY/m?E' C", '<a><b>')
+=> '-DO"l\'
+Y/m?E\' C'
+=== strip_tags("-DO\"l'\x0aY/m?E' C", '<x>')
+=> '-DO"l\'
+Y/m?E\' C'
+=== strip_tags("?Yx?>\x00bx'", null)
+=> '?Yx?>bx\''
+=== strip_tags("?Yx?>\x00bx'", '<a><b>')
+=> '?Yx?>bx\''
+=== strip_tags("?Yx?>\x00bx'", '<x>')
+=> '?Yx?>bx\''
+=== strip_tags(" L'>\x00\\m'bpc!MOO \x00>Mo-<", null)
+=> ' L\'>\\m\'bpc!MOO >Mo-'
+=== strip_tags(" L'>\x00\\m'bpc!MOO \x00>Mo-<", '<a><b>')
+=> ' L\'>\\m\'bpc!MOO >Mo-'
+=== strip_tags(" L'>\x00\\m'bpc!MOO \x00>Mo-<", '<x>')
+=> ' L\'>\\m\'bpc!MOO >Mo-'
+=== strip_tags('/!Y"y<y<(cb>\'>cTPd', null)
+=> '/!Y"y'
+=== strip_tags('/!Y"y<y<(cb>\'>cTPd', '<a><b>')
+=> '/!Y"y'
+=== strip_tags('/!Y"y<y<(cb>\'>cTPd', '<x>')
+=> '/!Y"y'
+=== strip_tags("\"E-<< !E'\"'\x0a-t=\"", null)
+=> '"E-'
+=== strip_tags("\"E-<< !E'\"'\x0a-t=\"", '<a><b>')
+=> '"E-'
+=== strip_tags("\"E-<< !E'\"'\x0a-t=\"", '<x>')
+=> '"E-'
+=== strip_tags('?=<\\-d-\\Ye <!?y! l\\ aOa', null)
+=> '?='
+=== strip_tags('?=<\\-d-\\Ye <!?y! l\\ aOa', '<a><b>')
+=> '?='
+=== strip_tags('?=<\\-d-\\Ye <!?y! l\\ aOa', '<x>')
+=> '?='
+=== strip_tags('?p', null)
+=> '?p'
+=== strip_tags('?p', '<a><b>')
+=> '?p'
+=== strip_tags('?p', '<x>')
+=> '?p'
+=== strip_tags('\\oO ', null)
+=> '\\oO '
+=== strip_tags('\\oO ', '<a><b>')
+=> '\\oO '
+=== strip_tags('\\oO ', '<x>')
+=> '\\oO '
+=== strip_tags('\\Mc>-MC! c"!</d\'mTTa', null)
+=> '\\Mc>-MC! c"!'
+=== strip_tags('\\Mc>-MC! c"!</d\'mTTa', '<a><b>')
+=> '\\Mc>-MC! c"!'
+=== strip_tags('\\Mc>-MC! c"!</d\'mTTa', '<x>')
+=> '\\Mc>-MC! c"!'
+=== strip_tags('=Cxee"aT<><Ed-!Eo', null)
+=> '=Cxee"aT'
+=== strip_tags('=Cxee"aT<><Ed-!Eo', '<a><b>')
+=> '=Cxee"aT'
+=== strip_tags('=Cxee"aT<><Ed-!Eo', '<x>')
+=> '=Cxee"aT'
+=== strip_tags('M>\'\'!/"y>TE<>m\\b !apM>', null)
+=> 'M>\'\'!/"y>TEm\\b !apM>'
+=== strip_tags('M>\'\'!/"y>TE<>m\\b !apM>', '<a><b>')
+=> 'M>\'\'!/"y>TEm\\b !apM>'
+=== strip_tags('M>\'\'!/"y>TE<>m\\b !apM>', '<x>')
+=> 'M>\'\'!/"y>TEm\\b !apM>'
+=== strip_tags("<'d)\x0ayO'm'<M)", null)
+=> ''
+=== strip_tags("<'d)\x0ayO'm'<M)", '<a><b>')
+=> ''
+=== strip_tags("<'d)\x0ayO'm'<M)", '<x>')
+=> ''
+=== strip_tags('>E', null)
+=> '>E'
+=== strip_tags('>E', '<a><b>')
+=> '>E'
+=== strip_tags('>E', '<x>')
+=> '>E'
+=== strip_tags('L\'', null)
+=> 'L\''
+=== strip_tags('L\'', '<a><b>')
+=> 'L\''
+=== strip_tags('L\'', '<x>')
+=> 'L\''
+=== strip_tags("D\x0aa ''tm>>mD\x0a<=\\\"ObeCP", null)
+=> 'D
+a \'\'tm>>mD
+'
+=== strip_tags("D\x0aa ''tm>>mD\x0a<=\\\"ObeCP", '<a><b>')
+=> 'D
+a \'\'tm>>mD
+'
+=== strip_tags("D\x0aa ''tm>>mD\x0a<=\\\"ObeCP", '<x>')
+=> 'D
+a \'\'tm>>mD
+'
+=== strip_tags('m?<aol>olmP\'O/lp!P', null)
+=> 'm?olmP\'O/lp!P'
+=== strip_tags('m?<aol>olmP\'O/lp!P', '<a><b>')
+=> 'm?olmP\'O/lp!P'
+=== strip_tags('m?<aol>olmP\'O/lp!P', '<x>')
+=> 'm?olmP\'O/lp!P'
+=== strip_tags(' l-=aeTEtm(\\<>D \'p"=', null)
+=> ' l-=aeTEtm(\\D \'p"='
+=== strip_tags(' l-=aeTEtm(\\<>D \'p"=', '<a><b>')
+=> ' l-=aeTEtm(\\D \'p"='
+=== strip_tags(' l-=aeTEtm(\\<>D \'p"=', '<x>')
+=> ' l-=aeTEtm(\\D \'p"='
+=== strip_tags("y<Lx t\x0a>LMD)'>L=)d>?<PC", null)
+=> 'yLMD)\'>L=)d>?'
+=== strip_tags("y<Lx t\x0a>LMD)'>L=)d>?<PC", '<a><b>')
+=> 'yLMD)\'>L=)d>?'
+=== strip_tags("y<Lx t\x0a>LMD)'>L=)d>?<PC", '<x>')
+=> 'yLMD)\'>L=)d>?'
+=== strip_tags("<aPT'p>!\x0a<=<\x0a>c'!=E", null)
+=> ''
+=== strip_tags("<aPT'p>!\x0a<=<\x0a>c'!=E", '<a><b>')
+=> ''
+=== strip_tags("<aPT'p>!\x0a<=<\x0a>c'!=E", '<x>')
+=> ''
+=== strip_tags("\"l><>'\x0a<\\", null)
+=> '"l>\'
+'
+=== strip_tags("\"l><>'\x0a<\\", '<a><b>')
+=> '"l>\'
+'
+=== strip_tags("\"l><>'\x0a<\\", '<x>')
+=> '"l>\'
+'
+=== strip_tags(' <y-ac!<e)DaDC\'<a<C', null)
+=> ' '
+=== strip_tags(' <y-ac!<e)DaDC\'<a<C', '<a><b>')
+=> ' '
+=== strip_tags(' <y-ac!<e)DaDC\'<a<C', '<x>')
+=> ' '
+=== strip_tags('=Y\'\\"', null)
+=> '=Y\'\\"'
+=== strip_tags('=Y\'\\"', '<a><b>')
+=> '=Y\'\\"'
+=== strip_tags('=Y\'\\"', '<x>')
+=> '=Y\'\\"'
+=== strip_tags("\x0a?\\<Y'\x00<a", null)
+=> '
+?\\'
+=== strip_tags("\x0a?\\<Y'\x00<a", '<a><b>')
+=> '
+?\\'
+=== strip_tags("\x0a?\\<Y'\x00<a", '<x>')
+=> '
+?\\'
+=== strip_tags('/>Y\'\'p(=- mO\'(pt\'-e=', null)
+=> '/>Y\'\'p(=- mO\'(pt\'-e='
+=== strip_tags('/>Y\'\'p(=- mO\'(pt\'-e=', '<a><b>')
+=> '/>Y\'\'p(=- mO\'(pt\'-e='
+=== strip_tags('/>Y\'\'p(=- mO\'(pt\'-e=', '<x>')
+=> '/>Y\'\'p(=- mO\'(pt\'-e='
+=== strip_tags(') <  >>TDT x\\!-- x\\Dt)', null)
+=> ') <  >>TDT x\\!-- x\\Dt)'
+=== strip_tags(') <  >>TDT x\\!-- x\\Dt)', '<a><b>')
+=> ') <  >>TDT x\\!-- x\\Dt)'
+=== strip_tags(') <  >>TDT x\\!-- x\\Dt)', '<x>')
+=> ') <  >>TDT x\\!-- x\\Dt)'
+=== strip_tags('b apm CY\\Lmm-TC"<>e\\T?>', null)
+=> 'b apm CY\\Lmm-TC"e\\T?>'
+=== strip_tags('b apm CY\\Lmm-TC"<>e\\T?>', '<a><b>')
+=> 'b apm CY\\Lmm-TC"e\\T?>'
+=== strip_tags('b apm CY\\Lmm-TC"<>e\\T?>', '<x>')
+=> 'b apm CY\\Lmm-TC"e\\T?>'
+=== strip_tags("-o\x00>E\x00L<T (b> \"", null)
+=> '-o>EL "'
+=== strip_tags("-o\x00>E\x00L<T (b> \"", '<a><b>')
+=> '-o>EL "'
+=== strip_tags("-o\x00>E\x00L<T (b> \"", '<x>')
+=> '-o>EL "'
+=== strip_tags('?P\\M!"<"\'/L mC"\'<EydD\'"', null)
+=> '?P\\M!"'
+=== strip_tags('?P\\M!"<"\'/L mC"\'<EydD\'"', '<a><b>')
+=> '?P\\M!"'
+=== strip_tags('?P\\M!"<"\'/L mC"\'<EydD\'"', '<x>')
+=> '?P\\M!"'
+=== strip_tags("DtL\\>lLDxcby/>o(t\x0axT?-M", null)
+=> 'DtL\\>lLDxcby/>o(t
+xT?-M'
+=== strip_tags("DtL\\>lLDxcby/>o(t\x0axT?-M", '<a><b>')
+=> 'DtL\\>lLDxcby/>o(t
+xT?-M'
+=== strip_tags("DtL\\>lLDxcby/>o(t\x0axT?-M", '<x>')
+=> 'DtL\\>lLDxcby/>o(t
+xT?-M'
+=== strip_tags('!e>\'<e<ldy', null)
+=> '!e>\''
+=== strip_tags('!e>\'<e<ldy', '<a><b>')
+=> '!e>\''
+=== strip_tags('!e>\'<e<ldy', '<x>')
+=> '!e>\''
+=== strip_tags("!Lm<\x00tPlCd x \x0a \\", null)
+=> '!Lm'
+=== strip_tags("!Lm<\x00tPlCd x \x0a \\", '<a><b>')
+=> '!Lm'
+=== strip_tags("!Lm<\x00tPlCd x \x0a \\", '<x>')
+=> '!Lm'
+=== strip_tags('!DL"D<pC', null)
+=> '!DL"D'
+=== strip_tags('!DL"D<pC', '<a><b>')
+=> '!DL"D'
+=== strip_tags('!DL"D<pC', '<x>')
+=> '!DL"D'
+=== strip_tags("  \x0am\\", null)
+=> '  
+m\\'
+=== strip_tags("  \x0am\\", '<a><b>')
+=> '  
+m\\'
+=== strip_tags("  \x0am\\", '<x>')
+=> '  
+m\\'
+=== strip_tags("><>C\\\x00lM<?>d(o=M\\?b", null)
+=> '>C\\lMd(o=M\\?b'
+=== strip_tags("><>C\\\x00lM<?>d(o=M\\?b", '<a><b>')
+=> '>C\\lMd(o=M\\?b'
+=== strip_tags("><>C\\\x00lM<?>d(o=M\\?b", '<x>')
+=> '>C\\lMd(o=M\\?b'
+=== strip_tags("-M)-\x0a<E", null)
+=> '-M)-
+'
+=== strip_tags("-M)-\x0a<E", '<a><b>')
+=> '-M)-
+'
+=== strip_tags("-M)-\x0a<E", '<x>')
+=> '-M)-
+'
+=== strip_tags("M>\x0ad<<YxP\"Do\"<Y=b\"!t?M", null)
+=> 'M>
+d'
+=== strip_tags("M>\x0ad<<YxP\"Do\"<Y=b\"!t?M", '<a><b>')
+=> 'M>
+d'
+=== strip_tags("M>\x0ad<<YxP\"Do\"<Y=b\"!t?M", '<x>')
+=> 'M>
+d'
+=== strip_tags('CTT) c bTM="" ?\'t-', null)
+=> 'CTT) c bTM="" ?\'t-'
+=== strip_tags('CTT) c bTM="" ?\'t-', '<a><b>')
+=> 'CTT) c bTM="" ?\'t-'
+=== strip_tags('CTT) c bTM="" ?\'t-', '<x>')
+=> 'CTT) c bTM="" ?\'t-'
+=== strip_tags("\"y-=OLbe\\'tY(\x00<", null)
+=> '"y-=OLbe\\\'tY('
+=== strip_tags("\"y-=OLbe\\'tY(\x00<", '<a><b>')
+=> '"y-=OLbe\\\'tY('
+=== strip_tags("\"y-=OLbe\\'tY(\x00<", '<x>')
+=> '"y-=OLbe\\\'tY('
+=== strip_tags("-\\-D\"<\"\x00<'E>' >?o", null)
+=> '-\\-D"'
+=== strip_tags("-\\-D\"<\"\x00<'E>' >?o", '<a><b>')
+=> '-\\-D"'
+=== strip_tags("-\\-D\"<\"\x00<'E>' >?o", '<x>')
+=> '-\\-D"'
+=== strip_tags('>PO-m> ya Ob\\><LE!', null)
+=> '>PO-m> ya Ob\\>'
+=== strip_tags('>PO-m> ya Ob\\><LE!', '<a><b>')
+=> '>PO-m> ya Ob\\>'
+=== strip_tags('>PO-m> ya Ob\\><LE!', '<x>')
+=> '>PO-m> ya Ob\\>'
+=== strip_tags('-\\?y>', null)
+=> '-\\?y>'
+=== strip_tags('-\\?y>', '<a><b>')
+=> '-\\?y>'
+=== strip_tags('-\\?y>', '<x>')
+=> '-\\?y>'
+=== strip_tags('b(-</e/', null)
+=> 'b(-'
+=== strip_tags('b(-</e/', '<a><b>')
+=> 'b(-'
+=== strip_tags('b(-</e/', '<x>')
+=> 'b(-'
+=== strip_tags('L ">c<!', null)
+=> 'L ">c'
+=== strip_tags('L ">c<!', '<a><b>')
+=> 'L ">c'
+=== strip_tags('L ">c<!', '<x>')
+=> 'L ">c'
+=== strip_tags("\"'t )-lL\x0a", null)
+=> '"\'t )-lL
+'
+=== strip_tags("\"'t )-lL\x0a", '<a><b>')
+=> '"\'t )-lL
+'
+=== strip_tags("\"'t )-lL\x0a", '<x>')
+=> '"\'t )-lL
+'
+=== strip_tags(' ac\\e><o)cd"!x"', null)
+=> ' ac\\e>'
+=== strip_tags(' ac\\e><o)cd"!x"', '<a><b>')
+=> ' ac\\e>'
+=== strip_tags(' ac\\e><o)cd"!x"', '<x>')
+=> ' ac\\e>'
+=== strip_tags('(tm<-xe<!/"Da?C', null)
+=> '(tm'
+=== strip_tags('(tm<-xe<!/"Da?C', '<a><b>')
+=> '(tm'
+=== strip_tags('(tm<-xe<!/"Da?C', '<x>')
+=> '(tm'
+=== strip_tags('>>c', null)
+=> '>>c'
+=== strip_tags('>>c', '<a><b>')
+=> '>>c'
+=== strip_tags('>>c', '<x>')
+=> '>>c'
+=== strip_tags('\\mCM\\', null)
+=> '\\mCM\\'
+=== strip_tags('\\mCM\\', '<a><b>')
+=> '\\mCM\\'
+=== strip_tags('\\mCM\\', '<x>')
+=> '\\mCM\\'
+=== strip_tags("bTt\"\x00 >!'dm >", null)
+=> 'bTt" >!\'dm >'
+=== strip_tags("bTt\"\x00 >!'dm >", '<a><b>')
+=> 'bTt" >!\'dm >'
+=== strip_tags("bTt\"\x00 >!'dm >", '<x>')
+=> 'bTt" >!\'dm >'
+=== strip_tags('-', null)
+=> '-'
+=== strip_tags('-', '<a><b>')
+=> '-'
+=== strip_tags('-', '<x>')
+=> '-'
+=== strip_tags('"!<d/', null)
+=> '"!'
+=== strip_tags('"!<d/', '<a><b>')
+=> '"!'
+=== strip_tags('"!<d/', '<x>')
+=> '"!'
+=== strip_tags('<<mpm< PxlE<aeM/""', null)
+=> ''
+=== strip_tags('<<mpm< PxlE<aeM/""', '<a><b>')
+=> ''
+=== strip_tags('<<mpm< PxlE<aeM/""', '<x>')
+=> ''
+=== strip_tags('T>!?\'b\'?C?!\\<"TC"mPx', null)
+=> 'T>!?\'b\'?C?!\\'
+=== strip_tags('T>!?\'b\'?C?!\\<"TC"mPx', '<a><b>')
+=> 'T>!?\'b\'?C?!\\'
+=== strip_tags('T>!?\'b\'?C?!\\<"TC"mPx', '<x>')
+=> 'T>!?\'b\'?C?!\\'
+=== strip_tags('-P', null)
+=> '-P'
+=== strip_tags('-P', '<a><b>')
+=> '-P'
+=== strip_tags('-P', '<x>')
+=> '-P'
+=== strip_tags("'??\x0a<ca> P  b'TO", null)
+=> '\'??
+ P  b\'TO'
+=== strip_tags("'??\x0a<ca> P  b'TO", '<a><b>')
+=> '\'??
+ P  b\'TO'
+=== strip_tags("'??\x0a<ca> P  b'TO", '<x>')
+=> '\'??
+ P  b\'TO'
+=== strip_tags('T-- Y-" ->? ', null)
+=> 'T-- Y-" ->? '
+=== strip_tags('T-- Y-" ->? ', '<a><b>')
+=> 'T-- Y-" ->? '
+=== strip_tags('T-- Y-" ->? ', '<x>')
+=> 'T-- Y-" ->? '
+=== strip_tags("<e \x00d\"< <D-", null)
+=> ''
+=== strip_tags("<e \x00d\"< <D-", '<a><b>')
+=> ''
+=== strip_tags("<e \x00d\"< <D-", '<x>')
+=> ''
+=== strip_tags("\x0a >m!-'-/D'EY?\\YP<EDD", null)
+=> '
+ >m!-\'-/D\'EY?\\YP'
+=== strip_tags("\x0a >m!-'-/D'EY?\\YP<EDD", '<a><b>')
+=> '
+ >m!-\'-/D\'EY?\\YP'
+=== strip_tags("\x0a >m!-'-/D'EY?\\YP<EDD", '<x>')
+=> '
+ >m!-\'-/D\'EY?\\YP'
+=== strip_tags('?)\\\\pYt(tM\'!y>', null)
+=> '?)\\\\pYt(tM\'!y>'
+=== strip_tags('?)\\\\pYt(tM\'!y>', '<a><b>')
+=> '?)\\\\pYt(tM\'!y>'
+=== strip_tags('?)\\\\pYt(tM\'!y>', '<x>')
+=> '?)\\\\pYt(tM\'!y>'
+=== strip_tags('/M)!de \'><\' l-P\'"?d', null)
+=> '/M)!de \'>'
+=== strip_tags('/M)!de \'><\' l-P\'"?d', '<a><b>')
+=> '/M)!de \'>'
+=== strip_tags('/M)!de \'><\' l-P\'"?d', '<x>')
+=> '/M)!de \'>'
+=== strip_tags('" \'', null)
+=> '" \''
+=== strip_tags('" \'', '<a><b>')
+=> '" \''
+=== strip_tags('" \'', '<x>')
+=> '" \''
+=== strip_tags('<?xmbtO) !', null)
+=> ''
+=== strip_tags('<?xmbtO) !', '<a><b>')
+=> ''
+=== strip_tags('<?xmbtO) !', '<x>')
+=> ''
+=== strip_tags("\"l\x00y>\"D'E?>", null)
+=> '"ly>"D\'E?>'
+=== strip_tags("\"l\x00y>\"D'E?>", '<a><b>')
+=> '"ly>"D\'E?>'
+=== strip_tags("\"l\x00y>\"D'E?>", '<x>')
+=> '"ly>"D\'E?>'
+=== strip_tags("pcPpcM!=\\<M?''\x0a\\\"?\\'p-", null)
+=> 'pcPpcM!=\\'
+=== strip_tags("pcPpcM!=\\<M?''\x0a\\\"?\\'p-", '<a><b>')
+=> 'pcPpcM!=\\'
+=== strip_tags("pcPpcM!=\\<M?''\x0a\\\"?\\'p-", '<x>')
+=> 'pcPpcM!=\\'
+=== strip_tags("tm\\<mYE\x0ac'y\"t''o> DaO", null)
+=> 'tm\\'
+=== strip_tags("tm\\<mYE\x0ac'y\"t''o> DaO", '<a><b>')
+=> 'tm\\'
+=== strip_tags("tm\\<mYE\x0ac'y\"t''o> DaO", '<x>')
+=> 'tm\\'
+=== strip_tags('/<!?L', null)
+=> '/'
+=== strip_tags('/<!?L', '<a><b>')
+=> '/'
+=== strip_tags('/<!?L', '<x>')
+=> '/'
+=== strip_tags('"!o<\\c', null)
+=> '"!o'
+=== strip_tags('"!o<\\c', '<a><b>')
+=> '"!o'
+=== strip_tags('"!o<\\c', '<x>')
+=> '"!o'
+=== strip_tags('\' "L', null)
+=> '\' "L'
+=== strip_tags('\' "L', '<a><b>')
+=> '\' "L'
+=== strip_tags('\' "L', '<x>')
+=> '\' "L'
+=== strip_tags(")YT\" b\\\x00?P=P\\octcCp\\Yp<", null)
+=> ')YT" b\\?P=P\\octcCp\\Yp'
+=== strip_tags(")YT\" b\\\x00?P=P\\octcCp\\Yp<", '<a><b>')
+=> ')YT" b\\?P=P\\octcCp\\Yp'
+=== strip_tags(")YT\" b\\\x00?P=P\\octcCp\\Yp<", '<x>')
+=> ')YT" b\\?P=P\\octcCp\\Yp'
+=== strip_tags("L>EO'\\=!((<Y\x00-m>/x\x00YO!C", null)
+=> 'L>EO\'\\=!((/xYO!C'
+=== strip_tags("L>EO'\\=!((<Y\x00-m>/x\x00YO!C", '<a><b>')
+=> 'L>EO\'\\=!((/xYO!C'
+=== strip_tags("L>EO'\\=!((<Y\x00-m>/x\x00YO!C", '<x>')
+=> 'L>EO\'\\=!((/xYO!C'
+=== strip_tags('!>\')><T<Ol\\\'<xt-MP->', null)
+=> '!>\')>'
+=== strip_tags('!>\')><T<Ol\\\'<xt-MP->', '<a><b>')
+=> '!>\')>'
+=== strip_tags('!>\')><T<Ol\\\'<xt-MP->', '<x>')
+=> '!>\')>'
+=== strip_tags('DM\\', null)
+=> 'DM\\'
+=== strip_tags('DM\\', '<a><b>')
+=> 'DM\\'
+=== strip_tags('DM\\', '<x>')
+=> 'DM\\'
+=== strip_tags('e!', null)
+=> 'e!'
+=== strip_tags('e!', '<a><b>')
+=> 'e!'
+=== strip_tags('e!', '<x>')
+=> 'e!'
+=== strip_tags('c>>xp"\\E("pL\'\\\'<!\'-=ml', null)
+=> 'c>>xp"\\E("pL\'\\\''
+=== strip_tags('c>>xp"\\E("pL\'\\\'<!\'-=ml', '<a><b>')
+=> 'c>>xp"\\E("pL\'\\\''
+=== strip_tags('c>>xp"\\E("pL\'\\\'<!\'-=ml', '<x>')
+=> 'c>>xp"\\E("pL\'\\\''
+=== strip_tags('-Ep!"?', null)
+=> '-Ep!"?'
+=== strip_tags('-Ep!"?', '<a><b>')
+=> '-Ep!"?'
+=== strip_tags('-Ep!"?', '<x>')
+=> '-Ep!"?'
+=== strip_tags("d>a\x0a--yDot d\\?", null)
+=> 'd>a
+--yDot d\\?'
+=== strip_tags("d>a\x0a--yDot d\\?", '<a><b>')
+=> 'd>a
+--yDot d\\?'
+=== strip_tags("d>a\x0a--yDot d\\?", '<x>')
+=> 'd>a
+--yDot d\\?'
+=== strip_tags('?<Lb>)LMO', null)
+=> '?)LMO'
+=== strip_tags('?<Lb>)LMO', '<a><b>')
+=> '?)LMO'
+=== strip_tags('?<Lb>)LMO', '<x>')
+=> '?)LMO'
+=== strip_tags("(tb')=!t\x0aD(Y!\"My", null)
+=> '(tb\')=!t
+D(Y!"My'
+=== strip_tags("(tb')=!t\x0aD(Y!\"My", '<a><b>')
+=> '(tb\')=!t
+D(Y!"My'
+=== strip_tags("(tb')=!t\x0aD(Y!\"My", '<x>')
+=> '(tb\')=!t
+D(Y!"My'
+=== strip_tags("<D/\"<L-?T\x0abM<>\"", null)
+=> ''
+=== strip_tags("<D/\"<L-?T\x0abM<>\"", '<a><b>')
+=> ''
+=== strip_tags("<D/\"<L-?T\x0abM<>\"", '<x>')
+=> ''
+=== strip_tags('l-', null)
+=> 'l-'
+=== strip_tags('l-', '<a><b>')
+=> 'l-'
+=== strip_tags('l-', '<x>')
+=> 'l-'
+=== strip_tags("l<\x00>-", null)
+=> 'l-'
+=== strip_tags("l<\x00>-", '<a><b>')
+=> 'l-'
+=== strip_tags("l<\x00>-", '<x>')
+=> 'l-'
+=== strip_tags("?\x0a>bo\x0a-'PD", null)
+=> '?
+>bo
+-\'PD'
+=== strip_tags("?\x0a>bo\x0a-'PD", '<a><b>')
+=> '?
+>bo
+-\'PD'
+=== strip_tags("?\x0a>bo\x0a-'PD", '<x>')
+=> '?
+>bo
+-\'PD'
+=== strip_tags("-<?\"\\m \x0a)\"\x00OcC\x00d", null)
+=> '-'
+=== strip_tags("-<?\"\\m \x0a)\"\x00OcC\x00d", '<a><b>')
+=> '-'
+=== strip_tags("-<?\"\\m \x0a)\"\x00OcC\x00d", '<x>')
+=> '-'
+=== strip_tags('Ep"e\\-o', null)
+=> 'Ep"e\\-o'
+=== strip_tags('Ep"e\\-o', '<a><b>')
+=> 'Ep"e\\-o'
+=== strip_tags('Ep"e\\-o', '<x>')
+=> 'Ep"e\\-o'
+=== strip_tags('?o', null)
+=> '?o'
+=== strip_tags('?o', '<a><b>')
+=> '?o'
+=== strip_tags('?o', '<x>')
+=> '?o'
+=== strip_tags("!c\"?e>\x0a'!/", null)
+=> '!c"?e>
+\'!/'
+=== strip_tags("!c\"?e>\x0a'!/", '<a><b>')
+=> '!c"?e>
+\'!/'
+=== strip_tags("!c\"?e>\x0a'!/", '<x>')
+=> '!c"?e>
+\'!/'
+=== strip_tags('aT', null)
+=> 'aT'
+=== strip_tags('aT', '<a><b>')
+=> 'aT'
+=== strip_tags('aT', '<x>')
+=> 'aT'
+=== strip_tags("c<\x00bY do> T>", null)
+=> 'c T>'
+=== strip_tags("c<\x00bY do> T>", '<a><b>')
+=> 'c T>'
+=== strip_tags("c<\x00bY do> T>", '<x>')
+=> 'c T>'
+=== strip_tags("mp<\x00\"t<M\"<cO\\\x00\"TtO\\ <x=", null)
+=> 'mp'
+=== strip_tags("mp<\x00\"t<M\"<cO\\\x00\"TtO\\ <x=", '<a><b>')
+=> 'mp'
+=== strip_tags("mp<\x00\"t<M\"<cO\\\x00\"TtO\\ <x=", '<x>')
+=> 'mp'
+=== strip_tags("/!?Pt\x0a<", null)
+=> '/!?Pt
+'
+=== strip_tags("/!?Pt\x0a<", '<a><b>')
+=> '/!?Pt
+'
+=== strip_tags("/!?Pt\x0a<", '<x>')
+=> '/!?Pt
+'
+=== strip_tags(" >Y<DCDem\x0aP\x00\"<\\ap-\x00M", null)
+=> ' >Y'
+=== strip_tags(" >Y<DCDem\x0aP\x00\"<\\ap-\x00M", '<a><b>')
+=> ' >Y'
+=== strip_tags(" >Y<DCDem\x0aP\x00\"<\\ap-\x00M", '<x>')
+=> ' >Y'
+=== strip_tags("tTtY<D?  /\x0a= y-t'<a-!", null)
+=> 'tTtY'
+=== strip_tags("tTtY<D?  /\x0a= y-t'<a-!", '<a><b>')
+=> 'tTtY'
+=== strip_tags("tTtY<D?  /\x0a= y-t'<a-!", '<x>')
+=> 'tTtY'
+=== strip_tags(' PT>!te', null)
+=> ' PT>!te'
+=== strip_tags(' PT>!te', '<a><b>')
+=> ' PT>!te'
+=== strip_tags(' PT>!te', '<x>')
+=> ' PT>!te'
+=== strip_tags('\\">>', null)
+=> '\\">>'
+=== strip_tags('\\">>', '<a><b>')
+=> '\\">>'
+=== strip_tags('\\">>', '<x>')
+=> '\\">>'
+=== strip_tags('e""O', null)
+=> 'e""O'
+=== strip_tags('e""O', '<a><b>')
+=> 'e""O'
+=== strip_tags('e""O', '<x>')
+=> 'e""O'
+=== strip_tags('<<ml!x"!(', null)
+=> ''
+=== strip_tags('<<ml!x"!(', '<a><b>')
+=> ''
+=== strip_tags('<<ml!x"!(', '<x>')
+=> ''
+=== strip_tags('tpel/ MCO<m', null)
+=> 'tpel/ MCO'
+=== strip_tags('tpel/ MCO<m', '<a><b>')
+=> 'tpel/ MCO'
+=== strip_tags('tpel/ MCO<m', '<x>')
+=> 'tpel/ MCO'
+=== strip_tags('-cp>-!\'"\'ooToE>', null)
+=> '-cp>-!\'"\'ooToE>'
+=== strip_tags('-cp>-!\'"\'ooToE>', '<a><b>')
+=> '-cp>-!\'"\'ooToE>'
+=== strip_tags('-cp>-!\'"\'ooToE>', '<x>')
+=> '-cp>-!\'"\'ooToE>'
+=== strip_tags("'c(oM-mT?lL(=C<>\x00b !o", null)
+=> '\'c(oM-mT?lL(=Cb !o'
+=== strip_tags("'c(oM-mT?lL(=C<>\x00b !o", '<a><b>')
+=> '\'c(oM-mT?lL(=Cb !o'
+=== strip_tags("'c(oM-mT?lL(=C<>\x00b !o", '<x>')
+=> '\'c(oM-mT?lL(=Cb !o'
+=== strip_tags(' Y?p-plbaO\\<\\<e-/', null)
+=> ' Y?p-plbaO\\'
+=== strip_tags(' Y?p-plbaO\\<\\<e-/', '<a><b>')
+=> ' Y?p-plbaO\\'
+=== strip_tags(' Y?p-plbaO\\<\\<e-/', '<x>')
+=> ' Y?p-plbaO\\'
+=== strip_tags('C"/T)b\\">M', null)
+=> 'C"/T)b\\">M'
+=== strip_tags('C"/T)b\\">M', '<a><b>')
+=> 'C"/T)b\\">M'
+=== strip_tags('C"/T)b\\">M', '<x>')
+=> 'C"/T)b\\">M'
+=== strip_tags("\x0a\\)m\"CT!<>'TCc\x0aD=!<!", null)
+=> '
+\\)m"CT!\'TCc
+D=!'
+=== strip_tags("\x0a\\)m\"CT!<>'TCc\x0aD=!<!", '<a><b>')
+=> '
+\\)m"CT!\'TCc
+D=!'
+=== strip_tags("\x0a\\)m\"CT!<>'TCc\x0aD=!<!", '<x>')
+=> '
+\\)m"CT!\'TCc
+D=!'
+=== strip_tags('c<<-D\\)>D OM-(', null)
+=> 'c'
+=== strip_tags('c<<-D\\)>D OM-(', '<a><b>')
+=> 'c'
+=== strip_tags('c<<-D\\)>D OM-(', '<x>')
+=> 'c'
+=== strip_tags('>b pd', null)
+=> '>b pd'
+=== strip_tags('>b pd', '<a><b>')
+=> '>b pd'
+=== strip_tags('>b pd', '<x>')
+=> '>b pd'
+=== strip_tags("a !\"!<b!D!\x0ad\"Ot", null)
+=> 'a !"!'
+=== strip_tags("a !\"!<b!D!\x0ad\"Ot", '<a><b>')
+=> 'a !"!'
+=== strip_tags("a !\"!<b!D!\x0ad\"Ot", '<x>')
+=> 'a !"!'
+=== strip_tags(">e=?\\><>\"-oOoc\x00", null)
+=> '>e=?\\>"-oOoc'
+=== strip_tags(">e=?\\><>\"-oOoc\x00", '<a><b>')
+=> '>e=?\\>"-oOoc'
+=== strip_tags(">e=?\\><>\"-oOoc\x00", '<x>')
+=> '>e=?\\>"-oOoc'
+=== strip_tags('mTp<C\\\\!', null)
+=> 'mTp'
+=== strip_tags('mTp<C\\\\!', '<a><b>')
+=> 'mTp'
+=== strip_tags('mTp<C\\\\!', '<x>')
+=> 'mTp'
+=== strip_tags('D<D\\D/?cO!>\\L!eee \'\\M', null)
+=> 'D\\L!eee \'\\M'
+=== strip_tags('D<D\\D/?cO!>\\L!eee \'\\M', '<a><b>')
+=> 'D\\L!eee \'\\M'
+=== strip_tags('D<D\\D/?cO!>\\L!eee \'\\M', '<x>')
+=> 'D\\L!eee \'\\M'
+=== strip_tags("(\x0axe>d(/<\x00(", null)
+=> '(
+xe>d(/'
+=== strip_tags("(\x0axe>d(/<\x00(", '<a><b>')
+=> '(
+xe>d(/'
+=== strip_tags("(\x0axe>d(/<\x00(", '<x>')
+=> '(
+xe>d(/'
+=== strip_tags('"P(<?', null)
+=> '"P('
+=== strip_tags('"P(<?', '<a><b>')
+=> '"P('
+=== strip_tags('"P(<?', '<x>')
+=> '"P('
+=== strip_tags('E=!>MC)\\\'-M>xE', null)
+=> 'E=!>MC)\\\'-M>xE'
+=== strip_tags('E=!>MC)\\\'-M>xE', '<a><b>')
+=> 'E=!>MC)\\\'-M>xE'
+=== strip_tags('E=!>MC)\\\'-M>xE', '<x>')
+=> 'E=!>MC)\\\'-M>xE'
+=== strip_tags('<bym \'<L\'', null)
+=> ''
+=== strip_tags('<bym \'<L\'', '<a><b>')
+=> ''
+=== strip_tags('<bym \'<L\'', '<x>')
+=> ''
+=== strip_tags("\\D-T?\"'<\x0ae>tLc>'te<>\"y", null)
+=> '\\D-T?"\'<
+e>tLc>\'te"y'
+=== strip_tags("\\D-T?\"'<\x0ae>tLc>'te<>\"y", '<a><b>')
+=> '\\D-T?"\'<
+e>tLc>\'te"y'
+=== strip_tags("\\D-T?\"'<\x0ae>tLc>'te<>\"y", '<x>')
+=> '\\D-T?"\'<
+e>tLc>\'te"y'
+=== strip_tags("\"\\myL>e-b\"c!Ecl!!\x0a>=p", null)
+=> '"\\myL>e-b"c!Ecl!!
+>=p'
+=== strip_tags("\"\\myL>e-b\"c!Ecl!!\x0a>=p", '<a><b>')
+=> '"\\myL>e-b"c!Ecl!!
+>=p'
+=== strip_tags("\"\\myL>e-b\"c!Ecl!!\x0a>=p", '<x>')
+=> '"\\myL>e-b"c!Ecl!!
+>=p'
+=== strip_tags("T\\M'D\"?\x0a/(E", null)
+=> 'T\\M\'D"?
+/(E'
+=== strip_tags("T\\M'D\"?\x0a/(E", '<a><b>')
+=> 'T\\M\'D"?
+/(E'
+=== strip_tags("T\\M'D\"?\x0a/(E", '<x>')
+=> 'T\\M\'D"?
+/(E'
+=== strip_tags("\x0a\x00m>E!m\\=l\"lb<\\\x0a", null)
+=> '
+m>E!m\\=l"lb'
+=== strip_tags("\x0a\x00m>E!m\\=l\"lb<\\\x0a", '<a><b>')
+=> '
+m>E!m\\=l"lb'
+=== strip_tags("\x0a\x00m>E!m\\=l\"lb<\\\x0a", '<x>')
+=> '
+m>E!m\\=l"lb'
+=== strip_tags("'<<bd' )lcl'\x0aYCY", null)
+=> '\''
+=== strip_tags("'<<bd' )lcl'\x0aYCY", '<a><b>')
+=> '\''
+=== strip_tags("'<<bd' )lcl'\x0aYCY", '<x>')
+=> '\''
+=== strip_tags('\' pmM/x" ??ll lcox<y', null)
+=> '\' pmM/x" ??ll lcox'
+=== strip_tags('\' pmM/x" ??ll lcox<y', '<a><b>')
+=> '\' pmM/x" ??ll lcox'
+=== strip_tags('\' pmM/x" ??ll lcox<y', '<x>')
+=> '\' pmM/x" ??ll lcox'
+=== strip_tags("!p->  \x00Mcb>o <(m!<l>", null)
+=> '!p->  Mcb>o '
+=== strip_tags("!p->  \x00Mcb>o <(m!<l>", '<a><b>')
+=> '!p->  Mcb>o '
+=== strip_tags("!p->  \x00Mcb>o <(m!<l>", '<x>')
+=> '!p->  Mcb>o '
+=== strip_tags("<yEaea\\=mm\x00C\"\"T", null)
+=> ''
+=== strip_tags("<yEaea\\=mm\x00C\"\"T", '<a><b>')
+=> ''
+=== strip_tags("<yEaea\\=mm\x00C\"\"T", '<x>')
+=> ''
+=== strip_tags('c\\Om<)>a<>dd\'e ', null)
+=> 'c\\Omadd\'e '
+=== strip_tags('c\\Om<)>a<>dd\'e ', '<a><b>')
+=> 'c\\Omadd\'e '
+=== strip_tags('c\\Om<)>a<>dd\'e ', '<x>')
+=> 'c\\Omadd\'e '
+=== strip_tags('lm>cPD', null)
+=> 'lm>cPD'
+=== strip_tags('lm>cPD', '<a><b>')
+=> 'lm>cPD'
+=== strip_tags('lm>cPD', '<x>')
+=> 'lm>cPD'
+=== strip_tags('<Y "', null)
+=> ''
+=== strip_tags('<Y "', '<a><b>')
+=> ''
+=== strip_tags('<Y "', '<x>')
+=> ''
+=== strip_tags("=>?P?\x0ad?", null)
+=> '=>?P?
+d?'
+=== strip_tags("=>?P?\x0ad?", '<a><b>')
+=> '=>?P?
+d?'
+=== strip_tags("=>?P?\x0ad?", '<x>')
+=> '=>?P?
+d?'
+=== strip_tags('(/>y\\>E!=/ "Y"Y', null)
+=> '(/>y\\>E!=/ "Y"Y'
+=== strip_tags('(/>y\\>E!=/ "Y"Y', '<a><b>')
+=> '(/>y\\>E!=/ "Y"Y'
+=== strip_tags('(/>y\\>E!=/ "Y"Y', '<x>')
+=> '(/>y\\>E!=/ "Y"Y'
+=== strip_tags('D=El', null)
+=> 'D=El'
+=== strip_tags('D=El', '<a><b>')
+=> 'D=El'
+=== strip_tags('D=El', '<x>')
+=> 'D=El'
+=== strip_tags('mtpE-=O?mM<TYtEd>mpx>c', null)
+=> 'mtpE-=O?mMmpx>c'
+=== strip_tags('mtpE-=O?mM<TYtEd>mpx>c', '<a><b>')
+=> 'mtpE-=O?mMmpx>c'
+=== strip_tags('mtpE-=O?mM<TYtEd>mpx>c', '<x>')
+=> 'mtpE-=O?mMmpx>c'
+=== strip_tags('?c>-(Pm o<)o-C)', null)
+=> '?c>-(Pm o'
+=== strip_tags('?c>-(Pm o<)o-C)', '<a><b>')
+=> '?c>-(Pm o'
+=== strip_tags('?c>-(Pm o<)o-C)', '<x>')
+=> '?c>-(Pm o'
+=== strip_tags('L-/', null)
+=> 'L-/'
+=== strip_tags('L-/', '<a><b>')
+=> 'L-/'
+=== strip_tags('L-/', '<x>')
+=> 'L-/'
+=== strip_tags(')>b', null)
+=> ')>b'
+=== strip_tags(')>b', '<a><b>')
+=> ')>b'
+=== strip_tags(')>b', '<x>')
+=> ')>b'
+=== strip_tags("O\"Ce>x!!?O<(\x0a-?-", null)
+=> 'O"Ce>x!!?O'
+=== strip_tags("O\"Ce>x!!?O<(\x0a-?-", '<a><b>')
+=> 'O"Ce>x!!?O'
+=== strip_tags("O\"Ce>x!!?O<(\x0a-?-", '<x>')
+=> 'O"Ce>x!!?O'
+=== strip_tags('C)ma>P)<e=P', null)
+=> 'C)ma>P)'
+=== strip_tags('C)ma>P)<e=P', '<a><b>')
+=> 'C)ma>P)'
+=== strip_tags('C)ma>P)<e=P', '<x>')
+=> 'C)ma>P)'
+=== strip_tags('T (p<)\\llmC(!O!!cb< d(\'', null)
+=> 'T (p'
+=== strip_tags('T (p<)\\llmC(!O!!cb< d(\'', '<a><b>')
+=> 'T (p'
+=== strip_tags('T (p<)\\llmC(!O!!cb< d(\'', '<x>')
+=> 'T (p'
+=== strip_tags("MP\x00\x0a\"L !!pm\">>>-e=p!\\", null)
+=> 'MP
+"L !!pm">>>-e=p!\\'
+=== strip_tags("MP\x00\x0a\"L !!pm\">>>-e=p!\\", '<a><b>')
+=> 'MP
+"L !!pm">>>-e=p!\\'
+=== strip_tags("MP\x00\x0a\"L !!pm\">>>-e=p!\\", '<x>')
+=> 'MP
+"L !!pm">>>-e=p!\\'
+=== strip_tags('>>p<\'l<\'ym>eTT<', null)
+=> '>>peTT'
+=== strip_tags('>>p<\'l<\'ym>eTT<', '<a><b>')
+=> '>>peTT'
+=== strip_tags('>>p<\'l<\'ym>eTT<', '<x>')
+=> '>>peTT'
+=== strip_tags("P\x0am\x00b!\"!>l", null)
+=> 'P
+mb!"!>l'
+=== strip_tags("P\x0am\x00b!\"!>l", '<a><b>')
+=> 'P
+mb!"!>l'
+=== strip_tags("P\x0am\x00b!\"!>l", '<x>')
+=> 'P
+mb!"!>l'
+=== strip_tags('t(>O?<?e', null)
+=> 't(>O?'
+=== strip_tags('t(>O?<?e', '<a><b>')
+=> 't(>O?'
+=== strip_tags('t(>O?<?e', '<x>')
+=> 't(>O?'
+=== strip_tags(' -\\xc\'((<x?!tM-">\\<', null)
+=> ' -\\xc\'(('
+=== strip_tags(' -\\xc\'((<x?!tM-">\\<', '<a><b>')
+=> ' -\\xc\'(('
+=== strip_tags(' -\\xc\'((<x?!tM-">\\<', '<x>')
+=> ' -\\xc\'(('
+=== strip_tags('!p!!<m\'<\\cDb?xy\\yl\\', null)
+=> '!p!!'
+=== strip_tags('!p!!<m\'<\\cDb?xy\\yl\\', '<a><b>')
+=> '!p!!'
+=== strip_tags('!p!!<m\'<\\cDb?xy\\yl\\', '<x>')
+=> '!p!!'
+=== strip_tags('mm!M"om?"\'\\L"T-/m>>l<E', null)
+=> 'mm!M"om?"\'\\L"T-/m>>l'
+=== strip_tags('mm!M"om?"\'\\L"T-/m>>l<E', '<a><b>')
+=> 'mm!M"om?"\'\\L"T-/m>>l'
+=== strip_tags('mm!M"om?"\'\\L"T-/m>>l<E', '<x>')
+=> 'mm!M"om?"\'\\L"T-/m>>l'
+=== strip_tags(")</\x00\"\"\x00?o( T P?<'Ml=>o", null)
+=> ')'
+=== strip_tags(")</\x00\"\"\x00?o( T P?<'Ml=>o", '<a><b>')
+=> ')'
+=== strip_tags(")</\x00\"\"\x00?o( T P?<'Ml=>o", '<x>')
+=> ')'
+=== strip_tags('P)"L\\xc\\\\EoMp', null)
+=> 'P)"L\\xc\\\\EoMp'
+=== strip_tags('P)"L\\xc\\\\EoMp', '<a><b>')
+=> 'P)"L\\xc\\\\EoMp'
+=== strip_tags('P)"L\\xc\\\\EoMp', '<x>')
+=> 'P)"L\\xc\\\\EoMp'
+=== strip_tags('\\<opDy>d<>>)"M>x', null)
+=> '\\d>)"M>x'
+=== strip_tags('\\<opDy>d<>>)"M>x', '<a><b>')
+=> '\\d>)"M>x'
+=== strip_tags('\\<opDy>d<>>)"M>x', '<x>')
+=> '\\d>)"M>x'
+=== strip_tags('>o!-?)lme\\\'m-?EEb ', null)
+=> '>o!-?)lme\\\'m-?EEb '
+=== strip_tags('>o!-?)lme\\\'m-?EEb ', '<a><b>')
+=> '>o!-?)lme\\\'m-?EEb '
+=== strip_tags('>o!-?)lme\\\'m-?EEb ', '<x>')
+=> '>o!-?)lme\\\'m-?EEb '
+=== strip_tags('-\'!\')O!<\'PtOyelTTb=M', null)
+=> '-\'!\')O!'
+=== strip_tags('-\'!\')O!<\'PtOyelTTb=M', '<a><b>')
+=> '-\'!\')O!'
+=== strip_tags('-\'!\')O!<\'PtOyelTTb=M', '<x>')
+=> '-\'!\')O!'
+=== strip_tags("o>M)P<<bml<x\"--> \x00\">op ", null)
+=> 'o>M)P'
+=== strip_tags("o>M)P<<bml<x\"--> \x00\">op ", '<a><b>')
+=> 'o>M)P'
+=== strip_tags("o>M)P<<bml<x\"--> \x00\">op ", '<x>')
+=> 'o>M)P'
+=== strip_tags(')"?', null)
+=> ')"?'
+=== strip_tags(')"?', '<a><b>')
+=> ')"?'
+=== strip_tags(')"?', '<x>')
+=> ')"?'
+=== strip_tags('>a>yY!<>Y?\'<<', null)
+=> '>a>yY!Y?\''
+=== strip_tags('>a>yY!<>Y?\'<<', '<a><b>')
+=> '>a>yY!Y?\''
+=== strip_tags('>a>yY!<>Y?\'<<', '<x>')
+=> '>a>yY!Y?\''
+=== strip_tags(')cl?', null)
+=> ')cl?'
+=== strip_tags(')cl?', '<a><b>')
+=> ')cl?'
+=== strip_tags(')cl?', '<x>')
+=> ')cl?'
+=== strip_tags('E-dYaO\\T"EE', null)
+=> 'E-dYaO\\T"EE'
+=== strip_tags('E-dYaO\\T"EE', '<a><b>')
+=> 'E-dYaO\\T"EE'
+=== strip_tags('E-dYaO\\T"EE', '<x>')
+=> 'E-dYaO\\T"EE'
+=== strip_tags(')de>?Mo\\\')!a\'\\<\\\'/ PP-', null)
+=> ')de>?Mo\\\')!a\'\\'
+=== strip_tags(')de>?Mo\\\')!a\'\\<\\\'/ PP-', '<a><b>')
+=> ')de>?Mo\\\')!a\'\\'
+=== strip_tags(')de>?Mo\\\')!a\'\\<\\\'/ PP-', '<x>')
+=> ')de>?Mo\\\')!a\'\\'
+=== strip_tags('LP\\ed><Yac', null)
+=> 'LP\\ed>'
+=== strip_tags('LP\\ed><Yac', '<a><b>')
+=> 'LP\\ed>'
+=== strip_tags('LP\\ed><Yac', '<x>')
+=> 'LP\\ed>'
+=== strip_tags("\x0a>-", null)
+=> '
+>-'
+=== strip_tags("\x0a>-", '<a><b>')
+=> '
+>-'
+=== strip_tags("\x0a>-", '<x>')
+=> '
+>-'
+=== strip_tags('Do\\)t\'L', null)
+=> 'Do\\)t\'L'
+=== strip_tags('Do\\)t\'L', '<a><b>')
+=> 'Do\\)t\'L'
+=== strip_tags('Do\\)t\'L', '<x>')
+=> 'Do\\)t\'L'
+=== strip_tags('=))Y>  /p\\ Tcl() ', null)
+=> '=))Y>  /p\\ Tcl() '
+=== strip_tags('=))Y>  /p\\ Tcl() ', '<a><b>')
+=> '=))Y>  /p\\ Tcl() '
+=== strip_tags('=))Y>  /p\\ Tcl() ', '<x>')
+=> '=))Y>  /p\\ Tcl() '
+=== strip_tags('!(D TLb', null)
+=> '!(D TLb'
+=== strip_tags('!(D TLb', '<a><b>')
+=> '!(D TLb'
+=== strip_tags('!(D TLb', '<x>')
+=> '!(D TLb'
+=== strip_tags("\x0aO/\x0aOx\"P\"/y", null)
+=> '
+O/
+Ox"P"/y'
+=== strip_tags("\x0aO/\x0aOx\"P\"/y", '<a><b>')
+=> '
+O/
+Ox"P"/y'
+=== strip_tags("\x0aO/\x0aOx\"P\"/y", '<x>')
+=> '
+O/
+Ox"P"/y'
+=== strip_tags("lL>('ld'o\\Ta-?<!\x00pCcP\"", null)
+=> 'lL>(\'ld\'o\\Ta-?'
+=== strip_tags("lL>('ld'o\\Ta-?<!\x00pCcP\"", '<a><b>')
+=> 'lL>(\'ld\'o\\Ta-?'
+=== strip_tags("lL>('ld'o\\Ta-?<!\x00pCcP\"", '<x>')
+=> 'lL>(\'ld\'o\\Ta-?'
+=== strip_tags(')tTT?e\\', null)
+=> ')tTT?e\\'
+=== strip_tags(')tTT?e\\', '<a><b>')
+=> ')tTT?e\\'
+=== strip_tags(')tTT?e\\', '<x>')
+=> ')tTT?e\\'
+=== strip_tags('>tOO?d!=O- tO Dt"D', null)
+=> '>tOO?d!=O- tO Dt"D'
+=== strip_tags('>tOO?d!=O- tO Dt"D', '<a><b>')
+=> '>tOO?d!=O- tO Dt"D'
+=== strip_tags('>tOO?d!=O- tO Dt"D', '<x>')
+=> '>tOO?d!=O- tO Dt"D'
+=== strip_tags("!/<\\<Mp\x00b> Dd\"Mdl><\x00'T", null)
+=> '!/'
+=== strip_tags("!/<\\<Mp\x00b> Dd\"Mdl><\x00'T", '<a><b>')
+=> '!/'
+=== strip_tags("!/<\\<Mp\x00b> Dd\"Mdl><\x00'T", '<x>')
+=> '!/'
+=== strip_tags('m!"a', null)
+=> 'm!"a'
+=== strip_tags('m!"a', '<a><b>')
+=> 'm!"a'
+=== strip_tags('m!"a', '<x>')
+=> 'm!"a'
+=== strip_tags(' ?T??C\'', null)
+=> ' ?T??C\''
+=== strip_tags(' ?T??C\'', '<a><b>')
+=> ' ?T??C\''
+=== strip_tags(' ?T??C\'', '<x>')
+=> ' ?T??C\''
+=== strip_tags('C/"<P', null)
+=> 'C/"'
+=== strip_tags('C/"<P', '<a><b>')
+=> 'C/"'
+=== strip_tags('C/"<P', '<x>')
+=> 'C/"'
+=== strip_tags("T! d\x0aeb ", null)
+=> 'T! d
+eb '
+=== strip_tags("T! d\x0aeb ", '<a><b>')
+=> 'T! d
+eb '
+=== strip_tags("T! d\x0aeb ", '<x>')
+=> 'T! d
+eb '
+=== strip_tags('-=aPM< <x-<d<E\\!>', null)
+=> '-=aPM< '
+=== strip_tags('-=aPM< <x-<d<E\\!>', '<a><b>')
+=> '-=aPM< '
+=== strip_tags('-=aPM< <x-<d<E\\!>', '<x>')
+=> '-=aPM< '
+=== strip_tags('?', null)
+=> '?'
+=== strip_tags('?', '<a><b>')
+=> '?'
+=== strip_tags('?', '<x>')
+=> '?'
+=== strip_tags('p', null)
+=> 'p'
+=== strip_tags('p', '<a><b>')
+=> 'p'
+=== strip_tags('p', '<x>')
+=> 'p'
+=== strip_tags('M<', null)
+=> 'M'
+=== strip_tags('M<', '<a><b>')
+=> 'M'
+=== strip_tags('M<', '<x>')
+=> 'M'
+=== strip_tags('"bO\'', null)
+=> '"bO\''
+=== strip_tags('"bO\'', '<a><b>')
+=> '"bO\''
+=== strip_tags('"bO\'', '<x>')
+=> '"bO\''
+=== strip_tags("\\<Md/ml\x00\x0ad'", null)
+=> '\\'
+=== strip_tags("\\<Md/ml\x00\x0ad'", '<a><b>')
+=> '\\'
+=== strip_tags("\\<Md/ml\x00\x0ad'", '<x>')
+=> '\\'
+=== strip_tags('ta', null)
+=> 'ta'
+=== strip_tags('ta', '<a><b>')
+=> 'ta'
+=== strip_tags('ta', '<x>')
+=> 'ta'
+=== strip_tags(">\\>P\" (\">>a\x0a))>pCmcedLa", null)
+=> '>\\>P" (">>a
+))>pCmcedLa'
+=== strip_tags(">\\>P\" (\">>a\x0a))>pCmcedLa", '<a><b>')
+=> '>\\>P" (">>a
+))>pCmcedLa'
+=== strip_tags(">\\>P\" (\">>a\x0a))>pCmcedLa", '<x>')
+=> '>\\>P" (">>a
+))>pCmcedLa'
+=== strip_tags(">xLEtO LD)'(L-\\\x00-lO\x0a", null)
+=> '>xLEtO LD)\'(L-\\-lO
+'
+=== strip_tags(">xLEtO LD)'(L-\\\x00-lO\x0a", '<a><b>')
+=> '>xLEtO LD)\'(L-\\-lO
+'
+=== strip_tags(">xLEtO LD)'(L-\\\x00-lO\x0a", '<x>')
+=> '>xLEtO LD)\'(L-\\-lO
+'
+=== strip_tags('/aD!TDm(E\\ce>', null)
+=> '/aD!TDm(E\\ce>'
+=== strip_tags('/aD!TDm(E\\ce>', '<a><b>')
+=> '/aD!TDm(E\\ce>'
+=== strip_tags('/aD!TDm(E\\ce>', '<x>')
+=> '/aD!TDm(E\\ce>'
+=== strip_tags('Cx><>\'O\\>>"\\', null)
+=> 'Cx>\'O\\>>"\\'
+=== strip_tags('Cx><>\'O\\>>"\\', '<a><b>')
+=> 'Cx>\'O\\>>"\\'
+=== strip_tags('Cx><>\'O\\>>"\\', '<x>')
+=> 'Cx>\'O\\>>"\\'
+=== strip_tags('da-P)', null)
+=> 'da-P)'
+=== strip_tags('da-P)', '<a><b>')
+=> 'da-P)'
+=== strip_tags('da-P)', '<x>')
+=> 'da-P)'
+=== strip_tags('< (L- <?>Db(?', null)
+=> '< (L- Db(?'
+=== strip_tags('< (L- <?>Db(?', '<a><b>')
+=> '< (L- Db(?'
+=== strip_tags('< (L- <?>Db(?', '<x>')
+=> '< (L- Db(?'
+=== strip_tags(')\\?yPExyCbb>Dpl!t\' LYbt', null)
+=> ')\\?yPExyCbb>Dpl!t\' LYbt'
+=== strip_tags(')\\?yPExyCbb>Dpl!t\' LYbt', '<a><b>')
+=> ')\\?yPExyCbb>Dpl!t\' LYbt'
+=== strip_tags(')\\?yPExyCbb>Dpl!t\' LYbt', '<x>')
+=> ')\\?yPExyCbb>Dpl!t\' LYbt'
+=== strip_tags("\\Da\\o\x0a?m=\x00=!DMa!'lM\\d\"!", null)
+=> '\\Da\\o
+?m==!DMa!\'lM\\d"!'
+=== strip_tags("\\Da\\o\x0a?m=\x00=!DMa!'lM\\d\"!", '<a><b>')
+=> '\\Da\\o
+?m==!DMa!\'lM\\d"!'
+=== strip_tags("\\Da\\o\x0a?m=\x00=!DMa!'lM\\d\"!", '<x>')
+=> '\\Da\\o
+?m==!DMa!\'lM\\d"!'
+=== strip_tags(" ob>E\x00?-L\\ xbD\"", null)
+=> ' ob>E?-L\\ xbD"'
+=== strip_tags(" ob>E\x00?-L\\ xbD\"", '<a><b>')
+=> ' ob>E?-L\\ xbD"'
+=== strip_tags(" ob>E\x00?-L\\ xbD\"", '<x>')
+=> ' ob>E?-L\\ xbD"'
+=== strip_tags('P-xa=>) <EeCm\' p!m?', null)
+=> 'P-xa=>) '
+=== strip_tags('P-xa=>) <EeCm\' p!m?', '<a><b>')
+=> 'P-xa=>) '
+=== strip_tags('P-xa=>) <EeCm\' p!m?', '<x>')
+=> 'P-xa=>) '
+=== strip_tags(">=xo?C\x00=O?'d", null)
+=> '>=xo?C=O?\'d'
+=== strip_tags(">=xo?C\x00=O?'d", '<a><b>')
+=> '>=xo?C=O?\'d'
+=== strip_tags(">=xo?C\x00=O?'d", '<x>')
+=> '>=xo?C=O?\'d'
+=== strip_tags('T?mtE>\'/m?!"P>', null)
+=> 'T?mtE>\'/m?!"P>'
+=== strip_tags('T?mtE>\'/m?!"P>', '<a><b>')
+=> 'T?mtE>\'/m?!"P>'
+=== strip_tags('T?mtE>\'/m?!"P>', '<x>')
+=> 'T?mtE>\'/m?!"P>'
+=== strip_tags("'e'/L\\<=b<!P\"o(b\x00a'", null)
+=> '\'e\'/L\\'
+=== strip_tags("'e'/L\\<=b<!P\"o(b\x00a'", '<a><b>')
+=> '\'e\'/L\\'
+=== strip_tags("'e'/L\\<=b<!P\"o(b\x00a'", '<x>')
+=> '\'e\'/L\\'
+=== strip_tags('ap(\\e-=\'a', null)
+=> 'ap(\\e-=\'a'
+=== strip_tags('ap(\\e-=\'a', '<a><b>')
+=> 'ap(\\e-=\'a'
+=== strip_tags('ap(\\e-=\'a', '<x>')
+=> 'ap(\\e-=\'a'
+=== strip_tags('!td?bPlyo\\?-\\Ot("mt t', null)
+=> '!td?bPlyo\\?-\\Ot("mt t'
+=== strip_tags('!td?bPlyo\\?-\\Ot("mt t', '<a><b>')
+=> '!td?bPlyo\\?-\\Ot("mt t'
+=== strip_tags('!td?bPlyo\\?-\\Ot("mt t', '<x>')
+=> '!td?bPlyo\\?-\\Ot("mt t'
+=== strip_tags('C>?\\d\\Md', null)
+=> 'C>?\\d\\Md'
+=== strip_tags('C>?\\d\\Md', '<a><b>')
+=> 'C>?\\d\\Md'
+=== strip_tags('C>?\\d\\Md', '<x>')
+=> 'C>?\\d\\Md'
+=== strip_tags("=-\x0aa", null)
+=> '=-
+a'
+=== strip_tags("=-\x0aa", '<a><b>')
+=> '=-
+a'
+=== strip_tags("=-\x0aa", '<x>')
+=> '=-
+a'
+=== strip_tags('P >Clx!<>?><l/>m"CE/!>d', null)
+=> 'P >Clx!?>m"CE/!>d'
+=== strip_tags('P >Clx!<>?><l/>m"CE/!>d', '<a><b>')
+=> 'P >Clx!?>m"CE/!>d'
+=== strip_tags('P >Clx!<>?><l/>m"CE/!>d', '<x>')
+=> 'P >Clx!?>m"CE/!>d'
+=== strip_tags(" \x00a", null)
+=> ' a'
+=== strip_tags(" \x00a", '<a><b>')
+=> ' a'
+=== strip_tags(" \x00a", '<x>')
+=> ' a'
+=== strip_tags("->!T'>Mc>yc\\o<\\>??b\x0a><", null)
+=> '->!T\'>Mc>yc\\o??b
+>'
+=== strip_tags("->!T'>Mc>yc\\o<\\>??b\x0a><", '<a><b>')
+=> '->!T\'>Mc>yc\\o??b
+>'
+=== strip_tags("->!T'>Mc>yc\\o<\\>??b\x0a><", '<x>')
+=> '->!T\'>Mc>yc\\o??b
+>'
+=== strip_tags('!byo)ML', null)
+=> '!byo)ML'
+=== strip_tags('!byo)ML', '<a><b>')
+=> '!byo)ML'
+=== strip_tags('!byo)ML', '<x>')
+=> '!byo)ML'
+=== strip_tags("\x0ae<p?<-'P( LP<\x00)l(!/O<", null)
+=> '
+e'
+=== strip_tags("\x0ae<p?<-'P( LP<\x00)l(!/O<", '<a><b>')
+=> '
+e'
+=== strip_tags("\x0ae<p?<-'P( LP<\x00)l(!/O<", '<x>')
+=> '
+e'
+=== strip_tags('\\cO"L', null)
+=> '\\cO"L'
+=== strip_tags('\\cO"L', '<a><b>')
+=> '\\cO"L'
+=== strip_tags('\\cO"L', '<x>')
+=> '\\cO"L'
+=== strip_tags('""', null)
+=> '""'
+=== strip_tags('""', '<a><b>')
+=> '""'
+=== strip_tags('""', '<x>')
+=> '""'
+=== strip_tags("ED>oT>m\x0a?/  d<", null)
+=> 'ED>oT>m
+?/  d'
+=== strip_tags("ED>oT>m\x0a?/  d<", '<a><b>')
+=> 'ED>oT>m
+?/  d'
+=== strip_tags("ED>oT>m\x0a?/  d<", '<x>')
+=> 'ED>oT>m
+?/  d'
+=== strip_tags("<'\x0a/<L\"t\"MT'E=x?-", null)
+=> ''
+=== strip_tags("<'\x0a/<L\"t\"MT'E=x?-", '<a><b>')
+=> ''
+=== strip_tags("<'\x0a/<L\"t\"MT'E=x?-", '<x>')
+=> ''
+=== strip_tags('Mde/<?\\mC">M-t)-"<<CM-', null)
+=> 'Mde/'
+=== strip_tags('Mde/<?\\mC">M-t)-"<<CM-', '<a><b>')
+=> 'Mde/'
+=== strip_tags('Mde/<?\\mC">M-t)-"<<CM-', '<x>')
+=> 'Mde/'
+=== strip_tags('D>=D<"<"p!>-b-', null)
+=> 'D>=D-b-'
+=== strip_tags('D>=D<"<"p!>-b-', '<a><b>')
+=> 'D>=D-b-'
+=== strip_tags('D>=D<"<"p!>-b-', '<x>')
+=> 'D>=D-b-'
+=== strip_tags('>-D?', null)
+=> '>-D?'
+=== strip_tags('>-D?', '<a><b>')
+=> '>-D?'
+=== strip_tags('>-D?', '<x>')
+=> '>-D?'
+=== strip_tags(' \'m=Dx<e', null)
+=> ' \'m=Dx'
+=== strip_tags(' \'m=Dx<e', '<a><b>')
+=> ' \'m=Dx'
+=== strip_tags(' \'m=Dx<e', '<x>')
+=> ' \'m=Dx'
+=== strip_tags('a -', null)
+=> 'a -'
+=== strip_tags('a -', '<a><b>')
+=> 'a -'
+=== strip_tags('a -', '<x>')
+=> 'a -'
+=== strip_tags("/P-P y?E!D'\x00C'Y>cp", null)
+=> '/P-P y?E!D\'C\'Y>cp'
+=== strip_tags("/P-P y?E!D'\x00C'Y>cp", '<a><b>')
+=> '/P-P y?E!D\'C\'Y>cp'
+=== strip_tags("/P-P y?E!D'\x00C'Y>cp", '<x>')
+=> '/P-P y?E!D\'C\'Y>cp'
+=== strip_tags("\x00x\\", null)
+=> 'x\\'
+=== strip_tags("\x00x\\", '<a><b>')
+=> 'x\\'
+=== strip_tags("\x00x\\", '<x>')
+=> 'x\\'
+=== strip_tags('Dm< O-e)D', null)
+=> 'Dm< O-e)D'
+=== strip_tags('Dm< O-e)D', '<a><b>')
+=> 'Dm< O-e)D'
+=== strip_tags('Dm< O-e)D', '<x>')
+=> 'Dm< O-e)D'
+=== strip_tags('> \'>E>L!>E/T mD"O=EM', null)
+=> '> \'>E>L!>E/T mD"O=EM'
+=== strip_tags('> \'>E>L!>E/T mD"O=EM', '<a><b>')
+=> '> \'>E>L!>E/T mD"O=EM'
+=== strip_tags('> \'>E>L!>E/T mD"O=EM', '<x>')
+=> '> \'>E>L!>E/T mD"O=EM'
+=== strip_tags("a\\<(y<daa)\"\"'ma\\\x0aY< \x0a", null)
+=> 'a\\'
+=== strip_tags("a\\<(y<daa)\"\"'ma\\\x0aY< \x0a", '<a><b>')
+=> 'a\\'
+=== strip_tags("a\\<(y<daa)\"\"'ma\\\x0aY< \x0a", '<x>')
+=> 'a\\'
+=== strip_tags("YO>Pla<d>e<Ob\"\x00<(c'Y\"", null)
+=> 'YO>Plae'
+=== strip_tags("YO>Pla<d>e<Ob\"\x00<(c'Y\"", '<a><b>')
+=> 'YO>Plae'
+=== strip_tags("YO>Pla<d>e<Ob\"\x00<(c'Y\"", '<x>')
+=> 'YO>Plae'
+=== strip_tags("mExP ''>>(\x0aay<>moml", null)
+=> 'mExP \'\'>>(
+aymoml'
+=== strip_tags("mExP ''>>(\x0aay<>moml", '<a><b>')
+=> 'mExP \'\'>>(
+aymoml'
+=== strip_tags("mExP ''>>(\x0aay<>moml", '<x>')
+=> 'mExP \'\'>>(
+aymoml'
+=== strip_tags("/!\\t\x0a<bl?>d-o\"?b", null)
+=> '/!\\t
+d-o"?b'
+=== strip_tags("/!\\t\x0a<bl?>d-o\"?b", '<a><b>')
+=> '/!\\t
+d-o"?b'
+=== strip_tags("/!\\t\x0a<bl?>d-o\"?b", '<x>')
+=> '/!\\t
+d-o"?b'
+=== strip_tags("?>>LaYe<T'M-\x0apo-", null)
+=> '?>>LaYe'
+=== strip_tags("?>>LaYe<T'M-\x0apo-", '<a><b>')
+=> '?>>LaYe'
+=== strip_tags("?>>LaYe<T'M-\x0apo-", '<x>')
+=> '?>>LaYe'
+=== strip_tags(' \\?- mYdLb-', null)
+=> ' \\?- mYdLb-'
+=== strip_tags(' \\?- mYdLb-', '<a><b>')
+=> ' \\?- mYdLb-'
+=== strip_tags(' \\?- mYdLb-', '<x>')
+=> ' \\?- mYdLb-'
+=== strip_tags('\'a', null)
+=> '\'a'
+=== strip_tags('\'a', '<a><b>')
+=> '\'a'
+=== strip_tags('\'a', '<x>')
+=> '\'a'
+=== strip_tags("ax!!yy\x0a>?LaM<aPo'T o", null)
+=> 'ax!!yy
+>?LaM'
+=== strip_tags("ax!!yy\x0a>?LaM<aPo'T o", '<a><b>')
+=> 'ax!!yy
+>?LaM'
+=== strip_tags("ax!!yy\x0a>?LaM<aPo'T o", '<x>')
+=> 'ax!!yy
+>?LaM'
+=== strip_tags('\'>\\\\><', null)
+=> '\'>\\\\>'
+=== strip_tags('\'>\\\\><', '<a><b>')
+=> '\'>\\\\>'
+=== strip_tags('\'>\\\\><', '<x>')
+=> '\'>\\\\>'
+=== strip_tags("a\x00mC??)\x0ady\x0a ODoYt", null)
+=> 'amC??)
+dy
+ ODoYt'
+=== strip_tags("a\x00mC??)\x0ady\x0a ODoYt", '<a><b>')
+=> 'amC??)
+dy
+ ODoYt'
+=== strip_tags("a\x00mC??)\x0ady\x0a ODoYt", '<x>')
+=> 'amC??)
+dy
+ ODoYt'
+=== strip_tags("DeM>\x00P", null)
+=> 'DeM>P'
+=== strip_tags("DeM>\x00P", '<a><b>')
+=> 'DeM>P'
+=== strip_tags("DeM>\x00P", '<x>')
+=> 'DeM>P'
+=== strip_tags("<=(T=p=\"m!oE<o xm\x00!'a", null)
+=> ''
+=== strip_tags("<=(T=p=\"m!oE<o xm\x00!'a", '<a><b>')
+=> ''
+=== strip_tags("<=(T=p=\"m!oE<o xm\x00!'a", '<x>')
+=> ''
+=== strip_tags(' ', null)
+=> ' '
+=== strip_tags(' ', '<a><b>')
+=> ' '
+=== strip_tags(' ', '<x>')
+=> ' '
+=== strip_tags("\"m\x0a>=ae)PM<<'C-y<O>xl??", null)
+=> '"m
+>=ae)PM'
+=== strip_tags("\"m\x0a>=ae)PM<<'C-y<O>xl??", '<a><b>')
+=> '"m
+>=ae)PM'
+=== strip_tags("\"m\x0a>=ae)PM<<'C-y<O>xl??", '<x>')
+=> '"m
+>=ae)PM'
+=== strip_tags("!-M\">D>\x0ae\\", null)
+=> '!-M">D>
+e\\'
+=== strip_tags("!-M\">D>\x0ae\\", '<a><b>')
+=> '!-M">D>
+e\\'
+=== strip_tags("!-M\">D>\x0ae\\", '<x>')
+=> '!-M">D>
+e\\'
+=== strip_tags("ctT\"'\"\x00p>xD Ox!>cC\"?=", null)
+=> 'ctT"\'"p>xD Ox!>cC"?='
+=== strip_tags("ctT\"'\"\x00p>xD Ox!>cC\"?=", '<a><b>')
+=> 'ctT"\'"p>xD Ox!>cC"?='
+=== strip_tags("ctT\"'\"\x00p>xD Ox!>cC\"?=", '<x>')
+=> 'ctT"\'"p>xD Ox!>cC"?='
+=== strip_tags("\"\"/<\"tOtL)o\x00o'=<", null)
+=> '""/'
+=== strip_tags("\"\"/<\"tOtL)o\x00o'=<", '<a><b>')
+=> '""/'
+=== strip_tags("\"\"/<\"tOtL)o\x00o'=<", '<x>')
+=> '""/'
+=== strip_tags('?Ym) L\'m', null)
+=> '?Ym) L\'m'
+=== strip_tags('?Ym) L\'m', '<a><b>')
+=> '?Ym) L\'m'
+=== strip_tags('?Ym) L\'m', '<x>')
+=> '?Ym) L\'m'
+=== strip_tags('Oole>', null)
+=> 'Oole>'
+=== strip_tags('Oole>', '<a><b>')
+=> 'Oole>'
+=== strip_tags('Oole>', '<x>')
+=> 'Oole>'
+=== strip_tags("-b>>\x0a?-C?t?l\\eat-(O\"\x00'E", null)
+=> '-b>>
+?-C?t?l\\eat-(O"\'E'
+=== strip_tags("-b>>\x0a?-C?t?l\\eat-(O\"\x00'E", '<a><b>')
+=> '-b>>
+?-C?t?l\\eat-(O"\'E'
+=== strip_tags("-b>>\x0a?-C?t?l\\eat-(O\"\x00'E", '<x>')
+=> '-b>>
+?-C?t?l\\eat-(O"\'E'
+=== strip_tags("a>PCt!T\x0aMoc><Ol\\(m>MdO", null)
+=> 'a>PCt!T
+Moc>MdO'
+=== strip_tags("a>PCt!T\x0aMoc><Ol\\(m>MdO", '<a><b>')
+=> 'a>PCt!T
+Moc>MdO'
+=== strip_tags("a>PCt!T\x0aMoc><Ol\\(m>MdO", '<x>')
+=> 'a>PCt!T
+Moc>MdO'
+=== strip_tags('CcdMM\'lYmD-y-M=/=E?Pp', null)
+=> 'CcdMM\'lYmD-y-M=/=E?Pp'
+=== strip_tags('CcdMM\'lYmD-y-M=/=E?Pp', '<a><b>')
+=> 'CcdMM\'lYmD-y-M=/=E?Pp'
+=== strip_tags('CcdMM\'lYmD-y-M=/=E?Pp', '<x>')
+=> 'CcdMM\'lYmD-y-M=/=E?Pp'
+=== strip_tags("\"d-c=cltE'xO\x0add", null)
+=> '"d-c=cltE\'xO
+dd'
+=== strip_tags("\"d-c=cltE'xO\x0add", '<a><b>')
+=> '"d-c=cltE\'xO
+dd'
+=== strip_tags("\"d-c=cltE'xO\x0add", '<x>')
+=> '"d-c=cltE\'xO
+dd'
+=== strip_tags("\x0a!lo<-bo><'ePdTo>?!CYY", null)
+=> '
+!lo'
+=== strip_tags("\x0a!lo<-bo><'ePdTo>?!CYY", '<a><b>')
+=> '
+!lo'
+=== strip_tags("\x0a!lo<-bo><'ePdTo>?!CYY", '<x>')
+=> '
+!lo'
+=== strip_tags("LDM<! a\x00eC\"", null)
+=> 'LDM'
+=== strip_tags("LDM<! a\x00eC\"", '<a><b>')
+=> 'LDM'
+=== strip_tags("LDM<! a\x00eC\"", '<x>')
+=> 'LDM'
+=== strip_tags("\x0aOy!>D!?c!oYt =)> =o\"", null)
+=> '
+Oy!>D!?c!oYt =)> =o"'
+=== strip_tags("\x0aOy!>D!?c!oYt =)> =o\"", '<a><b>')
+=> '
+Oy!>D!?c!oYt =)> =o"'
+=== strip_tags("\x0aOy!>D!?c!oYt =)> =o\"", '<x>')
+=> '
+Oy!>D!?c!oYt =)> =o"'
+=== strip_tags("\x00y?<bO\"?Tpbt=>x\"a\"y", null)
+=> 'y?'
+=== strip_tags("\x00y?<bO\"?Tpbt=>x\"a\"y", '<a><b>')
+=> 'y?'
+=== strip_tags("\x00y?<bO\"?Tpbt=>x\"a\"y", '<x>')
+=> 'y?'
+=== strip_tags('=Lp=l>-', null)
+=> '=Lp=l>-'
+=== strip_tags('=Lp=l>-', '<a><b>')
+=> '=Lp=l>-'
+=== strip_tags('=Lp=l>-', '<x>')
+=> '=Lp=l>-'
+=== strip_tags('xm L\\\\c\'po', null)
+=> 'xm L\\\\c\'po'
+=== strip_tags('xm L\\\\c\'po', '<a><b>')
+=> 'xm L\\\\c\'po'
+=== strip_tags('xm L\\\\c\'po', '<x>')
+=> 'xm L\\\\c\'po'
+=== strip_tags("\x0a=\\E'\"D(\"?\"po?", null)
+=> '
+=\\E\'"D("?"po?'
+=== strip_tags("\x0a=\\E'\"D(\"?\"po?", '<a><b>')
+=> '
+=\\E\'"D("?"po?'
+=== strip_tags("\x0a=\\E'\"D(\"?\"po?", '<x>')
+=> '
+=\\E\'"D("?"po?'
+=== strip_tags('? t>o\'\'yy<=d??! "yDy', null)
+=> '? t>o\'\'yy'
+=== strip_tags('? t>o\'\'yy<=d??! "yDy', '<a><b>')
+=> '? t>o\'\'yy'
+=== strip_tags('? t>o\'\'yy<=d??! "yDy', '<x>')
+=> '? t>o\'\'yy'
+=== strip_tags('yt?e>!?MdmY', null)
+=> 'yt?e>!?MdmY'
+=== strip_tags('yt?e>!?MdmY', '<a><b>')
+=> 'yt?e>!?MdmY'
+=== strip_tags('yt?e>!?MdmY', '<x>')
+=> 'yt?e>!?MdmY'
+=== strip_tags(')aC x>b=te', null)
+=> ')aC x>b=te'
+=== strip_tags(')aC x>b=te', '<a><b>')
+=> ')aC x>b=te'
+=== strip_tags(')aC x>b=te', '<x>')
+=> ')aC x>b=te'
+=== strip_tags('Lb)be!', null)
+=> 'Lb)be!'
+=== strip_tags('Lb)be!', '<a><b>')
+=> 'Lb)be!'
+=== strip_tags('Lb)be!', '<x>')
+=> 'Lb)be!'
+=== strip_tags('x\\>?p-\'>', null)
+=> 'x\\>?p-\'>'
+=== strip_tags('x\\>?p-\'>', '<a><b>')
+=> 'x\\>?p-\'>'
+=== strip_tags('x\\>?p-\'>', '<x>')
+=> 'x\\>?p-\'>'
+=== strip_tags("e=<t\x0aTD (O\x00 \x0aP('!C P-", null)
+=> 'e='
+=== strip_tags("e=<t\x0aTD (O\x00 \x0aP('!C P-", '<a><b>')
+=> 'e='
+=== strip_tags("e=<t\x0aTD (O\x00 \x0aP('!C P-", '<x>')
+=> 'e='
+=== strip_tags('t', null)
+=> 't'
+=== strip_tags('t', '<a><b>')
+=> 't'
+=== strip_tags('t', '<x>')
+=> 't'
+=== strip_tags('c?\\(P "aLp?', null)
+=> 'c?\\(P "aLp?'
+=== strip_tags('c?\\(P "aLp?', '<a><b>')
+=> 'c?\\(P "aLp?'
+=== strip_tags('c?\\(P "aLp?', '<x>')
+=> 'c?\\(P "aLp?'
+=== strip_tags('y )', null)
+=> 'y )'
+=== strip_tags('y )', '<a><b>')
+=> 'y )'
+=== strip_tags('y )', '<x>')
+=> 'y )'
+=== strip_tags("\x0a'=\x0aP!?='", null)
+=> '
+\'=
+P!?=\''
+=== strip_tags("\x0a'=\x0aP!?='", '<a><b>')
+=> '
+\'=
+P!?=\''
+=== strip_tags("\x0a'=\x0aP!?='", '<x>')
+=> '
+\'=
+P!?=\''
+=== strip_tags('my>?y/MTo\'y-', null)
+=> 'my>?y/MTo\'y-'
+=== strip_tags('my>?y/MTo\'y-', '<a><b>')
+=> 'my>?y/MTo\'y-'
+=== strip_tags('my>?y/MTo\'y-', '<x>')
+=> 'my>?y/MTo\'y-'
+=== strip_tags("c\"l?Ll?E\\DO\"TO?D<P-\"\x0aa", null)
+=> 'c"l?Ll?E\\DO"TO?D'
+=== strip_tags("c\"l?Ll?E\\DO\"TO?D<P-\"\x0aa", '<a><b>')
+=> 'c"l?Ll?E\\DO"TO?D'
+=== strip_tags("c\"l?Ll?E\\DO\"TO?D<P-\"\x0aa", '<x>')
+=> 'c"l?Ll?E\\DO"TO?D'
+=== strip_tags("\x00/<>cp", null)
+=> '/cp'
+=== strip_tags("\x00/<>cp", '<a><b>')
+=> '/cp'
+=== strip_tags("\x00/<>cp", '<x>')
+=> '/cp'
+=== strip_tags('<(pTM<', null)
+=> ''
+=== strip_tags('<(pTM<', '<a><b>')
+=> ''
+=== strip_tags('<(pTM<', '<x>')
+=> ''
+=== strip_tags('C', null)
+=> 'C'
+=== strip_tags('C', '<a><b>')
+=> 'C'
+=== strip_tags('C', '<x>')
+=> 'C'
+=== strip_tags("/l\\t\x00", null)
+=> '/l\\t'
+=== strip_tags("/l\\t\x00", '<a><b>')
+=> '/l\\t'
+=== strip_tags("/l\\t\x00", '<x>')
+=> '/l\\t'
+=== strip_tags("L'<?-'\x00-\"\\ tO'\\L<-o?'<'", null)
+=> 'L\''
+=== strip_tags("L'<?-'\x00-\"\\ tO'\\L<-o?'<'", '<a><b>')
+=> 'L\''
+=== strip_tags("L'<?-'\x00-\"\\ tO'\\L<-o?'<'", '<x>')
+=> 'L\''
+=== strip_tags('?CdbLEY Y>l\'c-e )e', null)
+=> '?CdbLEY Y>l\'c-e )e'
+=== strip_tags('?CdbLEY Y>l\'c-e )e', '<a><b>')
+=> '?CdbLEY Y>l\'c-e )e'
+=== strip_tags('?CdbLEY Y>l\'c-e )e', '<x>')
+=> '?CdbLEY Y>l\'c-e )e'
+=== strip_tags("=PL!de!(\x0a", null)
+=> '=PL!de!(
+'
+=== strip_tags("=PL!de!(\x0a", '<a><b>')
+=> '=PL!de!(
+'
+=== strip_tags("=PL!de!(\x0a", '<x>')
+=> '=PL!de!(
+'
+=== strip_tags('>xl!', null)
+=> '>xl!'
+=== strip_tags('>xl!', '<a><b>')
+=> '>xl!'
+=== strip_tags('>xl!', '<x>')
+=> '>xl!'
+=== strip_tags(')dY/a"y\'=" =Pa>E!!', null)
+=> ')dY/a"y\'=" =Pa>E!!'
+=== strip_tags(')dY/a"y\'=" =Pa>E!!', '<a><b>')
+=> ')dY/a"y\'=" =Pa>E!!'
+=== strip_tags(')dY/a"y\'=" =Pa>E!!', '<x>')
+=> ')dY/a"y\'=" =Pa>E!!'
+=== strip_tags('<-P<?T y-T<\\/', null)
+=> ''
+=== strip_tags('<-P<?T y-T<\\/', '<a><b>')
+=> ''
+=== strip_tags('<-P<?T y-T<\\/', '<x>')
+=> ''
+=== strip_tags('?>/\\</O/!', null)
+=> '?>/\\'
+=== strip_tags('?>/\\</O/!', '<a><b>')
+=> '?>/\\'
+=== strip_tags('?>/\\</O/!', '<x>')
+=> '?>/\\'
+=== strip_tags('xD>-/<ydp>(\\=>x/\\-?E ?', null)
+=> 'xD>-/(\\=>x/\\-?E ?'
+=== strip_tags('xD>-/<ydp>(\\=>x/\\-?E ?', '<a><b>')
+=> 'xD>-/(\\=>x/\\-?E ?'
+=== strip_tags('xD>-/<ydp>(\\=>x/\\-?E ?', '<x>')
+=> 'xD>-/(\\=>x/\\-?E ?'
+=== strip_tags("tE\"o(  -La ?\x0a>YLx>cD/", null)
+=> 'tE"o(  -La ?
+>YLx>cD/'
+=== strip_tags("tE\"o(  -La ?\x0a>YLx>cD/", '<a><b>')
+=> 'tE"o(  -La ?
+>YLx>cD/'
+=== strip_tags("tE\"o(  -La ?\x0a>YLx>cD/", '<x>')
+=> 'tE"o(  -La ?
+>YLx>cD/'
+=== strip_tags('Yp>e!< tmye', null)
+=> 'Yp>e!< tmye'
+=== strip_tags('Yp>e!< tmye', '<a><b>')
+=> 'Yp>e!< tmye'
+=== strip_tags('Yp>e!< tmye', '<x>')
+=> 'Yp>e!< tmye'
+=== strip_tags('\\e\\YY<d>c-l-="MxPY', null)
+=> '\\e\\YYc-l-="MxPY'
+=== strip_tags('\\e\\YY<d>c-l-="MxPY', '<a><b>')
+=> '\\e\\YYc-l-="MxPY'
+=== strip_tags('\\e\\YY<d>c-l-="MxPY', '<x>')
+=> '\\e\\YYc-l-="MxPY'
+=== strip_tags("lt\\?l\x00-\x00ml><", null)
+=> 'lt\\?l-ml>'
+=== strip_tags("lt\\?l\x00-\x00ml><", '<a><b>')
+=> 'lt\\?l-ml>'
+=== strip_tags("lt\\?l\x00-\x00ml><", '<x>')
+=> 'lt\\?l-ml>'
+=== strip_tags('<e!tOTm', null)
+=> ''
+=== strip_tags('<e!tOTm', '<a><b>')
+=> ''
+=== strip_tags('<e!tOTm', '<x>')
+=> ''
+=== strip_tags('<Mm', null)
+=> ''
+=== strip_tags('<Mm', '<a><b>')
+=> ''
+=== strip_tags('<Mm', '<x>')
+=> ''
+=== strip_tags('!<Ct<<!"=(lad \'', null)
+=> '!'
+=== strip_tags('!<Ct<<!"=(lad \'', '<a><b>')
+=> '!'
+=== strip_tags('!<Ct<<!"=(lad \'', '<x>')
+=> '!'
+=== strip_tags("omlO>L!p\x00?-", null)
+=> 'omlO>L!p?-'
+=== strip_tags("omlO>L!p\x00?-", '<a><b>')
+=> 'omlO>L!p?-'
+=== strip_tags("omlO>L!p\x00?-", '<x>')
+=> 'omlO>L!p?-'
+=== strip_tags('> PDPCEdC!', null)
+=> '> PDPCEdC!'
+=== strip_tags('> PDPCEdC!', '<a><b>')
+=> '> PDPCEdC!'
+=== strip_tags('> PDPCEdC!', '<x>')
+=> '> PDPCEdC!'
+=== strip_tags("=P-\x00", null)
+=> '=P-'
+=== strip_tags("=P-\x00", '<a><b>')
+=> '=P-'
+=== strip_tags("=P-\x00", '<x>')
+=> '=P-'
+=== strip_tags(' DCe> ', null)
+=> ' DCe> '
+=== strip_tags(' DCe> ', '<a><b>')
+=> ' DCe> '
+=== strip_tags(' DCe> ', '<x>')
+=> ' DCe> '
+=== strip_tags('O<oye<O"', null)
+=> 'O'
+=== strip_tags('O<oye<O"', '<a><b>')
+=> 'O'
+=== strip_tags('O<oye<O"', '<x>')
+=> 'O'
+=== strip_tags('><><P\'x-\')?\\ldmc', null)
+=> '>'
+=== strip_tags('><><P\'x-\')?\\ldmc', '<a><b>')
+=> '>'
+=== strip_tags('><><P\'x-\')?\\ldmc', '<x>')
+=> '>'
+=== strip_tags('p<EaO\\<>ta', null)
+=> 'p'
+=== strip_tags('p<EaO\\<>ta', '<a><b>')
+=> 'p'
+=== strip_tags('p<EaO\\<>ta', '<x>')
+=> 'p'
+=== strip_tags('m\'T"/a<O<', null)
+=> 'm\'T"/a'
+=== strip_tags('m\'T"/a<O<', '<a><b>')
+=> 'm\'T"/a'
+=== strip_tags('m\'T"/a<O<', '<x>')
+=> 'm\'T"/a'
+=== strip_tags('Y-P/(\\a-beEd>t', null)
+=> 'Y-P/(\\a-beEd>t'
+=== strip_tags('Y-P/(\\a-beEd>t', '<a><b>')
+=> 'Y-P/(\\a-beEd>t'
+=== strip_tags('Y-P/(\\a-beEd>t', '<x>')
+=> 'Y-P/(\\a-beEd>t'
+=== strip_tags('\'\'<O!L> >-', null)
+=> '\'\' >-'
+=== strip_tags('\'\'<O!L> >-', '<a><b>')
+=> '\'\' >-'
+=== strip_tags('\'\'<O!L> >-', '<x>')
+=> '\'\' >-'
+=== strip_tags("t \x00o-o-'oec? /l-/>l<xx", null)
+=> 't o-o-\'oec? /l-/>l'
+=== strip_tags("t \x00o-o-'oec? /l-/>l<xx", '<a><b>')
+=> 't o-o-\'oec? /l-/>l'
+=== strip_tags("t \x00o-o-'oec? /l-/>l<xx", '<x>')
+=> 't o-o-\'oec? /l-/>l'
+=== strip_tags("?)Yl!?Ma\x00<?b>\x0aC\"t)\"<PC-", null)
+=> '?)Yl!?Ma'
+=== strip_tags("?)Yl!?Ma\x00<?b>\x0aC\"t)\"<PC-", '<a><b>')
+=> '?)Yl!?Ma'
+=== strip_tags("?)Yl!?Ma\x00<?b>\x0aC\"t)\"<PC-", '<x>')
+=> '?)Yl!?Ma'
+=== strip_tags('>)p-Omy>b) t-/\'mc', null)
+=> '>)p-Omy>b) t-/\'mc'
+=== strip_tags('>)p-Omy>b) t-/\'mc', '<a><b>')
+=> '>)p-Omy>b) t-/\'mc'
+=== strip_tags('>)p-Omy>b) t-/\'mc', '<x>')
+=> '>)p-Omy>b) t-/\'mc'
+=== strip_tags('E >-"//(Y"p<', null)
+=> 'E >-"//(Y"p'
+=== strip_tags('E >-"//(Y"p<', '<a><b>')
+=> 'E >-"//(Y"p'
+=== strip_tags('E >-"//(Y"p<', '<x>')
+=> 'E >-"//(Y"p'
+=== strip_tags("Edt<' eY)<LE\x00l", null)
+=> 'Edt'
+=== strip_tags("Edt<' eY)<LE\x00l", '<a><b>')
+=> 'Edt'
+=== strip_tags("Edt<' eY)<LE\x00l", '<x>')
+=> 'Edt'
+=== strip_tags("oL(<xCd\\d\\\\P<\x0ap\"<M!=\\<", null)
+=> 'oL('
+=== strip_tags("oL(<xCd\\d\\\\P<\x0ap\"<M!=\\<", '<a><b>')
+=> 'oL('
+=== strip_tags("oL(<xCd\\d\\\\P<\x0ap\"<M!=\\<", '<x>')
+=> 'oL('
+=== strip_tags('OM>>?C', null)
+=> 'OM>>?C'
+=== strip_tags('OM>>?C', '<a><b>')
+=> 'OM>>?C'
+=== strip_tags('OM>>?C', '<x>')
+=> 'OM>>?C'
+=== strip_tags('"\'y"\\Mb?ad<E\\!T"!!cT(', null)
+=> '"\'y"\\Mb?ad'
+=== strip_tags('"\'y"\\Mb?ad<E\\!T"!!cT(', '<a><b>')
+=> '"\'y"\\Mb?ad'
+=== strip_tags('"\'y"\\Mb?ad<E\\!T"!!cT(', '<x>')
+=> '"\'y"\\Mb?ad'
+=== strip_tags(">Dtbo\x0axtam?m\"", null)
+=> '>Dtbo
+xtam?m"'
+=== strip_tags(">Dtbo\x0axtam?m\"", '<a><b>')
+=> '>Dtbo
+xtam?m"'
+=== strip_tags(">Dtbo\x0axtam?m\"", '<x>')
+=> '>Dtbo
+xtam?m"'
+=== strip_tags('L YM', null)
+=> 'L YM'
+=== strip_tags('L YM', '<a><b>')
+=> 'L YM'
+=== strip_tags('L YM', '<x>')
+=> 'L YM'
+=== strip_tags('/>\'y(?CTlb(M-Dxbmm', null)
+=> '/>\'y(?CTlb(M-Dxbmm'
+=== strip_tags('/>\'y(?CTlb(M-Dxbmm', '<a><b>')
+=> '/>\'y(?CTlb(M-Dxbmm'
+=== strip_tags('/>\'y(?CTlb(M-Dxbmm', '<x>')
+=> '/>\'y(?CTlb(M-Dxbmm'
+=== strip_tags("\x0a", null)
+=> '
+'
+=== strip_tags("\x0a", '<a><b>')
+=> '
+'
+=== strip_tags("\x0a", '<x>')
+=> '
+'
+=== strip_tags('\'yl!Y=', null)
+=> '\'yl!Y='
+=== strip_tags('\'yl!Y=', '<a><b>')
+=> '\'yl!Y='
+=== strip_tags('\'yl!Y=', '<x>')
+=> '\'yl!Y='
+=== strip_tags('lY\\D)o', null)
+=> 'lY\\D)o'
+=== strip_tags('lY\\D)o', '<a><b>')
+=> 'lY\\D)o'
+=== strip_tags('lY\\D)o', '<x>')
+=> 'lY\\D)o'
+=== strip_tags('<!P<DOo>-!>M\\', null)
+=> '-!>M\\'
+=== strip_tags('<!P<DOo>-!>M\\', '<a><b>')
+=> '-!>M\\'
+=== strip_tags('<!P<DOo>-!>M\\', '<x>')
+=> '-!>M\\'
+=== strip_tags('tc(o', null)
+=> 'tc(o'
+=== strip_tags('tc(o', '<a><b>')
+=> 'tc(o'
+=== strip_tags('tc(o', '<x>')
+=> 'tc(o'
+=== strip_tags('<bd-<(/)"p\\', null)
+=> ''
+=== strip_tags('<bd-<(/)"p\\', '<a><b>')
+=> ''
+=== strip_tags('<bd-<(/)"p\\', '<x>')
+=> ''
+=== strip_tags('Y<bl<e!(b"T"="<e', null)
+=> 'Y'
+=== strip_tags('Y<bl<e!(b"T"="<e', '<a><b>')
+=> 'Y'
+=== strip_tags('Y<bl<e!(b"T"="<e', '<x>')
+=> 'Y'
+=== strip_tags('a<?o\\', null)
+=> 'a'
+=== strip_tags('a<?o\\', '<a><b>')
+=> 'a'
+=== strip_tags('a<?o\\', '<x>')
+=> 'a'
+=== strip_tags('de/)L\\xLTPo-CCO', null)
+=> 'de/)L\\xLTPo-CCO'
+=== strip_tags('de/)L\\xLTPo-CCO', '<a><b>')
+=> 'de/)L\\xLTPo-CCO'
+=== strip_tags('de/)L\\xLTPo-CCO', '<x>')
+=> 'de/)L\\xLTPo-CCO'
+=== strip_tags(" !'=M'cl\\T<! Lb\\\x00D=d'>E", null)
+=> ' !\'=M\'cl\\T'
+=== strip_tags(" !'=M'cl\\T<! Lb\\\x00D=d'>E", '<a><b>')
+=> ' !\'=M\'cl\\T'
+=== strip_tags(" !'=M'cl\\T<! Lb\\\x00D=d'>E", '<x>')
+=> ' !\'=M\'cl\\T'
+=== strip_tags('<>yL>cMlOdyl\'', null)
+=> 'yL>cMlOdyl\''
+=== strip_tags('<>yL>cMlOdyl\'', '<a><b>')
+=> 'yL>cMlOdyl\''
+=== strip_tags('<>yL>cMlOdyl\'', '<x>')
+=> 'yL>cMlOdyl\''
+=== strip_tags('-o(-!y"T-?b-"', null)
+=> '-o(-!y"T-?b-"'
+=== strip_tags('-o(-!y"T-?b-"', '<a><b>')
+=> '-o(-!y"T-?b-"'
+=== strip_tags('-o(-!y"T-?b-"', '<x>')
+=> '-o(-!y"T-?b-"'
+=== strip_tags('-!b?\\!<mO"', null)
+=> '-!b?\\!'
+=== strip_tags('-!b?\\!<mO"', '<a><b>')
+=> '-!b?\\!'
+=== strip_tags('-!b?\\!<mO"', '<x>')
+=> '-!b?\\!'
+=== strip_tags("C?ale?L-!(m\x00\"EM!mxp", null)
+=> 'C?ale?L-!(m"EM!mxp'
+=== strip_tags("C?ale?L-!(m\x00\"EM!mxp", '<a><b>')
+=> 'C?ale?L-!(m"EM!mxp'
+=== strip_tags("C?ale?L-!(m\x00\"EM!mxp", '<x>')
+=> 'C?ale?L-!(m"EM!mxp'
+=== strip_tags('!Td?OP"MbP>', null)
+=> '!Td?OP"MbP>'
+=== strip_tags('!Td?OP"MbP>', '<a><b>')
+=> '!Td?OP"MbP>'
+=== strip_tags('!Td?OP"MbP>', '<x>')
+=> '!Td?OP"MbP>'
+=== strip_tags('->!', null)
+=> '->!'
+=== strip_tags('->!', '<a><b>')
+=> '->!'
+=== strip_tags('->!', '<x>')
+=> '->!'
+=== strip_tags('!cdy aoxTa-\' xpe', null)
+=> '!cdy aoxTa-\' xpe'
+=== strip_tags('!cdy aoxTa-\' xpe', '<a><b>')
+=> '!cdy aoxTa-\' xpe'
+=== strip_tags('!cdy aoxTa-\' xpe', '<x>')
+=> '!cdy aoxTa-\' xpe'
+=== strip_tags("!>'-\x00!DM'\\y!ae?o'o?bC", null)
+=> '!>\'-!DM\'\\y!ae?o\'o?bC'
+=== strip_tags("!>'-\x00!DM'\\y!ae?o'o?bC", '<a><b>')
+=> '!>\'-!DM\'\\y!ae?o\'o?bC'
+=== strip_tags("!>'-\x00!DM'\\y!ae?o'o?bC", '<x>')
+=> '!>\'-!DM\'\\y!ae?o\'o?bC'
+=== strip_tags('"mD', null)
+=> '"mD'
+=== strip_tags('"mD', '<a><b>')
+=> '"mD'
+=== strip_tags('"mD', '<x>')
+=> '"mD'
+=== strip_tags('/)', null)
+=> '/)'
+=== strip_tags('/)', '<a><b>')
+=> '/)'
+=== strip_tags('/)', '<x>')
+=> '/)'
+=== strip_tags('xp!T"', null)
+=> 'xp!T"'
+=== strip_tags('xp!T"', '<a><b>')
+=> 'xp!T"'
+=== strip_tags('xp!T"', '<x>')
+=> 'xp!T"'
+=== strip_tags('l=', null)
+=> 'l='
+=== strip_tags('l=', '<a><b>')
+=> 'l='
+=== strip_tags('l=', '<x>')
+=> 'l='
+=== strip_tags(" '\">\x00\"", null)
+=> ' \'">"'
+=== strip_tags(" '\">\x00\"", '<a><b>')
+=> ' \'">"'
+=== strip_tags(" '\">\x00\"", '<x>')
+=> ' \'">"'
+=== strip_tags('\\p(yDT', null)
+=> '\\p(yDT'
+=== strip_tags('\\p(yDT', '<a><b>')
+=> '\\p(yDT'
+=== strip_tags('\\p(yDT', '<x>')
+=> '\\p(yDT'
+=== strip_tags("\x00!</", null)
+=> '!'
+=== strip_tags("\x00!</", '<a><b>')
+=> '!'
+=== strip_tags("\x00!</", '<x>')
+=> '!'
+=== strip_tags('?\\', null)
+=> '?\\'
+=== strip_tags('?\\', '<a><b>')
+=> '?\\'
+=== strip_tags('?\\', '<x>')
+=> '?\\'
+=== strip_tags('Y', null)
+=> 'Y'
+=== strip_tags('Y', '<a><b>')
+=> 'Y'
+=== strip_tags('Y', '<x>')
+=> 'Y'
+=== strip_tags('c!TT>D>bd?b', null)
+=> 'c!TT>D>bd?b'
+=== strip_tags('c!TT>D>bd?b', '<a><b>')
+=> 'c!TT>D>bd?b'
+=== strip_tags('c!TT>D>bd?b', '<x>')
+=> 'c!TT>D>bd?b'
+=== strip_tags('Lm', null)
+=> 'Lm'
+=== strip_tags('Lm', '<a><b>')
+=> 'Lm'
+=== strip_tags('Lm', '<x>')
+=> 'Lm'
+=== strip_tags('\\E>', null)
+=> '\\E>'
+=== strip_tags('\\E>', '<a><b>')
+=> '\\E>'
+=== strip_tags('\\E>', '<x>')
+=> '\\E>'
+=== strip_tags('Teyaxm\\"D?', null)
+=> 'Teyaxm\\"D?'
+=== strip_tags('Teyaxm\\"D?', '<a><b>')
+=> 'Teyaxm\\"D?'
+=== strip_tags('Teyaxm\\"D?', '<x>')
+=> 'Teyaxm\\"D?'
+=== strip_tags('>P-dya-', null)
+=> '>P-dya-'
+=== strip_tags('>P-dya-', '<a><b>')
+=> '>P-dya-'
+=== strip_tags('>P-dya-', '<x>')
+=> '>P-dya-'
+=== strip_tags("D'D\x0aP'\x0aomx/->", null)
+=> 'D\'D
+P\'
+omx/->'
+=== strip_tags("D'D\x0aP'\x0aomx/->", '<a><b>')
+=> 'D\'D
+P\'
+omx/->'
+=== strip_tags("D'D\x0aP'\x0aomx/->", '<x>')
+=> 'D\'D
+P\'
+omx/->'
+=== strip_tags('\\<>>aO', null)
+=> '\\>aO'
+=== strip_tags('\\<>>aO', '<a><b>')
+=> '\\>aO'
+=== strip_tags('\\<>>aO', '<x>')
+=> '\\>aO'
+=== strip_tags("!C\x0a\"'t", null)
+=> '!C
+"\'t'
+=== strip_tags("!C\x0a\"'t", '<a><b>')
+=> '!C
+"\'t'
+=== strip_tags("!C\x0a\"'t", '<x>')
+=> '!C
+"\'t'
+=== strip_tags('b<-yE', null)
+=> 'b'
+=== strip_tags('b<-yE', '<a><b>')
+=> 'b'
+=== strip_tags('b<-yE', '<x>')
+=> 'b'
+=== strip_tags('d<<\\P\'E/\\L!-\\\'OT', null)
+=> 'd'
+=== strip_tags('d<<\\P\'E/\\L!-\\\'OT', '<a><b>')
+=> 'd'
+=== strip_tags('d<<\\P\'E/\\L!-\\\'OT', '<x>')
+=> 'd'
+=== strip_tags("d/!Co\x0at\"<<dLa O?C\x0ayy\\L<", null)
+=> 'd/!Co
+t"'
+=== strip_tags("d/!Co\x0at\"<<dLa O?C\x0ayy\\L<", '<a><b>')
+=> 'd/!Co
+t"'
+=== strip_tags("d/!Co\x0at\"<<dLa O?C\x0ayy\\L<", '<x>')
+=> 'd/!Co
+t"'
+=== strip_tags('Y \'/CD)x', null)
+=> 'Y \'/CD)x'
+=== strip_tags('Y \'/CD)x', '<a><b>')
+=> 'Y \'/CD)x'
+=== strip_tags('Y \'/CD)x', '<x>')
+=> 'Y \'/CD)x'
+=== strip_tags("c eLYc\x00b", null)
+=> 'c eLYcb'
+=== strip_tags("c eLYc\x00b", '<a><b>')
+=> 'c eLYcb'
+=== strip_tags("c eLYc\x00b", '<x>')
+=> 'c eLYcb'
+=== strip_tags('--\'<\'-', null)
+=> '--\''
+=== strip_tags('--\'<\'-', '<a><b>')
+=> '--\''
+=== strip_tags('--\'<\'-', '<x>')
+=> '--\''
+=== strip_tags('\'P) lCDE(-', null)
+=> '\'P) lCDE(-'
+=== strip_tags('\'P) lCDE(-', '<a><b>')
+=> '\'P) lCDE(-'
+=== strip_tags('\'P) lCDE(-', '<x>')
+=> '\'P) lCDE(-'
+=== strip_tags('<bECbD=eExM<', null)
+=> ''
+=== strip_tags('<bECbD=eExM<', '<a><b>')
+=> ''
+=== strip_tags('<bECbD=eExM<', '<x>')
+=> ''
+=== strip_tags("lOoM xO'tE/po>>ad\x00C!Ydc", null)
+=> 'lOoM xO\'tE/po>>adC!Ydc'
+=== strip_tags("lOoM xO'tE/po>>ad\x00C!Ydc", '<a><b>')
+=> 'lOoM xO\'tE/po>>adC!Ydc'
+=== strip_tags("lOoM xO'tE/po>>ad\x00C!Ydc", '<x>')
+=> 'lOoM xO\'tE/po>>adC!Ydc'
+=== strip_tags("Y m<D(b<EP!o/ \\\x0a", null)
+=> 'Y m'
+=== strip_tags("Y m<D(b<EP!o/ \\\x0a", '<a><b>')
+=> 'Y m'
+=== strip_tags("Y m<D(b<EP!o/ \\\x0a", '<x>')
+=> 'Y m'
+=== strip_tags('!?>C\\Dx/PPx\\--T)E)eCo ', null)
+=> '!?>C\\Dx/PPx\\--T)E)eCo '
+=== strip_tags('!?>C\\Dx/PPx\\--T)E)eCo ', '<a><b>')
+=> '!?>C\\Dx/PPx\\--T)E)eCo '
+=== strip_tags('!?>C\\Dx/PPx\\--T)E)eCo ', '<x>')
+=> '!?>C\\Dx/PPx\\--T)E)eCo '
+=== strip_tags("(oL>\x00\\p", null)
+=> '(oL>\\p'
+=== strip_tags("(oL>\x00\\p", '<a><b>')
+=> '(oL>\\p'
+=== strip_tags("(oL>\x00\\p", '<x>')
+=> '(oL>\\p'
+=== strip_tags("o\"o-lt->a=>?M\\p\x0al'/b=)", null)
+=> 'o"o-lt->a=>?M\\p
+l\'/b=)'
+=== strip_tags("o\"o-lt->a=>?M\\p\x0al'/b=)", '<a><b>')
+=> 'o"o-lt->a=>?M\\p
+l\'/b=)'
+=== strip_tags("o\"o-lt->a=>?M\\p\x0al'/b=)", '<x>')
+=> 'o"o-lt->a=>?M\\p
+l\'/b=)'
+=== strip_tags('\'yP??!?L>', null)
+=> '\'yP??!?L>'
+=== strip_tags('\'yP??!?L>', '<a><b>')
+=> '\'yP??!?L>'
+=== strip_tags('\'yP??!?L>', '<x>')
+=> '\'yP??!?L>'
+=== strip_tags('?)<?Pxto-\'t', null)
+=> '?)'
+=== strip_tags('?)<?Pxto-\'t', '<a><b>')
+=> '?)'
+=== strip_tags('?)<?Pxto-\'t', '<x>')
+=> '?)'
+=== strip_tags("E!O>D t!??L=x\"'?\\pD\x0a'\"c", null)
+=> 'E!O>D t!??L=x"\'?\\pD
+\'"c'
+=== strip_tags("E!O>D t!??L=x\"'?\\pD\x0a'\"c", '<a><b>')
+=> 'E!O>D t!??L=x"\'?\\pD
+\'"c'
+=== strip_tags("E!O>D t!??L=x\"'?\\pD\x0a'\"c", '<x>')
+=> 'E!O>D t!??L=x"\'?\\pD
+\'"c'
+=== strip_tags(' <DT?xYea', null)
+=> ' '
+=== strip_tags(' <DT?xYea', '<a><b>')
+=> ' '
+=== strip_tags(' <DT?xYea', '<x>')
+=> ' '
+=== strip_tags('\'E)>DO"<y" \\p?-L"tc', null)
+=> '\'E)>DO"'
+=== strip_tags('\'E)>DO"<y" \\p?-L"tc', '<a><b>')
+=> '\'E)>DO"'
+=== strip_tags('\'E)>DO"<y" \\p?-L"tc', '<x>')
+=> '\'E)>DO"'
+=== strip_tags("D>?!>mxl)?=\x0ad\x00edMC", null)
+=> 'D>?!>mxl)?=
+dedMC'
+=== strip_tags("D>?!>mxl)?=\x0ad\x00edMC", '<a><b>')
+=> 'D>?!>mxl)?=
+dedMC'
+=== strip_tags("D>?!>mxl)?=\x0ad\x00edMC", '<x>')
+=> 'D>?!>mxl)?=
+dedMC'
+=== strip_tags('\\(<! -O-o!be?b<p\\ ?y</\'', null)
+=> '\\('
+=== strip_tags('\\(<! -O-o!be?b<p\\ ?y</\'', '<a><b>')
+=> '\\('
+=== strip_tags('\\(<! -O-o!be?b<p\\ ?y</\'', '<x>')
+=> '\\('
+=== strip_tags(' /P!x ?<', null)
+=> ' /P!x ?'
+=== strip_tags(' /P!x ?<', '<a><b>')
+=> ' /P!x ?'
+=== strip_tags(' /P!x ?<', '<x>')
+=> ' /P!x ?'
+=== strip_tags('c>!=', null)
+=> 'c>!='
+=== strip_tags('c>!=', '<a><b>')
+=> 'c>!='
+=== strip_tags('c>!=', '<x>')
+=> 'c>!='
+=== strip_tags("Mp<E!< m\x0ac >\"!\\/=(l?", null)
+=> 'Mp"!\\/=(l?'
+=== strip_tags("Mp<E!< m\x0ac >\"!\\/=(l?", '<a><b>')
+=> 'Mp"!\\/=(l?'
+=== strip_tags("Mp<E!< m\x0ac >\"!\\/=(l?", '<x>')
+=> 'Mp"!\\/=(l?'
+=== strip_tags('!l>/', null)
+=> '!l>/'
+=== strip_tags('!l>/', '<a><b>')
+=> '!l>/'
+=== strip_tags('!l>/', '<x>')
+=> '!l>/'
+=== strip_tags("o)Mb\x00l", null)
+=> 'o)Mbl'
+=== strip_tags("o)Mb\x00l", '<a><b>')
+=> 'o)Mbl'
+=== strip_tags("o)Mb\x00l", '<x>')
+=> 'o)Mbl'
+=== strip_tags("\x0ax(yELbdo-(?'m", null)
+=> '
+x(yELbdo-(?\'m'
+=== strip_tags("\x0ax(yELbdo-(?'m", '<a><b>')
+=> '
+x(yELbdo-(?\'m'
+=== strip_tags("\x0ax(yELbdo-(?'m", '<x>')
+=> '
+x(yELbdo-(?\'m'
+=== strip_tags('\'<>e(L?<E!a/ym<oPo\'>', null)
+=> '\'e(L?'
+=== strip_tags('\'<>e(L?<E!a/ym<oPo\'>', '<a><b>')
+=> '\'e(L?'
+=== strip_tags('\'<>e(L?<E!a/ym<oPo\'>', '<x>')
+=> '\'e(L?'
+=== strip_tags('t)\\T>T\\Y"Y-lTb=>\\\'o C', null)
+=> 't)\\T>T\\Y"Y-lTb=>\\\'o C'
+=== strip_tags('t)\\T>T\\Y"Y-lTb=>\\\'o C', '<a><b>')
+=> 't)\\T>T\\Y"Y-lTb=>\\\'o C'
+=== strip_tags('t)\\T>T\\Y"Y-lTb=>\\\'o C', '<x>')
+=> 't)\\T>T\\Y"Y-lTb=>\\\'o C'
+=== strip_tags('<!\'"', null)
+=> ''
+=== strip_tags('<!\'"', '<a><b>')
+=> ''
+=== strip_tags('<!\'"', '<x>')
+=> ''
+=== strip_tags("\x0a\x0a<>cC!\x00P>x\"CP", null)
+=> '
+
+cC!P>x"CP'
+=== strip_tags("\x0a\x0a<>cC!\x00P>x\"CP", '<a><b>')
+=> '
+
+cC!P>x"CP'
+=== strip_tags("\x0a\x0a<>cC!\x00P>x\"CP", '<x>')
+=> '
+
+cC!P>x"CP'
+=== strip_tags('b>?lp', null)
+=> 'b>?lp'
+=== strip_tags('b>?lp', '<a><b>')
+=> 'b>?lp'
+=== strip_tags('b>?lp', '<x>')
+=> 'b>?lp'
+=== strip_tags('l<x=>l-c', null)
+=> 'll-c'
+=== strip_tags('l<x=>l-c', '<a><b>')
+=> 'll-c'
+=== strip_tags('l<x=>l-c', '<x>')
+=> 'll-c'
+=== strip_tags("y\x0aP!C\"!'a", null)
+=> 'y
+P!C"!\'a'
+=== strip_tags("y\x0aP!C\"!'a", '<a><b>')
+=> 'y
+P!C"!\'a'
+=== strip_tags("y\x0aP!C\"!'a", '<x>')
+=> 'y
+P!C"!\'a'
+=== strip_tags('ad(c o', null)
+=> 'ad(c o'
+=== strip_tags('ad(c o', '<a><b>')
+=> 'ad(c o'
+=== strip_tags('ad(c o', '<x>')
+=> 'ad(c o'
+=== strip_tags('>D!yy<cM-DT"> xyT', null)
+=> '>D!yy'
+=== strip_tags('>D!yy<cM-DT"> xyT', '<a><b>')
+=> '>D!yy'
+=== strip_tags('>D!yy<cM-DT"> xyT', '<x>')
+=> '>D!yy'
+=== strip_tags("/>\x00>C", null)
+=> '/>>C'
+=== strip_tags("/>\x00>C", '<a><b>')
+=> '/>>C'
+=== strip_tags("/>\x00>C", '<x>')
+=> '/>>C'
+=== strip_tags('ll !', null)
+=> 'll !'
+=== strip_tags('ll !', '<a><b>')
+=> 'll !'
+=== strip_tags('ll !', '<x>')
+=> 'll !'
+=== strip_tags("eD)m'M\x0a!\\(\"x\"L", null)
+=> 'eD)m\'M
+!\\("x"L'
+=== strip_tags("eD)m'M\x0a!\\(\"x\"L", '<a><b>')
+=> 'eD)m\'M
+!\\("x"L'
+=== strip_tags("eD)m'M\x0a!\\(\"x\"L", '<x>')
+=> 'eD)m\'M
+!\\("x"L'
+=== strip_tags('l-=<yTt D>l', null)
+=> 'l-=l'
+=== strip_tags('l-=<yTt D>l', '<a><b>')
+=> 'l-=l'
+=== strip_tags('l-=<yTt D>l', '<x>')
+=> 'l-=l'
+=== strip_tags('=?-(cCDp"\\', null)
+=> '=?-(cCDp"\\'
+=== strip_tags('=?-(cCDp"\\', '<a><b>')
+=> '=?-(cCDp"\\'
+=== strip_tags('=?-(cCDp"\\', '<x>')
+=> '=?-(cCDp"\\'
+=== strip_tags(")a-p-<P\x0a\x00!Dd(>!-D?E", null)
+=> ')a-p-!-D?E'
+=== strip_tags(")a-p-<P\x0a\x00!Dd(>!-D?E", '<a><b>')
+=> ')a-p-!-D?E'
+=== strip_tags(")a-p-<P\x0a\x00!Dd(>!-D?E", '<x>')
+=> ')a-p-!-D?E'
+=== strip_tags("\\>!T?\x0a\x00b \\", null)
+=> '\\>!T?
+b \\'
+=== strip_tags("\\>!T?\x0a\x00b \\", '<a><b>')
+=> '\\>!T?
+b \\'
+=== strip_tags("\\>!T?\x0a\x00b \\", '<x>')
+=> '\\>!T?
+b \\'
+=== strip_tags('o', null)
+=> 'o'
+=== strip_tags('o', '<a><b>')
+=> 'o'
+=== strip_tags('o', '<x>')
+=> 'o'
+=== strip_tags('dMTLx<d D\\=Y', null)
+=> 'dMTLx'
+=== strip_tags('dMTLx<d D\\=Y', '<a><b>')
+=> 'dMTLx'
+=== strip_tags('dMTLx<d D\\=Y', '<x>')
+=> 'dMTLx'
+=== strip_tags('=t!!<C', null)
+=> '=t!!'
+=== strip_tags('=t!!<C', '<a><b>')
+=> '=t!!'
+=== strip_tags('=t!!<C', '<x>')
+=> '=t!!'
+=== strip_tags('\'\'!/L!?(>cT>P!', null)
+=> '\'\'!/L!?(>cT>P!'
+=== strip_tags('\'\'!/L!?(>cT>P!', '<a><b>')
+=> '\'\'!/L!?(>cT>P!'
+=== strip_tags('\'\'!/L!?(>cT>P!', '<x>')
+=> '\'\'!/L!?(>cT>P!'
+=== strip_tags("P\"pO('? \\'\x0a<b", null)
+=> 'P"pO(\'? \\\'
+'
+=== strip_tags("P\"pO('? \\'\x0a<b", '<a><b>')
+=> 'P"pO(\'? \\\'
+'
+=== strip_tags("P\"pO('? \\'\x0a<b", '<x>')
+=> 'P"pO(\'? \\\'
+'
+=== strip_tags('d=-C!d!"lb!-O?Cbt', null)
+=> 'd=-C!d!"lb!-O?Cbt'
+=== strip_tags('d=-C!d!"lb!-O?Cbt', '<a><b>')
+=> 'd=-C!d!"lb!-O?Cbt'
+=== strip_tags('d=-C!d!"lb!-O?Cbt', '<x>')
+=> 'd=-C!d!"lb!-O?Cbt'
+=== strip_tags('t>lcd!e""o(\\bO"<\'', null)
+=> 't>lcd!e""o(\\bO"'
+=== strip_tags('t>lcd!e""o(\\bO"<\'', '<a><b>')
+=> 't>lcd!e""o(\\bO"'
+=== strip_tags('t>lcd!e""o(\\bO"<\'', '<x>')
+=> 't>lcd!e""o(\\bO"'
+=== strip_tags(' Dcl M>D>>Y', null)
+=> ' Dcl M>D>>Y'
+=== strip_tags(' Dcl M>D>>Y', '<a><b>')
+=> ' Dcl M>D>>Y'
+=== strip_tags(' Dcl M>D>>Y', '<x>')
+=> ' Dcl M>D>>Y'
+=== strip_tags('xC\'t>C(dL<>)= d\'!O>Y', null)
+=> 'xC\'t>C(dL)= d\'!O>Y'
+=== strip_tags('xC\'t>C(dL<>)= d\'!O>Y', '<a><b>')
+=> 'xC\'t>C(dL)= d\'!O>Y'
+=== strip_tags('xC\'t>C(dL<>)= d\'!O>Y', '<x>')
+=> 'xC\'t>C(dL)= d\'!O>Y'
+=== strip_tags('-y??a)', null)
+=> '-y??a)'
+=== strip_tags('-y??a)', '<a><b>')
+=> '-y??a)'
+=== strip_tags('-y??a)', '<x>')
+=> '-y??a)'
+=== strip_tags('>??tO!<', null)
+=> '>??tO!'
+=== strip_tags('>??tO!<', '<a><b>')
+=> '>??tO!'
+=== strip_tags('>??tO!<', '<x>')
+=> '>??tO!'
+=== strip_tags('\'?t"My<\'Lt)\'xL mcD', null)
+=> '\'?t"My'
+=== strip_tags('\'?t"My<\'Lt)\'xL mcD', '<a><b>')
+=> '\'?t"My'
+=== strip_tags('\'?t"My<\'Lt)\'xL mcD', '<x>')
+=> '\'?t"My'
+=== strip_tags("CE'?\x00mmp", null)
+=> 'CE\'?mmp'
+=== strip_tags("CE'?\x00mmp", '<a><b>')
+=> 'CE\'?mmp'
+=== strip_tags("CE'?\x00mmp", '<x>')
+=> 'CE\'?mmp'
+=== strip_tags('>>x\\?b', null)
+=> '>>x\\?b'
+=== strip_tags('>>x\\?b', '<a><b>')
+=> '>>x\\?b'
+=== strip_tags('>>x\\?b', '<x>')
+=> '>>x\\?b'
+=== strip_tags('YxY\\dabo!\'\'=<', null)
+=> 'YxY\\dabo!\'\'='
+=== strip_tags('YxY\\dabo!\'\'=<', '<a><b>')
+=> 'YxY\\dabo!\'\'='
+=== strip_tags('YxY\\dabo!\'\'=<', '<x>')
+=> 'YxY\\dabo!\'\'='
+=== strip_tags('T"?a<Y? <T"', null)
+=> 'T"?a'
+=== strip_tags('T"?a<Y? <T"', '<a><b>')
+=> 'T"?a'
+=== strip_tags('T"?a<Y? <T"', '<x>')
+=> 'T"?a'
+=== strip_tags("t<LD\\p=lyt\x00-\x0aT\x00>d ac\x0al", null)
+=> 'td ac
+l'
+=== strip_tags("t<LD\\p=lyt\x00-\x0aT\x00>d ac\x0al", '<a><b>')
+=> 'td ac
+l'
+=== strip_tags("t<LD\\p=lyt\x00-\x0aT\x00>d ac\x0al", '<x>')
+=> 'td ac
+l'
+=== strip_tags("aCp>\x0a-\"a><(\\\"(", null)
+=> 'aCp>
+-"a>'
+=== strip_tags("aCp>\x0a-\"a><(\\\"(", '<a><b>')
+=> 'aCp>
+-"a>'
+=== strip_tags("aCp>\x0a-\"a><(\\\"(", '<x>')
+=> 'aCp>
+-"a>'
+=== strip_tags('\\(\'MxmpxyM(M?oDd', null)
+=> '\\(\'MxmpxyM(M?oDd'
+=== strip_tags('\\(\'MxmpxyM(M?oDd', '<a><b>')
+=> '\\(\'MxmpxyM(M?oDd'
+=== strip_tags('\\(\'MxmpxyM(M?oDd', '<x>')
+=> '\\(\'MxmpxyM(M?oDd'
+=== strip_tags('<!aM=<PM', null)
+=> ''
+=== strip_tags('<!aM=<PM', '<a><b>')
+=> ''
+=== strip_tags('<!aM=<PM', '<x>')
+=> ''
+=== strip_tags('Y<pa !', null)
+=> 'Y'
+=== strip_tags('Y<pa !', '<a><b>')
+=> 'Y'
+=== strip_tags('Y<pa !', '<x>')
+=> 'Y'
+=== strip_tags('\\<-<McD!T"<\\x\')\'= =!=', null)
+=> '\\'
+=== strip_tags('\\<-<McD!T"<\\x\')\'= =!=', '<a><b>')
+=> '\\'
+=== strip_tags('\\<-<McD!T"<\\x\')\'= =!=', '<x>')
+=> '\\'
+=== strip_tags('lY?<<??/ Om!o<', null)
+=> 'lY?'
+=== strip_tags('lY?<<??/ Om!o<', '<a><b>')
+=> 'lY?'
+=== strip_tags('lY?<<??/ Om!o<', '<x>')
+=> 'lY?'
+=== strip_tags('<-!-', null)
+=> ''
+=== strip_tags('<-!-', '<a><b>')
+=> ''
+=== strip_tags('<-!-', '<x>')
+=> ''
+=== strip_tags('a\\-!-!p (-!=<>\\xce/"!)', null)
+=> 'a\\-!-!p (-!=\\xce/"!)'
+=== strip_tags('a\\-!-!p (-!=<>\\xce/"!)', '<a><b>')
+=> 'a\\-!-!p (-!=\\xce/"!)'
+=== strip_tags('a\\-!-!p (-!=<>\\xce/"!)', '<x>')
+=> 'a\\-!-!p (-!=\\xce/"!)'
+=== strip_tags('"(=', null)
+=> '"(='
+=== strip_tags('"(=', '<a><b>')
+=> '"(='
+=== strip_tags('"(=', '<x>')
+=> '"(='
+=== strip_tags('<t- EEaa\\=E!dY=\'\\\\P!O', null)
+=> ''
+=== strip_tags('<t- EEaa\\=E!dY=\'\\\\P!O', '<a><b>')
+=> ''
+=== strip_tags('<t- EEaa\\=E!dY=\'\\\\P!O', '<x>')
+=> ''
+=== strip_tags('Mt ?/P', null)
+=> 'Mt ?/P'
+=== strip_tags('Mt ?/P', '<a><b>')
+=> 'Mt ?/P'
+=== strip_tags('Mt ?/P', '<x>')
+=> 'Mt ?/P'
+=== strip_tags('pC', null)
+=> 'pC'
+=== strip_tags('pC', '<a><b>')
+=> 'pC'
+=== strip_tags('pC', '<x>')
+=> 'pC'
+=== strip_tags('?Pd)', null)
+=> '?Pd)'
+=== strip_tags('?Pd)', '<a><b>')
+=> '?Pd)'
+=== strip_tags('?Pd)', '<x>')
+=> '?Pd)'
+=== strip_tags("==?> -\x0a(/>e", null)
+=> '==?> -
+(/>e'
+=== strip_tags("==?> -\x0a(/>e", '<a><b>')
+=> '==?> -
+(/>e'
+=== strip_tags("==?> -\x0a(/>e", '<x>')
+=> '==?> -
+(/>e'
+=== strip_tags('\'EPx', null)
+=> '\'EPx'
+=== strip_tags('\'EPx', '<a><b>')
+=> '\'EPx'
+=== strip_tags('\'EPx', '<x>')
+=> '\'EPx'
+=== strip_tags("(lC<\"\x0a-?E<'", null)
+=> '(lC'
+=== strip_tags("(lC<\"\x0a-?E<'", '<a><b>')
+=> '(lC'
+=== strip_tags("(lC<\"\x0a-?E<'", '<x>')
+=> '(lC'
+=== strip_tags('P<<=\'/b\\E<(!!CT>/p', null)
+=> 'P'
+=== strip_tags('P<<=\'/b\\E<(!!CT>/p', '<a><b>')
+=> 'P'
+=== strip_tags('P<<=\'/b\\E<(!!CT>/p', '<x>')
+=> 'P'
+=== strip_tags('!\'=T\'\'x>(oY<', null)
+=> '!\'=T\'\'x>(oY'
+=== strip_tags('!\'=T\'\'x>(oY<', '<a><b>')
+=> '!\'=T\'\'x>(oY'
+=== strip_tags('!\'=T\'\'x>(oY<', '<x>')
+=> '!\'=T\'\'x>(oY'
+=== strip_tags('aM\'\'? e<', null)
+=> 'aM\'\'? e'
+=== strip_tags('aM\'\'? e<', '<a><b>')
+=> 'aM\'\'? e'
+=== strip_tags('aM\'\'? e<', '<x>')
+=> 'aM\'\'? e'
+=== strip_tags("Mced)b?cm?\\c>)p>\x0aD", null)
+=> 'Mced)b?cm?\\c>)p>
+D'
+=== strip_tags("Mced)b?cm?\\c>)p>\x0aD", '<a><b>')
+=> 'Mced)b?cm?\\c>)p>
+D'
+=== strip_tags("Mced)b?cm?\\c>)p>\x0aD", '<x>')
+=> 'Mced)b?cm?\\c>)p>
+D'
+=== strip_tags('>!C?)>C<L\'O', null)
+=> '>!C?)>C'
+=== strip_tags('>!C?)>C<L\'O', '<a><b>')
+=> '>!C?)>C'
+=== strip_tags('>!C?)>C<L\'O', '<x>')
+=> '>!C?)>C'
+=== strip_tags('T >LxEeyL?EY!\\"e', null)
+=> 'T >LxEeyL?EY!\\"e'
+=== strip_tags('T >LxEeyL?EY!\\"e', '<a><b>')
+=> 'T >LxEeyL?EY!\\"e'
+=== strip_tags('T >LxEeyL?EY!\\"e', '<x>')
+=> 'T >LxEeyL?EY!\\"e'
+=== strip_tags('!D>\'y\'TTdP<?-!me/', null)
+=> '!D>\'y\'TTdP'
+=== strip_tags('!D>\'y\'TTdP<?-!me/', '<a><b>')
+=> '!D>\'y\'TTdP'
+=== strip_tags('!D>\'y\'TTdP<?-!me/', '<x>')
+=> '!D>\'y\'TTdP'
+=== strip_tags("DMxd=LD>\x0a", null)
+=> 'DMxd=LD>
+'
+=== strip_tags("DMxd=LD>\x0a", '<a><b>')
+=> 'DMxd=LD>
+'
+=== strip_tags("DMxd=LD>\x0a", '<x>')
+=> 'DMxd=LD>
+'
+=== strip_tags('Lm)l', null)
+=> 'Lm)l'
+=== strip_tags('Lm)l', '<a><b>')
+=> 'Lm)l'
+=== strip_tags('Lm)l', '<x>')
+=> 'Lm)l'
+=== strip_tags('Y"<', null)
+=> 'Y"'
+=== strip_tags('Y"<', '<a><b>')
+=> 'Y"'
+=== strip_tags('Y"<', '<x>')
+=> 'Y"'
+=== strip_tags("\x0a\\PDMd? YoC<aaoem-/\"\"O", null)
+=> '
+\\PDMd? YoC'
+=== strip_tags("\x0a\\PDMd? YoC<aaoem-/\"\"O", '<a><b>')
+=> '
+\\PDMd? YoC'
+=== strip_tags("\x0a\\PDMd? YoC<aaoem-/\"\"O", '<x>')
+=> '
+\\PDMd? YoC'
+=== strip_tags('a\\t\'\'=bP-a', null)
+=> 'a\\t\'\'=bP-a'
+=== strip_tags('a\\t\'\'=bP-a', '<a><b>')
+=> 'a\\t\'\'=bP-a'
+=== strip_tags('a\\t\'\'=bP-a', '<x>')
+=> 'a\\t\'\'=bP-a'
+=== strip_tags('o"', null)
+=> 'o"'
+=== strip_tags('o"', '<a><b>')
+=> 'o"'
+=== strip_tags('o"', '<x>')
+=> 'o"'
+=== strip_tags("Op'P<O\"-tP!< Pm'C\x0a", null)
+=> 'Op\'P'
+=== strip_tags("Op'P<O\"-tP!< Pm'C\x0a", '<a><b>')
+=> 'Op\'P'
+=== strip_tags("Op'P<O\"-tP!< Pm'C\x0a", '<x>')
+=> 'Op\'P'
+=== strip_tags('<"Pcox-"?=>c ? c', null)
+=> 'c ? c'
+=== strip_tags('<"Pcox-"?=>c ? c', '<a><b>')
+=> 'c ? c'
+=== strip_tags('<"Pcox-"?=>c ? c', '<x>')
+=> 'c ? c'
+=== strip_tags('"dt=', null)
+=> '"dt='
+=== strip_tags('"dt=', '<a><b>')
+=> '"dt='
+=== strip_tags('"dt=', '<x>')
+=> '"dt='
+=== strip_tags('>Y?m\'-', null)
+=> '>Y?m\'-'
+=== strip_tags('>Y?m\'-', '<a><b>')
+=> '>Y?m\'-'
+=== strip_tags('>Y?m\'-', '<x>')
+=> '>Y?m\'-'
+=== strip_tags("t\"Y\"EdMPmbP\x0a)?x>!p\"c", null)
+=> 't"Y"EdMPmbP
+)?x>!p"c'
+=== strip_tags("t\"Y\"EdMPmbP\x0a)?x>!p\"c", '<a><b>')
+=> 't"Y"EdMPmbP
+)?x>!p"c'
+=== strip_tags("t\"Y\"EdMPmbP\x0a)?x>!p\"c", '<x>')
+=> 't"Y"EdMPmbP
+)?x>!p"c'
+=== strip_tags('> o', null)
+=> '> o'
+=== strip_tags('> o', '<a><b>')
+=> '> o'
+=== strip_tags('> o', '<x>')
+=> '> o'
+=== strip_tags('-aPLmM\\)D"x=<', null)
+=> '-aPLmM\\)D"x='
+=== strip_tags('-aPLmM\\)D"x=<', '<a><b>')
+=> '-aPLmM\\)D"x='
+=== strip_tags('-aPLmM\\)D"x=<', '<x>')
+=> '-aPLmM\\)D"x='
+=== strip_tags('a<\'PD pTeeO-', null)
+=> 'a'
+=== strip_tags('a<\'PD pTeeO-', '<a><b>')
+=> 'a'
+=== strip_tags('a<\'PD pTeeO-', '<x>')
+=> 'a'
+=== strip_tags(" YYL \"\\p-<\x00><Mo'/<!L", null)
+=> ' YYL "\\p-'
+=== strip_tags(" YYL \"\\p-<\x00><Mo'/<!L", '<a><b>')
+=> ' YYL "\\p-'
+=== strip_tags(" YYL \"\\p-<\x00><Mo'/<!L", '<x>')
+=> ' YYL "\\p-'
+=== strip_tags('Clo', null)
+=> 'Clo'
+=== strip_tags('Clo', '<a><b>')
+=> 'Clo'
+=== strip_tags('Clo', '<x>')
+=> 'Clo'
+=== strip_tags("Ox\\<-(e <)pY(at-\\\x00\"", null)
+=> 'Ox\\'
+=== strip_tags("Ox\\<-(e <)pY(at-\\\x00\"", '<a><b>')
+=> 'Ox\\'
+=== strip_tags("Ox\\<-(e <)pY(at-\\\x00\"", '<x>')
+=> 'Ox\\'
+=== strip_tags("\x0aPttd<L\x0a\"<?o  ", null)
+=> '
+Pttd'
+=== strip_tags("\x0aPttd<L\x0a\"<?o  ", '<a><b>')
+=> '
+Pttd'
+=== strip_tags("\x0aPttd<L\x0a\"<?o  ", '<x>')
+=> '
+Pttd'
+=== strip_tags(")m\\oD\x00/<L-t!'Md", null)
+=> ')m\\oD/'
+=== strip_tags(")m\\oD\x00/<L-t!'Md", '<a><b>')
+=> ')m\\oD/'
+=== strip_tags(")m\\oD\x00/<L-t!'Md", '<x>')
+=> ')m\\oD/'
+=== strip_tags("dc?\x0a'!c><>p\x0a-='<x)?", null)
+=> 'dc?
+\'!c>p
+-=\''
+=== strip_tags("dc?\x0a'!c><>p\x0a-='<x)?", '<a><b>')
+=> 'dc?
+\'!c>p
+-=\''
+=== strip_tags("dc?\x0a'!c><>p\x0a-='<x)?", '<x>')
+=> 'dc?
+\'!c>p
+-=\''
+=== strip_tags("'<b\x0a'(!\\\"a'Elt-", null)
+=> '\''
+=== strip_tags("'<b\x0a'(!\\\"a'Elt-", '<a><b>')
+=> '\''
+=== strip_tags("'<b\x0a'(!\\\"a'Elt-", '<x>')
+=> '\''
+=== strip_tags("<oyY!\x0adP", null)
+=> ''
+=== strip_tags("<oyY!\x0adP", '<a><b>')
+=> ''
+=== strip_tags("<oyY!\x0adP", '<x>')
+=> ''
+=== strip_tags("=c\x0aDT/\"=p p'L\"Tb?>ca", null)
+=> '=c
+DT/"=p p\'L"Tb?>ca'
+=== strip_tags("=c\x0aDT/\"=p p'L\"Tb?>ca", '<a><b>')
+=> '=c
+DT/"=p p\'L"Tb?>ca'
+=== strip_tags("=c\x0aDT/\"=p p'L\"Tb?>ca", '<x>')
+=> '=c
+DT/"=p p\'L"Tb?>ca'
+=== strip_tags(" < <\x00-EOc'l\x0a", null)
+=> ' < '
+=== strip_tags(" < <\x00-EOc'l\x0a", '<a><b>')
+=> ' < '
+=== strip_tags(" < <\x00-EOc'l\x0a", '<x>')
+=> ' < '
+=== strip_tags("(oM'L\x0a(>l'D'e'b-Oo>p(>", null)
+=> '(oM\'L
+(>l\'D\'e\'b-Oo>p(>'
+=== strip_tags("(oM'L\x0a(>l'D'e'b-Oo>p(>", '<a><b>')
+=> '(oM\'L
+(>l\'D\'e\'b-Oo>p(>'
+=== strip_tags("(oM'L\x0a(>l'D'e'b-Oo>p(>", '<x>')
+=> '(oM\'L
+(>l\'D\'e\'b-Oo>p(>'
+=== strip_tags(' >M!m><Et\'\\MP(\\\'\' )', null)
+=> ' >M!m>'
+=== strip_tags(' >M!m><Et\'\\MP(\\\'\' )', '<a><b>')
+=> ' >M!m>'
+=== strip_tags(' >M!m><Et\'\\MP(\\\'\' )', '<x>')
+=> ' >M!m>'
+=== strip_tags('>D', null)
+=> '>D'
+=== strip_tags('>D', '<a><b>')
+=> '>D'
+=== strip_tags('>D', '<x>')
+=> '>D'
+=== strip_tags("Od' 't<\x0a\\-\\=meTyl>TDt", null)
+=> 'Od\' \'t<
+\\-\\=meTyl>TDt'
+=== strip_tags("Od' 't<\x0a\\-\\=meTyl>TDt", '<a><b>')
+=> 'Od\' \'t<
+\\-\\=meTyl>TDt'
+=== strip_tags("Od' 't<\x0a\\-\\=meTyl>TDt", '<x>')
+=> 'Od\' \'t<
+\\-\\=meTyl>TDt'
+=== strip_tags("O\x00(\\Yt/\">oc", null)
+=> 'O(\\Yt/">oc'
+=== strip_tags("O\x00(\\Yt/\">oc", '<a><b>')
+=> 'O(\\Yt/">oc'
+=== strip_tags("O\x00(\\Yt/\">oc", '<x>')
+=> 'O(\\Yt/">oc'
+=== strip_tags('p>\\ME/>-<Mc>a?-?(', null)
+=> 'p>\\ME/>-a?-?('
+=== strip_tags('p>\\ME/>-<Mc>a?-?(', '<a><b>')
+=> 'p>\\ME/>-a?-?('
+=== strip_tags('p>\\ME/>-<Mc>a?-?(', '<x>')
+=> 'p>\\ME/>-a?-?('
+=== strip_tags('mb!-y>b<Tl!O>', null)
+=> 'mb!-y>b'
+=== strip_tags('mb!-y>b<Tl!O>', '<a><b>')
+=> 'mb!-y>b'
+=== strip_tags('mb!-y>b<Tl!O>', '<x>')
+=> 'mb!-y>b'
+=== strip_tags('  )!xtm\\e\\<!', null)
+=> '  )!xtm\\e\\'
+=== strip_tags('  )!xtm\\e\\<!', '<a><b>')
+=> '  )!xtm\\e\\'
+=== strip_tags('  )!xtm\\e\\<!', '<x>')
+=> '  )!xtm\\e\\'
+=== strip_tags('-E"\\OE!yppY>!"?<l', null)
+=> '-E"\\OE!yppY>!"?'
+=== strip_tags('-E"\\OE!yppY>!"?<l', '<a><b>')
+=> '-E"\\OE!yppY>!"?'
+=== strip_tags('-E"\\OE!yppY>!"?<l', '<x>')
+=> '-E"\\OE!yppY>!"?'
+=== strip_tags('(c>T\\!', null)
+=> '(c>T\\!'
+=== strip_tags('(c>T\\!', '<a><b>')
+=> '(c>T\\!'
+=== strip_tags('(c>T\\!', '<x>')
+=> '(c>T\\!'
+=== strip_tags(")E(Ea\x00by\x00!Yxt\x00\x0a\\b>TMLb", null)
+=> ')E(Eaby!Yxt
+\\b>TMLb'
+=== strip_tags(")E(Ea\x00by\x00!Yxt\x00\x0a\\b>TMLb", '<a><b>')
+=> ')E(Eaby!Yxt
+\\b>TMLb'
+=== strip_tags(")E(Ea\x00by\x00!Yxt\x00\x0a\\b>TMLb", '<x>')
+=> ')E(Eaby!Yxt
+\\b>TMLb'
+=== strip_tags('?T', null)
+=> '?T'
+=== strip_tags('?T', '<a><b>')
+=> '?T'
+=== strip_tags('?T', '<x>')
+=> '?T'
+=== strip_tags("\" /<E<\"t-aYtdy\x00lY?xe e", null)
+=> '" /'
+=== strip_tags("\" /<E<\"t-aYtdy\x00lY?xe e", '<a><b>')
+=> '" /'
+=== strip_tags("\" /<E<\"t-aYtdy\x00lY?xe e", '<x>')
+=> '" /'
+=== strip_tags("LlP(T'-\x0ap?MdT>\\>o-><", null)
+=> 'LlP(T\'-
+p?MdT>\\>o->'
+=== strip_tags("LlP(T'-\x0ap?MdT>\\>o-><", '<a><b>')
+=> 'LlP(T\'-
+p?MdT>\\>o->'
+=== strip_tags("LlP(T'-\x0ap?MdT>\\>o-><", '<x>')
+=> 'LlP(T\'-
+p?MdT>\\>o->'
+=== strip_tags("b<(D\x00)?'/!'l\x0aE", null)
+=> 'b'
+=== strip_tags("b<(D\x00)?'/!'l\x0aE", '<a><b>')
+=> 'b'
+=== strip_tags("b<(D\x00)?'/!'l\x0aE", '<x>')
+=> 'b'
+=== strip_tags('lyO', null)
+=> 'lyO'
+=== strip_tags('lyO', '<a><b>')
+=> 'lyO'
+=== strip_tags('lyO', '<x>')
+=> 'lyO'
+=== strip_tags("')m\x00T>-')'b< ?", null)
+=> '\')mT>-\')\'b< ?'
+=== strip_tags("')m\x00T>-')'b< ?", '<a><b>')
+=> '\')mT>-\')\'b< ?'
+=== strip_tags("')m\x00T>-')'b< ?", '<x>')
+=> '\')mT>-\')\'b< ?'
+=== strip_tags('(?c>L<"', null)
+=> '(?c>L'
+=== strip_tags('(?c>L<"', '<a><b>')
+=> '(?c>L'
+=== strip_tags('(?c>L<"', '<x>')
+=> '(?c>L'
+=== strip_tags("P\"<-Yp?M\x00 P-P<\\--EdMEY>", null)
+=> 'P"'
+=== strip_tags("P\"<-Yp?M\x00 P-P<\\--EdMEY>", '<a><b>')
+=> 'P"'
+=== strip_tags("P\"<-Yp?M\x00 P-P<\\--EdMEY>", '<x>')
+=> 'P"'
+=== strip_tags(">t\x0a-Ebb<aeOO", null)
+=> '>t
+-Ebb'
+=== strip_tags(">t\x0a-Ebb<aeOO", '<a><b>')
+=> '>t
+-Ebb'
+=== strip_tags(">t\x0a-Ebb<aeOO", '<x>')
+=> '>t
+-Ebb'
+=== strip_tags("'L\x00bd", null)
+=> '\'Lbd'
+=== strip_tags("'L\x00bd", '<a><b>')
+=> '\'Lbd'
+=== strip_tags("'L\x00bd", '<x>')
+=> '\'Lbd'
+=== strip_tags('e', null)
+=> 'e'
+=== strip_tags('e', '<a><b>')
+=> 'e'
+=== strip_tags('e', '<x>')
+=> 'e'
+=== strip_tags('!<??/', null)
+=> '!'
+=== strip_tags('!<??/', '<a><b>')
+=> '!'
+=== strip_tags('!<??/', '<x>')
+=> '!'
+=== strip_tags("e=\x0ap'>e'o!Em<'a\\!/>( ", null)
+=> 'e=
+p\'>e\'o!Em'
+=== strip_tags("e=\x0ap'>e'o!Em<'a\\!/>( ", '<a><b>')
+=> 'e=
+p\'>e\'o!Em'
+=== strip_tags("e=\x0ap'>e'o!Em<'a\\!/>( ", '<x>')
+=> 'e=
+p\'>e\'o!Em'
+=== strip_tags('"! <?d>', null)
+=> '"! '
+=== strip_tags('"! <?d>', '<a><b>')
+=> '"! '
+=== strip_tags('"! <?d>', '<x>')
+=> '"! '
+=== strip_tags('"!-', null)
+=> '"!-'
+=== strip_tags('"!-', '<a><b>')
+=> '"!-'
+=== strip_tags('"!-', '<x>')
+=> '"!-'
+=== strip_tags("aMp\x00\\", null)
+=> 'aMp\\'
+=== strip_tags("aMp\x00\\", '<a><b>')
+=> 'aMp\\'
+=== strip_tags("aMp\x00\\", '<x>')
+=> 'aMp\\'
+=== strip_tags(">Eot<a\x00\x00-T=\x00l-\x0aa\x0a\x0ax", null)
+=> '>Eot'
+=== strip_tags(">Eot<a\x00\x00-T=\x00l-\x0aa\x0a\x0ax", '<a><b>')
+=> '>Eot'
+=== strip_tags(">Eot<a\x00\x00-T=\x00l-\x0aa\x0a\x0ax", '<x>')
+=> '>Eot'
+=== strip_tags("\x00CdebEdO)L?=\\)pEC>lLD(m", null)
+=> 'CdebEdO)L?=\\)pEC>lLD(m'
+=== strip_tags("\x00CdebEdO)L?=\\)pEC>lLD(m", '<a><b>')
+=> 'CdebEdO)L?=\\)pEC>lLD(m'
+=== strip_tags("\x00CdebEdO)L?=\\)pEC>lLD(m", '<x>')
+=> 'CdebEdO)L?=\\)pEC>lLD(m'
+=== strip_tags('M', null)
+=> 'M'
+=== strip_tags('M', '<a><b>')
+=> 'M'
+=== strip_tags('M', '<x>')
+=> 'M'
+=== strip_tags('bm\\>', null)
+=> 'bm\\>'
+=== strip_tags('bm\\>', '<a><b>')
+=> 'bm\\>'
+=== strip_tags('bm\\>', '<x>')
+=> 'bm\\>'
+=== strip_tags("(!T<Coxe-D<\x0a", null)
+=> '(!T'
+=== strip_tags("(!T<Coxe-D<\x0a", '<a><b>')
+=> '(!T'
+=== strip_tags("(!T<Coxe-D<\x0a", '<x>')
+=> '(!T'
