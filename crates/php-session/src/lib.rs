@@ -16,6 +16,7 @@
 //!   `session_set_save_handler()` callables.
 //! * [`class`] — `SessionHandler` methods, the interface declarations and
 //!   the `PHP_SESSION_*` constants for the VM to register.
+//! * [`rfc1867`] — upload progress tracking hooks for the multipart parser.
 //! * [`sid`] — session ID generation/validation; [`http`] — cookie and
 //!   cache-limiter header formatting.
 //!
@@ -32,6 +33,7 @@ pub mod handler;
 pub mod host;
 pub mod http;
 pub mod ini;
+pub mod rfc1867;
 pub mod serializer;
 pub mod sid;
 pub mod state;

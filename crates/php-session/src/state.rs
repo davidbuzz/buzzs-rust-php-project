@@ -73,6 +73,7 @@ pub struct SessionState {
     pub(crate) exception: Option<RuntimeError>,
     pub(crate) modules: Vec<Rc<dyn SaveModule>>,
     pub(crate) modules_activated: bool,
+    pub(crate) in_rfc1867_update: bool,
 }
 
 impl Default for SessionState {
@@ -110,6 +111,7 @@ impl SessionState {
             exception: None,
             modules: vec![files],
             modules_activated: true,
+            in_rfc1867_update: false,
         }
     }
 
@@ -198,6 +200,20 @@ impl SessionState {
         let mut v: Vec<String> = self.modules.iter().map(|m| m.name().to_string()).collect();
         v.insert(1.min(v.len()), "user".to_string());
         v
+    }
+
+    /// `PS(in_rfc1867_update)`: while true the session is decoded and
+    /// re-encoded during request startup (upload progress), so the host's
+    /// (un)serialize hooks must keep objects as `__PHP_Incomplete_Class`
+    /// without autoloading or calling `__wakeup`/`__unserialize`.
+    #[must_use]
+    pub fn in_rfc1867_update(&self) -> bool {
+        self.in_rfc1867_update
+    }
+
+    /// `PG(modules_activated)`: whether request startup has completed.
+    pub fn set_modules_activated(&mut self, on: bool) {
+        self.modules_activated = on;
     }
 
     /// Records a thrown exception (the first one wins, like `EG(exception)`).
@@ -404,6 +420,7 @@ pub(crate) fn rinit_globals(h: &mut dyn SessionHost) {
     s.define_sid = true;
     s.session_vars = None;
     s.http_session_vars = None;
+    s.in_rfc1867_update = false;
 }
 
 /// Whether module data is open (`PS(mod_data) || PS(mod_user_implemented)`).
@@ -964,8 +981,16 @@ pub(crate) fn reset(h: &mut dyn SessionHost) -> bool {
 /// `RINIT`: resets the request globals, resolves the module and the
 /// serializer from the INI values and honours `session.auto_start`.
 pub fn request_startup(h: &mut dyn SessionHost) -> RtResult<()> {
-    rinit_globals(h);
     h.session().modules_activated = false;
+    let auto_start = h.session().config.auto_start;
+    rinit_session(h, auto_start);
+    h.session().modules_activated = true;
+    finish(h, ())
+}
+
+/// `php_rinit_session(auto_start)`.
+pub(crate) fn rinit_session(h: &mut dyn SessionHost, auto_start: bool) {
+    rinit_globals(h);
     let handler = h
         .session()
         .ini
@@ -986,11 +1011,9 @@ pub fn request_startup(h: &mut dyn SessionHost) -> RtResult<()> {
     let usable = h.session().module.is_some() && h.session().serializer.is_some();
     if !usable {
         h.session().status = SessionStatus::Disabled;
-    } else if h.session().config.auto_start {
+    } else if auto_start {
         start(h);
     }
-    h.session().modules_activated = true;
-    finish(h, ())
 }
 
 /// `RSHUTDOWN`: writes and closes an active session and frees the user

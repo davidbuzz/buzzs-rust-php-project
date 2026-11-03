@@ -345,3 +345,148 @@ fn interop_with_php() {
         );
     }
 }
+
+#[test]
+fn upload_progress() {
+    // rfc1867.phpt: cookie ID wins over GET/POST, cleanup=0 keeps the record.
+    use php_session::rfc1867;
+    let dir = tempdir("rfc1867");
+    let mut h = FakeHost::new();
+    let path = dir.to_string_lossy().into_owned();
+    let cfg = [
+        ("session.save_path", path.as_str()),
+        ("session.use_strict_mode", "0"),
+        ("session.use_only_cookies", "0"),
+        ("session.upload_progress.cleanup", "0"),
+        ("session.upload_progress.min_freq", "0.000000001"),
+    ];
+    let map: std::collections::HashMap<String, Vec<u8>> = cfg
+        .iter()
+        .map(|(k, v)| ((*k).to_string(), v.as_bytes().to_vec()))
+        .collect();
+    php_session::module_startup(&mut h, &|n| map.get(n).cloned());
+    h.take_log();
+    h.state.set_modules_activated(false);
+    h.set_global("_COOKIE", &[("PHPSESSID", Value::string("rfc1867"))]);
+    h.set_global("_GET", &[("PHPSESSID", Value::string("rfc1867-get"))]);
+    let mut p = rfc1867::start(&mut h, 600).unwrap();
+    assert!(rfc1867::formdata(
+        &mut h,
+        &mut p,
+        b"PHPSESSID",
+        b"rfc1867-post"
+    ));
+    assert!(rfc1867::formdata(
+        &mut h,
+        &mut p,
+        b"PHP_SESSION_UPLOAD_PROGRESS",
+        b"rfc1867.php"
+    ));
+    assert!(rfc1867::file_start(
+        &mut h,
+        &mut p,
+        b"file1",
+        b"file1.txt",
+        300
+    ));
+    assert!(rfc1867::file_data(&mut h, &mut p, 0, 1, 350));
+    assert!(rfc1867::file_end(
+        &mut h,
+        &mut p,
+        Some(b"/tmp/php1"),
+        0,
+        360
+    ));
+    assert!(rfc1867::file_start(
+        &mut h,
+        &mut p,
+        b"file2",
+        b"file2.txt",
+        450
+    ));
+    assert!(rfc1867::file_data(&mut h, &mut p, 0, 1, 500));
+    assert!(rfc1867::file_end(
+        &mut h,
+        &mut p,
+        Some(b"/tmp/php2"),
+        0,
+        510
+    ));
+    rfc1867::end(&mut h, p, 600);
+    assert!(h.session_global.is_none());
+    assert!(h.take_log().is_empty(), "{:?}", h.log);
+    // The request proper.
+    php_session::request_startup(&mut h).unwrap();
+    assert!(h.call("session_start", |h| session_start(h, None)).unwrap());
+    assert_eq!(h.state.id().unwrap().as_bytes(), b"rfc1867");
+    let sess = h.session();
+    let rec = sess
+        .as_array()
+        .unwrap()
+        .get_str(b"upload_progress_rfc1867.php")
+        .unwrap()
+        .clone();
+    let rec = rec.as_array().unwrap();
+    let keys: Vec<Vec<u8>> = rec.keys().map(php_runtime::ArrayKey::to_bytes).collect();
+    assert_eq!(
+        keys,
+        [
+            &b"start_time"[..],
+            b"content_length",
+            b"bytes_processed",
+            b"done",
+            b"files"
+        ]
+    );
+    assert_eq!(show(rec.get_str(b"done").unwrap()), "bool(true)");
+    assert_eq!(show(rec.get_str(b"bytes_processed").unwrap()), "int(600)");
+    let files = rec.get_str(b"files").unwrap().as_array().unwrap().clone();
+    assert_eq!(files.len(), 2);
+    let f1 = files.get_int(0).unwrap().as_array().unwrap().clone();
+    let keys: Vec<Vec<u8>> = f1.keys().map(php_runtime::ArrayKey::to_bytes).collect();
+    assert_eq!(
+        keys,
+        [
+            &b"field_name"[..],
+            b"name",
+            b"tmp_name",
+            b"error",
+            b"done",
+            b"start_time",
+            b"bytes_processed"
+        ]
+    );
+    assert_eq!(
+        show(f1.get_str(b"tmp_name").unwrap()),
+        "string(9) \"/tmp/php1\""
+    );
+    assert_eq!(show(f1.get_str(b"bytes_processed").unwrap()), "int(1)");
+    // Cancelling: the user sets cancel_upload in the record.
+    h.call("session_write_close", |h| session_write_close(h))
+        .unwrap();
+    let data = std::fs::read(dir.join("sess_rfc1867")).unwrap();
+    let mut patched = String::from_utf8(data).unwrap();
+    patched = patched.replace(
+        "s:4:\"done\";b:1;s:5:\"files\"",
+        "s:13:\"cancel_upload\";b:1;s:4:\"done\";b:1;s:5:\"files\"",
+    );
+    patched = patched.replace("a:5:{s:10:\"start_time\"", "a:6:{s:10:\"start_time\"");
+    assert!(patched.contains("a:6:"), "{patched}");
+    std::fs::write(dir.join("sess_rfc1867"), patched).unwrap();
+    php_session::request_shutdown(&mut h).unwrap();
+    h.state.set_modules_activated(false);
+    let mut p = rfc1867::start(&mut h, 600).unwrap();
+    assert!(rfc1867::formdata(
+        &mut h,
+        &mut p,
+        b"PHP_SESSION_UPLOAD_PROGRESS",
+        b"rfc1867.php"
+    ));
+    assert!(!rfc1867::file_start(
+        &mut h,
+        &mut p,
+        b"file1",
+        b"file1.txt",
+        300
+    ));
+}

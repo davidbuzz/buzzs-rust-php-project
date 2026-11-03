@@ -22,6 +22,7 @@ pub struct FakeClass {
     pub methods: Vec<String>,
 }
 
+#[allow(clippy::struct_excessive_bools)]
 pub struct FakeHost {
     pub ctx: CollectingContext,
     pub state: SessionState,
