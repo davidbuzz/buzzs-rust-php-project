@@ -316,6 +316,9 @@ impl RuntimeContext for Vm {
         let mut props = Vec::new();
         for (k, v, pi) in self.object_prop_table(obj, include_uninit) {
             match v {
+                // The table holds a second handle to a slot's reference: a
+                // reference only the property holds is not shown as `&`.
+                Some(Value::Reference(r)) if r.refcount() <= 2 => props.push((k, PropertySlot::Value(r.get()))),
                 Some(v) => props.push((k, PropertySlot::Value(v))),
                 None => {
                     if let Some(pi) = pi {
