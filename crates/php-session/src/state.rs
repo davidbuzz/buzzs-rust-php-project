@@ -337,6 +337,9 @@ pub(crate) fn encode(h: &mut dyn SessionHost) -> Option<Vec<u8>> {
             for w in &enc.warnings {
                 warn(h, ErrorLevel::Warning, w);
             }
+            if let Some(e) = enc.exception {
+                throw(h, e);
+            }
             enc.data
         }
         Err(e) => {

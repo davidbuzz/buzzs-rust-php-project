@@ -14,7 +14,7 @@
 use php_runtime::serialize::{serialize, unserialize, SerializedObject, UnserializeOptions};
 use php_runtime::{
     ArrayKey, BinaryOp, CastTarget, ErrorLevel, Obj, ObjectDump, PropertyPurpose, RtResult,
-    RuntimeContext, Value, ZArray, ZStr,
+    RuntimeContext, RuntimeError, Value, ZArray, ZStr,
 };
 
 /// `PS_DELIMITER` of the `php` serializer.
@@ -63,14 +63,18 @@ impl Serializer {
 }
 
 /// Result of [`encode`].
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default)]
 pub struct Encoded {
     /// The encoded data, `None` when encoding failed (a `php` key containing
-    /// `|`).
+    /// `|`, or an exception thrown while serializing).
     pub data: Option<Vec<u8>>,
     /// Docref warnings to emit, in order (`Skipping numeric key N`,
     /// `Failed to write session data. Data contains invalid key "…"`).
     pub warnings: Vec<String>,
+    /// An exception thrown by an object's serialization hook (e.g.
+    /// "Serialization of 'Closure' is not allowed"); it becomes pending
+    /// after the warnings are reported.
+    pub exception: Option<RuntimeError>,
 }
 
 /// Result of [`decode`].
@@ -101,10 +105,15 @@ pub fn encode(
     ctx: &mut (impl RuntimeContext + ?Sized),
 ) -> RtResult<Encoded> {
     if ser == Serializer::PhpSerialize {
-        let data = serialize(&Value::Array(vars.clone()), ctx)?;
-        return Ok(Encoded {
-            data: Some(data),
-            warnings: Vec::new(),
+        return Ok(match serialize(&Value::Array(vars.clone()), ctx) {
+            Ok(data) => Encoded {
+                data: Some(data),
+                ..Encoded::default()
+            },
+            Err(e) => Encoded {
+                exception: Some(e),
+                ..Encoded::default()
+            },
         });
     }
     // PS_ENCODE_LOOP: numeric keys are skipped with a warning.
@@ -126,7 +135,10 @@ pub fn encode(
             }
         }
     }
-    let values = serialize_entries(&selected, ctx)?;
+    let (values, exception) = match serialize_entries(&selected, ctx) {
+        Ok(v) => (v, None),
+        Err(e) => (Vec::new(), Some(e)),
+    };
     if let Some(bad) = bad_key {
         warnings.push(format!(
             "Failed to write session data. Data contains invalid key \"{}\"",
@@ -135,6 +147,14 @@ pub fn encode(
         return Ok(Encoded {
             data: None,
             warnings,
+            exception,
+        });
+    }
+    if exception.is_some() {
+        return Ok(Encoded {
+            data: None,
+            warnings,
+            exception,
         });
     }
     let mut out = Vec::new();
@@ -156,6 +176,7 @@ pub fn encode(
     Ok(Encoded {
         data: Some(out),
         warnings,
+        exception: None,
     })
 }
 

@@ -604,3 +604,323 @@ fn cache_limiters() {
         ini::ini_restore(&mut h, "session.cache_expire");
     }
 }
+
+#[test]
+fn reset_restores_saved_data() {
+    // session_reset_basic.phpt
+    let (mut h, _d) = files_host("reset", &[]);
+    assert!(start(&mut h));
+    let id = h.state.id().unwrap().clone();
+    h.set_var("foo", Value::Int(123));
+    h.call("session_commit", |h| session_commit(h)).unwrap();
+    h.call("session_id", |h| session_id(h, Some(&id))).unwrap();
+    assert!(start(&mut h));
+    h.set_var("bar", Value::Int(456));
+    assert_eq!(h.session_len(), 2);
+    assert!(h.call("session_reset", |h| session_reset(h)).unwrap());
+    assert_eq!(h.session_len(), 1);
+    assert!(h.session().as_array().unwrap().get_str(b"foo").is_some());
+    // Without an active session these are no-ops.
+    h.call("session_abort", |h| session_abort(h)).unwrap();
+    assert!(!h.call("session_reset", |h| session_reset(h)).unwrap());
+    assert!(!h.call("session_abort", |h| session_abort(h)).unwrap());
+    assert!(!h.call("session_unset", |h| session_unset(h)).unwrap());
+    assert!(!h
+        .call("session_write_close", |h| session_write_close(h))
+        .unwrap());
+    assert!(h.take_log().is_empty());
+}
+
+#[test]
+fn encode_failure_releases_lock() {
+    // session_write_close_encode_failure.phpt
+    let (mut h, dir) = files_host("encfail", &[("session.use_cookies", "0")]);
+    assert!(start(&mut h));
+    let file = dir.join(format!("sess_{}", h.state.id().unwrap().to_string_lossy()));
+    h.set_var("bad|key", Value::string("value"));
+    assert!(h
+        .call("session_write_close", |h| session_write_close(h))
+        .unwrap());
+    let f = std::fs::File::open(&file).unwrap();
+    assert!(f.try_lock().is_ok());
+    drop(f);
+    assert!(start(&mut h));
+    h.call("session_unset", |h| session_unset(h)).unwrap();
+    h.set_var(
+        "closure",
+        Value::Object(php_runtime::PlainObject::create("Closure", ZArray::new())),
+    );
+    h.set_var("bad|key", Value::string("value"));
+    let e = h
+        .call("session_write_close", |h| session_write_close(h))
+        .unwrap_err();
+    assert_eq!(
+        e.to_string(),
+        "Exception: Serialization of 'Closure' is not allowed"
+    );
+    let f = std::fs::File::open(&file).unwrap();
+    assert!(f.try_lock().is_ok());
+    assert_eq!(
+        h.take_log(),
+        vec![
+            "Warning: session_write_close(): Failed to write session data. Data contains invalid key \"bad|key\"",
+            "Warning: session_write_close(): Failed to write session data. Data contains invalid key \"bad|key\"",
+        ]
+    );
+    assert_eq!(h.state.status(), SessionStatus::None);
+}
+
+#[test]
+fn encode_without_session() {
+    let mut h = FakeHost::with_ini(&[]);
+    assert_eq!(
+        show(&h.call("session_encode", |h| session_encode(h)).unwrap()),
+        "bool(false)"
+    );
+    assert!(!h
+        .call("session_decode", |h| session_decode(h, b"a|i:1;"))
+        .unwrap());
+    assert_eq!(
+        h.take_log(),
+        vec![
+            "Warning: session_encode(): Cannot encode non-existent session",
+            "Warning: session_decode(): Session data cannot be decoded when there is no active session",
+        ]
+    );
+}
+
+#[test]
+fn ids_from_get_post_and_referer() {
+    let (mut h, _d) = files_host("get", &[("session.use_only_cookies", "0")]);
+    h.take_log();
+    h.set_global("_GET", &[("PHPSESSID", Value::string("fromget"))]);
+    h.set_global("_POST", &[("PHPSESSID", Value::string("frompost"))]);
+    assert!(start(&mut h));
+    assert_eq!(h.state.id().unwrap().as_bytes(), b"fromget");
+    // A non-cookie ID: SID is defined and no cookie is re-sent? (send_cookie stays false)
+    assert_eq!(h.sid_constant.as_deref(), Some(&b"PHPSESSID=fromget"[..]));
+    assert!(!h.headers.iter().any(|l| l.starts_with("Set-Cookie")));
+    h.call("session_abort", |h| session_abort(h)).unwrap();
+
+    // Referer check rejects foreign referers.
+    let (mut h, _d) = files_host(
+        "referer",
+        &[
+            ("session.use_only_cookies", "0"),
+            ("session.referer_check", "example.com"),
+        ],
+    );
+    h.take_log();
+    h.set_global("_GET", &[("PHPSESSID", Value::string("fromget"))]);
+    h.server
+        .insert("HTTP_REFERER".into(), Value::string("http://evil.test/"));
+    assert!(start(&mut h));
+    assert_ne!(h.state.id().unwrap().as_bytes(), b"fromget");
+    // Dangerous characters drop the ID.
+    let (mut h, _d) = files_host("danger", &[]);
+    h.set_global("_COOKIE", &[("PHPSESSID", Value::string("a<b"))]);
+    assert!(start(&mut h));
+    assert_eq!(h.state.id().unwrap().len(), 32);
+    // A non-string cookie forces a new ID and cookie.
+    let (mut h, _d) = files_host("arrcookie", &[]);
+    h.set_global(
+        "_COOKIE",
+        &[(
+            "PHPSESSID",
+            Value::Array(ZArray::from_values([Value::Int(1)])),
+        )],
+    );
+    assert!(start(&mut h));
+    assert!(h.headers[0].starts_with("Set-Cookie: PHPSESSID="));
+}
+
+#[test]
+fn module_name_and_save_path() {
+    let mut h = FakeHost::with_ini(&[]);
+    assert_eq!(
+        show(
+            &h.call("session_module_name", |h| session_module_name(h, None))
+                .unwrap()
+        ),
+        "string(5) \"files\""
+    );
+    assert_eq!(
+        show(
+            &h.call("session_module_name", |h| session_module_name(
+                h,
+                Some(&s("blah"))
+            ))
+            .unwrap()
+        ),
+        "bool(false)"
+    );
+    assert_eq!(
+        h.call("session_module_name", |h| session_module_name(
+            h,
+            Some(&s("user"))
+        ))
+        .unwrap_err()
+        .to_string(),
+        "ValueError: session_module_name(): Argument #1 ($module) must not be \"user\""
+    );
+    assert_eq!(
+        h.call("session_module_name", |h| session_module_name(
+            h,
+            Some(&s("a\0b"))
+        ))
+        .unwrap_err()
+        .to_string(),
+        "ValueError: session_module_name(): Argument #1 ($module) must not contain any null bytes"
+    );
+    assert_eq!(
+        show(
+            &h.call("session_module_name", |h| session_module_name(
+                h,
+                Some(&s("FILES"))
+            ))
+            .unwrap()
+        ),
+        "string(5) \"files\""
+    );
+    assert_eq!(
+        h.take_log(),
+        vec!["Warning: session_module_name(): Session handler module \"blah\" cannot be found"]
+    );
+    assert_eq!(
+        show(
+            &h.call("session_save_path", |h| session_save_path(
+                h,
+                Some(&s("/x"))
+            ))
+            .unwrap()
+        ),
+        "string(0) \"\""
+    );
+    assert_eq!(
+        show(
+            &h.call("session_save_path", |h| session_save_path(h, None))
+                .unwrap()
+        ),
+        "string(2) \"/x\""
+    );
+    assert_eq!(
+        h.call("session_name", |h| session_name(h, Some(&s("AB\0CD"))))
+            .unwrap_err()
+            .to_string(),
+        "ValueError: session_name(): Argument #1 ($name) must not contain any null bytes"
+    );
+    assert_eq!(
+        show(
+            &h.call("session_name", |h| session_name(h, Some(&s("\t"))))
+                .unwrap()
+        ),
+        "string(9) \"PHPSESSID\""
+    );
+    assert_eq!(
+        h.take_log(),
+        vec!["Warning: session_name(): session.name \"\t\" must not be numeric, empty, contain null bytes or any of the following characters \"=,;.[ \\t\\r\\n\\013\\014\""]
+    );
+}
+
+#[test]
+fn create_id_prefixes() {
+    // session_create_id_invalid_prefix.phpt / session_create_id_basic.phpt
+    let mut h = FakeHost::with_ini(&[]);
+    let id = h
+        .call("session_create_id", |h| session_create_id(h, None))
+        .unwrap();
+    assert_eq!(id.as_str().unwrap().len(), 32);
+    let id = h
+        .call("session_create_id", |h| {
+            session_create_id(h, Some(&s("abc-")))
+        })
+        .unwrap();
+    assert!(id.as_str().unwrap().as_bytes().starts_with(b"abc-"));
+    assert_eq!(
+        show(
+            &h.call("session_create_id", |h| session_create_id(h, Some(&s("_"))))
+                .unwrap()
+        ),
+        "bool(false)"
+    );
+    assert_eq!(
+        h.take_log(),
+        vec!["Warning: session_create_id(): Prefix cannot contain special characters. Only the A-Z, a-z, 0-9, \"-\", and \",\" characters are allowed"]
+    );
+    let long = "a".repeat(257);
+    assert_eq!(
+        h.call("session_create_id", |h| session_create_id(h, Some(&s(&long)))).unwrap_err().to_string(),
+        "ValueError: session_create_id(): Argument #1 ($prefix) cannot be longer than 256 characters"
+    );
+    assert_eq!(
+        h.call("session_create_id", |h| session_create_id(
+            h,
+            Some(&s("\0"))
+        ))
+        .unwrap_err()
+        .to_string(),
+        "ValueError: session_create_id(): Argument #1 ($prefix) must not contain any null bytes"
+    );
+    // sid_bits_per_character / sid_length shape the ID.
+    h.call("ini_set", |h| {
+        ini::ini_set(h, "session.sid_bits_per_character", b"6")
+    });
+    h.call("ini_set", |h| ini::ini_set(h, "session.sid_length", b"40"));
+    let id = h
+        .call("session_create_id", |h| session_create_id(h, None))
+        .unwrap();
+    let id = id.as_str().unwrap().clone();
+    assert_eq!(id.len(), 40);
+    assert!(id
+        .as_bytes()
+        .iter()
+        .all(|c| c.is_ascii_alphanumeric() || *c == b',' || *c == b'-'));
+}
+
+#[test]
+fn status_and_disabled_serializer() {
+    // session_status_disabled.phpt-like: a bogus serializer at startup.
+    let mut h = FakeHost::with_ini(&[("session.serialize_handler", "blah")]);
+    assert_eq!(session_status(&mut h), 0);
+    assert!(!start(&mut h));
+    assert_eq!(
+        h.take_log(),
+        vec!["Warning: session_start(): Cannot find session serialization handler \"blah\" - session startup failed"]
+    );
+    let (mut h, _d) = files_host("status", &[]);
+    assert_eq!(session_status(&mut h), 1);
+    start(&mut h);
+    assert_eq!(session_status(&mut h), 2);
+}
+
+#[test]
+fn auto_start_messages() {
+    let dir = tempdir("auto");
+    let path = dir.to_string_lossy().into_owned();
+    let mut h = FakeHost::with_ini(&[("session.auto_start", "1"), ("session.save_path", &path)]);
+    assert_eq!(h.state.status(), SessionStatus::Active);
+    h.state.config.auto_start = true;
+    // Started during request startup: no file/line is known.
+    let mut fresh = FakeHost::new();
+    fresh.location = None;
+    let map: std::collections::HashMap<String, Vec<u8>> = [
+        ("session.auto_start", "1"),
+        ("session.save_path", path.as_str()),
+    ]
+    .iter()
+    .map(|(k, v)| ((*k).to_string(), v.as_bytes().to_vec()))
+    .collect();
+    php_session::module_startup(&mut fresh, &|n| map.get(n).cloned());
+    php_session::request_startup(&mut fresh).unwrap();
+    fresh.location = Some(("/t/test.php".into(), 3));
+    assert!(fresh
+        .call("session_start", |h| session_start(h, None))
+        .unwrap());
+    let args = [Value::Null];
+    let _ = args;
+    assert_eq!(
+        fresh.take_log(),
+        vec!["Notice: session_start(): Ignoring session_start() because a session is already active (session started automatically)"]
+    );
+    php_session::request_shutdown(&mut fresh).unwrap();
+}

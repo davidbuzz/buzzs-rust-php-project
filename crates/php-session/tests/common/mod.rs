@@ -210,6 +210,12 @@ impl RuntimeContext for FakeHost {
         &mut self,
         obj: &Obj,
     ) -> RtResult<php_runtime::serialize::SerializedObject> {
+        if obj.class_name().as_bytes() == b"Closure" {
+            return Err(RuntimeError::Custom {
+                class: "Exception".into(),
+                message: "Serialization of 'Closure' is not allowed".into(),
+            });
+        }
         self.ctx.serialize_object(obj)
     }
     fn unserialize_object_create(&mut self, class: &ZStr) -> RtResult<Value> {

@@ -23,6 +23,7 @@ struct FileProgress {
 }
 
 /// The in-flight progress record (`php_session_rfc1867_progress`).
+#[allow(clippy::struct_excessive_bools)] // mirrors the C struct
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct UploadProgress {
     sid: Option<ZStr>,
@@ -181,7 +182,7 @@ pub fn file_start(
         p.done = false;
         rinit_session(h, false);
         let s = h.session();
-        s.id = p.sid.clone();
+        s.id.clone_from(&p.sid);
         if p.apply_trans_sid {
             s.config.use_trans_sid = true;
             s.config.use_only_cookies = false;
