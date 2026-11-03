@@ -31,6 +31,18 @@ pub enum DomValue {
     NamespaceInfo(NamespaceInfo),
     /// A PHP array (list or map).
     Array(Vec<(ArrayKey, DomValue)>),
+    /// A `DOMXPath` / `Dom\\XPath` object.
+    XPath(crate::xpath::XPath),
+    /// An iterator object (`getIterator()`).
+    Iterator(crate::dispatch::IterHandle),
+    /// A resolved PHP callable (argument of XPath callback registration).
+    Callable(crate::host::HostCallable),
+    /// An enum case (`Dom\\AdjacentPosition::*`): `(class, case name)`.
+    Enum(&'static str, &'static str),
+    /// Any other PHP value the DOM API cannot use; the payload is
+    /// `zend_zval_type_name()` of it (for error messages), or for callable
+    /// positions the `zend_is_callable` error text.
+    Other(String),
 }
 
 /// An array key.
@@ -79,7 +91,33 @@ impl DomValue {
                 | Self::Implementation(_)
                 | Self::TokenList(_)
                 | Self::NamespaceInfo(_)
+                | Self::XPath(_)
+                | Self::Iterator(_)
+                | Self::Enum(..)
         )
+    }
+
+    /// `zend_zval_type_name()`.
+    pub fn type_name(&self) -> String {
+        match self {
+            Self::Null => "null".into(),
+            Self::Bool(_) => "bool".into(),
+            Self::Int(_) => "int".into(),
+            Self::Float(_) => "float".into(),
+            Self::Str(_) => "string".into(),
+            Self::Array(_) => "array".into(),
+            Self::Node(n) => n.class_name(),
+            Self::NodeList(l) => l.class_name().into(),
+            Self::NamedNodeMap(m) => m.class_name().into(),
+            Self::Implementation(i) => i.class_name().into(),
+            Self::TokenList(_) => "Dom\\TokenList".into(),
+            Self::NamespaceInfo(_) => "Dom\\NamespaceInfo".into(),
+            Self::XPath(x) => x.class_name().into(),
+            Self::Iterator(_) => "InternalIterator".into(),
+            Self::Callable(_) => "Closure".into(),
+            Self::Enum(c, _) => (*c).into(),
+            Self::Other(t) => t.clone(),
+        }
     }
 
     /// Builds a list array.

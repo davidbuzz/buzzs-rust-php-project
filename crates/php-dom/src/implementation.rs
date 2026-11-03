@@ -85,6 +85,7 @@ impl Implementation {
         let node = Node::wrap_with_doc(d, None);
         if self.modern {
             node.set_class_name("Dom\\DocumentType");
+            node.set_builtin_class("Dom\\DocumentType");
             node.set_family_modern(true);
         }
         Ok(node)

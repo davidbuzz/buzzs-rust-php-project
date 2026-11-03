@@ -15,6 +15,8 @@
 pub mod chardata;
 pub mod classes;
 pub mod constants;
+pub(crate) mod css;
+pub mod dispatch;
 pub mod document;
 pub mod element;
 pub mod error;

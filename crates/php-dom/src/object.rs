@@ -254,6 +254,8 @@ pub struct NodeInner {
     class: RefCell<std::borrow::Cow<'static, str>>,
     /// Whether the object belongs to the `Dom\*` family.
     modern: Cell<bool>,
+    /// The built-in DOM class the object's class derives from.
+    builtin: Cell<&'static str>,
     doc: RefCell<Option<DocRef>>,
     /// For `DOMNameSpaceNode`: the element the declaration belongs to.
     pub(crate) ns_parent: RefCell<Option<Node>>,
@@ -316,10 +318,12 @@ impl Node {
         }
         let modern = doc.as_ref().is_some_and(|d| d.is_modern());
         let class = crate::classes::class_for_node(n, modern, doc.as_ref());
+        let builtin = crate::classes::builtin_class(n, modern).unwrap_or("DOMNode");
         let inner = Rc::new(NodeInner {
             ptr: Cell::new(n.p()),
             class: RefCell::new(class),
             modern: Cell::new(modern),
+            builtin: Cell::new(builtin),
             doc: RefCell::new(doc),
             ns_parent: RefCell::new(None),
             extra: RefCell::new(NodeExtra::default()),
@@ -343,11 +347,16 @@ impl Node {
 
     /// A handle that is not bound to any node (an object constructed
     /// without its constructor having run, e.g. via reflection).
-    pub fn new_unbound(class: impl Into<std::borrow::Cow<'static, str>>, modern: bool) -> Node {
+    ///
+    /// `builtin` is the built-in DOM class the object's class derives from
+    /// (e.g. `"DOMElement"` for `class Foo extends DOMElement`).
+    pub fn new_unbound(class: impl Into<std::borrow::Cow<'static, str>>, builtin: &'static str) -> Node {
+        let modern = builtin.starts_with("Dom\\");
         Node(Rc::new(NodeInner {
             ptr: Cell::new(ptr::null_mut()),
             class: RefCell::new(class.into()),
             modern: Cell::new(modern),
+            builtin: Cell::new(builtin),
             doc: RefCell::new(None),
             ns_parent: RefCell::new(None),
             extra: RefCell::new(NodeExtra::default()),
@@ -462,6 +471,15 @@ impl Node {
 
     pub(crate) fn set_family_modern(&self, modern: bool) {
         self.0.modern.set(modern);
+    }
+
+    /// The built-in DOM class this object's class derives from.
+    pub fn builtin_class(&self) -> &'static str {
+        self.0.builtin.get()
+    }
+
+    pub(crate) fn set_builtin_class(&self, c: &'static str) {
+        self.0.builtin.set(c);
     }
 
     /// `DOM_GET_OBJ`: the node, or "Couldn't fetch".

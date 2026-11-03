@@ -10,6 +10,10 @@ build = "build.rs"
 [dependencies]
 php-libxml = { path = "../php-libxml" }
 
+[dev-dependencies]
+php-parser = { path = "../php-parser" }
+phpt-runner = { path = "../phpt-runner" }
+
 [build-dependencies]
 cc = "1"
 
