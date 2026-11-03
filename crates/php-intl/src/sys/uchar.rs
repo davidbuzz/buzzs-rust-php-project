@@ -284,7 +284,7 @@ pub fn enum_char_names(
             ctx.cast(),
             choice,
             &mut st,
-        )
+        );
     };
     st.check()
 }

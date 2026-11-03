@@ -202,7 +202,6 @@ pub fn char_from_name(name: &[u8], choice: i64) -> Result<i64> {
     uchar::char_from_name(i32_of(choice), name)
         .map(i64::from)
         .map_err(Error::code)
-        .and_then(|v| Ok(v))
 }
 
 /// `IntlChar::enumCharTypes($callback)`; `f(start, limit, type)` returns
