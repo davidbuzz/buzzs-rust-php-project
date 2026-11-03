@@ -18,3 +18,9 @@ A Rust re-implementation of PHP whose goal is to pass the php-src `.phpt` test s
 - Each crate owns its public API; coordinate via the types in `php-runtime`.
 - Track progress in `FEATURE_GAP.md` (update the % column for rows you advance).
 - Run `cargo fmt && cargo clippy --all-targets && cargo test` before declaring work done.
+- `crates/php-support` — INI parser, output-buffering stack, printf/sprintf format engine (ref: Zend/zend_ini_*, main/output.c, main/snprintf.c, ext/standard/formatted_print.c)
+- `crates/php-hash`    — hash()/md5/sha*/crc32 etc. (ref: ext/hash, ext/standard/{md5,sha1,crc32}.c)
+- `crates/php-random`  — Mt19937/PCG/Xoshiro/Secure engines, rand/mt_rand/lcg exact sequences (ref: ext/random)
+
+## Parallel work
+Several agents work concurrently, one crate each. Only edit files inside your own crate (plus your row(s) in FEATURE_GAP.md). Never edit workspace Cargo.toml; crates are pre-registered. Commit your own crate's files with `git add crates/<yours>` only.

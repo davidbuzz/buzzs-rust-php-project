@@ -7,6 +7,10 @@ name = "php-cli"
 version = "0.1.0"
 
 [[package]]
+name = "php-hash"
+version = "0.1.0"
+
+[[package]]
 name = "php-lexer"
 version = "0.1.0"
 
@@ -15,7 +19,15 @@ name = "php-parser"
 version = "0.1.0"
 
 [[package]]
+name = "php-random"
+version = "0.1.0"
+
+[[package]]
 name = "php-runtime"
+version = "0.1.0"
+
+[[package]]
+name = "php-support"
 version = "0.1.0"
 
 [[package]]

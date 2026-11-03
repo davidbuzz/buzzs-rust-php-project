@@ -7,6 +7,9 @@ members = [
     "crates/php-vm",
     "crates/php-cli",
     "crates/phpt-runner",
+    "crates/php-support",
+    "crates/php-hash",
+    "crates/php-random",
 ]
 
 [workspace.package]
