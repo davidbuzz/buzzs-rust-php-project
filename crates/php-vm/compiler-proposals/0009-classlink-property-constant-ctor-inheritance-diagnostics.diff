@@ -1,0 +1,233 @@
+0009 — classlink.rs: inheritance diagnostics found by the magic-methods pass
+(apply on top of 0001-0008).
+
+* do_inherit_property for static redeclarations: a static property
+  redeclaring an inherited non-static one fails with "Cannot redeclare non
+  static %s::$%s as static %s::$%s"; redeclaring an inherited static one with
+  narrower visibility fails with "Access level to %s::$%s must be %s (as in
+  class %s)%s" (the 9 tests/classes/property_override_*Static* tests).
+* do_inherit_constant_check: a redeclared class constant may only widen
+  visibility: "Access level to %s::%s must be %s (as in class|interface
+  %s)%s" (tests/classes/constants_visibility_error_003, _004).
+* do_inheritance_check_on_method: private methods are skipped only when
+  they are neither abstract nor the constructor, so a final private
+  constructor still cannot be overridden (tests/classes/final_private_ctor);
+  a constructor is checked against its abstract/interface prototype and the
+  access error names the prototype's class (Zend/tests/magic_methods/
+  bug61970_2: "must be public (as in class Foo)").
+* Bug #81582: a __toString() taken from an (already declared) trait also
+  makes the class implement Stringable (Zend/tests/magic_methods/
+  stringable_trait).
+* interface_gets_implemented hooks run before the abstract-method check, as
+  do_implement_interface runs before zend_verify_abstract_class. Needed for
+  tests/classes/bug65768 once ext/date registers its DateTimeInterface hook
+  ("DateTimeInterface can't be implemented by user classes"; php-ext-date
+  does not register one yet).
+
+diff --git a/crates/php-vm/src/classlink.rs b/crates/php-vm/src/classlink.rs
+index 5df94bd..825ef07 100644
+--- a/crates/php-vm/src/classlink.rs
++++ b/crates/php-vm/src/classlink.rs
+@@ -721,10 +721,16 @@ impl Vm {
+             }
+         }
+         let mut iface_names = decl.interfaces.clone();
+-        if decl
++        // A `__toString()` declared here or (bug #81582) taken from a trait
++        // implies Stringable.
++        if (decl
+             .methods
+             .iter()
+             .any(|m| m.name.eq_ignore_ascii_case(b"__tostring"))
++            || decl.traits.iter().any(|t| {
++                self.find_class(t.as_bytes())
++                    .is_some_and(|tc| tc.find_method(b"__tostring").is_some())
++            }))
+             && !iface_names
+                 .iter()
+                 .any(|i| i.eq_ignore_ascii_case(b"Stringable"))
+@@ -863,6 +869,16 @@ impl Vm {
+         if let Some(e) = err {
+             return Err(self.fatal_at(&e, line));
+         }
++        // `do_implement_interface` runs before `zend_verify_abstract_class`.
++        for iface in cls.interfaces.clone() {
++            if let Some(f) = iface
++                .hooks
++                .as_ref()
++                .and_then(|h| h.interface_gets_implemented)
++            {
++                f(self, &cls)?;
++            }
++        }
+         // Abstract method check.
+         if !cls.is_interface() && !cls.is_trait() && cls.flags & cflags::EXPLICIT_ABSTRACT == 0 {
+             let mut missing: Vec<String> = Vec::new();
+@@ -934,15 +950,6 @@ impl Vm {
+         if let Some((e, l)) = crate::attrs::check_override(&cls) {
+             return Err(self.fatal_at(&e, if l == 0 { line } else { l }));
+         }
+-        for iface in cls.interfaces.clone() {
+-            if let Some(f) = iface
+-                .hooks
+-                .as_ref()
+-                .and_then(|h| h.interface_gets_implemented)
+-            {
+-                f(self, &cls)?;
+-            }
+-        }
+         // `zend_implement_serializable`.
+         if cls.flags & cflags::EXPLICIT_ABSTRACT == 0
+             && !cls.is_interface()
+@@ -1037,6 +1044,36 @@ fn trait_defaults_identical(a: Option<&ConstExpr>, b: Option<&ConstExpr>) -> boo
+     }
+ }
+ 
++/// The `Access level to %s::$%s must be %s (as in class %s)%s` error when a
++/// redeclared property narrows the parent's visibility.
++fn weaker_property_access(
++    class: &ZStr,
++    prop: &ZStr,
++    child: u32,
++    parent: u32,
++    parent_class: &ZStr,
++) -> Option<String> {
++    let weaker = match parent & flags::VISIBILITY {
++        flags::PUBLIC => child & flags::VISIBILITY != flags::PUBLIC,
++        flags::PROTECTED => child & flags::PRIVATE != 0,
++        _ => false,
++    };
++    weaker.then(|| {
++        format!(
++            "Access level to {}::${} must be {} (as in class {}){}",
++            class,
++            prop,
++            visibility_name(parent),
++            object::display_name(parent_class),
++            if parent & flags::PROTECTED != 0 {
++                " or weaker"
++            } else {
++                ""
++            }
++        )
++    })
++}
++
+ fn visibility_name(f: u32) -> &'static str {
+     match f & flags::VISIBILITY {
+         flags::PRIVATE => "private",
+@@ -1062,7 +1099,10 @@ fn check_method_inheritance(cls: &Rc<Class>) -> Option<(String, u32)> {
+             Func::User(u) => u.line_start,
+             Func::Builtin(_) => 0,
+         };
+-        if pm.visibility() == flags::PRIVATE {
++        // `do_inheritance_check_on_method`: private methods are not
++        // checked, except abstract ones and constructors.
++        if pm.visibility() == flags::PRIVATE && !pm.is_abstract() && lc.as_bytes() != b"__construct"
++        {
+             continue;
+         }
+         if pm.flags & flags::FINAL != 0 {
+@@ -1110,13 +1150,24 @@ fn check_method_inheritance(cls: &Rc<Class>) -> Option<(String, u32)> {
+         }
+         // Constructors only inherit a prototype (and its visibility) from
+         // an abstract or interface declaration.
+-        if lc.as_bytes() == b"__construct"
+-            && !pm.is_abstract()
+-            && !pm.proto_scope.upgrade().is_some_and(|p| p.is_interface())
+-        {
+-            continue;
++        let mut pv = pm.visibility();
++        let mut pscope = pm.scope().name.clone();
++        if lc.as_bytes() == b"__construct" {
++            // Constructors are only checked against an abstract (or
++            // interface) prototype, and then against that prototype.
++            let proto = pm.proto_scope.upgrade();
++            let proto_m = proto.as_ref().and_then(|p| p.methods.get(lc).cloned());
++            let enforced = pm.is_abstract()
++                || proto.as_ref().is_some_and(|p| p.is_interface())
++                || proto_m.as_ref().is_some_and(|x| x.is_abstract());
++            if !enforced {
++                continue;
++            }
++            if let Some(x) = proto_m.filter(|x| x.is_abstract()) {
++                pv = x.visibility();
++                pscope = x.scope().name.clone();
++            }
+         }
+-        let pv = pm.visibility();
+         let v = m.visibility();
+         let weaker = match pv {
+             flags::PUBLIC => v != flags::PUBLIC,
+@@ -1130,7 +1181,7 @@ fn check_method_inheritance(cls: &Rc<Class>) -> Option<(String, u32)> {
+                     object::display_name(&cls.name),
+                     m.name,
+                     visibility_name(pv),
+-                    object::display_name(&pm.scope().name),
++                    object::display_name(&pscope),
+                     if pv == flags::PROTECTED {
+                         " or weaker"
+                     } else {
+@@ -1209,6 +1260,31 @@ fn build_class(
+                     cd.name
+                 ));
+             }
++            // `do_inherit_constant_check`: visibility may only widen.
++            let rank = |f: u32| match f & flags::VISIBILITY {
++                flags::PRIVATE => 2,
++                flags::PROTECTED => 1,
++                _ => 0,
++            };
++            if existing.class != name && rank(cd.flags) > rank(existing.flags) && err.is_none() {
++                let kind = if interfaces.iter().any(|i| i.name == existing.class) {
++                    "interface"
++                } else {
++                    "class"
++                };
++                *err = Some(format!(
++                    "Access level to {}::{} must be {} (as in {kind} {}){}",
++                    name,
++                    cd.name,
++                    visibility_name(existing.flags),
++                    existing.class,
++                    if existing.flags & flags::PUBLIC != 0 {
++                        ""
++                    } else {
++                        " or weaker"
++                    }
++                ));
++            }
+         }
+         let value = match &cd.value {
+             ConstExpr::Value(v) if cd.ty.is_none() => Some(v.clone()),
+@@ -1385,6 +1461,30 @@ fn build_class(
+             }
+         }
+         if pd.flags & flags::STATIC != 0 {
++            // `do_inherit_property` for a static redeclaration.
++            if let Some(e) = prop_map.get(&pd.name).filter(|e| e.class != name) {
++                if err.is_none() {
++                    *err = Some(format!(
++                        "Cannot redeclare non static {}::${} as static {}::${}",
++                        object::display_name(&e.class),
++                        pd.name,
++                        display,
++                        pd.name
++                    ));
++                }
++            } else if let Some(e) = static_map
++                .get(&pd.name)
++                .map(|&i| &static_props[i])
++                .filter(|e| e.class != name)
++            {
++                if let Some(msg) =
++                    weaker_property_access(&display, &pd.name, pd.flags, e.flags, &e.class)
++                {
++                    if err.is_none() {
++                        *err = Some(msg);
++                    }
++                }
++            }
+             let sp = StaticProp {
+                 name: pd.name.clone(),
+                 flags: pd.flags,

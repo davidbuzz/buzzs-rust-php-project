@@ -1,0 +1,97 @@
+0008 — compiler/decl.rs: compile-time diagnostics found by the magic-methods
+pass (apply on top of 0001-0007).
+
+* Interface constants must be public (zend_declare_typed_class_constant):
+  "Access type for interface constant %s::%s must be public"
+  (tests/classes/interface_constant_inheritance_006, _007).
+* zend_compile_func_decl: E_DEPRECATED "Making a constructor a Generator is
+  deprecated" / "Making a destructor a Generator is deprecated"
+  (Zend/tests/magic_methods/constructor_destructor_return).
+* zend_check_magic_method_implementation: a __debugInfo() return type that
+  admits null gives E_DEPRECATED "Returning null from %s::__debugInfo() is
+  deprecated, make the return type non-nullable and return an empty array
+  instead" (Zend/tests/magic_methods/magic_methods_inheritance_rules).
+* "Private methods cannot be final as they are never overridden by other
+  classes" is no longer pushed here: php-parser's validate.rs now emits it,
+  so it was printed twice (tests/classes/inheritance_007).
+
+diff --git a/crates/php-vm/src/compiler/decl.rs b/crates/php-vm/src/compiler/decl.rs
+index 3f735ef..1a37892 100644
+--- a/crates/php-vm/src/compiler/decl.rs
++++ b/crates/php-vm/src/compiler/decl.rs
+@@ -290,6 +290,23 @@ impl Compiler {
+             }
+         }
+         let _ = delayed;
++        // `zend_compile_func_decl`.
++        if spec.kind == FnKind::Method && spec.is_generator && self.hook_prop.is_none() {
++            let what = if spec.method_name.eq_ignore_ascii_case(b"__construct") {
++                Some("constructor")
++            } else if spec.method_name.eq_ignore_ascii_case(b"__destruct") {
++                Some("destructor")
++            } else {
++                None
++            };
++            if let Some(what) = what {
++                self.warnings.push((
++                    8192,
++                    format!("Making a {what} a Generator is deprecated"),
++                    spec.line_start,
++                ));
++            }
++        }
+         let mut f = FnCtx::new(spec.kind);
+         f.line = spec.line_start;
+         f.func_name = spec.name.clone();
+@@ -1304,6 +1321,16 @@ impl Compiler {
+                         self.f().line = c.span.line;
+                         self.check_const_expr(&c.value, false)?;
+                         let value = self.const_expr(&c.value)?;
++                        // `zend_declare_typed_class_constant`.
++                        if kind == ClassKind::Interface && fl & flags::PUBLIC == 0 {
++                            return self.err(
++                                format!(
++                                    "Access type for interface constant {cname}::{} must be public",
++                                    c.name.as_str_lossy()
++                                ),
++                                c.span.line,
++                            );
++                        }
+                         consts.push(ConstDecl {
+                             name: ZStr::from(c.name.name.as_slice()),
+                             value,
+@@ -1387,16 +1414,6 @@ impl Compiler {
+                             md.span.line,
+                         );
+                     }
+-                    if fl & flags::PRIVATE != 0
+-                        && fl & flags::FINAL != 0
+-                        && !md.name.eq_ignore_case("__construct")
+-                    {
+-                        self.warnings.push((
+-                            128,
+-                            "Private methods cannot be final as they are never overridden by other classes".to_string(),
+-                            md.span.line,
+-                        ));
+-                    }
+                     let is_ctor = md.name.eq_ignore_case("__construct");
+                     if !is_ctor && md.params.iter().any(|p| !p.modifiers.is_empty()) {
+                         return self.err(
+@@ -2104,6 +2121,17 @@ impl Compiler {
+                 non_static(self)?;
+                 public(self);
+                 ret_type(self, m::ARRAY | m::NULL, "?array")?;
++                if uf
++                    .return_type
++                    .as_ref()
++                    .is_some_and(|t| t.mask & m::NULL != 0)
++                {
++                    self.warnings.push((
++                        8192,
++                        format!("Returning null from {cname}::__debugInfo() is deprecated, make the return type non-nullable and return an empty array instead"),
++                        line,
++                    ));
++                }
+             }
+             "__serialize" | "__sleep" => {
+                 args(self, 0)?;
