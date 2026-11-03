@@ -1,11 +1,17 @@
 [package]
 name = "php-ext-ftp"
+description = "ext/ftp for the phprust VM: binds the php-ftp engine (functions, constants, FTP\\Connection)"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+php-vm = { path = "../php-vm" }
+php-runtime = { path = "../php-runtime" }
+php-ftp = { path = "../php-ftp" }
+php-streams = { path = "../php-streams" }
+php-ext-streams = { path = "../php-ext-streams" }
 
 [lints]
 workspace = true
