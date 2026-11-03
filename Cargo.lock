@@ -287,6 +287,10 @@ name = "php-stdstr"
 version = "0.1.0"
 
 [[package]]
+name = "php-streams"
+version = "0.1.0"
+
+[[package]]
 name = "php-support"
 version = "0.1.0"
 
