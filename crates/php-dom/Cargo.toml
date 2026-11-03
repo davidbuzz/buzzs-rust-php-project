@@ -1,13 +1,17 @@
 [package]
 name = "php-dom"
-description = "PHP's ext/filter: filter_var/filter_var_array/filter_input engine with all validation and sanitizing filters"
+description = "PHP's ext/dom: DOMDocument & friends and the PHP 8.4 Dom\\ API over the system libxml2, with a lexbor-backed HTML5 parser and CSS selectors"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
+build = "build.rs"
 
 [dependencies]
-php-runtime = { path = "../php-runtime" }
+php-libxml = { path = "../php-libxml" }
+
+[build-dependencies]
+cc = "1"
 
 [lints]
 workspace = true
