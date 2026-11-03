@@ -582,6 +582,35 @@ pub(crate) fn rp_is_lazy(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     Ok(Value::Bool(slot_is_lazy(&o, slot)))
 }
 
+/// The real instance of an initialized lazy proxy (its `var_dump()` shows
+/// `["instance" => ...]`, `zend_lazy_object_debug_info`).
+pub(crate) fn proxy_instance(o: &Obj) -> Option<Obj> {
+    match info(o) {
+        Some(i) if i.proxy && i.initialized => i.instance,
+        _ => None,
+    }
+}
+
+/// `zend_lazy_object_clone`: initializes `o` and returns the object to clone
+/// (`None`: not lazy). For an initialized proxy, returns a new proxy whose
+/// instance is a clone of the real instance.
+pub(crate) fn clone_lazy(vm: &mut Vm, o: &Obj) -> VmResult<Option<Value>> {
+    let Some(i) = info(o) else { return Ok(None) };
+    if !i.initialized {
+        init(vm, o)?;
+    }
+    let Some(i) = info(o) else { return Ok(None) };
+    let Some(inst) = i.instance.clone() else { return Ok(None) };
+    let cls = object::class_of(o).clone();
+    let new_inst = vm.clone_value(Value::Object(inst))?;
+    let Value::Object(new_inst) = new_inst else { return Ok(None) };
+    let np = object::new_object(cls.clone(), vec![None; cls.props.len()]);
+    let d = object::data(&np);
+    d.flags.set(d.flags.get() | oflags::DESTRUCTED);
+    set_info(&np, Some(LazyInfo { instance: Some(new_inst), ..i }));
+    Ok(Some(Value::Object(np)))
+}
+
 #[allow(dead_code)]
 fn unused(vm: &mut Vm, a: &Args) -> VmResult<()> {
     let _ = (str_arg(a, 0), with_scope(vm, None, |_| Ok(())));

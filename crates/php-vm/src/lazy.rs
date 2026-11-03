@@ -51,6 +51,7 @@ impl Vm {
     /// Whether `o` is an uninitialized lazy object (`var_dump` prefix).
     pub(crate) fn lazy_prefix(&self, o: &Obj) -> &'static str {
         match object::data(o).lazy.borrow().as_ref() {
+            Some(i) if i.initializing => "",
             Some(i) if !i.initialized => {
                 if i.proxy {
                     "lazy proxy "
