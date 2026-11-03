@@ -45,6 +45,6 @@ pub fn show(b: &[u8]) -> String {
 /// `var_export()` of a value.
 pub fn export(v: &php_runtime::Value) -> String {
     let mut ctx = php_runtime::CollectingContext::new();
-    String::from_utf8(php_runtime::dump::var_export(v, &mut ctx).expect("var_export"))
-        .expect("utf8")
+    String::from_utf8_lossy(&php_runtime::dump::var_export(v, &mut ctx).expect("var_export"))
+        .into_owned()
 }
