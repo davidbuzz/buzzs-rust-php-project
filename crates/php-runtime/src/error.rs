@@ -394,6 +394,52 @@ pub trait RuntimeContext {
         })
     }
 
+    /// Decides how an object is serialized (`__serialize`, `__sleep`,
+    /// `Serializable`, enums). The default writes the `Serialize`-purpose
+    /// property table as `O:`.
+    fn serialize_object(&mut self, obj: &Obj) -> RtResult<crate::serialize::SerializedObject> {
+        let props = self
+            .object_properties(obj, PropertyPurpose::Serialize)?
+            .unwrap_or_default();
+        Ok(crate::serialize::SerializedObject::Object {
+            class: obj.class_name(),
+            props,
+        })
+    }
+
+    /// `unserialize()`: instantiates an object of `class` (without calling
+    /// the constructor). Properties are supplied afterwards through
+    /// [`RuntimeContext::unserialize_object_finish`], so that back-references
+    /// (`r:`) to the object inside its own properties work.
+    fn unserialize_object_create(&mut self, class: &ZStr) -> RtResult<Value> {
+        Err(RuntimeError::Error(format!(
+            "Cannot unserialize object of class {class} without a VM"
+        )))
+    }
+
+    /// `unserialize()`: fills the properties of an object created by
+    /// [`RuntimeContext::unserialize_object_create`] (calling `__unserialize`
+    /// or `__wakeup` as appropriate). Keys are mangled property names.
+    fn unserialize_object_finish(&mut self, obj: &Value, props: ZArray) -> RtResult<()> {
+        let _ = (obj, props);
+        Ok(())
+    }
+
+    /// `unserialize()` of `E:` (enum case).
+    fn unserialize_enum(&mut self, class: &ZStr, case: &ZStr) -> RtResult<Value> {
+        Err(RuntimeError::Error(format!(
+            "Cannot unserialize enum {class}::{case} without a VM"
+        )))
+    }
+
+    /// `unserialize()` of `C:` (`Serializable::unserialize`).
+    fn unserialize_custom(&mut self, class: &ZStr, data: &[u8]) -> RtResult<Value> {
+        let _ = data;
+        Err(RuntimeError::Error(format!(
+            "Cannot unserialize object of class {class} without a VM"
+        )))
+    }
+
     /// Creates a `stdClass` object whose properties are `props` (the
     /// `(object)` cast). The table already uses property-table (string) keys.
     fn create_std_object(&mut self, props: ZArray) -> RtResult<Value> {

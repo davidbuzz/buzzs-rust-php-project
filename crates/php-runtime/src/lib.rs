@@ -11,6 +11,7 @@ pub mod error;
 pub mod float;
 pub mod numeric;
 pub mod ops;
+pub mod serialize;
 pub mod sort;
 pub mod string;
 pub mod value;
