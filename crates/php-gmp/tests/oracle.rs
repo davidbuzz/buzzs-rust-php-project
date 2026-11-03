@@ -152,7 +152,12 @@ fn eval(f: &[&str]) -> Vec<String> {
         }
         "import" => {
             let size = usize::try_from(small(f[2])).expect("size");
-            vec![h(&Mpz::import(&unhex(f[1]), size, order(f[3]), endian(f[4])))]
+            vec![h(&Mpz::import(
+                &unhex(f[1]),
+                size,
+                order(f[3]),
+                endian(f[4]),
+            ))]
         }
         "rand" => {
             let mut st = MtState::new(&a());
@@ -191,7 +196,12 @@ fn matches_libgmp() {
         count += 1;
         if got.iter().map(String::as_str).ne(expected.iter().copied()) {
             let short: String = line.chars().take(300).collect();
-            failures.push(format!("{short}\n   got {:?}", got.iter().map(|s| s.chars().take(120).collect::<String>()).collect::<Vec<_>>()));
+            failures.push(format!(
+                "{short}\n   got {:?}",
+                got.iter()
+                    .map(|s| s.chars().take(120).collect::<String>())
+                    .collect::<Vec<_>>()
+            ));
         }
     }
     assert!(count > 25_000, "oracle too small: {count}");
@@ -199,6 +209,11 @@ fn matches_libgmp() {
         failures.is_empty(),
         "{} mismatches:\n{}",
         failures.len(),
-        failures.iter().take(25).cloned().collect::<Vec<_>>().join("\n")
+        failures
+            .iter()
+            .take(25)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join("\n")
     );
 }

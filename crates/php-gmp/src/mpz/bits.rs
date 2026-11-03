@@ -1,6 +1,6 @@
 //! Bitwise operations with GMP's infinite two's complement semantics.
 
-use super::Mpz;
+use super::{mag, Mpz};
 
 /// Two's complement limbs of `x` over `n` limbs (sign-extended).
 fn twos(x: &Mpz, n: usize) -> Vec<u64> {
@@ -80,14 +80,26 @@ impl Mpz {
 
     /// `mpz_setbit`.
     pub fn set_bit(&mut self, index: u64) {
-        if !self.test_bit(index) {
+        if !self.neg {
+            let li = usize::try_from(index / 64).expect("bit index too large");
+            if li >= self.mag.len() {
+                self.mag.resize(li + 1, 0);
+            }
+            self.mag[li] |= 1 << (index % 64);
+        } else if !self.test_bit(index) {
             *self = self.or(&Self::pow2(index));
         }
     }
 
     /// `mpz_clrbit`.
     pub fn clear_bit(&mut self, index: u64) {
-        if self.test_bit(index) {
+        if !self.neg {
+            let li = usize::try_from(index / 64).unwrap_or(usize::MAX);
+            if li < self.mag.len() {
+                self.mag[li] &= !(1 << (index % 64));
+                mag::normalize(&mut self.mag);
+            }
+        } else if self.test_bit(index) {
             *self = self.and(&Self::pow2(index).com());
         }
     }
@@ -156,22 +168,6 @@ impl Mpz {
             None => 0,
             Some(l) => z as u64 * 64 + u64::from(l.trailing_zeros()),
         }
-    }
-
-    /// `self mod 2^bits` of the magnitude, i.e. `|self| & (2^bits - 1)`.
-    pub(crate) fn low_bits(&self, bits: u64) -> Self {
-        let full = usize::try_from(bits / 64).unwrap_or(usize::MAX);
-        let mut v: Vec<u64> = self
-            .mag
-            .iter()
-            .take(full.saturating_add(1))
-            .copied()
-            .collect();
-        if v.len() > full {
-            let s = bits % 64;
-            v[full] &= (1u64 << s) - 1;
-        }
-        Self::from_parts(false, v)
     }
 }
 

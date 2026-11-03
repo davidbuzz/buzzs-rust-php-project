@@ -5,6 +5,7 @@ mod convert;
 pub(crate) mod mag;
 mod theory;
 
+pub(crate) use convert::is_c_space;
 pub use convert::{Endian, WordOrder};
 
 use std::cmp::Ordering;
