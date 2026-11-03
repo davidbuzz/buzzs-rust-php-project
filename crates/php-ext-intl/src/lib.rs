@@ -20,6 +20,7 @@ mod iter;
 mod locale;
 mod misc;
 mod msgformat;
+mod newfmt;
 mod numfmt;
 mod registry;
 mod stubs;
@@ -115,6 +116,7 @@ fn all_handlers() -> HashMap<&'static str, NativeFn> {
         dateformat::handlers(),
         numfmt::handlers(),
         msgformat::handlers(),
+        newfmt::handlers(),
     ] {
         for (k, f) in list {
             h.insert(k, f);
