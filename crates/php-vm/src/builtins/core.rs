@@ -5,7 +5,6 @@ use super::{alias, constant, reg};
 use crate::class::{cflags, Class};
 use crate::func::{flags, Args, Func};
 use crate::object;
-use crate::props::PropLookup;
 use crate::vm::{ErrorHandler, FrameKind, Throw, Vm, VmResult};
 use php_runtime::{ArrayKey, HashTable, Value, ZArray, ZStr};
 use std::rc::Rc;

@@ -47,7 +47,7 @@ mod weakref;
 
 pub use vm::{Throw, Vm, VmResult};
 
-use php_runtime::{ArrayKey, HashTable, Value, ZArray, ZStr};
+use php_runtime::{Value, ZArray, ZStr};
 use php_support::ini::{Access, IniDirective, IniRegistry, ModifyHandler};
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
