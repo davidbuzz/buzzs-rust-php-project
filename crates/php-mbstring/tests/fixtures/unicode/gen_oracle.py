@@ -12,6 +12,11 @@ Line formats (tab separated, byte strings hex encoded):
   check ENC INPUT 0|1
   cut   ENC START LENGTH|null INPUT OUTPUT
 
+The oracle is PHP 8.3, whose codecs for these encodings match php-src master.
+`cut` lines reflect 8.3's mb_strcut: master differs for UTF-16 (fast `cut`
+functions) and returns "" for a zero length, so the replay test only checks
+the legacy-filter encodings and emulates 8.3's argument handling.
+
 Usage: python3 gen_oracle.py [path/to/php-src]
 """
 import os
