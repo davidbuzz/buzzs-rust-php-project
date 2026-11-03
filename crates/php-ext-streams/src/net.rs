@@ -17,8 +17,11 @@ use php_streams::value::Value as SValue;
 use php_vm::ext::{Args, ModuleBuilder, VmResult};
 use php_vm::Vm;
 
+use php_streams::context::ContextRef;
+
 use crate::bridge::{self, bytes};
 use crate::res::{self, str_arg, stream_arg};
+use crate::xport::{self, XportError, XportRequest};
 
 /// A socket stream over a descriptor (`php_netstream_data_t`).
 #[derive(Debug)]
@@ -181,16 +184,29 @@ fn default_timeout(vm: &Vm) -> Duration {
     Duration::from_secs(u64::try_from(vm.ini_long("default_socket_timeout")).unwrap_or(60))
 }
 
-fn timeout_arg(a: &Args, n: usize, vm: &Vm) -> Option<Duration> {
+/// `PHP_TIMEOUT_ULL_MAX / 1000000.0`.
+const TIMEOUT_MAX: f64 = 18_446_744_073_709.551_615;
+
+/// Converts a validated timeout in seconds; negative or huge values wait
+/// forever (`tv_pointer = NULL`).
+fn to_duration(t: f64) -> Option<Duration> {
+    if !(0.0..TIMEOUT_MAX).contains(&t) {
+        return None;
+    }
+    Duration::try_from_secs_f64(t).ok()
+}
+
+/// A `?float $timeout` argument of `stream_socket_client()` /
+/// `stream_socket_accept()` ("must be a finite value").
+fn finite_timeout(vm: &mut Vm, a: &Args, n: usize) -> VmResult<Option<Duration>> {
     match a.opt(n) {
-        None => Some(default_timeout(vm)),
+        None => Ok(Some(default_timeout(vm))),
         Some(_) => {
             let t = a.float(n);
-            if t < 0.0 {
-                None
-            } else {
-                Some(Duration::from_secs_f64(t))
+            if !t.is_finite() {
+                return Err(a.value_error(vm, n + 1, "must be a finite value"));
             }
+            Ok(to_duration(t))
         }
     }
 }
@@ -201,10 +217,118 @@ fn set_ref(a: &mut Args, n: usize, v: Value) {
     }
 }
 
+/// The `ssl` options of a context as PHP values.
+fn ssl_options(ctx: Option<&ContextRef>) -> Value {
+    let Some(c) = ctx else {
+        return Value::Array(ZArray::new());
+    };
+    if let Some(cell) = res::ctx_cell_of_lib(c) {
+        if let Some(v) = cell.options.borrow().get_str(b"ssl") {
+            return v.clone();
+        }
+    }
+    Value::Array(ZArray::new())
+}
+
+/// `php_stream_xport_create()`: a client or server stream for `address`.
+fn xport_create(
+    vm: &mut Vm,
+    address: &str,
+    timeout: Option<Duration>,
+    server: bool,
+    flags: i64,
+    persistent_id: Option<String>,
+    ctx: Option<ContextRef>,
+) -> VmResult<Result<Stream, XportError>> {
+    let (scheme, rest) = xport::split_scheme(address);
+    if let Some(t) = xport::find(&scheme) {
+        let (host, port) = xport::parse_host_port(rest).unwrap_or_else(|| (rest.to_string(), 0));
+        let req = XportRequest {
+            scheme: scheme.clone(),
+            address: address.to_string(),
+            host,
+            port,
+            timeout,
+            server,
+            flags,
+            persistent_id,
+            ssl_options: ssl_options(ctx.as_ref()),
+            context: ctx.clone(),
+        };
+        let r = (t.create)(vm, &req)?;
+        if let Ok(s) = &r {
+            if server {
+                xport::note_server(s.id(), &scheme);
+            }
+        }
+        return Ok(r.map(|mut s| {
+            if s.context.is_none() {
+                s.context = ctx;
+            }
+            s
+        }));
+    }
+    if !server && flags & 4 == 0 && matches!(scheme.as_str(), "tcp" | "udp" | "unix") {
+        // No STREAM_CLIENT_CONNECT: an unconnected socket (xp_socket parses
+        // the address only when connecting).
+        let domain = if scheme == "unix" { libc::AF_UNIX } else { libc::AF_INET };
+        let ty = if scheme == "udp" { libc::SOCK_DGRAM } else { libc::SOCK_STREAM };
+        // SAFETY: plain socket(2) call.
+        let fd = unsafe { libc::socket(domain, ty, 0) };
+        if fd >= 0 {
+            // SAFETY: fresh descriptor.
+            let owned = unsafe { OwnedFd::from_raw_fd(fd) };
+            let label = match scheme.as_str() {
+                "udp" => "udp_socket",
+                "unix" => "unix_socket",
+                _ => "tcp_socket",
+            };
+            let mut s = sock_stream(owned, label, timeout);
+            s.context = ctx;
+            return Ok(Ok(s));
+        }
+    }
+    if server {
+        return Ok(server_socket(&scheme, rest, address).map(|mut s| {
+            s.context = ctx;
+            s
+        }));
+    }
+    let r = bridge::run(vm, || transports::socket_client(address.as_bytes(), timeout))?;
+    Ok(r
+        .map(|mut s| {
+            s.context = ctx;
+            s
+        })
+        .map_err(|e| XportError {
+            errno: e.errno,
+            message: e.message,
+        }))
+}
+
 fn fsockopen_impl(vm: &mut Vm, a: &mut Args, persistent: bool) -> VmResult<Value> {
     let host = str_arg(a, 0);
     let port = a.int(1);
-    let timeout = timeout_arg(a, 4, vm);
+    let timeout = match a.opt(4) {
+        None => Some(default_timeout(vm)),
+        Some(_) => {
+            let t = a.float(4);
+            #[allow(clippy::float_cmp)]
+            let minus_one = t == -1.0;
+            if !minus_one && !(0.0..=TIMEOUT_MAX).contains(&t) {
+                return Err(a.value_error(
+                    vm,
+                    5,
+                    "must be -1 or between 0 and 18446744073709",
+                ));
+            }
+            if minus_one {
+                None
+            } else {
+                to_duration(t)
+            }
+        }
+    };
     let host_s = String::from_utf8_lossy(&host).into_owned();
     let target = if port > 0 {
         if host_s.contains(':') && !host_s.contains("://") && !host_s.starts_with('[') {
@@ -217,8 +341,9 @@ fn fsockopen_impl(vm: &mut Vm, a: &mut Args, persistent: bool) -> VmResult<Value
     };
     set_ref(a, 2, Value::Int(0));
     set_ref(a, 3, bytes(""));
-    let r = bridge::run(vm, || transports::socket_client(target.as_bytes(), timeout))?;
-    match r {
+    let ctx = None;
+    let pid = persistent.then(|| format!("pfsockopen__{host_s}:{port}"));
+    match xport_create(vm, &target, timeout, false, 4, pid, ctx)? {
         Ok(s) => Ok(res::new_stream_ex(s, None, persistent)),
         Err(e) => {
             vm.php_warning(&format!(
@@ -241,20 +366,18 @@ fn pfsockopen(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 }
 
 fn stream_socket_client(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let addr = str_arg(a, 0);
-    let timeout = timeout_arg(a, 3, vm);
-    let ctx = res::context_arg(vm, a, 5, false)?;
+    let addr = String::from_utf8_lossy(&str_arg(a, 0)).into_owned();
+    let timeout = finite_timeout(vm, a, 3)?;
+    let flags = if a.has(4) { a.int(4) } else { 4 };
+    let ctx = res::context_arg(vm, a, 5, flags & 16 != 0)?;
     set_ref(a, 1, Value::Int(0));
     set_ref(a, 2, bytes(""));
-    let r = bridge::run(vm, || transports::socket_client(&addr, timeout))?;
-    match r {
-        Ok(mut s) => {
-            s.context = ctx;
-            Ok(res::new_stream(s, None))
-        }
+    let persistent = flags & 1 != 0;
+    let pid = persistent.then(|| format!("stream_socket_client__{addr}"));
+    match xport_create(vm, &addr, timeout, false, flags, pid, ctx)? {
+        Ok(s) => Ok(res::new_stream_ex(s, None, persistent)),
         Err(e) => {
-            let shown = String::from_utf8_lossy(&addr).into_owned();
-            vm.php_warning(&format!("Unable to connect to {shown} ({})", e.message))?;
+            vm.php_warning(&format!("Unable to connect to {addr} ({})", e.message))?;
             set_ref(a, 1, Value::Int(i64::from(e.errno)));
             set_ref(a, 2, bytes(e.message.as_bytes()));
             Ok(Value::Bool(false))
@@ -262,43 +385,118 @@ fn stream_socket_client(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     }
 }
 
-/// Splits `proto://rest` (default `tcp`).
-fn split_url(addr: &str) -> (&str, &str) {
-    match addr.find("://") {
-        Some(i) => (&addr[..i], &addr[i + 3..]),
-        None => ("tcp", addr),
-    }
+/// A listening socket for the built-in transports.
+fn server_socket(scheme: &str, rest: &str, address: &str) -> Result<Stream, XportError> {
+    let io_err = |e: &std::io::Error| XportError {
+        errno: e.raw_os_error().unwrap_or(0),
+        message: e
+            .raw_os_error()
+            .map_or_else(|| e.to_string(), php_streams::sys::strerror),
+    };
+    let r: std::io::Result<(OwnedFd, &'static str)> = match scheme {
+        "tcp" | "udp" => {
+            let Some((host, port)) = xport::parse_host_port(rest) else {
+                return Err(XportError {
+                    errno: 0,
+                    message: format!("Failed to parse address \"{rest}\""),
+                });
+            };
+            let bind = if host.contains(':') {
+                format!("[{host}]:{port}")
+            } else {
+                format!("{host}:{port}")
+            };
+            if scheme == "tcp" {
+                std::net::TcpListener::bind(bind).map(|l| (OwnedFd::from(l), "tcp_socket"))
+            } else {
+                std::net::UdpSocket::bind(bind).map(|l| (OwnedFd::from(l), "udp_socket"))
+            }
+        }
+        "unix" => std::os::unix::net::UnixListener::bind(rest)
+            .map(|l| (OwnedFd::from(l), "unix_socket")),
+        _ => {
+            let shown: String = scheme.chars().take(31).collect();
+            return Err(XportError {
+                errno: 0,
+                message: format!(
+                    "Unable to find the socket transport \"{shown}\" - did you forget to enable it when you configured PHP?"
+                ),
+            });
+        }
+    };
+    let _ = address;
+    r.map(|(fd, label)| sock_stream(fd, label, None))
+        .map_err(|e| io_err(&e))
 }
 
 fn stream_socket_server(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let addr = String::from_utf8_lossy(&str_arg(a, 0)).into_owned();
     let flags = if a.has(3) { a.int(3) } else { 12 };
+    let ctx = res::context_arg(vm, a, 4, false)?;
     set_ref(a, 1, Value::Int(0));
     set_ref(a, 2, bytes(""));
-    let (proto, rest) = split_url(&addr);
-    let r: std::io::Result<(OwnedFd, &'static str)> = match proto {
-        "tcp" => std::net::TcpListener::bind(rest).map(|l| (OwnedFd::from(l), "tcp_socket")),
-        "udp" => std::net::UdpSocket::bind(rest).map(|l| (OwnedFd::from(l), "udp_socket")),
-        "unix" => {
-            std::os::unix::net::UnixListener::bind(rest).map(|l| (OwnedFd::from(l), "unix_socket"))
-        }
-        _ => Err(std::io::Error::other(format!(
-            "Unable to find the socket transport \"{proto}\" - did you forget to enable it when you configured PHP?"
-        ))),
-    };
-    let _ = flags;
-    match r {
-        Ok((fd, label)) => Ok(res::new_stream(sock_stream(fd, label, None), None)),
+    match xport_create(vm, &addr, None, true, flags, None, ctx)? {
+        Ok(s) => Ok(res::new_stream(s, None)),
         Err(e) => {
-            let msg = e
-                .raw_os_error()
-                .map_or_else(|| e.to_string(), php_streams::sys::strerror);
-            vm.php_warning(&format!("Unable to connect to {addr} ({msg})"))?;
-            set_ref(a, 1, Value::Int(i64::from(e.raw_os_error().unwrap_or(0))));
-            set_ref(a, 2, bytes(msg.as_bytes()));
+            vm.php_warning(&format!("Unable to connect to {addr} ({})", e.message))?;
+            set_ref(a, 1, Value::Int(i64::from(e.errno)));
+            set_ref(a, 2, bytes(e.message.as_bytes()));
             Ok(Value::Bool(false))
         }
     }
+}
+
+fn stream_socket_enable_crypto(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let cell = stream_arg(vm, a, 0)?;
+    let enable = a.bool(1);
+    let method = a.opt(2).map(|_| a.int(2));
+    let session = match a.opt(3) {
+        Some(_) => Some(stream_arg(vm, a, 3)?),
+        None => None,
+    };
+    if enable && method.is_none() && !cell.get().is_some_and(|s| s.context.is_some()) {
+        // Without a context there is no crypto_method option to fall back on.
+    }
+    let Some(hook) = xport::crypto_hooks().enable else {
+        vm.php_warning("SSL/TLS support is not available in this build")?;
+        return Ok(Value::Bool(false));
+    };
+    let Some(mut s) = cell.take() else {
+        return Ok(Value::Bool(false));
+    };
+    let mut sess = session.as_ref().and_then(|c| c.take());
+    let r = hook(vm, &mut s, enable, method, sess.as_mut());
+    if let (Some(c), Some(ss)) = (session.as_ref(), sess) {
+        c.replace_stream(ss);
+    }
+    let (v, replacement) = match r {
+        Ok(x) => x,
+        Err(t) => {
+            cell.replace_stream(s);
+            return Err(t);
+        }
+    };
+    match replacement {
+        Some(new) => {
+            let mut old = s;
+            old.add_flags(flags::NO_CLOSE);
+            drop(old);
+            cell.replace_stream(new);
+        }
+        None => {
+            cell.replace_stream(s);
+        }
+    }
+    Ok(v)
+}
+
+fn stream_socket_get_crypto_status(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let cell = stream_arg(vm, a, 0)?;
+    let st = xport::crypto_hooks()
+        .status
+        .and_then(|f| cell.get().map(|mut s| f(&mut s)))
+        .unwrap_or(0);
+    Ok(Value::Int(st))
 }
 
 fn sockaddr_name(fd: RawFd, remote: bool) -> Option<String> {
@@ -347,7 +545,7 @@ fn sockaddr_name(fd: RawFd, remote: bool) -> Option<String> {
 
 fn stream_socket_accept(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let cell = stream_arg(vm, a, 0)?;
-    let timeout = timeout_arg(a, 1, vm);
+    let timeout = finite_timeout(vm, a, 1)?;
     let fd = cell.get().and_then(|mut s| s.cast(CastAs::FdForSelect, false));
     let Some(fd) = fd else {
         return Ok(Value::Bool(false));
@@ -373,7 +571,23 @@ fn stream_socket_accept(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         let peer = sockaddr_name(nfd, true).map_or(Value::Null, |p| bytes(p.as_bytes()));
         a.set_ref(2, peer);
     }
-    Ok(res::new_stream(sock_stream(owned, label, Some(default_timeout(vm))), None))
+    let mut conn = sock_stream(owned, label, Some(default_timeout(vm)));
+    if let Some(hook) = xport::server_transport(cell.id()).and_then(|t| t.accept) {
+        let Some(mut listener) = cell.take() else {
+            return Ok(Value::Bool(false));
+        };
+        conn.context.clone_from(&listener.context);
+        let r = hook(vm, &mut listener, conn, timeout);
+        cell.replace_stream(listener);
+        match r? {
+            Ok(s) => return Ok(res::new_stream(s, None)),
+            Err(e) => {
+                vm.php_warning(&format!("Accept failed: {}", e.message))?;
+                return Ok(Value::Bool(false));
+            }
+        }
+    }
+    Ok(res::new_stream(conn, None))
 }
 
 fn stream_socket_get_name(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -442,6 +656,7 @@ fn stream_socket_recvfrom(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         return Err(a.value_error(vm, 2, "must be greater than 0"));
     }
     let flags = i32::try_from(a.int(2)).unwrap_or(0);
+    set_ref(a, 3, Value::Null);
     let fd = cell.get().and_then(|mut s| s.cast(CastAs::FdForSelect, false));
     let Some(fd) = fd else {
         return Ok(Value::Bool(false));
@@ -496,6 +711,11 @@ pub fn register(m: &mut ModuleBuilder<'_>) {
         stream_socket_accept,
     )
     .function("stream_socket_get_name($socket, bool $remote): string|false", stream_socket_get_name)
+    .function(
+        "stream_socket_enable_crypto($stream, bool $enable, ?int $crypto_method = null, $session_stream = null): int|bool",
+        stream_socket_enable_crypto,
+    )
+    .function("stream_socket_get_crypto_status($stream): int", stream_socket_get_crypto_status)
     .function("stream_socket_shutdown($stream, int $mode): bool", stream_socket_shutdown)
     .function(
         "stream_socket_pair(int $domain, int $type, int $protocol, $context = null): array|false",

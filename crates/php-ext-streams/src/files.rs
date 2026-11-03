@@ -134,7 +134,7 @@ fn fclose(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     if let Some(mut s) = cell.take() {
         r.close();
         result = bridge::run(vm, || s.close())?;
-        crate::process::reap(cell.id);
+        crate::process::reap(cell.id());
     } else {
         r.close();
     }

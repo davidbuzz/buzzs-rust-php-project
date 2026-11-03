@@ -6,7 +6,8 @@
 //! * [`dirs`] — `dir.c` (opendir, scandir, glob, `Directory`);
 //! * [`streams`] — `streamsfuncs.c` (meta data, contexts, select);
 //! * [`userwrap`] / [`userfilter`] — user-space wrappers and filters;
-//! * [`net`] — sockets; [`process`] — `popen()`.
+//! * [`net`] — sockets; [`xport`] — the transport/crypto registry other
+//!   extensions (openssl) plug into; [`process`] — `popen()`.
 //!
 //! [`bridge`] connects the library's diagnostics and callbacks to the VM,
 //! [`res`] owns the stream and context resources.
@@ -21,6 +22,7 @@ pub mod stat;
 pub mod streams;
 pub mod userfilter;
 pub mod userwrap;
+pub mod xport;
 
 use php_runtime::{Resource, Value};
 use php_streams::stream::flags;

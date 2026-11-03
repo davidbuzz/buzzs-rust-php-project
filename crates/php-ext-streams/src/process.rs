@@ -77,7 +77,7 @@ fn pclose(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         bridge::run(vm, || s.close())?;
     }
     r.close();
-    let child = CHILDREN.with(|m| m.borrow_mut().remove(&cell.id));
+    let child = CHILDREN.with(|m| m.borrow_mut().remove(&cell.id()));
     Ok(Value::Int(exit_code(child)))
 }
 

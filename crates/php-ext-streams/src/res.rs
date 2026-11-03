@@ -32,8 +32,7 @@ pub const CONTEXT: &str = "stream-context";
 #[derive(Debug)]
 pub struct StreamCell {
     stream: RefCell<Option<Stream>>,
-    /// The library stream id.
-    pub id: u64,
+    id: Cell<u64>,
     handle: Cell<i64>,
     /// The user-space wrapper object (`wrapper_data` in the meta data).
     pub wrapper_data: RefCell<Option<Value>>,
@@ -60,6 +59,25 @@ impl StreamCell {
     /// Removes the stream (for closing).
     pub fn take(&self) -> Option<Stream> {
         self.stream.try_borrow_mut().ok()?.take()
+    }
+
+    /// The library stream id.
+    pub fn id(&self) -> u64 {
+        self.id.get()
+    }
+
+    /// Replaces the stream behind the resource (e.g. a TLS upgrade of a
+    /// socket), keeping the resource identity. Returns the old stream.
+    pub fn replace_stream(self: &Rc<Self>, new: Stream) -> Option<Stream> {
+        let new_id = new.id();
+        let old = std::mem::replace(&mut *self.stream.try_borrow_mut().ok()?, Some(new));
+        STREAMS.with(|m| {
+            let mut m = m.borrow_mut();
+            m.remove(&self.id.get());
+            m.insert(new_id, Rc::downgrade(self));
+        });
+        self.id.set(new_id);
+        old
     }
 
     /// The resource handle number.
@@ -90,7 +108,7 @@ impl Drop for StreamCell {
     fn drop(&mut self) {
         STREAMS.with(|m| {
             if let Ok(mut m) = m.try_borrow_mut() {
-                m.remove(&self.id);
+                m.remove(&self.id.get());
             }
         });
         let Some(mut s) = self.stream.get_mut().take() else {
@@ -143,7 +161,7 @@ pub fn new_stream_ex(stream: Stream, wrapper_data: Option<Value>, persistent: bo
     let cell = Rc::new(StreamCell {
         ctx_keep: RefCell::new(stream.context.as_ref().and_then(ctx_cell_of_lib)),
         stream: RefCell::new(Some(stream)),
-        id,
+        id: Cell::new(id),
         handle: Cell::new(0),
         wrapper_data: RefCell::new(wrapper_data),
         persistent,
@@ -160,7 +178,7 @@ pub fn new_stream_with_handle(stream: Stream, handle: i64) -> Value {
     let id = stream.id();
     let cell = Rc::new(StreamCell {
         stream: RefCell::new(Some(stream)),
-        id,
+        id: Cell::new(id),
         handle: Cell::new(handle),
         wrapper_data: RefCell::new(None),
         persistent: false,
@@ -181,7 +199,7 @@ pub fn cell_of(r: &Resource) -> Option<Rc<StreamCell>> {
 
 /// The library stream id of a stream resource.
 pub fn stream_id_of(r: &Resource) -> Option<u64> {
-    cell_of(r).map(|c| c.id)
+    cell_of(r).map(|c| c.id())
 }
 
 /// A resource value for the live stream with library id `id`.

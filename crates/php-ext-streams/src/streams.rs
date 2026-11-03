@@ -62,6 +62,9 @@ fn stream_copy_to_stream(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 fn stream_get_meta_data(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let cell = stream_arg(vm, a, 0)?;
     let meta = with_stream(vm, &cell, Stream::meta_data)?.unwrap_or_default();
+    let crypto = crate::xport::crypto_hooks()
+        .meta
+        .and_then(|f| cell.get().and_then(|s| f(&s)));
     let mut arr = ZArray::new();
     let wrapper_data = cell.wrapper_data.borrow().clone();
     for (k, v) in meta {
@@ -71,6 +74,9 @@ fn stream_get_meta_data(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             }
         }
         arr.make_mut().insert(ArrayKey::Str(ZStr::from(k.as_str())), bridge::from_lib(&v));
+    }
+    if let Some(c) = crypto {
+        arr.make_mut().insert("crypto", c);
     }
     Ok(Value::Array(arr))
 }
@@ -165,6 +171,9 @@ fn stream_get_transports(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
     for p in transports::transports() {
         let _ = arr.make_mut().push(bytes(p));
     }
+    for p in crate::xport::schemes() {
+        let _ = arr.make_mut().push(bytes(p));
+    }
     Ok(Value::Array(arr))
 }
 
@@ -189,7 +198,15 @@ fn select_entries(arr: &ZArray) -> Vec<(ArrayKey, Value, Rc<res::StreamCell>)> {
 
 fn select_fd(cell: &res::StreamCell) -> Option<i32> {
     let mut s = cell.get()?;
-    s.cast(CastAs::FdForSelect, true).filter(|&fd| fd >= 0)
+    let fd = s.cast(CastAs::FdForSelect, true).filter(|&fd| fd >= 0);
+    if fd.is_none() {
+        // php_stream_cast()'s generic failure report (missing in the library).
+        php_streams::diag::warning(format!(
+            "Cannot represent a stream of type {} as a select()able descriptor",
+            s.ops_label()
+        ));
+    }
+    fd
 }
 
 #[allow(clippy::too_many_lines)]
