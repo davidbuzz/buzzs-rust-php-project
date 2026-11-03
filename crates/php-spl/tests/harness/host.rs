@@ -309,6 +309,10 @@ impl SplHost for Interp {
         Ok(false)
     }
 
+    fn pcre(&mut self) -> &mut php_pcre::Pcre {
+        &mut self.pcre
+    }
+
     fn write_output(&mut self, bytes: &[u8]) -> RtResult<()> {
         self.echo(bytes);
         Ok(())

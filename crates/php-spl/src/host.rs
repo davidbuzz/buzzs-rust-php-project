@@ -123,6 +123,10 @@ pub trait SplHost: ArrayContext {
     /// Returns whether the file was executed.
     fn autoload_include(&mut self, file: &ZStr) -> RtResult<bool>;
 
+    /// The request's PCRE state (`RegexIterator`): pattern cache, INI
+    /// limits and `preg_last_error()`.
+    fn pcre(&mut self) -> &mut php_pcre::Pcre;
+
     /// Writes to the output (`fpassthru`).
     fn write_output(&mut self, bytes: &[u8]) -> RtResult<()>;
 }

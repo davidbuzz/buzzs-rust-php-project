@@ -46,6 +46,17 @@ pub struct ParamDef {
     pub variadic: bool,
 }
 
+/// A declared (public) property.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PropDef {
+    /// Name without `$`.
+    pub name: &'static str,
+    /// Declared type.
+    pub ty: Option<&'static str>,
+    /// Default value as PHP source.
+    pub default: Option<&'static str>,
+}
+
 /// A `#[\Deprecated]` attribute.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Deprecation {
@@ -100,6 +111,8 @@ pub struct ClassDef {
     pub interfaces: &'static [&'static str],
     /// Class constants (all `int`).
     pub constants: &'static [(&'static str, i64)],
+    /// Declared properties (`RegexIterator::$replacement`).
+    pub properties: &'static [PropDef],
     /// Methods declared by this class.
     pub methods: &'static [MethodDef],
 }

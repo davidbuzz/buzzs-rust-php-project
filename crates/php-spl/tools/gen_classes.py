@@ -119,7 +119,7 @@ def parse(path):
             extends = [x.strip() for x in (m.group(4) or "").split(",") if x.strip()]
             impls = [x.strip() for x in (m.group(5) or "").split(",") if x.strip()]
             cur = {"name": m.group(3), "kind": kind, "abstract": "abstract" in line.split("class")[0],
-                   "final": "final" in mods, "parent": None, "interfaces": [], "consts": [], "methods": []}
+                   "final": "final" in mods, "parent": None, "interfaces": [], "consts": [], "methods": [], "props": []}
             if kind == "interface":
                 cur["interfaces"] = extends
             else:
@@ -130,6 +130,11 @@ def parse(path):
             continue
         if line == "}" and cur is not None and not lines[i - 2].strip().endswith("{}"):
             pass
+        pm = re.match(r"^(public|protected|private) (\??[\w|]+ )?\$(\w+)(?: = (.*))?;", line)
+        if pm and cur is not None:
+            cur["props"].append((pm.group(3), (pm.group(2) or "").strip() or None, pm.group(4)))
+            doc, attrs = "", []
+            continue
         m = re.match(r"^public const (?:\w+ )?(\w+) = (.*);", line)
         if m and cur is not None:
             key = cur["name"] + "::" + m.group(1)
@@ -214,6 +219,7 @@ def main():
         print("        parent: %s," % rs(c["parent"]))
         print("        interfaces: &[%s]," % ", ".join('"%s"' % x for x in c["interfaces"]))
         print("        constants: &[%s]," % consts)
+        print("        properties: &[%s]," % ", ".join('PropDef { name: "%s", ty: %s, default: %s }' % (n, rs(t), rs(d)) for n, t, d in c["props"]))
         print("        methods: &[")
         for m in c["methods"]:
             print("            " + emit_method(m) + ",")

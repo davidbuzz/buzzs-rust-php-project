@@ -1574,6 +1574,9 @@ impl Interp {
                     let a = Value::Array(ZArray::from_values(argv));
                     return self.call_method_h(Some(&o), &cls, &call, &[Value::from(n), a]);
                 }
+                if let Some(target) = php_spl::handlers::method_target(self, &o)? {
+                    return self.call_method(&target, n, &argv);
+                }
                 Err(rt_err(format!("Call to undefined method {}::{n}()", cls.name)))
             }
         }

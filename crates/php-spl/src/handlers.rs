@@ -319,6 +319,13 @@ pub fn clone_state(
     Ok(Some(fresh))
 }
 
+/// `get_method` fallback: dual iterators and `RecursiveIteratorIterator`
+/// forward calls of methods their class lacks to the inner (current
+/// sub-) iterator. Returns the object to call the method on instead.
+pub fn method_target(host: &mut dyn SplHost, obj: &Obj) -> RtResult<Option<Obj>> {
+    crate::iterators::method_target(host, obj)
+}
+
 /// `get_iterator` of the SPL classes that iterate natively (not through
 /// their `Iterator` methods). `None` means: use the `Iterator` /
 /// `IteratorAggregate` methods.
@@ -357,7 +364,10 @@ pub fn native_iterator(
             Some(it) => it,
             None => return Ok(None),
         },
-        Family::Recursive => Box::new(crate::iterators::RecursiveItIter::new(obj.clone())),
+        Family::Recursive => {
+            crate::iterators::check_recursive_initialized(&st)?;
+            Box::new(crate::iterators::RecursiveItIter::new(obj.clone()))
+        }
         Family::File => match crate::directory::native_iterator(host, obj, &st)? {
             Some(it) => it,
             None => return Ok(None),

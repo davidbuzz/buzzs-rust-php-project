@@ -231,6 +231,11 @@ pub fn register_classes(it: &mut Interp) {
             php_spl::classes::ClassKind::Abstract => CKind::Abstract,
             php_spl::classes::ClassKind::Class => CKind::Class,
         };
+        let props = def
+            .properties
+            .iter()
+            .map(|p| PropDecl { name: p.name.to_string(), visibility: 0, default: Some(lit(Value::Null)), is_static: false, typed: false })
+            .collect();
         let c = Rc::new(Class {
             name: def.name.to_string(),
             parent,
@@ -238,7 +243,7 @@ pub fn register_classes(it: &mut Interp) {
             kind,
             consts: RefCell::new(def.constants.iter().map(|(n, v)| ((*n).to_string(), Ok(Value::Int(*v)))).collect()),
             statics: RefCell::new(HashMap::new()),
-            props: Vec::new(),
+            props,
             methods,
             spl_base,
             internal: true,

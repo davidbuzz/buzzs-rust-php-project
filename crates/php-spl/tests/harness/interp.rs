@@ -276,6 +276,7 @@ pub struct Interp {
     pub shutdown: Vec<(Value, Vec<Value>)>,
     pub depth: usize,
     pub tmpfiles: Vec<String>,
+    pub pcre: php_pcre::Pcre,
 }
 
 pub fn rt_err(msg: impl Into<String>) -> RuntimeError {
@@ -312,6 +313,7 @@ impl Interp {
             shutdown: Vec::new(),
             depth: 0,
             tmpfiles: Vec::new(),
+            pcre: php_pcre::Pcre::new(),
         };
         crate::harness::builtins::register_classes(&mut it);
         crate::harness::builtins::register_constants(&mut it);

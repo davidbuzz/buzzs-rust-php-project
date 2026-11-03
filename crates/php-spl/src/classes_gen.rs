@@ -10,6 +10,7 @@ pub static CLASSES: &[ClassDef] = &[
         parent: Some("Exception"),
         interfaces: &[],
         constants: &[],
+        properties: &[],
         methods: &[
         ],
     },
@@ -20,6 +21,7 @@ pub static CLASSES: &[ClassDef] = &[
         parent: Some("LogicException"),
         interfaces: &[],
         constants: &[],
+        properties: &[],
         methods: &[
         ],
     },
@@ -30,6 +32,7 @@ pub static CLASSES: &[ClassDef] = &[
         parent: Some("BadFunctionCallException"),
         interfaces: &[],
         constants: &[],
+        properties: &[],
         methods: &[
         ],
     },
@@ -40,6 +43,7 @@ pub static CLASSES: &[ClassDef] = &[
         parent: Some("LogicException"),
         interfaces: &[],
         constants: &[],
+        properties: &[],
         methods: &[
         ],
     },
@@ -50,6 +54,7 @@ pub static CLASSES: &[ClassDef] = &[
         parent: Some("LogicException"),
         interfaces: &[],
         constants: &[],
+        properties: &[],
         methods: &[
         ],
     },
@@ -60,6 +65,7 @@ pub static CLASSES: &[ClassDef] = &[
         parent: Some("LogicException"),
         interfaces: &[],
         constants: &[],
+        properties: &[],
         methods: &[
         ],
     },
@@ -70,6 +76,7 @@ pub static CLASSES: &[ClassDef] = &[
         parent: Some("LogicException"),
         interfaces: &[],
         constants: &[],
+        properties: &[],
         methods: &[
         ],
     },
@@ -80,6 +87,7 @@ pub static CLASSES: &[ClassDef] = &[
         parent: Some("Exception"),
         interfaces: &[],
         constants: &[],
+        properties: &[],
         methods: &[
         ],
     },
@@ -90,6 +98,7 @@ pub static CLASSES: &[ClassDef] = &[
         parent: Some("RuntimeException"),
         interfaces: &[],
         constants: &[],
+        properties: &[],
         methods: &[
         ],
     },
@@ -100,6 +109,7 @@ pub static CLASSES: &[ClassDef] = &[
         parent: Some("RuntimeException"),
         interfaces: &[],
         constants: &[],
+        properties: &[],
         methods: &[
         ],
     },
@@ -110,6 +120,7 @@ pub static CLASSES: &[ClassDef] = &[
         parent: Some("RuntimeException"),
         interfaces: &[],
         constants: &[],
+        properties: &[],
         methods: &[
         ],
     },
@@ -120,6 +131,7 @@ pub static CLASSES: &[ClassDef] = &[
         parent: Some("RuntimeException"),
         interfaces: &[],
         constants: &[],
+        properties: &[],
         methods: &[
         ],
     },
@@ -130,6 +142,7 @@ pub static CLASSES: &[ClassDef] = &[
         parent: Some("RuntimeException"),
         interfaces: &[],
         constants: &[],
+        properties: &[],
         methods: &[
         ],
     },
@@ -140,6 +153,7 @@ pub static CLASSES: &[ClassDef] = &[
         parent: None,
         interfaces: &["Iterator"],
         constants: &[],
+        properties: &[],
         methods: &[
             MethodDef { name: "current", flags: 0, params: &[], return_type: Some("never"), tentative: true, deprecated: None, alias_of: None },
             MethodDef { name: "next", flags: 0, params: &[], return_type: Some("void"), tentative: true, deprecated: None, alias_of: None },
@@ -155,6 +169,7 @@ pub static CLASSES: &[ClassDef] = &[
         parent: Some("FilterIterator"),
         interfaces: &[],
         constants: &[],
+        properties: &[],
         methods: &[
             MethodDef { name: "__construct", flags: 0, params: &[ParamDef { name: "iterator", ty: Some("Iterator"), default: None, by_ref: false, variadic: false }, ParamDef { name: "callback", ty: Some("callable"), default: None, by_ref: false, variadic: false }], return_type: None, tentative: false, deprecated: None, alias_of: None },
             MethodDef { name: "accept", flags: 0, params: &[], return_type: Some("bool"), tentative: true, deprecated: None, alias_of: None },
@@ -167,6 +182,7 @@ pub static CLASSES: &[ClassDef] = &[
         parent: Some("CallbackFilterIterator"),
         interfaces: &["RecursiveIterator"],
         constants: &[],
+        properties: &[],
         methods: &[
             MethodDef { name: "__construct", flags: 0, params: &[ParamDef { name: "iterator", ty: Some("RecursiveIterator"), default: None, by_ref: false, variadic: false }, ParamDef { name: "callback", ty: Some("callable"), default: None, by_ref: false, variadic: false }], return_type: None, tentative: false, deprecated: None, alias_of: None },
             MethodDef { name: "hasChildren", flags: 0, params: &[], return_type: Some("bool"), tentative: true, deprecated: None, alias_of: Some("RecursiveFilterIterator::hasChildren") },
@@ -180,6 +196,7 @@ pub static CLASSES: &[ClassDef] = &[
         parent: None,
         interfaces: &["Iterator"],
         constants: &[],
+        properties: &[],
         methods: &[
             MethodDef { name: "hasChildren", flags: 0, params: &[], return_type: Some("bool"), tentative: true, deprecated: None, alias_of: None },
             MethodDef { name: "getChildren", flags: 0, params: &[], return_type: Some("?RecursiveIterator"), tentative: true, deprecated: None, alias_of: None },
@@ -192,6 +209,7 @@ pub static CLASSES: &[ClassDef] = &[
         parent: None,
         interfaces: &["OuterIterator"],
         constants: &[("LEAVES_ONLY", 0), ("SELF_FIRST", 1), ("CHILD_FIRST", 2), ("CATCH_GET_CHILD", 16)],
+        properties: &[],
         methods: &[
             MethodDef { name: "__construct", flags: 0, params: &[ParamDef { name: "iterator", ty: Some("Traversable"), default: None, by_ref: false, variadic: false }, ParamDef { name: "mode", ty: Some("int"), default: Some("RecursiveIteratorIterator::LEAVES_ONLY"), by_ref: false, variadic: false }, ParamDef { name: "flags", ty: Some("int"), default: Some("0"), by_ref: false, variadic: false }], return_type: None, tentative: false, deprecated: None, alias_of: None },
             MethodDef { name: "rewind", flags: 0, params: &[], return_type: Some("void"), tentative: true, deprecated: None, alias_of: None },
@@ -220,6 +238,7 @@ pub static CLASSES: &[ClassDef] = &[
         parent: None,
         interfaces: &["Iterator"],
         constants: &[],
+        properties: &[],
         methods: &[
             MethodDef { name: "getInnerIterator", flags: 0, params: &[], return_type: Some("?Iterator"), tentative: true, deprecated: None, alias_of: None },
         ],
@@ -231,6 +250,7 @@ pub static CLASSES: &[ClassDef] = &[
         parent: None,
         interfaces: &["OuterIterator"],
         constants: &[],
+        properties: &[],
         methods: &[
             MethodDef { name: "__construct", flags: 0, params: &[ParamDef { name: "iterator", ty: Some("Traversable"), default: None, by_ref: false, variadic: false }, ParamDef { name: "class", ty: Some("?string"), default: Some("null"), by_ref: false, variadic: false }], return_type: None, tentative: false, deprecated: None, alias_of: None },
             MethodDef { name: "getInnerIterator", flags: 0, params: &[], return_type: Some("?Iterator"), tentative: true, deprecated: None, alias_of: None },
@@ -248,6 +268,7 @@ pub static CLASSES: &[ClassDef] = &[
         parent: Some("IteratorIterator"),
         interfaces: &[],
         constants: &[],
+        properties: &[],
         methods: &[
             MethodDef { name: "accept", flags: MethodFlags::ABSTRACT, params: &[], return_type: Some("bool"), tentative: true, deprecated: None, alias_of: None },
             MethodDef { name: "__construct", flags: 0, params: &[ParamDef { name: "iterator", ty: Some("Iterator"), default: None, by_ref: false, variadic: false }], return_type: None, tentative: false, deprecated: None, alias_of: None },
@@ -262,6 +283,7 @@ pub static CLASSES: &[ClassDef] = &[
         parent: Some("FilterIterator"),
         interfaces: &["RecursiveIterator"],
         constants: &[],
+        properties: &[],
         methods: &[
             MethodDef { name: "__construct", flags: 0, params: &[ParamDef { name: "iterator", ty: Some("RecursiveIterator"), default: None, by_ref: false, variadic: false }], return_type: None, tentative: false, deprecated: None, alias_of: None },
             MethodDef { name: "hasChildren", flags: 0, params: &[], return_type: Some("bool"), tentative: true, deprecated: None, alias_of: None },
@@ -275,6 +297,7 @@ pub static CLASSES: &[ClassDef] = &[
         parent: Some("RecursiveFilterIterator"),
         interfaces: &[],
         constants: &[],
+        properties: &[],
         methods: &[
             MethodDef { name: "__construct", flags: 0, params: &[ParamDef { name: "iterator", ty: Some("RecursiveIterator"), default: None, by_ref: false, variadic: false }], return_type: None, tentative: false, deprecated: None, alias_of: None },
             MethodDef { name: "accept", flags: 0, params: &[], return_type: Some("bool"), tentative: true, deprecated: None, alias_of: Some("RecursiveFilterIterator::hasChildren") },
@@ -287,6 +310,7 @@ pub static CLASSES: &[ClassDef] = &[
         parent: None,
         interfaces: &["Iterator"],
         constants: &[],
+        properties: &[],
         methods: &[
             MethodDef { name: "seek", flags: 0, params: &[ParamDef { name: "offset", ty: Some("int"), default: None, by_ref: false, variadic: false }], return_type: Some("void"), tentative: true, deprecated: None, alias_of: None },
         ],
@@ -298,6 +322,7 @@ pub static CLASSES: &[ClassDef] = &[
         parent: Some("IteratorIterator"),
         interfaces: &[],
         constants: &[],
+        properties: &[],
         methods: &[
             MethodDef { name: "__construct", flags: 0, params: &[ParamDef { name: "iterator", ty: Some("Iterator"), default: None, by_ref: false, variadic: false }, ParamDef { name: "offset", ty: Some("int"), default: Some("0"), by_ref: false, variadic: false }, ParamDef { name: "limit", ty: Some("int"), default: Some("-1"), by_ref: false, variadic: false }], return_type: None, tentative: false, deprecated: None, alias_of: None },
             MethodDef { name: "rewind", flags: 0, params: &[], return_type: Some("void"), tentative: true, deprecated: None, alias_of: None },
@@ -314,6 +339,7 @@ pub static CLASSES: &[ClassDef] = &[
         parent: Some("IteratorIterator"),
         interfaces: &["ArrayAccess", "Countable", "Stringable"],
         constants: &[("CALL_TOSTRING", 1), ("CATCH_GET_CHILD", 16), ("TOSTRING_USE_KEY", 2), ("TOSTRING_USE_CURRENT", 4), ("TOSTRING_USE_INNER", 8), ("FULL_CACHE", 256)],
+        properties: &[],
         methods: &[
             MethodDef { name: "__construct", flags: 0, params: &[ParamDef { name: "iterator", ty: Some("Iterator"), default: None, by_ref: false, variadic: false }, ParamDef { name: "flags", ty: Some("int"), default: Some("CachingIterator::CALL_TOSTRING"), by_ref: false, variadic: false }], return_type: None, tentative: false, deprecated: None, alias_of: None },
             MethodDef { name: "rewind", flags: 0, params: &[], return_type: Some("void"), tentative: true, deprecated: None, alias_of: None },
@@ -338,6 +364,7 @@ pub static CLASSES: &[ClassDef] = &[
         parent: Some("CachingIterator"),
         interfaces: &["RecursiveIterator"],
         constants: &[],
+        properties: &[],
         methods: &[
             MethodDef { name: "__construct", flags: 0, params: &[ParamDef { name: "iterator", ty: Some("Iterator"), default: None, by_ref: false, variadic: false }, ParamDef { name: "flags", ty: Some("int"), default: Some("RecursiveCachingIterator::CALL_TOSTRING"), by_ref: false, variadic: false }], return_type: None, tentative: false, deprecated: None, alias_of: None },
             MethodDef { name: "hasChildren", flags: 0, params: &[], return_type: Some("bool"), tentative: true, deprecated: None, alias_of: None },
@@ -351,6 +378,7 @@ pub static CLASSES: &[ClassDef] = &[
         parent: Some("IteratorIterator"),
         interfaces: &[],
         constants: &[],
+        properties: &[],
         methods: &[
             MethodDef { name: "__construct", flags: 0, params: &[ParamDef { name: "iterator", ty: Some("Iterator"), default: None, by_ref: false, variadic: false }], return_type: None, tentative: false, deprecated: None, alias_of: None },
             MethodDef { name: "rewind", flags: 0, params: &[], return_type: Some("void"), tentative: true, deprecated: None, alias_of: None },
@@ -367,6 +395,7 @@ pub static CLASSES: &[ClassDef] = &[
         parent: Some("IteratorIterator"),
         interfaces: &[],
         constants: &[],
+        properties: &[],
         methods: &[
             MethodDef { name: "__construct", flags: 0, params: &[], return_type: None, tentative: false, deprecated: None, alias_of: None },
             MethodDef { name: "append", flags: 0, params: &[ParamDef { name: "iterator", ty: Some("Iterator"), default: None, by_ref: false, variadic: false }], return_type: Some("void"), tentative: true, deprecated: None, alias_of: None },
@@ -385,6 +414,7 @@ pub static CLASSES: &[ClassDef] = &[
         parent: Some("IteratorIterator"),
         interfaces: &[],
         constants: &[],
+        properties: &[],
         methods: &[
             MethodDef { name: "__construct", flags: 0, params: &[ParamDef { name: "iterator", ty: Some("Iterator"), default: None, by_ref: false, variadic: false }], return_type: None, tentative: false, deprecated: None, alias_of: None },
             MethodDef { name: "next", flags: 0, params: &[], return_type: Some("void"), tentative: true, deprecated: None, alias_of: None },
@@ -397,6 +427,7 @@ pub static CLASSES: &[ClassDef] = &[
         parent: Some("FilterIterator"),
         interfaces: &[],
         constants: &[("USE_KEY", 1), ("INVERT_MATCH", 2), ("MATCH", 0), ("GET_MATCH", 1), ("ALL_MATCHES", 2), ("SPLIT", 3), ("REPLACE", 4)],
+        properties: &[PropDef { name: "replacement", ty: Some("?string"), default: Some("null") }],
         methods: &[
             MethodDef { name: "__construct", flags: 0, params: &[ParamDef { name: "iterator", ty: Some("Iterator"), default: None, by_ref: false, variadic: false }, ParamDef { name: "pattern", ty: Some("string"), default: None, by_ref: false, variadic: false }, ParamDef { name: "mode", ty: Some("int"), default: Some("RegexIterator::MATCH"), by_ref: false, variadic: false }, ParamDef { name: "flags", ty: Some("int"), default: Some("0"), by_ref: false, variadic: false }, ParamDef { name: "pregFlags", ty: Some("int"), default: Some("0"), by_ref: false, variadic: false }], return_type: None, tentative: false, deprecated: None, alias_of: None },
             MethodDef { name: "accept", flags: 0, params: &[], return_type: Some("bool"), tentative: true, deprecated: None, alias_of: None },
@@ -416,6 +447,7 @@ pub static CLASSES: &[ClassDef] = &[
         parent: Some("RegexIterator"),
         interfaces: &["RecursiveIterator"],
         constants: &[],
+        properties: &[],
         methods: &[
             MethodDef { name: "__construct", flags: 0, params: &[ParamDef { name: "iterator", ty: Some("RecursiveIterator"), default: None, by_ref: false, variadic: false }, ParamDef { name: "pattern", ty: Some("string"), default: None, by_ref: false, variadic: false }, ParamDef { name: "mode", ty: Some("int"), default: Some("RecursiveRegexIterator::MATCH"), by_ref: false, variadic: false }, ParamDef { name: "flags", ty: Some("int"), default: Some("0"), by_ref: false, variadic: false }, ParamDef { name: "pregFlags", ty: Some("int"), default: Some("0"), by_ref: false, variadic: false }], return_type: None, tentative: false, deprecated: None, alias_of: None },
             MethodDef { name: "accept", flags: 0, params: &[], return_type: Some("bool"), tentative: true, deprecated: None, alias_of: None },
@@ -430,6 +462,7 @@ pub static CLASSES: &[ClassDef] = &[
         parent: Some("RecursiveIteratorIterator"),
         interfaces: &[],
         constants: &[("BYPASS_CURRENT", 4), ("BYPASS_KEY", 8), ("PREFIX_LEFT", 0), ("PREFIX_MID_HAS_NEXT", 1), ("PREFIX_MID_LAST", 2), ("PREFIX_END_HAS_NEXT", 3), ("PREFIX_END_LAST", 4), ("PREFIX_RIGHT", 5)],
+        properties: &[],
         methods: &[
             MethodDef { name: "__construct", flags: 0, params: &[ParamDef { name: "iterator", ty: Some("RecursiveIterator|IteratorAggregate"), default: None, by_ref: false, variadic: false }, ParamDef { name: "flags", ty: Some("int"), default: Some("RecursiveTreeIterator::BYPASS_KEY"), by_ref: false, variadic: false }, ParamDef { name: "cachingIteratorFlags", ty: Some("int"), default: Some("CachingIterator::CATCH_GET_CHILD"), by_ref: false, variadic: false }, ParamDef { name: "mode", ty: Some("int"), default: Some("RecursiveTreeIterator::SELF_FIRST"), by_ref: false, variadic: false }], return_type: None, tentative: false, deprecated: None, alias_of: None },
             MethodDef { name: "key", flags: 0, params: &[], return_type: Some("mixed"), tentative: true, deprecated: None, alias_of: None },
@@ -448,6 +481,7 @@ pub static CLASSES: &[ClassDef] = &[
         parent: None,
         interfaces: &["IteratorAggregate", "ArrayAccess", "Serializable", "Countable"],
         constants: &[("STD_PROP_LIST", 1), ("ARRAY_AS_PROPS", 2)],
+        properties: &[],
         methods: &[
             MethodDef { name: "__construct", flags: 0, params: &[ParamDef { name: "array", ty: Some("array|object"), default: Some("[]"), by_ref: false, variadic: false }, ParamDef { name: "flags", ty: Some("int"), default: Some("0"), by_ref: false, variadic: false }, ParamDef { name: "iteratorClass", ty: Some("string"), default: Some("ArrayIterator::class"), by_ref: false, variadic: false }], return_type: None, tentative: false, deprecated: None, alias_of: None },
             MethodDef { name: "offsetExists", flags: 0, params: &[ParamDef { name: "key", ty: Some("mixed"), default: None, by_ref: false, variadic: false }], return_type: Some("bool"), tentative: true, deprecated: None, alias_of: None },
@@ -483,6 +517,7 @@ pub static CLASSES: &[ClassDef] = &[
         parent: None,
         interfaces: &["SeekableIterator", "ArrayAccess", "Serializable", "Countable"],
         constants: &[("STD_PROP_LIST", 1), ("ARRAY_AS_PROPS", 2)],
+        properties: &[],
         methods: &[
             MethodDef { name: "__construct", flags: 0, params: &[ParamDef { name: "array", ty: Some("array|object"), default: Some("[]"), by_ref: false, variadic: false }, ParamDef { name: "flags", ty: Some("int"), default: Some("0"), by_ref: false, variadic: false }], return_type: None, tentative: false, deprecated: None, alias_of: None },
             MethodDef { name: "offsetExists", flags: 0, params: &[ParamDef { name: "key", ty: Some("mixed"), default: None, by_ref: false, variadic: false }], return_type: Some("bool"), tentative: true, deprecated: None, alias_of: Some("ArrayObject::offsetExists") },
@@ -520,6 +555,7 @@ pub static CLASSES: &[ClassDef] = &[
         parent: Some("ArrayIterator"),
         interfaces: &["RecursiveIterator"],
         constants: &[("CHILD_ARRAYS_ONLY", 4)],
+        properties: &[],
         methods: &[
             MethodDef { name: "hasChildren", flags: 0, params: &[], return_type: Some("bool"), tentative: true, deprecated: None, alias_of: None },
             MethodDef { name: "getChildren", flags: 0, params: &[], return_type: Some("?RecursiveArrayIterator"), tentative: true, deprecated: None, alias_of: None },
@@ -532,6 +568,7 @@ pub static CLASSES: &[ClassDef] = &[
         parent: None,
         interfaces: &["Stringable"],
         constants: &[],
+        properties: &[],
         methods: &[
             MethodDef { name: "__construct", flags: 0, params: &[ParamDef { name: "filename", ty: Some("string"), default: None, by_ref: false, variadic: false }], return_type: None, tentative: false, deprecated: None, alias_of: None },
             MethodDef { name: "getPath", flags: 0, params: &[], return_type: Some("string"), tentative: true, deprecated: None, alias_of: None },
@@ -573,6 +610,7 @@ pub static CLASSES: &[ClassDef] = &[
         parent: Some("SplFileInfo"),
         interfaces: &["SeekableIterator"],
         constants: &[],
+        properties: &[],
         methods: &[
             MethodDef { name: "__construct", flags: 0, params: &[ParamDef { name: "directory", ty: Some("string"), default: None, by_ref: false, variadic: false }], return_type: None, tentative: false, deprecated: None, alias_of: None },
             MethodDef { name: "getFilename", flags: 0, params: &[], return_type: Some("string"), tentative: true, deprecated: None, alias_of: None },
@@ -595,6 +633,7 @@ pub static CLASSES: &[ClassDef] = &[
         parent: Some("DirectoryIterator"),
         interfaces: &[],
         constants: &[("CURRENT_MODE_MASK", 240), ("CURRENT_AS_PATHNAME", 32), ("CURRENT_AS_FILEINFO", 0), ("CURRENT_AS_SELF", 16), ("KEY_MODE_MASK", 3840), ("KEY_AS_PATHNAME", 0), ("FOLLOW_SYMLINKS", 16384), ("KEY_AS_FILENAME", 256), ("NEW_CURRENT_AND_KEY", 256), ("OTHER_MODE_MASK", 28672), ("SKIP_DOTS", 4096), ("UNIX_PATHS", 8192)],
+        properties: &[],
         methods: &[
             MethodDef { name: "__construct", flags: 0, params: &[ParamDef { name: "directory", ty: Some("string"), default: None, by_ref: false, variadic: false }, ParamDef { name: "flags", ty: Some("int"), default: Some("FilesystemIterator::KEY_AS_PATHNAME | FilesystemIterator::CURRENT_AS_FILEINFO | FilesystemIterator::SKIP_DOTS"), by_ref: false, variadic: false }], return_type: None, tentative: false, deprecated: None, alias_of: None },
             MethodDef { name: "rewind", flags: 0, params: &[], return_type: Some("void"), tentative: true, deprecated: None, alias_of: None },
@@ -611,6 +650,7 @@ pub static CLASSES: &[ClassDef] = &[
         parent: Some("FilesystemIterator"),
         interfaces: &["RecursiveIterator"],
         constants: &[],
+        properties: &[],
         methods: &[
             MethodDef { name: "__construct", flags: 0, params: &[ParamDef { name: "directory", ty: Some("string"), default: None, by_ref: false, variadic: false }, ParamDef { name: "flags", ty: Some("int"), default: Some("FilesystemIterator::KEY_AS_PATHNAME | FilesystemIterator::CURRENT_AS_FILEINFO"), by_ref: false, variadic: false }], return_type: None, tentative: false, deprecated: None, alias_of: None },
             MethodDef { name: "hasChildren", flags: 0, params: &[ParamDef { name: "allowLinks", ty: Some("bool"), default: Some("false"), by_ref: false, variadic: false }], return_type: Some("bool"), tentative: true, deprecated: None, alias_of: None },
@@ -626,6 +666,7 @@ pub static CLASSES: &[ClassDef] = &[
         parent: Some("FilesystemIterator"),
         interfaces: &["Countable"],
         constants: &[],
+        properties: &[],
         methods: &[
             MethodDef { name: "__construct", flags: 0, params: &[ParamDef { name: "pattern", ty: Some("string"), default: None, by_ref: false, variadic: false }, ParamDef { name: "flags", ty: Some("int"), default: Some("FilesystemIterator::KEY_AS_PATHNAME | FilesystemIterator::CURRENT_AS_FILEINFO"), by_ref: false, variadic: false }], return_type: None, tentative: false, deprecated: None, alias_of: None },
             MethodDef { name: "count", flags: 0, params: &[], return_type: Some("int"), tentative: true, deprecated: None, alias_of: None },
@@ -638,6 +679,7 @@ pub static CLASSES: &[ClassDef] = &[
         parent: Some("SplFileInfo"),
         interfaces: &["RecursiveIterator", "SeekableIterator"],
         constants: &[("DROP_NEW_LINE", 1), ("READ_AHEAD", 2), ("SKIP_EMPTY", 4), ("READ_CSV", 8)],
+        properties: &[],
         methods: &[
             MethodDef { name: "__construct", flags: 0, params: &[ParamDef { name: "filename", ty: Some("string"), default: None, by_ref: false, variadic: false }, ParamDef { name: "mode", ty: Some("string"), default: Some("\"r\""), by_ref: false, variadic: false }, ParamDef { name: "useIncludePath", ty: Some("bool"), default: Some("false"), by_ref: false, variadic: false }, ParamDef { name: "context", ty: None, default: Some("null"), by_ref: false, variadic: false }], return_type: None, tentative: false, deprecated: None, alias_of: None },
             MethodDef { name: "rewind", flags: 0, params: &[], return_type: Some("void"), tentative: true, deprecated: None, alias_of: None },
@@ -680,6 +722,7 @@ pub static CLASSES: &[ClassDef] = &[
         parent: Some("SplFileObject"),
         interfaces: &[],
         constants: &[],
+        properties: &[],
         methods: &[
             MethodDef { name: "__construct", flags: 0, params: &[ParamDef { name: "maxMemory", ty: Some("int"), default: Some("2 * 1024 * 1024"), by_ref: false, variadic: false }], return_type: None, tentative: false, deprecated: None, alias_of: None },
         ],
@@ -691,6 +734,7 @@ pub static CLASSES: &[ClassDef] = &[
         parent: None,
         interfaces: &["Iterator", "Countable", "ArrayAccess", "Serializable"],
         constants: &[("IT_MODE_LIFO", 2), ("IT_MODE_FIFO", 0), ("IT_MODE_DELETE", 1), ("IT_MODE_KEEP", 0)],
+        properties: &[],
         methods: &[
             MethodDef { name: "add", flags: 0, params: &[ParamDef { name: "index", ty: Some("int"), default: None, by_ref: false, variadic: false }, ParamDef { name: "value", ty: Some("mixed"), default: None, by_ref: false, variadic: false }], return_type: Some("void"), tentative: true, deprecated: None, alias_of: None },
             MethodDef { name: "pop", flags: 0, params: &[], return_type: Some("mixed"), tentative: true, deprecated: None, alias_of: None },
@@ -727,6 +771,7 @@ pub static CLASSES: &[ClassDef] = &[
         parent: Some("SplDoublyLinkedList"),
         interfaces: &[],
         constants: &[],
+        properties: &[],
         methods: &[
             MethodDef { name: "enqueue", flags: 0, params: &[ParamDef { name: "value", ty: Some("mixed"), default: None, by_ref: false, variadic: false }], return_type: Some("void"), tentative: true, deprecated: None, alias_of: Some("SplDoublyLinkedList::push") },
             MethodDef { name: "dequeue", flags: 0, params: &[], return_type: Some("mixed"), tentative: true, deprecated: None, alias_of: Some("SplDoublyLinkedList::shift") },
@@ -739,6 +784,7 @@ pub static CLASSES: &[ClassDef] = &[
         parent: Some("SplDoublyLinkedList"),
         interfaces: &[],
         constants: &[],
+        properties: &[],
         methods: &[
         ],
     },
@@ -749,6 +795,7 @@ pub static CLASSES: &[ClassDef] = &[
         parent: None,
         interfaces: &["Iterator", "Countable"],
         constants: &[("EXTR_BOTH", 3), ("EXTR_PRIORITY", 2), ("EXTR_DATA", 1)],
+        properties: &[],
         methods: &[
             MethodDef { name: "compare", flags: 0, params: &[ParamDef { name: "priority1", ty: Some("mixed"), default: None, by_ref: false, variadic: false }, ParamDef { name: "priority2", ty: Some("mixed"), default: None, by_ref: false, variadic: false }], return_type: Some("int"), tentative: true, deprecated: None, alias_of: None },
             MethodDef { name: "insert", flags: 0, params: &[ParamDef { name: "value", ty: Some("mixed"), default: None, by_ref: false, variadic: false }, ParamDef { name: "priority", ty: Some("mixed"), default: None, by_ref: false, variadic: false }], return_type: Some("true"), tentative: true, deprecated: None, alias_of: None },
@@ -777,6 +824,7 @@ pub static CLASSES: &[ClassDef] = &[
         parent: None,
         interfaces: &["Iterator", "Countable"],
         constants: &[],
+        properties: &[],
         methods: &[
             MethodDef { name: "extract", flags: 0, params: &[], return_type: Some("mixed"), tentative: true, deprecated: None, alias_of: None },
             MethodDef { name: "insert", flags: 0, params: &[ParamDef { name: "value", ty: Some("mixed"), default: None, by_ref: false, variadic: false }], return_type: Some("true"), tentative: true, deprecated: None, alias_of: None },
@@ -803,6 +851,7 @@ pub static CLASSES: &[ClassDef] = &[
         parent: Some("SplHeap"),
         interfaces: &[],
         constants: &[],
+        properties: &[],
         methods: &[
             MethodDef { name: "compare", flags: MethodFlags::PROTECTED, params: &[ParamDef { name: "value1", ty: Some("mixed"), default: None, by_ref: false, variadic: false }, ParamDef { name: "value2", ty: Some("mixed"), default: None, by_ref: false, variadic: false }], return_type: Some("int"), tentative: true, deprecated: None, alias_of: None },
         ],
@@ -814,6 +863,7 @@ pub static CLASSES: &[ClassDef] = &[
         parent: Some("SplHeap"),
         interfaces: &[],
         constants: &[],
+        properties: &[],
         methods: &[
             MethodDef { name: "compare", flags: MethodFlags::PROTECTED, params: &[ParamDef { name: "value1", ty: Some("mixed"), default: None, by_ref: false, variadic: false }, ParamDef { name: "value2", ty: Some("mixed"), default: None, by_ref: false, variadic: false }], return_type: Some("int"), tentative: true, deprecated: None, alias_of: None },
         ],
@@ -825,6 +875,7 @@ pub static CLASSES: &[ClassDef] = &[
         parent: None,
         interfaces: &["IteratorAggregate", "ArrayAccess", "Countable", "JsonSerializable"],
         constants: &[],
+        properties: &[],
         methods: &[
             MethodDef { name: "__construct", flags: 0, params: &[ParamDef { name: "size", ty: Some("int"), default: Some("0"), by_ref: false, variadic: false }], return_type: None, tentative: false, deprecated: None, alias_of: None },
             MethodDef { name: "__wakeup", flags: 0, params: &[], return_type: Some("void"), tentative: true, deprecated: Some(Deprecation { since: Some("8.4"), message: Some("this method is obsolete, as serialization hooks are provided by __unserialize() and __serialize()") }), alias_of: None },
@@ -850,6 +901,7 @@ pub static CLASSES: &[ClassDef] = &[
         parent: None,
         interfaces: &[],
         constants: &[],
+        properties: &[],
         methods: &[
             MethodDef { name: "update", flags: 0, params: &[ParamDef { name: "subject", ty: Some("SplSubject"), default: None, by_ref: false, variadic: false }], return_type: Some("void"), tentative: true, deprecated: None, alias_of: None },
         ],
@@ -861,6 +913,7 @@ pub static CLASSES: &[ClassDef] = &[
         parent: None,
         interfaces: &[],
         constants: &[],
+        properties: &[],
         methods: &[
             MethodDef { name: "attach", flags: 0, params: &[ParamDef { name: "observer", ty: Some("SplObserver"), default: None, by_ref: false, variadic: false }], return_type: Some("void"), tentative: true, deprecated: None, alias_of: None },
             MethodDef { name: "detach", flags: 0, params: &[ParamDef { name: "observer", ty: Some("SplObserver"), default: None, by_ref: false, variadic: false }], return_type: Some("void"), tentative: true, deprecated: None, alias_of: None },
@@ -874,6 +927,7 @@ pub static CLASSES: &[ClassDef] = &[
         parent: None,
         interfaces: &["Countable", "SeekableIterator", "Serializable", "ArrayAccess"],
         constants: &[],
+        properties: &[],
         methods: &[
             MethodDef { name: "attach", flags: 0, params: &[ParamDef { name: "object", ty: Some("object"), default: None, by_ref: false, variadic: false }, ParamDef { name: "info", ty: Some("mixed"), default: Some("null"), by_ref: false, variadic: false }], return_type: Some("void"), tentative: true, deprecated: Some(Deprecation { since: Some("8.5"), message: Some("use method SplObjectStorage::offsetSet() instead") }), alias_of: None },
             MethodDef { name: "detach", flags: 0, params: &[ParamDef { name: "object", ty: Some("object"), default: None, by_ref: false, variadic: false }], return_type: Some("void"), tentative: true, deprecated: Some(Deprecation { since: Some("8.5"), message: Some("use method SplObjectStorage::offsetUnset() instead") }), alias_of: None },
@@ -909,6 +963,7 @@ pub static CLASSES: &[ClassDef] = &[
         parent: None,
         interfaces: &["Iterator"],
         constants: &[("MIT_NEED_ANY", 0), ("MIT_NEED_ALL", 1), ("MIT_KEYS_NUMERIC", 0), ("MIT_KEYS_ASSOC", 2)],
+        properties: &[],
         methods: &[
             MethodDef { name: "__construct", flags: 0, params: &[ParamDef { name: "flags", ty: Some("int"), default: Some("MultipleIterator::MIT_NEED_ALL|MultipleIterator::MIT_KEYS_NUMERIC"), by_ref: false, variadic: false }], return_type: None, tentative: false, deprecated: None, alias_of: None },
             MethodDef { name: "getFlags", flags: 0, params: &[], return_type: Some("int"), tentative: true, deprecated: None, alias_of: None },
