@@ -652,8 +652,13 @@ impl Extension for CliServerModule {
         ));
         {
             let vm = m.vm();
+            // cli-server has no STDIN/STDOUT/STDERR constants.  The stream
+            // resources own descriptors 0-2, so dropping them would close
+            // the server's console: keep them alive, unreachable.
             for c in ["STDIN", "STDOUT", "STDERR"] {
-                vm.constants.remove(c.as_bytes());
+                if let Some(v) = vm.constants.remove(c.as_bytes()) {
+                    std::mem::forget(v);
+                }
             }
             if let Some(b) = vm.native_function("error_log") {
                 ORIG_ERROR_LOG.with(|c| c.set(Some(b.handler)));
