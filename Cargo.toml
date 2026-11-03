@@ -21,6 +21,8 @@ members = [
     "crates/php-ctype",
     "crates/php-uri",
     "crates/php-bcmath",
+    "crates/php-gmp",
+    "crates/php-calendar",
 ]
 
 [workspace.package]
