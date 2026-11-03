@@ -6,6 +6,7 @@
 //!   `proc_nice`.
 //! * [`proc`] — `proc_open`/`proc_close`/`proc_get_status`/`proc_terminate`
 //!   (pipes as `php-ext-streams` stream resources).
+//! * [`head`] — `setcookie`/`setrawcookie` validation (no CLI headers).
 //! * [`net`] — address conversion, host/service/protocol lookups, DNS,
 //!   `net_get_interfaces`, syslog.
 //! * [`env`] — environment/process information, time and sleep functions,
@@ -25,6 +26,7 @@ mod crypt;
 mod ctx;
 mod env;
 mod exec;
+mod head;
 mod ini;
 mod misc;
 mod net;
@@ -47,6 +49,7 @@ impl Extension for StdMisc {
         crypt::register(m);
         exec::register(m);
         proc::register(m);
+        head::register(m);
         net::register(m);
         env::register(m);
         text::register(m);

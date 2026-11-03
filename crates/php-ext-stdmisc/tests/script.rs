@@ -139,6 +139,20 @@ fn getopt_without_argv_options() {
 fn proc_open_validates_command() {
     // Only the `standard` misc extension is loaded here, so no stream
     // functions are available; the argument checks still run.
-    let out = run(r#"try { proc_open([], [], $p); } catch (ValueError $e) { echo $e->getMessage(); }"#);
+    let out =
+        run(r#"try { proc_open([], [], $p); } catch (ValueError $e) { echo $e->getMessage(); }"#);
     assert_eq!(out, "proc_open(): Argument #1 ($command) must not be empty");
+}
+
+#[test]
+fn setcookie_validation() {
+    let out = run(
+        r#"var_dump(setcookie("a", "b", ["path" => "/", "samesite" => "Lax"]));
+        try { setcookie("a", "b", ["bogus" => 1]); } catch (ValueError $e) { echo $e->getMessage(), '|'; }
+        try { setrawcookie("a", "b c"); } catch (ValueError $e) { echo $e->getMessage(); }"#,
+    );
+    assert_eq!(
+        out,
+        "bool(true)\nsetcookie(): option \"bogus\" is invalid|setrawcookie(): Argument #2 ($value) cannot contain \",\", \";\", \" \", \"\\t\", \"\\r\", \"\\n\", \"\\013\", or \"\\014\""
+    );
 }

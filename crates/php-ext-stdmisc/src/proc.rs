@@ -101,8 +101,10 @@ impl ProcHost for Host {
         let fd = php_ext_streams::res::cell_of(resource)
             .and_then(|c| c.get().and_then(|mut s| s.cast(CastAs::Fd, true)));
         if fd.is_none() {
-            self.warnings
-                .push("proc_open(): Cannot represent a stream of type unknown as a File Descriptor".into());
+            self.warnings.push(
+                "proc_open(): Cannot represent a stream of type unknown as a File Descriptor"
+                    .into(),
+            );
         }
         Ok(fd)
     }
@@ -140,7 +142,9 @@ fn proc_open(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         let file = std::fs::File::from(p.fd);
         let stream = php_streams::plain::stream_from_file(file, p.mode, false);
         let v = php_ext_streams::res::new_stream(stream, None);
-        pipes.make_mut().insert(php_runtime::ArrayKey::Int(p.index), v.clone());
+        pipes
+            .make_mut()
+            .insert(php_runtime::ArrayKey::Int(p.index), v.clone());
         held.push(v);
     }
     a.set_ref(2, Value::Array(pipes));
@@ -148,7 +152,10 @@ fn proc_open(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         process: RefCell::new(proc),
         pipes: RefCell::new(held),
     };
-    Ok(Value::Resource(Resource::new(PROCESS, Some(Box::new(payload)))))
+    Ok(Value::Resource(Resource::new(
+        PROCESS,
+        Some(Box::new(payload)),
+    )))
 }
 
 /// The `process` resource argument #1, or the "not a valid process
@@ -165,7 +172,10 @@ fn process_arg(vm: &mut Vm, a: &Args) -> VmResult<Resource> {
     }
     Err(vm.throw(
         "TypeError",
-        &format!("{}(): supplied resource is not a valid process resource", a.func_name()),
+        &format!(
+            "{}(): supplied resource is not a valid process resource",
+            a.func_name()
+        ),
     ))
 }
 
@@ -185,7 +195,10 @@ fn proc_close(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 fn proc_get_status(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let r = process_arg(vm, a)?;
-    Ok(with_proc(&r, |p| Value::Array(p.process.borrow_mut().status())).unwrap_or(Value::Bool(false)))
+    Ok(
+        with_proc(&r, |p| Value::Array(p.process.borrow_mut().status()))
+            .unwrap_or(Value::Bool(false)),
+    )
 }
 
 fn proc_terminate(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
