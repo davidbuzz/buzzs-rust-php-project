@@ -13,6 +13,11 @@ use std::rc::Rc;
 use crate::diag;
 use crate::value::Value;
 
+pub mod consumed;
+pub mod convert;
+pub mod dechunk;
+pub mod standard;
+pub mod string;
 pub mod user;
 
 pub use user::{UserFilter, UserFilterFactory, UserFilterObject};
