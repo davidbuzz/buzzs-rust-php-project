@@ -202,6 +202,41 @@ fn fixtures_against_reference_php() {
 }
 
 #[test]
+fn redirect_test_against_reference_php() {
+    let Some(php) = reference_php() else {
+        eprintln!("skipping: {REFERENCE_PHP} not found");
+        return;
+    };
+    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/redirect");
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("phpt-redirect-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(dir.join("targets")).unwrap();
+    for f in ["redirect.phpt", "targets/one.phpt", "targets/two.phpt"] {
+        fs::copy(src.join(f), dir.join(f)).unwrap();
+    }
+    let (report, code, stdout) = run_runner(
+        &["--php", php, "--srcdir", dir.to_str().unwrap()],
+        &[&dir.join("redirect.phpt")],
+    );
+    assert_eq!(code, Some(0), "{stdout}");
+    let got: Vec<(&str, &str, Status)> = report
+        .tests
+        .iter()
+        .map(|t| (t.path.as_str(), t.name.as_str(), t.result))
+        .collect();
+    assert_eq!(
+        got,
+        [
+            ("one.phpt", "Redirector redirected one", Status::Pass),
+            ("two.phpt", "Redirector redirected two", Status::Pass),
+        ],
+        "{stdout}"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn baseline_round_trip() {
     let Some(php) = reference_php() else {
         eprintln!("skipping: {REFERENCE_PHP} not found");
