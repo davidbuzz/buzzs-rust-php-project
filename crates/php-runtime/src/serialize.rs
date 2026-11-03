@@ -721,19 +721,17 @@ pub fn unserialize(
         depth_error: false,
     };
     let Ok(root) = p.value(false, ctx) else {
-        {
-            if !data.is_empty() {
-                ctx.diagnostic(
-                    ErrorLevel::Warning,
-                    &format!(
-                        "unserialize(): Error at offset {} of {} bytes",
-                        p.pos,
-                        data.len()
-                    ),
-                )?;
-            }
-            return Ok(None);
+        if !data.is_empty() {
+            ctx.diagnostic(
+                ErrorLevel::Warning,
+                &format!(
+                    "unserialize(): Error at offset {} of {} bytes",
+                    p.pos,
+                    data.len()
+                ),
+            )?;
         }
+        return Ok(None);
     };
     let mut b = Builder {
         nodes: &p.nodes,
