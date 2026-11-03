@@ -7,6 +7,7 @@
 
 use crate::bridge::{by_ref, callback, check_callable, rest, rt, with_rng};
 use crate::memory;
+use crate::stack;
 use crate::symtab::CallerSymbols;
 use php_runtime::{Value, ZArray, ZStr};
 use php_stdarr as sa;
@@ -36,6 +37,12 @@ fn called_from_code(vm: &Vm) -> bool {
 
 pub fn count(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let v = a.at(0);
+    if a.int(1) == sa::COUNT_RECURSIVE {
+        // php_count_recursive() recurses once per level below the top.
+        stack::check_depth(vm, |cap| {
+            stack::nesting_depth(&v, cap + 1).saturating_sub(1)
+        })?;
+    }
     let f = a.func_name();
     let r = sa::basic::count(vm, &f, &v, a.int(1));
     Ok(Value::Int(rt(vm, r)?))
@@ -404,7 +411,20 @@ pub fn array_replace(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 }
 
 pub fn array_replace_recursive(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let r = sa::merge::array_replace_recursive(&rest(a, 0));
+    let args = rest(a, 0);
+    if args.len() > 1 {
+        // The recursion only follows keys holding arrays on both sides.
+        stack::check_depth(vm, |cap| {
+            let dest = stack::nesting_depth(&args[0], cap + 1);
+            let src = args[1..]
+                .iter()
+                .map(|v| stack::nesting_depth(v, cap + 1))
+                .max()
+                .unwrap_or(0);
+            dest.min(src).saturating_sub(1)
+        })?;
+    }
+    let r = sa::merge::array_replace_recursive(&args);
     Ok(Value::Array(rt(vm, r)?))
 }
 
@@ -484,6 +504,10 @@ fn walk(vm: &mut Vm, a: &Args, recursive: bool) -> VmResult<Value> {
     let cb = a.at(1);
     check_callable(vm, a, 2, true, false, &cb)?;
     let arr = by_ref(a, 0);
+    if recursive {
+        let v = arr.get();
+        stack::check_depth(vm, |cap| stack::nesting_depth(&v, cap))?;
+    }
     let mut cb = callback(cb);
     let ud = a.get(2);
     let r = if recursive {
@@ -648,6 +672,9 @@ pub fn extract(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 pub fn compact(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let mut sym = forbid_dynamic_call(vm, a)?;
     let vals = rest(a, 0);
+    for v in &vals {
+        stack::check_depth(vm, |cap| stack::nesting_depth(v, cap))?;
+    }
     let r = sa::symbols::compact(vm, &mut sym, &vals);
     Ok(Value::Array(rt(vm, r)?))
 }

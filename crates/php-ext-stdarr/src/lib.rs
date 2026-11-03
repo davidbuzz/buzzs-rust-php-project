@@ -19,6 +19,7 @@
 mod bridge;
 mod funcs;
 mod memory;
+mod stack;
 mod symtab;
 
 use funcs as f;
