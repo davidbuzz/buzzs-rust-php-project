@@ -1,5 +1,5 @@
 //! `Collator` checked against fixtures from `/usr/bin/php`.
-#![allow(clippy::too_many_lines, clippy::many_single_char_names)]
+#![allow(clippy::too_many_lines, clippy::many_single_char_names, clippy::format_collect)]
 
 mod common;
 
