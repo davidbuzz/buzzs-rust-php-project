@@ -283,3 +283,39 @@ fn timezones_list() {
     assert!(tz::is_valid_id("Africa/Abidjan"));
     assert!(tz::is_valid_id("Zulu"));
 }
+
+#[test]
+fn interval_exception_messages() {
+    let iso = |s: &str| String::from_utf8(api::interval_from_iso(s.as_bytes()).unwrap_err()).unwrap();
+    assert_eq!(iso("2007-05-11T15:30:00Z"), "Failed to parse interval (2007-05-11T15:30:00Z)");
+    assert_eq!(iso("2007-05-11T15:30:00Z/"), "Failed to parse interval (2007-05-11T15:30:00Z/)");
+    assert_eq!(iso(""), "Unknown or bad format ()");
+    assert_eq!(iso("2007-05-11T15:30:00Z/:00Z"), "Unknown or bad format (2007-05-11T15:30:00Z/:00Z)");
+    assert_eq!(iso("blah"), "Unknown or bad format (blah)");
+    assert_eq!(iso("P3\"D"), "Unknown or bad format (P3\"D)");
+    let ds = |s: &str| match api::interval_from_date_string(s.as_bytes()).unwrap_err() {
+        api::DateStringIntervalError::BadFormat(m) | api::DateStringIntervalError::NonRelative(m) => {
+            String::from_utf8(m).unwrap()
+        }
+    };
+    assert_eq!(ds("+5 hours noon"), "String '+5 hours noon' contains non-relative elements");
+    assert_eq!(ds("+72 seconds UTC"), "String '+72 seconds UTC' contains non-relative elements");
+    assert_eq!(ds("-8 days March 23"), "String '-8 days March 23' contains non-relative elements");
+    assert_eq!(ds("next weekday 15:30"), "String 'next weekday 15:30' contains non-relative elements");
+    assert_eq!(
+        ds("foobar"),
+        "Unknown or bad format (foobar) at position 0 (f): The timezone could not be found in the database"
+    );
+    assert_eq!(
+        String::from_utf8(api::Interval::from_date_string_property(b"2023-01-16-foobar$*").unwrap_err()).unwrap(),
+        "Unknown or bad format (2023-01-16-foobar$*) at position 10 (-) while unserializing: Unexpected character"
+    );
+    for (s, msg) in [
+        ("", "Unknown or bad format ()"),
+        ("2008-03-01T12:00:00Z1", "Unknown or bad format (2008-03-01T12:00:00Z1)"),
+        ("2D", "Unknown or bad format (2D)"),
+        ("R4/2012-07-01T00:/P7D", "Unknown or bad format (R4/2012-07-01T00:/P7D)"),
+    ] {
+        assert_eq!(api::DatePeriod::from_iso(s.as_bytes(), 0).unwrap_err(), msg);
+    }
+}
