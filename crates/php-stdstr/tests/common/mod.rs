@@ -206,7 +206,16 @@ pub fn export_float(d: f64) -> String {
         };
     }
     // Shortest round-trip digits via Rust's `{:e}` formatting.
-    let e = format!("{:e}", d.abs());
+    // On an exact tie between two shortest candidates dtoa picks the even
+    // one; exact `{:.Ne}` formatting (round-half-even) reproduces that.
+    let mut e = format!("{:e}", d.abs());
+    let n = e
+        .split_once('e')
+        .map_or(1, |(m, _)| m.chars().filter(char::is_ascii_digit).count());
+    let exact = format!("{:.*e}", n - 1, d.abs());
+    if exact.parse::<f64>().ok() == Some(d.abs()) {
+        e = exact;
+    }
     let (mant, exp) = e.split_once('e').expect("exp form");
     let exp: i32 = exp.parse().expect("exp");
     let digits: String = mant.chars().filter(char::is_ascii_digit).collect();
@@ -528,6 +537,7 @@ fn export_float_forms() {
         "1.2345678901234568E+17"
     );
     assert_eq!(export_float(-2.5), "-2.5");
+    assert_eq!(export_float(1e16 / -7.5), "-1333333333333333.2");
     assert_eq!(
         V::from(vec![V::Int(1), V::from(vec![2i64])]).export(),
         "array (\n  0 => 1,\n  1 => \n  array (\n    0 => 2,\n  ),\n)"
