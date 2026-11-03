@@ -334,6 +334,7 @@ name = "php-bz2"
 version = "0.1.0"
 dependencies = [
  "bzip2-sys",
+ "libc",
  "php-streams",
 ]
 
@@ -359,6 +360,13 @@ dependencies = [
 [[package]]
 name = "php-date"
 version = "0.1.0"
+
+[[package]]
+name = "php-dom"
+version = "0.1.0"
+dependencies = [
+ "php-runtime",
+]
 
 [[package]]
 name = "php-exif"
@@ -457,7 +465,12 @@ dependencies = [
 name = "php-phar"
 version = "0.1.0"
 dependencies = [
+ "bzip2-sys",
+ "libc",
+ "php-hash",
  "php-runtime",
+ "php-streams",
+ "php-zlib",
 ]
 
 [[package]]
@@ -484,6 +497,7 @@ version = "0.1.0"
 dependencies = [
  "php-random",
  "php-runtime",
+ "php-support",
 ]
 
 [[package]]

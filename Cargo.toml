@@ -41,6 +41,8 @@ members = [
     "crates/php-stdmisc",
     "crates/php-phar",
     "crates/php-dom",
+    "crates/php-simplexml",
+    "crates/php-xmlreader",
 ]
 
 [workspace.package]
