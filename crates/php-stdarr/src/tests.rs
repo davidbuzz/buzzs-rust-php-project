@@ -838,3 +838,38 @@ fn frameless_min_max() {
         Some(&b"b"[..])
     );
 }
+
+/// gh16053: merging into an object entry converts it with `(array)`.
+#[test]
+fn merge_recursive_into_object_entry() {
+    let mut ctx = Ctx::new();
+    let a = Value::Array(ZArray::from_pairs([(
+        "string",
+        Value::Object(Obj::new(TestObj)),
+    )]));
+    let b = Value::Array(ZArray::from_pairs([("string", Value::from("hello"))]));
+    let out = merge::array_merge_recursive(&mut ctx, &[a, b]).unwrap();
+    let inner = arr_of(out.get(&ArrayKey::from("string")).unwrap());
+    assert_eq!(keys(&inner), ["0"]);
+}
+
+/// gh15982 / gh20043: `array_find` dereferences; `array_unique` reports
+/// conversion errors raised while sorting.
+#[test]
+fn find_derefs_and_unique_propagates_errors() {
+    let mut ctx = Ctx::new();
+    let r = PhpRef::new(Value::from("hello"));
+    let t = list([Value::Reference(r.clone()), Value::Reference(r)]);
+    let mut yes = |_: &mut Ctx, _: &[Value]| Ok(Value::Bool(true));
+    let v = callback::array_find(&mut ctx, &t, &mut yes).unwrap();
+    assert!(matches!(v, Value::Str(_)));
+    let objs = list([
+        Value::Object(Obj::new(TestObj)),
+        Value::Object(Obj::new(TestObj)),
+    ]);
+    let e = setops::array_unique(&mut ctx, &objs, SORT_STRING | SORT_FLAG_CASE).unwrap_err();
+    assert_eq!(
+        e.message(),
+        Some("Object of class Foo could not be converted to string")
+    );
+}
