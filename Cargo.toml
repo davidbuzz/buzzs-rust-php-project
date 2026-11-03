@@ -19,6 +19,7 @@ members = [
     "crates/php-json",
     "crates/php-filter",
     "crates/php-ctype",
+    "crates/php-uri",
 ]
 
 [workspace.package]
