@@ -235,24 +235,21 @@ fn ctx_option(vm: &mut Vm, context: Option<&Value>, name: &str) -> Option<Value>
 }
 
 /// The `header` context option flattened to one string (array entries
-/// joined with CRLF, `__toString` honoured), trimmed like
+/// joined with CRLF), trimmed like
 /// `php_stream_url_wrap_http_ex` does.
 fn user_headers(vm: &mut Vm, context: Option<&Value>) -> Vec<u8> {
     let mut out = Vec::new();
+    // Only strings count: objects (even stringable ones) are ignored.
     match ctx_option(vm, context, "header") {
         Some(Value::Array(a)) => {
             for v in a.values() {
-                if let Ok(s) = vm.value_to_string(&v.deref()) {
+                if let Value::Str(s) = v.deref() {
                     out.extend_from_slice(s.as_bytes());
                     out.extend_from_slice(b"\r\n");
                 }
             }
         }
-        Some(v @ (Value::Str(_) | Value::Object(_))) => {
-            if let Ok(s) = vm.value_to_string(&v) {
-                out.extend_from_slice(s.as_bytes());
-            }
-        }
+        Some(Value::Str(s)) => out.extend_from_slice(s.as_bytes()),
         _ => {}
     }
     let ws = |c: &u8| matches!(c, b' ' | b'\t' | b'\r' | b'\n' | b'\0' | 0x0b);

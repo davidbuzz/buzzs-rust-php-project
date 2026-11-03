@@ -384,6 +384,22 @@ impl SoapHost for VmHost<'_> {
             }
             Err(t) => return Err(to_rt(self.vm, t)),
         };
+        // `object_init_ex` refuses what `new` refuses.
+        let kind = if cls.flags & php_vm::ext::class_flags::INTERFACE != 0 {
+            Some("interface")
+        } else if cls.is_enum() {
+            Some("enum")
+        } else if cls.flags & php_vm::ext::class_flags::ABSTRACT != 0 {
+            Some("abstract class")
+        } else {
+            None
+        };
+        if let Some(kind) = kind {
+            return Err(RuntimeError::Error(format!(
+                "Cannot instantiate {kind} {}",
+                php_vm::object::display_name(&cls.name).to_string_lossy()
+            )));
+        }
         self.vm.new_object(&cls).map_err(|t| to_rt(self.vm, t))
     }
 
