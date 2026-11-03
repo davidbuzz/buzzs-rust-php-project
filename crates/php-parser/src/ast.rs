@@ -1210,6 +1210,30 @@ pub enum ClassRef {
     Expr(Expr),
 }
 
+impl ClassRef {
+    /// Whether `class::name(...)` is a call of a parent property hook,
+    /// `parent::$prop::get()` / `parent::$prop::set()`
+    /// (`zend_ast_is_parent_hook_call`).
+    pub fn is_parent_hook_call(&self, name: &MemberName) -> bool {
+        let ClassRef::Expr(e) = self else {
+            return false;
+        };
+        let ExprKind::StaticProp {
+            class,
+            name: VarName::Name(_),
+            parenthesized: false,
+        } = &e.kind
+        else {
+            return false;
+        };
+        let ClassRef::Name(parent) = class.as_ref() else {
+            return false;
+        };
+        parent.is_special("parent")
+            && matches!(name, MemberName::Ident(m) if m.eq_ignore_case("get") || m.eq_ignore_case("set"))
+    }
+}
+
 /// The callee of a function call.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Callee {

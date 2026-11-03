@@ -10,7 +10,9 @@
 
 pub mod ast;
 mod error;
+pub mod export;
 mod parser;
+pub mod visit;
 
 pub use ast::Program;
 pub use error::{ErrorKind, ParseError};

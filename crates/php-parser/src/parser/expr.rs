@@ -68,6 +68,10 @@ pub(crate) enum Cat {
     Const,
     /// A magic constant: dereferenceable with `[`/`->` only.
     Magic,
+    /// `'(' expr ')'`: like `Callable`; which grammar rule reduced the
+    /// parentheses (and so which "parenthesized" flag is set) depends on
+    /// what follows.
+    Paren,
     /// Anything else.
     Other,
 }
@@ -852,18 +856,12 @@ impl Parser<'_> {
             }
             T::LParen => {
                 self.bump();
-                let mut e = self.parse_expr()?;
+                let e = self.parse_expr()?;
                 if self.peek() != T::RParen {
                     return Err(self.unexpected(&[]));
                 }
                 self.bump();
-                match &mut e.kind {
-                    ExprKind::Conditional { parenthesized, .. }
-                    | ExprKind::StaticProp { parenthesized, .. } => *parenthesized = true,
-                    ExprKind::ArrowFn(f) => f.parenthesized = true,
-                    _ => {}
-                }
-                Ok((e, Cat::Callable))
+                Ok((e, Cat::Paren))
             }
             T::New => self.parse_new(),
             T::Exit => {
@@ -945,6 +943,28 @@ impl Parser<'_> {
     /// primary.
     #[allow(clippy::too_many_lines)]
     fn parse_postfix(&mut self, mut e: Expr, mut cat: Cat) -> PResult<(Expr, Cat)> {
+        if cat == Cat::Paren {
+            match self.peek() {
+                // `fully_dereferenceable: '(' expr ')'`
+                T::LBracket
+                | T::ObjectOperator
+                | T::NullsafeObjectOperator
+                | T::PaamayimNekudotayim => {
+                    if let ExprKind::StaticProp { parenthesized, .. } = &mut e.kind {
+                        *parenthesized = true;
+                    }
+                }
+                // `callable_expr: '(' expr ')'`
+                T::LParen => {}
+                // `expr: '(' expr ')'`
+                _ => match &mut e.kind {
+                    ExprKind::Conditional { parenthesized, .. } => *parenthesized = true,
+                    ExprKind::ArrowFn(f) => f.parenthesized = true,
+                    _ => {}
+                },
+            }
+            cat = Cat::Callable;
+        }
         loop {
             match self.peek() {
                 T::LBracket if cat.is_aod() => {
@@ -1379,7 +1399,7 @@ impl Parser<'_> {
                 return Err(self.unexpected(&[]));
             }
             self.bump();
-            let (e, _) = self.parse_postfix(first, Cat::Callable)?;
+            let (e, _) = self.parse_postfix(first, Cat::Paren)?;
             let span = e.span;
             let args = ArgList {
                 args: vec![Arg {
