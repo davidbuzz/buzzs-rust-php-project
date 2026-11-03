@@ -15,7 +15,7 @@ use php_vm::ext::{Args, VmResult};
 use php_vm::Vm;
 
 use crate::state;
-use crate::util::{bytes, opt_int, opt_str, run, string_arg, throw};
+use crate::util::{bytes, check_paths, opt_int, opt_str, run, string_arg, throw, throw_chained};
 
 type PharRef = Rc<RefCell<PharObject>>;
 
@@ -29,7 +29,40 @@ fn this_state(a: &Args) -> (Obj, PharRef) {
 
 fn st(a: &Args) -> PharRef {
     state::sweep();
-    this_state(a).1
+    let st = this_state(a).1;
+    refresh(&st);
+    st
+}
+
+/// Re-points an object at the request-local copy of a cached
+/// (`phar.cache_list`) archive once it was copied on write
+/// (`phar_copy_cached_phar()` updates the registered objects).
+fn refresh(st: &PharRef) {
+    let Ok(ar) = st.borrow().archive() else {
+        return;
+    };
+    let (persistent, fname) = {
+        let a = ar.borrow();
+        (a.is_persistent, a.fname.clone())
+    };
+    if !persistent {
+        return;
+    }
+    let Some(cur) = reg::find_by_fname(&fname) else {
+        return;
+    };
+    if Rc::ptr_eq(&cur, &ar) || cur.borrow().is_persistent {
+        return;
+    }
+    let (is_data, info) = {
+        let s = st.borrow();
+        (s.is_data_class, s.info_class_is_pharfileinfo)
+    };
+    let mut n = PharObject::new(is_data);
+    n.info_class_is_pharfileinfo = info;
+    if n.construct(&fname, None, 0).is_ok() {
+        *st.borrow_mut() = n;
+    }
 }
 
 /// Calls an SPL method of `class` on `this` (the parent constructors).
@@ -61,10 +94,8 @@ pub fn construct(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     state::sweep();
     let (this, st) = this_state(a);
     let is_data = st.borrow().is_data_class;
+    check_paths(vm, a, &[0])?;
     let fname = a.str(0).as_bytes().to_vec();
-    if fname.contains(&0) {
-        return Err(a.value_error(vm, 0, "must not contain any null bytes"));
-    }
     let flags = if a.has(1) {
         a.int(1)
     } else {
@@ -148,6 +179,7 @@ pub fn get_signature(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 /// `Phar::delete()`.
 pub fn delete(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let st = st(a);
+    check_paths(vm, a, &[0])?;
     let name = a.str(0);
     Ok(Value::Bool(run(vm, || {
         st.borrow_mut().delete(name.as_bytes())
@@ -253,6 +285,7 @@ pub fn set_stub(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 /// `Phar::setDefaultStub()`.
 pub fn set_default_stub(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let st = st(a);
+    check_paths(vm, a, &[0, 1])?;
     let index = opt_str(a, 0);
     let web = opt_str(a, 1);
     let r = run(vm, || {
@@ -393,6 +426,7 @@ pub fn offset_unset(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 /// `Phar::addEmptyDir()`.
 pub fn add_empty_dir(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let st = st(a);
+    check_paths(vm, a, &[0])?;
     let d = a.str(0);
     run(vm, || st.borrow_mut().add_empty_dir(d.as_bytes()))?;
     Ok(Value::Null)
@@ -401,6 +435,7 @@ pub fn add_empty_dir(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 /// `Phar::addFile()`.
 pub fn add_file(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let st = st(a);
+    check_paths(vm, a, &[0])?;
     let file = a.str(0).as_bytes().to_vec();
     let local = opt_str(a, 1);
     run(vm, || {
@@ -426,6 +461,7 @@ pub fn add_file(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 /// `Phar::addFromString()`.
 pub fn add_from_string(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let st = st(a);
+    check_paths(vm, a, &[0])?;
     let name = a.str(0);
     let content = a.str(1);
     run(vm, || {
@@ -438,6 +474,7 @@ pub fn add_from_string(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 /// `Phar::copy()`.
 pub fn copy(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let st = st(a);
+    check_paths(vm, a, &[0, 1])?;
     let from = a.str(0);
     let to = a.str(1);
     Ok(Value::Bool(run(vm, || {
@@ -508,10 +545,8 @@ pub fn convert_to_data(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 /// `Phar::extractTo()`.
 pub fn extract_to(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let st = st(a);
+    check_paths(vm, a, &[0])?;
     let to = a.str(0).as_bytes().to_vec();
-    if to.contains(&0) {
-        return Err(a.value_error(vm, 0, "must not contain any null bytes"));
-    }
     let files = match a.at(1) {
         Value::Str(s) => ExtractFiles::One(s.as_bytes().to_vec()),
         Value::Array(arr) => ExtractFiles::List(
@@ -540,6 +575,7 @@ fn build_result(r: BuildResult) -> Value {
 /// `Phar::buildFromDirectory()`.
 pub fn build_from_directory(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let st = st(a);
+    check_paths(vm, a, &[0])?;
     let dir = a.str(0).as_bytes().to_vec();
     let pattern = if a.has(1) {
         a.str(1).as_bytes().to_vec()
@@ -570,31 +606,35 @@ pub fn build_from_directory(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     Ok(build_result(r))
 }
 
-/// One element of the iterator given to `buildFromIterator()`.
+/// One element of the iterator given to `buildFromIterator()`, and the
+/// exception a user `getMTime()` threw (chained to the build error).
+type Item = (Result<BuildItem, PharError>, Option<php_vm::ext::Throw>);
+
 fn build_item(
     vm: &mut Vm,
     it: &mut dyn php_spl::host::ObjectIterator,
     value: &Value,
     need_key: bool,
     class: &str,
-) -> VmResult<Result<BuildItem, PharError>> {
+) -> VmResult<Item> {
     let mut key = |vm: &mut Vm| -> VmResult<Option<Vec<u8>>> {
         let k = php_ext_spl::iter::with_host(vm, |h| it.key(h))?;
-        Ok(match k {
+        Ok(match k.map(|k| k.deref()) {
             Some(Value::Str(s)) => Some(s.as_bytes().to_vec()),
             _ => None,
         })
     };
-    Ok(Ok(match value.deref() {
+    let item = match value.deref() {
         Value::Str(s) => BuildItem::Path {
             value: s.as_bytes().to_vec(),
             key: if need_key { key(vm)? } else { None },
         },
         v @ Value::Resource(_) => {
             let Some((content, mode)) = read_stream(vm, &v, None)? else {
-                return Ok(Err(PharError::bad_method(format!(
+                let e = PharError::bad_method(format!(
                     "Iterator {class} returned an invalid stream handle"
-                ))));
+                ));
+                return Ok((Err(e), None));
             };
             BuildItem::Stream {
                 key: key(vm)?,
@@ -604,32 +644,53 @@ fn build_item(
         }
         Value::Object(o) if php_vm::object::class_of(&o).instance_of_name(b"splfileinfo") => {
             let user = php_vm::object::class_of(&o).decl.is_some();
-            let p = vm.call_method_by_name(&o, "getPathname", vec![])?;
-            let Value::Str(p) = p else {
-                return Ok(Err(PharError::unexpected(
-                    "getPathname() must return a string",
-                )));
+            let p = match vm.call_method_by_name(&o, "getPathname", vec![]) {
+                Ok(p) => p.deref(),
+                Err(t) => {
+                    return Err(throw_chained(
+                        vm,
+                        "UnexpectedValueException",
+                        "getPathname() must return a string",
+                        t,
+                    ))
+                }
             };
+            let Value::Str(p) = p else {
+                let e = PharError::unexpected("getPathname() must return a string");
+                return Ok((Err(e), None));
+            };
+            let mut prev = None;
             let mtime = if user {
-                match vm.call_method_by_name(&o, "getMTime", vec![])? {
-                    Value::Int(t) => MTime::Int(t),
-                    _ => MTime::NotInt,
+                match vm.call_method_by_name(&o, "getMTime", vec![]) {
+                    Ok(v) => match v.deref() {
+                        Value::Int(t) => MTime::Int(t),
+                        _ => MTime::NotInt,
+                    },
+                    Err(t) => {
+                        prev = Some(t);
+                        MTime::NotInt
+                    }
                 }
             } else {
                 MTime::Internal
             };
-            BuildItem::FileInfo {
-                pathname: p.as_bytes().to_vec(),
-                mtime,
-            }
+            return Ok((
+                Ok(BuildItem::FileInfo {
+                    pathname: p.as_bytes().to_vec(),
+                    mtime,
+                }),
+                prev,
+            ));
         }
         _ => BuildItem::Invalid,
-    }))
+    };
+    Ok((Ok(item), None))
 }
 
 /// `Phar::buildFromIterator()`.
 pub fn build_from_iterator(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let st = st(a);
+    check_paths(vm, a, &[1])?;
     let Value::Object(iter) = a.at(0) else {
         return Ok(Value::Null);
     };
@@ -647,11 +708,17 @@ pub fn build_from_iterator(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
                 &PharError::unexpected(format!("Iterator {class} returned no value")),
             ));
         };
-        let item = match build_item(vm, it.as_mut(), &cur, base.is_empty(), &class)? {
-            Ok(i) => i,
-            Err(e) => return Err(throw(vm, &e)),
+        let (item, prev) = build_item(vm, it.as_mut(), &cur, base.is_empty(), &class)?;
+        let r = match item {
+            Ok(i) => bridge::run(vm, || bs.add(i, &class))?,
+            Err(e) => Err(e),
         };
-        run(vm, || bs.add(item, &class))?;
+        if let Err(e) = r {
+            return Err(match prev {
+                Some(p) => throw_chained(vm, e.class.name(), &e.message, p),
+                None => throw(vm, &e),
+            });
+        }
         php_ext_spl::iter::with_host(vm, |h| it.next(h))?;
     }
     let r = run(vm, || bs.finish())?;

@@ -61,6 +61,52 @@ pub fn type_name(v: &Value) -> String {
     }
 }
 
+/// `Class::method` of the running method (for argument errors).
+pub fn method_name(a: &Args) -> String {
+    let class = a
+        .this
+        .as_ref()
+        .map(|o| php_vm::object::class_of(o).clone())
+        .or_else(|| a.called.clone());
+    let class = match class {
+        Some(c) if c.instance_of_name(b"pharfileinfo") => "PharFileInfo",
+        Some(c) if c.instance_of_name(b"phardata") => "PharData",
+        _ => "Phar",
+    };
+    format!("{class}::{}", a.func_name())
+}
+
+/// Throws `$class: Class::method(): Argument #n ($name) $msg` (`n` is
+/// 0-based).
+pub fn arg_error(vm: &mut Vm, a: &Args, class: &str, n: usize, msg: &str) -> Throw {
+    let text = format!(
+        "{}(): Argument #{} (${}) {msg}",
+        method_name(a),
+        n + 1,
+        param_name(a, n)
+    );
+    vm.throw(class, &text)
+}
+
+/// `Z_PARAM_PATH` checks for already-coerced string arguments: none of
+/// the listed (0-based) arguments may contain NUL bytes.
+pub fn check_paths(vm: &mut Vm, a: &Args, idx: &[usize]) -> VmResult<()> {
+    for &n in idx {
+        if let Value::Str(s) = a.at(n) {
+            if s.as_bytes().contains(&0) {
+                return Err(arg_error(
+                    vm,
+                    a,
+                    "ValueError",
+                    n,
+                    "must not contain any null bytes",
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// `Z_PARAM_PATH` / `Z_PARAM_STR` for an untyped stub parameter: converts
 /// scalars (and `Stringable` objects) to a string with PHP's argument
 /// errors; `path` additionally rejects NUL bytes.
@@ -88,13 +134,45 @@ pub fn string_arg(vm: &mut Vm, a: &Args, n: usize, path: bool) -> VmResult<Vec<u
         }
         other => {
             let t = type_name(other);
-            return Err(a.type_error(vm, n, &format!("must be of type string, {t} given")));
+            return Err(arg_error(
+                vm,
+                a,
+                "TypeError",
+                n,
+                &format!("must be of type string, {t} given"),
+            ));
         }
     };
     if path && s.contains(&0) {
-        return Err(a.value_error(vm, n, "must not contain any null bytes"));
+        return Err(arg_error(
+            vm,
+            a,
+            "ValueError",
+            n,
+            "must not contain any null bytes",
+        ));
     }
     Ok(s)
+}
+
+/// Throws `class` with `message`, chaining `prev` (an exception thrown by
+/// a callback) as its previous exception, like `zend_throw_exception()`
+/// while another exception is pending.
+pub fn throw_chained(vm: &mut Vm, class: &str, message: &str, prev: Throw) -> Throw {
+    let Throw::Exception(prev_obj) = prev else {
+        return prev;
+    };
+    let cls = match vm.find_class(class.as_bytes()) {
+        Some(c) => c,
+        None => return Throw::Exception(prev_obj),
+    };
+    match vm.new_object_with_args(
+        &cls,
+        vec![bytes(message), Value::Int(0), Value::Object(prev_obj)],
+    ) {
+        Ok(o) => Throw::Exception(o),
+        Err(t) => t,
+    }
 }
 
 /// The name of parameter `n` of the running function.

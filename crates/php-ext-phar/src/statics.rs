@@ -6,7 +6,7 @@ use php_vm::ext::{Args, VmResult};
 use php_vm::Vm;
 
 use crate::state;
-use crate::util::{bytes, executed, halt_defined, opt_str, run, run_ok};
+use crate::util::{bytes, check_paths, executed, halt_defined, opt_str, run, run_ok};
 
 fn str_list(v: &[&str]) -> Value {
     Value::Array(ZArray::from_values(v.iter().map(bytes)))
@@ -30,6 +30,7 @@ pub fn can_write(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
 
 /// `Phar::createDefaultStub()`.
 pub fn create_default_stub(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    check_paths(vm, a, &[0, 1])?;
     let index = opt_str(a, 0);
     let web = opt_str(a, 1);
     let s = run(vm, || {
@@ -55,7 +56,8 @@ pub fn intercept_file_funcs(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
 }
 
 /// `Phar::isValidPharFilename()`.
-pub fn is_valid_phar_filename(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+pub fn is_valid_phar_filename(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    check_paths(vm, a, &[0])?;
     let f = a.str(0);
     let exec = !a.has(1) || a.bool(1);
     Ok(Value::Bool(po::is_valid_phar_filename(f.as_bytes(), exec)))
@@ -63,6 +65,7 @@ pub fn is_valid_phar_filename(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 /// `Phar::loadPhar()`.
 pub fn load_phar(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    check_paths(vm, a, &[0])?;
     let f = a.str(0);
     let alias = opt_str(a, 1);
     Ok(Value::Bool(run(vm, || {
@@ -91,11 +94,7 @@ pub fn running(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 pub fn mount(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let path = a.str(0);
     let actual = a.str(1);
-    for (n, v) in [(0, &path), (1, &actual)] {
-        if v.as_bytes().contains(&0) {
-            return Err(a.value_error(vm, n, "must not contain any null bytes"));
-        }
-    }
+    check_paths(vm, a, &[0, 1])?;
     let ex = executed(vm);
     run(vm, || {
         po::mount(ex.as_deref(), path.as_bytes(), actual.as_bytes())
@@ -119,6 +118,7 @@ pub fn mung_server(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 /// `Phar::unlinkArchive()`.
 pub fn unlink_archive(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    check_paths(vm, a, &[0])?;
     state::sweep();
     let f = a.str(0);
     let ex = executed(vm);

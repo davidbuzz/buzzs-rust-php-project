@@ -54,7 +54,7 @@ fn instance_methods(data: bool) -> Vec<(&'static str, NativeFn)> {
         ("setAlias(string $alias): true", "setAlias(string $alias): bool", ar::set_alias),
         ("setDefaultStub(?string $index = null, ?string $webIndex = null): true", "setDefaultStub(?string $index = null, ?string $webIndex = null): bool", ar::set_default_stub),
         ("setMetadata(mixed $metadata): void", "setMetadata(mixed $metadata): void", ar::set_metadata),
-        ("setSignatureAlgorithm(int $algo, ?string $privateKey = null): void", "setSignatureAlgorithm(int $algo, ?string $privateKey = null): void", ar::set_signature_algorithm),
+        ("setSignatureAlgorithm(int $algo, #[\\SensitiveParameter] ?string $privateKey = null): void", "setSignatureAlgorithm(int $algo, #[\\SensitiveParameter] ?string $privateKey = null): void", ar::set_signature_algorithm),
         ("setStub($stub, int $length = UNKNOWN): true", "setStub($stub, int $length = UNKNOWN): true", ar::set_stub),
         ("startBuffering(): void", "startBuffering(): void", ar::start_buffering),
         ("stopBuffering(): void", "stopBuffering(): void", ar::stop_buffering),
