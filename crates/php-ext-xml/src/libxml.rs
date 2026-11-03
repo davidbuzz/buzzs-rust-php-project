@@ -35,9 +35,7 @@ use std::rc::Rc;
 
 use php_ext_streams::{bridge, res};
 use php_libxml::error::{self as xerr, Diagnostic, DiagnosticLevel, ErrorProperty, LibXmlError};
-use php_libxml::io::{
-    self as xio, EntityLoaderResult, EntityRequest, InputStream, StreamHooks,
-};
+use php_libxml::io::{self as xio, EntityLoaderResult, EntityRequest, InputStream, StreamHooks};
 use php_runtime::{Obj, Resource, Value, ZArray, ZStr};
 use php_streams::context::ContextRef;
 use php_streams::stream::Stream;
@@ -137,7 +135,8 @@ pub fn run<R>(vm: &mut Vm, a: &Args, f: impl FnOnce() -> R) -> VmResult<R> {
 /// The stream context libxml2 opens files with: the one set by
 /// `libxml_set_streams_context()`, else `FG(default_context)`.
 pub fn streams_context() -> Option<ContextRef> {
-    if let Some(ctx) = xio::streams_context().and_then(|c| c.downcast_ref::<ContextRef>().cloned()) {
+    if let Some(ctx) = xio::streams_context().and_then(|c| c.downcast_ref::<ContextRef>().cloned())
+    {
         return Some(ctx);
     }
     res::ctx_cell_of(&res::default_context()).map(|c| Rc::clone(&c.ctx))
@@ -234,12 +233,16 @@ impl Read for ResourceReader {
 fn open_read(path: &[u8]) -> Option<InputStream> {
     let ctx = streams_context();
     if let Some(loc) = wrapper::locate(path, 0) {
-        if let Some(Err(())) = loc.wrapper.url_stat(&loc.path, URL_STAT_QUIET, ctx.as_ref()) {
+        if let Some(Err(())) = loc
+            .wrapper
+            .url_stat(&loc.path, URL_STAT_QUIET, ctx.as_ref())
+        {
             return None;
         }
     }
     let mut opened = None;
-    let stream = php_streams::open::open_wrapper(path, "rb", REPORT_ERRORS, &mut opened, ctx.as_ref())?;
+    let stream =
+        php_streams::open::open_wrapper(path, "rb", REPORT_ERRORS, &mut opened, ctx.as_ref())?;
     Some(InputStream {
         reader: Box::new(StreamReader(stream)),
         charset: None,
@@ -250,7 +253,8 @@ fn open_read(path: &[u8]) -> Option<InputStream> {
 fn open_write(path: &[u8]) -> Option<Box<dyn Write>> {
     let ctx = streams_context();
     let mut opened = None;
-    let stream = php_streams::open::open_wrapper(path, "wb", REPORT_ERRORS, &mut opened, ctx.as_ref())?;
+    let stream =
+        php_streams::open::open_wrapper(path, "wb", REPORT_ERRORS, &mut opened, ctx.as_ref())?;
     Some(Box::new(StreamWriter(stream)))
 }
 
@@ -354,7 +358,9 @@ fn call_loader(vm: &mut Vm, callable: &Value, req: &EntityRequest) -> EntityLoad
                 EntityLoaderResult::Stream(Box::new(ResourceReader { cell, _keep: r }))
             }
             _ => {
-                let func = ACTIVE.with(|s| s.borrow().last().cloned()).unwrap_or_default();
+                let func = ACTIVE
+                    .with(|s| s.borrow().last().cloned())
+                    .unwrap_or_default();
                 let msg = format!(
                     "{func}(): The user entity loader callback \"{}\" has returned a resource, but it is not a stream",
                     callable_display_name(callable)
@@ -473,20 +479,32 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
         .prop("file", acc::PUBLIC, Some("string"), None)
         .prop("line", acc::PUBLIC, Some("int"), None)
         .register(m.vm());
-    m.function("libxml_set_streams_context($context): void", set_streams_context)
-        .function("libxml_use_internal_errors(?bool $use_errors = null): bool", use_internal_errors)
-        .function("libxml_get_last_error(): LibXMLError|false", get_last_error)
-        .function("libxml_get_errors(): array", get_errors)
-        .function("libxml_clear_errors(): void", clear_errors_fn)
-        .function("libxml_disable_entity_loader(bool $disable = true): bool", disable_entity_loader)
-        .deprecated("8.0", "as external entity loading is disabled by default")
-        .function(
-            "libxml_set_external_entity_loader(?callable $resolver_function): true",
-            set_external_entity_loader,
-        )
-        .function("libxml_get_external_entity_loader(): ?callable", get_external_entity_loader)
-        .on_request_startup(reset_request)
-        .on_request_shutdown(reset_request);
+    m.function(
+        "libxml_set_streams_context($context): void",
+        set_streams_context,
+    )
+    .function(
+        "libxml_use_internal_errors(?bool $use_errors = null): bool",
+        use_internal_errors,
+    )
+    .function("libxml_get_last_error(): LibXMLError|false", get_last_error)
+    .function("libxml_get_errors(): array", get_errors)
+    .function("libxml_clear_errors(): void", clear_errors_fn)
+    .function(
+        "libxml_disable_entity_loader(bool $disable = true): bool",
+        disable_entity_loader,
+    )
+    .deprecated("8.0", "as external entity loading is disabled by default")
+    .function(
+        "libxml_set_external_entity_loader(?callable $resolver_function): true",
+        set_external_entity_loader,
+    )
+    .function(
+        "libxml_get_external_entity_loader(): ?callable",
+        get_external_entity_loader,
+    )
+    .on_request_startup(reset_request)
+    .on_request_shutdown(reset_request);
 }
 
 #[cfg(test)]
@@ -500,7 +518,10 @@ mod tests {
         let mut arr = ZArray::new();
         let _ = arr.make_mut().push(Value::from("A"));
         let _ = arr.make_mut().push(Value::from("handle"));
-        assert_eq!(callable_function_name(&Value::Array(arr.clone())), b"handle");
+        assert_eq!(
+            callable_function_name(&Value::Array(arr.clone())),
+            b"handle"
+        );
         assert_eq!(callable_display_name(&Value::Array(arr)), "A::handle");
     }
 

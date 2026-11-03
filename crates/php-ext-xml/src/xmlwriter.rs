@@ -48,12 +48,13 @@ type OpResult = Result<Value, NameError>;
 /// `ValueError` with the argument number of the calling form.
 fn with_writer(
     vm: &mut Vm,
-    a: &Args,
+    args: &Args,
     off: usize,
-    f: impl FnOnce(&XmlWriter) -> OpResult,
+    op: impl FnOnce(&XmlWriter) -> OpResult,
 ) -> VmResult<Value> {
-    let w = writer_of(vm, a, off)?;
-    match crate::libxml::run(vm, a, || f(&w))? {
+    let a = args;
+    let writer = writer_of(vm, a, off)?;
+    match crate::libxml::run(vm, a, || op(&writer))? {
         Ok(v) => Ok(v),
         Err(e) => {
             let n = usize::try_from(e.position).unwrap_or(1) - 1 + off;
@@ -298,7 +299,15 @@ fn to_stream(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         let given = a.at(0).type_name();
         return Err(a.type_error(vm, 1, &format!("must be of type resource, {given} given")));
     };
-    let cell = res::stream_of_resource(vm, a, &r)?;
+    let cell = match res::cell_of(&r) {
+        Some(c) if !r.is_closed() && !c.is_closed() => c,
+        _ => {
+            return Err(vm.throw(
+                "TypeError",
+                "XMLWriter::toStream(): supplied resource is not a valid stream resource",
+            ))
+        }
+    };
     let sink = ResourceSink { cell, _keep: r };
     match XmlWriter::to_sink(Box::new(sink)) {
         Some(w) => create_static(vm, a, w),
@@ -311,7 +320,12 @@ fn to_stream(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 // ---------------------------------------------------------------------
 
 /// `(procedural signature, method signature, function, method)`.
-type Pair = (&'static str, &'static str, php_vm::ext::NativeFn, php_vm::ext::NativeFn);
+type Pair = (
+    &'static str,
+    &'static str,
+    php_vm::ext::NativeFn,
+    php_vm::ext::NativeFn,
+);
 
 const PAIRS: &[Pair] = &[
     ("xmlwriter_set_indent(XMLWriter $writer, bool $enable): bool", "setIndent(bool $enable): bool", f_set_indent, m_set_indent),
@@ -359,22 +373,33 @@ const PAIRS: &[Pair] = &[
 /// Registers the `xmlwriter` module.
 pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
     let mut class = ClassBuilder::new("XMLWriter")
-        .flags(php_vm::ext::class_flags::NO_CLONE)
+        .flags(php_vm::ext::class_flags::NO_CLONE | php_vm::ext::class_flags::NOT_SERIALIZABLE)
         .hooks(ClassHooks {
             create: Some(init_slot),
             ..Default::default()
         })
         .method("openUri(string $uri): bool", acc::PUBLIC, m_open_uri)
-        .method("toUri(string $uri): static", acc::PUBLIC | acc::STATIC, to_uri)
+        .method(
+            "toUri(string $uri): static",
+            acc::PUBLIC | acc::STATIC,
+            to_uri,
+        )
         .method("openMemory(): bool", acc::PUBLIC, m_open_memory)
         .method("toMemory(): static", acc::PUBLIC | acc::STATIC, to_memory)
-        .method("toStream($stream): static", acc::PUBLIC | acc::STATIC, to_stream);
+        .method(
+            "toStream($stream): static",
+            acc::PUBLIC | acc::STATIC,
+            to_stream,
+        );
     for (_, sig, _, meth) in PAIRS {
         class = class.method(sig, acc::PUBLIC, *meth);
     }
     class.register(m.vm());
-    m.function("xmlwriter_open_uri(string $uri): XMLWriter|false", f_open_uri)
-        .function("xmlwriter_open_memory(): XMLWriter|false", f_open_memory);
+    m.function(
+        "xmlwriter_open_uri(string $uri): XMLWriter|false",
+        f_open_uri,
+    )
+    .function("xmlwriter_open_memory(): XMLWriter|false", f_open_memory);
     for (sig, _, func, _) in PAIRS {
         m.function(sig, *func);
     }

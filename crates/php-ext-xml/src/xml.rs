@@ -14,7 +14,7 @@ use php_libxml::xml::{
     XmlHandlers, XmlOption, XmlParser, ERROR_CONSTANTS, OPTION_CONSTANTS, XML_SAX_IMPL,
 };
 use php_runtime::{ArrayKey, HashTable, Obj, PhpRef, Value, ZArray, ZStr};
-use php_vm::ext::{class_flags, Args, ClassBuilder, ClassHooks, ModuleBuilder, VmResult};
+use php_vm::ext::{acc, class_flags, Args, ClassBuilder, ClassHooks, ModuleBuilder, VmResult};
 use php_vm::{object, Throw, Vm};
 
 /// Handler kinds in `xml_parser` field order (the order `xml_set_object()`
@@ -152,7 +152,10 @@ impl XmlHandlers for VmHandlers<'_> {
         for (k, v) in attributes {
             attrs.make_mut().insert(ArrayKey::from_bytes(k), bytes(v));
         }
-        self.call(HandlerKind::StartElement, vec![bytes(name), Value::Array(attrs)]);
+        self.call(
+            HandlerKind::StartElement,
+            vec![bytes(name), Value::Array(attrs)],
+        );
     }
 
     fn end_element(&mut self, name: &[u8]) {
@@ -391,15 +394,12 @@ impl StructSink for RefSink {
         };
         with_array(info, |a| {
             let key = ArrayKey::from_bytes(tag);
-            match a.get_mut(&key) {
-                Some(e) => {
-                    with_elem(e, |e| e.push(Value::Int(position)).ok());
-                }
-                None => {
-                    let mut list = ZArray::new();
-                    let _ = list.make_mut().push(Value::Int(position));
-                    a.insert(key, Value::Array(list));
-                }
+            if let Some(e) = a.get_mut(&key) {
+                with_elem(e, |e| e.push(Value::Int(position)).ok());
+            } else {
+                let mut list = ZArray::new();
+                let _ = list.make_mut().push(Value::Int(position));
+                a.insert(key, Value::Array(list));
             }
         })
         .is_some()
@@ -412,8 +412,12 @@ impl StructSink for RefSink {
 
 fn throw_xml_error(vm: &mut Vm, a: &Args, e: &XmlError) -> Throw {
     match e {
-        XmlError::UnsupportedSourceEncoding => a.value_error(vm, 1, "is not a supported source encoding"),
-        XmlError::UnsupportedTargetEncoding => a.value_error(vm, 3, "is not a supported target encoding"),
+        XmlError::UnsupportedSourceEncoding => {
+            a.value_error(vm, 1, "is not a supported source encoding")
+        }
+        XmlError::UnsupportedTargetEncoding => {
+            a.value_error(vm, 3, "is not a supported target encoding")
+        }
         other => vm.throw("Error", &other.to_string()),
     }
 }
@@ -452,7 +456,12 @@ fn xml_parse(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let data = a.str(1);
     let is_final = a.bool(2);
     let r = run_parse(vm, &obj, &st, |p, h, sink| {
-        p.parse(data.as_bytes(), is_final, h, sink.map(|s| s as &mut dyn StructSink))
+        p.parse(
+            data.as_bytes(),
+            is_final,
+            h,
+            sink.map(|s| s as &mut dyn StructSink),
+        )
     })?;
     match r {
         Ok(v) => Ok(Value::Int(v)),
@@ -646,17 +655,18 @@ fn classify(vm: &mut Vm, v: Value) -> HandlerArg {
 /// The string a `S` parameter would accept (callable strings included).
 fn as_string(arg: &HandlerArg) -> Option<ZStr> {
     match arg {
-        HandlerArg::Name(s) => Some(s.clone()),
-        HandlerArg::Callable(Value::Str(s)) => Some(s.clone()),
+        HandlerArg::Name(s) | HandlerArg::Callable(Value::Str(s)) => Some(s.clone()),
         _ => None,
     }
 }
 
-fn fcc(arg: &HandlerArg) -> Option<Option<Handler>> {
+/// What `F!` would parse: `Ok(handler)` (with `None` for `null`), or
+/// `Err(())` when the argument is neither callable nor `null`.
+fn fcc(arg: &HandlerArg) -> Result<Option<Handler>, ()> {
     match arg {
-        HandlerArg::Null => Some(None),
-        HandlerArg::Callable(v) => Some(Some(Handler::Callable(v.clone()))),
-        _ => None,
+        HandlerArg::Null => Ok(None),
+        HandlerArg::Callable(v) => Ok(Some(Handler::Callable(v.clone()))),
+        _ => Err(()),
     }
 }
 
@@ -700,12 +710,18 @@ fn deprecate_strings(vm: &mut Vm) -> VmResult<()> {
     vm.php_deprecated("Passing non-callable strings is deprecated since 8.4")
 }
 
-fn set_handlers(vm: &mut Vm, a: &Args, st: &ParserState, list: &[(HandlerKind, Option<Handler>)]) -> VmResult<Value> {
+fn set_handlers(
+    vm: &mut Vm,
+    a: &Args,
+    st: &ParserState,
+    list: &[(HandlerKind, Option<Handler>)],
+) -> VmResult<Value> {
     if st.parser.is_parsing() {
         return Err(vm.throw("Error", "Cannot change handlers while parsing"));
     }
     for (kind, h) in list {
-        st.set(*kind, h.clone()).map_err(|e| throw_xml_error(vm, a, &e))?;
+        st.set(*kind, h.clone())
+            .map_err(|e| throw_xml_error(vm, a, &e))?;
     }
     Ok(Value::Bool(true))
 }
@@ -714,7 +730,7 @@ fn set_single(vm: &mut Vm, a: &Args, kind: HandlerKind) -> VmResult<Value> {
     let (_, st) = state_of(vm, a)?;
     let arg = classify(vm, a.at(1));
     let h = match &arg {
-        HandlerArg::Null | HandlerArg::Callable(_) => fcc(&arg).flatten(),
+        HandlerArg::Null | HandlerArg::Callable(_) => fcc(&arg).ok().flatten(),
         HandlerArg::Name(name) => {
             deprecate_strings(vm)?;
             method_handler(vm, a, &st, 2, name)?
@@ -730,7 +746,7 @@ fn xml_set_element_handler(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let (_, st) = state_of(vm, a)?;
     let start = classify(vm, a.at(1));
     let end = classify(vm, a.at(2));
-    let (s, e) = match (fcc(&start), fcc(&end)) {
+    let (s, e) = match (fcc(&start).ok(), fcc(&end).ok()) {
         (Some(s), Some(e)) => (s, e),
         (Some(s), None) if as_string(&end).is_some() => {
             deprecate_strings(vm)?;
@@ -738,7 +754,7 @@ fn xml_set_element_handler(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             let e = method_handler(vm, a, &st, 3, &name)?;
             (s, e)
         }
-        _ => match (as_string(&start), fcc(&end), as_string(&end)) {
+        _ => match (as_string(&start), fcc(&end).ok(), as_string(&end)) {
             (Some(sn), Some(e), _) => {
                 deprecate_strings(vm)?;
                 let s = method_handler(vm, a, &st, 2, &sn)?;
@@ -751,7 +767,11 @@ fn xml_set_element_handler(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
                 (s, e)
             }
             _ => {
-                let n = if matches!(a.at(1), Value::Null | Value::Str(_)) { 3 } else { 2 };
+                let n = if matches!(a.at(1), Value::Null | Value::Str(_)) {
+                    3
+                } else {
+                    2
+                };
                 return Err(a.type_error(vm, n, "must be of type callable|string|null"));
             }
         },
@@ -798,27 +818,23 @@ fn xml_set_object(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             if !Obj::ptr_eq(&object, &old) {
                 continue;
             }
-            match new_class.find_method(name.as_bytes()) {
-                Some(m) => {
-                    st.handlers.borrow_mut()[slot(kind)] = Some(Handler::Method {
-                        object: new_this.clone(),
-                        name: m.name.clone(),
-                    });
-                }
-                None => {
-                    st.handlers.borrow_mut()[slot(kind)] = None;
-                    return Err(a.value_error(
-                        vm,
-                        2,
-                        &format!(
-                            "cannot safely swap to object of class {} as method \"{}\" does not exist, which was set via {}",
-                            new_class.name.to_string_lossy(),
-                            name.to_string_lossy(),
-                            kind.setter_name()
-                        ),
-                    ));
-                }
-            }
+            let Some(m) = new_class.find_method(name.as_bytes()) else {
+                st.handlers.borrow_mut()[slot(kind)] = None;
+                return Err(a.value_error(
+                    vm,
+                    2,
+                    &format!(
+                        "cannot safely swap to object of class {} as method \"{}\" does not exist, which was set via {}",
+                        new_class.name.to_string_lossy(),
+                        name.to_string_lossy(),
+                        kind.setter_name()
+                    ),
+                ));
+            };
+            st.handlers.borrow_mut()[slot(kind)] = Some(Handler::Method {
+                object: new_this.clone(),
+                name: m.name.clone(),
+            });
         }
     }
     *st.object.borrow_mut() = Some(new_this);
@@ -835,6 +851,15 @@ fn not_comparable(_vm: &mut Vm, l: &Value, r: &Value) -> VmResult<Option<i32>> {
     Ok(Some(1))
 }
 
+/// `xml_parser_get_constructor`: `XMLParser` cannot be instantiated
+/// directly.
+fn xml_parser_construct(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
+    Err(vm.throw(
+        "Error",
+        "Cannot directly construct XMLParser, use xml_parser_create() or xml_parser_create_ns() instead",
+    ))
+}
+
 /// Registers the `xml` module.
 pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
     for (name, v) in ERROR_CONSTANTS.iter().chain(OPTION_CONSTANTS.iter()) {
@@ -842,38 +867,64 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
     }
     m.constant("XML_SAX_IMPL", Value::from(XML_SAX_IMPL));
     ClassBuilder::new("XMLParser")
-        .flags(
-            class_flags::FINAL
-                | class_flags::NO_NEW
-                | class_flags::NOT_SERIALIZABLE
-                | class_flags::NO_CLONE,
-        )
+        .flags(class_flags::FINAL | class_flags::NOT_SERIALIZABLE | class_flags::NO_CLONE)
         .hooks(ClassHooks {
             compare: Some(not_comparable),
             ..Default::default()
         })
+        .method("__construct()", acc::PUBLIC, xml_parser_construct)
         .register(m.vm());
     let handler_sig = |name: &str| format!("{name}(XMLParser $parser, $handler): true");
-    m.function("xml_parser_create(?string $encoding = null): XMLParser", xml_parser_create)
-        .function(
-            "xml_parser_create_ns(?string $encoding = null, string $separator = \":\"): XMLParser",
-            xml_parser_create_ns,
-        )
-        .function("xml_set_object(XMLParser $parser, object $object): true", xml_set_object)
-        .deprecated("8.4", "provide a proper method callable to xml_set_*_handler() functions")
-        .function(
-            "xml_set_element_handler(XMLParser $parser, $start_handler, $end_handler): true",
-            xml_set_element_handler,
-        );
+    m.function(
+        "xml_parser_create(?string $encoding = null): XMLParser",
+        xml_parser_create,
+    )
+    .function(
+        "xml_parser_create_ns(?string $encoding = null, string $separator = \":\"): XMLParser",
+        xml_parser_create_ns,
+    )
+    .function(
+        "xml_set_object(XMLParser $parser, object $object): true",
+        xml_set_object,
+    )
+    .deprecated(
+        "8.4",
+        "provide a proper method callable to xml_set_*_handler() functions",
+    )
+    .function(
+        "xml_set_element_handler(XMLParser $parser, $start_handler, $end_handler): true",
+        xml_set_element_handler,
+    );
     let singles: [(&str, php_vm::ext::NativeFn); 8] = [
-        ("xml_set_character_data_handler", xml_set_character_data_handler),
-        ("xml_set_processing_instruction_handler", xml_set_processing_instruction_handler),
+        (
+            "xml_set_character_data_handler",
+            xml_set_character_data_handler,
+        ),
+        (
+            "xml_set_processing_instruction_handler",
+            xml_set_processing_instruction_handler,
+        ),
         ("xml_set_default_handler", xml_set_default_handler),
-        ("xml_set_unparsed_entity_decl_handler", xml_set_unparsed_entity_decl_handler),
-        ("xml_set_notation_decl_handler", xml_set_notation_decl_handler),
-        ("xml_set_external_entity_ref_handler", xml_set_external_entity_ref_handler),
-        ("xml_set_start_namespace_decl_handler", xml_set_start_namespace_decl_handler),
-        ("xml_set_end_namespace_decl_handler", xml_set_end_namespace_decl_handler),
+        (
+            "xml_set_unparsed_entity_decl_handler",
+            xml_set_unparsed_entity_decl_handler,
+        ),
+        (
+            "xml_set_notation_decl_handler",
+            xml_set_notation_decl_handler,
+        ),
+        (
+            "xml_set_external_entity_ref_handler",
+            xml_set_external_entity_ref_handler,
+        ),
+        (
+            "xml_set_start_namespace_decl_handler",
+            xml_set_start_namespace_decl_handler,
+        ),
+        (
+            "xml_set_end_namespace_decl_handler",
+            xml_set_end_namespace_decl_handler,
+        ),
     ];
     for (name, f) in singles {
         m.function(&handler_sig(name), f);
@@ -959,11 +1010,19 @@ mod tests {
         sink.mark_complete(0);
         assert!(sink.add_index(b"A", 0));
         assert!(sink.add_index(b"A", 1));
-        let Value::Array(d) = data.get() else { panic!() };
-        let Some(Value::Array(first)) = d.get_int(0).cloned() else { panic!() };
+        let Value::Array(d) = data.get() else {
+            panic!()
+        };
+        let Some(Value::Array(first)) = d.get_int(0).cloned() else {
+            panic!()
+        };
         assert!(matches!(first.get_str(b"value"), Some(Value::Str(s)) if s.as_bytes() == b"xy"));
-        assert!(matches!(first.get_str(b"type"), Some(Value::Str(s)) if s.as_bytes() == b"complete"));
-        let Value::Array(i) = info.get() else { panic!() };
+        assert!(
+            matches!(first.get_str(b"type"), Some(Value::Str(s)) if s.as_bytes() == b"complete")
+        );
+        let Value::Array(i) = info.get() else {
+            panic!()
+        };
         assert!(matches!(i.get_str(b"A"), Some(Value::Array(l)) if l.len() == 2));
     }
 }

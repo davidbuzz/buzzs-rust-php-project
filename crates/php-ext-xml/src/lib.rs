@@ -11,6 +11,10 @@
 //! The single [`Xml`] extension registers all three modules and reports
 //! `libxml`, `xml` and `xmlwriter` as loaded extensions.
 
+// Native handlers have the fixed `NativeFn` / hook signatures, so many
+// infallible ones still return `VmResult`.
+#![allow(clippy::unnecessary_wraps)]
+
 pub mod libxml;
 pub mod xml;
 pub mod xmlwriter;
