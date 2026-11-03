@@ -1,6 +1,10 @@
 //! `IntlCalendar` checked against fixtures from `/usr/bin/php`.
 
-#![allow(clippy::too_many_lines, clippy::float_cmp)]
+#![allow(
+    clippy::too_many_lines,
+    clippy::float_cmp,
+    clippy::many_single_char_names
+)]
 
 mod common;
 

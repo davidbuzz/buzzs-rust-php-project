@@ -12,6 +12,7 @@ pub mod ustr;
 
 pub mod calendar;
 pub mod common;
+pub mod dateformat;
 pub mod numfmt;
 pub mod sys;
 pub mod timezone;

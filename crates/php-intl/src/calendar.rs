@@ -170,13 +170,11 @@ const DEBUG_FIELDS: [(i32, &str); 23] = [
 
 impl IntlCalendar {
     /// Wraps an ICU calendar.
-    #[allow(dead_code)]
     pub(crate) fn from_calendar(cal: Calendar) -> Self {
         Self { cal }
     }
 
     /// The wrapped ICU calendar.
-    #[allow(dead_code)]
     pub(crate) fn raw(&self) -> &Calendar {
         &self.cal
     }

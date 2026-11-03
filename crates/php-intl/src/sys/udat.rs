@@ -188,6 +188,60 @@ impl DateFormat {
     }
 }
 
+/// A borrowed view of the formatter's own calendar.
+#[derive(Debug)]
+pub struct OwnCalendar<'a> {
+    cal: std::mem::ManuallyDrop<Calendar>,
+    _fmt: std::marker::PhantomData<&'a DateFormat>,
+}
+
+impl std::ops::Deref for OwnCalendar<'_> {
+    type Target = Calendar;
+    fn deref(&self) -> &Calendar {
+        &self.cal
+    }
+}
+
+impl DateFormat {
+    /// The formatter's own calendar, borrowed (never closed by the view).
+    pub fn own_calendar(&self) -> OwnCalendar<'_> {
+        // SAFETY: the calendar is owned by the live formatter and outlives
+        // the returned view, which never closes it (ManuallyDrop).
+        let p = unsafe { ffi::udat_getCalendar(self.0) }.cast_mut();
+        OwnCalendar {
+            // SAFETY: see above; p is non-null for a constructed formatter.
+            cal: std::mem::ManuallyDrop::new(unsafe { Calendar::from_raw(p) }),
+            _fmt: std::marker::PhantomData,
+        }
+    }
+
+    /// `udat_parseCalendar()` into the formatter's own calendar, as
+    /// php-src's `parseToCalendar()`/`localtime()` do.
+    pub fn parse_own_calendar(
+        &mut self,
+        text: &[u16],
+        pos: Option<&mut i32>,
+    ) -> Result<(), UErrorCode> {
+        let mut st = UErrorCode::ZERO;
+        // SAFETY: the formatter owns its calendar; mutating it in place is
+        // what php-src does (casting away const).  `self` is uniquely borrowed.
+        let cal = unsafe { ffi::udat_getCalendar(self.0) }.cast_mut();
+        let pp = pos.map_or(std::ptr::null_mut(), std::ptr::from_mut::<i32>);
+        // SAFETY: text is a live slice; pp is null or a valid in/out pointer.
+        unsafe { ffi::udat_parseCalendar(self.0, cal, text.as_ptr(), len32(text), pp, &mut st) };
+        st.check()
+    }
+
+    /// `udat_parse()` with an optional position (`NULL` when absent).
+    pub fn parse_opt(&self, text: &[u16], pos: Option<&mut i32>) -> Result<f64, UErrorCode> {
+        let mut st = UErrorCode::ZERO;
+        let pp = pos.map_or(std::ptr::null_mut(), std::ptr::from_mut::<i32>);
+        // SAFETY: text is a live slice; pp is null or a valid in/out pointer.
+        let v = unsafe { ffi::udat_parse(self.0, text.as_ptr(), len32(text), pp, &mut st) };
+        st.check().map(|()| v)
+    }
+}
+
 impl Drop for DateFormat {
     fn drop(&mut self) {
         // SAFETY: owned handle, closed once.
