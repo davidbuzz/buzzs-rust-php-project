@@ -246,6 +246,17 @@ name = "php-bcmath"
 version = "0.1.0"
 
 [[package]]
+name = "php-bz2"
+version = "0.1.0"
+dependencies = [
+ "php-runtime",
+]
+
+[[package]]
+name = "php-calendar"
+version = "0.1.0"
+
+[[package]]
 name = "php-cli"
 version = "0.1.0"
 dependencies = [
@@ -266,12 +277,26 @@ version = "0.1.0"
 [[package]]
 name = "php-filter"
 version = "0.1.0"
+dependencies = [
+ "php-runtime",
+]
+
+[[package]]
+name = "php-gmp"
+version = "0.1.0"
 
 [[package]]
 name = "php-hash"
 version = "0.1.0"
 dependencies = [
  "twox-hash",
+]
+
+[[package]]
+name = "php-iconv"
+version = "0.1.0"
+dependencies = [
+ "php-runtime",
 ]
 
 [[package]]
@@ -286,8 +311,22 @@ name = "php-lexer"
 version = "0.1.0"
 
 [[package]]
+name = "php-libxml"
+version = "0.1.0"
+dependencies = [
+ "php-runtime",
+]
+
+[[package]]
 name = "php-mbstring"
 version = "0.1.0"
+
+[[package]]
+name = "php-openssl"
+version = "0.1.0"
+dependencies = [
+ "php-runtime",
+]
 
 [[package]]
 name = "php-parser"
@@ -304,6 +343,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "php-posix"
+version = "0.1.0"
+dependencies = [
+ "php-runtime",
+]
+
+[[package]]
 name = "php-random"
 version = "0.1.0"
 dependencies = [
@@ -313,6 +359,13 @@ dependencies = [
 [[package]]
 name = "php-runtime"
 version = "0.1.0"
+
+[[package]]
+name = "php-sqlite"
+version = "0.1.0"
+dependencies = [
+ "php-runtime",
+]
 
 [[package]]
 name = "php-stdarr"
@@ -348,6 +401,13 @@ dependencies = [
  "php-parser",
  "php-runtime",
  "php-support",
+]
+
+[[package]]
+name = "php-zlib"
+version = "0.1.0"
+dependencies = [
+ "php-runtime",
 ]
 
 [[package]]

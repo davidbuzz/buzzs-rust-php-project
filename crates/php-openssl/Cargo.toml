@@ -1,0 +1,13 @@
+[package]
+name = "php-openssl"
+description = "PHP's ext/filter: filter_var/filter_var_array/filter_input engine with all validation and sanitizing filters"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+php-runtime = { path = "../php-runtime" }
+
+[lints]
+workspace = true

@@ -23,6 +23,13 @@ members = [
     "crates/php-bcmath",
     "crates/php-gmp",
     "crates/php-calendar",
+    "crates/php-zlib",
+    "crates/php-bz2",
+    "crates/php-iconv",
+    "crates/php-posix",
+    "crates/php-openssl",
+    "crates/php-sqlite",
+    "crates/php-libxml",
 ]
 
 [workspace.package]

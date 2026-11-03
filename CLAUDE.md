@@ -34,6 +34,13 @@ A Rust re-implementation of PHP whose goal is to pass the php-src `.phpt` test s
 - `crates/php-bcmath`   — arbitrary-precision decimal arithmetic for bc* functions and BcMath\\Number (ref: ext/bcmath)
 - `crates/php-gmp`      — big-integer engine behind GMP objects/functions (ref: ext/gmp)
 - `crates/php-calendar` — calendar conversions (ref: ext/calendar)
+- `crates/php-zlib`     — zlib binding with ext/zlib semantics (gz*, deflate/inflate contexts, zlib.* filters)
+- `crates/php-bz2`      — libbz2 binding with ext/bz2 semantics
+- `crates/php-iconv`    — glibc iconv binding with ext/iconv semantics
+- `crates/php-posix`    — ext/posix over libc
+- `crates/php-openssl`  — OpenSSL binding with ext/openssl semantics
+- `crates/php-sqlite`   — libsqlite3 binding behind ext/sqlite3 and ext/pdo_sqlite
+- `crates/php-libxml`   — libxml2 FFI base + ext/xml (expat-style) + ext/xmlwriter; dom/simplexml/xmlreader/xsl build on it
 
 ## Parallel work
 Several agents work concurrently, one crate each. Only edit files inside your own crate (plus your row(s) in FEATURE_GAP.md). Never edit workspace Cargo.toml; crates are pre-registered. Commit your own crate's files with `git add crates/<yours>` only.
