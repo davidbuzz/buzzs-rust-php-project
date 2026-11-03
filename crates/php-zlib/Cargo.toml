@@ -1,13 +1,15 @@
 [package]
 name = "php-zlib"
-description = "PHP's ext/filter: filter_var/filter_var_array/filter_input engine with all validation and sanitizing filters"
+description = "PHP's ext/zlib: gzcompress/gzencode/zlib_encode family, incremental deflate/inflate contexts, gzFile streams, zlib.* stream filters and ob_gzhandler, bound to the system zlib"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-php-runtime = { path = "../php-runtime" }
+libz-sys = { version = "1.1", default-features = false, features = ["libc"] }
+libc = "0.2"
+php-streams = { path = "../php-streams" }
 
 [lints]
 workspace = true
