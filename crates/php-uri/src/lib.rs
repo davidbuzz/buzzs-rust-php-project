@@ -8,6 +8,7 @@
 
 pub mod error;
 pub mod rfc3986;
+pub mod whatwg;
 
 pub use error::{ErrorClass, UriError, UrlValidationError, UrlValidationErrorType};
 
