@@ -320,6 +320,7 @@ struct Request {
     exec_end: Option<Vec<u8>>,
     reflection_what: Vec<u8>,
     repeats: i64,
+    hide_argv: bool,
 }
 
 impl Request {
@@ -472,6 +473,7 @@ fn parse_request(argv: &[Vec<u8>]) -> (Request, usize, Option<&'static str>) {
                         r.mode = Some(Mode::Highlight);
                     }
                 }
+                b'H' => r.hide_argv = true,
                 b'w' => {
                     if mode == Mode::CliDirect || mode == Mode::ProcessStdin {
                         param_error = Some("Source stripping only works for files.\n");
@@ -511,6 +513,9 @@ fn do_cli(argv: &[Vec<u8>], cfg: &Config) -> i32 {
     if let Some(e) = param_error {
         out(e.as_bytes());
         return 1;
+    }
+    if req.hide_argv {
+        proctitle::hide_args();
     }
     let mut repeats = req.repeats;
     if repeats > 1 {
@@ -840,10 +845,16 @@ fn execute_script(vm: &mut Vm, src: &[u8], path: &[u8]) -> i32 {
         if name.is_empty() {
             return Ok(());
         }
-        match resolve_path(vm, &name) {
-            Some(full) => vm.include_file(&lossy(&full)),
-            None => Ok(()),
+        let Some(full) = resolve_path(vm, &name) else {
+            return Ok(());
+        };
+        // Recorded like any `require`d file (`get_included_files()`,
+        // `*_once`).
+        let real = ZStr::from(real_path(&full));
+        if vm.included_set.insert(real.clone()) {
+            vm.included.push(real);
         }
+        vm.include_file(&lossy(&full))
     };
     let mut r = extra(vm, "auto_prepend_file");
     if r.is_ok() {

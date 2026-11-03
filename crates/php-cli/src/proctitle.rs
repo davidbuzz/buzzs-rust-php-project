@@ -9,6 +9,7 @@
 
 use std::cell::RefCell;
 use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
+use std::sync::OnceLock;
 
 static ARGC: AtomicUsize = AtomicUsize::new(0);
 static ARGV: AtomicPtr<*mut libc::c_char> = AtomicPtr::new(std::ptr::null_mut());
@@ -33,8 +34,15 @@ thread_local! {
     static TITLE: RefCell<Option<Vec<u8>>> = const { RefCell::new(None) };
 }
 
-/// The contiguous memory holding the `argv` strings.
+/// The contiguous memory holding the `argv` strings, measured once (it
+/// cannot be measured again after `-H` blanked the arguments).
 fn argv_area() -> Option<(*mut u8, usize)> {
+    static AREA: OnceLock<Option<(usize, usize)>> = OnceLock::new();
+    AREA.get_or_init(|| measure_argv_area().map(|(p, n)| (p as usize, n)))
+        .map(|(p, n)| (p as *mut u8, n))
+}
+
+fn measure_argv_area() -> Option<(*mut u8, usize)> {
     let count = ARGC.load(Ordering::Relaxed);
     let argv = ARGV.load(Ordering::Relaxed);
     if argv.is_null() || count == 0 {
@@ -84,6 +92,28 @@ pub fn set(title: &[u8]) -> bool {
     }
     TITLE.with(|t| *t.borrow_mut() = Some(title.to_vec()));
     true
+}
+
+/// `-H`: blanks the arguments after `argv[0]` so tools such as `ps` do
+/// not show them.
+pub fn hide_args() {
+    let _ = argv_area();
+    let count = ARGC.load(Ordering::Relaxed);
+    let argv = ARGV.load(Ordering::Relaxed);
+    if argv.is_null() {
+        return;
+    }
+    for i in 1..count {
+        // SAFETY: entries `1..count` of the C runtime's `argv` are valid
+        // NUL-terminated strings in writable memory; only their bytes
+        // before the terminator are overwritten.
+        unsafe {
+            let s = *argv.add(i);
+            if !s.is_null() {
+                std::ptr::write_bytes(s.cast::<u8>(), 0, libc::strlen(s));
+            }
+        }
+    }
 }
 
 /// `get_ps_title()`: the last title set, or the original command line.
