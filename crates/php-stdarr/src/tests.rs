@@ -667,3 +667,134 @@ fn user_compare_cb_type() {
     sort::uasort(&mut ctx, &r, &mut cb).unwrap();
     assert_eq!(keys(&arr_of(&r.get())), ["1", "0"]);
 }
+
+// ---------------------------------------------------------------------------
+// php-src regression tests (ext/standard/tests/array)
+// ---------------------------------------------------------------------------
+
+/// bug69068: replacing the walked array restarts at its internal pointer.
+#[test]
+fn walk_follows_replaced_array() {
+    let mut ctx = Ctx::new();
+    let r = PhpRef::new(ints(&[1, 2, 3]));
+    let target = r.clone();
+    let mut seen = Vec::new();
+    let mut cb = |_: &mut Ctx, a: &[Value]| {
+        let v = util::deref(&a[0]).as_int().unwrap_or(0);
+        seen.push(v);
+        if v == 2 {
+            target.set(ints(&[4, 5]));
+        }
+        Ok(Value::Null)
+    };
+    callback::array_walk(&mut ctx, &r, &mut cb, None).unwrap();
+    assert_eq!(seen, [1, 2, 4, 5]);
+    assert_eq!(int_vals(&arr_of(&r.get())), [4, 5]);
+}
+
+/// bug61967: unsetting elements of the outer array during the walk.
+#[test]
+fn walk_recursive_with_outer_unset() {
+    let mut ctx = Ctx::new();
+    let r = PhpRef::new(Value::Array(list((0..5).map(|_| ints(&[1, 2, 3, 4, 5])))));
+    let target = r.clone();
+    let mut seen = Vec::new();
+    let mut cb = |_: &mut Ctx, a: &[Value]| {
+        let k = a[1].as_int().unwrap_or(-1);
+        seen.push(k);
+        if let Value::Array(t) = &mut *target.borrow_mut() {
+            t.make_mut().remove(&ArrayKey::Int(k));
+        }
+        Ok(Value::Null)
+    };
+    callback::array_walk_recursive(&mut ctx, &r, &mut cb, None).unwrap();
+    assert_eq!(seen, [0, 1, 2, 3, 4]);
+}
+
+/// gh16957 / gh17447: shifting/popping a self-referencing array returns
+/// the array as it is after the operation.
+#[test]
+fn shift_and_pop_self_reference() {
+    let r = PhpRef::new(Value::Null);
+    r.set(Value::Array(list([
+        Value::Reference(r.clone()),
+        Value::Int(1),
+        Value::from("two"),
+    ])));
+    let shifted = stack::array_shift(&r).unwrap();
+    let after = arr_of(&r.get());
+    assert_eq!(keys(&after), ["0", "1"]);
+    assert!(php_runtime::ops::is_identical(&shifted, &r.get()).unwrap());
+
+    let p = PhpRef::new(Value::Null);
+    p.set(Value::Array(list([Value::Reference(p.clone())])));
+    let popped = stack::array_pop(&p).unwrap();
+    assert!(arr_of(&popped).is_empty());
+    assert!(arr_of(&p.get()).is_empty());
+}
+
+/// gh18480: extreme offsets and lengths.
+#[test]
+fn splice_extreme_arguments() {
+    let mut ctx = Ctx::new();
+    let mut lens = Vec::new();
+    for length in [i64::MIN, i64::MAX] {
+        for offset in [i64::MAX, i64::MIN] {
+            let r = PhpRef::new(ints(&[i64::MAX]));
+            let removed = stack::array_splice(&mut ctx, &r, offset, Some(length), None).unwrap();
+            lens.push(removed.len());
+        }
+    }
+    assert_eq!(lens, [0, 0, 0, 1]);
+}
+
+/// gh19926: the internal pointer after array_splice.
+#[test]
+fn splice_resets_internal_pointer() {
+    let mut ctx = Ctx::new();
+    let mut t = HashTable::new();
+    for i in 1..=3 {
+        t.push(Value::Int(i)).unwrap();
+    }
+    t.remove(&ArrayKey::Int(0));
+    let r = PhpRef::new(Value::Array(ZArray::from_table(t)));
+    assert_eq!(pointer::next(&mut ctx, &r).unwrap().as_int(), Some(3));
+    let repl = ints(&[999]);
+    stack::array_splice(&mut ctx, &r, 0, Some(0), Some(&repl)).unwrap();
+    assert_eq!(
+        pointer::current(&mut ctx, "current", &r.get())
+            .unwrap()
+            .as_int(),
+        Some(999)
+    );
+}
+
+/// gh23576: the next free key of array_keys() results.
+#[test]
+fn array_keys_next_index() {
+    let mut ctx = Ctx::new();
+    let mut t = HashTable::new();
+    t.insert(123, Value::Int(123));
+    t.remove(&ArrayKey::Int(123));
+    for filter in [None, Some(&Value::Int(123))] {
+        let mut k = basic::array_keys(&mut ctx, &t, filter, false).unwrap();
+        assert_eq!(k.make_mut().push(Value::Int(42)).unwrap(), 0);
+    }
+}
+
+/// gh9244: multisort followed by array_shift.
+#[test]
+fn multisort_then_shift() {
+    let mut ctx = Ctx::new();
+    let items = PhpRef::new(Value::Array(ZArray::from_pairs([
+        ("foo", Value::Int(1)),
+        ("bar", Value::Int(2)),
+    ])));
+    let order = PhpRef::new(ints(&[4, 3]));
+    sort::array_multisort(
+        &mut ctx,
+        &[Value::Reference(order), Value::Reference(items.clone())],
+    )
+    .unwrap();
+    assert_eq!(stack::array_shift(&items).unwrap().as_int(), Some(2));
+}
