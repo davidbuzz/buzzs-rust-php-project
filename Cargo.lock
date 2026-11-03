@@ -352,6 +352,7 @@ dependencies = [
  "php-ext-calendar",
  "php-ext-curl",
  "php-ext-date",
+ "php-ext-dom",
  "php-ext-exif",
  "php-ext-fileinfo",
  "php-ext-filter",
