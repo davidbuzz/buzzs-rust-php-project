@@ -376,12 +376,28 @@ pub fn array_splice(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let used_ret = vm.pending_call_dst.is_some() || !called_from_code(vm);
     let arr = by_ref(a, 0);
     let len = a.opt(2).map(|_| a.int(2));
-    let rep = a.get(3);
-    let r = sa::stack::array_splice(vm, &arr, a.int(1), len, rep.as_ref());
-    let removed = rt(vm, r)?;
+    let offset = a.int(1);
     if used_ret {
-        return Ok(Value::Array(removed));
+        let rep = a.get(3);
+        let r = sa::stack::array_splice(vm, &arr, offset, len, rep.as_ref());
+        return Ok(Value::Array(rt(vm, r)?));
     }
+    // php_splice() without a `removed` table: the removed elements are
+    // destroyed in place, and iterator positions are computed without
+    // counting them (unlike the `USED_RET()` path php-stdarr implements).
+    let repl = match a.get(3) {
+        Some(v) => {
+            let r = v.to_array(vm);
+            Some(rt(vm, r)?)
+        }
+        None => None,
+    };
+    let r = sa::util::with_array(&arr, "array_splice", 1, "array", |t| {
+        let length = len.unwrap_or_else(|| i64::try_from(t.len()).unwrap_or(i64::MAX));
+        let removed = t.make_mut().splice(offset, length, repl.as_deref(), false);
+        Ok(removed.unwrap_or_default())
+    });
+    let removed = rt(vm, r)?;
     // Without a used result PHP destroys the removed elements while the
     // array is being rebuilt (holding an extra reference to it), and fails
     // if a destructor modified or replaced the array meanwhile.
