@@ -1,11 +1,13 @@
 [package]
 name = "php-json"
+description = "PHP's ext/json: json_encode/json_decode/json_validate on top of php-runtime"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+php-runtime = { path = "../php-runtime" }
 
 [lints]
 workspace = true
