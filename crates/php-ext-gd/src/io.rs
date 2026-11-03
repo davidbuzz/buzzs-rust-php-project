@@ -21,8 +21,17 @@ pub(crate) enum Opened {
     Other(Vec<u8>),
 }
 
+/// `php_stream_open_wrapper()`'s "Path cannot be empty" `ValueError`.
+pub(crate) fn check_not_empty(vm: &mut Vm, path: &[u8]) -> VmResult<()> {
+    if path.is_empty() {
+        return Err(vm.throw("ValueError", php_streams::open::EMPTY_PATH_ERROR));
+    }
+    Ok(())
+}
+
 /// Opens `path` read-only and reads it completely.
 pub(crate) fn read_path(vm: &mut Vm, path: &[u8]) -> VmResult<Opened> {
+    check_not_empty(vm, path)?;
     let out = bridge::run(vm, || {
         let mut opened = None;
         let mut s = php_streams::open::open_wrapper(path, "rb", REPORT_ERRORS, &mut opened, None)?;
@@ -77,6 +86,7 @@ pub(crate) fn output_sink(vm: &mut Vm, a: &Args, n: usize) -> VmResult<Option<Si
 
 /// `php_stream_open_wrapper(path, "wb", REPORT_ERRORS|IGNORE_PATH)`.
 pub(crate) fn open_for_writing(vm: &mut Vm, path: &[u8]) -> VmResult<Option<Sink>> {
+    check_not_empty(vm, path)?;
     let s = bridge::run(vm, || {
         let mut opened = None;
         php_streams::open::open_wrapper(path, "wb", REPORT_ERRORS, &mut opened, None)

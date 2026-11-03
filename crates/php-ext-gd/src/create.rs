@@ -91,7 +91,8 @@ fn imagecreatefromstring(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         return Ok(Value::Bool(false));
     };
     let dec = match t {
-        ImageType::Jpeg => Decoder::Jpeg(false),
+        // `gdImageCreateFromJpegCtx()` ignores libjpeg warnings.
+        ImageType::Jpeg => Decoder::Jpeg(true),
         ImageType::Png => Decoder::Png,
         ImageType::Gif => Decoder::Gif,
         ImageType::Wbmp => Decoder::Wbmp,
@@ -422,6 +423,7 @@ fn read_full(s: &mut php_streams::stream::Stream, buf: &mut [u8]) -> (usize, boo
 
 fn imageloadfont(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let path = res::path_arg(vm, a, 0)?;
+    io::check_not_empty(vm, &path)?;
     let out = bridge::run(vm, || {
         let mut opened = None;
         let Some(mut s) =
