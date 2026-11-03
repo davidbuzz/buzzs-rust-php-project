@@ -30,7 +30,8 @@ mod timezone;
 use php_date::api;
 use php_runtime::Value;
 use php_support::ini::{Access, IniDirective, ModifyHandler};
-use php_vm::ext::{ClassBuilder, Extension, ModuleBuilder};
+use php_vm::ext::{ClassBuilder, Extension, InfoItem, ModuleBuilder, VmResult};
+use php_vm::Vm;
 
 /// The `date` extension.
 #[derive(Debug, Clone, Copy, Default)]
@@ -48,6 +49,60 @@ const EXCEPTIONS: [(&str, &str); 9] = [
     ("DateException", "DateMalformedIntervalStringException"),
     ("DateException", "DateMalformedPeriodStringException"),
 ];
+
+/// The current `date.timezone` if it is a valid identifier
+/// (`DATEG(default_timezone)`), else `UTC`.
+fn valid_ini_timezone(vm: &Vm) -> String {
+    vm.ini_string("date.timezone")
+        .map(|v| String::from_utf8_lossy(&v).into_owned())
+        .filter(|s| php_date::tz::is_valid_id(s))
+        .unwrap_or_else(|| "UTC".to_string())
+}
+
+/// `OnUpdate_date_timezone`: rejects unknown identifiers with a warning.
+fn on_update_timezone(vm: &mut Vm, v: &[u8]) -> VmResult<bool> {
+    let name = String::from_utf8_lossy(v).into_owned();
+    if php_date::tz::is_valid_id(&name) {
+        return Ok(true);
+    }
+    let cur = valid_ini_timezone(vm);
+    vm.php_warning(&format!(
+        "Invalid date.timezone value '{name}', using '{cur}' instead"
+    ))?;
+    Ok(false)
+}
+
+/// The same check for the startup value (`-d`/php.ini).
+fn check_startup_timezone(vm: &mut Vm) {
+    let Some(v) = vm.ini_string("date.timezone") else {
+        return;
+    };
+    let name = String::from_utf8_lossy(&v).into_owned();
+    if !php_date::tz::is_valid_id(&name) {
+        let _ = vm.raise(
+            common::E_WARNING,
+            &format!("PHP Startup: Invalid date.timezone value '{name}', using 'UTC' instead"),
+        );
+    }
+}
+
+/// `PHP_MINFO_FUNCTION(date)`.
+fn module_info(vm: &mut Vm) -> Vec<InfoItem> {
+    let row = |a: &str, b: &str| InfoItem::Row(vec![a.to_string(), b.to_string()]);
+    vec![
+        InfoItem::TableStart,
+        row("date/time support", "enabled"),
+        row("timelib version", "2026.02"),
+        row(
+            "\"Olson\" Timezone Database Version",
+            php_date::tz::version(),
+        ),
+        row("Timezone Database", "internal"),
+        row("Default timezone", &common::default_tz_name(vm)),
+        InfoItem::TableEnd,
+        InfoItem::IniEntries,
+    ]
+}
 
 impl Extension for Date {
     fn name(&self) -> &'static str {
@@ -69,12 +124,18 @@ impl Extension for Date {
                 "date",
             ));
         }
-        m.constant(
-            "SUNFUNCS_RET_TIMESTAMP",
-            Value::Int(api::SUNFUNCS_RET_TIMESTAMP),
-        )
-        .constant("SUNFUNCS_RET_STRING", Value::Int(api::SUNFUNCS_RET_STRING))
-        .constant("SUNFUNCS_RET_DOUBLE", Value::Int(api::SUNFUNCS_RET_DOUBLE));
+        for (name, v) in [
+            ("SUNFUNCS_RET_TIMESTAMP", api::SUNFUNCS_RET_TIMESTAMP),
+            ("SUNFUNCS_RET_STRING", api::SUNFUNCS_RET_STRING),
+            ("SUNFUNCS_RET_DOUBLE", api::SUNFUNCS_RET_DOUBLE),
+        ] {
+            m.constant_deprecated(
+                name,
+                Value::Int(v),
+                "8.4",
+                "as date_sunrise() and date_sunset() were deprecated in 8.1",
+            );
+        }
 
         {
             let vm = m.vm();
@@ -91,6 +152,10 @@ impl Extension for Date {
 
         functions::register(m);
         datetime::register_functions(m);
+
+        m.ini_on_modify("date.timezone", on_update_timezone);
+        m.on_request_startup(check_startup_timezone);
+        m.info(module_info);
 
         m.on_request_shutdown(|_| {
             common::reset_request_state();

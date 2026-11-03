@@ -797,13 +797,32 @@ fn hooks() -> ClassHooks {
 #[allow(clippy::too_many_lines)]
 pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
     for (name, v) in FORMATS {
-        m.constant(&format!("DATE_{name}"), Value::Str(ZStr::from(v)));
+        let cname = format!("DATE_{name}");
+        if name == "RFC7231" {
+            m.constant_deprecated(
+                &cname,
+                Value::Str(ZStr::from(v)),
+                "8.5",
+                "as this format ignores the associated timezone and always uses GMT",
+            );
+        } else {
+            m.constant(&cname, Value::Str(ZStr::from(v)));
+        }
     }
 
     let vm = m.vm();
     let mut iface = ClassBuilder::new("DateTimeInterface").flags(class_flags::INTERFACE);
     for (name, v) in FORMATS {
-        iface = iface.constant(name, Value::Str(ZStr::from(v)));
+        iface = if name == "RFC7231" {
+            iface.deprecated_constant(
+                name,
+                Value::Str(ZStr::from(v)),
+                "8.5",
+                "as this format ignores the associated timezone and always uses GMT",
+            )
+        } else {
+            iface.constant(name, Value::Str(ZStr::from(v)))
+        };
     }
     iface
         .abstract_method("format(string $format): string", acc::PUBLIC)

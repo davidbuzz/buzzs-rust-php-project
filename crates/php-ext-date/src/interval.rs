@@ -3,7 +3,7 @@
 use php_date::api::{self, DateStringIntervalError, Interval, IntervalKind};
 use php_date::{RelTime, UNSET};
 use php_runtime::{Obj, PropertyPurpose, Value, ZArray, ZStr};
-use php_vm::ext::{acc, Args, ClassBuilder, ClassHooks, ModuleBuilder, VmResult};
+use php_vm::ext::{acc, Args, ClassBuilder, ClassHooks, ModuleBuilder, PropCtx, VmResult};
 use php_vm::object;
 use php_vm::Vm;
 
@@ -261,8 +261,11 @@ fn has_property(vm: &mut Vm, o: &Obj, name: &ZStr, check_empty: bool) -> VmResul
     let Some(v) = read_property(vm, o, name)? else {
         return Ok(None);
     };
+    if vm.property_context() == PropCtx::Exists {
+        return Ok(Some(true));
+    }
     if check_empty {
-        Ok(Some(!vm.value_to_bool(&v)?))
+        Ok(Some(vm.value_to_bool(&v)?))
     } else {
         Ok(Some(!matches!(v, Value::Null)))
     }

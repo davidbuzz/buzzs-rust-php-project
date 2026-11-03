@@ -9,7 +9,7 @@ use php_date::{RelTime, Time};
 use php_runtime::{Obj, PropertyPurpose, Value, ZArray, ZStr};
 use php_vm::class::Class;
 use php_vm::ext::{
-    acc, Args, ClassBuilder, ClassHooks, ModuleBuilder, NativeIterator, Throw, VmResult,
+    acc, Args, ClassBuilder, ClassHooks, ModuleBuilder, NativeIterator, PropCtx, Throw, VmResult,
 };
 use php_vm::object;
 use php_vm::Vm;
@@ -343,11 +343,13 @@ fn get_recurrences(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     Ok(if r == 0 { Value::Null } else { Value::Int(r) })
 }
 
-fn get_iterator_m(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
-    Err(vm.throw(
-        "Error",
-        "DatePeriod::getIterator() is not supported by this build",
-    ))
+/// `zend_create_internal_iterator_zval()` over the native iterator.
+fn get_iterator_m(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let it = PeriodIter {
+        obj: a.this_obj(),
+        index: 0,
+    };
+    Ok(Value::Object(vm.new_internal_iterator(Box::new(it))?))
 }
 
 // ---------------------------------------------------------------------------
@@ -533,6 +535,9 @@ fn read_property(vm: &mut Vm, o: &Obj, name: &ZStr) -> VmResult<Option<Value>> {
     if !is_internal(name.as_bytes()) {
         return Ok(None);
     }
+    if !matches!(vm.property_context(), PropCtx::Read | PropCtx::Isset) {
+        return Err(readonly_error(vm, name));
+    }
     let p = period_of(o);
     read_one(vm, &p, name.as_bytes()).map(Some)
 }
@@ -558,14 +563,16 @@ fn has_property(vm: &mut Vm, o: &Obj, name: &ZStr, check_empty: bool) -> VmResul
     if !is_internal(name.as_bytes()) {
         return Ok(None);
     }
+    if vm.property_context() == PropCtx::Exists {
+        return Ok(Some(true));
+    }
     let p = period_of(o);
     if !p.initialized {
-        // isset() is false and empty() is true.
-        return Ok(Some(check_empty));
+        return Ok(Some(false));
     }
     let v = read_one(vm, &p, name.as_bytes())?;
     if check_empty {
-        Ok(Some(!vm.value_to_bool(&v)?))
+        Ok(Some(vm.value_to_bool(&v)?))
     } else {
         Ok(Some(!matches!(v, Value::Null)))
     }

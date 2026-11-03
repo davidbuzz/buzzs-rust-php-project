@@ -9,7 +9,7 @@ use php_vm::ext::{Args, ModuleBuilder, VmResult};
 use php_vm::Vm;
 
 use crate::common::{
-    default_tz, ini_double, last_errors, lossy, php_time, set_tz_override, to_php, E_DEPRECATED,
+    default_tz, ini_double, last_errors, lossy, php_time, set_tz_override, to_php,
 };
 
 /// The optional `?int $timestamp` argument `n`, defaulting to now.
@@ -99,13 +99,6 @@ fn checkdate(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 }
 
 fn strftime_impl(vm: &mut Vm, a: &Args, gmt: bool) -> VmResult<Value> {
-    let name = if gmt { "gmstrftime" } else { "strftime" };
-    vm.raise(
-        E_DEPRECATED,
-        &format!(
-            "Function {name}() is deprecated since 8.1, use IntlDateFormatter::format() instead"
-        ),
-    )?;
     let format = a.str(0);
     if format.is_empty() {
         return Ok(Value::Bool(false));
@@ -217,15 +210,6 @@ fn date_default_timezone_get(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
 }
 
 fn sunrise_sunset(vm: &mut Vm, a: &Args, sunset: bool) -> VmResult<Value> {
-    let name = if sunset {
-        "date_sunset"
-    } else {
-        "date_sunrise"
-    };
-    vm.raise(
-        E_DEPRECATED,
-        &format!("Function {name}() is deprecated since 8.1, use date_sun_info() instead"),
-    )?;
     let time = a.int(0);
     let retformat = if a.has(1) {
         a.int(1)
@@ -309,7 +293,9 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
         )
         .function("checkdate(int $month, int $day, int $year): bool", checkdate)
         .function("strftime(string $format, ?int $timestamp = null): string|false", strftime)
+        .deprecated("8.1", "use IntlDateFormatter::format() instead")
         .function("gmstrftime(string $format, ?int $timestamp = null): string|false", gmstrftime)
+        .deprecated("8.1", "use IntlDateFormatter::format() instead")
         .function("time(): int", time)
         .function("localtime(?int $timestamp = null, bool $associative = false): array", localtime)
         .function("getdate(?int $timestamp = null): array", getdate)
@@ -335,10 +321,12 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
             "date_sunrise(int $timestamp, int $returnFormat = SUNFUNCS_RET_STRING, ?float $latitude = null, ?float $longitude = null, ?float $zenith = null, ?float $utcOffset = null): string|int|float|false",
             date_sunrise,
         )
+        .deprecated("8.1", "use date_sun_info() instead")
         .function(
             "date_sunset(int $timestamp, int $returnFormat = SUNFUNCS_RET_STRING, ?float $latitude = null, ?float $longitude = null, ?float $zenith = null, ?float $utcOffset = null): string|int|float|false",
             date_sunset,
         )
+        .deprecated("8.1", "use date_sun_info() instead")
         .function(
             "date_sun_info(int $timestamp, float $latitude, float $longitude): array",
             date_sun_info,
