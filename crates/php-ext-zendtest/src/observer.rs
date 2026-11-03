@@ -93,7 +93,7 @@ fn show_init_backtrace(vm: &mut Vm) {
             (FrameKind::Function | FrameKind::Builtin, Some(func)) => {
                 let name = func.name().to_string_lossy();
                 match &fr.scope {
-                    Some(c) if !name.starts_with("{closure") => {
+                    Some(c) => {
                         let _ = writeln!(s, "{pad}{}::{name}()", c.name.to_string_lossy());
                     }
                     _ => {
