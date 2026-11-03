@@ -97,6 +97,7 @@ members = [
     "crates/php-ext-json",
     "crates/php-ext-streams",
     "crates/php-ext-ctype",
+    "crates/php-ext-zendtest",
     "crates/php-ext-xsl",
 ]
 
