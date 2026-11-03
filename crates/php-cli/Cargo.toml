@@ -19,6 +19,7 @@ php-ext-json = { path = "../php-ext-json" }
 php-ext-spl = { path = "../php-ext-spl" }
 php-ext-hash = { path = "../php-ext-hash" }
 php-ext-random = { path = "../php-ext-random" }
+php-ext-filter = { path = "../php-ext-filter" }
 libc = "0.2"
 
 [lints]
