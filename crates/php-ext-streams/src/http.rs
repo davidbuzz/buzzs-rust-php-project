@@ -11,6 +11,7 @@ use php_runtime::{ArrayKey, Value, ZArray, ZStr};
 use php_streams::context::{self, ContextRef, Notification};
 use php_streams::http::{self, HttpEnv};
 use php_streams::stream::Stream;
+use php_streams::value::Value as SValue;
 use php_streams::wrapper::{REPORT_ERRORS, STREAM_USE_URL};
 use php_vm::ext::{Args, ModuleBuilder, VmResult};
 use php_vm::vm::FrameKind;
@@ -97,10 +98,8 @@ impl HttpEnv for VmEnv {
         }
     }
 
-    fn enable_crypto(&self, stream: Stream, peer_name: Option<&[u8]>) -> Result<Stream, Stream> {
-        let Some(hook) = crate::xport::crypto_hooks().enable else {
-            return Err(stream);
-        };
+    fn enable_crypto(&self, stream: Stream, peer_name: Option<&[u8]>) -> Option<Stream> {
+        let hook = crate::xport::crypto_hooks().enable?;
         let cell = stream.context.as_ref().and_then(res::ctx_cell_of_lib);
         if let (Some(c), Some(p)) = (&cell, peer_name) {
             crate::streams::set_option(c, b"ssl", b"peer_name", bytes(p));
@@ -111,12 +110,20 @@ impl HttpEnv for VmEnv {
             crate::streams::unset_option(c, b"ssl", b"peer_name");
         }
         match r {
-            Some(Ok((Value::Bool(true), replacement))) => Ok(replacement.unwrap_or(stream)),
+            Some(Ok((Value::Bool(true), replacement))) => Some(match replacement {
+                Some(new) => {
+                    // The TLS stream took over the descriptor.
+                    stream.add_flags(php_streams::stream::flags::NO_CLOSE);
+                    drop(stream);
+                    new
+                }
+                None => stream,
+            }),
             Some(Err(t)) => {
                 bridge::set_pending(t);
-                Err(stream)
+                None
             }
-            _ => Err(stream),
+            _ => None,
         }
     }
 
@@ -189,50 +196,52 @@ fn get_headers(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let assoc = a.bool(1);
     let ctx = res::context_arg(vm, a, 2, false)?;
     let opts = REPORT_ERRORS | STREAM_USE_URL | http::STREAM_ONLY_GET_HEADERS;
-    let Some((mut s, _)) = crate::files::open_stream(vm, a, &url, "r", opts, ctx.as_ref())? else {
+    let Some((mut stream, _)) = crate::files::open_stream(vm, a, &url, "r", opts, ctx.as_ref())?
+    else {
         return Ok(Value::Bool(false));
     };
-    let data = s.wrapper_data.take();
-    bridge::run(vm, || s.close())?;
-    let Some(php_streams::value::Value::Array(items)) = data else {
+    let data = stream.wrapper_data.take();
+    bridge::run(vm, || stream.close())?;
+    let Some(SValue::Array(items)) = data else {
         return Ok(Value::Bool(false));
     };
     let mut out = ZArray::new();
-    for (_, h) in items {
-        let php_streams::value::Value::Str(h) = h else {
+    for (_, item) in items {
+        let SValue::Str(line) = item else {
             continue;
         };
         let colon = if assoc {
-            h.iter().position(|&c| c == b':')
+            line.iter().position(|&c| c == b':')
         } else {
             None
         };
-        let Some(p) = colon else {
-            let _ = out.make_mut().push(bytes(&h));
+        let Some(colon) = colon else {
+            let _ = out.make_mut().push(bytes(&line));
             continue;
         };
-        let mut v = p + 1;
-        while h
-            .get(v)
+        let mut start = colon + 1;
+        while line
+            .get(start)
             .is_some_and(|c| c.is_ascii_whitespace() || *c == 0x0b)
         {
-            v += 1;
+            start += 1;
         }
-        let key = ArrayKey::from_zstr(&ZStr::from(&h[..p]));
-        let value = bytes(&h[v..]);
-        let t = out.make_mut();
-        match t.get_mut(&key) {
+        let key = ArrayKey::from_zstr(&ZStr::from(&line[..colon]));
+        let value = bytes(&line[start..]);
+        let table = out.make_mut();
+        match table.get_mut(&key) {
             None => {
-                t.insert(key, value);
+                table.insert(key, value);
             }
             Some(prev) => {
+                // Repeated headers become a list.
                 if !matches!(prev, Value::Array(_)) {
-                    let mut arr = ZArray::new();
-                    let _ = arr.make_mut().push(prev.clone());
-                    *prev = Value::Array(arr);
+                    let mut list = ZArray::new();
+                    let _ = list.make_mut().push(prev.clone());
+                    *prev = Value::Array(list);
                 }
-                if let Value::Array(arr) = prev {
-                    let _ = arr.make_mut().push(value);
+                if let Value::Array(list) = prev {
+                    let _ = list.make_mut().push(value);
                 }
             }
         }

@@ -296,6 +296,7 @@ fn format_float(f: f64) -> String {
 
 /// `zend_strtod()` over the numeric prefix of `s` (leading whitespace
 /// allowed); 0.0 when there is none.
+#[allow(clippy::many_single_char_names)] // index arithmetic over one buffer
 fn str_to_double(s: &[u8]) -> f64 {
     let mut i = s
         .iter()

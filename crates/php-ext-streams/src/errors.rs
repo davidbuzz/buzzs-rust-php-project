@@ -88,7 +88,7 @@ fn enum_option(vm: &mut Vm, v: &Value, class: &str) -> Result<String, ()> {
     }
     vm.get_property(o, "name")
         .ok()
-        .and_then(|n| n.as_str().map(|s| s.to_string_lossy()))
+        .and_then(|n| n.as_str().map(php_runtime::ZStr::to_string_lossy))
         .ok_or(())
 }
 
@@ -114,6 +114,7 @@ fn emit(vm: &mut Vm, level: i64, text: &str) {
 }
 
 /// Reports the diagnostics of one operation.
+#[allow(clippy::too_many_lines)] // one dispatch over the error modes
 pub fn report(vm: &mut Vm, diags: Vec<Diagnostic>) {
     let ctx = OP_CONTEXT
         .with(|c| c.borrow_mut().take())

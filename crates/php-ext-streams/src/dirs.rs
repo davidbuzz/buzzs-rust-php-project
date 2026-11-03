@@ -107,7 +107,10 @@ fn dir_from_this(vm: &mut Vm, a: &Args) -> VmResult<(Resource, Rc<StreamCell>)> 
     let Some(this) = a.this.clone() else {
         return Err(vm.throw("Error", "Internal directory stream has been altered"));
     };
-    let Value::Resource(r) = vm.get_property(&this, "handle")?.deref() else {
+    // An uninitialized `$handle` (instance made without `dir()`) reads as
+    // "altered" (Z_DIRECTORY_HANDLE_P is not IS_RESOURCE).
+    let handle = vm.get_property(&this, "handle").map(|v| v.deref());
+    let Ok(Value::Resource(r)) = handle else {
         return Err(vm.throw("Error", "Internal directory stream has been altered"));
     };
     let cell = match res::cell_of(&r) {

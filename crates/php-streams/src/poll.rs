@@ -198,7 +198,7 @@ fn epoll_native(events: u32) -> u32 {
         (ET, libc::EPOLLET),
     ] {
         if events & bit != 0 {
-            n |= native.cast_unsigned();
+            n |= u32::from_ne_bytes(native.to_ne_bytes());
         }
     }
     n
@@ -213,7 +213,7 @@ fn epoll_from_native(native: u32) -> u32 {
         (HUP, libc::EPOLLHUP),
         (RDHUP, libc::EPOLLRDHUP),
     ] {
-        if native & n.cast_unsigned() != 0 {
+        if native & u32::from_ne_bytes(n.to_ne_bytes()) != 0 {
             e |= bit;
         }
     }
@@ -454,7 +454,7 @@ mod tests {
             assert_eq!(ctx.backend(), kind);
             let (a, mut b) = UnixStream::pair().expect("pair");
             ctx.add(a.as_raw_fd(), READ).expect("add");
-            assert_eq!(ctx.add(a.as_raw_fd(), READ).is_err(), true);
+            assert!(ctx.add(a.as_raw_fd(), READ).is_err());
             assert!(ctx.wait(4, Some(Duration::ZERO)).expect("wait").is_empty());
             b.write_all(b"x").expect("write");
             let evs = ctx.wait(4, Some(Duration::from_millis(100))).expect("wait");

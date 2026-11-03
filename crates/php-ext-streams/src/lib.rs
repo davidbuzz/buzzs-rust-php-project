@@ -7,6 +7,7 @@
 //! * [`streams`] — `streamsfuncs.c` (meta data, contexts, select);
 //! * [`userwrap`] / [`userfilter`] — user-space wrappers and filters;
 //! * [`http`] — the `http://` wrapper's VM services, `get_headers()`;
+//! * [`io_poll`] — master's `Io\\Poll` classes;
 //! * [`net`] — sockets; [`xport`] — the transport/crypto registry other
 //!   extensions (openssl) plug into; [`process`] — `popen()`.
 //!
@@ -24,6 +25,7 @@ pub mod files;
 pub mod http;
 pub mod include;
 pub mod ini;
+pub mod io_poll;
 pub mod meta;
 pub mod net;
 pub mod process;
@@ -92,6 +94,7 @@ impl Extension for Streams {
         userfilter::register(m);
         net::register(m);
         http::register(m);
+        io_poll::register(m);
         process::register(m);
         for (n, v) in CONSTANTS {
             m.constant(n, Value::Int(*v));

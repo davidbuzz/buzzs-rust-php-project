@@ -36,7 +36,7 @@ pub const STREAM_ONLY_GET_HEADERS: u32 = 0x200;
 /// `HTTP_HEADER_MAX_LOCATION_SIZE`.
 const MAX_LOCATION_SIZE: usize = 8182;
 /// `PHP_TIMEOUT_ULL_MAX / 1000000.0`.
-const TIMEOUT_MAX: f64 = 18_446_744_073_709.551_615;
+const TIMEOUT_MAX: f64 = 18_446_744_073_709.55;
 
 /// `HTTP_HEADER_*` bits of the user-supplied headers.
 mod have {
@@ -75,11 +75,8 @@ pub trait HttpEnv {
     /// `php_stream_xport_crypto_setup()` + `crypto_enable()` on a proxy
     /// tunnel; `peer_name` is set as the `ssl` context option for the
     /// handshake (when the context has none). Returns the (possibly
-    /// replaced) stream.
-    ///
-    /// # Errors
-    /// The stream (to be closed) when the handshake failed.
-    fn enable_crypto(&self, stream: Stream, peer_name: Option<&[u8]>) -> Result<Stream, Stream>;
+    /// replaced) stream, `None` (stream closed) when the handshake failed.
+    fn enable_crypto(&self, stream: Stream, peer_name: Option<&[u8]>) -> Option<Stream>;
 
     /// Throws `ValueError: f(): Provided stream context has invalid value
     /// for the "uri_parser_class" option`.
@@ -117,8 +114,9 @@ impl HttpEnv for DefaultEnv {
         }
     }
 
-    fn enable_crypto(&self, stream: Stream, _peer_name: Option<&[u8]>) -> Result<Stream, Stream> {
-        Err(stream)
+    fn enable_crypto(&self, mut stream: Stream, _peer_name: Option<&[u8]>) -> Option<Stream> {
+        stream.close();
+        None
     }
 
     fn invalid_uri_parser(&self) {}
@@ -651,17 +649,14 @@ fn proxy_tunnel(req: &mut Request<'_>, mut stream: Stream, resource: &Uri) -> Op
         .context
         .is_some_and(|c| c.borrow().get("ssl", "peer_name").is_some());
     let peer = (!has_peer_name).then_some(host.as_slice());
-    match env().enable_crypto(stream, peer) {
-        Ok(s) => Some(s),
-        Err(mut s) => {
-            req.log(
-                StreamErrorCode::SslNotSupported,
-                "Cannot connect to HTTPS server through proxy",
-            );
-            s.close();
-            None
-        }
+    let s = env().enable_crypto(stream, peer);
+    if s.is_none() {
+        req.log(
+            StreamErrorCode::SslNotSupported,
+            "Cannot connect to HTTPS server through proxy",
+        );
     }
+    s
 }
 
 /// Removes the `Proxy-Authorization` line (sent with `CONNECT`) from the
@@ -833,7 +828,8 @@ fn build_request(
         out.extend_from_slice(b"Host: ");
         out.extend_from_slice(resource.host.as_deref().unwrap_or_default());
         let port = resource.port;
-        if (t.use_ssl && port != 443 && port != 0) || (!t.use_ssl && port != 80 && port != 0) {
+        let default_port = if t.use_ssl { 443 } else { 80 };
+        if port != default_port && port != 0 {
             out.push(b':');
             out.extend_from_slice(port.to_string().as_bytes());
         }
@@ -1020,21 +1016,14 @@ fn read_status(stream: &mut Stream) -> Option<(Vec<u8>, i64)> {
     Some((line, code))
 }
 
-/// The outcome of reading the response head.
-enum Head {
-    /// Headers read; the stream is positioned at the body.
-    Ok(Stream),
-    /// The response was invalid (stream closed, error logged).
-    Failed,
-}
-
-/// Reads the header lines after the status line.
+/// Reads the header lines after the status line; `None` (stream closed,
+/// error logged) when the response is invalid.
 fn read_headers(
     req: &mut Request<'_>,
     mut stream: Stream,
     response_code: i64,
     info: &mut HeaderInfo,
-) -> Head {
+) -> Option<Stream> {
     let mut last_header: Option<Vec<u8>> = None;
     while !stream.eof() {
         let Some(mut line) = stream.get_line(None) else {
@@ -1048,7 +1037,7 @@ fn read_headers(
                         StreamErrorCode::InvalidResponse,
                         "HTTP invalid header name (cannot start with CR character)!",
                     );
-                    return Head::Failed;
+                    return None;
                 }
                 true
             }
@@ -1062,7 +1051,7 @@ fn read_headers(
             }
             if info.error {
                 stream.close();
-                return Head::Failed;
+                return None;
             }
         } else if !last_line {
             if matches!(line[0], b' ' | b'\t') {
@@ -1071,7 +1060,7 @@ fn read_headers(
                     StreamErrorCode::InvalidResponse,
                     "HTTP invalid response format (folding header at the start)!",
                 );
-                return Head::Failed;
+                return None;
             }
             header_trim(&mut line);
         }
@@ -1084,7 +1073,7 @@ fn read_headers(
         // The stream ended early: still process the last line (BC).
         let _ = parse_header(req, prev, None, response_code, info);
     }
-    Head::Ok(stream)
+    Some(stream)
 }
 
 /// `php_stream_url_wrap_http_ex()`.
@@ -1192,10 +1181,7 @@ fn open_ex(req: &mut Request<'_>, path: &[u8], redirect_max: i64, flags: u32) ->
     }
     req.headers().push(shown);
 
-    let stream = match read_headers(req, stream, response_code, &mut info) {
-        Head::Ok(s) => s,
-        Head::Failed => return None,
-    };
+    let stream = read_headers(req, stream, response_code, &mut info)?;
 
     let mut result = Some(stream);
     if !reqok || (info.location.is_some() && info.follow_location) {

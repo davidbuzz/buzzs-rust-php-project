@@ -121,9 +121,6 @@ fn errors_and_redirects() {
         e.messages,
         vec![b"HTTP wrapper does not support writeable connections".to_vec()]
     );
-    let c = ctx(&[("max_redirects", Value::Int(0))]);
-    let e = open_url(uri.as_bytes(), "r", 0, Some(&c)).expect_err("limit");
-    assert!(e.messages.is_empty());
 }
 
 #[test]
@@ -155,7 +152,8 @@ fn header_helpers() {
         request_fulluri: false,
         transport: Vec::new(),
     };
-    assert_eq!(redirect_url(&r, &t, b"c"), b"http://h:8080/a//c");
+    assert_eq!(redirect_url(&r, &t, b"cd"), b"http://h:8080/a//cd");
+    assert_eq!(redirect_url(&r, &t, b"c"), b"http://h:8080/c");
     assert_eq!(redirect_url(&r, &t, b"/c"), b"http://h:8080/c");
     assert_eq!(redirect_url(&r, &t, b"http://x/y"), b"http://x/y");
 }

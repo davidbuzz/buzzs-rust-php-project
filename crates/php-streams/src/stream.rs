@@ -279,8 +279,18 @@ pub struct WrapperInfo {
     pub is_plain_files: bool,
 }
 
+/// Called with the stream id when a stream is closed, before its handle is
+/// released (`php_io_poll_stream_notify_close()`).
+pub type CloseHook = std::rc::Rc<dyn Fn(u64)>;
+
 thread_local! {
     static NEXT_STREAM_ID: std::cell::Cell<u64> = const { std::cell::Cell::new(1) };
+    static CLOSE_HOOK: std::cell::RefCell<Option<CloseHook>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Installs the stream close hook.
+pub fn set_close_hook(hook: Option<CloseHook>) {
+    CLOSE_HOOK.with(|h| *h.borrow_mut() = hook);
 }
 
 fn fresh_id() -> u64 {
@@ -1496,6 +1506,9 @@ impl Stream {
         } else {
             0
         };
+        if let Some(hook) = CLOSE_HOOK.with(|h| h.borrow().clone()) {
+            hook(self.state.id);
+        }
         let mut ret = self.ops.close(&mut self.state, preserve);
         if ret == 0 {
             ret = flush_result;
