@@ -24,9 +24,24 @@ fn charset_cstr(name: &[u8]) -> CString {
     CString::new(&name[..end]).unwrap_or_default()
 }
 
-/// Reads the calling thread's `errno`.
+thread_local! {
+    /// The `errno` left behind by the most recent failing iconv call on
+    /// this thread.  PHP occasionally reports a stale global `errno`
+    /// ("Unknown error (%d)"); this mirrors it deterministically.
+    static LAST_ERRNO: std::cell::Cell<i32> = const { std::cell::Cell::new(0) };
+}
+
+/// Reads the calling thread's `errno` and records it as the last error.
 fn errno() -> i32 {
-    std::io::Error::last_os_error().raw_os_error().unwrap_or(0)
+    let e = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
+    LAST_ERRNO.with(|c| c.set(e));
+    e
+}
+
+/// The errno of the most recent failing iconv call on this thread (what
+/// PHP's global `errno` would most likely hold).
+pub fn last_errno() -> i32 {
+    LAST_ERRNO.with(std::cell::Cell::get)
 }
 
 impl Cd {

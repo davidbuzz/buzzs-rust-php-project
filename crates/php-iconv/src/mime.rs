@@ -296,7 +296,7 @@ pub fn mime_encode(
                 }
                 let encoded = base64_encode(&buf[..pos]);
                 if char_cnt < encoded.len() {
-                    return Err(IconvErr::Unknown(errno));
+                    return Err(IconvErr::Unknown(crate::ffi::last_errno()));
                 }
                 ret.append(&encoded);
                 char_cnt -= encoded.len();
@@ -627,7 +627,7 @@ pub fn mime_decode(s: &[u8], enc: &[u8], mode: i64, limit: Limit) -> Result<Deco
                                     scan_stat = if strict { 12 } else { 0 };
                                     break 'choice;
                                 }
-                                return Err(IconvErr::Unknown(errno));
+                                return Err(IconvErr::Unknown(crate::ffi::last_errno()));
                             };
                             err = match cd.as_mut() {
                                 Some(cd) => {
@@ -636,7 +636,7 @@ pub fn mime_decode(s: &[u8], enc: &[u8], mode: i64, limit: Limit) -> Result<Deco
                                             appendl(&mut ret, None, cd, &mut errno, limit)
                                         })
                                 }
-                                None => Err(IconvErr::Unknown(errno)),
+                                None => Err(IconvErr::Unknown(crate::ffi::last_errno())),
                             };
                             if err.is_err() {
                                 if cont {
