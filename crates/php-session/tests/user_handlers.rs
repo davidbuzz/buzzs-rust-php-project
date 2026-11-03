@@ -587,3 +587,194 @@ fn shutdown_bailout_reports_recursion() {
         ]
     );
 }
+
+/// Registers the native `SessionHandler` methods as callbacks.
+fn native_session_handler(h: &mut FakeHost) -> Value {
+    fn bytes(v: &Value) -> Vec<u8> {
+        v.as_str()
+            .map(|s| s.as_bytes().to_vec())
+            .unwrap_or_default()
+    }
+    h.on("SessionHandler::open", |h, a| {
+        let (p, n) = (bytes(&a[0]), bytes(&a[1]));
+        session_handler_open(h, &p, &n).map(|b| Some(Value::Bool(b)))
+    });
+    h.on("SessionHandler::close", |h, _| {
+        session_handler_close(h).map(|b| Some(Value::Bool(b)))
+    });
+    h.on("SessionHandler::read", |h, a| {
+        session_handler_read(h, &bytes(&a[0])).map(Some)
+    });
+    h.on("SessionHandler::write", |h, a| {
+        session_handler_write(h, &bytes(&a[0]), &bytes(&a[1])).map(|b| Some(Value::Bool(b)))
+    });
+    h.on("SessionHandler::destroy", |h, a| {
+        session_handler_destroy(h, &bytes(&a[0])).map(|b| Some(Value::Bool(b)))
+    });
+    h.on("SessionHandler::gc", |h, a| {
+        session_handler_gc(h, a[0].as_int().unwrap_or(0)).map(Some)
+    });
+    h.on("SessionHandler::create_sid", |h, _| {
+        session_handler_create_sid(h).map(Some)
+    });
+    h.on("SessionHandler::validateid", |h, a| {
+        session_handler_validate_id(h, &bytes(&a[0])).map(|b| Some(Value::Bool(b)))
+    });
+    h.object(
+        "SessionHandler",
+        &["SessionHandlerInterface", "SessionIdInterface"],
+        &[
+            "open",
+            "close",
+            "read",
+            "write",
+            "destroy",
+            "gc",
+            "create_sid",
+            "validateId",
+        ],
+    )
+}
+
+#[test]
+fn strict_mode_with_plain_session_handler() {
+    // session_strict_mode_sessionhandler.phpt
+    let dir = common::tempdir("plainsh");
+    let path = dir.to_string_lossy().into_owned();
+    let mut h = FakeHost::with_ini(&[
+        ("session.use_strict_mode", "1"),
+        ("session.use_cookies", "0"),
+        ("session.cache_limiter", ""),
+        ("session.gc_probability", "0"),
+        ("session.save_path", &path),
+    ]);
+    std::fs::write(dir.join("sess_knownfilesessionid"), b"value|s:5:\"files\";").unwrap();
+    let obj = native_session_handler(&mut h);
+    assert!(h
+        .call("session_set_save_handler", |h| session_set_save_handler(
+            h,
+            &[obj, Value::Bool(true)]
+        ))
+        .unwrap());
+    h.call("session_id", |h| {
+        session_id(h, Some(&s("knownfilesessionid")))
+    })
+    .unwrap();
+    assert!(h.call("session_start", |h| session_start(h, None)).unwrap());
+    assert_eq!(h.state.id().unwrap().as_bytes(), b"knownfilesessionid");
+    let sess = h.session();
+    assert_eq!(
+        show(sess.as_array().unwrap().get_str(b"value").unwrap()),
+        "string(5) \"files\""
+    );
+    h.call("session_write_close", |h| session_write_close(h))
+        .unwrap();
+    h.call("session_id", |h| {
+        session_id(h, Some(&s("attackerchosensessionid")))
+    })
+    .unwrap();
+    assert!(h.call("session_start", |h| session_start(h, None)).unwrap());
+    assert_ne!(h.state.id().unwrap().as_bytes(), b"attackerchosensessionid");
+    h.call("session_write_close", |h| session_write_close(h))
+        .unwrap();
+    assert!(h.take_log().is_empty(), "{:?}", h.log);
+    // gc through the parent (bug55688.phpt / bug78624.phpt).
+    assert!(h.call("session_start", |h| session_start(h, None)).unwrap());
+    let n = h.call("session_gc", |h| session_gc(h)).unwrap();
+    assert_eq!(show(&n), "int(0)");
+}
+
+#[test]
+fn failure_messages_name_the_handler() {
+    // gh7787.phpt
+    let mut h = FakeHost::with_ini(&[("session.use_strict_mode", "0")]);
+    let obj = h.object(
+        "MySessionHandler",
+        &[
+            "SessionHandlerInterface",
+            "SessionIdInterface",
+            "SessionUpdateTimestampHandlerInterface",
+        ],
+        &[
+            "open",
+            "close",
+            "read",
+            "write",
+            "destroy",
+            "gc",
+            "create_sid",
+            "validateId",
+            "updateTimestamp",
+        ],
+    );
+    for (m, v) in [
+        ("open", Value::Bool(true)),
+        ("close", Value::Bool(true)),
+        ("read", Value::string("foo|s:3:\"foo\";")),
+        ("write", Value::Bool(false)),
+        ("destroy", Value::Bool(true)),
+        ("gc", Value::Bool(true)),
+        (
+            "create_sid",
+            Value::string("0123456789abcdef0123456789abcdef01234567"),
+        ),
+        ("validateid", Value::Bool(true)),
+        ("updatetimestamp", Value::Bool(false)),
+    ] {
+        h.on(&format!("MySessionHandler::{m}"), move |_, _| {
+            Ok(Some(v.clone()))
+        });
+    }
+    h.call("session_set_save_handler", |h| {
+        session_set_save_handler(h, &[obj])
+    })
+    .unwrap();
+    for change in [true, false] {
+        assert!(h.call("session_start", |h| session_start(h, None)).unwrap());
+        if change {
+            h.set_var("foo", Value::string("bar"));
+        }
+        h.call("session_write_close", |h| session_write_close(h))
+            .unwrap();
+    }
+    assert_eq!(
+        h.take_log(),
+        vec![
+            "Warning: session_write_close(): Failed to write session data using user defined save handler. (session.save_path: , handler: MySessionHandler::write)",
+            "Warning: session_write_close(): Failed to write session data using user defined save handler. (session.save_path: , handler: MySessionHandler::updateTimestamp)",
+        ]
+    );
+}
+
+#[test]
+fn create_id_without_validate_id() {
+    // gh9583.phpt: no validateId() → session_create_id() must not loop.
+    let mut h = FakeHost::with_ini(&[("session.use_strict_mode", "1")]);
+    let obj = h.object(
+        "SessionHandlerTester",
+        &["SessionHandlerInterface"],
+        &["open", "close", "read", "write", "destroy", "gc"],
+    );
+    for (m, v) in [
+        ("open", Value::Bool(true)),
+        ("close", Value::Bool(true)),
+        ("read", Value::string("")),
+        ("write", Value::Bool(true)),
+        ("destroy", Value::Bool(true)),
+        ("gc", Value::Int(1)),
+    ] {
+        h.on(&format!("SessionHandlerTester::{m}"), move |_, _| {
+            Ok(Some(v.clone()))
+        });
+    }
+    h.call("session_set_save_handler", |h| {
+        session_set_save_handler(h, &[obj])
+    })
+    .unwrap();
+    assert!(h.call("session_start", |h| session_start(h, None)).unwrap());
+    let id = h
+        .call("session_create_id", |h| session_create_id(h, None))
+        .unwrap();
+    assert_eq!(id.as_str().unwrap().len(), 32);
+    assert_eq!(h.take_log().len(), 2);
+}
