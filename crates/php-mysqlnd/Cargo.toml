@@ -1,11 +1,15 @@
 [package]
 name = "php-mysqlnd"
+description = "Pure-Rust MySQL/MariaDB client protocol with ext/mysqlnd semantics (auth plugins, text + binary protocols, charsets, statistics)"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+php-runtime = { path = "../php-runtime" }
+php-hash = { path = "../php-hash" }
+openssl = "0.10"
 
 [lints]
 workspace = true
