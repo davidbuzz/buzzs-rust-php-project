@@ -367,10 +367,7 @@ pub trait RuntimeContext {
     /// without access to property tables: identical objects compare equal,
     /// distinct objects are uncomparable (`1`).
     fn compare_objects(&mut self, op1: &Value, op2: &Value) -> RtResult<i32> {
-        match (op1, op2) {
-            (Value::Object(a), Value::Object(b)) if Obj::ptr_eq(a, b) => Ok(0),
-            _ => Ok(1),
-        }
+        crate::ops::std_compare_objects(self, op1, op2, |_, _, _| Ok(1))
     }
 
     /// Returns the property table of an object for the given purpose

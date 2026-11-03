@@ -5,9 +5,11 @@
 //! `Zend/zend_operators.c`, `Zend/zend_strtod.c`, `ext/standard/var.c`.
 
 pub mod array;
+pub mod convert;
 pub mod error;
 pub mod float;
 pub mod numeric;
+pub mod ops;
 pub mod sort;
 pub mod string;
 pub mod value;
