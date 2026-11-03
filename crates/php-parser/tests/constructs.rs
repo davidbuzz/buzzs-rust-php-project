@@ -464,7 +464,7 @@ fn doc_comments() {
     let StmtKind::Function(func) = &program.statements[0].kind else {
         panic!()
     };
-    assert_eq!(funclass.doc_comment.as_deref(), Some(&b"/** fdoc */"[..]));
+    assert_eq!(func.doc_comment.as_deref(), Some(&b"/** fdoc */"[..]));
     let StmtKind::Class(class) = &program.statements[1].kind else {
         panic!()
     };
