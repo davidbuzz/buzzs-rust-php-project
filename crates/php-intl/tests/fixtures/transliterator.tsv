@@ -1,0 +1,449 @@
+s:create	s:Any-Latin	i:0	s:Any-Latin	s:Any-Null
+s:trans	s:Any-Latin	i:0	s:Hello World	s:Hello World	s:Hello World
+s:trans	s:Any-Latin	i:0	s:Ἀριστοτέλης	s:Aristotélēs	s:Ἀriστοτέλης
+s:trans	s:Any-Latin	i:0	s:Привет мир	s:Privet mir	s:Пriвет мир
+s:trans	s:Any-Latin	i:0	s:日本語	s:rì běn yǔ	s:日běn yǔ
+s:trans	s:Any-Latin	i:0	s:カタカナ	s:katakana	s:カtakaナ
+s:trans	s:Any-Latin	i:0	s:ひらがな	s:hiragana	s:ひragaな
+s:trans	s:Any-Latin	i:0	s:Ärger über Öl	s:Ärger über Öl	s:Ärger über Öl
+s:trans	s:Any-Latin	i:0	s:"quotes" -- dashes	s:"quotes" -- dashes	s:"quotes" -- dashes
+s:trans	s:Any-Latin	i:0	s:xéy	s:xéy	s:xéy
+s:trans	s:Any-Latin	i:0	s:é	s:é	s:!U_ILLEGAL_ARGUMENT_ERROR
+s:create	s:Any-Latin	i:1	s:Any-Null	s:Any-Null
+s:trans	s:Any-Latin	i:1	s:Hello World	s:Hello World	s:Hello World
+s:trans	s:Any-Latin	i:1	s:Ἀριστοτέλης	s:Ἀριστοτέλης	s:Ἀριστοτέλης
+s:trans	s:Any-Latin	i:1	s:Привет мир	s:Привет мир	s:Привет мир
+s:trans	s:Any-Latin	i:1	s:日本語	s:日本語	s:日本語
+s:trans	s:Any-Latin	i:1	s:カタカナ	s:カタカナ	s:カタカナ
+s:trans	s:Any-Latin	i:1	s:ひらがな	s:ひらがな	s:ひらがな
+s:trans	s:Any-Latin	i:1	s:Ärger über Öl	s:Ärger über Öl	s:Ärger über Öl
+s:trans	s:Any-Latin	i:1	s:"quotes" -- dashes	s:"quotes" -- dashes	s:"quotes" -- dashes
+s:trans	s:Any-Latin	i:1	s:xéy	s:xéy	s:xéy
+s:trans	s:Any-Latin	i:1	s:é	s:é	s:!U_ILLEGAL_ARGUMENT_ERROR
+s:create	s:Latin-ASCII	i:0	s:Latin-ASCII	s:ASCII-Latin
+s:trans	s:Latin-ASCII	i:0	s:Hello World	s:Hello World	s:Hello World
+s:trans	s:Latin-ASCII	i:0	s:Ἀριστοτέλης	s:Ἀριστοτέλης	s:Ἀριστοτέλης
+s:trans	s:Latin-ASCII	i:0	s:Привет мир	s:Привет мир	s:Привет мир
+s:trans	s:Latin-ASCII	i:0	s:日本語	s:日本語	s:日本語
+s:trans	s:Latin-ASCII	i:0	s:カタカナ	s:カタカナ	s:カタカナ
+s:trans	s:Latin-ASCII	i:0	s:ひらがな	s:ひらがな	s:ひらがな
+s:trans	s:Latin-ASCII	i:0	s:Ärger über Öl	s:Arger uber Ol	s:Ärger über Öl
+s:trans	s:Latin-ASCII	i:0	s:"quotes" -- dashes	s:"quotes" -- dashes	s:"quotes" -- dashes
+s:trans	s:Latin-ASCII	i:0	s:xéy	s:xey	s:xey
+s:trans	s:Latin-ASCII	i:0	s:é	s:e	s:!U_ILLEGAL_ARGUMENT_ERROR
+s:create	s:Latin-ASCII	i:1	s:ASCII-Latin	s:Latin-ASCII
+s:trans	s:Latin-ASCII	i:1	s:Hello World	s:Hello World	s:Hello World
+s:trans	s:Latin-ASCII	i:1	s:Ἀριστοτέλης	s:Ἀριστοτέλης	s:Ἀριστοτέλης
+s:trans	s:Latin-ASCII	i:1	s:Привет мир	s:Привет мир	s:Привет мир
+s:trans	s:Latin-ASCII	i:1	s:日本語	s:日本語	s:日本語
+s:trans	s:Latin-ASCII	i:1	s:カタカナ	s:カタカナ	s:カタカナ
+s:trans	s:Latin-ASCII	i:1	s:ひらがな	s:ひらがな	s:ひらがな
+s:trans	s:Latin-ASCII	i:1	s:Ärger über Öl	s:Ärger über Öl	s:Ärger über Öl
+s:trans	s:Latin-ASCII	i:1	s:"quotes" -- dashes	s:"quotes" -- dashes	s:"quotes" -- dashes
+s:trans	s:Latin-ASCII	i:1	s:xéy	s:xéy	s:xéy
+s:trans	s:Latin-ASCII	i:1	s:é	s:é	s:!U_ILLEGAL_ARGUMENT_ERROR
+s:create	s:Any-Latin; Latin-ASCII; Lower()	i:0	s:Any-Latin;Latin-ASCII;Lower()	s:(Lower);ASCII-Latin;Any-Null
+s:trans	s:Any-Latin; Latin-ASCII; Lower()	i:0	s:Hello World	s:hello world	s:Hello World
+s:trans	s:Any-Latin; Latin-ASCII; Lower()	i:0	s:Ἀριστοτέλης	s:aristoteles	s:Ἀriστοτέλης
+s:trans	s:Any-Latin; Latin-ASCII; Lower()	i:0	s:Привет мир	s:privet mir	s:Пriвет мир
+s:trans	s:Any-Latin; Latin-ASCII; Lower()	i:0	s:日本語	s:ri ben yu	s:日ben yu
+s:trans	s:Any-Latin; Latin-ASCII; Lower()	i:0	s:カタカナ	s:katakana	s:カtakaナ
+s:trans	s:Any-Latin; Latin-ASCII; Lower()	i:0	s:ひらがな	s:hiragana	s:ひragaな
+s:trans	s:Any-Latin; Latin-ASCII; Lower()	i:0	s:Ärger über Öl	s:arger uber ol	s:Ärger über Öl
+s:trans	s:Any-Latin; Latin-ASCII; Lower()	i:0	s:"quotes" -- dashes	s:"quotes" -- dashes	s:"quotes" -- dashes
+s:trans	s:Any-Latin; Latin-ASCII; Lower()	i:0	s:xéy	s:xey	s:xey
+s:trans	s:Any-Latin; Latin-ASCII; Lower()	i:0	s:é	s:e	s:!U_ILLEGAL_ARGUMENT_ERROR
+s:create	s:Any-Latin; Latin-ASCII; Lower()	i:1	s:(Lower);ASCII-Latin;Any-Null	s:Any-Null;Latin-ASCII;Lower()
+s:trans	s:Any-Latin; Latin-ASCII; Lower()	i:1	s:Hello World	s:Hello World	s:Hello World
+s:trans	s:Any-Latin; Latin-ASCII; Lower()	i:1	s:Ἀριστοτέλης	s:Ἀριστοτέλης	s:Ἀριστοτέλης
+s:trans	s:Any-Latin; Latin-ASCII; Lower()	i:1	s:Привет мир	s:Привет мир	s:Привет мир
+s:trans	s:Any-Latin; Latin-ASCII; Lower()	i:1	s:日本語	s:日本語	s:日本語
+s:trans	s:Any-Latin; Latin-ASCII; Lower()	i:1	s:カタカナ	s:カタカナ	s:カタカナ
+s:trans	s:Any-Latin; Latin-ASCII; Lower()	i:1	s:ひらがな	s:ひらがな	s:ひらがな
+s:trans	s:Any-Latin; Latin-ASCII; Lower()	i:1	s:Ärger über Öl	s:Ärger über Öl	s:Ärger über Öl
+s:trans	s:Any-Latin; Latin-ASCII; Lower()	i:1	s:"quotes" -- dashes	s:"quotes" -- dashes	s:"quotes" -- dashes
+s:trans	s:Any-Latin; Latin-ASCII; Lower()	i:1	s:xéy	s:xéy	s:xéy
+s:trans	s:Any-Latin; Latin-ASCII; Lower()	i:1	s:é	s:é	s:!U_ILLEGAL_ARGUMENT_ERROR
+s:create	s:Greek-Latin	i:0	s:Greek-Latin	s:Latin-Greek
+s:trans	s:Greek-Latin	i:0	s:Hello World	s:Hello World	s:Hello World
+s:trans	s:Greek-Latin	i:0	s:Ἀριστοτέλης	s:Aristotélēs	s:Ἀriστοτέλης
+s:trans	s:Greek-Latin	i:0	s:Привет мир	s:Привет мир	s:Привет мир
+s:trans	s:Greek-Latin	i:0	s:日本語	s:日本語	s:日本語
+s:trans	s:Greek-Latin	i:0	s:カタカナ	s:カタカナ	s:カタカナ
+s:trans	s:Greek-Latin	i:0	s:ひらがな	s:ひらがな	s:ひらがな
+s:trans	s:Greek-Latin	i:0	s:Ärger über Öl	s:Ärger über Öl	s:Ärger über Öl
+s:trans	s:Greek-Latin	i:0	s:"quotes" -- dashes	s:"quotes" -- dashes	s:"quotes" -- dashes
+s:trans	s:Greek-Latin	i:0	s:xéy	s:xéy	s:xéy
+s:trans	s:Greek-Latin	i:0	s:é	s:é	s:!U_ILLEGAL_ARGUMENT_ERROR
+s:create	s:Greek-Latin	i:1	s:Latin-Greek	s:Greek-Latin
+s:trans	s:Greek-Latin	i:1	s:Hello World	s:Ἑλλο Βορλδ	s:Hἐλlo World
+s:trans	s:Greek-Latin	i:1	s:Ἀριστοτέλης	s:Ἀριστοτέλης	s:Ἀριστοτέλης
+s:trans	s:Greek-Latin	i:1	s:Привет мир	s:Привет мир	s:Привет мир
+s:trans	s:Greek-Latin	i:1	s:日本語	s:日本語	s:日本語
+s:trans	s:Greek-Latin	i:1	s:カタカナ	s:カタカナ	s:カタカナ
+s:trans	s:Greek-Latin	i:1	s:ひらがな	s:ひらがな	s:ひらがな
+s:trans	s:Greek-Latin	i:1	s:Ärger über Öl	s:Ἀ̈ργερ ὐ̈βερ Ὀ̈λ	s:Äῤγer über Öl
+s:trans	s:Greek-Latin	i:1	s:"quotes" -- dashes	s:"κυοτες" -- δασἑς	s:"κυotes" -- dashes
+s:trans	s:Greek-Latin	i:1	s:xéy	s:ξέυ	s:xἔυ
+s:trans	s:Greek-Latin	i:1	s:é	s:ἔ	s:!U_ILLEGAL_ARGUMENT_ERROR
+s:create	s:Latin-Greek	i:0	s:Latin-Greek	s:Greek-Latin
+s:trans	s:Latin-Greek	i:0	s:Hello World	s:Ἑλλο Βορλδ	s:Hἐλlo World
+s:trans	s:Latin-Greek	i:0	s:Ἀριστοτέλης	s:Ἀριστοτέλης	s:Ἀριστοτέλης
+s:trans	s:Latin-Greek	i:0	s:Привет мир	s:Привет мир	s:Привет мир
+s:trans	s:Latin-Greek	i:0	s:日本語	s:日本語	s:日本語
+s:trans	s:Latin-Greek	i:0	s:カタカナ	s:カタカナ	s:カタカナ
+s:trans	s:Latin-Greek	i:0	s:ひらがな	s:ひらがな	s:ひらがな
+s:trans	s:Latin-Greek	i:0	s:Ärger über Öl	s:Ἀ̈ργερ ὐ̈βερ Ὀ̈λ	s:Äῤγer über Öl
+s:trans	s:Latin-Greek	i:0	s:"quotes" -- dashes	s:"κυοτες" -- δασἑς	s:"κυotes" -- dashes
+s:trans	s:Latin-Greek	i:0	s:xéy	s:ξέυ	s:xἔυ
+s:trans	s:Latin-Greek	i:0	s:é	s:ἔ	s:!U_ILLEGAL_ARGUMENT_ERROR
+s:create	s:Latin-Greek	i:1	s:Greek-Latin	s:Latin-Greek
+s:trans	s:Latin-Greek	i:1	s:Hello World	s:Hello World	s:Hello World
+s:trans	s:Latin-Greek	i:1	s:Ἀριστοτέλης	s:Aristotélēs	s:Ἀriστοτέλης
+s:trans	s:Latin-Greek	i:1	s:Привет мир	s:Привет мир	s:Привет мир
+s:trans	s:Latin-Greek	i:1	s:日本語	s:日本語	s:日本語
+s:trans	s:Latin-Greek	i:1	s:カタカナ	s:カタカナ	s:カタカナ
+s:trans	s:Latin-Greek	i:1	s:ひらがな	s:ひらがな	s:ひらがな
+s:trans	s:Latin-Greek	i:1	s:Ärger über Öl	s:Ärger über Öl	s:Ärger über Öl
+s:trans	s:Latin-Greek	i:1	s:"quotes" -- dashes	s:"quotes" -- dashes	s:"quotes" -- dashes
+s:trans	s:Latin-Greek	i:1	s:xéy	s:xéy	s:xéy
+s:trans	s:Latin-Greek	i:1	s:é	s:é	s:!U_ILLEGAL_ARGUMENT_ERROR
+s:create	s:Cyrillic-Latin	i:0	s:Cyrillic-Latin	s:Latin-Cyrillic
+s:trans	s:Cyrillic-Latin	i:0	s:Hello World	s:Hello World	s:Hello World
+s:trans	s:Cyrillic-Latin	i:0	s:Ἀριστοτέλης	s:Ἀριστοτέλης	s:Ἀριστοτέλης
+s:trans	s:Cyrillic-Latin	i:0	s:Привет мир	s:Privet mir	s:Пriвет мир
+s:trans	s:Cyrillic-Latin	i:0	s:日本語	s:日本語	s:日本語
+s:trans	s:Cyrillic-Latin	i:0	s:カタカナ	s:カタカナ	s:カタカナ
+s:trans	s:Cyrillic-Latin	i:0	s:ひらがな	s:ひらがな	s:ひらがな
+s:trans	s:Cyrillic-Latin	i:0	s:Ärger über Öl	s:Ärger über Öl	s:Ärger über Öl
+s:trans	s:Cyrillic-Latin	i:0	s:"quotes" -- dashes	s:"quotes" -- dashes	s:"quotes" -- dashes
+s:trans	s:Cyrillic-Latin	i:0	s:xéy	s:xéy	s:xéy
+s:trans	s:Cyrillic-Latin	i:0	s:é	s:é	s:!U_ILLEGAL_ARGUMENT_ERROR
+s:create	s:Cyrillic-Latin	i:1	s:Latin-Cyrillic	s:Cyrillic-Latin
+s:trans	s:Cyrillic-Latin	i:1	s:Hello World	s:Хелло Уорлд	s:Hелlo World
+s:trans	s:Cyrillic-Latin	i:1	s:Ἀριστοτέλης	s:Ἀριστοτέλης	s:Ἀριστοτέλης
+s:trans	s:Cyrillic-Latin	i:1	s:Привет мир	s:Привет мир	s:Привет мир
+s:trans	s:Cyrillic-Latin	i:1	s:日本語	s:日本語	s:日本語
+s:trans	s:Cyrillic-Latin	i:1	s:カタカナ	s:カタカナ	s:カタカナ
+s:trans	s:Cyrillic-Latin	i:1	s:ひらがな	s:ひらがな	s:ひらがな
+s:trans	s:Cyrillic-Latin	i:1	s:Ärger über Öl	s:Ӓргер үбер Өл	s:Äргer über Öl
+s:trans	s:Cyrillic-Latin	i:1	s:"quotes" -- dashes	s:"куотес" -- дасхес	s:"куotes" -- dashes
+s:trans	s:Cyrillic-Latin	i:1	s:xéy	s:ксэы	s:xэы
+s:trans	s:Cyrillic-Latin	i:1	s:é	s:э	s:!U_ILLEGAL_ARGUMENT_ERROR
+s:create	s:Upper	i:0	s:Upper	s:Lower
+s:trans	s:Upper	i:0	s:Hello World	s:HELLO WORLD	s:HELlo World
+s:trans	s:Upper	i:0	s:Ἀριστοτέλης	s:ἈΡΙΣΤΟΤΈΛΗΣ	s:ἈΡΙστοτέλης
+s:trans	s:Upper	i:0	s:Привет мир	s:ПРИВЕТ МИР	s:ПРИвет мир
+s:trans	s:Upper	i:0	s:日本語	s:日本語	s:日本語
+s:trans	s:Upper	i:0	s:カタカナ	s:カタカナ	s:カタカナ
+s:trans	s:Upper	i:0	s:ひらがな	s:ひらがな	s:ひらがな
+s:trans	s:Upper	i:0	s:Ärger über Öl	s:ÄRGER ÜBER ÖL	s:ÄRGer über Öl
+s:trans	s:Upper	i:0	s:"quotes" -- dashes	s:"QUOTES" -- DASHES	s:"QUotes" -- dashes
+s:trans	s:Upper	i:0	s:xéy	s:XÉY	s:xÉY
+s:trans	s:Upper	i:0	s:é	s:É	s:!U_ILLEGAL_ARGUMENT_ERROR
+s:create	s:Upper	i:1	s:Lower	s:Upper
+s:trans	s:Upper	i:1	s:Hello World	s:hello world	s:Hello World
+s:trans	s:Upper	i:1	s:Ἀριστοτέλης	s:ἀριστοτέλης	s:Ἀριστοτέλης
+s:trans	s:Upper	i:1	s:Привет мир	s:привет мир	s:Привет мир
+s:trans	s:Upper	i:1	s:日本語	s:日本語	s:日本語
+s:trans	s:Upper	i:1	s:カタカナ	s:カタカナ	s:カタカナ
+s:trans	s:Upper	i:1	s:ひらがな	s:ひらがな	s:ひらがな
+s:trans	s:Upper	i:1	s:Ärger über Öl	s:ärger über öl	s:Ärger über Öl
+s:trans	s:Upper	i:1	s:"quotes" -- dashes	s:"quotes" -- dashes	s:"quotes" -- dashes
+s:trans	s:Upper	i:1	s:xéy	s:xéy	s:xéy
+s:trans	s:Upper	i:1	s:é	s:é	s:!U_ILLEGAL_ARGUMENT_ERROR
+s:create	s:Lower	i:0	s:Lower	s:Upper
+s:trans	s:Lower	i:0	s:Hello World	s:hello world	s:Hello World
+s:trans	s:Lower	i:0	s:Ἀριστοτέλης	s:ἀριστοτέλης	s:Ἀριστοτέλης
+s:trans	s:Lower	i:0	s:Привет мир	s:привет мир	s:Привет мир
+s:trans	s:Lower	i:0	s:日本語	s:日本語	s:日本語
+s:trans	s:Lower	i:0	s:カタカナ	s:カタカナ	s:カタカナ
+s:trans	s:Lower	i:0	s:ひらがな	s:ひらがな	s:ひらがな
+s:trans	s:Lower	i:0	s:Ärger über Öl	s:ärger über öl	s:Ärger über Öl
+s:trans	s:Lower	i:0	s:"quotes" -- dashes	s:"quotes" -- dashes	s:"quotes" -- dashes
+s:trans	s:Lower	i:0	s:xéy	s:xéy	s:xéy
+s:trans	s:Lower	i:0	s:é	s:é	s:!U_ILLEGAL_ARGUMENT_ERROR
+s:create	s:Lower	i:1	s:Upper	s:Lower
+s:trans	s:Lower	i:1	s:Hello World	s:HELLO WORLD	s:HELlo World
+s:trans	s:Lower	i:1	s:Ἀριστοτέλης	s:ἈΡΙΣΤΟΤΈΛΗΣ	s:ἈΡΙστοτέλης
+s:trans	s:Lower	i:1	s:Привет мир	s:ПРИВЕТ МИР	s:ПРИвет мир
+s:trans	s:Lower	i:1	s:日本語	s:日本語	s:日本語
+s:trans	s:Lower	i:1	s:カタカナ	s:カタカナ	s:カタカナ
+s:trans	s:Lower	i:1	s:ひらがな	s:ひらがな	s:ひらがな
+s:trans	s:Lower	i:1	s:Ärger über Öl	s:ÄRGER ÜBER ÖL	s:ÄRGer über Öl
+s:trans	s:Lower	i:1	s:"quotes" -- dashes	s:"QUOTES" -- DASHES	s:"QUotes" -- dashes
+s:trans	s:Lower	i:1	s:xéy	s:XÉY	s:xÉY
+s:trans	s:Lower	i:1	s:é	s:É	s:!U_ILLEGAL_ARGUMENT_ERROR
+s:create	s:Title	i:0	s:Title	s:Lower
+s:trans	s:Title	i:0	s:Hello World	s:Hello World	s:HEllo World
+s:trans	s:Title	i:0	s:Ἀριστοτέλης	s:Ἀριστοτέλης	s:ἈΡιστοτέλης
+s:trans	s:Title	i:0	s:Привет мир	s:Привет Мир	s:ПРивет мир
+s:trans	s:Title	i:0	s:日本語	s:日本語	s:日本語
+s:trans	s:Title	i:0	s:カタカナ	s:カタカナ	s:カタカナ
+s:trans	s:Title	i:0	s:ひらがな	s:ひらがな	s:ひらがな
+s:trans	s:Title	i:0	s:Ärger über Öl	s:Ärger Über Öl	s:ÄRger über Öl
+s:trans	s:Title	i:0	s:"quotes" -- dashes	s:"Quotes" -- Dashes	s:"Quotes" -- dashes
+s:trans	s:Title	i:0	s:xéy	s:Xéy	s:xÉy
+s:trans	s:Title	i:0	s:é	s:É	s:!U_ILLEGAL_ARGUMENT_ERROR
+s:create	s:Title	i:1	s:Lower	s:Upper
+s:trans	s:Title	i:1	s:Hello World	s:hello world	s:Hello World
+s:trans	s:Title	i:1	s:Ἀριστοτέλης	s:ἀριστοτέλης	s:Ἀριστοτέλης
+s:trans	s:Title	i:1	s:Привет мир	s:привет мир	s:Привет мир
+s:trans	s:Title	i:1	s:日本語	s:日本語	s:日本語
+s:trans	s:Title	i:1	s:カタカナ	s:カタカナ	s:カタカナ
+s:trans	s:Title	i:1	s:ひらがな	s:ひらがな	s:ひらがな
+s:trans	s:Title	i:1	s:Ärger über Öl	s:ärger über öl	s:Ärger über Öl
+s:trans	s:Title	i:1	s:"quotes" -- dashes	s:"quotes" -- dashes	s:"quotes" -- dashes
+s:trans	s:Title	i:1	s:xéy	s:xéy	s:xéy
+s:trans	s:Title	i:1	s:é	s:é	s:!U_ILLEGAL_ARGUMENT_ERROR
+s:create	s:NFD; [:Nonspacing Mark:] Remove; NFC	i:0	s:NFD;[:Nonspacing Mark:] Remove;NFC	s:NFD;[:Nonspacing Mark:] Null;NFC
+s:trans	s:NFD; [:Nonspacing Mark:] Remove; NFC	i:0	s:Hello World	s:Hello World	s:Hello World
+s:trans	s:NFD; [:Nonspacing Mark:] Remove; NFC	i:0	s:Ἀριστοτέλης	s:Αριστοτελης	s:Ἀριστοτέλης
+s:trans	s:NFD; [:Nonspacing Mark:] Remove; NFC	i:0	s:Привет мир	s:Привет мир	s:Привет мир
+s:trans	s:NFD; [:Nonspacing Mark:] Remove; NFC	i:0	s:日本語	s:日本語	s:日本語
+s:trans	s:NFD; [:Nonspacing Mark:] Remove; NFC	i:0	s:カタカナ	s:カタカナ	s:カタカナ
+s:trans	s:NFD; [:Nonspacing Mark:] Remove; NFC	i:0	s:ひらがな	s:ひらかな	s:ひらかな
+s:trans	s:NFD; [:Nonspacing Mark:] Remove; NFC	i:0	s:Ärger über Öl	s:Arger uber Ol	s:Ärger über Öl
+s:trans	s:NFD; [:Nonspacing Mark:] Remove; NFC	i:0	s:"quotes" -- dashes	s:"quotes" -- dashes	s:"quotes" -- dashes
+s:trans	s:NFD; [:Nonspacing Mark:] Remove; NFC	i:0	s:xéy	s:xey	s:xey
+s:trans	s:NFD; [:Nonspacing Mark:] Remove; NFC	i:0	s:é	s:e	s:!U_ILLEGAL_ARGUMENT_ERROR
+s:create	s:NFD; [:Nonspacing Mark:] Remove; NFC	i:1	s:NFD;[:Nonspacing Mark:] Null;NFC	s:NFD;[:Nonspacing Mark:] Null;NFC
+s:trans	s:NFD; [:Nonspacing Mark:] Remove; NFC	i:1	s:Hello World	s:Hello World	s:Hello World
+s:trans	s:NFD; [:Nonspacing Mark:] Remove; NFC	i:1	s:Ἀριστοτέλης	s:Ἀριστοτέλης	s:Ἀριστοτέλης
+s:trans	s:NFD; [:Nonspacing Mark:] Remove; NFC	i:1	s:Привет мир	s:Привет мир	s:Привет мир
+s:trans	s:NFD; [:Nonspacing Mark:] Remove; NFC	i:1	s:日本語	s:日本語	s:日本語
+s:trans	s:NFD; [:Nonspacing Mark:] Remove; NFC	i:1	s:カタカナ	s:カタカナ	s:カタカナ
+s:trans	s:NFD; [:Nonspacing Mark:] Remove; NFC	i:1	s:ひらがな	s:ひらがな	s:ひらがな
+s:trans	s:NFD; [:Nonspacing Mark:] Remove; NFC	i:1	s:Ärger über Öl	s:Ärger über Öl	s:Ärger über Öl
+s:trans	s:NFD; [:Nonspacing Mark:] Remove; NFC	i:1	s:"quotes" -- dashes	s:"quotes" -- dashes	s:"quotes" -- dashes
+s:trans	s:NFD; [:Nonspacing Mark:] Remove; NFC	i:1	s:xéy	s:xéy	s:xéy
+s:trans	s:NFD; [:Nonspacing Mark:] Remove; NFC	i:1	s:é	s:é	s:!U_ILLEGAL_ARGUMENT_ERROR
+s:create	s:Hex-Any	i:0	s:Hex-Any	s:Any-Hex
+s:trans	s:Hex-Any	i:0	s:Hello World	s:Hello World	s:Hello World
+s:trans	s:Hex-Any	i:0	s:Ἀριστοτέλης	s:Ἀριστοτέλης	s:Ἀριστοτέλης
+s:trans	s:Hex-Any	i:0	s:Привет мир	s:Привет мир	s:Привет мир
+s:trans	s:Hex-Any	i:0	s:日本語	s:日本語	s:日本語
+s:trans	s:Hex-Any	i:0	s:カタカナ	s:カタカナ	s:カタカナ
+s:trans	s:Hex-Any	i:0	s:ひらがな	s:ひらがな	s:ひらがな
+s:trans	s:Hex-Any	i:0	s:Ärger über Öl	s:Ärger über Öl	s:Ärger über Öl
+s:trans	s:Hex-Any	i:0	s:"quotes" -- dashes	s:"quotes" -- dashes	s:"quotes" -- dashes
+s:trans	s:Hex-Any	i:0	s:xéy	s:xéy	s:xéy
+s:trans	s:Hex-Any	i:0	s:é	s:é	s:!U_ILLEGAL_ARGUMENT_ERROR
+s:create	s:Hex-Any	i:1	s:Any-Hex	s:Hex-Any
+s:trans	s:Hex-Any	i:1	s:Hello World	s:\\u0048\\u0065\\u006C\\u006C\\u006F\\u0020\\u0057\\u006F\\u0072\\u006C\\u0064	s:H\\u0065\\u006Clo World
+s:trans	s:Hex-Any	i:1	s:Ἀριστοτέλης	s:\\u1F08\\u03C1\\u03B9\\u03C3\\u03C4\\u03BF\\u03C4\\u03AD\\u03BB\\u03B7\\u03C2	s:Ἀ\\u03C1\\u03B9στοτέλης
+s:trans	s:Hex-Any	i:1	s:Привет мир	s:\\u041F\\u0440\\u0438\\u0432\\u0435\\u0442\\u0020\\u043C\\u0438\\u0440	s:П\\u0440\\u0438вет мир
+s:trans	s:Hex-Any	i:1	s:日本語	s:\\u65E5\\u672C\\u8A9E	s:日\\u672C\\u8A9E
+s:trans	s:Hex-Any	i:1	s:カタカナ	s:\\u30AB\\u30BF\\u30AB\\u30CA	s:カ\\u30BF\\u30ABナ
+s:trans	s:Hex-Any	i:1	s:ひらがな	s:\\u3072\\u3089\\u304C\\u306A	s:ひ\\u3089\\u304Cな
+s:trans	s:Hex-Any	i:1	s:Ärger über Öl	s:\\u00C4\\u0072\\u0067\\u0065\\u0072\\u0020\\u00FC\\u0062\\u0065\\u0072\\u0020\\u00D6\\u006C	s:Ä\\u0072\\u0067er über Öl
+s:trans	s:Hex-Any	i:1	s:"quotes" -- dashes	s:\\u0022\\u0071\\u0075\\u006F\\u0074\\u0065\\u0073\\u0022\\u0020\\u002D\\u002D\\u0020\\u0064\\u0061\\u0073\\u0068\\u0065\\u0073	s:"\\u0071\\u0075otes" -- dashes
+s:trans	s:Hex-Any	i:1	s:xéy	s:\\u0078\\u00E9\\u0079	s:x\\u00E9\\u0079
+s:trans	s:Hex-Any	i:1	s:é	s:\\u00E9	s:!U_ILLEGAL_ARGUMENT_ERROR
+s:create	s:Any-Hex	i:0	s:Any-Hex	s:Hex-Any
+s:trans	s:Any-Hex	i:0	s:Hello World	s:\\u0048\\u0065\\u006C\\u006C\\u006F\\u0020\\u0057\\u006F\\u0072\\u006C\\u0064	s:H\\u0065\\u006Clo World
+s:trans	s:Any-Hex	i:0	s:Ἀριστοτέλης	s:\\u1F08\\u03C1\\u03B9\\u03C3\\u03C4\\u03BF\\u03C4\\u03AD\\u03BB\\u03B7\\u03C2	s:Ἀ\\u03C1\\u03B9στοτέλης
+s:trans	s:Any-Hex	i:0	s:Привет мир	s:\\u041F\\u0440\\u0438\\u0432\\u0435\\u0442\\u0020\\u043C\\u0438\\u0440	s:П\\u0440\\u0438вет мир
+s:trans	s:Any-Hex	i:0	s:日本語	s:\\u65E5\\u672C\\u8A9E	s:日\\u672C\\u8A9E
+s:trans	s:Any-Hex	i:0	s:カタカナ	s:\\u30AB\\u30BF\\u30AB\\u30CA	s:カ\\u30BF\\u30ABナ
+s:trans	s:Any-Hex	i:0	s:ひらがな	s:\\u3072\\u3089\\u304C\\u306A	s:ひ\\u3089\\u304Cな
+s:trans	s:Any-Hex	i:0	s:Ärger über Öl	s:\\u00C4\\u0072\\u0067\\u0065\\u0072\\u0020\\u00FC\\u0062\\u0065\\u0072\\u0020\\u00D6\\u006C	s:Ä\\u0072\\u0067er über Öl
+s:trans	s:Any-Hex	i:0	s:"quotes" -- dashes	s:\\u0022\\u0071\\u0075\\u006F\\u0074\\u0065\\u0073\\u0022\\u0020\\u002D\\u002D\\u0020\\u0064\\u0061\\u0073\\u0068\\u0065\\u0073	s:"\\u0071\\u0075otes" -- dashes
+s:trans	s:Any-Hex	i:0	s:xéy	s:\\u0078\\u00E9\\u0079	s:x\\u00E9\\u0079
+s:trans	s:Any-Hex	i:0	s:é	s:\\u00E9	s:!U_ILLEGAL_ARGUMENT_ERROR
+s:create	s:Any-Hex	i:1	s:Hex-Any	s:Any-Hex
+s:trans	s:Any-Hex	i:1	s:Hello World	s:Hello World	s:Hello World
+s:trans	s:Any-Hex	i:1	s:Ἀριστοτέλης	s:Ἀριστοτέλης	s:Ἀριστοτέλης
+s:trans	s:Any-Hex	i:1	s:Привет мир	s:Привет мир	s:Привет мир
+s:trans	s:Any-Hex	i:1	s:日本語	s:日本語	s:日本語
+s:trans	s:Any-Hex	i:1	s:カタカナ	s:カタカナ	s:カタカナ
+s:trans	s:Any-Hex	i:1	s:ひらがな	s:ひらがな	s:ひらがな
+s:trans	s:Any-Hex	i:1	s:Ärger über Öl	s:Ärger über Öl	s:Ärger über Öl
+s:trans	s:Any-Hex	i:1	s:"quotes" -- dashes	s:"quotes" -- dashes	s:"quotes" -- dashes
+s:trans	s:Any-Hex	i:1	s:xéy	s:xéy	s:xéy
+s:trans	s:Any-Hex	i:1	s:é	s:é	s:!U_ILLEGAL_ARGUMENT_ERROR
+s:create	s:Han-Latin	i:0	s:Han-Latin	s:!U_INVALID_ID
+s:trans	s:Han-Latin	i:0	s:Hello World	s:Hello World	s:Hello World
+s:trans	s:Han-Latin	i:0	s:Ἀριστοτέλης	s:Ἀριστοτέλης	s:Ἀριστοτέλης
+s:trans	s:Han-Latin	i:0	s:Привет мир	s:Привет мир	s:Привет мир
+s:trans	s:Han-Latin	i:0	s:日本語	s:rì běn yǔ	s:日běn yǔ
+s:trans	s:Han-Latin	i:0	s:カタカナ	s:カタカナ	s:カタカナ
+s:trans	s:Han-Latin	i:0	s:ひらがな	s:ひらがな	s:ひらがな
+s:trans	s:Han-Latin	i:0	s:Ärger über Öl	s:Ärger über Öl	s:Ärger über Öl
+s:trans	s:Han-Latin	i:0	s:"quotes" -- dashes	s:"quotes" -- dashes	s:"quotes" -- dashes
+s:trans	s:Han-Latin	i:0	s:xéy	s:xéy	s:xéy
+s:trans	s:Han-Latin	i:0	s:é	s:é	s:!U_ILLEGAL_ARGUMENT_ERROR
+s:create	s:Han-Latin	i:1	s:!U_INVALID_ID
+s:create	s:Katakana-Hiragana	i:0	s:Katakana-Hiragana	s:Hiragana-Katakana
+s:trans	s:Katakana-Hiragana	i:0	s:Hello World	s:Hello World	s:Hello World
+s:trans	s:Katakana-Hiragana	i:0	s:Ἀριστοτέλης	s:Ἀριστοτέλης	s:Ἀριστοτέλης
+s:trans	s:Katakana-Hiragana	i:0	s:Привет мир	s:Привет мир	s:Привет мир
+s:trans	s:Katakana-Hiragana	i:0	s:日本語	s:日本語	s:日本語
+s:trans	s:Katakana-Hiragana	i:0	s:カタカナ	s:かたかな	s:カたかナ
+s:trans	s:Katakana-Hiragana	i:0	s:ひらがな	s:ひらがな	s:ひらがな
+s:trans	s:Katakana-Hiragana	i:0	s:Ärger über Öl	s:Ärger über Öl	s:Ärger über Öl
+s:trans	s:Katakana-Hiragana	i:0	s:"quotes" -- dashes	s:"quotes" -- dashes	s:"quotes" -- dashes
+s:trans	s:Katakana-Hiragana	i:0	s:xéy	s:xéy	s:xéy
+s:trans	s:Katakana-Hiragana	i:0	s:é	s:é	s:!U_ILLEGAL_ARGUMENT_ERROR
+s:create	s:Katakana-Hiragana	i:1	s:Hiragana-Katakana	s:Katakana-Hiragana
+s:trans	s:Katakana-Hiragana	i:1	s:Hello World	s:Hello World	s:Hello World
+s:trans	s:Katakana-Hiragana	i:1	s:Ἀριστοτέλης	s:Ἀριστοτέλης	s:Ἀριστοτέλης
+s:trans	s:Katakana-Hiragana	i:1	s:Привет мир	s:Привет мир	s:Привет мир
+s:trans	s:Katakana-Hiragana	i:1	s:日本語	s:日本語	s:日本語
+s:trans	s:Katakana-Hiragana	i:1	s:カタカナ	s:カタカナ	s:カタカナ
+s:trans	s:Katakana-Hiragana	i:1	s:ひらがな	s:ヒラガナ	s:ひラガな
+s:trans	s:Katakana-Hiragana	i:1	s:Ärger über Öl	s:Ärger über Öl	s:Ärger über Öl
+s:trans	s:Katakana-Hiragana	i:1	s:"quotes" -- dashes	s:"quotes" -- dashes	s:"quotes" -- dashes
+s:trans	s:Katakana-Hiragana	i:1	s:xéy	s:xéy	s:xéy
+s:trans	s:Katakana-Hiragana	i:1	s:é	s:é	s:!U_ILLEGAL_ARGUMENT_ERROR
+s:create	s:Hiragana-Katakana	i:0	s:Hiragana-Katakana	s:Katakana-Hiragana
+s:trans	s:Hiragana-Katakana	i:0	s:Hello World	s:Hello World	s:Hello World
+s:trans	s:Hiragana-Katakana	i:0	s:Ἀριστοτέλης	s:Ἀριστοτέλης	s:Ἀριστοτέλης
+s:trans	s:Hiragana-Katakana	i:0	s:Привет мир	s:Привет мир	s:Привет мир
+s:trans	s:Hiragana-Katakana	i:0	s:日本語	s:日本語	s:日本語
+s:trans	s:Hiragana-Katakana	i:0	s:カタカナ	s:カタカナ	s:カタカナ
+s:trans	s:Hiragana-Katakana	i:0	s:ひらがな	s:ヒラガナ	s:ひラガな
+s:trans	s:Hiragana-Katakana	i:0	s:Ärger über Öl	s:Ärger über Öl	s:Ärger über Öl
+s:trans	s:Hiragana-Katakana	i:0	s:"quotes" -- dashes	s:"quotes" -- dashes	s:"quotes" -- dashes
+s:trans	s:Hiragana-Katakana	i:0	s:xéy	s:xéy	s:xéy
+s:trans	s:Hiragana-Katakana	i:0	s:é	s:é	s:!U_ILLEGAL_ARGUMENT_ERROR
+s:create	s:Hiragana-Katakana	i:1	s:Katakana-Hiragana	s:Hiragana-Katakana
+s:trans	s:Hiragana-Katakana	i:1	s:Hello World	s:Hello World	s:Hello World
+s:trans	s:Hiragana-Katakana	i:1	s:Ἀριστοτέλης	s:Ἀριστοτέλης	s:Ἀριστοτέλης
+s:trans	s:Hiragana-Katakana	i:1	s:Привет мир	s:Привет мир	s:Привет мир
+s:trans	s:Hiragana-Katakana	i:1	s:日本語	s:日本語	s:日本語
+s:trans	s:Hiragana-Katakana	i:1	s:カタカナ	s:かたかな	s:カたかナ
+s:trans	s:Hiragana-Katakana	i:1	s:ひらがな	s:ひらがな	s:ひらがな
+s:trans	s:Hiragana-Katakana	i:1	s:Ärger über Öl	s:Ärger über Öl	s:Ärger über Öl
+s:trans	s:Hiragana-Katakana	i:1	s:"quotes" -- dashes	s:"quotes" -- dashes	s:"quotes" -- dashes
+s:trans	s:Hiragana-Katakana	i:1	s:xéy	s:xéy	s:xéy
+s:trans	s:Hiragana-Katakana	i:1	s:é	s:é	s:!U_ILLEGAL_ARGUMENT_ERROR
+s:create	s:de-ASCII	i:0	s:de-ASCII	s:ASCII-de
+s:trans	s:de-ASCII	i:0	s:Hello World	s:Hello World	s:Hello World
+s:trans	s:de-ASCII	i:0	s:Ἀριστοτέλης	s:Ἀριστοτέλης	s:Ἀριστοτέλης
+s:trans	s:de-ASCII	i:0	s:Привет мир	s:Привет мир	s:Привет мир
+s:trans	s:de-ASCII	i:0	s:日本語	s:日本語	s:日本語
+s:trans	s:de-ASCII	i:0	s:カタカナ	s:カタカナ	s:カタカナ
+s:trans	s:de-ASCII	i:0	s:ひらがな	s:ひらがな	s:ひらがな
+s:trans	s:de-ASCII	i:0	s:Ärger über Öl	s:Aerger ueber Oel	s:Ärger über Öl
+s:trans	s:de-ASCII	i:0	s:"quotes" -- dashes	s:"quotes" -- dashes	s:"quotes" -- dashes
+s:trans	s:de-ASCII	i:0	s:xéy	s:xey	s:xey
+s:trans	s:de-ASCII	i:0	s:é	s:e	s:!U_ILLEGAL_ARGUMENT_ERROR
+s:create	s:de-ASCII	i:1	s:ASCII-de	s:de-ASCII
+s:trans	s:de-ASCII	i:1	s:Hello World	s:Hello World	s:Hello World
+s:trans	s:de-ASCII	i:1	s:Ἀριστοτέλης	s:Ἀριστοτέλης	s:Ἀριστοτέλης
+s:trans	s:de-ASCII	i:1	s:Привет мир	s:Привет мир	s:Привет мир
+s:trans	s:de-ASCII	i:1	s:日本語	s:日本語	s:日本語
+s:trans	s:de-ASCII	i:1	s:カタカナ	s:カタカナ	s:カタカナ
+s:trans	s:de-ASCII	i:1	s:ひらがな	s:ひらがな	s:ひらがな
+s:trans	s:de-ASCII	i:1	s:Ärger über Öl	s:Ärger über Öl	s:Ärger über Öl
+s:trans	s:de-ASCII	i:1	s:"quotes" -- dashes	s:"quotes" -- dashes	s:"quotes" -- dashes
+s:trans	s:de-ASCII	i:1	s:xéy	s:xéy	s:xéy
+s:trans	s:de-ASCII	i:1	s:é	s:é	s:!U_ILLEGAL_ARGUMENT_ERROR
+s:create	s:Any-Publishing	i:0	s:Any-Publishing	s:Publishing-Any
+s:trans	s:Any-Publishing	i:0	s:Hello World	s:Hello World	s:Hello World
+s:trans	s:Any-Publishing	i:0	s:Ἀριστοτέλης	s:Ἀριστοτέλης	s:Ἀριστοτέλης
+s:trans	s:Any-Publishing	i:0	s:Привет мир	s:Привет мир	s:Привет мир
+s:trans	s:Any-Publishing	i:0	s:日本語	s:日本語	s:日本語
+s:trans	s:Any-Publishing	i:0	s:カタカナ	s:カタカナ	s:カタカナ
+s:trans	s:Any-Publishing	i:0	s:ひらがな	s:ひらがな	s:ひらがな
+s:trans	s:Any-Publishing	i:0	s:Ärger über Öl	s:Ärger über Öl	s:Ärger über Öl
+s:trans	s:Any-Publishing	i:0	s:"quotes" -- dashes	s:“quotes” — dashes	s:"quotes" -- dashes
+s:trans	s:Any-Publishing	i:0	s:xéy	s:xéy	s:xéy
+s:trans	s:Any-Publishing	i:0	s:é	s:é	s:!U_ILLEGAL_ARGUMENT_ERROR
+s:create	s:Any-Publishing	i:1	s:Publishing-Any	s:Any-Publishing
+s:trans	s:Any-Publishing	i:1	s:Hello World	s:Hello World	s:Hello World
+s:trans	s:Any-Publishing	i:1	s:Ἀριστοτέλης	s:Ἀριστοτέλης	s:Ἀριστοτέλης
+s:trans	s:Any-Publishing	i:1	s:Привет мир	s:Привет мир	s:Привет мир
+s:trans	s:Any-Publishing	i:1	s:日本語	s:日本語	s:日本語
+s:trans	s:Any-Publishing	i:1	s:カタカナ	s:カタカナ	s:カタカナ
+s:trans	s:Any-Publishing	i:1	s:ひらがな	s:ひらがな	s:ひらがな
+s:trans	s:Any-Publishing	i:1	s:Ärger über Öl	s:Ärger über Öl	s:Ärger über Öl
+s:trans	s:Any-Publishing	i:1	s:"quotes" -- dashes	s:"quotes" -- dashes	s:"quotes" -- dashes
+s:trans	s:Any-Publishing	i:1	s:xéy	s:xéy	s:xéy
+s:trans	s:Any-Publishing	i:1	s:é	s:é	s:!U_ILLEGAL_ARGUMENT_ERROR
+s:create	s:Bogus-Id	i:0	s:!U_INVALID_ID
+s:create	s:Bogus-Id	i:1	s:!U_INVALID_ID
+s:create	s:Null	i:0	s:Null	s:Null
+s:trans	s:Null	i:0	s:Hello World	s:Hello World	s:Hello World
+s:trans	s:Null	i:0	s:Ἀριστοτέλης	s:Ἀριστοτέλης	s:Ἀριστοτέλης
+s:trans	s:Null	i:0	s:Привет мир	s:Привет мир	s:Привет мир
+s:trans	s:Null	i:0	s:日本語	s:日本語	s:日本語
+s:trans	s:Null	i:0	s:カタカナ	s:カタカナ	s:カタカナ
+s:trans	s:Null	i:0	s:ひらがな	s:ひらがな	s:ひらがな
+s:trans	s:Null	i:0	s:Ärger über Öl	s:Ärger über Öl	s:Ärger über Öl
+s:trans	s:Null	i:0	s:"quotes" -- dashes	s:"quotes" -- dashes	s:"quotes" -- dashes
+s:trans	s:Null	i:0	s:xéy	s:xéy	s:xéy
+s:trans	s:Null	i:0	s:é	s:é	s:!U_ILLEGAL_ARGUMENT_ERROR
+s:create	s:Null	i:1	s:Null	s:Null
+s:trans	s:Null	i:1	s:Hello World	s:Hello World	s:Hello World
+s:trans	s:Null	i:1	s:Ἀριστοτέλης	s:Ἀριστοτέλης	s:Ἀριστοτέλης
+s:trans	s:Null	i:1	s:Привет мир	s:Привет мир	s:Привет мир
+s:trans	s:Null	i:1	s:日本語	s:日本語	s:日本語
+s:trans	s:Null	i:1	s:カタカナ	s:カタカナ	s:カタカナ
+s:trans	s:Null	i:1	s:ひらがな	s:ひらがな	s:ひらがな
+s:trans	s:Null	i:1	s:Ärger über Öl	s:Ärger über Öl	s:Ärger über Öl
+s:trans	s:Null	i:1	s:"quotes" -- dashes	s:"quotes" -- dashes	s:"quotes" -- dashes
+s:trans	s:Null	i:1	s:xéy	s:xéy	s:xéy
+s:trans	s:Null	i:1	s:é	s:é	s:!U_ILLEGAL_ARGUMENT_ERROR
+s:create	s:::Lower;	i:0	s:!U_INVALID_ID
+s:create	s:::Lower;	i:1	s:!U_INVALID_ID
+s:create	s:Remove	i:0	s:Remove	s:Null
+s:trans	s:Remove	i:0	s:Hello World	s:	s:Hlo World
+s:trans	s:Remove	i:0	s:Ἀριστοτέλης	s:	s:Ἀστοτέλης
+s:trans	s:Remove	i:0	s:Привет мир	s:	s:Пвет мир
+s:trans	s:Remove	i:0	s:日本語	s:	s:日
+s:trans	s:Remove	i:0	s:カタカナ	s:	s:カナ
+s:trans	s:Remove	i:0	s:ひらがな	s:	s:ひな
+s:trans	s:Remove	i:0	s:Ärger über Öl	s:	s:Äer über Öl
+s:trans	s:Remove	i:0	s:"quotes" -- dashes	s:	s:"otes" -- dashes
+s:trans	s:Remove	i:0	s:xéy	s:	s:x
+s:trans	s:Remove	i:0	s:é	s:	s:!U_ILLEGAL_ARGUMENT_ERROR
+s:create	s:Remove	i:1	s:Null	s:Null
+s:trans	s:Remove	i:1	s:Hello World	s:Hello World	s:Hello World
+s:trans	s:Remove	i:1	s:Ἀριστοτέλης	s:Ἀριστοτέλης	s:Ἀριστοτέλης
+s:trans	s:Remove	i:1	s:Привет мир	s:Привет мир	s:Привет мир
+s:trans	s:Remove	i:1	s:日本語	s:日本語	s:日本語
+s:trans	s:Remove	i:1	s:カタカナ	s:カタカナ	s:カタカナ
+s:trans	s:Remove	i:1	s:ひらがな	s:ひらがな	s:ひらがな
+s:trans	s:Remove	i:1	s:Ärger über Öl	s:Ärger über Öl	s:Ärger über Öl
+s:trans	s:Remove	i:1	s:"quotes" -- dashes	s:"quotes" -- dashes	s:"quotes" -- dashes
+s:trans	s:Remove	i:1	s:xéy	s:xéy	s:xéy
+s:trans	s:Remove	i:1	s:é	s:é	s:!U_ILLEGAL_ARGUMENT_ERROR
+s:create	s:[a-z] Upper	i:0	s:[a-z] Upper	s:[a-z] Lower
+s:trans	s:[a-z] Upper	i:0	s:Hello World	s:HELLO WORLD	s:HELlo World
+s:trans	s:[a-z] Upper	i:0	s:Ἀριστοτέλης	s:Ἀριστοτέλης	s:Ἀριστοτέλης
+s:trans	s:[a-z] Upper	i:0	s:Привет мир	s:Привет мир	s:Привет мир
+s:trans	s:[a-z] Upper	i:0	s:日本語	s:日本語	s:日本語
+s:trans	s:[a-z] Upper	i:0	s:カタカナ	s:カタカナ	s:カタカナ
+s:trans	s:[a-z] Upper	i:0	s:ひらがな	s:ひらがな	s:ひらがな
+s:trans	s:[a-z] Upper	i:0	s:Ärger über Öl	s:ÄRGER üBER ÖL	s:ÄRGer über Öl
+s:trans	s:[a-z] Upper	i:0	s:"quotes" -- dashes	s:"QUOTES" -- DASHES	s:"QUotes" -- dashes
+s:trans	s:[a-z] Upper	i:0	s:xéy	s:XéY	s:xéY
+s:trans	s:[a-z] Upper	i:0	s:é	s:é	s:!U_ILLEGAL_ARGUMENT_ERROR
+s:create	s:[a-z] Upper	i:1	s:[a-z] Lower	s:[a-z] Upper
+s:trans	s:[a-z] Upper	i:1	s:Hello World	s:Hello World	s:Hello World
+s:trans	s:[a-z] Upper	i:1	s:Ἀριστοτέλης	s:Ἀριστοτέλης	s:Ἀριστοτέλης
+s:trans	s:[a-z] Upper	i:1	s:Привет мир	s:Привет мир	s:Привет мир
+s:trans	s:[a-z] Upper	i:1	s:日本語	s:日本語	s:日本語
+s:trans	s:[a-z] Upper	i:1	s:カタカナ	s:カタカナ	s:カタカナ
+s:trans	s:[a-z] Upper	i:1	s:ひらがな	s:ひらがな	s:ひらがな
+s:trans	s:[a-z] Upper	i:1	s:Ärger über Öl	s:Ärger über Öl	s:Ärger über Öl
+s:trans	s:[a-z] Upper	i:1	s:"quotes" -- dashes	s:"quotes" -- dashes	s:"quotes" -- dashes
+s:trans	s:[a-z] Upper	i:1	s:xéy	s:xéy	s:xéy
+s:trans	s:[a-z] Upper	i:1	s:é	s:é	s:!U_ILLEGAL_ARGUMENT_ERROR
+s:rules	s:a > b; b > a;	i:0	a:["RulesTransPHP","bac beiou xyz"]	s:U_ZERO_ERROR
+s:rules	s:a > b; b > a;	i:1	a:["RulesTransPHP","abc aeiou xyz"]	s:U_ZERO_ERROR
+s:rules	s:$vowel = [aeiou]; $vowel > X;	i:0	a:["RulesTransPHP","Xbc XXXXX xyz"]	s:U_ZERO_ERROR
+s:rules	s:$vowel = [aeiou]; $vowel > X;	i:1	a:["RulesTransPHP","abc aeiou xyz"]	s:U_ZERO_ERROR
+s:rules	s::: Upper; ::Lower;	i:0	a:["RulesTransPHP","abc aeiou xyz"]	s:U_ZERO_ERROR
+s:rules	s::: Upper; ::Lower;	i:1	a:["RulesTransPHP","abc aeiou xyz"]	s:U_ZERO_ERROR
+s:rules	s:a > ;!	i:0	s:!U_UNQUOTED_SPECIAL	s:transliterator_create_from_rules: unable to create ICU transliterator from rules (parse error at offset 5, after "a > ;", before or at "!"): U_UNQUOTED_SPECIAL
+s:rules	s:a > ;!	i:1	s:!U_UNQUOTED_SPECIAL	s:transliterator_create_from_rules: unable to create ICU transliterator from rules (parse error at offset 5, after "a > ;", before or at "!"): U_UNQUOTED_SPECIAL
+s:rules	s:[[	i:0	s:!U_MALFORMED_SET	s:transliterator_create_from_rules: unable to create ICU transliterator from rules (parse error at offset 0, before or at "[["): U_MALFORMED_SET
+s:rules	s:[[	i:1	s:!U_MALFORMED_SET	s:transliterator_create_from_rules: unable to create ICU transliterator from rules (parse error at offset 0, before or at "[["): U_MALFORMED_SET
+s:rules	s:x } y > z;	i:0	a:["RulesTransPHP","abc aeiou zyz"]	s:U_ZERO_ERROR
+s:rules	s:x } y > z;	i:1	a:["RulesTransPHP","abc aeiou xyz"]	s:U_ZERO_ERROR
+s:rules	s:::Null;	i:0	a:["RulesTransPHP","abc aeiou xyz"]	s:U_ZERO_ERROR
+s:rules	s:::Null;	i:1	a:["RulesTransPHP","abc aeiou xyz"]	s:U_ZERO_ERROR
+s:ids	i:756	a:["Kannada-Bengali","Gujr-Arab","Latin-Bengali","Katakana-Hiragana","fa-fa_Latn/BGN","Tamil-Oriya","Any-uz_Cyrl","Latn-Hebr","Gurmukhi-Arabic","am-chr","Mongolian-Latin/BGN","Han-Latin/Names","ug-ug_FONIPA","sk_FONIPA-ja","Thaa-Latn","Hant-Hans","ta-ta_FONIPA","NumericPinyin-Latin","und_FONIPA-fa","Ethiopic-Latin/Beta_Metsehaf","ar-ar_Latn/BGN","Any-Ethiopic/Tekie_Alibekit","eo-eo_FONIPA","Tamil-Malayalam","Any-Beng","Any-Arabic","Armenian-Latin","es_419-fa","cs-am","Latin-Arabic","Ethiopic-Latin/IES_JES_1964","Latn-Grek/UNGEGN","cs-ar","Any-Cyrillic","ky-ky_Latn/BGN","Latn-Orya","byn_Ethi-byn_Latn/Xaleget","Georgian-Latin","Any-Remove","Thaana-Latin","Latn-Gujr","xh-chr","Maldivian-Latin/BGN","sat-ar","hy-hy_Latn/BGN","Sarb-gz_Ethi","Latn-Kana","Any-tk/BGN","az_Cyrl-az/BGN","Ethi-sgw_Ethi/Gurage_2013"]

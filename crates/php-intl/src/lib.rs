@@ -25,5 +25,6 @@ pub mod normalizer;
 pub mod numfmt;
 pub mod sys;
 pub mod timezone;
+pub mod transliterator;
 
 pub use error::{Error, ErrorState, IntlError, IntlSettings, Notice, Result, Scope, UErrorCode};
