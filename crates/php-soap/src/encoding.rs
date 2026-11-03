@@ -1502,7 +1502,9 @@ impl EncodeCtx<'_> {
     /// The xsi:type filter of `master_to_zval`/`guess_zval_convert`: drops
     /// encoders that only restate the expected simple type.
     fn filter_xsi_encoder(&self, found: EncRef) -> Option<EncRef> {
-        let sdl = self.sdl.clone()?;
+        let Some(sdl) = self.sdl.clone() else {
+            return Some(found);
+        };
         let mut tmp = Some(found);
         while let Some(tm) = tmp {
             let Some(st) = self.sdl_type_of(tm) else {
@@ -2842,8 +2844,8 @@ impl EncodeCtx<'_> {
             self.protected.insert(a.addr());
             let r = (|| -> SoapResult<()> {
                 for (k, v) in a.iter() {
-                    let item = doc.new_child(xml_param, None, b"item");
-                    let key = doc.new_child(item, None, b"key");
+                    let item = doc.add_element(xml_param, b"item");
+                    let key = doc.add_element(item, b"key");
                     match k {
                         ArrayKey::Str(s) => {
                             if style == SOAP_ENCODED {

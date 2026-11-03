@@ -1280,6 +1280,17 @@ impl Parser {
             } else if self.is_op("(") && matches!(e, E::Var(_) | E::Index(..) | E::Prop(..) | E::Closure(_) | E::CallExpr(..)) {
                 let args = self.args()?;
                 e = E::CallExpr(Box::new(e), args);
+            } else if self.is_op("::") && matches!(e, E::Var(_)) {
+                self.i += 1;
+                let m = self.ident()?;
+                if m.eq_ignore_ascii_case("class") {
+                    e = E::Call("get_class".into(), vec![Arg { e, spread: false, name: None }]);
+                } else if self.is_op("(") {
+                    let args = self.args()?;
+                    e = E::MCall(Box::new(e), Box::new(E::Lit(Value::from(m.as_str()))), args);
+                } else {
+                    e = E::Lit(Value::Null);
+                }
             } else if self.eat_op("++") {
                 e = E::IncDec(false, true, Box::new(e));
             } else if self.eat_op("--") {
@@ -1531,7 +1542,19 @@ fn truthy(h: &mut TestHost, v: &Value) -> RtResult<bool> {
 }
 
 /// Runs a script.
+fn builtin_hook(h: &mut TestHost, name: &str, args: &[Value]) -> Option<RtResult<Value>> {
+    let mut f = Frame::global(PathBuf::new());
+    builtin(h, &mut f, &name.to_ascii_lowercase(), args, &[]).transpose()
+}
+
+fn method_hook(h: &mut TestHost, obj: &Obj, name: &str, args: &[Value]) -> Option<RtResult<Value>> {
+    let mut refs = Vec::new();
+    internal_method(h, obj, name, args, &mut refs).transpose()
+}
+
 pub fn run_file(h: &mut TestHost, path: &Path, code: &[u8]) -> RtResult<()> {
+    h.builtin_hook = Some(builtin_hook);
+    h.method_hook = Some(method_hook);
     let toks = Lexer::lex(code);
     let mut p = Parser { t: toks, i: 0 };
     let prog = p.program().map_err(|e| err(format!("parse error: {e}")))?;
@@ -1554,6 +1577,7 @@ fn hoist(h: &mut TestHost, prog: &[S]) {
 }
 
 fn declare_function(h: &mut TestHost, f: &Rc<Func>) {
+    h.param_names.insert(f.name.to_ascii_lowercase(), f.params.iter().map(|p| p.name.clone()).collect());
     let fr = Rc::clone(f);
     h.add_function(&f.name, move |h, args| call_user(h, &fr, None, None, args, &mut Vec::new()));
 }
@@ -1578,6 +1602,18 @@ fn declare_class(h: &mut TestHost, c: &Rc<ClassDecl>) {
     }
     let mut methods: Vec<(String, MethodFn)> = Vec::new();
     for m in &c.methods {
+        h.param_names.insert(
+            format!("{}::{}", c.name.to_ascii_lowercase(), m.name.to_ascii_lowercase()),
+            m.params.iter().map(|p| p.name.clone()).collect(),
+        );
+        // promoted constructor parameters are declared properties
+        if m.name.eq_ignore_ascii_case("__construct") {
+            for p in m.params.iter().filter(|p| p.promote) {
+                if !props.iter().any(|(n, _): &(String, Value)| *n == p.name) {
+                    props.push((p.name.clone(), Value::Null));
+                }
+            }
+        }
         let mr = Rc::clone(m);
         let cname = c.name.clone();
         methods.push((
@@ -1887,6 +1923,12 @@ fn assign(h: &mut TestHost, f: &mut Frame, target: &E, v: Value) -> RtResult<()>
             h.globals.insert(format!("{}::${n}", c.to_ascii_lowercase()), v);
             Ok(())
         }
+        E::Index(base, Some(idx)) if matches!(&**base, E::Var(n) if n == "GLOBALS") => {
+            let k = eval(h, f, idx)?;
+            let k = String::from_utf8_lossy(&to_str(h, &k)?).into_owned();
+            h.globals.insert(k, v);
+            Ok(())
+        }
         E::Index(base, idx) => {
             let mut b = match eval(h, f, base) {
                 Ok(b) => b.deref(),
@@ -1942,6 +1984,72 @@ fn assign(h: &mut TestHost, f: &mut Frame, target: &E, v: Value) -> RtResult<()>
         }
         _ => Err(err("cannot assign")),
     }
+}
+
+/// Parameter names (and internal defaults) of a callee for named arguments.
+fn callee_params(h: &TestHost, class: Option<&str>, name: &str) -> Vec<(String, Value)> {
+    let lc = name.to_ascii_lowercase();
+    let mut cur = class.map(str::to_owned);
+    while let Some(c) = cur.clone() {
+        if let Some(p) = h.param_names.get(&format!("{}::{lc}", c.to_ascii_lowercase())) {
+            return p.iter().map(|n| (n.clone(), Value::Null)).collect();
+        }
+        if let Some(def) = php_soap::classes::find_class(&c) {
+            if let Some(m) = def.methods.iter().find(|m| m.name.eq_ignore_ascii_case(name)) {
+                return m
+                    .params
+                    .iter()
+                    .map(|p| {
+                        let d = match p.default {
+                            Some("\"\"") => Value::from(""),
+                            Some("false") => Value::Bool(false),
+                            Some("true") => Value::Bool(true),
+                            Some("[]") => Value::Array(ZArray::new()),
+                            _ => Value::Null,
+                        };
+                        (p.name.to_owned(), d)
+                    })
+                    .collect();
+            }
+        }
+        cur = h.classes.get(&c.to_ascii_lowercase()).and_then(|x| x.parent.clone()).or_else(|| {
+            php_soap::classes::find_class(&c).and_then(|d| d.parent.map(str::to_owned))
+        });
+    }
+    if class.is_none() {
+        if let Some(p) = h.param_names.get(&lc) {
+            return p.iter().map(|n| (n.clone(), Value::Null)).collect();
+        }
+    }
+    Vec::new()
+}
+
+fn eval_args_for(h: &mut TestHost, f: &mut Frame, args: &[Arg], class: Option<&str>, name: &str) -> RtResult<Vec<Value>> {
+    if !args.iter().any(|a| a.name.is_some()) {
+        return eval_args(h, f, args);
+    }
+    let params = callee_params(h, class, name);
+    let mut out: Vec<Option<Value>> = Vec::new();
+    for a in args {
+        let v = eval(h, f, &a.e)?;
+        match &a.name {
+            None => out.push(Some(v)),
+            Some(n) => {
+                let Some(pos) = params.iter().position(|(p, _)| p == n) else {
+                    return Err(err(format!("Unknown named parameter ${n}")));
+                };
+                if out.len() <= pos {
+                    out.resize(pos + 1, None);
+                }
+                out[pos] = Some(v);
+            }
+        }
+    }
+    Ok(out
+        .into_iter()
+        .enumerate()
+        .map(|(i, v)| v.unwrap_or_else(|| params.get(i).map(|(_, d)| d.clone()).unwrap_or_default()))
+        .collect())
 }
 
 fn eval_args(h: &mut TestHost, f: &mut Frame, args: &[Arg]) -> RtResult<Vec<Value>> {
@@ -2307,8 +2415,7 @@ fn eval(h: &mut TestHost, f: &mut Frame, e: &E) -> RtResult<Value> {
         }
         E::Call(name, args) => {
             let lc = name.to_ascii_lowercase();
-            // by-ref builtins handled specially
-            let vals = eval_args(h, f, args)?;
+            let vals = eval_args_for(h, f, args, None, name)?;
             if let Some(r) = builtin(h, f, &lc, &vals, args)? {
                 return Ok(r);
             }
@@ -2332,14 +2439,18 @@ fn eval(h: &mut TestHost, f: &mut Frame, e: &E) -> RtResult<Value> {
                     declare_class(h, &Rc::new(d));
                 }
             });
-            let vals = eval_args(h, f, args)?;
+            let vals = eval_args_for(h, f, args, Some(&cname), "__construct")?;
             new_object(h, &cname, &vals, args)?
         }
         E::MCall(o, n, args) => {
             let ov = eval(h, f, o)?.deref();
             let name = eval(h, f, n)?;
             let name = String::from_utf8_lossy(&to_str(h, &name)?).into_owned();
-            let vals = eval_args(h, f, args)?;
+            let cls = match &ov {
+                Value::Object(o) => Some(o.class_name().to_string_lossy()),
+                _ => None,
+            };
+            let vals = eval_args_for(h, f, args, cls.as_deref(), &name)?;
             let Value::Object(obj) = ov else {
                 return Err(err(format!("Call to a member function {name}() on {}", ov.type_name())));
             };
@@ -2510,7 +2621,7 @@ pub fn internal_method(h: &mut TestHost, o: &Obj, name: &str, a: &[Value], refs:
                     Some(Value::Array(x)) => Some(x),
                     _ => None,
                 };
-                client::construct(h, o, wsdl.as_deref(), opts.as_ref().or(Some(&ZArray::new())))?;
+                client::construct(h, o, wsdl.as_deref(), opts.as_ref())?;
                 Value::Null
             }
             "__soapcall" => {
@@ -2873,6 +2984,20 @@ fn builtin(h: &mut TestHost, f: &mut Frame, name: &str, a: &[Value], exprs: &[Ar
             v.map_or(Value::Bool(false), |b| Value::from(b.as_slice()))
         }
         "ob_end_clean" => Value::Bool(h.ob.pop().is_some()),
+        "ob_flush" => {
+            if let Some(b) = h.ob.pop() {
+                h.echo(&b);
+                h.ob.push(Vec::new());
+            }
+            Value::Bool(true)
+        }
+        "ob_clean" => {
+            if let Some(b) = h.ob.last_mut() {
+                b.clear();
+            }
+            Value::Bool(true)
+        }
+        "ob_get_length" => h.ob.last().map_or(Value::Bool(false), |b| Value::Int(i64::try_from(b.len()).unwrap_or(0))),
         "ob_end_flush" | "ob_get_flush" => {
             if let Some(b) = h.ob.pop() {
                 h.echo(&b);
@@ -3088,10 +3213,33 @@ fn builtin(h: &mut TestHost, f: &mut Frame, name: &str, a: &[Value], exprs: &[Ar
             let n = usize::try_from(int(h, 1)?.max(1)).unwrap_or(1);
             Value::Array(ZArray::from_values(x.chunks(n).map(Value::from)))
         }
-        "json_encode" | "simplexml_load_string" | "unserialize" => return Ok(None),
+        "simplexml_load_string" => {
+            let x = s(h, 0)?;
+            match php_soap::xml::Doc::parse(&x) {
+                Ok(doc) => match doc.root() {
+                    Some(r) => simplexml(h, &doc, r),
+                    None => Value::Bool(false),
+                },
+                Err(_) => Value::Bool(false),
+            }
+        }
+        "json_encode" | "unserialize" => return Ok(None),
         _ => {
             let _ = (f, exprs);
             return Ok(None);
         }
     }))
+}
+
+fn simplexml(h: &mut TestHost, doc: &php_soap::xml::Doc, n: usize) -> Value {
+    let kids: Vec<usize> = doc.children(n).filter(|&c| doc.is_element(c)).collect();
+    if kids.is_empty() {
+        return Value::from(doc.text_content(n).as_slice());
+    }
+    let o = h.new_object("stdClass");
+    for c in kids {
+        let v = simplexml(h, doc, c);
+        let _ = h.write_property(&o, doc.name(c), v);
+    }
+    Value::Object(o)
 }

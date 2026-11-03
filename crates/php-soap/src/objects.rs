@@ -11,7 +11,7 @@ use crate::host::SoapHost;
 pub fn soap_param_construct(host: &mut dyn SoapHost, this: &Obj, data: &Value, name: &[u8]) -> RtResult<()> {
     if name.is_empty() {
         return Err(RuntimeError::ValueError(
-            "SoapParam::__construct(): Argument #2 ($name) cannot be empty".into(),
+            "SoapParam::__construct(): Argument #2 ($name) must not be empty".into(),
         ));
     }
     host.write_slot(this, "param_name", Value::from(name));
@@ -40,12 +40,12 @@ pub fn soap_header_construct(
 ) -> RtResult<()> {
     if namespace.is_empty() {
         return Err(RuntimeError::ValueError(
-            "SoapHeader::__construct(): Argument #1 ($namespace) cannot be empty".into(),
+            "SoapHeader::__construct(): Argument #1 ($namespace) must not be empty".into(),
         ));
     }
     if name.is_empty() {
         return Err(RuntimeError::ValueError(
-            "SoapHeader::__construct(): Argument #2 ($name) cannot be empty".into(),
+            "SoapHeader::__construct(): Argument #2 ($name) must not be empty".into(),
         ));
     }
     host.write_slot(this, "namespace", Value::from(namespace));

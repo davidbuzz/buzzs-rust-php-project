@@ -133,6 +133,12 @@ pub struct TestHost {
     pub include_override: HashMap<String, String>,
     /// User call depth (simulates the memory limit on runaway recursion).
     pub depth: usize,
+    /// Parameter names of user functions/methods (`func` or `class::method`, lower-case).
+    pub param_names: HashMap<String, Vec<String>>,
+    /// Builtin functions of the interpreter.
+    pub builtin_hook: Option<fn(&mut TestHost, &str, &[Value]) -> Option<RtResult<Value>>>,
+    /// Internal methods of the interpreter.
+    pub method_hook: Option<fn(&mut TestHost, &Obj, &str, &[Value]) -> Option<RtResult<Value>>>,
 }
 
 impl TestHost {
@@ -482,6 +488,9 @@ impl SoapHost for TestHost {
     fn call_function(&mut self, name: &[u8], args: &[Value]) -> RtResult<Option<Value>> {
         let key = String::from_utf8_lossy(name).to_ascii_lowercase();
         let Some((_, f)) = self.functions.get(&key).cloned() else {
+            if let Some(hook) = self.builtin_hook {
+                return hook(self, &key, args).transpose();
+            }
             return Ok(None);
         };
         f(self, args).map(Some)
@@ -489,7 +498,11 @@ impl SoapHost for TestHost {
 
     fn function_exists(&mut self, name: &[u8]) -> Option<ZStr> {
         let key = String::from_utf8_lossy(name).to_ascii_lowercase();
-        self.functions.get(&key).map(|(n, _)| ZStr::from(n.as_str()))
+        if let Some((n, _)) = self.functions.get(&key) {
+            return Some(ZStr::from(n.as_str()));
+        }
+        const BUILTINS: &[&str] = &["strlen", "count", "var_dump", "gzinflate", "gzdeflate", "gzuncompress", "gzcompress", "gzencode", "gzdecode", "str_repeat", "trim", "strtolower", "strtoupper", "base64_encode", "md5"];
+        BUILTINS.iter().find(|b| **b == key).map(|b| ZStr::from(*b))
     }
 
     fn defined_functions(&mut self) -> Vec<ZStr> {
@@ -530,6 +543,17 @@ impl SoapHost for TestHost {
             let one_way = matches!(args.get(4), Some(Value::Bool(true)));
             let r = php_soap::client::do_request_method(self, obj, &s(0), &s(1), &s(2), version, one_way, None)?;
             return Ok(MethodCall::Returned(r));
+        }
+        if let Some(hook) = self.method_hook {
+            if !n.eq_ignore_ascii_case("__doRequest") {
+                if let Some(r) = hook(self, obj, &n, args) {
+                    return r.map(MethodCall::Returned);
+                }
+            }
+        }
+        if let Some(m) = self.find_method(&class, "__call") {
+            let a = ZArray::from_values(args.iter().cloned());
+            return m(self, obj, &[Value::from(n.as_str()), Value::Array(a)]).map(MethodCall::Returned);
         }
         if n.eq_ignore_ascii_case("getTraceAsString") {
             return Ok(MethodCall::Returned(Value::from("#0 {main}")));

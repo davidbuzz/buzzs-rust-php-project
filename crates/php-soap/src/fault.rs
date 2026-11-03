@@ -109,6 +109,15 @@ pub fn construct(
 ) -> RtResult<()> {
     let mut code_ns = None;
     let mut fault_code: Option<Vec<u8>> = None;
+    if let Value::Object(_) | Value::Int(_) | Value::Float(_) | Value::Bool(_) | Value::Resource(_) = code.deref() {
+        let given = match code.deref() {
+            Value::Object(o) => o.class_name().to_string_lossy(),
+            other => crate::client_type_name(&other).to_owned(),
+        };
+        return Err(RuntimeError::TypeError(format!(
+            "SoapFault::__construct(): Argument #1 ($code) must be of type array|string|null, {given} given"
+        )));
+    }
     match code.deref() {
         Value::Str(s) => fault_code = Some(s.as_bytes().to_vec()),
         Value::Array(a) if a.len() == 2 => {

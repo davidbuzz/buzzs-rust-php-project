@@ -691,10 +691,11 @@ impl Doc {
         self.alloc(NodeData::new(Kind::EntityRef, name))
     }
 
-    /// `xmlNewChild(parent, ns, name, NULL)`.
+    /// `xmlNewChild(parent, ns, name, NULL)`: without a namespace the child
+    /// inherits the parent's.
     pub fn new_child(&mut self, parent: NodeId, ns: Option<Ns>, name: &[u8]) -> NodeId {
         let n = self.new_element(name);
-        self.nodes[n].ns = ns;
+        self.nodes[n].ns = ns.or_else(|| self.nodes[parent].ns.clone());
         self.append_child(parent, n)
     }
 
@@ -786,6 +787,12 @@ impl Doc {
         d.parent = Parent::None;
         d.prev = None;
         d.next = None;
+    }
+
+    /// `xmlNewDocNode` + `xmlAddChild`: a child element without namespace.
+    pub fn add_element(&mut self, parent: NodeId, name: &[u8]) -> NodeId {
+        let n = self.new_element(name);
+        self.append_child(parent, n)
     }
 
     /// Removes all children of `n`.

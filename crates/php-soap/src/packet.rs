@@ -1365,7 +1365,7 @@ pub fn serialize_response_call(
         let detail_name: &[u8];
         if version == SOAP_1_1 {
             if let Some(Value::Str(code)) = ctx.host.read_slot(fault, "faultcode").map(|v| v.deref()) {
-                let node = doc.new_child(param, None, b"faultcode");
+                let node = doc.add_element(param, b"faultcode");
                 let escaped = html_escape(code.as_bytes());
                 if let Some(fns) = &fault_ns {
                     let nsp = ctx.encode_add_ns(&mut doc, node, fns);
@@ -1425,7 +1425,7 @@ pub fn serialize_response_call(
         }
         let detail = ctx.host.read_slot(fault, "detail").map(|v| v.deref()).filter(|v| !matches!(v, Value::Null));
         if let Some(f) = sfault.filter(|f| f.details.len() == 1) {
-            let node = doc.new_child(param, None, detail_name);
+            let node = doc.add_element(param, detail_name);
             let sparam = &f.details[0];
             let mut detail = detail;
             if let (Some(Value::Object(o)), Some(e), Some(sdl)) = (&detail, sparam.element, sdl_ref) {
@@ -1556,8 +1556,12 @@ pub fn serialize_response_call(
     Ok(Some(doc))
 }
 
-/// `php_escape_html_entities(str, len, 0, 0, NULL)`: escapes `&`, `<`, `>`.
+/// `php_escape_html_entities(str, len, 0, 0, NULL)`: escapes `&`, `<`, `>`;
+/// invalid UTF-8 yields an empty string.
 fn html_escape(s: &[u8]) -> Vec<u8> {
+    if std::str::from_utf8(s).is_err() {
+        return Vec::new();
+    }
     let mut out = Vec::with_capacity(s.len());
     for &c in s {
         match c {

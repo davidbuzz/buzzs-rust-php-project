@@ -9,6 +9,63 @@ use std::path::{Path, PathBuf};
 use common::php::run_file;
 use common::{output_matches, phpt_sections, soap_tests_dir, with_big_stack, TestHost};
 
+/// Tests whose scripts need engine features the test interpreter lacks
+/// (sessions, references, `__get`/`__set`, Reflection, `unserialize`,
+/// visibility-mangled dumps, pcntl, process spawning, generators, …).
+/// They are exercised by the phpt runner once the extension is wired into
+/// the VM.
+const ENGINE_DEPENDENT: &[&str] = &[
+    "GHSA-m33r-qmcv-p97q.phpt",
+    "SoapServer/persistent-session-no-free-SoapFault.phpt",
+    "bugs/bug28751.phpt",
+    "bugs/bug29830.phpt",
+    "bugs/bug30045.phpt",
+    "bugs/bug30928.phpt",
+    "bugs/bug31422.phpt",
+    "bugs/bug39815.phpt",
+    "bugs/bug42151.phpt",
+    "bugs/bug46760.phpt",
+    "bugs/bug47021.phpt",
+    "bugs/bug47925.phpt",
+    "bugs/bug54911.phpt",
+    "bugs/bug61525.phpt",
+    "bugs/bug69085.phpt",
+    "bugs/bug70388.phpt",
+    "bugs/bug70469.phpt",
+    "bugs/bug73237.phpt",
+    "bugs/bug73452.phpt",
+    "bugs/bug75306.phpt",
+    "bugs/bug77088.phpt",
+    "bugs/bug79357.phpt",
+    "bugs/gh16237.phpt",
+    "bugs/gh16259.phpt",
+    "bugs/gh16429.phpt",
+    "bugs/gh18990.phpt",
+    "bugs/gh21421.phpt",
+    "bugs/gh22167.phpt",
+    "bugs/gh22895.phpt",
+    "bugs/segfault_assertion_props.phpt",
+    "classmap004.phpt",
+    "classmap_private_property_packed_array.phpt",
+    "gh15711.phpt",
+    "gh16318.phpt",
+    "gh22585.phpt",
+    "gh23447.phpt",
+    "oom_soapclient_call.phpt",
+    "oom_soapclient_dorequest_chunked.phpt",
+    "oom_soapclient_dorequest_close.phpt",
+    "oom_soapclient_dorequest_content_length.phpt",
+    "oom_soapclient_response_headers.phpt",
+    "oom_soapclient_soapcall.phpt",
+    "oom_soapserver_handle_array.phpt",
+    "server003.phpt",
+    "server009.phpt",
+    "server019.phpt",
+    "server020.phpt",
+    "server030.phpt",
+    "server031.phpt",
+];
+
 /// Outcome of one test.
 enum Outcome {
     Pass,
@@ -17,9 +74,11 @@ enum Outcome {
 }
 
 fn run_phpt(path: &Path) -> Outcome {
-    let Ok(src) = std::fs::read_to_string(path) else {
+    let Ok(raw) = std::fs::read(path) else {
         return Outcome::Skip("unreadable".into());
     };
+    // Latin-1 view so that non-UTF-8 test files survive unchanged.
+    let src: String = raw.iter().map(|&b| char::from(b)).collect();
     let sec = phpt_sections(&src);
     let Some(file) = sec.get("FILE") else {
         return Outcome::Skip("no FILE".into());
@@ -60,10 +119,13 @@ fn run_phpt(path: &Path) -> Outcome {
     }
     php_soap::globals::request_init();
     php_soap::globals::with(|g| g.mem_cache.clear());
-    if let Err(e) = run_file(&mut host, &script, file.as_bytes()) {
+    let code: Vec<u8> = file.chars().map(|c| u8::try_from(u32::from(c)).unwrap_or(b'?')).collect();
+    if let Err(e) = run_file(&mut host, &script, &code) {
         host.report(&e);
     }
     let out = host.finish();
+    let out: String = out.iter().map(|&b| char::from(b)).collect();
+    let out = out.into_bytes();
     if output_matches(&expected, &out, fmt) {
         Outcome::Pass
     } else {
@@ -99,7 +161,9 @@ fn soap_phpt_suite() {
     };
     let filter = std::env::var("SOAP_PHPT").ok();
     let verbose = std::env::var("SOAP_PHPT_VERBOSE").is_ok();
+    let flt2 = filter.clone();
     let (pass, skip, fails) = with_big_stack(move || {
+        let filter = flt2;
         let mut files = Vec::new();
         collect(&dir, &mut files);
         files.sort();
@@ -137,4 +201,13 @@ fn soap_phpt_suite() {
         }
     }
     eprintln!("phpt: {pass} passed, {skip} skipped, {} failed", fails.len());
+    let unexpected: Vec<&String> = fails
+        .iter()
+        .map(|(n, _)| n)
+        .filter(|n| !ENGINE_DEPENDENT.contains(&n.as_str()))
+        .collect();
+    assert!(unexpected.is_empty(), "unexpected failures: {unexpected:?}");
+    if filter.is_none() {
+        assert!(pass >= 392, "only {pass} phpt tests passed");
+    }
 }
