@@ -8,7 +8,7 @@ use php_runtime::{Value, ZArray, ZStr};
 use php_vm::ext::{Args, ModuleBuilder, NativeFn, VmResult};
 use php_vm::Vm;
 
-use crate::{is_gmp, new_gmp, num_arg, throw, GmpState};
+use crate::{check_bits, is_gmp, new_gmp, num_arg, throw, GmpState};
 
 thread_local! {
     /// `GMPG(rand_state)`: per-request Mersenne Twister state.
@@ -116,7 +116,6 @@ unary! {
     gmp_abs => |x| Ok(gmp::gmp_abs(&x));
     gmp_com => |x| Ok(gmp::gmp_com(&x));
     gmp_nextprime => |x| Ok(gmp::gmp_nextprime(&x));
-    gmp_fact => |x| gmp::gmp_fact(&x);
     gmp_sqrt => |x| gmp::gmp_sqrt(&x);
 }
 
@@ -181,6 +180,26 @@ unary_scalar! {
     gmp_perfect_power => |x| gmp::gmp_perfect_power(&x);
 }
 
+fn gmp_fact(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let x = num_arg(vm, a, 0, "gmp_fact")?;
+    // n! has about n·log2(n) bits.
+    if let Some(n) = x.to_u64() {
+        let n = u128::from(n);
+        check_bits(vm, n * (128 - u128::from(n.leading_zeros())))?;
+    }
+    gmp_result(vm, "gmp_fact", gmp::gmp_fact(&x))
+}
+
+/// Estimated size in bits of `x ** e`.
+pub(crate) fn pow_bits(x: &Mpz, e: u64) -> u128 {
+    let bits = u128::from(x.bit_len());
+    if bits <= 1 {
+        1
+    } else {
+        (bits - 1).saturating_mul(u128::from(e)) + 1
+    }
+}
+
 fn div_with(
     vm: &mut Vm,
     a: &Args,
@@ -230,11 +249,19 @@ fn gmp_rootrem(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 fn gmp_pow(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let x = num_arg(vm, a, 0, "gmp_pow")?;
+    if let Ok(e) = u64::try_from(a.int(1)) {
+        check_bits(vm, pow_bits(&x, e))?;
+    }
     gmp_result(vm, "gmp_pow", gmp::gmp_pow(&x, a.int(1)))
 }
 
 fn gmp_binomial(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let x = num_arg(vm, a, 0, "gmp_binomial")?;
+    if let Ok(k) = u64::try_from(a.int(1)) {
+        // C(n, k) < n^k.
+        let k = u128::from(k.min(x.to_u64().map_or(k, |n| n.saturating_sub(k)).max(1)));
+        check_bits(vm, u128::from(x.bit_len()).saturating_mul(k))?;
+    }
     gmp_result(vm, "gmp_binomial", gmp::gmp_binomial(&x, a.int(1)))
 }
 
@@ -301,6 +328,9 @@ fn gmp_random_seed(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 fn gmp_random_bits(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let bits = a.int(0);
+    if let Ok(b) = u32::try_from(bits) {
+        check_bits(vm, u128::from(b))?;
+    }
     let r = RANDOM.with(|r| r.borrow_mut().bits(bits, entropy));
     gmp_result(vm, "gmp_random_bits", r)
 }
@@ -332,6 +362,11 @@ fn mutate(
 
 fn gmp_setbit(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let index = a.int(1);
+    if let Ok(i) = u64::try_from(index) {
+        if i / 64 < u64::from(u32::MAX >> 1) {
+            check_bits(vm, u128::from(i) + 1)?;
+        }
+    }
     let value = !a.has(2) || a.bool(2);
     mutate(vm, a, "gmp_setbit", |m| gmp::gmp_setbit(m, index, value))
 }

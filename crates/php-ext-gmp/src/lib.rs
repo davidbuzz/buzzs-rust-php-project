@@ -89,6 +89,42 @@ pub(crate) fn float_to_long(vm: &mut Vm, d: f64) -> VmResult<Option<i64>> {
     Ok(Some(l))
 }
 
+/// Refuses to build a number of `bits` bits when it would not fit in
+/// `memory_limit` (4 GiB when unlimited).
+///
+/// libgmp ignores PHP's memory limit (and aborts the process past 2^37
+/// bits); the VM process must not be taken down by `gmp_pow(2, 2**40)`,
+/// so such requests end with PHP's out-of-memory fatal error instead.
+pub(crate) fn check_bits(vm: &mut Vm, bits: u128) -> VmResult<()> {
+    let limit = vm
+        .ini_string("memory_limit")
+        .map(|raw| php_support_quantity(&raw))
+        .filter(|&l| l > 0)
+        .map_or(1u128 << 32, |l| u128::from(l.unsigned_abs()));
+    let bytes = bits / 8 + 32;
+    if bytes > limit {
+        return Err(vm.fatal(&format!(
+            "Allowed memory size of {limit} bytes exhausted (tried to allocate {bytes} bytes)"
+        )));
+    }
+    Ok(())
+}
+
+/// `zend_ini_parse_quantity` for `memory_limit` (`128M`, `1G`, `-1`).
+fn php_support_quantity(raw: &[u8]) -> i64 {
+    let s = String::from_utf8_lossy(raw);
+    let s = s.trim();
+    let (num, mul) = match s.as_bytes().last().map(u8::to_ascii_lowercase) {
+        Some(b'k') => (&s[..s.len() - 1], 1i64 << 10),
+        Some(b'm') => (&s[..s.len() - 1], 1i64 << 20),
+        Some(b'g') => (&s[..s.len() - 1], 1i64 << 30),
+        _ => (s, 1),
+    };
+    num.trim()
+        .parse::<i64>()
+        .map_or(0, |n| n.saturating_mul(mul))
+}
+
 /// `E_DEPRECATED`.
 pub(crate) const E_DEPRECATED: i64 = 8192;
 

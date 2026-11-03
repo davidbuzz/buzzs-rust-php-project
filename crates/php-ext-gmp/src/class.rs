@@ -14,7 +14,7 @@ use php_vm::object::{data, set_internal};
 use php_vm::Vm;
 
 use crate::funcs::init_number;
-use crate::{is_gmp, mpz_of, new_gmp, throw, GmpState};
+use crate::{check_bits, is_gmp, mpz_of, new_gmp, throw, GmpState};
 
 /// `E_DEPRECATED`.
 const E_DEPRECATED: i64 = 8192;
@@ -120,6 +120,12 @@ fn finish_shift(
     let Some(base) = operand(vm, l)? else {
         return Err(unsupported(vm));
     };
+    let bits = match op {
+        GmpOp::Pow => crate::funcs::pow_bits(&base, count),
+        GmpOp::Shl if !base.is_zero() => u128::from(base.bit_len()) + u128::from(count),
+        _ => 0,
+    };
+    check_bits(vm, bits)?;
     new_gmp(vm, gmp::count_op(op, &base, count))
 }
 
