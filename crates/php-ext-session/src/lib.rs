@@ -23,7 +23,9 @@ mod funcs;
 mod headers;
 mod host;
 mod ini;
+mod rewrite;
 mod shutdown;
+mod urlscan;
 
 use php_runtime::{ArrayKey, PropertyPurpose, RuntimeContext, Value};
 use php_vm::ext::{Extension, ModuleBuilder};
@@ -46,6 +48,7 @@ impl Extension for Session {
         ini::register(m);
         funcs::register(m);
         classes::register(m);
+        rewrite::register(m);
         ini::install_hooks(m);
         m.on_request_shutdown(shutdown::request_shutdown);
         startup(m.vm());
@@ -66,8 +69,12 @@ fn startup(vm: &mut Vm) {
             .find(|(n, _)| *n == name)
             .and_then(|(_, v)| v.clone())
     };
-    let err = with_host(vm, |h| {
+    with_host(vm, |h| {
         php_session::module_startup(h, &lookup);
+        h.state().take_exception();
+    });
+    rewrite::startup(vm);
+    let err = with_host(vm, |h| {
         let r = php_session::request_startup(h);
         let late = h.state().take_exception();
         r.err().or(late)
@@ -75,6 +82,7 @@ fn startup(vm: &mut Vm) {
     // An exception during startup cannot be caught by PHP code; it is
     // dropped like PHP drops exceptions thrown before the script starts.
     drop(err);
+    vm.pending_throw = None;
     set_phase(Phase::Running);
 }
 

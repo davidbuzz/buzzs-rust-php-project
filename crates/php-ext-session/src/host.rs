@@ -420,6 +420,10 @@ impl SessionHost for VmHost<'_> {
         true
     }
 
+    fn url_rewrite_session_var(&mut self, name: &[u8], id: &[u8]) {
+        crate::rewrite::session_var(self.vm, name, id);
+    }
+
     fn define_sid(&mut self, value: &[u8]) {
         self.vm
             .constants

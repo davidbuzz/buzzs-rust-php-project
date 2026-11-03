@@ -42,6 +42,10 @@ pub(crate) fn append_write_close(vm: &mut Vm) {
 /// The `RSHUTDOWN` hook: writes and closes an active session, frees the
 /// user handlers and restores the directives changed at runtime.
 pub(crate) fn request_shutdown(vm: &mut Vm) {
+    // php_request_shutdown() ends all output buffers (step 3) before the
+    // modules' RSHUTDOWN (step 7): the URL rewriter must see the final
+    // output and session warnings are written unbuffered.
+    php_support::output::end_all(vm);
     set_phase(Phase::Shutdown);
     let err = with_host(vm, |h| {
         let r = php_session::request_shutdown(h);
@@ -50,6 +54,7 @@ pub(crate) fn request_shutdown(vm: &mut Vm) {
         r.err().or(late)
     });
     crate::headers::reset();
+    crate::rewrite::request_shutdown(vm);
     if let Some(e) = err {
         report(vm, e);
     }

@@ -12,6 +12,7 @@ php-runtime = { path = "../php-runtime" }
 php-session = { path = "../php-session" }
 php-support = { path = "../php-support" }
 php-streams = { path = "../php-streams" }
+php-stdstr = { path = "../php-stdstr" }
 
 [lints]
 workspace = true
