@@ -1,0 +1,189 @@
+//! End-to-end tests: PHP scripts run on a VM with the `session` extension.
+
+#![allow(clippy::needless_raw_string_hashes)]
+
+use std::cell::RefCell;
+use std::io::Write;
+use std::path::PathBuf;
+use std::rc::Rc;
+
+use php_vm::ext::Extension;
+use php_vm::{Vm, VmOptions};
+
+/// A `Write` sink shared with the test.
+#[derive(Clone, Default)]
+struct Sink(Rc<RefCell<Vec<u8>>>);
+
+impl Write for Sink {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0.borrow_mut().extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// A fresh, empty directory for session files.
+fn save_dir(name: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!(
+        "php-ext-session-test-{}-{name}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("temp dir");
+    dir
+}
+
+/// Runs `code` (a whole script, including `<?php`) with extra INI values.
+fn run_with(code: &str, ini: &[(&str, &str)]) -> String {
+    let sink = Sink::default();
+    let ext = php_ext_session::Session;
+    let exts: [&dyn Extension; 1] = [&ext];
+    let opts = VmOptions {
+        ini: ini
+            .iter()
+            .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+            .collect(),
+    };
+    let mut vm = Vm::with_extensions(&opts, Box::new(sink.clone()), &exts);
+    vm.run_script(code.as_bytes(), "test.php");
+    drop(vm);
+    let out = sink.0.borrow().clone();
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+#[test]
+fn files_handler_round_trip_and_superglobal_binding() {
+    let dir = save_dir("files");
+    let path = dir.to_string_lossy().into_owned();
+    let ini = [
+        ("session.save_path", path.as_str()),
+        ("session.use_strict_mode", "0"),
+    ];
+    let out = run_with(
+        r#"<?php ob_start();
+        session_id("abc123");
+        var_dump(session_start(), session_status() === PHP_SESSION_ACTIVE);
+        function put() { $_SESSION['n'] = 41; }
+        put();
+        $_SESSION['n']++;
+        echo session_encode(), "\n";"#,
+        &ini,
+    );
+    assert_eq!(out, "bool(true)\nbool(true)\nn|i:42;\n");
+    let stored = std::fs::read(dir.join("sess_abc123")).expect("session file");
+    assert_eq!(stored, b"n|i:42;");
+    let out = run_with(
+        r#"<?php ob_start(); session_id("abc123"); session_start(); var_dump($_SESSION);"#,
+        &ini,
+    );
+    assert_eq!(out, "array(1) {\n  [\"n\"]=>\n  int(42)\n}\n");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn ini_values_are_shared_with_the_vm() {
+    let out = run_with(
+        r#"<?php
+        ob_start();
+        var_dump(session_name("other"), ini_get("session.name"));
+        var_dump(ini_set("session.name", "third"), session_name());
+        var_dump(ini_set("session.sid_length", "1"));
+        ini_restore("session.name");
+        var_dump(session_name());"#,
+        &[("session.cookie_secure", "On")],
+    );
+    let expected = "string(9) \"PHPSESSID\"\nstring(5) \"other\"\nstring(5) \"other\"\nstring(5) \"third\"\n\
+         \nDeprecated: ini_set(): session.sid_length INI setting is deprecated in test.php on line 5\n\
+         \nWarning: ini_set(): session.configuration \"session.sid_length\" must be between 22 and 256 in test.php on line 5\n\
+         bool(false)\nstring(9) \"PHPSESSID\"\n";
+    assert_eq!(out, expected);
+    let out = run_with(
+        r#"<?php var_dump(ini_get("session.cookie_secure"));"#,
+        &[("session.cookie_secure", "On")],
+    );
+    assert_eq!(out, "string(1) \"1\"\n");
+}
+
+#[test]
+fn user_handler_object_reenters_the_module() {
+    let out = run_with(
+        r#"<?php ob_start();
+        class H extends SessionHandler {
+            public $log = [];
+            function open($p, $n): bool { $this->log[] = "open:" . session_status(); return true; }
+            function close(): bool { $this->log[] = "close"; return true; }
+            function read($id): string|false { $this->log[] = "read:" . session_id(); return "a|i:1;"; }
+            function write($id, $d): bool { $this->log[] = "write:$d"; return true; }
+            function destroy($id): bool { return true; }
+            function gc($m): int|false { return 0; }
+            function create_sid(): string { return "fixedid"; }
+        }
+        $h = new H;
+        session_set_save_handler($h, false);
+        session_start();
+        $_SESSION['b'] = 2;
+        session_write_close();
+        echo implode(",", $h->log), "\n";"#,
+        &[],
+    );
+    assert_eq!(out, "open:2,read:fixedid,write:a|i:1;b|i:2;,close\n");
+}
+
+#[test]
+fn shutdown_writes_through_the_user_handler() {
+    let out = run_with(
+        r#"<?php ob_start();
+        class H implements SessionHandlerInterface, SessionIdInterface, SessionUpdateTimestampHandlerInterface {
+            function open($p, $n): bool { return true; }
+            function close(): bool { echo "close\n"; return true; }
+            function read($id): string|false { return ""; }
+            function write($id, $d): bool { echo "write $d\n"; return true; }
+            function destroy($id): bool { return true; }
+            function gc($m): int|false { return 0; }
+            function create_sid(): string { return "sid1"; }
+            function validateId($id): bool { return true; }
+            function updateTimestamp($id, $d): bool { return true; }
+        }
+        session_set_save_handler(new H);
+        session_start();
+        $_SESSION['x'] = 'y';
+        echo "end\n";"#,
+        &[],
+    );
+    assert_eq!(out, "end\nwrite x|s:1:\"y\";\nclose\n");
+}
+
+#[test]
+fn trans_sid_rewrites_links_and_forms() {
+    let out = run_with(
+        "<?php session_id('s1'); session_start(); ?>\n<a href=\"x.php?a=1\">\n<form action=\"/f\">\n",
+        &[
+            ("session.use_cookies", "0"),
+            ("session.use_only_cookies", "0"),
+            ("session.use_trans_sid", "1"),
+            ("session.use_strict_mode", "0"),
+            ("session.save_handler", "files"),
+            ("session.save_path", std::env::temp_dir().to_str().unwrap_or("/tmp")),
+        ],
+    );
+    assert!(
+        out.ends_with(
+            "<a href=\"x.php?a=1&PHPSESSID=s1\">\n<form action=\"/f\">\
+             <input type=\"hidden\" name=\"PHPSESSID\" value=\"s1\" />\n"
+        ),
+        "{out}"
+    );
+    let _ = std::fs::remove_file(std::env::temp_dir().join("sess_s1"));
+}
+
+#[test]
+fn output_add_rewrite_var_uses_url_rewriter_tags() {
+    let out = run_with(
+        "<?php ini_set('url_rewriter.tags', 'a=href,form='); output_add_rewrite_var('k', 'v w'); ?>\n<a href=\"p\">\n",
+        &[],
+    );
+    assert_eq!(out, "<a href=\"p?k=v%20w\">\n");
+}
