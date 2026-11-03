@@ -350,6 +350,7 @@ dependencies = [
  "php-cli-server",
  "php-ext-bcmath",
  "php-ext-calendar",
+ "php-ext-curl",
  "php-ext-date",
  "php-ext-exif",
  "php-ext-fileinfo",
