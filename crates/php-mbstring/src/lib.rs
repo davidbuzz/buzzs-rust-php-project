@@ -14,6 +14,7 @@ pub mod encoding;
 pub mod error;
 pub mod legacy;
 pub mod tables;
+pub mod unicode;
 
 pub use convert::{ConvertBuf, ErrorMode, BAD_INPUT};
 pub use encoding::{Encoding, EncodingNo};

@@ -4,3 +4,7 @@
 pub mod cjk;
 pub mod html_entities;
 pub mod singlebyte;
+pub mod eaw;
+pub mod rare_cp;
+pub mod unicode_data;
+pub mod qencode;
