@@ -2,7 +2,7 @@
 
 use crate::ctx::{RtExt, VmQuery};
 use php_lexer::WarningKind;
-use php_runtime::{Value, ZStr};
+use php_runtime::{HashTable, RtResult, Value, ZArray, ZStr};
 use php_stdmisc::highlight::{self, HighlightColors};
 use php_stdmisc::locale::{self, LocaleState};
 use php_stdmisc::query::{self, InputSettings};
@@ -179,10 +179,49 @@ fn input_settings(vm: &Vm) -> InputSettings {
     }
 }
 
+/// `filter.default` / `filter.default_flags` when the filter extension is
+/// loaded and selects a filter other than `FILTER_UNSAFE_RAW`.
+fn default_filter(vm: &Vm) -> Option<(i64, i64)> {
+    let raw = vm.ini_string("filter.default")?;
+    let (id, _) = php_filter::parse_default_filter_ini(&raw);
+    if id == php_filter::constants::FILTER_UNSAFE_RAW {
+        return None;
+    }
+    let flags = vm
+        .ini_string("filter.default_flags")
+        .filter(|v| !v.is_empty());
+    Some((id, php_filter::parse_default_flags_ini(flags.as_deref())))
+}
+
+/// `sapi_module.input_filter` for `PARSE_STRING` (`php_sapi_filter`):
+/// applies the default filter to every value of the parsed array.
+fn filter_values(q: &mut VmQuery<'_>, arr: &ZArray, filter: i64, flags: i64) -> RtResult<ZArray> {
+    let mut out = HashTable::new();
+    for (k, v) in arr.iter() {
+        let nv = match v.deref() {
+            Value::Array(inner) => Value::Array(filter_values(q, &inner, filter, flags)?),
+            Value::Str(s) => {
+                match php_filter::apply_default_filter(q, s.as_bytes(), filter, flags)? {
+                    v @ Value::Str(_) => v,
+                    Value::Bool(false) | Value::Null => Value::from(""),
+                    other => Value::Str(other.to_zstr(q)?),
+                }
+            }
+            other => other,
+        };
+        out.insert(k.clone(), nv);
+    }
+    Ok(ZArray::from_table(out))
+}
+
 fn parse_str(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let s = a.str(0);
     let settings = input_settings(vm);
-    let arr = query::parse_str(s.as_bytes(), &settings, vm).vm(vm)?;
+    let mut arr = query::parse_str(s.as_bytes(), &settings, vm).vm(vm)?;
+    if let Some((filter, flags)) = default_filter(vm) {
+        let r = filter_values(&mut VmQuery::new(vm), &arr, filter, flags);
+        arr = r.vm(vm)?;
+    }
     a.set_ref(1, Value::Array(arr));
     Ok(Value::Null)
 }

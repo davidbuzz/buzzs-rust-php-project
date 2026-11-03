@@ -156,3 +156,15 @@ fn setcookie_validation() {
         "bool(true)\nsetcookie(): option \"bogus\" is invalid|setrawcookie(): Argument #2 ($value) cannot contain \",\", \";\", \" \", \"\\t\", \"\\r\", \"\\n\", \"\\013\", or \"\\014\""
     );
 }
+
+#[test]
+fn ini_parse_quantity_warns() {
+    let out = run(r#"var_dump(ini_parse_quantity("2K"), ini_parse_quantity("1Q"));"#);
+    assert!(out.contains("Invalid quantity \"1Q\""), "{out}");
+    assert!(out.ends_with("int(2048)\nint(1)\n"), "{out}");
+}
+
+#[test]
+fn get_current_user_without_script_is_empty() {
+    assert_eq!(run(r#"var_dump(get_current_user());"#), "string(0) \"\"\n");
+}

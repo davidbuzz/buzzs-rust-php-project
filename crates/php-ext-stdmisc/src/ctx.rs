@@ -216,3 +216,15 @@ impl QueryContext for VmQuery<'_> {
         Ok(Some(Some(v)))
     }
 }
+
+impl php_filter::FilterHost for VmQuery<'_> {
+    fn is_callable(&mut self, callable: &Value) -> bool {
+        self.vm.is_callable(callable)
+    }
+
+    fn call_callback(&mut self, callable: &Value, arg: Value) -> RtResult<Value> {
+        self.vm
+            .call_value(callable, vec![arg])
+            .map_err(|t| to_rt(self.vm, t))
+    }
+}

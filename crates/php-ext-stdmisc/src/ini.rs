@@ -181,6 +181,16 @@ fn parse_ini_file(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     parse_result(vm, r)
 }
 
+/// `ini_parse_quantity($shorthand)`: the value, with PHP's warning for
+/// malformed input (`zend_error(E_WARNING, ...)`, no function prefix).
+fn ini_parse_quantity(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let (v, err) = ini::parse_quantity(a.str(0).as_bytes());
+    if let Some(e) = err {
+        vm.raise(2, &e)?;
+    }
+    Ok(Value::Int(v))
+}
+
 #[allow(clippy::unnecessary_wraps)] // native handler signature
 fn get_included_files(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
     let mut out: Vec<Value> = Vec::with_capacity(vm.included.len() + 1);
@@ -217,6 +227,7 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
         "parse_ini_file(string $filename, bool $process_sections = false, int $scanner_mode = INI_SCANNER_NORMAL): array|false",
         parse_ini_file,
     )
+    .function("ini_parse_quantity(string $shorthand): int", ini_parse_quantity)
     .function("get_included_files(): array", get_included_files)
     .function("get_required_files(): array", get_included_files);
 }

@@ -54,6 +54,37 @@ fn page_info(vm: &Vm) -> PageInfo {
     PageInfo::for_script(real.then_some(path))
 }
 
+/// The login name of `uid` from the passwd database (`getpwuid()`; files
+/// backend).
+fn user_name(uid: i64) -> Option<String> {
+    let passwd = std::fs::read_to_string("/etc/passwd").ok()?;
+    passwd.lines().find_map(|l| {
+        let mut f = l.split(':');
+        let name = f.next()?;
+        let _pw = f.next()?;
+        (f.next()?.parse::<i64>().ok()? == uid).then(|| name.to_string())
+    })
+}
+
+/// `get_current_user()`: the owner of the main script (`""` when there is
+/// none, e.g. `php -r`, it cannot be stat'ed, or the uid has no passwd
+/// entry).
+#[allow(clippy::unnecessary_wraps)] // native handler signature
+fn get_current_user(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
+    let path = vm.script_path.as_bytes();
+    let real = !path.is_empty() && path != b"Standard input code" && path != b"Command line code";
+    if !real {
+        return Ok(Value::from(""));
+    }
+    // `sapi_get_stat()` failed (e.g. the script was deleted): no user.
+    let page = page_info(vm);
+    if page.inode < 0 {
+        return Ok(Value::from(""));
+    }
+    let name = user_name(page.uid).unwrap_or_default();
+    Ok(Value::from(name))
+}
+
 #[allow(clippy::unnecessary_wraps)] // native handler signature
 fn getmyuid(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
     Ok(page_info(vm).getmyuid())
@@ -216,6 +247,7 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
     .function("getrusage(int $mode = 0): array|false", getrusage)
     .function("getmypid(): int|false", getmypid)
     .function("getmyuid(): int|false", getmyuid)
+    .function("get_current_user(): string", get_current_user)
     .function("getmygid(): int|false", getmygid)
     .function("getmyinode(): int|false", getmyinode)
     .function("getlastmod(): int|false", getlastmod)

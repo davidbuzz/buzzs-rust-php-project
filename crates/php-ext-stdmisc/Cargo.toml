@@ -11,6 +11,7 @@ php-runtime = { path = "../php-runtime" }
 php-stdmisc = { path = "../php-stdmisc" }
 php-support = { path = "../php-support" }
 php-lexer = { path = "../php-lexer" }
+php-filter = { path = "../php-filter" }
 php-streams = { path = "../php-streams" }
 php-ext-streams = { path = "../php-ext-streams" }
 

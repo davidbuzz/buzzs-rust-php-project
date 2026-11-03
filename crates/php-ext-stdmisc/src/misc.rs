@@ -8,7 +8,7 @@ use php_stdmisc::info::{self, InfoModule, InfoPrinter, InfoSource};
 use php_stdmisc::mail::{self, ErrorLogSettings, HeadersArg, LogTarget, MailSettings, ScriptInfo};
 use php_stdmisc::misc::{self, AssertState};
 use php_stdmisc::system::{self, PageInfo};
-use php_vm::ext::{Args, ModuleBuilder, VmResult};
+use php_vm::ext::{Args, InfoItem, ModuleBuilder, VmResult};
 use php_vm::Vm;
 
 /// The `mail.*` INI settings.
@@ -177,6 +177,9 @@ fn assert_options(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 struct Module {
     name: String,
     ini: Vec<(Vec<u8>, Vec<u8>, Vec<u8>)>,
+    /// The `PHP_MINFO` section registered with `ModuleBuilder::info`
+    /// (`None`: the module only has a version).
+    info: Option<Vec<InfoItem>>,
 }
 
 impl InfoModule for Module {
@@ -187,7 +190,36 @@ impl InfoModule for Module {
         true
     }
     fn print_body(&self, p: &mut InfoPrinter) {
-        p.ini_entries(&self.ini);
+        if let Some(items) = &self.info {
+            print_items(p, items, &self.ini);
+        } else {
+            // `php_info_print_module()` for a module without `info_func`.
+            p.table_start();
+            p.table_row(&[b"Version", php_vm::PHP_VERSION.as_bytes()]);
+            p.table_end();
+            p.ini_entries(&self.ini);
+        }
+    }
+}
+
+/// Renders a module's `PHP_MINFO` items (`php_info_print_table_*` calls,
+/// `DISPLAY_INI_ENTRIES()` with the module's INI rows).
+fn print_items(p: &mut InfoPrinter, items: &[InfoItem], ini: &[(Vec<u8>, Vec<u8>, Vec<u8>)]) {
+    for item in items {
+        match item {
+            InfoItem::TableStart => p.table_start(),
+            InfoItem::TableEnd => p.table_end(),
+            InfoItem::Header(cols) => {
+                let cols: Vec<&[u8]> = cols.iter().map(String::as_bytes).collect();
+                p.table_header(&cols);
+            }
+            InfoItem::ColspanHeader(text) => p.colspan_header(2, text),
+            InfoItem::Row(cols) => {
+                let cols: Vec<&[u8]> = cols.iter().map(String::as_bytes).collect();
+                p.table_row(&cols);
+            }
+            InfoItem::IniEntries => p.ini_entries(ini),
+        }
     }
 }
 
@@ -320,16 +352,22 @@ fn phpinfo(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         .iter()
         .map(|s| (*s).to_string())
         .collect();
-    for e in &vm.loaded_extensions {
-        if !names.iter().any(|n| n.eq_ignore_ascii_case(e)) {
-            names.push(e.clone());
+    for e in vm
+        .loaded_extensions
+        .iter()
+        .cloned()
+        .chain(vm.modules_with_info())
+    {
+        if !names.iter().any(|n| n.eq_ignore_ascii_case(&e)) {
+            names.push(e);
         }
     }
     let modules: Vec<Module> = names
         .into_iter()
         .map(|name| {
             let ini = ini_rows(vm, &name);
-            Module { name, ini }
+            let info = vm.module_info(&name);
+            Module { name, ini, info }
         })
         .collect();
     let module_refs: Vec<&dyn InfoModule> = modules.iter().map(|m| m as &dyn InfoModule).collect();
