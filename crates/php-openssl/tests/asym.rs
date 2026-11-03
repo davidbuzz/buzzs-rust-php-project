@@ -156,7 +156,7 @@ fn seal_open() {
     let pub_url = fixture_url("public.key");
     let pk = KeyArg::Str(&pub_url);
     assert_eq!(
-        o.seal(b"data", &[pk.clone()], b"aes-128-cbc", false)
+        o.seal(b"data", std::slice::from_ref(&pk), b"aes-128-cbc", false)
             .unwrap_err(),
         Throw::ArgumentValueError {
             arg: 6,
@@ -211,7 +211,7 @@ fn seal_open() {
         .is_err());
     // ECB needs no IV.
     let s = o
-        .seal(b"data", &[pk.clone()], b"aes-128-ecb", false)
+        .seal(b"data", std::slice::from_ref(&pk), b"aes-128-ecb", false)
         .unwrap()
         .unwrap();
     let out = s.outputs.unwrap();
