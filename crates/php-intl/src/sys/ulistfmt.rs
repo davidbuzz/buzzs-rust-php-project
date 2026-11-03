@@ -35,7 +35,7 @@ impl ListFormatter {
 
     /// `ulistfmt_format()`.
     pub fn format(&self, items: &[Vec<UChar>]) -> Result<Vec<UChar>, UErrorCode> {
-        let ptrs: Vec<*const UChar> = items.iter().map(|s| s.as_ptr()).collect();
+        let ptrs: Vec<*const UChar> = items.iter().map(Vec::as_ptr).collect();
         let lens: Vec<i32> = items.iter().map(|s| ffi::len32(s)).collect();
         // SAFETY: ptrs/lens describe `items`, which outlives the call; the
         // buffer contract is handled by fill_u16.
