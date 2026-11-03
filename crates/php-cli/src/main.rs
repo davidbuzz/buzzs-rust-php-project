@@ -54,7 +54,27 @@ enum Mode {
     Stdin,
 }
 
+/// Caps the address space so that runaway scripts fail instead of
+/// exhausting the machine's memory (PHP's `memory_limit` analogue).
+fn limit_memory() {
+    let limit: u64 = std::env::var("PHPRUST_MAX_AS_MB")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(4096)
+        * 1024
+        * 1024;
+    let rl = libc::rlimit {
+        rlim_cur: limit,
+        rlim_max: limit,
+    };
+    // SAFETY: setrlimit only reads the struct we pass; failure is harmless.
+    unsafe {
+        libc::setrlimit(libc::RLIMIT_AS, &rl);
+    }
+}
+
 fn main() {
+    limit_memory();
     let raw: Vec<Vec<u8>> = std::env::args_os().skip(1).map(OsStringExt::into_vec).collect();
     std::process::exit(run(&raw));
 }
@@ -216,7 +236,7 @@ fn run(raw: &[Vec<u8>]) -> i32 {
     let p = String::from_utf8_lossy(&path).into_owned();
     // Run on a thread with a large stack (deep recursion in user code).
     let r = std::thread::Builder::new()
-        .stack_size(1 << 30)
+        .stack_size(256 << 20)
         .spawn(move || {
             let stdout: Box<dyn Write> =
                 Box::new(std::io::BufWriter::with_capacity(1 << 16, std::io::stdout()));
