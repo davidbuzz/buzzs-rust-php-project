@@ -19,6 +19,8 @@ use php_vm::{Throw, Vm};
 use php_zip::{RegexMatcher, ZipHost};
 
 thread_local! {
+    /// Library diagnostics held back by [`run_frameless`].
+    static HELD: RefCell<Option<Vec<Diagnostic>>> = const { RefCell::new(None) };
     /// The `addPattern()` PCRE state (pattern cache). The `php-ext-pcre`
     /// state is private to that crate, so zip keeps its own.
     static PCRE: RefCell<php_pcre::Pcre> = RefCell::new(php_pcre::Pcre::new());
@@ -155,7 +157,7 @@ fn compile_regex(vm: &mut Vm, regex: &[u8]) -> Option<RegexMatcher> {
         let r = p.compile(regex);
         (r, p.take_warnings(), p.config())
     });
-    let mut warn = |vm: &mut Vm, w: &[u8]| {
+    let warn = |vm: &mut Vm, w: &[u8]| {
         if let Err(t) = vm.php_warning_bytes(w) {
             bridge::set_pending(t);
         }
@@ -176,6 +178,16 @@ fn compile_regex(vm: &mut Vm, regex: &[u8]) -> Option<RegexMatcher> {
 
 /// The diagnostics sink installed by [`run`]: emits through the VM at once.
 fn emit_now(d: Diagnostic) {
+    let pass = HELD.with(|h| match h.borrow_mut().as_mut() {
+        Some(held) => {
+            held.push(d);
+            None
+        }
+        None => Some(d),
+    });
+    let Some(d) = pass else {
+        return;
+    };
     let done = bridge::with_vm(|vm| {
         // php_stream_display_wrapper_errors() stays silent when an
         // exception has already been thrown.
@@ -227,4 +239,30 @@ pub(crate) fn run<R>(
         },
         Err(e) => Err(rt_throw(vm, e)),
     }
+}
+
+/// [`run`] for code running without an executing PHP frame (the
+/// destructor at request shutdown).
+///
+/// There, PHP turns any exception into an "Uncaught" fatal error and bails
+/// out of libzip at once, so the library's later warnings (e.g. "Cannot
+/// destroy the zip context" after a cancel callback returned garbage) are
+/// never shown. The library's diagnostics are therefore held back and
+/// emitted only when the call completes without an exception.
+pub(crate) fn run_frameless<R>(
+    vm: &mut Vm,
+    f: impl FnOnce(&mut dyn ZipHost) -> RtResult<R>,
+) -> VmResult<R> {
+    let outer = HELD.with(|h| h.borrow_mut().replace(Vec::new()));
+    let r = run(vm, f);
+    let held = HELD.with(|h| std::mem::replace(&mut *h.borrow_mut(), outer)).unwrap_or_default();
+    if r.is_ok() {
+        let prev = diag::set_handler(Some(Box::new(emit_now)));
+        bridge::enter(vm, || held.into_iter().for_each(emit_now));
+        diag::set_handler(prev);
+        if let Some(t) = bridge::take_pending() {
+            return Err(t);
+        }
+    }
+    r
 }

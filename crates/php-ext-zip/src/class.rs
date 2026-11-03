@@ -7,7 +7,7 @@ use std::rc::Rc;
 use php_ext_streams::res;
 use php_runtime::{ArrayKey, Obj, PropertyPurpose, RtResult, Value, ZArray, ZStr};
 use php_streams::stream::Stream;
-use php_vm::ext::{acc, Args, ClassBuilder, ClassHooks, ModuleBuilder, VmResult};
+use php_vm::ext::{acc, class_flags, Args, ClassBuilder, ClassHooks, ModuleBuilder, VmResult};
 use php_vm::func::flags;
 use php_vm::object;
 use php_vm::{Throw, Vm};
@@ -435,7 +435,13 @@ fn is_encryption_method_supported(vm: &mut Vm, a: &mut Args) -> VmResult<Value> 
 /// is destroyed. Registered as `__destruct` because the VM has no native
 /// destructor hook.
 fn destruct(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    match with_zip(vm, a, |z, h| z.destroy(h)) {
+    let z = state_of(&a.this_obj());
+    let r = if vm.is_executing() {
+        host::run(vm, |h| z.destroy(h))
+    } else {
+        host::run_frameless(vm, |h| z.destroy(h))
+    };
+    match r {
         Ok(()) => Ok(Value::Null),
         Err(Throw::Exception(e)) => {
             hide_destructor_frame(&e);
@@ -463,7 +469,7 @@ fn hide_destructor_frame(e: &Obj) {
         let Value::Array(f) = frame.deref() else {
             return false;
         };
-        let field = |k: &[u8]| f.get_str(k).map(|v| v.deref());
+        let field = |k: &[u8]| f.get_str(k).map(Value::deref);
         matches!(field(b"function"), Some(Value::Str(n)) if n.as_bytes() == b"__destruct")
             && matches!(field(b"class"), Some(Value::Str(c)) if c.as_bytes() == b"ZipArchive")
     };
@@ -482,22 +488,23 @@ fn hide_destructor_frame(e: &Obj) {
 }
 
 // ---------------------------------------------------------------------------
-// Object handlers
+// Object handlers (signatures fixed by `ClassHooks`)
 // ---------------------------------------------------------------------------
 
-fn create(_vm: &mut Vm, o: &Obj) -> VmResult<()> {
-    object::set_internal::<State>(o, Rc::new(ZipArchive::new()));
+#[allow(clippy::unnecessary_wraps)]
+fn create(vm: &mut Vm, o: &Obj) -> VmResult<()> {
+    let z = ZipArchive::new();
+    // The declared slots are initialised so that code walking the standard
+    // property table (`get_object_vars()`, `foreach`) lists them; their
+    // values are always read through `read_property`.
+    for (name, v) in z.properties() {
+        vm.set_property_raw(o, name, v);
+    }
+    object::set_internal::<State>(o, Rc::new(z));
     Ok(())
 }
 
-fn clone(vm: &mut Vm, old: &Obj, _new: &Obj) -> VmResult<()> {
-    let msg = format!(
-        "Trying to clone an uncloneable object of class {}",
-        class_name(old)
-    );
-    Err(vm.throw("Error", &msg))
-}
-
+#[allow(clippy::unnecessary_wraps)]
 fn read_property(_vm: &mut Vm, o: &Obj, name: &ZStr) -> VmResult<Option<Value>> {
     if !ZipArchive::is_virtual_property(name.as_bytes()) {
         return Ok(None);
@@ -513,6 +520,7 @@ fn write_property(vm: &mut Vm, o: &Obj, name: &ZStr, _v: &Value) -> VmResult<boo
     Err(host::rt_throw(vm, e))
 }
 
+#[allow(clippy::unnecessary_wraps)]
 fn has_property(_vm: &mut Vm, o: &Obj, name: &ZStr, empty: bool) -> VmResult<Option<bool>> {
     // The VM asks "is it empty?" for `empty()`, PHP's handler answers
     // "is it non-empty?".
@@ -539,6 +547,7 @@ fn mangle(pi: &php_vm::class::PropInfo) -> ZStr {
     }
 }
 
+#[allow(clippy::unnecessary_wraps)]
 /// `php_zip_get_properties()`: the standard table with the virtual
 /// properties' current values.
 fn properties_for(_vm: &mut Vm, o: &Obj, purpose: PropertyPurpose) -> VmResult<Option<ZArray>> {
@@ -716,7 +725,11 @@ const STATIC_METHODS: &[(&str, Handler)] = &[
 /// Registers `ZipArchive`.
 pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
     let vm = m.vm();
-    let mut cb = ClassBuilder::new("ZipArchive").implements(vm, &["Countable"]);
+    // Internal classes allow dynamic properties unless `@strict-properties`;
+    // `clone_obj` is NULL.
+    let mut cb = ClassBuilder::new("ZipArchive")
+        .flags(class_flags::ALLOW_DYNAMIC | class_flags::NO_CLONE)
+        .implements(vm, &["Countable"]);
     for c in consts::class_constants() {
         let v = match c.value {
             ConstValue::Int(i) => Value::Int(i),
@@ -728,15 +741,14 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
         cb = cb.prop(name, acc::PUBLIC, Some(*ty), None);
     }
     for (sig, h) in METHODS {
-        cb = cb.method(*sig, acc::PUBLIC, *h);
+        cb = cb.method(sig, acc::PUBLIC, *h);
     }
     for (sig, h) in STATIC_METHODS {
-        cb = cb.method(*sig, acc::PUBLIC | acc::STATIC, *h);
+        cb = cb.method(sig, acc::PUBLIC | acc::STATIC, *h);
     }
     cb.method("__destruct()", acc::PUBLIC, destruct)
         .hooks(ClassHooks {
             create: Some(create),
-            clone: Some(clone),
             read_property: Some(read_property),
             write_property: Some(write_property),
             has_property: Some(has_property),
