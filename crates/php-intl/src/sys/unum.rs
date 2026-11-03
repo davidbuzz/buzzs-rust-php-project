@@ -3,6 +3,17 @@
 use crate::error::UErrorCode;
 use crate::ffi::{self, fill_u16, len32, UNumberFormat, UParseError};
 
+/// A number parsed into a `Formattable`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Parsed {
+    /// `kDouble`
+    Double(f64),
+    /// `kLong` (int32)
+    Long(i32),
+    /// `kInt64`
+    Int64(i64),
+}
+
 /// Owned `UNumberFormat*`.
 #[derive(Debug)]
 pub struct NumberFormat(*mut UNumberFormat);
@@ -182,6 +193,35 @@ impl NumberFormat {
         *pos = p;
         let n = cur.iter().position(|&c| c == 0).unwrap_or(3).min(3);
         Ok((r, cur[..n].to_vec()))
+    }
+
+    /// `unum_parseToUFormattable()` → the parsed value with its
+    /// `Formattable` type.
+    pub fn parse_formattable(&self, text: &[u16], pos: &mut i32) -> Result<Parsed, UErrorCode> {
+        let mut st = UErrorCode::ZERO;
+        // SAFETY: ufmt_open has no preconditions; closed below.
+        let f = unsafe { ffi::ufmt_open(&mut st) };
+        st.check()?;
+        let mut p = *pos;
+        // SAFETY: f is live; text is a live slice; p a valid in/out pointer.
+        unsafe { ffi::unum_parseToUFormattable(self.0, f, text.as_ptr(), len32(text), &mut p, &mut st) };
+        let r = if st.is_failure() {
+            Err(st)
+        } else {
+            *pos = p;
+            // SAFETY: f holds the parse result.
+            let ty = unsafe { ffi::ufmt_getType(f, &mut st) };
+            // SAFETY: getters on a live formattable of the matching type.
+            match ty {
+                1 => Ok(Parsed::Double(unsafe { ffi::ufmt_getDouble(f, &mut st) })),
+                2 => Ok(Parsed::Long(unsafe { ffi::ufmt_getLong(f, &mut st) })),
+                5 => Ok(Parsed::Int64(unsafe { ffi::ufmt_getInt64(f, &mut st) })),
+                _ => Ok(Parsed::Double(unsafe { ffi::ufmt_getDouble(f, &mut st) })),
+            }
+        };
+        // SAFETY: f is owned here and closed once.
+        unsafe { ffi::ufmt_close(f) };
+        r
     }
 
     /// `unum_getAttribute()`.

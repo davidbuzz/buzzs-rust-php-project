@@ -14,6 +14,7 @@ pub mod calendar;
 pub mod common;
 pub mod dateformat;
 pub mod datepatterngenerator;
+pub mod msgpattern;
 pub mod numfmt;
 pub mod sys;
 pub mod timezone;

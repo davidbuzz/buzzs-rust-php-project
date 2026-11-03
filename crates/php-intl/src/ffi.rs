@@ -274,11 +274,13 @@ icu! {
     fn unum_formatDoubleForFields(format: *const UNumberFormat, number: f64, result: *mut UChar, resultLength: i32, fpositer: *mut UFieldPositionIterator, status: *mut UErrorCode) -> i32;
     fn unum_formatDecimal(fmt: *const UNumberFormat, number: *const c_char, length: i32, result: *mut UChar, resultLength: i32, pos: *mut UFieldPosition, status: *mut UErrorCode) -> i32;
     fn unum_formatDoubleCurrency(fmt: *const UNumberFormat, number: f64, currency: *mut UChar, result: *mut UChar, resultLength: i32, pos: *mut UFieldPosition, status: *mut UErrorCode) -> i32;
+    fn unum_formatUFormattable(fmt: *const UNumberFormat, number: *const *mut c_void, result: *mut UChar, resultLength: i32, pos: *mut UFieldPosition, status: *mut UErrorCode) -> i32;
     fn unum_parse(fmt: *const UNumberFormat, text: *const UChar, textLength: i32, parsePos: *mut i32, status: *mut UErrorCode) -> i32;
     fn unum_parseInt64(fmt: *const UNumberFormat, text: *const UChar, textLength: i32, parsePos: *mut i32, status: *mut UErrorCode) -> i64;
     fn unum_parseDouble(fmt: *const UNumberFormat, text: *const UChar, textLength: i32, parsePos: *mut i32, status: *mut UErrorCode) -> f64;
     fn unum_parseDecimal(fmt: *const UNumberFormat, text: *const UChar, textLength: i32, parsePos: *mut i32, outBuf: *mut c_char, outBufLength: i32, status: *mut UErrorCode) -> i32;
     fn unum_parseDoubleCurrency(fmt: *const UNumberFormat, text: *const UChar, textLength: i32, parsePos: *mut i32, currency: *mut UChar, status: *mut UErrorCode) -> f64;
+    fn unum_parseToUFormattable(fmt: *const UNumberFormat, result: *mut *mut c_void, text: *const UChar, textLength: i32, parsePos: *mut i32, status: *mut UErrorCode) -> *mut *mut c_void;
     fn unum_applyPattern(format: *mut UNumberFormat, localized: UBool, pattern: *const UChar, patternLength: i32, parseError: *mut UParseError, status: *mut UErrorCode);
     fn unum_getAvailable(localeIndex: i32) -> *const c_char;
     fn unum_countAvailable() -> i32;
@@ -931,6 +933,13 @@ icu! {
     fn unumsys_isAlgorithmic(unumsys: *const UNumberingSystem) -> UBool;
     fn unumsys_getRadix(unumsys: *const UNumberingSystem) -> i32;
     fn unumsys_getDescription(unumsys: *const UNumberingSystem, result: *mut UChar, resultLength: i32, status: *mut UErrorCode) -> i32;
+    fn umsg_open(pattern: *const UChar, patternLength: i32, locale: *const c_char, parseError: *mut UParseError, status: *mut UErrorCode) -> *mut *mut c_void;
+    fn umsg_close(format: *mut *mut c_void);
+    fn umsg_clone(fmt: *const *mut c_void, status: *mut UErrorCode) -> *mut c_void;
+    fn umsg_setLocale(fmt: *mut *mut c_void, locale: *const c_char);
+    fn umsg_getLocale(fmt: *const *mut c_void) -> *const c_char;
+    fn umsg_applyPattern(fmt: *mut *mut c_void, pattern: *const UChar, patternLength: i32, parseError: *mut UParseError, status: *mut UErrorCode);
+    fn umsg_toPattern(fmt: *const *mut c_void, result: *mut UChar, resultLength: i32, status: *mut UErrorCode) -> i32;
     fn umsg_autoQuoteApostrophe(pattern: *const UChar, patternLength: i32, dest: *mut UChar, destCapacity: i32, ec: *mut UErrorCode) -> i32;
     fn ucol_keyHashCode(key: *const u8, length: i32) -> i32;
     fn ucol_primaryOrder(order: i32) -> i32;
@@ -948,6 +957,26 @@ icu! {
     fn ulocdata_getMeasurementSystem(localeID: *const c_char, status: *mut UErrorCode) -> i32;
     fn ulocdata_getPaperSize(localeID: *const c_char, height: *mut i32, width: *mut i32, status: *mut UErrorCode);
     fn ulocdata_getCLDRVersion(versionArray: *mut u8, status: *mut UErrorCode);
+    fn unumf_openResult(ec: *mut UErrorCode) -> *mut UFormattedNumber;
+    fn unumf_resultAsValue(uresult: *const UFormattedNumber, ec: *mut UErrorCode) -> *const UFormattedValue;
+    fn unumf_resultToString(uresult: *const UFormattedNumber, buffer: *mut UChar, bufferCapacity: i32, ec: *mut UErrorCode) -> i32;
+    fn unumf_resultNextFieldPosition(uresult: *const UFormattedNumber, ufpos: *mut UFieldPosition, ec: *mut UErrorCode) -> UBool;
+    fn unumf_resultGetAllFieldPositions(uresult: *const UFormattedNumber, ufpositer: *mut UFieldPositionIterator, ec: *mut UErrorCode);
+    fn unumf_resultToDecimalNumber(uresult: *const UFormattedNumber, dest: *mut c_char, destCapacity: i32, ec: *mut UErrorCode) -> i32;
+    fn unumf_closeResult(uresult: *mut UFormattedNumber);
+    fn ufmt_open(status: *mut UErrorCode) -> *mut *mut c_void;
+    fn ufmt_close(fmt: *mut *mut c_void);
+    fn ufmt_getType(fmt: *const *mut c_void, status: *mut UErrorCode) -> i32;
+    fn ufmt_isNumeric(fmt: *const *mut c_void) -> UBool;
+    fn ufmt_getDate(fmt: *const *mut c_void, status: *mut UErrorCode) -> UDate;
+    fn ufmt_getDouble(fmt: *mut *mut c_void, status: *mut UErrorCode) -> f64;
+    fn ufmt_getLong(fmt: *mut *mut c_void, status: *mut UErrorCode) -> i32;
+    fn ufmt_getInt64(fmt: *mut *mut c_void, status: *mut UErrorCode) -> i64;
+    fn ufmt_getObject(fmt: *const *mut c_void, status: *mut UErrorCode) -> *const c_void;
+    fn ufmt_getUChars(fmt: *mut *mut c_void, len: *mut i32, status: *mut UErrorCode) -> *const UChar;
+    fn ufmt_getArrayLength(fmt: *const *mut c_void, status: *mut UErrorCode) -> i32;
+    fn ufmt_getArrayItemByIndex(fmt: *mut *mut c_void, n: i32, status: *mut UErrorCode) -> *mut *mut c_void;
+    fn ufmt_getDecNumChars(fmt: *mut *mut c_void, len: *mut i32, status: *mut UErrorCode) -> *const c_char;
 }
 // DECLS-END
 

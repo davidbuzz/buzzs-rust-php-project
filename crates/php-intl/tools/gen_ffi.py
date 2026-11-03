@@ -10,7 +10,7 @@ HEADERS = ['utypes', 'uversion', 'uenum', 'uloc', 'unum', 'udat', 'ucal', 'ucol'
            'ustring', 'upluralrules', 'unumberformatter', 'unumberrangeformatter', 'ureldatefmt',
            'usearch', 'uset', 'uscript', 'ucurr', 'ufieldpositer', 'uformattedvalue', 'uldnames',
            'unumsys', 'umsg', 'ucasemap', 'uiter', 'ucoleitr', 'putil', 'uclean', 'udisplaycontext',
-           'icudataver', 'ulocdata']
+           'icudataver', 'ulocdata', 'uformattednumber', 'uformattable', 'ustring', 'utext']
 OPAQUE = set('''UNumberFormat UDateFormat UCollator UEnumeration UCalendar UBreakIterator UTransliterator
 UResourceBundle USpoofChecker USpoofCheckResult UConverter UDateTimePatternGenerator UListFormatter
 UFormattedList UIDNA UNormalizer2 UPluralRules UNumberFormatter UFormattedNumber UNumberRangeFormatter
@@ -18,8 +18,8 @@ UFormattedNumberRange URelativeDateTimeFormatter UStringSearch USet UFieldPositi
 ULocaleDisplayNames UFormattedValue UConstrainedFieldPosition UCharsetDetector UNumberingSystem'''.split())
 STRUCTS = {'UParseError', 'UFieldPosition', 'UIDNAInfo', 'UTransPosition', 'UConverterFromUnicodeArgs',
            'UConverterToUnicodeArgs'}
-SKIP_TYPES = {'UText', 'UCharIterator', 'UCaseMap', 'UReplaceable', 'UReplaceableCallbacks', 'UMessageFormat',
-              'va_list', 'UFormattable', 'UDataInfo', 'UCollationElements', 'UBreakIterator*const',
+SKIP_TYPES = {'UText', 'UCharIterator', 'UCaseMap', 'UReplaceable', 'UReplaceableCallbacks',
+              'va_list', 'UDataInfo', 'UCollationElements', 'UBreakIterator*const',
               'UDateFormatOpener', 'UCPMap', 'UCPTrie', 'UMutableCPTrie', 'UTraceEntry',
               'UCharNameChoice_', 'UCollationResult_', 'ULocaleData', 'USerializedSet', 'UStringPrepProfile',
               'UConverterSelector', 'ULocale', 'ULocaleBuilder', 'UDisplayOptions', 'UConstrainedFieldPosition',
@@ -30,7 +30,8 @@ SCALARS = {'int32_t': 'i32', 'int64_t': 'i64', 'uint32_t': 'u32', 'int16_t': 'i1
            'int8_t': 'i8', 'uint8_t': 'u8', 'double': 'f64', 'UBool': 'UBool', 'bool': 'bool', 'UChar': 'UChar',
            'UChar32': 'UChar32', 'UDate': 'UDate', 'char': 'c_char', 'size_t': 'usize', 'void': 'c_void',
            'UErrorCode': 'UErrorCode', 'UVersionInfo': '[u8; 4]', 'int': 'i32', 'float': 'f32',
-           'UProperty': 'i32', 'UScriptCode': 'i32', 'UAcceptResult': 'i32'}
+           'UProperty': 'i32', 'UScriptCode': 'i32', 'UAcceptResult': 'i32',
+           'UMessageFormat': '*mut c_void', 'UFormattable': '*mut c_void'}
 
 FNTYPES = {'UEnumCharNamesFn', 'UCharEnumTypeRange'}
 
