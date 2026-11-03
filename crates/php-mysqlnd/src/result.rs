@@ -278,12 +278,26 @@ impl ResultSet {
     /// `mysqlnd_res::fetch_row`: the next row as values, `Ok(None)` at the
     /// end. Errors are recorded on the connection.
     pub fn fetch_row_values(&mut self) -> Result<Option<Vec<Value>>> {
+        self.fetch_inner(true)
+    }
+
+    /// `fetch_row` with `row_ptr == NULL`: advances without decoding (no
+    /// per-type statistics), as `skip_result` does.
+    fn fetch_inner(&mut self, decode: bool) -> Result<Option<Vec<Value>>> {
         if self.cursor_stmt_id.is_some() {
             return Err(Error { errno: 0, sqlstate: String::new(), message: Vec::new() });
         }
         match &mut self.data {
             Data::None => Ok(None),
             Data::Buffered { rows, current } => {
+                if *current < rows.len() as u64 && !decode {
+                    *current += 1;
+                    inc_global(
+                        if self.ps { Stat::RowsFetchedFromClientPsBuf } else { Stat::RowsFetchedFromClientNormalBuf },
+                        1,
+                    );
+                    return Ok(Some(Vec::new()));
+                }
                 if *current < rows.len() as u64 {
                     #[allow(clippy::cast_possible_truncation)]
                     let raw = std::mem::take(&mut rows[*current as usize]);
@@ -327,12 +341,12 @@ impl ResultSet {
                 if *eof {
                     return Ok(None);
                 }
-                self.fetch_unbuffered()
+                self.fetch_unbuffered(decode)
             }
         }
     }
 
-    fn fetch_unbuffered(&mut self) -> Result<Option<Vec<Value>>> {
+    fn fetch_unbuffered(&mut self, decode: bool) -> Result<Option<Vec<Value>>> {
         let Some(conn) = self.conn.clone() else { return Ok(None) };
         let mut c = conn.data();
         if c.state != ConnState::FetchingData {
@@ -349,14 +363,17 @@ impl ResultSet {
                     if self.ps { Stat::RowsFetchedFromClientPsUnbuf } else { Stat::RowsFetchedFromClientNormalUnbuf },
                     1,
                 );
-                let native = c.options.int_and_float_native;
-                let mut stats = std::mem::take(&mut c.stats);
-                let decoded = self.decode(&raw, &mut stats, native);
-                c.stats = stats;
                 if let Data::Unbuffered { count, has_row, .. } = &mut self.data {
                     *count += 1;
                     *has_row = true;
                 }
+                if !decode {
+                    return Ok(Some(Vec::new()));
+                }
+                let native = c.options.int_and_float_native;
+                let mut stats = std::mem::take(&mut c.stats);
+                let decoded = self.decode(&raw, &mut stats, native);
+                c.stats = stats;
                 match decoded {
                     Some(r) => Ok(Some(r)),
                     None => Err(Error { errno: 0, sqlstate: String::new(), message: Vec::new() }),
@@ -449,7 +466,7 @@ impl ResultSet {
         if let Data::Unbuffered { eof: false, .. } = self.data {
             let Some(conn) = self.conn.clone() else { return };
             conn.data().inc(if self.ps { Stat::FlushedPsSets } else { Stat::FlushedNormalSets }, 1);
-            while let Ok(Some(_)) = self.fetch_row_values() {
+            while let Ok(Some(_)) = self.fetch_inner(false) {
                 conn.data().inc(if self.ps { Stat::RowsSkippedPs } else { Stat::RowsSkippedNormal }, 1);
             }
         }
