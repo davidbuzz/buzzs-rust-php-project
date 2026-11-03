@@ -487,6 +487,20 @@ impl IniRegistry {
     /// (case-insensitive).  `Err` carries the "Extension \"%s\" cannot be
     /// found" warning.
     pub fn ini_get_all(&self, extension: Option<&str>) -> Result<Vec<IniEntryInfo>, Diagnostic> {
+        self.rows(extension, true)
+    }
+
+    /// The same rows as [`Self::ini_get_all`] but in registration order,
+    /// as `php --re`/`--ri` and `ReflectionExtension::getINIEntries()`
+    /// list them (`zend_ini_directives` iteration order).
+    pub fn ini_entries_registered(
+        &self,
+        extension: Option<&str>,
+    ) -> Result<Vec<IniEntryInfo>, Diagnostic> {
+        self.rows(extension, false)
+    }
+
+    fn rows(&self, extension: Option<&str>, sorted: bool) -> Result<Vec<IniEntryInfo>, Diagnostic> {
         if let Some(ext) = extension {
             if !self.modules.iter().any(|m| m.eq_ignore_ascii_case(ext)) {
                 return Err(Diagnostic::docref(
@@ -502,7 +516,9 @@ impl IniRegistry {
                 extension.is_none_or(|ext| self.entries[*n].def.module.eq_ignore_ascii_case(ext))
             })
             .collect();
-        names.sort_by(|a, b| strcasecmp(a, b));
+        if sorted {
+            names.sort_by(|a, b| strcasecmp(a, b));
+        }
         Ok(names
             .into_iter()
             .map(|n| {
@@ -1100,6 +1116,15 @@ mod tests {
         let mut sorted = names.clone();
         sorted.sort_by(|a, b| strcasecmp(a, b));
         assert_eq!(names, sorted);
+        // Registration order is kept by `ini_entries_registered` (same rows).
+        let reg = r.ini_entries_registered(None).unwrap();
+        let reg_names: Vec<&str> = reg.iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(
+            reg_names,
+            r.order.iter().map(String::as_str).collect::<Vec<_>>()
+        );
+        assert_ne!(reg_names, names);
+        assert!(r.ini_entries_registered(Some("nosuchextension")).is_err());
         // "SMTP" sorts case-insensitively between "short_open_tag" and "smtp_port".
         let i = names.iter().position(|&n| n == "SMTP").unwrap();
         assert_eq!(names[i + 1], "smtp_port");
