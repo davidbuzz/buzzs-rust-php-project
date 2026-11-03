@@ -45,8 +45,6 @@ pub enum FiberState {
 /// Internal state of a `Fiber`.
 #[derive(Debug)]
 pub struct FiberData {
-    /// The callable.
-    pub callable: Value,
     /// The callable resolved by the constructor (`fci`/`fcc`: keeps the
     /// object a `[A::class, 'm']` callable bound to); taken by `start()`.
     call: Option<PendingCall>,
@@ -78,9 +76,8 @@ pub struct FiberData {
 }
 
 impl FiberData {
-    fn new(callable: Value, call: PendingCall) -> Self {
+    fn new(call: PendingCall) -> Self {
         FiberData {
-            callable,
             call: Some(call),
             state: FiberState::Init,
             threw: false,
@@ -134,7 +131,7 @@ pub(crate) fn is_graceful_exit(o: &Obj) -> bool {
     GRACEFUL_EXIT.with(|g| g.borrow().as_ref().is_some_and(|c| Rc::ptr_eq(c, object::class_of(o))))
 }
 
-fn create_graceful_exit() -> Option<Obj> {
+pub(crate) fn create_graceful_exit() -> Option<Obj> {
     let cls = GRACEFUL_EXIT.with(|g| g.borrow().clone())?;
     Some(object::new_object(cls, Vec::new()))
 }
@@ -406,9 +403,8 @@ fn fiber_construct(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     if object::has_internal::<FiberData>(&o) {
         return Err(vm.fiber_error("Cannot call constructor twice"));
     }
-    let cb = a.at(0);
-    let call = vm.resolve_callable_for_call(&cb)?;
-    object::set_internal(&o, FiberData::new(cb, call));
+    let call = vm.resolve_callable_for_call(&a.at(0))?;
+    object::set_internal(&o, FiberData::new(call));
     Ok(Value::Null)
 }
 
@@ -520,6 +516,9 @@ fn fiber_destroy(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     vm.frames.pop();
     if let Some(f) = own {
         vm.frames.push(f);
+    }
+    if let Err(Throw::Exception(e)) = &r {
+        crate::generator::strip_graceful_previous(e);
     }
     r.map(|_| Value::Null)
 }

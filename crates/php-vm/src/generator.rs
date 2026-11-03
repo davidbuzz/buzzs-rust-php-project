@@ -1,83 +1,185 @@
-//! Generators (`Zend/zend_generators.c`): suspended frames resumed by a
-//! nested interpreter loop.
+//! Generators (`Zend/zend_generators.c`).
+//!
+//! A generator owns its suspended frame; resuming pushes the frame and runs
+//! a nested interpreter loop until the next `yield`, `yield from`, `return`
+//! or uncaught exception.
+//!
+//! `yield from <generator>` follows php-src's delegation tree: the
+//! delegating generator (a *child*) points at the generator it delegates to
+//! (its *parent*). The innermost generator without a parent is the *root*;
+//! it is the one actually executing, and its current key/value are the
+//! current key/value of every leaf above it. Several generators may delegate
+//! to the same generator, which is then shared. When a root finishes, the
+//! child on the path to the generator being resumed receives the return
+//! value and becomes the new root (`zend_generator_update_current`).
+//! `yield from` over arrays and other `Traversable`s iterates them inside
+//! the delegating generator ("delegated values").
 
 use crate::builtins::classbuilder::ClassBuilder;
 use crate::class::{cflags, InternalKind};
 use crate::exec::Flow;
 use crate::func::{flags, Args};
 use crate::object;
-use crate::vm::{Frame, RetTarget, Throw, Vm, VmResult};
-use php_runtime::{Obj, Value, ZArray};
+use crate::vm::{Frame, FrameKind, RetTarget, Throw, Vm, VmResult};
+use php_runtime::{ArrayKey, HashTable, Obj, PhpObject, Value, ZArray, ZStr};
+use std::cell::Cell;
+use std::rc::{Rc, Weak};
 
 /// Generator state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GenState {
     /// Created, not yet started.
     Created,
-    /// Suspended at a `yield`.
+    /// Suspended at a `yield` or `yield from`.
     Suspended,
-    /// Currently running.
+    /// Currently running (`ZEND_GENERATOR_CURRENTLY_RUNNING`).
     Running,
-    /// Finished (returned or threw).
+    /// Finished (returned, threw or was destroyed): `execute_data == NULL`.
     Finished,
 }
 
-/// `yield from` delegation state.
+/// Values delegated to by `yield from` over a non-generator.
 #[derive(Debug)]
 pub enum Delegate {
-    /// Iterating an array.
+    /// An array and the next position.
     Array(ZArray, u32),
-    /// Delegating to another generator.
-    Gen(Obj),
-    /// Delegating to an `Iterator`.
-    Iter(Obj, bool),
+    /// An `Iterator` and the number of elements fetched so far.
+    Iter(Obj, u64),
 }
 
 /// Internal state of a `Generator` object.
 #[derive(Debug)]
 pub struct GenData {
-    /// The suspended frame.
+    /// The suspended frame (`None` while running or once finished).
     pub frame: Option<Box<Frame>>,
     /// State.
     pub state: GenState,
-    /// Current key.
-    pub key: Value,
-    /// Current value.
-    pub value: Value,
-    /// Next auto key.
-    pub auto_key: i64,
+    /// Current key (`None` = UNDEF).
+    pub key: Option<Value>,
+    /// Current value (`None` = UNDEF: not yet primed).
+    pub value: Option<Value>,
+    /// `largest_used_integer_key`.
+    pub largest_key: i64,
     /// Temporary receiving the sent value.
     pub send_target: Option<u32>,
-    /// Return value.
+    /// Return value (`None` = UNDEF).
     pub ret: Option<Value>,
-    /// Active delegation.
-    pub delegate: Option<Delegate>,
-    /// Whether the generator has advanced past its first yield.
-    pub advanced: bool,
+    /// Delegated values of `yield from` over an array/`Traversable`.
+    pub values: Option<Delegate>,
+    /// Whether the frame is suspended at a `yield from`, and the temporary
+    /// receiving its result.
+    pub yield_from: Option<Option<u32>>,
+    /// The generator delegated to (`node.parent`).
+    pub parent: Option<Obj>,
+    /// Generators delegating to this one (`node.children`).
+    children: Vec<Weak<dyn PhpObject>>,
+    /// Cached root and the tree epoch it was computed in.
+    root: Option<(Weak<dyn PhpObject>, u64)>,
+    /// `ZEND_GENERATOR_DO_INIT`.
+    do_init: bool,
+    /// `ZEND_GENERATOR_AT_FIRST_YIELD`.
+    at_first_yield: bool,
+    /// `ZEND_GENERATOR_FORCED_CLOSE`.
+    forced_close: bool,
+    /// Exception to throw at the suspension point on the next resume.
+    pending_exc: Option<Obj>,
+    /// The frame is on the VM stack below a running delegate (for
+    /// backtraces), not in `frame`.
+    lent: bool,
+    /// Function name for `__debugInfo()`.
+    func_name: ZStr,
+}
+
+thread_local! {
+    /// Bumped whenever a delegation link is removed, invalidating cached
+    /// roots.
+    static EPOCH: Cell<u64> = const { Cell::new(0) };
+}
+
+fn epoch() -> u64 {
+    EPOCH.with(Cell::get)
+}
+
+fn bump_epoch() {
+    EPOCH.with(|e| e.set(e.get() + 1));
 }
 
 fn with<R>(g: &Obj, f: impl FnOnce(&mut GenData) -> R) -> Option<R> {
     object::internal::<GenData, R>(g, f)
 }
 
-/// Marks a generator as finished (its frame was unwound by an exception).
-pub(crate) fn mark_finished(g: &Obj) {
+fn state(g: &Obj) -> GenState {
+    with(g, |d| d.state).unwrap_or(GenState::Finished)
+}
+
+fn finished(g: &Obj) -> bool {
+    state(g) == GenState::Finished
+}
+
+fn parent_of(g: &Obj) -> Option<Obj> {
+    with(g, |d| d.parent.clone()).flatten()
+}
+
+fn children_of(g: &Obj) -> Vec<Obj> {
+    with(g, |d| d.children.iter().filter_map(Weak::upgrade).map(Obj::from_rc).collect()).unwrap_or_default()
+}
+
+fn remove_child(parent: &Obj, child: &Obj) {
+    let target = Rc::downgrade(child.rc());
+    with(parent, |d| d.children.retain(|w| !Weak::ptr_eq(w, &target) && w.strong_count() > 0));
+}
+
+/// Removes `g` from its parent's children and clears its parent link.
+fn detach(g: &Obj) {
+    if let Some(p) = with(g, |d| d.parent.take()).flatten() {
+        remove_child(&p, g);
+        bump_epoch();
+    }
+}
+
+/// Closes a generator whose frame is gone (`zend_generator_close`).
+fn close(g: &Obj) {
     with(g, |d| {
         d.state = GenState::Finished;
-        d.value = Value::Null;
-        d.key = Value::Null;
-        d.delegate = None;
+        d.frame = None;
+        d.values = None;
+        d.yield_from = None;
+        d.send_target = None;
     });
+    detach(g);
+}
+
+/// Marks a generator as finished (its frame was unwound by an exception).
+pub(crate) fn mark_finished(g: &Obj) {
+    close(g);
 }
 
 /// Finishes a generator with a return value.
 pub(crate) fn finish_with(g: &Obj, v: Value) {
-    with(g, |d| {
-        d.state = GenState::Finished;
-        d.ret = Some(v);
-        d.value = Value::Null;
-        d.key = Value::Null;
-    });
+    with(g, |d| d.ret = Some(v));
+    close(g);
+}
+
+/// The internal "graceful exit" object used to unwind a force-closed
+/// generator through its `finally` blocks.
+fn is_graceful(e: &Obj) -> bool {
+    crate::fiber::is_graceful_exit(e)
+}
+
+/// Removes graceful-exit objects linked as `previous` of `e` (an exception
+/// thrown by a `finally` block while force-closing).
+pub(crate) fn strip_graceful_previous(e: &Obj) {
+    let mut cur = e.clone();
+    for _ in 0..10_000 {
+        match crate::exceptions::get_base_prop(&cur, "previous") {
+            Some(Value::Object(p)) if is_graceful(&p) => {
+                crate::exceptions::set_base_prop(&cur, "previous", Value::Null);
+                return;
+            }
+            Some(Value::Object(p)) => cur = p,
+            _ => return,
+        }
+    }
 }
 
 impl Vm {
@@ -87,6 +189,16 @@ impl Vm {
         let mut frame = self.frames.pop().expect("generator frame");
         let ret = frame.ret;
         frame.ret = RetTarget::Discard;
+        let func_name = match (&frame.func, &frame.scope) {
+            (Some(f), Some(s)) => {
+                let mut n = s.name.as_bytes().to_vec();
+                n.extend_from_slice(b"::");
+                n.extend_from_slice(f.name().as_bytes());
+                ZStr::from(n)
+            }
+            (Some(f), None) => f.name().clone(),
+            _ => ZStr::from(""),
+        };
         let cls = self.find_class(b"Generator").expect("Generator class");
         let g = object::new_object(cls, Vec::new());
         object::set_internal(
@@ -94,13 +206,22 @@ impl Vm {
             GenData {
                 frame: Some(Box::new(frame)),
                 state: GenState::Created,
-                key: Value::Null,
-                value: Value::Null,
-                auto_key: 0,
+                key: None,
+                value: None,
+                largest_key: -1,
                 send_target: None,
                 ret: None,
-                delegate: None,
-                advanced: false,
+                values: None,
+                yield_from: None,
+                parent: None,
+                children: Vec::new(),
+                root: None,
+                do_init: false,
+                at_first_yield: false,
+                forced_close: false,
+                pending_exc: None,
+                lent: false,
+                func_name,
             },
         );
         let v = Value::Object(g);
@@ -113,42 +234,36 @@ impl Vm {
         Ok(Flow::Reload)
     }
 
-    fn suspend(&mut self, key: Option<Value>, val: Value, dst: Option<u32>, base: usize, rewind_ip: bool) -> VmResult<Flow> {
+    /// Pops the running generator frame and stores it in the generator.
+    fn gen_suspend_frame(&mut self, base: usize, update: impl FnOnce(&mut GenData)) -> Flow {
         let fidx = self.frames.len() - 1;
         let mut frame = self.frames.pop().expect("generator frame");
-        if rewind_ip {
-            frame.ip -= 1;
+        if let Some(g) = frame.generator.take() {
+            with(&g, move |d| {
+                update(d);
+                d.frame = Some(Box::new(frame));
+                d.state = GenState::Suspended;
+            });
         }
-        let g = frame.generator.take().expect("generator frame has generator");
-        with(&g, move |d| {
-            match key {
-                Some(k) => {
-                    if let Value::Int(i) = k {
-                        if i >= d.auto_key {
-                            d.auto_key = i + 1;
-                        }
-                    }
-                    d.key = k;
-                }
-                None => {
-                    d.key = Value::Int(d.auto_key);
-                    d.auto_key += 1;
-                }
-            }
-            d.value = val;
-            d.send_target = dst;
-            d.frame = Some(Box::new(frame));
-            d.state = GenState::Suspended;
-        });
         if fidx <= base {
-            Ok(Flow::Done(Value::Null))
+            Flow::Done(Value::Null)
         } else {
-            Ok(Flow::Reload)
+            Flow::Reload
         }
     }
 
-    /// `yield`.
+    fn running_generator(&self) -> Option<Obj> {
+        self.frame().generator.clone()
+    }
+
+    /// `ZEND_YIELD`.
     pub(crate) fn op_yield(&mut self, key: Option<Value>, val: Option<Value>, dst: Option<u32>, base: usize) -> VmResult<Flow> {
+        let Some(g) = self.running_generator() else {
+            return Ok(Flow::Next);
+        };
+        if with(&g, |d| d.forced_close).unwrap_or(false) {
+            return Err(self.make_throw("Error", "Cannot yield from finally in a force-closed generator"));
+        }
         let by_ref = self
             .frame()
             .ufunc
@@ -156,226 +271,472 @@ impl Vm {
             .is_some_and(|u| u.flags & flags::RETURN_REF != 0);
         let v = val.unwrap_or_default();
         let v = if by_ref { v } else { v.deref() };
+        let key = key.map(|k| k.deref());
         if let Some(d) = dst {
             self.set_tmp(d, Value::Null);
         }
-        self.suspend(key, v, dst, base, false)
+        Ok(self.gen_suspend_frame(base, move |d| {
+            match key {
+                Some(k) => {
+                    if let Value::Int(i) = k {
+                        if i > d.largest_key {
+                            d.largest_key = i;
+                        }
+                    }
+                    d.key = Some(k);
+                }
+                None => {
+                    d.largest_key += 1;
+                    d.key = Some(Value::Int(d.largest_key));
+                }
+            }
+            d.value = Some(v);
+            d.send_target = dst;
+            d.yield_from = None;
+        }))
     }
 
-    /// `yield from`.
+    /// `ZEND_YIELD_FROM`.
     pub(crate) fn op_yield_from(&mut self, src: Value, dst: Option<u32>, base: usize) -> VmResult<Flow> {
-        let g = self.frame().generator.clone().expect("generator");
-        let has_delegate = with(&g, |d| d.delegate.is_some()).unwrap_or(false);
-        if !has_delegate {
-            let src = src.deref();
-            let del = match src {
-                Value::Array(a) => Delegate::Array(a, 0),
-                Value::Object(o) if object::has_internal::<GenData>(&o) => {
-                    if Obj::ptr_eq(&o, &g) {
-                        return Err(self.make_throw("Error", "Impossible to yield from the Generator being currently run"));
-                    }
-                    let st = with(&o, |d| d.state).unwrap_or(GenState::Finished);
-                    if st == GenState::Finished {
-                        let has_ret = with(&o, |d| d.ret.is_some()).unwrap_or(false);
-                        if !has_ret {
-                            return Err(self.make_throw("Error", "Generator passed to yield from was aborted without proper return and is unable to continue"));
-                        }
-                    }
-                    self.gen_ensure_started(&o)?;
-                    Delegate::Gen(o)
-                }
-                Value::Object(o) if self.instance_of(&o, b"traversable") => {
-                    let it = self.get_iterator(&o)?;
-                    self.call_method_name(&it, "rewind", Vec::new())?;
-                    Delegate::Iter(it, false)
-                }
-                _ => {
-                    return Err(self.make_throw(
-                        "Error",
-                        "Can use \"yield from\" only with arrays and Traversables",
-                    ))
-                }
-            };
-            with(&g, |d| d.delegate = Some(del));
-        } else {
-            // Resumed: advance the delegate.
-            let sent = dst.map(|t| std::mem::take(&mut self.frame_mut().tmps[t as usize]));
-            let del = with(&g, |d| d.delegate.take()).flatten();
-            let del = match del {
-                Some(Delegate::Array(a, pos)) => Some(Delegate::Array(a, pos + 1)),
-                Some(Delegate::Gen(o)) => {
-                    match sent {
-                        Some(v) if !v.is_null() => {
-                            self.gen_send(&o, v)?;
-                        }
-                        _ => self.gen_next(&o)?,
-                    }
-                    Some(Delegate::Gen(o))
-                }
-                Some(Delegate::Iter(o, _)) => {
-                    self.call_method_name(&o, "next", Vec::new())?;
-                    Some(Delegate::Iter(o, true))
-                }
-                None => None,
-            };
-            with(&g, |d| d.delegate = del);
+        let Some(g) = self.running_generator() else {
+            return Ok(Flow::Next);
+        };
+        if with(&g, |d| d.forced_close).unwrap_or(false) {
+            return Err(self.make_throw("Error", "Cannot use \"yield from\" in a force-closed generator"));
         }
-        // Produce the current item of the delegate, or finish.
-        let del = with(&g, |d| d.delegate.take()).flatten();
-        match del {
-            Some(Delegate::Array(a, pos)) => {
-                let p = a.valid_pos(pos);
-                if let Some((k, v)) = a.at(p) {
-                    let (k, v) = (k.to_value(), v.deref());
-                    with(&g, |d| d.delegate = Some(Delegate::Array(a.clone(), p)));
-                    return self.suspend_delegate(k, v, dst, base);
-                }
-                if let Some(t) = dst {
-                    self.set_tmp(t, Value::Null);
-                }
-                Ok(Flow::Next)
+        match src.deref() {
+            Value::Array(a) => {
+                with(&g, |d| d.values = Some(Delegate::Array(a, 0)));
             }
-            Some(Delegate::Gen(o)) => {
-                let st = with(&o, |d| d.state).unwrap_or(GenState::Finished);
-                if st != GenState::Finished {
-                    let (k, v) = with(&o, |d| (d.key.clone(), d.value.clone())).unwrap_or_default();
-                    with(&g, |d| d.delegate = Some(Delegate::Gen(o.clone())));
-                    return self.suspend_delegate(k, v, dst, base);
+            Value::Object(o) if object::has_internal::<GenData>(&o) => {
+                if finished(&o) {
+                    let ret = with(&o, |d| d.ret.clone()).flatten();
+                    let Some(r) = ret else {
+                        return Err(self.make_throw(
+                            "Error",
+                            "Generator passed to yield from was aborted without proper return and is unable to continue",
+                        ));
+                    };
+                    self.set_dst(dst, r);
+                    return Ok(Flow::Next);
                 }
-                let r = with(&o, |d| d.ret.clone()).flatten().unwrap_or_default();
-                if let Some(t) = dst {
-                    self.set_tmp(t, r);
+                let cur = self.gen_get_current(&o)?;
+                if Obj::ptr_eq(&cur, &g) {
+                    return Err(self.make_throw("Error", "Impossible to yield from the Generator being currently run"));
                 }
-                Ok(Flow::Next)
+                // zend_generator_yield_from
+                let weak = Rc::downgrade(g.rc());
+                with(&o, |d| d.children.push(weak));
+                with(&g, |d| {
+                    d.parent = Some(o.clone());
+                    d.do_init = true;
+                });
             }
-            Some(Delegate::Iter(o, started)) => {
-                let valid = self.call_method_name(&o, "valid", Vec::new())?;
-                if self.to_bool(&valid)? {
-                    let v = self.call_method_name(&o, "current", Vec::new())?;
-                    let k = self.call_method_name(&o, "key", Vec::new())?;
-                    with(&g, |d| d.delegate = Some(Delegate::Iter(o.clone(), started)));
-                    return self.suspend_delegate(k, v, dst, base);
-                }
-                if let Some(t) = dst {
-                    self.set_tmp(t, Value::Null);
-                }
-                Ok(Flow::Next)
+            Value::Object(o) if self.instance_of(&o, b"traversable") => {
+                let it = self.get_iterator(&o)?;
+                self.call_method_name(&it, "rewind", Vec::new())?;
+                with(&g, |d| d.values = Some(Delegate::Iter(it, 0)));
             }
-            None => Ok(Flow::Next),
+            _ => {
+                return Err(self.make_throw("Error", "Can use \"yield from\" only with arrays and Traversables"));
+            }
         }
+        self.set_dst(dst, Value::Null);
+        Ok(self.gen_suspend_frame(base, move |d| {
+            d.send_target = None;
+            d.yield_from = Some(dst);
+        }))
     }
 
-    fn suspend_delegate(&mut self, k: Value, v: Value, dst: Option<u32>, base: usize) -> VmResult<Flow> {
-        // Keys from delegates do not change the auto key.
-        let g = self.frame().generator.clone().expect("generator");
-        let saved = with(&g, |d| d.auto_key).unwrap_or(0);
-        let r = self.suspend(Some(k), v, dst, base, true);
-        with(&g, |d| d.auto_key = saved);
+    /// `zend_generator_get_current`: the generator whose key/value `g`
+    /// currently exposes (the root of its delegation tree).
+    pub(crate) fn gen_get_current(&mut self, g: &Obj) -> VmResult<Obj> {
+        let Some(parent) = parent_of(g) else {
+            return Ok(g.clone());
+        };
+        let now = epoch();
+        let cached = with(g, |d| match &d.root {
+            Some((w, e)) if *e == now => w.upgrade().map(Obj::from_rc),
+            _ => None,
+        })
+        .flatten();
+        let mut root = cached.unwrap_or(parent);
+        while let Some(p) = parent_of(&root) {
+            root = p;
+        }
+        let w = Rc::downgrade(root.rc());
+        with(g, |d| d.root = Some((w, now)));
+        if !finished(&root) {
+            return Ok(root);
+        }
+        self.gen_update_current(g, &root, false)
+    }
+
+    /// `zend_generator_update_current`: the root finished; its child on
+    /// the path to `g` takes over and receives the return value.
+    fn gen_update_current(&mut self, g: &Obj, old_root: &Obj, exception_pending: bool) -> VmResult<Obj> {
+        // Walk down single-child chains from the old root, else up from g.
+        let mut cur = old_root.clone();
+        let mut found = None;
+        loop {
+            if !finished(&cur) {
+                found = Some(cur);
+                break;
+            }
+            let ch = children_of(&cur);
+            if ch.len() != 1 {
+                break;
+            }
+            cur = ch[0].clone();
+        }
+        let new_root = match found {
+            Some(n) => n,
+            None => {
+                let mut n = g.clone();
+                while let Some(p) = parent_of(&n) {
+                    if finished(&p) {
+                        break;
+                    }
+                    n = p;
+                }
+                n
+            }
+        };
+        let Some(new_parent) = parent_of(&new_root) else {
+            return Ok(new_root);
+        };
+        let at_yield_from = with(&new_root, |d| d.yield_from).flatten();
+        let mut closed_exc = None;
+        if !exception_pending {
+            if let Some(dst) = at_yield_from {
+                let ret = with(&new_parent, |d| d.ret.clone()).flatten();
+                match ret {
+                    None => {
+                        closed_exc = Some(self.gen_exception_in(
+                            &new_root,
+                            "ClosedGeneratorException",
+                            "Generator yielded from aborted, no return value available",
+                        )?);
+                    }
+                    Some(r) => {
+                        let pv = with(&new_parent, |d| d.value.clone()).flatten();
+                        with(&new_root, |d| {
+                            if pv.is_some() {
+                                d.value = pv;
+                            }
+                            if let (Some(t), Some(f)) = (dst, d.frame.as_mut()) {
+                                f.tmps[t as usize] = r;
+                            }
+                        });
+                    }
+                }
+            }
+        }
+        detach(&new_root);
+        let w = Rc::downgrade(new_root.rc());
+        let now = epoch();
+        with(g, |d| d.root = Some((w, now)));
+        if let Some(e) = closed_exc {
+            with(&new_root, |d| d.pending_exc = Some(e));
+            if state(old_root) != GenState::Running {
+                self.gen_resume(g)?;
+                return self.gen_get_current(g);
+            }
+        }
+        Ok(new_root)
+    }
+
+    /// Creates an exception as if thrown inside `g`'s frame.
+    fn gen_exception_in(&mut self, g: &Obj, class: &str, msg: &str) -> VmResult<Obj> {
+        let frame = with(g, |d| d.frame.take()).flatten();
+        let pushed = frame.is_some();
+        if let Some(f) = frame {
+            self.frames.push(*f);
+        }
+        let r = self.create_exception(class, msg, 0);
+        if pushed {
+            if let Some(f) = self.frames.pop() {
+                with(g, |d| d.frame = Some(Box::new(f)));
+            }
+        }
         r
     }
 
-    /// Resumes a generator (optionally throwing an exception at the yield).
-    fn gen_resume(&mut self, g: &Obj, throw: Option<Obj>) -> VmResult<()> {
-        let st = with(g, |d| d.state).unwrap_or(GenState::Finished);
-        match st {
-            GenState::Finished => {
-                if let Some(e) = throw {
-                    return Err(Throw::Exception(e));
+    /// `zend_generator_get_next_delegated_value`. Returns `true` when a
+    /// value was produced.
+    fn gen_next_delegated(&mut self, g: &Obj) -> VmResult<bool> {
+        let Some(del) = with(g, |d| d.values.take()).flatten() else {
+            return Ok(false);
+        };
+        match del {
+            Delegate::Array(a, pos) => {
+                let p = a.valid_pos(pos);
+                if let Some((k, v)) = a.at(p) {
+                    let (k, v) = (k.to_value(), v.deref());
+                    with(g, |d| {
+                        d.value = Some(v);
+                        d.key = Some(k);
+                        d.values = Some(Delegate::Array(a.clone(), p + 1));
+                    });
+                    return Ok(true);
                 }
-                return Ok(());
+                Ok(false)
             }
-            GenState::Running => {
-                return Err(self.make_throw("Error", "Cannot resume an already running generator"));
+            Delegate::Iter(it, index) => {
+                if index > 0 {
+                    self.call_method_name(&it, "next", Vec::new())?;
+                }
+                let valid = self.call_method_name(&it, "valid", Vec::new())?;
+                if !self.to_bool(&valid)? {
+                    return Ok(false);
+                }
+                let v = self.call_method_name(&it, "current", Vec::new())?;
+                let k = self.call_method_name(&it, "key", Vec::new())?;
+                with(g, |d| {
+                    d.value = Some(v);
+                    d.key = Some(k);
+                    d.values = Some(Delegate::Iter(it, index + 1));
+                });
+                Ok(true)
             }
-            _ => {}
         }
-        let frame = with(g, |d| {
+    }
+
+    /// Runs `g`'s frame until it suspends or finishes, throwing its
+    /// pending exception (if any) at the suspension point first.
+    fn gen_run(&mut self, g: &Obj) -> VmResult<()> {
+        let Some((frame, exc)) = with(g, |d| {
             d.state = GenState::Running;
-            d.frame.take()
-        })
-        .flatten();
-        let Some(mut frame) = frame else {
+            d.yield_from = None;
+            (d.frame.take(), d.pending_exc.take())
+        }) else {
             return Ok(());
+        };
+        let Some(mut frame) = frame else {
+            close(g);
+            return exc.map_or(Ok(()), |e| Err(Throw::Exception(e)));
         };
         frame.generator = Some(g.clone());
         self.frames.push(*frame);
         let base = self.frames.len() - 1;
-        let r = match throw {
+        let r = match exc {
             Some(e) => match self.handle_exception(e, base) {
                 Ok(()) => self.execute(base).map(|_| ()),
                 Err(t) => Err(t),
             },
             None => self.execute(base).map(|_| ()),
         };
-        if r.is_err() {
-            // The frame was unwound.
-            with(g, |d| {
-                if d.state == GenState::Running {
-                    d.state = GenState::Finished;
-                    d.value = Value::Null;
-                    d.key = Value::Null;
-                }
-            });
+        if r.is_err() && state(g) != GenState::Finished {
+            // The frame was unwound (exit, fatal error).
+            close(g);
         }
         r
     }
 
-    /// Runs a fresh generator to its first yield.
-    pub(crate) fn gen_ensure_started(&mut self, g: &Obj) -> VmResult<()> {
-        let st = with(g, |d| d.state).unwrap_or(GenState::Finished);
-        if st == GenState::Created {
-            self.gen_resume(g, None)?;
+    /// `zend_generator_resume`.
+    fn gen_resume(&mut self, orig: &Obj) -> VmResult<()> {
+        let mut gen = self.gen_get_current(orig)?;
+        if finished(&gen) {
+            return Ok(());
+        }
+        let mut delegator = orig.clone();
+        loop {
+            if state(&gen) == GenState::Running {
+                return Err(self.make_throw("Error", "Cannot resume an already running generator"));
+            }
+            let do_init = with(&delegator, |d| std::mem::take(&mut d.do_init)).unwrap_or(false);
+            if do_init {
+                let primed = with(&gen, |d| d.value.is_some() && d.pending_exc.is_none()).unwrap_or(false);
+                if primed {
+                    return Ok(());
+                }
+            }
+            with(orig, |d| d.at_first_yield = false);
+            let has_values = with(&gen, |d| d.values.is_some() && d.pending_exc.is_none()).unwrap_or(false);
+            if has_values {
+                with(&gen, |d| d.state = GenState::Running);
+                let r = self.gen_next_delegated(&gen);
+                with(&gen, |d| d.state = GenState::Suspended);
+                match r {
+                    Ok(true) => return Ok(()),
+                    Ok(false) => {}
+                    Err(Throw::Exception(e)) => {
+                        with(&gen, |d| {
+                            d.values = None;
+                            d.pending_exc = Some(e);
+                        });
+                    }
+                    Err(t) => return Err(t),
+                }
+            }
+            let chain = self.gen_lend_chain(orig, &gen);
+            let r = self.gen_run(&gen);
+            self.gen_return_chain(chain);
+            match r {
+                Ok(()) => {}
+                Err(Throw::Exception(e)) => {
+                    if Obj::ptr_eq(&gen, orig) {
+                        return Err(Throw::Exception(e));
+                    }
+                    // Rethrow into the generator that delegated to it.
+                    let next = match parent_of(orig) {
+                        Some(_) => {
+                            let root = self.gen_root_of(orig);
+                            if finished(&root) {
+                                self.gen_update_current(orig, &root, true)?
+                            } else {
+                                root
+                            }
+                        }
+                        None => orig.clone(),
+                    };
+                    if finished(&next) {
+                        return Err(Throw::Exception(e));
+                    }
+                    with(&next, |d| {
+                        d.values = None;
+                        d.pending_exc = Some(e);
+                    });
+                    gen = next;
+                    delegator = orig.clone();
+                    continue;
+                }
+                Err(t) => return Err(t),
+            }
+            if !finished(&gen) && with(&gen, |d| d.yield_from.is_some()).unwrap_or(false) {
+                delegator = gen.clone();
+                gen = self.gen_get_current(orig)?;
+                continue;
+            }
+            if !Obj::ptr_eq(&gen, orig) && finished(&gen) && with(&gen, |d| d.ret.is_some()).unwrap_or(false) {
+                delegator = orig.clone();
+                gen = self.gen_get_current(orig)?;
+                if finished(&gen) {
+                    return Ok(());
+                }
+                continue;
+            }
+            return Ok(());
+        }
+    }
+
+    /// Pushes the suspended frames of the generators delegating from
+    /// `leaf` down to `root` (exclusive), so that backtraces show the
+    /// `yield from` chain as php-src's placeholder frames do.
+    fn gen_lend_chain(&mut self, leaf: &Obj, root: &Obj) -> Vec<Obj> {
+        let mut chain = Vec::new();
+        let mut cur = leaf.clone();
+        while !Obj::ptr_eq(&cur, root) {
+            chain.push(cur.clone());
+            match parent_of(&cur) {
+                Some(p) => cur = p,
+                None => return Vec::new(),
+            }
+        }
+        let mut lent = Vec::new();
+        for g in chain {
+            let frame = with(&g, |d| {
+                let f = d.frame.take();
+                d.lent = f.is_some();
+                f
+            })
+            .flatten();
+            if let Some(f) = frame {
+                self.frames.push(*f);
+                lent.push(g);
+            }
+        }
+        lent
+    }
+
+    /// Takes back the frames lent by [`Vm::gen_lend_chain`].
+    fn gen_return_chain(&mut self, lent: Vec<Obj>) {
+        for g in lent.into_iter().rev() {
+            if let Some(f) = self.frames.pop() {
+                with(&g, |d| {
+                    d.lent = false;
+                    if d.state != GenState::Finished {
+                        d.frame = Some(Box::new(f));
+                    }
+                });
+            }
+        }
+    }
+
+    /// The root of `g`'s delegation tree without updating anything.
+    fn gen_root_of(&self, g: &Obj) -> Obj {
+        let mut root = g.clone();
+        while let Some(p) = parent_of(&root) {
+            root = p;
+        }
+        root
+    }
+
+    /// `zend_generator_ensure_initialized`.
+    fn gen_ensure_initialized(&mut self, g: &Obj) -> VmResult<()> {
+        let need = with(g, |d| d.value.is_none() && d.state != GenState::Finished && d.parent.is_none()).unwrap_or(false);
+        if need {
+            self.gen_resume(g)?;
+            with(g, |d| d.at_first_yield = true);
         }
         Ok(())
     }
 
-    /// `Generator::next()`.
+    /// `Generator::next()` (also used by `foreach`).
     pub(crate) fn gen_next(&mut self, g: &Obj) -> VmResult<()> {
-        let st = with(g, |d| d.state).unwrap_or(GenState::Finished);
-        if st == GenState::Created {
-            self.gen_resume(g, None)?;
-        }
-        with(g, |d| d.advanced = true);
-        // Set the sent value to null.
-        self.gen_resume(g, None)
+        self.gen_ensure_initialized(g)?;
+        self.gen_resume(g)
     }
 
     /// `Generator::send()`.
     pub(crate) fn gen_send(&mut self, g: &Obj, v: Value) -> VmResult<Value> {
-        let st = with(g, |d| d.state).unwrap_or(GenState::Finished);
-        if st == GenState::Created {
-            self.gen_resume(g, None)?;
+        self.gen_ensure_initialized(g)?;
+        if finished(g) {
+            return Ok(Value::Null);
         }
-        with(g, |d| d.advanced = true);
-        let target = with(g, |d| d.send_target).flatten();
-        if let Some(t) = target {
-            with(g, |d| {
-                if let Some(f) = &mut d.frame {
-                    f.tmps[t as usize] = v.clone();
+        let root = self.gen_get_current(g)?;
+        with(&root, |d| {
+            if d.state != GenState::Running {
+                if let (Some(t), Some(f)) = (d.send_target, d.frame.as_mut()) {
+                    f.tmps[t as usize] = v;
                 }
-            });
+            }
+        });
+        self.gen_resume(g)?;
+        let root = self.gen_get_current(g)?;
+        if finished(g) {
+            return Ok(Value::Null);
         }
-        self.gen_resume(g, None)?;
-        Ok(with(g, |d| d.value.clone()).unwrap_or_default())
+        Ok(with(&root, |d| d.value.clone()).flatten().unwrap_or_default().deref())
     }
 
     /// Whether a generator has a current element (starting it if needed).
     pub(crate) fn gen_valid(&mut self, g: &Obj) -> VmResult<bool> {
-        self.gen_ensure_started(g)?;
-        Ok(with(g, |d| d.state != GenState::Finished).unwrap_or(false))
+        self.gen_ensure_initialized(g)?;
+        self.gen_get_current(g)?;
+        Ok(!finished(g))
     }
 
-    /// Current key and value.
+    /// Current key and value (the value keeps a yielded reference).
     pub(crate) fn gen_current(&mut self, g: &Obj) -> VmResult<(Value, Value)> {
-        self.gen_ensure_started(g)?;
-        Ok(with(g, |d| (d.key.clone(), d.value.clone())).unwrap_or_default())
+        self.gen_ensure_initialized(g)?;
+        let root = self.gen_get_current(g)?;
+        if finished(g) {
+            return Ok((Value::Null, Value::Null));
+        }
+        Ok(with(&root, |d| {
+            (
+                d.key.clone().unwrap_or_default().deref(),
+                d.value.clone().unwrap_or_default(),
+            )
+        })
+        .unwrap_or_default())
     }
 
-    /// Prepares a generator for `foreach`.
+    /// `Generator::rewind()` / `foreach` rewind.
     pub(crate) fn gen_rewind(&mut self, g: &Obj) -> VmResult<()> {
-        self.gen_ensure_started(g)?;
-        let advanced = with(g, |d| d.advanced).unwrap_or(false);
-        if advanced {
+        self.gen_ensure_initialized(g)?;
+        if !with(g, |d| d.at_first_yield).unwrap_or(false) {
             return Err(self.make_throw("Exception", "Cannot rewind a generator that was already run"));
         }
         Ok(())
@@ -383,7 +744,77 @@ impl Vm {
 
     /// Whether a generator is finished.
     pub(crate) fn gen_finished(&self, g: &Obj) -> bool {
-        with(g, |d| d.state == GenState::Finished).unwrap_or(true)
+        finished(g)
+    }
+
+    /// `Generator::throw()`.
+    fn gen_throw(&mut self, g: &Obj, e: Obj) -> VmResult<Value> {
+        self.gen_ensure_initialized(g)?;
+        if finished(g) {
+            return Err(Throw::Exception(e));
+        }
+        let root = self.gen_get_current(g)?;
+        if state(&root) == GenState::Running {
+            return Err(self.make_throw("Error", "Cannot resume an already running generator"));
+        }
+        with(&root, |d| {
+            d.values = None;
+            d.pending_exc = Some(e);
+        });
+        self.gen_resume(g)?;
+        let root = self.gen_get_current(g)?;
+        if finished(g) {
+            return Ok(Value::Null);
+        }
+        Ok(with(&root, |d| d.value.clone()).flatten().unwrap_or_default().deref())
+    }
+
+    /// `zend_generator_dtor_storage`: runs pending `finally` blocks of a
+    /// suspended generator that is being destroyed.
+    fn gen_destroy(&mut self, g: &Obj) -> VmResult<()> {
+        // Executing (possibly suspended inside a fiber): the frames are
+        // unwound with their owner; only forbid yielding from `finally`.
+        if with(g, |d| d.state == GenState::Running || d.lent).unwrap_or(false) {
+            with(g, |d| d.forced_close = true);
+            return Ok(());
+        }
+        with(g, |d| d.values = None);
+        // A generator delegated to keeps running for its other children.
+        for c in children_of(g) {
+            detach(&c);
+        }
+        detach(g);
+        let in_finally_scope = with(g, |d| {
+            d.frame.as_ref().is_some_and(|f| {
+                let ip = f.ip.saturating_sub(1) as u32;
+                f.code.try_table.iter().any(|e| {
+                    e.finally.is_some_and(|(_, fs, _)| ip >= e.try_start && ip < fs)
+                })
+            })
+        })
+        .unwrap_or(false);
+        if state(g) != GenState::Suspended || !in_finally_scope {
+            close(g);
+            return Ok(());
+        }
+        let Some(ge) = crate::fiber::create_graceful_exit() else {
+            close(g);
+            return Ok(());
+        };
+        with(g, |d| {
+            d.forced_close = true;
+            d.pending_exc = Some(ge);
+        });
+        let r = self.gen_run(g);
+        close(g);
+        match r {
+            Err(Throw::Exception(e)) if is_graceful(&e) => Ok(()),
+            Err(Throw::Exception(e)) => {
+                strip_graceful_previous(&e);
+                Err(Throw::Exception(e))
+            }
+            other => other,
+        }
     }
 }
 
@@ -393,7 +824,7 @@ fn gen_obj(a: &Args) -> Obj {
 
 fn g_current(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let g = gen_obj(a);
-    Ok(vm.gen_current(&g)?.1)
+    Ok(vm.gen_current(&g)?.1.deref())
 }
 
 fn g_key(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -429,52 +860,48 @@ fn g_throw(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let Value::Object(e) = a.at(0) else {
         return Ok(Value::Null);
     };
-    let st = with(&g, |d| d.state).unwrap_or(GenState::Finished);
-    if st == GenState::Created {
-        // Throwing into a fresh generator: it is first started.
-        vm.gen_resume(&g, None)?;
-    }
-    // Delegate throws go to the inner generator.
-    let inner = with(&g, |d| match &d.delegate {
-        Some(Delegate::Gen(o)) => Some(o.clone()),
-        _ => None,
-    })
-    .flatten();
-    if let Some(i) = inner {
-        let r = vm.gen_resume(&i, Some(e.clone()));
-        if let Err(Throw::Exception(ex)) = r {
-            with(&g, |d| d.delegate = None);
-            vm.gen_resume(&g, Some(ex))?;
-        } else {
-            r?;
-            vm.gen_resume(&g, None)?;
-        }
-    } else {
-        vm.gen_resume(&g, Some(e))?;
-    }
-    Ok(with(&g, |d| d.value.clone()).unwrap_or_default())
+    vm.gen_throw(&g, e)
 }
 
 fn g_get_return(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let g = gen_obj(a);
-    let r = with(&g, |d| (d.state, d.ret.clone()));
-    match r {
-        Some((GenState::Finished, Some(v))) => Ok(v),
-        Some((GenState::Finished, None)) => Err(vm.make_throw(
-            "Exception",
-            "Cannot get return value of a generator that hasn't returned",
-        )),
-        _ => Err(vm.make_throw(
+    vm.gen_ensure_initialized(&g)?;
+    match with(&g, |d| d.ret.clone()).flatten() {
+        Some(v) => Ok(v),
+        None => Err(vm.make_throw(
             "Exception",
             "Cannot get return value of a generator that hasn't returned",
         )),
     }
 }
 
-/// Registers the `Generator` class.
+fn g_debug_info(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let g = gen_obj(a);
+    let name = with(&g, |d| d.func_name.clone()).unwrap_or_else(|| ZStr::from(""));
+    let mut t = HashTable::new();
+    t.insert(ArrayKey::Str(ZStr::from("function")), Value::Str(name));
+    Ok(Value::Array(ZArray::from_table(t)))
+}
+
+/// The `dtor_obj` handler.
+fn g_destruct(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let g = gen_obj(a);
+    // php-src destroys without a call frame: hide ours from backtraces.
+    let own = vm.frames.pop();
+    let hidden = Frame::with_vars(vm.empty_code.clone(), FrameKind::Builtin, vm.empty_vars.clone(), None);
+    vm.frames.push(hidden);
+    let r = vm.gen_destroy(&g);
+    vm.frames.pop();
+    if let Some(f) = own {
+        vm.frames.push(f);
+    }
+    r.map(|()| Value::Null)
+}
+
+/// Registers the `Generator` and `ClosedGeneratorException` classes.
 pub(crate) fn register(vm: &mut Vm) {
     ClassBuilder::new("Generator")
-        .flags(cflags::FINAL | cflags::NO_NEW | cflags::NOT_SERIALIZABLE)
+        .flags(cflags::FINAL | cflags::NO_NEW | cflags::NOT_SERIALIZABLE | cflags::NO_CLONE | cflags::NO_DYNAMIC_PROPERTIES)
         .internal(InternalKind::Generator)
         .implements(vm, &["Iterator"])
         .method("rewind(): void", flags::PUBLIC, g_rewind)
@@ -485,5 +912,11 @@ pub(crate) fn register(vm: &mut Vm) {
         .method("send(mixed $value): mixed", flags::PUBLIC, g_send)
         .method("throw(Throwable $exception): mixed", flags::PUBLIC, g_throw)
         .method("getReturn(): mixed", flags::PUBLIC, g_get_return)
+        .method("__debugInfo(): array", flags::PUBLIC, g_debug_info)
+        // The `dtor_obj` handler (php-src has no such method).
+        .method("__destruct(): void", flags::PUBLIC, g_destruct)
         .register(vm);
+    if vm.find_class(b"ClosedGeneratorException").is_none() {
+        ClassBuilder::new("ClosedGeneratorException").extends(vm, "Exception").register(vm);
+    }
 }
