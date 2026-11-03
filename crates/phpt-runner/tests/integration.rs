@@ -327,6 +327,37 @@ fn resume_log_reuses_results() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// run-tests.php (master and 8.3 alike) evaluates SKIPIF with the base INI settings
+/// (`$orig_ini_settings_args`, computed before the `--INI--` section is applied) plus `-d`
+/// options, not with the test's own `--INI--` section.
+#[test]
+fn skipif_sees_base_ini_but_not_the_ini_section() {
+    let Some(php) = reference_php() else {
+        eprintln!("skipping: {REFERENCE_PHP} not found");
+        return;
+    };
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("phpt-skipif-ini-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(
+        dir.join("t.phpt"),
+        "--TEST--\nskipif ini\n--SKIPIF--\n<?php if (ini_get('precision') !== '7') die('skip precision is ' . ini_get('precision')); ?>\n\
+         --INI--\nprecision=7\n--FILE--\n<?php echo ini_get('precision');\n--EXPECT--\n7\n",
+    )
+    .unwrap();
+    let srcdir = dir.to_str().unwrap();
+    let (report, _, stdout) = run_runner(&["--php", php, "--srcdir", srcdir], &[&dir]);
+    assert_eq!(report.tests[0].result, Status::Skip, "{stdout}");
+    assert_eq!(report.tests[0].info, "reason: precision is 14", "{stdout}");
+    let (report, _, stdout) = run_runner(
+        &["--php", php, "--srcdir", srcdir, "-d", "precision=7"],
+        &[&dir],
+    );
+    assert_eq!(report.tests[0].result, Status::Pass, "{stdout}");
+    let _ = fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn env_option_reaches_tests() {
     let Some(php) = reference_php() else {

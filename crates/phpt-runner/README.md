@@ -77,6 +77,11 @@ target/debug/phpt-runner -q -j 4 \
 
 (`--env` is a convenience; exported variables reach the tests too.)
 
+Like run-tests.php (master and 8.3), SKIPIF and CLEAN run with the base INI settings plus `-d`
+options but *not* the test's `--INI--` section. So the four LOAD DATA LOCAL tests, which set
+`mysqli.allow_local_infile=1` only in `--INI--`, skip in upstream CI too (their SKIPIF probe
+needs it). To exercise them anyway, pass it to every process: `-d mysqli.allow_local_infile=1`.
+
 ## Extension directory
 
 A binary that loads no php.ini (ours) gets `-d extension_dir=/nonexistent/phpt-runner-extension-dir`,
