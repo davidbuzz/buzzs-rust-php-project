@@ -2,7 +2,7 @@
 //! (`intl_error_set()` and friends) and argument helpers.
 
 use std::any::Any;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 
 use php_intl::{Error, ErrorState, IntlError, Scope, UErrorCode};
 use php_runtime::{Obj, Value, ZStr};
@@ -33,6 +33,42 @@ impl std::fmt::Debug for IntlObj {
 thread_local! {
     /// `INTL_G(g_error)`.
     static GLOBAL: RefCell<ErrorState> = RefCell::new(ErrorState::default());
+    /// Set while a constructor runs: php-src forces
+    /// `intl.use_exceptions = 1` and `intl.error_level = 0` there.
+    static FORCE_THROW: Cell<u32> = const { Cell::new(0) };
+}
+
+/// While alive, intl errors throw `IntlException` and never warn (the
+/// `__construct` convention of php-src master).
+#[derive(Debug)]
+pub(crate) struct CtorGuard(());
+
+impl CtorGuard {
+    /// Enters constructor mode.
+    pub(crate) fn new() -> Self {
+        FORCE_THROW.with(|c| c.set(c.get() + 1));
+        CtorGuard(())
+    }
+}
+
+impl Drop for CtorGuard {
+    fn drop(&mut self) {
+        FORCE_THROW.with(|c| c.set(c.get().saturating_sub(1)));
+    }
+}
+
+/// Runs `f` in constructor mode (see [`CtorGuard`]).
+pub(crate) fn in_ctor<R>(f: impl FnOnce() -> R) -> R {
+    let _g = CtorGuard::new();
+    f()
+}
+
+/// Looks up an intl class and instantiates it without its constructor.
+pub(crate) fn instantiate(vm: &mut Vm, class: &str) -> VmResult<Obj> {
+    let Some(cls) = vm.find_class(class.as_bytes()) else {
+        return Err(vm.throw("Error", &format!("Class \"{class}\" not found")));
+    };
+    vm.new_object(&cls)
 }
 
 /// The `create_object` hook shared by all intl classes.
@@ -123,6 +159,9 @@ pub(crate) fn active_function(vm: &Vm) -> Option<String> {
 
 /// `intl.error_level` and `intl.use_exceptions`.
 fn settings(vm: &Vm) -> (i64, bool) {
+    if FORCE_THROW.with(Cell::get) > 0 {
+        return (0, true);
+    }
     (vm.ini_long("intl.error_level"), vm.ini_bool("intl.use_exceptions"))
 }
 
@@ -264,4 +303,25 @@ pub(crate) fn get_error_message(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 pub(crate) fn not_implemented(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let name = active_function(vm).unwrap_or_else(|| a.func_name());
     Err(vm.throw("Error", &format!("{name}() is not implemented in phprust yet")))
+}
+
+/// `ZEND_NUM_ARGS()`: the number of arguments actually passed.
+pub(crate) fn num_args(a: &Args) -> usize {
+    a.passed.iter().rposition(|&p| p).map_or(0, |i| i + 1)
+}
+
+/// `zend_zval_value_name()` for error messages.
+pub(crate) fn type_name(v: &Value) -> String {
+    match v {
+        Value::Null => "null".into(),
+        Value::Bool(true) => "true".into(),
+        Value::Bool(false) => "false".into(),
+        Value::Int(_) => "int".into(),
+        Value::Float(_) => "float".into(),
+        Value::Str(_) => "string".into(),
+        Value::Array(_) => "array".into(),
+        Value::Object(o) => object::class_of(o).name.to_string_lossy(),
+        Value::Resource(_) => "resource".into(),
+        Value::Reference(r) => type_name(&r.get()),
+    }
 }

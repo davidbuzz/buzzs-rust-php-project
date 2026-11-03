@@ -13,6 +13,28 @@ pub(crate) fn text(z: &ZStr) -> String {
     String::from_utf8_lossy(z.as_bytes()).into_owned()
 }
 
+/// A `Z_PARAM_PATH` argument: rejects NUL bytes (0-based `n`).
+pub(crate) fn path(vm: &mut Vm, a: &Args, n: usize) -> VmResult<String> {
+    let z = a.str(n);
+    if z.as_bytes().contains(&0) {
+        return Err(a.value_error(vm, n + 1, "must not contain any null bytes"));
+    }
+    Ok(text(&z))
+}
+
+/// A `Z_PARAM_PATH_OR_NULL` argument.
+pub(crate) fn opt_path(vm: &mut Vm, a: &Args, n: usize) -> VmResult<Option<String>> {
+    match a.opt(n) {
+        Some(Value::Str(z)) => {
+            if z.as_bytes().contains(&0) {
+                return Err(a.value_error(vm, n + 1, "must not contain any null bytes"));
+            }
+            Ok(Some(text(&z)))
+        }
+        _ => Ok(None),
+    }
+}
+
 /// An optional string argument.
 pub(crate) fn opt_text(a: &Args, n: usize) -> Option<String> {
     a.opt(n).map(|v| match v {
@@ -47,7 +69,8 @@ fn set_default(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 fn getter(vm: &mut Vm, a: &Args, f: fn(&str) -> Result<Option<String>>) -> VmResult<Value> {
     core::reset_global();
-    let r = f(&text(&a.str(0)));
+    let loc = path(vm, a, 0)?;
+    let r = f(&loc);
     finish(vm, a, r, Value::Null, Value::Null)
 }
 
@@ -69,7 +92,8 @@ fn canonicalize(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 fn keywords(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     core::reset_global();
-    match lib::get_keywords(&text(&a.str(0))) {
+    let loc = path(vm, a, 0)?;
+    match lib::get_keywords(&loc) {
         Ok(Some(kw)) => {
             let mut arr = ZArray::new();
             for (k, v) in kw {
@@ -86,8 +110,9 @@ type DisplayFn = fn(&str, Option<&str>) -> Result<Option<String>>;
 
 fn display(vm: &mut Vm, a: &Args, f: DisplayFn) -> VmResult<Value> {
     core::reset_global();
-    let disp = opt_text(a, 1);
-    let r = f(&text(&a.str(0)), disp.as_deref());
+    let loc = path(vm, a, 0)?;
+    let disp = opt_path(vm, a, 1)?;
+    let r = f(&loc, disp.as_deref());
     finish(vm, a, r, Value::Bool(false), Value::Bool(false))
 }
 
@@ -113,15 +138,18 @@ fn display_variant(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 fn display_keyword(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     core::reset_global();
-    let disp = opt_text(a, 1);
-    let r = lib::get_display_keyword(&text(&a.str(0)), disp.as_deref()).map(Some);
+    let kw = path(vm, a, 0)?;
+    let disp = opt_path(vm, a, 1)?;
+    let r = lib::get_display_keyword(&kw, disp.as_deref()).map(Some);
     finish(vm, a, r, Value::Bool(false), Value::Bool(false))
 }
 
 fn display_keyword_value(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     core::reset_global();
-    let disp = opt_text(a, 2);
-    let r = lib::get_display_keyword_value(&text(&a.str(0)), &text(&a.str(1)), disp.as_deref()).map(Some);
+    let loc = path(vm, a, 0)?;
+    let kw = path(vm, a, 1)?;
+    let disp = opt_path(vm, a, 2)?;
+    let r = lib::get_display_keyword_value(&loc, &kw, disp.as_deref()).map(Some);
     finish(vm, a, r, Value::Bool(false), Value::Bool(false))
 }
 
@@ -172,7 +200,8 @@ fn pairs_to_array(p: Vec<(String, String)>) -> Value {
 
 fn parse(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     core::reset_global();
-    match lib::parse(&text(&a.str(0))) {
+    let loc = path(vm, a, 0)?;
+    match lib::parse(&loc) {
         Ok(p) => Ok(pairs_to_array(p)),
         Err(e) => core::fail_with(vm, a, None, e, 0, Value::Null),
     }
@@ -180,7 +209,8 @@ fn parse(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 fn all_variants(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     core::reset_global();
-    match lib::get_all_variants(&text(&a.str(0))) {
+    let loc = path(vm, a, 0)?;
+    match lib::get_all_variants(&loc) {
         Ok(v) => {
             let mut arr = ZArray::new();
             for x in v {
@@ -194,7 +224,9 @@ fn all_variants(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 fn filter_matches(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     core::reset_global();
-    match lib::filter_matches(&text(&a.str(0)), &text(&a.str(1)), a.bool(2)) {
+    let tag = path(vm, a, 0)?;
+    let range = path(vm, a, 1)?;
+    match lib::filter_matches(&tag, &range, a.bool(2)) {
         Ok(b) => Ok(Value::Bool(b)),
         Err(e) => core::fail_with(vm, a, None, e, 0, Value::Bool(false)),
     }
@@ -221,8 +253,9 @@ fn as_lookup(e: &[Option<ZStr>]) -> Vec<LookupEntry<'_>> {
 fn lookup(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     core::reset_global();
     let list = entries(&a.array(0));
-    let fallback = opt_text(a, 3);
-    let r = lib::lookup(&as_lookup(&list), &text(&a.str(1)), a.bool(2), fallback.as_deref());
+    let range = path(vm, a, 1)?;
+    let fallback = opt_path(vm, a, 3)?;
+    let r = lib::lookup(&as_lookup(&list), &range, a.bool(2), fallback.as_deref());
     finish(vm, a, r, Value::Null, Value::Null)
 }
 
@@ -237,13 +270,15 @@ fn accept_from_http(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     finish(vm, a, r, Value::Bool(false), Value::Bool(false))
 }
 
-fn is_rtl(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    Ok(Value::Bool(lib::is_right_to_left(&text(&a.str(0)))))
+fn is_rtl(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let loc = path(vm, a, 0)?;
+    Ok(Value::Bool(lib::is_right_to_left(&loc)))
 }
 
 fn subtags(vm: &mut Vm, a: &Args, f: fn(&str) -> Result<String>) -> VmResult<Value> {
     core::reset_global();
-    let r = f(&text(&a.str(0))).map(Some);
+    let loc = path(vm, a, 0)?;
+    let r = f(&loc).map(Some);
     finish(vm, a, r, Value::Bool(false), Value::Bool(false))
 }
 

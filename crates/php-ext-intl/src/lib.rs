@@ -11,11 +11,16 @@
 //! [`core`].
 #![allow(clippy::needless_pass_by_value, clippy::unnecessary_wraps)]
 
+mod calendar;
+mod collator;
 mod core;
+mod dt;
+mod iter;
 mod locale;
 mod misc;
 mod registry;
 mod stubs;
+mod timezone;
 
 use std::cell::Cell;
 use std::collections::HashMap;
@@ -97,7 +102,14 @@ fn install_ini_hooks(m: &mut ModuleBuilder<'_>) {
 
 fn all_handlers() -> HashMap<&'static str, NativeFn> {
     let mut h = HashMap::new();
-    for list in [misc::handlers(), locale::handlers()] {
+    for list in [
+        misc::handlers(),
+        locale::handlers(),
+        collator::handlers(),
+        iter::handlers(),
+        timezone::handlers(),
+        calendar::handlers(),
+    ] {
         for (k, f) in list {
             h.insert(k, f);
         }
@@ -105,8 +117,34 @@ fn all_handlers() -> HashMap<&'static str, NativeFn> {
     h
 }
 
-fn class_opts(_name: &str) -> registry::ClassOpts {
-    registry::ClassOpts::default()
+fn class_opts(name: &str) -> registry::ClassOpts {
+    use php_vm::ext::{class_flags, ClassHooks};
+    let mut o = registry::ClassOpts::default();
+    match name {
+        "Collator" | "IntlNumberFormatter" | "IntlListFormatter" | "IntlNumberRangeFormatter" | "ResourceBundle"
+        | "IntlRelativeDateTimeFormatter" => o.flags |= class_flags::NO_CLONE,
+        "IntlIterator" | "IntlPartsIterator" => {
+            o.flags |= class_flags::NO_CLONE;
+            o.hooks = ClassHooks { get_iterator: Some(iter::get_iterator), ..ClassHooks::default() };
+        }
+        "IntlTimeZone" => {
+            o.hooks = ClassHooks {
+                clone: Some(timezone::clone),
+                compare: Some(timezone::compare),
+                properties_for: Some(timezone::debug_info),
+                ..ClassHooks::default()
+            };
+        }
+        "IntlCalendar" | "IntlGregorianCalendar" => {
+            o.hooks = ClassHooks {
+                clone: Some(calendar::clone),
+                properties_for: Some(calendar::debug_info),
+                ..ClassHooks::default()
+            };
+        }
+        _ => {}
+    }
+    o
 }
 
 impl Extension for Intl {
