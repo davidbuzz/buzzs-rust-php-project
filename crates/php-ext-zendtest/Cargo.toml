@@ -9,6 +9,10 @@ rust-version.workspace = true
 [dependencies]
 php-vm = { path = "../php-vm" }
 php-runtime = { path = "../php-runtime" }
+php-support = { path = "../php-support" }
+php-parser = { path = "../php-parser" }
+php-memlimit = { path = "../php-memlimit" }
+libc = "0.2"
 
 [lints]
 workspace = true
