@@ -1,0 +1,563 @@
+s:idn	s:idn_to_ascii	s:bücher.de	i:0	s:xn--bcher-kva.de	a:{"result":"xn--bcher-kva.de","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_utf8	s:bücher.de	i:0	s:bücher.de	a:{"result":"bücher.de","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_ascii	s:bücher.de	i:1	s:xn--bcher-kva.de	a:{"result":"xn--bcher-kva.de","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_utf8	s:bücher.de	i:1	s:bücher.de	a:{"result":"bücher.de","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_ascii	s:bücher.de	i:2	s:xn--bcher-kva.de	a:{"result":"xn--bcher-kva.de","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_utf8	s:bücher.de	i:2	s:bücher.de	a:{"result":"bücher.de","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_ascii	s:bücher.de	i:4	s:xn--bcher-kva.de	a:{"result":"xn--bcher-kva.de","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_utf8	s:bücher.de	i:4	s:bücher.de	a:{"result":"bücher.de","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_ascii	s:bücher.de	i:8	s:xn--bcher-kva.de	a:{"result":"xn--bcher-kva.de","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_utf8	s:bücher.de	i:8	s:bücher.de	a:{"result":"bücher.de","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_ascii	s:bücher.de	i:16	s:xn--bcher-kva.de	a:{"result":"xn--bcher-kva.de","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_utf8	s:bücher.de	i:16	s:bücher.de	a:{"result":"bücher.de","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_ascii	s:bücher.de	i:32	s:xn--bcher-kva.de	a:{"result":"xn--bcher-kva.de","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_utf8	s:bücher.de	i:32	s:bücher.de	a:{"result":"bücher.de","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_ascii	s:bücher.de	i:62	s:xn--bcher-kva.de	a:{"result":"xn--bcher-kva.de","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_utf8	s:bücher.de	i:62	s:bücher.de	a:{"result":"bücher.de","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_ascii	s:xn--bcher-kva.de	i:0	s:xn--bcher-kva.de	a:{"result":"xn--bcher-kva.de","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_utf8	s:xn--bcher-kva.de	i:0	s:bücher.de	a:{"result":"bücher.de","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_ascii	s:xn--bcher-kva.de	i:1	s:xn--bcher-kva.de	a:{"result":"xn--bcher-kva.de","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_utf8	s:xn--bcher-kva.de	i:1	s:bücher.de	a:{"result":"bücher.de","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_ascii	s:xn--bcher-kva.de	i:2	s:xn--bcher-kva.de	a:{"result":"xn--bcher-kva.de","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_utf8	s:xn--bcher-kva.de	i:2	s:bücher.de	a:{"result":"bücher.de","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_ascii	s:xn--bcher-kva.de	i:4	s:xn--bcher-kva.de	a:{"result":"xn--bcher-kva.de","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_utf8	s:xn--bcher-kva.de	i:4	s:bücher.de	a:{"result":"bücher.de","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_ascii	s:xn--bcher-kva.de	i:8	s:xn--bcher-kva.de	a:{"result":"xn--bcher-kva.de","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_utf8	s:xn--bcher-kva.de	i:8	s:bücher.de	a:{"result":"bücher.de","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_ascii	s:xn--bcher-kva.de	i:16	s:xn--bcher-kva.de	a:{"result":"xn--bcher-kva.de","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_utf8	s:xn--bcher-kva.de	i:16	s:bücher.de	a:{"result":"bücher.de","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_ascii	s:xn--bcher-kva.de	i:32	s:xn--bcher-kva.de	a:{"result":"xn--bcher-kva.de","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_utf8	s:xn--bcher-kva.de	i:32	s:bücher.de	a:{"result":"bücher.de","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_ascii	s:xn--bcher-kva.de	i:62	s:xn--bcher-kva.de	a:{"result":"xn--bcher-kva.de","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_utf8	s:xn--bcher-kva.de	i:62	s:bücher.de	a:{"result":"bücher.de","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_ascii	s:example.com	i:0	s:example.com	a:{"result":"example.com","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_utf8	s:example.com	i:0	s:example.com	a:{"result":"example.com","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_ascii	s:example.com	i:1	s:example.com	a:{"result":"example.com","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_utf8	s:example.com	i:1	s:example.com	a:{"result":"example.com","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_ascii	s:example.com	i:2	s:example.com	a:{"result":"example.com","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_utf8	s:example.com	i:2	s:example.com	a:{"result":"example.com","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_ascii	s:example.com	i:4	s:example.com	a:{"result":"example.com","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_utf8	s:example.com	i:4	s:example.com	a:{"result":"example.com","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_ascii	s:example.com	i:8	s:example.com	a:{"result":"example.com","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_utf8	s:example.com	i:8	s:example.com	a:{"result":"example.com","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_ascii	s:example.com	i:16	s:example.com	a:{"result":"example.com","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_utf8	s:example.com	i:16	s:example.com	a:{"result":"example.com","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_ascii	s:example.com	i:32	s:example.com	a:{"result":"example.com","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_utf8	s:example.com	i:32	s:example.com	a:{"result":"example.com","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_ascii	s:example.com	i:62	s:example.com	a:{"result":"example.com","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_utf8	s:example.com	i:62	s:example.com	a:{"result":"example.com","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_ascii	s:a..b	i:0	s:!U_ZERO_ERROR	a:{"result":"a..b","isTransitionalDifferent":false,"errors":1}
+s:idn	s:idn_to_utf8	s:a..b	i:0	s:!U_ZERO_ERROR	a:{"result":"a..b","isTransitionalDifferent":false,"errors":1}
+s:idn	s:idn_to_ascii	s:a..b	i:1	s:!U_ZERO_ERROR	a:{"result":"a..b","isTransitionalDifferent":false,"errors":1}
+s:idn	s:idn_to_utf8	s:a..b	i:1	s:!U_ZERO_ERROR	a:{"result":"a..b","isTransitionalDifferent":false,"errors":1}
+s:idn	s:idn_to_ascii	s:a..b	i:2	s:!U_ZERO_ERROR	a:{"result":"a..b","isTransitionalDifferent":false,"errors":1}
+s:idn	s:idn_to_utf8	s:a..b	i:2	s:!U_ZERO_ERROR	a:{"result":"a..b","isTransitionalDifferent":false,"errors":1}
+s:idn	s:idn_to_ascii	s:a..b	i:4	s:!U_ZERO_ERROR	a:{"result":"a..b","isTransitionalDifferent":false,"errors":1}
+s:idn	s:idn_to_utf8	s:a..b	i:4	s:!U_ZERO_ERROR	a:{"result":"a..b","isTransitionalDifferent":false,"errors":1}
+s:idn	s:idn_to_ascii	s:a..b	i:8	s:!U_ZERO_ERROR	a:{"result":"a..b","isTransitionalDifferent":false,"errors":1}
+s:idn	s:idn_to_utf8	s:a..b	i:8	s:!U_ZERO_ERROR	a:{"result":"a..b","isTransitionalDifferent":false,"errors":1}
+s:idn	s:idn_to_ascii	s:a..b	i:16	s:!U_ZERO_ERROR	a:{"result":"a..b","isTransitionalDifferent":false,"errors":1}
+s:idn	s:idn_to_utf8	s:a..b	i:16	s:!U_ZERO_ERROR	a:{"result":"a..b","isTransitionalDifferent":false,"errors":1}
+s:idn	s:idn_to_ascii	s:a..b	i:32	s:!U_ZERO_ERROR	a:{"result":"a..b","isTransitionalDifferent":false,"errors":1}
+s:idn	s:idn_to_utf8	s:a..b	i:32	s:!U_ZERO_ERROR	a:{"result":"a..b","isTransitionalDifferent":false,"errors":1}
+s:idn	s:idn_to_ascii	s:a..b	i:62	s:!U_ZERO_ERROR	a:{"result":"a..b","isTransitionalDifferent":false,"errors":1}
+s:idn	s:idn_to_utf8	s:a..b	i:62	s:!U_ZERO_ERROR	a:{"result":"a..b","isTransitionalDifferent":false,"errors":1}
+s:idn	s:idn_to_ascii	s:-ab.com	i:0	s:!U_ZERO_ERROR	a:{"result":"-ab.com","isTransitionalDifferent":false,"errors":8}
+s:idn	s:idn_to_utf8	s:-ab.com	i:0	s:!U_ZERO_ERROR	a:{"result":"-ab.com","isTransitionalDifferent":false,"errors":8}
+s:idn	s:idn_to_ascii	s:-ab.com	i:1	s:!U_ZERO_ERROR	a:{"result":"-ab.com","isTransitionalDifferent":false,"errors":8}
+s:idn	s:idn_to_utf8	s:-ab.com	i:1	s:!U_ZERO_ERROR	a:{"result":"-ab.com","isTransitionalDifferent":false,"errors":8}
+s:idn	s:idn_to_ascii	s:-ab.com	i:2	s:!U_ZERO_ERROR	a:{"result":"-ab.com","isTransitionalDifferent":false,"errors":8}
+s:idn	s:idn_to_utf8	s:-ab.com	i:2	s:!U_ZERO_ERROR	a:{"result":"-ab.com","isTransitionalDifferent":false,"errors":8}
+s:idn	s:idn_to_ascii	s:-ab.com	i:4	s:!U_ZERO_ERROR	a:{"result":"-ab.com","isTransitionalDifferent":false,"errors":8}
+s:idn	s:idn_to_utf8	s:-ab.com	i:4	s:!U_ZERO_ERROR	a:{"result":"-ab.com","isTransitionalDifferent":false,"errors":8}
+s:idn	s:idn_to_ascii	s:-ab.com	i:8	s:!U_ZERO_ERROR	a:{"result":"-ab.com","isTransitionalDifferent":false,"errors":8}
+s:idn	s:idn_to_utf8	s:-ab.com	i:8	s:!U_ZERO_ERROR	a:{"result":"-ab.com","isTransitionalDifferent":false,"errors":8}
+s:idn	s:idn_to_ascii	s:-ab.com	i:16	s:!U_ZERO_ERROR	a:{"result":"-ab.com","isTransitionalDifferent":false,"errors":8}
+s:idn	s:idn_to_utf8	s:-ab.com	i:16	s:!U_ZERO_ERROR	a:{"result":"-ab.com","isTransitionalDifferent":false,"errors":8}
+s:idn	s:idn_to_ascii	s:-ab.com	i:32	s:!U_ZERO_ERROR	a:{"result":"-ab.com","isTransitionalDifferent":false,"errors":8}
+s:idn	s:idn_to_utf8	s:-ab.com	i:32	s:!U_ZERO_ERROR	a:{"result":"-ab.com","isTransitionalDifferent":false,"errors":8}
+s:idn	s:idn_to_ascii	s:-ab.com	i:62	s:!U_ZERO_ERROR	a:{"result":"-ab.com","isTransitionalDifferent":false,"errors":8}
+s:idn	s:idn_to_utf8	s:-ab.com	i:62	s:!U_ZERO_ERROR	a:{"result":"-ab.com","isTransitionalDifferent":false,"errors":8}
+s:idn	s:idn_to_ascii	s:ab-.com	i:0	s:!U_ZERO_ERROR	a:{"result":"ab-.com","isTransitionalDifferent":false,"errors":16}
+s:idn	s:idn_to_utf8	s:ab-.com	i:0	s:!U_ZERO_ERROR	a:{"result":"ab-.com","isTransitionalDifferent":false,"errors":16}
+s:idn	s:idn_to_ascii	s:ab-.com	i:1	s:!U_ZERO_ERROR	a:{"result":"ab-.com","isTransitionalDifferent":false,"errors":16}
+s:idn	s:idn_to_utf8	s:ab-.com	i:1	s:!U_ZERO_ERROR	a:{"result":"ab-.com","isTransitionalDifferent":false,"errors":16}
+s:idn	s:idn_to_ascii	s:ab-.com	i:2	s:!U_ZERO_ERROR	a:{"result":"ab-.com","isTransitionalDifferent":false,"errors":16}
+s:idn	s:idn_to_utf8	s:ab-.com	i:2	s:!U_ZERO_ERROR	a:{"result":"ab-.com","isTransitionalDifferent":false,"errors":16}
+s:idn	s:idn_to_ascii	s:ab-.com	i:4	s:!U_ZERO_ERROR	a:{"result":"ab-.com","isTransitionalDifferent":false,"errors":16}
+s:idn	s:idn_to_utf8	s:ab-.com	i:4	s:!U_ZERO_ERROR	a:{"result":"ab-.com","isTransitionalDifferent":false,"errors":16}
+s:idn	s:idn_to_ascii	s:ab-.com	i:8	s:!U_ZERO_ERROR	a:{"result":"ab-.com","isTransitionalDifferent":false,"errors":16}
+s:idn	s:idn_to_utf8	s:ab-.com	i:8	s:!U_ZERO_ERROR	a:{"result":"ab-.com","isTransitionalDifferent":false,"errors":16}
+s:idn	s:idn_to_ascii	s:ab-.com	i:16	s:!U_ZERO_ERROR	a:{"result":"ab-.com","isTransitionalDifferent":false,"errors":16}
+s:idn	s:idn_to_utf8	s:ab-.com	i:16	s:!U_ZERO_ERROR	a:{"result":"ab-.com","isTransitionalDifferent":false,"errors":16}
+s:idn	s:idn_to_ascii	s:ab-.com	i:32	s:!U_ZERO_ERROR	a:{"result":"ab-.com","isTransitionalDifferent":false,"errors":16}
+s:idn	s:idn_to_utf8	s:ab-.com	i:32	s:!U_ZERO_ERROR	a:{"result":"ab-.com","isTransitionalDifferent":false,"errors":16}
+s:idn	s:idn_to_ascii	s:ab-.com	i:62	s:!U_ZERO_ERROR	a:{"result":"ab-.com","isTransitionalDifferent":false,"errors":16}
+s:idn	s:idn_to_utf8	s:ab-.com	i:62	s:!U_ZERO_ERROR	a:{"result":"ab-.com","isTransitionalDifferent":false,"errors":16}
+s:idn	s:idn_to_ascii	s:ab--cd.com	i:0	s:!U_ZERO_ERROR	a:{"result":"ab--cd.com","isTransitionalDifferent":false,"errors":32}
+s:idn	s:idn_to_utf8	s:ab--cd.com	i:0	s:!U_ZERO_ERROR	a:{"result":"ab--cd.com","isTransitionalDifferent":false,"errors":32}
+s:idn	s:idn_to_ascii	s:ab--cd.com	i:1	s:!U_ZERO_ERROR	a:{"result":"ab--cd.com","isTransitionalDifferent":false,"errors":32}
+s:idn	s:idn_to_utf8	s:ab--cd.com	i:1	s:!U_ZERO_ERROR	a:{"result":"ab--cd.com","isTransitionalDifferent":false,"errors":32}
+s:idn	s:idn_to_ascii	s:ab--cd.com	i:2	s:!U_ZERO_ERROR	a:{"result":"ab--cd.com","isTransitionalDifferent":false,"errors":32}
+s:idn	s:idn_to_utf8	s:ab--cd.com	i:2	s:!U_ZERO_ERROR	a:{"result":"ab--cd.com","isTransitionalDifferent":false,"errors":32}
+s:idn	s:idn_to_ascii	s:ab--cd.com	i:4	s:!U_ZERO_ERROR	a:{"result":"ab--cd.com","isTransitionalDifferent":false,"errors":32}
+s:idn	s:idn_to_utf8	s:ab--cd.com	i:4	s:!U_ZERO_ERROR	a:{"result":"ab--cd.com","isTransitionalDifferent":false,"errors":32}
+s:idn	s:idn_to_ascii	s:ab--cd.com	i:8	s:!U_ZERO_ERROR	a:{"result":"ab--cd.com","isTransitionalDifferent":false,"errors":32}
+s:idn	s:idn_to_utf8	s:ab--cd.com	i:8	s:!U_ZERO_ERROR	a:{"result":"ab--cd.com","isTransitionalDifferent":false,"errors":32}
+s:idn	s:idn_to_ascii	s:ab--cd.com	i:16	s:!U_ZERO_ERROR	a:{"result":"ab--cd.com","isTransitionalDifferent":false,"errors":32}
+s:idn	s:idn_to_utf8	s:ab--cd.com	i:16	s:!U_ZERO_ERROR	a:{"result":"ab--cd.com","isTransitionalDifferent":false,"errors":32}
+s:idn	s:idn_to_ascii	s:ab--cd.com	i:32	s:!U_ZERO_ERROR	a:{"result":"ab--cd.com","isTransitionalDifferent":false,"errors":32}
+s:idn	s:idn_to_utf8	s:ab--cd.com	i:32	s:!U_ZERO_ERROR	a:{"result":"ab--cd.com","isTransitionalDifferent":false,"errors":32}
+s:idn	s:idn_to_ascii	s:ab--cd.com	i:62	s:!U_ZERO_ERROR	a:{"result":"ab--cd.com","isTransitionalDifferent":false,"errors":32}
+s:idn	s:idn_to_utf8	s:ab--cd.com	i:62	s:!U_ZERO_ERROR	a:{"result":"ab--cd.com","isTransitionalDifferent":false,"errors":32}
+s:idn	s:idn_to_ascii	s:Faß.de	i:0	s:fass.de	a:{"result":"fass.de","isTransitionalDifferent":true,"errors":0}
+s:idn	s:idn_to_utf8	s:Faß.de	i:0	s:fass.de	a:{"result":"fass.de","isTransitionalDifferent":true,"errors":0}
+s:idn	s:idn_to_ascii	s:Faß.de	i:1	s:fass.de	a:{"result":"fass.de","isTransitionalDifferent":true,"errors":0}
+s:idn	s:idn_to_utf8	s:Faß.de	i:1	s:fass.de	a:{"result":"fass.de","isTransitionalDifferent":true,"errors":0}
+s:idn	s:idn_to_ascii	s:Faß.de	i:2	s:fass.de	a:{"result":"fass.de","isTransitionalDifferent":true,"errors":0}
+s:idn	s:idn_to_utf8	s:Faß.de	i:2	s:fass.de	a:{"result":"fass.de","isTransitionalDifferent":true,"errors":0}
+s:idn	s:idn_to_ascii	s:Faß.de	i:4	s:fass.de	a:{"result":"fass.de","isTransitionalDifferent":true,"errors":0}
+s:idn	s:idn_to_utf8	s:Faß.de	i:4	s:fass.de	a:{"result":"fass.de","isTransitionalDifferent":true,"errors":0}
+s:idn	s:idn_to_ascii	s:Faß.de	i:8	s:fass.de	a:{"result":"fass.de","isTransitionalDifferent":true,"errors":0}
+s:idn	s:idn_to_utf8	s:Faß.de	i:8	s:fass.de	a:{"result":"fass.de","isTransitionalDifferent":true,"errors":0}
+s:idn	s:idn_to_ascii	s:Faß.de	i:16	s:xn--fa-hia.de	a:{"result":"xn--fa-hia.de","isTransitionalDifferent":true,"errors":0}
+s:idn	s:idn_to_utf8	s:Faß.de	i:16	s:fass.de	a:{"result":"fass.de","isTransitionalDifferent":true,"errors":0}
+s:idn	s:idn_to_ascii	s:Faß.de	i:32	s:fass.de	a:{"result":"fass.de","isTransitionalDifferent":true,"errors":0}
+s:idn	s:idn_to_utf8	s:Faß.de	i:32	s:faß.de	a:{"result":"faß.de","isTransitionalDifferent":true,"errors":0}
+s:idn	s:idn_to_ascii	s:Faß.de	i:62	s:xn--fa-hia.de	a:{"result":"xn--fa-hia.de","isTransitionalDifferent":true,"errors":0}
+s:idn	s:idn_to_utf8	s:Faß.de	i:62	s:faß.de	a:{"result":"faß.de","isTransitionalDifferent":true,"errors":0}
+s:idn	s:idn_to_ascii	s:βόλος.com	i:0	s:xn--nxasmq6b.com	a:{"result":"xn--nxasmq6b.com","isTransitionalDifferent":true,"errors":0}
+s:idn	s:idn_to_utf8	s:βόλος.com	i:0	s:βόλοσ.com	a:{"result":"βόλοσ.com","isTransitionalDifferent":true,"errors":0}
+s:idn	s:idn_to_ascii	s:βόλος.com	i:1	s:xn--nxasmq6b.com	a:{"result":"xn--nxasmq6b.com","isTransitionalDifferent":true,"errors":0}
+s:idn	s:idn_to_utf8	s:βόλος.com	i:1	s:βόλοσ.com	a:{"result":"βόλοσ.com","isTransitionalDifferent":true,"errors":0}
+s:idn	s:idn_to_ascii	s:βόλος.com	i:2	s:xn--nxasmq6b.com	a:{"result":"xn--nxasmq6b.com","isTransitionalDifferent":true,"errors":0}
+s:idn	s:idn_to_utf8	s:βόλος.com	i:2	s:βόλοσ.com	a:{"result":"βόλοσ.com","isTransitionalDifferent":true,"errors":0}
+s:idn	s:idn_to_ascii	s:βόλος.com	i:4	s:xn--nxasmq6b.com	a:{"result":"xn--nxasmq6b.com","isTransitionalDifferent":true,"errors":0}
+s:idn	s:idn_to_utf8	s:βόλος.com	i:4	s:βόλοσ.com	a:{"result":"βόλοσ.com","isTransitionalDifferent":true,"errors":0}
+s:idn	s:idn_to_ascii	s:βόλος.com	i:8	s:xn--nxasmq6b.com	a:{"result":"xn--nxasmq6b.com","isTransitionalDifferent":true,"errors":0}
+s:idn	s:idn_to_utf8	s:βόλος.com	i:8	s:βόλοσ.com	a:{"result":"βόλοσ.com","isTransitionalDifferent":true,"errors":0}
+s:idn	s:idn_to_ascii	s:βόλος.com	i:16	s:xn--nxasmm1c.com	a:{"result":"xn--nxasmm1c.com","isTransitionalDifferent":true,"errors":0}
+s:idn	s:idn_to_utf8	s:βόλος.com	i:16	s:βόλοσ.com	a:{"result":"βόλοσ.com","isTransitionalDifferent":true,"errors":0}
+s:idn	s:idn_to_ascii	s:βόλος.com	i:32	s:xn--nxasmq6b.com	a:{"result":"xn--nxasmq6b.com","isTransitionalDifferent":true,"errors":0}
+s:idn	s:idn_to_utf8	s:βόλος.com	i:32	s:βόλος.com	a:{"result":"βόλος.com","isTransitionalDifferent":true,"errors":0}
+s:idn	s:idn_to_ascii	s:βόλος.com	i:62	s:xn--nxasmm1c.com	a:{"result":"xn--nxasmm1c.com","isTransitionalDifferent":true,"errors":0}
+s:idn	s:idn_to_utf8	s:βόλος.com	i:62	s:βόλος.com	a:{"result":"βόλος.com","isTransitionalDifferent":true,"errors":0}
+s:idn	s:idn_to_ascii	s:ශ්‍රී.com	i:0	s:xn--10cl1a0b.com	a:{"result":"xn--10cl1a0b.com","isTransitionalDifferent":true,"errors":0}
+s:idn	s:idn_to_utf8	s:ශ්‍රී.com	i:0	s:ශ්රී.com	a:{"result":"ශ්රී.com","isTransitionalDifferent":true,"errors":0}
+s:idn	s:idn_to_ascii	s:ශ්‍රී.com	i:1	s:xn--10cl1a0b.com	a:{"result":"xn--10cl1a0b.com","isTransitionalDifferent":true,"errors":0}
+s:idn	s:idn_to_utf8	s:ශ්‍රී.com	i:1	s:ශ්රී.com	a:{"result":"ශ්රී.com","isTransitionalDifferent":true,"errors":0}
+s:idn	s:idn_to_ascii	s:ශ්‍රී.com	i:2	s:xn--10cl1a0b.com	a:{"result":"xn--10cl1a0b.com","isTransitionalDifferent":true,"errors":0}
+s:idn	s:idn_to_utf8	s:ශ්‍රී.com	i:2	s:ශ්රී.com	a:{"result":"ශ්රී.com","isTransitionalDifferent":true,"errors":0}
+s:idn	s:idn_to_ascii	s:ශ්‍රී.com	i:4	s:xn--10cl1a0b.com	a:{"result":"xn--10cl1a0b.com","isTransitionalDifferent":true,"errors":0}
+s:idn	s:idn_to_utf8	s:ශ්‍රී.com	i:4	s:ශ්රී.com	a:{"result":"ශ්රී.com","isTransitionalDifferent":true,"errors":0}
+s:idn	s:idn_to_ascii	s:ශ්‍රී.com	i:8	s:xn--10cl1a0b.com	a:{"result":"xn--10cl1a0b.com","isTransitionalDifferent":true,"errors":0}
+s:idn	s:idn_to_utf8	s:ශ්‍රී.com	i:8	s:ශ්රී.com	a:{"result":"ශ්රී.com","isTransitionalDifferent":true,"errors":0}
+s:idn	s:idn_to_ascii	s:ශ්‍රී.com	i:16	s:xn--10cl1a0b660p.com	a:{"result":"xn--10cl1a0b660p.com","isTransitionalDifferent":true,"errors":0}
+s:idn	s:idn_to_utf8	s:ශ්‍රී.com	i:16	s:ශ්රී.com	a:{"result":"ශ්රී.com","isTransitionalDifferent":true,"errors":0}
+s:idn	s:idn_to_ascii	s:ශ්‍රී.com	i:32	s:xn--10cl1a0b.com	a:{"result":"xn--10cl1a0b.com","isTransitionalDifferent":true,"errors":0}
+s:idn	s:idn_to_utf8	s:ශ්‍රී.com	i:32	s:ශ්‍රී.com	a:{"result":"ශ්‍රී.com","isTransitionalDifferent":true,"errors":0}
+s:idn	s:idn_to_ascii	s:ශ්‍රී.com	i:62	s:xn--10cl1a0b660p.com	a:{"result":"xn--10cl1a0b660p.com","isTransitionalDifferent":true,"errors":0}
+s:idn	s:idn_to_utf8	s:ශ්‍රී.com	i:62	s:ශ්‍රී.com	a:{"result":"ශ්‍රී.com","isTransitionalDifferent":true,"errors":0}
+s:idn	s:idn_to_ascii	s:نامه‌ای.com	i:0	s:xn--mgba3gch31f.com	a:{"result":"xn--mgba3gch31f.com","isTransitionalDifferent":true,"errors":0}
+s:idn	s:idn_to_utf8	s:نامه‌ای.com	i:0	s:نامهای.com	a:{"result":"نامهای.com","isTransitionalDifferent":true,"errors":0}
+s:idn	s:idn_to_ascii	s:نامه‌ای.com	i:1	s:xn--mgba3gch31f.com	a:{"result":"xn--mgba3gch31f.com","isTransitionalDifferent":true,"errors":0}
+s:idn	s:idn_to_utf8	s:نامه‌ای.com	i:1	s:نامهای.com	a:{"result":"نامهای.com","isTransitionalDifferent":true,"errors":0}
+s:idn	s:idn_to_ascii	s:نامه‌ای.com	i:2	s:xn--mgba3gch31f.com	a:{"result":"xn--mgba3gch31f.com","isTransitionalDifferent":true,"errors":0}
+s:idn	s:idn_to_utf8	s:نامه‌ای.com	i:2	s:نامهای.com	a:{"result":"نامهای.com","isTransitionalDifferent":true,"errors":0}
+s:idn	s:idn_to_ascii	s:نامه‌ای.com	i:4	s:xn--mgba3gch31f.com	a:{"result":"xn--mgba3gch31f.com","isTransitionalDifferent":true,"errors":0}
+s:idn	s:idn_to_utf8	s:نامه‌ای.com	i:4	s:نامهای.com	a:{"result":"نامهای.com","isTransitionalDifferent":true,"errors":0}
+s:idn	s:idn_to_ascii	s:نامه‌ای.com	i:8	s:xn--mgba3gch31f.com	a:{"result":"xn--mgba3gch31f.com","isTransitionalDifferent":true,"errors":0}
+s:idn	s:idn_to_utf8	s:نامه‌ای.com	i:8	s:نامهای.com	a:{"result":"نامهای.com","isTransitionalDifferent":true,"errors":0}
+s:idn	s:idn_to_ascii	s:نامه‌ای.com	i:16	s:xn--mgba3gch31f060k.com	a:{"result":"xn--mgba3gch31f060k.com","isTransitionalDifferent":true,"errors":0}
+s:idn	s:idn_to_utf8	s:نامه‌ای.com	i:16	s:نامهای.com	a:{"result":"نامهای.com","isTransitionalDifferent":true,"errors":0}
+s:idn	s:idn_to_ascii	s:نامه‌ای.com	i:32	s:xn--mgba3gch31f.com	a:{"result":"xn--mgba3gch31f.com","isTransitionalDifferent":true,"errors":0}
+s:idn	s:idn_to_utf8	s:نامه‌ای.com	i:32	s:نامه‌ای.com	a:{"result":"نامه‌ای.com","isTransitionalDifferent":true,"errors":0}
+s:idn	s:idn_to_ascii	s:نامه‌ای.com	i:62	s:xn--mgba3gch31f060k.com	a:{"result":"xn--mgba3gch31f060k.com","isTransitionalDifferent":true,"errors":0}
+s:idn	s:idn_to_utf8	s:نامه‌ای.com	i:62	s:نامه‌ای.com	a:{"result":"نامه‌ای.com","isTransitionalDifferent":true,"errors":0}
+s:idn	s:idn_to_ascii	s:1.2.3.4	i:0	s:1.2.3.4	a:{"result":"1.2.3.4","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_utf8	s:1.2.3.4	i:0	s:1.2.3.4	a:{"result":"1.2.3.4","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_ascii	s:1.2.3.4	i:1	s:1.2.3.4	a:{"result":"1.2.3.4","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_utf8	s:1.2.3.4	i:1	s:1.2.3.4	a:{"result":"1.2.3.4","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_ascii	s:1.2.3.4	i:2	s:1.2.3.4	a:{"result":"1.2.3.4","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_utf8	s:1.2.3.4	i:2	s:1.2.3.4	a:{"result":"1.2.3.4","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_ascii	s:1.2.3.4	i:4	s:1.2.3.4	a:{"result":"1.2.3.4","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_utf8	s:1.2.3.4	i:4	s:1.2.3.4	a:{"result":"1.2.3.4","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_ascii	s:1.2.3.4	i:8	s:1.2.3.4	a:{"result":"1.2.3.4","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_utf8	s:1.2.3.4	i:8	s:1.2.3.4	a:{"result":"1.2.3.4","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_ascii	s:1.2.3.4	i:16	s:1.2.3.4	a:{"result":"1.2.3.4","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_utf8	s:1.2.3.4	i:16	s:1.2.3.4	a:{"result":"1.2.3.4","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_ascii	s:1.2.3.4	i:32	s:1.2.3.4	a:{"result":"1.2.3.4","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_utf8	s:1.2.3.4	i:32	s:1.2.3.4	a:{"result":"1.2.3.4","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_ascii	s:1.2.3.4	i:62	s:1.2.3.4	a:{"result":"1.2.3.4","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_utf8	s:1.2.3.4	i:62	s:1.2.3.4	a:{"result":"1.2.3.4","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_ascii	s:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.com	i:0	s:!U_ZERO_ERROR	a:{"result":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.com","isTransitionalDifferent":false,"errors":2}
+s:idn	s:idn_to_utf8	s:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.com	i:0	s:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.com	a:{"result":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.com","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_ascii	s:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.com	i:1	s:!U_ZERO_ERROR	a:{"result":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.com","isTransitionalDifferent":false,"errors":2}
+s:idn	s:idn_to_utf8	s:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.com	i:1	s:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.com	a:{"result":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.com","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_ascii	s:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.com	i:2	s:!U_ZERO_ERROR	a:{"result":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.com","isTransitionalDifferent":false,"errors":2}
+s:idn	s:idn_to_utf8	s:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.com	i:2	s:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.com	a:{"result":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.com","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_ascii	s:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.com	i:4	s:!U_ZERO_ERROR	a:{"result":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.com","isTransitionalDifferent":false,"errors":2}
+s:idn	s:idn_to_utf8	s:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.com	i:4	s:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.com	a:{"result":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.com","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_ascii	s:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.com	i:8	s:!U_ZERO_ERROR	a:{"result":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.com","isTransitionalDifferent":false,"errors":2}
+s:idn	s:idn_to_utf8	s:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.com	i:8	s:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.com	a:{"result":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.com","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_ascii	s:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.com	i:16	s:!U_ZERO_ERROR	a:{"result":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.com","isTransitionalDifferent":false,"errors":2}
+s:idn	s:idn_to_utf8	s:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.com	i:16	s:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.com	a:{"result":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.com","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_ascii	s:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.com	i:32	s:!U_ZERO_ERROR	a:{"result":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.com","isTransitionalDifferent":false,"errors":2}
+s:idn	s:idn_to_utf8	s:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.com	i:32	s:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.com	a:{"result":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.com","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_ascii	s:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.com	i:62	s:!U_ZERO_ERROR	a:{"result":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.com","isTransitionalDifferent":false,"errors":2}
+s:idn	s:idn_to_utf8	s:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.com	i:62	s:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.com	a:{"result":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.com","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_ascii	s:abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.com	i:0	s:!U_ZERO_ERROR	a:[]
+s:idn	s:idn_to_utf8	s:abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.com	i:0	s:abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.com	a:{"result":"abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.com","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_ascii	s:abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.com	i:1	s:!U_ZERO_ERROR	a:[]
+s:idn	s:idn_to_utf8	s:abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.com	i:1	s:abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.com	a:{"result":"abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.com","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_ascii	s:abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.com	i:2	s:!U_ZERO_ERROR	a:[]
+s:idn	s:idn_to_utf8	s:abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.com	i:2	s:abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.com	a:{"result":"abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.com","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_ascii	s:abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.com	i:4	s:!U_ZERO_ERROR	a:[]
+s:idn	s:idn_to_utf8	s:abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.com	i:4	s:abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.com	a:{"result":"abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.com","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_ascii	s:abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.com	i:8	s:!U_ZERO_ERROR	a:[]
+s:idn	s:idn_to_utf8	s:abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.com	i:8	s:abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.com	a:{"result":"abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.com","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_ascii	s:abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.com	i:16	s:!U_ZERO_ERROR	a:[]
+s:idn	s:idn_to_utf8	s:abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.com	i:16	s:abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.com	a:{"result":"abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.com","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_ascii	s:abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.com	i:32	s:!U_ZERO_ERROR	a:[]
+s:idn	s:idn_to_utf8	s:abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.com	i:32	s:abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.com	a:{"result":"abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.com","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_ascii	s:abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.com	i:62	s:!U_ZERO_ERROR	a:[]
+s:idn	s:idn_to_utf8	s:abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.com	i:62	s:abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.com	a:{"result":"abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.abcdefgh.com","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_ascii	s:xn--abc	i:0	s:!U_ZERO_ERROR	a:{"result":"xn--abc�","isTransitionalDifferent":false,"errors":1024}
+s:idn	s:idn_to_utf8	s:xn--abc	i:0	s:!U_ZERO_ERROR	a:{"result":"xn--abc�","isTransitionalDifferent":false,"errors":1024}
+s:idn	s:idn_to_ascii	s:xn--abc	i:1	s:!U_ZERO_ERROR	a:{"result":"xn--abc�","isTransitionalDifferent":false,"errors":1024}
+s:idn	s:idn_to_utf8	s:xn--abc	i:1	s:!U_ZERO_ERROR	a:{"result":"xn--abc�","isTransitionalDifferent":false,"errors":1024}
+s:idn	s:idn_to_ascii	s:xn--abc	i:2	s:!U_ZERO_ERROR	a:{"result":"xn--abc�","isTransitionalDifferent":false,"errors":1024}
+s:idn	s:idn_to_utf8	s:xn--abc	i:2	s:!U_ZERO_ERROR	a:{"result":"xn--abc�","isTransitionalDifferent":false,"errors":1024}
+s:idn	s:idn_to_ascii	s:xn--abc	i:4	s:!U_ZERO_ERROR	a:{"result":"xn--abc�","isTransitionalDifferent":false,"errors":1024}
+s:idn	s:idn_to_utf8	s:xn--abc	i:4	s:!U_ZERO_ERROR	a:{"result":"xn--abc�","isTransitionalDifferent":false,"errors":1024}
+s:idn	s:idn_to_ascii	s:xn--abc	i:8	s:!U_ZERO_ERROR	a:{"result":"xn--abc�","isTransitionalDifferent":false,"errors":1024}
+s:idn	s:idn_to_utf8	s:xn--abc	i:8	s:!U_ZERO_ERROR	a:{"result":"xn--abc�","isTransitionalDifferent":false,"errors":1024}
+s:idn	s:idn_to_ascii	s:xn--abc	i:16	s:!U_ZERO_ERROR	a:{"result":"xn--abc�","isTransitionalDifferent":false,"errors":1024}
+s:idn	s:idn_to_utf8	s:xn--abc	i:16	s:!U_ZERO_ERROR	a:{"result":"xn--abc�","isTransitionalDifferent":false,"errors":1024}
+s:idn	s:idn_to_ascii	s:xn--abc	i:32	s:!U_ZERO_ERROR	a:{"result":"xn--abc�","isTransitionalDifferent":false,"errors":1024}
+s:idn	s:idn_to_utf8	s:xn--abc	i:32	s:!U_ZERO_ERROR	a:{"result":"xn--abc�","isTransitionalDifferent":false,"errors":1024}
+s:idn	s:idn_to_ascii	s:xn--abc	i:62	s:!U_ZERO_ERROR	a:{"result":"xn--abc�","isTransitionalDifferent":false,"errors":1024}
+s:idn	s:idn_to_utf8	s:xn--abc	i:62	s:!U_ZERO_ERROR	a:{"result":"xn--abc�","isTransitionalDifferent":false,"errors":1024}
+s:idn	s:idn_to_ascii	s:xn--a.com	i:0	s:!U_ZERO_ERROR	a:{"result":"xn--a�.com","isTransitionalDifferent":false,"errors":1024}
+s:idn	s:idn_to_utf8	s:xn--a.com	i:0	s:!U_ZERO_ERROR	a:{"result":"xn--a�.com","isTransitionalDifferent":false,"errors":1024}
+s:idn	s:idn_to_ascii	s:xn--a.com	i:1	s:!U_ZERO_ERROR	a:{"result":"xn--a�.com","isTransitionalDifferent":false,"errors":1024}
+s:idn	s:idn_to_utf8	s:xn--a.com	i:1	s:!U_ZERO_ERROR	a:{"result":"xn--a�.com","isTransitionalDifferent":false,"errors":1024}
+s:idn	s:idn_to_ascii	s:xn--a.com	i:2	s:!U_ZERO_ERROR	a:{"result":"xn--a�.com","isTransitionalDifferent":false,"errors":1024}
+s:idn	s:idn_to_utf8	s:xn--a.com	i:2	s:!U_ZERO_ERROR	a:{"result":"xn--a�.com","isTransitionalDifferent":false,"errors":1024}
+s:idn	s:idn_to_ascii	s:xn--a.com	i:4	s:!U_ZERO_ERROR	a:{"result":"xn--a�.com","isTransitionalDifferent":false,"errors":1024}
+s:idn	s:idn_to_utf8	s:xn--a.com	i:4	s:!U_ZERO_ERROR	a:{"result":"xn--a�.com","isTransitionalDifferent":false,"errors":1024}
+s:idn	s:idn_to_ascii	s:xn--a.com	i:8	s:!U_ZERO_ERROR	a:{"result":"xn--a�.com","isTransitionalDifferent":false,"errors":1024}
+s:idn	s:idn_to_utf8	s:xn--a.com	i:8	s:!U_ZERO_ERROR	a:{"result":"xn--a�.com","isTransitionalDifferent":false,"errors":1024}
+s:idn	s:idn_to_ascii	s:xn--a.com	i:16	s:!U_ZERO_ERROR	a:{"result":"xn--a�.com","isTransitionalDifferent":false,"errors":1024}
+s:idn	s:idn_to_utf8	s:xn--a.com	i:16	s:!U_ZERO_ERROR	a:{"result":"xn--a�.com","isTransitionalDifferent":false,"errors":1024}
+s:idn	s:idn_to_ascii	s:xn--a.com	i:32	s:!U_ZERO_ERROR	a:{"result":"xn--a�.com","isTransitionalDifferent":false,"errors":1024}
+s:idn	s:idn_to_utf8	s:xn--a.com	i:32	s:!U_ZERO_ERROR	a:{"result":"xn--a�.com","isTransitionalDifferent":false,"errors":1024}
+s:idn	s:idn_to_ascii	s:xn--a.com	i:62	s:!U_ZERO_ERROR	a:{"result":"xn--a�.com","isTransitionalDifferent":false,"errors":1024}
+s:idn	s:idn_to_utf8	s:xn--a.com	i:62	s:!U_ZERO_ERROR	a:{"result":"xn--a�.com","isTransitionalDifferent":false,"errors":1024}
+s:idn	s:idn_to_ascii	s:EXAMPLE.COM	i:0	s:example.com	a:{"result":"example.com","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_utf8	s:EXAMPLE.COM	i:0	s:example.com	a:{"result":"example.com","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_ascii	s:EXAMPLE.COM	i:1	s:example.com	a:{"result":"example.com","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_utf8	s:EXAMPLE.COM	i:1	s:example.com	a:{"result":"example.com","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_ascii	s:EXAMPLE.COM	i:2	s:example.com	a:{"result":"example.com","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_utf8	s:EXAMPLE.COM	i:2	s:example.com	a:{"result":"example.com","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_ascii	s:EXAMPLE.COM	i:4	s:example.com	a:{"result":"example.com","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_utf8	s:EXAMPLE.COM	i:4	s:example.com	a:{"result":"example.com","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_ascii	s:EXAMPLE.COM	i:8	s:example.com	a:{"result":"example.com","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_utf8	s:EXAMPLE.COM	i:8	s:example.com	a:{"result":"example.com","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_ascii	s:EXAMPLE.COM	i:16	s:example.com	a:{"result":"example.com","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_utf8	s:EXAMPLE.COM	i:16	s:example.com	a:{"result":"example.com","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_ascii	s:EXAMPLE.COM	i:32	s:example.com	a:{"result":"example.com","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_utf8	s:EXAMPLE.COM	i:32	s:example.com	a:{"result":"example.com","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_ascii	s:EXAMPLE.COM	i:62	s:example.com	a:{"result":"example.com","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_utf8	s:EXAMPLE.COM	i:62	s:example.com	a:{"result":"example.com","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_ascii	s:☃.net	i:0	s:xn--n3h.net	a:{"result":"xn--n3h.net","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_utf8	s:☃.net	i:0	s:☃.net	a:{"result":"☃.net","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_ascii	s:☃.net	i:1	s:xn--n3h.net	a:{"result":"xn--n3h.net","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_utf8	s:☃.net	i:1	s:☃.net	a:{"result":"☃.net","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_ascii	s:☃.net	i:2	s:xn--n3h.net	a:{"result":"xn--n3h.net","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_utf8	s:☃.net	i:2	s:☃.net	a:{"result":"☃.net","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_ascii	s:☃.net	i:4	s:xn--n3h.net	a:{"result":"xn--n3h.net","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_utf8	s:☃.net	i:4	s:☃.net	a:{"result":"☃.net","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_ascii	s:☃.net	i:8	s:xn--n3h.net	a:{"result":"xn--n3h.net","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_utf8	s:☃.net	i:8	s:☃.net	a:{"result":"☃.net","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_ascii	s:☃.net	i:16	s:xn--n3h.net	a:{"result":"xn--n3h.net","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_utf8	s:☃.net	i:16	s:☃.net	a:{"result":"☃.net","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_ascii	s:☃.net	i:32	s:xn--n3h.net	a:{"result":"xn--n3h.net","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_utf8	s:☃.net	i:32	s:☃.net	a:{"result":"☃.net","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_ascii	s:☃.net	i:62	s:xn--n3h.net	a:{"result":"xn--n3h.net","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_utf8	s:☃.net	i:62	s:☃.net	a:{"result":"☃.net","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_ascii	s:a b.com	i:0	s:a b.com	a:{"result":"a b.com","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_utf8	s:a b.com	i:0	s:a b.com	a:{"result":"a b.com","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_ascii	s:a b.com	i:1	s:a b.com	a:{"result":"a b.com","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_utf8	s:a b.com	i:1	s:a b.com	a:{"result":"a b.com","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_ascii	s:a b.com	i:2	s:!U_ZERO_ERROR	a:{"result":"a�b.com","isTransitionalDifferent":false,"errors":128}
+s:idn	s:idn_to_utf8	s:a b.com	i:2	s:!U_ZERO_ERROR	a:{"result":"a�b.com","isTransitionalDifferent":false,"errors":128}
+s:idn	s:idn_to_ascii	s:a b.com	i:4	s:a b.com	a:{"result":"a b.com","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_utf8	s:a b.com	i:4	s:a b.com	a:{"result":"a b.com","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_ascii	s:a b.com	i:8	s:a b.com	a:{"result":"a b.com","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_utf8	s:a b.com	i:8	s:a b.com	a:{"result":"a b.com","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_ascii	s:a b.com	i:16	s:a b.com	a:{"result":"a b.com","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_utf8	s:a b.com	i:16	s:a b.com	a:{"result":"a b.com","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_ascii	s:a b.com	i:32	s:a b.com	a:{"result":"a b.com","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_utf8	s:a b.com	i:32	s:a b.com	a:{"result":"a b.com","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_ascii	s:a b.com	i:62	s:!U_ZERO_ERROR	a:{"result":"a�b.com","isTransitionalDifferent":false,"errors":128}
+s:idn	s:idn_to_utf8	s:a b.com	i:62	s:!U_ZERO_ERROR	a:{"result":"a�b.com","isTransitionalDifferent":false,"errors":128}
+s:idn	s:idn_to_ascii	s:á.com	i:0	s:xn--1ca.com	a:{"result":"xn--1ca.com","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_utf8	s:á.com	i:0	s:á.com	a:{"result":"á.com","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_ascii	s:á.com	i:1	s:xn--1ca.com	a:{"result":"xn--1ca.com","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_utf8	s:á.com	i:1	s:á.com	a:{"result":"á.com","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_ascii	s:á.com	i:2	s:xn--1ca.com	a:{"result":"xn--1ca.com","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_utf8	s:á.com	i:2	s:á.com	a:{"result":"á.com","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_ascii	s:á.com	i:4	s:xn--1ca.com	a:{"result":"xn--1ca.com","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_utf8	s:á.com	i:4	s:á.com	a:{"result":"á.com","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_ascii	s:á.com	i:8	s:xn--1ca.com	a:{"result":"xn--1ca.com","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_utf8	s:á.com	i:8	s:á.com	a:{"result":"á.com","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_ascii	s:á.com	i:16	s:xn--1ca.com	a:{"result":"xn--1ca.com","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_utf8	s:á.com	i:16	s:á.com	a:{"result":"á.com","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_ascii	s:á.com	i:32	s:xn--1ca.com	a:{"result":"xn--1ca.com","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_utf8	s:á.com	i:32	s:á.com	a:{"result":"á.com","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_ascii	s:á.com	i:62	s:xn--1ca.com	a:{"result":"xn--1ca.com","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_utf8	s:á.com	i:62	s:á.com	a:{"result":"á.com","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_ascii	s:.	i:0	s:!U_ZERO_ERROR	a:{"result":".","isTransitionalDifferent":false,"errors":1}
+s:idn	s:idn_to_utf8	s:.	i:0	s:!U_ZERO_ERROR	a:{"result":".","isTransitionalDifferent":false,"errors":1}
+s:idn	s:idn_to_ascii	s:.	i:1	s:!U_ZERO_ERROR	a:{"result":".","isTransitionalDifferent":false,"errors":1}
+s:idn	s:idn_to_utf8	s:.	i:1	s:!U_ZERO_ERROR	a:{"result":".","isTransitionalDifferent":false,"errors":1}
+s:idn	s:idn_to_ascii	s:.	i:2	s:!U_ZERO_ERROR	a:{"result":".","isTransitionalDifferent":false,"errors":1}
+s:idn	s:idn_to_utf8	s:.	i:2	s:!U_ZERO_ERROR	a:{"result":".","isTransitionalDifferent":false,"errors":1}
+s:idn	s:idn_to_ascii	s:.	i:4	s:!U_ZERO_ERROR	a:{"result":".","isTransitionalDifferent":false,"errors":1}
+s:idn	s:idn_to_utf8	s:.	i:4	s:!U_ZERO_ERROR	a:{"result":".","isTransitionalDifferent":false,"errors":1}
+s:idn	s:idn_to_ascii	s:.	i:8	s:!U_ZERO_ERROR	a:{"result":".","isTransitionalDifferent":false,"errors":1}
+s:idn	s:idn_to_utf8	s:.	i:8	s:!U_ZERO_ERROR	a:{"result":".","isTransitionalDifferent":false,"errors":1}
+s:idn	s:idn_to_ascii	s:.	i:16	s:!U_ZERO_ERROR	a:{"result":".","isTransitionalDifferent":false,"errors":1}
+s:idn	s:idn_to_utf8	s:.	i:16	s:!U_ZERO_ERROR	a:{"result":".","isTransitionalDifferent":false,"errors":1}
+s:idn	s:idn_to_ascii	s:.	i:32	s:!U_ZERO_ERROR	a:{"result":".","isTransitionalDifferent":false,"errors":1}
+s:idn	s:idn_to_utf8	s:.	i:32	s:!U_ZERO_ERROR	a:{"result":".","isTransitionalDifferent":false,"errors":1}
+s:idn	s:idn_to_ascii	s:.	i:62	s:!U_ZERO_ERROR	a:{"result":".","isTransitionalDifferent":false,"errors":1}
+s:idn	s:idn_to_utf8	s:.	i:62	s:!U_ZERO_ERROR	a:{"result":".","isTransitionalDifferent":false,"errors":1}
+s:idn	s:idn_to_ascii	s:a.	i:0	s:a.	a:{"result":"a.","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_utf8	s:a.	i:0	s:a.	a:{"result":"a.","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_ascii	s:a.	i:1	s:a.	a:{"result":"a.","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_utf8	s:a.	i:1	s:a.	a:{"result":"a.","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_ascii	s:a.	i:2	s:a.	a:{"result":"a.","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_utf8	s:a.	i:2	s:a.	a:{"result":"a.","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_ascii	s:a.	i:4	s:a.	a:{"result":"a.","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_utf8	s:a.	i:4	s:a.	a:{"result":"a.","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_ascii	s:a.	i:8	s:a.	a:{"result":"a.","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_utf8	s:a.	i:8	s:a.	a:{"result":"a.","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_ascii	s:a.	i:16	s:a.	a:{"result":"a.","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_utf8	s:a.	i:16	s:a.	a:{"result":"a.","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_ascii	s:a.	i:32	s:a.	a:{"result":"a.","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_utf8	s:a.	i:32	s:a.	a:{"result":"a.","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_ascii	s:a.	i:62	s:a.	a:{"result":"a.","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_utf8	s:a.	i:62	s:a.	a:{"result":"a.","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_ascii	s:١٢.com	i:0	s:xn--9hbc.com	a:{"result":"xn--9hbc.com","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_utf8	s:١٢.com	i:0	s:١٢.com	a:{"result":"١٢.com","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_ascii	s:١٢.com	i:1	s:xn--9hbc.com	a:{"result":"xn--9hbc.com","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_utf8	s:١٢.com	i:1	s:١٢.com	a:{"result":"١٢.com","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_ascii	s:١٢.com	i:2	s:xn--9hbc.com	a:{"result":"xn--9hbc.com","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_utf8	s:١٢.com	i:2	s:١٢.com	a:{"result":"١٢.com","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_ascii	s:١٢.com	i:4	s:!U_ZERO_ERROR	a:{"result":"xn--9hbc.com","isTransitionalDifferent":false,"errors":2048}
+s:idn	s:idn_to_utf8	s:١٢.com	i:4	s:!U_ZERO_ERROR	a:{"result":"١٢.com","isTransitionalDifferent":false,"errors":2048}
+s:idn	s:idn_to_ascii	s:١٢.com	i:8	s:xn--9hbc.com	a:{"result":"xn--9hbc.com","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_utf8	s:١٢.com	i:8	s:١٢.com	a:{"result":"١٢.com","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_ascii	s:١٢.com	i:16	s:xn--9hbc.com	a:{"result":"xn--9hbc.com","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_utf8	s:١٢.com	i:16	s:١٢.com	a:{"result":"١٢.com","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_ascii	s:١٢.com	i:32	s:xn--9hbc.com	a:{"result":"xn--9hbc.com","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_utf8	s:١٢.com	i:32	s:١٢.com	a:{"result":"١٢.com","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_ascii	s:١٢.com	i:62	s:!U_ZERO_ERROR	a:{"result":"xn--9hbc.com","isTransitionalDifferent":false,"errors":2048}
+s:idn	s:idn_to_utf8	s:١٢.com	i:62	s:!U_ZERO_ERROR	a:{"result":"١٢.com","isTransitionalDifferent":false,"errors":2048}
+s:idn	s:idn_to_ascii	s:xn--zca.com	i:0	s:xn--zca.com	a:{"result":"xn--zca.com","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_utf8	s:xn--zca.com	i:0	s:ß.com	a:{"result":"ß.com","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_ascii	s:xn--zca.com	i:1	s:xn--zca.com	a:{"result":"xn--zca.com","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_utf8	s:xn--zca.com	i:1	s:ß.com	a:{"result":"ß.com","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_ascii	s:xn--zca.com	i:2	s:xn--zca.com	a:{"result":"xn--zca.com","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_utf8	s:xn--zca.com	i:2	s:ß.com	a:{"result":"ß.com","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_ascii	s:xn--zca.com	i:4	s:xn--zca.com	a:{"result":"xn--zca.com","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_utf8	s:xn--zca.com	i:4	s:ß.com	a:{"result":"ß.com","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_ascii	s:xn--zca.com	i:8	s:xn--zca.com	a:{"result":"xn--zca.com","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_utf8	s:xn--zca.com	i:8	s:ß.com	a:{"result":"ß.com","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_ascii	s:xn--zca.com	i:16	s:xn--zca.com	a:{"result":"xn--zca.com","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_utf8	s:xn--zca.com	i:16	s:ß.com	a:{"result":"ß.com","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_ascii	s:xn--zca.com	i:32	s:xn--zca.com	a:{"result":"xn--zca.com","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_utf8	s:xn--zca.com	i:32	s:ß.com	a:{"result":"ß.com","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_ascii	s:xn--zca.com	i:62	s:xn--zca.com	a:{"result":"xn--zca.com","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_utf8	s:xn--zca.com	i:62	s:ß.com	a:{"result":"ß.com","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_ascii	s:xn--55qx5d.cn	i:0	s:xn--55qx5d.cn	a:{"result":"xn--55qx5d.cn","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_utf8	s:xn--55qx5d.cn	i:0	s:公司.cn	a:{"result":"公司.cn","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_ascii	s:xn--55qx5d.cn	i:1	s:xn--55qx5d.cn	a:{"result":"xn--55qx5d.cn","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_utf8	s:xn--55qx5d.cn	i:1	s:公司.cn	a:{"result":"公司.cn","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_ascii	s:xn--55qx5d.cn	i:2	s:xn--55qx5d.cn	a:{"result":"xn--55qx5d.cn","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_utf8	s:xn--55qx5d.cn	i:2	s:公司.cn	a:{"result":"公司.cn","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_ascii	s:xn--55qx5d.cn	i:4	s:xn--55qx5d.cn	a:{"result":"xn--55qx5d.cn","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_utf8	s:xn--55qx5d.cn	i:4	s:公司.cn	a:{"result":"公司.cn","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_ascii	s:xn--55qx5d.cn	i:8	s:xn--55qx5d.cn	a:{"result":"xn--55qx5d.cn","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_utf8	s:xn--55qx5d.cn	i:8	s:公司.cn	a:{"result":"公司.cn","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_ascii	s:xn--55qx5d.cn	i:16	s:xn--55qx5d.cn	a:{"result":"xn--55qx5d.cn","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_utf8	s:xn--55qx5d.cn	i:16	s:公司.cn	a:{"result":"公司.cn","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_ascii	s:xn--55qx5d.cn	i:32	s:xn--55qx5d.cn	a:{"result":"xn--55qx5d.cn","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_utf8	s:xn--55qx5d.cn	i:32	s:公司.cn	a:{"result":"公司.cn","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_ascii	s:xn--55qx5d.cn	i:62	s:xn--55qx5d.cn	a:{"result":"xn--55qx5d.cn","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_utf8	s:xn--55qx5d.cn	i:62	s:公司.cn	a:{"result":"公司.cn","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_ascii	s:中国.cn	i:0	s:xn--fiqs8s.cn	a:{"result":"xn--fiqs8s.cn","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_utf8	s:中国.cn	i:0	s:中国.cn	a:{"result":"中国.cn","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_ascii	s:中国.cn	i:1	s:xn--fiqs8s.cn	a:{"result":"xn--fiqs8s.cn","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_utf8	s:中国.cn	i:1	s:中国.cn	a:{"result":"中国.cn","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_ascii	s:中国.cn	i:2	s:xn--fiqs8s.cn	a:{"result":"xn--fiqs8s.cn","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_utf8	s:中国.cn	i:2	s:中国.cn	a:{"result":"中国.cn","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_ascii	s:中国.cn	i:4	s:xn--fiqs8s.cn	a:{"result":"xn--fiqs8s.cn","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_utf8	s:中国.cn	i:4	s:中国.cn	a:{"result":"中国.cn","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_ascii	s:中国.cn	i:8	s:xn--fiqs8s.cn	a:{"result":"xn--fiqs8s.cn","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_utf8	s:中国.cn	i:8	s:中国.cn	a:{"result":"中国.cn","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_ascii	s:中国.cn	i:16	s:xn--fiqs8s.cn	a:{"result":"xn--fiqs8s.cn","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_utf8	s:中国.cn	i:16	s:中国.cn	a:{"result":"中国.cn","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_ascii	s:中国.cn	i:32	s:xn--fiqs8s.cn	a:{"result":"xn--fiqs8s.cn","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_utf8	s:中国.cn	i:32	s:中国.cn	a:{"result":"中国.cn","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_ascii	s:中国.cn	i:62	s:xn--fiqs8s.cn	a:{"result":"xn--fiqs8s.cn","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_utf8	s:中国.cn	i:62	s:中国.cn	a:{"result":"中国.cn","isTransitionalDifferent":false,"errors":0}
+s:idn	s:idn_to_ascii	s:u-.com	i:0	s:!U_ZERO_ERROR	a:{"result":"u-.com","isTransitionalDifferent":false,"errors":16}
+s:idn	s:idn_to_utf8	s:u-.com	i:0	s:!U_ZERO_ERROR	a:{"result":"u-.com","isTransitionalDifferent":false,"errors":16}
+s:idn	s:idn_to_ascii	s:u-.com	i:1	s:!U_ZERO_ERROR	a:{"result":"u-.com","isTransitionalDifferent":false,"errors":16}
+s:idn	s:idn_to_utf8	s:u-.com	i:1	s:!U_ZERO_ERROR	a:{"result":"u-.com","isTransitionalDifferent":false,"errors":16}
+s:idn	s:idn_to_ascii	s:u-.com	i:2	s:!U_ZERO_ERROR	a:{"result":"u-.com","isTransitionalDifferent":false,"errors":16}
+s:idn	s:idn_to_utf8	s:u-.com	i:2	s:!U_ZERO_ERROR	a:{"result":"u-.com","isTransitionalDifferent":false,"errors":16}
+s:idn	s:idn_to_ascii	s:u-.com	i:4	s:!U_ZERO_ERROR	a:{"result":"u-.com","isTransitionalDifferent":false,"errors":16}
+s:idn	s:idn_to_utf8	s:u-.com	i:4	s:!U_ZERO_ERROR	a:{"result":"u-.com","isTransitionalDifferent":false,"errors":16}
+s:idn	s:idn_to_ascii	s:u-.com	i:8	s:!U_ZERO_ERROR	a:{"result":"u-.com","isTransitionalDifferent":false,"errors":16}
+s:idn	s:idn_to_utf8	s:u-.com	i:8	s:!U_ZERO_ERROR	a:{"result":"u-.com","isTransitionalDifferent":false,"errors":16}
+s:idn	s:idn_to_ascii	s:u-.com	i:16	s:!U_ZERO_ERROR	a:{"result":"u-.com","isTransitionalDifferent":false,"errors":16}
+s:idn	s:idn_to_utf8	s:u-.com	i:16	s:!U_ZERO_ERROR	a:{"result":"u-.com","isTransitionalDifferent":false,"errors":16}
+s:idn	s:idn_to_ascii	s:u-.com	i:32	s:!U_ZERO_ERROR	a:{"result":"u-.com","isTransitionalDifferent":false,"errors":16}
+s:idn	s:idn_to_utf8	s:u-.com	i:32	s:!U_ZERO_ERROR	a:{"result":"u-.com","isTransitionalDifferent":false,"errors":16}
+s:idn	s:idn_to_ascii	s:u-.com	i:62	s:!U_ZERO_ERROR	a:{"result":"u-.com","isTransitionalDifferent":false,"errors":16}
+s:idn	s:idn_to_utf8	s:u-.com	i:62	s:!U_ZERO_ERROR	a:{"result":"u-.com","isTransitionalDifferent":false,"errors":16}
+s:norm	s:é	i:4	s:é	s:yes
+s:norm	s:é	i:8	s:é	s:yes
+s:norm	s:é	i:16	s:é	s:no
+s:norm	s:é	i:32	s:é	s:no
+s:norm	s:é	i:48	s:é	s:no
+s:norm	s:é	i:4	s:é	s:no
+s:norm	s:é	i:8	s:é	s:no
+s:norm	s:é	i:16	s:é	s:yes
+s:norm	s:é	i:32	s:é	s:yes
+s:norm	s:é	i:48	s:é	s:yes
+s:norm	s:ﬁ	i:4	s:ﬁ	s:yes
+s:norm	s:ﬁ	i:8	s:fi	s:no
+s:norm	s:ﬁ	i:16	s:ﬁ	s:yes
+s:norm	s:ﬁ	i:32	s:fi	s:no
+s:norm	s:ﬁ	i:48	s:fi	s:no
+s:norm	s:Ⅸ	i:4	s:Ⅸ	s:yes
+s:norm	s:Ⅸ	i:8	s:IX	s:no
+s:norm	s:Ⅸ	i:16	s:Ⅸ	s:yes
+s:norm	s:Ⅸ	i:32	s:IX	s:no
+s:norm	s:Ⅸ	i:48	s:ix	s:no
+s:norm	s:ẛ̣	i:4	s:ẛ̣	s:no
+s:norm	s:ẛ̣	i:8	s:ṩ	s:no
+s:norm	s:ẛ̣	i:16	s:ẛ̣	s:yes
+s:norm	s:ẛ̣	i:32	s:ṩ	s:no
+s:norm	s:ẛ̣	i:48	s:ṩ	s:no
+s:norm	s:ｶﾞ	i:4	s:ｶﾞ	s:yes
+s:norm	s:ｶﾞ	i:8	s:ガ	s:no
+s:norm	s:ｶﾞ	i:16	s:ｶﾞ	s:yes
+s:norm	s:ｶﾞ	i:32	s:ガ	s:no
+s:norm	s:ｶﾞ	i:48	s:ガ	s:no
+s:norm	s:Å	i:4	s:Å	s:no
+s:norm	s:Å	i:8	s:Å	s:no
+s:norm	s:Å	i:16	s:Å	s:yes
+s:norm	s:Å	i:32	s:Å	s:yes
+s:norm	s:Å	i:48	s:å	s:no
+s:norm	s:Å	i:4	s:Å	s:no
+s:norm	s:Å	i:8	s:Å	s:no
+s:norm	s:Å	i:16	s:Å	s:yes
+s:norm	s:Å	i:32	s:Å	s:yes
+s:norm	s:Å	i:48	s:å	s:no
+s:norm	s:ß	i:4	s:ß	s:yes
+s:norm	s:ß	i:8	s:ß	s:yes
+s:norm	s:ß	i:16	s:ß	s:yes
+s:norm	s:ß	i:32	s:ß	s:yes
+s:norm	s:ß	i:48	s:ss	s:no
+s:norm	s:ǅ	i:4	s:ǅ	s:yes
+s:norm	s:ǅ	i:8	s:Dž	s:no
+s:norm	s:ǅ	i:16	s:ǅ	s:yes
+s:norm	s:ǅ	i:32	s:Dž	s:no
+s:norm	s:ǅ	i:48	s:dž	s:no
+s:norm	s:ẛ̣	i:4	s:ẛ̣	s:no
+s:norm	s:ẛ̣	i:8	s:ṩ	s:no
+s:norm	s:ẛ̣	i:16	s:ẛ̣	s:yes
+s:norm	s:ẛ̣	i:32	s:ṩ	s:no
+s:norm	s:ẛ̣	i:48	s:ṩ	s:no
+s:norm	s:한글	i:4	s:한글	s:no
+s:norm	s:한글	i:8	s:한글	s:no
+s:norm	s:한글	i:16	s:한글	s:yes
+s:norm	s:한글	i:32	s:한글	s:yes
+s:norm	s:한글	i:48	s:한글	s:yes
+s:norm	s:ä́	i:4	s:ä́	s:yes
+s:norm	s:ä́	i:8	s:ä́	s:yes
+s:norm	s:ä́	i:16	s:ä́	s:no
+s:norm	s:ä́	i:32	s:ä́	s:no
+s:norm	s:ä́	i:48	s:ä́	s:no
+s:norm	s:ཱི	i:4	s:ཱི	s:no
+s:norm	s:ཱི	i:8	s:ཱི	s:no
+s:norm	s:ཱི	i:16	s:ཱི	s:no
+s:norm	s:ཱི	i:32	s:ཱི	s:no
+s:norm	s:ཱི	i:48	s:ཱི	s:no
+s:norm	s:Straße	i:4	s:Straße	s:yes
+s:norm	s:Straße	i:8	s:Straße	s:yes
+s:norm	s:Straße	i:16	s:Straße	s:yes
+s:norm	s:Straße	i:32	s:Straße	s:yes
+s:norm	s:Straße	i:48	s:strasse	s:no
+s:norm	s:	i:4	s:	s:yes
+s:norm	s:	i:8	s:	s:yes
+s:norm	s:	i:16	s:	s:yes
+s:norm	s:	i:32	s:	s:yes
+s:norm	s:	i:48	s:	s:yes
+s:norm	s:abc	i:4	s:abc	s:yes
+s:norm	s:abc	i:8	s:abc	s:yes
+s:norm	s:abc	i:16	s:abc	s:yes
+s:norm	s:abc	i:32	s:abc	s:yes
+s:norm	s:abc	i:48	s:abc	s:yes
+s:norm	s:שּׁ	i:4	s:שּׁ	s:no
+s:norm	s:שּׁ	i:8	s:שּׁ	s:no
+s:norm	s:שּׁ	i:16	s:שּׁ	s:no
+s:norm	s:שּׁ	i:32	s:שּׁ	s:no
+s:norm	s:שּׁ	i:48	s:שּׁ	s:no
+s:norm	b:ff	i:4	s:!U_INVALID_CHAR_FOUND	s:no
+s:norm	b:ff	i:8	s:!U_INVALID_CHAR_FOUND	s:no
+s:norm	b:ff	i:16	s:!U_INVALID_CHAR_FOUND	s:no
+s:norm	b:ff	i:32	s:!U_INVALID_CHAR_FOUND	s:no
+s:norm	b:ff	i:48	s:!U_INVALID_CHAR_FOUND	s:no
+s:raw	s:é	i:4	s:é
+s:raw	s:é	i:8	s:é
+s:raw	s:é	i:16	s:é
+s:raw	s:é	i:32	s:é
+s:raw	s:a	i:4	~N
+s:raw	s:a	i:8	~N
+s:raw	s:a	i:16	~N
+s:raw	s:a	i:32	~N
+s:raw	s:ﬁ	i:4	~N
+s:raw	s:ﬁ	i:8	s:fi
+s:raw	s:ﬁ	i:16	~N
+s:raw	s:ﬁ	i:32	s:fi
+s:raw	s:Ⅸ	i:4	~N
+s:raw	s:Ⅸ	i:8	s:IX
+s:raw	s:Ⅸ	i:16	~N
+s:raw	s:Ⅸ	i:32	s:IX
+s:raw	s:가	i:4	s:가
+s:raw	s:가	i:8	s:가
+s:raw	s:가	i:16	s:가
+s:raw	s:가	i:32	s:가
+s:raw	s:ǅ	i:4	~N
+s:raw	s:ǅ	i:8	s:Dž
+s:raw	s:ǅ	i:16	~N
+s:raw	s:ǅ	i:32	s:Dž
+s:raw	s:Å	i:4	s:Å
+s:raw	s:Å	i:8	s:Å
+s:raw	s:Å	i:16	s:Å
+s:raw	s:Å	i:32	s:Å
+s:raw	s:ẛ	i:4	s:ẛ
+s:raw	s:ẛ	i:8	s:ẛ
+s:raw	s:ẛ	i:16	s:ẛ
+s:raw	s:ẛ	i:32	s:ẛ
+s:raw	s:ཱི	i:4	s:ཱི
+s:raw	s:ཱི	i:8	s:ཱི
+s:raw	s:ཱི	i:16	s:ཱི
+s:raw	s:ཱི	i:32	s:ཱི
