@@ -76,12 +76,121 @@ pub fn name2mbctype(name: &[u8]) -> Option<usize> {
     })
 }
 
-/// Regex encoding state (`MBREX(default_mbctype)` / `current_mbctype`).
+/// `ONIG_OPTION_IGNORECASE`.
+pub const OPTION_IGNORECASE: u32 = 1;
+/// `ONIG_OPTION_EXTEND`.
+pub const OPTION_EXTEND: u32 = 1 << 1;
+/// `ONIG_OPTION_MULTILINE` (Ruby: `.` matches newline).
+pub const OPTION_MULTILINE: u32 = 1 << 2;
+/// `ONIG_OPTION_SINGLELINE` (`$` matches only at the end).
+pub const OPTION_SINGLELINE: u32 = 1 << 3;
+/// `ONIG_OPTION_FIND_LONGEST`.
+pub const OPTION_FIND_LONGEST: u32 = 1 << 4;
+/// `ONIG_OPTION_FIND_NOT_EMPTY`.
+pub const OPTION_FIND_NOT_EMPTY: u32 = 1 << 5;
+
+/// Oniguruma syntaxes selectable through option letters.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Syntax {
+    /// `j`.
+    Java,
+    /// `u`.
+    GnuRegex,
+    /// `g`.
+    Grep,
+    /// `c`.
+    Emacs,
+    /// `r` (default).
+    Ruby,
+    /// `z`.
+    Perl,
+    /// `b`.
+    PosixBasic,
+    /// `d`.
+    PosixExtended,
+}
+
+/// `_php_mb_regex_init_options`: parse an option string into option bits
+/// and a syntax (`None` options string = defaults untouched).
+pub fn parse_options(s: &[u8]) -> Result<(u32, Syntax), crate::MbError> {
+    let mut opt = 0;
+    let mut syntax = Syntax::Ruby;
+    for &c in s {
+        match c {
+            b'i' => opt |= OPTION_IGNORECASE,
+            b'x' => opt |= OPTION_EXTEND,
+            b'm' => opt |= OPTION_MULTILINE,
+            b's' => opt |= OPTION_SINGLELINE,
+            b'p' => opt |= OPTION_MULTILINE | OPTION_SINGLELINE,
+            b'l' => opt |= OPTION_FIND_LONGEST,
+            b'n' => opt |= OPTION_FIND_NOT_EMPTY,
+            b'j' => syntax = Syntax::Java,
+            b'u' => syntax = Syntax::GnuRegex,
+            b'g' => syntax = Syntax::Grep,
+            b'c' => syntax = Syntax::Emacs,
+            b'r' => syntax = Syntax::Ruby,
+            b'z' => syntax = Syntax::Perl,
+            b'b' => syntax = Syntax::PosixBasic,
+            b'd' => syntax = Syntax::PosixExtended,
+            _ => {
+                return Err(crate::MbError::Value(format!(
+                    "Option \"{}\" is not supported",
+                    char::from(c)
+                )))
+            }
+        }
+    }
+    Ok((opt, syntax))
+}
+
+/// `_php_mb_regex_get_option_string`.
+pub fn option_string(opt: u32, syntax: Syntax) -> String {
+    let mut s = String::new();
+    if opt & OPTION_IGNORECASE != 0 {
+        s.push('i');
+    }
+    if opt & OPTION_EXTEND != 0 {
+        s.push('x');
+    }
+    if opt & (OPTION_MULTILINE | OPTION_SINGLELINE) == OPTION_MULTILINE | OPTION_SINGLELINE {
+        s.push('p');
+    } else {
+        if opt & OPTION_MULTILINE != 0 {
+            s.push('m');
+        }
+        if opt & OPTION_SINGLELINE != 0 {
+            s.push('s');
+        }
+    }
+    if opt & OPTION_FIND_LONGEST != 0 {
+        s.push('l');
+    }
+    if opt & OPTION_FIND_NOT_EMPTY != 0 {
+        s.push('n');
+    }
+    s.push(match syntax {
+        Syntax::Java => 'j',
+        Syntax::GnuRegex => 'u',
+        Syntax::Grep => 'g',
+        Syntax::Emacs => 'c',
+        Syntax::Ruby => 'r',
+        Syntax::Perl => 'z',
+        Syntax::PosixBasic => 'b',
+        Syntax::PosixExtended => 'd',
+    });
+    s
+}
+
+/// Regex state (`MBREX(...)`): encoding and default options.
 #[derive(Debug, Clone)]
 pub struct RegexState {
     default_mbctype: usize,
     current_mbctype: usize,
     current_encoding: &'static Encoding,
+    /// `MBREX(regex_default_options)`.
+    pub default_options: u32,
+    /// `MBREX(regex_default_syntax)`.
+    pub default_syntax: Syntax,
 }
 
 impl Default for RegexState {
@@ -90,6 +199,8 @@ impl Default for RegexState {
             default_mbctype: 1,
             current_mbctype: 1,
             current_encoding: encoding::utf8(),
+            default_options: OPTION_MULTILINE | OPTION_SINGLELINE,
+            default_syntax: Syntax::Ruby,
         }
     }
 }
@@ -155,8 +266,45 @@ impl crate::MbState {
         }
     }
 
+    /// `mb_regex_set_options($options)`: sets new defaults (when given) and
+    /// returns the *previous* option string (or the current one).
+    pub fn mb_regex_set_options(&mut self, options: Option<&[u8]>) -> crate::MbResult<String> {
+        let (opt, syntax) = match options {
+            Some(o) => {
+                let (opt, syntax) = parse_options(o)?;
+                let prev = (self.regex.default_options, self.regex.default_syntax);
+                self.regex.default_options = opt;
+                self.regex.default_syntax = syntax;
+                prev
+            }
+            None => (self.regex.default_options, self.regex.default_syntax),
+        };
+        Ok(option_string(opt, syntax))
+    }
+
     /// The mbstring encoding used for regex subjects.
     pub fn regex_encoding(&self) -> &'static Encoding {
         self.regex.encoding()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::MbState;
+
+    #[test]
+    fn regex_options_round_trip() {
+        let mut st = MbState::new();
+        assert_eq!(st.mb_regex_set_options(None).unwrap(), "pr");
+        assert_eq!(st.mb_regex_set_options(Some(b"ixz")).unwrap(), "pr");
+        assert_eq!(st.mb_regex_set_options(None).unwrap(), "ixz");
+        assert_eq!(
+            st.mb_regex_set_options(Some(b"Q")).unwrap_err().to_string(),
+            "Option \"Q\" is not supported"
+        );
+        assert_eq!(st.mb_regex_encoding_get(), "UTF-8");
+        st.mb_regex_encoding_set(b"sjis-win").unwrap();
+        assert_eq!(st.mb_regex_encoding_get(), "SJIS");
+        assert!(st.mb_regex_encoding_set(b"UTF-7").is_err());
     }
 }

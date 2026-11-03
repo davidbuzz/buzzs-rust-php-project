@@ -6,6 +6,31 @@
 //! carrying PHP's exact messages, and warnings/deprecations are pushed to
 //! [`MbState::diagnostics`].
 //!
+//! # Usage from the VM
+//!
+//! One [`MbState`] lives per request (`MbState::with_ini` at startup,
+//! [`MbState::request_shutdown`] at the end). Every `mb_*` function is a
+//! method on it taking the PHP arguments after zpp coercion (`Option` for
+//! nullable/omitted ones):
+//!
+//! * returns `Ok(value)`; `Option` results map `None` to PHP `false`;
+//! * `Err(MbError)` is a thrown exception — [`MbError::class`] and
+//!   [`MbError::message_for`]`("mb_strlen")` give PHP's class and message;
+//! * after each call, drain [`MbState::take_diagnostics`] and raise them as
+//!   `E_WARNING`/`E_DEPRECATED` prefixed with `"func(): "`.
+//!
+//! Array-shaped arguments are traversed by the VM: `mb_convert_encoding`
+//! on arrays ([`MbState::convert_encoding_args`] +
+//! [`MbState::convert_encoding_value`] per key/string),
+//! `mb_check_encoding` on arrays ([`strings::check_str_encoding`]),
+//! `mb_convert_variables` ([`MbState::convert_variables_encodings`] +
+//! [`MbState::convert_ex`]), and encoding-list arguments are passed as
+//! [`EncodingList`]. INI changes go through [`MbState::ini_set`].
+//!
+//! Lower layers are usable directly: [`encoding`] (registry and lookup),
+//! [`convert`] (decode/encode with substitution), [`unicode`] (properties,
+//! case mapping, display width), [`detect`] (encoding detection).
+//!
 //! Ref: `ext/mbstring/` (`mbstring.c`, `php_unicode.c`, `libmbfl/`).
 
 pub mod codecs;
