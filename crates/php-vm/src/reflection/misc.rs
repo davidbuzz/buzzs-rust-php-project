@@ -390,7 +390,7 @@ fn clone_error(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
 
 fn this_gen(vm: &mut Vm, a: &Args) -> VmResult<Obj> {
     match this_refl(vm, a)? {
-        Refl::Generator(g) => Ok(g),
+        Refl::Generator(g, _) => Ok(g),
         _ => Err(vm.make_throw(
             "Error",
             "Internal error: Failed to retrieve the reflection object",
@@ -406,6 +406,21 @@ struct GenFrame {
     this: Option<Obj>,
     closure: Option<Obj>,
     scope: Option<Rc<Class>>,
+    args: Vec<Value>,
+}
+
+impl GenFrame {
+    fn of(f: &crate::vm::Frame) -> Self {
+        GenFrame {
+            file: f.code.filename.clone(),
+            line: f.line(),
+            func: f.func.clone(),
+            this: f.this.clone(),
+            closure: f.closure.clone(),
+            scope: f.scope.clone(),
+            args: f.args.iter().map(|a| a.clone().map(|v| v.deref()).unwrap_or_default()).collect(),
+        }
+    }
 }
 
 fn gen_frame(vm: &Vm, g: &Obj) -> Option<GenFrame> {
@@ -413,16 +428,7 @@ fn gen_frame(vm: &Vm, g: &Obj) -> Option<GenFrame> {
         if d.state == crate::generator::GenState::Finished {
             return Some(None);
         }
-        d.frame.as_ref().map(|f| {
-            Some(GenFrame {
-                file: f.code.filename.clone(),
-                line: f.line(),
-                func: f.func.clone(),
-                this: f.this.clone(),
-                closure: f.closure.clone(),
-                scope: f.scope.clone(),
-            })
-        })
+        d.frame.as_ref().map(|f| Some(GenFrame::of(f)))
     })
     .flatten();
     match suspended {
@@ -432,14 +438,7 @@ fn gen_frame(vm: &Vm, g: &Obj) -> Option<GenFrame> {
             .iter()
             .rev()
             .find(|f| f.generator.as_ref().is_some_and(|x| Obj::ptr_eq(x, g)))
-            .map(|f| GenFrame {
-                file: f.code.filename.clone(),
-                line: f.line(),
-                func: f.func.clone(),
-                this: f.this.clone(),
-                closure: f.closure.clone(),
-                scope: f.scope.clone(),
-            }),
+            .map(GenFrame::of),
     }
 }
 
@@ -447,12 +446,13 @@ fn gen_closed(vm: &mut Vm) -> crate::vm::Throw {
     rexc(vm, "Cannot fetch information from a closed Generator")
 }
 
-fn rg_construct(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+fn rg_construct(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let o = this(a);
     let Value::Object(g) = a.at(0) else {
         return Ok(Value::Null);
     };
-    object::set_internal(&o, Refl::Generator(g));
+    let f = gen_frame(vm, &g).and_then(|f| gen_fnref(&f));
+    object::set_internal(&o, Refl::Generator(g, f));
     Ok(Value::Null)
 }
 
@@ -480,31 +480,31 @@ fn rg_get_this(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     }
 }
 
-fn rg_get_function(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let g = this_gen(vm, a)?;
-    let Some(f) = gen_frame(vm, &g) else {
-        return Err(gen_closed(vm));
-    };
-    let Some(func) = f.func else {
-        return Ok(Value::Null);
-    };
-    if let Some(c) = f.closure {
-        return super::function_value(
-            vm,
-            FnRef {
-                func,
-                method: None,
-                class: None,
-                closure: Some(c),
-            },
-        );
+/// The reflected function of a generator frame.
+fn gen_fnref(f: &GenFrame) -> Option<FnRef> {
+    let func = f.func.clone()?;
+    if let Some(c) = &f.closure {
+        return Some(FnRef { func, method: None, class: None, closure: Some(c.clone()) });
     }
-    if let Some(s) = f.scope {
+    if let Some(s) = &f.scope {
         if let Some(m) = s.find_method(func.name().as_bytes()).cloned() {
-            return super::method_value(vm, &m, &s);
+            return Some(FnRef::method(&m, s));
         }
     }
-    super::function_value(vm, FnRef::function(func))
+    Some(FnRef::function(func))
+}
+
+fn rg_get_function(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let (g, saved) = match this_refl(vm, a)? {
+        Refl::Generator(g, f) => (g, f),
+        _ => return Err(vm.make_throw("Error", "Internal error: Failed to retrieve the reflection object")),
+    };
+    let f = gen_frame(vm, &g).and_then(|f| gen_fnref(&f)).or(saved);
+    let Some(f) = f else { return Err(gen_closed(vm)) };
+    match (&f.method, &f.class) {
+        (Some(m), Some(c)) => super::method_value(vm, &m.clone(), &c.clone()),
+        _ => super::function_value(vm, f),
+    }
 }
 
 fn rg_get_executing_generator(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -523,29 +523,52 @@ fn rg_is_closed(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 fn rg_get_trace(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let g = this_gen(vm, a)?;
-    let Some(f) = gen_frame(vm, &g) else {
-        return Err(gen_closed(vm));
+    let options = match a.get(0) {
+        Some(Value::Int(i)) => i,
+        _ => 1,
     };
-    let mut t = HashTable::new();
-    let mut e = HashTable::new();
-    e.insert(ArrayKey::from("file"), Value::Str(f.file));
-    e.insert(ArrayKey::from("line"), Value::Int(i64::from(f.line)));
-    if let Some(func) = &f.func {
-        e.insert(ArrayKey::from("function"), Value::Str(func.name().clone()));
-        if let Some(s) = &f.scope {
-            e.insert(ArrayKey::from("class"), Value::Str(s.name.clone()));
-            if let Some(o) = &f.this {
-                e.insert(ArrayKey::from("object"), Value::Object(o.clone()));
-            }
-            e.insert(
-                ArrayKey::from("type"),
-                zs(if f.this.is_some() { "->" } else { "::" }),
-            );
-        }
+    if gen_frame(vm, &g).is_none() {
+        return Err(gen_closed(vm));
     }
-    e.insert(ArrayKey::from("args"), Value::Array(ZArray::new()));
-    let _ = t.push(Value::Array(ZArray::from_table(e)));
-    Ok(Value::Array(ZArray::from_table(t)))
+    // The delegation chain: `g` delegates to its `parent`, down to the
+    // executing generator; the trace lists the executing one first.
+    let mut chain = vec![g.clone()];
+    let mut cur = g.clone();
+    while let Some(p) = object::internal::<crate::generator::GenData, _>(&cur, |d| d.parent.clone()).flatten() {
+        if chain.iter().any(|x| Obj::ptr_eq(x, &p)) {
+            break;
+        }
+        chain.push(p.clone());
+        cur = p;
+    }
+    chain.reverse();
+    let frames: Vec<Option<GenFrame>> = chain.iter().map(|x| gen_frame(vm, x)).collect();
+    let mut out = Vec::new();
+    for (i, f) in frames.iter().enumerate() {
+        let Some(f) = f else { continue };
+        let mut e = HashTable::new();
+        if let Some(Some(caller)) = frames.get(i + 1) {
+            e.insert(ArrayKey::from("file"), Value::Str(caller.file.clone()));
+            e.insert(ArrayKey::from("line"), Value::Int(i64::from(caller.line)));
+        }
+        if let Some(func) = &f.func {
+            e.insert(ArrayKey::from("function"), Value::Str(func.name().clone()));
+            if f.closure.is_none() {
+                if let Some(s) = &f.scope {
+                    e.insert(ArrayKey::from("class"), Value::Str(s.name.clone()));
+                    if let (Some(o), true) = (&f.this, options & 1 != 0) {
+                        e.insert(ArrayKey::from("object"), Value::Object(o.clone()));
+                    }
+                    e.insert(ArrayKey::from("type"), zs(if f.this.is_some() { "->" } else { "::" }));
+                }
+            }
+        }
+        if options & 2 == 0 {
+            e.insert(ArrayKey::from("args"), Value::Array(ZArray::from_values(f.args.clone())));
+        }
+        out.push(Value::Array(ZArray::from_table(e)));
+    }
+    Ok(Value::Array(ZArray::from_values(out)))
 }
 
 /// Registers `ReflectionGenerator`.
@@ -666,11 +689,44 @@ fn rfb_get_callable(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 fn rfb_get_trace(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let f = this_fiber(vm, a)?;
     fiber_check(vm, &f)?;
-    if fiber_state(&f) == Some(crate::fiber::FiberState::Running) {
-        let t = vm.backtrace(false, false, true, 0);
-        return Ok(Value::Array(t));
+    let options = match a.get(0) {
+        Some(Value::Int(i)) => i,
+        _ => 1,
+    };
+    let (ignore_args, provide_object) = (options & 2 != 0, options & 1 != 0);
+    match fiber_state(&f) {
+        Some(crate::fiber::FiberState::Running) => {
+            // Only the fiber's own frames: hide the frames below its base.
+            let base = object::internal::<crate::fiber::FiberData, _>(&f, |d| d.base).unwrap_or(0).min(vm.frames.len());
+            // A fiber that resumed another one ends where that one starts.
+            let end = vm
+                .fibers
+                .iter()
+                .filter(|x| !Obj::ptr_eq(x, &f) && fiber_state(x) == Some(crate::fiber::FiberState::Running))
+                .filter_map(|x| object::internal::<crate::fiber::FiberData, _>(x, |d| d.base))
+                .filter(|b| *b > base)
+                .min()
+                .unwrap_or(vm.frames.len())
+                .min(vm.frames.len());
+            let above = vm.frames.split_off(end);
+            let head: Vec<crate::vm::Frame> = vm.frames.drain(..base).collect();
+            let t = vm.backtrace(false, ignore_args, provide_object, 0);
+            let mid = std::mem::take(&mut vm.frames);
+            vm.frames = head;
+            vm.frames.extend(mid);
+            vm.frames.extend(above);
+            Ok(Value::Array(t))
+        }
+        _ => {
+            // Suspended: trace the fiber's saved frames.
+            let saved = object::internal::<crate::fiber::FiberData, _>(&f, |d| std::mem::take(&mut d.frames)).unwrap_or_default();
+            let outer = std::mem::replace(&mut vm.frames, saved);
+            let t = vm.backtrace(false, ignore_args, provide_object, 0);
+            let saved = std::mem::replace(&mut vm.frames, outer);
+            object::internal::<crate::fiber::FiberData, _>(&f, |d| d.frames = saved);
+            Ok(Value::Array(t))
+        }
     }
-    Ok(Value::Array(ZArray::new()))
 }
 
 /// Registers `ReflectionFiber`.

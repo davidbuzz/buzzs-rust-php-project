@@ -243,8 +243,9 @@ pub(crate) enum Refl {
     Attr(Rc<AttrRef>),
     /// `ReflectionExtension` / `ReflectionZendExtension`.
     Extension(ZStr),
-    /// `ReflectionGenerator`.
-    Generator(Obj),
+    /// `ReflectionGenerator` (with the generator's function, captured at
+    /// construction so that it survives termination).
+    Generator(Obj, Option<FnRef>),
     /// `ReflectionFiber`.
     Fiber(Obj),
     /// `ReflectionReference`.

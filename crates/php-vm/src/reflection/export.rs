@@ -475,7 +475,11 @@ pub(crate) fn function_string(
         }
     }
     if let Some(m) = &f.method {
-        if let Some(p) = order::prototype(m) {
+        let proto = match scope {
+            Some(sc) => order::prototype_in(m, sc),
+            None => order::prototype(m),
+        };
+        if let Some(p) = proto {
             b.s(", prototype ").z(&p.scope().name);
         }
     }

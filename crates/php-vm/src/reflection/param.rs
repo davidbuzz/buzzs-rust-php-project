@@ -482,10 +482,14 @@ fn rp_get_class(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let Some(t) = &p.ty else {
         return Ok(Value::Null);
     };
-    if t.classes.len() != 1 || !t.intersections.is_empty() || t.mask & !mask::NULL != 0 {
+    let cn = if t.classes.is_empty() && t.intersections.is_empty() && t.mask & !mask::NULL == mask::ITERABLE {
+        // `iterable` is `Traversable|array`: its class is `Traversable`.
+        ZStr::from("Traversable")
+    } else if t.classes.len() != 1 || !t.intersections.is_empty() || t.mask & !mask::NULL != 0 {
         return Ok(Value::Null);
-    }
-    let cn = t.classes[0].clone();
+    } else {
+        t.classes[0].clone()
+    };
     let scope = f.scope(vm);
     let c =
         if cn.eq_ignore_ascii_case(b"self") {

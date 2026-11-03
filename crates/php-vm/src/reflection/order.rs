@@ -298,6 +298,33 @@ pub(crate) fn consts(c: &Rc<Class>) -> Vec<Rc<ClassConst>> {
         .collect()
 }
 
+/// `common.prototype` of method `m` as seen in class `class`: an inherited
+/// method gets the interface method as prototype when a subclass implements
+/// the interface (php-src duplicates the function there).
+pub(crate) fn prototype_in(m: &Rc<Method>, class: &Rc<Class>) -> Option<Rc<Method>> {
+    let scope = m.scope();
+    let lc = m.name.to_ascii_lowercase();
+    let mut k = Some(class.clone());
+    while let Some(kc) = k {
+        if Rc::ptr_eq(&kc, &scope) {
+            break;
+        }
+        let inherited: Vec<Rc<Class>> = kc.parent.as_ref().map(|p| p.interfaces.clone()).unwrap_or_default();
+        for i in &kc.interfaces {
+            if inherited.iter().any(|x| Rc::ptr_eq(x, i)) {
+                continue;
+            }
+            if let Some(im) = i.methods.get(&lc) {
+                if !Rc::ptr_eq(im, m) {
+                    return Some(prototype(im).unwrap_or_else(|| im.clone()));
+                }
+            }
+        }
+        k = kc.parent.clone();
+    }
+    prototype(m)
+}
+
 /// `common.prototype` of method `m`.
 pub(crate) fn prototype(m: &Rc<Method>) -> Option<Rc<Method>> {
     let scope = m.scope();
