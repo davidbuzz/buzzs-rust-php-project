@@ -7,6 +7,7 @@
 //! callback, `__toString`, ...) may freely use the same SPL object again.
 
 use crate::object::SplObject;
+use php_runtime::serialize::UnserializeOptions;
 use php_runtime::{Obj, RtResult, RuntimeError, Value, ZArray, ZStr};
 use php_stdarr::ArrayContext;
 use std::any::Any;
@@ -38,6 +39,15 @@ pub trait SplHost: ArrayContext {
     /// [`crate::object::create_state`] when the object was instantiated
     /// (`None` for objects that are not instances of an SPL class).
     fn spl_state(&mut self, obj: &Obj) -> Option<Rc<SplObject>>;
+
+    /// The options of the `var_hash` the legacy `Serializable` formats
+    /// unserialize their parts with: the active `unserialize()` call's
+    /// (`allowed_classes`, `max_depth` and the depth reached), with
+    /// diagnostics naming the active method. The default uses php-runtime's
+    /// defaults.
+    fn unserialize_options(&mut self) -> UnserializeOptions {
+        UnserializeOptions::default()
+    }
 
     /// `zend_call_method`: calls `$obj->name(...$args)` with normal method
     /// dispatch. When the method resolves to an internal SPL method the VM

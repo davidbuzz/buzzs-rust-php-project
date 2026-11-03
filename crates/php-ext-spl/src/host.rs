@@ -362,6 +362,13 @@ impl RuntimeContext for VmHost<'_> {
     fn unserialize_enum(&mut self, class: &ZStr, case: &ZStr) -> RtResult<Value> {
         self.vm.unserialize_enum(class, case)
     }
+    fn unserialize_enum_case(
+        &mut self,
+        class: &ZStr,
+        case: &ZStr,
+    ) -> RtResult<php_runtime::serialize::EnumCaseLookup> {
+        self.vm.unserialize_enum_case(class, case)
+    }
     fn unserialize_custom(&mut self, class: &ZStr, data: &[u8]) -> RtResult<Value> {
         self.vm.unserialize_custom(class, data)
     }
@@ -400,6 +407,10 @@ impl ArrayContext for VmHost<'_> {
 impl SplHost for VmHost<'_> {
     fn spl_state(&mut self, obj: &Obj) -> Option<Rc<SplObject>> {
         spl_state_of(obj)
+    }
+
+    fn unserialize_options(&mut self) -> php_runtime::serialize::UnserializeOptions {
+        self.vm.unserialize_options_in_effect()
     }
 
     fn call_method(&mut self, obj: &Obj, name: &str, args: &[Value]) -> RtResult<Value> {
@@ -709,6 +720,13 @@ impl RuntimeContext for BridgedHost {
     fn unserialize_enum(&mut self, class: &ZStr, case: &ZStr) -> RtResult<Value> {
         lent_rt(|h| h.unserialize_enum(class, case))
     }
+    fn unserialize_enum_case(
+        &mut self,
+        class: &ZStr,
+        case: &ZStr,
+    ) -> RtResult<php_runtime::serialize::EnumCaseLookup> {
+        lent_rt(|h| h.unserialize_enum_case(class, case))
+    }
     fn unserialize_custom(&mut self, class: &ZStr, data: &[u8]) -> RtResult<Value> {
         lent_rt(|h| h.unserialize_custom(class, data))
     }
@@ -747,6 +765,9 @@ impl ArrayContext for BridgedHost {
 impl SplHost for BridgedHost {
     fn spl_state(&mut self, obj: &Obj) -> Option<Rc<SplObject>> {
         spl_state_of(obj)
+    }
+    fn unserialize_options(&mut self) -> php_runtime::serialize::UnserializeOptions {
+        lent(|h| h.unserialize_options()).unwrap_or_default()
     }
     fn call_method(&mut self, obj: &Obj, name: &str, args: &[Value]) -> RtResult<Value> {
         lent_rt(|h| h.call_method(obj, name, args))

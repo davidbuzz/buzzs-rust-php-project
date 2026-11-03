@@ -4,7 +4,7 @@
 //! unserializes it without emitting `unserialize()` warnings.
 
 use crate::host::SplHost;
-use php_runtime::serialize::{unserialize, SerializedObject, UnserializeOptions};
+use php_runtime::serialize::{unserialize_partial, EnumCaseLookup, SerializedObject};
 use php_runtime::{
     BinaryOp, CastTarget, ErrorLevel, Obj, ObjectDump, PropertyPurpose, RtResult, RuntimeContext,
     Value, ZArray, ZStr,
@@ -158,6 +158,9 @@ impl RuntimeContext for Quiet<'_> {
     fn unserialize_enum(&mut self, class: &ZStr, case: &ZStr) -> RtResult<Value> {
         self.0.unserialize_enum(class, case)
     }
+    fn unserialize_enum_case(&mut self, class: &ZStr, case: &ZStr) -> RtResult<EnumCaseLookup> {
+        self.0.unserialize_enum_case(class, case)
+    }
     fn unserialize_custom(&mut self, class: &ZStr, data: &[u8]) -> RtResult<Value> {
         self.0.unserialize_custom(class, data)
     }
@@ -178,20 +181,21 @@ impl RuntimeContext for Quiet<'_> {
     }
 }
 
-/// Unserializes one value starting at `p`; returns the value and the
-/// position after it. `Err(pos)` reports the error offset. Exceptions
-/// thrown by user code during unserialization are reported as errors at
-/// `p` too (the caller converts them to its own exception).
+/// Unserializes one value starting at `p` (`php_var_unserialize()` with
+/// the host's [`SplHost::unserialize_options`]); returns the value and the
+/// position after it. `Err(pos)` reports the error offset. Exceptions thrown
+/// by user code during unserialization are reported as errors at `p` (the
+/// caller converts them to its own exception).
 pub fn unserialize_at(
     host: &mut dyn SplHost,
     buf: &[u8],
     p: usize,
 ) -> Result<(Value, usize), usize> {
-    let end = value_end(buf, p).ok_or(p)?;
+    let opts = host.unserialize_options();
     let mut q = Quiet(host);
-    match unserialize(&buf[p..end], &UnserializeOptions::default(), &mut q) {
-        Ok(Some(v)) => Ok((v, end)),
-        _ => Err(end),
+    match unserialize_partial(buf, p, &opts, &mut q) {
+        Ok(r) => r,
+        Err(_) => Err(p),
     }
 }
 
