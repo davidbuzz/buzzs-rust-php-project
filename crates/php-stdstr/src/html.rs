@@ -321,7 +321,7 @@ fn next_char_utf8(s: &[u8], pos: usize) -> NextChar {
             | ((at(1) & 0x3F) << 12)
             | ((at(2) & 0x3F) << 6)
             | (at(3) & 0x3F);
-        if !(0x10000..=0x10FFFF).contains(&ch) {
+        if !(0x10000..=0x0010_FFFF).contains(&ch) {
             return fail(4);
         }
         (Ok(ch), pos + 4)
@@ -578,13 +578,13 @@ fn unicode_cp_is_allowed(cp: u32, doctype: u32) -> bool {
                 || cp == 0x09
                 || cp == 0x0D
                 || (0xA0..=0xD7FF).contains(&cp)
-                || (0xE000..=0x10FFFF).contains(&cp)
+                || (0xE000..=0x0010_FFFF).contains(&cp)
         }
         DOC_HTML5 => {
             (0x20..=0x7E).contains(&cp)
                 || ((0x09..=0x0D).contains(&cp) && cp != 0x0B)
                 || (0xA0..=0xD7FF).contains(&cp)
-                || ((0xE000..=0x10FFFF).contains(&cp)
+                || ((0xE000..=0x0010_FFFF).contains(&cp)
                     && (cp & 0xFFFF) < 0xFFFE
                     && !(0xFDD0..=0xFDEF).contains(&cp))
         }
@@ -593,7 +593,7 @@ fn unicode_cp_is_allowed(cp: u32, doctype: u32) -> bool {
                 || cp == 0x0A
                 || cp == 0x09
                 || cp == 0x0D
-                || ((0xE000..=0x10FFFF).contains(&cp) && cp != 0xFFFE && cp != 0xFFFF)
+                || ((0xE000..=0x0010_FFFF).contains(&cp) && cp != 0xFFFE && cp != 0xFFFF)
         }
         _ => true,
     }
@@ -602,11 +602,11 @@ fn unicode_cp_is_allowed(cp: u32, doctype: u32) -> bool {
 /// `numeric_entity_is_allowed()`.
 fn numeric_entity_is_allowed(cp: u32, doctype: u32) -> bool {
     match doctype {
-        DOC_HTML401 => cp <= 0x10FFFF,
+        DOC_HTML401 => cp <= 0x0010_FFFF,
         DOC_HTML5 => {
             (0x20..=0x7E).contains(&cp)
                 || ((0x09..=0x0C).contains(&cp) && cp != 0x0B)
-                || ((0xA0..=0x10FFFF).contains(&cp)
+                || ((0xA0..=0x0010_FFFF).contains(&cp)
                     && (cp & 0xFFFF) < 0xFFFE
                     && !(0xFDD0..=0xFDEF).contains(&cp))
         }
@@ -632,13 +632,13 @@ fn process_numeric_entity(s: &[u8], mut pos: usize) -> (Option<u32>, usize) {
         return (None, pos);
     }
     let radix: u64 = if hex { 16 } else { 10 };
-    // strtol saturates at ZEND_LONG_MAX; anything above 0x10FFFF fails.
+    // strtol saturates at ZEND_LONG_MAX; anything above 0x0010_FFFF fails.
     let mut value: u64 = 0;
     while let Some(d) = char::from(at(s, pos)).to_digit(if hex { 16 } else { 10 }) {
         value = value.saturating_mul(radix).saturating_add(u64::from(d));
         pos += 1;
     }
-    if at(s, pos) != b';' || value > 0x10FFFF {
+    if at(s, pos) != b';' || value > 0x0010_FFFF {
         return (None, pos);
     }
     (u32::try_from(value).ok(), pos)
@@ -944,17 +944,15 @@ pub fn escape_html_entities(
         if byte >= 0x80 {
             let (r, next) = next_char(charset, old, cursor);
             cursor = next;
-            match r {
-                Ok(c) => this_char = c,
-                Err(()) => {
-                    if flags & IGNORE_ERRORS != 0 {
-                        continue;
-                    } else if flags & SUBSTITUTE_ERRORS != 0 {
-                        out.extend_from_slice(replacement);
-                        continue;
-                    }
-                    return Vec::new();
-                }
+            if let Ok(c) = r {
+                this_char = c;
+            } else if flags & IGNORE_ERRORS != 0 {
+                continue;
+            } else if flags & SUBSTITUTE_ERRORS != 0 {
+                out.extend_from_slice(replacement);
+                continue;
+            } else {
+                return Vec::new();
             }
         } else {
             cursor += 1;

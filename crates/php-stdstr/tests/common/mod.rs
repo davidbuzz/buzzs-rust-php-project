@@ -150,18 +150,44 @@ where
     )
 }
 
-fn export_str(s: &[u8], out: &mut String) {
-    // var_export: '...' with \ and ' escaped; NUL bytes as ' . "\0" . '
-    out.push('\'');
-    for &b in s {
-        match b {
-            b'\\' => out.push_str("\\\\"),
-            b'\'' => out.push_str("\\'"),
-            0 => out.push_str("' . \"\\0\" . '"),
-            _ => out.push(char::from(b)),
+/// Lossless bytes -> text: valid UTF-8 is kept, every byte of an invalid
+/// sequence becomes the private-use char U+F700 + byte. Applied to both the
+/// fixture and our rendering so non-UTF-8 output compares byte-exactly.
+pub fn bytes_to_text(mut s: &[u8]) -> String {
+    let mut out = String::with_capacity(s.len());
+    loop {
+        match std::str::from_utf8(s) {
+            Ok(v) => {
+                out.push_str(v);
+                return out;
+            }
+            Err(e) => {
+                let (good, rest) = s.split_at(e.valid_up_to());
+                out.push_str(std::str::from_utf8(good).unwrap_or_default());
+                let bad = e.error_len().unwrap_or(rest.len());
+                for &b in &rest[..bad] {
+                    out.push(char::from_u32(0xF700 + u32::from(b)).unwrap_or('?'));
+                }
+                s = &rest[bad..];
+            }
         }
     }
-    out.push('\'');
+}
+
+fn export_str(s: &[u8], out: &mut String) {
+    // var_export: '...' with \ and ' escaped; NUL bytes as ' . "\0" . '
+    let mut buf = Vec::with_capacity(s.len() + 2);
+    buf.push(b'\'');
+    for &b in s {
+        match b {
+            b'\\' => buf.extend_from_slice(b"\\\\"),
+            b'\'' => buf.extend_from_slice(b"\\'"),
+            0 => buf.extend_from_slice(b"' . \"\\0\" . '"),
+            _ => buf.push(b),
+        }
+    }
+    buf.push(b'\'');
+    out.push_str(&bytes_to_text(&buf));
 }
 
 /// `smart_str_append_double(buf, d, serialize_precision = -1, zero_frac)`.
@@ -390,7 +416,7 @@ fn parse_fixture(text: &str) -> HashMap<String, String> {
 pub fn check(name: &str, cases: &[Case]) {
     let path = fixture_path(name);
     let text = std::fs::read(&path).unwrap_or_default();
-    let fixture = parse_fixture(&String::from_utf8_lossy(&text));
+    let fixture = parse_fixture(&bytes_to_text(&text));
     let mut failures = Vec::new();
     for c in cases {
         let expected = match &c.expected {
