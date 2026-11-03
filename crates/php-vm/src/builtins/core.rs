@@ -357,9 +357,8 @@ fn class_exists_kind(vm: &mut Vm, a: &Args, pred: fn(&Class) -> bool) -> VmResul
 }
 
 fn class_exists(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    class_exists_kind(vm, a, |c| {
-        !c.is_interface() && !c.is_trait() && !c.is_enum()
-    })
+    // Enums are classes (`ZEND_ACC_INTERFACE | ZEND_ACC_TRAIT` excluded).
+    class_exists_kind(vm, a, |c| !c.is_interface() && !c.is_trait())
 }
 fn interface_exists(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     class_exists_kind(vm, a, Class::is_interface)
@@ -783,6 +782,7 @@ fn class_alias(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             String::from_utf8_lossy(an)
         )));
     }
+    vm.class_order.push(lc.clone());
     vm.classes.insert(lc, c);
     Ok(Value::Bool(true))
 }
@@ -1147,28 +1147,43 @@ fn extract(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     Ok(Value::Int(n))
 }
 
-fn get_declared_classes(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
+/// Internal classes php-src does not have (engine helpers).
+const HIDDEN_CLASSES: &[&[u8]] = &[b"fibergracefulexit"];
+
+/// `get_declared_class_impl()`: the class table in declaration order;
+/// aliases (`class_alias()`) are listed by their lowercase key.
+fn declared(vm: &Vm, pred: fn(&Class) -> bool) -> Value {
+    let mut seen = std::collections::HashSet::new();
     let mut out = Vec::new();
     for lc in &vm.class_order {
-        if let Some(c) = vm.classes.get(lc) {
-            if !c.is_interface() && !c.is_trait() && c.flags & cflags::ANON == 0 {
-                out.push(Value::Str(c.name.clone()));
-            }
+        if !seen.insert(lc.clone()) || HIDDEN_CLASSES.contains(&lc.as_bytes()) {
+            continue;
+        }
+        let Some(c) = vm.classes.get(lc) else {
+            continue;
+        };
+        if !pred(c) {
+            continue;
+        }
+        if c.lc_name == *lc {
+            out.push(Value::Str(c.name.clone()));
+        } else {
+            out.push(Value::Str(lc.clone()));
         }
     }
-    Ok(Value::Array(ZArray::from_values(out)))
+    Value::Array(ZArray::from_values(out))
+}
+
+fn get_declared_classes(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
+    Ok(declared(vm, |c| !c.is_interface() && !c.is_trait()))
 }
 
 fn get_declared_interfaces(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
-    let mut out = Vec::new();
-    for lc in &vm.class_order {
-        if let Some(c) = vm.classes.get(lc) {
-            if c.is_interface() {
-                out.push(Value::Str(c.name.clone()));
-            }
-        }
-    }
-    Ok(Value::Array(ZArray::from_values(out)))
+    Ok(declared(vm, Class::is_interface))
+}
+
+fn get_declared_traits(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
+    Ok(declared(vm, Class::is_trait))
 }
 
 fn get_defined_functions(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
@@ -1665,6 +1680,7 @@ pub(crate) fn register(vm: &mut Vm) {
         function_exists,
     );
     reg(vm, "get_declared_classes(): array", get_declared_classes);
+    reg(vm, "get_declared_traits(): array", get_declared_traits);
     reg(
         vm,
         "get_declared_interfaces(): array",

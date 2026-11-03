@@ -4,6 +4,7 @@ pub mod classbuilder;
 mod core;
 mod dump;
 pub(crate) mod headers;
+pub(crate) mod info;
 pub(crate) use self::core::enum_methods;
 mod array;
 mod classes;
@@ -83,6 +84,7 @@ pub(crate) fn register_all(vm: &mut Vm) {
     string::register(vm);
     array::register(vm);
     math::register(vm);
+    info::register(vm);
 }
 
 /// Defines a constant.
