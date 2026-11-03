@@ -14,6 +14,7 @@
 mod breakiter;
 mod calendar;
 mod collator;
+mod converter;
 mod core;
 mod dateformat;
 mod dt;
@@ -28,6 +29,7 @@ mod stubs;
 mod text;
 mod timezone;
 mod translit;
+mod vmbridge;
 
 use std::cell::Cell;
 use std::collections::HashMap;
@@ -114,6 +116,7 @@ fn all_handlers() -> HashMap<&'static str, NativeFn> {
         locale::handlers(),
         collator::handlers(),
         breakiter::handlers(),
+        converter::handlers(),
         iter::handlers(),
         timezone::handlers(),
         calendar::handlers(),
@@ -163,6 +166,9 @@ fn class_opts(name: &str) -> registry::ClassOpts {
                 get_iterator: Some(breakiter::get_iterator),
                 ..ClassHooks::default()
             };
+        }
+        "UConverter" => {
+            o.hooks = ClassHooks { create: Some(converter::create), clone: Some(converter::clone), ..ClassHooks::default() };
         }
         "Transliterator" => {
             o.hooks = ClassHooks { clone: Some(translit::clone), ..ClassHooks::default() };
