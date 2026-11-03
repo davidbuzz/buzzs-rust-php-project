@@ -423,6 +423,13 @@ fn parse_fixture(text: &str) -> HashMap<String, String> {
 
 /// Compares every case against the cached fixture.
 pub fn check(name: &str, cases: &[Case]) {
+    check_mapped(name, cases, |_, e| e.to_owned());
+}
+
+/// Like [`check`], but first passes each oracle outcome through `map`
+/// (called with the PHP expression and the 8.3 outcome) to account for
+/// systematic php-src master differences such as reworded messages.
+pub fn check_mapped(name: &str, cases: &[Case], map: impl Fn(&str, &str) -> String) {
     let path = fixture_path(name);
     let text = std::fs::read(&path).unwrap_or_default();
     let fixture = parse_fixture(&bytes_to_text(&text));
@@ -432,7 +439,7 @@ pub fn check(name: &str, cases: &[Case]) {
             Some(e) => e.clone(),
             None => {
                 if let Some(e) = fixture.get(&c.php) {
-                    e.clone()
+                    map(&c.php, e)
                 } else {
                     failures.push(format!(
                         "{}\n  missing from fixture {name}.txt (run `cargo test -p php-stdstr --test oracle_{name} -- --ignored`)",
