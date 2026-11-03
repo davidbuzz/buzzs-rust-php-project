@@ -68,7 +68,11 @@ pub(crate) fn input_buffer_from_reader(
 }
 
 /// Write callback over a `Box<Box<dyn Write>>` context.
-unsafe extern "C" fn write_callback(ctx: *mut c_void, buffer: *const c_char, len: c_int) -> c_int {
+pub(crate) unsafe extern "C" fn write_callback(
+    ctx: *mut c_void,
+    buffer: *const c_char,
+    len: c_int,
+) -> c_int {
     if ctx.is_null() || len < 0 {
         return -1;
     }
@@ -89,7 +93,7 @@ unsafe extern "C" fn write_callback(ctx: *mut c_void, buffer: *const c_char, len
     })
 }
 
-unsafe extern "C" fn write_close_callback(ctx: *mut c_void) -> c_int {
+pub(crate) unsafe extern "C" fn write_close_callback(ctx: *mut c_void) -> c_int {
     if ctx.is_null() {
         return 0;
     }
