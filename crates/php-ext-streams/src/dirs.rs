@@ -39,16 +39,19 @@ fn do_opendir(vm: &mut Vm, a: &Args) -> VmResult<Option<Resource>> {
     let path = path_arg(vm, a, 0)?;
     let ctx = context_arg(vm, a, 1, false)?;
     crate::userwrap::clear_last_object();
-    let s = bridge::run(vm, || open::opendir(&path, REPORT_ERRORS, ctx.as_ref()))?;
-    let Some(mut s) = s else {
+    let r = bridge::run(vm, || {
+        let s = open::opendir(&path, REPORT_ERRORS, ctx.as_ref())?;
+        let data = if res::is_user_stream(&s) {
+            crate::userwrap::take_last_object()
+        } else {
+            None
+        };
+        Some((s, data))
+    })?;
+    let Some((mut s, data)) = r else {
         return Ok(None);
     };
     s.add_flags(flags::NO_FCLOSE);
-    let data = if res::is_user_stream(&s) {
-        crate::userwrap::take_last_object()
-    } else {
-        None
-    };
     let Value::Resource(r) = res::new_stream(s, data) else {
         return Ok(None);
     };

@@ -182,8 +182,11 @@ fn run_ex<R>(vm: &mut Vm, sync: bool, f: impl FnOnce() -> R) -> VmResult<R> {
         s.pop();
         s.last().cloned()
     });
-    if let Some(ctx) = enclosing_ctx {
-        crate::errors::set_operation_context(ctx);
+    match enclosing_ctx {
+        Some(ctx) => crate::errors::set_operation_context(ctx),
+        // The outermost operation ended: a user wrapper instance made for
+        // a URL operation (unlink, stat, ...) is released now.
+        None => crate::userwrap::clear_last_object(),
     }
     let inner = take_pending();
     if let Some(t) = outer {

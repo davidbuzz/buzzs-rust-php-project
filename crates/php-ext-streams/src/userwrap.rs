@@ -23,7 +23,9 @@ thread_local! {
     /// `wrapper_data` when an open succeeds).
     static LAST_OBJECT: RefCell<Option<Obj>> = const { RefCell::new(None) };
     /// `le_protocols` resources allocated by `stream_wrapper_register()`.
-    static PROTOCOL_RESOURCES: RefCell<Vec<Resource>> = const { RefCell::new(Vec::new()) };
+    /// (protocol, resource), released by `stream_wrapper_unregister()`
+    /// (GH-8548).
+    static PROTOCOL_RESOURCES: RefCell<Vec<(Vec<u8>, Resource)>> = const { RefCell::new(Vec::new()) };
 }
 
 /// Forgets the last instantiated object.
@@ -196,7 +198,7 @@ fn stream_wrapper_register(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let wc: Rc<dyn UserWrapperClass> = Rc::new(WrapperClass { class });
     let result = bridge::run(vm, || user::register(&protocol, wc, flags))?;
     if result == RegisterResult::Ok {
-        PROTOCOL_RESOURCES.with(|p| p.borrow_mut().push(r));
+        PROTOCOL_RESOURCES.with(|p| p.borrow_mut().push((protocol.clone(), r)));
         Ok(Value::Bool(true))
     } else {
         r.close();
@@ -207,6 +209,17 @@ fn stream_wrapper_register(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 fn stream_wrapper_unregister(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let protocol = res::str_arg(a, 0);
     let r = bridge::run(vm, || user::unregister(&protocol))?;
+    if r {
+        let released = PROTOCOL_RESOURCES.with(|p| {
+            let mut p = p.borrow_mut();
+            p.iter()
+                .rposition(|(name, _)| *name == protocol)
+                .map(|i| p.remove(i))
+        });
+        if let Some((_, res)) = released {
+            res.close();
+        }
+    }
     Ok(Value::Bool(r))
 }
 

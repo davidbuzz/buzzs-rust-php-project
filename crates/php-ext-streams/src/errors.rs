@@ -124,6 +124,64 @@ pub fn report(vm: &mut Vm, diags: Vec<Diagnostic>) {
     let ctx = OP_CONTEXT
         .with(|c| c.borrow_mut().take())
         .or_else(res::existing_default_context);
+    if diags.len() > 1 && in_implicit_operation(vm) {
+        // Without an explicit operation every error is its own implicit
+        // one (`php_stream_wrapper_error_internal`): reported at once, in
+        // order with the function's other warnings.
+        for d in diags {
+            report_in(vm, ctx.clone(), vec![d]);
+        }
+        return;
+    }
+    report_in(vm, ctx, diags);
+}
+
+/// ext/standard functions that do not begin a stream error operation
+/// (filestat.c and friends).
+const IMPLICIT_OPERATION_FUNCTIONS: &[&str] = &[
+    "stat",
+    "lstat",
+    "file_exists",
+    "is_file",
+    "is_dir",
+    "is_link",
+    "is_readable",
+    "is_writable",
+    "is_writeable",
+    "is_executable",
+    "fileperms",
+    "fileinode",
+    "filesize",
+    "fileowner",
+    "filegroup",
+    "fileatime",
+    "filemtime",
+    "filectime",
+    "filetype",
+    "touch",
+    "chmod",
+    "chown",
+    "chgrp",
+    "lchown",
+    "lchgrp",
+    "disk_free_space",
+    "diskfreespace",
+    "disk_total_space",
+];
+
+/// Whether the running function has no explicit stream error operation.
+fn in_implicit_operation(vm: &Vm) -> bool {
+    vm.frames
+        .iter()
+        .rev()
+        .find_map(|f| f.builtin_name.as_ref())
+        .is_some_and(|n| {
+            let n = n.to_string_lossy().to_ascii_lowercase();
+            IMPLICIT_OPERATION_FUNCTIONS.contains(&n.as_str())
+        })
+}
+
+fn report_in(vm: &mut Vm, ctx: Option<ContextRef>, diags: Vec<Diagnostic>) {
     let mut entries = Vec::new();
     for d in diags {
         // php_stream_display_wrapper_errors() stays silent once an

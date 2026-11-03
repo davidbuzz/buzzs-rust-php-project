@@ -97,10 +97,22 @@ impl StreamOps for SocketOps {
             return Err(OpFailed);
         };
         self.timed_out = false;
-        if self.is_blocked {
+        // With data already returned by this read, a blocking socket does
+        // not wait for more (`php_sockop_read` checks has_buffered_data).
+        let dont_wait = self.is_blocked && st.has_buffered_data;
+        if dont_wait {
+            let _ = sock.set_nonblocking(true);
+        } else if self.is_blocked {
             let _ = sock.set_read_timeout(self.timeout);
         }
-        match sock.recv(buf) {
+        let r = sock.recv(buf);
+        if dont_wait {
+            let _ = sock.set_nonblocking(false);
+            if matches!(&r, Err(e) if e.kind() == io::ErrorKind::WouldBlock) {
+                return Ok(0);
+            }
+        }
+        match r {
             Ok(0) => {
                 st.eof = true;
                 Ok(0)

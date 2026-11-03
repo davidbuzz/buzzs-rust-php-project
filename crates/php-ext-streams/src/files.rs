@@ -42,18 +42,19 @@ pub fn open_stream(
     let mut opened = None;
     crate::userwrap::clear_last_object();
     let s = bridge::run(vm, || {
-        open::open_wrapper(path, mode, options, &mut opened, ctx)
+        let s = open::open_wrapper(path, mode, options, &mut opened, ctx)?;
+        let data = if res::is_user_stream(&s) {
+            crate::userwrap::take_last_object()
+        } else {
+            None
+        };
+        Some((s, data))
     })?;
-    let Some(s) = s else {
+    let Some((s, data)) = s else {
         if let Some(e) = php_wrapper::take_exception() {
             return Err(php_url_exception(vm, a, &e));
         }
         return Ok(None);
-    };
-    let data = if res::is_user_stream(&s) {
-        crate::userwrap::take_last_object()
-    } else {
-        None
     };
     Ok(Some((s, data)))
 }
