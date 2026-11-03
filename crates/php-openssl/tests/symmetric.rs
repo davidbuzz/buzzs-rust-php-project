@@ -1,6 +1,8 @@
 //! Oracle-checked symmetric crypto (expected values produced by
 //! `/usr/bin/php` 8.3 linked against the same OpenSSL 3.0).
 
+#![allow(clippy::many_single_char_names)]
+
 use php_openssl::symmetric::{DecryptArgs, EncryptArgs, TagOut};
 use php_openssl::{Level, OpenSsl, Throw};
 

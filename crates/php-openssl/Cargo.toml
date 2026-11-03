@@ -9,8 +9,6 @@ rust-version.workspace = true
 [dependencies]
 openssl = "0.10"
 openssl-sys = "0.9"
-foreign-types = "0.3"
-libc = "0.2"
 
 [lints]
 workspace = true
