@@ -680,8 +680,10 @@ name = "php-ext-pcre"
 version = "0.1.0"
 dependencies = [
  "libc",
+ "php-memlimit",
  "php-pcre",
  "php-runtime",
+ "php-support",
  "php-vm",
 ]
 
