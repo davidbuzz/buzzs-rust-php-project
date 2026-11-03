@@ -607,6 +607,7 @@ fn web_phar_outside_web_returns() {
 }
 
 #[test]
+#[allow(clippy::many_single_char_names)]
 fn including_phars_directly() {
     use php_phar::include::{compile_source, CompileSource};
     writable();
