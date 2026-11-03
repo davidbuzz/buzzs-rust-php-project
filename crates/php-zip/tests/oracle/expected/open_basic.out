@@ -1,0 +1,63 @@
+# oo_open / oo_close / doubleclose / getStatusString
+z props = ["lastId"=>-1,"status"=>0,"statusSys"=>0,"numFiles"=>0,"filename"=>"","comment"=>""]
+z->open = 9
+z->getStatusString = "No error"
+z props = ["lastId"=>-1,"status"=>0,"statusSys"=>0,"numFiles"=>0,"filename"=>"","comment"=>""]
+z->open = true
+z props = ["lastId"=>-1,"status"=>0,"statusSys"=>0,"numFiles"=>0,"filename"=>"{DIR}/nofile","comment"=>""]
+z->close = true
+exists nofile = false
+! ValueError: ZipArchive::open(): Argument #1 ($filename) must not be empty
+z->open = true
+z props = ["lastId"=>-1,"status"=>0,"statusSys"=>0,"numFiles"=>4,"filename"=>"{DIR}/test.zip","comment"=>""]
+z->count = 4
+z->close = true
+! ValueError: Invalid or uninitialized Zip object
+! ValueError: Invalid or uninitialized Zip object
+z->getStatusString = "No error"
+! ValueError: Invalid or uninitialized Zip object
+! ValueError: Invalid or uninitialized Zip object
+! ValueError: Invalid or uninitialized Zip object
+! ValueError: Invalid or uninitialized Zip object
+! ValueError: Invalid or uninitialized Zip object
+z->addFile = false
+z->clearError = null
+! ValueError: Invalid or uninitialized Zip object
+z->renameIndex = false
+! ValueError: Invalid or uninitialized Zip object
+! ValueError: ZipArchive::setCommentName(): Argument #1 ($name) must not be empty
+! ValueError: ZipArchive::replaceFile(): Argument #1 ($filepath) must not be empty
+! ValueError: ZipArchive::replaceFile(): Argument #2 ($index) must be greater than or equal to 0
+z->replaceFile = false
+! ValueError: Invalid or uninitialized Zip object
+! ValueError: Invalid or uninitialized Zip object
+ZipArchive::isCompressionMethodSupported = true
+ZipArchive::isCompressionMethodSupported = true
+ZipArchive::isCompressionMethodSupported = true
+ZipArchive::isCompressionMethodSupported = false
+ZipArchive::isCompressionMethodSupported = false
+ZipArchive::isCompressionMethodSupported = false
+ZipArchive::isCompressionMethodSupported = true
+ZipArchive::isEncryptionMethodSupported = true
+ZipArchive::isEncryptionMethodSupported = true
+ZipArchive::isEncryptionMethodSupported = true
+ZipArchive::isEncryptionMethodSupported = true
+[Deprecated] ZipArchive::open(): Using empty file as ZipArchive is deprecated
+e->open = true
+e props = ["lastId"=>-1,"status"=>0,"statusSys"=>0,"numFiles"=>0,"filename"=>"{DIR}/empty.zip","comment"=>""]
+e->close = true
+exists empty.zip = false
+e->open = 19
+e->open = 19
+e->open = 10
+e->open = 10
+e->open = true
+e->count = 0
+e->close = true
+size test.zip = false
+e->open = true
+e->close = true
+e->open = true
+e->open = 19
+e->open = 19
+END
