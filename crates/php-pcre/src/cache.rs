@@ -22,6 +22,16 @@ pub struct MatchConfig {
     pub recursion_limit: u32,
     /// `pcre.jit`: whether the shared JIT stack is attached to the match context.
     pub jit: bool,
+    /// The caller guarantees the subject is valid UTF-8 (PHP's
+    /// `IS_STR_VALID_UTF8` string flag), so `/u` patterns may skip PCRE2's
+    /// per-call validation (`PCRE2_NO_UTF_CHECK`).  A start offset that
+    /// points into a continuation byte is still checked, so
+    /// `PREG_BAD_UTF8_OFFSET_ERROR` is reported exactly as without the hint.
+    /// Not an INI setting: set it per call with
+    /// [`MatchConfig::with_known_valid_utf8`].  Passing `true` for an invalid
+    /// subject is a logic error (PCRE2 behaviour is then undefined), so only
+    /// pass what a validation actually established.
+    pub known_valid_utf8: bool,
 }
 
 impl MatchConfig {
@@ -33,6 +43,17 @@ impl MatchConfig {
             backtrack_limit: backtrack_limit as u32,
             recursion_limit: recursion_limit as u32,
             jit,
+            known_valid_utf8: false,
+        }
+    }
+
+    /// A copy of this config carrying the per-call "subject is known to be
+    /// valid UTF-8" hint (see [`MatchConfig::known_valid_utf8`]).
+    #[must_use]
+    pub fn with_known_valid_utf8(self, known_valid_utf8: bool) -> Self {
+        Self {
+            known_valid_utf8,
+            ..self
         }
     }
 }
@@ -44,6 +65,7 @@ impl Default for MatchConfig {
             backtrack_limit: 1_000_000,
             recursion_limit: 100_000,
             jit: true,
+            known_valid_utf8: false,
         }
     }
 }

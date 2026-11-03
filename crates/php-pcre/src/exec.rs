@@ -15,6 +15,7 @@ pub(crate) struct Exec<'a> {
     pub(crate) subject: &'a [u8],
     md: MatchData,
     ctx: MatchContext,
+    known_valid_utf8: bool,
 }
 
 impl<'a> Exec<'a> {
@@ -28,17 +29,26 @@ impl<'a> Exec<'a> {
             subject,
             md,
             ctx,
+            known_valid_utf8: cfg.known_valid_utf8,
         })
     }
 
-    /// Options for the first match of a call: UTF patterns get their subject
-    /// validated, everything else skips the check.
-    pub(crate) fn first_options(&self) -> u32 {
-        if self.re.is_utf() {
-            0
-        } else {
+    /// Options for the first match of a call starting at `start`: UTF
+    /// patterns get their subject validated unless the caller vouched for it
+    /// and `start` is not inside a character (`is_known_valid_utf8`);
+    /// everything else skips the check.
+    pub(crate) fn first_options(&self, start: usize) -> u32 {
+        if !self.re.is_utf() || self.skip_utf_check(start) {
             ffi::PCRE2_NO_UTF_CHECK
+        } else {
+            0
         }
+    }
+
+    fn skip_utf_check(&self, start: usize) -> bool {
+        self.known_valid_utf8
+            && (start == self.subject.len()
+                || self.subject.get(start).is_some_and(|b| b & 0xC0 != 0x80))
     }
 
     /// `pcre2_match()` at `start` with `options`.

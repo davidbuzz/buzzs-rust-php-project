@@ -223,19 +223,29 @@ fn named_groups_beyond_prealloc() {
     assert_eq!(o.result, Ok(1));
 }
 
-/// `bug72685.phpt`: anchored scanning with an offset stays linear.
+/// `bug72685.phpt`: anchored scanning with an offset stays linear once the
+/// subject is known to be valid UTF-8 (PHP flags the string after the first
+/// successful `/u` match at offset 0; the caller passes the hint back).
 #[test]
 fn offset_scan_is_fast() {
     let re = Regex::compile(b"/\\G\\w/u").unwrap();
-    let cfg = MatchConfig::default();
+    let mut cfg = MatchConfig::default();
     let s = vec![b'a'; 64 * 1024];
     let start = std::time::Instant::now();
     let mut pos = 0;
-    while match_one(&re, &cfg, &s, true, 0, pos).result == Ok(1) {
+    loop {
+        let o = match_one(&re, &cfg, &s, true, 0, pos);
+        if o.subject_valid_utf8 {
+            cfg = cfg.with_known_valid_utf8(true);
+        }
+        if o.result != Ok(1) {
+            break;
+        }
         pos += 1;
     }
     assert_eq!(pos, 64 * 1024);
-    assert!(start.elapsed().as_secs() < 20);
+    assert!(cfg.known_valid_utf8);
+    assert!(start.elapsed().as_secs() < 5, "{:?}", start.elapsed());
 }
 
 /// `007.phpt`: subject validity is checked on every call.

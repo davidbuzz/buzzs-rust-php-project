@@ -50,7 +50,7 @@ pub fn split(
     if run {
         let mut ex = Exec::new(re, cfg, subject).ok_or(PregError::Internal)?;
         let mut start = 0usize;
-        let mut count = ex.run(start, ex.first_options());
+        let mut count = ex.run(start, ex.first_options(start));
         'outer: loop {
             if count >= 0 {
                 let mut n = pairs(count, num_subpats);
@@ -137,10 +137,12 @@ pub fn grep<'s, I>(
 where
     I: IntoIterator<Item = &'s [u8]>,
 {
+    // The UTF-8 validity hint describes one subject, not a whole array.
+    let cfg = cfg.with_known_valid_utf8(false);
     let mut kept = Vec::new();
     for (idx, subject) in items.into_iter().enumerate() {
-        let mut ex = Exec::new(re, cfg, subject).ok_or(PregError::Internal)?;
-        let count = ex.run(0, ex.first_options());
+        let mut ex = Exec::new(re, &cfg, subject).ok_or(PregError::Internal)?;
+        let count = ex.run(0, ex.first_options(0));
         if count >= 0 {
             if !invert {
                 kept.push(idx);

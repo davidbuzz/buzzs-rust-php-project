@@ -13,6 +13,14 @@
 //!   [`MatchConfig`], so user callbacks may re-enter the extension:
 //!   [`match_one`], [`match_all`], [`replace`], [`replace_callback`],
 //!   [`replace_array`], [`split`], [`grep`], [`quote`].
+//! * Matching can be split in two phases for `memory_limit` accounting:
+//!   [`match_one_spans`] / [`match_all_spans`] record only offsets (see
+//!   [`MatchSpans::captured_bytes`] and [`MatchSpans::matches`]), and
+//!   [`MatchSpans::into_outcome`] then copies the captures.
+//! * [`MatchConfig::with_known_valid_utf8`] lets the caller skip PCRE2's
+//!   UTF-8 validation for subjects it knows are valid (PHP's
+//!   `IS_STR_VALID_UTF8` flag); [`MatchOutcome::subject_valid_utf8`] reports
+//!   when a match established validity.
 //! * Arrays come back as [`MatchArray`] (insertion-ordered [`Key`] →
 //!   [`Value`]) which maps 1:1 onto PHP arrays.
 //!
@@ -38,7 +46,10 @@ mod value;
 
 pub use cache::{MatchConfig, Pcre, RegexCache, PCRE_CACHE_SIZE};
 pub use error::{CompileError, PregError};
-pub use matching::{match_all, match_one, MatchFailure, MatchOutcome};
+pub use matching::{
+    match_all, match_all_spans, match_one, match_one_spans, MatchFailure, MatchOutcome, MatchRef,
+    MatchSpans,
+};
 pub use regex::{parse_pattern, ParsedPattern, Regex};
 pub use replace::{
     limit_from_php, replace, replace_array, replace_callback, ReplaceOutcome, Replacement,

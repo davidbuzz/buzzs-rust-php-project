@@ -224,7 +224,7 @@ fn replace_loop(
     let mut last_end = 0usize;
     let mut start = 0usize;
 
-    let mut count = ex.run(start, ex.first_options());
+    let mut count = ex.run(start, ex.first_options(start));
     loop {
         if count >= 0 && limit > 0 {
             let mut n = pairs(count, num_subpats);

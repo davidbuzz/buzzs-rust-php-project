@@ -153,6 +153,18 @@ fn dump_array(out: &mut Vec<u8>, a: &MatchArray, indent: usize) {
     out.extend_from_slice(b"}\n");
 }
 
+thread_local! {
+    /// Whether to pass the "known valid UTF-8" hint for valid subjects.
+    static HINT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// The match config for `subject`, carrying the UTF-8 hint in hinted runs.
+fn cfg_for(pcre: &Pcre, subject: &[u8]) -> php_pcre::MatchConfig {
+    let valid = std::str::from_utf8(subject).is_ok();
+    pcre.config()
+        .with_known_valid_utf8(HINT.with(std::cell::Cell::get) && valid)
+}
+
 fn warn(out: &mut Vec<u8>, e: &CompileError) {
     out.extend_from_slice(b"Warning: ");
     out.extend_from_slice(&e.message());
@@ -194,7 +206,7 @@ fn run_match(out: &mut Vec<u8>, pcre: &mut Pcre, args: &[Arg], global: bool, cap
         }
     };
     drain_warnings(out, pcre);
-    let cfg = pcre.config();
+    let cfg = cfg_for(pcre, args[1].bytes());
     let (flags, offset) = (int_arg(args, 2, 0), int_arg(args, 3, 0));
     let f = if global { match_all } else { match_one };
     let o = f(&re, &cfg, args[1].bytes(), capture, flags, offset);
@@ -248,7 +260,7 @@ fn run_replace(out: &mut Vec<u8>, pcre: &mut Pcre, args: &[Arg], filter: bool) {
         Arg::Str(p) => match pcre.compile(p) {
             Ok(re) => {
                 drain_warnings(out, pcre);
-                let cfg = pcre.config();
+                let cfg = cfg_for(pcre, subject);
                 let o = replace(
                     &re,
                     &cfg,
@@ -305,7 +317,7 @@ fn run_callback(out: &mut Vec<u8>, pcre: &mut Pcre, args: &[Arg]) {
             return;
         }
     };
-    let cfg = pcre.config();
+    let cfg = cfg_for(pcre, args[1].bytes());
     let limit = limit_from_php(int_arg(args, 2, -1));
     let flags = int_arg(args, 3, 0);
     pcre.set_last_error(PregError::NoError);
@@ -349,7 +361,7 @@ fn run_case(out: &mut Vec<u8>, pcre: &mut Pcre, op: &str, args: &[Arg]) {
         "callback" => run_callback(out, pcre, args),
         "split" => match pcre.compile(args[0].bytes()) {
             Ok(re) => {
-                let cfg = pcre.config();
+                let cfg = cfg_for(pcre, args[1].bytes());
                 let r = split(
                     &re,
                     &cfg,
@@ -435,6 +447,18 @@ fn parse_expected(data: &[u8]) -> BTreeMap<usize, Vec<u8>> {
 
 #[test]
 fn oracle_cases() {
+    run_oracle(false);
+}
+
+/// The same cases with `known_valid_utf8` set for every valid subject: the
+/// hint must never change results.
+#[test]
+fn oracle_cases_with_utf8_hint() {
+    HINT.with(|h| h.set(true));
+    run_oracle(true);
+}
+
+fn run_oracle(hinted: bool) {
     let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/oracle");
     let cases = std::fs::read(format!("{dir}/cases.txt")).unwrap();
     let expected = parse_expected(&std::fs::read(format!("{dir}/cases.expected")).unwrap());
@@ -469,5 +493,8 @@ fn oracle_cases() {
         }
     }
     assert!(ran > 300, "only {ran} cases ran");
-    assert!(failures.is_empty(), "oracle mismatches:{failures}");
+    assert!(
+        failures.is_empty(),
+        "oracle mismatches (hinted={hinted}):{failures}"
+    );
 }
