@@ -605,3 +605,146 @@ fn engine_kinds() {
     assert!(!NativeEngine::Pcg(PcgOneseq128XslRr64::from_int(1)).is_mt19937_legacy());
     assert_eq!(IntervalBoundary::default().name(), "ClosedOpen");
 }
+
+fn queue_engine(values: Vec<Vec<u8>>) -> UserEngine<impl FnMut() -> php_random::Result<Vec<u8>>> {
+    let mut it = values.into_iter();
+    UserEngine(move || Ok(it.next().unwrap_or_default()))
+}
+
+#[test]
+fn get_float_extreme_range() {
+    // ext/random/tests/03_randomizer/methods/getFloat_extreme_range.phpt
+    let mut r = Randomizer::new(queue_engine(vec![
+        b"\x64\xe8\x58\x79\x3e\xf6\x38\x00".to_vec(),
+        b"\x65\xe8\x58\x79\x3e\xf6\x38\x00".to_vec(),
+        vec![0; 8],
+    ]));
+    let b = IntervalBoundary::ClosedOpen;
+    assert_eq!(
+        r.get_float(-1.6e308, 1.6e308, b),
+        Ok(-1.599_999_999_999_999_8e308)
+    );
+    assert_eq!(r.get_float(-1.6e308, 1.6e308, b), Ok(-1.6e308));
+    assert_eq!(
+        r.get_float(-1.6e308, 1.6e308, b),
+        Ok(1.599_999_999_999_999_8e308)
+    );
+}
+
+#[test]
+fn get_float_opposite_signs() {
+    // ext/random/tests/03_randomizer/methods/getFloat_opposite_signs.phpt
+    let vals = (0x63u8..=0x67)
+        .map(|b| vec![b, 0xe8, 0x58, 0x79, 0x3e, 0xf6, 0x38, 0x00])
+        .collect();
+    let mut r = Randomizer::new(queue_engine(vals));
+    // printf("%.17f") output of the test, parsed back (exact round-trip).
+    let expected = [
+        "-0.78005908680576086",
+        "-0.78005908680576097",
+        "-0.78005908680576108",
+        "-0.78005908680576119",
+        "-0.78005908680576130",
+    ]
+    .map(|s| s.parse::<f64>().unwrap());
+    for e in expected {
+        assert_eq!(r.get_float(-1.0, 1.0, IntervalBoundary::ClosedOpen), Ok(e));
+    }
+}
+
+#[test]
+fn legacy_mt_rand_php_cases() {
+    // ext/random/tests/01_functions/array_rand_mt_rand_php.phpt
+    let mut g = RandomGlobals::new();
+    g.mt_srand(Some(1), 1);
+    let keys: Vec<u32> = (0..3)
+        .map(|_| g.array_rand(&php_random::Dense(3), 1).unwrap()[0])
+        .collect();
+    assert_eq!(keys, [0, 1, 0]);
+    // ext/random/tests/01_functions/bug75514.phpt
+    g.mt_srand(Some(0), 1);
+    assert_eq!(g.mt_rand_range(0, 999_999_999), Ok(448_865_905));
+    assert_eq!(g.mt_rand_range(0, 999), Ok(592));
+}
+
+#[test]
+fn get_int_gh9415() {
+    // ext/random/tests/03_randomizer/methods/getInt_gh9415.phpt
+    let mut r = Randomizer::new(Mt19937::new(1234, Mt19937Mode::Mt19937));
+    assert_eq!(r.get_int(-2_147_483_648, 2_147_483_647), Ok(-1_324_913_873));
+    let mut r = Randomizer::new(Mt19937::new(4321, Mt19937Mode::Mt19937));
+    assert_eq!(r.get_int(-2_147_483_648, 2_147_483_647), Ok(-1_843_387_587));
+}
+
+fn byte_engine() -> UserEngine<impl FnMut() -> php_random::Result<Vec<u8>>> {
+    let mut i = 0u8;
+    UserEngine(move || {
+        i += 1;
+        Ok(vec![i])
+    })
+}
+
+#[test]
+fn get_int_expansion() {
+    // ext/random/tests/03_randomizer/methods/getInt_expansion_{32,64}.phpt
+    let mut r = Randomizer::new(byte_engine());
+    let v = r.get_int(0, 0x00FF_FFFF).unwrap();
+    assert_eq!(hex(&u32::try_from(v).unwrap().to_le_bytes()), "01020300");
+    let mut r = Randomizer::new(byte_engine());
+    let v = r.get_int(0, 0x00FF_FFFF_FFFF_FFFF).unwrap();
+    assert_eq!(hex(&v.to_le_bytes()), "0102030405060700");
+}
+
+#[test]
+fn get_bytes_expansion() {
+    // ext/random/tests/03_randomizer/methods/getBytes_expansion.phpt
+    let mut r = Randomizer::new(queue_engine(
+        [
+            &b"H"[..],
+            b"e",
+            b"ll",
+            b"o",
+            b"abcdefghijklmnopqrstuvwxyz",
+            b"ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+            b"success",
+        ]
+        .iter()
+        .map(|s| s.to_vec())
+        .collect(),
+    ));
+    assert_eq!(r.get_bytes(5).unwrap(), b"Hello");
+    assert_eq!(r.get_bytes(11).unwrap(), b"abcdefghABC");
+    assert_eq!(r.get_bytes(7).unwrap(), b"success");
+}
+
+#[test]
+fn get_bytes_from_string_call_counts() {
+    // ext/random/tests/03_randomizer/methods/getBytesFromString_fast_path.phpt
+    let all: Vec<u8> = (0..=255).collect();
+    let mut i = 1;
+    while i <= 256 {
+        let mut calls = 0;
+        let mut inner = Xoshiro256StarStar::from_seed64(99);
+        let mut r = Randomizer::new(UserEngine(|| {
+            calls += 1;
+            Ok(inner.next_u64().to_le_bytes().to_vec())
+        }));
+        let out = r.get_bytes_from_string(&all[..i], 20000).unwrap();
+        let mut seen = [false; 256];
+        for b in out {
+            seen[usize::from(b)] = true;
+        }
+        assert_eq!(calls, 2500, "len {i}");
+        assert_eq!(seen.iter().filter(|&&s| s).count(), i);
+        i *= 2;
+    }
+    let mut calls = 0;
+    let mut inner = Xoshiro256StarStar::from_seed64(99);
+    let doubled = [all.clone(), all].concat();
+    let mut r = Randomizer::new(UserEngine(|| {
+        calls += 1;
+        Ok(inner.next_u64().to_le_bytes().to_vec())
+    }));
+    r.get_bytes_from_string(&doubled, 20000).unwrap();
+    assert_eq!(calls, 20000);
+}
