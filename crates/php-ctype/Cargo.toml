@@ -1,11 +1,13 @@
 [package]
 name = "php-ctype"
+description = "PHP's ext/ctype: ctype_* character-class predicates with PHP's exact argument rules"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+php-runtime = { path = "../php-runtime" }
 
 [lints]
 workspace = true
