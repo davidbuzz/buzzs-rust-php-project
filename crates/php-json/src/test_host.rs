@@ -121,7 +121,9 @@ impl RuntimeContext for TestHost {
     }
 
     fn object_properties(&mut self, obj: &Obj, _: PropertyPurpose) -> RtResult<Option<ZArray>> {
-        Ok(Some(ZArray::from_table(obj_ref(obj).props.borrow().clone())))
+        Ok(Some(ZArray::from_table(
+            obj_ref(obj).props.borrow().clone(),
+        )))
     }
 
     fn object_dump(&mut self, obj: &Obj, _: PropertyPurpose) -> RtResult<ObjectDump> {
@@ -134,7 +136,11 @@ impl RuntimeContext for TestHost {
             },
             Kind::BackedEnum(case, v) => ObjectKind::Enum {
                 case_name: case.clone(),
-                backing_type: Some(if matches!(v, Value::Int(_)) { "int" } else { "string" }),
+                backing_type: Some(if matches!(v, Value::Int(_)) {
+                    "int"
+                } else {
+                    "string"
+                }),
                 has_debug_info: false,
             },
             _ if t.class == "stdClass" => ObjectKind::StdClass,
@@ -190,10 +196,7 @@ impl JsonHost for TestHost {
     }
 
     fn is_enum(&mut self, obj: &Obj) -> bool {
-        matches!(
-            obj_ref(obj).kind,
-            Kind::UnitEnum(_) | Kind::BackedEnum(..)
-        )
+        matches!(obj_ref(obj).kind, Kind::UnitEnum(_) | Kind::BackedEnum(..))
     }
 
     fn enum_backing_value(&mut self, obj: &Obj) -> Option<Value> {

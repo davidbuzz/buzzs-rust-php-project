@@ -69,7 +69,8 @@ pub(crate) fn next_utf8_char(s: &[u8]) -> (Option<u32>, usize) {
             };
             return (None, n);
         }
-        let cp = (u32::from(c & 0x0F) << 12) | (u32::from(s[1] & 0x3F) << 6) | u32::from(s[2] & 0x3F);
+        let cp =
+            (u32::from(c & 0x0F) << 12) | (u32::from(s[1] & 0x3F) << 6) | u32::from(s[2] & 0x3F);
         if cp < 0x800 || (0xD800..=0xDFFF).contains(&cp) {
             return (None, 3);
         }
@@ -397,7 +398,10 @@ impl<'h> Encoder<'h> {
         let mut pos = 0;
         while pos < s.len() {
             // Copy the run of bytes that need no escaping.
-            let run = s[pos..].iter().position(|&b| needs_escape(b)).unwrap_or(s.len() - pos);
+            let run = s[pos..]
+                .iter()
+                .position(|&b| needs_escape(b))
+                .unwrap_or(s.len() - pos);
             buf.extend_from_slice(&s[pos..pos + run]);
             pos += run;
             let Some(&us) = s.get(pos) else { break };

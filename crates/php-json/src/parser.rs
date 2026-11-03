@@ -106,7 +106,13 @@ pub(crate) struct Parser<'a, S: Sink> {
 
 impl<'a, S: Sink> Parser<'a, S> {
     /// `php_json_parser_init_ex`. `max_depth == 0` disables the depth check.
-    pub(crate) fn new(input: &'a [u8], options: i64, max_depth: i64, sink: S, validate: bool) -> Self {
+    pub(crate) fn new(
+        input: &'a [u8],
+        options: i64,
+        max_depth: i64,
+        sink: S,
+        validate: bool,
+    ) -> Self {
         Parser {
             scanner: Scanner::new(input, options, validate),
             sink,
@@ -117,7 +123,11 @@ impl<'a, S: Sink> Parser<'a, S> {
     }
 
     fn error(&self, code: ErrorCode) -> ParseError {
-        ParseError::Json(JsonError::at(code, self.scanner.line(), self.scanner.column()))
+        ParseError::Json(JsonError::at(
+            code,
+            self.scanner.line(),
+            self.scanner.column(),
+        ))
     }
 
     fn action_error(&self, e: ActionError) -> ParseError {
@@ -161,187 +171,233 @@ impl<'a, S: Sink> Parser<'a, S> {
     pub(crate) fn parse(mut self) -> Result<S::Value, ParseError> {
         let mut stack: Vec<Frame<S>> = Vec::new();
         let mut tok = self.scanner.scan();
-        'value: loop {
+        loop {
             // `tok` is the lookahead at a position expecting a value.
-            let mut value = match tok {
-                Token::LBracket => {
-                    self.push(1)?; // shift '['
-                    self.depth_inc()?; // $@ action
-                    self.push(1)?; // $@ goto
-                    tok = self.scanner.scan();
-                    if matches!(tok, Token::RBracket | Token::RBrace) {
-                        // elements: %empty; shift array_end; reduce.
-                        self.push(2)?;
-                        if tok == Token::RBrace {
-                            return Err(self.error(ErrorCode::StateMismatch));
-                        }
-                        self.stack_size -= 3;
-                        self.depth -= 1;
-                        self.sink.empty_array()
-                    } else {
-                        stack.push(Frame::Array(None));
-                        continue 'value;
-                    }
+            let mut value = match self.start_value(tok, &mut stack)? {
+                Started::Value(v) => v,
+                Started::Opened(next) => {
+                    tok = next;
+                    continue;
                 }
-                Token::LBrace => {
-                    self.push(1)?;
-                    self.depth_inc()?;
-                    self.push(1)?;
-                    tok = self.scanner.scan();
-                    match tok {
-                        Token::RBrace | Token::RBracket => {
-                            // members: %empty (creates the object); shift.
-                            self.push(1)?;
-                            let v = self
-                                .sink
-                                .empty_object()
-                                .map_err(|e| self.action_error(e))?;
-                            self.push(1)?;
-                            if tok == Token::RBracket {
-                                return Err(self.error(ErrorCode::StateMismatch));
-                            }
-                            self.stack_size -= 3;
-                            self.depth -= 1;
-                            v
-                        }
-                        Token::Str(key) => {
-                            self.push(1)?; // shift key (reduced in place)
-                            let key = ZStr::from(key);
-                            tok = self.scanner.scan();
-                            if tok != Token::Colon {
-                                return Err(self.unexpected(&tok));
-                            }
-                            self.push(1)?;
-                            stack.push(Frame::Object(None, key));
-                            tok = self.scanner.scan();
-                            continue 'value;
-                        }
-                        other => return Err(self.unexpected(&other)),
-                    }
-                }
-                Token::Null => self.scalar(Scalar::Null)?,
-                Token::True => self.scalar(Scalar::Bool(true))?,
-                Token::False => self.scalar(Scalar::Bool(false))?,
-                Token::Int(i) => self.scalar(Scalar::Int(i))?,
-                Token::Double(d) => self.scalar(Scalar::Double(d))?,
-                Token::Str(s) => self.scalar(Scalar::Str(s))?,
-                other => return Err(self.unexpected(&other)),
             };
-            // A complete value has been reduced; attach it to its container.
+            // A complete value has been reduced: attach it to its container,
+            // closing containers as long as their end follows.
             loop {
-                match stack.last_mut() {
-                    None => {
-                        tok = self.scanner.scan();
-                        if tok != Token::Eoi {
-                            return Err(self.unexpected(&tok));
-                        }
-                        self.push(1)?;
-                        return Ok(value);
+                let attached = match stack.last_mut() {
+                    None => return self.finish(value),
+                    Some(Frame::Array(arr)) => self.array_element(arr, value)?,
+                    Some(Frame::Object(obj, key)) => self.object_member(obj, key, value)?,
+                };
+                match attached {
+                    Attached::Next(next) => {
+                        tok = next;
+                        break;
                     }
-                    Some(Frame::Array(arr)) => {
-                        match arr {
-                            None => {
-                                // element: value
-                                let mut a = self.sink.array_create();
-                                self.sink.array_append(&mut a, value);
-                                *arr = Some(a);
-                            }
-                            Some(a) => {
-                                // element: element ',' value
-                                self.stack_size -= 2;
-                                self.sink.array_append(a, value);
-                            }
-                        }
-                        tok = self.scanner.scan();
-                        match tok {
-                            Token::Comma => {
-                                self.push(1)?;
-                                tok = self.scanner.scan();
-                                continue 'value;
-                            }
-                            Token::RBracket | Token::RBrace => {
-                                // elements: element; shift array_end.
-                                self.push(1)?;
-                                if tok == Token::RBrace {
-                                    return Err(self.error(ErrorCode::StateMismatch));
-                                }
-                                self.stack_size -= 3;
-                                self.depth -= 1;
-                                let Some(Frame::Array(Some(a))) = stack.pop() else {
-                                    unreachable!("array frame without array");
-                                };
-                                value = self.sink.array_finish(a);
-                            }
-                            other => return Err(self.unexpected(&other)),
-                        }
-                    }
-                    Some(Frame::Object(obj, key)) => {
-                        let key = std::mem::take(key);
-                        let first = obj.is_none();
-                        if first {
-                            // member: key ':' value
-                            self.stack_size -= 2;
-                            let o = self
-                                .sink
-                                .object_create()
-                                .map_err(|e| self.action_error(e))?;
-                            *obj = Some(o);
-                        } else {
-                            // member: member ',' key ':' value
-                            self.stack_size -= 4;
-                        }
-                        let Some(o) = obj.as_mut() else {
-                            unreachable!("object frame without object");
+                    Attached::Closed => {
+                        value = match stack.pop() {
+                            Some(Frame::Array(Some(a))) => self.sink.array_finish(a),
+                            Some(Frame::Object(Some(o), _)) => self.sink.object_finish(o),
+                            _ => unreachable!("closed an empty frame"),
                         };
-                        if let Err(e) = self.sink.object_update(o, key, value) {
-                            return Err(self.action_error(e));
-                        }
-                        tok = self.scanner.scan();
-                        match tok {
-                            Token::Comma => {
-                                self.push(1)?;
-                                tok = self.scanner.scan();
-                                let Token::Str(k) = tok else {
-                                    return Err(self.unexpected(&tok));
-                                };
-                                self.push(1)?;
-                                tok = self.scanner.scan();
-                                if tok != Token::Colon {
-                                    return Err(self.unexpected(&tok));
-                                }
-                                self.push(1)?;
-                                if let Some(Frame::Object(_, key)) = stack.last_mut() {
-                                    *key = ZStr::from(k);
-                                }
-                                tok = self.scanner.scan();
-                                continue 'value;
-                            }
-                            Token::RBrace | Token::RBracket => {
-                                // members: member; shift object_end.
-                                self.push(1)?;
-                                if tok == Token::RBracket {
-                                    return Err(self.error(ErrorCode::StateMismatch));
-                                }
-                                self.stack_size -= 3;
-                                self.depth -= 1;
-                                let Some(Frame::Object(Some(o), _)) = stack.pop() else {
-                                    unreachable!("object frame without object");
-                                };
-                                value = self.sink.object_finish(o);
-                            }
-                            other => return Err(self.unexpected(&other)),
-                        }
                     }
                 }
             }
         }
     }
 
-    /// Shifts a scalar token and reduces it to a value.
-    fn scalar(&mut self, s: Scalar) -> Result<S::Value, ParseError> {
-        self.push(1)?;
-        Ok(self.sink.scalar(s))
+    /// Handles the first token of a value: shifts and reduces a scalar or an
+    /// empty container, or opens a container (pushing its frame and
+    /// returning the lookahead of its first value).
+    fn start_value(
+        &mut self,
+        tok: Token,
+        stack: &mut Vec<Frame<S>>,
+    ) -> Result<Started<S::Value>, ParseError> {
+        let scalar = match tok {
+            Token::LBracket => return self.open_array(stack),
+            Token::LBrace => return self.open_object(stack),
+            Token::Null => Scalar::Null,
+            Token::True => Scalar::Bool(true),
+            Token::False => Scalar::Bool(false),
+            Token::Int(i) => Scalar::Int(i),
+            Token::Double(d) => Scalar::Double(d),
+            Token::Str(s) => Scalar::Str(s),
+            other => return Err(self.unexpected(&other)),
+        };
+        self.push(1)?; // shift; reduce `value`
+        Ok(Started::Value(self.sink.scalar(scalar)))
     }
+
+    /// `array: '[' $@ elements array_end` up to the first element.
+    fn open_array(&mut self, stack: &mut Vec<Frame<S>>) -> Result<Started<S::Value>, ParseError> {
+        self.push(1)?; // shift '['
+        self.depth_inc()?; // $@ action
+        self.push(1)?; // $@ goto
+        let tok = self.scanner.scan();
+        if !matches!(tok, Token::RBracket | Token::RBrace) {
+            stack.push(Frame::Array(None));
+            return Ok(Started::Opened(tok));
+        }
+        // elements: %empty; shift array_end; reduce.
+        self.push(2)?;
+        if tok == Token::RBrace {
+            return Err(self.error(ErrorCode::StateMismatch));
+        }
+        self.close(3);
+        Ok(Started::Value(self.sink.empty_array()))
+    }
+
+    /// `object: '{' $@ members object_end` up to the first member's value.
+    fn open_object(&mut self, stack: &mut Vec<Frame<S>>) -> Result<Started<S::Value>, ParseError> {
+        self.push(1)?; // shift '{'
+        self.depth_inc()?; // $@ action
+        self.push(1)?; // $@ goto
+        match self.scanner.scan() {
+            tok @ (Token::RBrace | Token::RBracket) => {
+                // members: %empty (creates the object); shift object_end.
+                self.push(1)?;
+                let v = self.sink.empty_object().map_err(|e| self.action_error(e))?;
+                self.push(1)?;
+                if tok == Token::RBracket {
+                    return Err(self.error(ErrorCode::StateMismatch));
+                }
+                self.close(3);
+                Ok(Started::Value(v))
+            }
+            Token::Str(key) => {
+                self.push(1)?; // shift key (reduced in place)
+                self.colon()?;
+                stack.push(Frame::Object(None, ZStr::from(key)));
+                Ok(Started::Opened(self.scanner.scan()))
+            }
+            other => Err(self.unexpected(&other)),
+        }
+    }
+
+    /// Expects and shifts the `':'` after a key.
+    fn colon(&mut self) -> Result<(), ParseError> {
+        let tok = self.scanner.scan();
+        if tok != Token::Colon {
+            return Err(self.unexpected(&tok));
+        }
+        self.push(1)
+    }
+
+    /// Reduces a container (`array`/`object`, net `pop` states after the end
+    /// token was shifted) and leaves its nesting level.
+    fn close(&mut self, pop: usize) {
+        self.stack_size -= pop;
+        self.depth -= 1;
+    }
+
+    /// `start: value PHP_JSON_T_EOI`.
+    fn finish(&mut self, value: S::Value) -> Result<S::Value, ParseError> {
+        let tok = self.scanner.scan();
+        if tok != Token::Eoi {
+            return Err(self.unexpected(&tok));
+        }
+        self.push(1)?;
+        Ok(value)
+    }
+
+    /// Reduces `element` with `value`, then reads what follows it.
+    fn array_element(
+        &mut self,
+        arr: &mut Option<S::Array>,
+        value: S::Value,
+    ) -> Result<Attached, ParseError> {
+        if let Some(a) = arr {
+            // element: element ',' value
+            self.stack_size -= 2;
+            self.sink.array_append(a, value);
+        } else {
+            // element: value
+            let mut a = self.sink.array_create();
+            self.sink.array_append(&mut a, value);
+            *arr = Some(a);
+        }
+        match self.scanner.scan() {
+            Token::Comma => {
+                self.push(1)?;
+                Ok(Attached::Next(self.scanner.scan()))
+            }
+            tok @ (Token::RBracket | Token::RBrace) => {
+                // elements: element; shift array_end.
+                self.push(1)?;
+                if tok == Token::RBrace {
+                    return Err(self.error(ErrorCode::StateMismatch));
+                }
+                self.close(3);
+                Ok(Attached::Closed)
+            }
+            other => Err(self.unexpected(&other)),
+        }
+    }
+
+    /// Reduces `member` with `value` (creating the object on the first
+    /// member), then reads what follows it.
+    fn object_member(
+        &mut self,
+        obj: &mut Option<S::Object>,
+        key: &mut ZStr,
+        value: S::Value,
+    ) -> Result<Attached, ParseError> {
+        let o = if let Some(o) = obj {
+            // member: member ',' key ':' value
+            self.stack_size -= 4;
+            o
+        } else {
+            // member: key ':' value
+            self.stack_size -= 2;
+            let o = self
+                .sink
+                .object_create()
+                .map_err(|e| self.action_error(e))?;
+            obj.insert(o)
+        };
+        if let Err(e) = self.sink.object_update(o, std::mem::take(key), value) {
+            return Err(self.action_error(e));
+        }
+        match self.scanner.scan() {
+            Token::Comma => {
+                self.push(1)?;
+                let tok = self.scanner.scan();
+                let Token::Str(k) = tok else {
+                    return Err(self.unexpected(&tok));
+                };
+                self.push(1)?;
+                self.colon()?;
+                *key = ZStr::from(k);
+                Ok(Attached::Next(self.scanner.scan()))
+            }
+            tok @ (Token::RBrace | Token::RBracket) => {
+                // members: member; shift object_end.
+                self.push(1)?;
+                if tok == Token::RBracket {
+                    return Err(self.error(ErrorCode::StateMismatch));
+                }
+                self.close(3);
+                Ok(Attached::Closed)
+            }
+            other => Err(self.unexpected(&other)),
+        }
+    }
+}
+
+/// Outcome of [`Parser::start_value`].
+enum Started<V> {
+    /// A complete value.
+    Value(V),
+    /// A container was opened; the lookahead of its first value.
+    Opened(Token),
+}
+
+/// Outcome of attaching a value to the innermost container.
+enum Attached {
+    /// A `,` followed: the lookahead of the next value.
+    Next(Token),
+    /// The container was closed and must be popped.
+    Closed,
 }
 
 /// The validation sink (`validate_parser_methods`): builds nothing.
@@ -449,8 +505,7 @@ mod tests {
         let objects = |n: usize| format!("{}1{}", "{\"a\":".repeat(n), "}".repeat(n));
         assert_eq!(check(&objects(2499), 100_000), Ok(()));
         assert_eq!(check(&objects(2500), 100_000).unwrap_err().code(), 4);
-        let objects2 =
-            |n: usize| format!("{}1{}", "{\"b\":1,\"a\":".repeat(n), "}".repeat(n));
+        let objects2 = |n: usize| format!("{}1{}", "{\"b\":1,\"a\":".repeat(n), "}".repeat(n));
         assert_eq!(check(&objects2(1666), 100_000), Ok(()));
         assert_eq!(check(&objects2(1667), 100_000).unwrap_err().code(), 4);
     }

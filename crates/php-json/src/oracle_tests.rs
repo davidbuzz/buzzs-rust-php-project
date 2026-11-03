@@ -8,8 +8,8 @@
 //! extra `" near location L:C"` suffix.
 
 use crate::functions::{json_decode, json_encode, json_validate, JsonState};
-use crate::test_host::TestHost;
 use crate::test_host::Kind;
+use crate::test_host::TestHost;
 use php_runtime::serialize::serialize;
 use php_runtime::{ArrayKey, HashTable, RuntimeError, Value, ZArray, ZStr};
 
@@ -68,6 +68,7 @@ fn check_exception(e: &RuntimeError, expected: &str, code: i64) -> Result<(), St
     }
 }
 
+#[allow(clippy::many_single_char_names)]
 /// A minimal `unserialize()` for the fixture values (`N`, `b`, `i`, `d`,
 /// `s`, `a`, `O`; no references). Objects keep their property keys verbatim.
 fn mini_unserialize(d: &[u8], pos: &mut usize, host: &mut TestHost) -> Option<Value> {
@@ -183,7 +184,10 @@ fn run_encode(f: &[&str]) -> Result<(), String> {
         }
     }
     let msg = text(f[7]);
-    if state.last_error.code() == 5 && code == 7 && flags & crate::flags::PARTIAL_OUTPUT_ON_ERROR == 0 {
+    if state.last_error.code() == 5
+        && code == 7
+        && flags & crate::flags::PARTIAL_OUTPUT_ON_ERROR == 0
+    {
         // php-src master aborts at an invalid UTF-8 key
         // (json_encode_invalid_key_aborts.phpt); PHP 8.3 went on and
         // reported a later NAN.
@@ -318,11 +322,7 @@ fn run_fixture() {
             _ => continue,
         };
         if let Err(e) = r {
-            let input = match kind {
-                "E" => text(rest[3]),
-                "D" => text(rest[4]),
-                _ => text(rest[3]),
-            };
+            let input = text(if kind == "D" { rest[4] } else { rest[3] });
             let short: String = input.chars().take(120).collect();
             failures.push(format!(
                 "line {}: {kind} flags={} depth={} input={short:?}: {e}",
@@ -332,15 +332,21 @@ fn run_fixture() {
             ));
         }
     }
-    assert!(counts.iter().all(|&c| c > 100), "fixture too small: {counts:?}");
+    assert!(
+        counts.iter().all(|&c| c > 100),
+        "fixture too small: {counts:?}"
+    );
     if !failures.is_empty() {
         for f in failures.iter().take(40) {
             eprintln!("{f}");
         }
-        panic!("{} of {} oracle records failed", failures.len(), counts.iter().sum::<usize>());
+        panic!(
+            "{} of {} oracle records failed",
+            failures.len(),
+            counts.iter().sum::<usize>()
+        );
     }
 }
-
 
 const LOCATIONS: &str = include_str!("../tests/fixtures/locations.txt");
 

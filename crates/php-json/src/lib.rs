@@ -49,6 +49,8 @@ pub use host::{GuardKey, JsonHost};
 
 impl JsonHost for php_runtime::CollectingContext {}
 #[cfg(test)]
-mod test_host;
+mod object_tests;
 #[cfg(test)]
 mod oracle_tests;
+#[cfg(test)]
+mod test_host;

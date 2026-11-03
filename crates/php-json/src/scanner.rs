@@ -219,15 +219,14 @@ impl<'a> Scanner<'a> {
                     return Token::Error(ErrorCode::CtrlChar);
                 }
                 _ => {
-                    return match utf8_sequence_len(&self.input[self.cursor..]) {
-                        Some(n) => {
-                            self.cursor += n;
-                            Token::Error(ErrorCode::Syntax)
-                        }
-                        None => {
-                            self.cursor += 1;
-                            Token::Error(ErrorCode::Utf8)
-                        }
+                    // Any other valid UTF-8 character is a syntax error, an
+                    // invalid byte a UTF-8 error.
+                    return if let Some(n) = utf8_sequence_len(&self.input[self.cursor..]) {
+                        self.cursor += n;
+                        Token::Error(ErrorCode::Syntax)
+                    } else {
+                        self.cursor += 1;
+                        Token::Error(ErrorCode::Utf8)
                     };
                 }
             }
@@ -500,7 +499,10 @@ mod tests {
             scan_all(b"-9223372036854775809", BIGINT_AS_STRING)[0],
             Token::Str(b"-9223372036854775809".to_vec())
         );
-        assert_eq!(scan_all(b"01", 0), vec![Token::Int(0), Token::Int(1), Token::Eoi]);
+        assert_eq!(
+            scan_all(b"01", 0),
+            vec![Token::Int(0), Token::Int(1), Token::Eoi]
+        );
         assert_eq!(
             scan_all(b"1.e5", 0),
             vec![Token::Int(1), Token::Error(ErrorCode::Syntax)]
