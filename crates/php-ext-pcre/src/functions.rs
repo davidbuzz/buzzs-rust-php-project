@@ -6,6 +6,7 @@ use php_vm::ext::{Args, ModuleBuilder, VmResult};
 use php_vm::Vm;
 
 use crate::convert::to_zarray;
+use crate::memory;
 use crate::state;
 
 /// Registers the functions of the extension.
@@ -97,6 +98,7 @@ fn do_match(vm: &mut Vm, a: &Args, global: bool) -> VmResult<Value> {
     }
     if capture {
         if let Some(m) = out.matches {
+            memory::check(vm, memory::array_size(&m))?;
             a.set_ref(2, Value::Array(to_zarray(m)));
         }
     }
@@ -236,7 +238,15 @@ fn replace_one(
     let out = php_pcre::replace(&re, &cfg, subject, &Replacement::parse(replacement), limit);
     *count += out.count;
     state::set_last_error(out.last_error());
-    Ok(out.result.ok())
+    checked(vm, out.result.ok())
+}
+
+/// Applies the memory limit to a replacement result.
+fn checked(vm: &mut Vm, result: Option<Vec<u8>>) -> VmResult<Option<Vec<u8>>> {
+    if let Some(r) = &result {
+        memory::check(vm, memory::string_size(r.len()))?;
+    }
+    Ok(result)
 }
 
 // ---------------------------------------------------------------------------
@@ -379,7 +389,7 @@ fn replace_func(
     if let Some(t) = thrown {
         return Err(t);
     }
-    Ok(out.result.ok())
+    checked(vm, out.result.ok())
 }
 
 /// `preg_do_repl_func()`: calls the user callback with the match array and
@@ -408,6 +418,7 @@ fn preg_split(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     match php_pcre::split(&re, &cfg, subject.as_bytes(), limit, flags) {
         Ok(parts) => {
             state::set_last_error(PregError::NoError);
+            memory::check(vm, memory::array_size(&parts))?;
             Ok(Value::Array(to_zarray(parts)))
         }
         Err(e) => {
@@ -432,8 +443,10 @@ fn grep_impl(vm: &mut Vm, re: &Regex, input: &ZArray, invert: bool) -> VmResult<
     let cfg = config();
     state::set_last_error(PregError::NoError);
     let mut out = HashTable::new();
-    for (key, entry) in entries(input) {
-        let s = vm.value_to_string(&entry)?;
+    // Entries are copied as they are, so references stay references.
+    let raw: Vec<(ArrayKey, Value)> = input.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+    for (key, entry) in raw {
+        let s = vm.value_to_string(&entry.deref())?;
         match php_pcre::grep(re, &cfg, [s.as_bytes()], invert) {
             Ok(kept) => {
                 if !kept.is_empty() {

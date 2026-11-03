@@ -14,6 +14,7 @@
 
 mod convert;
 mod functions;
+mod memory;
 mod state;
 
 use php_runtime::Value;
