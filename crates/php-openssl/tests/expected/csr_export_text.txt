@@ -1,0 +1,60 @@
+Certificate Request:
+    Data:
+        Version: 1 (0x0)
+        Subject: C=NL, ST=Noord Brabant, L=Uden, O=Triconnect, OU=Triconnect, CN=\x00*\x00.\x00t\x00r\x00i\x00c\x00o\x00n\x00n\x00e\x00c\x00t\x00.\x00n\x00l
+        Subject Public Key Info:
+            Public Key Algorithm: rsaEncryption
+                Public-Key: (1024 bit)
+                Modulus:
+                    00:d8:c4:fe:a2:80:2a:0a:3d:df:5e:b6:1e:1b:57:
+                    39:97:6f:ba:71:79:78:6f:cf:14:ad:b2:9f:ab:80:
+                    50:35:a0:65:c8:8f:a0:a0:6c:96:02:fa:6b:ab:0a:
+                    f9:17:5c:4b:b2:e3:59:d8:d6:10:e3:80:34:6c:d9:
+                    63:52:a4:15:e9:73:c6:b2:23:20:64:86:24:70:bd:
+                    7a:e6:de:6d:db:b6:2d:61:45:33:97:04:30:38:87:
+                    d1:04:83:f5:17:62:cb:bb:2f:48:b5:af:9e:05:03:
+                    62:3d:30:c1:df:a6:89:5d:9d:bb:35:05:1e:7b:ac:
+                    8f:d8:95:3e:90:fd:b3:8e:d1
+                Exponent: 65537 (0x10001)
+        Attributes:
+            1.3.6.1.4.1.311.13.2.3   :5.2.3790.2
+            1.3.6.1.4.1.311.13.2.2   :unable to print attribute
+            Requested Extensions:
+                X509v3 Key Usage: critical
+                    Digital Signature, Non Repudiation, Key Encipherment, Data Encipherment
+                S/MIME Capabilities: 
+                    050...*.H........0...*.H........0...+....0
+..*.H....
+                X509v3 Extended Key Usage: 
+                    TLS Web Server Authentication
+    Signature Algorithm: sha1WithRSAEncryption
+    Signature Value:
+        38:6a:08:94:90:86:e5:84:5f:a7:d3:0b:61:e2:f4:18:f8:fc:
+        0c:69:dc:9a:06:90:38:7a:9a:f8:4c:a2:f4:40:49:00:d1:b4:
+        01:6c:81:11:c3:97:43:13:75:90:8b:a6:95:14:97:ba:cb:ce:
+        f4:43:29:81:c2:62:88:bd:f0:41:7c:ec:b2:03:42:25:42:af:
+        e7:bb:26:e1:cd:03:50:6d:23:0a:17:54:fc:da:1a:5f:87:5c:
+        36:47:05:46:68:6a:f0:ed:fe:aa:1f:e0:8b:c8:fd:72:76:f0:
+        4f:be:60:fc:f0:7c:22:89:b3:41:04:1d:dc:47:6d:e6:10:41:
+        98:51
+-----BEGIN CERTIFICATE REQUEST-----
+MIIDYzCCAswCAQAwgYcxCzAJBgNVBAYTAk5MMRYwFAYDVQQIEw1Ob29yZCBCcmFi
+YW50MQ0wCwYDVQQHEwRVZGVuMRMwEQYDVQQKEwpUcmljb25uZWN0MRMwEQYDVQQL
+EwpUcmljb25uZWN0MScwJQYDVQQDHh4AKgAuAHQAcgBpAGMAbwBuAG4AZQBjAHQA
+LgBuAGwwgZ8wDQYJKoZIhvcNAQEBBQADgY0AMIGJAoGBANjE/qKAKgo93162HhtX
+OZdvunF5eG/PFK2yn6uAUDWgZciPoKBslgL6a6sK+RdcS7LjWdjWEOOANGzZY1Kk
+FelzxrIjIGSGJHC9eubebdu2LWFFM5cEMDiH0QSD9Rdiy7svSLWvngUDYj0wwd+m
+iV2duzUFHnusj9iVPpD9s47RAgMBAAGgggGZMBoGCisGAQQBgjcNAgMxDBYKNS4y
+LjM3OTAuMjB7BgorBgEEAYI3AgEOMW0wazAOBgNVHQ8BAf8EBAMCBPAwRAYJKoZI
+hvcNAQkPBDcwNTAOBggqhkiG9w0DAgICAIAwDgYIKoZIhvcNAwQCAgCAMAcGBSsO
+AwIHMAoGCCqGSIb3DQMHMBMGA1UdJQQMMAoGCCsGAQUFBwMBMIH9BgorBgEEAYI3
+DQICMYHuMIHrAgEBHloATQBpAGMAcgBvAHMAbwBmAHQAIABSAFMAQQAgAFMAQwBo
+AGEAbgBuAGUAbAAgAEMAcgB5AHAAdABvAGcAcgBhAHAAaABpAGMAIABQAHIAbwB2
+AGkAZABlAHIDgYkAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+AAAAADANBgkqhkiG9w0BAQUFAAOBgQA4agiUkIblhF+n0wth4vQY+PwMadyaBpA4
+epr4TKL0QEkA0bQBbIERw5dDE3WQi6aVFJe6y870QymBwmKIvfBBfOyyA0IlQq/n
+uybhzQNQbSMKF1T82hpfh1w2RwVGaGrw7f6qH+CLyP1ydvBPvmD88HwiibNBBB3c
+R23mEEGYUQ==
+-----END CERTIFICATE REQUEST-----

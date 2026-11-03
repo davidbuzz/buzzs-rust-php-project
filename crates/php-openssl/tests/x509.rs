@@ -197,3 +197,33 @@ fn export() {
         .unwrap());
     assert_eq!(warnings(&mut o), ["Error opening file /nonexistent/dir/x"]);
 }
+
+#[test]
+fn export_text_matches_php() {
+    let mut o = OpenSsl::new();
+    let data = read("cert.crt");
+    let got = o.x509_export(CertArg::Str(&data), false).unwrap().unwrap();
+    let want = std::fs::read(format!(
+        "{}/tests/expected/x509_export_text_cert.txt",
+        env!("CARGO_MANIFEST_DIR")
+    ))
+    .unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&got),
+        String::from_utf8_lossy(&want)
+    );
+    let csr = read("cert.csr");
+    let got = o
+        .csr_export(php_openssl::CsrArg::Str(&csr), false)
+        .unwrap()
+        .unwrap();
+    let want = std::fs::read(format!(
+        "{}/tests/expected/csr_export_text.txt",
+        env!("CARGO_MANIFEST_DIR")
+    ))
+    .unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&got),
+        String::from_utf8_lossy(&want)
+    );
+}
