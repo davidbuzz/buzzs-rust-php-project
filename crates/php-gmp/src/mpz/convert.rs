@@ -125,7 +125,7 @@ impl Mpz {
                 if d >= base {
                     return None;
                 }
-                digits.push(d as u8);
+                digits.push(u8::try_from(d).unwrap_or(0));
             }
             c = next();
         }
@@ -294,7 +294,7 @@ fn mag_to_digits(m: &[u64], base: u32) -> Vec<u8> {
                     v |= next << (64 - off);
                 }
             }
-            out.push((v & ((1 << bits) - 1)) as u8);
+            out.push(u8::try_from(v & ((1 << bits) - 1)).unwrap_or(0));
         }
         return out;
     }
@@ -328,7 +328,7 @@ fn mag_to_digits(m: &[u64], base: u32) -> Vec<u8> {
         let mut buf = vec![0u8; k];
         let mut v = *g;
         for slot in buf.iter_mut().rev() {
-            *slot = (v % b) as u8;
+            *slot = u8::try_from(v % b).unwrap_or(0);
             v /= b;
         }
         if gi == 0 {

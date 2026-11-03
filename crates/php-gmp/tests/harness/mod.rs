@@ -2,7 +2,7 @@
 //! (argument conversion in order, then the function), rendering results in a
 //! compact form so `.phpt` expectations can be transcribed directly.
 
-#![allow(dead_code)]
+#![allow(dead_code, clippy::many_single_char_names)]
 
 use php_gmp::php::{self, GmpError, GmpRandom, Num, StrOrInt};
 use php_gmp::Mpz;
@@ -218,7 +218,10 @@ pub fn call(func: &str, args: &[V]) -> String {
                     php::gmp_export(&x, opt(1, 1), opt(2, php::DEFAULT_IMPORT_EXPORT_FLAGS))?;
                 format!(
                     "hex({})",
-                    bytes.iter().map(|b| format!("{b:02x}")).collect::<String>()
+                    bytes.iter().fold(String::new(), |mut s, b| {
+                        let _ = std::fmt::Write::write_fmt(&mut s, format_args!("{b:02x}"));
+                        s
+                    })
                 )
             }
             "gmp_import" => {

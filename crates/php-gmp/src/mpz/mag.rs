@@ -2,6 +2,15 @@
 //!
 //! All functions accept non-normalized input unless documented otherwise and
 //! return normalized vectors (no high zero limbs; zero is the empty vector).
+//!
+//! Limb arithmetic deliberately splits `u128`/`i128` products into their low
+//! and high 64-bit halves, so truncating casts are the intended semantics.
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_possible_wrap,
+    clippy::many_single_char_names
+)]
 
 use std::cmp::Ordering;
 

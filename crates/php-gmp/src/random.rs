@@ -73,6 +73,14 @@ fn mangle_seed(r: &Mpz) -> Mpz {
     r
 }
 
+/// Splits a limb into its low and high 32-bit halves.
+fn split_u64(v: u64) -> [u32; 2] {
+    [
+        u32::try_from(v & 0xFFFF_FFFF).unwrap_or(0),
+        u32::try_from(v >> 32).unwrap_or(0),
+    ]
+}
+
 fn low_bits(a: &[u64], bits: usize) -> Vec<u64> {
     let full = bits / 64;
     let mut v: Vec<u64> = a.iter().take(full + 1).copied().collect();
@@ -110,8 +118,9 @@ impl MtState {
         let limbs = seed1.limbs();
         let mut words = Vec::with_capacity(limbs.len() * 2);
         for l in limbs {
-            words.push(*l as u32);
-            words.push((*l >> 32) as u32);
+            let [lo, hi] = split_u64(*l);
+            words.push(lo);
+            words.push(hi);
         }
         while words.last() == Some(&0) {
             words.pop();

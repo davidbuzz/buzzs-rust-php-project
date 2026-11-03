@@ -317,12 +317,11 @@ impl Mpz {
                 let mut acc = vec![1u64];
                 let mut small: u64 = 1;
                 for i in lo..=hi {
-                    match small.checked_mul(i) {
-                        Some(v) => small = v,
-                        None => {
-                            acc = mag::mul_limb_add(&acc, small, 0);
-                            small = i;
-                        }
+                    if let Some(v) = small.checked_mul(i) {
+                        small = v;
+                    } else {
+                        acc = mag::mul_limb_add(&acc, small, 0);
+                        small = i;
                     }
                 }
                 return mag::mul_limb_add(&acc, small, 0);

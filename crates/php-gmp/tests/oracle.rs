@@ -1,8 +1,10 @@
+#![allow(clippy::many_single_char_names)]
 //! Cross-checks the engine against results recorded from the system libgmp
 //! (`tests/data/gen_oracle.py`, GMP 6.3.0 via ctypes).
 
 use php_gmp::random::MtState;
 use php_gmp::{Endian, Mpz, Round, WordOrder};
+use std::fmt::Write as _;
 
 fn z(s: &str) -> Mpz {
     let (neg, digits) = s.strip_prefix('-').map_or((false, s), |d| (true, d));
@@ -37,7 +39,10 @@ fn unhex(s: &str) -> Vec<u8> {
 }
 
 fn hexbytes(b: &[u8]) -> String {
-    b.iter().map(|x| format!("{x:02x}")).collect()
+    b.iter().fold(String::new(), |mut s, x| {
+        let _ = write!(s, "{x:02x}");
+        s
+    })
 }
 
 fn order(s: &str) -> WordOrder {
@@ -173,7 +178,7 @@ fn eval(f: &[&str]) -> Vec<String> {
                     format!("{lhs}={}", h(&v))
                 })
                 .collect();
-            return vec![f[0].to_string(), f[1].to_string(), parts.join(",")];
+            vec![f[0].to_string(), f[1].to_string(), parts.join(",")]
         }
         other => panic!("unknown op {other}"),
     }

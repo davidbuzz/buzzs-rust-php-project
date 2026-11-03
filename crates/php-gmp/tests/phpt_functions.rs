@@ -522,8 +522,8 @@ fn gcd_lcm_family() {
         let out = call("gmp_gcdext", &[a.clone(), b.clone()]);
         assert!(out.starts_with(&format!("g={g_} ")), "{out}");
         let parts: Vec<&str> = out.split(' ').collect();
-        let s = Mpz::parse(parts[1][2..].as_bytes(), 10).unwrap();
-        let t = Mpz::parse(parts[2][2..].as_bytes(), 10).unwrap();
+        let s = Mpz::parse(&parts[1].as_bytes()[2..], 10).unwrap();
+        let t = Mpz::parse(&parts[2].as_bytes()[2..], 10).unwrap();
         let to = |v: &harness::V| match v {
             I(i) => Mpz::from(*i),
             S(s) => Mpz::parse(s.as_bytes(), 10).unwrap(),

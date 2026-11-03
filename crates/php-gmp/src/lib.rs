@@ -10,6 +10,9 @@
 //!   (un)serialization helpers and operator overloading with PHP's exact
 //!   error messages.
 
+// Number-theoretic code follows the usual mathematical notation (a, b, n, q, r...).
+#![allow(clippy::many_single_char_names)]
+
 pub mod mpz;
 pub mod php;
 pub mod random;

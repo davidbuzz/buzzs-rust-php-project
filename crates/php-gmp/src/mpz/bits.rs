@@ -179,9 +179,9 @@ mod tests {
     fn bit_ops() {
         let a = Mpz::from(-12);
         let b = Mpz::from(10);
-        assert_eq!(a.and(&b), Mpz::from(-12 & 10));
-        assert_eq!(a.or(&b), Mpz::from(-12 | 10));
-        assert_eq!(a.xor(&b), Mpz::from(-12 ^ 10));
+        assert_eq!(a.and(&b), Mpz::from(-0b1100 & 0b1010));
+        assert_eq!(a.or(&b), Mpz::from(-0b1100 | 0b1010));
+        assert_eq!(a.xor(&b), Mpz::from(-0b1100 ^ 0b1010));
         assert_eq!(a.com(), Mpz::from(11));
         assert!(a.test_bit(100));
         assert!(!a.test_bit(0));

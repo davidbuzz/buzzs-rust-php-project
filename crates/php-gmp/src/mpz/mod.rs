@@ -17,6 +17,7 @@ use std::ops::{Add, Mul, Neg, Sub};
 /// The magnitude is stored as little-endian 64-bit limbs without high zero
 /// limbs; zero is never negative.
 #[derive(Clone, PartialEq, Eq, Hash, Default)]
+#[must_use]
 pub struct Mpz {
     neg: bool,
     mag: Vec<u64>,
@@ -116,7 +117,7 @@ impl Mpz {
                 let m = self.mag[0];
                 if self.neg {
                     if m <= 1u64 << 63 {
-                        Some((m as i64).wrapping_neg())
+                        Some(0i64.wrapping_sub_unsigned(m))
                     } else {
                         None
                     }
@@ -146,10 +147,10 @@ impl Mpz {
     /// (two's complement style for negative values), as GMP does.
     pub fn get_si(&self) -> i64 {
         let zl = self.low_u64();
-        let low = (zl & (i64::MAX as u64)) as i64;
+        let low = i64::try_from(zl & (i64::MAX as u64)).unwrap_or(0);
         match self.sign() {
             1 => low,
-            -1 => -1 - ((zl.wrapping_sub(1) & (i64::MAX as u64)) as i64),
+            -1 => -1 - i64::try_from(zl.wrapping_sub(1) & (i64::MAX as u64)).unwrap_or(0),
             _ => 0,
         }
     }
@@ -165,13 +166,13 @@ impl Mpz {
             // Exact up to 53 bits; truncate the rest explicitly.
             let m = self.mag[0];
             let drop = bits.saturating_sub(53);
-            ((m >> drop) as f64) * (2f64).powi(drop as i32)
+            ((m >> drop) as f64) * (2f64).powi(i32::try_from(drop).unwrap_or(0))
         } else if bits > 1024 {
             f64::INFINITY
         } else {
             let top = mag::shr(&self.mag, bits - 53);
             let m = top[0] as f64;
-            let e = (bits - 53) as i32;
+            let e = i32::try_from(bits - 53).unwrap_or(i32::MAX);
             // m < 2^53 and e <= 971, so the product is exact or overflows.
             let half = e / 2;
             m * (2f64).powi(half) * (2f64).powi(e - half)
@@ -196,7 +197,7 @@ impl Mpz {
             return Some(Self::zero());
         }
         let bits = a.to_bits();
-        let exp = ((bits >> 52) & 0x7FF) as i64 - 1075;
+        let exp = i64::try_from((bits >> 52) & 0x7FF).unwrap_or(0) - 1075;
         let mant = (bits & ((1u64 << 52) - 1)) | (1u64 << 52);
         let mag = if exp >= 0 {
             mag::shl(&[mant], exp as u64)
@@ -499,8 +500,14 @@ mod tests {
         assert_eq!(z("-9223372036854775808").get_si(), i64::MIN);
         assert_eq!(z("-9223372036854775809").get_si(), -1);
         assert_eq!(z("18446744073709551615").get_si(), i64::MAX);
-        assert_eq!(z("9007199254740993").to_f64(), 9_007_199_254_740_992.0);
-        assert_eq!(z("-9007199254740995").to_f64(), -9_007_199_254_740_994.0);
+        assert_eq!(
+            z("9007199254740993").to_f64().to_bits(),
+            9_007_199_254_740_992f64.to_bits()
+        );
+        assert_eq!(
+            z("-9007199254740995").to_f64().to_bits(),
+            (-9_007_199_254_740_994f64).to_bits()
+        );
     }
 
     #[test]

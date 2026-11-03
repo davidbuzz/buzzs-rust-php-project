@@ -346,7 +346,7 @@ pub fn gmp_intval(num: &Mpz) -> i64 {
 
 /// `gmp_strval(GMP|int|string $num, int $base = 10)`.
 pub fn gmp_strval(num: &Mpz, base: i64) -> Result<String, GmpError> {
-    if (-1..=1).contains(&base) || base > GMP_MAX_BASE || base < -36 {
+    if (-1..=1).contains(&base) || !(-36..=GMP_MAX_BASE).contains(&base) {
         return Err(GmpError::value_arg(
             2,
             format!("must be between 2 and {GMP_MAX_BASE}, or -2 and -36"),
