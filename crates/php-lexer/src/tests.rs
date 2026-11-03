@@ -108,3 +108,161 @@ fn iterator_interface() {
         ]
     );
 }
+
+fn significant(src: &str) -> Vec<(TokenKind, String)> {
+    kinds(src)
+        .into_iter()
+        .filter(|t| !t.0.is_trivia())
+        .map(|t| (t.0, t.1))
+        .collect()
+}
+
+#[test]
+fn asymmetric_visibility_tokens() {
+    use TokenKind as T;
+    let t = significant("<?php public(set) protected(SET) PRIVATE(set) public (set) public(get)");
+    let k: Vec<_> = t.iter().map(|x| x.0).collect();
+    assert_eq!(
+        k,
+        vec![
+            T::PublicSet,
+            T::ProtectedSet,
+            T::PrivateSet,
+            T::Public,
+            T::LParen,
+            T::String,
+            T::RParen,
+            T::Public,
+            T::LParen,
+            T::String,
+            T::RParen
+        ]
+    );
+    assert_eq!(t[1].1, "protected(SET)");
+}
+
+#[test]
+fn pipe_void_cast_property_constant() {
+    use TokenKind as T;
+    let k: Vec<_> = significant(
+        "<?php $a |> f(...); $a ||> $b; $a |>= 1; (void) f(); ( VOID\t)$x; __PROPERTY__;",
+    )
+    .into_iter()
+    .map(|x| x.0)
+    .collect();
+    assert_eq!(
+        k,
+        vec![
+            T::Variable,
+            T::PipeOp,
+            T::String,
+            T::LParen,
+            T::Ellipsis,
+            T::RParen,
+            T::Semicolon,
+            T::Variable,
+            T::BooleanOr,
+            T::Gt,
+            T::Variable,
+            T::Semicolon,
+            T::Variable,
+            T::PipeOp,
+            T::Equals,
+            T::LNumber,
+            T::Semicolon,
+            T::VoidCast,
+            T::String,
+            T::LParen,
+            T::RParen,
+            T::Semicolon,
+            T::VoidCast,
+            T::Variable,
+            T::Semicolon,
+            T::PropertyC,
+            T::Semicolon
+        ]
+    );
+}
+
+#[test]
+fn comments_after_object_operator() {
+    // gh14961 (fixed in php-src master): comments between `->` and a keyword
+    // keep the scanner looking for a property name.
+    use TokenKind as T;
+    let t = kinds("<?php $c->/* c */class; $c?->\n// x\nclass; $c->\n# y\nclass;");
+    let k: Vec<_> = t
+        .iter()
+        .filter(|t| !matches!(t.0, T::Whitespace))
+        .map(|t| t.0)
+        .collect();
+    assert_eq!(
+        k,
+        vec![
+            T::OpenTag,
+            T::Variable,
+            T::ObjectOperator,
+            T::Comment,
+            T::String,
+            T::Semicolon,
+            T::Variable,
+            T::NullsafeObjectOperator,
+            T::Comment,
+            T::String,
+            T::Semicolon,
+            T::Variable,
+            T::ObjectOperator,
+            T::Comment,
+            T::String,
+            T::Semicolon
+        ]
+    );
+}
+
+#[test]
+fn keywords_are_case_insensitive_and_whole_words() {
+    use TokenKind as T;
+    let k: Vec<_> = significant("<?php CLASS Classes iF ELSEIF __halt_COMPILER Die")
+        .into_iter()
+        .map(|x| x.0)
+        .collect();
+    assert_eq!(
+        k,
+        vec![
+            T::Class,
+            T::String,
+            T::If,
+            T::ElseIf,
+            T::HaltCompiler,
+            T::Exit
+        ]
+    );
+}
+
+#[test]
+fn line_numbers() {
+    use TokenKind as T;
+    let t = kinds("<?php\n$a\n=\n<<<X\n  a\n  b\n  X\n;\n/* c\n*/ $b ?>\nx\ny<?php $c");
+    let lines: Vec<_> = t
+        .iter()
+        .filter(|t| !matches!(t.0, TokenKind::Whitespace))
+        .map(|t| (t.0, t.2))
+        .collect();
+    assert_eq!(
+        lines,
+        vec![
+            (T::OpenTag, 1),
+            (T::Variable, 2),
+            (T::Equals, 3),
+            (T::StartHeredoc, 4),
+            (T::EncapsedAndWhitespace, 5),
+            (T::EndHeredoc, 7),
+            (T::Semicolon, 8),
+            (T::Comment, 9),
+            (T::Variable, 10),
+            (T::CloseTag, 10),
+            (T::InlineHtml, 11),
+            (T::OpenTag, 12),
+            (T::Variable, 12),
+        ]
+    );
+}
