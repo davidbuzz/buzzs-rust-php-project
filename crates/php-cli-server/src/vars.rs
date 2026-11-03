@@ -94,7 +94,13 @@ pub fn server_entries(req: &Request, facts: &ServerFacts<'_>) -> Vec<(Vec<u8>, V
     for (k, v) in &req.headers {
         let key: Vec<u8> = k
             .iter()
-            .map(|&c| if c == b'-' { b'_' } else { c.to_ascii_uppercase() })
+            .map(|&c| {
+                if c == b'-' {
+                    b'_'
+                } else {
+                    c.to_ascii_uppercase()
+                }
+            })
             .collect();
         let mut real = b"HTTP_".to_vec();
         real.extend_from_slice(&key);
@@ -262,8 +268,8 @@ fn base64_decode(s: &[u8]) -> Vec<u8> {
 /// `sapi_read_standard_form_data()`: enforces `post_max_size`; returns
 /// whether the body was accepted.
 fn read_standard_form_data(vm: &mut Vm, ctx: &RequestCtx) -> bool {
-    let content_length = i64::try_from(ctx.request.content.as_ref().map_or(0, Vec::len))
-        .unwrap_or(i64::MAX);
+    let content_length =
+        i64::try_from(ctx.request.content.as_ref().map_or(0, Vec::len)).unwrap_or(i64::MAX);
     let post_max_size = vm.ini_long("post_max_size");
     if post_max_size > 0 && content_length > post_max_size {
         startup_warning(
@@ -333,8 +339,9 @@ pub fn populate(vm: &mut Vm, ctx: &RequestCtx, facts: &ServerFacts<'_>, auth: &A
                             file_uploads: vm.ini_bool("file_uploads"),
                             tmp_dirs: tmp_dirs(vm),
                         };
-                        let content_length = i64::try_from(req.content.as_ref().map_or(0, Vec::len))
-                            .unwrap_or(i64::MAX);
+                        let content_length =
+                            i64::try_from(req.content.as_ref().map_or(0, Vec::len))
+                                .unwrap_or(i64::MAX);
                         let mut read = |buf: &mut [u8]| ctx.read_post(buf);
                         let outcome = multipart::parse(ct, content_length, &upload, &mut read);
                         *ctx.body.borrow_mut() = Body::Consumed;
@@ -567,8 +574,14 @@ mod tests {
             auth_data(Some(b"Basic dXNlcjpwYXNz")),
             (Some(b"user".to_vec()), Some(b"pass".to_vec()), None)
         );
-        assert_eq!(auth_data(Some(b"Digest x")), (None, None, Some(b"x".to_vec())));
+        assert_eq!(
+            auth_data(Some(b"Digest x")),
+            (None, None, Some(b"x".to_vec()))
+        );
         assert_eq!(build_argv(b"a+b"), vec![b"a".to_vec(), b"b".to_vec()]);
-        assert_eq!(content_type_key(b"Multipart/Form-Data; b=1"), b"multipart/form-data");
+        assert_eq!(
+            content_type_key(b"Multipart/Form-Data; b=1"),
+            b"multipart/form-data"
+        );
     }
 }

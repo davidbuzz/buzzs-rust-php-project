@@ -168,8 +168,27 @@ const LF: u8 = b'\n';
 /// `tokens[]`: header-name characters, lower-cased (0 = invalid).
 fn token(c: u8) -> u8 {
     match c {
-        b' ' | b'!' | b'"' | b'#' | b'$' | b'%' | b'&' | b'\'' | b'*' | b'+' | b'-' | b'.'
-        | b'/' | b'0'..=b'9' | b'a'..=b'z' | b'^' | b'_' | b'`' | b'|' | b'}' | b'~' => c,
+        b' '
+        | b'!'
+        | b'"'
+        | b'#'
+        | b'$'
+        | b'%'
+        | b'&'
+        | b'\''
+        | b'*'
+        | b'+'
+        | b'-'
+        | b'.'
+        | b'/'
+        | b'0'..=b'9'
+        | b'a'..=b'z'
+        | b'^'
+        | b'_'
+        | b'`'
+        | b'|'
+        | b'}'
+        | b'~' => c,
         b'A'..=b'Z' => c | 0x20,
         _ => 0,
     }
@@ -338,7 +357,11 @@ impl Parser {
 
     /// `php_http_parser_execute()`: parses `data` and returns the number of
     /// bytes consumed (less than `data.len()` on error).
-    #[allow(clippy::too_many_lines, clippy::cognitive_complexity)]
+    #[allow(
+        clippy::too_many_lines,
+        clippy::cognitive_complexity,
+        clippy::many_single_char_names
+    )]
     pub fn execute<H: Handler + ?Sized>(&mut self, h: &mut H, data: &[u8]) -> usize {
         let len = data.len();
         let mut state = self.state;
@@ -488,8 +511,7 @@ impl Parser {
                             self.method = Method::Put;
                         } else if index == 1 && self.method == Method::Post && ch == b'A' {
                             self.method = Method::Patch;
-                        } else if index == 1 && self.method == Method::Subscribe && ch == b'E'
-                        {
+                        } else if index == 1 && self.method == Method::Subscribe && ch == b'E' {
                             self.method = Method::Search;
                         } else if index == 2 && self.method == Method::Unlock && ch == b'S' {
                             self.method = Method::Unsubscribe;
@@ -890,13 +912,31 @@ impl Parser {
                                 self.content_length = self.content_length * 10 + d;
                             }
                             HState::MatchingTransferEncodingChunked => {
-                                hs = match_word(&mut index, c, b"chunked", hs, HState::TransferEncodingChunked);
+                                hs = match_word(
+                                    &mut index,
+                                    c,
+                                    b"chunked",
+                                    hs,
+                                    HState::TransferEncodingChunked,
+                                );
                             }
                             HState::MatchingConnectionKeepAlive => {
-                                hs = match_word(&mut index, c, b"keep-alive", hs, HState::ConnectionKeepAlive);
+                                hs = match_word(
+                                    &mut index,
+                                    c,
+                                    b"keep-alive",
+                                    hs,
+                                    HState::ConnectionKeepAlive,
+                                );
                             }
                             HState::MatchingConnectionClose => {
-                                hs = match_word(&mut index, c, b"close", hs, HState::ConnectionClose);
+                                hs = match_word(
+                                    &mut index,
+                                    c,
+                                    b"close",
+                                    hs,
+                                    HState::ConnectionClose,
+                                );
                             }
                             HState::TransferEncodingChunked
                             | HState::ConnectionKeepAlive
@@ -966,7 +1006,8 @@ impl Parser {
                     }
                     State::BodyIdentity => {
                         let avail = len - p;
-                        let to_read = avail.min(usize::try_from(self.content_length).unwrap_or(usize::MAX));
+                        let to_read =
+                            avail.min(usize::try_from(self.content_length).unwrap_or(usize::MAX));
                         if to_read > 0 {
                             let info = self.info();
                             if 0 != h.on_body(&info, &data[p..p + to_read]) {
@@ -1098,7 +1139,6 @@ impl Parser {
 /// One step of matching a header name against the special names.
 fn header_field_step(hs: HState, index: &mut u32, c: u8, ch: u8) -> HState {
     match hs {
-        HState::General => HState::General,
         HState::C => {
             *index += 1;
             if c == b'o' {
@@ -1123,9 +1163,7 @@ fn header_field_step(hs: HState, index: &mut u32, c: u8, ch: u8) -> HState {
                 _ => HState::General,
             }
         }
-        HState::MatchingConnection => {
-            match_word(index, c, b"connection", hs, HState::Connection)
-        }
+        HState::MatchingConnection => match_word(index, c, b"connection", hs, HState::Connection),
         HState::MatchingProxyConnection => {
             match_word(index, c, b"proxy-connection", hs, HState::Connection)
         }

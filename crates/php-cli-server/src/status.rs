@@ -261,7 +261,10 @@ pub fn error_page(
         body.extend_from_slice(status_str.as_bytes());
         let rest = parts.next().unwrap_or_default();
         if status == 413 {
-            body.extend_from_slice(rest.replacen("%d", &post_max_size.to_string(), 1).as_bytes());
+            body.extend_from_slice(
+                rest.replacen("%d", &post_max_size.to_string(), 1)
+                    .as_bytes(),
+            );
         } else if let Some((a, b)) = rest.split_once("%s") {
             body.extend_from_slice(a.as_bytes());
             body.extend_from_slice(&escape_html(request_uri));

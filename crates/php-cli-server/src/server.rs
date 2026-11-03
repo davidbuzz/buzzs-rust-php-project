@@ -18,9 +18,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc};
 use std::time::Duration;
 
-/// How many VMs are kept ready for upcoming requests.
-const PREPARED_VMS: usize = 4;
-
 /// Cleared by SIGINT (`php_cli_server_sigint_handler`).
 static RUNNING: AtomicBool = AtomicBool::new(true);
 
@@ -72,7 +69,8 @@ pub struct Server {
     clients: BTreeMap<RawFd, Client>,
     config: Arc<ServerConfig>,
     post_max_size: i64,
-    prepared: std::collections::VecDeque<Prepared>,
+    /// The VM after module startup; each request runs on a forked copy.
+    template: Option<crate::sapi::PreparedVm>,
 }
 
 /// `php_cli_server_parse_addr()`: `host:port` or `[host]:port`.
@@ -163,44 +161,21 @@ impl Server {
     /// A server on `listener`.
     pub fn new(listener: TcpListener, config: ServerConfig, post_max_size: i64) -> Self {
         let config = Arc::new(config);
-        let prepared: std::collections::VecDeque<Prepared> =
-            Prepared::spawn(&config).into_iter().collect();
-        // Like PHP, be ready to serve when the banner appears.
-        let deadline = std::time::Instant::now() + Duration::from_millis(2500);
-        while prepared.front().is_some_and(|p| !p.ready.load(Ordering::SeqCst))
-            && std::time::Instant::now() < deadline
-        {
-            std::thread::sleep(Duration::from_millis(10));
-        }
+        // Module startup happens once, before the banner (as in PHP);
+        // requests run in forked children of this process.
+        let template = Some(crate::sapi::prepare_vm(&config));
         Server {
             listener,
             clients: BTreeMap::new(),
             config,
             post_max_size,
-            prepared,
+            template,
         }
-    }
-
-    /// Keeps [`PREPARED_VMS`] VMs ready, preparing one at a time (they
-    /// would otherwise compete for the CPU).  Returns whether more are
-    /// still to be prepared.
-    fn top_up(&mut self) -> bool {
-        let busy = self
-            .prepared
-            .iter()
-            .any(|p| !p.ready.load(Ordering::SeqCst));
-        if !busy && self.prepared.len() < PREPARED_VMS {
-            if let Some(p) = Prepared::spawn(&self.config) {
-                self.prepared.push_back(p);
-            }
-        }
-        self.prepared.len() < PREPARED_VMS || busy
     }
 
     /// `php_cli_server_do_event_loop()`: returns the exit status.
     pub fn run(&mut self) -> i32 {
         while RUNNING.load(Ordering::SeqCst) {
-            let timeout = if self.top_up() { 50 } else { 1000 };
             let mut fds = vec![libc::pollfd {
                 fd: self.listener.as_raw_fd(),
                 events: libc::POLLIN,
@@ -218,7 +193,7 @@ impl Server {
                     revents: 0,
                 });
             }
-            match poll(&mut fds, timeout) {
+            match poll(&mut fds, 1000) {
                 Ok(0) => {}
                 Ok(_) => {
                     for p in &fds {
@@ -475,12 +450,11 @@ impl Server {
             self.begin_send_static(fd);
             return;
         }
-        let prepared = self
-            .prepared
-            .pop_front()
-            .or_else(|| Prepared::spawn(&self.config));
-        let outcome = run_php(c, prepared, is_static);
-        self.top_up();
+        let outcome = if self.template.is_some() {
+            run_php_forked(c, &mut self.template, &self.config, is_static)
+        } else {
+            run_php(c, Prepared::spawn(&self.config), is_static)
+        };
         match outcome {
             Outcome::Done => self.close(fd),
             Outcome::ServeStatic => self.begin_send_static(fd),
@@ -527,7 +501,6 @@ struct Job {
 struct Prepared {
     jobs: mpsc::Sender<Job>,
     done: mpsc::Receiver<Outcome>,
-    ready: Arc<AtomicBool>,
 }
 
 impl Prepared {
@@ -535,14 +508,11 @@ impl Prepared {
         let (jtx, jrx) = mpsc::channel::<Job>();
         let (dtx, drx) = mpsc::channel::<Outcome>();
         let config = config.clone();
-        let ready = Arc::new(AtomicBool::new(false));
-        let ready_flag = ready.clone();
         std::thread::Builder::new()
             .name("php-request".to_string())
             .stack_size(256 << 20)
             .spawn(move || {
                 let vm = crate::sapi::prepare_vm(&config);
-                ready_flag.store(true, Ordering::SeqCst);
                 let Ok(job) = jrx.recv() else {
                     return;
                 };
@@ -556,7 +526,6 @@ impl Prepared {
         Some(Prepared {
             jobs: jtx,
             done: drx,
-            ready,
         })
     }
 }
@@ -591,6 +560,76 @@ fn run_php(c: &mut Client, prepared: Option<Prepared>, is_static: bool) -> Outco
     outcome
 }
 
+/// Exit status of a request child that asks for the static file.
+const EXIT_SERVE_STATIC: i32 = 10;
+
+/// Runs the PHP part of a request in a forked child of the server, which
+/// inherits the started-up `template` VM (PHP's per-request startup
+/// without paying for module startup again) and leaves the server's state
+/// untouched.  Waits for the child, as PHP's server is single-threaded.
+fn run_php_forked(
+    c: &mut Client,
+    template: &mut Option<crate::sapi::PreparedVm>,
+    config: &Arc<ServerConfig>,
+    is_static: bool,
+) -> Outcome {
+    let _ = std::io::stderr().flush();
+    // SAFETY: the server thread is the only one doing work; the child only
+    // continues on this thread with its copy of the address space and ends
+    // with `_exit`.
+    let pid = unsafe { libc::fork() };
+    if pid < 0 {
+        return run_php(c, Prepared::spawn(config), is_static);
+    }
+    if pid == 0 {
+        // SAFETY: prctl has no memory-safety preconditions.
+        unsafe {
+            libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM);
+        }
+        let code = match (c.stream.try_clone(), template.take()) {
+            (Ok(stream), Some(vm)) => {
+                let _ = stream.set_nonblocking(false);
+                let _ = stream.set_write_timeout(Some(Duration::from_secs(10)));
+                let request = std::mem::take(&mut c.reader.request);
+                let ctx = Rc::new(RequestCtx::new(request, stream, c.addr.clone()));
+                let (outcome, vm) = crate::sapi::run_request(vm, &ctx, config, is_static);
+                // The process ends right away: skip the VM's destruction.
+                std::mem::forget(vm);
+                if outcome == Outcome::Done {
+                    // The response is complete: let the client see EOF now.
+                    let _ = ctx.stream.shutdown(std::net::Shutdown::Write);
+                }
+                std::mem::forget(ctx);
+                match outcome {
+                    Outcome::Done => 0,
+                    Outcome::ServeStatic => EXIT_SERVE_STATIC,
+                }
+            }
+            _ => 0,
+        };
+        let _ = std::io::stderr().flush();
+        // SAFETY: ends the child without running the parent's destructors.
+        unsafe { libc::_exit(code) }
+    }
+    let mut status = 0;
+    loop {
+        // SAFETY: waitpid writes the status into our local.
+        let r = unsafe { libc::waitpid(pid, &raw mut status, 0) };
+        if r == pid {
+            break;
+        }
+        if r < 0 && std::io::Error::last_os_error().kind() != ErrorKind::Interrupted {
+            return Outcome::Done;
+        }
+    }
+    let _ = c.stream.set_nonblocking(true);
+    if libc::WIFEXITED(status) && libc::WEXITSTATUS(status) == EXIT_SERVE_STATIC {
+        Outcome::ServeStatic
+    } else {
+        Outcome::Done
+    }
+}
+
 /// `php_cli_server_startup_workers()`: forks `PHP_CLI_SERVER_WORKERS`
 /// processes sharing the listening socket.  Returns the worker PIDs (in
 /// the master; empty in workers and without workers).
@@ -622,6 +661,7 @@ pub fn startup_workers() -> Vec<libc::pid_t> {
                     libc::_exit(1);
                 }
             }
+            log::set_pid(std::process::id());
             return Vec::new();
         }
         pids.push(pid);
@@ -645,7 +685,11 @@ pub fn wait_workers(pids: &[libc::pid_t]) {
 
 /// Logs the startup banner.
 pub fn banner(host: &str, port: u16) {
-    let (l, r) = if host.contains(':') { ("[", "]") } else { ("", "") };
+    let (l, r) = if host.contains(':') {
+        ("[", "]")
+    } else {
+        ("", "")
+    };
     log::logf(
         LOG_PROCESS,
         &format!(
@@ -661,7 +705,10 @@ mod tests {
 
     #[test]
     fn addresses() {
-        assert_eq!(parse_addr("localhost:8080"), Some(("localhost".into(), 8080)));
+        assert_eq!(
+            parse_addr("localhost:8080"),
+            Some(("localhost".into(), 8080))
+        );
         assert_eq!(parse_addr("[::1]:80"), Some(("::1".into(), 80)));
         assert_eq!(parse_addr("localhost:0"), Some(("localhost".into(), 0)));
         assert_eq!(parse_addr("localhost"), None);
@@ -675,10 +722,16 @@ mod tests {
     #[test]
     fn listen_errors() {
         let e = listen("192.168.1.999", 8080).unwrap_err();
-        assert!(e.starts_with("php_network_getaddresses: getaddrinfo for 192.168.1.999 failed"), "{e}");
+        assert!(
+            e.starts_with("php_network_getaddresses: getaddrinfo for 192.168.1.999 failed"),
+            "{e}"
+        );
         let l = listen("127.0.0.1", 0).unwrap();
         let port = l.local_addr().unwrap().port();
-        assert_eq!(listen("127.0.0.1", port).unwrap_err(), "Address already in use");
+        assert_eq!(
+            listen("127.0.0.1", port).unwrap_err(),
+            "Address already in use"
+        );
     }
 
     #[test]

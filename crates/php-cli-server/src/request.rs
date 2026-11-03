@@ -451,10 +451,8 @@ mod tests {
     }
 
     fn tmpdir(name: &str) -> std::path::PathBuf {
-        let d = std::env::temp_dir().join(format!(
-            "php-cli-server-test-{name}-{}",
-            std::process::id()
-        ));
+        let d =
+            std::env::temp_dir().join(format!("php-cli-server-test-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(d.join("sub/deeper")).unwrap();
         std::fs::create_dir_all(d.join("noindex")).unwrap();
@@ -479,7 +477,7 @@ mod tests {
     fn translation() {
         let d = tmpdir("translate");
         let root = d.as_os_str().as_bytes().to_vec();
-        let mut abs = |s: &str| {
+        let abs = |s: &str| {
             let mut v = root.clone();
             v.extend_from_slice(s.as_bytes());
             v
@@ -541,7 +539,14 @@ mod tests {
                 .iter()
                 .map(|(k, _)| k.as_slice())
                 .collect::<Vec<_>>(),
-            vec![&b"Host"[..], b"X-A", b"x-a", b"Set-Cookie", b"Empty", b"Content-Length"]
+            vec![
+                &b"Host"[..],
+                b"X-A",
+                b"x-a",
+                b"Set-Cookie",
+                b"Empty",
+                b"Content-Length"
+            ]
         );
         let _ = std::fs::remove_dir_all(&d);
     }

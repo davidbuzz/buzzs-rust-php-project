@@ -47,10 +47,16 @@ pub struct ServerConfig {
 impl std::fmt::Debug for ServerConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ServerConfig")
-            .field("document_root", &String::from_utf8_lossy(&self.document_root))
+            .field(
+                "document_root",
+                &String::from_utf8_lossy(&self.document_root),
+            )
             .field("host", &self.host)
             .field("port", &self.port)
-            .field("router", &self.router.as_ref().map(|r| String::from_utf8_lossy(r)))
+            .field(
+                "router",
+                &self.router.as_ref().map(|r| String::from_utf8_lossy(r)),
+            )
             .finish_non_exhaustive()
     }
 }
@@ -306,7 +312,10 @@ fn header(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 }
 
 fn header_remove(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let name = a.opt(0).filter(|v| !matches!(v, Value::Null)).map(|_| a.str(0));
+    let name = a
+        .opt(0)
+        .filter(|v| !matches!(v, Value::Null))
+        .map(|_| a.str(0));
     let r = ctx_or(Ok(false), |c| match &name {
         None => c.header_op(HeaderOp::DeleteAll),
         Some(n) => c.header_op(HeaderOp::Delete(n.as_bytes())),
@@ -503,7 +512,9 @@ fn path_of(s: &ZStr) -> PathBuf {
 #[allow(clippy::unnecessary_wraps)]
 fn is_uploaded_file(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let p = path_of(&a.str(0));
-    Ok(Value::Bool(ctx_or(false, |c| c.uploaded.borrow().contains(&p))))
+    Ok(Value::Bool(ctx_or(false, |c| {
+        c.uploaded.borrow().contains(&p)
+    })))
 }
 
 fn move_uploaded_file(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -523,7 +534,9 @@ fn move_uploaded_file(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             libc::umask(m);
             m
         };
-        if let Err(e) = std::fs::set_permissions(&to, std::fs::Permissions::from_mode(0o666 & !mask)) {
+        if let Err(e) =
+            std::fs::set_permissions(&to, std::fs::Permissions::from_mode(0o666 & !mask))
+        {
             vm.php_warning(&e.to_string())?;
         }
     } else if std::fs::copy(&from, &to).is_ok() {
@@ -590,6 +603,35 @@ fn router_return(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     Ok(v)
 }
 
+/// The `UPLOAD_ERR_*` constants (`php_rfc1867_register_constants`).
+pub const UPLOAD_ERR: &[(&str, i64)] = &[
+    ("UPLOAD_ERR_OK", 0),
+    ("UPLOAD_ERR_INI_SIZE", 1),
+    ("UPLOAD_ERR_FORM_SIZE", 2),
+    ("UPLOAD_ERR_PARTIAL", 3),
+    ("UPLOAD_ERR_NO_FILE", 4),
+    ("UPLOAD_ERR_NO_TMP_DIR", 6),
+    ("UPLOAD_ERR_CANT_WRITE", 7),
+    ("UPLOAD_ERR_EXTENSION", 8),
+];
+
+/// Registers the `UPLOAD_ERR_*` constants; core constants that every SAPI
+/// has (the CLI binary can register this module too).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Rfc1867Constants;
+
+impl Extension for Rfc1867Constants {
+    fn name(&self) -> &'static str {
+        "rfc1867"
+    }
+
+    fn register(&self, m: &mut ModuleBuilder<'_>) {
+        for (name, v) in UPLOAD_ERR {
+            m.constant(name, Value::Int(*v));
+        }
+    }
+}
+
 /// The `cli_server` module plus the SAPI-provided functions.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct CliServerModule;
@@ -616,6 +658,9 @@ impl Extension for CliServerModule {
             if let Some(b) = vm.native_function("error_log") {
                 ORIG_ERROR_LOG.with(|c| c.set(Some(b.handler)));
             }
+        }
+        for (name, v) in UPLOAD_ERR {
+            m.constant(name, Value::Int(*v));
         }
         m.constant("PHP_SAPI", str_value("cli-server"))
             .function("header(string $header, bool $replace = true, int $response_code = 0): void", header)
@@ -696,7 +741,13 @@ fn execute_script(vm: &mut Vm, src: &[u8], path: &[u8]) -> Result<(), Throw> {
 }
 
 /// `php_cli_server_log_response()`.
-pub fn log_response(client: &str, req: &Request, status: i32, message: Option<&str>, vm: Option<&Vm>) {
+pub fn log_response(
+    client: &str,
+    req: &Request,
+    status: i32,
+    message: Option<&str>,
+    vm: Option<&Vm>,
+) {
     let mut line = format!("{client} [{status}]: {} ", req.method.as_str()).into_bytes();
     line.extend_from_slice(req.uri());
     if let Some(m) = message {
@@ -774,7 +825,12 @@ pub fn run_request(
     (outcome, machine)
 }
 
-fn run_request_inner(vm: &mut Vm, ctx: &Rc<RequestCtx>, cfg: &ServerConfig, is_static: bool) -> Outcome {
+fn run_request_inner(
+    vm: &mut Vm,
+    ctx: &Rc<RequestCtx>,
+    cfg: &ServerConfig,
+    is_static: bool,
+) -> Outcome {
     ctx.refresh_facts(vm);
 
     // php_cli_server_request_startup() + php_request_startup()
@@ -822,17 +878,16 @@ fn run_request_inner(vm: &mut Vm, ctx: &Rc<RequestCtx>, cfg: &ServerConfig, is_s
         if let Some(dir) = p.parent() {
             let _ = std::env::set_current_dir(dir);
         }
-        r = match std::fs::read(p) {
-            Ok(src) => execute_script(vm, &src, &path),
-            Err(_) => {
-                let msg = format!(
-                    "Failed opening required '{}' (include_path='{}')",
-                    String::from_utf8_lossy(&path),
-                    String::from_utf8_lossy(&vm.ini_string("include_path").unwrap_or_default())
-                );
-                let _ = vm.raise(64, &msg);
-                Err(Throw::Fatal)
-            }
+        r = if let Ok(src) = std::fs::read(p) {
+            execute_script(vm, &src, &path)
+        } else {
+            let msg = format!(
+                "Failed opening required '{}' (include_path='{}')",
+                String::from_utf8_lossy(&path),
+                String::from_utf8_lossy(&vm.ini_string("include_path").unwrap_or_default())
+            );
+            let _ = vm.raise(64, &msg);
+            Err(Throw::Fatal)
         };
         apply_fatal_status(vm, ctx);
         let status = ctx.headers.borrow().response_code;

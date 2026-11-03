@@ -155,14 +155,23 @@ pub fn run(opts: &Options, extensions: ExtensionFactory) -> i32 {
         let p = std::path::Path::new(std::ffi::OsStr::from_bytes(dr));
         match std::fs::metadata(p) {
             Err(_) => {
-                log::raw(format!("Directory {} does not exist.\n", String::from_utf8_lossy(dr)).as_bytes());
+                log::raw(
+                    format!(
+                        "Directory {} does not exist.\n",
+                        String::from_utf8_lossy(dr)
+                    )
+                    .as_bytes(),
+                );
                 return 1;
             }
             Ok(m) if !m.is_dir() => {
-                log::raw(format!("{} is not a directory.\n", String::from_utf8_lossy(dr)).as_bytes());
+                log::raw(
+                    format!("{} is not a directory.\n", String::from_utf8_lossy(dr)).as_bytes(),
+                );
                 return 1;
             }
-            Ok(_) => std::fs::canonicalize(p).map_or_else(|_| dr.clone(), |c| c.into_os_string().into_vec()),
+            Ok(_) => std::fs::canonicalize(p)
+                .map_or_else(|_| dr.clone(), |c| c.into_os_string().into_vec()),
         }
     } else {
         std::env::current_dir().map_or_else(|_| b".".to_vec(), |c| c.into_os_string().into_vec())
@@ -237,7 +246,15 @@ mod tests {
     #[test]
     fn argument_parsing() {
         let o = parse_args(&args(&[
-            "-d", "a=1", "-t", "/tmp", "-n", "-S", "localhost:0", "router.php", "x",
+            "-d",
+            "a=1",
+            "-t",
+            "/tmp",
+            "-n",
+            "-S",
+            "localhost:0",
+            "router.php",
+            "x",
         ]))
         .unwrap();
         assert_eq!(o.address, "localhost:0");

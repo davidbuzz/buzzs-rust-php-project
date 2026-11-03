@@ -89,7 +89,7 @@ pub fn rewrite(src: &[u8]) -> Option<Vec<u8>> {
                         last -= 1;
                     }
                     let close_at = if last < k { toks[last].pos } else { end };
-                    inserts.push((t.pos + t.text.len(), format!(" \\{RETURN_HOOK}(")));
+                    inserts.push((toks[j].pos, format!("\\{RETURN_HOOK}(")));
                     inserts.push((close_at, ")".to_string()));
                 }
             }

@@ -3,7 +3,7 @@
 //! prefixed with the PID when running with several workers.
 
 use std::io::Write;
-use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, Ordering};
 
 /// `PHP_CLI_SERVER_LOG_PROCESS`: startup banner and fatal server errors.
 pub const LOG_PROCESS: i32 = 1;
@@ -25,16 +25,24 @@ pub fn level() -> i32 {
     LEVEL.load(Ordering::Relaxed)
 }
 
+static PID: AtomicU32 = AtomicU32::new(0);
+
 /// Prefix lines with `[pid]` (`PHP_CLI_SERVER_WORKERS` > 1).
 pub fn set_with_pid(on: bool) {
     WITH_PID.store(on, Ordering::Relaxed);
+    set_pid(std::process::id());
+}
+
+/// The PID shown in log lines (the worker's, also in its request children).
+pub fn set_pid(pid: u32) {
+    PID.store(pid, Ordering::Relaxed);
 }
 
 /// Formats one log line (without writing it).
 pub fn format_line(msg: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(msg.len() + 40);
     if WITH_PID.load(Ordering::Relaxed) {
-        out.extend_from_slice(format!("[{}] ", std::process::id()).as_bytes());
+        out.extend_from_slice(format!("[{}] ", PID.load(Ordering::Relaxed)).as_bytes());
     }
     out.push(b'[');
     out.extend_from_slice(crate::status::log_time().as_bytes());

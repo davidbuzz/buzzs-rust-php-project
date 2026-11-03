@@ -33,7 +33,8 @@ impl Drop for ServerProc {
 }
 
 fn start(name: &str, files: &[(&str, &str)], router: Option<&str>) -> ServerProc {
-    let root = std::env::temp_dir().join(format!("php-cli-server-it-{name}-{}", std::process::id()));
+    let root =
+        std::env::temp_dir().join(format!("php-cli-server-it-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).unwrap();
     for (f, content) in files {
@@ -105,11 +106,15 @@ fn scripts_static_files_and_errors() {
         ],
         None,
     );
-    let r = request(srv.port, "GET /?a=1 HTTP/1.1\r\nHost: x\r\nCookie: k=v\r\n\r\n");
+    let r = request(
+        srv.port,
+        "GET /?a=1 HTTP/1.1\r\nHost: x\r\nCookie: k=v\r\n\r\n",
+    );
     let (head, body) = split(&r);
     assert!(head.starts_with("HTTP/1.1 200 OK\r\nDate: "), "{head}");
     assert!(head.contains("\r\nConnection: close\r\nX-Powered-By: PHP/"));
-    assert!(head.contains("\r\nX-Test: yes\r\nSet-Cookie: c=v\r\nContent-type: text/html; charset=UTF-8"));
+    assert!(head
+        .contains("\r\nX-Test: yes\r\nSet-Cookie: c=v\r\nContent-type: text/html; charset=UTF-8"));
     assert_eq!(body, "GET 1 - v -");
 
     let r = request(
@@ -121,12 +126,18 @@ fn scripts_static_files_and_errors() {
     assert_eq!(body, "POST - 2 - /extra/path");
 
     let r = request(srv.port, "GET /status.php HTTP/1.1\r\n\r\n");
-    assert!(r.starts_with("HTTP/1.1 418 I'm a teapot") || r.starts_with("HTTP/1.1 418 Unknown"), "{r}");
+    assert!(
+        r.starts_with("HTTP/1.1 418 I'm a teapot") || r.starts_with("HTTP/1.1 418 Unknown"),
+        "{r}"
+    );
     assert!(r.ends_with("tea"));
 
     let r = request(srv.port, "GET /hello.txt HTTP/1.1\r\n\r\n");
     let (head, body) = split(&r);
-    assert!(head.contains("Content-Type: text/plain; charset=UTF-8\r\nContent-Length: 6"), "{head}");
+    assert!(
+        head.contains("Content-Type: text/plain; charset=UTF-8\r\nContent-Length: 6"),
+        "{head}"
+    );
     assert_eq!(body, "hello\n");
 
     let r = request(srv.port, "HEAD /style.css HTTP/1.1\r\n\r\n");
@@ -191,4 +202,63 @@ fn idle_connection_does_not_block_others() {
         "POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n3\r\nabc\r\n0\r\n\r\n",
     );
     assert_eq!(split(&r).1, "ok");
+}
+
+/// The start-up path of `ext/curl/tests/server.inc`: a relative router
+/// (`.inc`), stderr closed by the parent right after the banner, then an
+/// immediate connect probe and a request.
+#[test]
+#[ignore = "needs target/debug/php"]
+fn curl_server_inc_startup() {
+    let root = std::env::temp_dir().join(format!("php-cli-server-it-curl-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(root.join("responder")).unwrap();
+    std::fs::write(
+        root.join("responder/get.inc"),
+        "<?php header('Content-Type: text/plain'); echo 'Hello World!', $_GET['x'] ?? '';",
+    )
+    .unwrap();
+    let mut child = Command::new(php_binary())
+        .arg("-t")
+        .arg(&root)
+        .args(["-n", "-S", "localhost:0", "responder/get.inc"])
+        .current_dir(&root)
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let started = Instant::now();
+    let stderr = child.stderr.take().unwrap();
+    let mut lines = BufReader::new(stderr).lines();
+    let banner = lines.next().unwrap().unwrap();
+    drop(lines); // closes the pipe: later log lines must not kill the server
+    let port: u16 = banner
+        .rsplit(':')
+        .next()
+        .and_then(|s| s.strip_suffix(") started"))
+        .and_then(|s| s.parse().ok())
+        .unwrap();
+    // Connect probe, closed without a request.
+    drop(TcpStream::connect(("localhost", port)).unwrap());
+    let r = request(port, "GET /?x=1 HTTP/1.1\r\nHost: localhost\r\n\r\n");
+    assert!(r.starts_with("HTTP/1.1 200 OK"), "{r:?}");
+    assert!(
+        r.contains("Content-type: text/plain;charset=UTF-8\r\n"),
+        "{r}"
+    );
+    assert!(r.ends_with("\r\n\r\nHello World!1"), "{r}");
+    // Repeated requests stay fast once the server is up.
+    let t = Instant::now();
+    for _ in 0..5 {
+        let r = request(port, "GET / HTTP/1.1\r\n\r\n");
+        assert!(r.ends_with("Hello World!"), "{r}");
+    }
+    eprintln!(
+        "startup+first request {:?}, 5 requests {:?}",
+        started.elapsed(),
+        t.elapsed()
+    );
+    let _ = child.kill();
+    let _ = child.wait();
+    let _ = std::fs::remove_dir_all(&root);
 }

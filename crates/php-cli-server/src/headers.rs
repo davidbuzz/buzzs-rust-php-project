@@ -387,7 +387,10 @@ mod tests {
             op(&mut h, HeaderOp::Replace(b"X-A: 1\r\nX-B: 2", 0)),
             Err(HeaderError::NewLine)
         );
-        assert_eq!(op(&mut h, HeaderOp::Replace(b"X: \0", 0)), Err(HeaderError::Nul));
+        assert_eq!(
+            op(&mut h, HeaderOp::Replace(b"X: \0", 0)),
+            Err(HeaderError::Nul)
+        );
         assert_eq!(op(&mut h, HeaderOp::Replace(b"", 0)), Ok(false));
         assert_eq!(
             op(&mut h, HeaderOp::Delete(b"X: y")),
@@ -451,7 +454,10 @@ mod tests {
         let mut h = SapiHeaders::new();
         op(&mut h, HeaderOp::Add(b"Date: today", 0)).unwrap();
         let head = String::from_utf8(h.render(100, 0)).unwrap();
-        assert_eq!(head, "HTTP/1.0 200 OK\r\nConnection: close\r\nDate: today\r\n\r\n");
+        assert_eq!(
+            head,
+            "HTTP/1.0 200 OK\r\nConnection: close\r\nDate: today\r\n\r\n"
+        );
     }
 
     #[test]
