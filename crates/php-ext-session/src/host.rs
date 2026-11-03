@@ -284,6 +284,13 @@ impl RuntimeContext for VmHost<'_> {
     fn unserialize_enum(&mut self, class: &ZStr, case: &ZStr) -> RtResult<Value> {
         self.parked(|vm| vm.unserialize_enum(class, case))
     }
+    fn unserialize_enum_case(
+        &mut self,
+        class: &ZStr,
+        case: &ZStr,
+    ) -> RtResult<php_runtime::serialize::EnumCaseLookup> {
+        self.parked(|vm| vm.unserialize_enum_case(class, case))
+    }
     fn unserialize_custom(&mut self, class: &ZStr, data: &[u8]) -> RtResult<Value> {
         self.parked(|vm| vm.unserialize_custom(class, data))
     }
@@ -307,6 +314,10 @@ impl RuntimeContext for VmHost<'_> {
 impl SessionHost for VmHost<'_> {
     fn session(&mut self) -> &mut SessionState {
         self.state()
+    }
+
+    fn unserialize_options(&mut self) -> php_runtime::serialize::UnserializeOptions {
+        self.vm.unserialize_options_in_effect()
     }
 
     fn emit_diagnostic(&mut self, level: ErrorLevel, message: &str) -> RtResult<()> {

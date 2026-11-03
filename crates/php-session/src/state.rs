@@ -354,7 +354,8 @@ pub(crate) fn decode(h: &mut dyn SessionHost, data: &[u8]) -> bool {
     let Some(ser) = h.session().serializer else {
         return false;
     };
-    let ok = match serializer::decode(ser, data, h) {
+    let opts = h.unserialize_options();
+    let ok = match serializer::decode_with(ser, data, &opts, h) {
         Ok(Decoded::Merge { entries, ok }) => {
             if let Some(r) = h.session().http_session_vars.clone() {
                 let mut v = r.borrow_mut();

@@ -11,7 +11,9 @@
 //! assembling use a small scanner over the serialization grammar of
 //! `ext/standard/var_unserializer.re`.
 
-use php_runtime::serialize::{serialize, unserialize, SerializedObject, UnserializeOptions};
+use php_runtime::serialize::{
+    serialize, unserialize_partial, EnumCaseLookup, SerializedObject, UnserializeOptions,
+};
 use php_runtime::{
     ArrayKey, BinaryOp, CastTarget, ErrorLevel, Obj, ObjectDump, PropertyPurpose, RtResult,
     RuntimeContext, RuntimeError, Value, ZArray, ZStr,
@@ -212,12 +214,24 @@ pub fn decode(
     data: &[u8],
     ctx: &mut (impl RuntimeContext + ?Sized),
 ) -> RtResult<Decoded> {
+    decode_with(ser, data, &UnserializeOptions::default(), ctx)
+}
+
+/// Decodes session data with explicit `php_var_unserialize()` options
+/// (`max_depth`, the function named by diagnostics).
+pub fn decode_with(
+    ser: Serializer,
+    data: &[u8],
+    opts: &UnserializeOptions,
+    ctx: &mut (impl RuntimeContext + ?Sized),
+) -> RtResult<Decoded> {
     let mut quiet = Quiet(ctx);
     if ser == Serializer::PhpSerialize {
-        let result = unserialize(data, &UnserializeOptions::default(), &mut quiet)?;
+        // `php_var_unserialize()`: no offset / extra-data warnings.
+        let result = unserialize_partial(data, 0, opts, &mut quiet)?;
         return Ok(match result {
-            Some(v) => Decoded::Replace { value: v, ok: true },
-            None => Decoded::Replace {
+            Ok((v, _)) => Decoded::Replace { value: v, ok: true },
+            Err(_) => Decoded::Replace {
                 value: Value::empty_array(),
                 ok: data.is_empty(),
             },
@@ -267,8 +281,13 @@ pub fn decode(
             combined.extend_from_slice(payload);
         }
         combined.push(b'}');
-        match unserialize(&combined, &UnserializeOptions::default(), &mut quiet)? {
-            Some(Value::Array(arr)) => {
+        // The enclosing array adds one level the C code does not have.
+        let mut opts = opts.clone();
+        if opts.max_depth > 0 {
+            opts.max_depth += 1;
+        }
+        match unserialize_partial(&combined, 0, &opts, &mut quiet)? {
+            Ok((Value::Array(arr), _)) => {
                 for (name, (_, v)) in names.into_iter().zip(arr.iter()) {
                     entries.push((name, v.clone()));
                 }
@@ -328,6 +347,9 @@ impl<C: RuntimeContext + ?Sized> RuntimeContext for Quiet<'_, C> {
     }
     fn unserialize_enum(&mut self, class: &ZStr, case: &ZStr) -> RtResult<Value> {
         self.0.unserialize_enum(class, case)
+    }
+    fn unserialize_enum_case(&mut self, class: &ZStr, case: &ZStr) -> RtResult<EnumCaseLookup> {
+        self.0.unserialize_enum_case(class, case)
     }
     fn unserialize_custom(&mut self, class: &ZStr, data: &[u8]) -> RtResult<Value> {
         self.0.unserialize_custom(class, data)

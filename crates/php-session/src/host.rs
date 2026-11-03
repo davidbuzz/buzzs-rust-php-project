@@ -1,6 +1,7 @@
 //! The interface between the session module and its embedder (the VM/SAPI).
 
 use crate::state::SessionState;
+use php_runtime::serialize::UnserializeOptions;
 use php_runtime::{ErrorLevel, Obj, PhpRef, RtResult, RuntimeContext, RuntimeError, Value, ZArray};
 use std::path::PathBuf;
 
@@ -20,6 +21,13 @@ use std::path::PathBuf;
 pub trait SessionHost: RuntimeContext {
     /// The per-request session state (`PS()` globals).
     fn session(&mut self) -> &mut SessionState;
+
+    /// The `var_hash` options session data is unserialized with
+    /// (`unserialize_max_depth`, and diagnostics naming the active function
+    /// like `php_error_docref`). The default uses php-runtime's defaults.
+    fn unserialize_options(&mut self) -> UnserializeOptions {
+        UnserializeOptions::default()
+    }
 
     /// `php_error_docref(NULL, level, "%s", message)`. Returning `Err`
     /// models a user error handler throwing; the session module keeps going
