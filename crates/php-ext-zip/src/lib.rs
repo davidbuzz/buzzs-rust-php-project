@@ -15,10 +15,13 @@
 //!
 //! # Known gaps
 //!
-//! * The VM has no native `dtor_obj` hook, so the closing destructor is
-//!   registered as `ZipArchive::__destruct()` (visible to reflection). A
-//!   subclass overriding `__destruct()` without calling the parent closes
-//!   the archive only when the object is freed, without callbacks.
+//! * The closing destructor is the VM's native `destruct` hook, which the
+//!   VM skips when a subclass declares `__destruct()` (PHP runs both): such
+//!   an archive is closed only when the object is freed, without callbacks.
+//! * `php_zip::ZipHost` cannot ask whether a PHP frame is executing, so
+//!   exceptions the library itself raises during a shutdown destructor are
+//!   not bailouts there; [`host`] holds back the library's warnings in that
+//!   case instead.
 
 pub mod class;
 mod host;
@@ -26,7 +29,8 @@ pub mod procedural;
 
 use std::rc::Rc;
 
-use php_vm::ext::{Extension, ModuleBuilder};
+use php_vm::ext::{Extension, InfoItem, ModuleBuilder};
+use php_vm::Vm;
 
 /// The `zip` extension.
 #[derive(Debug, Clone, Copy, Default)]
@@ -41,5 +45,18 @@ impl Extension for Zip {
         php_streams::wrapper::register_global(b"zip", Rc::new(php_zip::ZipWrapper));
         procedural::register(m);
         class::register(m);
+        m.info(info);
     }
+}
+
+/// `PHP_MINFO_FUNCTION(zip)`.
+fn info(_vm: &mut Vm) -> Vec<InfoItem> {
+    let mut items = vec![InfoItem::TableStart];
+    items.extend(
+        php_zip::consts::info_rows()
+            .into_iter()
+            .map(|(k, v)| InfoItem::Row(vec![k.to_string(), v])),
+    );
+    items.push(InfoItem::TableEnd);
+    items
 }

@@ -10,7 +10,7 @@ use php_streams::stream::Stream;
 use php_vm::ext::{acc, class_flags, Args, ClassBuilder, ClassHooks, ModuleBuilder, VmResult};
 use php_vm::func::flags;
 use php_vm::object;
-use php_vm::{Throw, Vm};
+use php_vm::Vm;
 use php_zip::consts::{self, ConstValue};
 use php_zip::{EntryStat, ExtractFiles, OpenResult, ZipArchive, ZipHost};
 
@@ -431,59 +431,14 @@ fn is_encryption_method_supported(vm: &mut Vm, a: &mut Args) -> VmResult<Value> 
     host::run(vm, |_| ZipArchive::is_encryption_method_supported(m, enc)).map(bool_v)
 }
 
-/// `dtor_obj`: closes the archive (running the callbacks) when the object
-/// is destroyed. Registered as `__destruct` because the VM has no native
-/// destructor hook.
-fn destruct(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let z = state_of(&a.this_obj());
-    let r = if vm.is_executing() {
+/// `dtor_obj` (`php_zip_object_dtor()`): closes the archive, running the
+/// callbacks, when the object is released or at shutdown.
+fn destruct(vm: &mut Vm, o: &Obj) -> VmResult<()> {
+    let z = state_of(o);
+    if vm.is_executing() {
         host::run(vm, |h| z.destroy(h))
     } else {
         host::run_frameless(vm, |h| z.destroy(h))
-    };
-    match r {
-        Ok(()) => Ok(Value::Null),
-        Err(Throw::Exception(e)) => {
-            hide_destructor_frame(&e);
-            Err(Throw::Exception(e))
-        }
-        Err(t) => Err(t),
-    }
-}
-
-/// Removes the `ZipArchive->__destruct()` frames from the trace of an
-/// exception raised while the object was destroyed: PHP's `dtor_obj`
-/// handler is not a function call and never appears in backtraces.
-fn hide_destructor_frame(e: &Obj) {
-    let d = object::data(e);
-    let Some(pi) = d.class.props.iter().find(|p| {
-        p.name.as_bytes() == b"trace" && matches!(p.class.as_bytes(), b"Exception" | b"Error")
-    }) else {
-        return;
-    };
-    let mut slots = d.slots.borrow_mut();
-    let Some(Some(Value::Array(trace))) = slots.get(pi.slot as usize).cloned() else {
-        return;
-    };
-    let is_dtor = |frame: &Value| {
-        let Value::Array(f) = frame.deref() else {
-            return false;
-        };
-        let field = |k: &[u8]| f.get_str(k).map(Value::deref);
-        matches!(field(b"function"), Some(Value::Str(n)) if n.as_bytes() == b"__destruct")
-            && matches!(field(b"class"), Some(Value::Str(c)) if c.as_bytes() == b"ZipArchive")
-    };
-    if !trace.iter().any(|(_, f)| is_dtor(f)) {
-        return;
-    }
-    let mut kept = ZArray::new();
-    for (_, f) in trace.iter() {
-        if !is_dtor(f) {
-            let _ = kept.make_mut().push(f.clone());
-        }
-    }
-    if let Some(slot) = slots.get_mut(pi.slot as usize) {
-        *slot = Some(Value::Array(kept));
     }
 }
 
@@ -494,9 +449,10 @@ fn hide_destructor_frame(e: &Obj) {
 #[allow(clippy::unnecessary_wraps)]
 fn create(vm: &mut Vm, o: &Obj) -> VmResult<()> {
     let z = ZipArchive::new();
-    // The declared slots are initialised so that code walking the standard
-    // property table (`get_object_vars()`, `foreach`) lists them; their
-    // values are always read through `read_property`.
+    // `get_object_vars()` and `foreach` walk the standard property table
+    // (not `properties_for`), so the declared slots are initialised to make
+    // them list the properties; values are always read through
+    // `read_property`.
     for (name, v) in z.properties() {
         vm.set_property_raw(o, name, v);
     }
@@ -521,12 +477,10 @@ fn write_property(vm: &mut Vm, o: &Obj, name: &ZStr, _v: &Value) -> VmResult<boo
 }
 
 #[allow(clippy::unnecessary_wraps)]
-fn has_property(_vm: &mut Vm, o: &Obj, name: &ZStr, empty: bool) -> VmResult<Option<bool>> {
-    // The VM asks "is it empty?" for `empty()`, PHP's handler answers
-    // "is it non-empty?".
-    Ok(state_of(o)
-        .has_property(name.as_bytes(), empty)
-        .map(|r| if empty { !r } else { r }))
+fn has_property(_vm: &mut Vm, o: &Obj, name: &ZStr, check_empty: bool) -> VmResult<Option<bool>> {
+    // Same convention as `php_zip_has_property()`: "set" or, for
+    // `empty()`, "set and not empty".
+    Ok(state_of(o).has_property(name.as_bytes(), check_empty))
 }
 
 fn mangle(pi: &php_vm::class::PropInfo) -> ZStr {
@@ -590,7 +544,7 @@ type Handler = fn(&mut Vm, &mut Args) -> VmResult<Value>;
 const METHODS: &[(&str, Handler)] = &[
     ("open(string $filename, int $flags = 0): bool|int", open),
     ("openString(string $data = '', int $flags = 0): bool|int", open_string),
-    ("setPassword(string $password): bool", set_password),
+    ("setPassword(#[\\SensitiveParameter] string $password): bool", set_password),
     ("close(): bool", close),
     ("closeString(): string|false", close_string),
     ("count(): int", count),
@@ -693,11 +647,11 @@ const METHODS: &[(&str, Handler)] = &[
         set_compression_index,
     ),
     (
-        "setEncryptionName(string $name, int $method, ?string $password = null): bool",
+        "setEncryptionName(string $name, int $method, #[\\SensitiveParameter] ?string $password = null): bool",
         set_encryption_name,
     ),
     (
-        "setEncryptionIndex(int $index, int $method, ?string $password = null): bool",
+        "setEncryptionIndex(int $index, int $method, #[\\SensitiveParameter] ?string $password = null): bool",
         set_encryption_index,
     ),
     (
@@ -735,7 +689,10 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
             ConstValue::Int(i) => Value::Int(i),
             ConstValue::Str(s) => bytes(s),
         };
-        cb = cb.constant(c.name, v);
+        cb = match c.deprecated_since {
+            Some(since) => cb.deprecated_constant(c.name, v, since, ""),
+            None => cb.constant(c.name, v),
+        };
     }
     for (name, ty) in php_zip::class::PROPERTIES {
         cb = cb.prop(name, acc::PUBLIC, Some(*ty), None);
@@ -746,14 +703,14 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
     for (sig, h) in STATIC_METHODS {
         cb = cb.method(sig, acc::PUBLIC | acc::STATIC, *h);
     }
-    cb.method("__destruct()", acc::PUBLIC, destruct)
-        .hooks(ClassHooks {
-            create: Some(create),
-            read_property: Some(read_property),
-            write_property: Some(write_property),
-            has_property: Some(has_property),
-            properties_for: Some(properties_for),
-            ..Default::default()
-        })
-        .register(vm);
+    cb.hooks(ClassHooks {
+        create: Some(create),
+        destruct: Some(destruct),
+        read_property: Some(read_property),
+        write_property: Some(write_property),
+        has_property: Some(has_property),
+        properties_for: Some(properties_for),
+        ..Default::default()
+    })
+    .register(vm);
 }

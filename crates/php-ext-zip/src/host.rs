@@ -255,6 +255,14 @@ pub(crate) fn run_frameless<R>(
     let held = HELD
         .with(|h| std::mem::replace(&mut *h.borrow_mut(), outer))
         .unwrap_or_default();
+    if let Err(Throw::Exception(_)) = &r {
+        // The exception bails out (`zend_exception_error()` +
+        // `zend_bailout()`); after a bailout during the shutdown
+        // destructors PHP marks every object destructed, so values the
+        // callbacks released meanwhile never run their destructors.
+        drop(php_vm::object::take_pending_destructors());
+        php_vm::object::set_destructors_enabled(false);
+    }
     if r.is_ok() {
         let prev = diag::set_handler(Some(Box::new(emit_now)));
         bridge::enter(vm, || held.into_iter().for_each(emit_now));

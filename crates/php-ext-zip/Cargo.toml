@@ -18,3 +18,4 @@ workspace = true
 
 [dev-dependencies]
 php-ext-stdstr = { path = "../php-ext-stdstr" }
+libc = "0.2"

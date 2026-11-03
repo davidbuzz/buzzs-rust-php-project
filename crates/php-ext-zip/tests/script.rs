@@ -25,6 +25,33 @@ impl Write for Sink {
     }
 }
 
+/// Keeps the test process's standard descriptors: `php-ext-streams`
+/// really closes them when the VM's `STDIN`/`STDOUT`/`STDERR` resources
+/// are released (GH-8827), which would silence the test harness.
+struct SavedFds([i32; 3]);
+
+impl SavedFds {
+    fn save() -> Self {
+        // SAFETY: duplicating the standard descriptors has no memory effects.
+        SavedFds([0, 1, 2].map(|fd| unsafe { libc::dup(fd) }))
+    }
+}
+
+impl Drop for SavedFds {
+    fn drop(&mut self) {
+        for (fd, saved) in (0..).zip(self.0) {
+            if saved >= 0 {
+                // SAFETY: `saved` is a descriptor we own; it is moved back
+                // onto the standard slot and then closed.
+                unsafe {
+                    libc::dup2(saved, fd);
+                    libc::close(saved);
+                }
+            }
+        }
+    }
+}
+
 /// A fresh directory for one test.
 fn tmpdir(name: &str) -> PathBuf {
     let d = std::env::temp_dir().join(format!("php-ext-zip-{}-{name}", std::process::id()));
@@ -36,6 +63,12 @@ fn tmpdir(name: &str) -> PathBuf {
 /// Runs `code` (without `<?php`, `$dir` set to a scratch directory) and
 /// returns its output.
 fn run(name: &str, code: &str) -> String {
+    // One VM at a time: the descriptors are process-wide.
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _guard = LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _fds = SavedFds::save();
     let dir = tmpdir(name);
     let sink = Sink::default();
     let streams = php_ext_streams::Streams;
