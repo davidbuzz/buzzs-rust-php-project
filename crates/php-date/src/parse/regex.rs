@@ -9,6 +9,7 @@
 //! mirroring re2c's NUL-padded buffer.
 
 use std::collections::HashMap;
+use std::sync::Mutex;
 
 /// A set of bytes.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -319,11 +320,34 @@ enum State {
     Match(u16),
 }
 
+const UNKNOWN: u32 = u32::MAX;
+const DEAD: u32 = u32::MAX - 1;
+
+/// A lazily built DFA state: a set of NFA states plus its transitions.
+struct DState {
+    nfa: Vec<u32>,
+    accept: Option<u16>,
+    next: Box<[u32; 256]>,
+}
+
+/// Lazily determinised view of the NFA (subset construction on demand).
+#[derive(Default)]
+struct DfaCache {
+    ids: HashMap<Vec<u32>, u32>,
+    states: Vec<DState>,
+}
+
 /// A compiled multi-rule scanner.
-#[derive(Debug)]
 pub(crate) struct Scanner {
     states: Vec<State>,
     start: usize,
+    dfa: Mutex<DfaCache>,
+}
+
+impl std::fmt::Debug for Scanner {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Scanner({} NFA states)", self.states.len())
+    }
 }
 
 impl Scanner {
@@ -332,6 +356,7 @@ impl Scanner {
         let mut sc = Self {
             states: Vec::new(),
             start: 0,
+            dfa: Mutex::new(DfaCache::default()),
         };
         let mut entries = Vec::new();
         for (i, r) in rules.iter().enumerate() {
@@ -393,69 +418,96 @@ impl Scanner {
         }
     }
 
-    fn add(
-        &self,
-        list: &mut Vec<usize>,
-        marks: &mut [u32],
-        gen: u32,
-        s: usize,
-        stack: &mut Vec<usize>,
-    ) {
-        stack.push(s);
+    /// Epsilon closure of `seeds`, as a sorted set of non-split states.
+    fn closure(&self, seeds: impl IntoIterator<Item = usize>) -> Vec<u32> {
+        let mut seen = vec![false; self.states.len()];
+        let mut stack: Vec<usize> = seeds.into_iter().collect();
+        let mut out = Vec::new();
         while let Some(s) = stack.pop() {
-            if marks[s] == gen {
+            if seen[s] {
                 continue;
             }
-            marks[s] = gen;
+            seen[s] = true;
             match self.states[s] {
                 State::Split(a, b) => {
                     stack.push(b);
                     stack.push(a);
                 }
-                _ => list.push(s),
+                _ => out.push(u32::try_from(s).unwrap_or(u32::MAX)),
             }
         }
+        out.sort_unstable();
+        out
+    }
+
+    fn intern(&self, cache: &mut DfaCache, set: Vec<u32>) -> u32 {
+        if set.is_empty() {
+            return DEAD;
+        }
+        if let Some(&id) = cache.ids.get(&set) {
+            return id;
+        }
+        let accept = set
+            .iter()
+            .filter_map(|&s| match self.states[s as usize] {
+                State::Match(r) => Some(r),
+                _ => None,
+            })
+            .min();
+        let id = u32::try_from(cache.states.len()).unwrap_or(DEAD);
+        cache.states.push(DState {
+            nfa: set.clone(),
+            accept,
+            next: Box::new([UNKNOWN; 256]),
+        });
+        cache.ids.insert(set, id);
+        id
+    }
+
+    fn step(&self, cache: &mut DfaCache, d: u32, b: u8) -> u32 {
+        let known = cache.states[d as usize].next[usize::from(b)];
+        if known != UNKNOWN {
+            return known;
+        }
+        let targets: Vec<usize> = cache.states[d as usize]
+            .nfa
+            .iter()
+            .filter_map(|&s| match self.states[s as usize] {
+                State::Byte(set, n) if set.contains(b) => Some(n),
+                _ => None,
+            })
+            .collect();
+        let set = self.closure(targets);
+        let id = self.intern(cache, set);
+        cache.states[d as usize].next[usize::from(b)] = id;
+        id
     }
 
     /// Longest match at `start`: `(length, rule index)`. Bytes past the end
     /// of `input` read as NUL.
     pub(crate) fn longest_match(&self, input: &[u8], start: usize) -> Option<(usize, usize)> {
-        let mut marks = vec![0u32; self.states.len()];
-        let mut gen = 1;
-        let mut cur = Vec::new();
-        let mut next = Vec::new();
-        let mut stack = Vec::new();
-        self.add(&mut cur, &mut marks, gen, self.start, &mut stack);
-        let mut best = None;
+        let mut guard = self
+            .dfa
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let cache = &mut *guard;
+        if cache.states.is_empty() {
+            let set = self.closure([self.start]);
+            self.intern(cache, set);
+        }
+        let mut d = 0u32;
+        let mut best = cache.states[0].accept.map(|r| (0, usize::from(r)));
         let mut pos = start;
-        loop {
-            let mut rule = None;
-            for &s in &cur {
-                if let State::Match(r) = self.states[s] {
-                    let r = usize::from(r);
-                    if rule.is_none_or(|x| r < x) {
-                        rule = Some(r);
-                    }
-                }
-            }
-            if let Some(r) = rule {
-                best = Some((pos - start, r));
-            }
-            if cur.is_empty() || pos > input.len() + 64 {
+        while pos <= input.len() + 64 {
+            let b = input.get(pos).copied().unwrap_or(0);
+            d = self.step(cache, d, b);
+            if d == DEAD {
                 break;
             }
-            let b = input.get(pos).copied().unwrap_or(0);
-            gen += 1;
-            next.clear();
-            for &s in &cur {
-                if let State::Byte(set, n) = self.states[s] {
-                    if set.contains(b) {
-                        self.add(&mut next, &mut marks, gen, n, &mut stack);
-                    }
-                }
-            }
-            std::mem::swap(&mut cur, &mut next);
             pos += 1;
+            if let Some(r) = cache.states[d as usize].accept {
+                best = Some((pos - start, usize::from(r)));
+            }
         }
         best
     }
