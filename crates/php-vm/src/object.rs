@@ -71,6 +71,9 @@ struct ObjectStore {
 impl Drop for ObjectData {
     fn drop(&mut self) {
         let handle = self.handle;
+        // `zend_weakrefs_notify`: purge WeakMap entries before the handle
+        // can be reused.
+        crate::weakref::object_freed(handle);
         // `try_with`: the store may already be gone during thread teardown.
         let _ = STORE.try_with(|s| {
             if let Ok(mut s) = s.try_borrow_mut() {

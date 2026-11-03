@@ -480,7 +480,7 @@ impl Vm {
                 ),
             ));
         }
-        if cls.is_enum() {
+        if cls.is_enum() || cls.flags & cflags::NO_DYNAMIC_PROPERTIES != 0 {
             return Err(self.make_throw(
                 "Error",
                 &format!(

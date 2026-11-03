@@ -69,6 +69,7 @@ pub(crate) fn alias(vm: &mut Vm, alias: &str, target: &str) {
 /// Registers every builtin function and class.
 pub(crate) fn register_all(vm: &mut Vm) {
     classes::register(vm);
+    crate::weakref::register(vm);
     core::register(vm);
     var::register(vm);
     output::register(vm);

@@ -800,6 +800,13 @@ impl Vm {
                                     }
                                 }
                             }
+                            WOp::AssignRef(r) => {
+                                if let Some(f) = h.write_dimension {
+                                    if f(self, &obj, keyopt, r)? {
+                                        return Ok(r.clone());
+                                    }
+                                }
+                            }
                             WOp::Unset => {
                                 if let (Some(f), Some(k)) = (h.unset_dimension, keyopt) {
                                     if f(self, &obj, k)? {
@@ -1196,7 +1203,7 @@ impl Vm {
                     }
                     if let Some(f) = h.read_dimension {
                         if let Some(v) = f(self, &o, k)? {
-                            return Ok(v);
+                            return Ok(v.deref());
                         }
                     }
                 }

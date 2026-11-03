@@ -38,6 +38,7 @@ mod typecheck;
 mod variance;
 pub mod types;
 pub mod vm;
+mod weakref;
 
 pub use vm::{Throw, Vm, VmResult};
 

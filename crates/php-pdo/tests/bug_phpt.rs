@@ -395,8 +395,10 @@ fn bug_36798_latin1_literal() {
 fn bug_50458_fetch_func_closure() {
     let mut h = TestHost::new();
     let db = h.factory();
-    h.exec(&db, "CREATE TABLE test50458 (a VARCHAR(10))").unwrap();
-    h.exec(&db, "INSERT INTO test50458 (a) VALUES ('xyz')").unwrap();
+    h.exec(&db, "CREATE TABLE test50458 (a VARCHAR(10))")
+        .unwrap();
+    h.exec(&db, "INSERT INTO test50458 (a) VALUES ('xyz')")
+        .unwrap();
     h.add_function("upper", |_, args| {
         let s = args[0].as_str().unwrap().to_ascii_uppercase();
         Ok(Value::Str(s))
@@ -440,14 +442,16 @@ fn bug_60665_lazy_isset_empty() {
 #[test]
 fn bug_61292_persistent_subclass() {
     let mut h = TestHost::new();
-    h.add_class(
-        Class::new("Database_SQL")
-            .extends("PDO")
-            .prop_default("bar", Vis::Public, Value::Array(arr(vec![]))),
-    );
+    h.add_class(Class::new("Database_SQL").extends("PDO").prop_default(
+        "bar",
+        Vis::Public,
+        Value::Array(arr(vec![])),
+    ));
     let mut opts = php_runtime::ZArray::new();
-    opts.make_mut()
-        .insert(php_runtime::ArrayKey::Int(ATTR_PERSISTENT), Value::Bool(true));
+    opts.make_mut().insert(
+        php_runtime::ArrayKey::Int(ATTR_PERSISTENT),
+        Value::Bool(true),
+    );
     let db = h
         .new_pdo("Database_SQL", "sqlite::memory:", Some(opts))
         .unwrap();
@@ -536,7 +540,8 @@ fn bug_71447_comments() {
     let mut h = TestHost::new();
     let db = h.factory();
     h.set_attr(&db, ATTR_ERRMODE, i(ERRMODE_WARNING)).unwrap();
-    h.set_attr(&db, ATTR_DEFAULT_FETCH_MODE, i(FETCH_NUM)).unwrap();
+    h.set_attr(&db, ATTR_DEFAULT_FETCH_MODE, i(FETCH_NUM))
+        .unwrap();
     let _ = h.set_attr(&db, ATTR_EMULATE_PREPARES, Value::Bool(false));
     h.exec(&db, "CREATE TABLE test71447(id int)").unwrap();
     h.exec(&db, "INSERT INTO test71447 VALUES(1)").unwrap();
@@ -612,8 +617,10 @@ fn bug_72788_persistent_failed_query() {
     let mut h = TestHost::new();
     for _ in 0..2 {
         let mut opts = php_runtime::ZArray::new();
-        opts.make_mut()
-            .insert(php_runtime::ArrayKey::Int(ATTR_PERSISTENT), Value::Bool(true));
+        opts.make_mut().insert(
+            php_runtime::ArrayKey::Int(ATTR_PERSISTENT),
+            Value::Bool(true),
+        );
         let db = h.factory_class("PDO", Some(opts));
         let before = h.out.len();
         let st = h.query(&db, "SELECT 1 FROM TABLE_DOES_NOT_EXIST").unwrap();

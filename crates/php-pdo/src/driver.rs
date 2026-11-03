@@ -243,8 +243,15 @@ pub trait StmtDriver: Any {
     /// Upcast for downcasting to the concrete driver statement.
     fn as_any(&self) -> &dyn Any;
 
-    /// `executer`. `executed` is `stmt->executed`.
-    fn execute(&self, cx: &mut DriverCx<'_>, executed: bool) -> Result<ExecuteInfo, DriverError>;
+    /// `executer`. `executed` is `stmt->executed`; `active_query` is
+    /// `stmt->active_query_string` (the query with emulated placeholders
+    /// substituted, when the core emulates prepares).
+    fn execute(
+        &self,
+        cx: &mut DriverCx<'_>,
+        executed: bool,
+        active_query: Option<&ZStr>,
+    ) -> Result<ExecuteInfo, DriverError>;
 
     /// `fetcher`: `Ok(false)` when there are no more rows.
     fn fetch(

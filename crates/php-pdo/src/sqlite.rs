@@ -231,7 +231,12 @@ impl StmtDriver for SqliteStmt {
         self
     }
 
-    fn execute(&self, cx: &mut DriverCx<'_>, executed: bool) -> Result<ExecuteInfo, DriverError> {
+    fn execute(
+        &self,
+        cx: &mut DriverCx<'_>,
+        executed: bool,
+        _active_query: Option<&ZStr>,
+    ) -> Result<ExecuteInfo, DriverError> {
         let info = self.stmt.execute(cx, executed).map_err(state)?;
         Ok(ExecuteInfo {
             column_count: info.column_count,

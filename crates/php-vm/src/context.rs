@@ -226,6 +226,16 @@ impl RuntimeContext for Vm {
                 lazy_prefix: self.lazy_prefix(obj),
             }
         };
+        // Native `get_properties_for` / `get_debug_info` handlers.
+        if let Some(f) = cls.hooks.as_ref().and_then(|h| h.properties_for) {
+            if let Some(t) = f(self, obj, purpose).map_err(|t| self.to_rt(t))? {
+                let properties = t.iter().map(|(k, v)| (k.clone(), PropertySlot::Value(v.clone()))).collect();
+                return Ok(ObjectDump {
+                    kind,
+                    properties: Some(properties),
+                });
+            }
+        }
         let custom = purpose == PropertyPurpose::Debug && cls.magic.debug_info.is_some()
             || self.has_internal_array(obj);
         if custom {
@@ -542,6 +552,12 @@ impl Vm {
 
     fn unserialize_custom_vm(&mut self, class: &ZStr, data: &[u8]) -> VmResult<Value> {
         let cls = self.lookup_class_or_error(class)?;
+        if cls.flags & cflags::NOT_SERIALIZABLE != 0 {
+            return Err(self.make_throw(
+                "Exception",
+                &format!("Unserialization of '{}' is not allowed", cls.name),
+            ));
+        }
         let o = self.instantiate_unchecked(&cls)?;
         self.call_method_name(&o, "unserialize", vec![Value::Str(ZStr::from(data))])?;
         Ok(Value::Object(o))

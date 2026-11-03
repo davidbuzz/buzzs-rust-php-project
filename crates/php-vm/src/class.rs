@@ -39,6 +39,9 @@ pub mod cflags {
     pub const DEPRECATED: u32 = 1 << 12;
     /// Cannot be cloned.
     pub const NO_CLONE: u32 = 1 << 13;
+    /// `@strict-properties` internal class: creating a dynamic property is
+    /// an `Error` (`ZEND_ACC_NO_DYNAMIC_PROPERTIES`).
+    pub const NO_DYNAMIC_PROPERTIES: u32 = 1 << 14;
 }
 
 /// An attribute applied to a declaration (for Reflection).

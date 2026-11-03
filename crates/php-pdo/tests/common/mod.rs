@@ -814,6 +814,12 @@ impl PdoHost for TestHost {
                 .position(|p| p.name.as_bytes() == name.as_bytes())
                 .map(|i| o.props.borrow()[i].clone())
         });
+        // a parent's private property is invisible from other scopes
+        let slot = slot.filter(|p| {
+            !(p.vis == Vis::Private
+                && !p.class.as_bytes().eq_ignore_ascii_case(class.as_bytes())
+                && !self.can_access(p, scope))
+        });
         match slot {
             Some(p) => {
                 if !self.can_access(&p, scope) {
@@ -853,7 +859,16 @@ impl PdoHost for TestHost {
                         &format!("Creation of dynamic property {class}::${name} is deprecated"),
                     )?;
                 }
-                Self::set_prop(obj, &name.to_string_lossy(), value.deref());
+                Self::with_obj(obj, |o| {
+                    o.props.borrow_mut().push(Prop {
+                        name: name.clone(),
+                        class: o.class.clone(),
+                        vis: Vis::Public,
+                        ty: None,
+                        value: Some(value.deref()),
+                        declared: false,
+                    });
+                });
                 Ok(())
             }
         }
@@ -1351,6 +1366,7 @@ pub fn expectf_match(pattern: &str, text: &str) -> bool {
                 b'S' => Some((|c| c != b'\n' && c != b'\r', false)),
                 b'a' => Some((|_| true, true)),
                 b'A' => Some((|_| true, false)),
+                b'w' => Some((|c: u8| c.is_ascii_whitespace(), false)),
                 b'd' => Some((|c: u8| c.is_ascii_digit(), true)),
                 b'i' => Some((|c: u8| c.is_ascii_digit() || c == b'-' || c == b'+', true)),
                 b'x' => Some((|c: u8| c.is_ascii_hexdigit(), true)),
@@ -1424,4 +1440,165 @@ macro_rules! assert_phpt {
             $file
         );
     };
+}
+
+// ---------------------------------------------------------------------
+// An emulating driver: `sqlemu:` = SQLite with PDO-emulated prepares
+// ---------------------------------------------------------------------
+
+pub mod emu {
+    use php_pdo::driver::{
+        ColumnData, ConnectParams, Connection, DbhDriver, DriverEntry, DriverError, ExecuteInfo,
+        Prepared, StmtDriver,
+    };
+    use php_pdo::host::{Ctx, DriverCx};
+    use php_runtime::{Value, ZArray, ZStr};
+    use std::any::Any;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    struct EmuDbh {
+        inner: Rc<dyn DbhDriver>,
+    }
+
+    struct EmuStmt {
+        dbh: Rc<dyn DbhDriver>,
+        stmt: RefCell<Option<Rc<dyn StmtDriver>>>,
+    }
+
+    impl EmuStmt {
+        fn inner(&self) -> Result<Rc<dyn StmtDriver>, DriverError> {
+            self.stmt.borrow().clone().ok_or(DriverError::Silent)
+        }
+    }
+
+    fn connect(cx: &mut Ctx<'_>, p: &ConnectParams, o: Option<&ZArray>) -> Option<Connection> {
+        let c = (php_pdo::sqlite::SQLITE_DRIVER.factory)(cx, p, o)?;
+        Some(Connection {
+            driver: Rc::new(EmuDbh { inner: c.driver }),
+            flags: c.flags,
+        })
+    }
+
+    /// Registers the `sqlemu` driver.
+    pub fn register() {
+        php_pdo::driver::register_driver(DriverEntry {
+            name: "sqlemu",
+            specific_class: None,
+            factory: connect,
+        });
+    }
+
+    impl DbhDriver for EmuDbh {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+        fn close(&self, cx: &mut DriverCx<'_>) {
+            self.inner.close(cx);
+        }
+        fn prepare(
+            &self,
+            _: &mut DriverCx<'_>,
+            _: &ZStr,
+            _: Option<&ZArray>,
+        ) -> Result<Prepared, DriverError> {
+            Ok(Prepared {
+                stmt: Rc::new(EmuStmt {
+                    dbh: self.inner.clone(),
+                    stmt: RefCell::new(None),
+                }),
+                supports_placeholders: 0,
+                named_rewrite_template: None,
+            })
+        }
+        fn exec(&self, cx: &mut DriverCx<'_>, sql: &ZStr) -> Result<i64, DriverError> {
+            self.inner.exec(cx, sql)
+        }
+        fn quote(
+            &self,
+            cx: &mut DriverCx<'_>,
+            s: &[u8],
+            t: i64,
+            m: i64,
+        ) -> Option<Result<ZStr, DriverError>> {
+            self.inner.quote(cx, s, t, m)
+        }
+        fn set_attribute(
+            &self,
+            cx: &mut DriverCx<'_>,
+            attr: i64,
+            v: &Value,
+        ) -> Option<Result<(), DriverError>> {
+            if attr == php_pdo::consts::ATTR_EMULATE_PREPARES {
+                return Some(Ok(()));
+            }
+            self.inner.set_attribute(cx, attr, v)
+        }
+        fn get_attribute(
+            &self,
+            cx: &mut DriverCx<'_>,
+            attr: i64,
+        ) -> Option<Result<Option<Value>, DriverError>> {
+            if attr == php_pdo::consts::ATTR_EMULATE_PREPARES {
+                return Some(Ok(Some(Value::Bool(true))));
+            }
+            self.inner.get_attribute(cx, attr)
+        }
+        fn fetch_error(&self, s: Option<&dyn StmtDriver>) -> Option<Vec<Value>> {
+            self.inner.fetch_error(s)
+        }
+        fn last_insert_id(
+            &self,
+            cx: &mut DriverCx<'_>,
+            n: Option<&ZStr>,
+        ) -> Option<Result<ZStr, DriverError>> {
+            self.inner.last_insert_id(cx, n)
+        }
+        fn scanner(&self) -> &dyn php_sqlite::pdo::parser::Scanner {
+            &php_sqlite::pdo::parser::SqliteScanner
+        }
+    }
+
+    impl StmtDriver for EmuStmt {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+        fn execute(
+            &self,
+            cx: &mut DriverCx<'_>,
+            _: bool,
+            active: Option<&ZStr>,
+        ) -> Result<ExecuteInfo, DriverError> {
+            let sql = active.cloned().unwrap_or_else(ZStr::empty);
+            let p = self.dbh.prepare(cx, &sql, None)?;
+            *self.stmt.borrow_mut() = Some(p.stmt.clone());
+            p.stmt.execute(cx, false, None)
+        }
+        fn fetch(&self, cx: &mut DriverCx<'_>, o: i64, off: i64) -> Result<bool, DriverError> {
+            self.inner()?.fetch(cx, o, off)
+        }
+        fn describe(&self, cx: &mut DriverCx<'_>, c: i64) -> Result<ColumnData, DriverError> {
+            self.inner()?.describe(cx, c)
+        }
+        fn get_col(&self, cx: &mut DriverCx<'_>, c: i64) -> Result<Value, DriverError> {
+            self.inner()?.get_col(cx, c)
+        }
+        fn cursor_closer(&self, cx: &mut DriverCx<'_>) -> Option<Result<(), DriverError>> {
+            match self.stmt.borrow().clone() {
+                Some(s) => s.cursor_closer(cx),
+                None => Some(Ok(())),
+            }
+        }
+        fn column_meta(
+            &self,
+            cx: &mut DriverCx<'_>,
+            c: i64,
+            e: bool,
+        ) -> Option<Result<ZArray, DriverError>> {
+            match self.stmt.borrow().clone() {
+                Some(s) => s.column_meta(cx, c, e),
+                None => Some(Err(DriverError::Silent)),
+            }
+        }
+    }
 }

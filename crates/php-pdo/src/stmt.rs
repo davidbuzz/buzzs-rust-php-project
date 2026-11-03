@@ -202,7 +202,12 @@ impl Stmt {
     pub fn run_executer(&self, cx: &mut Ctx<'_>) -> Option<ExecuteInfo> {
         let d = self.driver()?;
         let executed = self.executed.get();
-        match cx.with_driver(|dcx| d.execute(dcx, executed)) {
+        let active = self
+            .active_query_string
+            .borrow()
+            .as_ref()
+            .map(|(q, _)| q.clone());
+        match cx.with_driver(|dcx| d.execute(dcx, executed, active.as_ref())) {
             Ok(info) => {
                 self.apply_info(info);
                 Some(info)
