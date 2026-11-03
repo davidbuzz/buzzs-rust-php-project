@@ -1,0 +1,1362 @@
+//! `Zend/zend_builtin_functions.c` and core runtime functions.
+
+use super::util::{arr, b, i, opt, s, sv, value_error};
+use super::{alias, constant, reg};
+use crate::class::{cflags, Class};
+use crate::func::{flags, Args, Func};
+use crate::object;
+use crate::props::PropLookup;
+use crate::vm::{ErrorHandler, FrameKind, Throw, Vm, VmResult};
+use php_runtime::{ArrayKey, HashTable, Value, ZArray, ZStr};
+use std::rc::Rc;
+
+fn caller_idx(vm: &Vm) -> Option<usize> {
+    let n = vm.frames.len();
+    if n < 2 {
+        return None;
+    }
+    Some(n - 2)
+}
+
+fn func_get_args(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
+    let Some(idx) = caller_idx(vm) else {
+        return Ok(Value::Null);
+    };
+    if vm.frames[idx].kind != FrameKind::Function {
+        return Err(vm.make_throw("Error", "func_get_args() cannot be called from the global scope"));
+    }
+    Ok(Value::Array(vm.frame_args(idx)))
+}
+
+fn func_num_args(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
+    let Some(idx) = caller_idx(vm) else {
+        return Ok(Value::Int(-1));
+    };
+    if vm.frames[idx].kind != FrameKind::Function {
+        return Err(vm.make_throw("Error", "func_num_args() must be called from a function context"));
+    }
+    let f = &vm.frames[idx];
+    let n = if f.magic_name.is_some() {
+        match f.args.get(1) {
+            Some(Some(Value::Array(a))) => a.len(),
+            _ => 0,
+        }
+    } else {
+        f.args.len()
+    };
+    Ok(Value::Int(i64::try_from(n).unwrap_or(0)))
+}
+
+fn func_get_arg(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let n = i(a, 0);
+    let Some(idx) = caller_idx(vm) else {
+        return Ok(Value::Null);
+    };
+    if vm.frames[idx].kind != FrameKind::Function {
+        return Err(vm.make_throw("Error", "func_get_arg() cannot be called from the global scope"));
+    }
+    if n < 0 {
+        return Err(value_error(vm, a, 1, "must be greater than or equal to 0"));
+    }
+    let args = vm.frame_args(idx);
+    match args.get(&ArrayKey::Int(n)) {
+        Some(v) => Ok(v.clone()),
+        None => Err(value_error(
+            vm,
+            a,
+            1,
+            "must be less than the number of the arguments passed to the currently executed function",
+        )),
+    }
+}
+
+fn strlen(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    Ok(Value::Int(i64::try_from(s(a, 0).len()).unwrap_or(0)))
+}
+
+fn define(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let name = s(a, 0);
+    if a.has(2) && b(a, 2) {
+        vm.warning("define(): Argument #3 ($case_insensitive) is ignored since declaration of case-insensitive constants is no longer supported")?;
+    }
+    if let Some(p) = crate::call::find_double_colon(name.as_bytes()) {
+        let _ = p;
+        return Err(value_error(vm, a, 1, "cannot be a class constant"));
+    }
+    let v = a.at(1);
+    let ok = vm.declare_constant(name, v)?;
+    Ok(Value::Bool(ok))
+}
+
+fn defined(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let name = s(a, 0);
+    if let Some(p) = crate::call::find_double_colon(name.as_bytes()) {
+        let cls = ZStr::from(&name.as_bytes()[..p]);
+        let cn = &name.as_bytes()[p + 2..];
+        return Ok(Value::Bool(match vm.lookup_class(&cls)? {
+            Some(c) => c.find_const(cn).is_some(),
+            None => false,
+        }));
+    }
+    let n = name.as_bytes().strip_prefix(b"\\").unwrap_or(name.as_bytes());
+    Ok(Value::Bool(vm.constants.contains_key(n)))
+}
+
+fn constant_fn(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let name = s(a, 0);
+    if let Some(p) = crate::call::find_double_colon(name.as_bytes()) {
+        let cls = ZStr::from(&name.as_bytes()[..p]);
+        let cn = ZStr::from(&name.as_bytes()[p + 2..]);
+        let c = vm.lookup_class_or_error(&cls)?;
+        return vm.class_constant(&c, &cn);
+    }
+    let n = name.as_bytes().strip_prefix(b"\\").unwrap_or(name.as_bytes());
+    match vm.constants.get(n) {
+        Some(v) => Ok(v.clone()),
+        None => Err(vm.make_throw(
+            "Error",
+            &format!("Undefined constant \"{}\"", name.to_string_lossy()),
+        )),
+    }
+}
+
+fn get_class(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    match a.get(0) {
+        Some(Value::Object(o)) => Ok(Value::Str(object::class_of(&o).name.clone())),
+        Some(_) => Ok(Value::Bool(false)),
+        None => match vm.frames.get(vm.frames.len().wrapping_sub(2)).and_then(|f| f.scope.clone()) {
+            Some(c) => Ok(Value::Str(c.name.clone())),
+            None => Err(vm.make_throw("Error", "get_class() without arguments must be called from within a class")),
+        },
+    }
+}
+
+fn get_parent_class(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let cls = match a.get(0) {
+        Some(Value::Object(o)) => Some(object::class_of(&o).clone()),
+        Some(Value::Str(s)) => vm.lookup_class(&s)?,
+        _ => vm.frames.get(vm.frames.len().wrapping_sub(2)).and_then(|f| f.scope.clone()),
+    };
+    Ok(match cls.and_then(|c| c.parent.clone()) {
+        Some(p) => Value::Str(p.name.clone()),
+        None => Value::Bool(false),
+    })
+}
+
+fn get_called_class(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
+    let c = vm.frames.get(vm.frames.len().wrapping_sub(2)).and_then(|f| f.called.clone());
+    match c {
+        Some(c) => Ok(Value::Str(c.name.clone())),
+        None => Err(vm.make_throw("Error", "get_called_class() must be called from within a class")),
+    }
+}
+
+fn class_arg(vm: &mut Vm, v: &Value, autoload: bool) -> VmResult<Option<Rc<Class>>> {
+    match v {
+        Value::Object(o) => Ok(Some(object::class_of(o).clone())),
+        Value::Str(s) => {
+            if autoload {
+                vm.lookup_class(s)
+            } else {
+                Ok(vm.find_class(s.as_bytes()))
+            }
+        }
+        _ => Ok(None),
+    }
+}
+
+fn get_object_vars(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let Value::Object(o) = a.at(0) else {
+        return Ok(Value::Null);
+    };
+    let mut t = HashTable::new();
+    for (k, name, _) in vm.visible_props(&o) {
+        let v = vm.read_property(&o, &name, crate::opcode::FetchMode::Is)?;
+        let key = match k {
+            Value::Int(i) => ArrayKey::Int(i),
+            Value::Str(s) => ArrayKey::from_zstr(&s),
+            _ => continue,
+        };
+        t.insert(key, v);
+    }
+    Ok(Value::Array(ZArray::from_table(t)))
+}
+
+fn get_class_vars(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let name = s(a, 0);
+    let Some(cls) = vm.lookup_class(&name)? else {
+        return Ok(Value::Bool(false));
+    };
+    let scope = vm.frames.get(vm.frames.len().wrapping_sub(2)).and_then(|f| f.scope.clone());
+    let defaults = vm.class_defaults(&cls)?;
+    let mut t = HashTable::new();
+    for pi in &cls.props {
+        if let PropLookup::Found(f) = vm.lookup_prop(&cls, &pi.name, scope.as_ref()) {
+            if f.slot != pi.slot {
+                continue;
+            }
+            if let Some(Some(v)) = defaults.get(pi.slot as usize) {
+                t.insert(ArrayKey::Str(pi.name.clone()), v.clone());
+            }
+        }
+    }
+    for sp in cls.static_props.clone() {
+        let cell = match vm.static_prop_cell(&cls, &sp.name) {
+            Ok(c) => c,
+            Err(Throw::Exception(_)) => continue,
+            Err(e) => return Err(e),
+        };
+        t.insert(ArrayKey::Str(sp.name.clone()), cell.borrow().deref());
+    }
+    Ok(Value::Array(ZArray::from_table(t)))
+}
+
+fn get_class_methods(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let Some(cls) = class_arg(vm, &a.at(0), true)? else {
+        return Err(super::util::type_error(
+            vm,
+            a,
+            1,
+            &format!("must be an object or a valid class name, {} given", crate::typecheck::given_type(&a.at(0))),
+        ));
+    };
+    let scope = vm.frames.get(vm.frames.len().wrapping_sub(2)).and_then(|f| f.scope.clone());
+    let mut out = HashTable::new();
+    for lc in &cls.method_order {
+        let m = &cls.methods[lc];
+        if vm.can_access_method(m, scope.as_ref()) {
+            let _ = out.push(Value::Str(m.name.clone()));
+        }
+    }
+    Ok(Value::Array(ZArray::from_table(out)))
+}
+
+fn method_exists(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let v = a.at(0);
+    let cls = match &v {
+        Value::Object(o) => Some(object::class_of(o).clone()),
+        Value::Str(s) => vm.lookup_class(s)?,
+        _ => {
+            return Err(super::util::type_error(
+                vm,
+                a,
+                1,
+                &format!("must be of type object|string, {} given", crate::typecheck::given_type(&v)),
+            ))
+        }
+    };
+    let m = s(a, 1);
+    let Some(cls) = cls else {
+        return Ok(Value::Bool(false));
+    };
+    if cls.find_method(m.as_bytes()).is_some() {
+        return Ok(Value::Bool(true));
+    }
+    if let Value::Object(o) = &v {
+        if vm.closure_data(o).is_some() && m.eq_ignore_ascii_case(b"__invoke") {
+            return Ok(Value::Bool(true));
+        }
+    }
+    Ok(Value::Bool(false))
+}
+
+fn property_exists(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let v = a.at(0);
+    let p = s(a, 1);
+    let cls = match &v {
+        Value::Object(o) => object::class_of(o).clone(),
+        Value::Str(s) => match vm.lookup_class(s)? {
+            Some(c) => c,
+            None => return Ok(Value::Bool(false)),
+        },
+        _ => {
+            return Err(super::util::type_error(
+                vm,
+                a,
+                1,
+                &format!("must be of type object|string, {} given", crate::typecheck::given_type(&v)),
+            ))
+        }
+    };
+    if cls.prop_map.contains_key(&p) || cls.static_map.contains_key(&p) || cls.props.iter().any(|x| x.name == p) {
+        return Ok(Value::Bool(true));
+    }
+    if let Value::Object(o) = &v {
+        let d = object::data(o).dynamic.borrow();
+        if d.as_ref().is_some_and(|t| t.contains_key(&ArrayKey::Str(p.clone()))) {
+            return Ok(Value::Bool(true));
+        }
+    }
+    Ok(Value::Bool(false))
+}
+
+fn class_exists_kind(vm: &mut Vm, a: &Args, pred: fn(&Class) -> bool) -> VmResult<Value> {
+    let name = s(a, 0);
+    let autoload = !a.has(1) || b(a, 1);
+    let c = if autoload { vm.lookup_class(&name)? } else { vm.find_class(name.as_bytes()) };
+    Ok(Value::Bool(c.is_some_and(|c| pred(&c))))
+}
+
+fn class_exists(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    class_exists_kind(vm, a, |c| !c.is_interface() && !c.is_trait() && !c.is_enum())
+}
+fn interface_exists(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    class_exists_kind(vm, a, Class::is_interface)
+}
+fn trait_exists(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    class_exists_kind(vm, a, Class::is_trait)
+}
+fn enum_exists(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    class_exists_kind(vm, a, Class::is_enum)
+}
+
+fn function_exists(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let n = s(a, 0);
+    let n = n.as_bytes().strip_prefix(b"\\").unwrap_or(n.as_bytes());
+    Ok(Value::Bool(vm.functions.contains_key(n.to_ascii_lowercase().as_slice())))
+}
+
+fn is_a_impl(vm: &mut Vm, a: &Args, subclass_only: bool) -> VmResult<Value> {
+    let v = a.at(0);
+    let allow_string = a.has(2) && b(a, 2) || (subclass_only && !a.has(2));
+    let cls = match &v {
+        Value::Object(o) => object::class_of(o).clone(),
+        Value::Str(s) if allow_string => match vm.lookup_class(s)? {
+            Some(c) => c,
+            None => return Ok(Value::Bool(false)),
+        },
+        _ => return Ok(Value::Bool(false)),
+    };
+    let target = s(a, 1);
+    let Some(t) = vm.find_class(target.as_bytes()) else {
+        return Ok(Value::Bool(false));
+    };
+    if subclass_only && Rc::ptr_eq(&cls, &t) {
+        return Ok(Value::Bool(false));
+    }
+    Ok(Value::Bool(cls.is_subclass_of(&t)))
+}
+
+fn is_a(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    is_a_impl(vm, a, false)
+}
+fn is_subclass_of(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    is_a_impl(vm, a, true)
+}
+
+fn spl_autoload_register(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    if let Some(cb) = opt(a, 0) {
+        if !vm.is_callable_value(&cb) {
+            return Err(super::util::type_error(vm, a, 1, "must be a valid callback or null, no array or string given"));
+        }
+        let prepend = b(a, 2);
+        if !vm.autoloaders.iter().any(|x| php_runtime::ops::is_identical(x, &cb).unwrap_or(false)) {
+            if prepend {
+                vm.autoloaders.insert(0, cb);
+            } else {
+                vm.autoloaders.push(cb);
+            }
+        }
+    }
+    Ok(Value::Bool(true))
+}
+
+fn spl_autoload_unregister(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let cb = a.at(0);
+    let before = vm.autoloaders.len();
+    vm.autoloaders.retain(|x| !php_runtime::ops::is_identical(x, &cb).unwrap_or(false));
+    Ok(Value::Bool(vm.autoloaders.len() != before))
+}
+
+fn spl_autoload_functions(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
+    Ok(Value::Array(ZArray::from_values(vm.autoloaders.clone())))
+}
+
+fn spl_autoload_call(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let n = s(a, 0);
+    vm.lookup_class(&n)?;
+    Ok(Value::Null)
+}
+
+fn spl_object_id(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    match a.at(0) {
+        Value::Object(o) => Ok(Value::Int(i64::from(o.handle()))),
+        _ => Ok(Value::Int(0)),
+    }
+}
+
+fn spl_object_hash(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    match a.at(0) {
+        Value::Object(o) => Ok(sv(format!("{:032x}", o.handle()))),
+        _ => Ok(sv("")),
+    }
+}
+
+fn set_error_handler(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let cb = a.at(0);
+    if !cb.is_null() && !vm.is_callable_value(&cb) {
+        let desc = vm.callable_error(&cb);
+        return Err(super::util::type_error(vm, a, 1, &format!("must be a valid callback or null, {desc}")));
+    }
+    let mask = if a.has(1) { i(a, 1) } else { 30719 };
+    let old = vm.error_handlers.last().map(|h| h.callback.clone()).unwrap_or_default();
+    vm.error_handlers.push(ErrorHandler { callback: cb, mask });
+    Ok(old)
+}
+
+fn restore_error_handler(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
+    vm.error_handlers.pop();
+    Ok(Value::Bool(true))
+}
+
+fn set_exception_handler(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let cb = a.at(0);
+    if !cb.is_null() && !vm.is_callable_value(&cb) {
+        let desc = vm.callable_error(&cb);
+        return Err(super::util::type_error(vm, a, 1, &format!("must be a valid callback or null, {desc}")));
+    }
+    let old = vm.exception_handlers.last().cloned().unwrap_or_default();
+    vm.exception_handlers.push(cb);
+    Ok(old)
+}
+
+fn restore_exception_handler(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
+    vm.exception_handlers.pop();
+    Ok(Value::Bool(true))
+}
+
+fn trigger_error(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let msg = s(a, 0);
+    let level = if a.has(1) { i(a, 1) } else { 1024 };
+    match level {
+        256 | 512 | 1024 | 16384 => {}
+        _ => {
+            return Err(value_error(
+                vm,
+                a,
+                2,
+                "must be one of E_USER_ERROR, E_USER_WARNING, E_USER_NOTICE, or E_USER_DEPRECATED",
+            ))
+        }
+    }
+    if level == 256 {
+        vm.deprecated("Passing E_USER_ERROR to trigger_error() is deprecated since 8.4, throw an exception or call exit with a string message instead")?;
+    }
+    vm.error(level, &msg.to_string_lossy())?;
+    Ok(Value::Bool(true))
+}
+
+fn error_reporting(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let old = vm.error_reporting;
+    if let Some(v) = opt(a, 0) {
+        let n = vm.to_long(&v)?;
+        vm.error_reporting = n;
+        let mut sink = Vec::new();
+        vm.ini.alter("error_reporting", n.to_string().as_bytes(), php_support::ini::Access::USER, php_support::ini::Stage::Runtime, true, &mut sink);
+    }
+    Ok(Value::Int(old))
+}
+
+fn error_get_last(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
+    let Some(e) = vm.last_error.clone() else {
+        return Ok(Value::Null);
+    };
+    let mut t = HashTable::new();
+    t.insert(ArrayKey::Str(ZStr::from("type")), Value::Int(e.level));
+    t.insert(ArrayKey::Str(ZStr::from("message")), sv(e.message));
+    t.insert(ArrayKey::Str(ZStr::from("file")), Value::Str(e.file));
+    t.insert(ArrayKey::Str(ZStr::from("line")), Value::Int(i64::from(e.line)));
+    Ok(Value::Array(ZArray::from_table(t)))
+}
+
+fn error_clear_last(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
+    vm.last_error = None;
+    Ok(Value::Null)
+}
+
+fn ini_get(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let n = s(a, 0);
+    let name = n.to_string_lossy();
+    Ok(match vm.ini.ini_get(&name) {
+        Some(v) => sv(v),
+        None => Value::Bool(false),
+    })
+}
+
+fn ini_set(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let n = s(a, 0).to_string_lossy();
+    let v = a.at(1);
+    let val: Vec<u8> = match &v {
+        Value::Bool(b) => if *b { b"1".to_vec() } else { b"".to_vec() },
+        Value::Null => Vec::new(),
+        other => vm.to_zstr(other)?.as_bytes().to_vec(),
+    };
+    let mut sink = Vec::new();
+    let r = vm.ini.ini_set(&n, &val, &mut sink);
+    for d in sink {
+        let lvl = i64::from(d.level.0);
+        if d.docref {
+            vm.docref(lvl, &d.message)?;
+        } else {
+            vm.error(lvl, &d.message)?;
+        }
+    }
+    vm.sync_ini(&n);
+    Ok(match r {
+        Some(old) => sv(old),
+        None => Value::Bool(false),
+    })
+}
+
+fn ini_restore(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let n = s(a, 0).to_string_lossy();
+    let mut sink = Vec::new();
+    vm.ini.ini_restore(&n, &mut sink);
+    vm.sync_ini(&n);
+    Ok(Value::Null)
+}
+
+fn set_include_path(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let v = s(a, 0);
+    let mut sink = Vec::new();
+    let old = vm.ini.ini_set("include_path", v.as_bytes(), &mut sink);
+    Ok(match old {
+        Some(o) => sv(o),
+        None => Value::Bool(false),
+    })
+}
+
+fn get_include_path(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
+    Ok(vm.ini.ini_get("include_path").map_or(Value::Bool(false), sv))
+}
+
+fn debug_backtrace(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let opts = if a.has(0) { i(a, 0) } else { 1 };
+    let limit = usize::try_from(i(a, 1).max(0)).unwrap_or(0);
+    let t = vm.backtrace(true, opts & 2 != 0, opts & 1 != 0, limit);
+    Ok(Value::Array(t))
+}
+
+fn debug_print_backtrace(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let opts = i(a, 0);
+    let limit = usize::try_from(i(a, 1).max(0)).unwrap_or(0);
+    let t = vm.backtrace(true, opts & 2 != 0, false, limit);
+    let s = vm.trace_to_string(&t, false);
+    vm.echo(s.as_bytes());
+    Ok(Value::Null)
+}
+
+fn ret_zero(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
+    Ok(Value::Int(0))
+}
+fn ret_true(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
+    Ok(Value::Bool(true))
+}
+fn ret_false(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
+    Ok(Value::Bool(false))
+}
+fn ret_null(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
+    Ok(Value::Null)
+}
+
+fn memory_get_usage(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
+    Ok(Value::Int(2 * 1024 * 1024))
+}
+
+fn php_sapi_name(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
+    Ok(sv("cli"))
+}
+
+fn phpversion(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    if a.has(0) && !a.at(0).is_null() {
+        let e = s(a, 0).to_ascii_lowercase();
+        return Ok(match e.as_bytes() {
+            b"core" | b"standard" | b"date" | b"pcre" | b"spl" | b"json" | b"random" | b"reflection" | b"hash" => {
+                sv(crate::PHP_VERSION)
+            }
+            _ => Value::Bool(false),
+        });
+    }
+    Ok(sv(crate::PHP_VERSION))
+}
+
+fn zend_version(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
+    Ok(sv(crate::ZEND_VERSION))
+}
+
+fn extension_loaded(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let e = s(a, 0).to_ascii_lowercase();
+    Ok(Value::Bool(crate::LOADED_EXTENSIONS.iter().any(|x| x.eq_ignore_ascii_case(&e.to_string_lossy()))))
+}
+
+fn get_loaded_extensions(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
+    Ok(Value::Array(ZArray::from_values(crate::LOADED_EXTENSIONS.iter().map(|e| sv(*e)))))
+}
+
+fn call_user_func(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let cb = a.at(0);
+    let args: Vec<Value> = a.values.iter().skip(1).map(Value::deref).collect();
+    let named = std::mem::take(&mut a.named);
+    vm.call_value_named(&cb, args, named)
+}
+
+fn call_user_func_array(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let cb = a.at(0);
+    let arr = arr(a, 1);
+    let mut args = Vec::new();
+    let mut named = Vec::new();
+    for (k, v) in arr.iter() {
+        match k {
+            ArrayKey::Int(_) => {
+                if !named.is_empty() {
+                    return Err(vm.make_throw("Error", "Cannot use positional argument after named argument"));
+                }
+                args.push(v.clone());
+            }
+            ArrayKey::Str(s) => named.push((s.clone(), v.clone())),
+        }
+    }
+    vm.call_value_named(&cb, args, named)
+}
+
+fn is_callable(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let v = a.at(0);
+    let syntax_only = b(a, 1);
+    let r = if syntax_only {
+        match &v {
+            Value::Str(_) | Value::Object(_) => true,
+            Value::Array(x) => x.len() == 2,
+            _ => false,
+        }
+    } else {
+        vm.is_callable_value(&v)
+    };
+    if a.has(2) {
+        let name = vm.callable_name(&v);
+        a.set_ref(2, sv(name));
+    }
+    Ok(Value::Bool(r))
+}
+
+fn register_shutdown_function(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let cb = a.at(0);
+    if !vm.is_callable_value(&cb) {
+        let desc = vm.callable_error(&cb);
+        return Err(super::util::type_error(vm, a, 1, &format!("must be a valid callback, {desc}")));
+    }
+    let args: Vec<Value> = a.values.iter().skip(1).map(Value::deref).collect();
+    vm.shutdown_functions.push((cb, args));
+    Ok(Value::Null)
+}
+
+fn get_defined_vars(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
+    let Some(idx) = caller_idx(vm) else {
+        return Ok(Value::Array(ZArray::new()));
+    };
+    let t = vm.frames[idx].vars.borrow().to_array();
+    Ok(Value::Array(ZArray::from_table(t)))
+}
+
+fn compact(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let Some(idx) = caller_idx(vm) else {
+        return Ok(Value::Array(ZArray::new()));
+    };
+    let mut out = HashTable::new();
+    let vars = vm.frames[idx].vars.clone();
+    fn add(vm: &mut Vm, vars: &std::rc::Rc<std::cell::RefCell<crate::vm::VarStore>>, v: &Value, out: &mut HashTable, depth: u32) -> VmResult<()> {
+        match v {
+            Value::Str(n) => {
+                let val = {
+                    let mut st = vars.borrow_mut();
+                    st.find(n.as_bytes()).and_then(|i| st.slots[i as usize].clone())
+                };
+                match val {
+                    Some(val) => {
+                        out.insert(ArrayKey::from_zstr(n), val.deref());
+                    }
+                    None => {
+                        if n.as_bytes() == b"this" {
+                            if let Some(t) = vm.frames.iter().rev().nth(1).and_then(|f| f.this.clone()) {
+                                out.insert(ArrayKey::Str(n.clone()), Value::Object(t));
+                                return Ok(());
+                            }
+                        }
+                        vm.warning(&format!("compact(): Undefined variable ${}", n.to_string_lossy()))?;
+                    }
+                }
+            }
+            Value::Array(arr) => {
+                if depth > 64 {
+                    return Err(vm.make_throw("Error", "Recursion detected"));
+                }
+                for (_, x) in arr.iter() {
+                    add(vm, vars, &x.deref(), out, depth + 1)?;
+                }
+            }
+            Value::Reference(r) => add(vm, vars, &r.get(), out, depth)?,
+            other => {
+                vm.warning(&format!(
+                    "compact(): Argument #1 must be string or array of strings, {} given",
+                    other.type_name()
+                ))?;
+            }
+        }
+        Ok(())
+    }
+    let vals: Vec<Value> = a.values.iter().map(Value::deref).collect();
+    for v in vals {
+        add(vm, &vars, &v, &mut out, 0)?;
+    }
+    Ok(Value::Array(ZArray::from_table(out)))
+}
+
+fn extract(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let Some(idx) = caller_idx(vm) else {
+        return Ok(Value::Int(0));
+    };
+    let src = match a.values.first() {
+        Some(Value::Reference(r)) => r.get(),
+        Some(v) => v.clone(),
+        None => Value::Null,
+    };
+    let Value::Array(arr) = src else {
+        return Ok(Value::Int(0));
+    };
+    let flags_v = if a.has(1) { i(a, 1) } else { 0 };
+    let prefix = if a.has(2) { s(a, 2) } else { ZStr::empty() };
+    let refs = flags_v & 256 != 0;
+    let mode = flags_v & 0xff;
+    let vars = vm.frames[idx].vars.clone();
+    let mut n = 0;
+    for (k, v) in arr.iter() {
+        let ArrayKey::Str(name) = k else {
+            if mode == 2 || mode == 3 {
+                // EXTR_PREFIX_ALL/INVALID with numeric keys.
+                let nm = format!("{}_{}", prefix, match k { ArrayKey::Int(i) => i.to_string(), _ => String::new() });
+                let mut st = vars.borrow_mut();
+                let i = st.find_or_add(nm.as_bytes());
+                st.slots[i as usize] = Some(v.deref());
+                n += 1;
+            }
+            continue;
+        };
+        let valid = !name.is_empty()
+            && (name.as_bytes()[0].is_ascii_alphabetic() || name.as_bytes()[0] == b'_' || name.as_bytes()[0] >= 0x80)
+            && name.as_bytes().iter().all(|&c| c.is_ascii_alphanumeric() || c == b'_' || c >= 0x80);
+        let exists = vars.borrow_mut().find(name.as_bytes()).is_some_and(|i| vars.borrow().slots[i as usize].is_some());
+        let target = match mode {
+            1 => {
+                if exists {
+                    continue;
+                }
+                name.clone()
+            }
+            2 => {
+                if exists {
+                    ZStr::from(format!("{prefix}_{name}"))
+                } else {
+                    name.clone()
+                }
+            }
+            3 => ZStr::from(format!("{prefix}_{name}")),
+            6 => {
+                if !exists {
+                    continue;
+                }
+                name.clone()
+            }
+            _ => name.clone(),
+        };
+        if !valid && mode != 3 {
+            continue;
+        }
+        if target.as_bytes() == b"this" {
+            continue;
+        }
+        if target.as_bytes() == b"GLOBALS" {
+            continue;
+        }
+        let mut st = vars.borrow_mut();
+        let i = st.find_or_add(target.as_bytes()) as usize;
+        if refs {
+            let _ = v;
+        }
+        match &mut st.slots[i] {
+            Some(Value::Reference(r)) if !refs => {
+                r.set(v.deref());
+            }
+            slot => *slot = Some(v.deref()),
+        }
+        n += 1;
+    }
+    Ok(Value::Int(n))
+}
+
+fn get_declared_classes(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
+    let mut out = Vec::new();
+    for lc in &vm.class_order {
+        if let Some(c) = vm.classes.get(lc) {
+            if !c.is_interface() && !c.is_trait() && c.flags & cflags::ANON == 0 {
+                out.push(Value::Str(c.name.clone()));
+            }
+        }
+    }
+    Ok(Value::Array(ZArray::from_values(out)))
+}
+
+fn get_declared_interfaces(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
+    let mut out = Vec::new();
+    for lc in &vm.class_order {
+        if let Some(c) = vm.classes.get(lc) {
+            if c.is_interface() {
+                out.push(Value::Str(c.name.clone()));
+            }
+        }
+    }
+    Ok(Value::Array(ZArray::from_values(out)))
+}
+
+fn get_defined_functions(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
+    let mut internal = Vec::new();
+    let mut user = Vec::new();
+    for (k, f) in &vm.functions {
+        match f {
+            Func::Builtin(_) => internal.push(Value::Str(k.clone())),
+            Func::User(_) => user.push(Value::Str(k.clone())),
+        }
+    }
+    let mut t = HashTable::new();
+    t.insert(ArrayKey::Str(ZStr::from("internal")), Value::Array(ZArray::from_values(internal)));
+    t.insert(ArrayKey::Str(ZStr::from("user")), Value::Array(ZArray::from_values(user)));
+    Ok(Value::Array(ZArray::from_table(t)))
+}
+
+fn get_defined_constants(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let mut t = HashTable::new();
+    if b(a, 0) {
+        let mut u = HashTable::new();
+        for n in &vm.user_constants {
+            if let Some(v) = vm.constants.get(n) {
+                u.insert(ArrayKey::Str(n.clone()), v.clone());
+            }
+        }
+        t.insert(ArrayKey::Str(ZStr::from("user")), Value::Array(ZArray::from_table(u)));
+        return Ok(Value::Array(ZArray::from_table(t)));
+    }
+    for (k, v) in &vm.constants {
+        t.insert(ArrayKey::Str(k.clone()), v.clone());
+    }
+    Ok(Value::Array(ZArray::from_table(t)))
+}
+
+fn iterator_to_array(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let v = a.at(0);
+    let preserve = !a.has(1) || b(a, 1);
+    let pairs = vm.iterate_to_vec(&v)?;
+    Ok(Value::Array(vm.pairs_to_array(pairs, preserve)?))
+}
+
+fn iterator_count(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let v = a.at(0);
+    let pairs = vm.iterate_to_vec(&v)?;
+    Ok(Value::Int(i64::try_from(pairs.len()).unwrap_or(0)))
+}
+
+fn iterator_apply(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let Value::Object(o) = a.at(0) else { return Ok(Value::Int(0)) };
+    let cb = a.at(1);
+    let args: Vec<Value> = match a.get(2) {
+        Some(Value::Array(x)) => x.iter().map(|(_, v)| v.clone()).collect(),
+        _ => Vec::new(),
+    };
+    let it = vm.get_iterator(&o)?;
+    vm.call_method_name(&it, "rewind", Vec::new())?;
+    let mut n = 0;
+    loop {
+        let valid = vm.call_method_name(&it, "valid", Vec::new())?;
+        if !vm.to_bool(&valid)? {
+            break;
+        }
+        n += 1;
+        let r = vm.call_value(&cb, args.clone())?;
+        if !vm.to_bool(&r)? {
+            break;
+        }
+        vm.call_method_name(&it, "next", Vec::new())?;
+    }
+    Ok(Value::Int(n))
+}
+
+fn class_implements(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let Some(c) = class_arg(vm, &a.at(0), true)? else {
+        return Ok(Value::Bool(false));
+    };
+    let mut t = HashTable::new();
+    for i in &c.interfaces {
+        t.insert(ArrayKey::Str(i.name.clone()), Value::Str(i.name.clone()));
+    }
+    Ok(Value::Array(ZArray::from_table(t)))
+}
+
+fn class_parents(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let Some(c) = class_arg(vm, &a.at(0), true)? else {
+        return Ok(Value::Bool(false));
+    };
+    let mut t = HashTable::new();
+    let mut p = c.parent.clone();
+    while let Some(x) = p {
+        t.insert(ArrayKey::Str(x.name.clone()), Value::Str(x.name.clone()));
+        p = x.parent.clone();
+    }
+    Ok(Value::Array(ZArray::from_table(t)))
+}
+
+fn class_uses(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let Some(c) = class_arg(vm, &a.at(0), true)? else {
+        return Ok(Value::Bool(false));
+    };
+    let mut t = HashTable::new();
+    for x in &c.traits {
+        t.insert(ArrayKey::Str(x.name.clone()), Value::Str(x.name.clone()));
+    }
+    Ok(Value::Array(ZArray::from_table(t)))
+}
+
+fn getenv(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    if !a.has(0) || a.at(0).is_null() {
+        let mut t = HashTable::new();
+        for (k, v) in std::env::vars_os() {
+            use std::os::unix::ffi::OsStrExt;
+            t.insert(ArrayKey::from_bytes(k.as_bytes()), sv(v.as_bytes()));
+        }
+        return Ok(Value::Array(ZArray::from_table(t)));
+    }
+    let n = s(a, 0);
+    use std::os::unix::ffi::OsStrExt;
+    match std::env::var_os(std::ffi::OsStr::from_bytes(n.as_bytes())) {
+        Some(v) => Ok(sv(v.as_bytes())),
+        None => Ok(Value::Bool(false)),
+    }
+}
+
+fn putenv(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let st = s(a, 0).to_string_lossy();
+    match st.split_once('=') {
+        // SAFETY-free: std::env::set_var is safe on this toolchain edition.
+        Some((k, v)) => std::env::set_var(k, v),
+        None => std::env::remove_var(st),
+    }
+    Ok(Value::Bool(true))
+}
+
+fn usleep(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    std::thread::sleep(std::time::Duration::from_micros(u64::try_from(i(a, 0).max(0)).unwrap_or(0)));
+    Ok(Value::Null)
+}
+
+fn sleep(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    std::thread::sleep(std::time::Duration::from_secs(u64::try_from(i(a, 0).max(0)).unwrap_or(0)));
+    Ok(Value::Int(0))
+}
+
+fn time(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
+    let t = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+    Ok(Value::Int(i64::try_from(t).unwrap_or(0)))
+}
+
+fn microtime(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let d = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
+    if b(a, 0) {
+        return Ok(Value::Float(d.as_secs_f64()));
+    }
+    Ok(sv(format!("{:.8} {}", f64::from(d.subsec_micros()) / 1e6, d.as_secs())))
+}
+
+fn hrtime(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    let st = START.get_or_init(std::time::Instant::now);
+    let e = st.elapsed();
+    if b(a, 0) {
+        return Ok(Value::Int(i64::try_from(e.as_nanos()).unwrap_or(0) + 1_000_000_000));
+    }
+    Ok(Value::Array(ZArray::from_values([
+        Value::Int(i64::try_from(e.as_secs()).unwrap_or(0) + 1),
+        Value::Int(i64::from(e.subsec_nanos())),
+    ])))
+}
+
+fn gc_status(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
+    let mut t = HashTable::new();
+    for k in ["runs", "collected", "threshold", "roots"] {
+        t.insert(ArrayKey::Str(ZStr::from(k)), Value::Int(if k == "threshold" { 10001 } else { 0 }));
+    }
+    Ok(Value::Array(ZArray::from_table(t)))
+}
+
+fn version_compare(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let v1 = s(a, 0);
+    let v2 = s(a, 1);
+    let c = php_version_compare(v1.as_bytes(), v2.as_bytes());
+    if a.has(2) && !a.at(2).is_null() {
+        let op = s(a, 2).to_string_lossy();
+        let r = match op.as_str() {
+            "<" | "lt" => c < 0,
+            "<=" | "le" => c <= 0,
+            ">" | "gt" => c > 0,
+            ">=" | "ge" => c >= 0,
+            "==" | "eq" => c == 0,
+            "!=" | "<>" | "ne" => c != 0,
+            _ => {
+                return Err(value_error(vm, a, 3, "must be a valid comparison operator"));
+            }
+        };
+        return Ok(Value::Bool(r));
+    }
+    Ok(Value::Int(i64::from(c)))
+}
+
+fn canon_version(v: &[u8]) -> Vec<u8> {
+    let mut out = Vec::new();
+    let mut prev: Option<u8> = None;
+    for &c in v {
+        let kind = |x: u8| if x.is_ascii_digit() { 1 } else if x == b'.' || x == b'-' || x == b'_' || x == b'+' { 2 } else { 3 };
+        if kind(c) == 2 {
+            if out.last() != Some(&b'.') {
+                out.push(b'.');
+            }
+        } else {
+            if let Some(p) = prev {
+                if kind(p) != 2 && kind(p) != kind(c) && out.last() != Some(&b'.') {
+                    out.push(b'.');
+                }
+            }
+            out.push(c);
+        }
+        prev = Some(c);
+    }
+    out
+}
+
+fn special_order(s: &[u8]) -> i32 {
+    let forms: [(&[u8], i32); 9] = [
+        (b"dev", 0),
+        (b"alpha", 1),
+        (b"a", 1),
+        (b"beta", 2),
+        (b"b", 2),
+        (b"RC", 3),
+        (b"rc", 3),
+        (b"#", 4),
+        (b"pl", 5),
+    ];
+    for (f, o) in forms {
+        if s.starts_with(f) {
+            return o;
+        }
+    }
+    -6
+}
+
+/// `php_version_compare`.
+pub(crate) fn php_version_compare(a: &[u8], b: &[u8]) -> i32 {
+    let ca = canon_version(a);
+    let cb = canon_version(b);
+    let pa: Vec<&[u8]> = ca.split(|&c| c == b'.').filter(|p| !p.is_empty()).collect();
+    let pb: Vec<&[u8]> = cb.split(|&c| c == b'.').filter(|p| !p.is_empty()).collect();
+    let n = pa.len().max(pb.len());
+    for idx in 0..n {
+        let x = pa.get(idx);
+        let y = pb.get(idx);
+        let r = match (x, y) {
+            (Some(x), Some(y)) => {
+                let xd = x[0].is_ascii_digit();
+                let yd = y[0].is_ascii_digit();
+                match (xd, yd) {
+                    (true, true) => {
+                        let xi: i64 = std::str::from_utf8(x).ok().and_then(|s| s.parse().ok()).unwrap_or(0);
+                        let yi: i64 = std::str::from_utf8(y).ok().and_then(|s| s.parse().ok()).unwrap_or(0);
+                        (xi > yi) as i32 - (xi < yi) as i32
+                    }
+                    (false, false) => {
+                        let (o1, o2) = (special_order(x), special_order(y));
+                        (o1 > o2) as i32 - (o1 < o2) as i32
+                    }
+                    (true, false) => {
+                        let o = special_order(y);
+                        (4 > o) as i32 - (4 < o) as i32
+                    }
+                    (false, true) => {
+                        let o = special_order(x);
+                        (o > 4) as i32 - (o < 4) as i32
+                    }
+                }
+            }
+            (Some(x), None) => {
+                if x[0].is_ascii_digit() {
+                    1
+                } else {
+                    let o = special_order(x);
+                    (o > 4) as i32 - (o < 4) as i32
+                }
+            }
+            (None, Some(y)) => {
+                if y[0].is_ascii_digit() {
+                    -1
+                } else {
+                    let o = special_order(y);
+                    (4 > o) as i32 - (4 < o) as i32
+                }
+            }
+            (None, None) => 0,
+        };
+        if r != 0 {
+            return r;
+        }
+    }
+    0
+}
+
+fn get_resource_type(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    match a.at(0) {
+        Value::Resource(r) => Ok(sv(r.type_name().map_or_else(|| "Unknown".to_string(), |t| t.to_string_lossy()))),
+        _ => Ok(Value::Bool(false)),
+    }
+}
+
+fn get_resource_id(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    match a.at(0) {
+        Value::Resource(r) => Ok(Value::Int(r.handle())),
+        _ => Ok(Value::Int(0)),
+    }
+}
+
+fn enum_cases(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let called = a.called.clone().expect("enum class");
+    vm.enum_cases_array(&called)
+}
+
+fn enum_from(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let called = a.called.clone().expect("enum class");
+    vm.enum_from(&called, a.at(0), false)
+}
+
+fn enum_try_from(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let called = a.called.clone().expect("enum class");
+    vm.enum_from(&called, a.at(0), true)
+}
+
+pub(crate) fn enum_methods() -> [(&'static str, u32, crate::func::BuiltinFn); 3] {
+    [
+        ("cases(): array", flags::PUBLIC | flags::STATIC, enum_cases),
+        ("from(int|string $value): static", flags::PUBLIC | flags::STATIC, enum_from),
+        ("tryFrom(int|string $value): ?static", flags::PUBLIC | flags::STATIC, enum_try_from),
+    ]
+}
+
+/// Registers the core functions and constants.
+#[allow(clippy::too_many_lines)]
+pub(crate) fn register(vm: &mut Vm) {
+    reg(vm, "zend_version(): string", zend_version);
+    reg(vm, "func_num_args(): int", func_num_args);
+    reg(vm, "func_get_arg(int $position): mixed", func_get_arg);
+    reg(vm, "func_get_args(): array", func_get_args);
+    reg(vm, "strlen(string $string): int", strlen);
+    reg(vm, "define(string $constant_name, mixed $value, bool $case_insensitive = false): bool", define);
+    reg(vm, "defined(string $constant_name): bool", defined);
+    reg(vm, "constant(string $name): mixed", constant_fn);
+    reg(vm, "get_class(object $object = UNKNOWN): string", get_class);
+    reg(vm, "get_called_class(): string", get_called_class);
+    reg(vm, "get_parent_class(object|string $object_or_class = UNKNOWN): string|false", get_parent_class);
+    reg(vm, "is_subclass_of(mixed $object_or_class, string $class, bool $allow_string = true): bool", is_subclass_of);
+    reg(vm, "is_a(mixed $object_or_class, string $class, bool $allow_string = false): bool", is_a);
+    reg(vm, "get_class_vars(string $class): array|false", get_class_vars);
+    reg(vm, "get_object_vars(object $object): array", get_object_vars);
+    reg(vm, "get_mangled_object_vars(object $object): array", get_object_vars);
+    reg(vm, "get_class_methods(object|string $object_or_class): array", get_class_methods);
+    reg(vm, "method_exists($object_or_class, string $method): bool", method_exists);
+    reg(vm, "property_exists($object_or_class, string $property): bool", property_exists);
+    reg(vm, "class_exists(string $class, bool $autoload = true): bool", class_exists);
+    reg(vm, "interface_exists(string $interface, bool $autoload = true): bool", interface_exists);
+    reg(vm, "trait_exists(string $trait, bool $autoload = true): bool", trait_exists);
+    reg(vm, "enum_exists(string $enum, bool $autoload = true): bool", enum_exists);
+    reg(vm, "function_exists(string $function): bool", function_exists);
+    reg(vm, "get_declared_classes(): array", get_declared_classes);
+    reg(vm, "get_declared_interfaces(): array", get_declared_interfaces);
+    reg(vm, "get_defined_functions(bool $exclude_disabled = true): array", get_defined_functions);
+    reg(vm, "get_defined_vars(): array", get_defined_vars);
+    reg(vm, "get_defined_constants(bool $categorize = false): array", get_defined_constants);
+    reg(vm, "trigger_error(string $message, int $error_level = E_USER_NOTICE): true", trigger_error);
+    alias(vm, "user_error", "trigger_error");
+    reg(vm, "set_error_handler(?callable $callback, int $error_levels = E_ALL)", set_error_handler);
+    reg(vm, "restore_error_handler(): true", restore_error_handler);
+    reg(vm, "set_exception_handler(?callable $callback)", set_exception_handler);
+    reg(vm, "restore_exception_handler(): true", restore_exception_handler);
+    reg(vm, "error_reporting(?int $error_level = null): int", error_reporting);
+    reg(vm, "error_get_last(): ?array", error_get_last);
+    reg(vm, "error_clear_last(): void", error_clear_last);
+    reg(vm, "ini_get(string $option): string|false", ini_get);
+    reg(vm, "ini_set(string $option, string|int|float|bool|null $value): string|false", ini_set);
+    alias(vm, "ini_alter", "ini_set");
+    reg(vm, "ini_restore(string $option): void", ini_restore);
+    reg(vm, "set_include_path(string $include_path): string|false", set_include_path);
+    reg(vm, "get_include_path(): string|false", get_include_path);
+    reg(vm, "debug_backtrace(int $options = 1, int $limit = 0): array", debug_backtrace);
+    reg(vm, "debug_print_backtrace(int $options = 0, int $limit = 0): void", debug_print_backtrace);
+    reg(vm, "gc_collect_cycles(): int", ret_zero);
+    reg(vm, "gc_enabled(): bool", ret_true);
+    reg(vm, "gc_enable(): void", ret_null);
+    reg(vm, "gc_disable(): void", ret_null);
+    reg(vm, "gc_mem_caches(): int", ret_zero);
+    reg(vm, "gc_status(): array", gc_status);
+    reg(vm, "memory_get_usage(bool $real_usage = false): int", memory_get_usage);
+    reg(vm, "memory_get_peak_usage(bool $real_usage = false): int", memory_get_usage);
+    reg(vm, "memory_reset_peak_usage(): void", ret_null);
+    reg(vm, "set_time_limit(int $seconds): bool", ret_true);
+    reg(vm, "ignore_user_abort(?bool $enable = null): int", ret_zero);
+    reg(vm, "connection_status(): int", ret_zero);
+    reg(vm, "connection_aborted(): int", ret_zero);
+    reg(vm, "php_sapi_name(): string|false", php_sapi_name);
+    reg(vm, "phpversion(?string $extension = null): string|false", phpversion);
+    reg(vm, "extension_loaded(string $extension): bool", extension_loaded);
+    reg(vm, "get_loaded_extensions(bool $zend_extensions = false): array", get_loaded_extensions);
+    reg(vm, "call_user_func(callable $callback, mixed ...$args): mixed", call_user_func);
+    reg(vm, "call_user_func_array(callable $callback, array $args): mixed", call_user_func_array);
+    reg(vm, "forward_static_call(callable $callback, mixed ...$args): mixed", call_user_func);
+    reg(vm, "forward_static_call_array(callable $callback, array $args): mixed", call_user_func_array);
+    reg(vm, "is_callable(mixed $value, bool $syntax_only = false, &$callable_name = null): bool", is_callable);
+    reg(vm, "register_shutdown_function(callable $callback, mixed ...$args): void", register_shutdown_function);
+    reg(vm, "compact($var_name, ...$var_names): array", compact);
+    reg(vm, "extract(array &$array, int $flags = 0, string $prefix = \"\"): int", extract);
+    reg(vm, "spl_autoload_register(?callable $callback = null, bool $throw = true, bool $prepend = false): bool", spl_autoload_register);
+    reg(vm, "spl_autoload_unregister(callable $callback): bool", spl_autoload_unregister);
+    reg(vm, "spl_autoload_functions(): array", spl_autoload_functions);
+    reg(vm, "spl_autoload_call(string $class): void", spl_autoload_call);
+    reg(vm, "spl_object_id(object $object): int", spl_object_id);
+    reg(vm, "spl_object_hash(object $object): string", spl_object_hash);
+    reg(vm, "class_implements($object_or_class, bool $autoload = true): array|false", class_implements);
+    reg(vm, "class_parents($object_or_class, bool $autoload = true): array|false", class_parents);
+    reg(vm, "class_uses($object_or_class, bool $autoload = true): array|false", class_uses);
+    reg(vm, "iterator_to_array(Traversable|array $iterator, bool $preserve_keys = true): array", iterator_to_array);
+    reg(vm, "iterator_count(Traversable|array $iterator): int", iterator_count);
+    reg(vm, "iterator_apply(Traversable $iterator, callable $callback, ?array $args = null): int", iterator_apply);
+    reg(vm, "getenv(?string $name = null, bool $local_only = false): array|string|false", getenv);
+    reg(vm, "putenv(string $assignment): bool", putenv);
+    reg(vm, "usleep(int $microseconds): void", usleep);
+    reg(vm, "sleep(int $seconds): int", sleep);
+    reg(vm, "time(): int", time);
+    reg(vm, "microtime(bool $as_float = false): string|float", microtime);
+    reg(vm, "hrtime(bool $as_number = false): array|int|float|false", hrtime);
+    reg(vm, "version_compare(string $version1, string $version2, ?string $operator = null): int|bool", version_compare);
+    reg(vm, "get_resource_type($resource): string", get_resource_type);
+    reg(vm, "get_resource_id($resource): int", get_resource_id);
+    reg(vm, "flush(): void", ret_null);
+    reg(vm, "headers_sent(&$filename = null, &$line = null): bool", ret_false);
+    reg(vm, "header(string $header, bool $replace = true, int $response_code = 0): void", ret_null);
+    reg(vm, "headers_list(): array", |_, _| Ok(Value::Array(ZArray::new())));
+    reg(vm, "php_ini_loaded_file(): string|false", ret_false);
+    reg(vm, "php_ini_scanned_files(): string|false", ret_false);
+    reg(vm, "setlocale(int $category, $locales, ...$rest): string|false", |_, _| Ok(sv("C")));
+    reg(vm, "gethostname(): string|false", |_, _| Ok(sv("localhost")));
+    reg(vm, "getmypid(): int|false", |_, _| Ok(Value::Int(i64::from(std::process::id()))));
+    reg(vm, "sys_get_temp_dir(): string", |_, _| Ok(sv(std::env::temp_dir().to_string_lossy().into_owned())));
+    reg(vm, "php_uname(string $mode = \"a\"): string", |_, a| {
+        let m = s(a, 0);
+        Ok(sv(match m.as_bytes() {
+            b"s" => "Linux",
+            b"n" => "localhost",
+            b"r" => "6.0.0",
+            b"m" => "x86_64",
+            _ => "Linux localhost 6.0.0 #1 SMP x86_64",
+        }))
+    });
+
+    for (n, v) in [
+        ("E_ERROR", 1),
+        ("E_WARNING", 2),
+        ("E_PARSE", 4),
+        ("E_NOTICE", 8),
+        ("E_CORE_ERROR", 16),
+        ("E_CORE_WARNING", 32),
+        ("E_COMPILE_ERROR", 64),
+        ("E_COMPILE_WARNING", 128),
+        ("E_USER_ERROR", 256),
+        ("E_USER_WARNING", 512),
+        ("E_USER_NOTICE", 1024),
+        ("E_STRICT", 2048),
+        ("E_RECOVERABLE_ERROR", 4096),
+        ("E_DEPRECATED", 8192),
+        ("E_USER_DEPRECATED", 16384),
+        ("E_ALL", 30719),
+        ("DEBUG_BACKTRACE_PROVIDE_OBJECT", 1),
+        ("DEBUG_BACKTRACE_IGNORE_ARGS", 2),
+        ("EXTR_OVERWRITE", 0),
+        ("EXTR_SKIP", 1),
+        ("EXTR_PREFIX_SAME", 2),
+        ("EXTR_PREFIX_ALL", 3),
+        ("EXTR_PREFIX_INVALID", 4),
+        ("EXTR_PREFIX_IF_EXISTS", 5),
+        ("EXTR_IF_EXISTS", 6),
+        ("EXTR_REFS", 256),
+        ("PHP_MAJOR_VERSION", 8),
+        ("PHP_MINOR_VERSION", 7),
+        ("PHP_RELEASE_VERSION", 0),
+        ("PHP_VERSION_ID", 80700),
+        ("PHP_DEBUG", 0),
+        ("PHP_ZTS", 0),
+        ("PHP_MAXPATHLEN", 4096),
+        ("PHP_INT_SIZE", 8),
+        ("PHP_FLOAT_DIG", 15),
+        ("ZEND_THREAD_SAFE", 0),
+        ("ZEND_DEBUG_BUILD", 0),
+    ] {
+        constant(vm, n, Value::Int(v));
+    }
+    constant(vm, "ZEND_THREAD_SAFE", Value::Bool(false));
+    constant(vm, "ZEND_DEBUG_BUILD", Value::Bool(false));
+    constant(vm, "PHP_INT_MAX", Value::Int(i64::MAX));
+    constant(vm, "PHP_INT_MIN", Value::Int(i64::MIN));
+    constant(vm, "PHP_FLOAT_EPSILON", Value::Float(f64::EPSILON));
+    constant(vm, "PHP_FLOAT_MAX", Value::Float(f64::MAX));
+    constant(vm, "PHP_FLOAT_MIN", Value::Float(f64::MIN_POSITIVE));
+    constant(vm, "NAN", Value::Float(f64::NAN));
+    constant(vm, "INF", Value::Float(f64::INFINITY));
+    constant(vm, "PHP_VERSION", sv(crate::PHP_VERSION));
+    constant(vm, "PHP_EXTRA_VERSION", sv("-dev"));
+    constant(vm, "PHP_OS", sv("Linux"));
+    constant(vm, "PHP_OS_FAMILY", sv("Linux"));
+    constant(vm, "PHP_EOL", sv("\n"));
+    constant(vm, "DIRECTORY_SEPARATOR", sv("/"));
+    constant(vm, "PATH_SEPARATOR", sv(":"));
+    constant(vm, "PHP_SHLIB_SUFFIX", sv("so"));
+    constant(vm, "PHP_BINARY", sv(std::env::current_exe().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default()));
+    constant(vm, "PHP_SAPI", sv("cli"));
+    constant(vm, "PHP_PREFIX", sv("/usr/local"));
+    constant(vm, "PHP_BINDIR", sv("/usr/local/bin"));
+    constant(vm, "PHP_LIBDIR", sv("/usr/local/lib/php"));
+    constant(vm, "PHP_DATADIR", sv("/usr/local/share/php"));
+    constant(vm, "PHP_EXTENSION_DIR", sv("/usr/local/lib/php/extensions"));
+    constant(vm, "DEFAULT_INCLUDE_PATH", sv(".:/usr/local/lib/php"));
+    constant(vm, "PEAR_INSTALL_DIR", sv("/usr/local/lib/php"));
+    constant(vm, "PEAR_EXTENSION_DIR", sv("/usr/local/lib/php/extensions"));
+    constant(vm, "PHP_CONFIG_FILE_PATH", sv("/usr/local/etc"));
+    constant(vm, "PHP_CONFIG_FILE_SCAN_DIR", sv(""));
+    constant(vm, "PHP_MANDIR", sv("/usr/local/share/man"));
+    constant(vm, "PHP_SYSCONFDIR", sv("/usr/local/etc"));
+    constant(vm, "PHP_LOCALSTATEDIR", sv("/usr/local/var"));
+    constant(vm, "PHP_FD_SETSIZE", Value::Int(1024));
+    constant(vm, "PHP_OUTPUT_HANDLER_START", Value::Int(1));
+    constant(vm, "PHP_OUTPUT_HANDLER_WRITE", Value::Int(0));
+    constant(vm, "PHP_OUTPUT_HANDLER_FLUSH", Value::Int(4));
+    constant(vm, "PHP_OUTPUT_HANDLER_CLEAN", Value::Int(2));
+    constant(vm, "PHP_OUTPUT_HANDLER_FINAL", Value::Int(8));
+    constant(vm, "PHP_OUTPUT_HANDLER_CONT", Value::Int(0));
+    constant(vm, "PHP_OUTPUT_HANDLER_END", Value::Int(8));
+    constant(vm, "PHP_OUTPUT_HANDLER_CLEANABLE", Value::Int(16));
+    constant(vm, "PHP_OUTPUT_HANDLER_FLUSHABLE", Value::Int(32));
+    constant(vm, "PHP_OUTPUT_HANDLER_REMOVABLE", Value::Int(64));
+    constant(vm, "PHP_OUTPUT_HANDLER_STDFLAGS", Value::Int(112));
+    constant(vm, "PHP_OUTPUT_HANDLER_STARTED", Value::Int(4096));
+    constant(vm, "PHP_OUTPUT_HANDLER_DISABLED", Value::Int(8192));
+    constant(vm, "PHP_OUTPUT_HANDLER_PROCESSED", Value::Int(16384));
+    let _ = (Throw::Fatal,);
+}

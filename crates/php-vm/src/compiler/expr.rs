@@ -861,16 +861,11 @@ impl Compiler {
         let t = self.tmp();
         if let ExprKind::Var(VarName::Name(id)) = &v.kind {
             if id.name == b"this" {
-                self.emit(Op::Isset {
-                    place: {
-                        let p = Place {
-                            base: PlaceBase::This,
-                            segs: Vec::new(),
-                        };
-                        self.place(p)
-                    },
-                    dst: t,
+                let pid = self.place(Place {
+                    base: PlaceBase::This,
+                    segs: Vec::new(),
                 });
+                self.emit(Op::Isset { place: pid, dst: t });
                 return Ok(Operand::Tmp(t));
             }
         }

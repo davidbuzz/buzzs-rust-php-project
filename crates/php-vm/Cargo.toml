@@ -10,6 +10,10 @@ php-lexer = { path = "../php-lexer" }
 php-parser = { path = "../php-parser" }
 php-runtime = { path = "../php-runtime" }
 php-support = { path = "../php-support" }
+php-random = { path = "../php-random" }
+php-stdarr = { path = "../php-stdarr" }
+php-stdstr = { path = "../php-stdstr" }
+php-hash = { path = "../php-hash" }
 
 [lints]
 workspace = true

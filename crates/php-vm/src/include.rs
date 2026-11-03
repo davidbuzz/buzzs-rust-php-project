@@ -36,6 +36,7 @@ impl Vm {
                     let level = match w.level {
                         php_parser::ast::DiagnosticLevel::CompileWarning => 128,
                         php_parser::ast::DiagnosticLevel::Deprecated => 8192,
+                        php_parser::ast::DiagnosticLevel::Warning => 2,
                     };
                     self.error_at(level, &w.message, filename, w.line)?;
                 }
@@ -66,6 +67,7 @@ impl Vm {
                     let level = match w.level {
                         php_parser::ast::DiagnosticLevel::CompileWarning => 128,
                         php_parser::ast::DiagnosticLevel::Deprecated => 8192,
+                        php_parser::ast::DiagnosticLevel::Warning => 2,
                     };
                     self.error_at(level, &w.message, filename, w.line)?;
                 }

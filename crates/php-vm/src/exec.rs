@@ -873,7 +873,7 @@ impl Vm {
                 (Value::Int(x), Value::Int(y)) => Ok(Value::Bool(x <= y)),
                 _ => ops::is_smaller_or_equal(a, b, self).map(Value::Bool),
             },
-            BinKind::Spaceship => ops::spaceship(a, b, self).map(Value::Int),
+            BinKind::Spaceship => ops::spaceship(a, b, self),
         };
         r.map_err(|e| self.rt_throw(e))
     }

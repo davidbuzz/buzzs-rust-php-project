@@ -238,6 +238,7 @@ pub fn compile(
         let level = match w.level {
             ast::DiagnosticLevel::CompileWarning => 128,
             ast::DiagnosticLevel::Deprecated => 8192,
+            ast::DiagnosticLevel::Warning => 2,
         };
         c.warnings.push((level, w.message.clone(), w.line));
     }

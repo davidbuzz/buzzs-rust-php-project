@@ -1,0 +1,269 @@
+//! `ext/standard/var.c`, `type.c`: dumping, type inspection and conversion.
+
+use super::reg;
+use super::util::{b, i, s, sv};
+use crate::func::Args;
+use crate::object;
+use crate::vm::{Vm, VmResult};
+use php_runtime::{dump, serialize, Value, ZArray, ZStr};
+
+fn var_dump(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let vals: Vec<Value> = a.values.iter().map(Value::deref).collect();
+    for v in vals {
+        let mut out = Vec::new();
+        let r = dump::var_dump(&mut out, &v, vm);
+        vm.echo(&out);
+        r.map_err(|e| vm.rt_throw(e))?;
+    }
+    Ok(Value::Null)
+}
+
+fn print_r(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let v = a.at(0);
+    let ret = b(a, 1);
+    if ret {
+        // Output produced while formatting goes into the result.
+        let out = dump::print_r(&v, vm).map_err(|e| vm.rt_throw(e))?;
+        return Ok(sv(out));
+    }
+    let out = dump::print_r(&v, vm).map_err(|e| vm.rt_throw(e))?;
+    vm.echo(&out);
+    Ok(Value::Bool(true))
+}
+
+fn var_export(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let v = a.at(0);
+    let out = dump::var_export(&v, vm).map_err(|e| vm.rt_throw(e))?;
+    if b(a, 1) {
+        return Ok(sv(out));
+    }
+    vm.echo(&out);
+    Ok(Value::Null)
+}
+
+fn debug_zval_refcount(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    var_dump(vm, a)
+}
+
+fn serialize_fn(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let v = a.at(0);
+    let out = serialize::serialize(&v, vm).map_err(|e| vm.rt_throw(e))?;
+    Ok(sv(out))
+}
+
+fn unserialize_fn(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let data = s(a, 0);
+    let opts = serialize::UnserializeOptions::default();
+    let r = serialize::unserialize(data.as_bytes(), &opts, vm).map_err(|e| vm.rt_throw(e))?;
+    Ok(r.unwrap_or(Value::Bool(false)))
+}
+
+fn gettype(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    Ok(sv(a.at(0).legacy_type_name()))
+}
+
+fn get_debug_type(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let v = a.at(0);
+    Ok(sv(match &v {
+        Value::Null => "null".to_string(),
+        Value::Bool(_) => "bool".into(),
+        Value::Int(_) => "int".into(),
+        Value::Float(_) => "float".into(),
+        Value::Str(_) => "string".into(),
+        Value::Array(_) => "array".into(),
+        Value::Resource(r) => {
+            if r.is_closed() {
+                "resource (closed)".into()
+            } else {
+                format!("resource ({})", r.type_name().map(|t| t.to_string_lossy()).unwrap_or_default())
+            }
+        }
+        Value::Object(o) => {
+            let c = object::class_of(o);
+            if c.flags & crate::class::cflags::ANON != 0 {
+                let parent = c.parent.as_ref().map(|p| p.name.to_string_lossy()).or_else(|| {
+                    c.interfaces.first().map(|i| i.name.to_string_lossy())
+                });
+                format!("{}@anonymous", parent.unwrap_or_else(|| "class".into()))
+            } else {
+                c.name.to_string_lossy()
+            }
+        }
+        Value::Reference(_) => String::new(),
+    }))
+}
+
+fn settype(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let Some(r) = a.reference(0) else { return Ok(Value::Bool(false)) };
+    let t = s(a, 1).to_ascii_lowercase();
+    let v = r.get();
+    let nv = match t.as_bytes() {
+        b"int" | b"integer" => Value::Int(vm.to_long(&v)?),
+        b"float" | b"double" => Value::Float(vm.to_double(&v)?),
+        b"string" => Value::Str(vm.to_zstr(&v)?),
+        b"bool" | b"boolean" => Value::Bool(vm.to_bool(&v)?),
+        b"array" => match v {
+            Value::Array(_) => v,
+            Value::Null => Value::Array(ZArray::new()),
+            Value::Object(o) => Value::Array(vm.object_to_array(&o)?),
+            other => Value::Array(ZArray::from_values([other])),
+        },
+        b"null" => Value::Null,
+        b"object" => match v {
+            Value::Object(_) => v,
+            Value::Array(arr) => vm.array_to_object(&arr)?,
+            Value::Null => vm.create_std_object_vm()?,
+            other => {
+                let o = vm.create_std_object_vm()?;
+                if let Value::Object(obj) = &o {
+                    vm.write_dynamic_prop(obj, ZStr::from("scalar"), other);
+                }
+                o
+            }
+        },
+        b"resource" => {
+            return Err(super::util::value_error(vm, a, 2, "must be a valid type"));
+        }
+        _ => return Err(super::util::value_error(vm, a, 2, "must be a valid type")),
+    };
+    r.set(nv);
+    Ok(Value::Bool(true))
+}
+
+fn intval(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let v = a.at(0);
+    let base = if a.has(1) { i(a, 1) } else { 10 };
+    if base != 10 {
+        if let Value::Str(s) = &v {
+            let t = s.to_string_lossy();
+            let t = t.trim_start();
+            let (neg, t) = match t.strip_prefix('-') {
+                Some(r) => (true, r),
+                None => (false, t.strip_prefix('+').unwrap_or(t)),
+            };
+            let (base, t) = if base == 16 {
+                (16, t.strip_prefix("0x").or_else(|| t.strip_prefix("0X")).unwrap_or(t))
+            } else if base == 8 {
+                (8, t.strip_prefix("0o").or_else(|| t.strip_prefix("0O")).unwrap_or(t))
+            } else if base == 2 {
+                (2, t.strip_prefix("0b").or_else(|| t.strip_prefix("0B")).unwrap_or(t))
+            } else if base == 0 {
+                if let Some(r) = t.strip_prefix("0x").or_else(|| t.strip_prefix("0X")) {
+                    (16, r)
+                } else if let Some(r) = t.strip_prefix("0b").or_else(|| t.strip_prefix("0B")) {
+                    (2, r)
+                } else if let Some(r) = t.strip_prefix("0o").or_else(|| t.strip_prefix("0O")) {
+                    (8, r)
+                } else if t.starts_with('0') && t.len() > 1 {
+                    (8, &t[1..])
+                } else {
+                    (10, t)
+                }
+            } else {
+                (base, t)
+            };
+            let digits: String = t
+                .chars()
+                .take_while(|c| c.to_digit(u32::try_from(base).unwrap_or(10)).is_some())
+                .collect();
+            let n = i128::from_str_radix(&digits, u32::try_from(base).unwrap_or(10)).unwrap_or(0);
+            let n = if neg { -n } else { n };
+            let n = n.clamp(i128::from(i64::MIN), i128::from(i64::MAX));
+            return Ok(Value::Int(i64::try_from(n).unwrap_or(0)));
+        }
+    }
+    Ok(Value::Int(vm.to_long(&v)?))
+}
+
+fn floatval(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let v = a.at(0);
+    Ok(Value::Float(vm.to_double(&v)?))
+}
+
+fn strval(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let v = a.at(0);
+    Ok(Value::Str(vm.to_zstr(&v)?))
+}
+
+fn boolval(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let v = a.at(0);
+    Ok(Value::Bool(vm.to_bool(&v)?))
+}
+
+macro_rules! is_fn {
+    ($name:ident, $pat:pat) => {
+        fn $name(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+            Ok(Value::Bool(matches!(a.at(0), $pat)))
+        }
+    };
+}
+
+is_fn!(is_int, Value::Int(_));
+is_fn!(is_float, Value::Float(_));
+is_fn!(is_string, Value::Str(_));
+is_fn!(is_bool, Value::Bool(_));
+is_fn!(is_array, Value::Array(_));
+is_fn!(is_object, Value::Object(_));
+is_fn!(is_null, Value::Null);
+is_fn!(is_scalar, Value::Int(_) | Value::Float(_) | Value::Str(_) | Value::Bool(_));
+
+fn is_resource(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    Ok(Value::Bool(matches!(a.at(0), Value::Resource(r) if !r.is_closed())))
+}
+
+fn is_numeric(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    Ok(Value::Bool(match a.at(0) {
+        Value::Int(_) | Value::Float(_) => true,
+        Value::Str(s) => php_runtime::numeric::is_numeric_string_ex(s.as_bytes(), false).is_some(),
+        _ => false,
+    }))
+}
+
+fn is_iterable(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    Ok(Value::Bool(match a.at(0) {
+        Value::Array(_) => true,
+        Value::Object(o) => vm.instance_of(&o, b"traversable"),
+        _ => false,
+    }))
+}
+
+fn is_countable(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    Ok(Value::Bool(match a.at(0) {
+        Value::Array(_) => true,
+        Value::Object(o) => vm.instance_of(&o, b"countable"),
+        _ => false,
+    }))
+}
+
+/// Registers the var functions.
+pub(crate) fn register(vm: &mut Vm) {
+    reg(vm, "var_dump(mixed $value, mixed ...$values): void", var_dump);
+    reg(vm, "debug_zval_refcount(mixed $value, mixed ...$values): void", debug_zval_refcount);
+    reg(vm, "print_r(mixed $value, bool $return = false): string|true", print_r);
+    reg(vm, "var_export(mixed $value, bool $return = false): ?string", var_export);
+    reg(vm, "serialize(mixed $value): string", serialize_fn);
+    reg(vm, "unserialize(string $data, array $options = []): mixed", unserialize_fn);
+    reg(vm, "gettype(mixed $value): string", gettype);
+    reg(vm, "get_debug_type(mixed $value): string", get_debug_type);
+    reg(vm, "settype(mixed &$var, string $type): bool", settype);
+    reg(vm, "intval(mixed $value, int $base = 10): int", intval);
+    reg(vm, "floatval(mixed $value): float", floatval);
+    reg(vm, "doubleval(mixed $value): float", floatval);
+    reg(vm, "strval(mixed $value): string", strval);
+    reg(vm, "boolval(mixed $value): bool", boolval);
+    reg(vm, "is_int(mixed $value): bool", is_int);
+    reg(vm, "is_integer(mixed $value): bool", is_int);
+    reg(vm, "is_long(mixed $value): bool", is_int);
+    reg(vm, "is_float(mixed $value): bool", is_float);
+    reg(vm, "is_double(mixed $value): bool", is_float);
+    reg(vm, "is_string(mixed $value): bool", is_string);
+    reg(vm, "is_bool(mixed $value): bool", is_bool);
+    reg(vm, "is_array(mixed $value): bool", is_array);
+    reg(vm, "is_object(mixed $value): bool", is_object);
+    reg(vm, "is_null(mixed $value): bool", is_null);
+    reg(vm, "is_scalar(mixed $value): bool", is_scalar);
+    reg(vm, "is_resource(mixed $value): bool", is_resource);
+    reg(vm, "is_numeric(mixed $value): bool", is_numeric);
+    reg(vm, "is_iterable(mixed $value): bool", is_iterable);
+    reg(vm, "is_countable(mixed $value): bool", is_countable);
+}
