@@ -370,3 +370,163 @@ fn bug42259_recursive_iteration() {
     }
     t.expect("bug42259.phpt");
 }
+
+#[test]
+fn bug42369_string_conversion() {
+    let mut t = T::new("bug42369");
+    let x = t.load_string("<?xml version=\"1.0\" encoding=\"utf-8\"?><q><x>foo</x></q>");
+    t.echo("explicit conversion\n");
+    for _ in 0..1000 {
+        let v = t.prop(&x, "x");
+        assert_eq!(t.str(&v), "foo");
+    }
+    t.echo("no conversion\n");
+    t.expect("bug42369.phpt");
+}
+
+#[test]
+fn bug43221_attribute_namespaces() {
+    let mut t = T::new("bug43221");
+    let xml = t.load_string("<?xml version=\"1.0\" encoding=\"utf-8\"?><root />");
+    let n = t.add_child(&xml, "node", Some("value"), None);
+    t.add_attribute(&n, "a", "b", None);
+    t.add_attribute(&n, "c", "d", Some("http://bar.com"));
+    t.add_attribute(&n, "foo:e", "f", Some("http://bar.com"));
+    let x = t.as_xml(&xml);
+    let o = t.str(&x);
+    t.echo(o);
+    t.expect("bug43221.phpt");
+}
+
+#[test]
+fn bug44478_entities_in_values() {
+    let mut t = T::new("bug44478");
+    let e = t.new_sxe("<root></root>");
+    for _ in 0..2 {
+        t.set_prop(&e, "node1", s("a &#38; b"));
+        let v = t.prop(&e, "node1");
+        let o = t.str(&v);
+        t.echo(o + "\n");
+    }
+    t.add_child(&e, "node2", Some("a &#38; b"), None);
+    let v = t.prop(&e, "node2");
+    let o = t.str(&v);
+    t.echo(o + "\n");
+    t.set_prop(&e, "node2", s("a & b"));
+    let v = t.prop(&e, "node2");
+    let o = t.str(&v);
+    t.echo(o + "\n");
+    let x = t.as_xml(&e);
+    let o = t.str(&x);
+    t.echo(o);
+    t.expect("bug44478.phpt");
+}
+
+#[test]
+fn bug45553_xpath_namespaced_attributes() {
+    let mut t = T::new("bug45553");
+    let x = t.load_string("<xml xmlns:a=\"http://a\">\n    <data a:label=\"I am A\" label=\"I am Nothing\">test1</data>\n    <a:data a:label=\"I am a:A\" label=\"I am a:Nothing\">test2</a:data>\n</xml>");
+    let sx = t.sxe(&x);
+    php_simplexml::Sxe::register_xpath_namespace(&sx, b"a", b"http://a").unwrap();
+    let first = |t: &mut T, q: &str| {
+        let r = t.xpath(&x, q);
+        let v = r.as_array().unwrap().values().next().cloned().unwrap();
+        v
+    };
+    let a = first(&mut t, "/xml/data/@a:label");
+    let o = t.str(&a);
+    t.echo(o + "\n");
+    let a = first(&mut t, "/xml/a:data");
+    let at = t.attributes(&a, None, false);
+    let o = t.str(&at);
+    t.echo(o + "\n");
+    for q in ["/xml/a:data/@a:label", "/xml/a:data/@label", "/xml/data/@label"] {
+        let a = first(&mut t, q);
+        let o = t.str(&a);
+        t.echo(o + "\n");
+    }
+    t.expect("bug45553.phpt");
+}
+
+#[test]
+fn bug46003_isset_nested() {
+    let mut t = T::new("bug46003");
+    let x = t.load_string("<r>\n  <p>Test</p>\n  <o d='h'>\n    <xx rr='info' />\n    <yy rr='data' />\n  </o>\n</r>");
+    let b = t.isset_prop(&x, "p");
+    t.var_dump(&Value::Bool(b));
+    for (a, b) in [("p", "o"), ("o", "yy"), ("o", "zz"), ("o", "text"), ("o", "xx")] {
+        let first = t.prop_mode(&x, a, FetchMode::IsSet);
+        let r = matches!(first, Value::Object(_)) && t.isset_prop(&first, b);
+        t.var_dump(&Value::Bool(r));
+    }
+    t.expect("bug46003.phpt");
+}
+
+#[test]
+fn bug46047_empty_children() {
+    let mut t = T::new("bug46047");
+    let xml = t
+        .new_sxe_ex("SimpleXMLElement", "<foo><bar><![CDATA[]]></bar><baz/></foo>", 16384, false, "", false)
+        .unwrap();
+    t.print_r(&xml);
+    let xml = t.new_sxe("<foo><bar></bar><baz/></foo>");
+    t.print_r(&xml);
+    let xml = t.new_sxe("<foo><bar/><baz/></foo>");
+    t.print_r(&xml);
+    t.expect("bug46047.phpt");
+}
+
+#[test]
+fn bug46048_get_object_vars() {
+    let mut t = T::new("bug46048");
+    let obj = t.load_string("\n<data id=\"1\">\n    <key>value</key>\n</data>\n");
+    let vars = t.array(&obj);
+    t.print_r(&vars);
+    t.expect("bug46048.phpt");
+}
+
+#[test]
+fn bug48601_xpath_empty_result() {
+    let mut t = T::new("bug48601");
+    let sxe = t.load_string("<root><node1>1</node1></root>");
+    let nodes = t.xpath(&sxe, "/root/node2/@test");
+    match nodes.as_array() {
+        Some(a) => t.echo(format!("Result Count: {}\n", a.len())),
+        None => t.echo("An error occurred\n"),
+    }
+    t.expect("bug48601.phpt");
+}
+
+#[test]
+fn bug52751_processing_instructions() {
+    let mut t = T::new("bug52751");
+    let sxe = t.load_string("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<foo>\n  <bar>text node</bar>\n  <bar><?baz href=\"ftw\" ?></bar>\n  <bar><?foo bar ?></bar>\n</foo>");
+    let v = t.xpath(&sxe, "//bar");
+    t.var_dump(&v);
+    drop(v);
+    let v = t.xpath(&sxe, "//processing-instruction('baz')");
+    t.var_dump(&v);
+    drop(v);
+    let list = t.xpath(&sxe, "//processing-instruction()");
+    for pi in list.as_array().unwrap().values().cloned().collect::<Vec<_>>() {
+        let n = t.get_name(&pi);
+        t.var_dump(&s(&n));
+    }
+    t.expect("bug52751.phpt");
+}
+
+#[test]
+fn bug53033_arithmetic() {
+    let mut t = T::new("bug53033");
+    let x = t.load_string("<x>2.5</x>");
+    let v = php_runtime::ops::mul(&x, &Value::Int(1), &mut t.h).unwrap();
+    t.var_dump(&v);
+    let v = php_runtime::ops::mul(&x, &Value::Float(1.0), &mut t.h).unwrap();
+    t.var_dump(&v);
+    let v = php_runtime::ops::mul(&s("2.5"), &Value::Int(1), &mut t.h).unwrap();
+    t.var_dump(&v);
+    let st = t.str(&x);
+    let v = php_runtime::ops::mul(&s(&st), &Value::Int(1), &mut t.h).unwrap();
+    t.var_dump(&v);
+    t.expect("bug53033.phpt");
+}
