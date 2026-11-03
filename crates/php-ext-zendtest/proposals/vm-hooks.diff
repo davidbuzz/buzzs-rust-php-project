@@ -22,12 +22,14 @@ crates/php-cli/Cargo.toml.
    (zend_mark_internal_attribute): compile-time target/repeat checks and
    a validator for extension attribute classes, and
    ReflectionAttribute::newInstance() accepting them.
+3. `Vm::call_function` (native code calling a native helper by name, e.g.
+   realpath() from SoapClient) is not observed: it is a C call in php-src.
 
 Measured with these applied: ext/zend_test/tests 99/168 (56 without),
 the zend_test-gated tests elsewhere 102/136 (95 without).
 
 diff --git a/crates/php-vm/src/call.rs b/crates/php-vm/src/call.rs
-index eaabf50..c759cfa 100644
+index eaabf50..3abd6fa 100644
 --- a/crates/php-vm/src/call.rs
 +++ b/crates/php-vm/src/call.rs
 @@ -835,11 +835,42 @@ impl Vm {
@@ -110,6 +112,26 @@ index eaabf50..c759cfa 100644
              self.frames.truncate(depth - 1);
          }
      }
+@@ -1496,9 +1530,18 @@ impl Vm {
+         let Some(f) = f else {
+             return Err(self.make_throw("Error", &format!("Call to undefined function {name}()")));
+         };
++        // A native helper called by native code is a C call in php-src,
++        // not an observable function call.
++        let quiet = matches!(f, Func::Builtin(_)) && self.observer.hooks.is_some();
+         let mut call = PendingCall::new(f);
+         call.args = args.into_iter().map(Some).collect();
+-        self.call_pending(call)
++        if !quiet {
++            return self.call_pending(call);
++        }
++        let saved = std::mem::replace(&mut self.observer.in_hook, true);
++        let r = self.call_pending(call);
++        self.observer.in_hook = saved;
++        r
+     }
+ }
+ 
 diff --git a/crates/php-vm/src/compiler/attrs.rs b/crates/php-vm/src/compiler/attrs.rs
 index 56fe39d..255ec96 100644
 --- a/crates/php-vm/src/compiler/attrs.rs

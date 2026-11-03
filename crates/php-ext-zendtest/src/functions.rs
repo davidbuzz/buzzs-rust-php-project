@@ -247,19 +247,54 @@ fn object_init_with_constructor(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             &format!("Cannot instantiate {what} {}", cls.name.to_string_lossy()),
         ));
     }
-    if cls.magic.construct.is_none() && (!args.is_empty() || !named.is_empty()) {
-        // object_init_with_constructor() with arguments but no
-        // constructor.
+    let o = vm.new_object(&cls)?;
+    // `get_constructor` handlers refuse direct construction.
+    if let Some(h) = cls.hooks.as_ref().and_then(|h| h.get_constructor) {
+        if let Err(e) = h(vm, &o) {
+            ctor_failed(&o);
+            return Err(e);
+        }
+    }
+    let Some(ctor) = cls.magic.construct.clone() else {
+        // No constructor: positional arguments are ignored, named ones are
+        // unknown parameters.
+        if let Some((n, _)) = named.first() {
+            ctor_failed(&o);
+            return Err(vm.throw(
+                "Error",
+                &format!("Unknown named parameter ${}", n.to_string_lossy()),
+            ));
+        }
+        return Ok(Value::Object(o));
+    };
+    if ctor.visibility() != php_vm::func::flags::PUBLIC {
+        ctor_failed(&o);
+        let vis = if ctor.visibility() == php_vm::func::flags::PRIVATE {
+            "private"
+        } else {
+            "protected"
+        };
         return Err(vm.throw(
-            "ArgumentCountError",
+            "Error",
             &format!(
-                "{}::__construct() does not accept any arguments",
+                "Call to {vis} {}::__construct() from global scope",
                 cls.name.to_string_lossy()
             ),
         ));
     }
-    let o = vm.new_object_named(&cls, args, named)?;
+    if let Err(e) = vm.call_method_named(&o, "__construct", args, named) {
+        ctor_failed(&o);
+        return Err(e);
+    }
     Ok(Value::Object(o))
+}
+
+/// `zend_object_store_ctor_failed()`: the object is released without
+/// running its destructor.
+fn ctor_failed(o: &php_runtime::Obj) {
+    let d = php_vm::object::data(o);
+    d.flags
+        .set(d.flags.get() | php_vm::object::oflags::DESTRUCTED);
 }
 
 /// `zend_call_method_if_exists(object $obj, string $method, mixed ...$args)`.
