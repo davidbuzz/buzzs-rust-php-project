@@ -4,8 +4,9 @@
 //! — a port of `ext/openssl/xp_ssl.c` (client and server side) on the
 //! `openssl` crate, plugged into `php_ext_streams::xport`.
 //!
-//! Not ported yet: renegotiation rate limiting (`reneg_limit*`), session
-//! resumption callbacks (`session_new_cb` …), PSK and TLS 1.3 early data.
+//! Session resumption lives in `sess`, PSK in `psk`, 0-RTT in `early`
+//! and renegotiation limiting in `reneg`; `tcp` is registered too, as
+//! ext/openssl does.
 
 // The port keeps xp_ssl.c's names (`ssl`/`ssls`, `ops`/`opts`).
 #![allow(clippy::similar_names)]

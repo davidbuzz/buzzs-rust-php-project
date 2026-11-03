@@ -32,8 +32,11 @@
 //! methods, non-blocking handshakes returning `0`),
 //! `stream_socket_get_crypto_status()` and
 //! `stream_get_meta_data()["crypto"]`, with the `ssl` context options and
-//! PHP's warning texts. Not ported yet: renegotiation rate limiting,
-//! session resumption callbacks, PSK and TLS 1.3 early data.
+//! PHP's warning texts, session resumption (callbacks and server
+//! cache), PSK (TLS 1.2 and 1.3), TLS 1.3 early data and renegotiation
+//! rate limiting. Like ext/openssl it also registers `tcp`, so plain TCP
+//! sockets are `tcp_socket/ssl` streams whose accepted connections inherit
+//! the listener's context.
 
 // Native handlers must match the VM's `NativeFn` signature even when they
 // cannot fail.
