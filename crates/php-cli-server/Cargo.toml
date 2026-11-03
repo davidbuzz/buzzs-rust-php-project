@@ -4,10 +4,18 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
+description = "The CLI built-in web server (php -S)"
 
 [dependencies]
 php-vm = { path = "../php-vm" }
 php-runtime = { path = "../php-runtime" }
+php-support = { path = "../php-support" }
+php-lexer = { path = "../php-lexer" }
+php-stdmisc = { path = "../php-stdmisc" }
+php-streams = { path = "../php-streams" }
+php-ext-streams = { path = "../php-ext-streams" }
+php-memlimit = { path = "../php-memlimit" }
+libc = "0.2"
 
 [lints]
 workspace = true

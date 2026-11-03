@@ -106,6 +106,10 @@ fn version_banner() -> String {
 
 #[allow(clippy::too_many_lines)]
 fn run(raw: &[Vec<u8>]) -> i32 {
+    // `-S <addr>:<port> [-t docroot] [router]`: the built-in web server.
+    if let Some(status) = php_cli_server::maybe_run(raw, extensions::all) {
+        return status;
+    }
     let mut ini: Vec<(String, String)> = Vec::new();
     let mut mode: Option<Mode> = None;
     let mut lint = false;
