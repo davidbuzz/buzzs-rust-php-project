@@ -427,7 +427,10 @@ fn has_dimension(vm: &mut Vm, o: &Obj, k: &Value, check_empty: bool) -> VmResult
     };
     let off = to_offset(vm, k)?;
     let ctx = obj_ctx(o);
-    if check_empty && matches!(d, DomObject::TokenList(_)) {
+    if check_empty
+        && matches!(d, DomObject::TokenList(_))
+        && !matches!(off, Offset::Other(_) | Offset::Array(_))
+    {
         // Tokens are strings ("0" is empty): perform an actual read.
         let r = run::lib(vm, || dispatch::offset_get(&d, &off))?;
         let v = check(vm, r, Some(&ctx))?.unwrap_or(php_dom::DomValue::Null);
