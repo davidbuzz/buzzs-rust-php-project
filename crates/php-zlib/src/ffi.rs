@@ -325,6 +325,19 @@ pub fn crc32(crc: u32, data: &[u8]) -> u32 {
     u32::try_from(crc).unwrap_or(0)
 }
 
+/// `strerror(errno)`.
+pub fn strerror(errno: i32) -> String {
+    // SAFETY: strerror returns a pointer to a NUL-terminated string that
+    // stays valid until the next strerror call on this thread; it is copied
+    // immediately.
+    let p = unsafe { libc::strerror(errno) };
+    if p.is_null() {
+        return format!("Unknown error {errno}");
+    }
+    // SAFETY: non-null pointer to a NUL-terminated string (see above).
+    unsafe { CStr::from_ptr(p) }.to_string_lossy().into_owned()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -349,6 +362,7 @@ mod tests {
     fn version_and_crc() {
         assert!(zlib_version().starts_with('1'));
         assert_eq!(crc32(0, b"hello"), 0x3610_a686);
+        assert_eq!(strerror(13), "Permission denied");
     }
 
     #[test]
