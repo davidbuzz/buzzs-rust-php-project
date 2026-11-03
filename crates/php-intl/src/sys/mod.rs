@@ -14,6 +14,7 @@ pub mod ucnv;
 pub mod ucol;
 pub mod udat;
 pub mod udatpg;
+pub mod ulistfmt;
 pub mod umsg;
 pub mod unorm;
 pub mod unum;

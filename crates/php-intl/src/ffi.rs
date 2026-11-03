@@ -1010,6 +1010,7 @@ icu! {
 // Declarations the generator cannot express (array parameters).
 icu! {
     fn uenum_openCharStringsEnumeration(strings: *const *const c_char, count: i32, ec: *mut UErrorCode) -> *mut UEnumeration;
+    fn ulistfmt_format(listfmt: *const UListFormatter, strings: *const *const UChar, stringLengths: *const i32, stringCount: i32, result: *mut UChar, resultCapacity: i32, status: *mut UErrorCode) -> i32;
 }
 
 // ---------------------------------------------------------------------------
