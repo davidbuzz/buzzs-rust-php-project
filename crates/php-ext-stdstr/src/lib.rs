@@ -84,19 +84,6 @@ pub(crate) fn check<T>(vm: &mut Vm, r: StdResult<T>) -> VmResult<T> {
     r.map_err(|e| throw(vm, &e))
 }
 
-/// Emits the `#[\Deprecated]` notice of a deprecated internal function.
-pub(crate) fn deprecated_function(
-    vm: &mut Vm,
-    name: &str,
-    since: &str,
-    message: &str,
-) -> VmResult<()> {
-    vm.raise(
-        E_DEPRECATED,
-        &format!("Function {name}() is deprecated since {since}, {message}"),
-    )
-}
-
 /// A PHP string value from bytes.
 pub(crate) fn bytes(v: impl Into<ZStr>) -> Value {
     Value::Str(v.into())
@@ -137,49 +124,49 @@ pub(crate) fn to_str(vm: &mut Vm, v: &Value) -> VmResult<ZStr> {
     }
 }
 
-/// Approximate Zend MM accounting for the allocations this crate makes on
-/// behalf of PHP code, so that `memory_limit` is enforced for the large
-/// results string functions can build (the VM has no allocator-level
-/// limit).
+/// `memory_limit` checks for script-sized allocations (PHP's fallible
+/// `zend_string_safe_alloc()` + `RETURN_OOM()`); everything else is
+/// accounted by `php_memlimit`'s global allocator.
 pub(crate) mod mem {
     use php_vm::ext::VmResult;
     use php_vm::Vm;
-
-    /// Size of a hash bucket holding one zval (`Bucket`).
-    pub(crate) const BUCKET: usize = 32;
 
     /// Allocation size of a `zend_string` of `len` bytes.
     pub(crate) const fn zstr(len: usize) -> usize {
         (24 + len + 1 + 7) & !7
     }
 
-    /// Bytes held by the elements of a list of strings.
-    pub(crate) fn str_list<T: AsRef<[u8]>>(items: &[T]) -> usize {
-        items.iter().fold(0usize, |acc, s| {
-            acc.saturating_add(BUCKET + zstr(s.as_ref().len()))
-        })
+    /// Size of a packed array element (`zval`) holding a string of `len`
+    /// bytes.
+    pub(crate) const fn elem(len: usize) -> usize {
+        16 + zstr(len)
     }
 
-    /// The effective `memory_limit` in bytes (`None` for unlimited).
-    fn limit(vm: &Vm) -> Option<usize> {
-        let raw = vm
-            .ini_string("memory_limit")
-            .unwrap_or_else(|| b"128M".to_vec());
-        let (v, _) = php_support::ini::parse_quantity(&raw);
-        usize::try_from(v).ok().filter(|&v| v > 0)
-    }
-
-    /// Raises PHP's out-of-memory fatal error when `live` bytes (the
-    /// inputs still referenced) plus a new allocation of `alloc` bytes
-    /// exceed `memory_limit`.
-    pub(crate) fn check(vm: &mut Vm, live: usize, alloc: usize) -> VmResult<()> {
-        let Some(limit) = limit(vm) else {
-            return Ok(());
+    /// Non-overlapping occurrences of `needle` (non-empty) in `hay`.
+    pub(crate) fn occurrences(hay: &[u8], needle: &[u8], ci: bool) -> usize {
+        if needle.is_empty() || needle.len() > hay.len() {
+            return 0;
+        }
+        let (h, n) = if ci {
+            (hay.to_ascii_lowercase(), needle.to_ascii_lowercase())
+        } else {
+            (hay.to_vec(), needle.to_vec())
         };
-        if live.saturating_add(alloc) > limit {
-            return Err(vm.fatal(&format!(
-                "Allowed memory size of {limit} bytes exhausted (tried to allocate {alloc} bytes)"
-            )));
+        php_stdstr::search::substr_count(&h, &n, 0, None)
+            .ok()
+            .and_then(|c| usize::try_from(c).ok())
+            .unwrap_or(0)
+    }
+
+    /// Reserves `alloc` bytes before building a result of that size; over
+    /// the limit, raises `Allowed memory size of N bytes exhausted (tried
+    /// to allocate M bytes)` at the current line.
+    pub(crate) fn check(vm: &mut Vm, alloc: usize) -> VmResult<()> {
+        if let Err(over) = php_memlimit::try_reserve(alloc) {
+            // Handle the recorded violation here so the VM's post-call poll
+            // does not raise it a second time.
+            let _ = php_memlimit::take();
+            return Err(vm.fatal(&over.to_string()));
         }
         Ok(())
     }
@@ -194,9 +181,9 @@ mod tests {
         assert_eq!(mem::zstr(0), 32);
         assert_eq!(mem::zstr(7), 32);
         assert_eq!(mem::zstr(8), 40);
-        assert_eq!(
-            mem::str_list(&[b"a".as_slice(), b"bc".as_slice()]),
-            2 * (mem::BUCKET + 32)
-        );
+        assert_eq!(mem::elem(1), 48);
+        assert_eq!(mem::occurrences(b"aXaxa", b"x", false), 1);
+        assert_eq!(mem::occurrences(b"aXaxa", b"x", true), 2);
+        assert_eq!(mem::occurrences(b"aaaa", b"aa", false), 2);
     }
 }

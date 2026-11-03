@@ -11,7 +11,7 @@ use php_stdstr::{analysis, quoted_printable, uuencode, versioning};
 use php_vm::ext::{Args, ModuleBuilder, VmResult};
 use php_vm::Vm;
 
-use crate::{assoc, bytes, check, deprecated_function, emit, mem, opt_bytes, to_str};
+use crate::{assoc, bytes, check, emit, mem, opt_bytes, to_str};
 
 /// The conversion `pack()` applies to an argument.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -92,19 +92,16 @@ fn pack_fn(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 }
 
 fn unpack_fn(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let (format, data) = (a.str(0), a.str(1));
+    // `C*`/`c*` (one element per remaining byte) is the format that can
+    // turn a script-sized string into a huge array.
+    if format.windows(2).any(|w| matches!(w, [b'c' | b'C', b'*'])) {
+        mem::check(vm, data.len().saturating_mul(mem::elem(0)))?;
+    }
     let mut n = Notices::new();
-    let r = pack::unpack(a.str(0).as_bytes(), a.str(1).as_bytes(), a.int(2), &mut n);
+    let r = pack::unpack(format.as_bytes(), data.as_bytes(), a.int(2), &mut n);
     emit(vm, n)?;
     let r = check(vm, r)?;
-    if let Some(items) = &r {
-        let size = items.iter().fold(0usize, |acc, (_, v)| {
-            acc.saturating_add(match v {
-                UnpackValue::Str(s) => mem::BUCKET + mem::zstr(s.len()),
-                _ => mem::BUCKET,
-            })
-        });
-        mem::check(vm, 0, size)?;
-    }
     Ok(match r {
         None => Value::Bool(false),
         Some(items) => assoc(items.into_iter().map(|(k, v)| {
@@ -192,12 +189,6 @@ fn soundex(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 }
 
 fn metaphone(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    deprecated_function(
-        vm,
-        "metaphone",
-        "8.6",
-        "use a userland phonetic matching library instead",
-    )?;
     let r = analysis::metaphone(a.str(0).as_bytes(), a.int(1));
     Ok(bytes(check(vm, r)?))
 }
@@ -208,7 +199,7 @@ fn levenshtein(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     if !s1.is_empty() && !s2.is_empty() {
         // The first of the two workspace rows.
         let row = (s2.len() + 1).saturating_mul(8);
-        mem::check(vm, mem::zstr(s1.len()) + mem::zstr(s2.len()), row)?;
+        mem::check(vm, row)?;
     }
     let r = analysis::levenshtein(s1.as_bytes(), s2.as_bytes(), cost(2), cost(3), cost(4));
     Ok(Value::Int(r))
@@ -226,5 +217,6 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
         .function("version_compare(string $version1, string $version2, ?string $operator = null): int|bool", version_compare)
         .function("soundex(string $string): string", soundex)
         .function("metaphone(string $string, int $max_phonemes = 0): string", metaphone)
+        .deprecated("8.6", "use a userland phonetic matching library instead")
         .function("levenshtein(string $string1, string $string2, int $insertion_cost = 1, int $replacement_cost = 1, int $deletion_cost = 1): int", levenshtein);
 }

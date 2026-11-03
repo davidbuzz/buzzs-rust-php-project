@@ -11,7 +11,7 @@ use php_stdstr::{compare, slashes, strip_tags};
 use php_vm::ext::{Args, ModuleBuilder, VmResult};
 use php_vm::Vm;
 
-use crate::{assoc, bytes, check, deprecated_function, emit, mem, opt_bytes, str_list, to_str};
+use crate::{assoc, bytes, check, emit, mem, opt_bytes, str_list, to_str};
 
 thread_local! {
     /// `BG(strtok_string)` / `BG(strtok_last)`.
@@ -59,8 +59,7 @@ fn strcspn(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     Ok(Value::Int(r))
 }
 
-fn strcoll(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    deprecated_function(vm, "strcoll", "8.6", "use Collator::compare() instead")?;
+fn strcoll(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     // LC_COLLATE is "C" unless setlocale() changed it: glibc strcoll() is
     // then strcmp(), whose result is the byte difference.
     let r = compare::strcmp(a.str(0).as_bytes(), a.str(1).as_bytes());
@@ -110,7 +109,7 @@ fn wordwrap(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         } else {
             tl.saturating_mul(brk.len() + 1)
         };
-        mem::check(vm, mem::zstr(tl) + mem::zstr(brk.len()), mem::zstr(alloc))?;
+        mem::check(vm, mem::zstr(alloc))?;
     }
     let r = transform::wordwrap(text.as_bytes(), width, brk.as_bytes(), cut);
     Ok(bytes(check(vm, r)?))
@@ -119,15 +118,29 @@ fn wordwrap(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 fn explode(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let limit = if a.has(2) { a.int(2) } else { i64::MAX };
     let s = a.str(1);
-    let r = search::explode(a.str(0).as_bytes(), s.as_bytes(), limit);
+    let sep = a.str(0);
+    let pieces = mem::occurrences(s.as_bytes(), sep.as_bytes(), false) + 1;
+    mem::check(
+        vm,
+        pieces.saturating_mul(mem::elem(0)).saturating_add(s.len()),
+    )?;
+    let r = search::explode(sep.as_bytes(), s.as_bytes(), limit);
     let parts = check(vm, r)?;
-    mem::check(vm, mem::zstr(s.len()), mem::str_list(&parts))?;
     Ok(str_list(parts))
 }
 
 /// `php_implode()`.
 pub(crate) fn implode_array(vm: &mut Vm, glue: &[u8], pieces: &ZArray) -> VmResult<Vec<u8>> {
-    let mut out = Vec::new();
+    let known: usize = pieces
+        .iter()
+        .map(|(_, v)| match v.deref() {
+            Value::Str(s) => s.len(),
+            _ => 0,
+        })
+        .sum();
+    let total = known.saturating_add(glue.len().saturating_mul(pieces.len().saturating_sub(1)));
+    mem::check(vm, mem::zstr(total))?;
+    let mut out = Vec::with_capacity(total);
     for (i, (_, v)) in pieces.iter().enumerate() {
         if i > 0 {
             out.extend_from_slice(glue);
@@ -168,7 +181,6 @@ fn implode(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         }
     };
     let out = implode_array(vm, glue.as_bytes(), &pieces)?;
-    mem::check(vm, mem::zstr(glue.len()), mem::zstr(out.len()))?;
     Ok(bytes(out))
 }
 
@@ -279,11 +291,7 @@ fn chunk_split(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     if len > 0 {
         let chunks = s.len() / usize::try_from(len).unwrap_or(usize::MAX) + 1;
         let alloc = s.len().saturating_add(chunks.saturating_mul(end.len()));
-        mem::check(
-            vm,
-            mem::zstr(s.len()) + mem::zstr(end.len()),
-            mem::zstr(alloc),
-        )?;
+        mem::check(vm, mem::zstr(alloc))?;
     }
     let r = transform::chunk_split(s.as_bytes(), len, end.as_bytes());
     Ok(bytes(check(vm, r)?))
@@ -370,8 +378,20 @@ fn substr_replace(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         (Some(v), None) => Some(vm.value_to_int(v)?),
         _ => None,
     };
+    let mut estimate = 0usize;
+    for (_, v) in subjects.iter() {
+        let len = match v.deref() {
+            Value::Str(s) => s.len(),
+            _ => 0,
+        };
+        let r = match &repl {
+            Value::Array(_) => 0,
+            _ => repl_str.len(),
+        };
+        estimate = estimate.saturating_add(mem::elem(len.saturating_add(r)));
+    }
+    mem::check(vm, estimate)?;
     let mut out = HashTable::new();
-    let mut total = 0usize;
     for (k, v) in subjects.iter() {
         let orig = to_str(vm, &v.deref())?;
         let f = match &mut from_cur {
@@ -396,8 +416,6 @@ fn substr_replace(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             None => repl_str.clone(),
         };
         let piece = search::substr_replace(orig.as_bytes(), r.as_bytes(), f, l);
-        total = total.saturating_add(mem::BUCKET + mem::zstr(piece.len()));
-        mem::check(vm, mem::zstr(r.len()), total)?;
         out.insert(k.clone(), bytes(piece));
     }
     Ok(Value::Array(ZArray::from_table(out)))
@@ -445,10 +463,20 @@ fn strtr(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let s = a.str(0);
     let from = a.at(1);
     if a.has(2) {
-        if let Value::Array(_) = from {
-            return Err(a.type_error(vm, 2, "must be of type string, array given"));
-        }
-        let from = to_str(vm, &from)?;
+        // Z_PARAM_STR(from_str)
+        let from = match from {
+            Value::Array(_) | Value::Resource(_) => {
+                let msg = format!("must be of type string, {} given", crate::type_name(&from));
+                return Err(a.type_error(vm, 2, &msg));
+            }
+            Value::Null => {
+                vm.php_deprecated(
+                    "Passing null to parameter #2 ($from) of type array|string is deprecated",
+                )?;
+                ZStr::empty()
+            }
+            other => to_str(vm, &other)?,
+        };
         let to = a.str(2);
         if s.is_empty() {
             return Ok(bytes(ZStr::empty()));
@@ -475,10 +503,20 @@ fn strtr(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         let val = to_str(vm, &v.deref())?;
         ps.push((key, val.as_bytes().to_vec()));
     }
+    if ps.len() <= 16 {
+        // Upper bound of the result: every occurrence of every key replaced.
+        let growth: usize = ps
+            .iter()
+            .map(|(k, v)| {
+                mem::occurrences(s.as_bytes(), k, false)
+                    .saturating_mul(v.len().saturating_sub(k.len()))
+            })
+            .fold(0, usize::saturating_add);
+        mem::check(vm, mem::zstr(s.len().saturating_add(growth)))?;
+    }
     let mut n = Notices::new();
     let r = transform::strtr_pairs(s.as_bytes(), &ps, &mut n);
     emit(vm, n)?;
-    mem::check(vm, mem::zstr(s.len()), mem::zstr(r.len()))?;
     Ok(bytes(r))
 }
 
@@ -517,6 +555,24 @@ fn stripslashes(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 /// subject, converting array entries lazily exactly like PHP (so
 /// conversion warnings repeat per subject and stop once the subject
 /// becomes empty).
+/// Reserves the result of replacing every `search` in `subject`.
+fn reserve_replace(
+    vm: &mut Vm,
+    subject: &[u8],
+    search: &[u8],
+    replace: &[u8],
+    ci: bool,
+) -> VmResult<()> {
+    if replace.len() > search.len() {
+        let n = mem::occurrences(subject, search, ci);
+        let grown = subject
+            .len()
+            .saturating_add(n.saturating_mul(replace.len() - search.len()));
+        mem::check(vm, mem::zstr(grown))?;
+    }
+    Ok(())
+}
+
 fn replace_in_subject(
     vm: &mut Vm,
     search: &Value,
@@ -530,6 +586,7 @@ fn replace_in_subject(
     let Value::Array(searches) = search else {
         let s = to_str(vm, search)?;
         let r = to_str(vm, replace)?;
+        reserve_replace(vm, &subject, &s, &r, ci)?;
         let res = transform::str_replace(
             subject.as_bytes(),
             ReplaceArg::One::<&[u8]>(s.as_bytes()),
@@ -537,13 +594,6 @@ fn replace_in_subject(
             ci,
         );
         let (out, n) = check(vm, res)?;
-        if out.len() > subject.len() {
-            mem::check(
-                vm,
-                mem::zstr(subject.len()) + mem::zstr(r.len()),
-                mem::zstr(out.len()),
-            )?;
-        }
         return Ok((if n == 0 { subject } else { ZStr::from(out) }, n));
     };
     let mut repl_cur = Cursor::new(replace);
@@ -566,6 +616,7 @@ fn replace_in_subject(
         if s.is_empty() {
             continue;
         }
+        reserve_replace(vm, &subject, &s, &r, ci)?;
         let res = transform::str_replace(
             subject.as_bytes(),
             ReplaceArg::One::<&[u8]>(s.as_bytes()),
@@ -573,13 +624,6 @@ fn replace_in_subject(
             ci,
         );
         let (out, n) = check(vm, res)?;
-        if out.len() > subject.len() {
-            mem::check(
-                vm,
-                mem::zstr(subject.len()) + mem::zstr(r.len()),
-                mem::zstr(out.len()),
-            )?;
-        }
         if n > 0 {
             count += n;
             subject = ZStr::from(out);
@@ -639,10 +683,13 @@ fn hebrev(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 fn nl2br(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let xhtml = !a.has(1) || a.bool(1);
     let s = a.str(0);
+    let breaks = s.iter().filter(|&&c| c == b'\n' || c == b'\r').count();
+    let tag = if xhtml { 6 } else { 4 };
+    mem::check(
+        vm,
+        mem::zstr(s.len().saturating_add(breaks.saturating_mul(tag))),
+    )?;
     let out = transform::nl2br(s.as_bytes(), xhtml);
-    if out.len() > s.len() {
-        mem::check(vm, mem::zstr(s.len()), mem::zstr(out.len()))?;
-    }
     Ok(bytes(out))
 }
 
@@ -672,7 +719,7 @@ fn str_repeat(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         let total = s
             .len()
             .saturating_mul(usize::try_from(times).unwrap_or(usize::MAX));
-        mem::check(vm, mem::zstr(s.len()), mem::zstr(total))?;
+        mem::check(vm, mem::zstr(total))?;
     }
     let r = transform::str_repeat(s.as_bytes(), times);
     Ok(bytes(check(vm, r)?))
@@ -751,7 +798,7 @@ fn str_pad(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let len = a.int(1);
     let target = usize::try_from(len).unwrap_or(0);
     if target > s.len() && !pad.is_empty() && (0..=2).contains(&ty) {
-        mem::check(vm, mem::zstr(s.len()), mem::zstr(target))?;
+        mem::check(vm, mem::zstr(target))?;
     }
     let r = transform::str_pad(s.as_bytes(), len, pad.as_bytes(), ty);
     Ok(bytes(check(vm, r)?))
@@ -782,9 +829,28 @@ fn str_shuffle(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 fn str_word_count(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let chars = a.opt(2).map(|_| a.str(2));
+    let text = a.str(0);
+    if a.int(1) != 0 {
+        // Upper bound of the words: runs of word characters.
+        let mut words = 0usize;
+        let mut prev = false;
+        for &c in text.as_bytes() {
+            let w = c.is_ascii_alphabetic() || c == b'\'' || c == b'-' || chars.is_some();
+            if w && !prev {
+                words += 1;
+            }
+            prev = w;
+        }
+        mem::check(
+            vm,
+            words
+                .saturating_mul(mem::elem(0))
+                .saturating_add(text.len()),
+        )?;
+    }
     let mut n = Notices::new();
     let r = analysis::str_word_count(
-        a.str(0).as_bytes(),
+        text.as_bytes(),
         a.int(1),
         chars.as_ref().map(ZStr::as_bytes),
         &mut n,
@@ -792,10 +858,7 @@ fn str_word_count(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     emit(vm, n)?;
     Ok(match check(vm, r)? {
         WordCount::Count(c) => Value::Int(c),
-        WordCount::Words(w) => {
-            mem::check(vm, 0, mem::str_list(&w))?;
-            str_list(w)
-        }
+        WordCount::Words(w) => str_list(w),
         WordCount::Positions(p) => assoc(p.into_iter().map(|(pos, w)| (pos, bytes(w)))),
     })
 }
@@ -803,9 +866,17 @@ fn str_word_count(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 fn str_split(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let len = if a.has(1) { a.int(1) } else { 1 };
     let s = a.str(0);
+    if let Ok(chunk) = usize::try_from(len) {
+        if chunk > 0 {
+            let pieces = s.len().div_ceil(chunk);
+            mem::check(
+                vm,
+                pieces.saturating_mul(mem::elem(0)).saturating_add(s.len()),
+            )?;
+        }
+    }
     let r = transform::str_split(s.as_bytes(), len);
     let parts = check(vm, r)?;
-    mem::check(vm, mem::zstr(s.len()), mem::str_list(&parts))?;
     Ok(str_list(parts))
 }
 
@@ -827,13 +898,11 @@ fn substr_compare(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 const UTF8_DEPRECATION: &str = "visit the php.net documentation for various alternatives";
 
-fn utf8_encode(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    deprecated_function(vm, "utf8_encode", "8.2", UTF8_DEPRECATION)?;
+fn utf8_encode(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     Ok(bytes(transform::utf8_encode(a.str(0).as_bytes())))
 }
 
-fn utf8_decode(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    deprecated_function(vm, "utf8_decode", "8.2", UTF8_DEPRECATION)?;
+fn utf8_decode(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     Ok(bytes(transform::utf8_decode(a.str(0).as_bytes())))
 }
 
@@ -853,22 +922,35 @@ fn str_getcsv(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     );
     emit(vm, n)?;
     let opts = check(vm, opts)?;
-    Ok(match csv::str_getcsv(a.str(0).as_bytes(), &opts) {
-        Some(fields) => {
-            mem::check(vm, 0, mem::str_list(&fields))?;
-            str_list(fields)
-        }
+    let input = a.str(0);
+    #[allow(clippy::naive_bytecount)]
+    let fields = input.iter().filter(|&&c| c == opts.delimiter).count() + 1;
+    mem::check(
+        vm,
+        fields
+            .saturating_mul(mem::elem(0))
+            .saturating_add(input.len()),
+    )?;
+    Ok(match csv::str_getcsv(input.as_bytes(), &opts) {
+        Some(fields) => str_list(fields),
         None => Value::Array(ZArray::from_values([Value::Null])),
     })
 }
 
+/// `RINIT`: forget the previous request's `strtok()` string.
+fn reset_strtok(_vm: &mut Vm) {
+    STRTOK.with(|t| *t.borrow_mut() = Strtok::new());
+}
+
 /// Registers the `string.c` functions.
 pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
+    m.on_request_startup(reset_strtok);
     m.function("bin2hex(string $string): string", bin2hex)
         .function("hex2bin(string $string): string|false", hex2bin)
         .function("strspn(string $string, string $characters, int $offset = 0, ?int $length = null): int", strspn)
         .function("strcspn(string $string, string $characters, int $offset = 0, ?int $length = null): int", strcspn)
         .function("strcoll(string $string1, string $string2): int", strcoll)
+        .deprecated("8.6", "use Collator::compare() instead")
         .function("trim(string $string, string $characters = \" \\f\\n\\r\\t\\v\\0\"): string", trim)
         .function("rtrim(string $string, string $characters = \" \\f\\n\\r\\t\\v\\0\"): string", rtrim)
         .function("chop(string $string, string $characters = \" \\f\\n\\r\\t\\v\\0\"): string", rtrim)
@@ -902,7 +984,7 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
         .function("ucfirst(string $string): string", ucfirst)
         .function("lcfirst(string $string): string", lcfirst)
         .function("ucwords(string $string, string $separators = \" \\t\\r\\n\\f\\v\"): string", ucwords)
-        .function("strtr(string $string, array|string $from, ?string $to = null): string", strtr)
+        .function("strtr(string $string, mixed $from, ?string $to = null): string", strtr)
         .function("strrev(string $string): string", strrev)
         .function("similar_text(string $string1, string $string2, &$percent = null): int", similar_text)
         .function("addcslashes(string $string, string $characters): string", addcslashes)
@@ -932,7 +1014,9 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
         .function("strpbrk(string $string, string $characters): string|false", strpbrk)
         .function("substr_compare(string $haystack, string $needle, int $offset, ?int $length = null, bool $case_insensitive = false): int", substr_compare)
         .function("utf8_encode(string $string): string", utf8_encode)
-        .function("utf8_decode(string $string): string", utf8_decode);
+        .deprecated("8.2", UTF8_DEPRECATION)
+        .function("utf8_decode(string $string): string", utf8_decode)
+        .deprecated("8.2", UTF8_DEPRECATION);
     for (name, v) in [
         ("STR_PAD_LEFT", transform::STR_PAD_LEFT),
         ("STR_PAD_RIGHT", transform::STR_PAD_RIGHT),
