@@ -90,6 +90,11 @@ struct Cli {
     /// resumable after the runner is killed.
     #[arg(long, value_name = "FILE")]
     resume: Option<PathBuf>,
+    /// Run the binary in place instead of a private snapshot (by default it is hard-linked or
+    /// copied into a temporary directory first, so a concurrent rebuild of e.g.
+    /// target/debug/php cannot change or break it mid-run).
+    #[arg(long)]
+    no_snapshot: bool,
     /// Extra environment variable for every test, e.g. `--env MYSQL_TEST_HOST=127.0.0.1`
     /// (repeatable).
     #[arg(long, value_name = "KEY=VALUE")]
@@ -140,6 +145,46 @@ impl Drop for SharedProbeCache {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.0);
     }
+}
+
+/// A private hard link (or copy) of the binary under test; removed when dropped.
+struct BinarySnapshot {
+    dir: PathBuf,
+    path: PathBuf,
+}
+
+impl BinarySnapshot {
+    fn create(php: &Path) -> Result<Self, String> {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.subsec_nanos());
+        let dir = std::env::temp_dir().join(format!(
+            "phpt-runner-bin-{}-{nanos:08x}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+        let snapshot = BinarySnapshot {
+            path: dir.join(php.file_name().unwrap_or_else(|| "php".as_ref())),
+            dir,
+        };
+        if std::fs::hard_link(php, &snapshot.path).is_err() {
+            std::fs::copy(php, &snapshot.path)
+                .map_err(|e| format!("cannot snapshot {}: {e}", php.display()))?;
+        }
+        Ok(snapshot)
+    }
+}
+
+impl Drop for BinarySnapshot {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.dir);
+    }
+}
+
+/// Things that must stay alive for the whole run.
+struct RunGuards {
+    _probe_cache: Option<SharedProbeCache>,
+    _snapshot: Option<BinarySnapshot>,
 }
 
 fn base_env(php: &Path, skip_slow: bool) -> Env {
@@ -286,7 +331,7 @@ fn apply_scope(
 
 /// Locate the PHP binary, build the base environment and probe extensions. The returned probe
 /// cache directory must outlive the run.
-fn make_runner(cli: &Cli, srcdir: &Path) -> Result<(Runner, Option<SharedProbeCache>), String> {
+fn make_runner(cli: &Cli, srcdir: &Path) -> Result<(Runner, RunGuards), String> {
     let php = cli
         .php
         .clone()
@@ -295,6 +340,12 @@ fn make_runner(cli: &Cli, srcdir: &Path) -> Result<(Runner, Option<SharedProbeCa
     let php = php
         .canonicalize()
         .map_err(|e| format!("invalid PHP executable {}: {e}", php.display()))?;
+    let snapshot = if cli.no_snapshot {
+        None
+    } else {
+        Some(BinarySnapshot::create(&php)?)
+    };
+    let php = snapshot.as_ref().map_or(php, |s| s.path.clone());
 
     let mut env = base_env(&php, cli.skip_slow);
     for kv in &cli.env {
@@ -337,7 +388,13 @@ fn make_runner(cli: &Cli, srcdir: &Path) -> Result<(Runner, Option<SharedProbeCa
         write_artifacts: !cli.no_artifacts,
         extensions,
     });
-    Ok((runner, probe_cache))
+    Ok((
+        runner,
+        RunGuards {
+            _probe_cache: probe_cache,
+            _snapshot: snapshot,
+        },
+    ))
 }
 
 /// Run all tests in parallel, printing result lines as they complete.
@@ -390,6 +447,9 @@ fn execute(
         |batch| {
             for r in batch {
                 print_result(&r, cli, color, show_diff);
+                // Diffs can be large; they were printed (and written to .diff) already.
+                let mut r = r;
+                r.diff = None;
                 if let Some(log) = log.as_deref_mut() {
                     if let Ok(line) = serde_json::to_string(&r) {
                         let _ = writeln!(log, "{line}");
@@ -470,7 +530,7 @@ fn run(cli: &Cli) -> Result<ExitCode, String> {
             );
         }
     }
-    let (runner, _probe_cache) = make_runner(cli, &srcdir)?;
+    let (runner, _guards) = make_runner(cli, &srcdir)?;
 
     let mut previous = Vec::new();
     let mut log = None;

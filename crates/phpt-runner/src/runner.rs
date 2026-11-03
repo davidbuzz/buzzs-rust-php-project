@@ -355,6 +355,16 @@ fn prefix_reason(rest: &[u8], require_space: bool) -> Option<String> {
     (!line.is_empty()).then(|| lossy(line))
 }
 
+/// Spawn errors worth retrying.
+fn is_transient_spawn_error(e: &std::io::Error) -> bool {
+    use nix::errno::Errno;
+    e.raw_os_error().is_some_and(|code| {
+        [Errno::ENOMEM, Errno::EAGAIN, Errno::ETXTBSY]
+            .iter()
+            .any(|errno| *errno as i32 == code)
+    })
+}
+
 fn remove_request_vars(env: &Env) -> Env {
     let mut env = env.clone();
     for k in [
@@ -436,7 +446,7 @@ impl Runner {
         stdin: Option<&[u8]>,
         capture: Capture,
     ) -> Vec<u8> {
-        let result = run(&Invocation {
+        let inv = Invocation {
             argv,
             env,
             cwd: &self.config.srcdir,
@@ -444,7 +454,22 @@ impl Runner {
             capture,
             discard_stderr: true,
             timeout: self.config.timeout,
-        });
+        };
+        let mut result = run(&inv);
+        // Spawning can fail transiently on a loaded machine (fork ENOMEM/EAGAIN) or while the
+        // binary is being relinked (ETXTBSY): back off and retry rather than recording a bogus
+        // failure.
+        let mut delay = Duration::from_millis(500);
+        for _ in 0..6 {
+            match &result {
+                Err(e) if is_transient_spawn_error(e) => {
+                    std::thread::sleep(delay);
+                    delay *= 2;
+                    result = run(&inv);
+                }
+                _ => break,
+            }
+        }
         match result {
             Ok(out) => out.data,
             Err(e) => format!("phpt-runner: cannot execute {:?}: {e}\n", argv[0]).into_bytes(),

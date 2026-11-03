@@ -32,6 +32,7 @@ target/debug/phpt-runner [OPTIONS] <PATHS>...
 | `--scope <FILE>` | Out-of-scope prefixes (default: `phpt-scope.txt` in the php-src root or an ancestor, i.e. the repository root). |
 | `--no-scope` | Run and count every selected test. |
 | `--env KEY=VALUE` | Extra environment variable for every test (repeatable). |
+| `--no-snapshot` | Run the binary in place. By default it is hard-linked (or copied) into a private temp directory first, so a concurrent `cargo build` relinking `target/debug/php` cannot break a long run. |
 | `--resume <FILE>` | Append each result to a JSON-lines log as it completes; tests already in the log are not rerun (their results are reused), so a killed full-suite run can be continued. |
 
 Examples:
@@ -136,7 +137,9 @@ total/pass/fail/skip and pass rates per suite (Zend/tests, tests/, ext/, sapi/) 
 - Tests are dispatched in batches of up to 4 consecutive files, and `CONFLICTS` keys (file or
   directory) are honoured; tests conflicting with `all` run alone at the end.
 - Child processes run in their own process group (killed as a group on timeout) with
-  `RLIMIT_CORE=0`; a death by signal appends `Termsig=N` like run-tests.php.
+  `RLIMIT_CORE=0`, an `RLIMIT_CPU` backstop just above the timeout and a parent-death signal
+  (so nothing is orphaned if the runner is killed); transient spawn failures (ENOMEM, EAGAIN,
+  ETXTBSY) are retried with backoff; a death by signal appends `Termsig=N` like run-tests.php.
 - Deliberate deviation: a test that timed out is not retried as "flaky".
 - Not supported: CGI (`--GET--`, `--POST--`, `--COOKIE--`, `--EXPECTHEADERS--`, ...) and
   `--PHPDBG--` tests are parsed but SKIPPED; no valgrind/ASAN leak detection, `--repeat`,
