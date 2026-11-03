@@ -1,11 +1,18 @@
 [package]
 name = "php-ftp"
+description = "PHP's ext/ftp client protocol engine: control connection, reply parsing, PASV/EPSV/PORT data connections, blocking and non-blocking transfers, FTPS"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+# FTPS (`ftp_ssl_connect`) needs control over the SSL_CTX that
+# php-openssl's `tls::connect` does not expose: no peer verification
+# (ext/ftp never verifies), and TLS session reuse from the control
+# connection on every data connection (`SSL_CTX_sess_set_new_cb` +
+# `SSL_set_session`), which ext/ftp requires.
+openssl = "0.10"
 
 [lints]
 workspace = true
