@@ -23,7 +23,7 @@ pub(crate) const SEEK_END: i32 = 2;
 #[derive(Debug)]
 pub(crate) enum PhpStream {
     /// Opened (and closed) by the extension.
-    Owned(Stream),
+    Owned(Box<Stream>),
     /// The user's stream resource.
     Shared(Rc<StreamCell>),
 }
@@ -140,7 +140,7 @@ pub(crate) fn open_for_download(
     let (update, create) = if ascii { ("rt+", "wt") } else { ("rb+", "wb") };
     if autoseek && *resumepos != 0 {
         let s = open(local, update).or_else(|| open(local, create))?;
-        let mut s = PhpStream::Owned(s);
+        let mut s = PhpStream::Owned(Box::new(s));
         if *resumepos == php_ftp::AUTORESUME {
             s.seek(0, SEEK_END);
             *resumepos = s.tell();
@@ -149,7 +149,7 @@ pub(crate) fn open_for_download(
         }
         Some(s)
     } else {
-        open(local, create).map(PhpStream::Owned)
+        open(local, create).map(|s| PhpStream::Owned(Box::new(s)))
     }
 }
 

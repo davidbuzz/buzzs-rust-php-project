@@ -22,7 +22,9 @@ use std::rc::Rc;
 use php_ext_streams::{bridge, res};
 use php_ftp::{NbStatus, TransferType, AUTORESUME, TIMEOUT_SEC_MAX};
 use php_runtime::{ArrayKey, Obj, Value, ZArray, ZStr};
-use php_vm::ext::{acc, class_flags, Args, ClassBuilder, Extension, ModuleBuilder, Throw, VmResult};
+use php_vm::ext::{
+    acc, class_flags, Args, ClassBuilder, Extension, ModuleBuilder, Throw, VmResult,
+};
 use php_vm::{object, Vm};
 
 use streamio::{open, open_for_download, unlink, NullSink, PhpStream, SEEK_END, SEEK_SET};
@@ -33,6 +35,8 @@ pub struct Ftp;
 
 /// The class name.
 const CLASS: &str = "FTP\\Connection";
+/// The first parameter of every function but the connectors.
+const CONN_PARAM: &str = "FTP\\Connection $ftp";
 /// `ftp->in_use` warning of the engine functions.
 const IN_USE: &str = "FTP\\Connection is already in use";
 /// `ftp->in_use` error of the non-blocking starters.
@@ -367,7 +371,8 @@ fn ftp_rawlist(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 fn ftp_mlsd(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let dir = a.str(1);
     let lines = quiet(vm, a, Value::Bool(false), |f| {
-        f.mlsd(dir.as_bytes()).map_or(Value::Bool(false), list_value)
+        f.mlsd(dir.as_bytes())
+            .map_or(Value::Bool(false), list_value)
     })?;
     let Value::Array(lines) = lines else {
         return Ok(lines);
@@ -379,7 +384,8 @@ fn ftp_mlsd(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             Ok(entry) => {
                 let mut e = ZArray::new();
                 for (k, v) in entry {
-                    e.make_mut().insert(ArrayKey::Str(ZStr::from(k.as_slice())), bytes(&v));
+                    e.make_mut()
+                        .insert(ArrayKey::Str(ZStr::from(k.as_slice())), bytes(&v));
                 }
                 let _ = out.make_mut().push(Value::Array(e));
             }
@@ -466,11 +472,16 @@ fn ftp_set_option(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             };
             if t <= 0 {
                 drop(ftp);
-                return Err(a.value_error(vm, 3, "must be greater than 0 for the FTP_TIMEOUT_SEC option"));
+                return Err(a.value_error(
+                    vm,
+                    3,
+                    "must be greater than 0 for the FTP_TIMEOUT_SEC option",
+                ));
             }
             if t.unsigned_abs() >= TIMEOUT_SEC_MAX {
                 drop(ftp);
-                let msg = format!("must be less than {TIMEOUT_SEC_MAX} for the FTP_TIMEOUT_SEC option");
+                let msg =
+                    format!("must be less than {TIMEOUT_SEC_MAX} for the FTP_TIMEOUT_SEC option");
                 return Err(a.value_error(vm, 3, &msg));
             }
             ftp.timeout_sec = t;
@@ -817,9 +828,13 @@ fn put(vm: &mut Vm, a: &Args, append: bool) -> VmResult<Value> {
     let mut ftp = ready_or_in_use!(vm, h);
     let ty = xtype(vm, a, 3)?;
     let pos = if append { 0 } else { int_or(a, 4, 0) };
-    let mode = if ty == TransferType::Ascii { "rt" } else { "rb" };
+    let mode = if ty == TransferType::Ascii {
+        "rt"
+    } else {
+        "rb"
+    };
     let (r, pending) = streams(vm, || {
-        let mut s = PhpStream::Owned(open(&local, mode)?);
+        let mut s = PhpStream::Owned(Box::new(open(&local, mode)?));
         let ok = if append {
             ftp.append(&remote, &mut s, ty)
         } else {
@@ -857,7 +872,7 @@ fn ftp_nb_put(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             // PHP opens the local file before noticing the busy connection.
             let ((), pending) = streams(vm, || {
                 if let Some(s) = open(&local, "rb") {
-                    PhpStream::Owned(s).close();
+                    PhpStream::Owned(Box::new(s)).close();
                 }
             });
             if let Some(t) = pending {
@@ -868,9 +883,13 @@ fn ftp_nb_put(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     };
     let ty = xtype(vm, a, 3)?;
     let pos = int_or(a, 4, 0);
-    let mode = if ty == TransferType::Ascii { "rt" } else { "rb" };
+    let mode = if ty == TransferType::Ascii {
+        "rt"
+    } else {
+        "rb"
+    };
     let (st, pending) = streams(vm, || {
-        let mut s = PhpStream::Owned(open(&local, mode)?);
+        let mut s = PhpStream::Owned(Box::new(open(&local, mode)?));
         let pos = upload_seek(&mut ftp, &mut s, &remote, pos);
         let st = ftp.nb_put(&remote, &mut s, ty, pos);
         if st == NbStatus::MoreData {
@@ -922,8 +941,7 @@ impl Extension for Ftp {
             .method("__construct()", acc::PUBLIC, ctor)
             .register(m.vm());
 
-        const C: &str = "FTP\\Connection $ftp";
-        let sig = |s: &str| s.replace("$C", C);
+        let sig = |s: &str| s.replace("$C", CONN_PARAM);
         for (s, f) in [
             ("ftp_connect(string $hostname, int $port = 21, int $timeout = 90): FTP\\Connection|false", ftp_connect as php_vm::ext::NativeFn),
             ("ftp_ssl_connect(string $hostname, int $port = 21, int $timeout = 90): FTP\\Connection|false", ftp_ssl_connect),

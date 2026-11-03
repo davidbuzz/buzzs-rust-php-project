@@ -13,5 +13,9 @@ php-ftp = { path = "../php-ftp" }
 php-streams = { path = "../php-streams" }
 php-ext-streams = { path = "../php-ext-streams" }
 
+
+[dev-dependencies]
+php-ext-stdarr = { path = "../php-ext-stdarr" }
+
 [lints]
 workspace = true
