@@ -244,6 +244,9 @@ dependencies = [
 [[package]]
 name = "php-cli"
 version = "0.1.0"
+dependencies = [
+ "php-vm",
+]
 
 [[package]]
 name = "php-date"
@@ -258,6 +261,10 @@ dependencies = [
 
 [[package]]
 name = "php-lexer"
+version = "0.1.0"
+
+[[package]]
+name = "php-mbstring"
 version = "0.1.0"
 
 [[package]]
@@ -288,6 +295,9 @@ version = "0.1.0"
 [[package]]
 name = "php-stdarr"
 version = "0.1.0"
+dependencies = [
+ "php-runtime",
+]
 
 [[package]]
 name = "php-stdstr"
@@ -307,6 +317,12 @@ version = "0.1.0"
 [[package]]
 name = "php-vm"
 version = "0.1.0"
+dependencies = [
+ "php-lexer",
+ "php-parser",
+ "php-runtime",
+ "php-support",
+]
 
 [[package]]
 name = "phpt-runner"

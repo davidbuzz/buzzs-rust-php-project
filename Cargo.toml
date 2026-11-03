@@ -16,6 +16,7 @@ members = [
     "crates/php-streams",
     "crates/php-stdarr",
     "crates/php-mbstring",
+    "crates/php-json",
 ]
 
 [workspace.package]
