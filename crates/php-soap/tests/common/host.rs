@@ -5,6 +5,7 @@
 use std::any::Any;
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::fmt::Write as _;
 use std::rc::Rc;
 
 use php_runtime::array::ArrayKey;
@@ -51,13 +52,98 @@ pub struct UserClass {
     pub methods: Vec<(String, MethodFn)>,
 }
 
+/// A PHP built-in web server (`php -S`) emulated in-process: every request
+/// runs `code` in a fresh interpreter (see `php_cli_server_start`).
+#[derive(Debug, Clone)]
+pub struct CliServer {
+    pub code: String,
+    /// The script file name the code is stored under (`index.php` or the router).
+    pub script: String,
+    pub doc_root: std::path::PathBuf,
+}
+
+/// Serves one raw HTTP request; returns the raw response and the files the
+/// script wrote.
+pub type CliHandler = fn(&CliServer, u16, Vec<u8>) -> (Vec<u8>, HashMap<String, Vec<u8>>);
+
 /// Canned HTTP exchanges.
 #[derive(Debug, Default, Clone)]
 pub struct FakeNet {
     pub responses: Vec<Vec<u8>>,
     pub requests: Rc<RefCell<Vec<Vec<u8>>>>,
     pub targets: Rc<RefCell<Vec<ConnectTarget>>>,
+    /// Emulated `php -S` servers by port.
+    pub servers: HashMap<u16, CliServer>,
+    /// Files written by emulated servers (shared "disk").
+    pub server_files: Rc<RefCell<HashMap<String, Vec<u8>>>>,
+    pub cli_handler: Option<CliHandler>,
 }
+
+impl FakeNet {
+    fn server_for(&self, host: &str, port: u16) -> Option<(CliServer, CliHandler)> {
+        if !matches!(host, "localhost" | "127.0.0.1") {
+            return None;
+        }
+        Some((self.servers.get(&port)?.clone(), self.cli_handler?))
+    }
+
+    /// Performs one request against an emulated server.
+    pub fn exchange(&self, host: &str, port: u16, request: Vec<u8>) -> Option<Vec<u8>> {
+        let (server, handler) = self.server_for(host, port)?;
+        let (resp, files) = handler(&server, port, request);
+        self.server_files.borrow_mut().extend(files);
+        Some(resp)
+    }
+}
+
+/// A connection to an emulated `php -S` server: the request is buffered and
+/// served on the first read.
+struct CliStream {
+    server: CliServer,
+    port: u16,
+    handler: CliHandler,
+    request: Vec<u8>,
+    response: Option<FakeStream>,
+    files: Rc<RefCell<HashMap<String, Vec<u8>>>>,
+    log: Rc<RefCell<Vec<Vec<u8>>>>,
+}
+
+impl CliStream {
+    fn response(&mut self) -> &mut FakeStream {
+        if self.response.is_none() {
+            let req = std::mem::take(&mut self.request);
+            let (data, files) = (self.handler)(&self.server, self.port, req);
+            self.files.borrow_mut().extend(files);
+            self.response = Some(FakeStream {
+                data,
+                pos: 0,
+                log: Rc::clone(&self.log),
+            });
+        }
+        self.response.as_mut().expect("response")
+    }
+}
+
+impl HttpStream for CliStream {
+    fn write(&mut self, data: &[u8]) -> usize {
+        self.log.borrow_mut().push(data.to_vec());
+        self.request.extend_from_slice(data);
+        data.len()
+    }
+    fn read_line(&mut self) -> Option<Vec<u8>> {
+        self.response().read_line()
+    }
+    fn read(&mut self, n: usize) -> Vec<u8> {
+        self.response().read(n)
+    }
+    fn eof(&mut self) -> bool {
+        self.response().eof()
+    }
+}
+
+/// The payload of a `stream-context` resource.
+#[derive(Debug, Default)]
+pub struct StreamContext(pub RefCell<Vec<(String, String, Value)>>);
 
 struct FakeStream {
     data: Vec<u8>,
@@ -96,6 +182,17 @@ impl HttpStream for FakeStream {
 impl HttpConnector for FakeNet {
     fn connect(&mut self, target: &ConnectTarget) -> Option<Box<dyn HttpStream>> {
         self.targets.borrow_mut().push(target.clone());
+        if let Some((server, handler)) = self.server_for(&target.host, target.port) {
+            return Some(Box::new(CliStream {
+                server,
+                port: target.port,
+                handler,
+                request: Vec::new(),
+                response: None,
+                files: Rc::clone(&self.server_files),
+                log: Rc::clone(&self.requests),
+            }));
+        }
         if self.responses.is_empty() {
             return None;
         }
@@ -124,6 +221,10 @@ pub struct TestHost {
     pub tz_offset: i64,
     pub server_vars: HashMap<String, Vec<u8>>,
     pub request_body: Option<Vec<u8>>,
+    /// Request headers in arrival order (`getallheaders()`).
+    pub request_headers: Vec<(String, String)>,
+    /// `http_response_code()`.
+    pub response_code: Option<i64>,
     pub now: i64,
     /// File name used in error messages.
     pub script: String,
@@ -548,6 +649,7 @@ impl SoapHost for TestHost {
         }
         const BUILTINS: &[&str] = &[
             "strlen",
+            "strrev",
             "count",
             "var_dump",
             "gzinflate",
@@ -556,6 +658,7 @@ impl SoapHost for TestHost {
             "gzcompress",
             "gzencode",
             "gzdecode",
+            "zlib_decode",
             "str_repeat",
             "trim",
             "strtolower",
@@ -637,9 +740,17 @@ impl SoapHost for TestHost {
         )))
     }
 
-    fn load_resource(&mut self, url: &str, _context: Option<&Value>) -> Result<Vec<u8>, String> {
+    fn load_resource(&mut self, url: &str, context: Option<&Value>) -> Result<Vec<u8>, String> {
         if let Some(f) = self.files.get(url) {
             return Ok(f.clone());
+        }
+        if let Some(f) = self.net.server_files.borrow().get(url) {
+            return Ok(f.clone());
+        }
+        if url.starts_with("http://") {
+            if let Some(body) = self.http_get(url, context) {
+                return Ok(body);
+            }
         }
         let path = url.strip_prefix("file://").unwrap_or(url);
         if !url.contains("://") || url.starts_with("file://") {
@@ -706,12 +817,69 @@ impl SoapHost for TestHost {
         self.server_vars.get(name).cloned()
     }
 
+    fn request_line(&mut self) -> (Option<String>, Option<String>) {
+        (
+            self.server_vars
+                .get("REQUEST_METHOD")
+                .map(|v| String::from_utf8_lossy(v).into_owned()),
+            self.server_vars
+                .get("QUERY_STRING")
+                .map(|v| String::from_utf8_lossy(v).into_owned()),
+        )
+    }
+
     fn request_body(&mut self) -> Option<Vec<u8>> {
         self.request_body.clone()
     }
 
     fn ini_get(&mut self, name: &str) -> Option<Vec<u8>> {
         self.ini.get(name).cloned()
+    }
+
+    fn context_create(&mut self) -> Value {
+        Value::Resource(php_runtime::Resource::new(
+            "stream-context",
+            Some(Box::new(StreamContext::default())),
+        ))
+    }
+
+    fn context_get_option(
+        &mut self,
+        context: &Value,
+        wrapper: &str,
+        option: &str,
+    ) -> Option<Value> {
+        let Value::Resource(r) = context.deref() else {
+            return None;
+        };
+        let data = r.data();
+        let ctx = data.as_ref()?.downcast_ref::<StreamContext>()?;
+        let opts = ctx.0.borrow();
+        opts.iter()
+            .find(|(w, o, _)| w == wrapper && o == option)
+            .map(|(_, _, v)| v.clone())
+    }
+
+    fn context_set_option(&mut self, context: &Value, wrapper: &str, option: &str, value: Value) {
+        let Value::Resource(r) = context.deref() else {
+            return;
+        };
+        let data = r.data();
+        let Some(ctx) = data
+            .as_ref()
+            .and_then(|d| d.downcast_ref::<StreamContext>())
+        else {
+            return;
+        };
+        let mut opts = ctx.0.borrow_mut();
+        if let Some(slot) = opts
+            .iter_mut()
+            .find(|(w, o, _)| w == wrapper && o == option)
+        {
+            slot.2 = value;
+        } else {
+            opts.push((wrapper.to_owned(), option.to_owned(), value));
+        }
     }
 
     fn connector(&mut self) -> Option<&mut dyn HttpConnector> {
@@ -732,6 +900,72 @@ impl SoapHost for TestHost {
 
 impl TestHost {
     /// Ends all output buffers (script end) and returns the output.
+    /// The `http://` stream wrapper against an emulated server
+    /// (`php_stream_url_wrap_http_ex` request layout).
+    pub fn http_get(&mut self, url: &str, context: Option<&Value>) -> Option<Vec<u8>> {
+        let rest = url.strip_prefix("http://")?;
+        let (authority, path) = rest
+            .find('/')
+            .map_or((rest, "/"), |p| (&rest[..p], &rest[p..]));
+        let (host, port) = match authority.rsplit_once(':') {
+            Some((h, p)) => (h, p.parse().ok()?),
+            None => (authority, 80u16),
+        };
+        let opt =
+            |h: &mut Self, name: &str| context.and_then(|c| h.context_get_option(c, "http", name));
+        let protocol = match opt(self, "protocol_version").map(|v| v.deref()) {
+            Some(Value::Float(f)) => format!("{f:.1}"),
+            Some(Value::Str(s)) => String::from_utf8_lossy(s.as_bytes()).into_owned(),
+            _ => "1.1".to_owned(),
+        };
+        let mut user = Vec::new();
+        match opt(self, "header").map(|v| v.deref()) {
+            Some(Value::Str(s)) => user.extend_from_slice(s.as_bytes()),
+            Some(Value::Array(a)) => {
+                for v in a.values() {
+                    if let Value::Str(s) = v.deref() {
+                        user.extend_from_slice(s.as_bytes());
+                        user.extend_from_slice(b"\r\n");
+                    }
+                }
+            }
+            _ => {}
+        }
+        let user = String::from_utf8_lossy(&user)
+            .trim_matches(|c| matches!(c, ' ' | '\t' | '\r' | '\n' | '\0' | '\x0b'))
+            .to_owned();
+        let has = |name: &str| {
+            user.split('\n').any(|l| {
+                l.trim_start()
+                    .to_ascii_lowercase()
+                    .starts_with(&format!("{name}:"))
+            })
+        };
+        let mut req = format!("GET {path} HTTP/{protocol}\r\n");
+        if !has("host") {
+            if port == 80 {
+                let _ = write!(req, "Host: {host}\r\n");
+            } else {
+                let _ = write!(req, "Host: {host}:{port}\r\n");
+            }
+        }
+        if !has("connection") {
+            req.push_str("Connection: close\r\n");
+        }
+        if !user.is_empty() {
+            req.push_str(&user);
+            req.push_str("\r\n");
+        }
+        req.push_str("\r\n");
+        let resp = self.net.exchange(host, port, req.into_bytes())?;
+        let split = resp.windows(4).position(|w| w == b"\r\n\r\n")?;
+        let status = resp.split(|&c| c == b' ').nth(1)?;
+        if !status.starts_with(b"2") {
+            return None;
+        }
+        Some(resp[split + 4..].to_vec())
+    }
+
     pub fn finish(&mut self) -> Vec<u8> {
         while let Some(b) = self.ob.pop() {
             self.write_output(&b);

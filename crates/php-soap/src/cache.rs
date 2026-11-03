@@ -228,6 +228,8 @@ fn slot_str(host: &mut dyn SoapHost, obj: &Obj, name: &str) -> Option<Vec<u8>> {
 fn wsdl_context(host: &mut dyn SoapHost, client: Option<&Obj>, uri: &str) -> Value {
     let mut headers: Vec<u8> = Vec::new();
     let mut context: Option<Value> = None;
+    let mut has_authorization = false;
+    let mut has_proxy_authorization = false;
     if let Some(this) = client {
         if let Some(Value::Resource(r)) = host.read_slot(this, "_stream_context").map(|v| v.deref())
         {
@@ -251,6 +253,7 @@ fn wsdl_context(host: &mut dyn SoapHost, client: Option<&Obj>, uri: &str) -> Val
                 host.context_set_option(&ctx, "http", "request_fulluri", Value::Bool(true));
             }
             if let Some(login) = slot_str(host, this, "_proxy_login") {
+                has_proxy_authorization = true;
                 let pw = slot_str(host, this, "_proxy_password");
                 headers.extend_from_slice(b"Proxy-Authorization: Basic ");
                 headers.extend_from_slice(&basic_auth(&login, pw.as_deref()));
@@ -262,6 +265,7 @@ fn wsdl_context(host: &mut dyn SoapHost, client: Option<&Obj>, uri: &str) -> Val
             Some(Value::Bool(true))
         );
         if let (Some(login), false) = (slot_str(host, this, "_login"), use_digest) {
+            has_authorization = true;
             let pw = slot_str(host, this, "_password");
             headers.extend_from_slice(b"Authorization: Basic ");
             headers.extend_from_slice(&basic_auth(&login, pw.as_deref()));
@@ -277,13 +281,14 @@ fn wsdl_context(host: &mut dyn SoapHost, client: Option<&Obj>, uri: &str) -> Val
         headers.extend_from_slice(b"Connection: close\r\n");
     }
     if !headers.is_empty() {
-        if let Some(existing) = host.context_get_option(&ctx, "http", "header") {
-            if let Value::Str(s) = existing.deref() {
-                let mut h = headers.clone();
-                h.extend_from_slice(s.as_bytes());
-                headers = h;
-            }
-        }
+        crate::http::http_context_headers(
+            host,
+            &ctx,
+            has_authorization,
+            has_proxy_authorization,
+            false,
+            &mut headers,
+        );
         host.context_set_option(&ctx, "http", "header", Value::from(headers.as_slice()));
     }
     ctx

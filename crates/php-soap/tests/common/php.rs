@@ -14,7 +14,7 @@ use php_runtime::array::ArrayKey;
 use php_runtime::{ops, Obj, RtResult, RuntimeError, Value, ZArray, ZStr};
 use php_soap::host::SoapHost;
 
-use super::host::{MethodFn, TestHost, UserClass};
+use super::host::{CliServer, MethodFn, TestHost, UserClass};
 
 // ---- lexer --------------------------------------------------------------------
 
@@ -879,6 +879,31 @@ impl Parser {
                         let name = self.ident()?;
                         Ok(S::Func(Rc::new(self.func_rest(name, false)?)))
                     }
+                    "const" if matches!(self.peek_at(1), Some(T::Id(_))) => {
+                        self.i += 1;
+                        let mut defs = Vec::new();
+                        loop {
+                            let name = self.ident()?;
+                            if !self.eat_op("=") {
+                                return Err("expected = in const".into());
+                            }
+                            let value = self.expr()?;
+                            let arg = |e| Arg {
+                                e,
+                                spread: false,
+                                name: None,
+                            };
+                            defs.push(S::Expr(E::Call(
+                                "define".into(),
+                                vec![arg(E::Lit(Value::from(name.as_str()))), arg(value)],
+                            )));
+                            if !self.eat_op(",") {
+                                break;
+                            }
+                        }
+                        self.semi();
+                        Ok(S::Block(defs))
+                    }
                     "global" => {
                         self.i += 1;
                         let mut v = Vec::new();
@@ -1658,6 +1683,14 @@ fn get_var(h: &mut TestHost, f: &Frame, n: &str) -> Value {
     if n == "this" {
         return f.this.clone().map(Value::Object).unwrap_or_default();
     }
+    if n == "_SERVER" {
+        return Value::Array(ZArray::from_pairs(h.server_vars.iter().map(|(k, v)| {
+            (
+                ArrayKey::from_bytes(k.as_bytes()),
+                Value::from(v.as_slice()),
+            )
+        })));
+    }
     if n == "GLOBALS" {
         return Value::Array(ZArray::from_pairs(
             h.globals
@@ -1709,9 +1742,167 @@ fn method_hook(h: &mut TestHost, obj: &Obj, name: &str, args: &[Value]) -> Optio
     internal_method(h, obj, name, args, &mut refs).transpose()
 }
 
+/// Serves one request of an emulated `php -S` server on its own thread
+/// (fresh extension globals, like a separate process).
+fn serve_cli(
+    server: &CliServer,
+    port: u16,
+    request: Vec<u8>,
+) -> (Vec<u8>, HashMap<String, Vec<u8>>) {
+    let server = server.clone();
+    std::thread::Builder::new()
+        .stack_size(256 << 20)
+        .spawn(move || serve_cli_request(&server, port, &request))
+        .expect("spawn server thread")
+        .join()
+        .unwrap_or_else(|_| {
+            (
+                b"HTTP/1.1 500 Internal Server Error\r\nConnection: close\r\n\r\n".to_vec(),
+                HashMap::new(),
+            )
+        })
+}
+
+fn reason_phrase(code: i64) -> &'static str {
+    match code {
+        200 => "OK",
+        201 => "Created",
+        202 => "Accepted",
+        204 => "No Content",
+        301 => "Moved Permanently",
+        302 => "Found",
+        303 => "See Other",
+        307 => "Temporary Redirect",
+        308 => "Permanent Redirect",
+        400 => "Bad Request",
+        401 => "Unauthorized",
+        403 => "Forbidden",
+        404 => "Not Found",
+        500 => "Internal Server Error",
+        _ => "Unknown",
+    }
+}
+
+fn serve_cli_request(
+    server: &CliServer,
+    port: u16,
+    request: &[u8],
+) -> (Vec<u8>, HashMap<String, Vec<u8>>) {
+    let head_end = request
+        .windows(4)
+        .position(|w| w == b"\r\n\r\n")
+        .map_or(request.len(), |p| p + 4);
+    let head = String::from_utf8_lossy(&request[..head_end]).into_owned();
+    let mut lines = head.split('\n').map(|l| l.trim_end_matches('\r'));
+    let first = lines.next().unwrap_or_default();
+    let mut parts = first.split(' ');
+    let method = parts.next().unwrap_or("GET").to_owned();
+    let uri = parts.next().unwrap_or("/").to_owned();
+    let protocol = parts.next().unwrap_or("HTTP/1.1").to_owned();
+    let mut headers = Vec::new();
+    for l in lines {
+        if let Some((n, v)) = l.split_once(':') {
+            headers.push((n.trim().to_owned(), v.trim().to_owned()));
+        }
+    }
+    let mut body = request.get(head_end..).unwrap_or_default().to_vec();
+    if let Some((_, len)) = headers
+        .iter()
+        .find(|(n, _)| n.eq_ignore_ascii_case("content-length"))
+    {
+        if let Ok(len) = len.parse::<usize>() {
+            body.truncate(len);
+        }
+    }
+
+    php_soap::globals::request_init();
+    let mut h = TestHost::new();
+    let path = server.doc_root.join(&server.script);
+    h.base_dir.clone_from(&server.doc_root);
+    h.current_file.clone_from(&path);
+    h.script = path.to_string_lossy().into_owned();
+    let (path_part, query) = uri.split_once('?').unwrap_or((uri.as_str(), ""));
+    for (k, v) in [
+        ("REQUEST_METHOD", method.as_str()),
+        ("REQUEST_URI", uri.as_str()),
+        ("SERVER_PROTOCOL", protocol.as_str()),
+        ("QUERY_STRING", query),
+        ("PHP_SELF", path_part),
+        ("SCRIPT_NAME", path_part),
+        ("SERVER_NAME", "localhost"),
+        ("DOCUMENT_ROOT", &server.doc_root.to_string_lossy()),
+    ] {
+        h.server_vars.insert(k.to_owned(), v.as_bytes().to_vec());
+    }
+    h.server_vars
+        .insert("SERVER_PORT".into(), port.to_string().into_bytes());
+    for (n, v) in &headers {
+        let key = n.to_ascii_uppercase().replace('-', "_");
+        let key = if key == "CONTENT_TYPE" || key == "CONTENT_LENGTH" {
+            key
+        } else {
+            format!("HTTP_{key}")
+        };
+        h.server_vars.insert(key, v.as_bytes().to_vec());
+    }
+    h.request_headers = headers;
+    h.request_body = Some(body);
+    let code = format!("<?php {} ?>", server.code);
+    if let Err(e) = run_file(&mut h, &path, code.as_bytes()) {
+        h.report(&e);
+    }
+    let out = h.finish();
+
+    let mut status = h.response_code.unwrap_or(200);
+    let mut status_line: Option<String> = None;
+    let mut sent: Vec<String> = vec![format!("X-Powered-By: PHP/{}", php_soap::PHP_VERSION)];
+    for line in std::mem::take(&mut h.headers) {
+        if line.starts_with("HTTP/") {
+            if let Some(c) = line.split(' ').nth(1).and_then(|c| c.parse().ok()) {
+                status = c;
+            }
+            status_line = Some(line);
+            continue;
+        }
+        let Some((name, _)) = line.split_once(':') else {
+            continue;
+        };
+        if name.eq_ignore_ascii_case("location") && status != 201 && !(300..400).contains(&status) {
+            status = 302;
+        }
+        if let Some(slot) = sent.iter_mut().find(|l| {
+            l.split_once(':')
+                .is_some_and(|(n, _)| n.eq_ignore_ascii_case(name))
+        }) {
+            *slot = line;
+        } else {
+            sent.push(line);
+        }
+    }
+    if !sent
+        .iter()
+        .any(|l| l.to_ascii_lowercase().starts_with("content-type:"))
+    {
+        sent.push("Content-type: text/html; charset=UTF-8".into());
+    }
+    let mut resp = status_line
+        .filter(|_| h.response_code.is_none())
+        .unwrap_or_else(|| format!("HTTP/1.1 {status} {}", reason_phrase(status)));
+    resp.push_str("\r\nDate: Thu, 01 Jan 1970 00:00:00 GMT\r\nConnection: close\r\n");
+    for l in sent {
+        resp.push_str(&l);
+        resp.push_str("\r\n");
+    }
+    resp.push_str("\r\n");
+    let mut resp = resp.into_bytes();
+    resp.extend_from_slice(&out);
+    (resp, std::mem::take(&mut h.files))
+}
+
 pub fn run_file(h: &mut TestHost, path: &Path, code: &[u8]) -> RtResult<()> {
     h.builtin_hook = Some(builtin_hook);
     h.method_hook = Some(method_hook);
+    h.net.cli_handler = Some(serve_cli);
     let toks = Lexer::lex(code);
     let mut p = Parser { t: toks, i: 0 };
     let prog = p.program().map_err(|e| err(format!("parse error: {e}")))?;
@@ -2131,6 +2322,13 @@ fn assign(h: &mut TestHost, f: &mut Frame, target: &E, v: Value) -> RtResult<()>
             let k = eval(h, f, idx)?;
             let k = String::from_utf8_lossy(&to_str(h, &k)?).into_owned();
             h.globals.insert(k, v);
+            Ok(())
+        }
+        E::Index(base, Some(idx)) if matches!(&**base, E::Var(n) if n == "_SERVER") => {
+            let k = eval(h, f, idx)?;
+            let k = String::from_utf8_lossy(&to_str(h, &k)?).into_owned();
+            let v = to_str(h, &v)?;
+            h.server_vars.insert(k, v);
             Ok(())
         }
         E::Index(base, idx) => {
@@ -2794,6 +2992,7 @@ fn constant(h: &mut TestHost, f: &Frame, c: &str) -> RtResult<Value> {
         "PHP_INT_SIZE" => Value::Int(8),
         "PHP_VERSION" => Value::from(php_soap::PHP_VERSION),
         "PHP_OS" | "PHP_OS_FAMILY" => Value::from("Linux"),
+        "PHP_SHLIB_SUFFIX" => Value::from("so"),
         "E_ALL" => Value::Int(32767),
         "E_WARNING" => Value::Int(2),
         "E_NOTICE" => Value::Int(8),
@@ -3233,6 +3432,25 @@ fn builtin(
             Value::Array(x) => i64::try_from(x.len()).unwrap_or(0),
             _ => 1,
         }),
+        "gzcompress" | "gzencode" | "gzdeflate" | "gzuncompress" | "gzdecode" | "gzinflate"
+        | "zlib_decode" => {
+            let data = s(h, 0)?;
+            let r = match name {
+                "gzcompress" => php_zlib::codec::gzcompress(&data, -1, 15),
+                "gzencode" => php_zlib::codec::gzencode(&data, -1, 31),
+                "gzdeflate" => php_zlib::codec::gzdeflate(&data, -1, -15),
+                "gzuncompress" => php_zlib::codec::gzuncompress(&data, 0),
+                "gzdecode" => php_zlib::codec::gzdecode(&data, 0),
+                "gzinflate" => php_zlib::codec::gzinflate(&data, 0),
+                _ => php_zlib::codec::zlib_decode(&data, 0),
+            };
+            r.map_or(Value::Bool(false), |d| Value::from(d.as_slice()))
+        }
+        "strrev" => {
+            let mut v = s(h, 0)?;
+            v.reverse();
+            Value::from(v.as_slice())
+        }
         "strlen" => Value::Int(i64::try_from(s(h, 0)?.len()).unwrap_or(0)),
         "is_null" => Value::Bool(matches!(arg(0), Value::Null)),
         "is_array" => Value::Bool(matches!(arg(0), Value::Array(_))),
@@ -3329,6 +3547,83 @@ fn builtin(
                 .get(&n)
                 .map_or(Value::Bool(false), |v| Value::from(v.as_slice()))
         }
+        "header" => {
+            let line = String::from_utf8_lossy(&s(h, 0)?).into_owned();
+            h.headers.push(line);
+            Value::Null
+        }
+        "http_response_code" => {
+            let old = h.response_code;
+            if let Some(v) = a.first() {
+                h.response_code = Some(v.to_long(h)?);
+            }
+            old.map_or(Value::Bool(true), Value::Int)
+        }
+        "getallheaders" => {
+            let mut out = ZArray::new();
+            for (n, v) in &h.request_headers {
+                out.make_mut()
+                    .insert(ArrayKey::from_bytes(n.as_bytes()), Value::from(v.as_str()));
+            }
+            Value::Array(out)
+        }
+        "stream_context_create" => {
+            let ctx = h.context_create();
+            if let Value::Array(opts) = arg(0) {
+                for (wrapper, inner) in opts.iter() {
+                    if let Value::Array(inner) = inner.deref() {
+                        for (opt, v) in inner.iter() {
+                            h.context_set_option(
+                                &ctx,
+                                &String::from_utf8_lossy(&wrapper.to_bytes()),
+                                &String::from_utf8_lossy(&opt.to_bytes()),
+                                v.deref(),
+                            );
+                        }
+                    }
+                }
+            }
+            ctx
+        }
+        "php_cli_server_start" => {
+            let code = match arg(0) {
+                Value::Null => String::new(),
+                v => String::from_utf8_lossy(&to_str(h, &v)?).into_owned(),
+            };
+            let script = match a.get(1).map(Value::deref) {
+                None => "index.php".to_owned(),
+                Some(Value::Null) => "index.php".to_owned(),
+                Some(v) => String::from_utf8_lossy(&to_str(h, &v)?).into_owned(),
+            };
+            let port = 8964 + u16::try_from(h.net.servers.len()).unwrap_or(0);
+            let doc_root = h.base_dir.clone();
+            h.net.servers.insert(
+                port,
+                CliServer {
+                    code,
+                    script,
+                    doc_root: doc_root.clone(),
+                },
+            );
+            for (k, v) in [
+                ("PHP_CLI_SERVER_HOSTNAME", Value::from("localhost")),
+                ("PHP_CLI_SERVER_PORT", Value::Int(i64::from(port))),
+                (
+                    "PHP_CLI_SERVER_ADDRESS",
+                    Value::from(format!("localhost:{port}").as_str()),
+                ),
+            ] {
+                h.globals.entry(format!("const::{k}")).or_insert(v);
+            }
+            let o = h.new_object("stdClass");
+            h.write_property(
+                &o,
+                b"docRoot",
+                Value::from(doc_root.to_string_lossy().as_ref()),
+            )?;
+            h.write_property(&o, b"port", Value::Int(i64::from(port)))?;
+            Value::Object(o)
+        }
         "error_reporting"
         | "set_error_handler"
         | "restore_error_handler"
@@ -3336,8 +3631,6 @@ fn builtin(
         | "putenv"
         | "date_default_timezone_set"
         | "gc_collect_cycles"
-        | "header"
-        | "http_response_code"
         | "libxml_disable_entity_loader"
         | "libxml_use_internal_errors"
         | "define"
@@ -3439,6 +3732,8 @@ fn builtin(
                 Value::Int(i64::try_from(p).unwrap_or(0))
             })
         }
+        "str_starts_with" => Value::Bool(s(h, 0)?.starts_with(&s(h, 1)?)),
+        "str_ends_with" => Value::Bool(s(h, 0)?.ends_with(&s(h, 1)?)),
         "str_contains" => {
             let hay = s(h, 0)?;
             let n = s(h, 1)?;
@@ -3560,6 +3855,21 @@ fn builtin(
         }
         "file_get_contents" => {
             let p = String::from_utf8_lossy(&s(h, 0)?).into_owned();
+            if let Some(d) = h.net.server_files.borrow().get(&p) {
+                return Ok(Some(Value::from(d.as_slice())));
+            }
+            if p.starts_with("http://") {
+                let ctx = a.get(2).map(Value::deref);
+                return Ok(Some(
+                    h.http_get(&p, ctx.as_ref())
+                        .map_or(Value::Bool(false), |d| Value::from(d.as_slice())),
+                ));
+            }
+            if p == "php://input" {
+                return Ok(Some(Value::from(
+                    h.request_body.clone().unwrap_or_default().as_slice(),
+                )));
+            }
             match h.load_resource(&p, None) {
                 Ok(d) => Value::from(d.as_slice()),
                 Err(_) => Value::Bool(false),
@@ -3598,9 +3908,12 @@ fn builtin(
             Value::Int(i64::try_from(d.len()).unwrap_or(0))
         }
         "fclose" => Value::Bool(true),
-        "stream_context_create" => Value::Null,
         "php_ini_loaded_file" => Value::Bool(false),
-        "extension_loaded" => Value::Bool(true),
+        "extension_loaded" => Value::Bool(!matches!(
+            s(h, 0)?.to_ascii_lowercase().as_slice(),
+            b"session" | b"pcntl" | b"posix"
+        )),
+        "getenv" => Value::Bool(false),
         "spl_object_id" => match arg(0) {
             Value::Object(o) => Value::Int(i64::from(o.handle())),
             _ => Value::Int(0),

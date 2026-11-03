@@ -11,5 +11,8 @@ php-runtime = { path = "../php-runtime" }
 php-libxml = { path = "../php-libxml" }
 php-hash = { path = "../php-hash" }
 
+[dev-dependencies]
+php-zlib = { path = "../php-zlib" }
+
 [lints]
 workspace = true

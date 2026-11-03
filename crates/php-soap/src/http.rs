@@ -444,6 +444,37 @@ fn http_fault(host: &mut dyn SoapHost, this: &Obj, msg: &str) -> RtResult<Option
     Ok(None)
 }
 
+/// `http_context_headers`: appends the `http.header` context option (a
+/// string, or an array whose non-empty string elements are used), minus the
+/// headers the caller generates itself.
+pub(crate) fn http_context_headers(
+    host: &mut dyn SoapHost,
+    ctx: &Value,
+    has_auth: bool,
+    has_proxy_auth: bool,
+    has_cookies: bool,
+    out: &mut Vec<u8>,
+) {
+    match host
+        .context_get_option(ctx, "http", "header")
+        .map(|v| v.deref())
+    {
+        Some(Value::Str(s)) if !s.is_empty() => {
+            context_headers(s.as_bytes(), has_auth, has_proxy_auth, has_cookies, out);
+        }
+        Some(Value::Array(a)) => {
+            for v in a.values() {
+                if let Value::Str(s) = v.deref() {
+                    if !s.is_empty() {
+                        context_headers(s.as_bytes(), has_auth, has_proxy_auth, has_cookies, out);
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
 /// `http_context_add_header`: extra headers from the stream context,
 /// skipping the ones the client generates itself.
 fn context_headers(
@@ -940,30 +971,7 @@ pub fn make_http_soap_request(
             }
         }
         if let Some(ctx) = &context {
-            match host
-                .context_get_option(ctx, "http", "header")
-                .map(|v| v.deref())
-            {
-                Some(Value::Str(s)) if !s.is_empty() => {
-                    context_headers(s.as_bytes(), has_auth, has_proxy_auth, has_cookies, &mut h);
-                }
-                Some(Value::Array(a)) => {
-                    for v in a.values() {
-                        if let Value::Str(s) = v.deref() {
-                            if !s.is_empty() {
-                                context_headers(
-                                    s.as_bytes(),
-                                    has_auth,
-                                    has_proxy_auth,
-                                    has_cookies,
-                                    &mut h,
-                                );
-                            }
-                        }
-                    }
-                }
-                _ => {}
-            }
+            http_context_headers(host, ctx, has_auth, has_proxy_auth, has_cookies, &mut h);
         }
         h.extend_from_slice(b"\r\n");
         if client_trace {

@@ -28,16 +28,16 @@ const ENGINE_DEPENDENT: &[&str] = &[
     "bugs/bug30045.phpt",
     "bugs/bug30928.phpt",
     "bugs/bug31422.phpt",
-    "bugs/bug39815.phpt",
     "bugs/bug42151.phpt",
     "bugs/bug46760.phpt",
-    "bugs/bug47021.phpt",
-    "bugs/bug47925.phpt",
+    "bugs/bug51561.phpt",
     "bugs/bug54911.phpt",
-    "bugs/bug61525.phpt",
     "bugs/bug69085.phpt",
     "bugs/bug70388.phpt",
     "bugs/bug70469.phpt",
+    "bugs/bug70211.phpt",
+    "bugs/bug71610.phpt",
+    "bugs/bug73037.phpt",
     "bugs/bug73237.phpt",
     "bugs/bug73452.phpt",
     "bugs/bug75306.phpt",
@@ -46,7 +46,6 @@ const ENGINE_DEPENDENT: &[&str] = &[
     "bugs/gh16237.phpt",
     "bugs/gh16259.phpt",
     "bugs/gh16429.phpt",
-    "bugs/gh18990.phpt",
     "bugs/gh21421.phpt",
     "bugs/gh22167.phpt",
     "bugs/gh22895.phpt",
@@ -58,16 +57,10 @@ const ENGINE_DEPENDENT: &[&str] = &[
     "gh22585.phpt",
     "gh23447.phpt",
     "oom_soapclient_call.phpt",
-    "oom_soapclient_dorequest_chunked.phpt",
-    "oom_soapclient_dorequest_close.phpt",
-    "oom_soapclient_dorequest_content_length.phpt",
-    "oom_soapclient_response_headers.phpt",
     "oom_soapclient_soapcall.phpt",
     "oom_soapserver_handle_array.phpt",
     "server003.phpt",
     "server009.phpt",
-    "server019.phpt",
-    "server020.phpt",
     "server030.phpt",
     "server031.phpt",
 ];
@@ -90,9 +83,6 @@ fn run_phpt(path: &Path) -> Outcome {
         return Outcome::Skip("no FILE".into());
     };
     for unsupported in [
-        "POST",
-        "POST_RAW",
-        "GET",
         "CGI",
         "ARGS",
         "STDIN",
@@ -106,22 +96,28 @@ fn run_phpt(path: &Path) -> Outcome {
         }
     }
     if let Some(skip) = sec.get("SKIPIF") {
-        for needle in [
-            "php_cli_server",
-            "getenv(\"SKIP_ONLINE",
-            "SKIP_SLOW",
-            "PHP_ZTS",
-            "die(\"skip",
-        ] {
+        for needle in ["getenv(\"SKIP_ONLINE", "SKIP_SLOW", "PHP_ZTS"] {
             if skip.contains(needle) {
                 return Outcome::Skip(format!("SKIPIF {needle}"));
             }
         }
+        // Evaluate the remaining conditions like run-tests.php does.
+        let mut probe = TestHost::new();
+        probe.base_dir = path.parent().map(Path::to_path_buf).unwrap_or_default();
+        probe.current_file = path.to_path_buf();
+        let code: Vec<u8> = skip
+            .chars()
+            .map(|c| u8::try_from(u32::from(c)).unwrap_or(b'?'))
+            .collect();
+        let _ = run_file(&mut probe, path, &code);
+        let out = String::from_utf8_lossy(&probe.finish())
+            .trim()
+            .to_ascii_lowercase();
+        if out.starts_with("skip") {
+            return Outcome::Skip(format!("SKIPIF {out}"));
+        }
     }
-    if file.contains("php_cli_server")
-        || file.contains("stream_socket_server")
-        || file.contains("proc_open")
-    {
+    if file.contains("stream_socket_server") || file.contains("proc_open") {
         return Outcome::Skip("network server".into());
     }
     let (expected, fmt) = match (sec.get("EXPECT"), sec.get("EXPECTF")) {
@@ -130,6 +126,9 @@ fn run_phpt(path: &Path) -> Outcome {
         _ => return Outcome::Skip("no EXPECT".into()),
     };
     let mut host = TestHost::new();
+    // `php_cli_server_start()` is emulated in-process by the interpreter.
+    host.include_override
+        .insert("php_cli_server.inc".into(), "<?php\n".into());
     let dir = path.parent().map(Path::to_path_buf).unwrap_or_default();
     let script: PathBuf = path.with_extension("php");
     host.base_dir = dir;
@@ -144,6 +143,43 @@ fn run_phpt(path: &Path) -> Outcome {
                     .insert(k.trim().to_owned(), v.trim().as_bytes().to_vec());
             }
         }
+    }
+    if let Some(get) = sec.get("GET") {
+        host.server_vars
+            .insert("REQUEST_METHOD".into(), b"GET".to_vec());
+        host.server_vars
+            .insert("QUERY_STRING".into(), get.trim().as_bytes().to_vec());
+    }
+    // run-tests.php: POST bodies are trimmed; GZIP_POST/DEFLATE_POST are
+    // compressed at level 9 and announced via Content-Encoding.
+    for (section, encoding) in [
+        ("POST", None),
+        ("POST_RAW", None),
+        ("GZIP_POST", Some("gzip")),
+        ("DEFLATE_POST", Some("deflate")),
+    ] {
+        let Some(post) = sec.get(section) else {
+            continue;
+        };
+        host.server_vars
+            .insert("REQUEST_METHOD".into(), b"POST".to_vec());
+        let mut body: Vec<u8> = post
+            .trim()
+            .chars()
+            .map(|c| u8::try_from(u32::from(c)).unwrap_or(b'?'))
+            .collect();
+        if let Some(enc) = encoding {
+            body = if enc == "gzip" {
+                php_zlib::codec::gzencode(&body, 9, 31)
+            } else {
+                php_zlib::codec::gzcompress(&body, 9, 15)
+            }
+            .expect("compress POST body");
+            host.server_vars
+                .insert("HTTP_CONTENT_ENCODING".into(), enc.as_bytes().to_vec());
+        }
+        host.request_body = Some(body);
+        break;
     }
     php_soap::globals::request_init();
     php_soap::globals::with(|g| g.mem_cache.clear());
@@ -248,6 +284,14 @@ fn soap_phpt_suite() {
         .collect();
     assert!(unexpected.is_empty(), "unexpected failures: {unexpected:?}");
     if filter.is_none() {
-        assert!(pass >= 392, "only {pass} phpt tests passed");
+        let stale: Vec<&&str> = ENGINE_DEPENDENT
+            .iter()
+            .filter(|n| !fails.iter().any(|(f, _)| f == *n))
+            .collect();
+        assert!(
+            stale.is_empty(),
+            "now passing, drop from ENGINE_DEPENDENT: {stale:?}"
+        );
+        assert!(pass >= 440, "only {pass} phpt tests passed");
     }
 }
