@@ -360,6 +360,13 @@ name = "php-date"
 version = "0.1.0"
 
 [[package]]
+name = "php-exif"
+version = "0.1.0"
+dependencies = [
+ "php-runtime",
+]
+
+[[package]]
 name = "php-filter"
 version = "0.1.0"
 dependencies = [

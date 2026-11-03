@@ -32,6 +32,10 @@ members = [
     "crates/php-libxml",
     "crates/php-intl",
     "crates/php-exif",
+    "crates/php-sockets",
+    "crates/php-sysv",
+    "crates/php-gettext",
+    "crates/php-pcntl",
 ]
 
 [workspace.package]

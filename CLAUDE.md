@@ -43,6 +43,10 @@ A Rust re-implementation of PHP whose goal is to pass the php-src `.phpt` test s
 - `crates/php-libxml`   — libxml2 FFI base + ext/xml (expat-style) + ext/xmlwriter; dom/simplexml/xmlreader/xsl build on it
 - `crates/php-intl`     — ICU binding with ext/intl semantics (ref: ext/intl)
 - `crates/php-exif`     — EXIF/JPEG/TIFF metadata parser with ext/exif semantics (ref: ext/exif)
+- `crates/php-sockets`  — ext/sockets over libc
+- `crates/php-sysv`     — ext/sysvmsg, sysvsem, sysvshm, shmop over libc
+- `crates/php-gettext`  — ext/gettext over libc
+- `crates/php-pcntl`    — ext/pcntl over libc (signal dispatch hooks for the VM)
 
 ## Parallel work
 Several agents work concurrently, one crate each. Only edit files inside your own crate (plus your row(s) in FEATURE_GAP.md). Never edit workspace Cargo.toml; crates are pre-registered. Commit your own crate's files with `git add crates/<yours>` only.
