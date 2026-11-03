@@ -65,7 +65,7 @@ pub(crate) fn register(vm: &mut Vm) {
     ClassBuilder::new("IteratorAggregate")
         .flags(cflags::INTERFACE)
         .implements(vm, &["Traversable"])
-        .abstract_method("getIterator(): Iterator", PUB)
+        .abstract_method("getIterator(): Traversable", PUB)
         .register(vm);
     ClassBuilder::new("ArrayAccess")
         .flags(cflags::INTERFACE)

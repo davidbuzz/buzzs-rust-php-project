@@ -1262,6 +1262,9 @@ impl Compiler {
                     };
                     let mut uf = self.compile_body(&spec, body)?;
                     uf.flags |= fl;
+                    if md.name.eq_ignore_case("__tostring") && uf.return_type.is_none() {
+                        uf.return_type = Some(crate::types::TypeDecl::simple(crate::types::mask::STRING));
+                    }
                     if is_ctor {
                         uf.flags |= flags::CTOR;
                     }

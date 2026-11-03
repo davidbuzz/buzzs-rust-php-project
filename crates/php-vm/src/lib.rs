@@ -35,6 +35,7 @@ mod place;
 mod props;
 mod reflection;
 mod typecheck;
+mod variance;
 pub mod types;
 pub mod vm;
 

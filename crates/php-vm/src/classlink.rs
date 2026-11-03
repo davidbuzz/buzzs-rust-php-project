@@ -694,6 +694,14 @@ impl Vm {
         if let Some(e) = check_method_inheritance(&cls) {
             return Err(self.fatal_at(&e.0, e.1));
         }
+        let (err, warnings) = crate::variance::check_class(self, &cls);
+        if let Some(e) = err {
+            return Err(self.fatal_at(&e.0, e.1));
+        }
+        for (w, l) in warnings {
+            let file = decl.filename.clone();
+            self.error_at(crate::errors::level::DEPRECATED, &w, &file, l)?;
+        }
         Ok(cls)
     }
 }
