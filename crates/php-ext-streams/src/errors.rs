@@ -129,11 +129,11 @@ pub fn report(vm: &mut Vm, diags: Vec<Diagnostic>) {
         // one (`php_stream_wrapper_error_internal`): reported at once, in
         // order with the function's other warnings.
         for d in diags {
-            report_in(vm, ctx.clone(), vec![d]);
+            report_in(vm, ctx.as_ref(), vec![d]);
         }
         return;
     }
-    report_in(vm, ctx, diags);
+    report_in(vm, ctx.as_ref(), diags);
 }
 
 /// ext/standard functions that do not begin a stream error operation
@@ -181,7 +181,7 @@ fn in_implicit_operation(vm: &Vm) -> bool {
         })
 }
 
-fn report_in(vm: &mut Vm, ctx: Option<ContextRef>, diags: Vec<Diagnostic>) {
+fn report_in(vm: &mut Vm, ctx: Option<&ContextRef>, diags: Vec<Diagnostic>) {
     let mut entries = Vec::new();
     for d in diags {
         // php_stream_display_wrapper_errors() stays silent once an
@@ -204,7 +204,7 @@ fn report_in(vm: &mut Vm, ctx: Option<ContextRef>, diags: Vec<Diagnostic>) {
     if entries.is_empty() {
         return;
     }
-    let mode = match option(ctx.as_ref(), b"error_mode") {
+    let mode = match option(ctx, b"error_mode") {
         None => Mode::Error,
         Some(v) => match enum_option(vm, &v, "StreamErrorMode").as_deref() {
             Ok("Exception") => Mode::Exception,
@@ -220,7 +220,7 @@ fn report_in(vm: &mut Vm, ctx: Option<ContextRef>, diags: Vec<Diagnostic>) {
             }
         },
     };
-    let store = match option(ctx.as_ref(), b"error_store") {
+    let store = match option(ctx, b"error_store") {
         None => auto_store(mode),
         Some(v) => match enum_option(vm, &v, "StreamErrorStore").as_deref() {
             Ok("None") => Store::None,
@@ -253,7 +253,7 @@ fn report_in(vm: &mut Vm, ctx: Option<ContextRef>, diags: Vec<Diagnostic>) {
         Mode::Exception | Mode::Silent => {}
     }
     // zend_call_function() does nothing while an exception is pending.
-    let handler = option(ctx.as_ref(), b"error_handler").filter(|_| !bridge::has_pending());
+    let handler = option(ctx, b"error_handler").filter(|_| !bridge::has_pending());
     if let Some(handler) = handler {
         match errors_array(vm, &entries) {
             Ok(arr) => {
