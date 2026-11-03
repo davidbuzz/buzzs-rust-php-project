@@ -36,11 +36,19 @@ fn out(vm: &mut Vm, line: &str) {
     vm.output(line.as_bytes());
 }
 
+/// A name as `%s` prints it: up to the first NUL (anonymous classes are
+/// `class@anonymous\0file:line$0`).
+fn c_str(s: &ZStr) -> String {
+    let b = s.as_bytes();
+    let end = b.iter().position(|&c| c == 0).unwrap_or(b.len());
+    String::from_utf8_lossy(&b[..end]).into_owned()
+}
+
 /// `Class::name` / `name`.
 fn display(f: &ObservedFrame) -> Option<String> {
-    let name = f.function.as_ref()?.to_string_lossy();
+    let name = c_str(f.function.as_ref()?);
     Some(match &f.scope {
-        Some(s) => format!("{}::{name}", s.to_string_lossy()),
+        Some(s) => format!("{}::{name}", c_str(s)),
         None => name,
     })
 }
@@ -136,7 +144,7 @@ fn begin(vm: &mut Vm, f: &ObservedFrame) {
 /// `php_var_export_ex(retval, level, buf)`.
 fn var_export(vm: &Vm, v: &Value, level: usize, buf: &mut String) {
     match v {
-        Value::Null => buf.push_str("NULL"),
+        Value::Null | Value::Resource(_) => buf.push_str("NULL"),
         Value::Bool(b) => buf.push_str(if *b { "true" } else { "false" }),
         Value::Int(i) => {
             let _ = write!(buf, "{i}");
@@ -192,7 +200,6 @@ fn var_export(vm: &Vm, v: &Value, level: usize, buf: &mut String) {
                 o.class_name().to_string_lossy()
             );
         }
-        Value::Resource(_) => buf.push_str("NULL"),
         Value::Reference(r) => var_export(vm, &r.get(), level, buf),
     }
 }
@@ -211,7 +218,12 @@ fn retval_info(vm: &Vm, retval: Option<&Value>) -> String {
     match v {
         None => s.push_str("NULL"),
         Some(Value::Object(o)) if show_value => {
-            let _ = write!(s, "object({})#{}", o.class_name().to_string_lossy(), o.handle());
+            let _ = write!(
+                s,
+                "object({})#{}",
+                o.class_name().to_string_lossy(),
+                o.handle()
+            );
         }
         Some(v) if show_value => {
             var_export(vm, &v, 2 * DEPTH.with(Cell::get) + 3, &mut s);

@@ -96,13 +96,12 @@ const MM_MAX_LARGE: u64 = MM_CHUNK - MM_PAGE;
 
 /// `zend_mem_block_size` of a fresh `emalloc(size)`.
 pub(crate) fn mm_block_size(size: u64) -> u64 {
-    if let Some(b) = MM_BINS.iter().find(|&&b| b >= size) {
-        *b
-    } else if size <= MM_MAX_LARGE {
-        size.div_ceil(MM_PAGE) * MM_PAGE
-    } else {
-        size.div_ceil(MM_PAGE) * MM_PAGE
-    }
+    // Small bins, then large runs and huge blocks: whole pages.
+    MM_BINS
+        .iter()
+        .find(|&&b| b >= size)
+        .copied()
+        .unwrap_or_else(|| size.div_ceil(MM_PAGE) * MM_PAGE)
 }
 
 /// `zend_mem_block_size` after `erealloc(emalloc(old), new)`.

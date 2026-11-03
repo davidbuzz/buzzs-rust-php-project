@@ -1,8 +1,12 @@
 //! `ext/zend_test` for the phprust VM: the engine's own test extension
 //! (the functions, classes, enums, attributes, INI settings and observer
 //! hooks that php-src's `.phpt` tests rely on through `--EXTENSIONS--
-//! zend_test`). Ref: ext/zend_test/{test.c,test.stub.php,observer.c,
-//! fiber.c,iterators.c,object_handlers.c}.
+//! zend_test`). Ref: `ext/zend_test/{test.c,test.stub.php,observer.c,
+//! fiber.c,iterators.c,object_handlers.c}`.
+//!
+//! Native function handlers share the `NativeFn` signature, so the ones
+//! that cannot fail still return `VmResult`.
+#![allow(clippy::unnecessary_wraps)]
 //!
 //! Layout:
 //! * [`functions`] — the plain functions of `test.stub.php`;
@@ -20,7 +24,7 @@ mod functions;
 mod ini;
 mod iterators;
 mod object_handlers;
-#[cfg(feature = "observer")]
+#[cfg(feature = "vm-hooks")]
 mod observer;
 mod patch;
 mod stack;
@@ -57,7 +61,7 @@ impl Extension for ZendTest {
         classes::register(m);
         iterators::register(m);
         object_handlers::register(m);
-        #[cfg(feature = "observer")]
+        #[cfg(feature = "vm-hooks")]
         observer::register(m);
         m.info(info);
         m.on_request_startup(state::request_startup);

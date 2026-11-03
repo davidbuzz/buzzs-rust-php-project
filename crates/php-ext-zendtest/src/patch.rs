@@ -40,6 +40,9 @@ pub(crate) fn deprecate_function(vm: &mut Vm, name: &str, since: &str, message: 
 }
 
 /// `build_magic` over a method table.
+// `ZStr` caches its hash in a cell; keys are never mutated (the VM's own
+// tables use the same key type).
+#[allow(clippy::mutable_key_type)]
 pub(crate) fn magic_of(methods: &HashMap<ZStr, Rc<Method>>) -> Magic {
     let g = |n: &str| methods.get(n.as_bytes()).cloned();
     Magic {
@@ -86,6 +89,7 @@ fn remap_method(m: &Rc<Method>, old: &Weak<Class>, weak: &Weak<Class>) -> Rc<Met
 /// replaces it in the class table. Methods declared by the class are
 /// re-pointed at the new class; the magic method cache is rebuilt after
 /// the edit. Register subclasses only after patching their parent.
+#[allow(clippy::mutable_key_type)]
 pub(crate) fn rebuild_class(
     vm: &mut Vm,
     cls: &Rc<Class>,

@@ -280,15 +280,36 @@ fn register_test_class(vm: &mut Vm) {
 // Magic call classes
 // ---------------------------------------------------------------------
 
+/// The `(name, arguments)` of a native `__call`: the VM passes the
+/// called method's arguments unpacked (named ones in `a.named`) and the
+/// name through [`Vm::magic_call_name`]; a direct `->__call($n, $args)`
+/// call passes them as written.
+fn magic_call_args(vm: &Vm, a: &Args) -> (Value, Value) {
+    match vm.magic_call_name() {
+        Some(name) => {
+            let mut t = php_runtime::HashTable::new();
+            for v in &a.values {
+                let _ = t.push(v.clone());
+            }
+            for (k, v) in &a.named {
+                t.insert(k.clone(), v.clone());
+            }
+            (Value::Str(name), Value::Array(ZArray::from_table(t)))
+        }
+        None => (a.at(0), a.at(1)),
+    }
+}
+
 /// `_ZendTestMagicCall::__call()`: `[$name, $args]`.
-fn magic_call(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    Ok(Value::Array(ZArray::from_values([a.at(0), a.at(1)])))
+fn magic_call(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let (name, args) = magic_call_args(vm, a);
+    Ok(Value::Array(ZArray::from_values([name, args])))
 }
 
 /// `_ZendTestMagicCallForward::__call()`: calls the function `$name`
 /// without arguments.
 fn magic_call_forward(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let f = a.at(0);
+    let (f, _) = magic_call_args(vm, a);
     let r = vm.call_value(&f, Vec::new())?;
     Ok(match r {
         Value::Reference(r) => r.get(),
@@ -330,10 +351,11 @@ fn mark_attribute(vm: &mut Vm, name: &str, flags: i64, doc: Option<&str>) {
         return;
     };
     rebuild_class(vm, &cls, |c, _| {
-        // The VM only recognizes its own internal attribute classes by
-        // name; a declared `#[Attribute]` marker is honoured for
-        // non-internal classes (see proposals/internal-attributes.diff).
-        c.flags &= !cflags::INTERNAL;
+        // Without the VM's internal attribute registry, a declared
+        // `#[Attribute]` marker is only honoured on non-internal classes.
+        if cfg!(not(feature = "vm-hooks")) {
+            c.flags &= !cflags::INTERNAL;
+        }
         c.attributes = vec![attribute("Attribute", vec![(None, Value::Int(flags))])];
         c.doc_comment = doc.map(ZStr::from);
     });
@@ -399,6 +421,32 @@ fn register_attributes(vm: &mut Vm) {
         .register(vm);
     mark_attribute(vm, "ZendTestAttributeWithArguments", target::ALL, None);
     let _ = target::CLASS;
+}
+
+/// `zend_attribute_validate_zendtestattribute`.
+#[cfg(feature = "vm-hooks")]
+fn validate_zend_test_attribute(target: u32) -> Option<String> {
+    (i64::from(target) != target::CLASS)
+        .then(|| "Only classes can be marked with #[ZendTestAttribute]".to_string())
+}
+
+/// `zend_mark_internal_attribute()` of the attribute classes.
+#[cfg(feature = "vm-hooks")]
+fn register_internal_attributes(m: &mut ModuleBuilder<'_>) {
+    let fl = |f: i64| u32::try_from(f).unwrap_or(0);
+    m.internal_attribute(
+        "ZendTestAttribute",
+        fl(target::ALL),
+        Some(validate_zend_test_attribute),
+    );
+    m.internal_attribute(
+        "ZendTestRepeatableAttribute",
+        fl(target::ALL | target::IS_REPEATABLE),
+        None,
+    );
+    m.internal_attribute("ZendTestParameterAttribute", fl(target::PARAMETER), None);
+    m.internal_attribute("ZendTestPropertyAttribute", fl(target::PROPERTY), None);
+    m.internal_attribute("ZendTestAttributeWithArguments", fl(target::ALL), None);
 }
 
 fn param_attr_2(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
@@ -488,7 +536,7 @@ fn register_attribute_users(vm: &mut Vm) {
         )
         .register(vm);
     rebuild_class(vm, &cls, |c, _| {
-        add_param_attribute(c, "override", "value4")
+        add_param_attribute(c, "override", "value4");
     });
 
     let cls = ClassBuilder::new("ZendTestClassWithPropertyAttribute")
@@ -774,6 +822,9 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
         }
     });
     register_test_class(vm);
+    #[cfg(feature = "vm-hooks")]
+    register_internal_attributes(m);
+    let vm = m.vm();
     ClassBuilder::new("ZendTestGenStubFlagCompatibilityTest")
         .flags(class_flags::FINAL | class_flags::NOT_SERIALIZABLE)
         .register(vm);
@@ -794,14 +845,14 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
     register_enums(vm);
     ClassBuilder::new("_ZendTestMagicCall")
         .method(
-            "__call(string $name, array $args): mixed",
+            "__call(mixed ...$args): mixed",
             acc::PUBLIC,
             magic_call,
         )
         .register(vm);
     ClassBuilder::new("_ZendTestMagicCallForward")
         .method(
-            "__call(string $name, array $args): mixed",
+            "__call(mixed ...$args): mixed",
             acc::PUBLIC,
             magic_call_forward,
         )

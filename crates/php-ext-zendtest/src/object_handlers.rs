@@ -1,4 +1,4 @@
-//! object_handlers.c: classes with custom `do_operation`, `cast_object`,
+//! `object_handlers.c`: classes with custom `do_operation`, `cast_object`,
 //! `compare` and dimension handlers.
 
 use php_runtime::{BinaryOp, CastTarget, Obj, Value};
@@ -22,16 +22,18 @@ fn set_slot(o: &Obj, n: usize, v: Value) {
     }
 }
 
-fn init_val(v: Value) -> fn(&mut Vm, &Obj) -> VmResult<()> {
-    match v {
-        Value::Float(_) => |_vm, o| {
+/// The `create_object` handler storing `0` / `0.0` in slot 0.
+fn init_val(float: bool) -> fn(&mut Vm, &Obj) -> VmResult<()> {
+    if float {
+        |_vm, o| {
             set_slot(o, 0, Value::Float(0.0));
             Ok(())
-        },
-        _ => |_vm, o| {
+        }
+    } else {
+        |_vm, o| {
             set_slot(o, 0, Value::Int(0));
             Ok(())
-        },
+        }
     }
 }
 
@@ -49,6 +51,7 @@ fn is_class(v: &Value, name: &[u8]) -> Option<Obj> {
 }
 
 /// `donc_do_operation`: `+` and `*` produce a new `DoOperationNoCast`.
+#[allow(clippy::many_single_char_names)]
 fn donc_do_operation(vm: &mut Vm, op: BinaryOp, a: &Value, b: &Value) -> VmResult<Option<Value>> {
     if !matches!(op, BinaryOp::Add | BinaryOp::Mul) {
         return Ok(None);
@@ -89,6 +92,7 @@ fn numeric_cast(_vm: &mut Vm, o: &Obj, t: CastTarget) -> VmResult<Option<Value>>
 }
 
 /// `vm_interrupt_comparable_compare`.
+#[allow(clippy::many_single_char_names)]
 fn interrupt_compare(_vm: &mut Vm, a: &Value, b: &Value) -> VmResult<Option<i32>> {
     let (Some(x), Some(y)) = (
         is_class(a, b"vminterruptcomparable"),
@@ -167,7 +171,7 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
         .prop("val", acc::PRIVATE, Some("int"), None)
         .method("__construct(int $val)", acc::PUBLIC, ctor)
         .hooks(ClassHooks {
-            create: Some(init_val(Value::Int(0))),
+            create: Some(init_val(false)),
             do_operation: Some(donc_do_operation),
             ..Default::default()
         })
@@ -177,7 +181,7 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
         .prop("val", acc::PRIVATE, Some("int"), None)
         .method("__construct(int $val)", acc::PUBLIC, ctor)
         .hooks(ClassHooks {
-            create: Some(init_val(Value::Int(0))),
+            create: Some(init_val(false)),
             cast: Some(long_cast),
             ..Default::default()
         })
@@ -187,7 +191,7 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
         .prop("val", acc::PRIVATE, Some("float"), None)
         .method("__construct(float $val)", acc::PUBLIC, ctor)
         .hooks(ClassHooks {
-            create: Some(init_val(Value::Float(0.0))),
+            create: Some(init_val(true)),
             cast: Some(float_cast),
             ..Default::default()
         })
@@ -197,7 +201,7 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
         .prop("val", acc::PRIVATE, Some("int|float"), None)
         .method("__construct(int|float $val)", acc::PUBLIC, ctor)
         .hooks(ClassHooks {
-            create: Some(init_val(Value::Int(0))),
+            create: Some(init_val(false)),
             cast: Some(numeric_cast),
             ..Default::default()
         })
@@ -207,7 +211,7 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
         .prop("val", acc::PRIVATE, Some("int"), None)
         .method("__construct(int $val)", acc::PUBLIC, ctor)
         .hooks(ClassHooks {
-            create: Some(init_val(Value::Int(0))),
+            create: Some(init_val(false)),
             compare: Some(interrupt_compare),
             ..Default::default()
         })
