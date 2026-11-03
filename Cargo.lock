@@ -566,6 +566,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "php-ext-gd"
+version = "0.1.0"
+dependencies = [
+ "php-gd",
+ "php-runtime",
+ "php-vm",
+]
+
+[[package]]
 name = "php-ext-gettext"
 version = "0.1.0"
 dependencies = [
@@ -754,6 +763,7 @@ name = "php-ext-simplexml"
 version = "0.1.0"
 dependencies = [
  "libc",
+ "php-ext-dom",
  "php-ext-json",
  "php-ext-spl",
  "php-ext-stdarr",
@@ -907,6 +917,7 @@ name = "php-ext-xmlreader"
 version = "0.1.0"
 dependencies = [
  "libc",
+ "php-ext-dom",
  "php-ext-streams",
  "php-ext-xml",
  "php-runtime",
@@ -978,6 +989,13 @@ name = "php-ftp"
 version = "0.1.0"
 dependencies = [
  "openssl",
+]
+
+[[package]]
+name = "php-gd"
+version = "0.1.0"
+dependencies = [
+ "pkg-config",
 ]
 
 [[package]]
@@ -1152,6 +1170,7 @@ version = "0.1.0"
 dependencies = [
  "php-json",
  "php-libxml",
+ "php-memlimit",
  "php-runtime",
 ]
 
@@ -1264,6 +1283,7 @@ name = "php-xmlreader"
 version = "0.1.0"
 dependencies = [
  "php-libxml",
+ "php-memlimit",
 ]
 
 [[package]]
