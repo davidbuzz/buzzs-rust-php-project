@@ -104,6 +104,12 @@ fn fopen(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     }
 }
 
+/// Whether `handle` is one of the CLI's `STDIN`/`STDOUT`/`STDERR`
+/// resources (handles 1–3, registered with `NO_CLOSE`).
+fn is_cli_std_handle(handle: i64) -> bool {
+    (1..=3).contains(&handle)
+}
+
 fn fclose(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let (r, cell) = res::stream_arg_res(vm, a, 0)?;
     // A stream in use by one of its own callbacks cannot be closed
@@ -119,6 +125,11 @@ fn fclose(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     sync_stdio(vm, &cell);
     if let Some(mut s) = cell.take() {
         r.close();
+        if is_cli_std_handle(r.handle()) {
+            // GH-8827: an explicit fclose(STDIN/STDOUT/STDERR) closes the
+            // descriptor; only dropping the constant's resource keeps it.
+            s.clear_flags(php_streams::stream::flags::NO_CLOSE);
+        }
         result = bridge::run(vm, || s.close())?;
         crate::process::reap(cell.id());
     } else {

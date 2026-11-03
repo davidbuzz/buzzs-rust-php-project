@@ -54,9 +54,13 @@ fn register_std_streams(m: &mut ModuleBuilder<'_>) {
             php_streams::open::fopen(url.as_bytes(), mode, false, None)
         });
         let _ = php_streams::diag::take();
-        // cli_register_file_handles(no_close = false): fclose(STDIN)
-        // really closes descriptor 0.
-        if let Some(s) = s {
+        // cli_register_file_handles(no_close = false): an explicit
+        // fclose(STDIN) really closes descriptor 0 (`files::fclose` clears
+        // the flag), but dropping the resources at VM teardown (or in an
+        // embedding such as `php -S`'s workers) must leave the process's
+        // descriptors alone.
+        if let Some(mut s) = s {
+            s.add_flags(php_streams::stream::flags::NO_CLOSE);
             let handle = i64::try_from(i).unwrap_or(0) + 1;
             m.constant(name, res::new_stream_with_handle(s, handle));
         }
