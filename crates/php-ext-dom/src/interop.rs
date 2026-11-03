@@ -12,6 +12,8 @@
 //! * [`shared_node_object`] — the PHP DOM object of a node of a shared
 //!   tree (`dom_import_simplexml()`, `XMLReader::expand()`), legacy or
 //!   modern (`Dom\*`) family; the existing object when there is one.
+//! * [`serialize_shared_node`] — DOM's modern XML serializer for a shared
+//!   `Dom\XMLDocument` tree (`SimpleXMLElement::asXML()` on it).
 //! * [`node_object`] — the PHP DOM object of a node of a document DOM
 //!   already knows (or a detached node handed over), with an optional
 //!   keep-alive.
@@ -147,4 +149,51 @@ pub unsafe fn shared_node_object(
 /// tree, when DOM already has objects for it.
 pub fn shared_family(shared: &SharedDocument) -> Option<bool> {
     crate::xsl::family_of(shared)
+}
+
+/// Serializes a node of a shared tree whose DOM family is modern
+/// (`Dom\XMLDocument`): PHP serializes such documents through DOM's
+/// spec-compliant XML serializer even from `SimpleXMLElement::asXML()`
+/// (the document's handlers). Passing the document node (`xmlDoc*`)
+/// yields the whole document with its XML declaration (`saveXML()`),
+/// any other node yields just that node (`saveXML($node)`).
+///
+/// `Ok(None)` when DOM has no modern objects for the tree (serialize with
+/// libxml2 as usual) or the node cannot be serialized.
+///
+/// # Safety
+/// `node` must be a live node (or the document node) of `shared`'s
+/// document.
+pub unsafe fn serialize_shared_node(
+    vm: &mut Vm,
+    shared: &SharedDocument,
+    node: NonNull<c_void>,
+) -> VmResult<Option<Vec<u8>>> {
+    if crate::xsl::family_of(shared) != Some(true) {
+        // Not imported as modern by this binding: modern only if DOM
+        // already has a modern reference object for the document.
+        let doc = php_dom::interop::adopt_shared_document(shared.clone(), false, None);
+        if !doc.family_is_modern() {
+            return Ok(None);
+        }
+    }
+    let doc = php_dom::interop::adopt_shared_document(shared.clone(), true, None);
+    let is_doc = node.as_ptr() == shared.as_ptr().cast::<c_void>();
+    let args = if is_doc {
+        Vec::new()
+    } else {
+        // SAFETY: forwarded to the caller.
+        match unsafe { php_dom::interop::wrap_shared_node(shared, node.as_ptr()) } {
+            Some(n) => vec![php_dom::DomValue::Node(n)],
+            None => return Ok(None),
+        }
+    };
+    let d = DomObject::Node(doc);
+    let r = crate::run::direct(vm, || {
+        php_dom::dispatch::call(&d, "saveXML", &args, &php_dom::NoHost)
+    })?;
+    Ok(match crate::errors::check(vm, r, None)? {
+        Some(php_dom::DomValue::Str(s)) => Some(s),
+        _ => None,
+    })
 }
