@@ -6,6 +6,7 @@
 
 pub mod array;
 pub mod convert;
+pub mod dump;
 pub mod error;
 pub mod float;
 pub mod numeric;

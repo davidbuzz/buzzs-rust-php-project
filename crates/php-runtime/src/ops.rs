@@ -1292,12 +1292,12 @@ mod tests {
         assert_eq!(inc(Value::from("1e2")).0.as_float(), Some(101.0));
         assert_eq!(
             inc(Value::Int(i64::MAX)).0.as_float(),
-            Some(9.223_372_036_854_775_807e18)
+            Some(9.223_372_036_854_776e18)
         );
         assert_eq!(inc(Value::Null).0.as_int(), Some(1));
         assert_eq!(
             dec(Value::Int(i64::MIN)).0.as_float(),
-            Some(-9.223_372_036_854_775_808e18)
+            Some(-9.223_372_036_854_776e18)
         );
         assert_eq!(dec(Value::from("5")).0.as_int(), Some(4));
         let (v, m) = dec(Value::from(""));
