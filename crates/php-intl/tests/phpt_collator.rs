@@ -74,3 +74,30 @@ fn good_objects_sort_as_strings() {
         .expect("sort");
     assert_eq!(order, [1, 0]);
 }
+
+#[test]
+fn gh18566_regular_sort_numeric_strings_with_spaces() {
+    let c = Collator::new("en").expect("collator").0;
+    let arr: [&[u8]; 9] = [
+        b"2023-02-04 14:00:00",
+        b"2023-01-08 12:00:00",
+        b"2023-01-03 12:00:00",
+        b"2023-01-03 12:00:00",
+        b"2021-01-03 12:00:00",
+        b"2023-01-05 14:00:00",
+        b"2024-01-03 12:00:00",
+        b"2023-01-03 12:00:00",
+        b"   ",
+    ];
+    let v: Vec<_> = arr.iter().map(|s| SortValue::Str(s)).collect();
+    assert_eq!(
+        c.sort_order(&v, sort_flags::REGULAR).expect("sort"),
+        [8, 4, 2, 3, 7, 5, 1, 0, 6]
+    );
+    let arr: [&[u8]; 3] = [b"   100000", b"  10", b"  -100  "];
+    let v: Vec<_> = arr.iter().map(|s| SortValue::Str(s)).collect();
+    assert_eq!(
+        c.sort_order(&v, sort_flags::REGULAR).expect("sort"),
+        [2, 1, 0]
+    );
+}
