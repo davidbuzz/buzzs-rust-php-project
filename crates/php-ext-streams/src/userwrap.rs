@@ -141,8 +141,8 @@ pub fn call_method(
 /// `zend_is_callable_ex()` for a method name on an object.
 pub fn method_exists(vm: &mut Vm, obj: &Obj, method: &str) -> bool {
     let mut cb = ZArray::new();
-    let _ = cb.push(Value::Object(obj.clone()));
-    let _ = cb.push(Value::Str(method.into()));
+    let _ = cb.make_mut().push(Value::Object(obj.clone()));
+    let _ = cb.make_mut().push(Value::Str(method.into()));
     vm.is_callable(&Value::Array(cb))
 }
 

@@ -67,10 +67,10 @@ fn stream_get_meta_data(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     for (k, v) in meta {
         if k == "wrapper_type" {
             if let Some(w) = &wrapper_data {
-                arr.insert("wrapper_data", w.clone());
+                arr.make_mut().insert("wrapper_data", w.clone());
             }
         }
-        arr.insert(ArrayKey::Str(ZStr::from(k.as_str())), bridge::from_lib(&v));
+        arr.make_mut().insert(ArrayKey::Str(ZStr::from(k.as_str())), bridge::from_lib(&v));
     }
     Ok(Value::Array(arr))
 }
@@ -155,7 +155,7 @@ fn stream_resolve_include_path(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 fn stream_get_wrappers(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
     let mut arr = ZArray::new();
     for p in wrapper::protocols() {
-        let _ = arr.push(bytes(p));
+        let _ = arr.make_mut().push(bytes(p));
     }
     Ok(Value::Array(arr))
 }
@@ -163,7 +163,7 @@ fn stream_get_wrappers(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
 fn stream_get_transports(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
     let mut arr = ZArray::new();
     for p in transports::transports() {
-        let _ = arr.push(bytes(p));
+        let _ = arr.make_mut().push(bytes(p));
     }
     Ok(Value::Array(arr))
 }
@@ -242,7 +242,7 @@ fn stream_select(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         let mut n = 0;
         for (k, v, c) in &entries[0] {
             if c.get().is_some_and(|s| s.unread_bytes() > 0) {
-                ready.insert(k.clone(), v.clone());
+                ready.make_mut().insert(k.clone(), v.clone());
                 n += 1;
             }
         }
@@ -303,7 +303,7 @@ fn stream_select(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             };
             if hit {
                 let (k, v, _) = &entries[set][i];
-                out.insert(k.clone(), v.clone());
+                out.make_mut().insert(k.clone(), v.clone());
                 total += 1;
             }
         }
@@ -346,12 +346,12 @@ fn set_option(cell: &CtxCell, w: &[u8], o: &[u8], v: Value) {
     cell.ctx.borrow_mut().set(&ws, &os, bridge::to_lib(&v));
     let mut mirror = cell.options.borrow_mut();
     let wkey = ArrayKey::Str(ZStr::from(w));
-    let slot = mirror.lookup(wkey);
+    let slot = mirror.make_mut().lookup(wkey);
     if !matches!(slot, Value::Array(_)) {
         *slot = Value::Array(ZArray::new());
     }
     if let Value::Array(inner) = slot {
-        inner.insert(ArrayKey::Str(ZStr::from(o)), v);
+        inner.make_mut().insert(ArrayKey::Str(ZStr::from(o)), v);
     }
 }
 
@@ -501,9 +501,9 @@ fn stream_context_get_params(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let c = decode_context(vm, a)?;
     let mut arr = ZArray::new();
     if let Some(n) = c.notifier.borrow().clone() {
-        arr.insert("notification", n);
+        arr.make_mut().insert("notification", n);
     }
-    arr.insert("options", Value::Array(c.options.borrow().clone()));
+    arr.make_mut().insert("options", Value::Array(c.options.borrow().clone()));
     Ok(Value::Array(arr))
 }
 

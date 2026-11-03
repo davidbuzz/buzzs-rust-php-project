@@ -371,7 +371,7 @@ fn file(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         Ok(Some(lines)) => {
             let mut arr = ZArray::with_capacity(lines.len());
             for l in lines {
-                let _ = arr.push(bytes(l));
+                let _ = arr.make_mut().push(bytes(l));
             }
             Ok(Value::Array(arr))
         }
@@ -510,13 +510,13 @@ fn pathinfo(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         let info = pathname::pathinfo(&p);
         let mut arr = ZArray::new();
         if let Some(d) = info.dirname {
-            arr.insert("dirname", bytes(d));
+            arr.make_mut().insert("dirname", bytes(d));
         }
-        arr.insert("basename", bytes(info.basename));
+        arr.make_mut().insert("basename", bytes(info.basename));
         if let Some(e) = info.extension {
-            arr.insert("extension", bytes(e));
+            arr.make_mut().insert("extension", bytes(e));
         }
-        arr.insert("filename", bytes(info.filename));
+        arr.make_mut().insert("filename", bytes(info.filename));
         return Ok(Value::Array(arr));
     }
     match pathname::pathinfo_part(&p, opt) {
@@ -591,11 +591,11 @@ fn fgetcsv(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             match fields {
                 Some(f) => {
                     for x in f {
-                        let _ = arr.push(bytes(x));
+                        let _ = arr.make_mut().push(bytes(x));
                     }
                 }
                 None => {
-                    let _ = arr.push(Value::Null);
+                    let _ = arr.make_mut().push(Value::Null);
                 }
             }
             Ok(Value::Array(arr))
@@ -643,7 +643,7 @@ fn fscanf(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         Ok(SscanfResult::Array(Some(vals))) => {
             let mut arr = ZArray::new();
             for v in vals {
-                let _ = arr.push(v.map_or(Value::Null, scan_value));
+                let _ = arr.make_mut().push(v.map_or(Value::Null, scan_value));
             }
             Ok(Value::Array(arr))
         }

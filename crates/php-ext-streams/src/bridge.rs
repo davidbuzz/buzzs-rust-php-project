@@ -214,8 +214,8 @@ pub fn from_lib(v: &SValue) -> Value {
             let mut a = ZArray::new();
             for (k, v) in items {
                 match k {
-                    SKey::Int(i) => a.insert(*i, from_lib(v)),
-                    SKey::Str(s) => a.insert(ArrayKey::Str(ZStr::from(s.as_slice())), from_lib(v)),
+                    SKey::Int(i) => a.make_mut().insert(*i, from_lib(v)),
+                    SKey::Str(s) => a.make_mut().insert(ArrayKey::Str(ZStr::from(s.as_slice())), from_lib(v)),
                 };
             }
             Value::Array(a)
@@ -253,8 +253,8 @@ mod tests {
     #[test]
     fn value_roundtrip() {
         let mut a = ZArray::new();
-        a.insert("k", Value::Int(3));
-        a.insert(5, bytes("x"));
+        a.make_mut().insert("k", Value::Int(3));
+        a.make_mut().insert(5, bytes("x"));
         let v = Value::Array(a);
         let back = from_lib(&to_lib(&v));
         let arr = back.as_array().expect("array");

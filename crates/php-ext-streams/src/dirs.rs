@@ -204,7 +204,7 @@ fn scandir(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         (Some(names), _) => {
             let mut arr = ZArray::with_capacity(names.len());
             for n in names {
-                let _ = arr.push(bytes(n));
+                let _ = arr.make_mut().push(bytes(n));
             }
             Ok(Value::Array(arr))
         }
@@ -232,7 +232,7 @@ fn glob_fn(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         Ok(list) => {
             let mut arr = ZArray::with_capacity(list.len());
             for p in list {
-                let _ = arr.push(bytes(p));
+                let _ = arr.make_mut().push(bytes(p));
             }
             Ok(Value::Array(arr))
         }

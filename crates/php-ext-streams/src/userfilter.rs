@@ -284,7 +284,7 @@ fn stream_bucket_new(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 fn stream_get_filters(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
     let mut arr = ZArray::new();
     for n in wrapper::filter_names() {
-        let _ = arr.push(bytes(n));
+        let _ = arr.make_mut().push(bytes(n));
     }
     Ok(Value::Array(arr))
 }
