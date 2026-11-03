@@ -185,7 +185,7 @@ impl<'h> Encoder<'h> {
                 if self.host.is_json_serializable(o) {
                     return self.encode_serializable_object(buf, o, options);
                 }
-                if self.host.is_enum(o) {
+                if JsonHost::is_enum(self.host, o) {
                     return self.encode_serializable_enum(buf, o, options);
                 }
                 return self.encode_array(buf, val, options);

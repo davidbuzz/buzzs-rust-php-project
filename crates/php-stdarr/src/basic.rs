@@ -86,7 +86,7 @@ pub fn count<C: ArrayContext + ?Sized>(
             }
         }
         Value::Reference(r) => count(ctx, func, &r.get(), mode),
-        Value::Object(o) => match ctx.count_object(o)? {
+        Value::Object(o) => match ArrayContext::count_object(ctx, o)? {
             Some(n) => Ok(n),
             None => Err(countable_error(func, value)),
         },
