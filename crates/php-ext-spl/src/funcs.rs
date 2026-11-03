@@ -1,7 +1,7 @@
 //! The SPL functions: `php-spl` implements them; the autoload registry is
 //! mirrored into the VM's (`Vm::autoloaders`), which performs autoloading.
 
-use crate::host::{rt_throw, VmHost};
+use crate::host::VmHost;
 use php_runtime::Value;
 use std::sync::OnceLock;
 use php_vm::ext::{Args, ModuleBuilder, VmResult};
@@ -29,7 +29,7 @@ fn call(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     if name.starts_with("spl_autoload_") {
         vm.autoloaders = php_spl::functions::autoloaders();
     }
-    r.map_err(|e| rt_throw(vm, e))
+    crate::iter::finish(vm, r)
 }
 
 /// Resolves an include path for `spl_autoload()` (`zend_resolve_path`):

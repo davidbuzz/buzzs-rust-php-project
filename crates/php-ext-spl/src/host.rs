@@ -11,6 +11,7 @@ use php_stdarr::ArrayContext;
 use php_vm::class::Class;
 use php_vm::func::{flags, Func};
 use php_vm::object::{class_of, data};
+use php_vm::vm::FrameKind;
 use php_vm::{Throw, Vm};
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -234,6 +235,38 @@ pub fn set_std_properties(obj: &Obj, props: &ZArray) {
     }
 }
 
+/// `zend_std_has_property(obj, name, ZEND_PROPERTY_EXISTS)` from `scope`:
+/// an initialized declared property visible from the scope, or a dynamic
+/// property.
+#[must_use]
+pub fn has_accessible_property(obj: &Obj, name: &ZStr, scope: Option<&Rc<Class>>) -> bool {
+    let cls = class_of(obj).clone();
+    let d = data(obj);
+    let visible = |pi: &php_vm::class::PropInfo| {
+        if pi.flags & flags::PRIVATE != 0 {
+            scope.is_some_and(|s| s.name.eq_ignore_ascii_case(pi.class.as_bytes()))
+        } else if pi.flags & flags::PROTECTED != 0 {
+            scope.is_some_and(|s| {
+                s.instance_of_name(pi.class.to_ascii_lowercase().as_bytes())
+                    || cls.instance_of_name(s.lc_name.as_bytes())
+            })
+        } else {
+            true
+        }
+    };
+    let slots = d.slots.borrow();
+    for pi in cls.props.iter().filter(|p| p.name == *name && p.flags & flags::STATIC == 0) {
+        if visible(pi) {
+            return matches!(slots.get(pi.slot as usize), Some(Some(_)));
+        }
+    }
+    drop(slots);
+    d.dynamic
+        .borrow()
+        .as_ref()
+        .is_some_and(|t| t.get_str(name.as_bytes()).is_some())
+}
+
 fn class_info_of(cls: &Rc<Class>) -> ClassInfo {
     let mut parents = Vec::new();
     let mut p = cls.parent.clone();
@@ -440,6 +473,17 @@ impl SplHost for VmHost<'_> {
         std_properties(obj)
     }
 
+    fn std_has_property(&mut self, obj: &Obj, name: &ZStr) -> bool {
+        let scope = self
+            .vm
+            .frames
+            .iter()
+            .rev()
+            .find(|f| f.kind != FrameKind::Builtin)
+            .and_then(|f| f.scope.clone());
+        has_accessible_property(obj, name, scope.as_ref())
+    }
+
     fn set_std_properties(&mut self, obj: &Obj, props: ZArray) -> RtResult<()> {
         set_std_properties(obj, &props);
         Ok(())
@@ -473,13 +517,17 @@ impl SplHost for VmHost<'_> {
 
     fn autoload_include(&mut self, file: &ZStr) -> RtResult<bool> {
         let path = file.to_string_lossy();
-        let resolved = crate::funcs::resolve_include(self.vm, &path);
-        let Some(full) = resolved else {
+        let Some(full) = crate::funcs::resolve_include(self.vm, &path) else {
             return Ok(false);
         };
-        if self.vm.included_set.contains(&ZStr::from(full.as_str())) {
+        let real = std::fs::canonicalize(&full)
+            .map_or_else(|_| full.clone(), |p| p.to_string_lossy().into_owned());
+        let key = ZStr::from(real.as_str());
+        if self.vm.included_set.contains(&key) {
             return Ok(true);
         }
+        self.vm.included_set.insert(key.clone());
+        self.vm.included.push(key);
         let r = self.vm.include_file(&full);
         self.vm_rt(r)?;
         Ok(true)

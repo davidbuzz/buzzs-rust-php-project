@@ -18,7 +18,19 @@ pub fn with_host<T>(
         let mut host = VmHost::new(vm);
         f(&mut host)
     };
-    r.map_err(|e| rt_throw(vm, e))
+    finish(vm, r)
+}
+
+/// Converts a `php-spl` result, surfacing a bailout (`exit`, fatal error)
+/// that happened in a callback even when the library carried on.
+pub fn finish<T>(vm: &mut Vm, r: RtResult<T>) -> VmResult<T> {
+    match r {
+        Ok(v) => match vm.pending_throw.take() {
+            Some(t) => Err(t),
+            None => Ok(v),
+        },
+        Err(e) => Err(rt_throw(vm, e)),
+    }
 }
 
 /// An SPL [`ObjectIterator`] seen as a VM [`NativeIterator`] (`foreach`).

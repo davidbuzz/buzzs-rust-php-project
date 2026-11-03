@@ -7,6 +7,8 @@ use php_runtime::{Value, ZStr};
 use php_spl::classes::{ClassDef, ClassKind, MethodDef, MethodFlags};
 use php_vm::ext::{acc, class_flags, Args, ClassBuilder, VmResult};
 use php_vm::func::Func;
+use php_vm::opcode::{Op, Operand};
+use php_vm::vm::FrameKind;
 use php_vm::Vm;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -234,6 +236,12 @@ fn register_class(vm: &mut Vm, c: &'static ClassDef) {
     if c.kind != ClassKind::Interface {
         b = b.hooks(crate::hooks::class_hooks());
     }
+    if matches!(c.name, "IteratorIterator" | "RecursiveIteratorIterator") {
+        // `spl_dual_it_get_method` / `spl_recursive_it_get_method` forward
+        // calls of unknown methods to the inner iterator; the VM has no
+        // `get_method` hook, so this is modelled with `__call`.
+        b = b.method("__call(...$arguments)", acc::PUBLIC, forward_call);
+    }
     let cls = b.register(vm);
     METHODS.with(|m| {
         let mut m = m.borrow_mut();
@@ -343,7 +351,7 @@ fn method_handler(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         }
         r.and_then(|()| php_spl::call_method(&mut host, t.class, t.def.name, this.as_ref(), &args))
     };
-    r.map_err(|e| rt_throw(vm, e))
+    crate::iter::finish(vm, r)
 }
 
 /// The VM stub signature of an SPL function.
@@ -352,3 +360,107 @@ pub fn function_signature(d: &MethodDef) -> String {
     signature(d)
 }
 
+
+/// The method name of the call being dispatched to `__call`: the VM does
+/// not pass it to native `__call` handlers, so it is recovered from the
+/// calling frame's pending `InitMethodCall` (matched by call nesting).
+fn pending_method_name(vm: &Vm) -> Option<ZStr> {
+    let f = vm.frames.iter().rev().find(|f| f.kind != FrameKind::Builtin)?;
+    let ops = &f.code.ops;
+    let mut i = f.ip.min(ops.len().checked_sub(1)?);
+    if !matches!(ops[i], Op::DoCall { .. }) {
+        i = i.checked_sub(1)?;
+        if !matches!(ops[i], Op::DoCall { .. }) {
+            return None;
+        }
+    }
+    let mut depth = 0usize;
+    loop {
+        match &ops[i] {
+            Op::DoCall { .. } | Op::CallableConvert { .. } => depth += 1,
+            Op::InitMethodCall { name, .. } => {
+                depth -= 1;
+                if depth == 0 {
+                    return match name {
+                        Operand::Lit(n) => match f.code.literals.get(*n as usize) {
+                            Some(Value::Str(s)) => Some(s.clone()),
+                            _ => None,
+                        },
+                        _ => None,
+                    };
+                }
+            }
+            Op::InitFCall { .. }
+            | Op::InitDynCall { .. }
+            | Op::InitStaticCall { .. }
+            | Op::InitParentHook { .. }
+            | Op::New { .. } => {
+                depth -= 1;
+                if depth == 0 {
+                    return None;
+                }
+            }
+            _ => {}
+        }
+        i = i.checked_sub(1)?;
+    }
+}
+
+/// Forwards an unknown method call to the inner (current sub-) iterator.
+fn forward_call(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let Some(this) = a.this.clone() else {
+        return Ok(Value::Null);
+    };
+    let name = pending_method_name(vm);
+    let target = {
+        let mut host = VmHost::new(vm);
+        php_spl::handlers::method_target(&mut host, &this)
+    };
+    let target = target.map_err(|e| rt_throw(vm, e))?;
+    if let (Some(name), Some(inner)) = (&name, target) {
+        let lc = name.to_ascii_lowercase();
+        let icls = php_vm::object::class_of(&inner);
+        if icls.find_method(lc.as_bytes()).is_some() || icls.magic.call.is_some() {
+            let args: Vec<Value> = a.values.iter().map(Value::deref).collect();
+            return vm.call_method_by_name(&inner, &name.to_string_lossy(), args);
+        }
+    }
+    let shown = name.map_or_else(|| "__call".to_string(), |n| n.to_string_lossy());
+    Err(vm.throw(
+        "Error",
+        &format!(
+            "Call to undefined method {}::{shown}()",
+            this.class_name().to_string_lossy()
+        ),
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn lit(src: &str, class: &str) -> Option<String> {
+        eval_default(src, class).as_ref().and_then(literal)
+    }
+
+    #[test]
+    fn defaults_evaluate() {
+        assert_eq!(lit("null", "").as_deref(), Some("null"));
+        assert_eq!(lit("2 * 1024 * 1024", "").as_deref(), Some("2097152"));
+        assert_eq!(lit("self::LEAVES_ONLY", "RecursiveIteratorIterator").as_deref(), Some("0"));
+        assert_eq!(lit("\"\\\"\"", "").as_deref(), Some("'\"'"));
+        assert_eq!(lit("\"\\\\\"", "").as_deref(), Some("'\\\\'"));
+        assert_eq!(lit("PHP_INT_MAX", "").as_deref(), Some("9223372036854775807"));
+    }
+
+    #[test]
+    fn signatures_render() {
+        let (_, m) = php_spl::classes::find_method("SplFileObject", "fgetcsv").expect("method");
+        assert_eq!(
+            signature(m),
+            "fgetcsv(string $separator = ',', string $enclosure = '\"', string $escape = '\\\\'): array|false"
+        );
+        let (_, m) = php_spl::classes::find_method("CallbackFilterIterator", "__construct").expect("ctor");
+        assert_eq!(signature(m), "__construct(Iterator $iterator, $callback)");
+    }
+}
