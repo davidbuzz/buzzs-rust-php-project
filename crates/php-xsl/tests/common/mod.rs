@@ -21,8 +21,8 @@ use php_libxml::error::{Diagnostic, DiagnosticLevel};
 use php_libxml::ffi::xmlNode;
 use php_libxml::tree::{Document, Node, ParseOptions};
 use php_xsl::{
-    CallbackArg, CallbackContext, CallbackReturn, NodeArg, ReturnedNode, XmlDocument, XmlOutput, XslError,
-    XslHost, XsltProcessor,
+    CallbackArg, CallbackContext, CallbackReturn, NodeArg, ReturnedNode, XmlDocument, XmlOutput,
+    XslError, XslHost, XsltProcessor,
 };
 
 // ---------------------------------------------------------------------------
@@ -134,7 +134,9 @@ impl TNode {
             return Vec::new();
         }
         // SAFETY: node names are valid C strings.
-        unsafe { std::ffi::CStr::from_ptr(n.name.cast()) }.to_bytes().to_vec()
+        unsafe { std::ffi::CStr::from_ptr(n.name.cast()) }
+            .to_bytes()
+            .to_vec()
     }
 
     /// `parentNode` (for namespace nodes: the element).
@@ -147,7 +149,9 @@ impl TNode {
                     return Vec::new();
                 }
                 // SAFETY: the parent is alive with the node.
-                unsafe { std::ffi::CStr::from_ptr((*p).name.cast()) }.to_bytes().to_vec()
+                unsafe { std::ffi::CStr::from_ptr((*p).name.cast()) }
+                    .to_bytes()
+                    .to_vec()
             }
         }
     }
@@ -207,7 +211,11 @@ pub fn php_float(f: f64) -> String {
     if f.is_nan() {
         "NAN".into()
     } else if f.is_infinite() {
-        if f > 0.0 { "INF".into() } else { "-INF".into() }
+        if f > 0.0 {
+            "INF".into()
+        } else {
+            "-INF".into()
+        }
     } else if f.fract() == 0.0 && f.abs() < 1e15 {
         format!("{f:.0}")
     } else {
@@ -346,7 +354,11 @@ fn open_read(base: &Path, path: &[u8]) -> Option<php_libxml::io::InputStream> {
     let s = String::from_utf8_lossy(path).into_owned();
     let reader: Box<dyn Read> = if let Some(rest) = s.strip_prefix("compress.zlib://") {
         let file = resolve(base, strip_file_scheme(rest));
-        let out = std::process::Command::new("gzip").arg("-dc").arg(file).output().ok()?;
+        let out = std::process::Command::new("gzip")
+            .arg("-dc")
+            .arg(file)
+            .output()
+            .ok()?;
         if !out.status.success() {
             return None;
         }
@@ -393,6 +405,8 @@ pub struct Php {
     /// `php_dom_xpath_callbacks::node_list`.
     pub node_list: Vec<Value>,
     pub finished: usize,
+    /// Runs while the node list is torn down (object destructors).
+    pub finish_hook: Option<Box<dyn FnMut()>>,
 }
 
 impl Php {
@@ -406,8 +420,12 @@ impl Php {
             }
             Ok(Value::Str(s))
         });
-        php.define("strtoupper", |_, a| Ok(Value::Str(arg(&a, 0).to_ascii_uppercase())));
-        php.define("strtolower", |_, a| Ok(Value::Str(arg(&a, 0).to_ascii_lowercase())));
+        php.define("strtoupper", |_, a| {
+            Ok(Value::Str(arg(&a, 0).to_ascii_uppercase()))
+        });
+        php.define("strtolower", |_, a| {
+            Ok(Value::Str(arg(&a, 0).to_ascii_lowercase()))
+        });
         php.define("strrev", |_, a| {
             let mut s = arg(&a, 0);
             s.reverse();
@@ -424,7 +442,11 @@ impl Php {
         php
     }
 
-    pub fn define(&mut self, name: &str, f: impl Fn(&mut Php, Vec<Value>) -> Result<Value, Exc> + 'static) {
+    pub fn define(
+        &mut self,
+        name: &str,
+        f: impl Fn(&mut Php, Vec<Value>) -> Result<Value, Exc> + 'static,
+    ) {
         self.functions.insert(name.to_ascii_lowercase(), Rc::new(f));
     }
 
@@ -449,7 +471,11 @@ impl Php {
         }
     }
 
-    fn convert_args(&mut self, ctx: &CallbackContext<'_>, args: Vec<CallbackArg<'_>>) -> Vec<Value> {
+    fn convert_args(
+        &mut self,
+        ctx: &CallbackContext<'_>,
+        args: Vec<CallbackArg<'_>>,
+    ) -> Vec<Value> {
         let keep_doc = ctx.document_copy.cloned();
         args.into_iter()
             .map(|a| match a {
@@ -511,7 +537,11 @@ fn convert_node(n: NodeArg<'_>, keep_doc: Option<&Document>) -> TNode {
                 keep_doc: keep_doc.cloned(),
             }
         }
-        NodeArg::Namespace { parent, prefix, href } => TNode::Namespace {
+        NodeArg::Namespace {
+            parent,
+            prefix,
+            href,
+        } => TNode::Namespace {
             prefix,
             href,
             parent: Box::new(convert_node(*parent, keep_doc)),
@@ -565,7 +595,11 @@ fn var_dump_indent(v: &Value, indent: usize) {
 }
 
 impl XslHost<Callable> for Php {
-    fn call_by_name(&mut self, ctx: &CallbackContext<'_>, args: Vec<CallbackArg<'_>>) -> CallbackReturn {
+    fn call_by_name(
+        &mut self,
+        ctx: &CallbackContext<'_>,
+        args: Vec<CallbackArg<'_>>,
+    ) -> CallbackReturn {
         let args = self.convert_args(ctx, args);
         match self.resolve(ctx.function) {
             Ok(f) => {
@@ -594,7 +628,12 @@ impl XslHost<Callable> for Php {
         }
     }
 
-    fn call(&mut self, callable: &Callable, ctx: &CallbackContext<'_>, args: Vec<CallbackArg<'_>>) -> CallbackReturn {
+    fn call(
+        &mut self,
+        callable: &Callable,
+        ctx: &CallbackContext<'_>,
+        args: Vec<CallbackArg<'_>>,
+    ) -> CallbackReturn {
         let args = self.convert_args(ctx, args);
         let v = self.run(callable, args);
         self.convert_return(v)
@@ -615,6 +654,10 @@ impl XslHost<Callable> for Php {
     fn transformation_finished(&mut self) {
         self.finished += 1;
         self.node_list.clear();
+        if let Some(mut hook) = self.finish_hook.take() {
+            hook();
+            self.finish_hook = Some(hook);
+        }
     }
 }
 
@@ -640,7 +683,8 @@ pub fn scratch() -> PathBuf {
 /// `DOMDocument::load()`.
 pub fn load(path: &Path) -> Document {
     in_method("DOMDocument::load", || {
-        Document::parse_file(path.to_string_lossy().as_bytes(), &ParseOptions::default()).expect("load")
+        Document::parse_file(path.to_string_lossy().as_bytes(), &ParseOptions::default())
+            .expect("load")
     })
 }
 
@@ -669,26 +713,36 @@ pub fn import(proc: &Proc, doc: &dyn XmlDocument) -> bool {
 
 /// `print $proc->transformToXml($doc)` (false/null print nothing).
 pub fn to_xml(proc: &Proc, php: &mut Php, doc: &dyn XmlDocument) -> Option<Vec<u8>> {
-    in_method("XSLTProcessor::transformToXml", || match proc.transform_to_xml(doc, php) {
-        Ok(XmlOutput::Str(s)) => Some(s),
-        Ok(_) => None,
-        Err(e) => {
-            throw(e.into());
-            None
+    in_method("XSLTProcessor::transformToXml", || {
+        match proc.transform_to_xml(doc, php) {
+            Ok(XmlOutput::Str(s)) => Some(s),
+            Ok(_) => None,
+            Err(e) => {
+                throw(e.into());
+                None
+            }
         }
     })
 }
 
-pub fn to_xml_raw(proc: &Proc, php: &mut Php, doc: &dyn XmlDocument) -> Result<XmlOutput, XslError> {
-    in_method("XSLTProcessor::transformToXml", || proc.transform_to_xml(doc, php))
+pub fn to_xml_raw(
+    proc: &Proc,
+    php: &mut Php,
+    doc: &dyn XmlDocument,
+) -> Result<XmlOutput, XslError> {
+    in_method("XSLTProcessor::transformToXml", || {
+        proc.transform_to_xml(doc, php)
+    })
 }
 
 pub fn to_doc(proc: &Proc, php: &mut Php, doc: &dyn XmlDocument) -> Option<Document> {
-    in_method("XSLTProcessor::transformToDoc", || match proc.transform_to_doc(doc, php) {
-        Ok(d) => d.map(php_xsl::ResultDocument::into_document),
-        Err(e) => {
-            throw(e.into());
-            None
+    in_method("XSLTProcessor::transformToDoc", || {
+        match proc.transform_to_doc(doc, php) {
+            Ok(d) => d.map(php_xsl::ResultDocument::into_document),
+            Err(e) => {
+                throw(e.into());
+                None
+            }
         }
     })
 }
@@ -702,7 +756,9 @@ pub fn set_output_attr(xsl: &Document, attr: &str, value: &str) {
         .into_iter()
         .find(|n| n.name() == b"output")
         .expect("xsl:output");
-    output.set_attribute(attr.as_bytes(), value.as_bytes()).unwrap();
+    output
+        .set_attribute(attr.as_bytes(), value.as_bytes())
+        .unwrap();
 }
 
 /// `var_dump()` of a `transformToXml()` result.
@@ -745,7 +801,9 @@ pub fn expectf_match(pattern: &[u8], text: &[u8]) -> bool {
                 b'd' => (1, |c| c.is_ascii_digit()),
                 b'i' => (1, |c| c.is_ascii_digit() || c == b'-' || c == b'+'),
                 b'x' => (1, |c| c.is_ascii_hexdigit()),
-                b'f' => (1, |c| c.is_ascii_digit() || matches!(c, b'.' | b'-' | b'+' | b'e' | b'E')),
+                b'f' => (1, |c| {
+                    c.is_ascii_digit() || matches!(c, b'.' | b'-' | b'+' | b'e' | b'E')
+                }),
                 b'c' => {
                     return !t.is_empty() && m(rest, &t[1..]);
                 }
@@ -787,11 +845,18 @@ pub fn expect(phpt: &str, output: &[u8]) {
     let raw_text = std::fs::read(fixture(phpt)).expect("phpt file");
     let (expected, is_f) = match raw_section(&raw_text, "EXPECT") {
         Some(e) => (e, false),
-        None => (raw_section(&raw_text, "EXPECTF").expect("expectation"), true),
+        None => (
+            raw_section(&raw_text, "EXPECTF").expect("expectation"),
+            true,
+        ),
     };
     let exp = trim(&expected);
     let out = trim(output);
-    let ok = if is_f { expectf_match(exp, out) } else { exp == out };
+    let ok = if is_f {
+        expectf_match(exp, out)
+    } else {
+        exp == out
+    };
     assert!(
         ok,
         "{phpt}: output mismatch\n--- expected ---\n{}\n--- actual ---\n{}\n",

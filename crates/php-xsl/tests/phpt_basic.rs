@@ -42,7 +42,8 @@ fn xslt003() {
     let (dom, xsl, proc, mut php) = prepare();
     echo("Test 3: Using Parameters");
     import(&proc, &xsl);
-    proc.set_parameter(b"", b"foo", Some(b"hello world")).unwrap();
+    proc.set_parameter(b"", b"foo", Some(b"hello world"))
+        .unwrap();
     echo("\n");
     echo(to_xml(&proc, &mut php, &dom).unwrap());
     echo("\n");
@@ -94,7 +95,8 @@ fn xslt007() {
     let out = scratch().join("xslt007-out.xml");
     let uri = format!("file://{}", out.display());
     let n = in_method("XSLTProcessor::transformToUri", || {
-        proc.transform_to_uri(&dom, uri.as_bytes(), &mut php).unwrap()
+        proc.transform_to_uri(&dom, uri.as_bytes(), &mut php)
+            .unwrap()
     });
     assert!(n > 0);
     echo(std::fs::read(&out).unwrap());
