@@ -9,7 +9,7 @@
 use crate::host::{ObjectIterator, SplHost};
 use crate::object::{SplObject, SplState};
 use crate::util::DimKind;
-use php_runtime::{Obj, PropertyPurpose, RtResult, Value, ZArray};
+use php_runtime::{Obj, PropertyPurpose, RtResult, Value, ZArray, ZStr};
 use std::rc::Rc;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -196,6 +196,62 @@ pub fn debug_info(host: &mut dyn SplHost, obj: &Obj) -> RtResult<Option<ZArray>>
     }
 }
 
+/// `read_property` (`ArrayObject::ARRAY_AS_PROPS`). `Ok(None)` means: use
+/// the standard property lookup.
+pub fn read_property(
+    host: &mut dyn SplHost,
+    obj: &Obj,
+    name: &ZStr,
+    kind: DimKind,
+) -> RtResult<Option<Value>> {
+    let Some((st, fam)) = state(host, obj)? else {
+        return Ok(None);
+    };
+    match fam {
+        Family::Array => crate::array::read_property(host, obj, &st, name, kind),
+        _ => Ok(None),
+    }
+}
+
+/// `write_property`; returns whether SPL handled the write.
+pub fn write_property(host: &mut dyn SplHost, obj: &Obj, name: &ZStr, value: Value) -> RtResult<bool> {
+    let Some((st, fam)) = state(host, obj)? else {
+        return Ok(false);
+    };
+    match fam {
+        Family::Array => crate::array::write_property(host, obj, &st, name, value),
+        _ => Ok(false),
+    }
+}
+
+/// `has_property` (`check`: 0 = `isset`, 1 = `empty` semantics (truthy),
+/// 2 = exists). `Ok(None)` means: use the standard lookup.
+pub fn has_property(
+    host: &mut dyn SplHost,
+    obj: &Obj,
+    name: &ZStr,
+    check: i32,
+) -> RtResult<Option<bool>> {
+    let Some((st, fam)) = state(host, obj)? else {
+        return Ok(None);
+    };
+    match fam {
+        Family::Array => crate::array::has_property(host, obj, &st, name, check),
+        _ => Ok(None),
+    }
+}
+
+/// `unset_property`; returns whether SPL handled it.
+pub fn unset_property(host: &mut dyn SplHost, obj: &Obj, name: &ZStr) -> RtResult<bool> {
+    let Some((st, fam)) = state(host, obj)? else {
+        return Ok(false);
+    };
+    match fam {
+        Family::Array => crate::array::unset_property(host, obj, &st, name),
+        _ => Ok(false),
+    }
+}
+
 /// `compare` handler for two objects, at least one of which has SPL state.
 pub fn compare(host: &mut dyn SplHost, a: &Obj, b: &Obj) -> RtResult<Option<i32>> {
     let fa = state(host, a)?.map(|s| s.1);
@@ -274,6 +330,20 @@ pub fn native_iterator(
     let Some((st, fam)) = state(host, obj)? else {
         return Ok(None);
     };
+    // A user subclass overriding the iteration methods iterates through
+    // them (`zend_implement_iterator` / `zend_implement_aggregate`).
+    let overridden = match fam {
+        Family::Fixed | Family::Storage => host.has_user_method(obj, "getIterator"),
+        Family::Array if host.instance_of(obj, "IteratorAggregate") => {
+            host.has_user_method(obj, "getIterator")
+        }
+        _ => ["rewind", "valid", "key", "current", "next"]
+            .iter()
+            .any(|m| host.has_user_method(obj, m)),
+    };
+    if overridden {
+        return Ok(None);
+    }
     let it: Box<dyn ObjectIterator> = match fam {
         Family::Fixed | Family::Heap | Family::DlList | Family::Recursive if by_ref => {
             return Err(php_runtime::RuntimeError::Error(

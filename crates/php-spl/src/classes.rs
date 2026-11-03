@@ -147,6 +147,44 @@ pub fn find_method(class: &str, method: &str) -> Option<(&'static str, &'static 
     None
 }
 
+/// The `E_DEPRECATED` message PHP emits when calling a method marked
+/// `#[\Deprecated]` (`zend_deprecated_function`), e.g. "Method
+/// SplObjectStorage::attach() is deprecated since 8.5, use method
+/// SplObjectStorage::offsetSet() instead". `class` is the declaring class.
+#[must_use]
+pub fn deprecation_message(class: &str, method: &str) -> Option<String> {
+    let c = find_class(class)?;
+    let m = c.methods.iter().find(|m| m.name.eq_ignore_ascii_case(method))?;
+    let d = m.deprecated?;
+    let mut suffix = String::new();
+    if let Some(since) = d.since {
+        suffix.push_str(" since ");
+        suffix.push_str(since);
+    }
+    if let Some(msg) = d.message {
+        suffix.push_str(", ");
+        suffix.push_str(msg);
+    }
+    Some(format!("Method {}::{}() is deprecated{suffix}", c.name, m.name))
+}
+
+/// The deprecation message of an SPL function (`spl_object_hash()`...).
+#[must_use]
+pub fn function_deprecation_message(name: &str) -> Option<String> {
+    let f = FUNCTIONS.iter().find(|f| f.name.eq_ignore_ascii_case(name))?;
+    let d = f.deprecated?;
+    let mut suffix = String::new();
+    if let Some(since) = d.since {
+        suffix.push_str(" since ");
+        suffix.push_str(since);
+    }
+    if let Some(msg) = d.message {
+        suffix.push_str(", ");
+        suffix.push_str(msg);
+    }
+    Some(format!("Function {}() is deprecated{suffix}", f.name))
+}
+
 /// A class constant value.
 #[must_use]
 pub fn constant(class: &str, name: &str) -> Option<i64> {

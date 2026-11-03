@@ -12,3 +12,7 @@ php-stdarr = { path = "../php-stdarr" }
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+php-parser = { path = "../php-parser" }
+php-support = { path = "../php-support" }

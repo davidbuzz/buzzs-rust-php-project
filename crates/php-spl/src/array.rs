@@ -16,7 +16,7 @@ impl ArrayObject {
 use crate::host::{ObjectIterator, SplHost};
 use crate::object::SplObject;
 use crate::util::DimKind;
-use php_runtime::{Obj, PropertyPurpose, RtResult, Value, ZArray};
+use php_runtime::{Obj, PropertyPurpose, RtResult, Value, ZArray, ZStr};
 use std::rc::Rc;
 
 pub(crate) fn call(
@@ -116,4 +116,42 @@ pub fn native_iterator(
     _by_ref: bool,
 ) -> RtResult<Option<Box<dyn ObjectIterator>>> {
     Ok(None)
+}
+
+/// `read_property` handler.
+pub fn read_property(
+    _host: &mut dyn SplHost,
+    _obj: &Obj,
+    _st: &Rc<SplObject>,
+    _name: &ZStr,
+    _kind: DimKind,
+) -> RtResult<Option<Value>> {
+    Ok(None)
+}
+
+/// `write_property` handler.
+pub fn write_property(
+    _host: &mut dyn SplHost,
+    _obj: &Obj,
+    _st: &Rc<SplObject>,
+    _name: &ZStr,
+    _value: Value,
+) -> RtResult<bool> {
+    Ok(false)
+}
+
+/// `has_property` handler.
+pub fn has_property(
+    _host: &mut dyn SplHost,
+    _obj: &Obj,
+    _st: &Rc<SplObject>,
+    _name: &ZStr,
+    _check: i32,
+) -> RtResult<Option<bool>> {
+    Ok(None)
+}
+
+/// `unset_property` handler.
+pub fn unset_property(_host: &mut dyn SplHost, _obj: &Obj, _st: &Rc<SplObject>, _name: &ZStr) -> RtResult<bool> {
+    Ok(false)
 }
