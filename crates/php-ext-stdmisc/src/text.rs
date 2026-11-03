@@ -57,10 +57,13 @@ fn highlight_string(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 /// Whether `path` names a stream wrapper URL (`scheme://...` or `data:`).
 fn is_url(path: &[u8]) -> bool {
     path.starts_with(b"data:")
-        || path
-            .iter()
-            .position(|&c| c == b':')
-            .is_some_and(|i| i > 1 && path[i..].starts_with(b"://") && path[..i].iter().all(|c| c.is_ascii_alphanumeric() || matches!(c, b'+' | b'-' | b'.')))
+        || path.iter().position(|&c| c == b':').is_some_and(|i| {
+            i > 1
+                && path[i..].starts_with(b"://")
+                && path[..i]
+                    .iter()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'+' | b'-' | b'.'))
+        })
 }
 
 /// Reads a script for highlighting/stripping like `zend_stream_open()`:
@@ -88,9 +91,7 @@ fn read_script(vm: &mut Vm, path: &[u8]) -> VmResult<Option<Vec<u8>>> {
             let reason = match e.kind() {
                 std::io::ErrorKind::NotFound => "No such file or directory".to_string(),
                 std::io::ErrorKind::PermissionDenied => "Permission denied".to_string(),
-                _ if std::fs::metadata(p).is_ok_and(|m| m.is_dir()) => {
-                    "Is a directory".to_string()
-                }
+                _ if std::fs::metadata(p).is_ok_and(|m| m.is_dir()) => "Is a directory".to_string(),
                 _ => e.to_string(),
             };
             vm.php_warning(&format!("Failed to open stream: {reason}"))?;
@@ -186,51 +187,58 @@ fn parse_str(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     Ok(Value::Null)
 }
 
-/// ZPP of `setlocale()`'s `$rest` arguments (`?string`, path semantics,
-/// reported without a parameter name since they are variadic): objects are
-/// converted to strings so that the library sees plain values.
-fn setlocale_args(vm: &mut Vm, a: &Args) -> VmResult<Vec<Value>> {
-    let mut out = Vec::with_capacity(a.values.len().saturating_sub(1));
-    for (i, v) in a.values.iter().skip(1).map(Value::deref).enumerate() {
-        let n = i + 2;
-        if i == 0 {
-            out.push(v);
-            continue;
+/// Checks one of `setlocale()`'s variadic `$rest` arguments (argument
+/// number `n`) like `try_setlocale_zval()` does when it reaches it:
+/// `?string` with path semantics, reported without a parameter name.
+/// Objects are converted to strings.
+fn rest_arg(vm: &mut Vm, n: usize, v: Value) -> VmResult<Value> {
+    let v = match v {
+        Value::Array(_) => {
+            return Err(vm.throw(
+                "TypeError",
+                &format!("setlocale(): Argument #{n} must be of type ?string, array given"),
+            ))
         }
-        let v = match v {
-            Value::Array(_) => {
-                return Err(vm.throw(
-                    "TypeError",
-                    &format!("setlocale(): Argument #{n} must be of type ?string, array given"),
-                ))
-            }
-            Value::Object(_) => Value::Str(vm.value_to_string(&v)?),
-            other => other,
-        };
-        if let Value::Str(s) = &v {
-            if s.as_bytes().contains(&0) {
-                return Err(vm.throw(
-                    "ValueError",
-                    &format!("setlocale(): Argument #{n} must not contain any null bytes"),
-                ));
-            }
+        Value::Object(_) => Value::Str(vm.value_to_string(&v)?),
+        other => other,
+    };
+    if let Value::Str(s) = &v {
+        if s.as_bytes().contains(&0) {
+            return Err(vm.throw(
+                "ValueError",
+                &format!("setlocale(): Argument #{n} must not contain any null bytes"),
+            ));
         }
-        out.push(v);
     }
-    Ok(out)
+    Ok(v)
 }
 
+/// `setlocale($category, $locales, ...$rest)`: the arguments are tried in
+/// order and each `$rest` argument is only validated when it is reached.
 fn setlocale(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let cat = a.int(0);
-    let args = setlocale_args(vm, a)?;
-    LOCALE
-        .with(|l| {
-            let mut st = l.borrow().clone();
-            let r = st.setlocale(cat, &args, vm);
-            *l.borrow_mut() = st;
-            r
-        })
-        .vm(vm)
+    let args: Vec<Value> = a.values.iter().skip(1).map(Value::deref).collect();
+    let call = |vm: &mut Vm, args: &[Value]| {
+        LOCALE
+            .with(|l| {
+                let mut st = l.borrow().clone();
+                let r = st.setlocale(cat, args, vm);
+                *l.borrow_mut() = st;
+                r
+            })
+            .vm(vm)
+    };
+    if args.len() < 2 || matches!(args[0], Value::Array(_)) {
+        return call(vm, &args);
+    }
+    for (i, v) in args.into_iter().enumerate() {
+        let v = if i == 0 { v } else { rest_arg(vm, i + 2, v)? };
+        let r = call(vm, std::slice::from_ref(&v))?;
+        if !matches!(r, Value::Bool(false)) {
+            return Ok(r);
+        }
+    }
+    Ok(Value::Bool(false))
 }
 
 #[allow(clippy::unnecessary_wraps)] // native handler signature

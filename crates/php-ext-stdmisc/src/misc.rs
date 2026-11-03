@@ -113,7 +113,7 @@ fn error_log(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             .and_then(|v| i64::from_str_radix(String::from_utf8_lossy(&v).trim(), 8).ok())
             .unwrap_or(0o644),
     };
-    if ty == 3 && dest.as_ref().is_none_or(|d| d.is_empty()) {
+    if ty == 3 && dest.as_ref().is_none_or(ZStr::is_empty) {
         // `php_stream_open_wrapper()` on an empty path.
         return Err(vm.throw("ValueError", "Path must not be empty"));
     }
@@ -233,6 +233,36 @@ fn constant_str(vm: &Vm, name: &str, default: &str) -> String {
     }
 }
 
+/// Fallback for `stream_get_wrappers()` when the streams extension is absent.
+const DEFAULT_WRAPPERS: &[&str] = &[
+    "https",
+    "ftps",
+    "compress.zlib",
+    "php",
+    "file",
+    "glob",
+    "data",
+    "http",
+    "ftp",
+    "phar",
+];
+
+/// Fallback for `stream_get_transports()` when the streams extension is absent.
+const DEFAULT_TRANSPORTS: &[&str] = &[
+    "tcp", "udp", "unix", "udg", "ssl", "tls", "tlsv1.0", "tlsv1.1", "tlsv1.2", "tlsv1.3",
+];
+
+/// Fallback for `stream_get_filters()` when the streams extension is absent.
+const DEFAULT_FILTERS: &[&str] = &[
+    "zlib.*",
+    "string.rot13",
+    "string.toupper",
+    "string.tolower",
+    "convert.*",
+    "consumed",
+    "dechunk",
+];
+
 /// The general rows of `phpinfo()` from "PHP API" to "`DTrace` Support".
 const ENGINE_ROWS: &[(&str, &str)] = &[
     ("PHP API", "20240925"),
@@ -282,42 +312,9 @@ fn phpinfo(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let flag = if a.has(0) { a.int(0) } else { info::INFO_ALL };
     let version = constant_str(vm, "PHP_VERSION", "8.5.0-dev");
     let uname = system::php_uname(b"a").vm(vm)?;
-    let wrappers = string_list(
-        vm,
-        "stream_get_wrappers",
-        &[
-            "https",
-            "ftps",
-            "compress.zlib",
-            "php",
-            "file",
-            "glob",
-            "data",
-            "http",
-            "ftp",
-            "phar",
-        ],
-    );
-    let transports = string_list(
-        vm,
-        "stream_get_transports",
-        &[
-            "tcp", "udp", "unix", "udg", "ssl", "tls", "tlsv1.0", "tlsv1.1", "tlsv1.2", "tlsv1.3",
-        ],
-    );
-    let filters = string_list(
-        vm,
-        "stream_get_filters",
-        &[
-            "zlib.*",
-            "string.rot13",
-            "string.toupper",
-            "string.tolower",
-            "convert.*",
-            "consumed",
-            "dechunk",
-        ],
-    );
+    let wrappers = string_list(vm, "stream_get_wrappers", DEFAULT_WRAPPERS);
+    let transports = string_list(vm, "stream_get_transports", DEFAULT_TRANSPORTS);
+    let filters = string_list(vm, "stream_get_filters", DEFAULT_FILTERS);
     let core_ini = ini_rows(vm, "Core");
     let mut names: Vec<String> = php_vm::LOADED_EXTENSIONS
         .iter()
@@ -363,8 +360,13 @@ fn phpinfo(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     };
     // `php-stdmisc` does not render the credits section: print everything
     // up to the variables, then the credits, then the license.
-    let mut out = info::print_info(flag & !(info::INFO_CREDITS | info::INFO_LICENSE), &src, true, vm)
-        .vm(vm)?;
+    let mut out = info::print_info(
+        flag & !(info::INFO_CREDITS | info::INFO_LICENSE),
+        &src,
+        true,
+        vm,
+    )
+    .vm(vm)?;
     if flag & info::INFO_CREDITS != 0 {
         let mut p = InfoPrinter::new(true);
         p.hr();
