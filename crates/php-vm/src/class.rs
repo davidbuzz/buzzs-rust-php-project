@@ -53,6 +53,9 @@ pub struct AttributeInfo {
     pub args: Vec<(Option<ZStr>, ConstExpr)>,
     /// Source line.
     pub line: u32,
+    /// `ZEND_ATTRIBUTE_STRICT_TYPES`: whether the declaring file used
+    /// `strict_types=1` (applied when instantiating the attribute).
+    pub strict: bool,
 }
 
 /// A constant expression: a literal value or code that computes it (run in

@@ -787,7 +787,17 @@ impl Vm {
                 }
             }
         }
-        let name = self.func_display(&call.func, call.scope.as_ref());
+        let name = match (&call.magic_name, &call.scope) {
+            // The __call/__callStatic trampoline carries the called name.
+            (Some(m), Some(sc)) => {
+                format!(
+                    "{}::{}",
+                    crate::object::display_name(&sc.name),
+                    m.to_string_lossy()
+                )
+            }
+            _ => self.func_display(&call.func, call.scope.as_ref()),
+        };
         let kind = if call.scope.is_some() {
             "method"
         } else {
@@ -1486,11 +1496,15 @@ impl Vm {
                     }
                 }
                 self.check_deprecated_call(&call)?;
-                self.push_user_frame(&uf, call, RetTarget::Discard, false, true)?;
+                let strict = call.strict;
+                self.push_user_frame(&uf, call, RetTarget::Discard, strict, true)?;
                 let base = self.frames.len() - 1;
                 self.execute(base)
             }
-            Func::Builtin(b) => self.call_builtin(&b, call, false),
+            Func::Builtin(b) => {
+                let strict = call.strict;
+                self.call_builtin(&b, call, strict)
+            }
         }
     }
 

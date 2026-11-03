@@ -874,6 +874,7 @@ fn rc_get_attributes(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
                 name: ZStr::from("Attribute"),
                 args: vec![(None, crate::class::ConstExpr::Value(Value::Int(fl)))],
                 line: 0,
+                strict: false,
             });
         }
     }

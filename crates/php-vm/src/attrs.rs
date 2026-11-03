@@ -39,7 +39,7 @@ impl Vm {
         scope: Option<&Rc<Class>>,
     ) -> VmResult<Obj> {
         let (pos, named) = self.attribute_args(info, scope)?;
-        self.construct_with(cls, pos, named)
+        self.construct_with_strict(cls, pos, named, info.strict)
     }
 
     /// `new cls(...pos, ...named)`.
@@ -49,12 +49,24 @@ impl Vm {
         pos: Vec<Value>,
         named: Vec<(ZStr, Value)>,
     ) -> VmResult<Obj> {
+        self.construct_with_strict(cls, pos, named, false)
+    }
+
+    /// [`Self::construct_with`] with an explicit argument-coercion mode.
+    pub(crate) fn construct_with_strict(
+        &mut self,
+        cls: &Rc<Class>,
+        pos: Vec<Value>,
+        named: Vec<(ZStr, Value)>,
+        strict: bool,
+    ) -> VmResult<Obj> {
         let o = self.instantiate(cls)?;
         if let Some(m) = cls.magic.construct.clone() {
             let mut call = PendingCall {
                 this: Some(o.clone()),
                 scope: Some(m.scope()),
                 called: Some(cls.clone()),
+                strict,
                 ..PendingCall::new(m.func.clone())
             };
             call.args = pos.into_iter().map(Some).collect();

@@ -221,6 +221,7 @@ fn case_attributes(c: &Class, cc: &ClassConst) -> Vec<crate::class::AttributeInf
                     name: ZStr::from(full),
                     args,
                     line: at.span.line,
+                    strict: false,
                 });
             }
         }
@@ -438,6 +439,7 @@ fn rk_get_attributes(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             name: ZStr::from("Deprecated"),
             args: Vec::new(),
             line: 0,
+            strict: false,
         });
     }
     let file = vm.const_files.get(&c.name).cloned();

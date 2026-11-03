@@ -674,6 +674,7 @@ impl Compiler {
                     name,
                     args,
                     line: a.span.line,
+                    strict: self.strict_types,
                 });
             }
         }

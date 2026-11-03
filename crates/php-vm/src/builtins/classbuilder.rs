@@ -143,6 +143,7 @@ impl ClassBuilder {
             name: ZStr::from("Deprecated"),
             args,
             line: 0,
+            strict: false,
         };
         self.consts
             .push((name.to_string(), v, flags::PUBLIC, vec![attr]));

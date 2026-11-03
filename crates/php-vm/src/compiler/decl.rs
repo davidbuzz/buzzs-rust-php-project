@@ -2080,21 +2080,36 @@ impl Compiler {
             }
             Ok(())
         };
+        // `zend_check_magic_method_no_return_type` /
+        // `zend_check_magic_method_return_type(MAY_BE_VOID)`: a magic method
+        // that cannot return a value cannot be `#[\NoDiscard]`.
+        let no_discard = |c: &Compiler| -> CResult<()> {
+            if uf.flags & flags::NODISCARD != 0 {
+                return c.err(
+                    format!("Method {cname}::{name} cannot be #[\\NoDiscard]"),
+                    line,
+                );
+            }
+            Ok(())
+        };
         use crate::types::mask as m;
         match lc.as_str() {
             "__construct" => {
                 non_static(self)?;
                 no_ret(self)?;
+                no_discard(self)?;
             }
             "__destruct" => {
                 args(self, 0)?;
                 non_static(self)?;
                 no_ret(self)?;
+                no_discard(self)?;
             }
             "__clone" => {
                 args(self, 0)?;
                 non_static(self)?;
                 ret_type(self, m::VOID, "void")?;
+                no_discard(self)?;
             }
             "__get" => {
                 args(self, 1)?;
@@ -2108,6 +2123,7 @@ impl Compiler {
                 public(self);
                 arg_type(self, 0, m::STRING, "string")?;
                 ret_type(self, m::VOID, "void")?;
+                no_discard(self)?;
             }
             "__unset" => {
                 args(self, 1)?;
@@ -2115,6 +2131,7 @@ impl Compiler {
                 public(self);
                 arg_type(self, 0, m::STRING, "string")?;
                 ret_type(self, m::VOID, "void")?;
+                no_discard(self)?;
             }
             "__isset" => {
                 args(self, 1)?;
@@ -2158,6 +2175,7 @@ impl Compiler {
                 public(self);
                 arg_type(self, 0, m::ARRAY, "array")?;
                 ret_type(self, m::VOID, "void")?;
+                no_discard(self)?;
             }
             "__set_state" => {
                 args(self, 1)?;
@@ -2175,6 +2193,7 @@ impl Compiler {
                 non_static(self)?;
                 public(self);
                 ret_type(self, m::VOID, "void")?;
+                no_discard(self)?;
             }
             _ => {}
         }

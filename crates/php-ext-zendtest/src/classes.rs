@@ -844,11 +844,7 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
     register_namespaced(vm);
     register_enums(vm);
     ClassBuilder::new("_ZendTestMagicCall")
-        .method(
-            "__call(mixed ...$args): mixed",
-            acc::PUBLIC,
-            magic_call,
-        )
+        .method("__call(mixed ...$args): mixed", acc::PUBLIC, magic_call)
         .register(vm);
     ClassBuilder::new("_ZendTestMagicCallForward")
         .method(

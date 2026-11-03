@@ -162,6 +162,9 @@ pub struct PendingCall {
     pub is_ctor: bool,
     /// Placeholders of a partial application.
     pub pfa: Option<Box<crate::pfa::PfaArgs>>,
+    /// Coerce arguments in strict mode (`ZEND_CALL_STRICT_TYPES` for calls
+    /// made from Rust, e.g. attribute instantiation).
+    pub strict: bool,
 }
 
 impl PendingCall {
@@ -179,6 +182,7 @@ impl PendingCall {
             has_named: false,
             is_ctor: false,
             pfa: None,
+            strict: false,
         }
     }
 }

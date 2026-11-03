@@ -57,6 +57,7 @@ pub(crate) fn attribute(name: &str, args: Vec<(Option<&str>, Value)>) -> Attribu
             .map(|(n, v)| (n.map(ZStr::from), ConstExpr::Value(v)))
             .collect(),
         line: 0,
+        strict: false,
     }
 }
 

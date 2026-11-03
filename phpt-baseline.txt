@@ -29,16 +29,11 @@ Zend/tests/attributes/016_custom_attribute_validation.phpt
 Zend/tests/attributes/030_strict_types.phpt
 Zend/tests/attributes/031_backtrace.phpt
 Zend/tests/attributes/delayed_target_validation/validator_NoDiscard.phpt
-Zend/tests/attributes/deprecated/type_validation_002.phpt
 Zend/tests/attributes/nodiscard/001.phpt
-Zend/tests/attributes/nodiscard/002.phpt
 Zend/tests/attributes/nodiscard/005.phpt
 Zend/tests/attributes/nodiscard/007.phpt
 Zend/tests/attributes/nodiscard/009.phpt
 Zend/tests/attributes/nodiscard/010.phpt
-Zend/tests/attributes/nodiscard/type_validation_002.phpt
-Zend/tests/attributes/nodiscard/unsupported_clone.phpt
-Zend/tests/attributes/nodiscard/unsupported_constructor.phpt
 Zend/tests/attributes/override/021.phpt
 Zend/tests/attributes/override/constants/anon_failure.phpt
 Zend/tests/attributes/override/gh12189_4.phpt
