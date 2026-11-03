@@ -39,6 +39,7 @@ pub mod float;
 pub mod numeric;
 pub mod ops;
 pub mod plain;
+pub mod ref_roots;
 pub mod serialize;
 pub mod sort;
 pub mod string;

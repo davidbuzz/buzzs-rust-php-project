@@ -1,0 +1,168 @@
+//! The possible-root buffer for references (`gc_check_possible_root` for
+//! `zend_reference`), consumed by the VM's cycle collector.
+//!
+//! When a [`PhpRef`] handle is dropped while other handles remain, the
+//! reference may now be part of an unreachable cycle (`$a[] = &$a;
+//! unset($a);`). Its address is buffered weakly (at most once) so that the
+//! collector can start from it. Nothing is recorded until the collector
+//! turns recording on.
+
+use crate::value::{PhpRef, RefInner};
+use crate::Value;
+use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
+use std::rc::Weak;
+
+#[derive(Default)]
+struct Buf {
+    entries: Vec<Weak<RefInner>>,
+    index: HashMap<usize, usize>,
+    /// Dead entries are dropped when `entries` grows past this (keeps the
+    /// buffer bounded while the collector does not run).
+    compact_at: usize,
+}
+
+impl Buf {
+    fn compact(&mut self) {
+        self.entries.retain(|w| w.strong_count() > 0);
+        self.index.clear();
+        for (i, w) in self.entries.iter().enumerate() {
+            self.index.insert(w.as_ptr() as usize, i);
+        }
+        self.compact_at = self.entries.len() * 2;
+    }
+}
+
+thread_local! {
+    static RECORDING: Cell<bool> = const { Cell::new(false) };
+    static NOTIFY: Cell<Option<fn()>> = const { Cell::new(None) };
+    static BUF: RefCell<Buf> = RefCell::new(Buf::default());
+}
+
+/// Called by `PhpRef::drop` when a handle is released and others remain.
+/// Costs one thread-local load while recording is off.
+pub(crate) fn released(r: &PhpRef) {
+    if !RECORDING.try_with(Cell::get).unwrap_or(false) {
+        return;
+    }
+    // Only a reference to an array or object can close a cycle
+    // (`Z_COLLECTABLE`).
+    if !r
+        .try_borrow()
+        .is_some_and(|v| matches!(*v, Value::Array(_) | Value::Object(_)))
+    {
+        return;
+    }
+    let addr = r.addr();
+    let present = BUF
+        .try_with(|b| {
+            b.try_borrow().map_or(true, |b| {
+                b.index.get(&addr).is_some_and(|&i| {
+                    b.entries
+                        .get(i)
+                        .is_some_and(|w| w.strong_count() > 0 && w.as_ptr() as usize == addr)
+                })
+            })
+        })
+        .unwrap_or(true);
+    if present {
+        return;
+    }
+    // The collector may run (and empty the buffer) before the new root is
+    // added, like `gc_possible_root_when_full`.
+    if let Some(f) = NOTIFY.try_with(Cell::get).ok().flatten() {
+        f();
+    }
+    let w = r.downgrade();
+    let _ = BUF.try_with(|b| {
+        if let Ok(mut b) = b.try_borrow_mut() {
+            if b.entries.len() >= b.compact_at.max(4096) {
+                b.compact();
+            }
+            let i = b.entries.len();
+            b.entries.push(w);
+            b.index.insert(addr, i);
+        }
+    });
+}
+
+/// Takes the buffered references that are still alive and empties the
+/// buffer.
+#[must_use]
+pub fn take() -> Vec<Value> {
+    let entries = BUF
+        .try_with(|b| {
+            b.try_borrow_mut()
+                .map(|mut b| {
+                    b.index.clear();
+                    std::mem::take(&mut b.entries)
+                })
+                .unwrap_or_default()
+        })
+        .unwrap_or_default();
+    entries
+        .into_iter()
+        .filter_map(|w| w.upgrade())
+        .map(|rc| Value::Reference(PhpRef::from_inner(rc)))
+        .collect()
+}
+
+/// Number of buffered references still alive.
+#[must_use]
+pub fn len() -> usize {
+    BUF.try_with(|b| {
+        b.try_borrow().map_or(0, |b| {
+            b.entries.iter().filter(|w| w.strong_count() > 0).count()
+        })
+    })
+    .unwrap_or(0)
+}
+
+/// Turns recording on or off; returns the previous setting.
+pub fn set_recording(on: bool) -> bool {
+    RECORDING.try_with(|r| r.replace(on)).unwrap_or(false)
+}
+
+/// Sets the function called before a new root is buffered.
+pub fn set_notify(f: Option<fn()>) {
+    let _ = NOTIFY.try_with(|n| n.set(f));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn records_shared_releases_once() {
+        set_recording(true);
+        let r = PhpRef::new(Value::empty_array());
+        let r2 = r.clone();
+        let r3 = r.clone();
+        drop(r2);
+        drop(r3);
+        assert_eq!(len(), 1);
+        let roots = take();
+        assert_eq!(roots.len(), 1);
+        assert_eq!(len(), 0);
+        drop(roots);
+        drop(r);
+        set_recording(false);
+    }
+
+    #[test]
+    fn scalars_are_not_collectable() {
+        set_recording(true);
+        let r = PhpRef::new(Value::Int(1));
+        drop(r.clone());
+        assert_eq!(len(), 0);
+        set_recording(false);
+    }
+
+    #[test]
+    fn nothing_recorded_when_off() {
+        set_recording(false);
+        let r = PhpRef::new(Value::Int(1));
+        drop(r.clone());
+        assert_eq!(len(), 0);
+    }
+}

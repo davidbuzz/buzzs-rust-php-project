@@ -315,7 +315,7 @@ impl<T: Into<Value>> From<Option<T>> for Value {
 // References
 // ---------------------------------------------------------------------------
 
-struct RefInner {
+pub(crate) struct RefInner {
     value: RefCell<Value>,
     /// Opaque slot for the VM (e.g. typed-property type sources,
     /// `ZEND_REF_HAS_TYPE_SOURCES`).
@@ -419,6 +419,31 @@ impl PhpRef {
     /// Attaches (or clears) VM metadata.
     pub fn set_meta(&self, meta: Option<Rc<dyn Any>>) {
         *self.0.meta.borrow_mut() = meta;
+    }
+}
+
+impl PhpRef {
+    /// A weak handle (for the cycle collector's root buffer).
+    pub(crate) fn downgrade(&self) -> std::rc::Weak<RefInner> {
+        Rc::downgrade(&self.0)
+    }
+
+    /// Re-wraps an upgraded weak handle.
+    pub(crate) fn from_inner(rc: Rc<RefInner>) -> Self {
+        PhpRef(rc)
+    }
+}
+
+/// Releasing a handle while others remain (`GC_DELREF` to a non-zero
+/// count) makes the reference a possible cycle root
+/// (`gc_check_possible_root`).
+impl Drop for PhpRef {
+    fn drop(&mut self) {
+        // Only a reference to an array or object can close a cycle
+        // (`Z_COLLECTABLE`).
+        if Rc::strong_count(&self.0) > 1 {
+            crate::ref_roots::released(self);
+        }
     }
 }
 
