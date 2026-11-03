@@ -113,3 +113,16 @@ missing_panics_doc = "allow"
 [profile.release]
 lto = "thin"
 codegen-units = 1
+
+# Pure-Rust crypto/bignum crates are far too slow unoptimised (argon2 ~13 s per hash in debug);
+# optimise them even in dev builds so the test suite's 60 s per-test timeout is not hit.
+[profile.dev.package.php-stdmisc]
+opt-level = 3
+[profile.dev.package.php-hash]
+opt-level = 3
+[profile.dev.package.php-gmp]
+opt-level = 3
+[profile.dev.package.php-bcmath]
+opt-level = 3
+[profile.dev.package.php-mbstring]
+opt-level = 2

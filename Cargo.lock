@@ -351,6 +351,8 @@ dependencies = [
  "php-ext-filter",
  "php-ext-hash",
  "php-ext-json",
+ "php-ext-mbstring",
+ "php-ext-openssl",
  "php-ext-pcre",
  "php-ext-pdo",
  "php-ext-random",
@@ -358,6 +360,7 @@ dependencies = [
  "php-ext-stdarr",
  "php-ext-stdmisc",
  "php-ext-stdstr",
+ "php-ext-streams",
  "php-vm",
 ]
 
@@ -480,6 +483,7 @@ dependencies = [
 name = "php-ext-hash"
 version = "0.1.0"
 dependencies = [
+ "php-ext-streams",
  "php-hash",
  "php-runtime",
  "php-streams",
@@ -515,7 +519,11 @@ dependencies = [
 name = "php-ext-mbstring"
 version = "0.1.0"
 dependencies = [
+ "php-mbstring",
+ "php-pcre",
  "php-runtime",
+ "php-stdmisc",
+ "php-support",
  "php-vm",
 ]
 
@@ -527,7 +535,12 @@ version = "0.1.0"
 name = "php-ext-openssl"
 version = "0.1.0"
 dependencies = [
+ "foreign-types",
+ "openssl",
+ "openssl-sys",
+ "php-openssl",
  "php-runtime",
+ "php-support",
  "php-vm",
 ]
 
@@ -553,6 +566,7 @@ dependencies = [
 name = "php-ext-pdo"
 version = "0.1.0"
 dependencies = [
+ "php-ext-streams",
  "php-pdo",
  "php-runtime",
  "php-sqlite",
@@ -651,9 +665,11 @@ dependencies = [
 name = "php-ext-stdmisc"
 version = "0.1.0"
 dependencies = [
+ "php-ext-streams",
  "php-lexer",
  "php-runtime",
  "php-stdmisc",
+ "php-streams",
  "php-support",
  "php-vm",
 ]
@@ -869,6 +885,27 @@ version = "0.1.0"
 [[package]]
 name = "php-sapi-apache2"
 version = "0.1.0"
+dependencies = [
+ "cc",
+ "libc",
+ "php-ext-date",
+ "php-ext-filter",
+ "php-ext-hash",
+ "php-ext-json",
+ "php-ext-pcre",
+ "php-ext-pdo",
+ "php-ext-random",
+ "php-ext-spl",
+ "php-ext-stdarr",
+ "php-ext-stdmisc",
+ "php-ext-stdstr",
+ "php-ext-streams",
+ "php-runtime",
+ "php-stdmisc",
+ "php-streams",
+ "php-support",
+ "php-vm",
+]
 
 [[package]]
 name = "php-session"
@@ -998,6 +1035,10 @@ dependencies = [
 [[package]]
 name = "php-xsl"
 version = "0.1.0"
+dependencies = [
+ "cc",
+ "php-libxml",
+]
 
 [[package]]
 name = "php-zip"
