@@ -39,16 +39,9 @@ pub static ENC_CP950: Encoding = Encoding {
     cut: None,
 };
 
-/// `cp950_pua_tbl`: `[first PUA code point, last PUA code point, first
-/// CP950 code, last CP950 code]` (63 + 94 = 157 or 94 codes per row).
-/// (Not `const` in the C source, so not emitted by the table generator.)
-static CP950_PUA_TBL: [[u16; 4]; 5] = [
-    [0xE000, 0xE310, 0xFA40, 0xFEFE],
-    [0xE311, 0xEEB7, 0x8E40, 0xA0FE],
-    [0xEEB8, 0xF6B0, 0x8140, 0x8DFE],
-    [0xF6B1, 0xF70E, 0xC6A1, 0xC6FE],
-    [0xF70F, 0xF848, 0xC740, 0xC8FE],
-];
+// `cp950_pua_tbl`: `[first PUA code point, last PUA code point, first
+// CP950 code, last CP950 code]` (63 + 94 = 157 or 94 codes per row).
+use crate::tables::cjk::misc::CP950_PUA_TBL;
 
 /// `is_in_cp950_pua`.
 fn is_in_cp950_pua(c1: u8, c: u8) -> bool {

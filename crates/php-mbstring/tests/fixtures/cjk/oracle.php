@@ -12,6 +12,9 @@
 
 function conv(string $from, string $to, string $in, $mode = 0x3F): void {
     if ($mode === 'none' || $mode === 'long' || $mode === 'entity') {
+        // These modes still use the previously set substitute character for
+        // bad input; replay_oracle assumes '?', so reset it first.
+        mb_substitute_character(0x3F);
         mb_substitute_character($mode);
         $m = $mode;
     } else {

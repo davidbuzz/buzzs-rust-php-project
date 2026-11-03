@@ -33,3 +33,15 @@ pub use sjis::{
     ENC_CP932, ENC_SJIS, ENC_SJISWIN, ENC_SJIS_DOCOMO, ENC_SJIS_KDDI, ENC_SJIS_MAC, ENC_SJIS_SB,
 };
 pub use utf8_mobile::{ENC_UTF8_DOCOMO, ENC_UTF8_KDDI_A, ENC_UTF8_KDDI_B, ENC_UTF8_SB};
+
+#[cfg(test)]
+mod tests {
+    use super::testutil;
+
+    /// Mixed CJK text and error cases through every encoding of this module,
+    /// checked against php 8.3 (`tests/fixtures/cjk/smoke_oracle.php`).
+    #[test]
+    fn smoke_oracle_all_encodings() {
+        assert!(testutil::replay_oracle("smoke_oracle.tsv") > 600);
+    }
+}
