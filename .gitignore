@@ -1,0 +1,4 @@
+/target
+/modules/php-src
+*.phpt.out
+*.phpt.diff
