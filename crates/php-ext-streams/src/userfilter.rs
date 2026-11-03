@@ -323,7 +323,7 @@ fn apply(vm: &mut Vm, a: &Args, append: bool) -> VmResult<Value> {
         let mut s = cell.get()?;
         let read_write = if rw & lib::STREAM_FILTER_ALL == 0 {
             let mut x = 0;
-            if s.mode.contains('r') {
+            if s.mode.contains(['r', '+']) {
                 x |= lib::STREAM_FILTER_READ;
             }
             if s.mode.contains(['w', '+', 'a']) {

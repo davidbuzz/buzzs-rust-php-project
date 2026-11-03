@@ -123,9 +123,11 @@ fn fopen(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 fn fclose(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let (r, cell) = res::stream_arg_res(vm, a, 0)?;
+    // A stream in use by one of its own callbacks cannot be closed
+    // (PHP_STREAM_FLAG_NO_FCLOSE is set around user-space calls).
     let no_fclose = cell
         .get()
-        .is_some_and(|s| s.has_flag(php_streams::stream::flags::NO_FCLOSE));
+        .is_none_or(|s| s.has_flag(php_streams::stream::flags::NO_FCLOSE));
     if no_fclose {
         vm.php_warning("cannot close the provided stream, as it must not be manually closed")?;
         return Ok(Value::Bool(false));
@@ -807,6 +809,26 @@ fn write_formatted(vm: &mut Vm, cell: &Rc<StreamCell>, out: &[u8]) -> VmResult<V
     Ok(Value::Int(i64::try_from(out.len()).unwrap_or(i64::MAX)))
 }
 
+fn get_meta_tags(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let path = path_arg(vm, a, 0)?;
+    let use_path = a.bool(1);
+    let opts = REPORT_ERRORS | if use_path { USE_PATH } else { 0 };
+    let Some((mut s, _)) = open_stream(vm, a, &path, "rb", opts, None)? else {
+        return Ok(Value::Bool(false));
+    };
+    let tags = bridge::run(vm, || {
+        let t = crate::meta::meta_tags(&mut s);
+        s.close();
+        t
+    })?;
+    let mut arr = ZArray::new();
+    for (k, v) in tags {
+        arr.make_mut()
+            .insert(php_runtime::ArrayKey::Str(k.as_slice().into()), bytes(v));
+    }
+    Ok(Value::Array(arr))
+}
+
 /// Registers the functions of this module.
 pub fn register(m: &mut ModuleBuilder<'_>) {
     m.function(
@@ -875,6 +897,10 @@ pub fn register(m: &mut ModuleBuilder<'_>) {
     .function(
         "fscanf($stream, string $format, mixed &...$vars): array|int|false|null",
         fscanf,
+    )
+    .function(
+        "get_meta_tags(string $filename, bool $use_include_path = false): array|false",
+        get_meta_tags,
     )
     .function("fprintf($stream, string $format, mixed ...$values): int", fprintf)
     .function("vfprintf($stream, string $format, array $values): int", vfprintf);

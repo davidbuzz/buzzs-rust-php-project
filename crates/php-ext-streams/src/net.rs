@@ -76,7 +76,7 @@ impl StreamOps for FdSockOps {
         self.timed_out = false;
         if self.blocked && !wait_fd(fd, libc::POLLIN, self.timeout) {
             self.timed_out = true;
-            return Ok(0);
+            return Err(OpFailed);
         }
         // SAFETY: `buf` is a valid writable buffer of `buf.len()` bytes.
         let n = unsafe { libc::recv(fd, buf.as_mut_ptr().cast(), buf.len(), 0) };
@@ -377,12 +377,32 @@ fn stream_socket_client(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     match xport_create(vm, &addr, timeout, false, flags, pid, ctx)? {
         Ok(s) => Ok(res::new_stream_ex(s, None, persistent)),
         Err(e) => {
-            vm.php_warning(&format!("Unable to connect to {addr} ({})", e.message))?;
+            vm.php_warning(&format!(
+                "Unable to connect to {} ({})",
+                addslashes(&addr),
+                e.message
+            ))?;
             set_ref(a, 1, Value::Int(i64::from(e.errno)));
             set_ref(a, 2, bytes(e.message.as_bytes()));
             Ok(Value::Bool(false))
         }
     }
+}
+
+/// `php_addslashes()` for messages.
+fn addslashes(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '\0' => out.push_str("\\0"),
+            '\'' | '"' | '\\' => {
+                out.push('\\');
+                out.push(c);
+            }
+            _ => out.push(c),
+        }
+    }
+    out
 }
 
 /// A listening socket for the built-in transports.
@@ -424,9 +444,12 @@ fn server_socket(scheme: &str, rest: &str, address: &str) -> Result<Stream, Xpor
             });
         }
     };
-    let _ = address;
-    r.map(|(fd, label)| sock_stream(fd, label, None))
-        .map_err(|e| io_err(&e))
+    r.map(|(fd, label)| {
+        let mut s = sock_stream(fd, label, None);
+        s.orig_path = Some(address.as_bytes().to_vec());
+        s
+    })
+    .map_err(|e| io_err(&e))
 }
 
 fn stream_socket_server(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {

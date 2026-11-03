@@ -123,6 +123,16 @@ pub fn call_method(
             })
             .collect();
         match vm.call_method_by_name(obj, method, vals) {
+            Ok(Value::Object(o)) if method == user::methods::READ => {
+                // convert_to_string() of the returned value.
+                match vm.value_to_string(&Value::Object(o)) {
+                    Ok(s) => UserCall::Returned(SValue::Str(s.as_bytes().to_vec())),
+                    Err(t) => {
+                        bridge::set_pending(t);
+                        UserCall::Threw
+                    }
+                }
+            }
             Ok(v) => {
                 for (i, r) in refs {
                     args[i] = bridge::to_lib(&r.get());

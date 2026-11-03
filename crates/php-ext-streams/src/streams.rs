@@ -67,7 +67,13 @@ fn stream_get_meta_data(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         .and_then(|f| cell.get().and_then(|s| f(&s)));
     let mut arr = ZArray::new();
     let wrapper_data = cell.wrapper_data.borrow().clone();
+    let is_dir = cell
+        .get()
+        .is_some_and(|s| s.has_flag(php_streams::stream::flags::IS_DIR));
     for (k, v) in meta {
+        if is_dir && k == "uri" {
+            continue;
+        }
         if k == "wrapper_type" {
             if let Some(w) = &wrapper_data {
                 arr.make_mut().insert("wrapper_data", w.clone());
@@ -378,10 +384,11 @@ fn parse_params(vm: &mut Vm, a: &Args, cell: &CtxCell, params: &ZArray) -> VmRes
     if let Some(n) = params.get_str(b"notification") {
         let n = n.deref();
         if !vm.is_callable(&n) {
+            let why = callable_error(vm, &n);
             return Err(a.type_error(
                 vm,
                 1,
-                "must be an array with valid callbacks as values, no array or string given",
+                &format!("must be an array with valid callbacks as values, {why}"),
             ));
         }
         *cell.notifier.borrow_mut() = Some(n);
@@ -395,6 +402,47 @@ fn parse_params(vm: &mut Vm, a: &Args, cell: &CtxCell, params: &ZArray) -> VmRes
         }
     }
     Ok(())
+}
+
+/// The reason `zend_is_callable_ex()` gives for a non-callable value.
+fn callable_error(vm: &mut Vm, v: &Value) -> String {
+    match v {
+        Value::Str(s) => {
+            let name = s.to_string_lossy();
+            if let Some((c, _)) = name.split_once("::") {
+                if vm.find_class(c.as_bytes()).is_none() {
+                    return format!("class \"{c}\" not found");
+                }
+                return format!("class {c} does not have a method \"{}\"", &name[c.len() + 2..]);
+            }
+            format!("function \"{name}\" not found or invalid function name")
+        }
+        Value::Array(arr) if arr.len() == 2 => {
+            let first = arr.get_int(0).map(Value::deref);
+            let second = arr.get_int(1).map(Value::deref);
+            match (first, second) {
+                (Some(Value::Str(c)), Some(Value::Str(m))) => {
+                    let cs = c.to_string_lossy();
+                    if vm.find_class(c.as_bytes()).is_none() {
+                        format!("class \"{cs}\" not found")
+                    } else {
+                        format!(
+                            "class {cs} does not have a method \"{}\"",
+                            m.to_string_lossy()
+                        )
+                    }
+                }
+                (Some(Value::Object(o)), Some(Value::Str(m))) => format!(
+                    "class {} does not have a method \"{}\"",
+                    o.class_name().to_string_lossy(),
+                    m.to_string_lossy()
+                ),
+                _ => "first array member is not a valid class name or object".into(),
+            }
+        }
+        Value::Array(_) => "array must have exactly two members".into(),
+        _ => "no array or string given".into(),
+    }
 }
 
 /// `decode_context_param`: a context, or the context of a stream
@@ -453,7 +501,7 @@ fn stream_context_get_options(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 }
 
 fn stream_context_set_option(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    if a.len() == 2 {
+    if !a.has(2) && !a.has(3) {
         vm.raise(
             8192,
             "Calling stream_context_set_option() with 2 arguments is deprecated, use stream_context_set_options() instead",

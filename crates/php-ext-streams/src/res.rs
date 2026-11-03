@@ -155,8 +155,22 @@ pub fn new_stream(stream: Stream, wrapper_data: Option<Value>) -> Value {
     new_stream_ex(stream, wrapper_data, false)
 }
 
+/// Whether `ctx` is `FG(default_context)`.
+pub fn is_default_context(ctx: &ContextRef) -> bool {
+    DEFAULT_CONTEXT.with(|d| {
+        d.borrow()
+            .as_ref()
+            .and_then(ctx_cell_of)
+            .is_some_and(|c| Rc::ptr_eq(&c.ctx, ctx))
+    })
+}
+
 /// Wraps a library stream in a new (optionally persistent) resource.
-pub fn new_stream_ex(stream: Stream, wrapper_data: Option<Value>, persistent: bool) -> Value {
+pub fn new_stream_ex(mut stream: Stream, wrapper_data: Option<Value>, persistent: bool) -> Value {
+    // A stream opened with the default context does not keep it.
+    if stream.context.as_ref().is_some_and(is_default_context) {
+        stream.context = None;
+    }
     let id = stream.id();
     let cell = Rc::new(StreamCell {
         ctx_keep: RefCell::new(stream.context.as_ref().and_then(ctx_cell_of_lib)),

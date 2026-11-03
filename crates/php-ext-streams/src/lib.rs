@@ -15,6 +15,7 @@
 pub mod bridge;
 pub mod dirs;
 pub mod files;
+pub mod meta;
 pub mod net;
 pub mod process;
 pub mod res;
