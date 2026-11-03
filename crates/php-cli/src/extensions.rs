@@ -29,5 +29,6 @@ pub fn all() -> Vec<Box<dyn Extension>> {
         Box::new(php_ext_exif::Exif),
         Box::new(php_ext_zlib::Zlib),
         Box::new(php_ext_gettext::Gettext),
+        Box::new(php_ext_calendar::Calendar),
     ]
 }
