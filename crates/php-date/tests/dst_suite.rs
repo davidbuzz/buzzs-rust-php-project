@@ -37,11 +37,26 @@ fn run_case(mode: &str, script: &[&str]) -> String {
     let mut out = String::new();
     let mut zone = tz::get("UTC").unwrap();
     let mut vars: HashMap<String, Time> = HashMap::new();
+    let mut interval = None;
     for line in script {
         let f: Vec<&str> = line.split('\t').collect();
         match f[0] {
             "tz" => zone = tz::get(f[1]).unwrap(),
-            "echo" => out.push_str(f[1]),
+            "echo" => out.push_str(&f[1].replace("\\n", "\n")),
+            "iv" => interval = Some(api::interval_from_iso(f[1].as_bytes()).unwrap()),
+            "fmt" => out.push_str(&fmt(&vars[f[1]], f[2])),
+            "add" => {
+                let t = api::add(&vars[f[1]], interval.as_ref().unwrap());
+                vars.insert(f[1].to_string(), t);
+            }
+            "sub" => {
+                let t = api::sub(&vars[f[1]], interval.as_ref().unwrap()).unwrap();
+                vars.insert(f[1].to_string(), t);
+            }
+            "diff" => {
+                let r = api::diff(&vars[f[1]], &vars[f[2]], false);
+                out.push_str(&String::from_utf8_lossy(&r.format(f[3].as_bytes())));
+            }
             "new" => {
                 let t = if f[2].is_empty() {
                     new_dt("now", &zone)
@@ -191,7 +206,7 @@ fn datetime_dst_suite() {
             failures.push(format!("{name}:\n{}", diff.join("\n")));
         }
     }
-    assert_eq!(cases, 45);
+    assert_eq!(cases, 54);
     assert!(
         failures.is_empty(),
         "{} cases failed:\n{}",

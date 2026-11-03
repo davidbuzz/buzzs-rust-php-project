@@ -230,7 +230,9 @@ fn timezone_location_get() {
     let z = TimezoneSpec::Id(tz::get("Europe/Oslo").unwrap());
     let v = z.location().unwrap();
     assert_eq!(v.get("country_code"), Some(&Value::Str("NO".into())));
-    let Some(Value::Float(lat)) = v.get("latitude") else { panic!() };
+    let Some(Value::Float(lat)) = v.get("latitude") else {
+        panic!()
+    };
     assert!((59.9166..59.9167).contains(lat), "{lat}");
     assert_eq!(v.get("longitude"), Some(&Value::Float(10.75)));
     assert_eq!(v.get("comments"), Some(&Value::Str(String::new())));
@@ -239,15 +241,22 @@ fn timezone_location_get() {
 
 #[test]
 fn timezone_abbreviations_list_basic1() {
-    let Value::Array(abbr) = api::timezone_abbreviations_list() else { panic!() };
+    let Value::Array(abbr) = api::timezone_abbreviations_list() else {
+        panic!()
+    };
     assert_eq!(abbr.len(), 144);
     let acst = api::timezone_abbreviations_list();
-    let Some(Value::Array(entries)) = acst.get("acst") else { panic!() };
+    let Some(Value::Array(entries)) = acst.get("acst") else {
+        panic!()
+    };
     assert_eq!(entries.len(), 6);
     let first = &entries[0].1;
     assert_eq!(first.get("dst"), Some(&Value::Bool(false)));
     assert_eq!(first.get("offset"), Some(&Value::Int(34200)));
-    assert_eq!(first.get("timezone_id"), Some(&Value::Str("Australia/Adelaide".into())));
+    assert_eq!(
+        first.get("timezone_id"),
+        Some(&Value::Str("Australia/Adelaide".into()))
+    );
 }
 
 #[test]

@@ -5844,3 +5844,1468 @@ test_time_spring_type3_post_type3_post: SUB: 2010-03-15 19:59:59 EDT - P+0Y0M0DT
 test_time_spring_type3_stsec_type3_dtsec: SUB: 2010-03-14 03:00:00 EDT - P+0Y0M0DT0H0M1S = **2010-03-14 01:59:59 EST**
 test_time_spring_type3_dtsec_type3_stsec: SUB: 2010-03-14 01:59:59 EST - P-0Y0M0DT0H0M1S = **2010-03-14 03:00:00 EDT**
 #end
+#case	rfc-datetime_and_daylight_saving_time-type1	SCRIPT
+tz	America/New_York
+new	end	2010-03-14 03:00:00 -0400
+new	start	2010-03-14 01:59:59 -0500
+echo	fd1 
+fmt	end	Y-m-d H:i:s e
+echo	 - 
+fmt	start	Y-m-d H:i:s e
+echo	 = 
+diff	start	end	PT%hH%iM%sS
+echo	\n
+new	end	2010-03-14 04:30:00 -0400
+new	start	2010-03-13 04:30:00 -0500
+echo	fd2 
+fmt	end	Y-m-d H:i:s e
+echo	 - 
+fmt	start	Y-m-d H:i:s e
+echo	 = 
+diff	start	end	P%dDT%hH
+echo	\n
+new	end	2010-03-14 03:30:00 -0400
+new	start	2010-03-13 04:30:00 -0500
+echo	fd3 
+fmt	end	Y-m-d H:i:s e
+echo	 - 
+fmt	start	Y-m-d H:i:s e
+echo	 = 
+diff	start	end	P%dDT%hH
+echo	\n
+new	end	2010-03-14 01:30:00 -0500
+new	start	2010-03-13 04:30:00 -0500
+echo	fd4 
+fmt	end	Y-m-d H:i:s e
+echo	 - 
+fmt	start	Y-m-d H:i:s e
+echo	 = 
+diff	start	end	P%dDT%hH
+echo	\n
+new	end	2010-03-14 01:30:00 -0500
+new	start	2010-03-13 01:30:00 -0500
+echo	fd5 
+fmt	end	Y-m-d H:i:s e
+echo	 - 
+fmt	start	Y-m-d H:i:s e
+echo	 = 
+diff	start	end	P%dDT%hH
+echo	\n
+new	end	2010-03-14 03:30:00 -0400
+new	start	2010-03-13 03:30:00 -0500
+echo	fd6 
+fmt	end	Y-m-d H:i:s e
+echo	 - 
+fmt	start	Y-m-d H:i:s e
+echo	 = 
+diff	start	end	P%dDT%hH
+echo	\n
+new	end	2010-03-14 03:30:00 -0400
+new	start	2010-03-13 02:30:00 -0500
+echo	fd7 
+fmt	end	Y-m-d H:i:s e
+echo	 - 
+fmt	start	Y-m-d H:i:s e
+echo	 = 
+diff	start	end	P%dDT%hH
+echo	\n
+echo	\n
+new	start	2010-03-14 01:59:59 -0500
+iv	PT1S
+echo	fa1 
+fmt	start	Y-m-d H:i:s e
+echo	 + PT1S = 
+add	start
+fmt	start	Y-m-d H:i:s e
+echo	\n
+new	start	2010-03-13 04:30:00 -0500
+iv	P1D
+echo	fa2 
+fmt	start	Y-m-d H:i:s e
+echo	 + P1D = 
+add	start
+fmt	start	Y-m-d H:i:s e
+echo	\n
+new	start	2010-03-13 04:30:00 -0500
+iv	PT22H
+echo	fa3 
+fmt	start	Y-m-d H:i:s e
+echo	 + PT22H = 
+add	start
+fmt	start	Y-m-d H:i:s e
+echo	\n
+new	start	2010-03-13 04:30:00 -0500
+iv	PT21H
+echo	fa4 
+fmt	start	Y-m-d H:i:s e
+echo	 + PT21H = 
+add	start
+fmt	start	Y-m-d H:i:s e
+echo	\n
+new	start	2010-03-13 01:30:00 -0500
+iv	P1D
+echo	fa5 
+fmt	start	Y-m-d H:i:s e
+echo	 + P1D = 
+add	start
+fmt	start	Y-m-d H:i:s e
+echo	\n
+new	start	2010-03-13 02:30:00 -0500
+iv	P1D
+echo	fa6 
+fmt	start	Y-m-d H:i:s e
+echo	 + P1D = 
+add	start
+fmt	start	Y-m-d H:i:s e
+echo	\n
+echo	\n
+new	end	2010-03-14 03:00:00 -0400
+iv	PT1S
+echo	fs1 
+fmt	end	Y-m-d H:i:s e
+echo	 - PT1S = 
+sub	end
+fmt	end	Y-m-d H:i:s e
+echo	\n
+new	end	2010-03-14 04:30:00 -0400
+iv	P1D
+echo	fs2 
+fmt	end	Y-m-d H:i:s e
+echo	 - P1D = 
+sub	end
+fmt	end	Y-m-d H:i:s e
+echo	\n
+new	end	2010-03-14 03:30:00 -0400
+iv	PT22H
+echo	fs3 
+fmt	end	Y-m-d H:i:s e
+echo	 - PT22H = 
+sub	end
+fmt	end	Y-m-d H:i:s e
+echo	\n
+new	end	2010-03-14 01:30:00 -0500
+iv	PT21H
+echo	fs4 
+fmt	end	Y-m-d H:i:s e
+echo	 - PT21H = 
+sub	end
+fmt	end	Y-m-d H:i:s e
+echo	\n
+new	end	2010-03-14 01:30:00 -0500
+iv	P1D
+echo	fs5 
+fmt	end	Y-m-d H:i:s e
+echo	 - P1D = 
+sub	end
+fmt	end	Y-m-d H:i:s e
+echo	\n
+new	end	2010-03-15 03:30:00 -0400
+iv	P1D
+echo	fs6 
+fmt	end	Y-m-d H:i:s e
+echo	 - P1D = 
+sub	end
+fmt	end	Y-m-d H:i:s e
+echo	\n
+new	end	2010-03-15 02:30:00 -0400
+iv	P1D
+echo	fs7 
+fmt	end	Y-m-d H:i:s e
+echo	 - P1D = 
+sub	end
+fmt	end	Y-m-d H:i:s e
+echo	\n
+echo	\n
+new	end	2010-11-07 01:00:00 -0500
+new	start	2010-11-07 01:59:59 -0400
+echo	bd1 
+fmt	end	Y-m-d H:i:s e
+echo	 - 
+fmt	start	Y-m-d H:i:s e
+echo	 = 
+diff	start	end	PT%hH%iM%sS
+echo	\n
+new	end	2010-11-07 04:30:00 -0500
+new	start	2010-11-06 04:30:00 -0400
+echo	bd2 
+fmt	end	Y-m-d H:i:s e
+echo	 - 
+fmt	start	Y-m-d H:i:s e
+echo	 = 
+diff	start	end	P%dDT%hH
+echo	\n
+new	end	2010-11-07 03:30:00 -0500
+new	start	2010-11-06 04:30:00 -0400
+echo	bd3 
+fmt	end	Y-m-d H:i:s e
+echo	 - 
+fmt	start	Y-m-d H:i:s e
+echo	 = 
+diff	start	end	P%dDT%hH
+echo	\n
+new	end	2010-11-07 02:30:00 -0500
+new	start	2010-11-06 04:30:00 -0400
+echo	bd4 
+fmt	end	Y-m-d H:i:s e
+echo	 - 
+fmt	start	Y-m-d H:i:s e
+echo	 = 
+diff	start	end	P%dDT%hH
+echo	\n
+new	end	2010-11-07 01:30:00 -0500
+new	start	2010-11-06 04:30:00 -0400
+echo	bd5 
+fmt	end	Y-m-d H:i:s e
+echo	 - 
+fmt	start	Y-m-d H:i:s e
+echo	 = 
+diff	start	end	P%dDT%hH
+echo	\n
+new	end	2010-11-07 01:30:00 -0400
+new	start	2010-11-06 04:30:00 -0400
+echo	bd6 
+fmt	end	Y-m-d H:i:s e
+echo	 - 
+fmt	start	Y-m-d H:i:s e
+echo	 = 
+diff	start	end	P%dDT%hH
+echo	\n
+new	end	2010-11-07 01:30:00 -0400
+new	start	2010-11-06 01:30:00 -0400
+echo	bd7 
+fmt	end	Y-m-d H:i:s e
+echo	 - 
+fmt	start	Y-m-d H:i:s e
+echo	 = 
+diff	start	end	P%dDT%hH
+echo	\n
+new	end	2010-11-07 01:30:00 -0500
+new	start	2010-11-06 01:30:00 -0400
+echo	bd8 
+fmt	end	Y-m-d H:i:s e
+echo	 - 
+fmt	start	Y-m-d H:i:s e
+echo	 = 
+diff	start	end	P%dDT%hH
+echo	\n
+echo	\n
+new	start	2010-11-07 01:59:59 -0400
+iv	PT1S
+echo	ba1 
+fmt	start	Y-m-d H:i:s e
+echo	 + PT1S = 
+add	start
+fmt	start	Y-m-d H:i:s e
+echo	\n
+new	start	2010-11-06 04:30:00 -0400
+iv	P1D
+echo	ba2 
+fmt	start	Y-m-d H:i:s e
+echo	 + P1D = 
+add	start
+fmt	start	Y-m-d H:i:s e
+echo	\n
+new	start	2010-11-06 04:30:00 -0400
+iv	PT24H
+echo	ba3 
+fmt	start	Y-m-d H:i:s e
+echo	 + PT24H = 
+add	start
+fmt	start	Y-m-d H:i:s e
+echo	\n
+new	start	2010-11-06 04:30:00 -0400
+iv	PT23H
+echo	ba4 
+fmt	start	Y-m-d H:i:s e
+echo	 + PT23H = 
+add	start
+fmt	start	Y-m-d H:i:s e
+echo	\n
+new	start	2010-11-06 04:30:00 -0400
+iv	PT22H
+echo	ba5 
+fmt	start	Y-m-d H:i:s e
+echo	 + PT22H = 
+add	start
+fmt	start	Y-m-d H:i:s e
+echo	\n
+new	start	2010-11-06 04:30:00 -0400
+iv	PT21H
+echo	ba6 
+fmt	start	Y-m-d H:i:s e
+echo	 + PT21H = 
+add	start
+fmt	start	Y-m-d H:i:s e
+echo	\n
+new	start	2010-11-06 01:30:00 -0400
+iv	P1D
+echo	ba7 
+fmt	start	Y-m-d H:i:s e
+echo	 + P1D = 
+add	start
+fmt	start	Y-m-d H:i:s e
+echo	\n
+new	start	2010-11-06 01:30:00 -0400
+iv	P1DT1H
+echo	ba8 
+fmt	start	Y-m-d H:i:s e
+echo	 + P1DT1H = 
+add	start
+fmt	start	Y-m-d H:i:s e
+echo	\n
+new	start	2010-11-06 04:30:00 -0400
+iv	PT25H
+echo	ba9 
+fmt	start	Y-m-d H:i:s e
+echo	 + PT25H = 
+add	start
+fmt	start	Y-m-d H:i:s e
+echo	\n
+new	start	2010-11-06 03:30:00 -0400
+iv	P1D
+echo	ba10 
+fmt	start	Y-m-d H:i:s e
+echo	 + P1D = 
+add	start
+fmt	start	Y-m-d H:i:s e
+echo	\n
+new	start	2010-11-06 02:30:00 -0400
+iv	P1D
+echo	ba11 
+fmt	start	Y-m-d H:i:s e
+echo	 + P1D = 
+add	start
+fmt	start	Y-m-d H:i:s e
+echo	\n
+echo	\n
+new	end	2010-11-07 01:00:00 -0500
+iv	PT1S
+echo	bs1 
+fmt	end	Y-m-d H:i:s e
+echo	 - PT1S = 
+sub	end
+fmt	end	Y-m-d H:i:s e
+echo	\n
+new	end	2010-11-07 04:30:00 -0500
+iv	P1D
+echo	bs2 
+fmt	end	Y-m-d H:i:s e
+echo	 - P1D = 
+sub	end
+fmt	end	Y-m-d H:i:s e
+echo	\n
+new	end	2010-11-07 03:30:00 -0500
+iv	PT24H
+echo	bs3 
+fmt	end	Y-m-d H:i:s e
+echo	 - PT24H = 
+sub	end
+fmt	end	Y-m-d H:i:s e
+echo	\n
+new	end	2010-11-07 02:30:00 -0500
+iv	PT23H
+echo	bs4 
+fmt	end	Y-m-d H:i:s e
+echo	 - PT23H = 
+sub	end
+fmt	end	Y-m-d H:i:s e
+echo	\n
+new	end	2010-11-07 01:30:00 -0500
+iv	PT22H
+echo	bs5 
+fmt	end	Y-m-d H:i:s e
+echo	 - PT22H = 
+sub	end
+fmt	end	Y-m-d H:i:s e
+echo	\n
+new	end	2010-11-07 01:30:00 -0400
+iv	PT21H
+echo	bs6 
+fmt	end	Y-m-d H:i:s e
+echo	 - PT21H = 
+sub	end
+fmt	end	Y-m-d H:i:s e
+echo	\n
+new	end	2010-11-07 01:30:00 -0400
+iv	P1D
+echo	bs7 
+fmt	end	Y-m-d H:i:s e
+echo	 - P1D = 
+sub	end
+fmt	end	Y-m-d H:i:s e
+echo	\n
+new	end	2010-11-07 01:30:00 -0500
+iv	P1DT1H
+echo	bs8 
+fmt	end	Y-m-d H:i:s e
+echo	 - P1DT1H = 
+sub	end
+fmt	end	Y-m-d H:i:s e
+echo	\n
+new	end	2010-11-07 03:30:00 -0500
+iv	P1D
+echo	bs9 
+fmt	end	Y-m-d H:i:s e
+echo	 - P1D = 
+sub	end
+fmt	end	Y-m-d H:i:s e
+echo	\n
+new	end	2010-11-07 02:30:00 -0500
+iv	P1D
+echo	bs10 
+fmt	end	Y-m-d H:i:s e
+echo	 - P1D = 
+sub	end
+fmt	end	Y-m-d H:i:s e
+echo	\n
+#expect
+fd1 2010-03-14 03:00:00 -04:00 - 2010-03-14 01:59:59 -05:00 = PT0H0M1S
+fd2 2010-03-14 04:30:00 -04:00 - 2010-03-13 04:30:00 -05:00 = P0DT23H
+fd3 2010-03-14 03:30:00 -04:00 - 2010-03-13 04:30:00 -05:00 = P0DT22H
+fd4 2010-03-14 01:30:00 -05:00 - 2010-03-13 04:30:00 -05:00 = P0DT21H
+fd5 2010-03-14 01:30:00 -05:00 - 2010-03-13 01:30:00 -05:00 = P1DT0H
+fd6 2010-03-14 03:30:00 -04:00 - 2010-03-13 03:30:00 -05:00 = P0DT23H
+fd7 2010-03-14 03:30:00 -04:00 - 2010-03-13 02:30:00 -05:00 = P1DT0H
+
+fa1 2010-03-14 01:59:59 -05:00 + PT1S = 2010-03-14 02:00:00 -05:00
+fa2 2010-03-13 04:30:00 -05:00 + P1D = 2010-03-14 04:30:00 -05:00
+fa3 2010-03-13 04:30:00 -05:00 + PT22H = 2010-03-14 02:30:00 -05:00
+fa4 2010-03-13 04:30:00 -05:00 + PT21H = 2010-03-14 01:30:00 -05:00
+fa5 2010-03-13 01:30:00 -05:00 + P1D = 2010-03-14 01:30:00 -05:00
+fa6 2010-03-13 02:30:00 -05:00 + P1D = 2010-03-14 02:30:00 -05:00
+
+fs1 2010-03-14 03:00:00 -04:00 - PT1S = 2010-03-14 02:59:59 -04:00
+fs2 2010-03-14 04:30:00 -04:00 - P1D = 2010-03-13 04:30:00 -04:00
+fs3 2010-03-14 03:30:00 -04:00 - PT22H = 2010-03-13 05:30:00 -04:00
+fs4 2010-03-14 01:30:00 -05:00 - PT21H = 2010-03-13 04:30:00 -05:00
+fs5 2010-03-14 01:30:00 -05:00 - P1D = 2010-03-13 01:30:00 -05:00
+fs6 2010-03-15 03:30:00 -04:00 - P1D = 2010-03-14 03:30:00 -04:00
+fs7 2010-03-15 02:30:00 -04:00 - P1D = 2010-03-14 02:30:00 -04:00
+
+bd1 2010-11-07 01:00:00 -05:00 - 2010-11-07 01:59:59 -04:00 = PT0H0M1S
+bd2 2010-11-07 04:30:00 -05:00 - 2010-11-06 04:30:00 -04:00 = P1DT1H
+bd3 2010-11-07 03:30:00 -05:00 - 2010-11-06 04:30:00 -04:00 = P1DT0H
+bd4 2010-11-07 02:30:00 -05:00 - 2010-11-06 04:30:00 -04:00 = P0DT23H
+bd5 2010-11-07 01:30:00 -05:00 - 2010-11-06 04:30:00 -04:00 = P0DT22H
+bd6 2010-11-07 01:30:00 -04:00 - 2010-11-06 04:30:00 -04:00 = P0DT21H
+bd7 2010-11-07 01:30:00 -04:00 - 2010-11-06 01:30:00 -04:00 = P1DT0H
+bd8 2010-11-07 01:30:00 -05:00 - 2010-11-06 01:30:00 -04:00 = P1DT1H
+
+ba1 2010-11-07 01:59:59 -04:00 + PT1S = 2010-11-07 02:00:00 -04:00
+ba2 2010-11-06 04:30:00 -04:00 + P1D = 2010-11-07 04:30:00 -04:00
+ba3 2010-11-06 04:30:00 -04:00 + PT24H = 2010-11-07 04:30:00 -04:00
+ba4 2010-11-06 04:30:00 -04:00 + PT23H = 2010-11-07 03:30:00 -04:00
+ba5 2010-11-06 04:30:00 -04:00 + PT22H = 2010-11-07 02:30:00 -04:00
+ba6 2010-11-06 04:30:00 -04:00 + PT21H = 2010-11-07 01:30:00 -04:00
+ba7 2010-11-06 01:30:00 -04:00 + P1D = 2010-11-07 01:30:00 -04:00
+ba8 2010-11-06 01:30:00 -04:00 + P1DT1H = 2010-11-07 02:30:00 -04:00
+ba9 2010-11-06 04:30:00 -04:00 + PT25H = 2010-11-07 05:30:00 -04:00
+ba10 2010-11-06 03:30:00 -04:00 + P1D = 2010-11-07 03:30:00 -04:00
+ba11 2010-11-06 02:30:00 -04:00 + P1D = 2010-11-07 02:30:00 -04:00
+
+bs1 2010-11-07 01:00:00 -05:00 - PT1S = 2010-11-07 00:59:59 -05:00
+bs2 2010-11-07 04:30:00 -05:00 - P1D = 2010-11-06 04:30:00 -05:00
+bs3 2010-11-07 03:30:00 -05:00 - PT24H = 2010-11-06 03:30:00 -05:00
+bs4 2010-11-07 02:30:00 -05:00 - PT23H = 2010-11-06 03:30:00 -05:00
+bs5 2010-11-07 01:30:00 -05:00 - PT22H = 2010-11-06 03:30:00 -05:00
+bs6 2010-11-07 01:30:00 -04:00 - PT21H = 2010-11-06 04:30:00 -04:00
+bs7 2010-11-07 01:30:00 -04:00 - P1D = 2010-11-06 01:30:00 -04:00
+bs8 2010-11-07 01:30:00 -05:00 - P1DT1H = 2010-11-06 00:30:00 -05:00
+bs9 2010-11-07 03:30:00 -05:00 - P1D = 2010-11-06 03:30:00 -05:00
+bs10 2010-11-07 02:30:00 -05:00 - P1D = 2010-11-06 02:30:00 -05:00
+#end
+#case	rfc-datetime_and_daylight_saving_time-type2	SCRIPT
+tz	America/New_York
+new	end	2010-03-14 03:00:00 EDT
+new	start	2010-03-14 01:59:59 EST
+echo	fd1 
+fmt	end	Y-m-d H:i:s T e
+echo	 - 
+fmt	start	Y-m-d H:i:s T e
+echo	 = 
+diff	start	end	PT%hH%iM%sS
+echo	\n
+new	end	2010-03-14 04:30:00 EDT
+new	start	2010-03-13 04:30:00 EST
+echo	fd2 
+fmt	end	Y-m-d H:i:s T e
+echo	 - 
+fmt	start	Y-m-d H:i:s T e
+echo	 = 
+diff	start	end	P%dDT%hH
+echo	\n
+new	end	2010-03-14 03:30:00 EDT
+new	start	2010-03-13 04:30:00 EST
+echo	fd3 
+fmt	end	Y-m-d H:i:s T e
+echo	 - 
+fmt	start	Y-m-d H:i:s T e
+echo	 = 
+diff	start	end	P%dDT%hH
+echo	\n
+new	end	2010-03-14 01:30:00 EST
+new	start	2010-03-13 04:30:00 EST
+echo	fd4 
+fmt	end	Y-m-d H:i:s T e
+echo	 - 
+fmt	start	Y-m-d H:i:s T e
+echo	 = 
+diff	start	end	P%dDT%hH
+echo	\n
+new	end	2010-03-14 01:30:00 EST
+new	start	2010-03-13 01:30:00 EST
+echo	fd5 
+fmt	end	Y-m-d H:i:s T e
+echo	 - 
+fmt	start	Y-m-d H:i:s T e
+echo	 = 
+diff	start	end	P%dDT%hH
+echo	\n
+new	end	2010-03-14 03:30:00 EDT
+new	start	2010-03-13 03:30:00 EST
+echo	fd6 
+fmt	end	Y-m-d H:i:s T e
+echo	 - 
+fmt	start	Y-m-d H:i:s T e
+echo	 = 
+diff	start	end	P%dDT%hH
+echo	\n
+new	end	2010-03-14 03:30:00 EDT
+new	start	2010-03-13 02:30:00 EST
+echo	fd7 
+fmt	end	Y-m-d H:i:s T e
+echo	 - 
+fmt	start	Y-m-d H:i:s T e
+echo	 = 
+diff	start	end	P%dDT%hH
+echo	\n
+echo	\n
+new	start	2010-03-14 01:59:59 EST
+iv	PT1S
+echo	fa1 
+fmt	start	Y-m-d H:i:s T e
+echo	 + PT1S = 
+add	start
+fmt	start	Y-m-d H:i:s T e
+echo	\n
+new	start	2010-03-13 04:30:00 EST
+iv	P1D
+echo	fa2 
+fmt	start	Y-m-d H:i:s T e
+echo	 + P1D = 
+add	start
+fmt	start	Y-m-d H:i:s T e
+echo	\n
+new	start	2010-03-13 04:30:00 EST
+iv	PT22H
+echo	fa3 
+fmt	start	Y-m-d H:i:s T e
+echo	 + PT22H = 
+add	start
+fmt	start	Y-m-d H:i:s T e
+echo	\n
+new	start	2010-03-13 04:30:00 EST
+iv	PT21H
+echo	fa4 
+fmt	start	Y-m-d H:i:s T e
+echo	 + PT21H = 
+add	start
+fmt	start	Y-m-d H:i:s T e
+echo	\n
+new	start	2010-03-13 01:30:00 EST
+iv	P1D
+echo	fa5 
+fmt	start	Y-m-d H:i:s T e
+echo	 + P1D = 
+add	start
+fmt	start	Y-m-d H:i:s T e
+echo	\n
+new	start	2010-03-13 02:30:00 EST
+iv	P1D
+echo	fa6 
+fmt	start	Y-m-d H:i:s T e
+echo	 + P1D = 
+add	start
+fmt	start	Y-m-d H:i:s T e
+echo	\n
+echo	\n
+new	end	2010-03-14 03:00:00 EDT
+iv	PT1S
+echo	fs1 
+fmt	end	Y-m-d H:i:s T e
+echo	 - PT1S = 
+sub	end
+fmt	end	Y-m-d H:i:s T e
+echo	\n
+new	end	2010-03-14 04:30:00 EDT
+iv	P1D
+echo	fs2 
+fmt	end	Y-m-d H:i:s T e
+echo	 - P1D = 
+sub	end
+fmt	end	Y-m-d H:i:s T e
+echo	\n
+new	end	2010-03-14 03:30:00 EDT
+iv	PT22H
+echo	fs3 
+fmt	end	Y-m-d H:i:s T e
+echo	 - PT22H = 
+sub	end
+fmt	end	Y-m-d H:i:s T e
+echo	\n
+new	end	2010-03-14 01:30:00 EST
+iv	PT21H
+echo	fs4 
+fmt	end	Y-m-d H:i:s T e
+echo	 - PT21H = 
+sub	end
+fmt	end	Y-m-d H:i:s T e
+echo	\n
+new	end	2010-03-14 01:30:00 EST
+iv	P1D
+echo	fs5 
+fmt	end	Y-m-d H:i:s T e
+echo	 - P1D = 
+sub	end
+fmt	end	Y-m-d H:i:s T e
+echo	\n
+new	end	2010-03-15 03:30:00 EDT
+iv	P1D
+echo	fs6 
+fmt	end	Y-m-d H:i:s T e
+echo	 - P1D = 
+sub	end
+fmt	end	Y-m-d H:i:s T e
+echo	\n
+new	end	2010-03-15 02:30:00 EDT
+iv	P1D
+echo	fs7 
+fmt	end	Y-m-d H:i:s T e
+echo	 - P1D = 
+sub	end
+fmt	end	Y-m-d H:i:s T e
+echo	\n
+echo	\n
+new	end	2010-11-07 01:00:00 EST
+new	start	2010-11-07 01:59:59 EDT
+echo	bd1 
+fmt	end	Y-m-d H:i:s T e
+echo	 - 
+fmt	start	Y-m-d H:i:s T e
+echo	 = 
+diff	start	end	PT%hH%iM%sS
+echo	\n
+new	end	2010-11-07 04:30:00 EST
+new	start	2010-11-06 04:30:00 EDT
+echo	bd2 
+fmt	end	Y-m-d H:i:s T e
+echo	 - 
+fmt	start	Y-m-d H:i:s T e
+echo	 = 
+diff	start	end	P%dDT%hH
+echo	\n
+new	end	2010-11-07 03:30:00 EST
+new	start	2010-11-06 04:30:00 EDT
+echo	bd3 
+fmt	end	Y-m-d H:i:s T e
+echo	 - 
+fmt	start	Y-m-d H:i:s T e
+echo	 = 
+diff	start	end	P%dDT%hH
+echo	\n
+new	end	2010-11-07 02:30:00 EST
+new	start	2010-11-06 04:30:00 EDT
+echo	bd4 
+fmt	end	Y-m-d H:i:s T e
+echo	 - 
+fmt	start	Y-m-d H:i:s T e
+echo	 = 
+diff	start	end	P%dDT%hH
+echo	\n
+new	end	2010-11-07 01:30:00 EST
+new	start	2010-11-06 04:30:00 EDT
+echo	bd5 
+fmt	end	Y-m-d H:i:s T e
+echo	 - 
+fmt	start	Y-m-d H:i:s T e
+echo	 = 
+diff	start	end	P%dDT%hH
+echo	\n
+new	end	2010-11-07 01:30:00 EDT
+new	start	2010-11-06 04:30:00 EDT
+echo	bd6 
+fmt	end	Y-m-d H:i:s T e
+echo	 - 
+fmt	start	Y-m-d H:i:s T e
+echo	 = 
+diff	start	end	P%dDT%hH
+echo	\n
+new	end	2010-11-07 01:30:00 EDT
+new	start	2010-11-06 01:30:00 EDT
+echo	bd7 
+fmt	end	Y-m-d H:i:s T e
+echo	 - 
+fmt	start	Y-m-d H:i:s T e
+echo	 = 
+diff	start	end	P%dDT%hH
+echo	\n
+new	end	2010-11-07 01:30:00 EST
+new	start	2010-11-06 01:30:00 EDT
+echo	bd8 
+fmt	end	Y-m-d H:i:s T e
+echo	 - 
+fmt	start	Y-m-d H:i:s T e
+echo	 = 
+diff	start	end	P%dDT%hH
+echo	\n
+echo	\n
+new	start	2010-11-07 01:59:59 EDT
+iv	PT1S
+echo	ba1 
+fmt	start	Y-m-d H:i:s T e
+echo	 + PT1S = 
+add	start
+fmt	start	Y-m-d H:i:s T e
+echo	\n
+new	start	2010-11-06 04:30:00 EDT
+iv	P1D
+echo	ba2 
+fmt	start	Y-m-d H:i:s T e
+echo	 + P1D = 
+add	start
+fmt	start	Y-m-d H:i:s T e
+echo	\n
+new	start	2010-11-06 04:30:00 EDT
+iv	PT24H
+echo	ba3 
+fmt	start	Y-m-d H:i:s T e
+echo	 + PT24H = 
+add	start
+fmt	start	Y-m-d H:i:s T e
+echo	\n
+new	start	2010-11-06 04:30:00 EDT
+iv	PT23H
+echo	ba4 
+fmt	start	Y-m-d H:i:s T e
+echo	 + PT23H = 
+add	start
+fmt	start	Y-m-d H:i:s T e
+echo	\n
+new	start	2010-11-06 04:30:00 EDT
+iv	PT22H
+echo	ba5 
+fmt	start	Y-m-d H:i:s T e
+echo	 + PT22H = 
+add	start
+fmt	start	Y-m-d H:i:s T e
+echo	\n
+new	start	2010-11-06 04:30:00 EDT
+iv	PT21H
+echo	ba6 
+fmt	start	Y-m-d H:i:s T e
+echo	 + PT21H = 
+add	start
+fmt	start	Y-m-d H:i:s T e
+echo	\n
+new	start	2010-11-06 01:30:00 EDT
+iv	P1D
+echo	ba7 
+fmt	start	Y-m-d H:i:s T e
+echo	 + P1D = 
+add	start
+fmt	start	Y-m-d H:i:s T e
+echo	\n
+new	start	2010-11-06 01:30:00 EDT
+iv	P1DT1H
+echo	ba8 
+fmt	start	Y-m-d H:i:s T e
+echo	 + P1DT1H = 
+add	start
+fmt	start	Y-m-d H:i:s T e
+echo	\n
+new	start	2010-11-06 04:30:00 EDT
+iv	PT25H
+echo	ba9 
+fmt	start	Y-m-d H:i:s T e
+echo	 + PT25H = 
+add	start
+fmt	start	Y-m-d H:i:s T e
+echo	\n
+new	start	2010-11-06 03:30:00 EDT
+iv	P1D
+echo	ba10 
+fmt	start	Y-m-d H:i:s T e
+echo	 + P1D = 
+add	start
+fmt	start	Y-m-d H:i:s T e
+echo	\n
+new	start	2010-11-06 02:30:00 EDT
+iv	P1D
+echo	ba11 
+fmt	start	Y-m-d H:i:s T e
+echo	 + P1D = 
+add	start
+fmt	start	Y-m-d H:i:s T e
+echo	\n
+echo	\n
+new	end	2010-11-07 01:00:00 EST
+iv	PT1S
+echo	bs1 
+fmt	end	Y-m-d H:i:s T e
+echo	 - PT1S = 
+sub	end
+fmt	end	Y-m-d H:i:s T e
+echo	\n
+new	end	2010-11-07 04:30:00 EST
+iv	P1D
+echo	bs2 
+fmt	end	Y-m-d H:i:s T e
+echo	 - P1D = 
+sub	end
+fmt	end	Y-m-d H:i:s T e
+echo	\n
+new	end	2010-11-07 03:30:00 EST
+iv	PT24H
+echo	bs3 
+fmt	end	Y-m-d H:i:s T e
+echo	 - PT24H = 
+sub	end
+fmt	end	Y-m-d H:i:s T e
+echo	\n
+new	end	2010-11-07 02:30:00 EST
+iv	PT23H
+echo	bs4 
+fmt	end	Y-m-d H:i:s T e
+echo	 - PT23H = 
+sub	end
+fmt	end	Y-m-d H:i:s T e
+echo	\n
+new	end	2010-11-07 01:30:00 EST
+iv	PT22H
+echo	bs5 
+fmt	end	Y-m-d H:i:s T e
+echo	 - PT22H = 
+sub	end
+fmt	end	Y-m-d H:i:s T e
+echo	\n
+new	end	2010-11-07 01:30:00 EDT
+iv	PT21H
+echo	bs6 
+fmt	end	Y-m-d H:i:s T e
+echo	 - PT21H = 
+sub	end
+fmt	end	Y-m-d H:i:s T e
+echo	\n
+new	end	2010-11-07 01:30:00 EDT
+iv	P1D
+echo	bs7 
+fmt	end	Y-m-d H:i:s T e
+echo	 - P1D = 
+sub	end
+fmt	end	Y-m-d H:i:s T e
+echo	\n
+new	end	2010-11-07 01:30:00 EST
+iv	P1DT1H
+echo	bs8 
+fmt	end	Y-m-d H:i:s T e
+echo	 - P1DT1H = 
+sub	end
+fmt	end	Y-m-d H:i:s T e
+echo	\n
+new	end	2010-11-07 03:30:00 EST
+iv	P1D
+echo	bs9 
+fmt	end	Y-m-d H:i:s T e
+echo	 - P1D = 
+sub	end
+fmt	end	Y-m-d H:i:s T e
+echo	\n
+new	end	2010-11-07 02:30:00 EST
+iv	P1D
+echo	bs10 
+fmt	end	Y-m-d H:i:s T e
+echo	 - P1D = 
+sub	end
+fmt	end	Y-m-d H:i:s T e
+echo	\n
+#expect
+fd1 2010-03-14 03:00:00 EDT EDT - 2010-03-14 01:59:59 EST EST = PT0H0M1S
+fd2 2010-03-14 04:30:00 EDT EDT - 2010-03-13 04:30:00 EST EST = P0DT23H
+fd3 2010-03-14 03:30:00 EDT EDT - 2010-03-13 04:30:00 EST EST = P0DT22H
+fd4 2010-03-14 01:30:00 EST EST - 2010-03-13 04:30:00 EST EST = P0DT21H
+fd5 2010-03-14 01:30:00 EST EST - 2010-03-13 01:30:00 EST EST = P1DT0H
+fd6 2010-03-14 03:30:00 EDT EDT - 2010-03-13 03:30:00 EST EST = P0DT23H
+fd7 2010-03-14 03:30:00 EDT EDT - 2010-03-13 02:30:00 EST EST = P1DT0H
+
+fa1 2010-03-14 01:59:59 EST EST + PT1S = 2010-03-14 02:00:00 EST EST
+fa2 2010-03-13 04:30:00 EST EST + P1D = 2010-03-14 04:30:00 EST EST
+fa3 2010-03-13 04:30:00 EST EST + PT22H = 2010-03-14 02:30:00 EST EST
+fa4 2010-03-13 04:30:00 EST EST + PT21H = 2010-03-14 01:30:00 EST EST
+fa5 2010-03-13 01:30:00 EST EST + P1D = 2010-03-14 01:30:00 EST EST
+fa6 2010-03-13 02:30:00 EST EST + P1D = 2010-03-14 02:30:00 EST EST
+
+fs1 2010-03-14 03:00:00 EDT EDT - PT1S = 2010-03-14 02:59:59 EDT EDT
+fs2 2010-03-14 04:30:00 EDT EDT - P1D = 2010-03-13 04:30:00 EDT EDT
+fs3 2010-03-14 03:30:00 EDT EDT - PT22H = 2010-03-13 05:30:00 EDT EDT
+fs4 2010-03-14 01:30:00 EST EST - PT21H = 2010-03-13 04:30:00 EST EST
+fs5 2010-03-14 01:30:00 EST EST - P1D = 2010-03-13 01:30:00 EST EST
+fs6 2010-03-15 03:30:00 EDT EDT - P1D = 2010-03-14 03:30:00 EDT EDT
+fs7 2010-03-15 02:30:00 EDT EDT - P1D = 2010-03-14 02:30:00 EDT EDT
+
+bd1 2010-11-07 01:00:00 EST EST - 2010-11-07 01:59:59 EDT EDT = PT0H0M1S
+bd2 2010-11-07 04:30:00 EST EST - 2010-11-06 04:30:00 EDT EDT = P1DT1H
+bd3 2010-11-07 03:30:00 EST EST - 2010-11-06 04:30:00 EDT EDT = P1DT0H
+bd4 2010-11-07 02:30:00 EST EST - 2010-11-06 04:30:00 EDT EDT = P0DT23H
+bd5 2010-11-07 01:30:00 EST EST - 2010-11-06 04:30:00 EDT EDT = P0DT22H
+bd6 2010-11-07 01:30:00 EDT EDT - 2010-11-06 04:30:00 EDT EDT = P0DT21H
+bd7 2010-11-07 01:30:00 EDT EDT - 2010-11-06 01:30:00 EDT EDT = P1DT0H
+bd8 2010-11-07 01:30:00 EST EST - 2010-11-06 01:30:00 EDT EDT = P1DT1H
+
+ba1 2010-11-07 01:59:59 EDT EDT + PT1S = 2010-11-07 02:00:00 EDT EDT
+ba2 2010-11-06 04:30:00 EDT EDT + P1D = 2010-11-07 04:30:00 EDT EDT
+ba3 2010-11-06 04:30:00 EDT EDT + PT24H = 2010-11-07 04:30:00 EDT EDT
+ba4 2010-11-06 04:30:00 EDT EDT + PT23H = 2010-11-07 03:30:00 EDT EDT
+ba5 2010-11-06 04:30:00 EDT EDT + PT22H = 2010-11-07 02:30:00 EDT EDT
+ba6 2010-11-06 04:30:00 EDT EDT + PT21H = 2010-11-07 01:30:00 EDT EDT
+ba7 2010-11-06 01:30:00 EDT EDT + P1D = 2010-11-07 01:30:00 EDT EDT
+ba8 2010-11-06 01:30:00 EDT EDT + P1DT1H = 2010-11-07 02:30:00 EDT EDT
+ba9 2010-11-06 04:30:00 EDT EDT + PT25H = 2010-11-07 05:30:00 EDT EDT
+ba10 2010-11-06 03:30:00 EDT EDT + P1D = 2010-11-07 03:30:00 EDT EDT
+ba11 2010-11-06 02:30:00 EDT EDT + P1D = 2010-11-07 02:30:00 EDT EDT
+
+bs1 2010-11-07 01:00:00 EST EST - PT1S = 2010-11-07 00:59:59 EST EST
+bs2 2010-11-07 04:30:00 EST EST - P1D = 2010-11-06 04:30:00 EST EST
+bs3 2010-11-07 03:30:00 EST EST - PT24H = 2010-11-06 03:30:00 EST EST
+bs4 2010-11-07 02:30:00 EST EST - PT23H = 2010-11-06 03:30:00 EST EST
+bs5 2010-11-07 01:30:00 EST EST - PT22H = 2010-11-06 03:30:00 EST EST
+bs6 2010-11-07 01:30:00 EDT EDT - PT21H = 2010-11-06 04:30:00 EDT EDT
+bs7 2010-11-07 01:30:00 EDT EDT - P1D = 2010-11-06 01:30:00 EDT EDT
+bs8 2010-11-07 01:30:00 EST EST - P1DT1H = 2010-11-06 00:30:00 EST EST
+bs9 2010-11-07 03:30:00 EST EST - P1D = 2010-11-06 03:30:00 EST EST
+bs10 2010-11-07 02:30:00 EST EST - P1D = 2010-11-06 02:30:00 EST EST
+#end
+#case	rfc-datetime_and_daylight_saving_time-type3-ba	SCRIPT
+tz	America/New_York
+new	start	2010-11-07 01:59:59
+iv	PT1S
+echo	ba1 
+fmt	start	Y-m-d H:i:s T e
+echo	 + PT1S = 
+add	start
+fmt	start	Y-m-d H:i:s T e
+echo	\n
+new	start	2010-11-06 04:30:00
+iv	P1D
+echo	ba2 
+fmt	start	Y-m-d H:i:s T e
+echo	 + P1D = 
+add	start
+fmt	start	Y-m-d H:i:s T e
+echo	\n
+new	start	2010-11-06 04:30:00
+iv	PT24H
+echo	ba3 
+fmt	start	Y-m-d H:i:s T e
+echo	 + PT24H = 
+add	start
+fmt	start	Y-m-d H:i:s T e
+echo	\n
+new	start	2010-11-06 04:30:00
+iv	PT23H
+echo	ba4 
+fmt	start	Y-m-d H:i:s T e
+echo	 + PT23H = 
+add	start
+fmt	start	Y-m-d H:i:s T e
+echo	\n
+new	start	2010-11-06 04:30:00
+iv	PT22H
+echo	ba5 
+fmt	start	Y-m-d H:i:s T e
+echo	 + PT22H = 
+add	start
+fmt	start	Y-m-d H:i:s T e
+echo	\n
+new	start	2010-11-06 04:30:00
+iv	PT21H
+echo	ba6 
+fmt	start	Y-m-d H:i:s T e
+echo	 + PT21H = 
+add	start
+fmt	start	Y-m-d H:i:s T e
+echo	\n
+new	start	2010-11-06 01:30:00
+iv	P1D
+echo	ba7 
+fmt	start	Y-m-d H:i:s T e
+echo	 + P1D = 
+add	start
+fmt	start	Y-m-d H:i:s T e
+echo	\n
+new	start	2010-11-06 01:30:00
+iv	P1DT1H
+echo	ba8 
+fmt	start	Y-m-d H:i:s T e
+echo	 + P1DT1H = 
+add	start
+fmt	start	Y-m-d H:i:s T e
+echo	\n
+new	start	2010-11-06 04:30:00
+iv	PT25H
+echo	ba9 
+fmt	start	Y-m-d H:i:s T e
+echo	 + PT25H = 
+add	start
+fmt	start	Y-m-d H:i:s T e
+echo	\n
+new	start	2010-11-06 03:30:00
+iv	P1D
+echo	ba10 
+fmt	start	Y-m-d H:i:s T e
+echo	 + P1D = 
+add	start
+fmt	start	Y-m-d H:i:s T e
+echo	\n
+new	start	2010-11-06 02:30:00
+iv	P1D
+echo	ba11 
+fmt	start	Y-m-d H:i:s T e
+echo	 + P1D = 
+add	start
+fmt	start	Y-m-d H:i:s T e
+echo	\n
+echo	\n
+#expect
+ba1 2010-11-07 01:59:59 EDT America/New_York + PT1S = 2010-11-07 01:00:00 EST America/New_York
+ba2 2010-11-06 04:30:00 EDT America/New_York + P1D = 2010-11-07 04:30:00 EST America/New_York
+ba3 2010-11-06 04:30:00 EDT America/New_York + PT24H = 2010-11-07 03:30:00 EST America/New_York
+ba4 2010-11-06 04:30:00 EDT America/New_York + PT23H = 2010-11-07 02:30:00 EST America/New_York
+ba5 2010-11-06 04:30:00 EDT America/New_York + PT22H = 2010-11-07 01:30:00 EST America/New_York
+ba6 2010-11-06 04:30:00 EDT America/New_York + PT21H = 2010-11-07 01:30:00 EDT America/New_York
+ba7 2010-11-06 01:30:00 EDT America/New_York + P1D = 2010-11-07 01:30:00 EDT America/New_York
+ba8 2010-11-06 01:30:00 EDT America/New_York + P1DT1H = 2010-11-07 01:30:00 EST America/New_York
+ba9 2010-11-06 04:30:00 EDT America/New_York + PT25H = 2010-11-07 04:30:00 EST America/New_York
+ba10 2010-11-06 03:30:00 EDT America/New_York + P1D = 2010-11-07 03:30:00 EST America/New_York
+ba11 2010-11-06 02:30:00 EDT America/New_York + P1D = 2010-11-07 02:30:00 EST America/New_York
+#end
+#case	rfc-datetime_and_daylight_saving_time-type3-bd1	SCRIPT
+tz	America/New_York
+new	end	2010-11-07 05:30:00
+new	start	2010-11-06 04:30:00
+echo	bd1 
+fmt	end	Y-m-d H:i:s T e
+echo	 - 
+fmt	start	Y-m-d H:i:s T e
+echo	 = 
+diff	start	end	P%dDT%hH
+echo	\n
+new	end	2010-11-07 04:30:00
+new	start	2010-11-06 04:30:00
+echo	bd2 
+fmt	end	Y-m-d H:i:s T e
+echo	 - 
+fmt	start	Y-m-d H:i:s T e
+echo	 = 
+diff	start	end	P%dDT%hH
+echo	\n
+new	end	2010-11-07 03:30:00
+new	start	2010-11-06 04:30:00
+echo	bd3 
+fmt	end	Y-m-d H:i:s T e
+echo	 - 
+fmt	start	Y-m-d H:i:s T e
+echo	 = 
+diff	start	end	P%dDT%hH
+echo	\n
+new	end	2010-11-07 02:30:00
+new	start	2010-11-06 04:30:00
+echo	bd4 
+fmt	end	Y-m-d H:i:s T e
+echo	 - 
+fmt	start	Y-m-d H:i:s T e
+echo	 = 
+diff	start	end	P%dDT%hH
+echo	\n
+new	end	2010-11-07 01:30:00
+new	start	2010-11-06 01:30:00
+echo	bd7 
+fmt	end	Y-m-d H:i:s T e
+echo	 - 
+fmt	start	Y-m-d H:i:s T e
+echo	 = 
+diff	start	end	P%dDT%hH
+echo	\n
+echo	\n
+#expect
+bd1 2010-11-07 05:30:00 EST America/New_York - 2010-11-06 04:30:00 EDT America/New_York = P1DT1H
+bd2 2010-11-07 04:30:00 EST America/New_York - 2010-11-06 04:30:00 EDT America/New_York = P1DT0H
+bd3 2010-11-07 03:30:00 EST America/New_York - 2010-11-06 04:30:00 EDT America/New_York = P0DT24H
+bd4 2010-11-07 02:30:00 EST America/New_York - 2010-11-06 04:30:00 EDT America/New_York = P0DT23H
+bd7 2010-11-07 01:30:00 EDT America/New_York - 2010-11-06 01:30:00 EDT America/New_York = P0DT24H
+#end
+#case	rfc-datetime_and_daylight_saving_time-type3-bd2	SCRIPT
+tz	America/New_York
+new	end	2010-11-07 01:00:00 EST
+settz	end	America/New_York
+new	start	2010-11-07 01:59:59
+echo	bd0 
+fmt	end	Y-m-d H:i:s T e
+echo	 - 
+fmt	start	Y-m-d H:i:s T e
+echo	 = 
+diff	start	end	P%dDT%hH%iM%sS
+echo	\n
+new	end	2010-11-07 01:30:00 EST
+settz	end	America/New_York
+new	start	2010-11-06 04:30:00
+echo	bd5 
+fmt	end	Y-m-d H:i:s T e
+echo	 - 
+fmt	start	Y-m-d H:i:s T e
+echo	 = 
+diff	start	end	P%dDT%hH
+echo	\n
+new	end	2010-11-07 01:30:00 EDT
+settz	end	America/New_York
+new	start	2010-11-06 04:30:00
+echo	bd6 
+fmt	end	Y-m-d H:i:s T e
+echo	 - 
+fmt	start	Y-m-d H:i:s T e
+echo	 = 
+diff	start	end	P%dDT%hH
+echo	\n
+new	end	2010-11-07 01:00:00 EST
+settz	end	America/New_York
+new	start	2010-11-06 01:00:00
+echo	bd8a 
+fmt	end	Y-m-d H:i:s T e
+echo	 - 
+fmt	start	Y-m-d H:i:s T e
+echo	 = 
+diff	start	end	P%dDT%hH
+echo	\n
+new	end	2010-11-07 01:00:00 EDT
+settz	end	America/New_York
+new	start	2010-11-06 01:00:00
+echo	bd8b 
+fmt	end	Y-m-d H:i:s T e
+echo	 - 
+fmt	start	Y-m-d H:i:s T e
+echo	 = 
+diff	start	end	P%dDT%hH
+echo	\n
+echo	\n
+#expect
+bd0 2010-11-07 01:00:00 EST America/New_York - 2010-11-07 01:59:59 EDT America/New_York = P0DT0H0M1S
+bd5 2010-11-07 01:30:00 EST America/New_York - 2010-11-06 04:30:00 EDT America/New_York = P0DT22H
+bd6 2010-11-07 01:30:00 EDT America/New_York - 2010-11-06 04:30:00 EDT America/New_York = P0DT21H
+bd8a 2010-11-07 01:00:00 EST America/New_York - 2010-11-06 01:00:00 EDT America/New_York = P1DT0H
+bd8b 2010-11-07 01:00:00 EDT America/New_York - 2010-11-06 01:00:00 EDT America/New_York = P0DT24H
+#end
+#case	rfc-datetime_and_daylight_saving_time-type3-bs	SCRIPT
+tz	America/New_York
+new	end	2010-11-07 01:00:00 EST
+settz	end	America/New_York
+iv	PT1S
+echo	bs1 
+fmt	end	Y-m-d H:i:s T e
+echo	 - PT1S = 
+sub	end
+fmt	end	Y-m-d H:i:s T e
+echo	\n
+new	end	2010-11-07 04:30:00
+iv	P1D
+echo	bs2 
+fmt	end	Y-m-d H:i:s T e
+echo	 - P1D = 
+sub	end
+fmt	end	Y-m-d H:i:s T e
+echo	\n
+new	end	2010-11-07 03:30:00
+iv	PT24H
+echo	bs3 
+fmt	end	Y-m-d H:i:s T e
+echo	 - PT24H = 
+sub	end
+fmt	end	Y-m-d H:i:s T e
+echo	\n
+new	end	2010-11-07 02:30:00
+iv	PT23H
+echo	bs4 
+fmt	end	Y-m-d H:i:s T e
+echo	 - PT23H = 
+sub	end
+fmt	end	Y-m-d H:i:s T e
+echo	\n
+new	end	2010-11-07 01:30:00 EST
+settz	end	America/New_York
+iv	PT22H
+echo	bs5 
+fmt	end	Y-m-d H:i:s T e
+echo	 - PT22H = 
+sub	end
+fmt	end	Y-m-d H:i:s T e
+echo	\n
+new	end	2010-11-07 01:30:00 EDT
+settz	end	America/New_York
+iv	PT21H
+echo	bs6 
+fmt	end	Y-m-d H:i:s T e
+echo	 - PT21H = 
+sub	end
+fmt	end	Y-m-d H:i:s T e
+echo	\n
+new	end	2010-11-07 01:30:00
+iv	P1D
+echo	bs7 
+fmt	end	Y-m-d H:i:s T e
+echo	 - P1D = 
+sub	end
+fmt	end	Y-m-d H:i:s T e
+echo	\n
+new	end	2010-11-07 01:30:00 EST
+settz	end	America/New_York
+iv	P1DT1H
+echo	bs8 
+fmt	end	Y-m-d H:i:s T e
+echo	 - P1DT1H = 
+sub	end
+fmt	end	Y-m-d H:i:s T e
+echo	\n
+new	end	2010-11-07 03:30:00
+iv	P1D
+echo	bs9 
+fmt	end	Y-m-d H:i:s T e
+echo	 - P1D = 
+sub	end
+fmt	end	Y-m-d H:i:s T e
+echo	\n
+new	end	2010-11-07 02:30:00
+iv	P1D
+echo	bs10 
+fmt	end	Y-m-d H:i:s T e
+echo	 - P1D = 
+sub	end
+fmt	end	Y-m-d H:i:s T e
+echo	\n
+#expect
+bs1 2010-11-07 01:00:00 EST America/New_York - PT1S = 2010-11-07 01:59:59 EDT America/New_York
+bs2 2010-11-07 04:30:00 EST America/New_York - P1D = 2010-11-06 04:30:00 EDT America/New_York
+bs3 2010-11-07 03:30:00 EST America/New_York - PT24H = 2010-11-06 04:30:00 EDT America/New_York
+bs4 2010-11-07 02:30:00 EST America/New_York - PT23H = 2010-11-06 04:30:00 EDT America/New_York
+bs5 2010-11-07 01:30:00 EST America/New_York - PT22H = 2010-11-06 04:30:00 EDT America/New_York
+bs6 2010-11-07 01:30:00 EDT America/New_York - PT21H = 2010-11-06 04:30:00 EDT America/New_York
+bs7 2010-11-07 01:30:00 EDT America/New_York - P1D = 2010-11-06 01:30:00 EDT America/New_York
+bs8 2010-11-07 01:30:00 EST America/New_York - P1DT1H = 2010-11-06 00:30:00 EDT America/New_York
+bs9 2010-11-07 03:30:00 EST America/New_York - P1D = 2010-11-06 03:30:00 EDT America/New_York
+bs10 2010-11-07 02:30:00 EST America/New_York - P1D = 2010-11-06 02:30:00 EDT America/New_York
+#end
+#case	rfc-datetime_and_daylight_saving_time-type3-fa	SCRIPT
+tz	America/New_York
+new	start	2010-03-14 01:59:59
+iv	PT1S
+echo	fa1 
+fmt	start	Y-m-d H:i:s T e
+echo	 + PT1S = 
+add	start
+fmt	start	Y-m-d H:i:s T e
+echo	\n
+new	start	2010-03-13 04:30:00
+iv	P1D
+echo	fa2 
+fmt	start	Y-m-d H:i:s T e
+echo	 + P1D = 
+add	start
+fmt	start	Y-m-d H:i:s T e
+echo	\n
+new	start	2010-03-13 04:30:00
+iv	PT23H
+echo	fa2.5 
+fmt	start	Y-m-d H:i:s T e
+echo	 + PT23H = 
+add	start
+fmt	start	Y-m-d H:i:s T e
+echo	\n
+new	start	2010-03-13 04:30:00
+iv	PT22H
+echo	fa3 
+fmt	start	Y-m-d H:i:s T e
+echo	 + PT22H = 
+add	start
+fmt	start	Y-m-d H:i:s T e
+echo	\n
+new	start	2010-03-13 04:30:00
+iv	PT21H
+echo	fa4 
+fmt	start	Y-m-d H:i:s T e
+echo	 + PT21H = 
+add	start
+fmt	start	Y-m-d H:i:s T e
+echo	\n
+new	start	2010-03-13 01:30:00
+iv	P1D
+echo	fa5 
+fmt	start	Y-m-d H:i:s T e
+echo	 + P1D = 
+add	start
+fmt	start	Y-m-d H:i:s T e
+echo	\n
+new	start	2010-03-13 02:30:00
+iv	P1D
+echo	fa6 
+fmt	start	Y-m-d H:i:s T e
+echo	 + P1D = 
+add	start
+fmt	start	Y-m-d H:i:s T e
+echo	\n
+#expect
+fa1 2010-03-14 01:59:59 EST America/New_York + PT1S = 2010-03-14 03:00:00 EDT America/New_York
+fa2 2010-03-13 04:30:00 EST America/New_York + P1D = 2010-03-14 04:30:00 EDT America/New_York
+fa2.5 2010-03-13 04:30:00 EST America/New_York + PT23H = 2010-03-14 04:30:00 EDT America/New_York
+fa3 2010-03-13 04:30:00 EST America/New_York + PT22H = 2010-03-14 03:30:00 EDT America/New_York
+fa4 2010-03-13 04:30:00 EST America/New_York + PT21H = 2010-03-14 01:30:00 EST America/New_York
+fa5 2010-03-13 01:30:00 EST America/New_York + P1D = 2010-03-14 01:30:00 EST America/New_York
+fa6 2010-03-13 02:30:00 EST America/New_York + P1D = 2010-03-14 03:30:00 EDT America/New_York
+#end
+#case	rfc-datetime_and_daylight_saving_time-type3-fd	SCRIPT
+tz	America/New_York
+new	end	2010-03-14 03:00:00
+new	start	2010-03-14 01:59:59
+echo	fd1 
+fmt	end	Y-m-d H:i:s T e
+echo	 - 
+fmt	start	Y-m-d H:i:s T e
+echo	 = 
+diff	start	end	PT%hH%iM%sS
+echo	\n
+new	end	2010-03-14 04:30:00
+new	start	2010-03-13 04:30:00
+echo	fd2 
+fmt	end	Y-m-d H:i:s T e
+echo	 - 
+fmt	start	Y-m-d H:i:s T e
+echo	 = 
+diff	start	end	P%dDT%hH
+echo	\n
+new	end	2010-03-14 03:30:00
+new	start	2010-03-13 04:30:00
+echo	fd3 
+fmt	end	Y-m-d H:i:s T e
+echo	 - 
+fmt	start	Y-m-d H:i:s T e
+echo	 = 
+diff	start	end	P%dDT%hH
+echo	\n
+new	end	2010-03-14 01:30:00
+new	start	2010-03-13 04:30:00
+echo	fd4 
+fmt	end	Y-m-d H:i:s T e
+echo	 - 
+fmt	start	Y-m-d H:i:s T e
+echo	 = 
+diff	start	end	P%dDT%hH
+echo	\n
+new	end	2010-03-14 01:30:00
+new	start	2010-03-13 01:30:00
+echo	fd5 
+fmt	end	Y-m-d H:i:s T e
+echo	 - 
+fmt	start	Y-m-d H:i:s T e
+echo	 = 
+diff	start	end	P%dDT%hH
+echo	\n
+new	end	2010-03-14 03:30:00
+new	start	2010-03-13 03:30:00
+echo	fd6 
+fmt	end	Y-m-d H:i:s T e
+echo	 - 
+fmt	start	Y-m-d H:i:s T e
+echo	 = 
+diff	start	end	P%dDT%hH
+echo	\n
+new	end	2010-03-14 03:30:00
+new	start	2010-03-13 02:30:00
+echo	fd7 
+fmt	end	Y-m-d H:i:s T e
+echo	 - 
+fmt	start	Y-m-d H:i:s T e
+echo	 = 
+diff	start	end	P%dDT%hH
+echo	\n
+#expect
+fd1 2010-03-14 03:00:00 EDT America/New_York - 2010-03-14 01:59:59 EST America/New_York = PT0H0M1S
+fd2 2010-03-14 04:30:00 EDT America/New_York - 2010-03-13 04:30:00 EST America/New_York = P1DT0H
+fd3 2010-03-14 03:30:00 EDT America/New_York - 2010-03-13 04:30:00 EST America/New_York = P0DT22H
+fd4 2010-03-14 01:30:00 EST America/New_York - 2010-03-13 04:30:00 EST America/New_York = P0DT21H
+fd5 2010-03-14 01:30:00 EST America/New_York - 2010-03-13 01:30:00 EST America/New_York = P1DT0H
+fd6 2010-03-14 03:30:00 EDT America/New_York - 2010-03-13 03:30:00 EST America/New_York = P1DT0H
+fd7 2010-03-14 03:30:00 EDT America/New_York - 2010-03-13 02:30:00 EST America/New_York = P1DT1H
+#end
+#case	rfc-datetime_and_daylight_saving_time-type3-fs	SCRIPT
+tz	America/New_York
+new	end	2010-03-14 03:00:00
+iv	PT1S
+echo	fs1 
+fmt	end	Y-m-d H:i:s T e
+echo	 - PT1S = 
+sub	end
+fmt	end	Y-m-d H:i:s T e
+echo	\n
+new	end	2010-03-14 04:30:00
+iv	P1D
+echo	fs2 
+fmt	end	Y-m-d H:i:s T e
+echo	 - P1D = 
+sub	end
+fmt	end	Y-m-d H:i:s T e
+echo	\n
+new	end	2010-03-14 03:30:00
+iv	PT22H
+echo	fs3 
+fmt	end	Y-m-d H:i:s T e
+echo	 - PT22H = 
+sub	end
+fmt	end	Y-m-d H:i:s T e
+echo	\n
+new	end	2010-03-14 01:30:00
+iv	PT21H
+echo	fs4 
+fmt	end	Y-m-d H:i:s T e
+echo	 - PT21H = 
+sub	end
+fmt	end	Y-m-d H:i:s T e
+echo	\n
+new	end	2010-03-14 01:30:00
+iv	P1D
+echo	fs5 
+fmt	end	Y-m-d H:i:s T e
+echo	 - P1D = 
+sub	end
+fmt	end	Y-m-d H:i:s T e
+echo	\n
+new	end	2010-03-15 03:30:00
+iv	P1D
+echo	fs6 
+fmt	end	Y-m-d H:i:s T e
+echo	 - P1D = 
+sub	end
+fmt	end	Y-m-d H:i:s T e
+echo	\n
+new	end	2010-03-15 02:30:00
+iv	P1D
+echo	fs7 
+fmt	end	Y-m-d H:i:s T e
+echo	 - P1D = 
+sub	end
+fmt	end	Y-m-d H:i:s T e
+echo	\n
+#expect
+fs1 2010-03-14 03:00:00 EDT America/New_York - PT1S = 2010-03-14 01:59:59 EST America/New_York
+fs2 2010-03-14 04:30:00 EDT America/New_York - P1D = 2010-03-13 04:30:00 EST America/New_York
+fs3 2010-03-14 03:30:00 EDT America/New_York - PT22H = 2010-03-13 04:30:00 EST America/New_York
+fs4 2010-03-14 01:30:00 EST America/New_York - PT21H = 2010-03-13 04:30:00 EST America/New_York
+fs5 2010-03-14 01:30:00 EST America/New_York - P1D = 2010-03-13 01:30:00 EST America/New_York
+fs6 2010-03-15 03:30:00 EDT America/New_York - P1D = 2010-03-14 03:30:00 EDT America/New_York
+fs7 2010-03-15 02:30:00 EDT America/New_York - P1D = 2010-03-14 03:30:00 EDT America/New_York
+#end
