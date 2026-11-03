@@ -38,6 +38,24 @@ pub(crate) fn install_hooks(m: &mut ModuleBuilder<'_>) {
     }
 }
 
+/// Request startup: `output_handler=mb_output_handler` in php.ini starts
+/// the handler before the script runs (`php_output_start_user()` with
+/// mbstring's handler alias). The VM does not interpret `output_handler`
+/// itself.
+pub(crate) fn request_startup(vm: &mut Vm) {
+    if vm.ini.raw("output_handler") == Some(b"mb_output_handler".as_slice()) {
+        php_support::output::start(
+            vm,
+            php_support::output::StartHandler::User {
+                name: b"mb_output_handler".to_vec(),
+                callback: Value::from("mb_output_handler"),
+            },
+            0,
+            php_support::output::flags::STDFLAGS,
+        );
+    }
+}
+
 /// `RSHUTDOWN`.
 pub(crate) fn reset() {
     HEADERS.with(|h| *h.borrow_mut() = Headers::default());

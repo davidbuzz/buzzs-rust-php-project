@@ -43,6 +43,7 @@ impl Extension for Mbstring {
         ini::install_hooks(m);
         output::install_hooks(m);
         ini::startup(m.vm());
+        m.on_request_startup(output::request_startup);
         m.on_request_shutdown(|_| {
             state::with(php_mbstring::MbState::request_shutdown);
             output::reset();

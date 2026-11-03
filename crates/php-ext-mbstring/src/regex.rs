@@ -227,6 +227,17 @@ fn has_named_groups(p: &[u8]) -> bool {
     false
 }
 
+/// The name of a `(?<name>` / `(?'name'` group (`p` starts after `(?`).
+fn group_name(p: &[u8]) -> Option<&[u8]> {
+    let close = match p.first()? {
+        b'<' if !matches!(p.get(1), Some(b'=' | b'!')) => b'>',
+        b'\'' => b'\'',
+        _ => return None,
+    };
+    let end = p[1..].iter().position(|&b| b == close)?;
+    Some(&p[1..=end])
+}
+
 /// Rewrites Oniguruma Ruby syntax into PCRE2 syntax. `Err` carries an
 /// Oniguruma-style error message.
 fn translate(p: &[u8], names: bool) -> Result<Vec<u8>, String> {
@@ -290,6 +301,14 @@ fn translate(p: &[u8], names: bool) -> Result<Vec<u8>, String> {
             }
             b'(' if class_depth == 0 => {
                 if p.get(i + 1) == Some(&b'?') {
+                    if let Some(name) = group_name(&p[i + 2..]) {
+                        if !name.first().is_some_and(|b| b.is_ascii_alphabetic() || *b == b'_' || *b >= 0x80) {
+                            return Err(format!(
+                                "invalid group name <{}>",
+                                String::from_utf8_lossy(name)
+                            ));
+                        }
+                    }
                     // Inline options: Ruby's `m` is PCRE's `s`.
                     let mut j = i + 2;
                     let mut flags = Vec::new();
@@ -1167,4 +1186,81 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
         .deprecated(SINCE, WHY)
         .function("mb_regex_set_options(?string $options = null): string", mb_regex_set_options)
         .deprecated(SINCE, WHY);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tr(p: &str) -> String {
+        let p = p.as_bytes();
+        String::from_utf8(translate(p, has_named_groups(p)).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn translates_ruby_syntax() {
+        assert_eq!(tr(r"\h+"), "[0-9a-fA-F]+");
+        assert_eq!(tr(r"[\h_]"), "[0-9a-fA-F_]");
+        assert_eq!(tr(r"é"), r"\x{00e9}");
+        assert_eq!(tr("a{,2}"), "a{0,2}");
+        assert_eq!(tr("(?m)a.b"), "(?s)a.b");
+        assert_eq!(tr("(?mi:x)"), "(?si:x)");
+        assert_eq!(tr("(a)(b)"), "(a)(b)");
+        assert_eq!(tr("(a)(?<n>b)"), "(?:a)(?<n>b)");
+        assert_eq!(tr("(?<=a)(b)"), "(?<=a)(b)");
+        assert_eq!(tr("[(]"), "[(]");
+        assert_eq!(tr("[]a]"), r"[\]a]");
+        assert_eq!(tr("[[:alpha:]]"), "[[:alpha:]]");
+        assert!(translate(br"abc\", false).is_err());
+        assert_eq!(
+            translate(b"(?<0>a)", true).unwrap_err(),
+            "invalid group name <0>"
+        );
+    }
+
+    #[test]
+    fn named_group_detection() {
+        assert!(has_named_groups(b"(?<x>a)"));
+        assert!(has_named_groups(b"(?'x'a)"));
+        assert!(!has_named_groups(b"(?<=a)(?<!b)"));
+        assert!(!has_named_groups(br"\(?<x>a\)"));
+        assert!(!has_named_groups(b"[(?<x>]"));
+    }
+
+    #[test]
+    fn posix_basic_syntax() {
+        assert_eq!(from_basic(br"a\{1,2\}"), b"a{1,2}");
+        assert_eq!(from_basic(br"\(a\)|b+"), br"(a)\|b\+");
+        assert_eq!(from_basic(b"[(]"), b"[(]");
+    }
+
+    #[test]
+    fn subject_offsets_map_back() {
+        let enc = php_mbstring::encoding::by_name(b"EUC-JP").unwrap();
+        // "a" + HIRAGANA A (EUC-JP A4A2) + "b"
+        let s = to_subject(b"a\xA4\xA2b", enc);
+        assert_eq!(s.text, "aあb".as_bytes());
+        assert_eq!(s.to_orig(1), 1);
+        assert_eq!(s.to_orig(4), 3);
+        assert_eq!(s.to_orig(5), 4);
+        assert_eq!(s.to_utf8(3), 4);
+        let utf8 = to_subject("aあ".as_bytes(), php_mbstring::encoding::utf8());
+        assert!(utf8.back.is_none());
+        assert_eq!(utf8.to_orig(4), 4);
+    }
+
+    #[test]
+    fn onig_messages() {
+        assert_eq!(
+            onig_message(b"missing closing parenthesis"),
+            "end pattern with unmatched parenthesis"
+        );
+        assert_eq!(onig_message(b"something else"), "something else");
+    }
+
+    #[test]
+    fn simple_match_is_caseless() {
+        assert!(simple_match(br"^(text/|application/xhtml\+xml)", b"TEXT/html", true));
+        assert!(!simple_match(b"^text/", b"image/png", true));
+    }
 }

@@ -431,3 +431,36 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
         mb_send_mail,
     );
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_mail_headers() {
+        let h = parse_mail_headers(
+            b"Content-Type: text/plain; charset=ISO-2022-JP\r\nX-Foo:  bar\r\n baz\r\nMIME-Version: 1.0",
+        );
+        assert_eq!(
+            h.get(&b"content-type"[..]).map(Vec::as_slice),
+            Some(&b"text/plain; charset=ISO-2022-JP"[..])
+        );
+        assert_eq!(h.get(&b"mime-version"[..]).map(Vec::as_slice), Some(&b"1.0"[..]));
+        assert!(h.contains_key(&b"x-foo"[..]));
+    }
+
+    #[test]
+    fn sanitizes_recipients() {
+        assert_eq!(sanitize_to(b"a@b\x01c  \n"), b"a@b c");
+        assert_eq!(sanitize_to(b"a@b,\r\n c@d"), b"a@b,\r\n c@d");
+    }
+
+    #[test]
+    fn strtok_skips_separators() {
+        let s = b"charset = \"UTF-8\"";
+        let mut pos = 0;
+        assert_eq!(strtok(s, &mut pos, b"= "), Some(&b"charset"[..]));
+        assert_eq!(strtok(s, &mut pos, b"= \""), Some(&b"UTF-8"[..]));
+        assert_eq!(strtok(s, &mut pos, b"= \""), None);
+    }
+}

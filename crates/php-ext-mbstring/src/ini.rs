@@ -100,6 +100,9 @@ pub(crate) fn startup(vm: &mut Vm) {
     }
     let diags = st.take_diagnostics();
     state::replace(st);
+    // Startup errors are displayed before the request: they do not count
+    // as sent headers (other modules' INI handlers check that).
+    let headers_sent = vm.headers_sent;
     for d in diags {
         let level = match d.level {
             php_mbstring::Level::Warning => E_WARNING,
@@ -113,6 +116,7 @@ pub(crate) fn startup(vm: &mut Vm) {
             0,
         );
     }
+    vm.headers_sent = headers_sent;
 }
 
 /// Installs the `ini_set()`/`ini_alter()`/`ini_restore()` wrappers.

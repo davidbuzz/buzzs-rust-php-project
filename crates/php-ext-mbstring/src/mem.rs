@@ -84,3 +84,26 @@ pub(crate) fn result(vm: &mut Vm, live: usize, v: Value) -> VmResult<Value> {
     check(vm, live, value_size(&v))?;
     Ok(v)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use php_runtime::{ZArray, ZStr};
+
+    #[test]
+    fn zend_sizes() {
+        assert_eq!(zstr(0), 32);
+        assert_eq!(zstr(7), 32);
+        assert_eq!(zstr(8), 40);
+        assert_eq!(packed(3), 56 + 8 * 16);
+        assert_eq!(hashed(9), 56 + 16 * 40);
+    }
+
+    #[test]
+    fn value_sizes() {
+        assert_eq!(value_size(&Value::Str(ZStr::from("a"))), 0);
+        assert_eq!(value_size(&Value::Str(ZStr::from("abc"))), 32);
+        let arr = ZArray::from_values([Value::from("abc"), Value::Int(1)]);
+        assert_eq!(value_size(&Value::Array(arr)), packed(2) + 32);
+    }
+}
