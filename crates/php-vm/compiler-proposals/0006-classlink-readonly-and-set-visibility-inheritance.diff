@@ -1,0 +1,77 @@
+0006 — classlink.rs build_class: do_inherit_property readonly/set-visibility
+rules (apply after 0001-0005).
+
+* "Cannot redeclare (non-)readonly property ..." is not raised when the
+  parent property is abstract (a hooked abstract property may be
+  implemented by a readonly one), as in php-src do_inherit_property.
+* Child set visibility must be the parent's or weaker: the parent's set
+  visibility, or (without one) its visibility mapped to the set level;
+  a get-only virtual parent has none. Otherwise "Set access level of
+  %s::$%s must be %s (as in class %s)%s" with private(set)/protected(set)/
+  omitted and " or weaker" when the parent declared a set visibility.
+
+Fixes: Zend/tests/asymmetric_visibility/override_{private_public,
+protected_private,public_private,public_protected};
+Zend/tests/readonly_props/readonly_with_default_abstract_get_set_implicit_set.
+
+diff --git a/crates/php-vm/src/classlink.rs b/crates/php-vm/src/classlink.rs
+index b182488..c993bd9 100644
+--- a/crates/php-vm/src/classlink.rs
++++ b/crates/php-vm/src/classlink.rs
+@@ -1374,7 +1374,12 @@ fn build_class(
+                             }
+                         ));
+                     }
+-                    if e.flags & flags::READONLY != pd.flags & flags::READONLY && err.is_none() {
++                    // `do_inherit_property`: an abstract (hooked) parent
++                    // property may be implemented by a readonly one.
++                    if e.flags & flags::READONLY != pd.flags & flags::READONLY
++                        && e.flags & flags::ABSTRACT == 0
++                        && err.is_none()
++                    {
+                         *err =
+                             Some(format!(
+                             "Cannot redeclare {}readonly property {}::${} as {}readonly {}::${}",
+@@ -1386,6 +1391,42 @@ fn build_class(
+                             pd.name
+                         ));
+                     }
++                    // Set visibility may only be the parent's (or weaker);
++                    // get-only virtual parents have none.
++                    let parent_get_only = e.is_virtual()
++                        && e.hooks
++                            .as_ref()
++                            .is_some_and(|h| h.set.is_none() && !h.abstract_set);
++                    if pd.flags & flags::SET_MASK != 0 && !parent_get_only && err.is_none() {
++                        let parent_set = match e.flags & flags::SET_MASK {
++                            0 => match e.visibility() {
++                                flags::PRIVATE => flags::SET_PRIVATE,
++                                flags::PROTECTED => flags::SET_PROTECTED,
++                                _ => flags::SET_PUBLIC,
++                            },
++                            s => s,
++                        };
++                        if pd.flags & flags::SET_MASK > parent_set {
++                            let shown = if e.flags & flags::SET_PRIVATE != 0 {
++                                "private(set)"
++                            } else if e.flags & flags::SET_PROTECTED != 0 {
++                                "protected(set)"
++                            } else {
++                                "omitted"
++                            };
++                            *err = Some(format!(
++                                "Set access level of {}::${} must be {shown} (as in class {}){}",
++                                name,
++                                pd.name,
++                                e.class,
++                                if e.flags & flags::SET_MASK == 0 {
++                                    ""
++                                } else {
++                                    " or weaker"
++                                }
++                            ));
++                        }
++                    }
+                     e.slot
+                 } else {
+                     u32::try_from(props.len()).unwrap_or(0)
