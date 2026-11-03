@@ -1,9 +1,11 @@
 [package]
 name = "php-fileinfo"
+description = "PHP's ext/fileinfo (finfo_*, mime_content_type, the finfo class) bound to the system libmagic"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
+build = "build.rs"
 
 [dependencies]
 

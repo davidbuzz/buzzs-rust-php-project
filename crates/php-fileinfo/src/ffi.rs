@@ -1,0 +1,44 @@
+//! Raw declarations for the parts of libmagic (`<magic.h>`, file 5.45) and
+//! libc that this crate uses.  Everything here is `unsafe` to call; the
+//! safe wrappers live in [`crate::magic`] and [`crate::capture`].
+
+#![allow(non_camel_case_types, unsafe_code)]
+
+use std::ffi::{c_char, c_int, c_void};
+
+/// Opaque `struct magic_set`.
+#[repr(C)]
+pub struct magic_set {
+    _private: [u8; 0],
+}
+
+/// `magic_t`.
+pub type magic_t = *mut magic_set;
+
+#[link(name = "magic")]
+unsafe extern "C" {
+    pub fn magic_open(flags: c_int) -> magic_t;
+    pub fn magic_close(ms: magic_t);
+    pub fn magic_descriptor(ms: magic_t, fd: c_int) -> *const c_char;
+    pub fn magic_buffer(ms: magic_t, buf: *const c_void, len: usize) -> *const c_char;
+    pub fn magic_error(ms: magic_t) -> *const c_char;
+    pub fn magic_getflags(ms: magic_t) -> c_int;
+    pub fn magic_setflags(ms: magic_t, flags: c_int) -> c_int;
+    pub fn magic_version() -> c_int;
+    pub fn magic_load(ms: magic_t, path: *const c_char) -> c_int;
+    pub fn magic_load_buffers(
+        ms: magic_t,
+        bufs: *mut *mut c_void,
+        sizes: *mut usize,
+        nbufs: usize,
+    ) -> c_int;
+    pub fn magic_errno(ms: magic_t) -> c_int;
+    pub fn magic_getparam(ms: magic_t, param: c_int, value: *mut c_void) -> c_int;
+    pub fn magic_setparam(ms: magic_t, param: c_int, value: *const c_void) -> c_int;
+}
+
+unsafe extern "C" {
+    pub fn dup(fd: c_int) -> c_int;
+    pub fn dup2(oldfd: c_int, newfd: c_int) -> c_int;
+    pub fn close(fd: c_int) -> c_int;
+}

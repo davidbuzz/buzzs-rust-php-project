@@ -1,0 +1,278 @@
+//! Work-arounds for behaviour of the system libmagic (5.45) that PHP's
+//! bundled, patched copy does not share.
+
+use std::path::{Path, PathBuf};
+
+/// php-src's `simh_parse()` (`is_simh.c`), which is stricter than the one
+/// in libmagic 5.45: data that merely *starts* with a plausible record
+/// length (e.g. 250000 × `0x01`) is not SIMH tape data.
+pub(crate) fn is_simh(data: &[u8]) -> bool {
+    const TAPEMARKS: usize = 10;
+    let getlen = |pos: usize| -> Result<u32, ()> {
+        let n = u32::from_le_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]);
+        if n == 0xFFFF_FFFF {
+            return Ok(n);
+        }
+        if (n & 0x00FF_FFFF) != (n & 0x0FFF_FFFF) {
+            return Err(());
+        }
+        let n = n & 0x00FF_FFFF;
+        Ok(if n & 1 == 1 { n + 1 } else { n })
+    };
+    let end = data.len();
+    let mut pos = 0usize;
+    let (mut nt, mut nr) = (0usize, 0usize);
+    while end.saturating_sub(pos) >= 4 && pos <= end {
+        let Ok(nbytes) = getlen(pos) else {
+            return false;
+        };
+        pos += 4;
+        if (nt > 0 || nr > 0) && nbytes == 0xFFFF_FFFF {
+            break;
+        }
+        if nbytes == 0 {
+            nt += 1;
+            if nt == TAPEMARKS {
+                break;
+            }
+            continue;
+        }
+        pos += nbytes as usize;
+        if pos > end || end - pos < 4 {
+            break;
+        }
+        let Ok(cbytes) = getlen(pos) else {
+            return false;
+        };
+        pos += 4;
+        if nbytes != cbytes {
+            return false;
+        }
+        nr += 1;
+    }
+    if nt * 4 == pos {
+        return false;
+    }
+    nr != 0
+}
+
+/// Whether `desc` is what libmagic's built-in SIMH test prints.
+pub(crate) fn is_simh_description(desc: &[u8]) -> bool {
+    desc == b"SIMH tape data" || desc == b"application/SIMH-tape-data"
+}
+
+/// C `isprint()` / `isspace()` in the "C" locale.
+fn regex_char_ok(c: u8) -> bool {
+    (0x20..0x7f).contains(&c) || matches!(c, b'\t' | b'\n' | 0x0b | 0x0c | b'\r' | 0x08 | 0x8a)
+}
+
+/// libmagic 5.45 rejects `regex` patterns containing non-printable bytes
+/// ("non-ascii characters in regex"), which PHP's PCRE-based copy accepts;
+/// such bytes are rewritten to `.` (any character).  Returns `None` when
+/// the line needs no change.
+#[allow(clippy::many_single_char_names)]
+fn sanitize_line(line: &[u8]) -> Option<Vec<u8>> {
+    if line.first().is_none_or(|&c| c == b'#' || c == b'!') {
+        return None;
+    }
+    let is_ws = |c: u8| c == b' ' || c == b'\t';
+    let mut i = 0;
+    // Offset (with its leading '>' continuation levels).
+    while i < line.len() && !is_ws(line[i]) {
+        i += 1;
+    }
+    while i < line.len() && is_ws(line[i]) {
+        i += 1;
+    }
+    let type_start = i;
+    while i < line.len() && !is_ws(line[i]) {
+        i += 1;
+    }
+    if !line[type_start..i].starts_with(b"regex") {
+        return None;
+    }
+    while i < line.len() && is_ws(line[i]) {
+        i += 1;
+    }
+    let mut out = line[..i].to_vec();
+    let mut changed = false;
+    while i < line.len() && !is_ws(line[i]) {
+        let c = line[i];
+        if c != b'\\' || i + 1 >= line.len() {
+            if regex_char_ok(c) {
+                out.push(c);
+            } else {
+                out.push(b'.');
+                changed = true;
+            }
+            i += 1;
+            continue;
+        }
+        // An escape: decode it the way apprentice.c's getstr() does.
+        let start = i;
+        i += 1;
+        let e = line[i];
+        let value = match e {
+            b'0'..=b'7' => {
+                let mut v = 0u32;
+                let mut n = 0;
+                while n < 3 && i < line.len() && (b'0'..=b'7').contains(&line[i]) {
+                    v = v * 8 + u32::from(line[i] - b'0');
+                    i += 1;
+                    n += 1;
+                }
+                i -= 1;
+                Some(v & 0xff)
+            }
+            b'x' => {
+                let mut v = 0u32;
+                let mut n = 0;
+                while n < 2 && i + 1 < line.len() && line[i + 1].is_ascii_hexdigit() {
+                    v = v * 16 + char::from(line[i + 1]).to_digit(16).unwrap_or(0);
+                    i += 1;
+                    n += 1;
+                }
+                (n > 0).then_some(v)
+            }
+            b'a' => Some(7),
+            b'f' => Some(0x0c),
+            b'v' => Some(0x0b),
+            b'e' => Some(0x1b),
+            _ => None,
+        };
+        i += 1;
+        // NUL ends the C string, so it is never inspected.
+        match value {
+            Some(v) if v != 0 && !regex_char_ok(u8::try_from(v).unwrap_or(0)) => {
+                out.push(b'.');
+                changed = true;
+            }
+            _ => out.extend_from_slice(&line[start..i]),
+        }
+    }
+    out.extend_from_slice(&line[i..]);
+    changed.then_some(out)
+}
+
+/// The sanitized text of a magic file, if anything needed rewriting.
+fn sanitize(text: &[u8]) -> Option<Vec<u8>> {
+    let mut changed = false;
+    let mut out = Vec::with_capacity(text.len());
+    for line in text.split_inclusive(|&b| b == b'\n') {
+        let (body, nl) = match line.strip_suffix(b"\n") {
+            Some(b) => (b, &b"\n"[..]),
+            None => (line, &b""[..]),
+        };
+        if let Some(fixed) = sanitize_line(body) {
+            out.extend_from_slice(&fixed);
+            changed = true;
+        } else {
+            out.extend_from_slice(body);
+        }
+        out.extend_from_slice(nl);
+    }
+    changed.then_some(out)
+}
+
+/// A temporary directory removed on drop.
+#[derive(Debug)]
+pub(crate) struct TempDir(PathBuf);
+
+impl TempDir {
+    fn new() -> Option<Self> {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        for _ in 0..16 {
+            let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+            let p = std::env::temp_dir()
+                .join(format!(".php-fileinfo-magic-{}-{n}", std::process::id()));
+            if std::fs::create_dir(&p).is_ok() {
+                return Some(Self(p));
+            }
+        }
+        None
+    }
+}
+
+impl Drop for TempDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// Rewrites the text magic sources `path` (a file or a directory of
+/// files) into a temporary location when libmagic 5.45 would reject them;
+/// returns the path to load instead plus the guard keeping it alive.
+pub(crate) fn sanitized_source(path: &Path) -> Option<(PathBuf, TempDir)> {
+    if path.is_dir() {
+        let mut files: Vec<(std::ffi::OsString, Vec<u8>, bool)> = Vec::new();
+        let mut any = false;
+        for entry in std::fs::read_dir(path).ok()?.flatten() {
+            let p = entry.path();
+            if !p.metadata().is_ok_and(|m| m.is_file()) {
+                continue;
+            }
+            let text = std::fs::read(&p).ok()?;
+            match sanitize(&text) {
+                Some(fixed) => {
+                    any = true;
+                    files.push((entry.file_name(), fixed, true));
+                }
+                None => files.push((entry.file_name(), text, false)),
+            }
+        }
+        if !any {
+            return None;
+        }
+        let tmp = TempDir::new()?;
+        for (name, data, _) in &files {
+            std::fs::write(tmp.0.join(name), data).ok()?;
+        }
+        let dir = tmp.0.clone();
+        Some((dir, tmp))
+    } else {
+        let fixed = sanitize(&std::fs::read(path).ok()?)?;
+        let tmp = TempDir::new()?;
+        let name = path
+            .file_name()
+            .map_or_else(|| "magic".into(), ToOwned::to_owned);
+        let file = tmp.0.join(name);
+        std::fs::write(&file, fixed).ok()?;
+        Some((file, tmp))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn simh_rejects_unterminated_records() {
+        assert!(!is_simh(&[1u8; 1000]));
+        assert!(!is_simh(&[0u8; 64]));
+        // One 2-byte record framed by its length twice.
+        let rec = [2, 0, 0, 0, b'h', b'i', 2, 0, 0, 0, 0xff, 0xff, 0xff, 0xff];
+        assert!(is_simh(&rec));
+        // Mismatched trailer.
+        let bad = [2, 0, 0, 0, b'h', b'i', 4, 0, 0, 0];
+        assert!(!is_simh(&bad));
+    }
+
+    #[test]
+    fn regex_lines_are_sanitized() {
+        assert_eq!(
+            sanitize_line(b">7\tregex/9 V[.0-9]{4,5}\\020\t%s").unwrap(),
+            b">7\tregex/9 V[.0-9]{4,5}.\t%s"
+        );
+        assert!(sanitize_line(b"0\tregex\t\\^[\\040\\t]{0,50}\\\\.byte\t\tasm").is_none());
+        assert!(sanitize_line(b">0\tregex\tdex\\n[0-9]{2}\\0\tDalvik").is_none());
+        assert!(sanitize_line(b">>5\tregex/s\t[=.<>|!^\\x8a]{79}\tAW").is_none());
+        assert!(sanitize_line(b"0\tstring\t\\020\tx").is_none());
+        assert!(sanitize_line(b"# regex \\020").is_none());
+        assert_eq!(
+            sanitize(b"a\n0 regex \\x01b x\n").unwrap(),
+            b"a\n0 regex .b x\n"
+        );
+        assert!(sanitize(b"a\nb").is_none());
+    }
+}

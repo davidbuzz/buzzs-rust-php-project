@@ -1,0 +1,931 @@
+# finfo_file() results from /usr/bin/php 8.3.6 (bundled libmagic 5.43) for php-src fixtures,
+# restricted to files where the system libmagic 5.45 agrees. Columns: path (relative to
+# modules/php-src/ext), flags, description. Regenerate with examples/finfo_dump.rs + the PHP twin.
+# Rows rendering timestamps (CDF/FIT dates use the local time zone) are left out.
+fileinfo/tests/67647.mov	0	ISO Media, Apple QuickTime movie, Apple QuickTime (.MOV/QT)
+fileinfo/tests/67647.mov	1040	video/quicktime; charset=binary
+fileinfo/tests/67647.mov	16	video/quicktime
+fileinfo/tests/67647.mov	1024	binary
+fileinfo/tests/67647.mov	16777216	???
+fileinfo/tests/67647.mov	2048	UNKNUNKN
+fileinfo/tests/68398.zip	0	Zip archive data, at least v2.0 to extract, compression method=store
+fileinfo/tests/68398.zip	1040	application/zip; charset=binary
+fileinfo/tests/68398.zip	16	application/zip
+fileinfo/tests/68398.zip	1024	binary
+fileinfo/tests/68398.zip	16777216	???
+fileinfo/tests/68398.zip	2048	UNKNUNKN
+fileinfo/tests/68731.gif	0	GIF image data, version 89a, 32 x 32
+fileinfo/tests/68731.gif	1040	image/gif; charset=binary
+fileinfo/tests/68731.gif	16	image/gif
+fileinfo/tests/68731.gif	1024	binary
+fileinfo/tests/68731.gif	16777216	gif
+fileinfo/tests/68731.gif	2048	8BIMGIFf
+fileinfo/tests/bug67516.gif	0	GIF image data, version 89a, 128 x 88
+fileinfo/tests/bug67516.gif	1040	image/gif; charset=binary
+fileinfo/tests/bug67516.gif	16	image/gif
+fileinfo/tests/bug67516.gif	1024	binary
+fileinfo/tests/bug67516.gif	16777216	gif
+fileinfo/tests/bug67516.gif	2048	8BIMGIFf
+fileinfo/tests/bug68735.jpg	0	JPEG image data, JFIF standard 1.01, resolution (DPI), density 180x52, segment length 16, comment: ""
+fileinfo/tests/bug68735.jpg	1040	image/jpeg; charset=binary
+fileinfo/tests/bug68735.jpg	16	image/jpeg
+fileinfo/tests/bug68735.jpg	1024	binary
+fileinfo/tests/bug68735.jpg	16777216	jpeg/jpg/jpe/jfif
+fileinfo/tests/bug68735.jpg	2048	8BIMJPEG
+fileinfo/tests/bug71527.magic	0	ASCII text, with no line terminators
+fileinfo/tests/bug71527.magic	1040	text/plain; charset=us-ascii
+fileinfo/tests/bug71527.magic	16	text/plain
+fileinfo/tests/bug71527.magic	1024	us-ascii
+fileinfo/tests/bug71527.magic	16777216	???
+fileinfo/tests/bug71527.magic	2048	UNKNUNKN
+fileinfo/tests/bug71527私はガラスを食べられます.magic	0	ASCII text, with no line terminators
+fileinfo/tests/bug71527私はガラスを食べられます.magic	1040	text/plain; charset=us-ascii
+fileinfo/tests/bug71527私はガラスを食べられます.magic	16	text/plain
+fileinfo/tests/bug71527私はガラスを食べられます.magic	1024	us-ascii
+fileinfo/tests/bug71527私はガラスを食べられます.magic	16777216	???
+fileinfo/tests/bug71527私はガラスを食べられます.magic	2048	UNKNUNKN
+fileinfo/tests/bug77961.magic	0	ASCII text
+fileinfo/tests/bug77961.magic	1040	text/plain; charset=us-ascii
+fileinfo/tests/bug77961.magic	16	text/plain
+fileinfo/tests/bug77961.magic	1024	us-ascii
+fileinfo/tests/bug77961.magic	16777216	???
+fileinfo/tests/bug77961.magic	2048	UNKNUNKN
+fileinfo/tests/bug79756.xls	1040	application/vnd.ms-excel; charset=binary
+fileinfo/tests/bug79756.xls	16	application/vnd.ms-excel
+fileinfo/tests/bug79756.xls	1024	binary
+fileinfo/tests/bug79756.xls	16777216	xls/xla/xlt/
+fileinfo/tests/bug79756.xls	2048	????XLS5
+fileinfo/tests/resources/dir.zip	0	Zip archive data, at least v1.0 to extract, compression method=store
+fileinfo/tests/resources/dir.zip	1040	application/zip; charset=binary
+fileinfo/tests/resources/dir.zip	16	application/zip
+fileinfo/tests/resources/dir.zip	1024	binary
+fileinfo/tests/resources/dir.zip	16777216	???
+fileinfo/tests/resources/dir.zip	2048	UNKNUNKN
+fileinfo/tests/resources/test.awk	0	awk or perl script, ASCII text
+fileinfo/tests/resources/test.awk	1040	text/plain; charset=us-ascii
+fileinfo/tests/resources/test.awk	16	text/plain
+fileinfo/tests/resources/test.awk	1024	us-ascii
+fileinfo/tests/resources/test.awk	16777216	???
+fileinfo/tests/resources/test.awk	2048	UNKNUNKN
+fileinfo/tests/resources/test.bmp	0	PC bitmap, Windows 3.x format, 1 x 1 x 24, image size 4, resolution 2834 x 2834 px/m, cbSize 58, bits offset 54
+fileinfo/tests/resources/test.bmp	1040	image/bmp; charset=binary
+fileinfo/tests/resources/test.bmp	16	image/bmp
+fileinfo/tests/resources/test.bmp	1024	binary
+fileinfo/tests/resources/test.bmp	16777216	bmp/ico
+fileinfo/tests/resources/test.bmp	2048	????BMPp
+fileinfo/tests/resources/test.gif	0	GIF image data, version 89a, 1 x 1
+fileinfo/tests/resources/test.gif	1040	image/gif; charset=binary
+fileinfo/tests/resources/test.gif	16	image/gif
+fileinfo/tests/resources/test.gif	1024	binary
+fileinfo/tests/resources/test.gif	16777216	gif
+fileinfo/tests/resources/test.gif	2048	8BIMGIFf
+fileinfo/tests/resources/test.jpg	0	JPEG image data, JFIF standard 1.01, resolution (DPI), density 72x72, segment length 16, baseline, precision 8, 1x1, components 1
+fileinfo/tests/resources/test.jpg	1040	image/jpeg; charset=binary
+fileinfo/tests/resources/test.jpg	16	image/jpeg
+fileinfo/tests/resources/test.jpg	1024	binary
+fileinfo/tests/resources/test.jpg	16777216	jpeg/jpg/jpe/jfif
+fileinfo/tests/resources/test.jpg	2048	8BIMJPEG
+fileinfo/tests/resources/test.json	0	JSON text data
+fileinfo/tests/resources/test.json	1040	application/json; charset=us-ascii
+fileinfo/tests/resources/test.json	16	application/json
+fileinfo/tests/resources/test.json	1024	us-ascii
+fileinfo/tests/resources/test.json	16777216	???
+fileinfo/tests/resources/test.json	2048	UNKNUNKN
+fileinfo/tests/resources/test.mp3	0	Audio file with ID3 version 2.4.0, extended header, contains: MPEG ADTS, layer III, v1, 192 kbps, 44.1 kHz, Stereo
+fileinfo/tests/resources/test.mp3	1040	audio/mpeg; charset=binary
+fileinfo/tests/resources/test.mp3	16	audio/mpeg
+fileinfo/tests/resources/test.mp3	1024	binary
+fileinfo/tests/resources/test.mp3	16777216	???
+fileinfo/tests/resources/test.mp3	2048	UNKNUNKN
+fileinfo/tests/resources/test.png	0	PNG image data, 1 x 1, 16-bit/color RGB, non-interlaced
+fileinfo/tests/resources/test.png	1040	image/png; charset=binary
+fileinfo/tests/resources/test.png	16	image/png
+fileinfo/tests/resources/test.png	1024	binary
+fileinfo/tests/resources/test.png	16777216	png
+fileinfo/tests/resources/test.png	2048	UNKNUNKN
+fileinfo/tests/resources/test.ppt	1040	application/vnd.ms-powerpoint; charset=binary
+fileinfo/tests/resources/test.ppt	16	application/vnd.ms-powerpoint
+fileinfo/tests/resources/test.ppt	1024	binary
+fileinfo/tests/resources/test.ppt	16777216	ppt/pps/pot
+fileinfo/tests/resources/test.ppt	2048	????PPT3
+fileinfo/tests/resources/test.tga	0	Targa image data - Mono 1 x 1 x 8
+fileinfo/tests/resources/test.tga	1040	image/x-tga; charset=binary
+fileinfo/tests/resources/test.tga	16	image/x-tga
+fileinfo/tests/resources/test.tga	1024	binary
+fileinfo/tests/resources/test.tga	16777216	tga/tpic/icb/vda/vst
+fileinfo/tests/resources/test.tga	2048	????TPIC
+fileinfo/tests/resources/test.webm	0	WebM
+fileinfo/tests/resources/test.webm	1040	video/webm; charset=binary
+fileinfo/tests/resources/test.webm	16	video/webm
+fileinfo/tests/resources/test.webm	1024	binary
+fileinfo/tests/resources/test.webm	16777216	???
+fileinfo/tests/resources/test.webm	2048	UNKNUNKN
+fileinfo/tests/resources/test.woff	0	Web Open Font Format, TrueType, length 1256, version 1.0
+fileinfo/tests/resources/test.woff	1040	font/woff; charset=binary
+fileinfo/tests/resources/test.woff	16	font/woff
+fileinfo/tests/resources/test.woff	1024	binary
+fileinfo/tests/resources/test.woff	16777216	???
+fileinfo/tests/resources/test.woff	2048	UNKNUNKN
+fileinfo/tests/upstream/android-vdex-1.result	0	ASCII text, with no line terminators
+fileinfo/tests/upstream/android-vdex-1.result	1040	text/plain; charset=us-ascii
+fileinfo/tests/upstream/android-vdex-1.result	16	text/plain
+fileinfo/tests/upstream/android-vdex-1.result	1024	us-ascii
+fileinfo/tests/upstream/android-vdex-1.result	16777216	???
+fileinfo/tests/upstream/android-vdex-1.result	2048	UNKNUNKN
+fileinfo/tests/upstream/android-vdex-1.testfile	0	Android vdex file, verifier deps version: 021, dex section version: 002, number of dex files: 4, verifier deps size: 106328
+fileinfo/tests/upstream/android-vdex-1.testfile	1040	application/octet-stream; charset=binary
+fileinfo/tests/upstream/android-vdex-1.testfile	16	application/octet-stream
+fileinfo/tests/upstream/android-vdex-1.testfile	1024	binary
+fileinfo/tests/upstream/android-vdex-1.testfile	16777216	???
+fileinfo/tests/upstream/android-vdex-1.testfile	2048	UNKNUNKN
+fileinfo/tests/upstream/android-vdex-2.result	0	ASCII text, with no line terminators
+fileinfo/tests/upstream/android-vdex-2.result	1040	text/plain; charset=us-ascii
+fileinfo/tests/upstream/android-vdex-2.result	16	text/plain
+fileinfo/tests/upstream/android-vdex-2.result	1024	us-ascii
+fileinfo/tests/upstream/android-vdex-2.result	16777216	???
+fileinfo/tests/upstream/android-vdex-2.result	2048	UNKNUNKN
+fileinfo/tests/upstream/android-vdex-2.testfile	0	Android vdex file, being processed by dex2oat, verifier deps version: 019, dex section version: 002, number of dex files: 1, verifier deps size: 1016
+fileinfo/tests/upstream/android-vdex-2.testfile	1040	application/octet-stream; charset=binary
+fileinfo/tests/upstream/android-vdex-2.testfile	16	application/octet-stream
+fileinfo/tests/upstream/android-vdex-2.testfile	1024	binary
+fileinfo/tests/upstream/android-vdex-2.testfile	16777216	???
+fileinfo/tests/upstream/android-vdex-2.testfile	2048	UNKNUNKN
+fileinfo/tests/upstream/arj.result	0	ASCII text
+fileinfo/tests/upstream/arj.result	1040	text/plain; charset=us-ascii
+fileinfo/tests/upstream/arj.result	16	text/plain
+fileinfo/tests/upstream/arj.result	1024	us-ascii
+fileinfo/tests/upstream/arj.result	16777216	???
+fileinfo/tests/upstream/arj.result	2048	UNKNUNKN
+fileinfo/tests/upstream/arj.testfile	0	ARJ archive data, v11, slash-switched, created 5 1980+48, original name: example_m0.arj, os: Unix
+fileinfo/tests/upstream/arj.testfile	1040	application/x-arj; charset=binary
+fileinfo/tests/upstream/arj.testfile	16	application/x-arj
+fileinfo/tests/upstream/arj.testfile	1024	binary
+fileinfo/tests/upstream/arj.testfile	16777216	arj
+fileinfo/tests/upstream/arj.testfile	2048	UNKNUNKN
+fileinfo/tests/upstream/bcachefs.result	0	ASCII text, with no line terminators
+fileinfo/tests/upstream/bcachefs.result	1040	text/plain; charset=us-ascii
+fileinfo/tests/upstream/bcachefs.result	16	text/plain
+fileinfo/tests/upstream/bcachefs.result	1024	us-ascii
+fileinfo/tests/upstream/bcachefs.result	16777216	???
+fileinfo/tests/upstream/bcachefs.result	2048	UNKNUNKN
+fileinfo/tests/upstream/bcachefs.testfile	0	bcachefs, UUID=46bd306f-80ad-4cd0-af4f-147e7d85f393, label "Label", version 13, min version 13, device 0/UUID=72a60ede-4cb6-4374-aa70-cb38a50af5ef, 1 devices
+fileinfo/tests/upstream/bcachefs.testfile	1040	application/octet-stream; charset=binary
+fileinfo/tests/upstream/bcachefs.testfile	16	application/octet-stream
+fileinfo/tests/upstream/bcachefs.testfile	1024	binary
+fileinfo/tests/upstream/bcachefs.testfile	16777216	???
+fileinfo/tests/upstream/bcachefs.testfile	2048	UNKNUNKN
+fileinfo/tests/upstream/cl8m8ocofedso.result	0	ASCII text, with no line terminators
+fileinfo/tests/upstream/cl8m8ocofedso.result	1040	text/plain; charset=us-ascii
+fileinfo/tests/upstream/cl8m8ocofedso.result	16	text/plain
+fileinfo/tests/upstream/cl8m8ocofedso.result	1024	us-ascii
+fileinfo/tests/upstream/cl8m8ocofedso.result	16777216	???
+fileinfo/tests/upstream/cl8m8ocofedso.result	2048	UNKNUNKN
+fileinfo/tests/upstream/cl8m8ocofedso.testfile	0	Audio file with ID3 version 2.4.0, contains: MPEG ADTS, layer III, v1, 192 kbps, 44.1 kHz, JntStereo
+fileinfo/tests/upstream/cl8m8ocofedso.testfile	1040	audio/mpeg; charset=binary
+fileinfo/tests/upstream/cl8m8ocofedso.testfile	16	audio/mpeg
+fileinfo/tests/upstream/cl8m8ocofedso.testfile	1024	binary
+fileinfo/tests/upstream/cl8m8ocofedso.testfile	16777216	???
+fileinfo/tests/upstream/cl8m8ocofedso.testfile	2048	UNKNUNKN
+fileinfo/tests/upstream/CVE-2014-1943.result	0	ASCII text, with no line terminators
+fileinfo/tests/upstream/CVE-2014-1943.result	1040	text/plain; charset=us-ascii
+fileinfo/tests/upstream/CVE-2014-1943.result	16	text/plain
+fileinfo/tests/upstream/CVE-2014-1943.result	1024	us-ascii
+fileinfo/tests/upstream/CVE-2014-1943.result	16777216	???
+fileinfo/tests/upstream/CVE-2014-1943.result	2048	UNKNUNKN
+fileinfo/tests/upstream/CVE-2014-1943.testfile	0	Apple Driver Map, blocksize 0
+fileinfo/tests/upstream/CVE-2014-1943.testfile	1040	application/x-apple-diskimage; charset=binary
+fileinfo/tests/upstream/CVE-2014-1943.testfile	16	application/x-apple-diskimage
+fileinfo/tests/upstream/CVE-2014-1943.testfile	1024	binary
+fileinfo/tests/upstream/CVE-2014-1943.testfile	16777216	dmg/iso
+fileinfo/tests/upstream/CVE-2014-1943.testfile	2048	????devr
+fileinfo/tests/upstream/dsd64-dff.result	0	ASCII text, with no line terminators
+fileinfo/tests/upstream/dsd64-dff.result	1040	text/plain; charset=us-ascii
+fileinfo/tests/upstream/dsd64-dff.result	16	text/plain
+fileinfo/tests/upstream/dsd64-dff.result	1024	us-ascii
+fileinfo/tests/upstream/dsd64-dff.result	16777216	???
+fileinfo/tests/upstream/dsd64-dff.result	2048	UNKNUNKN
+fileinfo/tests/upstream/dsd64-dff.testfile	0	DSDIFF audio bitstream data, 1 bit, mono, "DSD 64" 2822400 Hz, no compression, ID3 version 2.0.0
+fileinfo/tests/upstream/dsd64-dff.testfile	1040	audio/x-dff; charset=binary
+fileinfo/tests/upstream/dsd64-dff.testfile	16	audio/x-dff
+fileinfo/tests/upstream/dsd64-dff.testfile	1024	binary
+fileinfo/tests/upstream/dsd64-dff.testfile	16777216	dff
+fileinfo/tests/upstream/dsd64-dff.testfile	2048	UNKNUNKN
+fileinfo/tests/upstream/dsd64-dsf.result	0	ASCII text, with no line terminators
+fileinfo/tests/upstream/dsd64-dsf.result	1040	text/plain; charset=us-ascii
+fileinfo/tests/upstream/dsd64-dsf.result	16	text/plain
+fileinfo/tests/upstream/dsd64-dsf.result	1024	us-ascii
+fileinfo/tests/upstream/dsd64-dsf.result	16777216	???
+fileinfo/tests/upstream/dsd64-dsf.result	2048	UNKNUNKN
+fileinfo/tests/upstream/dsd64-dsf.testfile	0	DSF audio bitstream data, 1 bit, mono, "DSD 64" 2822400 Hz, no compression, ID3 version 2.3.0
+fileinfo/tests/upstream/dsd64-dsf.testfile	1040	audio/x-dsf; charset=binary
+fileinfo/tests/upstream/dsd64-dsf.testfile	16	audio/x-dsf
+fileinfo/tests/upstream/dsd64-dsf.testfile	1024	binary
+fileinfo/tests/upstream/dsd64-dsf.testfile	16777216	dsf
+fileinfo/tests/upstream/dsd64-dsf.testfile	2048	UNKNUNKN
+fileinfo/tests/upstream/escapevel.result	0	ASCII text, with no line terminators
+fileinfo/tests/upstream/escapevel.result	1040	text/plain; charset=us-ascii
+fileinfo/tests/upstream/escapevel.result	16	text/plain
+fileinfo/tests/upstream/escapevel.result	1024	us-ascii
+fileinfo/tests/upstream/escapevel.result	16777216	???
+fileinfo/tests/upstream/escapevel.result	2048	UNKNUNKN
+fileinfo/tests/upstream/escapevel.testfile	0	Zip data (MIME type "application/vnd.nz.gen.geek_central.ti5x"?)
+fileinfo/tests/upstream/escapevel.testfile	1040	application/zip; charset=binary
+fileinfo/tests/upstream/escapevel.testfile	16	application/zip
+fileinfo/tests/upstream/escapevel.testfile	1024	binary
+fileinfo/tests/upstream/escapevel.testfile	16777216	???
+fileinfo/tests/upstream/escapevel.testfile	2048	UNKNUNKN
+fileinfo/tests/upstream/ext4.result	0	ASCII text, with no line terminators
+fileinfo/tests/upstream/ext4.result	1040	text/plain; charset=us-ascii
+fileinfo/tests/upstream/ext4.result	16	text/plain
+fileinfo/tests/upstream/ext4.result	1024	us-ascii
+fileinfo/tests/upstream/ext4.result	16777216	???
+fileinfo/tests/upstream/ext4.result	2048	UNKNUNKN
+fileinfo/tests/upstream/ext4.testfile	0	Linux rev 1.0 ext4 filesystem data, UUID=d32bbb08-3a76-4510-a064-3045f887dbdf (extents) (64bit) (large files) (huge files)
+fileinfo/tests/upstream/ext4.testfile	1040	application/octet-stream; charset=binary
+fileinfo/tests/upstream/ext4.testfile	16	application/octet-stream
+fileinfo/tests/upstream/ext4.testfile	1024	binary
+fileinfo/tests/upstream/ext4.testfile	16777216	???
+fileinfo/tests/upstream/ext4.testfile	2048	UNKNUNKN
+fileinfo/tests/upstream/fit-map-data.result	0	ASCII text, with no line terminators
+fileinfo/tests/upstream/fit-map-data.result	1040	text/plain; charset=us-ascii
+fileinfo/tests/upstream/fit-map-data.result	16	text/plain
+fileinfo/tests/upstream/fit-map-data.result	1024	us-ascii
+fileinfo/tests/upstream/fit-map-data.result	16777216	???
+fileinfo/tests/upstream/fit-map-data.result	2048	UNKNUNKN
+fileinfo/tests/upstream/fit-map-data.testfile	1040	application/octet-stream; charset=binary
+fileinfo/tests/upstream/fit-map-data.testfile	16	application/octet-stream
+fileinfo/tests/upstream/fit-map-data.testfile	1024	binary
+fileinfo/tests/upstream/fit-map-data.testfile	16777216	???
+fileinfo/tests/upstream/fit-map-data.testfile	2048	UNKNUNKN
+fileinfo/tests/upstream/gedcom.result	0	ASCII text, with no line terminators
+fileinfo/tests/upstream/gedcom.result	1040	text/plain; charset=us-ascii
+fileinfo/tests/upstream/gedcom.result	16	text/plain
+fileinfo/tests/upstream/gedcom.result	1024	us-ascii
+fileinfo/tests/upstream/gedcom.result	16777216	???
+fileinfo/tests/upstream/gedcom.result	2048	UNKNUNKN
+fileinfo/tests/upstream/gpkg-1-zst.result	0	ASCII text
+fileinfo/tests/upstream/gpkg-1-zst.result	1040	text/plain; charset=us-ascii
+fileinfo/tests/upstream/gpkg-1-zst.result	16	text/plain
+fileinfo/tests/upstream/gpkg-1-zst.result	1024	us-ascii
+fileinfo/tests/upstream/gpkg-1-zst.result	16777216	???
+fileinfo/tests/upstream/gpkg-1-zst.result	2048	UNKNUNKN
+fileinfo/tests/upstream/hddrawcopytool.result	0	ASCII text, with no line terminators
+fileinfo/tests/upstream/hddrawcopytool.result	1040	text/plain; charset=us-ascii
+fileinfo/tests/upstream/hddrawcopytool.result	16	text/plain
+fileinfo/tests/upstream/hddrawcopytool.result	1024	us-ascii
+fileinfo/tests/upstream/hddrawcopytool.result	16777216	???
+fileinfo/tests/upstream/hddrawcopytool.result	2048	UNKNUNKN
+fileinfo/tests/upstream/hddrawcopytool.testfile	0	HDD Raw Copy Tool 1.10 - HD model: ST500DM0 02-1BD142 serial: 51D20233A7C0
+fileinfo/tests/upstream/hddrawcopytool.testfile	1040	application/octet-stream; charset=binary
+fileinfo/tests/upstream/hddrawcopytool.testfile	16	application/octet-stream
+fileinfo/tests/upstream/hddrawcopytool.testfile	1024	binary
+fileinfo/tests/upstream/hddrawcopytool.testfile	16777216	imgc
+fileinfo/tests/upstream/hddrawcopytool.testfile	2048	UNKNUNKN
+fileinfo/tests/upstream/issue311docx.result	0	ASCII text, with no line terminators
+fileinfo/tests/upstream/issue311docx.result	1040	text/plain; charset=us-ascii
+fileinfo/tests/upstream/issue311docx.result	16	text/plain
+fileinfo/tests/upstream/issue311docx.result	1024	us-ascii
+fileinfo/tests/upstream/issue311docx.result	16777216	???
+fileinfo/tests/upstream/issue311docx.result	2048	UNKNUNKN
+fileinfo/tests/upstream/issue311docx.testfile	0	Microsoft Word 2007+
+fileinfo/tests/upstream/issue311docx.testfile	1040	application/vnd.openxmlformats-officedocument.wordprocessingml.document; charset=binary
+fileinfo/tests/upstream/issue311docx.testfile	16	application/vnd.openxmlformats-officedocument.wordprocessingml.document
+fileinfo/tests/upstream/issue311docx.testfile	1024	binary
+fileinfo/tests/upstream/issue311docx.testfile	16777216	docx
+fileinfo/tests/upstream/issue311docx.testfile	2048	UNKNUNKN
+fileinfo/tests/upstream/issue359xlsx.result	0	ASCII text, with no line terminators
+fileinfo/tests/upstream/issue359xlsx.result	1040	text/plain; charset=us-ascii
+fileinfo/tests/upstream/issue359xlsx.result	16	text/plain
+fileinfo/tests/upstream/issue359xlsx.result	1024	us-ascii
+fileinfo/tests/upstream/issue359xlsx.result	16777216	???
+fileinfo/tests/upstream/issue359xlsx.result	2048	UNKNUNKN
+fileinfo/tests/upstream/issue359xlsx.testfile	0	Microsoft Excel 2007+
+fileinfo/tests/upstream/issue359xlsx.testfile	1040	application/vnd.openxmlformats-officedocument.spreadsheetml.sheet; charset=binary
+fileinfo/tests/upstream/issue359xlsx.testfile	16	application/vnd.openxmlformats-officedocument.spreadsheetml.sheet
+fileinfo/tests/upstream/issue359xlsx.testfile	1024	binary
+fileinfo/tests/upstream/issue359xlsx.testfile	16777216	xlsx
+fileinfo/tests/upstream/issue359xlsx.testfile	2048	UNKNUNKN
+fileinfo/tests/upstream/json1.result	0	ASCII text, with no line terminators
+fileinfo/tests/upstream/json1.result	1040	text/plain; charset=us-ascii
+fileinfo/tests/upstream/json1.result	16	text/plain
+fileinfo/tests/upstream/json1.result	1024	us-ascii
+fileinfo/tests/upstream/json1.result	16777216	???
+fileinfo/tests/upstream/json1.result	2048	UNKNUNKN
+fileinfo/tests/upstream/json1.testfile	0	JSON text data
+fileinfo/tests/upstream/json1.testfile	1040	application/json; charset=us-ascii
+fileinfo/tests/upstream/json1.testfile	16	application/json
+fileinfo/tests/upstream/json1.testfile	1024	us-ascii
+fileinfo/tests/upstream/json1.testfile	16777216	???
+fileinfo/tests/upstream/json1.testfile	2048	UNKNUNKN
+fileinfo/tests/upstream/json2.result	0	ASCII text, with no line terminators
+fileinfo/tests/upstream/json2.result	1040	text/plain; charset=us-ascii
+fileinfo/tests/upstream/json2.result	16	text/plain
+fileinfo/tests/upstream/json2.result	1024	us-ascii
+fileinfo/tests/upstream/json2.result	16777216	???
+fileinfo/tests/upstream/json2.result	2048	UNKNUNKN
+fileinfo/tests/upstream/json2.testfile	0	JSON text data
+fileinfo/tests/upstream/json2.testfile	1040	application/json; charset=us-ascii
+fileinfo/tests/upstream/json2.testfile	16	application/json
+fileinfo/tests/upstream/json2.testfile	1024	us-ascii
+fileinfo/tests/upstream/json2.testfile	16777216	???
+fileinfo/tests/upstream/json2.testfile	2048	UNKNUNKN
+fileinfo/tests/upstream/json3.result	0	ASCII text, with no line terminators
+fileinfo/tests/upstream/json3.result	1040	text/plain; charset=us-ascii
+fileinfo/tests/upstream/json3.result	16	text/plain
+fileinfo/tests/upstream/json3.result	1024	us-ascii
+fileinfo/tests/upstream/json3.result	16777216	???
+fileinfo/tests/upstream/json3.result	2048	UNKNUNKN
+fileinfo/tests/upstream/json3.testfile	0	JSON text data
+fileinfo/tests/upstream/json3.testfile	1040	application/json; charset=us-ascii
+fileinfo/tests/upstream/json3.testfile	16	application/json
+fileinfo/tests/upstream/json3.testfile	1024	us-ascii
+fileinfo/tests/upstream/json3.testfile	16777216	???
+fileinfo/tests/upstream/json3.testfile	2048	UNKNUNKN
+fileinfo/tests/upstream/json4.result	0	ASCII text, with no line terminators
+fileinfo/tests/upstream/json4.result	1040	text/plain; charset=us-ascii
+fileinfo/tests/upstream/json4.result	16	text/plain
+fileinfo/tests/upstream/json4.result	1024	us-ascii
+fileinfo/tests/upstream/json4.result	16777216	???
+fileinfo/tests/upstream/json4.result	2048	UNKNUNKN
+fileinfo/tests/upstream/json4.testfile	0	JSON text data
+fileinfo/tests/upstream/json4.testfile	1040	application/json; charset=us-ascii
+fileinfo/tests/upstream/json4.testfile	16	application/json
+fileinfo/tests/upstream/json4.testfile	1024	us-ascii
+fileinfo/tests/upstream/json4.testfile	16777216	???
+fileinfo/tests/upstream/json4.testfile	2048	UNKNUNKN
+fileinfo/tests/upstream/json5.result	0	ASCII text, with no line terminators
+fileinfo/tests/upstream/json5.result	1040	text/plain; charset=us-ascii
+fileinfo/tests/upstream/json5.result	16	text/plain
+fileinfo/tests/upstream/json5.result	1024	us-ascii
+fileinfo/tests/upstream/json5.result	16777216	???
+fileinfo/tests/upstream/json5.result	2048	UNKNUNKN
+fileinfo/tests/upstream/json5.testfile	0	ASCII text
+fileinfo/tests/upstream/json5.testfile	1040	text/plain; charset=us-ascii
+fileinfo/tests/upstream/json5.testfile	16	text/plain
+fileinfo/tests/upstream/json5.testfile	1024	us-ascii
+fileinfo/tests/upstream/json5.testfile	16777216	???
+fileinfo/tests/upstream/json5.testfile	2048	UNKNUNKN
+fileinfo/tests/upstream/json6.result	0	ASCII text, with no line terminators
+fileinfo/tests/upstream/json6.result	1040	text/plain; charset=us-ascii
+fileinfo/tests/upstream/json6.result	16	text/plain
+fileinfo/tests/upstream/json6.result	1024	us-ascii
+fileinfo/tests/upstream/json6.result	16777216	???
+fileinfo/tests/upstream/json6.result	2048	UNKNUNKN
+fileinfo/tests/upstream/json6.testfile	0	JSON text data
+fileinfo/tests/upstream/json6.testfile	1040	application/json; charset=us-ascii
+fileinfo/tests/upstream/json6.testfile	16	application/json
+fileinfo/tests/upstream/json6.testfile	1024	us-ascii
+fileinfo/tests/upstream/json6.testfile	16777216	???
+fileinfo/tests/upstream/json6.testfile	2048	UNKNUNKN
+fileinfo/tests/upstream/json7.result	0	ASCII text, with no line terminators
+fileinfo/tests/upstream/json7.result	1040	text/plain; charset=us-ascii
+fileinfo/tests/upstream/json7.result	16	text/plain
+fileinfo/tests/upstream/json7.result	1024	us-ascii
+fileinfo/tests/upstream/json7.result	16777216	???
+fileinfo/tests/upstream/json7.result	2048	UNKNUNKN
+fileinfo/tests/upstream/json7.testfile	0	ASCII text
+fileinfo/tests/upstream/json7.testfile	1040	text/plain; charset=us-ascii
+fileinfo/tests/upstream/json7.testfile	16	text/plain
+fileinfo/tests/upstream/json7.testfile	1024	us-ascii
+fileinfo/tests/upstream/json7.testfile	16777216	???
+fileinfo/tests/upstream/json7.testfile	2048	UNKNUNKN
+fileinfo/tests/upstream/json8.result	0	ASCII text, with no line terminators
+fileinfo/tests/upstream/json8.result	1040	text/plain; charset=us-ascii
+fileinfo/tests/upstream/json8.result	16	text/plain
+fileinfo/tests/upstream/json8.result	1024	us-ascii
+fileinfo/tests/upstream/json8.result	16777216	???
+fileinfo/tests/upstream/json8.result	2048	UNKNUNKN
+fileinfo/tests/upstream/json8.testfile	0	JSON text data
+fileinfo/tests/upstream/json8.testfile	1040	application/json; charset=us-ascii
+fileinfo/tests/upstream/json8.testfile	16	application/json
+fileinfo/tests/upstream/json8.testfile	1024	us-ascii
+fileinfo/tests/upstream/json8.testfile	16777216	???
+fileinfo/tests/upstream/json8.testfile	2048	UNKNUNKN
+fileinfo/tests/upstream/jsonlines1.result	0	ASCII text, with no line terminators
+fileinfo/tests/upstream/jsonlines1.result	1040	text/plain; charset=us-ascii
+fileinfo/tests/upstream/jsonlines1.result	16	text/plain
+fileinfo/tests/upstream/jsonlines1.result	1024	us-ascii
+fileinfo/tests/upstream/jsonlines1.result	16777216	???
+fileinfo/tests/upstream/jsonlines1.result	2048	UNKNUNKN
+fileinfo/tests/upstream/JW07022A.mp3.result	0	ASCII text, with no line terminators
+fileinfo/tests/upstream/JW07022A.mp3.result	1040	text/plain; charset=us-ascii
+fileinfo/tests/upstream/JW07022A.mp3.result	16	text/plain
+fileinfo/tests/upstream/JW07022A.mp3.result	1024	us-ascii
+fileinfo/tests/upstream/JW07022A.mp3.result	16777216	???
+fileinfo/tests/upstream/JW07022A.mp3.result	2048	UNKNUNKN
+fileinfo/tests/upstream/JW07022A.mp3.testfile	0	Audio file with ID3 version 2.2.0, contains: MPEG ADTS, layer III, v1, 96 kbps, 44.1 kHz, Monaural
+fileinfo/tests/upstream/JW07022A.mp3.testfile	1040	audio/mpeg; charset=binary
+fileinfo/tests/upstream/JW07022A.mp3.testfile	16	audio/mpeg
+fileinfo/tests/upstream/JW07022A.mp3.testfile	1024	binary
+fileinfo/tests/upstream/JW07022A.mp3.testfile	16777216	???
+fileinfo/tests/upstream/JW07022A.mp3.testfile	2048	UNKNUNKN
+fileinfo/tests/upstream/matilde.arm.result	0	ASCII text, with no line terminators
+fileinfo/tests/upstream/matilde.arm.result	1040	text/plain; charset=us-ascii
+fileinfo/tests/upstream/matilde.arm.result	16	text/plain
+fileinfo/tests/upstream/matilde.arm.result	1024	us-ascii
+fileinfo/tests/upstream/matilde.arm.result	16777216	???
+fileinfo/tests/upstream/matilde.arm.result	2048	UNKNUNKN
+fileinfo/tests/upstream/matilde.arm.testfile	0	Adaptive Multi-Rate Codec (GSM telephony)
+fileinfo/tests/upstream/matilde.arm.testfile	1040	audio/amr; charset=binary
+fileinfo/tests/upstream/matilde.arm.testfile	16	audio/amr
+fileinfo/tests/upstream/matilde.arm.testfile	1024	binary
+fileinfo/tests/upstream/matilde.arm.testfile	16777216	amr
+fileinfo/tests/upstream/matilde.arm.testfile	2048	UNKNUNKN
+fileinfo/tests/upstream/pcjr.result	0	ASCII text, with no line terminators
+fileinfo/tests/upstream/pcjr.result	1040	text/plain; charset=us-ascii
+fileinfo/tests/upstream/pcjr.result	16	text/plain
+fileinfo/tests/upstream/pcjr.result	1024	us-ascii
+fileinfo/tests/upstream/pcjr.result	16777216	???
+fileinfo/tests/upstream/pcjr.result	2048	UNKNUNKN
+fileinfo/tests/upstream/pcjr.testfile	0	PCjr Cartridge image
+fileinfo/tests/upstream/pcjr.testfile	1040	application/octet-stream; charset=binary
+fileinfo/tests/upstream/pcjr.testfile	16	application/octet-stream
+fileinfo/tests/upstream/pcjr.testfile	1024	binary
+fileinfo/tests/upstream/pcjr.testfile	16777216	???
+fileinfo/tests/upstream/pcjr.testfile	2048	UNKNUNKN
+fileinfo/tests/upstream/pgp-binary-key-v2-phil.result	0	ASCII text, with no line terminators
+fileinfo/tests/upstream/pgp-binary-key-v2-phil.result	1040	text/plain; charset=us-ascii
+fileinfo/tests/upstream/pgp-binary-key-v2-phil.result	16	text/plain
+fileinfo/tests/upstream/pgp-binary-key-v2-phil.result	1024	us-ascii
+fileinfo/tests/upstream/pgp-binary-key-v2-phil.result	16777216	???
+fileinfo/tests/upstream/pgp-binary-key-v2-phil.result	2048	UNKNUNKN
+fileinfo/tests/upstream/pgp-binary-key-v3-lutz.result	0	ASCII text, with no line terminators
+fileinfo/tests/upstream/pgp-binary-key-v3-lutz.result	1040	text/plain; charset=us-ascii
+fileinfo/tests/upstream/pgp-binary-key-v3-lutz.result	16	text/plain
+fileinfo/tests/upstream/pgp-binary-key-v3-lutz.result	1024	us-ascii
+fileinfo/tests/upstream/pgp-binary-key-v3-lutz.result	16777216	???
+fileinfo/tests/upstream/pgp-binary-key-v3-lutz.result	2048	UNKNUNKN
+fileinfo/tests/upstream/pgp-binary-key-v4-dsa.result	0	ASCII text, with no line terminators
+fileinfo/tests/upstream/pgp-binary-key-v4-dsa.result	1040	text/plain; charset=us-ascii
+fileinfo/tests/upstream/pgp-binary-key-v4-dsa.result	16	text/plain
+fileinfo/tests/upstream/pgp-binary-key-v4-dsa.result	1024	us-ascii
+fileinfo/tests/upstream/pgp-binary-key-v4-dsa.result	16777216	???
+fileinfo/tests/upstream/pgp-binary-key-v4-dsa.result	2048	UNKNUNKN
+fileinfo/tests/upstream/pgp-binary-key-v4-ecc-no-userid-secret.result	0	ASCII text, with no line terminators
+fileinfo/tests/upstream/pgp-binary-key-v4-ecc-no-userid-secret.result	1040	text/plain; charset=us-ascii
+fileinfo/tests/upstream/pgp-binary-key-v4-ecc-no-userid-secret.result	16	text/plain
+fileinfo/tests/upstream/pgp-binary-key-v4-ecc-no-userid-secret.result	1024	us-ascii
+fileinfo/tests/upstream/pgp-binary-key-v4-ecc-no-userid-secret.result	16777216	???
+fileinfo/tests/upstream/pgp-binary-key-v4-ecc-no-userid-secret.result	2048	UNKNUNKN
+fileinfo/tests/upstream/pgp-binary-key-v4-ecc-secret-key.result	0	ASCII text, with no line terminators
+fileinfo/tests/upstream/pgp-binary-key-v4-ecc-secret-key.result	1040	text/plain; charset=us-ascii
+fileinfo/tests/upstream/pgp-binary-key-v4-ecc-secret-key.result	16	text/plain
+fileinfo/tests/upstream/pgp-binary-key-v4-ecc-secret-key.result	1024	us-ascii
+fileinfo/tests/upstream/pgp-binary-key-v4-ecc-secret-key.result	16777216	???
+fileinfo/tests/upstream/pgp-binary-key-v4-ecc-secret-key.result	2048	UNKNUNKN
+fileinfo/tests/upstream/pgp-binary-key-v4-rsa-key.result	0	ASCII text, with no line terminators
+fileinfo/tests/upstream/pgp-binary-key-v4-rsa-key.result	1040	text/plain; charset=us-ascii
+fileinfo/tests/upstream/pgp-binary-key-v4-rsa-key.result	16	text/plain
+fileinfo/tests/upstream/pgp-binary-key-v4-rsa-key.result	1024	us-ascii
+fileinfo/tests/upstream/pgp-binary-key-v4-rsa-key.result	16777216	???
+fileinfo/tests/upstream/pgp-binary-key-v4-rsa-key.result	2048	UNKNUNKN
+fileinfo/tests/upstream/pgp-binary-key-v4-rsa-no-userid-secret.result	0	ASCII text, with no line terminators
+fileinfo/tests/upstream/pgp-binary-key-v4-rsa-no-userid-secret.result	1040	text/plain; charset=us-ascii
+fileinfo/tests/upstream/pgp-binary-key-v4-rsa-no-userid-secret.result	16	text/plain
+fileinfo/tests/upstream/pgp-binary-key-v4-rsa-no-userid-secret.result	1024	us-ascii
+fileinfo/tests/upstream/pgp-binary-key-v4-rsa-no-userid-secret.result	16777216	???
+fileinfo/tests/upstream/pgp-binary-key-v4-rsa-no-userid-secret.result	2048	UNKNUNKN
+fileinfo/tests/upstream/pgp-binary-key-v4-rsa-secret-key.result	0	ASCII text, with no line terminators
+fileinfo/tests/upstream/pgp-binary-key-v4-rsa-secret-key.result	1040	text/plain; charset=us-ascii
+fileinfo/tests/upstream/pgp-binary-key-v4-rsa-secret-key.result	16	text/plain
+fileinfo/tests/upstream/pgp-binary-key-v4-rsa-secret-key.result	1024	us-ascii
+fileinfo/tests/upstream/pgp-binary-key-v4-rsa-secret-key.result	16777216	???
+fileinfo/tests/upstream/pgp-binary-key-v4-rsa-secret-key.result	2048	UNKNUNKN
+fileinfo/tests/upstream/uf2.result	0	ASCII text, with no line terminators
+fileinfo/tests/upstream/uf2.result	1040	text/plain; charset=us-ascii
+fileinfo/tests/upstream/uf2.result	16	text/plain
+fileinfo/tests/upstream/uf2.result	1024	us-ascii
+fileinfo/tests/upstream/uf2.result	16777216	???
+fileinfo/tests/upstream/uf2.result	2048	UNKNUNKN
+fileinfo/tests/upstream/uf2.testfile	0	UF2 firmware image, family ESP32-S2, address 00000000, 4829 total blocks
+fileinfo/tests/upstream/uf2.testfile	1040	application/octet-stream; charset=binary
+fileinfo/tests/upstream/uf2.testfile	16	application/octet-stream
+fileinfo/tests/upstream/uf2.testfile	1024	binary
+fileinfo/tests/upstream/uf2.testfile	16777216	uf2
+fileinfo/tests/upstream/uf2.testfile	2048	UNKNUNKN
+fileinfo/tests/upstream/zstd-3-skippable-frames.result	0	ASCII text, with no line terminators
+fileinfo/tests/upstream/zstd-3-skippable-frames.result	1040	text/plain; charset=us-ascii
+fileinfo/tests/upstream/zstd-3-skippable-frames.result	16	text/plain
+fileinfo/tests/upstream/zstd-3-skippable-frames.result	1024	us-ascii
+fileinfo/tests/upstream/zstd-3-skippable-frames.result	16777216	???
+fileinfo/tests/upstream/zstd-3-skippable-frames.result	2048	UNKNUNKN
+fileinfo/tests/upstream/zstd-dictionary-0.result	0	ASCII text, with no line terminators
+fileinfo/tests/upstream/zstd-dictionary-0.result	1040	text/plain; charset=us-ascii
+fileinfo/tests/upstream/zstd-dictionary-0.result	16	text/plain
+fileinfo/tests/upstream/zstd-dictionary-0.result	1024	us-ascii
+fileinfo/tests/upstream/zstd-dictionary-0.result	16777216	???
+fileinfo/tests/upstream/zstd-dictionary-0.result	2048	UNKNUNKN
+fileinfo/tests/upstream/zstd-dictionary-1.result	0	ASCII text, with no line terminators
+fileinfo/tests/upstream/zstd-dictionary-1.result	1040	text/plain; charset=us-ascii
+fileinfo/tests/upstream/zstd-dictionary-1.result	16	text/plain
+fileinfo/tests/upstream/zstd-dictionary-1.result	1024	us-ascii
+fileinfo/tests/upstream/zstd-dictionary-1.result	16777216	???
+fileinfo/tests/upstream/zstd-dictionary-1.result	2048	UNKNUNKN
+fileinfo/tests/upstream/zstd-dictionary-2.result	0	ASCII text, with no line terminators
+fileinfo/tests/upstream/zstd-dictionary-2.result	1040	text/plain; charset=us-ascii
+fileinfo/tests/upstream/zstd-dictionary-2.result	16	text/plain
+fileinfo/tests/upstream/zstd-dictionary-2.result	1024	us-ascii
+fileinfo/tests/upstream/zstd-dictionary-2.result	16777216	???
+fileinfo/tests/upstream/zstd-dictionary-2.result	2048	UNKNUNKN
+fileinfo/tests/upstream/zstd-skippable-frame-0.result	0	ASCII text, with no line terminators
+fileinfo/tests/upstream/zstd-skippable-frame-0.result	1040	text/plain; charset=us-ascii
+fileinfo/tests/upstream/zstd-skippable-frame-0.result	16	text/plain
+fileinfo/tests/upstream/zstd-skippable-frame-0.result	1024	us-ascii
+fileinfo/tests/upstream/zstd-skippable-frame-0.result	16777216	???
+fileinfo/tests/upstream/zstd-skippable-frame-0.result	2048	UNKNUNKN
+fileinfo/tests/upstream/zstd-skippable-frame-4.result	0	ASCII text, with no line terminators
+fileinfo/tests/upstream/zstd-skippable-frame-4.result	1040	text/plain; charset=us-ascii
+fileinfo/tests/upstream/zstd-skippable-frame-4.result	16	text/plain
+fileinfo/tests/upstream/zstd-skippable-frame-4.result	1024	us-ascii
+fileinfo/tests/upstream/zstd-skippable-frame-4.result	16777216	???
+fileinfo/tests/upstream/zstd-skippable-frame-4.result	2048	UNKNUNKN
+fileinfo/tests/upstream/zstd-skippable-frame-8.result	0	ASCII text, with no line terminators
+fileinfo/tests/upstream/zstd-skippable-frame-8.result	1040	text/plain; charset=us-ascii
+fileinfo/tests/upstream/zstd-skippable-frame-8.result	16	text/plain
+fileinfo/tests/upstream/zstd-skippable-frame-8.result	1024	us-ascii
+fileinfo/tests/upstream/zstd-skippable-frame-8.result	16777216	???
+fileinfo/tests/upstream/zstd-skippable-frame-8.result	2048	UNKNUNKN
+fileinfo/tests/upstream/zstd-skippable-frame-C.result	0	ASCII text, with no line terminators
+fileinfo/tests/upstream/zstd-skippable-frame-C.result	1040	text/plain; charset=us-ascii
+fileinfo/tests/upstream/zstd-skippable-frame-C.result	16	text/plain
+fileinfo/tests/upstream/zstd-skippable-frame-C.result	1024	us-ascii
+fileinfo/tests/upstream/zstd-skippable-frame-C.result	16777216	???
+fileinfo/tests/upstream/zstd-skippable-frame-C.result	2048	UNKNUNKN
+fileinfo/tests/upstream/zstd-v0.2-FF.result	0	ASCII text, with no line terminators
+fileinfo/tests/upstream/zstd-v0.2-FF.result	1040	text/plain; charset=us-ascii
+fileinfo/tests/upstream/zstd-v0.2-FF.result	16	text/plain
+fileinfo/tests/upstream/zstd-v0.2-FF.result	1024	us-ascii
+fileinfo/tests/upstream/zstd-v0.2-FF.result	16777216	???
+fileinfo/tests/upstream/zstd-v0.2-FF.result	2048	UNKNUNKN
+fileinfo/tests/upstream/zstd-v0.3-FF.result	0	ASCII text, with no line terminators
+fileinfo/tests/upstream/zstd-v0.3-FF.result	1040	text/plain; charset=us-ascii
+fileinfo/tests/upstream/zstd-v0.3-FF.result	16	text/plain
+fileinfo/tests/upstream/zstd-v0.3-FF.result	1024	us-ascii
+fileinfo/tests/upstream/zstd-v0.3-FF.result	16777216	???
+fileinfo/tests/upstream/zstd-v0.3-FF.result	2048	UNKNUNKN
+fileinfo/tests/upstream/zstd-v0.4-FF.result	0	ASCII text, with no line terminators
+fileinfo/tests/upstream/zstd-v0.4-FF.result	1040	text/plain; charset=us-ascii
+fileinfo/tests/upstream/zstd-v0.4-FF.result	16	text/plain
+fileinfo/tests/upstream/zstd-v0.4-FF.result	1024	us-ascii
+fileinfo/tests/upstream/zstd-v0.4-FF.result	16777216	???
+fileinfo/tests/upstream/zstd-v0.4-FF.result	2048	UNKNUNKN
+fileinfo/tests/upstream/zstd-v0.5-FF.result	0	ASCII text, with no line terminators
+fileinfo/tests/upstream/zstd-v0.5-FF.result	1040	text/plain; charset=us-ascii
+fileinfo/tests/upstream/zstd-v0.5-FF.result	16	text/plain
+fileinfo/tests/upstream/zstd-v0.5-FF.result	1024	us-ascii
+fileinfo/tests/upstream/zstd-v0.5-FF.result	16777216	???
+fileinfo/tests/upstream/zstd-v0.5-FF.result	2048	UNKNUNKN
+fileinfo/tests/upstream/zstd-v0.6-FF.result	0	ASCII text, with no line terminators
+fileinfo/tests/upstream/zstd-v0.6-FF.result	1040	text/plain; charset=us-ascii
+fileinfo/tests/upstream/zstd-v0.6-FF.result	16	text/plain
+fileinfo/tests/upstream/zstd-v0.6-FF.result	1024	us-ascii
+fileinfo/tests/upstream/zstd-v0.6-FF.result	16777216	???
+fileinfo/tests/upstream/zstd-v0.6-FF.result	2048	UNKNUNKN
+fileinfo/tests/upstream/zstd-v0.7-00.result	0	ASCII text, with no line terminators
+fileinfo/tests/upstream/zstd-v0.7-00.result	1040	text/plain; charset=us-ascii
+fileinfo/tests/upstream/zstd-v0.7-00.result	16	text/plain
+fileinfo/tests/upstream/zstd-v0.7-00.result	1024	us-ascii
+fileinfo/tests/upstream/zstd-v0.7-00.result	16777216	???
+fileinfo/tests/upstream/zstd-v0.7-00.result	2048	UNKNUNKN
+fileinfo/tests/upstream/zstd-v0.7-21.result	0	ASCII text, with no line terminators
+fileinfo/tests/upstream/zstd-v0.7-21.result	1040	text/plain; charset=us-ascii
+fileinfo/tests/upstream/zstd-v0.7-21.result	16	text/plain
+fileinfo/tests/upstream/zstd-v0.7-21.result	1024	us-ascii
+fileinfo/tests/upstream/zstd-v0.7-21.result	16777216	???
+fileinfo/tests/upstream/zstd-v0.7-21.result	2048	UNKNUNKN
+fileinfo/tests/upstream/zstd-v0.7-22.result	0	ASCII text, with no line terminators
+fileinfo/tests/upstream/zstd-v0.7-22.result	1040	text/plain; charset=us-ascii
+fileinfo/tests/upstream/zstd-v0.7-22.result	16	text/plain
+fileinfo/tests/upstream/zstd-v0.7-22.result	1024	us-ascii
+fileinfo/tests/upstream/zstd-v0.7-22.result	16777216	???
+fileinfo/tests/upstream/zstd-v0.7-22.result	2048	UNKNUNKN
+fileinfo/tests/upstream/zstd-v0.8-00.result	0	ASCII text, with no line terminators
+fileinfo/tests/upstream/zstd-v0.8-00.result	1040	text/plain; charset=us-ascii
+fileinfo/tests/upstream/zstd-v0.8-00.result	16	text/plain
+fileinfo/tests/upstream/zstd-v0.8-00.result	1024	us-ascii
+fileinfo/tests/upstream/zstd-v0.8-00.result	16777216	???
+fileinfo/tests/upstream/zstd-v0.8-00.result	2048	UNKNUNKN
+fileinfo/tests/upstream/zstd-v0.8-01.result	0	ASCII text, with no line terminators
+fileinfo/tests/upstream/zstd-v0.8-01.result	1040	text/plain; charset=us-ascii
+fileinfo/tests/upstream/zstd-v0.8-01.result	16	text/plain
+fileinfo/tests/upstream/zstd-v0.8-01.result	1024	us-ascii
+fileinfo/tests/upstream/zstd-v0.8-01.result	16777216	???
+fileinfo/tests/upstream/zstd-v0.8-01.result	2048	UNKNUNKN
+fileinfo/tests/upstream/zstd-v0.8-02.result	0	ASCII text, with no line terminators
+fileinfo/tests/upstream/zstd-v0.8-02.result	1040	text/plain; charset=us-ascii
+fileinfo/tests/upstream/zstd-v0.8-02.result	16	text/plain
+fileinfo/tests/upstream/zstd-v0.8-02.result	1024	us-ascii
+fileinfo/tests/upstream/zstd-v0.8-02.result	16777216	???
+fileinfo/tests/upstream/zstd-v0.8-02.result	2048	UNKNUNKN
+fileinfo/tests/upstream/zstd-v0.8-03.result	0	ASCII text, with no line terminators
+fileinfo/tests/upstream/zstd-v0.8-03.result	1040	text/plain; charset=us-ascii
+fileinfo/tests/upstream/zstd-v0.8-03.result	16	text/plain
+fileinfo/tests/upstream/zstd-v0.8-03.result	1024	us-ascii
+fileinfo/tests/upstream/zstd-v0.8-03.result	16777216	???
+fileinfo/tests/upstream/zstd-v0.8-03.result	2048	UNKNUNKN
+fileinfo/tests/upstream/zstd-v0.8-16.result	0	ASCII text, with no line terminators
+fileinfo/tests/upstream/zstd-v0.8-16.result	1040	text/plain; charset=us-ascii
+fileinfo/tests/upstream/zstd-v0.8-16.result	16	text/plain
+fileinfo/tests/upstream/zstd-v0.8-16.result	1024	us-ascii
+fileinfo/tests/upstream/zstd-v0.8-16.result	16777216	???
+fileinfo/tests/upstream/zstd-v0.8-16.result	2048	UNKNUNKN
+fileinfo/tests/upstream/zstd-v0.8-20.result	0	ASCII text, with no line terminators
+fileinfo/tests/upstream/zstd-v0.8-20.result	1040	text/plain; charset=us-ascii
+fileinfo/tests/upstream/zstd-v0.8-20.result	16	text/plain
+fileinfo/tests/upstream/zstd-v0.8-20.result	1024	us-ascii
+fileinfo/tests/upstream/zstd-v0.8-20.result	16777216	???
+fileinfo/tests/upstream/zstd-v0.8-20.result	2048	UNKNUNKN
+fileinfo/tests/upstream/zstd-v0.8-21.result	0	ASCII text, with no line terminators
+fileinfo/tests/upstream/zstd-v0.8-21.result	1040	text/plain; charset=us-ascii
+fileinfo/tests/upstream/zstd-v0.8-21.result	16	text/plain
+fileinfo/tests/upstream/zstd-v0.8-21.result	1024	us-ascii
+fileinfo/tests/upstream/zstd-v0.8-21.result	16777216	???
+fileinfo/tests/upstream/zstd-v0.8-21.result	2048	UNKNUNKN
+fileinfo/tests/upstream/zstd-v0.8-22.result	0	ASCII text, with no line terminators
+fileinfo/tests/upstream/zstd-v0.8-22.result	1040	text/plain; charset=us-ascii
+fileinfo/tests/upstream/zstd-v0.8-22.result	16	text/plain
+fileinfo/tests/upstream/zstd-v0.8-22.result	1024	us-ascii
+fileinfo/tests/upstream/zstd-v0.8-22.result	16777216	???
+fileinfo/tests/upstream/zstd-v0.8-22.result	2048	UNKNUNKN
+fileinfo/tests/upstream/zstd-v0.8-23.result	0	ASCII text, with no line terminators
+fileinfo/tests/upstream/zstd-v0.8-23.result	1040	text/plain; charset=us-ascii
+fileinfo/tests/upstream/zstd-v0.8-23.result	16	text/plain
+fileinfo/tests/upstream/zstd-v0.8-23.result	1024	us-ascii
+fileinfo/tests/upstream/zstd-v0.8-23.result	16777216	???
+fileinfo/tests/upstream/zstd-v0.8-23.result	2048	UNKNUNKN
+fileinfo/tests/upstream/zstd-v0.8-F4.result	0	ASCII text, with no line terminators
+fileinfo/tests/upstream/zstd-v0.8-F4.result	1040	text/plain; charset=us-ascii
+fileinfo/tests/upstream/zstd-v0.8-F4.result	16	text/plain
+fileinfo/tests/upstream/zstd-v0.8-F4.result	1024	us-ascii
+fileinfo/tests/upstream/zstd-v0.8-F4.result	16777216	???
+fileinfo/tests/upstream/zstd-v0.8-F4.result	2048	UNKNUNKN
+fileinfo/tests/upstream/zstd-v0.8-FF.result	0	ASCII text, with no line terminators
+fileinfo/tests/upstream/zstd-v0.8-FF.result	1040	text/plain; charset=us-ascii
+fileinfo/tests/upstream/zstd-v0.8-FF.result	16	text/plain
+fileinfo/tests/upstream/zstd-v0.8-FF.result	1024	us-ascii
+fileinfo/tests/upstream/zstd-v0.8-FF.result	16777216	???
+fileinfo/tests/upstream/zstd-v0.8-FF.result	2048	UNKNUNKN
+standard/tests/image/200x100.bmp	0	PC bitmap, Windows 3.x format, 200 x 100 x 24, image size 60000, cbSize 60054, bits offset 54
+standard/tests/image/200x100.bmp	1040	image/bmp; charset=binary
+standard/tests/image/200x100.bmp	16	image/bmp
+standard/tests/image/200x100.bmp	1024	binary
+standard/tests/image/200x100.bmp	16777216	bmp
+standard/tests/image/200x100.bmp	2048	????BMPp
+standard/tests/image/200x100.gif	0	GIF image data, version 89a, 200 x 100
+standard/tests/image/200x100.gif	1040	image/gif; charset=binary
+standard/tests/image/200x100.gif	16	image/gif
+standard/tests/image/200x100.gif	1024	binary
+standard/tests/image/200x100.gif	16777216	gif
+standard/tests/image/200x100.gif	2048	8BIMGIFf
+standard/tests/image/200x100.jpg	0	JPEG image data, JFIF standard 1.01, resolution (DPI), density 96x96, segment length 16, baseline, precision 8, 200x100, components 3
+standard/tests/image/200x100.jpg	1040	image/jpeg; charset=binary
+standard/tests/image/200x100.jpg	16	image/jpeg
+standard/tests/image/200x100.jpg	1024	binary
+standard/tests/image/200x100.jpg	16777216	jpeg/jpg/jpe/jfif
+standard/tests/image/200x100.jpg	2048	8BIMJPEG
+standard/tests/image/200x100.png	0	PNG image data, 200 x 100, 8-bit/color RGB, non-interlaced
+standard/tests/image/200x100.png	1040	image/png; charset=binary
+standard/tests/image/200x100.png	16	image/png
+standard/tests/image/200x100.png	1024	binary
+standard/tests/image/200x100.png	16777216	png
+standard/tests/image/200x100.png	2048	UNKNUNKN
+standard/tests/image/200x100.swf	0	Macromedia Flash data, version 6
+standard/tests/image/200x100.swf	1040	application/x-shockwave-flash; charset=binary
+standard/tests/image/200x100.swf	16	application/x-shockwave-flash
+standard/tests/image/200x100.swf	1024	binary
+standard/tests/image/200x100.swf	16777216	???
+standard/tests/image/200x100.swf	2048	UNKNUNKN
+standard/tests/image/200x100_unknown.unknown	0	ISO-8859 text, with very long lines (54812), with no line terminators
+standard/tests/image/200x100_unknown.unknown	1040	text/plain; charset=iso-8859-1
+standard/tests/image/200x100_unknown.unknown	16	text/plain
+standard/tests/image/200x100_unknown.unknown	1024	iso-8859-1
+standard/tests/image/200x100_unknown.unknown	16777216	???
+standard/tests/image/200x100_unknown.unknown	2048	UNKNUNKN
+standard/tests/image/246x247.png	0	PNG image data, 246 x 247, 4-bit colormap, non-interlaced
+standard/tests/image/246x247.png	1040	image/png; charset=binary
+standard/tests/image/246x247.png	16	image/png
+standard/tests/image/246x247.png	1024	binary
+standard/tests/image/246x247.png	16777216	png
+standard/tests/image/246x247.png	2048	UNKNUNKN
+standard/tests/image/32x256.ico	0	MS Windows icon resource - 1 icon, 32x256, 8 bits/pixel
+standard/tests/image/32x256.ico	1040	image/vnd.microsoft.icon; charset=binary
+standard/tests/image/32x256.ico	16	image/vnd.microsoft.icon
+standard/tests/image/32x256.ico	1024	binary
+standard/tests/image/32x256.ico	16777216	ico
+standard/tests/image/32x256.ico	2048	UNKNUNKN
+standard/tests/image/384x385.png	0	PNG image data, 384 x 385, 1-bit colormap, non-interlaced
+standard/tests/image/384x385.png	1040	image/png; charset=binary
+standard/tests/image/384x385.png	16	image/png
+standard/tests/image/384x385.png	1024	binary
+standard/tests/image/384x385.png	16777216	png
+standard/tests/image/384x385.png	2048	UNKNUNKN
+standard/tests/image/75x50.wbmp	0	data
+standard/tests/image/75x50.wbmp	1040	application/octet-stream; charset=binary
+standard/tests/image/75x50.wbmp	16	application/octet-stream
+standard/tests/image/75x50.wbmp	1024	binary
+standard/tests/image/75x50.wbmp	16777216	???
+standard/tests/image/75x50.wbmp	2048	UNKNUNKN
+standard/tests/image/75x50.xbm	0	xbm image (75x, ASCII text, with CRLF line terminators
+standard/tests/image/75x50.xbm	1040	text/plain; charset=us-ascii
+standard/tests/image/75x50.xbm	16	text/plain
+standard/tests/image/75x50.xbm	1024	us-ascii
+standard/tests/image/75x50.xbm	16777216	???
+standard/tests/image/75x50.xbm	2048	UNKNUNKN
+standard/tests/image/blank_file.bmp	0	empty
+standard/tests/image/blank_file.bmp	1040	application/x-empty; charset=binary
+standard/tests/image/blank_file.bmp	16	application/x-empty
+standard/tests/image/blank_file.bmp	1024	binary
+standard/tests/image/blank_file.bmp	16777216	???
+standard/tests/image/blank_file.bmp	2048	UNKNUNKN
+standard/tests/image/bug13213.jpg	0	JPEG image data, JFIF standard 1.02, resolution (DPI), density 96x96, segment length 16, comment: "PHP Bug #13213 test image generated manually. (c) helly@php.net"
+standard/tests/image/bug13213.jpg	1040	image/jpeg; charset=binary
+standard/tests/image/bug13213.jpg	16	image/jpeg
+standard/tests/image/bug13213.jpg	1024	binary
+standard/tests/image/bug13213.jpg	16777216	jpeg/jpg/jpe/jfif
+standard/tests/image/bug13213.jpg	2048	8BIMJPEG
+standard/tests/image/bug70052_1.wbmp	0	data
+standard/tests/image/bug70052_1.wbmp	1040	application/octet-stream; charset=binary
+standard/tests/image/bug70052_1.wbmp	16	application/octet-stream
+standard/tests/image/bug70052_1.wbmp	1024	binary
+standard/tests/image/bug70052_1.wbmp	16777216	???
+standard/tests/image/bug70052_1.wbmp	2048	UNKNUNKN
+standard/tests/image/bug70052_2.wbmp	0	data
+standard/tests/image/bug70052_2.wbmp	1040	application/octet-stream; charset=binary
+standard/tests/image/bug70052_2.wbmp	16	application/octet-stream
+standard/tests/image/bug70052_2.wbmp	1024	binary
+standard/tests/image/bug70052_2.wbmp	16777216	???
+standard/tests/image/bug70052_2.wbmp	2048	UNKNUNKN
+standard/tests/image/bug71848.jpg	0	JPEG image data, JFIF standard 1.01, aspect ratio, density 1x1, segment length 16, comment: "CREATOR: gd-jpeg v1.0 (using IJG JPEG v90), default quality", baseline, precision 8, 8x8, components 3
+standard/tests/image/bug71848.jpg	1040	image/jpeg; charset=binary
+standard/tests/image/bug71848.jpg	16	image/jpeg
+standard/tests/image/bug71848.jpg	1024	binary
+standard/tests/image/bug71848.jpg	16777216	jpeg/jpg/jpe/jfif
+standard/tests/image/bug71848.jpg	2048	8BIMJPEG
+standard/tests/image/gh20201.avif	0	ISO Media, HEIF Image
+standard/tests/image/gh20201.avif	1040	image/heif; charset=binary
+standard/tests/image/gh20201.avif	16	image/heif
+standard/tests/image/gh20201.avif	1024	binary
+standard/tests/image/gh20201.avif	16777216	???
+standard/tests/image/gh20201.avif	2048	UNKNUNKN
+standard/tests/image/oom_getimagesize_cws.inc	0	PHP script, ASCII text
+standard/tests/image/oom_getimagesize_cws.inc	1040	text/x-php; charset=us-ascii
+standard/tests/image/oom_getimagesize_cws.inc	16	text/x-php
+standard/tests/image/oom_getimagesize_cws.inc	1024	us-ascii
+standard/tests/image/oom_getimagesize_cws.inc	16777216	???
+standard/tests/image/oom_getimagesize_cws.inc	2048	UNKNUNKN
+standard/tests/image/skipif_imagetype.inc	0	PHP script, ASCII text
+standard/tests/image/skipif_imagetype.inc	1040	text/x-php; charset=us-ascii
+standard/tests/image/skipif_imagetype.inc	16	text/x-php
+standard/tests/image/skipif_imagetype.inc	1024	us-ascii
+standard/tests/image/skipif_imagetype.inc	16777216	???
+standard/tests/image/skipif_imagetype.inc	2048	UNKNUNKN
+standard/tests/image/test12pix.webp	0	RIFF (little-endian) data, Web/P image
+standard/tests/image/test12pix.webp	1040	image/webp; charset=binary
+standard/tests/image/test12pix.webp	16	image/webp
+standard/tests/image/test12pix.webp	1024	binary
+standard/tests/image/test12pix.webp	16777216	webp
+standard/tests/image/test12pix.webp	2048	UNKNUNKN
+standard/tests/image/test13pix.swf	0	Macromedia Flash data (compressed), version 6
+standard/tests/image/test13pix.swf	1040	application/x-shockwave-flash; charset=binary
+standard/tests/image/test13pix.swf	16	application/x-shockwave-flash
+standard/tests/image/test13pix.swf	1024	binary
+standard/tests/image/test13pix.swf	16777216	???
+standard/tests/image/test13pix.swf	2048	UNKNUNKN
+standard/tests/image/test1bpix.bmp	0	PC bitmap, Windows 98/2000 and newer format, 1 x 1 x 32, cbSize 142, bits offset 138
+standard/tests/image/test1bpix.bmp	1040	image/bmp; charset=binary
+standard/tests/image/test1bpix.bmp	16	image/bmp
+standard/tests/image/test1bpix.bmp	1024	binary
+standard/tests/image/test1bpix.bmp	16777216	bmp
+standard/tests/image/test1bpix.bmp	2048	UNKNUNKN
+standard/tests/image/test1pix.avif	0	ISO Media, AVIF Image
+standard/tests/image/test1pix.avif	1040	image/avif; charset=binary
+standard/tests/image/test1pix.avif	16	image/avif
+standard/tests/image/test1pix.avif	1024	binary
+standard/tests/image/test1pix.avif	16777216	???
+standard/tests/image/test1pix.avif	2048	UNKNUNKN
+standard/tests/image/test-1pix.bmp	0	PC bitmap, Windows 3.x format, 1 x -1 x 24, image size 4, resolution 3779 x 3779 px/m, cbSize 58, bits offset 54
+standard/tests/image/test-1pix.bmp	1040	image/bmp; charset=binary
+standard/tests/image/test-1pix.bmp	16	image/bmp
+standard/tests/image/test-1pix.bmp	1024	binary
+standard/tests/image/test-1pix.bmp	16777216	bmp
+standard/tests/image/test-1pix.bmp	2048	????BMPp
+standard/tests/image/test1pix.bmp	0	PC bitmap, Windows 3.x format, 1 x 1 x 24, image size 4, resolution 3779 x 3779 px/m, cbSize 58, bits offset 54
+standard/tests/image/test1pix.bmp	1040	image/bmp; charset=binary
+standard/tests/image/test1pix.bmp	16	image/bmp
+standard/tests/image/test1pix.bmp	1024	binary
+standard/tests/image/test1pix.bmp	16777216	bmp/ico
+standard/tests/image/test1pix.bmp	2048	????BMPp
+standard/tests/image/test1pix.jp2	0	JPEG 2000 Part 1 (JP2)
+standard/tests/image/test1pix.jp2	1040	image/jp2; charset=binary
+standard/tests/image/test1pix.jp2	16	image/jp2
+standard/tests/image/test1pix.jp2	1024	binary
+standard/tests/image/test1pix.jp2	16777216	jp2
+standard/tests/image/test1pix.jp2	2048	UNKNUNKN
+standard/tests/image/test1pix.jpc	0	JPEG 2000 codestream
+standard/tests/image/test1pix.jpc	1040	image/x-jp2-codestream; charset=binary
+standard/tests/image/test1pix.jpc	16	image/x-jp2-codestream
+standard/tests/image/test1pix.jpc	1024	binary
+standard/tests/image/test1pix.jpc	16777216	jpc/j2c/j2k
+standard/tests/image/test1pix.jpc	2048	UNKNUNKN
+standard/tests/image/test1pix.jpg	0	JPEG image data, JFIF standard 1.02, resolution (DPI), density 96x96, segment length 16, baseline, precision 8, 1x1, components 3
+standard/tests/image/test1pix.jpg	1040	image/jpeg; charset=binary
+standard/tests/image/test1pix.jpg	16	image/jpeg
+standard/tests/image/test1pix.jpg	1024	binary
+standard/tests/image/test1pix.jpg	16777216	jpeg/jpg/jpe/jfif
+standard/tests/image/test1pix.jpg	2048	8BIMJPEG
+standard/tests/image/test2pix.gif	0	GIF image data, version 89a, 2 x 1
+standard/tests/image/test2pix.gif	1040	image/gif; charset=binary
+standard/tests/image/test2pix.gif	16	image/gif
+standard/tests/image/test2pix.gif	1024	binary
+standard/tests/image/test2pix.gif	16777216	gif
+standard/tests/image/test2pix.gif	2048	8BIMGIFf
+standard/tests/image/test3llpix.webp	0	RIFF (little-endian) data, Web/P image
+standard/tests/image/test3llpix.webp	1040	image/webp; charset=binary
+standard/tests/image/test3llpix.webp	16	image/webp
+standard/tests/image/test3llpix.webp	1024	binary
+standard/tests/image/test3llpix.webp	16777216	webp
+standard/tests/image/test3llpix.webp	2048	UNKNUNKN
+standard/tests/image/test3pix.webp	0	RIFF (little-endian) data, Web/P image, VP8 encoding, 1x3, Scaling: [none]x[none], YUV color, decoders should clamp
+standard/tests/image/test3pix.webp	1040	image/webp; charset=binary
+standard/tests/image/test3pix.webp	16	image/webp
+standard/tests/image/test3pix.webp	1024	binary
+standard/tests/image/test3pix.webp	16777216	webp
+standard/tests/image/test3pix.webp	2048	UNKNUNKN
+standard/tests/image/test4pix.gif	0	GIF image data, version 89a, 4 x 1
+standard/tests/image/test4pix.gif	1040	image/gif; charset=binary
+standard/tests/image/test4pix.gif	16	image/gif
+standard/tests/image/test4pix.gif	1024	binary
+standard/tests/image/test4pix.gif	16777216	gif
+standard/tests/image/test4pix.gif	2048	8BIMGIFf
+standard/tests/image/test4pix.heic	0	ISO Media, HEIF Image HEVC Main or Main Still Picture Profile
+standard/tests/image/test4pix.heic	1040	image/heic; charset=binary
+standard/tests/image/test4pix.heic	16	image/heic
+standard/tests/image/test4pix.heic	1024	binary
+standard/tests/image/test4pix.heic	16777216	???
+standard/tests/image/test4pix.heic	2048	UNKNUNKN
+standard/tests/image/test4pix.iff	0	IFF data, ILBM interleaved image, 4 x 1
+standard/tests/image/test4pix.iff	1040	application/octet-stream; charset=binary
+standard/tests/image/test4pix.iff	16	application/octet-stream
+standard/tests/image/test4pix.iff	1024	binary
+standard/tests/image/test4pix.iff	16777216	???
+standard/tests/image/test4pix.iff	2048	UNKNUNKN
+standard/tests/image/test4pix.png	0	PNG image data, 4 x 1, 4-bit colormap, non-interlaced
+standard/tests/image/test4pix.png	1040	image/png; charset=binary
+standard/tests/image/test4pix.png	16	image/png
+standard/tests/image/test4pix.png	1024	binary
+standard/tests/image/test4pix.png	16777216	png
+standard/tests/image/test4pix.png	2048	UNKNUNKN
+standard/tests/image/test4pix.psd	0	Adobe Photoshop Image, 4 x 1, indexed, 8-bit channel
+standard/tests/image/test4pix.psd	1040	image/vnd.adobe.photoshop; charset=binary
+standard/tests/image/test4pix.psd	16	image/vnd.adobe.photoshop
+standard/tests/image/test4pix.psd	1024	binary
+standard/tests/image/test4pix.psd	16777216	psd
+standard/tests/image/test4pix.psd	2048	????8BPS
+standard/tests/image/test4pix.swf	0	Macromedia Flash data, version 6
+standard/tests/image/test4pix.swf	1040	application/x-shockwave-flash; charset=binary
+standard/tests/image/test4pix.swf	16	application/x-shockwave-flash
+standard/tests/image/test4pix.swf	1024	binary
+standard/tests/image/test4pix.swf	16777216	???
+standard/tests/image/test4pix.swf	2048	UNKNUNKN
+standard/tests/image/test.gif	0	GIF image data, version 89a, 120 x 67
+standard/tests/image/test.gif	1040	image/gif; charset=binary
+standard/tests/image/test.gif	16	image/gif
+standard/tests/image/test.gif	1024	binary
+standard/tests/image/test.gif	16777216	gif
+standard/tests/image/test.gif	2048	8BIMGIFf
+standard/tests/image/test.txt	0	ASCII text, with no line terminators
+standard/tests/image/test.txt	1040	text/plain; charset=us-ascii
+standard/tests/image/test.txt	16	text/plain
+standard/tests/image/test.txt	1024	us-ascii
+standard/tests/image/test.txt	16777216	???
+standard/tests/image/test.txt	2048	UNKNUNKN
+fileinfo/tests/bug57547.phpt	0	PHP core test, ASCII text
+fileinfo/tests/bug57547.phpt	1040	text/plain; charset=us-ascii
+fileinfo/tests/bug57547.phpt	16	text/plain
+fileinfo/tests/bug57547.phpt	1024	us-ascii
+fileinfo/tests/bug57547.phpt	16777216	phpt
+fileinfo/tests/bug57547.phpt	2048	UNKNUNKN
+fileinfo/tests/bug61173.phpt	0	PHP core test, ASCII text
+fileinfo/tests/bug61173.phpt	1040	text/plain; charset=us-ascii
+fileinfo/tests/bug61173.phpt	16	text/plain
+fileinfo/tests/bug61173.phpt	1024	us-ascii
+fileinfo/tests/bug61173.phpt	16777216	phpt
+fileinfo/tests/bug61173.phpt	2048	UNKNUNKN
+fileinfo/tests/bug61964-mb.phpt	0	PHP core test, Unicode text, UTF-8 text
+fileinfo/tests/bug61964-mb.phpt	1040	text/plain; charset=utf-8
+fileinfo/tests/bug61964-mb.phpt	16	text/plain
+fileinfo/tests/bug61964-mb.phpt	1024	utf-8
+fileinfo/tests/bug61964-mb.phpt	16777216	phpt
+fileinfo/tests/bug61964-mb.phpt	2048	UNKNUNKN
+fileinfo/tests/bug61964.phpt	0	PHP core test, ASCII text
+fileinfo/tests/bug61964.phpt	1040	text/plain; charset=us-ascii
+fileinfo/tests/bug61964.phpt	16	text/plain
+fileinfo/tests/bug61964.phpt	1024	us-ascii
+fileinfo/tests/bug61964.phpt	16777216	phpt
+fileinfo/tests/bug61964.phpt	2048	UNKNUNKN
+fileinfo/tests/bug67516.phpt	0	PHP core test, ASCII text
+fileinfo/tests/bug67516.phpt	1040	text/plain; charset=us-ascii
+fileinfo/tests/bug67516.phpt	16	text/plain
+fileinfo/tests/bug67516.phpt	1024	us-ascii
+fileinfo/tests/bug67516.phpt	16777216	phpt
+fileinfo/tests/bug67516.phpt	2048	UNKNUNKN
