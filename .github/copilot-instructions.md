@@ -86,6 +86,13 @@ Cargo workspace, ~100 crates, strictly layered:
   indirection in the executor and `php-runtime` core types. The target is to match or beat
   the C implementation; `scripts/perf_gate.sh` enforces this per workload.
 
+## Workflow
+
+- **Never foreground-wait on build/test/suite runs.** Start builds, test suites, and phpt
+  runs as background tasks and use the wait time productively: update documentation, make
+  pending git commits, review diffs, or plan the next work items. Check results when the
+  background task completes, not by blocking on it.
+
 ## Parallel agents
 
 Several agents work concurrently, one crate each:
