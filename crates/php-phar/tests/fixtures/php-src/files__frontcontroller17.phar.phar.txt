@@ -1,0 +1,9 @@
+version: 1.1.0
+alias: '%DIR%/files/frontcontroller17.phar'
+count: 1
+signature: SHA-1 C1C5F6AEB89FF083FBA0B48B92DFBAC41E60A1E0
+compressed: false
+format: phar
+metadata: NONE
+stub: 1b9e34cb279dd20b0eb244788a36da1f 240
+entry index.php dir=0 size=17 perms=100444 mtime=1471560010 csize=17 gz=0 bz2=0 flags=0 crc=2345948746 meta=NONE md5=5b8c4d6ab5d24d35e5ac72f0166b79ae

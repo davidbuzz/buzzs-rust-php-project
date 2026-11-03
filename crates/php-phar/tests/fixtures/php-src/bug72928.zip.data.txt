@@ -1,0 +1,1 @@
+EXCEPTION UnexpectedValueException: phar error: signature cannot be read in zip-based phar "%DIR%/bug72928.zip"

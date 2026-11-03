@@ -1,0 +1,20 @@
+version: 
+alias: '%DIR%/tar/files/P1-1.0.0.tgz'
+count: 7
+signature: OpenSSL 0BC7A8DD88F33921CD46A4884DFA2A98C3D2E82770A299544C387E4ADC975A361B5BEEB554CC164412B676AEDE6047034798FDDDCF7BC7439249ABEB5DD448ED87F8FAA415AA9E64EA3234CE1AD02934B47342DF7BB1413D3151EFD963174D4EDBF39E56B2C1763362877B4A4BD686BBCBE3D2B79E8DBF426C37F09518C2954849265F6BF797A3F9664272DBADFC3193C0A29B872800203E4C2AB76BFF93D0FFEBCE53E5DF0DE5DFE809093942F8D7D0EA7E1AFA28EF6477C688EF7D8004F06DA6922862C88308D0060C9251264EDF2E4688B88ACC6028F170B833A30FF1D040EB20B50400FFFDE91E6129DEC5F1B22132495E8031875F240B68B1FDA8D3A391
+compressed: 4096
+format: tar
+metadata: s:56:".xmlregistry/packages/pear2.php.net/P1/1.0.0-package.xml";
+stub: d41d8cd98f00b204e9800998ecf8427e 0
+entry .xmlregistry dir=1 size=0 perms=40777 mtime=0 csize=0 gz=0 bz2=0 flags=0 crc=- meta=NONE md5=-
+entry .xmlregistry/packages dir=1 size=0 perms=40777 mtime=0 csize=0 gz=0 bz2=0 flags=0 crc=- meta=NONE md5=-
+entry .xmlregistry/packages/pear2.php.net dir=1 size=0 perms=40777 mtime=0 csize=0 gz=0 bz2=0 flags=0 crc=- meta=NONE md5=-
+entry .xmlregistry/packages/pear2.php.net/P1 dir=1 size=0 perms=40777 mtime=0 csize=0 gz=0 bz2=0 flags=0 crc=- meta=NONE md5=-
+entry .xmlregistry/packages/pear2.php.net/P1/1.0.0-package.xml dir=0 size=1216 perms=100666 mtime=1245819309 csize=1216 gz=0 bz2=0 flags=0 crc=0 meta=NONE md5=a5e4475272b5553f1b5a784b6c8046f4
+entry php dir=1 size=0 perms=40777 mtime=0 csize=0 gz=0 bz2=0 flags=0 crc=- meta=NONE md5=-
+entry php/PEAR2 dir=1 size=0 perms=40777 mtime=1245819309 csize=0 gz=0 bz2=0 flags=0 crc=- meta=NONE md5=-
+entry php/PEAR2/Autoload.php dir=0 size=3 perms=100666 mtime=1245819309 csize=3 gz=0 bz2=0 flags=0 crc=0 meta=NONE md5=764efa883dda1e11db47671c4a3bbd9e
+entry php/PEAR2/Exception.php dir=0 size=3 perms=100666 mtime=1245819309 csize=3 gz=0 bz2=0 flags=0 crc=0 meta=NONE md5=764efa883dda1e11db47671c4a3bbd9e
+entry php/PEAR2/MultiErrors dir=1 size=0 perms=40777 mtime=0 csize=0 gz=0 bz2=0 flags=0 crc=- meta=NONE md5=-
+entry php/PEAR2/MultiErrors/Exception.php dir=0 size=66 perms=100666 mtime=1245819309 csize=66 gz=0 bz2=0 flags=0 crc=0 meta=NONE md5=9c0ab53cc32a2117c5dcf215498753a3
+entry php/PEAR2/MultiErrors.php dir=0 size=3 perms=100666 mtime=1245819309 csize=3 gz=0 bz2=0 flags=0 crc=0 meta=NONE md5=764efa883dda1e11db47671c4a3bbd9e

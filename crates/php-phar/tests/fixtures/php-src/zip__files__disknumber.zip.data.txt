@@ -1,0 +1,1 @@
+EXCEPTION UnexpectedValueException: phar error: split archives spanning multiple zips cannot be processed in zip-based phar "%DIR%/zip/files/disknumber.zip"

@@ -1,0 +1,11 @@
+version: 1.1.0
+alias: '%DIR%/files/include_path2.phar'
+count: 2
+signature: SHA-1 82035659B23DC743B25CC27810D58E2C63B3124D
+compressed: false
+format: phar
+metadata: NONE
+stub: b054613284b7da92db4bba77e169f279 6653
+entry file1.php dir=0 size=10 perms=100444 mtime=1478396159 csize=10 gz=0 bz2=0 flags=0 crc=3267302025 meta=NONE md5=8e830d91ac43dab312e56ae6e0c0d6bf
+entry test dir=1 size=0 perms=40555 mtime=1478396159 csize=0 gz=0 bz2=0 flags=0 crc=- meta=NONE md5=-
+entry test/file1.php dir=0 size=15 perms=100444 mtime=1478396159 csize=15 gz=0 bz2=0 flags=0 crc=1202648643 meta=NONE md5=f81ae03e4ebde86454df7f459518a493

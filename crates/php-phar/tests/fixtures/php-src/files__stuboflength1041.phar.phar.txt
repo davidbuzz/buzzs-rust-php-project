@@ -1,0 +1,10 @@
+version: 1.1.0
+alias: '%DIR%/files/stuboflength1041.phar'
+count: 2
+signature: SHA-1 EE2C13DD11A5AC27FEB965B83ACD11C4B0371A11
+compressed: false
+format: phar
+metadata: NONE
+stub: e1a1b5ae364770c33f03be54a586b4dc 1046
+entry a.php dir=0 size=3 perms=100444 mtime=1320949519 csize=3 gz=0 bz2=0 flags=0 crc=1550095198 meta=NONE md5=bc640ecb0f821b0d408a8d7bc1997976
+entry b.php dir=0 size=3 perms=100444 mtime=1320949519 csize=3 gz=0 bz2=0 flags=0 crc=3312304868 meta=NONE md5=3a17b2790e0fb6f9a94400d70b9d81bf

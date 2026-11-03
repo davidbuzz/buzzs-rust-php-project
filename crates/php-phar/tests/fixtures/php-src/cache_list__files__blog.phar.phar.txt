@@ -1,0 +1,10 @@
+version: 1.1.0
+alias: '%DIR%/cache_list/files/blog.phar'
+count: 2
+signature: SHA-1 BD7D4C912B0BC9F9E1BAC6780111F090DA51C90B
+compressed: false
+format: phar
+metadata: NONE
+stub: fe386801854ab8146ca22301ac4775fe 198
+entry index.php dir=0 size=118 perms=100444 mtime=1211628550 csize=118 gz=0 bz2=0 flags=0 crc=2317732210 meta=NONE md5=e0fc4f1596b593db05d60c3f155665d1
+entry install.php dir=0 size=26 perms=100444 mtime=1211628550 csize=26 gz=0 bz2=0 flags=0 crc=3199021589 meta=NONE md5=2975b740dd00b6e30464e699e63cb19f

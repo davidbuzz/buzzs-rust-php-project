@@ -1,0 +1,1 @@
+EXCEPTION UnexpectedValueException: internal corruption of phar "%DIR%/files/gh20442.phar" (__HALT_COMPILER(); not found)

@@ -1,0 +1,1 @@
+EXCEPTION UnexpectedValueException: phar error: tar-based phar "%DIR%/bug79503.phar" has invalid metadata in magic file ".phar/.metadata.bin"

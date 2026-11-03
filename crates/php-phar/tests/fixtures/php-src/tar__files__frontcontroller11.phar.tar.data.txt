@@ -1,0 +1,1 @@
+EXCEPTION UnexpectedValueException: Cannot create phar '%DIR%/tar/files/frontcontroller11.phar.tar', file extension (or combination) not recognised or the directory does not exist

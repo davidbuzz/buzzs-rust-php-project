@@ -1,0 +1,9 @@
+version: 1.1.0
+alias: '%DIR%/cache_list/files/write4.phar'
+count: 1
+signature: SHA-1 B2C2111EA9188EFB58B3D5C65046DB2EE1FF1233
+compressed: false
+format: phar
+metadata: NONE
+stub: 4d40ccf04ac84ac7eefdd7b9dfda5458 297
+entry tobemounted dir=0 size=2 perms=100444 mtime=1223854760 csize=2 gz=0 bz2=0 flags=0 crc=3633523372 meta=NONE md5=49f68a5c8493ec2c0bf489821c21fc3b

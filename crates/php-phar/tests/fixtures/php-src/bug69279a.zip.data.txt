@@ -1,0 +1,11 @@
+version: 
+alias: '%DIR%/bug69279a.zip'
+count: 3
+signature: none
+compressed: false
+format: zip
+metadata: NONE
+stub: d41d8cd98f00b204e9800998ecf8427e 0
+entry 1.txt dir=0 size=601 perms=100666 mtime=1610955444 csize=217 gz=1 bz2=0 flags=0 crc=- meta=NONE md5=be00ae5d209fc9b29e46db4f5cb87246
+entry 2.txt dir=0 size=5 perms=100666 mtime=1610943508 csize=5 gz=0 bz2=0 flags=0 crc=- meta=NONE md5=2145971cf82058b108229a3a2e3bff35
+entry 3.txt dir=0 size=601 perms=100666 mtime=1610955450 csize=217 gz=1 bz2=0 flags=0 crc=- meta=NONE md5=be00ae5d209fc9b29e46db4f5cb87246

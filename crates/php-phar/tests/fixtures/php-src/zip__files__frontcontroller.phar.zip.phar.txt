@@ -1,0 +1,1 @@
+EXCEPTION UnexpectedValueException: phar error: signature is missing in zip-based phar "%DIR%/zip/files/frontcontroller.phar.zip"

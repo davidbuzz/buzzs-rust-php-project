@@ -1,0 +1,1 @@
+EXCEPTION UnexpectedValueException: phar error: invalid alias "hi/thereaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa..." in tar-based phar "%DIR%/tar/files/badalias1.phar.tar"

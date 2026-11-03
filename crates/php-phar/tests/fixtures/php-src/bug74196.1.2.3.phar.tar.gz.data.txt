@@ -1,0 +1,1 @@
+EXCEPTION UnexpectedValueException: Cannot create phar '%DIR%/bug74196.1.2.3.phar.tar.gz', file extension (or combination) not recognised or the directory does not exist

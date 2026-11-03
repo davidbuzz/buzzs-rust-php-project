@@ -1,0 +1,1 @@
+EXCEPTION UnexpectedValueException: internal corruption of phar "%DIR%/bug69324.phar" (truncated manifest entry)

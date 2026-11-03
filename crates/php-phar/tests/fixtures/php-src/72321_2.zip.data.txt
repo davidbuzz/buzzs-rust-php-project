@@ -1,0 +1,11 @@
+version: 
+alias: '%DIR%/72321_2.zip'
+count: 1
+signature: none
+compressed: false
+format: zip
+metadata: NONE
+stub: d41d8cd98f00b204e9800998ecf8427e 0
+entry AAAAAAAAxxxxBBBBCCCCCCCCxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx dir=1 size=0 perms=40777 mtime=0 csize=0 gz=0 bz2=0 flags=0 crc=- meta=NONE md5=-
+entry AAAAAAAAxxxxBBBBCCCCCCCCxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx/b dir=1 size=0 perms=40777 mtime=0 csize=0 gz=0 bz2=0 flags=0 crc=- meta=NONE md5=-
+entry AAAAAAAAxxxxBBBBCCCCCCCCxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx/b/c dir=0 size=0 perms=100666 mtime=1465713870 csize=0 gz=0 bz2=0 flags=0 crc=- meta=NONE md5=d41d8cd98f00b204e9800998ecf8427e

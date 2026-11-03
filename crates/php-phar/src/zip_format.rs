@@ -262,8 +262,18 @@ pub fn parse(image: Rc<Vec<u8>>, fname: &[u8], require_hash: bool) -> Result<Par
         }
         match get16(c, 10) {
             0 => {}
-            8 => e.flags |= ENT_COMPRESSED_GZ,
-            12 => e.flags |= ENT_COMPRESSED_BZ2,
+            8 => {
+                e.flags |= ENT_COMPRESSED_GZ;
+                if !crate::registry::has_zlib() {
+                    return fail("zlib extension is required");
+                }
+            }
+            12 => {
+                e.flags |= ENT_COMPRESSED_BZ2;
+                if !crate::registry::has_bz2() {
+                    return fail("bzip2 extension is required");
+                }
+            }
             1 => return fail("unsupported compression method (Shrunk) used in this zip"),
             2..=5 => return fail("unsupported compression method (Reduce) used in this zip"),
             6 => return fail("unsupported compression method (Implode) used in this zip"),

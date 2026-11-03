@@ -1,0 +1,11 @@
+version: 
+alias: '%DIR%/bug69720.phar'
+count: 7
+signature: SHA-1 2A90700C002A250E58D97F4654067F6EAFD663D1
+compressed: false
+format: tar
+metadata: s:12:"MY_METADATA_";
+stub: d400e2b23076a0b6a5dee1092af413f0 51
+entry phpinfo.php dir=0 size=0 perms=100000 mtime=0 csize=0 gz=0 bz2=0 flags=0 crc=0 meta=NONE md5=d41d8cd98f00b204e9800998ecf8427e
+entry test.php dir=0 size=11 perms=100444 mtime=1427849871 csize=11 gz=0 bz2=0 flags=0 crc=0 meta=a:1:{s:8:"whatever";i:123;} md5=85045e319309968c6b040fc7c18a1ae8
+entry test2 dir=0 size=11 perms=100444 mtime=1427849871 csize=11 gz=0 bz2=0 flags=0 crc=0 meta=O:8:"DateTime":3:{s:4:"date";s:26:"2000-01-01 00:00:00.000000";s:13:"timezone_type";i:3;s:8:"timezone";s:3:"UTC";} md5=6a6da8a635a06a5d65f8bd4f844a0c0c

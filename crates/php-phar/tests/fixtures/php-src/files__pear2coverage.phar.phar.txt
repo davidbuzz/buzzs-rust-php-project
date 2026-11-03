@@ -1,0 +1,20 @@
+version: 1.1.0
+alias: '%DIR%/files/pear2coverage.phar'
+count: 10
+signature: SHA-1 4E9D9CC89D87C28829D6B8EFE8B21FBD159CE28A
+compressed: false
+format: phar
+metadata: NONE
+stub: 4aef9b02c93422719edc1d3c591ec68c 364
+entry Aggregator.php dir=0 size=5804 perms=100444 mtime=1651096193 csize=5804 gz=0 bz2=0 flags=0 crc=1550726134 meta=NONE md5=6398b9859c3c814ab263609b9cceb6de
+entry Exception.php dir=0 size=100 perms=100444 mtime=1651096193 csize=100 gz=0 bz2=0 flags=0 crc=2492796224 meta=NONE md5=e8934268fe0dffd66364c882607f063d
+entry SourceFile dir=1 size=0 perms=40555 mtime=1651096193 csize=0 gz=0 bz2=0 flags=0 crc=- meta=NONE md5=-
+entry SourceFile/PerTest.php dir=0 size=1157 perms=100444 mtime=1651096193 csize=1157 gz=0 bz2=0 flags=0 crc=1386528243 meta=NONE md5=4ad26fe7114bff6fe38a9a72b8204626
+entry SourceFile.php dir=0 size=2106 perms=100444 mtime=1651096193 csize=2106 gz=0 bz2=0 flags=0 crc=814258046 meta=NONE md5=1a6d0b789afde791a81dfb4a9fe0e64d
+entry Sqlite.php dir=0 size=22576 perms=100444 mtime=1651096193 csize=22576 gz=0 bz2=0 flags=0 crc=754416561 meta=NONE md5=4227650fb4ee903cb9fdd2b2cebc1b8e
+entry Web dir=1 size=0 perms=40555 mtime=1651096193 csize=0 gz=0 bz2=0 flags=0 crc=- meta=NONE md5=-
+entry Web/Aggregator.php dir=0 size=4880 perms=100444 mtime=1651096193 csize=4880 gz=0 bz2=0 flags=0 crc=1647229661 meta=NONE md5=410d21242f98bf6ed7e38f29c66b8f70
+entry Web/Controller.php dir=0 size=2451 perms=100444 mtime=1651096193 csize=2451 gz=0 bz2=0 flags=0 crc=3583938234 meta=NONE md5=e6c8f5a18e7c245dbfda3237afe44005
+entry Web/Exception.php dir=0 size=104 perms=100444 mtime=1651096193 csize=104 gz=0 bz2=0 flags=0 crc=1517296645 meta=NONE md5=cec8a880459b4645120087c9db1cf2dd
+entry Web/View.php dir=0 size=14931 perms=100444 mtime=1651096193 csize=14931 gz=0 bz2=0 flags=0 crc=369386828 meta=NONE md5=c1536460fae283580e1f345015766088
+entry index.php dir=0 size=326 perms=100444 mtime=1651096193 csize=326 gz=0 bz2=0 flags=0 crc=1606558059 meta=NONE md5=a0ddcafc96787115879b059bf9aae854

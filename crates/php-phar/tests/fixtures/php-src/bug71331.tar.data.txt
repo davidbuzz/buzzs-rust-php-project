@@ -1,0 +1,1 @@
+EXCEPTION UnexpectedValueException: phar error: "%DIR%/bug71331.tar" is a corrupted tar file (invalid entry size)

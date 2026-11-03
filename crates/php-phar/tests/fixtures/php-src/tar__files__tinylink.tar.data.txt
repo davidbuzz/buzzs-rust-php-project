@@ -1,0 +1,10 @@
+version: 
+alias: '%DIR%/tar/files/tinylink.tar'
+count: 2
+signature: none
+compressed: false
+format: tar
+metadata: NONE
+stub: d41d8cd98f00b204e9800998ecf8427e 0
+entry file.txt dir=0 size=3 perms=100644 mtime=1210546793 csize=3 gz=0 bz2=0 flags=0 crc=0 meta=NONE md5=764efa883dda1e11db47671c4a3bbd9e
+entry link.txt dir=0 size=0 perms=100777 mtime=1210546811 csize=0 gz=0 bz2=0 flags=0 crc=0 meta=NONE md5=764efa883dda1e11db47671c4a3bbd9e

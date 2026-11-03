@@ -1,0 +1,9 @@
+version: 
+alias: '%DIR%/bug71354.tar'
+count: 1
+signature: none
+compressed: false
+format: tar
+metadata: NONE
+stub: d41d8cd98f00b204e9800998ecf8427e 0
+entry aaaa dir=0 size=0 perms=100666 mtime=1452730792 csize=0 gz=0 bz2=0 flags=0 crc=0 meta=NONE md5=d41d8cd98f00b204e9800998ecf8427e

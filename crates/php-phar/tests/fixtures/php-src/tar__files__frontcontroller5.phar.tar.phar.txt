@@ -1,0 +1,11 @@
+version: 
+alias: '%DIR%/tar/files/frontcontroller5.phar.tar'
+count: 4
+signature: SHA-1 C2CE203C64675095D07479AA95BB14B511AB44C8
+compressed: false
+format: tar
+metadata: NONE
+stub: cf6a886fa2f40ba73e6171bad55bc6b2 149
+entry a.jpg dir=0 size=3 perms=100444 mtime=1213392529 csize=3 gz=0 bz2=0 flags=0 crc=0 meta=NONE md5=46266719a10cd345b20ad764953b8882
+entry a.php dir=0 size=3 perms=100444 mtime=1213392529 csize=3 gz=0 bz2=0 flags=0 crc=0 meta=NONE md5=46266719a10cd345b20ad764953b8882
+entry a.phps dir=0 size=22 perms=100444 mtime=1213392529 csize=22 gz=0 bz2=0 flags=0 crc=0 meta=NONE md5=69da124c77a47b7665275391dbbd7347

@@ -1,0 +1,12 @@
+version: 
+alias: '%DIR%/tar/files/frontcontroller9.phar.tar'
+count: 5
+signature: SHA-1 CF29FC822EF880757521D8C9FD2CD068C4E7B890
+compressed: false
+format: tar
+metadata: NONE
+stub: 762fa1434bc930c5b10662f26745c502 225
+entry a.jpg dir=0 size=4 perms=100444 mtime=1213392536 csize=4 gz=0 bz2=0 flags=0 crc=0 meta=NONE md5=b263b13b8667746abd9cf91ce9e0e630
+entry a.php dir=0 size=22 perms=100444 mtime=1213392536 csize=22 gz=0 bz2=0 flags=0 crc=0 meta=NONE md5=69da124c77a47b7665275391dbbd7347
+entry a.phps dir=0 size=4 perms=100444 mtime=1213392536 csize=4 gz=0 bz2=0 flags=0 crc=0 meta=NONE md5=f839c7944953f1d30003300ffe2dd858
+entry fronk.gronk dir=0 size=4 perms=100444 mtime=1213392536 csize=4 gz=0 bz2=0 flags=0 crc=0 meta=NONE md5=b2e33cf97ce692202a5fb964d5bba3bb

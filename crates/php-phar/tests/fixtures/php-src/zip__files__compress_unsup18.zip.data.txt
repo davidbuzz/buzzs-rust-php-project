@@ -1,0 +1,1 @@
+EXCEPTION UnexpectedValueException: phar error: unsupported compression method (IBM TERSE) used in this zip in zip-based phar "%DIR%/zip/files/compress_unsup18.zip"

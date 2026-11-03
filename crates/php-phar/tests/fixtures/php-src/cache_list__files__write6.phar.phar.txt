@@ -1,0 +1,9 @@
+version: 1.1.0
+alias: '%DIR%/cache_list/files/write6.phar'
+count: 1
+signature: SHA-1 CFACCC42459BBF40C478250C93431E10DC637217
+compressed: false
+format: phar
+metadata: NONE
+stub: 232dff1331ecae68859ba1505bf7907a 592
+entry hi dir=0 size=3 perms=100444 mtime=1235185864 csize=3 gz=0 bz2=0 flags=0 crc=3983506042 meta=NONE md5=764efa883dda1e11db47671c4a3bbd9e

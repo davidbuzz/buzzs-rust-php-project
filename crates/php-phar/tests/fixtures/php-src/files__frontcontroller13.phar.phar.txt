@@ -1,0 +1,12 @@
+version: 1.1.0
+alias: '%DIR%/files/frontcontroller13.phar'
+count: 3
+signature: SHA-1 21E0C33BE407AEA43AA2D0C2AAA65D7B4A2DEBB7
+compressed: false
+format: phar
+metadata: NONE
+stub: c683f20deafbffdd217ca733f1514450 46
+entry index.php dir=0 size=47 perms=100444 mtime=1205292245 csize=47 gz=0 bz2=0 flags=0 crc=2010567405 meta=NONE md5=ba2da30496b748b2678bccbfd029b02f
+entry oof dir=1 size=0 perms=40555 mtime=1205292245 csize=0 gz=0 bz2=0 flags=0 crc=- meta=NONE md5=-
+entry oof/hi.php dir=0 size=21 perms=100444 mtime=1205292245 csize=21 gz=0 bz2=0 flags=0 crc=4079567996 meta=NONE md5=326c4895faed2fae2a9a313e79ca1ea2
+entry oof/test.php dir=0 size=51 perms=100444 mtime=1205292245 csize=51 gz=0 bz2=0 flags=0 crc=1524253190 meta=NONE md5=db6cae3de58934b7fb30e6c492e2cef7

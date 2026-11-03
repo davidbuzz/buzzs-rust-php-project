@@ -1,0 +1,11 @@
+version: 
+alias: '%DIR%/tar/files/frontcontroller7.phar.tar'
+count: 4
+signature: SHA-1 C3386E6406FDC5E948B2883922CBF6789A9EFF44
+compressed: false
+format: tar
+metadata: NONE
+stub: e80bc131f642764ec2f75faec18b96b8 151
+entry a.jpg dir=0 size=3 perms=100444 mtime=1216635845 csize=3 gz=0 bz2=0 flags=0 crc=0 meta=NONE md5=46266719a10cd345b20ad764953b8882
+entry a.php dir=0 size=3 perms=100444 mtime=1216635845 csize=3 gz=0 bz2=0 flags=0 crc=0 meta=NONE md5=46266719a10cd345b20ad764953b8882
+entry a.phps dir=0 size=22 perms=100444 mtime=1216635845 csize=22 gz=0 bz2=0 flags=0 crc=0 meta=NONE md5=69da124c77a47b7665275391dbbd7347

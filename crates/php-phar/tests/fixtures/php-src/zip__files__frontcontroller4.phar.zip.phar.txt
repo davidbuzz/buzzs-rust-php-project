@@ -1,0 +1,11 @@
+version: 
+alias: '%DIR%/zip/files/frontcontroller4.phar.zip'
+count: 4
+signature: SHA-1 6E647076ED699A0D125139B29E88476B213282D0
+compressed: false
+format: zip
+metadata: NONE
+stub: ce632ad8036aeb314aeeb7b032099c84 254
+entry a.jpg dir=0 size=3 perms=100444 mtime=1478352006 csize=3 gz=0 bz2=0 flags=0 crc=- meta=NONE md5=46266719a10cd345b20ad764953b8882
+entry a.php dir=0 size=3 perms=100444 mtime=1478352006 csize=3 gz=0 bz2=0 flags=0 crc=- meta=NONE md5=46266719a10cd345b20ad764953b8882
+entry a.phps dir=0 size=22 perms=100444 mtime=1478352006 csize=22 gz=0 bz2=0 flags=0 crc=- meta=NONE md5=69da124c77a47b7665275391dbbd7347

@@ -1,0 +1,9 @@
+version: 1.1.0
+alias: '%DIR%/cache_list/files/write11.phar'
+count: 1
+signature: SHA-1 8A6A3F8DCF63AB780C48A282FB2A947DC8219335
+compressed: false
+format: phar
+metadata: NONE
+stub: 86925abdd53ba41684bfb4edd6e88631 174
+entry test.txt dir=0 size=24 perms=100444 mtime=1223870104 csize=24 gz=0 bz2=0 flags=0 crc=1167048873 meta=NONE md5=a87c9c0340ba7f697894909f144a87b1

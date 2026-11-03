@@ -1,0 +1,10 @@
+version: 1.1.1
+alias: '%DIR%/cache_list/files/write3.phar'
+count: 2
+signature: SHA-1 6785F2141F6A617BA5EF1D6C174824900297A20F
+compressed: false
+format: phar
+metadata: s:2:"hi";
+stub: f87d397c97347ea404dc973f5b5bc57f 307
+entry test dir=1 size=0 perms=40555 mtime=1223868411 csize=0 gz=0 bz2=0 flags=0 crc=- meta=NONE md5=-
+entry test.txt dir=0 size=3 perms=100444 mtime=1223868411 csize=3 gz=0 bz2=0 flags=0 crc=3983506042 meta=s:2:"hi"; md5=764efa883dda1e11db47671c4a3bbd9e

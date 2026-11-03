@@ -1,0 +1,16 @@
+version: 
+alias: '%DIR%/tar/files/links.tar'
+count: 8
+signature: none
+compressed: false
+format: tar
+metadata: NONE
+stub: d41d8cd98f00b204e9800998ecf8427e 0
+entry testit dir=1 size=0 perms=40755 mtime=1208727565 csize=0 gz=0 bz2=0 flags=0 crc=- meta=NONE md5=-
+entry testit/empty dir=1 size=0 perms=40755 mtime=1208727393 csize=0 gz=0 bz2=0 flags=0 crc=- meta=NONE md5=-
+entry testit/emptyfile dir=0 size=0 perms=100644 mtime=1208727398 csize=0 gz=0 bz2=0 flags=0 crc=0 meta=NONE md5=d41d8cd98f00b204e9800998ecf8427e
+entry testit/file dir=0 size=0 perms=100644 mtime=1208727402 csize=0 gz=0 bz2=0 flags=0 crc=0 meta=NONE md5=764efa883dda1e11db47671c4a3bbd9e
+entry testit/hard dir=0 size=3 perms=100644 mtime=1208727402 csize=3 gz=0 bz2=0 flags=0 crc=0 meta=NONE md5=764efa883dda1e11db47671c4a3bbd9e
+entry testit/hasfiles dir=1 size=0 perms=40755 mtime=1208727412 csize=0 gz=0 bz2=0 flags=0 crc=- meta=NONE md5=-
+entry testit/hasfiles/stuff.txt dir=0 size=9 perms=100644 mtime=1208727412 csize=9 gz=0 bz2=0 flags=0 crc=0 meta=NONE md5=fe50f7c3dd2f847d5b360b65dd42f61a
+entry testit/link dir=0 size=0 perms=100777 mtime=1208727560 csize=0 gz=0 bz2=0 flags=0 crc=0 meta=NONE md5=764efa883dda1e11db47671c4a3bbd9e

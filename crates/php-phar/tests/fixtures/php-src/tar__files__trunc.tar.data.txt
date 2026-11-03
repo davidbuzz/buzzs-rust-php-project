@@ -1,0 +1,1 @@
+EXCEPTION UnexpectedValueException: phar error: "%DIR%/tar/files/trunc.tar" is a corrupted tar file (truncated)

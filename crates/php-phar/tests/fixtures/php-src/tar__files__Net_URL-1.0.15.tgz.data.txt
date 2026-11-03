@@ -1,0 +1,14 @@
+version: 
+alias: '%DIR%/tar/files/Net_URL-1.0.15.tgz'
+count: 4
+signature: none
+compressed: 4096
+format: tar
+metadata: NONE
+stub: d41d8cd98f00b204e9800998ecf8427e 0
+entry Net_URL-1.0.15 dir=1 size=0 perms=40777 mtime=0 csize=0 gz=0 bz2=0 flags=0 crc=- meta=NONE md5=-
+entry Net_URL-1.0.15/URL.php dir=0 size=15304 perms=100644 mtime=1183042623 csize=15304 gz=0 bz2=0 flags=0 crc=0 meta=NONE md5=c7e690d656b56cc48a12399331a35b27
+entry Net_URL-1.0.15/docs dir=1 size=0 perms=40777 mtime=0 csize=0 gz=0 bz2=0 flags=0 crc=- meta=NONE md5=-
+entry Net_URL-1.0.15/docs/6470.php dir=0 size=186 perms=100644 mtime=1183042623 csize=186 gz=0 bz2=0 flags=0 crc=0 meta=NONE md5=0488b5531c31332113100971be7ba2d9
+entry Net_URL-1.0.15/docs/example.php dir=0 size=3382 perms=100644 mtime=1183042623 csize=3382 gz=0 bz2=0 flags=0 crc=0 meta=NONE md5=af793351a5f00e31a2df697b54cfbc02
+entry package.xml dir=0 size=7750 perms=100644 mtime=1183042623 csize=7750 gz=0 bz2=0 flags=0 crc=0 meta=NONE md5=7764f8a1ddab2d376adeea7a2b5f0204

@@ -1,0 +1,10 @@
+version: 
+alias: '%DIR%/bug71391.tar'
+count: 3
+signature: none
+compressed: false
+format: tar
+metadata: s:4:"bbbb";
+stub: d41d8cd98f00b204e9800998ecf8427e 0
+entry aaaa dir=0 size=0 perms=100666 mtime=1452730792 csize=0 gz=0 bz2=0 flags=0 crc=0 meta=NONE md5=d41d8cd98f00b204e9800998ecf8427e
+entry something dir=0 size=9 perms=100666 mtime=1453004923 csize=9 gz=0 bz2=0 flags=0 crc=0 meta=NONE md5=437b930db84b8079c2dd804a71936b5f

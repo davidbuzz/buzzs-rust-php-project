@@ -1,0 +1,9 @@
+version: 1.1.0
+alias: '%DIR%/cache_list/files/write20.phar'
+count: 1
+signature: SHA-1 33B28C2BEF254C73571DC568630A4881F0B07506
+compressed: false
+format: phar
+metadata: NONE
+stub: f6b280934d0423e4217a001d43583e89 180
+entry test.txt dir=0 size=24 perms=100444 mtime=1223871051 csize=24 gz=0 bz2=0 flags=0 crc=1167048873 meta=s:2:"hi"; md5=a87c9c0340ba7f697894909f144a87b1

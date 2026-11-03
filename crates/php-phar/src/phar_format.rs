@@ -322,7 +322,16 @@ pub fn parse(
         e.offset_abs = offset;
         offset += u64::from(e.compressed_filesize);
         match e.flags & ENT_COMPRESSION_MASK {
-            ENT_COMPRESSED_GZ | ENT_COMPRESSED_BZ2 => {}
+            ENT_COMPRESSED_GZ => {
+                if !crate::registry::has_zlib() {
+                    return fail("zlib extension is required for gz compressed .phar file \"%s\"");
+                }
+            }
+            ENT_COMPRESSED_BZ2 => {
+                if !crate::registry::has_bz2() {
+                    return fail("bz2 extension is required for bzip2 compressed .phar file \"%s\"");
+                }
+            }
             _ => {
                 if e.uncompressed_filesize != e.compressed_filesize {
                     return fail("internal corruption of phar \"%s\" (compressed and uncompressed size does not match for uncompressed entry)");

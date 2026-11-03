@@ -1,0 +1,10 @@
+version: 
+alias: '%DIR%/files/notbogus.zip'
+count: 2
+signature: none
+compressed: false
+format: zip
+metadata: NONE
+stub: d41d8cd98f00b204e9800998ecf8427e 0
+entry nonsense.txt dir=0 size=49 perms=100666 mtime=1215357938 csize=49 gz=0 bz2=0 flags=0 crc=- meta=NONE md5=b14596382cf124524576695d1c6b1883
+entry stuff.txt dir=0 size=34 perms=100666 mtime=1215357954 csize=34 gz=0 bz2=0 flags=0 crc=- meta=NONE md5=54ed4ef6d43139fe0bc7a9130beecb4a

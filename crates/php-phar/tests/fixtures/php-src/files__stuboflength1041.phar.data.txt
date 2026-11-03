@@ -1,0 +1,1 @@
+EXCEPTION UnexpectedValueException: Cannot create phar '%DIR%/files/stuboflength1041.phar', file extension (or combination) not recognised or the directory does not exist

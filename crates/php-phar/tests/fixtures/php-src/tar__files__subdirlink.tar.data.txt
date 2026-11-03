@@ -1,0 +1,11 @@
+version: 
+alias: '%DIR%/tar/files/subdirlink.tar'
+count: 3
+signature: none
+compressed: false
+format: tar
+metadata: NONE
+stub: d41d8cd98f00b204e9800998ecf8427e 0
+entry hi dir=1 size=0 perms=40755 mtime=1210547103 csize=0 gz=0 bz2=0 flags=0 crc=- meta=NONE md5=-
+entry hi/link.txt dir=0 size=0 perms=100777 mtime=1210547103 csize=0 gz=0 bz2=0 flags=0 crc=0 meta=NONE md5=764efa883dda1e11db47671c4a3bbd9e
+entry hi/test.txt dir=0 size=3 perms=100644 mtime=1210547094 csize=3 gz=0 bz2=0 flags=0 crc=0 meta=NONE md5=764efa883dda1e11db47671c4a3bbd9e

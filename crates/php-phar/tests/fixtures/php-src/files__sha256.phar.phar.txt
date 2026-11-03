@@ -1,0 +1,9 @@
+version: 1.1.0
+alias: '%DIR%/files/sha256.phar'
+count: 1
+signature: SHA-256 E4E37552C847BE5E1E7E19ED9901E1C5635DA79A7B96E20F03C240D43B11CFDA
+compressed: false
+format: phar
+metadata: NONE
+stub: 27414790753743a62a8b71fd6c6935a9 29
+entry hi dir=0 size=2 perms=100444 mtime=1195968085 csize=2 gz=0 bz2=0 flags=0 crc=3633523372 meta=NONE md5=49f68a5c8493ec2c0bf489821c21fc3b

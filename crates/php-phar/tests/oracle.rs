@@ -316,48 +316,60 @@ fn listing(path: &[u8], is_data: bool) -> String {
     let mut prefix = b"phar://".to_vec();
     prefix.extend_from_slice(&p.get_path().unwrap());
     let w = php_phar::wrapper::PharWrapper;
-    fn walk(w: &php_phar::wrapper::PharWrapper, dir: &[u8], prefix_len: usize, out: &mut String) {
+    fn walk(
+        w: &php_phar::wrapper::PharWrapper,
+        dir: &[u8],
+        prefix_len: usize,
+        out: &mut String,
+    ) -> Result<(), php_phar::error::PharError> {
         let Ok(mut d) = w.opendir(dir, 0, None) else {
-            return;
+            return Ok(());
         };
         while let Some(name) = d.readdir() {
+            if name == b"." || name == b".." {
+                continue;
+            }
             let mut full = dir.to_vec();
             full.push(b'/');
             full.extend_from_slice(&name);
-            let sb = w.url_stat(&full, 0, None).unwrap().unwrap();
+            let sb = w.url_stat(&full, 0, None).unwrap().unwrap_or_default();
             let is_dir = sb.is_dir();
             let mut fi = PharFileInfo::new();
-            fi.construct(&full).unwrap();
+            fi.construct(&full)?;
             let rel = String::from_utf8_lossy(&full[prefix_len + 1..]).into_owned();
-            let crc = if !is_dir && fi.is_crc_checked().unwrap() {
-                (fi.get_crc32().unwrap() & 0xFFFF_FFFF).to_string()
-            } else {
-                "-".into()
-            };
-            let content = if is_dir {
-                "-".to_string()
-            } else {
-                md5hex(&fi.get_content().unwrap())
-            };
-            out.push_str(&format!(
-                "entry {rel} dir={} size={} perms={:o} mtime={} csize={} gz={} bz2={} flags={} crc={crc} meta={} md5={content}\n",
+            let mut line = format!(
+                "entry {rel} dir={} size={} perms={:o} mtime={} csize={} gz={} bz2={} flags={}",
                 i32::from(is_dir),
                 sb.size,
                 sb.mode,
                 sb.mtime,
-                fi.get_compressed_size().unwrap(),
-                i32::from(fi.is_compressed(Some(0x1000)).unwrap()),
-                i32::from(fi.is_compressed(Some(0x2000)).unwrap()),
-                fi.get_phar_flags().unwrap(),
-                meta_string(&fi.get_metadata(false).unwrap()),
-            ));
+                fi.get_compressed_size()?,
+                i32::from(fi.is_compressed(Some(0x1000))?),
+                i32::from(fi.is_compressed(Some(0x2000))?),
+                fi.get_phar_flags()?,
+            );
+            let crc = if !is_dir && fi.is_crc_checked()? {
+                (fi.get_crc32()? & 0xFFFF_FFFF).to_string()
+            } else {
+                "-".into()
+            };
+            line += &format!(" crc={crc} meta={}", meta_string(&fi.get_metadata(false)?));
+            let content = if is_dir {
+                "-".to_string()
+            } else {
+                md5hex(&fi.get_content()?)
+            };
+            out.push_str(&format!("{line} md5={content}\n"));
             fi.release();
             if is_dir {
-                walk(w, &full, prefix_len, out);
+                walk(w, &full, prefix_len, out)?;
             }
         }
+        Ok(())
     }
-    walk(&w, &prefix, prefix.len(), &mut out);
+    if let Err(e) = walk(&w, &prefix, prefix.len(), &mut out) {
+        out += &format!("ITER EXCEPTION {}: {}\n", e.class.name(), e.message);
+    }
     p.release();
     out
 }
@@ -511,4 +523,113 @@ fn php_reads_our_archives() {
     }
     registry::set_ini("phar.readonly", true, true);
     assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+fn php_src_tests() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../modules/php-src/ext/phar/tests")
+}
+
+fn php_src_listing_dir() -> PathBuf {
+    fixtures().join("php-src")
+}
+
+/// The archives shipped with php-src's phar tests (tracked files only).
+fn php_src_archives() -> Vec<String> {
+    let list = php_src_listing_dir().join("files.txt");
+    std::fs::read_to_string(list)
+        .unwrap_or_default()
+        .lines()
+        .map(str::to_string)
+        .collect()
+}
+
+#[test]
+#[ignore = "regenerates php-src archive listings with /usr/bin/php"]
+fn regenerate_php_src_listings() {
+    let o = Command::new("git")
+        .args(["-C", php_src_tests().to_str().unwrap(), "ls-files", "."])
+        .output()
+        .unwrap();
+    let files: Vec<String> = String::from_utf8(o.stdout)
+        .unwrap()
+        .lines()
+        .filter(|f| {
+            [".phar", ".zip", ".tar", ".tgz", ".gz", ".bz2"]
+                .iter()
+                .any(|e| f.ends_with(e))
+        })
+        .map(str::to_string)
+        .collect();
+    let dir = php_src_listing_dir();
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("files.txt"), files.join("\n")).unwrap();
+    let base = std::fs::canonicalize(php_src_tests()).unwrap();
+    for f in &files {
+        let path = base.join(f);
+        for kind in ["phar", "data"] {
+            let l = php(&[
+                "-d",
+                "display_errors=0",
+                "-d",
+                "log_errors=0",
+                oracle_dir().join("list.php").to_str().unwrap(),
+                path.to_str().unwrap(),
+                kind,
+            ]);
+            let text = String::from_utf8_lossy(&l.stdout).replace(base.to_str().unwrap(), "%DIR%");
+            std::fs::write(dir.join(format!("{}.{kind}.txt", f.replace('/', "__"))), text).unwrap();
+        }
+    }
+}
+
+/// Archives where php-src master intentionally differs from PHP 8.3:
+/// GH-20442 (case-insensitive `__halt_compiler()` search) and the zip
+/// `UT` extended-timestamp extra field (8.3 uses the DOS local time).
+const MASTER_DIFFERS: &[&str] = &[
+    "files/gh20442.phar",
+    "bug77565.zip",
+    "gh12532.zip",
+    "zip/files/gh13037.zip",
+    "zip/files/zip.zip",
+];
+
+#[test]
+fn reads_php_src_archives_like_php() {
+    php_phar::stub::set_flavor(php_phar::stub::Flavor::Php83);
+    // The oracle PHP build has no ext/bz2.
+    registry::set_compression_support(true, false);
+    let Ok(base) = std::fs::canonicalize(php_src_tests()) else {
+        return;
+    };
+    let mut failures = Vec::new();
+    let mut checked = 0;
+    for f in php_src_archives() {
+        if f.contains("openssl") || MASTER_DIFFERS.contains(&f.as_str()) {
+            continue;
+        }
+        let path = base.join(&f);
+        if !path.exists() {
+            continue;
+        }
+        for kind in ["phar", "data"] {
+            let Ok(expected) = std::fs::read_to_string(
+                php_src_listing_dir().join(format!("{}.{kind}.txt", f.replace('/', "__"))),
+            ) else {
+                continue;
+            };
+            // OpenSSL-signed archives need an ext/openssl hook.
+            if expected.contains("signature: OpenSSL") {
+                continue;
+            }
+            let ours = listing(path.to_str().unwrap().as_bytes(), kind == "data")
+                .replace(base.to_str().unwrap(), "%DIR%");
+            registry::reset_request();
+            checked += 1;
+            if ours != expected {
+                failures.push(format!("== {f} ({kind})\n--- php\n{expected}--- ours\n{ours}"));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{} of {checked} differ:\n{}", failures.len(), failures.join("\n"));
 }

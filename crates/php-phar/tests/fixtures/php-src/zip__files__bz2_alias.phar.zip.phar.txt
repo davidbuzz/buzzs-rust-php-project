@@ -1,0 +1,1 @@
+EXCEPTION UnexpectedValueException: phar error: bzip2 extension is required in zip-based phar "%DIR%/zip/files/bz2_alias.phar.zip"

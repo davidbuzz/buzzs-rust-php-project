@@ -1,0 +1,1 @@
+EXCEPTION UnexpectedValueException: phar error: "%DIR%/bug69453.tar.phar" is a corrupted tar file (checksum mismatch of file "")

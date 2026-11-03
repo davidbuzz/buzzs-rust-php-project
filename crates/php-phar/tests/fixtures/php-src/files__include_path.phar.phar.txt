@@ -1,0 +1,10 @@
+version: 1.1.0
+alias: '%DIR%/files/include_path.phar'
+count: 1
+signature: SHA-1 81ECD9184F62DE594EBF3163ADCE54EFCAB80E2F
+compressed: false
+format: phar
+metadata: NONE
+stub: cae72062c7b3489d12a12976ccedd044 352
+entry hello dir=1 size=0 perms=40555 mtime=1223793778 csize=0 gz=0 bz2=0 flags=0 crc=- meta=NONE md5=-
+entry hello/test.php dir=0 size=26 perms=100444 mtime=1223793778 csize=26 gz=0 bz2=0 flags=0 crc=1437118728 meta=NONE md5=3e6fe8845a2a88ec89657fc4cbc8896e

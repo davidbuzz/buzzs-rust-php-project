@@ -1,0 +1,9 @@
+version: 1.1.0
+alias: '%DIR%/cache_list/files/write10.phar'
+count: 1
+signature: SHA-1 83B8BDB4025DF1F32B19DAB757E9049201FCF663
+compressed: false
+format: phar
+metadata: NONE
+stub: f18ad46e8472c770df6d10867464c9e9 214
+entry test.txt dir=0 size=24 perms=100444 mtime=1223869227 csize=24 gz=0 bz2=0 flags=0 crc=1167048873 meta=NONE md5=a87c9c0340ba7f697894909f144a87b1

@@ -1,0 +1,29 @@
+version: 
+alias: '%DIR%/files/zfapp.tgz'
+count: 21
+signature: none
+compressed: 4096
+format: tar
+metadata: NONE
+stub: d41d8cd98f00b204e9800998ecf8427e 0
+entry application dir=1 size=0 perms=40755 mtime=1202166494 csize=0 gz=0 bz2=0 flags=0 crc=- meta=NONE md5=-
+entry application/default dir=1 size=0 perms=40755 mtime=1202166494 csize=0 gz=0 bz2=0 flags=0 crc=- meta=NONE md5=-
+entry application/default/controllers dir=1 size=0 perms=40755 mtime=1202166494 csize=0 gz=0 bz2=0 flags=0 crc=- meta=NONE md5=-
+entry application/default/controllers/ErrorController.php dir=0 size=1219 perms=100644 mtime=1202166286 csize=1219 gz=0 bz2=0 flags=0 crc=0 meta=NONE md5=f1cad4e878ff64b7b6ab854837469cbf
+entry application/default/controllers/IndexController.php dir=0 size=404 perms=100644 mtime=1202166420 csize=404 gz=0 bz2=0 flags=0 crc=0 meta=NONE md5=7e5fb6c1c868a0d1b59ae9649cd927cf
+entry application/default/models dir=1 size=0 perms=40755 mtime=1202166494 csize=0 gz=0 bz2=0 flags=0 crc=- meta=NONE md5=-
+entry application/default/views dir=1 size=0 perms=40755 mtime=1202166494 csize=0 gz=0 bz2=0 flags=0 crc=- meta=NONE md5=-
+entry application/default/views/filters dir=1 size=0 perms=40755 mtime=1202166494 csize=0 gz=0 bz2=0 flags=0 crc=- meta=NONE md5=-
+entry application/default/views/helpers dir=1 size=0 perms=40755 mtime=1202166494 csize=0 gz=0 bz2=0 flags=0 crc=- meta=NONE md5=-
+entry application/default/views/scripts dir=1 size=0 perms=40755 mtime=1202166494 csize=0 gz=0 bz2=0 flags=0 crc=- meta=NONE md5=-
+entry application/default/views/scripts/error dir=1 size=0 perms=40755 mtime=1202166494 csize=0 gz=0 bz2=0 flags=0 crc=- meta=NONE md5=-
+entry application/default/views/scripts/error/error.phtml dir=0 size=464 perms=100644 mtime=1202166593 csize=464 gz=0 bz2=0 flags=0 crc=0 meta=NONE md5=f2f1015ca9436f46ec575a7c8986a09b
+entry application/default/views/scripts/index dir=1 size=0 perms=40755 mtime=1202166494 csize=0 gz=0 bz2=0 flags=0 crc=- meta=NONE md5=-
+entry application/default/views/scripts/index/index.phtml dir=0 size=403 perms=100644 mtime=1202166439 csize=403 gz=0 bz2=0 flags=0 crc=0 meta=NONE md5=a3d6b8a1f2790ceb1008b09eb3fd1b20
+entry html dir=1 size=0 perms=40755 mtime=1202166494 csize=0 gz=0 bz2=0 flags=0 crc=- meta=NONE md5=-
+entry html/.htaccess dir=0 size=68 perms=100644 mtime=1202166286 csize=68 gz=0 bz2=0 flags=0 crc=0 meta=NONE md5=2e50c2e56f19322f6f8b60df2d99c97f
+entry html/images dir=1 size=0 perms=40755 mtime=1202166494 csize=0 gz=0 bz2=0 flags=0 crc=- meta=NONE md5=-
+entry html/index.php dir=0 size=535 perms=100644 mtime=1202166286 csize=535 gz=0 bz2=0 flags=0 crc=0 meta=NONE md5=0e345f050f59d6e3059f186e813e2177
+entry html/scripts dir=1 size=0 perms=40755 mtime=1202166494 csize=0 gz=0 bz2=0 flags=0 crc=- meta=NONE md5=-
+entry html/styles dir=1 size=0 perms=40755 mtime=1202166494 csize=0 gz=0 bz2=0 flags=0 crc=- meta=NONE md5=-
+entry library dir=1 size=0 perms=40755 mtime=1202166494 csize=0 gz=0 bz2=0 flags=0 crc=- meta=NONE md5=-

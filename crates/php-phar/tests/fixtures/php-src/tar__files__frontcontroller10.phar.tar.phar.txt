@@ -1,0 +1,9 @@
+version: 
+alias: '%DIR%/tar/files/frontcontroller10.phar.tar'
+count: 2
+signature: SHA-1 070F1305CFD6B7159E6F323AB85F3AC8BB010C77
+compressed: false
+format: tar
+metadata: NONE
+stub: 334ee215e9715ed2e8fbfbe557d2e357 196
+entry index.php dir=0 size=308 perms=100444 mtime=1213392538 csize=308 gz=0 bz2=0 flags=0 crc=0 meta=NONE md5=931931bfecfd25f4c5259a2d4691e580

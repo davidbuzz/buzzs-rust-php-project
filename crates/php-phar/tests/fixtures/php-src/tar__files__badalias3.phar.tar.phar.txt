@@ -1,0 +1,1 @@
+EXCEPTION UnexpectedValueException: phar error: invalid alias "hi;there" in tar-based phar "%DIR%/tar/files/badalias3.phar.tar"

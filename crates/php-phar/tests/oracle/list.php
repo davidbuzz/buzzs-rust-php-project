@@ -19,6 +19,7 @@ echo "format: ", $p->isFileFormat(Phar::ZIP) ? 'zip' : ($p->isFileFormat(Phar::T
 echo "metadata: ", $meta($p), "\n";
 echo "stub: ", md5($p->getStub()), " ", strlen($p->getStub()), "\n";
 $prefix = 'phar://' . $p->getPath() . '/';
+try {
 foreach (new RecursiveIteratorIterator($p, RecursiveIteratorIterator::SELF_FIRST) as $f) {
     $name = substr($f->getPathname(), strlen($prefix));
     $line = "entry $name dir=" . (int)$f->isDir();
@@ -31,4 +32,7 @@ foreach (new RecursiveIteratorIterator($p, RecursiveIteratorIterator::SELF_FIRST
     $line .= " meta=" . $meta($f);
     $line .= " md5=" . ($f->isDir() ? '-' : md5($f->getContent()));
     echo $line, "\n";
+}
+} catch (Throwable $e) {
+    echo "ITER EXCEPTION ", get_class($e), ": ", $e->getMessage(), "\n";
 }

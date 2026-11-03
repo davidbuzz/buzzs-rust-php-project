@@ -1,0 +1,1 @@
+EXCEPTION UnexpectedValueException: phar error: unsupported compression method (PKWare Implode/old IBM TERSE) used in this zip in zip-based phar "%DIR%/zip/files/compress_unsup10.zip"

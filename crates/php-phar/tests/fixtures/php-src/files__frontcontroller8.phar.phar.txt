@@ -1,0 +1,18 @@
+version: 1.1.0
+alias: '%DIR%/files/frontcontroller8.phar'
+count: 10
+signature: SHA-1 8BF07E3C112E39282A02EA5328DCE2B0BCB69F4E
+compressed: false
+format: phar
+metadata: NONE
+stub: caa9b5dbbe230320aa28fdea1def30e0 203
+entry 404.php dir=0 size=18 perms=100444 mtime=1478383723 csize=18 gz=0 bz2=0 flags=0 crc=3911294589 meta=NONE md5=4f6ebe725cc0b63b4566e5ffa830fb5a
+entry a.jpg dir=0 size=4 perms=100444 mtime=1478383723 csize=4 gz=0 bz2=0 flags=0 crc=2992821943 meta=NONE md5=b263b13b8667746abd9cf91ce9e0e630
+entry a.php dir=0 size=22 perms=100444 mtime=1478383723 csize=22 gz=0 bz2=0 flags=0 crc=1619094547 meta=NONE md5=69da124c77a47b7665275391dbbd7347
+entry a.phps dir=0 size=4 perms=100444 mtime=1478383723 csize=4 gz=0 bz2=0 flags=0 crc=728467213 meta=NONE md5=f839c7944953f1d30003300ffe2dd858
+entry a1.phps dir=0 size=63 perms=100444 mtime=1478383723 csize=63 gz=0 bz2=0 flags=0 crc=931309527 meta=NONE md5=8b4eafe47375873e7e82bda6291d9660
+entry bigfile.txt dir=0 size=8193 perms=100444 mtime=1478383723 csize=8193 gz=0 bz2=0 flags=0 crc=503576446 meta=NONE md5=b7652d9bca37038c342cc0c492dd70f9
+entry fatalerror.phps dir=0 size=21 perms=100444 mtime=1478383723 csize=21 gz=0 bz2=0 flags=0 crc=2130173450 meta=NONE md5=9f8e89027d01ad5312558c083fd3d351
+entry fronk.gronk dir=0 size=4 perms=100444 mtime=1478383723 csize=4 gz=0 bz2=0 flags=0 crc=3311789601 meta=NONE md5=b2e33cf97ce692202a5fb964d5bba3bb
+entry noext dir=0 size=2 perms=100444 mtime=1478383723 csize=2 gz=0 bz2=0 flags=0 crc=3633523372 meta=NONE md5=49f68a5c8493ec2c0bf489821c21fc3b
+entry unknown.ext dir=0 size=21 perms=100444 mtime=1478383723 csize=21 gz=0 bz2=0 flags=0 crc=279282989 meta=NONE md5=469bbaa16cc49502ba39a398e024f849

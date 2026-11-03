@@ -1,0 +1,1 @@
+EXCEPTION UnexpectedValueException: phar error: tar-based phar "%DIR%/tar/files/badalias5.phar.tar" has alias that is larger than 511 bytes, cannot process

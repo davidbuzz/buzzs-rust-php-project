@@ -1,0 +1,1 @@
+EXCEPTION UnexpectedValueException: phar error: end of central directory not found in zip-based phar "%DIR%/bug71498.zip"

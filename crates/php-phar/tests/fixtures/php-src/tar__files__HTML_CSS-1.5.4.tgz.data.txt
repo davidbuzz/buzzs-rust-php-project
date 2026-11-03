@@ -1,0 +1,39 @@
+version: 
+alias: '%DIR%/tar/files/HTML_CSS-1.5.4.tgz'
+count: 27
+signature: none
+compressed: 4096
+format: tar
+metadata: NONE
+stub: d41d8cd98f00b204e9800998ecf8427e 0
+entry HTML_CSS-1.5.4 dir=1 size=0 perms=40777 mtime=0 csize=0 gz=0 bz2=0 flags=0 crc=- meta=NONE md5=-
+entry HTML_CSS-1.5.4/CSS dir=1 size=0 perms=40777 mtime=0 csize=0 gz=0 bz2=0 flags=0 crc=- meta=NONE md5=-
+entry HTML_CSS-1.5.4/CSS/Error.php dir=0 size=14581 perms=100666 mtime=33206 csize=14581 gz=0 bz2=0 flags=0 crc=0 meta=NONE md5=4c81a521793091a32c447c06f6b1c097
+entry HTML_CSS-1.5.4/CSS.php dir=0 size=97236 perms=100666 mtime=33206 csize=97236 gz=0 bz2=0 flags=0 crc=0 meta=NONE md5=65563b0a4e9ef702dd87a320647971ad
+entry HTML_CSS-1.5.4/ChangeLog dir=0 size=6815 perms=100666 mtime=33206 csize=6815 gz=0 bz2=0 flags=0 crc=0 meta=NONE md5=751d98031afaa4b51ed10b64429e0c57
+entry HTML_CSS-1.5.4/examples dir=1 size=0 perms=40777 mtime=0 csize=0 gz=0 bz2=0 flags=0 crc=- meta=NONE md5=-
+entry HTML_CSS-1.5.4/examples/CSS_Advanced.php dir=0 size=1016 perms=100666 mtime=33206 csize=1016 gz=0 bz2=0 flags=0 crc=0 meta=NONE md5=1543a31121e351f8cf0eb1c5bc5e4685
+entry HTML_CSS-1.5.4/examples/CSS_DisplayOnline.php dir=0 size=1130 perms=100666 mtime=33206 csize=1130 gz=0 bz2=0 flags=0 crc=0 meta=NONE md5=bbd42307855c479fc167bcf431a1749b
+entry HTML_CSS-1.5.4/examples/CSS_InHeader.php dir=0 size=1550 perms=100666 mtime=33206 csize=1550 gz=0 bz2=0 flags=0 crc=0 meta=NONE md5=03c48c69c2565b088ea58d96dbfa13cf
+entry HTML_CSS-1.5.4/examples/CSS_Inline.php dir=0 size=1413 perms=100666 mtime=33206 csize=1413 gz=0 bz2=0 flags=0 crc=0 meta=NONE md5=1036574f501c154361e76f13209f6694
+entry HTML_CSS-1.5.4/examples/CSS_Logger.php dir=0 size=6108 perms=100666 mtime=33206 csize=6108 gz=0 bz2=0 flags=0 crc=0 meta=NONE md5=749d8d20488cdad8244bee6b4f9733cc
+entry HTML_CSS-1.5.4/examples/CSS_Stylesheet.php dir=0 size=1064 perms=100666 mtime=33206 csize=1064 gz=0 bz2=0 flags=0 crc=0 meta=NONE md5=187c9e50f3595429370cdd2308b0a145
+entry HTML_CSS-1.5.4/examples/CSS_grepStyles.php dir=0 size=2975 perms=100666 mtime=33206 csize=2975 gz=0 bz2=0 flags=0 crc=0 meta=NONE md5=44342f3bd3e570e58e18ce5f6c854e19
+entry HTML_CSS-1.5.4/examples/CSS_parseData.php dir=0 size=2021 perms=100666 mtime=33206 csize=2021 gz=0 bz2=0 flags=0 crc=0 meta=NONE md5=2308abf78460db031f0fade6022b2a08
+entry HTML_CSS-1.5.4/examples/CSS_req12194_atrule_api.php dir=0 size=1419 perms=100666 mtime=33206 csize=1419 gz=0 bz2=0 flags=0 crc=0 meta=NONE md5=08facf95c0f17e00fc016d3d59c80c4a
+entry HTML_CSS-1.5.4/examples/CSS_req12194_atrule_parser.php dir=0 size=570 perms=100666 mtime=33206 csize=570 gz=0 bz2=0 flags=0 crc=0 meta=NONE md5=f1705159532bda8ee3ce3796371cf23a
+entry HTML_CSS-1.5.4/examples/CSS_validate.php dir=0 size=2708 perms=100666 mtime=33206 csize=2708 gz=0 bz2=0 flags=0 crc=0 meta=NONE md5=50095673510865cca6c36e7b577334ed
+entry HTML_CSS-1.5.4/examples/css_error_custom.php dir=0 size=2664 perms=100666 mtime=33206 csize=2664 gz=0 bz2=0 flags=0 crc=0 meta=NONE md5=d5063c0b92e4408932d8a150a33d8354
+entry HTML_CSS-1.5.4/examples/css_error_ignore.php dir=0 size=1255 perms=100666 mtime=33206 csize=1255 gz=0 bz2=0 flags=0 crc=0 meta=NONE md5=0c179d0d57fbdffd012f3493ac580c0b
+entry HTML_CSS-1.5.4/examples/css_error_logger.php dir=0 size=4226 perms=100666 mtime=33206 csize=4226 gz=0 bz2=0 flags=0 crc=0 meta=NONE md5=c8dc6b11406facb7ed0f19c8f01f753f
+entry HTML_CSS-1.5.4/examples/css_errorstack_custom.php dir=0 size=5160 perms=100666 mtime=33206 csize=5160 gz=0 bz2=0 flags=0 crc=0 meta=NONE md5=269cc7e3f96bcf024e7331ee52776055
+entry HTML_CSS-1.5.4/examples/css_errorstack_logger.php dir=0 size=6149 perms=100666 mtime=33206 csize=6149 gz=0 bz2=0 flags=0 crc=0 meta=NONE md5=b15d27c57162eed9139799f9046f73ea
+entry HTML_CSS-1.5.4/tests dir=1 size=0 perms=40777 mtime=0 csize=0 gz=0 bz2=0 flags=0 crc=- meta=NONE md5=-
+entry HTML_CSS-1.5.4/tests/AllTests.php dir=0 size=4165 perms=100666 mtime=33206 csize=4165 gz=0 bz2=0 flags=0 crc=0 meta=NONE md5=41a35f74b30f939138e06929793208c5
+entry HTML_CSS-1.5.4/tests/HTML_CSS_TestSuite_Bugs.php dir=0 size=20751 perms=100666 mtime=33206 csize=20751 gz=0 bz2=0 flags=0 crc=0 meta=NONE md5=13d42193dfa686ca4524677650dbe7f2
+entry HTML_CSS-1.5.4/tests/HTML_CSS_TestSuite_Output.php dir=0 size=4171 perms=100666 mtime=33206 csize=4171 gz=0 bz2=0 flags=0 crc=0 meta=NONE md5=2e66fc3c677ff212a847416d2ab8a2f2
+entry HTML_CSS-1.5.4/tests/HTML_CSS_TestSuite_Standard.php dir=0 size=59825 perms=100666 mtime=33206 csize=59825 gz=0 bz2=0 flags=0 crc=0 meta=NONE md5=f2fc90f4afde8c76f5a4e0e9a94a94f6
+entry HTML_CSS-1.5.4/tests/TestListener.php dir=0 size=2459 perms=100666 mtime=33206 csize=2459 gz=0 bz2=0 flags=0 crc=0 meta=NONE md5=13cf7dbaa47942293f14e3f5c8b633f1
+entry HTML_CSS-1.5.4/tests/phpunit.xml dir=0 size=812 perms=100666 mtime=33206 csize=812 gz=0 bz2=0 flags=0 crc=0 meta=NONE md5=bdb58577bae9ea9ac7ef84e36087ac06
+entry HTML_CSS-1.5.4/tests/stylesheet.css dir=0 size=1429 perms=100666 mtime=33206 csize=1429 gz=0 bz2=0 flags=0 crc=0 meta=NONE md5=44be5c6f33b217d75eacf2935a0f4a1f
+entry package.xml dir=0 size=22295 perms=100666 mtime=33206 csize=22295 gz=0 bz2=0 flags=0 crc=0 meta=NONE md5=f0b3c429afb7cf57bc89b744f88bf773

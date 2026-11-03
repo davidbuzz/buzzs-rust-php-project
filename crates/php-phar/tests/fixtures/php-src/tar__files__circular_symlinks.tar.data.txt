@@ -1,0 +1,10 @@
+version: 
+alias: '%DIR%/tar/files/circular_symlinks.tar'
+count: 2
+signature: none
+compressed: false
+format: tar
+metadata: NONE
+stub: d41d8cd98f00b204e9800998ecf8427e 0
+entry file_a dir=0 size=0 perms=100644 mtime=0 csize=0 gz=0 bz2=0 flags=0 crc=0 meta=NONE md5=d41d8cd98f00b204e9800998ecf8427e
+entry file_b dir=0 size=0 perms=100644 mtime=0 csize=0 gz=0 bz2=0 flags=0 crc=0 meta=NONE md5=d41d8cd98f00b204e9800998ecf8427e

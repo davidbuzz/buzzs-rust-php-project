@@ -1,0 +1,11 @@
+version: 
+alias: '%DIR%/tar/files/biglink.tar'
+count: 3
+signature: none
+compressed: false
+format: tar
+metadata: NONE
+stub: d41d8cd98f00b204e9800998ecf8427e 0
+entry file.txt dir=0 size=0 perms=100777 mtime=1210545987 csize=0 gz=0 bz2=0 flags=0 crc=0 meta=NONE md5=af6e53e029ab4b3f3039ad1a3039d030
+entry my dir=1 size=0 perms=40755 mtime=1210546006 csize=0 gz=0 bz2=0 flags=0 crc=- meta=NONE md5=-
+entry my/file dir=0 size=8 perms=100644 mtime=1210546006 csize=8 gz=0 bz2=0 flags=0 crc=0 meta=NONE md5=af6e53e029ab4b3f3039ad1a3039d030

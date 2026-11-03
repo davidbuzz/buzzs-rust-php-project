@@ -1,0 +1,1 @@
+EXCEPTION UnexpectedValueException: tar-based phar "%DIR%/tar/files/links.phar.tar" does not have a signature

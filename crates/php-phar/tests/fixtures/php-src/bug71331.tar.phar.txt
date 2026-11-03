@@ -1,0 +1,1 @@
+EXCEPTION UnexpectedValueException: Cannot create phar '%DIR%/bug71331.tar', file extension (or combination) not recognised or the directory does not exist

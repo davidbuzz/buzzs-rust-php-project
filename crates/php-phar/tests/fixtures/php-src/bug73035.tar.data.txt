@@ -1,0 +1,1 @@
+EXCEPTION UnexpectedValueException: phar error: tar-based phar "%DIR%/bug73035.tar" signature cannot be read

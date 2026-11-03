@@ -1,0 +1,1 @@
+EXCEPTION UnexpectedValueException: phar error: Cannot process zips created from stdin (zero-length filename) in zip-based phar "%DIR%/zip/files/stdin.zip"

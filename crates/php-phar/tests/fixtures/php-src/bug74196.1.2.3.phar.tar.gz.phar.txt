@@ -1,0 +1,11 @@
+version: 
+alias: '%DIR%/bug74196.1.2.3.phar.tar.gz'
+count: 4
+signature: SHA-1 ADABCE4D77062DAC03044E5326FF48BF4228EB31
+compressed: 4096
+format: tar
+metadata: NONE
+stub: f6a3e44876aa82b6ea1e2305fbfb330a 60
+entry a dir=0 size=1 perms=100444 mtime=1141214400 csize=1 gz=0 bz2=0 flags=0 crc=0 meta=NONE md5=0cc175b9c0f1b6a831c399e269772661
+entry b dir=0 size=1 perms=100444 mtime=1141214400 csize=1 gz=0 bz2=0 flags=0 crc=0 meta=NONE md5=92eb5ffee6ae2fec3ad71c777531578f
+entry c dir=0 size=1 perms=100444 mtime=1141214400 csize=1 gz=0 bz2=0 flags=0 crc=0 meta=NONE md5=4a8a08f09d37b73795649038408b5f33

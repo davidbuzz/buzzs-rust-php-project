@@ -1,0 +1,1 @@
+EXCEPTION UnexpectedValueException: phar error: unsupported compression method (Tokenize) used in this zip in zip-based phar "%DIR%/zip/files/compress_unsup7.zip"

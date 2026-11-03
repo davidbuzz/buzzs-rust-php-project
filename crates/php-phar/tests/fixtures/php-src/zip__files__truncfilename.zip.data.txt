@@ -1,0 +1,1 @@
+EXCEPTION UnexpectedValueException: phar error: corrupted central directory entry, no magic signature in zip-based phar "%DIR%/zip/files/truncfilename.zip"

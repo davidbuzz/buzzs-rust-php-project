@@ -1,0 +1,11 @@
+version: 1.1.0
+alias: '%DIR%/cache_list/files/frontcontroller5.phar'
+count: 3
+signature: SHA-1 D5C9BA6C23EF74ECDB40BB30935EA1F95359F59E
+compressed: false
+format: phar
+metadata: NONE
+stub: cf6a886fa2f40ba73e6171bad55bc6b2 149
+entry a.jpg dir=0 size=3 perms=100444 mtime=1199511835 csize=3 gz=0 bz2=0 flags=0 crc=3501715373 meta=NONE md5=46266719a10cd345b20ad764953b8882
+entry a.php dir=0 size=3 perms=100444 mtime=1199511835 csize=3 gz=0 bz2=0 flags=0 crc=3501715373 meta=NONE md5=46266719a10cd345b20ad764953b8882
+entry a.phps dir=0 size=22 perms=100444 mtime=1199511835 csize=22 gz=0 bz2=0 flags=0 crc=1619094547 meta=NONE md5=69da124c77a47b7665275391dbbd7347

@@ -1,0 +1,10 @@
+version: 1.1.0
+alias: '%DIR%/tar/files/bug67761.tar/bug67761.phar'
+count: 2
+signature: SHA-1 8C5FEC729FBFA87626DF36CBDFE56848817FF64F
+compressed: false
+format: phar
+metadata: NONE
+stub: eb7ece45d973ef44357eeaef47148aaa 116
+entry some.txt dir=0 size=12000 perms=100444 mtime=1427718337 csize=12000 gz=0 bz2=0 flags=0 crc=586977933 meta=NONE md5=9116010774d30a544dc3991eccde880f
+entry test.php dir=0 size=18 perms=100444 mtime=1427718337 csize=18 gz=0 bz2=0 flags=0 crc=2680713701 meta=NONE md5=7409468c457e85e23acc189e0832eff1
