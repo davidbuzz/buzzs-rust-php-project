@@ -1,5 +1,6 @@
 <?php
-// Generates calendar_oracle.txt from the C implementation (php -n -d extension=calendar).
+// Generates calendar_oracle.txt from the C implementation:
+//   php -d memory_limit=1G gen_oracle.php > calendar_oracle.txt
 // Format: func|arg,arg,...|result   (strings hex-encoded with "h:" prefix,
 // ints as "i:", null "n", errors "E:<message>").
 mt_srand(12345);

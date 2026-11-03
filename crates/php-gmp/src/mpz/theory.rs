@@ -172,15 +172,25 @@ impl Mpz {
         if m == Self::from(1) {
             return Self::zero();
         }
-        let mut base = self.modulo(&m);
+        let base = self.modulo(&m);
+        if e.is_zero() {
+            return Self::from(1);
+        }
+        if m.is_odd() && m.limbs().len() > 1 {
+            return powm_montgomery(&base, e, &m);
+        }
+        // Left-to-right fixed 4-bit window with plain reduction.
+        let mut table = vec![Self::from(1), base.clone()];
+        for i in 2..16 {
+            table.push((&table[i - 1] * &base).modulo(&m));
+        }
         let mut result = Self::from(1);
-        let bits = e.bit_len();
-        for i in 0..bits {
-            if e.test_bit(i) {
-                result = (&result * &base).modulo(&m);
+        for w in exponent_windows(e) {
+            for _ in 0..4 {
+                result = (&result * &result).modulo(&m);
             }
-            if i + 1 < bits {
-                base = (&base * &base).modulo(&m);
+            if w != 0 {
+                result = (&result * &table[w]).modulo(&m);
             }
         }
         result
@@ -358,6 +368,44 @@ impl Mpz {
         }
         r
     }
+}
+
+/// The exponent split into 4-bit windows, most significant first.
+fn exponent_windows(e: &Mpz) -> Vec<usize> {
+    let bits = e.bit_len();
+    let n = bits.div_ceil(4);
+    (0..n)
+        .rev()
+        .map(|i| {
+            let mut w = 0usize;
+            for b in (0..4).rev() {
+                w = (w << 1) | usize::from(e.test_bit(i * 4 + b));
+            }
+            w
+        })
+        .collect()
+}
+
+/// `base^e mod m` for odd multi-limb `m`, `0 <= base < m`, `e > 0`.
+fn powm_montgomery(base: &Mpz, e: &Mpz, m: &Mpz) -> Mpz {
+    let ctx = mag::Montgomery::new(m.limbs());
+    let one = ctx.to_mont(&[1]);
+    let b = ctx.to_mont(base.limbs());
+    let mut table = vec![one.clone(), b.clone()];
+    for i in 2..16 {
+        let next = ctx.mul(&table[i - 1], &b);
+        table.push(next);
+    }
+    let mut acc = one;
+    for w in exponent_windows(e) {
+        for _ in 0..4 {
+            acc = ctx.mul(&acc, &acc);
+        }
+        if w != 0 {
+            acc = ctx.mul(&acc, &table[w]);
+        }
+    }
+    Mpz::from_parts(false, ctx.redc(&acc))
 }
 
 /// Strong probable-prime test to base 2 plus the strong Lucas test with

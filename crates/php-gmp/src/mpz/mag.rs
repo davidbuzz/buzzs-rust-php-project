@@ -444,6 +444,68 @@ pub fn pow(a: &[u64], e: u64) -> Vec<u64> {
     }
 }
 
+/// Montgomery arithmetic modulo an odd modulus `m` (normalized, len `n`).
+pub struct Montgomery {
+    m: Vec<u64>,
+    /// `-m^{-1} mod 2^64`.
+    minv: u64,
+}
+
+impl Montgomery {
+    /// Prepares the context; `m` must be odd and normalized.
+    pub fn new(m: &[u64]) -> Self {
+        let m0 = m[0];
+        let mut inv: u64 = 1;
+        for _ in 0..6 {
+            inv = inv.wrapping_mul(2u64.wrapping_sub(m0.wrapping_mul(inv)));
+        }
+        Self {
+            m: m.to_vec(),
+            minv: inv.wrapping_neg(),
+        }
+    }
+
+    /// Converts `a < m` into Montgomery form `a * R mod m`.
+    pub fn to_mont(&self, a: &[u64]) -> Vec<u64> {
+        let shifted = shl(a, 64 * self.m.len() as u64);
+        divrem(&shifted, &self.m).1
+    }
+
+    /// Montgomery reduction of `t < m * R`: `t * R^{-1} mod m`.
+    pub fn redc(&self, t: &[u64]) -> Vec<u64> {
+        let n = self.m.len();
+        let mut buf = vec![0u64; 2 * n + 1];
+        buf[..t.len()].copy_from_slice(t);
+        for i in 0..n {
+            let u = buf[i].wrapping_mul(self.minv);
+            let mut carry = 0u128;
+            for j in 0..n {
+                let s = u128::from(buf[i + j]) + u128::from(u) * u128::from(self.m[j]) + carry;
+                buf[i + j] = s as u64;
+                carry = s >> 64;
+            }
+            let mut k = i + n;
+            while carry != 0 {
+                let s = u128::from(buf[k]) + carry;
+                buf[k] = s as u64;
+                carry = s >> 64;
+                k += 1;
+            }
+        }
+        let mut r = buf[n..].to_vec();
+        normalize(&mut r);
+        if cmp(&r, &self.m) != Ordering::Less {
+            sub_assign(&mut r, &self.m);
+        }
+        r
+    }
+
+    /// Montgomery product.
+    pub fn mul(&self, a: &[u64], b: &[u64]) -> Vec<u64> {
+        self.redc(&mul(a, b))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -467,6 +529,36 @@ mod tests {
         assert_eq!(isqrt(&from_u128(1 << 100)), from_u128(1 << 50));
         assert_eq!(iroot(&from_u128(1000), 3), vec![10]);
         assert_eq!(iroot(&from_u128(999), 3), vec![9]);
+    }
+
+    #[test]
+    fn large_division_identity() {
+        let mut x = 0x9e37_79b9_7f4a_7c15u64;
+        let mut next = || {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            x
+        };
+        for (la, lb) in [(700, 250), (1200, 600), (300, 299), (500, 2)] {
+            let a: Vec<u64> = (0..la).map(|_| next()).collect();
+            let b: Vec<u64> = (0..lb).map(|_| next()).collect();
+            let (q, r) = divrem(&a, &b);
+            assert_eq!(cmp(&r, &b), Ordering::Less);
+            assert_eq!(add(&mul(&q, &b), &r), trim(&a).to_vec());
+            let sq = mul(&a, &a);
+            assert_eq!(isqrt(&sq), trim(&a).to_vec());
+        }
+    }
+
+    #[test]
+    fn montgomery_matches_plain() {
+        let m = vec![0xFFFF_FFFF_FFFF_FFC5u64, 0x1234_5678, 0xdead_beef_0000_0001];
+        let ctx = Montgomery::new(&m);
+        let a = vec![12345u64, 678, 9];
+        let b = vec![u64::MAX, 77, 1];
+        let prod = ctx.redc(&ctx.mul(&ctx.to_mont(&a), &ctx.to_mont(&b)));
+        assert_eq!(prod, divrem(&mul(&a, &b), &m).1);
     }
 
     #[test]
