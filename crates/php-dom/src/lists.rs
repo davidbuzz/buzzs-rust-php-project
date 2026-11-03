@@ -690,7 +690,7 @@ pub enum Offset {
 }
 
 /// `ZEND_HANDLE_NUMERIC_STR`: canonical decimal integer strings.
-fn handle_numeric(s: &[u8]) -> Option<i64> {
+pub(crate) fn handle_numeric(s: &[u8]) -> Option<i64> {
     if s.is_empty() || s.len() > 20 {
         return None;
     }
@@ -720,6 +720,22 @@ fn dval_to_lval(d: f64) -> i64 {
         let v = d as i64;
         v
     }
+}
+
+/// `zend_dval_to_lval_safe`: like `zend_dval_to_lval` but deprecates a
+/// fractional value that fits a long.
+pub(crate) fn dval_to_lval_safe(d: f64) -> i64 {
+    let l = dval_to_lval(d);
+    #[allow(clippy::cast_precision_loss)]
+    let compatible = (l as f64 - d).abs() == 0.0;
+    let fits = d.is_finite() && d >= -9.223_372_036_854_775_808e18 && d < 9.223_372_036_854_775_807e18;
+    if !compatible && fits {
+        crate::error::emit(
+            crate::error::Level::Deprecated,
+            format!("Implicit conversion from float {} to int loses precision", crate::dispatch::float_to_repr(d)),
+        );
+    }
+    l
 }
 
 /// Parses a legacy offset (`dom_nodemap_or_nodelist_process_offset_as_named`):
@@ -981,7 +997,7 @@ enum ModernIndex {
 fn modern_index(off: &Offset) -> ModernIndex {
     match off {
         Offset::Int(i) => ModernIndex::Long(*i),
-        Offset::Float(f) => ModernIndex::Long(dval_to_lval(*f)),
+        Offset::Float(f) => ModernIndex::Long(dval_to_lval_safe(*f)),
         Offset::Str(s) => match handle_numeric(s) {
             Some(i) => ModernIndex::Long(i),
             None => ModernIndex::Str(s.clone()),

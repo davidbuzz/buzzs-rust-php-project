@@ -245,6 +245,7 @@ impl Drop for DocInner {
 pub(crate) struct NodeExtra {
     pub class_list: Option<crate::tokenlist::TokenList>,
     pub children: Option<crate::lists::NodeList>,
+    pub implementation: Option<crate::implementation::Implementation>,
 }
 
 /// The payload of a PHP DOM node object.

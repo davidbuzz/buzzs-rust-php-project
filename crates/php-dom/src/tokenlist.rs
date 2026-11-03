@@ -316,21 +316,9 @@ impl TokenList {
     fn offset_index(o: &Offset) -> Result<i64, ()> {
         match o {
             Offset::Int(i) => Ok(*i),
-            Offset::Float(f) => Ok(if f.is_finite() {
-                #[allow(clippy::cast_possible_truncation)]
-                let v = *f as i64;
-                v
-            } else {
-                0
-            }),
+            Offset::Float(f) => Ok(crate::lists::dval_to_lval_safe(*f)),
             Offset::Bool(b) => Ok(i64::from(*b)),
-            Offset::Str(s) => {
-                let t = std::str::from_utf8(s).map_err(|_| ())?;
-                match t.parse::<i64>() {
-                    Ok(v) if v.to_string() == t && v >= 0 => Ok(v),
-                    _ => Err(()),
-                }
-            }
+            Offset::Str(s) => crate::lists::handle_numeric(s).ok_or(()),
             Offset::Null | Offset::Array(_) | Offset::Other(_) => Err(()),
         }
     }

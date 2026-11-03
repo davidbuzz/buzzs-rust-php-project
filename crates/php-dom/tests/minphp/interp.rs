@@ -2667,7 +2667,15 @@ impl Interp {
                 V::Obj(o)
             }
             DomValue::NamedNodeMap(m) => V::Obj(new_obj(m.class_name(), ObjKind::Dom(DomObject::NamedNodeMap(m)))),
-            DomValue::Implementation(i) => V::Obj(new_obj(i.class_name(), ObjKind::Dom(DomObject::Implementation(i)))),
+            DomValue::Implementation(i) => {
+                let id = i.identity();
+                if let Some(existing) = self.list_objs.borrow().get(&id).and_then(std::rc::Weak::upgrade) {
+                    return V::Obj(existing);
+                }
+                let o = new_obj(i.class_name(), ObjKind::Dom(DomObject::Implementation(i)));
+                self.list_objs.borrow_mut().insert(id, Rc::downgrade(&o));
+                V::Obj(o)
+            }
             DomValue::TokenList(t) => V::Obj(new_obj("Dom\\TokenList", ObjKind::Dom(DomObject::TokenList(t)))),
             DomValue::XPath(x) => V::Obj(new_obj(x.class_name(), ObjKind::Dom(DomObject::XPath(x)))),
             DomValue::Iterator(i) => V::Obj(new_obj("InternalIterator", ObjKind::Iter(i))),

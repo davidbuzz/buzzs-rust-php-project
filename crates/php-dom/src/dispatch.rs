@@ -166,6 +166,48 @@ pub fn offset_exists(obj: &DomObject, offset: &Offset) -> DomResult<bool> {
 // Scalar coercion
 // ---------------------------------------------------------------------------
 
+/// A float in PHP's `serialize_precision = -1` form (`%.*H` with -1):
+/// the shortest round-tripping digits.
+pub fn float_to_repr(f: f64) -> String {
+    if !f.is_finite() || f == 0.0 {
+        return float_to_string(f);
+    }
+    let s = format!("{f:e}");
+    let (mant, exp) = s.split_once('e').unwrap_or((&s, "0"));
+    let exp: i32 = exp.parse().unwrap_or(0);
+    let neg = mant.starts_with('-');
+    let digits: String = mant.chars().filter(char::is_ascii_digit).collect();
+    let mut out = String::new();
+    if neg {
+        out.push('-');
+    }
+    if !(-4..17).contains(&exp) {
+        out.push_str(&digits[..1]);
+        out.push('.');
+        out.push_str(if digits.len() > 1 { &digits[1..] } else { "0" });
+        out.push_str(&format!("E{}{}", if exp < 0 { '-' } else { '+' }, exp.abs()));
+    } else if exp < 0 {
+        out.push_str("0.");
+        for _ in 0..(-exp - 1) {
+            out.push('0');
+        }
+        out.push_str(&digits);
+    } else {
+        let int_len = usize::try_from(exp).unwrap_or(0) + 1;
+        if digits.len() <= int_len {
+            out.push_str(&digits);
+            for _ in digits.len()..int_len {
+                out.push('0');
+            }
+        } else {
+            out.push_str(&digits[..int_len]);
+            out.push('.');
+            out.push_str(&digits[int_len..]);
+        }
+    }
+    out
+}
+
 /// PHP's `(string)` of a float (`precision=14`, `%.14G`).
 pub fn float_to_string(f: f64) -> String {
     if f.is_nan() {
@@ -1453,6 +1495,23 @@ fn write_node_property(n: &Node, name: &str, value: &DomValue) -> DomResult<bool
         n.set_doc_flag(f, truthy(value));
         Ok(true)
     };
+    if modern
+        && name == "textContent"
+        && !matches!(
+            builtin,
+            "Dom\\DocumentFragment"
+                | "Dom\\CharacterData"
+                | "Dom\\Text"
+                | "Dom\\CDATASection"
+                | "Dom\\Comment"
+                | "Dom\\ProcessingInstruction"
+                | "Dom\\Attr"
+                | "Dom\\Element"
+                | "Dom\\HTMLElement"
+        )
+    {
+        return Err(DomError::Error(format!("Cannot modify readonly property {}::${name}", n.class_name())));
+    }
     match name {
         "nodeValue" => n.set_node_value(want_opt_str(name, value)?.as_deref())?,
         "textContent" => n.set_text_content(want_opt_str(name, value)?.as_deref())?,
@@ -1536,8 +1595,8 @@ pub fn instantiate(builtin: &str) -> Option<DomObject> {
     Some(match c.name {
         "DOMNodeList" | "Dom\\NodeList" | "Dom\\HTMLCollection" => DomObject::NodeList(new_list(c.name, None, MapKind::Noop)),
         "DOMNamedNodeMap" | "Dom\\NamedNodeMap" | "Dom\\DtdNamedNodeMap" => DomObject::NamedNodeMap(new_map(c.name, None, MapKind::Noop)),
-        "DOMImplementation" => DomObject::Implementation(Implementation { modern: false }),
-        "Dom\\Implementation" => DomObject::Implementation(Implementation { modern: true }),
+        "DOMImplementation" => DomObject::Implementation(Implementation::new(false)),
+        "Dom\\Implementation" => DomObject::Implementation(Implementation::new(true)),
         _ => return None,
     })
 }

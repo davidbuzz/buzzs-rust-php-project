@@ -192,6 +192,10 @@ pub fn new_obj(class: &str, kind: ObjKind) -> Rc<Obj> {
 
 impl Drop for Obj {
     fn drop(&mut self) {
+        // Owned objects and properties are released before the handle
+        // itself goes back to the free list (zend_objects_store_del order).
+        drop(std::mem::take(&mut *self.keep.borrow_mut()));
+        drop(std::mem::take(&mut *self.props.borrow_mut()));
         let id = self.id;
         if id != 0 && self.gen == GEN.with(std::cell::Cell::get) {
             FREE_IDS.with(|f| f.borrow_mut().push(id));

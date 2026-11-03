@@ -12,9 +12,24 @@ use crate::raw::{cs, N};
 pub struct Implementation {
     /// Whether this is `Dom\Implementation`.
     pub modern: bool,
+    token: std::rc::Rc<()>,
 }
 
 impl Implementation {
+    /// A new implementation object.
+    pub fn new(modern: bool) -> Self {
+        Implementation {
+            modern,
+            token: std::rc::Rc::new(()),
+        }
+    }
+
+    /// A stable identity: `Dom\Document::$implementation` returns the same
+    /// object on every read.
+    pub fn identity(&self) -> usize {
+        std::rc::Rc::as_ptr(&self.token) as usize
+    }
+
     /// The PHP class.
     pub fn class_name(&self) -> &'static str {
         if self.modern {
@@ -231,8 +246,9 @@ impl Implementation {
 impl Node {
     /// `$implementation`.
     pub fn implementation(&self) -> Implementation {
-        Implementation {
-            modern: self.family_is_modern(),
+        if !self.family_is_modern() {
+            return Implementation::new(false);
         }
+        self.0.extra.borrow_mut().implementation.get_or_insert_with(|| Implementation::new(true)).clone()
     }
 }
