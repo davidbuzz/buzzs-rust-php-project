@@ -172,6 +172,60 @@ for ($case = 0; $case < 120; $case++) {
     engine_ops($P, new Randomizer($e), $BOUNDS, 40, $kind < 2);
 }
 
+// Userland engines returning 1..8 (or more) bytes per call, cycling through
+// a pattern of lengths; the bytes come from an inner Xoshiro256StarStar.
+final class SizedEngine implements Random\Engine {
+    private int $i = 0;
+    public function __construct(private Xoshiro256StarStar $inner, private array $sizes) {}
+    public function generate(): string {
+        $n = $this->sizes[$this->i++ % count($this->sizes)];
+        $b = '';
+        while (strlen($b) < $n) $b .= $this->inner->generate();
+        return substr($b, 0, $n);
+    }
+}
+for ($case = 0; $case < 40; $case++) {
+    $seed = $P->getInt(0, 100000);
+    $sizes = [];
+    $k = $P->getInt(1, 4);
+    for ($i = 0; $i < $k; $i++) $sizes[] = $P->getInt(1, 9);
+    echo "new user $seed ", implode(',', $sizes), "\n";
+    $r = new Randomizer(new SizedEngine(new Xoshiro256StarStar($seed), $sizes));
+    for ($j = 0; $j < 30; $j++) {
+        $op = $P->getInt(0, 9);
+        switch ($op) {
+            case 0: case 1: case 2:
+                [$a, $b] = pick_range($P, $BOUNDS);
+                echo "int $a $b = ", $r->getInt($a, $b), "\n"; break;
+            case 3:
+                echo "nextint = ", $r->nextInt(), "\n"; break;
+            case 4:
+                $n = $P->getInt(1, 40);
+                echo "bytes $n = ", bin2hex($r->getBytes($n)), "\n"; break;
+            case 5:
+                $choices = ['ab', '0123456789abcdef', 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789', str_repeat('q', 256) . 'z'];
+                $s = $choices[$P->getInt(0, count($choices) - 1)];
+                $n = $P->getInt(1, 30);
+                echo "bfs ", bin2hex($s), " $n = ", bin2hex($r->getBytesFromString($s, $n)), "\n"; break;
+            case 6:
+                echo "nextfloat = ", fbits($r->nextFloat()), "\n"; break;
+            case 7:
+                [$a, $b] = pick_float_range($P);
+                $bd = IntervalBoundary::cases()[$P->getInt(0, 3)];
+                try { $v = fbits($r->getFloat($a, $b, $bd)); } catch (ValueError $ex) { $v = 'ERR'; }
+                echo "float ", fbits($a), " ", fbits($b), " ", $bd->name, " = $v\n"; break;
+            case 8:
+                $n = $P->getInt(1, 30);
+                echo "shuffle $n = ", implode(',', $r->shuffleArray(range(0, $n - 1))), "\n"; break;
+            default:
+                $m = rand_mask($P);
+                $avail = substr_count($m, '1');
+                $num = $P->getInt(0, 3) == 0 ? 1 : $P->getInt(1, $avail);
+                echo "pick $m $num = ", implode(',', $r->pickArrayKeys(mask_array($m), $num)), "\n"; break;
+        }
+    }
+}
+
 // Global-state scenarios.
 for ($case = 0; $case < 60; $case++) {
     $seed = $P->getInt(0, 2) == 0 ? $BOUNDS[$P->getInt(0, count($BOUNDS) - 1)] : $P->getInt(0, 100000);

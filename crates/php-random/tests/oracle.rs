@@ -4,8 +4,9 @@
 use php_random::state::StateValue;
 use php_random::{
     Engine, IntervalBoundary, Mt19937, NativeEngine, PcgOneseq128XslRr64, RandomGlobals,
-    Randomizer, Seed, Xoshiro256StarStar,
+    Randomizer, Seed, UserEngine, UserGenerate, Xoshiro256StarStar,
 };
+use std::fmt::Write;
 
 const ORACLE: &str = include_str!("fixtures/oracle.txt");
 
@@ -23,7 +24,10 @@ fn hex(b: &[u8]) -> String {
     if b.is_empty() {
         return "-".into();
     }
-    b.iter().map(|x| format!("{x:02x}")).collect()
+    b.iter().fold(String::new(), |mut s, x| {
+        let _ = write!(s, "{x:02x}");
+        s
+    })
 }
 
 fn fbits(f: f64) -> String {
@@ -79,13 +83,50 @@ fn ser_line(state: &[StateValue]) -> String {
     parts.join(",")
 }
 
+/// The userland `SizedEngine` of gen.php.
+struct SizedGen {
+    inner: Xoshiro256StarStar,
+    sizes: Vec<usize>,
+    i: usize,
+}
+
+impl UserGenerate for SizedGen {
+    fn call_generate(&mut self) -> php_random::Result<Vec<u8>> {
+        let n = self.sizes[self.i % self.sizes.len()];
+        self.i += 1;
+        let mut b = Vec::new();
+        while b.len() < n {
+            b.extend_from_slice(&self.inner.next_u64().to_le_bytes());
+        }
+        b.truncate(n);
+        Ok(b)
+    }
+}
+
+enum Current {
+    Native(NativeEngine),
+    User(UserEngine<SizedGen>),
+}
+
+impl Current {
+    fn engine(&mut self) -> &mut dyn Engine {
+        match self {
+            Self::Native(e) => e,
+            Self::User(e) => e,
+        }
+    }
+
+    fn native(&mut self) -> &mut NativeEngine {
+        match self {
+            Self::Native(e) => e,
+            Self::User(_) => panic!("not a native engine"),
+        }
+    }
+}
+
 #[allow(clippy::too_many_lines)]
-fn run_engine_op(
-    r: &mut Randomizer<NativeEngine>,
-    op: &str,
-    args: &[&str],
-    expected: &str,
-) -> String {
+fn run_engine_op(cur: &mut Current, op: &str, args: &[&str], expected: &str) -> String {
+    let mut r = Randomizer::new(cur.engine());
     let int = |i: usize| args[i].parse::<i64>().unwrap();
     match op {
         "gen" => hex(&r.engine.generate_bytes().unwrap()),
@@ -110,9 +151,9 @@ fn run_engine_op(
         }
         "shufbytes" => hex(&r.shuffle_bytes(&unhex(args[0])).unwrap()),
         "pick" => join(&r.pick_array_keys(&slots(args[0]), int(1)).unwrap()),
-        "ser" => ser_line(&r.engine.serialize_state().unwrap()),
+        "ser" => ser_line(&cur.native().serialize_state().unwrap()),
         "jump" => {
-            match &mut r.engine {
+            match cur.native() {
                 NativeEngine::Pcg(e) => e.jump(int(0)).unwrap(),
                 NativeEngine::Xoshiro(e) => e.jump(),
                 _ => panic!("jump on wrong engine"),
@@ -120,7 +161,7 @@ fn run_engine_op(
             String::new()
         }
         "jumplong" => {
-            match &mut r.engine {
+            match cur.native() {
                 NativeEngine::Xoshiro(e) => e.jump_long(),
                 _ => panic!("jumpLong on wrong engine"),
             }
@@ -162,7 +203,7 @@ fn run_global_op(g: &mut RandomGlobals, op: &str, args: &[&str]) -> String {
 
 #[test]
 fn replay_oracle_transcript() {
-    let mut engine: Option<Randomizer<NativeEngine>> = None;
+    let mut engine: Option<Current> = None;
     let mut globals = RandomGlobals::new();
     let mut checked = 0usize;
     for (lineno, line) in ORACLE.lines().enumerate() {
@@ -174,6 +215,14 @@ fn replay_oracle_transcript() {
         let (op, args) = (words[0], &words[1..]);
         let got = match op {
             "new" => {
+                if args[0] == "user" {
+                    engine = Some(Current::User(UserEngine(SizedGen {
+                        inner: Xoshiro256StarStar::from_seed64(args[1].parse().unwrap()),
+                        sizes: args[2].split(',').map(|x| x.parse().unwrap()).collect(),
+                        i: 0,
+                    })));
+                    continue;
+                }
                 let e = match (args[0], args[1]) {
                     ("mt", seed) => NativeEngine::Mt19937(Box::new(
                         Mt19937::construct(Some(seed.parse().unwrap()), args[2].parse().unwrap())
@@ -194,7 +243,7 @@ fn replay_oracle_transcript() {
                     ),
                     other => panic!("bad engine {other:?}"),
                 };
-                engine = Some(Randomizer::new(e));
+                engine = Some(Current::Native(e));
                 continue;
             }
             "mt_srand" => {
