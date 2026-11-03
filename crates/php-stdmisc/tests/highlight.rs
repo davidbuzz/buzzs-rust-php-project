@@ -127,3 +127,40 @@ fn phpt_corpus_matches_oracle() {
         &bad[..bad.len().min(30)]
     );
 }
+
+#[test]
+fn file_variants() {
+    let mut ctx = php_runtime::CollectingContext::new();
+    let colors = HighlightColors::default();
+    assert!(php_stdmisc::highlight::highlight_file(
+        "show_source",
+        b"/nonexistent",
+        &colors,
+        true,
+        &mut ctx
+    )
+    .unwrap()
+    .is_none());
+    let (s, _) =
+        php_stdmisc::highlight::php_strip_whitespace(b"/nonexistent", true, &mut ctx).unwrap();
+    assert!(s.is_empty());
+    assert_eq!(
+        ctx.messages(),
+        [
+            "Warning: show_source(/nonexistent): Failed to open stream: No such file or directory",
+            "Warning: show_source(): Failed opening '/nonexistent' for highlighting",
+            "Warning: php_strip_whitespace(/nonexistent): Failed to open stream: No such file or directory",
+        ]
+    );
+    let p = std::env::temp_dir().join(format!("stdmisc-hl-{}.php", std::process::id()));
+    std::fs::write(&p, "<?php /* c */ echo 1;\n").unwrap();
+    let path = p.to_str().unwrap().as_bytes();
+    let h = php_stdmisc::highlight::highlight_file("highlight_file", path, &colors, true, &mut ctx)
+        .unwrap()
+        .unwrap();
+    assert!(show(&h).contains("#FF8000"));
+    let (s, w) = php_stdmisc::highlight::php_strip_whitespace(path, true, &mut ctx).unwrap();
+    assert_eq!(show(&s), "<?php  echo 1; ");
+    assert!(w.is_empty());
+    std::fs::remove_file(&p).unwrap();
+}

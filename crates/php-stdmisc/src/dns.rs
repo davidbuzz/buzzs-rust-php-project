@@ -706,21 +706,18 @@ pub fn dns_get_record(
         while qd > 0 {
             qd -= 1;
             let next = cp.and_then(|c| dn_skipname(&ans, end, c).map(|n| c + n + QFIXEDSZ));
-            if let Some(c) = next {
-                cp = Some(c);
-            } else {
-                {
-                    ctx.diagnostic(
-                        php_runtime::ErrorLevel::Warning,
-                        "dns_get_record(): Unable to parse DNS data received",
-                    )?;
-                    return Ok(DnsRecords {
-                        value: Value::Bool(false),
-                        authns,
-                        addtl,
-                    });
-                }
+            if next.is_none() {
+                ctx.diagnostic(
+                    php_runtime::ErrorLevel::Warning,
+                    "dns_get_record(): Unable to parse DNS data received",
+                )?;
+                return Ok(DnsRecords {
+                    value: Value::Bool(false),
+                    authns,
+                    addtl,
+                });
             }
+            cp = next;
         }
         while an > 0 {
             an -= 1;

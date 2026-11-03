@@ -214,6 +214,76 @@ pub fn strip_whitespace(src: &[u8], short_tags: bool) -> (Vec<u8>, Vec<LexWarnin
     (out, warnings)
 }
 
+fn read_source(
+    func: &str,
+    path: &[u8],
+    ctx: &mut (impl php_runtime::RuntimeContext + ?Sized),
+) -> php_runtime::RtResult<Option<Vec<u8>>> {
+    use std::os::unix::ffi::OsStrExt;
+    match std::fs::read(std::ffi::OsStr::from_bytes(path)) {
+        Ok(src) => Ok(Some(src)),
+        Err(e) => {
+            ctx.diagnostic(
+                php_runtime::ErrorLevel::Warning,
+                &format!(
+                    "{func}({}): Failed to open stream: {}",
+                    String::from_utf8_lossy(path),
+                    crate::sys::strerror(e.raw_os_error().unwrap_or(0))
+                ),
+            )?;
+            Ok(None)
+        }
+    }
+}
+
+/// `highlight_file($filename)` / `show_source()` for plain files: the
+/// HTML, or `None` (`false`) after PHP's two warnings. `func` is the
+/// called name.
+pub fn highlight_file(
+    func: &str,
+    path: &[u8],
+    colors: &HighlightColors,
+    short_tags: bool,
+    ctx: &mut (impl php_runtime::RuntimeContext + ?Sized),
+) -> php_runtime::RtResult<Option<Vec<u8>>> {
+    if path.contains(&0) {
+        return Err(php_runtime::RuntimeError::ValueError(format!(
+            "{func}(): Argument #1 ($filename) must not contain any null bytes"
+        )));
+    }
+    if let Some(src) = read_source(func, path, ctx)? {
+        return Ok(Some(highlight(&src, colors, short_tags)));
+    }
+    ctx.diagnostic(
+        php_runtime::ErrorLevel::Warning,
+        &format!(
+            "{func}(): Failed opening '{}' for highlighting",
+            String::from_utf8_lossy(path)
+        ),
+    )?;
+    Ok(None)
+}
+
+/// `php_strip_whitespace($filename)` for plain files (an empty string
+/// when the file cannot be opened). Scanner warnings are returned for the
+/// VM to report with its own file/line information.
+pub fn php_strip_whitespace(
+    path: &[u8],
+    short_tags: bool,
+    ctx: &mut (impl php_runtime::RuntimeContext + ?Sized),
+) -> php_runtime::RtResult<(Vec<u8>, Vec<LexWarning>)> {
+    if path.contains(&0) {
+        return Err(php_runtime::RuntimeError::ValueError(
+            "php_strip_whitespace(): Argument #1 ($filename) must not contain any null bytes"
+                .into(),
+        ));
+    }
+    Ok(match read_source("php_strip_whitespace", path, ctx)? {
+        Some(src) => strip_whitespace(&src, short_tags),
+        None => (Vec::new(), Vec::new()),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
