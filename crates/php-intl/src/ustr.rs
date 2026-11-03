@@ -69,6 +69,36 @@ pub fn utf16_offset_to_utf8(units: &[u16], position: i32) -> i32 {
     i32::try_from(u16_index_to_u8(units, pos)).unwrap_or(i32::MAX)
 }
 
+/// ICU's `U8_NEXT` on the start of `s` → `(code point or -1, bytes
+/// consumed)`.  An empty input reads the implicit NUL terminator.
+pub fn u8_next(s: &[u8]) -> (i32, usize) {
+    let Some(&lead) = s.first() else {
+        return (0, 1);
+    };
+    let (need, init, min) = match lead {
+        0x00..=0x7f => return (i32::from(lead), 1),
+        0xc2..=0xdf => (1, u32::from(lead & 0x1f), 0x80),
+        0xe0..=0xef => (2, u32::from(lead & 0x0f), 0x800),
+        0xf0..=0xf4 => (3, u32::from(lead & 0x07), 0x10000),
+        _ => return (-1, 1),
+    };
+    let mut cp = init;
+    let mut i = 1;
+    while i <= need {
+        match s.get(i) {
+            Some(&t) if (0x80..0xc0).contains(&t) => {
+                cp = (cp << 6) | u32::from(t & 0x3f);
+                i += 1;
+            }
+            _ => return (-1, i),
+        }
+    }
+    if cp < min || (0xd800..0xe000).contains(&cp) || cp > 0x0010_ffff {
+        return (-1, i);
+    }
+    (i32::try_from(cp).unwrap_or(-1), i)
+}
+
 /// `U16_IS_LEAD`.
 pub fn is_lead(u: u16) -> bool {
     (0xD800..0xDC00).contains(&u)

@@ -18,6 +18,7 @@ pub mod dateformat;
 pub mod datepatterngenerator;
 pub mod grapheme;
 pub mod idn;
+pub mod intlchar;
 pub mod locale;
 pub mod msgformat;
 pub mod msgpattern;

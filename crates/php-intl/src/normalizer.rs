@@ -61,37 +61,10 @@ pub fn is_normalized(s: &[u8], f: i64) -> Result<bool> {
     })
 }
 
-/// ICU's `U8_NEXT` → `(code point or -1, bytes consumed)`.
-fn u8_next(s: &[u8]) -> (i32, usize) {
-    let Some(&b) = s.first() else { return (0, 1) };
-    let (need, init, min) = match b {
-        0x00..=0x7f => return (i32::from(b), 1),
-        0xc2..=0xdf => (1, u32::from(b & 0x1f), 0x80),
-        0xe0..=0xef => (2, u32::from(b & 0x0f), 0x800),
-        0xf0..=0xf4 => (3, u32::from(b & 0x07), 0x10000),
-        _ => return (-1, 1),
-    };
-    let mut cp = init;
-    let mut i = 1;
-    while i <= need {
-        match s.get(i) {
-            Some(&t) if (0x80..0xc0).contains(&t) => {
-                cp = (cp << 6) | u32::from(t & 0x3f);
-                i += 1;
-            }
-            _ => return (-1, i),
-        }
-    }
-    if cp < min || (0xd800..0xe000).contains(&cp) || cp > 0x0010_ffff {
-        return (-1, i);
-    }
-    (i32::try_from(cp).unwrap_or(-1), i)
-}
-
 /// `Normalizer::getRawDecomposition($string, $form)` (`Ok(None)` →
 /// `null`).
 pub fn raw_decomposition(s: &[u8], f: i64) -> Result<Option<String>> {
-    let (cp, n) = u8_next(s);
+    let (cp, n) = ustr::u8_next(s);
     if n != s.len() {
         return Err(Error::global(
             UErrorCode::ILLEGAL_ARGUMENT_ERROR,
