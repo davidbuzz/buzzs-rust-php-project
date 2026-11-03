@@ -10,7 +10,7 @@
 use crate::object;
 use crate::props::PropLookup;
 use crate::vm::Vm;
-use php_runtime::{Obj, RtResult, Value, ZStr};
+use php_runtime::{ArrayKey, Obj, PhpRef, RtResult, Value, ZStr};
 use php_stdarr as sa;
 
 impl sa::ArrayContext for Vm {
@@ -34,6 +34,58 @@ impl sa::ArrayContext for Vm {
         self.read_property(obj, name, crate::opcode::FetchMode::Is)
             .map(|v| Some(v.deref()))
             .map_err(|t| self.to_rt(t))
+    }
+
+    fn property_reference(
+        &mut self,
+        obj: &Obj,
+        key: &ArrayKey,
+    ) -> RtResult<Option<sa::PropertyRef>> {
+        let cls = object::class_of(obj).clone();
+        if cls
+            .hooks
+            .as_ref()
+            .is_some_and(|h| h.properties_for.is_some())
+        {
+            // Native property tables: a detached reference, written back.
+            let table = php_runtime::RuntimeContext::object_properties(
+                self,
+                obj,
+                php_runtime::PropertyPurpose::ArrayCast,
+            )?;
+            return Ok(table.and_then(|t| {
+                t.get(key).map(|v| match v {
+                    Value::Reference(r) => sa::PropertyRef::Bound(r.clone()),
+                    other => sa::PropertyRef::Detached(PhpRef::new(other.clone())),
+                })
+            }));
+        }
+        let d = object::data(obj);
+        // A declared slot (`ZVAL_MAKE_REF` on the property slot);
+        // uninitialized typed properties are skipped.
+        if let Some(pi) = cls
+            .props
+            .iter()
+            .find(|p| !p.is_virtual() && crate::props::mangle(p) == *key)
+        {
+            let mut slots = d.slots.borrow_mut();
+            return Ok(match slots.get_mut(pi.slot as usize) {
+                Some(Some(v)) => Some(sa::PropertyRef::Bound(v.make_ref())),
+                _ => None,
+            });
+        }
+        // A dynamic property (numeric names are integer keys in the
+        // `(array)` table but string keys in the object).
+        let mut dynamic = d.dynamic.borrow_mut();
+        let Some(t) = dynamic.as_mut() else {
+            return Ok(None);
+        };
+        let lookup = match key {
+            ArrayKey::Int(i) if t.get(key).is_none() => ArrayKey::Str(ZStr::from(i.to_string())),
+            k => k.clone(),
+        };
+        Ok(t.get_mut(&lookup)
+            .map(|v| sa::PropertyRef::Bound(v.make_ref())))
     }
 
     fn this_object(&mut self) -> Option<Value> {

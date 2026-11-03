@@ -2,6 +2,7 @@
 //! and php-stdarr's (`RtResult`, `RuntimeError`, closures).
 
 use php_runtime::{ArrayKey, PhpRef, RtResult, Value, ZStr};
+use php_stdarr::OwnedArgs;
 use php_vm::ext::{Args, VmResult};
 use php_vm::Vm;
 
@@ -10,12 +11,13 @@ pub fn rt<T>(vm: &mut Vm, r: RtResult<T>) -> VmResult<T> {
     r.map_err(|e| vm.throw_runtime_error(e))
 }
 
-/// A php-stdarr callback calling the PHP callable `cb`.
-pub fn callback(cb: Value) -> impl FnMut(&mut Vm, &[Value]) -> RtResult<Value> {
-    move |vm: &mut Vm, args: &[Value]| {
-        vm.call_value(&cb, args.to_vec())
+/// A php-stdarr callback calling the PHP callable `cb`. The arguments are
+/// moved into the call (`OwnedArgs`), so the callee sees PHP's refcounts.
+pub fn callback(cb: Value) -> OwnedArgs<impl FnMut(&mut Vm, Vec<Value>) -> RtResult<Value>> {
+    OwnedArgs(move |vm: &mut Vm, args: Vec<Value>| {
+        vm.call_value(&cb, args)
             .map_err(|t| vm.runtime_error_from(t))
-    }
+    })
 }
 
 /// The reference bound to by-reference argument `n` (a fresh reference
