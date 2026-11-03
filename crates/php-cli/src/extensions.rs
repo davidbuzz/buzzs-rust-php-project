@@ -25,6 +25,7 @@ pub fn all() -> Vec<Box<dyn Extension>> {
         Box::new(php_ext_session::Session),
         Box::new(php_ext_openssl::OpenSsl),
         Box::new(php_ext_sodium::Sodium),
+        Box::new(php_ext_fileinfo::Fileinfo),
         Box::new(php_ext_posix::PosixExt),
         Box::new(php_ext_iconv::IconvExt),
         Box::new(php_ext_intl::Intl),
@@ -41,5 +42,6 @@ pub fn all() -> Vec<Box<dyn Extension>> {
         Box::new(php_ext_pcntl::PcntlExt),
         Box::new(php_ext_calendar::Calendar),
         Box::new(php_ext_bcmath::Bcmath),
+        Box::new(php_ext_gmp::Gmp),
     ]
 }

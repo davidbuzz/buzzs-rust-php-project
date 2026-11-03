@@ -1,1 +1,438 @@
-//! TODO
+//! `ext/fileinfo` for the phprust VM: binds the `php-fileinfo` library (the
+//! system libmagic) through the `php_vm::ext` extension API.
+//!
+//! Registers the `finfo` class (`__construct`, `file`, `buffer`,
+//! `set_flags`), the procedural `finfo_*` functions, `mime_content_type()`
+//! and the `FILEINFO_*` constants.  Paths are opened through the streams
+//! layer of `php-ext-streams` (wrappers, contexts, `open_basedir`), plain
+//! files are then handed to libmagic by descriptor and anything else is
+//! read into memory.
+//!
+//! A `finfo` object carries its libmagic cookie as native state; an object
+//! whose constructor failed (or was never run) has none and every method
+//! throws `Error: Invalid finfo object`.
+
+use std::fs::File;
+use std::io::{Read, Seek, SeekFrom};
+
+use php_ext_streams::{bridge, files, res};
+use php_fileinfo::{CallStyle, Finfo, Thrown, Warning};
+use php_runtime::{Obj, Value, ZStr};
+use php_streams::context::ContextRef;
+use php_streams::diag::{self, Severity};
+use php_streams::plain::StdioOps;
+use php_streams::stream::Stream;
+use php_streams::wrapper::REPORT_ERRORS;
+use php_vm::ext::{acc, class_flags, Args, ClassBuilder, Extension, ModuleBuilder, Throw, VmResult};
+use php_vm::Vm;
+
+/// The `fileinfo` extension.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Fileinfo;
+
+/// The native state of a `finfo` object (`None` once a constructor call
+/// failed).
+struct State(Option<Finfo>);
+
+/// `SEEK_SET`.
+const SEEK_SET: i32 = 0;
+
+// ---------------------------------------------------------------------------
+// Diagnostics
+// ---------------------------------------------------------------------------
+
+/// Where warnings go: emitted normally, or — inside `finfo::__construct()`,
+/// which runs with `EH_THROW` — the first one becomes an `Exception`.
+struct Reporter {
+    throw_first: bool,
+    thrown: Option<Throw>,
+}
+
+impl Reporter {
+    fn new(throw_first: bool) -> Self {
+        Self {
+            throw_first,
+            thrown: None,
+        }
+    }
+
+    /// Reports one `E_WARNING` docref message (without the prefix).
+    fn warn(&mut self, vm: &mut Vm, msg: &str) -> VmResult<()> {
+        if !self.throw_first {
+            return vm.php_warning(msg);
+        }
+        if self.thrown.is_none() {
+            let t = vm.throw("Exception", &format!("finfo::__construct(): {msg}"));
+            self.thrown = Some(t);
+        }
+        Ok(())
+    }
+
+    /// Reports the library's collected warnings.
+    fn warnings(&mut self, vm: &mut Vm, list: Vec<Warning>) -> VmResult<()> {
+        for w in list {
+            self.warn(vm, &w.message)?;
+        }
+        Ok(())
+    }
+
+    /// Reports the diagnostics queued by the streams library.
+    fn stream_diags(&mut self, vm: &mut Vm) -> VmResult<()> {
+        for d in diag::take() {
+            let text = d.text();
+            match d.severity {
+                Severity::Warning => self.warn(vm, &text)?,
+                Severity::Notice => vm.php_notice(&text)?,
+                Severity::Deprecated => vm.php_deprecated(&text)?,
+                Severity::Error => vm.raise(1, &text)?,
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Runs a library call collecting its warnings.
+fn collect<T>(f: impl FnOnce(&mut dyn FnMut(Warning)) -> T) -> (T, Vec<Warning>) {
+    let mut list = Vec::new();
+    let r = f(&mut |w| list.push(w));
+    (r, list)
+}
+
+/// Throws a library-built exception.
+fn thrown(vm: &mut Vm, t: Thrown) -> Throw {
+    match t {
+        Thrown::ValueError(m) => vm.throw("ValueError", &m),
+        Thrown::TypeError(m) => vm.throw("TypeError", &m),
+        Thrown::Error(m) => vm.throw("Error", &m),
+    }
+}
+
+/// An `int` parameter whose stub default is `FILEINFO_NONE`.
+fn flags_arg(a: &Args, n: usize) -> i64 {
+    if a.has(n) {
+        a.int(n)
+    } else {
+        php_fileinfo::FILEINFO_NONE
+    }
+}
+
+/// The `finfo` object (`$this`, or argument #1 procedurally) and the index
+/// of the first argument after it.
+fn target(a: &Args) -> (Obj, usize, CallStyle) {
+    match &a.this {
+        Some(o) => (o.clone(), 0, CallStyle::Method),
+        None => match a.at(0) {
+            Value::Object(o) => (o, 1, CallStyle::Function),
+            // ZPP (`finfo $finfo`) guarantees an object.
+            _ => unreachable!("finfo argument is not an object"),
+        },
+    }
+}
+
+/// Runs `f` on the object's cookie, or throws "Invalid finfo object".
+fn with_finfo<R>(vm: &mut Vm, o: &Obj, f: impl FnOnce(&mut Finfo) -> R) -> VmResult<R> {
+    match php_vm::object::internal::<State, _>(o, |s| s.0.as_mut().map(f)) {
+        Some(Some(r)) => Ok(r),
+        _ => Err(vm.throw("Error", php_fileinfo::INVALID_OBJECT)),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Opening
+// ---------------------------------------------------------------------------
+
+/// `finfo_open()` / `finfo::__construct()` minus the object handling:
+/// argument checks, `open_basedir`, path expansion and loading.
+fn open(vm: &mut Vm, a: &Args, style: CallStyle, rep: &mut Reporter) -> VmResult<Option<Finfo>> {
+    let flags = flags_arg(a, 0);
+    let database = a.opt(1).map(|v| match v {
+        Value::Str(s) => s.as_bytes().to_vec(),
+        _ => Vec::new(),
+    });
+    if let Some(db) = &database {
+        php_fileinfo::check_magic_database(style, db).map_err(|t| thrown(vm, t))?;
+    }
+    let mut resolved = None;
+    if let Some(db) = database.filter(|d| !d.is_empty()) {
+        let allowed = bridge::enter(vm, || php_streams::paths::check_open_basedir(&db));
+        rep.stream_diags(vm)?;
+        if !allowed {
+            return Ok(None);
+        }
+        let cwd = std::env::current_dir()
+            .map(|p| std::os::unix::ffi::OsStringExt::into_vec(p.into_os_string()))
+            .unwrap_or_default();
+        match php_fileinfo::expand_filepath(&db, &cwd) {
+            Some(p) => resolved = Some(p),
+            None => return Ok(None),
+        }
+    }
+    let (finfo, warnings) = collect(|w| Finfo::open(flags, resolved.as_deref(), w));
+    rep.warnings(vm, warnings)?;
+    Ok(finfo)
+}
+
+fn finfo_open(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let mut rep = Reporter::new(false);
+    let Some(finfo) = open(vm, a, CallStyle::Function, &mut rep)? else {
+        return Ok(Value::Bool(false));
+    };
+    let class = vm
+        .find_class(b"finfo")
+        .ok_or_else(|| vm.throw("Error", "Class \"finfo\" not found"))?;
+    let o = vm.new_object(&class)?;
+    php_vm::object::set_internal(&o, State(Some(finfo)));
+    Ok(Value::Object(o))
+}
+
+fn construct(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let o = a.this_obj();
+    // A second constructor call first drops the old cookie.
+    php_vm::object::internal::<State, _>(&o, |s| s.0 = None);
+    let mut rep = Reporter::new(true);
+    let finfo = open(vm, a, CallStyle::Method, &mut rep)?;
+    if let Some(t) = rep.thrown.take() {
+        return Err(t);
+    }
+    match finfo {
+        Some(f) => {
+            php_vm::object::set_internal(&o, State(Some(f)));
+            Ok(Value::Null)
+        }
+        None => Err(vm.throw("Exception", php_fileinfo::CONSTRUCTOR_FAILED)),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Methods / functions
+// ---------------------------------------------------------------------------
+
+fn finfo_close(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
+    Ok(Value::Bool(true))
+}
+
+fn set_flags(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let (o, base, _) = target(a);
+    let flags = a.int(base);
+    with_finfo(vm, &o, |f| f.set_flags(flags))?;
+    Ok(Value::Bool(true))
+}
+
+fn buffer(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let (o, base, _) = target(a);
+    if a.has(base + 2) {
+        vm.php_deprecated(php_fileinfo::buffer_context_deprecation())?;
+    }
+    if let Some(v) = a.get(base + 2) {
+        if !matches!(v, Value::Null | Value::Resource(_)) {
+            return Err(a.type_error(
+                vm,
+                base + 3,
+                &format!(
+                    "must be of type resource or null, {} given",
+                    bridge::given_type(&v)
+                ),
+            ));
+        }
+    }
+    let data = a.str(base);
+    let flags = flags_arg(a, base + 1);
+    let (r, warnings) = with_finfo(vm, &o, |f| collect(|w| f.buffer(data.as_bytes(), flags, w)))?;
+    Reporter::new(false).warnings(vm, warnings)?;
+    Ok(r.map_or(Value::Bool(false), |d| Value::Str(ZStr::from(d))))
+}
+
+fn file(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let (o, base, style) = target(a);
+    let path = a.str(base);
+    let path = path.as_bytes();
+    let check = php_fileinfo::check_filename(style, path);
+    if path.contains(&0) {
+        if let Err(t) = check {
+            return Err(thrown(vm, t));
+        }
+    }
+    with_finfo(vm, &o, |_| ())?;
+    check.map_err(|t| thrown(vm, t))?;
+    let ctx = res::context_arg(vm, a, base + 2, false)?;
+    let flags = flags_arg(a, base + 1);
+    let r = from_path(vm, a, path, ctx.as_ref(), &mut |vm, run| {
+        with_finfo(vm, &o, |f| collect(|w| run(f, flags, w)))
+    })?;
+    Ok(r.map_or(Value::Bool(false), |d| Value::Str(ZStr::from(d))))
+}
+
+/// How [`from_path`] reaches a cookie: `get(vm, run)` calls `run` on it with
+/// the per-call flags and a warning sink.
+type Identify<'a> = dyn FnMut(
+        &mut Vm,
+        &mut dyn FnMut(&mut Finfo, i64, &mut dyn FnMut(Warning)) -> Option<Vec<u8>>,
+    ) -> VmResult<(Option<Vec<u8>>, Vec<Warning>)>
+    + 'a;
+
+/// What libmagic should examine once the stream is open.
+enum Source {
+    /// A plain file, re-opened by descriptor.
+    File(File),
+    /// Any other stream's content (up to `MAGIC_PARAM_BYTES_MAX`).
+    Bytes(Vec<u8>),
+    /// A directory.
+    Directory,
+}
+
+/// `php_fileinfo_from_path()`: opens `path` through the wrappers (which
+/// report open failures), answers `"directory"` for directories and
+/// otherwise lets libmagic examine the content.
+fn from_path(
+    vm: &mut Vm,
+    a: &Args,
+    path: &[u8],
+    ctx: Option<&ContextRef>,
+    get: &mut Identify<'_>,
+) -> VmResult<Option<Vec<u8>>> {
+    let Some((mut stream, _)) = files::open_stream(vm, a, path, "rb", REPORT_ERRORS, ctx)? else {
+        return Ok(None);
+    };
+    let source = bridge::run(vm, || source_of(&mut stream))?;
+    bridge::run(vm, || stream.close())?;
+    let (r, warnings) = match source {
+        Source::Directory => return Ok(Some(php_fileinfo::DIRECTORY.to_vec())),
+        Source::File(file) => get(vm, &mut |f, flags, w| f.file_handle(&file, flags, w))?,
+        Source::Bytes(data) => get(vm, &mut |f, flags, w| f.buffer(&data, flags, w))?,
+    };
+    Reporter::new(false).warnings(vm, warnings)?;
+    Ok(r)
+}
+
+/// Classifies an open stream (see [`Source`]).
+fn source_of(stream: &mut Stream) -> Source {
+    if stream.stat().is_some_and(|s| s.is_dir()) {
+        return Source::Directory;
+    }
+    if !stream.is_filtered() && stream.unread_bytes() == 0 {
+        if let Some(fd) = stream.ops_as::<StdioOps>().map(StdioOps::fd) {
+            if let Ok(file) = File::open(format!("/proc/self/fd/{fd}")) {
+                return Source::File(file);
+            }
+        }
+    }
+    let max = 7 * 1024 * 1024;
+    let mut data = Vec::new();
+    let mut buf = vec![0u8; 64 * 1024];
+    while data.len() < max {
+        match stream.read(&mut buf) {
+            Ok(0) | Err(_) => break,
+            Ok(n) => data.extend_from_slice(&buf[..n.min(max - data.len())]),
+        }
+    }
+    Source::Bytes(data)
+}
+
+/// `std::io` view of a library stream (for `mime_content_type($stream)`).
+struct StreamIo<'a>(&'a mut Stream);
+
+impl Read for StreamIo<'_> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        self.0
+            .read(buf)
+            .map_err(|_| std::io::Error::other("stream read failed"))
+    }
+}
+
+impl Seek for StreamIo<'_> {
+    fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
+        let (offset, whence) = match pos {
+            SeekFrom::Start(o) => (i64::try_from(o).unwrap_or(i64::MAX), SEEK_SET),
+            SeekFrom::Current(o) => (o, 1),
+            SeekFrom::End(o) => (o, 2),
+        };
+        if self.0.seek(offset, whence) != 0 {
+            return Err(std::io::Error::other("stream seek failed"));
+        }
+        u64::try_from(self.0.tell()).map_err(|_| std::io::Error::other("bad stream position"))
+    }
+}
+
+fn mime_content_type(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let r = match a.at(0) {
+        Value::Str(s) => {
+            let path = s.as_bytes();
+            php_fileinfo::check_mime_content_type_filename(path).map_err(|t| thrown(vm, t))?;
+            let (finfo, warnings) =
+                collect(|w| Finfo::open(php_fileinfo::FILEINFO_MIME_TYPE, None, w));
+            Reporter::new(false).warnings(vm, warnings)?;
+            let Some(finfo) = finfo else {
+                return Ok(Value::Bool(false));
+            };
+            let mut finfo = Some(finfo);
+            let ctx = res::ctx_cell_of(&res::default_context()).map(|c| c.ctx.clone());
+            from_path(vm, a, path, ctx.as_ref(), &mut |_vm, run| {
+                let f = finfo.as_mut().ok_or(Throw::Fatal)?;
+                Ok(collect(|w| run(f, 0, w)))
+            })?
+        }
+        Value::Resource(r) => {
+            let cell = res::stream_of_resource(vm, a, &r)?;
+            let (out, warnings) = bridge::run(vm, || {
+                collect(|w| match cell.get() {
+                    Some(mut s) => php_fileinfo::mime_content_type_stream(&mut StreamIo(&mut s), w),
+                    None => None,
+                })
+            })?;
+            Reporter::new(false).warnings(vm, warnings)?;
+            out
+        }
+        other => {
+            let name = bridge::given_type(&other);
+            return Err(thrown(vm, php_fileinfo::mime_content_type_type_error(&name)));
+        }
+    };
+    Ok(r.map_or(Value::Bool(false), |d| Value::Str(ZStr::from(d))))
+}
+
+impl Extension for Fileinfo {
+    fn name(&self) -> &'static str {
+        "fileinfo"
+    }
+
+    fn register(&self, m: &mut ModuleBuilder<'_>) {
+        for &(name, value) in php_fileinfo::CONSTANTS {
+            m.constant(name, Value::Int(value));
+        }
+        ClassBuilder::new("finfo")
+            .flags(class_flags::NO_CLONE | class_flags::NOT_SERIALIZABLE)
+            .method(
+                "__construct(int $flags = FILEINFO_NONE, ?string $magic_database = null)",
+                acc::PUBLIC,
+                construct,
+            )
+            .method(
+                "file(string $filename, int $flags = FILEINFO_NONE, $context = null): string|false",
+                acc::PUBLIC,
+                file,
+            )
+            .method(
+                "buffer(string $string, int $flags = FILEINFO_NONE, $context = null): string|false",
+                acc::PUBLIC,
+                buffer,
+            )
+            .method("set_flags(int $flags): true", acc::PUBLIC, set_flags)
+            .register(m.vm());
+        m.function(
+            "finfo_open(int $flags = FILEINFO_NONE, ?string $magic_database = null): finfo|false",
+            finfo_open,
+        )
+        .function("finfo_close(finfo $finfo): true", finfo_close)
+        .deprecated("8.5", "as finfo objects are freed automatically")
+        .function("finfo_set_flags(finfo $finfo, int $flags): true", set_flags)
+        .function(
+            "finfo_file(finfo $finfo, string $filename, int $flags = FILEINFO_NONE, $context = null): string|false",
+            file,
+        )
+        .function(
+            "finfo_buffer(finfo $finfo, string $string, int $flags = FILEINFO_NONE, $context = null): string|false",
+            buffer,
+        )
+        .function("mime_content_type($filename): string|false", mime_content_type);
+    }
+}
