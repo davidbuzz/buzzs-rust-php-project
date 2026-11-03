@@ -13,7 +13,8 @@ fn err_name(e: &Error) -> String {
         Error::ArgumentValue { .. } | Error::Value(_) => "s:!ValueError".into(),
         Error::ArgumentType { .. } => "s:!TypeError".into(),
         Error::Thrown(_) => "s:!Error".into(),
-        Error::IntlException(_) => "s:!IntlException".into(),
+        Error::ArgumentCount(_) => "s:!ArgumentCountError".into(),
+        Error::IntlException(_) | Error::IntlExceptionInFunction(_) => "s:!IntlException".into(),
     }
 }
 

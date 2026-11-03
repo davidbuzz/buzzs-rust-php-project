@@ -202,9 +202,14 @@ pub enum Error {
     Value(String),
     /// `zend_throw_error(NULL, message)` → plain `Error`.
     Thrown(String),
+    /// `zend_argument_count_error(message)` → `ArgumentCountError`.
+    ArgumentCount(String),
     /// `zend_throw_exception(IntlException, message)` (thrown directly,
     /// independent of `intl.use_exceptions`).
     IntlException(String),
+    /// `IntlException` whose message the VM prefixes with the active
+    /// function name: `"func(): message"`.
+    IntlExceptionInFunction(String),
 }
 
 impl Error {
@@ -294,7 +299,11 @@ impl fmt::Display for Error {
             Self::ArgumentValue { arg, message } | Self::ArgumentType { arg, message } => {
                 write!(f, "Argument #{arg} {message}")
             }
-            Self::Value(m) | Self::Thrown(m) | Self::IntlException(m) => f.write_str(m),
+            Self::Value(m)
+            | Self::Thrown(m)
+            | Self::ArgumentCount(m)
+            | Self::IntlException(m)
+            | Self::IntlExceptionInFunction(m) => f.write_str(m),
         }
     }
 }

@@ -7,4 +7,7 @@
 #![allow(clippy::borrow_as_ptr)]
 
 pub mod loc;
+pub mod ucal;
+pub mod udat;
 pub mod unum;
+pub mod ures;

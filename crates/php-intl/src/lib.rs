@@ -10,8 +10,10 @@ pub mod error;
 pub mod ffi;
 pub mod ustr;
 
+pub mod calendar;
 pub mod common;
 pub mod numfmt;
 pub mod sys;
+pub mod timezone;
 
 pub use error::{Error, ErrorState, IntlError, IntlSettings, Notice, Result, Scope, UErrorCode};
