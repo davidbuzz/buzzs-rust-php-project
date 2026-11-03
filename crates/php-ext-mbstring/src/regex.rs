@@ -46,11 +46,14 @@ const SINCE: &str = "8.6";
 /// The deprecation message.
 const WHY: &str = "because the underlying library is no longer maintained";
 
+/// Group names with their group numbers.
+type NameList = Vec<(Vec<u8>, Vec<usize>)>;
+
 /// A compiled pattern.
 struct Compiled {
     re: php_pcre::Regex,
     /// Group names in definition order with their group numbers.
-    names: Vec<(Vec<u8>, Vec<usize>)>,
+    names: NameList,
     /// Whether plain groups capture (`onig_noname_group_capture_is_active`).
     noname_capture: bool,
 }
@@ -465,14 +468,17 @@ fn onig_name_hash(name: &[u8]) -> u32 {
 /// the (11-bin) `st` hash table, most recently inserted first within a bin.
 fn onig_name_order(names: &mut [(Vec<u8>, Vec<usize>)]) {
     let bins = if names.len() > 55 { 19 } else { 11 };
-    let mut keyed: Vec<(u32, usize, (Vec<u8>, Vec<usize>))> = names
+    let mut order: Vec<(u32, usize)> = names
         .iter()
-        .cloned()
         .enumerate()
-        .map(|(i, n)| (onig_name_hash(&n.0) % bins, usize::MAX - i, n))
+        .map(|(i, n)| (onig_name_hash(&n.0) % bins, usize::MAX - i))
         .collect();
-    keyed.sort_by_key(|k| (k.0, k.1));
-    for (slot, (_, _, n)) in names.iter_mut().zip(keyed) {
+    order.sort_unstable();
+    let sorted: NameList = order
+        .iter()
+        .map(|&(_, rev)| names[usize::MAX - rev].clone())
+        .collect();
+    for (slot, n) in names.iter_mut().zip(sorted) {
         *slot = n;
     }
 }
@@ -535,7 +541,7 @@ fn compile(
             return Ok(None);
         }
     };
-    let mut name_list: Vec<(Vec<u8>, Vec<usize>)> = Vec::new();
+    let mut name_list: NameList = Vec::new();
     for (g, n) in re.group_names().iter().enumerate() {
         if let Some(n) = n {
             if let Some(e) = name_list.iter_mut().find(|(k, _)| k.as_slice() == &n[..]) {
@@ -934,7 +940,7 @@ fn replace_common(vm: &mut Vm, a: &mut Args, base_opts: u32, callable: bool) -> 
         Found::Match(_)
     );
     // Appends the replacement (or the callback's result) for one match.
-    let mut emit = |vm: &mut Vm, out: &mut Vec<u8>, regs: &Regs| -> VmResult<()> {
+    let emit = |vm: &mut Vm, out: &mut Vec<u8>, regs: &Regs| -> VmResult<()> {
         if let Some(rep) = &replacement {
             substitute(out, s, rep.as_bytes(), &c, regs, enc);
         }
