@@ -10,6 +10,7 @@ pub mod loc;
 pub mod ubrk;
 pub mod ucal;
 pub mod uchar;
+pub mod ucnv;
 pub mod ucol;
 pub mod udat;
 pub mod udatpg;
