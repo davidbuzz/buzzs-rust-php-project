@@ -761,6 +761,114 @@ fn cases() -> Vec<(&'static str, Script)> {
             o.var_dump(&Value::Bool(t.image_type == 2));
         }),
     ));
+    c.push((
+        "sony.phpt",
+        Box::new(|o: &mut Out| {
+            let v = read(o, "sony.jpg", None, false, false, false);
+            for t in ["SonyModelID", "Panorama", "AntiBlur"] {
+                let found = !get(&v, t).is_null();
+                o.echo(format!(
+                    "{t} was {}found\n",
+                    if found { "" } else { "NOT " }
+                ));
+            }
+        }),
+    ));
+    c.push((
+        "redhat-bug1362571.phpt",
+        Box::new(|o: &mut Out| {
+            let t = thumb(o, "redhat-bug1362571.jpg", false);
+            o.var_dump(&Value::Bool(t.is_some_and(|t| !t.data.is_empty())));
+        }),
+    ));
+    c.push((
+        "temporary_buffer_leak.phpt",
+        Box::new(|o: &mut Out| {
+            let v = read(o, "temporary_buffer_leak.jpg", None, false, false, true);
+            o.var_dump(&v);
+        }),
+    ));
+    c.push((
+        "tag_with_illegal_zero_components.phpt",
+        Box::new(|o: &mut Out| {
+            let v = read(
+                o,
+                "tag_with_illegal_zero_components.jpeg",
+                None,
+                false,
+                false,
+                false,
+            );
+            o.var_dump(&v);
+        }),
+    ));
+    for (phpt, img, sec, th, tail) in [
+        (
+            "zero_length_makernote_leak.phpt",
+            "zero_length_makernote_leak.tiff",
+            None,
+            false,
+            "===DONE===",
+        ),
+        (
+            "duplicate_copyright_tag_leak.phpt",
+            "duplicate_copyright_tag_leak.tiff",
+            None,
+            false,
+            "===DONE===",
+        ),
+        (
+            "bug78256.phpt",
+            "bug78256.jpg",
+            Some("COMMENT"),
+            true,
+            "DONE",
+        ),
+    ] {
+        c.push((
+            phpt,
+            Box::new(move |o: &mut Out| {
+                read(o, img, sec, false, th, true);
+                o.echo(tail);
+            }),
+        ));
+    }
+    c.push((
+        "gh16409.phpt",
+        Box::new(|o: &mut Out| {
+            // A popen() pipe: a plain-file stream whose path cannot be stat()ed.
+            let (r, d) = exif_thumbnail(
+                Cursor::new(b"1\n".to_vec()),
+                &StreamOrigin::UnstatableFile,
+                true,
+                None,
+                &ExifConfig::default(),
+                &BuiltinConverter,
+            );
+            o.diags("exif_thumbnail", &d);
+            o.var_dump(&thumb_value(r.as_ref()));
+        }),
+    ));
+    for (phpt, img) in [
+        ("oss_fuzz_442954659.phpt", "oss_fuzz_442954659/input"),
+        ("oss_fuzz_444479893.phpt", "oss_fuzz_444479893/input"),
+    ] {
+        c.push((
+            phpt,
+            Box::new(move |o: &mut Out| {
+                read(o, img, None, false, false, false);
+            }),
+        ));
+    }
+    c.push((
+        "bug78793.phpt",
+        Box::new(|o: &mut Out| {
+            for _ in 0..10 {
+                read(o, "bug77950.tiff", None, false, false, true);
+            }
+            o.echo("===DONE===");
+        }),
+    ));
     // data: URLs are non-plain streams (no FileName, FileDateTime 0).
     for (phpt, b64) in [
         (
