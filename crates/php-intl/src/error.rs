@@ -150,6 +150,11 @@ pub struct IntlError {
     pub message: Option<Cow<'static, str>>,
     /// Where the error is recorded.
     pub scope: Scope,
+    /// Recorded with `intl.use_exceptions` forced on and
+    /// `intl.error_level` forced to 0: the VM always throws an
+    /// `IntlException` with the prefixed message and never warns
+    /// (`IntlNumberRangeFormatter`).
+    pub always_throw: bool,
 }
 
 impl IntlError {
@@ -159,6 +164,7 @@ impl IntlError {
             code,
             message: Some(message.into()),
             scope: Scope::Both,
+            always_throw: false,
         }
     }
 
@@ -168,6 +174,7 @@ impl IntlError {
             code,
             message: None,
             scope: Scope::Both,
+            always_throw: false,
         }
     }
 
@@ -175,6 +182,13 @@ impl IntlError {
     #[must_use]
     pub fn with_scope(mut self, scope: Scope) -> Self {
         self.scope = scope;
+        self
+    }
+
+    /// Marks the error as always throwing (see [`IntlError::always_throw`]).
+    #[must_use]
+    pub fn throwing(mut self) -> Self {
+        self.always_throw = true;
         self
     }
 }
