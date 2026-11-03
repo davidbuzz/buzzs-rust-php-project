@@ -54,6 +54,7 @@ A Rust re-implementation of PHP whose goal is to pass the php-src `.phpt` test s
 - `crates/php-dom`      — ext/dom (legacy DOMDocument API + PHP 8.4 Dom\\* HTML5 API) over php-libxml (ref: ext/dom, ext/lexbor)
 - `crates/php-simplexml` — SimpleXMLElement semantics over php-libxml (ref: ext/simplexml)
 - `crates/php-xmlreader` — XMLReader pull parser over php-libxml (ref: ext/xmlreader)
+- `crates/php-pdo`      — PDO core: PDO/PDOStatement semantics, fetch modes, error modes, driver trait (ref: ext/pdo)
 
 ## Parallel work
 Several agents work concurrently, one crate each. Only edit files inside your own crate (plus your row(s) in FEATURE_GAP.md). Never edit workspace Cargo.toml; crates are pre-registered. Commit your own crate's files with `git add crates/<yours>` only.

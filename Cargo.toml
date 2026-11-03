@@ -43,6 +43,7 @@ members = [
     "crates/php-dom",
     "crates/php-simplexml",
     "crates/php-xmlreader",
+    "crates/php-pdo",
 ]
 
 [workspace.package]

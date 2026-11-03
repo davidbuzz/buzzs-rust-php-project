@@ -365,7 +365,8 @@ version = "0.1.0"
 name = "php-dom"
 version = "0.1.0"
 dependencies = [
- "php-runtime",
+ "cc",
+ "php-libxml",
 ]
 
 [[package]]
@@ -453,6 +454,9 @@ dependencies = [
 [[package]]
 name = "php-pcntl"
 version = "0.1.0"
+dependencies = [
+ "libc",
+]
 
 [[package]]
 name = "php-pcre"
@@ -501,6 +505,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "php-simplexml"
+version = "0.1.0"
+dependencies = [
+ "php-runtime",
+]
+
+[[package]]
 name = "php-sockets"
 version = "0.1.0"
 
@@ -532,6 +543,10 @@ dependencies = [
 name = "php-stdmisc"
 version = "0.1.0"
 dependencies = [
+ "libc",
+ "php-hash",
+ "php-lexer",
+ "php-random",
  "php-runtime",
 ]
 
@@ -573,6 +588,13 @@ dependencies = [
  "php-stdarr",
  "php-stdstr",
  "php-support",
+]
+
+[[package]]
+name = "php-xmlreader"
+version = "0.1.0"
+dependencies = [
+ "php-runtime",
 ]
 
 [[package]]
