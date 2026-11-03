@@ -305,3 +305,57 @@ fn locale_aware_cache_keys() {
         CompileError::BadDelimiter
     );
 }
+
+/// `VmSize` of this process in kB (Linux only).
+#[cfg(target_os = "linux")]
+fn vm_size_kb() -> u64 {
+    let status = std::fs::read_to_string("/proc/self/status").unwrap();
+    status
+        .lines()
+        .find_map(|l| l.strip_prefix("VmSize:"))
+        .and_then(|v| v.trim().trim_end_matches("kB").trim().parse().ok())
+        .unwrap()
+}
+
+/// The JIT stack is created once per thread and assigned through the match
+/// context; match data and contexts are freed on every path (including
+/// errors and callbacks that abort), so address space stays flat over many
+/// calls and across threads.
+#[cfg(target_os = "linux")]
+#[test]
+fn no_address_space_growth() {
+    let re = Regex::compile(b"/(\\w+)(\\d)/").unwrap();
+    let bad = Regex::compile(b"/x/u").unwrap();
+    let cfg = MatchConfig::default();
+    let s = b"abc123 ".repeat(20);
+    let round = || {
+        let _ = match_one(&re, &cfg, &s, true, 0, 0);
+        let _ = match_all(&re, &cfg, &s, true, PREG_SET_ORDER, 0);
+        let _ = match_one(&bad, &cfg, b"\xff", false, 0, 0);
+        let _ = replace_callback(&re, &cfg, &s, usize::MAX, 0, |_| None);
+        let _ = split(&re, &cfg, &s, -1, 0);
+    };
+    for _ in 0..1000 {
+        round();
+    }
+    let before = vm_size_kb();
+    for _ in 0..20_000 {
+        round();
+    }
+    // Fresh threads each get (and on exit free) their own JIT stack.
+    for _ in 0..200 {
+        let (re, s) = (re.clone(), s.clone());
+        std::thread::spawn(move || {
+            let _ = match_one(&re, &MatchConfig::default(), &s, true, 0, 0);
+        })
+        .join()
+        .unwrap();
+    }
+    let after = vm_size_kb();
+    // A per-match or per-thread JIT stack leak would add many megabytes;
+    // allow some slack for other tests running concurrently.
+    assert!(
+        after < before + 32 * 1024,
+        "VmSize grew from {before} kB to {after} kB"
+    );
+}
