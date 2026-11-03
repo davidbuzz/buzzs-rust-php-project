@@ -350,6 +350,14 @@ impl Value {
         Ok(match self {
             Value::Array(a) => a.clone(),
             Value::Null => ZArray::new(),
+            // `convert_to_array()`: a Closure is wrapped like a scalar
+            // (`convert_scalar_to_array`), every other object exports its
+            // properties.
+            Value::Object(o) if ctx.is_closure(o) => {
+                let mut t = HashTable::with_capacity(1);
+                t.insert(0, self.clone());
+                ZArray::from_table(t)
+            }
             Value::Object(o) => match ctx.object_properties(o, PropertyPurpose::ArrayCast)? {
                 Some(props) => ZArray::from_table(props.to_symtable()),
                 None => ZArray::new(),

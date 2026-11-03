@@ -476,6 +476,14 @@ pub trait RuntimeContext {
         false
     }
 
+    /// Whether the object is a `Closure`. `convert_to_array()` wraps a
+    /// closure in a one-element array instead of exporting its properties.
+    /// The default returns `false`.
+    fn is_closure(&mut self, obj: &Obj) -> bool {
+        let _ = obj;
+        false
+    }
+
     /// `count()` on an object: `Ok(Some(n))` for `Countable` objects (calling
     /// `count()`), `Ok(None)` when the object is not countable.
     fn count_object(&mut self, obj: &Obj) -> RtResult<Option<i64>> {
