@@ -1753,6 +1753,12 @@ impl Interp {
                 }
             }
         }
+        if ob.dom().is_some() && ob.prop(n).is_none() {
+            let cls = ob.class.borrow().clone();
+            if php_dom::classes::find_class(&cls).is_some() {
+                self.emit_raw("Deprecated", format!("Creation of dynamic property {cls}::${} is deprecated", String::from_utf8_lossy(n)).as_bytes());
+            }
+        }
         ob.set_prop(n, v);
         Ok(())
     }
@@ -1781,6 +1787,10 @@ impl Interp {
             "bool" => match v {
                 V::Arr(_) | V::Obj(_) => Err(self.throw_err("TypeError", &format!("Cannot assign {} to property {class}::${name} of type {ty}", v.type_name()))),
                 other => Ok(V::Bool(other.truthy())),
+            },
+            cls if cls.contains('\\') || cls.starts_with("DOM") => match v {
+                V::Obj(o) if self.is_subclass(&o.class.borrow().clone(), cls) => Ok(v.clone()),
+                _ => Err(self.throw_err("TypeError", &format!("Cannot assign {} to property {class}::${name} of type {ty}", v.type_name()))),
             },
             _ => Ok(v.clone()),
         }

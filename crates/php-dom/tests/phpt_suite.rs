@@ -140,7 +140,13 @@ fn phpt_dom_suite() {
     let handle = std::thread::Builder::new()
         .stack_size(256 * 1024 * 1024)
         .spawn(move || {
-            let _ = std::env::set_current_dir(&target_clone);
+            // run-tests.php runs scripts from the php-src root, not the
+            // test directory: use an empty root with ext/dom/tests linked.
+            let root = target_clone.with_file_name("phpt-dom-root");
+            let _ = std::fs::create_dir_all(root.join("ext/dom"));
+            #[cfg(unix)]
+            let _ = std::os::unix::fs::symlink(&target_clone, root.join("ext/dom/tests"));
+            let _ = std::env::set_current_dir(&root);
             let mut report = String::new();
             let (mut pass, mut fail, mut skip) = (0, 0, 0);
             for f in &files {

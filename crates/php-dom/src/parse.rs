@@ -325,7 +325,18 @@ unsafe fn trampoline_inner(err: *mut ffi::xmlError) {
         return;
     }
     if from_parser_ctxt {
-        let c = if e.ctxt.cast() == ctxt { ctxt } else { e.ctxt.cast() };
+        let c: *mut ffi::xmlParserCtxt = if e.ctxt.cast() == ctxt { ctxt } else { e.ctxt.cast() };
+        // A context whose SAX error channel was cleared (LIBXML_NOERROR /
+        // LIBXML_NOWARNING) reports nothing.
+        // SAFETY: e.ctxt is the live parser context raising the error.
+        let silenced = !matches!(e.domain, 4 | 23)
+            && unsafe {
+                let sax = (*c).sax;
+                !sax.is_null() && if e.level == 1 { (*sax).warning.is_none() } else { (*sax).error.is_none() }
+            };
+        if silenced {
+            return;
+        }
         for line in report_error_format(e, c) {
             lxerr::issue_error(DiagnosticLevel::Warning, &line);
         }

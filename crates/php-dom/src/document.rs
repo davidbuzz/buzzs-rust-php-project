@@ -1039,7 +1039,7 @@ impl Node {
         let modern = self.family_is_modern();
         let root = if modern { "Dom\\Node" } else { "DOMNode" };
         if !host.is_subclass_of(base, root) {
-            return Err(DomError::arg_type(1, format!("must be a class name derived from {root}, {base} given")));
+            return Err(DomError::arg_type(1, format!("must be a class name derived from {root}, \"{base}\" given")));
         }
         if host.is_abstract(base) {
             return Err(DomError::arg_value(1, "must not be an abstract class"));
