@@ -8,6 +8,7 @@ rust-version.workspace = true
 [dependencies]
 php-vm = { path = "../php-vm" }
 php-runtime = { path = "../php-runtime" }
+php-sodium = { path = "../php-sodium" }
 
 [lints]
 workspace = true
