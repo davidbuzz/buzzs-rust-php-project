@@ -203,6 +203,16 @@ fn method_flags(d: &MethodDef) -> u32 {
     f
 }
 
+/// Classes whose handlers have no `clone_obj` (dual iterators, recursive
+/// iterators, `SplFileObject`, `GlobIterator`).
+fn uncloneable(name: &str) -> bool {
+    matches!(
+        name,
+        "GlobIterator" | "SplFileObject" | "SplTempFileObject" | "RecursiveIteratorIterator"
+    ) || php_spl::classes::is_subclass_of(name, "IteratorIterator")
+        || php_spl::classes::is_subclass_of(name, "RecursiveIteratorIterator")
+}
+
 /// Registers one SPL class or interface.
 fn register_class(vm: &mut Vm, c: &'static ClassDef) {
     let sigs = signatures();
@@ -217,6 +227,9 @@ fn register_class(vm: &mut Vm, c: &'static ClassDef) {
     }
     if c.name == "SplFileInfo" {
         b = b.flags(class_flags::NOT_SERIALIZABLE);
+    }
+    if uncloneable(c.name) {
+        b = b.flags(class_flags::NO_CLONE);
     }
     if let Some(p) = c.parent {
         b = b.extends(vm, p);
@@ -375,14 +388,34 @@ fn method_handler(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     if let Some(e) = disabled_sort(vm, t) {
         return Err(e);
     }
+    if t.class == "SplFixedArray"
+        && t.def.name == "offsetGet"
+        && a.at(0).is_null()
+        && !is_direct_call(vm, "offsetGet")
+    {
+        // `$fa[]` in a write context: the VM falls back to `offsetGet(null)`
+        // because its `read_dimension` hook has no append form.
+        return Err(vm.throw("Error", "[] operator not supported for SplFixedArray"));
+    }
     let args = collect_args(a, t);
     let this = a.this.clone();
+    if t.class == "SplFixedArray" && t.def.name == "getIterator" && args.is_empty() {
+        if let Some((obj, st)) = this.as_ref().and_then(|o| Some((o.clone(), spl_state_of(o)?))) {
+            // `zend_create_internal_iterator_zval` over the class's own
+            // iterator: `php-spl` resolves it through `get_iterator`, which
+            // re-enters a user `getIterator()` override (infinite recursion).
+            let it = Box::new(php_spl::fixedarray::FixedArrayIter::new(obj, st));
+            return crate::iter::new_internal_iterator(vm, it);
+        }
+    }
+    // `get_method` checks apply to method calls made by user code, not to
+    // constructors or calls made by the engine (`count()`, `foreach`).
+    let check_state = is_direct_call(vm, t.def.name);
     let r = {
         let mut host = VmHost::new(vm);
         let mut r = Ok(());
         if let Some(o) = &this {
-            // `get_method` checks do not apply to constructor calls.
-            if spl_state_of(o).is_some() && !t.def.name.eq_ignore_ascii_case("__construct") {
+            if check_state && spl_state_of(o).is_some() {
                 r = php_spl::handlers::before_method_call(&mut host, o);
             }
         }
@@ -464,6 +497,13 @@ pub fn current_dim_kind(vm: &Vm) -> php_spl::DimKind {
         Some(Op::Unset { .. }) => DimKind::Unset,
         _ => DimKind::Read,
     }
+}
+
+/// Whether `method` is being called directly by user code (`$o->m()`), as
+/// opposed to by the engine (`ArrayAccess` dispatch, `count()`,
+/// `foreach`) or through a constructor call.
+fn is_direct_call(vm: &Vm, method: &str) -> bool {
+    pending_method_name(vm).is_some_and(|n| n.eq_ignore_ascii_case(method.as_bytes()))
 }
 
 /// Whether the instruction being executed is `$a = &$b`.

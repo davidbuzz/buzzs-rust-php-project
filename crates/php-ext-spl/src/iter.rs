@@ -6,7 +6,11 @@
 use crate::host::{rt_throw, VmHost};
 use php_runtime::{RtResult, Value};
 use php_spl::ObjectIterator;
-use php_vm::ext::{acc, class_flags, Args, ClassBuilder, NativeIterator, VmResult};
+use php_runtime::ZStr;
+use php_vm::ext::{acc, class_flags, Args, ClassBuilder, NativeFn, NativeIterator, VmResult};
+use php_vm::func::Func;
+use std::cell::RefCell;
+use std::collections::HashMap;
 use php_vm::Vm;
 
 /// Runs `f` with a [`VmHost`] over `vm`, converting the error.
@@ -102,7 +106,26 @@ enum Op {
     Rewind,
 }
 
-fn internal_op(vm: &mut Vm, a: &Args, op: Op) -> VmResult<Value> {
+impl Op {
+    fn name(self) -> &'static str {
+        match self {
+            Op::Current => "current",
+            Op::Key => "key",
+            Op::Next => "next",
+            Op::Valid => "valid",
+            Op::Rewind => "rewind",
+        }
+    }
+}
+
+thread_local! {
+    /// The VM's own `InternalIterator` method handlers, when the VM
+    /// provides the class (its constructor function is crate-private, so
+    /// SPL registers a replacement that serves both kinds of objects).
+    static VM_HANDLERS: RefCell<HashMap<&'static str, NativeFn>> = RefCell::new(HashMap::new());
+}
+
+fn internal_op(vm: &mut Vm, a: &mut Args, op: Op) -> VmResult<Value> {
     let Some(this) = a.this.clone() else {
         return Ok(Value::Null);
     };
@@ -110,6 +133,11 @@ fn internal_op(vm: &mut Vm, a: &Args, op: Op) -> VmResult<Value> {
         php_vm::object::internal::<InternalIt, _>(&this, |s| s.it.take().map(|it| (it, s.rewound)))
             .flatten();
     let Some((mut it, rewound)) = taken else {
+        // An iterator created by the VM itself (`WeakMap::getIterator()`):
+        // run the VM's own implementation.
+        if let Some(f) = VM_HANDLERS.with(|m| m.borrow().get(op.name()).copied()) {
+            return f(vm, a);
+        }
         return Err(vm.throw(
             "Error",
             "The InternalIterator object has not been properly initialized",
@@ -166,8 +194,17 @@ fn ii_construct(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
 
 /// Registers `InternalIterator` unless the VM already provides it.
 pub fn register_internal_iterator(vm: &mut Vm) {
-    if vm.find_class(b"InternalIterator").is_some() {
-        return;
+    if let Some(existing) = vm.find_class(b"InternalIterator") {
+        VM_HANDLERS.with(|m| {
+            let mut m = m.borrow_mut();
+            for name in ["current", "key", "next", "valid", "rewind"] {
+                if let Some(meth) = existing.methods.get(&ZStr::from(name)) {
+                    if let Func::Builtin(b) = &meth.func {
+                        m.insert(name, b.handler);
+                    }
+                }
+            }
+        });
     }
     ClassBuilder::new("InternalIterator")
         .flags(class_flags::FINAL | class_flags::NOT_SERIALIZABLE)
@@ -179,4 +216,7 @@ pub fn register_internal_iterator(vm: &mut Vm) {
         .method("valid(): bool", acc::PUBLIC, ii_valid)
         .method("rewind(): void", acc::PUBLIC, ii_rewind)
         .register(vm);
+    // Replacing a class appends its name to the declaration order again.
+    let mut seen = std::collections::HashSet::new();
+    vm.class_order.retain(|n| seen.insert(n.clone()));
 }
