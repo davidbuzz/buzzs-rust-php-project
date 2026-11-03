@@ -16,8 +16,9 @@
 // signature, even those that cannot fail.
 #![allow(clippy::unnecessary_wraps)]
 
+mod cdf;
+
 use std::fs::File;
-use std::io::{Read, Seek, SeekFrom};
 
 use php_ext_streams::{bridge, files, res};
 use php_fileinfo::{CallStyle, Finfo, Thrown, Warning};
@@ -28,7 +29,7 @@ use php_streams::plain::StdioOps;
 use php_streams::stream::Stream;
 use php_streams::wrapper::REPORT_ERRORS;
 use php_vm::ext::{
-    acc, class_flags, Args, ClassBuilder, Extension, ModuleBuilder, Throw, VmResult,
+    acc, class_flags, Args, ClassBuilder, Extension, InfoItem, ModuleBuilder, Throw, VmResult,
 };
 use php_vm::Vm;
 
@@ -225,11 +226,11 @@ fn set_flags(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 }
 
 fn buffer(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let (o, base, style) = target(a);
+    let (o, base, _) = target(a);
     // ZPP (`r!`) runs before the deprecation.
     if let Some(v) = a.get(base + 2) {
         if !matches!(v, Value::Null | Value::Resource(_)) {
-            return Err(context_type_error(vm, style, "buffer", base + 3, &v));
+            return Err(context_type_error(vm, a, base + 2, &v));
         }
     }
     if a.has(base + 2) {
@@ -237,6 +238,8 @@ fn buffer(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     }
     let data = a.str(base);
     let flags = flags_arg(a, base + 1);
+    let effective = effective_flags(vm, &o, flags)?;
+    reserve_cdf(vm, effective, data.as_bytes())?;
     let (r, warnings) = with_finfo(vm, &o, |f| collect(|w| f.buffer(data.as_bytes(), flags, w)))?;
     Reporter::new(false).warnings(vm, warnings)?;
     Ok(r.map_or(Value::Bool(false), |d| Value::Str(ZStr::from(d))))
@@ -250,14 +253,14 @@ fn func_name(style: CallStyle, name: &str) -> String {
     }
 }
 
-/// ZPP's `TypeError` for a `$context` (argument #`n`) that is neither a
-/// resource nor `null`.
-fn context_type_error(vm: &mut Vm, style: CallStyle, name: &str, n: usize, v: &Value) -> Throw {
-    vm.throw(
-        "TypeError",
+/// ZPP's `TypeError` for a `$context` (0-based argument `n`) that is
+/// neither a resource nor `null`.
+fn context_type_error(vm: &mut Vm, a: &Args, n: usize, v: &Value) -> Throw {
+    a.type_error(
+        vm,
+        n + 1,
         &format!(
-            "{}(): Argument #{n} ($context) must be of type resource or null, {} given",
-            func_name(style, name),
+            "must be of type resource or null, {} given",
             bridge::given_type(v)
         ),
     )
@@ -277,7 +280,8 @@ fn file(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     check.map_err(|t| thrown(vm, t))?;
     let ctx = context_arg(vm, a, base + 2, style)?;
     let flags = flags_arg(a, base + 1);
-    let r = from_path(vm, a, path, ctx.as_ref(), &mut |vm, run| {
+    let effective = effective_flags(vm, &o, flags)?;
+    let r = from_path(vm, a, path, ctx.as_ref(), effective, &mut |vm, run| {
         with_finfo(vm, &o, |f| collect(|w| run(f, flags, w)))
     })?;
     Ok(r.map_or(Value::Bool(false), |d| Value::Str(ZStr::from(d))))
@@ -299,7 +303,7 @@ fn context_arg(vm: &mut Vm, a: &Args, n: usize, style: CallStyle) -> VmResult<Op
                 ),
             )),
         },
-        other => Err(context_type_error(vm, style, "file", n + 1, &other)),
+        other => Err(context_type_error(vm, a, n, &other)),
     }
 }
 
@@ -329,6 +333,7 @@ fn from_path(
     a: &Args,
     path: &[u8],
     ctx: Option<&ContextRef>,
+    flags: i64,
     get: &mut Identify<'_>,
 ) -> VmResult<Option<Vec<u8>>> {
     let Some((mut stream, _)) = files::open_stream(vm, a, path, "rb", REPORT_ERRORS, ctx)? else {
@@ -338,8 +343,14 @@ fn from_path(
     bridge::run(vm, || stream.close())?;
     let (r, warnings) = match source {
         Source::Directory => return Ok(Some(php_fileinfo::DIRECTORY.to_vec())),
-        Source::File(file) => get(vm, &mut |f, flags, w| f.file_handle(&file, flags, w))?,
-        Source::Bytes(data) => get(vm, &mut |f, flags, w| f.buffer(&data, flags, w))?,
+        Source::File(file) => {
+            reserve_cdf(vm, flags, &file)?;
+            get(vm, &mut |f, flags, w| f.file_handle(&file, flags, w))?
+        }
+        Source::Bytes(data) => {
+            reserve_cdf(vm, flags, data.as_slice())?;
+            get(vm, &mut |f, flags, w| f.buffer(&data, flags, w))?
+        }
     };
     Reporter::new(false).warnings(vm, warnings)?;
     Ok(r)
@@ -357,6 +368,11 @@ fn source_of(stream: &mut Stream) -> Source {
             }
         }
     }
+    Source::Bytes(read_head(stream))
+}
+
+/// Up to `MAGIC_PARAM_BYTES_MAX` (7 MiB) bytes from the stream's position.
+fn read_head(stream: &mut Stream) -> Vec<u8> {
     let max = 7 * 1024 * 1024;
     let mut data = Vec::new();
     let mut buf = vec![0u8; 64 * 1024];
@@ -366,32 +382,34 @@ fn source_of(stream: &mut Stream) -> Source {
             Ok(n) => data.extend_from_slice(&buf[..n.min(max - data.len())]),
         }
     }
-    Source::Bytes(data)
+    data
 }
 
-/// `std::io` view of a library stream (for `mime_content_type($stream)`).
-struct StreamIo<'a>(&'a mut Stream);
-
-impl Read for StreamIo<'_> {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        self.0
-            .read(buf)
-            .map_err(|_| std::io::Error::other("stream read failed"))
+/// The flags libmagic runs with: the per-call `$flags` when non-zero,
+/// otherwise the object's.
+fn effective_flags(vm: &mut Vm, o: &Obj, flags: i64) -> VmResult<i64> {
+    if flags != 0 {
+        return Ok(flags);
     }
+    with_finfo(vm, o, |f| i64::from(f.flags()))
 }
 
-impl Seek for StreamIo<'_> {
-    fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
-        let (offset, whence) = match pos {
-            SeekFrom::Start(o) => (i64::try_from(o).unwrap_or(i64::MAX), SEEK_SET),
-            SeekFrom::Current(o) => (o, 1),
-            SeekFrom::End(o) => (o, 2),
-        };
-        if self.0.seek(offset, whence) != 0 {
-            return Err(std::io::Error::other("stream seek failed"));
+/// Charges the memory the bundled libmagic's CDF reader would `emalloc()`
+/// for `src` (see [`cdf`]) against `memory_limit`; over it, the fatal
+/// "Allowed memory size of N bytes exhausted" PHP raises.  `file_trycdf()`
+/// is skipped for `MAGIC_APPLE`/`MAGIC_EXTENSION`.
+fn reserve_cdf(vm: &mut Vm, flags: i64, src: &(impl cdf::Source + ?Sized)) -> VmResult<()> {
+    if flags & (php_fileinfo::FILEINFO_APPLE | php_fileinfo::FILEINFO_EXTENSION) != 0 {
+        return Ok(());
+    }
+    for bytes in cdf::allocations(src) {
+        if let Err(over) = php_memlimit::try_reserve(bytes) {
+            // Raised here; keep the VM's post-call poll from repeating it.
+            let _ = php_memlimit::take();
+            return Err(vm.fatal(&over.to_string()));
         }
-        u64::try_from(self.0.tell()).map_err(|_| std::io::Error::other("bad stream position"))
     }
+    Ok(())
 }
 
 fn mime_content_type(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -407,19 +425,39 @@ fn mime_content_type(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             };
             let mut finfo = Some(finfo);
             let ctx = res::ctx_cell_of(&res::default_context()).map(|c| c.ctx.clone());
-            from_path(vm, a, path, ctx.as_ref(), &mut |_vm, run| {
-                let f = finfo.as_mut().ok_or(Throw::Fatal)?;
-                Ok(collect(|w| run(f, 0, w)))
-            })?
+            from_path(
+                vm,
+                a,
+                path,
+                ctx.as_ref(),
+                php_fileinfo::FILEINFO_MIME_TYPE,
+                &mut |_vm, run| {
+                    let f = finfo.as_mut().ok_or(Throw::Fatal)?;
+                    Ok(collect(|w| run(f, 0, w)))
+                },
+            )?
         }
         Value::Resource(r) => {
             let cell = res::stream_of_resource(vm, a, &r)?;
-            let (out, warnings) = bridge::run(vm, || {
-                collect(|w| match cell.get() {
-                    Some(mut s) => php_fileinfo::mime_content_type_stream(&mut StreamIo(&mut s), w),
-                    None => None,
+            // Rewind, read, restore the position (`magic_stream()`).
+            let data = bridge::run(vm, || {
+                cell.get().map(|mut s| {
+                    let pos = s.tell();
+                    s.seek(0, SEEK_SET);
+                    let data = read_head(&mut s);
+                    s.seek(pos, SEEK_SET);
+                    data
                 })
-            })?;
+            })?
+            .unwrap_or_default();
+            reserve_cdf(vm, php_fileinfo::FILEINFO_MIME_TYPE, data.as_slice())?;
+            let (finfo, warnings) =
+                collect(|w| Finfo::open(php_fileinfo::FILEINFO_MIME_TYPE, None, w));
+            Reporter::new(false).warnings(vm, warnings)?;
+            let Some(mut finfo) = finfo else {
+                return Ok(Value::Bool(false));
+            };
+            let (out, warnings) = collect(|w| finfo.buffer(&data, 0, w));
             Reporter::new(false).warnings(vm, warnings)?;
             out
         }
@@ -432,6 +470,16 @@ fn mime_content_type(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         }
     };
     Ok(r.map_or(Value::Bool(false), |d| Value::Str(ZStr::from(d))))
+}
+
+/// `PHP_MINFO(fileinfo)`: the `phpinfo()` section.
+fn info(_vm: &mut Vm) -> Vec<InfoItem> {
+    vec![
+        InfoItem::TableStart,
+        InfoItem::Row(vec!["fileinfo support".into(), "enabled".into()]),
+        InfoItem::Row(vec!["libmagic".into(), php_fileinfo::libmagic_version()]),
+        InfoItem::TableEnd,
+    ]
 }
 
 impl Extension for Fileinfo {
@@ -477,7 +525,8 @@ impl Extension for Fileinfo {
             "finfo_buffer(finfo $finfo, string $string, int $flags = FILEINFO_NONE, $context = null): string|false",
             buffer,
         )
-        .function("mime_content_type($filename): string|false", mime_content_type);
+        .function("mime_content_type($filename): string|false", mime_content_type)
+        .info(info);
     }
 }
 
@@ -495,17 +544,6 @@ mod tests {
     fn flags_default_to_none() {
         let a = Args::default();
         assert_eq!(flags_arg(&a, 1), php_fileinfo::FILEINFO_NONE);
-    }
-
-    #[test]
-    fn stream_io_reads_and_seeks() {
-        let mut s = php_streams::memory::memory_create(php_streams::mode::TempMode::Default);
-        assert!(s.write(b"hello world").is_ok());
-        let mut io = StreamIo(&mut s);
-        assert_eq!(io.seek(SeekFrom::Start(6)).ok(), Some(6));
-        let mut out = String::new();
-        assert!(io.read_to_string(&mut out).is_ok());
-        assert_eq!(out, "world");
     }
 
     #[test]

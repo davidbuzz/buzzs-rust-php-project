@@ -11,6 +11,7 @@ php-runtime = { path = "../php-runtime" }
 php-fileinfo = { path = "../php-fileinfo" }
 php-streams = { path = "../php-streams" }
 php-ext-streams = { path = "../php-ext-streams" }
+php-memlimit = { path = "../php-memlimit" }
 
 [lints]
 workspace = true
