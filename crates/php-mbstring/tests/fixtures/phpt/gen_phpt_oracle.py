@@ -23,7 +23,7 @@ HERE = Path(__file__).resolve().parent
 SRC = Path(sys.argv[1]) if len(sys.argv) > 1 else HERE.parents[4] / "modules" / "php-src"
 TESTS = SRC / "ext/mbstring/tests"
 PHP = "/usr/bin/php"
-SKIP_FUNCS = re.compile(r"mb_(ereg|eregi|split|regex_set_options|convert_variables|parse_str|send_mail|output_handler)")
+SKIP_FUNCS = re.compile(r"mb_(ereg|eregi|split|regex_set_options|parse_str|send_mail|output_handler)")
 
 
 def sections(text):

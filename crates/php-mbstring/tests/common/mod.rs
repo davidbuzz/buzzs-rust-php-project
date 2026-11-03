@@ -273,6 +273,7 @@ pub fn dispatch(st: &mut MbState, f: &str, a: &[V]) -> V {
             None => V::S(st.mb_regex_encoding_get().as_bytes().to_vec()),
             Some(x) => r!(st.mb_regex_encoding_set(s(x)), V::B),
         },
+        "mb_get_info" => info_to_v(st.mb_get_info(os(a.first()))),
         "mb_list_encodings" => V::A(
             php_mbstring::state::mb_list_encodings()
                 .into_iter()
@@ -323,5 +324,17 @@ pub fn values(v: &V) -> Vec<V> {
         V::A(x) => x.clone(),
         V::K(x) => x.iter().map(|(_, v)| v.clone()).collect(),
         _ => vec![],
+    }
+}
+
+fn info_to_v(v: php_mbstring::info::InfoValue) -> V {
+    use php_mbstring::info::InfoValue as I;
+    match v {
+        I::Str(s) => V::S(s.into_bytes()),
+        I::Int(n) => V::I(n),
+        I::List(l) => V::A(l.into_iter().map(|n| V::S(n.as_bytes().to_vec())).collect()),
+        I::Assoc(a) => V::K(a.into_iter().map(|(k, v)| (V::S(k.as_bytes().to_vec()), info_to_v(v))).collect()),
+        I::Null => V::N,
+        I::False => V::B(false),
     }
 }

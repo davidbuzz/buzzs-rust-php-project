@@ -49,3 +49,23 @@ function __mbw_ini_set($k, $v) {
     fwrite(__mbw_fh(), "#INISET\t" . $k . "\t" . bin2hex((string)$v) . "\n");
     return $r;
 }
+function __mbw_mb_convert_variables($to, $from, &...$vars) {
+    $before = __mbw_enc($vars);
+    $diag = [];
+    set_error_handler(function ($no, $str) use (&$diag) {
+        $lvl = ($no === E_DEPRECATED) ? 'D' : (($no === E_NOTICE) ? 'N' : 'W');
+        $diag[] = $lvl . bin2hex(preg_replace('/^[a-z_]+\(\): /', '', $str));
+        return true;
+    });
+    $head = "mb_convert_variables\t" . __mbw_enc($to) . "\t" . __mbw_enc($from) . "\t" . $before;
+    try {
+        $r = mb_convert_variables($to, $from, ...$vars);
+    } catch (Throwable $e) {
+        restore_error_handler();
+        fwrite(__mbw_fh(), $head . "\t=E" . get_class($e) . ':' . bin2hex($e->getMessage()) . "\t" . implode(',', $diag) . "\n");
+        throw $e;
+    }
+    restore_error_handler();
+    fwrite(__mbw_fh(), $head . "\t=" . __mbw_enc($r) . "\t" . implode(',', $diag) . "\t" . __mbw_enc($vars) . "\n");
+    return $r;
+}

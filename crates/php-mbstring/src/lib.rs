@@ -13,6 +13,7 @@ pub mod convert;
 pub mod detect;
 pub mod encoding;
 pub mod error;
+pub mod info;
 pub mod legacy;
 pub mod numericentity;
 pub mod mbregex;

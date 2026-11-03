@@ -143,6 +143,11 @@ pub struct MbState {
     php_internal_encoding: Option<Vec<u8>>,
     php_input_encoding: Option<Vec<u8>>,
     php_output_encoding: Option<Vec<u8>>,
+    /// `mbstring.http_output_conv_mimetypes` (a PCRE pattern, matched
+    /// case-insensitively by the SAPI glue).
+    pub http_output_conv_mimetypes: Vec<u8>,
+    pub(crate) outconv_enabled: bool,
+    pub(crate) outconv_state: u32,
     pub(crate) regex: crate::mbregex::RegexState,
     /// Warnings / deprecations emitted since last drained.
     pub diagnostics: Vec<Diagnostic>,
@@ -198,6 +203,9 @@ impl MbState {
             php_internal_encoding: None,
             php_input_encoding: None,
             php_output_encoding: None,
+            http_output_conv_mimetypes: br"^(text/|application/xhtml\+xml)".to_vec(),
+            outconv_enabled: false,
+            outconv_state: 0,
             regex: crate::mbregex::RegexState::default(),
             diagnostics: Vec::new(),
         };
@@ -256,6 +264,9 @@ impl MbState {
         self.internal_encoding_set = false;
         self.http_output_set = false;
         self.http_input_set = false;
+        self.outconv_enabled = false;
+        self.outconv_state = 0;
+        self.regex.request_shutdown();
     }
 
     /// Take the pending diagnostics.
@@ -398,6 +409,11 @@ impl MbState {
             "mbstring.substitute_character" => self.ini_set_substitute_character(value),
             "mbstring.strict_detection" => {
                 self.strict_detection = value.is_some_and(ini_bool);
+                true
+            }
+            "mbstring.http_output_conv_mimetypes" => {
+                let v = value.unwrap_or(br"^(text/|application/xhtml\+xml)");
+                self.http_output_conv_mimetypes = v.trim_ascii().to_vec();
                 true
             }
             "mbstring.encoding_translation" => {

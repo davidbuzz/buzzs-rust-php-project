@@ -18,6 +18,7 @@ use std::collections::BTreeMap;
 const MASTER_DIFF_TESTS: &[&str] = &[
     "GHSA-74r9-qxhc-fx53",     // NUL inside encoding names is not ignored
     "mb_detect_order_with_ini_set", // runtime ini_set updates the detect order
+    "mb_get_info_errors",      // invalid type is a warning + false
     "bug79149",                // %pS: message keeps bytes after NUL
     "gh11476",
     "gh16360",                 // mb_substr(PHP_INT_MIN) now a ValueError
@@ -40,8 +41,13 @@ const MASTER_DIFF_TESTS: &[&str] = &[
     "gb18030_2022_encoding",   // encoding does not exist in 8.3
 ];
 
+/// Tests whose remaining differences come from state only the VM/SAPI can
+/// provide (`mb_http_input` detection of request data, objects passed to
+/// `mb_convert_variables`).
+const VM_DEPENDENT_TESTS: &[&str] = &["mb_get_info", "mb_convert_variables"];
+
 /// Number of tests (with at least one checked call) that must reproduce.
-const MIN_REPRODUCED: usize = 279;
+const MIN_REPRODUCED: usize = 282;
 
 fn norm(v: V) -> V {
     match v {
@@ -151,11 +157,64 @@ fn check_recursive(st: &mut MbState, arr: &[(V, V)], enc: &'static php_mbstring:
     true
 }
 
+fn collect_strings(v: &V, out: &mut Vec<Vec<u8>>) -> bool {
+    match v {
+        V::S(x) => out.push(x.clone()),
+        V::K(items) => {
+            for (_, x) in items {
+                if !collect_strings(x, out) {
+                    return false;
+                }
+            }
+        }
+        V::O | V::D(_) => return matches!(v, V::D(_)),
+        _ => {}
+    }
+    true
+}
+
+fn convert_strings(st: &mut MbState, v: &V, from: &'static php_mbstring::Encoding, to: &'static php_mbstring::Encoding) -> V {
+    match v {
+        V::S(x) => V::S(st.convert_ex(x, to, from)),
+        V::K(items) => V::K(items.iter().map(|(k, x)| (k.clone(), convert_strings(st, x, from, to))).collect()),
+        other => other.clone(),
+    }
+}
+
+/// `mb_convert_variables` as the VM would drive it. Returns the result and
+/// the converted variables.
+fn convert_variables(st: &mut MbState, args: &[V]) -> Option<(V, V)> {
+    let to = coerce_str(args.first()?)?;
+    let vars = args.get(2)?;
+    let mut strings = Vec::new();
+    if !collect_strings(vars, &mut strings) {
+        return None;
+    }
+    let from_vals;
+    let from = match args.get(1)? {
+        V::S(x) => EncodingList::Str(x),
+        v @ V::K(_) => {
+            from_vals = values(v).iter().filter_map(coerce_str).map(|x| common::s(&x).to_vec()).collect::<Vec<_>>();
+            EncodingList::Array(&from_vals)
+        }
+        _ => return None,
+    };
+    let refs: Vec<&[u8]> = strings.iter().map(Vec::as_slice).collect();
+    match st.convert_variables_encodings(common::s(&to), from, false, &refs) {
+        Err(e) => Some((common::err(&e, "mb_convert_variables"), vars.clone())),
+        Ok(None) => Some((V::B(false), vars.clone())),
+        Ok(Some((from, to))) => {
+            let out = convert_strings(st, vars, from, to);
+            Some((V::S(from.name.as_bytes().to_vec()), out))
+        }
+    }
+}
+
 /// Returns `None` when the call is outside this crate's responsibility.
 fn replay(st: &mut MbState, f: &str, args: &[V]) -> Option<V> {
     // mb_get_info is VM-side; mb_list_encodings differs (GB18030-2022) and
     // is unit-tested; mb_http_input() reports SAPI input detection.
-    if f == "mb_get_info" || f == "mb_list_encodings" || (f == "mb_http_input" && args.is_empty()) {
+    if f == "mb_list_encodings" || (f == "mb_http_input" && args.is_empty()) {
         return None;
     }
     let args = coerce_args(f, args)?;
@@ -199,7 +258,7 @@ fn replay(st: &mut MbState, f: &str, args: &[V]) -> Option<V> {
     let args: Vec<V> = args
         .into_iter()
         .map(|a| match a {
-            V::K(_) => V::A(values(&a)),
+            V::K(_) if f != "mb_get_info" => V::A(values(&a)),
             other => other,
         })
         .collect();
@@ -287,7 +346,23 @@ fn replay_phpt_calls() {
                     .collect()
             })
             .unwrap_or_default();
-        let Some(got) = replay(&mut st, f, &args) else {
+        let (got, extra_ok) = if f == "mb_convert_variables" {
+            let snapshot = st.clone();
+            let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| convert_variables(&mut st, &args)));
+            let res = res.unwrap_or_else(|_| {
+                st = snapshot;
+                None
+            });
+            let Some((r, vars)) = res else {
+                st.take_diagnostics();
+                continue;
+            };
+            let ok = parts.get(eq + 2).is_none_or(|after| norm(parse(after)) == norm(vars));
+            (Some(r), ok)
+        } else {
+            (replay(&mut st, f, &args), true)
+        };
+        let Some(got) = got else {
             st.take_diagnostics();
             continue;
         };
@@ -300,7 +375,7 @@ fn replay_phpt_calls() {
         let entry = results.get_mut(&current).unwrap();
         entry.0 += 1;
         let (got, expected) = (norm(got), norm(expected));
-        if got != expected || got_diag != exp_diag {
+        if got != expected || got_diag != exp_diag || !extra_ok {
             entry.1 += 1;
             if entry.2.is_empty() {
                 let show = |v: &V| match v {
@@ -321,7 +396,13 @@ fn replay_phpt_calls() {
     let mut report = String::new();
     for (name, (n, nf, first)) in &checked {
         if *nf > 0 {
-            let tag = if MASTER_DIFF_TESTS.contains(&name.as_str()) { " [master diff]" } else { "" };
+            let tag = if MASTER_DIFF_TESTS.contains(&name.as_str()) {
+                " [master diff]"
+            } else if VM_DEPENDENT_TESTS.contains(&name.as_str()) {
+                " [vm state]"
+            } else {
+                ""
+            };
             report.push_str(&format!("{name}: {nf}/{n} failed{tag}: {first}\n"));
         }
     }
