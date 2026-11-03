@@ -86,7 +86,7 @@ impl DecompressFilter {
 }
 
 impl StreamFilter for DecompressFilter {
-    fn label(&self) -> &str {
+    fn label(&self) -> &'static str {
         "bzip2.decompress"
     }
 
@@ -203,7 +203,7 @@ impl CompressFilter {
 }
 
 impl StreamFilter for CompressFilter {
-    fn label(&self) -> &str {
+    fn label(&self) -> &'static str {
         "bzip2.compress"
     }
 
@@ -265,15 +265,12 @@ impl StreamFilter for CompressFilter {
     fn seek(&mut self, _env: &mut FilterEnv, _offset: i64, _whence: i32) -> bool {
         self.strm.end();
         self.is_flushed = true;
-        match RawStream::compress_init(self.block_size, self.work_factor) {
-            Ok(s) => {
-                self.strm = s;
-                true
-            }
-            Err(_) => {
-                diag::warning("bzip2.compress: failed to reset compression state");
-                false
-            }
+        if let Ok(s) = RawStream::compress_init(self.block_size, self.work_factor) {
+            self.strm = s;
+            true
+        } else {
+            diag::warning("bzip2.compress: failed to reset compression state");
+            false
         }
     }
 
@@ -504,15 +501,13 @@ mod tests {
 
     #[test]
     fn concatenated_streams() {
-        let one = match crate::bzcompress(b"first ", 4, 0).unwrap() {
-            crate::Output::Data(d) => d,
-            _ => unreachable!(),
+        let crate::Output::Data(one) = crate::bzcompress(b"first ", 4, 0).unwrap() else {
+            unreachable!()
         };
-        let two = match crate::bzcompress(b"second", 4, 0).unwrap() {
-            crate::Output::Data(d) => d,
-            _ => unreachable!(),
+        let crate::Output::Data(two) = crate::bzcompress(b"second", 4, 0).unwrap() else {
+            unreachable!()
         };
-        let both = [one.clone(), two].concat();
+        let both = [one, two].concat();
         let p = Value::Array(vec![(Key::str("concatenated"), Value::Bool(true))]);
         let mut d = create("bzip2.decompress", Some(&p)).unwrap();
         assert_eq!(

@@ -152,6 +152,7 @@ impl RawStream {
     }
 
     /// `total_out` (64-bit).
+    #[cfg(test)]
     pub fn total_out(&self) -> u64 {
         (u64::from(self.strm.total_out_hi32) << 32) | u64::from(self.strm.total_out_lo32)
     }
@@ -176,6 +177,21 @@ impl Drop for RawStream {
     fn drop(&mut self) {
         self.end();
     }
+}
+
+/// `dup(fd)` wrapped in a [`std::fs::File`] owning the duplicate (PHP's
+/// `php_bz2_bzdopen()`). `None` when `dup()` fails.
+pub fn dup_fd(fd: i32) -> Option<std::fs::File> {
+    use std::os::fd::FromRawFd;
+    // SAFETY: dup() has no memory-safety preconditions; an invalid fd
+    // yields -1.
+    let d = unsafe { libc::dup(fd) };
+    if d < 0 {
+        return None;
+    }
+    // SAFETY: `d` is a fresh descriptor owned by nobody else; the File
+    // takes ownership and closes it on drop.
+    Some(unsafe { std::fs::File::from_raw_fd(d) })
 }
 
 #[cfg(test)]
