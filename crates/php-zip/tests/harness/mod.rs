@@ -613,7 +613,16 @@ pub fn run(script: &str, dir: &Path, fix: &Path) -> String {
         let path = |i: usize| dir.join(rest[i].as_str().unwrap());
         match op.as_str() {
             "echo" => emit(&st, &format!("# {}", sname(0))),
-            "new" => st.borrow_mut().vars.push((sname(0), Var::Zip(Rc::new(ZipArchive::new())))),
+            "new" => {
+                let name = sname(0);
+                let z = Var::Zip(Rc::new(ZipArchive::new()));
+                let mut s = st.borrow_mut();
+                if let Some(slot) = s.vars.iter_mut().find(|(n, _)| *n == name) {
+                    slot.1 = z;
+                } else {
+                    s.vars.push((name, z));
+                }
+            }
             "call" | "extattr" => {
                 let z = zip_var(&st, &sname(0));
                 let m = sname(1);
@@ -762,10 +771,14 @@ pub fn run(script: &str, dir: &Path, fix: &Path) -> String {
                 let n = rest[0].as_u64().unwrap() as usize;
                 let len = rest.get(1).and_then(J::as_u64);
                 st.borrow_mut().func = if len.is_some() { "fread" } else { "stream_get_contents" }.into();
-                let mut s = st.borrow_mut().streams[n].take().unwrap();
+                let Some(mut s) = st.borrow_mut().streams.get_mut(n).and_then(Option::take) else {
+                    emit(&st, &format!("read #{n} = no stream"));
+                    continue;
+                };
                 let r = match len {
                     Some(l) => s.read_vec(l as usize),
-                    None => s.copy_to_mem(None),
+                    // stream_get_contents() returns "" when nothing could be read.
+                    None => Some(s.copy_to_mem(None).unwrap_or_default()),
                 };
                 let eof = s.eof();
                 st.borrow_mut().streams[n] = Some(s);
@@ -775,7 +788,10 @@ pub fn run(script: &str, dir: &Path, fix: &Path) -> String {
             "sstat" => {
                 let n = rest[0].as_u64().unwrap() as usize;
                 st.borrow_mut().func = "fstat".into();
-                let mut s = st.borrow_mut().streams[n].take().unwrap();
+                let Some(mut s) = st.borrow_mut().streams.get_mut(n).and_then(Option::take) else {
+                    emit(&st, &format!("fstat #{n} = no stream"));
+                    continue;
+                };
                 let r = s.stat();
                 st.borrow_mut().streams[n] = Some(s);
                 match r {
@@ -795,7 +811,7 @@ pub fn run(script: &str, dir: &Path, fix: &Path) -> String {
             "sclose" => {
                 let n = rest[0].as_u64().unwrap() as usize;
                 st.borrow_mut().func = "fclose".into();
-                let s = st.borrow_mut().streams[n].take();
+                let s = st.borrow_mut().streams.get_mut(n).and_then(Option::take);
                 if let Some(mut s) = s {
                     s.close();
                 }

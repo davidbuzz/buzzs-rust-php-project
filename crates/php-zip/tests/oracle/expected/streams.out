@@ -1,0 +1,113 @@
+# getStream / getStreamName / getStreamIndex
+z->open = true
+z->getStream = stream #0
+read #0 = "fo" eof=false
+read #0 = hex:6f0a0a eof=true
+read #0 = "" eof=true
+fstat #0 = false
+fclose #0 = true
+z->getStream = stream #1
+read #1 = hex:626c61626c61206c6162657220726162616265722073c3bc6c7a0a eof=true
+fclose #1 = true
+z->getStream = false
+! ValueError: ZipArchive::getStream(): Argument #1 ($name) must not be empty
+z->getStreamName = stream #2
+read #2 = hex:666f6f0a0a eof=true
+z->getStreamIndex = stream #3
+read #3 = hex:6261720a eof=true
+z->getStreamIndex = false
+z->getStreamIndex = false
+z->getStreamName = stream #4
+read #4 = hex:4bca494cca49540092a9450a45894960baf8f09e9c2a2e00 eof=true
+z->close = true
+! ValueError: Invalid or uninitialized Zip object
+# changed entries
+z->open = true
+z->addFromString = true
+z->addFromString = true
+z->close = true
+z->open = true
+z->addFromString = true
+z->getStreamName = stream #5
+z->status = 0
+read #5 = "foo" eof=true
+z->clearError = null
+z->getStreamIndex = false
+z->status = 15
+z->getStatusString = "Entry has been changed"
+z->clearError = null
+z->getStreamIndex = stream #6
+z->status = 0
+read #6 = "bar" eof=true
+# streams outlive the object's archive
+z->getStream = stream #7
+[Warning] ZipArchive::close(): Resource still in use
+z->close = false
+[Warning] stream_get_contents(): Zip stream error: Containing zip archive was closed
+read #7 = "" eof=true
+fclose #7 = true
+z->open = true
+z->getStream = stream #8
+z->open = true
+[Warning] Undefined array key 9
+! TypeError: stream_get_contents(): Argument #1 ($stream) must be of type resource, null given
+[Warning] Undefined array key 9
+! TypeError: fclose(): Argument #1 ($stream) must be of type resource, null given
+z->close = true
+# CRC errors while streaming (bug49072)
+z->open = true
+z->getStream = stream #9
+[Warning] Undefined array key 10
+! TypeError: fread(): Argument #1 ($stream) must be of type resource, null given
+[Warning] Undefined array key 10
+! TypeError: fread(): Argument #1 ($stream) must be of type resource, null given
+[Warning] Undefined array key 10
+! TypeError: fread(): Argument #1 ($stream) must be of type resource, null given
+z->close = true
+# zip:// wrapper
+fopen = stream #10
+[Warning] Undefined array key 11
+! TypeError: fread(): Argument #1 ($stream) must be of type resource, null given
+[Warning] Undefined array key 11
+! TypeError: fread(): Argument #1 ($stream) must be of type resource, null given
+[Warning] Undefined array key 11
+! TypeError: fread(): Argument #1 ($stream) must be of type resource, null given
+[Warning] Undefined array key 11
+! TypeError: fread(): Argument #1 ($stream) must be of type resource, null given
+[Warning] Undefined array key 11
+! TypeError: fstat(): Argument #1 ($stream) must be of type resource, null given
+[Warning] Undefined array key 11
+! TypeError: fclose(): Argument #1 ($stream) must be of type resource, null given
+fopen = stream #11
+[Warning] Undefined array key 12
+! TypeError: fstat(): Argument #1 ($stream) must be of type resource, null given
+[Warning] Undefined array key 13
+! TypeError: stream_get_contents(): Argument #1 ($stream) must be of type resource, null given
+[Warning] fopen(zip://{FIX}/test.zip#ENTRY1.TXT): Failed to open stream: operation failed
+fopen = false
+fopen = stream #12
+[Warning] Undefined array key 14
+! TypeError: fstat(): Argument #1 ($stream) must be of type resource, null given
+[Warning] Undefined array key 14
+! TypeError: stream_get_contents(): Argument #1 ($stream) must be of type resource, null given
+[Warning] fopen(zip://{FIX}/test.zip#missing): Failed to open stream: operation failed
+fopen = false
+[Warning] fopen(zip://{FIX}/test.zip): Failed to open stream: operation failed
+fopen = false
+[Warning] fopen(zip://{DIR}/nope.zip#a): Failed to open stream: operation failed
+fopen = false
+[Warning] fopen(zip://{FIX}/utils.inc#a): Failed to open stream: operation failed
+fopen = false
+[Warning] fopen({FIX}/test.zip#entry1.txt): Failed to open stream: No such file or directory
+fopen = false
+z->open = true
+z->addFromString = true
+z->close = true
+fopen = stream #13
+[Warning] Undefined array key 15
+! TypeError: fstat(): Argument #1 ($stream) must be of type resource, null given
+[Warning] Undefined array key 15
+! TypeError: fstat(): Argument #1 ($stream) must be of type resource, null given
+[Warning] Undefined array key 15
+! TypeError: stream_get_contents(): Argument #1 ($stream) must be of type resource, null given
+END

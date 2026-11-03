@@ -1,0 +1,86 @@
+# AES encryption round trip
+z->open = true
+z->addFromString = true
+z->addFromString = true
+z->addFromString = true
+z->addFromString = true
+z->setEncryptionName = false
+z->getStatusString = "Encryption method not supported"
+z->setEncryptionName = true
+z->setEncryptionIndex = true
+z->setEncryptionIndex = true
+z->setEncryptionIndex = true
+z->getStatusString = "Encryption method not supported"
+z->setEncryptionName = false
+! ValueError: ZipArchive::setEncryptionName(): Argument #1 ($name) must not be empty
+z->setEncryptionName = true
+z->setEncryptionName = true
+z->statName = ["name"=>"bar.txt","index"=>1,"crc"=>0,"size"=>3,"mtime"=>NOW,"comp_size"=>3,"comp_method"=>0,"encryption_method"=>0]
+z->close = true
+z->open = true
+z->statName = ["name"=>"foo.txt","index"=>0,"crc"=>2356372769,"size"=>3,"mtime"=>NOW,"comp_size"=>3,"comp_method"=>0,"encryption_method"=>0]
+z->statName = ["name"=>"bar.txt","index"=>1,"crc"=>0,"size"=>3,"mtime"=>NOW,"comp_size"=>31,"comp_method"=>0,"encryption_method"=>259]
+z->statName = ["name"=>"baz.txt","index"=>2,"crc"=>0,"size"=>3,"mtime"=>NOW,"comp_size"=>23,"comp_method"=>0,"encryption_method"=>257]
+z->statName = ["name"=>"pk.txt","index"=>3,"crc"=>3408813487,"size"=>6,"mtime"=>NOW,"comp_size"=>18,"comp_method"=>0,"encryption_method"=>1]
+z->getFromName = "foo"
+z->getFromName = false
+z->getStatusString = "No password provided"
+z->getStream = false
+z->getStatusString = "No password provided"
+z->setPassword = false
+z->setPassword = true
+z->getFromName = false
+z->getStatusString = "Wrong password provided"
+z->setPassword = true
+z->getFromName = "bar"
+z->getFromName = false
+z->extractTo = false
+ls bar.txt 3 37b51d19
+ls foo.txt 3 acbd18db
+z->getStream = stream #0
+read #0 = "bar" eof=true
+z->setPassword = true
+z->getFromName = "baz"
+z->getFromIndex = "foo"
+z->close = true
+# zip:// with passwords
+fopen = stream #1
+read #1 = "foo" eof=true
+[Warning] fopen(zip://{DIR}/enc.zip#bar.txt): Failed to open stream: operation failed
+fopen = false
+fopen = stream #2
+read #2 = "bar" eof=true
+[Warning] fopen(zip://{DIR}/enc.zip#bar.txt): Failed to open stream: operation failed
+fopen = false
+[Warning] fopen(): Can't set zip password
+[Warning] fopen(zip://{DIR}/enc.zip#bar.txt): Failed to open stream: operation failed
+fopen = false
+# bug80833: per-entry passwords
+z->open = true
+z->setPassword = true
+z->addFromString = true
+z->setEncryptionName = true
+z->addFromString = true
+z->setEncryptionName = true
+z->close = true
+fopen = stream #3
+read #3 = "This is a test string." eof=true
+z->open = true
+z->setPassword = true
+z->getStream = stream #4
+read #4 = "This is a test string." eof=true
+z->setPassword = true
+z->getStream = stream #5
+read #5 = "This is another test string." eof=true
+z->close = true
+# addGlob with encryption options
+z->open = true
+z->addGlob = [0=>"{DIR}/g/a.txt",1=>"{DIR}/g/b.txt"]
+z->close = true
+z->open = true
+z->statIndex = ["name"=>"a.txt","index"=>0,"crc"=>0,"size"=>3,"mtime"=>NOW,"comp_size"=>31,"comp_method"=>0,"encryption_method"=>259]
+z->statIndex = ["name"=>"b.txt","index"=>1,"crc"=>0,"size"=>3,"mtime"=>NOW,"comp_size"=>31,"comp_method"=>0,"encryption_method"=>259]
+z->setPassword = true
+z->getFromIndex = "bbb"
+z->close = true
+END

@@ -96,4 +96,27 @@ z->getNameIndex = false
 z->getNameIndex = false
 z->getNameIndex = false
 z->close = true
+# setEncryption resets the password first (master)
+z->open = true
+z->addFromString = true
+[Warning] ZipArchive::setEncryptionIndex(): password reset failed
+z->setEncryptionIndex = false
+z->getStatusString = "Invalid argument"
+z->setEncryptionIndex = true
+z->setEncryptionIndex = true
+z->setEncryptionName = true
+z->close = true
+z->open = true
+z->setPassword = true
+z->getFromName = "b"
+z->close = true
+# streams keep the archive alive after the object is destroyed (gh17787/gh23276)
+z->open = true
+z->addFromString = true
+z->close = true
+z->open = true
+z->getStreamIndex = stream #0
+unset z
+read #0 = "foo" eof=true
+fclose #0 = true
 END
