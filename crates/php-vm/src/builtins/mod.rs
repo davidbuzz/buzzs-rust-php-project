@@ -3,6 +3,7 @@
 pub mod classbuilder;
 mod core;
 mod dump;
+pub(crate) mod headers;
 pub(crate) use self::core::enum_methods;
 mod array;
 mod classes;
@@ -76,6 +77,7 @@ pub(crate) fn register_all(vm: &mut Vm) {
     classes::register(vm);
     crate::weakref::register(vm);
     core::register(vm);
+    headers::register(vm);
     var::register(vm);
     output::register(vm);
     string::register(vm);
