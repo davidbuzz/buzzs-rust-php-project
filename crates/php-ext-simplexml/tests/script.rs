@@ -53,14 +53,14 @@ fn read_elements_and_attributes() {
 
 #[test]
 fn writes_create_nodes() {
-    let code = r#"
+    let code = r"
         $x = simplexml_load_string('<r/>');
         $x->a = 'v';
         $x->a['k'] = 'w';
         $x->b->c = 'deep';
         $x->a[1] = 'second';
         echo $x->asXML();
-    "#;
+    ";
     assert_eq!(
         run(code),
         "<?xml version=\"1.0\"?>\n<r><a k=\"w\">v</a><b><c>deep</c></b><a>second</a></r>\n"
@@ -80,10 +80,10 @@ fn isset_empty_unset() {
 
 #[test]
 fn casts_and_json() {
-    let code = r#"
+    let code = r"
         $x = simplexml_load_string('<r><n>42</n><f>1.5</f></r>');
         var_dump((int) $x->n, (float) $x->f, (bool) $x->missing, json_encode($x));
-    "#;
+    ";
     assert_eq!(
         run(code),
         "int(42)\nfloat(1.5)\nbool(false)\nstring(20) \"{\"n\":\"42\",\"f\":\"1.5\"}\"\n"
@@ -107,23 +107,23 @@ fn subclass_and_class_name_validation() {
 
 #[test]
 fn user_overrides_win() {
-    let code = r#"
+    let code = r"
         class E extends SimpleXMLElement {
             public function __toString(): string { return 'custom'; }
             public function count(): int { return 7; }
         }
         $x = new E('<r><i/></r>');
         echo $x, count($x);
-    "#;
+    ";
     assert_eq!(run(code), "custom7");
 }
 
 #[test]
 fn add_element_warning_uses_main_prefix() {
-    let code = r#"
+    let code = r"
         $x = simplexml_load_string('<r><i/></r>');
         $x->i[5] = 'z';
-    "#;
+    ";
     assert!(
         run(code).contains("main(): Cannot add element i number 5 when only 1 such elements exist")
     );
