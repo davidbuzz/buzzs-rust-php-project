@@ -11,6 +11,7 @@ pub mod ffi;
 pub mod ustr;
 
 pub mod calendar;
+pub mod collator;
 pub mod common;
 pub mod dateformat;
 pub mod datepatterngenerator;

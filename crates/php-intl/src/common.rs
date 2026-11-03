@@ -369,3 +369,208 @@ mod tests {
         assert_eq!(php_float_to_string(12_345_678_901_234.0), "12345678901234");
     }
 }
+
+/// A port of PHP's `zend_sort()` (hybrid insertion sort / quicksort derived
+/// from libc++), operating on a slice with a three-way comparator.  It is
+/// reproduced exactly so that non-transitive comparators (as used by
+/// `Collator::sort()` with `SORT_REGULAR`) give the same order as PHP.
+pub fn zend_sort<T>(v: &mut [T], cmp: &mut dyn FnMut(&T, &T) -> i32) {
+    let mut base = 0usize;
+    let mut nmemb = v.len();
+    loop {
+        if nmemb <= 16 {
+            zend_insert_sort(&mut v[base..base + nmemb], cmp);
+            return;
+        }
+        let start = base;
+        let end = base + nmemb;
+        let offset = nmemb >> 1;
+        let pivot0 = start + offset;
+        if nmemb >> 10 != 0 {
+            let delta = offset >> 1;
+            sort5(
+                v,
+                [start, start + delta, pivot0, pivot0 + delta, end - 1],
+                cmp,
+            );
+        } else {
+            sort3(v, start, pivot0, end - 1, cmp);
+        }
+        v.swap(start + 1, pivot0);
+        let pivot = start + 1;
+        let mut i = pivot + 1;
+        let mut j = end - 1;
+        'outer: loop {
+            while cmp(&v[pivot], &v[i]) > 0 {
+                i += 1;
+                if i == j {
+                    break 'outer;
+                }
+            }
+            j -= 1;
+            if j == i {
+                break;
+            }
+            while cmp(&v[j], &v[pivot]) > 0 {
+                j -= 1;
+                if j == i {
+                    break 'outer;
+                }
+            }
+            v.swap(i, j);
+            i += 1;
+            if i == j {
+                break;
+            }
+        }
+        v.swap(pivot, i - 1);
+        if (i - 1) - start < end - i {
+            let n = i - start - 1;
+            zend_sort(&mut v[start..start + n], cmp);
+            base = i;
+            nmemb = end - i;
+        } else {
+            zend_sort(&mut v[i..end], cmp);
+            nmemb = i - start - 1;
+            base = start;
+        }
+    }
+}
+
+fn sort2<T>(v: &mut [T], a: usize, b: usize, cmp: &mut dyn FnMut(&T, &T) -> i32) {
+    if cmp(&v[a], &v[b]) > 0 {
+        v.swap(a, b);
+    }
+}
+
+fn sort3<T>(v: &mut [T], a: usize, b: usize, c: usize, cmp: &mut dyn FnMut(&T, &T) -> i32) {
+    if cmp(&v[a], &v[b]) <= 0 {
+        if cmp(&v[b], &v[c]) <= 0 {
+            return;
+        }
+        v.swap(b, c);
+        if cmp(&v[a], &v[b]) > 0 {
+            v.swap(a, b);
+        }
+        return;
+    }
+    if cmp(&v[c], &v[b]) <= 0 {
+        v.swap(a, c);
+        return;
+    }
+    v.swap(a, b);
+    if cmp(&v[b], &v[c]) > 0 {
+        v.swap(b, c);
+    }
+}
+
+#[allow(clippy::many_single_char_names)]
+fn sort4<T>(v: &mut [T], [a, b, c, d]: [usize; 4], cmp: &mut dyn FnMut(&T, &T) -> i32) {
+    sort3(v, a, b, c, cmp);
+    if cmp(&v[c], &v[d]) > 0 {
+        v.swap(c, d);
+        if cmp(&v[b], &v[c]) > 0 {
+            v.swap(b, c);
+            if cmp(&v[a], &v[b]) > 0 {
+                v.swap(a, b);
+            }
+        }
+    }
+}
+
+#[allow(clippy::many_single_char_names)]
+fn sort5<T>(v: &mut [T], [a, b, c, d, e]: [usize; 5], cmp: &mut dyn FnMut(&T, &T) -> i32) {
+    sort4(v, [a, b, c, d], cmp);
+    if cmp(&v[d], &v[e]) > 0 {
+        v.swap(d, e);
+        if cmp(&v[c], &v[d]) > 0 {
+            v.swap(c, d);
+            if cmp(&v[b], &v[c]) > 0 {
+                v.swap(b, c);
+                if cmp(&v[a], &v[b]) > 0 {
+                    v.swap(a, b);
+                }
+            }
+        }
+    }
+}
+
+/// `zend_insert_sort()`.
+fn zend_insert_sort<T>(v: &mut [T], cmp: &mut dyn FnMut(&T, &T) -> i32) {
+    let n = v.len();
+    match n {
+        0 | 1 => {}
+        2 => sort2(v, 0, 1, cmp),
+        3 => sort3(v, 0, 1, 2, cmp),
+        4 => sort4(v, [0, 1, 2, 3], cmp),
+        5 => sort5(v, [0, 1, 2, 3, 4], cmp),
+        _ => {
+            let sentry = 6.min(n);
+            for i in 1..sentry {
+                let mut j = i - 1;
+                if cmp(&v[j], &v[i]) <= 0 {
+                    continue;
+                }
+                while j != 0 {
+                    j -= 1;
+                    if cmp(&v[j], &v[i]) <= 0 {
+                        j += 1;
+                        break;
+                    }
+                }
+                let mut k = i;
+                while k > j {
+                    v.swap(k, k - 1);
+                    k -= 1;
+                }
+            }
+            for i in sentry..n {
+                let mut j = i - 1;
+                if cmp(&v[j], &v[i]) <= 0 {
+                    continue;
+                }
+                loop {
+                    j -= 2;
+                    if cmp(&v[j], &v[i]) <= 0 {
+                        j += 1;
+                        if cmp(&v[j], &v[i]) <= 0 {
+                            j += 1;
+                        }
+                        break;
+                    }
+                    if j == 0 {
+                        break;
+                    }
+                    if j == 1 {
+                        j -= 1;
+                        if cmp(&v[i], &v[j]) > 0 {
+                            j += 1;
+                        }
+                        break;
+                    }
+                }
+                let mut k = i;
+                while k > j {
+                    v.swap(k, k - 1);
+                    k -= 1;
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod sort_tests {
+    use super::zend_sort;
+
+    #[test]
+    fn sorts_like_std() {
+        for n in [0usize, 1, 2, 3, 5, 6, 7, 15, 16, 17, 40, 1100] {
+            let mut v: Vec<u64> = (0..n as u64).map(|i| (i * 7919 + 13) % 101).collect();
+            let mut w = v.clone();
+            w.sort_unstable();
+            zend_sort(&mut v, &mut |a, b| a.cmp(b) as i32);
+            assert_eq!(v, w, "n={n}");
+        }
+    }
+}

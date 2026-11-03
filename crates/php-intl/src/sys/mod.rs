@@ -9,6 +9,7 @@
 pub mod loc;
 pub mod ucal;
 pub mod uchar;
+pub mod ucol;
 pub mod udat;
 pub mod udatpg;
 pub mod umsg;
