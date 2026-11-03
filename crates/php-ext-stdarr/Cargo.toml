@@ -11,6 +11,7 @@ php-vm = { path = "../php-vm" }
 php-runtime = { path = "../php-runtime" }
 php-stdarr = { path = "../php-stdarr" }
 php-random = { path = "../php-random" }
+php-memlimit = { path = "../php-memlimit" }
 
 [lints]
 workspace = true

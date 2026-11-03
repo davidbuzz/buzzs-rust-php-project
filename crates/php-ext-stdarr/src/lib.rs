@@ -8,13 +8,15 @@
 //! `COUNT_*`, `EXTR_*`, `CASE_*` and `ARRAY_FILTER_USE_*` constants.
 //!
 //! Signatures follow `basic_functions.stub.php`, with two deliberate
-//! deviations where php-stdarr performs PHP's own in-body checks:
+//! deviations where PHP's argument order matters:
 //!
 //! * variadic array parameters (`array ...$arrays`) are declared untyped so
-//!   the "Argument #N must be of type array" errors carry no parameter
-//!   name, as in PHP;
-//! * `callable` parameters are declared untyped and validated here, giving
-//!   PHP's "must be a valid callback, ..." messages.
+//!   php-stdarr reports "Argument #N must be of type array" without a
+//!   parameter name, as PHP does; `array_map()`'s `$array` likewise, so the
+//!   callback is validated first;
+//! * the callback of `usort()`/`uasort()`/`uksort()`/`array_walk()`/
+//!   `array_walk_recursive()` is untyped and validated in the handler,
+//!   because the by-reference array before it must be checked first.
 
 mod bridge;
 mod funcs;
@@ -73,7 +75,7 @@ const FUNCTIONS: &[(&str, NativeFn)] = &[
     ("usort(array &$array, $callback): true", f::usort),
     ("uasort(array &$array, $callback): true", f::uasort),
     ("uksort(array &$array, $callback): true", f::uksort),
-    ("array_multisort(&$array, &...$rest): true", f::array_multisort),
+    ("array_multisort(@prefer-ref &$array, @prefer-ref &...$rest): true", f::array_multisort),
     ("array_push(array &$array, mixed ...$values): int", f::array_push),
     ("array_pop(array &$array): mixed", f::array_pop),
     ("array_shift(array &$array): mixed", f::array_shift),
@@ -102,13 +104,13 @@ const FUNCTIONS: &[(&str, NativeFn)] = &[
     ("array_uintersect_uassoc(array $array, ...$rest): array", f::array_uintersect_uassoc),
     ("array_walk(array|object &$array, $callback, mixed $arg = UNKNOWN): true", f::array_walk),
     ("array_walk_recursive(array|object &$array, $callback, mixed $arg = UNKNOWN): true", f::array_walk_recursive),
-    ("array_map($callback, $array, ...$arrays): array", f::array_map),
-    ("array_filter(array $array, $callback = null, int $mode = 0): array", f::array_filter),
-    ("array_reduce(array $array, $callback, mixed $initial = null): mixed", f::array_reduce),
-    ("array_find(array $array, $callback): mixed", f::array_find),
-    ("array_find_key(array $array, $callback): mixed", f::array_find_key),
-    ("array_any(array $array, $callback): bool", f::array_any),
-    ("array_all(array $array, $callback): bool", f::array_all),
+    ("array_map(?callable $callback, $array, ...$arrays): array", f::array_map),
+    ("array_filter(array $array, ?callable $callback = null, int $mode = 0): array", f::array_filter),
+    ("array_reduce(array $array, callable $callback, mixed $initial = null): mixed", f::array_reduce),
+    ("array_find(array $array, callable $callback): mixed", f::array_find),
+    ("array_find_key(array $array, callable $callback): mixed", f::array_find_key),
+    ("array_any(array $array, callable $callback): bool", f::array_any),
+    ("array_all(array $array, callable $callback): bool", f::array_all),
     ("end(array|object &$array): mixed", f::end),
     ("prev(array|object &$array): mixed", f::prev),
     ("next(array|object &$array): mixed", f::next),
@@ -119,7 +121,7 @@ const FUNCTIONS: &[(&str, NativeFn)] = &[
     ("shuffle(array &$array): true", f::shuffle),
     ("array_rand(array $array, int $num = 1): int|string|array", f::array_rand),
     ("str_shuffle(string $string): string", f::str_shuffle),
-    ("extract(array &$array, int $flags = 0, string $prefix = \"\"): int", f::extract),
+    ("extract(@prefer-ref array &$array, int $flags = 0, string $prefix = \"\"): int", f::extract),
     ("compact($var_name, ...$var_names): array", f::compact),
 ];
 

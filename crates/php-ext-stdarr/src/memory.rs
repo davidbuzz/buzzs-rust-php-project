@@ -2,11 +2,11 @@
 //! build arrays whose size the caller controls (`array_fill`, `range`,
 //! `array_pad`, `array_chunk`, `array_map(null, ...)`).
 //!
-//! The VM does not account memory, so PHP's fatal errors — "Possible
-//! integer overflow in memory allocation" for tables above `HT_MAX_SIZE`
-//! and "Allowed memory size of N bytes exhausted" past `memory_limit` —
-//! are reproduced from the size PHP would allocate. This also keeps a
-//! script from making the process allocate gigabytes.
+//! The size PHP would allocate is computed up front: tables above
+//! `HT_MAX_SIZE` raise "Possible integer overflow in memory allocation",
+//! and the bytes are reserved against `memory_limit` through
+//! `php-memlimit` before anything is built, so a script cannot make the
+//! process allocate gigabytes.
 
 use php_vm::ext::VmResult;
 use php_vm::Vm;
@@ -62,29 +62,20 @@ pub fn check_table(vm: &mut Vm, n: u64) -> VmResult<()> {
     Ok(())
 }
 
-/// Raises PHP's out-of-memory fatal error when allocating `bytes` would
-/// exceed `memory_limit`.
-pub fn check(vm: &mut Vm, bytes: u64) -> VmResult<()> {
-    let Ok(limit) = u64::try_from(vm.ini_long("memory_limit")) else {
-        return Ok(());
-    };
-    if limit == 0 || bytes <= limit {
-        return Ok(());
-    }
-    vm.raise(
-        E_ERROR,
-        &format!(
-            "Allowed memory size of {limit} bytes exhausted (tried to allocate {bytes} bytes)"
-        ),
-    )
+/// Reserves `bytes` against `memory_limit` (`php_memlimit::try_reserve`).
+/// On `false` the handler must return without building the array; the VM
+/// then raises "Allowed memory size of N bytes exhausted".
+#[must_use]
+pub fn reserve(bytes: u64) -> bool {
+    php_memlimit::try_reserve(usize::try_from(bytes).unwrap_or(usize::MAX)).is_ok()
 }
 
-/// Checks a list of `n` arrays of `each` packed elements (plus the outer
-/// packed list), as built by `array_chunk()` and `array_map(null, ...)`.
-pub fn check_nested(vm: &mut Vm, n: u64, each: u64) -> VmResult<()> {
+/// [`reserve`] for a list of `n` arrays of `each` packed elements (plus the
+/// outer packed list), as built by `array_chunk()` and `array_map(null, ...)`.
+#[must_use]
+pub fn reserve_nested(n: u64, each: u64) -> bool {
     let inner = ARRAY_HEADER + packed_data(each);
-    let total = packed_data(n).saturating_add(n.saturating_mul(inner));
-    check(vm, total)
+    reserve(packed_data(n).saturating_add(n.saturating_mul(inner)))
 }
 
 #[cfg(test)]

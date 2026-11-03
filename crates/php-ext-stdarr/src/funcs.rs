@@ -5,7 +5,7 @@
 //! that cannot fail still return `VmResult`.
 #![allow(clippy::unnecessary_wraps)]
 
-use crate::bridge::{by_ref, callback, check_callable, rt, variadic, with_rng};
+use crate::bridge::{by_ref, callback, check_callable, rest, rt, with_rng};
 use crate::memory;
 use crate::objptr;
 use crate::stack;
@@ -144,10 +144,14 @@ pub fn array_fill(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         if (0..num).contains(&start) {
             let size = start.unsigned_abs() + num.unsigned_abs();
             memory::check_table(vm, size)?;
-            memory::check(vm, memory::packed_data(size))?;
+            if !memory::reserve(memory::packed_data(size)) {
+                return Ok(Value::Null);
+            }
         } else {
             memory::check_table(vm, num.unsigned_abs())?;
-            memory::check(vm, memory::hash_data(num.unsigned_abs()))?;
+            if !memory::reserve(memory::hash_data(num.unsigned_abs())) {
+                return Ok(Value::Null);
+            }
         }
     }
     let r = sa::basic::array_fill(start, num, &a.at(2));
@@ -163,8 +167,8 @@ pub fn array_fill_keys(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 pub fn array_pad(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let (h, len) = (a.array(0), a.int(1));
     let n = len.unsigned_abs();
-    if n > h.len() as u64 && n <= memory::HT_MAX_SIZE {
-        memory::check(vm, memory::packed_data(n))?;
+    if n > h.len() as u64 && n <= memory::HT_MAX_SIZE && !memory::reserve(memory::packed_data(n)) {
+        return Ok(Value::Null);
     }
     let r = sa::basic::array_pad(&h, len, &a.at(2));
     Ok(Value::Array(rt(vm, r)?))
@@ -191,7 +195,9 @@ pub fn array_chunk(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let (h, size) = (a.array(0), a.int(1));
     if size >= 1 && !h.is_empty() {
         let (len, size) = (h.len() as u64, size.unsigned_abs());
-        memory::check_nested(vm, len.div_ceil(size), size.min(len))?;
+        if !memory::reserve_nested(len.div_ceil(size), size.min(len)) {
+            return Ok(Value::Null);
+        }
     }
     let r = sa::basic::array_chunk(&h, size, a.bool(2));
     Ok(Value::Array(rt(vm, r)?))
@@ -232,7 +238,7 @@ pub fn array_product(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 }
 
 pub fn min(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let vals = variadic(vm, a, 0)?;
+    let vals = rest(a, 0);
     let r = match vals.as_slice() {
         [x, y] => sa::basic::min2(vm, x, y),
         _ => sa::basic::min(vm, &vals),
@@ -241,7 +247,7 @@ pub fn min(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 }
 
 pub fn max(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let vals = variadic(vm, a, 0)?;
+    let vals = rest(a, 0);
     let r = match vals.as_slice() {
         [x, y] => sa::basic::max2(vm, x, y),
         _ => sa::basic::max(vm, &vals),
@@ -268,8 +274,8 @@ pub fn range(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     if let Some(n) = range_len(&s, &e, st.as_ref()) {
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let n = n as u64;
-        if n > 1024 && n < memory::HT_MAX_SIZE {
-            memory::check(vm, memory::packed_data(n))?;
+        if n > 1024 && n < memory::HT_MAX_SIZE && !memory::reserve(memory::packed_data(n)) {
+            return Ok(Value::Null);
         }
     }
     let r = sa::range::range(vm, &s, &e, st.as_ref());
@@ -345,7 +351,6 @@ usort_fn!(uasort, sa::sort::uasort);
 usort_fn!(uksort, sa::sort::uksort);
 
 pub fn array_multisort(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    variadic(vm, a, 0)?;
     let vals = a.values.clone();
     let r = sa::sort::array_multisort(vm, &vals);
     rt(vm, r)?;
@@ -358,7 +363,7 @@ pub fn array_multisort(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 pub fn array_push(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let arr = by_ref(a, 0);
-    let vals = variadic(vm, a, 1)?;
+    let vals = rest(a, 1);
     let r = sa::stack::array_push(&arr, &vals);
     Ok(Value::Int(rt(vm, r)?))
 }
@@ -375,7 +380,7 @@ pub fn array_shift(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 pub fn array_unshift(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let arr = by_ref(a, 0);
-    let vals = variadic(vm, a, 1)?;
+    let vals = rest(a, 1);
     let r = sa::stack::array_unshift(&arr, &vals);
     Ok(Value::Int(rt(vm, r)?))
 }
@@ -432,7 +437,7 @@ pub fn array_splice(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 macro_rules! args_fn {
     ($name:ident, $f:path) => {
         pub fn $name(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-            let vals = variadic(vm, a, 0)?;
+            let vals = rest(a, 0);
             let r = $f(vm, &vals);
             Ok(Value::Array(rt(vm, r)?))
         }
@@ -448,13 +453,13 @@ args_fn!(array_diff_key, sa::setops::array_diff_key);
 args_fn!(array_diff_assoc, sa::setops::array_diff_assoc);
 
 pub fn array_replace(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let vals = variadic(vm, a, 0)?;
+    let vals = rest(a, 0);
     let r = sa::merge::array_replace(&vals);
     Ok(Value::Array(rt(vm, r)?))
 }
 
 pub fn array_replace_recursive(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let args = variadic(vm, a, 0)?;
+    let args = rest(a, 0);
     if args.len() > 1 {
         // The recursion only follows keys holding arrays on both sides.
         stack::check_depth(vm, |cap| {
@@ -484,7 +489,7 @@ fn split_callbacks(vm: &mut Vm, a: &Args, ncb: usize) -> VmResult<(Vec<Value>, V
         );
         return Err(vm.throw("ArgumentCountError", &msg));
     }
-    let all = variadic(vm, a, 0)?;
+    let all = rest(a, 0);
     let (arrays, cbs) = all.split_at(n - ncb);
     for (i, cb) in cbs.iter().enumerate() {
         check_callable(vm, a, n - ncb + i + 1, false, false, cb)?;
@@ -573,8 +578,7 @@ fn walk(vm: &mut Vm, a: &Args, recursive: bool) -> VmResult<Value> {
 
 pub fn array_map(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let cbv = a.at(0);
-    check_callable(vm, a, 1, true, true, &cbv)?;
-    let arrays = variadic(vm, a, 1)?;
+    let arrays = rest(a, 1);
     if cbv.is_null() && arrays.len() > 1 {
         let longest = arrays
             .iter()
@@ -584,7 +588,9 @@ pub fn array_map(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             })
             .max()
             .unwrap_or(0);
-        memory::check_nested(vm, longest, arrays.len() as u64)?;
+        if !memory::reserve_nested(longest, arrays.len() as u64) {
+            return Ok(Value::Null);
+        }
     }
     let r = if cbv.is_null() {
         sa::callback::array_map::<Vm>(vm, None, &arrays)
@@ -598,7 +604,6 @@ pub fn array_map(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 pub fn array_filter(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let h = a.array(0);
     let cbv = a.at(1);
-    check_callable(vm, a, 2, true, true, &cbv)?;
     let mode = int_or(a, 2, sa::ARRAY_FILTER_USE_VALUE);
     let r = if cbv.is_null() {
         sa::callback::array_filter::<Vm>(vm, &h, None, mode)
@@ -612,7 +617,6 @@ pub fn array_filter(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 pub fn array_reduce(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let h = a.array(0);
     let cb = a.at(1);
-    check_callable(vm, a, 2, true, false, &cb)?;
     let mut cb = callback(cb);
     let init = a.get(2);
     let r = sa::callback::array_reduce(vm, &h, &mut cb, init.as_ref());
@@ -624,7 +628,6 @@ macro_rules! find_fn {
         pub fn $name(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             let h = a.array(0);
             let cb = a.at(1);
-            check_callable(vm, a, 2, true, false, &cb)?;
             let mut cb = callback(cb);
             let r = $f(vm, &h, &mut cb);
             Ok($wrap(rt(vm, r)?))
@@ -732,7 +735,7 @@ pub fn extract(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 pub fn compact(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let mut sym = forbid_dynamic_call(vm, a)?;
-    let vals = variadic(vm, a, 0)?;
+    let vals = rest(a, 0);
     for v in &vals {
         stack::check_depth(vm, |cap| stack::nesting_depth(v, cap))?;
     }

@@ -172,10 +172,8 @@ fn array_splice_detects_destructor_modification() {
 
 #[test]
 fn memory_and_stack_limits() {
-    assert!(
-        run("ini_set('memory_limit', '8M'); $x = range(1, 1000000);")
-            .contains("Allowed memory size of 8388608 bytes exhausted")
-    );
+    // `memory_limit` is process-global in php-memlimit, so it is exercised
+    // by the oom_*.phpt tests rather than by these parallel unit tests.
     assert!(run("array_fill(0, 2147483647, 1);")
         .contains("Possible integer overflow in memory allocation"));
     let deep = "$a = []; for ($i = 0; $i < 1000; $i++) { $a = [$a, []]; }";

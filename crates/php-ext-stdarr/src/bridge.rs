@@ -1,60 +1,21 @@
 //! Glue between the VM's calling convention (`VmResult`, `Throw`, `Args`)
 //! and php-stdarr's (`RtResult`, `RuntimeError`, closures).
 
-use php_runtime::{ArrayKey, PhpRef, RtResult, RuntimeError, Value, ZStr};
-use php_vm::ext::{Args, Throw, VmResult};
+use php_runtime::{ArrayKey, PhpRef, RtResult, Value, ZStr};
+use php_vm::ext::{Args, VmResult};
 use php_vm::Vm;
-
-/// Converts a php-stdarr error into a VM throw (the VM's `rt_throw`): an
-/// exception thrown by user code inside a callback is re-thrown as is,
-/// bailouts (`exit`, fatal errors) recorded by [`to_rt`] are resumed, and
-/// the built-in error kinds become new exception objects.
-pub fn throw(vm: &mut Vm, e: RuntimeError) -> Throw {
-    if let Some(t) = vm.pending_throw.take() {
-        return t;
-    }
-    match e {
-        RuntimeError::Thrown(Value::Object(o)) => Throw::Exception(o),
-        RuntimeError::Thrown(_) => Throw::Fatal,
-        RuntimeError::Fatal(m) => vm.fatal(&m),
-        RuntimeError::Custom { class, message } => vm.throw(&class.to_string_lossy(), &message),
-        other => {
-            let class = other.class_name().unwrap_or("Error");
-            let msg = match other {
-                RuntimeError::Error(m)
-                | RuntimeError::TypeError(m)
-                | RuntimeError::ValueError(m)
-                | RuntimeError::ArithmeticError(m)
-                | RuntimeError::DivisionByZeroError(m)
-                | RuntimeError::ArgumentCountError(m) => m,
-                _ => String::new(),
-            };
-            vm.throw(class, &msg)
-        }
-    }
-}
-
-/// Converts a VM throw raised inside a callback into a php-stdarr error.
-/// Non-exception unwinds (`exit()`, fatal errors) are parked in
-/// `vm.pending_throw` and resumed by [`throw`].
-pub fn to_rt(vm: &mut Vm, t: Throw) -> RuntimeError {
-    match t {
-        Throw::Exception(o) => RuntimeError::Thrown(Value::Object(o)),
-        other => {
-            vm.pending_throw = Some(other);
-            RuntimeError::Fatal(String::new())
-        }
-    }
-}
 
 /// Lifts a php-stdarr result into the VM.
 pub fn rt<T>(vm: &mut Vm, r: RtResult<T>) -> VmResult<T> {
-    r.map_err(|e| throw(vm, e))
+    r.map_err(|e| vm.throw_runtime_error(e))
 }
 
 /// A php-stdarr callback calling the PHP callable `cb`.
 pub fn callback(cb: Value) -> impl FnMut(&mut Vm, &[Value]) -> RtResult<Value> {
-    move |vm: &mut Vm, args: &[Value]| vm.call_value(&cb, args.to_vec()).map_err(|t| to_rt(vm, t))
+    move |vm: &mut Vm, args: &[Value]| {
+        vm.call_value(&cb, args.to_vec())
+            .map_err(|t| vm.runtime_error_from(t))
+    }
 }
 
 /// The reference bound to by-reference argument `n` (a fresh reference
@@ -63,18 +24,10 @@ pub fn by_ref(a: &Args, n: usize) -> PhpRef {
     a.reference(n).unwrap_or_else(|| PhpRef::new(a.at(n)))
 }
 
-/// All arguments from position `from` on, dereferenced, for a variadic
-/// parameter: internal functions reject extra named arguments
-/// ("does not accept named variadic arguments").
-pub fn variadic(vm: &mut Vm, a: &Args, from: usize) -> VmResult<Vec<Value>> {
-    if !a.named.is_empty() {
-        let msg = format!(
-            "Internal function {}() does not accept named variadic arguments",
-            a.func_name()
-        );
-        return Err(vm.throw("ArgumentCountError", &msg));
-    }
-    Ok(a.values.iter().skip(from).map(Value::deref).collect())
+/// All arguments from position `from` on, dereferenced (the variadic
+/// part; the VM already rejects named variadic arguments).
+pub fn rest(a: &Args, from: usize) -> Vec<Value> {
+    a.values.iter().skip(from).map(Value::deref).collect()
 }
 
 /// Checks a `callable` parameter like `Z_PARAM_FUNC`:
