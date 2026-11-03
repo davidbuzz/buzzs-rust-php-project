@@ -43,13 +43,12 @@ impl TextWriter {
         // it, on failure we close it ourselves.
         unsafe {
             let w = ffi::xmlNewTextWriter(out);
-            match NonNull::new(w) {
-                Some(ptr) => Some(Self { ptr }),
-                None => {
-                    ffi::xmlOutputBufferClose(out);
-                    guard::resume();
-                    None
-                }
+            if let Some(ptr) = NonNull::new(w) {
+                Some(Self { ptr })
+            } else {
+                ffi::xmlOutputBufferClose(out);
+                guard::resume();
+                None
             }
         }
     }

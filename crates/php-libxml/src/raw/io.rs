@@ -242,6 +242,14 @@ fn open_output(
 ) -> Result<*mut ffi::xmlOutputBuffer, ()> {
     let open = hooks::stream_hooks().filter(|h| h.open_write.is_some());
     let Some(stream_hooks) = open else {
+        if let Some(path) = uri_bytes.and_then(local_path) {
+            // PHP writes local files through the unbuffered plain-files
+            // stream wrapper; libxml2's own FILE* output would only become
+            // visible on close.
+            let file = std::fs::File::create(bytes_to_path(&path)).map_err(|_| ())?;
+            let buf = output_buffer_from_writer(Box::new(file), encoder);
+            return if buf.is_null() { Err(()) } else { Ok(buf) };
+        }
         // SAFETY: libxml2's own factory with the original arguments; it
         // takes care of the encoder.
         return Ok(unsafe { ffi::__xmlOutputBufferCreateFilename(uri_ptr, encoder, compression) });
@@ -272,6 +280,42 @@ fn open_output(
         Err(())
     } else {
         Ok(buf)
+    }
+}
+
+/// The local file path of a scheme-less or `file:` URI (what PHP's
+/// plain-files wrapper would open), `None` for other schemes.
+fn local_path(uri_bytes: &[u8]) -> Option<Vec<u8>> {
+    let parsed = uri::parse(uri_bytes);
+    match parsed.as_ref().and_then(|p| p.scheme.as_deref()) {
+        None => Some(uri_bytes.to_vec()),
+        Some(s) if s.eq_ignore_ascii_case(b"file") => {
+            let u = uri::unescape(uri_bytes)?;
+            let lower = u.to_ascii_lowercase();
+            let rest = if lower.starts_with(b"file://localhost/") {
+                &u[16..]
+            } else if lower.starts_with(b"file:///") {
+                &u[7..]
+            } else if lower.starts_with(b"file:/") {
+                &u[5..]
+            } else {
+                return None;
+            };
+            Some(rest.to_vec())
+        }
+        Some(_) => None,
+    }
+}
+
+fn bytes_to_path(b: &[u8]) -> std::path::PathBuf {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        std::path::PathBuf::from(std::ffi::OsStr::from_bytes(b))
+    }
+    #[cfg(not(unix))]
+    {
+        std::path::PathBuf::from(String::from_utf8_lossy(b).into_owned())
     }
 }
 
