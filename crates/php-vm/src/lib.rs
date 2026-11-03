@@ -179,6 +179,7 @@ impl Vm {
             main_return: Value::Null,
             native_stack_base: 0,
             native_stack_size: 8 << 20,
+            stack_limit_ini: None,
             output_handler_aliases: std::collections::HashMap::new(),
             include_opener: None,
             source_filter: None,

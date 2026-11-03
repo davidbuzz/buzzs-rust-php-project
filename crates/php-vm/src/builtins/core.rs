@@ -323,37 +323,49 @@ fn get_object_vars(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         }
     }
     // Like php-src: the raw property table filtered by
-    // `zend_check_property_access()`, never per-name property reads (no
-    // hooks or `__get`); dynamic properties pass whatever their name.
+    // `zend_check_property_access()`, except hooked properties, which are
+    // re-read through their get hook (`zend_read_property_ex`); virtual
+    // hooked properties without a get hook are skipped. No `__get`.
     let scope = vm.scope();
     let cls = object::class_of(&o).clone();
     let mut t = HashTable::new();
-    for (k, v, pi) in vm.object_prop_table(&o, false) {
-        let Some(v) = v else { continue };
-        match pi {
-            Some(pi) => {
-                let name = pi.name.clone();
-                let visible = match vm.lookup_prop(&cls, &name, scope.as_ref()) {
-                    crate::props::PropLookup::Found(found) if found.slot == pi.slot => true,
-                    // A parent's private property from the parent's scope.
-                    _ => {
-                        pi.visibility() == flags::PRIVATE
-                            && scope
-                                .as_ref()
-                                .is_some_and(|s| s.name.eq_ignore_ascii_case(pi.class.as_bytes()))
-                    }
-                };
-                if visible {
-                    t.insert(ArrayKey::from_zstr(&name), v);
-                }
+    for pi in cls.props.clone() {
+        let name = pi.name.clone();
+        let visible = match vm.lookup_prop(&cls, &name, scope.as_ref()) {
+            crate::props::PropLookup::Found(found) if found.slot == pi.slot => true,
+            // A parent's private property from the parent's scope.
+            _ => {
+                pi.visibility() == flags::PRIVATE
+                    && scope
+                        .as_ref()
+                        .is_some_and(|s| s.name.eq_ignore_ascii_case(pi.class.as_bytes()))
             }
-            None => {
-                let key = match k {
-                    ArrayKey::Str(s) => ArrayKey::from_zstr(&s),
-                    k => k,
-                };
-                t.insert(key, v);
+        };
+        if !visible {
+            continue;
+        }
+        let v = if let Some(h) = &pi.hooks {
+            if pi.is_virtual() && h.get.is_none() {
+                continue;
             }
+            vm.read_property(&o, &name, crate::opcode::FetchMode::Is)?
+        } else {
+            let d = object::data(&o);
+            let slot = d.slots.borrow().get(pi.slot as usize).cloned().flatten();
+            match slot {
+                Some(v) => v,
+                None => continue, // uninitialized typed property
+            }
+        };
+        t.insert(ArrayKey::from_zstr(&name), v);
+    }
+    if let Some(dyn_t) = object::data(&o).dynamic.borrow().as_ref() {
+        for (k, v) in dyn_t.iter() {
+            let key = match k {
+                ArrayKey::Str(s) => ArrayKey::from_zstr(s),
+                k => k.clone(),
+            };
+            t.insert(key, v.clone());
         }
     }
     Ok(Value::Array(ZArray::from_table(t)))

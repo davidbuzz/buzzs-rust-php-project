@@ -519,6 +519,9 @@ pub struct Vm {
     pub(crate) native_stack_base: usize,
     /// Size of the native stack the VM runs on.
     pub(crate) native_stack_size: usize,
+    /// Cached `(zend.max_allowed_stack_size, zend.reserved_stack_size)`;
+    /// both are `INI_SYSTEM`, so they never change after startup.
+    pub(crate) stack_limit_ini: Option<(i64, usize)>,
     /// Named native output handlers (`ob_start('ob_gzhandler')`).
     pub output_handler_aliases: HashMap<ZStr, crate::ext::OutputHandlerFn>,
     /// `include` opener hook.

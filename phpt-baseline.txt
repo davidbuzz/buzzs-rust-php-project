@@ -595,7 +595,6 @@ Zend/tests/property_hooks/get_by_ref_implemented_by_val.phpt
 Zend/tests/property_hooks/gh15140.phpt
 Zend/tests/property_hooks/gh15438_1.phpt
 Zend/tests/property_hooks/gh16185.phpt
-Zend/tests/property_hooks/gh16725.phpt
 Zend/tests/property_hooks/gh17234.phpt
 Zend/tests/property_hooks/gh20479.phpt
 Zend/tests/property_hooks/interface.phpt
@@ -1054,9 +1053,6 @@ ext/standard/tests/class_object/forward_static_call_001.phpt
 ext/standard/tests/class_object/forward_static_call_002.phpt
 ext/standard/tests/class_object/forward_static_call_003.phpt
 ext/standard/tests/class_object/get_class_methods_basic_001.phpt
-ext/standard/tests/class_object/get_object_vars_variation_002.phpt
-ext/standard/tests/class_object/get_object_vars_variation_004.phpt
-ext/standard/tests/class_object/get_object_vars_variation_005.phpt
 ext/standard/tests/class_object/is_a.phpt
 ext/standard/tests/class_object/is_a_variation_001.phpt
 ext/standard/tests/class_object/method_exists_basic_001.phpt
@@ -1092,7 +1088,6 @@ ext/standard/tests/general_functions/debug_zval_dump_o.phpt
 ext/standard/tests/general_functions/debug_zval_dump_v.phpt
 ext/standard/tests/general_functions/error_get_last_002.phpt
 ext/standard/tests/general_functions/get_cfg_var_array.phpt
-ext/standard/tests/general_functions/gh20840.phpt
 ext/standard/tests/general_functions/gh22118.phpt
 ext/standard/tests/general_functions/ini_set_types.phpt
 ext/standard/tests/general_functions/is_callable_abstract_method-deprecated.phpt

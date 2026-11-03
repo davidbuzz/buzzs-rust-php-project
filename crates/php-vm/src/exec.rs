@@ -1404,12 +1404,22 @@ impl Vm {
             return false;
         }
         let used = self.native_stack_base - here;
-        let max = self.ini.get_long("zend.max_allowed_stack_size");
+        // Both INIs are INI_SYSTEM: read them once.
+        let (max, reserved) = match self.stack_limit_ini {
+            Some(t) => t,
+            None => {
+                let t = (
+                    self.ini.get_long("zend.max_allowed_stack_size"),
+                    usize::try_from(self.ini.get_long("zend.reserved_stack_size").max(0))
+                        .unwrap_or(0),
+                );
+                self.stack_limit_ini = Some(t);
+                t
+            }
+        };
         if max < 0 {
             return false;
         }
-        let reserved =
-            usize::try_from(self.ini.get_long("zend.reserved_stack_size").max(0)).unwrap_or(0);
         // The real thread stack must never be smashed, whatever the INI says.
         let hard = self
             .native_stack_size
