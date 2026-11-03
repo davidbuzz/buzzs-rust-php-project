@@ -28,7 +28,7 @@ fn truecolor() -> Image {
     let blue = im.color_allocate_alpha(0, 0, 255, 64);
     im.filled_rectangle(2, 2, 20, 12, red);
     im.line(0, 23, 31, 0, blue);
-    im.ellipse(16, 12, 20, 10, 0x00ff00);
+    im.ellipse(16, 12, 20, 10, 0x0000_ff00);
     let f = Font::builtin(2);
     for (i, b) in b"Hi".iter().enumerate() {
         let x = 1 + i32::try_from(i).unwrap_or(0) * f.width();

@@ -2,6 +2,9 @@
 //! `GdFont`, the `image*` functions and the GD constants) through the
 //! `php_vm::ext` extension API. Ref: ext/gd/gd.c, ext/gd/gd.stub.php.
 
+// `r`, `g`, `b`, `a`, `x`, `y`, `w`, `h` mirror gd.c.
+#![allow(clippy::many_single_char_names)]
+
 mod create;
 mod draw;
 mod io;

@@ -124,6 +124,7 @@ extern "C" {
     pub fn gdImageCreate(sx: c_int, sy: c_int) -> gdImagePtr;
     pub fn gdImageCreateTrueColor(sx: c_int, sy: c_int) -> gdImagePtr;
     pub fn gdImageDestroy(im: gdImagePtr);
+    pub fn gdImageClone(src: gdImagePtr) -> gdImagePtr;
 
     pub fn gdImageCreateFromPngPtr(size: c_int, data: *mut c_void) -> gdImagePtr;
     pub fn gdImageCreateFromGifPtr(size: c_int, data: *mut c_void) -> gdImagePtr;

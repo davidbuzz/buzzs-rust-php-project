@@ -45,7 +45,7 @@ pub(crate) enum Sink {
     /// A stream resource passed by the caller (left open).
     Borrowed(Rc<res::StreamCell>),
     /// A stream opened from a path (closed when done).
-    Owned(Stream),
+    Owned(Box<Stream>),
 }
 
 /// `create_output_context(to_zval, arg_num)` for argument `n` (0-based):
@@ -81,7 +81,7 @@ pub(crate) fn open_for_writing(vm: &mut Vm, path: &[u8]) -> VmResult<Option<Sink
         let mut opened = None;
         php_streams::open::open_wrapper(path, "wb", REPORT_ERRORS, &mut opened, None)
     })?;
-    Ok(s.map(Sink::Owned))
+    Ok(s.map(|s| Sink::Owned(Box::new(s))))
 }
 
 impl Sink {

@@ -14,5 +14,9 @@ php-streams = { path = "../php-streams" }
 php-ext-streams = { path = "../php-ext-streams" }
 php-support = { path = "../php-support" }
 
+[dev-dependencies]
+php-ext-stdstr = { path = "../php-ext-stdstr" }
+libc = "0.2"
+
 [lints]
 workspace = true

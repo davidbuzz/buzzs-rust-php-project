@@ -744,8 +744,37 @@ impl Image {
         }
     }
 
+    /// `gdImageClone`.
+    pub fn try_clone(&self) -> Option<Image> {
+        // SAFETY: valid image; returns a new image or null.
+        wrap(unsafe { sys::gdImageClone(self.raw()) })
+    }
+
     /// `gdImageRotateInterpolated`.
+    ///
+    /// libgd 2.3.3 hands palette images to its nearest-neighbour rotation,
+    /// which reads `tpixels` and crashes; like php-src's bundled libgd, a
+    /// truecolor copy is rotated instead (with the background color
+    /// resolved from the palette).
+    #[allow(clippy::cast_possible_truncation)]
     pub fn rotate(&self, angle: f32, bg: i32) -> Option<Image> {
+        const NEAREST_NEIGHBOUR: c_int = 16;
+        let rounded = ((angle * 100.0).floor() as i32) % 36000;
+        let square = matches!(rounded, 0 | 9000 | -27000 | 18000 | -18000 | -9000 | 27000);
+        if !self.is_truecolor()
+            && bg >= 0
+            && !square
+            && self.interpolation_id() == NEAREST_NEIGHBOUR
+        {
+            let mut bg = bg;
+            if let Some([r, g, b, a]) = self.color_components(bg) {
+                bg = (a << 24) + (r << 16) + (g << 8) + b;
+            }
+            let tc = self.try_clone()?;
+            tc.palette_to_truecolor();
+            // SAFETY: valid image; returns a new image or null.
+            return wrap(unsafe { sys::gdImageRotateInterpolated(tc.raw(), angle, bg) });
+        }
         // SAFETY: valid image; returns a new image or null.
         wrap(unsafe { sys::gdImageRotateInterpolated(self.raw(), angle, bg) })
     }

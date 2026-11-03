@@ -104,13 +104,11 @@ fn imagecreatefromstring(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         }
     };
     let im = from_string(vm, data, t, dec)?;
-    match im {
-        Some(im) => new_image(vm, im),
-        None => {
-            warn(vm, b"Couldn't create GD Image Stream out of Data")?;
-            Ok(Value::Bool(false))
-        }
+    if let Some(im) = im {
+        return new_image(vm, im);
     }
+    warn(vm, b"Couldn't create GD Image Stream out of Data")?;
+    Ok(Value::Bool(false))
 }
 
 /// The formats of `_php_image_create_from()`.
@@ -197,16 +195,14 @@ fn create_from(vm: &mut Vm, a: &Args, kind: From) -> VmResult<Value> {
         From::Tga => Image::decode(Decoder::Tga, &data),
     };
     flush(vm)?;
-    match im {
-        Some(im) => new_image(vm, im),
-        None => {
-            let mut msg = b"\"".to_vec();
-            msg.extend_from_slice(&path);
-            msg.extend_from_slice(format!("\" is not a valid {} file", kind.name()).as_bytes());
-            warn(vm, &msg)?;
-            Ok(Value::Bool(false))
-        }
+    if let Some(im) = im {
+        return new_image(vm, im);
     }
+    let mut msg = b"\"".to_vec();
+    msg.extend_from_slice(&path);
+    msg.extend_from_slice(format!("\" is not a valid {} file", kind.name()).as_bytes());
+    warn(vm, &msg)?;
+    Ok(Value::Bool(false))
 }
 
 macro_rules! create_from_fn {
@@ -345,7 +341,7 @@ fn gd_output(vm: &mut Vm, a: &Args, gd2: bool) -> VmResult<Value> {
         None => None,
     };
     let (mut quality, kind) = if gd2 { (a.int(2), a.int(3)) } else { (128, 1) };
-    if quality < INT_MIN || quality > INT_MAX {
+    if !(INT_MIN..=INT_MAX).contains(&quality) {
         warn(
             vm,
             format!("Argument #3 ($chunk_size) must be between {INT_MIN} and {INT_MAX}").as_bytes(),
@@ -360,8 +356,8 @@ fn gd_output(vm: &mut Vm, a: &Args, gd2: bool) -> VmResult<Value> {
     } else {
         Encoder::Gd
     };
-    match file.filter(|f| !f.is_empty()) {
-        Some(path) => {
+    if let Some(path) = file.filter(|f| !f.is_empty()) {
+        {
             if !bridge::run(vm, || php_streams::paths::check_open_basedir(&path))? {
                 warn(vm, b"Invalid filename")?;
                 return Ok(Value::Bool(false));
@@ -380,10 +376,9 @@ fn gd_output(vm: &mut Vm, a: &Args, gd2: bool) -> VmResult<Value> {
             let buf = encode(vm, &im, &enc)?;
             let _ = std::io::Write::write_all(&mut f, &buf);
         }
-        None => {
-            let buf = encode(vm, &im, &enc)?;
-            Sink::Output.finish(vm, &buf)?;
-        }
+    } else {
+        let buf = encode(vm, &im, &enc)?;
+        Sink::Output.finish(vm, &buf)?;
     }
     Ok(Value::Bool(true))
 }

@@ -312,13 +312,11 @@ fn imagepalettecopy(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 fn imagecolorat(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let im = image_arg(vm, a, 0)?;
     let (x, y) = (a.int(1), a.int(2));
-    match im.pixel_at(ci(x), ci(y)) {
-        Some(c) => Ok(Value::Int(i64::from(c))),
-        None => {
-            vm.php_notice(&format!("{x},{y} is out of bounds"))?;
-            Ok(Value::Bool(false))
-        }
+    if let Some(c) = im.pixel_at(ci(x), ci(y)) {
+        return Ok(Value::Int(i64::from(c)));
     }
+    vm.php_notice(&format!("{x},{y} is out of bounds"))?;
+    Ok(Value::Bool(false))
 }
 
 fn imagesetpixel(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -650,6 +648,7 @@ fn imagesetbrush(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 }
 
 /// Registers the functions of this module.
+#[allow(clippy::too_many_lines)] // one row per function
 pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
     let fns: &[(&str, php_vm::ext::NativeFn)] = &[
         ("imagesetstyle(GdImage $image, array $style): bool", imagesetstyle),

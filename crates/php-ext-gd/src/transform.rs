@@ -1,5 +1,5 @@
 //! Filters, transformations, interpolation, clipping, resolution and
-//! FreeType text.
+//! `FreeType` text.
 
 use php_gd::info::{GD_METHOD_COUNT, IMAGE_FILTER_MAX};
 use php_gd::{affine, Filter, Image, Rect};
@@ -22,7 +22,7 @@ fn imagerotate(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     }
     let im = image_arg(vm, a, 0)?;
     #[allow(clippy::cast_possible_truncation)]
-    let r = im.rotate(degrees as f32, ci(a.int(2)));
+    let r = php_gd::filters::rotate(&im, degrees as f32, ci(a.int(2)));
     flush(vm)?;
     image_or_false(vm, r)
 }
@@ -308,7 +308,7 @@ fn imagecropauto(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
                 ));
             }
             #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-            im.crop_threshold(color as u32, threshold as f32)
+            php_gd::filters::crop_threshold(&im, color as u32, threshold as f32)
         }
         _ => return Err(a.value_error(vm, 2, "must be a valid mode")),
     };
