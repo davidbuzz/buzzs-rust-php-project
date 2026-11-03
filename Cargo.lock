@@ -914,11 +914,14 @@ dependencies = [
 name = "php-ext-xml"
 version = "0.1.0"
 dependencies = [
+ "php-exif",
+ "php-ext-exif",
  "php-ext-streams",
  "php-libxml",
  "php-runtime",
  "php-streams",
  "php-vm",
+ "php-xmlreader",
 ]
 
 [[package]]
