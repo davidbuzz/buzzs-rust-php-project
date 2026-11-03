@@ -268,7 +268,7 @@ impl ObjMap {
     fn doc_nr(&self, n: N) -> Option<u64> {
         let obj = Node::existing(n)?;
         let doc = obj.doc_ref()?;
-        Some(doc.modification_nr.get())
+        Some(doc.cache_nr())
     }
 
     fn is_stale(&self, n: N) -> bool {

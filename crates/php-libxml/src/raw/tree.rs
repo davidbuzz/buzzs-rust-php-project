@@ -251,6 +251,13 @@ struct DocInner {
     ptr: NonNull<ffi::xmlDoc>,
     /// Live handle count per node address.
     live: RefCell<HashMap<usize, usize>>,
+    /// Shared with another object model ([`SharedDocument`]): a node whose
+    /// `_private` is set is referenced by that model (PHP's convention:
+    /// `_private` points at the owning PHP object) and counts as live.
+    shared: std::cell::Cell<bool>,
+    /// Bumped by every structural mutation made through this layer (the
+    /// cache tag other models compare against).
+    generation: std::cell::Cell<u64>,
 }
 
 impl DocInner {
@@ -259,10 +266,27 @@ impl DocInner {
     }
 
     fn is_live(&self, node: *mut ffi::xmlNode) -> bool {
+        self.is_pinned(node) || self.foreign_ref(node)
+    }
+
+    /// Whether this layer holds handles to `node`.
+    fn is_pinned(&self, node: *mut ffi::xmlNode) -> bool {
         self.live
             .borrow()
             .get(&(node as usize))
             .is_some_and(|&n| n > 0)
+    }
+
+    /// Whether another object model references `node` (shared mode only).
+    #[allow(clippy::used_underscore_binding)]
+    fn foreign_ref(&self, node: *mut ffi::xmlNode) -> bool {
+        // SAFETY: node is a live node of this document; `_private` is the
+        // first field of every node struct.
+        self.shared.get() && !unsafe { (*node)._private }.is_null()
+    }
+
+    fn touch(&self) {
+        self.generation.set(self.generation.get().wrapping_add(1));
     }
 
     fn acquire(&self, node: *mut ffi::xmlNode) {
@@ -323,6 +347,7 @@ impl DocInner {
 
     /// Unlinks `node` and makes it self-contained regarding namespaces.
     fn detach(&self, node: *mut ffi::xmlNode) {
+        self.touch();
         // SAFETY: node is a live node of this document.
         unsafe {
             ffi::xmlUnlinkNode(node);
@@ -395,7 +420,7 @@ impl DocInner {
                 // Declarations and documents are owned elsewhere.
                 return;
             }
-            if self.doc().cast::<ffi::xmlNode>() == node {
+            if self.doc().cast::<ffi::xmlNode>() == node || self.foreign_ref(node) {
                 return;
             }
             self.rescue_descendants(node);
@@ -457,6 +482,8 @@ impl Document {
             inner: Rc::new(DocInner {
                 ptr,
                 live: RefCell::new(HashMap::new()),
+                shared: std::cell::Cell::new(false),
+                generation: std::cell::Cell::new(0),
             }),
         }
     }
@@ -766,9 +793,151 @@ impl Document {
         }
     }
 
+    /// Switches this document to shared ownership (see [`SharedDocument`]);
+    /// the `Document` (and its clones and nodes) keep working unchanged.
+    pub fn into_shared(self) -> SharedDocument {
+        self.inner.shared.set(true);
+        SharedDocument { inner: self.inner }
+    }
+
+    /// Like [`Document::into_shared`] without consuming `self`.
+    pub fn to_shared(&self) -> SharedDocument {
+        self.clone().into_shared()
+    }
+
+    /// Whether the tree is shared with another object model.
+    pub fn is_shared(&self) -> bool {
+        self.inner.shared.get()
+    }
+
+    /// The mutation counter (see [`SharedDocument::generation`]).
+    pub fn generation(&self) -> u64 {
+        self.inner.generation.get()
+    }
+
+    /// Records a mutation made outside this layer.
+    pub fn mark_modified(&self) {
+        self.inner.touch();
+    }
+
     /// Number of distinct nodes that currently have handles.
     pub fn live_handles(&self) -> usize {
         self.inner.live.borrow().len()
+    }
+}
+
+/// A [`Document`] whose tree is co-owned by another object model (DOM and
+/// `SimpleXML` / XSL results sharing one `xmlDoc`, PHP's shared
+/// `php_libxml_ref_obj`).
+///
+/// * The `xmlDoc` is freed when the last `SharedDocument`, [`Document`] and
+///   [`Node`] of it are gone; the other model holds a `SharedDocument` for
+///   as long as it has objects of the tree.
+/// * Following PHP's convention, the other model marks every node it has
+///   an object for by a non-NULL `node->_private` (php-dom does). Such
+///   nodes count as referenced here: a detached subtree is never freed by
+///   this layer while one of its nodes is referenced by either model, and
+///   referenced descendants are rescued (unlinked) before a subtree is
+///   freed (`php_libxml_node_free_list`).
+/// * In the other direction, the other model asks [`SharedDocument::is_pinned`]
+///   before freeing a detached node and rescues pinned descendants with
+///   [`SharedDocument::detach`]; whichever model releases the last
+///   reference frees the node.
+/// * [`SharedDocument::generation`] changes on every structural mutation
+///   made through this layer, so the other model can invalidate its caches
+///   (node lists); call [`SharedDocument::mark_modified`] after mutating the
+///   tree directly through FFI.
+#[derive(Clone)]
+pub struct SharedDocument {
+    inner: Rc<DocInner>,
+}
+
+impl std::fmt::Debug for SharedDocument {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SharedDocument")
+            .field("ptr", &self.inner.ptr)
+            .finish_non_exhaustive()
+    }
+}
+
+impl PartialEq for SharedDocument {
+    fn eq(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.inner, &other.inner)
+    }
+}
+
+impl Eq for SharedDocument {}
+
+impl SharedDocument {
+    /// Takes ownership of an `xmlDoc` in shared mode (e.g. a DOM document
+    /// handed to `SimpleXML`, or an XSLT result tree).
+    ///
+    /// # Safety
+    /// `ptr` must be a valid `xmlDoc` that from now on is only freed through
+    /// this handle (the other model drops its `SharedDocument` instead of
+    /// calling `xmlFreeDoc`).
+    pub unsafe fn from_raw(ptr: NonNull<ffi::xmlDoc>) -> Self {
+        let doc = Document::wrap(ptr);
+        doc.into_shared()
+    }
+
+    /// The underlying `xmlDoc` pointer (valid while `self` lives).
+    pub fn as_ptr(&self) -> *mut ffi::xmlDoc {
+        self.inner.doc()
+    }
+
+    /// A [`Document`] view of the same tree (same ownership).
+    pub fn document(&self) -> Document {
+        Document {
+            inner: self.inner.clone(),
+        }
+    }
+
+    /// A [`Node`] handle pinning `ptr` (see [`Document::node_handle`]).
+    ///
+    /// # Safety
+    /// As for [`Document::node_handle`].
+    pub unsafe fn pin(&self, ptr: *mut ffi::xmlNode) -> Option<Node> {
+        self.document().handle(ptr)
+    }
+
+    /// Whether this layer holds [`Node`] handles to `node` (references of
+    /// the other model, i.e. `_private`, are not counted).
+    pub fn is_pinned(&self, node: *const ffi::xmlNode) -> bool {
+        self.inner.is_pinned(node.cast_mut())
+    }
+
+    /// Unlinks a node and makes it self-contained regarding namespaces
+    /// (`xmlReconciliateNs` for elements, a private namespace copy in
+    /// `doc->oldNs` for attributes): how a model rescues a node pinned by
+    /// the other one before freeing the subtree around it.
+    ///
+    /// # Safety
+    /// `node` must be a live node of this document.
+    pub unsafe fn detach(&self, node: *mut ffi::xmlNode) {
+        self.inner.detach(node);
+    }
+
+    /// Frees a detached node that neither model references any more
+    /// (rescuing referenced descendants first); a no-op when the node is
+    /// attached, pinned or referenced through `_private`.
+    ///
+    /// # Safety
+    /// `node` must be a live node of this document.
+    pub unsafe fn free_if_unreferenced(&self, node: *mut ffi::xmlNode) {
+        if !self.inner.is_live(node) {
+            self.inner.free_detached(node);
+        }
+    }
+
+    /// The mutation counter (see the type docs).
+    pub fn generation(&self) -> u64 {
+        self.inner.generation.get()
+    }
+
+    /// Records a mutation made outside this layer.
+    pub fn mark_modified(&self) {
+        self.inner.touch();
     }
 }
 
@@ -1005,6 +1174,7 @@ impl Node {
     /// Replaces the content (children of elements/attributes are replaced
     /// by a text node; referenced children survive detached).
     pub fn set_content(&self, content: &[u8]) {
+        self.doc.touch();
         self.doc.rescue_children(self.ptr.as_ptr());
         let c = c_string(content);
         // SAFETY: referenced descendants were detached; libxml2 frees the
@@ -1051,6 +1221,7 @@ impl Node {
 
     /// Sets (or replaces the value of) an attribute without namespace.
     pub fn set_attribute(&self, name: &[u8], value: &[u8]) -> Result<Node, TreeError> {
+        self.doc.touch();
         if !self.is_element() {
             return Err(TreeError::InvalidNodeType);
         }
@@ -1073,6 +1244,7 @@ impl Node {
     /// Removes an attribute by name; returns whether one was removed. A
     /// handle to the attribute keeps it alive (detached).
     pub fn remove_attribute(&self, name: &[u8]) -> bool {
+        self.doc.touch();
         match self.attribute_node(name) {
             Some(attr) => {
                 attr.unlink();
@@ -1090,6 +1262,7 @@ impl Node {
         uri: &[u8],
         use_it: bool,
     ) -> Result<(), TreeError> {
+        self.doc.touch();
         if !self.is_element() {
             return Err(TreeError::InvalidNodeType);
         }

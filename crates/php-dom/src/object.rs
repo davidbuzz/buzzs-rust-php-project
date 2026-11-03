@@ -104,6 +104,10 @@ pub struct DocInner {
     pub(crate) class_type: Cell<ClassType>,
     pub(crate) quirks_mode: Cell<QuirksMode>,
     pub(crate) handlers: Cell<Handlers>,
+    /// Set once the tree is shared with another object model (`SimpleXML`,
+    /// XSL): the `xmlDoc` is then owned through this handle and freed when
+    /// the last holder of either model is gone.
+    pub(crate) shared: RefCell<Option<php_libxml::tree::SharedDocument>>,
 }
 
 impl std::fmt::Debug for DocInner {
@@ -121,6 +125,33 @@ pub type DocRef = Rc<DocInner>;
 thread_local! {
     /// xmlDoc address → its reference object.
     static DOCS: RefCell<HashMap<usize, Weak<DocInner>>> = RefCell::new(HashMap::new());
+    /// Number of live documents shared with another object model (fast
+    /// path for [`foreign_pinned`]).
+    static SHARED_COUNT: Cell<usize> = const { Cell::new(0) };
+}
+
+/// Whether another object model (php-libxml handles, e.g. `SimpleXML`)
+/// holds `n`: such nodes are rescued, not freed.
+pub(crate) fn foreign_pinned(n: N) -> bool {
+    if SHARED_COUNT.with(Cell::get) == 0 {
+        return false;
+    }
+    shared_of(n).is_some_and(|s| s.is_pinned(n.p()))
+}
+
+fn shared_of(n: N) -> Option<php_libxml::tree::SharedDocument> {
+    DocInner::lookup(n.doc_ptr()).and_then(|d| d.shared.borrow().clone())
+}
+
+/// Rescues a node pinned by another model out of a subtree being freed.
+fn rescue_foreign(n: N) {
+    if let Some(s) = shared_of(n) {
+        // SAFETY: n is a live node of the shared document.
+        unsafe { s.detach(n.p()) };
+    } else {
+        // SAFETY: live node.
+        unsafe { ffi::xmlUnlinkNode(n.p()) };
+    }
 }
 
 impl DocInner {
@@ -135,6 +166,7 @@ impl DocInner {
             class_type: Cell::new(ClassType::Unset),
             quirks_mode: Cell::new(QuirksMode::NoQuirks),
             handlers: Cell::new(Handlers::Default),
+            shared: RefCell::new(None),
         });
         DOCS.with(|d| d.borrow_mut().insert(doc as usize, Rc::downgrade(&inner)));
         inner
@@ -181,6 +213,53 @@ impl DocInner {
     pub(crate) fn invalidate(&self) {
         self.modification_nr
             .set(self.modification_nr.get().wrapping_add(1));
+        if let Some(s) = self.shared.borrow().as_ref() {
+            s.mark_modified();
+        }
+    }
+
+    /// The tag node-list caches compare against: this document's
+    /// modification counter combined with the mutations made by another
+    /// object model sharing the tree.
+    pub(crate) fn cache_nr(&self) -> u64 {
+        let shared = self
+            .shared
+            .borrow()
+            .as_ref()
+            .map_or(0, php_libxml::tree::SharedDocument::generation);
+        self.modification_nr
+            .get()
+            .wrapping_add(shared.wrapping_mul(0x9e37_79b9))
+    }
+
+    /// The shared-ownership handle of this document, creating it (and
+    /// handing the `xmlDoc` over to it) on first use.
+    pub(crate) fn shared_document(&self) -> Option<php_libxml::tree::SharedDocument> {
+        if let Some(s) = self.shared.borrow().as_ref() {
+            return Some(s.clone());
+        }
+        let ptr = std::ptr::NonNull::new(self.ptr)?;
+        // SAFETY: we own the document; from now on it is only freed
+        // through the shared handle (see Drop).
+        let s = unsafe { php_libxml::tree::SharedDocument::from_raw(ptr) };
+        *self.shared.borrow_mut() = Some(s.clone());
+        SHARED_COUNT.with(|c| c.set(c.get() + 1));
+        Some(s)
+    }
+
+    /// A reference object for a tree another model shares with us.
+    pub(crate) fn new_shared(shared: php_libxml::tree::SharedDocument) -> DocRef {
+        if let Some(existing) = DocInner::lookup(shared.as_ptr()) {
+            if existing.shared.borrow().is_none() {
+                // Cannot happen: a document is shared through exactly one
+                // ownership path; keep ours.
+            }
+            return existing;
+        }
+        let d = DocInner::new(shared.as_ptr());
+        *d.shared.borrow_mut() = Some(shared);
+        SHARED_COUNT.with(|c| c.set(c.get() + 1));
+        d
     }
 
     /// `dom_minimum_modification_nr_since_parsing`.
@@ -227,9 +306,16 @@ impl Drop for DocInner {
             // The document node's handle (if any) is gone: every Node holds
             // a DocRef, so none can remain.
             self.n().set_private(ptr::null_mut());
-            // SAFETY: no handle references this document any more (every
-            // handle holds a strong reference), so we own the tree.
-            unsafe { ffi::xmlFreeDoc(self.ptr) };
+            if let Some(shared) = self.shared.borrow_mut().take() {
+                // Co-owned: the tree goes with the last holder of either
+                // object model.
+                SHARED_COUNT.with(|c| c.set(c.get().saturating_sub(1)));
+                drop(shared);
+            } else {
+                // SAFETY: no handle references this document any more (every
+                // handle holds a strong reference), so we own the tree.
+                unsafe { ffi::xmlFreeDoc(self.ptr) };
+            }
         }
     }
 }
@@ -725,6 +811,12 @@ pub(crate) fn node_free(n: N) {
 pub(crate) fn free_list(first: Option<N>) {
     let mut cur = first;
     while let Some(node) = cur {
+        if node.private().is_null() && foreign_pinned(node) {
+            let next = node.next();
+            rescue_foreign(node);
+            cur = next;
+            continue;
+        }
         if !node.private().is_null() {
             let next = node.next();
             // SAFETY: node is live; unlinking keeps it alive as a detached
@@ -802,6 +894,11 @@ pub(crate) fn free_resource(n: N) {
             }
         }
         t => {
+            if n.parent().is_none() && t != ffi::XML_NAMESPACE_DECL && foreign_pinned(n) {
+                // Another model still holds the detached root.
+                unregister_node(n);
+                return;
+            }
             if n.parent().is_none() || t == ffi::XML_NAMESPACE_DECL {
                 free_list(n.children());
                 if t == ffi::XML_ELEMENT_NODE {
@@ -822,7 +919,9 @@ pub(crate) fn node_list_unlink(first: Option<N>) {
     let mut cur = first;
     while let Some(node) = cur {
         let next = node.next();
-        if !node.private().is_null() {
+        if node.private().is_null() && foreign_pinned(node) {
+            rescue_foreign(node);
+        } else if !node.private().is_null() {
             // SAFETY: live node.
             unsafe { ffi::xmlUnlinkNode(node.p()) };
         } else if node.t() != ffi::XML_ENTITY_REF_NODE {

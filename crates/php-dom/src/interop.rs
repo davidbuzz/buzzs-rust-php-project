@@ -11,6 +11,8 @@ use std::ptr::{self, NonNull};
 use std::rc::Rc;
 
 use crate::ffi;
+use php_libxml::tree::SharedDocument;
+
 use crate::object::{DocInner, Node};
 use crate::raw::{cs, Ns, N};
 
@@ -43,6 +45,19 @@ impl Node {
         self.doc_ref().is_some_and(|d| Rc::strong_count(&d) > 2)
     }
 
+    /// The shared-ownership handle of this node's document, switching the
+    /// document to shared ownership on first use (`simplexml_import_dom()`
+    /// and other cross-model hand-overs). Pin nodes for the other model
+    /// with [`SharedDocument::pin`]. `None` for unbound or document-less
+    /// nodes.
+    pub fn shared_document(&self) -> Option<SharedDocument> {
+        if let Some(d) = self.doc_ref() {
+            return d.shared_document();
+        }
+        let n = self.n()?;
+        DocInner::lookup(n.doc_ptr()).and_then(|d| d.shared_document())
+    }
+
     /// Keeps `value` alive for as long as this handle exists; it is
     /// released after the node itself (use for nodes of documents owned
     /// by another crate, e.g. an XSLT input copy).
@@ -73,6 +88,44 @@ pub unsafe fn adopt_document(doc: NonNull<c_void>, modern: bool, class: Option<&
         obj.set_class_name(c.to_string());
     }
     obj
+}
+
+/// The document object for a tree shared by another object model
+/// (`dom_import_simplexml()` on a document, an XSLT result handed over as
+/// a [`SharedDocument`]): the existing one when php-dom already has a
+/// reference object for this `xmlDoc`, otherwise a new one (`DOMDocument`,
+/// or `Dom\XMLDocument` when `modern`, with PHP class `class` if given).
+pub fn adopt_shared_document(shared: SharedDocument, modern: bool, class: Option<&str>) -> Node {
+    let d = DocInner::new_shared(shared);
+    let n = d.n();
+    if let Some(existing) = Node::existing(n) {
+        return existing;
+    }
+    if modern && !d.is_modern() {
+        crate::document::set_xml_class(&d);
+        crate::document::convert_to_modern(&d);
+    }
+    let obj = Node::wrap_with_doc(n, Some(d));
+    if let Some(c) = class {
+        obj.set_class_name(c.to_string());
+    }
+    obj
+}
+
+/// The object for a node of a tree shared by another object model
+/// (`dom_import_simplexml()`): the existing handle if there is one,
+/// otherwise a new handle whose document is kept alive through `shared`.
+/// `None` when `node` is NULL.
+///
+/// # Safety
+/// `node` must be a live node of `shared`'s document.
+pub unsafe fn wrap_shared_node(shared: &SharedDocument, node: *mut c_void) -> Option<Node> {
+    let n = N::new(node.cast())?;
+    if let Some(existing) = Node::existing(n) {
+        return Some(existing);
+    }
+    let d = DocInner::new_shared(shared.clone());
+    Some(Node::wrap_with_doc(n, Some(d)))
 }
 
 /// The object for a node of a live document (`php_dom_create_object`):

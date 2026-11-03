@@ -73,10 +73,7 @@ impl<'a> Html5Serializer<'a> {
     }
 
     /// A serializer that hands every piece to `sink` as it is produced.
-    pub(crate) fn streaming(
-        private: Option<&'a PrivateData>,
-        sink: Sink<'a>,
-    ) -> Self {
+    pub(crate) fn streaming(private: Option<&'a PrivateData>, sink: Sink<'a>) -> Self {
         Html5Serializer {
             out: Vec::new(),
             private,

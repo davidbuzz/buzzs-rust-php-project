@@ -3,7 +3,11 @@
 //! * [`error`] / [`io`] — `ext/libxml`: the `libxml_*()` functions, the
 //!   `LibXMLError` list, external entity loader and stream hooks.
 //! * [`tree`] — a safe, reference-counted document/node layer (the shared
-//!   base for DOM, `SimpleXML`, `XMLReader` and XSL).
+//!   base for DOM, `SimpleXML`, `XMLReader` and XSL). Trees shared between
+//!   two object models (`simplexml_import_dom()`, `dom_import_simplexml()`,
+//!   `XSLTProcessor::transformToDoc()`) use [`tree::SharedDocument`]:
+//!   reference-counted co-ownership mirroring
+//!   `php_libxml_node_decrement_resource` / `php_libxml_node_free_list`.
 //! * [`xml`] — `ext/xml`: the expat-compatible SAX parser.
 //! * [`xmlwriter`] — `ext/xmlwriter`: the `XMLWriter` class.
 //! * [`constants`] — the `LIBXML_*` constants.
