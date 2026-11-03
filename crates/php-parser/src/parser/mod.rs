@@ -32,6 +32,10 @@ pub struct ParseOptions {
     pub record_identifier_tokens: bool,
     /// Which thread [`crate::parse`] parses on.
     pub stack: crate::StackPolicy,
+    /// `zend.multibyte` is on: `declare(encoding=...)` is honoured by the
+    /// host's script-encoding filter instead of drawing the "ignored because
+    /// Zend multibyte feature is turned off" compile warning.
+    pub multibyte: bool,
 }
 
 /// Result type of parser functions.
@@ -78,6 +82,8 @@ pub(crate) struct Parser<'a> {
     /// Set when parsing stopped because the native stack ran low (rather
     /// than at bison's depth limit).
     pub stack_exhausted: bool,
+    /// [`ParseOptions::multibyte`].
+    multibyte: bool,
     /// Start offset of a keyword that began a call argument (see
     /// `parse_argument`).
     pub colon_hint: Option<usize>,
@@ -116,6 +122,7 @@ impl<'a> Parser<'a> {
             stack_limit: None,
             stack_exhausted: false,
             colon_hint: None,
+            multibyte: opts.multibyte,
         }
     }
 

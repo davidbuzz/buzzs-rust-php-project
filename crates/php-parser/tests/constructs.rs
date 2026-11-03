@@ -522,6 +522,16 @@ fn encoding_declare_warning() {
     assert_eq!(p.warnings[0].line, 2);
     let e = php_parser::parse(b"<?php declare(encoding=FOO);", &opts).unwrap_err();
     assert_eq!(e.message, "Encoding must be a literal");
+
+    // With zend.multibyte on the host honours the declaration, so no warning.
+    let opts = ParseOptions {
+        multibyte: true,
+        ..opts
+    };
+    let p = php_parser::parse(b"<?php declare(encoding='UTF-8');", &opts).unwrap();
+    assert!(p.warnings.is_empty());
+    let e = php_parser::parse(b"<?php declare(encoding=FOO);", &opts).unwrap_err();
+    assert_eq!(e.message, "Encoding must be a literal");
 }
 
 #[test]

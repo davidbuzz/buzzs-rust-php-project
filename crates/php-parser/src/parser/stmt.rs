@@ -799,11 +799,13 @@ impl Parser<'_> {
                         line,
                     ));
                 }
-                self.warnings.push(crate::ast::Diagnostic {
-                    level: crate::ast::DiagnosticLevel::CompileWarning,
-                    message: "declare(encoding=...) ignored because Zend multibyte feature is turned off by settings".to_owned(),
-                    line,
-                });
+                if !self.multibyte {
+                    self.warnings.push(crate::ast::Diagnostic {
+                        level: crate::ast::DiagnosticLevel::CompileWarning,
+                        message: "declare(encoding=...) ignored because Zend multibyte feature is turned off by settings".to_owned(),
+                        line,
+                    });
+                }
             }
         }
         let body = match self.peek() {
