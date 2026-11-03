@@ -1,11 +1,13 @@
 [package]
 name = "php-hash"
+description = "Bit-exact implementations of PHP's ext/hash algorithms, HMAC/HKDF/PBKDF2 and HashContext serialization"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+twox-hash = { version = "2.1", default-features = false, features = ["std", "xxhash3_64", "xxhash3_128"] }
 
 [lints]
 workspace = true
