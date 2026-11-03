@@ -37,8 +37,8 @@ const VERSIONS: &[&[u8]] = &[
 ];
 
 const OPS: &[&[u8]] = &[
-    b"<", b"lt", b"<=", b"le", b">", b"gt", b">=", b"ge", b"==", b"=", b"eq", b"!=", b"<>",
-    b"ne", b"", b"l", b"??", b"LT",
+    b"<", b"lt", b"<=", b"le", b">", b"gt", b">=", b"ge", b"==", b"=", b"eq", b"!=", b"<>", b"ne",
+    b"", b"l", b"??", b"LT",
 ];
 
 fn cases() -> Vec<Case> {
@@ -70,7 +70,11 @@ fn cases() -> Vec<Case> {
         );
     }
     for op in OPS {
-        for (a, b) in [(&b"1.0"[..], &b"1.0.1"[..]), (b"1.0", b"1.0"), (b"1.0pl1", b"1.0")] {
+        for (a, b) in [
+            (&b"1.0"[..], &b"1.0.1"[..]),
+            (b"1.0", b"1.0"),
+            (b"1.0pl1", b"1.0"),
+        ] {
             v.push(case(
                 &format!("version_compare({}, {}, {})", lit(a), lit(b), lit(op)),
                 |_| version_compare_op(a, b, op),
