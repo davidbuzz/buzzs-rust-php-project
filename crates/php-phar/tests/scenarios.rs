@@ -12,6 +12,13 @@
 //! work dir), `u:file/inner` (`phar://` URL in the work dir),
 //! `a:tok,tok` (array).
 
+#![allow(
+    clippy::many_single_char_names,
+    clippy::too_many_lines,
+    clippy::cast_possible_wrap,
+    clippy::format_push_string
+)]
+
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::rc::Rc;
@@ -440,22 +447,21 @@ impl Ctx {
             "mkdir" => V::Bool(php_streams::file::mkdir(&s(0), 0o777, false, None)),
             "rmdir" => V::Bool(php_streams::file::rmdir(&s(0), None)),
             "scandir" => {
-                match php_streams::open::scandir(
+                if let Some(list) = php_streams::open::scandir(
                     &s(0),
                     php_streams::open::ScandirSort::Ascending,
                     None,
                 ) {
-                    Some(list) => V::Arr(
+                    V::Arr(
                         list.into_iter()
                             .enumerate()
                             .map(|(i, n)| (V::Int(i as i64), V::Str(n)))
                             .collect(),
-                    ),
-                    None => {
-                        // ext/standard's scandir() warning
-                        php_streams::diag::warning("(errno 2): No such file or directory");
-                        V::Bool(false)
-                    }
+                    )
+                } else {
+                    // ext/standard's scandir() warning
+                    php_streams::diag::warning("(errno 2): No such file or directory");
+                    V::Bool(false)
                 }
             }
             other => Self::stat_fn(other, &s(0)),
