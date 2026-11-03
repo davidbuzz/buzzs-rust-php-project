@@ -66,6 +66,8 @@ A Rust re-implementation of PHP whose goal is to pass the php-src `.phpt` test s
 - `crates/php-xmlreader` — XMLReader pull parser over php-libxml (ref: ext/xmlreader)
 - `crates/php-pdo`      — PDO core: PDO/PDOStatement semantics, fetch modes, error modes, driver trait (ref: ext/pdo)
 - `crates/php-soap`     — SOAP core: WSDL/XSD parser, SOAP 1.1/1.2 encoding of values, packet build/parse, HTTP transport glue (ref: ext/soap)
+- `crates/php-gd`       — libgd binding with ext/gd semantics (system libgd 2.3.3; GD_BUNDLED is false) (ref: ext/gd)
+- `crates/php-ext-zendtest` — ext/zend_test: the engine test extension gating `--EXTENSIONS-- zend_test` tests (ref: ext/zend_test)
 
 ## Parallel work
 Several agents work concurrently, one crate each. Only edit files inside your own crate (plus your row(s) in FEATURE_GAP.md). Never edit workspace Cargo.toml; crates are pre-registered. Commit your own crate's files with `git add crates/<yours>` only.
