@@ -437,11 +437,68 @@ fn downcast_aggregate(vm: &mut Vm, args: &mut Vec<Value>) -> VmResult<()> {
     }
 }
 
+/// Stack budget when `zend.max_allowed_stack_size` is 0 (auto): what is
+/// left of the default 8 MiB main-thread stack after the VM's own use.
+const DEFAULT_STACK_BUDGET: usize = 6 * 1024 * 1024;
+
+thread_local! {
+    /// Approximate stack address of the outermost SPL method call and the
+    /// nesting depth (`zend_call_stack_overflowed` emulation: SPL methods
+    /// recurse natively, e.g. an `AppendIterator` appended to itself).
+    static STACK: RefCell<(usize, usize)> = const { RefCell::new((0, 0)) };
+}
+
+/// Leaves one SPL call level on drop.
+struct StackLevel;
+
+impl Drop for StackLevel {
+    fn drop(&mut self) {
+        STACK.with(|s| {
+            let mut s = s.borrow_mut();
+            s.1 = s.1.saturating_sub(1);
+        });
+    }
+}
+
+/// Enters one SPL call level; `Err` with PHP's "Maximum call stack size"
+/// error when the native stack used since the outermost SPL call exceeds
+/// `zend.max_allowed_stack_size - zend.reserved_stack_size`.
+fn enter_stack(vm: &mut Vm) -> VmResult<StackLevel> {
+    let marker = 0u8;
+    let here = std::ptr::from_ref(&marker) as usize;
+    let used = STACK.with(|s| {
+        let mut s = s.borrow_mut();
+        if s.1 == 0 {
+            s.0 = here;
+        }
+        s.1 += 1;
+        s.0.saturating_sub(here)
+    });
+    let level = StackLevel;
+    let max = vm.ini_long("zend.max_allowed_stack_size");
+    let reserved = usize::try_from(vm.ini_long("zend.reserved_stack_size")).unwrap_or(0);
+    let budget = usize::try_from(max)
+        .ok()
+        .filter(|&m| m > 0)
+        .unwrap_or(DEFAULT_STACK_BUDGET)
+        .saturating_sub(reserved);
+    if used > budget {
+        return Err(vm.throw(
+            "Error",
+            &format!(
+                "Maximum call stack size of {budget} bytes (zend.max_allowed_stack_size - zend.reserved_stack_size) reached. Infinite recursion?"
+            ),
+        ));
+    }
+    Ok(level)
+}
+
 /// The native handler of every SPL method.
 fn method_handler(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let Some(f) = a.func.clone() else {
         return Err(vm.throw("Error", "SPL method called without a function"));
     };
+    let _level = enter_stack(vm)?;
     let key = Rc::as_ptr(&f) as usize;
     let Some(t) = METHODS.with(|m| m.borrow().get(&key).copied()) else {
         return Err(vm.throw(
@@ -484,18 +541,11 @@ fn method_handler(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             return crate::iter::new_internal_iterator(vm, it);
         }
     }
-    // `get_method` checks apply to method calls made by user code, not to
-    // constructors or calls made by the engine (`count()`, `foreach`).
-    let check_state = is_direct_call(vm, t.def.name);
+    // The "object not initialized" checks of `$obj->m()` run in the
+    // `get_method` hook (see `hooks::get_method`).
     let r = {
         let mut host = VmHost::new(vm);
-        let mut r = Ok(());
-        if let Some(o) = &this {
-            if check_state && spl_state_of(o).is_some() {
-                r = php_spl::handlers::before_method_call(&mut host, o);
-            }
-        }
-        r.and_then(|()| php_spl::call_method(&mut host, t.class, t.def.name, this.as_ref(), &args))
+        php_spl::call_method(&mut host, t.class, t.def.name, this.as_ref(), &args)
     };
     crate::iter::finish(vm, r)
 }

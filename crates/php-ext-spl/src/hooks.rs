@@ -32,6 +32,7 @@ pub fn class_hooks() -> ClassHooks {
         unset_dimension: Some(unset_dimension),
         get_iterator: Some(get_iterator),
         unserialize: Some(unserialize),
+        get_method: Some(get_method),
         ..ClassHooks::default()
     }
 }
@@ -304,4 +305,24 @@ fn unserialize(vm: &mut Vm, o: &Obj, data: ZArray) -> VmResult<bool> {
         vec![Value::Array(ZArray::from_table(t))],
     )?;
     Ok(true)
+}
+
+/// `get_method` of the SPL classes that refuse calls on objects whose
+/// constructor did not run: `spl_filesystem_object_get_method_check`
+/// (`SplFileObject`, `SplTempFileObject`, `GlobIterator`: "The parent
+/// constructor was not called") and `spl_recursive_it_get_method`
+/// (`RecursiveIteratorIterator`: "The %s instance wasn't initialized
+/// properly"). Applies to user methods of subclasses too.
+fn get_method(vm: &mut Vm, o: &Obj, _name: &ZStr) -> VmResult<()> {
+    if spl_state_of(o).is_none() {
+        return Ok(());
+    }
+    let recursive = php_vm::object::class_of(o).instance_of_name(b"recursiveiteratoriterator");
+    with_host(vm, |host| {
+        h::before_method_call(host, o)?;
+        if recursive {
+            h::method_target(host, o)?;
+        }
+        Ok(())
+    })
 }
