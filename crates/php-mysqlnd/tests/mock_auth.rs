@@ -6,7 +6,8 @@
 #![allow(
     clippy::too_many_lines,
     clippy::cast_possible_truncation,
-    clippy::doc_markdown
+    clippy::doc_markdown,
+    clippy::many_single_char_names
 )]
 
 use std::io::{Read, Write};
@@ -571,4 +572,122 @@ fn tls_verified_with_right_ca() {
     drop(c);
     h.join().unwrap();
     let _ = std::fs::remove_file(ca);
+}
+
+#[test]
+fn diagnostics_are_delivered_before_the_next_packet() {
+    use std::sync::{Arc, Mutex};
+    let timeline = Arc::new(Mutex::new(Vec::<String>::new()));
+    let t_srv = timeline.clone();
+    let (port, h) = serve(move |m| {
+        m.greeting("sha256_password", false);
+        // sha256_password without TLS asks for the key before the handshake response
+        assert_eq!(m.read(), vec![0x01]);
+        m.write(&[]); // empty public-key response
+        let (_, _, auth, _, _) = m.handshake_response();
+        t_srv
+            .lock()
+            .unwrap()
+            .push("server: handshake response".into());
+        assert!(auth.is_empty());
+        m.ok();
+        m.finish();
+    });
+    let t_cli = timeline.clone();
+    let _ = php_mysqlnd::diag::set_sink(Some(Box::new(move |d: &php_mysqlnd::diag::Diag| {
+        t_cli.lock().unwrap().push(format!("warn: {}", d.message));
+    })));
+    let (c, r) = connect(port, b"secret", 0, |_| {});
+    let _ = php_mysqlnd::diag::set_sink(None);
+    r.unwrap();
+    drop(c);
+    h.join().unwrap();
+    let t = timeline.lock().unwrap().clone();
+    let pid = std::process::id();
+    assert_eq!(
+        t,
+        vec![
+            "warn: Premature end of data (mysqlnd_wireprotocol.c:2120)".to_string(),
+            "warn: SHA256_PK_REQUEST_RESPONSE packet shorter than expected".to_string(),
+            format!("warn: Error while receiving public key. PID={pid}"),
+            "server: handshake response".to_string(),
+        ]
+    );
+}
+
+#[test]
+fn malformed_auth_and_change_user_replies() {
+    // auth switch with an unterminated plugin name -> old-password error
+    let (port, h) = serve(|m| {
+        m.greeting("mysql_native_password", false);
+        let _ = m.handshake_response();
+        m.write(b"\xfemysql_native_password");
+    });
+    let _ = php_mysqlnd::diag::take();
+    let (_c, r) = connect(port, b"secret", 0, |_| {});
+    let e = r.unwrap_err();
+    assert_eq!(
+        (e.errno, e.message.as_slice()),
+        (CR_UNKNOWN_ERROR, MSG_OLD_PASSWD.as_bytes())
+    );
+    let d: Vec<String> = php_mysqlnd::diag::take()
+        .into_iter()
+        .map(|d| d.message)
+        .collect();
+    assert_eq!(d[1], "AUTH_RESPONSE packet shorter than expected");
+    h.join().unwrap();
+
+    // OK with an over-long message -> its own warning, unknown connect error
+    let (port, h) = serve(|m| {
+        m.greeting("mysql_native_password", false);
+        let _ = m.handshake_response();
+        m.write(&[0, 0, 0, 2, 0, 0, 0, 0xfc, 0xff]);
+    });
+    let (_c, r) = connect(port, b"", 0, |_| {});
+    let e = r.unwrap_err();
+    assert!(e
+        .message
+        .starts_with(b"Unknown error while trying to connect via tcp://127.0.0.1:"));
+    let d: Vec<String> = php_mysqlnd::diag::take()
+        .into_iter()
+        .map(|d| d.message)
+        .collect();
+    assert_eq!(
+        d,
+        vec!["OK packet message length is past the packet size".to_string()]
+    );
+    h.join().unwrap();
+
+    // affected rows as NULL length is accepted
+    let (port, h) = serve(|m| {
+        m.greeting("mysql_native_password", false);
+        let _ = m.handshake_response();
+        m.write(&[0, 0xfb, 0, 2, 0, 0, 0]);
+        m.finish();
+    });
+    let (_c, r) = connect(port, b"", 0, |_| {});
+    r.unwrap();
+    h.join().unwrap();
+
+    // a one-byte change-user reply fails
+    let (port, h) = serve(|m| {
+        m.greeting("mysql_native_password", false);
+        let _ = m.handshake_response();
+        m.ok();
+        m.seq = 0;
+        let _ = m.read();
+        m.write(&[0]);
+        m.finish();
+    });
+    let (c, r) = connect(port, b"", 0, |_| {});
+    r.unwrap();
+    let _ = php_mysqlnd::diag::take();
+    assert!(c.change_user(b"root2", b"", None, false).is_err());
+    let d: Vec<String> = php_mysqlnd::diag::take()
+        .into_iter()
+        .map(|d| d.message)
+        .collect();
+    assert_eq!(d[1], "CHANGE_USER packet shorter than expected");
+    drop(c);
+    h.join().unwrap();
 }

@@ -154,3 +154,39 @@ fn privileged_commands_match_oracle() {
         assert_lines_eq(&mine, &theirs);
     }
 }
+
+#[test]
+fn error_and_affected_rows_save_restore() {
+    let Some(c) = connect() else { return };
+    let _ = c.query(b"SELEC 1");
+    let saved = c.error_info();
+    let up = c.upsert_status();
+    c.query(b"SELECT 1").unwrap();
+    let _ = c.store_result().unwrap();
+    assert_eq!(c.errno(), 0);
+    c.restore_error(saved);
+    c.restore_upsert_status(up);
+    assert_eq!(c.errno(), 1064);
+    assert_eq!(c.sqlstate(), "42000");
+    c.set_error(2014, "HY000", b"x");
+    assert_eq!((c.errno(), c.error()), (2014, b"x".to_vec()));
+    c.set_error(0, "", b"");
+    assert_eq!(c.errno(), 0);
+    c.set_affected_rows(7);
+    assert_eq!(c.affected_rows(), 7);
+    // multi statements on, then off immediately
+    c.set_server_option(php_mysqlnd::consts::OPTION_MULTI_STATEMENTS_ON)
+        .unwrap();
+    c.query(b"SELECT 1; SELECT 2").unwrap();
+    let _ = c.store_result().unwrap();
+    // a result is still pending: switching off fails silently, error untouched
+    let _ = c.query(b"SELEC 2");
+    let before = c.errno();
+    assert!(!c.exit_multi_statements());
+    assert_eq!(c.errno(), before);
+    while c.next_result().unwrap() {
+        let _ = c.store_result().unwrap();
+    }
+    assert!(c.exit_multi_statements());
+    assert_eq!(c.query(b"SELECT 1; SELECT 2").unwrap_err().errno, 1064);
+}

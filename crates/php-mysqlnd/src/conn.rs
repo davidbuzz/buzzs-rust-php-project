@@ -20,11 +20,11 @@ use crate::consts::{
     CR_LOAD_DATA_LOCAL_INFILE_REJECTED, CR_MALFORMED_PACKET, CR_NOT_IMPLEMENTED,
     CR_SERVER_GONE_ERROR, CR_SERVER_LOST, CR_UNKNOWN_ERROR, DEFAULT_AUTH_PROTOCOL, MAX_PACKET_SIZE,
     MSG_OLD_PASSWD, MSG_OUT_OF_SYNC, MSG_SERVER_GONE, MYSQLND_CAPABILITIES,
-    NET_CMD_BUFFER_MIN_SIZE, SCRAMBLE_LENGTH, SERVER_MORE_RESULTS_EXISTS,
-    SERVER_QUERY_NO_GOOD_INDEX_USED, SERVER_QUERY_NO_INDEX_USED, SERVER_QUERY_WAS_SLOW,
-    SERVER_STATUS_NO_BACKSLASH_ESCAPES, TRANS_COR_AND_CHAIN, TRANS_COR_AND_NO_CHAIN,
-    TRANS_COR_NO_RELEASE, TRANS_COR_RELEASE, TRANS_START_READ_ONLY, TRANS_START_READ_WRITE,
-    TRANS_START_WITH_CONSISTENT_SNAPSHOT, UNKNOWN_SQLSTATE,
+    NET_CMD_BUFFER_MIN_SIZE, OPTION_MULTI_STATEMENTS_OFF, SCRAMBLE_LENGTH,
+    SERVER_MORE_RESULTS_EXISTS, SERVER_QUERY_NO_GOOD_INDEX_USED, SERVER_QUERY_NO_INDEX_USED,
+    SERVER_QUERY_WAS_SLOW, SERVER_STATUS_NO_BACKSLASH_ESCAPES, TRANS_COR_AND_CHAIN,
+    TRANS_COR_AND_NO_CHAIN, TRANS_COR_NO_RELEASE, TRANS_COR_RELEASE, TRANS_START_READ_ONLY,
+    TRANS_START_READ_WRITE, TRANS_START_WITH_CONSISTENT_SNAPSHOT, UNKNOWN_SQLSTATE,
 };
 use crate::diag;
 use crate::error::{Error, ErrorEntry, ErrorInfo, Result, ServerError};
@@ -1259,9 +1259,10 @@ impl ConnData {
                 Err(sw) => return (false, Some(sw)),
             }
         }
-        let resp = self
-            .read_packet(PacketKind::Ok)
-            .and_then(|b| protocol::parse_auth_response(&b, false));
+        let (code, resp) = match self.read_packet(PacketKind::Ok) {
+            Some(b) => protocol::parse_auth_response(&b, false),
+            None => (0, None),
+        };
         match resp {
             Some(Response::Ok(ok)) => {
                 self.last_message = if ok.message.is_empty() {
@@ -1280,7 +1281,13 @@ impl ConnData {
                 self.error_info.set(e.errno, UNKNOWN_SQLSTATE, &e.message);
                 (false, None)
             }
-            None => (false, None),
+            None => {
+                // a malformed 0xFE reply leaves response_code set without a plugin name
+                if code == 0xFE {
+                    self.error_info.set_client(CR_UNKNOWN_ERROR, MSG_OLD_PASSWD);
+                }
+                (false, None)
+            }
         }
     }
 
@@ -1353,26 +1360,23 @@ impl ConnData {
         let mut ret = false;
         let mut switch = None;
         let mut asked_323 = false;
+        let mut code = 0;
         if let Some(buf) = self.read_packet(PacketKind::ChgUser) {
-            match protocol::parse_change_user_response(&buf, self.server_capabilities) {
-                Some(None) => asked_323 = true,
-                Some(Some(Response::Ok(_))) => ret = true,
-                Some(Some(Response::Err(e))) => {
-                    e.apply(&mut pkt_err);
-                    ret = true;
-                }
-                Some(Some(Response::AuthSwitch(n, d))) => switch = Some((n, d)),
-                Some(Some(Response::OldAuthSwitch)) => {
-                    self.error_info.copy_from(&pkt_err);
-                    self.error_info.set_client(CR_UNKNOWN_ERROR, MSG_OLD_PASSWD);
-                    return (false, None);
-                }
-                None => {}
+            let r = protocol::parse_change_user_response(&buf, self.server_capabilities);
+            ret = r.ok;
+            code = r.code;
+            asked_323 = r.asked_323;
+            if let Some(e) = &r.error {
+                e.apply(&mut pkt_err);
             }
+            switch = r.switch;
         }
         self.error_info.copy_from(&pkt_err);
-        if switch.is_some() {
+        if code == 0xFE {
             ret = false;
+            if switch.is_none() {
+                self.error_info.set_client(CR_UNKNOWN_ERROR, MSG_OLD_PASSWD);
+            }
         }
         if self.error_info.errno != 0 {
             ret = false;
@@ -2451,6 +2455,53 @@ impl Connection {
     }
 
     // ------------------------------------------------------------ accessors
+
+    /// Records an error on the connection (`SET_CLIENT_ERROR`; `errno == 0`
+    /// clears it). Lets the binding mirror errors raised elsewhere, e.g. a
+    /// statement's close resetting the connection error.
+    pub fn set_error(&self, errno: u32, sqlstate: &str, message: &[u8]) {
+        self.data().error_info.set(errno, sqlstate, message);
+    }
+
+    /// Snapshot of the full error state (errno, SQLSTATE, message, list).
+    #[must_use]
+    pub fn error_info(&self) -> ErrorInfo {
+        self.data().error_info.clone()
+    }
+
+    /// Restores an error state saved with [`Connection::error_info`].
+    pub fn restore_error(&self, info: ErrorInfo) {
+        self.data().error_info = info;
+    }
+
+    /// Overwrites the affected-rows value (`u64::MAX` = -1).
+    pub fn set_affected_rows(&self, rows: u64) {
+        self.data().upsert.affected_rows = rows;
+    }
+
+    /// Snapshot of the upsert status (affected rows, insert id, warnings,
+    /// server status).
+    #[must_use]
+    pub fn upsert_status(&self) -> UpsertStatus {
+        self.data().upsert
+    }
+
+    /// Restores an upsert status saved with [`Connection::upsert_status`].
+    pub fn restore_upsert_status(&self, u: UpsertStatus) {
+        self.data().upsert = u;
+    }
+
+    /// `MYSQLI_DISABLE_MQ`: sends `COM_SET_OPTION(MULTI_STATEMENTS_OFF)` right
+    /// away. Failures (e.g. results still pending) are ignored and leave the
+    /// error state untouched. Returns whether the option was applied.
+    pub fn exit_multi_statements(&self) -> bool {
+        let saved = self.error_info();
+        let ok = self.set_server_option(OPTION_MULTI_STATEMENTS_OFF).is_ok();
+        if !ok {
+            self.restore_error(saved);
+        }
+        ok
+    }
 
     /// `mysqlnd_errno`
     #[must_use]

@@ -17,29 +17,54 @@ pub struct Diag {
     pub message: String,
 }
 
+/// A callback receiving diagnostics the moment mysqlnd raises them.
+pub type Sink = Box<dyn FnMut(&Diag)>;
+
 thread_local! {
     static QUEUE: RefCell<Vec<Diag>> = const { RefCell::new(Vec::new()) };
+    static SINK: RefCell<Option<Sink>> = const { RefCell::new(None) };
 }
 
-/// Queues a `php_error_docref(NULL, E_WARNING, ...)`.
+/// Installs (or removes) a callback that receives every diagnostic
+/// immediately, in the order mysqlnd raises it (so PHP warnings interleave
+/// with network traffic exactly like PHP). Without a sink, diagnostics are
+/// queued for [`take`]. Returns the previous sink.
+pub fn set_sink(sink: Option<Sink>) -> Option<Sink> {
+    SINK.with(|s| std::mem::replace(&mut *s.borrow_mut(), sink))
+}
+
+fn emit(d: Diag) {
+    // take the sink out while calling it, so a re-entrant warning is queued
+    let taken = SINK.with(|s| s.borrow_mut().take());
+    match taken {
+        Some(mut f) => {
+            f(&d);
+            SINK.with(|s| {
+                let mut slot = s.borrow_mut();
+                if slot.is_none() {
+                    *slot = Some(f);
+                }
+            });
+        }
+        None => QUEUE.with(|q| q.borrow_mut().push(d)),
+    }
+}
+
+/// Raises a `php_error_docref(NULL, E_WARNING, ...)`.
 pub fn warn(message: impl Into<String>) {
-    QUEUE.with(|q| {
-        q.borrow_mut().push(Diag {
-            docref: true,
-            fatal: false,
-            message: message.into(),
-        });
+    emit(Diag {
+        docref: true,
+        fatal: false,
+        message: message.into(),
     });
 }
 
-/// Queues a `php_error(E_WARNING, ...)` (no function prefix).
+/// Raises a `php_error(E_WARNING, ...)` (no function prefix).
 pub fn warn_plain(message: impl Into<String>) {
-    QUEUE.with(|q| {
-        q.borrow_mut().push(Diag {
-            docref: false,
-            fatal: false,
-            message: message.into(),
-        });
+    emit(Diag {
+        docref: false,
+        fatal: false,
+        message: message.into(),
     });
 }
 
@@ -68,5 +93,21 @@ mod tests {
         assert_eq!(d.len(), 2);
         assert!(d[0].docref && !d[1].docref);
         assert!(take().is_empty());
+    }
+
+    #[test]
+    fn sink_receives_immediately() {
+        use std::rc::Rc;
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let s2 = seen.clone();
+        let _ = set_sink(Some(Box::new(move |d: &Diag| {
+            s2.borrow_mut().push(d.message.clone());
+        })));
+        warn("x");
+        assert_eq!(*seen.borrow(), vec!["x".to_string()]);
+        assert!(take().is_empty());
+        let _ = set_sink(None);
+        warn("y");
+        assert_eq!(take().len(), 1);
     }
 }

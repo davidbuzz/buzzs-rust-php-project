@@ -276,38 +276,66 @@ pub enum Response {
     OldAuthSwitch,
 }
 
+/// Why an OK body failed to decode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OkFail {
+    /// `BAIL_PREMATURE_END` (the caller adds its "... shorter than expected").
+    Premature,
+    /// The auth response's message length points past the packet (its own warning).
+    MessagePastEnd,
+}
+
+/// Reads a length-encoded 64-bit value (`php_mysqlnd_net_field_length_ll`):
+/// NULL (0xFB) yields `MYSQLND_NULL_LENGTH`.
+fn lenenc_ll(r: &mut Reader<'_>) -> Option<u64> {
+    match r.field_len_ll() {
+        FieldLen::Len(v) => Some(v),
+        FieldLen::Null => Some(u64::MAX),
+        FieldLen::Invalid => None,
+    }
+}
+
 #[allow(clippy::many_single_char_names)]
 fn parse_ok_body(
     r: &mut Reader<'_>,
     session_track: bool,
     lines: (u32, u32, u32),
-) -> Option<OkPacket> {
+    auth: bool,
+) -> Result<OkPacket, OkFail> {
     let mut ok = OkPacket::default();
-    let FieldLen::Len(a) = r.field_len_ll() else {
+    let Some(a) = lenenc_ll(r) else {
         premature(lines.0);
-        return None;
+        return Err(OkFail::Premature);
     };
     ok.affected_rows = a;
-    let FieldLen::Len(i) = r.field_len_ll() else {
+    let Some(i) = lenenc_ll(r) else {
         premature(lines.0);
-        return None;
+        return Err(OkFail::Premature);
     };
     ok.last_insert_id = i;
     if r.remaining() < 4 {
         premature(lines.1);
-        return None;
+        return Err(OkFail::Premature);
     }
     ok.server_status = r.u16().unwrap_or(0);
     ok.warning_count = r.u16().unwrap_or(0);
     if r.remaining() > 0 {
         match r.field_len() {
-            FieldLen::Len(0) | FieldLen::Null => {}
-            FieldLen::Invalid => {
+            FieldLen::Len(0) => {}
+            FieldLen::Invalid if !auth => {
                 premature(lines.2);
-                return None;
+                return Err(OkFail::Premature);
             }
-            FieldLen::Len(n) => {
-                let n = usize::try_from(n).unwrap_or(usize::MAX).min(r.remaining());
+            other => {
+                let n = match other {
+                    FieldLen::Len(n) => usize::try_from(n).unwrap_or(usize::MAX),
+                    _ => usize::MAX,
+                };
+                if auth && n > r.remaining() {
+                    diag::warn("OK packet message length is past the packet size");
+                    return Err(OkFail::MessagePastEnd);
+                }
+                let n = n.min(r.remaining());
                 ok.message = r.take(n).unwrap_or_default().to_vec();
             }
         }
@@ -328,7 +356,7 @@ fn parse_ok_body(
             }
         }
     }
-    Some(ok)
+    Ok(ok)
 }
 
 /// `php_mysqlnd_ok_read`
@@ -353,17 +381,25 @@ fn parse_ok_inner(buf: &[u8], session_track: bool) -> Option<Response> {
         return Some(Response::Err(ServerError::parse(&buf[1..])));
     }
     let mut r = Reader::new(&buf[1..]);
-    parse_ok_body(&mut r, session_track, (929, 939, 950)).map(Response::Ok)
+    parse_ok_body(&mut r, session_track, (929, 939, 950), false)
+        .ok()
+        .map(Response::Ok)
 }
 
-/// `php_mysqlnd_auth_response_read` (also used for the change-user and
-/// cached-sha2 responses' 0x00/0xFF/0xFE branches).
-pub fn parse_auth_response(buf: &[u8], session_track: bool) -> Option<Response> {
+/// `php_mysqlnd_auth_response_read`. Returns the response code byte (set
+/// even when decoding fails, as mysqlnd's `packet->response_code` is) and
+/// the decoded response (`None` = malformed, warnings raised).
+pub fn parse_auth_response(buf: &[u8], session_track: bool) -> (u8, Option<Response>) {
+    let code = buf.first().copied().unwrap_or(0);
     let r = parse_auth_response_inner(buf, session_track);
-    if r.is_none() {
-        diag::warn("AUTH_RESPONSE packet shorter than expected");
+    match r {
+        Ok(r) => (code, Some(r)),
+        Err(OkFail::Premature) => {
+            diag::warn("AUTH_RESPONSE packet shorter than expected");
+            (code, None)
+        }
+        Err(OkFail::MessagePastEnd) => (code, None),
     }
-    r
 }
 
 fn parse_auth_switch(rest: &[u8], line: u32) -> Option<Response> {
@@ -380,57 +416,80 @@ fn parse_auth_switch(rest: &[u8], line: u32) -> Option<Response> {
     ))
 }
 
-fn parse_auth_response_inner(buf: &[u8], session_track: bool) -> Option<Response> {
+fn parse_auth_response_inner(buf: &[u8], session_track: bool) -> Result<Response, OkFail> {
     if buf.is_empty() {
         premature(736);
-        return None;
+        return Err(OkFail::Premature);
     }
     if buf.len() < 2 {
         premature(741);
-        return None;
+        return Err(OkFail::Premature);
     }
     match buf[0] {
-        ERROR_MARKER => Some(Response::Err(ServerError::parse(&buf[1..]))),
-        0xFE => parse_auth_switch(&buf[1..], 756),
+        ERROR_MARKER => Ok(Response::Err(ServerError::parse(&buf[1..]))),
+        0xFE => parse_auth_switch(&buf[1..], 756).ok_or(OkFail::Premature),
         _ => {
             let mut r = Reader::new(&buf[1..]);
-            let ok = parse_ok_body(&mut r, session_track, (777, 787, 787))?;
-            if !ok.message.is_empty() && !buf.is_empty() {
-                // checked length already clamps; mysqlnd warns when past the end
-            }
-            Some(Response::Ok(ok))
+            parse_ok_body(&mut r, session_track, (777, 787, 787), true).map(Response::Ok)
         }
     }
 }
 
-/// `php_mysqlnd_chg_user_read`: returns `None` on malformed input, and
-/// `Some(None)` when the server asked for pre-4.1 (3.23) authentication.
-pub fn parse_change_user_response(buf: &[u8], server_caps: u32) -> Option<Option<Response>> {
-    if buf.is_empty() {
-        premature(2004);
+/// Decoded `COM_CHANGE_USER` reply (`php_mysqlnd_chg_user_read`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChgUserResponse {
+    /// `packet->response_code` (0 when the packet was empty).
+    pub code: u8,
+    /// Whether the read succeeded (mysqlnd's `PACKET_READ` result).
+    pub ok: bool,
+    /// The server asked for pre-4.1 (3.23) authentication.
+    pub asked_323: bool,
+    /// Error from an error packet.
+    pub error: Option<ServerError>,
+    /// Auth switch request (plugin, data).
+    pub switch: Option<(String, Vec<u8>)>,
+}
+
+/// `php_mysqlnd_chg_user_read`
+pub fn parse_change_user_response(buf: &[u8], server_caps: u32) -> ChgUserResponse {
+    let mut out = ChgUserResponse {
+        code: 0,
+        ok: false,
+        asked_323: false,
+        error: None,
+        switch: None,
+    };
+    let fail = |out: ChgUserResponse, line: u32| {
+        premature(line);
         diag::warn("CHANGE_USER packet shorter than expected");
-        return None;
+        out
+    };
+    if buf.is_empty() {
+        return fail(out, 2004);
     }
+    out.code = buf[0];
     if buf.len() == 1 && buf[0] == EODATA_MARKER && server_caps & CLIENT_SECURE_CONNECTION != 0 {
-        return Some(None);
+        out.asked_323 = true;
+        return out;
     }
-    match buf[0] {
-        ERROR_MARKER => Some(Some(Response::Err(ServerError::parse(&buf[1..])))),
-        0xFE if buf.len() > 1 => {
-            if let Some(r) = parse_auth_switch(&buf[1..], 2034) {
-                Some(Some(r))
-            } else {
+    if buf[0] == ERROR_MARKER {
+        out.error = Some(ServerError::parse(&buf[1..]));
+    }
+    if buf.len() < 2 {
+        return fail(out, 2029);
+    }
+    if buf[0] == 0xFE {
+        match parse_auth_switch(&buf[1..], 2034) {
+            Some(Response::AuthSwitch(n, d)) => out.switch = Some((n, d)),
+            Some(_) => {}
+            None => {
                 diag::warn("CHANGE_USER packet shorter than expected");
-                None
+                return out;
             }
         }
-        0xFE => Some(Some(Response::OldAuthSwitch)),
-        _ => {
-            let mut r = Reader::new(&buf[1..]);
-            let ok = parse_ok_body(&mut r, false, (2029, 2029, 2029)).unwrap_or_default();
-            Some(Some(Response::Ok(ok)))
-        }
     }
+    out.ok = true;
+    out
 }
 
 /// The reply to a `caching_sha2_password` exchange (`php_mysqlnd_cached_sha2_result_read`).
@@ -544,10 +603,10 @@ pub fn parse_rset_header(buf: &[u8], session_track: bool) -> Option<RsetHeader> 
         FieldLen::Null => Some(RsetHeader::LocalInfile(buf[1..].to_vec())),
         FieldLen::Len(0) => {
             let mut ok = OkPacket::default();
-            let FieldLen::Len(a) = r.field_len_ll() else {
+            let Some(a) = lenenc_ll(&mut r) else {
                 return fail(Some(1182));
             };
-            let FieldLen::Len(i) = r.field_len_ll() else {
+            let Some(i) = lenenc_ll(&mut r) else {
                 return fail(Some(1188));
             };
             ok.affected_rows = a;
@@ -998,13 +1057,18 @@ mod tests {
 
     #[test]
     fn change_user_old_auth() {
+        assert!(parse_change_user_response(&[0xfe], CLIENT_SECURE_CONNECTION).asked_323);
+        let r =
+            parse_change_user_response(b"\xfecaching_sha2_password\0xyz", CLIENT_SECURE_CONNECTION);
         assert_eq!(
-            parse_change_user_response(&[0xfe], CLIENT_SECURE_CONNECTION),
-            Some(None)
+            r.switch,
+            Some(("caching_sha2_password".to_string(), b"xyz".to_vec()))
         );
-        assert!(matches!(
-            parse_change_user_response(b"\xfecaching_sha2_password\0xyz", CLIENT_SECURE_CONNECTION),
-            Some(Some(Response::AuthSwitch(_, _)))
-        ));
+        let _ = diag::take();
+        let r = parse_change_user_response(&[0], CLIENT_SECURE_CONNECTION);
+        assert!(!r.ok);
+        assert_eq!(diag::take().len(), 2);
+        let r = parse_change_user_response(b"\xfemysql_native", CLIENT_SECURE_CONNECTION);
+        assert!(!r.ok && r.code == 0xfe && r.switch.is_none());
     }
 }

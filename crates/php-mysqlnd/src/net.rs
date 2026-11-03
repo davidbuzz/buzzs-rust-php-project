@@ -176,6 +176,7 @@ pub struct Net {
     unc: Vec<u8>,
     unc_pos: usize,
     prefetch: Vec<u8>,
+    pre_pos: usize,
     /// TLS is active on the stream.
     pub ssl: bool,
     /// The stream is a Unix socket.
@@ -204,6 +205,7 @@ impl Net {
         }
         self.ssl = false;
         self.prefetch.clear();
+        self.pre_pos = 0;
         self.unc.clear();
         self.unc_pos = 0;
     }
@@ -377,7 +379,7 @@ impl Net {
     /// Whether data (or EOF) can be read without blocking (`select()`
     /// readiness used by `mysqlnd_poll`).
     pub fn readable(&mut self) -> bool {
-        if self.unc_pos < self.unc.len() || !self.prefetch.is_empty() {
+        if self.unc_pos < self.unc.len() || self.pre_pos < self.prefetch.len() {
             return true;
         }
         let (plain, pending) = match self.stream.as_ref() {
@@ -404,6 +406,8 @@ impl Net {
                 let r = sref.read(&mut b);
                 let _ = s.set_nonblocking(false);
                 if let Ok(1) = r {
+                    self.prefetch.drain(..self.pre_pos);
+                    self.pre_pos = 0;
                     self.prefetch.push(b[0]);
                 }
                 r
@@ -416,23 +420,43 @@ impl Net {
     }
 
     /// `mysqlnd_vio::network_read`: reads exactly `buf.len()` bytes.
+    ///
+    /// Like PHP's stream layer, data is read ahead in chunks of
+    /// `net_read_buffer_size` bytes into a client-side buffer (so e.g. a
+    /// forked child sees what the parent had already buffered).
     pub fn network_read(&mut self, buf: &mut [u8], stats: &mut Stats) -> bool {
-        let mut done = self.prefetch.len().min(buf.len());
-        buf[..done].copy_from_slice(&self.prefetch[..done]);
-        self.prefetch.drain(..done);
-        let Some(s) = self.stream.as_mut() else {
-            return false;
-        };
+        let mut done = 0;
         let mut ok = true;
         while done < buf.len() {
-            match s.read(&mut buf[done..]) {
+            if self.pre_pos < self.prefetch.len() {
+                let n = (self.prefetch.len() - self.pre_pos).min(buf.len() - done);
+                buf[done..done + n].copy_from_slice(&self.prefetch[self.pre_pos..self.pre_pos + n]);
+                self.pre_pos += n;
+                done += n;
+                continue;
+            }
+            let Some(s) = self.stream.as_mut() else {
+                ok = false;
+                break;
+            };
+            let chunk = if self.opts.net_read_buffer_size == 0 {
+                8192
+            } else {
+                self.opts.net_read_buffer_size
+            };
+            let want = chunk.max(buf.len() - done);
+            self.prefetch.resize(want, 0);
+            self.pre_pos = 0;
+            match s.read(&mut self.prefetch) {
                 Ok(0) => {
+                    self.prefetch.clear();
                     ok = false;
                     break;
                 }
-                Ok(n) => done += n,
-                Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
+                Ok(n) => self.prefetch.truncate(n),
+                Err(e) if e.kind() == io::ErrorKind::Interrupted => self.prefetch.clear(),
                 Err(_) => {
+                    self.prefetch.clear();
                     ok = false;
                     break;
                 }
