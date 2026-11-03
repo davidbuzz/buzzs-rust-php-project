@@ -47,8 +47,16 @@ pub enum Delegate {
     Iter(Obj, u64),
 }
 
+/// A suspended `yield from`.
+#[derive(Debug, Clone, Copy)]
+pub struct YieldFrom {
+    /// The temporary receiving the delegate's return value.
+    pub dst: Option<u32>,
+}
+
 /// Internal state of a `Generator` object.
 #[derive(Debug)]
+#[allow(clippy::struct_excessive_bools)] // mirrors php-src's flag bits
 pub struct GenData {
     /// The suspended frame (`None` while running or once finished).
     pub frame: Option<Box<Frame>>,
@@ -66,9 +74,8 @@ pub struct GenData {
     pub ret: Option<Value>,
     /// Delegated values of `yield from` over an array/`Traversable`.
     pub values: Option<Delegate>,
-    /// Whether the frame is suspended at a `yield from`, and the temporary
-    /// receiving its result.
-    pub yield_from: Option<Option<u32>>,
+    /// Set while the frame is suspended at a `yield from`.
+    pub yield_from: Option<YieldFrom>,
     /// The generator delegated to (`node.parent`).
     pub parent: Option<Obj>,
     /// Generators delegating to this one (`node.children`).
@@ -121,12 +128,22 @@ fn parent_of(g: &Obj) -> Option<Obj> {
 }
 
 fn children_of(g: &Obj) -> Vec<Obj> {
-    with(g, |d| d.children.iter().filter_map(Weak::upgrade).map(Obj::from_rc).collect()).unwrap_or_default()
+    with(g, |d| {
+        d.children
+            .iter()
+            .filter_map(Weak::upgrade)
+            .map(Obj::from_rc)
+            .collect()
+    })
+    .unwrap_or_default()
 }
 
 fn remove_child(parent: &Obj, child: &Obj) {
     let target = Rc::downgrade(child.rc());
-    with(parent, |d| d.children.retain(|w| !Weak::ptr_eq(w, &target) && w.strong_count() > 0));
+    with(parent, |d| {
+        d.children
+            .retain(|w| !Weak::ptr_eq(w, &target) && w.strong_count() > 0)
+    });
 }
 
 /// Removes `g` from its parent's children and clears its parent link.
@@ -135,6 +152,15 @@ fn detach(g: &Obj) {
         remove_child(&p, g);
         bump_epoch();
     }
+}
+
+/// The root of `g`'s delegation tree, without updating anything.
+fn root_of(g: &Obj) -> Obj {
+    let mut root = g.clone();
+    while let Some(p) = parent_of(&root) {
+        root = p;
+    }
+    root
 }
 
 /// Closes a generator whose frame is gone (`zend_generator_close`).
@@ -184,6 +210,7 @@ pub(crate) fn strip_graceful_previous(e: &Obj) {
 
 impl Vm {
     /// `ZEND_GENERATOR_CREATE`.
+    #[allow(clippy::unnecessary_wraps)] // uniform opcode handler signature
     pub(crate) fn op_generator_create(&mut self, base: usize) -> VmResult<Flow> {
         let fidx = self.frames.len() - 1;
         let mut frame = self.frames.pop().expect("generator frame");
@@ -257,12 +284,21 @@ impl Vm {
     }
 
     /// `ZEND_YIELD`.
-    pub(crate) fn op_yield(&mut self, key: Option<Value>, val: Option<Value>, dst: Option<u32>, base: usize) -> VmResult<Flow> {
+    pub(crate) fn op_yield(
+        &mut self,
+        key: Option<Value>,
+        val: Option<Value>,
+        dst: Option<u32>,
+        base: usize,
+    ) -> VmResult<Flow> {
         let Some(g) = self.running_generator() else {
             return Ok(Flow::Next);
         };
         if with(&g, |d| d.forced_close).unwrap_or(false) {
-            return Err(self.make_throw("Error", "Cannot yield from finally in a force-closed generator"));
+            return Err(self.make_throw(
+                "Error",
+                "Cannot yield from finally in a force-closed generator",
+            ));
         }
         let by_ref = self
             .frame()
@@ -276,19 +312,16 @@ impl Vm {
             self.set_tmp(d, Value::Null);
         }
         Ok(self.gen_suspend_frame(base, move |d| {
-            match key {
-                Some(k) => {
-                    if let Value::Int(i) = k {
-                        if i > d.largest_key {
-                            d.largest_key = i;
-                        }
+            if let Some(k) = key {
+                if let Value::Int(i) = k {
+                    if i > d.largest_key {
+                        d.largest_key = i;
                     }
-                    d.key = Some(k);
                 }
-                None => {
-                    d.largest_key += 1;
-                    d.key = Some(Value::Int(d.largest_key));
-                }
+                d.key = Some(k);
+            } else {
+                d.largest_key += 1;
+                d.key = Some(Value::Int(d.largest_key));
             }
             d.value = Some(v);
             d.send_target = dst;
@@ -297,12 +330,21 @@ impl Vm {
     }
 
     /// `ZEND_YIELD_FROM`.
-    pub(crate) fn op_yield_from(&mut self, src: Value, dst: Option<u32>, base: usize) -> VmResult<Flow> {
+    #[allow(clippy::needless_pass_by_value)] // called with an owned operand
+    pub(crate) fn op_yield_from(
+        &mut self,
+        src: Value,
+        dst: Option<u32>,
+        base: usize,
+    ) -> VmResult<Flow> {
         let Some(g) = self.running_generator() else {
             return Ok(Flow::Next);
         };
         if with(&g, |d| d.forced_close).unwrap_or(false) {
-            return Err(self.make_throw("Error", "Cannot use \"yield from\" in a force-closed generator"));
+            return Err(self.make_throw(
+                "Error",
+                "Cannot use \"yield from\" in a force-closed generator",
+            ));
         }
         match src.deref() {
             Value::Array(a) => {
@@ -322,7 +364,10 @@ impl Vm {
                 }
                 let cur = self.gen_get_current(&o)?;
                 if Obj::ptr_eq(&cur, &g) {
-                    return Err(self.make_throw("Error", "Impossible to yield from the Generator being currently run"));
+                    return Err(self.make_throw(
+                        "Error",
+                        "Impossible to yield from the Generator being currently run",
+                    ));
                 }
                 // zend_generator_yield_from
                 let weak = Rc::downgrade(g.rc());
@@ -338,13 +383,16 @@ impl Vm {
                 with(&g, |d| d.values = Some(Delegate::Iter(it, 0)));
             }
             _ => {
-                return Err(self.make_throw("Error", "Can use \"yield from\" only with arrays and Traversables"));
+                return Err(self.make_throw(
+                    "Error",
+                    "Can use \"yield from\" only with arrays and Traversables",
+                ));
             }
         }
         self.set_dst(dst, Value::Null);
         Ok(self.gen_suspend_frame(base, move |d| {
             d.send_target = None;
-            d.yield_from = Some(dst);
+            d.yield_from = Some(YieldFrom { dst });
         }))
     }
 
@@ -374,7 +422,12 @@ impl Vm {
 
     /// `zend_generator_update_current`: the root finished; its child on
     /// the path to `g` takes over and receives the return value.
-    fn gen_update_current(&mut self, g: &Obj, old_root: &Obj, exception_pending: bool) -> VmResult<Obj> {
+    fn gen_update_current(
+        &mut self,
+        g: &Obj,
+        old_root: &Obj,
+        exception_pending: bool,
+    ) -> VmResult<Obj> {
         // Walk down single-child chains from the old root, else up from g.
         let mut cur = old_root.clone();
         let mut found = None;
@@ -389,46 +442,40 @@ impl Vm {
             }
             cur = ch[0].clone();
         }
-        let new_root = match found {
-            Some(n) => n,
-            None => {
-                let mut n = g.clone();
-                while let Some(p) = parent_of(&n) {
-                    if finished(&p) {
-                        break;
-                    }
-                    n = p;
+        let new_root = found.unwrap_or_else(|| {
+            let mut n = g.clone();
+            while let Some(p) = parent_of(&n) {
+                if finished(&p) {
+                    break;
                 }
-                n
+                n = p;
             }
-        };
+            n
+        });
         let Some(new_parent) = parent_of(&new_root) else {
             return Ok(new_root);
         };
         let at_yield_from = with(&new_root, |d| d.yield_from).flatten();
         let mut closed_exc = None;
         if !exception_pending {
-            if let Some(dst) = at_yield_from {
+            if let Some(YieldFrom { dst }) = at_yield_from {
                 let ret = with(&new_parent, |d| d.ret.clone()).flatten();
-                match ret {
-                    None => {
-                        closed_exc = Some(self.gen_exception_in(
-                            &new_root,
-                            "ClosedGeneratorException",
-                            "Generator yielded from aborted, no return value available",
-                        )?);
-                    }
-                    Some(r) => {
-                        let pv = with(&new_parent, |d| d.value.clone()).flatten();
-                        with(&new_root, |d| {
-                            if pv.is_some() {
-                                d.value = pv;
-                            }
-                            if let (Some(t), Some(f)) = (dst, d.frame.as_mut()) {
-                                f.tmps[t as usize] = r;
-                            }
-                        });
-                    }
+                if let Some(r) = ret {
+                    let pv = with(&new_parent, |d| d.value.clone()).flatten();
+                    with(&new_root, |d| {
+                        if pv.is_some() {
+                            d.value = pv;
+                        }
+                        if let (Some(t), Some(f)) = (dst, d.frame.as_mut()) {
+                            f.tmps[t as usize] = r;
+                        }
+                    });
+                } else {
+                    closed_exc = Some(self.gen_exception_in(
+                        &new_root,
+                        "ClosedGeneratorException",
+                        "Generator yielded from aborted, no return value available",
+                    )?);
                 }
             }
         }
@@ -469,14 +516,14 @@ impl Vm {
             return Ok(false);
         };
         match del {
-            Delegate::Array(a, pos) => {
-                let p = a.valid_pos(pos);
-                if let Some((k, v)) = a.at(p) {
-                    let (k, v) = (k.to_value(), v.deref());
+            Delegate::Array(arr, pos) => {
+                let at = arr.valid_pos(pos);
+                if let Some((key, val)) = arr.at(at) {
+                    let (key, val) = (key.to_value(), val.deref());
                     with(g, |d| {
-                        d.value = Some(v);
-                        d.key = Some(k);
-                        d.values = Some(Delegate::Array(a.clone(), p + 1));
+                        d.value = Some(val);
+                        d.key = Some(key);
+                        d.values = Some(Delegate::Array(arr.clone(), at + 1));
                     });
                     return Ok(true);
                 }
@@ -546,13 +593,15 @@ impl Vm {
             }
             let do_init = with(&delegator, |d| std::mem::take(&mut d.do_init)).unwrap_or(false);
             if do_init {
-                let primed = with(&gen, |d| d.value.is_some() && d.pending_exc.is_none()).unwrap_or(false);
+                let primed =
+                    with(&gen, |d| d.value.is_some() && d.pending_exc.is_none()).unwrap_or(false);
                 if primed {
                     return Ok(());
                 }
             }
             with(orig, |d| d.at_first_yield = false);
-            let has_values = with(&gen, |d| d.values.is_some() && d.pending_exc.is_none()).unwrap_or(false);
+            let has_values =
+                with(&gen, |d| d.values.is_some() && d.pending_exc.is_none()).unwrap_or(false);
             if has_values {
                 with(&gen, |d| d.state = GenState::Running);
                 let r = self.gen_next_delegated(&gen);
@@ -581,7 +630,7 @@ impl Vm {
                     // Rethrow into the generator that delegated to it.
                     let next = match parent_of(orig) {
                         Some(_) => {
-                            let root = self.gen_root_of(orig);
+                            let root = root_of(orig);
                             if finished(&root) {
                                 self.gen_update_current(orig, &root, true)?
                             } else {
@@ -608,7 +657,10 @@ impl Vm {
                 gen = self.gen_get_current(orig)?;
                 continue;
             }
-            if !Obj::ptr_eq(&gen, orig) && finished(&gen) && with(&gen, |d| d.ret.is_some()).unwrap_or(false) {
+            if !Obj::ptr_eq(&gen, orig)
+                && finished(&gen)
+                && with(&gen, |d| d.ret.is_some()).unwrap_or(false)
+            {
                 delegator = orig.clone();
                 gen = self.gen_get_current(orig)?;
                 if finished(&gen) {
@@ -669,18 +721,12 @@ impl Vm {
         }
     }
 
-    /// The root of `g`'s delegation tree without updating anything.
-    fn gen_root_of(&self, g: &Obj) -> Obj {
-        let mut root = g.clone();
-        while let Some(p) = parent_of(&root) {
-            root = p;
-        }
-        root
-    }
-
     /// `zend_generator_ensure_initialized`.
     fn gen_ensure_initialized(&mut self, g: &Obj) -> VmResult<()> {
-        let need = with(g, |d| d.value.is_none() && d.state != GenState::Finished && d.parent.is_none()).unwrap_or(false);
+        let need = with(g, |d| {
+            d.value.is_none() && d.state != GenState::Finished && d.parent.is_none()
+        })
+        .unwrap_or(false);
         if need {
             self.gen_resume(g)?;
             with(g, |d| d.at_first_yield = true);
@@ -713,7 +759,10 @@ impl Vm {
         if finished(g) {
             return Ok(Value::Null);
         }
-        Ok(with(&root, |d| d.value.clone()).flatten().unwrap_or_default().deref())
+        Ok(with(&root, |d| d.value.clone())
+            .flatten()
+            .unwrap_or_default()
+            .deref())
     }
 
     /// Whether a generator has a current element (starting it if needed).
@@ -743,12 +792,16 @@ impl Vm {
     pub(crate) fn gen_rewind(&mut self, g: &Obj) -> VmResult<()> {
         self.gen_ensure_initialized(g)?;
         if !with(g, |d| d.at_first_yield).unwrap_or(false) {
-            return Err(self.make_throw("Exception", "Cannot rewind a generator that was already run"));
+            return Err(self.make_throw(
+                "Exception",
+                "Cannot rewind a generator that was already run",
+            ));
         }
         Ok(())
     }
 
     /// Whether a generator is finished.
+    #[allow(clippy::unused_self)] // method form used by the foreach code
     pub(crate) fn gen_finished(&self, g: &Obj) -> bool {
         finished(g)
     }
@@ -772,7 +825,10 @@ impl Vm {
         if finished(g) {
             return Ok(Value::Null);
         }
-        Ok(with(&root, |d| d.value.clone()).flatten().unwrap_or_default().deref())
+        Ok(with(&root, |d| d.value.clone())
+            .flatten()
+            .unwrap_or_default()
+            .deref())
     }
 
     /// `zend_generator_dtor_storage`: runs pending `finally` blocks of a
@@ -800,9 +856,10 @@ impl Vm {
         }
         let in_finally_scope = with(g, |d| {
             d.frame.as_ref().is_some_and(|f| {
-                let ip = f.ip.saturating_sub(1) as u32;
+                let ip = u32::try_from(f.ip.saturating_sub(1)).unwrap_or(u32::MAX);
                 f.code.try_table.iter().any(|e| {
-                    e.finally.is_some_and(|(_, fs, _)| ip >= e.try_start && ip < fs)
+                    e.finally
+                        .is_some_and(|(_, fs, _)| ip >= e.try_start && ip < fs)
                 })
             })
         })
@@ -820,7 +877,12 @@ impl Vm {
         let released = with(g, |d| {
             d.forced_close = true;
             d.pending_exc = Some(ge);
-            d.frame.as_mut().map(|f| (std::mem::take(&mut f.calls), f.iters.iter_mut().map(Option::take).collect::<Vec<_>>()))
+            d.frame.as_mut().map(|f| {
+                (
+                    std::mem::take(&mut f.calls),
+                    f.iters.iter_mut().map(Option::take).collect::<Vec<_>>(),
+                )
+            })
         })
         .flatten();
         drop(released);
@@ -895,6 +957,7 @@ fn g_get_return(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     }
 }
 
+#[allow(clippy::unnecessary_wraps)] // builtin signature
 fn g_debug_info(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let g = gen_obj(a);
     let name = with(&g, |d| d.func_name.clone()).unwrap_or_else(|| ZStr::from(""));
@@ -911,7 +974,12 @@ fn g_destruct(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let own = vm.frames.pop();
     let hidden = vm.frames.is_empty();
     if hidden {
-        vm.frames.push(Frame::with_vars(vm.empty_code.clone(), FrameKind::Builtin, vm.empty_vars.clone(), None));
+        vm.frames.push(Frame::with_vars(
+            vm.empty_code.clone(),
+            FrameKind::Builtin,
+            vm.empty_vars.clone(),
+            None,
+        ));
     }
     let r = vm.gen_destroy(&g);
     if hidden {
@@ -926,7 +994,13 @@ fn g_destruct(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 /// Registers the `Generator` and `ClosedGeneratorException` classes.
 pub(crate) fn register(vm: &mut Vm) {
     ClassBuilder::new("Generator")
-        .flags(cflags::FINAL | cflags::NO_NEW | cflags::NOT_SERIALIZABLE | cflags::NO_CLONE | cflags::NO_DYNAMIC_PROPERTIES)
+        .flags(
+            cflags::FINAL
+                | cflags::NO_NEW
+                | cflags::NOT_SERIALIZABLE
+                | cflags::NO_CLONE
+                | cflags::NO_DYNAMIC_PROPERTIES,
+        )
         .internal(InternalKind::Generator)
         .implements(vm, &["Iterator"])
         .method("rewind(): void", flags::PUBLIC, g_rewind)
@@ -942,6 +1016,8 @@ pub(crate) fn register(vm: &mut Vm) {
         .method("__destruct(): void", flags::PUBLIC, g_destruct)
         .register(vm);
     if vm.find_class(b"ClosedGeneratorException").is_none() {
-        ClassBuilder::new("ClosedGeneratorException").extends(vm, "Exception").register(vm);
+        ClassBuilder::new("ClosedGeneratorException")
+            .extends(vm, "Exception")
+            .register(vm);
     }
 }

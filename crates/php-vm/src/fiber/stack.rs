@@ -108,7 +108,7 @@ impl Coroutine {
             panic: Cell::new(None),
         });
         let top = inner.stack.top();
-        let arg: *const Inner = &*inner;
+        let arg: *const Inner = std::ptr::from_ref::<Inner>(&inner);
         // SAFETY: `top` is the 16-byte aligned end of a writable mapping of
         // at least `MIN_STACK - PAGE` bytes, enough for the initial frame.
         let sp = unsafe { arch::init_stack(top, entry as *const () as usize, arg as usize) };
@@ -178,7 +178,14 @@ mod sys {
     pub const MAP_NORESERVE: i32 = 0x4000;
     pub const MAP_STACK: i32 = 0x20000;
     extern "C" {
-        pub fn mmap(addr: *mut c_void, len: usize, prot: i32, flags: i32, fd: i32, off: i64) -> *mut c_void;
+        pub fn mmap(
+            addr: *mut c_void,
+            len: usize,
+            prot: i32,
+            flags: i32,
+            fd: i32,
+            off: i64,
+        ) -> *mut c_void;
         pub fn munmap(addr: *mut c_void, len: usize) -> i32;
         pub fn mprotect(addr: *mut c_void, len: usize, prot: i32) -> i32;
     }
@@ -209,7 +216,10 @@ impl Stack {
             unsafe { sys::munmap(p, len) };
             return Err(StackError::Mmap(e));
         }
-        Ok(Stack { base: p.cast(), len })
+        Ok(Stack {
+            base: p.cast(),
+            len,
+        })
     }
 
     /// The (16-byte aligned) highest address of the stack.
@@ -311,6 +321,7 @@ mod arch {
         // Slots (from the new sp upwards): MXCSR + x87 CW, r15, r14, r13,
         // r12, rbx, rbp, return address. After `ret` the stack pointer is
         // `sp + 64`, 16-byte aligned as required before the `call`.
+        #[allow(clippy::cast_ptr_alignment)] // `top` is 16-byte aligned
         let sp = top.wrapping_sub(16 + 64).cast::<usize>();
         let slots: [usize; 8] = [
             0x037F_0000_1F80, // MXCSR default | x87 CW default << 32
@@ -422,12 +433,16 @@ mod tests {
 
     #[test]
     fn too_small() {
-        assert!(matches!(Coroutine::new(100, Box::new(|_: &Suspender| {})), Err(StackError::TooSmall)));
+        assert!(matches!(
+            Coroutine::new(100, Box::new(|_: &Suspender| {})),
+            Err(StackError::TooSmall)
+        ));
     }
 
     #[test]
     fn abandoned_coroutine_is_unmapped() {
-        let co = Coroutine::new(64 * 1024, Box::new(|s: &Suspender| s.suspend())).expect("coroutine");
+        let co =
+            Coroutine::new(64 * 1024, Box::new(|s: &Suspender| s.suspend())).expect("coroutine");
         assert!(!co.resume());
         drop(co);
     }

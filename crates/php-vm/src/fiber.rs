@@ -128,7 +128,11 @@ thread_local! {
 /// Whether `o` is the internal "graceful exit" unwinding object
 /// (`zend_is_graceful_exit`), which no `catch` block matches.
 pub(crate) fn is_graceful_exit(o: &Obj) -> bool {
-    GRACEFUL_EXIT.with(|g| g.borrow().as_ref().is_some_and(|c| Rc::ptr_eq(c, object::class_of(o))))
+    GRACEFUL_EXIT.with(|g| {
+        g.borrow()
+            .as_ref()
+            .is_some_and(|c| Rc::ptr_eq(c, object::class_of(o)))
+    })
 }
 
 pub(crate) fn create_graceful_exit() -> Option<Obj> {
@@ -177,11 +181,19 @@ impl Vm {
                 for _ in 0..n {
                     let f = match &model {
                         Some(m) => self.filler_frame(m),
-                        None => Frame::with_vars(self.empty_code.clone(), FrameKind::ConstExpr, self.empty_vars.clone(), None),
+                        None => Frame::with_vars(
+                            self.empty_code.clone(),
+                            FrameKind::ConstExpr,
+                            self.empty_vars.clone(),
+                            None,
+                        ),
                     };
                     self.frames.insert(d.saturating_sub(1), f);
                 }
-                return Prefix::Fillers { pos: d.saturating_sub(1), n };
+                return Prefix::Fillers {
+                    pos: d.saturating_sub(1),
+                    n,
+                };
             }
             return Prefix::Exact;
         }
@@ -191,7 +203,9 @@ impl Vm {
                 let n = base - d;
                 let pos = d - 1;
                 let model_idx = d.saturating_sub(2);
-                let fillers: Vec<Frame> = (0..n).map(|_| self.filler_frame(&self.frames[model_idx])).collect();
+                let fillers: Vec<Frame> = (0..n)
+                    .map(|_| self.filler_frame(&self.frames[model_idx]))
+                    .collect();
                 self.frames.splice(pos..pos, fillers);
                 Prefix::Fillers { pos, n }
             }
@@ -223,7 +237,13 @@ impl Vm {
         let Some((co, base, frames, depth, er)) = with(fiber, |d| {
             d.state = FiberState::Running;
             d.transfer = Some(input);
-            (d.co.clone(), d.base, std::mem::take(&mut d.frames), d.depth, d.error_reporting)
+            (
+                d.co.clone(),
+                d.base,
+                std::mem::take(&mut d.frames),
+                d.depth,
+                d.error_reporting,
+            )
         }) else {
             return Ok(Value::Null);
         };
@@ -264,35 +284,43 @@ impl Vm {
 
     /// Adds the `start()` arguments to the resolved call (the named
     /// argument rules of `zend_call_function`).
-    fn fiber_bind_args(&mut self, mut call: PendingCall, args: Vec<Value>, named: Vec<(ZStr, Value)>) -> VmResult<PendingCall> {
+    fn fiber_bind_args(
+        &mut self,
+        mut call: PendingCall,
+        args: Vec<Value>,
+        named: Vec<(ZStr, Value)>,
+    ) -> VmResult<PendingCall> {
         call.args = args.into_iter().map(Some).collect();
         for (k, v) in named {
             let pos = if call.magic_name.is_some() {
                 None
             } else {
-                call.func.params().iter().position(|p| p.name == k && !p.variadic)
+                call.func
+                    .params()
+                    .iter()
+                    .position(|p| p.name == k && !p.variadic)
             };
-            match pos {
-                Some(p) => {
-                    if call.args.len() <= p {
-                        call.args.resize(p + 1, None);
-                    } else if call.args[p].is_some() {
-                        return Err(self.make_throw(
-                            "Error",
-                            &format!("Named parameter ${} overwrites previous argument", k.to_string_lossy()),
-                        ));
-                    }
-                    call.args[p] = Some(v);
+            if let Some(p) = pos {
+                if call.args.len() <= p {
+                    call.args.resize(p + 1, None);
+                } else if call.args[p].is_some() {
+                    return Err(self.make_throw(
+                        "Error",
+                        &format!(
+                            "Named parameter ${} overwrites previous argument",
+                            k.to_string_lossy()
+                        ),
+                    ));
                 }
-                None => {
-                    if !call.func.is_variadic() && call.magic_name.is_none() {
-                        return Err(self.make_throw(
-                            "Error",
-                            &format!("Unknown named parameter ${}", k.to_string_lossy()),
-                        ));
-                    }
-                    call.named.push((k, v));
+                call.args[p] = Some(v);
+            } else {
+                if !call.func.is_variadic() && call.magic_name.is_none() {
+                    return Err(self.make_throw(
+                        "Error",
+                        &format!("Unknown named parameter ${}", k.to_string_lossy()),
+                    ));
                 }
+                call.named.push((k, v));
             }
             call.has_named = true;
         }
@@ -300,7 +328,12 @@ impl Vm {
     }
 
     /// Creates the native stack of a fiber about to start.
-    fn fiber_create_context(&mut self, fiber: &Obj, args: Vec<Value>, named: Vec<(ZStr, Value)>) -> VmResult<()> {
+    fn fiber_create_context(
+        &mut self,
+        fiber: &Obj,
+        args: Vec<Value>,
+        named: Vec<(ZStr, Value)>,
+    ) -> VmResult<()> {
         let requested = match self.ini.typed("fiber.stack_size") {
             php_support::ini::IniTyped::Long(n) => usize::try_from(n).unwrap_or(0),
             _ => DEFAULT_STACK,
@@ -308,7 +341,10 @@ impl Vm {
         if requested < stack::MIN_STACK {
             return Err(self.make_throw(
                 "Exception",
-                &format!("Fiber stack size is too small, it needs to be at least {} bytes", stack::MIN_STACK),
+                &format!(
+                    "Fiber stack size is too small, it needs to be at least {} bytes",
+                    stack::MIN_STACK
+                ),
             ));
         }
         let size = requested.saturating_mul(STACK_SCALE).max(1 << 20);
@@ -327,7 +363,9 @@ impl Vm {
         });
         match Coroutine::new(size, body) {
             Ok(co) => {
-                let budget = u32::try_from(size / BYTES_PER_LEVEL).unwrap_or(MAX_DEPTH).min(MAX_DEPTH);
+                let budget = u32::try_from(size / BYTES_PER_LEVEL)
+                    .unwrap_or(MAX_DEPTH)
+                    .min(MAX_DEPTH);
                 let base = self.frames.len() + SLACK;
                 // Fibers start with the INI error_reporting, not a value
                 // lowered by a `@` around `start()`.
@@ -348,11 +386,15 @@ impl Vm {
             }
             Err(StackError::TooSmall) => Err(self.make_throw(
                 "Exception",
-                &format!("Fiber stack size is too small, it needs to be at least {} bytes", stack::MIN_STACK),
+                &format!(
+                    "Fiber stack size is too small, it needs to be at least {} bytes",
+                    stack::MIN_STACK
+                ),
             )),
-            Err(StackError::Mmap(m)) => {
-                Err(self.make_throw("Exception", &format!("Fiber stack allocate failed: mmap failed: {m}")))
-            }
+            Err(StackError::Mmap(m)) => Err(self.make_throw(
+                "Exception",
+                &format!("Fiber stack allocate failed: mmap failed: {m}"),
+            )),
             Err(StackError::Unsupported) => {
                 Err(self.fiber_error("Fibers are not supported on this platform"))
             }
@@ -364,7 +406,11 @@ impl Vm {
 fn fiber_body(vm: &mut Vm, s: Suspender, call: PendingCall) {
     // No strong reference to the fiber may live on its own stack, or an
     // unreferenced suspended fiber would never be destroyed.
-    let Some(()) = vm.fibers.last().and_then(|f| with(f, |d| d.suspender = Some(s))) else {
+    let Some(()) = vm
+        .fibers
+        .last()
+        .and_then(|f| with(f, |d| d.suspender = Some(s)))
+    else {
         return;
     };
     let r = vm.call_pending(call);
@@ -441,7 +487,9 @@ fn fiber_throw(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 fn fiber_get_return(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let o = a.this_obj();
-    let Some((state, threw, bailout, ret)) = with(&o, |d| (d.state, d.threw, d.bailout, d.ret.clone())) else {
+    let Some((state, threw, bailout, ret)) =
+        with(&o, |d| (d.state, d.threw, d.bailout, d.ret.clone()))
+    else {
         return Err(vm.fiber_error("Cannot get fiber return value: The fiber has not been started"));
     };
     let msg = match state {
@@ -454,15 +502,21 @@ fn fiber_get_return(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     Err(vm.fiber_error(&format!("Cannot get fiber return value: {msg}")))
 }
 
+#[allow(clippy::unnecessary_wraps)] // builtin signature
 fn fiber_is_started(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     Ok(Value::Bool(state_of(&a.this_obj()) != FiberState::Init))
 }
+#[allow(clippy::unnecessary_wraps)] // builtin signature
 fn fiber_is_suspended(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    Ok(Value::Bool(state_of(&a.this_obj()) == FiberState::Suspended))
+    Ok(Value::Bool(
+        state_of(&a.this_obj()) == FiberState::Suspended,
+    ))
 }
+#[allow(clippy::unnecessary_wraps)] // builtin signature
 fn fiber_is_running(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     Ok(Value::Bool(state_of(&a.this_obj()) == FiberState::Running))
 }
+#[allow(clippy::unnecessary_wraps)] // builtin signature
 fn fiber_is_terminated(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     Ok(Value::Bool(state_of(&a.this_obj()) == FiberState::Dead))
 }
@@ -492,6 +546,7 @@ fn fiber_suspend(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         .unwrap_or(Ok(Value::Null))
 }
 
+#[allow(clippy::unnecessary_wraps)] // builtin signature
 fn fiber_get_current(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
     Ok(vm.fibers.last().cloned().map_or(Value::Null, Value::Object))
 }
@@ -510,7 +565,12 @@ fn fiber_destroy(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     // php-src destroys from the `dtor_obj` handler, without a call frame:
     // replace our `__destruct` frame by one backtraces skip.
     let own = vm.frames.pop();
-    let hidden = Frame::with_vars(vm.empty_code.clone(), FrameKind::Builtin, vm.empty_vars.clone(), None);
+    let hidden = Frame::with_vars(
+        vm.empty_code.clone(),
+        FrameKind::Builtin,
+        vm.empty_vars.clone(),
+        None,
+    );
     vm.frames.push(hidden);
     let r = vm.fiber_switch_in(&o, Err(Throw::Exception(g)));
     vm.frames.pop();
@@ -534,17 +594,37 @@ fn fiber_error_construct(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
 pub(crate) fn register(vm: &mut Vm) {
     ClassBuilder::new("Fiber")
         .flags(cflags::FINAL | cflags::NOT_SERIALIZABLE | cflags::NO_CLONE)
-        .method("__construct(callable $callback)", flags::PUBLIC, fiber_construct)
+        .method(
+            "__construct(callable $callback)",
+            flags::PUBLIC,
+            fiber_construct,
+        )
         .method("start(mixed ...$args): mixed", flags::PUBLIC, fiber_start)
-        .method("resume(mixed $value = null): mixed", flags::PUBLIC, fiber_resume)
-        .method("throw(Throwable $exception): mixed", flags::PUBLIC, fiber_throw)
+        .method(
+            "resume(mixed $value = null): mixed",
+            flags::PUBLIC,
+            fiber_resume,
+        )
+        .method(
+            "throw(Throwable $exception): mixed",
+            flags::PUBLIC,
+            fiber_throw,
+        )
         .method("getReturn(): mixed", flags::PUBLIC, fiber_get_return)
         .method("isStarted(): bool", flags::PUBLIC, fiber_is_started)
         .method("isSuspended(): bool", flags::PUBLIC, fiber_is_suspended)
         .method("isRunning(): bool", flags::PUBLIC, fiber_is_running)
         .method("isTerminated(): bool", flags::PUBLIC, fiber_is_terminated)
-        .method("suspend(mixed $value = null): mixed", flags::PUBLIC | flags::STATIC, fiber_suspend)
-        .method("getCurrent(): ?Fiber", flags::PUBLIC | flags::STATIC, fiber_get_current)
+        .method(
+            "suspend(mixed $value = null): mixed",
+            flags::PUBLIC | flags::STATIC,
+            fiber_suspend,
+        )
+        .method(
+            "getCurrent(): ?Fiber",
+            flags::PUBLIC | flags::STATIC,
+            fiber_get_current,
+        )
         // The `dtor_obj` handler. php-src has no such method; ClassBuilder
         // only wires destructors through `__destruct`.
         .method("__destruct(): void", flags::PUBLIC, fiber_destroy)
@@ -556,7 +636,9 @@ pub(crate) fn register(vm: &mut Vm) {
         .register(vm);
     // The graceful-exit unwinder: a hidden class outside the Throwable
     // hierarchy, so no `catch` matches it.
-    let cls = ClassBuilder::new("FiberGracefulExit").flags(cflags::FINAL).register(vm);
+    let cls = ClassBuilder::new("FiberGracefulExit")
+        .flags(cflags::FINAL)
+        .register(vm);
     vm.classes.remove(&cls.lc_name);
     vm.class_order.retain(|n| *n != cls.lc_name);
     GRACEFUL_EXIT.with(|g| *g.borrow_mut() = Some(cls));
