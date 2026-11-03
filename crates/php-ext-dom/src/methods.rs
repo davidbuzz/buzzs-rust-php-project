@@ -4,7 +4,7 @@
 
 use std::rc::Rc;
 
-use php_dom::classes::{find_class, find_method, ClassKind};
+use php_dom::classes::{find_method, MethodInfo};
 use php_dom::dispatch::{self, DomObject};
 use php_dom::{ArrayKey as DomKey, DomValue};
 use php_runtime::{Obj, Value};
@@ -13,16 +13,34 @@ use php_vm::object::{class_of, display_name};
 use php_vm::Vm;
 
 use crate::errors::{check, Ctx};
-use crate::hooks::builtin_of;
+use crate::hooks::{builtin_of, builtin_of_class};
 use crate::host::VmHost;
 use crate::run;
 use crate::state::{dom_object, set_dom_object, to_dom, to_value};
 
+thread_local! {
+    /// `(builtin, lowercase method)` → declaration.
+    static METHODS: std::cell::RefCell<
+        std::collections::HashMap<(&'static str, String), Option<(&'static str, &'static MethodInfo)>>,
+    > = std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+/// `find_method`, cached.
+fn method_info(builtin: &'static str, method: &str) -> Option<(&'static str, &'static MethodInfo)> {
+    let key = (builtin, method.to_ascii_lowercase());
+    if let Some(r) = METHODS.with(|m| m.borrow().get(&key).copied()) {
+        return r;
+    }
+    let r = find_method(builtin, method).map(|(c, m)| (c.name, m));
+    METHODS.with(|m| m.borrow_mut().insert(key, r));
+    r
+}
+
 /// The error context of `builtin::method` called on an object of `class`.
-fn method_ctx(builtin: &str, method: &str, class: String) -> Ctx {
-    match find_method(builtin, method) {
+fn method_ctx(builtin: &'static str, method: &str, class: String) -> Ctx {
+    match method_info(builtin, method) {
         Some((c, m)) => Ctx {
-            func: format!("{}::{}", c.name, m.name),
+            func: format!("{c}::{}", m.name),
             params: m.params.iter().map(|p| p.name).collect(),
             variadic_from: m.params.iter().position(|p| p.variadic),
             class,
@@ -37,8 +55,13 @@ fn method_ctx(builtin: &str, method: &str, class: String) -> Ctx {
 
 /// Converts the passed arguments (trailing omitted optional arguments are
 /// left out so php-dom can tell them from explicit values).
-fn convert_args(vm: &mut Vm, a: &Args, builtin: &str, method: &str) -> VmResult<Vec<DomValue>> {
-    let params = find_method(builtin, method).map_or(&[][..], |(_, m)| m.params);
+fn convert_args(
+    vm: &mut Vm,
+    a: &Args,
+    builtin: &'static str,
+    method: &str,
+) -> VmResult<Vec<DomValue>> {
+    let params = method_info(builtin, method).map_or(&[][..], |(_, m)| m.params);
     let n = a
         .passed
         .iter()
@@ -97,20 +120,6 @@ fn convert_args(vm: &mut Vm, a: &Args, builtin: &str, method: &str) -> VmResult<
         out.push(dv);
     }
     Ok(out)
-}
-
-/// Finds the built-in DOM class of a (possibly user) class.
-fn builtin_of_class(cls: &Rc<php_vm::class::Class>) -> Option<&'static str> {
-    let mut c = Some(cls.clone());
-    while let Some(cl) = c {
-        if let Some(ci) = find_class(&display_name(&cl.name).to_string_lossy()) {
-            if ci.kind == ClassKind::Class {
-                return Some(ci.name);
-            }
-        }
-        c = cl.parent.clone();
-    }
-    None
 }
 
 fn finish(vm: &mut Vm, r: Result<DomValue, php_dom::DomError>, ctx: &Ctx) -> VmResult<Value> {

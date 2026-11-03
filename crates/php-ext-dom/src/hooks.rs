@@ -15,19 +15,37 @@ use crate::errors::{check, Ctx};
 use crate::run;
 use crate::state::{bind_node_object, dom_object, to_dom, to_value, DomIter, DomState};
 
-/// The built-in DOM class an object's class derives from.
-pub(crate) fn builtin_of(o: &Obj) -> Option<&'static str> {
-    let mut c = Some(class_of(o).clone());
-    while let Some(cls) = c {
-        let name = display_name(&cls.name).to_string_lossy();
+thread_local! {
+    /// Class (by address) → built-in DOM class it derives from.
+    static BUILTIN: std::cell::RefCell<std::collections::HashMap<usize, Option<&'static str>>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+/// The built-in DOM class a class derives from.
+pub(crate) fn builtin_of_class(cls: &std::rc::Rc<php_vm::class::Class>) -> Option<&'static str> {
+    let key = std::rc::Rc::as_ptr(cls) as usize;
+    if let Some(b) = BUILTIN.with(|m| m.borrow().get(&key).copied()) {
+        return b;
+    }
+    let mut found = None;
+    let mut c = Some(cls.clone());
+    while let Some(cl) = c {
+        let name = display_name(&cl.name).to_string_lossy();
         if let Some(ci) = find_class(&name) {
             if ci.kind == php_dom::classes::ClassKind::Class {
-                return Some(ci.name);
+                found = Some(ci.name);
+                break;
             }
         }
-        c = cls.parent.clone();
+        c = cl.parent.clone();
     }
-    None
+    BUILTIN.with(|m| m.borrow_mut().insert(key, found));
+    found
+}
+
+/// The built-in DOM class an object's class derives from.
+pub(crate) fn builtin_of(o: &Obj) -> Option<&'static str> {
+    builtin_of_class(class_of(o))
 }
 
 /// Whether a built-in class is a node class.

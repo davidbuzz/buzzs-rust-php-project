@@ -29,6 +29,10 @@ pub(crate) struct DomXslAccess;
 pub(crate) static ACCESS: DomXslAccess = DomXslAccess;
 
 thread_local! {
+    /// Documents imported from SimpleXML, with the family they were
+    /// imported as (`nodeobj->document->class_type`): `true` for `Dom\`.
+    static IMPORTED: RefCell<std::collections::HashMap<usize, bool>> =
+        RefCell::new(std::collections::HashMap::new());
     /// Objects returned from callbacks, kept alive until the
     /// transformation is over.
     static RETURNED: RefCell<Vec<Obj>> = const { RefCell::new(Vec::new()) };
@@ -186,6 +190,18 @@ pub(crate) fn import_simplexml(vm: &mut Vm, a: &Args) -> VmResult<Value> {
     let Some(p) = NonNull::new(sx.as_ptr().cast::<c_void>()) else {
         return Err(bad(vm, a));
     };
+    // Lock the document to one node family.
+    let modern = a.func_name().to_ascii_lowercase().starts_with("dom\\");
+    let doc_key = sx.document().as_ptr() as usize;
+    let previous = IMPORTED.with(|m| *m.borrow_mut().entry(doc_key).or_insert(modern));
+    if previous != modern {
+        let msg = if modern {
+            "must not be already imported as a DOMNode"
+        } else {
+            "must not be already imported as a Dom\\Node"
+        };
+        return Err(a.type_error(vm, 1, msg));
+    }
     // SAFETY: the node belongs to a document kept alive by the attached
     // SimpleXML handle.
     let n = unsafe { wrap_raw_node(p) };
