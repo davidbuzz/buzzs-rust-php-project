@@ -529,6 +529,23 @@ impl Vm {
                 }
                 Ok(false)
             }
+            Delegate::Iter(it, index) if object::has_internal::<GenData>(&it) => {
+                // A generator behind an `IteratorAggregate`: its iterator
+                // functions, without `Generator->next()` call frames.
+                if index > 0 {
+                    self.gen_next(&it)?;
+                }
+                if !self.gen_valid(&it)? {
+                    return Ok(false);
+                }
+                let (key, val) = self.gen_current(&it)?;
+                with(g, |d| {
+                    d.value = Some(val);
+                    d.key = Some(key);
+                    d.values = Some(Delegate::Iter(it, index + 1));
+                });
+                Ok(true)
+            }
             Delegate::Iter(it, index) => {
                 if index > 0 {
                     self.call_method_name(&it, "next", Vec::new())?;
@@ -603,9 +620,27 @@ impl Vm {
             let has_values =
                 with(&gen, |d| d.values.is_some() && d.pending_exc.is_none()).unwrap_or(false);
             if has_values {
-                with(&gen, |d| d.state = GenState::Running);
+                // The delegated iterator runs "inside" the generator: its
+                // frame (and the `yield from` chain) is current.
+                let mut chain = self.gen_lend_chain(orig, &gen);
+                let own = with(&gen, |d| {
+                    let f = d.frame.take();
+                    d.lent = f.is_some();
+                    d.state = GenState::Running;
+                    f
+                })
+                .flatten();
+                if let Some(f) = own {
+                    self.frames.push(*f);
+                    chain.push(gen.clone());
+                }
                 let r = self.gen_next_delegated(&gen);
-                with(&gen, |d| d.state = GenState::Suspended);
+                self.gen_return_chain(chain);
+                with(&gen, |d| {
+                    if d.state == GenState::Running {
+                        d.state = GenState::Suspended;
+                    }
+                });
                 match r {
                     Ok(true) => return Ok(()),
                     Ok(false) => {}
