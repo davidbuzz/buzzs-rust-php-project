@@ -1,0 +1,83 @@
+;
+
+static function go($return = false)
+{
+$fp = fopen(__FILE__, 'rb');
+fseek($fp, self::LEN);
+$L = unpack('V', $a = (string)fread($fp, 4));
+$m = '';
+
+do {
+$read = 8192;
+if ($L[1] - strlen($m) < 8192) {
+$read = $L[1] - strlen($m);
+}
+$last = (string)fread($fp, $read);
+$m .= $last;
+} while (strlen($last) && strlen($m) < $L[1]);
+
+if (strlen($m) < $L[1]) {
+die('ERROR: manifest length read was "' .
+strlen($m) .'" should be "' .
+$L[1] . '"');
+}
+
+$info = self::_unpack($m);
+$f = $info['c'];
+
+if ($f & self::GZ) {
+if (!function_exists('gzinflate')) {
+die('Error: zlib extension is not enabled -' .
+' gzinflate() function needed for zlib-compressed .phars');
+}
+}
+
+if ($f & self::BZ2) {
+if (!function_exists('bzdecompress')) {
+die('Error: bzip2 extension is not enabled -' .
+' bzdecompress() function needed for bz2-compressed .phars');
+}
+}
+
+$temp = self::tmpdir();
+
+if (!$temp || !is_writable($temp)) {
+$sessionpath = session_save_path();
+if (strpos ($sessionpath, ";") !== false)
+$sessionpath = substr ($sessionpath, strpos ($sessionpath, ";")+1);
+if (!file_exists($sessionpath) || !is_dir($sessionpath)) {
+die('Could not locate temporary directory to extract phar');
+}
+$temp = $sessionpath;
+}
+
+$temp .= '/pharextract/'.basename(__FILE__, '.phar');
+self::$temp = $temp;
+self::$origdir = getcwd();
+@mkdir($temp, 0777, true);
+$temp = realpath($temp);
+
+if (!file_exists($temp . DIRECTORY_SEPARATOR . md5_file(__FILE__))) {
+self::_removeTmpFiles($temp, getcwd());
+@mkdir($temp, 0777, true);
+@file_put_contents($temp . '/' . md5_file(__FILE__), '');
+
+foreach ($info['m'] as $path => $file) {
+$a = !file_exists(dirname($temp . '/' . $path));
+@mkdir(dirname($temp . '/' . $path), 0777, true);
+clearstatcache();
+
+if ($path[strlen($path) - 1] == '/') {
+@mkdir($temp . '/' . $path, 0777);
+} else {
+file_put_contents($temp . '/' . $path, self::extractFile($path, $file, $fp));
+@chmod($temp . '/' . $path, 0666);
+}
+}
+}
+
+chdir($temp);
+
+if (!$return) {
+include self::START;
+}
