@@ -10,6 +10,9 @@ rust-version.workspace = true
 php-vm = { path = "../php-vm" }
 php-runtime = { path = "../php-runtime" }
 php-gd = { path = "../php-gd" }
+php-streams = { path = "../php-streams" }
+php-ext-streams = { path = "../php-ext-streams" }
+php-support = { path = "../php-support" }
 
 [lints]
 workspace = true

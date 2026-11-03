@@ -57,6 +57,7 @@ php-ext-xsl = { path = "../php-ext-xsl" }
 php-ext-tokenizer = { path = "../php-ext-tokenizer" }
 php-ext-ftp = { path = "../php-ext-ftp" }
 php-ext-curl = { path = "../php-ext-curl" }
+php-ext-gd = { path = "../php-ext-gd" }
 php-ext-zendtest = { path = "../php-ext-zendtest" }
 php-cli-server = { path = "../php-cli-server" }
 libc = "0.2"
