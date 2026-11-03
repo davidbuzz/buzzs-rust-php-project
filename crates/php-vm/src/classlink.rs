@@ -969,6 +969,46 @@ fn is_valid_class_name(n: &[u8]) -> bool {
             .all(|&c| c.is_ascii_alphanumeric() || c == b'_' || c == b'\\' || c >= 0x80)
 }
 
+/// `inherit_property_hook`: a redeclared property keeps the parent's hooks
+/// it does not declare itself. An abstract parent hook is satisfied by a
+/// backed property (`get` always, `set` unless readonly) and otherwise
+/// stays abstract.
+fn inherit_prop_hooks(
+    parent: Option<&Rc<PropInfo>>,
+    child: Option<&Rc<crate::class::PropHooks>>,
+    child_flags: u32,
+) -> Option<Rc<crate::class::PropHooks>> {
+    let Some(ph) = parent.and_then(|p| p.hooks.as_ref()) else {
+        return child.cloned();
+    };
+    let backed = child_flags & flags::VIRTUAL == 0;
+    let readonly = child_flags & flags::READONLY != 0;
+    let mut h = match child {
+        Some(c) => (**c).clone(),
+        None => crate::class::PropHooks {
+            class: ph.class.clone(),
+            ..Default::default()
+        },
+    };
+    let mut changed = false;
+    if h.get.is_none() && ph.get.is_some() && !(ph.abstract_get && backed) {
+        h.get.clone_from(&ph.get);
+        h.final_get = ph.final_get;
+        h.abstract_get = ph.abstract_get;
+        changed = true;
+    }
+    if h.set.is_none() && ph.set.is_some() && !(ph.abstract_set && backed && !readonly) {
+        h.set.clone_from(&ph.set);
+        h.final_set = ph.final_set;
+        h.abstract_set = ph.abstract_set;
+        changed = true;
+    }
+    if !changed {
+        return child.cloned();
+    }
+    Some(Rc::new(h))
+}
+
 /// `zend_do_traits_property_binding`: the error for a property of trait
 /// `traits[ti]` that collides with an own (or earlier trait's) property of
 /// `class` in an incompatible way. Traits are bound before inheritance, so
@@ -1518,7 +1558,13 @@ fn build_class(
             default: pd.default.clone(),
             doc_comment: pd.doc_comment.clone(),
             attributes: pd.attributes.clone(),
-            hooks: pd.hooks.clone(),
+            hooks: inherit_prop_hooks(
+                existing
+                    .as_ref()
+                    .filter(|e| e.visibility() != flags::PRIVATE),
+                pd.hooks.as_ref(),
+                pflags,
+            ),
         });
         if (slot as usize) < props.len() {
             props[slot as usize] = pi.clone();

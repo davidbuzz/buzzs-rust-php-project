@@ -896,7 +896,7 @@ impl Vm {
                     };
                 }
                 self.typed_prop_dim_write_check(&obj, name, &segs[i + 1], &wop)?;
-                match self.property_container(&obj, name)? {
+                match self.property_container(&obj, name, matches!(wop, WOp::FetchRw))? {
                     PropContainer::Declared(idx) => {
                         let mut diags = Vec::new();
                         let mut w = wop;

@@ -1723,7 +1723,10 @@ fn unser_destroy(vm: &mut Vm, d: &UnserRc, outermost: bool, run: bool) -> VmResu
                 }
                 let cls = object::class_of(&o).clone();
                 let r = if let Some(m) = cls.magic.unserialize.clone() {
-                    locked(|| vm.call_method(&o, &m, vec![data])).map(|_| ())
+                    // Readonly properties may be initialized once more
+                    // (`zend_object_set_properties_reinitable`).
+                    locked(|| vm.with_reinitable_props(&o, |vm| vm.call_method(&o, &m, vec![data])))
+                        .map(|_| ())
                 } else if let Some(f) = cls.hooks.as_ref().and_then(|h| h.unserialize) {
                     let Value::Array(a) = data else { continue };
                     locked(|| f(vm, &o, a)).map(|_| ())

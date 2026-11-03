@@ -342,6 +342,7 @@ impl Vm {
                 match found {
                     Some((k, name, _)) => {
                         let v = if by_ref {
+                            self.foreach_readonly_ref_check(&obj, &name)?;
                             Value::Reference(self.property_ref(&obj, &name)?)
                         } else {
                             self.read_property(&obj, &name, crate::opcode::FetchMode::Is)?
