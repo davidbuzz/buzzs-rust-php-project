@@ -52,7 +52,11 @@ fn check(test: &str, prefix: &str) {
         return;
     };
     let msgs = assert_args(&file);
-    let mut expected: Vec<String> = expect.split(prefix).skip(1).map(|m| m.to_owned()).collect();
+    let mut expected: Vec<String> = expect
+        .split(prefix)
+        .skip(1)
+        .map(ToOwned::to_owned)
+        .collect();
     // Each message runs up to the next prefix; drop the trailing newline.
     for m in &mut expected {
         while m.ends_with('\n') {

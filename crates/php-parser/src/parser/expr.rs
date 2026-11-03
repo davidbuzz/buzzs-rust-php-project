@@ -132,7 +132,8 @@ fn binary_info(k: T) -> Option<(u8, Assoc, BinaryOp)> {
     })
 }
 
-fn assign_op(k: T) -> Option<Option<BinaryOp>> {
+/// An assignment operator: `=` (`None`) or a compound operator.
+fn assign_op(k: T) -> Option<AssignOp> {
     Some(match k {
         T::Equals => None,
         T::PlusEqual => Some(BinaryOp::Add),
@@ -151,6 +152,9 @@ fn assign_op(k: T) -> Option<Option<BinaryOp>> {
         _ => return None,
     })
 }
+
+/// The operator of an assignment token: `None` for plain `=`.
+type AssignOp = Option<BinaryOp>;
 
 fn magic_const(k: T) -> Option<MagicConst> {
     Some(match k {
@@ -704,11 +708,7 @@ impl Parser<'_> {
     fn var_name_of(e: Expr) -> VarName {
         match e.kind {
             ExprKind::Var(VarName::Name(id)) => VarName::Name(id),
-            ExprKind::Var(VarName::Expr(inner)) => match inner.kind {
-                // `$$a` keeps the inner variable as the name expression.
-                ExprKind::Var(_) => VarName::Expr(inner),
-                _ => VarName::Expr(inner),
-            },
+            ExprKind::Var(VarName::Expr(inner)) => VarName::Expr(inner),
             _ => VarName::Expr(bx(e)),
         }
     }
@@ -1049,6 +1049,7 @@ impl Parser<'_> {
 
     /// After `class ::`: static property, static call, class constant or
     /// `::class`.
+    #[allow(clippy::too_many_lines)]
     fn parse_static_access(&mut self, class: ClassRef, start: Span) -> PResult<(Expr, Cat)> {
         self.bump(); // ::
         let k = self.peek();

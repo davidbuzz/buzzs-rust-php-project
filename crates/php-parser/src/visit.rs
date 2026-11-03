@@ -167,6 +167,7 @@ fn walk_member<V: Visitor + ?Sized>(v: &mut V, m: &ClassMember) {
 }
 
 /// Visits the children of a statement.
+#[allow(clippy::too_many_lines)]
 pub fn walk_stmt<V: Visitor + ?Sized>(v: &mut V, s: &Stmt) {
     match &s.kind {
         StmtKind::Block(b) => walk_stmts(v, b),

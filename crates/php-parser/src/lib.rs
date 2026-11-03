@@ -28,6 +28,7 @@ const PARSER_STACK_SIZE: usize = 512 * 1024 * 1024;
 /// Parsing runs on a helper thread with a large stack so that deeply nested
 /// code behaves like PHP (which fails with `memory exhausted` only beyond
 /// bison's maximum depth).
+#[allow(clippy::trivially_copy_pass_by_ref)] // stable API; `ParseOptions` may grow
 pub fn parse(src: &[u8], opts: &ParseOptions) -> Result<Program, ParseError> {
     std::thread::scope(|s| {
         match std::thread::Builder::new()
@@ -44,6 +45,7 @@ pub fn parse(src: &[u8], opts: &ParseOptions) -> Result<Program, ParseError> {
     })
 }
 
+#[allow(clippy::trivially_copy_pass_by_ref)]
 fn parse_and_validate(src: &[u8], opts: &ParseOptions) -> Result<Program, ParseError> {
     let mut program = parser::parse_program(src, opts)?;
     if !opts.syntax_only {

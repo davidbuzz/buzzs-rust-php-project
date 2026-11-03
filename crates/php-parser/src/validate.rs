@@ -69,6 +69,7 @@ struct ClassCtx {
 }
 
 #[derive(Default)]
+#[allow(clippy::struct_excessive_bools)] // mirrors the compiler's file context
 struct Validator {
     fns: Vec<FnCtx>,
     classes: Vec<ClassCtx>,
@@ -180,16 +181,14 @@ fn can_write_to_variable(e: &Expr) -> bool {
         return true;
     }
     let mut base = e;
-    loop {
-        match &base.kind {
-            ExprKind::Dim { base: b, .. }
-            | ExprKind::Prop {
-                object: b,
-                nullsafe: false,
-                ..
-            } => base = b,
-            _ => break,
-        }
+    while let ExprKind::Dim { base: b, .. }
+    | ExprKind::Prop {
+        object: b,
+        nullsafe: false,
+        ..
+    } = &base.kind
+    {
+        base = b;
     }
     is_variable(base) && !is_short_circuited(base)
 }
@@ -272,7 +271,7 @@ impl Validator {
 
     fn top_stmt(&mut self, s: &Stmt, file: &[Stmt], idx: usize) -> VResult {
         match &s.kind {
-            StmtKind::Nop => return Ok(()),
+            StmtKind::Nop | StmtKind::HaltCompiler { .. } => return Ok(()),
             StmtKind::Namespace { name, body } => {
                 let with_bracket = body.is_some();
                 if self.has_bracketed_namespaces {
@@ -328,7 +327,6 @@ impl Validator {
                 return Ok(());
             }
             StmtKind::Declare { .. } => self.declare(s, Some((file, idx)))?,
-            StmtKind::HaltCompiler { .. } => return Ok(()),
             _ => self.stmt(s)?,
         }
         if self.has_bracketed_namespaces && !self.in_namespace {
@@ -596,8 +594,8 @@ impl Validator {
                 }
                 Ok(())
             }
-            StmtKind::Namespace { .. } => Ok(()),
-            StmtKind::InlineHtml(_)
+            StmtKind::Namespace { .. }
+            | StmtKind::InlineHtml(_)
             | StmtKind::Nop
             | StmtKind::Goto(_)
             | StmtKind::Label(_)
@@ -763,6 +761,7 @@ impl Validator {
     }
 
     /// Type checks that need no class information.
+    #[allow(clippy::unused_self)] // kept a method like the other checks
     fn ty(&mut self, t: &Type) -> VResult {
         match &t.kind {
             TypeKind::Nullable(inner) => {
@@ -1198,6 +1197,7 @@ impl Validator {
     }
 
     /// `zend_ensure_writable_variable`
+    #[allow(clippy::unused_self)] // kept a method like the other checks
     fn ensure_writable(&mut self, e: &Expr) -> VResult {
         let line = e.span.line;
         if matches!(e.kind, ExprKind::Call { .. } | ExprKind::Pipe { .. }) {
@@ -1351,32 +1351,30 @@ impl Validator {
             if let Some(k) = &it.key {
                 self.expr(k)?;
             }
-            match &it.value.kind {
-                ExprKind::Array {
-                    items: sub,
-                    syntax: sub_style,
-                } => {
-                    if *sub_style == ArraySyntax::Long {
-                        return err("Cannot assign to array(), use [] instead", self.cur_line);
-                    }
-                    if *sub_style != style {
-                        return err("Cannot mix [] and list()", self.cur_line);
-                    }
-                    self.list_assign(sub, style, it.value.span.line)?;
+            if let ExprKind::Array {
+                items: sub,
+                syntax: sub_style,
+            } = &it.value.kind
+            {
+                if *sub_style == ArraySyntax::Long {
+                    return err("Cannot assign to array(), use [] instead", self.cur_line);
                 }
-                _ => {
-                    if !can_write_to_variable(&it.value) {
-                        return err(
-                            "Assignments can only happen to writable values",
-                            self.cur_line,
-                        );
-                    }
-                    if is_this(&it.value) {
-                        return err("Cannot re-assign $this", it.value.span.line);
-                    }
-                    self.ensure_writable(&it.value)?;
-                    self.var(&it.value, Mode::Write)?;
+                if *sub_style != style {
+                    return err("Cannot mix [] and list()", self.cur_line);
                 }
+                self.list_assign(sub, style, it.value.span.line)?;
+            } else {
+                if !can_write_to_variable(&it.value) {
+                    return err(
+                        "Assignments can only happen to writable values",
+                        self.cur_line,
+                    );
+                }
+                if is_this(&it.value) {
+                    return err("Cannot re-assign $this", it.value.span.line);
+                }
+                self.ensure_writable(&it.value)?;
+                self.var(&it.value, Mode::Write)?;
             }
         }
         if !has_elems {
@@ -1432,12 +1430,12 @@ impl Validator {
                 }
                 Ok(())
             }
-            ExprKind::Call { .. } | ExprKind::MethodCall { .. } | ExprKind::StaticCall { .. } => {
-                self.expr(e)
-            }
-            ExprKind::Assign { .. } | ExprKind::AssignRef { .. } | ExprKind::Pipe { .. } => {
-                self.expr(e)
-            }
+            ExprKind::Call { .. }
+            | ExprKind::MethodCall { .. }
+            | ExprKind::StaticCall { .. }
+            | ExprKind::Assign { .. }
+            | ExprKind::AssignRef { .. }
+            | ExprKind::Pipe { .. } => self.expr(e),
             _ => {
                 if matches!(mode, Mode::Write | Mode::ReadWrite | Mode::Unset) {
                     return err("Cannot use temporary expression in write context", line);

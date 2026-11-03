@@ -240,6 +240,7 @@ pub struct Stmt {
 
 /// The kinds of statement.
 #[derive(Clone, Debug, PartialEq)]
+#[allow(clippy::large_enum_variant)] // boxing would complicate pattern matching
 pub enum StmtKind {
     /// `{ ... }`, also the body of alternative-syntax blocks.
     Block(Vec<Stmt>),
@@ -588,6 +589,7 @@ pub struct ClosureUse {
 
 /// An arrow function (`fn ($x) => expr`).
 #[derive(Clone, Debug, PartialEq)]
+#[allow(clippy::struct_excessive_bools)] // independent syntactic flags
 pub struct ArrowFn {
     /// Attributes.
     pub attributes: Attributes,

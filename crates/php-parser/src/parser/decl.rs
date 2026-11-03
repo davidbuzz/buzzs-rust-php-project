@@ -535,6 +535,7 @@ impl Parser<'_> {
 
     /// A closure or arrow function; the current token is `function` or
     /// `fn` (after `static`, which has been consumed if `is_static`).
+    #[allow(clippy::too_many_lines)]
     pub(crate) fn parse_closure(
         &mut self,
         attributes: Attributes,

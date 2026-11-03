@@ -73,6 +73,7 @@ pub(crate) struct Parser<'a> {
 const MAX_DEPTH: u32 = 9990;
 
 impl<'a> Parser<'a> {
+    #[allow(clippy::trivially_copy_pass_by_ref)] // `ParseOptions` may grow
     pub fn new(src: &'a [u8], opts: &ParseOptions) -> Self {
         let lexer = Lexer::with_options(
             src,
@@ -124,10 +125,8 @@ impl<'a> Parser<'a> {
                     doc = Some(t.text(self.src).to_vec());
                     continue;
                 }
-                TokenKind::Error => {
-                    if self.lex_error.is_none() {
-                        self.lex_error = self.lexer.error().cloned();
-                    }
+                TokenKind::Error if self.lex_error.is_none() => {
+                    self.lex_error = self.lexer.error().cloned();
                 }
                 _ => {}
             }
@@ -358,12 +357,13 @@ pub(crate) fn is_name_token(k: TokenKind) -> bool {
     )
 }
 
-/// Whether a token can be used as `identifier` (T_STRING or semi-reserved).
+/// Whether a token can be used as `identifier` (`T_STRING` or semi-reserved).
 pub(crate) fn is_identifier_token(k: TokenKind) -> bool {
     k == TokenKind::String || k.is_semi_reserved()
 }
 
 /// Parses a complete file.
+#[allow(clippy::trivially_copy_pass_by_ref)] // `ParseOptions` may grow
 pub fn parse_program(src: &[u8], opts: &ParseOptions) -> Result<Program, ParseError> {
     let mut p = Parser::new(src, opts);
     match p.parse_top_level() {

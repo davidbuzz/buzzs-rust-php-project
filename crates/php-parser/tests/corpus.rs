@@ -291,6 +291,7 @@ fn wildcard_match(pattern: &str, s: &str) -> bool {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
 fn corpus_agreement() {
     let Ok(fixture) = std::fs::read_to_string(fixture_path()) else {
         eprintln!("no fixture; skipping");

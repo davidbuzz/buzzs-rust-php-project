@@ -86,7 +86,7 @@ pub fn format_double(value: f64, precision: usize) -> String {
     };
     #[allow(clippy::cast_possible_wrap, clippy::cast_possible_truncation)]
     let ndigit = precision as i32;
-    if (decpt < 0 && decpt < -3) || (decpt >= 0 && decpt > ndigit) {
+    if decpt < -3 || decpt > ndigit {
         // exponential format
         let e = decpt - 1;
         let bytes = digits.as_bytes();
@@ -390,6 +390,7 @@ impl Exporter {
         }
     }
 
+    #[allow(clippy::too_many_arguments)] // mirrors the `BINARY_OP` macro
     fn binary(
         &mut self,
         op: &str,
@@ -927,6 +928,7 @@ impl Exporter {
         }
     }
 
+    #[allow(clippy::too_many_arguments)] // mirrors the fields of `zend_ast_decl`
     fn function_like(
         &mut self,
         attributes: &[AttributeGroup],
