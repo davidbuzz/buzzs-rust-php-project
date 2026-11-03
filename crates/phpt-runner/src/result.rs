@@ -20,6 +20,10 @@ pub enum Status {
     Skip,
     /// The test file itself is broken or its SKIPIF/CLEAN printed garbage.
     Bork,
+    /// Not run: under a prefix listed in the scope file (an out-of-scope extension or SAPI).
+    /// Excluded from pass rates and from the baseline.
+    #[serde(rename = "OUT")]
+    OutOfScope,
 }
 
 impl Status {
@@ -32,6 +36,7 @@ impl Status {
             Status::Xfail => "XFAIL",
             Status::Skip => "SKIP",
             Status::Bork => "BORK",
+            Status::OutOfScope => "OUT",
         }
     }
 

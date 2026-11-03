@@ -10,12 +10,16 @@ use clap::Parser;
 
 use phpt_runner::baseline::Baseline;
 use phpt_runner::discover::{collect, find_srcdir, ConflictResolver};
-use phpt_runner::ini::{default_ini_overwrites, escapeshellarg, IniSettings, E_ALL};
+use phpt_runner::ini::{
+    default_ini_overwrites, escapeshellarg, IniSettings, E_ALL, NO_EXTENSION_DIR,
+};
+use phpt_runner::phpt::TestFile;
 use phpt_runner::process::Env;
 use phpt_runner::report::{by_dir, dir_table, summary, totals, JsonReport};
 use phpt_runner::result::{Status, TestResult};
-use phpt_runner::runner::{probe_e_all, Config, Extensions, Runner};
+use phpt_runner::runner::{probe_e_all, probe_loads_ini_files, Config, Extensions, Runner};
 use phpt_runner::schedule::{run_jobs, Job};
+use phpt_runner::scope::Scope;
 
 /// Run php-src `.phpt` tests (a Rust port of run-tests.php).
 #[derive(Debug, Parser)]
@@ -73,6 +77,18 @@ struct Cli {
     /// Disable coloured output.
     #[arg(long)]
     no_color: bool,
+    /// Scope file listing out-of-scope path prefixes (tests under them are not run and are
+    /// excluded from pass rates and the baseline) [default: `phpt-scope.txt` in the php-src
+    /// root or one of its ancestors].
+    #[arg(long, value_name = "FILE")]
+    scope: Option<PathBuf>,
+    /// Ignore the scope file: run and count every selected test.
+    #[arg(long, conflicts_with = "scope")]
+    no_scope: bool,
+    /// Extra environment variable for every test, e.g. `--env MYSQL_TEST_HOST=127.0.0.1`
+    /// (repeatable).
+    #[arg(long, value_name = "KEY=VALUE")]
+    env: Vec<String>,
     /// Test files or directories.
     #[arg(required = true)]
     paths: Vec<PathBuf>,
@@ -220,6 +236,49 @@ fn shortname(path: &Path, srcdir: &Path) -> String {
         .into_owned()
 }
 
+/// Load the scope file (explicit `--scope`, else the default one if present).
+fn load_scope(cli: &Cli, srcdir: &Path) -> Result<Option<(Scope, PathBuf)>, String> {
+    if cli.no_scope {
+        return Ok(None);
+    }
+    let Some(path) = cli.scope.clone().or_else(|| Scope::find_default(srcdir)) else {
+        return Ok(None);
+    };
+    let scope = Scope::load(&path)
+        .map_err(|e| format!("cannot read scope file {}: {e}", path.display()))?;
+    Ok(Some((scope, path)))
+}
+
+/// Split off out-of-scope tests, returning their (not run) results.
+fn apply_scope(
+    tests: &mut Vec<PathBuf>,
+    srcdir: &Path,
+    scope: Option<&(Scope, PathBuf)>,
+) -> Vec<TestResult> {
+    let Some((scope, scope_path)) = scope else {
+        return Vec::new();
+    };
+    let (out, keep): (Vec<PathBuf>, Vec<PathBuf>) = std::mem::take(tests)
+        .into_iter()
+        .partition(|t| scope.is_out_of_scope(&shortname(t, srcdir)));
+    *tests = keep;
+    let file_name = scope_path
+        .file_name()
+        .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+    out.iter()
+        .map(|t| TestResult {
+            path: shortname(t, srcdir),
+            name: TestFile::load(t, false)
+                .map(|f| f.name())
+                .unwrap_or_default(),
+            result: Status::OutOfScope,
+            info: format!("reason: out of scope ({file_name})"),
+            duration_ms: 0,
+            diff: None,
+        })
+        .collect()
+}
+
 /// Locate the PHP binary, build the base environment and probe extensions. The returned probe
 /// cache directory must outlive the run.
 fn make_runner(cli: &Cli, srcdir: &Path) -> Result<(Runner, Option<SharedProbeCache>), String> {
@@ -233,8 +292,17 @@ fn make_runner(cli: &Cli, srcdir: &Path) -> Result<(Runner, Option<SharedProbeCa
         .map_err(|e| format!("invalid PHP executable {}: {e}", php.display()))?;
 
     let mut env = base_env(&php, cli.skip_slow);
+    for kv in &cli.env {
+        let (k, v) = kv
+            .split_once('=')
+            .ok_or_else(|| format!("--env {kv}: expected KEY=VALUE"))?;
+        env.insert(k.into(), v.into());
+    }
     let e_all = probe_e_all(&php, &env, srcdir).unwrap_or(E_ALL);
     let mut ini_overwrites = default_ini_overwrites(e_all);
+    if !probe_loads_ini_files(&php, &env, srcdir) {
+        ini_overwrites.push(format!("extension_dir={NO_EXTENSION_DIR}"));
+    }
     ini_overwrites.extend(cli.ini.iter().cloned());
     env.remove(&OsString::from("TEST_PHP_SHARED_CACHE_DIR"));
     let probe_cache = SharedProbeCache::create();
@@ -352,21 +420,34 @@ fn check_baseline(cli: &Cli, results: &[TestResult]) -> Result<ExitCode, String>
 }
 
 fn run(cli: &Cli) -> Result<ExitCode, String> {
-    let (tests, srcdir) = select_tests(cli)?;
+    let (mut tests, srcdir) = select_tests(cli)?;
+    let scope = load_scope(cli, &srcdir)?;
+    let out_of_scope = apply_scope(&mut tests, &srcdir, scope.as_ref());
     if cli.list {
         for t in &tests {
             println!("{}", shortname(t, &srcdir));
         }
         return Ok(ExitCode::SUCCESS);
     }
-    if tests.is_empty() {
+    if tests.is_empty() && out_of_scope.is_empty() {
         println!("No tests found.");
         return Ok(ExitCode::SUCCESS);
+    }
+    if let Some((scope_obj, path)) = &scope {
+        if !out_of_scope.is_empty() {
+            println!(
+                "{} test(s) out of scope per {} ({} prefixes); not run",
+                out_of_scope.len(),
+                path.display(),
+                scope_obj.prefixes().len()
+            );
+        }
     }
     let (runner, _probe_cache) = make_runner(cli, &srcdir)?;
 
     let start = Instant::now();
-    let results = execute(cli, &runner, &tests);
+    let mut results = execute(cli, &runner, &tests);
+    results.extend(out_of_scope);
     let elapsed = start.elapsed().as_secs_f64();
 
     let total = totals(&results);

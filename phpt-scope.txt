@@ -1,0 +1,46 @@
+# Out-of-scope php-src test directories (paths relative to modules/php-src).
+# Project decision of 3 Nov 2026, recorded in FEATURE_GAP.md (Pri = `out`): opcache/JIT,
+# non-CLI SAPIs except apache2handler, server-backed DB/protocol clients except mysqli, ffi,
+# readline, tidy/enchant/com_dotnet/imap, and php-src's internal test-helper extensions.
+#
+# phpt-runner reads this file by default: tests under these prefixes are not run, are reported
+# as "OUT", and are excluded from pass-rate denominators and from phpt-baseline.txt.
+# Use `phpt-runner --no-scope` to run everything. One prefix per line; `#` starts a comment.
+
+# Engine extras
+ext/opcache
+ext/ffi
+
+# Server-backed database / protocol clients (mysqli stays in scope)
+ext/mysqlnd
+ext/pdo_mysql
+ext/pgsql
+ext/pdo_pgsql
+ext/odbc
+ext/pdo_odbc
+ext/pdo_dblib
+ext/pdo_firebird
+ext/dba
+ext/ldap
+ext/snmp
+ext/imap
+
+# Niche libraries / Windows-only / interactive
+ext/readline
+ext/tidy
+ext/enchant
+ext/com_dotnet
+
+# Test-helper and skeleton extensions of php-src itself
+ext/dl_test
+ext/skeleton
+ext/zend_test
+ext/lexbor
+
+# Non-CLI SAPIs (apache2handler stays in scope)
+sapi/fpm
+sapi/phpdbg
+sapi/cgi
+sapi/embed
+sapi/litespeed
+sapi/fuzzer

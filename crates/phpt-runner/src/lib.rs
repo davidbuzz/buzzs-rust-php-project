@@ -16,3 +16,4 @@ pub mod report;
 pub mod result;
 pub mod runner;
 pub mod schedule;
+pub mod scope;

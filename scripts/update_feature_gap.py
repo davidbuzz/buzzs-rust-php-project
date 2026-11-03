@@ -5,6 +5,8 @@ Usage:
     target/debug/phpt-runner --json results.json modules/php-src/Zend/tests modules/php-src/tests ...
     scripts/update_feature_gap.py results.json [--feature-gap FEATURE_GAP.md] [--dry-run]
                                                [--denominator all|ran] [--min-tests N]
+                                               [--scope FILE | --no-scope]
+    scripts/update_feature_gap.py results.json --summary     # headline numbers, no rewrite
 
 Each row name below maps to one or more path prefixes (relative to the php-src root). A row is
 only rewritten when the report contains at least --min-tests tests under its prefixes, so a
@@ -13,6 +15,10 @@ partial run leaves the other rows alone. Rows without a mapping are never touche
 The percentage is passed / total by default (skipped tests count as not passing, since in this
 project a skip usually means a missing extension or SAPI); `--denominator ran` excludes skipped
 and borked tests instead.
+
+Out-of-scope tests (status "OUT" in the report, or under a prefix of the scope file,
+default `phpt-scope.txt` at the repository root) are not counted, and rows whose prefixes are
+all out of scope are left untouched.
 
 Python 3 standard library only.
 """
@@ -183,6 +189,39 @@ MAPPING: dict[str, list[str]] = {
 }
 
 
+REPO_ROOT = Path(__file__).resolve().parent.parent
+
+# Headline groups for --summary: (label, prefixes).
+SUMMARY_GROUPS: list[tuple[str, list[str]]] = [
+    ("Zend/tests", ["Zend/tests/"]),
+    ("tests/", ["tests/"]),
+    ("ext/", ["ext/"]),
+    ("sapi/", ["sapi/"]),
+]
+
+
+def load_scope(path: Path | None) -> list[str]:
+    """Out-of-scope prefixes from a scope file (one per line, '#' comments)."""
+    if path is None or not path.is_file():
+        return []
+    prefixes = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.split("#", 1)[0].strip()
+        if line:
+            prefixes.append(line.removeprefix("./").rstrip("/"))
+    return prefixes
+
+
+def out_of_scope(path: str, scope: list[str]) -> bool:
+    return any(path == p or path.startswith(p + "/") for p in scope)
+
+
+def in_scope_tests(tests: list[dict], scope: list[str]) -> list[dict]:
+    return [
+        t for t in tests if t.get("result") != "OUT" and not out_of_scope(t.get("path", ""), scope)
+    ]
+
+
 def load_results(path: Path) -> list[dict]:
     with path.open(encoding="utf-8") as fh:
         report = json.load(fh)
@@ -190,6 +229,33 @@ def load_results(path: Path) -> list[dict]:
     if not isinstance(tests, list):
         raise SystemExit(f"{path}: not a phpt-runner --json report (no 'tests' list)")
     return tests
+
+
+def counts(tests: list[dict], prefixes: list[str]) -> dict[str, int]:
+    c = {k: 0 for k in ("total", "PASS", "WARN", "FAIL", "SKIP", "XFAIL", "BORK")}
+    for t in tests:
+        if any(t.get("path", "").startswith(p) for p in prefixes):
+            c["total"] += 1
+            c[t.get("result", "FAIL")] = c.get(t.get("result", "FAIL"), 0) + 1
+    return c
+
+
+def print_summary(tests: list[dict], scope_count: int) -> None:
+    def pct(n: int, d: int) -> str:
+        return f"{100.0 * n / d:.1f}%" if d else "-"
+
+    print("| Suite | total | pass | fail | skip | xfail | bork | pass % (ran) | pass % (all) |")
+    print("|---|---|---|---|---|---|---|---|---|")
+    groups = [g for g in SUMMARY_GROUPS if counts(tests, g[1])["total"]]
+    for label, prefixes in groups + [("**in scope, total**", [""])]:
+        c = counts(tests, prefixes)
+        passed = c["PASS"] + c["WARN"]
+        ran = c["total"] - c["SKIP"] - c["BORK"]
+        print(
+            f"| {label} | {c['total']} | {passed} | {c['FAIL']} | {c['SKIP']} | {c['XFAIL']} "
+            f"| {c['BORK']} | {pct(passed, ran)} | {pct(passed, c['total'])} |"
+        )
+    print(f"\n{scope_count} out-of-scope test(s) not counted.")
 
 
 def row_stats(tests: list[dict], prefixes: list[str]) -> tuple[int, int, int]:
@@ -266,12 +332,31 @@ def main(argv: list[str]) -> int:
         "--min-tests", type=int, default=1, help="minimum tests in the report for a row to be updated"
     )
     parser.add_argument("--only", action="append", default=[], help="only update these row names")
+    parser.add_argument(
+        "--scope",
+        type=Path,
+        default=REPO_ROOT / "phpt-scope.txt",
+        help="scope file of out-of-scope prefixes (default: phpt-scope.txt at the repository root)",
+    )
+    parser.add_argument("--no-scope", action="store_true", help="ignore the scope file")
+    parser.add_argument(
+        "--summary",
+        action="store_true",
+        help="print the in-scope headline numbers (markdown table) and exit without rewriting",
+    )
     args = parser.parse_args(argv)
 
-    tests = load_results(args.report)
+    all_tests = load_results(args.report)
+    scope = [] if args.no_scope else load_scope(args.scope)
+    tests = in_scope_tests(all_tests, scope)
+    if args.summary:
+        print_summary(tests, len(all_tests) - len(tests))
+        return 0
     percents: dict[str, str] = {}
     for row, prefixes in MAPPING.items():
         if args.only and row not in args.only:
+            continue
+        if scope and all(out_of_scope(p.rstrip("/"), scope) for p in prefixes):
             continue
         passed, total, ran = row_stats(tests, prefixes)
         if total < max(1, args.min_tests):

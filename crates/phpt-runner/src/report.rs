@@ -24,6 +24,9 @@ pub struct Counts {
     pub bork: usize,
     /// WARN (also included in `pass`).
     pub warn: usize,
+    /// Out of scope (not run; excluded from the pass rates).
+    #[serde(default)]
+    pub out_of_scope: usize,
 }
 
 impl Counts {
@@ -40,12 +43,18 @@ impl Counts {
             Status::Xfail => self.xfail += 1,
             Status::Skip => self.skip += 1,
             Status::Bork => self.bork += 1,
+            Status::OutOfScope => self.out_of_scope += 1,
         }
     }
 
-    /// Tests that actually ran (not skipped or borked).
+    /// In-scope tests.
+    pub fn in_scope(&self) -> usize {
+        self.total - self.out_of_scope
+    }
+
+    /// In-scope tests that actually ran (not skipped or borked).
     pub fn ran(&self) -> usize {
-        self.total - self.skip - self.bork
+        self.in_scope() - self.skip - self.bork
     }
 
     /// Pass percentage of the tests that ran.
@@ -53,9 +62,9 @@ impl Counts {
         percent(self.pass, self.ran())
     }
 
-    /// Pass percentage of all tests (skips count against).
+    /// Pass percentage of all in-scope tests (skips count against).
     pub fn pass_rate_all(&self) -> f64 {
-        percent(self.pass, self.total)
+        percent(self.pass, self.in_scope())
     }
 }
 
@@ -104,40 +113,48 @@ pub fn dir_table(dirs: &BTreeMap<String, Counts>, total: &Counts) -> String {
     let mut s = String::new();
     let _ = writeln!(
         s,
-        "{:<width$} {:>6} {:>6} {:>6} {:>6} {:>6} {:>6} {:>7}",
-        "Directory", "total", "pass", "fail", "skip", "xfail", "bork", "pass%"
+        "{:<width$} {:>6} {:>6} {:>6} {:>6} {:>6} {:>6} {:>6} {:>7}",
+        "Directory", "total", "pass", "fail", "skip", "xfail", "bork", "out", "pass%"
     );
-    let _ = writeln!(s, "{}", "-".repeat(width + 50));
+    let _ = writeln!(s, "{}", "-".repeat(width + 57));
     let row = |s: &mut String, name: &str, c: &Counts| {
         let _ = writeln!(
             s,
-            "{name:<width$} {:>6} {:>6} {:>6} {:>6} {:>6} {:>6} {:>6.1}%",
+            "{name:<width$} {:>6} {:>6} {:>6} {:>6} {:>6} {:>6} {:>6} {:>6.1}%",
             c.total,
             c.pass,
             c.fail,
             c.skip,
             c.xfail,
             c.bork,
+            c.out_of_scope,
             c.pass_rate()
         );
     };
     for (dir, c) in dirs {
         row(&mut s, dir, c);
     }
-    let _ = writeln!(s, "{}", "-".repeat(width + 50));
+    let _ = writeln!(s, "{}", "-".repeat(width + 57));
     row(&mut s, "TOTAL", total);
     s
 }
 
-/// run-tests.php style summary block.
+/// run-tests.php style summary block (over in-scope tests).
 pub fn summary(total: &Counts, seconds: f64) -> String {
-    let n = total.total;
+    let n = total.in_scope();
     let x = total.ran();
     let pct = |v: usize| percent(v, n);
     let xpct = |v: usize| percent(v, x);
     let mut s = String::new();
     s.push_str("=====================================================================\n");
     let _ = writeln!(s, "Number of tests : {n:5}          {x:8}");
+    if total.out_of_scope > 0 {
+        let _ = writeln!(
+            s,
+            "Out of scope    : {:5} (not run, not counted)",
+            total.out_of_scope
+        );
+    }
     if total.bork > 0 {
         let _ = writeln!(
             s,
@@ -246,13 +263,21 @@ mod tests {
     #[test]
     fn counts_and_rates() {
         let mut c = Counts::default();
-        for s in [Status::Pass, Status::Warn, Status::Fail, Status::Skip] {
+        for s in [
+            Status::Pass,
+            Status::Warn,
+            Status::Fail,
+            Status::Skip,
+            Status::OutOfScope,
+        ] {
             c.add(s);
         }
         assert_eq!(c.pass, 2);
         assert_eq!(c.ran(), 3);
         assert!((c.pass_rate() - 66.666).abs() < 0.01);
         assert!((c.pass_rate_all() - 50.0).abs() < 0.01);
+        assert_eq!(c.out_of_scope, 1);
+        assert!(summary(&c, 1.0).contains("Out of scope    :     1"));
         let table = dir_table(&BTreeMap::from([("x".to_string(), c)]), &c);
         assert!(table.contains("TOTAL"));
         assert!(summary(&c, 1.0).contains("Tests passed    :     1"));

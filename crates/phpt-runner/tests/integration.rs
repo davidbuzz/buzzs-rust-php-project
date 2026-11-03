@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use phpt_runner::expectf::{expectf_matches, expectf_to_regex, regex_matches};
 use phpt_runner::phpt::{ExpectKind, TestFile};
@@ -40,10 +41,11 @@ fn fixture_copy(tag: &str) -> PathBuf {
 
 /// Run the binary and return the parsed JSON report and exit code.
 fn run_runner(args: &[&str], paths: &[&Path]) -> (JsonReport, Option<i32>, String) {
+    static COUNTER: AtomicUsize = AtomicUsize::new(0);
     let json = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!(
         "report-{}-{}.json",
         std::process::id(),
-        args.join("_").replace(['/', ' '], "_")
+        COUNTER.fetch_add(1, Ordering::SeqCst)
     ));
     let output = Command::new(env!("CARGO_BIN_EXE_phpt-runner"))
         .args(args)
@@ -233,6 +235,100 @@ fn redirect_test_against_reference_php() {
         ],
         "{stdout}"
     );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn scope_file_excludes_tests() {
+    let Some(php) = reference_php() else {
+        eprintln!("skipping: {REFERENCE_PHP} not found");
+        return;
+    };
+    let dir =
+        Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("phpt-scope-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(dir.join("outside")).unwrap();
+    fs::create_dir_all(dir.join("inside")).unwrap();
+    let fail = "--TEST--\nfails\n--FILE--\n<?php echo 1;\n--EXPECT--\n2\n";
+    fs::write(dir.join("outside/a.phpt"), fail).unwrap();
+    fs::write(dir.join("inside/b.phpt"), fail).unwrap();
+    fs::write(dir.join("scope.txt"), "# test\noutside\n").unwrap();
+    let baseline = dir.join("baseline.txt");
+    let (report, code, stdout) = run_runner(
+        &[
+            "--php",
+            php,
+            "--srcdir",
+            dir.to_str().unwrap(),
+            "--scope",
+            dir.join("scope.txt").to_str().unwrap(),
+            "--baseline",
+            baseline.to_str().unwrap(),
+            "--update-baseline",
+        ],
+        &[&dir],
+    );
+    assert_eq!(code, Some(0), "{stdout}");
+    assert_eq!(report.totals.total, 2, "{stdout}");
+    assert_eq!(report.totals.out_of_scope, 1, "{stdout}");
+    assert_eq!(report.totals.fail, 1, "{stdout}");
+    let out = report
+        .tests
+        .iter()
+        .find(|t| t.path == "outside/a.phpt")
+        .unwrap();
+    assert_eq!(out.result, Status::OutOfScope);
+    assert_eq!(out.name, "fails");
+    let text = fs::read_to_string(&baseline).unwrap();
+    assert!(
+        text.contains("inside/b.phpt") && !text.contains("outside"),
+        "{text}"
+    );
+
+    // --no-scope runs everything.
+    let (report, _, stdout) = run_runner(
+        &[
+            "--php",
+            php,
+            "--srcdir",
+            dir.to_str().unwrap(),
+            "--no-scope",
+        ],
+        &[&dir],
+    );
+    assert_eq!(report.totals.fail, 2, "{stdout}");
+    assert_eq!(report.totals.out_of_scope, 0, "{stdout}");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn env_option_reaches_tests() {
+    let Some(php) = reference_php() else {
+        eprintln!("skipping: {REFERENCE_PHP} not found");
+        return;
+    };
+    let dir =
+        Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("phpt-env-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(
+        dir.join("env.phpt"),
+        "--TEST--\nenv\n--FILE--\n<?php var_dump(getenv('PHPT_X'));\n--EXPECT--\nstring(3) \"a=b\"\n",
+    )
+    .unwrap();
+    let (report, code, stdout) = run_runner(
+        &[
+            "--php",
+            php,
+            "--srcdir",
+            dir.to_str().unwrap(),
+            "--env",
+            "PHPT_X=a=b",
+        ],
+        &[&dir],
+    );
+    assert_eq!(code, Some(0), "{stdout}");
+    assert_eq!(report.totals.pass, 1, "{stdout}");
     let _ = fs::remove_dir_all(&dir);
 }
 

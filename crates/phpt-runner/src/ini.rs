@@ -7,6 +7,13 @@ use std::fmt::Write as _;
 /// binary under test cannot report its own value.
 pub const E_ALL: u32 = 30719;
 
+/// `extension_dir` given to binaries that do not load a php.ini: a directory that does not
+/// exist, so a binary whose built-in `extension_dir` points at a system PHP installation cannot
+/// pick up that installation's shared modules (via `--EXTENSIONS--`, `dl()` or SKIPIF probes).
+/// A binary that loads php.ini files (e.g. a distribution `/usr/bin/php`, whose `extension=`
+/// lines need the real directory) keeps its own. `-d extension_dir=...` overrides either way.
+pub const NO_EXTENSION_DIR: &str = "/nonexistent/phpt-runner-extension-dir";
+
 /// The INI settings run-tests.php passes to every test with `-d`. `e_all` is the `E_ALL` value
 /// for `error_reporting` (run-tests.php uses the constant of the PHP running it, normally the
 /// binary under test).

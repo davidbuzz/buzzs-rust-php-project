@@ -82,7 +82,13 @@ impl Extensions {
 
 /// Ask the binary for its `E_ALL` value (`php -r 'echo E_ALL;'`).
 pub fn probe_e_all(php: &Path, env: &Env, cwd: &Path) -> Option<u32> {
-    let argv: Vec<OsString> = vec![php.into(), os("-r"), os("echo E_ALL;")];
+    let argv: Vec<OsString> = vec![
+        php.into(),
+        os("-d"),
+        os("memory_limit=128M"),
+        os("-r"),
+        os("echo E_ALL;"),
+    ];
     let out = run(&Invocation {
         argv: &argv,
         env,
@@ -94,6 +100,28 @@ pub fn probe_e_all(php: &Path, env: &Env, cwd: &Path) -> Option<u32> {
     })
     .ok()?;
     std::str::from_utf8(trim(&out.data)).ok()?.parse().ok()
+}
+
+/// Does the binary load php.ini files (`php_ini_loaded_file()` / `php_ini_scanned_files()`)?
+/// False if it cannot say.
+pub fn probe_loads_ini_files(php: &Path, env: &Env, cwd: &Path) -> bool {
+    let argv: Vec<OsString> = vec![
+        php.into(),
+        os("-d"),
+        os("memory_limit=128M"),
+        os("-r"),
+        os("echo (php_ini_loaded_file() !== false || php_ini_scanned_files() !== false) ? 'yes' : 'no';"),
+    ];
+    run(&Invocation {
+        argv: &argv,
+        env,
+        cwd,
+        stdin: None,
+        capture: Capture::STDOUT_ONLY,
+        discard_stderr: true,
+        timeout: Duration::from_secs(30),
+    })
+    .is_ok_and(|out| trim(&out.data) == b"yes")
 }
 
 /// Settings shared by all tests in a run.
