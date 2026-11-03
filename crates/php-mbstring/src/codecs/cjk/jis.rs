@@ -2021,4 +2021,62 @@ mod tests {
                 .collect::<Vec<_>>()
         );
     }
+
+    /// Replay the error-free oracle conversions through the legacy filters:
+    /// on valid input they must agree with the fast codecs.
+    #[test]
+    fn legacy_filters_agree_on_valid_oracle_cases() {
+        let path = crate::codecs::cjk::testutil::fixture_path("jis_oracle.tsv");
+        let Ok(text) = std::fs::read_to_string(path) else {
+            return;
+        };
+        let unhex = |h: &str| -> Vec<u8> {
+            (0..h.len())
+                .step_by(2)
+                .map(|i| u8::from_str_radix(&h[i..i + 2], 16).unwrap_or(0))
+                .collect()
+        };
+        let mut mismatches = Vec::new();
+        let mut checked = 0;
+        for line in text.lines() {
+            let f: Vec<&str> = line.split('\t').collect();
+            if f[0] != "conv" || f[6] != "0" || f[1] == f[2] {
+                continue;
+            }
+            if f[2] == "UTF-8" {
+                let e = crate::codecs::cjk::testutil::enc(f[1]);
+                let input = unhex(f[4]);
+                checked += 1;
+                if legacy_decode(e, &input) != decode(e, &input) {
+                    mismatches.push(format!("decode {} {}", f[1], f[4]));
+                }
+            } else {
+                let e = crate::codecs::cjk::testutil::enc(f[2]);
+                let text = String::from_utf8(unhex(f[4])).unwrap_or_default();
+                let w = u(&text);
+                if e.no == EncodingNo::Jis && w.iter().any(|c| (0xFF61..=0xFF9F).contains(c)) {
+                    // The legacy JIS encoder (like the C one) mangles
+                    // halfwidth kana by sending them down the JIS X 0208 path.
+                    continue;
+                }
+                if e.no == EncodingNo::Iso2022JpKddi
+                    && w.iter().any(|c| (0x1F1E6..=0x1F1FF).contains(c))
+                {
+                    // Only the fast KDDI encoder knows the flag emoji.
+                    continue;
+                }
+                checked += 1;
+                if legacy_encode(e, &w) != encode(e, &w).0 {
+                    mismatches.push(format!("encode {} {}", f[2], f[4]));
+                }
+            }
+        }
+        assert!(checked > 1000);
+        assert!(
+            mismatches.is_empty(),
+            "{} mismatches:\n{}",
+            mismatches.len(),
+            mismatches[..mismatches.len().min(40)].join("\n")
+        );
+    }
 }
