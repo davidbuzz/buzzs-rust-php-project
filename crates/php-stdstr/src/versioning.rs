@@ -205,7 +205,7 @@ mod tests {
         assert_eq!(canonicalize_version(b"1.0-dev"), b"1.0.dev");
         assert_eq!(canonicalize_version(b"1.0rc1"), b"1.0.rc.1");
         assert_eq!(canonicalize_version(b"1.2."), b"1.2");
-        assert_eq!(canonicalize_version(b"1..2"), b"1..2");
+        assert_eq!(canonicalize_version(b"1..2"), b"1.2");
         assert_eq!(canonicalize_version(b""), b"");
     }
 
