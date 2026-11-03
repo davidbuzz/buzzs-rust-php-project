@@ -1,6 +1,8 @@
 //! Script-level tests of type-declaration coercion (expected output from
 //! `/usr/bin/php -n`, paths normalised to `t.php`).
 
+#![allow(clippy::needless_raw_string_hashes)]
+
 use crate::{Vm, VmOptions};
 use std::cell::RefCell;
 use std::io::Write;
