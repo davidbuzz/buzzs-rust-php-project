@@ -16,6 +16,20 @@
 //! The crate does not depend on the runtime's value types: inputs and
 //! outputs are integers, floats, byte strings and slices, and every PHP
 //! throwable is described by a [`RandomError`] carrying PHP's exact message.
+//!
+//! ```
+//! use php_random::{Mt19937, Mt19937Mode, RandomGlobals, Randomizer};
+//!
+//! // mt_srand(42); mt_rand(); mt_rand(1, 100);
+//! let mut g = RandomGlobals::new();
+//! g.mt_srand(Some(42), php_random::MT_RAND_MT19937);
+//! assert_eq!(g.mt_rand(), 804_318_771);
+//! assert_eq!(g.mt_rand_range(1, 100), Ok(68));
+//!
+//! // (new Random\Randomizer(new Random\Engine\Mt19937(1)))->getInt(0, 10)
+//! let mut r = Randomizer::new(Mt19937::new(1, Mt19937Mode::Mt19937));
+//! assert_eq!(r.get_int(0, 10), Ok(0));
+//! ```
 
 pub mod csprng;
 pub mod engine;
