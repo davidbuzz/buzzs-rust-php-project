@@ -18,6 +18,7 @@ mod converter;
 mod core;
 mod dateformat;
 mod dt;
+mod intlchar;
 mod iter;
 mod locale;
 mod misc;
@@ -121,6 +122,7 @@ fn all_handlers() -> HashMap<&'static str, NativeFn> {
         converter::handlers(),
         resbundle::handlers(),
         spoof::handlers(),
+        intlchar::handlers(),
         iter::handlers(),
         timezone::handlers(),
         calendar::handlers(),
@@ -187,6 +189,9 @@ fn class_opts(name: &str) -> registry::ClassOpts {
         }
         "Spoofchecker" => {
             o.hooks = ClassHooks { clone: Some(spoof::clone), ..ClassHooks::default() };
+        }
+        "IntlDatePatternGenerator" => {
+            o.hooks = ClassHooks { clone: Some(intlchar::dtpg_clone), ..ClassHooks::default() };
         }
         "Transliterator" => {
             o.hooks = ClassHooks { clone: Some(translit::clone), ..ClassHooks::default() };
