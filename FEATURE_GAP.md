@@ -4,7 +4,7 @@ What has to be built for the Rust port to pass the php-src test suite, and how f
 Right now it is the TODO list. Once items are done, it becomes the itemised record of what was completed.
 
 - **%**: estimated completion. Where possible, this should track the share of that item's `.phpt` tests that pass.
-- **Pri**: `high` blocks most other work or most tests; `med` is a widely used feature; `low` is niche, platform-specific or optional.
+- **Pri**: `high` blocks most other work or most tests; `med` is a widely used feature; `low` is niche, platform-specific or optional; `out` = out of scope (decided 3 Nov 2026: opcache/JIT, non-CLI SAPIs except apache2handler, server-backed DB/protocol clients except mysqli, ffi, readline, tidy/enchant/com_dotnet/imap). Out-of-scope tests are excluded from headline pass rates.
 - **Source / tests**: where the reference lives in `modules/php-src/` and how many `.phpt` files cover it, as counted at commit `0c7255dc521`. The whole tree has 23,792 `.phpt` files.
 
 Keep rows when they reach 100%; they become the completion record. Add rows as gaps are found.
@@ -60,10 +60,11 @@ Keep rows when they reach 100%; they become the completion record. Add rows as g
 | **SAPIs** | | | |
 | CLI (`php` binary) | 0% | high | Arguments, `-r`, `-d`, `-n`, `-l`, STDIN/STDOUT/STDERR constants, exit codes. Ref: `sapi/cli` (127). |
 | CLI built-in web server | 0% | low | `php -S`. Ref: `sapi/cli/php_cli_server.c`. |
-| CGI | 0% | low | Ref: `sapi/cgi` (24). |
-| FPM | 0% | low | Ref: `sapi/fpm` (151). |
-| phpdbg | 0% | low | Ref: `sapi/phpdbg` (74). |
-| Embed / apache2handler / litespeed / fuzzer | 0% | low | No tests of their own; probably out of scope. |
+| CGI | n/a | out | **Out of scope** (non-CLI SAPI). Ref: `sapi/cgi` (24). |
+| FPM | n/a | out | **Out of scope** (non-CLI SAPI). Ref: `sapi/fpm` (151). |
+| phpdbg | n/a | out | **Out of scope** (debugger SAPI). Ref: `sapi/phpdbg` (74). |
+| apache2handler (mod_php) | 0% | med | **In scope** (user request): Apache module SAPI — needs apache2-dev/apxs; no .phpt tests of its own, verified by loading into httpd. Ref: `sapi/apache2handler`. |
+| Embed / litespeed / fuzzer | n/a | out | **Out of scope** (non-CLI SAPIs without tests). |
 | **Core extensions (always enabled)** | | | |
 | ext/standard | 0% | high | Strings, arrays, math, files, `var_dump`/`print_r`/`var_export`, `serialize`, `sprintf`, `preg`-free string functions, URLs, base64, crc32, md5/sha1, `proc_open`, `mail`… The largest extension (4,068 `.phpt`). Split into sub-rows as work starts. |
 | ext/standard — string/url/math algorithms (php-stdstr) | 60% | high | `crates/php-stdstr` is complete as a library of byte-exact ports (plain `&[u8]`/`i64`/`f64` APIs, `StdError` for throws, `Notice` buffer for warnings/deprecations, master wording): case/trim (`..` ranges)/pad/`wordwrap`/`chunk_split`/`nl2br`/`strrev`/`str_repeat`/`str_split`/`strtr` (both forms)/`str_replace`/`str_ireplace`/`substr`/`substr_replace`/`substr_count`/`strpos` family/`strstr`/`strrchr`/`strpbrk`/`strspn`/`explode`/`strtok` (stateful)/`str_increment`/`hebrev`/`basename`/`dirname`/`pathinfo`, `strcmp` family/`strnatcmp`/`substr_compare`, `similar_text`/`levenshtein`/`soundex`/`metaphone`/`str_word_count`/`count_chars`, slashes/`quotemeta`, `strip_tags`, `chr`/`ord`/`bin2hex`/`hex2bin`/`utf8_*`, `html*` entity functions (all flags/doctypes/charsets, generated tables), `urlencode` family/`parse_url`, base64/uuencode/quoted-printable, CSV (`str_getcsv`/`fgetcsv` core/`fputcsv`), `sscanf`, `pack`/`unpack`, `version_compare`, `base_convert`/`bindec`/…/`intdiv`/`fmod`/`fdiv`/`log`/round-mode parsing. ~74k oracle cases vs `/usr/bin/php` (`tests/fixtures/*.txt`, mapped to master). Remaining: VM bindings (argument coercion, array forms, alias names), `implode`/`http_build_query`/`parse_str`/`str_shuffle` (value-level, VM), locale-dependent paths (non-ASCII `basename`, `setlocale`). |
@@ -113,18 +114,19 @@ Keep rows when they reach 100%; they become the completion record. Add rows as g
 | **Databases** | | | |
 | ext/pdo (core) | 0% | med | PDO abstraction (137). |
 | ext/pdo_sqlite / ext/sqlite3 | 70% | med | SQLite support, self-contained so testable in CI (95 / 108). `crates/php-sqlite` (system libsqlite3 3.45.1): SQLite3/SQLite3Stmt/SQLite3Result with all sqlite3.c messages, UDF/aggregate/collation/authorizer callbacks, blob streams (php-streams StreamOps), PDO driver (dbh/stmt method tables, SQLSTATE mapping, column meta, attributes, Pdo\Sqlite methods), pdo_sql_parser port + SQLSTATE table; 61 tests port the phpt logic. Remaining: VM class wiring, ZPP, PDO core (fetch modes, errmode handling). |
-| ext/mysqli, ext/mysqlnd, ext/pdo_mysql | 0% | low | Need a live MySQL server to test (495 / 0 / 169). |
-| ext/pgsql, ext/pdo_pgsql | 0% | low | Need a live PostgreSQL server to test (105 / 96). |
-| ext/odbc, pdo_odbc, pdo_dblib, pdo_firebird, dba | 0% | low | (54 / 26 / 33 / 51 / 61). |
-| ext/ldap, ext/snmp | 0% | low | Need external services (142 / 42). |
+| ext/mysqli + ext/mysqlnd | 0% | med | **In scope** (user request): pure-Rust port of the mysqlnd client protocol (auth plugins, text + binary/prepared protocols, charsets) and the mysqli API (495). Tests need a live MySQL/MariaDB server (MYSQL_TEST_* env). |
+| ext/pdo_mysql | n/a | out | **Out of scope** for now (shares mysqlnd; cheap to add after mysqli) (169). |
+| ext/pgsql, ext/pdo_pgsql | n/a | out | **Out of scope** (needs a live PostgreSQL server; skipped in php-src CI without one). Need a live PostgreSQL server to test (105 / 96). |
+| ext/odbc, pdo_odbc, pdo_dblib, pdo_firebird, dba | n/a | out | **Out of scope** (external drivers/servers). (54 / 26 / 33 / 51 / 61). |
+| ext/ldap, ext/snmp | n/a | out | **Out of scope** (external services). Need external services (142 / 42). |
 | **POSIX / OS** | | | |
 | ext/posix | 60% | low | (61). `crates/php-posix` is complete as a library over libc (all `unsafe` in `sys.rs`): every `posix_*` function as a method on `Posix` (owning `last_error`) with PHP's return shapes (`entries()` give exact array keys/order for uname/times/getpwnam/getgrnam incl. members/getrlimit with `"unlimited"`), pid/fd range checks and exact `ValueError`/warning texts, `setrlimit` validation, `mknod` major check, `expand_filepath` for access/eaccess, errno semantics (`posix_get_last_error`/`posix_errno`/`posix_strerror`), all `POSIX_*` constants (master list) from libc. Verified against `/usr/bin/php` (constants, strerror table, uname, pw/gr lookups incl. not-found errno, rlimits, sysconf, pathconf) plus hand-ported phpt cases. Remaining: VM bindings (`int\|resource` fd juggling + stream→fd cast, `open_basedir`, array conversion). |
 | ext/pcntl | 60% | low | Process control, signals (69). `crates/php-pcntl` (all `unsafe` in `sys.rs`): `Pcntl<C>` (PCNTL_G: handler table over the VM's callable type, last_error, async flag) with fork/waitpid/wait/waitid (status pass-through, rusage arrays, siginfo shape), W* macros, exec (argv/envp marshalling + NUL errors), alarm, signal (SIG_DFL/SIG_IGN/callable, restart default, zend_signal fatal for uncatchable signals), get_handler, sigprocmask/sigwaitinfo/sigtimedwait (siginfo arrays per signal incl. SIGCHLD utime/stime, RT signals), priority/unshare/setns/cpu affinity/getcpu with master's exact warnings & ValueErrors; lock-free async-signal-safe signal queue (65 records) with a two-step `begin_dispatch`/`end_dispatch` protocol (re-entrancy guard, requeue after a throwing handler) and `signals_pending`/`async_interrupt_pending` polling hooks. Tests: oracle (constants, status macros, strerror), isolated-subprocess fork/wait/waitid/signal/sigprocmask/exec/priority/namespace/affinity scenarios, and a harness-less single-threaded test for process-directed signals (002.phpt). Remaining: VM wiring (ticks, interrupt checks, `php_child_init`, callable invocation). rfork/forkx/QoS are not built on Linux. |
-| ext/readline | 0% | low | Interactive shell `php -a` (36). |
+| ext/readline | n/a | out | **Out of scope** (interactive php -a only). Interactive shell `php -a` (36). |
 | ext/shmop, sysvmsg, sysvsem, sysvshm | 65% | low | SysV IPC (7 / 9 / 3 / 16). `crates/php-sysv` (all `unsafe` in `sys.rs`): `MessageQueue` (get/exists/send/receive with flag mapping, E2BIG/ENOMSG errno out-params, stat array/set, non-serialized payload rendering incl. `%F`), `Semaphore` (PHP's exact 3-semaphore SYSVSEM_SEM/USAGE/SETVAL protocol, auto-release on drop, warnings), `SharedMemory` (byte-exact `sysvshm_chunk_head`/`sysvshm_chunk` layout, bounds-checked, init_mem default, the destroyed/serialization Errors), `Shmop` (modes a/c/w/n, read/write/size/delete); key range ValueErrors. Tests on real IPC objects plus interop with `/usr/bin/php` (queues, semaphores, shm segments read/written by both). Remaining: VM bindings ((un)serialize around the byte APIs, objects). |
 | **Engine extras** | | | |
-| ext/opcache | 0% | low | Many of its 1,038 tests check optimizer/JIT internals; decide which behaviour-only tests to keep. Ref: `Zend/Optimizer`. |
-| Optimizer passes | 0% | low | Only needed where they change observable behaviour, e.g. some warnings. Ref: `Zend/Optimizer/`. |
-| ext/ffi | 0% | low | C FFI from PHP (109). |
+| ext/opcache | n/a | out | **Out of scope** (opcache.enable_cli=0 by default; tests probe optimizer/JIT internals). Many of its 1,038 tests check optimizer/JIT internals; decide which behaviour-only tests to keep. Ref: `Zend/Optimizer`. |
+| Optimizer passes | n/a | out | **Out of scope** (no observable behaviour without opcache). Only needed where they change observable behaviour, e.g. some warnings. Ref: `Zend/Optimizer/`. |
+| ext/ffi | n/a | out | **Out of scope** (default-disabled (ffi.enable=preload); needs a C declaration parser + libffi). C FFI from PHP (109). |
 | ext/zend_test, dl_test, skeleton | 0% | low | Test-only helper extensions that some Zend tests depend on (168 / 3 / 3). |
-| ext/tidy, enchant, com_dotnet, imap | 0% | low | Niche or Windows-only; probably out of scope (53 / 33 / 42 / 1). |
+| ext/tidy, enchant, com_dotnet, imap | n/a | out | **Out of scope** (niche libraries / Windows-only). Niche or Windows-only; probably out of scope (53 / 33 / 42 / 1). |
