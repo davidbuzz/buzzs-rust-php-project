@@ -1,11 +1,22 @@
 [package]
 name = "php-zip"
+description = "PHP's ext/zip (ZipArchive, the zip:// wrapper and the deprecated zip_* functions) bound to the system libzip"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
+build = "build.rs"
 
 [dependencies]
+libc = "0.2"
+php-runtime = { path = "../php-runtime" }
+php-streams = { path = "../php-streams" }
+
+[build-dependencies]
+pkg-config = "0.3"
+
+[dev-dependencies]
+php-pcre = { path = "../php-pcre" }
 
 [lints]
 workspace = true
