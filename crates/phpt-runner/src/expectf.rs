@@ -143,11 +143,15 @@ fn pattern_to_ascii(re: &[u8]) -> String {
     out
 }
 
+/// Largest JIT stack for whole-output matches. PCRE2 reserves it as virtual memory per regex,
+/// so it is only used for the one-off full match, never for cached line patterns.
+const JIT_STACK_SIZE: usize = 64 * 1024 * 1024;
+
 fn build(pattern: &str, jit: bool) -> Option<Regex> {
     RegexBuilder::new()
         .dotall(true)
         .jit_if_available(jit)
-        .max_jit_stack_size(Some(64 * 1024 * 1024))
+        .max_jit_stack_size(jit.then_some(JIT_STACK_SIZE))
         .build(pattern)
         .ok()
 }
@@ -191,7 +195,8 @@ impl LineMatcher {
             if has_unescaped_delimiter(&re) {
                 None
             } else {
-                build(&format!("^{}$", pattern_to_ascii(&re)), true)
+                // Lines are short: the interpreter is fine and needs no JIT stack.
+                build(&format!("^{}$", pattern_to_ascii(&re)), false)
             }
         });
         regex

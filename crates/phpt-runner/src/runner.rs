@@ -165,7 +165,6 @@ type SkipKey = (PathBuf, Vec<OsString>, Vec<u8>);
 pub struct Runner {
     config: Config,
     skip_cache: Mutex<HashMap<SkipKey, Vec<u8>>>,
-    line_matcher: LineMatcher,
 }
 
 enum Once {
@@ -384,7 +383,6 @@ impl Runner {
         Runner {
             config,
             skip_cache: Mutex::new(HashMap::new()),
-            line_matcher: LineMatcher::default(),
         }
     }
 
@@ -887,7 +885,10 @@ impl Runner {
         let mut diff = match kind {
             ExpectKind::Exact => generate_diff(&wanted, &output, &|e, o| e == o),
             ExpectKind::Format | ExpectKind::Regex => {
-                generate_diff(&wanted, &output, &|e, o| self.line_matcher.matches(e, o))
+                // A fresh matcher per diff: its cache of compiled line patterns must not
+                // outlive the test.
+                let matcher = LineMatcher::default();
+                generate_diff(&wanted, &output, &|e, o| matcher.matches(e, o))
             }
         };
         if a.redirect.is_some() {
