@@ -76,6 +76,10 @@ fn properties_for(vm: &mut Vm, o: &Obj, purpose: PropertyPurpose) -> VmResult<Op
     if spl_state_of(o).is_none() {
         return Ok(None);
     }
+    if purpose == PropertyPurpose::Debug && php_vm::object::class_of(o).magic.debug_info.is_some() {
+        // The VM calls `__debugInfo()` (native or a user override).
+        return Ok(None);
+    }
     with_host(vm, |host| {
         if purpose == PropertyPurpose::Debug {
             if let Some(t) = h::debug_info(host, o)? {

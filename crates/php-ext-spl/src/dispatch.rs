@@ -335,6 +335,26 @@ fn collect_args(args: &Args, target: Target) -> Vec<Value> {
         .collect()
 }
 
+/// `spl_array_method`: the `ArrayObject`/`ArrayIterator` sort methods
+/// call the array function of the same name, which may be disabled.
+fn disabled_sort(vm: &mut Vm, t: Target) -> Option<Throw> {
+    const SORTS: &[&str] = &["asort", "ksort", "uasort", "uksort", "natsort", "natcasesort"];
+    if !matches!(t.class, "ArrayObject" | "ArrayIterator") {
+        return None;
+    }
+    let name = SORTS.iter().find(|s| s.eq_ignore_ascii_case(t.def.name))?;
+    let list = vm.ini_string("disable_functions")?;
+    let disabled = list
+        .split(|&b| b == b',' || b == b' ')
+        .any(|f| f.eq_ignore_ascii_case(name.as_bytes()));
+    disabled.then(|| {
+        vm.throw(
+            "Error",
+            &format!("Cannot call method {name} when function {name} is disabled"),
+        )
+    })
+}
+
 /// The native handler of every SPL method.
 fn method_handler(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let Some(f) = a.func.clone() else {
@@ -351,6 +371,9 @@ fn method_handler(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         if let Some(msg) = php_spl::classes::deprecation_message(t.class, t.def.name) {
             vm.raise(8192, &msg)?;
         }
+    }
+    if let Some(e) = disabled_sort(vm, t) {
+        return Err(e);
     }
     let args = collect_args(a, t);
     let this = a.this.clone();
