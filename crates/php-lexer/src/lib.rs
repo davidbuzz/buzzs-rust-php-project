@@ -1,19 +1,66 @@
 //! A tokenizer for PHP source code, ported from the Zend engine's re2c
-//! scanner (`Zend/zend_language_scanner.l`).
+//! scanner (`Zend/zend_language_scanner.l`, php-src master).
 //!
 //! PHP source is a byte string, so the lexer operates on `&[u8]`.
 //!
-//! * [`Lexer`] is the scanner. In [`LexMode::Tokenizer`] it behaves like
-//!   `token_get_all()`; in [`LexMode::Parser`] it behaves like the compiler's
-//!   scanner (token values, `?>` as `;`, scanner errors as `T_ERROR`).
-//! * [`token_get_all`] returns the same `(id, text, line)` triples as PHP's
-//!   `token_get_all()` without flags.
+//! # Tokenizer API
+//!
+//! [`token_get_all`] returns the same `(id, text, line)` triples as PHP's
+//! `token_get_all()` without flags (verified against `/usr/bin/php` over every
+//! `.phpt` file in php-src), and [`Lexer::new`] is a plain iterator of
+//! [`Token`]s with the same semantics:
 //!
 //! ```
-//! use php_lexer::{token_get_all, TokenKind};
+//! use php_lexer::{token_get_all, Lexer, TokenKind};
 //! let toks = token_get_all(b"<?php echo 1;");
 //! assert_eq!(toks[1].kind, TokenKind::Echo);
 //! assert_eq!(toks[1].text, b"echo");
+//! assert_eq!(toks[1].kind.id(), 291); // T_ECHO
+//!
+//! let kinds: Vec<TokenKind> = Lexer::new(b"<?php $a;").map(|t| t.kind).collect();
+//! assert_eq!(kinds, [TokenKind::OpenTag, TokenKind::Variable, TokenKind::Semicolon]);
+//! ```
+//!
+//! # Parser mode
+//!
+//! With [`LexMode::Parser`] the lexer behaves like the scanner the compiler
+//! uses:
+//!
+//! * `?>` is returned as [`TokenKind::Semicolon`] (with the `?>` text) and
+//!   `<?=` as [`TokenKind::Echo`];
+//! * whitespace, comments and open tags are still returned (they are
+//!   [`TokenKind::is_trivia`]) so that a parser can track doc comments; a
+//!   parser should skip them;
+//! * after each token, [`Lexer::take_value`] yields the semantic value of
+//!   number and string tokens: integers that overflow become floats, escape
+//!   sequences are resolved and heredoc/nowdoc indentation is removed;
+//! * a scanner error (e.g. `Invalid numeric literal`, `Unclosed '{' on line
+//!   2`) produces a [`TokenKind::Error`] token and [`Lexer::error`] gives
+//!   PHP's message and line; iteration stops afterwards;
+//! * deprecations and compile warnings (non-canonical casts, octal escape
+//!   overflow) are collected in [`Lexer::warnings`].
+//!
+//! A syntax error at a token is reported by PHP on [`Token::end_line`], and
+//! [`TokenKind::unexpected_description`] / [`TokenKind::expected_name`] render
+//! tokens the way bison error messages do. After `__halt_compiler ( ) ;` a
+//! parser should call [`Lexer::stop`]; [`Lexer::offset`] at that point is the
+//! value of `__COMPILER_HALT_OFFSET__`.
+//!
+//! ```
+//! use php_lexer::{LexMode, Lexer, LexerOptions, TokenKind, TokenValue};
+//! let opts = LexerOptions { mode: LexMode::Parser, ..LexerOptions::default() };
+//! let mut lx = Lexer::with_options(b"<?php 0x10;", opts);
+//! let mut values = Vec::new();
+//! while let Some(tok) = lx.next_token() {
+//!     if !tok.kind.is_trivia() {
+//!         values.push((tok.kind, lx.take_value()));
+//!     }
+//! }
+//! assert_eq!(values[0], (TokenKind::LNumber, Some(TokenValue::Int(16))));
+//!
+//! let mut lx = Lexer::with_options(b"<?php 08;", opts);
+//! let err = lx.find(|t| t.kind == TokenKind::Error).map(|_| lx.error().cloned());
+//! assert_eq!(err.flatten().unwrap().message, "Invalid numeric literal");
 //! ```
 
 #![warn(missing_docs)]

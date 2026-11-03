@@ -259,6 +259,8 @@ impl<'a> Lexer<'a> {
     }
 
     /// The scanner error that produced the last `T_ERROR` token (parser mode).
+    /// In tokenizer mode no `T_ERROR` is produced; this holds the first error
+    /// PHP would have raised (and `token_get_all()` ignores).
     pub fn error(&self) -> Option<&LexError> {
         self.error.as_ref()
     }
