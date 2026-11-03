@@ -28,6 +28,37 @@ pub(crate) fn run<T>(
     a: &Args,
     f: impl FnOnce(&mut php_openssl::OpenSsl) -> PhpResult<T>,
 ) -> VmResult<T> {
+    let result = run_raw(vm, f)?;
+    result.map_err(|t| throw(vm, a, &t))
+}
+
+/// Like [`run`] for functions that warn "X.509 Certificate cannot be
+/// retrieved" when loading argument `cert_arg` fails: PHP prints that
+/// warning even when the failure was a thrown `ValueError` (e.g. a
+/// `file://` path with a NUL byte), so it precedes the exception.
+pub(crate) fn run_cert<T>(
+    vm: &mut Vm,
+    a: &Args,
+    cert_arg: u32,
+    f: impl FnOnce(&mut php_openssl::OpenSsl) -> PhpResult<T>,
+) -> VmResult<T> {
+    match run_raw(vm, f)? {
+        Ok(v) => Ok(v),
+        Err(t) => {
+            let e = throw(vm, a, &t);
+            if matches!(t, Throw::ArgumentValueError { arg, .. } if arg == cert_arg) {
+                vm.php_warning("X.509 Certificate cannot be retrieved")?;
+            }
+            Err(e)
+        }
+    }
+}
+
+/// Runs `f` and raises its diagnostics, returning the library result.
+fn run_raw<T>(
+    vm: &mut Vm,
+    f: impl FnOnce(&mut php_openssl::OpenSsl) -> PhpResult<T>,
+) -> VmResult<PhpResult<T>> {
     let cafile = vm.ini_string("openssl.cafile").unwrap_or_default();
     let capath = vm.ini_string("openssl.capath").unwrap_or_default();
     let basedir = vm.ini_string("open_basedir").filter(|b| !b.is_empty());
@@ -41,7 +72,7 @@ pub(crate) fn run<T>(
         (r, ssl.take_diagnostics())
     });
     emit(vm, diags)?;
-    result.map_err(|t| throw(vm, a, &t))
+    Ok(result)
 }
 
 /// Like [`run`] for library calls that cannot throw.
@@ -68,10 +99,10 @@ pub(crate) fn emit(vm: &mut Vm, diags: Vec<Diagnostic>) -> VmResult<()> {
 /// Converts a library [`Throw`] into the VM throwable.
 pub(crate) fn throw(vm: &mut Vm, a: &Args, t: &Throw) -> php_vm::ext::Throw {
     match t {
-        Throw::ArgumentValueError { arg, message } => {
-            a.value_error(vm, *arg as usize, message)
+        Throw::ArgumentValueError { arg, message } => a.value_error(vm, *arg as usize, message),
+        Throw::ArgumentMustNotBeEmpty { arg } => {
+            a.value_error(vm, *arg as usize, "must not be empty")
         }
-        Throw::ArgumentMustNotBeEmpty { arg } => a.value_error(vm, *arg as usize, "must not be empty"),
         Throw::ValueError(m) => vm.throw("ValueError", m),
         Throw::Exception(m) => vm.throw("Exception", m),
     }
@@ -81,6 +112,22 @@ pub(crate) fn throw(vm: &mut Vm, a: &Args, t: &Throw) -> php_vm::ext::Throw {
 pub(crate) fn deprecated_function(vm: &mut Vm, a: &Args, message: &str) -> VmResult<()> {
     vm.raise(
         E_DEPRECATED,
-        &format!("Function {}() is deprecated since 8.0, {message}", a.func_name()),
+        &format!(
+            "Function {}() is deprecated since 8.0, {message}",
+            a.func_name()
+        ),
     )
+}
+
+/// ZPP's `p` / `p!` check: the string arguments at `indices` (0-based)
+/// must not contain NUL bytes.
+pub(crate) fn check_paths(vm: &mut Vm, a: &Args, indices: &[usize]) -> VmResult<()> {
+    for &n in indices {
+        if let Some(php_runtime::Value::Str(s)) = a.get(n) {
+            if s.as_bytes().contains(&0) {
+                return Err(a.value_error(vm, n + 1, "must not contain any null bytes"));
+            }
+        }
+    }
+    Ok(())
 }

@@ -14,7 +14,7 @@ use crate::convert::{
     string_values, to_bytes,
 };
 use crate::objects::{CertHold, KeyHold};
-use crate::state::{run, run_ok};
+use crate::state::{check_paths, run, run_cert, run_ok};
 
 /// `?array $headers`: `"name: value"` / `"value"` lines.
 fn headers(vm: &mut Vm, a: &Args, n: usize) -> VmResult<Option<Vec<Header>>> {
@@ -87,6 +87,7 @@ fn set_cert_list(a: &Args, n: usize, list: Option<Vec<Vec<u8>>>) -> Value {
 }
 
 fn pkcs7_verify(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    check_paths(vm, a, &[0, 2, 4, 5, 6])?;
     let input = a.str(0);
     let flags = a.int(1);
     let signers = opt_bytes(a, 2);
@@ -109,6 +110,7 @@ fn pkcs7_verify(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 }
 
 fn pkcs7_encrypt(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    check_paths(vm, a, &[0, 1])?;
     let (input, output) = (a.str(0), a.str(1));
     let recips = recipients(vm, &a.at(2))?;
     let hdrs = headers(vm, a, 3)?;
@@ -134,13 +136,14 @@ fn pkcs7_read(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 }
 
 fn pkcs7_sign(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    check_paths(vm, a, &[0, 1, 6])?;
     let (input, output) = (a.str(0), a.str(1));
     let cert = cert_hold(vm, &a.at(2))?;
     let key = key_hold(vm, &a.at(3))?;
     let hdrs = headers(vm, a, 4)?;
     let flags = int_or(a, 5, PKCS7_DETACHED);
     let untrusted = opt_bytes(a, 6);
-    let ok = run(vm, a, |s| {
+    let ok = run_cert(vm, a, 3, |s| {
         s.pkcs7_sign(
             input.as_bytes(),
             output.as_bytes(),
@@ -155,10 +158,11 @@ fn pkcs7_sign(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 }
 
 fn pkcs7_decrypt(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    check_paths(vm, a, &[0, 1])?;
     let (input, output) = (a.str(0), a.str(1));
     let cert = cert_hold(vm, &a.at(2))?;
     let key = opt_key(vm, a, 3)?;
-    let ok = run(vm, a, |s| {
+    let ok = run_cert(vm, a, 3, |s| {
         let k = key.as_ref().map(KeyHold::arg);
         s.pkcs7_decrypt(input.as_bytes(), output.as_bytes(), cert.arg(), k.as_ref())
     })?;
@@ -166,6 +170,7 @@ fn pkcs7_decrypt(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 }
 
 fn cms_verify(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    check_paths(vm, a, &[0, 2, 4, 5, 6, 7])?;
     let input = a.str(0);
     let flags = a.int(1);
     let certs = opt_bytes(a, 2);
@@ -192,6 +197,7 @@ fn cms_verify(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 }
 
 fn cms_encrypt(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    check_paths(vm, a, &[0, 1])?;
     let (input, output) = (a.str(0), a.str(1));
     let recips = recipients(vm, &a.at(2))?;
     let hdrs = headers(vm, a, 3)?;
@@ -224,6 +230,7 @@ fn cms_read(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 }
 
 fn cms_sign(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    check_paths(vm, a, &[0, 1, 7])?;
     let (input, output) = (a.str(0), a.str(1));
     let cert = cert_hold(vm, &a.at(2))?;
     let key = key_hold(vm, &a.at(3))?;
@@ -231,7 +238,7 @@ fn cms_sign(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let flags = a.int(5);
     let encoding = int_or(a, 6, OPENSSL_ENCODING_SMIME);
     let untrusted = opt_bytes(a, 7);
-    let ok = run(vm, a, |s| {
+    let ok = run_cert(vm, a, 3, |s| {
         s.cms_sign(
             input.as_bytes(),
             output.as_bytes(),
@@ -247,11 +254,12 @@ fn cms_sign(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 }
 
 fn cms_decrypt(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    check_paths(vm, a, &[0, 1])?;
     let (input, output) = (a.str(0), a.str(1));
     let cert = cert_hold(vm, &a.at(2))?;
     let key = opt_key(vm, a, 3)?;
     let encoding = int_or(a, 4, OPENSSL_ENCODING_SMIME);
-    let ok = run(vm, a, |s| {
+    let ok = run_cert(vm, a, 3, |s| {
         let k = key.as_ref().map(KeyHold::arg);
         s.cms_decrypt(
             input.as_bytes(),
@@ -309,12 +317,13 @@ fn pkcs12_options(vm: &mut Vm, opts: Option<&ZArray>) -> VmResult<Pkcs12Hold> {
 }
 
 fn pkcs12_export_to_file(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    check_paths(vm, a, &[1])?;
     let cert = cert_hold(vm, &a.at(0))?;
     let file = a.str(1);
     let key = key_hold(vm, &a.at(2))?;
     let pass = a.str(3);
     let opts = pkcs12_options(vm, opt_array(a, 4).as_ref())?;
-    let ok = run(vm, a, |s| {
+    let ok = run_cert(vm, a, 1, |s| {
         s.pkcs12_export_to_file(
             cert.arg(),
             file.as_bytes(),
@@ -331,7 +340,7 @@ fn pkcs12_export(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let key = key_hold(vm, &a.at(2))?;
     let pass = a.str(3);
     let opts = pkcs12_options(vm, opt_array(a, 4).as_ref())?;
-    let r = run(vm, a, |s| {
+    let r = run_cert(vm, a, 1, |s| {
         s.pkcs12_export(cert.arg(), &key.arg(), pass.as_bytes(), &opts.arg())
     })?;
     Ok(Value::Bool(r.is_some_and(|out| {
@@ -355,13 +364,22 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
     m.function("openssl_pkcs7_encrypt(string $input_filename, string $output_filename, $certificate, ?array $headers, int $flags = 0, int $cipher_algo = OPENSSL_CIPHER_AES_128_CBC): bool", pkcs7_encrypt);
     m.function("openssl_pkcs7_sign(string $input_filename, string $output_filename, OpenSSLCertificate|string $certificate, $private_key, ?array $headers, int $flags = PKCS7_DETACHED, ?string $untrusted_certificates_filename = null): bool", pkcs7_sign);
     m.function("openssl_pkcs7_decrypt(string $input_filename, string $output_filename, $certificate, $private_key = null): bool", pkcs7_decrypt);
-    m.function("openssl_pkcs7_read(string $data, &$certificates): bool", pkcs7_read);
+    m.function(
+        "openssl_pkcs7_read(string $data, &$certificates): bool",
+        pkcs7_read,
+    );
     m.function("openssl_cms_verify(string $input_filename, int $flags = 0, ?string $certificates = null, array $ca_info = [], ?string $untrusted_certificates_filename = null, ?string $content = null, ?string $pk7 = null, ?string $sigfile = null, int $encoding = OPENSSL_ENCODING_SMIME): bool", cms_verify);
     m.function("openssl_cms_encrypt(string $input_filename, string $output_filename, $certificate, ?array $headers, int $flags = 0, int $encoding = OPENSSL_ENCODING_SMIME, string|int $cipher_algo = OPENSSL_CIPHER_AES_128_CBC): bool", cms_encrypt);
     m.function("openssl_cms_sign(string $input_filename, string $output_filename, OpenSSLCertificate|string $certificate, $private_key, ?array $headers, int $flags = 0, int $encoding = OPENSSL_ENCODING_SMIME, ?string $untrusted_certificates_filename = null): bool", cms_sign);
     m.function("openssl_cms_decrypt(string $input_filename, string $output_filename, $certificate, $private_key = null, int $encoding = OPENSSL_ENCODING_SMIME): bool", cms_decrypt);
-    m.function("openssl_cms_read(string $input_filename, &$certificates): bool", cms_read);
+    m.function(
+        "openssl_cms_read(string $input_filename, &$certificates): bool",
+        cms_read,
+    );
     m.function("openssl_pkcs12_export_to_file(OpenSSLCertificate|string $certificate, string $output_filename, $private_key, string $passphrase, array $options = []): bool", pkcs12_export_to_file);
     m.function("openssl_pkcs12_export(OpenSSLCertificate|string $certificate, &$output, $private_key, string $passphrase, array $options = []): bool", pkcs12_export);
-    m.function("openssl_pkcs12_read(string $pkcs12, &$certificates, string $passphrase): bool", pkcs12_read);
+    m.function(
+        "openssl_pkcs12_read(string $pkcs12, &$certificates, string $passphrase): bool",
+        pkcs12_read,
+    );
 }

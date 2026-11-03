@@ -2,14 +2,18 @@
 //! `openssl_seal`/`open`, `openssl_dh_compute_key`, `openssl_pkey_derive`.
 
 use php_openssl::asym::DigestAlgo;
-use php_openssl::constants::{OPENSSL_ALGO_SHA1, OPENSSL_PKCS1_PADDING, OPENSSL_RSA_PSS_SALTLEN_AUTO};
+use php_openssl::constants::{
+    OPENSSL_ALGO_SHA1, OPENSSL_PKCS1_PADDING, OPENSSL_RSA_PSS_SALTLEN_AUTO,
+};
 use php_runtime::{Value, ZArray};
 use php_vm::ext::{Args, ModuleBuilder, VmResult};
 use php_vm::Vm;
 
-use crate::convert::{bytes, from_php_array, int_or, key_hold, opt_array, opt_bytes, or_false, to_php_array};
+use crate::convert::{
+    bytes, from_php_array, int_or, key_hold, opt_array, opt_bytes, or_false, to_php_array,
+};
 use crate::objects::{key_of, new_key, KeyHold};
-use crate::state::{deprecated_function, run, run_ok};
+use crate::state::{check_paths, deprecated_function, run, run_ok};
 
 /// The `OpenSSLAsymmetricKey` of a typed parameter.
 fn key_obj(a: &Args, n: usize) -> Option<std::rc::Rc<php_openssl::AsymmetricKey>> {
@@ -28,12 +32,18 @@ fn pkey_new(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 }
 
 fn pkey_export_to_file(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    check_paths(vm, a, &[1])?;
     let key = key_hold(vm, &a.at(0))?;
     let file = a.str(1);
     let pass = opt_bytes(a, 2);
     let options = opt_array(a, 3).map(|o| to_php_array(&o));
     let ok = run(vm, a, |s| {
-        s.pkey_export_to_file(&key.arg(), file.as_bytes(), pass.as_deref(), options.as_ref())
+        s.pkey_export_to_file(
+            &key.arg(),
+            file.as_bytes(),
+            pass.as_deref(),
+            options.as_ref(),
+        )
     })?;
     Ok(Value::Bool(ok))
 }
@@ -69,7 +79,11 @@ fn pkey_get_private(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 }
 
 fn pkey_free(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    deprecated_function(vm, a, "as OpenSSLAsymmetricKey objects are freed automatically")?;
+    deprecated_function(
+        vm,
+        a,
+        "as OpenSSLAsymmetricKey objects are freed automatically",
+    )?;
     Ok(Value::Null)
 }
 
@@ -108,6 +122,9 @@ enum Rsa {
 }
 
 fn rsa(vm: &mut Vm, a: &Args, op: Rsa) -> VmResult<Value> {
+    if matches!(op, Rsa::PrivateDecrypt | Rsa::PublicEncrypt) {
+        check_paths(vm, a, &[4])?;
+    }
     let data = a.str(0);
     let key = key_hold(vm, &a.at(2))?;
     let padding = int_or(a, 3, OPENSSL_PKCS1_PADDING);
@@ -218,7 +235,9 @@ fn seal(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         a.set_ref(1, bytes(out.sealed_data));
         a.set_ref(
             2,
-            Value::Array(ZArray::from_values(out.encrypted_keys.into_iter().map(bytes))),
+            Value::Array(ZArray::from_values(
+                out.encrypted_keys.into_iter().map(bytes),
+            )),
         );
         if let Some(iv) = out.iv {
             a.set_ref(5, bytes(iv));
@@ -250,18 +269,39 @@ fn open(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 /// Registers the key functions.
 pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
-    m.function("openssl_pkey_new(?array $options = null): OpenSSLAsymmetricKey|false", pkey_new);
+    m.function(
+        "openssl_pkey_new(?array $options = null): OpenSSLAsymmetricKey|false",
+        pkey_new,
+    );
     m.function("openssl_pkey_export_to_file($key, string $output_filename, ?string $passphrase = null, ?array $options = null): bool", pkey_export_to_file);
     m.function("openssl_pkey_export($key, &$output, ?string $passphrase = null, ?array $options = null): bool", pkey_export);
-    m.function("openssl_pkey_get_public($public_key): OpenSSLAsymmetricKey|false", pkey_get_public);
-    m.function("openssl_get_publickey($public_key): OpenSSLAsymmetricKey|false", pkey_get_public);
-    m.function("openssl_pkey_free(OpenSSLAsymmetricKey $key): void", pkey_free);
-    m.function("openssl_free_key(OpenSSLAsymmetricKey $key): void", pkey_free);
+    m.function(
+        "openssl_pkey_get_public($public_key): OpenSSLAsymmetricKey|false",
+        pkey_get_public,
+    );
+    m.function(
+        "openssl_get_publickey($public_key): OpenSSLAsymmetricKey|false",
+        pkey_get_public,
+    );
+    m.function(
+        "openssl_pkey_free(OpenSSLAsymmetricKey $key): void",
+        pkey_free,
+    );
+    m.function(
+        "openssl_free_key(OpenSSLAsymmetricKey $key): void",
+        pkey_free,
+    );
     m.function("openssl_pkey_get_private($private_key, ?string $passphrase = null): OpenSSLAsymmetricKey|false", pkey_get_private);
     m.function("openssl_get_privatekey($private_key, ?string $passphrase = null): OpenSSLAsymmetricKey|false", pkey_get_private);
-    m.function("openssl_pkey_get_details(OpenSSLAsymmetricKey $key): array|false", pkey_get_details);
+    m.function(
+        "openssl_pkey_get_details(OpenSSLAsymmetricKey $key): array|false",
+        pkey_get_details,
+    );
     m.function("openssl_dh_compute_key(string $public_key, OpenSSLAsymmetricKey $private_key): string|false", dh_compute_key);
-    m.function("openssl_pkey_derive($public_key, $private_key, int $key_length = 0): string|false", pkey_derive);
+    m.function(
+        "openssl_pkey_derive($public_key, $private_key, int $key_length = 0): string|false",
+        pkey_derive,
+    );
     m.function("openssl_private_encrypt(string $data, &$encrypted_data, $private_key, int $padding = OPENSSL_PKCS1_PADDING): bool", private_encrypt);
     m.function("openssl_private_decrypt(string $data, &$decrypted_data, $private_key, int $padding = OPENSSL_PKCS1_PADDING, ?string $digest_algo = null): bool", private_decrypt);
     m.function("openssl_public_encrypt(string $data, &$encrypted_data, $public_key, int $padding = OPENSSL_PKCS1_PADDING, ?string $digest_algo = null): bool", public_encrypt);

@@ -32,6 +32,7 @@ mod convert;
 mod crypto;
 mod keys;
 mod objects;
+mod session;
 mod smime;
 mod state;
 mod x509;
@@ -52,6 +53,7 @@ impl Extension for OpenSsl {
 
     fn register(&self, m: &mut ModuleBuilder<'_>) {
         objects::register(m);
+        session::register(m);
         for (name, value) in constants::all() {
             let v = match value {
                 ConstValue::Int(i) => Value::Int(i),
@@ -59,6 +61,13 @@ impl Extension for OpenSsl {
             };
             m.constant(name, v);
         }
+        m.ini(IniDirective::new(
+            "openssl.libctx",
+            Some("custom"),
+            Access::PERDIR,
+            ModifyHandler::None,
+            "openssl",
+        ));
         for name in ["openssl.cafile", "openssl.capath"] {
             m.ini(IniDirective::new(
                 name,
