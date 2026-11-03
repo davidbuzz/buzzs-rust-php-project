@@ -36,7 +36,13 @@ impl Cp {
     }
 }
 
-fn finish<T>(vm: &mut Vm, a: &Args, r: php_intl::Result<T>, ok: impl FnOnce(T) -> Value, fail: Value) -> VmResult<Value> {
+fn finish<T>(
+    vm: &mut Vm,
+    a: &Args,
+    r: php_intl::Result<T>,
+    ok: impl FnOnce(T) -> Value,
+    fail: Value,
+) -> VmResult<Value> {
     match r {
         Ok(v) => Ok(ok(v)),
         Err(e) => core::fail_with(vm, a, None, e, 0, fail),
@@ -132,7 +138,9 @@ fn digit(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let cp = Cp::of(&a.at(0));
     let r = lib::digit(cp.view(), a.int(1));
     let fail = match &r {
-        Err(php_intl::Error::Intl(e)) if e.message.as_deref() == Some("Invalid digit") => Value::Bool(false),
+        Err(php_intl::Error::Intl(e)) if e.message.as_deref() == Some("Invalid digit") => {
+            Value::Bool(false)
+        }
         _ => Value::Null,
     };
     finish(vm, a, r, Value::Int, fail)
@@ -163,7 +171,11 @@ fn get_fc_nfkc_closure(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     core::reset_global();
     let cp = Cp::of(&a.at(0));
     let r = lib::get_fc_nfkc_closure(cp.view());
-    let fail = if lib::convert_cp(cp.view()).is_err() { Value::Null } else { Value::Bool(false) };
+    let fail = if lib::convert_cp(cp.view()).is_err() {
+        Value::Null
+    } else {
+        Value::Bool(false)
+    };
     finish(vm, a, r, s, fail)
 }
 
@@ -184,13 +196,14 @@ fn enum_char_types(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     core::reset_global();
     let cb = a.at(0);
     let mut err = None;
-    lib::enum_char_types(&mut |start, limit, ty| {
-        match vm.call_value(&cb, vec![Value::Int(start), Value::Int(limit), Value::Int(ty)]) {
-            Ok(_) => true,
-            Err(t) => {
-                err = Some(t);
-                false
-            }
+    lib::enum_char_types(&mut |start, limit, ty| match vm.call_value(
+        &cb,
+        vec![Value::Int(start), Value::Int(limit), Value::Int(ty)],
+    ) {
+        Ok(_) => true,
+        Err(t) => {
+            err = Some(t);
+            false
         }
     });
     match err {
@@ -204,15 +217,21 @@ fn enum_char_names(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let (start, end) = (Cp::of(&a.at(0)), Cp::of(&a.at(1)));
     let cb = a.at(2);
     let mut err = None;
-    let r = lib::enum_char_names(start.view(), end.view(), a.int(3), &mut |c, n, name| {
-        match vm.call_value(&cb, vec![Value::Int(c), Value::Int(n), Value::Str(ZStr::from(name))]) {
+    let r = lib::enum_char_names(
+        start.view(),
+        end.view(),
+        a.int(3),
+        &mut |c, n, name| match vm.call_value(
+            &cb,
+            vec![Value::Int(c), Value::Int(n), Value::Str(ZStr::from(name))],
+        ) {
             Ok(_) => true,
             Err(t) => {
                 err = Some(t);
                 false
             }
-        }
-    });
+        },
+    );
     if let Some(t) = err {
         return Err(t);
     }
@@ -238,7 +257,10 @@ fn get_property_value_name(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 fn get_property_value_enum(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     core::reset_global();
-    Ok(Value::Int(lib::get_property_value_enum(a.int(0), a.str(1).as_bytes())))
+    Ok(Value::Int(lib::get_property_value_enum(
+        a.int(0),
+        a.str(1).as_bytes(),
+    )))
 }
 
 // ------------------------------------------------- IntlDatePatternGenerator
@@ -246,10 +268,21 @@ fn get_property_value_enum(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 fn dtpg_ctor(vm: &mut Vm, a: &Args, o: &Obj) -> VmResult<bool> {
     core::reset_global();
     if core::is_constructed::<IntlDatePatternGenerator>(o) {
-        core::errors_set(vm, o, php_intl::UErrorCode::ILLEGAL_ARGUMENT_ERROR, "Cannot call constructor twice")?;
+        core::errors_set(
+            vm,
+            o,
+            php_intl::UErrorCode::ILLEGAL_ARGUMENT_ERROR,
+            "Cannot call constructor twice",
+        )?;
         return Ok(false);
     }
-    let loc = a.opt(0).map(|v| if let Value::Str(z) = v { text(&z) } else { String::new() });
+    let loc = a.opt(0).map(|v| {
+        if let Value::Str(z) = v {
+            text(&z)
+        } else {
+            String::new()
+        }
+    });
     match IntlDatePatternGenerator::new(loc.as_deref()) {
         Ok(g) => {
             core::set_data(o, g);
@@ -306,7 +339,12 @@ pub(crate) fn dtpg_clone(vm: &mut Vm, old: &Obj, new: &Obj) -> VmResult<()> {
     match core::with::<IntlDatePatternGenerator, _>(old, |g| g.try_clone()) {
         Some(Ok(g)) => core::set_data(new, g),
         Some(Err(_)) => return Err(vm.throw("Error", "Failed to clone IntlDatePatternGenerator")),
-        None => return Err(vm.throw("Error", "Cannot clone uninitialized IntlDatePatternGenerator")),
+        None => {
+            return Err(vm.throw(
+                "Error",
+                "Cannot clone uninitialized IntlDatePatternGenerator",
+            ))
+        }
     }
     Ok(())
 }
@@ -325,8 +363,14 @@ pub(crate) fn handlers() -> Vec<(&'static str, NativeFn)> {
         ("IntlChar::foldCase", fold_case),
         ("IntlChar::forDigit", for_digit),
         ("IntlChar::getFC_NFKC_Closure", get_fc_nfkc_closure),
-        ("IntlChar::getIntPropertyMaxValue", get_int_property_max_value),
-        ("IntlChar::getIntPropertyMinValue", get_int_property_min_value),
+        (
+            "IntlChar::getIntPropertyMaxValue",
+            get_int_property_max_value,
+        ),
+        (
+            "IntlChar::getIntPropertyMinValue",
+            get_int_property_min_value,
+        ),
         ("IntlChar::getIntPropertyValue", get_int_property_value),
         ("IntlChar::getNumericValue", get_numeric_value),
         ("IntlChar::getPropertyEnum", get_property_enum),
@@ -339,7 +383,10 @@ pub(crate) fn handlers() -> Vec<(&'static str, NativeFn)> {
         ("IntlDatePatternGenerator::create", dtpg_create),
         ("IntlDatePatternGenerator::getBestPattern", dtpg_best),
         ("IntlDatePatternGenerator::getSkeleton", dtpg_skeleton),
-        ("IntlDatePatternGenerator::getBaseSkeleton", dtpg_base_skeleton),
+        (
+            "IntlDatePatternGenerator::getBaseSkeleton",
+            dtpg_base_skeleton,
+        ),
     ];
     // The generic predicates / int / mapping methods, by name.
     for c in stubs::CLASSES.iter().filter(|c| c.name == "IntlChar") {
@@ -349,8 +396,11 @@ pub(crate) fn handlers() -> Vec<(&'static str, NativeFn)> {
             }
             let name = m.sig.split('(').next().unwrap_or_default();
             let h: NativeFn = match name {
-                "charDirection" | "charType" | "getCombiningClass" | "charDigitValue" | "getBlockCode" => int_method,
-                "charMirror" | "tolower" | "toupper" | "totitle" | "getBidiPairedBracket" => char_method,
+                "charDirection" | "charType" | "getCombiningClass" | "charDigitValue"
+                | "getBlockCode" => int_method,
+                "charMirror" | "tolower" | "toupper" | "totitle" | "getBidiPairedBracket" => {
+                    char_method
+                }
                 _ => bool_method,
             };
             v.push((m.key, h));

@@ -40,6 +40,9 @@ pub(crate) struct MethodStub {
     pub is_static: bool,
     pub is_final: bool,
     pub is_abstract: bool,
+    /// `#[\Deprecated]` (not applied: the class builder cannot mark
+    /// methods deprecated yet).
+    #[allow(dead_code)]
     pub deprecated: Option<(&'static str, &'static str)>,
 }
 
@@ -130,7 +133,11 @@ pub(crate) fn register(
             enums.push_str(" }\n");
         }
     }
-    if !enums.is_empty() && m.vm().find_class(b"IntlRelativeDateTimeFormatterStyle").is_none() {
+    if !enums.is_empty()
+        && m.vm()
+            .find_class(b"IntlRelativeDateTimeFormatterStyle")
+            .is_none()
+    {
         // The extension API cannot build native enums yet.
         let src = format!("<?php\n{enums}");
         let _ = m.vm().run_main(src.as_bytes(), &ZStr::from("[ext/intl]"));
@@ -185,7 +192,10 @@ pub(crate) fn register(
                 b = b.abstract_method(mt.sig, f);
                 continue;
             }
-            let h = handlers.get(mt.key).copied().unwrap_or(core::not_implemented as NativeFn);
+            let h = handlers
+                .get(mt.key)
+                .copied()
+                .unwrap_or(core::not_implemented as NativeFn);
             b = b.method(sig_override(mt.key, mt.sig), f, h);
         }
         if c.kind == ClassKind::Class && c.name != "IntlException" {
@@ -198,7 +208,10 @@ pub(crate) fn register(
         b.register(m.vm());
     }
     for f in crate::stubs::FUNCTIONS {
-        let h = handlers.get(f.key).copied().unwrap_or(core::not_implemented as NativeFn);
+        let h = handlers
+            .get(f.key)
+            .copied()
+            .unwrap_or(core::not_implemented as NativeFn);
         m.function(sig_override(f.key, f.sig), h);
         if let Some((since, msg)) = f.deprecated {
             m.deprecated(since, msg);

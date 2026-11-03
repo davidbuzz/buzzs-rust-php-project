@@ -9,7 +9,13 @@
 //! [`core::target`]).  The intl error model (`intl_error_set()`, the
 //! `intl.error_level`/`intl.use_exceptions` INI settings) lives in
 //! [`core`].
-#![allow(clippy::needless_pass_by_value, clippy::unnecessary_wraps)]
+// `vm`, `a` (arguments), `o` (object) and `s` (string value) are the
+// conventional names throughout the binding handlers.
+#![allow(
+    clippy::needless_pass_by_value,
+    clippy::unnecessary_wraps,
+    clippy::many_single_char_names
+)]
 
 mod breakiter;
 mod calendar;
@@ -37,10 +43,10 @@ mod vmbridge;
 use std::cell::Cell;
 use std::collections::HashMap;
 
+use php_runtime::Value;
 use php_support::ini::{Access, IniDirective, ModifyHandler};
 use php_vm::ext::{Args, Extension, ModuleBuilder, NativeFn, VmResult};
 use php_vm::Vm;
-use php_runtime::Value;
 
 /// The `intl` extension.
 #[derive(Debug, Clone, Copy, Default)]
@@ -55,7 +61,9 @@ thread_local! {
 /// `Locale::setDefault()`) and syncs the library's copy.
 pub(crate) fn set_default_locale_ini(vm: &mut Vm, value: &str) {
     let mut sink: Vec<php_support::Diagnostic> = Vec::new();
-    let _ = vm.ini.ini_set("intl.default_locale", value.as_bytes(), &mut sink);
+    let _ = vm
+        .ini
+        .ini_set("intl.default_locale", value.as_bytes(), &mut sink);
     sync_default_locale(vm);
 }
 
@@ -66,7 +74,11 @@ pub(crate) fn sync_default_locale(vm: &Vm) {
     php_intl::common::set_ini_default_locale(v.as_deref());
 }
 
-fn run_orig(cell: &'static std::thread::LocalKey<Cell<Option<NativeFn>>>, vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+fn run_orig(
+    cell: &'static std::thread::LocalKey<Cell<Option<NativeFn>>>,
+    vm: &mut Vm,
+    a: &mut Args,
+) -> VmResult<Value> {
     match cell.with(Cell::get) {
         Some(f) => f(vm, a),
         None => Ok(Value::Bool(false)),
@@ -78,7 +90,10 @@ fn run_orig(cell: &'static std::thread::LocalKey<Cell<Option<NativeFn>>>, vm: &m
 fn ini_set_hook(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let name = a.str(0).to_string_lossy();
     let r = run_orig(&ORIG_INI_SET, vm, a)?;
-    if name == "intl.error_level" && !matches!(r, Value::Bool(false)) && vm.ini_long("intl.error_level") != 0 {
+    if name == "intl.error_level"
+        && !matches!(r, Value::Bool(false))
+        && vm.ini_long("intl.error_level") != 0
+    {
         vm.php_deprecated(php_intl::error::ERROR_LEVEL_DEPRECATION)?;
     }
     if name == "intl.default_locale" {
@@ -144,7 +159,11 @@ fn class_opts(name: &str) -> registry::ClassOpts {
     use php_vm::ext::{class_flags, ClassHooks};
     let mut o = registry::ClassOpts::default();
     match name {
-        "Collator" | "IntlNumberFormatter" | "IntlListFormatter" | "IntlNumberRangeFormatter" | "IntlRelativeDateTimeFormatter" => {
+        "Collator"
+        | "IntlNumberFormatter"
+        | "IntlListFormatter"
+        | "IntlNumberRangeFormatter"
+        | "IntlRelativeDateTimeFormatter" => {
             o.flags |= class_flags::NO_CLONE;
         }
         "ResourceBundle" => {
@@ -159,7 +178,10 @@ fn class_opts(name: &str) -> registry::ClassOpts {
         }
         "IntlIterator" | "IntlPartsIterator" => {
             o.flags |= class_flags::NO_CLONE;
-            o.hooks = ClassHooks { get_iterator: Some(iter::get_iterator), ..ClassHooks::default() };
+            o.hooks = ClassHooks {
+                get_iterator: Some(iter::get_iterator),
+                ..ClassHooks::default()
+            };
         }
         "IntlTimeZone" => {
             o.hooks = ClassHooks {
@@ -170,10 +192,16 @@ fn class_opts(name: &str) -> registry::ClassOpts {
             };
         }
         "NumberFormatter" => {
-            o.hooks = ClassHooks { clone: Some(numfmt::clone), ..ClassHooks::default() };
+            o.hooks = ClassHooks {
+                clone: Some(numfmt::clone),
+                ..ClassHooks::default()
+            };
         }
         "MessageFormatter" => {
-            o.hooks = ClassHooks { clone: Some(msgformat::clone), ..ClassHooks::default() };
+            o.hooks = ClassHooks {
+                clone: Some(msgformat::clone),
+                ..ClassHooks::default()
+            };
         }
         "IntlBreakIterator" | "IntlRuleBasedBreakIterator" | "IntlCodePointBreakIterator" => {
             o.hooks = ClassHooks {
@@ -185,19 +213,35 @@ fn class_opts(name: &str) -> registry::ClassOpts {
             };
         }
         "UConverter" => {
-            o.hooks = ClassHooks { create: Some(converter::create), clone: Some(converter::clone), ..ClassHooks::default() };
+            o.hooks = ClassHooks {
+                create: Some(converter::create),
+                clone: Some(converter::clone),
+                ..ClassHooks::default()
+            };
         }
         "Spoofchecker" => {
-            o.hooks = ClassHooks { clone: Some(spoof::clone), ..ClassHooks::default() };
+            o.hooks = ClassHooks {
+                clone: Some(spoof::clone),
+                ..ClassHooks::default()
+            };
         }
         "IntlDatePatternGenerator" => {
-            o.hooks = ClassHooks { clone: Some(intlchar::dtpg_clone), ..ClassHooks::default() };
+            o.hooks = ClassHooks {
+                clone: Some(intlchar::dtpg_clone),
+                ..ClassHooks::default()
+            };
         }
         "Transliterator" => {
-            o.hooks = ClassHooks { clone: Some(translit::clone), ..ClassHooks::default() };
+            o.hooks = ClassHooks {
+                clone: Some(translit::clone),
+                ..ClassHooks::default()
+            };
         }
         "IntlDateFormatter" => {
-            o.hooks = ClassHooks { clone: Some(dateformat::clone), ..ClassHooks::default() };
+            o.hooks = ClassHooks {
+                clone: Some(dateformat::clone),
+                ..ClassHooks::default()
+            };
         }
         "IntlCalendar" | "IntlGregorianCalendar" => {
             o.hooks = ClassHooks {
@@ -217,9 +261,27 @@ impl Extension for Intl {
     }
 
     fn register(&self, m: &mut ModuleBuilder<'_>) {
-        m.ini(IniDirective::new("intl.default_locale", None, Access::ALL, ModifyHandler::StringUnempty, "intl"));
-        m.ini(IniDirective::new("intl.error_level", Some("0"), Access::ALL, ModifyHandler::Long, "intl"));
-        m.ini(IniDirective::new("intl.use_exceptions", Some("0"), Access::ALL, ModifyHandler::Bool, "intl"));
+        m.ini(IniDirective::new(
+            "intl.default_locale",
+            None,
+            Access::ALL,
+            ModifyHandler::StringUnempty,
+            "intl",
+        ));
+        m.ini(IniDirective::new(
+            "intl.error_level",
+            Some("0"),
+            Access::ALL,
+            ModifyHandler::Long,
+            "intl",
+        ));
+        m.ini(IniDirective::new(
+            "intl.use_exceptions",
+            Some("0"),
+            Access::ALL,
+            ModifyHandler::Bool,
+            "intl",
+        ));
         sync_default_locale(m.vm());
         let handlers = all_handlers();
         registry::register(m, &handlers, &mut class_opts);
@@ -228,5 +290,75 @@ impl Extension for Intl {
             core::reset_global();
             sync_default_locale(vm);
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_stub_entry_has_a_handler() {
+        let h = all_handlers();
+        for c in stubs::CLASSES {
+            for m in c.methods {
+                if c.kind == registry::ClassKind::Interface || m.is_abstract {
+                    continue;
+                }
+                assert!(h.contains_key(m.key), "no handler for {}", m.key);
+            }
+        }
+        for f in stubs::FUNCTIONS {
+            assert!(h.contains_key(f.key), "no handler for {}", f.key);
+        }
+    }
+
+    #[test]
+    fn procedural_aliases_share_method_handlers() {
+        let get = stubs::FUNCTIONS
+            .iter()
+            .find(|f| f.sig.starts_with("intlcal_get("))
+            .map(|f| f.key);
+        assert_eq!(get, Some("IntlCalendar::get"));
+        let set = stubs::FUNCTIONS
+            .iter()
+            .find(|f| f.sig.starts_with("intlcal_set("))
+            .and_then(|f| f.deprecated);
+        assert!(set.is_some_and(|(since, _)| since == "8.4"));
+    }
+
+    #[test]
+    fn class_constant_defaults_are_resolved() {
+        let create = stubs::CLASSES
+            .iter()
+            .find(|c| c.name == "IntlDateFormatter")
+            .and_then(|c| c.methods.iter().find(|m| m.sig.starts_with("create(")))
+            .map(|m| m.sig);
+        assert!(create.is_some_and(
+            |s| s.contains("int $dateType = 0") && s.contains("object|string|null $timezone")
+        ));
+        let extract = stubs::FUNCTIONS
+            .iter()
+            .find(|f| f.sig.starts_with("grapheme_extract("))
+            .map(|f| f.sig);
+        assert!(extract.is_some_and(|s| s.contains("int $type = 0")));
+    }
+
+    #[test]
+    fn parents_are_registered_first() {
+        let pos = |n: &str| stubs::CLASSES.iter().position(|c| c.name == n);
+        assert!(pos("IntlIterator") < pos("IntlPartsIterator"));
+        assert!(pos("IntlBreakIterator") < pos("IntlRuleBasedBreakIterator"));
+        assert!(pos("IntlCalendar") < pos("IntlGregorianCalendar"));
+    }
+
+    #[test]
+    fn class_options() {
+        use php_vm::ext::class_flags;
+        assert_ne!(class_opts("Collator").flags & class_flags::NO_CLONE, 0);
+        assert_eq!(class_opts("IntlCalendar").flags & class_flags::NO_CLONE, 0);
+        assert!(class_opts("IntlCalendar").hooks.clone.is_some());
+        assert!(class_opts("ResourceBundle").hooks.read_dimension.is_some());
+        assert!(class_opts("IntlIterator").hooks.get_iterator.is_some());
     }
 }

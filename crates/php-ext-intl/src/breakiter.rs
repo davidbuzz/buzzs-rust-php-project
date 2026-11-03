@@ -22,7 +22,10 @@ fn object(vm: &mut Vm, bi: IntlBreakIterator) -> VmResult<Value> {
 }
 
 fn construct(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
-    Err(vm.throw("Exception", "An object of this type cannot be created with the new operator"))
+    Err(vm.throw(
+        "Exception",
+        "An object of this type cannot be created with the new operator",
+    ))
 }
 
 fn factory(vm: &mut Vm, a: &Args, kind: Kind) -> VmResult<Value> {
@@ -74,7 +77,12 @@ fn fetch(vm: &mut Vm, a: &Args) -> VmResult<Obj> {
     Ok(o)
 }
 
-fn run<T>(vm: &mut Vm, a: &Args, f: impl FnOnce(&mut IntlBreakIterator) -> php_intl::Result<T>, ok: impl FnOnce(T) -> Value) -> VmResult<Value> {
+fn run<T>(
+    vm: &mut Vm,
+    a: &Args,
+    f: impl FnOnce(&mut IntlBreakIterator) -> php_intl::Result<T>,
+    ok: impl FnOnce(T) -> Value,
+) -> VmResult<Value> {
     let o = fetch(vm, a)?;
     match core::with::<IntlBreakIterator, _>(&o, f) {
         Some(Ok(v)) => Ok(ok(v)),
@@ -84,7 +92,12 @@ fn run<T>(vm: &mut Vm, a: &Args, f: impl FnOnce(&mut IntlBreakIterator) -> php_i
 }
 
 fn get_text(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    run(vm, a, |b| Ok(b.text().map(<[u8]>::to_vec)), |t| t.map_or(Value::Null, |t| Value::Str(ZStr::from(t))))
+    run(
+        vm,
+        a,
+        |b| Ok(b.text().map(<[u8]>::to_vec)),
+        |t| t.map_or(Value::Null, |t| Value::Str(ZStr::from(t))),
+    )
 }
 
 fn set_text(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -146,18 +159,25 @@ fn get_rule_status(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 }
 
 fn get_rule_status_vec(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    run(vm, a, IntlBreakIterator::rule_status_vec, |v| Value::Array(ZArray::from_values(v.into_iter().map(Value::Int))))
+    run(vm, a, IntlBreakIterator::rule_status_vec, |v| {
+        Value::Array(ZArray::from_values(v.into_iter().map(Value::Int)))
+    })
 }
 
 fn get_binary_rules(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    run(vm, a, IntlBreakIterator::binary_rules, |v| Value::Str(ZStr::from(v)))
+    run(vm, a, IntlBreakIterator::binary_rules, |v| {
+        Value::Str(ZStr::from(v))
+    })
 }
 
 fn rbbi_construct(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let o = a.this_obj();
     core::reset_both(&o);
     if core::is_constructed::<IntlBreakIterator>(&o) {
-        return Err(vm.throw("Error", "IntlRuleBasedBreakIterator object is already constructed"));
+        return Err(vm.throw(
+            "Error",
+            "IntlRuleBasedBreakIterator object is already constructed",
+        ));
     }
     match IntlBreakIterator::from_rules(a.str(0).as_bytes(), a.bool(1)) {
         Ok(bi) => {
@@ -188,7 +208,9 @@ impl IterSource for Parts {
     }
 
     fn current(&self) -> Value {
-        self.cursor.current().map_or(Value::Null, |c| Value::Str(ZStr::from(c)))
+        self.cursor
+            .current()
+            .map_or(Value::Null, |c| Value::Str(ZStr::from(c)))
     }
 
     fn key(&self, index: i64) -> Value {
@@ -197,7 +219,9 @@ impl IterSource for Parts {
 
     fn move_forward(&mut self, _vm: &mut Vm, index: &mut i64) -> VmResult<()> {
         let cursor = &mut self.cursor;
-        if let Some(Some(i)) = core::with::<IntlBreakIterator, _>(&self.bi, |b| cursor.move_forward(b)) {
+        if let Some(Some(i)) =
+            core::with::<IntlBreakIterator, _>(&self.bi, |b| cursor.move_forward(b))
+        {
             *index = i;
         }
         Ok(())
@@ -214,8 +238,15 @@ fn get_parts_iterator(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         Ok(k) => k,
         Err(e) => return Err(core::throw_engine(vm, a, e, 0)),
     };
-    let src = Parts { bi: o, cursor: PartsCursor::new(key) };
-    Ok(Value::Object(crate::iter::wrap(vm, "IntlPartsIterator", Box::new(src))?))
+    let src = Parts {
+        bi: o,
+        cursor: PartsCursor::new(key),
+    };
+    Ok(Value::Object(crate::iter::wrap(
+        vm,
+        "IntlPartsIterator",
+        Box::new(src),
+    )?))
 }
 
 /// The boundary iterator of `foreach ($bi as ...)` / `getIterator()`.
@@ -276,14 +307,24 @@ impl NativeIterator for Driver {
 }
 
 /// The `get_iterator` hook.
-pub(crate) fn get_iterator(vm: &mut Vm, o: &Obj, by_ref: bool) -> VmResult<Box<dyn NativeIterator>> {
+pub(crate) fn get_iterator(
+    vm: &mut Vm,
+    o: &Obj,
+    by_ref: bool,
+) -> VmResult<Box<dyn NativeIterator>> {
     if by_ref {
         return Err(vm.throw("Exception", "Iteration by reference is not supported"));
     }
     if !core::is_constructed::<IntlBreakIterator>(o) {
         return Err(vm.throw("Exception", "The BreakIterator is not properly constructed"));
     }
-    Ok(Box::new(Driver { src: Boundaries { bi: o.clone(), current: None }, index: 0 }))
+    Ok(Box::new(Driver {
+        src: Boundaries {
+            bi: o.clone(),
+            current: None,
+        },
+        index: 0,
+    }))
 }
 
 fn get_iterator_method(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -291,8 +332,15 @@ fn get_iterator_method(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     if !core::is_constructed::<IntlBreakIterator>(&o) {
         return Err(vm.throw("Exception", "The BreakIterator is not properly constructed"));
     }
-    let src = Boundaries { bi: o, current: None };
-    Ok(Value::Object(crate::iter::wrap(vm, "IntlIterator", Box::new(src))?))
+    let src = Boundaries {
+        bi: o,
+        current: None,
+    };
+    Ok(Value::Object(crate::iter::wrap(
+        vm,
+        "IntlIterator",
+        Box::new(src),
+    )?))
 }
 
 fn parts_get_break_iterator(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -354,8 +402,10 @@ pub(crate) fn compare(_vm: &mut Vm, x: &Value, y: &Value) -> VmResult<Option<i32
     if a == b {
         return Ok(Some(0));
     }
-    let ta = core::with::<IntlBreakIterator, _>(a, |bi| (bi.class(), bi.text().map(<[u8]>::to_vec)));
-    let tb = core::with::<IntlBreakIterator, _>(b, |bi| (bi.class(), bi.text().map(<[u8]>::to_vec)));
+    let ta =
+        core::with::<IntlBreakIterator, _>(a, |bi| (bi.class(), bi.text().map(<[u8]>::to_vec)));
+    let tb =
+        core::with::<IntlBreakIterator, _>(b, |bi| (bi.class(), bi.text().map(<[u8]>::to_vec)));
     match (ta, tb) {
         (Some(x), Some(y)) if x == y => Ok(Some(0)),
         (Some(_), Some(_)) => Ok(Some(1)),
@@ -366,8 +416,14 @@ pub(crate) fn compare(_vm: &mut Vm, x: &Value, y: &Value) -> VmResult<Option<i32
 /// Handlers by stub key.
 pub(crate) fn handlers() -> Vec<(&'static str, NativeFn)> {
     vec![
-        ("IntlBreakIterator::createCharacterInstance", create_character),
-        ("IntlBreakIterator::createCodePointInstance", create_code_point),
+        (
+            "IntlBreakIterator::createCharacterInstance",
+            create_character,
+        ),
+        (
+            "IntlBreakIterator::createCodePointInstance",
+            create_code_point,
+        ),
         ("IntlBreakIterator::createLineInstance", create_line),
         ("IntlBreakIterator::createSentenceInstance", create_sentence),
         ("IntlBreakIterator::createTitleInstance", create_title),
@@ -377,7 +433,10 @@ pub(crate) fn handlers() -> Vec<(&'static str, NativeFn)> {
         ("IntlBreakIterator::first", first),
         ("IntlBreakIterator::following", following),
         ("IntlBreakIterator::getErrorCode", core::get_error_code),
-        ("IntlBreakIterator::getErrorMessage", core::get_error_message),
+        (
+            "IntlBreakIterator::getErrorMessage",
+            core::get_error_message,
+        ),
         ("IntlBreakIterator::getLocale", get_locale),
         ("IntlBreakIterator::getPartsIterator", get_parts_iterator),
         ("IntlBreakIterator::getText", get_text),
@@ -389,12 +448,24 @@ pub(crate) fn handlers() -> Vec<(&'static str, NativeFn)> {
         ("IntlBreakIterator::setText", set_text),
         ("IntlBreakIterator::getIterator", get_iterator_method),
         ("IntlRuleBasedBreakIterator::__construct", rbbi_construct),
-        ("IntlRuleBasedBreakIterator::getBinaryRules", get_binary_rules),
+        (
+            "IntlRuleBasedBreakIterator::getBinaryRules",
+            get_binary_rules,
+        ),
         ("IntlRuleBasedBreakIterator::getRules", get_rules),
         ("IntlRuleBasedBreakIterator::getRuleStatus", get_rule_status),
-        ("IntlRuleBasedBreakIterator::getRuleStatusVec", get_rule_status_vec),
-        ("IntlCodePointBreakIterator::getLastCodePoint", get_last_code_point),
-        ("IntlPartsIterator::getBreakIterator", parts_get_break_iterator),
+        (
+            "IntlRuleBasedBreakIterator::getRuleStatusVec",
+            get_rule_status_vec,
+        ),
+        (
+            "IntlCodePointBreakIterator::getLastCodePoint",
+            get_last_code_point,
+        ),
+        (
+            "IntlPartsIterator::getBreakIterator",
+            parts_get_break_iterator,
+        ),
         ("IntlPartsIterator::getRuleStatus", parts_get_rule_status),
     ]
 }

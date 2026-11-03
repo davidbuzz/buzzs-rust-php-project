@@ -70,7 +70,9 @@ fn is_suspicious(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 fn are_confusable(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let o = fetch(vm, a)?;
     let (x, y) = (a.str(0), a.str(1));
-    let Some(c) = core::with::<Spoofchecker, _>(&o, |c| c.are_confusable(x.as_bytes(), y.as_bytes())) else {
+    let Some(c) =
+        core::with::<Spoofchecker, _>(&o, |c| c.are_confusable(x.as_bytes(), y.as_bytes()))
+    else {
         return Ok(Value::Bool(false));
     };
     finish_check(vm, a, &o, c, 2)
@@ -80,7 +82,9 @@ fn are_bidi_confusable(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let o = fetch(vm, a)?;
     let (x, y) = (a.str(1), a.str(2));
     let dir = a.int(0);
-    match core::with::<Spoofchecker, _>(&o, |c| c.are_bidi_confusable(dir, x.as_bytes(), y.as_bytes())) {
+    match core::with::<Spoofchecker, _>(&o, |c| {
+        c.are_bidi_confusable(dir, x.as_bytes(), y.as_bytes())
+    }) {
         Some(Ok(c)) => finish_check(vm, a, &o, c, 3),
         Some(Err(e)) => {
             sync_status(&o);
@@ -138,7 +142,12 @@ fn set_allowed_chars(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     Ok(Value::Null)
 }
 
-fn skeleton_result(vm: &mut Vm, a: &Args, o: &Obj, r: Option<php_intl::Result<Vec<u8>>>) -> VmResult<Value> {
+fn skeleton_result(
+    vm: &mut Vm,
+    a: &Args,
+    o: &Obj,
+    r: Option<php_intl::Result<Vec<u8>>>,
+) -> VmResult<Value> {
     match r {
         Some(Ok(v)) => {
             sync_status(o);

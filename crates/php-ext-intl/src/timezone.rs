@@ -25,13 +25,24 @@ pub(crate) fn zone_of(o: &Obj) -> Option<TimeZone> {
 /// `timezone_process_timezone_argument()` for argument `n` (0-based).
 /// Intl errors are recorded on `err_obj` (and globally) and yield
 /// `Ok(None)`.
-pub(crate) fn process_arg(vm: &mut Vm, a: &Args, n: usize, err_obj: Option<&Obj>) -> VmResult<Option<TimeZone>> {
+pub(crate) fn process_arg(
+    vm: &mut Vm,
+    a: &Args,
+    n: usize,
+    err_obj: Option<&Obj>,
+) -> VmResult<Option<TimeZone>> {
     let v = a.opt(n);
     process_value(vm, a, v, n, err_obj)
 }
 
 /// [`process_arg`] on an explicit value (`None` = `null`).
-pub(crate) fn process_value(vm: &mut Vm, a: &Args, v: Option<Value>, n: usize, err_obj: Option<&Obj>) -> VmResult<Option<TimeZone>> {
+pub(crate) fn process_value(
+    vm: &mut Vm,
+    a: &Args,
+    v: Option<Value>,
+    n: usize,
+    err_obj: Option<&Obj>,
+) -> VmResult<Option<TimeZone>> {
     let mut zone = None;
     let mut name: Option<ZStr> = None;
     let mut intl: Option<TimeZone> = None;
@@ -45,7 +56,9 @@ pub(crate) fn process_value(vm: &mut Vm, a: &Args, v: Option<Value>, n: usize, e
                         return Err(core::throw_engine(
                             vm,
                             a,
-                            php_intl::Error::IntlExceptionInFunction("passed IntlTimeZone is not properly constructed".into()),
+                            php_intl::Error::IntlExceptionInFunction(
+                                "passed IntlTimeZone is not properly constructed".into(),
+                            ),
                             0,
                         ))
                     }
@@ -56,7 +69,12 @@ pub(crate) fn process_value(vm: &mut Vm, a: &Args, v: Option<Value>, n: usize, e
                 name = Some(vm.value_to_string(&Value::Object(o))?);
             } else {
                 let cls = php_vm::object::class_of(&o).name.to_string_lossy();
-                return Err(core::type_error(vm, a, n + 1, &format!("Object of class {cls} could not be converted to string")));
+                return Err(core::type_error(
+                    vm,
+                    a,
+                    n + 1,
+                    &format!("Object of class {cls} could not be converted to string"),
+                ));
             }
         }
         Some(other) => name = Some(vm.value_to_string(&other)?),
@@ -78,7 +96,10 @@ pub(crate) fn process_value(vm: &mut Vm, a: &Args, v: Option<Value>, n: usize, e
 }
 
 fn construct(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
-    Err(vm.throw("Exception", "An object of this type cannot be created with the new operator"))
+    Err(vm.throw(
+        "Exception",
+        "An object of this type cannot be created with the new operator",
+    ))
 }
 
 /// Static-call tail: string result or intl error + `fail`.
@@ -107,13 +128,12 @@ fn create_enumeration(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let arg = a.opt(0);
     let country;
     let filter = match &arg {
-        None => EnumerationFilter::All,
         Some(Value::Int(i)) => EnumerationFilter::RawOffset(*i),
         Some(Value::Str(z)) => {
             country = text(z);
             EnumerationFilter::Country(&country)
         }
-        Some(_) => EnumerationFilter::All,
+        _ => EnumerationFilter::All,
     };
     match lib::create_enumeration(filter) {
         Ok(ids) => crate::iter::from_strings(vm, ids),
@@ -249,7 +269,10 @@ fn get_offset(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let r = if date.is_finite() {
         t.offset(date, a.bool(off + 1))
     } else {
-        Err(php_intl::Error::intl(php_intl::UErrorCode::ILLEGAL_ARGUMENT_ERROR, "error obtaining offset"))
+        Err(php_intl::Error::intl(
+            php_intl::UErrorCode::ILLEGAL_ARGUMENT_ERROR,
+            "error obtaining offset",
+        ))
     };
     match r {
         Ok((raw, dst)) => {
@@ -271,13 +294,16 @@ fn has_same_rules(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let Value::Object(other) = a.at(off) else {
         return Ok(Value::Bool(false));
     };
-    match zone_of(&other) {
-        Some(ot) => Ok(Value::Bool(t.has_same_rules(&ot))),
-        None => {
-            core::errors_set(vm, &o, php_intl::UErrorCode::ILLEGAL_ARGUMENT_ERROR, "The second IntlTimeZone is unconstructed")?;
-            Ok(Value::Bool(false))
-        }
+    if let Some(ot) = zone_of(&other) {
+        return Ok(Value::Bool(t.has_same_rules(&ot)));
     }
+    core::errors_set(
+        vm,
+        &o,
+        php_intl::UErrorCode::ILLEGAL_ARGUMENT_ERROR,
+        "The second IntlTimeZone is unconstructed",
+    )?;
+    Ok(Value::Bool(false))
 }
 
 fn get_display_name(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -349,15 +375,20 @@ pub(crate) fn compare(vm: &mut Vm, x: &Value, y: &Value) -> VmResult<Option<i32>
     let (Value::Object(a), Value::Object(b)) = (x, y) else {
         return Ok(None);
     };
-    if !php_vm::object::class_of(a).instance_of_name(b"intltimezone") || !php_vm::object::class_of(b).instance_of_name(b"intltimezone") {
+    if !php_vm::object::class_of(a).instance_of_name(b"intltimezone")
+        || !php_vm::object::class_of(b).instance_of_name(b"intltimezone")
+    {
         return Ok(None);
     }
     if a == b {
         return Ok(Some(0));
     }
     match (zone_of(a), zone_of(b)) {
-        (Some(ta), Some(tb)) => Ok(Some(if ta.equals(&tb) { 0 } else { 1 })),
-        _ => Err(vm.throw("Exception", "Comparison with at least one unconstructed IntlTimeZone operand")),
+        (Some(ta), Some(tb)) => Ok(Some(i32::from(!ta.equals(&tb)))),
+        _ => Err(vm.throw(
+            "Exception",
+            "Comparison with at least one unconstructed IntlTimeZone operand",
+        )),
     }
 }
 
@@ -369,7 +400,10 @@ pub(crate) fn handlers() -> Vec<(&'static str, NativeFn)> {
         ("IntlTimeZone::createDefault", create_default),
         ("IntlTimeZone::createEnumeration", create_enumeration),
         ("IntlTimeZone::createTimeZone", create_time_zone),
-        ("IntlTimeZone::createTimeZoneIDEnumeration", create_time_zone_id_enumeration),
+        (
+            "IntlTimeZone::createTimeZoneIDEnumeration",
+            create_time_zone_id_enumeration,
+        ),
         ("IntlTimeZone::fromDateTimeZone", from_date_time_zone),
         ("IntlTimeZone::getCanonicalID", get_canonical_id),
         ("IntlTimeZone::getDisplayName", get_display_name),

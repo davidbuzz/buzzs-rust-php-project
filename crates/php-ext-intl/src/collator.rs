@@ -93,7 +93,12 @@ fn get_attribute(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 fn set_attribute(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let off = usize::from(a.this.is_none());
     let (attr, val) = (a.int(off), a.int(off + 1));
-    run(vm, a, |c| c.set_attribute(attr, val), |()| Value::Bool(true))
+    run(
+        vm,
+        a,
+        |c| c.set_attribute(attr, val),
+        |()| Value::Bool(true),
+    )
 }
 
 fn get_strength(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -123,7 +128,12 @@ fn get_locale(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 fn get_sort_key(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let off = usize::from(a.this.is_none());
     let x = a.str(off);
-    run(vm, a, |c| c.sort_key(x.as_bytes()), |k| k.map_or(Value::Bool(false), |k| Value::Str(ZStr::from(k))))
+    run(
+        vm,
+        a,
+        |c| c.sort_key(x.as_bytes()),
+        |k| k.map_or(Value::Bool(false), |k| Value::Str(ZStr::from(k))),
+    )
 }
 
 /// A sort operand with owned string data.
@@ -138,7 +148,9 @@ enum Owned {
 }
 
 pub(crate) fn has_to_string(o: &Obj) -> bool {
-    php_vm::object::class_of(o).methods.contains_key(&ZStr::from("__tostring"))
+    php_vm::object::class_of(o)
+        .methods
+        .contains_key(&ZStr::from("__tostring"))
 }
 
 fn owned(vm: &mut Vm, v: &Value) -> VmResult<Owned> {
@@ -167,7 +179,9 @@ fn view(o: &Owned) -> SortValue<'_> {
         Owned::Int(i) => SortValue::Int(*i),
         Owned::Float(f) => SortValue::Float(*f),
         Owned::Str(z) => SortValue::Str(z.as_bytes()),
-        Owned::Object(z) => SortValue::Object { as_string: z.as_ref().map(ZStr::as_bytes) },
+        Owned::Object(z) => SortValue::Object {
+            as_string: z.as_ref().map(ZStr::as_bytes),
+        },
         Owned::Array => SortValue::Array,
     }
 }
@@ -186,7 +200,8 @@ fn sort_impl(vm: &mut Vm, a: &Args, renumber: bool, with_keys: bool) -> VmResult
         _ => ZArray::new(),
     };
     let flags = if with_keys { 0 } else { a.int(off + 1) };
-    let entries: Vec<(php_runtime::ArrayKey, Value)> = arr.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+    let entries: Vec<(php_runtime::ArrayKey, Value)> =
+        arr.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
     let mut ops = Vec::with_capacity(entries.len());
     for (_, v) in &entries {
         ops.push(owned(vm, v)?);

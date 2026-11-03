@@ -52,7 +52,9 @@ fn list_format(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     for v in arr.values() {
         items.push(vm.value_to_string(&v.deref())?);
     }
-    let r = core::with::<IntlListFormatter, _>(&o, |f| f.format(&items.iter().map(ZStr::as_bytes).collect::<Vec<_>>()));
+    let r = core::with::<IntlListFormatter, _>(&o, |f| {
+        f.format(&items.iter().map(ZStr::as_bytes).collect::<Vec<_>>())
+    });
     match r {
         Some(Ok(v)) => Ok(bytes(v)),
         Some(Err(e)) => core::fail_with(vm, a, Some(&o), e, 0, Value::Bool(false)),
@@ -63,8 +65,14 @@ fn list_format(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 // --------------------------------------------------------- IntlNumberFormatter
 
 fn nf_construct(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
-    let name = core::active_function(vm).map_or_else(|| "IntlNumberFormatter".to_owned(), |f| f.split("::").next().unwrap_or_default().to_owned());
-    Err(vm.throw("Error", &format!("Cannot directly construct {name}, use createFromSkeleton method instead")))
+    let name = core::active_function(vm).map_or_else(
+        || "IntlNumberFormatter".to_owned(),
+        |f| f.split("::").next().unwrap_or_default().to_owned(),
+    );
+    Err(vm.throw(
+        "Error",
+        &format!("Cannot directly construct {name}, use createFromSkeleton method instead"),
+    ))
 }
 
 fn nf_create(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -108,7 +116,12 @@ fn range_construct(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
 fn range_create(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     core::reset_global();
     let loc = text(&a.str(1));
-    match IntlNumberRangeFormatter::create_from_skeleton(a.str(0).as_bytes(), &loc, a.int(2), a.int(3)) {
+    match IntlNumberRangeFormatter::create_from_skeleton(
+        a.str(0).as_bytes(),
+        &loc,
+        a.int(2),
+        a.int(3),
+    ) {
         Ok(f) => {
             let o = core::instantiate(vm, "IntlNumberRangeFormatter")?;
             core::set_data(&o, f);
@@ -181,13 +194,22 @@ fn rel_construct(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     };
     // Validate the locale before looking at the formatter (php-src order).
     let probe = IntlRelativeDateTimeFormatter::new(loc.as_deref(), style, cap, None);
-    if let Err(e @ (php_intl::Error::ArgumentValue { .. } | php_intl::Error::ArgumentType { .. })) = probe {
+    if let Err(e @ (php_intl::Error::ArgumentValue { .. } | php_intl::Error::ArgumentType { .. })) =
+        probe
+    {
         return Err(core::throw_engine(vm, a, e, 0));
     }
     let r = match &nf_obj {
-        Some(n) => match core::with::<NumberFormatter, _>(n, |nf| IntlRelativeDateTimeFormatter::new(loc.as_deref(), style, cap, Some(nf))) {
+        Some(n) => match core::with::<NumberFormatter, _>(n, |nf| {
+            IntlRelativeDateTimeFormatter::new(loc.as_deref(), style, cap, Some(nf))
+        }) {
             Some(r) => r,
-            None => return Err(vm.throw("Error", php_intl::reldateformatter::UNCONSTRUCTED_NUMBER_FORMATTER)),
+            None => {
+                return Err(vm.throw(
+                    "Error",
+                    php_intl::reldateformatter::UNCONSTRUCTED_NUMBER_FORMATTER,
+                ))
+            }
         },
         None => probe,
     };
@@ -236,7 +258,8 @@ fn rel_format_impl(vm: &mut Vm, a: &Args, numeric: bool) -> VmResult<Value> {
             }
         };
         match &nf {
-            Some(n) => core::with::<NumberFormatter, _>(n, |nfv| go(&mut r.f, Some(nfv))).unwrap_or_else(|| go(&mut r.f, None)),
+            Some(n) => core::with::<NumberFormatter, _>(n, |nfv| go(&mut r.f, Some(nfv)))
+                .unwrap_or_else(|| go(&mut r.f, None)),
             None => go(&mut r.f, None),
         }
     });
@@ -258,7 +281,9 @@ fn rel_format_numeric(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 fn rel_combine(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let o = rel_fetch(vm, a)?;
     let (d, t) = (a.str(0), a.str(1));
-    match core::with::<RelDate, _>(&o, |r| r.f.combine_date_and_time(d.as_bytes(), t.as_bytes())) {
+    match core::with::<RelDate, _>(&o, |r| {
+        r.f.combine_date_and_time(d.as_bytes(), t.as_bytes())
+    }) {
         Some(Ok(v)) => Ok(bytes(v)),
         Some(Err(e)) => core::fail_with(vm, a, Some(&o), e, 0, Value::Bool(false)),
         None => Ok(Value::Bool(false)),
@@ -271,22 +296,46 @@ pub(crate) fn handlers() -> Vec<(&'static str, NativeFn)> {
         ("IntlListFormatter::__construct", list_construct),
         ("IntlListFormatter::format", list_format),
         ("IntlListFormatter::getErrorCode", core::get_error_code),
-        ("IntlListFormatter::getErrorMessage", core::get_error_message),
+        (
+            "IntlListFormatter::getErrorMessage",
+            core::get_error_message,
+        ),
         ("IntlNumberFormatter::__construct", nf_construct),
         ("IntlNumberFormatter::createFromSkeleton", nf_create),
         ("IntlNumberFormatter::format", nf_format),
         ("IntlNumberFormatter::getErrorCode", core::get_error_code),
-        ("IntlNumberFormatter::getErrorMessage", core::get_error_message),
+        (
+            "IntlNumberFormatter::getErrorMessage",
+            core::get_error_message,
+        ),
         ("IntlNumberRangeFormatter::__construct", range_construct),
         ("IntlNumberRangeFormatter::createFromSkeleton", range_create),
         ("IntlNumberRangeFormatter::format", range_format),
-        ("IntlNumberRangeFormatter::getErrorCode", core::get_error_code),
-        ("IntlNumberRangeFormatter::getErrorMessage", core::get_error_message),
+        (
+            "IntlNumberRangeFormatter::getErrorCode",
+            core::get_error_code,
+        ),
+        (
+            "IntlNumberRangeFormatter::getErrorMessage",
+            core::get_error_message,
+        ),
         ("IntlRelativeDateTimeFormatter::__construct", rel_construct),
         ("IntlRelativeDateTimeFormatter::format", rel_format),
-        ("IntlRelativeDateTimeFormatter::formatNumeric", rel_format_numeric),
-        ("IntlRelativeDateTimeFormatter::combineDateAndTime", rel_combine),
-        ("IntlRelativeDateTimeFormatter::getErrorCode", core::get_error_code),
-        ("IntlRelativeDateTimeFormatter::getErrorMessage", core::get_error_message),
+        (
+            "IntlRelativeDateTimeFormatter::formatNumeric",
+            rel_format_numeric,
+        ),
+        (
+            "IntlRelativeDateTimeFormatter::combineDateAndTime",
+            rel_combine,
+        ),
+        (
+            "IntlRelativeDateTimeFormatter::getErrorCode",
+            core::get_error_code,
+        ),
+        (
+            "IntlRelativeDateTimeFormatter::getErrorMessage",
+            core::get_error_message,
+        ),
     ]
 }

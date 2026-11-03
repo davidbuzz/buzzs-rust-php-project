@@ -1,7 +1,10 @@
 //! `IntlDateFormatter` and the `datefmt_*()` functions.
 
 use php_intl::calendar::{IntlCalendar, PhpDateTime};
-use php_intl::dateformat::{self as lib, CalendarArg, DateArg, IntlDateFormatter, ObjectArg, ObjectFormat, Timestamp, TmArray, TmElem};
+use php_intl::dateformat::{
+    self as lib, CalendarArg, DateArg, IntlDateFormatter, ObjectArg, ObjectFormat, Timestamp,
+    TmArray, TmElem,
+};
 use php_intl::timezone::{PhpZone, TimeZone, TimeZoneArg};
 use php_intl::{Error, UErrorCode};
 use php_runtime::{Obj, Value, ZArray, ZStr};
@@ -39,7 +42,9 @@ pub(crate) fn owned_tz(vm: &mut Vm, a: &Args, v: Value, n: usize) -> VmResult<Ow
                     None => Err(core::throw_engine(
                         vm,
                         a,
-                        Error::IntlExceptionInFunction("passed IntlTimeZone is not properly constructed".into()),
+                        Error::IntlExceptionInFunction(
+                            "passed IntlTimeZone is not properly constructed".into(),
+                        ),
                         0,
                     )),
                 }
@@ -49,7 +54,12 @@ pub(crate) fn owned_tz(vm: &mut Vm, a: &Args, v: Value, n: usize) -> VmResult<Ow
                 Ok(OwnedTz::Str(vm.value_to_string(&Value::Object(o))?))
             } else {
                 let cls = php_vm::object::class_of(&o).name.to_string_lossy();
-                Err(core::type_error(vm, a, n + 1, &format!("Object of class {cls} could not be converted to string")))
+                Err(core::type_error(
+                    vm,
+                    a,
+                    n + 1,
+                    &format!("Object of class {cls} could not be converted to string"),
+                ))
             }
         }
         other => Ok(OwnedTz::Str(vm.value_to_string(&other)?)),
@@ -77,17 +87,21 @@ fn owned_cal(vm: &mut Vm, a: &Args, v: Option<Value>, n: usize) -> VmResult<Owne
     Ok(match v {
         None | Some(Value::Null) => OwnedCal::Null,
         Some(Value::Int(i)) => OwnedCal::Type(i),
-        Some(Value::Object(o)) if dt::instance_of(&o, "IntlCalendar") => match crate::calendar::require(&o) {
-            Some(c) => OwnedCal::Object(c),
-            None => {
-                return Err(core::throw_engine(
-                    vm,
-                    a,
-                    Error::IntlExceptionInFunction("Found unconstructed IntlCalendar object".into()),
-                    0,
-                ))
+        Some(Value::Object(o)) if dt::instance_of(&o, "IntlCalendar") => {
+            match crate::calendar::require(&o) {
+                Some(c) => OwnedCal::Object(c),
+                None => {
+                    return Err(core::throw_engine(
+                        vm,
+                        a,
+                        Error::IntlExceptionInFunction(
+                            "Found unconstructed IntlCalendar object".into(),
+                        ),
+                        0,
+                    ))
+                }
             }
-        },
+        }
         Some(Value::Float(f)) if f.fract() == 0.0 => {
             #[allow(clippy::cast_possible_truncation)]
             let i = f as i64;
@@ -99,7 +113,12 @@ fn owned_cal(vm: &mut Vm, a: &Args, v: Option<Value>, n: usize) -> VmResult<Owne
         }
         Some(other) => {
             let given = core::type_name(&other);
-            return Err(core::type_error(vm, a, n + 1, &format!("must be of type IntlCalendar|int|null, {given} given")));
+            return Err(core::type_error(
+                vm,
+                a,
+                n + 1,
+                &format!("must be of type IntlCalendar|int|null, {given} given"),
+            ));
         }
     })
 }
@@ -113,7 +132,12 @@ fn ctor(vm: &mut Vm, a: &Args, o: &Obj) -> VmResult<bool> {
     };
     let cal = owned_cal(vm, a, a.opt(4), 4)?;
     if core::is_constructed::<IntlDateFormatter>(o) {
-        core::errors_set(vm, o, UErrorCode::ILLEGAL_ARGUMENT_ERROR, "cannot call constructor twice")?;
+        core::errors_set(
+            vm,
+            o,
+            UErrorCode::ILLEGAL_ARGUMENT_ERROR,
+            "cannot call constructor twice",
+        )?;
         return Ok(false);
     }
     let locale = a.opt(0).map(|v| match v {
@@ -197,15 +221,24 @@ macro_rules! simple {
 
 simple!(get_date_type, |f, a, off| Ok(f.date_type()), Value::Int);
 simple!(get_time_type, |f, a, off| Ok(f.time_type()), Value::Int);
-simple!(get_calendar, |f, a, off| Ok(f.calendar_type()), |t| t.map_or(Value::Bool(false), Value::Int));
+simple!(get_calendar, |f, a, off| Ok(f.calendar_type()), |t| t
+    .map_or(Value::Bool(false), Value::Int));
 simple!(get_time_zone_id, |f, a, off| f.time_zone_id(), s);
-simple!(set_pattern, |f, a, off| f.set_pattern(a.str(off).as_bytes()), |()| Value::Bool(true));
+simple!(
+    set_pattern,
+    |f, a, off| f.set_pattern(a.str(off).as_bytes()),
+    |()| Value::Bool(true)
+);
 simple!(get_pattern, |f, a, off| f.pattern(), s);
 simple!(get_locale, |f, a, off| f.locale(a.int(off)), s);
-simple!(set_lenient, |f, a, off| {
-    f.set_lenient(a.bool(off));
-    Ok(())
-}, |()| Value::Null);
+simple!(
+    set_lenient,
+    |f, a, off| {
+        f.set_lenient(a.bool(off));
+        Ok(())
+    },
+    |()| Value::Null
+);
 simple!(is_lenient, |f, a, off| Ok(f.is_lenient()), Value::Bool);
 
 fn get_time_zone(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -232,13 +265,27 @@ fn set_time_zone(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         Some(v) => owned_tz(vm, a, v, off)?,
         None => OwnedTz::Str(ZStr::from(dt::default_tz_name(vm)?)),
     };
-    run(vm, a, &o, off, |f| f.set_time_zone(tz.view()), |()| Value::Bool(true))
+    run(
+        vm,
+        a,
+        &o,
+        off,
+        |f| f.set_time_zone(tz.view()),
+        |()| Value::Bool(true),
+    )
 }
 
 fn set_calendar(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let (o, off) = fetch(vm, a)?;
     let cal = owned_cal(vm, a, a.opt(off), off)?;
-    run(vm, a, &o, off, |f| f.set_calendar(cal.view()), |()| Value::Bool(true))
+    run(
+        vm,
+        a,
+        &o,
+        off,
+        |f| f.set_calendar(cal.view()),
+        |()| Value::Bool(true),
+    )
 }
 
 /// An owned `format()` argument.
@@ -318,12 +365,21 @@ fn format_object(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         Value::Object(o) => o,
         other => {
             let given = core::type_name(&other);
-            return Err(core::type_error(vm, a, 1, &format!("must be of type object, {given} given")));
+            return Err(core::type_error(
+                vm,
+                a,
+                1,
+                &format!("must be of type object, {given} given"),
+            ));
         }
     };
     let owned = if dt::instance_of(&obj, "IntlCalendar") {
         let Some(c) = crate::calendar::require(&obj) else {
-            core::global_error_set(vm, UErrorCode::ILLEGAL_ARGUMENT_ERROR, "bad IntlCalendar instance: not initialized properly")?;
+            core::global_error_set(
+                vm,
+                UErrorCode::ILLEGAL_ARGUMENT_ERROR,
+                "bad IntlCalendar instance: not initialized properly",
+            )?;
             return Ok(Value::Bool(false));
         };
         Some(OwnedDate::Calendar(c))
@@ -341,7 +397,11 @@ fn format_object(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
                 Some(Value::Int(x)) => Some(x),
                 _ => None,
             };
-            ObjectFormat::Styles { count: arr.len(), date: get(0), time: get(1) }
+            ObjectFormat::Styles {
+                count: arr.len(),
+                date: get(0),
+                time: get(1),
+            }
         }
         Some(Value::Int(i)) => ObjectFormat::Style(*i),
         Some(v) => {
@@ -386,12 +446,18 @@ fn float_to_long(vm: &mut Vm, f: f64) -> VmResult<i64> {
     let in_range = f.is_finite() && f >= i64::MIN as f64 && f < i64::MAX as f64;
     if !in_range {
         let repr = php_intl::common::php_gcvt(f, 17);
-        vm.raise(2, &format!("The float {repr} is not representable as an int, cast occurred"))?;
+        vm.raise(
+            2,
+            &format!("The float {repr} is not representable as an int, cast occurred"),
+        )?;
         return Ok(php_intl::common::dval_to_lval_cap(f));
     }
     if f.fract() != 0.0 {
         let repr = php_intl::common::php_gcvt(f, 17);
-        vm.raise(8192, &format!("Implicit conversion from float {repr} to int loses precision"))?;
+        vm.raise(
+            8192,
+            &format!("Implicit conversion from float {repr} to int loses precision"),
+        )?;
     }
     Ok(php_intl::common::dval_to_lval_cap(f))
 }
@@ -402,13 +468,16 @@ fn read_offset(vm: &mut Vm, a: &Args, n: usize) -> VmResult<Option<i64>> {
         return Ok(None);
     }
     let v = a.at(n);
-    match try_get_long(vm, &v)? {
-        Some(l) => Ok(Some(l)),
-        None => {
-            let given = core::type_name(&v);
-            Err(core::type_error(vm, a, n + 1, &format!("must be of type int, {given} given")))
-        }
+    if let Some(l) = try_get_long(vm, &v)? {
+        return Ok(Some(l));
     }
+    let given = core::type_name(&v);
+    Err(core::type_error(
+        vm,
+        a,
+        n + 1,
+        &format!("must be of type int, {given} given"),
+    ))
 }
 
 fn timestamp(t: Timestamp) -> Value {
@@ -418,7 +487,14 @@ fn timestamp(t: Timestamp) -> Value {
     }
 }
 
-fn finish_parse<T>(vm: &mut Vm, a: &Args, o: &Obj, off: usize, r: Option<(php_intl::Result<T>, Option<i64>)>, ok: impl FnOnce(T) -> Value) -> VmResult<Value> {
+fn finish_parse<T>(
+    vm: &mut Vm,
+    a: &Args,
+    o: &Obj,
+    off: usize,
+    r: Option<(php_intl::Result<T>, Option<i64>)>,
+    ok: impl FnOnce(T) -> Value,
+) -> VmResult<Value> {
     let Some((r, new_off)) = r else {
         return Ok(Value::Bool(false));
     };
@@ -497,6 +573,9 @@ pub(crate) fn handlers() -> Vec<(&'static str, NativeFn)> {
         ("IntlDateFormatter::parseToCalendar", parse_to_calendar),
         ("IntlDateFormatter::localtime", localtime),
         ("IntlDateFormatter::getErrorCode", core::get_error_code),
-        ("IntlDateFormatter::getErrorMessage", core::get_error_message),
+        (
+            "IntlDateFormatter::getErrorMessage",
+            core::get_error_message,
+        ),
     ]
 }

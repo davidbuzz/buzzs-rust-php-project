@@ -1,7 +1,7 @@
 //! `NumberFormatter` and the `numfmt_*()` functions.
 
 use php_intl::numfmt::{Number, NumberFormatter, Parsed};
-use php_runtime::{Obj, Value};
+use php_runtime::{Obj, Value, ZStr};
 use php_vm::ext::{Args, NativeFn, VmResult};
 use php_vm::Vm;
 
@@ -11,14 +11,16 @@ use crate::locale::text;
 fn ctor(vm: &mut Vm, a: &Args, o: &Obj) -> VmResult<bool> {
     core::reset_global();
     let loc = text(&a.str(0));
-    if loc.len() <= php_intl::common::INTL_MAX_LOCALE_LEN && core::is_constructed::<NumberFormatter>(o) {
+    if loc.len() <= php_intl::common::INTL_MAX_LOCALE_LEN
+        && core::is_constructed::<NumberFormatter>(o)
+    {
         return Err(vm.throw("Error", "NumberFormatter object is already constructed"));
     }
     let pattern = match a.opt(2) {
         Some(Value::Str(z)) => Some(z),
         _ => None,
     };
-    match NumberFormatter::new(&loc, a.int(1), pattern.as_ref().map(|z| z.as_bytes())) {
+    match NumberFormatter::new(&loc, a.int(1), pattern.as_ref().map(ZStr::as_bytes)) {
         Ok(f) => {
             core::set_data(o, f);
             Ok(true)
@@ -97,15 +99,47 @@ macro_rules! simple {
     };
 }
 
-simple!(format, |f, a, off| f.format(number(&a.at(off)), a.int(off + 1), off == 1), s);
-simple!(format_currency, |f, a, off| f.format_currency(a.float(off), a.str(off + 1).as_bytes()), s);
-simple!(set_attribute, |f, a, off| f.set_attribute(a.int(off), number(&a.at(off + 1))), |()| Value::Bool(true));
-simple!(get_attribute, |f, a, off| f.get_attribute(a.int(off)), num_value);
-simple!(set_text_attribute, |f, a, off| f.set_text_attribute(a.int(off), a.str(off + 1).as_bytes()), |()| Value::Bool(true));
-simple!(get_text_attribute, |f, a, off| f.get_text_attribute(a.int(off)), s);
-simple!(set_symbol, |f, a, off| f.set_symbol(a.int(off), a.str(off + 1).as_bytes()), |()| Value::Bool(true));
+simple!(
+    format,
+    |f, a, off| f.format(number(&a.at(off)), a.int(off + 1), off == 1),
+    s
+);
+simple!(
+    format_currency,
+    |f, a, off| f.format_currency(a.float(off), a.str(off + 1).as_bytes()),
+    s
+);
+simple!(
+    set_attribute,
+    |f, a, off| f.set_attribute(a.int(off), number(&a.at(off + 1))),
+    |()| Value::Bool(true)
+);
+simple!(
+    get_attribute,
+    |f, a, off| f.get_attribute(a.int(off)),
+    num_value
+);
+simple!(
+    set_text_attribute,
+    |f, a, off| f.set_text_attribute(a.int(off), a.str(off + 1).as_bytes()),
+    |()| Value::Bool(true)
+);
+simple!(
+    get_text_attribute,
+    |f, a, off| f.get_text_attribute(a.int(off)),
+    s
+);
+simple!(
+    set_symbol,
+    |f, a, off| f.set_symbol(a.int(off), a.str(off + 1).as_bytes()),
+    |()| Value::Bool(true)
+);
 simple!(get_symbol, |f, a, off| f.get_symbol(a.int(off)), s);
-simple!(set_pattern, |f, a, off| f.set_pattern(a.str(off).as_bytes()), |()| Value::Bool(true));
+simple!(
+    set_pattern,
+    |f, a, off| f.set_pattern(a.str(off).as_bytes()),
+    |()| Value::Bool(true)
+);
 simple!(get_pattern, |f, a, off| f.get_pattern(), s);
 simple!(get_locale, |f, a, off| f.get_locale(a.int(off)), s);
 
@@ -126,7 +160,12 @@ fn parse(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let pos = offset_arg(vm, a, off + 2)?;
     if let Some(p) = pos {
         if i32::try_from(p).is_err() {
-            return Err(core::value_error(vm, a, off + 3, &format!("must be between {} and {}", i32::MIN, i32::MAX)));
+            return Err(core::value_error(
+                vm,
+                a,
+                off + 3,
+                &format!("must be between {} and {}", i32::MIN, i32::MAX),
+            ));
         }
     }
     let (o, off) = {

@@ -17,7 +17,12 @@ pub(crate) fn text(z: &ZStr) -> String {
 pub(crate) fn path(vm: &mut Vm, a: &Args, n: usize) -> VmResult<String> {
     let z = a.str(n);
     if z.as_bytes().contains(&0) {
-        return Err(core::value_error(vm, a, n + 1, "must not contain any null bytes"));
+        return Err(core::value_error(
+            vm,
+            a,
+            n + 1,
+            "must not contain any null bytes",
+        ));
     }
     Ok(text(&z))
 }
@@ -27,7 +32,12 @@ pub(crate) fn opt_path(vm: &mut Vm, a: &Args, n: usize) -> VmResult<Option<Strin
     match a.opt(n) {
         Some(Value::Str(z)) => {
             if z.as_bytes().contains(&0) {
-                return Err(core::value_error(vm, a, n + 1, "must not contain any null bytes"));
+                return Err(core::value_error(
+                    vm,
+                    a,
+                    n + 1,
+                    "must not contain any null bytes",
+                ));
             }
             Ok(Some(text(&z)))
         }
@@ -35,17 +45,15 @@ pub(crate) fn opt_path(vm: &mut Vm, a: &Args, n: usize) -> VmResult<Option<Strin
     }
 }
 
-/// An optional string argument.
-pub(crate) fn opt_text(a: &Args, n: usize) -> Option<String> {
-    a.opt(n).map(|v| match v {
-        Value::Str(z) => text(&z),
-        _ => String::new(),
-    })
-}
-
 /// Common tail: `Ok(Some(s))` → string, `Ok(None)` → `none`, `Err` →
 /// intl error then `fail`.
-fn finish(vm: &mut Vm, a: &Args, r: Result<Option<String>>, none: Value, fail: Value) -> VmResult<Value> {
+fn finish(
+    vm: &mut Vm,
+    a: &Args,
+    r: Result<Option<String>>,
+    none: Value,
+    fail: Value,
+) -> VmResult<Value> {
     match r {
         Ok(Some(v)) => Ok(s(v)),
         Ok(None) => Ok(none),
@@ -60,7 +68,12 @@ fn get_default(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
 fn set_default(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let z = a.str(0);
     if z.as_bytes().contains(&0) {
-        return Err(core::value_error(vm, a, 1, "must not contain any null bytes"));
+        return Err(core::value_error(
+            vm,
+            a,
+            1,
+            "must not contain any null bytes",
+        ));
     }
     let v = lib::set_default_value(&text(&z));
     crate::set_default_locale_ini(vm, &v);
@@ -153,11 +166,14 @@ fn display_keyword_value(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     finish(vm, a, r, Value::Bool(false), Value::Bool(false))
 }
 
+/// A `composeLocale()` element: key, list value, string value.
+type ComposeEntry = (String, Option<Vec<Option<String>>>, Option<String>);
+
 fn compose(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     core::reset_global();
     let arr = a.array(0);
     // Materialise the string views first (the closure borrows them).
-    let mut entries: Vec<(String, Option<Vec<Option<String>>>, Option<String>)> = Vec::new();
+    let mut entries: Vec<ComposeEntry> = Vec::new();
     for (k, v) in arr.iter() {
         let key = match k {
             php_runtime::ArrayKey::Int(i) => i.to_string(),

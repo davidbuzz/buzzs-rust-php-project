@@ -80,7 +80,10 @@ pub(crate) fn create(_vm: &mut Vm, o: &Obj) -> VmResult<()> {
 
 /// Runs `f` on the payload of `o` when it is constructed with type `T`.
 pub(crate) fn with<T: 'static, R>(o: &Obj, f: impl FnOnce(&mut T) -> R) -> Option<R> {
-    object::internal::<IntlObj, _>(o, |s| s.data.as_mut().and_then(|d| d.downcast_mut::<T>()).map(f)).flatten()
+    object::internal::<IntlObj, _>(o, |s| {
+        s.data.as_mut().and_then(|d| d.downcast_mut::<T>()).map(f)
+    })
+    .flatten()
 }
 
 /// Whether `o` holds a payload of type `T`.
@@ -148,9 +151,15 @@ pub(crate) fn active_function(vm: &Vm) -> Option<String> {
         if top.kind != FrameKind::Function {
             return Some("main".to_owned());
         }
-        let name = top.ufunc.as_ref().map(|u| u.name.to_string_lossy()).unwrap_or_default();
+        let name = top
+            .ufunc
+            .as_ref()
+            .map(|u| u.name.to_string_lossy())
+            .unwrap_or_default();
         return Some(match &top.scope {
-            Some(c) if !name.contains("{closure") => format!("{}::{name}", object::display_name(&c.name)),
+            Some(c) if !name.contains("{closure") => {
+                format!("{}::{name}", object::display_name(&c.name))
+            }
             _ => name,
         });
     }
@@ -174,7 +183,32 @@ fn settings(vm: &Vm) -> (i64, bool) {
     if FORCE_THROW.with(Cell::get) > 0 {
         return (0, true);
     }
-    (vm.ini_long("intl.error_level"), vm.ini_bool("intl.use_exceptions"))
+    (
+        vm.ini_long("intl.error_level"),
+        vm.ini_bool("intl.use_exceptions"),
+    )
+}
+
+/// Throws `class` with a binary-safe message.
+pub(crate) fn throw_bytes(vm: &mut Vm, class: &str, msg: &[u8]) -> Throw {
+    let t = vm.throw(class, &String::from_utf8_lossy(msg));
+    if std::str::from_utf8(msg).is_err() {
+        if let Throw::Exception(e) = &t {
+            vm.set_property_raw(e, "message", Value::Str(ZStr::from(msg)));
+        }
+    }
+    t
+}
+
+/// `"func(): "` + `msg` as bytes.
+fn prefixed_bytes(func: Option<&str>, msg: &[u8]) -> Vec<u8> {
+    let mut out = Vec::new();
+    if let Some(f) = func {
+        out.extend_from_slice(f.as_bytes());
+        out.extend_from_slice(b"(): ");
+    }
+    out.extend_from_slice(msg);
+    out
 }
 
 /// `intl_error_set_custom_msg(NULL, msg)`: stores the prefixed message in
@@ -188,8 +222,8 @@ pub(crate) fn global_message(vm: &mut Vm, msg: &[u8]) -> VmResult<()> {
         vm.php_error_bytes(level, msg)?;
     }
     if exc {
-        let prefixed = php_intl::error::prefix_message(func.as_deref(), &text);
-        return Err(vm.throw("IntlException", &prefixed));
+        let prefixed = prefixed_bytes(func.as_deref(), msg);
+        return Err(throw_bytes(vm, "IntlException", &prefixed));
     }
     Ok(())
 }
@@ -206,8 +240,9 @@ pub(crate) fn record(vm: &mut Vm, o: Option<&Obj>, e: &IntlError) -> VmResult<()
         if let (Some(o), false) = (o, e.scope == Scope::Global) {
             with_obj_error(o, |s| s.record(func.as_deref(), e));
         }
-        let prefixed = php_intl::error::prefix_message(func.as_deref(), &text);
-        return Err(vm.throw("IntlException", &prefixed));
+        let _ = text;
+        let prefixed = prefixed_bytes(func.as_deref(), e.message_bytes().unwrap_or_default());
+        return Err(throw_bytes(vm, "IntlException", &prefixed));
     }
     match e.scope {
         Scope::Both => {
@@ -263,14 +298,25 @@ pub(crate) fn throw_engine(vm: &mut Vm, a: &Args, e: Error, shift: usize) -> Thr
 }
 
 /// `fail()` and then return `ret`.
-pub(crate) fn fail_with(vm: &mut Vm, a: &Args, o: Option<&Obj>, e: Error, shift: usize, ret: Value) -> VmResult<Value> {
+pub(crate) fn fail_with(
+    vm: &mut Vm,
+    a: &Args,
+    o: Option<&Obj>,
+    e: Error,
+    shift: usize,
+    ret: Value,
+) -> VmResult<Value> {
     fail(vm, a, o, e, shift)?;
     Ok(ret)
 }
 
 /// An intl error recorded globally with a message (`intl_error_set(NULL, code, msg)`).
 pub(crate) fn global_error_set(vm: &mut Vm, code: UErrorCode, msg: &str) -> VmResult<()> {
-    record(vm, None, &IntlError::new(code, msg.to_owned()).with_scope(Scope::Global))
+    record(
+        vm,
+        None,
+        &IntlError::new(code, msg.to_owned()).with_scope(Scope::Global),
+    )
 }
 
 /// An intl error recorded in both slots (`intl_errors_set(&obj->err, code, msg)`).
@@ -316,7 +362,10 @@ pub(crate) fn get_error_message(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 /// The handler registered for stub entries without an implementation.
 pub(crate) fn not_implemented(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let name = active_function(vm).unwrap_or_else(|| a.func_name());
-    Err(vm.throw("Error", &format!("{name}() is not implemented in phprust yet")))
+    Err(vm.throw(
+        "Error",
+        &format!("{name}() is not implemented in phprust yet"),
+    ))
 }
 
 /// `ZEND_NUM_ARGS()`: the number of arguments actually passed.
@@ -345,7 +394,11 @@ fn arg_error(vm: &mut Vm, class: &str, a: &Args, n: usize, msg: &str) -> Throw {
     let pname = a
         .func
         .as_ref()
-        .and_then(|f| f.params.get(n.wrapping_sub(1)).map(|p| p.name.to_string_lossy()))
+        .and_then(|f| {
+            f.params
+                .get(n.wrapping_sub(1))
+                .map(|p| p.name.to_string_lossy())
+        })
         .unwrap_or_default();
     vm.throw(class, &format!("{fname}(): Argument #{n} (${pname}) {msg}"))
 }
@@ -360,7 +413,41 @@ pub(crate) fn type_error(vm: &mut Vm, a: &Args, n: usize, msg: &str) -> Throw {
     arg_error(vm, "TypeError", a, n, msg)
 }
 
-/// `zend_argument_error(class, n, msg)`.
-pub(crate) fn argument_error(vm: &mut Vm, class: &str, a: &Args, n: usize, msg: &str) -> Throw {
-    arg_error(vm, class, a, n, msg)
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn prefixes() {
+        assert_eq!(prefixed_bytes(Some("f"), b"m\x80"), b"f(): m\x80".to_vec());
+        assert_eq!(prefixed_bytes(None, b"m"), b"m".to_vec());
+    }
+
+    #[test]
+    fn type_names() {
+        assert_eq!(type_name(&Value::Null), "null");
+        assert_eq!(type_name(&Value::Bool(true)), "true");
+        assert_eq!(type_name(&Value::Int(1)), "int");
+        assert_eq!(type_name(&Value::Float(1.0)), "float");
+        assert_eq!(type_name(&Value::Str(ZStr::from("x"))), "string");
+    }
+
+    #[test]
+    fn ctor_guard_nests() {
+        assert_eq!(FORCE_THROW.with(Cell::get), 0);
+        {
+            let _a = CtorGuard::new();
+            let _b = CtorGuard::new();
+            assert_eq!(FORCE_THROW.with(Cell::get), 2);
+        }
+        assert_eq!(FORCE_THROW.with(Cell::get), 0);
+    }
+
+    #[test]
+    fn global_slot() {
+        with_global(|g| g.code = UErrorCode::ILLEGAL_ARGUMENT_ERROR);
+        assert_eq!(global_error().code, UErrorCode::ILLEGAL_ARGUMENT_ERROR);
+        reset_global();
+        assert_eq!(global_error().code, UErrorCode::ZERO);
+    }
 }

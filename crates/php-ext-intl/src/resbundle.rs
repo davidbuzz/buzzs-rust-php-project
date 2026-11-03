@@ -13,7 +13,15 @@ fn ctor(vm: &mut Vm, a: &Args, o: &Obj) -> VmResult<bool> {
     if core::is_constructed::<ResourceBundle>(o) {
         return Err(vm.throw("Error", "ResourceBundle object is already constructed"));
     }
-    let opt = |n: usize| a.opt(n).map(|v| if let Value::Str(z) = v { text(&z) } else { String::new() });
+    let opt = |n: usize| {
+        a.opt(n).map(|v| {
+            if let Value::Str(z) = v {
+                text(&z)
+            } else {
+                String::new()
+            }
+        })
+    };
     let (loc, bundle) = (opt(0), opt(1));
     match ResourceBundle::new(loc.as_deref(), bundle.as_deref(), a.bool(2)) {
         Ok((rb, st)) => {
@@ -50,7 +58,9 @@ fn value(vm: &mut Vm, v: ResourceValue) -> VmResult<Value> {
         ResourceValue::Str(t) => s(t),
         ResourceValue::Binary(b) => Value::Str(ZStr::from(b)),
         ResourceValue::Int(i) => Value::Int(i),
-        ResourceValue::IntVector(v) => Value::Array(ZArray::from_values(v.into_iter().map(Value::Int))),
+        ResourceValue::IntVector(v) => {
+            Value::Array(ZArray::from_values(v.into_iter().map(Value::Int)))
+        }
         ResourceValue::Bundle(rb) => {
             let o = core::instantiate(vm, "ResourceBundle")?;
             core::set_data(&o, rb);
@@ -61,7 +71,14 @@ fn value(vm: &mut Vm, v: ResourceValue) -> VmResult<Value> {
 
 /// `resource_bundle_array_fetch()`; `arg` is the offset's argument
 /// number (`None` for `$rb[...]`).
-fn fetch_elem(vm: &mut Vm, a: Option<&Args>, o: &Obj, off: &Value, fallback: bool, arg: Option<u32>) -> VmResult<Value> {
+fn fetch_elem(
+    vm: &mut Vm,
+    a: Option<&Args>,
+    o: &Obj,
+    off: &Value,
+    fallback: bool,
+    arg: Option<u32>,
+) -> VmResult<Value> {
     core::reset_both(o);
     let key;
     let offset = match off {
@@ -154,7 +171,10 @@ impl NativeIterator for Iter {
 
     fn current(&mut self, vm: &mut Vm) -> VmResult<Value> {
         self.read(vm)?;
-        Ok(self.current.as_ref().map_or(Value::Null, |(_, v)| v.clone()))
+        Ok(self
+            .current
+            .as_ref()
+            .map_or(Value::Null, |(_, v)| v.clone()))
     }
 
     fn key(&mut self, vm: &mut Vm) -> VmResult<Value> {
@@ -174,13 +194,25 @@ impl NativeIterator for Iter {
 
 fn make_iter(o: &Obj) -> Iter {
     let len = core::with::<ResourceBundle, _>(o, |rb| rb.count()).unwrap_or(0);
-    Iter { o: o.clone(), i: 0, len, current: None }
+    Iter {
+        o: o.clone(),
+        i: 0,
+        len,
+        current: None,
+    }
 }
 
 /// `get_iterator`.
-pub(crate) fn get_iterator(vm: &mut Vm, o: &Obj, by_ref: bool) -> VmResult<Box<dyn NativeIterator>> {
+pub(crate) fn get_iterator(
+    vm: &mut Vm,
+    o: &Obj,
+    by_ref: bool,
+) -> VmResult<Box<dyn NativeIterator>> {
     if by_ref {
-        return Err(vm.throw("Error", "An iterator cannot be used with foreach by reference"));
+        return Err(vm.throw(
+            "Error",
+            "An iterator cannot be used with foreach by reference",
+        ));
     }
     if !core::is_constructed::<ResourceBundle>(o) {
         return Err(vm.throw("Error", "Found unconstructed ResourceBundle"));
@@ -201,7 +233,10 @@ impl crate::iter::IterSource for Source {
     }
 
     fn current(&self) -> Value {
-        self.0.current.as_ref().map_or(Value::Null, |(_, v)| v.clone())
+        self.0
+            .current
+            .as_ref()
+            .map_or(Value::Null, |(_, v)| v.clone())
     }
 
     fn key(&self, _index: i64) -> Value {
@@ -225,7 +260,11 @@ fn get_iterator_method(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     }
     let mut it = make_iter(&o);
     it.read(vm)?;
-    Ok(Value::Object(crate::iter::wrap(vm, "IntlIterator", Box::new(Source(it)))?))
+    Ok(Value::Object(crate::iter::wrap(
+        vm,
+        "IntlIterator",
+        Box::new(Source(it)),
+    )?))
 }
 
 /// `read_dimension`.
@@ -234,25 +273,36 @@ pub(crate) fn read_dimension(vm: &mut Vm, o: &Obj, off: &Value) -> VmResult<Opti
         v @ (Value::Int(_) | Value::Str(_)) => fetch_elem(vm, None, o, &v, true, None).map(Some),
         other => {
             let t = core::type_name(&other);
-            Err(vm.throw("TypeError", &format!("Cannot access offset of type {t} on ResourceBundle")))
+            Err(vm.throw(
+                "TypeError",
+                &format!("Cannot access offset of type {t} on ResourceBundle"),
+            ))
         }
     }
 }
 
 /// `write_dimension`.
-pub(crate) fn write_dimension(vm: &mut Vm, _o: &Obj, _k: Option<&Value>, _v: &Value) -> VmResult<bool> {
+pub(crate) fn write_dimension(
+    vm: &mut Vm,
+    _o: &Obj,
+    _k: Option<&Value>,
+    _v: &Value,
+) -> VmResult<bool> {
     Err(vm.throw("Error", "Cannot modify readonly ResourceBundle"))
 }
 
 /// `count_elements`.
 pub(crate) fn count_elements(vm: &mut Vm, o: &Obj) -> VmResult<Option<i64>> {
-    match core::with::<ResourceBundle, _>(o, |rb| rb.count()) {
-        Some(n) => Ok(Some(n)),
-        None => {
-            core::errors_set(vm, o, php_intl::UErrorCode::ILLEGAL_ARGUMENT_ERROR, "Found unconstructed ResourceBundle")?;
-            Ok(Some(0))
-        }
+    if let Some(n) = core::with::<ResourceBundle, _>(o, |rb| rb.count()) {
+        return Ok(Some(n));
     }
+    core::errors_set(
+        vm,
+        o,
+        php_intl::UErrorCode::ILLEGAL_ARGUMENT_ERROR,
+        "Found unconstructed ResourceBundle",
+    )?;
+    Ok(Some(0))
 }
 
 /// Handlers by stub key.

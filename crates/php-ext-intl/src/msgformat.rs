@@ -103,7 +103,10 @@ fn view(o: &Owned) -> MsgValue<'_> {
         Owned::Str(z) => MsgValue::Str(z.as_bytes()),
         Owned::DateTime(d) => MsgValue::DateTime(d),
         Owned::Calendar(c) => MsgValue::Calendar(c),
-        Owned::Object(class, z) => MsgValue::Object { class, as_string: z.as_ref().map(ZStr::as_bytes) },
+        Owned::Object(class, z) => MsgValue::Object {
+            class,
+            as_string: z.as_ref().map(ZStr::as_bytes),
+        },
         Owned::Array(n) => MsgValue::Array { non_empty: *n },
         Owned::Other => MsgValue::Other,
     }
@@ -192,7 +195,10 @@ fn set_pattern(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 fn get_pattern(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let (o, _) = fetch(vm, a)?;
-    Ok(core::with::<MessageFormatter, _>(&o, |f| Value::Str(ZStr::from(f.pattern()))).unwrap_or(Value::Bool(false)))
+    Ok(
+        core::with::<MessageFormatter, _>(&o, |f| Value::Str(ZStr::from(f.pattern())))
+            .unwrap_or(Value::Bool(false)),
+    )
 }
 
 fn get_locale(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {

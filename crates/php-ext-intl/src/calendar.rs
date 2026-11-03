@@ -13,7 +13,11 @@ use crate::locale::text;
 
 /// Wraps a calendar in a new `IntlCalendar`/`IntlGregorianCalendar`.
 pub(crate) fn object(vm: &mut Vm, cal: IntlCalendar) -> VmResult<Value> {
-    let class = if cal.is_gregorian() { "IntlGregorianCalendar" } else { "IntlCalendar" };
+    let class = if cal.is_gregorian() {
+        "IntlGregorianCalendar"
+    } else {
+        "IntlCalendar"
+    };
     let o = core::instantiate(vm, class)?;
     core::set_data(&o, cal);
     Ok(Value::Object(o))
@@ -32,7 +36,10 @@ fn opt_string(a: &Args, n: usize) -> Option<String> {
 }
 
 fn construct(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
-    Err(vm.throw("Exception", "An object of this type cannot be created with the new operator"))
+    Err(vm.throw(
+        "Exception",
+        "An object of this type cannot be created with the new operator",
+    ))
 }
 
 fn create_instance(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -55,17 +62,20 @@ fn from_date_time(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             let Some(cls) = vm.find_class(b"DateTime") else {
                 return Ok(Value::Null);
             };
-            match vm.new_object_with_args(&cls, vec![Value::Str(z)]) {
-                Ok(o) => o,
-                Err(e) => return Err(e),
-            }
+            vm.new_object_with_args(&cls, vec![Value::Str(z)])?
         }
         _ => return Ok(Value::Null),
     };
     let pdt = match dt::php_datetime(vm, &dto) {
         Ok(p) => p,
-        Err(php_vm::ext::Throw::Exception(e)) if php_vm::object::class_of(&e).instance_of_name(b"error") => {
-            core::global_error_set(vm, UErrorCode::ILLEGAL_ARGUMENT_ERROR, "DateTime object is unconstructed")?;
+        Err(php_vm::ext::Throw::Exception(e))
+            if php_vm::object::class_of(&e).instance_of_name(b"error") =>
+        {
+            core::global_error_set(
+                vm,
+                UErrorCode::ILLEGAL_ARGUMENT_ERROR,
+                "DateTime object is unconstructed",
+            )?;
             return Ok(Value::Null);
         }
         Err(e) => return Err(e),
@@ -79,7 +89,9 @@ fn from_date_time(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 fn get_available_locales(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
     core::reset_global();
-    Ok(Value::Array(ZArray::from_values(lib::available_locales().into_iter().map(s))))
+    Ok(Value::Array(ZArray::from_values(
+        lib::available_locales().into_iter().map(s),
+    )))
 }
 
 fn get_keyword_values_for_locale(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -135,64 +147,196 @@ macro_rules! simple {
 
 simple!(get, |c, a, off| c.get(a.int(off)), Value::Int);
 simple!(get_time, |c, a, off| c.get_time(), Value::Float);
-simple!(set_time, |c, a, off| c.set_time(a.float(off)), |()| Value::Bool(true));
-simple!(add, |c, a, off| c.add(a.int(off), a.int(off + 1)), |()| Value::Bool(true));
-simple!(clear, |c, a, off| c.clear(a.opt(off).map(|v| if let Value::Int(i) = v { i } else { 0 })), |()| Value::Bool(true));
-simple!(field_difference, |c, a, off| c.field_difference(a.float(off), a.int(off + 1)), Value::Int);
-simple!(get_actual_maximum, |c, a, off| c.limit(a.int(off), Limit::ActualMaximum), Value::Int);
-simple!(get_actual_minimum, |c, a, off| c.limit(a.int(off), Limit::ActualMinimum), Value::Int);
-simple!(get_maximum, |c, a, off| c.limit(a.int(off), Limit::Maximum), Value::Int);
-simple!(get_minimum, |c, a, off| c.limit(a.int(off), Limit::Minimum), Value::Int);
-simple!(get_greatest_minimum, |c, a, off| c.limit(a.int(off), Limit::GreatestMinimum), Value::Int);
-simple!(get_least_maximum, |c, a, off| c.limit(a.int(off), Limit::LeastMaximum), Value::Int);
-simple!(get_day_of_week_type, |c, a, off| c.day_of_week_type(a.int(off)), Value::Int);
-simple!(get_weekend_transition, |c, a, off| c.weekend_transition(a.int(off)), Value::Int);
-simple!(get_first_day_of_week, |c, a, off| Ok(c.first_day_of_week()), Value::Int);
-simple!(set_first_day_of_week, |c, a, off| c.set_first_day_of_week(a.int(off)), |()| Value::Bool(true));
-simple!(get_minimal_days, |c, a, off| Ok(c.minimal_days_in_first_week()), Value::Int);
-simple!(set_minimal_days, |c, a, off| c.set_minimal_days_in_first_week(a.int(off)), |()| Value::Bool(true));
+simple!(set_time, |c, a, off| c.set_time(a.float(off)), |()| {
+    Value::Bool(true)
+});
+simple!(add, |c, a, off| c.add(a.int(off), a.int(off + 1)), |()| {
+    Value::Bool(true)
+});
+simple!(
+    clear,
+    |c, a, off| c.clear(
+        a.opt(off)
+            .map(|v| if let Value::Int(i) = v { i } else { 0 })
+    ),
+    |()| Value::Bool(true)
+);
+simple!(
+    field_difference,
+    |c, a, off| c.field_difference(a.float(off), a.int(off + 1)),
+    Value::Int
+);
+simple!(
+    get_actual_maximum,
+    |c, a, off| c.limit(a.int(off), Limit::ActualMaximum),
+    Value::Int
+);
+simple!(
+    get_actual_minimum,
+    |c, a, off| c.limit(a.int(off), Limit::ActualMinimum),
+    Value::Int
+);
+simple!(
+    get_maximum,
+    |c, a, off| c.limit(a.int(off), Limit::Maximum),
+    Value::Int
+);
+simple!(
+    get_minimum,
+    |c, a, off| c.limit(a.int(off), Limit::Minimum),
+    Value::Int
+);
+simple!(
+    get_greatest_minimum,
+    |c, a, off| c.limit(a.int(off), Limit::GreatestMinimum),
+    Value::Int
+);
+simple!(
+    get_least_maximum,
+    |c, a, off| c.limit(a.int(off), Limit::LeastMaximum),
+    Value::Int
+);
+simple!(
+    get_day_of_week_type,
+    |c, a, off| c.day_of_week_type(a.int(off)),
+    Value::Int
+);
+simple!(
+    get_weekend_transition,
+    |c, a, off| c.weekend_transition(a.int(off)),
+    Value::Int
+);
+simple!(
+    get_first_day_of_week,
+    |c, a, off| Ok(c.first_day_of_week()),
+    Value::Int
+);
+simple!(
+    set_first_day_of_week,
+    |c, a, off| c.set_first_day_of_week(a.int(off)),
+    |()| Value::Bool(true)
+);
+simple!(
+    get_minimal_days,
+    |c, a, off| Ok(c.minimal_days_in_first_week()),
+    Value::Int
+);
+simple!(
+    set_minimal_days,
+    |c, a, off| c.set_minimal_days_in_first_week(a.int(off)),
+    |()| Value::Bool(true)
+);
 simple!(get_locale, |c, a, off| c.locale(a.int(off)), s);
 simple!(get_type, |c, a, off| Ok(c.cal_type()), s);
-simple!(in_daylight_time, |c, a, off| c.in_daylight_time(), Value::Bool);
+simple!(
+    in_daylight_time,
+    |c, a, off| c.in_daylight_time(),
+    Value::Bool
+);
 simple!(is_lenient, |c, a, off| Ok(c.is_lenient()), Value::Bool);
-simple!(set_lenient, |c, a, off| {
-    c.set_lenient(a.bool(off));
-    Ok(())
-}, |()| Value::Bool(true));
+simple!(
+    set_lenient,
+    |c, a, off| {
+        c.set_lenient(a.bool(off));
+        Ok(())
+    },
+    |()| Value::Bool(true)
+);
 simple!(is_set, |c, a, off| c.is_set(a.int(off)), Value::Bool);
-simple!(is_weekend, |c, a, off| c.is_weekend(a.opt(off).map(|v| if let Value::Float(f) = v { f } else { 0.0 })), Value::Bool);
-simple!(get_repeated_wall_time_option, |c, a, off| Ok(c.repeated_wall_time_option()), Value::Int);
-simple!(get_skipped_wall_time_option, |c, a, off| Ok(c.skipped_wall_time_option()), Value::Int);
-simple!(set_repeated_wall_time_option, |c, a, off| c.set_repeated_wall_time_option(a.int(off)), |()| Value::Bool(true));
-simple!(set_skipped_wall_time_option, |c, a, off| c.set_skipped_wall_time_option(a.int(off)), |()| Value::Bool(true));
-simple!(set_date, |c, a, off| c.set_date(a.int(off), a.int(off + 1), a.int(off + 2)), |()| Value::Null);
-simple!(set_date_time, |c, a, off| c.set_date_time(
-    a.int(off),
-    a.int(off + 1),
-    a.int(off + 2),
-    a.int(off + 3),
-    a.int(off + 4),
-    a.opt(off + 5).map(|v| if let Value::Int(i) = v { i } else { 0 })
-), |()| Value::Null);
-simple!(set_gregorian_change, |c, a, off| c.set_gregorian_change(a.float(off)), |()| Value::Bool(true));
-simple!(get_gregorian_change, |c, a, off| Ok(c.gregorian_change()), Value::Float);
-simple!(is_leap_year, |c, a, off| c.is_leap_year(a.int(off)), Value::Bool);
+simple!(
+    is_weekend,
+    |c, a, off| c.is_weekend(
+        a.opt(off)
+            .map(|v| if let Value::Float(f) = v { f } else { 0.0 })
+    ),
+    Value::Bool
+);
+simple!(
+    get_repeated_wall_time_option,
+    |c, a, off| Ok(c.repeated_wall_time_option()),
+    Value::Int
+);
+simple!(
+    get_skipped_wall_time_option,
+    |c, a, off| Ok(c.skipped_wall_time_option()),
+    Value::Int
+);
+simple!(
+    set_repeated_wall_time_option,
+    |c, a, off| c.set_repeated_wall_time_option(a.int(off)),
+    |()| Value::Bool(true)
+);
+simple!(
+    set_skipped_wall_time_option,
+    |c, a, off| c.set_skipped_wall_time_option(a.int(off)),
+    |()| Value::Bool(true)
+);
+simple!(
+    set_date,
+    |c, a, off| c.set_date(a.int(off), a.int(off + 1), a.int(off + 2)),
+    |()| Value::Null
+);
+simple!(
+    set_date_time,
+    |c, a, off| c.set_date_time(
+        a.int(off),
+        a.int(off + 1),
+        a.int(off + 2),
+        a.int(off + 3),
+        a.int(off + 4),
+        a.opt(off + 5)
+            .map(|v| if let Value::Int(i) = v { i } else { 0 })
+    ),
+    |()| Value::Null
+);
+simple!(
+    set_gregorian_change,
+    |c, a, off| c.set_gregorian_change(a.float(off)),
+    |()| Value::Bool(true)
+);
+simple!(
+    get_gregorian_change,
+    |c, a, off| Ok(c.gregorian_change()),
+    Value::Float
+);
+simple!(
+    is_leap_year,
+    |c, a, off| c.is_leap_year(a.int(off)),
+    Value::Bool
+);
 
 /// `before`/`after`/`equals`/`isEquivalentTo`.
-fn compare_with(vm: &mut Vm, a: &Args, check_first: bool, f: fn(&IntlCalendar, &IntlCalendar) -> Result<bool>) -> VmResult<Value> {
-    let (o0, off0) = core::target(a);
-    let other = match a.at(off0) {
-        Value::Object(x) => x,
-        _ => return Ok(Value::Bool(false)),
+fn compare_with(
+    vm: &mut Vm,
+    a: &Args,
+    check_first: bool,
+    f: fn(&IntlCalendar, &IntlCalendar) -> Result<bool>,
+) -> VmResult<Value> {
+    let off0 = usize::from(a.this.is_none());
+    let Value::Object(other) = a.at(off0) else {
+        return Ok(Value::Bool(false));
     };
     let other_cal = calendar_of(&other);
     if check_first && other_cal.is_none() {
-        let _ = o0;
-        return Err(vm.throw("Error", &format!("{}(): Argument #{} ($other) is uninitialized", core::active_function(vm).unwrap_or_default(), off0 + 1)));
+        return Err(vm.throw(
+            "Error",
+            &format!(
+                "{}(): Argument #{} ($other) is uninitialized",
+                core::active_function(vm).unwrap_or_default(),
+                off0 + 1
+            ),
+        ));
     }
     let (o, off) = fetch(vm, a)?;
     let Some(other_cal) = other_cal else {
-        return Err(vm.throw("Error", &format!("{}(): Argument #{} ($other) is uninitialized", core::active_function(vm).unwrap_or_default(), off + 1)));
+        return Err(vm.throw(
+            "Error",
+            &format!(
+                "{}(): Argument #{} ($other) is uninitialized",
+                core::active_function(vm).unwrap_or_default(),
+                off + 1
+            ),
+        ));
     };
     let other_cal = match other_cal {
         Ok(c) => c,
@@ -231,7 +375,15 @@ fn set(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     // procedural numbering by `fail`).
     for (i, v) in vals.iter().enumerate() {
         if i32::try_from(*v).is_err() {
-            return Err(core::throw_engine(vm, a, Error::arg_value(u32::try_from(i + 1).unwrap_or(1), format!("must be between {} and {}", i32::MIN, i32::MAX)), off));
+            return Err(core::throw_engine(
+                vm,
+                a,
+                Error::arg_value(
+                    u32::try_from(i + 1).unwrap_or(1),
+                    format!("must be between {} and {}", i32::MIN, i32::MAX),
+                ),
+                off,
+            ));
         }
     }
     let (o, off) = fetch(vm, a)?;
@@ -258,7 +410,14 @@ fn roll(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         }
         v => vm.value_to_int(&v)?,
     };
-    run(vm, a, &o, off, |c| c.roll(field, amount), |()| Value::Bool(true))
+    run(
+        vm,
+        a,
+        &o,
+        off,
+        |c| c.roll(field, amount),
+        |()| Value::Bool(true),
+    )
 }
 
 fn get_time_zone(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -278,7 +437,14 @@ fn set_time_zone(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let Some(tz) = crate::timezone::process_value(vm, a, a.opt(off), off, Some(&o))? else {
         return Ok(Value::Bool(false));
     };
-    run(vm, a, &o, off, |c| c.set_time_zone(Some(&tz)), |()| Value::Bool(true))
+    run(
+        vm,
+        a,
+        &o,
+        off,
+        |c| c.set_time_zone(Some(&tz)),
+        |()| Value::Bool(true),
+    )
 }
 
 fn to_date_time(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -299,9 +465,18 @@ fn to_date_time(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 /// The shared body of `new IntlGregorianCalendar(...)` and
 /// `intlgregcal_create_instance(...)`; returns the calendar or `None`
 /// (error recorded).
-fn gregorian_body(vm: &mut Vm, a: &Args, is_ctor: bool, target: Option<&Obj>) -> VmResult<Option<IntlCalendar>> {
+fn gregorian_body(
+    vm: &mut Vm,
+    a: &Args,
+    is_ctor: bool,
+    target: Option<&Obj>,
+) -> VmResult<Option<IntlCalendar>> {
     core::reset_global();
-    let n = if a.values.len() > 6 { a.values.len() } else { core::num_args(a) };
+    let n = if a.values.len() > 6 {
+        a.values.len()
+    } else {
+        core::num_args(a)
+    };
     if is_ctor && n > 2 {
         vm.raise(
             8192,
@@ -316,16 +491,27 @@ fn gregorian_body(vm: &mut Vm, a: &Args, is_ctor: bool, target: Option<&Obj>) ->
         variant -= 1;
     }
     if variant == 4 {
-        return Err(vm.throw("ArgumentCountError", "No variant with 4 arguments (excluding trailing NULLs)"));
+        return Err(vm.throw(
+            "ArgumentCountError",
+            "No variant with 4 arguments (excluding trailing NULLs)",
+        ));
     }
     if variant <= 2 {
         if variant >= 2 && !matches!(a.at(1), Value::Str(_) | Value::Null) {
             let given = crate::core::type_name(&a.at(1));
-            return Err(core::type_error(vm, a, 2, &format!("must be of type ?string, {given} given")));
+            return Err(core::type_error(
+                vm,
+                a,
+                2,
+                &format!("must be of type ?string, {given} given"),
+            ));
         }
         if let Some(t) = target {
             if core::is_constructed::<IntlCalendar>(t) {
-                return Err(vm.throw("Error", "IntlGregorianCalendar object is already constructed"));
+                return Err(vm.throw(
+                    "Error",
+                    "IntlGregorianCalendar object is already constructed",
+                ));
             }
         }
         let Some(tz) = crate::timezone::process_arg(vm, a, 0, None)? else {
@@ -351,23 +537,38 @@ fn gregorian_body(vm: &mut Vm, a: &Args, is_ctor: bool, target: Option<&Obj>) ->
                 x
             }
             Value::Bool(b) => i64::from(*b),
-            Value::Str(z) if php_intl::common::numeric_string(z.as_bytes()).is_some() => vm.value_to_int(&v)?,
+            Value::Str(z) if php_intl::common::numeric_string(z.as_bytes()).is_some() => {
+                vm.value_to_int(&v)?
+            }
             Value::Null if i >= 3 => 0,
             other => {
                 let given = crate::core::type_name(other);
-                return Err(core::type_error(vm, a, i + 1, &format!("must be of type int, {given} given")));
+                return Err(core::type_error(
+                    vm,
+                    a,
+                    i + 1,
+                    &format!("must be of type int, {given} given"),
+                ));
             }
         };
         vals.push(iv);
     }
     if let Some(t) = target {
         if core::is_constructed::<IntlCalendar>(t) {
-            return Err(vm.throw("Error", "IntlGregorianCalendar object is already constructed"));
+            return Err(vm.throw(
+                "Error",
+                "IntlGregorianCalendar object is already constructed",
+            ));
         }
     }
     for (i, v) in vals.iter().enumerate() {
         if i32::try_from(*v).is_err() {
-            return Err(core::value_error(vm, a, i + 1, &format!("must be between {} and {}", i32::MIN, i32::MAX)));
+            return Err(core::value_error(
+                vm,
+                a,
+                i + 1,
+                &format!("must be between {} and {}", i32::MIN, i32::MAX),
+            ));
         }
     }
     let tzname = dt::default_tz_name(vm)?;
@@ -413,7 +614,12 @@ fn greg_from_fields(vm: &mut Vm, a: &mut Args, count: usize) -> VmResult<Value> 
     }
     for (i, v) in vals.iter().enumerate() {
         if i32::try_from(*v).is_err() {
-            return Err(core::value_error(vm, a, i + 1, &format!("must be between {} and {}", i32::MIN, i32::MAX)));
+            return Err(core::value_error(
+                vm,
+                a,
+                i + 1,
+                &format!("must be between {} and {}", i32::MIN, i32::MAX),
+            ));
         }
     }
     let tzname = dt::default_tz_name(vm)?;
@@ -468,10 +674,13 @@ pub(crate) fn debug_info(_vm: &mut Vm, o: &Obj, p: PropertyPurpose) -> VmResult<
     h.insert("locale", s(info.locale));
     let mut fields = ZArray::new();
     for (name, v) in info.fields {
-        fields.make_mut().insert(ZStr::from(name), match v {
-            Ok(i) => Value::Int(i),
-            Err(e) => s(e),
-        });
+        fields.make_mut().insert(
+            ZStr::from(name),
+            match v {
+                Ok(i) => Value::Int(i),
+                Err(e) => s(e),
+            },
+        );
     }
     h.insert("fields", Value::Array(fields));
     Ok(Some(arr))
@@ -514,7 +723,10 @@ pub(crate) fn handlers() -> Vec<(&'static str, NativeFn)> {
         ("IntlCalendar::getErrorMessage", core::get_error_message),
         ("IntlCalendar::getFirstDayOfWeek", get_first_day_of_week),
         ("IntlCalendar::getGreatestMinimum", get_greatest_minimum),
-        ("IntlCalendar::getKeywordValuesForLocale", get_keyword_values_for_locale),
+        (
+            "IntlCalendar::getKeywordValuesForLocale",
+            get_keyword_values_for_locale,
+        ),
         ("IntlCalendar::getLeastMaximum", get_least_maximum),
         ("IntlCalendar::getLocale", get_locale),
         ("IntlCalendar::getMaximum", get_maximum),
@@ -522,8 +734,14 @@ pub(crate) fn handlers() -> Vec<(&'static str, NativeFn)> {
         ("IntlCalendar::setMinimalDaysInFirstWeek", set_minimal_days),
         ("IntlCalendar::getMinimum", get_minimum),
         ("IntlCalendar::getNow", get_now),
-        ("IntlCalendar::getRepeatedWallTimeOption", get_repeated_wall_time_option),
-        ("IntlCalendar::getSkippedWallTimeOption", get_skipped_wall_time_option),
+        (
+            "IntlCalendar::getRepeatedWallTimeOption",
+            get_repeated_wall_time_option,
+        ),
+        (
+            "IntlCalendar::getSkippedWallTimeOption",
+            get_skipped_wall_time_option,
+        ),
         ("IntlCalendar::getTime", get_time),
         ("IntlCalendar::getTimeZone", get_time_zone),
         ("IntlCalendar::getType", get_type),
@@ -539,18 +757,36 @@ pub(crate) fn handlers() -> Vec<(&'static str, NativeFn)> {
         ("IntlCalendar::setDateTime", set_date_time),
         ("IntlCalendar::setFirstDayOfWeek", set_first_day_of_week),
         ("IntlCalendar::setLenient", set_lenient),
-        ("IntlCalendar::setRepeatedWallTimeOption", set_repeated_wall_time_option),
-        ("IntlCalendar::setSkippedWallTimeOption", set_skipped_wall_time_option),
+        (
+            "IntlCalendar::setRepeatedWallTimeOption",
+            set_repeated_wall_time_option,
+        ),
+        (
+            "IntlCalendar::setSkippedWallTimeOption",
+            set_skipped_wall_time_option,
+        ),
         ("IntlCalendar::setTime", set_time),
         ("IntlCalendar::setTimeZone", set_time_zone),
         ("intlcal_set_time_zone", set_time_zone),
         ("IntlCalendar::toDateTime", to_date_time),
-        ("IntlGregorianCalendar::createFromDate", greg_create_from_date),
-        ("IntlGregorianCalendar::createFromDateTime", greg_create_from_date_time),
+        (
+            "IntlGregorianCalendar::createFromDate",
+            greg_create_from_date,
+        ),
+        (
+            "IntlGregorianCalendar::createFromDateTime",
+            greg_create_from_date_time,
+        ),
         ("IntlGregorianCalendar::__construct", greg_construct),
         ("intlgregcal_create_instance", greg_create_instance),
-        ("IntlGregorianCalendar::setGregorianChange", set_gregorian_change),
-        ("IntlGregorianCalendar::getGregorianChange", get_gregorian_change),
+        (
+            "IntlGregorianCalendar::setGregorianChange",
+            set_gregorian_change,
+        ),
+        (
+            "IntlGregorianCalendar::getGregorianChange",
+            get_gregorian_change,
+        ),
         ("IntlGregorianCalendar::isLeapYear", is_leap_year),
     ]
 }

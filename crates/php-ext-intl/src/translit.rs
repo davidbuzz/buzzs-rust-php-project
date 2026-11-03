@@ -16,7 +16,10 @@ fn object(vm: &mut Vm, t: Transliterator) -> VmResult<Obj> {
 }
 
 fn construct(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
-    Err(vm.throw("Exception", "An object of this type cannot be created with the new operator."))
+    Err(vm.throw(
+        "Exception",
+        "An object of this type cannot be created with the new operator.",
+    ))
 }
 
 fn create(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -104,7 +107,9 @@ fn transliterate(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     core::reset_both(&o);
     let st = a.str(off);
     let (start, end) = (a.int(off + 1), a.int(off + 2));
-    match core::with::<Transliterator, _>(&o, |t| t.transliterate(st.as_bytes(), start, end, procedural)) {
+    match core::with::<Transliterator, _>(&o, |t| {
+        t.transliterate(st.as_bytes(), start, end, procedural)
+    }) {
         Some(Ok(r)) => Ok(s(r)),
         Some(Err(e)) => core::fail_with(vm, a, Some(&o), e, 0, Value::Bool(false)),
         None => Err(core::unconstructed(vm, "transliterator")),

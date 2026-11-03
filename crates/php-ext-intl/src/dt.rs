@@ -47,7 +47,11 @@ pub(crate) fn php_datetime(vm: &mut Vm, dt: &Obj) -> VmResult<PhpDateTime> {
         Value::Object(o) => Some(php_zone(vm, &o)?),
         _ => None,
     };
-    Ok(PhpDateTime { timestamp, microseconds, zone })
+    Ok(PhpDateTime {
+        timestamp,
+        microseconds,
+        zone,
+    })
 }
 
 /// `date_default_timezone_get()`.
@@ -74,7 +78,12 @@ pub(crate) fn make_timezone(vm: &mut Vm, spec: &DateTimeZoneSpec) -> VmResult<Va
     match vm.new_object_with_args(&cls, vec![Value::Str(ZStr::from(name))]) {
         Ok(o) => Ok(Value::Object(o)),
         Err(Throw::Exception(prev)) if matches!(spec, DateTimeZoneSpec::Id(_)) => {
-            Err(throw_with_previous(vm, "IntlException", "DateTimeZone constructor threw exception", prev))
+            Err(throw_with_previous(
+                vm,
+                "IntlException",
+                "DateTimeZone constructor threw exception",
+                prev,
+            ))
         }
         Err(e) => Err(e),
     }
@@ -97,4 +106,18 @@ pub(crate) fn throw_with_previous(vm: &mut Vm, class: &str, message: &str, prev:
         vm.set_property_raw(e, "previous", Value::Object(prev));
     }
     t
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn offsets() {
+        assert_eq!(parse_offset("+05:30"), Some(19800));
+        assert_eq!(parse_offset("-01:00"), Some(-3600));
+        assert_eq!(parse_offset("+00:00:30"), Some(30));
+        assert_eq!(parse_offset("Europe/Lisbon"), None);
+        assert_eq!(parse_offset("+x"), None);
+    }
 }

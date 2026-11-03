@@ -46,7 +46,11 @@ pub(crate) struct StringList {
 impl StringList {
     /// Wraps a list.
     pub(crate) fn new(items: Vec<String>) -> Self {
-        Self { items, pos: 0, started: false }
+        Self {
+            items,
+            pos: 0,
+            started: false,
+        }
     }
 }
 
@@ -89,7 +93,11 @@ pub(crate) fn wrap(vm: &mut Vm, class: &str, src: Box<dyn IterSource>) -> VmResu
 
 /// Creates an `IntlIterator` over strings (`IntlIterator_from_StringEnumeration`).
 pub(crate) fn from_strings(vm: &mut Vm, items: Vec<String>) -> VmResult<Value> {
-    Ok(Value::Object(wrap(vm, "IntlIterator", Box::new(StringList::new(items)))?))
+    Ok(Value::Object(wrap(
+        vm,
+        "IntlIterator",
+        Box::new(StringList::new(items)),
+    )?))
 }
 
 fn fetch(vm: &mut Vm, a: &Args) -> VmResult<Obj> {
@@ -127,14 +135,21 @@ fn rewind(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let r = core::with::<IterState, _>(&o, |s| s.src.rewind(vm, &mut s.index)).flatten();
     match r {
         Some(r) => r?,
-        None => core::errors_set(vm, &o, php_intl::UErrorCode::UNSUPPORTED_ERROR, "rewind not supported")?,
+        None => core::errors_set(
+            vm,
+            &o,
+            php_intl::UErrorCode::UNSUPPORTED_ERROR,
+            "rewind not supported",
+        )?,
     }
     Ok(Value::Null)
 }
 
 fn valid(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let o = fetch(vm, a)?;
-    Ok(Value::Bool(core::with::<IterState, _>(&o, |s| s.src.valid()).unwrap_or(false)))
+    Ok(Value::Bool(
+        core::with::<IterState, _>(&o, |s| s.src.valid()).unwrap_or(false),
+    ))
 }
 
 /// `foreach` over an `IntlIterator`: drives the source directly.
@@ -175,7 +190,11 @@ impl NativeIterator for Foreach {
 }
 
 /// The `get_iterator` hook of `IntlIterator`.
-pub(crate) fn get_iterator(vm: &mut Vm, o: &Obj, by_ref: bool) -> VmResult<Box<dyn NativeIterator>> {
+pub(crate) fn get_iterator(
+    vm: &mut Vm,
+    o: &Obj,
+    by_ref: bool,
+) -> VmResult<Box<dyn NativeIterator>> {
     if by_ref {
         return Err(vm.throw("Exception", "Iteration by reference is not supported"));
     }

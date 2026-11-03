@@ -12,7 +12,13 @@ fn bytes(v: Vec<u8>) -> Value {
     Value::Str(ZStr::from(v))
 }
 
-fn finish<T>(vm: &mut Vm, a: &Args, r: php_intl::Result<T>, ok: impl FnOnce(T) -> Value, fail: Value) -> VmResult<Value> {
+fn finish<T>(
+    vm: &mut Vm,
+    a: &Args,
+    r: php_intl::Result<T>,
+    ok: impl FnOnce(T) -> Value,
+    fail: Value,
+) -> VmResult<Value> {
     match r {
         Ok(v) => Ok(ok(v)),
         Err(e) => core::fail_with(vm, a, None, e, 0, fail),
@@ -65,8 +71,20 @@ fn substr(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 fn strstr_common(vm: &mut Vm, a: &Args, ci: bool) -> VmResult<Value> {
     core::reset_global();
     let loc = path(vm, a, 3)?;
-    let r = grapheme::strstr(a.str(0).as_bytes(), a.str(1).as_bytes(), a.bool(2), ci, &loc);
-    finish(vm, a, r, |v| v.map_or(Value::Bool(false), bytes), Value::Bool(false))
+    let r = grapheme::strstr(
+        a.str(0).as_bytes(),
+        a.str(1).as_bytes(),
+        a.bool(2),
+        ci,
+        &loc,
+    );
+    finish(
+        vm,
+        a,
+        r,
+        |v| v.map_or(Value::Bool(false), bytes),
+        Value::Bool(false),
+    )
 }
 
 fn strstr(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -80,13 +98,26 @@ fn stristr(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 fn str_split(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     core::reset_global();
     let r = grapheme::str_split(a.str(0).as_bytes(), a.int(1));
-    finish(vm, a, r, |v| Value::Array(ZArray::from_values(v.into_iter().map(bytes))), Value::Bool(false))
+    finish(
+        vm,
+        a,
+        r,
+        |v| Value::Array(ZArray::from_values(v.into_iter().map(bytes))),
+        Value::Bool(false),
+    )
 }
 
 fn levenshtein(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     core::reset_global();
     let loc = path(vm, a, 5)?;
-    let r = grapheme::levenshtein(a.str(0).as_bytes(), a.str(1).as_bytes(), a.int(2), a.int(3), a.int(4), &loc);
+    let r = grapheme::levenshtein(
+        a.str(0).as_bytes(),
+        a.str(1).as_bytes(),
+        a.int(2),
+        a.int(3),
+        a.int(4),
+        &loc,
+    );
     finish(vm, a, r, Value::Int, Value::Bool(false))
 }
 
@@ -110,9 +141,18 @@ fn extract(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 fn idn_common(vm: &mut Vm, a: &Args, to_ascii: bool) -> VmResult<Value> {
     core::reset_global();
     let d = a.str(0);
-    let r = if to_ascii { idn::to_ascii(d.as_bytes(), a.int(1), a.int(2)) } else { idn::to_utf8(d.as_bytes(), a.int(1), a.int(2)) };
+    let r = if to_ascii {
+        idn::to_ascii(d.as_bytes(), a.int(1), a.int(2))
+    } else {
+        idn::to_utf8(d.as_bytes(), a.int(1), a.int(2))
+    };
     // `zend_try_array_init($idna_info)` happens once the arguments are valid.
-    if a.has(3) && !matches!(r, Err(php_intl::Error::ArgumentValue { .. } | php_intl::Error::ArgumentType { .. })) {
+    if a.has(3)
+        && !matches!(
+            r,
+            Err(php_intl::Error::ArgumentValue { .. } | php_intl::Error::ArgumentType { .. })
+        )
+    {
         a.set_ref(3, Value::Array(ZArray::new()));
     }
     match r {
@@ -122,7 +162,10 @@ fn idn_common(vm: &mut Vm, a: &Args, to_ascii: bool) -> VmResult<Value> {
                     let mut arr = ZArray::new();
                     let h = arr.make_mut();
                     h.insert("result", bytes(info.result));
-                    h.insert("isTransitionalDifferent", Value::Bool(info.is_transitional_different));
+                    h.insert(
+                        "isTransitionalDifferent",
+                        Value::Bool(info.is_transitional_different),
+                    );
                     h.insert("errors", Value::Int(i64::from(info.errors)));
                     a.set_ref(3, Value::Array(arr));
                 }
