@@ -30,6 +30,7 @@ php-ext-posix = { path = "../php-ext-posix" }
 php-ext-intl = { path = "../php-ext-intl" }
 php-ext-exif = { path = "../php-ext-exif" }
 php-ext-zlib = { path = "../php-ext-zlib" }
+php-ext-gettext = { path = "../php-ext-gettext" }
 libc = "0.2"
 
 [lints]
