@@ -208,7 +208,7 @@ impl<H: FilterHost + ?Sized> Engine<'_, H> {
     /// `php_zval_filter`: filters one non-array value.
     fn zval_filter(
         &mut self,
-        value: Value,
+        value: &Value,
         filter: i64,
         flags: i64,
         options: Option<&Value>,
@@ -217,36 +217,36 @@ impl<H: FilterHost + ?Sized> Engine<'_, H> {
         let value = value.deref();
         let result = 'filtered: {
             let s = match &value {
-                Value::Object(o) => match self.host.cast_object(o, CastTarget::String)? {
-                    Some(Value::Str(s)) => s,
-                    _ => {
+                Value::Object(o) => {
+                    if let Some(Value::Str(s)) = self.host.cast_object(o, CastTarget::String)? {
+                        s
+                    } else {
                         // #49274: objects without __toString fail nicely.
                         if flags & FILTER_THROW_ON_FAILURE != 0 {
                             let msg = format!(
-                                "filter validation failed: object of type {} has no __toString() method",
-                                o.class_name()
-                            );
+                            "filter validation failed: object of type {} has no __toString() method",
+                            o.class_name()
+                        );
                             return Err(self.host.filter_failed_exception(msg));
                         }
                         break 'filtered validation_failed(flags);
                     }
-                },
+                }
                 other => other.to_zstr(self.host)?,
             };
             let copy = (flags & FILTER_THROW_ON_FAILURE != 0).then(|| s.clone());
-            match self.run_filter(entry.kind, s, flags, options)? {
-                Some(v) => v,
-                None => {
-                    if let Some(copy) = copy {
-                        let msg = format!(
-                            "filter validation failed: filter {} not satisfied by '{}'",
-                            entry.name,
-                            c_str(copy.as_bytes())
-                        );
-                        return Err(self.host.filter_failed_exception(msg));
-                    }
-                    validation_failed(flags)
+            if let Some(v) = self.run_filter(entry.kind, s, flags, options)? {
+                v
+            } else {
+                if let Some(copy) = copy {
+                    let msg = format!(
+                        "filter validation failed: filter {} not satisfied by '{}'",
+                        entry.name,
+                        c_str(copy.as_bytes())
+                    );
+                    return Err(self.host.filter_failed_exception(msg));
                 }
+                validation_failed(flags)
             }
         };
         // handle_default:
@@ -288,7 +288,7 @@ impl<H: FilterHost + ?Sized> Engine<'_, H> {
                         self.guard.pop();
                         Value::Array(res?)
                     } else {
-                        self.zval_filter(inner, filter, flags, options)?
+                        self.zval_filter(&inner, filter, flags, options)?
                     };
                     r.set(new);
                 }
@@ -298,7 +298,7 @@ impl<H: FilterHost + ?Sized> Engine<'_, H> {
                 }
                 other => {
                     let v = std::mem::replace(other, Value::Null);
-                    *other = self.zval_filter(v, filter, flags, options)?;
+                    *other = self.zval_filter(&v, filter, flags, options)?;
                 }
             }
         }
@@ -309,7 +309,7 @@ impl<H: FilterHost + ?Sized> Engine<'_, H> {
     /// (`-1` in php-src), where `args` gives the filter.
     fn filter_call(
         &mut self,
-        filtered: Value,
+        filtered: &Value,
         filter: Option<i64>,
         args: &FilterArgs,
         mut flags: i64,
@@ -383,7 +383,7 @@ impl<H: FilterHost + ?Sized> Engine<'_, H> {
                     }
                     return Ok(validation_failed(flags));
                 }
-                let v = self.zval_filter(other, filter, flags, options)?;
+                let v = self.zval_filter(&other, filter, flags, options)?;
                 if flags & FILTER_FORCE_ARRAY != 0 {
                     Ok(Value::Array(ZArray::from_values([v])))
                 } else {
@@ -403,7 +403,7 @@ impl<H: FilterHost + ?Sized> Engine<'_, H> {
         let op_ht = match op {
             FilterArgs::Long(l) => {
                 return self.filter_call(
-                    Value::Array(input.clone()),
+                    &Value::Array(input.clone()),
                     None,
                     &FilterArgs::Long(*l),
                     FILTER_REQUIRE_ARRAY,
@@ -444,7 +444,7 @@ impl<H: FilterHost + ?Sized> Engine<'_, H> {
                         }
                         FilterArgs::Long(id)
                     };
-                    let res = self.filter_call(nval, None, &args, FILTER_REQUIRE_SCALAR, 2)?;
+                    let res = self.filter_call(&nval, None, &args, FILTER_REQUIRE_SCALAR, 2)?;
                     out.make_mut().insert(key.clone(), res);
                 }
             }
@@ -464,7 +464,7 @@ fn engine<H: FilterHost + ?Sized>(host: &mut H, func: FilterFunction) -> Engine<
 /// `filter_var(mixed $value, int $filter = FILTER_DEFAULT, array|int
 /// $options = 0): mixed`.
 ///
-/// An unknown `$filter` emits "filter_var(): Unknown filter with ID N" and
+/// An unknown `$filter` emits "`filter_var()`: Unknown filter with ID N" and
 /// returns `false`.
 pub fn filter_var<H: FilterHost + ?Sized>(
     host: &mut H,
@@ -477,13 +477,7 @@ pub fn filter_var<H: FilterHost + ?Sized>(
         e.warning(&format!("Unknown filter with ID {filter}"))?;
         return Ok(Value::Bool(false));
     }
-    e.filter_call(
-        value.deref(),
-        Some(filter),
-        options,
-        FILTER_REQUIRE_SCALAR,
-        3,
-    )
+    e.filter_call(value, Some(filter), options, FILTER_REQUIRE_SCALAR, 3)
 }
 
 /// `filter_var_array(array $array, array|int $options = FILTER_DEFAULT,
@@ -554,7 +548,7 @@ pub fn filter_input<H: FilterHost + ?Sized>(
         });
     };
     let value = found.deref();
-    e.filter_call(value, Some(filter), options, FILTER_REQUIRE_SCALAR, 4)
+    e.filter_call(&value, Some(filter), options, FILTER_REQUIRE_SCALAR, 4)
 }
 
 /// `filter_input_array(int $type, array|int $options = FILTER_DEFAULT,
@@ -636,5 +630,5 @@ pub fn apply_default_filter<H: FilterHost + ?Sized>(
         return Ok(Value::from(raw));
     }
     let mut e = engine(host, FilterFunction::FilterVar);
-    e.zval_filter(Value::from(raw), default_filter, default_flags, None)
+    e.zval_filter(&Value::from(raw), default_filter, default_flags, None)
 }

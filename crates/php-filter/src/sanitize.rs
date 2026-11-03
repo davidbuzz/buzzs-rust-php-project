@@ -268,12 +268,10 @@ pub fn strip_tags(rbuf: &mut [u8]) -> usize {
                 }
             },
             1 => match c {
-                0 => {}
-                b'<' => {
-                    if in_q == 0 {
+                b'<'
+                    if in_q == 0 => {
                         depth += 1;
                     }
-                }
                 b'>' => {
                     if depth > 0 {
                         depth -= 1;
@@ -286,39 +284,34 @@ pub fn strip_tags(rbuf: &mut [u8]) -> usize {
                         }
                     }
                 }
-                b'"' | b'\'' => {
-                    if p != 0 && (in_q == 0 || c == in_q) {
+                b'"' | b'\''
+                    if p != 0 && (in_q == 0 || c == in_q) => {
                         in_q = if in_q != 0 { 0 } else { c };
                     }
-                }
-                b'!' => {
+                b'!'
                     // JavaScript & other HTML scripting languages.
-                    if p >= 1 && prev(p, 1) == b'<' {
+                    if p >= 1 && prev(p, 1) == b'<' => {
                         state = 3;
                         lc = c;
                     }
-                }
-                b'?' => {
-                    if p >= 1 && prev(p, 1) == b'<' {
+                b'?'
+                    if p >= 1 && prev(p, 1) == b'<' => {
                         br = 0;
                         state = 2;
                     }
-                }
                 _ => {}
             },
             2 => match c {
-                b'(' => {
-                    if lc != b'"' && lc != b'\'' {
+                b'('
+                    if lc != b'"' && lc != b'\'' => {
                         lc = b'(';
                         br += 1;
                     }
-                }
-                b')' => {
-                    if lc != b'"' && lc != b'\'' {
+                b')'
+                    if lc != b'"' && lc != b'\'' => {
                         lc = b')';
                         br -= 1;
                     }
-                }
                 b'>' => {
                     if depth > 0 {
                         depth -= 1;
@@ -327,8 +320,8 @@ pub fn strip_tags(rbuf: &mut [u8]) -> usize {
                         state = 0;
                     }
                 }
-                b'"' | b'\'' => {
-                    if p >= 1 && prev(p, 1) != b'\\' {
+                b'"' | b'\''
+                    if p >= 1 && prev(p, 1) != b'\\' => {
                         if lc == c {
                             lc = 0;
                         } else if lc != b'\\' {
@@ -338,19 +331,17 @@ pub fn strip_tags(rbuf: &mut [u8]) -> usize {
                             in_q = if in_q != 0 { 0 } else { c };
                         }
                     }
-                }
-                b'l' | b'L' => {
+                b'l' | b'L'
                     // "<?xml": switch back to HTML.
                     if p > 4
                         && matches!(prev(p, 1), b'm' | b'M')
                         && matches!(prev(p, 2), b'x' | b'X')
                         && prev(p, 3) == b'?'
                         && prev(p, 4) == b'<'
-                    {
+                    => {
                         state = 1;
                         is_xml = true;
                     }
-                }
                 _ => {}
             },
             3 => match c {
@@ -362,17 +353,15 @@ pub fn strip_tags(rbuf: &mut [u8]) -> usize {
                         state = 0;
                     }
                 }
-                b'"' | b'\'' => {
-                    if p != 0 && prev(p, 1) != b'\\' && (in_q == 0 || c == in_q) {
+                b'"' | b'\''
+                    if p != 0 && prev(p, 1) != b'\\' && (in_q == 0 || c == in_q) => {
                         in_q = if in_q != 0 { 0 } else { c };
                     }
-                }
-                b'-' => {
-                    if p >= 2 && prev(p, 1) == b'-' && prev(p, 2) == b'!' {
+                b'-'
+                    if p >= 2 && prev(p, 1) == b'-' && prev(p, 2) == b'!' => {
                         state = 4;
                     }
-                }
-                b'E' | b'e' => {
+                b'E' | b'e'
                     // !DOCTYPE exception.
                     if p > 6
                         && matches!(prev(p, 1), b'p' | b'P')
@@ -381,10 +370,9 @@ pub fn strip_tags(rbuf: &mut [u8]) -> usize {
                         && matches!(prev(p, 4), b'c' | b'C')
                         && matches!(prev(p, 5), b'o' | b'O')
                         && matches!(prev(p, 6), b'd' | b'D')
-                    {
+                    => {
                         state = 1;
                     }
-                }
                 _ => {}
             },
             _ => {

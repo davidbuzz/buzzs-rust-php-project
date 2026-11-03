@@ -14,7 +14,7 @@
 //!   `FILTER_SANITIZE_STRING`/`STRIPPED`).
 //! * [`engine`] — the PHP-level functions. They take the already
 //!   zpp-coerced arguments (`$options` as [`FilterArgs`]) and return
-//!   `RtResult<Value>`: warnings ("filter_var(): Unknown filter with ID 999")
+//!   `RtResult<Value>`: warnings ("`filter_var()`: Unknown filter with ID 999")
 //!   go through [`RuntimeContext::diagnostic`](php_runtime::RuntimeContext),
 //!   `ValueError`/`TypeError` texts are exactly php-src's, and
 //!   `Filter\FilterFailedException` is built by
@@ -64,3 +64,9 @@ pub use host::{
 
 #[cfg(test)]
 mod test_host;
+
+#[cfg(test)]
+mod oracle_tests;
+
+#[cfg(test)]
+mod phpt_tests;

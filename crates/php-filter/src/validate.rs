@@ -207,11 +207,10 @@ pub fn filter_boolean(s: &[u8]) -> Option<Value> {
     let t = &s[start..end];
     let ret = if t.is_empty() || t == b"0" {
         Some(false)
-    } else if t == b"1" {
-        Some(true)
-    } else if ["on", "yes", "true"]
-        .iter()
-        .any(|w| t.eq_ignore_ascii_case(w.as_bytes()))
+    } else if t == b"1"
+        || ["on", "yes", "true"]
+            .iter()
+            .any(|w| t.eq_ignore_ascii_case(w.as_bytes()))
     {
         Some(true)
     } else if ["no", "off", "false"]
@@ -309,7 +308,7 @@ pub fn filter_float<H: FilterHost + ?Sized>(
             break;
         }
         if flags & FILTER_FLAG_ALLOW_THOUSAND != 0 && c_strchr(&tsd_sep, c) {
-            if if first { n < 1 || n > 3 } else { n != 3 } {
+            if if first { !(1..=3).contains(&n) } else { n != 3 } {
                 return Ok(None);
             }
             first = false;
@@ -558,7 +557,12 @@ pub fn validate_ipv4(s: &[u8]) -> Option<[u32; 4]> {
 /// `_php_filter_validate_ipv6`. When `out` is given, it receives the eight
 /// 16-bit groups (an embedded IPv4 address always yields `::ffff:a.b.c.d`,
 /// like php-src).
-#[allow(clippy::cast_possible_wrap, clippy::cast_sign_loss)]
+#[allow(
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::cast_possible_truncation,
+    clippy::too_many_lines
+)]
 pub fn validate_ipv6(s: &[u8], mut out: Option<&mut [i64; 8]>) -> bool {
     if !s.contains(&b':') {
         return false;

@@ -338,7 +338,7 @@ pub type ConstantDeprecation = (&'static str, &'static str);
 /// All PHP constants registered by `ext/filter`, in registration order:
 /// `(name, value, deprecation)`. A deprecated constant makes the engine emit
 /// `E_DEPRECATED` "Constant NAME is deprecated since 8.1, use
-/// htmlspecialchars() instead" when it is read.
+/// `htmlspecialchars()` instead" when it is read.
 pub const CONSTANTS: [(&str, i64, Option<ConstantDeprecation>); 56] = [
     ("INPUT_POST", INPUT_POST, None),
     ("INPUT_GET", INPUT_GET, None),

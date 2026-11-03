@@ -67,7 +67,7 @@ pub enum UriParseResult {
 pub trait FilterHost: RuntimeContext {
     /// `FILTER_VALIDATE_REGEXP`: compiles `pattern` through the preg cache
     /// (`pcre_get_compiled_regex`, which emits its own warnings such as
-    /// "filter_var(): Delimiter must not be alphanumeric, backslash, or
+    /// "`filter_var()`: Delimiter must not be alphanumeric, backslash, or
     /// NUL byte") and matches it against `subject`.
     ///
     /// Returns `Ok(None)` when the pattern does not compile, `Ok(Some(true))`
