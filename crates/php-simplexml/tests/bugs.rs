@@ -165,3 +165,208 @@ fn bug38347_unknown_element() {
     t.echo("Done\n");
     t.expect("bug38347.phpt");
 }
+
+#[test]
+fn bug38354_xpath_as_xml() {
+    let mut t = T::new("bug38354");
+    let xml = t.load_string("<code>\n    <a href=\"javascript:alert('1');\"><strong>Item Two</strong></a>\n</code>");
+    let list = t.xpath(&xml, "//*");
+    for e in list.as_array().unwrap().values().cloned().collect::<Vec<_>>() {
+        let x = t.as_xml(&e);
+        t.var_dump(&x);
+    }
+    t.echo("Done\n");
+    t.expect("bug38354.phpt");
+}
+
+#[test]
+fn bug38406_assign_object() {
+    let mut t = T::new("bug38406");
+    let item = t.new_sxe("<something />");
+    t.set_prop(&item, "attribute", s("something"));
+    let v = t.prop(&item, "attribute");
+    t.var_dump(&v);
+    let v = t.prop(&item, "attribute");
+    t.set_prop(&item, "otherAttribute", v);
+    let v = t.prop(&item, "otherAttribute");
+    t.var_dump(&v);
+    t.echo("\nWarning: Array to string conversion in /t/x.php on line 1\n");
+    let obj = common::new_object("stdClass", None);
+    t.set_prop(&item, "Array", obj);
+    t.echo("Done\n");
+    t.expect("bug38406.phpt");
+}
+
+#[test]
+fn bug38424_escaping() {
+    let mut t = T::new("bug38424");
+    let xml = t.load_string("<xml></xml>");
+    let st = "abc & def";
+    let esc = "abc &amp; def";
+    t.set_dim(&xml, Some(s("a1")), s(""));
+    t.set_dim(&xml, Some(s("a1")), s(esc));
+    t.set_dim(&xml, Some(s("a2")), s(esc));
+    t.set_dim(&xml, Some(s("a3")), s(""));
+    t.set_dim(&xml, Some(s("a3")), s(st));
+    t.set_dim(&xml, Some(s("a4")), s(st));
+    let x = t.as_xml(&xml);
+    let o = t.str(&x);
+    t.echo(o);
+    t.expect("bug38424.phpt");
+}
+
+#[test]
+fn bug39662_clone_whitespace() {
+    let mut t = T::new("bug39662");
+    let root = t.load_string("<?xml version=\"1.0\" encoding=\"utf-8\" ?>\n<test>\n\n</test>");
+    let clone = t.clone_obj(&root);
+    t.var_dump(&root);
+    t.var_dump(&clone);
+    let x = t.as_xml(&clone);
+    t.var_dump(&x);
+    t.echo("Done\n");
+    t.expect("bug39662.phpt");
+}
+
+#[test]
+fn bug39760_clone_subnodes() {
+    let mut t = T::new("bug39760");
+    let test = t.load_string("<?xml version=\"1.0\" ?>\n<test>\n    <level1>\n        <level2a>text1</level2a>\n        <level2b>text2</level2b>\n   </level1>\n</test>");
+    let v = t.path(&test, &["level1", "level2a"]);
+    t.var_dump(&v);
+    let test2 = t.clone_obj(&test);
+    let v = t.path(&test2, &["level1", "level2a"]);
+    t.var_dump(&v);
+    let v = t.path(&test, &["level1", "level2a"]);
+    let test3 = t.clone_obj(&v);
+    t.var_dump(&test3);
+    t.echo("Done\n");
+    t.expect("bug39760.phpt");
+}
+
+#[test]
+fn bug40451_add_attribute_no_parent() {
+    let mut t = T::new("bug40451");
+    let xml = t.load_string("<?xml version=\"1.0\"?>\n    <Host enable=\"true\">\n     <Name>host.server.com</Name>\n     </Host>");
+    let add = t.add_child(&xml, "Host", None, None);
+    let host = t.prop(&add, "Host");
+    t.add_attribute(&host, "enable", "true", None);
+    t.expect("bug40451.phpt");
+}
+
+#[test]
+fn bug41175_empty_attribute() {
+    let mut t = T::new("bug41175");
+    let xml = t.new_sxe("<img></img>");
+    t.add_attribute(&xml, "src", "foo", None);
+    t.add_attribute(&xml, "alt", "", None);
+    let x = t.as_xml(&xml);
+    let o = t.str(&x);
+    t.echo(o);
+    t.expect("bug41175.phpt");
+}
+
+#[test]
+fn bug41582_deep_autovivification() {
+    let mut t = T::new("bug41582");
+    let xml = t.new_sxe("<?xml version=\"1.0\" standalone=\"yes\"?>\n<collection></collection>");
+    let movie = t.prop_w(&xml, "movie");
+    let m = t.dim_mode(&movie, None, FetchMode::Write);
+    let ch = t.prop_w(&m, "characters");
+    let c = t.prop_w(&ch, "character");
+    let c0 = t.dim_mode(&c, Some(Value::Int(0)), FetchMode::Write);
+    t.set_prop(&c0, "name", s("Miss Coder"));
+    let x = t.as_xml(&xml);
+    let o = t.str(&x);
+    t.echo(o);
+    t.expect("bug41582.phpt");
+}
+
+#[test]
+fn bug41861_namespaces_of_children() {
+    let mut t = T::new("bug41861");
+    let xml = t.load_string("<root>\n    <first_node_no_ns />\n    <ns1:node1 xmlns:ns1=\"#ns1\" />\n    <ns2:node2 xmlns:ns2=\"#ns2\" />\n    <ns3:node3 xmlns:ns3=\"#ns3\" />\n    <last_node_no_ns />\n</root>");
+    let implode = |a: &php_runtime::ZArray| {
+        a.values()
+            .map(|v| v.as_str().map(|s| s.to_string_lossy()).unwrap_or_default())
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let name = t.get_name(&xml);
+    let sx = t.sxe(&xml);
+    let ns = php_simplexml::Sxe::get_namespaces(&sx, true).unwrap();
+    t.echo(format!("root(recursive): '{name}' -- namespaces: {}\n", implode(&ns)));
+    let ns = php_simplexml::Sxe::get_namespaces(&sx, false).unwrap();
+    t.echo(format!("root(non-recursive): '{name}' -- namespaces: {}\n", implode(&ns)));
+    for ns in [None, Some("#ns1"), Some("#ns2"), Some("#ns3")] {
+        let c = t.children(&xml, ns, false);
+        t.foreach(&c, |t, _, child| {
+            let name = t.get_name(&child);
+            let cs = t.sxe(&child);
+            let n = php_simplexml::Sxe::get_namespaces(&cs, false).unwrap();
+            t.echo(format!(
+                "children({}): '{name}' -- namespaces: {}\n",
+                ns.unwrap_or(""),
+                implode(&n)
+            ));
+        });
+    }
+    t.expect("bug41861.phpt");
+}
+
+#[test]
+fn bug41867_get_name() {
+    let mut t = T::new("bug41867");
+    let a = t.load_string("<a><b><c/></b></a>");
+    for p in [&[][..], &["b"], &["b", "c"]] {
+        let v = t.path(&a, p);
+        let n = t.get_name(&v);
+        t.echo(n + "\n");
+    }
+    t.expect("bug41867.phpt");
+}
+
+#[test]
+fn bug41947_empty_namespace() {
+    let mut t = T::new("bug41947");
+    let xml = t.load_string("<?xml version=\"1.0\" encoding=\"utf-8\"?><root xmlns:myns=\"http://myns\" />");
+    let c = t.add_child(&xml, "child", None, Some("http://myns"));
+    let _g = t.add_child(&c, "grandchild", Some("hello"), Some(""));
+    let g = t.xpath(&xml, "//grandchild");
+    if let Some(first) = g.as_array().and_then(|a| a.values().next().cloned()) {
+        let st = t.str(&first);
+        t.echo(st + "\n");
+    }
+    t.expect("bug41947.phpt");
+}
+
+/// `RecursiveIteratorIterator(LEAVES_ONLY)` over a `SimpleXMLIterator`.
+fn leaves(t: &mut T, it: &Value, out: &mut Vec<Value>) {
+    let sx = t.sxe(it);
+    php_simplexml::Sxe::rewind(&sx, &mut t.h).unwrap();
+    while php_simplexml::Sxe::valid(&sx) {
+        if php_simplexml::Sxe::has_children(&sx, &mut t.h).unwrap() {
+            let c = php_simplexml::Sxe::get_children(&sx);
+            leaves(t, &c, out);
+        } else {
+            out.push(php_simplexml::Sxe::current(&sx).unwrap());
+        }
+        php_simplexml::Sxe::next(&sx, &mut t.h).unwrap();
+    }
+}
+
+#[test]
+fn bug42259_recursive_iteration() {
+    let mut t = T::new("bug42259");
+    let xml = "<xml>\n  <fieldset1>\n    <field1/>\n    <field2/>\n  </fieldset1>\n  <fieldset2>\n    <options>\n      <option1/>\n      <option2/>\n      <option3/>\n    </options>\n    <field1/>\n    <field2/>\n  </fieldset2>\n</xml>";
+    let sxe = t.new_sxe_ex("SimpleXMLIterator", xml, 0, false, "", false).unwrap();
+    let mut out = Vec::new();
+    leaves(&mut t, &sxe, &mut out);
+    for child in out {
+        let anc = t.xpath(&child, "ancestor-or-self::*");
+        let list: Vec<Value> = anc.as_array().unwrap().values().cloned().collect();
+        let names: Vec<String> = list.iter().map(|a| t.get_name(a)).collect();
+        t.echo(format!("{} steps: {}\n", list.len(), names.join("/")));
+    }
+    t.expect("bug42259.phpt");
+}
