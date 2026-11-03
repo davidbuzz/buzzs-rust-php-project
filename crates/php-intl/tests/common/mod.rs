@@ -363,6 +363,7 @@ fn json_value(b: &[u8], i: &mut usize) -> J {
     }
 }
 
+#[allow(clippy::many_single_char_names)]
 fn json_string(b: &[u8], i: &mut usize) -> String {
     *i += 1;
     let mut out: Vec<u16> = Vec::new();

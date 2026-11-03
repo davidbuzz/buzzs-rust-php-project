@@ -21,5 +21,6 @@ pub mod unumf;
 pub mod uplrules;
 pub mod ures;
 pub mod usearch;
+pub mod uspoof;
 pub mod utext;
 pub mod utrans;
