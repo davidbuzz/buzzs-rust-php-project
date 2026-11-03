@@ -218,5 +218,5 @@ pub fn register_internal_iterator(vm: &mut Vm) {
         .register(vm);
     // Replacing a class appends its name to the declaration order again.
     let mut seen = std::collections::HashSet::new();
-    vm.class_order.retain(|n| seen.insert(n.clone()));
+    vm.class_order.retain(|n| seen.insert(n.as_bytes().to_vec()));
 }
