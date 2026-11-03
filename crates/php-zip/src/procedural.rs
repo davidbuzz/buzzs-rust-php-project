@@ -111,7 +111,7 @@ impl ZipDir {
             return None;
         }
         let cur = self.inner.index_current.get();
-        if cur as i64 >= self.inner.num_files {
+        if i64::try_from(cur).map_or(true, |c| c >= self.inner.num_files) {
             return None;
         }
         let mut sb = std::mem::MaybeUninit::<ffi::zip_stat_t>::zeroed();

@@ -11,7 +11,7 @@ use crate::stream::ZipFile;
 
 /// Extracts the entry `file` (looked up by name when `idx < 0`) into
 /// `dest`. Returns `false` on any failure (some emit warnings).
-#[allow(clippy::cast_sign_loss)]
+#[allow(clippy::cast_sign_loss, clippy::too_many_lines)] // a direct port of the C function
 pub(crate) fn extract_file(za: *mut zip_t, dest: &[u8], file: &[u8], idx: i64) -> bool {
     let idx = if idx < 0 {
         let c = cstr(file);

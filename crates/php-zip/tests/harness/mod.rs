@@ -1,7 +1,15 @@
 //! The Rust side of the scenario interpreter (mirror of
 //! `tests/oracle/runner.php`).
 
-#![allow(clippy::too_many_lines, dead_code)]
+#![allow(
+    clippy::too_many_lines,
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::many_single_char_names,
+    clippy::float_cmp,
+    clippy::format_push_string,
+    dead_code
+)]
 
 use std::cell::RefCell;
 use std::fmt::Write as _;
@@ -201,7 +209,11 @@ impl ZipHost for Host {
             }
             "progress_all" => {
                 let r = r.unwrap_or(0.0);
-                let v = if r > 0.0 && r < 1.0 { V::s("mid") } else { V::Float(r) };
+                let v = if r > 0.0 && r < 1.0 {
+                    V::s("mid")
+                } else {
+                    V::Float(r)
+                };
                 emit(&self.st, &format!("progress {}", ex(&v)));
                 Ok(Value::Null)
             }
@@ -230,12 +242,18 @@ impl ZipHost for Host {
                 let args: Vec<J> = serde_json::from_str(&parts[3..].join(":")).unwrap_or_default();
                 let zip = {
                     let s = self.st.borrow();
-                    s.vars.iter().find(|(n, _)| *n == var).and_then(|(_, v)| match v {
-                        Var::Zip(z) => Some(Rc::clone(z)),
-                        _ => None,
-                    })
+                    s.vars
+                        .iter()
+                        .find(|(n, _)| *n == var)
+                        .and_then(|(_, v)| match v {
+                            Var::Zip(z) => Some(Rc::clone(z)),
+                            _ => None,
+                        })
                 };
-                let saved = std::mem::replace(&mut self.st.borrow_mut().func, format!("ZipArchive::{method}"));
+                let saved = std::mem::replace(
+                    &mut self.st.borrow_mut().func,
+                    format!("ZipArchive::{method}"),
+                );
                 let res = zip.map(|z| dispatch(self, &z, &method, &args));
                 self.st.borrow_mut().func = saved;
                 match res {
@@ -260,15 +278,18 @@ impl ZipHost for Host {
         match php_pcre::Regex::compile(regex) {
             Ok(re) => {
                 let cfg = php_pcre::Pcre::new().config();
-                Some(Box::new(move |s: &[u8]| {
-                    matches!(php_pcre::match_one(&re, &cfg, s, false, 0, 0).result, Ok(n) if n > 0)
-                }))
+                Some(Box::new(
+                    move |s: &[u8]| matches!(php_pcre::match_one(&re, &cfg, s, false, 0, 0).result, Ok(n) if n > 0),
+                ))
             }
             Err(e) => {
                 let func = self.st.borrow().func.clone();
                 emit(
                     &self.st,
-                    &format!("[Warning] {func}(): {}", String::from_utf8_lossy(&e.message())),
+                    &format!(
+                        "[Warning] {func}(): {}",
+                        String::from_utf8_lossy(&e.message())
+                    ),
                 );
                 None
             }
@@ -292,7 +313,9 @@ fn subst(st: &Shared, s: &str) -> Vec<u8> {
         return body.repeat(n.parse().unwrap()).into_bytes();
     }
     let st = st.borrow();
-    s.replace("{DIR}", &st.dir).replace("{FIX}", &st.fix).into_bytes()
+    s.replace("{DIR}", &st.dir)
+        .replace("{FIX}", &st.fix)
+        .into_bytes()
 }
 
 fn constant(name: &str) -> i64 {
@@ -475,8 +498,12 @@ fn dispatch(host: &mut Host, zip: &ZipArchive, method: &str, a: &[J]) -> RtResul
         "getCommentName" => V::opt_str(zip.get_comment_name(&a.s(0), a.i(1, 0))?),
         "deleteIndex" => V::Bool(zip.delete_index(a.i(0, 0))?),
         "deleteName" => V::Bool(zip.delete_name(&a.s(0))?),
-        "statName" => zip.stat_name(&a.s(0), a.i(1, 0))?.map_or(V::Bool(false), |s| stat_v(&s)),
-        "statIndex" => zip.stat_index(a.i(0, 0), a.i(1, 0))?.map_or(V::Bool(false), |s| stat_v(&s)),
+        "statName" => zip
+            .stat_name(&a.s(0), a.i(1, 0))?
+            .map_or(V::Bool(false), |s| stat_v(&s)),
+        "statIndex" => zip
+            .stat_index(a.i(0, 0), a.i(1, 0))?
+            .map_or(V::Bool(false), |s| stat_v(&s)),
         "locateName" => V::opt_int(zip.locate_name(&a.s(0), a.i(1, 0))?),
         "getNameIndex" => V::opt_str(zip.get_name_index(a.i(0, 0), a.i(1, 0))?),
         "unchangeArchive" => V::Bool(zip.unchange_archive()?),
@@ -499,12 +526,9 @@ fn dispatch(host: &mut Host, zip: &ZipArchive, method: &str, a: &[J]) -> RtResul
         }
         "getFromName" => V::opt_str(zip.get_from_name(&a.s(0), a.i(1, 0), a.i(2, 0))?),
         "getFromIndex" => V::opt_str(zip.get_from_index(a.i(0, 0), a.i(1, 0), a.i(2, 0))?),
-        "setExternalAttributesName" => V::Bool(zip.set_external_attributes_name(
-            &a.s(0),
-            a.i(1, 0),
-            a.i(2, 0),
-            a.i(3, 0),
-        )?),
+        "setExternalAttributesName" => {
+            V::Bool(zip.set_external_attributes_name(&a.s(0), a.i(1, 0), a.i(2, 0), a.i(3, 0))?)
+        }
         "setExternalAttributesIndex" => V::Bool(zip.set_external_attributes_index(
             a.i(0, 0),
             a.i(1, 0),
@@ -512,9 +536,15 @@ fn dispatch(host: &mut Host, zip: &ZipArchive, method: &str, a: &[J]) -> RtResul
             a.i(3, 0),
         )?),
         "setCompressionName" => V::Bool(zip.set_compression_name(&a.s(0), a.i(1, 0), a.i(2, 0))?),
-        "setCompressionIndex" => V::Bool(zip.set_compression_index(a.i(0, 0), a.i(1, 0), a.i(2, 0))?),
-        "setEncryptionName" => V::Bool(zip.set_encryption_name(&a.s(0), a.i(1, 0), a.opt_s(2).as_deref())?),
-        "setEncryptionIndex" => V::Bool(zip.set_encryption_index(a.i(0, 0), a.i(1, 0), a.opt_s(2).as_deref())?),
+        "setCompressionIndex" => {
+            V::Bool(zip.set_compression_index(a.i(0, 0), a.i(1, 0), a.i(2, 0))?)
+        }
+        "setEncryptionName" => {
+            V::Bool(zip.set_encryption_name(&a.s(0), a.i(1, 0), a.opt_s(2).as_deref())?)
+        }
+        "setEncryptionIndex" => {
+            V::Bool(zip.set_encryption_index(a.i(0, 0), a.i(1, 0), a.opt_s(2).as_deref())?)
+        }
         "registerProgressCallback" => V::Bool(zip.register_progress_callback(a.f(0), a.v(1))?),
         "registerCancelCallback" => V::Bool(zip.register_cancel_callback(a.v(0))?),
         other => panic!("unknown method {other}"),
@@ -538,14 +568,22 @@ fn zip_var(st: &Shared, name: &str) -> Rc<ZipArchive> {
 }
 
 fn ls(base: &Path, prefix: &str, out: &mut Vec<String>) {
-    let d = if prefix.is_empty() { base.to_path_buf() } else { base.join(prefix) };
+    let d = if prefix.is_empty() {
+        base.to_path_buf()
+    } else {
+        base.join(prefix)
+    };
     let mut items: Vec<String> = fs::read_dir(&d)
         .unwrap()
         .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
         .collect();
     items.sort();
     for it in items {
-        let p = if prefix.is_empty() { it.clone() } else { format!("{prefix}/{it}") };
+        let p = if prefix.is_empty() {
+            it.clone()
+        } else {
+            format!("{prefix}/{it}")
+        };
         let full = base.join(&p);
         if full.is_dir() {
             out.push(format!("{p}/"));
@@ -555,7 +593,11 @@ fn ls(base: &Path, prefix: &str, out: &mut Vec<String>) {
             let m = fs::metadata(&full).unwrap();
             let mtime = std::os::unix::fs::MetadataExt::mtime(&m);
             let md5 = md5_hex(&c);
-            let mt = if mtime < 1_600_000_000 { format!(" mtime={mtime}") } else { String::new() };
+            let mt = if mtime < 1_600_000_000 {
+                format!(" mtime={mtime}")
+            } else {
+                String::new()
+            };
             out.push(format!("{p} {} {}{mt}", c.len(), &md5[..8]));
         }
     }
@@ -606,7 +648,11 @@ pub fn run(script: &str, dir: &Path, fix: &Path) -> String {
             Severity::Error => "Error",
         };
         let func = st2.borrow().func.clone();
-        let params: Vec<String> = d.params.iter().map(|p| String::from_utf8_lossy(p).to_string()).collect();
+        let params: Vec<String> = d
+            .params
+            .iter()
+            .map(|p| String::from_utf8_lossy(p).to_string())
+            .collect();
         emit(
             &st2,
             &format!("[{lvl}] {func}({}): {}", params.join(","), d.text()),
@@ -618,8 +664,11 @@ pub fn run(script: &str, dir: &Path, fix: &Path) -> String {
         if line.is_empty() || line.starts_with('#') {
             continue;
         }
-        let mut cmd: Vec<J> = serde_json::from_str(line).unwrap_or_else(|e| panic!("bad line {line}: {e}"));
-        if matches!(cmd[0].as_str(), Some("sread" | "sstat" | "sclose")) && cmd[1].as_i64() == Some(-1) {
+        let mut cmd: Vec<J> =
+            serde_json::from_str(line).unwrap_or_else(|e| panic!("bad line {line}: {e}"));
+        if matches!(cmd[0].as_str(), Some("sread" | "sstat" | "sclose"))
+            && cmd[1].as_i64() == Some(-1)
+        {
             let last = st.borrow().streams.len().saturating_sub(1);
             cmd[1] = J::from(last);
         }
@@ -644,7 +693,10 @@ pub fn run(script: &str, dir: &Path, fix: &Path) -> String {
                 let m = sname(1);
                 st.borrow_mut().func = format!("ZipArchive::{m}");
                 let r = if op == "extattr" {
-                    let a = Args { st: &st, a: &rest[2..] };
+                    let a = Args {
+                        st: &st,
+                        a: &rest[2..],
+                    };
                     let r = if m == "getExternalAttributesName" {
                         z.get_external_attributes_name(&a.s(0), a.i(1, 0))
                     } else {
@@ -666,7 +718,10 @@ pub fn run(script: &str, dir: &Path, fix: &Path) -> String {
             "static" => {
                 let m = sname(0);
                 st.borrow_mut().func = format!("ZipArchive::{m}");
-                let a = Args { st: &st, a: &rest[1..] };
+                let a = Args {
+                    st: &st,
+                    a: &rest[1..],
+                };
                 let r = match m.as_str() {
                     "isCompressionMethodSupported" => {
                         ZipArchive::is_compression_method_supported(a.i(0, 0), a.b(1, true))
@@ -681,7 +736,10 @@ pub fn run(script: &str, dir: &Path, fix: &Path) -> String {
             "prop" => {
                 let z = zip_var(&st, &sname(0));
                 let v = z.read_property(sname(1).as_bytes()).unwrap();
-                emit(&st, &format!("{}->{} = {}", sname(0), sname(1), ex(&from_value(&v))));
+                emit(
+                    &st,
+                    &format!("{}->{} = {}", sname(0), sname(1), ex(&from_value(&v))),
+                );
             }
             "props" => {
                 let z = zip_var(&st, &sname(0));
@@ -694,7 +752,10 @@ pub fn run(script: &str, dir: &Path, fix: &Path) -> String {
             }
             "setprop" => {
                 if ZipArchive::is_virtual_property(sname(1).as_bytes()) {
-                    emit(&st, &err_line(&php_zip::error::readonly_property("ZipArchive", &sname(1))));
+                    emit(
+                        &st,
+                        &err_line(&php_zip::error::readonly_property("ZipArchive", &sname(1))),
+                    );
                 } else {
                     emit(&st, &format!("[Deprecated] Creation of dynamic property ZipArchive::${} is deprecated", sname(1)));
                     emit(&st, "set ok");
@@ -704,10 +765,13 @@ pub fn run(script: &str, dir: &Path, fix: &Path) -> String {
                 let name = sname(0);
                 let zip = {
                     let s = st.borrow();
-                    s.vars.iter().find(|(n, _)| *n == name).and_then(|(_, v)| match v {
-                        Var::Zip(z) => Some(Rc::clone(z)),
-                        _ => None,
-                    })
+                    s.vars
+                        .iter()
+                        .find(|(n, _)| *n == name)
+                        .and_then(|(_, v)| match v {
+                            Var::Zip(z) => Some(Rc::clone(z)),
+                            _ => None,
+                        })
                 };
                 st.borrow_mut().func = "main".into();
                 // The destructor runs while the variable is still reachable
@@ -728,7 +792,10 @@ pub fn run(script: &str, dir: &Path, fix: &Path) -> String {
                 let z = zip_var(&st, &sname(0));
                 let m = sname(1);
                 st.borrow_mut().func = format!("ZipArchive::{m}");
-                let a = Args { st: &st, a: &rest[2..] };
+                let a = Args {
+                    st: &st,
+                    a: &rest[2..],
+                };
                 let r = match m.as_str() {
                     "getStream" => z.get_stream(&a.s(0)),
                     "getStreamName" => z.get_stream_name(&a.s(0), a.i(1, 0)),
@@ -787,7 +854,12 @@ pub fn run(script: &str, dir: &Path, fix: &Path) -> String {
             "sread" => {
                 let n = rest[0].as_u64().unwrap() as usize;
                 let len = rest.get(1).and_then(J::as_u64);
-                st.borrow_mut().func = if len.is_some() { "fread" } else { "stream_get_contents" }.into();
+                st.borrow_mut().func = if len.is_some() {
+                    "fread"
+                } else {
+                    "stream_get_contents"
+                }
+                .into();
                 let Some(mut s) = st.borrow_mut().streams.get_mut(n).and_then(Option::take) else {
                     emit(&st, &format!("read #{n} = no stream"));
                     continue;
@@ -800,7 +872,10 @@ pub fn run(script: &str, dir: &Path, fix: &Path) -> String {
                 let eof = s.eof();
                 st.borrow_mut().streams[n] = Some(s);
                 let v = r.map_or(V::Bool(false), V::Str);
-                emit(&st, &format!("read #{n} = {} eof={}", ex(&v), ex(&V::Bool(eof))));
+                emit(
+                    &st,
+                    &format!("read #{n} = {} eof={}", ex(&v), ex(&V::Bool(eof))),
+                );
             }
             "sstat" => {
                 let n = rest[0].as_u64().unwrap() as usize;
@@ -814,7 +889,11 @@ pub fn run(script: &str, dir: &Path, fix: &Path) -> String {
                 match r {
                     None => emit(&st, &format!("fstat #{n} = false")),
                     Some(sb) => {
-                        let mt = if sb.mtime > 1_600_000_000 { "NOW".to_string() } else { sb.mtime.to_string() };
+                        let mt = if sb.mtime > 1_600_000_000 {
+                            "NOW".to_string()
+                        } else {
+                            sb.mtime.to_string()
+                        };
                         emit(
                             &st,
                             &format!(
@@ -948,7 +1027,12 @@ pub fn run(script: &str, dir: &Path, fix: &Path) -> String {
             "zipfn" => {
                 let f = sname(0);
                 deprecation(&st, &f);
-                let var = rest[1].as_str().unwrap().strip_prefix("var:").unwrap().to_string();
+                let var = rest[1]
+                    .as_str()
+                    .unwrap()
+                    .strip_prefix("var:")
+                    .unwrap()
+                    .to_string();
                 let mut s = st.borrow_mut();
                 let slot = s.vars.iter_mut().find(|(n, _)| *n == var).map(|(_, v)| v);
                 let v = match (f.as_str(), slot) {
@@ -961,7 +1045,12 @@ pub fn run(script: &str, dir: &Path, fix: &Path) -> String {
                         }
                     }
                     ("zip_entry_open", _) => {
-                        let ev = rest[2].as_str().unwrap().strip_prefix("var:").unwrap().to_string();
+                        let ev = rest[2]
+                            .as_str()
+                            .unwrap()
+                            .strip_prefix("var:")
+                            .unwrap()
+                            .to_string();
                         match s.vars.iter().find(|(n, _)| *n == ev) {
                             Some((_, Var::Entry(e))) => Ok(V::Bool(e.open())),
                             _ => Err("zip_entry_open(): supplied resource is not a valid Zip Entry resource"),
@@ -984,9 +1073,9 @@ pub fn run(script: &str, dir: &Path, fix: &Path) -> String {
                     ("zip_entry_compressedsize", Some(Var::Entry(e))) => {
                         Ok(V::opt_int(e.compressed_size()))
                     }
-                    ("zip_entry_compressionmethod", Some(Var::Entry(e))) => Ok(e
-                        .compression_method()
-                        .map_or(V::Bool(false), V::s)),
+                    ("zip_entry_compressionmethod", Some(Var::Entry(e))) => {
+                        Ok(e.compression_method().map_or(V::Bool(false), V::s))
+                    }
                     _ => Err("bad procedural call"),
                 };
                 drop(s);

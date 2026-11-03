@@ -62,9 +62,7 @@ pub fn unserialize_not_allowed(class: &str) -> RuntimeError {
 
 /// The `Error` thrown when writing one of the virtual properties.
 pub fn readonly_property(class: &str, name: &str) -> RuntimeError {
-    RuntimeError::Error(format!(
-        "Cannot write read-only property {class}::${name}"
-    ))
+    RuntimeError::Error(format!("Cannot write read-only property {class}::${name}"))
 }
 
 /// `php_error_docref(NULL, E_WARNING, msg)`.
@@ -95,7 +93,10 @@ mod tests {
             serialize_not_allowed("ZipArchive").to_string(),
             "Exception: Serialization of 'ZipArchive' is not allowed, override __serialize() and __unserialize() to implement it"
         );
-        assert_eq!(uninitialized().message(), Some("Invalid or uninitialized Zip object"));
+        assert_eq!(
+            uninitialized().message(),
+            Some("Invalid or uninitialized Zip object")
+        );
         assert_eq!(already_closing().class_name(), Some("Error"));
         assert_eq!(
             arg_type_error("f", 2, "files", "must x").to_string(),

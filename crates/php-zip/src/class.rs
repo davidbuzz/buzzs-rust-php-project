@@ -94,12 +94,31 @@ const fn f(
 
 /// The deprecated procedural functions.
 pub const FUNCTIONS: &[Method] = &[
-    f("zip_open", &[p("filename", "string")], "", Some("use ZipArchive::open() instead")),
-    f("zip_close", &[p("zip", "")], "void", Some("use ZipArchive::close() instead")),
-    f("zip_read", &[p("zip", "")], "", Some("use ZipArchive::statIndex() instead")),
+    f(
+        "zip_open",
+        &[p("filename", "string")],
+        "",
+        Some("use ZipArchive::open() instead"),
+    ),
+    f(
+        "zip_close",
+        &[p("zip", "")],
+        "void",
+        Some("use ZipArchive::close() instead"),
+    ),
+    f(
+        "zip_read",
+        &[p("zip", "")],
+        "",
+        Some("use ZipArchive::statIndex() instead"),
+    ),
     f(
         "zip_entry_open",
-        &[p("zip_dp", ""), p("zip_entry", ""), o("mode", "string", "\"rb\"")],
+        &[
+            p("zip_dp", ""),
+            p("zip_entry", ""),
+            o("mode", "string", "\"rb\""),
+        ],
         "bool",
         None,
     ),
@@ -142,8 +161,16 @@ const INDEX_FLAGS: &[Param] = &[p("index", "int"), o("flags", "int", "0")];
 /// The `ZipArchive` methods in declaration order (the class implements
 /// `Countable`).
 pub const METHODS: &[Method] = &[
-    m("open", &[p("filename", "string"), o("flags", "int", "0")], "bool|int"),
-    m("openString", &[o("data", "string", "''"), o("flags", "int", "0")], "bool|int"),
+    m(
+        "open",
+        &[p("filename", "string"), o("flags", "int", "0")],
+        "bool|int",
+    ),
+    m(
+        "openString",
+        &[o("data", "string", "''"), o("flags", "int", "0")],
+        "bool|int",
+    ),
     m("setPassword", &[s(p("password", "string"))], "bool"),
     m("close", &[], "bool"),
     m("closeString", &[], "string|false"),
@@ -152,7 +179,11 @@ pub const METHODS: &[Method] = &[
     m("__unserialize", &[p("data", "array")], "void"),
     m("getStatusString", &[], "string"),
     m("clearError", &[], "void"),
-    m("addEmptyDir", &[p("dirname", "string"), o("flags", "int", "0")], "bool"),
+    m(
+        "addEmptyDir",
+        &[p("dirname", "string"), o("flags", "int", "0")],
+        "bool",
+    ),
     m(
         "addFromString",
         &[
@@ -186,30 +217,74 @@ pub const METHODS: &[Method] = &[
     ),
     m(
         "addGlob",
-        &[p("pattern", "string"), o("flags", "int", "0"), o("options", "array", "[]")],
+        &[
+            p("pattern", "string"),
+            o("flags", "int", "0"),
+            o("options", "array", "[]"),
+        ],
         "array|false",
     ),
     m(
         "addPattern",
-        &[p("pattern", "string"), o("path", "string", "\".\""), o("options", "array", "[]")],
+        &[
+            p("pattern", "string"),
+            o("path", "string", "\".\""),
+            o("options", "array", "[]"),
+        ],
         "array|false",
     ),
-    m("renameIndex", &[p("index", "int"), p("new_name", "string")], "bool"),
-    m("renameName", &[p("name", "string"), p("new_name", "string")], "bool"),
+    m(
+        "renameIndex",
+        &[p("index", "int"), p("new_name", "string")],
+        "bool",
+    ),
+    m(
+        "renameName",
+        &[p("name", "string"), p("new_name", "string")],
+        "bool",
+    ),
     m("setArchiveComment", &[p("comment", "string")], "bool"),
-    m("getArchiveComment", &[o("flags", "int", "0")], "string|false"),
-    m("setArchiveFlag", &[p("flag", "int"), p("value", "int")], "bool"),
-    m("getArchiveFlag", &[p("flag", "int"), o("flags", "int", "0")], "int"),
-    m("setCommentIndex", &[p("index", "int"), p("comment", "string")], "bool"),
-    m("setCommentName", &[p("name", "string"), p("comment", "string")], "bool"),
+    m(
+        "getArchiveComment",
+        &[o("flags", "int", "0")],
+        "string|false",
+    ),
+    m(
+        "setArchiveFlag",
+        &[p("flag", "int"), p("value", "int")],
+        "bool",
+    ),
+    m(
+        "getArchiveFlag",
+        &[p("flag", "int"), o("flags", "int", "0")],
+        "int",
+    ),
+    m(
+        "setCommentIndex",
+        &[p("index", "int"), p("comment", "string")],
+        "bool",
+    ),
+    m(
+        "setCommentName",
+        &[p("name", "string"), p("comment", "string")],
+        "bool",
+    ),
     m(
         "setMtimeIndex",
-        &[p("index", "int"), p("timestamp", "int"), o("flags", "int", "0")],
+        &[
+            p("index", "int"),
+            p("timestamp", "int"),
+            o("flags", "int", "0"),
+        ],
         "bool",
     ),
     m(
         "setMtimeName",
-        &[p("name", "string"), p("timestamp", "int"), o("flags", "int", "0")],
+        &[
+            p("name", "string"),
+            p("timestamp", "int"),
+            o("flags", "int", "0"),
+        ],
         "bool",
     ),
     m("getCommentIndex", INDEX_FLAGS, "string|false"),
@@ -226,17 +301,28 @@ pub const METHODS: &[Method] = &[
     m("unchangeName", &[p("name", "string")], "bool"),
     m(
         "extractTo",
-        &[p("pathto", "string"), o("files", "array|string|null", "null")],
+        &[
+            p("pathto", "string"),
+            o("files", "array|string|null", "null"),
+        ],
         "bool",
     ),
     m(
         "getFromName",
-        &[p("name", "string"), o("len", "int", "0"), o("flags", "int", "0")],
+        &[
+            p("name", "string"),
+            o("len", "int", "0"),
+            o("flags", "int", "0"),
+        ],
         "string|false",
     ),
     m(
         "getFromIndex",
-        &[p("index", "int"), o("len", "int", "0"), o("flags", "int", "0")],
+        &[
+            p("index", "int"),
+            o("len", "int", "0"),
+            o("flags", "int", "0"),
+        ],
         "string|false",
     ),
     m("getStreamIndex", INDEX_FLAGS, ""),
@@ -244,42 +330,78 @@ pub const METHODS: &[Method] = &[
     m("getStream", &[p("name", "string")], ""),
     m(
         "setExternalAttributesName",
-        &[p("name", "string"), p("opsys", "int"), p("attr", "int"), o("flags", "int", "0")],
+        &[
+            p("name", "string"),
+            p("opsys", "int"),
+            p("attr", "int"),
+            o("flags", "int", "0"),
+        ],
         "bool",
     ),
     m(
         "setExternalAttributesIndex",
-        &[p("index", "int"), p("opsys", "int"), p("attr", "int"), o("flags", "int", "0")],
+        &[
+            p("index", "int"),
+            p("opsys", "int"),
+            p("attr", "int"),
+            o("flags", "int", "0"),
+        ],
         "bool",
     ),
     m(
         "getExternalAttributesName",
-        &[p("name", "string"), r("opsys"), r("attr"), o("flags", "int", "0")],
+        &[
+            p("name", "string"),
+            r("opsys"),
+            r("attr"),
+            o("flags", "int", "0"),
+        ],
         "bool",
     ),
     m(
         "getExternalAttributesIndex",
-        &[p("index", "int"), r("opsys"), r("attr"), o("flags", "int", "0")],
+        &[
+            p("index", "int"),
+            r("opsys"),
+            r("attr"),
+            o("flags", "int", "0"),
+        ],
         "bool",
     ),
     m(
         "setCompressionName",
-        &[p("name", "string"), p("method", "int"), o("compflags", "int", "0")],
+        &[
+            p("name", "string"),
+            p("method", "int"),
+            o("compflags", "int", "0"),
+        ],
         "bool",
     ),
     m(
         "setCompressionIndex",
-        &[p("index", "int"), p("method", "int"), o("compflags", "int", "0")],
+        &[
+            p("index", "int"),
+            p("method", "int"),
+            o("compflags", "int", "0"),
+        ],
         "bool",
     ),
     m(
         "setEncryptionName",
-        &[p("name", "string"), p("method", "int"), s(o("password", "?string", "null"))],
+        &[
+            p("name", "string"),
+            p("method", "int"),
+            s(o("password", "?string", "null")),
+        ],
         "bool",
     ),
     m(
         "setEncryptionIndex",
-        &[p("index", "int"), p("method", "int"), s(o("password", "?string", "null"))],
+        &[
+            p("index", "int"),
+            p("method", "int"),
+            s(o("password", "?string", "null")),
+        ],
         "bool",
     ),
     m(
@@ -287,7 +409,11 @@ pub const METHODS: &[Method] = &[
         &[p("rate", "float"), p("callback", "callable")],
         "bool",
     ),
-    m("registerCancelCallback", &[p("callback", "callable")], "bool"),
+    m(
+        "registerCancelCallback",
+        &[p("callback", "callable")],
+        "bool",
+    ),
     Method {
         name: "isCompressionMethodSupported",
         params: &[p("method", "int"), o("enc", "bool", "true")],

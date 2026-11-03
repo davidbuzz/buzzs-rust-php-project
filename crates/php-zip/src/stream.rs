@@ -77,7 +77,10 @@ impl std::fmt::Debug for ZipStreamOps {
         f.debug_struct("ZipStreamOps")
             .field("open", &self.zf.is_some())
             .field("cursor", &self.cursor)
-            .field("path", &self.path.as_ref().map(|p| String::from_utf8_lossy(p)))
+            .field(
+                "path",
+                &self.path.as_ref().map(|p| String::from_utf8_lossy(p)),
+            )
             .finish_non_exhaustive()
     }
 }
@@ -206,16 +209,14 @@ pub fn stat_url(path: &[u8]) -> Option<StatBuf> {
     let c = cstr(&dir);
     let mut err = 0;
     // SAFETY: C string path and a valid error output.
-    let za = unsafe { ffi::zip_open(c.as_ptr(), crate::consts::RDONLY as i32, &raw mut err) };
+    let za = unsafe { ffi::zip_open(c.as_ptr(), ffi::ZIP_RDONLY, &raw mut err) };
     if za.is_null() {
         return None;
     }
     let ce = cstr(&entry);
     let mut sb = std::mem::MaybeUninit::<ffi::zip_stat_t>::zeroed();
     // SAFETY: open archive, C string, zeroed output struct.
-    let r = unsafe {
-        ffi::zip_stat(za, ce.as_ptr(), crate::consts::FL_NOCASE as u32, sb.as_mut_ptr())
-    };
+    let r = unsafe { ffi::zip_stat(za, ce.as_ptr(), ffi::ZIP_FL_NOCASE, sb.as_mut_ptr()) };
     // SAFETY: the read-only archive is closed exactly once.
     unsafe { ffi::zip_close(za) };
     if r != 0 {
@@ -271,7 +272,7 @@ impl Wrapper for ZipWrapper {
         let c = cstr(&dir);
         let mut err = 0;
         // SAFETY: C string path and a valid error output.
-        let za = unsafe { ffi::zip_open(c.as_ptr(), crate::consts::RDONLY as i32, &raw mut err) };
+        let za = unsafe { ffi::zip_open(c.as_ptr(), ffi::ZIP_RDONLY, &raw mut err) };
         if za.is_null() {
             return Err(OpenError::silent());
         }
@@ -337,7 +338,10 @@ mod tests {
             split_path(b"ZIP://x.zip#"),
             Some((b"x.zip".to_vec(), Vec::new()))
         );
-        assert_eq!(split_path(b"x.zip#e"), Some((b"x.zip".to_vec(), b"e".to_vec())));
+        assert_eq!(
+            split_path(b"x.zip#e"),
+            Some((b"x.zip".to_vec(), b"e".to_vec()))
+        );
         assert_eq!(split_path(b"zip://x.zip"), None);
     }
 }

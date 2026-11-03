@@ -84,10 +84,10 @@ pub const OPSYS_UNIX: i64 = 3;
 /// `ZIP_OPSYS_DEFAULT`.
 pub const OPSYS_DEFAULT: i64 = OPSYS_UNIX;
 
-/// `ZIP_LENGTH_TO_END`: `-1` since libzip 1.10.1, `0` before (php_zip.h).
+/// `ZIP_LENGTH_TO_END`: `-1` since libzip 1.10.1, `0` before (`php_zip.h`).
 #[cfg(libzip_1_10)]
 pub const LENGTH_TO_END: i64 = -1;
-/// `ZIP_LENGTH_TO_END`: `-1` since libzip 1.10.1, `0` before (php_zip.h).
+/// `ZIP_LENGTH_TO_END`: `-1` since libzip 1.10.1, `0` before (`php_zip.h`).
 #[cfg(not(libzip_1_10))]
 pub const LENGTH_TO_END: i64 = 0;
 
@@ -365,7 +365,10 @@ pub fn info_rows() -> Vec<(&'static str, String)> {
     if version == env!("PHP_ZIP_LIBZIP_VERSION") {
         rows.push(("Libzip version", version.to_string()));
     } else {
-        rows.push(("Libzip headers version", env!("PHP_ZIP_LIBZIP_VERSION").to_string()));
+        rows.push((
+            "Libzip headers version",
+            env!("PHP_ZIP_LIBZIP_VERSION").to_string(),
+        ));
         rows.push(("Libzip library version", version.to_string()));
     }
     let cm = |m: i64| compression_method_supported(i32::try_from(m).unwrap_or(-2), true);
@@ -390,7 +393,10 @@ mod tests {
     fn table_shape() {
         let all = class_constants();
         assert_eq!(all[0].name, "CREATE");
-        assert_eq!(class_constant("OVERWRITE").map(|c| c.value), Some(ConstValue::Int(8)));
+        assert_eq!(
+            class_constant("OVERWRITE").map(|c| c.value),
+            Some(ConstValue::Int(8))
+        );
         assert_eq!(
             class_constant("FL_OPEN_FILE_NOW").map(|c| c.value),
             Some(ConstValue::Int(1_073_741_824))

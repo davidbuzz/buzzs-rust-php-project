@@ -44,7 +44,12 @@ impl StringSource {
     }
 
     #[allow(clippy::too_many_lines)]
-    fn command(&mut self, data: *mut c_void, len: zip_uint64_t, cmd: zip_source_cmd_t) -> zip_int64_t {
+    fn command(
+        &mut self,
+        data: *mut c_void,
+        len: zip_uint64_t,
+        cmd: zip_source_cmd_t,
+    ) -> zip_int64_t {
         let len_usize = usize::try_from(len).unwrap_or(usize::MAX);
         match cmd {
             ffi::ZIP_SOURCE_SUPPORTS => {
@@ -116,7 +121,9 @@ impl StringSource {
                 to_i64(std::mem::size_of::<ffi::zip_stat_t>())
             }
             // SAFETY: `data`/`len` describe libzip's output buffer.
-            ffi::ZIP_SOURCE_ERROR => unsafe { ffi::zip_error_to_data(&raw const self.error, data, len) },
+            ffi::ZIP_SOURCE_ERROR => unsafe {
+                ffi::zip_error_to_data(&raw const self.error, data, len)
+            },
             ffi::ZIP_SOURCE_SEEK => {
                 // SAFETY: `data`/`len` are libzip's seek arguments; the
                 // error pointer is our initialised error.
@@ -136,7 +143,7 @@ impl StringSource {
                 0
             }
             ffi::ZIP_SOURCE_TELL => to_i64(self.in_offset),
-            ffi::ZIP_SOURCE_BEGIN_WRITE => {
+            ffi::ZIP_SOURCE_BEGIN_WRITE | ffi::ZIP_SOURCE_ROLLBACK_WRITE => {
                 self.out_str = Vec::new();
                 0
             }
@@ -162,10 +169,6 @@ impl StringSource {
                 if let Some(dest) = &self.dest {
                     dest.borrow_mut().clone_from(&self.in_str);
                 }
-                0
-            }
-            ffi::ZIP_SOURCE_ROLLBACK_WRITE => {
-                self.out_str = Vec::new();
                 0
             }
             ffi::ZIP_SOURCE_SEEK_WRITE => {

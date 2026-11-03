@@ -95,6 +95,11 @@ pub const ZIP_SOURCE_SUPPORTS: zip_source_cmd_t = 14;
 pub const ZIP_SOURCE_REMOVE: zip_source_cmd_t = 15;
 pub const ZIP_SOURCE_SUPPORTS_REOPEN: zip_source_cmd_t = 21;
 
+/// `ZIP_RDONLY` for `zip_open()`.
+pub const ZIP_RDONLY: c_int = 16;
+/// `ZIP_FL_NOCASE`.
+pub const ZIP_FL_NOCASE: zip_flags_t = 1;
+
 pub const ZIP_STAT_SIZE: zip_uint64_t = 0x0004;
 pub const ZIP_STAT_COMP_SIZE: zip_uint64_t = 0x0008;
 pub const ZIP_STAT_MTIME: zip_uint64_t = 0x0010;
@@ -132,8 +137,11 @@ extern "C" {
     pub fn zip_error_init(err: *mut zip_error_t);
     pub fn zip_error_set(err: *mut zip_error_t, ze: c_int, se: c_int);
     pub fn zip_error_strerror(err: *mut zip_error_t) -> *const c_char;
-    pub fn zip_error_to_data(err: *const zip_error_t, data: *mut c_void, len: zip_uint64_t)
-        -> zip_int64_t;
+    pub fn zip_error_to_data(
+        err: *const zip_error_t,
+        data: *mut c_void,
+        len: zip_uint64_t,
+    ) -> zip_int64_t;
     pub fn zip_strerror(za: *mut zip_t) -> *const c_char;
 
     pub fn zip_get_num_entries(za: *mut zip_t, flags: zip_flags_t) -> zip_int64_t;

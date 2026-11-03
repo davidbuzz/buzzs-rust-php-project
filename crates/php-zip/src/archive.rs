@@ -28,8 +28,8 @@ use php_streams::stream::Stream;
 
 use crate::consts;
 use crate::error::{
-    already_closing, arg_type_error, arg_value_error, deprecated, must_not_be_empty,
-    uninitialized, warning,
+    already_closing, arg_type_error, arg_value_error, deprecated, must_not_be_empty, uninitialized,
+    warning,
 };
 use crate::ffi::{self, zip_error_t, zip_stat_t, zip_t};
 use crate::host::ZipHost;
@@ -96,7 +96,10 @@ fn archive_error_codes(za: *mut zip_t) -> (i32, i32) {
     // SAFETY: `za` is an open archive; the error struct belongs to it.
     unsafe {
         let err = ffi::zip_get_error(za);
-        let codes = (ffi::zip_error_code_zip(err), ffi::zip_error_code_system(err));
+        let codes = (
+            ffi::zip_error_code_zip(err),
+            ffi::zip_error_code_system(err),
+        );
         ffi::zip_error_fini(err);
         codes
     }
@@ -238,6 +241,7 @@ fn erase_host<'a>(host: &'a mut (dyn ZipHost + 'a)) -> NonNull<dyn ZipHost> {
     // layout). The pointer is stored in `Archive::host` exclusively for the
     // duration of a `zip_close()` call made while the borrow is live (see
     // `Archive::zip_close_with`), and is cleared before that borrow ends.
+    #[allow(clippy::transmute_ptr_to_ptr)] // `as` cannot change a trait object's lifetime bound
     let p: *mut (dyn ZipHost + 'static) = unsafe { std::mem::transmute(p) };
     // SAFETY: derived from a reference, hence non-null.
     unsafe { NonNull::new_unchecked(p) }
@@ -403,12 +407,15 @@ impl Archive {
         this: Rc<Self>,
         host: Option<&mut dyn ZipHost>,
     ) -> (bool, Option<RuntimeError>) {
-        if Rc::strong_count(&this) == 1 {
+        let result = if Rc::strong_count(&this) == 1 {
             let bailout = this.finalize(host);
             (bailout, this.take_pending())
         } else {
             (false, None)
-        }
+        };
+        // Dropping the reference is the point of this function.
+        drop(this);
+        result
     }
 }
 
@@ -506,13 +513,17 @@ fn parse_options(host: &mut dyn ZipHost, options: &ZArray) -> RtResult<ZipOption
     if let Some(v) = get("comp_method") {
         let m = option_long(host, "comp_method", &v)?;
         if !(0..=INT_MAX).contains(&m) {
-            warning(format!("Option \"comp_method\" must be between 0 and {INT_MAX}"));
+            warning(format!(
+                "Option \"comp_method\" must be between 0 and {INT_MAX}"
+            ));
         }
         opts.comp_method = m as i32;
         if let Some(v) = get("comp_flags") {
             let f = option_long(host, "comp_flags", &v)?;
             if !(0..=USHRT_MAX).contains(&f) {
-                warning(format!("Option \"comp_flags\" must be between 0 and {USHRT_MAX}"));
+                warning(format!(
+                    "Option \"comp_flags\" must be between 0 and {USHRT_MAX}"
+                ));
             }
             opts.comp_flags = f as u32;
         }
@@ -706,7 +717,12 @@ impl ZipArchive {
     }
 
     /// `ZipArchive::open(string $filename, int $flags = 0): bool|int`.
-    pub fn open(&self, host: &mut dyn ZipHost, filename: &[u8], flags: i64) -> RtResult<OpenResult> {
+    pub fn open(
+        &self,
+        host: &mut dyn ZipHost,
+        filename: &[u8],
+        flags: i64,
+    ) -> RtResult<OpenResult> {
         if filename.is_empty() {
             return Err(must_not_be_empty("ZipArchive::open", 1, "filename"));
         }
@@ -740,7 +756,12 @@ impl ZipArchive {
     }
 
     /// `ZipArchive::openString(string $data = '', int $flags = 0): bool|int`.
-    pub fn open_string(&self, host: &mut dyn ZipHost, data: &[u8], flags: i64) -> RtResult<OpenResult> {
+    pub fn open_string(
+        &self,
+        host: &mut dyn ZipHost,
+        data: &[u8],
+        flags: i64,
+    ) -> RtResult<OpenResult> {
         self.check_closing()?;
         let pending = self.close_before_open(host)?;
         let out: OutStr = Rc::new(RefCell::new(Vec::new()));
@@ -1012,7 +1033,11 @@ impl ZipArchive {
         if filepath.is_empty() {
             return Err(must_not_be_empty("ZipArchive::addFile", 1, "filepath"));
         }
-        let entry = if entryname.is_empty() { filepath } else { entryname };
+        let entry = if entryname.is_empty() {
+            filepath
+        } else {
+            entryname
+        };
         self.check_closing()?;
         Ok(self.add_file_internal(filepath, entry, start, length, -1, flags))
     }
@@ -1070,9 +1095,11 @@ impl ZipArchive {
         for file in &files {
             let stripped: &[u8] = if opts.remove_all_path {
                 paths::basename(file)
-            } else if let Some(rp) = opts.remove_path.as_deref().filter(|rp| {
-                file.len() > rp.len() && file.starts_with(rp)
-            }) {
+            } else if let Some(rp) = opts
+                .remove_path
+                .as_deref()
+                .filter(|rp| file.len() > rp.len() && file.starts_with(rp))
+            {
                 if file[rp.len()] == b'/' {
                     &file[rp.len() + 1..]
                 } else {
@@ -1108,7 +1135,12 @@ impl ZipArchive {
                 }
             }
             if opts.enc_method >= 0
-                && !set_encryption(za, id, i64::from(opts.enc_method), opts.enc_password.as_deref())
+                && !set_encryption(
+                    za,
+                    id,
+                    i64::from(opts.enc_method),
+                    opts.enc_password.as_deref(),
+                )
             {
                 return None;
             }
@@ -1231,7 +1263,9 @@ impl ZipArchive {
     pub fn get_archive_flag(&self, flag: i64, flags: i64) -> RtResult<i64> {
         let za = self.za()?;
         // SAFETY: open archive.
-        Ok(i64::from(unsafe { ffi::zip_get_archive_flag(za, flag as u32, flags as u32) }))
+        Ok(i64::from(unsafe {
+            ffi::zip_get_archive_flag(za, flag as u32, flags as u32)
+        }))
     }
 
     /// `ZipArchive::setCommentIndex(int $index, string $comment): bool`.
@@ -1361,7 +1395,9 @@ impl ZipArchive {
     /// `ZipArchive::statIndex(int $index, int $flags = 0): array|false`.
     pub fn stat_index(&self, index: i64, flags: i64) -> RtResult<Option<EntryStat>> {
         let za = self.za()?;
-        Ok(stat_index(za, index, flags).as_ref().map(EntryStat::from_raw))
+        Ok(stat_index(za, index, flags)
+            .as_ref()
+            .map(EntryStat::from_raw))
     }
 
     /// `ZipArchive::locateName(string $name, int $flags = 0): int|false`.
@@ -1764,7 +1800,11 @@ impl ZipArchive {
         let za = self.za()?;
         self.check_closing()?;
         if name.is_empty() {
-            return Err(must_not_be_empty("ZipArchive::setEncryptionName", 1, "name"));
+            return Err(must_not_be_empty(
+                "ZipArchive::setEncryptionName",
+                1,
+                "name",
+            ));
         }
         let idx = name_locate(za, name, 0);
         if idx < 0 {
@@ -2000,7 +2040,8 @@ fn file_comment(za: *mut zip_t, index: u64, flags: u32) -> Vec<u8> {
 fn set_file_comment(za: *mut zip_t, index: u64, comment: &[u8]) -> bool {
     let mut len: u32 = 0;
     // SAFETY: open archive.
-    let cur = unsafe { ffi::zip_file_get_comment(za, index, &raw mut len, consts::FL_ENC_RAW as u32) };
+    let cur =
+        unsafe { ffi::zip_file_get_comment(za, index, &raw mut len, consts::FL_ENC_RAW as u32) };
     if !cur.is_null() && len as usize == comment.len() {
         // SAFETY: libzip returns `len` readable bytes.
         let cur = unsafe { std::slice::from_raw_parts(cur.cast::<u8>(), len as usize) };

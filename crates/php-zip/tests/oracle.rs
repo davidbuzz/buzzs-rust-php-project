@@ -15,6 +15,7 @@
 
 mod harness;
 
+use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -49,13 +50,17 @@ fn workdir(name: &str, tag: &str) -> PathBuf {
 /// through `php_error_docref1()`; compare those lines without it.
 fn strip_open_failure_params(s: &str) -> String {
     s.lines()
-        .map(|l| match (
-            l.find("): Failed to open stream:")
-                .or_else(|| l.find("): Failed to open directory:")),
-            l.find('('),
-        ) {
-            (Some(end), Some(start)) if start < end => format!("{}(*{}", &l[..start], &l[end..]),
-            _ => l.to_string(),
+        .map(|l| {
+            match (
+                l.find("): Failed to open stream:")
+                    .or_else(|| l.find("): Failed to open directory:")),
+                l.find('('),
+            ) {
+                (Some(end), Some(start)) if start < end => {
+                    format!("{}(*{}", &l[..start], &l[end..])
+                }
+                _ => l.to_string(),
+            }
         })
         .collect::<Vec<_>>()
         .join("\n")
@@ -94,7 +99,14 @@ fn regenerate() {
         }
         let dir = workdir(&name, "php");
         let out = Command::new("/usr/bin/php")
-            .args(["-d", "memory_limit=1G", "-d", "display_errors=1", "-d", "error_reporting=-1"])
+            .args([
+                "-d",
+                "memory_limit=1G",
+                "-d",
+                "display_errors=1",
+                "-d",
+                "error_reporting=-1",
+            ])
             .arg(root().join("runner.php"))
             .arg(&sc)
             .arg(&dir)
@@ -139,12 +151,13 @@ fn scenarios_match_oracle() {
             for i in 0..e.len().max(g.len()) {
                 let (a, b) = (e.get(i).copied(), g.get(i).copied());
                 if a != b {
-                    diff.push_str(&format!(
+                    let _ = write!(
+                        diff,
                         "  line {}:\n    php: {}\n    rs : {}\n",
                         i + 1,
                         a.unwrap_or("<none>"),
                         b.unwrap_or("<none>")
-                    ));
+                    );
                     if diff.len() > 4000 {
                         break;
                     }
@@ -154,5 +167,9 @@ fn scenarios_match_oracle() {
         }
         let _ = fs::remove_dir_all(&dir);
     }
-    assert!(failures.is_empty(), "scenario mismatches:\n{}", failures.join("\n"));
+    assert!(
+        failures.is_empty(),
+        "scenario mismatches:\n{}",
+        failures.join("\n")
+    );
 }
