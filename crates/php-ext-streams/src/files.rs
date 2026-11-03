@@ -56,7 +56,7 @@ pub fn open_stream(
         }
         return Ok(None);
     };
-    let data = if s.ops().is_userspace() {
+    let data = if res::is_user_stream(&s) {
         crate::userwrap::take_last_object()
     } else {
         None

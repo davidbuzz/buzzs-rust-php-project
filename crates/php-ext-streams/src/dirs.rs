@@ -44,7 +44,7 @@ fn do_opendir(vm: &mut Vm, a: &Args) -> VmResult<Option<Resource>> {
         return Ok(None);
     };
     s.add_flags(flags::NO_FCLOSE);
-    let data = if s.ops().is_userspace() {
+    let data = if res::is_user_stream(&s) {
         crate::userwrap::take_last_object()
     } else {
         None

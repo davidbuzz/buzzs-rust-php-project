@@ -94,8 +94,17 @@ impl StreamCell {
 }
 
 /// Whether closing `s` runs PHP code.
-fn needs_vm(s: &Stream) -> bool {
+/// Whether `s` was opened through a user-space wrapper (file or directory).
+pub fn is_user_stream(s: &Stream) -> bool {
     s.ops().is_userspace()
+        || s
+            .wrapper
+            .as_ref()
+            .is_some_and(|w| w.label == php_streams::user::LABEL)
+}
+
+fn needs_vm(s: &Stream) -> bool {
+    is_user_stream(s)
         || s.read_filters
             .filters
             .iter()
