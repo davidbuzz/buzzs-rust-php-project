@@ -68,21 +68,25 @@ fn diff_with_tzid(one: &Time, two: &Time) -> RelTime {
         invert: i32::from(sort_old_to_new(&mut one, &mut two)),
         ..RelTime::default()
     };
-    let mut dst_corr = two.z - one.z;
+    let mut dst_corr = two.z.wrapping_sub(one.z);
     let dst_h_corr = dst_corr / 3600;
     let dst_m_corr = (dst_corr % 3600) / 60;
 
     rt.y = two.y.wrapping_sub(one.y);
-    rt.m = two.m - one.m;
-    rt.d = two.d - one.d;
-    rt.h = two.h - one.h;
-    rt.i = two.i - one.i;
-    rt.s = two.s - one.s;
-    rt.us = two.us - one.us;
+    rt.m = two.m.wrapping_sub(one.m);
+    rt.d = two.d.wrapping_sub(one.d);
+    rt.h = two.h.wrapping_sub(one.h);
+    rt.i = two.i.wrapping_sub(one.i);
+    rt.s = two.s.wrapping_sub(one.s);
+    rt.us = two.us.wrapping_sub(one.us);
     rt.days = diff_days(&one, &two);
 
     if two.sse < one.sse {
-        let flipped = (rt.i * 60 + rt.s - dst_corr).abs();
+        let flipped =
+            rt.i.wrapping_mul(60)
+                .wrapping_add(rt.s)
+                .wrapping_sub(dst_corr)
+                .wrapping_abs();
         rt.h = flipped / 3600;
         rt.i = (flipped - rt.h * 3600) / 60;
         rt.s = flipped % 60;
@@ -96,27 +100,29 @@ fn diff_with_tzid(one: &Time, two: &Time) -> RelTime {
     }
 
     if one.dst == 1 && two.dst == 0 {
-        if two.tz_info.is_some() && (two.sse - one.sse + dst_corr) < 86400 {
+        if two.tz_info.is_some() && two.sse.wrapping_sub(one.sse).wrapping_add(dst_corr) < 86400 {
             rt.h -= dst_h_corr;
             rt.i -= dst_m_corr;
         }
     } else if one.dst == 0 && two.dst == 1 {
         if let Some(tz) = &two.tz_info {
             if let Some((_, trans_tt, _)) = tz.offset_info(two.sse) {
-                if !((one.sse + 86400 > trans_tt) && (one.sse + 86400 <= trans_tt + dst_corr))
+                let one_next = one.sse.wrapping_add(86400);
+                if !((one_next > trans_tt) && (one_next <= trans_tt.wrapping_add(dst_corr)))
                     && two.sse >= trans_tt
-                    && ((two.sse - one.sse + dst_corr) % 86400) > (two.sse - trans_tt)
+                    && (two.sse.wrapping_sub(one.sse).wrapping_add(dst_corr) % 86400)
+                        > two.sse.wrapping_sub(trans_tt)
                 {
                     rt.h -= dst_h_corr;
                     rt.i -= dst_m_corr;
                 }
             }
         }
-    } else if two.sse - one.sse >= 86400 {
+    } else if two.sse.wrapping_sub(one.sse) >= 86400 {
         if let Some(tz) = &two.tz_info {
-            if let Some((trans_offset, trans_tt, _)) = tz.offset_info(two.sse - two.z) {
-                dst_corr = one.z - i64::from(trans_offset);
-                if two.sse >= trans_tt - dst_corr && two.sse < trans_tt {
+            if let Some((trans_offset, trans_tt, _)) = tz.offset_info(two.sse.wrapping_sub(two.z)) {
+                dst_corr = one.z.wrapping_sub(i64::from(trans_offset));
+                if two.sse >= trans_tt.wrapping_sub(dst_corr) && two.sse < trans_tt {
                     rt.d -= 1;
                     rt.h = 24;
                 }
@@ -138,18 +144,22 @@ pub fn diff(one: &Time, two: &Time) -> RelTime {
         ..RelTime::default()
     };
     rt.y = two.y.wrapping_sub(one.y);
-    rt.m = two.m - one.m;
-    rt.d = two.d - one.d;
-    rt.h = two.h - one.h;
+    rt.m = two.m.wrapping_sub(one.m);
+    rt.d = two.d.wrapping_sub(one.d);
+    rt.h = two.h.wrapping_sub(one.h);
     if one.zone_type != ZoneType::Id {
-        rt.h += one.dst;
+        rt.h = rt.h.wrapping_add(one.dst);
     }
     if two.zone_type != ZoneType::Id {
-        rt.h -= two.dst;
+        rt.h = rt.h.wrapping_sub(two.dst);
     }
-    rt.i = two.i - one.i;
-    rt.s = two.s - one.s - two.z + one.z;
-    rt.us = two.us - one.us;
+    rt.i = two.i.wrapping_sub(one.i);
+    rt.s = two
+        .s
+        .wrapping_sub(one.s)
+        .wrapping_sub(two.z)
+        .wrapping_add(one.z);
+    rt.us = two.us.wrapping_sub(one.us);
     rt.days = diff_days(&one, &two);
     if rt.invert != 0 {
         do_rel_normalize(&mut one, &mut rt);

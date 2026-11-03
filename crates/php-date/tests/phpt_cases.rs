@@ -1,5 +1,7 @@
 //! Hand-ported expectations from php-src `ext/date/tests/*.phpt`.
 
+#![allow(clippy::many_single_char_names, clippy::too_many_lines)]
+
 use std::fmt::Write as _;
 
 use php_date::api::{self, Value};
@@ -344,5 +346,240 @@ fn interval_exception_messages() {
         ),
     ] {
         assert_eq!(api::DatePeriod::from_iso(s.as_bytes(), 0).unwrap_err(), msg);
+    }
+}
+
+#[test]
+fn gh18076_sun_info() {
+    let utc = tz::get("UTC").unwrap();
+    let ts = api::strtotime(b"2025-03-21", 0, &utc).unwrap();
+    let v = api::date_sun_info(ts, 51.48, 0.0, &utc);
+    let Some(Value::Int(rise)) = v.get("sunrise") else {
+        panic!()
+    };
+    let Some(Value::Int(set)) = v.get("sunset") else {
+        panic!()
+    };
+    assert_eq!(api::date(b"H:i:s", *rise, &utc), b"05:59:21");
+    assert_eq!(api::date(b"H:i:s", *set, &utc), b"18:14:48");
+}
+
+#[test]
+fn gh18422_extreme_isodate() {
+    let utc = tz::get("UTC").unwrap();
+    let (t, _) = api::date_initialize(b"2006-12-12", None, None, &utc, 0, 0);
+    let mut t = t.unwrap();
+    api::set_isodate(&mut t, i64::MIN, 1, 1);
+    for f in [b"Y", b"x", b"X"] {
+        let s = api::format(&t, f);
+        assert_eq!(s[0], b'-');
+        assert!(s[1..].iter().all(u8::is_ascii_digit));
+    }
+    let (t, _) = api::date_initialize(b"-0042-01-01", None, None, &utc, 0, 0);
+    assert_eq!(api::format(&t.unwrap(), b"Y"), b"-0042");
+}
+
+#[test]
+fn gh18481_non_finite_offsets() {
+    let utc = tz::get("UTC").unwrap();
+    for off in [f64::NAN, -f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        let v = api::date_sunrise_sunset(
+            0,
+            api::SUNFUNCS_RET_STRING,
+            38.4,
+            -9.0,
+            90.0,
+            Some(off),
+            &utc,
+            false,
+        );
+        assert_eq!(v, Value::Bool(false));
+    }
+}
+
+#[test]
+fn gh20764_offsets_with_seconds() {
+    let utc = tz::get("UTC").unwrap();
+    for (spec, name) in [("+03:00:30", "+03:00:30"), ("-03:00:30", "-03:00:30")] {
+        let z = php_date::parse::parse_timezone_spec(spec).unwrap();
+        assert_eq!(z.name(), name);
+        let (t, _) = api::date_initialize(b"2025-04-01", None, Some(&z), &utc, 0, 0);
+        let t = t.unwrap();
+        assert_eq!(api::format(&t, b"e"), name.as_bytes());
+        let props = api::date_props(&t);
+        assert_eq!(
+            props.get("date"),
+            Some(&Value::Str("2025-04-01 00:00:00.000000".into()))
+        );
+        assert_eq!(props.get("timezone_type"), Some(&Value::Int(1)));
+        assert_eq!(props.get("timezone"), Some(&Value::Str(name.into())));
+    }
+}
+
+/// Extreme inputs must not panic (debug builds check overflow) and must
+/// behave like C's wrapping arithmetic.
+#[test]
+fn extreme_values_do_not_panic() {
+    let utc = tz::get("UTC").unwrap();
+    let ams = tz::get("Europe/Amsterdam").unwrap();
+    for s in [
+        "@9223372036854775807",
+        "@-9223372036854775808",
+        "+9223372036854775807 seconds",
+        "-9223372036854775808 days",
+        "9999999999999 years ago",
+        "+1000000000000 weeks",
+        "292277026596-12-04 15:30:07",
+        "-292277022657-01-27 08:29:52",
+        "+99999999999999999-01-01",
+        "@1.999999",
+        "last day of +999999999999 months",
+        "+999999999999 weekdays",
+    ] {
+        let _ = api::date_parse(s.as_bytes());
+        for tz in [&utc, &ams] {
+            if let Some(ts) = api::strtotime(s.as_bytes(), 0, tz) {
+                let _ = api::date(b"c r U e T I L W o t z N B u v", ts, tz);
+            }
+        }
+    }
+    for ts in [i64::MIN, i64::MAX, i64::MIN + 1, i64::MAX - 86400] {
+        for tz in [&utc, &ams] {
+            let _ = api::date(b"c r U e T I L W o t z N B u v x X", ts, tz);
+            let _ = api::getdate(ts, tz);
+            let _ = php_date::format::strftime(b"%c %s %G %V %z", ts, Some(tz));
+            let _ = api::date_sun_info(ts, 50.0, 5.0, tz);
+            let _ = api::idate(b"U", ts, tz);
+        }
+    }
+    for v in [i64::MIN, i64::MAX, 0, -1] {
+        let _ = api::mktime(
+            v,
+            Some(v),
+            Some(v),
+            Some(v),
+            Some(v),
+            Some(v),
+            0,
+            Some(&ams),
+        );
+        let (t, _) = api::date_initialize(b"2010-01-01", None, None, &ams, 0, 0);
+        let mut t = t.unwrap();
+        api::set_date(&mut t, v, v, v);
+        api::set_time(&mut t, v, v, v, 0);
+        let _ = api::format(&t, b"c u");
+        let mut t2 = t.clone();
+        api::set_timestamp(&mut t2, v);
+        let d = api::diff(&t, &t2, false);
+        let _ = d.format(b"%a %y %d %h");
+        let _ = api::add(&t, &d);
+        let _ = api::sub(&t, &d);
+    }
+}
+
+/// Deterministic fuzzing of the arithmetic paths with extreme values.
+#[test]
+fn fuzz_extremes_do_not_panic() {
+    let mut seed: u64 = 0x2545_f491_4f6c_dd1d;
+    let mut next = move || {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        seed
+    };
+    let zones: Vec<_> = [
+        "UTC",
+        "Europe/Amsterdam",
+        "America/St_Johns",
+        "Pacific/Chatham",
+        "Asia/Kathmandu",
+    ]
+    .iter()
+    .map(|z| tz::get(z).unwrap())
+    .collect();
+    let interesting = [
+        i64::MIN,
+        i64::MIN + 1,
+        -1,
+        0,
+        1,
+        i64::MAX - 1,
+        i64::MAX,
+        1 << 40,
+        -(1 << 50),
+    ];
+    let pick = |n: &mut dyn FnMut() -> u64| -> i64 {
+        let r = n();
+        if r % 3 == 0 {
+            interesting[(r >> 8) as usize % interesting.len()]
+        } else {
+            (r >> 2) as i64 >> ((r >> 60) as u32 * 4)
+        }
+    };
+    let words = [
+        "+",
+        "-",
+        "day",
+        "week",
+        "month",
+        "year",
+        "hour",
+        "min",
+        "sec",
+        "usec",
+        "monday",
+        "weekday",
+        "ago",
+        "first day of",
+        "last day of",
+        "next",
+        "last",
+        "@",
+        " ",
+        "2010-01-01",
+        "10:00",
+        "UTC",
+        "CEST",
+        "+0200",
+    ];
+    for i in 0..3000 {
+        let tz = &zones[i % zones.len()];
+        let a = pick(&mut next);
+        let b = pick(&mut next);
+        let c = pick(&mut next);
+        let (t, _) = api::date_initialize(b"2010-03-28 02:30:00", None, None, tz, 0, 0);
+        let mut t = t.unwrap();
+        match i % 6 {
+            0 => api::set_date(&mut t, a, b, c),
+            1 => api::set_time(&mut t, a, b, c, pick(&mut next)),
+            2 => api::set_isodate(&mut t, a, b, c),
+            3 => api::set_timestamp(&mut t, a),
+            4 => {
+                let s = format!(
+                    "{a} {} {b} {}",
+                    words[(c as u64 % 24) as usize],
+                    words[(b as u64 % 24) as usize]
+                );
+                let _ = api::modify(&mut t, s.as_bytes());
+                let _ = api::strtotime(s.as_bytes(), a, tz);
+                let _ = api::date_parse(s.as_bytes());
+            }
+            _ => {
+                let _ = api::mktime(a, Some(b), Some(c), Some(a), Some(b), Some(c), a, Some(tz));
+            }
+        }
+        let _ = api::format(&t, b"c r U e T I L W o t z N B u v x X");
+        let mut other = t.clone();
+        api::set_timestamp(&mut other, pick(&mut next));
+        let d = api::diff(&t, &other, i % 2 == 0);
+        let _ = d.format(b"%a %y %m %d %h %i %s %f %R");
+        let _ = api::add(&t, &d);
+        let _ = api::sub(&t, &d);
+        let mut wall = d.clone();
+        wall.kind = api::IntervalKind::Wall;
+        let _ = api::add(&other, &wall);
+        let _ = api::sub(&other, &wall);
+        let _ = php_date::format::strftime(b"%c %s %G %V %z %C %y", a, Some(tz));
+        let _ = api::idate(b"B", a, tz);
     }
 }
