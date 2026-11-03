@@ -1361,8 +1361,8 @@ impl Stream {
     }
 
     /// Builds `stream_get_meta_data()`. `wrapper_data` is VM-side (the
-    /// user-space wrapper object) and is inserted by the VM after the
-    /// first entries when present.
+    /// user-space wrapper object, see [`crate::user::UserStreamOps::object`]);
+    /// when present the VM inserts it immediately before `wrapper_type`.
     pub fn meta_data(&mut self) -> MetaData {
         let mut out = Vec::new();
         if self.set_option(&mut StreamOption::MetaData(&mut out)) != OPT_OK {

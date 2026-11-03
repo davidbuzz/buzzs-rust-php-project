@@ -62,7 +62,7 @@ pub enum Value {
         /// `__toString()` result, if the class is stringable.
         string_value: Option<Vec<u8>>,
     },
-    /// A stream resource, identified by [`crate::stream::StreamId`].
+    /// A stream resource, identified by [`crate::stream::Stream::id`].
     Stream(u64),
     /// Any other resource.
     Resource(i64),

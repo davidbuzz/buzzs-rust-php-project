@@ -605,6 +605,43 @@ mod tests {
     }
 
     #[test]
+    fn filter_order() {
+        reset_volatile();
+        assert_eq!(
+            filter_names(),
+            [
+                "string.rot13",
+                "string.toupper",
+                "string.tolower",
+                "convert.*",
+                "consumed",
+                "dechunk"
+            ]
+        );
+    }
+
+    #[test]
+    fn open_basedir_on_open() {
+        let _ = diag::take();
+        let d = crate::test_util::TempDir::new();
+        crate::state::update_settings(|s| s.open_basedir = d.path());
+        assert!(crate::open::fopen(b"/etc/passwd", "r", false, None).is_none());
+        let msgs: Vec<String> = diag::take().iter().map(diag::Diagnostic::text).collect();
+        assert_eq!(
+            msgs,
+            [
+                format!(
+                    "open_basedir restriction in effect. File(/etc/passwd) is not within the allowed path(s): ({})",
+                    String::from_utf8_lossy(&d.path())
+                ),
+                "Failed to open stream: Operation not permitted".to_string(),
+            ]
+        );
+        assert!(crate::open::fopen(&d.file("new"), "w", false, None).is_some());
+        crate::state::update_settings(|s| s.open_basedir.clear());
+    }
+
+    #[test]
     fn volatile_registration() {
         reset_volatile();
         assert!(!register_volatile(

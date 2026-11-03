@@ -30,6 +30,7 @@ impl UserStreamObject for VarStream {
         }
         self.shared.borrow_mut().calls.push(match args.first() {
             Some(Value::Int(n)) => format!("{method}({n})"),
+            Some(Value::Str(b)) if method == "stream_write" => format!("{method}[{}]", b.len()),
             _ => method.to_string(),
         });
         let mut sh = self.shared.borrow_mut();
@@ -163,6 +164,21 @@ fn read_write_protocol() {
         .contains(&"stream_read(8192)".to_string()));
     assert_eq!(s.stat().unwrap().size, 11);
     assert!(s.truncate_supported());
+    // writes are chunked by the chunk size for user-space streams
+    s.write(&vec![b'a'; 20000]).unwrap();
+    let calls = shared.borrow().calls.clone();
+    let writes: Vec<&String> = calls
+        .iter()
+        .filter(|c| c.starts_with("stream_write["))
+        .collect();
+    assert_eq!(
+        writes[writes.len() - 3..],
+        [
+            "stream_write[8192]",
+            "stream_write[8192]",
+            "stream_write[3616]"
+        ]
+    );
     let meta = s.meta_data();
     assert_eq!(meta[3].1, Value::str("user-space"));
     assert_eq!(s.close(), 0);
