@@ -10,10 +10,7 @@ use php_vm::ext::{acc, class_flags, Args, ClassBuilder, NativeIterator, VmResult
 use php_vm::Vm;
 
 /// Runs `f` with a [`VmHost`] over `vm`, converting the error.
-pub fn with_host<T>(
-    vm: &mut Vm,
-    f: impl FnOnce(&mut VmHost<'_>) -> RtResult<T>,
-) -> VmResult<T> {
+pub fn with_host<T>(vm: &mut Vm, f: impl FnOnce(&mut VmHost<'_>) -> RtResult<T>) -> VmResult<T> {
     let r = {
         let mut host = VmHost::new(vm);
         f(&mut host)
@@ -109,10 +106,9 @@ fn internal_op(vm: &mut Vm, a: &Args, op: Op) -> VmResult<Value> {
     let Some(this) = a.this.clone() else {
         return Ok(Value::Null);
     };
-    let taken = php_vm::object::internal::<InternalIt, _>(&this, |s| {
-        s.it.take().map(|it| (it, s.rewound))
-    })
-    .flatten();
+    let taken =
+        php_vm::object::internal::<InternalIt, _>(&this, |s| s.it.take().map(|it| (it, s.rewound)))
+            .flatten();
     let Some((mut it, rewound)) = taken else {
         return Err(vm.throw(
             "Error",
@@ -127,7 +123,12 @@ fn internal_op(vm: &mut Vm, a: &Args, op: Op) -> VmResult<Value> {
     r
 }
 
-fn run_op(h: &mut VmHost<'_>, it: &mut dyn ObjectIterator, rewound: bool, op: Op) -> RtResult<Value> {
+fn run_op(
+    h: &mut VmHost<'_>,
+    it: &mut dyn ObjectIterator,
+    rewound: bool,
+    op: Op,
+) -> RtResult<Value> {
     if !rewound || matches!(op, Op::Rewind) {
         it.rewind(h)?;
     }
@@ -158,6 +159,7 @@ fn ii_valid(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 fn ii_rewind(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     internal_op(vm, a, Op::Rewind)
 }
+#[allow(clippy::unnecessary_wraps)] // native method signature
 fn ii_construct(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
     Ok(Value::Null)
 }

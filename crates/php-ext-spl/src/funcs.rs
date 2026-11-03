@@ -3,9 +3,9 @@
 
 use crate::host::VmHost;
 use php_runtime::Value;
-use std::sync::OnceLock;
 use php_vm::ext::{Args, ModuleBuilder, VmResult};
 use php_vm::Vm;
+use std::sync::OnceLock;
 
 /// Calls the `php-spl` implementation of the running function.
 fn call(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -22,9 +22,8 @@ fn call(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         let mut host = VmHost::new(vm);
         php_spl::call_function(&mut host, &name, &args)
     };
-    let r = match r {
-        Some(r) => r,
-        None => return Err(vm.throw("Error", &format!("Call to undefined function {name}()"))),
+    let Some(r) = r else {
+        return Err(vm.throw("Error", &format!("Call to undefined function {name}()")));
     };
     if name.starts_with("spl_autoload_") {
         vm.autoloaders = php_spl::functions::autoloaders();
@@ -42,10 +41,10 @@ pub fn resolve_include(vm: &Vm, file: &str) -> Option<String> {
     if p.is_absolute() || file.starts_with("./") || file.starts_with("../") {
         return exists(p).then(|| file.to_string());
     }
-    let ip = vm
-        .ini_string("include_path")
-        .map(|v| String::from_utf8_lossy(&v).into_owned())
-        .unwrap_or_else(|| ".".to_string());
+    let ip = vm.ini_string("include_path").map_or_else(
+        || ".".to_string(),
+        |v| String::from_utf8_lossy(&v).into_owned(),
+    );
     for dir in ip.split(':').filter(|d| !d.is_empty()) {
         let cand = std::path::Path::new(dir).join(file);
         if exists(&cand) {

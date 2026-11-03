@@ -176,7 +176,7 @@ fn build_properties(obj: &Obj) -> ZArray {
         }
     }
     if let Some(dynp) = d.dynamic.borrow().as_ref() {
-        for (k, v) in dynp.iter() {
+        for (k, v) in dynp {
             t.insert(k.clone(), v.clone());
         }
     }
@@ -255,7 +255,11 @@ pub fn has_accessible_property(obj: &Obj, name: &ZStr, scope: Option<&Rc<Class>>
         }
     };
     let slots = d.slots.borrow();
-    for pi in cls.props.iter().filter(|p| p.name == *name && p.flags & flags::STATIC == 0) {
+    for pi in cls
+        .props
+        .iter()
+        .filter(|p| p.name == *name && p.flags & flags::STATIC == 0)
+    {
         if visible(pi) {
             return matches!(slots.get(pi.slot as usize), Some(Some(_)));
         }
@@ -268,12 +272,9 @@ pub fn has_accessible_property(obj: &Obj, name: &ZStr, scope: Option<&Rc<Class>>
 }
 
 fn class_info_of(cls: &Rc<Class>) -> ClassInfo {
-    let mut parents = Vec::new();
-    let mut p = cls.parent.clone();
-    while let Some(x) = p {
-        parents.push(x.name.clone());
-        p = x.parent.clone();
-    }
+    let parents = std::iter::successors(cls.parent.clone(), |c| c.parent.clone())
+        .map(|c| c.name.clone())
+        .collect();
     ClassInfo {
         name: cls.name.clone(),
         parents,
@@ -536,7 +537,7 @@ impl SplHost for VmHost<'_> {
     fn pcre(&mut self) -> &mut php_pcre::Pcre {
         if self.pcre.is_none() {
             let p = PCRE.with(|s| s.borrow_mut().take());
-            self.pcre = Some(p.unwrap_or_else(php_pcre::Pcre::new));
+            self.pcre = Some(p.unwrap_or_default());
         }
         self.pcre.get_or_insert_with(php_pcre::Pcre::new)
     }

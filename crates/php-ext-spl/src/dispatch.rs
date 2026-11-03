@@ -12,6 +12,7 @@ use php_vm::vm::FrameKind;
 use php_vm::{Throw, Vm};
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::ops::BitOr;
 use std::rc::Rc;
 use std::sync::OnceLock;
 
@@ -22,6 +23,8 @@ struct Target {
     class: &'static str,
     /// The method declaration.
     def: &'static MethodDef,
+    /// Whether the method is `#[\Deprecated]`.
+    deprecated: bool,
 }
 
 thread_local! {
@@ -75,21 +78,16 @@ fn literal(v: &Value) -> Option<String> {
 #[must_use]
 pub fn eval_default(src: &str, class: &str) -> Option<Value> {
     let s = src.trim();
-    if let Some(pos) = s.find('|') {
-        let a = eval_default(&s[..pos], class)?;
-        let b = eval_default(&s[pos + 1..], class)?;
-        return match (a, b) {
-            (Value::Int(x), Value::Int(y)) => Some(Value::Int(x | y)),
-            _ => None,
-        };
-    }
-    if let Some(pos) = s.find('*') {
-        let a = eval_default(&s[..pos], class)?;
-        let b = eval_default(&s[pos + 1..], class)?;
-        return match (a, b) {
-            (Value::Int(x), Value::Int(y)) => Some(Value::Int(x.saturating_mul(y))),
-            _ => None,
-        };
+    for (sep, op) in [
+        ('|', i64::bitor as fn(i64, i64) -> i64),
+        ('*', i64::saturating_mul),
+    ] {
+        if let Some((lhs, rhs)) = s.split_once(sep) {
+            return match (eval_default(lhs, class)?, eval_default(rhs, class)?) {
+                (Value::Int(lhs), Value::Int(rhs)) => Some(Value::Int(op(lhs, rhs))),
+                _ => None,
+            };
+        }
     }
     match s.to_ascii_lowercase().as_str() {
         "null" => return Some(Value::Null),
@@ -97,8 +95,7 @@ pub fn eval_default(src: &str, class: &str) -> Option<Value> {
         "false" => return Some(Value::Bool(false)),
         "[]" => return Some(Value::empty_array()),
         "php_int_max" => return Some(Value::Int(i64::MAX)),
-        "sort_regular" => return Some(Value::Int(0)),
-        "count_normal" => return Some(Value::Int(0)),
+        "sort_regular" | "count_normal" => return Some(Value::Int(0)),
         "preg_split_no_empty" => return Some(Value::Int(1)),
         _ => {}
     }
@@ -140,6 +137,13 @@ pub fn eval_default(src: &str, class: &str) -> Option<Value> {
     None
 }
 
+/// Whether a declared parameter type is left to `php-spl`'s own checks.
+fn loose_type(method: &str, ty: &str) -> bool {
+    method.eq_ignore_ascii_case("__construct")
+        || ty.contains("callable")
+        || matches!(ty, "array|object" | "object|array")
+}
+
 /// The VM stub signature of a method.
 fn signature(d: &MethodDef) -> String {
     let mut s = String::from(d.name);
@@ -148,9 +152,12 @@ fn signature(d: &MethodDef) -> String {
         if i > 0 {
             s.push_str(", ");
         }
-        // Callable parameters are checked by `php-spl`, which produces
-        // PHP's "must be a valid callback, ..." messages.
-        if let Some(t) = p.ty.filter(|t| !t.contains("callable")) {
+        // Some parameters are checked by `php-spl` itself, which produces
+        // the exact `zend_parse_parameters` messages: callables ("must be
+        // a valid callback, ..."), `array|object` ("must be of type
+        // array, ...") and constructor arguments (constructors are not
+        // subject to signature compatibility checks).
+        if let Some(t) = p.ty.filter(|t| !loose_type(d.name, t)) {
             s.push_str(t);
             s.push(' ');
         }
@@ -249,7 +256,14 @@ fn register_class(vm: &mut Vm, c: &'static ClassDef) {
             let lc = d.name.to_ascii_lowercase();
             if let Some(meth) = cls.methods.get(&ZStr::from(lc)) {
                 if let Func::Builtin(bi) = &meth.func {
-                    m.insert(Rc::as_ptr(bi) as usize, Target { class: c.name, def: d });
+                    m.insert(
+                        Rc::as_ptr(bi) as usize,
+                        Target {
+                            class: c.name,
+                            def: d,
+                            deprecated: d.deprecated.is_some(),
+                        },
+                    );
                 }
             }
         }
@@ -297,30 +311,28 @@ pub fn register_classes(vm: &mut Vm) -> Vec<&'static str> {
 
 /// The arguments as `php-spl` expects them: only the passed ones, with
 /// parameters skipped by named arguments filled with their defaults.
-fn collect_args(a: &Args, t: Target) -> Vec<Value> {
-    let variadic = t.def.params.last().is_some_and(|p| p.variadic);
-    let n = if variadic {
-        a.values.len()
+fn collect_args(args: &Args, target: Target) -> Vec<Value> {
+    let variadic = target.def.params.last().is_some_and(|p| p.variadic);
+    let count = if variadic {
+        args.values.len()
     } else {
-        a.passed.iter().rposition(|&p| p).map_or(0, |i| i + 1)
+        args.passed.iter().rposition(|&p| p).map_or(0, |i| i + 1)
     };
-    let mut out = Vec::with_capacity(n);
-    for i in 0..n {
-        let passed = a.passed.get(i).copied().unwrap_or(true);
-        let v = a.values.get(i).cloned().unwrap_or_default();
-        if passed {
-            out.push(v);
-        } else {
-            let d = t
+    (0..count)
+        .map(|i| {
+            let value = args.values.get(i).cloned().unwrap_or_default();
+            if args.passed.get(i).copied().unwrap_or(true) {
+                return value;
+            }
+            target
                 .def
                 .params
                 .get(i)
                 .and_then(|p| p.default)
-                .and_then(|d| eval_default(d, t.class));
-            out.push(d.unwrap_or(v));
-        }
-    }
-    out
+                .and_then(|d| eval_default(d, target.class))
+                .unwrap_or(value)
+        })
+        .collect()
 }
 
 /// The native handler of every SPL method.
@@ -335,8 +347,10 @@ fn method_handler(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             &format!("Unknown SPL method {}()", f.name.to_string_lossy()),
         ));
     };
-    if let Some(msg) = php_spl::classes::deprecation_message(t.class, t.def.name) {
-        vm.raise(8192, &msg)?;
+    if t.deprecated {
+        if let Some(msg) = php_spl::classes::deprecation_message(t.class, t.def.name) {
+            vm.raise(8192, &msg)?;
+        }
     }
     let args = collect_args(a, t);
     let this = a.this.clone();
@@ -360,12 +374,15 @@ pub fn function_signature(d: &MethodDef) -> String {
     signature(d)
 }
 
-
 /// The method name of the call being dispatched to `__call`: the VM does
 /// not pass it to native `__call` handlers, so it is recovered from the
 /// calling frame's pending `InitMethodCall` (matched by call nesting).
 fn pending_method_name(vm: &Vm) -> Option<ZStr> {
-    let f = vm.frames.iter().rev().find(|f| f.kind != FrameKind::Builtin)?;
+    let f = vm
+        .frames
+        .iter()
+        .rev()
+        .find(|f| f.kind != FrameKind::Builtin)?;
     let ops = &f.code.ops;
     // The interpreter advances `ip` before executing an instruction.
     let mut i = f.ip.checked_sub(1)?;
@@ -410,7 +427,12 @@ fn pending_method_name(vm: &Vm) -> Option<ZStr> {
 #[must_use]
 pub fn current_dim_kind(vm: &Vm) -> php_spl::DimKind {
     use php_spl::DimKind;
-    let Some(f) = vm.frames.iter().rev().find(|f| f.kind != FrameKind::Builtin) else {
+    let Some(f) = vm
+        .frames
+        .iter()
+        .rev()
+        .find(|f| f.kind != FrameKind::Builtin)
+    else {
         return DimKind::Read;
     };
     match f.ip.checked_sub(1).and_then(|i| f.code.ops.get(i)) {
@@ -493,10 +515,16 @@ mod tests {
     fn defaults_evaluate() {
         assert_eq!(lit("null", "").as_deref(), Some("null"));
         assert_eq!(lit("2 * 1024 * 1024", "").as_deref(), Some("2097152"));
-        assert_eq!(lit("self::LEAVES_ONLY", "RecursiveIteratorIterator").as_deref(), Some("0"));
+        assert_eq!(
+            lit("self::LEAVES_ONLY", "RecursiveIteratorIterator").as_deref(),
+            Some("0")
+        );
         assert_eq!(lit("\"\\\"\"", "").as_deref(), Some("'\"'"));
         assert_eq!(lit("\"\\\\\"", "").as_deref(), Some("'\\\\'"));
-        assert_eq!(lit("PHP_INT_MAX", "").as_deref(), Some("9223372036854775807"));
+        assert_eq!(
+            lit("PHP_INT_MAX", "").as_deref(),
+            Some("9223372036854775807")
+        );
     }
 
     #[test]
@@ -506,7 +534,10 @@ mod tests {
             signature(m),
             "fgetcsv(string $separator = ',', string $enclosure = '\"', string $escape = '\\\\'): array|false"
         );
-        let (_, m) = php_spl::classes::find_method("CallbackFilterIterator", "__construct").expect("ctor");
-        assert_eq!(signature(m), "__construct(Iterator $iterator, $callback)");
+        let (_, m) =
+            php_spl::classes::find_method("CallbackFilterIterator", "__construct").expect("ctor");
+        assert_eq!(signature(m), "__construct($iterator, $callback)");
+        let (_, m) = php_spl::classes::find_method("ArrayObject", "exchangeArray").expect("method");
+        assert_eq!(signature(m), "exchangeArray($array): array");
     }
 }

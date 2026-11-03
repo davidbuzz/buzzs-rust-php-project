@@ -6,8 +6,12 @@ use php_runtime::numeric::handle_numeric_str;
 use php_runtime::{ArrayKey, HashTable, Obj, PropertyPurpose, Value, ZArray, ZStr};
 use php_spl::handlers as h;
 use php_spl::DimKind;
+use php_vm::class::Class;
 use php_vm::ext::{ClassHooks, NativeIterator, VmResult};
 use php_vm::Vm;
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::rc::Rc;
 
 /// The hooks installed on every SPL class (inherited by subclasses).
 #[must_use]
@@ -32,19 +36,30 @@ pub fn class_hooks() -> ClassHooks {
     }
 }
 
+thread_local! {
+    /// The stateful SPL base of each class seen by [`create`], keyed by
+    /// the class address (classes live for the whole request).
+    static BASES: RefCell<HashMap<usize, Option<&'static str>>> = RefCell::new(HashMap::new());
+}
+
+/// The nearest stateful SPL ancestor of `cls` (or `cls` itself).
+fn stateful_base(cls: &Rc<Class>) -> Option<&'static str> {
+    let key = Rc::as_ptr(cls) as usize;
+    if let Some(b) = BASES.with(|m| m.borrow().get(&key).copied()) {
+        return b;
+    }
+    let base = std::iter::successors(Some(cls.clone()), |c| c.parent.clone())
+        .find_map(|c| php_spl::object::canonical_class(&c.name.to_string_lossy()));
+    BASES.with(|m| m.borrow_mut().insert(key, base));
+    base
+}
+
 /// `create_object`: attaches the state of the nearest stateful SPL
 /// ancestor.
+#[allow(clippy::unnecessary_wraps)] // signature fixed by `ClassHooks::create`
 fn create(_vm: &mut Vm, o: &Obj) -> VmResult<()> {
-    let mut c = Some(php_vm::object::class_of(o).clone());
-    while let Some(cls) = c {
-        let name = cls.name.to_string_lossy();
-        if php_spl::object::canonical_class(&name).is_some() {
-            if let Some(st) = php_spl::create_state(&name) {
-                php_vm::object::set_internal(o, st);
-            }
-            return Ok(());
-        }
-        c = cls.parent.clone();
+    if let Some(st) = stateful_base(php_vm::object::class_of(o)).and_then(php_spl::create_state) {
+        php_vm::object::set_internal(o, st);
     }
     Ok(())
 }
@@ -191,6 +206,7 @@ fn get_iterator(vm: &mut Vm, o: &Obj, by_ref: bool) -> VmResult<Box<dyn NativeIt
 /// Calls `__unserialize()` with the data array in canonical form: the
 /// runtime's object parser keeps integer-like keys as strings, while PHP
 /// hands `__unserialize()` an ordinary array (`zend_symtable_update`).
+#[allow(clippy::needless_pass_by_value)] // signature fixed by `ClassHooks::unserialize`
 fn unserialize(vm: &mut Vm, o: &Obj, data: ZArray) -> VmResult<bool> {
     let cls = php_vm::object::class_of(o).clone();
     if cls.magic.unserialize.is_none() {
@@ -207,6 +223,10 @@ fn unserialize(vm: &mut Vm, o: &Obj, data: ZArray) -> VmResult<bool> {
         };
         t.insert(key, v.clone());
     }
-    vm.call_method_by_name(o, "__unserialize", vec![Value::Array(ZArray::from_table(t))])?;
+    vm.call_method_by_name(
+        o,
+        "__unserialize",
+        vec![Value::Array(ZArray::from_table(t))],
+    )?;
     Ok(true)
 }
