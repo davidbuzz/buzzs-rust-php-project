@@ -300,6 +300,11 @@ mod tests {
 
     #[test]
     fn mime_and_extension_tables() {
+        // Registered handlers extend the tables past IMAGETYPE_COUNT: hold
+        // the registry still and probe one past the current end.
+        let _registry = crate::handlers::REGISTRY_TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         assert_eq!(image_type_to_mime_type(IMAGETYPE_JPEG), "image/jpeg");
         assert_eq!(
             image_type_to_mime_type(IMAGETYPE_JPC),
@@ -310,7 +315,10 @@ mod tests {
         assert_eq!(image_type_to_extension(IMAGETYPE_WBMP, true), Some(".bmp"));
         assert_eq!(image_type_to_extension(IMAGETYPE_JPEG, false), Some("jpeg"));
         assert_eq!(image_type_to_extension(IMAGETYPE_UNKNOWN, true), None);
-        assert_eq!(image_type_to_extension(IMAGETYPE_COUNT, true), None);
+        assert_eq!(
+            image_type_to_extension(crate::handlers::image_type_count(), true),
+            None
+        );
         assert_eq!(IMAGETYPE_CONSTANTS.len(), 23);
     }
 }

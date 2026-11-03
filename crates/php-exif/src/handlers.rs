@@ -131,6 +131,11 @@ pub fn image_type_count() -> i64 {
     )
 }
 
+/// Serializes tests that read or mutate the process-wide [`HANDLERS`]
+/// registry, so registry-relative assertions see a stable count.
+#[cfg(test)]
+pub(crate) static REGISTRY_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// The registered handlers' turn in `php_getimagetype()`: the id of the
 /// first one that identifies the data.
 pub(crate) fn identify(stream: &mut dyn ImageInput) -> Option<i64> {
@@ -179,6 +184,9 @@ mod tests {
 
     #[test]
     fn registered_handlers_extend_the_type_functions() {
+        let _registry = REGISTRY_TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let id = register_handler(&TEST);
         assert!(id >= IMAGETYPE_COUNT);
         assert_eq!(register_handler(&TEST), id);
