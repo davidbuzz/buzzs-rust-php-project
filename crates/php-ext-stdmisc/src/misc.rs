@@ -1,5 +1,5 @@
-//! `mail()`, `error_log()`, `assert_options()`, `phpinfo()` and
-//! `phpcredits()`.
+//! `mail()`, `error_log()`, `assert_options()`, `phpinfo()`,
+//! `phpcredits()` and `dl()`.
 
 use crate::credits;
 use crate::ctx::{global, RtExt};
@@ -455,6 +455,48 @@ fn phpcredits(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     Ok(Value::Bool(true))
 }
 
+/// `MAXPATHLEN`.
+const MAXPATHLEN: usize = 4096;
+
+/// `dl($extension_filename)`: phprust links its extensions statically, so
+/// after php-src's checks every load fails like a missing shared object.
+fn dl(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let name = a.str(0);
+    if name.as_bytes().contains(&0) {
+        return Err(a.value_error(vm, 1, "must not contain any null bytes"));
+    }
+    if !vm.ini_bool("enable_dl") {
+        vm.php_warning("Dynamically loaded extensions aren't enabled")?;
+        return Ok(Value::Bool(false));
+    }
+    if name.len() >= MAXPATHLEN {
+        vm.php_warning(&format!(
+            "Filename exceeds the maximum allowed length of {MAXPATHLEN} characters"
+        ))?;
+        return Ok(Value::Bool(false));
+    }
+    if name.as_bytes().contains(&b'/') {
+        vm.php_warning("Temporary module name should contain only filename")?;
+        return Ok(Value::Bool(false));
+    }
+    let dir = vm.ini_string("extension_dir").unwrap_or_default();
+    if dir.is_empty() {
+        return Ok(Value::Bool(false));
+    }
+    let dir = String::from_utf8_lossy(&dir).into_owned();
+    let sep = if dir.ends_with('/') { "" } else { "/" };
+    let file = name.to_string_lossy();
+    let p1 = format!("{dir}{sep}{file}");
+    let p2 = format!("{dir}{sep}{file}.so");
+    let err = |p: &str| format!("{p}: cannot open shared object file: No such file or directory");
+    vm.php_warning(&format!(
+        "Unable to load dynamic library '{file}' (tried: {p1} ({}), {p2} ({}))",
+        err(&p1),
+        err(&p2)
+    ))?;
+    Ok(Value::Bool(false))
+}
+
 /// Registers the functions and constants.
 pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
     for (name, v) in info::INFO_CONSTANTS.iter().chain(misc::ASSERT_CONSTANTS) {
@@ -470,5 +512,6 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
     )
     .function("assert_options(int $option, mixed $value = UNKNOWN): mixed", assert_options)
     .function("phpinfo(int $flags = INFO_ALL): true", phpinfo)
-    .function("phpcredits(int $flags = CREDITS_ALL): true", phpcredits);
+    .function("phpcredits(int $flags = CREDITS_ALL): true", phpcredits)
+    .function("dl(string $extension_filename): bool", dl);
 }
