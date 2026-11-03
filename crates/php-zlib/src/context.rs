@@ -32,6 +32,13 @@ const ENCODING_MSG: &str =
     "must be one of ZLIB_ENCODING_RAW, ZLIB_ENCODING_GZIP, or ZLIB_ENCODING_DEFLATE";
 const FLUSH_MSG: &str = "must be one of ZLIB_NO_FLUSH, ZLIB_PARTIAL_FLUSH, ZLIB_SYNC_FLUSH, ZLIB_FULL_FLUSH, ZLIB_BLOCK, or ZLIB_FINISH";
 
+/// The `Error` thrown by `new DeflateContext()`.
+pub const DEFLATE_CONSTRUCT_ERROR: &str =
+    "Cannot directly construct DeflateContext, use deflate_init() instead";
+/// The `Error` thrown by `new InflateContext()`.
+pub const INFLATE_CONSTRUCT_ERROR: &str =
+    "Cannot directly construct InflateContext, use inflate_init() instead";
+
 /// The deprecation PHP emits (as `func(): …`) when `$options` is an object.
 pub fn object_options_deprecation(func: &str) -> String {
     format!(
