@@ -364,3 +364,48 @@ fn phpt_oracle() {
 fn fuzz_oracle() {
     replay("fuzz.tsv", FUZZ);
 }
+
+/// Decode `input` calling the decoder with `bufsize`-element buffers.
+fn decode_with(input: &[u8], enc: &Encoding, bufsize: usize) -> Vec<u32> {
+    let mut out = Vec::new();
+    let mut buf = vec![0u32; bufsize];
+    let mut state = 0;
+    let mut rest = input;
+    let mut calls = 0;
+    while !rest.is_empty() {
+        let n = (enc.to_wchar)(&mut rest, &mut buf, &mut state);
+        out.extend_from_slice(&buf[..n]);
+        calls += 1;
+        assert!(calls <= 4 * input.len() + 4, "decoder made no progress");
+    }
+    out
+}
+
+/// The decoders' results must not depend on the output buffer size (down to
+/// libmbfl's minimum of 5), i.e. state is carried correctly between calls.
+#[test]
+fn decoders_are_buffer_size_independent() {
+    let mut ran = 0;
+    for line in FUZZ.lines().chain(PHPT.lines()) {
+        let f: Vec<&str> = line.split('\t').collect();
+        if f[0] != "check" {
+            continue;
+        }
+        let Some(enc) = encoding::by_name(f[1].as_bytes()).filter(|e| supported(e)) else {
+            continue;
+        };
+        let input = unhex(f[2]);
+        let reference = decode_with(&input, enc, 128);
+        for bufsize in [5, 6, 7, 8, 9, 13] {
+            assert_eq!(
+                decode_with(&input, enc, bufsize),
+                reference,
+                "{} bufsize {bufsize} input {}",
+                f[1],
+                f[2]
+            );
+        }
+        ran += 1;
+    }
+    assert!(ran > 1000);
+}

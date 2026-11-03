@@ -511,3 +511,68 @@ pub fn filt_wchar_utf7imap(c: i32, filter: &mut Filter, out: &mut dyn Sink) {
 fn filt_wchar_utf7imap_flush(filter: &mut Filter, out: &mut dyn Sink) {
     legacy_flush_fragment(IMAP_BASE64_TABLE, filter, out);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codecs::utf7::tests::{legacy_decode, legacy_encode, random_cps};
+    use crate::convert::{decode_all, encode_all, ErrorMode};
+
+    #[test]
+    fn decode_cases() {
+        // utf7imap_encoding.phpt / gh10192_utf7imap.phpt
+        let d = |s: &[u8]| decode_all(s, &ENC_UTF7IMAP);
+        assert_eq!(d(b"&-"), vec![0x26]);
+        assert_eq!(d(b"&AGE-"), vec![BAD_INPUT]);
+        assert_eq!(d(b"&ZeVnLIqe-"), vec![0x65E5, 0x672C, 0x8A9E]);
+        assert_eq!(d(b"&Q"), vec![BAD_INPUT]);
+        assert_eq!(d(b"&i6o\x83"), vec![0x8BAA, BAD_INPUT]);
+        assert_eq!(d(b"\x7F"), vec![BAD_INPUT]);
+        assert!(check_utf7imap(b"&ZeVnLIqe-x&-"));
+        assert!(!check_utf7imap(b"&ZeVnLIqe"));
+        assert!(!check_utf7imap(b"&AGE-"));
+        assert!(!check_utf7imap(b"&"));
+    }
+
+    #[test]
+    fn encode_cases() {
+        let e = |w: &[u32]| encode_all(w, &ENC_UTF7IMAP, 0x3F, ErrorMode::Char);
+        assert_eq!(e(&[0x26, 0x41]), b"&-A");
+        assert_eq!(e(&[0x65E5, 0x672C, 0x8A9E]), b"&ZeVnLIqe-");
+        assert_eq!(e(&[0x0]), b"&AAA-");
+        assert_eq!(e(&[0x1234_5678]), b"?");
+    }
+
+    #[test]
+    fn legacy_filters_agree_with_fast_path_on_valid_text() {
+        for seed in 1..60 {
+            let cps = random_cps(seed, (seed as usize * 7) % 90);
+            let encoded = encode_all(&cps, &ENC_UTF7IMAP, 0x3F, ErrorMode::Char);
+            assert_eq!(
+                legacy_encode(&VTBL_WCHAR_UTF7IMAP, &cps),
+                encoded,
+                "seed {seed}"
+            );
+            assert_eq!(
+                legacy_decode(&VTBL_UTF7IMAP_WCHAR, &encoded),
+                cps,
+                "seed {seed}"
+            );
+            assert!(check_utf7imap(&encoded));
+        }
+    }
+
+    #[test]
+    fn legacy_differences() {
+        // The legacy encoder writes NUL directly; the fast path Base64-encodes it.
+        assert_eq!(legacy_encode(&VTBL_WCHAR_UTF7IMAP, &[0, 0x41]), b"\x00A");
+        assert_eq!(
+            legacy_decode(&VTBL_UTF7IMAP_WCHAR, b"&ZeV"),
+            vec![0x65E5, BAD_INPUT]
+        );
+        assert_eq!(
+            legacy_decode(&VTBL_UTF7IMAP_WCHAR, b"&AGE-"),
+            vec![BAD_INPUT]
+        );
+    }
+}

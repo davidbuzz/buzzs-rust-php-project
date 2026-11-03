@@ -783,3 +783,138 @@ pub fn filt_wchar_utf7_flush(filter: &mut Filter, out: &mut dyn Sink) {
     legacy_flush_fragment(BASE64_TABLE, filter, out);
     out.flush();
 }
+
+#[cfg(test)]
+pub(crate) mod tests {
+    use super::*;
+    use crate::convert::{decode_all, encode_all, ErrorMode};
+    use crate::legacy::ByteSink;
+
+    /// Collects the raw `i32` values a filter emits.
+    #[derive(Default)]
+    pub(crate) struct IntSink(pub(crate) Vec<i32>);
+    impl Sink for IntSink {
+        fn put(&mut self, c: i32) {
+            self.0.push(c);
+        }
+    }
+
+    /// Deterministic pseudo-random valid code points (xorshift).
+    pub(crate) fn random_cps(seed: u32, n: usize) -> Vec<u32> {
+        let mut x = seed | 1;
+        (0..n)
+            .map(|_| {
+                x ^= x << 13;
+                x ^= x >> 17;
+                x ^= x << 5;
+                let cp = match x % 4 {
+                    0 => x % 0x80,
+                    1 => b" -+&/,.?!A\t"[(x as usize >> 3) % 11].into(),
+                    2 => 0x80 + x % 0xD780,
+                    _ => 0x1_0000 + x % 0x10_0000,
+                };
+                if cp == 0 {
+                    1
+                } else {
+                    cp
+                }
+            })
+            .collect()
+    }
+
+    pub(crate) fn legacy_decode(vtbl: &Vtbl, input: &[u8]) -> Vec<u32> {
+        let mut f = Filter::new(vtbl);
+        let mut sink = IntSink::default();
+        for &b in input {
+            f.feed(i32::from(b), &mut sink);
+        }
+        f.flush(&mut sink);
+        #[allow(clippy::cast_sign_loss)]
+        sink.0.into_iter().map(|c| c as u32).collect()
+    }
+
+    #[allow(clippy::cast_possible_wrap)]
+    pub(crate) fn legacy_encode(vtbl: &Vtbl, input: &[u32]) -> Vec<u8> {
+        let mut f = Filter::new(vtbl);
+        let mut sink = ByteSink::default();
+        for &w in input {
+            f.feed(w as i32, &mut sink);
+        }
+        f.flush(&mut sink);
+        sink.0
+    }
+
+    #[test]
+    fn decode_phpt_cases() {
+        // utf_encodings.phpt / gh10192_utf7.phpt
+        let d = |s: &[u8]| decode_all(s, &ENC_UTF7);
+        assert_eq!(d(b"+-"), vec![0x2B]);
+        assert_eq!(d(b"+AGE-"), vec![0x61]);
+        assert_eq!(d(b"+2D3eAA-"), vec![0x1F600]);
+        assert_eq!(d(b"+l"), vec![BAD_INPUT]);
+        assert_eq!(d(b"+A"), vec![BAD_INPUT]);
+        assert_eq!(d(b"+\x80"), vec![BAD_INPUT]);
+        assert_eq!(d(b"\xFF"), vec![BAD_INPUT]);
+        assert_eq!(d(b"+RR8I"), vec![0x451F, BAD_INPUT]);
+        assert_eq!(d(b"a+"), vec![0x61]);
+        assert!(check_utf7(b"+AGE-a+-"));
+        assert!(!check_utf7(b"+AGEA-"));
+        assert!(!check_utf7(b"+2D0-"));
+        assert!(check_utf7(b"+"));
+    }
+
+    #[test]
+    fn encode_cases() {
+        let e = |w: &[u32]| encode_all(w, &ENC_UTF7, 0x3F, ErrorMode::Char);
+        assert_eq!(e(&[0x25, 0x41]), b"+ACU-A");
+        assert_eq!(e(&[0x25, 0x25, 0x41]), b"+ACUAJQ-A");
+        assert_eq!(e(&[0x1F600, 0x20]), b"+2D3eAA ");
+        assert_eq!(e(&[0x1234_5678]), b"?");
+        let e = |w: &[u32]| encode_all(w, &ENC_UTF7, 0x25, ErrorMode::Char);
+        assert_eq!(e(&[0x1234_5678]), b"+ACU-");
+    }
+
+    #[test]
+    fn legacy_filters_agree_with_fast_path_on_valid_text() {
+        for seed in 1..60 {
+            let cps = random_cps(seed, (seed as usize * 7) % 90);
+            let encoded = encode_all(&cps, &ENC_UTF7, 0x3F, ErrorMode::Char);
+            assert_eq!(
+                legacy_encode(&VTBL_WCHAR_UTF7, &cps),
+                encoded,
+                "seed {seed}"
+            );
+            assert_eq!(
+                legacy_decode(&VTBL_UTF7_WCHAR, &encoded),
+                cps,
+                "seed {seed}"
+            );
+            assert!(check_utf7(&encoded));
+        }
+    }
+
+    #[test]
+    fn legacy_decoder_errors() {
+        // Unlike the fast path, the legacy decoder accepts a section ending
+        // with zero padding bits even if a whole extra Base64 digit is present.
+        assert_eq!(
+            legacy_decode(&VTBL_UTF7_WCHAR, b"+AGEA-x"),
+            vec![0x61, 0x78]
+        );
+        assert_eq!(
+            decode_all(b"+AGEA-x", &ENC_UTF7),
+            vec![0x61, BAD_INPUT, 0x78]
+        );
+        assert_eq!(
+            legacy_decode(&VTBL_UTF7_WCHAR, b"+AGEB-x"),
+            vec![0x61, BAD_INPUT, 0x78]
+        );
+        assert_eq!(legacy_decode(&VTBL_UTF7_WCHAR, b"+2D0-"), vec![BAD_INPUT]);
+        assert_eq!(legacy_decode(&VTBL_UTF7_WCHAR, b"+2D0"), vec![BAD_INPUT]);
+        assert_eq!(
+            legacy_decode(&VTBL_UTF7_WCHAR, b"+-\x80"),
+            vec![0x2B, BAD_INPUT]
+        );
+        assert_eq!(legacy_encode(&VTBL_WCHAR_UTF7, &[0x11_0000, 0x41]), b"?A");
+    }
+}
