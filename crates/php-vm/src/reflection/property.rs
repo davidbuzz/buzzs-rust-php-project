@@ -32,7 +32,7 @@ pub(crate) fn php_flags(p: &PropMeta) -> i64 {
         _ => 0,
     };
     if set == 0 {
-        if vis == flags::PUBLIC && f & flags::READONLY != 0 {
+        if vis == flags::PUBLIC && f & flags::READONLY != 0 && p.internal {
             r |= super::acc::PROTECTED_SET;
         }
     } else if set_vis != vis {

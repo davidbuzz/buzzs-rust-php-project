@@ -39,6 +39,8 @@ pub(crate) struct PropMeta {
     pub is_static: bool,
     /// The instance property info.
     pub info: Option<Rc<PropInfo>>,
+    /// Declared by an internal class (no compile-time flag normalization).
+    pub internal: bool,
 }
 
 impl PropMeta {
@@ -54,6 +56,7 @@ impl PropMeta {
             hooks: pi.hooks.clone(),
             is_static: false,
             info: Some(pi.clone()),
+            internal: false,
         }
     }
 
@@ -61,6 +64,31 @@ impl PropMeta {
     pub fn visibility(&self) -> u32 {
         self.flags & flags::VISIBILITY
     }
+}
+
+/// The hooks of a property including those inherited from parent classes
+/// (`zend_property_info.hooks` after inheritance).
+fn merged_hooks(c: &Rc<Class>, pi: &PropInfo) -> Option<Rc<PropHooks>> {
+    let own = pi.hooks.clone()?;
+    if own.get.is_some() && own.set.is_some() {
+        return Some(own);
+    }
+    let mut h = (*own).clone();
+    let mut p = c.parent.clone();
+    while let Some(pc) = p {
+        if let Some(ph) = pc.prop_map.get(&pi.name).and_then(|x| x.hooks.clone()) {
+            if h.get.is_none() && ph.get.is_some() {
+                h.get = ph.get.clone();
+                h.final_get = ph.final_get;
+            }
+            if h.set.is_none() && ph.set.is_some() {
+                h.set = ph.set.clone();
+                h.final_set = ph.final_set;
+            }
+        }
+        p = pc.parent.clone();
+    }
+    Some(Rc::new(h))
 }
 
 /// Finds the declaration of a static property (for its attributes).
@@ -84,9 +112,10 @@ fn static_decl_attrs(vm: &Vm, class: &ZStr, name: &ZStr) -> Vec<AttributeInfo> {
 /// restricted to entries visible in `c` (no inherited private shadows).
 pub(crate) fn find_prop(vm: &Vm, c: &Rc<Class>, name: &[u8]) -> Option<PropMeta> {
     let key = ZStr::from(name);
+    let internal = |pi: &PropInfo| vm.find_class(pi.class.as_bytes()).is_some_and(|d| d.flags & crate::class::cflags::INTERNAL != 0 || d.is_enum());
     if let Some(pi) = c.prop_map.get(&key) {
         if pi.visibility() != flags::PRIVATE || pi.class.eq_ignore_ascii_case(c.name.as_bytes()) {
-            return Some(PropMeta::from_info(pi));
+            return Some(PropMeta { internal: internal(pi), hooks: merged_hooks(c, pi), ..PropMeta::from_info(pi) });
         }
     }
     if let Some(sp) = c.find_static(name) {
@@ -102,6 +131,7 @@ pub(crate) fn find_prop(vm: &Vm, c: &Rc<Class>, name: &[u8]) -> Option<PropMeta>
                 hooks: None,
                 is_static: true,
                 info: None,
+                internal: c.flags & crate::class::cflags::INTERNAL != 0,
             });
         }
     }

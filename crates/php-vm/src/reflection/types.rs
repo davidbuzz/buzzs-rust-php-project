@@ -38,7 +38,7 @@ impl ZType {
     /// Converts the VM's type declaration.
     pub fn from_decl(t: &TypeDecl) -> Self {
         let mut z = ZType { mask: t.mask & !mask::ITERABLE, names: Vec::new(), intersection: false, iterable: false };
-        if t.pure_intersection {
+        if t.pure_intersection && t.mask & mask::NULL == 0 {
             if let Some(g) = t.intersections.first() {
                 z.names = g.iter().map(|n| TypeElem::Class(n.clone())).collect();
             }

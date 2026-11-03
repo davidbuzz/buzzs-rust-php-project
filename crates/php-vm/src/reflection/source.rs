@@ -154,8 +154,27 @@ impl php_parser::visit::Visitor for ParamCollector {
     }
     fn visit_class(&mut self, c: &ClassDecl) {
         for m in &c.members {
-            if let ClassMemberKind::Method(md) = &m.kind {
-                self.check(md.span.line, md.end_line, &md.params);
+            match &m.kind {
+                ClassMemberKind::Method(md) => {
+                    self.check(md.span.line, md.end_line, &md.params);
+                    for p in &md.params {
+                        for h in p.hooks.iter().flatten() {
+                            if let Some(ps) = &h.params {
+                                self.check(h.span.line, h.end_line, ps);
+                            }
+                        }
+                    }
+                }
+                ClassMemberKind::Property(g) => {
+                    for p in &g.props {
+                        for h in p.hooks.iter().flatten() {
+                            if let Some(ps) = &h.params {
+                                self.check(h.span.line, h.end_line, ps);
+                            }
+                        }
+                    }
+                }
+                _ => {}
             }
         }
         php_parser::visit::walk_class(self, c);
