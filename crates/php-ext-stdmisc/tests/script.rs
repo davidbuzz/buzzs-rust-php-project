@@ -134,3 +134,11 @@ fn getopt_without_argv_options() {
     let out = run(r#"var_dump(getopt("a:", ["long"], $rest), $rest);"#);
     assert!(out.ends_with("int(1)\n"), "{out}");
 }
+
+#[test]
+fn proc_open_validates_command() {
+    // Only the `standard` misc extension is loaded here, so no stream
+    // functions are available; the argument checks still run.
+    let out = run(r#"try { proc_open([], [], $p); } catch (ValueError $e) { echo $e->getMessage(); }"#);
+    assert_eq!(out, "proc_open(): Argument #1 ($command) must not be empty");
+}

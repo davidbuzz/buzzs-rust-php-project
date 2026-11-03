@@ -1,18 +1,20 @@
 //! The "misc" of `ext/standard` for the phprust VM: binds the
 //! `php-stdmisc` library through the `php_vm::ext` extension API.
 //!
-//! * [`crypt`]: `crypt()` and `password_*`.
-//! * [`exec`]: `escapeshell*`, `exec`/`system`/`passthru`/`shell_exec`,
+//! * [`crypt`] — `crypt()` and `password_*`.
+//! * [`exec`] — `escapeshell*`, `exec`/`system`/`passthru`/`shell_exec`,
 //!   `proc_nice`.
-//! * [`net`]: address conversion, host/service/protocol lookups, DNS,
+//! * [`proc`] — `proc_open`/`proc_close`/`proc_get_status`/`proc_terminate`
+//!   (pipes as `php-ext-streams` stream resources).
+//! * [`net`] — address conversion, host/service/protocol lookups, DNS,
 //!   `net_get_interfaces`, syslog.
-//! * [`env`]: environment/process information, time and sleep functions,
+//! * [`env`] — environment/process information, time and sleep functions,
 //!   connection state, `getopt`, `get_cfg_var`.
-//! * [`text`]: highlighting, `php_strip_whitespace`, `http_build_query`,
+//! * [`text`] — highlighting, `php_strip_whitespace`, `http_build_query`,
 //!   `parse_str`, locale functions.
-//! * [`ini`]: `ini_get_all`, `parse_ini_string`/`parse_ini_file`,
+//! * [`ini`] — `ini_get_all`, `parse_ini_string`/`parse_ini_file`,
 //!   `get_included_files`.
-//! * [`misc`]: `mail`, `error_log`, `assert_options`, `phpinfo`,
+//! * [`misc`] — `mail`, `error_log`, `assert_options`, `phpinfo`,
 //!   `phpcredits`.
 //!
 //! Per-request state (locale, `putenv` changes, syslog, assert callback)
@@ -26,6 +28,7 @@ mod exec;
 mod ini;
 mod misc;
 mod net;
+mod proc;
 mod text;
 
 use php_vm::ext::{Extension, ModuleBuilder};
@@ -43,6 +46,7 @@ impl Extension for StdMisc {
     fn register(&self, m: &mut ModuleBuilder<'_>) {
         crypt::register(m);
         exec::register(m);
+        proc::register(m);
         net::register(m);
         env::register(m);
         text::register(m);
