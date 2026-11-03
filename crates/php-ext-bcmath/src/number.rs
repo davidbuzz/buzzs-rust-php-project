@@ -311,7 +311,14 @@ fn write_property(vm: &mut Vm, _o: &Obj, name: &ZStr, _v: &Value) -> VmResult<bo
             "Error",
             &BcError::readonly_modification(&name.to_string_lossy()).message,
         )),
-        _ => Ok(false),
+        // Readonly classes forbid dynamic properties.
+        _ => Err(vm.throw(
+            "Error",
+            &format!(
+                "Cannot create dynamic property {CLASS}::${}",
+                name.to_string_lossy()
+            ),
+        )),
     }
 }
 
@@ -325,17 +332,22 @@ fn unset_property(vm: &mut Vm, _o: &Obj, name: &ZStr) -> VmResult<bool> {
     }
 }
 
+/// `isset()` (`check_empty == false`: whether it is set) and `empty()`
+/// (`check_empty == true`: the VM expects whether it is *empty*, the
+/// negation of C's `ZEND_PROPERTY_NOT_EMPTY` result).
 fn has_property(_vm: &mut Vm, o: &Obj, name: &ZStr, check_empty: bool) -> VmResult<Option<bool>> {
     let name = name.to_string_lossy();
-    Ok(Some(match number_of(o) {
-        Some(n) => n.has_property(&name, check_empty).unwrap_or(false),
-        None => false,
-    }))
+    let not_empty = number_of(o)
+        .and_then(|n| n.has_property(&name, check_empty))
+        .unwrap_or(false);
+    Ok(Some(if check_empty { !not_empty } else { not_empty }))
 }
 
-fn cast(_vm: &mut Vm, o: &Obj, target: CastTarget) -> VmResult<Option<Value>> {
+fn cast(vm: &mut Vm, o: &Obj, target: CastTarget) -> VmResult<Option<Value>> {
     Ok(match target {
         CastTarget::Bool => Some(Value::Bool(number_of(o).is_some_and(|n| n.is_truthy()))),
+        // `(array)` uses `get_properties_for(ZEND_PROP_PURPOSE_ARRAY_CAST)`.
+        CastTarget::Array => properties_for(vm, o, PropertyPurpose::ArrayCast)?.map(Value::Array),
         _ => None,
     })
 }
