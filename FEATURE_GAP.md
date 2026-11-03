@@ -39,8 +39,8 @@ Keep rows when they reach 100%; they become the completion record. Add rows as g
 | Namespaces and `use` | 82% | high | Name resolution, group use, function and constant fallback. Ref: `Zend/tests/namespaces`. |
 | Autoloading | 50% | high | `spl_autoload_register`, class loading order. Ref: `Zend/zend_autoload.c`. |
 | Enums | 68% | med | Pure and backed enums, `cases()`, `from`/`tryFrom`, interface implementation. Ref: `Zend/zend_enum.c`, `Zend/tests/enum`. |
-| Generators | 60% | med | `yield`, `yield from`, send/throw, generators as iterators. Ref: `Zend/zend_generators.c`, `Zend/tests/generators`. |
-| Fibers | 34% | med | `Fiber` start/suspend/resume, needs a separate stack or a CPS design. Ref: `Zend/zend_fibers.c`, `Zend/tests/fibers`. |
+| Generators | 78% | med | `yield`, `yield from` delegation tree (shared delegates, ClosedGeneratorException), send/throw/getReturn priming, finally on destruction (force-close). Measured 149/190 in Zend/tests/generators{,/errors,/finally}; rest: cycle GC (gh9750/gh15330), memory_limit, foreach-by-ref over IteratorAggregate (iter.rs), yield-by-ref notices (compiler). Ref: `Zend/zend_generators.c`. |
+| Fibers | 66% | med | Native stacks (mmap + x86_64 context switch, `fiber/stack.rs`), suspend from anywhere, graceful destroy of suspended fibers, per-fiber error_reporting. Measured 79/120 in Zend/tests/fibers; rest: cycle GC (destructors_*, gh9735), memory_limit, ticks. Ref: `Zend/zend_fibers.c`. |
 | Attributes | 22% | med | Parsing, `#[Attribute]` validation, reflection access, built-ins (`Override`, `Deprecated`, `SensitiveParameter`…). Ref: `Zend/zend_attributes.c`. |
 | `match`, nullsafe, spread, list/destructuring | 77% | high | Modern expression syntax. Ref: `Zend/tests/match`, `nullsafe_operator`, `list`, `array_unpack`. |
 | Property hooks and asymmetric visibility | 24% | med | PHP 8.4 `get`/`set` hooks, `private(set)`. Ref: `Zend/tests/property_hooks`, `asymmetric_visibility`. |
