@@ -105,7 +105,7 @@ pub fn param_type(x: i64) -> i64 {
 
 /// The integer class constants of `PDO`, in stub declaration order
 /// (`ReflectionClass::getConstants()` order); `PDO::ERR_NONE` (a string)
-/// follows `NULL_TO_STRING`, see [`PDO_CLASS_CONSTANTS_ORDERED`].
+/// follows `NULL_TO_STRING`, see [`pdo_class_constants`].
 pub const PDO_INT_CONSTANTS: &[(&str, i64)] = &[
     ("PARAM_NULL", PARAM_NULL),
     ("PARAM_BOOL", PARAM_BOOL),
