@@ -128,3 +128,7 @@
 ["write", "s.zip", "this is not a zip archive"]
 ["sstat", -1]
 ["sread", -1]
+["echo", "gh17319: entry outliving its directory"]
+["zip_open", "{FIX}/test_procedural.zip", "g"]
+["zip_read", "g", "g"]
+["zipfn", "zip_entry_name", "var:g"]

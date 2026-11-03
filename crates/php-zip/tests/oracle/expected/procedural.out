@@ -1,0 +1,105 @@
+# zip_open / zip_read / zip_entry_*
+[Deprecated] Function zip_open() is deprecated since 8.0, use ZipArchive::open() instead
+zip_open = resource
+[Deprecated] Function zip_read() is deprecated since 8.0, use ZipArchive::statIndex() instead
+zip_read = resource
+[Deprecated] Function zip_entry_name() is deprecated since 8.0, use ZipArchive::statIndex() instead
+zip_entry_name = "foo"
+[Deprecated] Function zip_entry_filesize() is deprecated since 8.0, use ZipArchive::statIndex() instead
+zip_entry_filesize = 5
+[Deprecated] Function zip_entry_compressedsize() is deprecated since 8.0, use ZipArchive::statIndex() instead
+zip_entry_compressedsize = 5
+[Deprecated] Function zip_entry_compressionmethod() is deprecated since 8.0, use ZipArchive::statIndex() instead
+zip_entry_compressionmethod = "stored"
+[Deprecated] Function zip_entry_open() is deprecated since 8.0
+zip_entry_open = true
+[Deprecated] Function zip_entry_read() is deprecated since 8.0, use ZipArchive::getFromIndex() instead
+zip_entry_read = "fo"
+[Deprecated] Function zip_entry_read() is deprecated since 8.0, use ZipArchive::getFromIndex() instead
+zip_entry_read = hex:6f0a0a
+[Deprecated] Function zip_entry_read() is deprecated since 8.0, use ZipArchive::getFromIndex() instead
+zip_entry_read = ""
+[Deprecated] Function zip_entry_close() is deprecated since 8.0
+zip_entry_close = true
+[Deprecated] Function zip_entry_close() is deprecated since 8.0
+! TypeError: zip_entry_close(): supplied resource is not a valid Zip Entry resource
+[Deprecated] Function zip_read() is deprecated since 8.0, use ZipArchive::statIndex() instead
+zip_read = resource
+[Deprecated] Function zip_entry_name() is deprecated since 8.0, use ZipArchive::statIndex() instead
+zip_entry_name = "bar"
+[Deprecated] Function zip_entry_read() is deprecated since 8.0, use ZipArchive::getFromIndex() instead
+zip_entry_read = hex:6261720a
+[Deprecated] Function zip_read() is deprecated since 8.0, use ZipArchive::statIndex() instead
+zip_read = resource
+[Deprecated] Function zip_entry_name() is deprecated since 8.0, use ZipArchive::statIndex() instead
+zip_entry_name = "foobar/"
+[Deprecated] Function zip_entry_compressionmethod() is deprecated since 8.0, use ZipArchive::statIndex() instead
+zip_entry_compressionmethod = "stored"
+[Deprecated] Function zip_read() is deprecated since 8.0, use ZipArchive::statIndex() instead
+zip_read = resource
+[Deprecated] Function zip_entry_name() is deprecated since 8.0, use ZipArchive::statIndex() instead
+zip_entry_name = "foobar/baz"
+[Deprecated] Function zip_entry_filesize() is deprecated since 8.0, use ZipArchive::statIndex() instead
+zip_entry_filesize = 27
+[Deprecated] Function zip_entry_compressedsize() is deprecated since 8.0, use ZipArchive::statIndex() instead
+zip_entry_compressedsize = 24
+[Deprecated] Function zip_entry_compressionmethod() is deprecated since 8.0, use ZipArchive::statIndex() instead
+zip_entry_compressionmethod = "deflated"
+[Deprecated] Function zip_entry_read() is deprecated since 8.0, use ZipArchive::getFromIndex() instead
+zip_entry_read = hex:626c61626c61206c6162657220726162616265722073c3bc6c7a0a
+[Deprecated] Function zip_read() is deprecated since 8.0, use ZipArchive::statIndex() instead
+zip_read = false
+[Deprecated] Function zip_read() is deprecated since 8.0, use ZipArchive::statIndex() instead
+zip_read = false
+[Deprecated] Function zip_close() is deprecated since 8.0, use ZipArchive::close() instead
+zip_close = null
+[Deprecated] Function zip_close() is deprecated since 8.0, use ZipArchive::close() instead
+! TypeError: zip_close(): supplied resource is not a valid Zip Directory resource
+[Deprecated] Function zip_open() is deprecated since 8.0, use ZipArchive::open() instead
+zip_open = resource
+[Deprecated] Function zip_read() is deprecated since 8.0, use ZipArchive::statIndex() instead
+zip_read = resource
+[Deprecated] Function zip_entry_filesize() is deprecated since 8.0, use ZipArchive::statIndex() instead
+zip_entry_filesize = 695
+[Deprecated] Function zip_entry_read() is deprecated since 8.0, use ZipArchive::getFromIndex() instead
+zip_entry_read = hex:ffd8ffe000104a46494600010100000100010000fffe003e43524541544f523a2067642d6a7065672076312e3020287573696e6720494a47204a50454720763632292c2064656661756c74207175616c6974790affdb004300080606070605080707070909080a0c140d0c0b0b0c1912130f141d1a1f1e1d1a1c1c20242e2720222c231c1c2837292c30313434341f27393d38323c2e333432ffdb0043010909090c0b0c180d0d1832211c213232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232ffc00011080001000103012200021101031101ffc4001f0000010501010101010100000000000000000102030405060708090a0bffc400b5100002010303020403050504040000017d01020300041105122131410613516107227114328191a1082342b1c11552d1f02433627282090a161718191a25262728292a3435363738393a434445464748494a535455565758595a636465666768696a737475767778797a838485868788898a92939495969798999aa2a3a4a5a6a7a8a9aab2b3b4b5b6b7b8b9bac2c3c4c5c6c7c8c9cad2d3d4d5d6d7d8d9dae1e2e3e4e5e6e7e8e9eaf1f2f3f4f5f6f7f8f9faffc4001f0100030101010101010101010000000000000102030405060708090a0bffc400b51100020102040403040705040400010277000102031104052131061241510761711322328108144291a1b1c109233352f0156272d10a162434e125f11718191a262728292a35363738393a434445464748494a535455565758595a636465666768696a737475767778797a82838485868788898a92939495969798999aa2a3a4a5a6a7a8a9aab2b3b4b5b6b7b8b9bac2c3c4c5c6c7c8c9cad2d3d4d5d6d7d8d9dae2e3e4e5e6e7e8e9eaf2f3f4f5f6f7f8f9faffda000c03010002110311003f00f9fe8a28a00fffd9
+[Deprecated] Function zip_open() is deprecated since 8.0, use ZipArchive::open() instead
+zip_open = resource
+[Deprecated] Function zip_read() is deprecated since 8.0, use ZipArchive::statIndex() instead
+zip_read = false
+[Deprecated] Function zip_read() is deprecated since 8.0, use ZipArchive::statIndex() instead
+zip_read = false
+[Deprecated] Function zip_open() is deprecated since 8.0, use ZipArchive::open() instead
+zip_open = resource
+[Deprecated] Function zip_read() is deprecated since 8.0, use ZipArchive::statIndex() instead
+zip_read = resource
+[Deprecated] Function zip_entry_compressionmethod() is deprecated since 8.0, use ZipArchive::statIndex() instead
+zip_entry_compressionmethod = "stored"
+[Deprecated] Function zip_read() is deprecated since 8.0, use ZipArchive::statIndex() instead
+zip_read = resource
+[Deprecated] Function zip_entry_compressionmethod() is deprecated since 8.0, use ZipArchive::statIndex() instead
+zip_entry_compressionmethod = "stored"
+[Deprecated] Function zip_entry_name() is deprecated since 8.0, use ZipArchive::statIndex() instead
+zip_entry_name = "foobar/"
+[Deprecated] Function zip_entry_read() is deprecated since 8.0, use ZipArchive::getFromIndex() instead
+zip_entry_read = ""
+[Deprecated] Function zip_read() is deprecated since 8.0, use ZipArchive::statIndex() instead
+zip_read = resource
+[Deprecated] Function zip_entry_compressionmethod() is deprecated since 8.0, use ZipArchive::statIndex() instead
+zip_entry_compressionmethod = "deflated"
+[Deprecated] Function zip_close() is deprecated since 8.0, use ZipArchive::close() instead
+zip_close = null
+[Deprecated] Function zip_entry_read() is deprecated since 8.0, use ZipArchive::getFromIndex() instead
+zip_entry_read = ""
+[Deprecated] Function zip_read() is deprecated since 8.0, use ZipArchive::statIndex() instead
+! TypeError: zip_read(): supplied resource is not a valid Zip Directory resource
+# errors
+[Deprecated] Function zip_open() is deprecated since 8.0, use ZipArchive::open() instead
+! ValueError: zip_open(): Argument #1 ($filename) must not be empty
+[Deprecated] Function zip_open() is deprecated since 8.0, use ZipArchive::open() instead
+zip_open = 9
+[Deprecated] Function zip_open() is deprecated since 8.0, use ZipArchive::open() instead
+zip_open = 19
+[Deprecated] Function zip_open() is deprecated since 8.0, use ZipArchive::open() instead
+zip_open = 19
+END

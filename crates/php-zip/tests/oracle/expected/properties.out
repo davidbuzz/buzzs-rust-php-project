@@ -1,0 +1,35 @@
+# virtual properties
+z props = ["lastId"=>-1,"status"=>0,"statusSys"=>0,"numFiles"=>0,"filename"=>"","comment"=>""]
+! Error: Cannot write read-only property ZipArchive::$lastId
+! Error: Cannot write read-only property ZipArchive::$status
+! Error: Cannot write read-only property ZipArchive::$statusSys
+! Error: Cannot write read-only property ZipArchive::$numFiles
+! Error: Cannot write read-only property ZipArchive::$filename
+! Error: Cannot write read-only property ZipArchive::$comment
+[Deprecated] Creation of dynamic property ZipArchive::$custom is deprecated
+set ok
+z props = ["lastId"=>-1,"status"=>0,"statusSys"=>0,"numFiles"=>0,"filename"=>"","comment"=>""]
+z->open = true
+z props = ["lastId"=>-1,"status"=>0,"statusSys"=>0,"numFiles"=>4,"filename"=>"{DIR}/c.zip","comment"=>"Zip archive comment"]
+z->addEmptyDir = true
+z props = ["lastId"=>4,"status"=>0,"statusSys"=>0,"numFiles"=>5,"filename"=>"{DIR}/c.zip","comment"=>"Zip archive comment"]
+z->setArchiveComment = true
+z->comment = "Zip archive comment"
+z->deleteIndex = false
+z props = ["lastId"=>4,"status"=>18,"statusSys"=>0,"numFiles"=>5,"filename"=>"{DIR}/c.zip","comment"=>"Zip archive comment"]
+z->close = true
+z props = ["lastId"=>4,"status"=>0,"statusSys"=>0,"numFiles"=>0,"filename"=>"","comment"=>""]
+z->open = true
+z->comment = ""
+z->numFiles = 5
+z->close = true
+z->open = 9
+z props = ["lastId"=>4,"status"=>0,"statusSys"=>0,"numFiles"=>0,"filename"=>"","comment"=>""]
+z->getStatusString = "No error"
+z->open = 28
+z props = ["lastId"=>4,"status"=>0,"statusSys"=>0,"numFiles"=>0,"filename"=>"","comment"=>""]
+z->getStatusString = "No error"
+z->open = 10
+z props = ["lastId"=>4,"status"=>0,"statusSys"=>0,"numFiles"=>0,"filename"=>"","comment"=>""]
+z->getStatusString = "No error"
+END

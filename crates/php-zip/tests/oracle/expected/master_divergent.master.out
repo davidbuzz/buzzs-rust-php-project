@@ -127,4 +127,11 @@ fopen = stream #1
 fstat #1 = size=5 mode=100000 mtime=NOW nlink=1 ino=-1
 fstat #1 = false
 read #1 = "entry" eof=true
+# gh17319: entry outliving its directory
+[Deprecated] Function zip_open() is deprecated since 8.0, use ZipArchive::open() instead
+zip_open = resource
+[Deprecated] Function zip_read() is deprecated since 8.0, use ZipArchive::statIndex() instead
+zip_read = resource
+[Deprecated] Function zip_entry_name() is deprecated since 8.0, use ZipArchive::statIndex() instead
+zip_entry_name = false
 END

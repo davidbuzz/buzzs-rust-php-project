@@ -684,6 +684,7 @@ pub fn run(script: &str, dir: &Path, fix: &Path) -> String {
                 if ZipArchive::is_virtual_property(sname(1).as_bytes()) {
                     emit(&st, &err_line(&php_zip::error::readonly_property("ZipArchive", &sname(1))));
                 } else {
+                    emit(&st, &format!("[Deprecated] Creation of dynamic property ZipArchive::${} is deprecated", sname(1)));
                     emit(&st, "set ok");
                 }
             }
@@ -903,10 +904,18 @@ pub fn run(script: &str, dir: &Path, fix: &Path) -> String {
             }
             "zip_read" => {
                 deprecation(&st, "zip_read");
+                let closed = {
+                    let s = st.borrow();
+                    matches!(s.vars.iter().find(|(n, _)| *n == sname(0)), Some((_, Var::Dir(d))) if d.is_closed())
+                };
+                if closed {
+                    emit(&st, "! TypeError: zip_read(): supplied resource is not a valid Zip Directory resource");
+                    continue;
+                }
                 let entry = {
                     let s = st.borrow();
                     match s.vars.iter().find(|(n, _)| *n == sname(0)) {
-                        Some((_, Var::Dir(d))) if !d.is_closed() => d.read(),
+                        Some((_, Var::Dir(d))) => d.read(),
                         _ => None,
                     }
                 };
