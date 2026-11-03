@@ -30,9 +30,10 @@ use std::ptr;
 use std::rc::Rc;
 
 pub(crate) use sys::{
-    SQLITE_BLOB, SQLITE_BUSY, SQLITE_DONE, SQLITE_ERROR, SQLITE_FLOAT, SQLITE_INTEGER,
-    SQLITE_LOCKED, SQLITE_MISUSE, SQLITE_NOMEM, SQLITE_NULL, SQLITE_OK, SQLITE_ROW, SQLITE_TEXT,
-    SQLITE_UTF8,
+    SQLITE_BLOB, SQLITE_BUSY, SQLITE_CONSTRAINT, SQLITE_DONE, SQLITE_ERROR, SQLITE_FLOAT,
+    SQLITE_INTEGER, SQLITE_INTERRUPT, SQLITE_LOCKED, SQLITE_MISUSE, SQLITE_NOLFS, SQLITE_NOMEM,
+    SQLITE_NOTFOUND, SQLITE_NULL, SQLITE_OK, SQLITE_OPEN_URI, SQLITE_ROW, SQLITE_TEXT,
+    SQLITE_TOOBIG, SQLITE_UTF8,
 };
 
 /// `SQLITE_ATTACH` authorizer action code.
@@ -320,12 +321,6 @@ impl Connection {
         }))
     }
 
-    /// Whether the handle is still open.
-    #[allow(dead_code)] // used by the PDO driver
-    pub fn is_open(&self) -> bool {
-        !self.db.get().is_null()
-    }
-
     fn raw(&self) -> *mut sys::sqlite3 {
         self.db.get()
     }
@@ -468,7 +463,6 @@ impl Connection {
     }
 
     /// `sqlite3_get_autocommit()`.
-    #[allow(dead_code)] // used by the PDO driver
     pub fn get_autocommit(&self) -> bool {
         if self.raw().is_null() {
             return true;
@@ -769,12 +763,6 @@ impl RawStatement {
         self.raw().is_null()
     }
 
-    /// The connection this statement belongs to.
-    #[allow(dead_code)] // used by the PDO driver
-    pub fn connection(&self) -> &Rc<Connection> {
-        &self.conn
-    }
-
     /// `sqlite3_step()`.
     pub fn step(&self) -> i32 {
         let s = self.raw();
@@ -1018,7 +1006,6 @@ impl RawStatement {
     }
 
     /// `sqlite3_column_decltype()`.
-    #[allow(dead_code)] // used by the PDO driver
     pub fn column_decltype(&self, col: i32) -> Option<Vec<u8>> {
         let s = self.raw();
         if s.is_null() {
@@ -1029,7 +1016,6 @@ impl RawStatement {
     }
 
     /// `sqlite3_column_table_name()`.
-    #[allow(dead_code)] // used by the PDO driver
     pub fn column_table_name(&self, col: i32) -> Option<Vec<u8>> {
         let s = self.raw();
         if s.is_null() {

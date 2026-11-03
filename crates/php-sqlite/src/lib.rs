@@ -29,6 +29,8 @@
 
 // FFI code naturally has `argc`/`argv`, `src`/`dst` pairs.
 #![allow(clippy::similar_names)]
+// "SQLite" is a proper noun, not an identifier.
+#![allow(clippy::doc_markdown)]
 
 pub mod blob;
 pub mod constants;
