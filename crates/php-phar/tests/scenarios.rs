@@ -70,7 +70,7 @@ fn tok(t: &str, w: &str) -> Tok {
     match k {
         "s" => Tok::Str(v.as_bytes().to_vec()),
         "x" => Tok::Str(hex(v)),
-        "i" => Tok::Int(v.parse().unwrap()),
+        "i" => Tok::Int(v.parse().unwrap_or(0)),
         "b" => Tok::Bool(v == "1"),
         "p" => Tok::Str(format!("{w}/{v}").into_bytes()),
         "u" => Tok::Str(format!("phar://{w}/{v}").into_bytes()),
@@ -276,10 +276,18 @@ impl Ctx {
             }
             "delMetadata" => V::Bool(p.del_metadata().map_err(e)?),
             "hasMetadata" => V::Bool(p.has_metadata().map_err(e)?),
-            "offsetGet" => V::Obj(format!(
-                "PharFileInfo({})",
-                String::from_utf8_lossy(&p.offset_get(&s(0)).map_err(e)?)
-            )),
+            "offsetGet" => {
+                let path = p.offset_get(&s(0)).map_err(e)?;
+                // the VM instantiates the info class with that path
+                let mut fi = PharFileInfo::new();
+                let mut name = fi.construct(&path).map_err(e)?;
+                fi.release();
+                // SplFileInfo strips trailing slashes from the path name
+                while name.len() > 1 && name.last() == Some(&b'/') {
+                    name.pop();
+                }
+                V::Obj(format!("PharFileInfo({})", String::from_utf8_lossy(&name)))
+            }
             "offsetSet" => {
                 p.offset_set(&s(0), &s(1)).map_err(e)?;
                 V::Null
@@ -584,6 +592,106 @@ impl Ctx {
                 }
                 Ok("ok".into())
             }
+            "mkfile" => {
+                let path = format!("{w}/{}", words[1]);
+                if let Some(parent) = Path::new(&path).parent() {
+                    std::fs::create_dir_all(parent).unwrap();
+                }
+                let content = words.get(2).map_or(Vec::new(), |t| tok(t, &w).bytes());
+                std::fs::write(&path, content).unwrap();
+                Ok("ok".into())
+            }
+            "build" => {
+                let dir = format!("{w}/{}", words[1]);
+                let suffix = words.get(2).map(|r| {
+                    let r = tok(r, &w).bytes();
+                    let r = String::from_utf8_lossy(&r).into_owned();
+                    // only `/\.ext$/` style patterns are supported here
+                    r.trim_start_matches("/\\")
+                        .trim_end_matches("$/")
+                        .to_string()
+                });
+                let filter = |p: &[u8]| suffix.as_ref().is_none_or(|s| p.ends_with(s.as_bytes()));
+                let p = self.obj();
+                match p {
+                    Err(e) => Err(e),
+                    Ok(p) => match p.build_from_directory(dir.as_bytes(), Some(&filter)) {
+                        Ok(mut r) => {
+                            r.sort();
+                            Ok(dump(
+                                &V::Arr(
+                                    r.into_iter().map(|(k, v)| (V::Str(k), V::Str(v))).collect(),
+                                ),
+                                &w,
+                            ))
+                        }
+                        Err(e) => Err(exc(&e)),
+                    },
+                }
+            }
+            "buildi" => {
+                let base = tok(words[1], &w);
+                let items: Vec<(Tok, Tok)> = words[2..]
+                    .iter()
+                    .map(|kv| {
+                        let (k, v) = kv.split_once('=').unwrap();
+                        (tok(k, &w), tok(v, &w))
+                    })
+                    .collect();
+                let p = self.obj();
+                match p {
+                    Err(e) => Err(e),
+                    Ok(p) => {
+                        let r = (|| {
+                            let mut st =
+                                p.build_from_iterator_start(&base.opt().unwrap_or_default())?;
+                            for (k, v) in items {
+                                let key = match k {
+                                    Tok::Str(s) => Some(s),
+                                    _ => None,
+                                };
+                                let item = match v {
+                                    Tok::Str(s) => {
+                                        php_phar::object::BuildItem::Path { value: s, key }
+                                    }
+                                    _ => php_phar::object::BuildItem::Invalid,
+                                };
+                                st.add(item, "ArrayIterator")?;
+                            }
+                            st.finish()
+                        })();
+                        match r {
+                            Ok(r) => Ok(dump(
+                                &V::Arr(
+                                    r.into_iter().map(|(k, v)| (V::Str(k), V::Str(v))).collect(),
+                                ),
+                                &w,
+                            )),
+                            Err(e) => Err(exc(&e)),
+                        }
+                    }
+                }
+            }
+            "fopen" => {
+                let url = tok(words[1], &w).bytes();
+                let mut opened = None;
+                match php_streams::open::open_wrapper(
+                    &url,
+                    words[2],
+                    php_streams::wrapper::REPORT_ERRORS,
+                    &mut opened,
+                    None,
+                ) {
+                    Some(mut f) => {
+                        if let Some(d) = words.get(3) {
+                            let _ = f.write(&tok(d, &w).bytes());
+                        }
+                        f.close();
+                        Ok("ok".into())
+                    }
+                    None => Ok("bool(false)".into()),
+                }
+            }
             "shell" => Ok(dump(
                 &V::Bool(Path::new(&format!("{w}/{}", words[1])).exists()),
                 &w,
@@ -723,14 +831,19 @@ fn scenarios_match_php() {
         let ours = normalize(&run(&name));
         let expected = normalize(&expected);
         if ours != expected {
-            let diff: Vec<String> = expected
-                .lines()
-                .zip(ours.lines().chain(std::iter::repeat("<missing>")))
-                .filter(|(a, b)| a != b)
-                .take(6)
-                .map(|(a, b)| format!("  php:  {a}\n  ours: {b}"))
-                .collect();
-            failures.push(format!("== {name}\n{}", diff.join("\n")));
+            let e: Vec<&str> = expected.lines().collect();
+            let o: Vec<&str> = ours.lines().collect();
+            let first = e
+                .iter()
+                .zip(&o)
+                .position(|(a, b)| a != b)
+                .unwrap_or(e.len().min(o.len()));
+            let from = first.saturating_sub(3);
+            failures.push(format!(
+                "== {name} (line {first})\n--- php\n{}\n--- ours\n{}",
+                e[from..(first + 4).min(e.len())].join("\n"),
+                o[from..(first + 4).min(o.len())].join("\n")
+            ));
         }
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));

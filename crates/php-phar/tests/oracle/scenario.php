@@ -4,6 +4,7 @@
 $lines = file($argv[1], FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
 $W = rtrim($argv[2], '/');
 set_error_handler(function ($no, $msg) use ($W) {
+    if (!(error_reporting() & $no)) return true;
     // strip the "function(args): " prefix the VM adds
     if (preg_match('/^[A-Za-z_:]+\((.*?)\): (.*)$/s', $msg, $m)) {
         $msg = $m[2];
@@ -15,6 +16,7 @@ set_error_handler(function ($no, $msg) use ($W) {
 });
 function tok($t, $W) {
     if ($t === 'n') return null;
+    if (!str_contains($t, ':')) return $t;
     [$k, $v] = explode(':', $t, 2) + [1 => ''];
     switch ($k) {
         case 's': return $v;
@@ -68,6 +70,27 @@ foreach ($lines as $line) {
             case 'fn': echo dump(($w[1])(...$args), $W), "\n"; break;
             case 'release': $p = null; echo "ok\n"; break;
             case 'shell': echo dump(file_exists("$W/{$w[1]}"), $W), "\n"; break;
+            case 'mkfile':
+                @mkdir(dirname("$W/{$w[1]}"), 0777, true);
+                file_put_contents("$W/{$w[1]}", tok($w[2] ?? 's:', $W));
+                echo "ok\n";
+                break;
+            case 'build':
+                $r = isset($w[2]) ? $p->buildFromDirectory("$W/{$w[1]}", tok($w[2], $W)) : $p->buildFromDirectory("$W/{$w[1]}");
+                ksort($r);
+                echo dump($r, $W), "\n";
+                break;
+            case 'buildi':
+                $items = [];
+                foreach (array_slice($w, 2) as $kv) { [$k, $v] = explode('=', $kv, 2); $items[tok($k, $W)] = tok($v, $W); }
+                $base = tok($w[1], $W);
+                $r = $base === null ? $p->buildFromIterator(new ArrayIterator($items)) : $p->buildFromIterator(new ArrayIterator($items), $base);
+                echo dump($r, $W), "\n";
+                break;
+            case 'fopen':
+                $f = fopen(tok($w[1], $W), $w[2]);
+                if ($f) { if (isset($w[3])) fwrite($f, tok($w[3], $W)); fclose($f); echo "ok\n"; } else echo "bool(false)\n";
+                break;
             default: throw new Error("unknown op");
         }
     } catch (Throwable $e) {

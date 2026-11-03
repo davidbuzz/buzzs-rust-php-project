@@ -1,0 +1,69 @@
+> phar p:t.phar.tar
+ok
+> call offsetSet s:a.txt s:hello
+NULL
+> call offsetSet x:6161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161 s:toolong
+EXC PharException: tar-based phar "%W%/t.phar.tar" cannot be created, filename "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" is too long for tar file format
+> call offsetSet x:6161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161 s:toolong2
+EXC PharException: tar-based phar "%W%/t.phar.tar" cannot be created, filename "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" is too long for tar file format
+> call setSignatureAlgorithm i:2
+EXC PharException: tar-based phar "%W%/t.phar.tar" cannot be created, filename "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" is too long for tar file format
+> call getAlias
+string(14) "%W%/t.phar.tar"
+> call setAlias s:taral
+EXC PharException: tar-based phar "%W%/t.phar.tar" cannot be created, filename "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" is too long for tar file format
+> call getAlias
+string(14) "%W%/t.phar.tar"
+> call count
+int(4)
+> release
+ok
+> phar p:t.phar.tar
+ok
+> call getAlias
+string(14) "%W%/t.phar.tar"
+> call count
+int(4)
+> fn file_get_contents s:phar://taral/a.txt
+W: Failed to open stream: phar error: invalid url or non-existent phar "phar://taral/a.txt"
+bool(false)
+> data p:plain.tar
+ok
+> call offsetSet s:a s:1
+NULL
+> release
+ok
+> phar p:plain.tar
+EXC UnexpectedValueException: Cannot create phar '%W%/plain.tar', file extension (or combination) not recognised or the directory does not exist
+> data p:t.phar.tar
+EXC UnexpectedValueException: Cannot create phar '%W%/t.phar.tar', file extension (or combination) not recognised or the directory does not exist
+> phar p:z.phar.zip
+ok
+> call offsetSet s:a.txt s:hello
+NULL
+> call setAlias s:zipal
+bool(true)
+> release
+ok
+> phar p:z.phar.zip
+ok
+> call getAlias
+string(5) "zipal"
+> data p:plain.zip
+ok
+> call offsetSet s:a s:1
+NULL
+> release
+ok
+> phar p:plain.zip
+EXC UnexpectedValueException: Cannot create phar '%W%/plain.zip', file extension (or combination) not recognised or the directory does not exist
+> ini phar.readonly 1
+string(1) "0"
+> phar p:plain.zip
+EXC UnexpectedValueException: Cannot create phar '%W%/plain.zip', file extension (or combination) not recognised or the directory does not exist
+> phar p:plain.tar
+EXC UnexpectedValueException: Cannot create phar '%W%/plain.tar', file extension (or combination) not recognised or the directory does not exist
+> data p:plain.tar
+ok
+> call count
+int(1)

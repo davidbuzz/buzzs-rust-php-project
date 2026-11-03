@@ -1,0 +1,27 @@
+mkfile src/a.txt s:alpha
+mkfile src/b.php s:beta
+mkfile src/sub/c.txt s:gamma
+mkfile src/sub/deep/d.txt s:delta
+mkfile other.txt s:outside
+phar p:b.phar
+build src
+call count
+info s:sub/deep/d.txt getContent
+fn scandir u:b.phar/sub
+phar p:b2.phar
+build src x:2f5c2e747874242f
+call count
+build nonexistent
+phar p:b3.phar
+buildi n s:x.txt=p:other.txt s:y/z.txt=p:src/a.txt
+call count
+info s:y/z.txt getContent
+buildi p:src a=p:src/a.txt b=p:src/sub/c.txt
+buildi p:src a=p:other.txt
+buildi n s:q=p:missing.txt
+buildi n i:5=p:other.txt
+buildi n s:.phar/x=p:other.txt
+call count
+ini phar.readonly 1
+buildi n s:r=p:other.txt
+build src

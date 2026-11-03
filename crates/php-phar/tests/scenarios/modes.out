@@ -1,0 +1,55 @@
+> phar p:m.phar
+ok
+> call offsetSet s:a.txt s:hello
+NULL
+> fopen u:m.phar/a.txt rb
+ok
+> fopen u:m.phar/a.txt a
+W: Failed to open stream: phar error: open mode append not supported
+bool(false)
+> fopen u:m.phar/a.txt ab s:x
+W: Failed to open stream: phar error: open mode append not supported
+bool(false)
+> fopen u:m.phar/new.txt wb s:created
+ok
+> fn file_get_contents u:m.phar/new.txt
+string(7) "created"
+> fopen u:m.phar/a.txt r+ s:HE
+ok
+> fn file_get_contents u:m.phar/a.txt
+string(5) "HEllo"
+> fopen u:m.phar/nothere rb
+W: Failed to open stream: phar error: "nothere" is not a file in phar "%W%/m.phar"
+bool(false)
+> fopen s:phar:///nonexistent/x.phar/a rb
+W: Failed to open stream: phar error: invalid url or non-existent phar "phar:///nonexistent/x.phar/a"
+bool(false)
+> fopen s:phar://m.phar rb
+W: Failed to open stream: phar error: invalid url or non-existent phar "phar://m.phar"
+bool(false)
+> fopen u:m.phar/dir/ wb s:x
+ok
+> fopen u:m.phar/.phar/stub.php wb s:x
+ok
+> fopen u:m.phar/.phar/stub.php rb
+ok
+> fn file_get_contents u:m.phar/.phar/alias.txt
+W: Failed to open stream: phar error: ".phar/alias.txt" is not a file in phar "%W%/m.phar"
+bool(false)
+> fn file_put_contents u:m.phar/x?y s:query
+int(5)
+> fn file_get_contents u:m.phar/x
+string(5) "query"
+> ini phar.readonly 1
+string(1) "0"
+> fopen u:m.phar/a.txt rb
+ok
+> fopen u:m.phar/a.txt r+
+W: Failed to open stream: phar error: write operations disabled by the php.ini setting phar.readonly
+bool(false)
+> fopen u:m.phar/a.txt wb
+W: Failed to open stream: phar error: write operations disabled by the php.ini setting phar.readonly
+bool(false)
+> fopen u:m.phar/zzz wb
+W: Failed to open stream: phar error: write operations disabled by the php.ini setting phar.readonly
+bool(false)

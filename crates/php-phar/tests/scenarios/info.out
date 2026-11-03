@@ -1,0 +1,82 @@
+> phar p:i.phar
+ok
+> call offsetSet s:a.txt s:hello
+NULL
+> call addEmptyDir s:d
+NULL
+> call offsetSet s:d2/e.txt s:e
+NULL
+> info s:a.txt getCRC32
+int(907060870)
+> info s:a.txt isCRCChecked
+bool(true)
+> info s:a.txt getPharFlags
+int(0)
+> info s:a.txt getCompressedSize
+int(5)
+> info s:a.txt chmod i:0777
+NULL
+> fn fileperms u:i.phar/a.txt
+int(33033)
+> info s:a.txt chmod i:01777
+NULL
+> fn fileperms u:i.phar/a.txt
+int(33009)
+> info s:d getCRC32
+EXC BadMethodCallException: Phar entry is a directory, does not have a CRC
+> info s:d getContent
+EXC BadMethodCallException: phar error: Cannot retrieve contents, "d" in phar "%W%/i.phar" is a directory
+> info s:d isCRCChecked
+bool(true)
+> info s:d2 chmod i:0700
+EXC BadMethodCallException: Phar entry "d2" is a temporary directory (not an actual entry in the archive), cannot chmod
+> info s:d2 setMetadata s:x
+EXC BadMethodCallException: Phar entry is a temporary directory (not an actual entry in the archive), cannot set metadata
+> info s:d2 delMetadata
+EXC BadMethodCallException: Phar entry is a temporary directory (not an actual entry in the archive), cannot delete metadata
+> info s:d2 getPharFlags
+int(0)
+> info s:nothere getContent
+EXC RuntimeException: Cannot access phar file entry '/nothere' in archive '%W%/i.phar'
+> info s:a.txt hasMetadata
+bool(false)
+> info s:a.txt setMetadata a:s:x,i:2
+NULL
+> info s:a.txt getMetadata
+array(int(0)=>string(1) "x", int(1)=>int(2))
+> info s:a.txt hasMetadata
+bool(true)
+> info s:a.txt delMetadata
+bool(true)
+> info s:a.txt hasMetadata
+bool(false)
+> call offsetGet s:d
+PharFileInfo(phar://%W%/i.phar/d)
+> call offsetGet s:d2
+PharFileInfo(phar://%W%/i.phar/d2)
+> call offsetGet s:d2/
+PharFileInfo(phar://%W%/i.phar/d2)
+> call offsetGet s:/a.txt
+EXC RuntimeException: Cannot access phar file entry '//a.txt' in archive '%W%/i.phar', phar error: invalid path "//a.txt" contains double slash
+> call offsetGet s:a.txt/
+PharFileInfo(phar://%W%/i.phar/a.txt)
+> call offsetGet s:.phar
+EXC BadMethodCallException: Entry .phar does not exist
+> call offsetGet s:.phar/alias.txt
+EXC BadMethodCallException: Entry .phar/alias.txt does not exist
+> call offsetExists s:.phar/stub.php
+bool(false)
+> call offsetExists s:d2
+bool(true)
+> ini phar.readonly 1
+string(1) "0"
+> info s:a.txt chmod i:0600
+EXC PharException: Cannot modify permissions for file "a.txt" in phar "%W%/i.phar", write operations are prohibited
+> info s:a.txt setMetadata s:x
+EXC BadMethodCallException: Write operations disabled by the php.ini setting phar.readonly
+> info s:a.txt delMetadata
+EXC BadMethodCallException: Write operations disabled by the php.ini setting phar.readonly
+> info s:a.txt compress i:4096
+EXC BadMethodCallException: Phar is readonly, cannot change compression
+> info s:a.txt decompress
+bool(true)

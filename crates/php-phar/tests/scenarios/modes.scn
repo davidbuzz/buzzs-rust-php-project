@@ -1,0 +1,23 @@
+phar p:m.phar
+call offsetSet s:a.txt s:hello
+fopen u:m.phar/a.txt rb
+fopen u:m.phar/a.txt a
+fopen u:m.phar/a.txt ab s:x
+fopen u:m.phar/new.txt wb s:created
+fn file_get_contents u:m.phar/new.txt
+fopen u:m.phar/a.txt r+ s:HE
+fn file_get_contents u:m.phar/a.txt
+fopen u:m.phar/nothere rb
+fopen s:phar:///nonexistent/x.phar/a rb
+fopen s:phar://m.phar rb
+fopen u:m.phar/dir/ wb s:x
+fopen u:m.phar/.phar/stub.php wb s:x
+fopen u:m.phar/.phar/stub.php rb
+fn file_get_contents u:m.phar/.phar/alias.txt
+fn file_put_contents u:m.phar/x?y s:query
+fn file_get_contents u:m.phar/x
+ini phar.readonly 1
+fopen u:m.phar/a.txt rb
+fopen u:m.phar/a.txt r+
+fopen u:m.phar/a.txt wb
+fopen u:m.phar/zzz wb

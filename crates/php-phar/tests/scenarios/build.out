@@ -1,0 +1,54 @@
+> mkfile src/a.txt s:alpha
+ok
+> mkfile src/b.php s:beta
+ok
+> mkfile src/sub/c.txt s:gamma
+ok
+> mkfile src/sub/deep/d.txt s:delta
+ok
+> mkfile other.txt s:outside
+ok
+> phar p:b.phar
+ok
+> build src
+array(string(5) "a.txt"=>string(13) "%W%/src/a.txt", string(5) "b.php"=>string(13) "%W%/src/b.php", string(9) "sub/c.txt"=>string(17) "%W%/src/sub/c.txt", string(14) "sub/deep/d.txt"=>string(22) "%W%/src/sub/deep/d.txt")
+> call count
+int(4)
+> info s:sub/deep/d.txt getContent
+string(5) "delta"
+> fn scandir u:b.phar/sub
+array(int(0)=>string(5) "c.txt", int(1)=>string(4) "deep")
+> phar p:b2.phar
+ok
+> build src x:2f5c2e747874242f
+array(string(5) "a.txt"=>string(13) "%W%/src/a.txt", string(9) "sub/c.txt"=>string(17) "%W%/src/sub/c.txt", string(14) "sub/deep/d.txt"=>string(22) "%W%/src/sub/deep/d.txt")
+> call count
+int(3)
+> build nonexistent
+EXC UnexpectedValueException: RecursiveDirectoryIterator::__construct(%W%/nonexistent): Failed to open directory: No such file or directory
+> phar p:b3.phar
+ok
+> buildi n s:x.txt=p:other.txt s:y/z.txt=p:src/a.txt
+array(string(5) "x.txt"=>string(13) "%W%/other.txt", string(7) "y/z.txt"=>string(13) "%W%/src/a.txt")
+> call count
+int(2)
+> info s:y/z.txt getContent
+string(5) "alpha"
+> buildi p:src a=p:src/a.txt b=p:src/sub/c.txt
+array(string(5) "a.txt"=>string(13) "%W%/src/a.txt", string(9) "sub/c.txt"=>string(17) "%W%/src/sub/c.txt")
+> buildi p:src a=p:other.txt
+EXC UnexpectedValueException: Iterator ArrayIterator returned a path "%W%/other.txt" that is not in the base directory "%W%/src"
+> buildi n s:q=p:missing.txt
+EXC UnexpectedValueException: Iterator ArrayIterator returned a file that could not be opened "%W%/missing.txt"
+> buildi n i:5=p:other.txt
+EXC UnexpectedValueException: Iterator ArrayIterator returned an invalid key (must return a string)
+> buildi n s:.phar/x=p:other.txt
+array()
+> call count
+int(4)
+> ini phar.readonly 1
+string(1) "0"
+> buildi n s:r=p:other.txt
+EXC UnexpectedValueException: Cannot write out phar archive, phar is read-only
+> build src
+EXC UnexpectedValueException: Cannot write to archive - write operations restricted by INI setting

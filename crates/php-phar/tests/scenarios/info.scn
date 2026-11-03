@@ -1,0 +1,41 @@
+phar p:i.phar
+call offsetSet s:a.txt s:hello
+call addEmptyDir s:d
+call offsetSet s:d2/e.txt s:e
+info s:a.txt getCRC32
+info s:a.txt isCRCChecked
+info s:a.txt getPharFlags
+info s:a.txt getCompressedSize
+info s:a.txt chmod i:0777
+fn fileperms u:i.phar/a.txt
+info s:a.txt chmod i:01777
+fn fileperms u:i.phar/a.txt
+info s:d getCRC32
+info s:d getContent
+info s:d isCRCChecked
+info s:d2 chmod i:0700
+info s:d2 setMetadata s:x
+info s:d2 delMetadata
+info s:d2 getPharFlags
+info s:nothere getContent
+info s:a.txt hasMetadata
+info s:a.txt setMetadata a:s:x,i:2
+info s:a.txt getMetadata
+info s:a.txt hasMetadata
+info s:a.txt delMetadata
+info s:a.txt hasMetadata
+call offsetGet s:d
+call offsetGet s:d2
+call offsetGet s:d2/
+call offsetGet s:/a.txt
+call offsetGet s:a.txt/
+call offsetGet s:.phar
+call offsetGet s:.phar/alias.txt
+call offsetExists s:.phar/stub.php
+call offsetExists s:d2
+ini phar.readonly 1
+info s:a.txt chmod i:0600
+info s:a.txt setMetadata s:x
+info s:a.txt delMetadata
+info s:a.txt compress i:4096
+info s:a.txt decompress
