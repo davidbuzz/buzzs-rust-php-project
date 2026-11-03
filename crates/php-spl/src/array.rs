@@ -168,15 +168,12 @@ fn with_pos<R>(
 ) -> RtResult<R> {
     let id = st.array(|a| a.ht_iter)?;
     let (r, new_id) = with_ht(host, tgt, |ht| {
-        let (id, pos) = match id {
-            Some(id) => (id, ht.iterator_pos(id)),
-            None => {
-                let mut p = ht.valid_pos(0);
-                if is_obj {
-                    p = skip_protected(ht, p);
-                }
-                (ht.iterator_add(p), p)
+        let (id, pos) = if let Some(id) = id { (id, ht.iterator_pos(id)) } else {
+            let mut p = ht.valid_pos(0);
+            if is_obj {
+                p = skip_protected(ht, p);
             }
+            (ht.iterator_add(p), p)
         };
         let (np, r) = f(ht, pos);
         ht.iterator_set_pos(id, np);
