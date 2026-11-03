@@ -10,6 +10,7 @@ use crate::stat::StatBuf;
 
 /// INI settings consulted by the streams layer.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(clippy::struct_excessive_bools)] // independent INI booleans
 pub struct Settings {
     /// `include_path`.
     pub include_path: Vec<u8>,
@@ -50,16 +51,23 @@ impl Default for Settings {
     }
 }
 
+/// `PHPWRITE()` sink.
+pub type OutputHook = Box<dyn FnMut(&[u8])>;
+/// `zend_get_executed_filename()` provider.
+pub type FilenameHook = Box<dyn Fn() -> Option<Vec<u8>>>;
+/// Request body provider.
+pub type BodyHook = Box<dyn FnMut() -> Vec<u8>>;
+
 /// Callbacks into the VM / SAPI.
 #[derive(Default)]
 pub struct Hooks {
     /// `PHPWRITE()`: writes to the output layer (`php://output`).
-    pub output: Option<Box<dyn FnMut(&[u8])>>,
+    pub output: Option<OutputHook>,
     /// Returns the currently executing script file
     /// (`zend_get_executed_filename()`), used by include path resolution.
-    pub executed_filename: Option<Box<dyn Fn() -> Option<Vec<u8>>>>,
+    pub executed_filename: Option<FilenameHook>,
     /// The request body read by `php://input`.
-    pub request_body: Option<Box<dyn FnMut() -> Vec<u8>>>,
+    pub request_body: Option<BodyHook>,
 }
 
 impl std::fmt::Debug for Hooks {
@@ -79,6 +87,7 @@ struct StatCache {
 }
 
 #[derive(Debug, Default)]
+#[allow(clippy::struct_excessive_bools)] // independent request flags
 struct Globals {
     settings: Settings,
     stat_cache: StatCache,

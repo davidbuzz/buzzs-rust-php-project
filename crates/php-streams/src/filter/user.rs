@@ -103,7 +103,7 @@ impl UserFilter {
 }
 
 impl StreamFilter for UserFilter {
-    fn label(&self) -> &str {
+    fn label(&self) -> &'static str {
         "user-filter"
     }
 

@@ -37,6 +37,7 @@ pub fn wrapper_info() -> WrapperInfo {
 
 /// STDIO stream ops over a file descriptor (`php_stream_stdio_ops`).
 #[derive(Debug)]
+#[allow(clippy::struct_excessive_bools)] // mirrors php_stdio_stream_data flags
 pub struct StdioOps {
     file: Option<File>,
     fd: RawFd,
@@ -301,13 +302,6 @@ impl StreamOps for StdioOps {
                     }
                 }
             }
-            StreamOption::SyncSupported => {
-                if fd == -1 {
-                    OPT_ERR
-                } else {
-                    OPT_OK
-                }
-            }
             StreamOption::Sync(data_only) => {
                 let Some(file) = self.file.as_mut() else {
                     return OPT_ERR;
@@ -323,7 +317,7 @@ impl StreamOps for StdioOps {
                     OPT_ERR
                 }
             }
-            StreamOption::TruncateSupported => {
+            StreamOption::TruncateSupported | StreamOption::SyncSupported => {
                 if fd == -1 {
                     OPT_ERR
                 } else {
@@ -755,6 +749,7 @@ fn mkdir_one(path: &[u8], mode: i64) -> io::Result<()> {
 }
 
 /// `php_plain_files_mkdir()`.
+#[allow(clippy::too_many_lines)] // a direct port of the C function
 pub fn plain_mkdir(dir: &[u8], mode: i64, options: u32) -> bool {
     if options & MKDIR_RECURSIVE == 0 {
         if !paths::check_open_basedir(dir) {

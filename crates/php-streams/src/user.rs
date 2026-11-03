@@ -260,9 +260,8 @@ impl Wrapper for UserWrapper {
                 );
                 Some(Err(()))
             }
-            UserCall::Threw => Some(Err(())),
             UserCall::Returned(v @ Value::Array(_)) => Some(Ok(StatBuf::from_value(&v))),
-            UserCall::Returned(_) => Some(Err(())),
+            UserCall::Threw | UserCall::Returned(_) => Some(Err(())),
         }
     }
 
@@ -494,8 +493,7 @@ impl UserStreamOps {
                 self.not_impl(st, methods::EOF, " Assuming EOF");
                 OPT_ERR
             }
-            UserCall::Threw => OPT_ERR,
-            UserCall::Returned(Value::Bool(true)) => OPT_ERR,
+            UserCall::Threw | UserCall::Returned(Value::Bool(true)) => OPT_ERR,
             UserCall::Returned(Value::Bool(false)) => OPT_OK,
             UserCall::Returned(v) => {
                 st.warn(
@@ -534,12 +532,11 @@ impl StreamOps for UserStreamOps {
         let mut args = [Value::Int(i64::try_from(count).unwrap_or(i64::MAX))];
         let ret = self.guarded(st, methods::READ, &mut args);
         let data = match ret {
-            UserCall::Threw => return Err(OpFailed),
             UserCall::NotImplemented => {
                 self.not_impl(st, methods::READ, "");
                 return Err(OpFailed);
             }
-            UserCall::Returned(Value::Bool(false)) => return Err(OpFailed),
+            UserCall::Threw | UserCall::Returned(Value::Bool(false)) => return Err(OpFailed),
             UserCall::Returned(v) => v.to_bytes().ok_or(OpFailed)?,
         };
         let mut didread = data.len();
@@ -672,6 +669,7 @@ impl StreamOps for UserStreamOps {
         }
     }
 
+    #[allow(clippy::too_many_lines)] // a direct port of the C function
     fn set_option(&mut self, st: &mut StreamState, opt: &mut StreamOption<'_>) -> i64 {
         if self.dir {
             return OPT_NOTIMPL;
@@ -727,9 +725,8 @@ impl StreamOps for UserStreamOps {
                         self.not_impl(st, methods::TRUNCATE, "");
                         OPT_ERR
                     }
-                    UserCall::Threw => OPT_ERR,
                     UserCall::Returned(Value::Bool(true)) => OPT_OK,
-                    UserCall::Returned(Value::Bool(false)) => OPT_ERR,
+                    UserCall::Threw | UserCall::Returned(Value::Bool(false)) => OPT_ERR,
                     UserCall::Returned(v) => {
                         st.warn(
                             StreamErrorCode::UserspaceInvalidReturn,
@@ -772,12 +769,14 @@ impl StreamOps for UserStreamOps {
                         self.not_impl(st, methods::SET_OPTION, "");
                         OPT_ERR
                     }
-                    UserCall::Threw => OPT_ERR,
                     r if r.is_true() => OPT_OK,
                     _ => OPT_ERR,
                 }
             }
-            _ => OPT_NOTIMPL,
+            StreamOption::ChunkSize(_)
+            | StreamOption::Sync(_)
+            | StreamOption::SyncSupported
+            | StreamOption::MetaData(_) => OPT_NOTIMPL,
         }
     }
 

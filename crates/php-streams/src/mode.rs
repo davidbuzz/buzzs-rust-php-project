@@ -100,6 +100,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[allow(clippy::many_single_char_names)]
     fn modes() {
         let r = parse_fopen_mode("r").unwrap();
         assert!(r.read && !r.write && !r.create);

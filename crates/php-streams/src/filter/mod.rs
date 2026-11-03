@@ -415,7 +415,7 @@ mod tests {
     #[derive(Debug)]
     struct Upper;
     impl StreamFilter for Upper {
-        fn label(&self) -> &str {
+        fn label(&self) -> &'static str {
             "t.upper"
         }
         fn filter(

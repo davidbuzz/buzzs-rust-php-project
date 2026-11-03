@@ -179,12 +179,17 @@ impl UserCall {
     }
 }
 
-#[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_precision_loss,
+    clippy::cast_sign_loss,
+    clippy::cast_possible_wrap
+)]
 fn float_to_long(f: f64) -> i64 {
     if !f.is_finite() {
         return 0;
     }
-    if f >= -9_223_372_036_854_775_808.0 && f < 9_223_372_036_854_775_808.0 {
+    if (-9_223_372_036_854_775_808.0..9_223_372_036_854_775_808.0).contains(&f) {
         f as i64
     } else {
         // zend_dval_to_lval_cap is not used by zval_get_long; PHP 8 returns
@@ -247,6 +252,7 @@ pub(crate) fn str_to_long(s: &[u8]) -> i64 {
 
 /// Formats a float like PHP's default string conversion (precision 17
 /// shortest round-trip representation, `serialize_precision = -1`).
+#[allow(clippy::float_cmp)] // exact integral check, as in smart_str_append_double
 fn format_float(f: f64) -> String {
     if f.is_nan() {
         return "NAN".into();

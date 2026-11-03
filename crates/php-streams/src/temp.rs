@@ -27,8 +27,7 @@ thread_local! {
 fn seed() -> u64 {
     let t = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
+        .map_or(0, |d| d.as_nanos());
     #[allow(clippy::cast_possible_truncation)]
     let t = t as u64;
     t ^ (u64::from(std::process::id()) << 32) ^ 0x9E37_79B9_7F4A_7C15

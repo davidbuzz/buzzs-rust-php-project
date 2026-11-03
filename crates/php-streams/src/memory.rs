@@ -114,7 +114,7 @@ impl StreamOps for MemoryOps {
             }
         };
         if let Some(t) = target {
-            self.fpos = t as usize;
+            self.fpos = usize::try_from(t).unwrap_or(usize::MAX);
             *newpos = t;
             st.eof = false;
             st.fatal_error = false;

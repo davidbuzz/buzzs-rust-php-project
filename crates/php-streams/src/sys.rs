@@ -97,7 +97,7 @@ pub const EWOULDBLOCK: i32 = libc::EWOULDBLOCK;
 /// `umask(mask)`, returning the previous mask.
 pub fn umask(mask: u32) -> u32 {
     // SAFETY: umask has no preconditions.
-    u32::from(unsafe { libc::umask(mask as libc::mode_t) })
+    unsafe { libc::umask(mask as libc::mode_t) }
 }
 
 /// Reads the current umask without changing it.

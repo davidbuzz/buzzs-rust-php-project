@@ -215,13 +215,14 @@ pub fn php_stat(filename: &[u8], ty: FsType) -> StatResult {
         FsType::Atime => StatResult::Int(sb.atime),
         FsType::Mtime => StatResult::Int(sb.mtime),
         FsType::Ctime => StatResult::Int(sb.ctime),
-        FsType::Type => match sb.type_name() {
-            Some(t) => StatResult::Str(t),
-            None => {
+        FsType::Type => {
+            if let Some(t) = sb.type_name() {
+                StatResult::Str(t)
+            } else {
                 diag::notice(format!("Unknown file type ({})", sb.mode & mode::S_IFMT));
                 StatResult::Str("unknown")
             }
-        },
+        }
         FsType::IsW => StatResult::Bool(sb.mode & wmask != 0),
         FsType::IsR => StatResult::Bool(sb.mode & rmask != 0),
         FsType::IsX => StatResult::Bool(sb.mode & xmask != 0),
@@ -269,12 +270,11 @@ impl wrapper::Wrapper for NoMeta {
 }
 
 fn via_wrapper(w: &dyn wrapper::Wrapper, filename: &[u8], op: &MetadataOp, fname: &str) -> bool {
-    match w.metadata(filename, op, None) {
-        Some(r) => r,
-        None => {
-            diag::warning(format!("Cannot call {fname}() for a non-standard stream"));
-            false
-        }
+    if let Some(r) = w.metadata(filename, op, None) {
+        r
+    } else {
+        diag::warning(format!("Cannot call {fname}() for a non-standard stream"));
+        false
     }
 }
 
@@ -286,9 +286,10 @@ pub fn chmod(filename: &[u8], mode: i64) -> bool {
     if !paths::check_open_basedir(filename) {
         return false;
     }
-    use std::os::unix::fs::PermissionsExt;
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    let perms = std::fs::Permissions::from_mode((mode as u32) & 0o7777);
+    let perms = <std::fs::Permissions as std::os::unix::fs::PermissionsExt>::from_mode(
+        (mode as u32) & 0o7777,
+    );
     match std::fs::set_permissions(os_path(filename), perms) {
         Ok(()) => {
             state::clear_stat_cache();
@@ -332,16 +333,15 @@ fn do_chown(filename: &[u8], who: &Principal, group: bool, follow: bool) -> bool
             } else {
                 sys::uid_by_name(n)
             };
-            match r {
-                Some(i) => i,
-                None => {
-                    let what = if group { "gid" } else { "uid" };
-                    diag::warning(diag::msg(&[
-                        format!("Unable to find {what} for ").as_bytes(),
-                        n,
-                    ]));
-                    return false;
-                }
+            if let Some(i) = r {
+                i
+            } else {
+                let what = if group { "gid" } else { "uid" };
+                diag::warning(diag::msg(&[
+                    format!("Unable to find {what} for ").as_bytes(),
+                    n,
+                ]));
+                return false;
             }
         }
         Principal::Id(i) => *i as u32,
@@ -467,6 +467,3 @@ pub fn disk_space(directory: &[u8], total: bool) -> Option<f64> {
         }
     }
 }
-
-#[cfg(test)]
-mod tests;

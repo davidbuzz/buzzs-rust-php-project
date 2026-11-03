@@ -37,7 +37,7 @@ pub fn dirname(path: &[u8]) -> Vec<u8> {
     if path.is_empty() {
         return Vec::new();
     }
-    let mut end = path.len() as isize - 1;
+    let mut end = isize::try_from(path.len()).unwrap_or(isize::MAX) - 1;
     let at = |i: isize| path[usize::try_from(i).unwrap_or(0)];
     while end >= 0 && at(end) == b'/' {
         end -= 1;

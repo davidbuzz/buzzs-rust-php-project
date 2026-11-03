@@ -18,6 +18,11 @@ use crate::filter::{
 use crate::stat::StatBuf;
 use crate::value::Value;
 
+/// Converts a byte count to a stream offset (saturating).
+fn to_i64(n: usize) -> i64 {
+    i64::try_from(n).unwrap_or(i64::MAX)
+}
+
 /// Default read chunk size (`CHUNK_SIZE`).
 pub const CHUNK_SIZE: usize = 8192;
 
@@ -591,7 +596,7 @@ impl Stream {
             }
         }
         if didread > 0 {
-            self.position += didread as i64;
+            self.position += to_i64(didread);
         }
         Ok(didread)
     }
@@ -630,7 +635,7 @@ impl Stream {
             let cr = avail.iter().position(|&c| c == b'\r');
             let lf = avail.iter().position(|&c| c == b'\n');
             if let Some(cr) = cr {
-                if lf != Some(cr + 1) && !lf.is_some_and(|lf| lf < cr) {
+                if lf != Some(cr + 1) && lf.is_none_or(|lf| lf >= cr) {
                     self.state.flags ^= flags::DETECT_EOL;
                     self.state.flags |= flags::EOL_MAC;
                     return Some(cr);
@@ -675,7 +680,7 @@ impl Stream {
                     }
                 }
                 out.extend_from_slice(&self.readbuf[self.readpos..self.readpos + cpysz]);
-                self.position += cpysz as i64;
+                self.position += to_i64(cpysz);
                 self.readpos += cpysz;
                 if let Some(m) = maxlen.as_mut() {
                     *m -= cpysz;
@@ -750,9 +755,7 @@ impl Stream {
             f
         } else if !has_delim && buffered >= maxlen {
             maxlen
-        } else if buffered < maxlen && !self.state.eof {
-            return None;
-        } else if buffered == 0 && self.state.eof {
+        } else if (buffered < maxlen && !self.state.eof) || (buffered == 0 && self.state.eof) {
             return None;
         } else {
             buffered.min(maxlen)
@@ -762,7 +765,7 @@ impl Stream {
         out.truncate(n);
         if found.is_some() {
             self.readpos += delim.len();
-            self.position += delim.len() as i64;
+            self.position += to_i64(delim.len());
         }
         Some(out)
     }
@@ -788,7 +791,7 @@ impl Stream {
                 Ok(w) if w > 0 => {
                     buf = &buf[w..];
                     didwrite += w;
-                    self.position += w as i64;
+                    self.position += to_i64(w);
                 }
                 other => {
                     if didwrite == 0 {
@@ -951,7 +954,7 @@ impl Stream {
         {
             return -1;
         }
-        let avail = (self.writepos - self.readpos) as i64;
+        let avail = to_i64(self.writepos - self.readpos);
         if !self.has_flag(flags::NO_BUFFER) {
             match whence {
                 SEEK_CUR if offset > 0 && offset <= avail => {
@@ -1011,7 +1014,7 @@ impl Stream {
             while offset > 0 {
                 let n = usize::try_from(offset).unwrap_or(usize::MAX).min(tmp.len());
                 match self.read(&mut tmp[..n]) {
-                    Ok(r) if r > 0 => offset -= r as i64,
+                    Ok(r) if r > 0 => offset -= to_i64(r),
                     _ => return -1,
                 }
             }
@@ -1319,7 +1322,7 @@ impl Stream {
             ChainKind::Write => {
                 for b in inp {
                     if let Ok(n) = self.ops.write(&mut self.state, &b.data) {
-                        self.position += n as i64;
+                        self.position += to_i64(n);
                     }
                 }
             }
@@ -1367,7 +1370,7 @@ impl Stream {
         out.push(("mode".into(), Value::str(self.mode.as_bytes())));
         out.push((
             "unread_bytes".into(),
-            Value::Int((self.writepos - self.readpos) as i64),
+            Value::Int(to_i64(self.writepos - self.readpos)),
         ));
         out.push(("seekable".into(), Value::Bool(self.is_seekable())));
         if let Some(p) = &self.orig_path {

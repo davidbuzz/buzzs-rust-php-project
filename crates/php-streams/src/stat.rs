@@ -97,9 +97,7 @@ impl StatBuf {
     /// the named keys.
     pub fn entries(&self) -> Vec<(Key, i64)> {
         let vals = self.values();
-        let mut out: Vec<(Key, i64)> = (0..13i64)
-            .map(|i| (Key::Int(i), vals[i as usize]))
-            .collect();
+        let mut out: Vec<(Key, i64)> = (0i64..).zip(vals).map(|(i, v)| (Key::Int(i), v)).collect();
         out.extend(STAT_NAMES.iter().zip(vals).map(|(n, v)| (Key::str(*n), v)));
         out
     }

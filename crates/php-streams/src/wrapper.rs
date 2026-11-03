@@ -440,6 +440,7 @@ pub struct Located {
 
 /// `php_stream_locate_url_wrapper()`. Emits PHP's warnings; returns
 /// `None` when no wrapper may be used.
+#[allow(clippy::too_many_lines)] // a direct port of the C function
 pub fn locate(path: &[u8], options: u32) -> Option<Located> {
     let plain = || crate::builtin::plain_wrapper();
     if options & IGNORE_URL != 0 {

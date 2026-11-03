@@ -60,6 +60,7 @@ pub const EMPTY_PATH_ERROR: &str = "Path must not be empty";
 ///
 /// An empty `path` returns `None` without a warning; callers raise
 /// [`EMPTY_PATH_ERROR`] as a `ValueError` (PHP checks this before).
+#[allow(clippy::too_many_lines)] // a direct port of the C function
 pub fn open_wrapper(
     path: &[u8],
     mode: &str,

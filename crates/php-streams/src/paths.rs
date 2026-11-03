@@ -195,6 +195,7 @@ fn has_url_scheme(s: &[u8]) -> Option<usize> {
 /// `php_resolve_path()`: resolves `filename` against `include_path` (used
 /// by `include`, `fopen(..., use_include_path)` etc.). Returns the real
 /// path of the first match.
+#[allow(clippy::too_many_lines)] // a direct port of the C function
 pub fn resolve_path(filename: &[u8], include_path: &[u8]) -> Option<Vec<u8>> {
     if filename.contains(&0) {
         return None;
@@ -227,11 +228,10 @@ pub fn resolve_path(filename: &[u8], include_path: &[u8]) -> Option<Vec<u8>> {
             && n > 1
             && rest.get(n + 1) == Some(&b'/')
             && rest.get(n + 2) == Some(&b'/')
+            && !(rest[n - 1] == b'.' && rest[n - 2] == b'.' && n == 2)
         {
-            if !(rest[n - 1] == b'.' && rest[n - 2] == b'.' && n == 2) {
-                scan_from = n + 3;
-                is_stream_wrapper = true;
-            }
+            scan_from = n + 3;
+            is_stream_wrapper = true;
         }
         let (entry, next): (&[u8], Option<&[u8]>) = match rest[scan_from.min(rest.len())..]
             .iter()

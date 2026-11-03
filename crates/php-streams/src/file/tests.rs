@@ -294,12 +294,14 @@ fn flock_on_files() {
 }
 
 #[test]
+#[allow(clippy::naive_bytecount)]
 fn fgetcsv_hook() {
     let mut m =
         crate::memory::memory_open(crate::mode::TempMode::ReadOnly, b"a,\"b\nc\"\nd\n".to_vec());
     let r = fgetcsv(&mut m, None, |first, more| {
         let mut rec = first;
         if rec.iter().filter(|&&c| c == b'"').count() % 2 == 1 {
+            // (a naive byte count is fine in a test)
             rec.extend(more().unwrap());
         }
         rec
@@ -314,7 +316,7 @@ fn fgetcsv_hook() {
 fn readfile_and_passthru() {
     let mut out = Vec::new();
     let n = readfile(b"data:,hello%20there", false, None, &mut |b| {
-        out.extend_from_slice(b)
+        out.extend_from_slice(b);
     });
     assert_eq!(n, Some(11));
     assert_eq!(out, b"hello there");

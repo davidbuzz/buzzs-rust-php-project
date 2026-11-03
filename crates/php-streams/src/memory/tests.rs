@@ -8,7 +8,11 @@ fn unhex(s: &str) -> Vec<u8> {
 }
 
 fn hex(b: &[u8]) -> String {
-    b.iter().map(|c| format!("{c:02x}")).collect()
+    use std::fmt::Write;
+    b.iter().fold(String::new(), |mut s, c| {
+        let _ = write!(s, "{c:02x}");
+        s
+    })
 }
 
 #[test]

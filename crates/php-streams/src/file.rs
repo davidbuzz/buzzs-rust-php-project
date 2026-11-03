@@ -258,7 +258,7 @@ pub fn file(
 fn detect_mac(buf: &[u8]) -> bool {
     let cr = buf.iter().position(|&c| c == b'\r');
     let lf = buf.iter().position(|&c| c == b'\n');
-    matches!(cr, Some(c) if lf != Some(c + 1) && !lf.is_some_and(|l| l < c))
+    matches!(cr, Some(c) if lf != Some(c + 1) && lf.is_none_or(|l| l >= c))
 }
 
 /// The line splitting of `file()` for a given EOL marker.
@@ -417,15 +417,14 @@ pub fn rename(old: &[u8], new: &[u8], context: Option<&ContextRef>) -> bool {
         diag::warning("Cannot rename a file across wrapper types");
         return false;
     }
-    match w.wrapper.rename(old, new, REPORT_ERRORS, context) {
-        Some(r) => r,
-        None => {
-            diag::warning(format!(
-                "{} wrapper does not support renaming",
-                w.wrapper.label()
-            ));
-            false
-        }
+    if let Some(r) = w.wrapper.rename(old, new, REPORT_ERRORS, context) {
+        r
+    } else {
+        diag::warning(format!(
+            "{} wrapper does not support renaming",
+            w.wrapper.label()
+        ));
+        false
     }
 }
 
