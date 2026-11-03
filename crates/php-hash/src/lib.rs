@@ -1499,3 +1499,6 @@ pub fn mhash_keygen_s2k(
     key.truncate(bytes);
     Ok(Some(key))
 }
+
+#[cfg(test)]
+mod tests;

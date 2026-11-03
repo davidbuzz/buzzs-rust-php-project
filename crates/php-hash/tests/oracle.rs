@@ -7,7 +7,10 @@ use php_hash::{
     bin2hex, hash, hash_algos, hash_hkdf, hash_hmac, hash_hmac_algos, hash_pbkdf2, HashContext,
     HashOptions, StateElem, StateValue,
 };
-use vectors::{CHUNKED, DIGESTS, HKDF, HMAC, INPUTS, PBKDF2, SECRET, SECRETED, SEEDED, SERIALIZED};
+use vectors::{
+    CHUNKED, DIGESTS, HKDF, HMAC, INPUTS, PBKDF2, SECRET, SECRETED, SEEDED, SERIALIZED,
+    SERIALIZED_CHUNKED,
+};
 
 fn hex(algo: &str, data: &[u8], opts: &HashOptions) -> String {
     hash(algo.as_bytes(), data, opts)
@@ -209,4 +212,29 @@ fn xxh3_secret_phpt_vectors() {
         hex("xxh128", data, &HashOptions::with_secret(secret)),
         "54279097795e7218093a05d4d781cbb9"
     );
+}
+
+#[test]
+fn serialization_after_chunked_updates() {
+    let data = &INPUTS[6][..1003];
+    let mut failures = Vec::new();
+    for (algo, want) in SERIALIZED_CHUNKED {
+        let mut ctx = HashContext::new(algo.as_bytes(), 0, b"", &HashOptions::default()).unwrap();
+        let (mut p, mut n) = (0usize, 1usize);
+        while p < data.len() {
+            let end = (p + n).min(data.len());
+            ctx.update(&data[p..end]).unwrap();
+            p = end;
+            n = n % 37 + 1;
+        }
+        let got = php_serialize(&ctx.serialize().unwrap().state);
+        if got != *want {
+            failures.push(format!(
+                "{algo}: got {} want {}",
+                String::from_utf8_lossy(&got),
+                String::from_utf8_lossy(want)
+            ));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
