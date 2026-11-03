@@ -466,6 +466,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "php-pdo"
+version = "0.1.0"
+dependencies = [
+ "php-runtime",
+]
+
+[[package]]
 name = "php-phar"
 version = "0.1.0"
 dependencies = [
@@ -594,7 +601,7 @@ dependencies = [
 name = "php-xmlreader"
 version = "0.1.0"
 dependencies = [
- "php-runtime",
+ "php-libxml",
 ]
 
 [[package]]
