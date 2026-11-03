@@ -191,12 +191,13 @@ MAPPING: dict[str, list[str]] = {
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
-# Headline groups for --summary: (label, prefixes).
-SUMMARY_GROUPS: list[tuple[str, list[str]]] = [
-    ("Zend/tests", ["Zend/tests/"]),
-    ("tests/", ["tests/"]),
-    ("ext/", ["ext/"]),
-    ("sapi/", ["sapi/"]),
+# Headline groups for --summary: (label, included prefixes, excluded prefixes).
+SUMMARY_GROUPS: list[tuple[str, list[str], list[str]]] = [
+    ("Zend/tests", ["Zend/tests/"], []),
+    ("tests/", ["tests/"], []),
+    ("ext/standard", ["ext/standard/"], []),
+    ("other ext/*", ["ext/"], ["ext/standard/"]),
+    ("sapi/", ["sapi/"], []),
 ]
 
 
@@ -231,10 +232,13 @@ def load_results(path: Path) -> list[dict]:
     return tests
 
 
-def counts(tests: list[dict], prefixes: list[str]) -> dict[str, int]:
+def counts(tests: list[dict], prefixes: list[str], exclude: list[str] | None = None) -> dict[str, int]:
     c = {k: 0 for k in ("total", "PASS", "WARN", "FAIL", "SKIP", "XFAIL", "BORK")}
     for t in tests:
-        if any(t.get("path", "").startswith(p) for p in prefixes):
+        path = t.get("path", "")
+        if any(path.startswith(p) for p in prefixes) and not any(
+            path.startswith(p) for p in exclude or []
+        ):
             c["total"] += 1
             c[t.get("result", "FAIL")] = c.get(t.get("result", "FAIL"), 0) + 1
     return c
@@ -246,9 +250,9 @@ def print_summary(tests: list[dict], scope_count: int) -> None:
 
     print("| Suite | total | pass | fail | skip | xfail | bork | pass % (ran) | pass % (all) |")
     print("|---|---|---|---|---|---|---|---|---|")
-    groups = [g for g in SUMMARY_GROUPS if counts(tests, g[1])["total"]]
-    for label, prefixes in groups + [("**in scope, total**", [""])]:
-        c = counts(tests, prefixes)
+    groups = [g for g in SUMMARY_GROUPS if counts(tests, g[1], g[2])["total"]]
+    for label, prefixes, exclude in groups + [("**in scope, total**", [""], [])]:
+        c = counts(tests, prefixes, exclude)
         passed = c["PASS"] + c["WARN"]
         ran = c["total"] - c["SKIP"] - c["BORK"]
         print(

@@ -6,19 +6,26 @@ The original PHP is written in C. This project ports it to idiomatic, best-pract
 (clippy-pedantic clean, `unsafe` only in audited FFI modules), matching PHP's observable
 behaviour byte for byte: error messages, line numbers, `var_dump` layout, float printing.
 
-## Status (3 Nov 2026, late evening)
+## Status (4 Nov 2026)
 
-The engine runs real PHP and every in-scope extension is bound to it. Pass rates below are
-over non-skipped tests, measured with our own `php` binary against the php-src suite. The
-engine rows are from the last full measurement earlier today; a resumable full in-scope run
-is in progress and will replace them (the owner's partial runs since then are around 76% for
-`tests/` + `Zend/tests` combined).
+The engine runs real PHP and every in-scope extension is bound to it. Full in-scope run of the
+php-src suite (`Zend`, `tests`, `ext`, `sapi`) with our own `php` binary, measured 4 Nov 2026
+(`scripts/update_feature_gap.py report.json --summary`); "ran" excludes skipped tests. 2,514
+tests under out-of-scope directories ([phpt-scope.txt](phpt-scope.txt)) are not counted.
+
+| Suite | tests | pass | fail | skip | pass % (ran) | pass % (all) |
+|---|---|---|---|---|---|---|
+| `Zend/tests` | 5,725 | 4,498 | 1,167 | 60 | 79.4% | 78.6% |
+| `tests/` | 904 | 707 | 70 | 126 | 90.9% | 78.2% |
+| `ext/standard` | 4,068 | 3,363 | 189 | 514 | 94.6% | 82.7% |
+| other `ext/*` | 10,590 | 9,700 | 199 | 684 | 97.9% | 91.6% |
+| `sapi/` | 127 | 110 | 2 | 15 | 98.2% | 86.6% |
+| **in scope, total** | **21,414** | **18,378** | **1,627** | **1,399** | **91.8%** | **85.8%** |
+
+Earlier per-extension measurements (owners' runs, 3 Nov):
 
 | Suite | pass % | detail |
 |---|---|---|
-| `tests/lang` | 88.6% | 248/282 |
-| `tests/` (all) | 72.1% | 555/770 |
-| `Zend/tests` | 53.3% | 2,961/5,558 (lazy objects now 81.6%, attributes 91.2%) |
 | ext/standard strings, arrays, files, dir | 95–100% | |
 | ext/date, json, random, bcmath, uri, iconv, tokenizer | 98–99% | |
 | ext/pcre, hash, mbstring, intl, gmp, openssl, sodium, zlib, filter | 95–98% | |
