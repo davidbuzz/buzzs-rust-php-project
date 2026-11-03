@@ -234,6 +234,6 @@ mod tests {
         let Value::Array(a) = to_php(&v) else {
             panic!("array expected")
         };
-        assert_eq!(get_str(&a, "year"), Some(&Value::Int(2006)));
+        assert!(matches!(get_str(&a, "year"), Some(Value::Int(2006))));
     }
 }

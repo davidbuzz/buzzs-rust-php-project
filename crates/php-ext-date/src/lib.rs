@@ -13,6 +13,11 @@
 //! Native state lives in the objects (see [`objects`]); the per-request
 //! globals (`DATEG(timezone)`, `DATEG(last_errors)`) in [`common`].
 
+// Native handlers and object hooks have signatures fixed by the VM (they
+// return `VmResult` even when they cannot fail), and the code keeps
+// timelib's one-letter field names (y, m, d, h, i, s).
+#![allow(clippy::unnecessary_wraps, clippy::many_single_char_names)]
+
 mod common;
 mod datetime;
 mod duration;
@@ -64,9 +69,12 @@ impl Extension for Date {
                 "date",
             ));
         }
-        m.constant("SUNFUNCS_RET_TIMESTAMP", Value::Int(api::SUNFUNCS_RET_TIMESTAMP))
-            .constant("SUNFUNCS_RET_STRING", Value::Int(api::SUNFUNCS_RET_STRING))
-            .constant("SUNFUNCS_RET_DOUBLE", Value::Int(api::SUNFUNCS_RET_DOUBLE));
+        m.constant(
+            "SUNFUNCS_RET_TIMESTAMP",
+            Value::Int(api::SUNFUNCS_RET_TIMESTAMP),
+        )
+        .constant("SUNFUNCS_RET_STRING", Value::Int(api::SUNFUNCS_RET_STRING))
+        .constant("SUNFUNCS_RET_DOUBLE", Value::Int(api::SUNFUNCS_RET_DOUBLE));
 
         {
             let vm = m.vm();

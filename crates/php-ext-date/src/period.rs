@@ -134,13 +134,7 @@ fn init_finish(
 }
 
 /// `date_period_init_iso8601_string()`; returns the recurrence count.
-fn init_iso(
-    vm: &mut Vm,
-    p: &mut PeriodObj,
-    base: &str,
-    iso: &[u8],
-    func: &str,
-) -> VmResult<i64> {
+fn init_iso(vm: &mut Vm, p: &mut PeriodObj, base: &str, iso: &[u8], func: &str) -> VmResult<i64> {
     let r = parse_iso_interval(iso);
     let s = lossy(iso);
     if !r.errors.errors.is_empty() {
@@ -190,10 +184,7 @@ fn init_iso(
 fn create_from_iso(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let s = a.str(0);
     let options = if a.has(1) { a.int(1) } else { 0 };
-    let cls = a
-        .called
-        .clone()
-        .unwrap_or_else(|| class(vm, "DatePeriod"));
+    let cls = a.called.clone().unwrap_or_else(|| class(vm, "DatePeriod"));
     let o = instantiate(vm, &cls)?;
     let mut p = PeriodObj::default();
     let func = "DatePeriod::createFromISO8601String";
@@ -209,9 +200,7 @@ fn quiet_long(v: &Value) -> Option<i64> {
         Value::Int(i) => Some(*i),
         Value::Bool(b) => Some(i64::from(*b)),
         #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
-        Value::Float(f) if f.is_finite() && f.fract() == 0.0 && f.abs() < 9.2e18 => {
-            Some(*f as i64)
-        }
+        Value::Float(f) if f.is_finite() && f.fract() == 0.0 && f.abs() < 9.2e18 => Some(*f as i64),
         Value::Str(s) => std::str::from_utf8(s.as_bytes())
             .ok()
             .and_then(|s| s.trim_start().parse::<i64>().ok()),
@@ -376,7 +365,11 @@ fn add_period_props(vm: &mut Vm, props: &mut ZArray, p: &PeriodObj) -> VmResult<
     let iv = interval_value(vm, p.interval.as_ref())?;
     set_str(props, "interval", iv);
     set_str(props, "recurrences", Value::Int(p.recurrences));
-    set_str(props, "include_start_date", Value::Bool(p.include_start_date));
+    set_str(
+        props,
+        "include_start_date",
+        Value::Bool(p.include_start_date),
+    );
     set_str(props, "include_end_date", Value::Bool(p.include_end_date));
     Ok(())
 }

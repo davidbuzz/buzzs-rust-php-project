@@ -83,7 +83,7 @@ fn initialize(
     o: &Obj,
     time_str: &[u8],
     format: Option<&[u8]>,
-    zone: Result<Option<TimezoneSpec>, ()>,
+    zone: &Result<Option<TimezoneSpec>, ()>,
     ctor: bool,
 ) -> VmResult<bool> {
     let dtz = default_tz(vm)?;
@@ -114,7 +114,7 @@ fn initialize(
 fn date_create_impl(vm: &mut Vm, a: &Args, cls: &Rc<Class>) -> VmResult<Value> {
     let s = if a.has(0) { a.str(0) } else { ZStr::from("") };
     let o = instantiate(vm, cls)?;
-    if initialize(vm, &o, s.as_bytes(), None, zone_arg(a, 1), false)? {
+    if initialize(vm, &o, s.as_bytes(), None, &zone_arg(a, 1), false)? {
         Ok(Value::Object(o))
     } else {
         Ok(Value::Bool(false))
@@ -198,7 +198,7 @@ fn from_format_impl(vm: &mut Vm, a: &Args, cls: &Rc<Class>) -> VmResult<Value> {
         &o,
         s.as_bytes(),
         Some(format.as_bytes()),
-        zone_arg(a, 2),
+        &zone_arg(a, 2),
         false,
     )? {
         Ok(Value::Object(o))
@@ -239,7 +239,7 @@ fn dti_create_from_format(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 fn construct(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let o = this(a);
     let s = if a.has(0) { a.str(0) } else { ZStr::from("") };
-    initialize(vm, &o, s.as_bytes(), None, zone_arg(a, 1), true)?;
+    initialize(vm, &o, s.as_bytes(), None, &zone_arg(a, 1), true)?;
     Ok(Value::Null)
 }
 
@@ -320,7 +320,7 @@ fn init_from_hash(vm: &mut Vm, o: &Obj, h: &ZArray) -> VmResult<bool> {
             let mut s = date.as_bytes().to_vec();
             s.push(b' ');
             s.extend_from_slice(tz.as_bytes());
-            initialize(vm, o, &s, None, Ok(None), false)
+            initialize(vm, o, &s, None, &Ok(None), false)
         }
         3 => {
             let dtz = default_tz(vm)?;
@@ -381,12 +381,7 @@ fn serialize(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 }
 
 /// Restores the non-internal entries of a serialisation hash as properties.
-pub(crate) fn restore_custom(
-    vm: &mut Vm,
-    o: &Obj,
-    h: &ZArray,
-    internal: &[&str],
-) -> VmResult<()> {
+pub(crate) fn restore_custom(vm: &mut Vm, o: &Obj, h: &ZArray, internal: &[&str]) -> VmResult<()> {
     for (k, v) in h.iter() {
         let ArrayKey::Str(name) = k else { continue };
         if matches!(v, Value::Reference(_))
@@ -520,16 +515,11 @@ fn op_modify(vm: &mut Vm, o: &Obj, s: &[u8], throw_as: Option<&str>) -> VmResult
         Err(e) => {
             update_errors(&e);
             let msg = lossy(&api::parse_failure_message(s, &e));
-            match throw_as {
-                Some(func) => Err(vm.throw(
-                    "DateMalformedStringException",
-                    &format!("{func}(): {msg}"),
-                )),
-                None => {
-                    vm.php_warning(&msg)?;
-                    Ok(false)
-                }
+            if let Some(func) = throw_as {
+                return Err(vm.throw("DateMalformedStringException", &format!("{func}(): {msg}")));
             }
+            vm.php_warning(&msg)?;
+            Ok(false)
         }
     }
 }
@@ -549,10 +539,7 @@ fn op_sub(vm: &mut Vm, o: &Obj, iv: &Obj, throw_as: Option<&str>) -> VmResult<()
             Ok(())
         }
         Err(m) => match throw_as {
-            Some(func) => Err(vm.throw(
-                "DateInvalidOperationException",
-                &format!("{func}(): {m}"),
-            )),
+            Some(func) => Err(vm.throw("DateInvalidOperationException", &format!("{func}(): {m}"))),
             None => vm.php_warning(m),
         },
     }
@@ -561,9 +548,10 @@ fn op_sub(vm: &mut Vm, o: &Obj, iv: &Obj, throw_as: Option<&str>) -> VmResult<()
 fn op_set_timezone(vm: &mut Vm, o: &Obj, z: &Obj) -> VmResult<()> {
     require_time(vm, o)?;
     let zone = tz_of(z);
-    with_time(vm, o, |t| match zone {
-        Some(z) => api::set_timezone(t, &z),
-        None => {
+    with_time(vm, o, |t| {
+        if let Some(z) = zone {
+            api::set_timezone(t, &z);
+        } else {
             let sse = t.sse;
             t.unixtime2local(sse);
         }
@@ -576,11 +564,7 @@ fn instance_of_immutable(o: &Obj) -> bool {
 
 /// Applies `op` to `$this` (`DateTime`) or to a raw clone of it
 /// (`DateTimeImmutable`), returning the affected object.
-fn apply(
-    vm: &mut Vm,
-    a: &Args,
-    op: impl FnOnce(&mut Vm, &Obj) -> VmResult<()>,
-) -> VmResult<Value> {
+fn apply(vm: &mut Vm, a: &Args, op: impl FnOnce(&mut Vm, &Obj) -> VmResult<()>) -> VmResult<Value> {
     let o = this(a);
     let target = if instance_of_immutable(&o) {
         clone_raw(&o)
@@ -694,7 +678,9 @@ fn date_time_set(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 fn set_date_m(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let (y, m, d) = (a.int(0), a.int(1), a.int(2));
-    apply(vm, a, |vm, o| with_time(vm, o, |t| api::set_date(t, y, m, d)))
+    apply(vm, a, |vm, o| {
+        with_time(vm, o, |t| api::set_date(t, y, m, d))
+    })
 }
 
 fn date_date_set(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -788,10 +774,7 @@ fn compare(vm: &mut Vm, a: &Value, b: &Value) -> VmResult<Option<i32>> {
         return Ok(None);
     }
     let (Some(mut t1), Some(mut t2)) = (time_of(x), time_of(y)) else {
-        return Err(vm.throw(
-            "DateObjectError",
-            api::messages::INCOMPLETE_DATE_COMPARE,
-        ));
+        return Err(vm.throw("DateObjectError", api::messages::INCOMPLETE_DATE_COMPARE));
     };
     Ok(Some(match api::compare(&mut t1, &mut t2) {
         std::cmp::Ordering::Less => -1,
@@ -811,6 +794,7 @@ fn hooks() -> ClassHooks {
 }
 
 /// Registers the interface and both classes.
+#[allow(clippy::too_many_lines)]
 pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
     for (name, v) in FORMATS {
         m.constant(&format!("DATE_{name}"), Value::Str(ZStr::from(v)));

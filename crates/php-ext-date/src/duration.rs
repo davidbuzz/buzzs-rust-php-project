@@ -9,7 +9,9 @@ use std::cell::RefCell;
 use php_date::parse::parse_iso_interval;
 use php_runtime::{ArrayKey, Obj, Value, ZStr};
 use php_vm::class::cflags;
-use php_vm::ext::{acc, class_flags, Args, ClassBuilder, ClassHooks, ModuleBuilder, Throw, VmResult};
+use php_vm::ext::{
+    acc, class_flags, Args, ClassBuilder, ClassHooks, ModuleBuilder, Throw, VmResult,
+};
 use php_vm::object;
 use php_vm::Vm;
 
@@ -90,12 +92,12 @@ impl Duration {
 
     fn sub_abs(a: &Self, b: &Self) -> DResult {
         let mut s = a.seconds.wrapping_sub(b.seconds);
-        let mut ns = a.nanoseconds.cast_signed() - b.nanoseconds.cast_signed();
+        let mut ns = a.nanoseconds.cast_signed_compat() - b.nanoseconds.cast_signed_compat();
         if ns < 0 {
             s = s.wrapping_sub(1);
-            ns += NSECS_PER_SEC.cast_signed();
+            ns += NSECS_PER_SEC.cast_signed_compat();
         }
-        Self::new(s, ns.cast_unsigned(), a.negative)
+        Self::new(s, ns.cast_unsigned_compat(), a.negative)
     }
 
     /// `timelib_duration_abs_compare()`.
@@ -185,12 +187,11 @@ impl Duration {
         if p.y > 0 || p.m > 0 || p.d > 0 {
             return Err(DurationError::DaysFound);
         }
-        let secs = p
-            .h
-            .wrapping_mul(3600)
-            .wrapping_add(p.i.wrapping_mul(60))
-            .wrapping_add(p.s);
-        Self::new(secs.cast_unsigned(), 0, false)
+        let secs =
+            p.h.wrapping_mul(3600)
+                .wrapping_add(p.i.wrapping_mul(60))
+                .wrapping_add(p.s);
+        Self::new(secs.cast_unsigned_compat(), 0, false)
     }
 }
 
@@ -257,14 +258,18 @@ fn slot_initialized(o: &Obj, name: &str) -> bool {
 /// `sync_properties()` on a fresh object.
 fn make(vm: &mut Vm, r: DResult) -> VmResult<Value> {
     let d = r.map_err(|e| timelib_error(vm, e))?;
-    if d.seconds > i64::MAX.cast_unsigned() || d.seconds > MAX_DURATION_SECONDS {
+    if d.seconds > i64::MAX.cast_unsigned_compat() || d.seconds > MAX_DURATION_SECONDS {
         return Err(out_of_range(vm));
     }
     let cls = class(vm, CLASS);
     let o = instantiate(vm, &cls)?;
     object::set_internal(&o, d);
-    write_slot(&o, "seconds", Value::Int(d.seconds.cast_signed()));
-    write_slot(&o, "nanoseconds", Value::Int(d.nanoseconds.cast_signed()));
+    write_slot(&o, "seconds", Value::Int(d.seconds.cast_signed_compat()));
+    write_slot(
+        &o,
+        "nanoseconds",
+        Value::Int(d.nanoseconds.cast_signed_compat()),
+    );
     write_slot(&o, "negative", Value::Bool(d.negative));
     Ok(Value::Object(o))
 }
@@ -305,7 +310,7 @@ fn ulong(vm: &mut Vm, a: &Args, n: usize, method: &str, pname: &str) -> VmResult
             "must be greater than or equal to 0",
         ));
     }
-    Ok(v.cast_unsigned())
+    Ok(v.cast_unsigned_compat())
 }
 
 fn construct(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
@@ -337,7 +342,10 @@ fn invalid_data(vm: &mut Vm, prev: Option<(&str, String)>) -> Throw {
 
 /// Validates an `__unserialize()` payload like `object_properties_load()`
 /// followed by the range checks of `Time\Duration::__unserialize()`.
-fn check_payload(o: &Obj, h: &php_runtime::ZArray) -> Result<Duration, Option<(&'static str, String)>> {
+fn check_payload(
+    o: &Obj,
+    h: &php_runtime::ZArray,
+) -> Result<Duration, Option<(&'static str, String)>> {
     let names = ["seconds", "nanoseconds", "negative"];
     for (k, v) in h.iter() {
         let ArrayKey::Str(name) = k else {
@@ -383,10 +391,10 @@ fn check_payload(o: &Obj, h: &php_runtime::ZArray) -> Result<Duration, Option<(&
     else {
         return Err(None);
     };
-    if s < 0 || ns < 0 || ns >= NSECS_PER_SEC.cast_signed() {
+    if s < 0 || ns < 0 || ns >= NSECS_PER_SEC.cast_signed_compat() {
         return Err(None);
     }
-    let d = match Duration::new(s.cast_unsigned(), ns.cast_unsigned(), neg) {
+    let d = match Duration::new(s.cast_unsigned_compat(), ns.cast_unsigned_compat(), neg) {
         Ok(d) => d,
         Err(DurationError::SecondsOutOfRange) => {
             return Err(Some((
@@ -420,8 +428,12 @@ fn unserialize(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let h = a.array(0);
     let d = check_payload(&o, &h).map_err(|prev| invalid_data(vm, prev))?;
     object::set_internal(&o, d);
-    write_slot(&o, "seconds", Value::Int(d.seconds.cast_signed()));
-    write_slot(&o, "nanoseconds", Value::Int(d.nanoseconds.cast_signed()));
+    write_slot(&o, "seconds", Value::Int(d.seconds.cast_signed_compat()));
+    write_slot(
+        &o,
+        "nanoseconds",
+        Value::Int(d.nanoseconds.cast_signed_compat()),
+    );
     write_slot(&o, "negative", Value::Bool(d.negative));
     Ok(Value::Null)
 }
@@ -572,11 +584,31 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
         .prop("negative", ro, Some("bool"), None)
         .method("__construct()", acc::PRIVATE, construct)
         .method("__unserialize(array $data): void", p, unserialize)
-        .method("fromSeconds(int $seconds, int $nanoseconds = 0): Time\\Duration", ps, from_seconds)
-        .method("fromNanoseconds(int $nanoseconds): Time\\Duration", ps, from_nanoseconds)
-        .method("fromMicroseconds(int $microseconds): Time\\Duration", ps, from_microseconds)
-        .method("fromMilliseconds(int $milliseconds): Time\\Duration", ps, from_milliseconds)
-        .method("fromMinutes(int $minutes): Time\\Duration", ps, from_minutes)
+        .method(
+            "fromSeconds(int $seconds, int $nanoseconds = 0): Time\\Duration",
+            ps,
+            from_seconds,
+        )
+        .method(
+            "fromNanoseconds(int $nanoseconds): Time\\Duration",
+            ps,
+            from_nanoseconds,
+        )
+        .method(
+            "fromMicroseconds(int $microseconds): Time\\Duration",
+            ps,
+            from_microseconds,
+        )
+        .method(
+            "fromMilliseconds(int $milliseconds): Time\\Duration",
+            ps,
+            from_milliseconds,
+        )
+        .method(
+            "fromMinutes(int $minutes): Time\\Duration",
+            ps,
+            from_minutes,
+        )
         .method("fromHours(int $hours): Time\\Duration", ps, from_hours)
         .method(
             "fromIso8601DurationString(string $specification): Time\\Duration",
@@ -589,7 +621,11 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
         .method("sub(Time\\Duration $duration): Time\\Duration", p, sub)
         .method("multiplyBy(int $factor): Time\\Duration", p, multiply_by)
         .method("divideBy(int $divisor): Time\\Duration", p, divide_by)
-        .method("compare(Time\\Duration $a, Time\\Duration $b): int", ps, compare_m)
+        .method(
+            "compare(Time\\Duration $a, Time\\Duration $b): int",
+            ps,
+            compare_m,
+        )
         .hooks(ClassHooks {
             create: Some(create_hook),
             clone: Some(clone_hook),
@@ -597,6 +633,32 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
             ..ClassHooks::default()
         })
         .register(vm);
+}
+
+/// `u64`/`i64` reinterpretation (`cast_signed`/`cast_unsigned` need Rust
+/// 1.87, above the workspace MSRV).
+trait CastCompat {
+    type Out;
+    fn cast_signed_compat(self) -> Self::Out;
+}
+
+impl CastCompat for u64 {
+    type Out = i64;
+    #[allow(clippy::cast_possible_wrap)]
+    fn cast_signed_compat(self) -> i64 {
+        self as i64
+    }
+}
+
+trait CastUnsignedCompat {
+    fn cast_unsigned_compat(self) -> u64;
+}
+
+impl CastUnsignedCompat for i64 {
+    #[allow(clippy::cast_sign_loss)]
+    fn cast_unsigned_compat(self) -> u64 {
+        self as u64
+    }
 }
 
 #[cfg(test)]
@@ -609,11 +671,26 @@ mod tests {
 
     #[test]
     fn arithmetic() {
-        assert_eq!(Duration::add(&d(1, 5, false), &d(0, 999_999_999, false)), Ok(d(2, 4, false)));
-        assert_eq!(Duration::add(&d(1, 0, false), &d(2, 0, true)), Ok(d(1, 0, true)));
-        assert_eq!(Duration::sub(&d(1, 0, false), &d(1, 0, false)), Ok(Duration::default()));
-        assert_eq!(Duration::sub(&d(1, 0, false), &d(2, 1, false)), Ok(d(1, 1, true)));
-        assert_eq!(d(1, 500_000_000, false).mul(3), Ok(d(4, 500_000_000, false)));
+        assert_eq!(
+            Duration::add(&d(1, 5, false), &d(0, 999_999_999, false)),
+            Ok(d(2, 4, false))
+        );
+        assert_eq!(
+            Duration::add(&d(1, 0, false), &d(2, 0, true)),
+            Ok(d(1, 0, true))
+        );
+        assert_eq!(
+            Duration::sub(&d(1, 0, false), &d(1, 0, false)),
+            Ok(Duration::default())
+        );
+        assert_eq!(
+            Duration::sub(&d(1, 0, false), &d(2, 1, false)),
+            Ok(d(1, 1, true))
+        );
+        assert_eq!(
+            d(1, 500_000_000, false).mul(3),
+            Ok(d(4, 500_000_000, false))
+        );
         assert_eq!(d(3, 0, false).div(2), Ok(d(1, 500_000_000, false)));
         assert_eq!(d(3, 0, false).div(0), Err(DurationError::DivisionByZero));
         assert_eq!(Duration::new(0, 0, true).map(|x| x.negative), Ok(false));

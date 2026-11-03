@@ -14,7 +14,9 @@ use crate::datetime::{
     restore_custom, wakeup_deprecation,
 };
 use crate::functions::{timezone_abbreviations_list, timezone_identifiers_list};
-use crate::objects::{class, instantiate, require_time, require_tz, set_tz, std_props, tz_of, TzObj};
+use crate::objects::{
+    class, instantiate, require_time, require_tz, set_tz, std_props, tz_of, TzObj,
+};
 
 /// `timezone_initialize()`.
 fn initialize(s: &[u8]) -> Result<TimezoneSpec, String> {
@@ -179,10 +181,7 @@ fn compare(vm: &mut Vm, a: &Value, b: &Value) -> VmResult<Option<i32>> {
         return Ok(None);
     }
     let (Some(z1), Some(z2)) = (tz_of(x), tz_of(y)) else {
-        return Err(vm.throw(
-            "DateObjectError",
-            api::messages::UNINITIALIZED_ZONE_COMPARE,
-        ));
+        return Err(vm.throw("DateObjectError", api::messages::UNINITIALIZED_ZONE_COMPARE));
     };
     match z1.equals(&z2) {
         Some(eq) => Ok(Some(i32::from(!eq))),

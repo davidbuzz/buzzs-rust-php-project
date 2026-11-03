@@ -150,7 +150,7 @@ fn from_hash(vm: &mut Vm, h: &ZArray) -> VmResult<Interval> {
         Some(v) if scalar(&v) => a64i(vm, &v)?,
         _ => -1,
     };
-    r.special_type = long(vm, "special_type", 0)? as u32;
+    r.special_type = u32::try_from(long(vm, "special_type", 0)?).unwrap_or(0);
     r.special_amount = match get_str(h, "special_amount").map(Value::deref) {
         Some(v) if scalar(&v) => a64i(vm, &v)?,
         _ => -1,

@@ -9,8 +9,7 @@ use php_vm::ext::{Args, ModuleBuilder, VmResult};
 use php_vm::Vm;
 
 use crate::common::{
-    default_tz, ini_double, last_errors, lossy, php_time, set_tz_override,
-    to_php, E_DEPRECATED,
+    default_tz, ini_double, last_errors, lossy, php_time, set_tz_override, to_php, E_DEPRECATED,
 };
 
 /// The optional `?int $timestamp` argument `n`, defaulting to now.
@@ -24,7 +23,11 @@ fn ts_arg(a: &Args, n: usize) -> i64 {
 fn date(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let tz = default_tz(vm)?;
     let ts = ts_arg(a, 1);
-    Ok(Value::Str(ZStr::from(api::date(a.str(0).as_bytes(), ts, &tz))))
+    Ok(Value::Str(ZStr::from(api::date(
+        a.str(0).as_bytes(),
+        ts,
+        &tz,
+    ))))
 }
 
 #[allow(clippy::unnecessary_wraps)]
@@ -99,7 +102,9 @@ fn strftime_impl(vm: &mut Vm, a: &Args, gmt: bool) -> VmResult<Value> {
     let name = if gmt { "gmstrftime" } else { "strftime" };
     vm.raise(
         E_DEPRECATED,
-        &format!("Function {name}() is deprecated since 8.1, use IntlDateFormatter::format() instead"),
+        &format!(
+            "Function {name}() is deprecated since 8.1, use IntlDateFormatter::format() instead"
+        ),
     )?;
     let format = a.str(0);
     if format.is_empty() {
@@ -212,7 +217,11 @@ fn date_default_timezone_get(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
 }
 
 fn sunrise_sunset(vm: &mut Vm, a: &Args, sunset: bool) -> VmResult<Value> {
-    let name = if sunset { "date_sunset" } else { "date_sunrise" };
+    let name = if sunset {
+        "date_sunset"
+    } else {
+        "date_sunrise"
+    };
     vm.raise(
         E_DEPRECATED,
         &format!("Function {name}() is deprecated since 8.1, use date_sun_info() instead"),

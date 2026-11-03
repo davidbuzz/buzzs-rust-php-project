@@ -55,7 +55,7 @@ pub(crate) fn time_of(o: &Obj) -> Option<Time> {
 
 /// Replaces the time of a date object.
 pub(crate) fn set_time(o: &Obj, t: Option<Time>) {
-    if object::internal::<DateObj, _>(o, |s| s.time = t.clone()).is_none() {
+    if object::internal::<DateObj, _>(o, |s| s.time.clone_from(&t)).is_none() {
         object::set_internal(o, DateObj { time: t });
     }
 }
@@ -85,7 +85,7 @@ pub(crate) fn tz_of(o: &Obj) -> Option<TimezoneSpec> {
 
 /// Sets the zone of a `DateTimeZone` object.
 pub(crate) fn set_tz(o: &Obj, tz: Option<TimezoneSpec>) {
-    if object::internal::<TzObj, _>(o, |s| s.tz = tz.clone()).is_none() {
+    if object::internal::<TzObj, _>(o, |s| s.tz.clone_from(&tz)).is_none() {
         object::set_internal(o, TzObj { tz });
     }
 }
@@ -125,7 +125,7 @@ pub(crate) fn set_interval(o: &Obj, iv: Option<Interval>) {
             }
         }
     }
-    if object::internal::<IntervalObj, _>(o, |s| s.iv = iv.clone()).is_none() {
+    if object::internal::<IntervalObj, _>(o, |s| s.iv.clone_from(&iv)).is_none() {
         object::set_internal(o, IntervalObj { iv });
     }
 }
@@ -229,10 +229,7 @@ pub(crate) fn instantiate(vm: &mut Vm, cls: &Rc<Class>) -> VmResult<Obj> {
         } else {
             "abstract class"
         };
-        return Err(vm.throw(
-            "Error",
-            &format!("Cannot instantiate {what} {}", cls.name),
-        ));
+        return Err(vm.throw("Error", &format!("Cannot instantiate {what} {}", cls.name)));
     }
     vm.new_object(cls)
 }
@@ -268,7 +265,9 @@ pub(crate) fn clone_raw(o: &Obj) -> Obj {
     let n = object::new_object(d.class.clone(), slots);
     let nd = object::data(&n);
     nd.dynamic.borrow_mut().clone_from(&d.dynamic.borrow());
-    nd.readonly_init.borrow_mut().clone_from(&d.readonly_init.borrow());
+    nd.readonly_init
+        .borrow_mut()
+        .clone_from(&d.readonly_init.borrow());
     copy_state(o, &n);
     n
 }
@@ -322,7 +321,7 @@ pub(crate) fn std_props(o: &Obj) -> ZArray {
             }
         }
         if let Some(dynp) = d.dynamic.borrow().as_ref() {
-            for (k, v) in dynp.iter() {
+            for (k, v) in dynp {
                 t.insert(k.clone(), v.deref());
             }
         }
