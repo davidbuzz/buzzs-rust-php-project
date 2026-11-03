@@ -85,9 +85,14 @@ pub(crate) fn sync(h: &mut VmHost<'_>) {
             h.vm.ini.restore(d.name, Stage::Deactivate, &mut sink);
         }
         if h.vm.ini.raw(d.name) != Some(e.value.as_slice()) {
-            h.vm
-                .ini
-                .alter(d.name, &e.value, Access::SYSTEM, Stage::Runtime, true, &mut sink);
+            h.vm.ini.alter(
+                d.name,
+                &e.value,
+                Access::SYSTEM,
+                Stage::Runtime,
+                true,
+                &mut sink,
+            );
         }
     }
 }
@@ -136,9 +141,7 @@ fn ini_set_hook(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let name = a.str(0).to_string_lossy();
     if crate::rewrite::is_directive(&name) {
         let value = ini_value(vm, &a.at(1))?;
-        return crate::rewrite::ini_set(vm, &name, &value, |vm| {
-            run_orig(&ORIG_INI_SET, vm, a)
-        });
+        return crate::rewrite::ini_set(vm, &name, &value, |vm| run_orig(&ORIG_INI_SET, vm, a));
     }
     if directive_index(&name).is_none() {
         return run_orig(&ORIG_INI_SET, vm, a);

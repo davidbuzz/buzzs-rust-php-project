@@ -30,7 +30,8 @@ pub(crate) fn register(vm: &mut Vm) {
 
 /// `remove_user_shutdown_function("session_shutdown")`.
 pub(crate) fn remove(vm: &mut Vm) {
-    vm.shutdown_functions.retain(|(cb, _)| !is_session_shutdown(cb));
+    vm.shutdown_functions
+        .retain(|(cb, _)| !is_session_shutdown(cb));
 }
 
 /// `append_user_shutdown_function()` calling `session_write_close()`.

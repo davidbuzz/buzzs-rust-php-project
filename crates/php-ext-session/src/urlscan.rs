@@ -125,7 +125,9 @@ pub(crate) fn set_tags(kind: Kind, value: &[u8]) {
 
 /// `php_ini_on_update_hosts()`.
 pub(crate) fn set_hosts(kind: Kind, value: &[u8]) {
-    let hosts: HashSet<Vec<u8>> = split_tokens(value).map(<[u8]>::to_ascii_lowercase).collect();
+    let hosts: HashSet<Vec<u8>> = split_tokens(value)
+        .map(<[u8]>::to_ascii_lowercase)
+        .collect();
     with(|s| match kind {
         Kind::Session => s.session_cfg.hosts = hosts,
         Kind::Output => s.output_cfg.hosts = hosts,
@@ -134,7 +136,12 @@ pub(crate) fn set_hosts(kind: Kind, value: &[u8]) {
 
 /// Records `arg_separator.output` and `$_SERVER['HTTP_HOST']`.
 pub(crate) fn set_env(separator: Vec<u8>, http_host: Option<Vec<u8>>) {
-    with(|s| s.env = Env { separator, http_host });
+    with(|s| {
+        s.env = Env {
+            separator,
+            http_host,
+        }
+    });
 }
 
 fn is_alpha(c: u8) -> bool {
@@ -276,91 +283,86 @@ enum Act {
     Unquoted,
 }
 
-/// One re2c match at `i`; `None` is `YYFILL` (more input needed).
-fn scan(state: State, b: &[u8], i: usize) -> Option<Tok> {
-    let n = b.len();
-    let run = |mut j: usize, pred: &dyn Fn(u8) -> bool| {
-        while j < n && pred(b[j]) {
-            j += 1;
+/// One re2c match at `pos`; `None` is `YYFILL` (more input needed).
+fn scan(state: State, buf: &[u8], pos: usize) -> Option<Tok> {
+    let len = buf.len();
+    let run = |mut end: usize, pred: &dyn Fn(u8) -> bool| {
+        while end < len && pred(buf[end]) {
+            end += 1;
         }
-        j
+        end
     };
+    let first = *buf.get(pos)?;
     match state {
         State::Plain => {
-            let c = *b.get(i)?;
-            if c == b'<' {
+            if first == b'<' {
                 return Some(Tok::Take(1, Act::Lt));
             }
-            let j = run(i, &|c| c != b'<');
-            (j < n).then_some(Tok::Take(j - i, Act::Text))
+            let end = run(pos, &|ch| ch != b'<');
+            (end < len).then_some(Tok::Take(end - pos, Act::Text))
         }
         State::Tag => {
-            let c = *b.get(i)?;
-            if is_alpha(c) || c == b':' {
-                let j = run(i, &|c| is_alpha(c) || c == b':');
-                (j < n).then_some(Tok::Take(j - i, Act::TagName))
+            if is_alpha(first) || first == b':' {
+                let end = run(pos, &|ch| is_alpha(ch) || ch == b':');
+                (end < len).then_some(Tok::Take(end - pos, Act::TagName))
             } else {
                 Some(Tok::Take(1, Act::PassToPlain))
             }
         }
         State::NextArg => {
             // re2c needs two bytes here (for "/>").
-            if n.saturating_sub(i) < 2 {
+            if len - pos < 2 {
                 return None;
             }
-            let c = b[i];
-            if c == b'>' {
+            if first == b'>' {
                 Some(Tok::Take(1, Act::Close))
-            } else if c == b'/' && b[i + 1] == b'>' {
+            } else if first == b'/' && buf[pos + 1] == b'>' {
                 Some(Tok::Take(2, Act::Close))
-            } else if is_ws(c) {
-                let j = run(i, &is_ws);
-                (j < n).then_some(Tok::Take(j - i, Act::Space))
-            } else if is_alpha(c) {
+            } else if is_ws(first) {
+                let end = run(pos, &is_ws);
+                (end < len).then_some(Tok::Take(end - pos, Act::Space))
+            } else if is_alpha(first) {
                 Some(Tok::Peek(Act::ToArg))
             } else {
                 Some(Tok::Take(1, Act::PassToPlain))
             }
         }
         State::Arg => {
-            let c = *b.get(i)?;
-            if is_alpha(c) {
-                let j = run(i + 1, &|c| is_alpha(c) || c == b'-');
-                (j < n).then_some(Tok::Take(j - i, Act::ArgName))
+            if is_alpha(first) {
+                let end = run(pos + 1, &|ch| is_alpha(ch) || ch == b'-');
+                (end < len).then_some(Tok::Take(end - pos, Act::ArgName))
             } else {
                 Some(Tok::Take(1, Act::PassToNextArg))
             }
         }
         State::BeforeVal => {
-            b.get(i)?;
-            let j = run(i, &|c| c == b' ');
-            if j == n {
+            let eq = run(pos, &|ch| ch == b' ');
+            if eq == len {
                 return None;
             }
-            if b[j] == b'=' {
-                let k = run(j + 1, &|c| c == b' ');
-                (k < n).then_some(Tok::Take(k - i, Act::Eq))
+            if buf[eq] == b'=' {
+                let end = run(eq + 1, &|ch| ch == b' ');
+                (end < len).then_some(Tok::Take(end - pos, Act::Eq))
             } else {
                 Some(Tok::Peek(Act::ToNextArg))
             }
         }
         State::Val => {
-            let c = *b.get(i)?;
-            if c == b'"' || c == b'\'' {
-                let j = run(i + 1, &|x| x != c && x != b'>');
-                if j == n {
+            let unquoted =
+                |ch: u8| !matches!(ch, b' ' | b'\r' | b'\t' | b'\n' | b'>' | b'\'' | b'"');
+            if first == b'"' || first == b'\'' {
+                let end = run(pos + 1, &|ch| ch != first && ch != b'>');
+                if end == len {
                     return None;
                 }
-                if b[j] == c {
-                    Some(Tok::Take(j + 1 - i, Act::Quoted(c)))
+                if buf[end] == first {
+                    Some(Tok::Take(end + 1 - pos, Act::Quoted(first)))
                 } else {
                     Some(Tok::Take(1, Act::PassToNextArg))
                 }
-            } else if !matches!(c, b' ' | b'\r' | b'\t' | b'\n' | b'>' | b'\'' | b'"') {
-                let j = run(i, &|x| {
-                    !matches!(x, b' ' | b'\r' | b'\t' | b'\n' | b'>' | b'\'' | b'"')
-                });
-                (j < n).then_some(Tok::Take(j - i, Act::Unquoted))
+            } else if unquoted(first) {
+                let end = run(pos, &unquoted);
+                (end < len).then_some(Tok::Take(end - pos, Act::Unquoted))
             } else {
                 Some(Tok::Take(1, Act::PassToNextArg))
             }
@@ -561,7 +563,8 @@ pub(crate) fn add_var(kind: Kind, name: &[u8], value: &[u8], encode: bool) -> bo
         ctx.url_app.extend_from_slice(&sname);
         ctx.url_app.push(b'=');
         ctx.url_app.extend_from_slice(&svalue);
-        ctx.form_app.extend_from_slice(b"<input type=\"hidden\" name=\"");
+        ctx.form_app
+            .extend_from_slice(b"<input type=\"hidden\" name=\"");
         ctx.form_app.extend_from_slice(&hname);
         ctx.form_app.extend_from_slice(b"\" value=\"");
         ctx.form_app.extend_from_slice(&hvalue);
@@ -704,10 +707,19 @@ mod tests {
         assert_eq!(rewrite(t, &["<a href=x "]), "<a href=x?a=b ");
         assert_eq!(rewrite(t, &["<a href = \"x\">"]), "<a href = \"x?a=b\">");
         assert_eq!(rewrite(t, &["<a href=x", "y>"]), "<a href=xy?a=b>");
-        assert_eq!(rewrite(t, &["<a href=\"/p?q=1#f\">"]), "<a href=\"/p?q=1&a=b#f\">");
+        assert_eq!(
+            rewrite(t, &["<a href=\"/p?q=1#f\">"]),
+            "<a href=\"/p?q=1&a=b#f\">"
+        );
         assert_eq!(rewrite(t, &["<a href=\"#top\">"]), "<a href=\"#top\">");
-        assert_eq!(rewrite(t, &["<a href=\"http://php.net/\">"]), "<a href=\"http://php.net/\">");
-        assert_eq!(rewrite(t, &["<a href=\"mailto:x@y\">"]), "<a href=\"mailto:x@y\">");
+        assert_eq!(
+            rewrite(t, &["<a href=\"http://php.net/\">"]),
+            "<a href=\"http://php.net/\">"
+        );
+        assert_eq!(
+            rewrite(t, &["<a href=\"mailto:x@y\">"]),
+            "<a href=\"mailto:x@y\">"
+        );
     }
 
     #[test]

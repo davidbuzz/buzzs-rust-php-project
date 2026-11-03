@@ -26,6 +26,18 @@ thread_local! {
     /// The values of the session directives at startup (restored at the
     /// end of the request).
     static STARTUP: RefCell<Vec<(&'static str, Vec<u8>)>> = const { RefCell::new(Vec::new()) };
+    /// Directives changed at runtime (restored by `zend_ini_deactivate`).
+    static MODIFIED: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+}
+
+fn set_modified(name: &str, on: bool) {
+    MODIFIED.with(|m| {
+        let mut m = m.borrow_mut();
+        m.retain(|n| n != name);
+        if on {
+            m.push(name.to_string());
+        }
+    });
 }
 
 /// Registers the directives the VM does not know yet and the functions.
@@ -51,7 +63,10 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
         "output_add_rewrite_var(string $name, string $value): bool",
         output_add_rewrite_var,
     )
-    .function("output_reset_rewrite_vars(): bool", output_reset_rewrite_vars);
+    .function(
+        "output_reset_rewrite_vars(): bool",
+        output_reset_rewrite_vars,
+    );
 }
 
 /// The deprecation `OnUpdateSessionTags`/`OnUpdateSessionHosts` raise for
@@ -105,9 +120,9 @@ pub(crate) fn startup(vm: &mut Vm) {
 pub(crate) fn request_shutdown(vm: &mut Vm) {
     urlscan::request_shutdown();
     let startup = STARTUP.with(|s| s.borrow().clone());
+    let modified = MODIFIED.with(|m| std::mem::take(&mut *m.borrow_mut()));
     for (name, orig) in startup {
-        let cur = vm.ini.raw(name).map(<[u8]>::to_vec).unwrap_or_default();
-        if cur != orig {
+        if modified.iter().any(|m| m == name) {
             let _ = on_modify(vm, name, &orig);
         }
     }
@@ -123,11 +138,18 @@ fn refresh_env(vm: &mut Vm) {
     let host = {
         let mut g = vm.globals.borrow_mut();
         g.find(b"_SERVER").and_then(|i| {
-            match g.slots.get(i as usize).and_then(Option::as_ref).map(Value::deref) {
-                Some(Value::Array(a)) => match a.get(&ArrayKey::from("HTTP_HOST")).map(Value::deref) {
-                    Some(Value::Str(s)) => Some(s.as_bytes().to_vec()),
-                    _ => None,
-                },
+            match g
+                .slots
+                .get(i as usize)
+                .and_then(Option::as_ref)
+                .map(Value::deref)
+            {
+                Some(Value::Array(a)) => {
+                    match a.get(&ArrayKey::from("HTTP_HOST")).map(Value::deref) {
+                        Some(Value::Str(s)) => Some(s.as_bytes().to_vec()),
+                        _ => None,
+                    }
+                }
                 _ => None,
             }
         })
@@ -158,12 +180,14 @@ pub(crate) fn session_var(vm: &mut Vm, name: &[u8], id: &[u8]) {
     add_var(vm, Kind::Session, name, id);
 }
 
+#[allow(clippy::unnecessary_wraps)] // the native function signature
 fn output_add_rewrite_var(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let (name, value) = (a.str(0), a.str(1));
     add_var(vm, Kind::Output, name.as_bytes(), value.as_bytes());
     Ok(Value::Bool(true))
 }
 
+#[allow(clippy::unnecessary_wraps)] // the native function signature
 fn output_reset_rewrite_vars(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
     urlscan::reset_vars(Kind::Output);
     Ok(Value::Bool(true))
@@ -181,6 +205,7 @@ pub(crate) fn ini_set(
         docref(vm, 8192, msg.as_bytes())?;
     }
     let r = store(vm)?;
+    set_modified(name, true);
     if !matches!(r, Value::Bool(false)) {
         let stored = vm.ini.raw(name).map(<[u8]>::to_vec).unwrap_or_default();
         apply(name, &stored);
@@ -196,6 +221,7 @@ pub(crate) fn ini_restore(
 ) -> VmResult<Value> {
     let before = vm.ini.raw(name).map(<[u8]>::to_vec).unwrap_or_default();
     let r = restore(vm)?;
+    set_modified(name, false);
     let after = vm.ini.raw(name).map(<[u8]>::to_vec).unwrap_or_default();
     if after != before {
         on_modify(vm, name, &after)?;

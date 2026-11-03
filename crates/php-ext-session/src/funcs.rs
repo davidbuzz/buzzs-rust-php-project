@@ -10,62 +10,65 @@ use crate::host::{with_host, VmHost};
 
 /// Registers the 23 functions.
 pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
-    m.function("session_name(?string $name = null): string|false", session_name)
-        .function(
-            "session_module_name(?string $module = null): string|false",
-            session_module_name,
-        )
-        .function(
-            "session_save_path(?string $path = null): string|false",
-            session_save_path,
-        )
-        .function("session_id(?string $id = null): string|false", session_id)
-        .function(
-            "session_create_id(string $prefix = \"\"): string|false",
-            session_create_id,
-        )
-        .function(
-            "session_regenerate_id(bool $delete_old_session = false): bool",
-            session_regenerate_id,
-        )
-        .function("session_decode(string $data): bool", session_decode)
-        .function("session_encode(): string|false", session_encode)
-        .function("session_destroy(): bool", session_destroy)
-        .function("session_unset(): bool", session_unset)
-        .function("session_gc(): int|false", session_gc)
-        .function(
-            "session_get_cookie_params(): array",
-            session_get_cookie_params,
-        )
-        .function("session_write_close(): bool", session_write_close)
-        .function("session_abort(): bool", session_abort)
-        .function("session_reset(): bool", session_reset)
-        .function("session_status(): int", session_status)
-        .function(
-            "session_register_shutdown(): void",
-            session_register_shutdown,
-        )
-        .function("session_commit(): bool", session_commit)
-        .function(
-            "session_set_save_handler($open, $close = UNKNOWN, $read = UNKNOWN, \
+    m.function(
+        "session_name(?string $name = null): string|false",
+        session_name,
+    )
+    .function(
+        "session_module_name(?string $module = null): string|false",
+        session_module_name,
+    )
+    .function(
+        "session_save_path(?string $path = null): string|false",
+        session_save_path,
+    )
+    .function("session_id(?string $id = null): string|false", session_id)
+    .function(
+        "session_create_id(string $prefix = \"\"): string|false",
+        session_create_id,
+    )
+    .function(
+        "session_regenerate_id(bool $delete_old_session = false): bool",
+        session_regenerate_id,
+    )
+    .function("session_decode(string $data): bool", session_decode)
+    .function("session_encode(): string|false", session_encode)
+    .function("session_destroy(): bool", session_destroy)
+    .function("session_unset(): bool", session_unset)
+    .function("session_gc(): int|false", session_gc)
+    .function(
+        "session_get_cookie_params(): array",
+        session_get_cookie_params,
+    )
+    .function("session_write_close(): bool", session_write_close)
+    .function("session_abort(): bool", session_abort)
+    .function("session_reset(): bool", session_reset)
+    .function("session_status(): int", session_status)
+    .function(
+        "session_register_shutdown(): void",
+        session_register_shutdown,
+    )
+    .function("session_commit(): bool", session_commit)
+    .function(
+        "session_set_save_handler($open, $close = UNKNOWN, $read = UNKNOWN, \
              $write = UNKNOWN, $destroy = UNKNOWN, $gc = UNKNOWN, $create_sid = UNKNOWN, \
              $validate_sid = UNKNOWN, $update_timestamp = UNKNOWN): bool",
-            session_set_save_handler,
-        )
-        .function(
-            "session_cache_limiter(?string $value = null): string|false",
-            session_cache_limiter,
-        )
-        .function(
-            "session_cache_expire(?int $value = null): int|false",
-            session_cache_expire,
-        )
-        .function(
-            "session_set_cookie_params(array|int $lifetime_or_options, ?string $path = null, \
+        session_set_save_handler,
+    )
+    .function(
+        "session_cache_limiter(?string $value = null): string|false",
+        session_cache_limiter,
+    )
+    .function(
+        "session_cache_expire(?int $value = null): int|false",
+        session_cache_expire,
+    )
+    .function(
+        "session_set_cookie_params(array|int $lifetime_or_options, ?string $path = null, \
              ?string $domain = null, ?bool $secure = null, ?bool $httponly = null): bool",
-            session_set_cookie_params,
-        )
-        .function("session_start(array $options = []): bool", session_start);
+        session_set_cookie_params,
+    )
+    .function("session_start(array $options = []): bool", session_start);
 }
 
 /// A `?string` argument (absent or `null` → `None`).
@@ -88,10 +91,7 @@ fn opt_bool(a: &Args, n: usize) -> Option<bool> {
 /// the module (e.g. an invalid save-handler return value) are destroyed
 /// before the function returns, so their destructors' exceptions surface
 /// from the call, as in PHP.
-pub(crate) fn call<T>(
-    vm: &mut Vm,
-    f: impl FnOnce(&mut VmHost<'_>) -> RtResult<T>,
-) -> VmResult<T> {
+pub(crate) fn call<T>(vm: &mut Vm, f: impl FnOnce(&mut VmHost<'_>) -> RtResult<T>) -> VmResult<T> {
     let r = with_host(vm, |h| {
         let r = f(h);
         h.vm_result(r)
@@ -216,14 +216,7 @@ fn session_set_cookie_params(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let secure = opt_bool(a, 3);
     let httponly = opt_bool(a, 4);
     bool_v(call(vm, |h| {
-        api::session_set_cookie_params(
-            h,
-            &first,
-            path.as_ref(),
-            domain.as_ref(),
-            secure,
-            httponly,
-        )
+        api::session_set_cookie_params(h, &first, path.as_ref(), domain.as_ref(), secure, httponly)
     }))
 }
 

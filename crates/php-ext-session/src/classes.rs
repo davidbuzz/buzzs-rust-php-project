@@ -31,7 +31,10 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
     ClassBuilder::new("SessionUpdateTimestampHandlerInterface")
         .flags(class_flags::INTERFACE)
         .abstract_method("validateId(string $id): bool", acc::PUBLIC)
-        .abstract_method("updateTimestamp(string $id, string $data): bool", acc::PUBLIC)
+        .abstract_method(
+            "updateTimestamp(string $id, string $data): bool",
+            acc::PUBLIC,
+        )
         .register(vm);
     ClassBuilder::new("SessionHandler")
         .implements(vm, &["SessionHandlerInterface", "SessionIdInterface"])
@@ -48,7 +51,10 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
 
 fn open(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let (path, name) = (a.str(0), a.str(1));
-    call(vm, |h| class::session_handler_open(h, path.as_bytes(), name.as_bytes())).map(Value::Bool)
+    call(vm, |h| {
+        class::session_handler_open(h, path.as_bytes(), name.as_bytes())
+    })
+    .map(Value::Bool)
 }
 
 fn close(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
@@ -62,7 +68,10 @@ fn read(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 fn write(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let (id, data) = (a.str(0), a.str(1));
-    call(vm, |h| class::session_handler_write(h, id.as_bytes(), data.as_bytes())).map(Value::Bool)
+    call(vm, |h| {
+        class::session_handler_write(h, id.as_bytes(), data.as_bytes())
+    })
+    .map(Value::Bool)
 }
 
 fn destroy(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
