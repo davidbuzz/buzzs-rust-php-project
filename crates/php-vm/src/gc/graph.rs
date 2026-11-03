@@ -295,7 +295,8 @@ impl Graph {
             // A `WeakMap` value is live when both its map and its key are.
             for c in &self.cond {
                 let key_live = c.key == NONE || self.nodes[c.key as usize].live;
-                if key_live && self.nodes[c.map as usize].live && !self.nodes[c.value as usize].live {
+                if key_live && self.nodes[c.map as usize].live && !self.nodes[c.value as usize].live
+                {
                     self.nodes[c.value as usize].live = true;
                     work.push(c.value);
                 }

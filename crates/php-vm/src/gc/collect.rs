@@ -234,9 +234,7 @@ impl Vm {
             let t = Instant::now();
             let r = self.gc_call_destructors(&dtors, err, &mut res.zombies);
             with_state(|s| s.dtor_time += t.elapsed());
-            if let Err(e) = r {
-                return Err(e);
-            }
+            r?;
             res.survivors = dtors;
         }
 

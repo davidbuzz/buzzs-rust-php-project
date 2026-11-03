@@ -90,11 +90,9 @@ fn closure_use_by_reference_cycle() {
 
 #[test]
 fn generator_cycle() {
-    let out = run(
-        "<?php function g($o) { yield 1; }\n\
+    let out = run("<?php function g($o) { yield 1; }\n\
          $o = new stdClass; $o->g = g($o); $o->g->current(); unset($o);\n\
-         var_dump(gc_collect_cycles());",
-    );
+         var_dump(gc_collect_cycles());");
     // The generator has a destructor (`dtor_obj`): it is freed by the
     // re-run, the stdClass in the first pass is excluded as nested data.
     assert_eq!(out, "int(1)\n");

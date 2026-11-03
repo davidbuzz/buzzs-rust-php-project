@@ -141,6 +141,7 @@ impl RootBuffer {
 }
 
 /// Collector state (`zend_gc_globals`).
+#[allow(clippy::struct_excessive_bools)] // mirrors php-src's flags
 struct GcState {
     /// `gc_enabled` (`zend.enable_gc`).
     enabled: bool,
@@ -231,7 +232,7 @@ fn sync_recording() {
 /// `gc_enable()`: turns the collector on or off; returns the old setting.
 /// The first enabling unprotects the root buffer (`gc_reset`).
 pub fn set_enabled(on: bool) -> bool {
-    with_state(|s| {
+    let old = with_state(|s| {
         let old = s.enabled;
         s.enabled = on;
         if on && s.protected && !s.active {
@@ -239,12 +240,9 @@ pub fn set_enabled(on: bool) -> bool {
             s.full = false;
         }
         old
-    })
-    .map(|old| {
-        sync_recording();
-        old
-    })
-    .unwrap_or(false)
+    });
+    sync_recording();
+    old.unwrap_or(false)
 }
 
 /// `gc_enabled()`.
