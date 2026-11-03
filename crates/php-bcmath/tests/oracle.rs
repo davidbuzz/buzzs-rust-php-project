@@ -17,6 +17,7 @@ fn render_err(e: &BcError) -> String {
                 format!("ERR\tV\t{}", e.message)
             }
         }
+        ErrorKind::OutOfMemory => "ERR\tM\tOOM".to_string(),
         _ => format!("ERR\t?\t{}", e.message),
     }
 }
@@ -119,7 +120,11 @@ fn run(bc: &BcMath, req: &[&str]) -> String {
 
 #[test]
 fn libbcmath_oracle() {
-    let data = include_str!("data/oracle.tsv");
+    // BCMATH_ORACLE_FILE replays an alternative (e.g. larger) fixture.
+    let data = std::env::var("BCMATH_ORACLE_FILE").map_or_else(
+        |_| include_str!("data/oracle.tsv").to_string(),
+        |p| std::fs::read_to_string(p).expect("fixture"),
+    );
     let bc = BcMath::new();
     let mut failures = Vec::new();
     let mut total = 0;

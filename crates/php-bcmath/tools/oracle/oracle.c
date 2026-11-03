@@ -51,6 +51,24 @@ static void pow_err(bc_raise_status status, int arg_num)
 	}
 }
 
+/* Mirrors php-bcmath's raise_alloc_bytes(): reports what PHP could only
+ * answer with a memory-limit fatal error instead of trying to compute it. */
+static bool raise_too_large(bc_num base, long exponent)
+{
+	unsigned long long exp = exponent < 0 ? -(unsigned long long) exponent : (unsigned long long) exponent;
+	size_t base_len = base->n_len + base->n_scale;
+	if (exp == 0 || bc_is_zero(base)) return false;
+	if (base->n_len > SIZE_MAX / exp || base->n_scale > SIZE_MAX / exp) return false; /* overflow error first */
+	unsigned __int128 full = (unsigned __int128) base->n_len * exp + (unsigned __int128) base->n_scale * exp;
+	if (full > SIZE_MAX) return false; /* overflow error first */
+	if (base_len <= 8 && full <= 16) return false;
+	size_t lz = 0;
+	while (lz < base_len && base->n_value[lz] == 0) lz++;
+	unsigned __int128 bytes = (unsigned __int128) ((base_len - lz + 7) / 8) * exp * 24;
+	if (bytes > 256u * 1024 * 1024) { err("M", "OOM"); return true; }
+	return false;
+}
+
 /* ---- plain functions ---- */
 static void fn_binary(const char *op)
 {
@@ -76,6 +94,7 @@ static void fn_binary(const char *op)
 		long e = bc_num2long(b);
 		if (e == 0 && (b->n_len > 1 || b->n_value[0] != 0)) { err("A2", "is too large"); return; }
 		bc_init_num(&r);
+		if (raise_too_large(a, e)) return;
 		bc_raise_status st = bc_raise(a, e, &r, scale);
 		if (st != BC_RAISE_STATUS_OK) { pow_err(st, 2); return; }
 		ok_num(r, scale);
@@ -202,6 +221,7 @@ static void number_calc(const char *op)
 			}
 		}
 		if (exponent == 0 && (n2->n_len > 1 || n2->n_value[0] != 0)) { err("A1", "exponent is too large"); return; }
+		if (raise_too_large(n1, exponent)) return;
 		bc_raise_status st = bc_raise(n1, exponent, &ret, scale);
 		if (st != BC_RAISE_STATUS_OK) { pow_err(st, 1); return; }
 		bc_rm_trailing_zeros(ret);

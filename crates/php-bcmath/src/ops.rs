@@ -77,8 +77,9 @@ pub enum RaiseError {
     FullLenOverflow,
     /// `BC_RAISE_STATUS_DIVIDE_BY_ZERO`: zero raised to a negative power.
     DivideByZero,
-    /// The power would have more than [`crate::MAX_DIGITS`] digits; PHP
-    /// exhausts its memory limit computing it. Carries the digit estimate.
+    /// Computing the power needs more than [`crate::MAX_DIGITS`] bytes of
+    /// work buffers in libbcmath, so PHP exhausts its memory limit. Carries
+    /// the number of bytes PHP would try to allocate.
     TooLarge(usize),
 }
 
@@ -299,9 +300,9 @@ impl BcNum {
         power_len
             .checked_add(power_scale)
             .ok_or(RaiseError::FullLenOverflow)?;
-        let hint = power_size_hint(base, exp);
-        if hint > crate::MAX_DIGITS {
-            return Err(RaiseError::TooLarge(hint));
+        let bytes = raise_alloc_bytes(base, exp);
+        if bytes > crate::MAX_DIGITS {
+            return Err(RaiseError::TooLarge(bytes));
         }
 
         let power_sign = if base.sign == Sign::Minus && exp & 1 == 1 {
@@ -570,22 +571,24 @@ impl BcNum {
     }
 }
 
-/// Estimated number of digits of `base ** exponent` (`exponent > 0`), used
-/// to refuse computations PHP could never complete.
-fn power_size_hint(base: &BcNum, exponent: u64) -> usize {
+/// Bytes `bc_raise` would allocate for its `BC_VECTOR` buffers when
+/// computing `base ** exponent` (0 on its allocation-free fast path). PHP
+/// fails with a memory error when this exceeds its memory limit.
+pub(crate) fn raise_alloc_bytes(base: &BcNum, exponent: u64) -> usize {
+    let base_len = base.len + base.scale;
     let exp = usize::try_from(exponent).unwrap_or(usize::MAX);
-    let digits = base.digits();
-    let scale_digits = base.scale().saturating_mul(exp);
-    let Some(first) = digits.iter().position(|&d| d != 0) else {
-        return 1;
-    };
-    let is_pow10 = digits[first] == 1 && digits[first + 1..].iter().all(|&d| d == 0);
-    let grow = if is_pow10 {
-        digits.len() - 1 - first
-    } else {
-        digits.len() - first
-    };
-    grow.saturating_mul(exp).max(scale_digits).saturating_add(1)
+    let power_full_len = base
+        .len
+        .saturating_mul(exp)
+        .saturating_add(base.scale.saturating_mul(exp));
+    if base_len <= 8 && power_full_len <= 16 {
+        return 0;
+    }
+    let significant = base_len - base.digits.iter().take_while(|&&d| d == 0).count();
+    significant
+        .div_ceil(8)
+        .saturating_mul(exp)
+        .saturating_mul(24)
 }
 
 /// Builds `10^zeros` as a number with `power_scale` fractional digits

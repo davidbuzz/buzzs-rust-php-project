@@ -14,9 +14,9 @@ use crate::ops::{RaiseError, RaiseModError, RoundingMode};
 /// Largest accepted scale (`INT_MAX`).
 pub const MAX_SCALE: i64 = 2_147_483_647;
 
-/// Largest number of digits a single result may have. PHP would exhaust its
-/// memory limit long before this; the VM reports [`crate::ErrorKind::OutOfMemory`]
-/// as a fatal error.
+/// Largest number of digits (≈ bytes) a single result or work buffer may
+/// need. PHP would exhaust its memory limit at this size; the VM reports
+/// [`crate::ErrorKind::OutOfMemory`] as a fatal error.
 pub const MAX_DIGITS: usize = 256 * 1024 * 1024;
 
 /// Fails with [`crate::ErrorKind::OutOfMemory`] when a result of `digits`
@@ -45,7 +45,7 @@ pub(crate) fn pow_error(func: &str, err: RaiseError, arg_num: u32, arg_name: &st
     const MSG: &str = "exponent is too large, the number of digits overflowed";
     match err {
         RaiseError::DivideByZero => BcError::division_by_zero("Negative power of zero"),
-        RaiseError::TooLarge(digits) => BcError::out_of_memory(digits.saturating_add(25)),
+        RaiseError::TooLarge(bytes) => BcError::out_of_memory(bytes),
         RaiseError::LenOverflow | RaiseError::ScaleOverflow | RaiseError::FullLenOverflow => {
             if arg_num == 0 {
                 BcError::value(MSG)

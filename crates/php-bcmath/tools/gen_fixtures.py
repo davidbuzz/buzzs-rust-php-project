@@ -2,7 +2,7 @@
 """Generates tests/data/oracle.tsv by running random requests through the
 libbcmath oracle (tools/oracle, built from php-src master's libbcmath).
 
-usage: tools/gen_fixtures.py <path-to-bcoracle> [seed]
+usage: tools/gen_fixtures.py <path-to-bcoracle> [seed] [output]
 
 Each output line is `<request fields>\t=>\t<response fields>` (see
 tools/oracle/oracle.c for the protocol).
@@ -39,7 +39,12 @@ def number(rng, max_int=30, max_frac=30, allow_sign=True):
         return rng.choice(specials)
     kind = rng.choice(["rand", "rand", "rand", "rand", "rand", "nines", "sparse", "five", "zeros"])
     il = rng.choice([0, 1, 1, 2, 3, 5, 8, 9, 10, 16, 17, rng.randint(0, max_int)])
+    if max_int >= 30 and rng.random() < 0.06:
+        # Occasionally large operands to exercise multi-limb division.
+        il = rng.randint(0, 250)
     fl = min(max_frac, rng.choice([0, 0, 1, 2, 3, 5, 8, 9, 10, 17, rng.randint(0, max_frac)]))
+    if max_frac >= 30 and rng.random() < 0.06:
+        fl = rng.randint(0, 250)
     il = min(max_int, il)
     ip = digits(rng, il, kind)
     if rng.random() < 0.1:
@@ -68,7 +73,7 @@ def operand(rng, **kw):
 
 
 def scale(rng):
-    return str(rng.choice([0, 0, 1, 2, 3, 5, 10, 20, rng.randint(0, 50)]))
+    return str(rng.choice([0, 0, 1, 2, 3, 5, 10, 20, rng.randint(0, 50), rng.randint(0, 50), rng.randint(50, 200)]))
 
 
 def gen(rng):
@@ -144,7 +149,8 @@ def main():
     out = subprocess.run([oracle], input=data.encode(), capture_output=True, check=True).stdout.decode()
     lines = out.split("\n")[:-1]
     assert len(lines) == len(reqs), (len(lines), len(reqs))
-    with open("tests/data/oracle.tsv", "w") as f:
+    path = sys.argv[3] if len(sys.argv) > 3 else "tests/data/oracle.tsv"
+    with open(path, "w") as f:
         for r, l in zip(reqs, lines):
             f.write("\t".join(r) + "\t=>\t" + l + "\n")
     print(f"{len(reqs)} cases")
