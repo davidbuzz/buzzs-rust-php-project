@@ -110,7 +110,7 @@ checks.
 
 | | Zend/tests/gc | Zend/tests/weakrefs | Zend/tests/fibers |
 |---|---|---|---|
-| before (no collector) | 34/85 | 23/38 | 103/122 |
+| before (no collector) | 34/85 | 23/38 | — |
 | master (gc.rs only) | 62/85 | 24/38 | 103/122 |
 | master + 01..06 | 75/85 | 34/38 | 105/122 |
 
