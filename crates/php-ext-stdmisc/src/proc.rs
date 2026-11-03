@@ -100,11 +100,11 @@ impl ProcHost for Host {
     fn stream_fd(&mut self, resource: &Resource) -> RtResult<Option<RawFd>> {
         let fd = php_ext_streams::res::cell_of(resource)
             .and_then(|c| c.get().and_then(|mut s| s.cast(CastAs::Fd, true)));
-        if fd.is_none() {
-            self.warnings.push(
-                "proc_open(): Cannot represent a stream of type unknown as a File Descriptor"
-                    .into(),
-            );
+        // The stream layer's own warnings ("N bytes of buffered data lost
+        // during stream conversion!", "Cannot represent a stream of type X
+        // as a File Descriptor").
+        for d in php_ext_streams::bridge::take_diagnostics() {
+            self.warnings.push(format!("proc_open(): {d}"));
         }
         Ok(fd)
     }

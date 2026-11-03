@@ -6,7 +6,7 @@
 //!   `proc_nice`.
 //! * [`proc`] — `proc_open`/`proc_close`/`proc_get_status`/`proc_terminate`
 //!   (pipes as `php-ext-streams` stream resources).
-//! * [`head`] — `setcookie`/`setrawcookie` validation (no CLI headers).
+//! * [`head`] — `setcookie`/`setrawcookie` (validation, then the VM's `header()`).
 //! * [`net`] — address conversion, host/service/protocol lookups, DNS,
 //!   `net_get_interfaces`, syslog.
 //! * [`env`] — environment/process information, time and sleep functions,

@@ -1,8 +1,7 @@
-//! `setcookie()` / `setrawcookie()` / `header_remove()` (`ext/standard/head.c`).
-//!
-//! The CLI SAPI keeps no response headers, so after php-src's argument and
-//! option validation the cookie header is not stored; the functions return
-//! `true` like `php_setcookie()` + `sapi_header_op()` do under the CLI.
+//! `setcookie()` / `setrawcookie()` (`ext/standard/head.c`): php-src's
+//! argument and option validation, then the `Set-Cookie` line is added
+//! through the VM's `header()` (`sapi_header_op(SAPI_HEADER_ADD)`), which
+//! owns the header list and the "headers already sent" state.
 
 use php_runtime::{Value, ZArray, ZStr};
 use php_vm::ext::{Args, ModuleBuilder, VmResult};
@@ -25,6 +24,7 @@ struct Cookie {
     path: Option<ZStr>,
     domain: Option<ZStr>,
     secure: bool,
+    httponly: bool,
     samesite: Option<ZStr>,
     partitioned: bool,
 }
@@ -44,9 +44,7 @@ fn parse_options(vm: &mut Vm, func: &str, opts: &ZArray, c: &mut Cookie) -> VmRe
             b"path" => c.path = Some(vm.value_to_string(&v)?),
             b"domain" => c.domain = Some(vm.value_to_string(&v)?),
             b"secure" => c.secure = vm.value_to_bool(&v)?,
-            b"httponly" => {
-                vm.value_to_bool(&v)?;
-            }
+            b"httponly" => c.httponly = vm.value_to_bool(&v)?,
             b"samesite" => c.samesite = Some(vm.value_to_string(&v)?),
             b"partitioned" => c.partitioned = vm.value_to_bool(&v)?,
             _ => {
@@ -134,12 +132,103 @@ fn setcookie_common(vm: &mut Vm, a: &Args, raw: bool) -> VmResult<Value> {
         c.path = a.has(3).then(|| a.str(3));
         c.domain = a.has(4).then(|| a.str(4));
         c.secure = a.has(5) && a.bool(5);
+        c.httponly = a.has(6) && a.bool(6);
     }
     validate(vm, a, &func, raw, &c)?;
-    if a.has(1) {
-        check_memory(vm, &a.str(1), raw)?;
+    let value = if a.has(1) { a.str(1) } else { ZStr::from("") };
+    check_memory(vm, &value, raw)?;
+    let line = cookie_line(&a.str(0), &value, &c, raw);
+    // `sapi_header_op()` fails (with its warning) once headers were sent.
+    let sent = vm.headers_sent;
+    vm.call_value(
+        &Value::from("header"),
+        vec![Value::Str(ZStr::from(line)), Value::Bool(false)],
+    )?;
+    Ok(Value::Bool(!sent))
+}
+
+/// `php_raw_url_encode()`.
+fn raw_url_encode(out: &mut Vec<u8>, s: &[u8]) {
+    for &c in s {
+        if c.is_ascii_alphanumeric() || b"-_.~".contains(&c) {
+            out.push(c);
+        } else {
+            out.extend_from_slice(format!("%{c:02X}").as_bytes());
+        }
     }
-    Ok(Value::Bool(true))
+}
+
+/// `php_format_date()` of the cookie expiry: `D, d M Y H:i:s` + ` GMT`.
+fn http_date(ts: i64) -> String {
+    const DAY: [&str; 7] = ["Thu", "Fri", "Sat", "Sun", "Mon", "Tue", "Wed"];
+    const MON: [&str; 12] = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ];
+    let days = ts.div_euclid(86_400);
+    let secs = ts.rem_euclid(86_400);
+    // Howard Hinnant's civil_from_days.
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = yoe + era * 400 + i64::from(m <= 2);
+    let wd = usize::try_from(days.rem_euclid(7)).unwrap_or(0);
+    format!(
+        "{}, {d:02} {} {y:04} {:02}:{:02}:{:02} GMT",
+        DAY[wd],
+        MON[usize::try_from(m - 1).unwrap_or(0)],
+        secs / 3600,
+        (secs / 60) % 60,
+        secs % 60
+    )
+}
+
+/// The `Set-Cookie:` header line built by `php_setcookie()`.
+fn cookie_line(name: &ZStr, value: &ZStr, c: &Cookie, raw: bool) -> Vec<u8> {
+    let mut buf = b"Set-Cookie: ".to_vec();
+    buf.extend_from_slice(name.as_bytes());
+    if value.is_empty() {
+        buf.extend_from_slice(b"=deleted; expires=Thu, 01 Jan 1970 00:00:01 GMT; Max-Age=0");
+    } else {
+        buf.push(b'=');
+        if raw {
+            buf.extend_from_slice(value.as_bytes());
+        } else {
+            raw_url_encode(&mut buf, value.as_bytes());
+        }
+        if c.expires > 0 {
+            buf.extend_from_slice(b"; expires=");
+            buf.extend_from_slice(http_date(c.expires).as_bytes());
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(0));
+            buf.extend_from_slice(format!("; Max-Age={}", (c.expires - now).max(0)).as_bytes());
+        }
+    }
+    for (label, v) in [("; path=", &c.path), ("; domain=", &c.domain)] {
+        if let Some(v) = v.as_ref().filter(|v| !v.is_empty()) {
+            buf.extend_from_slice(label.as_bytes());
+            buf.extend_from_slice(v.as_bytes());
+        }
+    }
+    if c.secure {
+        buf.extend_from_slice(b"; secure");
+    }
+    if c.httponly {
+        buf.extend_from_slice(b"; HttpOnly");
+    }
+    if let Some(ss) = c.samesite.as_ref().filter(|v| !v.is_empty()) {
+        buf.extend_from_slice(b"; SameSite=");
+        buf.extend_from_slice(ss.as_bytes());
+    }
+    if c.partitioned {
+        buf.extend_from_slice(b"; Partitioned");
+    }
+    buf
 }
 
 /// `memory_limit` in bytes (`None` = unlimited).
@@ -191,11 +280,6 @@ fn check_memory(vm: &mut Vm, value: &ZStr, raw: bool) -> VmResult<()> {
     Ok(())
 }
 
-#[allow(clippy::unnecessary_wraps)] // native handler signature
-fn header_remove(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
-    Ok(Value::Null)
-}
-
 fn setcookie(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     setcookie_common(vm, a, false)
 }
@@ -213,6 +297,35 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
     .function(
         "setrawcookie(string $name, string $value = \"\", array|int $expires_or_options = 0, string $path = \"\", string $domain = \"\", bool $secure = false, bool $httponly = false): bool",
         setrawcookie,
-    )
-    .function("header_remove(?string $name = null): void", header_remove);
+    );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn http_dates() {
+        assert_eq!(http_date(0), "Thu, 01 Jan 1970 00:00:00 GMT");
+        assert_eq!(http_date(1_700_000_000), "Tue, 14 Nov 2023 22:13:20 GMT");
+    }
+
+    #[test]
+    fn cookie_lines() {
+        let c = Cookie {
+            path: Some(ZStr::from("/")),
+            secure: true,
+            httponly: true,
+            samesite: Some(ZStr::from("Lax")),
+            ..Cookie::default()
+        };
+        assert_eq!(
+            cookie_line(&ZStr::from("n"), &ZStr::from("a b"), &c, false),
+            b"Set-Cookie: n=a%20b; path=/; secure; HttpOnly; SameSite=Lax".to_vec()
+        );
+        assert_eq!(
+            cookie_line(&ZStr::from("n"), &ZStr::from(""), &Cookie::default(), true),
+            b"Set-Cookie: n=deleted; expires=Thu, 01 Jan 1970 00:00:01 GMT; Max-Age=0".to_vec()
+        );
+    }
 }

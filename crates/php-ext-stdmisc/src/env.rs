@@ -188,7 +188,8 @@ fn connection_status(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
     ))
 }
 
-/// `ignore_user_abort($enable)`: returns the previous setting, updating
+/// `ignore_user_abort($enable)`: returns the previous setting (`bool` in
+/// php-src master: `RETURN_BOOL(old_setting)`), updating
 /// the `ignore_user_abort` INI entry.
 #[allow(clippy::unnecessary_wraps)] // native handler signature
 fn ignore_user_abort(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
