@@ -12,7 +12,7 @@
 //!   [`numeric`].
 //! * [`ZArray`] / [`HashTable`] — PHP's ordered hash table with packed arrays,
 //!   holes, `nNextFreeElement`, internal pointer, registered iterators for
-//!   `foreach` by reference and copy-on-write ([`array`]); [`sort`] ports
+//!   `foreach` by reference and copy-on-write ([`array`](mod@array)); [`sort`] ports
 //!   `zend_sort`.
 //! * [`Value`] — the zval: `Null`, `Bool`, `Int`, `Float`, `Str`, `Array`,
 //!   `Object` ([`Obj`] over the VM-implemented [`PhpObject`] trait),
