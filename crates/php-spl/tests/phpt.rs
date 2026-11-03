@@ -35,11 +35,39 @@ fn rel(p: &Path) -> String {
     p.strip_prefix(spl_tests_dir()).unwrap_or(p).to_string_lossy().into_owned()
 }
 
+/// A scratch copy of the test directory (tests write files next to
+/// themselves; the php-src checkout must stay untouched).
+fn work_dir() -> PathBuf {
+    static DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    DIR.get_or_init(|| {
+        let dst = std::env::temp_dir().join(format!("php-spl-phpt-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dst);
+        let src = spl_tests_dir();
+        let mut stack = vec![src.clone()];
+        while let Some(d) = stack.pop() {
+            let rel = d.strip_prefix(&src).unwrap_or(&d).to_path_buf();
+            let _ = std::fs::create_dir_all(dst.join(&rel));
+            let Ok(rd) = std::fs::read_dir(&d) else { continue };
+            for e in rd.flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    stack.push(p);
+                } else if p.extension().is_none_or(|x| x != "phpt") {
+                    let _ = std::fs::copy(&p, dst.join(&rel).join(e.file_name()));
+                }
+            }
+        }
+        dst
+    })
+    .clone()
+}
+
 fn run_isolated(p: &Path) -> harness::Outcome {
     let p = p.to_path_buf();
+    let work = work_dir().join(p.strip_prefix(spl_tests_dir()).unwrap_or(&p));
     let h = std::thread::Builder::new()
         .stack_size(256 * 1024 * 1024)
-        .spawn(move || harness::run_phpt(&p))
+        .spawn(move || harness::run_phpt(&p, &work))
         .expect("spawn");
     h.join().unwrap_or(harness::Outcome::Fail { expected: String::new(), got: "panic".into() })
 }
@@ -57,6 +85,7 @@ fn phpt_passing() {
             failures.push(format!("{name}\n--- expected\n{expected}\n--- got\n{got}\n"));
         }
     }
+    let _ = std::fs::remove_dir_all(work_dir());
     assert!(failures.is_empty(), "{} regressions:\n{}", failures.len(), failures.join("\n"));
 }
 
@@ -86,6 +115,7 @@ fn phpt_survey() {
             harness::Outcome::Skip(_) => skip += 1,
         }
     }
+    let _ = std::fs::remove_dir_all(work_dir());
     println!("pass {} fail {} skip {}", pass.len(), fail.len(), skip);
     for f in &fail {
         println!("FAIL {f}");

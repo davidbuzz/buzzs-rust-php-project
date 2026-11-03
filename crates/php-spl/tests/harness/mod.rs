@@ -247,7 +247,7 @@ pub enum Outcome {
 }
 
 /// Runs one `.phpt` file.
-pub fn run_phpt(path: &std::path::Path) -> Outcome {
+pub fn run_phpt(path: &std::path::Path, work: &std::path::Path) -> Outcome {
     let data = match std::fs::read(path) {
         Ok(d) => d,
         Err(e) => return Outcome::Skip(e.to_string()),
@@ -270,8 +270,9 @@ pub fn run_phpt(path: &std::path::Path) -> Outcome {
     let Some(file) = t.get("FILE") else {
         return Outcome::Skip("no FILE".into());
     };
-    let name = path.to_string_lossy().replace(".phpt", ".php");
-    let dir = path.parent().map(|p| p.to_path_buf()).unwrap_or_default();
+    let name = work.to_string_lossy().replace(".phpt", ".php");
+    let dir = work.parent().map(|p| p.to_path_buf()).unwrap_or_default();
+    let _ = std::fs::write(&name, file);
     let mut it = Interp::new(&name);
     it.dir = dir.to_string_lossy().into_owned();
     if let Some(ini) = t.get("INI") {
@@ -303,6 +304,7 @@ pub fn run_phpt(path: &std::path::Path) -> Outcome {
         c.dir = it.dir.clone();
         c.run_source(clean);
     }
+    let _ = std::fs::remove_file(&name);
     let got = normalize(&out);
     let (expected, ok) = if let Some(e) = t.get("EXPECT") {
         let e = normalize(e);

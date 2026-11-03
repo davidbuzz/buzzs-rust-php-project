@@ -1425,10 +1425,16 @@ impl Interp {
     // -----------------------------------------------------------------------
 
     pub fn eval_args(&mut self, args: &ArgList, by_ref: &dyn Fn(usize) -> bool) -> RtResult<Vec<Value>> {
+        self.pending_named.clear();
         let mut out = Vec::new();
         for a in &args.args {
+            if let ArgKind::Named { name, value } = &a.kind {
+                let v = self.eval(value)?.deref();
+                self.pending_named.push((s(&name.name), v));
+                continue;
+            }
             match &a.kind {
-                ArgKind::Positional(e) | ArgKind::Named { value: e, .. } => {
+                ArgKind::Positional(e) => {
                     let i = out.len();
                     if by_ref(i) && is_lvalue(e) {
                         out.push(Value::Reference(self.get_ref(e)?));
@@ -1436,6 +1442,7 @@ impl Interp {
                         out.push(self.eval(e)?.deref());
                     }
                 }
+                ArgKind::Named { .. } => {}
                 ArgKind::Unpack(e) => {
                     let v = self.eval(e)?;
                     match v {
@@ -1637,6 +1644,14 @@ impl Interp {
     }
 
     fn call_method_h_inner(&mut self, this: Option<&Obj>, cls: &Rc<Class>, m: &Rc<MethodH>, args: &[Value]) -> RtResult<Value> {
+        let named = std::mem::take(&mut self.pending_named);
+        let placed;
+        let args = if named.is_empty() {
+            args
+        } else {
+            placed = self.place_named(m, args, named)?;
+            &placed[..]
+        };
         match &m.kind {
             MKind::User(def) => {
                 let scope = self.find_class(m.class.as_bytes()).or_else(|| Some(cls.clone()));
@@ -1651,6 +1666,68 @@ impl Interp {
             }
             MKind::Native(f) => f(self, this, args),
             MKind::Abstract => Err(rt_err(format!("Cannot call abstract method {}::{}()", m.class, m.name))),
+        }
+    }
+
+    /// Places named arguments by parameter name, filling gaps with defaults.
+    fn place_named(&mut self, m: &Rc<MethodH>, args: &[Value], named: Vec<(String, Value)>) -> RtResult<Vec<Value>> {
+        let params: Vec<(String, Option<Value>)> = match &m.kind {
+            MKind::User(d) => {
+                let mut v = Vec::new();
+                for p in &d.params {
+                    let def = match &p.default {
+                        Some(e) => Some(self.eval(e)?),
+                        None => None,
+                    };
+                    v.push((s(&p.name.name), def));
+                }
+                v
+            }
+            _ => match php_spl::classes::find_method(&m.class, &m.name) {
+                Some((_, md)) => {
+                    let mut v = Vec::new();
+                    for p in md.params {
+                        let def = match p.default {
+                            Some(src) => Some(self.eval_source_expr(src)?),
+                            None => None,
+                        };
+                        v.push((p.name.to_string(), def));
+                    }
+                    v
+                }
+                None => Vec::new(),
+            },
+        };
+        let mut out: Vec<Option<Value>> = args.iter().cloned().map(Some).collect();
+        for (n, v) in named {
+            let Some(i) = params.iter().position(|(pn, _)| *pn == n) else {
+                return Err(rt_err(format!("Unknown named parameter ${n}")));
+            };
+            if out.len() <= i {
+                out.resize(i + 1, None);
+            }
+            out[i] = Some(v);
+        }
+        let mut res = Vec::new();
+        for (i, v) in out.into_iter().enumerate() {
+            match v {
+                Some(v) => res.push(v),
+                None => res.push(params.get(i).and_then(|p| p.1.clone()).unwrap_or_default()),
+            }
+        }
+        Ok(res)
+    }
+
+    fn eval_source_expr(&mut self, src: &str) -> RtResult<Value> {
+        let code = format!("<?php return {src};");
+        let prog = php_parser::parse(code.as_bytes(), &php_parser::ParseOptions::default())
+            .map_err(|e| rt_err(e.message.clone()))?;
+        match prog.statements.first().map(|s| &s.kind) {
+            Some(StmtKind::Return(Some(e))) => {
+                let e = e.clone();
+                self.eval(&e)
+            }
+            _ => Ok(Value::Null),
         }
     }
 

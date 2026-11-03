@@ -281,6 +281,7 @@ pub struct Interp {
     pub tmpfiles: Vec<String>,
     pub pcre: php_pcre::Pcre,
     pub deadline: std::time::Instant,
+    pub pending_named: Vec<(String, Value)>,
     pub steps: u64,
 }
 
@@ -321,6 +322,7 @@ impl Interp {
             pcre: php_pcre::Pcre::new(),
             deadline: std::time::Instant::now() + std::time::Duration::from_secs(10),
             steps: 0,
+            pending_named: Vec::new(),
         };
         crate::harness::builtins::register_classes(&mut it);
         crate::harness::builtins::register_constants(&mut it);

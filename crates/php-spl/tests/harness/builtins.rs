@@ -338,6 +338,10 @@ pub fn register_constants(it: &mut Interp) {
         ("PREG_SPLIT_OFFSET_CAPTURE", 4),
         ("PREG_UNMATCHED_AS_NULL", 512),
         ("SEEK_SET", 0),
+        ("PATHINFO_DIRNAME", 1),
+        ("PATHINFO_BASENAME", 2),
+        ("PATHINFO_EXTENSION", 4),
+        ("PATHINFO_FILENAME", 8),
         ("SEEK_CUR", 1),
         ("SEEK_END", 2),
         ("LOCK_SH", 1),
@@ -1067,6 +1071,155 @@ pub fn call(it: &mut Interp, name: &str, args: &[Value]) -> RtResult<Value> {
             Ok(d) => Value::Str(ZStr::from(d)),
             Err(_) => Value::Bool(false),
         },
+        "strstr" | "stristr" | "strrchr" => {
+            let h = zstr(it, &a0())?;
+            let n = zstr(it, &arg(args, 1))?;
+            let before = arg(args, 2).to_bool(it)?;
+            let hb = h.as_bytes();
+            let pos = if name == "strrchr" {
+                n.as_bytes().first().and_then(|c| hb.iter().rposition(|x| x == c))
+            } else if name == "stristr" {
+                let hl = hb.to_ascii_lowercase();
+                let nl = n.as_bytes().to_ascii_lowercase();
+                hl.windows(nl.len().max(1)).position(|w| w == nl.as_slice())
+            } else {
+                hb.windows(n.len().max(1)).position(|w| w == n.as_bytes())
+            };
+            match pos {
+                Some(p) if before => Value::Str(ZStr::from(&hb[..p])),
+                Some(p) => Value::Str(ZStr::from(&hb[p..])),
+                None => Value::Bool(false),
+            }
+        }
+        "str_rot13" => Value::Str(ZStr::from(
+            zstr(it, &a0())?
+                .as_bytes()
+                .iter()
+                .map(|&c| match c {
+                    b'a'..=b'z' => (c - b'a' + 13) % 26 + b'a',
+                    b'A'..=b'Z' => (c - b'A' + 13) % 26 + b'A',
+                    _ => c,
+                })
+                .collect::<Vec<u8>>(),
+        )),
+        "pathinfo" => {
+            let p = zstr(it, &a0())?;
+            let pi = php_streams::pathname::pathinfo(p.as_bytes());
+            let opt = if args.len() > 1 { arg(args, 1).to_long(it)? } else { 15 };
+            let mut t = HashTable::new();
+            let mut put = |k: &str, v: Option<&Vec<u8>>| {
+                if let Some(v) = v {
+                    t.insert(ArrayKey::from(k), Value::Str(ZStr::from(v.as_slice())));
+                }
+            };
+            let dir = pi.dirname.clone();
+            let base = Some(pi.basename.clone());
+            let ext = pi.extension.clone();
+            let fname = Some(pi.filename.clone());
+            match opt {
+                1 => return Ok(dir.map_or(Value::from(""), |d| Value::Str(ZStr::from(d)))),
+                2 => return Ok(Value::Str(ZStr::from(pi.basename))),
+                4 => return Ok(ext.map_or(Value::from(""), |d| Value::Str(ZStr::from(d)))),
+                8 => return Ok(Value::Str(ZStr::from(pi.filename))),
+                _ => {}
+            }
+            put("dirname", dir.as_ref());
+            put("basename", base.as_ref());
+            put("extension", ext.as_ref());
+            put("filename", fname.as_ref());
+            Value::Array(ZArray::from_table(t))
+        }
+        "getenv" => Value::Bool(false),
+        "set_include_path" | "get_include_path" => Value::from("."),
+        "realpath" => match std::fs::canonicalize(zstr(it, &a0())?.to_string_lossy()) {
+            Ok(p) => Value::from(p.to_string_lossy().into_owned()),
+            Err(_) => Value::Bool(false),
+        },
+        "symlink" => {
+            let t = zstr(it, &a0())?.to_string_lossy();
+            let l = zstr(it, &arg(args, 1))?.to_string_lossy();
+            Value::Bool(std::os::unix::fs::symlink(t, l).is_ok())
+        }
+        "is_link" => Value::Bool(std::fs::symlink_metadata(zstr(it, &a0())?.to_string_lossy()).is_ok_and(|m| m.file_type().is_symlink())),
+        "fileowner" | "filegroup" | "fileperms" | "filesize" | "fileinode" | "filemtime" | "fileatime" | "filectime" | "filetype" | "is_readable" | "is_writable" | "is_writeable" | "is_executable" => {
+            use php_streams::filestat::{php_stat, FsType, StatResult};
+            let p = zstr(it, &a0())?;
+            let ty = match name {
+                "fileowner" => FsType::Owner,
+                "filegroup" => FsType::Group,
+                "fileperms" => FsType::Perms,
+                "filesize" => FsType::Size,
+                "fileinode" => FsType::Inode,
+                "filemtime" => FsType::Mtime,
+                "fileatime" => FsType::Atime,
+                "filectime" => FsType::Ctime,
+                "filetype" => FsType::Type,
+                "is_readable" => FsType::IsR,
+                "is_executable" => FsType::IsX,
+                _ => FsType::IsW,
+            };
+            match php_stat(p.as_bytes(), ty) {
+                StatResult::Bool(b) => Value::Bool(b),
+                StatResult::Int(i) => Value::Int(i),
+                StatResult::Str(s) => Value::from(s),
+                StatResult::Stat(_) => Value::Null,
+            }
+        }
+        "fopen" => {
+            let p = zstr(it, &a0())?;
+            let mode = zstr(it, &arg(args, 1))?.to_string_lossy();
+            let prev = php_streams::diag::set_handler(None);
+            let s = php_streams::open::fopen(p.as_bytes(), &mode, false, None);
+            let diags = php_streams::diag::take();
+            php_streams::diag::set_handler(prev);
+            for d in diags {
+                it.emit(ErrorLevel::Warning, &format!("fopen({}): {}", p.to_string_lossy(), d.text()))?;
+            }
+            match s {
+                Some(s) => Value::Resource(php_runtime::Resource::new("stream", Some(Box::new(s)))),
+                None => Value::Bool(false),
+            }
+        }
+        "fclose" | "fwrite" | "fputs" | "fgets" | "feof" | "fread" | "rewind" | "ftell" | "fflush" => {
+            let Value::Resource(r) = a0() else { return Err(rt_err(format!("{name}(): Argument #1 must be of type resource"))) };
+            if name == "fclose" {
+                r.close();
+                return Ok(Value::Bool(true));
+            }
+            let data2 = if args.len() > 1 { Some(zstr(it, &arg(args, 1))?) } else { None };
+            let mut d = r.data_mut();
+            let Some(s) = d.as_mut().and_then(|b| b.downcast_mut::<php_streams::stream::Stream>()) else {
+                return Ok(Value::Bool(false));
+            };
+            match name {
+                "fwrite" | "fputs" => match s.write(data2.unwrap_or_default().as_bytes()) {
+                    Ok(n) => Value::Int(n as i64),
+                    Err(_) => Value::Bool(false),
+                },
+                "fgets" => s.get_line(None).map_or(Value::Bool(false), |l| Value::Str(ZStr::from(l))),
+                "feof" => Value::Bool(s.eof()),
+                "fread" => {
+                    let n = data2.and_then(|z| z.to_string_lossy().parse::<usize>().ok()).unwrap_or(0);
+                    s.read_vec(n).map_or(Value::from(""), |v| Value::Str(ZStr::from(v)))
+                }
+                "rewind" => Value::Bool(s.rewind() == 0),
+                "ftell" => Value::Int(s.tell()),
+                _ => Value::Bool(s.flush() == 0),
+            }
+        }
+        "file" => {
+            let p = zstr(it, &a0())?;
+            let flags = arg(args, 1).to_long(it)?;
+            match std::fs::read(p.to_string_lossy()) {
+                Ok(d) => Value::Array(ZArray::from_values(
+                    php_streams::file::split_lines(&d, b'\n', flags & 2 == 0, flags & 4 != 0)
+                        .into_iter()
+                        .map(|l| Value::Str(ZStr::from(l))),
+                )),
+                Err(_) => Value::Bool(false),
+            }
+        }
+        "preg_match" | "preg_match_all" | "preg_replace" | "preg_split" | "preg_quote" => return preg(it, name, args),
         "getmypid" => Value::Int(i64::from(std::process::id())),
         "sys_get_temp_dir" => Value::from(std::env::temp_dir().to_string_lossy().into_owned()),
         "tempnam" => {
@@ -1162,12 +1315,6 @@ pub fn call(it: &mut Interp, name: &str, args: &[Value]) -> RtResult<Value> {
         "array_column" | "array_rand" => return Err(rt_err(format!("builtin {name} unsupported"))),
         "spl_autoload_register_" => Value::Null,
         "debug_zval_refcount" | "debug_zval_dump" => Value::Null,
-        "preg_match" | "preg_replace" | "preg_split" | "preg_quote" | "preg_match_all" => {
-            return Err(rt_err(format!("builtin {name} unsupported")));
-        }
-        "fopen" | "fclose" | "fwrite" | "fgets" | "feof" | "stream_get_meta_data" => {
-            return Err(rt_err(format!("builtin {name} unsupported")));
-        }
         "assert" => Value::Bool(true),
         "array_is_list" => Value::Bool(arr(&a0())?.is_list()),
         "array_any" | "array_all" => {
@@ -1296,3 +1443,71 @@ fn md5_hash(_data: &[u8]) -> u128 {
 
 
 pub fn unused(_: &HashTable, _: ArrayKey, _: Obj) {}
+
+fn pcre_value(v: &php_pcre::Value) -> Value {
+    match v {
+        php_pcre::Value::Str(s) => Value::Str(ZStr::from(s.as_slice())),
+        php_pcre::Value::Null => Value::Null,
+        php_pcre::Value::Int(i) => Value::Int(*i),
+        php_pcre::Value::Array(a) => Value::Array(pcre_array(a)),
+    }
+}
+
+fn pcre_array(a: &php_pcre::MatchArray) -> ZArray {
+    let mut t = HashTable::new();
+    for (k, v) in a.iter() {
+        let key = match k {
+            php_pcre::Key::Index(i) => ArrayKey::Int(*i),
+            php_pcre::Key::Name(n) => ArrayKey::from_bytes(n),
+        };
+        t.insert(key, pcre_value(v));
+    }
+    ZArray::from_table(t)
+}
+
+fn preg(it: &mut Interp, name: &str, args: &[Value]) -> RtResult<Value> {
+    if name == "preg_quote" {
+        let s = zstr(it, &arg(args, 0))?;
+        let d = if args.len() > 1 { Some(zstr(it, &arg(args, 1))?) } else { None };
+        return Ok(Value::Str(ZStr::from(php_pcre::quote(s.as_bytes(), d.as_ref().map(ZStr::as_bytes)))));
+    }
+    let pat = zstr(it, &arg(args, 0))?;
+    let re = match it.pcre.compile(pat.as_bytes()) {
+        Ok(r) => r,
+        Err(e) => {
+            it.emit(ErrorLevel::Warning, &format!("{name}(): {}", String::from_utf8_lossy(&e.message())))?;
+            return Ok(Value::Bool(false));
+        }
+    };
+    let cfg = it.pcre.config();
+    match name {
+        "preg_match" | "preg_match_all" => {
+            let subj = zstr(it, &arg(args, 1))?;
+            let flags = arg(args, 3).to_long(it)?;
+            let out = if name == "preg_match" {
+                php_pcre::match_one(&re, &cfg, subj.as_bytes(), args.len() > 2, flags, 0)
+            } else {
+                php_pcre::match_all(&re, &cfg, subj.as_bytes(), args.len() > 2, flags, 0)
+            };
+            if let (Some(Value::Reference(r)), Some(m)) = (args.get(2), &out.matches) {
+                r.set(Value::Array(pcre_array(m)));
+            }
+            Ok(match out.result {
+                Ok(n) => Value::Int(n as i64),
+                Err(_) => Value::Bool(false),
+            })
+        }
+        "preg_replace" => {
+            let rep = zstr(it, &arg(args, 1))?;
+            let subj = zstr(it, &arg(args, 2))?;
+            let out = php_pcre::replace(&re, &cfg, subj.as_bytes(), &php_pcre::Replacement::parse(rep.as_bytes()), php_pcre::limit_from_php(-1));
+            Ok(out.result.map_or(Value::Null, |v| Value::Str(ZStr::from(v))))
+        }
+        _ => {
+            let subj = zstr(it, &arg(args, 1))?;
+            let limit = if args.len() > 2 { arg(args, 2).to_long(it)? } else { -1 };
+            let flags = arg(args, 3).to_long(it)?;
+            Ok(php_pcre::split(&re, &cfg, subj.as_bytes(), limit, flags).map_or(Value::Bool(false), |a| Value::Array(pcre_array(&a))))
+        }
+    }
+}
