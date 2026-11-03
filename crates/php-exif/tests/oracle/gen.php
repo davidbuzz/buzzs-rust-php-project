@@ -71,3 +71,15 @@ for ($i = -2; $i <= 0x10001; $i++) {
     if ($r !== false) fwrite($out, "$i $r\n");
 }
 fclose($out);
+
+$out = fopen(__DIR__ . '/iptc.txt', 'w');
+$iptc = "\x1C\x02x\x00\x0ATest image\x1C\x02t\x00\x05(c)PH";
+foreach ($files as $f) {
+    if (filesize("$root/$f") > 60000) continue;
+    $diags = [];
+    $r = @iptcembed($iptc, "$root/$f");
+    emit($out, "$f|iptcembed", $diags, $r);
+    $r = iptcparse(is_string($r) ? $r : file_get_contents("$root/$f"));
+    emit($out, "$f|iptcparse", $diags, $r);
+}
+fclose($out);

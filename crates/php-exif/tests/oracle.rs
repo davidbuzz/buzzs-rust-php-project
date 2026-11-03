@@ -335,3 +335,30 @@ fn regenerate_oracle() {
         .expect("run php");
     assert!(status.success());
 }
+
+#[test]
+fn iptc_matches_oracle() {
+    let iptc = b"\x1C\x02x\x00\x0ATest image\x1C\x02t\x00\x05(c)PH";
+    let mut mismatches = Vec::new();
+    let mut last_embed: Option<Vec<u8>> = None;
+    for c in load("iptc.txt") {
+        let parts = split_id(&c.id);
+        let path = root().join("fixtures").join(parts[0]);
+        let data = std::fs::read(&path).expect("read");
+        let v = if parts[1] == "iptcembed" {
+            let r = php_exif::iptc::iptcembed(iptc, &data, 0);
+            last_embed = r.result.clone().ok().flatten();
+            match r.result {
+                Ok(Some(b)) => Value::string(b.as_slice()),
+                Ok(None) => Value::Bool(true),
+                Err(()) => Value::Bool(false),
+            }
+        } else {
+            php_exif::iptc::iptcparse(last_embed.as_deref().unwrap_or(&data))
+        };
+        if ser(&v) != c.result {
+            mismatches.push(format!("{}|", c.id));
+        }
+    }
+    report("iptc", &mismatches);
+}

@@ -9,5 +9,6 @@ pub mod fmt;
 pub mod imagesize;
 pub mod imagetype;
 mod inflate;
+pub mod iptc;
 pub mod stream;
 pub mod tags;
