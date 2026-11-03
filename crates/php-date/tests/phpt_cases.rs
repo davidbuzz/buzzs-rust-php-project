@@ -588,3 +588,23 @@ fn fuzz_extremes_do_not_panic() {
         let _ = api::idate(b"B", a, tz);
     }
 }
+
+#[test]
+fn bug52480_diff_in_every_zone() {
+    let utc = tz::get("UTC").unwrap();
+    let mut wrong = Vec::new();
+    for id in tz::identifiers_list(tz::group::ALL, None).unwrap() {
+        let zone = TimezoneSpec::Id(tz::get(id).unwrap());
+        let start = api::date_initialize(b"2017-03-01", None, Some(&zone), &utc, 0, 0)
+            .0
+            .unwrap();
+        let end = api::date_initialize(b"2017-03-31", None, Some(&zone), &utc, 0, 0)
+            .0
+            .unwrap();
+        let d = api::diff(&start, &end, false).rel;
+        if (d.y, d.m, d.d, d.h, d.i, d.s, d.us, d.invert, d.days) != (0, 0, 30, 0, 0, 0, 0, 0, 30) {
+            wrong.push(id);
+        }
+    }
+    assert!(wrong.is_empty(), "wrong result for {wrong:?}");
+}
