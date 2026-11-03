@@ -24,7 +24,8 @@
 //! * Wrappers: [`plain`] (files, directories, STDIO ops), [`php_wrapper`]
 //!   (`php://`), [`memory`] (memory/temp streams and `data:`),
 //!   [`glob_wrapper`] (`glob://`), [`user`] (`stream_wrapper_register`),
-//!   [`transports`] (`stream_socket_client` for tcp/udp/unix).
+//!   [`transports`] (`stream_socket_client` for tcp/udp/unix),
+//!   [`http`] (`http://` / `https://`).
 //! * [`filter`] — filter framework, bundled filters and `php_user_filter`.
 //! * [`file`](mod@file) / [`filestat`] — the PHP functions' core logic (argument
 //!   `ValueError`s are returned as [`file::ArgError`]).
@@ -43,6 +44,7 @@ pub mod filter;
 pub mod fnmatch;
 pub mod glob;
 pub mod glob_wrapper;
+pub mod http;
 pub mod memory;
 pub mod mode;
 pub mod open;
@@ -50,6 +52,7 @@ pub mod pathname;
 pub mod paths;
 pub mod php_wrapper;
 pub mod plain;
+pub mod poll;
 pub mod stat;
 pub mod state;
 pub mod stream;

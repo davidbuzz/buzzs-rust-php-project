@@ -6,6 +6,7 @@
 //! * [`dirs`] — `dir.c` (opendir, scandir, glob, `Directory`);
 //! * [`streams`] — `streamsfuncs.c` (meta data, contexts, select);
 //! * [`userwrap`] / [`userfilter`] — user-space wrappers and filters;
+//! * [`http`] — the `http://` wrapper's VM services, `get_headers()`;
 //! * [`net`] — sockets; [`xport`] — the transport/crypto registry other
 //!   extensions (openssl) plug into; [`process`] — `popen()`.
 //!
@@ -20,6 +21,7 @@ pub mod bridge;
 pub mod dirs;
 pub mod errors;
 pub mod files;
+pub mod http;
 pub mod include;
 pub mod ini;
 pub mod meta;
@@ -70,6 +72,7 @@ fn register_std_streams(m: &mut ModuleBuilder<'_>) {
 
 fn shutdown(vm: &mut Vm) {
     res::shutdown(vm);
+    http::shutdown();
 }
 
 impl Extension for Streams {
@@ -88,6 +91,7 @@ impl Extension for Streams {
         userwrap::register(m);
         userfilter::register(m);
         net::register(m);
+        http::register(m);
         process::register(m);
         for (n, v) in CONSTANTS {
             m.constant(n, Value::Int(*v));

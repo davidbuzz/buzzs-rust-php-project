@@ -97,8 +97,7 @@ impl StreamCell {
 /// Whether `s` was opened through a user-space wrapper (file or directory).
 pub fn is_user_stream(s: &Stream) -> bool {
     s.ops().is_userspace()
-        || s
-            .wrapper
+        || s.wrapper
             .as_ref()
             .is_some_and(|w| w.label == php_streams::user::LABEL)
 }

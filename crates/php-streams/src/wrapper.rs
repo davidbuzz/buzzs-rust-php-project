@@ -580,7 +580,7 @@ mod tests {
             .iter()
             .map(|x| String::from_utf8_lossy(x).into_owned())
             .collect();
-        assert_eq!(names, vec!["php", "file", "glob", "data"]);
+        assert_eq!(names, vec!["https", "php", "file", "glob", "data", "http"]);
     }
 
     #[test]

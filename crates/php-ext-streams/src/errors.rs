@@ -277,7 +277,10 @@ fn throw_exception(vm: &mut Vm, entries: &[Entry]) -> VmResult<()> {
     };
     let o: Obj = vm.new_object_with_args(
         &cls,
-        vec![bytes(first.message.as_bytes()), Value::Int(code_id(first.code))],
+        vec![
+            bytes(first.message.as_bytes()),
+            Value::Int(code_id(first.code)),
+        ],
     )?;
     let arr = errors_array(vm, entries)?;
     vm.set_property_raw(&o, "errors", arr.clone());
@@ -319,8 +322,10 @@ fn get_errors(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         return Ok(Value::Array(ZArray::new()));
     };
     let _ = vm;
-    Ok(php_vm::object::internal::<ExceptionErrors, _>(&this, |e| e.0.clone())
-        .unwrap_or_else(|| Value::Array(ZArray::new())))
+    Ok(
+        php_vm::object::internal::<ExceptionErrors, _>(&this, |e| e.0.clone())
+            .unwrap_or_else(|| Value::Array(ZArray::new())),
+    )
 }
 
 /// Registers the enums, classes and functions.
@@ -351,7 +356,12 @@ pub fn register(m: &mut ModuleBuilder<'_>) {
         .register(m.vm());
     let exception = ClassBuilder::new("StreamException")
         .extends(m.vm(), "Exception")
-        .prop("errors", acc::PRIVATE, Some("array"), Some(Value::Array(ZArray::new())))
+        .prop(
+            "errors",
+            acc::PRIVATE,
+            Some("array"),
+            Some(Value::Array(ZArray::new())),
+        )
         .method("getErrors(): array", acc::PUBLIC, get_errors)
         .register(m.vm());
     CLASSES.with(|c| *c.borrow_mut() = vec![error, exception]);

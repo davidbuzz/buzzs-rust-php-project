@@ -256,7 +256,10 @@ fn parse_host_port(addr: &str) -> Result<(String, u16), ConnectError> {
     let b = addr.as_bytes();
     if b.first() == Some(&b'[') && b.len() > 1 {
         // memchr(str + 1, ']', len - 2): the last byte is not searched.
-        let end = b[1..b.len() - 1].iter().position(|&c| c == b']').map(|e| e + 1);
+        let end = b[1..b.len() - 1]
+            .iter()
+            .position(|&c| c == b']')
+            .map(|e| e + 1);
         let Some(end) = end.filter(|&e| b.get(e + 1) == Some(&b':')) else {
             return Err(fail(format!("Failed to parse IPv6 address \"{addr}\"")));
         };
@@ -264,7 +267,9 @@ fn parse_host_port(addr: &str) -> Result<(String, u16), ConnectError> {
             .ok_or_else(|| fail(format!("Failed to parse port of address \"{addr}\"")))?;
         return Ok((addr[1..end].to_string(), port));
     }
-    let colon = b[..b.len().saturating_sub(1)].iter().position(|&c| c == b':');
+    let colon = b[..b.len().saturating_sub(1)]
+        .iter()
+        .position(|&c| c == b':');
     let Some(c) = colon else {
         return Err(fail(format!("Failed to parse address \"{addr}\"")));
     };

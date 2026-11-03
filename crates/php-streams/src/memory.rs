@@ -124,7 +124,6 @@ impl StreamOps for MemoryOps {
         }
     }
 
-
     fn stat(&mut self, _st: &mut StreamState) -> Option<StatBuf> {
         Some(StatBuf {
             mode: if self.mode == TempMode::ReadOnly {

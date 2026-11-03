@@ -14,7 +14,7 @@
 use std::cell::{Cell, RefCell};
 
 use php_runtime::{ArrayKey, Value, ZArray, ZStr};
-use php_streams::diag::{self, Severity};
+use php_streams::diag;
 use php_streams::state;
 use php_streams::value::{Key as SKey, Value as SValue};
 use php_vm::ext::{Throw, VmResult};
@@ -130,7 +130,11 @@ fn run_ex<R>(vm: &mut Vm, sync: bool, f: impl FnOnce() -> R) -> VmResult<R> {
         let _ = diag::take();
     }
     let outer = take_pending();
-    let r = if sync { enter(vm, f) } else { enter_nosync(vm, f) };
+    let r = if sync {
+        enter(vm, f)
+    } else {
+        enter_nosync(vm, f)
+    };
     flush_diags(vm);
     let inner = take_pending();
     if let Some(t) = outer {
@@ -145,7 +149,10 @@ fn run_ex<R>(vm: &mut Vm, sync: bool, f: impl FnOnce() -> R) -> VmResult<R> {
 /// For other extensions calling the library directly (outside [`run`]):
 /// the queued diagnostic texts (without the `func(): ` prefix).
 pub fn take_diagnostics() -> Vec<String> {
-    diag::take().iter().map(php_streams::diag::Diagnostic::text).collect()
+    diag::take()
+        .iter()
+        .map(php_streams::diag::Diagnostic::text)
+        .collect()
 }
 
 /// Defers [`flush_diags`] while `f` runs.
@@ -168,6 +175,8 @@ fn sync_settings(vm: &Vm) {
     let auto_detect_line_endings = vm.ini_bool("auto_detect_line_endings");
     let default_socket_timeout = vm.ini_long("default_socket_timeout");
     let html_errors = vm.ini_bool("html_errors");
+    let user_agent = vm.ini_string("user_agent").filter(|v| !v.is_empty());
+    let from_address = vm.ini_string("from").filter(|v| !v.is_empty());
     state::update_settings(|s| {
         s.include_path = include_path;
         s.open_basedir = open_basedir;
@@ -179,6 +188,8 @@ fn sync_settings(vm: &Vm) {
         s.default_socket_timeout = default_socket_timeout;
         s.html_errors = html_errors;
         s.sapi_is_cli = true;
+        s.user_agent = user_agent;
+        s.from_address = from_address;
     });
 }
 

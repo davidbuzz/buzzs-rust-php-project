@@ -366,7 +366,7 @@ fn parse_options(vm: &mut Vm, cell: &CtxCell, options: &ZArray) -> VmResult<bool
 }
 
 /// `php_stream_context_set_option`, keeping the VM-side mirror.
-fn set_option(cell: &CtxCell, w: &[u8], o: &[u8], v: Value) {
+pub(crate) fn set_option(cell: &CtxCell, w: &[u8], o: &[u8], v: Value) {
     let ws = String::from_utf8_lossy(w).into_owned();
     let os = String::from_utf8_lossy(o).into_owned();
     cell.ctx.borrow_mut().set(&ws, &os, bridge::to_lib(&v));
@@ -378,6 +378,17 @@ fn set_option(cell: &CtxCell, w: &[u8], o: &[u8], v: Value) {
     }
     if let Value::Array(inner) = slot {
         inner.make_mut().insert(ArrayKey::Str(ZStr::from(o)), v);
+    }
+}
+
+/// `php_stream_context_unset_option`, keeping the VM-side mirror.
+pub(crate) fn unset_option(cell: &CtxCell, w: &[u8], o: &[u8]) {
+    let ws = String::from_utf8_lossy(w).into_owned();
+    let os = String::from_utf8_lossy(o).into_owned();
+    cell.ctx.borrow_mut().unset(&ws, &os);
+    let mut mirror = cell.options.borrow_mut();
+    if let Some(Value::Array(inner)) = mirror.make_mut().get_mut(&ArrayKey::Str(ZStr::from(w))) {
+        inner.make_mut().remove(&ArrayKey::Str(ZStr::from(o)));
     }
 }
 
@@ -394,6 +405,8 @@ fn parse_params(vm: &mut Vm, a: &Args, cell: &CtxCell, params: &ZArray) -> VmRes
             ));
         }
         *cell.notifier.borrow_mut() = Some(n);
+        // A fresh notifier: progress bookkeeping starts over.
+        cell.ctx.borrow_mut().notifier = Some(php_streams::context::Notifier::default());
     }
     if let Some(o) = params.get_str(b"options") {
         match o.deref() {

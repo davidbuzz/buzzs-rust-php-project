@@ -382,6 +382,82 @@ pub fn in_group(gid_to_check: i64) -> bool {
         .any(|&g| i64::from(g) == gid_to_check)
 }
 
+/// `epoll_create1(EPOLL_CLOEXEC)`.
+///
+/// # Errors
+/// The `errno` of the failed call.
+pub fn epoll_create() -> Result<std::os::fd::OwnedFd, i32> {
+    // SAFETY: plain system call without pointer arguments.
+    let fd = unsafe { libc::epoll_create1(libc::EPOLL_CLOEXEC) };
+    if fd < 0 {
+        return Err(last_errno());
+    }
+    // SAFETY: `fd` is a fresh descriptor owned by nobody else.
+    Ok(unsafe { std::os::fd::OwnedFd::from_raw_fd(fd) })
+}
+
+/// `epoll_ctl(epfd, op, fd, {events, data.u64 = fd})`.
+///
+/// # Errors
+/// The `errno` of the failed call.
+pub fn epoll_ctl(epfd: RawFd, op: i32, fd: RawFd, events: u32) -> Result<(), i32> {
+    let mut ev = libc::epoll_event {
+        events,
+        u64: u64::try_from(fd).unwrap_or(0),
+    };
+    // SAFETY: `ev` is a valid epoll_event for the duration of the call
+    // (ignored for EPOLL_CTL_DEL).
+    let rc = unsafe { libc::epoll_ctl(epfd, op, fd, &raw mut ev) };
+    if rc < 0 {
+        return Err(last_errno());
+    }
+    Ok(())
+}
+
+/// `epoll_wait()`: `(fd, native events)` pairs.
+///
+/// # Errors
+/// The `errno` of the failed call.
+pub fn epoll_wait(epfd: RawFd, max: usize, timeout_ms: i32) -> Result<Vec<(RawFd, u32)>, i32> {
+    let mut evs = vec![libc::epoll_event { events: 0, u64: 0 }; max.max(1)];
+    let n = i32::try_from(evs.len()).unwrap_or(i32::MAX);
+    // SAFETY: `evs` holds `n` writable epoll_event entries.
+    let rc = unsafe { libc::epoll_wait(epfd, evs.as_mut_ptr(), n, timeout_ms) };
+    if rc < 0 {
+        return Err(last_errno());
+    }
+    let rc = usize::try_from(rc).unwrap_or(0);
+    Ok(evs[..rc]
+        .iter()
+        .map(|e| {
+            let (fd, ev) = (e.u64, e.events);
+            (RawFd::try_from(fd).unwrap_or(-1), ev)
+        })
+        .collect())
+}
+
+/// `poll()` over `(fd, events)`; returns the `revents` per entry.
+///
+/// # Errors
+/// The `errno` of the failed call.
+pub fn poll_fds(fds: &[(RawFd, i16)], timeout_ms: i32) -> Result<Vec<i16>, i32> {
+    let mut p: Vec<libc::pollfd> = fds
+        .iter()
+        .map(|&(fd, events)| libc::pollfd {
+            fd,
+            events,
+            revents: 0,
+        })
+        .collect();
+    let n = libc::nfds_t::try_from(p.len()).unwrap_or(0);
+    // SAFETY: `p` holds `n` valid pollfd entries.
+    let rc = unsafe { libc::poll(p.as_mut_ptr(), n, timeout_ms) };
+    if rc < 0 {
+        return Err(last_errno());
+    }
+    Ok(p.iter().map(|e| e.revents).collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

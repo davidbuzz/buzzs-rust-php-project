@@ -104,6 +104,17 @@ impl Value {
         }
     }
 
+    /// `zval_get_double()`: strings use their numeric prefix
+    /// (`zend_strtod`).
+    pub fn to_double(&self) -> f64 {
+        match self {
+            Value::Float(f) => *f,
+            Value::Str(s) => str_to_double(s),
+            #[allow(clippy::cast_precision_loss)] // PHP's (double) cast
+            other => other.to_long() as f64,
+        }
+    }
+
     /// String conversion (`zval_get_string()` / `try_convert_to_string()`).
     /// Returns `None` for values PHP cannot convert (arrays convert to
     /// `"Array"` with a warning in PHP; objects without `__toString`).
@@ -281,6 +292,51 @@ fn format_float(f: f64) -> String {
     } else {
         s
     }
+}
+
+/// `zend_strtod()` over the numeric prefix of `s` (leading whitespace
+/// allowed); 0.0 when there is none.
+fn str_to_double(s: &[u8]) -> f64 {
+    let mut i = s
+        .iter()
+        .take_while(|c| matches!(c, b' ' | b'\t' | b'\n' | b'\r' | b'\x0b' | b'\x0c'))
+        .count();
+    let start = i;
+    if matches!(s.get(i), Some(b'+' | b'-')) {
+        i += 1;
+    }
+    let digits = |i: &mut usize| {
+        let b = *i;
+        while s.get(*i).is_some_and(u8::is_ascii_digit) {
+            *i += 1;
+        }
+        *i - b
+    };
+    let mut n = digits(&mut i);
+    if s.get(i) == Some(&b'.') {
+        let mut j = i + 1;
+        let f = digits(&mut j);
+        if n + f > 0 {
+            n += f;
+            i = j;
+        }
+    }
+    if n == 0 {
+        return 0.0;
+    }
+    if matches!(s.get(i), Some(b'e' | b'E')) {
+        let mut j = i + 1;
+        if matches!(s.get(j), Some(b'+' | b'-')) {
+            j += 1;
+        }
+        if digits(&mut j) > 0 {
+            i = j;
+        }
+    }
+    std::str::from_utf8(&s[start..i])
+        .ok()
+        .and_then(|t| t.parse().ok())
+        .unwrap_or(0.0)
 }
 
 #[cfg(test)]

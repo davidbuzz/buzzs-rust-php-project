@@ -320,6 +320,9 @@ pub struct Stream {
     pub lock_flag: i32,
     /// Whether the stream was opened for `include` (`fclose()` refuses it).
     pub is_include: bool,
+    /// `stream->wrapperdata` set by a built-in wrapper (the `http://`
+    /// response headers); user-space wrapper objects are VM-side.
+    pub wrapper_data: Option<Value>,
 }
 
 impl fmt::Debug for Stream {
@@ -374,6 +377,7 @@ impl Stream {
             closed: false,
             lock_flag: 0,
             is_include: false,
+            wrapper_data: None,
         }
     }
 
@@ -499,6 +503,9 @@ impl Stream {
             let mut chunk = vec![0u8; self.chunk_size];
             while !self.state.eof && self.writepos - self.readpos < to_read_now {
                 let justread = self.ops.read(&mut self.state, &mut chunk);
+                if let Ok(n) = justread {
+                    self.note_progress(n);
+                }
                 let mut input = Brigade::new();
                 let flags = match justread {
                     Err(_) if self.writepos == self.readpos => return Err(OpFailed),
@@ -530,6 +537,7 @@ impl Stream {
                     FilterStatus::ErrFatal => {
                         self.state.eof = true;
                         self.state.fatal_error = true;
+                        crate::context::notify_completed(self.context.as_ref());
                         return Err(OpFailed);
                     }
                 }
@@ -549,10 +557,36 @@ impl Stream {
                 self.readbuf.resize(newlen, 0);
             }
             let wp = self.writepos;
-            let n = self.ops.read(&mut self.state, &mut self.readbuf[wp..])?;
-            self.writepos += n;
+            let old_eof = self.state.eof;
+            let r = self.ops.read(&mut self.state, &mut self.readbuf[wp..]);
+            if let Ok(n) = r {
+                self.writepos += n;
+                self.note_progress(n);
+            }
+            if old_eof != self.state.eof {
+                crate::context::notify_completed(self.context.as_ref());
+            }
+            r?;
         }
         Ok(())
+    }
+
+    /// Whether the ops are a socket (`xp_socket` / `xp_ssl`), whose reads
+    /// and writes advance the context's progress notifications.
+    fn is_socket(&self) -> bool {
+        let l = self.ops.label();
+        l.ends_with("_socket") || l.ends_with("/ssl")
+    }
+
+    /// `php_stream_notify_progress_increment()` after socket I/O.
+    fn note_progress(&self, n: usize) {
+        if n > 0 && self.context.is_some() && self.is_socket() {
+            crate::context::notify_progress_increment(
+                self.context.as_ref(),
+                u64::try_from(n).unwrap_or(u64::MAX),
+                0,
+            );
+        }
     }
 
     /// `php_stream_read()`: returns the number of bytes read; `Err` when
@@ -580,7 +614,10 @@ impl Stream {
                 && (self.has_flag(flags::NO_BUFFER) || self.chunk_size == 1)
             {
                 match self.ops.read(&mut self.state, &mut buf[off..off + size]) {
-                    Ok(n) => toread = n,
+                    Ok(n) => {
+                        self.note_progress(n);
+                        toread = n;
+                    }
                     Err(e) => {
                         if didread == 0 {
                             return Err(e);
@@ -807,7 +844,15 @@ impl Stream {
         let mut didwrite = 0usize;
         while !buf.is_empty() {
             let n = buf.len().min(chunk.max(1));
-            match self.ops.write(&mut self.state, &buf[..n]) {
+            let old_eof = self.state.eof;
+            let r = self.ops.write(&mut self.state, &buf[..n]);
+            if let Ok(w) = r {
+                self.note_progress(w);
+            }
+            if old_eof != self.state.eof {
+                crate::context::notify_completed(self.context.as_ref());
+            }
+            match r {
                 Ok(w) if w > 0 => {
                     buf = &buf[w..];
                     didwrite += w;
@@ -1412,6 +1457,9 @@ impl Stream {
             out.push(("blocked".into(), Value::Bool(true)));
             let eof = self.eof();
             out.push(("eof".into(), Value::Bool(eof)));
+        }
+        if let Some(d) = &self.wrapper_data {
+            out.push(("wrapper_data".into(), d.clone()));
         }
         if let Some(w) = &self.wrapper {
             out.push(("wrapper_type".into(), Value::str(w.label)));

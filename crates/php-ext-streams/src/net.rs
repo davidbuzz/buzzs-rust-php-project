@@ -235,7 +235,7 @@ fn ssl_options(ctx: Option<&ContextRef>) -> Value {
 }
 
 /// `php_stream_xport_create()`: a client or server stream for `address`.
-fn xport_create(
+pub(crate) fn xport_create(
     vm: &mut Vm,
     address: &str,
     timeout: Option<Duration>,

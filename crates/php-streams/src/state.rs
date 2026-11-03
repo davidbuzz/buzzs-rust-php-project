@@ -32,6 +32,10 @@ pub struct Settings {
     pub html_errors: bool,
     /// Whether the SAPI is the CLI (`php://stdin` semantics, `php://fd`).
     pub sapi_is_cli: bool,
+    /// `user_agent` (`FG(user_agent)`; `None` when unset).
+    pub user_agent: Option<Vec<u8>>,
+    /// `from` (`FG(from_address)`; `None` when unset).
+    pub from_address: Option<Vec<u8>>,
 }
 
 impl Default for Settings {
@@ -47,6 +51,8 @@ impl Default for Settings {
             default_socket_timeout: 60,
             html_errors: false,
             sapi_is_cli: true,
+            user_agent: None,
+            from_address: None,
         }
     }
 }

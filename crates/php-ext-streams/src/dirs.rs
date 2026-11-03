@@ -181,7 +181,10 @@ fn m_rewind(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     rewind_dir(vm, &cell)
 }
 
-fn m_construct(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
+/// `dir_class_get_constructor`: `Directory` declares no constructor (so
+/// `ReflectionClass::getConstructor()` is null and PDO's `FETCH_CLASS`
+/// instantiates it), but `new Directory()` throws.
+fn get_constructor(vm: &mut Vm, _obj: &php_runtime::Obj) -> VmResult<()> {
     Err(vm.throw(
         "Error",
         "Cannot directly construct Directory, use dir() instead",
@@ -319,7 +322,10 @@ pub fn register(m: &mut ModuleBuilder<'_>) {
         .flags(class_flags::FINAL | class_flags::NOT_SERIALIZABLE | class_flags::NO_CLONE)
         .prop("path", acc::PUBLIC | acc::READONLY, Some("string"), None)
         .prop("handle", acc::PUBLIC | acc::READONLY, Some("mixed"), None)
-        .method("__construct()", acc::PUBLIC, m_construct)
+        .hooks(php_vm::ext::ClassHooks {
+            get_constructor: Some(get_constructor),
+            ..php_vm::ext::ClassHooks::default()
+        })
         .method("close(): void", acc::PUBLIC, m_close)
         .method("rewind(): void", acc::PUBLIC, m_rewind)
         .method("read(): string|false", acc::PUBLIC, m_read)
