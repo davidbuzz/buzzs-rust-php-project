@@ -3,27 +3,9 @@
 
 mod common;
 
-use common::{load, Checker, V};
+use common::{err_name, load, show_s, Checker, V};
 use php_intl::numfmt::{Number, NumberFormatter, Parsed};
 use php_intl::Error;
-
-fn err_name(e: &Error) -> String {
-    match e {
-        Error::Intl(i) => format!("s:!{}", i.code.name()),
-        Error::ArgumentValue { .. } | Error::Value(_) => "s:!ValueError".into(),
-        Error::ArgumentType { .. } => "s:!TypeError".into(),
-        Error::Thrown(_) => "s:!Error".into(),
-        Error::ArgumentCount(_) => "s:!ArgumentCountError".into(),
-        Error::IntlException(_) | Error::IntlExceptionInFunction(_) => "s:!IntlException".into(),
-    }
-}
-
-fn show_s(r: php_intl::Result<String>) -> String {
-    match r {
-        Ok(s) => format!("s:{s}"),
-        Err(e) => err_name(&e),
-    }
-}
 
 fn show_num(r: php_intl::Result<Number>) -> String {
     match r {

@@ -177,3 +177,60 @@ impl Checker {
         eprintln!("{name}: {} checks passed", self.total);
     }
 }
+
+/// Renders an error like the fixtures' `attempt()` helper does.
+pub fn err_name(e: &php_intl::Error) -> String {
+    use php_intl::Error;
+    match e {
+        Error::Intl(i) => format!("s:!{}", i.code.name()),
+        Error::ArgumentValue { .. } | Error::Value(_) => "s:!ValueError".into(),
+        Error::ArgumentType { .. } => "s:!TypeError".into(),
+        Error::Thrown(_) => "s:!Error".into(),
+        Error::ArgumentCount(_) => "s:!ArgumentCountError".into(),
+        Error::IntlException(_) | Error::IntlExceptionInFunction(_) => "s:!IntlException".into(),
+    }
+}
+
+/// `s:<string>` or the error marker.
+pub fn show_s(r: php_intl::Result<String>) -> String {
+    match r {
+        Ok(s) => format!("s:{s}"),
+        Err(e) => err_name(&e),
+    }
+}
+
+/// JSON rendering of a string list (as `json_encode` with unescaped
+/// unicode/slashes would produce).
+pub fn json_strs(v: &[String]) -> String {
+    let mut out = String::from("[");
+    for (i, s) in v.iter().enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        out.push_str(&json_str(s));
+    }
+    out.push(']');
+    out
+}
+
+/// `json_encode` of one string (unescaped unicode and slashes).
+pub fn json_str(s: &str) -> String {
+    let mut out = String::from("\"");
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            '\u{8}' => out.push_str("\\b"),
+            '\u{c}' => out.push_str("\\f"),
+            c if (c as u32) < 0x20 => {
+                let _ = std::fmt::Write::write_fmt(&mut out, format_args!("\\u{:04x}", c as u32));
+            }
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}

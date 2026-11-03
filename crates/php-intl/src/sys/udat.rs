@@ -125,7 +125,7 @@ impl DateFormat {
                 i8::from(localized),
                 pattern.as_ptr(),
                 len32(pattern),
-            )
+            );
         }
     }
 

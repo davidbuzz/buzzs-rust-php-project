@@ -290,7 +290,7 @@ impl Calendar {
                 &mut raw,
                 &mut dst,
                 &mut st,
-            )
+            );
         };
         st.check().map(|()| (raw, dst))
     }

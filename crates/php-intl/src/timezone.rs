@@ -98,6 +98,9 @@ pub enum TimeZoneArg<'a> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TimeZone {
     id: Vec<u16>,
+    /// ICU's `TimeZone::getUnknown()` `SimpleTimeZone` (what invalid IDs
+    /// resolve to), as opposed to the `Etc/Unknown` Olson zone.
+    unknown: bool,
 }
 
 fn zone_calendar(id: &[u16]) -> std::result::Result<Calendar, UErrorCode> {
@@ -108,15 +111,20 @@ impl TimeZone {
     /// `TimeZone::createTimeZone(id)`: never fails; unknown IDs yield
     /// `Etc/Unknown`, custom IDs are normalised (`GMT+5` → `GMT+05:00`).
     pub fn create_u16(id: &[u16]) -> Self {
+        let unknown = ustr::str_u16(UNKNOWN_ZONE_ID);
         match zone_calendar(id).and_then(|c| c.time_zone_id()) {
-            Ok(id) => Self { id },
+            Ok(r) if r == unknown && id != unknown.as_slice() => Self::unknown(),
+            Ok(r) => Self {
+                id: r,
+                unknown: false,
+            },
             Err(_) => Self::unknown(),
         }
     }
 
     /// Wraps an ID ICU has already resolved (e.g. from a calendar).
     pub(crate) fn from_resolved_id(id: Vec<u16>) -> Self {
-        Self { id }
+        Self { id, unknown: false }
     }
 
     /// `IntlTimeZone::createTimeZone($id)`.
@@ -135,6 +143,7 @@ impl TimeZone {
     pub fn gmt() -> Self {
         Self {
             id: ustr::str_u16("GMT"),
+            unknown: false,
         }
     }
 
@@ -142,12 +151,13 @@ impl TimeZone {
     pub fn unknown() -> Self {
         Self {
             id: ustr::str_u16(UNKNOWN_ZONE_ID),
+            unknown: true,
         }
     }
 
-    /// Whether this is ICU's unknown zone.
+    /// Whether this is ICU's unknown zone (`TimeZone::getUnknown()`).
     pub fn is_unknown(&self) -> bool {
-        self.id == ustr::str_u16(UNKNOWN_ZONE_ID)
+        self.unknown
     }
 
     /// The UTF-16 ID.
@@ -186,6 +196,10 @@ impl TimeZone {
 
     /// `IntlTimeZone::getDSTSavings()`.
     pub fn dst_savings(&self) -> i32 {
+        if self.unknown {
+            // SimpleTimeZone's default DST savings.
+            return 3_600_000;
+        }
         ucal::dst_savings(&self.id).unwrap_or(0)
     }
 
@@ -277,13 +291,35 @@ impl TimeZone {
         out
     }
 
+    /// Whether ICU implements this zone as an `OlsonTimeZone` (system
+    /// zone) rather than a `SimpleTimeZone` (custom `GMT±hh:mm` IDs and
+    /// `Etc/Unknown`).
+    fn is_olson(&self) -> bool {
+        let custom = self.id.starts_with(&ustr::str_u16("GMT+"))
+            || self.id.starts_with(&ustr::str_u16("GMT-"));
+        !self.unknown && !custom
+    }
+
     /// `IntlTimeZone::hasSameRules($other)`.
     pub fn has_same_rules(&self, other: &TimeZone) -> bool {
         if self.id == other.id {
             return true;
         }
+        match (self.is_olson(), other.is_olson()) {
+            (false, false) => {
+                // SimpleTimeZone: same raw offset, neither observes DST.
+                return self.raw_offset() == other.raw_offset();
+            }
+            (true, true) => {}
+            _ => return false,
+        }
         let a = self.rule_fingerprint();
         let b = other.rule_fingerprint();
+        // Zones without any transition share ICU's null type map and
+        // compare equal regardless of their offsets.
+        if a.len() == 1 && b.len() == 1 {
+            return true;
+        }
         // Compare the offset histories ignoring zero-change "transitions".
         let norm = |v: Vec<(i64, i32, i32)>| {
             let mut out: Vec<(i64, i32, i32)> = Vec::new();
@@ -344,20 +380,14 @@ impl TimeZone {
                     _ => "VVVV",
                 };
                 let r = format_with_pattern(&self.id, locale, pattern, ucal::now());
-                if style == display::GENERIC_LOCATION {
-                    return r;
-                }
                 // Generic names may fall back to localized GMT; then the
                 // time type of "now" decides whether it matches $isDaylight.
                 let now_dst = self.offset(ucal::now(), false).is_ok_and(|(_, d)| d != 0);
+                let short = style == display::SHORT_GENERIC;
                 let gmt_now = format_with_pattern(
                     &self.id,
                     locale,
-                    if style == display::SHORT_GENERIC {
-                        "O"
-                    } else {
-                        "OOOO"
-                    },
+                    if short { "O" } else { "OOOO" },
                     ucal::now(),
                 );
                 if r == gmt_now && daylight != now_dst {
@@ -367,7 +397,7 @@ impl TimeZone {
                     } else {
                         raw
                     };
-                    return localized_gmt(off, locale, style == display::SHORT_GENERIC);
+                    return localized_gmt(off, locale, short);
                 }
                 r
             }
@@ -397,7 +427,7 @@ impl TimeZone {
 
     /// The `==` comparison handler (same ID and rules).
     pub fn equals(&self, other: &TimeZone) -> bool {
-        self.id == other.id
+        self.id == other.id && self.unknown == other.unknown
     }
 }
 
@@ -616,6 +646,9 @@ pub fn equivalent_id(id: &[u8], index: i64) -> Result<String> {
 pub fn region(id: &[u8]) -> Result<String> {
     let u = conv_id(id)?;
     let fail = || Error::global(UErrorCode::ILLEGAL_ARGUMENT_ERROR, "error obtaining region");
+    if u == ustr::str_u16(UNKNOWN_ZONE_ID) {
+        return Err(fail());
+    }
     // TimeZone::getRegion: canonical IDs and links are in Names/Regions.
     let (top, idx) = olson_index(&u).ok_or_else(fail)?;
     let (regions, _) = top.by_key("Regions").map_err(|_| fail())?;
@@ -627,7 +660,7 @@ pub fn region(id: &[u8]) -> Result<String> {
 // Argument coercions
 // ---------------------------------------------------------------------------
 
-/// `timezone_convert_datetimezone()`: a DateTimeZone's zone as an ICU zone.
+/// `timezone_convert_datetimezone()`: a `DateTimeZone`'s zone as an ICU zone.
 /// Errors are intl errors with `Scope::Both` (callers re-scope them).
 pub fn from_php_zone(zone: &PhpZone) -> Result<TimeZone> {
     let id = match zone {
@@ -672,7 +705,7 @@ pub(crate) fn rescope(e: Error, scope: Scope) -> Error {
     }
 }
 
-/// `timezone_process_timezone_argument()`.  DateTimeZone conversion
+/// `timezone_process_timezone_argument()`.  `DateTimeZone` conversion
 /// failures are intl errors (`Scope::Both`; re-scope for static callers),
 /// everything else throws `IntlException` prefixed with the function name.
 pub fn process_timezone_argument(arg: TimeZoneArg<'_>) -> Result<TimeZone> {

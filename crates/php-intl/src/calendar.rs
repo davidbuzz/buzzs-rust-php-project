@@ -170,11 +170,13 @@ const DEBUG_FIELDS: [(i32, &str); 23] = [
 
 impl IntlCalendar {
     /// Wraps an ICU calendar.
+    #[allow(dead_code)]
     pub(crate) fn from_calendar(cal: Calendar) -> Self {
         Self { cal }
     }
 
     /// The wrapped ICU calendar.
+    #[allow(dead_code)]
     pub(crate) fn raw(&self) -> &Calendar {
         &self.cal
     }
@@ -350,21 +352,25 @@ impl IntlCalendar {
     /// `IntlCalendar::setDateTime($y, $m, $d, $h, $i, $s = null)`.
     pub fn set_date_time(
         &mut self,
-        y: i64,
-        m: i64,
-        d: i64,
-        h: i64,
-        i: i64,
-        s: Option<i64>,
+        year: i64,
+        month: i64,
+        day: i64,
+        hour: i64,
+        minute: i64,
+        second: Option<i64>,
     ) -> Result<()> {
-        let (y, m, d) = (int32_arg(y, 1)?, int32_arg(m, 2)?, int32_arg(d, 3)?);
-        let (h, i) = (int32_arg(h, 4)?, int32_arg(i, 5)?);
-        let s = s.map(|s| int32_arg(s, 6)).transpose()?;
-        self.set_ymd(y, m, d);
-        self.cal.set(field::HOUR_OF_DAY, h);
-        self.cal.set(field::MINUTE, i);
-        if let Some(s) = s {
-            self.cal.set(field::SECOND, s);
+        let (year, month, day) = (
+            int32_arg(year, 1)?,
+            int32_arg(month, 2)?,
+            int32_arg(day, 3)?,
+        );
+        let (hour, minute) = (int32_arg(hour, 4)?, int32_arg(minute, 5)?);
+        let second = second.map(|v| int32_arg(v, 6)).transpose()?;
+        self.set_ymd(year, month, day);
+        self.cal.set(field::HOUR_OF_DAY, hour);
+        self.cal.set(field::MINUTE, minute);
+        if let Some(sec) = second {
+            self.cal.set(field::SECOND, sec);
         }
         Ok(())
     }
@@ -511,12 +517,11 @@ impl IntlCalendar {
 
     /// `IntlCalendar::isWeekend($timestamp = null)`.
     pub fn is_weekend(&self, date: Option<f64>) -> Result<bool> {
-        match date {
-            Some(d) => self.cal.is_weekend(d).or_intl("Error calling ICU method"),
-            None => {
-                let now = self.cal.millis().unwrap_or(0.0);
-                Ok(self.cal.is_weekend(now).unwrap_or(false))
-            }
+        if let Some(d) = date {
+            self.cal.is_weekend(d).or_intl("Error calling ICU method")
+        } else {
+            let now = self.cal.millis().unwrap_or(0.0);
+            Ok(self.cal.is_weekend(now).unwrap_or(false))
         }
     }
 
@@ -578,7 +583,7 @@ impl IntlCalendar {
     /// The `var_dump()` view.
     pub fn debug_info(&self) -> CalendarDebugInfo {
         let tz = self.time_zone().unwrap_or_else(|_| TimeZone::unknown());
-        let locale = self.cal.locale_by_type(1).unwrap_or_else(|e| e.name());
+        let locale = self.cal.locale_by_type(1).unwrap_or_else(UErrorCode::name);
         let fields = DEBUG_FIELDS
             .iter()
             .map(|&(f, name)| {
@@ -663,9 +668,9 @@ impl IntlCalendar {
         let y = int32_arg(year, 1)?;
         let cutover_year = self.cutover_year();
         Ok(if y >= cutover_year {
-            (y & 3) == 0 && (y % 100 != 0 || y % 400 == 0)
+            y.rem_euclid(4) == 0 && (y % 100 != 0 || y % 400 == 0)
         } else {
-            (y & 3) == 0
+            y.rem_euclid(4) == 0
         })
     }
 

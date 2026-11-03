@@ -1,0 +1,2495 @@
+s:id	s:Europe/Lisbon	s:Europe/Lisbon
+s:dst	s:Europe/Lisbon	i:3600000
+s:offset	s:Europe/Lisbon	d:0.0	~F	~T	i:3600000	i:0
+s:offset	s:Europe/Lisbon	d:0.0	~T	~T	i:3600000	i:0
+s:offset	s:Europe/Lisbon	d:1341100800000.0	~F	~T	i:0	i:3600000
+s:offset	s:Europe/Lisbon	d:1341100800000.0	~T	~T	i:0	i:3600000
+s:offset	s:Europe/Lisbon	d:1325376000000.0	~F	~T	i:0	i:0
+s:offset	s:Europe/Lisbon	d:1325376000000.0	~T	~T	i:0	i:0
+s:offset	s:Europe/Lisbon	d:-2208988800000.0	~F	~T	i:-2205000	i:0
+s:offset	s:Europe/Lisbon	d:-2208988800000.0	~T	~T	i:-2205000	i:0
+s:offset	s:Europe/Lisbon	d:1711846800000.0	~F	~T	i:0	i:3600000
+s:offset	s:Europe/Lisbon	d:1711846800000.0	~T	~T	i:0	i:0
+s:offset	s:Europe/Lisbon	d:1711843200000.0	~F	~T	i:0	i:0
+s:offset	s:Europe/Lisbon	d:1711843200000.0	~T	~T	i:0	i:0
+s:offset	s:Europe/Lisbon	d:1730595600000.0	~F	~T	i:0	i:0
+s:offset	s:Europe/Lisbon	d:1730595600000.0	~T	~T	i:0	i:0
+s:display	s:Europe/Lisbon	s:en_US	i:1	~F	s:GMT
+s:display	s:Europe/Lisbon	s:en_US	i:1	~T	s:GMT+1
+s:display	s:Europe/Lisbon	s:en_US	i:2	~F	s:Western European Standard Time
+s:display	s:Europe/Lisbon	s:en_US	i:2	~T	s:Western European Summer Time
+s:display	s:Europe/Lisbon	s:en_US	i:5	~F	s:+0000
+s:display	s:Europe/Lisbon	s:en_US	i:5	~T	s:+0100
+s:display	s:Europe/Lisbon	s:en_US	i:6	~F	s:GMT
+s:display	s:Europe/Lisbon	s:en_US	i:6	~T	s:GMT+01:00
+s:display	s:Europe/Lisbon	s:en_US	i:7	~F	s:GMT
+s:display	s:Europe/Lisbon	s:en_US	i:7	~T	s:GMT+1
+s:display	s:Europe/Lisbon	s:en_US	i:8	~F	s:Portugal Time
+s:display	s:Europe/Lisbon	s:en_US	i:8	~T	s:Portugal Time
+s:display	s:Europe/Lisbon	s:pt_PT	i:1	~F	s:WET
+s:display	s:Europe/Lisbon	s:pt_PT	i:1	~T	s:WEST
+s:display	s:Europe/Lisbon	s:pt_PT	i:2	~F	s:Hora padrão da Europa Ocidental
+s:display	s:Europe/Lisbon	s:pt_PT	i:2	~T	s:Hora de verão da Europa Ocidental
+s:display	s:Europe/Lisbon	s:pt_PT	i:5	~F	s:+0000
+s:display	s:Europe/Lisbon	s:pt_PT	i:5	~T	s:+0100
+s:display	s:Europe/Lisbon	s:pt_PT	i:6	~F	s:GMT
+s:display	s:Europe/Lisbon	s:pt_PT	i:6	~T	s:GMT+01:00
+s:display	s:Europe/Lisbon	s:pt_PT	i:7	~F	s:WET
+s:display	s:Europe/Lisbon	s:pt_PT	i:7	~T	s:WEST
+s:display	s:Europe/Lisbon	s:pt_PT	i:8	~F	s:Hora de Portugal
+s:display	s:Europe/Lisbon	s:pt_PT	i:8	~T	s:Hora de Portugal
+s:display	s:Europe/Lisbon	s:ja_JP	i:1	~F	s:GMT
+s:display	s:Europe/Lisbon	s:ja_JP	i:1	~T	s:GMT+1
+s:display	s:Europe/Lisbon	s:ja_JP	i:2	~F	s:西ヨーロッパ標準時
+s:display	s:Europe/Lisbon	s:ja_JP	i:2	~T	s:西ヨーロッパ夏時間
+s:display	s:Europe/Lisbon	s:ja_JP	i:5	~F	s:+0000
+s:display	s:Europe/Lisbon	s:ja_JP	i:5	~T	s:+0100
+s:display	s:Europe/Lisbon	s:ja_JP	i:6	~F	s:GMT
+s:display	s:Europe/Lisbon	s:ja_JP	i:6	~T	s:GMT+01:00
+s:display	s:Europe/Lisbon	s:ja_JP	i:7	~F	s:GMT
+s:display	s:Europe/Lisbon	s:ja_JP	i:7	~T	s:GMT+1
+s:display	s:Europe/Lisbon	s:ja_JP	i:8	~F	s:ポルトガル時間
+s:display	s:Europe/Lisbon	s:ja_JP	i:8	~T	s:ポルトガル時間
+s:display	s:Europe/Lisbon	s:de_DE	i:1	~F	s:WEZ
+s:display	s:Europe/Lisbon	s:de_DE	i:1	~T	s:WESZ
+s:display	s:Europe/Lisbon	s:de_DE	i:2	~F	s:Westeuropäische Normalzeit
+s:display	s:Europe/Lisbon	s:de_DE	i:2	~T	s:Westeuropäische Sommerzeit
+s:display	s:Europe/Lisbon	s:de_DE	i:5	~F	s:+0000
+s:display	s:Europe/Lisbon	s:de_DE	i:5	~T	s:+0100
+s:display	s:Europe/Lisbon	s:de_DE	i:6	~F	s:GMT
+s:display	s:Europe/Lisbon	s:de_DE	i:6	~T	s:GMT+01:00
+s:display	s:Europe/Lisbon	s:de_DE	i:7	~F	s:WEZ
+s:display	s:Europe/Lisbon	s:de_DE	i:7	~T	s:WESZ
+s:display	s:Europe/Lisbon	s:de_DE	i:8	~F	s:Portugal (Ortszeit)
+s:display	s:Europe/Lisbon	s:de_DE	i:8	~T	s:Portugal (Ortszeit)
+s:display	s:Europe/Lisbon	s:fr_FR	i:1	~F	s:UTC
+s:display	s:Europe/Lisbon	s:fr_FR	i:1	~T	s:UTC+1
+s:display	s:Europe/Lisbon	s:fr_FR	i:2	~F	s:heure normale d’Europe de l’Ouest
+s:display	s:Europe/Lisbon	s:fr_FR	i:2	~T	s:heure d’été d’Europe de l’Ouest
+s:display	s:Europe/Lisbon	s:fr_FR	i:5	~F	s:+0000
+s:display	s:Europe/Lisbon	s:fr_FR	i:5	~T	s:+0100
+s:display	s:Europe/Lisbon	s:fr_FR	i:6	~F	s:UTC
+s:display	s:Europe/Lisbon	s:fr_FR	i:6	~T	s:UTC+01:00
+s:display	s:Europe/Lisbon	s:fr_FR	i:7	~F	s:UTC
+s:display	s:Europe/Lisbon	s:fr_FR	i:7	~T	s:UTC+1
+s:display	s:Europe/Lisbon	s:fr_FR	i:8	~F	s:heure : Portugal
+s:display	s:Europe/Lisbon	s:fr_FR	i:8	~T	s:heure : Portugal
+s:canonical	s:Europe/Lisbon	a:["Europe/Lisbon",true]
+s:region	s:Europe/Lisbon	s:PT
+s:count_equiv	s:Europe/Lisbon	i:2
+s:equiv	s:Europe/Lisbon	i:0	s:Europe/Lisbon
+s:equiv	s:Europe/Lisbon	i:1	s:Portugal
+s:equiv	s:Europe/Lisbon	i:2	s:
+s:equiv	s:Europe/Lisbon	i:5	s:
+s:equiv	s:Europe/Lisbon	i:-1	s:
+s:equiv	s:Europe/Lisbon	i:100	s:
+s:windows	s:Europe/Lisbon	s:GMT Standard Time
+s:iana	s:Europe/Lisbon	s:!Error
+s:to_dtz	s:Europe/Lisbon	s:Europe/Lisbon
+s:same_rules	s:Europe/Lisbon	s:Europe/Lisbon	~T
+s:same_rules	s:Europe/Lisbon	s:Europe/London	~F
+s:same_rules	s:Europe/Lisbon	s:WET	~F
+s:same_rules	s:Europe/Lisbon	s:Atlantic/Madeira	~F
+s:same_rules	s:Europe/Lisbon	s:UTC	~F
+s:same_rules	s:Europe/Lisbon	s:Etc/UTC	~F
+s:same_rules	s:Europe/Lisbon	s:Asia/Calcutta	~F
+s:same_rules	s:Europe/Lisbon	s:Asia/Kolkata	~F
+s:same_rules	s:Europe/Lisbon	s:GMT+05:30	~F
+s:id	s:America/New_York	s:America/New_York
+s:dst	s:America/New_York	i:3600000
+s:offset	s:America/New_York	d:0.0	~F	~T	i:-18000000	i:0
+s:offset	s:America/New_York	d:0.0	~T	~T	i:-18000000	i:0
+s:offset	s:America/New_York	d:1341100800000.0	~F	~T	i:-18000000	i:3600000
+s:offset	s:America/New_York	d:1341100800000.0	~T	~T	i:-18000000	i:3600000
+s:offset	s:America/New_York	d:1325376000000.0	~F	~T	i:-18000000	i:0
+s:offset	s:America/New_York	d:1325376000000.0	~T	~T	i:-18000000	i:0
+s:offset	s:America/New_York	d:-2208988800000.0	~F	~T	i:-18000000	i:0
+s:offset	s:America/New_York	d:-2208988800000.0	~T	~T	i:-18000000	i:0
+s:offset	s:America/New_York	d:1711846800000.0	~F	~T	i:-18000000	i:3600000
+s:offset	s:America/New_York	d:1711846800000.0	~T	~T	i:-18000000	i:3600000
+s:offset	s:America/New_York	d:1711843200000.0	~F	~T	i:-18000000	i:3600000
+s:offset	s:America/New_York	d:1711843200000.0	~T	~T	i:-18000000	i:3600000
+s:offset	s:America/New_York	d:1730595600000.0	~F	~T	i:-18000000	i:3600000
+s:offset	s:America/New_York	d:1730595600000.0	~T	~T	i:-18000000	i:0
+s:display	s:America/New_York	s:en_US	i:1	~F	s:EST
+s:display	s:America/New_York	s:en_US	i:1	~T	s:EDT
+s:display	s:America/New_York	s:en_US	i:2	~F	s:Eastern Standard Time
+s:display	s:America/New_York	s:en_US	i:2	~T	s:Eastern Daylight Time
+s:display	s:America/New_York	s:en_US	i:5	~F	s:-0500
+s:display	s:America/New_York	s:en_US	i:5	~T	s:-0400
+s:display	s:America/New_York	s:en_US	i:6	~F	s:GMT-05:00
+s:display	s:America/New_York	s:en_US	i:6	~T	s:GMT-04:00
+s:display	s:America/New_York	s:en_US	i:7	~F	s:EST
+s:display	s:America/New_York	s:en_US	i:7	~T	s:EDT
+s:display	s:America/New_York	s:en_US	i:8	~F	s:New York Time
+s:display	s:America/New_York	s:en_US	i:8	~T	s:New York Time
+s:display	s:America/New_York	s:pt_PT	i:1	~F	s:GMT-5
+s:display	s:America/New_York	s:pt_PT	i:1	~T	s:GMT-4
+s:display	s:America/New_York	s:pt_PT	i:2	~F	s:Hora padrão oriental norte-americana
+s:display	s:America/New_York	s:pt_PT	i:2	~T	s:Hora de verão oriental norte-americana
+s:display	s:America/New_York	s:pt_PT	i:5	~F	s:-0500
+s:display	s:America/New_York	s:pt_PT	i:5	~T	s:-0400
+s:display	s:America/New_York	s:pt_PT	i:6	~F	s:GMT-05:00
+s:display	s:America/New_York	s:pt_PT	i:6	~T	s:GMT-04:00
+s:display	s:America/New_York	s:pt_PT	i:7	~F	s:GMT-5
+s:display	s:America/New_York	s:pt_PT	i:7	~T	s:GMT-4
+s:display	s:America/New_York	s:pt_PT	i:8	~F	s:Hora de Nova Iorque
+s:display	s:America/New_York	s:pt_PT	i:8	~T	s:Hora de Nova Iorque
+s:display	s:America/New_York	s:ja_JP	i:1	~F	s:GMT-5
+s:display	s:America/New_York	s:ja_JP	i:1	~T	s:GMT-4
+s:display	s:America/New_York	s:ja_JP	i:2	~F	s:アメリカ東部標準時
+s:display	s:America/New_York	s:ja_JP	i:2	~T	s:アメリカ東部夏時間
+s:display	s:America/New_York	s:ja_JP	i:5	~F	s:-0500
+s:display	s:America/New_York	s:ja_JP	i:5	~T	s:-0400
+s:display	s:America/New_York	s:ja_JP	i:6	~F	s:GMT-05:00
+s:display	s:America/New_York	s:ja_JP	i:6	~T	s:GMT-04:00
+s:display	s:America/New_York	s:ja_JP	i:7	~F	s:GMT-5
+s:display	s:America/New_York	s:ja_JP	i:7	~T	s:GMT-4
+s:display	s:America/New_York	s:ja_JP	i:8	~F	s:ニューヨーク時間
+s:display	s:America/New_York	s:ja_JP	i:8	~T	s:ニューヨーク時間
+s:display	s:America/New_York	s:de_DE	i:1	~F	s:GMT-5
+s:display	s:America/New_York	s:de_DE	i:1	~T	s:GMT-4
+s:display	s:America/New_York	s:de_DE	i:2	~F	s:Nordamerikanische Ostküsten-Normalzeit
+s:display	s:America/New_York	s:de_DE	i:2	~T	s:Nordamerikanische Ostküsten-Sommerzeit
+s:display	s:America/New_York	s:de_DE	i:5	~F	s:-0500
+s:display	s:America/New_York	s:de_DE	i:5	~T	s:-0400
+s:display	s:America/New_York	s:de_DE	i:6	~F	s:GMT-05:00
+s:display	s:America/New_York	s:de_DE	i:6	~T	s:GMT-04:00
+s:display	s:America/New_York	s:de_DE	i:7	~F	s:GMT-5
+s:display	s:America/New_York	s:de_DE	i:7	~T	s:GMT-4
+s:display	s:America/New_York	s:de_DE	i:8	~F	s:New York (Ortszeit)
+s:display	s:America/New_York	s:de_DE	i:8	~T	s:New York (Ortszeit)
+s:display	s:America/New_York	s:fr_FR	i:1	~F	s:UTC−5
+s:display	s:America/New_York	s:fr_FR	i:1	~T	s:UTC−4
+s:display	s:America/New_York	s:fr_FR	i:2	~F	s:heure normale de l’Est nord-américain
+s:display	s:America/New_York	s:fr_FR	i:2	~T	s:heure d’été de l’Est nord-américain
+s:display	s:America/New_York	s:fr_FR	i:5	~F	s:-0500
+s:display	s:America/New_York	s:fr_FR	i:5	~T	s:-0400
+s:display	s:America/New_York	s:fr_FR	i:6	~F	s:UTC−05:00
+s:display	s:America/New_York	s:fr_FR	i:6	~T	s:UTC−04:00
+s:display	s:America/New_York	s:fr_FR	i:7	~F	s:UTC−5
+s:display	s:America/New_York	s:fr_FR	i:7	~T	s:UTC−4
+s:display	s:America/New_York	s:fr_FR	i:8	~F	s:heure : New York
+s:display	s:America/New_York	s:fr_FR	i:8	~T	s:heure : New York
+s:canonical	s:America/New_York	a:["America/New_York",true]
+s:region	s:America/New_York	s:US
+s:count_equiv	s:America/New_York	i:2
+s:equiv	s:America/New_York	i:0	s:America/New_York
+s:equiv	s:America/New_York	i:1	s:US/Eastern
+s:equiv	s:America/New_York	i:2	s:
+s:equiv	s:America/New_York	i:5	s:
+s:equiv	s:America/New_York	i:-1	s:
+s:equiv	s:America/New_York	i:100	s:
+s:windows	s:America/New_York	s:Eastern Standard Time
+s:iana	s:America/New_York	s:!Error
+s:to_dtz	s:America/New_York	s:America/New_York
+s:same_rules	s:America/New_York	s:Europe/Lisbon	~F
+s:same_rules	s:America/New_York	s:Europe/London	~F
+s:same_rules	s:America/New_York	s:WET	~F
+s:same_rules	s:America/New_York	s:Atlantic/Madeira	~F
+s:same_rules	s:America/New_York	s:UTC	~F
+s:same_rules	s:America/New_York	s:Etc/UTC	~F
+s:same_rules	s:America/New_York	s:Asia/Calcutta	~F
+s:same_rules	s:America/New_York	s:Asia/Kolkata	~F
+s:same_rules	s:America/New_York	s:GMT+05:30	~F
+s:id	s:Asia/Kolkata	s:Asia/Kolkata
+s:dst	s:Asia/Kolkata	i:0
+s:offset	s:Asia/Kolkata	d:0.0	~F	~T	i:19800000	i:0
+s:offset	s:Asia/Kolkata	d:0.0	~T	~T	i:19800000	i:0
+s:offset	s:Asia/Kolkata	d:1341100800000.0	~F	~T	i:19800000	i:0
+s:offset	s:Asia/Kolkata	d:1341100800000.0	~T	~T	i:19800000	i:0
+s:offset	s:Asia/Kolkata	d:1325376000000.0	~F	~T	i:19800000	i:0
+s:offset	s:Asia/Kolkata	d:1325376000000.0	~T	~T	i:19800000	i:0
+s:offset	s:Asia/Kolkata	d:-2208988800000.0	~F	~T	i:19270000	i:0
+s:offset	s:Asia/Kolkata	d:-2208988800000.0	~T	~T	i:19270000	i:0
+s:offset	s:Asia/Kolkata	d:1711846800000.0	~F	~T	i:19800000	i:0
+s:offset	s:Asia/Kolkata	d:1711846800000.0	~T	~T	i:19800000	i:0
+s:offset	s:Asia/Kolkata	d:1711843200000.0	~F	~T	i:19800000	i:0
+s:offset	s:Asia/Kolkata	d:1711843200000.0	~T	~T	i:19800000	i:0
+s:offset	s:Asia/Kolkata	d:1730595600000.0	~F	~T	i:19800000	i:0
+s:offset	s:Asia/Kolkata	d:1730595600000.0	~T	~T	i:19800000	i:0
+s:display	s:Asia/Kolkata	s:en_US	i:1	~F	s:GMT+5:30
+s:display	s:Asia/Kolkata	s:en_US	i:1	~T	s:GMT+5:30
+s:display	s:Asia/Kolkata	s:en_US	i:2	~F	s:India Standard Time
+s:display	s:Asia/Kolkata	s:en_US	i:2	~T	s:GMT+05:30
+s:display	s:Asia/Kolkata	s:en_US	i:5	~F	s:+0530
+s:display	s:Asia/Kolkata	s:en_US	i:5	~T	s:+0530
+s:display	s:Asia/Kolkata	s:en_US	i:6	~F	s:GMT+05:30
+s:display	s:Asia/Kolkata	s:en_US	i:6	~T	s:GMT+05:30
+s:display	s:Asia/Kolkata	s:en_US	i:7	~F	s:GMT+5:30
+s:display	s:Asia/Kolkata	s:en_US	i:7	~T	s:GMT+5:30
+s:display	s:Asia/Kolkata	s:en_US	i:8	~F	s:India Time
+s:display	s:Asia/Kolkata	s:en_US	i:8	~T	s:India Time
+s:display	s:Asia/Kolkata	s:pt_PT	i:1	~F	s:GMT+5:30
+s:display	s:Asia/Kolkata	s:pt_PT	i:1	~T	s:GMT+5:30
+s:display	s:Asia/Kolkata	s:pt_PT	i:2	~F	s:Hora padrão da Índia
+s:display	s:Asia/Kolkata	s:pt_PT	i:2	~T	s:GMT+05:30
+s:display	s:Asia/Kolkata	s:pt_PT	i:5	~F	s:+0530
+s:display	s:Asia/Kolkata	s:pt_PT	i:5	~T	s:+0530
+s:display	s:Asia/Kolkata	s:pt_PT	i:6	~F	s:GMT+05:30
+s:display	s:Asia/Kolkata	s:pt_PT	i:6	~T	s:GMT+05:30
+s:display	s:Asia/Kolkata	s:pt_PT	i:7	~F	s:GMT+5:30
+s:display	s:Asia/Kolkata	s:pt_PT	i:7	~T	s:GMT+5:30
+s:display	s:Asia/Kolkata	s:pt_PT	i:8	~F	s:Hora de Índia
+s:display	s:Asia/Kolkata	s:pt_PT	i:8	~T	s:Hora de Índia
+s:display	s:Asia/Kolkata	s:ja_JP	i:1	~F	s:GMT+5:30
+s:display	s:Asia/Kolkata	s:ja_JP	i:1	~T	s:GMT+5:30
+s:display	s:Asia/Kolkata	s:ja_JP	i:2	~F	s:インド標準時
+s:display	s:Asia/Kolkata	s:ja_JP	i:2	~T	s:GMT+05:30
+s:display	s:Asia/Kolkata	s:ja_JP	i:5	~F	s:+0530
+s:display	s:Asia/Kolkata	s:ja_JP	i:5	~T	s:+0530
+s:display	s:Asia/Kolkata	s:ja_JP	i:6	~F	s:GMT+05:30
+s:display	s:Asia/Kolkata	s:ja_JP	i:6	~T	s:GMT+05:30
+s:display	s:Asia/Kolkata	s:ja_JP	i:7	~F	s:GMT+5:30
+s:display	s:Asia/Kolkata	s:ja_JP	i:7	~T	s:GMT+5:30
+s:display	s:Asia/Kolkata	s:ja_JP	i:8	~F	s:インド時間
+s:display	s:Asia/Kolkata	s:ja_JP	i:8	~T	s:インド時間
+s:display	s:Asia/Kolkata	s:de_DE	i:1	~F	s:GMT+5:30
+s:display	s:Asia/Kolkata	s:de_DE	i:1	~T	s:GMT+5:30
+s:display	s:Asia/Kolkata	s:de_DE	i:2	~F	s:Indische Normalzeit
+s:display	s:Asia/Kolkata	s:de_DE	i:2	~T	s:GMT+05:30
+s:display	s:Asia/Kolkata	s:de_DE	i:5	~F	s:+0530
+s:display	s:Asia/Kolkata	s:de_DE	i:5	~T	s:+0530
+s:display	s:Asia/Kolkata	s:de_DE	i:6	~F	s:GMT+05:30
+s:display	s:Asia/Kolkata	s:de_DE	i:6	~T	s:GMT+05:30
+s:display	s:Asia/Kolkata	s:de_DE	i:7	~F	s:GMT+5:30
+s:display	s:Asia/Kolkata	s:de_DE	i:7	~T	s:GMT+5:30
+s:display	s:Asia/Kolkata	s:de_DE	i:8	~F	s:Indien (Ortszeit)
+s:display	s:Asia/Kolkata	s:de_DE	i:8	~T	s:Indien (Ortszeit)
+s:display	s:Asia/Kolkata	s:fr_FR	i:1	~F	s:UTC+5:30
+s:display	s:Asia/Kolkata	s:fr_FR	i:1	~T	s:UTC+5:30
+s:display	s:Asia/Kolkata	s:fr_FR	i:2	~F	s:heure de l’Inde
+s:display	s:Asia/Kolkata	s:fr_FR	i:2	~T	s:UTC+05:30
+s:display	s:Asia/Kolkata	s:fr_FR	i:5	~F	s:+0530
+s:display	s:Asia/Kolkata	s:fr_FR	i:5	~T	s:+0530
+s:display	s:Asia/Kolkata	s:fr_FR	i:6	~F	s:UTC+05:30
+s:display	s:Asia/Kolkata	s:fr_FR	i:6	~T	s:UTC+05:30
+s:display	s:Asia/Kolkata	s:fr_FR	i:7	~F	s:UTC+5:30
+s:display	s:Asia/Kolkata	s:fr_FR	i:7	~T	s:UTC+5:30
+s:display	s:Asia/Kolkata	s:fr_FR	i:8	~F	s:heure : Inde
+s:display	s:Asia/Kolkata	s:fr_FR	i:8	~T	s:heure : Inde
+s:canonical	s:Asia/Kolkata	a:["Asia/Calcutta",true]
+s:region	s:Asia/Kolkata	s:IN
+s:count_equiv	s:Asia/Kolkata	i:3
+s:equiv	s:Asia/Kolkata	i:0	s:Asia/Calcutta
+s:equiv	s:Asia/Kolkata	i:1	s:Asia/Kolkata
+s:equiv	s:Asia/Kolkata	i:2	s:IST
+s:equiv	s:Asia/Kolkata	i:5	s:
+s:equiv	s:Asia/Kolkata	i:-1	s:
+s:equiv	s:Asia/Kolkata	i:100	s:
+s:windows	s:Asia/Kolkata	s:India Standard Time
+s:iana	s:Asia/Kolkata	s:!Error
+s:to_dtz	s:Asia/Kolkata	s:Asia/Kolkata
+s:same_rules	s:Asia/Kolkata	s:Europe/Lisbon	~F
+s:same_rules	s:Asia/Kolkata	s:Europe/London	~F
+s:same_rules	s:Asia/Kolkata	s:WET	~F
+s:same_rules	s:Asia/Kolkata	s:Atlantic/Madeira	~F
+s:same_rules	s:Asia/Kolkata	s:UTC	~F
+s:same_rules	s:Asia/Kolkata	s:Etc/UTC	~F
+s:same_rules	s:Asia/Kolkata	s:Asia/Calcutta	~T
+s:same_rules	s:Asia/Kolkata	s:Asia/Kolkata	~T
+s:same_rules	s:Asia/Kolkata	s:GMT+05:30	~F
+s:id	s:Australia/Lord_Howe	s:Australia/Lord_Howe
+s:dst	s:Australia/Lord_Howe	i:1800000
+s:offset	s:Australia/Lord_Howe	d:0.0	~F	~T	i:36000000	i:0
+s:offset	s:Australia/Lord_Howe	d:0.0	~T	~T	i:36000000	i:0
+s:offset	s:Australia/Lord_Howe	d:1341100800000.0	~F	~T	i:37800000	i:0
+s:offset	s:Australia/Lord_Howe	d:1341100800000.0	~T	~T	i:37800000	i:0
+s:offset	s:Australia/Lord_Howe	d:1325376000000.0	~F	~T	i:37800000	i:1800000
+s:offset	s:Australia/Lord_Howe	d:1325376000000.0	~T	~T	i:37800000	i:1800000
+s:offset	s:Australia/Lord_Howe	d:-2208988800000.0	~F	~T	i:36000000	i:0
+s:offset	s:Australia/Lord_Howe	d:-2208988800000.0	~T	~T	i:36000000	i:0
+s:offset	s:Australia/Lord_Howe	d:1711846800000.0	~F	~T	i:37800000	i:1800000
+s:offset	s:Australia/Lord_Howe	d:1711846800000.0	~T	~T	i:37800000	i:1800000
+s:offset	s:Australia/Lord_Howe	d:1711843200000.0	~F	~T	i:37800000	i:1800000
+s:offset	s:Australia/Lord_Howe	d:1711843200000.0	~T	~T	i:37800000	i:1800000
+s:offset	s:Australia/Lord_Howe	d:1730595600000.0	~F	~T	i:37800000	i:1800000
+s:offset	s:Australia/Lord_Howe	d:1730595600000.0	~T	~T	i:37800000	i:1800000
+s:display	s:Australia/Lord_Howe	s:en_US	i:1	~F	s:GMT+10:30
+s:display	s:Australia/Lord_Howe	s:en_US	i:1	~T	s:GMT+11
+s:display	s:Australia/Lord_Howe	s:en_US	i:2	~F	s:Lord Howe Standard Time
+s:display	s:Australia/Lord_Howe	s:en_US	i:2	~T	s:Lord Howe Daylight Time
+s:display	s:Australia/Lord_Howe	s:en_US	i:5	~F	s:+1030
+s:display	s:Australia/Lord_Howe	s:en_US	i:5	~T	s:+1100
+s:display	s:Australia/Lord_Howe	s:en_US	i:6	~F	s:GMT+10:30
+s:display	s:Australia/Lord_Howe	s:en_US	i:6	~T	s:GMT+11:00
+s:display	s:Australia/Lord_Howe	s:en_US	i:7	~F	s:GMT+10:30
+s:display	s:Australia/Lord_Howe	s:en_US	i:7	~T	s:GMT+11
+s:display	s:Australia/Lord_Howe	s:en_US	i:8	~F	s:Lord Howe Time
+s:display	s:Australia/Lord_Howe	s:en_US	i:8	~T	s:Lord Howe Time
+s:display	s:Australia/Lord_Howe	s:pt_PT	i:1	~F	s:GMT+10:30
+s:display	s:Australia/Lord_Howe	s:pt_PT	i:1	~T	s:GMT+11
+s:display	s:Australia/Lord_Howe	s:pt_PT	i:2	~F	s:Hora padrão de Lord Howe
+s:display	s:Australia/Lord_Howe	s:pt_PT	i:2	~T	s:Hora de verão de Lord Howe
+s:display	s:Australia/Lord_Howe	s:pt_PT	i:5	~F	s:+1030
+s:display	s:Australia/Lord_Howe	s:pt_PT	i:5	~T	s:+1100
+s:display	s:Australia/Lord_Howe	s:pt_PT	i:6	~F	s:GMT+10:30
+s:display	s:Australia/Lord_Howe	s:pt_PT	i:6	~T	s:GMT+11:00
+s:display	s:Australia/Lord_Howe	s:pt_PT	i:7	~F	s:GMT+10:30
+s:display	s:Australia/Lord_Howe	s:pt_PT	i:7	~T	s:GMT+11
+s:display	s:Australia/Lord_Howe	s:pt_PT	i:8	~F	s:Hora de Ilha de Lord Howe
+s:display	s:Australia/Lord_Howe	s:pt_PT	i:8	~T	s:Hora de Ilha de Lord Howe
+s:display	s:Australia/Lord_Howe	s:ja_JP	i:1	~F	s:GMT+10:30
+s:display	s:Australia/Lord_Howe	s:ja_JP	i:1	~T	s:GMT+11
+s:display	s:Australia/Lord_Howe	s:ja_JP	i:2	~F	s:ロードハウ標準時
+s:display	s:Australia/Lord_Howe	s:ja_JP	i:2	~T	s:ロードハウ夏時間
+s:display	s:Australia/Lord_Howe	s:ja_JP	i:5	~F	s:+1030
+s:display	s:Australia/Lord_Howe	s:ja_JP	i:5	~T	s:+1100
+s:display	s:Australia/Lord_Howe	s:ja_JP	i:6	~F	s:GMT+10:30
+s:display	s:Australia/Lord_Howe	s:ja_JP	i:6	~T	s:GMT+11:00
+s:display	s:Australia/Lord_Howe	s:ja_JP	i:7	~F	s:GMT+10:30
+s:display	s:Australia/Lord_Howe	s:ja_JP	i:7	~T	s:GMT+11
+s:display	s:Australia/Lord_Howe	s:ja_JP	i:8	~F	s:ロードハウ時間
+s:display	s:Australia/Lord_Howe	s:ja_JP	i:8	~T	s:ロードハウ時間
+s:display	s:Australia/Lord_Howe	s:de_DE	i:1	~F	s:GMT+10:30
+s:display	s:Australia/Lord_Howe	s:de_DE	i:1	~T	s:GMT+11
+s:display	s:Australia/Lord_Howe	s:de_DE	i:2	~F	s:Lord-Howe-Normalzeit
+s:display	s:Australia/Lord_Howe	s:de_DE	i:2	~T	s:Lord-Howe-Sommerzeit
+s:display	s:Australia/Lord_Howe	s:de_DE	i:5	~F	s:+1030
+s:display	s:Australia/Lord_Howe	s:de_DE	i:5	~T	s:+1100
+s:display	s:Australia/Lord_Howe	s:de_DE	i:6	~F	s:GMT+10:30
+s:display	s:Australia/Lord_Howe	s:de_DE	i:6	~T	s:GMT+11:00
+s:display	s:Australia/Lord_Howe	s:de_DE	i:7	~F	s:GMT+10:30
+s:display	s:Australia/Lord_Howe	s:de_DE	i:7	~T	s:GMT+11
+s:display	s:Australia/Lord_Howe	s:de_DE	i:8	~F	s:Lord Howe (Ortszeit)
+s:display	s:Australia/Lord_Howe	s:de_DE	i:8	~T	s:Lord Howe (Ortszeit)
+s:display	s:Australia/Lord_Howe	s:fr_FR	i:1	~F	s:UTC+10:30
+s:display	s:Australia/Lord_Howe	s:fr_FR	i:1	~T	s:UTC+11
+s:display	s:Australia/Lord_Howe	s:fr_FR	i:2	~F	s:heure normale de Lord Howe
+s:display	s:Australia/Lord_Howe	s:fr_FR	i:2	~T	s:heure d’été de Lord Howe
+s:display	s:Australia/Lord_Howe	s:fr_FR	i:5	~F	s:+1030
+s:display	s:Australia/Lord_Howe	s:fr_FR	i:5	~T	s:+1100
+s:display	s:Australia/Lord_Howe	s:fr_FR	i:6	~F	s:UTC+10:30
+s:display	s:Australia/Lord_Howe	s:fr_FR	i:6	~T	s:UTC+11:00
+s:display	s:Australia/Lord_Howe	s:fr_FR	i:7	~F	s:UTC+10:30
+s:display	s:Australia/Lord_Howe	s:fr_FR	i:7	~T	s:UTC+11
+s:display	s:Australia/Lord_Howe	s:fr_FR	i:8	~F	s:heure : Lord Howe
+s:display	s:Australia/Lord_Howe	s:fr_FR	i:8	~T	s:heure : Lord Howe
+s:canonical	s:Australia/Lord_Howe	a:["Australia/Lord_Howe",true]
+s:region	s:Australia/Lord_Howe	s:AU
+s:count_equiv	s:Australia/Lord_Howe	i:2
+s:equiv	s:Australia/Lord_Howe	i:0	s:Australia/LHI
+s:equiv	s:Australia/Lord_Howe	i:1	s:Australia/Lord_Howe
+s:equiv	s:Australia/Lord_Howe	i:2	s:
+s:equiv	s:Australia/Lord_Howe	i:5	s:
+s:equiv	s:Australia/Lord_Howe	i:-1	s:
+s:equiv	s:Australia/Lord_Howe	i:100	s:
+s:windows	s:Australia/Lord_Howe	s:Lord Howe Standard Time
+s:iana	s:Australia/Lord_Howe	s:!Error
+s:to_dtz	s:Australia/Lord_Howe	s:Australia/Lord_Howe
+s:same_rules	s:Australia/Lord_Howe	s:Europe/Lisbon	~F
+s:same_rules	s:Australia/Lord_Howe	s:Europe/London	~F
+s:same_rules	s:Australia/Lord_Howe	s:WET	~F
+s:same_rules	s:Australia/Lord_Howe	s:Atlantic/Madeira	~F
+s:same_rules	s:Australia/Lord_Howe	s:UTC	~F
+s:same_rules	s:Australia/Lord_Howe	s:Etc/UTC	~F
+s:same_rules	s:Australia/Lord_Howe	s:Asia/Calcutta	~F
+s:same_rules	s:Australia/Lord_Howe	s:Asia/Kolkata	~F
+s:same_rules	s:Australia/Lord_Howe	s:GMT+05:30	~F
+s:id	s:Asia/Tokyo	s:Asia/Tokyo
+s:dst	s:Asia/Tokyo	i:0
+s:offset	s:Asia/Tokyo	d:0.0	~F	~T	i:32400000	i:0
+s:offset	s:Asia/Tokyo	d:0.0	~T	~T	i:32400000	i:0
+s:offset	s:Asia/Tokyo	d:1341100800000.0	~F	~T	i:32400000	i:0
+s:offset	s:Asia/Tokyo	d:1341100800000.0	~T	~T	i:32400000	i:0
+s:offset	s:Asia/Tokyo	d:1325376000000.0	~F	~T	i:32400000	i:0
+s:offset	s:Asia/Tokyo	d:1325376000000.0	~T	~T	i:32400000	i:0
+s:offset	s:Asia/Tokyo	d:-2208988800000.0	~F	~T	i:32400000	i:0
+s:offset	s:Asia/Tokyo	d:-2208988800000.0	~T	~T	i:32400000	i:0
+s:offset	s:Asia/Tokyo	d:1711846800000.0	~F	~T	i:32400000	i:0
+s:offset	s:Asia/Tokyo	d:1711846800000.0	~T	~T	i:32400000	i:0
+s:offset	s:Asia/Tokyo	d:1711843200000.0	~F	~T	i:32400000	i:0
+s:offset	s:Asia/Tokyo	d:1711843200000.0	~T	~T	i:32400000	i:0
+s:offset	s:Asia/Tokyo	d:1730595600000.0	~F	~T	i:32400000	i:0
+s:offset	s:Asia/Tokyo	d:1730595600000.0	~T	~T	i:32400000	i:0
+s:display	s:Asia/Tokyo	s:en_US	i:1	~F	s:GMT+9
+s:display	s:Asia/Tokyo	s:en_US	i:1	~T	s:GMT+9
+s:display	s:Asia/Tokyo	s:en_US	i:2	~F	s:Japan Standard Time
+s:display	s:Asia/Tokyo	s:en_US	i:2	~T	s:Japan Daylight Time
+s:display	s:Asia/Tokyo	s:en_US	i:5	~F	s:+0900
+s:display	s:Asia/Tokyo	s:en_US	i:5	~T	s:+0900
+s:display	s:Asia/Tokyo	s:en_US	i:6	~F	s:GMT+09:00
+s:display	s:Asia/Tokyo	s:en_US	i:6	~T	s:GMT+09:00
+s:display	s:Asia/Tokyo	s:en_US	i:7	~F	s:GMT+9
+s:display	s:Asia/Tokyo	s:en_US	i:7	~T	s:GMT+9
+s:display	s:Asia/Tokyo	s:en_US	i:8	~F	s:Japan Time
+s:display	s:Asia/Tokyo	s:en_US	i:8	~T	s:Japan Time
+s:display	s:Asia/Tokyo	s:pt_PT	i:1	~F	s:GMT+9
+s:display	s:Asia/Tokyo	s:pt_PT	i:1	~T	s:GMT+9
+s:display	s:Asia/Tokyo	s:pt_PT	i:2	~F	s:Hora padrão do Japão
+s:display	s:Asia/Tokyo	s:pt_PT	i:2	~T	s:Hora de verão do Japão
+s:display	s:Asia/Tokyo	s:pt_PT	i:5	~F	s:+0900
+s:display	s:Asia/Tokyo	s:pt_PT	i:5	~T	s:+0900
+s:display	s:Asia/Tokyo	s:pt_PT	i:6	~F	s:GMT+09:00
+s:display	s:Asia/Tokyo	s:pt_PT	i:6	~T	s:GMT+09:00
+s:display	s:Asia/Tokyo	s:pt_PT	i:7	~F	s:GMT+9
+s:display	s:Asia/Tokyo	s:pt_PT	i:7	~T	s:GMT+9
+s:display	s:Asia/Tokyo	s:pt_PT	i:8	~F	s:Hora de Japão
+s:display	s:Asia/Tokyo	s:pt_PT	i:8	~T	s:Hora de Japão
+s:display	s:Asia/Tokyo	s:ja_JP	i:1	~F	s:JST
+s:display	s:Asia/Tokyo	s:ja_JP	i:1	~T	s:JDT
+s:display	s:Asia/Tokyo	s:ja_JP	i:2	~F	s:日本標準時
+s:display	s:Asia/Tokyo	s:ja_JP	i:2	~T	s:日本夏時間
+s:display	s:Asia/Tokyo	s:ja_JP	i:5	~F	s:+0900
+s:display	s:Asia/Tokyo	s:ja_JP	i:5	~T	s:+0900
+s:display	s:Asia/Tokyo	s:ja_JP	i:6	~F	s:GMT+09:00
+s:display	s:Asia/Tokyo	s:ja_JP	i:6	~T	s:GMT+09:00
+s:display	s:Asia/Tokyo	s:ja_JP	i:7	~F	s:JST
+s:display	s:Asia/Tokyo	s:ja_JP	i:7	~T	s:JDT
+s:display	s:Asia/Tokyo	s:ja_JP	i:8	~F	s:日本時間
+s:display	s:Asia/Tokyo	s:ja_JP	i:8	~T	s:日本時間
+s:display	s:Asia/Tokyo	s:de_DE	i:1	~F	s:GMT+9
+s:display	s:Asia/Tokyo	s:de_DE	i:1	~T	s:GMT+9
+s:display	s:Asia/Tokyo	s:de_DE	i:2	~F	s:Japanische Normalzeit
+s:display	s:Asia/Tokyo	s:de_DE	i:2	~T	s:Japanische Sommerzeit
+s:display	s:Asia/Tokyo	s:de_DE	i:5	~F	s:+0900
+s:display	s:Asia/Tokyo	s:de_DE	i:5	~T	s:+0900
+s:display	s:Asia/Tokyo	s:de_DE	i:6	~F	s:GMT+09:00
+s:display	s:Asia/Tokyo	s:de_DE	i:6	~T	s:GMT+09:00
+s:display	s:Asia/Tokyo	s:de_DE	i:7	~F	s:GMT+9
+s:display	s:Asia/Tokyo	s:de_DE	i:7	~T	s:GMT+9
+s:display	s:Asia/Tokyo	s:de_DE	i:8	~F	s:Japan (Ortszeit)
+s:display	s:Asia/Tokyo	s:de_DE	i:8	~T	s:Japan (Ortszeit)
+s:display	s:Asia/Tokyo	s:fr_FR	i:1	~F	s:UTC+9
+s:display	s:Asia/Tokyo	s:fr_FR	i:1	~T	s:UTC+9
+s:display	s:Asia/Tokyo	s:fr_FR	i:2	~F	s:heure normale du Japon
+s:display	s:Asia/Tokyo	s:fr_FR	i:2	~T	s:heure d’été du Japon
+s:display	s:Asia/Tokyo	s:fr_FR	i:5	~F	s:+0900
+s:display	s:Asia/Tokyo	s:fr_FR	i:5	~T	s:+0900
+s:display	s:Asia/Tokyo	s:fr_FR	i:6	~F	s:UTC+09:00
+s:display	s:Asia/Tokyo	s:fr_FR	i:6	~T	s:UTC+09:00
+s:display	s:Asia/Tokyo	s:fr_FR	i:7	~F	s:UTC+9
+s:display	s:Asia/Tokyo	s:fr_FR	i:7	~T	s:UTC+9
+s:display	s:Asia/Tokyo	s:fr_FR	i:8	~F	s:heure : Japon
+s:display	s:Asia/Tokyo	s:fr_FR	i:8	~T	s:heure : Japon
+s:canonical	s:Asia/Tokyo	a:["Asia/Tokyo",true]
+s:region	s:Asia/Tokyo	s:JP
+s:count_equiv	s:Asia/Tokyo	i:3
+s:equiv	s:Asia/Tokyo	i:0	s:Asia/Tokyo
+s:equiv	s:Asia/Tokyo	i:1	s:JST
+s:equiv	s:Asia/Tokyo	i:2	s:Japan
+s:equiv	s:Asia/Tokyo	i:5	s:
+s:equiv	s:Asia/Tokyo	i:-1	s:
+s:equiv	s:Asia/Tokyo	i:100	s:
+s:windows	s:Asia/Tokyo	s:Tokyo Standard Time
+s:iana	s:Asia/Tokyo	s:!Error
+s:to_dtz	s:Asia/Tokyo	s:Asia/Tokyo
+s:same_rules	s:Asia/Tokyo	s:Europe/Lisbon	~F
+s:same_rules	s:Asia/Tokyo	s:Europe/London	~F
+s:same_rules	s:Asia/Tokyo	s:WET	~F
+s:same_rules	s:Asia/Tokyo	s:Atlantic/Madeira	~F
+s:same_rules	s:Asia/Tokyo	s:UTC	~F
+s:same_rules	s:Asia/Tokyo	s:Etc/UTC	~F
+s:same_rules	s:Asia/Tokyo	s:Asia/Calcutta	~F
+s:same_rules	s:Asia/Tokyo	s:Asia/Kolkata	~F
+s:same_rules	s:Asia/Tokyo	s:GMT+05:30	~F
+s:id	s:UTC	s:UTC
+s:dst	s:UTC	i:0
+s:offset	s:UTC	d:0.0	~F	~T	i:0	i:0
+s:offset	s:UTC	d:0.0	~T	~T	i:0	i:0
+s:offset	s:UTC	d:1341100800000.0	~F	~T	i:0	i:0
+s:offset	s:UTC	d:1341100800000.0	~T	~T	i:0	i:0
+s:offset	s:UTC	d:1325376000000.0	~F	~T	i:0	i:0
+s:offset	s:UTC	d:1325376000000.0	~T	~T	i:0	i:0
+s:offset	s:UTC	d:-2208988800000.0	~F	~T	i:0	i:0
+s:offset	s:UTC	d:-2208988800000.0	~T	~T	i:0	i:0
+s:offset	s:UTC	d:1711846800000.0	~F	~T	i:0	i:0
+s:offset	s:UTC	d:1711846800000.0	~T	~T	i:0	i:0
+s:offset	s:UTC	d:1711843200000.0	~F	~T	i:0	i:0
+s:offset	s:UTC	d:1711843200000.0	~T	~T	i:0	i:0
+s:offset	s:UTC	d:1730595600000.0	~F	~T	i:0	i:0
+s:offset	s:UTC	d:1730595600000.0	~T	~T	i:0	i:0
+s:display	s:UTC	s:en_US	i:1	~F	s:UTC
+s:display	s:UTC	s:en_US	i:1	~T	s:GMT
+s:display	s:UTC	s:en_US	i:2	~F	s:Coordinated Universal Time
+s:display	s:UTC	s:en_US	i:2	~T	s:GMT
+s:display	s:UTC	s:en_US	i:5	~F	s:+0000
+s:display	s:UTC	s:en_US	i:5	~T	s:+0000
+s:display	s:UTC	s:en_US	i:6	~F	s:GMT
+s:display	s:UTC	s:en_US	i:6	~T	s:GMT
+s:display	s:UTC	s:en_US	i:7	~F	s:UTC
+s:display	s:UTC	s:en_US	i:7	~T	s:GMT
+s:display	s:UTC	s:en_US	i:8	~F	s:GMT
+s:display	s:UTC	s:en_US	i:8	~T	s:GMT
+s:display	s:UTC	s:pt_PT	i:1	~F	s:UTC
+s:display	s:UTC	s:pt_PT	i:1	~T	s:GMT
+s:display	s:UTC	s:pt_PT	i:2	~F	s:Hora Coordenada Universal
+s:display	s:UTC	s:pt_PT	i:2	~T	s:GMT
+s:display	s:UTC	s:pt_PT	i:5	~F	s:+0000
+s:display	s:UTC	s:pt_PT	i:5	~T	s:+0000
+s:display	s:UTC	s:pt_PT	i:6	~F	s:GMT
+s:display	s:UTC	s:pt_PT	i:6	~T	s:GMT
+s:display	s:UTC	s:pt_PT	i:7	~F	s:UTC
+s:display	s:UTC	s:pt_PT	i:7	~T	s:GMT
+s:display	s:UTC	s:pt_PT	i:8	~F	s:GMT
+s:display	s:UTC	s:pt_PT	i:8	~T	s:GMT
+s:display	s:UTC	s:ja_JP	i:1	~F	s:UTC
+s:display	s:UTC	s:ja_JP	i:1	~T	s:GMT
+s:display	s:UTC	s:ja_JP	i:2	~F	s:協定世界時
+s:display	s:UTC	s:ja_JP	i:2	~T	s:GMT
+s:display	s:UTC	s:ja_JP	i:5	~F	s:+0000
+s:display	s:UTC	s:ja_JP	i:5	~T	s:+0000
+s:display	s:UTC	s:ja_JP	i:6	~F	s:GMT
+s:display	s:UTC	s:ja_JP	i:6	~T	s:GMT
+s:display	s:UTC	s:ja_JP	i:7	~F	s:UTC
+s:display	s:UTC	s:ja_JP	i:7	~T	s:GMT
+s:display	s:UTC	s:ja_JP	i:8	~F	s:GMT
+s:display	s:UTC	s:ja_JP	i:8	~T	s:GMT
+s:display	s:UTC	s:de_DE	i:1	~F	s:UTC
+s:display	s:UTC	s:de_DE	i:1	~T	s:GMT
+s:display	s:UTC	s:de_DE	i:2	~F	s:Koordinierte Weltzeit
+s:display	s:UTC	s:de_DE	i:2	~T	s:GMT
+s:display	s:UTC	s:de_DE	i:5	~F	s:+0000
+s:display	s:UTC	s:de_DE	i:5	~T	s:+0000
+s:display	s:UTC	s:de_DE	i:6	~F	s:GMT
+s:display	s:UTC	s:de_DE	i:6	~T	s:GMT
+s:display	s:UTC	s:de_DE	i:7	~F	s:UTC
+s:display	s:UTC	s:de_DE	i:7	~T	s:GMT
+s:display	s:UTC	s:de_DE	i:8	~F	s:GMT
+s:display	s:UTC	s:de_DE	i:8	~T	s:GMT
+s:display	s:UTC	s:fr_FR	i:1	~F	s:UTC
+s:display	s:UTC	s:fr_FR	i:1	~T	s:UTC
+s:display	s:UTC	s:fr_FR	i:2	~F	s:temps universel coordonné
+s:display	s:UTC	s:fr_FR	i:2	~T	s:UTC
+s:display	s:UTC	s:fr_FR	i:5	~F	s:+0000
+s:display	s:UTC	s:fr_FR	i:5	~T	s:+0000
+s:display	s:UTC	s:fr_FR	i:6	~F	s:UTC
+s:display	s:UTC	s:fr_FR	i:6	~T	s:UTC
+s:display	s:UTC	s:fr_FR	i:7	~F	s:UTC
+s:display	s:UTC	s:fr_FR	i:7	~T	s:UTC
+s:display	s:UTC	s:fr_FR	i:8	~F	s:UTC
+s:display	s:UTC	s:fr_FR	i:8	~T	s:UTC
+s:canonical	s:UTC	a:["Etc/UTC",true]
+s:region	s:UTC	s:001
+s:count_equiv	s:UTC	i:8
+s:equiv	s:UTC	i:0	s:Etc/UCT
+s:equiv	s:UTC	i:1	s:Etc/UTC
+s:equiv	s:UTC	i:2	s:Etc/Universal
+s:equiv	s:UTC	i:5	s:UTC
+s:equiv	s:UTC	i:-1	s:
+s:equiv	s:UTC	i:100	s:
+s:windows	s:UTC	s:UTC
+s:iana	s:UTC	s:!Error
+s:to_dtz	s:UTC	s:UTC
+s:same_rules	s:UTC	s:Europe/Lisbon	~F
+s:same_rules	s:UTC	s:Europe/London	~F
+s:same_rules	s:UTC	s:WET	~F
+s:same_rules	s:UTC	s:Atlantic/Madeira	~F
+s:same_rules	s:UTC	s:UTC	~T
+s:same_rules	s:UTC	s:Etc/UTC	~T
+s:same_rules	s:UTC	s:Asia/Calcutta	~F
+s:same_rules	s:UTC	s:Asia/Kolkata	~F
+s:same_rules	s:UTC	s:GMT+05:30	~F
+s:id	s:GMT	s:GMT
+s:dst	s:GMT	i:0
+s:offset	s:GMT	d:0.0	~F	~T	i:0	i:0
+s:offset	s:GMT	d:0.0	~T	~T	i:0	i:0
+s:offset	s:GMT	d:1341100800000.0	~F	~T	i:0	i:0
+s:offset	s:GMT	d:1341100800000.0	~T	~T	i:0	i:0
+s:offset	s:GMT	d:1325376000000.0	~F	~T	i:0	i:0
+s:offset	s:GMT	d:1325376000000.0	~T	~T	i:0	i:0
+s:offset	s:GMT	d:-2208988800000.0	~F	~T	i:0	i:0
+s:offset	s:GMT	d:-2208988800000.0	~T	~T	i:0	i:0
+s:offset	s:GMT	d:1711846800000.0	~F	~T	i:0	i:0
+s:offset	s:GMT	d:1711846800000.0	~T	~T	i:0	i:0
+s:offset	s:GMT	d:1711843200000.0	~F	~T	i:0	i:0
+s:offset	s:GMT	d:1711843200000.0	~T	~T	i:0	i:0
+s:offset	s:GMT	d:1730595600000.0	~F	~T	i:0	i:0
+s:offset	s:GMT	d:1730595600000.0	~T	~T	i:0	i:0
+s:display	s:GMT	s:en_US	i:1	~F	s:GMT
+s:display	s:GMT	s:en_US	i:1	~T	s:GMT
+s:display	s:GMT	s:en_US	i:2	~F	s:Greenwich Mean Time
+s:display	s:GMT	s:en_US	i:2	~T	s:GMT
+s:display	s:GMT	s:en_US	i:5	~F	s:+0000
+s:display	s:GMT	s:en_US	i:5	~T	s:+0000
+s:display	s:GMT	s:en_US	i:6	~F	s:GMT
+s:display	s:GMT	s:en_US	i:6	~T	s:GMT
+s:display	s:GMT	s:en_US	i:7	~F	s:GMT
+s:display	s:GMT	s:en_US	i:7	~T	s:GMT
+s:display	s:GMT	s:en_US	i:8	~F	s:GMT
+s:display	s:GMT	s:en_US	i:8	~T	s:GMT
+s:display	s:GMT	s:pt_PT	i:1	~F	s:GMT
+s:display	s:GMT	s:pt_PT	i:1	~T	s:GMT
+s:display	s:GMT	s:pt_PT	i:2	~F	s:Hora de Greenwich
+s:display	s:GMT	s:pt_PT	i:2	~T	s:GMT
+s:display	s:GMT	s:pt_PT	i:5	~F	s:+0000
+s:display	s:GMT	s:pt_PT	i:5	~T	s:+0000
+s:display	s:GMT	s:pt_PT	i:6	~F	s:GMT
+s:display	s:GMT	s:pt_PT	i:6	~T	s:GMT
+s:display	s:GMT	s:pt_PT	i:7	~F	s:GMT
+s:display	s:GMT	s:pt_PT	i:7	~T	s:GMT
+s:display	s:GMT	s:pt_PT	i:8	~F	s:GMT
+s:display	s:GMT	s:pt_PT	i:8	~T	s:GMT
+s:display	s:GMT	s:ja_JP	i:1	~F	s:GMT
+s:display	s:GMT	s:ja_JP	i:1	~T	s:GMT
+s:display	s:GMT	s:ja_JP	i:2	~F	s:グリニッジ標準時
+s:display	s:GMT	s:ja_JP	i:2	~T	s:GMT
+s:display	s:GMT	s:ja_JP	i:5	~F	s:+0000
+s:display	s:GMT	s:ja_JP	i:5	~T	s:+0000
+s:display	s:GMT	s:ja_JP	i:6	~F	s:GMT
+s:display	s:GMT	s:ja_JP	i:6	~T	s:GMT
+s:display	s:GMT	s:ja_JP	i:7	~F	s:GMT
+s:display	s:GMT	s:ja_JP	i:7	~T	s:GMT
+s:display	s:GMT	s:ja_JP	i:8	~F	s:GMT
+s:display	s:GMT	s:ja_JP	i:8	~T	s:GMT
+s:display	s:GMT	s:de_DE	i:1	~F	s:GMT
+s:display	s:GMT	s:de_DE	i:1	~T	s:GMT
+s:display	s:GMT	s:de_DE	i:2	~F	s:Mittlere Greenwich-Zeit
+s:display	s:GMT	s:de_DE	i:2	~T	s:GMT
+s:display	s:GMT	s:de_DE	i:5	~F	s:+0000
+s:display	s:GMT	s:de_DE	i:5	~T	s:+0000
+s:display	s:GMT	s:de_DE	i:6	~F	s:GMT
+s:display	s:GMT	s:de_DE	i:6	~T	s:GMT
+s:display	s:GMT	s:de_DE	i:7	~F	s:GMT
+s:display	s:GMT	s:de_DE	i:7	~T	s:GMT
+s:display	s:GMT	s:de_DE	i:8	~F	s:GMT
+s:display	s:GMT	s:de_DE	i:8	~T	s:GMT
+s:display	s:GMT	s:fr_FR	i:1	~F	s:UTC
+s:display	s:GMT	s:fr_FR	i:1	~T	s:UTC
+s:display	s:GMT	s:fr_FR	i:2	~F	s:heure moyenne de Greenwich
+s:display	s:GMT	s:fr_FR	i:2	~T	s:UTC
+s:display	s:GMT	s:fr_FR	i:5	~F	s:+0000
+s:display	s:GMT	s:fr_FR	i:5	~T	s:+0000
+s:display	s:GMT	s:fr_FR	i:6	~F	s:UTC
+s:display	s:GMT	s:fr_FR	i:6	~T	s:UTC
+s:display	s:GMT	s:fr_FR	i:7	~F	s:UTC
+s:display	s:GMT	s:fr_FR	i:7	~T	s:UTC
+s:display	s:GMT	s:fr_FR	i:8	~F	s:UTC
+s:display	s:GMT	s:fr_FR	i:8	~T	s:UTC
+s:canonical	s:GMT	a:["Etc/GMT",true]
+s:region	s:GMT	s:001
+s:count_equiv	s:GMT	i:10
+s:equiv	s:GMT	i:0	s:Etc/GMT
+s:equiv	s:GMT	i:1	s:Etc/GMT+0
+s:equiv	s:GMT	i:2	s:Etc/GMT-0
+s:equiv	s:GMT	i:5	s:GMT
+s:equiv	s:GMT	i:-1	s:
+s:equiv	s:GMT	i:100	s:
+s:windows	s:GMT	s:UTC
+s:iana	s:GMT	s:!Error
+s:to_dtz	s:GMT	s:+00:00
+s:same_rules	s:GMT	s:Europe/Lisbon	~F
+s:same_rules	s:GMT	s:Europe/London	~F
+s:same_rules	s:GMT	s:WET	~F
+s:same_rules	s:GMT	s:Atlantic/Madeira	~F
+s:same_rules	s:GMT	s:UTC	~T
+s:same_rules	s:GMT	s:Etc/UTC	~T
+s:same_rules	s:GMT	s:Asia/Calcutta	~F
+s:same_rules	s:GMT	s:Asia/Kolkata	~F
+s:same_rules	s:GMT	s:GMT+05:30	~F
+s:id	s:Etc/GMT+5	s:Etc/GMT+5
+s:dst	s:Etc/GMT+5	i:0
+s:offset	s:Etc/GMT+5	d:0.0	~F	~T	i:-18000000	i:0
+s:offset	s:Etc/GMT+5	d:0.0	~T	~T	i:-18000000	i:0
+s:offset	s:Etc/GMT+5	d:1341100800000.0	~F	~T	i:-18000000	i:0
+s:offset	s:Etc/GMT+5	d:1341100800000.0	~T	~T	i:-18000000	i:0
+s:offset	s:Etc/GMT+5	d:1325376000000.0	~F	~T	i:-18000000	i:0
+s:offset	s:Etc/GMT+5	d:1325376000000.0	~T	~T	i:-18000000	i:0
+s:offset	s:Etc/GMT+5	d:-2208988800000.0	~F	~T	i:-18000000	i:0
+s:offset	s:Etc/GMT+5	d:-2208988800000.0	~T	~T	i:-18000000	i:0
+s:offset	s:Etc/GMT+5	d:1711846800000.0	~F	~T	i:-18000000	i:0
+s:offset	s:Etc/GMT+5	d:1711846800000.0	~T	~T	i:-18000000	i:0
+s:offset	s:Etc/GMT+5	d:1711843200000.0	~F	~T	i:-18000000	i:0
+s:offset	s:Etc/GMT+5	d:1711843200000.0	~T	~T	i:-18000000	i:0
+s:offset	s:Etc/GMT+5	d:1730595600000.0	~F	~T	i:-18000000	i:0
+s:offset	s:Etc/GMT+5	d:1730595600000.0	~T	~T	i:-18000000	i:0
+s:display	s:Etc/GMT+5	s:en_US	i:1	~F	s:GMT-5
+s:display	s:Etc/GMT+5	s:en_US	i:1	~T	s:GMT-5
+s:display	s:Etc/GMT+5	s:en_US	i:2	~F	s:GMT-05:00
+s:display	s:Etc/GMT+5	s:en_US	i:2	~T	s:GMT-05:00
+s:display	s:Etc/GMT+5	s:en_US	i:5	~F	s:-0500
+s:display	s:Etc/GMT+5	s:en_US	i:5	~T	s:-0500
+s:display	s:Etc/GMT+5	s:en_US	i:6	~F	s:GMT-05:00
+s:display	s:Etc/GMT+5	s:en_US	i:6	~T	s:GMT-05:00
+s:display	s:Etc/GMT+5	s:en_US	i:7	~F	s:GMT-5
+s:display	s:Etc/GMT+5	s:en_US	i:7	~T	s:GMT-5
+s:display	s:Etc/GMT+5	s:en_US	i:8	~F	s:GMT-05:00
+s:display	s:Etc/GMT+5	s:en_US	i:8	~T	s:GMT-05:00
+s:display	s:Etc/GMT+5	s:pt_PT	i:1	~F	s:GMT-5
+s:display	s:Etc/GMT+5	s:pt_PT	i:1	~T	s:GMT-5
+s:display	s:Etc/GMT+5	s:pt_PT	i:2	~F	s:GMT-05:00
+s:display	s:Etc/GMT+5	s:pt_PT	i:2	~T	s:GMT-05:00
+s:display	s:Etc/GMT+5	s:pt_PT	i:5	~F	s:-0500
+s:display	s:Etc/GMT+5	s:pt_PT	i:5	~T	s:-0500
+s:display	s:Etc/GMT+5	s:pt_PT	i:6	~F	s:GMT-05:00
+s:display	s:Etc/GMT+5	s:pt_PT	i:6	~T	s:GMT-05:00
+s:display	s:Etc/GMT+5	s:pt_PT	i:7	~F	s:GMT-5
+s:display	s:Etc/GMT+5	s:pt_PT	i:7	~T	s:GMT-5
+s:display	s:Etc/GMT+5	s:pt_PT	i:8	~F	s:GMT-05:00
+s:display	s:Etc/GMT+5	s:pt_PT	i:8	~T	s:GMT-05:00
+s:display	s:Etc/GMT+5	s:ja_JP	i:1	~F	s:GMT-5
+s:display	s:Etc/GMT+5	s:ja_JP	i:1	~T	s:GMT-5
+s:display	s:Etc/GMT+5	s:ja_JP	i:2	~F	s:GMT-05:00
+s:display	s:Etc/GMT+5	s:ja_JP	i:2	~T	s:GMT-05:00
+s:display	s:Etc/GMT+5	s:ja_JP	i:5	~F	s:-0500
+s:display	s:Etc/GMT+5	s:ja_JP	i:5	~T	s:-0500
+s:display	s:Etc/GMT+5	s:ja_JP	i:6	~F	s:GMT-05:00
+s:display	s:Etc/GMT+5	s:ja_JP	i:6	~T	s:GMT-05:00
+s:display	s:Etc/GMT+5	s:ja_JP	i:7	~F	s:GMT-5
+s:display	s:Etc/GMT+5	s:ja_JP	i:7	~T	s:GMT-5
+s:display	s:Etc/GMT+5	s:ja_JP	i:8	~F	s:GMT-05:00
+s:display	s:Etc/GMT+5	s:ja_JP	i:8	~T	s:GMT-05:00
+s:display	s:Etc/GMT+5	s:de_DE	i:1	~F	s:GMT-5
+s:display	s:Etc/GMT+5	s:de_DE	i:1	~T	s:GMT-5
+s:display	s:Etc/GMT+5	s:de_DE	i:2	~F	s:GMT-05:00
+s:display	s:Etc/GMT+5	s:de_DE	i:2	~T	s:GMT-05:00
+s:display	s:Etc/GMT+5	s:de_DE	i:5	~F	s:-0500
+s:display	s:Etc/GMT+5	s:de_DE	i:5	~T	s:-0500
+s:display	s:Etc/GMT+5	s:de_DE	i:6	~F	s:GMT-05:00
+s:display	s:Etc/GMT+5	s:de_DE	i:6	~T	s:GMT-05:00
+s:display	s:Etc/GMT+5	s:de_DE	i:7	~F	s:GMT-5
+s:display	s:Etc/GMT+5	s:de_DE	i:7	~T	s:GMT-5
+s:display	s:Etc/GMT+5	s:de_DE	i:8	~F	s:GMT-05:00
+s:display	s:Etc/GMT+5	s:de_DE	i:8	~T	s:GMT-05:00
+s:display	s:Etc/GMT+5	s:fr_FR	i:1	~F	s:UTC−5
+s:display	s:Etc/GMT+5	s:fr_FR	i:1	~T	s:UTC−5
+s:display	s:Etc/GMT+5	s:fr_FR	i:2	~F	s:UTC−05:00
+s:display	s:Etc/GMT+5	s:fr_FR	i:2	~T	s:UTC−05:00
+s:display	s:Etc/GMT+5	s:fr_FR	i:5	~F	s:-0500
+s:display	s:Etc/GMT+5	s:fr_FR	i:5	~T	s:-0500
+s:display	s:Etc/GMT+5	s:fr_FR	i:6	~F	s:UTC−05:00
+s:display	s:Etc/GMT+5	s:fr_FR	i:6	~T	s:UTC−05:00
+s:display	s:Etc/GMT+5	s:fr_FR	i:7	~F	s:UTC−5
+s:display	s:Etc/GMT+5	s:fr_FR	i:7	~T	s:UTC−5
+s:display	s:Etc/GMT+5	s:fr_FR	i:8	~F	s:UTC−05:00
+s:display	s:Etc/GMT+5	s:fr_FR	i:8	~T	s:UTC−05:00
+s:canonical	s:Etc/GMT+5	a:["Etc/GMT+5",true]
+s:region	s:Etc/GMT+5	s:001
+s:count_equiv	s:Etc/GMT+5	i:0
+s:equiv	s:Etc/GMT+5	i:0	s:
+s:equiv	s:Etc/GMT+5	i:1	s:
+s:equiv	s:Etc/GMT+5	i:2	s:
+s:equiv	s:Etc/GMT+5	i:5	s:
+s:equiv	s:Etc/GMT+5	i:-1	s:
+s:equiv	s:Etc/GMT+5	i:100	s:
+s:windows	s:Etc/GMT+5	s:SA Pacific Standard Time
+s:iana	s:Etc/GMT+5	s:!Error
+s:to_dtz	s:Etc/GMT+5	s:Etc/GMT+5
+s:same_rules	s:Etc/GMT+5	s:Europe/Lisbon	~F
+s:same_rules	s:Etc/GMT+5	s:Europe/London	~F
+s:same_rules	s:Etc/GMT+5	s:WET	~F
+s:same_rules	s:Etc/GMT+5	s:Atlantic/Madeira	~F
+s:same_rules	s:Etc/GMT+5	s:UTC	~T
+s:same_rules	s:Etc/GMT+5	s:Etc/UTC	~T
+s:same_rules	s:Etc/GMT+5	s:Asia/Calcutta	~F
+s:same_rules	s:Etc/GMT+5	s:Asia/Kolkata	~F
+s:same_rules	s:Etc/GMT+5	s:GMT+05:30	~F
+s:id	s:GMT+05:30	s:GMT+05:30
+s:dst	s:GMT+05:30	i:3600000
+s:offset	s:GMT+05:30	d:0.0	~F	~T	i:19800000	i:0
+s:offset	s:GMT+05:30	d:0.0	~T	~T	i:19800000	i:0
+s:offset	s:GMT+05:30	d:1341100800000.0	~F	~T	i:19800000	i:0
+s:offset	s:GMT+05:30	d:1341100800000.0	~T	~T	i:19800000	i:0
+s:offset	s:GMT+05:30	d:1325376000000.0	~F	~T	i:19800000	i:0
+s:offset	s:GMT+05:30	d:1325376000000.0	~T	~T	i:19800000	i:0
+s:offset	s:GMT+05:30	d:-2208988800000.0	~F	~T	i:19800000	i:0
+s:offset	s:GMT+05:30	d:-2208988800000.0	~T	~T	i:19800000	i:0
+s:offset	s:GMT+05:30	d:1711846800000.0	~F	~T	i:19800000	i:0
+s:offset	s:GMT+05:30	d:1711846800000.0	~T	~T	i:19800000	i:0
+s:offset	s:GMT+05:30	d:1711843200000.0	~F	~T	i:19800000	i:0
+s:offset	s:GMT+05:30	d:1711843200000.0	~T	~T	i:19800000	i:0
+s:offset	s:GMT+05:30	d:1730595600000.0	~F	~T	i:19800000	i:0
+s:offset	s:GMT+05:30	d:1730595600000.0	~T	~T	i:19800000	i:0
+s:display	s:GMT+05:30	s:en_US	i:1	~F	s:GMT+5:30
+s:display	s:GMT+05:30	s:en_US	i:1	~T	s:GMT+5:30
+s:display	s:GMT+05:30	s:en_US	i:2	~F	s:GMT+05:30
+s:display	s:GMT+05:30	s:en_US	i:2	~T	s:GMT+05:30
+s:display	s:GMT+05:30	s:en_US	i:5	~F	s:+0530
+s:display	s:GMT+05:30	s:en_US	i:5	~T	s:+0530
+s:display	s:GMT+05:30	s:en_US	i:6	~F	s:GMT+05:30
+s:display	s:GMT+05:30	s:en_US	i:6	~T	s:GMT+05:30
+s:display	s:GMT+05:30	s:en_US	i:7	~F	s:GMT+5:30
+s:display	s:GMT+05:30	s:en_US	i:7	~T	s:GMT+5:30
+s:display	s:GMT+05:30	s:en_US	i:8	~F	s:GMT+05:30
+s:display	s:GMT+05:30	s:en_US	i:8	~T	s:GMT+06:30
+s:display	s:GMT+05:30	s:pt_PT	i:1	~F	s:GMT+5:30
+s:display	s:GMT+05:30	s:pt_PT	i:1	~T	s:GMT+5:30
+s:display	s:GMT+05:30	s:pt_PT	i:2	~F	s:GMT+05:30
+s:display	s:GMT+05:30	s:pt_PT	i:2	~T	s:GMT+05:30
+s:display	s:GMT+05:30	s:pt_PT	i:5	~F	s:+0530
+s:display	s:GMT+05:30	s:pt_PT	i:5	~T	s:+0530
+s:display	s:GMT+05:30	s:pt_PT	i:6	~F	s:GMT+05:30
+s:display	s:GMT+05:30	s:pt_PT	i:6	~T	s:GMT+05:30
+s:display	s:GMT+05:30	s:pt_PT	i:7	~F	s:GMT+5:30
+s:display	s:GMT+05:30	s:pt_PT	i:7	~T	s:GMT+5:30
+s:display	s:GMT+05:30	s:pt_PT	i:8	~F	s:GMT+05:30
+s:display	s:GMT+05:30	s:pt_PT	i:8	~T	s:GMT+06:30
+s:display	s:GMT+05:30	s:ja_JP	i:1	~F	s:GMT+5:30
+s:display	s:GMT+05:30	s:ja_JP	i:1	~T	s:GMT+5:30
+s:display	s:GMT+05:30	s:ja_JP	i:2	~F	s:GMT+05:30
+s:display	s:GMT+05:30	s:ja_JP	i:2	~T	s:GMT+05:30
+s:display	s:GMT+05:30	s:ja_JP	i:5	~F	s:+0530
+s:display	s:GMT+05:30	s:ja_JP	i:5	~T	s:+0530
+s:display	s:GMT+05:30	s:ja_JP	i:6	~F	s:GMT+05:30
+s:display	s:GMT+05:30	s:ja_JP	i:6	~T	s:GMT+05:30
+s:display	s:GMT+05:30	s:ja_JP	i:7	~F	s:GMT+5:30
+s:display	s:GMT+05:30	s:ja_JP	i:7	~T	s:GMT+5:30
+s:display	s:GMT+05:30	s:ja_JP	i:8	~F	s:GMT+05:30
+s:display	s:GMT+05:30	s:ja_JP	i:8	~T	s:GMT+06:30
+s:display	s:GMT+05:30	s:de_DE	i:1	~F	s:GMT+5:30
+s:display	s:GMT+05:30	s:de_DE	i:1	~T	s:GMT+5:30
+s:display	s:GMT+05:30	s:de_DE	i:2	~F	s:GMT+05:30
+s:display	s:GMT+05:30	s:de_DE	i:2	~T	s:GMT+05:30
+s:display	s:GMT+05:30	s:de_DE	i:5	~F	s:+0530
+s:display	s:GMT+05:30	s:de_DE	i:5	~T	s:+0530
+s:display	s:GMT+05:30	s:de_DE	i:6	~F	s:GMT+05:30
+s:display	s:GMT+05:30	s:de_DE	i:6	~T	s:GMT+05:30
+s:display	s:GMT+05:30	s:de_DE	i:7	~F	s:GMT+5:30
+s:display	s:GMT+05:30	s:de_DE	i:7	~T	s:GMT+5:30
+s:display	s:GMT+05:30	s:de_DE	i:8	~F	s:GMT+05:30
+s:display	s:GMT+05:30	s:de_DE	i:8	~T	s:GMT+06:30
+s:display	s:GMT+05:30	s:fr_FR	i:1	~F	s:UTC+5:30
+s:display	s:GMT+05:30	s:fr_FR	i:1	~T	s:UTC+5:30
+s:display	s:GMT+05:30	s:fr_FR	i:2	~F	s:UTC+05:30
+s:display	s:GMT+05:30	s:fr_FR	i:2	~T	s:UTC+05:30
+s:display	s:GMT+05:30	s:fr_FR	i:5	~F	s:+0530
+s:display	s:GMT+05:30	s:fr_FR	i:5	~T	s:+0530
+s:display	s:GMT+05:30	s:fr_FR	i:6	~F	s:UTC+05:30
+s:display	s:GMT+05:30	s:fr_FR	i:6	~T	s:UTC+05:30
+s:display	s:GMT+05:30	s:fr_FR	i:7	~F	s:UTC+5:30
+s:display	s:GMT+05:30	s:fr_FR	i:7	~T	s:UTC+5:30
+s:display	s:GMT+05:30	s:fr_FR	i:8	~F	s:UTC+05:30
+s:display	s:GMT+05:30	s:fr_FR	i:8	~T	s:UTC+06:30
+s:canonical	s:GMT+05:30	a:["GMT+05:30",false]
+s:region	s:GMT+05:30	s:!U_ILLEGAL_ARGUMENT_ERROR
+s:count_equiv	s:GMT+05:30	i:0
+s:equiv	s:GMT+05:30	i:0	s:
+s:equiv	s:GMT+05:30	i:1	s:
+s:equiv	s:GMT+05:30	i:2	s:
+s:equiv	s:GMT+05:30	i:5	s:
+s:equiv	s:GMT+05:30	i:-1	s:
+s:equiv	s:GMT+05:30	i:100	s:
+s:windows	s:GMT+05:30	s:!U_ILLEGAL_ARGUMENT_ERROR
+s:iana	s:GMT+05:30	s:!Error
+s:to_dtz	s:GMT+05:30	s:+05:30
+s:same_rules	s:GMT+05:30	s:Europe/Lisbon	~F
+s:same_rules	s:GMT+05:30	s:Europe/London	~F
+s:same_rules	s:GMT+05:30	s:WET	~F
+s:same_rules	s:GMT+05:30	s:Atlantic/Madeira	~F
+s:same_rules	s:GMT+05:30	s:UTC	~F
+s:same_rules	s:GMT+05:30	s:Etc/UTC	~F
+s:same_rules	s:GMT+05:30	s:Asia/Calcutta	~F
+s:same_rules	s:GMT+05:30	s:Asia/Kolkata	~F
+s:same_rules	s:GMT+05:30	s:GMT+05:30	~T
+s:id	s:GMT-3	s:GMT-03:00
+s:dst	s:GMT-3	i:3600000
+s:offset	s:GMT-3	d:0.0	~F	~T	i:-10800000	i:0
+s:offset	s:GMT-3	d:0.0	~T	~T	i:-10800000	i:0
+s:offset	s:GMT-3	d:1341100800000.0	~F	~T	i:-10800000	i:0
+s:offset	s:GMT-3	d:1341100800000.0	~T	~T	i:-10800000	i:0
+s:offset	s:GMT-3	d:1325376000000.0	~F	~T	i:-10800000	i:0
+s:offset	s:GMT-3	d:1325376000000.0	~T	~T	i:-10800000	i:0
+s:offset	s:GMT-3	d:-2208988800000.0	~F	~T	i:-10800000	i:0
+s:offset	s:GMT-3	d:-2208988800000.0	~T	~T	i:-10800000	i:0
+s:offset	s:GMT-3	d:1711846800000.0	~F	~T	i:-10800000	i:0
+s:offset	s:GMT-3	d:1711846800000.0	~T	~T	i:-10800000	i:0
+s:offset	s:GMT-3	d:1711843200000.0	~F	~T	i:-10800000	i:0
+s:offset	s:GMT-3	d:1711843200000.0	~T	~T	i:-10800000	i:0
+s:offset	s:GMT-3	d:1730595600000.0	~F	~T	i:-10800000	i:0
+s:offset	s:GMT-3	d:1730595600000.0	~T	~T	i:-10800000	i:0
+s:display	s:GMT-3	s:en_US	i:1	~F	s:GMT-3
+s:display	s:GMT-3	s:en_US	i:1	~T	s:GMT-3
+s:display	s:GMT-3	s:en_US	i:2	~F	s:GMT-03:00
+s:display	s:GMT-3	s:en_US	i:2	~T	s:GMT-03:00
+s:display	s:GMT-3	s:en_US	i:5	~F	s:-0300
+s:display	s:GMT-3	s:en_US	i:5	~T	s:-0300
+s:display	s:GMT-3	s:en_US	i:6	~F	s:GMT-03:00
+s:display	s:GMT-3	s:en_US	i:6	~T	s:GMT-03:00
+s:display	s:GMT-3	s:en_US	i:7	~F	s:GMT-3
+s:display	s:GMT-3	s:en_US	i:7	~T	s:GMT-3
+s:display	s:GMT-3	s:en_US	i:8	~F	s:GMT-03:00
+s:display	s:GMT-3	s:en_US	i:8	~T	s:GMT-02:00
+s:display	s:GMT-3	s:pt_PT	i:1	~F	s:GMT-3
+s:display	s:GMT-3	s:pt_PT	i:1	~T	s:GMT-3
+s:display	s:GMT-3	s:pt_PT	i:2	~F	s:GMT-03:00
+s:display	s:GMT-3	s:pt_PT	i:2	~T	s:GMT-03:00
+s:display	s:GMT-3	s:pt_PT	i:5	~F	s:-0300
+s:display	s:GMT-3	s:pt_PT	i:5	~T	s:-0300
+s:display	s:GMT-3	s:pt_PT	i:6	~F	s:GMT-03:00
+s:display	s:GMT-3	s:pt_PT	i:6	~T	s:GMT-03:00
+s:display	s:GMT-3	s:pt_PT	i:7	~F	s:GMT-3
+s:display	s:GMT-3	s:pt_PT	i:7	~T	s:GMT-3
+s:display	s:GMT-3	s:pt_PT	i:8	~F	s:GMT-03:00
+s:display	s:GMT-3	s:pt_PT	i:8	~T	s:GMT-02:00
+s:display	s:GMT-3	s:ja_JP	i:1	~F	s:GMT-3
+s:display	s:GMT-3	s:ja_JP	i:1	~T	s:GMT-3
+s:display	s:GMT-3	s:ja_JP	i:2	~F	s:GMT-03:00
+s:display	s:GMT-3	s:ja_JP	i:2	~T	s:GMT-03:00
+s:display	s:GMT-3	s:ja_JP	i:5	~F	s:-0300
+s:display	s:GMT-3	s:ja_JP	i:5	~T	s:-0300
+s:display	s:GMT-3	s:ja_JP	i:6	~F	s:GMT-03:00
+s:display	s:GMT-3	s:ja_JP	i:6	~T	s:GMT-03:00
+s:display	s:GMT-3	s:ja_JP	i:7	~F	s:GMT-3
+s:display	s:GMT-3	s:ja_JP	i:7	~T	s:GMT-3
+s:display	s:GMT-3	s:ja_JP	i:8	~F	s:GMT-03:00
+s:display	s:GMT-3	s:ja_JP	i:8	~T	s:GMT-02:00
+s:display	s:GMT-3	s:de_DE	i:1	~F	s:GMT-3
+s:display	s:GMT-3	s:de_DE	i:1	~T	s:GMT-3
+s:display	s:GMT-3	s:de_DE	i:2	~F	s:GMT-03:00
+s:display	s:GMT-3	s:de_DE	i:2	~T	s:GMT-03:00
+s:display	s:GMT-3	s:de_DE	i:5	~F	s:-0300
+s:display	s:GMT-3	s:de_DE	i:5	~T	s:-0300
+s:display	s:GMT-3	s:de_DE	i:6	~F	s:GMT-03:00
+s:display	s:GMT-3	s:de_DE	i:6	~T	s:GMT-03:00
+s:display	s:GMT-3	s:de_DE	i:7	~F	s:GMT-3
+s:display	s:GMT-3	s:de_DE	i:7	~T	s:GMT-3
+s:display	s:GMT-3	s:de_DE	i:8	~F	s:GMT-03:00
+s:display	s:GMT-3	s:de_DE	i:8	~T	s:GMT-02:00
+s:display	s:GMT-3	s:fr_FR	i:1	~F	s:UTC−3
+s:display	s:GMT-3	s:fr_FR	i:1	~T	s:UTC−3
+s:display	s:GMT-3	s:fr_FR	i:2	~F	s:UTC−03:00
+s:display	s:GMT-3	s:fr_FR	i:2	~T	s:UTC−03:00
+s:display	s:GMT-3	s:fr_FR	i:5	~F	s:-0300
+s:display	s:GMT-3	s:fr_FR	i:5	~T	s:-0300
+s:display	s:GMT-3	s:fr_FR	i:6	~F	s:UTC−03:00
+s:display	s:GMT-3	s:fr_FR	i:6	~T	s:UTC−03:00
+s:display	s:GMT-3	s:fr_FR	i:7	~F	s:UTC−3
+s:display	s:GMT-3	s:fr_FR	i:7	~T	s:UTC−3
+s:display	s:GMT-3	s:fr_FR	i:8	~F	s:UTC−03:00
+s:display	s:GMT-3	s:fr_FR	i:8	~T	s:UTC−02:00
+s:canonical	s:GMT-3	a:["GMT-03:00",false]
+s:region	s:GMT-3	s:!U_ILLEGAL_ARGUMENT_ERROR
+s:count_equiv	s:GMT-3	i:0
+s:equiv	s:GMT-3	i:0	s:
+s:equiv	s:GMT-3	i:1	s:
+s:equiv	s:GMT-3	i:2	s:
+s:equiv	s:GMT-3	i:5	s:
+s:equiv	s:GMT-3	i:-1	s:
+s:equiv	s:GMT-3	i:100	s:
+s:windows	s:GMT-3	s:!U_ILLEGAL_ARGUMENT_ERROR
+s:iana	s:GMT-3	s:!Error
+s:to_dtz	s:GMT-3	s:-03:00
+s:same_rules	s:GMT-3	s:Europe/Lisbon	~F
+s:same_rules	s:GMT-3	s:Europe/London	~F
+s:same_rules	s:GMT-3	s:WET	~F
+s:same_rules	s:GMT-3	s:Atlantic/Madeira	~F
+s:same_rules	s:GMT-3	s:UTC	~F
+s:same_rules	s:GMT-3	s:Etc/UTC	~F
+s:same_rules	s:GMT-3	s:Asia/Calcutta	~F
+s:same_rules	s:GMT-3	s:Asia/Kolkata	~F
+s:same_rules	s:GMT-3	s:GMT+05:30	~F
+s:id	s:gmt+1	s:GMT+01:00
+s:dst	s:gmt+1	i:3600000
+s:offset	s:gmt+1	d:0.0	~F	~T	i:3600000	i:0
+s:offset	s:gmt+1	d:0.0	~T	~T	i:3600000	i:0
+s:offset	s:gmt+1	d:1341100800000.0	~F	~T	i:3600000	i:0
+s:offset	s:gmt+1	d:1341100800000.0	~T	~T	i:3600000	i:0
+s:offset	s:gmt+1	d:1325376000000.0	~F	~T	i:3600000	i:0
+s:offset	s:gmt+1	d:1325376000000.0	~T	~T	i:3600000	i:0
+s:offset	s:gmt+1	d:-2208988800000.0	~F	~T	i:3600000	i:0
+s:offset	s:gmt+1	d:-2208988800000.0	~T	~T	i:3600000	i:0
+s:offset	s:gmt+1	d:1711846800000.0	~F	~T	i:3600000	i:0
+s:offset	s:gmt+1	d:1711846800000.0	~T	~T	i:3600000	i:0
+s:offset	s:gmt+1	d:1711843200000.0	~F	~T	i:3600000	i:0
+s:offset	s:gmt+1	d:1711843200000.0	~T	~T	i:3600000	i:0
+s:offset	s:gmt+1	d:1730595600000.0	~F	~T	i:3600000	i:0
+s:offset	s:gmt+1	d:1730595600000.0	~T	~T	i:3600000	i:0
+s:display	s:gmt+1	s:en_US	i:1	~F	s:GMT+1
+s:display	s:gmt+1	s:en_US	i:1	~T	s:GMT+1
+s:display	s:gmt+1	s:en_US	i:2	~F	s:GMT+01:00
+s:display	s:gmt+1	s:en_US	i:2	~T	s:GMT+01:00
+s:display	s:gmt+1	s:en_US	i:5	~F	s:+0100
+s:display	s:gmt+1	s:en_US	i:5	~T	s:+0100
+s:display	s:gmt+1	s:en_US	i:6	~F	s:GMT+01:00
+s:display	s:gmt+1	s:en_US	i:6	~T	s:GMT+01:00
+s:display	s:gmt+1	s:en_US	i:7	~F	s:GMT+1
+s:display	s:gmt+1	s:en_US	i:7	~T	s:GMT+1
+s:display	s:gmt+1	s:en_US	i:8	~F	s:GMT+01:00
+s:display	s:gmt+1	s:en_US	i:8	~T	s:GMT+02:00
+s:display	s:gmt+1	s:pt_PT	i:1	~F	s:GMT+1
+s:display	s:gmt+1	s:pt_PT	i:1	~T	s:GMT+1
+s:display	s:gmt+1	s:pt_PT	i:2	~F	s:GMT+01:00
+s:display	s:gmt+1	s:pt_PT	i:2	~T	s:GMT+01:00
+s:display	s:gmt+1	s:pt_PT	i:5	~F	s:+0100
+s:display	s:gmt+1	s:pt_PT	i:5	~T	s:+0100
+s:display	s:gmt+1	s:pt_PT	i:6	~F	s:GMT+01:00
+s:display	s:gmt+1	s:pt_PT	i:6	~T	s:GMT+01:00
+s:display	s:gmt+1	s:pt_PT	i:7	~F	s:GMT+1
+s:display	s:gmt+1	s:pt_PT	i:7	~T	s:GMT+1
+s:display	s:gmt+1	s:pt_PT	i:8	~F	s:GMT+01:00
+s:display	s:gmt+1	s:pt_PT	i:8	~T	s:GMT+02:00
+s:display	s:gmt+1	s:ja_JP	i:1	~F	s:GMT+1
+s:display	s:gmt+1	s:ja_JP	i:1	~T	s:GMT+1
+s:display	s:gmt+1	s:ja_JP	i:2	~F	s:GMT+01:00
+s:display	s:gmt+1	s:ja_JP	i:2	~T	s:GMT+01:00
+s:display	s:gmt+1	s:ja_JP	i:5	~F	s:+0100
+s:display	s:gmt+1	s:ja_JP	i:5	~T	s:+0100
+s:display	s:gmt+1	s:ja_JP	i:6	~F	s:GMT+01:00
+s:display	s:gmt+1	s:ja_JP	i:6	~T	s:GMT+01:00
+s:display	s:gmt+1	s:ja_JP	i:7	~F	s:GMT+1
+s:display	s:gmt+1	s:ja_JP	i:7	~T	s:GMT+1
+s:display	s:gmt+1	s:ja_JP	i:8	~F	s:GMT+01:00
+s:display	s:gmt+1	s:ja_JP	i:8	~T	s:GMT+02:00
+s:display	s:gmt+1	s:de_DE	i:1	~F	s:GMT+1
+s:display	s:gmt+1	s:de_DE	i:1	~T	s:GMT+1
+s:display	s:gmt+1	s:de_DE	i:2	~F	s:GMT+01:00
+s:display	s:gmt+1	s:de_DE	i:2	~T	s:GMT+01:00
+s:display	s:gmt+1	s:de_DE	i:5	~F	s:+0100
+s:display	s:gmt+1	s:de_DE	i:5	~T	s:+0100
+s:display	s:gmt+1	s:de_DE	i:6	~F	s:GMT+01:00
+s:display	s:gmt+1	s:de_DE	i:6	~T	s:GMT+01:00
+s:display	s:gmt+1	s:de_DE	i:7	~F	s:GMT+1
+s:display	s:gmt+1	s:de_DE	i:7	~T	s:GMT+1
+s:display	s:gmt+1	s:de_DE	i:8	~F	s:GMT+01:00
+s:display	s:gmt+1	s:de_DE	i:8	~T	s:GMT+02:00
+s:display	s:gmt+1	s:fr_FR	i:1	~F	s:UTC+1
+s:display	s:gmt+1	s:fr_FR	i:1	~T	s:UTC+1
+s:display	s:gmt+1	s:fr_FR	i:2	~F	s:UTC+01:00
+s:display	s:gmt+1	s:fr_FR	i:2	~T	s:UTC+01:00
+s:display	s:gmt+1	s:fr_FR	i:5	~F	s:+0100
+s:display	s:gmt+1	s:fr_FR	i:5	~T	s:+0100
+s:display	s:gmt+1	s:fr_FR	i:6	~F	s:UTC+01:00
+s:display	s:gmt+1	s:fr_FR	i:6	~T	s:UTC+01:00
+s:display	s:gmt+1	s:fr_FR	i:7	~F	s:UTC+1
+s:display	s:gmt+1	s:fr_FR	i:7	~T	s:UTC+1
+s:display	s:gmt+1	s:fr_FR	i:8	~F	s:UTC+01:00
+s:display	s:gmt+1	s:fr_FR	i:8	~T	s:UTC+02:00
+s:canonical	s:gmt+1	a:["GMT+01:00",false]
+s:region	s:gmt+1	s:!U_ILLEGAL_ARGUMENT_ERROR
+s:count_equiv	s:gmt+1	i:0
+s:equiv	s:gmt+1	i:0	s:
+s:equiv	s:gmt+1	i:1	s:
+s:equiv	s:gmt+1	i:2	s:
+s:equiv	s:gmt+1	i:5	s:
+s:equiv	s:gmt+1	i:-1	s:
+s:equiv	s:gmt+1	i:100	s:
+s:windows	s:gmt+1	s:!U_ILLEGAL_ARGUMENT_ERROR
+s:iana	s:gmt+1	s:!Error
+s:to_dtz	s:gmt+1	s:+01:00
+s:same_rules	s:gmt+1	s:Europe/Lisbon	~F
+s:same_rules	s:gmt+1	s:Europe/London	~F
+s:same_rules	s:gmt+1	s:WET	~F
+s:same_rules	s:gmt+1	s:Atlantic/Madeira	~F
+s:same_rules	s:gmt+1	s:UTC	~F
+s:same_rules	s:gmt+1	s:Etc/UTC	~F
+s:same_rules	s:gmt+1	s:Asia/Calcutta	~F
+s:same_rules	s:gmt+1	s:Asia/Kolkata	~F
+s:same_rules	s:gmt+1	s:GMT+05:30	~F
+s:id	s:Europe/Kiev	s:Europe/Kiev
+s:dst	s:Europe/Kiev	i:3600000
+s:offset	s:Europe/Kiev	d:0.0	~F	~T	i:10800000	i:0
+s:offset	s:Europe/Kiev	d:0.0	~T	~T	i:10800000	i:0
+s:offset	s:Europe/Kiev	d:1341100800000.0	~F	~T	i:7200000	i:3600000
+s:offset	s:Europe/Kiev	d:1341100800000.0	~T	~T	i:7200000	i:3600000
+s:offset	s:Europe/Kiev	d:1325376000000.0	~F	~T	i:7200000	i:0
+s:offset	s:Europe/Kiev	d:1325376000000.0	~T	~T	i:7200000	i:0
+s:offset	s:Europe/Kiev	d:-2208988800000.0	~F	~T	i:7324000	i:0
+s:offset	s:Europe/Kiev	d:-2208988800000.0	~T	~T	i:7324000	i:0
+s:offset	s:Europe/Kiev	d:1711846800000.0	~F	~T	i:7200000	i:3600000
+s:offset	s:Europe/Kiev	d:1711846800000.0	~T	~T	i:7200000	i:0
+s:offset	s:Europe/Kiev	d:1711843200000.0	~F	~T	i:7200000	i:0
+s:offset	s:Europe/Kiev	d:1711843200000.0	~T	~T	i:7200000	i:0
+s:offset	s:Europe/Kiev	d:1730595600000.0	~F	~T	i:7200000	i:0
+s:offset	s:Europe/Kiev	d:1730595600000.0	~T	~T	i:7200000	i:0
+s:display	s:Europe/Kiev	s:en_US	i:1	~F	s:GMT+2
+s:display	s:Europe/Kiev	s:en_US	i:1	~T	s:GMT+3
+s:display	s:Europe/Kiev	s:en_US	i:2	~F	s:Eastern European Standard Time
+s:display	s:Europe/Kiev	s:en_US	i:2	~T	s:Eastern European Summer Time
+s:display	s:Europe/Kiev	s:en_US	i:5	~F	s:+0200
+s:display	s:Europe/Kiev	s:en_US	i:5	~T	s:+0300
+s:display	s:Europe/Kiev	s:en_US	i:6	~F	s:GMT+02:00
+s:display	s:Europe/Kiev	s:en_US	i:6	~T	s:GMT+03:00
+s:display	s:Europe/Kiev	s:en_US	i:7	~F	s:GMT+2
+s:display	s:Europe/Kiev	s:en_US	i:7	~T	s:GMT+3
+s:display	s:Europe/Kiev	s:en_US	i:8	~F	s:Ukraine Time
+s:display	s:Europe/Kiev	s:en_US	i:8	~T	s:Ukraine Time
+s:display	s:Europe/Kiev	s:pt_PT	i:1	~F	s:EET
+s:display	s:Europe/Kiev	s:pt_PT	i:1	~T	s:EEST
+s:display	s:Europe/Kiev	s:pt_PT	i:2	~F	s:Hora padrão da Europa Oriental
+s:display	s:Europe/Kiev	s:pt_PT	i:2	~T	s:Hora de verão da Europa Oriental
+s:display	s:Europe/Kiev	s:pt_PT	i:5	~F	s:+0200
+s:display	s:Europe/Kiev	s:pt_PT	i:5	~T	s:+0300
+s:display	s:Europe/Kiev	s:pt_PT	i:6	~F	s:GMT+02:00
+s:display	s:Europe/Kiev	s:pt_PT	i:6	~T	s:GMT+03:00
+s:display	s:Europe/Kiev	s:pt_PT	i:7	~F	s:EET
+s:display	s:Europe/Kiev	s:pt_PT	i:7	~T	s:EEST
+s:display	s:Europe/Kiev	s:pt_PT	i:8	~F	s:Hora de Ucrânia
+s:display	s:Europe/Kiev	s:pt_PT	i:8	~T	s:Hora de Ucrânia
+s:display	s:Europe/Kiev	s:ja_JP	i:1	~F	s:GMT+2
+s:display	s:Europe/Kiev	s:ja_JP	i:1	~T	s:GMT+3
+s:display	s:Europe/Kiev	s:ja_JP	i:2	~F	s:東ヨーロッパ標準時
+s:display	s:Europe/Kiev	s:ja_JP	i:2	~T	s:東ヨーロッパ夏時間
+s:display	s:Europe/Kiev	s:ja_JP	i:5	~F	s:+0200
+s:display	s:Europe/Kiev	s:ja_JP	i:5	~T	s:+0300
+s:display	s:Europe/Kiev	s:ja_JP	i:6	~F	s:GMT+02:00
+s:display	s:Europe/Kiev	s:ja_JP	i:6	~T	s:GMT+03:00
+s:display	s:Europe/Kiev	s:ja_JP	i:7	~F	s:GMT+2
+s:display	s:Europe/Kiev	s:ja_JP	i:7	~T	s:GMT+3
+s:display	s:Europe/Kiev	s:ja_JP	i:8	~F	s:ウクライナ時間
+s:display	s:Europe/Kiev	s:ja_JP	i:8	~T	s:ウクライナ時間
+s:display	s:Europe/Kiev	s:de_DE	i:1	~F	s:OEZ
+s:display	s:Europe/Kiev	s:de_DE	i:1	~T	s:OESZ
+s:display	s:Europe/Kiev	s:de_DE	i:2	~F	s:Osteuropäische Normalzeit
+s:display	s:Europe/Kiev	s:de_DE	i:2	~T	s:Osteuropäische Sommerzeit
+s:display	s:Europe/Kiev	s:de_DE	i:5	~F	s:+0200
+s:display	s:Europe/Kiev	s:de_DE	i:5	~T	s:+0300
+s:display	s:Europe/Kiev	s:de_DE	i:6	~F	s:GMT+02:00
+s:display	s:Europe/Kiev	s:de_DE	i:6	~T	s:GMT+03:00
+s:display	s:Europe/Kiev	s:de_DE	i:7	~F	s:OEZ
+s:display	s:Europe/Kiev	s:de_DE	i:7	~T	s:OESZ
+s:display	s:Europe/Kiev	s:de_DE	i:8	~F	s:Ukraine (Ortszeit)
+s:display	s:Europe/Kiev	s:de_DE	i:8	~T	s:Ukraine (Ortszeit)
+s:display	s:Europe/Kiev	s:fr_FR	i:1	~F	s:UTC+2
+s:display	s:Europe/Kiev	s:fr_FR	i:1	~T	s:UTC+3
+s:display	s:Europe/Kiev	s:fr_FR	i:2	~F	s:heure normale d’Europe de l’Est
+s:display	s:Europe/Kiev	s:fr_FR	i:2	~T	s:heure d’été d’Europe de l’Est
+s:display	s:Europe/Kiev	s:fr_FR	i:5	~F	s:+0200
+s:display	s:Europe/Kiev	s:fr_FR	i:5	~T	s:+0300
+s:display	s:Europe/Kiev	s:fr_FR	i:6	~F	s:UTC+02:00
+s:display	s:Europe/Kiev	s:fr_FR	i:6	~T	s:UTC+03:00
+s:display	s:Europe/Kiev	s:fr_FR	i:7	~F	s:UTC+2
+s:display	s:Europe/Kiev	s:fr_FR	i:7	~T	s:UTC+3
+s:display	s:Europe/Kiev	s:fr_FR	i:8	~F	s:heure : Ukraine
+s:display	s:Europe/Kiev	s:fr_FR	i:8	~T	s:heure : Ukraine
+s:canonical	s:Europe/Kiev	a:["Europe/Kiev",true]
+s:region	s:Europe/Kiev	s:UA
+s:count_equiv	s:Europe/Kiev	i:4
+s:equiv	s:Europe/Kiev	i:0	s:Europe/Kiev
+s:equiv	s:Europe/Kiev	i:1	s:Europe/Kyiv
+s:equiv	s:Europe/Kiev	i:2	s:Europe/Uzhgorod
+s:equiv	s:Europe/Kiev	i:5	s:
+s:equiv	s:Europe/Kiev	i:-1	s:
+s:equiv	s:Europe/Kiev	i:100	s:
+s:windows	s:Europe/Kiev	s:FLE Standard Time
+s:iana	s:Europe/Kiev	s:!Error
+s:to_dtz	s:Europe/Kiev	s:!DateInvalidTimeZoneException
+s:same_rules	s:Europe/Kiev	s:Europe/Lisbon	~F
+s:same_rules	s:Europe/Kiev	s:Europe/London	~F
+s:same_rules	s:Europe/Kiev	s:WET	~F
+s:same_rules	s:Europe/Kiev	s:Atlantic/Madeira	~F
+s:same_rules	s:Europe/Kiev	s:UTC	~F
+s:same_rules	s:Europe/Kiev	s:Etc/UTC	~F
+s:same_rules	s:Europe/Kiev	s:Asia/Calcutta	~F
+s:same_rules	s:Europe/Kiev	s:Asia/Kolkata	~F
+s:same_rules	s:Europe/Kiev	s:GMT+05:30	~F
+s:id	s:Europe/Kyiv	s:Europe/Kyiv
+s:dst	s:Europe/Kyiv	i:3600000
+s:offset	s:Europe/Kyiv	d:0.0	~F	~T	i:10800000	i:0
+s:offset	s:Europe/Kyiv	d:0.0	~T	~T	i:10800000	i:0
+s:offset	s:Europe/Kyiv	d:1341100800000.0	~F	~T	i:7200000	i:3600000
+s:offset	s:Europe/Kyiv	d:1341100800000.0	~T	~T	i:7200000	i:3600000
+s:offset	s:Europe/Kyiv	d:1325376000000.0	~F	~T	i:7200000	i:0
+s:offset	s:Europe/Kyiv	d:1325376000000.0	~T	~T	i:7200000	i:0
+s:offset	s:Europe/Kyiv	d:-2208988800000.0	~F	~T	i:7324000	i:0
+s:offset	s:Europe/Kyiv	d:-2208988800000.0	~T	~T	i:7324000	i:0
+s:offset	s:Europe/Kyiv	d:1711846800000.0	~F	~T	i:7200000	i:3600000
+s:offset	s:Europe/Kyiv	d:1711846800000.0	~T	~T	i:7200000	i:0
+s:offset	s:Europe/Kyiv	d:1711843200000.0	~F	~T	i:7200000	i:0
+s:offset	s:Europe/Kyiv	d:1711843200000.0	~T	~T	i:7200000	i:0
+s:offset	s:Europe/Kyiv	d:1730595600000.0	~F	~T	i:7200000	i:0
+s:offset	s:Europe/Kyiv	d:1730595600000.0	~T	~T	i:7200000	i:0
+s:display	s:Europe/Kyiv	s:en_US	i:1	~F	s:GMT+2
+s:display	s:Europe/Kyiv	s:en_US	i:1	~T	s:GMT+3
+s:display	s:Europe/Kyiv	s:en_US	i:2	~F	s:Eastern European Standard Time
+s:display	s:Europe/Kyiv	s:en_US	i:2	~T	s:Eastern European Summer Time
+s:display	s:Europe/Kyiv	s:en_US	i:5	~F	s:+0200
+s:display	s:Europe/Kyiv	s:en_US	i:5	~T	s:+0300
+s:display	s:Europe/Kyiv	s:en_US	i:6	~F	s:GMT+02:00
+s:display	s:Europe/Kyiv	s:en_US	i:6	~T	s:GMT+03:00
+s:display	s:Europe/Kyiv	s:en_US	i:7	~F	s:GMT+2
+s:display	s:Europe/Kyiv	s:en_US	i:7	~T	s:GMT+3
+s:display	s:Europe/Kyiv	s:en_US	i:8	~F	s:Ukraine Time
+s:display	s:Europe/Kyiv	s:en_US	i:8	~T	s:Ukraine Time
+s:display	s:Europe/Kyiv	s:pt_PT	i:1	~F	s:EET
+s:display	s:Europe/Kyiv	s:pt_PT	i:1	~T	s:EEST
+s:display	s:Europe/Kyiv	s:pt_PT	i:2	~F	s:Hora padrão da Europa Oriental
+s:display	s:Europe/Kyiv	s:pt_PT	i:2	~T	s:Hora de verão da Europa Oriental
+s:display	s:Europe/Kyiv	s:pt_PT	i:5	~F	s:+0200
+s:display	s:Europe/Kyiv	s:pt_PT	i:5	~T	s:+0300
+s:display	s:Europe/Kyiv	s:pt_PT	i:6	~F	s:GMT+02:00
+s:display	s:Europe/Kyiv	s:pt_PT	i:6	~T	s:GMT+03:00
+s:display	s:Europe/Kyiv	s:pt_PT	i:7	~F	s:EET
+s:display	s:Europe/Kyiv	s:pt_PT	i:7	~T	s:EEST
+s:display	s:Europe/Kyiv	s:pt_PT	i:8	~F	s:Hora de Ucrânia
+s:display	s:Europe/Kyiv	s:pt_PT	i:8	~T	s:Hora de Ucrânia
+s:display	s:Europe/Kyiv	s:ja_JP	i:1	~F	s:GMT+2
+s:display	s:Europe/Kyiv	s:ja_JP	i:1	~T	s:GMT+3
+s:display	s:Europe/Kyiv	s:ja_JP	i:2	~F	s:東ヨーロッパ標準時
+s:display	s:Europe/Kyiv	s:ja_JP	i:2	~T	s:東ヨーロッパ夏時間
+s:display	s:Europe/Kyiv	s:ja_JP	i:5	~F	s:+0200
+s:display	s:Europe/Kyiv	s:ja_JP	i:5	~T	s:+0300
+s:display	s:Europe/Kyiv	s:ja_JP	i:6	~F	s:GMT+02:00
+s:display	s:Europe/Kyiv	s:ja_JP	i:6	~T	s:GMT+03:00
+s:display	s:Europe/Kyiv	s:ja_JP	i:7	~F	s:GMT+2
+s:display	s:Europe/Kyiv	s:ja_JP	i:7	~T	s:GMT+3
+s:display	s:Europe/Kyiv	s:ja_JP	i:8	~F	s:ウクライナ時間
+s:display	s:Europe/Kyiv	s:ja_JP	i:8	~T	s:ウクライナ時間
+s:display	s:Europe/Kyiv	s:de_DE	i:1	~F	s:OEZ
+s:display	s:Europe/Kyiv	s:de_DE	i:1	~T	s:OESZ
+s:display	s:Europe/Kyiv	s:de_DE	i:2	~F	s:Osteuropäische Normalzeit
+s:display	s:Europe/Kyiv	s:de_DE	i:2	~T	s:Osteuropäische Sommerzeit
+s:display	s:Europe/Kyiv	s:de_DE	i:5	~F	s:+0200
+s:display	s:Europe/Kyiv	s:de_DE	i:5	~T	s:+0300
+s:display	s:Europe/Kyiv	s:de_DE	i:6	~F	s:GMT+02:00
+s:display	s:Europe/Kyiv	s:de_DE	i:6	~T	s:GMT+03:00
+s:display	s:Europe/Kyiv	s:de_DE	i:7	~F	s:OEZ
+s:display	s:Europe/Kyiv	s:de_DE	i:7	~T	s:OESZ
+s:display	s:Europe/Kyiv	s:de_DE	i:8	~F	s:Ukraine (Ortszeit)
+s:display	s:Europe/Kyiv	s:de_DE	i:8	~T	s:Ukraine (Ortszeit)
+s:display	s:Europe/Kyiv	s:fr_FR	i:1	~F	s:UTC+2
+s:display	s:Europe/Kyiv	s:fr_FR	i:1	~T	s:UTC+3
+s:display	s:Europe/Kyiv	s:fr_FR	i:2	~F	s:heure normale d’Europe de l’Est
+s:display	s:Europe/Kyiv	s:fr_FR	i:2	~T	s:heure d’été d’Europe de l’Est
+s:display	s:Europe/Kyiv	s:fr_FR	i:5	~F	s:+0200
+s:display	s:Europe/Kyiv	s:fr_FR	i:5	~T	s:+0300
+s:display	s:Europe/Kyiv	s:fr_FR	i:6	~F	s:UTC+02:00
+s:display	s:Europe/Kyiv	s:fr_FR	i:6	~T	s:UTC+03:00
+s:display	s:Europe/Kyiv	s:fr_FR	i:7	~F	s:UTC+2
+s:display	s:Europe/Kyiv	s:fr_FR	i:7	~T	s:UTC+3
+s:display	s:Europe/Kyiv	s:fr_FR	i:8	~F	s:heure : Ukraine
+s:display	s:Europe/Kyiv	s:fr_FR	i:8	~T	s:heure : Ukraine
+s:canonical	s:Europe/Kyiv	a:["Europe/Kiev",true]
+s:region	s:Europe/Kyiv	s:UA
+s:count_equiv	s:Europe/Kyiv	i:4
+s:equiv	s:Europe/Kyiv	i:0	s:Europe/Kiev
+s:equiv	s:Europe/Kyiv	i:1	s:Europe/Kyiv
+s:equiv	s:Europe/Kyiv	i:2	s:Europe/Uzhgorod
+s:equiv	s:Europe/Kyiv	i:5	s:
+s:equiv	s:Europe/Kyiv	i:-1	s:
+s:equiv	s:Europe/Kyiv	i:100	s:
+s:windows	s:Europe/Kyiv	s:FLE Standard Time
+s:iana	s:Europe/Kyiv	s:!Error
+s:to_dtz	s:Europe/Kyiv	s:Europe/Kyiv
+s:same_rules	s:Europe/Kyiv	s:Europe/Lisbon	~F
+s:same_rules	s:Europe/Kyiv	s:Europe/London	~F
+s:same_rules	s:Europe/Kyiv	s:WET	~F
+s:same_rules	s:Europe/Kyiv	s:Atlantic/Madeira	~F
+s:same_rules	s:Europe/Kyiv	s:UTC	~F
+s:same_rules	s:Europe/Kyiv	s:Etc/UTC	~F
+s:same_rules	s:Europe/Kyiv	s:Asia/Calcutta	~F
+s:same_rules	s:Europe/Kyiv	s:Asia/Kolkata	~F
+s:same_rules	s:Europe/Kyiv	s:GMT+05:30	~F
+s:id	s:US/Pacific	s:US/Pacific
+s:dst	s:US/Pacific	i:3600000
+s:offset	s:US/Pacific	d:0.0	~F	~T	i:-28800000	i:0
+s:offset	s:US/Pacific	d:0.0	~T	~T	i:-28800000	i:0
+s:offset	s:US/Pacific	d:1341100800000.0	~F	~T	i:-28800000	i:3600000
+s:offset	s:US/Pacific	d:1341100800000.0	~T	~T	i:-28800000	i:3600000
+s:offset	s:US/Pacific	d:1325376000000.0	~F	~T	i:-28800000	i:0
+s:offset	s:US/Pacific	d:1325376000000.0	~T	~T	i:-28800000	i:0
+s:offset	s:US/Pacific	d:-2208988800000.0	~F	~T	i:-28800000	i:0
+s:offset	s:US/Pacific	d:-2208988800000.0	~T	~T	i:-28800000	i:0
+s:offset	s:US/Pacific	d:1711846800000.0	~F	~T	i:-28800000	i:3600000
+s:offset	s:US/Pacific	d:1711846800000.0	~T	~T	i:-28800000	i:3600000
+s:offset	s:US/Pacific	d:1711843200000.0	~F	~T	i:-28800000	i:3600000
+s:offset	s:US/Pacific	d:1711843200000.0	~T	~T	i:-28800000	i:3600000
+s:offset	s:US/Pacific	d:1730595600000.0	~F	~T	i:-28800000	i:3600000
+s:offset	s:US/Pacific	d:1730595600000.0	~T	~T	i:-28800000	i:0
+s:display	s:US/Pacific	s:en_US	i:1	~F	s:PST
+s:display	s:US/Pacific	s:en_US	i:1	~T	s:PDT
+s:display	s:US/Pacific	s:en_US	i:2	~F	s:Pacific Standard Time
+s:display	s:US/Pacific	s:en_US	i:2	~T	s:Pacific Daylight Time
+s:display	s:US/Pacific	s:en_US	i:5	~F	s:-0800
+s:display	s:US/Pacific	s:en_US	i:5	~T	s:-0700
+s:display	s:US/Pacific	s:en_US	i:6	~F	s:GMT-08:00
+s:display	s:US/Pacific	s:en_US	i:6	~T	s:GMT-07:00
+s:display	s:US/Pacific	s:en_US	i:7	~F	s:PST
+s:display	s:US/Pacific	s:en_US	i:7	~T	s:PDT
+s:display	s:US/Pacific	s:en_US	i:8	~F	s:Los Angeles Time
+s:display	s:US/Pacific	s:en_US	i:8	~T	s:Los Angeles Time
+s:display	s:US/Pacific	s:pt_PT	i:1	~F	s:GMT-8
+s:display	s:US/Pacific	s:pt_PT	i:1	~T	s:GMT-7
+s:display	s:US/Pacific	s:pt_PT	i:2	~F	s:Hora padrão do Pacífico norte-americana
+s:display	s:US/Pacific	s:pt_PT	i:2	~T	s:Hora de verão do Pacífico norte-americana
+s:display	s:US/Pacific	s:pt_PT	i:5	~F	s:-0800
+s:display	s:US/Pacific	s:pt_PT	i:5	~T	s:-0700
+s:display	s:US/Pacific	s:pt_PT	i:6	~F	s:GMT-08:00
+s:display	s:US/Pacific	s:pt_PT	i:6	~T	s:GMT-07:00
+s:display	s:US/Pacific	s:pt_PT	i:7	~F	s:GMT-8
+s:display	s:US/Pacific	s:pt_PT	i:7	~T	s:GMT-7
+s:display	s:US/Pacific	s:pt_PT	i:8	~F	s:Hora de Los Angeles
+s:display	s:US/Pacific	s:pt_PT	i:8	~T	s:Hora de Los Angeles
+s:display	s:US/Pacific	s:ja_JP	i:1	~F	s:GMT-8
+s:display	s:US/Pacific	s:ja_JP	i:1	~T	s:GMT-7
+s:display	s:US/Pacific	s:ja_JP	i:2	~F	s:アメリカ太平洋標準時
+s:display	s:US/Pacific	s:ja_JP	i:2	~T	s:アメリカ太平洋夏時間
+s:display	s:US/Pacific	s:ja_JP	i:5	~F	s:-0800
+s:display	s:US/Pacific	s:ja_JP	i:5	~T	s:-0700
+s:display	s:US/Pacific	s:ja_JP	i:6	~F	s:GMT-08:00
+s:display	s:US/Pacific	s:ja_JP	i:6	~T	s:GMT-07:00
+s:display	s:US/Pacific	s:ja_JP	i:7	~F	s:GMT-8
+s:display	s:US/Pacific	s:ja_JP	i:7	~T	s:GMT-7
+s:display	s:US/Pacific	s:ja_JP	i:8	~F	s:ロサンゼルス時間
+s:display	s:US/Pacific	s:ja_JP	i:8	~T	s:ロサンゼルス時間
+s:display	s:US/Pacific	s:de_DE	i:1	~F	s:GMT-8
+s:display	s:US/Pacific	s:de_DE	i:1	~T	s:GMT-7
+s:display	s:US/Pacific	s:de_DE	i:2	~F	s:Nordamerikanische Westküsten-Normalzeit
+s:display	s:US/Pacific	s:de_DE	i:2	~T	s:Nordamerikanische Westküsten-Sommerzeit
+s:display	s:US/Pacific	s:de_DE	i:5	~F	s:-0800
+s:display	s:US/Pacific	s:de_DE	i:5	~T	s:-0700
+s:display	s:US/Pacific	s:de_DE	i:6	~F	s:GMT-08:00
+s:display	s:US/Pacific	s:de_DE	i:6	~T	s:GMT-07:00
+s:display	s:US/Pacific	s:de_DE	i:7	~F	s:GMT-8
+s:display	s:US/Pacific	s:de_DE	i:7	~T	s:GMT-7
+s:display	s:US/Pacific	s:de_DE	i:8	~F	s:Los Angeles (Ortszeit)
+s:display	s:US/Pacific	s:de_DE	i:8	~T	s:Los Angeles (Ortszeit)
+s:display	s:US/Pacific	s:fr_FR	i:1	~F	s:UTC−8
+s:display	s:US/Pacific	s:fr_FR	i:1	~T	s:UTC−7
+s:display	s:US/Pacific	s:fr_FR	i:2	~F	s:heure normale du Pacifique nord-américain
+s:display	s:US/Pacific	s:fr_FR	i:2	~T	s:heure d’été du Pacifique nord-américain
+s:display	s:US/Pacific	s:fr_FR	i:5	~F	s:-0800
+s:display	s:US/Pacific	s:fr_FR	i:5	~T	s:-0700
+s:display	s:US/Pacific	s:fr_FR	i:6	~F	s:UTC−08:00
+s:display	s:US/Pacific	s:fr_FR	i:6	~T	s:UTC−07:00
+s:display	s:US/Pacific	s:fr_FR	i:7	~F	s:UTC−8
+s:display	s:US/Pacific	s:fr_FR	i:7	~T	s:UTC−7
+s:display	s:US/Pacific	s:fr_FR	i:8	~F	s:heure : Los Angeles
+s:display	s:US/Pacific	s:fr_FR	i:8	~T	s:heure : Los Angeles
+s:canonical	s:US/Pacific	a:["America/Los_Angeles",true]
+s:region	s:US/Pacific	s:US
+s:count_equiv	s:US/Pacific	i:4
+s:equiv	s:US/Pacific	i:0	s:America/Los_Angeles
+s:equiv	s:US/Pacific	i:1	s:PST
+s:equiv	s:US/Pacific	i:2	s:US/Pacific
+s:equiv	s:US/Pacific	i:5	s:
+s:equiv	s:US/Pacific	i:-1	s:
+s:equiv	s:US/Pacific	i:100	s:
+s:windows	s:US/Pacific	s:Pacific Standard Time
+s:iana	s:US/Pacific	s:!Error
+s:to_dtz	s:US/Pacific	s:!DateInvalidTimeZoneException
+s:same_rules	s:US/Pacific	s:Europe/Lisbon	~F
+s:same_rules	s:US/Pacific	s:Europe/London	~F
+s:same_rules	s:US/Pacific	s:WET	~F
+s:same_rules	s:US/Pacific	s:Atlantic/Madeira	~F
+s:same_rules	s:US/Pacific	s:UTC	~F
+s:same_rules	s:US/Pacific	s:Etc/UTC	~F
+s:same_rules	s:US/Pacific	s:Asia/Calcutta	~F
+s:same_rules	s:US/Pacific	s:Asia/Kolkata	~F
+s:same_rules	s:US/Pacific	s:GMT+05:30	~F
+s:id	s:EST	s:EST
+s:dst	s:EST	i:0
+s:offset	s:EST	d:0.0	~F	~T	i:-18000000	i:0
+s:offset	s:EST	d:0.0	~T	~T	i:-18000000	i:0
+s:offset	s:EST	d:1341100800000.0	~F	~T	i:-18000000	i:0
+s:offset	s:EST	d:1341100800000.0	~T	~T	i:-18000000	i:0
+s:offset	s:EST	d:1325376000000.0	~F	~T	i:-18000000	i:0
+s:offset	s:EST	d:1325376000000.0	~T	~T	i:-18000000	i:0
+s:offset	s:EST	d:-2208988800000.0	~F	~T	i:-18000000	i:0
+s:offset	s:EST	d:-2208988800000.0	~T	~T	i:-18000000	i:0
+s:offset	s:EST	d:1711846800000.0	~F	~T	i:-18000000	i:0
+s:offset	s:EST	d:1711846800000.0	~T	~T	i:-18000000	i:0
+s:offset	s:EST	d:1711843200000.0	~F	~T	i:-18000000	i:0
+s:offset	s:EST	d:1711843200000.0	~T	~T	i:-18000000	i:0
+s:offset	s:EST	d:1730595600000.0	~F	~T	i:-18000000	i:0
+s:offset	s:EST	d:1730595600000.0	~T	~T	i:-18000000	i:0
+s:display	s:EST	s:en_US	i:1	~F	s:GMT-5
+s:display	s:EST	s:en_US	i:1	~T	s:GMT-5
+s:display	s:EST	s:en_US	i:2	~F	s:GMT-05:00
+s:display	s:EST	s:en_US	i:2	~T	s:GMT-05:00
+s:display	s:EST	s:en_US	i:5	~F	s:-0500
+s:display	s:EST	s:en_US	i:5	~T	s:-0500
+s:display	s:EST	s:en_US	i:6	~F	s:GMT-05:00
+s:display	s:EST	s:en_US	i:6	~T	s:GMT-05:00
+s:display	s:EST	s:en_US	i:7	~F	s:GMT-5
+s:display	s:EST	s:en_US	i:7	~T	s:GMT-5
+s:display	s:EST	s:en_US	i:8	~F	s:GMT-05:00
+s:display	s:EST	s:en_US	i:8	~T	s:GMT-05:00
+s:display	s:EST	s:pt_PT	i:1	~F	s:GMT-5
+s:display	s:EST	s:pt_PT	i:1	~T	s:GMT-5
+s:display	s:EST	s:pt_PT	i:2	~F	s:GMT-05:00
+s:display	s:EST	s:pt_PT	i:2	~T	s:GMT-05:00
+s:display	s:EST	s:pt_PT	i:5	~F	s:-0500
+s:display	s:EST	s:pt_PT	i:5	~T	s:-0500
+s:display	s:EST	s:pt_PT	i:6	~F	s:GMT-05:00
+s:display	s:EST	s:pt_PT	i:6	~T	s:GMT-05:00
+s:display	s:EST	s:pt_PT	i:7	~F	s:GMT-5
+s:display	s:EST	s:pt_PT	i:7	~T	s:GMT-5
+s:display	s:EST	s:pt_PT	i:8	~F	s:GMT-05:00
+s:display	s:EST	s:pt_PT	i:8	~T	s:GMT-05:00
+s:display	s:EST	s:ja_JP	i:1	~F	s:GMT-5
+s:display	s:EST	s:ja_JP	i:1	~T	s:GMT-5
+s:display	s:EST	s:ja_JP	i:2	~F	s:GMT-05:00
+s:display	s:EST	s:ja_JP	i:2	~T	s:GMT-05:00
+s:display	s:EST	s:ja_JP	i:5	~F	s:-0500
+s:display	s:EST	s:ja_JP	i:5	~T	s:-0500
+s:display	s:EST	s:ja_JP	i:6	~F	s:GMT-05:00
+s:display	s:EST	s:ja_JP	i:6	~T	s:GMT-05:00
+s:display	s:EST	s:ja_JP	i:7	~F	s:GMT-5
+s:display	s:EST	s:ja_JP	i:7	~T	s:GMT-5
+s:display	s:EST	s:ja_JP	i:8	~F	s:GMT-05:00
+s:display	s:EST	s:ja_JP	i:8	~T	s:GMT-05:00
+s:display	s:EST	s:de_DE	i:1	~F	s:GMT-5
+s:display	s:EST	s:de_DE	i:1	~T	s:GMT-5
+s:display	s:EST	s:de_DE	i:2	~F	s:GMT-05:00
+s:display	s:EST	s:de_DE	i:2	~T	s:GMT-05:00
+s:display	s:EST	s:de_DE	i:5	~F	s:-0500
+s:display	s:EST	s:de_DE	i:5	~T	s:-0500
+s:display	s:EST	s:de_DE	i:6	~F	s:GMT-05:00
+s:display	s:EST	s:de_DE	i:6	~T	s:GMT-05:00
+s:display	s:EST	s:de_DE	i:7	~F	s:GMT-5
+s:display	s:EST	s:de_DE	i:7	~T	s:GMT-5
+s:display	s:EST	s:de_DE	i:8	~F	s:GMT-05:00
+s:display	s:EST	s:de_DE	i:8	~T	s:GMT-05:00
+s:display	s:EST	s:fr_FR	i:1	~F	s:UTC−5
+s:display	s:EST	s:fr_FR	i:1	~T	s:UTC−5
+s:display	s:EST	s:fr_FR	i:2	~F	s:UTC−05:00
+s:display	s:EST	s:fr_FR	i:2	~T	s:UTC−05:00
+s:display	s:EST	s:fr_FR	i:5	~F	s:-0500
+s:display	s:EST	s:fr_FR	i:5	~T	s:-0500
+s:display	s:EST	s:fr_FR	i:6	~F	s:UTC−05:00
+s:display	s:EST	s:fr_FR	i:6	~T	s:UTC−05:00
+s:display	s:EST	s:fr_FR	i:7	~F	s:UTC−5
+s:display	s:EST	s:fr_FR	i:7	~T	s:UTC−5
+s:display	s:EST	s:fr_FR	i:8	~F	s:UTC−05:00
+s:display	s:EST	s:fr_FR	i:8	~T	s:UTC−05:00
+s:canonical	s:EST	a:["Etc/GMT+5",true]
+s:region	s:EST	s:001
+s:count_equiv	s:EST	i:0
+s:equiv	s:EST	i:0	s:
+s:equiv	s:EST	i:1	s:
+s:equiv	s:EST	i:2	s:
+s:equiv	s:EST	i:5	s:
+s:equiv	s:EST	i:-1	s:
+s:equiv	s:EST	i:100	s:
+s:windows	s:EST	s:SA Pacific Standard Time
+s:iana	s:EST	s:!Error
+s:to_dtz	s:EST	s:EST
+s:same_rules	s:EST	s:Europe/Lisbon	~F
+s:same_rules	s:EST	s:Europe/London	~F
+s:same_rules	s:EST	s:WET	~F
+s:same_rules	s:EST	s:Atlantic/Madeira	~F
+s:same_rules	s:EST	s:UTC	~T
+s:same_rules	s:EST	s:Etc/UTC	~T
+s:same_rules	s:EST	s:Asia/Calcutta	~F
+s:same_rules	s:EST	s:Asia/Kolkata	~F
+s:same_rules	s:EST	s:GMT+05:30	~F
+s:id	s:CET	s:CET
+s:dst	s:CET	i:3600000
+s:offset	s:CET	d:0.0	~F	~T	i:3600000	i:0
+s:offset	s:CET	d:0.0	~T	~T	i:3600000	i:0
+s:offset	s:CET	d:1341100800000.0	~F	~T	i:3600000	i:3600000
+s:offset	s:CET	d:1341100800000.0	~T	~T	i:3600000	i:3600000
+s:offset	s:CET	d:1325376000000.0	~F	~T	i:3600000	i:0
+s:offset	s:CET	d:1325376000000.0	~T	~T	i:3600000	i:0
+s:offset	s:CET	d:-2208988800000.0	~F	~T	i:3600000	i:0
+s:offset	s:CET	d:-2208988800000.0	~T	~T	i:3600000	i:0
+s:offset	s:CET	d:1711846800000.0	~F	~T	i:3600000	i:3600000
+s:offset	s:CET	d:1711846800000.0	~T	~T	i:3600000	i:0
+s:offset	s:CET	d:1711843200000.0	~F	~T	i:3600000	i:0
+s:offset	s:CET	d:1711843200000.0	~T	~T	i:3600000	i:0
+s:offset	s:CET	d:1730595600000.0	~F	~T	i:3600000	i:0
+s:offset	s:CET	d:1730595600000.0	~T	~T	i:3600000	i:0
+s:display	s:CET	s:en_US	i:1	~F	s:GMT+1
+s:display	s:CET	s:en_US	i:1	~T	s:GMT+2
+s:display	s:CET	s:en_US	i:2	~F	s:GMT+01:00
+s:display	s:CET	s:en_US	i:2	~T	s:GMT+02:00
+s:display	s:CET	s:en_US	i:5	~F	s:+0100
+s:display	s:CET	s:en_US	i:5	~T	s:+0200
+s:display	s:CET	s:en_US	i:6	~F	s:GMT+01:00
+s:display	s:CET	s:en_US	i:6	~T	s:GMT+02:00
+s:display	s:CET	s:en_US	i:7	~F	s:GMT+1
+s:display	s:CET	s:en_US	i:7	~T	s:GMT+2
+s:display	s:CET	s:en_US	i:8	~F	s:GMT+01:00
+s:display	s:CET	s:en_US	i:8	~T	s:GMT+02:00
+s:display	s:CET	s:pt_PT	i:1	~F	s:GMT+1
+s:display	s:CET	s:pt_PT	i:1	~T	s:GMT+2
+s:display	s:CET	s:pt_PT	i:2	~F	s:GMT+01:00
+s:display	s:CET	s:pt_PT	i:2	~T	s:GMT+02:00
+s:display	s:CET	s:pt_PT	i:5	~F	s:+0100
+s:display	s:CET	s:pt_PT	i:5	~T	s:+0200
+s:display	s:CET	s:pt_PT	i:6	~F	s:GMT+01:00
+s:display	s:CET	s:pt_PT	i:6	~T	s:GMT+02:00
+s:display	s:CET	s:pt_PT	i:7	~F	s:GMT+1
+s:display	s:CET	s:pt_PT	i:7	~T	s:GMT+2
+s:display	s:CET	s:pt_PT	i:8	~F	s:GMT+01:00
+s:display	s:CET	s:pt_PT	i:8	~T	s:GMT+02:00
+s:display	s:CET	s:ja_JP	i:1	~F	s:GMT+1
+s:display	s:CET	s:ja_JP	i:1	~T	s:GMT+2
+s:display	s:CET	s:ja_JP	i:2	~F	s:GMT+01:00
+s:display	s:CET	s:ja_JP	i:2	~T	s:GMT+02:00
+s:display	s:CET	s:ja_JP	i:5	~F	s:+0100
+s:display	s:CET	s:ja_JP	i:5	~T	s:+0200
+s:display	s:CET	s:ja_JP	i:6	~F	s:GMT+01:00
+s:display	s:CET	s:ja_JP	i:6	~T	s:GMT+02:00
+s:display	s:CET	s:ja_JP	i:7	~F	s:GMT+1
+s:display	s:CET	s:ja_JP	i:7	~T	s:GMT+2
+s:display	s:CET	s:ja_JP	i:8	~F	s:GMT+01:00
+s:display	s:CET	s:ja_JP	i:8	~T	s:GMT+02:00
+s:display	s:CET	s:de_DE	i:1	~F	s:GMT+1
+s:display	s:CET	s:de_DE	i:1	~T	s:GMT+2
+s:display	s:CET	s:de_DE	i:2	~F	s:GMT+01:00
+s:display	s:CET	s:de_DE	i:2	~T	s:GMT+02:00
+s:display	s:CET	s:de_DE	i:5	~F	s:+0100
+s:display	s:CET	s:de_DE	i:5	~T	s:+0200
+s:display	s:CET	s:de_DE	i:6	~F	s:GMT+01:00
+s:display	s:CET	s:de_DE	i:6	~T	s:GMT+02:00
+s:display	s:CET	s:de_DE	i:7	~F	s:GMT+1
+s:display	s:CET	s:de_DE	i:7	~T	s:GMT+2
+s:display	s:CET	s:de_DE	i:8	~F	s:GMT+01:00
+s:display	s:CET	s:de_DE	i:8	~T	s:GMT+02:00
+s:display	s:CET	s:fr_FR	i:1	~F	s:UTC+1
+s:display	s:CET	s:fr_FR	i:1	~T	s:UTC+2
+s:display	s:CET	s:fr_FR	i:2	~F	s:UTC+01:00
+s:display	s:CET	s:fr_FR	i:2	~T	s:UTC+02:00
+s:display	s:CET	s:fr_FR	i:5	~F	s:+0100
+s:display	s:CET	s:fr_FR	i:5	~T	s:+0200
+s:display	s:CET	s:fr_FR	i:6	~F	s:UTC+01:00
+s:display	s:CET	s:fr_FR	i:6	~T	s:UTC+02:00
+s:display	s:CET	s:fr_FR	i:7	~F	s:UTC+1
+s:display	s:CET	s:fr_FR	i:7	~T	s:UTC+2
+s:display	s:CET	s:fr_FR	i:8	~F	s:UTC+01:00
+s:display	s:CET	s:fr_FR	i:8	~T	s:UTC+02:00
+s:canonical	s:CET	a:["CET",true]
+s:region	s:CET	s:001
+s:count_equiv	s:CET	i:0
+s:equiv	s:CET	i:0	s:
+s:equiv	s:CET	i:1	s:
+s:equiv	s:CET	i:2	s:
+s:equiv	s:CET	i:5	s:
+s:equiv	s:CET	i:-1	s:
+s:equiv	s:CET	i:100	s:
+s:windows	s:CET	s:!U_ILLEGAL_ARGUMENT_ERROR
+s:iana	s:CET	s:!Error
+s:to_dtz	s:CET	s:CET
+s:same_rules	s:CET	s:Europe/Lisbon	~F
+s:same_rules	s:CET	s:Europe/London	~F
+s:same_rules	s:CET	s:WET	~F
+s:same_rules	s:CET	s:Atlantic/Madeira	~F
+s:same_rules	s:CET	s:UTC	~F
+s:same_rules	s:CET	s:Etc/UTC	~F
+s:same_rules	s:CET	s:Asia/Calcutta	~F
+s:same_rules	s:CET	s:Asia/Kolkata	~F
+s:same_rules	s:CET	s:GMT+05:30	~F
+s:id	s:nonsense	s:Etc/Unknown
+s:dst	s:nonsense	i:3600000
+s:offset	s:nonsense	d:0.0	~F	~T	i:0	i:0
+s:offset	s:nonsense	d:0.0	~T	~T	i:0	i:0
+s:offset	s:nonsense	d:1341100800000.0	~F	~T	i:0	i:0
+s:offset	s:nonsense	d:1341100800000.0	~T	~T	i:0	i:0
+s:offset	s:nonsense	d:1325376000000.0	~F	~T	i:0	i:0
+s:offset	s:nonsense	d:1325376000000.0	~T	~T	i:0	i:0
+s:offset	s:nonsense	d:-2208988800000.0	~F	~T	i:0	i:0
+s:offset	s:nonsense	d:-2208988800000.0	~T	~T	i:0	i:0
+s:offset	s:nonsense	d:1711846800000.0	~F	~T	i:0	i:0
+s:offset	s:nonsense	d:1711846800000.0	~T	~T	i:0	i:0
+s:offset	s:nonsense	d:1711843200000.0	~F	~T	i:0	i:0
+s:offset	s:nonsense	d:1711843200000.0	~T	~T	i:0	i:0
+s:offset	s:nonsense	d:1730595600000.0	~F	~T	i:0	i:0
+s:offset	s:nonsense	d:1730595600000.0	~T	~T	i:0	i:0
+s:display	s:nonsense	s:en_US	i:1	~F	s:GMT
+s:display	s:nonsense	s:en_US	i:1	~T	s:GMT
+s:display	s:nonsense	s:en_US	i:2	~F	s:GMT
+s:display	s:nonsense	s:en_US	i:2	~T	s:GMT
+s:display	s:nonsense	s:en_US	i:5	~F	s:+0000
+s:display	s:nonsense	s:en_US	i:5	~T	s:+0000
+s:display	s:nonsense	s:en_US	i:6	~F	s:GMT
+s:display	s:nonsense	s:en_US	i:6	~T	s:GMT
+s:display	s:nonsense	s:en_US	i:7	~F	s:GMT
+s:display	s:nonsense	s:en_US	i:7	~T	s:GMT
+s:display	s:nonsense	s:en_US	i:8	~F	s:GMT
+s:display	s:nonsense	s:en_US	i:8	~T	s:GMT+01:00
+s:display	s:nonsense	s:pt_PT	i:1	~F	s:GMT
+s:display	s:nonsense	s:pt_PT	i:1	~T	s:GMT
+s:display	s:nonsense	s:pt_PT	i:2	~F	s:GMT
+s:display	s:nonsense	s:pt_PT	i:2	~T	s:GMT
+s:display	s:nonsense	s:pt_PT	i:5	~F	s:+0000
+s:display	s:nonsense	s:pt_PT	i:5	~T	s:+0000
+s:display	s:nonsense	s:pt_PT	i:6	~F	s:GMT
+s:display	s:nonsense	s:pt_PT	i:6	~T	s:GMT
+s:display	s:nonsense	s:pt_PT	i:7	~F	s:GMT
+s:display	s:nonsense	s:pt_PT	i:7	~T	s:GMT
+s:display	s:nonsense	s:pt_PT	i:8	~F	s:GMT
+s:display	s:nonsense	s:pt_PT	i:8	~T	s:GMT+01:00
+s:display	s:nonsense	s:ja_JP	i:1	~F	s:GMT
+s:display	s:nonsense	s:ja_JP	i:1	~T	s:GMT
+s:display	s:nonsense	s:ja_JP	i:2	~F	s:GMT
+s:display	s:nonsense	s:ja_JP	i:2	~T	s:GMT
+s:display	s:nonsense	s:ja_JP	i:5	~F	s:+0000
+s:display	s:nonsense	s:ja_JP	i:5	~T	s:+0000
+s:display	s:nonsense	s:ja_JP	i:6	~F	s:GMT
+s:display	s:nonsense	s:ja_JP	i:6	~T	s:GMT
+s:display	s:nonsense	s:ja_JP	i:7	~F	s:GMT
+s:display	s:nonsense	s:ja_JP	i:7	~T	s:GMT
+s:display	s:nonsense	s:ja_JP	i:8	~F	s:GMT
+s:display	s:nonsense	s:ja_JP	i:8	~T	s:GMT+01:00
+s:display	s:nonsense	s:de_DE	i:1	~F	s:GMT
+s:display	s:nonsense	s:de_DE	i:1	~T	s:GMT
+s:display	s:nonsense	s:de_DE	i:2	~F	s:GMT
+s:display	s:nonsense	s:de_DE	i:2	~T	s:GMT
+s:display	s:nonsense	s:de_DE	i:5	~F	s:+0000
+s:display	s:nonsense	s:de_DE	i:5	~T	s:+0000
+s:display	s:nonsense	s:de_DE	i:6	~F	s:GMT
+s:display	s:nonsense	s:de_DE	i:6	~T	s:GMT
+s:display	s:nonsense	s:de_DE	i:7	~F	s:GMT
+s:display	s:nonsense	s:de_DE	i:7	~T	s:GMT
+s:display	s:nonsense	s:de_DE	i:8	~F	s:GMT
+s:display	s:nonsense	s:de_DE	i:8	~T	s:GMT+01:00
+s:display	s:nonsense	s:fr_FR	i:1	~F	s:UTC
+s:display	s:nonsense	s:fr_FR	i:1	~T	s:UTC
+s:display	s:nonsense	s:fr_FR	i:2	~F	s:UTC
+s:display	s:nonsense	s:fr_FR	i:2	~T	s:UTC
+s:display	s:nonsense	s:fr_FR	i:5	~F	s:+0000
+s:display	s:nonsense	s:fr_FR	i:5	~T	s:+0000
+s:display	s:nonsense	s:fr_FR	i:6	~F	s:UTC
+s:display	s:nonsense	s:fr_FR	i:6	~T	s:UTC
+s:display	s:nonsense	s:fr_FR	i:7	~F	s:UTC
+s:display	s:nonsense	s:fr_FR	i:7	~T	s:UTC
+s:display	s:nonsense	s:fr_FR	i:8	~F	s:UTC
+s:display	s:nonsense	s:fr_FR	i:8	~T	s:UTC+01:00
+s:canonical	s:nonsense	s:!U_ILLEGAL_ARGUMENT_ERROR
+s:region	s:nonsense	s:!U_ILLEGAL_ARGUMENT_ERROR
+s:count_equiv	s:nonsense	i:0
+s:equiv	s:nonsense	i:0	s:
+s:equiv	s:nonsense	i:1	s:
+s:equiv	s:nonsense	i:2	s:
+s:equiv	s:nonsense	i:5	s:
+s:equiv	s:nonsense	i:-1	s:
+s:equiv	s:nonsense	i:100	s:
+s:windows	s:nonsense	s:!U_ILLEGAL_ARGUMENT_ERROR
+s:iana	s:nonsense	s:!Error
+s:to_dtz	s:nonsense	s:!DateInvalidTimeZoneException
+s:same_rules	s:nonsense	s:Europe/Lisbon	~F
+s:same_rules	s:nonsense	s:Europe/London	~F
+s:same_rules	s:nonsense	s:WET	~F
+s:same_rules	s:nonsense	s:Atlantic/Madeira	~F
+s:same_rules	s:nonsense	s:UTC	~F
+s:same_rules	s:nonsense	s:Etc/UTC	~F
+s:same_rules	s:nonsense	s:Asia/Calcutta	~F
+s:same_rules	s:nonsense	s:Asia/Kolkata	~F
+s:same_rules	s:nonsense	s:GMT+05:30	~F
+s:id	s:	s:Etc/Unknown
+s:dst	s:	i:3600000
+s:offset	s:	d:0.0	~F	~T	i:0	i:0
+s:offset	s:	d:0.0	~T	~T	i:0	i:0
+s:offset	s:	d:1341100800000.0	~F	~T	i:0	i:0
+s:offset	s:	d:1341100800000.0	~T	~T	i:0	i:0
+s:offset	s:	d:1325376000000.0	~F	~T	i:0	i:0
+s:offset	s:	d:1325376000000.0	~T	~T	i:0	i:0
+s:offset	s:	d:-2208988800000.0	~F	~T	i:0	i:0
+s:offset	s:	d:-2208988800000.0	~T	~T	i:0	i:0
+s:offset	s:	d:1711846800000.0	~F	~T	i:0	i:0
+s:offset	s:	d:1711846800000.0	~T	~T	i:0	i:0
+s:offset	s:	d:1711843200000.0	~F	~T	i:0	i:0
+s:offset	s:	d:1711843200000.0	~T	~T	i:0	i:0
+s:offset	s:	d:1730595600000.0	~F	~T	i:0	i:0
+s:offset	s:	d:1730595600000.0	~T	~T	i:0	i:0
+s:display	s:	s:en_US	i:1	~F	s:GMT
+s:display	s:	s:en_US	i:1	~T	s:GMT
+s:display	s:	s:en_US	i:2	~F	s:GMT
+s:display	s:	s:en_US	i:2	~T	s:GMT
+s:display	s:	s:en_US	i:5	~F	s:+0000
+s:display	s:	s:en_US	i:5	~T	s:+0000
+s:display	s:	s:en_US	i:6	~F	s:GMT
+s:display	s:	s:en_US	i:6	~T	s:GMT
+s:display	s:	s:en_US	i:7	~F	s:GMT
+s:display	s:	s:en_US	i:7	~T	s:GMT
+s:display	s:	s:en_US	i:8	~F	s:GMT
+s:display	s:	s:en_US	i:8	~T	s:GMT+01:00
+s:display	s:	s:pt_PT	i:1	~F	s:GMT
+s:display	s:	s:pt_PT	i:1	~T	s:GMT
+s:display	s:	s:pt_PT	i:2	~F	s:GMT
+s:display	s:	s:pt_PT	i:2	~T	s:GMT
+s:display	s:	s:pt_PT	i:5	~F	s:+0000
+s:display	s:	s:pt_PT	i:5	~T	s:+0000
+s:display	s:	s:pt_PT	i:6	~F	s:GMT
+s:display	s:	s:pt_PT	i:6	~T	s:GMT
+s:display	s:	s:pt_PT	i:7	~F	s:GMT
+s:display	s:	s:pt_PT	i:7	~T	s:GMT
+s:display	s:	s:pt_PT	i:8	~F	s:GMT
+s:display	s:	s:pt_PT	i:8	~T	s:GMT+01:00
+s:display	s:	s:ja_JP	i:1	~F	s:GMT
+s:display	s:	s:ja_JP	i:1	~T	s:GMT
+s:display	s:	s:ja_JP	i:2	~F	s:GMT
+s:display	s:	s:ja_JP	i:2	~T	s:GMT
+s:display	s:	s:ja_JP	i:5	~F	s:+0000
+s:display	s:	s:ja_JP	i:5	~T	s:+0000
+s:display	s:	s:ja_JP	i:6	~F	s:GMT
+s:display	s:	s:ja_JP	i:6	~T	s:GMT
+s:display	s:	s:ja_JP	i:7	~F	s:GMT
+s:display	s:	s:ja_JP	i:7	~T	s:GMT
+s:display	s:	s:ja_JP	i:8	~F	s:GMT
+s:display	s:	s:ja_JP	i:8	~T	s:GMT+01:00
+s:display	s:	s:de_DE	i:1	~F	s:GMT
+s:display	s:	s:de_DE	i:1	~T	s:GMT
+s:display	s:	s:de_DE	i:2	~F	s:GMT
+s:display	s:	s:de_DE	i:2	~T	s:GMT
+s:display	s:	s:de_DE	i:5	~F	s:+0000
+s:display	s:	s:de_DE	i:5	~T	s:+0000
+s:display	s:	s:de_DE	i:6	~F	s:GMT
+s:display	s:	s:de_DE	i:6	~T	s:GMT
+s:display	s:	s:de_DE	i:7	~F	s:GMT
+s:display	s:	s:de_DE	i:7	~T	s:GMT
+s:display	s:	s:de_DE	i:8	~F	s:GMT
+s:display	s:	s:de_DE	i:8	~T	s:GMT+01:00
+s:display	s:	s:fr_FR	i:1	~F	s:UTC
+s:display	s:	s:fr_FR	i:1	~T	s:UTC
+s:display	s:	s:fr_FR	i:2	~F	s:UTC
+s:display	s:	s:fr_FR	i:2	~T	s:UTC
+s:display	s:	s:fr_FR	i:5	~F	s:+0000
+s:display	s:	s:fr_FR	i:5	~T	s:+0000
+s:display	s:	s:fr_FR	i:6	~F	s:UTC
+s:display	s:	s:fr_FR	i:6	~T	s:UTC
+s:display	s:	s:fr_FR	i:7	~F	s:UTC
+s:display	s:	s:fr_FR	i:7	~T	s:UTC
+s:display	s:	s:fr_FR	i:8	~F	s:UTC
+s:display	s:	s:fr_FR	i:8	~T	s:UTC+01:00
+s:canonical	s:	s:!U_ILLEGAL_ARGUMENT_ERROR
+s:region	s:	s:!U_ILLEGAL_ARGUMENT_ERROR
+s:count_equiv	s:	i:0
+s:equiv	s:	i:0	s:
+s:equiv	s:	i:1	s:
+s:equiv	s:	i:2	s:
+s:equiv	s:	i:5	s:
+s:equiv	s:	i:-1	s:
+s:equiv	s:	i:100	s:
+s:windows	s:	s:!U_ILLEGAL_ARGUMENT_ERROR
+s:iana	s:	s:!Error
+s:to_dtz	s:	s:!DateInvalidTimeZoneException
+s:same_rules	s:	s:Europe/Lisbon	~F
+s:same_rules	s:	s:Europe/London	~F
+s:same_rules	s:	s:WET	~F
+s:same_rules	s:	s:Atlantic/Madeira	~F
+s:same_rules	s:	s:UTC	~F
+s:same_rules	s:	s:Etc/UTC	~F
+s:same_rules	s:	s:Asia/Calcutta	~F
+s:same_rules	s:	s:Asia/Kolkata	~F
+s:same_rules	s:	s:GMT+05:30	~F
+s:id	s:Africa/Casablanca	s:Africa/Casablanca
+s:dst	s:Africa/Casablanca	i:3600000
+s:offset	s:Africa/Casablanca	d:0.0	~F	~T	i:0	i:0
+s:offset	s:Africa/Casablanca	d:0.0	~T	~T	i:0	i:0
+s:offset	s:Africa/Casablanca	d:1341100800000.0	~F	~T	i:0	i:3600000
+s:offset	s:Africa/Casablanca	d:1341100800000.0	~T	~T	i:0	i:3600000
+s:offset	s:Africa/Casablanca	d:1325376000000.0	~F	~T	i:0	i:0
+s:offset	s:Africa/Casablanca	d:1325376000000.0	~T	~T	i:0	i:0
+s:offset	s:Africa/Casablanca	d:-2208988800000.0	~F	~T	i:-1820000	i:0
+s:offset	s:Africa/Casablanca	d:-2208988800000.0	~T	~T	i:-1820000	i:0
+s:offset	s:Africa/Casablanca	d:1711846800000.0	~F	~T	i:0	i:0
+s:offset	s:Africa/Casablanca	d:1711846800000.0	~T	~T	i:0	i:0
+s:offset	s:Africa/Casablanca	d:1711843200000.0	~F	~T	i:0	i:0
+s:offset	s:Africa/Casablanca	d:1711843200000.0	~T	~T	i:0	i:0
+s:offset	s:Africa/Casablanca	d:1730595600000.0	~F	~T	i:0	i:3600000
+s:offset	s:Africa/Casablanca	d:1730595600000.0	~T	~T	i:0	i:3600000
+s:display	s:Africa/Casablanca	s:en_US	i:1	~F	s:GMT
+s:display	s:Africa/Casablanca	s:en_US	i:1	~T	s:GMT+1
+s:display	s:Africa/Casablanca	s:en_US	i:2	~F	s:GMT
+s:display	s:Africa/Casablanca	s:en_US	i:2	~T	s:GMT+01:00
+s:display	s:Africa/Casablanca	s:en_US	i:5	~F	s:+0000
+s:display	s:Africa/Casablanca	s:en_US	i:5	~T	s:+0100
+s:display	s:Africa/Casablanca	s:en_US	i:6	~F	s:GMT
+s:display	s:Africa/Casablanca	s:en_US	i:6	~T	s:GMT+01:00
+s:display	s:Africa/Casablanca	s:en_US	i:7	~F	s:GMT
+s:display	s:Africa/Casablanca	s:en_US	i:7	~T	s:GMT+1
+s:display	s:Africa/Casablanca	s:en_US	i:8	~F	s:Morocco Time
+s:display	s:Africa/Casablanca	s:en_US	i:8	~T	s:Morocco Time
+s:display	s:Africa/Casablanca	s:pt_PT	i:1	~F	s:GMT
+s:display	s:Africa/Casablanca	s:pt_PT	i:1	~T	s:GMT+1
+s:display	s:Africa/Casablanca	s:pt_PT	i:2	~F	s:GMT
+s:display	s:Africa/Casablanca	s:pt_PT	i:2	~T	s:GMT+01:00
+s:display	s:Africa/Casablanca	s:pt_PT	i:5	~F	s:+0000
+s:display	s:Africa/Casablanca	s:pt_PT	i:5	~T	s:+0100
+s:display	s:Africa/Casablanca	s:pt_PT	i:6	~F	s:GMT
+s:display	s:Africa/Casablanca	s:pt_PT	i:6	~T	s:GMT+01:00
+s:display	s:Africa/Casablanca	s:pt_PT	i:7	~F	s:GMT
+s:display	s:Africa/Casablanca	s:pt_PT	i:7	~T	s:GMT+1
+s:display	s:Africa/Casablanca	s:pt_PT	i:8	~F	s:Hora de Marrocos
+s:display	s:Africa/Casablanca	s:pt_PT	i:8	~T	s:Hora de Marrocos
+s:display	s:Africa/Casablanca	s:ja_JP	i:1	~F	s:GMT
+s:display	s:Africa/Casablanca	s:ja_JP	i:1	~T	s:GMT+1
+s:display	s:Africa/Casablanca	s:ja_JP	i:2	~F	s:GMT
+s:display	s:Africa/Casablanca	s:ja_JP	i:2	~T	s:GMT+01:00
+s:display	s:Africa/Casablanca	s:ja_JP	i:5	~F	s:+0000
+s:display	s:Africa/Casablanca	s:ja_JP	i:5	~T	s:+0100
+s:display	s:Africa/Casablanca	s:ja_JP	i:6	~F	s:GMT
+s:display	s:Africa/Casablanca	s:ja_JP	i:6	~T	s:GMT+01:00
+s:display	s:Africa/Casablanca	s:ja_JP	i:7	~F	s:GMT
+s:display	s:Africa/Casablanca	s:ja_JP	i:7	~T	s:GMT+1
+s:display	s:Africa/Casablanca	s:ja_JP	i:8	~F	s:モロッコ時間
+s:display	s:Africa/Casablanca	s:ja_JP	i:8	~T	s:モロッコ時間
+s:display	s:Africa/Casablanca	s:de_DE	i:1	~F	s:GMT
+s:display	s:Africa/Casablanca	s:de_DE	i:1	~T	s:GMT+1
+s:display	s:Africa/Casablanca	s:de_DE	i:2	~F	s:GMT
+s:display	s:Africa/Casablanca	s:de_DE	i:2	~T	s:GMT+01:00
+s:display	s:Africa/Casablanca	s:de_DE	i:5	~F	s:+0000
+s:display	s:Africa/Casablanca	s:de_DE	i:5	~T	s:+0100
+s:display	s:Africa/Casablanca	s:de_DE	i:6	~F	s:GMT
+s:display	s:Africa/Casablanca	s:de_DE	i:6	~T	s:GMT+01:00
+s:display	s:Africa/Casablanca	s:de_DE	i:7	~F	s:GMT
+s:display	s:Africa/Casablanca	s:de_DE	i:7	~T	s:GMT+1
+s:display	s:Africa/Casablanca	s:de_DE	i:8	~F	s:Marokko (Ortszeit)
+s:display	s:Africa/Casablanca	s:de_DE	i:8	~T	s:Marokko (Ortszeit)
+s:display	s:Africa/Casablanca	s:fr_FR	i:1	~F	s:UTC
+s:display	s:Africa/Casablanca	s:fr_FR	i:1	~T	s:UTC+1
+s:display	s:Africa/Casablanca	s:fr_FR	i:2	~F	s:UTC
+s:display	s:Africa/Casablanca	s:fr_FR	i:2	~T	s:UTC+01:00
+s:display	s:Africa/Casablanca	s:fr_FR	i:5	~F	s:+0000
+s:display	s:Africa/Casablanca	s:fr_FR	i:5	~T	s:+0100
+s:display	s:Africa/Casablanca	s:fr_FR	i:6	~F	s:UTC
+s:display	s:Africa/Casablanca	s:fr_FR	i:6	~T	s:UTC+01:00
+s:display	s:Africa/Casablanca	s:fr_FR	i:7	~F	s:UTC
+s:display	s:Africa/Casablanca	s:fr_FR	i:7	~T	s:UTC+1
+s:display	s:Africa/Casablanca	s:fr_FR	i:8	~F	s:heure : Maroc
+s:display	s:Africa/Casablanca	s:fr_FR	i:8	~T	s:heure : Maroc
+s:canonical	s:Africa/Casablanca	a:["Africa/Casablanca",true]
+s:region	s:Africa/Casablanca	s:MA
+s:count_equiv	s:Africa/Casablanca	i:0
+s:equiv	s:Africa/Casablanca	i:0	s:
+s:equiv	s:Africa/Casablanca	i:1	s:
+s:equiv	s:Africa/Casablanca	i:2	s:
+s:equiv	s:Africa/Casablanca	i:5	s:
+s:equiv	s:Africa/Casablanca	i:-1	s:
+s:equiv	s:Africa/Casablanca	i:100	s:
+s:windows	s:Africa/Casablanca	s:Morocco Standard Time
+s:iana	s:Africa/Casablanca	s:!Error
+s:to_dtz	s:Africa/Casablanca	s:Africa/Casablanca
+s:same_rules	s:Africa/Casablanca	s:Europe/Lisbon	~F
+s:same_rules	s:Africa/Casablanca	s:Europe/London	~F
+s:same_rules	s:Africa/Casablanca	s:WET	~F
+s:same_rules	s:Africa/Casablanca	s:Atlantic/Madeira	~F
+s:same_rules	s:Africa/Casablanca	s:UTC	~F
+s:same_rules	s:Africa/Casablanca	s:Etc/UTC	~F
+s:same_rules	s:Africa/Casablanca	s:Asia/Calcutta	~F
+s:same_rules	s:Africa/Casablanca	s:Asia/Kolkata	~F
+s:same_rules	s:Africa/Casablanca	s:GMT+05:30	~F
+s:id	s:America/Sao_Paulo	s:America/Sao_Paulo
+s:dst	s:America/Sao_Paulo	i:0
+s:offset	s:America/Sao_Paulo	d:0.0	~F	~T	i:-10800000	i:0
+s:offset	s:America/Sao_Paulo	d:0.0	~T	~T	i:-10800000	i:0
+s:offset	s:America/Sao_Paulo	d:1341100800000.0	~F	~T	i:-10800000	i:0
+s:offset	s:America/Sao_Paulo	d:1341100800000.0	~T	~T	i:-10800000	i:0
+s:offset	s:America/Sao_Paulo	d:1325376000000.0	~F	~T	i:-10800000	i:3600000
+s:offset	s:America/Sao_Paulo	d:1325376000000.0	~T	~T	i:-10800000	i:3600000
+s:offset	s:America/Sao_Paulo	d:-2208988800000.0	~F	~T	i:-11188000	i:0
+s:offset	s:America/Sao_Paulo	d:-2208988800000.0	~T	~T	i:-11188000	i:0
+s:offset	s:America/Sao_Paulo	d:1711846800000.0	~F	~T	i:-10800000	i:0
+s:offset	s:America/Sao_Paulo	d:1711846800000.0	~T	~T	i:-10800000	i:0
+s:offset	s:America/Sao_Paulo	d:1711843200000.0	~F	~T	i:-10800000	i:0
+s:offset	s:America/Sao_Paulo	d:1711843200000.0	~T	~T	i:-10800000	i:0
+s:offset	s:America/Sao_Paulo	d:1730595600000.0	~F	~T	i:-10800000	i:0
+s:offset	s:America/Sao_Paulo	d:1730595600000.0	~T	~T	i:-10800000	i:0
+s:display	s:America/Sao_Paulo	s:en_US	i:1	~F	s:GMT-3
+s:display	s:America/Sao_Paulo	s:en_US	i:1	~T	s:GMT-3
+s:display	s:America/Sao_Paulo	s:en_US	i:2	~F	s:Brasilia Standard Time
+s:display	s:America/Sao_Paulo	s:en_US	i:2	~T	s:Brasilia Summer Time
+s:display	s:America/Sao_Paulo	s:en_US	i:5	~F	s:-0300
+s:display	s:America/Sao_Paulo	s:en_US	i:5	~T	s:-0300
+s:display	s:America/Sao_Paulo	s:en_US	i:6	~F	s:GMT-03:00
+s:display	s:America/Sao_Paulo	s:en_US	i:6	~T	s:GMT-03:00
+s:display	s:America/Sao_Paulo	s:en_US	i:7	~F	s:GMT-3
+s:display	s:America/Sao_Paulo	s:en_US	i:7	~T	s:GMT-3
+s:display	s:America/Sao_Paulo	s:en_US	i:8	~F	s:Sao Paulo Time
+s:display	s:America/Sao_Paulo	s:en_US	i:8	~T	s:Sao Paulo Time
+s:display	s:America/Sao_Paulo	s:pt_PT	i:1	~F	s:GMT-3
+s:display	s:America/Sao_Paulo	s:pt_PT	i:1	~T	s:GMT-3
+s:display	s:America/Sao_Paulo	s:pt_PT	i:2	~F	s:Hora padrão de Brasília
+s:display	s:America/Sao_Paulo	s:pt_PT	i:2	~T	s:Hora de verão de Brasília
+s:display	s:America/Sao_Paulo	s:pt_PT	i:5	~F	s:-0300
+s:display	s:America/Sao_Paulo	s:pt_PT	i:5	~T	s:-0300
+s:display	s:America/Sao_Paulo	s:pt_PT	i:6	~F	s:GMT-03:00
+s:display	s:America/Sao_Paulo	s:pt_PT	i:6	~T	s:GMT-03:00
+s:display	s:America/Sao_Paulo	s:pt_PT	i:7	~F	s:GMT-3
+s:display	s:America/Sao_Paulo	s:pt_PT	i:7	~T	s:GMT-3
+s:display	s:America/Sao_Paulo	s:pt_PT	i:8	~F	s:Hora de São Paulo
+s:display	s:America/Sao_Paulo	s:pt_PT	i:8	~T	s:Hora de São Paulo
+s:display	s:America/Sao_Paulo	s:ja_JP	i:1	~F	s:GMT-3
+s:display	s:America/Sao_Paulo	s:ja_JP	i:1	~T	s:GMT-3
+s:display	s:America/Sao_Paulo	s:ja_JP	i:2	~F	s:ブラジリア標準時
+s:display	s:America/Sao_Paulo	s:ja_JP	i:2	~T	s:ブラジリア夏時間
+s:display	s:America/Sao_Paulo	s:ja_JP	i:5	~F	s:-0300
+s:display	s:America/Sao_Paulo	s:ja_JP	i:5	~T	s:-0300
+s:display	s:America/Sao_Paulo	s:ja_JP	i:6	~F	s:GMT-03:00
+s:display	s:America/Sao_Paulo	s:ja_JP	i:6	~T	s:GMT-03:00
+s:display	s:America/Sao_Paulo	s:ja_JP	i:7	~F	s:GMT-3
+s:display	s:America/Sao_Paulo	s:ja_JP	i:7	~T	s:GMT-3
+s:display	s:America/Sao_Paulo	s:ja_JP	i:8	~F	s:サンパウロ時間
+s:display	s:America/Sao_Paulo	s:ja_JP	i:8	~T	s:サンパウロ時間
+s:display	s:America/Sao_Paulo	s:de_DE	i:1	~F	s:GMT-3
+s:display	s:America/Sao_Paulo	s:de_DE	i:1	~T	s:GMT-3
+s:display	s:America/Sao_Paulo	s:de_DE	i:2	~F	s:Brasília-Normalzeit
+s:display	s:America/Sao_Paulo	s:de_DE	i:2	~T	s:Brasília-Sommerzeit
+s:display	s:America/Sao_Paulo	s:de_DE	i:5	~F	s:-0300
+s:display	s:America/Sao_Paulo	s:de_DE	i:5	~T	s:-0300
+s:display	s:America/Sao_Paulo	s:de_DE	i:6	~F	s:GMT-03:00
+s:display	s:America/Sao_Paulo	s:de_DE	i:6	~T	s:GMT-03:00
+s:display	s:America/Sao_Paulo	s:de_DE	i:7	~F	s:GMT-3
+s:display	s:America/Sao_Paulo	s:de_DE	i:7	~T	s:GMT-3
+s:display	s:America/Sao_Paulo	s:de_DE	i:8	~F	s:São Paulo (Ortszeit)
+s:display	s:America/Sao_Paulo	s:de_DE	i:8	~T	s:São Paulo (Ortszeit)
+s:display	s:America/Sao_Paulo	s:fr_FR	i:1	~F	s:UTC−3
+s:display	s:America/Sao_Paulo	s:fr_FR	i:1	~T	s:UTC−3
+s:display	s:America/Sao_Paulo	s:fr_FR	i:2	~F	s:heure normale de Brasilia
+s:display	s:America/Sao_Paulo	s:fr_FR	i:2	~T	s:heure d’été de Brasilia
+s:display	s:America/Sao_Paulo	s:fr_FR	i:5	~F	s:-0300
+s:display	s:America/Sao_Paulo	s:fr_FR	i:5	~T	s:-0300
+s:display	s:America/Sao_Paulo	s:fr_FR	i:6	~F	s:UTC−03:00
+s:display	s:America/Sao_Paulo	s:fr_FR	i:6	~T	s:UTC−03:00
+s:display	s:America/Sao_Paulo	s:fr_FR	i:7	~F	s:UTC−3
+s:display	s:America/Sao_Paulo	s:fr_FR	i:7	~T	s:UTC−3
+s:display	s:America/Sao_Paulo	s:fr_FR	i:8	~F	s:heure : São Paulo
+s:display	s:America/Sao_Paulo	s:fr_FR	i:8	~T	s:heure : São Paulo
+s:canonical	s:America/Sao_Paulo	a:["America/Sao_Paulo",true]
+s:region	s:America/Sao_Paulo	s:BR
+s:count_equiv	s:America/Sao_Paulo	i:3
+s:equiv	s:America/Sao_Paulo	i:0	s:America/Sao_Paulo
+s:equiv	s:America/Sao_Paulo	i:1	s:BET
+s:equiv	s:America/Sao_Paulo	i:2	s:Brazil/East
+s:equiv	s:America/Sao_Paulo	i:5	s:
+s:equiv	s:America/Sao_Paulo	i:-1	s:
+s:equiv	s:America/Sao_Paulo	i:100	s:
+s:windows	s:America/Sao_Paulo	s:E. South America Standard Time
+s:iana	s:America/Sao_Paulo	s:!Error
+s:to_dtz	s:America/Sao_Paulo	s:America/Sao_Paulo
+s:same_rules	s:America/Sao_Paulo	s:Europe/Lisbon	~F
+s:same_rules	s:America/Sao_Paulo	s:Europe/London	~F
+s:same_rules	s:America/Sao_Paulo	s:WET	~F
+s:same_rules	s:America/Sao_Paulo	s:Atlantic/Madeira	~F
+s:same_rules	s:America/Sao_Paulo	s:UTC	~F
+s:same_rules	s:America/Sao_Paulo	s:Etc/UTC	~F
+s:same_rules	s:America/Sao_Paulo	s:Asia/Calcutta	~F
+s:same_rules	s:America/Sao_Paulo	s:Asia/Kolkata	~F
+s:same_rules	s:America/Sao_Paulo	s:GMT+05:30	~F
+s:id	s:Pacific/Chatham	s:Pacific/Chatham
+s:dst	s:Pacific/Chatham	i:3600000
+s:offset	s:Pacific/Chatham	d:0.0	~F	~T	i:45900000	i:0
+s:offset	s:Pacific/Chatham	d:0.0	~T	~T	i:45900000	i:0
+s:offset	s:Pacific/Chatham	d:1341100800000.0	~F	~T	i:45900000	i:0
+s:offset	s:Pacific/Chatham	d:1341100800000.0	~T	~T	i:45900000	i:0
+s:offset	s:Pacific/Chatham	d:1325376000000.0	~F	~T	i:45900000	i:3600000
+s:offset	s:Pacific/Chatham	d:1325376000000.0	~T	~T	i:45900000	i:3600000
+s:offset	s:Pacific/Chatham	d:-2208988800000.0	~F	~T	i:44100000	i:0
+s:offset	s:Pacific/Chatham	d:-2208988800000.0	~T	~T	i:44100000	i:0
+s:offset	s:Pacific/Chatham	d:1711846800000.0	~F	~T	i:45900000	i:3600000
+s:offset	s:Pacific/Chatham	d:1711846800000.0	~T	~T	i:45900000	i:3600000
+s:offset	s:Pacific/Chatham	d:1711843200000.0	~F	~T	i:45900000	i:3600000
+s:offset	s:Pacific/Chatham	d:1711843200000.0	~T	~T	i:45900000	i:3600000
+s:offset	s:Pacific/Chatham	d:1730595600000.0	~F	~T	i:45900000	i:3600000
+s:offset	s:Pacific/Chatham	d:1730595600000.0	~T	~T	i:45900000	i:3600000
+s:display	s:Pacific/Chatham	s:en_US	i:1	~F	s:GMT+12:45
+s:display	s:Pacific/Chatham	s:en_US	i:1	~T	s:GMT+13:45
+s:display	s:Pacific/Chatham	s:en_US	i:2	~F	s:Chatham Standard Time
+s:display	s:Pacific/Chatham	s:en_US	i:2	~T	s:Chatham Daylight Time
+s:display	s:Pacific/Chatham	s:en_US	i:5	~F	s:+1245
+s:display	s:Pacific/Chatham	s:en_US	i:5	~T	s:+1345
+s:display	s:Pacific/Chatham	s:en_US	i:6	~F	s:GMT+12:45
+s:display	s:Pacific/Chatham	s:en_US	i:6	~T	s:GMT+13:45
+s:display	s:Pacific/Chatham	s:en_US	i:7	~F	s:GMT+12:45
+s:display	s:Pacific/Chatham	s:en_US	i:7	~T	s:GMT+13:45
+s:display	s:Pacific/Chatham	s:en_US	i:8	~F	s:Chatham Time
+s:display	s:Pacific/Chatham	s:en_US	i:8	~T	s:Chatham Time
+s:display	s:Pacific/Chatham	s:pt_PT	i:1	~F	s:GMT+12:45
+s:display	s:Pacific/Chatham	s:pt_PT	i:1	~T	s:GMT+13:45
+s:display	s:Pacific/Chatham	s:pt_PT	i:2	~F	s:Hora padrão de Chatham
+s:display	s:Pacific/Chatham	s:pt_PT	i:2	~T	s:Hora de verão de Chatham
+s:display	s:Pacific/Chatham	s:pt_PT	i:5	~F	s:+1245
+s:display	s:Pacific/Chatham	s:pt_PT	i:5	~T	s:+1345
+s:display	s:Pacific/Chatham	s:pt_PT	i:6	~F	s:GMT+12:45
+s:display	s:Pacific/Chatham	s:pt_PT	i:6	~T	s:GMT+13:45
+s:display	s:Pacific/Chatham	s:pt_PT	i:7	~F	s:GMT+12:45
+s:display	s:Pacific/Chatham	s:pt_PT	i:7	~T	s:GMT+13:45
+s:display	s:Pacific/Chatham	s:pt_PT	i:8	~F	s:Hora de Chatham
+s:display	s:Pacific/Chatham	s:pt_PT	i:8	~T	s:Hora de Chatham
+s:display	s:Pacific/Chatham	s:ja_JP	i:1	~F	s:GMT+12:45
+s:display	s:Pacific/Chatham	s:ja_JP	i:1	~T	s:GMT+13:45
+s:display	s:Pacific/Chatham	s:ja_JP	i:2	~F	s:チャタム標準時
+s:display	s:Pacific/Chatham	s:ja_JP	i:2	~T	s:チャタム夏時間
+s:display	s:Pacific/Chatham	s:ja_JP	i:5	~F	s:+1245
+s:display	s:Pacific/Chatham	s:ja_JP	i:5	~T	s:+1345
+s:display	s:Pacific/Chatham	s:ja_JP	i:6	~F	s:GMT+12:45
+s:display	s:Pacific/Chatham	s:ja_JP	i:6	~T	s:GMT+13:45
+s:display	s:Pacific/Chatham	s:ja_JP	i:7	~F	s:GMT+12:45
+s:display	s:Pacific/Chatham	s:ja_JP	i:7	~T	s:GMT+13:45
+s:display	s:Pacific/Chatham	s:ja_JP	i:8	~F	s:チャタム時間
+s:display	s:Pacific/Chatham	s:ja_JP	i:8	~T	s:チャタム時間
+s:display	s:Pacific/Chatham	s:de_DE	i:1	~F	s:GMT+12:45
+s:display	s:Pacific/Chatham	s:de_DE	i:1	~T	s:GMT+13:45
+s:display	s:Pacific/Chatham	s:de_DE	i:2	~F	s:Chatham-Normalzeit
+s:display	s:Pacific/Chatham	s:de_DE	i:2	~T	s:Chatham-Sommerzeit
+s:display	s:Pacific/Chatham	s:de_DE	i:5	~F	s:+1245
+s:display	s:Pacific/Chatham	s:de_DE	i:5	~T	s:+1345
+s:display	s:Pacific/Chatham	s:de_DE	i:6	~F	s:GMT+12:45
+s:display	s:Pacific/Chatham	s:de_DE	i:6	~T	s:GMT+13:45
+s:display	s:Pacific/Chatham	s:de_DE	i:7	~F	s:GMT+12:45
+s:display	s:Pacific/Chatham	s:de_DE	i:7	~T	s:GMT+13:45
+s:display	s:Pacific/Chatham	s:de_DE	i:8	~F	s:Chatham (Ortszeit)
+s:display	s:Pacific/Chatham	s:de_DE	i:8	~T	s:Chatham (Ortszeit)
+s:display	s:Pacific/Chatham	s:fr_FR	i:1	~F	s:UTC+12:45
+s:display	s:Pacific/Chatham	s:fr_FR	i:1	~T	s:UTC+13:45
+s:display	s:Pacific/Chatham	s:fr_FR	i:2	~F	s:heure normale des îles Chatham
+s:display	s:Pacific/Chatham	s:fr_FR	i:2	~T	s:heure d’été des îles Chatham
+s:display	s:Pacific/Chatham	s:fr_FR	i:5	~F	s:+1245
+s:display	s:Pacific/Chatham	s:fr_FR	i:5	~T	s:+1345
+s:display	s:Pacific/Chatham	s:fr_FR	i:6	~F	s:UTC+12:45
+s:display	s:Pacific/Chatham	s:fr_FR	i:6	~T	s:UTC+13:45
+s:display	s:Pacific/Chatham	s:fr_FR	i:7	~F	s:UTC+12:45
+s:display	s:Pacific/Chatham	s:fr_FR	i:7	~T	s:UTC+13:45
+s:display	s:Pacific/Chatham	s:fr_FR	i:8	~F	s:heure : Chatham
+s:display	s:Pacific/Chatham	s:fr_FR	i:8	~T	s:heure : Chatham
+s:canonical	s:Pacific/Chatham	a:["Pacific/Chatham",true]
+s:region	s:Pacific/Chatham	s:NZ
+s:count_equiv	s:Pacific/Chatham	i:2
+s:equiv	s:Pacific/Chatham	i:0	s:NZ-CHAT
+s:equiv	s:Pacific/Chatham	i:1	s:Pacific/Chatham
+s:equiv	s:Pacific/Chatham	i:2	s:
+s:equiv	s:Pacific/Chatham	i:5	s:
+s:equiv	s:Pacific/Chatham	i:-1	s:
+s:equiv	s:Pacific/Chatham	i:100	s:
+s:windows	s:Pacific/Chatham	s:Chatham Islands Standard Time
+s:iana	s:Pacific/Chatham	s:!Error
+s:to_dtz	s:Pacific/Chatham	s:Pacific/Chatham
+s:same_rules	s:Pacific/Chatham	s:Europe/Lisbon	~F
+s:same_rules	s:Pacific/Chatham	s:Europe/London	~F
+s:same_rules	s:Pacific/Chatham	s:WET	~F
+s:same_rules	s:Pacific/Chatham	s:Atlantic/Madeira	~F
+s:same_rules	s:Pacific/Chatham	s:UTC	~F
+s:same_rules	s:Pacific/Chatham	s:Etc/UTC	~F
+s:same_rules	s:Pacific/Chatham	s:Asia/Calcutta	~F
+s:same_rules	s:Pacific/Chatham	s:Asia/Kolkata	~F
+s:same_rules	s:Pacific/Chatham	s:GMT+05:30	~F
+s:id	s:Antarctica/Troll	s:Antarctica/Troll
+s:dst	s:Antarctica/Troll	i:7200000
+s:offset	s:Antarctica/Troll	d:0.0	~F	~T	i:0	i:0
+s:offset	s:Antarctica/Troll	d:0.0	~T	~T	i:0	i:0
+s:offset	s:Antarctica/Troll	d:1341100800000.0	~F	~T	i:0	i:7200000
+s:offset	s:Antarctica/Troll	d:1341100800000.0	~T	~T	i:0	i:7200000
+s:offset	s:Antarctica/Troll	d:1325376000000.0	~F	~T	i:0	i:0
+s:offset	s:Antarctica/Troll	d:1325376000000.0	~T	~T	i:0	i:0
+s:offset	s:Antarctica/Troll	d:-2208988800000.0	~F	~T	i:0	i:0
+s:offset	s:Antarctica/Troll	d:-2208988800000.0	~T	~T	i:0	i:0
+s:offset	s:Antarctica/Troll	d:1711846800000.0	~F	~T	i:0	i:7200000
+s:offset	s:Antarctica/Troll	d:1711846800000.0	~T	~T	i:0	i:0
+s:offset	s:Antarctica/Troll	d:1711843200000.0	~F	~T	i:0	i:0
+s:offset	s:Antarctica/Troll	d:1711843200000.0	~T	~T	i:0	i:0
+s:offset	s:Antarctica/Troll	d:1730595600000.0	~F	~T	i:0	i:0
+s:offset	s:Antarctica/Troll	d:1730595600000.0	~T	~T	i:0	i:0
+s:display	s:Antarctica/Troll	s:en_US	i:1	~F	s:GMT
+s:display	s:Antarctica/Troll	s:en_US	i:1	~T	s:GMT+2
+s:display	s:Antarctica/Troll	s:en_US	i:2	~F	s:Greenwich Mean Time
+s:display	s:Antarctica/Troll	s:en_US	i:2	~T	s:GMT+02:00
+s:display	s:Antarctica/Troll	s:en_US	i:5	~F	s:+0000
+s:display	s:Antarctica/Troll	s:en_US	i:5	~T	s:+0200
+s:display	s:Antarctica/Troll	s:en_US	i:6	~F	s:GMT
+s:display	s:Antarctica/Troll	s:en_US	i:6	~T	s:GMT+02:00
+s:display	s:Antarctica/Troll	s:en_US	i:7	~F	s:GMT
+s:display	s:Antarctica/Troll	s:en_US	i:7	~T	s:GMT+2
+s:display	s:Antarctica/Troll	s:en_US	i:8	~F	s:Troll Time
+s:display	s:Antarctica/Troll	s:en_US	i:8	~T	s:Troll Time
+s:display	s:Antarctica/Troll	s:pt_PT	i:1	~F	s:GMT
+s:display	s:Antarctica/Troll	s:pt_PT	i:1	~T	s:GMT+2
+s:display	s:Antarctica/Troll	s:pt_PT	i:2	~F	s:Hora de Greenwich
+s:display	s:Antarctica/Troll	s:pt_PT	i:2	~T	s:GMT+02:00
+s:display	s:Antarctica/Troll	s:pt_PT	i:5	~F	s:+0000
+s:display	s:Antarctica/Troll	s:pt_PT	i:5	~T	s:+0200
+s:display	s:Antarctica/Troll	s:pt_PT	i:6	~F	s:GMT
+s:display	s:Antarctica/Troll	s:pt_PT	i:6	~T	s:GMT+02:00
+s:display	s:Antarctica/Troll	s:pt_PT	i:7	~F	s:GMT
+s:display	s:Antarctica/Troll	s:pt_PT	i:7	~T	s:GMT+2
+s:display	s:Antarctica/Troll	s:pt_PT	i:8	~F	s:Hora de Troll
+s:display	s:Antarctica/Troll	s:pt_PT	i:8	~T	s:Hora de Troll
+s:display	s:Antarctica/Troll	s:ja_JP	i:1	~F	s:GMT
+s:display	s:Antarctica/Troll	s:ja_JP	i:1	~T	s:GMT+2
+s:display	s:Antarctica/Troll	s:ja_JP	i:2	~F	s:グリニッジ標準時
+s:display	s:Antarctica/Troll	s:ja_JP	i:2	~T	s:GMT+02:00
+s:display	s:Antarctica/Troll	s:ja_JP	i:5	~F	s:+0000
+s:display	s:Antarctica/Troll	s:ja_JP	i:5	~T	s:+0200
+s:display	s:Antarctica/Troll	s:ja_JP	i:6	~F	s:GMT
+s:display	s:Antarctica/Troll	s:ja_JP	i:6	~T	s:GMT+02:00
+s:display	s:Antarctica/Troll	s:ja_JP	i:7	~F	s:GMT
+s:display	s:Antarctica/Troll	s:ja_JP	i:7	~T	s:GMT+2
+s:display	s:Antarctica/Troll	s:ja_JP	i:8	~F	s:トロル基地時間
+s:display	s:Antarctica/Troll	s:ja_JP	i:8	~T	s:トロル基地時間
+s:display	s:Antarctica/Troll	s:de_DE	i:1	~F	s:GMT
+s:display	s:Antarctica/Troll	s:de_DE	i:1	~T	s:GMT+2
+s:display	s:Antarctica/Troll	s:de_DE	i:2	~F	s:Mittlere Greenwich-Zeit
+s:display	s:Antarctica/Troll	s:de_DE	i:2	~T	s:GMT+02:00
+s:display	s:Antarctica/Troll	s:de_DE	i:5	~F	s:+0000
+s:display	s:Antarctica/Troll	s:de_DE	i:5	~T	s:+0200
+s:display	s:Antarctica/Troll	s:de_DE	i:6	~F	s:GMT
+s:display	s:Antarctica/Troll	s:de_DE	i:6	~T	s:GMT+02:00
+s:display	s:Antarctica/Troll	s:de_DE	i:7	~F	s:GMT
+s:display	s:Antarctica/Troll	s:de_DE	i:7	~T	s:GMT+2
+s:display	s:Antarctica/Troll	s:de_DE	i:8	~F	s:Troll (Ortszeit)
+s:display	s:Antarctica/Troll	s:de_DE	i:8	~T	s:Troll (Ortszeit)
+s:display	s:Antarctica/Troll	s:fr_FR	i:1	~F	s:UTC
+s:display	s:Antarctica/Troll	s:fr_FR	i:1	~T	s:UTC+2
+s:display	s:Antarctica/Troll	s:fr_FR	i:2	~F	s:heure moyenne de Greenwich
+s:display	s:Antarctica/Troll	s:fr_FR	i:2	~T	s:UTC+02:00
+s:display	s:Antarctica/Troll	s:fr_FR	i:5	~F	s:+0000
+s:display	s:Antarctica/Troll	s:fr_FR	i:5	~T	s:+0200
+s:display	s:Antarctica/Troll	s:fr_FR	i:6	~F	s:UTC
+s:display	s:Antarctica/Troll	s:fr_FR	i:6	~T	s:UTC+02:00
+s:display	s:Antarctica/Troll	s:fr_FR	i:7	~F	s:UTC
+s:display	s:Antarctica/Troll	s:fr_FR	i:7	~T	s:UTC+2
+s:display	s:Antarctica/Troll	s:fr_FR	i:8	~F	s:heure : Troll
+s:display	s:Antarctica/Troll	s:fr_FR	i:8	~T	s:heure : Troll
+s:canonical	s:Antarctica/Troll	a:["Antarctica/Troll",true]
+s:region	s:Antarctica/Troll	s:AQ
+s:count_equiv	s:Antarctica/Troll	i:0
+s:equiv	s:Antarctica/Troll	i:0	s:
+s:equiv	s:Antarctica/Troll	i:1	s:
+s:equiv	s:Antarctica/Troll	i:2	s:
+s:equiv	s:Antarctica/Troll	i:5	s:
+s:equiv	s:Antarctica/Troll	i:-1	s:
+s:equiv	s:Antarctica/Troll	i:100	s:
+s:windows	s:Antarctica/Troll	s:!U_ILLEGAL_ARGUMENT_ERROR
+s:iana	s:Antarctica/Troll	s:!Error
+s:to_dtz	s:Antarctica/Troll	s:Antarctica/Troll
+s:same_rules	s:Antarctica/Troll	s:Europe/Lisbon	~F
+s:same_rules	s:Antarctica/Troll	s:Europe/London	~F
+s:same_rules	s:Antarctica/Troll	s:WET	~F
+s:same_rules	s:Antarctica/Troll	s:Atlantic/Madeira	~F
+s:same_rules	s:Antarctica/Troll	s:UTC	~F
+s:same_rules	s:Antarctica/Troll	s:Etc/UTC	~F
+s:same_rules	s:Antarctica/Troll	s:Asia/Calcutta	~F
+s:same_rules	s:Antarctica/Troll	s:Asia/Kolkata	~F
+s:same_rules	s:Antarctica/Troll	s:GMT+05:30	~F
+s:id	s:Etc/Unknown	s:Etc/Unknown
+s:dst	s:Etc/Unknown	i:0
+s:offset	s:Etc/Unknown	d:0.0	~F	~T	i:0	i:0
+s:offset	s:Etc/Unknown	d:0.0	~T	~T	i:0	i:0
+s:offset	s:Etc/Unknown	d:1341100800000.0	~F	~T	i:0	i:0
+s:offset	s:Etc/Unknown	d:1341100800000.0	~T	~T	i:0	i:0
+s:offset	s:Etc/Unknown	d:1325376000000.0	~F	~T	i:0	i:0
+s:offset	s:Etc/Unknown	d:1325376000000.0	~T	~T	i:0	i:0
+s:offset	s:Etc/Unknown	d:-2208988800000.0	~F	~T	i:0	i:0
+s:offset	s:Etc/Unknown	d:-2208988800000.0	~T	~T	i:0	i:0
+s:offset	s:Etc/Unknown	d:1711846800000.0	~F	~T	i:0	i:0
+s:offset	s:Etc/Unknown	d:1711846800000.0	~T	~T	i:0	i:0
+s:offset	s:Etc/Unknown	d:1711843200000.0	~F	~T	i:0	i:0
+s:offset	s:Etc/Unknown	d:1711843200000.0	~T	~T	i:0	i:0
+s:offset	s:Etc/Unknown	d:1730595600000.0	~F	~T	i:0	i:0
+s:offset	s:Etc/Unknown	d:1730595600000.0	~T	~T	i:0	i:0
+s:display	s:Etc/Unknown	s:en_US	i:1	~F	s:GMT
+s:display	s:Etc/Unknown	s:en_US	i:1	~T	s:GMT
+s:display	s:Etc/Unknown	s:en_US	i:2	~F	s:GMT
+s:display	s:Etc/Unknown	s:en_US	i:2	~T	s:GMT
+s:display	s:Etc/Unknown	s:en_US	i:5	~F	s:+0000
+s:display	s:Etc/Unknown	s:en_US	i:5	~T	s:+0000
+s:display	s:Etc/Unknown	s:en_US	i:6	~F	s:GMT
+s:display	s:Etc/Unknown	s:en_US	i:6	~T	s:GMT
+s:display	s:Etc/Unknown	s:en_US	i:7	~F	s:GMT
+s:display	s:Etc/Unknown	s:en_US	i:7	~T	s:GMT
+s:display	s:Etc/Unknown	s:en_US	i:8	~F	s:GMT
+s:display	s:Etc/Unknown	s:en_US	i:8	~T	s:GMT
+s:display	s:Etc/Unknown	s:pt_PT	i:1	~F	s:GMT
+s:display	s:Etc/Unknown	s:pt_PT	i:1	~T	s:GMT
+s:display	s:Etc/Unknown	s:pt_PT	i:2	~F	s:GMT
+s:display	s:Etc/Unknown	s:pt_PT	i:2	~T	s:GMT
+s:display	s:Etc/Unknown	s:pt_PT	i:5	~F	s:+0000
+s:display	s:Etc/Unknown	s:pt_PT	i:5	~T	s:+0000
+s:display	s:Etc/Unknown	s:pt_PT	i:6	~F	s:GMT
+s:display	s:Etc/Unknown	s:pt_PT	i:6	~T	s:GMT
+s:display	s:Etc/Unknown	s:pt_PT	i:7	~F	s:GMT
+s:display	s:Etc/Unknown	s:pt_PT	i:7	~T	s:GMT
+s:display	s:Etc/Unknown	s:pt_PT	i:8	~F	s:GMT
+s:display	s:Etc/Unknown	s:pt_PT	i:8	~T	s:GMT
+s:display	s:Etc/Unknown	s:ja_JP	i:1	~F	s:GMT
+s:display	s:Etc/Unknown	s:ja_JP	i:1	~T	s:GMT
+s:display	s:Etc/Unknown	s:ja_JP	i:2	~F	s:GMT
+s:display	s:Etc/Unknown	s:ja_JP	i:2	~T	s:GMT
+s:display	s:Etc/Unknown	s:ja_JP	i:5	~F	s:+0000
+s:display	s:Etc/Unknown	s:ja_JP	i:5	~T	s:+0000
+s:display	s:Etc/Unknown	s:ja_JP	i:6	~F	s:GMT
+s:display	s:Etc/Unknown	s:ja_JP	i:6	~T	s:GMT
+s:display	s:Etc/Unknown	s:ja_JP	i:7	~F	s:GMT
+s:display	s:Etc/Unknown	s:ja_JP	i:7	~T	s:GMT
+s:display	s:Etc/Unknown	s:ja_JP	i:8	~F	s:GMT
+s:display	s:Etc/Unknown	s:ja_JP	i:8	~T	s:GMT
+s:display	s:Etc/Unknown	s:de_DE	i:1	~F	s:GMT
+s:display	s:Etc/Unknown	s:de_DE	i:1	~T	s:GMT
+s:display	s:Etc/Unknown	s:de_DE	i:2	~F	s:GMT
+s:display	s:Etc/Unknown	s:de_DE	i:2	~T	s:GMT
+s:display	s:Etc/Unknown	s:de_DE	i:5	~F	s:+0000
+s:display	s:Etc/Unknown	s:de_DE	i:5	~T	s:+0000
+s:display	s:Etc/Unknown	s:de_DE	i:6	~F	s:GMT
+s:display	s:Etc/Unknown	s:de_DE	i:6	~T	s:GMT
+s:display	s:Etc/Unknown	s:de_DE	i:7	~F	s:GMT
+s:display	s:Etc/Unknown	s:de_DE	i:7	~T	s:GMT
+s:display	s:Etc/Unknown	s:de_DE	i:8	~F	s:GMT
+s:display	s:Etc/Unknown	s:de_DE	i:8	~T	s:GMT
+s:display	s:Etc/Unknown	s:fr_FR	i:1	~F	s:UTC
+s:display	s:Etc/Unknown	s:fr_FR	i:1	~T	s:UTC
+s:display	s:Etc/Unknown	s:fr_FR	i:2	~F	s:UTC
+s:display	s:Etc/Unknown	s:fr_FR	i:2	~T	s:UTC
+s:display	s:Etc/Unknown	s:fr_FR	i:5	~F	s:+0000
+s:display	s:Etc/Unknown	s:fr_FR	i:5	~T	s:+0000
+s:display	s:Etc/Unknown	s:fr_FR	i:6	~F	s:UTC
+s:display	s:Etc/Unknown	s:fr_FR	i:6	~T	s:UTC
+s:display	s:Etc/Unknown	s:fr_FR	i:7	~F	s:UTC
+s:display	s:Etc/Unknown	s:fr_FR	i:7	~T	s:UTC
+s:display	s:Etc/Unknown	s:fr_FR	i:8	~F	s:UTC
+s:display	s:Etc/Unknown	s:fr_FR	i:8	~T	s:UTC
+s:canonical	s:Etc/Unknown	a:["Etc/Unknown",false]
+s:region	s:Etc/Unknown	s:!U_ILLEGAL_ARGUMENT_ERROR
+s:count_equiv	s:Etc/Unknown	i:0
+s:equiv	s:Etc/Unknown	i:0	s:
+s:equiv	s:Etc/Unknown	i:1	s:
+s:equiv	s:Etc/Unknown	i:2	s:
+s:equiv	s:Etc/Unknown	i:5	s:
+s:equiv	s:Etc/Unknown	i:-1	s:
+s:equiv	s:Etc/Unknown	i:100	s:
+s:windows	s:Etc/Unknown	s:!U_ILLEGAL_ARGUMENT_ERROR
+s:iana	s:Etc/Unknown	s:!Error
+s:to_dtz	s:Etc/Unknown	s:!DateInvalidTimeZoneException
+s:same_rules	s:Etc/Unknown	s:Europe/Lisbon	~F
+s:same_rules	s:Etc/Unknown	s:Europe/London	~F
+s:same_rules	s:Etc/Unknown	s:WET	~F
+s:same_rules	s:Etc/Unknown	s:Atlantic/Madeira	~F
+s:same_rules	s:Etc/Unknown	s:UTC	~T
+s:same_rules	s:Etc/Unknown	s:Etc/UTC	~T
+s:same_rules	s:Etc/Unknown	s:Asia/Calcutta	~F
+s:same_rules	s:Etc/Unknown	s:Asia/Kolkata	~F
+s:same_rules	s:Etc/Unknown	s:GMT+05:30	~F
+s:id	s:Asia/Calcutta	s:Asia/Calcutta
+s:dst	s:Asia/Calcutta	i:0
+s:offset	s:Asia/Calcutta	d:0.0	~F	~T	i:19800000	i:0
+s:offset	s:Asia/Calcutta	d:0.0	~T	~T	i:19800000	i:0
+s:offset	s:Asia/Calcutta	d:1341100800000.0	~F	~T	i:19800000	i:0
+s:offset	s:Asia/Calcutta	d:1341100800000.0	~T	~T	i:19800000	i:0
+s:offset	s:Asia/Calcutta	d:1325376000000.0	~F	~T	i:19800000	i:0
+s:offset	s:Asia/Calcutta	d:1325376000000.0	~T	~T	i:19800000	i:0
+s:offset	s:Asia/Calcutta	d:-2208988800000.0	~F	~T	i:19270000	i:0
+s:offset	s:Asia/Calcutta	d:-2208988800000.0	~T	~T	i:19270000	i:0
+s:offset	s:Asia/Calcutta	d:1711846800000.0	~F	~T	i:19800000	i:0
+s:offset	s:Asia/Calcutta	d:1711846800000.0	~T	~T	i:19800000	i:0
+s:offset	s:Asia/Calcutta	d:1711843200000.0	~F	~T	i:19800000	i:0
+s:offset	s:Asia/Calcutta	d:1711843200000.0	~T	~T	i:19800000	i:0
+s:offset	s:Asia/Calcutta	d:1730595600000.0	~F	~T	i:19800000	i:0
+s:offset	s:Asia/Calcutta	d:1730595600000.0	~T	~T	i:19800000	i:0
+s:display	s:Asia/Calcutta	s:en_US	i:1	~F	s:GMT+5:30
+s:display	s:Asia/Calcutta	s:en_US	i:1	~T	s:GMT+5:30
+s:display	s:Asia/Calcutta	s:en_US	i:2	~F	s:India Standard Time
+s:display	s:Asia/Calcutta	s:en_US	i:2	~T	s:GMT+05:30
+s:display	s:Asia/Calcutta	s:en_US	i:5	~F	s:+0530
+s:display	s:Asia/Calcutta	s:en_US	i:5	~T	s:+0530
+s:display	s:Asia/Calcutta	s:en_US	i:6	~F	s:GMT+05:30
+s:display	s:Asia/Calcutta	s:en_US	i:6	~T	s:GMT+05:30
+s:display	s:Asia/Calcutta	s:en_US	i:7	~F	s:GMT+5:30
+s:display	s:Asia/Calcutta	s:en_US	i:7	~T	s:GMT+5:30
+s:display	s:Asia/Calcutta	s:en_US	i:8	~F	s:India Time
+s:display	s:Asia/Calcutta	s:en_US	i:8	~T	s:India Time
+s:display	s:Asia/Calcutta	s:pt_PT	i:1	~F	s:GMT+5:30
+s:display	s:Asia/Calcutta	s:pt_PT	i:1	~T	s:GMT+5:30
+s:display	s:Asia/Calcutta	s:pt_PT	i:2	~F	s:Hora padrão da Índia
+s:display	s:Asia/Calcutta	s:pt_PT	i:2	~T	s:GMT+05:30
+s:display	s:Asia/Calcutta	s:pt_PT	i:5	~F	s:+0530
+s:display	s:Asia/Calcutta	s:pt_PT	i:5	~T	s:+0530
+s:display	s:Asia/Calcutta	s:pt_PT	i:6	~F	s:GMT+05:30
+s:display	s:Asia/Calcutta	s:pt_PT	i:6	~T	s:GMT+05:30
+s:display	s:Asia/Calcutta	s:pt_PT	i:7	~F	s:GMT+5:30
+s:display	s:Asia/Calcutta	s:pt_PT	i:7	~T	s:GMT+5:30
+s:display	s:Asia/Calcutta	s:pt_PT	i:8	~F	s:Hora de Índia
+s:display	s:Asia/Calcutta	s:pt_PT	i:8	~T	s:Hora de Índia
+s:display	s:Asia/Calcutta	s:ja_JP	i:1	~F	s:GMT+5:30
+s:display	s:Asia/Calcutta	s:ja_JP	i:1	~T	s:GMT+5:30
+s:display	s:Asia/Calcutta	s:ja_JP	i:2	~F	s:インド標準時
+s:display	s:Asia/Calcutta	s:ja_JP	i:2	~T	s:GMT+05:30
+s:display	s:Asia/Calcutta	s:ja_JP	i:5	~F	s:+0530
+s:display	s:Asia/Calcutta	s:ja_JP	i:5	~T	s:+0530
+s:display	s:Asia/Calcutta	s:ja_JP	i:6	~F	s:GMT+05:30
+s:display	s:Asia/Calcutta	s:ja_JP	i:6	~T	s:GMT+05:30
+s:display	s:Asia/Calcutta	s:ja_JP	i:7	~F	s:GMT+5:30
+s:display	s:Asia/Calcutta	s:ja_JP	i:7	~T	s:GMT+5:30
+s:display	s:Asia/Calcutta	s:ja_JP	i:8	~F	s:インド時間
+s:display	s:Asia/Calcutta	s:ja_JP	i:8	~T	s:インド時間
+s:display	s:Asia/Calcutta	s:de_DE	i:1	~F	s:GMT+5:30
+s:display	s:Asia/Calcutta	s:de_DE	i:1	~T	s:GMT+5:30
+s:display	s:Asia/Calcutta	s:de_DE	i:2	~F	s:Indische Normalzeit
+s:display	s:Asia/Calcutta	s:de_DE	i:2	~T	s:GMT+05:30
+s:display	s:Asia/Calcutta	s:de_DE	i:5	~F	s:+0530
+s:display	s:Asia/Calcutta	s:de_DE	i:5	~T	s:+0530
+s:display	s:Asia/Calcutta	s:de_DE	i:6	~F	s:GMT+05:30
+s:display	s:Asia/Calcutta	s:de_DE	i:6	~T	s:GMT+05:30
+s:display	s:Asia/Calcutta	s:de_DE	i:7	~F	s:GMT+5:30
+s:display	s:Asia/Calcutta	s:de_DE	i:7	~T	s:GMT+5:30
+s:display	s:Asia/Calcutta	s:de_DE	i:8	~F	s:Indien (Ortszeit)
+s:display	s:Asia/Calcutta	s:de_DE	i:8	~T	s:Indien (Ortszeit)
+s:display	s:Asia/Calcutta	s:fr_FR	i:1	~F	s:UTC+5:30
+s:display	s:Asia/Calcutta	s:fr_FR	i:1	~T	s:UTC+5:30
+s:display	s:Asia/Calcutta	s:fr_FR	i:2	~F	s:heure de l’Inde
+s:display	s:Asia/Calcutta	s:fr_FR	i:2	~T	s:UTC+05:30
+s:display	s:Asia/Calcutta	s:fr_FR	i:5	~F	s:+0530
+s:display	s:Asia/Calcutta	s:fr_FR	i:5	~T	s:+0530
+s:display	s:Asia/Calcutta	s:fr_FR	i:6	~F	s:UTC+05:30
+s:display	s:Asia/Calcutta	s:fr_FR	i:6	~T	s:UTC+05:30
+s:display	s:Asia/Calcutta	s:fr_FR	i:7	~F	s:UTC+5:30
+s:display	s:Asia/Calcutta	s:fr_FR	i:7	~T	s:UTC+5:30
+s:display	s:Asia/Calcutta	s:fr_FR	i:8	~F	s:heure : Inde
+s:display	s:Asia/Calcutta	s:fr_FR	i:8	~T	s:heure : Inde
+s:canonical	s:Asia/Calcutta	a:["Asia/Calcutta",true]
+s:region	s:Asia/Calcutta	s:IN
+s:count_equiv	s:Asia/Calcutta	i:3
+s:equiv	s:Asia/Calcutta	i:0	s:Asia/Calcutta
+s:equiv	s:Asia/Calcutta	i:1	s:Asia/Kolkata
+s:equiv	s:Asia/Calcutta	i:2	s:IST
+s:equiv	s:Asia/Calcutta	i:5	s:
+s:equiv	s:Asia/Calcutta	i:-1	s:
+s:equiv	s:Asia/Calcutta	i:100	s:
+s:windows	s:Asia/Calcutta	s:India Standard Time
+s:iana	s:Asia/Calcutta	s:!Error
+s:to_dtz	s:Asia/Calcutta	s:!DateInvalidTimeZoneException
+s:same_rules	s:Asia/Calcutta	s:Europe/Lisbon	~F
+s:same_rules	s:Asia/Calcutta	s:Europe/London	~F
+s:same_rules	s:Asia/Calcutta	s:WET	~F
+s:same_rules	s:Asia/Calcutta	s:Atlantic/Madeira	~F
+s:same_rules	s:Asia/Calcutta	s:UTC	~F
+s:same_rules	s:Asia/Calcutta	s:Etc/UTC	~F
+s:same_rules	s:Asia/Calcutta	s:Asia/Calcutta	~T
+s:same_rules	s:Asia/Calcutta	s:Asia/Kolkata	~T
+s:same_rules	s:Asia/Calcutta	s:GMT+05:30	~F
+s:id	s:America/Argentina/Buenos_Aires	s:America/Argentina/Buenos_Aires
+s:dst	s:America/Argentina/Buenos_Aires	i:0
+s:offset	s:America/Argentina/Buenos_Aires	d:0.0	~F	~T	i:-10800000	i:0
+s:offset	s:America/Argentina/Buenos_Aires	d:0.0	~T	~T	i:-10800000	i:0
+s:offset	s:America/Argentina/Buenos_Aires	d:1341100800000.0	~F	~T	i:-10800000	i:0
+s:offset	s:America/Argentina/Buenos_Aires	d:1341100800000.0	~T	~T	i:-10800000	i:0
+s:offset	s:America/Argentina/Buenos_Aires	d:1325376000000.0	~F	~T	i:-10800000	i:0
+s:offset	s:America/Argentina/Buenos_Aires	d:1325376000000.0	~T	~T	i:-10800000	i:0
+s:offset	s:America/Argentina/Buenos_Aires	d:-2208988800000.0	~F	~T	i:-15408000	i:0
+s:offset	s:America/Argentina/Buenos_Aires	d:-2208988800000.0	~T	~T	i:-15408000	i:0
+s:offset	s:America/Argentina/Buenos_Aires	d:1711846800000.0	~F	~T	i:-10800000	i:0
+s:offset	s:America/Argentina/Buenos_Aires	d:1711846800000.0	~T	~T	i:-10800000	i:0
+s:offset	s:America/Argentina/Buenos_Aires	d:1711843200000.0	~F	~T	i:-10800000	i:0
+s:offset	s:America/Argentina/Buenos_Aires	d:1711843200000.0	~T	~T	i:-10800000	i:0
+s:offset	s:America/Argentina/Buenos_Aires	d:1730595600000.0	~F	~T	i:-10800000	i:0
+s:offset	s:America/Argentina/Buenos_Aires	d:1730595600000.0	~T	~T	i:-10800000	i:0
+s:display	s:America/Argentina/Buenos_Aires	s:en_US	i:1	~F	s:GMT-3
+s:display	s:America/Argentina/Buenos_Aires	s:en_US	i:1	~T	s:GMT-3
+s:display	s:America/Argentina/Buenos_Aires	s:en_US	i:2	~F	s:Argentina Standard Time
+s:display	s:America/Argentina/Buenos_Aires	s:en_US	i:2	~T	s:Argentina Summer Time
+s:display	s:America/Argentina/Buenos_Aires	s:en_US	i:5	~F	s:-0300
+s:display	s:America/Argentina/Buenos_Aires	s:en_US	i:5	~T	s:-0300
+s:display	s:America/Argentina/Buenos_Aires	s:en_US	i:6	~F	s:GMT-03:00
+s:display	s:America/Argentina/Buenos_Aires	s:en_US	i:6	~T	s:GMT-03:00
+s:display	s:America/Argentina/Buenos_Aires	s:en_US	i:7	~F	s:GMT-3
+s:display	s:America/Argentina/Buenos_Aires	s:en_US	i:7	~T	s:GMT-3
+s:display	s:America/Argentina/Buenos_Aires	s:en_US	i:8	~F	s:Buenos Aires Time
+s:display	s:America/Argentina/Buenos_Aires	s:en_US	i:8	~T	s:Buenos Aires Time
+s:display	s:America/Argentina/Buenos_Aires	s:pt_PT	i:1	~F	s:GMT-3
+s:display	s:America/Argentina/Buenos_Aires	s:pt_PT	i:1	~T	s:GMT-3
+s:display	s:America/Argentina/Buenos_Aires	s:pt_PT	i:2	~F	s:Hora padrão da Argentina
+s:display	s:America/Argentina/Buenos_Aires	s:pt_PT	i:2	~T	s:Hora de verão da Argentina
+s:display	s:America/Argentina/Buenos_Aires	s:pt_PT	i:5	~F	s:-0300
+s:display	s:America/Argentina/Buenos_Aires	s:pt_PT	i:5	~T	s:-0300
+s:display	s:America/Argentina/Buenos_Aires	s:pt_PT	i:6	~F	s:GMT-03:00
+s:display	s:America/Argentina/Buenos_Aires	s:pt_PT	i:6	~T	s:GMT-03:00
+s:display	s:America/Argentina/Buenos_Aires	s:pt_PT	i:7	~F	s:GMT-3
+s:display	s:America/Argentina/Buenos_Aires	s:pt_PT	i:7	~T	s:GMT-3
+s:display	s:America/Argentina/Buenos_Aires	s:pt_PT	i:8	~F	s:Hora de Buenos Aires
+s:display	s:America/Argentina/Buenos_Aires	s:pt_PT	i:8	~T	s:Hora de Buenos Aires
+s:display	s:America/Argentina/Buenos_Aires	s:ja_JP	i:1	~F	s:GMT-3
+s:display	s:America/Argentina/Buenos_Aires	s:ja_JP	i:1	~T	s:GMT-3
+s:display	s:America/Argentina/Buenos_Aires	s:ja_JP	i:2	~F	s:アルゼンチン標準時
+s:display	s:America/Argentina/Buenos_Aires	s:ja_JP	i:2	~T	s:アルゼンチン夏時間
+s:display	s:America/Argentina/Buenos_Aires	s:ja_JP	i:5	~F	s:-0300
+s:display	s:America/Argentina/Buenos_Aires	s:ja_JP	i:5	~T	s:-0300
+s:display	s:America/Argentina/Buenos_Aires	s:ja_JP	i:6	~F	s:GMT-03:00
+s:display	s:America/Argentina/Buenos_Aires	s:ja_JP	i:6	~T	s:GMT-03:00
+s:display	s:America/Argentina/Buenos_Aires	s:ja_JP	i:7	~F	s:GMT-3
+s:display	s:America/Argentina/Buenos_Aires	s:ja_JP	i:7	~T	s:GMT-3
+s:display	s:America/Argentina/Buenos_Aires	s:ja_JP	i:8	~F	s:ブエノスアイレス時間
+s:display	s:America/Argentina/Buenos_Aires	s:ja_JP	i:8	~T	s:ブエノスアイレス時間
+s:display	s:America/Argentina/Buenos_Aires	s:de_DE	i:1	~F	s:GMT-3
+s:display	s:America/Argentina/Buenos_Aires	s:de_DE	i:1	~T	s:GMT-3
+s:display	s:America/Argentina/Buenos_Aires	s:de_DE	i:2	~F	s:Argentinische Normalzeit
+s:display	s:America/Argentina/Buenos_Aires	s:de_DE	i:2	~T	s:Argentinische Sommerzeit
+s:display	s:America/Argentina/Buenos_Aires	s:de_DE	i:5	~F	s:-0300
+s:display	s:America/Argentina/Buenos_Aires	s:de_DE	i:5	~T	s:-0300
+s:display	s:America/Argentina/Buenos_Aires	s:de_DE	i:6	~F	s:GMT-03:00
+s:display	s:America/Argentina/Buenos_Aires	s:de_DE	i:6	~T	s:GMT-03:00
+s:display	s:America/Argentina/Buenos_Aires	s:de_DE	i:7	~F	s:GMT-3
+s:display	s:America/Argentina/Buenos_Aires	s:de_DE	i:7	~T	s:GMT-3
+s:display	s:America/Argentina/Buenos_Aires	s:de_DE	i:8	~F	s:Buenos Aires (Ortszeit)
+s:display	s:America/Argentina/Buenos_Aires	s:de_DE	i:8	~T	s:Buenos Aires (Ortszeit)
+s:display	s:America/Argentina/Buenos_Aires	s:fr_FR	i:1	~F	s:UTC−3
+s:display	s:America/Argentina/Buenos_Aires	s:fr_FR	i:1	~T	s:UTC−3
+s:display	s:America/Argentina/Buenos_Aires	s:fr_FR	i:2	~F	s:heure normale d’Argentine
+s:display	s:America/Argentina/Buenos_Aires	s:fr_FR	i:2	~T	s:heure d’été de l’Argentine
+s:display	s:America/Argentina/Buenos_Aires	s:fr_FR	i:5	~F	s:-0300
+s:display	s:America/Argentina/Buenos_Aires	s:fr_FR	i:5	~T	s:-0300
+s:display	s:America/Argentina/Buenos_Aires	s:fr_FR	i:6	~F	s:UTC−03:00
+s:display	s:America/Argentina/Buenos_Aires	s:fr_FR	i:6	~T	s:UTC−03:00
+s:display	s:America/Argentina/Buenos_Aires	s:fr_FR	i:7	~F	s:UTC−3
+s:display	s:America/Argentina/Buenos_Aires	s:fr_FR	i:7	~T	s:UTC−3
+s:display	s:America/Argentina/Buenos_Aires	s:fr_FR	i:8	~F	s:heure : Buenos Aires
+s:display	s:America/Argentina/Buenos_Aires	s:fr_FR	i:8	~T	s:heure : Buenos Aires
+s:canonical	s:America/Argentina/Buenos_Aires	a:["America/Buenos_Aires",true]
+s:region	s:America/Argentina/Buenos_Aires	s:AR
+s:count_equiv	s:America/Argentina/Buenos_Aires	i:3
+s:equiv	s:America/Argentina/Buenos_Aires	i:0	s:AGT
+s:equiv	s:America/Argentina/Buenos_Aires	i:1	s:America/Argentina/Buenos_Aires
+s:equiv	s:America/Argentina/Buenos_Aires	i:2	s:America/Buenos_Aires
+s:equiv	s:America/Argentina/Buenos_Aires	i:5	s:
+s:equiv	s:America/Argentina/Buenos_Aires	i:-1	s:
+s:equiv	s:America/Argentina/Buenos_Aires	i:100	s:
+s:windows	s:America/Argentina/Buenos_Aires	s:Argentina Standard Time
+s:iana	s:America/Argentina/Buenos_Aires	s:!Error
+s:to_dtz	s:America/Argentina/Buenos_Aires	s:America/Argentina/Buenos_Aires
+s:same_rules	s:America/Argentina/Buenos_Aires	s:Europe/Lisbon	~F
+s:same_rules	s:America/Argentina/Buenos_Aires	s:Europe/London	~F
+s:same_rules	s:America/Argentina/Buenos_Aires	s:WET	~F
+s:same_rules	s:America/Argentina/Buenos_Aires	s:Atlantic/Madeira	~F
+s:same_rules	s:America/Argentina/Buenos_Aires	s:UTC	~F
+s:same_rules	s:America/Argentina/Buenos_Aires	s:Etc/UTC	~F
+s:same_rules	s:America/Argentina/Buenos_Aires	s:Asia/Calcutta	~F
+s:same_rules	s:America/Argentina/Buenos_Aires	s:Asia/Kolkata	~F
+s:same_rules	s:America/Argentina/Buenos_Aires	s:GMT+05:30	~F
+s:for_windows	s:Pacific Standard Time	~N	s:America/Los_Angeles
+s:for_windows	s:Pacific Standard Time	s:US	s:America/Los_Angeles
+s:for_windows	s:Pacific Standard Time	s:PT	s:America/Los_Angeles
+s:for_windows	s:Pacific Standard Time	s:DE	s:America/Los_Angeles
+s:for_windows	s:Pacific Standard Time	s:XX	s:America/Los_Angeles
+s:for_windows	s:W. Europe Standard Time	~N	s:Europe/Berlin
+s:for_windows	s:W. Europe Standard Time	s:US	s:Europe/Berlin
+s:for_windows	s:W. Europe Standard Time	s:PT	s:Europe/Berlin
+s:for_windows	s:W. Europe Standard Time	s:DE	s:Europe/Berlin
+s:for_windows	s:W. Europe Standard Time	s:XX	s:Europe/Berlin
+s:for_windows	s:Romance Standard Time	~N	s:Europe/Paris
+s:for_windows	s:Romance Standard Time	s:US	s:Europe/Paris
+s:for_windows	s:Romance Standard Time	s:PT	s:Europe/Paris
+s:for_windows	s:Romance Standard Time	s:DE	s:Europe/Paris
+s:for_windows	s:Romance Standard Time	s:XX	s:Europe/Paris
+s:for_windows	s:bogus	~N	s:!U_ILLEGAL_ARGUMENT_ERROR
+s:for_windows	s:bogus	s:US	s:!U_ILLEGAL_ARGUMENT_ERROR
+s:for_windows	s:bogus	s:PT	s:!U_ILLEGAL_ARGUMENT_ERROR
+s:for_windows	s:bogus	s:DE	s:!U_ILLEGAL_ARGUMENT_ERROR
+s:for_windows	s:bogus	s:XX	s:!U_ILLEGAL_ARGUMENT_ERROR
+s:for_windows	s:India Standard Time	~N	s:Asia/Calcutta
+s:for_windows	s:India Standard Time	s:US	s:Asia/Calcutta
+s:for_windows	s:India Standard Time	s:PT	s:Asia/Calcutta
+s:for_windows	s:India Standard Time	s:DE	s:Asia/Calcutta
+s:for_windows	s:India Standard Time	s:XX	s:Asia/Calcutta
+s:enum	~N	a:["ACT","AET","AGT","ART","AST","Africa/Abidjan","Africa/Accra","Africa/Addis_Ababa","Africa/Algiers","Africa/Asmara","Africa/Asmera","Africa/Bamako","Africa/Bangui","Africa/Banjul","Africa/Bissau","Africa/Blantyre","Africa/Brazzaville","Africa/Bujumbura","Africa/Cairo","Africa/Casablanca","Africa/Ceuta","Africa/Conakry","Africa/Dakar","Africa/Dar_es_Salaam","Africa/Djibouti","Africa/Douala","Africa/El_Aaiun","Africa/Freetown","Africa/Gaborone","Africa/Harare","Africa/Johannesburg","Africa/Juba","Africa/Kampala","Africa/Khartoum","Africa/Kigali","Africa/Kinshasa","Africa/Lagos","Africa/Libreville","Africa/Lome","Africa/Luanda","Africa/Lubumbashi","Africa/Lusaka","Africa/Malabo","Africa/Maputo","Africa/Maseru","Africa/Mbabane","Africa/Mogadishu","Africa/Monrovia","Africa/Nairobi","Africa/Ndjamena","Africa/Niamey","Africa/Nouakchott","Africa/Ouagadougou","Africa/Porto-Novo","Africa/Sao_Tome","Africa/Timbuktu","Africa/Tripoli","Africa/Tunis","Africa/Windhoek","America/Adak","America/Anchorage","America/Anguilla","America/Antigua","America/Araguaina","America/Argentina/Buenos_Aires","America/Argentina/Catamarca","America/Argentina/ComodRivadavia","America/Argentina/Cordoba","America/Argentina/Jujuy","America/Argentina/La_Rioja","America/Argentina/Mendoza","America/Argentina/Rio_Gallegos","America/Argentina/Salta","America/Argentina/San_Juan","America/Argentina/San_Luis","America/Argentina/Tucuman","America/Argentina/Ushuaia","America/Aruba","America/Asuncion","America/Atikokan","America/Atka","America/Bahia","America/Bahia_Banderas","America/Barbados","America/Belem","America/Belize","America/Blanc-Sablon","America/Boa_Vista","America/Bogota","America/Boise","America/Buenos_Aires","America/Cambridge_Bay","America/Campo_Grande","America/Cancun","America/Caracas","America/Catamarca","America/Cayenne","America/Cayman","America/Chicago","America/Chihuahua","America/Ciudad_Juarez","America/Coral_Harbour","America/Cordoba","America/Costa_Rica","America/Creston","America/Cuiaba","America/Curacao","America/Danmarkshavn","America/Dawson","America/Dawson_Creek","America/Denver","America/Detroit","America/Dominica","America/Edmonton","America/Eirunepe","America/El_Salvador","America/Ensenada","America/Fort_Nelson","America/Fort_Wayne","America/Fortaleza","America/Glace_Bay","America/Godthab","America/Goose_Bay","America/Grand_Turk","America/Grenada","America/Guadeloupe","America/Guatemala","America/Guayaquil","America/Guyana","America/Halifax","America/Havana","America/Hermosillo","America/Indiana/Indianapolis","America/Indiana/Knox","America/Indiana/Marengo","America/Indiana/Petersburg","America/Indiana/Tell_City","America/Indiana/Vevay","America/Indiana/Vincennes","America/Indiana/Winamac","America/Indianapolis","America/Inuvik","America/Iqaluit","America/Jamaica","America/Jujuy","America/Juneau","America/Kentucky/Louisville","America/Kentucky/Monticello","America/Knox_IN","America/Kralendijk","America/La_Paz","America/Lima","America/Los_Angeles","America/Louisville","America/Lower_Princes","America/Maceio","America/Managua","America/Manaus","America/Marigot","America/Martinique","America/Matamoros","America/Mazatlan","America/Mendoza","America/Menominee","America/Merida","America/Metlakatla","America/Mexico_City","America/Miquelon","America/Moncton","America/Monterrey","America/Montevideo","America/Montreal","America/Montserrat","America/Nassau","America/New_York","America/Nipigon","America/Nome","America/Noronha","America/North_Dakota/Beulah","America/North_Dakota/Center","America/North_Dakota/New_Salem","America/Nuuk","America/Ojinaga","America/Panama","America/Pangnirtung","America/Paramaribo","America/Phoenix","America/Port-au-Prince","America/Port_of_Spain","America/Porto_Acre","America/Porto_Velho","America/Puerto_Rico","America/Punta_Arenas","America/Rainy_River","America/Rankin_Inlet","America/Recife","America/Regina","America/Resolute","America/Rio_Branco","America/Rosario","America/Santa_Isabel","America/Santarem","America/Santiago","America/Santo_Domingo","America/Sao_Paulo","America/Scoresbysund","America/Shiprock","America/Sitka","America/St_Barthelemy","America/St_Johns","America/St_Kitts","America/St_Lucia","America/St_Thomas","America/St_Vincent","America/Swift_Current","America/Tegucigalpa","America/Thule","America/Thunder_Bay","America/Tijuana","America/Toronto","America/Tortola","America/Vancouver","America/Virgin","America/Whitehorse","America/Winnipeg","America/Yakutat","America/Yellowknife","Antarctica/Casey","Antarctica/Davis","Antarctica/DumontDUrville","Antarctica/Macquarie","Antarctica/Mawson","Antarctica/McMurdo","Antarctica/Palmer","Antarctica/Rothera","Antarctica/South_Pole","Antarctica/Syowa","Antarctica/Troll","Antarctica/Vostok","Arctic/Longyearbyen","Asia/Aden","Asia/Almaty","Asia/Amman","Asia/Anadyr","Asia/Aqtau","Asia/Aqtobe","Asia/Ashgabat","Asia/Ashkhabad","Asia/Atyrau","Asia/Baghdad","Asia/Bahrain","Asia/Baku","Asia/Bangkok","Asia/Barnaul","Asia/Beirut","Asia/Bishkek","Asia/Brunei","Asia/Calcutta","Asia/Chita","Asia/Choibalsan","Asia/Chongqing","Asia/Chungking","Asia/Colombo","Asia/Dacca","Asia/Damascus","Asia/Dhaka","Asia/Dili","Asia/Dubai","Asia/Dushanbe","Asia/Famagusta","Asia/Gaza","Asia/Harbin","Asia/Hebron","Asia/Ho_Chi_Minh","Asia/Hong_Kong","Asia/Hovd","Asia/Irkutsk","Asia/Istanbul","Asia/Jakarta","Asia/Jayapura","Asia/Jerusalem","Asia/Kabul","Asia/Kamchatka","Asia/Karachi","Asia/Kashgar","Asia/Kathmandu","Asia/Katmandu","Asia/Khandyga","Asia/Kolkata","Asia/Krasnoyarsk","Asia/Kuala_Lumpur","Asia/Kuching","Asia/Kuwait","Asia/Macao","Asia/Macau","Asia/Magadan","Asia/Makassar","Asia/Manila","Asia/Muscat","Asia/Nicosia","Asia/Novokuznetsk","Asia/Novosibirsk","Asia/Omsk","Asia/Oral","Asia/Phnom_Penh","Asia/Pontianak","Asia/Pyongyang","Asia/Qatar","Asia/Qostanay","Asia/Qyzylorda","Asia/Rangoon","Asia/Riyadh","Asia/Saigon","Asia/Sakhalin","Asia/Samarkand","Asia/Seoul","Asia/Shanghai","Asia/Singapore","Asia/Srednekolymsk","Asia/Taipei","Asia/Tashkent","Asia/Tbilisi","Asia/Tehran","Asia/Tel_Aviv","Asia/Thimbu","Asia/Thimphu","Asia/Tokyo","Asia/Tomsk","Asia/Ujung_Pandang","Asia/Ulaanbaatar","Asia/Ulan_Bator","Asia/Urumqi","Asia/Ust-Nera","Asia/Vientiane","Asia/Vladivostok","Asia/Yakutsk","Asia/Yangon","Asia/Yekaterinburg","Asia/Yerevan","Atlantic/Azores","Atlantic/Bermuda","Atlantic/Canary","Atlantic/Cape_Verde","Atlantic/Faeroe","Atlantic/Faroe","Atlantic/Jan_Mayen","Atlantic/Madeira","Atlantic/Reykjavik","Atlantic/South_Georgia","Atlantic/St_Helena","Atlantic/Stanley","Australia/ACT","Australia/Adelaide","Australia/Brisbane","Australia/Broken_Hill","Australia/Canberra","Australia/Currie","Australia/Darwin","Australia/Eucla","Australia/Hobart","Australia/LHI","Australia/Lindeman","Australia/Lord_Howe","Australia/Melbourne","Australia/NSW","Australia/North","Australia/Perth","Australia/Queensland","Australia/South","Australia/Sydney","Australia/Tasmania","Australia/Victoria","Australia/West","Australia/Yancowinna","BET","BST","Brazil/Acre","Brazil/DeNoronha","Brazil/East","Brazil/West","CAT","CET","CNT","CST","CST6CDT","CTT","Canada/Atlantic","Canada/Central","Canada/East-Saskatchewan","Canada/Eastern","Canada/Mountain","Canada/Newfoundland","Canada/Pacific","Canada/Saskatchewan","Canada/Yukon","Chile/Continental","Chile/EasterIsland","Cuba","EAT","ECT","EET","EST","EST5EDT","Egypt","Eire","Etc/GMT","Etc/GMT+0","Etc/GMT+1","Etc/GMT+10","Etc/GMT+11","Etc/GMT+12","Etc/GMT+2","Etc/GMT+3","Etc/GMT+4","Etc/GMT+5","Etc/GMT+6","Etc/GMT+7","Etc/GMT+8","Etc/GMT+9","Etc/GMT-0","Etc/GMT-1","Etc/GMT-10","Etc/GMT-11","Etc/GMT-12","Etc/GMT-13","Etc/GMT-14","Etc/GMT-2","Etc/GMT-3","Etc/GMT-4","Etc/GMT-5","Etc/GMT-6","Etc/GMT-7","Etc/GMT-8","Etc/GMT-9","Etc/GMT0","Etc/Greenwich","Etc/UCT","Etc/UTC","Etc/Universal","Etc/Zulu","Europe/Amsterdam","Europe/Andorra","Europe/Astrakhan","Europe/Athens","Europe/Belfast","Europe/Belgrade","Europe/Berlin","Europe/Bratislava","Europe/Brussels","Europe/Bucharest","Europe/Budapest","Europe/Busingen","Europe/Chisinau","Europe/Copenhagen","Europe/Dublin","Europe/Gibraltar","Europe/Guernsey","Europe/Helsinki","Europe/Isle_of_Man","Europe/Istanbul","Europe/Jersey","Europe/Kaliningrad","Europe/Kiev","Europe/Kirov","Europe/Kyiv","Europe/Lisbon","Europe/Ljubljana","Europe/London","Europe/Luxembourg","Europe/Madrid","Europe/Malta","Europe/Mariehamn","Europe/Minsk","Europe/Monaco","Europe/Moscow","Europe/Nicosia","Europe/Oslo","Europe/Paris","Europe/Podgorica","Europe/Prague","Europe/Riga","Europe/Rome","Europe/Samara","Europe/San_Marino","Europe/Sarajevo","Europe/Saratov","Europe/Simferopol","Europe/Skopje","Europe/Sofia","Europe/Stockholm","Europe/Tallinn","Europe/Tirane","Europe/Tiraspol","Europe/Ulyanovsk","Europe/Uzhgorod","Europe/Vaduz","Europe/Vatican","Europe/Vienna","Europe/Vilnius","Europe/Volgograd","Europe/Warsaw","Europe/Zagreb","Europe/Zaporozhye","Europe/Zurich","Factory","GB","GB-Eire","GMT","GMT+0","GMT-0","GMT0","Greenwich","HST","Hongkong","IET","IST","Iceland","Indian/Antananarivo","Indian/Chagos","Indian/Christmas","Indian/Cocos","Indian/Comoro","Indian/Kerguelen","Indian/Mahe","Indian/Maldives","Indian/Mauritius","Indian/Mayotte","Indian/Reunion","Iran","Israel","JST","Jamaica","Japan","Kwajalein","Libya","MET","MIT","MST","MST7MDT","Mexico/BajaNorte","Mexico/BajaSur","Mexico/General","NET","NST","NZ","NZ-CHAT","Navajo","PLT","PNT","PRC","PRT","PST","PST8PDT","Pacific/Apia","Pacific/Auckland","Pacific/Bougainville","Pacific/Chatham","Pacific/Chuuk","Pacific/Easter","Pacific/Efate","Pacific/Enderbury","Pacific/Fakaofo","Pacific/Fiji","Pacific/Funafuti","Pacific/Galapagos","Pacific/Gambier","Pacific/Guadalcanal","Pacific/Guam","Pacific/Honolulu","Pacific/Johnston","Pacific/Kanton","Pacific/Kiritimati","Pacific/Kosrae","Pacific/Kwajalein","Pacific/Majuro","Pacific/Marquesas","Pacific/Midway","Pacific/Nauru","Pacific/Niue","Pacific/Norfolk","Pacific/Noumea","Pacific/Pago_Pago","Pacific/Palau","Pacific/Pitcairn","Pacific/Pohnpei","Pacific/Ponape","Pacific/Port_Moresby","Pacific/Rarotonga","Pacific/Saipan","Pacific/Samoa","Pacific/Tahiti","Pacific/Tarawa","Pacific/Tongatapu","Pacific/Truk","Pacific/Wake","Pacific/Wallis","Pacific/Yap","Poland","Portugal","ROC","ROK","SST","Singapore","SystemV/AST4","SystemV/AST4ADT","SystemV/CST6","SystemV/CST6CDT","SystemV/EST5","SystemV/EST5EDT","SystemV/HST10","SystemV/MST7","SystemV/MST7MDT","SystemV/PST8","SystemV/PST8PDT","SystemV/YST9","SystemV/YST9YDT","Turkey","UCT","US/Alaska","US/Aleutian","US/Arizona","US/Central","US/East-Indiana","US/Eastern","US/Hawaii","US/Indiana-Starke","US/Michigan","US/Mountain","US/Pacific","US/Pacific-New","US/Samoa","UTC","Universal","VST","W-SU","WET","Zulu"]
+s:enum	s:PT	a:["Atlantic/Azores","Atlantic/Madeira","Europe/Lisbon","Portugal"]
+s:enum	s:US	a:["AST","America/Adak","America/Anchorage","America/Atka","America/Boise","America/Chicago","America/Denver","America/Detroit","America/Fort_Wayne","America/Indiana/Indianapolis","America/Indiana/Knox","America/Indiana/Marengo","America/Indiana/Petersburg","America/Indiana/Tell_City","America/Indiana/Vevay","America/Indiana/Vincennes","America/Indiana/Winamac","America/Indianapolis","America/Juneau","America/Kentucky/Louisville","America/Kentucky/Monticello","America/Knox_IN","America/Los_Angeles","America/Louisville","America/Menominee","America/Metlakatla","America/New_York","America/Nome","America/North_Dakota/Beulah","America/North_Dakota/Center","America/North_Dakota/New_Salem","America/Phoenix","America/Shiprock","America/Sitka","America/Yakutat","CST","IET","Navajo","PNT","PST","Pacific/Honolulu","US/Alaska","US/Aleutian","US/Arizona","US/Central","US/East-Indiana","US/Eastern","US/Hawaii","US/Indiana-Starke","US/Michigan","US/Mountain","US/Pacific","US/Pacific-New"]
+s:enum	s:XX	a:[]
+s:enum	s:001	a:[]
+s:enum_off	i:0	a:["Africa/Abidjan","Africa/Accra","Africa/Bamako","Africa/Banjul","Africa/Bissau","Africa/Casablanca","Africa/Conakry","Africa/Dakar","Africa/El_Aaiun","Africa/Freetown","Africa/Lome","Africa/Monrovia","Africa/Nouakchott","Africa/Ouagadougou","Africa/Sao_Tome","Africa/Timbuktu","America/Danmarkshavn","Antarctica/Troll","Atlantic/Canary","Atlantic/Faeroe","Atlantic/Faroe","Atlantic/Madeira","Atlantic/Reykjavik","Atlantic/St_Helena","Eire","Etc/GMT","Etc/GMT+0","Etc/GMT-0","Etc/GMT0","Etc/Greenwich","Etc/UCT","Etc/UTC","Etc/Universal","Etc/Zulu","Europe/Belfast","Europe/Dublin","Europe/Guernsey","Europe/Isle_of_Man","Europe/Jersey","Europe/Lisbon","Europe/London","Factory","GB","GB-Eire","GMT","GMT+0","GMT-0","GMT0","Greenwich","Iceland","Portugal","UCT","UTC","Universal","WET","Zulu"]
+s:enum_off	i:3600000	a:["Africa/Algiers","Africa/Bangui","Africa/Brazzaville","Africa/Ceuta","Africa/Douala","Africa/Kinshasa","Africa/Lagos","Africa/Libreville","Africa/Luanda","Africa/Malabo","Africa/Ndjamena","Africa/Niamey","Africa/Porto-Novo","Africa/Tunis","Arctic/Longyearbyen","Atlantic/Jan_Mayen","CET","ECT","Etc/GMT-1","Europe/Amsterdam","Europe/Andorra","Europe/Belgrade","Europe/Berlin","Europe/Bratislava","Europe/Brussels","Europe/Budapest","Europe/Busingen","Europe/Copenhagen","Europe/Gibraltar","Europe/Ljubljana","Europe/Luxembourg","Europe/Madrid","Europe/Malta","Europe/Monaco","Europe/Oslo","Europe/Paris","Europe/Podgorica","Europe/Prague","Europe/Rome","Europe/San_Marino","Europe/Sarajevo","Europe/Skopje","Europe/Stockholm","Europe/Tirane","Europe/Vaduz","Europe/Vatican","Europe/Vienna","Europe/Warsaw","Europe/Zagreb","Europe/Zurich","MET","Poland"]
+s:enum_off	i:19800000	a:["Asia/Calcutta","Asia/Colombo","Asia/Kolkata","IST"]
+s:enum_off	i:-18000000	a:["America/Atikokan","America/Bogota","America/Cancun","America/Cayman","America/Coral_Harbour","America/Detroit","America/Eirunepe","America/Fort_Wayne","America/Grand_Turk","America/Guayaquil","America/Havana","America/Indiana/Indianapolis","America/Indiana/Marengo","America/Indiana/Petersburg","America/Indiana/Vevay","America/Indiana/Vincennes","America/Indiana/Winamac","America/Indianapolis","America/Iqaluit","America/Jamaica","America/Kentucky/Louisville","America/Kentucky/Monticello","America/Lima","America/Louisville","America/Montreal","America/Nassau","America/New_York","America/Nipigon","America/Panama","America/Pangnirtung","America/Port-au-Prince","America/Porto_Acre","America/Rio_Branco","America/Thunder_Bay","America/Toronto","Brazil/Acre","Canada/Eastern","Cuba","EST","EST5EDT","Etc/GMT+5","IET","Jamaica","SystemV/EST5","SystemV/EST5EDT","US/East-Indiana","US/Eastern","US/Michigan"]
+s:enum_off	i:1234	a:[]
+s:idenum	i:0	~N	~N	a:["ACT","AET","AGT","ART","AST","Africa/Abidjan","Africa/Accra","Africa/Addis_Ababa","Africa/Algiers","Africa/Asmara","Africa/Asmera","Africa/Bamako","Africa/Bangui","Africa/Banjul","Africa/Bissau","Africa/Blantyre","Africa/Brazzaville","Africa/Bujumbura","Africa/Cairo","Africa/Casablanca","Africa/Ceuta","Africa/Conakry","Africa/Dakar","Africa/Dar_es_Salaam","Africa/Djibouti","Africa/Douala","Africa/El_Aaiun","Africa/Freetown","Africa/Gaborone","Africa/Harare","Africa/Johannesburg","Africa/Juba","Africa/Kampala","Africa/Khartoum","Africa/Kigali","Africa/Kinshasa","Africa/Lagos","Africa/Libreville","Africa/Lome","Africa/Luanda","Africa/Lubumbashi","Africa/Lusaka","Africa/Malabo","Africa/Maputo","Africa/Maseru","Africa/Mbabane","Africa/Mogadishu","Africa/Monrovia","Africa/Nairobi","Africa/Ndjamena","Africa/Niamey","Africa/Nouakchott","Africa/Ouagadougou","Africa/Porto-Novo","Africa/Sao_Tome","Africa/Timbuktu","Africa/Tripoli","Africa/Tunis","Africa/Windhoek","America/Adak","America/Anchorage","America/Anguilla","America/Antigua","America/Araguaina","America/Argentina/Buenos_Aires","America/Argentina/Catamarca","America/Argentina/ComodRivadavia","America/Argentina/Cordoba","America/Argentina/Jujuy","America/Argentina/La_Rioja","America/Argentina/Mendoza","America/Argentina/Rio_Gallegos","America/Argentina/Salta","America/Argentina/San_Juan","America/Argentina/San_Luis","America/Argentina/Tucuman","America/Argentina/Ushuaia","America/Aruba","America/Asuncion","America/Atikokan","America/Atka","America/Bahia","America/Bahia_Banderas","America/Barbados","America/Belem","America/Belize","America/Blanc-Sablon","America/Boa_Vista","America/Bogota","America/Boise","America/Buenos_Aires","America/Cambridge_Bay","America/Campo_Grande","America/Cancun","America/Caracas","America/Catamarca","America/Cayenne","America/Cayman","America/Chicago","America/Chihuahua","America/Ciudad_Juarez","America/Coral_Harbour","America/Cordoba","America/Costa_Rica","America/Creston","America/Cuiaba","America/Curacao","America/Danmarkshavn","America/Dawson","America/Dawson_Creek","America/Denver","America/Detroit","America/Dominica","America/Edmonton","America/Eirunepe","America/El_Salvador","America/Ensenada","America/Fort_Nelson","America/Fort_Wayne","America/Fortaleza","America/Glace_Bay","America/Godthab","America/Goose_Bay","America/Grand_Turk","America/Grenada","America/Guadeloupe","America/Guatemala","America/Guayaquil","America/Guyana","America/Halifax","America/Havana","America/Hermosillo","America/Indiana/Indianapolis","America/Indiana/Knox","America/Indiana/Marengo","America/Indiana/Petersburg","America/Indiana/Tell_City","America/Indiana/Vevay","America/Indiana/Vincennes","America/Indiana/Winamac","America/Indianapolis","America/Inuvik","America/Iqaluit","America/Jamaica","America/Jujuy","America/Juneau","America/Kentucky/Louisville","America/Kentucky/Monticello","America/Knox_IN","America/Kralendijk","America/La_Paz","America/Lima","America/Los_Angeles","America/Louisville","America/Lower_Princes","America/Maceio","America/Managua","America/Manaus","America/Marigot","America/Martinique","America/Matamoros","America/Mazatlan","America/Mendoza","America/Menominee","America/Merida","America/Metlakatla","America/Mexico_City","America/Miquelon","America/Moncton","America/Monterrey","America/Montevideo","America/Montreal","America/Montserrat","America/Nassau","America/New_York","America/Nipigon","America/Nome","America/Noronha","America/North_Dakota/Beulah","America/North_Dakota/Center","America/North_Dakota/New_Salem","America/Nuuk","America/Ojinaga","America/Panama","America/Pangnirtung","America/Paramaribo","America/Phoenix","America/Port-au-Prince","America/Port_of_Spain","America/Porto_Acre","America/Porto_Velho","America/Puerto_Rico","America/Punta_Arenas","America/Rainy_River","America/Rankin_Inlet","America/Recife","America/Regina","America/Resolute","America/Rio_Branco","America/Rosario","America/Santa_Isabel","America/Santarem","America/Santiago","America/Santo_Domingo","America/Sao_Paulo","America/Scoresbysund","America/Shiprock","America/Sitka","America/St_Barthelemy","America/St_Johns","America/St_Kitts","America/St_Lucia","America/St_Thomas","America/St_Vincent","America/Swift_Current","America/Tegucigalpa","America/Thule","America/Thunder_Bay","America/Tijuana","America/Toronto","America/Tortola","America/Vancouver","America/Virgin","America/Whitehorse","America/Winnipeg","America/Yakutat","America/Yellowknife","Antarctica/Casey","Antarctica/Davis","Antarctica/DumontDUrville","Antarctica/Macquarie","Antarctica/Mawson","Antarctica/McMurdo","Antarctica/Palmer","Antarctica/Rothera","Antarctica/South_Pole","Antarctica/Syowa","Antarctica/Troll","Antarctica/Vostok","Arctic/Longyearbyen","Asia/Aden","Asia/Almaty","Asia/Amman","Asia/Anadyr","Asia/Aqtau","Asia/Aqtobe","Asia/Ashgabat","Asia/Ashkhabad","Asia/Atyrau","Asia/Baghdad","Asia/Bahrain","Asia/Baku","Asia/Bangkok","Asia/Barnaul","Asia/Beirut","Asia/Bishkek","Asia/Brunei","Asia/Calcutta","Asia/Chita","Asia/Choibalsan","Asia/Chongqing","Asia/Chungking","Asia/Colombo","Asia/Dacca","Asia/Damascus","Asia/Dhaka","Asia/Dili","Asia/Dubai","Asia/Dushanbe","Asia/Famagusta","Asia/Gaza","Asia/Harbin","Asia/Hebron","Asia/Ho_Chi_Minh","Asia/Hong_Kong","Asia/Hovd","Asia/Irkutsk","Asia/Istanbul","Asia/Jakarta","Asia/Jayapura","Asia/Jerusalem","Asia/Kabul","Asia/Kamchatka","Asia/Karachi","Asia/Kashgar","Asia/Kathmandu","Asia/Katmandu","Asia/Khandyga","Asia/Kolkata","Asia/Krasnoyarsk","Asia/Kuala_Lumpur","Asia/Kuching","Asia/Kuwait","Asia/Macao","Asia/Macau","Asia/Magadan","Asia/Makassar","Asia/Manila","Asia/Muscat","Asia/Nicosia","Asia/Novokuznetsk","Asia/Novosibirsk","Asia/Omsk","Asia/Oral","Asia/Phnom_Penh","Asia/Pontianak","Asia/Pyongyang","Asia/Qatar","Asia/Qostanay","Asia/Qyzylorda","Asia/Rangoon","Asia/Riyadh","Asia/Saigon","Asia/Sakhalin","Asia/Samarkand","Asia/Seoul","Asia/Shanghai","Asia/Singapore","Asia/Srednekolymsk","Asia/Taipei","Asia/Tashkent","Asia/Tbilisi","Asia/Tehran","Asia/Tel_Aviv","Asia/Thimbu","Asia/Thimphu","Asia/Tokyo","Asia/Tomsk","Asia/Ujung_Pandang","Asia/Ulaanbaatar","Asia/Ulan_Bator","Asia/Urumqi","Asia/Ust-Nera","Asia/Vientiane","Asia/Vladivostok","Asia/Yakutsk","Asia/Yangon","Asia/Yekaterinburg","Asia/Yerevan","Atlantic/Azores","Atlantic/Bermuda","Atlantic/Canary","Atlantic/Cape_Verde","Atlantic/Faeroe","Atlantic/Faroe","Atlantic/Jan_Mayen","Atlantic/Madeira","Atlantic/Reykjavik","Atlantic/South_Georgia","Atlantic/St_Helena","Atlantic/Stanley","Australia/ACT","Australia/Adelaide","Australia/Brisbane","Australia/Broken_Hill","Australia/Canberra","Australia/Currie","Australia/Darwin","Australia/Eucla","Australia/Hobart","Australia/LHI","Australia/Lindeman","Australia/Lord_Howe","Australia/Melbourne","Australia/NSW","Australia/North","Australia/Perth","Australia/Queensland","Australia/South","Australia/Sydney","Australia/Tasmania","Australia/Victoria","Australia/West","Australia/Yancowinna","BET","BST","Brazil/Acre","Brazil/DeNoronha","Brazil/East","Brazil/West","CAT","CET","CNT","CST","CST6CDT","CTT","Canada/Atlantic","Canada/Central","Canada/East-Saskatchewan","Canada/Eastern","Canada/Mountain","Canada/Newfoundland","Canada/Pacific","Canada/Saskatchewan","Canada/Yukon","Chile/Continental","Chile/EasterIsland","Cuba","EAT","ECT","EET","EST","EST5EDT","Egypt","Eire","Etc/GMT","Etc/GMT+0","Etc/GMT+1","Etc/GMT+10","Etc/GMT+11","Etc/GMT+12","Etc/GMT+2","Etc/GMT+3","Etc/GMT+4","Etc/GMT+5","Etc/GMT+6","Etc/GMT+7","Etc/GMT+8","Etc/GMT+9","Etc/GMT-0","Etc/GMT-1","Etc/GMT-10","Etc/GMT-11","Etc/GMT-12","Etc/GMT-13","Etc/GMT-14","Etc/GMT-2","Etc/GMT-3","Etc/GMT-4","Etc/GMT-5","Etc/GMT-6","Etc/GMT-7","Etc/GMT-8","Etc/GMT-9","Etc/GMT0","Etc/Greenwich","Etc/UCT","Etc/UTC","Etc/Universal","Etc/Zulu","Europe/Amsterdam","Europe/Andorra","Europe/Astrakhan","Europe/Athens","Europe/Belfast","Europe/Belgrade","Europe/Berlin","Europe/Bratislava","Europe/Brussels","Europe/Bucharest","Europe/Budapest","Europe/Busingen","Europe/Chisinau","Europe/Copenhagen","Europe/Dublin","Europe/Gibraltar","Europe/Guernsey","Europe/Helsinki","Europe/Isle_of_Man","Europe/Istanbul","Europe/Jersey","Europe/Kaliningrad","Europe/Kiev","Europe/Kirov","Europe/Kyiv","Europe/Lisbon","Europe/Ljubljana","Europe/London","Europe/Luxembourg","Europe/Madrid","Europe/Malta","Europe/Mariehamn","Europe/Minsk","Europe/Monaco","Europe/Moscow","Europe/Nicosia","Europe/Oslo","Europe/Paris","Europe/Podgorica","Europe/Prague","Europe/Riga","Europe/Rome","Europe/Samara","Europe/San_Marino","Europe/Sarajevo","Europe/Saratov","Europe/Simferopol","Europe/Skopje","Europe/Sofia","Europe/Stockholm","Europe/Tallinn","Europe/Tirane","Europe/Tiraspol","Europe/Ulyanovsk","Europe/Uzhgorod","Europe/Vaduz","Europe/Vatican","Europe/Vienna","Europe/Vilnius","Europe/Volgograd","Europe/Warsaw","Europe/Zagreb","Europe/Zaporozhye","Europe/Zurich","Factory","GB","GB-Eire","GMT","GMT+0","GMT-0","GMT0","Greenwich","HST","Hongkong","IET","IST","Iceland","Indian/Antananarivo","Indian/Chagos","Indian/Christmas","Indian/Cocos","Indian/Comoro","Indian/Kerguelen","Indian/Mahe","Indian/Maldives","Indian/Mauritius","Indian/Mayotte","Indian/Reunion","Iran","Israel","JST","Jamaica","Japan","Kwajalein","Libya","MET","MIT","MST","MST7MDT","Mexico/BajaNorte","Mexico/BajaSur","Mexico/General","NET","NST","NZ","NZ-CHAT","Navajo","PLT","PNT","PRC","PRT","PST","PST8PDT","Pacific/Apia","Pacific/Auckland","Pacific/Bougainville","Pacific/Chatham","Pacific/Chuuk","Pacific/Easter","Pacific/Efate","Pacific/Enderbury","Pacific/Fakaofo","Pacific/Fiji","Pacific/Funafuti","Pacific/Galapagos","Pacific/Gambier","Pacific/Guadalcanal","Pacific/Guam","Pacific/Honolulu","Pacific/Johnston","Pacific/Kanton","Pacific/Kiritimati","Pacific/Kosrae","Pacific/Kwajalein","Pacific/Majuro","Pacific/Marquesas","Pacific/Midway","Pacific/Nauru","Pacific/Niue","Pacific/Norfolk","Pacific/Noumea","Pacific/Pago_Pago","Pacific/Palau","Pacific/Pitcairn","Pacific/Pohnpei","Pacific/Ponape","Pacific/Port_Moresby","Pacific/Rarotonga","Pacific/Saipan","Pacific/Samoa","Pacific/Tahiti","Pacific/Tarawa","Pacific/Tongatapu","Pacific/Truk","Pacific/Wake","Pacific/Wallis","Pacific/Yap","Poland","Portugal","ROC","ROK","SST","Singapore","SystemV/AST4","SystemV/AST4ADT","SystemV/CST6","SystemV/CST6CDT","SystemV/EST5","SystemV/EST5EDT","SystemV/HST10","SystemV/MST7","SystemV/MST7MDT","SystemV/PST8","SystemV/PST8PDT","SystemV/YST9","SystemV/YST9YDT","Turkey","UCT","US/Alaska","US/Aleutian","US/Arizona","US/Central","US/East-Indiana","US/Eastern","US/Hawaii","US/Indiana-Starke","US/Michigan","US/Mountain","US/Pacific","US/Pacific-New","US/Samoa","UTC","Universal","VST","W-SU","WET","Zulu"]
+s:idenum	i:0	~N	i:0	a:["Africa/Abidjan","Africa/Accra","Africa/Bamako","Africa/Banjul","Africa/Bissau","Africa/Casablanca","Africa/Conakry","Africa/Dakar","Africa/El_Aaiun","Africa/Freetown","Africa/Lome","Africa/Monrovia","Africa/Nouakchott","Africa/Ouagadougou","Africa/Sao_Tome","Africa/Timbuktu","America/Danmarkshavn","Antarctica/Troll","Atlantic/Canary","Atlantic/Faeroe","Atlantic/Faroe","Atlantic/Madeira","Atlantic/Reykjavik","Atlantic/St_Helena","Eire","Etc/GMT","Etc/GMT+0","Etc/GMT-0","Etc/GMT0","Etc/Greenwich","Etc/UCT","Etc/UTC","Etc/Universal","Etc/Zulu","Europe/Belfast","Europe/Dublin","Europe/Guernsey","Europe/Isle_of_Man","Europe/Jersey","Europe/Lisbon","Europe/London","Factory","GB","GB-Eire","GMT","GMT+0","GMT-0","GMT0","Greenwich","Iceland","Portugal","UCT","UTC","Universal","WET","Zulu"]
+s:idenum	i:0	~N	i:-18000000	a:["America/Atikokan","America/Bogota","America/Cancun","America/Cayman","America/Coral_Harbour","America/Detroit","America/Eirunepe","America/Fort_Wayne","America/Grand_Turk","America/Guayaquil","America/Havana","America/Indiana/Indianapolis","America/Indiana/Marengo","America/Indiana/Petersburg","America/Indiana/Vevay","America/Indiana/Vincennes","America/Indiana/Winamac","America/Indianapolis","America/Iqaluit","America/Jamaica","America/Kentucky/Louisville","America/Kentucky/Monticello","America/Lima","America/Louisville","America/Montreal","America/Nassau","America/New_York","America/Nipigon","America/Panama","America/Pangnirtung","America/Port-au-Prince","America/Porto_Acre","America/Rio_Branco","America/Thunder_Bay","America/Toronto","Brazil/Acre","Canada/Eastern","Cuba","EST","EST5EDT","Etc/GMT+5","IET","Jamaica","SystemV/EST5","SystemV/EST5EDT","US/East-Indiana","US/Eastern","US/Michigan"]
+s:idenum	i:0	s:PT	~N	a:["Atlantic/Azores","Atlantic/Madeira","Europe/Lisbon","Portugal"]
+s:idenum	i:0	s:PT	i:0	a:["Atlantic/Madeira","Europe/Lisbon","Portugal"]
+s:idenum	i:0	s:PT	i:-18000000	a:[]
+s:idenum	i:0	s:US	~N	a:["AST","America/Adak","America/Anchorage","America/Atka","America/Boise","America/Chicago","America/Denver","America/Detroit","America/Fort_Wayne","America/Indiana/Indianapolis","America/Indiana/Knox","America/Indiana/Marengo","America/Indiana/Petersburg","America/Indiana/Tell_City","America/Indiana/Vevay","America/Indiana/Vincennes","America/Indiana/Winamac","America/Indianapolis","America/Juneau","America/Kentucky/Louisville","America/Kentucky/Monticello","America/Knox_IN","America/Los_Angeles","America/Louisville","America/Menominee","America/Metlakatla","America/New_York","America/Nome","America/North_Dakota/Beulah","America/North_Dakota/Center","America/North_Dakota/New_Salem","America/Phoenix","America/Shiprock","America/Sitka","America/Yakutat","CST","IET","Navajo","PNT","PST","Pacific/Honolulu","US/Alaska","US/Aleutian","US/Arizona","US/Central","US/East-Indiana","US/Eastern","US/Hawaii","US/Indiana-Starke","US/Michigan","US/Mountain","US/Pacific","US/Pacific-New"]
+s:idenum	i:0	s:US	i:0	a:[]
+s:idenum	i:0	s:US	i:-18000000	a:["America/Detroit","America/Fort_Wayne","America/Indiana/Indianapolis","America/Indiana/Marengo","America/Indiana/Petersburg","America/Indiana/Vevay","America/Indiana/Vincennes","America/Indiana/Winamac","America/Indianapolis","America/Kentucky/Louisville","America/Kentucky/Monticello","America/Louisville","America/New_York","IET","US/East-Indiana","US/Eastern","US/Michigan"]
+s:idenum	i:1	~N	~N	a:["Africa/Abidjan","Africa/Accra","Africa/Addis_Ababa","Africa/Algiers","Africa/Asmera","Africa/Bamako","Africa/Bangui","Africa/Banjul","Africa/Bissau","Africa/Blantyre","Africa/Brazzaville","Africa/Bujumbura","Africa/Cairo","Africa/Casablanca","Africa/Ceuta","Africa/Conakry","Africa/Dakar","Africa/Dar_es_Salaam","Africa/Djibouti","Africa/Douala","Africa/El_Aaiun","Africa/Freetown","Africa/Gaborone","Africa/Harare","Africa/Johannesburg","Africa/Juba","Africa/Kampala","Africa/Khartoum","Africa/Kigali","Africa/Kinshasa","Africa/Lagos","Africa/Libreville","Africa/Lome","Africa/Luanda","Africa/Lubumbashi","Africa/Lusaka","Africa/Malabo","Africa/Maputo","Africa/Maseru","Africa/Mbabane","Africa/Mogadishu","Africa/Monrovia","Africa/Nairobi","Africa/Ndjamena","Africa/Niamey","Africa/Nouakchott","Africa/Ouagadougou","Africa/Porto-Novo","Africa/Sao_Tome","Africa/Tripoli","Africa/Tunis","Africa/Windhoek","America/Adak","America/Anchorage","America/Anguilla","America/Antigua","America/Araguaina","America/Argentina/La_Rioja","America/Argentina/Rio_Gallegos","America/Argentina/Salta","America/Argentina/San_Juan","America/Argentina/San_Luis","America/Argentina/Tucuman","America/Argentina/Ushuaia","America/Aruba","America/Asuncion","America/Bahia","America/Bahia_Banderas","America/Barbados","America/Belem","America/Belize","America/Blanc-Sablon","America/Boa_Vista","America/Bogota","America/Boise","America/Buenos_Aires","America/Cambridge_Bay","America/Campo_Grande","America/Cancun","America/Caracas","America/Catamarca","America/Cayenne","America/Cayman","America/Chicago","America/Chihuahua","America/Ciudad_Juarez","America/Coral_Harbour","America/Cordoba","America/Costa_Rica","America/Creston","America/Cuiaba","America/Curacao","America/Danmarkshavn","America/Dawson","America/Dawson_Creek","America/Denver","America/Detroit","America/Dominica","America/Edmonton","America/Eirunepe","America/El_Salvador","America/Fort_Nelson","America/Fortaleza","America/Glace_Bay","America/Godthab","America/Goose_Bay","America/Grand_Turk","America/Grenada","America/Guadeloupe","America/Guatemala","America/Guayaquil","America/Guyana","America/Halifax","America/Havana","America/Hermosillo","America/Indiana/Knox","America/Indiana/Marengo","America/Indiana/Petersburg","America/Indiana/Tell_City","America/Indiana/Vevay","America/Indiana/Vincennes","America/Indiana/Winamac","America/Indianapolis","America/Inuvik","America/Iqaluit","America/Jamaica","America/Jujuy","America/Juneau","America/Kentucky/Monticello","America/Kralendijk","America/La_Paz","America/Lima","America/Los_Angeles","America/Louisville","America/Lower_Princes","America/Maceio","America/Managua","America/Manaus","America/Marigot","America/Martinique","America/Matamoros","America/Mazatlan","America/Mendoza","America/Menominee","America/Merida","America/Metlakatla","America/Mexico_City","America/Miquelon","America/Moncton","America/Monterrey","America/Montevideo","America/Montserrat","America/Nassau","America/New_York","America/Nome","America/Noronha","America/North_Dakota/Beulah","America/North_Dakota/Center","America/North_Dakota/New_Salem","America/Ojinaga","America/Panama","America/Paramaribo","America/Phoenix","America/Port-au-Prince","America/Port_of_Spain","America/Porto_Velho","America/Puerto_Rico","America/Punta_Arenas","America/Rankin_Inlet","America/Recife","America/Regina","America/Resolute","America/Rio_Branco","America/Santarem","America/Santiago","America/Santo_Domingo","America/Sao_Paulo","America/Scoresbysund","America/Sitka","America/St_Barthelemy","America/St_Johns","America/St_Kitts","America/St_Lucia","America/St_Thomas","America/St_Vincent","America/Swift_Current","America/Tegucigalpa","America/Thule","America/Tijuana","America/Toronto","America/Tortola","America/Vancouver","America/Whitehorse","America/Winnipeg","America/Yakutat","Antarctica/Casey","Antarctica/Davis","Antarctica/DumontDUrville","Antarctica/Macquarie","Antarctica/Mawson","Antarctica/McMurdo","Antarctica/Palmer","Antarctica/Rothera","Antarctica/Syowa","Antarctica/Troll","Antarctica/Vostok","Arctic/Longyearbyen","Asia/Aden","Asia/Almaty","Asia/Amman","Asia/Anadyr","Asia/Aqtau","Asia/Aqtobe","Asia/Ashgabat","Asia/Atyrau","Asia/Baghdad","Asia/Bahrain","Asia/Baku","Asia/Bangkok","Asia/Barnaul","Asia/Beirut","Asia/Bishkek","Asia/Brunei","Asia/Calcutta","Asia/Chita","Asia/Choibalsan","Asia/Colombo","Asia/Damascus","Asia/Dhaka","Asia/Dili","Asia/Dubai","Asia/Dushanbe","Asia/Famagusta","Asia/Gaza","Asia/Hebron","Asia/Hong_Kong","Asia/Hovd","Asia/Irkutsk","Asia/Jakarta","Asia/Jayapura","Asia/Jerusalem","Asia/Kabul","Asia/Kamchatka","Asia/Karachi","Asia/Katmandu","Asia/Khandyga","Asia/Krasnoyarsk","Asia/Kuala_Lumpur","Asia/Kuching","Asia/Kuwait","Asia/Macau","Asia/Magadan","Asia/Makassar","Asia/Manila","Asia/Muscat","Asia/Nicosia","Asia/Novokuznetsk","Asia/Novosibirsk","Asia/Omsk","Asia/Oral","Asia/Phnom_Penh","Asia/Pontianak","Asia/Pyongyang","Asia/Qatar","Asia/Qostanay","Asia/Qyzylorda","Asia/Rangoon","Asia/Riyadh","Asia/Saigon","Asia/Sakhalin","Asia/Samarkand","Asia/Seoul","Asia/Shanghai","Asia/Singapore","Asia/Srednekolymsk","Asia/Taipei","Asia/Tashkent","Asia/Tbilisi","Asia/Tehran","Asia/Thimphu","Asia/Tokyo","Asia/Tomsk","Asia/Ulaanbaatar","Asia/Urumqi","Asia/Ust-Nera","Asia/Vientiane","Asia/Vladivostok","Asia/Yakutsk","Asia/Yekaterinburg","Asia/Yerevan","Atlantic/Azores","Atlantic/Bermuda","Atlantic/Canary","Atlantic/Cape_Verde","Atlantic/Faeroe","Atlantic/Madeira","Atlantic/Reykjavik","Atlantic/South_Georgia","Atlantic/St_Helena","Atlantic/Stanley","Australia/Adelaide","Australia/Brisbane","Australia/Broken_Hill","Australia/Darwin","Australia/Eucla","Australia/Hobart","Australia/Lindeman","Australia/Lord_Howe","Australia/Melbourne","Australia/Perth","Australia/Sydney","CET","CST6CDT","EET","EST5EDT","Etc/GMT","Etc/GMT+1","Etc/GMT+10","Etc/GMT+11","Etc/GMT+12","Etc/GMT+2","Etc/GMT+3","Etc/GMT+4","Etc/GMT+5","Etc/GMT+6","Etc/GMT+7","Etc/GMT+8","Etc/GMT+9","Etc/GMT-1","Etc/GMT-10","Etc/GMT-11","Etc/GMT-12","Etc/GMT-13","Etc/GMT-14","Etc/GMT-2","Etc/GMT-3","Etc/GMT-4","Etc/GMT-5","Etc/GMT-6","Etc/GMT-7","Etc/GMT-8","Etc/GMT-9","Etc/UTC","Europe/Amsterdam","Europe/Andorra","Europe/Astrakhan","Europe/Athens","Europe/Belgrade","Europe/Berlin","Europe/Bratislava","Europe/Brussels","Europe/Bucharest","Europe/Budapest","Europe/Busingen","Europe/Chisinau","Europe/Copenhagen","Europe/Dublin","Europe/Gibraltar","Europe/Guernsey","Europe/Helsinki","Europe/Isle_of_Man","Europe/Istanbul","Europe/Jersey","Europe/Kaliningrad","Europe/Kiev","Europe/Kirov","Europe/Lisbon","Europe/Ljubljana","Europe/London","Europe/Luxembourg","Europe/Madrid","Europe/Malta","Europe/Mariehamn","Europe/Minsk","Europe/Monaco","Europe/Moscow","Europe/Oslo","Europe/Paris","Europe/Podgorica","Europe/Prague","Europe/Riga","Europe/Rome","Europe/Samara","Europe/San_Marino","Europe/Sarajevo","Europe/Saratov","Europe/Simferopol","Europe/Skopje","Europe/Sofia","Europe/Stockholm","Europe/Tallinn","Europe/Tirane","Europe/Ulyanovsk","Europe/Vaduz","Europe/Vatican","Europe/Vienna","Europe/Vilnius","Europe/Volgograd","Europe/Warsaw","Europe/Zagreb","Europe/Zurich","Factory","Indian/Antananarivo","Indian/Chagos","Indian/Christmas","Indian/Cocos","Indian/Comoro","Indian/Kerguelen","Indian/Mahe","Indian/Maldives","Indian/Mauritius","Indian/Mayotte","Indian/Reunion","MET","MST7MDT","PST8PDT","Pacific/Apia","Pacific/Auckland","Pacific/Bougainville","Pacific/Chatham","Pacific/Easter","Pacific/Efate","Pacific/Enderbury","Pacific/Fakaofo","Pacific/Fiji","Pacific/Funafuti","Pacific/Galapagos","Pacific/Gambier","Pacific/Guadalcanal","Pacific/Guam","Pacific/Honolulu","Pacific/Kiritimati","Pacific/Kosrae","Pacific/Kwajalein","Pacific/Majuro","Pacific/Marquesas","Pacific/Midway","Pacific/Nauru","Pacific/Niue","Pacific/Norfolk","Pacific/Noumea","Pacific/Pago_Pago","Pacific/Palau","Pacific/Pitcairn","Pacific/Ponape","Pacific/Port_Moresby","Pacific/Rarotonga","Pacific/Saipan","Pacific/Tahiti","Pacific/Tarawa","Pacific/Tongatapu","Pacific/Truk","Pacific/Wake","Pacific/Wallis","SystemV/AST4","SystemV/AST4ADT","SystemV/CST6","SystemV/CST6CDT","SystemV/EST5","SystemV/EST5EDT","SystemV/HST10","SystemV/MST7","SystemV/MST7MDT","SystemV/PST8","SystemV/PST8PDT","SystemV/YST9","SystemV/YST9YDT","WET"]
+s:idenum	i:1	~N	i:0	a:["Africa/Abidjan","Africa/Accra","Africa/Bamako","Africa/Banjul","Africa/Bissau","Africa/Casablanca","Africa/Conakry","Africa/Dakar","Africa/El_Aaiun","Africa/Freetown","Africa/Lome","Africa/Monrovia","Africa/Nouakchott","Africa/Ouagadougou","Africa/Sao_Tome","America/Danmarkshavn","Antarctica/Troll","Atlantic/Canary","Atlantic/Faeroe","Atlantic/Madeira","Atlantic/Reykjavik","Atlantic/St_Helena","Etc/GMT","Etc/UTC","Europe/Dublin","Europe/Guernsey","Europe/Isle_of_Man","Europe/Jersey","Europe/Lisbon","Europe/London","Factory","WET"]
+s:idenum	i:1	~N	i:-18000000	a:["America/Bogota","America/Cancun","America/Cayman","America/Coral_Harbour","America/Detroit","America/Eirunepe","America/Grand_Turk","America/Guayaquil","America/Havana","America/Indiana/Marengo","America/Indiana/Petersburg","America/Indiana/Vevay","America/Indiana/Vincennes","America/Indiana/Winamac","America/Indianapolis","America/Iqaluit","America/Jamaica","America/Kentucky/Monticello","America/Lima","America/Louisville","America/Nassau","America/New_York","America/Panama","America/Port-au-Prince","America/Rio_Branco","America/Toronto","EST5EDT","Etc/GMT+5","SystemV/EST5","SystemV/EST5EDT"]
+s:idenum	i:1	s:PT	~N	a:["Atlantic/Azores","Atlantic/Madeira","Europe/Lisbon"]
+s:idenum	i:1	s:PT	i:0	a:["Atlantic/Madeira","Europe/Lisbon"]
+s:idenum	i:1	s:PT	i:-18000000	a:[]
+s:idenum	i:1	s:US	~N	a:["America/Adak","America/Anchorage","America/Boise","America/Chicago","America/Denver","America/Detroit","America/Indiana/Knox","America/Indiana/Marengo","America/Indiana/Petersburg","America/Indiana/Tell_City","America/Indiana/Vevay","America/Indiana/Vincennes","America/Indiana/Winamac","America/Indianapolis","America/Juneau","America/Kentucky/Monticello","America/Los_Angeles","America/Louisville","America/Menominee","America/Metlakatla","America/New_York","America/Nome","America/North_Dakota/Beulah","America/North_Dakota/Center","America/North_Dakota/New_Salem","America/Phoenix","America/Sitka","America/Yakutat","Pacific/Honolulu"]
+s:idenum	i:1	s:US	i:0	a:[]
+s:idenum	i:1	s:US	i:-18000000	a:["America/Detroit","America/Indiana/Marengo","America/Indiana/Petersburg","America/Indiana/Vevay","America/Indiana/Vincennes","America/Indiana/Winamac","America/Indianapolis","America/Kentucky/Monticello","America/Louisville","America/New_York"]
+s:idenum	i:2	~N	~N	a:["Africa/Abidjan","Africa/Accra","Africa/Addis_Ababa","Africa/Algiers","Africa/Asmera","Africa/Bamako","Africa/Bangui","Africa/Banjul","Africa/Bissau","Africa/Blantyre","Africa/Brazzaville","Africa/Bujumbura","Africa/Cairo","Africa/Casablanca","Africa/Ceuta","Africa/Conakry","Africa/Dakar","Africa/Dar_es_Salaam","Africa/Djibouti","Africa/Douala","Africa/El_Aaiun","Africa/Freetown","Africa/Gaborone","Africa/Harare","Africa/Johannesburg","Africa/Juba","Africa/Kampala","Africa/Khartoum","Africa/Kigali","Africa/Kinshasa","Africa/Lagos","Africa/Libreville","Africa/Lome","Africa/Luanda","Africa/Lubumbashi","Africa/Lusaka","Africa/Malabo","Africa/Maputo","Africa/Maseru","Africa/Mbabane","Africa/Mogadishu","Africa/Monrovia","Africa/Nairobi","Africa/Ndjamena","Africa/Niamey","Africa/Nouakchott","Africa/Ouagadougou","Africa/Porto-Novo","Africa/Sao_Tome","Africa/Tripoli","Africa/Tunis","Africa/Windhoek","America/Adak","America/Anchorage","America/Anguilla","America/Antigua","America/Araguaina","America/Argentina/La_Rioja","America/Argentina/Rio_Gallegos","America/Argentina/Salta","America/Argentina/San_Juan","America/Argentina/San_Luis","America/Argentina/Tucuman","America/Argentina/Ushuaia","America/Aruba","America/Asuncion","America/Bahia","America/Bahia_Banderas","America/Barbados","America/Belem","America/Belize","America/Blanc-Sablon","America/Boa_Vista","America/Bogota","America/Boise","America/Buenos_Aires","America/Cambridge_Bay","America/Campo_Grande","America/Cancun","America/Caracas","America/Catamarca","America/Cayenne","America/Cayman","America/Chicago","America/Chihuahua","America/Ciudad_Juarez","America/Coral_Harbour","America/Cordoba","America/Costa_Rica","America/Creston","America/Cuiaba","America/Curacao","America/Danmarkshavn","America/Dawson","America/Dawson_Creek","America/Denver","America/Detroit","America/Dominica","America/Edmonton","America/Eirunepe","America/El_Salvador","America/Fort_Nelson","America/Fortaleza","America/Glace_Bay","America/Godthab","America/Goose_Bay","America/Grand_Turk","America/Grenada","America/Guadeloupe","America/Guatemala","America/Guayaquil","America/Guyana","America/Halifax","America/Havana","America/Hermosillo","America/Indiana/Knox","America/Indiana/Marengo","America/Indiana/Petersburg","America/Indiana/Tell_City","America/Indiana/Vevay","America/Indiana/Vincennes","America/Indiana/Winamac","America/Indianapolis","America/Inuvik","America/Iqaluit","America/Jamaica","America/Jujuy","America/Juneau","America/Kentucky/Monticello","America/Kralendijk","America/La_Paz","America/Lima","America/Los_Angeles","America/Louisville","America/Lower_Princes","America/Maceio","America/Managua","America/Manaus","America/Marigot","America/Martinique","America/Matamoros","America/Mazatlan","America/Mendoza","America/Menominee","America/Merida","America/Metlakatla","America/Mexico_City","America/Miquelon","America/Moncton","America/Monterrey","America/Montevideo","America/Montserrat","America/Nassau","America/New_York","America/Nome","America/Noronha","America/North_Dakota/Beulah","America/North_Dakota/Center","America/North_Dakota/New_Salem","America/Ojinaga","America/Panama","America/Paramaribo","America/Phoenix","America/Port-au-Prince","America/Port_of_Spain","America/Porto_Velho","America/Puerto_Rico","America/Punta_Arenas","America/Rankin_Inlet","America/Recife","America/Regina","America/Resolute","America/Rio_Branco","America/Santarem","America/Santiago","America/Santo_Domingo","America/Sao_Paulo","America/Scoresbysund","America/Sitka","America/St_Barthelemy","America/St_Johns","America/St_Kitts","America/St_Lucia","America/St_Thomas","America/St_Vincent","America/Swift_Current","America/Tegucigalpa","America/Thule","America/Tijuana","America/Toronto","America/Tortola","America/Vancouver","America/Whitehorse","America/Winnipeg","America/Yakutat","Antarctica/Casey","Antarctica/Davis","Antarctica/DumontDUrville","Antarctica/Macquarie","Antarctica/Mawson","Antarctica/McMurdo","Antarctica/Palmer","Antarctica/Rothera","Antarctica/Syowa","Antarctica/Troll","Antarctica/Vostok","Arctic/Longyearbyen","Asia/Aden","Asia/Almaty","Asia/Amman","Asia/Anadyr","Asia/Aqtau","Asia/Aqtobe","Asia/Ashgabat","Asia/Atyrau","Asia/Baghdad","Asia/Bahrain","Asia/Baku","Asia/Bangkok","Asia/Barnaul","Asia/Beirut","Asia/Bishkek","Asia/Brunei","Asia/Calcutta","Asia/Chita","Asia/Choibalsan","Asia/Colombo","Asia/Damascus","Asia/Dhaka","Asia/Dili","Asia/Dubai","Asia/Dushanbe","Asia/Famagusta","Asia/Gaza","Asia/Hebron","Asia/Hong_Kong","Asia/Hovd","Asia/Irkutsk","Asia/Jakarta","Asia/Jayapura","Asia/Jerusalem","Asia/Kabul","Asia/Kamchatka","Asia/Karachi","Asia/Katmandu","Asia/Khandyga","Asia/Krasnoyarsk","Asia/Kuala_Lumpur","Asia/Kuching","Asia/Kuwait","Asia/Macau","Asia/Magadan","Asia/Makassar","Asia/Manila","Asia/Muscat","Asia/Nicosia","Asia/Novokuznetsk","Asia/Novosibirsk","Asia/Omsk","Asia/Oral","Asia/Phnom_Penh","Asia/Pontianak","Asia/Pyongyang","Asia/Qatar","Asia/Qostanay","Asia/Qyzylorda","Asia/Rangoon","Asia/Riyadh","Asia/Saigon","Asia/Sakhalin","Asia/Samarkand","Asia/Seoul","Asia/Shanghai","Asia/Singapore","Asia/Srednekolymsk","Asia/Taipei","Asia/Tashkent","Asia/Tbilisi","Asia/Tehran","Asia/Thimphu","Asia/Tokyo","Asia/Tomsk","Asia/Ulaanbaatar","Asia/Urumqi","Asia/Ust-Nera","Asia/Vientiane","Asia/Vladivostok","Asia/Yakutsk","Asia/Yekaterinburg","Asia/Yerevan","Atlantic/Azores","Atlantic/Bermuda","Atlantic/Canary","Atlantic/Cape_Verde","Atlantic/Faeroe","Atlantic/Madeira","Atlantic/Reykjavik","Atlantic/South_Georgia","Atlantic/St_Helena","Atlantic/Stanley","Australia/Adelaide","Australia/Brisbane","Australia/Broken_Hill","Australia/Darwin","Australia/Eucla","Australia/Hobart","Australia/Lindeman","Australia/Lord_Howe","Australia/Melbourne","Australia/Perth","Australia/Sydney","Europe/Amsterdam","Europe/Andorra","Europe/Astrakhan","Europe/Athens","Europe/Belgrade","Europe/Berlin","Europe/Bratislava","Europe/Brussels","Europe/Bucharest","Europe/Budapest","Europe/Busingen","Europe/Chisinau","Europe/Copenhagen","Europe/Dublin","Europe/Gibraltar","Europe/Guernsey","Europe/Helsinki","Europe/Isle_of_Man","Europe/Istanbul","Europe/Jersey","Europe/Kaliningrad","Europe/Kiev","Europe/Kirov","Europe/Lisbon","Europe/Ljubljana","Europe/London","Europe/Luxembourg","Europe/Madrid","Europe/Malta","Europe/Mariehamn","Europe/Minsk","Europe/Monaco","Europe/Moscow","Europe/Oslo","Europe/Paris","Europe/Podgorica","Europe/Prague","Europe/Riga","Europe/Rome","Europe/Samara","Europe/San_Marino","Europe/Sarajevo","Europe/Saratov","Europe/Simferopol","Europe/Skopje","Europe/Sofia","Europe/Stockholm","Europe/Tallinn","Europe/Tirane","Europe/Ulyanovsk","Europe/Vaduz","Europe/Vatican","Europe/Vienna","Europe/Vilnius","Europe/Volgograd","Europe/Warsaw","Europe/Zagreb","Europe/Zurich","Indian/Antananarivo","Indian/Chagos","Indian/Christmas","Indian/Cocos","Indian/Comoro","Indian/Kerguelen","Indian/Mahe","Indian/Maldives","Indian/Mauritius","Indian/Mayotte","Indian/Reunion","Pacific/Apia","Pacific/Auckland","Pacific/Bougainville","Pacific/Chatham","Pacific/Easter","Pacific/Efate","Pacific/Enderbury","Pacific/Fakaofo","Pacific/Fiji","Pacific/Funafuti","Pacific/Galapagos","Pacific/Gambier","Pacific/Guadalcanal","Pacific/Guam","Pacific/Honolulu","Pacific/Kiritimati","Pacific/Kosrae","Pacific/Kwajalein","Pacific/Majuro","Pacific/Marquesas","Pacific/Midway","Pacific/Nauru","Pacific/Niue","Pacific/Norfolk","Pacific/Noumea","Pacific/Pago_Pago","Pacific/Palau","Pacific/Pitcairn","Pacific/Ponape","Pacific/Port_Moresby","Pacific/Rarotonga","Pacific/Saipan","Pacific/Tahiti","Pacific/Tarawa","Pacific/Tongatapu","Pacific/Truk","Pacific/Wake","Pacific/Wallis"]
+s:idenum	i:2	~N	i:0	a:["Africa/Abidjan","Africa/Accra","Africa/Bamako","Africa/Banjul","Africa/Bissau","Africa/Casablanca","Africa/Conakry","Africa/Dakar","Africa/El_Aaiun","Africa/Freetown","Africa/Lome","Africa/Monrovia","Africa/Nouakchott","Africa/Ouagadougou","Africa/Sao_Tome","America/Danmarkshavn","Antarctica/Troll","Atlantic/Canary","Atlantic/Faeroe","Atlantic/Madeira","Atlantic/Reykjavik","Atlantic/St_Helena","Europe/Dublin","Europe/Guernsey","Europe/Isle_of_Man","Europe/Jersey","Europe/Lisbon","Europe/London"]
+s:idenum	i:2	~N	i:-18000000	a:["America/Bogota","America/Cancun","America/Cayman","America/Coral_Harbour","America/Detroit","America/Eirunepe","America/Grand_Turk","America/Guayaquil","America/Havana","America/Indiana/Marengo","America/Indiana/Petersburg","America/Indiana/Vevay","America/Indiana/Vincennes","America/Indiana/Winamac","America/Indianapolis","America/Iqaluit","America/Jamaica","America/Kentucky/Monticello","America/Lima","America/Louisville","America/Nassau","America/New_York","America/Panama","America/Port-au-Prince","America/Rio_Branco","America/Toronto"]
+s:idenum	i:2	s:PT	~N	a:["Atlantic/Azores","Atlantic/Madeira","Europe/Lisbon"]
+s:idenum	i:2	s:PT	i:0	a:["Atlantic/Madeira","Europe/Lisbon"]
+s:idenum	i:2	s:PT	i:-18000000	a:[]
+s:idenum	i:2	s:US	~N	a:["America/Adak","America/Anchorage","America/Boise","America/Chicago","America/Denver","America/Detroit","America/Indiana/Knox","America/Indiana/Marengo","America/Indiana/Petersburg","America/Indiana/Tell_City","America/Indiana/Vevay","America/Indiana/Vincennes","America/Indiana/Winamac","America/Indianapolis","America/Juneau","America/Kentucky/Monticello","America/Los_Angeles","America/Louisville","America/Menominee","America/Metlakatla","America/New_York","America/Nome","America/North_Dakota/Beulah","America/North_Dakota/Center","America/North_Dakota/New_Salem","America/Phoenix","America/Sitka","America/Yakutat","Pacific/Honolulu"]
+s:idenum	i:2	s:US	i:0	a:[]
+s:idenum	i:2	s:US	i:-18000000	a:["America/Detroit","America/Indiana/Marengo","America/Indiana/Petersburg","America/Indiana/Vevay","America/Indiana/Vincennes","America/Indiana/Winamac","America/Indianapolis","America/Kentucky/Monticello","America/Louisville","America/New_York"]
+s:from_dtz	s:Europe/Lisbon	s:Europe/Lisbon
+s:from_dtz	s:+03:00	s:GMT+03:00
+s:from_dtz	s:-03:30	s:GMT-03:30
+s:from_dtz	s:EST	s:EST
+s:from_dtz	s:CEST	s:!Error
+s:from_dtz	s:-00:30	s:GMT+00:30
+s:from_dtz	s:+14:00	s:GMT+14:00
+s:tzdata	s:2023c
