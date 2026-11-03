@@ -11,6 +11,8 @@ path = "src/main.rs"
 
 [dependencies]
 php-vm = { path = "../php-vm" }
+php-ext-pcre = { path = "../php-ext-pcre" }
+php-ext-json = { path = "../php-ext-json" }
 libc = "0.2"
 
 [lints]
