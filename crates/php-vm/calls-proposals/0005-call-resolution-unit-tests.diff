@@ -1,0 +1,145 @@
+php-vm calls proposal 0005: unit tests for 0001-0004 (new module call/tests.rs, `mod tests;` in call.rs).
+Applies after 0004. Script-level checks of static/dynamic call resolution, callable deprecations,
+__call by-ref arguments and destructor/clone visibility, with expectations checked against php 8.3
+(master wording where they differ).
+
+diff --git a/crates/php-vm/src/call.rs b/crates/php-vm/src/call.rs
+index 6aacc96..07774c9 100644
+--- a/crates/php-vm/src/call.rs
++++ b/crates/php-vm/src/call.rs
+@@ -1817,3 +1817,6 @@ fn dynamic_call_forbidden(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+         &format!("Cannot call {}() dynamically", a.func_name()),
+     ))
+ }
++
++#[cfg(test)]
++mod tests;
+diff --git a/crates/php-vm/src/call/tests.rs b/crates/php-vm/src/call/tests.rs
+new file mode 100644
+index 0000000..0e5c426
+--- /dev/null
++++ b/crates/php-vm/src/call/tests.rs
+@@ -0,0 +1,123 @@
++//! Script-level tests of method, static and dynamic call resolution.
++
++use crate::{Vm, VmOptions};
++use std::cell::RefCell;
++use std::io::Write;
++use std::rc::Rc;
++
++#[derive(Clone, Default)]
++struct Sink(Rc<RefCell<Vec<u8>>>);
++
++impl Write for Sink {
++    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
++        self.0.borrow_mut().extend_from_slice(buf);
++        Ok(buf.len())
++    }
++    fn flush(&mut self) -> std::io::Result<()> {
++        Ok(())
++    }
++}
++
++fn run(src: &str) -> String {
++    let sink = Sink::default();
++    let mut vm = Vm::new(&VmOptions::default(), Box::new(sink.clone()));
++    vm.run_script(src.as_bytes(), "t.php");
++    drop(vm);
++    let out = sink.0.borrow().clone();
++    String::from_utf8_lossy(&out).into_owned()
++}
++
++const CATCH: &str = "catch (Error $e) { echo $e->getMessage(), \"\\n\"; }";
++
++#[test]
++fn static_call_resolution() {
++    let out = run(&format!(
++        "<?php class A {{ function m() {{}} static function s() {{ echo 'A::s ', static::class, \"\\n\"; }}\n\
++         function __call($n, $a) {{ echo \"A::__call $n\\n\"; }} }}\n\
++         class B extends A {{ function __call($n, $a) {{ echo \"B::__call $n\\n\"; }}\n\
++         function t() {{ A::nope(); parent::s();\n\
++         try {{ A::__construct(); }} {CATCH} }} }}\n\
++         class C {{ private function p() {{}} }}\n\
++         class D extends C {{ function t() {{ try {{ $this->P(); }} {CATCH} }} }}\n\
++         (new B)->t(); (new D)->t();\n\
++         try {{ C::P(); }} {CATCH}\n\
++         class S {{ static function __callStatic($n, $a) {{ var_dump($n); }} }}\n\
++         $m = \"a\\0b\"; S::$m();\n\
++         interface I {{ public static function __callStatic($n, $a); }}\n\
++         try {{ I::x(); }} {CATCH}"
++    ));
++    assert_eq!(
++        out,
++        "B::__call nope\n\
++         A::s B\n\
++         Cannot call constructor\n\
++         Call to private method C::P() from scope D\n\
++         Call to private method C::P() from global scope\n\
++         string(1) \"a\"\n\
++         Cannot call abstract method I::x()\n"
++    );
++}
++
++#[test]
++fn dynamic_call_resolution() {
++    let out = run(&format!(
++        "<?php class A {{ function m() {{}} function __call($n, $a) {{}} }}\n\
++         class B extends A {{ function t() {{\n\
++         try {{ $f = ['A', 'm']; $f(); }} {CATCH}\n\
++         try {{ $f = 'A::zz'; $f(); }} {CATCH}\n\
++         try {{ $f = 'extract'; $x = []; $f($x); }} {CATCH} }} }}\n\
++         (new B)->t();\n\
++         try {{ $f = [1 => 0, 2 => 0]; $f(); }} {CATCH}\n\
++         try {{ $f = [1, 2, 3]; $f(); }} {CATCH}\n\
++         try {{ $f = [1, 'x']; $f(); }} {CATCH}\n\
++         try {{ $f = ['A', 1]; $f(); }} {CATCH}\n\
++         try {{ $f = true; $f(); }} {CATCH}\n\
++         try {{ ('\\\\nope')(); }} {CATCH}"
++    ));
++    assert_eq!(
++        out,
++        "Non-static method A::m() cannot be called statically\n\
++         Non-static method A::zz() cannot be called statically\n\
++         Cannot call extract() dynamically\n\
++         Array callback has to contain indices 0 and 1\n\
++         Array callback must have exactly two elements\n\
++         First array member is not a valid class name or object\n\
++         Second array member is not a valid method\n\
++         Value of type bool is not callable\n\
++         Call to undefined function nope()\n"
++    );
++}
++
++#[test]
++fn callable_arguments_and_trampoline_references() {
++    let out = run(
++        "<?php class A { static function s() { echo \"A::s\\n\"; } }\n\
++         class B extends A { function t() { call_user_func('parent::s'); } }\n\
++         (new B)->t();\n\
++         function inc(&$x) { $x++; }\n\
++         class P { function __call($n, $a) { call_user_func_array('inc', $a); } }\n\
++         $v = 1; call_user_func_array([new P, 'x'], [&$v]); var_dump($v);",
++    );
++    assert_eq!(
++        out,
++        "\nDeprecated: Use of \"parent\" in callables is deprecated in t.php on line 2\n\
++         A::s\n\
++         int(2)\n"
++    );
++}
++
++#[test]
++fn destructor_and_clone_visibility() {
++    let out = run(&format!(
++        "<?php class Q {{ private function __destruct() {{}} protected function __clone() {{}} }}\n\
++         try {{ $q = new Q; clone $q; }} {CATCH}\n\
++         try {{ unset($q); }} {CATCH}\n\
++         $keep = new Q;"
++    ));
++    assert_eq!(
++        out,
++        "Call to protected method Q::__clone() from global scope\n\
++         Call to private Q::__destruct() from global scope\n\
++         \nWarning: Call to private Q::__destruct() from global scope during shutdown ignored in Unknown on line 0\n"
++    );
++}

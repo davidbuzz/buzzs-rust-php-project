@@ -1,0 +1,39 @@
+php-vm calls proposal 0003: `__call` trampolines keep by-reference arguments (zend_call_function does
+not separate references for ZEND_ACC_CALL_VIA_TRAMPOLINE). Applies after 0002. File: call.rs.
+
+call_user_func_array([$proxy, 'missing'], [&$x]) must hand __call an $args array that still holds the
+reference, so __call can pass it on by reference. call_pending skips the by-ref/deref argument loop
+for a trampoline (the loop checked __call's own ($name, $args) parameters), and push_user_frame no
+longer dereferences positional arguments when it packs $args. Arguments sent by DO_FCALL are values
+already. Fixes Zend/tests/magic_methods/bug50394.
+
+diff --git a/crates/php-vm/src/call.rs b/crates/php-vm/src/call.rs
+index 8678702..6aacc96 100644
+--- a/crates/php-vm/src/call.rs
++++ b/crates/php-vm/src/call.rs
+@@ -945,8 +945,11 @@ impl Vm {
+         if let Some(name) = call.magic_name {
+             // __call($name, $args)
+             let mut arr = HashTable::new();
++            // References passed by an internal caller stay references
++            // (`zend_call_function` does not separate them for
++            // trampolines, Zend/tests/magic_methods/bug50394.phpt).
+             for a in call.args.into_iter().flatten() {
+-                let _ = arr.push(a.deref());
++                let _ = arr.push(a);
+             }
+             for (k, v) in call.named {
+                 arr.insert(ArrayKey::Str(k), v.deref());
+@@ -1538,8 +1541,10 @@ impl Vm {
+         self.check_interrupt()?;
+         match call.func.clone() {
+             Func::User(uf) => {
+-                // Arguments passed by value to by-ref parameters.
+-                for (i, a) in call.args.iter_mut().enumerate() {
++                // Arguments passed by value to by-ref parameters (a
++                // `__call` trampoline takes every argument as passed).
++                let trampoline = call.magic_name.is_some();
++                for (i, a) in call.args.iter_mut().enumerate().filter(|_| !trampoline) {
+                     if let Some(v) = a {
+                         if uf.params.get(i).is_some_and(|p| p.by_ref)
+                             || (i >= uf.params.len()

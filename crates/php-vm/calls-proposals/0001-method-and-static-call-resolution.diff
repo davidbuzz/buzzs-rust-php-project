@@ -1,0 +1,454 @@
+php-vm calls proposal 0001: method and static call resolution (zend_std_get_method,
+zend_std_get_static_method, ZEND_INIT_STATIC_METHOD_CALL). Base: 3be3cf4. Files: call.rs, exec.rs.
+
+- zend_bad_method_call: "Call to private method A::m() from scope B" names the declaring class
+  and the method name as written at the call (it used the object's class and the canonical name).
+  Fixes tests/classes/private_003b, private_004, private_004b.
+- get_static_method_fallback: `A::undefined()` from an instance context uses the `__call` of $this's
+  class (the top-level one), not A's own. Fixes tests/classes/__call_004.
+- Trampoline names stop at the first NUL byte (zend_get_call_trampoline_func).
+  Fixes Zend/tests/magic_methods/bug46238.
+- The abstract check also covers trampolines: an abstract `__callStatic` in an interface or abstract
+  class gives "Cannot call abstract method Foo::bar()". Fixes magic_methods/gh_17718_001/002.
+- `Calling static trait method T::m is deprecated, it should only be called on a class using the trait`.
+- A literal `X::__construct()` calls the class constructor (op2 UNUSED): "Cannot call constructor"
+  when there is none, and "Cannot call private X::__construct()" when $this's class is not the
+  constructor's class. No other visibility check applies. Fixes magic_methods/call_static_006 and
+  tests/classes/ctor_visibility.
+- The InitStaticCall handler fetches the class before it reads the method name, so `$a::$b()`
+  warns about $a and throws "Class name must be a valid object or a string".
+  Fixes dynamic_call/dynamic_call_004.
+- self::/parent:: forwarding takes the called scope from $this's class or the frame's called scope,
+  as php-src does.
+
+diff --git a/crates/php-vm/src/call.rs b/crates/php-vm/src/call.rs
+index 76403bf..ae23fca 100644
+--- a/crates/php-vm/src/call.rs
++++ b/crates/php-vm/src/call.rs
+@@ -271,20 +271,7 @@ impl Vm {
+             if let Some(callm) = cls.magic.call.clone() {
+                 return Ok(self.magic_call(&callm, Some(o.clone()), cls.clone(), name));
+             }
+-            let vis = if m.visibility() == flags::PRIVATE {
+-                "private"
+-            } else {
+-                "protected"
+-            };
+-            return Err(self.make_throw(
+-                "Error",
+-                &format!(
+-                    "Call to {vis} method {}::{}() from {}",
+-                    object::display_name(&cls.name),
+-                    m.name,
+-                    scope_display(scope.as_ref())
+-                ),
+-            ));
++            return Err(self.bad_method_call(&m, name, scope.as_ref()));
+         }
+         if let Some(c) = self.closure_method_call(o, &lc) {
+             return Ok(c);
+@@ -292,14 +279,50 @@ impl Vm {
+         if let Some(callm) = cls.magic.call.clone() {
+             return Ok(self.magic_call(&callm, Some(o.clone()), cls.clone(), name));
+         }
+-        Err(self.make_throw(
++        Err(self.undefined_method(cls, name))
++    }
++
++    /// `zend_bad_method_call`: `Call to private method A::m() from scope B`
++    /// (the declaring class and the name as written at the call).
++    fn bad_method_call(&mut self, m: &Method, name: &ZStr, scope: Option<&Rc<Class>>) -> Throw {
++        let vis = if m.visibility() == flags::PRIVATE {
++            "private"
++        } else {
++            "protected"
++        };
++        self.make_throw(
++            "Error",
++            &format!(
++                "Call to {vis} method {}::{}() from {}",
++                object::display_name(&m.scope().name),
++                name.to_string_lossy(),
++                scope_display(scope)
++            ),
++        )
++    }
++
++    /// `zend_undefined_method`.
++    fn undefined_method(&mut self, cls: &Class, name: &ZStr) -> Throw {
++        self.make_throw(
+             "Error",
+             &format!(
+                 "Call to undefined method {}::{}()",
+                 object::display_name(&cls.name),
+                 name.to_string_lossy()
+             ),
+-        ))
++        )
++    }
++
++    /// `zend_non_static_method_call`.
++    fn non_static_method_call(&mut self, fbc: &StaticFbc) -> Throw {
++        self.make_throw(
++            "Error",
++            &format!(
++                "Non-static method {}::{}() cannot be called statically",
++                object::display_name(&fbc.method.scope().name),
++                fbc.name()
++            ),
++        )
+     }
+ 
+     fn pending_for_method(
+@@ -328,136 +351,174 @@ impl Vm {
+             this,
+             scope: Some(m.scope()),
+             called: Some(called),
+-            magic_name: Some(name.clone()),
++            magic_name: Some(trampoline_name(name)),
+             ..PendingCall::new(m.func.clone())
+         }
+     }
+ 
+-    /// Prepares `Class::name()`.
+-    pub(crate) fn static_method_call(
+-        &mut self,
+-        cls: &Rc<Class>,
+-        name: &ZStr,
+-        forward: bool,
+-    ) -> VmResult<PendingCall> {
+-        let scope = self.scope();
+-        let this = self
+-            .frames
+-            .iter()
+-            .rev()
+-            .find(|f| f.kind != FrameKind::Builtin)
+-            .and_then(|f| f.this.clone());
+-        let cur_called = self
+-            .frames
++    /// `$this` and the called scope of the calling user frame.
++    fn user_this_and_called(&self) -> (Option<Obj>, Option<Rc<Class>>) {
++        self.frames
+             .iter()
+             .rev()
+             .find(|f| f.kind != FrameKind::Builtin)
+-            .and_then(|f| f.called.clone());
+-        let lc = ZStr::from(name.to_ascii_lowercase());
+-        let found = cls.methods.get(&lc).cloned();
+-        let m = match found {
+-            Some(m) if self.can_access_method(&m, scope.as_ref()) => m,
+-            other => {
+-                // __call in object context, else __callStatic.
+-                if let Some(t) = &this {
+-                    if object::class_of(t).is_subclass_of(cls) {
+-                        if let Some(callm) = cls.magic.call.clone() {
+-                            return Ok(self.magic_call(
+-                                &callm,
+-                                Some(t.clone()),
+-                                object::class_of(t).clone(),
+-                                name,
+-                            ));
+-                        }
++            .map_or((None, None), |f| (f.this.clone(), f.called.clone()))
++    }
++
++    /// `get_static_method_fallback`: the `__call` of `$this`'s class when
++    /// `$this` is an instance of `cls` (`tests/classes/__call_004.phpt`),
++    /// else `cls::__callStatic`.
++    fn static_method_fallback(&self, cls: &Rc<Class>, name: &ZStr) -> Option<StaticFbc> {
++        if cls.magic.call.is_some() {
++            if let (Some(t), _) = self.user_this_and_called() {
++                let oc = object::class_of(&t);
++                if oc.is_subclass_of(cls) {
++                    if let Some(c) = oc.magic.call.clone() {
++                        return Some(StaticFbc {
++                            method: c,
++                            magic: Some(trampoline_name(name)),
++                        });
+                     }
+                 }
+-                if let Some(cs) = cls.magic.call_static.clone() {
+-                    return Ok(self.magic_call(&cs, None, cls.clone(), name));
+-                }
+-                return Err(match other {
+-                    Some(m) => {
+-                        let vis = if m.visibility() == flags::PRIVATE {
+-                            "private"
+-                        } else {
+-                            "protected"
+-                        };
+-                        self.make_throw(
+-                            "Error",
+-                            &format!(
+-                                "Call to {vis} method {}::{}() from {}",
+-                                object::display_name(&cls.name),
+-                                m.name,
+-                                scope_display(scope.as_ref())
+-                            ),
+-                        )
++            }
++        }
++        cls.magic.call_static.clone().map(|c| StaticFbc {
++            method: c,
++            magic: Some(trampoline_name(name)),
++        })
++    }
++
++    /// `zend_std_get_static_method`: the method, or a `__call` /
++    /// `__callStatic` trampoline, for `cls::name()`.
++    fn std_get_static_method(&mut self, cls: &Rc<Class>, name: &ZStr) -> VmResult<StaticFbc> {
++        let lc = name.to_ascii_lowercase();
++        let fbc = match cls.methods.get(&lc).cloned() {
++            Some(m) => {
++                let scope = self.scope();
++                if self.can_access_method(&m, scope.as_ref()) {
++                    StaticFbc {
++                        method: m,
++                        magic: None,
+                     }
+-                    None => self.make_throw(
+-                        "Error",
+-                        &format!(
+-                            "Call to undefined method {}::{}()",
+-                            object::display_name(&cls.name),
+-                            name.to_string_lossy()
+-                        ),
+-                    ),
+-                });
++                } else if let Some(f) = self.static_method_fallback(cls, name) {
++                    f
++                } else {
++                    return Err(self.bad_method_call(&m, name, scope.as_ref()));
++                }
+             }
++            None => match self.static_method_fallback(cls, name) {
++                Some(f) => f,
++                None => return Err(self.undefined_method(cls, name)),
++            },
+         };
+-        if m.is_abstract() {
++        let scope = fbc.method.scope();
++        if fbc.method.is_abstract() {
+             return Err(self.make_throw(
+                 "Error",
+                 &format!(
+                     "Cannot call abstract method {}::{}()",
+-                    object::display_name(&m.scope().name),
+-                    m.name
++                    object::display_name(&scope.name),
++                    fbc.name()
+                 ),
+             ));
+         }
+-        if m.is_static() {
+-            let called = if forward {
+-                cur_called
+-                    .filter(|c| c.is_subclass_of(cls))
+-                    .unwrap_or_else(|| cls.clone())
+-            } else {
+-                cls.clone()
++        if scope.is_trait() {
++            self.deprecated(&format!(
++                "Calling static trait method {}::{} is deprecated, it should only be called on a class using the trait",
++                object::display_name(&scope.name),
++                fbc.name()
++            ))?;
++        }
++        Ok(fbc)
++    }
++
++    /// Prepares `Class::name()` (`ZEND_INIT_STATIC_METHOD_CALL`);
++    /// `forward` for `self::`/`parent::`/`static::`, which keep the
++    /// called scope.
++    pub(crate) fn static_method_call(
++        &mut self,
++        cls: &Rc<Class>,
++        name: &ZStr,
++        forward: bool,
++    ) -> VmResult<PendingCall> {
++        let fbc = self.std_get_static_method(cls, name)?;
++        self.finish_static_call(cls, fbc, forward)
++    }
++
++    /// The `$this`/called-scope part of `ZEND_INIT_STATIC_METHOD_CALL`.
++    fn finish_static_call(
++        &mut self,
++        cls: &Rc<Class>,
++        fbc: StaticFbc,
++        forward: bool,
++    ) -> VmResult<PendingCall> {
++        let (this, cur_called) = self.user_this_and_called();
++        if !fbc.method.is_static() {
++            // A non-static method needs a compatible `$this`.
++            return match this.filter(|t| object::class_of(t).is_subclass_of(cls)) {
++                Some(t) => {
++                    let called = object::class_of(&t).clone();
++                    Ok(fbc.into_call(Some(t), called))
++                }
++                None => Err(self.non_static_method_call(&fbc)),
+             };
+-            return Ok(PendingCall {
+-                scope: Some(m.scope()),
+-                called: Some(called),
+-                ..PendingCall::new(m.func.clone())
+-            });
+-        }
+-        // Non-static method: needs a compatible $this.
+-        if let Some(t) = this {
+-            if object::class_of(&t).is_subclass_of(cls) {
+-                let called = object::class_of(&t).clone();
+-                return Ok(PendingCall {
+-                    this: Some(t),
+-                    scope: Some(m.scope()),
+-                    called: Some(called),
+-                    ..PendingCall::new(m.func.clone())
+-                });
+-            }
+         }
+-        Err(self.make_throw(
+-            "Error",
+-            &format!(
+-                "Non-static method {}::{}() cannot be called statically",
+-                object::display_name(&m.scope().name),
+-                m.name
+-            ),
+-        ))
++        let called = if forward {
++            match &this {
++                Some(t) => object::class_of(t).clone(),
++                None => cur_called
++                    .filter(|c| c.is_subclass_of(cls))
++                    .unwrap_or_else(|| cls.clone()),
++            }
++        } else {
++            cls.clone()
++        };
++        Ok(fbc.into_call(None, called))
+     }
+ 
+-    pub(crate) fn op_init_static_call(&mut self, class: &ClassSpec, name: Value) -> VmResult<()> {
+-        let Value::Str(name) = name else {
+-            return Err(self.make_throw("Error", "Method name must be a string"));
++    /// `ZEND_INIT_STATIC_METHOD_CALL`. `literal_name` is set when the
++    /// method name is a literal in the source: a literal `__construct`
++    /// calls the class constructor directly (op2 `UNUSED`).
++    pub(crate) fn op_init_static_call(
++        &mut self,
++        cls: &Rc<Class>,
++        forward: bool,
++        name: Value,
++        literal_name: bool,
++    ) -> VmResult<()> {
++        let name = match name {
++            Value::Str(s) => s,
++            Value::Reference(r) => match r.get() {
++                Value::Str(s) => s,
++                _ => return Err(self.make_throw("Error", "Method name must be a string")),
++            },
++            _ => return Err(self.make_throw("Error", "Method name must be a string")),
++        };
++        let call = if literal_name && name.eq_ignore_ascii_case(b"__construct") {
++            let Some(ctor) = cls.magic.construct.clone() else {
++                return Err(self.make_throw("Error", "Cannot call constructor"));
++            };
++            if ctor.visibility() == flags::PRIVATE {
++                if let (Some(t), _) = self.user_this_and_called() {
++                    if !Rc::ptr_eq(object::class_of(&t), &ctor.scope()) {
++                        return Err(self.make_throw(
++                            "Error",
++                            &format!(
++                                "Cannot call private {}::__construct()",
++                                object::display_name(&cls.name)
++                            ),
++                        ));
++                    }
++                }
++            }
++            let fbc = StaticFbc {
++                method: ctor,
++                magic: None,
++            };
++            self.finish_static_call(cls, fbc, forward)?
++        } else {
++            self.static_method_call(cls, &name, forward)?
+         };
+-        let forward = matches!(
+-            class,
+-            ClassSpec::SelfClass | ClassSpec::Parent | ClassSpec::Static
+-        );
+-        let cls = self.resolve_class_spec(class)?;
+-        let call = self.static_method_call(&cls, &name, forward)?;
+         self.frame_mut().calls.push(call);
+         Ok(())
+     }
+@@ -1631,3 +1692,40 @@ fn frame_args(values: &[Value]) -> Vec<Option<Value>> {
+     }
+     out
+ }
++
++/// The function name of a `__call`/`__callStatic` trampoline: the called
++/// name up to the first NUL byte (`zend_get_call_trampoline_func`, see
++/// `Zend/tests/magic_methods/bug46238.phpt`).
++fn trampoline_name(name: &ZStr) -> ZStr {
++    match name.as_bytes().iter().position(|&b| b == 0) {
++        Some(p) => ZStr::from(&name.as_bytes()[..p]),
++        None => name.clone(),
++    }
++}
++
++/// A function found by `zend_std_get_static_method`: a method, or the
++/// `__call`/`__callStatic` handler behind a trampoline for `magic`.
++struct StaticFbc {
++    method: Rc<Method>,
++    magic: Option<ZStr>,
++}
++
++impl StaticFbc {
++    /// `fbc->common.function_name`.
++    fn name(&self) -> String {
++        match &self.magic {
++            Some(n) => n.to_string_lossy(),
++            None => self.method.name.to_string_lossy(),
++        }
++    }
++
++    fn into_call(self, this: Option<Obj>, called: Rc<Class>) -> PendingCall {
++        PendingCall {
++            this,
++            scope: Some(self.method.scope()),
++            called: Some(called),
++            magic_name: self.magic,
++            ..PendingCall::new(self.method.func.clone())
++        }
++    }
++}
+diff --git a/crates/php-vm/src/exec.rs b/crates/php-vm/src/exec.rs
+index 6677cc2..bc1bb3a 100644
+--- a/crates/php-vm/src/exec.rs
++++ b/crates/php-vm/src/exec.rs
+@@ -1,7 +1,7 @@
+ //! The interpreter loop (`execute_ex`) and simple instructions.
+ 
+ use crate::object;
+-use crate::opcode::{BinKind, CastKind, Op, Operand, UnKind};
++use crate::opcode::{BinKind, CastKind, ClassSpec, Op, Operand, UnKind};
+ use crate::vm::{FinState, Frame, RetTarget, Throw, Vm, VmResult};
+ use php_runtime::{ops, BinaryOp, ErrorLevel, PhpRef, Value, ZArray, ZStr};
+ use std::rc::Rc;
+@@ -541,8 +541,15 @@ impl Vm {
+                         Flow::Next
+                     }
+                     Op::InitStaticCall { class, name } => {
++                        // The class is fetched before the method name.
++                        let cls = self.resolve_class_spec(class)?;
++                        let forward = matches!(
++                            class,
++                            ClassSpec::SelfClass | ClassSpec::Parent | ClassSpec::Static
++                        );
+                         let n = self.read(*name)?;
+-                        self.op_init_static_call(class, n)?;
++                        let literal = matches!(name, Operand::Lit(_));
++                        self.op_init_static_call(&cls, forward, n, literal)?;
+                         Flow::Next
+                     }
+                     Op::InitParentHook { prop, set } => {

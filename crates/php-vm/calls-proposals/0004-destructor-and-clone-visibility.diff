@@ -1,0 +1,101 @@
+php-vm calls proposal 0004: destructor and __clone visibility (zend_objects_destroy_object, ZEND_CLONE /
+zend_bad_method_call). Applies after 0003. Files: exec.rs (call_destructor, new executed_scope helper),
+props.rs (clone message).
+
+- A private/protected destructor called while code is executing throws
+  Error "Call to private X::__destruct() from scope Y|global scope". Private: the object's class must
+  be zend_get_executed_scope(). Protected: zend_check_protected. With nothing executing (shutdown) it
+  is skipped with Warning "Call to private X::__destruct() from global scope during shutdown ignored",
+  reported at Unknown:0. The old `!in_shutdown` condition had both cases backwards.
+  Fixes tests/classes/destructor_visibility_001, 002, factory_and_singleton_002, 005, 006, 009, 010.
+- __clone visibility uses the master wording "Call to private method X::__clone() from global scope"
+  (zend_bad_method_call, declaring class). Fixes tests/classes/factory_and_singleton_007, 008.
+  (props.rs is outside the agreed call.rs/exec.rs scope: a one-line message change, take it or leave it.)
+
+diff --git a/crates/php-vm/src/exec.rs b/crates/php-vm/src/exec.rs
+index bc1bb3a..9bb91ad 100644
+--- a/crates/php-vm/src/exec.rs
++++ b/crates/php-vm/src/exec.rs
+@@ -1215,23 +1215,36 @@ impl Vm {
+             }
+             return Ok(());
+         };
+-        if m.visibility() != crate::func::flags::PUBLIC && !self.in_shutdown {
+-            // Calling a private/protected destructor from the wrong scope.
+-            let scope = self.frames.last().and_then(|f| f.scope.clone());
+-            let allowed = scope.is_some_and(|s| self.can_access_method(&m, Some(&s)));
+-            if !allowed {
+-                let vis = if m.visibility() == crate::func::flags::PRIVATE {
+-                    "private"
+-                } else {
+-                    "protected"
+-                };
+-                let scope_name = scope_display(self.frames.last().and_then(|f| f.scope.as_ref()));
++        // `zend_objects_destroy_object`: a private destructor runs only
++        // from its own class scope, a protected one from a related scope.
++        // While code executes the call fails with an Error; with nothing
++        // executing (shutdown) it is skipped with a warning.
++        if m.visibility() != crate::func::flags::PUBLIC {
++            let private = m.visibility() == crate::func::flags::PRIVATE;
++            let vis = if private { "private" } else { "protected" };
++            if !self.is_executing() {
+                 self.warning(&format!(
+-                    "Call to {vis} {}::__destruct() from {scope_name} during shutdown ignored",
+-                    cls.name
++                    "Call to {vis} {}::__destruct() from global scope during shutdown ignored",
++                    object::display_name(&cls.name)
+                 ))?;
+                 return Ok(());
+             }
++            let scope = self.executed_scope();
++            let allowed = if private {
++                scope.as_ref().is_some_and(|s| Rc::ptr_eq(s, &cls))
++            } else {
++                self.can_access_method(&m, scope.as_ref())
++            };
++            if !allowed {
++                return Err(self.make_throw(
++                    "Error",
++                    &format!(
++                        "Call to {vis} {}::__destruct() from {}",
++                        object::display_name(&cls.name),
++                        scope_display(scope.as_ref())
++                    ),
++                ));
++            }
+         }
+         self.call_method(o, &m, Vec::new())?;
+         // A native destructor hook also runs after a user `__destruct`
+@@ -1300,6 +1313,16 @@ impl Vm {
+         self.error(ErrorLevel::Deprecated.bits(), msg)
+     }
+ 
++    /// `zend_get_executed_scope`: the scope of the innermost user function
++    /// or method (internal functions only count when they are methods).
++    pub(crate) fn executed_scope(&self) -> Option<Rc<crate::class::Class>> {
++        self.frames
++            .iter()
++            .rev()
++            .find(|f| f.kind != crate::vm::FrameKind::Builtin || f.scope.is_some())
++            .and_then(|f| f.scope.clone())
++    }
++
+     /// The current class scope.
+     pub(crate) fn scope(&self) -> Option<Rc<crate::class::Class>> {
+         self.frames
+diff --git a/crates/php-vm/src/props.rs b/crates/php-vm/src/props.rs
+index b5fec11..2f61a0b 100644
+--- a/crates/php-vm/src/props.rs
++++ b/crates/php-vm/src/props.rs
+@@ -1247,8 +1247,9 @@ impl Vm {
+                 return Err(self.make_throw(
+                     "Error",
+                     &format!(
+-                        "Call to {vis} {}::__clone() from {}",
+-                        object::display_name(&cls.name),
++                        "Call to {vis} method {}::{}() from {}",
++                        object::display_name(&m.scope().name),
++                        m.name,
+                         scope_display(scope.as_ref())
+                     ),
+                 ));

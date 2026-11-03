@@ -1,0 +1,350 @@
+php-vm calls proposal 0002: dynamic calls and callables (zend_init_dynamic_call_string/_array,
+zend_fcall_info_init, zend_forbid_dynamic_call). Applies after 0001. Files: call.rs, fiber.rs, enums/callable.rs.
+
+- `$f()` follows INIT_DYNAMIC_CALL. "A::m" (last `::`) and ["A", "m"] go through
+  zend_std_get_static_method and never bind $this, so a non-static method (including a `__call`
+  trampoline) gives "Non-static method A::m() cannot be called statically".
+  [$obj, "parent::m"] is not special. Error texts: "Array callback has to contain indices 0 and 1",
+  "Second array member is not a valid method", "Value of type %s is not callable", and
+  "Call to undefined function bar()" without the leading `\`.
+  Fixes dynamic_call/bug63173, dynamic_call_non_static, dynamic_fully_qualified_call.
+- Internal callers (call_value / call_value_named: call_user_func(_array), array_map, ...) and the
+  Fiber constructor resolve through zend_is_callable (resolve_callable_value). This gives
+  `self::`/`parent::`/`static::` and ["C", "parent::m"] callables, and $this for non-static methods
+  of the calling class. The dynamic-call path is the fallback for errors.
+  Fixes dynamic_call/bug48770, bug48770_2, bug48770_3, bug78898, magic_methods/bug45186,
+  bug45186_2, tests/classes/abstract_user_call.
+- call_builtin checks a pure `callable` / `?callable` parameter once with zend_is_callable(v, false),
+  as Z_PARAM_FUNC does. The "Use of "self" in callables" and `Callables of the form ["C", "parent::f"]`
+  deprecations fire at argument-parsing time, and autoload runs only once.
+  Fixes tests/classes/autoload_012.
+- enums/callable.rs: the static-method fallback in zend_is_callable_check_func tries $this's `__call`
+  before `__callStatic`, like get_static_method_fallback. call_user_func('BAR::www') from inside a
+  BAR instance goes to __call (magic_methods/bug45186).
+- A dynamic call of extract/compact/get_defined_vars/func_get_args/func_get_arg/func_num_args
+  (@forbid-dynamic-calls) runs a copy of the builtin whose handler throws "Cannot call %s()
+  dynamically" after argument parsing. This needs no PendingCall/Frame layout change.
+  Fixes dynamic_call/dynamic_call_005, 006, 008.
+
+diff --git a/crates/php-vm/src/call.rs b/crates/php-vm/src/call.rs
+index ae23fca..8678702 100644
+--- a/crates/php-vm/src/call.rs
++++ b/crates/php-vm/src/call.rs
+@@ -97,20 +97,29 @@ impl Vm {
+     }
+ 
+     pub(crate) fn op_init_dyn_call(&mut self, callee: Value) -> VmResult<()> {
+-        let call = self.resolve_callable_for_call(&callee)?;
++        let mut call = self.resolve_callable_for_call(&callee)?;
++        forbid_dynamic_call(&mut call);
+         self.frame_mut().calls.push(call);
+         Ok(())
+     }
+ 
+-    /// Resolves a callable value for a dynamic call (`$f()`).
++    /// Resolves a callable value for a dynamic call (`$f()`,
++    /// `ZEND_INIT_DYNAMIC_CALL`): `"A::m"` and `["A", "m"]` name static
++    /// methods only (no `$this` is bound and `self`/`parent` are not
++    /// special), `[$obj, "m"]` goes through `get_method`.
+     pub(crate) fn resolve_callable_for_call(&mut self, callee: &Value) -> VmResult<PendingCall> {
+         match callee {
++            Value::Reference(r) => {
++                let inner = r.get();
++                self.resolve_callable_for_call(&inner)
++            }
+             Value::Str(s) => {
+-                if let Some(p) = find_double_colon(s.as_bytes()) {
++                // `zend_init_dynamic_call_string`: the last `::`.
++                if let Some(p) = rfind_double_colon(s.as_bytes()) {
+                     let cls_name = ZStr::from(&s.as_bytes()[..p]);
+                     let m = ZStr::from(&s.as_bytes()[p + 2..]);
+                     let cls = self.lookup_class_or_error(&cls_name)?;
+-                    return self.static_method_call(&cls, &m, false);
++                    return self.dynamic_static_call(&cls, &m);
+                 }
+                 let name = s.as_bytes().strip_prefix(b"\\").unwrap_or(s.as_bytes());
+                 let lc = ZStr::from(name.to_ascii_lowercase());
+@@ -118,7 +127,10 @@ impl Vm {
+                     Some(f) => Ok(PendingCall::new(f)),
+                     None => Err(self.make_throw(
+                         "Error",
+-                        &format!("Call to undefined function {}()", s.to_string_lossy()),
++                        &format!(
++                            "Call to undefined function {}()",
++                            String::from_utf8_lossy(name)
++                        ),
+                     )),
+                 }
+             }
+@@ -132,41 +144,26 @@ impl Vm {
+                     (a.get(&ArrayKey::Int(0)), a.get(&ArrayKey::Int(1)))
+                 else {
+                     return Err(
+-                        self.make_throw("Error", "Array callback must have exactly two elements")
++                        self.make_throw("Error", "Array callback has to contain indices 0 and 1")
+                     );
+                 };
+                 let target = target.deref();
+-                let method = method.deref();
+-                let Value::Str(m) = method else {
+-                    return Err(self.make_throw("Error", "Method name must be a string"));
++                if !matches!(target, Value::Str(_) | Value::Object(_)) {
++                    return Err(self.make_throw(
++                        "Error",
++                        "First array member is not a valid class name or object",
++                    ));
++                }
++                let Value::Str(m) = method.deref() else {
++                    return Err(self.make_throw("Error", "Second array member is not a valid method"));
+                 };
+                 match target {
+-                    Value::Object(o) => {
+-                        if let Some(p) = find_double_colon(m.as_bytes()) {
+-                            // [$obj, 'parent::m']
+-                            let cn = ZStr::from(&m.as_bytes()[..p]);
+-                            let mn = ZStr::from(&m.as_bytes()[p + 2..]);
+-                            let cls = if cn.eq_ignore_ascii_case(b"parent") {
+-                                object::class_of(&o).parent.clone().ok_or_else(|| {
+-                                    self.make_throw("Error", "Cannot use \"parent\" when current class scope has no parent")
+-                                })?
+-                            } else {
+-                                self.lookup_class_or_error(&cn)?
+-                            };
+-                            let mut c = self.method_call_on(&o, &cls, &mn)?;
+-                            c.called = Some(object::class_of(&o).clone());
+-                            return Ok(c);
+-                        }
+-                        self.method_call(&o, &m)
+-                    }
++                    Value::Object(o) => self.method_call(&o, &m),
+                     Value::Str(cn) => {
+                         let cls = self.lookup_class_or_error(&cn)?;
+-                        self.static_method_call(&cls, &m, false)
++                        self.dynamic_static_call(&cls, &m)
+                     }
+-                    _ => Err(self.make_throw(
+-                        "Error",
+-                        "First array member is not a valid class name or object",
+-                    )),
++                    _ => unreachable!("checked above"),
+                 }
+             }
+             Value::Object(o) => {
+@@ -190,10 +187,40 @@ impl Vm {
+                     )),
+                 }
+             }
+-            _ => Err(self.make_throw("Error", "Value not callable")),
++            other => Err(self.make_throw(
++                "Error",
++                &format!("Value of type {} is not callable", other.type_name()),
++            )),
+         }
+     }
+ 
++    /// Resolves a callable value the way `zend_fcall_info_init` does for
++    /// internal callers (`call_user_func`, `array_map`, `Fiber`): with the
++    /// `zend_is_callable_ex` rules (`"parent::m"`, `["A", "parent::m"]`,
++    /// `$this` for non-static `["A", "m"]`). Deprecations were already
++    /// raised by the callable argument check, so they are suppressed here.
++    pub(crate) fn resolve_callable_value(&mut self, callee: &Value) -> VmResult<PendingCall> {
++        if let Value::Object(o) = callee {
++            if let Some(c) = self.closure_call(o) {
++                return Ok(c);
++            }
++        }
++        match self.zend_is_callable(callee, true)? {
++            Ok(c) => Ok(c),
++            Err(_) => self.resolve_callable_for_call(callee),
++        }
++    }
++
++    /// `["A", "m"]()` / `"A::m"()`: `zend_std_get_static_method`, then a
++    /// non-static method is an error (no `$this` is passed on).
++    fn dynamic_static_call(&mut self, cls: &Rc<Class>, name: &ZStr) -> VmResult<PendingCall> {
++        let fbc = self.std_get_static_method(cls, name)?;
++        if !fbc.method.is_static() {
++            return Err(self.non_static_method_call(&fbc));
++        }
++        Ok(fbc.into_call(None, cls.clone()))
++    }
++
+     pub(crate) fn op_init_method_call(&mut self, obj: Value, name: Value) -> VmResult<()> {
+         let Value::Str(name) = name else {
+             return Err(self.make_throw("Error", "Method name must be a string"));
+@@ -1088,19 +1115,28 @@ impl Vm {
+                 strict,
+                 internal_arg: Some((&fname, i + 1, &pname)),
+             };
+-            let ok = match self.verify_type(ty, v, &ctx) {
+-                Ok(ok) => ok,
++            // A `callable` parameter (Z_PARAM_FUNC): resolved once, with
++            // the "Use of \"self\" in callables" style deprecations and a
++            // single autoload attempt (tests/classes/autoload_012.phpt).
++            let pure_callable = ty.mask & crate::types::mask::CALLABLE != 0
++                && !ty.has_classes()
++                && ty.mask & !(crate::types::mask::CALLABLE | crate::types::mask::NULL) == 0;
++            let checked = if pure_callable {
++                self.zend_is_callable(v, false).map(Result::err)
++            } else {
++                self.verify_type(ty, v, &ctx).map(|ok| {
++                    (!ok).then(String::new)
++                })
++            };
++            let failure = match checked {
++                Ok(f) => f,
+                 Err(e) => {
+                     self.pop_frames_to(depth);
+                     return Err(e);
+                 }
+             };
+-            if !ok {
+-                let msg = if ty.mask & crate::types::mask::CALLABLE != 0
+-                    && !ty.has_classes()
+-                    && ty.mask & !(crate::types::mask::CALLABLE | crate::types::mask::NULL) == 0
+-                {
+-                    let why = self.callable_error(v);
++            if let Some(why) = failure {
++                let msg = if pure_callable {
+                     let nul = if ty.allows_null() { " or null" } else { "" };
+                     format!(
+                         "{fname}(): Argument #{} (${pname}) must be a valid callback{nul}, {why}",
+@@ -1538,7 +1574,7 @@ impl Vm {
+ 
+     /// Calls a callable value with arguments (`call_user_func`).
+     pub fn call_value(&mut self, callable: &Value, args: Vec<Value>) -> VmResult<Value> {
+-        let mut call = self.resolve_callable_for_call(callable)?;
++        let mut call = self.resolve_callable_value(callable)?;
+         call.args = args.into_iter().map(Some).collect();
+         self.call_pending(call)
+     }
+@@ -1550,7 +1586,7 @@ impl Vm {
+         args: Vec<Value>,
+         named: Vec<(ZStr, Value)>,
+     ) -> VmResult<Value> {
+-        let mut call = self.resolve_callable_for_call(callable)?;
++        let mut call = self.resolve_callable_value(callable)?;
+         call.args = args.into_iter().map(Some).collect();
+         for (k, v) in named {
+             let pos = if call.magic_name.is_some() {
+@@ -1693,6 +1729,11 @@ fn frame_args(values: &[Value]) -> Vec<Option<Value>> {
+     out
+ }
+ 
++/// Position of the last `::` in a callable string.
++fn rfind_double_colon(s: &[u8]) -> Option<usize> {
++    s.windows(2).rposition(|w| w == b"::")
++}
++
+ /// The function name of a `__call`/`__callStatic` trampoline: the called
+ /// name up to the first NUL byte (`zend_get_call_trampoline_func`, see
+ /// `Zend/tests/magic_methods/bug46238.phpt`).
+@@ -1729,3 +1770,45 @@ impl StaticFbc {
+         }
+     }
+ }
++
++/// Builtins flagged `ZEND_ACC2_FORBID_DYN_CALLS`: they read or write the
++/// caller's symbol table or arguments.
++const FORBID_DYN_CALLS: [&[u8]; 6] = [
++    b"extract",
++    b"compact",
++    b"get_defined_vars",
++    b"func_get_args",
++    b"func_get_arg",
++    b"func_num_args",
++];
++
++/// `zend_forbid_dynamic_call()` for `$f()`: a dynamic call of a builtin
++/// that inspects its caller runs a stand-in that throws `Cannot call %s()
++/// dynamically` once its arguments have been parsed.
++fn forbid_dynamic_call(call: &mut PendingCall) {
++    let Func::Builtin(b) = &call.func else {
++        return;
++    };
++    if !FORBID_DYN_CALLS
++        .iter()
++        .any(|n| b.name.eq_ignore_ascii_case(n))
++    {
++        return;
++    }
++    call.func = Func::Builtin(Rc::new(Builtin {
++        name: b.name.clone(),
++        params: b.params.clone(),
++        defaults: b.defaults.clone(),
++        required: b.required,
++        return_type: b.return_type.clone(),
++        flags: b.flags,
++        handler: dynamic_call_forbidden,
++    }));
++}
++
++fn dynamic_call_forbidden(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
++    Err(vm.make_throw(
++        "Error",
++        &format!("Cannot call {}() dynamically", a.func_name()),
++    ))
++}
+diff --git a/crates/php-vm/src/enums/callable.rs b/crates/php-vm/src/enums/callable.rs
+index 2600f81..10e74cd 100644
+--- a/crates/php-vm/src/enums/callable.rs
++++ b/crates/php-vm/src/enums/callable.rs
+@@ -380,10 +380,24 @@ impl Vm {
+                 let accessible = m
+                     .as_ref()
+                     .is_some_and(|m| self.can_access_method(m, ctx.scope.as_ref()));
+-                if let (Some(m), true) = (m.clone(), accessible) {
++                // get_static_method_fallback: the `__call` of `$this` when
++                // it is an instance of the class, else `__callStatic`.
++                let this_call = if cs.magic.call.is_some() {
++                    ctx.this
++                        .clone()
++                        .filter(|t| instance_of(object::class_of(t), cs))
++                        .and_then(|t| object::class_of(&t).magic.call.clone().map(|c| (c, t)))
++                } else {
++                    None
++                };
++                if let (Some(m), true) = (m, accessible) {
+                     handler = Some(Handler::Method(m));
+-                } else if m.is_some() && cs.magic.call_static.is_none() {
+-                    handler = None;
++                } else if let Some((c, t)) = this_call {
++                    handler = Some(Handler::Magic(c, mname.clone()));
++                    via_handler = true;
++                    if fcc.object.is_none() {
++                        fcc.object = Some(t);
++                    }
+                 } else if let Some(c) = cs.magic.call_static.clone() {
+                     handler = Some(Handler::Magic(c, mname.clone()));
+                     via_handler = true;
+@@ -395,17 +409,6 @@ impl Vm {
+                         }
+                     }
+                 }
+-                if handler.is_none() && m.is_none() {
+-                    if let (Some(c), Some(t)) = (cs.magic.call.clone(), ctx.this.clone()) {
+-                        if instance_of(object::class_of(&t), cs) {
+-                            handler = Some(Handler::Magic(c, mname.clone()));
+-                            via_handler = true;
+-                            if fcc.object.is_none() {
+-                                fcc.object = Some(t);
+-                            }
+-                        }
+-                    }
+-                }
+             }
+         }
+         let Some(handler) = handler else {
+diff --git a/crates/php-vm/src/fiber.rs b/crates/php-vm/src/fiber.rs
+index 1a8833b..f426b9d 100644
+--- a/crates/php-vm/src/fiber.rs
++++ b/crates/php-vm/src/fiber.rs
+@@ -453,7 +453,7 @@ fn fiber_construct(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+         return Err(vm.fiber_error("Cannot call constructor twice"));
+     }
+     let callable = a.at(0);
+-    let call = vm.resolve_callable_for_call(&callable)?;
++    let call = vm.resolve_callable_value(&callable)?;
+     object::set_internal(&o, FiberData::new(call, callable));
+     Ok(Value::Null)
+ }
