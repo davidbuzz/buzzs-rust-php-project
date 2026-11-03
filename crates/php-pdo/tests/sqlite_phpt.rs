@@ -595,3 +595,47 @@ fn reentrant_bind() {
     h.echo("done\n");
     assert_phpt!(h, "pdo_sqlite", "pdo_sqlite_reentrant_bind.phpt");
 }
+
+#[test]
+fn subclasses_connect() {
+    for (file, connect) in [("pdosqlite_001.phpt", false), ("pdosqlite_002.phpt", true)] {
+        let mut h = TestHost::new();
+        let db = if connect {
+            h.connect("PDO", "sqlite::memory:", None).unwrap()
+        } else {
+            h.new_pdo("Pdo\\Sqlite", "sqlite::memory:", None).unwrap()
+        };
+        assert!(h.is_a(
+            &TestHost::obj(&db).class_name().to_string_lossy(),
+            "Pdo\\Sqlite"
+        ));
+        h.query(&db, "CREATE TABLE t (id INT AUTO INCREMENT, name TEXT)")
+            .unwrap();
+        h.query(&db, "INSERT INTO t VALUES (NULL, 'PHP')").unwrap();
+        h.query(&db, "INSERT INTO t VALUES (NULL, 'PHP6')").unwrap();
+        h.add_function("lower", |_, a| {
+            Ok(Value::Str(a[0].as_str().unwrap().to_ascii_lowercase()))
+        });
+        let sq = TestHost::pdo(&db).sqlite().unwrap();
+        assert!(sq.create_function(b"testing", s("lower"), 1, 2048));
+        let q = h.query(&db, "SELECT testing(name) FROM t").unwrap();
+        h.foreach(&q, |h, _, row| h.dump(&row)).unwrap();
+        h.echo("Fin.");
+        assert_phpt!(h, "pdo_sqlite", &format!("subclasses/{file}"));
+    }
+
+    let mut h = TestHost::new();
+    h.add_class(Class::new("MyPdoSqlite").extends("Pdo\\Sqlite"));
+    let db = h.connect("MyPdoSqlite", "sqlite::memory:", None).unwrap();
+    if TestHost::obj(&db).class_name().to_string_lossy() == "MyPdoSqlite" {
+        h.echo("OK");
+    }
+    assert_phpt!(h, "pdo_sqlite", "subclasses/pdosqlite_006.phpt");
+
+    let mut h = TestHost::new();
+    h.add_class(Class::new("MyPDO").extends("PDO"));
+    if let Err(e) = h.connect("MyPDO", "sqlite::memory:", None) {
+        print_err(&mut h, &e);
+    }
+    assert_phpt!(h, "pdo_sqlite", "subclasses/pdosqlite_007.phpt");
+}
