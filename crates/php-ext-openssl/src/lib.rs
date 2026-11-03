@@ -20,9 +20,50 @@
 //! `E_NOTICE` with the usual `func(): ` prefix, and its [`Throw`] values
 //! become `ValueError` / `Exception` throwables.
 //!
-//! The `ssl://` / `tls://` transports and `stream_socket_enable_crypto()`
-//! belong to the streams layer, which has no transport registration API
-//! yet; see the crate README section in `FEATURE_GAP.md`.
+//! The master-only `Openssl\OpensslException`, `Openssl\Psk` and
+//! `Openssl\Session` classes are provided too ([`session`]).
+//!
+//! # TLS stream transports (not wired yet)
+//!
+//! The `ssl://` / `tls://` / `tlsv1.x://` transports,
+//! `stream_socket_enable_crypto()` and `stream_socket_get_crypto_status()`
+//! belong to the streams layer (`php-streams` / `php-ext-streams`), which
+//! currently has no way for another crate to plug in a transport. To wire
+//! `php_openssl::tls` (client handshake over any `Read + Write`) in, the
+//! streams crates need to provide:
+//!
+//! 1. a **transport registry** (`php_stream_xport_register`): a
+//!    thread-local or VM-owned map from scheme (`ssl`, `tls`, `tlsv1.0`,
+//!    `tlsv1.1`, `tlsv1.2`, `tlsv1.3`) to a factory called by
+//!    `stream_socket_client()` / `stream_socket_server()` / `fsockopen()`
+//!    with the parsed host/port, timeout, flags, persistent id and the
+//!    `ssl` context options (as a `php_runtime` array), returning a
+//!    `Stream` (and contributing to `stream_get_transports()`);
+//! 2. a **crypto hook on socket streams**: `StreamOption::Crypto
+//!    { setup(method, session_stream), enable(bool), status }` routed by
+//!    `stream_socket_enable_crypto()` / `stream_socket_get_crypto_status()`
+//!    to the stream's ops, plus a way to *replace a stream's ops in place*
+//!    (the resource must stay the same while the plain socket ops become
+//!    TLS ops wrapping them), or `StreamCell` access that lets an
+//!    extension swap the `Stream` it holds;
+//! 3. **accepted-connection hooks** so `stream_socket_accept()` on an
+//!    `ssl://` server produces a TLS stream performing the server handshake
+//!    with the listener's context (`SNI_server_certs`, `local_cert`,
+//!    `local_pk`, `passphrase`, session/PSK callbacks …);
+//! 4. **metadata hooks**: `stream_get_meta_data()["crypto"]`
+//!    (`protocol`, `cipher_name`, `cipher_bits`, `cipher_version`,
+//!    `alpn_protocol`) and writing `peer_certificate` /
+//!    `peer_certificate_chain` / `session_meta` back into the stream's
+//!    context (`capture_peer_cert*` options), which needs mutable access to
+//!    the context resource of a stream;
+//! 5. the `StreamErrorCode` mapping for TLS failures (`stream_last_errors()`).
+//!
+//! On the library side `php_openssl::tls` implements the client
+//! (verification policy, `peer_fingerprint`, ALPN, `security_level`,
+//! `crypto_method`, PHP's warning texts); the server side, renegotiation
+//! limiting, session resumption callbacks, PSK and early data still have to
+//! be written. Until then the ~100 `ext/openssl/tests` that start a TLS
+//! server through `ServerClientTestCase.inc` fail.
 
 // Native handlers must match the VM's `NativeFn` signature even when they
 // cannot fail.
