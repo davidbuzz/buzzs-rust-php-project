@@ -1,0 +1,941 @@
+hooks-proposal 0001: property hooks / asymmetric visibility / readonly runtime
+semantics in props.rs (+ one call-site line in place.rs).
+Base: 3be3cf4.  Apply with `git apply crates/php-vm/hooks-proposals/0001-props-hooks-asym-readonly-runtime.diff`.
+
+php-src behaviour (Zend/zend_object_handlers.c, zend_execute.c, zend_objects.c):
+ * zend_std_unset_property: the readonly / set-visibility errors only apply
+   when the slot is defined, IS_PROP_UNINIT, or no __unset() can take over
+   (or its guard is active); unsetting an uninitialized typed property just
+   clears IS_PROP_UNINIT and bypasses __unset().  Error scope is that of
+   the running __unset() ("from scope D").
+ * zend_std_has_property: uninitialized typed properties skip __isset();
+   set-only virtual hooked properties throw "Cannot read from set-only
+   virtual property"; virtual props read from their own hook throw
+   "Must not read from virtual property".
+ * zend_fetch_property_address (BP_VAR_W/RW/UNSET), i.e. property_container
+   (now takes `rw`) and read_property_for_unset:
+   - readonly / no-set-access properties: objects are handed out as a copy
+     (`$r = &$o->ro` no longer turns the slot into a reference), everything
+     else throws "Cannot indirectly modify readonly property C::$p" /
+     "Cannot indirectly modify private(set) property C::$p from ..." --
+     also for an uninitialized readonly from inside the class (`$this->a[] = 1`,
+     `$this->p = &$x`), and for nested unset (`unset($o->ro['k'])`);
+   - RW fetch of an uninitialized typed property: "Typed property ... must
+     not be accessed before initialization" before the visibility errors;
+   - hooked properties outside their hooks go through the get hook (or the
+     backing value without one); non-reference, non-object results throw
+     "Indirect modification of C::$p is not allowed"; nested unset through
+     a get hook returning an ArrayAccess object reaches offsetUnset.
+ * zend_assign_to_property_reference: `$o->p =& $x` where the fetch yields a
+   value (hooked property, __get()) throws "Cannot assign by reference to
+   overloaded object" (after running the get hook); inside the hook an
+   uninitialized typed backing value is bound.
+ * IS_PROP_REINITABLE: during __clone() each initialized readonly property
+   may be re-initialized once ("Cannot modify readonly property" on the
+   second write).  New `Vm::with_reinitable_props()` wraps __clone() and is
+   meant for __unserialize() too (see 0002).  The "already re-initialized"
+   marker lives in `prop_guards` under a new kind 4 (G_REINIT), cleared per
+   object before/after cloning.
+ * is_protected_compatible_scope(prop_info->prototype->ce, scope): protected
+   access and protected(set) are checked against the class of the topmost
+   non-private declaration (new `prop_proto_class`).
+ * ZEND_INIT_PARENT_PROPERTY_HOOK_CALL: "Cannot use "parent" when current
+   class scope has no parent", "Cannot access private property A::$p"; the
+   implicit trampoline is `A::$p::get()` (0 args) / `A::$p::set()` (1 arg),
+   scoped to the declaring class, so ZPP errors read "A::$prop::get() expects
+   exactly 0 arguments, 1 given"; parent set writes through references.
+ * Hooks imported from a trait run in the using class's scope (not the trait).
+ * zend_should_call_hook / lazy objects: an initialized lazy proxy's real
+   instance counts as the hook's $this; backing-store access of a hooked
+   property initializes a lazy object (lazy_object_for skips hooked props).
+
+Fixes (measured on 3be3cf4, property_hooks + asymmetric_visibility +
+readonly_props: 226 -> 255 of 304; whole Zend/tests + ext/reflection with
+--baseline: 0 new failures):
+ asymmetric_visibility/{__unset,bug001,object_reference,variation,variation_nested}
+ property_hooks/{array_access,bug002,bug007,get_by_ref,get_by_ref_auto,
+   gh16615_001,gh18000,gh19044-8,oss-fuzz-471486164-002,
+   parent_get_in_class_with_no_parent,parent_get_plain_zpp,parent_set_plain_zpp,
+   parent_superfluous_args,parent_wrong_property_info,set,trait_scope}
+ readonly_props/{array_append_initialization,cache_slot,gh7942,magic_get_set,
+   readonly_clone_error1,readonly_clone_error4,variation,variation_nested}  (29 tests)
+
+diff --git a/crates/php-vm/src/place.rs b/crates/php-vm/src/place.rs
+index 7a42ddd..0213050 100644
+--- a/crates/php-vm/src/place.rs
++++ b/crates/php-vm/src/place.rs
+@@ -855,7 +855,7 @@ impl Vm {
+                     };
+                 }
+                 self.typed_prop_dim_write_check(&obj, name, &segs[i + 1], &wop)?;
+-                match self.property_container(&obj, name)? {
++                match self.property_container(&obj, name, matches!(wop, WOp::FetchRw))? {
+                     PropContainer::Declared(idx) => {
+                         let mut diags = Vec::new();
+                         let mut w = wop;
+diff --git a/crates/php-vm/src/props.rs b/crates/php-vm/src/props.rs
+index b5fec11..d26e63f 100644
+--- a/crates/php-vm/src/props.rs
++++ b/crates/php-vm/src/props.rs
+@@ -27,6 +27,9 @@ const G_GET: u8 = 0;
+ const G_SET: u8 = 1;
+ const G_ISSET: u8 = 2;
+ const G_UNSET: u8 = 3;
++/// Not a recursion guard: marks a readonly property of an object being
++/// cloned that was already re-initialized (`IS_PROP_REINITABLE` cleared).
++const G_REINIT: u8 = 4;
+ 
+ impl Vm {
+     /// Whether an object is an instance of the (lower-case) class name.
+@@ -74,8 +77,9 @@ impl Vm {
+                 }
+             }
+             _ => {
+-                let ok = scope.is_some_and(|s| match self.class_by_name(&pi.class) {
+-                    Some(decl) => s.is_subclass_of(&decl) || decl.is_subclass_of(s),
++                // `is_protected_compatible_scope(prototype->ce, scope)`.
++                let ok = scope.is_some_and(|s| match self.prop_proto_class(pi) {
++                    Some(root) => s.is_subclass_of(&root) || root.is_subclass_of(s),
+                     None => true,
+                 });
+                 if ok {
+@@ -87,6 +91,23 @@ impl Vm {
+         }
+     }
+ 
++    /// `prop_info->prototype->ce`: the class of the topmost non-private
++    /// declaration of an instance property.
++    fn prop_proto_class(&self, pi: &PropInfo) -> Option<Rc<Class>> {
++        let mut root = self.class_by_name(&pi.class)?;
++        while let Some(p) = root.parent.clone() {
++            if p.prop_map
++                .get(&pi.name)
++                .is_some_and(|x| x.visibility() != flags::PRIVATE && x.flags & flags::STATIC == 0)
++            {
++                root = p;
++            } else {
++                break;
++            }
++        }
++        Some(root)
++    }
++
+     fn guard_active(&self, o: &Obj, name: &ZStr, kind: u8) -> bool {
+         self.prop_guards.contains(&(o.handle(), name.clone(), kind))
+     }
+@@ -165,11 +186,42 @@ impl Vm {
+         };
+         let Some(uf) = &f.ufunc else { return false };
+         match &uf.hook_prop {
+-            Some(n) => *n == pi.name && f.this.as_ref().is_some_and(|t| Obj::ptr_eq(t, o)),
++            // `zend_should_call_hook`: the hook's `$this`, or the real
++            // instance of an initialized lazy proxy.
++            Some(n) => {
++                *n == pi.name
++                    && f.this.as_ref().is_some_and(|t| {
++                        Obj::ptr_eq(t, o)
++                            || object::data(t).lazy.borrow().as_ref().is_some_and(|i| {
++                                i.proxy
++                                    && i.initialized
++                                    && i.instance.as_ref().is_some_and(|x| Obj::ptr_eq(x, o))
++                            })
++                    })
++            }
+             None => false,
+         }
+     }
+ 
++    /// The object holding the backing value of hooked property `pi`
++    /// (`lazy_object_for` leaves hooked properties alone): a lazy slot
++    /// initializes the object first, an initialized proxy forwards to its
++    /// real instance.
++    fn lazy_backing(&mut self, o: &Obj, pi: &PropInfo) -> VmResult<Obj> {
++        let lazy = object::data(o).lazy.borrow().as_ref().is_some_and(|i| {
++            if i.initialized {
++                i.proxy
++            } else {
++                !i.initializing && i.lazy_slots.get(pi.slot as usize).copied().unwrap_or(false)
++            }
++        });
++        if lazy {
++            self.lazy_object_for(o, None)
++        } else {
++            Ok(o.clone())
++        }
++    }
++
+     fn call_hook(
+         &mut self,
+         o: &Obj,
+@@ -177,8 +229,11 @@ impl Vm {
+         pi: &PropInfo,
+         args: Vec<Value>,
+     ) -> VmResult<Value> {
++        // Hooks imported from a trait run in the scope of the using class.
+         let decl = self
+             .class_by_name(f.class_name.as_ref().unwrap_or(&pi.class))
++            .filter(|c| !c.is_trait())
++            .or_else(|| self.class_by_name(&pi.class))
+             .unwrap_or_else(|| object::class_of(o).clone());
+         let mut call = crate::vm::PendingCall {
+             this: Some(o.clone()),
+@@ -222,6 +277,7 @@ impl Vm {
+     }
+ 
+     /// Reads `$o->name`.
++    #[allow(clippy::too_many_lines)]
+     pub(crate) fn read_property(
+         &mut self,
+         o: &Obj,
+@@ -262,6 +318,13 @@ impl Vm {
+                         ));
+                     }
+                 }
++                let backing;
++                let o = if pi.hooks.is_some() {
++                    backing = self.lazy_backing(o, &pi)?;
++                    &backing
++                } else {
++                    o
++                };
+                 let v = object::data(o).slots.borrow()[pi.slot as usize].clone();
+                 if let Some(v) = v {
+                     return Ok(v.deref());
+@@ -347,18 +410,7 @@ impl Vm {
+             return true;
+         }
+         if pi.flags & flags::SET_PROTECTED != 0 {
+-            if let Some(decl) = self.class_by_name(&pi.class) {
+-                let mut root = decl.clone();
+-                while let Some(p) = root.parent.clone() {
+-                    if p.prop_map
+-                        .get(&pi.name)
+-                        .is_some_and(|x| x.visibility() != flags::PRIVATE)
+-                    {
+-                        root = p;
+-                    } else {
+-                        break;
+-                    }
+-                }
++            if let Some(root) = self.prop_proto_class(pi) {
+                 return s.is_subclass_of(&root) || root.is_subclass_of(&s);
+             }
+         }
+@@ -402,8 +454,7 @@ impl Vm {
+         if pi.flags & (flags::READONLY | flags::SET_MASK) == 0 {
+             return Ok(());
+         }
+-        let d = object::data(o);
+-        if pi.flags & flags::READONLY != 0 && initialized && d.flags.get() & oflags::CLONING == 0 {
++        if pi.flags & flags::READONLY != 0 && initialized && self.readonly_locked(o, pi) {
+             let msg = if op == "unset" {
+                 format!(
+                     "Cannot unset readonly property {}::${}",
+@@ -426,6 +477,33 @@ impl Vm {
+         Ok(())
+     }
+ 
++    /// Whether an initialized readonly property may not be modified: only
++    /// while cloning (`__clone()`, clone-with) is each one reinitializable,
++    /// once (`IS_PROP_REINITABLE`).
++    fn readonly_locked(&self, o: &Obj, pi: &PropInfo) -> bool {
++        object::data(o).flags.get() & oflags::CLONING == 0
++            || self
++                .prop_guards
++                .contains(&(o.handle(), pi.name.clone(), G_REINIT))
++    }
++
++    /// Clears `IS_PROP_REINITABLE` after a readonly property was written
++    /// during cloning.
++    fn consume_reinit(&mut self, o: &Obj, pi: &PropInfo) {
++        if pi.flags & flags::READONLY != 0 && object::data(o).flags.get() & oflags::CLONING != 0 {
++            self.prop_guards
++                .insert((o.handle(), pi.name.clone(), G_REINIT));
++        }
++    }
++
++    /// Forgets the reinitialization markers of an object.
++    fn clear_reinit(&mut self, o: &Obj) {
++        if object::class_of(o).props.iter().any(|p| p.is_readonly()) {
++            let h = o.handle();
++            self.prop_guards.retain(|k| !(k.0 == h && k.2 == G_REINIT));
++        }
++    }
++
+     /// Coerces a value for a typed property.
+     pub(crate) fn coerce_prop(
+         &mut self,
+@@ -471,6 +549,7 @@ impl Vm {
+     }
+ 
+     /// Writes `$o->name = v`; returns the assigned value.
++    #[allow(clippy::too_many_lines)]
+     pub(crate) fn write_property(&mut self, o: &Obj, name: &ZStr, v: Value) -> VmResult<Value> {
+         let lazy_target = self.lazy_object_for(o, Some(name))?;
+         let o = &lazy_target;
+@@ -508,6 +587,13 @@ impl Vm {
+                         ));
+                     }
+                 }
++                let backing;
++                let o = if pi.hooks.is_some() {
++                    backing = self.lazy_backing(o, &pi)?;
++                    &backing
++                } else {
++                    o
++                };
+                 let idx = pi.slot as usize;
+                 let cur_defined = object::data(o).slots.borrow()[idx].is_some();
+                 let magic_ok = !cur_defined
+@@ -526,6 +612,7 @@ impl Vm {
+                 if let Some(f) = object::data(o).readonly_init.borrow_mut().get_mut(idx) {
+                     *f = false;
+                 }
++                self.consume_reinit(o, &pi);
+                 if let Some(r) = typed_ref {
+                     return self.assign_ref(&r, v);
+                 }
+@@ -648,7 +735,7 @@ impl Vm {
+         if let Some(r) = self.uninit_typed_prop_ref(o, name)? {
+             return Ok(r);
+         }
+-        match self.property_container(o, name)? {
++        match self.property_container(o, name, false)? {
+             PropContainer::Declared(idx) => {
+                 let r = {
+                     let d = object::data(o);
+@@ -672,8 +759,16 @@ impl Vm {
+         }
+     }
+ 
+-    /// The storage of a property for nested writes (`$o->a[] = 1`).
+-    pub(crate) fn property_container(&mut self, o: &Obj, name: &ZStr) -> VmResult<PropContainer> {
++    /// The storage of a property for nested writes (`$o->a[] = 1`): the
++    /// `BP_VAR_W` (or, with `rw`, `BP_VAR_RW`) fetch of
++    /// `zend_fetch_property_address` — `get_property_ptr_ptr`, falling back
++    /// to `read_property` for hooks, `__get()` and restricted properties.
++    pub(crate) fn property_container(
++        &mut self,
++        o: &Obj,
++        name: &ZStr,
++        rw: bool,
++    ) -> VmResult<PropContainer> {
+         let lazy_target = self.lazy_object_for(o, Some(name))?;
+         let o = &lazy_target;
+         let cls = object::class_of(o).clone();
+@@ -682,60 +777,9 @@ impl Vm {
+             PropLookup::Found(pi) => {
+                 if let Some(h) = pi.hooks.clone() {
+                     if !self.in_hook(&pi, o) {
+-                        let v = match &h.get {
+-                            Some(g) => Some(self.call_hook(o, g, &pi, Vec::new())?),
+-                            None => None,
+-                        };
+-                        let v = match v {
+-                            Some(v) => Some(v),
+-                            None if pi.is_virtual() => {
+-                                return Err(self.virtual_error(
+-                                    o,
+-                                    &pi,
+-                                    "Cannot read from set-only virtual property",
+-                                ));
+-                            }
+-                            None if h.set.is_some() => None,
+-                            None => None,
+-                        };
+-                        match v {
+-                            Some(Value::Object(x)) => {
+-                                return Ok(PropContainer::Value(Value::Object(x)))
+-                            }
+-                            Some(Value::Reference(r)) => {
+-                                return Ok(PropContainer::Value(Value::Reference(r)))
+-                            }
+-                            Some(_) => {
+-                                return Err(self.make_throw(
+-                                    "Error",
+-                                    &format!(
+-                                        "Indirect modification of {}::${} is not allowed",
+-                                        object::display_name(&object::class_of(o).name),
+-                                        pi.name
+-                                    ),
+-                                ));
+-                            }
+-                            None => {
+-                                if h.set.is_some() {
+-                                    let cur =
+-                                        object::data(o).slots.borrow()[pi.slot as usize].clone();
+-                                    if !matches!(
+-                                        cur.as_ref().map(Value::deref),
+-                                        Some(Value::Object(_))
+-                                    ) {
+-                                        return Err(self.make_throw(
+-                                            "Error",
+-                                            &format!(
+-                                                "Indirect modification of {}::${} is not allowed",
+-                                                object::display_name(&object::class_of(o).name),
+-                                                pi.name
+-                                            ),
+-                                        ));
+-                                    }
+-                                }
+-                            }
+-                        }
+-                    } else if pi.is_virtual() {
++                        return self.hooked_container(o, &pi, &h);
++                    }
++                    if pi.is_virtual() {
+                         return Err(self.virtual_error(
+                             o,
+                             &pi,
+@@ -745,51 +789,42 @@ impl Vm {
+                 }
+                 let idx = pi.slot as usize;
+                 let defined = object::data(o).slots.borrow()[idx].is_some();
+-                if !defined && self.has_magic(o, name, G_GET) {
++                let uninit = !defined && pi.ty.is_some() && !self.slot_was_unset(o, idx);
++                let magic = !defined && !uninit && self.has_magic(o, name, G_GET);
++                if !defined && !magic && rw {
++                    if pi.ty.is_some() {
++                        return Err(self.uninit_prop_error(&pi));
++                    }
++                    self.undefined_property_warning(o, name)?;
++                    let d = object::data(o);
++                    let mut slots = d.slots.borrow_mut();
++                    if slots[idx].is_none() {
++                        slots[idx] = Some(Value::Null);
++                    }
++                }
++                // `read_property` with a write fetch: objects are handed
++                // out as a copy (they may be modified), anything else may
++                // not be modified indirectly.
++                if self.write_restricted(&pi) {
++                    let cur = object::data(o).slots.borrow()[idx]
++                        .as_ref()
++                        .map(Value::deref);
++                    if let Some(Value::Object(x)) = cur {
++                        return Ok(PropContainer::Value(Value::Object(x)));
++                    }
++                    return Err(self.indirect_modification_error(&pi));
++                }
++                if magic {
+                     let mut c = self.magic_container(o, name)?;
+                     if let PropContainer::Value(v) = &mut c {
+                         self.verify_magic_get_result(&pi, v)?;
+                     }
+                     return Ok(c);
+                 }
+-                if pi.flags & (flags::READONLY | flags::SET_MASK) != 0
+-                    && (pi.flags & flags::READONLY != 0 || !self.has_set_access(&pi))
+-                {
+-                    let is_obj = matches!(
+-                        object::data(o).slots.borrow()[idx]
+-                            .as_ref()
+-                            .map(Value::deref),
+-                        Some(Value::Object(_))
+-                    );
+-                    if !is_obj {
+-                        if pi.flags & flags::READONLY != 0 {
+-                            if defined || !self.has_set_access(&pi) {
+-                                return Err(self.make_throw(
+-                                    "Error",
+-                                    &format!(
+-                                        "Cannot indirectly modify readonly property {}::${}",
+-                                        object::display_name(&pi.class),
+-                                        pi.name
+-                                    ),
+-                                ));
+-                            }
+-                        } else {
+-                            let cn = cls.name.clone();
+-                            return Err(self.asym_error(&cn, &pi, "indirectly modify"));
+-                        }
+-                    }
+-                }
+                 if !defined {
+                     if let Some(ty) = &pi.ty {
+                         if ty.mask & crate::types::mask::ARRAY == 0 && !ty.is_mixed() {
+-                            return Err(self.make_throw(
+-                                "Error",
+-                                &format!(
+-                                    "Typed property {}::${} must not be accessed before initialization",
+-                                    object::display_name(&pi.class),
+-                                    pi.name
+-                                ),
+-                            ));
++                            return Err(self.uninit_prop_error(&pi));
+                         }
+                     }
+                 }
+@@ -819,6 +854,94 @@ impl Vm {
+         }
+     }
+ 
++    /// Whether the current scope may not modify `pi` in place (readonly,
++    /// or set visibility denying access).
++    fn write_restricted(&self, pi: &PropInfo) -> bool {
++        pi.flags & flags::READONLY != 0
++            || (pi.flags & flags::SET_MASK != 0 && !self.has_set_access(pi))
++    }
++
++    /// `zend_readonly_property_indirect_modification_error` /
++    /// the "indirectly modify" set-visibility error.
++    fn indirect_modification_error(&mut self, pi: &PropInfo) -> crate::vm::Throw {
++        if pi.flags & flags::READONLY != 0 {
++            return self.make_throw(
++                "Error",
++                &format!(
++                    "Cannot indirectly modify readonly property {}::${}",
++                    object::display_name(&pi.class),
++                    pi.name
++                ),
++            );
++        }
++        let cn = pi.class.clone();
++        self.asym_error(&cn, pi, "indirectly modify")
++    }
++
++    /// "Typed property `C::$p` must not be accessed before initialization".
++    fn uninit_prop_error(&mut self, pi: &PropInfo) -> crate::vm::Throw {
++        self.make_throw(
++            "Error",
++            &format!(
++                "Typed property {}::${} must not be accessed before initialization",
++                object::display_name(&pi.class),
++                pi.name
++            ),
++        )
++    }
++
++    /// A write fetch of a hooked property from outside its hooks
++    /// (`zend_std_read_property` with `BP_VAR_W`/`BP_VAR_RW`): the `get`
++    /// hook's result (or the backing value without one) must be a
++    /// reference or an object.
++    fn hooked_container(
++        &mut self,
++        o: &Obj,
++        pi: &PropInfo,
++        h: &crate::class::PropHooks,
++    ) -> VmResult<PropContainer> {
++        let v = self.hooked_write_fetch(o, pi, h)?;
++        match v {
++            Value::Object(_) | Value::Reference(_) => Ok(PropContainer::Value(v)),
++            _ => Err(self.make_throw(
++                "Error",
++                &format!(
++                    "Indirect modification of {}::${} is not allowed",
++                    object::display_name(&object::class_of(o).name),
++                    pi.name
++                ),
++            )),
++        }
++    }
++
++    /// The value a write fetch of a hooked property sees: the `get` hook's
++    /// result, or the backing value when there is no `get` hook.
++    fn hooked_write_fetch(
++        &mut self,
++        o: &Obj,
++        pi: &PropInfo,
++        h: &crate::class::PropHooks,
++    ) -> VmResult<Value> {
++        Ok(match &h.get {
++            Some(g) => self.call_hook(o, g, pi, Vec::new())?,
++            None if pi.is_virtual() => {
++                return Err(self.virtual_error(
++                    o,
++                    pi,
++                    "Cannot read from set-only virtual property",
++                ));
++            }
++            None => {
++                let b = self.lazy_backing(o, pi)?;
++                let cur = object::data(&b).slots.borrow()[pi.slot as usize].clone();
++                match cur {
++                    Some(v) => v.deref(),
++                    None => return Err(self.uninit_prop_error(pi)),
++                }
++            }
++        })
++    }
++
+     fn magic_container(&mut self, o: &Obj, name: &ZStr) -> VmResult<PropContainer> {
+         let v = self.call_magic_get(o, name)?;
+         match v {
+@@ -847,7 +970,19 @@ impl Vm {
+         if let Some(r) = self.assign_uninit_typed_prop_ref(o, name, &r)? {
+             return Ok(r);
+         }
+-        match self.property_container(o, name)? {
++        // A hooked property hands out a value (after running its `get`
++        // hook), never its storage.
++        if let Some((pi, h)) = self.hooked_outside_hook(o, name) {
++            self.hooked_write_fetch(o, &pi, &h)?;
++            return Err(self.make_throw("Error", "Cannot assign by reference to overloaded object"));
++        }
++        if let Some(idx) = self.uninit_backing_slot_in_hook(o, name) {
++            self.bind_slot_ref(o, idx, &r)?;
++            let old = object::data(o).slots.borrow_mut()[idx].replace(r.clone());
++            drop(old);
++            return Ok(r);
++        }
++        match self.property_container(o, name, false)? {
+             PropContainer::Declared(idx) => {
+                 self.bind_slot_ref(o, idx, &r)?;
+                 let d = object::data(o);
+@@ -865,8 +1000,47 @@ impl Vm {
+                 drop(old);
+                 Ok(r)
+             }
+-            PropContainer::Value(_) => Ok(r),
++            // Hooks and `__get()` hand out a value, not the storage.
++            PropContainer::Value(_) => {
++                Err(self.make_throw("Error", "Cannot assign by reference to overloaded object"))
++            }
++        }
++    }
++
++    /// The accessible hooked property `name` when accessed from outside
++    /// its hooks.
++    fn hooked_outside_hook(
++        &self,
++        o: &Obj,
++        name: &ZStr,
++    ) -> Option<(Rc<PropInfo>, Rc<crate::class::PropHooks>)> {
++        let cls = object::class_of(o).clone();
++        let scope = self.scope();
++        let PropLookup::Found(pi) = self.lookup_prop(&cls, name, scope.as_ref()) else {
++            return None;
++        };
++        let h = pi.hooks.clone()?;
++        (!self.in_hook(&pi, o)).then_some((pi, h))
++    }
++
++    /// The slot of an uninitialized typed backing value accessed from its
++    /// own hook (`$this->prop = &$x` inside a hook binds it).
++    fn uninit_backing_slot_in_hook(&self, o: &Obj, name: &ZStr) -> Option<usize> {
++        let cls = object::class_of(o).clone();
++        let scope = self.scope();
++        let PropLookup::Found(pi) = self.lookup_prop(&cls, name, scope.as_ref()) else {
++            return None;
++        };
++        if pi.hooks.is_none()
++            || pi.is_virtual()
++            || pi.ty.is_none()
++            || pi.flags & (flags::READONLY | flags::SET_MASK) != 0
++            || !self.in_hook(&pi, o)
++        {
++            return None;
+         }
++        let idx = pi.slot as usize;
++        object::data(o).slots.borrow()[idx].is_none().then_some(idx)
+     }
+ 
+     /// `unset($o->name)`.
+@@ -886,12 +1060,21 @@ impl Vm {
+                     return Err(self.virtual_error(o, &pi, "Cannot unset hooked property"));
+                 }
+                 let idx = pi.slot as usize;
+-                let init = object::data(o).slots.borrow()[idx].is_some();
+-                self.check_write_access(o, &pi, init, "unset")?;
+                 let defined = object::data(o).slots.borrow()[idx].is_some();
+-                if !defined && self.has_magic(o, name, G_UNSET) {
++                // `IS_PROP_UNINIT`: never initialized nor unset since.
++                let uninit = !defined && pi.ty.is_some() && !self.slot_was_unset(o, idx);
++                // `zend_std_unset_property`: the readonly / set-visibility
++                // checks apply unless `__unset()` takes over.
++                if pi.flags & (flags::READONLY | flags::SET_MASK) != 0
++                    && (defined || uninit || !self.has_magic(o, name, G_UNSET))
++                {
++                    self.check_write_access(o, &pi, defined, "unset")?;
++                }
++                if !defined && !uninit && self.has_magic(o, name, G_UNSET) {
+                     return self.magic_unset(o, name);
+                 }
++                // Unsetting clears `IS_PROP_UNINIT` (`__get()` & co. apply
++                // from now on).
+                 let old = object::data(o).slots.borrow_mut()[idx].take();
+                 if let Some(f) = object::data(o).readonly_init.borrow_mut().get_mut(idx) {
+                     *f = true;
+@@ -921,6 +1104,18 @@ impl Vm {
+         }
+     }
+ 
++    /// Whether declared slot `idx` was explicitly unset (the opposite of
++    /// `IS_PROP_UNINIT` for an undefined slot).
++    #[allow(clippy::unused_self)]
++    fn slot_was_unset(&self, o: &Obj, idx: usize) -> bool {
++        object::data(o)
++            .readonly_init
++            .borrow()
++            .get(idx)
++            .copied()
++            .unwrap_or(false)
++    }
++
+     fn magic_unset(&mut self, o: &Obj, name: &ZStr) -> VmResult<()> {
+         let m = object::class_of(o).magic.unset.clone().expect("__unset");
+         self.with_guard(o, name, G_UNSET, |vm| {
+@@ -940,7 +1135,32 @@ impl Vm {
+         let scope = self.scope();
+         match self.lookup_prop(&cls, name, scope.as_ref()) {
+             PropLookup::Found(pi) => {
++                if let Some(h) = pi.hooks.clone() {
++                    if !self.in_hook(&pi, o) {
++                        return match self.hooked_container(o, &pi, &h)? {
++                            PropContainer::Value(v) => Ok(Some(v)),
++                            _ => Ok(None),
++                        };
++                    }
++                    if pi.is_virtual() {
++                        return Err(self.virtual_error(
++                            o,
++                            &pi,
++                            "Must not read from virtual property",
++                        ));
++                    }
++                }
+                 let idx = pi.slot as usize;
++                if self.write_restricted(&pi) {
++                    let cur = object::data(o).slots.borrow()[idx]
++                        .as_ref()
++                        .map(Value::deref);
++                    return match cur {
++                        None => Ok(None),
++                        Some(Value::Object(x)) => Ok(Some(Value::Object(x))),
++                        Some(_) => Err(self.indirect_modification_error(&pi)),
++                    };
++                }
+                 let d = object::data(o);
+                 let mut slots = d.slots.borrow_mut();
+                 match &mut slots[idx] {
+@@ -991,25 +1211,42 @@ impl Vm {
+         }
+         let scope = self.scope();
+         let direct: Option<Option<Value>> = match self.lookup_prop(&cls, name, scope.as_ref()) {
+-            PropLookup::Found(pi)
+-                if pi.hooks.as_ref().is_some_and(|h| h.get.is_some()) && !self.in_hook(&pi, o) =>
+-            {
+-                let g = pi
+-                    .hooks
+-                    .as_ref()
+-                    .and_then(|h| h.get.clone())
+-                    .expect("get hook");
+-                let v = self.call_hook(o, &g, &pi, Vec::new())?.deref();
+-                return Ok(if empty {
+-                    !self.to_bool(&v)?
+-                } else {
+-                    !v.is_null()
+-                });
+-            }
+             PropLookup::Found(pi) => {
+-                let v = object::data(o).slots.borrow()[pi.slot as usize].clone();
++                if let Some(h) = pi.hooks.clone() {
++                    match &h.get {
++                        None if pi.is_virtual() => {
++                            return Err(self.virtual_error(
++                                o,
++                                &pi,
++                                "Cannot read from set-only virtual property",
++                            ));
++                        }
++                        Some(g) if !self.in_hook(&pi, o) => {
++                            let v = self.call_hook(o, g, &pi, Vec::new())?.deref();
++                            return Ok(if empty {
++                                !self.to_bool(&v)?
++                            } else {
++                                !v.is_null()
++                            });
++                        }
++                        Some(_) if pi.is_virtual() => {
++                            return Err(self.virtual_error(
++                                o,
++                                &pi,
++                                "Must not read from virtual property",
++                            ));
++                        }
++                        _ => {}
++                    }
++                }
++                let idx = pi.slot as usize;
++                let v = object::data(o).slots.borrow()[idx].clone();
+                 match v {
+                     Some(v) => Some(Some(v.deref())),
++                    // Uninitialized typed properties skip `__isset()`.
++                    None if pi.ty.is_some() && !self.slot_was_unset(o, idx) => {
++                        return Ok(empty);
++                    }
+                     None => None,
+                 }
+             }
+@@ -1274,14 +1511,32 @@ impl Vm {
+         if let Some(f) = cls.hooks.as_ref().and_then(|h| h.clone) {
+             f(self, &o, &n)?;
+         }
++        // Markers left by an earlier object with the same handle (or by a
++        // clone-with) must not leak into this clone.
++        self.clear_reinit(&n);
+         if let Some(m) = cls.magic.clone.clone() {
+-            nd.flags.set(nd.flags.get() | oflags::CLONING);
+-            let r = self.call_method(&n, &m, Vec::new());
+-            nd.flags.set(nd.flags.get() & !oflags::CLONING);
+-            r?;
++            self.with_reinitable_props(&n, |vm| vm.call_method(&n, &m, Vec::new()))?;
+         }
+         Ok(Value::Object(n))
+     }
++
++    /// Runs `f` with the readonly properties of `o` reinitializable once
++    /// each (`zend_object_set_properties_reinitable(o, true)` … `false`), as
++    /// around `__clone()` and `__unserialize()`.
++    pub(crate) fn with_reinitable_props<T>(
++        &mut self,
++        o: &Obj,
++        f: impl FnOnce(&mut Vm) -> VmResult<T>,
++    ) -> VmResult<T> {
++        let d = object::data(o);
++        let was = d.flags.get() & oflags::CLONING;
++        self.clear_reinit(o);
++        d.flags.set(d.flags.get() | oflags::CLONING);
++        let r = f(self);
++        d.flags.set((d.flags.get() & !oflags::CLONING) | was);
++        self.clear_reinit(o);
++        r
++    }
+ }
+ 
+ /// The mangled property-table key of a declared property.
+@@ -1303,9 +1558,23 @@ pub(crate) fn mangle(pi: &PropInfo) -> ArrayKey {
+     }
+ }
+ 
++/// The property name of a parent hook trampoline (`$prop::get`).
++fn trampoline_prop(a: &crate::func::Args) -> ZStr {
++    let Some(f) = &a.func else {
++        return ZStr::from("");
++    };
++    let n = f.name.as_bytes();
++    let n = n.strip_prefix(b"$").unwrap_or(n);
++    let n = n
++        .strip_suffix(b"::get")
++        .or_else(|| n.strip_suffix(b"::set"))
++        .unwrap_or(n);
++    ZStr::from(n.to_vec())
++}
++
+ fn parent_backing_get(vm: &mut Vm, a: &mut crate::func::Args) -> VmResult<Value> {
+     let o = a.this_obj();
+-    let name = crate::builtins::util::s(a, 0);
++    let name = trampoline_prop(a);
+     let cls = object::class_of(&o).clone();
+     if let Some(pi) = cls.prop_map.get(&name).cloned() {
+         if pi.is_virtual() {
+@@ -1318,7 +1587,8 @@ fn parent_backing_get(vm: &mut Vm, a: &mut crate::func::Args) -> VmResult<Value>
+                 "Error",
+                 &format!(
+                     "Typed property {}::${} must not be accessed before initialization",
+-                    pi.class, pi.name
++                    object::display_name(&pi.class),
++                    pi.name
+                 ),
+             )),
+         };
+@@ -1328,15 +1598,23 @@ fn parent_backing_get(vm: &mut Vm, a: &mut crate::func::Args) -> VmResult<Value>
+ 
+ fn parent_backing_set(vm: &mut Vm, a: &mut crate::func::Args) -> VmResult<Value> {
+     let o = a.this_obj();
+-    let name = crate::builtins::util::s(a, 0);
+-    let v = a.at(1);
++    let name = trampoline_prop(a);
++    let v = a.at(0);
+     let cls = object::class_of(&o).clone();
+     if let Some(pi) = cls.prop_map.get(&name).cloned() {
+         if pi.is_virtual() {
+             return Err(vm.virtual_error(&o, &pi, "Must not write to virtual property"));
+         }
+         let v = vm.coerce_prop(Some(&o), &pi, v)?;
+-        object::data(&o).slots.borrow_mut()[pi.slot as usize] = Some(v.clone());
++        let old = {
++            let d = object::data(&o);
++            let mut slots = d.slots.borrow_mut();
++            match &mut slots[pi.slot as usize] {
++                Some(Value::Reference(r)) => Some(r.set(v.clone())),
++                slot => slot.replace(v.clone()),
++            }
++        };
++        drop(old);
+         return Ok(v);
+     }
+     Ok(Value::Null)
+@@ -1344,21 +1622,36 @@ fn parent_backing_set(vm: &mut Vm, a: &mut crate::func::Args) -> VmResult<Value>
+ 
+ impl Vm {
+     /// `parent::$prop::get()` / `::set()`.
++    #[allow(clippy::needless_pass_by_value)]
+     pub(crate) fn op_init_parent_hook(&mut self, prop: ZStr, set: bool) -> VmResult<()> {
+         let scope = self.scope();
+         let this = self.frame().this.clone();
+-        let parent = scope.as_ref().and_then(|s| s.parent.clone());
+-        let pi = parent.as_ref().and_then(|p| p.prop_map.get(&prop).cloned());
+-        let Some(pi) = pi else {
++        let Some(parent) = scope.as_ref().and_then(|s| s.parent.clone()) else {
++            return Err(self.make_throw(
++                "Error",
++                "Cannot use \"parent\" when current class scope has no parent",
++            ));
++        };
++        let Some(pi) = parent.prop_map.get(&prop).cloned() else {
+             return Err(self.make_throw(
+                 "Error",
+                 &format!(
+                     "Undefined property {}::${}",
+-                    parent.map(|p| p.name.to_string_lossy()).unwrap_or_default(),
++                    object::display_name(&parent.name),
+                     prop
+                 ),
+             ));
+         };
++        if pi.visibility() == flags::PRIVATE {
++            return Err(self.make_throw(
++                "Error",
++                &format!(
++                    "Cannot access private property {}::${}",
++                    object::display_name(&parent.name),
++                    prop
++                ),
++            ));
++        }
+         let hook = pi
+             .hooks
+             .as_ref()
+@@ -1375,9 +1668,9 @@ impl Vm {
+             }
+             None => {
+                 let sig = if set {
+-                    "set(string $name, mixed $value): mixed"
++                    "set(mixed $value): mixed"
+                 } else {
+-                    "get(string $name): mixed"
++                    "get(): mixed"
+                 };
+                 let s = crate::builtins::sig::parse_sig(sig);
+                 let b = crate::func::Builtin {
+@@ -1393,13 +1686,14 @@ impl Vm {
+                         parent_backing_get
+                     },
+                 };
+-                let mut c = crate::vm::PendingCall {
++                // `zend_get_property_hook_trampoline`: scoped to the
++                // declaring class of the parent property.
++                let decl = self.class_by_name(&pi.class).unwrap_or(parent);
++                crate::vm::PendingCall {
+                     this,
+-                    scope: scope.clone(),
++                    scope: Some(decl),
+                     ..crate::vm::PendingCall::new(crate::func::Func::Builtin(Rc::new(b)))
+-                };
+-                c.args.push(Some(Value::Str(prop)));
+-                c
++                }
+             }
+         };
+         self.frame_mut().calls.push(call);
