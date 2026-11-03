@@ -1,6 +1,11 @@
 //! Hand-ported expectations from php-src `ext/date/tests/*.phpt`.
 
-#![allow(clippy::many_single_char_names, clippy::too_many_lines)]
+#![allow(
+    clippy::many_single_char_names,
+    clippy::too_many_lines,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss
+)]
 
 use std::fmt::Write as _;
 
