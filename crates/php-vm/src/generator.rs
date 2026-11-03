@@ -624,9 +624,15 @@ impl Vm {
     /// `leaf` down to `root` (exclusive), so that backtraces show the
     /// `yield from` chain as php-src's placeholder frames do.
     fn gen_lend_chain(&mut self, leaf: &Obj, root: &Obj) -> Vec<Obj> {
+        // Bounded: deep delegation chains (recursive `yield from`) would
+        // make every resumption linear in the depth.
+        const MAX_LENT: usize = 64;
         let mut chain = Vec::new();
         let mut cur = leaf.clone();
         while !Obj::ptr_eq(&cur, root) {
+            if chain.len() == MAX_LENT {
+                return Vec::new();
+            }
             chain.push(cur.clone());
             match parent_of(&cur) {
                 Some(p) => cur = p,
