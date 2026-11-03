@@ -4,7 +4,11 @@
 //! Snippets avoid syntax newer than the installed PHP (8.3): `public(set)`,
 //! `__PROPERTY__`, `|>`, `(void)` and comments after `->`.
 
+mod common;
+
+use php_lexer::TokenKind;
 use std::fmt::Write as _;
+use std::path::PathBuf;
 use std::process::Command;
 
 const SNIPPETS: &[&str] = &[
@@ -70,10 +74,52 @@ const SNIPPETS: &[&str] = &[
     "#!/usr/bin/env php\n<?php echo 1;",
     "<?php $a->/* c */b; $a?->c;",
     "<?php 1 <<<A\nfoo\nA\n",
+    "<?php 0o777777777777777777777777; 0O17; 0X1f; 0B11; 0x00000000000000000001; 0x0000_0000_7FFF_FFFF_FFFF_FFFF; 0xFFFFFFFFFFFFFFFF;",
+    "<?php 0b1000000000000000000000000000000000000000000000000000000000000000; 0b0111111111111111111111111111111111111111111111111111111111111111;",
+    "<?php 0777777777777777777777; 01000000000000000000000; 00000000000000000000000001; 99999999999999999999; 1_9_2_2_3_3_7_2_0_3_6_8_5_4_7_7_5_8_0_8;",
+    "<?php .5e-3; 1_000.000_1; 1e1_0; 1E+5; 1e-5_0; 1._5; 1_.5; ._5; 0.0; 00.0; 1e; 1e_1; 0x1_; 0b_1; 0o_7; 0o8; 0_0;",
+    "<?php $a = 1+-2; $b = $c--->d; $e = $f-->$g; $h = -.5; $i = 1.5.2.5;",
+    "<?php \"{$a}{$b[1]}{$c->d}{$e::$f}{$g()}{$h->i()}{$j['k']['l']}\";",
+    "<?php \"${a}${b[1]}${c['d']}${e . f}${g(1)}\";",
+    "<?php \"\\{$a} {\\$b} $\\{c} {$ d} { $e} $ f $1 ${1} {$}\";",
+    "<?php \"$a?->b $a?-> $a?->1 $a->b->c $a-> b\";",
+    "<?php \"$a[-1] $a[-0] $a[- 1] $a[--1] $a[1.5] $a[1e3] $a[0b11] $a[0o7] $a[007] $a[_x] $a[\\$x]\";",
+    "<?php <<<EOT\n  $a[1] {$b} ${c}\n    $d->e\n  EOT;\n",
+    "<?php <<<EOT\nEOT;\n<<<EOT\n\nEOT;\n<<<EOT\n  \n  EOT;\n<<<EOT\n\tx\n\tEOT;\n",
+    "<?php <<<EOT\nfoo\nEOTX\nEOT;\n<<<'EOT'\nEOT1\nEOT\n;",
+    "<?php <<<  EOT\nx\nEOT;\n<<<\t\"EOT\"\nx\nEOT;\n<<<'EOT\nx\nEOT;\n",
+    "<?php <<<EOT\r\n  a\r\n  EOT;\r\n<<<'N'\r\n  b\r\n  N;\r\n",
+    "<?php <<<EOT\n  a\n EOT;\n",
+    "<?php <<<EOT\n  a\n\t\tEOT;\n",
+    "<?php <<<A\n  {$x}\n A;\n",
+    "<?php <<<A\n${\n",
+    "<?php <<<A\n{$a\nA;\n",
+    "<?php $x = <<<A\n  a\n  A\n  ;",
+    "<?php echo <<<A\n  a\n  A, 1;",
+    "<?php `a\\`b $c[0] {$d}`;",
+    "<?php #[A] #[B(1, 2)] #[\\C\\D] #[E, F] class X {} #[\n  G\n] fn() => 1;",
+    "<?php #comment ?>x<?php // comment ?>\n#x\n<?php # c\r\n?>",
+    "<?php function f(): static|null&X {} fn&($x) => $x; function &g() {}",
+    "<?php $a = &$b; $c = & $d; $e = &/**/$f; foo(&...$g); $h &= 1; $i & 1;",
+    "<?php __halt_compiler",
+    "<?php __halt_compiler(",
+    "<?php __halt_compiler();",
+    "<?php __halt_compiler() ?>",
+    "<?php __halt_compiler /* a */ ( /* b */ ) /* c */ ;",
+    "<?php function __halt_compiler() {} $a->__halt_compiler(); __HALT_COMPILER();x",
+    "x<?php\n?>\n\n<?php\n?>\r\n<?php ?>\r<?php ?>",
+    "<?php ?><?php echo 1?>",
+    "<?php\0 $a\0;",
+    "\u{feff}<?php echo 1;",
+    "<?php $été = €; class Ünïcode {} $a->é;",
+    "<?php \"\\400 \\777 \\0 \\00 \\000 \\8 \\x \\xg \\u \\u{ \\u{41\";",
+    "<?php 'a\\\nb'; \"a\\\nb\"; 'a\nb'; \"\r\";",
 ];
 
-fn php_dump(snippets: &[&str]) -> Option<Vec<String>> {
-    let dir = std::env::temp_dir().join(format!("php-lexer-oracle-{}", std::process::id()));
+fn php_dump<S: AsRef<[u8]>>(snippets: &[S]) -> Option<Vec<String>> {
+    static COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!("php-lexer-oracle-{}-{n}", std::process::id()));
     std::fs::create_dir_all(&dir).ok()?;
     let script = dir.join("dump.php");
     std::fs::write(
@@ -97,7 +143,7 @@ foreach ($argv as $path) {
     let mut paths = Vec::new();
     for (i, s) in snippets.iter().enumerate() {
         let p = dir.join(format!("{i}.php"));
-        std::fs::write(&p, s).ok()?;
+        std::fs::write(&p, s.as_ref()).ok()?;
         paths.push(p);
     }
     let out = Command::new("php")
@@ -127,9 +173,9 @@ foreach ($argv as $path) {
     (lines.len() == snippets.len()).then_some(lines)
 }
 
-fn rust_dump(src: &str) -> String {
+fn rust_dump(src: &[u8]) -> String {
     let mut out = String::new();
-    for t in php_lexer::token_get_all(src.as_bytes()) {
+    for t in php_lexer::token_get_all(src) {
         let mut hex = String::new();
         for b in t.text {
             let _ = write!(hex, "{b:02x}");
@@ -151,7 +197,7 @@ fn matches_php_token_get_all() {
     };
     let mut failures = Vec::new();
     for (snippet, exp) in SNIPPETS.iter().zip(&expected) {
-        let got = rust_dump(snippet);
+        let got = rust_dump(snippet.as_bytes());
         if &got != exp {
             failures.push(format!(
                 "snippet {snippet:?}\n--- php\n{exp}--- rust\n{got}"
@@ -159,4 +205,49 @@ fn matches_php_token_get_all() {
         }
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// Whether `src` uses tokens or scanner fixes that only exist in php-src
+/// master and therefore cannot be compared with an older `/usr/bin/php`.
+fn uses_master_only_lexing(src: &[u8]) -> bool {
+    use TokenKind as T;
+    let toks = php_lexer::token_get_all(src);
+    toks.iter().enumerate().any(|(i, t)| {
+        matches!(
+            t.kind,
+            T::PublicSet | T::ProtectedSet | T::PrivateSet | T::PropertyC | T::PipeOp | T::VoidCast
+        ) || (matches!(t.kind, T::ObjectOperator | T::NullsafeObjectOperator)
+            && toks
+                .get(i + 1)
+                .is_some_and(|n| matches!(n.kind, T::Comment | T::DocComment)))
+    })
+}
+
+/// Compares every `.phpt` `--FILE--` section in php-src with
+/// `/usr/bin/php`. Slow (~15s); run with `cargo test -- --ignored`.
+#[test]
+#[ignore = "shells out to php for ~23k files"]
+fn full_corpus_matches_php() {
+    let corpus: Vec<(PathBuf, Vec<u8>)> = common::corpus()
+        .into_iter()
+        .filter(|(_, src)| !uses_master_only_lexing(src))
+        .collect();
+    if corpus.is_empty() {
+        return;
+    }
+    let mut failures = Vec::new();
+    for chunk in corpus.chunks(1000) {
+        let srcs: Vec<&[u8]> = chunk.iter().map(|(_, s)| s.as_slice()).collect();
+        let Some(expected) = php_dump(&srcs) else {
+            eprintln!("php with ext/tokenizer not available; skipping");
+            return;
+        };
+        for ((path, src), exp) in chunk.iter().zip(&expected) {
+            if &rust_dump(src) != exp {
+                failures.push(path.display().to_string());
+            }
+        }
+    }
+    eprintln!("compared {} files", corpus.len());
+    assert!(failures.is_empty(), "mismatches:\n{}", failures.join("\n"));
 }
