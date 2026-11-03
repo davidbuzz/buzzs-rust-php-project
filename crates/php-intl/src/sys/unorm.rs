@@ -21,7 +21,7 @@ pub enum Form {
     Nfkc,
     /// NFKD
     Nfkd,
-    /// NFKC_Casefold
+    /// `NFKC_Casefold`
     NfkcCf,
 }
 

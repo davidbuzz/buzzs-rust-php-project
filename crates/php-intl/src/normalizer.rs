@@ -82,7 +82,7 @@ fn u8_next(s: &[u8]) -> (i32, usize) {
             _ => return (-1, i),
         }
     }
-    if cp < min || (0xd800..0xe000).contains(&cp) || cp > 0x10ffff {
+    if cp < min || (0xd800..0xe000).contains(&cp) || cp > 0x0010_ffff {
         return (-1, i);
     }
     (i32::try_from(cp).unwrap_or(-1), i)
@@ -98,7 +98,7 @@ pub fn raw_decomposition(s: &[u8], f: i64) -> Result<Option<String>> {
             "Input string must be exactly one UTF-8 encoded code point long.",
         ));
     }
-    if !(0..=0x10ffff).contains(&cp) {
+    if !(0..=0x0010_ffff).contains(&cp) {
         return Err(Error::global(
             UErrorCode::ILLEGAL_ARGUMENT_ERROR,
             "Code point out of range",
