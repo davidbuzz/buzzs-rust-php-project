@@ -120,3 +120,194 @@ pub(crate) fn connect(vm: &mut Vm, t: &ConnectTarget) -> Option<Box<dyn HttpStre
     }
     Some(Box::new(stream))
 }
+
+/// Whether a stream wrapper is registered for `scheme`.
+pub(crate) fn has_wrapper(vm: &mut Vm, scheme: &str) -> bool {
+    match vm.call_value(&Value::from("stream_get_wrappers"), Vec::new()) {
+        Ok(Value::Array(a)) => a.values().any(|v| {
+            matches!(v.deref(), Value::Str(s) if s.as_bytes().eq_ignore_ascii_case(scheme.as_bytes()))
+        }),
+        _ => false,
+    }
+}
+
+/// A `http` context option.
+fn ctx_option(vm: &mut Vm, context: Option<&Value>, name: &str) -> Option<Value> {
+    let ctx = context?;
+    let Ok(Value::Array(opts)) =
+        vm.call_value(&Value::from("stream_context_get_options"), vec![ctx.clone()])
+    else {
+        return None;
+    };
+    match opts.get_str(b"http").map(Value::deref) {
+        Some(Value::Array(w)) => w.get_str(name.as_bytes()).map(Value::deref),
+        _ => None,
+    }
+}
+
+/// The `header` context option flattened to one string (array entries
+/// joined with CRLF, `__toString` honoured), trimmed like
+/// `php_stream_url_wrap_http_ex` does.
+fn user_headers(vm: &mut Vm, context: Option<&Value>) -> Vec<u8> {
+    let mut out = Vec::new();
+    match ctx_option(vm, context, "header") {
+        Some(Value::Array(a)) => {
+            for v in a.values() {
+                if let Ok(s) = vm.value_to_string(&v.deref()) {
+                    out.extend_from_slice(s.as_bytes());
+                    out.extend_from_slice(b"\r\n");
+                }
+            }
+        }
+        Some(v @ (Value::Str(_) | Value::Object(_))) => {
+            if let Ok(s) = vm.value_to_string(&v) {
+                out.extend_from_slice(s.as_bytes());
+            }
+        }
+        _ => {}
+    }
+    let ws = |c: &u8| matches!(c, b' ' | b'\t' | b'\r' | b'\n' | b'\0' | 0x0b);
+    let start = out.iter().position(|c| !ws(c)).unwrap_or(out.len());
+    let end = out.iter().rposition(|c| !ws(c)).map_or(start, |e| e + 1);
+    out[start..end].to_vec()
+}
+
+/// Whether the user headers contain `name:` at the start of a line.
+fn has_header(headers: &[u8], name: &str) -> bool {
+    headers.split(|&c| c == b'\n').any(|l| {
+        let l: Vec<u8> = l
+            .iter()
+            .skip_while(|c| c.is_ascii_whitespace())
+            .copied()
+            .collect();
+        l.len() > name.len()
+            && l[..name.len()].eq_ignore_ascii_case(name.as_bytes())
+            && l[name.len()] == b':'
+    })
+}
+
+/// A minimal `http://`/`https://` GET (the request layout of PHP's http
+/// stream wrapper) for loading WSDL/XSD documents when no `http` wrapper
+/// is registered. `None` on any failure or a non-2xx status.
+pub(crate) fn http_get(vm: &mut Vm, url: &str, context: Option<&Value>) -> Option<Vec<u8>> {
+    let (tls, rest) = if let Some(r) = url.strip_prefix("http://") {
+        (false, r)
+    } else {
+        (true, url.strip_prefix("https://")?)
+    };
+    let (authority, path) = rest
+        .find(['/', '?'])
+        .map_or((rest, "/".to_owned()), |p| {
+            let path = &rest[p..];
+            let path = if path.starts_with('?') {
+                format!("/{path}")
+            } else {
+                path.to_owned()
+            };
+            (&rest[..p], path)
+        });
+    let path = path.split('#').next().unwrap_or("/").to_owned();
+    let authority = authority.rsplit('@').next().unwrap_or(authority);
+    let default_port = if tls { 443 } else { 80 };
+    let (host, port) = match authority.rsplit_once(':') {
+        Some((h, p)) if !h.ends_with(']') || h.starts_with('[') => {
+            (h.trim_matches(['[', ']']).to_owned(), p.parse().ok()?)
+        }
+        _ => (authority.trim_matches(['[', ']']).to_owned(), default_port),
+    };
+    let protocol = match ctx_option(vm, context, "protocol_version") {
+        Some(Value::Float(f)) => format!("{f:.1}"),
+        Some(Value::Int(i)) => format!("{i}.0"),
+        Some(Value::Str(s)) => s.to_string_lossy(),
+        _ => "1.1".to_owned(),
+    };
+    let user = user_headers(vm, context);
+    let mut req = format!("GET {path} HTTP/{protocol}\r\n").into_bytes();
+    if !has_header(&user, "host") {
+        if port == default_port {
+            req.extend_from_slice(format!("Host: {host}\r\n").as_bytes());
+        } else {
+            req.extend_from_slice(format!("Host: {host}:{port}\r\n").as_bytes());
+        }
+    }
+    if !has_header(&user, "connection") {
+        req.extend_from_slice(b"Connection: close\r\n");
+    }
+    if !user.is_empty() {
+        req.extend_from_slice(&user);
+        req.extend_from_slice(b"\r\n");
+    }
+    req.extend_from_slice(b"\r\n");
+    let target = ConnectTarget {
+        protocol: if tls { "ssl" } else { "tcp" }.to_owned(),
+        host,
+        port,
+        timeout: None,
+        proxy_tunnel: None,
+    };
+    let mut s = connect(vm, &target)?;
+    if s.write(&req) != req.len() {
+        return None;
+    }
+    let status = s.read_line()?;
+    let code = status.split(|&c| c == b' ').nth(1)?;
+    if !code.starts_with(b"2") {
+        return None;
+    }
+    let mut length = None;
+    let mut chunked = false;
+    loop {
+        let l = s.read_line()?;
+        let t = String::from_utf8_lossy(&l).trim().to_owned();
+        if t.is_empty() {
+            break;
+        }
+        if let Some((n, v)) = t.split_once(':') {
+            let v = v.trim();
+            if n.eq_ignore_ascii_case("content-length") {
+                length = v.parse::<usize>().ok();
+            } else if n.eq_ignore_ascii_case("transfer-encoding") && v.eq_ignore_ascii_case("chunked")
+            {
+                chunked = true;
+            }
+        }
+    }
+    let mut body = Vec::new();
+    if chunked {
+        loop {
+            let l = s.read_line()?;
+            let t = String::from_utf8_lossy(&l);
+            let size = usize::from_str_radix(t.trim().split(';').next()?.trim(), 16).ok()?;
+            if size == 0 {
+                break;
+            }
+            let mut left = size;
+            while left > 0 {
+                let part = s.read(left);
+                if part.is_empty() {
+                    return Some(body);
+                }
+                left -= part.len();
+                body.extend_from_slice(&part);
+            }
+            s.read_line();
+        }
+    } else if let Some(n) = length {
+        while body.len() < n {
+            let part = s.read(n - body.len());
+            if part.is_empty() {
+                break;
+            }
+            body.extend_from_slice(&part);
+        }
+    } else {
+        while !s.eof() {
+            let part = s.read(8192);
+            if part.is_empty() {
+                break;
+            }
+            body.extend_from_slice(&part);
+        }
+    }
+    Some(body)
+}

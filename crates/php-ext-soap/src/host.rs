@@ -42,6 +42,10 @@ thread_local! {
     /// The message of the last fatal error the VM already reported (so it
     /// is not reported twice when it travels back through the library).
     static REPORTED_FATAL: RefCell<Option<String>> = const { RefCell::new(None) };
+    /// Set once a server fault response was written and the request is
+    /// bailing out: the VM's `Throw::Fatal` then means "bailout" again when
+    /// it unwinds back through the library.
+    static BAILING_OUT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// The method name of a `__call` dispatch started by this crate.
     static MAGIC_NAME: RefCell<Option<ZStr>> = const { RefCell::new(None) };
 }
@@ -58,6 +62,10 @@ pub(crate) fn to_rt(vm: &mut Vm, t: Throw) -> RuntimeError {
         Throw::Exception(o) => RuntimeError::Thrown(Value::Object(o)),
         Throw::Exit => RuntimeError::Custom {
             class: ZStr::from(EXIT_MARK),
+            message: String::new(),
+        },
+        Throw::Fatal if BAILING_OUT.with(std::cell::Cell::get) => RuntimeError::Custom {
+            class: ZStr::from(BAILOUT_MARK),
             message: String::new(),
         },
         Throw::Fatal => {
@@ -98,6 +106,7 @@ pub(crate) fn to_throw(vm: &mut Vm, e: RuntimeError) -> Throw {
         }
         RuntimeError::Custom { class, .. } if class.as_bytes() == EXIT_MARK => Throw::Exit,
         RuntimeError::Custom { class, .. } if class.as_bytes() == BAILOUT_MARK => {
+            BAILING_OUT.with(|b| b.set(true));
             vm.exit_status = 255;
             php_vm::object::set_destructors_enabled(false);
             Throw::Fatal
@@ -138,12 +147,16 @@ pub(crate) fn with_display_off<R>(vm: &mut Vm, f: impl FnOnce(&mut Vm) -> R) -> 
     r
 }
 
-/// Runs `f` with `error_reporting = 0` (the `@` operator).
+/// Runs `f` with `error_reporting = 0`, leaving `error_get_last()`
+/// untouched (internal stream operations whose failures PHP reports
+/// differently).
 pub(crate) fn silenced<R>(vm: &mut Vm, f: impl FnOnce(&mut Vm) -> R) -> R {
     let old = vm.error_reporting;
+    let last = vm.last_error.take();
     vm.error_reporting = 0;
     let r = f(vm);
     vm.error_reporting = old;
+    vm.last_error = last;
     r
 }
 
@@ -252,6 +265,7 @@ impl<'a> VmHost<'a> {
 fn is_internal_class(name: &ZStr) -> bool {
     php_soap::classes::find_class(&name.to_string_lossy()).is_some()
         || name.eq_ignore_ascii_case(b"Exception")
+        || name.eq_ignore_ascii_case(b"Error")
 }
 
 impl RuntimeContext for VmHost<'_> {
@@ -394,7 +408,11 @@ impl SoapHost for VmHost<'_> {
         if class_of(obj).magic.get.is_none() {
             return Ok(None);
         }
-        self.vm.property_read(obj, &ZStr::from(name))
+        let n = String::from_utf8_lossy(name).into_owned();
+        self.vm
+            .get_property(obj, &n)
+            .map(Some)
+            .map_err(|t| to_rt(self.vm, t))
     }
 
     fn write_property(&mut self, obj: &Obj, name: &[u8], value: Value) -> RtResult<()> {
@@ -474,6 +492,17 @@ impl SoapHost for VmHost<'_> {
 
     fn iterate(&mut self, obj: &Obj) -> RtResult<Vec<(Value, Value)>> {
         let cls = class_of(obj).clone();
+        if cls.lc_name.as_bytes() == b"generator" {
+            // `get_iterator` checks for a finished generator first.
+            let Value::Array(a) = self.call_named(
+                "iterator_to_array",
+                vec![Value::Object(obj.clone()), Value::Bool(true)],
+            )?
+            else {
+                return Ok(Vec::new());
+            };
+            return Ok(a.iter().map(|(k, v)| (k.to_value(), v.clone())).collect());
+        }
         if cls.instance_of_name(b"iterator") {
             return self.iterate_iterator(obj);
         }
@@ -554,7 +583,8 @@ impl SoapHost for VmHost<'_> {
     }
 
     fn is_unwind_exit(&mut self, err: &RuntimeError) -> bool {
-        matches!(err, RuntimeError::Custom { class, .. } if class.as_bytes() == EXIT_MARK)
+        matches!(err, RuntimeError::Custom { class, .. }
+            if class.as_bytes() == EXIT_MARK || class.as_bytes() == BAILOUT_MARK)
     }
 
     fn call_callable(&mut self, callable: &Value, args: &[Value]) -> RtResult<Value> {
@@ -637,18 +667,32 @@ impl SoapHost for VmHost<'_> {
     }
 
     fn memory_check(&mut self, bytes: usize) -> RtResult<()> {
+        // The accounting allocator records crossing `memory_limit`; the VM
+        // only notices at its next safe point, so long native loops poll
+        // here (PHP raises the fatal inside the allocator).
+        if php_memlimit::is_pending() {
+            if let Some(over) = php_memlimit::take() {
+                return Err(RuntimeError::Fatal(over.to_string()));
+            }
+        }
         if let Some(limit) = php_memlimit::limit() {
             if limit > 0 && bytes > limit {
-                let msg = format!(
+                return Err(RuntimeError::Fatal(format!(
                     "Allowed memory size of {limit} bytes exhausted (tried to allocate 65536 bytes)"
-                );
-                return Err(RuntimeError::Fatal(msg));
+                )));
             }
         }
         Ok(())
     }
 
     fn load_resource(&mut self, url: &str, context: Option<&Value>) -> Result<Vec<u8>, String> {
+        let lower = url.to_ascii_lowercase();
+        for scheme in ["http", "https"] {
+            if lower.starts_with(&format!("{scheme}://")) && !crate::net::has_wrapper(self.vm, scheme) {
+                return crate::net::http_get(self.vm, url, context)
+                    .ok_or_else(|| format!("failed to load external entity \"{url}\"\n"));
+            }
+        }
         let mut args = vec![Value::from(url), Value::Bool(false)];
         if let Some(c) = context {
             args.push(c.clone());
@@ -707,7 +751,11 @@ impl SoapHost for VmHost<'_> {
     }
 
     fn ob_discard(&mut self) {
-        php_support::output::discard(&mut *self.vm);
+        // With no active buffer PHP's notice goes to the SOAP error handler
+        // (not displayed in a server context).
+        if self.vm.output.level() > 0 {
+            php_support::output::discard(&mut *self.vm);
+        }
     }
 
     fn server_var(&mut self, name: &str) -> Option<Vec<u8>> {

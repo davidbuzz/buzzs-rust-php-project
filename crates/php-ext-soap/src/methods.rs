@@ -352,6 +352,12 @@ pub(crate) fn client_call(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     });
     let (name, args) = if let Some(n) = magic {
         let args = ZArray::from_values(a.values.iter().map(Value::deref));
+        // Backtraces show the trampoline as `__call('name', Array)`.
+        if let Some(f) = vm.frames.last_mut() {
+            if f.kind == FrameKind::Builtin {
+                f.args = vec![Some(Value::Str(n.clone())), Some(Value::Array(args.clone()))];
+            }
+        }
         (n, args)
     } else {
         if a.values.len() != 2 {
