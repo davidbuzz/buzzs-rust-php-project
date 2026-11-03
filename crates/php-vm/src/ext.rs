@@ -399,6 +399,9 @@ pub struct ClassHooks {
     /// and `foreach` over the object (unlike `properties_for`, which
     /// serves var_dump/(array)/serialize). `Ok(None)` falls back.
     pub get_properties: Option<fn(&mut Vm, &Obj) -> VmResult<Option<ZArray>>>,
+    /// `get_method`: runs before `$obj->m()` resolves the method (also for
+    /// user methods of subclasses); throw to refuse the call.
+    pub get_method: Option<fn(&mut Vm, &Obj, &ZStr) -> VmResult<()>>,
 }
 
 impl std::fmt::Debug for ClassHooks {

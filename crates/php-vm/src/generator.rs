@@ -1049,10 +1049,58 @@ pub(crate) fn register(vm: &mut Vm) {
         .method("__debugInfo(): array", flags::PUBLIC, g_debug_info)
         // The `dtor_obj` handler (php-src has no such method).
         .method("__destruct(): void", flags::PUBLIC, g_destruct)
+        .hooks(crate::ext::ClassHooks {
+            get_iterator: Some(gen_get_iterator),
+            ..Default::default()
+        })
         .register(vm);
     if vm.find_class(b"ClosedGeneratorException").is_none() {
         ClassBuilder::new("ClosedGeneratorException")
             .extends(vm, "Exception")
             .register(vm);
     }
+}
+
+/// `zend_generator_iterator_funcs`: drives a generator from native code
+/// (SPL's iterator_* functions) without PHP-level method frames.
+struct GenIter(Obj);
+
+impl crate::ext::NativeIterator for GenIter {
+    fn rewind(&mut self, vm: &mut Vm) -> VmResult<()> {
+        vm.gen_rewind(&self.0)
+    }
+    fn valid(&mut self, vm: &mut Vm) -> VmResult<bool> {
+        vm.gen_valid(&self.0)
+    }
+    fn current(&mut self, vm: &mut Vm) -> VmResult<Value> {
+        Ok(vm.gen_current(&self.0)?.1)
+    }
+    fn key(&mut self, vm: &mut Vm) -> VmResult<Value> {
+        Ok(vm.gen_current(&self.0)?.0)
+    }
+    fn next(&mut self, vm: &mut Vm) -> VmResult<()> {
+        vm.gen_next(&self.0)
+    }
+}
+
+/// `zend_generator_get_iterator`.
+fn gen_get_iterator(vm: &mut Vm, o: &Obj, by_ref: bool) -> VmResult<Box<dyn crate::ext::NativeIterator>> {
+    if vm.gen_finished(o) {
+        return Err(vm.make_throw("Exception", "Cannot traverse an already closed generator"));
+    }
+    if by_ref
+        && !with(o, |d| {
+            d.frame
+                .as_ref()
+                .and_then(|f| f.ufunc.as_ref())
+                .is_some_and(|u| u.flags & flags::RETURN_REF != 0)
+        })
+        .unwrap_or(false)
+    {
+        return Err(vm.make_throw(
+            "Exception",
+            "You can only iterate a generator by-reference if it declared that it yields by-reference",
+        ));
+    }
+    Ok(Box::new(GenIter(o.clone())))
 }

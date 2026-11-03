@@ -147,7 +147,10 @@ impl Vm {
     }
 
     fn object_iter(&mut self, o: Obj, by_ref: bool) -> VmResult<ForeachIter> {
-        if let Some(f) = crate::ext::hooks_of(&o).and_then(|h| h.get_iterator) {
+        if let Some(f) = crate::ext::hooks_of(&o)
+            .and_then(|h| h.get_iterator)
+            .filter(|_| !object::has_internal::<crate::generator::GenData>(&o))
+        {
             let mut it = f(self, &o, by_ref)?;
             it.rewind(self)?;
             return Ok(ForeachIter::Native(crate::vm::NativeIter(it), false));

@@ -234,6 +234,11 @@ impl Vm {
     /// Prepares `$obj->name()`.
     pub(crate) fn method_call(&mut self, o: &Obj, name: &ZStr) -> VmResult<PendingCall> {
         let cls = object::class_of(o).clone();
+        // Native `get_method` handler (e.g. SPL's "wasn't initialized
+        // properly" check before any method runs).
+        if let Some(f) = cls.hooks.as_ref().and_then(|h| h.get_method) {
+            f(self, o, name)?;
+        }
         self.method_call_on(o, &cls, name)
     }
 

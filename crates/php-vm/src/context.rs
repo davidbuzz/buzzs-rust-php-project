@@ -365,6 +365,10 @@ impl RuntimeContext for Vm {
         object::class_of(obj).is_enum()
     }
 
+    fn is_closure(&mut self, obj: &Obj) -> bool {
+        object::class_of(obj).lc_name.as_bytes() == b"closure"
+    }
+
     fn count_object(&mut self, obj: &Obj) -> RtResult<Option<i64>> {
         if let Some(f) = crate::ext::hooks_of(obj).and_then(|h| h.count) {
             if let Some(n) = f(self, obj).map_err(|t| self.to_rt(t))? {

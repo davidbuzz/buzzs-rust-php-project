@@ -1442,7 +1442,7 @@ impl Compiler {
                                 None,
                                 false,
                             )?;
-                            let pfl = normalize_set_visibility(
+                            let mut pfl = normalize_set_visibility(
                                 self,
                                 pfl,
                                 ty.is_some(),
@@ -1450,6 +1450,25 @@ impl Compiler {
                                 &p.name.as_str_lossy(),
                                 p.span.line,
                             )?;
+                            // Hooks on a promoted property.
+                            let hooks = match &p.hooks {
+                                Some(hs) => {
+                                    let (h, virt) = self.compile_prop_hooks(
+                                        &cname,
+                                        &p.name.name,
+                                        p.ty.as_ref(),
+                                        hs,
+                                        kind == ClassKind::Interface,
+                                        pfl,
+                                        p.span.line,
+                                    )?;
+                                    if virt {
+                                        pfl |= flags::VIRTUAL;
+                                    }
+                                    Some(Rc::new(h))
+                                }
+                                None => None,
+                            };
                             props.push(PropDecl {
                                 name: ZStr::from(p.name.name.as_slice()),
                                 default: if ty.is_none() {
@@ -1465,7 +1484,7 @@ impl Compiler {
                                     .map(|d| ZStr::from(d.as_slice())),
                                 attributes: attrs,
                                 line: p.span.line,
-                                hooks: None,
+                                hooks,
                             });
                         }
                     }
