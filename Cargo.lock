@@ -372,6 +372,7 @@ dependencies = [
  "php-ext-random",
  "php-ext-session",
  "php-ext-simplexml",
+ "php-ext-soap",
  "php-ext-sockets",
  "php-ext-sodium",
  "php-ext-spl",
@@ -539,6 +540,13 @@ dependencies = [
 [[package]]
 name = "php-ext-ftp"
 version = "0.1.0"
+dependencies = [
+ "php-ext-streams",
+ "php-ftp",
+ "php-runtime",
+ "php-streams",
+ "php-vm",
+]
 
 [[package]]
 name = "php-ext-gettext"
