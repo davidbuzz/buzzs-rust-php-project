@@ -23,6 +23,7 @@ pub type HardLimitHandler = fn(HardLimitExceeded) -> !;
 const NONE: u8 = 0;
 const RECORDING: u8 = 1;
 const PENDING: u8 = 2;
+const HANDLED: u8 = 3;
 
 /// Sentinel for "no limit" in the `limit` and threshold atomics.
 const UNLIMITED: usize = usize::MAX;
@@ -381,9 +382,8 @@ impl<A> CountingAlloc<A> {
         }
     }
 
-    /// The pending soft-limit violation, if any. Cheap (one load); the VM
-    /// calls this at safe points and raises
-    /// `Fatal error: {over}` when it returns `Some`.
+    /// The pending soft-limit violation, if any, without consuming it.
+    /// Cheap (one load). The VM uses [`take`](Self::take) to report it.
     #[inline]
     pub fn check(&self) -> Option<OverLimit> {
         if self.over_state.load(Acquire) == PENDING {
@@ -396,18 +396,43 @@ impl<A> CountingAlloc<A> {
         }
     }
 
-    /// Whether a violation is pending (`ZEND_HAS_OOM()`).
+    /// Whether a violation is pending and not yet taken. One relaxed load:
+    /// this is the per-opcode poll.
     #[inline]
     pub fn is_pending(&self) -> bool {
         self.over_state.load(Relaxed) == PENDING
     }
 
-    /// Forgets the pending violation (after the fatal has been reported) so
-    /// the next one can be recorded.
+    /// Takes the pending violation for reporting (`zend_handle_delayed_oom`):
+    /// returns it and moves to the *handled* state, in which
+    /// [`check`](Self::check) and [`is_pending`](Self::is_pending) report
+    /// nothing and no new violation is recorded — PHP raises at most one
+    /// memory-limit fatal per request phase, so the unwinding that follows
+    /// the fatal cannot trigger another. [`clear`](Self::clear) (at the
+    /// start of request shutdown) re-arms recording.
+    pub fn take(&self) -> Option<OverLimit> {
+        let over = self.check()?;
+        self.over_state
+            .compare_exchange(PENDING, HANDLED, Relaxed, Relaxed)
+            .ok()
+            .map(|_| over)
+    }
+
+    /// Whether a violation was taken and recording is suspended until
+    /// [`clear`](Self::clear).
+    pub fn is_handled(&self) -> bool {
+        self.over_state.load(Relaxed) == HANDLED
+    }
+
+    /// Forgets any pending or handled violation so the next one can be
+    /// recorded (`EG(delayed_oom).state = ZEND_OOM_STATE_NONE` at the start
+    /// of `php_request_shutdown`).
     pub fn clear(&self) {
-        let _ = self
-            .over_state
-            .compare_exchange(PENDING, NONE, Release, Relaxed);
+        for from in [PENDING, HANDLED] {
+            let _ = self
+                .over_state
+                .compare_exchange(from, NONE, Release, Relaxed);
+        }
     }
 
     /// Whether `bytes` more would still fit under the soft limit.

@@ -8,9 +8,10 @@
 //! The model mirrors `Zend/zend_alloc.c`'s delayed OOM handling:
 //!
 //! * an allocation that crosses the soft limit still succeeds but records an
-//!   [`OverLimit`]; the VM polls [`check`] at safe points and raises
+//!   [`OverLimit`]; the VM polls [`is_pending`] at safe points and raises
 //!   `Fatal error: Allowed memory size of N bytes exhausted (tried to
-//!   allocate M bytes)`, then calls [`clear`];
+//!   allocate M bytes)` with the record obtained from [`take`]; recording
+//!   stays suspended until [`clear`] at request shutdown;
 //! * builtins about to allocate a known large amount call [`try_reserve`]
 //!   first (PHP's fallible allocations + `RETURN_OOM()`), or wrap Rust's
 //!   `try_reserve` APIs in [`fallible`];
@@ -129,6 +130,11 @@ pub fn check() -> Option<OverLimit> {
 #[inline]
 pub fn is_pending() -> bool {
     GLOBAL.is_pending()
+}
+
+/// [`CountingAlloc::take`] on [`GLOBAL`].
+pub fn take() -> Option<OverLimit> {
+    GLOBAL.take()
 }
 
 /// [`CountingAlloc::clear`] on [`GLOBAL`].

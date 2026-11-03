@@ -212,6 +212,41 @@ fn soft_limit_is_flagged_not_failed() {
 }
 
 #[test]
+fn take_suspends_recording_until_clear() {
+    let a = CountingAlloc::new(System);
+    a.request_start(Some(4 * M)).expect("limit");
+    assert_eq!(a.take(), None);
+    let x = alloc(&a, 5 * M);
+    assert!(a.is_pending());
+    let over = a.take().expect("pending");
+    assert_eq!(
+        over,
+        OverLimit {
+            limit: 4 * M,
+            tried: 5 * M
+        }
+    );
+    assert!(!a.is_pending());
+    assert!(a.is_handled());
+    assert_eq!(a.check(), None);
+    assert_eq!(a.take(), None, "taken once");
+    let _y = alloc(&a, 100);
+    assert_eq!(a.try_reserve(8 * M).map_err(|e| e.tried), Err(8 * M));
+    assert!(!a.is_pending(), "nothing recorded while handled");
+    a.clear();
+    assert!(!a.is_handled());
+    let _z = alloc(&a, 100);
+    assert_eq!(
+        a.take(),
+        Some(OverLimit {
+            limit: 4 * M,
+            tried: 100
+        })
+    );
+    drop(x);
+}
+
+#[test]
 fn hard_ceiling_returns_null_without_handler() {
     let a = CountingAlloc::new(System);
     a.request_start(Some(4 * M)).expect("limit");
