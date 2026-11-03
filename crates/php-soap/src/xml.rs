@@ -130,8 +130,9 @@ pub enum ParseFailure {
 }
 
 /// An XML document.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct Doc {
+    uid: u64,
     nodes: Vec<NodeData>,
     first: Option<NodeId>,
     last: Option<NodeId>,
@@ -157,7 +158,36 @@ impl Iterator for Siblings<'_> {
     }
 }
 
+thread_local! {
+    static NEXT_DOC_ID: std::cell::Cell<u64> = const { std::cell::Cell::new(1) };
+}
+
+impl Default for Doc {
+    fn default() -> Self {
+        let uid = NEXT_DOC_ID.with(|c| {
+            let v = c.get();
+            c.set(v + 1);
+            v
+        });
+        Self {
+            uid,
+            nodes: Vec::new(),
+            first: None,
+            last: None,
+            url: None,
+            encoding: None,
+        }
+    }
+}
+
 impl Doc {
+    /// A process-unique identity of this document (used to key
+    /// multi-reference maps).
+    #[must_use]
+    pub fn uid(&self) -> u64 {
+        self.uid
+    }
+
     /// An empty document (`xmlNewDoc("1.0")`).
     #[must_use]
     pub fn new() -> Self {
