@@ -287,6 +287,9 @@ fn cases() -> Vec<Case> {
     v.push(pk("B", &[]));
     v.push(pk("nB", &[i(1)]));
     v.push(pk("", &[]));
+    v.push(pk("\0", &[]));
+    v.push(pk("H", &[s(b"\0")]));
+    v.push(up("\0", b"a"));
     v.push(pk("", &[i(1)]));
     v.push(pk("C2147483647", &[i(1)]));
     v.push(pk("CC2147483647", &[i(1), i(1)]));

@@ -272,8 +272,16 @@ fn ch(b: u8) -> char {
     char::from(b)
 }
 
+/// PHP formats messages into C strings, so a `%c` of NUL ends the text.
+fn c_msg(mut msg: String) -> String {
+    if let Some(n) = msg.find('\0') {
+        msg.truncate(n);
+    }
+    msg
+}
+
 fn value_error(msg: String) -> StdError {
-    StdError::new(ErrorKind::ValueError, msg)
+    StdError::new(ErrorKind::ValueError, c_msg(msg))
 }
 
 fn not_supported(code: u8) -> StdError {
@@ -333,7 +341,7 @@ pub fn pack<V: PackValue>(format: &[u8], args: &[V], notices: &mut Notices) -> S
     let mut currentarg: i64 = 0;
     let formatlen = format.len();
     let mut i = 0;
-    let warn = |n: &mut Notices, m: String| n.push(Notice::warning("pack", m));
+    let warn = |n: &mut Notices, m: String| n.push(Notice::warning("pack", c_msg(m)));
 
     while i < formatlen {
         let code = format[i];
@@ -700,7 +708,7 @@ pub fn unpack(
     let inputlen = total - offset;
     let mut inputpos: i64 = 0;
     let mut result = OrderedMap::default();
-    let warn = |n: &mut Notices, m: String| n.push(Notice::warning("unpack", m));
+    let warn = |n: &mut Notices, m: String| n.push(Notice::warning("unpack", c_msg(m)));
 
     let mut f = 0usize;
     let flen = format.len();

@@ -3605,6 +3605,13 @@ Warning: pack(): 2 arguments unused
 !! ValueError: Type B: unknown format code
 === bin2hex(pack(''))
 => ''
+=== bin2hex(pack("\x00"))
+!! ValueError: Type 
+=== bin2hex(pack('H', "\x00"))
+Warning: pack(): Type H: illegal hex digit 
+=> '00'
+=== unpack("\x00", 'a')
+!! ValueError: Invalid format type 
 === bin2hex(pack('', 1))
 Warning: pack(): 1 arguments unused
 => ''
