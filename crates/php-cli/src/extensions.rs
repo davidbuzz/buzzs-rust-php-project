@@ -30,6 +30,10 @@ pub fn all() -> Vec<Box<dyn Extension>> {
         Box::new(php_ext_exif::Exif),
         Box::new(php_ext_zlib::Zlib),
         Box::new(php_ext_gettext::Gettext),
+        Box::new(php_ext_sysv::Sysvmsg),
+        Box::new(php_ext_sysv::Sysvsem),
+        Box::new(php_ext_sysv::Sysvshm),
+        Box::new(php_ext_sysv::Shmop),
         Box::new(php_ext_calendar::Calendar),
     ]
 }

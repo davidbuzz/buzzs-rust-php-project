@@ -322,7 +322,11 @@ fn format_object(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         }
     };
     let owned = if dt::instance_of(&obj, "IntlCalendar") {
-        crate::calendar::require(&obj).map(OwnedDate::Calendar)
+        let Some(c) = crate::calendar::require(&obj) else {
+            core::global_error_set(vm, UErrorCode::ILLEGAL_ARGUMENT_ERROR, "bad IntlCalendar instance: not initialized properly")?;
+            return Ok(Value::Bool(false));
+        };
+        Some(OwnedDate::Calendar(c))
     } else if dt::instance_of(&obj, "DateTimeInterface") {
         Some(OwnedDate::DateTime(dt::php_datetime(vm, &obj)?))
     } else {
@@ -360,31 +364,36 @@ fn format_object(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     }
 }
 
-/// `zval_try_get_long()`.
+/// `zval_try_get_long()` (`None` = failed).
 pub(crate) fn try_get_long(vm: &mut Vm, v: &Value) -> VmResult<Option<i64>> {
     Ok(match v {
         Value::Int(i) => Some(*i),
         Value::Null => Some(0),
         Value::Bool(b) => Some(i64::from(*b)),
-        Value::Float(f) => {
-            if f.is_finite() && f.fract() == 0.0 {
-                Some(php_intl::common::dval_to_lval_cap(*f))
-            } else if f.is_finite() {
-                Some(php_intl::common::dval_to_lval_cap(*f))
-            } else {
-                None
-            }
-        }
+        Value::Float(f) => Some(float_to_long(vm, *f)?),
         Value::Str(z) => match php_intl::common::numeric_string(z.as_bytes()) {
             Some(php_intl::common::Numeric::Long(l)) => Some(l),
-            Some(php_intl::common::Numeric::Double(d)) => Some(php_intl::common::dval_to_lval_cap(d)),
+            Some(php_intl::common::Numeric::Double(d)) => Some(float_to_long(vm, d)?),
             None => None,
         },
-        _ => {
-            let _ = vm;
-            None
-        }
+        _ => None,
     })
+}
+
+/// A float to int conversion with PHP's diagnostics.
+fn float_to_long(vm: &mut Vm, f: f64) -> VmResult<i64> {
+    #[allow(clippy::cast_precision_loss)]
+    let in_range = f.is_finite() && f >= i64::MIN as f64 && f < i64::MAX as f64;
+    if !in_range {
+        let repr = php_intl::common::php_gcvt(f, 17);
+        vm.raise(2, &format!("The float {repr} is not representable as an int, cast occurred"))?;
+        return Ok(php_intl::common::dval_to_lval_cap(f));
+    }
+    if f.fract() != 0.0 {
+        let repr = php_intl::common::php_gcvt(f, 17);
+        vm.raise(8192, &format!("Implicit conversion from float {repr} to int loses precision"))?;
+    }
+    Ok(php_intl::common::dval_to_lval_cap(f))
 }
 
 /// Reads the `&$offset` argument: `Ok(Err(throw))` for type errors.
@@ -393,9 +402,6 @@ fn read_offset(vm: &mut Vm, a: &Args, n: usize) -> VmResult<Option<i64>> {
         return Ok(None);
     }
     let v = a.at(n);
-    if matches!(v, Value::Null) {
-        return Ok(None);
-    }
     match try_get_long(vm, &v)? {
         Some(l) => Ok(Some(l)),
         None => {

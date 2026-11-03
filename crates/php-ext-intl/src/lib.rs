@@ -19,6 +19,8 @@ mod dt;
 mod iter;
 mod locale;
 mod misc;
+mod msgformat;
+mod numfmt;
 mod registry;
 mod stubs;
 mod timezone;
@@ -111,6 +113,8 @@ fn all_handlers() -> HashMap<&'static str, NativeFn> {
         timezone::handlers(),
         calendar::handlers(),
         dateformat::handlers(),
+        numfmt::handlers(),
+        msgformat::handlers(),
     ] {
         for (k, f) in list {
             h.insert(k, f);
@@ -136,6 +140,12 @@ fn class_opts(name: &str) -> registry::ClassOpts {
                 properties_for: Some(timezone::debug_info),
                 ..ClassHooks::default()
             };
+        }
+        "NumberFormatter" => {
+            o.hooks = ClassHooks { clone: Some(numfmt::clone), ..ClassHooks::default() };
+        }
+        "MessageFormatter" => {
+            o.hooks = ClassHooks { clone: Some(msgformat::clone), ..ClassHooks::default() };
         }
         "IntlDateFormatter" => {
             o.hooks = ClassHooks { clone: Some(dateformat::clone), ..ClassHooks::default() };

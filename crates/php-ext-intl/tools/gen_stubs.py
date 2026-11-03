@@ -135,6 +135,9 @@ for path in files:
             decl = norm(m.group(9))
             mods, _, sig = decl.partition("function ")
             sig = resolve_defaults(norm(sig))
+            # ZPP parses these with Z_PARAM_OBJ_OR_STR_OR_NULL: its TypeError
+            # names "object|string|null".
+            sig = sig.replace("IntlTimeZone|DateTimeZone|string|null $timezone", "object|string|null $timezone")
             alias = re.search(r"@alias\s+(\w+)", doc)
             impl_alias = re.search(r"@implementation-alias\s+(\w+)", doc)
             dep = None

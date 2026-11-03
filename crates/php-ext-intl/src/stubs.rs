@@ -412,7 +412,7 @@ pub(crate) const CLASSES: &[ClassStub] = &[
                 deprecated: None,
             },
             MethodStub {
-                sig: "createInstance(IntlTimeZone|DateTimeZone|string|null $timezone = null, ?string $locale = null): ?IntlCalendar",
+                sig: "createInstance(object|string|null $timezone = null, ?string $locale = null): ?IntlCalendar",
                 key: "IntlCalendar::createInstance",
                 visibility: "public",
                 is_static: true,
@@ -817,7 +817,7 @@ pub(crate) const CLASSES: &[ClassStub] = &[
                 deprecated: None,
             },
             MethodStub {
-                sig: "setTimeZone(IntlTimeZone|DateTimeZone|string|null $timezone): bool",
+                sig: "setTimeZone(object|string|null $timezone): bool",
                 key: "IntlCalendar::setTimeZone",
                 visibility: "public",
                 is_static: false,
@@ -1242,7 +1242,7 @@ pub(crate) const CLASSES: &[ClassStub] = &[
         ],
         methods: &[
             MethodStub {
-                sig: "__construct(?string $locale, int $dateType = 0, int $timeType = 0, IntlTimeZone|DateTimeZone|string|null $timezone = null, $calendar = null, ?string $pattern = null)",
+                sig: "__construct(?string $locale, int $dateType = 0, int $timeType = 0, object|string|null $timezone = null, $calendar = null, ?string $pattern = null)",
                 key: "IntlDateFormatter::__construct",
                 visibility: "public",
                 is_static: false,
@@ -1251,7 +1251,7 @@ pub(crate) const CLASSES: &[ClassStub] = &[
                 deprecated: None,
             },
             MethodStub {
-                sig: "create(?string $locale, int $dateType = 0, int $timeType = 0, IntlTimeZone|DateTimeZone|string|null $timezone = null, IntlCalendar|int|null $calendar = null, ?string $pattern = null): ?IntlDateFormatter",
+                sig: "create(?string $locale, int $dateType = 0, int $timeType = 0, object|string|null $timezone = null, IntlCalendar|int|null $calendar = null, ?string $pattern = null): ?IntlDateFormatter",
                 key: "IntlDateFormatter::create",
                 visibility: "public",
                 is_static: true,
@@ -1323,7 +1323,7 @@ pub(crate) const CLASSES: &[ClassStub] = &[
                 deprecated: None,
             },
             MethodStub {
-                sig: "setTimeZone(IntlTimeZone|DateTimeZone|string|null $timezone): bool",
+                sig: "setTimeZone(object|string|null $timezone): bool",
                 key: "IntlDateFormatter::setTimeZone",
                 visibility: "public",
                 is_static: false,
@@ -3417,7 +3417,7 @@ pub(crate) const CLASSES: &[ClassStub] = &[
 
 /// Every procedural function.
 pub(crate) const FUNCTIONS: &[FuncStub] = &[
-    FuncStub { sig: "intlcal_create_instance(IntlTimeZone|DateTimeZone|string|null $timezone = null, ?string $locale = null): ?IntlCalendar", key: "IntlCalendar::createInstance", deprecated: None },
+    FuncStub { sig: "intlcal_create_instance(object|string|null $timezone = null, ?string $locale = null): ?IntlCalendar", key: "IntlCalendar::createInstance", deprecated: None },
     FuncStub { sig: "intlcal_get_keyword_values_for_locale(string $keyword, string $locale, bool $onlyCommon): IntlIterator|false", key: "IntlCalendar::getKeywordValuesForLocale", deprecated: None },
     FuncStub { sig: "intlcal_get_now(): float", key: "IntlCalendar::getNow", deprecated: None },
     FuncStub { sig: "intlcal_get_available_locales(): array", key: "IntlCalendar::getAvailableLocales", deprecated: None },
@@ -3425,7 +3425,7 @@ pub(crate) const FUNCTIONS: &[FuncStub] = &[
     FuncStub { sig: "intlcal_get_time(IntlCalendar $calendar): float|false", key: "IntlCalendar::getTime", deprecated: None },
     FuncStub { sig: "intlcal_set_time(IntlCalendar $calendar, float $timestamp): bool", key: "IntlCalendar::setTime", deprecated: None },
     FuncStub { sig: "intlcal_add(IntlCalendar $calendar, int $field, int $value): bool", key: "IntlCalendar::add", deprecated: None },
-    FuncStub { sig: "intlcal_set_time_zone(IntlCalendar $calendar, IntlTimeZone|DateTimeZone|string|null $timezone): bool", key: "intlcal_set_time_zone", deprecated: None },
+    FuncStub { sig: "intlcal_set_time_zone(IntlCalendar $calendar, object|string|null $timezone): bool", key: "intlcal_set_time_zone", deprecated: None },
     FuncStub { sig: "intlcal_after(IntlCalendar $calendar, IntlCalendar $other): bool", key: "IntlCalendar::after", deprecated: None },
     FuncStub { sig: "intlcal_before(IntlCalendar $calendar, IntlCalendar $other): bool", key: "IntlCalendar::before", deprecated: None },
     FuncStub { sig: "intlcal_set(IntlCalendar $calendar, int $year, int $month, int $dayOfMonth = UNKNOWN, int $hour = UNKNOWN, int $minute = UNKNOWN, int $second = UNKNOWN): true", key: "intlcal_set", deprecated: Some(("8.4", "use IntlCalendar::set(), IntlCalendar::setDate(), or IntlCalendar::setDateTime() instead")) },
@@ -3483,7 +3483,7 @@ pub(crate) const FUNCTIONS: &[FuncStub] = &[
     FuncStub { sig: "intl_get_error_message(): string", key: "intl_get_error_message", deprecated: None },
     FuncStub { sig: "intl_is_failure(int $errorCode): bool", key: "intl_is_failure", deprecated: None },
     FuncStub { sig: "intl_error_name(int $errorCode): string", key: "intl_error_name", deprecated: None },
-    FuncStub { sig: "datefmt_create(?string $locale, int $dateType = 0, int $timeType = 0, IntlTimeZone|DateTimeZone|string|null $timezone = null, IntlCalendar|int|null $calendar = null, ?string $pattern = null): ?IntlDateFormatter", key: "IntlDateFormatter::create", deprecated: None },
+    FuncStub { sig: "datefmt_create(?string $locale, int $dateType = 0, int $timeType = 0, object|string|null $timezone = null, IntlCalendar|int|null $calendar = null, ?string $pattern = null): ?IntlDateFormatter", key: "IntlDateFormatter::create", deprecated: None },
     FuncStub { sig: "datefmt_get_datetype(IntlDateFormatter $formatter): int|false", key: "IntlDateFormatter::getDateType", deprecated: None },
     FuncStub { sig: "datefmt_get_timetype(IntlDateFormatter $formatter): int|false", key: "IntlDateFormatter::getTimeType", deprecated: None },
     FuncStub { sig: "datefmt_get_calendar(IntlDateFormatter $formatter): int|false", key: "IntlDateFormatter::getCalendar", deprecated: None },
@@ -3491,7 +3491,7 @@ pub(crate) const FUNCTIONS: &[FuncStub] = &[
     FuncStub { sig: "datefmt_get_timezone_id(IntlDateFormatter $formatter): string|false", key: "IntlDateFormatter::getTimeZoneId", deprecated: None },
     FuncStub { sig: "datefmt_get_calendar_object(IntlDateFormatter $formatter): IntlCalendar|false|null", key: "IntlDateFormatter::getCalendarObject", deprecated: None },
     FuncStub { sig: "datefmt_get_timezone(IntlDateFormatter $formatter): IntlTimeZone|false", key: "IntlDateFormatter::getTimeZone", deprecated: None },
-    FuncStub { sig: "datefmt_set_timezone(IntlDateFormatter $formatter, IntlTimeZone|DateTimeZone|string|null $timezone): bool", key: "datefmt_set_timezone", deprecated: None },
+    FuncStub { sig: "datefmt_set_timezone(IntlDateFormatter $formatter, object|string|null $timezone): bool", key: "datefmt_set_timezone", deprecated: None },
     FuncStub { sig: "datefmt_set_pattern(IntlDateFormatter $formatter, string $pattern): bool", key: "IntlDateFormatter::setPattern", deprecated: None },
     FuncStub { sig: "datefmt_get_pattern(IntlDateFormatter $formatter): string|false", key: "IntlDateFormatter::getPattern", deprecated: None },
     FuncStub { sig: "datefmt_get_locale(IntlDateFormatter $formatter, int $type = 0): string|false", key: "IntlDateFormatter::getLocale", deprecated: None },
