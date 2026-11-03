@@ -49,6 +49,12 @@ A Rust re-implementation of PHP whose goal is to pass the php-src `.phpt` test s
 - `crates/php-pcntl`    — ext/pcntl over libc (signal dispatch hooks for the VM)
 - `crates/php-spl`      — SPL data structures, iterators, ArrayObject core over php-runtime (ref: ext/spl)
 - `crates/php-session`  — session core: serializers, save handlers, ID generation, INI semantics (ref: ext/session)
+- `crates/php-mysqlnd`  — pure-Rust MySQL client protocol (ref: ext/mysqlnd); `php-ext-mysqli` binds ext/mysqli on it
+- `crates/php-sapi-apache2` — mod_php: Apache 2.4 module SAPI (ref: sapi/apache2handler)
+- `crates/php-zip`      — libzip binding with ext/zip semantics
+- `crates/php-fileinfo` — libmagic binding with ext/fileinfo semantics
+- `crates/php-sodium`   — libsodium binding with ext/sodium semantics
+- `crates/php-xsl`      — libxslt binding over php-libxml with ext/xsl semantics
 - `crates/php-stdmisc`  — ext/standard: crypt/password, exec/proc_open, network/dns, env/info, highlight, getopt, http_build_query/parse_str, locale
 - `crates/php-phar`     — phar/tar/zip archive formats, manifest, signatures, stub, phar:// semantics (ref: ext/phar)
 - `crates/php-dom`      — ext/dom (legacy DOMDocument API + PHP 8.4 Dom\\* HTML5 API) over php-libxml (ref: ext/dom, ext/lexbor)
@@ -64,3 +70,7 @@ Several agents work concurrently, one crate each. Only edit files inside your ow
 - `.cargo/config.toml` caps `cargo` at 3 jobs; never override it with `-j`.
 - EVERY invocation of `/usr/bin/php` (oracle scripts, fixture generators) MUST pass `-d memory_limit=1G`. Ubuntu's CLI php.ini sets `memory_limit=-1`, and one unbounded script took the machine down.
 - Do not run more than one `cargo test`/`cargo build` at a time from a single agent; do not run the whole php-src suite with `--php /usr/bin/php` (use subsets).
+
+## Test services
+- MariaDB 10.11 is installed for ext/mysqli tests: database `test`, user `phptest` / password `phptest` on 127.0.0.1:3306 (set `MYSQL_TEST_HOST=127.0.0.1 MYSQL_TEST_USER=phptest MYSQL_TEST_PASSWD=phptest MYSQL_TEST_DB=test` when running those tests). Start/stop with `sudo systemctl start|stop mariadb`.
+- Apache 2.4 + apache2-dev (`apxs`) are installed for the mod_php SAPI; keep `apache2` stopped unless testing it.

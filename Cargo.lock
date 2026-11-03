@@ -347,9 +347,11 @@ name = "php-cli"
 version = "0.1.0"
 dependencies = [
  "libc",
+ "php-ext-hash",
  "php-ext-json",
  "php-ext-pcre",
  "php-ext-stdarr",
+ "php-ext-stdmisc",
  "php-ext-stdstr",
  "php-vm",
 ]
@@ -413,7 +415,9 @@ dependencies = [
 name = "php-ext-hash"
 version = "0.1.0"
 dependencies = [
+ "php-hash",
  "php-runtime",
+ "php-streams",
  "php-vm",
 ]
 
@@ -433,6 +437,10 @@ dependencies = [
  "php-runtime",
  "php-vm",
 ]
+
+[[package]]
+name = "php-ext-mysqli"
+version = "0.1.0"
 
 [[package]]
 name = "php-ext-pcre"
@@ -456,7 +464,10 @@ dependencies = [
 name = "php-ext-spl"
 version = "0.1.0"
 dependencies = [
+ "php-pcre",
  "php-runtime",
+ "php-spl",
+ "php-stdarr",
  "php-vm",
 ]
 
@@ -474,7 +485,10 @@ dependencies = [
 name = "php-ext-stdmisc"
 version = "0.1.0"
 dependencies = [
+ "php-lexer",
  "php-runtime",
+ "php-stdmisc",
+ "php-support",
  "php-vm",
 ]
 
@@ -499,6 +513,10 @@ dependencies = [
  "php-support",
  "php-vm",
 ]
+
+[[package]]
+name = "php-fileinfo"
+version = "0.1.0"
 
 [[package]]
 name = "php-filter"
@@ -556,6 +574,10 @@ version = "0.1.0"
 
 [[package]]
 name = "php-mbstring"
+version = "0.1.0"
+
+[[package]]
+name = "php-mysqlnd"
 version = "0.1.0"
 
 [[package]]
@@ -626,6 +648,10 @@ name = "php-runtime"
 version = "0.1.0"
 
 [[package]]
+name = "php-sapi-apache2"
+version = "0.1.0"
+
+[[package]]
 name = "php-session"
 version = "0.1.0"
 dependencies = [
@@ -658,6 +684,10 @@ version = "0.1.0"
 dependencies = [
  "libc",
 ]
+
+[[package]]
+name = "php-sodium"
+version = "0.1.0"
 
 [[package]]
 name = "php-spl"
@@ -745,6 +775,14 @@ version = "0.1.0"
 dependencies = [
  "php-libxml",
 ]
+
+[[package]]
+name = "php-xsl"
+version = "0.1.0"
+
+[[package]]
+name = "php-zip"
+version = "0.1.0"
 
 [[package]]
 name = "php-zlib"
