@@ -314,10 +314,20 @@ enum Xxh3Inner {
     H128(twox_hash::XxHash3_128),
 }
 
+/// Inputs up to this length are digested by the one-shot short-input
+/// routines (`XXH3_MIDSIZE_MAX`).
+const XXH3_MIDSIZE_MAX: usize = 240;
+
 /// `PHP_XXH3_64_CTX` / `PHP_XXH3_128_CTX`.
 #[derive(Clone)]
 pub(crate) struct Xxh3 {
     inner: Xxh3Inner,
+    /// For custom-secret contexts: the secret and the first
+    /// [`XXH3_MIDSIZE_MAX`] input bytes. The reference streaming digest
+    /// hashes short inputs with `XXH3_64bits_withSecret`, whereas
+    /// `twox-hash`'s streaming hasher would use the default secret.
+    short: Option<(Vec<u8>, Vec<u8>)>,
+    total_len: u64,
 }
 
 impl std::fmt::Debug for Xxh3 {
@@ -335,6 +345,10 @@ impl std::fmt::Debug for Xxh3 {
 impl Xxh3 {
     /// Creates an XXH3 context; `wide` selects the 128-bit variant.
     pub(crate) fn new(wide: bool, init: &Xxh3Init) -> Self {
+        let short = match init {
+            Xxh3Init::Seed(_) => None,
+            Xxh3Init::Secret(secret) => Some((secret.clone(), Vec::new())),
+        };
         let inner = match init {
             Xxh3Init::Seed(seed) => {
                 if wide {
@@ -360,12 +374,21 @@ impl Xxh3 {
                 }
             }
         };
-        Self { inner }
+        Self {
+            inner,
+            short,
+            total_len: 0,
+        }
     }
 }
 
 impl HashState for Xxh3 {
     fn update(&mut self, data: &[u8]) {
+        self.total_len = self.total_len.wrapping_add(data.len() as u64);
+        if let Some((_, buf)) = &mut self.short {
+            let room = XXH3_MIDSIZE_MAX.saturating_sub(buf.len());
+            buf.extend_from_slice(&data[..room.min(data.len())]);
+        }
         match &mut self.inner {
             Xxh3Inner::H64(h) => std::hash::Hasher::write(h, data),
             Xxh3Inner::H128(h) => h.write(data),
@@ -373,6 +396,20 @@ impl HashState for Xxh3 {
     }
 
     fn finish(&mut self, out: &mut [u8]) {
+        if let Some((secret, buf)) = &self.short {
+            if self.total_len <= XXH3_MIDSIZE_MAX as u64 {
+                let digest = match self.inner {
+                    Xxh3Inner::H64(_) => twox_hash::XxHash3_64::oneshot_with_secret(secret, buf)
+                        .map(|h| h.to_be_bytes().to_vec()),
+                    Xxh3Inner::H128(_) => twox_hash::XxHash3_128::oneshot_with_secret(secret, buf)
+                        .map(|h| h.to_be_bytes().to_vec()),
+                };
+                if let Ok(d) = digest {
+                    out.copy_from_slice(&d);
+                    return;
+                }
+            }
+        }
         match &self.inner {
             Xxh3Inner::H64(h) => out.copy_from_slice(&std::hash::Hasher::finish(h).to_be_bytes()),
             Xxh3Inner::H128(h) => out.copy_from_slice(&h.finish_128().to_be_bytes()),

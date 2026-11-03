@@ -102,7 +102,6 @@ fn seeded() {
 }
 
 #[test]
-#[ignore = "xxh3 custom-secret streaming not yet bit-exact"]
 fn xxh3_secret() {
     for (algo, short, long) in SECRETED {
         assert_eq!(
@@ -199,7 +198,6 @@ fn hkdf() {
 }
 
 #[test]
-#[ignore = "xxh3 custom-secret streaming not yet bit-exact"]
 fn xxh3_secret_phpt_vectors() {
     let secret = vec![b'a'; 256];
     let data = b"Lorem ipsum dolor sit amet, consectetur adipiscing elit.";
