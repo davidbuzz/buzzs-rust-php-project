@@ -1,0 +1,846 @@
+//! [`VmHost`]: the [`SoapHost`] implementation over the VM, plus the
+//! conversions between VM throws and runtime errors.
+//!
+//! # The SOAP error handler
+//!
+//! PHP's ext/soap replaces `zend_error_cb` while a `SoapClient` or
+//! `SoapServer` method runs. The VM has no such hook, so the parts that
+//! matter are emulated here:
+//!
+//! * diagnostics raised by `php-soap` itself go through
+//!   [`RuntimeContext::diagnostic`], which consults the handler state;
+//! * while a `SoapServer` dispatches to user code, `display_errors` is
+//!   switched off (what `soap_real_error_handler` does around the original
+//!   handler) and a fatal error becomes a fault response whose text is the
+//!   error message (`vm.last_error`).
+
+use std::cell::RefCell;
+use std::rc::Rc;
+
+use php_runtime::serialize::SerializedObject;
+use php_runtime::{
+    ArrayKey, BinaryOp, CastTarget, ErrorLevel, Obj, ObjectDump, PropertyPurpose, RtResult,
+    RuntimeContext, RuntimeError, Value, ZArray, ZStr,
+};
+use php_soap::globals::{self, ErrorObject};
+use php_soap::host::{
+    ConnectTarget, EnumKind, HttpConnector, HttpStream, LocalTime, MethodCall, SoapHost,
+};
+use php_soap::state::SoapObject;
+use php_vm::func::flags;
+use php_vm::object::{class_of, data};
+use php_vm::{Throw, Vm};
+
+/// Class name of the marker error for `exit()` unwinding through the
+/// library.
+const EXIT_MARK: &[u8] = b"\0soap-exit";
+/// Class name of the marker error for `zend_bailout()` after a server
+/// fault response was written.
+const BAILOUT_MARK: &[u8] = b"\0soap-bailout";
+
+thread_local! {
+    /// The message of the last fatal error the VM already reported (so it
+    /// is not reported twice when it travels back through the library).
+    static REPORTED_FATAL: RefCell<Option<String>> = const { RefCell::new(None) };
+    /// The method name of a `__call` dispatch started by this crate.
+    static MAGIC_NAME: RefCell<Option<ZStr>> = const { RefCell::new(None) };
+}
+
+/// Takes the method name stored by [`VmHost::call_method`] for the native
+/// `SoapClient::__call`.
+pub(crate) fn take_magic_name() -> Option<ZStr> {
+    MAGIC_NAME.with(|m| m.borrow_mut().take())
+}
+
+/// Converts a VM throw into a runtime error.
+pub(crate) fn to_rt(vm: &mut Vm, t: Throw) -> RuntimeError {
+    match t {
+        Throw::Exception(o) => RuntimeError::Thrown(Value::Object(o)),
+        Throw::Exit => RuntimeError::Custom {
+            class: ZStr::from(EXIT_MARK),
+            message: String::new(),
+        },
+        Throw::Fatal => {
+            let msg = vm
+                .last_error
+                .as_ref()
+                .map(|e| String::from_utf8_lossy(&e.message).into_owned())
+                .unwrap_or_default();
+            REPORTED_FATAL.with(|r| *r.borrow_mut() = Some(msg.clone()));
+            RuntimeError::Fatal(msg)
+        }
+        other @ Throw::FiberSuspend => {
+            if vm.pending_throw.is_none() {
+                vm.pending_throw = Some(other);
+            }
+            RuntimeError::Fatal(String::new())
+        }
+    }
+}
+
+/// Converts a runtime error into a VM throw, creating exception objects
+/// for errors raised by `php-soap` and reporting its fatal errors.
+pub(crate) fn to_throw(vm: &mut Vm, e: RuntimeError) -> Throw {
+    if let Some(t) = vm.pending_throw.take() {
+        return t;
+    }
+    let class = e.class_name().unwrap_or("Error");
+    match e {
+        RuntimeError::Thrown(Value::Object(o)) => Throw::Exception(o),
+        RuntimeError::Thrown(_) => Throw::Fatal,
+        RuntimeError::Fatal(m) => {
+            let reported = REPORTED_FATAL.with(|r| r.borrow_mut().take());
+            if m.is_empty() || reported.as_deref() == Some(m.as_str()) {
+                Throw::Fatal
+            } else {
+                vm.fatal(&m)
+            }
+        }
+        RuntimeError::Custom { class, .. } if class.as_bytes() == EXIT_MARK => Throw::Exit,
+        RuntimeError::Custom { class, .. } if class.as_bytes() == BAILOUT_MARK => {
+            vm.exit_status = 255;
+            php_vm::object::set_destructors_enabled(false);
+            Throw::Fatal
+        }
+        RuntimeError::Custom { class, message } => vm.throw(&class.to_string_lossy(), &message),
+        RuntimeError::Error(m)
+        | RuntimeError::TypeError(m)
+        | RuntimeError::ValueError(m)
+        | RuntimeError::ArithmeticError(m)
+        | RuntimeError::DivisionByZeroError(m)
+        | RuntimeError::ArgumentCountError(m) => vm.throw(class, &m),
+    }
+}
+
+/// Whether a server error context is active: errors are not displayed
+/// (`PG(display_errors) = 0` around the original handler).
+fn server_context() -> bool {
+    globals::with(|g| {
+        g.use_soap_error_handler && !matches!(g.error_object, Some(ErrorObject::Client(..)))
+    })
+}
+
+/// Runs `f` with `display_errors` off when a SOAP server context is active.
+pub(crate) fn quiet_if_server<R>(vm: &mut Vm, f: impl FnOnce(&mut Vm) -> R) -> R {
+    if server_context() {
+        with_display_off(vm, f)
+    } else {
+        f(vm)
+    }
+}
+
+/// Runs `f` with `display_errors=0`.
+pub(crate) fn with_display_off<R>(vm: &mut Vm, f: impl FnOnce(&mut Vm) -> R) -> R {
+    let old = vm.ini.get("display_errors").map(<[u8]>::to_vec);
+    set_ini(vm, "display_errors", b"0");
+    let r = f(vm);
+    set_ini(vm, "display_errors", old.as_deref().unwrap_or(b"1"));
+    r
+}
+
+/// Runs `f` with `error_reporting = 0` (the `@` operator).
+pub(crate) fn silenced<R>(vm: &mut Vm, f: impl FnOnce(&mut Vm) -> R) -> R {
+    let old = vm.error_reporting;
+    vm.error_reporting = 0;
+    let r = f(vm);
+    vm.error_reporting = old;
+    r
+}
+
+fn set_ini(vm: &mut Vm, name: &str, value: &[u8]) {
+    let _ = vm.call_value(
+        &Value::from("ini_set"),
+        vec![Value::from(name), Value::from(value)],
+    );
+}
+
+/// `"\0Class\0name"` / `"\0*\0name"` / `"name"`.
+fn mangle(flags_: u32, class: &ZStr, name: &ZStr) -> ZStr {
+    let mut v = Vec::new();
+    if flags_ & flags::PRIVATE != 0 {
+        v.push(0);
+        v.extend_from_slice(class.as_bytes());
+        v.push(0);
+    } else if flags_ & flags::PROTECTED != 0 {
+        v.extend_from_slice(b"\0*\0");
+    } else {
+        return name.clone();
+    }
+    v.extend_from_slice(name.as_bytes());
+    ZStr::from(v)
+}
+
+/// The VM seen as a [`SoapHost`].
+pub(crate) struct VmHost<'a> {
+    /// The VM.
+    pub(crate) vm: &'a mut Vm,
+}
+
+impl<'a> VmHost<'a> {
+    /// Wraps the VM.
+    pub(crate) fn new(vm: &'a mut Vm) -> Self {
+        VmHost { vm }
+    }
+
+    /// Converts a library result into a VM result.
+    pub(crate) fn vm_result<T>(&mut self, r: RtResult<T>) -> Result<T, Throw> {
+        r.map_err(|e| to_throw(self.vm, e))
+    }
+
+    /// Calls a PHP function by name.
+    fn call_named(&mut self, name: &str, args: Vec<Value>) -> RtResult<Value> {
+        self.vm
+            .call_value(&Value::from(name), args)
+            .map_err(|t| to_rt(self.vm, t))
+    }
+
+    /// The declared property `name` of `obj` as seen from the object's own
+    /// class (private properties of parents are skipped).
+    fn declared_prop(obj: &Obj, name: &[u8]) -> Option<Rc<php_vm::class::PropInfo>> {
+        let cls = class_of(obj);
+        cls.props
+            .iter()
+            .rev()
+            .find(|p| {
+                p.name.as_bytes() == name
+                    && p.flags & flags::STATIC == 0
+                    && p.hooks.is_none()
+                    && (p.flags & flags::PRIVATE == 0 || p.class.eq_ignore_ascii_case(&cls.name))
+            })
+            .cloned()
+    }
+
+    /// The slot of a property declared by an internal SOAP class (the
+    /// `OBJ_PROP_NUM` accessors of the C code).
+    fn internal_slot(obj: &Obj, name: &str) -> Option<usize> {
+        let cls = class_of(obj);
+        cls.props
+            .iter()
+            .find(|p| {
+                p.name.as_bytes() == name.as_bytes()
+                    && p.flags & flags::STATIC == 0
+                    && is_internal_class(&p.class)
+            })
+            .map(|p| p.slot as usize)
+    }
+
+    /// Iterates an `Iterator`.
+    fn iterate_iterator(&mut self, it: &Obj) -> RtResult<Vec<(Value, Value)>> {
+        let mut out = Vec::new();
+        let vm = &mut *self.vm;
+        let call = |vm: &mut Vm, m: &str| {
+            vm.call_method_by_name(it, m, Vec::new())
+                .map_err(|t| to_rt(vm, t))
+        };
+        call(vm, "rewind")?;
+        loop {
+            let valid = call(vm, "valid")?;
+            if !valid.to_bool(&mut *vm).map_err(|e| e)? {
+                break;
+            }
+            let v = call(vm, "current")?;
+            let k = call(vm, "key")?;
+            out.push((k, v));
+            call(vm, "next")?;
+        }
+        Ok(out)
+    }
+}
+
+/// Whether `name` is one of the classes this extension declares (or the
+/// `Exception` base of `SoapFault`).
+fn is_internal_class(name: &ZStr) -> bool {
+    php_soap::classes::find_class(&name.to_string_lossy()).is_some()
+        || name.eq_ignore_ascii_case(b"Exception")
+}
+
+impl RuntimeContext for VmHost<'_> {
+    fn diagnostic(&mut self, level: ErrorLevel, message: &str) -> RtResult<()> {
+        let client_wsdl = globals::with(|g| {
+            g.use_soap_error_handler
+                && matches!(g.error_object, Some(ErrorObject::Client(_, true)))
+                && g.error_code == Some("WSDL")
+        });
+        if client_wsdl {
+            // "Ignore libxml warnings during WSDL parsing".
+            return Ok(());
+        }
+        let vm = &mut *self.vm;
+        quiet_if_server(vm, |vm| vm.error(level.bits(), message)).map_err(|t| to_rt(self.vm, t))
+    }
+    fn precision(&self) -> i64 {
+        self.vm.precision()
+    }
+    fn serialize_precision(&self) -> i64 {
+        self.vm.serialize_precision()
+    }
+    fn cast_object(&mut self, obj: &Obj, target: CastTarget) -> RtResult<Option<Value>> {
+        self.vm.cast_object(obj, target)
+    }
+    fn do_operation(&mut self, op: BinaryOp, op1: &Value, op2: &Value) -> RtResult<Option<Value>> {
+        self.vm.do_operation(op, op1, op2)
+    }
+    fn compare_objects(&mut self, op1: &Value, op2: &Value) -> RtResult<i32> {
+        self.vm.compare_objects(op1, op2)
+    }
+    fn object_properties(
+        &mut self,
+        obj: &Obj,
+        purpose: PropertyPurpose,
+    ) -> RtResult<Option<ZArray>> {
+        self.vm.object_properties(obj, purpose)
+    }
+    fn object_dump(&mut self, obj: &Obj, purpose: PropertyPurpose) -> RtResult<ObjectDump> {
+        self.vm.object_dump(obj, purpose)
+    }
+    fn serialize_object(&mut self, obj: &Obj) -> RtResult<SerializedObject> {
+        self.vm.serialize_object(obj)
+    }
+    fn unserialize_object_create(&mut self, class: &ZStr) -> RtResult<Value> {
+        self.vm.unserialize_object_create(class)
+    }
+    fn unserialize_object_finish(&mut self, obj: &Value, props: ZArray) -> RtResult<()> {
+        self.vm.unserialize_object_finish(obj, props)
+    }
+    fn unserialize_enum(&mut self, class: &ZStr, case: &ZStr) -> RtResult<Value> {
+        self.vm.unserialize_enum(class, case)
+    }
+    fn unserialize_custom(&mut self, class: &ZStr, data: &[u8]) -> RtResult<Value> {
+        self.vm.unserialize_custom(class, data)
+    }
+    fn is_enum(&mut self, obj: &Obj) -> bool {
+        class_of(obj).is_enum()
+    }
+    fn count_object(&mut self, obj: &Obj) -> RtResult<Option<i64>> {
+        self.vm.count_object(obj)
+    }
+    fn property_read(&mut self, obj: &Obj, name: &ZStr) -> RtResult<Option<Value>> {
+        self.vm.property_read(obj, name)
+    }
+    fn property_write(&mut self, obj: &Obj, name: &ZStr, value: Value) -> RtResult<()> {
+        self.vm.property_write(obj, name, value)
+    }
+    fn create_std_object(&mut self, props: ZArray) -> RtResult<Value> {
+        self.vm.create_std_object(props)
+    }
+}
+
+impl SoapHost for VmHost<'_> {
+    fn soap_state(&mut self, obj: &Obj) -> Option<Rc<SoapObject>> {
+        php_vm::object::internal::<Rc<SoapObject>, _>(obj, |s| Rc::clone(s))
+    }
+
+    fn instance_of(&mut self, obj: &Obj, class: &str) -> bool {
+        class_of(obj).instance_of_name(class.to_ascii_lowercase().as_bytes())
+    }
+
+    fn fetch_class(&mut self, name: &[u8]) -> RtResult<Option<ZStr>> {
+        match self.vm.lookup_class(&ZStr::from(name)) {
+            Ok(Some(c)) => Ok(Some(c.name.clone())),
+            Ok(None) => Err(RuntimeError::Error(format!(
+                "Class \"{}\" not found",
+                String::from_utf8_lossy(name)
+            ))),
+            Err(t) => Err(to_rt(self.vm, t)),
+        }
+    }
+
+    fn create_object(&mut self, class: &ZStr) -> RtResult<Obj> {
+        let cls = match self.vm.lookup_class(class) {
+            Ok(Some(c)) => c,
+            Ok(None) => {
+                return Err(RuntimeError::Error(format!(
+                    "Class \"{}\" not found",
+                    class.to_string_lossy()
+                )))
+            }
+            Err(t) => return Err(to_rt(self.vm, t)),
+        };
+        self.vm.new_object(&cls).map_err(|t| to_rt(self.vm, t))
+    }
+
+    fn instantiate(&mut self, class: &ZStr, args: &[Value]) -> RtResult<Obj> {
+        let cls = match self.vm.lookup_class(class) {
+            Ok(Some(c)) => c,
+            Ok(None) => {
+                return Err(RuntimeError::Error(format!(
+                    "Class \"{}\" not found",
+                    class.to_string_lossy()
+                )))
+            }
+            Err(t) => return Err(to_rt(self.vm, t)),
+        };
+        let args = args.to_vec();
+        let vm = &mut *self.vm;
+        quiet_if_server(vm, |vm| vm.new_object_with_args(&cls, args))
+            .map_err(|t| to_rt(self.vm, t))
+    }
+
+    fn set_object_class(&mut self, _obj: &Obj, _class: &ZStr) {
+        // The VM cannot change the class of a live object.
+    }
+
+    fn read_property(&mut self, obj: &Obj, name: &[u8]) -> RtResult<Option<Value>> {
+        if let Some(pi) = Self::declared_prop(obj, name) {
+            return Ok(data(obj).slots.borrow()[pi.slot as usize]
+                .as_ref()
+                .map(Value::deref));
+        }
+        if let Some(t) = data(obj).dynamic.borrow().as_ref() {
+            if let Some(v) = t.get(&ArrayKey::from_bytes(name)) {
+                return Ok(Some(v.deref()));
+            }
+        }
+        if class_of(obj).magic.get.is_none() {
+            return Ok(None);
+        }
+        self.vm.property_read(obj, &ZStr::from(name))
+    }
+
+    fn write_property(&mut self, obj: &Obj, name: &[u8], value: Value) -> RtResult<()> {
+        if let Some(pi) = Self::declared_prop(obj, name) {
+            data(obj).slots.borrow_mut()[pi.slot as usize] = Some(value);
+            return Ok(());
+        }
+        let n = String::from_utf8_lossy(name).into_owned();
+        self.vm
+            .set_property(obj, &n, value)
+            .map_err(|t| to_rt(self.vm, t))
+    }
+
+    fn unset_property(&mut self, obj: &Obj, name: &[u8]) -> RtResult<()> {
+        if let Some(pi) = Self::declared_prop(obj, name) {
+            data(obj).slots.borrow_mut()[pi.slot as usize] = None;
+            return Ok(());
+        }
+        if let Some(t) = data(obj).dynamic.borrow_mut().as_mut() {
+            t.remove(&ArrayKey::from_bytes(name));
+        }
+        Ok(())
+    }
+
+    fn property_table(&mut self, obj: &Obj) -> ZArray {
+        let cls = class_of(obj).clone();
+        let mut out = ZArray::new();
+        {
+            let slots = data(obj).slots.borrow();
+            let t = out.make_mut();
+            for p in &cls.props {
+                if p.flags & flags::STATIC != 0 || p.is_virtual() {
+                    continue;
+                }
+                if let Some(Some(v)) = slots.get(p.slot as usize) {
+                    t.insert(ArrayKey::Str(mangle(p.flags, &p.class, &p.name)), v.clone());
+                }
+            }
+        }
+        if let Some(d) = data(obj).dynamic.borrow().as_ref() {
+            let t = out.make_mut();
+            for (k, v) in d.iter() {
+                t.insert(k.clone(), v.clone());
+            }
+        }
+        out
+    }
+
+    fn read_slot(&mut self, obj: &Obj, name: &str) -> Option<Value> {
+        let slot = Self::internal_slot(obj, name)?;
+        data(obj).slots.borrow().get(slot).cloned().flatten()
+    }
+
+    fn write_slot(&mut self, obj: &Obj, name: &str, value: Value) {
+        if let Some(slot) = Self::internal_slot(obj, name) {
+            if let Some(s) = data(obj).slots.borrow_mut().get_mut(slot) {
+                *s = Some(value);
+            }
+        } else {
+            self.vm.set_property_raw(obj, name, value);
+        }
+    }
+
+    fn enum_kind(&mut self, obj: &Obj) -> EnumKind {
+        let cls = class_of(obj).clone();
+        if !cls.is_enum() {
+            return EnumKind::NotEnum;
+        }
+        if cls.backing.is_none() {
+            return EnumKind::Pure;
+        }
+        match self.read_property(obj, b"value") {
+            Ok(Some(v)) => EnumKind::Backed(v),
+            _ => EnumKind::Pure,
+        }
+    }
+
+    fn iterate(&mut self, obj: &Obj) -> RtResult<Vec<(Value, Value)>> {
+        let cls = class_of(obj).clone();
+        if cls.instance_of_name(b"iterator") {
+            return self.iterate_iterator(obj);
+        }
+        if cls.instance_of_name(b"iteratoraggregate") {
+            let mut cur = obj.clone();
+            for _ in 0..32 {
+                let it = self
+                    .vm
+                    .call_method_by_name(&cur, "getIterator", Vec::new())
+                    .map_err(|t| to_rt(self.vm, t))?;
+                let Value::Object(it) = it else {
+                    return Ok(Vec::new());
+                };
+                if class_of(&it).instance_of_name(b"iterator") {
+                    return self.iterate_iterator(&it);
+                }
+                cur = it;
+            }
+        }
+        Ok(Vec::new())
+    }
+
+    fn format_date(&mut self, obj: &Obj, format: &str) -> Option<Vec<u8>> {
+        match self
+            .vm
+            .call_method_by_name(obj, "format", vec![Value::from(format)])
+        {
+            Ok(Value::Str(s)) => Some(s.as_bytes().to_vec()),
+            _ => None,
+        }
+    }
+
+    fn localtime(&mut self, ts: i64) -> Option<LocalTime> {
+        let lt = self
+            .call_named("localtime", vec![Value::Int(ts), Value::Bool(true)])
+            .ok()?;
+        let off = self
+            .call_named("date", vec![Value::from("Z"), Value::Int(ts)])
+            .ok()?;
+        let Value::Array(a) = lt else {
+            return None;
+        };
+        let field = |k: &str| match a.get_str(k.as_bytes()).map(Value::deref) {
+            Some(Value::Int(i)) => i,
+            _ => 0,
+        };
+        let n = |v: i64| u32::try_from(v).unwrap_or(0);
+        let gmtoff = match off {
+            Value::Str(s) => s.to_string_lossy().trim().parse().unwrap_or(0),
+            Value::Int(i) => i,
+            _ => 0,
+        };
+        Some(LocalTime {
+            year: field("tm_year") + 1900,
+            month: n(field("tm_mon") + 1),
+            day: n(field("tm_mday")),
+            hour: n(field("tm_hour")),
+            minute: n(field("tm_min")),
+            second: n(field("tm_sec")),
+            gmtoff,
+        })
+    }
+
+    fn exception_object(&mut self, err: &RuntimeError) -> Option<Obj> {
+        match err {
+            RuntimeError::Thrown(Value::Object(o)) => Some(o.clone()),
+            RuntimeError::Thrown(_) | RuntimeError::Fatal(_) => None,
+            RuntimeError::Custom { class, .. }
+                if class.as_bytes() == EXIT_MARK || class.as_bytes() == BAILOUT_MARK =>
+            {
+                None
+            }
+            other => match to_throw(self.vm, other.clone()) {
+                Throw::Exception(o) => Some(o),
+                _ => None,
+            },
+        }
+    }
+
+    fn is_unwind_exit(&mut self, err: &RuntimeError) -> bool {
+        matches!(err, RuntimeError::Custom { class, .. } if class.as_bytes() == EXIT_MARK)
+    }
+
+    fn call_callable(&mut self, callable: &Value, args: &[Value]) -> RtResult<Value> {
+        let args = args.to_vec();
+        let vm = &mut *self.vm;
+        quiet_if_server(vm, |vm| vm.call_value(callable, args)).map_err(|t| to_rt(self.vm, t))
+    }
+
+    fn call_function(&mut self, name: &[u8], args: &[Value]) -> RtResult<Option<Value>> {
+        if self.function_exists(name).is_none() {
+            return Ok(None);
+        }
+        let callable = Value::from(name);
+        self.call_callable(&callable, args).map(Some)
+    }
+
+    fn function_exists(&mut self, name: &[u8]) -> Option<ZStr> {
+        let lc = ZStr::from(name.to_ascii_lowercase());
+        self.vm.functions.get(&lc).map(|f| f.name().clone())
+    }
+
+    fn defined_functions(&mut self) -> Vec<ZStr> {
+        let Ok(Value::Array(a)) = self.call_named("get_defined_functions", Vec::new()) else {
+            return Vec::new();
+        };
+        let mut out = Vec::new();
+        for key in [&b"internal"[..], b"user"] {
+            if let Some(Value::Array(list)) = a.get_str(key).map(Value::deref) {
+                for v in list.values() {
+                    if let Value::Str(s) = v.deref() {
+                        let canon = self.function_exists(s.as_bytes()).unwrap_or(s);
+                        out.push(canon);
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    fn class_methods(&mut self, class: &ZStr) -> Vec<(ZStr, bool)> {
+        let Some(cls) = self.vm.find_class(class.as_bytes()) else {
+            return Vec::new();
+        };
+        let mut out = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        let mut cur = Some(cls);
+        while let Some(c) = cur {
+            for lc in &c.method_order {
+                if let Some(m) = c.methods.get(lc) {
+                    if seen.insert(lc.clone()) {
+                        let public = m.flags & (flags::PRIVATE | flags::PROTECTED) == 0;
+                        out.push((m.name.clone(), public));
+                    }
+                }
+            }
+            cur = c.parent.clone();
+        }
+        out
+    }
+
+    fn call_method(&mut self, obj: &Obj, name: &[u8], args: &[Value]) -> RtResult<MethodCall> {
+        let cls = class_of(obj).clone();
+        let n = String::from_utf8_lossy(name).into_owned();
+        let lc = n.to_ascii_lowercase();
+        let found = cls.find_method(lc.as_bytes()).is_some();
+        if !found {
+            if cls.magic.call.is_none() {
+                return Ok(MethodCall::NotCallable(format!(
+                    "class {} does not have a method \"{n}\"",
+                    php_vm::object::display_name(&cls.name).to_string_lossy()
+                )));
+            }
+            MAGIC_NAME.with(|m| *m.borrow_mut() = Some(ZStr::from(name)));
+        }
+        let args = args.to_vec();
+        let vm = &mut *self.vm;
+        let r = quiet_if_server(vm, |vm| vm.call_method_by_name(obj, &n, args));
+        MAGIC_NAME.with(|m| m.borrow_mut().take());
+        r.map(MethodCall::Returned).map_err(|t| to_rt(self.vm, t))
+    }
+
+    fn memory_check(&mut self, bytes: usize) -> RtResult<()> {
+        if let Some(limit) = php_memlimit::limit() {
+            if limit > 0 && bytes > limit {
+                let msg = format!(
+                    "Allowed memory size of {limit} bytes exhausted (tried to allocate 65536 bytes)"
+                );
+                return Err(RuntimeError::Fatal(msg));
+            }
+        }
+        Ok(())
+    }
+
+    fn load_resource(&mut self, url: &str, context: Option<&Value>) -> Result<Vec<u8>, String> {
+        let mut args = vec![Value::from(url), Value::Bool(false)];
+        if let Some(c) = context {
+            args.push(c.clone());
+        }
+        let vm = &mut *self.vm;
+        let r = silenced(vm, |vm| {
+            vm.call_value(&Value::from("file_get_contents"), args)
+        });
+        match r {
+            Ok(Value::Str(s)) => Ok(s.as_bytes().to_vec()),
+            Ok(_) => Err(format!("failed to load external entity \"{url}\"\n")),
+            Err(t) => {
+                // A user stream wrapper threw: keep the exception pending.
+                if let Throw::Exception(_) = t {
+                    self.vm.pending_throw = Some(t);
+                }
+                Err(format!("failed to load external entity \"{url}\"\n"))
+            }
+        }
+    }
+
+    fn realpath(&mut self, path: &str) -> Option<String> {
+        match self.call_named("realpath", vec![Value::from(path)]) {
+            Ok(Value::Str(s)) => Some(s.to_string_lossy()),
+            _ => None,
+        }
+    }
+
+    fn now(&mut self) -> i64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(0))
+    }
+
+    fn write_output(&mut self, data: &[u8]) {
+        self.vm.output(data);
+    }
+
+    fn add_header(&mut self, line: &str) {
+        let _ = silenced(self.vm, |vm| {
+            vm.call_value(&Value::from("header"), vec![Value::from(line)])
+        });
+    }
+
+    fn ob_start(&mut self) -> bool {
+        php_support::output::start(
+            &mut *self.vm,
+            php_support::output::StartHandler::Default,
+            0,
+            php_support::output::flags::STDFLAGS,
+        )
+    }
+
+    fn ob_contents(&mut self) -> Option<Vec<u8>> {
+        self.vm.output.contents().filter(|c| !c.is_empty())
+    }
+
+    fn ob_discard(&mut self) {
+        php_support::output::discard(&mut *self.vm);
+    }
+
+    fn server_var(&mut self, name: &str) -> Option<Vec<u8>> {
+        let server = global_array(self.vm, b"_SERVER")?;
+        match server.get_str(name.as_bytes()).map(Value::deref) {
+            Some(Value::Str(s)) => Some(s.as_bytes().to_vec()),
+            Some(v @ (Value::Int(_) | Value::Float(_) | Value::Bool(_))) => v
+                .to_zstr(&mut *self.vm)
+                .ok()
+                .map(|s| s.as_bytes().to_vec()),
+            _ => None,
+        }
+    }
+
+    fn request_line(&mut self) -> (Option<String>, Option<String>) {
+        let s = |h: &mut Self, n: &str| {
+            h.server_var(n)
+                .map(|v| String::from_utf8_lossy(&v).into_owned())
+        };
+        (s(self, "REQUEST_METHOD"), s(self, "QUERY_STRING"))
+    }
+
+    fn request_body(&mut self) -> Option<Vec<u8>> {
+        let body = php_streams::state::request_body();
+        (!body.is_empty()).then_some(body)
+    }
+
+    fn ini_get(&mut self, name: &str) -> Option<Vec<u8>> {
+        self.vm.ini_string(name)
+    }
+
+    fn context_create(&mut self) -> Value {
+        self.call_named("stream_context_create", Vec::new())
+            .unwrap_or(Value::Null)
+    }
+
+    fn context_get_option(
+        &mut self,
+        context: &Value,
+        wrapper: &str,
+        option: &str,
+    ) -> Option<Value> {
+        let Ok(Value::Array(opts)) =
+            self.call_named("stream_context_get_options", vec![context.clone()])
+        else {
+            return None;
+        };
+        match opts.get_str(wrapper.as_bytes()).map(Value::deref) {
+            Some(Value::Array(w)) => w.get_str(option.as_bytes()).map(Value::deref),
+            _ => None,
+        }
+    }
+
+    fn context_set_option(&mut self, context: &Value, wrapper: &str, option: &str, value: Value) {
+        let _ = self.call_named(
+            "stream_context_set_option",
+            vec![
+                context.clone(),
+                Value::from(wrapper),
+                Value::from(option),
+                value,
+            ],
+        );
+    }
+
+    fn connector(&mut self) -> Option<&mut dyn HttpConnector> {
+        Some(self)
+    }
+
+    fn random_bytes(&mut self, n: usize) -> RtResult<Vec<u8>> {
+        let len = i64::try_from(n).unwrap_or(0);
+        match self.call_named("random_bytes", vec![Value::Int(len)])? {
+            Value::Str(s) => Ok(s.as_bytes().to_vec()),
+            _ => Ok(vec![0; n]),
+        }
+    }
+
+    fn bailout(&mut self) -> RuntimeError {
+        RuntimeError::Custom {
+            class: ZStr::from(BAILOUT_MARK),
+            message: String::new(),
+        }
+    }
+
+    fn session_available(&mut self) -> bool {
+        self.function_exists(b"session_start").is_some()
+    }
+
+    fn session_get_object(&mut self) -> RtResult<Option<Value>> {
+        // PHP_SESSION_DISABLED = 0, PHP_SESSION_ACTIVE = 2.
+        let status = self.call_named("session_status", Vec::new())?;
+        if !matches!(status, Value::Int(0 | 2)) {
+            self.call_named("session_start", Vec::new())?;
+        }
+        let Some(sess) = global_array(self.vm, b"_SESSION") else {
+            return Ok(None);
+        };
+        Ok(sess.get_str(b"_bogus_session_name").map(Value::deref))
+    }
+
+    fn session_set_object(&mut self, value: Value) {
+        let mut g = self.vm.globals.borrow_mut();
+        let i = g.find_or_add(b"_SESSION") as usize;
+        match &mut g.slots[i] {
+            Some(Value::Reference(r)) => {
+                let mut cur = r.get();
+                if let Value::Array(a) = &mut cur {
+                    a.make_mut()
+                        .insert(ArrayKey::from_bytes(b"_bogus_session_name"), value);
+                    r.set(cur);
+                }
+            }
+            Some(Value::Array(a)) => {
+                a.make_mut()
+                    .insert(ArrayKey::from_bytes(b"_bogus_session_name"), value);
+            }
+            _ => {}
+        }
+    }
+}
+
+/// A superglobal array (`$_SERVER`, `$_SESSION`).
+fn global_array(vm: &Vm, name: &[u8]) -> Option<ZArray> {
+    let mut g = vm.globals.borrow_mut();
+    let i = g.find(name)? as usize;
+    match g.slots.get(i).and_then(Option::as_ref).map(Value::deref) {
+        Some(Value::Array(a)) => Some(a),
+        _ => None,
+    }
+}
+
+impl HttpConnector for VmHost<'_> {
+    fn connect(&mut self, target: &ConnectTarget) -> Option<Box<dyn HttpStream>> {
+        crate::net::connect(self.vm, target)
+    }
+}

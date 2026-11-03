@@ -46,6 +46,7 @@ php-ext-bcmath = { path = "../php-ext-bcmath" }
 php-ext-mysqli = { path = "../php-ext-mysqli" }
 php-ext-gmp = { path = "../php-ext-gmp" }
 php-ext-xml = { path = "../php-ext-xml" }
+php-ext-soap = { path = "../php-ext-soap" }
 php-ext-xmlreader = { path = "../php-ext-xmlreader" }
 php-ext-simplexml = { path = "../php-ext-simplexml" }
 php-ext-xsl = { path = "../php-ext-xsl" }
