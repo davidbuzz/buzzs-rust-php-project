@@ -253,6 +253,22 @@ impl Drop for IncDecGuard {
     }
 }
 
+// ---------------------------------------------------------------------------
+// By-reference argument writes of internal functions
+// ---------------------------------------------------------------------------
+
+thread_local! {
+    /// Writes of internal functions to typed by-reference arguments
+    /// ([`crate::func::Args::set_ref`]), checked once the function returns.
+    static DEFERRED_ARG_WRITES: RefCell<Vec<(PhpRef, Value)>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Queues a write to a typed by-reference argument (the VM is not at hand
+/// in [`crate::func::Args::set_ref`]); see [`Vm::flush_typed_arg_writes`].
+pub(crate) fn defer_typed_arg_write(r: PhpRef, v: Value) {
+    DEFERRED_ARG_WRITES.with(|d| d.borrow_mut().push((r, v)));
+}
+
 fn incdec_overflow() -> Option<bool> {
     INCDEC_OVERFLOW.with(Cell::get)
 }
@@ -504,6 +520,12 @@ impl Vm {
     /// of their sources first (`zend_assign_to_typed_ref`). Returns the
     /// value stored.
     pub(crate) fn assign_ref(&mut self, r: &PhpRef, v: Value) -> VmResult<Value> {
+        self.assign_ref_ex(r, v, None)
+    }
+
+    /// [`Vm::assign_ref`] with an explicit strictness (`None`: that of
+    /// the calling code).
+    fn assign_ref_ex(&mut self, r: &PhpRef, v: Value, strict: Option<bool>) -> VmResult<Value> {
         let incdec = take_incdec_overflow();
         if r.meta().is_none() {
             return Ok(set_ref_value(r, v));
@@ -522,15 +544,39 @@ impl Vm {
                 return Err(self.make_throw("TypeError", &msg));
             }
         }
-        let strict = self.uses_strict_types();
+        let strict = strict.unwrap_or_else(|| self.uses_strict_types());
         self.verify_ref_assignable(&sources, &mut v, strict)?;
         Ok(set_ref_value(r, v))
     }
 
-    /// `zend_try_assign_typed_ref`: a write by an internal function to a
-    /// by-reference argument.
-    pub(crate) fn try_assign_ref(&mut self, r: &PhpRef, v: Value) -> VmResult<()> {
-        self.assign_ref(r, v).map(drop)
+    /// `zend_assign_to_variable(..., strict = 1)`: like [`Vm::assign_ref`]
+    /// with strict typing whatever the calling code declares (`catch`
+    /// variables).
+    pub(crate) fn assign_ref_strict(&mut self, r: &PhpRef, v: Value) -> VmResult<Value> {
+        self.assign_ref_ex(r, v, Some(true))
+    }
+
+    /// Performs the writes internal functions made to typed by-reference
+    /// arguments (`zend_try_assign_typed_ref`) once the function returned
+    /// `result`; the first failing write's `TypeError` replaces a
+    /// successful result.
+    pub(crate) fn flush_typed_arg_writes(&mut self, result: VmResult<Value>) -> VmResult<Value> {
+        let pending = DEFERRED_ARG_WRITES.with(|d| {
+            if d.borrow().is_empty() {
+                Vec::new()
+            } else {
+                std::mem::take(&mut *d.borrow_mut())
+            }
+        });
+        let mut result = result;
+        for (r, v) in pending {
+            if let Err(e) = self.assign_ref(&r, v) {
+                if result.is_ok() {
+                    result = Err(e);
+                }
+            }
+        }
+        result
     }
 
     /// Whether a by-reference parameter check may coerce the value of `r`
@@ -588,6 +634,30 @@ impl Vm {
         pi: &Rc<PropInfo>,
         r: &PhpRef,
     ) -> VmResult<()> {
+        let mut v = Value::Reference(r.clone());
+        self.verify_prop_assignable_by_ref_ex(pi, &mut v, false)
+    }
+
+    /// The value returned by `__get()` for an unset typed property
+    /// (`zend_std_read_property`, `ZEND_VERIFY_PROP_ASSIGNABLE_BY_REF_CONTEXT_MAGIC_GET`):
+    /// must be compatible with the property type (and is coerced to it).
+    pub(crate) fn verify_magic_get_result(
+        &mut self,
+        pi: &Rc<PropInfo>,
+        v: &mut Value,
+    ) -> VmResult<()> {
+        self.verify_prop_assignable_by_ref_ex(pi, v, true)
+    }
+
+    /// `zend_verify_prop_assignable_by_ref_ex`: `v` is a reference or a
+    /// plain value (coerced in place, through the reference when not
+    /// typed).
+    fn verify_prop_assignable_by_ref_ex(
+        &mut self,
+        pi: &Rc<PropInfo>,
+        v: &mut Value,
+        magic_get: bool,
+    ) -> VmResult<()> {
         if !is_checked_type(pi) {
             return Ok(());
         }
@@ -597,8 +667,15 @@ impl Vm {
             decl,
         };
         let strict = self.uses_strict_types();
-        let val = r.get();
-        let sources = type_sources(r);
+        let r = match v {
+            Value::Reference(r) => Some(r.clone()),
+            _ => None,
+        };
+        let val = match &r {
+            Some(r) => r.get(),
+            None => v.clone(),
+        };
+        let sources = r.as_ref().map(type_sources).unwrap_or_default();
         if let Some(first) = sources.first() {
             match self.type_assignable(&target, &val, strict) {
                 Assignable::Yes => return Ok(()),
@@ -618,26 +695,41 @@ impl Vm {
                 Assignable::No => {}
             }
         } else if let Some(ty) = target.prop.ty.clone() {
-            let mut v = val.clone();
+            let mut c = val.clone();
             let ctx = TypeCtx {
                 scope: target.decl.as_ref(),
                 called: None,
                 strict,
                 internal_arg: None,
             };
-            if self.verify_type(&ty, &mut v, &ctx)? {
-                if !php_runtime::ops::is_identical(&v, &val).unwrap_or(false) {
-                    set_ref_value(r, v);
+            if self.verify_type(&ty, &mut c, &ctx)? {
+                if !php_runtime::ops::is_identical(&c, &val).unwrap_or(false) {
+                    match &r {
+                        Some(r) => {
+                            set_ref_value(r, c);
+                        }
+                        None => *v = c,
+                    }
                 }
                 return Ok(());
             }
         }
-        let msg = format!(
-            "Cannot assign {} to property {} of type {}",
-            zval_value_name(&val),
-            target.qualified_name(),
-            target.type_string()
-        );
+        let msg = if magic_get {
+            format!(
+                "Value of type {} returned from {}::__get() must be compatible with unset property {} of type {}",
+                zval_type_name(&val),
+                pi.class.to_string_lossy(),
+                target.qualified_name(),
+                target.type_string()
+            )
+        } else {
+            format!(
+                "Cannot assign {} to property {} of type {}",
+                zval_value_name(&val),
+                target.qualified_name(),
+                target.type_string()
+            )
+        };
         Err(self.make_throw("TypeError", &msg))
     }
 
@@ -673,15 +765,13 @@ impl Vm {
         Ok(())
     }
 
-    /// `$r = &$o->p` on a typed property that is not initialized
-    /// (`zend_handle_fetch_obj_flags`, `ZEND_FETCH_REF`): nullable types
-    /// start out as `null`, others throw. Returns `None` when the
-    /// property is not such a case (the caller proceeds normally).
-    pub(crate) fn uninit_typed_prop_ref(
-        &mut self,
-        o: &Obj,
-        name: &ZStr,
-    ) -> VmResult<Option<PhpRef>> {
+    /// The slot of an uninitialized typed property `name` of `o` that a
+    /// reference operation handles itself (`zend_std_get_property_ptr_ptr`
+    /// returns the `IS_UNDEF` slot for writes); `None` leaves the case to
+    /// the regular property path (untyped, hooked, readonly or
+    /// asymmetric-visibility properties, inaccessible ones, properties
+    /// `unset()` since, lazy objects).
+    fn uninit_typed_slot(&mut self, o: &Obj, name: &ZStr) -> VmResult<Option<Rc<PropInfo>>> {
         let cls = object::class_of(o).clone();
         let scope = self.scope();
         let pi = match self.lookup_prop(&cls, name, scope.as_ref()) {
@@ -698,13 +788,31 @@ impl Vm {
         let Some(d) = object_rc(o) else {
             return Ok(None);
         };
-        let uninit = d.slots.try_borrow().is_ok_and(|s| matches!(s.get(idx), Some(None)));
-        // Properties unset() since (magic `__get` applies) and lazy objects
-        // take the regular path.
-        let reinit = d.readonly_init.borrow().get(idx).copied().unwrap_or(false);
+        let uninit = d
+            .slots
+            .try_borrow()
+            .is_ok_and(|s| matches!(s.get(idx), Some(None)));
+        // After unset(), `__get()` takes over.
+        let reinit = d.readonly_init.borrow().get(idx).copied().unwrap_or(false)
+            && cls.magic.get.is_some();
         if !uninit || reinit || self.lazy_object_for(o, Some(name))?.ne(o) {
             return Ok(None);
         }
+        Ok(Some(pi))
+    }
+
+    /// `$r = &$o->p` on an uninitialized typed property
+    /// (`zend_handle_fetch_obj_flags`, `ZEND_FETCH_REF`): nullable types
+    /// start out as `null`, others throw. `None` when the regular path
+    /// applies.
+    pub(crate) fn uninit_typed_prop_ref(
+        &mut self,
+        o: &Obj,
+        name: &ZStr,
+    ) -> VmResult<Option<PhpRef>> {
+        let Some(pi) = self.uninit_typed_slot(o, name)? else {
+            return Ok(None);
+        };
         if !pi.ty.as_ref().is_some_and(TypeDecl::allows_null) {
             let msg = format!(
                 "Cannot access uninitialized non-nullable property {}::${} by reference",
@@ -713,7 +821,9 @@ impl Vm {
             );
             return Err(self.make_throw("Error", &msg));
         }
+        let idx = pi.slot as usize;
         let r = {
+            let d = object::data(o);
             let Ok(mut slots) = d.slots.try_borrow_mut() else {
                 return Ok(None);
             };
@@ -724,6 +834,37 @@ impl Vm {
         };
         self.add_slot_type_source(o, idx, &r);
         Ok(Some(r))
+    }
+
+    /// `$o->p = &$x` on an uninitialized typed property
+    /// (`zend_assign_to_property_reference`): verifies, binds and records
+    /// the source. `None` when the regular path applies.
+    pub(crate) fn assign_uninit_typed_prop_ref(
+        &mut self,
+        o: &Obj,
+        name: &ZStr,
+        r: &Value,
+    ) -> VmResult<Option<Value>> {
+        if !matches!(r, Value::Reference(_)) {
+            return Ok(None);
+        }
+        let Some(pi) = self.uninit_typed_slot(o, name)? else {
+            return Ok(None);
+        };
+        let idx = pi.slot as usize;
+        self.bind_slot_ref(o, idx, r)?;
+        let old = {
+            let d = object::data(o);
+            let Ok(mut slots) = d.slots.try_borrow_mut() else {
+                return Ok(None);
+            };
+            let Some(slot) = slots.get_mut(idx) else {
+                return Ok(None);
+            };
+            slot.replace(r.clone())
+        };
+        drop(old);
+        Ok(Some(r.clone()))
     }
 
     /// The property-type part of `$o->p = v` for a declared property
