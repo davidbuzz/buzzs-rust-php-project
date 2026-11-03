@@ -1,5 +1,6 @@
 [package]
 name = "php-ext-pdo"
+description = "ext/pdo, ext/pdo_sqlite and ext/sqlite3 bound to the phprust VM"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -8,6 +9,10 @@ rust-version.workspace = true
 [dependencies]
 php-vm = { path = "../php-vm" }
 php-runtime = { path = "../php-runtime" }
+php-support = { path = "../php-support" }
+php-streams = { path = "../php-streams" }
+php-pdo = { path = "../php-pdo" }
+php-sqlite = { path = "../php-sqlite" }
 
 [lints]
 workspace = true
