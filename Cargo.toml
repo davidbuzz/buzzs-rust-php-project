@@ -57,6 +57,8 @@ members = [
     "crates/php-memlimit",
     "crates/php-ext-tokenizer",
     "crates/php-cli-server",
+    "crates/php-curl",
+    "crates/php-ext-curl",
     "crates/php-ext-soap",
     "crates/php-ext-pcntl",
     "crates/php-ext-gettext",
