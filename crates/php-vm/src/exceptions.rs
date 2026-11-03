@@ -1030,3 +1030,6 @@ pub(crate) fn register(vm: &mut Vm) {
         ClassBuilder::new(name).extends(vm, parent).register(vm);
     }
 }
+
+#[cfg(test)]
+mod tests;

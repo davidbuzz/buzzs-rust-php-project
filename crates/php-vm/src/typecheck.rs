@@ -296,3 +296,6 @@ pub(crate) fn given_type(v: &Value) -> String {
         other => other.value_name(),
     }
 }
+
+#[cfg(test)]
+mod tests;
