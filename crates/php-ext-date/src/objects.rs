@@ -5,7 +5,7 @@
 
 use std::rc::Rc;
 
-use php_date::api::{self, Interval};
+use php_date::api::Interval;
 use php_date::parse::TimezoneSpec;
 use php_date::{RelTime, Time};
 use php_runtime::{ArrayKey, HashTable, Obj, Value, ZArray, ZStr};
@@ -117,12 +117,26 @@ pub(crate) fn set_interval(o: &Obj, iv: Option<Interval>) {
                 }
             }
         }
-        if let api::Value::Array(items) = iv.props() {
-            for (k, v) in items {
-                if let api::Key::Str(k) = k {
-                    write_table_prop(o, &k, crate::common::to_php(&v));
-                }
+        if iv.from_string {
+            write_table_prop(o, "from_string", Value::Bool(true));
+            let ds = iv.date_string.as_deref().unwrap_or_default();
+            write_table_prop(o, "date_string", Value::Str(ZStr::from(ds)));
+        } else {
+            // `date_interval_object_to_hash()`, without the intermediate tree.
+            let r = &iv.rel;
+            for (k, v) in [("y", r.y), ("m", r.m), ("d", r.d), ("h", r.h), ("i", r.i), ("s", r.s)] {
+                write_table_prop(o, k, Value::Int(v));
             }
+            #[allow(clippy::cast_precision_loss)]
+            write_table_prop(o, "f", Value::Float(r.us as f64 / 1_000_000.0));
+            write_table_prop(o, "invert", Value::Int(i64::from(r.invert)));
+            let days = if r.days == php_date::UNSET {
+                Value::Bool(false)
+            } else {
+                Value::Int(r.days)
+            };
+            write_table_prop(o, "days", days);
+            write_table_prop(o, "from_string", Value::Bool(false));
         }
     }
     if object::internal::<IntervalObj, _>(o, |s| s.iv.clone_from(&iv)).is_none() {
