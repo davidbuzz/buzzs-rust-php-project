@@ -668,6 +668,7 @@ impl Vm {
 
     /// `zend_traits_init_trait_structures`: resolves the traits named by
     /// `insteadof` and `as` rules (without autoloading) and validates them.
+    #[allow(clippy::too_many_lines)]
     fn init_trait_structures(
         &self,
         decl: &ClassDecl,
@@ -703,7 +704,7 @@ impl Vm {
                 continue;
             };
             let ti = find(trait_name)?;
-            let lc = ZStr::from(method.to_ascii_lowercase());
+            let lc = method.to_ascii_lowercase();
             if !traits[ti].methods.contains_key(&lc) {
                 return Err(format!(
                     "A precedence rule was defined for {}::{method} but this method does not exist",
@@ -737,7 +738,7 @@ impl Vm {
             else {
                 continue;
             };
-            let lc = ZStr::from(method.to_ascii_lowercase());
+            let lc = method.to_ascii_lowercase();
             if let Some(tn) = trait_name {
                 let ti = find(tn)?;
                 if !traits[ti].methods.contains_key(&lc) {
@@ -787,11 +788,12 @@ impl Vm {
     ) -> Option<(String, ZStr, u32)> {
         let (child, proto) = (&c.child, &c.proto);
         // `fixup_trait_scope`: `self` in trait methods is the using class.
-        let child_scope = if c.child_trait.is_some() || Weak::ptr_eq(&child.scope, &Rc::downgrade(cls)) {
-            cls.clone()
-        } else {
-            child.scope()
-        };
+        let child_scope =
+            if c.child_trait.is_some() || Weak::ptr_eq(&child.scope, &Rc::downgrade(cls)) {
+                cls.clone()
+            } else {
+                child.scope()
+            };
         let child_name = c
             .child_trait
             .clone()
@@ -803,7 +805,10 @@ impl Vm {
         };
         if proto.flags & flags::FINAL != 0 {
             return Some((
-                format!("Cannot override final method {proto_name}::{}()", child.name),
+                format!(
+                    "Cannot override final method {proto_name}::{}()",
+                    child.name
+                ),
                 file,
                 line,
             ));
@@ -837,7 +842,12 @@ impl Vm {
         Some((
             format!(
                 "Declaration of {} must be compatible with {}",
-                crate::variance::declaration_as(&child.func, child.flags, &child_name, &child_scope),
+                crate::variance::declaration_as(
+                    &child.func,
+                    child.flags,
+                    &child_name,
+                    &child_scope
+                ),
                 crate::variance::declaration_as(&proto.func, proto.flags, &proto_name, cls)
             ),
             file,
@@ -1072,7 +1082,12 @@ impl Vm {
             return Err(self.fatal_at(&e, line));
         }
         for w in &link_out.warnings {
-            self.error_at(crate::errors::level::COMPILE_WARNING, w, &decl.filename, line)?;
+            self.error_at(
+                crate::errors::level::COMPILE_WARNING,
+                w,
+                &decl.filename,
+                line,
+            )?;
         }
         for (a, b, msg) in &link_out.value_checks {
             // A failed evaluation makes the values incompatible.
@@ -1127,9 +1142,9 @@ impl Vm {
             for pi in &cls.props {
                 if explicit_abstract
                     || !cls
-                    .prop_map
-                    .get(&pi.name)
-                    .is_some_and(|x| Rc::ptr_eq(x, pi))
+                        .prop_map
+                        .get(&pi.name)
+                        .is_some_and(|x| Rc::ptr_eq(x, pi))
                 {
                     continue;
                 }
@@ -1185,8 +1200,12 @@ impl Vm {
         // `zend_implement_serializable`.
         if cls.flags & cflags::EXPLICIT_ABSTRACT == 0
             && !cls.is_interface()
-            && cls.interfaces.iter().any(|i| i.lc_name.as_bytes() == b"serializable")
-            && (cls.find_method(b"__serialize").is_none() || cls.find_method(b"__unserialize").is_none())
+            && cls
+                .interfaces
+                .iter()
+                .any(|i| i.lc_name.as_bytes() == b"serializable")
+            && (cls.find_method(b"__serialize").is_none()
+                || cls.find_method(b"__unserialize").is_none())
         {
             let msg = format!(
                 "{} implements the Serializable interface, which is deprecated. Implement __serialize() and __unserialize() instead (or in addition, if support for old PHP versions is necessary)",
@@ -1314,9 +1333,14 @@ impl TraitMethodBinder<'_> {
                     }
                     let fl = alias_flags(*f, tm.flags);
                     self.check_private_final(tm.flags, fl, a);
-                    self.add(a, ZStr::from(a.to_ascii_lowercase()), tm, fl, ti);
+                    self.add(a, a.to_ascii_lowercase(), tm, fl, ti);
                 }
-                if self.rules.excluded.iter().any(|(i, ml)| *i == ti && ml == lcm) {
+                if self
+                    .rules
+                    .excluded
+                    .iter()
+                    .any(|(i, ml)| *i == ti && ml == lcm)
+                {
                     continue;
                 }
                 // Aliases that only change the modifiers.
@@ -1493,7 +1517,7 @@ fn trait_prop_decls(t: &Rc<Class>) -> Vec<crate::class::PropDecl> {
 /// `traits[ti]` that collides with an own (or earlier trait's) property of
 /// `class` in an incompatible way. Traits are bound before inheritance, so
 /// inherited properties are not considered here.
-#[allow(clippy::mutable_key_type)] // `ZStr` keys hash by content only.
+#[allow(clippy::mutable_key_type, clippy::too_many_arguments)] // `ZStr` keys hash by content only.
 fn trait_property_conflict(
     class: &ZStr,
     traits: &[Rc<Class>],
@@ -1581,9 +1605,7 @@ fn check_method_inheritance(cls: &Rc<Class>) -> Option<(String, u32)> {
         };
         // A private parent method imposes nothing unless it is abstract or
         // the constructor (`do_inheritance_check_on_method`).
-        if pm.visibility() == flags::PRIVATE
-            && !pm.is_abstract()
-            && lc.as_bytes() != b"__construct"
+        if pm.visibility() == flags::PRIVATE && !pm.is_abstract() && lc.as_bytes() != b"__construct"
         {
             continue;
         }
