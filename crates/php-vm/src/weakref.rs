@@ -764,13 +764,10 @@ fn ii_current(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 }
 
 fn ii_key(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    with_internal_iter(vm, a, |vm, it| {
-        if it.valid(vm)? {
-            it.key(vm)
-        } else {
-            Ok(Value::Null)
-        }
-    })
+    // `InternalIterator::key()` asks the iterator without a validity
+    // check (`get_current_key`): past the end it reports what the native
+    // iterator reports.
+    with_internal_iter(vm, a, |vm, it| it.key(vm))
 }
 
 fn ii_next(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {

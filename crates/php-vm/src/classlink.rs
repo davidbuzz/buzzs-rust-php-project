@@ -941,6 +941,14 @@ fn check_method_inheritance(cls: &Rc<Class>) -> Option<(String, u32)> {
                 line,
             ));
         }
+        // Constructors only inherit a prototype (and its visibility) from
+        // an abstract or interface declaration.
+        if lc.as_bytes() == b"__construct"
+            && !pm.is_abstract()
+            && !pm.proto_scope.upgrade().is_some_and(|p| p.is_interface())
+        {
+            continue;
+        }
         let pv = pm.visibility();
         let v = m.visibility();
         let weaker = match pv {
