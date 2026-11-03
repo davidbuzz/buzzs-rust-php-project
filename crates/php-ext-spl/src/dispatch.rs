@@ -3,13 +3,13 @@
 //! that routes every call to [`php_spl::call_method`].
 
 use crate::host::{rt_throw, spl_state_of, VmHost};
-use php_runtime::{Value, ZStr};
+use php_runtime::{Obj, Value, ZStr};
 use php_spl::classes::{ClassDef, ClassKind, MethodDef, MethodFlags};
 use php_vm::ext::{acc, class_flags, Args, ClassBuilder, VmResult};
 use php_vm::func::Func;
 use php_vm::opcode::{Op, Operand};
 use php_vm::vm::FrameKind;
-use php_vm::Vm;
+use php_vm::{Throw, Vm};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -367,12 +367,10 @@ pub fn function_signature(d: &MethodDef) -> String {
 fn pending_method_name(vm: &Vm) -> Option<ZStr> {
     let f = vm.frames.iter().rev().find(|f| f.kind != FrameKind::Builtin)?;
     let ops = &f.code.ops;
-    let mut i = f.ip.min(ops.len().checked_sub(1)?);
-    if !matches!(ops[i], Op::DoCall { .. }) {
-        i = i.checked_sub(1)?;
-        if !matches!(ops[i], Op::DoCall { .. }) {
-            return None;
-        }
+    // The interpreter advances `ip` before executing an instruction.
+    let mut i = f.ip.checked_sub(1)?;
+    if !matches!(ops.get(i)?, Op::DoCall { .. }) {
+        return None;
     }
     let mut depth = 0usize;
     loop {
@@ -406,6 +404,34 @@ fn pending_method_name(vm: &Vm) -> Option<ZStr> {
     }
 }
 
+/// The fetch type of the dimension access being executed (`BP_VAR_*`),
+/// recovered from the current instruction: the VM's `read_dimension`
+/// hook does not say whether it serves a read or a write fetch.
+#[must_use]
+pub fn current_dim_kind(vm: &Vm) -> php_spl::DimKind {
+    use php_spl::DimKind;
+    let Some(f) = vm.frames.iter().rev().find(|f| f.kind != FrameKind::Builtin) else {
+        return DimKind::Read;
+    };
+    match f.ip.checked_sub(1).and_then(|i| f.code.ops.get(i)) {
+        Some(Op::Assign { .. } | Op::AssignRef { .. } | Op::MakeRef { .. }) => DimKind::Write,
+        Some(Op::AssignOp { .. } | Op::IncDec { .. }) => DimKind::ReadWrite,
+        Some(Op::Unset { .. }) => DimKind::Unset,
+        _ => DimKind::Read,
+    }
+}
+
+/// Whether the instruction being executed is `$a = &$b`.
+#[must_use]
+pub fn current_op_is_assign_ref(vm: &Vm) -> bool {
+    vm.frames
+        .iter()
+        .rev()
+        .find(|f| f.kind != FrameKind::Builtin)
+        .and_then(|f| f.ip.checked_sub(1).and_then(|i| f.code.ops.get(i)))
+        .is_some_and(|op| matches!(op, Op::AssignRef { .. }))
+}
+
 /// Forwards an unknown method call to the inner (current sub-) iterator.
 fn forward_call(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let Some(this) = a.this.clone() else {
@@ -426,13 +452,33 @@ fn forward_call(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         }
     }
     let shown = name.map_or_else(|| "__call".to_string(), |n| n.to_string_lossy());
-    Err(vm.throw(
+    let t = vm.throw(
         "Error",
         &format!(
             "Call to undefined method {}::{shown}()",
             this.class_name().to_string_lossy()
         ),
-    ))
+    );
+    if let Throw::Exception(e) = &t {
+        drop_top_trace_frame(e);
+    }
+    Err(t)
+}
+
+/// Removes the innermost frame (our `__call`) from an exception's trace:
+/// PHP raises "Call to undefined method" while resolving the call, before
+/// any frame is pushed.
+fn drop_top_trace_frame(e: &Obj) {
+    let cls = php_vm::object::class_of(e).clone();
+    let Some(pi) = cls.props.iter().find(|p| p.name.as_bytes() == b"trace") else {
+        return;
+    };
+    let d = php_vm::object::data(e);
+    let mut slots = d.slots.borrow_mut();
+    if let Some(Some(Value::Array(frames))) = slots.get(pi.slot as usize) {
+        let rest: Vec<Value> = frames.values().skip(1).cloned().collect();
+        slots[pi.slot as usize] = Some(Value::Array(php_runtime::ZArray::from_values(rest)));
+    }
 }
 
 #[cfg(test)]

@@ -92,7 +92,11 @@ fn read_property(vm: &mut Vm, o: &Obj, name: &ZStr) -> VmResult<Option<Value>> {
     if spl_state_of(o).is_none() {
         return Ok(None);
     }
-    with_host(vm, |host| h::read_property(host, o, name, DimKind::Read))
+    let kind = match crate::dispatch::current_dim_kind(vm) {
+        DimKind::Read => DimKind::Read,
+        _ => DimKind::Write,
+    };
+    with_host(vm, |host| h::read_property(host, o, name, kind))
 }
 
 fn write_property(vm: &mut Vm, o: &Obj, name: &ZStr, v: &Value) -> VmResult<bool> {
@@ -122,12 +126,45 @@ fn read_dimension(vm: &mut Vm, o: &Obj, k: &Value) -> VmResult<Option<Value>> {
     if spl_state_of(o).is_none() {
         return Ok(None);
     }
-    with_host(vm, |host| h::read_dimension(host, o, Some(k), DimKind::Read))
+    let kind = crate::dispatch::current_dim_kind(vm);
+    let v = with_host(vm, |host| h::read_dimension(host, o, Some(k), kind))?;
+    if let Some(v) = &v {
+        if kind != DimKind::Read && !matches!(v, Value::Reference(_) | Value::Object(_)) {
+            // `zend_fetch_dimension_address` on an object in a write
+            // context.
+            vm.raise(
+                8,
+                &format!(
+                    "Indirect modification of overloaded element of {} has no effect",
+                    o.class_name().to_string_lossy()
+                ),
+            )?;
+        }
+    }
+    Ok(v)
 }
 
 fn write_dimension(vm: &mut Vm, o: &Obj, k: Option<&Value>, v: &Value) -> VmResult<bool> {
     if spl_state_of(o).is_none() {
         return Ok(false);
+    }
+    if matches!(v, Value::Reference(_))
+        && crate::dispatch::current_dim_kind(vm) == DimKind::Write
+        && crate::dispatch::current_op_is_assign_ref(vm)
+    {
+        // `$obj[$k] = &$v`: FETCH_DIM_W yields a temporary, then
+        // ASSIGN_REF fails.
+        vm.raise(
+            8,
+            &format!(
+                "Indirect modification of overloaded element of {} has no effect",
+                o.class_name().to_string_lossy()
+            ),
+        )?;
+        return Err(vm.throw(
+            "Error",
+            "Cannot assign by reference to an array dimension of an object",
+        ));
     }
     with_host(vm, |host| h::write_dimension(host, o, k, v.clone()))
 }
