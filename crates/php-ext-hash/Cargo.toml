@@ -1,5 +1,6 @@
 [package]
 name = "php-ext-hash"
+description = "ext/hash (plus md5/sha1/crc32 of ext/standard) binding for the phprust VM"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -8,6 +9,8 @@ rust-version.workspace = true
 [dependencies]
 php-vm = { path = "../php-vm" }
 php-runtime = { path = "../php-runtime" }
+php-hash = { path = "../php-hash" }
+php-streams = { path = "../php-streams" }
 
 [lints]
 workspace = true

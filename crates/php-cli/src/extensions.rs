@@ -11,6 +11,7 @@ pub fn all() -> Vec<Box<dyn Extension>> {
         Box::new(php_ext_stdstr::StdStr),
         // Box::new(php_ext_ctype::Ctype),
         Box::new(php_ext_json::Json),
+        Box::new(php_ext_hash::Hash),
         Box::new(php_ext_pcre::Pcre),
         Box::new(php_ext_stdarr::StdArray),
         Box::new(php_ext_stdmisc::StdMisc),
