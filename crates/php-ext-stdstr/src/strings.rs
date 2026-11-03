@@ -842,7 +842,7 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
         .function("hebrev(string $string, int $max_chars_per_line = 0): string", hebrev)
         .function("nl2br(string $string, bool $use_xhtml = true): string", nl2br)
         .function("strip_tags(string $string, array|string|null $allowed_tags = null): string", strip_tags_fn)
-        .function("str_getcsv(string $string, string $separator = \",\", string $enclosure = \"\\\"\", string $escape = \"\\\\\"): array", str_getcsv)
+        .function("str_getcsv(string $string, string $separator = \",\", string $enclosure = UNKNOWN, string $escape = UNKNOWN): array", str_getcsv)
         .function("str_repeat(string $string, int $times): string", str_repeat)
         .function("count_chars(string $string, int $mode = 0): array|string", count_chars)
         .function("strnatcmp(string $string1, string $string2): int", strnatcmp)

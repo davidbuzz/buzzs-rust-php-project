@@ -9,6 +9,7 @@
 //! (`default_charset`) and the conversion of library errors/notices into
 //! thrown exceptions and emitted diagnostics.
 
+mod formatted;
 mod html;
 mod math;
 mod misc;
@@ -35,6 +36,7 @@ impl Extension for StdStr {
         url::register(m);
         math::register(m);
         misc::register(m);
+        formatted::register(m);
     }
 }
 

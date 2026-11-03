@@ -53,6 +53,44 @@ fn support_mode(m: RoundingMode) -> pfmt::RoundingMode {
     }
 }
 
+/// `Z_PARAM_OBJ_OF_CLASS_OR_LONG(mode_object, rounding_mode_ce, mode)`.
+fn round_mode(vm: &mut Vm, a: &Args, v: &Value) -> VmResult<RoundingMode> {
+    let long = match v {
+        Value::Object(o)
+            if o.class_name()
+                .as_bytes()
+                .eq_ignore_ascii_case(b"RoundingMode") =>
+        {
+            let name = vm.get_property(o, "name")?;
+            let name = crate::to_str(vm, &name)?;
+            return Ok(RoundingMode::from_enum_case(&name.to_string_lossy())
+                .unwrap_or(RoundingMode::HalfUp));
+        }
+        Value::Int(i) => Some(*i),
+        Value::Bool(b) => Some(i64::from(*b)),
+        #[allow(clippy::cast_possible_truncation, clippy::float_cmp)]
+        Value::Float(f) if f.is_finite() && f.trunc() == *f => Some(*f as i64),
+        Value::Str(s) => match php_runtime::numeric::is_numeric_string_ex(s.as_bytes(), false) {
+            Some(n) => match n.value {
+                php_runtime::numeric::Number::Int(i) => Some(i),
+                #[allow(clippy::cast_possible_truncation, clippy::float_cmp)]
+                php_runtime::numeric::Number::Float(f) if f.trunc() == f => Some(f as i64),
+                php_runtime::numeric::Number::Float(_) => None,
+            },
+            None => None,
+        },
+        _ => None,
+    };
+    let Some(m) = long else {
+        let msg = format!(
+            "must be of type RoundingMode|int, {} given",
+            crate::type_name(v)
+        );
+        return Err(a.type_error(vm, 3, &msg));
+    };
+    check(vm, RoundingMode::from_long(m))
+}
+
 fn round(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let num = number(vm, a, 0)?;
     let places = if a.has(1) {
@@ -62,16 +100,7 @@ fn round(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     };
     let mode = match a.get(2) {
         None => RoundingMode::HalfUp,
-        Some(Value::Object(o)) => {
-            // A `RoundingMode` enum case.
-            let name = vm.get_property(&o, "name")?;
-            let name = crate::to_str(vm, &name)?;
-            RoundingMode::from_enum_case(&name.to_string_lossy()).unwrap_or(RoundingMode::HalfUp)
-        }
-        Some(v) => {
-            let m = vm.value_to_int(&v)?;
-            check(vm, RoundingMode::from_long(m))?
-        }
+        Some(v) => round_mode(vm, a, &v)?,
     };
     let r = match num {
         Number::Int(i) => math::round_long(i, places)

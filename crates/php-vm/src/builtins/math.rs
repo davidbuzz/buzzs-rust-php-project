@@ -104,7 +104,6 @@ float_fn!(atanh, f64::atanh);
 float_fn!(exp, f64::exp);
 float_fn!(expm1, f64::exp_m1);
 float_fn!(log10, f64::log10);
-float_fn!(log2, f64::log2);
 float_fn!(log1p, f64::ln_1p);
 float_fn!(deg2rad, f64::to_radians);
 float_fn!(rad2deg, f64::to_degrees);
@@ -250,7 +249,6 @@ pub(crate) fn register(vm: &mut Vm) {
     reg(vm, "expm1(float $num): float", expm1);
     reg(vm, "log(float $num, float $base = M_E): float", log);
     reg(vm, "log10(float $num): float", log10);
-    reg(vm, "log2(float $num): float", log2);
     reg(vm, "log1p(float $num): float", log1p);
     reg(vm, "deg2rad(float $num): float", deg2rad);
     reg(vm, "rad2deg(float $num): float", rad2deg);
