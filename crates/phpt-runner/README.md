@@ -145,7 +145,9 @@ total/pass/fail/skip and pass rates per suite (Zend/tests, tests/, ext/, sapi/) 
   `RLIMIT_CORE=0`, an `RLIMIT_CPU` backstop just above the timeout and a parent-death signal
   (so nothing is orphaned if the runner is killed); transient spawn failures (ENOMEM, EAGAIN,
   ETXTBSY) are retried with backoff; a death by signal appends `Termsig=N` like run-tests.php.
-- Deliberate deviation: a test that timed out is not retried as "flaky".
+- Deliberate deviations: a test that timed out is not retried as "flaky"; output is capped at
+  16 MiB per process (a runaway test is killed and its output marked), which run-tests.php does
+  not do.
 - Not supported: CGI (`--GET--`, `--POST--`, `--COOKIE--`, `--EXPECTHEADERS--`, ...) and
   `--PHPDBG--` tests are parsed but SKIPPED; no valgrind/ASAN leak detection, `--repeat`,
   opcache file-cache/preload modes or JUnit output.

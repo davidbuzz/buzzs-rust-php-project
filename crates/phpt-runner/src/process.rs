@@ -72,20 +72,41 @@ pub struct RunOutput {
     pub timed_out: bool,
 }
 
+/// Most output kept per process. A test that prints more is runaway (typically an infinite
+/// loop in an early-stage implementation): its process group is killed, the output is truncated
+/// and marked, and the runner's memory stays bounded.
+pub const OUTPUT_LIMIT: usize = 16 * 1024 * 1024;
+
+/// Marker appended when [`OUTPUT_LIMIT`] was hit.
+pub const OUTPUT_LIMIT_MARKER: &[u8] =
+    b"\n ** ERROR: output exceeded the 16 MiB limit, process killed **\n";
+
+/// Read `source` to EOF into `sink` (up to `limit` bytes; on overflow the process group `pgid`
+/// is killed, the flag is set and further data is discarded), then signal `done`.
 fn spawn_reader(
     mut source: impl Read + Send + 'static,
     sink: Arc<Mutex<Vec<u8>>>,
     done: mpsc::Sender<()>,
+    pgid: Option<Pid>,
+    overflow: Arc<std::sync::atomic::AtomicBool>,
 ) {
     thread::spawn(move || {
         let mut buf = [0u8; 8192];
         loop {
             match source.read(&mut buf) {
                 Ok(0) | Err(_) => break,
-                Ok(n) => sink
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .extend_from_slice(&buf[..n]),
+                Ok(n) => {
+                    let mut data = sink
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    let room = OUTPUT_LIMIT.saturating_sub(data.len());
+                    data.extend_from_slice(&buf[..n.min(room)]);
+                    if n > room && !overflow.swap(true, std::sync::atomic::Ordering::SeqCst) {
+                        if let Some(pgid) = pgid {
+                            let _ = killpg(pgid, Signal::SIGKILL);
+                        }
+                    }
+                }
             }
         }
         let _ = done.send(());
@@ -237,8 +258,10 @@ pub fn run(inv: &Invocation<'_>) -> std::io::Result<RunOutput> {
     let sink = Arc::new(Mutex::new(Vec::new()));
     let (tx, rx) = mpsc::channel();
     let reading = reader.is_some();
+    let overflow = Arc::new(std::sync::atomic::AtomicBool::new(false));
     if let Some(r) = reader {
-        spawn_reader(r, Arc::clone(&sink), tx);
+        let pgid = i32::try_from(child.id()).ok().map(Pid::from_raw);
+        spawn_reader(r, Arc::clone(&sink), tx, pgid, Arc::clone(&overflow));
     }
 
     let take = |sink: &Arc<Mutex<Vec<u8>>>| {
@@ -272,6 +295,13 @@ pub fn run(inv: &Invocation<'_>) -> std::io::Result<RunOutput> {
     };
 
     let mut data = take(&sink);
+    if overflow.load(std::sync::atomic::Ordering::SeqCst) {
+        data.extend_from_slice(OUTPUT_LIMIT_MARKER);
+        return Ok(RunOutput {
+            data,
+            timed_out: false,
+        });
+    }
     if let Some(sig) = status.signal() {
         data.extend_from_slice(format!("\nTermsig={sig}\n").as_bytes());
     } else if let Some(code) = status.code() {
@@ -349,6 +379,15 @@ mod tests {
     fn children_cannot_dump_core() {
         let out = sh("ulimit -c", Capture::ALL, None, Duration::from_secs(10));
         assert_eq!(out.data, b"0\n");
+    }
+
+    #[test]
+    fn runaway_output_is_capped_and_killed() {
+        let start = Instant::now();
+        let out = sh("yes", Capture::ALL, None, Duration::from_secs(30));
+        assert!(start.elapsed() < Duration::from_secs(20));
+        assert!(out.data.ends_with(OUTPUT_LIMIT_MARKER));
+        assert_eq!(out.data.len(), OUTPUT_LIMIT + OUTPUT_LIMIT_MARKER.len());
     }
 
     #[test]
