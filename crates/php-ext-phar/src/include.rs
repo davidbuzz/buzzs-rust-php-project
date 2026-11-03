@@ -18,6 +18,16 @@ use crate::util::executed;
 thread_local! {
     static PREV_OPENER: Cell<Option<IncludeOpenerFn>> = const { Cell::new(None) };
     static PREV_FILTER: Cell<Option<SourceFilterFn>> = const { Cell::new(None) };
+    /// The construct of the include being opened (`include`,
+    /// `require_once`...), for warnings raised by the source filter.
+    static KIND: Cell<&'static str> = const { Cell::new("include") };
+}
+
+fn kind_static(kind: &str) -> &'static str {
+    ["include", "include_once", "require", "require_once"]
+        .into_iter()
+        .find(|k| *k == kind)
+        .unwrap_or("include")
 }
 
 /// Installs the hooks, chaining any opener/filter installed before.
@@ -91,6 +101,7 @@ fn open(vm: &mut Vm, target: &[u8], kind: &str) -> VmResult<IncludeOpen> {
 
 /// The include opener.
 fn opener(vm: &mut Vm, name: &[u8], kind: &str) -> VmResult<IncludeOpen> {
+    KIND.with(|k| k.set(kind_static(kind)));
     if name.is_empty() {
         return chain(vm, name, kind);
     }
@@ -142,12 +153,17 @@ fn filter(vm: &mut Vm, path: &ZStr, src: Vec<u8>) -> VmResult<Vec<u8>> {
         CompileSource::Original => src,
         CompileSource::Bytes(b) => b,
         CompileSource::Stub(url) => {
+            // zend_stream_open_function() on the stub: its errors are
+            // reported, and the file itself is compiled when it fails.
             let stub = bridge::enter(vm, || {
                 let mut opened = None;
-                php_streams::open::open_wrapper(&url, "rb", 0, &mut opened, None)
+                php_streams::open::open_wrapper(&url, "rb", REPORT_ERRORS, &mut opened, None)
                     .and_then(|mut s| s.copy_to_mem(None))
             });
-            let _ = diag::take();
+            if let Some(t) = bridge::take_pending() {
+                return Err(t);
+            }
+            report(vm, KIND.with(Cell::get))?;
             stub.unwrap_or(src)
         }
     })
