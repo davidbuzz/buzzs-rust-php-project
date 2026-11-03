@@ -1,0 +1,191 @@
+> static canWrite
+bool(true)
+> ini phar.readonly 1
+string(1) "0"
+> static canWrite
+bool(false)
+> phar p:a.phar
+EXC UnexpectedValueException: creating archive "%W%/a.phar" disabled by the php.ini setting phar.readonly
+> ini phar.readonly 0
+string(1) "1"
+> phar p:a.phar
+ok
+> call count
+int(0)
+> call offsetSet s:a.txt s:hello
+NULL
+> call count
+int(1)
+> call getVersion
+string(5) "1.1.1"
+> call offsetExists s:a.txt
+bool(true)
+> call offsetExists s:b.txt
+bool(false)
+> call offsetGet s:nope
+EXC BadMethodCallException: Entry nope does not exist
+> call offsetGet s:a.txt
+PharFileInfo(phar://%W%/a.phar/a.txt)
+> call offsetGet s:.phar/stub.php
+EXC BadMethodCallException: Entry .phar/stub.php does not exist
+> call offsetSet s:.phar/stub.php s:x
+EXC BadMethodCallException: Cannot set stub ".phar/stub.php" directly in phar "%W%/a.phar", use setStub
+> call offsetSet s:.phar/alias.txt s:x
+EXC BadMethodCallException: Cannot set alias ".phar/alias.txt" directly in phar "%W%/a.phar", use setAlias
+> call offsetSet s:.phar/foo s:x
+EXC BadMethodCallException: Cannot set any files or directories in magic ".phar" directory
+> call addFromString s:.phar/foo s:x
+EXC BadMethodCallException: Cannot create any files in magic ".phar" directory
+> call offsetSet s:bad//path s:x
+EXC BadMethodCallException: Entry bad//path does not exist and cannot be created: phar error: invalid path "bad//path" contains double slash
+> call offsetSet s:../up s:x
+NULL
+> call offsetSet s:star* s:x
+EXC BadMethodCallException: Entry star* does not exist and cannot be created: phar error: invalid path "star*" contains star
+> call getAlias
+string(10) "%W%/a.phar"
+> call setAlias s:my/alias
+EXC UnexpectedValueException: Invalid alias "my/alias" specified for phar "%W%/a.phar"
+> call setAlias s:goodalias
+bool(true)
+> call getAlias
+string(9) "goodalias"
+> call getSignature
+array(string(4) "hash"=>string(64) "822EA6C99F2BD66EE3752DDF2D078848505E2293A50A5FF5CCC33AE9A7B4E05B", string(9) "hash_type"=>string(7) "SHA-256")
+> call setSignatureAlgorithm i:99
+EXC UnexpectedValueException: Unknown signature algorithm specified
+> call setSignatureAlgorithm i:1
+NULL
+> call getSignature
+array(string(4) "hash"=>string(32) "49795235C797B8DAFAEE14F477775383", string(9) "hash_type"=>string(3) "MD5")
+> call setSignatureAlgorithm i:4
+NULL
+> call getSignature
+array(string(4) "hash"=>string(128) md5:0e3253a283babb760d2c186bf95fb9f0, string(9) "hash_type"=>string(7) "SHA-512")
+> call isFileFormat i:1
+bool(true)
+> call isFileFormat i:2
+bool(false)
+> call isFileFormat i:5
+EXC PharException: Unknown file format specified
+> call delete s:nope
+EXC BadMethodCallException: Entry nope does not exist and cannot be deleted
+> call offsetSet s:b.txt s:bee
+NULL
+> call delete s:a.txt
+bool(true)
+> call count
+int(2)
+> call copy s:a.txt s:c.txt
+EXC UnexpectedValueException: file "a.txt" cannot be copied to file "c.txt", file does not exist in %W%/a.phar
+> call copy s:b.txt s:b.txt
+EXC UnexpectedValueException: file "b.txt" cannot be copied to file "b.txt", file must not already exist in phar %W%/a.phar
+> call copy s:b.txt s:.phar/x
+EXC UnexpectedValueException: file "b.txt" cannot be copied to file ".phar/x", cannot copy to Phar meta-file in %W%/a.phar
+> call copy s:.phar/x s:y
+EXC UnexpectedValueException: file ".phar/x" cannot be copied to file "y", cannot copy Phar meta-file in %W%/a.phar
+> call copy s:b.txt s:bad\\name
+EXC UnexpectedValueException: file "bad\\name" contains invalid characters back-slash, cannot be copied from "b.txt" in phar %W%/a.phar
+> call copy s:b.txt s:c.txt
+bool(true)
+> call count
+int(3)
+> call addEmptyDir s:.phar/x
+EXC BadMethodCallException: Cannot create a directory in magic ".phar" directory
+> call addEmptyDir s:dir/sub
+NULL
+> call offsetExists s:dir
+bool(true)
+> call offsetExists s:dir/sub
+bool(true)
+> call isBuffering
+bool(false)
+> call startBuffering
+NULL
+> call isBuffering
+bool(true)
+> call offsetSet s:z.txt s:zzz
+NULL
+> call getModified
+bool(true)
+> call stopBuffering
+NULL
+> call isBuffering
+bool(false)
+> call isCompressed
+bool(false)
+> call isWritable
+bool(true)
+> call getMetadata
+NULL
+> call hasMetadata
+bool(false)
+> call setMetadata s:hello
+NULL
+> call getMetadata
+string(5) "hello"
+> call hasMetadata
+bool(true)
+> call delMetadata
+bool(true)
+> call hasMetadata
+bool(false)
+> call delMetadata
+bool(true)
+> fn file_get_contents u:a.phar/b.txt
+string(3) "bee"
+> fn file_get_contents u:a.phar/nothere
+W: Failed to open stream: phar error: "nothere" is not a file in phar "%W%/a.phar"
+bool(false)
+> fn file_get_contents u:a.phar/dir
+W: Failed to open stream: phar error: "dir" is not a file in phar "%W%/a.phar"
+bool(false)
+> fn file_get_contents u:a.phar/.phar/stub.php
+W: Failed to open stream: phar error: ".phar/stub.php" is not a file in phar "%W%/a.phar"
+bool(false)
+> call offsetUnset s:b.txt
+NULL
+> call offsetExists s:b.txt
+bool(false)
+> call offsetUnset s:nothere
+NULL
+> call count
+int(4)
+> release
+ok
+> ini phar.readonly 1
+string(1) "0"
+> phar p:a.phar
+ok
+> call offsetSet s:x s:y
+EXC BadMethodCallException: Write operations disabled by the php.ini setting phar.readonly
+> call setAlias s:z
+EXC UnexpectedValueException: Cannot write out phar archive, phar is read-only
+> call delete s:c.txt
+EXC UnexpectedValueException: Cannot write out phar archive, phar is read-only
+> call setStub s:x
+EXC UnexpectedValueException: Cannot change stub, phar is read-only
+> call setDefaultStub
+EXC UnexpectedValueException: Cannot change stub: phar.readonly=1
+> call setMetadata s:x
+EXC BadMethodCallException: Write operations disabled by the php.ini setting phar.readonly
+> call delMetadata
+EXC BadMethodCallException: Write operations disabled by the php.ini setting phar.readonly
+> call stopBuffering
+EXC UnexpectedValueException: Cannot write out phar archive, phar is read-only
+> call compressFiles i:4096
+EXC BadMethodCallException: Phar is readonly, cannot change compression
+> call decompressFiles
+EXC BadMethodCallException: Phar is readonly, cannot change compression
+> call copy s:c.txt s:d
+EXC UnexpectedValueException: Cannot copy "c.txt" to "d", phar is read-only
+> call setSignatureAlgorithm i:1
+EXC UnexpectedValueException: Cannot set signature algorithm, phar is read-only
+> call convertToExecutable
+EXC UnexpectedValueException: Cannot write out executable phar archive, phar is read-only
+> call addEmptyDir s:q
+EXC BadMethodCallException: Directory q does not exist and cannot be created: phar error: file "q" in phar "%W%/a.phar" cannot be opened for writing, disabled by ini setting
+> call offsetUnset s:c.txt
+EXC BadMethodCallException: Write operations disabled by the php.ini setting phar.readonly
+> call count
+int(4)

@@ -1,0 +1,44 @@
+> phar p:e.phar
+ok
+> call offsetSet s:a.txt s:hello
+NULL
+> call offsetSet s:d/b.txt s:bee
+NULL
+> call addEmptyDir s:empty
+NULL
+> call extractTo s:
+EXC InvalidArgumentException: Invalid argument, extraction path must be non-zero length
+> call extractTo p:out
+bool(true)
+> shell out/a.txt
+bool(true)
+> shell out/d/b.txt
+bool(true)
+> shell out/empty
+bool(false)
+> call extractTo p:out
+EXC PharException: Extraction from phar "%W%/e.phar" failed: Cannot extract "a.txt" to "%W%/out/a.txt", path already exists
+> call extractTo p:out n b:1
+bool(true)
+> call extractTo p:out2 s:a.txt
+bool(true)
+> shell out2/a.txt
+bool(true)
+> shell out2/d/b.txt
+bool(false)
+> call extractTo p:out3 s:d/
+bool(true)
+> shell out3/d/b.txt
+bool(true)
+> call extractTo p:out4 s:nothere
+EXC PharException: phar error: attempted to extract non-existent file or directory "nothere" from phar "%W%/e.phar"
+> call extractTo p:out5 a:s:a.txt,s:d/b.txt
+bool(true)
+> call extractTo p:out6 a:
+bool(false)
+> call extractTo p:out7 a:s:nothere
+EXC PharException: phar error: attempted to extract non-existent file or directory "nothere" from phar "%W%/e.phar"
+> call extractTo p:out8 a:i:5
+EXC InvalidArgumentException: Invalid argument, array of filenames to extract contains non-string value
+> call extractTo p:out/a.txt
+EXC RuntimeException: Unable to use path "%W%/out/a.txt" for extraction, it is a file, must be a directory

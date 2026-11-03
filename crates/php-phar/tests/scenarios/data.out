@@ -1,0 +1,120 @@
+> data p:d.tar
+ok
+> call offsetSet s:a.txt s:hello
+NULL
+> call getAlias
+NULL
+> call setAlias s:x
+EXC UnexpectedValueException: A Phar alias cannot be set in a plain tar archive
+> call setStub s:x
+EXC UnexpectedValueException: A Phar stub cannot be set in a plain tar archive
+> call setDefaultStub
+EXC UnexpectedValueException: A Phar stub cannot be set in a plain tar archive
+> call getStub
+string(0) ""
+> call getSignature
+bool(false)
+> call isFileFormat i:2
+bool(true)
+> call offsetSet s:dir/b.txt s:bee
+NULL
+> call addEmptyDir s:empty
+NULL
+> call count
+int(3)
+> call setMetadata s:meta
+NULL
+> call getMetadata
+string(4) "meta"
+> info s:a.txt setMetadata s:fmeta
+NULL
+> info s:a.txt getMetadata
+string(5) "fmeta"
+> info s:a.txt compress i:4096
+EXC BadMethodCallException: Cannot compress with Gzip compression, not possible with tar-based phar archives
+> info s:a.txt getCRC32
+int(2867)
+> info s:a.txt isCRCChecked
+bool(true)
+> info s:dir getCRC32
+EXC BadMethodCallException: Phar entry is a directory, does not have a CRC
+> info s:empty chmod i:0700
+NULL
+> info s:a.txt chmod i:0755
+NULL
+> fn fileperms u:d.tar/a.txt
+int(33011)
+> call compressFiles i:4096
+EXC BadMethodCallException: Cannot compress with Gzip compression, tar archives cannot compress individual files, use compress() to compress the whole archive
+> call decompressFiles
+bool(true)
+> release
+ok
+> data p:d.tar
+ok
+> call count
+int(5)
+> call getMetadata
+string(4) "meta"
+> info s:a.txt getMetadata
+string(5) "fmeta"
+> info s:a.txt getContent
+string(5) "hello"
+> info s:dir/b.txt getContent
+string(3) "bee"
+> info s:dir getContent
+EXC BadMethodCallException: phar error: Cannot retrieve contents, "dir" in phar "%W%/d.tar" is a directory
+> call convertToData i:1
+EXC UnexpectedValueException: Cannot write out data phar archive, use Phar::TAR or Phar::ZIP
+> call convertToData i:9
+EXC BadMethodCallException: Unknown file format specified, please pass one of Phar::TAR or Phar::ZIP
+> call convertToExecutable i:9
+EXC BadMethodCallException: Unknown file format specified, please pass one of Phar::PHAR, Phar::TAR or Phar::ZIP
+> call convertToData i:3 i:4096
+EXC BadMethodCallException: Cannot compress entire archive with gzip, zip archives do not support whole-archive compression
+> call convertToData i:2 i:12
+EXC BadMethodCallException: Unknown compression specified, please pass one of Phar::GZ or Phar::BZ2
+> swap convertToData i:3
+PharData(%W%/d.zip)
+> call getPath
+string(9) "%W%/d.zip"
+> call count
+int(5)
+> call isFileFormat i:3
+bool(true)
+> info s:a.txt getContent
+string(5) "hello"
+> call setAlias s:x
+EXC UnexpectedValueException: A Phar alias cannot be set in a plain zip archive
+> swap compress i:4096
+EXC UnexpectedValueException: Cannot compress zip-based archives with whole-archive compression
+> call compress i:4096
+EXC UnexpectedValueException: Cannot compress zip-based archives with whole-archive compression
+> data p:z.zip
+ok
+> call offsetSet s:a s:b
+NULL
+> call compress i:4096
+EXC UnexpectedValueException: Cannot compress zip-based archives with whole-archive compression
+> call decompress
+EXC UnexpectedValueException: Cannot decompress zip-based archives with whole-archive compression
+> call compressFiles i:4096
+NULL
+> info s:a isCompressed i:4096
+bool(true)
+> info s:a getCompressedSize
+int(3)
+> call decompressFiles
+bool(true)
+> info s:a isCompressed
+bool(false)
+> info s:a isCompressed i:5
+EXC BadMethodCallException: Unknown compression type specified
+> info s:a decompress
+bool(true)
+> data p:fmt.zipx i:0 n i:3
+ok
+> call offsetSet s:a s:b
+NULL
+> call isFileFormat i:3
+bool(true)

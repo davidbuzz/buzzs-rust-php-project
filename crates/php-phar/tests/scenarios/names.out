@@ -1,0 +1,80 @@
+> static isValidPharFilename s:a.phar
+bool(true)
+> static isValidPharFilename s:a.phar b:0
+bool(false)
+> static isValidPharFilename s:a.tar
+bool(false)
+> static isValidPharFilename s:a.tar b:0
+bool(true)
+> static isValidPharFilename s:a.phar.tar
+bool(true)
+> static isValidPharFilename s:a.zip b:0
+bool(true)
+> static isValidPharFilename s:a.phar.zip b:0
+bool(false)
+> static isValidPharFilename s:a
+bool(false)
+> static isValidPharFilename s:.phar
+bool(false)
+> static isValidPharFilename s:/.phar
+bool(false)
+> static isValidPharFilename s:a.phar/
+bool(true)
+> static isValidPharFilename s:a.pharx
+bool(false)
+> static isValidPharFilename s:dir/a.phar/b
+bool(false)
+> static isValidPharFilename s:a.php
+bool(false)
+> static isValidPharFilename s:a.php b:0
+bool(true)
+> static isValidPharFilename s:a.phar.php
+bool(true)
+> static isValidPharFilename s:http://x/a.phar
+bool(false)
+> static isValidPharFilename s:a..phar
+bool(true)
+> static isValidPharFilename s:a.ph.ar b:0
+bool(true)
+> static apiVersion
+string(5) "1.1.1"
+> static canCompress
+bool(true)
+> static canCompress i:4096
+bool(true)
+> static canCompress i:8192
+bool(false)
+> static getSupportedCompression
+array(int(0)=>string(2) "GZ")
+> static getSupportedSignatures
+array(int(0)=>string(3) "MD5", int(1)=>string(5) "SHA-1", int(2)=>string(7) "SHA-256", int(3)=>string(7) "SHA-512", int(4)=>string(7) "OpenSSL", int(5)=>string(14) "OpenSSL_SHA256", int(6)=>string(14) "OpenSSL_SHA512")
+> static createDefaultStub
+string(6641) md5:f51304254cb98cd97c5a4de9dff96034
+> static createDefaultStub s:start.php s:web.php
+string(6639) md5:e06e0ff910186270b115a2d7712da2c8
+> static createDefaultStub x:41414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141
+string(7020) md5:4a591cca02c47ae6fdb67d950512daab
+> static createDefaultStub s:a x:42424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242
+string(7012) md5:644f504aaca9576978efe98d123f5c92
+> phar p:noext
+EXC UnexpectedValueException: Cannot create phar '%W%/noext', file extension (or combination) not recognised or the directory does not exist
+> phar p:a.pharx
+EXC UnexpectedValueException: Cannot create phar '%W%/a.pharx', file extension (or combination) not recognised or the directory does not exist
+> phar s:http://example.com/a.phar
+EXC UnexpectedValueException: Cannot create a phar archive from a URL like "http://example.com/a.phar". Phar objects can only be created from local files
+> data p:a.phar
+EXC UnexpectedValueException: Cannot create phar '%W%/a.phar', file extension (or combination) not recognised or the directory does not exist
+> phar p:a.tar
+EXC UnexpectedValueException: Cannot create phar '%W%/a.tar', file extension (or combination) not recognised or the directory does not exist
+> phar p:missing/dir/a.phar
+EXC UnexpectedValueException: Cannot create phar '%W%/missing/dir/a.phar', file extension (or combination) not recognised or the directory does not exist
+> data p:x.tar.gz
+ok
+> static loadPhar p:nothere.phar
+EXC PharException: unable to open phar for reading "%W%/nothere.phar"
+> static unlinkArchive p:nothere.phar
+EXC PharException: Unknown phar archive "%W%/nothere.phar": unable to open phar for reading "%W%/nothere.phar"
+> static unlinkArchive s:
+EXC PharException: Unknown phar archive ""
+> static running
+string(0) ""

@@ -1,0 +1,22 @@
+phar p:e.phar
+call offsetSet s:a.txt s:hello
+call offsetSet s:d/b.txt s:bee
+call addEmptyDir s:empty
+call extractTo s:
+call extractTo p:out
+shell out/a.txt
+shell out/d/b.txt
+shell out/empty
+call extractTo p:out
+call extractTo p:out n b:1
+call extractTo p:out2 s:a.txt
+shell out2/a.txt
+shell out2/d/b.txt
+call extractTo p:out3 s:d/
+shell out3/d/b.txt
+call extractTo p:out4 s:nothere
+call extractTo p:out5 a:s:a.txt,s:d/b.txt
+call extractTo p:out6 a:
+call extractTo p:out7 a:s:nothere
+call extractTo p:out8 a:i:5
+call extractTo p:out/a.txt

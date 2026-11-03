@@ -1,0 +1,115 @@
+> ini phar.readonly 1
+string(1) "0"
+> fn file_put_contents u:w.phar/a.txt s:hello
+W: Failed to open stream: phar error: write operations disabled by the php.ini setting phar.readonly
+bool(false)
+> ini phar.readonly 0
+string(1) "1"
+> fn file_put_contents u:w.phar/a.txt s:hello
+int(5)
+> fn file_get_contents u:w.phar/a.txt
+string(5) "hello"
+> fn file_put_contents u:w.phar/dir/b.txt s:bee
+int(3)
+> fn scandir u:w.phar/
+array(int(0)=>string(5) "a.txt", int(1)=>string(3) "dir")
+> fn scandir u:w.phar/dir
+array(int(0)=>string(5) "b.txt")
+> fn scandir u:w.phar/nodir
+W: Failed to open directory: operation failed
+W: (errno 22): Invalid argument
+bool(false)
+> fn is_dir u:w.phar/dir
+bool(true)
+> fn is_file u:w.phar/dir
+bool(false)
+> fn is_file u:w.phar/a.txt
+bool(true)
+> fn file_exists u:w.phar/nope
+bool(false)
+> fn filesize u:w.phar/a.txt
+int(5)
+> fn filesize u:w.phar/nope
+W: stat failed for phar://%W%/w.phar/nope
+bool(false)
+> fn fileperms u:w.phar/a.txt
+int(33206)
+> fn fileperms u:w.phar/dir
+int(16895)
+> fn mkdir u:w.phar/newdir
+bool(true)
+> fn mkdir u:w.phar/newdir
+W: phar error: cannot create directory "newdir" in phar "%W%/w.phar", directory already exists
+bool(false)
+> fn mkdir u:w.phar/a.txt
+W: phar error: cannot create directory "a.txt" in phar "%W%/w.phar", phar error: path "a.txt" exists and is a not a directory
+bool(false)
+> fn is_dir u:w.phar/newdir
+bool(true)
+> fn rmdir u:w.phar/dir
+W: phar error: Directory not empty
+bool(false)
+> fn rmdir u:w.phar/newdir
+bool(true)
+> fn rmdir u:w.phar/nothere
+W: phar error: cannot remove directory "nothere" in phar "%W%/w.phar", directory does not exist
+bool(false)
+> fn rename u:w.phar/a.txt u:w.phar/c.txt
+bool(true)
+> fn file_get_contents u:w.phar/c.txt
+string(5) "hello"
+> fn file_get_contents u:w.phar/a.txt
+W: Failed to open stream: phar error: "a.txt" is not a file in phar "%W%/w.phar"
+bool(false)
+> fn rename u:w.phar/nope u:w.phar/x
+W: phar error: cannot rename "phar://%W%/w.phar/nope" to "phar://%W%/w.phar/x" from extracted phar archive, source does not exist
+bool(false)
+> fn rename u:w.phar/dir u:w.phar/dir2
+bool(true)
+> fn scandir u:w.phar/dir2
+array(int(0)=>string(5) "b.txt")
+> fn rename u:w.phar/c.txt u:other.phar/c.txt
+W: phar error: cannot rename "phar://%W%/w.phar/c.txt" to "phar://%W%/other.phar/c.txt", not within the same phar archive
+bool(false)
+> fn unlink u:w.phar/c.txt
+bool(true)
+> fn unlink u:w.phar/c.txt
+W: unlink of "phar://%W%/w.phar/c.txt" failed, file does not exist
+bool(false)
+> fn file_get_contents u:w.phar/c.txt
+W: Failed to open stream: phar error: "c.txt" is not a file in phar "%W%/w.phar"
+bool(false)
+> fn file_put_contents u:w.phar/.phar/x s:no
+int(2)
+> fn file_put_contents u:w.phar s:no
+W: Failed to open stream: phar error: file "" in phar "%W%/w.phar" cannot be empty
+bool(false)
+> fn file_get_contents u:nophar.phar/a
+W: Failed to open stream: phar error: invalid url or non-existent phar "phar://%W%/nophar.phar/a"
+bool(false)
+> fn file_get_contents u:w.phar
+W: Failed to open stream: phar error: file "" in phar "%W%/w.phar" cannot be empty
+bool(false)
+> fn scandir u:w.phar
+array(int(0)=>string(4) "dir2")
+> fn file_put_contents u:w.phar/d//e s:x
+int(1)
+> ini phar.readonly 1
+string(1) "0"
+> fn file_put_contents u:w.phar/z s:no
+W: Failed to open stream: phar error: write operations disabled by the php.ini setting phar.readonly
+bool(false)
+> fn unlink u:w.phar/dir2/b.txt
+W: phar error: write operations disabled by the php.ini setting phar.readonly
+bool(false)
+> fn mkdir u:w.phar/q
+W: phar error: cannot create directory "phar://%W%/w.phar/q", write operations disabled
+bool(false)
+> fn rmdir u:w.phar/dir2
+W: phar error: cannot rmdir directory "phar://%W%/w.phar/dir2", write operations disabled
+bool(false)
+> fn rename u:w.phar/dir2/b.txt u:w.phar/q
+W: phar error: cannot rename "phar://%W%/w.phar/dir2/b.txt" to "phar://%W%/w.phar/q": invalid or non-writable url "phar://%W%/w.phar/dir2/b.txt"
+bool(false)
+> fn file_get_contents u:w.phar/dir2/b.txt
+string(3) "bee"

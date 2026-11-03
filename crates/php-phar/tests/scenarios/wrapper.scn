@@ -1,0 +1,47 @@
+ini phar.readonly 1
+fn file_put_contents u:w.phar/a.txt s:hello
+ini phar.readonly 0
+fn file_put_contents u:w.phar/a.txt s:hello
+fn file_get_contents u:w.phar/a.txt
+fn file_put_contents u:w.phar/dir/b.txt s:bee
+fn scandir u:w.phar/
+fn scandir u:w.phar/dir
+fn scandir u:w.phar/nodir
+fn is_dir u:w.phar/dir
+fn is_file u:w.phar/dir
+fn is_file u:w.phar/a.txt
+fn file_exists u:w.phar/nope
+fn filesize u:w.phar/a.txt
+fn filesize u:w.phar/nope
+fn fileperms u:w.phar/a.txt
+fn fileperms u:w.phar/dir
+fn mkdir u:w.phar/newdir
+fn mkdir u:w.phar/newdir
+fn mkdir u:w.phar/a.txt
+fn is_dir u:w.phar/newdir
+fn rmdir u:w.phar/dir
+fn rmdir u:w.phar/newdir
+fn rmdir u:w.phar/nothere
+fn rename u:w.phar/a.txt u:w.phar/c.txt
+fn file_get_contents u:w.phar/c.txt
+fn file_get_contents u:w.phar/a.txt
+fn rename u:w.phar/nope u:w.phar/x
+fn rename u:w.phar/dir u:w.phar/dir2
+fn scandir u:w.phar/dir2
+fn rename u:w.phar/c.txt u:other.phar/c.txt
+fn unlink u:w.phar/c.txt
+fn unlink u:w.phar/c.txt
+fn file_get_contents u:w.phar/c.txt
+fn file_put_contents u:w.phar/.phar/x s:no
+fn file_put_contents u:w.phar s:no
+fn file_get_contents u:nophar.phar/a
+fn file_get_contents u:w.phar
+fn scandir u:w.phar
+fn file_put_contents u:w.phar/d//e s:x
+ini phar.readonly 1
+fn file_put_contents u:w.phar/z s:no
+fn unlink u:w.phar/dir2/b.txt
+fn mkdir u:w.phar/q
+fn rmdir u:w.phar/dir2
+fn rename u:w.phar/dir2/b.txt u:w.phar/q
+fn file_get_contents u:w.phar/dir2/b.txt

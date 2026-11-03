@@ -1,0 +1,60 @@
+data p:d.tar
+call offsetSet s:a.txt s:hello
+call getAlias
+call setAlias s:x
+call setStub s:x
+call setDefaultStub
+call getStub
+call getSignature
+call isFileFormat i:2
+call offsetSet s:dir/b.txt s:bee
+call addEmptyDir s:empty
+call count
+call setMetadata s:meta
+call getMetadata
+info s:a.txt setMetadata s:fmeta
+info s:a.txt getMetadata
+info s:a.txt compress i:4096
+info s:a.txt getCRC32
+info s:a.txt isCRCChecked
+info s:dir getCRC32
+info s:empty chmod i:0700
+info s:a.txt chmod i:0755
+fn fileperms u:d.tar/a.txt
+call compressFiles i:4096
+call decompressFiles
+release
+data p:d.tar
+call count
+call getMetadata
+info s:a.txt getMetadata
+info s:a.txt getContent
+info s:dir/b.txt getContent
+info s:dir getContent
+call convertToData i:1
+call convertToData i:9
+call convertToExecutable i:9
+call convertToData i:3 i:4096
+call convertToData i:2 i:12
+swap convertToData i:3
+call getPath
+call count
+call isFileFormat i:3
+info s:a.txt getContent
+call setAlias s:x
+swap compress i:4096
+call compress i:4096
+data p:z.zip
+call offsetSet s:a s:b
+call compress i:4096
+call decompress
+call compressFiles i:4096
+info s:a isCompressed i:4096
+info s:a getCompressedSize
+call decompressFiles
+info s:a isCompressed
+info s:a isCompressed i:5
+info s:a decompress
+data p:fmt.zipx i:0 n i:3
+call offsetSet s:a s:b
+call isFileFormat i:3

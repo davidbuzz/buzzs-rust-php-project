@@ -1,0 +1,21 @@
+phar p:one.phar i:0 s:shared
+call offsetSet s:a s:1
+call getAlias
+fn file_get_contents s:phar://shared/a
+phar p:two.phar i:0 s:shared
+phar p:three.phar
+call offsetSet s:b s:2
+call setAlias s:shared
+call setAlias s:three
+call getAlias
+fn file_get_contents s:phar://three/b
+release
+phar p:one.phar i:0 s:other
+phar p:one.phar
+call getAlias
+static loadPhar p:one.phar s:other
+static loadPhar p:three.phar s:three
+static unlinkArchive p:three.phar
+release
+static unlinkArchive p:three.phar
+shell three.phar

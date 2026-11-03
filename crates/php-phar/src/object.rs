@@ -464,7 +464,11 @@ impl PharObject {
             if (index.is_some() || webindex.is_some()) && (a.is_tar || a.is_zip) {
                 return Err(PharError::arg(
                     if index.is_some() { 1 } else { 2 },
-                    "must be null for a tar- or zip-based phar stub, string given",
+                    if index.is_some() {
+                        "Phar::setDefaultStub(): Argument #1 ($index) must be null for a tar- or zip-based phar stub, string given"
+                    } else {
+                        "Phar::setDefaultStub(): Argument #2 ($webIndex) must be null for a tar- or zip-based phar stub, string given"
+                    },
                 ));
             }
         }
@@ -2541,7 +2545,18 @@ impl PharFileInfo {
         if e.flags & target != 0 {
             return Ok(true);
         }
+        let (has_target, has_other) = if target == ENT_COMPRESSED_GZ {
+            (reg::has_zlib(), reg::has_bz2())
+        } else {
+            (reg::has_bz2(), reg::has_zlib())
+        };
         if e.flags & other != 0 {
+            if !has_other {
+                return Err(PharError::bad_method(format!(
+                    "Cannot compress with {this_name} compression, file is already compressed with {other_name} compression and {} extension is not enabled, cannot decompress",
+                    if target == ENT_COMPRESSED_GZ { "bz2" } else { "zlib" }
+                )));
+            }
             ar.borrow_mut().open_entry_fp(&key, true).map_err(|err| {
                 PharError::bad_method(format!(
                     "phar error: Cannot decompress {other_name}-compressed file \"{}\" in phar \"{}\" in order to compress with {this_name}: {err}",
@@ -2549,6 +2564,16 @@ impl PharFileInfo {
                     s(&fname)
                 ))
             })?;
+        }
+        if !has_target {
+            return Err(PharError::bad_method(format!(
+                "Cannot compress with {this_name} compression, {} extension is not enabled",
+                if target == ENT_COMPRESSED_GZ {
+                    "zlib"
+                } else {
+                    "bz2"
+                }
+            )));
         }
         let ar = self.update(|e| {
             e.old_flags = e.flags;
@@ -2579,6 +2604,16 @@ impl PharFileInfo {
         }
         if e.is_deleted {
             return Err(PharError::bad_method("Cannot compress deleted file"));
+        }
+        if e.flags & ENT_COMPRESSED_GZ != 0 && !reg::has_zlib() {
+            return Err(PharError::bad_method(
+                "Cannot decompress Gzip-compressed file, zlib extension is not enabled",
+            ));
+        }
+        if e.flags & ENT_COMPRESSED_BZ2 != 0 && !reg::has_bz2() {
+            return Err(PharError::bad_method(
+                "Cannot decompress Bzip2-compressed file, bz2 extension is not enabled",
+            ));
         }
         let kind = match e.flags & ENT_COMPRESSION_MASK {
             ENT_COMPRESSED_GZ => "gzip",

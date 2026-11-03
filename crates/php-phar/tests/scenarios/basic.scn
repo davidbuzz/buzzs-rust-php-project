@@ -1,0 +1,94 @@
+static canWrite
+ini phar.readonly 1
+static canWrite
+phar p:a.phar
+ini phar.readonly 0
+phar p:a.phar
+call count
+call offsetSet s:a.txt s:hello
+call count
+call getVersion
+call offsetExists s:a.txt
+call offsetExists s:b.txt
+call offsetGet s:nope
+call offsetGet s:a.txt
+call offsetGet s:.phar/stub.php
+call offsetSet s:.phar/stub.php s:x
+call offsetSet s:.phar/alias.txt s:x
+call offsetSet s:.phar/foo s:x
+call addFromString s:.phar/foo s:x
+call offsetSet s:bad//path s:x
+call offsetSet s:../up s:x
+call offsetSet s:star* s:x
+call getAlias
+call setAlias s:my/alias
+call setAlias s:goodalias
+call getAlias
+call getSignature
+call setSignatureAlgorithm i:99
+call setSignatureAlgorithm i:1
+call getSignature
+call setSignatureAlgorithm i:4
+call getSignature
+call isFileFormat i:1
+call isFileFormat i:2
+call isFileFormat i:5
+call delete s:nope
+call offsetSet s:b.txt s:bee
+call delete s:a.txt
+call count
+call copy s:a.txt s:c.txt
+call copy s:b.txt s:b.txt
+call copy s:b.txt s:.phar/x
+call copy s:.phar/x s:y
+call copy s:b.txt s:bad\\name
+call copy s:b.txt s:c.txt
+call count
+call addEmptyDir s:.phar/x
+call addEmptyDir s:dir/sub
+call offsetExists s:dir
+call offsetExists s:dir/sub
+call isBuffering
+call startBuffering
+call isBuffering
+call offsetSet s:z.txt s:zzz
+call getModified
+call stopBuffering
+call isBuffering
+call isCompressed
+call isWritable
+call getMetadata
+call hasMetadata
+call setMetadata s:hello
+call getMetadata
+call hasMetadata
+call delMetadata
+call hasMetadata
+call delMetadata
+fn file_get_contents u:a.phar/b.txt
+fn file_get_contents u:a.phar/nothere
+fn file_get_contents u:a.phar/dir
+fn file_get_contents u:a.phar/.phar/stub.php
+call offsetUnset s:b.txt
+call offsetExists s:b.txt
+call offsetUnset s:nothere
+call count
+release
+ini phar.readonly 1
+phar p:a.phar
+call offsetSet s:x s:y
+call setAlias s:z
+call delete s:c.txt
+call setStub s:x
+call setDefaultStub
+call setMetadata s:x
+call delMetadata
+call stopBuffering
+call compressFiles i:4096
+call decompressFiles
+call copy s:c.txt s:d
+call setSignatureAlgorithm i:1
+call convertToExecutable
+call addEmptyDir s:q
+call offsetUnset s:c.txt
+call count

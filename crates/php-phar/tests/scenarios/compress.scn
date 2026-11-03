@@ -1,0 +1,38 @@
+phar p:c.phar
+call offsetSet s:a.txt x:6161616161616161616161616161616161616161616161616161616161616161616161616161
+call offsetSet s:b.txt s:bbb
+call compressFiles i:1
+call compressFiles i:8192
+call compressFiles i:4096
+info s:a.txt isCompressed
+info s:a.txt isCompressed i:4096
+info s:a.txt getCompressedSize
+info s:a.txt getContent
+info s:a.txt compress i:4096
+info s:a.txt compress i:8192
+info s:a.txt compress i:99
+info s:a.txt decompress
+info s:a.txt isCompressed
+info s:a.txt getContent
+call addEmptyDir s:d
+info s:d compress i:4096
+info s:d decompress
+call decompressFiles
+release
+phar p:c.phar
+call isCompressed
+swap compress i:4096
+call isCompressed
+call getPath
+call count
+swap decompress s:dec.phar
+call getPath
+call isCompressed
+call compress i:1
+phar p:c.phar.tar
+call offsetSet s:x s:y
+call compressFiles i:4096
+info s:x compress i:4096
+swap compress i:4096
+call getPath
+call isCompressed

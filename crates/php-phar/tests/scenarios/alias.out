@@ -1,0 +1,42 @@
+> phar p:one.phar i:0 s:shared
+ok
+> call offsetSet s:a s:1
+NULL
+> call getAlias
+string(6) "shared"
+> fn file_get_contents s:phar://shared/a
+string(1) "1"
+> phar p:two.phar i:0 s:shared
+EXC UnexpectedValueException: alias "shared" is already used for archive "%W%/one.phar" cannot be overloaded with "%W%/two.phar"
+> phar p:three.phar
+ok
+> call offsetSet s:b s:2
+NULL
+> call setAlias s:shared
+bool(true)
+> call setAlias s:three
+bool(true)
+> call getAlias
+string(5) "three"
+> fn file_get_contents s:phar://three/b
+string(1) "2"
+> release
+ok
+> phar p:one.phar i:0 s:other
+EXC UnexpectedValueException: cannot load phar "%W%/one.phar" with implicit alias "shared" under different alias "other"
+> phar p:one.phar
+ok
+> call getAlias
+string(6) "shared"
+> static loadPhar p:one.phar s:other
+EXC PharException: alias "other" is already used for archive "%W%/one.phar" cannot be overloaded with "%W%/one.phar"
+> static loadPhar p:three.phar s:three
+bool(true)
+> static unlinkArchive p:three.phar
+bool(true)
+> release
+ok
+> static unlinkArchive p:three.phar
+EXC PharException: Unknown phar archive "%W%/three.phar": unable to open phar for reading "%W%/three.phar"
+> shell three.phar
+bool(false)

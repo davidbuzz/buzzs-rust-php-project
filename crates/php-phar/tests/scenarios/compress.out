@@ -1,0 +1,76 @@
+> phar p:c.phar
+ok
+> call offsetSet s:a.txt x:6161616161616161616161616161616161616161616161616161616161616161616161616161
+NULL
+> call offsetSet s:b.txt s:bbb
+NULL
+> call compressFiles i:1
+EXC BadMethodCallException: Unknown compression specified, please pass one of Phar::GZ or Phar::BZ2
+> call compressFiles i:8192
+EXC BadMethodCallException: Cannot compress files within archive with bz2, enable ext/bz2 in php.ini
+> call compressFiles i:4096
+NULL
+> info s:a.txt isCompressed
+bool(true)
+> info s:a.txt isCompressed i:4096
+bool(true)
+> info s:a.txt getCompressedSize
+int(6)
+> info s:a.txt getContent
+string(38) "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+> info s:a.txt compress i:4096
+bool(true)
+> info s:a.txt compress i:8192
+EXC BadMethodCallException: Cannot compress with bzip2 compression, bz2 extension is not enabled
+> info s:a.txt compress i:99
+EXC BadMethodCallException: Unknown compression type specified
+> info s:a.txt decompress
+bool(true)
+> info s:a.txt isCompressed
+bool(false)
+> info s:a.txt getContent
+string(38) "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+> call addEmptyDir s:d
+NULL
+> info s:d compress i:4096
+EXC BadMethodCallException: Phar entry is a directory, cannot set compression
+> info s:d decompress
+EXC BadMethodCallException: Phar entry is a directory, cannot set compression
+> call decompressFiles
+bool(true)
+> release
+ok
+> phar p:c.phar
+ok
+> call isCompressed
+bool(false)
+> swap compress i:4096
+Phar(%W%/c.phar.gz)
+> call isCompressed
+int(4096)
+> call getPath
+string(13) "%W%/c.phar.gz"
+> call count
+int(3)
+> swap decompress s:dec.phar
+Phar(%W%/c.dec.phar)
+> call getPath
+string(14) "%W%/c.dec.phar"
+> call isCompressed
+bool(false)
+> call compress i:1
+EXC BadMethodCallException: Unknown compression specified, please pass one of Phar::GZ or Phar::BZ2
+> phar p:c.phar.tar
+ok
+> call offsetSet s:x s:y
+NULL
+> call compressFiles i:4096
+EXC BadMethodCallException: Cannot compress with Gzip compression, tar archives cannot compress individual files, use compress() to compress the whole archive
+> info s:x compress i:4096
+EXC BadMethodCallException: Cannot compress with Gzip compression, not possible with tar-based phar archives
+> swap compress i:4096
+Phar(%W%/c.phar.tar.gz)
+> call getPath
+string(17) "%W%/c.phar.tar.gz"
+> call isCompressed
+int(4096)
