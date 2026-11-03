@@ -12,12 +12,12 @@ use std::rc::{Rc, Weak};
 use std::time::Instant;
 
 /// What a run considers.
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum Mode {
-    /// `gc_collect_cycles()`: the buffered roots (and these extra ones)
-    /// plus every live object.
-    Full(Vec<Value>),
-    /// A threshold-triggered run over exactly these roots.
-    Auto(Vec<Value>),
+    /// `gc_collect_cycles()`: the buffered roots plus every live object.
+    Full,
+    /// A threshold-triggered run over the buffered roots.
+    Auto,
 }
 
 /// Disables root recording in every provider while alive.
@@ -89,10 +89,8 @@ impl Vm {
             return Ok(0);
         };
         let guard = ActiveGuard;
-        let (full, mut extra) = match mode {
-            Mode::Full(v) => (true, v),
-            Mode::Auto(v) => (false, v),
-        };
+        let full = mode == Mode::Full;
+        let mut extra: Vec<Value> = Vec::new();
         let mut total = 0;
         let mut err: Option<Throw> = None;
         let mut rerun = false;
@@ -267,44 +265,61 @@ impl Vm {
 
     /// Calls the destructors of garbage objects in buffer order
     /// (`gc_call_destructors`), skipping objects freed or destructed in the
-    /// meantime.
+    /// meantime. Inside a fiber they run in a dedicated fiber
+    /// (`gc_call_destructors_in_fiber`).
     fn gc_call_destructors(
         &mut self,
         dtors: &[Weak<dyn PhpObject>],
         err: &mut Option<Throw>,
         zombies: &mut Vec<Obj>,
     ) -> VmResult<()> {
+        if !self.fibers.is_empty() {
+            return self.gc_call_destructors_in_fiber(dtors, err, zombies);
+        }
         for w in dtors {
-            let Some(rc) = w.upgrade() else { continue };
-            let o = Obj::from_rc(rc);
-            let d = object::data(&o);
-            if d.flags.get() & oflags::DESTRUCTED != 0 {
-                continue;
-            }
-            d.flags.set(d.flags.get() | oflags::DESTRUCTED);
-            let r = self
-                .call_destructor(&o)
-                .and_then(|()| self.run_pending_destructors());
-            if let Err(e) = r {
-                match e {
-                    Throw::Exception(new) => {
-                        if let Some(Throw::Exception(old)) = err.take() {
-                            crate::exceptions::chain_previous(&new, &old);
-                        }
-                        *err = Some(Throw::Exception(new));
-                    }
-                    other => return Err(other),
-                }
-            }
-            // Only the collector holds it now: it is freed by the re-run.
-            let sole = o
-                .downcast_ref::<crate::object::ObjBox>()
-                .is_some_and(|b| Rc::strong_count(&b.0) == 1);
-            if o.refcount() == 1 && sole {
-                zombies.push(o);
+            if let Some(z) = self.gc_destruct_one(w, err)? {
+                zombies.push(z);
             }
         }
         Ok(())
+    }
+
+    /// Runs one garbage object's destructor. Exceptions are chained into
+    /// `err` (`zend_objects_destroy_object`); returns the object if only the
+    /// collector holds it afterwards (`GC_DELREF` to zero without freeing:
+    /// the re-run frees it).
+    pub(super) fn gc_destruct_one(
+        &mut self,
+        w: &Weak<dyn PhpObject>,
+        err: &mut Option<Throw>,
+    ) -> VmResult<Option<Obj>> {
+        let Some(rc) = w.upgrade() else {
+            return Ok(None);
+        };
+        let o = Obj::from_rc(rc);
+        let d = object::data(&o);
+        if d.flags.get() & oflags::DESTRUCTED != 0 {
+            return Ok(None);
+        }
+        d.flags.set(d.flags.get() | oflags::DESTRUCTED);
+        let r = self
+            .call_destructor(&o)
+            .and_then(|()| self.run_pending_destructors());
+        if let Err(e) = r {
+            match e {
+                Throw::Exception(new) => {
+                    if let Some(Throw::Exception(old)) = err.take() {
+                        crate::exceptions::chain_previous(&new, &old);
+                    }
+                    *err = Some(Throw::Exception(new));
+                }
+                other => return Err(other),
+            }
+        }
+        let sole = o
+            .downcast_ref::<crate::object::ObjBox>()
+            .is_some_and(|b| Rc::strong_count(&b.0) == 1);
+        Ok((o.refcount() == 1 && sole).then_some(o))
     }
 }
 

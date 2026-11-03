@@ -217,3 +217,13 @@ fn fiber_callback_cycle() {
     );
     assert_eq!(out, "COLLECT\nDTOR\nDONE\n");
 }
+
+#[test]
+#[ignore = "needs the safe-point and release-site hooks of gc-proposals (exec.rs)"]
+fn threshold_triggers_automatic_collection() {
+    let out = run(
+        "<?php for ($i = 0; $i < 25000; $i++) { $o = new stdClass; $o->self = $o; }\n\
+         $s = gc_status(); var_dump($s['runs'] >= 2, $s['collected'] >= 20000);",
+    );
+    assert_eq!(out, "bool(true)\nbool(true)\n");
+}

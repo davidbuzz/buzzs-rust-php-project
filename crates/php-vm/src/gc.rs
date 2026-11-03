@@ -45,6 +45,7 @@
 
 mod builtins;
 mod collect;
+mod dtor_fiber;
 mod graph;
 mod traverse;
 
@@ -180,10 +181,9 @@ struct GcState {
     /// Possible roots recorded since the buffer was last emptied (also
     /// those buffered by providers): drives the threshold.
     pending: usize,
-    /// Roots set aside when the buffer reached the threshold: the next
-    /// automatic run considers exactly these (`gc_possible_root_when_full`
-    /// collects *before* adding the new root).
-    frozen: Option<Vec<Value>>,
+    /// The buffer reached the threshold: an automatic run is due at the
+    /// next safe point (`gc_possible_root_when_full`).
+    due: bool,
     /// External root providers.
     providers: Vec<RootProvider>,
     /// `activated_at`.
@@ -209,7 +209,7 @@ impl Default for GcState {
             buf_size: DEFAULT_BUF_SIZE,
             roots: RootBuffer::default(),
             pending: 0,
-            frozen: None,
+            due: false,
             providers: Vec::new(),
             activated_at: Instant::now(),
             collector_time: Duration::ZERO,
@@ -325,11 +325,10 @@ fn root_obj(o: &Obj) {
         return;
     }
     with_state(|s| {
-        if s.protected || s.active {
-            return;
-        }
-        if s.roots.push(o) {
-            note_new_root(s, true);
+        // Roots released by destructors during a run are kept for the
+        // next one (they never trigger a nested run).
+        if !s.protected && s.roots.push(o) && !s.active {
+            note_new_root(s);
         }
     });
 }
@@ -357,31 +356,22 @@ pub fn frame_released(f: &crate::vm::Frame) {
 pub fn note_possible_root() {
     with_state(|s| {
         if !s.protected && !s.active {
-            note_new_root(s, false);
+            note_new_root(s);
         }
     });
 }
 
-fn note_new_root(s: &mut GcState, own: bool) {
+fn note_new_root(s: &mut GcState) {
     s.pending += 1;
     if s.pending > s.buf_size {
         grow_buffer(s);
     }
     // The buffer holds `threshold - 1` roots when the next one triggers a
-    // run (`GC_HAS_NEXT_UNUSED_UNDER_THRESHOLD`).
-    if s.enabled && s.frozen.is_none() && s.pending >= s.threshold {
-        let mut roots = s.roots.take();
-        // The newest root triggered the run: it is buffered afterwards.
-        let newest = if own { roots.pop() } else { None };
-        let providers = s.providers.clone();
-        for p in &providers {
-            roots.extend((p.take)());
-        }
-        s.frozen = Some(roots);
-        s.pending = 1;
-        if let Some(Value::Object(o)) = newest {
-            s.roots.push(&o);
-        }
+    // run (`GC_HAS_NEXT_UNUSED_UNDER_THRESHOLD`). The run cannot happen
+    // inside the release (it may be in `Drop`): it is due at the next safe
+    // point, over the roots buffered by then.
+    if s.enabled && !s.due && s.pending >= s.threshold {
+        s.due = true;
         WANT_RUN.with(|w| w.set(true));
     }
 }
@@ -423,11 +413,8 @@ fn adjust_threshold(s: &mut GcState, count: i64) {
 /// Number of buffered possible roots (`num_roots`).
 #[must_use]
 pub fn num_roots() -> usize {
-    let (mine, providers) = with_state(|s| {
-        let frozen = s.frozen.as_ref().map_or(0, Vec::len);
-        (s.roots.live_len() + frozen, s.providers.clone())
-    })
-    .unwrap_or_default();
+    let (mine, providers) =
+        with_state(|s| (s.roots.live_len(), s.providers.clone())).unwrap_or_default();
     mine + providers.iter().map(|p| (p.len)()).sum::<usize>()
 }
 
@@ -533,16 +520,11 @@ impl Vm {
     /// Propagates exceptions thrown by destructors of garbage objects.
     pub fn gc_safe_point(&mut self) -> VmResult<()> {
         WANT_RUN.with(|w| w.set(false));
-        let Some(Some(roots)) = with_state(|s| {
-            if s.active || !s.enabled {
-                s.frozen = None;
-                return None;
-            }
-            s.frozen.take()
-        }) else {
+        let due = with_state(|s| std::mem::take(&mut s.due) && !s.active && s.enabled);
+        if due != Some(true) {
             return Ok(());
-        };
-        let count = self.gc_run(collect::Mode::Auto(roots))?;
+        }
+        let count = self.gc_run(collect::Mode::Auto)?;
         with_state(|s| adjust_threshold(s, count));
         Ok(())
     }
@@ -554,9 +536,7 @@ impl Vm {
     /// Propagates exceptions thrown by destructors of garbage objects.
     pub fn gc_collect_cycles(&mut self) -> VmResult<i64> {
         WANT_RUN.with(|w| w.set(false));
-        let frozen = with_state(|s| s.frozen.take())
-            .flatten()
-            .unwrap_or_default();
-        self.gc_run(collect::Mode::Full(frozen))
+        with_state(|s| s.due = false);
+        self.gc_run(collect::Mode::Full)
     }
 }
