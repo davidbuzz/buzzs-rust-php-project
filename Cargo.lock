@@ -260,6 +260,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "php-json"
+version = "0.1.0"
+dependencies = [
+ "php-runtime",
+]
+
+[[package]]
 name = "php-lexer"
 version = "0.1.0"
 

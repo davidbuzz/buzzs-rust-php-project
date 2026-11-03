@@ -17,6 +17,8 @@ members = [
     "crates/php-stdarr",
     "crates/php-mbstring",
     "crates/php-json",
+    "crates/php-filter",
+    "crates/php-ctype",
 ]
 
 [workspace.package]
