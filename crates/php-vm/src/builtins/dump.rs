@@ -76,7 +76,67 @@ fn object_dump(
     purpose: PropertyPurpose,
 ) -> VmResult<ObjectDump> {
     out.flush(vm);
+    if purpose == PropertyPurpose::Debug {
+        if let Some(d) = debug_info(vm, o)? {
+            return Ok(d);
+        }
+    }
     vm.object_dump(o, purpose).map_err(|e| vm.rt_throw(e))
+}
+
+/// `zend_std_get_debug_info()` for classes with a user `__debugInfo()`:
+/// a returned reference is unwrapped, `null` is deprecated (empty table),
+/// anything else is fatal.
+fn debug_info(vm: &mut Vm, o: &Obj) -> VmResult<Option<ObjectDump>> {
+    let cls = crate::object::class_of(o).clone();
+    if cls
+        .hooks
+        .as_ref()
+        .is_some_and(|h| h.properties_for.is_some())
+    {
+        return Ok(None);
+    }
+    let Some(m) = cls.magic.debug_info.clone() else {
+        return Ok(None);
+    };
+    let table = match vm.call_method(o, &m, Vec::new())?.deref() {
+        Value::Array(a) => a,
+        Value::Null => {
+            vm.deprecated(&format!(
+                "Returning null from {}::__debugInfo() is deprecated, return an empty array instead",
+                cls.name
+            ))?;
+            php_runtime::ZArray::new()
+        }
+        _ => return Err(vm.fatal("__debugInfo() must return an array")),
+    };
+    let kind = if cls.is_enum() {
+        ObjectKind::Enum {
+            case_name: vm.enum_case_name(o).unwrap_or_default(),
+            backing_type: cls.backing.map(|b| {
+                if b == crate::types::mask::LONG {
+                    "int"
+                } else {
+                    "string"
+                }
+            }),
+            has_debug_info: true,
+        }
+    } else if cls.lc_name.as_bytes() == b"stdclass" {
+        ObjectKind::StdClass
+    } else {
+        ObjectKind::Regular {
+            lazy_prefix: vm.lazy_prefix(o),
+        }
+    };
+    let properties = table
+        .iter()
+        .map(|(k, v)| (k.clone(), PropertySlot::Value(v.clone())))
+        .collect();
+    Ok(Some(ObjectDump {
+        kind,
+        properties: Some(properties),
+    }))
 }
 
 /// The property table of an enum case (`name`, `value`) for printers that
