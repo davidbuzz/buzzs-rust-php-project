@@ -106,6 +106,10 @@ fn sig_override(key: &str, sig: &'static str) -> &'static str {
         "intlgregcal_create_instance" => {
             "intlgregcal_create_instance($timezoneOrYear = UNKNOWN, $localeOrMonth = UNKNOWN, $day = UNKNOWN, $hour = UNKNOWN, $minute = UNKNOWN, $second = UNKNOWN, ...$__extra): ?IntlGregorianCalendar"
         }
+        // The "more than 2 arguments" deprecation precedes the arity check.
+        "intlcal_set" if sig.starts_with("set(") => {
+            "set(int $year, int $month, int $dayOfMonth = UNKNOWN, int $hour = UNKNOWN, int $minute = UNKNOWN, int $second = UNKNOWN, ...$__extra): true"
+        }
         _ => sig,
     }
 }

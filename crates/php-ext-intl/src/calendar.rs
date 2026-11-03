@@ -363,12 +363,16 @@ fn is_equivalent_to(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 fn set(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let off = usize::from(a.this.is_none());
-    let n = core::num_args(a).saturating_sub(off);
+    let total = if a.values.len() > 6 + off { a.values.len() } else { core::num_args(a) };
+    let n = total.saturating_sub(off);
     if a.this.is_some() && n > 2 {
         vm.raise(
             8192,
             "Calling IntlCalendar::set() with more than 2 arguments is deprecated, use either IntlCalendar::setDate() or IntlCalendar::setDateTime() instead",
         )?;
+    }
+    if a.this.is_some() && n > 6 {
+        return Err(vm.throw("ArgumentCountError", &format!("IntlCalendar::set() expects at most 6 arguments, {n} given")));
     }
     let vals: Vec<i64> = (0..n).map(|i| a.int(off + i)).collect();
     // Range checks happen before the object is fetched (shifted to the
