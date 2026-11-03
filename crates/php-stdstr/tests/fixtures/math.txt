@@ -1,0 +1,6863 @@
+=== bindec('')
+=> 0
+=== hexdec('')
+=> 0
+=== octdec('')
+=> 0
+=== base_convert('', 2, 10)
+=> '0'
+=== base_convert('', 8, 10)
+=> '0'
+=== base_convert('', 10, 2)
+=> '0'
+=== base_convert('', 10, 16)
+=> '0'
+=== base_convert('', 16, 10)
+=> '0'
+=== base_convert('', 16, 2)
+=> '0'
+=== base_convert('', 16, 15)
+=> '0'
+=== base_convert('', 36, 10)
+=> '0'
+=== base_convert('', 36, 16)
+=> '0'
+=== base_convert('', 10, 36)
+=> '0'
+=== base_convert('', 36, 2)
+=> '0'
+=== base_convert('', 2, 36)
+=> '0'
+=== base_convert('', 9, 10)
+=> '0'
+=== base_convert('', 3, 7)
+=> '0'
+=== bindec('0')
+=> 0
+=== hexdec('0')
+=> 0
+=== octdec('0')
+=> 0
+=== base_convert('0', 2, 10)
+=> '0'
+=== base_convert('0', 8, 10)
+=> '0'
+=== base_convert('0', 10, 2)
+=> '0'
+=== base_convert('0', 10, 16)
+=> '0'
+=== base_convert('0', 16, 10)
+=> '0'
+=== base_convert('0', 16, 2)
+=> '0'
+=== base_convert('0', 16, 15)
+=> '0'
+=== base_convert('0', 36, 10)
+=> '0'
+=== base_convert('0', 36, 16)
+=> '0'
+=== base_convert('0', 10, 36)
+=> '0'
+=== base_convert('0', 36, 2)
+=> '0'
+=== base_convert('0', 2, 36)
+=> '0'
+=== base_convert('0', 9, 10)
+=> '0'
+=== base_convert('0', 3, 7)
+=> '0'
+=== bindec('1')
+=> 1
+=== hexdec('1')
+=> 1
+=== octdec('1')
+=> 1
+=== base_convert('1', 2, 10)
+=> '1'
+=== base_convert('1', 8, 10)
+=> '1'
+=== base_convert('1', 10, 2)
+=> '1'
+=== base_convert('1', 10, 16)
+=> '1'
+=== base_convert('1', 16, 10)
+=> '1'
+=== base_convert('1', 16, 2)
+=> '1'
+=== base_convert('1', 16, 15)
+=> '1'
+=== base_convert('1', 36, 10)
+=> '1'
+=== base_convert('1', 36, 16)
+=> '1'
+=== base_convert('1', 10, 36)
+=> '1'
+=== base_convert('1', 36, 2)
+=> '1'
+=== base_convert('1', 2, 36)
+=> '1'
+=== base_convert('1', 9, 10)
+=> '1'
+=== base_convert('1', 3, 7)
+=> '1'
+=== bindec('10')
+=> 2
+=== hexdec('10')
+=> 16
+=== octdec('10')
+=> 8
+=== base_convert('10', 2, 10)
+=> '2'
+=== base_convert('10', 8, 10)
+=> '8'
+=== base_convert('10', 10, 2)
+=> '1010'
+=== base_convert('10', 10, 16)
+=> 'a'
+=== base_convert('10', 16, 10)
+=> '16'
+=== base_convert('10', 16, 2)
+=> '10000'
+=== base_convert('10', 16, 15)
+=> '11'
+=== base_convert('10', 36, 10)
+=> '36'
+=== base_convert('10', 36, 16)
+=> '24'
+=== base_convert('10', 10, 36)
+=> 'a'
+=== base_convert('10', 36, 2)
+=> '100100'
+=== base_convert('10', 2, 36)
+=> '2'
+=== base_convert('10', 9, 10)
+=> '9'
+=== base_convert('10', 3, 7)
+=> '3'
+=== bindec('11')
+=> 3
+=== hexdec('11')
+=> 17
+=== octdec('11')
+=> 9
+=== base_convert('11', 2, 10)
+=> '3'
+=== base_convert('11', 8, 10)
+=> '9'
+=== base_convert('11', 10, 2)
+=> '1011'
+=== base_convert('11', 10, 16)
+=> 'b'
+=== base_convert('11', 16, 10)
+=> '17'
+=== base_convert('11', 16, 2)
+=> '10001'
+=== base_convert('11', 16, 15)
+=> '12'
+=== base_convert('11', 36, 10)
+=> '37'
+=== base_convert('11', 36, 16)
+=> '25'
+=== base_convert('11', 10, 36)
+=> 'b'
+=== base_convert('11', 36, 2)
+=> '100101'
+=== base_convert('11', 2, 36)
+=> '3'
+=== base_convert('11', 9, 10)
+=> '10'
+=== base_convert('11', 3, 7)
+=> '4'
+=== bindec('101010')
+=> 42
+=== hexdec('101010')
+=> 1052688
+=== octdec('101010')
+=> 33288
+=== base_convert('101010', 2, 10)
+=> '42'
+=== base_convert('101010', 8, 10)
+=> '33288'
+=== base_convert('101010', 10, 2)
+=> '11000101010010010'
+=== base_convert('101010', 10, 16)
+=> '18a92'
+=== base_convert('101010', 16, 10)
+=> '1052688'
+=== base_convert('101010', 16, 2)
+=> '100000001000000010000'
+=== base_convert('101010', 16, 15)
+=> '15bd93'
+=== base_convert('101010', 36, 10)
+=> '60512868'
+=== base_convert('101010', 36, 16)
+=> '39b5a64'
+=== base_convert('101010', 10, 36)
+=> '25xu'
+=== base_convert('101010', 36, 2)
+=> '11100110110101101001100100'
+=== base_convert('101010', 2, 36)
+=> '16'
+=== base_convert('101010', 9, 10)
+=> '59787'
+=== base_convert('101010', 3, 7)
+=> '540'
+=== bindec('777')
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> 0
+=== hexdec('777')
+=> 1911
+=== octdec('777')
+=> 511
+=== base_convert('777', 2, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert('777', 8, 10)
+=> '511'
+=== base_convert('777', 10, 2)
+=> '1100001001'
+=== base_convert('777', 10, 16)
+=> '309'
+=== base_convert('777', 16, 10)
+=> '1911'
+=== base_convert('777', 16, 2)
+=> '11101110111'
+=== base_convert('777', 16, 15)
+=> '876'
+=== base_convert('777', 36, 10)
+=> '9331'
+=== base_convert('777', 36, 16)
+=> '2473'
+=== base_convert('777', 10, 36)
+=> 'll'
+=== base_convert('777', 36, 2)
+=> '10010001110011'
+=== base_convert('777', 2, 36)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert('777', 9, 10)
+=> '637'
+=== base_convert('777', 3, 7)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== bindec('789')
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> 0
+=== hexdec('789')
+=> 1929
+=== octdec('789')
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> 7
+=== base_convert('789', 2, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert('789', 8, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '7'
+=== base_convert('789', 10, 2)
+=> '1100010101'
+=== base_convert('789', 10, 16)
+=> '315'
+=== base_convert('789', 16, 10)
+=> '1929'
+=== base_convert('789', 16, 2)
+=> '11110001001'
+=== base_convert('789', 16, 15)
+=> '889'
+=== base_convert('789', 36, 10)
+=> '9369'
+=== base_convert('789', 36, 16)
+=> '2499'
+=== base_convert('789', 10, 36)
+=> 'lx'
+=== base_convert('789', 36, 2)
+=> '10010010011001'
+=== base_convert('789', 2, 36)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert('789', 9, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '71'
+=== base_convert('789', 3, 7)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== bindec('12345')
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> 1
+=== hexdec('12345')
+=> 74565
+=== octdec('12345')
+=> 5349
+=== base_convert('12345', 2, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '1'
+=== base_convert('12345', 8, 10)
+=> '5349'
+=== base_convert('12345', 10, 2)
+=> '11000000111001'
+=== base_convert('12345', 10, 16)
+=> '3039'
+=== base_convert('12345', 16, 10)
+=> '74565'
+=== base_convert('12345', 16, 2)
+=> '10010001101000101'
+=== base_convert('12345', 16, 15)
+=> '17160'
+=== base_convert('12345', 36, 10)
+=> '1776965'
+=== base_convert('12345', 36, 16)
+=> '1b1d45'
+=== base_convert('12345', 10, 36)
+=> '9ix'
+=== base_convert('12345', 36, 2)
+=> '110110001110101000101'
+=== base_convert('12345', 2, 36)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '1'
+=== base_convert('12345', 9, 10)
+=> '8303'
+=== base_convert('12345', 3, 7)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '5'
+=== bindec('0x1A')
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> 1
+=== hexdec('0x1A')
+=> 26
+=== octdec('0x1A')
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> 1
+=== base_convert('0x1A', 2, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '1'
+=== base_convert('0x1A', 8, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '1'
+=== base_convert('0x1A', 10, 2)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '1'
+=== base_convert('0x1A', 10, 16)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '1'
+=== base_convert('0x1A', 16, 10)
+=> '26'
+=== base_convert('0x1A', 16, 2)
+=> '11010'
+=== base_convert('0x1A', 16, 15)
+=> '1b'
+=== base_convert('0x1A', 36, 10)
+=> '42814'
+=== base_convert('0x1A', 36, 16)
+=> 'a73e'
+=== base_convert('0x1A', 10, 36)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '1'
+=== base_convert('0x1A', 36, 2)
+=> '1010011100111110'
+=== base_convert('0x1A', 2, 36)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '1'
+=== base_convert('0x1A', 9, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '1'
+=== base_convert('0x1A', 3, 7)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '1'
+=== bindec('0X1a')
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> 1
+=== hexdec('0X1a')
+=> 26
+=== octdec('0X1a')
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> 1
+=== base_convert('0X1a', 2, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '1'
+=== base_convert('0X1a', 8, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '1'
+=== base_convert('0X1a', 10, 2)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '1'
+=== base_convert('0X1a', 10, 16)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '1'
+=== base_convert('0X1a', 16, 10)
+=> '26'
+=== base_convert('0X1a', 16, 2)
+=> '11010'
+=== base_convert('0X1a', 16, 15)
+=> '1b'
+=== base_convert('0X1a', 36, 10)
+=> '42814'
+=== base_convert('0X1a', 36, 16)
+=> 'a73e'
+=== base_convert('0X1a', 10, 36)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '1'
+=== base_convert('0X1a', 36, 2)
+=> '1010011100111110'
+=== base_convert('0X1a', 2, 36)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '1'
+=== base_convert('0X1a', 9, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '1'
+=== base_convert('0X1a', 3, 7)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '1'
+=== bindec('0b101')
+=> 5
+=== hexdec('0b101')
+=> 45313
+=== octdec('0b101')
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> 65
+=== base_convert('0b101', 2, 10)
+=> '5'
+=== base_convert('0b101', 8, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '65'
+=== base_convert('0b101', 10, 2)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '1100101'
+=== base_convert('0b101', 10, 16)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '65'
+=== base_convert('0b101', 16, 10)
+=> '45313'
+=== base_convert('0b101', 16, 2)
+=> '1011000100000001'
+=== base_convert('0b101', 16, 15)
+=> 'd65d'
+=== base_convert('0b101', 36, 10)
+=> '514513'
+=== base_convert('0b101', 36, 16)
+=> '7d9d1'
+=== base_convert('0b101', 10, 36)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '2t'
+=== base_convert('0b101', 36, 2)
+=> '1111101100111010001'
+=== base_convert('0b101', 2, 36)
+=> '5'
+=== base_convert('0b101', 9, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '82'
+=== base_convert('0b101', 3, 7)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '13'
+=== bindec('0B11')
+=> 3
+=== hexdec('0B11')
+=> 2833
+=== octdec('0B11')
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> 9
+=== base_convert('0B11', 2, 10)
+=> '3'
+=== base_convert('0B11', 8, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '9'
+=== base_convert('0B11', 10, 2)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '1011'
+=== base_convert('0B11', 10, 16)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> 'b'
+=== base_convert('0B11', 16, 10)
+=> '2833'
+=== base_convert('0B11', 16, 2)
+=> '101100010001'
+=== base_convert('0B11', 16, 15)
+=> 'c8d'
+=== base_convert('0B11', 36, 10)
+=> '14293'
+=== base_convert('0B11', 36, 16)
+=> '37d5'
+=== base_convert('0B11', 10, 36)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> 'b'
+=== base_convert('0B11', 36, 2)
+=> '11011111010101'
+=== base_convert('0B11', 2, 36)
+=> '3'
+=== base_convert('0B11', 9, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '10'
+=== base_convert('0B11', 3, 7)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '4'
+=== bindec('0o17')
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> 1
+=== hexdec('0o17')
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> 23
+=== octdec('0o17')
+=> 15
+=== base_convert('0o17', 2, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '1'
+=== base_convert('0o17', 8, 10)
+=> '15'
+=== base_convert('0o17', 10, 2)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '10001'
+=== base_convert('0o17', 10, 16)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '11'
+=== base_convert('0o17', 16, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '23'
+=== base_convert('0o17', 16, 2)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '10111'
+=== base_convert('0o17', 16, 15)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '18'
+=== base_convert('0o17', 36, 10)
+=> '31147'
+=== base_convert('0o17', 36, 16)
+=> '79ab'
+=== base_convert('0o17', 10, 36)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> 'h'
+=== base_convert('0o17', 36, 2)
+=> '111100110101011'
+=== base_convert('0o17', 2, 36)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '1'
+=== base_convert('0o17', 9, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '16'
+=== base_convert('0o17', 3, 7)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '1'
+=== bindec('0O17')
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> 1
+=== hexdec('0O17')
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> 23
+=== octdec('0O17')
+=> 15
+=== base_convert('0O17', 2, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '1'
+=== base_convert('0O17', 8, 10)
+=> '15'
+=== base_convert('0O17', 10, 2)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '10001'
+=== base_convert('0O17', 10, 16)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '11'
+=== base_convert('0O17', 16, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '23'
+=== base_convert('0O17', 16, 2)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '10111'
+=== base_convert('0O17', 16, 15)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '18'
+=== base_convert('0O17', 36, 10)
+=> '31147'
+=== base_convert('0O17', 36, 16)
+=> '79ab'
+=== base_convert('0O17', 10, 36)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> 'h'
+=== base_convert('0O17', 36, 2)
+=> '111100110101011'
+=== base_convert('0O17', 2, 36)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '1'
+=== base_convert('0O17', 9, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '16'
+=== base_convert('0O17', 3, 7)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '1'
+=== bindec('00x1')
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> 1
+=== hexdec('00x1')
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> 1
+=== octdec('00x1')
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> 1
+=== base_convert('00x1', 2, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '1'
+=== base_convert('00x1', 8, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '1'
+=== base_convert('00x1', 10, 2)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '1'
+=== base_convert('00x1', 10, 16)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '1'
+=== base_convert('00x1', 16, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '1'
+=== base_convert('00x1', 16, 2)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '1'
+=== base_convert('00x1', 16, 15)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '1'
+=== base_convert('00x1', 36, 10)
+=> '1189'
+=== base_convert('00x1', 36, 16)
+=> '4a5'
+=== base_convert('00x1', 10, 36)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '1'
+=== base_convert('00x1', 36, 2)
+=> '10010100101'
+=== base_convert('00x1', 2, 36)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '1'
+=== base_convert('00x1', 9, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '1'
+=== base_convert('00x1', 3, 7)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '1'
+=== bindec('0x')
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> 0
+=== hexdec('0x')
+=> 0
+=== octdec('0x')
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> 0
+=== base_convert('0x', 2, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert('0x', 8, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert('0x', 10, 2)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert('0x', 10, 16)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert('0x', 16, 10)
+=> '0'
+=== base_convert('0x', 16, 2)
+=> '0'
+=== base_convert('0x', 16, 15)
+=> '0'
+=== base_convert('0x', 36, 10)
+=> '33'
+=== base_convert('0x', 36, 16)
+=> '21'
+=== base_convert('0x', 10, 36)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert('0x', 36, 2)
+=> '100001'
+=== base_convert('0x', 2, 36)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert('0x', 9, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert('0x', 3, 7)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== bindec('0b')
+=> 0
+=== hexdec('0b')
+=> 11
+=== octdec('0b')
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> 0
+=== base_convert('0b', 2, 10)
+=> '0'
+=== base_convert('0b', 8, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert('0b', 10, 2)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert('0b', 10, 16)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert('0b', 16, 10)
+=> '11'
+=== base_convert('0b', 16, 2)
+=> '1011'
+=== base_convert('0b', 16, 15)
+=> 'b'
+=== base_convert('0b', 36, 10)
+=> '11'
+=== base_convert('0b', 36, 16)
+=> 'b'
+=== base_convert('0b', 10, 36)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert('0b', 36, 2)
+=> '1011'
+=== base_convert('0b', 2, 36)
+=> '0'
+=== base_convert('0b', 9, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert('0b', 3, 7)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== bindec(" 0xFF\x09\x0a")
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> 0
+=== hexdec(" 0xFF\x09\x0a")
+=> 255
+=== octdec(" 0xFF\x09\x0a")
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> 0
+=== base_convert(" 0xFF\x09\x0a", 2, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert(" 0xFF\x09\x0a", 8, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert(" 0xFF\x09\x0a", 10, 2)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert(" 0xFF\x09\x0a", 10, 16)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert(" 0xFF\x09\x0a", 16, 10)
+=> '255'
+=== base_convert(" 0xFF\x09\x0a", 16, 2)
+=> '11111111'
+=== base_convert(" 0xFF\x09\x0a", 16, 15)
+=> '120'
+=== base_convert(" 0xFF\x09\x0a", 36, 10)
+=> '43323'
+=== base_convert(" 0xFF\x09\x0a", 36, 16)
+=> 'a93b'
+=== base_convert(" 0xFF\x09\x0a", 10, 36)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert(" 0xFF\x09\x0a", 36, 2)
+=> '1010100100111011'
+=== base_convert(" 0xFF\x09\x0a", 2, 36)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert(" 0xFF\x09\x0a", 9, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert(" 0xFF\x09\x0a", 3, 7)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== bindec("\x0d\x0aFF\x09\x0a")
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> 0
+=== hexdec("\x0d\x0aFF\x09\x0a")
+=> 255
+=== octdec("\x0d\x0aFF\x09\x0a")
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> 0
+=== base_convert("\x0d\x0aFF\x09\x0a", 2, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert("\x0d\x0aFF\x09\x0a", 8, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert("\x0d\x0aFF\x09\x0a", 10, 2)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert("\x0d\x0aFF\x09\x0a", 10, 16)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert("\x0d\x0aFF\x09\x0a", 16, 10)
+=> '255'
+=== base_convert("\x0d\x0aFF\x09\x0a", 16, 2)
+=> '11111111'
+=== base_convert("\x0d\x0aFF\x09\x0a", 16, 15)
+=> '120'
+=== base_convert("\x0d\x0aFF\x09\x0a", 36, 10)
+=> '555'
+=== base_convert("\x0d\x0aFF\x09\x0a", 36, 16)
+=> '22b'
+=== base_convert("\x0d\x0aFF\x09\x0a", 10, 36)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert("\x0d\x0aFF\x09\x0a", 36, 2)
+=> '1000101011'
+=== base_convert("\x0d\x0aFF\x09\x0a", 2, 36)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert("\x0d\x0aFF\x09\x0a", 9, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert("\x0d\x0aFF\x09\x0a", 3, 7)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== bindec("\x0b\x0c12\x0b")
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> 1
+=== hexdec("\x0b\x0c12\x0b")
+=> 18
+=== octdec("\x0b\x0c12\x0b")
+=> 10
+=== base_convert("\x0b\x0c12\x0b", 2, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '1'
+=== base_convert("\x0b\x0c12\x0b", 8, 10)
+=> '10'
+=== base_convert("\x0b\x0c12\x0b", 10, 2)
+=> '1100'
+=== base_convert("\x0b\x0c12\x0b", 10, 16)
+=> 'c'
+=== base_convert("\x0b\x0c12\x0b", 16, 10)
+=> '18'
+=== base_convert("\x0b\x0c12\x0b", 16, 2)
+=> '10010'
+=== base_convert("\x0b\x0c12\x0b", 16, 15)
+=> '13'
+=== base_convert("\x0b\x0c12\x0b", 36, 10)
+=> '38'
+=== base_convert("\x0b\x0c12\x0b", 36, 16)
+=> '26'
+=== base_convert("\x0b\x0c12\x0b", 10, 36)
+=> 'c'
+=== base_convert("\x0b\x0c12\x0b", 36, 2)
+=> '100110'
+=== base_convert("\x0b\x0c12\x0b", 2, 36)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '1'
+=== base_convert("\x0b\x0c12\x0b", 9, 10)
+=> '11'
+=== base_convert("\x0b\x0c12\x0b", 3, 7)
+=> '5'
+=== bindec(' 1 1 ')
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> 3
+=== hexdec(' 1 1 ')
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> 17
+=== octdec(' 1 1 ')
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> 9
+=== base_convert(' 1 1 ', 2, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '3'
+=== base_convert(' 1 1 ', 8, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '9'
+=== base_convert(' 1 1 ', 10, 2)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '1011'
+=== base_convert(' 1 1 ', 10, 16)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> 'b'
+=== base_convert(' 1 1 ', 16, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '17'
+=== base_convert(' 1 1 ', 16, 2)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '10001'
+=== base_convert(' 1 1 ', 16, 15)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '12'
+=== base_convert(' 1 1 ', 36, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '37'
+=== base_convert(' 1 1 ', 36, 16)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '25'
+=== base_convert(' 1 1 ', 10, 36)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> 'b'
+=== base_convert(' 1 1 ', 36, 2)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '100101'
+=== base_convert(' 1 1 ', 2, 36)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '3'
+=== base_convert(' 1 1 ', 9, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '10'
+=== base_convert(' 1 1 ', 3, 7)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '4'
+=== bindec('FF')
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> 0
+=== hexdec('FF')
+=> 255
+=== octdec('FF')
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> 0
+=== base_convert('FF', 2, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert('FF', 8, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert('FF', 10, 2)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert('FF', 10, 16)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert('FF', 16, 10)
+=> '255'
+=== base_convert('FF', 16, 2)
+=> '11111111'
+=== base_convert('FF', 16, 15)
+=> '120'
+=== base_convert('FF', 36, 10)
+=> '555'
+=== base_convert('FF', 36, 16)
+=> '22b'
+=== base_convert('FF', 10, 36)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert('FF', 36, 2)
+=> '1000101011'
+=== base_convert('FF', 2, 36)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert('FF', 9, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert('FF', 3, 7)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== bindec('ff')
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> 0
+=== hexdec('ff')
+=> 255
+=== octdec('ff')
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> 0
+=== base_convert('ff', 2, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert('ff', 8, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert('ff', 10, 2)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert('ff', 10, 16)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert('ff', 16, 10)
+=> '255'
+=== base_convert('ff', 16, 2)
+=> '11111111'
+=== base_convert('ff', 16, 15)
+=> '120'
+=== base_convert('ff', 36, 10)
+=> '555'
+=== base_convert('ff', 36, 16)
+=> '22b'
+=== base_convert('ff', 10, 36)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert('ff', 36, 2)
+=> '1000101011'
+=== base_convert('ff', 2, 36)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert('ff', 9, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert('ff', 3, 7)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== bindec('fg')
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> 0
+=== hexdec('fg')
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> 15
+=== octdec('fg')
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> 0
+=== base_convert('fg', 2, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert('fg', 8, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert('fg', 10, 2)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert('fg', 10, 16)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert('fg', 16, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '15'
+=== base_convert('fg', 16, 2)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '1111'
+=== base_convert('fg', 16, 15)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '10'
+=== base_convert('fg', 36, 10)
+=> '556'
+=== base_convert('fg', 36, 16)
+=> '22c'
+=== base_convert('fg', 10, 36)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert('fg', 36, 2)
+=> '1000101100'
+=== base_convert('fg', 2, 36)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert('fg', 9, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert('fg', 3, 7)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== bindec('zz')
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> 0
+=== hexdec('zz')
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> 0
+=== octdec('zz')
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> 0
+=== base_convert('zz', 2, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert('zz', 8, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert('zz', 10, 2)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert('zz', 10, 16)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert('zz', 16, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert('zz', 16, 2)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert('zz', 16, 15)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert('zz', 36, 10)
+=> '1295'
+=== base_convert('zz', 36, 16)
+=> '50f'
+=== base_convert('zz', 10, 36)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert('zz', 36, 2)
+=> '10100001111'
+=== base_convert('zz', 2, 36)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert('zz', 9, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert('zz', 3, 7)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== bindec('ZZ')
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> 0
+=== hexdec('ZZ')
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> 0
+=== octdec('ZZ')
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> 0
+=== base_convert('ZZ', 2, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert('ZZ', 8, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert('ZZ', 10, 2)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert('ZZ', 10, 16)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert('ZZ', 16, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert('ZZ', 16, 2)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert('ZZ', 16, 15)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert('ZZ', 36, 10)
+=> '1295'
+=== base_convert('ZZ', 36, 16)
+=> '50f'
+=== base_convert('ZZ', 10, 36)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert('ZZ', 36, 2)
+=> '10100001111'
+=== base_convert('ZZ', 2, 36)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert('ZZ', 9, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert('ZZ', 3, 7)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== bindec('Zz9')
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> 0
+=== hexdec('Zz9')
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> 9
+=== octdec('Zz9')
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> 0
+=== base_convert('Zz9', 2, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert('Zz9', 8, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert('Zz9', 10, 2)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '1001'
+=== base_convert('Zz9', 10, 16)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '9'
+=== base_convert('Zz9', 16, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '9'
+=== base_convert('Zz9', 16, 2)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '1001'
+=== base_convert('Zz9', 16, 15)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '9'
+=== base_convert('Zz9', 36, 10)
+=> '46629'
+=== base_convert('Zz9', 36, 16)
+=> 'b625'
+=== base_convert('Zz9', 10, 36)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '9'
+=== base_convert('Zz9', 36, 2)
+=> '1011011000100101'
+=== base_convert('Zz9', 2, 36)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert('Zz9', 9, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert('Zz9', 3, 7)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== bindec('-1')
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> 1
+=== hexdec('-1')
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> 1
+=== octdec('-1')
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> 1
+=== base_convert('-1', 2, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '1'
+=== base_convert('-1', 8, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '1'
+=== base_convert('-1', 10, 2)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '1'
+=== base_convert('-1', 10, 16)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '1'
+=== base_convert('-1', 16, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '1'
+=== base_convert('-1', 16, 2)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '1'
+=== base_convert('-1', 16, 15)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '1'
+=== base_convert('-1', 36, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '1'
+=== base_convert('-1', 36, 16)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '1'
+=== base_convert('-1', 10, 36)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '1'
+=== base_convert('-1', 36, 2)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '1'
+=== base_convert('-1', 2, 36)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '1'
+=== base_convert('-1', 9, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '1'
+=== base_convert('-1', 3, 7)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '1'
+=== bindec('+1')
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> 1
+=== hexdec('+1')
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> 1
+=== octdec('+1')
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> 1
+=== base_convert('+1', 2, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '1'
+=== base_convert('+1', 8, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '1'
+=== base_convert('+1', 10, 2)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '1'
+=== base_convert('+1', 10, 16)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '1'
+=== base_convert('+1', 16, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '1'
+=== base_convert('+1', 16, 2)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '1'
+=== base_convert('+1', 16, 15)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '1'
+=== base_convert('+1', 36, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '1'
+=== base_convert('+1', 36, 16)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '1'
+=== base_convert('+1', 10, 36)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '1'
+=== base_convert('+1', 36, 2)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '1'
+=== base_convert('+1', 2, 36)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '1'
+=== base_convert('+1', 9, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '1'
+=== base_convert('+1', 3, 7)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '1'
+=== bindec('1.5')
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> 1
+=== hexdec('1.5')
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> 21
+=== octdec('1.5')
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> 13
+=== base_convert('1.5', 2, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '1'
+=== base_convert('1.5', 8, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '13'
+=== base_convert('1.5', 10, 2)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '1111'
+=== base_convert('1.5', 10, 16)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> 'f'
+=== base_convert('1.5', 16, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '21'
+=== base_convert('1.5', 16, 2)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '10101'
+=== base_convert('1.5', 16, 15)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '16'
+=== base_convert('1.5', 36, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '41'
+=== base_convert('1.5', 36, 16)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '29'
+=== base_convert('1.5', 10, 36)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> 'f'
+=== base_convert('1.5', 36, 2)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '101001'
+=== base_convert('1.5', 2, 36)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '1'
+=== base_convert('1.5', 9, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '14'
+=== base_convert('1.5', 3, 7)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '1'
+=== bindec('1e5')
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> 1
+=== hexdec('1e5')
+=> 485
+=== octdec('1e5')
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> 13
+=== base_convert('1e5', 2, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '1'
+=== base_convert('1e5', 8, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '13'
+=== base_convert('1e5', 10, 2)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '1111'
+=== base_convert('1e5', 10, 16)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> 'f'
+=== base_convert('1e5', 16, 10)
+=> '485'
+=== base_convert('1e5', 16, 2)
+=> '111100101'
+=== base_convert('1e5', 16, 15)
+=> '225'
+=== base_convert('1e5', 36, 10)
+=> '1805'
+=== base_convert('1e5', 36, 16)
+=> '70d'
+=== base_convert('1e5', 10, 36)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> 'f'
+=== base_convert('1e5', 36, 2)
+=> '11100001101'
+=== base_convert('1e5', 2, 36)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '1'
+=== base_convert('1e5', 9, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '14'
+=== base_convert('1e5', 3, 7)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '1'
+=== bindec('q12345')
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> 1
+=== hexdec('q12345')
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> 74565
+=== octdec('q12345')
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> 5349
+=== base_convert('q12345', 2, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '1'
+=== base_convert('q12345', 8, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '5349'
+=== base_convert('q12345', 10, 2)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '11000000111001'
+=== base_convert('q12345', 10, 16)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '3039'
+=== base_convert('q12345', 16, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '74565'
+=== base_convert('q12345', 16, 2)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '10010001101000101'
+=== base_convert('q12345', 16, 15)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '17160'
+=== base_convert('q12345', 36, 10)
+=> '1573897541'
+=== base_convert('q12345', 36, 16)
+=> '5dcfc545'
+=== base_convert('q12345', 10, 36)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '9ix'
+=== base_convert('q12345', 36, 2)
+=> '1011101110011111100010101000101'
+=== base_convert('q12345', 2, 36)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '1'
+=== base_convert('q12345', 9, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '8303'
+=== base_convert('q12345', 3, 7)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '5'
+=== bindec('12345+?!')
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> 1
+=== hexdec('12345+?!')
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> 74565
+=== octdec('12345+?!')
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> 5349
+=== base_convert('12345+?!', 2, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '1'
+=== base_convert('12345+?!', 8, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '5349'
+=== base_convert('12345+?!', 10, 2)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '11000000111001'
+=== base_convert('12345+?!', 10, 16)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '3039'
+=== base_convert('12345+?!', 16, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '74565'
+=== base_convert('12345+?!', 16, 2)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '10010001101000101'
+=== base_convert('12345+?!', 16, 15)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '17160'
+=== base_convert('12345+?!', 36, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '1776965'
+=== base_convert('12345+?!', 36, 16)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '1b1d45'
+=== base_convert('12345+?!', 10, 36)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '9ix'
+=== base_convert('12345+?!', 36, 2)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '110110001110101000101'
+=== base_convert('12345+?!', 2, 36)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '1'
+=== base_convert('12345+?!', 9, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '8303'
+=== base_convert('12345+?!', 3, 7)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '5'
+=== bindec('12345q')
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> 1
+=== hexdec('12345q')
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> 74565
+=== octdec('12345q')
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> 5349
+=== base_convert('12345q', 2, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '1'
+=== base_convert('12345q', 8, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '5349'
+=== base_convert('12345q', 10, 2)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '11000000111001'
+=== base_convert('12345q', 10, 16)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '3039'
+=== base_convert('12345q', 16, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '74565'
+=== base_convert('12345q', 16, 2)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '10010001101000101'
+=== base_convert('12345q', 16, 15)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '17160'
+=== base_convert('12345q', 36, 10)
+=> '63970766'
+=== base_convert('12345q', 36, 16)
+=> '3d01dce'
+=== base_convert('12345q', 10, 36)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '9ix'
+=== base_convert('12345q', 36, 2)
+=> '11110100000001110111001110'
+=== base_convert('12345q', 2, 36)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '1'
+=== base_convert('12345q', 9, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '8303'
+=== base_convert('12345q', 3, 7)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '5'
+=== bindec("\x00")
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> 0
+=== hexdec("\x00")
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> 0
+=== octdec("\x00")
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> 0
+=== base_convert("\x00", 2, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert("\x00", 8, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert("\x00", 10, 2)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert("\x00", 10, 16)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert("\x00", 16, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert("\x00", 16, 2)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert("\x00", 16, 15)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert("\x00", 36, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert("\x00", 36, 16)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert("\x00", 10, 36)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert("\x00", 36, 2)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert("\x00", 2, 36)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert("\x00", 9, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert("\x00", 3, 7)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== bindec("1\x002")
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> 1
+=== hexdec("1\x002")
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> 18
+=== octdec("1\x002")
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> 10
+=== base_convert("1\x002", 2, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '1'
+=== base_convert("1\x002", 8, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '10'
+=== base_convert("1\x002", 10, 2)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '1100'
+=== base_convert("1\x002", 10, 16)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> 'c'
+=== base_convert("1\x002", 16, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '18'
+=== base_convert("1\x002", 16, 2)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '10010'
+=== base_convert("1\x002", 16, 15)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '13'
+=== base_convert("1\x002", 36, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '38'
+=== base_convert("1\x002", 36, 16)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '26'
+=== base_convert("1\x002", 10, 36)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> 'c'
+=== base_convert("1\x002", 36, 2)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '100110'
+=== base_convert("1\x002", 2, 36)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '1'
+=== base_convert("1\x002", 9, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '11'
+=== base_convert("1\x002", 3, 7)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '5'
+=== bindec("\xff\x80")
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> 0
+=== hexdec("\xff\x80")
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> 0
+=== octdec("\xff\x80")
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> 0
+=== base_convert("\xff\x80", 2, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert("\xff\x80", 8, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert("\xff\x80", 10, 2)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert("\xff\x80", 10, 16)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert("\xff\x80", 16, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert("\xff\x80", 16, 2)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert("\xff\x80", 16, 15)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert("\xff\x80", 36, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert("\xff\x80", 36, 16)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert("\xff\x80", 10, 36)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert("\xff\x80", 36, 2)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert("\xff\x80", 2, 36)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert("\xff\x80", 9, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert("\xff\x80", 3, 7)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== bindec('7fffffffffffffff')
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> 0
+=== hexdec('7fffffffffffffff')
+=> 9223372036854775807
+=== octdec('7fffffffffffffff')
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> 7
+=== base_convert('7fffffffffffffff', 2, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert('7fffffffffffffff', 8, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '7'
+=== base_convert('7fffffffffffffff', 10, 2)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '111'
+=== base_convert('7fffffffffffffff', 10, 16)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '7'
+=== base_convert('7fffffffffffffff', 16, 10)
+=> '9223372036854775807'
+=== base_convert('7fffffffffffffff', 16, 2)
+=> '111111111111111111111111111111111111111111111111111111111111111'
+=== base_convert('7fffffffffffffff', 16, 15)
+=> '160e2ad3246366807'
+=== base_convert('7fffffffffffffff', 36, 10)
+=> '1642263403639733860642488'
+=== base_convert('7fffffffffffffff', 36, 16)
+=> '15bc3470a4de9f0000000'
+=== base_convert('7fffffffffffffff', 10, 36)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '7'
+=== base_convert('7fffffffffffffff', 36, 2)
+=> '0100011100001010010011011110100111110000000000000000000000000000'
+=== base_convert('7fffffffffffffff', 2, 36)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert('7fffffffffffffff', 9, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '7'
+=== base_convert('7fffffffffffffff', 3, 7)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== bindec('8000000000000000')
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> 0
+=== hexdec('8000000000000000')
+=> 9.223372036854776E+18
+=== octdec('8000000000000000')
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> 0
+=== base_convert('8000000000000000', 2, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert('8000000000000000', 8, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert('8000000000000000', 10, 2)
+=> '11100011010111111010100100110001101000000000000000000'
+=== base_convert('8000000000000000', 10, 16)
+=> '1c6bf526340000'
+=== base_convert('8000000000000000', 16, 10)
+=> '9223372036854776028'
+=== base_convert('8000000000000000', 16, 2)
+=> '1000000000000000000000000000000000000000000000000000000000000000'
+=== base_convert('8000000000000000', 16, 15)
+=> '160e2ad3246366878'
+=== base_convert('8000000000000000', 36, 10)
+=> '1768591357765866882882488'
+=== base_convert('8000000000000000', 36, 16)
+=> '176838794f17200000000'
+=== base_convert('8000000000000000', 10, 36)
+=> '26rrh9i4cu8'
+=== base_convert('8000000000000000', 36, 2)
+=> '1000011110010100111100010111001000000000000000000000000000000000'
+=== base_convert('8000000000000000', 2, 36)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert('8000000000000000', 9, 10)
+=> '1647129056757192'
+=== base_convert('8000000000000000', 3, 7)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== bindec('ffffffffffffffff')
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> 0
+=== hexdec('ffffffffffffffff')
+=> 1.8446744073709552E+19
+=== octdec('ffffffffffffffff')
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> 0
+=== base_convert('ffffffffffffffff', 2, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert('ffffffffffffffff', 8, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert('ffffffffffffffff', 10, 2)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert('ffffffffffffffff', 10, 16)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert('ffffffffffffffff', 16, 10)
+=> '18446744073709552046'
+=== base_convert('ffffffffffffffff', 16, 2)
+=> '0000000000000000000000000000000000000000000000000000000000000000'
+=== base_convert('ffffffffffffffff', 16, 15)
+=> '2c1d56b648c6cd1e1'
+=== base_convert('ffffffffffffffff', 36, 10)
+=> '3410854761405601848882602'
+=== base_convert('ffffffffffffffff', 36, 16)
+=> '2d246ce9f3f5c00000000'
+=== base_convert('ffffffffffffffff', 10, 36)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert('ffffffffffffffff', 36, 2)
+=> '1100111010011111001111110101110000000000000000000000000000000000'
+=== base_convert('ffffffffffffffff', 2, 36)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert('ffffffffffffffff', 9, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert('ffffffffffffffff', 3, 7)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== bindec('12345678901234567')
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> 5
+=== hexdec('12345678901234567')
+=> 2.0988295476557332E+19
+=== octdec('12345678901234567')
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> 5744368105847
+=== base_convert('12345678901234567', 2, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '5'
+=== base_convert('12345678901234567', 8, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '5744368105847'
+=== base_convert('12345678901234567', 10, 2)
+=> '101011110111000101010001011101011010110100101110000111'
+=== base_convert('12345678901234567', 10, 16)
+=> '2bdc545d6b4b87'
+=== base_convert('12345678901234567', 16, 10)
+=> '20988295476557332280'
+=== base_convert('12345678901234567', 16, 2)
+=> '0010001101000101011001111000100100000001001000110100000000000000'
+=== base_convert('12345678901234567', 16, 15)
+=> '32de4105c784ec79a'
+=== base_convert('12345678901234567', 36, 10)
+=> '8419938611011877824682482'
+=== base_convert('12345678901234567', 36, 16)
+=> '6f6fdc966009c80000000'
+=== base_convert('12345678901234567', 10, 36)
+=> '3dk6el9t85j'
+=== base_convert('12345678901234567', 36, 2)
+=> '1100100101100110000000001001110010000000000000000000000000000000'
+=== base_convert('12345678901234567', 2, 36)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '5'
+=== base_convert('12345678901234567', 9, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '260580915629728'
+=== base_convert('12345678901234567', 3, 7)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '260'
+=== bindec('17fffffffffffffff')
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> 1
+=== hexdec('17fffffffffffffff')
+=> 2.7670116110564327E+19
+=== octdec('17fffffffffffffff')
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> 15
+=== base_convert('17fffffffffffffff', 2, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '1'
+=== base_convert('17fffffffffffffff', 8, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '15'
+=== base_convert('17fffffffffffffff', 10, 2)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '10001'
+=== base_convert('17fffffffffffffff', 10, 16)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '11'
+=== base_convert('17fffffffffffffff', 16, 10)
+=> '27670116110564338404'
+=== base_convert('17fffffffffffffff', 16, 2)
+=> '1000000000000000000000000000000000000000000000000000000000000000'
+=== base_convert('17fffffffffffffff', 16, 15)
+=> '432c82996d3a452e9'
+=== base_convert('17fffffffffffffff', 36, 10)
+=> '9600924513586138608488284'
+=== base_convert('17fffffffffffffff', 36, 16)
+=> '7f11329288c6b40000000'
+=== base_convert('17fffffffffffffff', 10, 36)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> 'h'
+=== base_convert('17fffffffffffffff', 36, 2)
+=> '0010100100101000100011000110101101000000000000000000000000000000'
+=== base_convert('17fffffffffffffff', 2, 36)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '1'
+=== base_convert('17fffffffffffffff', 9, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '16'
+=== base_convert('17fffffffffffffff', 3, 7)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '1'
+=== bindec('fffffffffffffffff')
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> 0
+=== hexdec('fffffffffffffffff')
+=> 2.9514790517935283E+20
+=== octdec('fffffffffffffffff')
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> 0
+=== base_convert('fffffffffffffffff', 2, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert('fffffffffffffffff', 8, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert('fffffffffffffffff', 10, 2)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert('fffffffffffffffff', 10, 16)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert('fffffffffffffffff', 16, 10)
+=> '295147905179352842046'
+=== base_convert('fffffffffffffffff', 16, 2)
+=> '0000000000000000000000000000000000000000000000000000000000000000'
+=== base_convert('fffffffffffffffff', 16, 15)
+=> '2ee03c32ad644bd1e1'
+=== base_convert('fffffffffffffffff', 36, 10)
+=> '122790771410601642646026802'
+=== base_convert('fffffffffffffffff', 36, 16)
+=> '6591f50e64e8f000000000'
+=== base_convert('fffffffffffffffff', 10, 36)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert('fffffffffffffffff', 36, 2)
+=> '0000111001100100111010001111000000000000000000000000000000000000'
+=== base_convert('fffffffffffffffff', 2, 36)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert('fffffffffffffffff', 9, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert('fffffffffffffffff', 3, 7)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== bindec('0111111111111111111111111111111111111111111111111111111111111111')
+=> 9223372036854775807
+=== hexdec('0111111111111111111111111111111111111111111111111111111111111111')
+=> 4.824670384888175E+74
+=== octdec('0111111111111111111111111111111111111111111111111111111111111111')
+=> 1.120911024176193E+56
+=== base_convert('0111111111111111111111111111111111111111111111111111111111111111', 2, 10)
+=> '9223372036854775807'
+=== base_convert('0111111111111111111111111111111111111111111111111111111111111111', 8, 10)
+=> '112091102417619328026280466466684048266428048220042488642'
+=== base_convert('0111111111111111111111111111111111111111111111111111111111111111', 10, 2)
+=> '0000000000000000000000000000000000000000000000000000000000000000'
+=== base_convert('0111111111111111111111111111111111111111111111111111111111111111', 10, 16)
+=> '4525056fa4e91c00000000000000000000000000000000000000'
+=== base_convert('0111111111111111111111111111111111111111111111111111111111111111', 16, 10)
+=> '8817526686042206840086806480880080666488628400646806062480286464'
+=== base_convert('0111111111111111111111111111111111111111111111111111111111111111', 16, 2)
+=> '0000000000000000000000000000000000000000000000000000000000000000'
+=== base_convert('0111111111111111111111111111111111111111111111111111111111111111', 16, 15)
+=> '3d4bb61791170118a9b502840a0471157889119c89e9a7ae06debc5950a1bd1e'
+=== base_convert('0111111111111111111111111111111111111111111111111111111111111111', 36, 10)
+=> '6848626680662604882480280846844240620680042480460242224226848464'
+=== base_convert('0111111111111111111111111111111111111111111111111111111111111111', 36, 16)
+=> '0000000000000000000000000000000000000000000000000000000000000000'
+=== base_convert('0111111111111111111111111111111111111111111111111111111111111111', 10, 36)
+=> 'mdv5fxbreuoso8sgsw0ck844so0gcwwgowk8ckw8'
+=== base_convert('0111111111111111111111111111111111111111111111111111111111111111', 36, 2)
+=> '0000000000000000000000000000000000000000000000000000000000000000'
+=== base_convert('0111111111111111111111111111111111111111111111111111111111111111', 2, 36)
+=> '1y2p0ij32e8e7'
+=== base_convert('0111111111111111111111111111111111111111111111111111111111111111', 9, 10)
+=> '163752563579702442642622888820026048240080068660860406624662'
+=== base_convert('0111111111111111111111111111111111111111111111111111111111111111', 3, 7)
+=> '134011205164561416215263360560516106'
+=== bindec('1111111111111111111111111111111111111111111111111111111111111111')
+=> 1.8446744073709552E+19
+=== hexdec('1111111111111111111111111111111111111111111111111111111111111111')
+=> 7.71947261582108E+75
+=== octdec('1111111111111111111111111111111111111111111111111111111111111111')
+=> 8.967288193409543E+56
+=== base_convert('1111111111111111111111111111111111111111111111111111111111111111', 2, 10)
+=> '18446744073709552046'
+=== base_convert('1111111111111111111111111111111111111111111111111111111111111111', 8, 10)
+=> '896728819340954664068640288288842024688264024660026244826'
+=== base_convert('1111111111111111111111111111111111111111111111111111111111111111', 10, 2)
+=> '0000000000000000000000000000000000000000000000000000000000000000'
+=== base_convert('1111111111111111111111111111111111111111111111111111111111111111', 10, 16)
+=> '2b372365c711b2000000000000000000000000000000000000000'
+=== base_convert('1111111111111111111111111111111111111111111111111111111111111111', 16, 10)
+=> '1080026686042206840086806480880080666488628400646806062480286464'
+=== base_convert('1111111111111111111111111111111111111111111111111111111111111111', 16, 2)
+=> '0000000000000000000000000000000000000000000000000000000000000000'
+=== base_convert('1111111111111111111111111111111111111111111111111111111111111111', 16, 15)
+=> '23182791a2871118a9b502840a0471157889119c89e9a7ae06debc5950a1bd1e'
+=== base_convert('1111111111111111111111111111111111111111111111111111111111111111', 36, 10)
+=> '8664004804848066066440644426064042466006664802266428446800800862'
+=== base_convert('1111111111111111111111111111111111111111111111111111111111111111', 36, 16)
+=> '0000000000000000000000000000000000000000000000000000000000000000'
+=== base_convert('1111111111111111111111111111111111111111111111111111111111111111', 10, 36)
+=> '67unif99m4cgs0s4w0sw88sg04oc8w408c4sg40k4'
+=== base_convert('1111111111111111111111111111111111111111111111111111111111111111', 36, 2)
+=> '0000000000000000000000000000000000000000000000000000000000000000'
+=== base_convert('1111111111111111111111111111111111111111111111111111111111111111', 2, 36)
+=> '3w5e11264sg0g'
+=== base_convert('1111111111111111111111111111111111111111111111111111111111111111', 9, 10)
+=> '1473773072217322024682284268448484226284448204844200002026224'
+=== base_convert('1111111111111111111111111111111111111111111111111111111111111111', 3, 7)
+=> '435033621560344554461361405040245301'
+=== bindec('11111111111111111111111111111111111111111111111111111111111111111')
+=> 3.6893488147419103E+19
+=== hexdec('11111111111111111111111111111111111111111111111111111111111111111')
+=> 1.2351156185313727E+77
+=== octdec('11111111111111111111111111111111111111111111111111111111111111111')
+=> 7.173830554727635E+57
+=== base_convert('11111111111111111111111111111111111111111111111111111111111111111', 2, 10)
+=> '36893488147419104082'
+=== base_convert('11111111111111111111111111111111111111111111111111111111111111111', 8, 10)
+=> '7173830554727637882084820644644426062844682062880068622468'
+=== base_convert('11111111111111111111111111111111111111111111111111111111111111111', 10, 2)
+=> '0000000000000000000000000000000000000000000000000000000000000000'
+=== base_convert('11111111111111111111111111111111111111111111111111111111111111111', 10, 16)
+=> '1b02761f9c6b0f0000000000000000000000000000000000000000'
+=== base_convert('11111111111111111111111111111111111111111111111111111111111111111', 16, 10)
+=> '7280026686042206840086806480880080666488628400646806062480286464'
+=== base_convert('11111111111111111111111111111111111111111111111111111111111111111', 16, 2)
+=> '0000000000000000000000000000000000000000000000000000000000000000'
+=== base_convert('11111111111111111111111111111111111111111111111111111111111111111', 16, 15)
+=> '549aa1abcb081118a9b502840a0471157889119c89e9a7ae06debc5950a1bd1e'
+=== base_convert('11111111111111111111111111111111111111111111111111111111111111111', 36, 10)
+=> '8880260604088228242604042862028266486024624006648684046806806066'
+=== base_convert('11111111111111111111111111111111111111111111111111111111111111111', 36, 16)
+=> '0000000000000000000000000000000000000000000000000000000000000000'
+=== base_convert('11111111111111111111111111111111111111111111111111111111111111111', 10, 36)
+=> '1q6ij48ko58gs04c4ow80c8k8cwsgsg4wwc8404040'
+=== base_convert('11111111111111111111111111111111111111111111111111111111111111111', 36, 2)
+=> '0000000000000000000000000000000000000000000000000000000000000000'
+=== base_convert('11111111111111111111111111111111111111111111111111111111111111111', 2, 36)
+=> '7sas224c9kw0w'
+=== base_convert('11111111111111111111111111111111111111111111111111111111111111111', 9, 10)
+=> '13263957649955894468208686466608204886822842262866800808644446'
+=== base_convert('11111111111111111111111111111111111111111111111111111111111111111', 3, 7)
+=> '1641134465341400330521502052452631215'
+=== bindec('0000000000000000000000000000000000000000000000000000000000000000000000001')
+=> 1
+=== hexdec('0000000000000000000000000000000000000000000000000000000000000000000000001')
+=> 1
+=== octdec('0000000000000000000000000000000000000000000000000000000000000000000000001')
+=> 1
+=== base_convert('0000000000000000000000000000000000000000000000000000000000000000000000001', 2, 10)
+=> '1'
+=== base_convert('0000000000000000000000000000000000000000000000000000000000000000000000001', 8, 10)
+=> '1'
+=== base_convert('0000000000000000000000000000000000000000000000000000000000000000000000001', 10, 2)
+=> '1'
+=== base_convert('0000000000000000000000000000000000000000000000000000000000000000000000001', 10, 16)
+=> '1'
+=== base_convert('0000000000000000000000000000000000000000000000000000000000000000000000001', 16, 10)
+=> '1'
+=== base_convert('0000000000000000000000000000000000000000000000000000000000000000000000001', 16, 2)
+=> '1'
+=== base_convert('0000000000000000000000000000000000000000000000000000000000000000000000001', 16, 15)
+=> '1'
+=== base_convert('0000000000000000000000000000000000000000000000000000000000000000000000001', 36, 10)
+=> '1'
+=== base_convert('0000000000000000000000000000000000000000000000000000000000000000000000001', 36, 16)
+=> '1'
+=== base_convert('0000000000000000000000000000000000000000000000000000000000000000000000001', 10, 36)
+=> '1'
+=== base_convert('0000000000000000000000000000000000000000000000000000000000000000000000001', 36, 2)
+=> '1'
+=== base_convert('0000000000000000000000000000000000000000000000000000000000000000000000001', 2, 36)
+=> '1'
+=== base_convert('0000000000000000000000000000000000000000000000000000000000000000000000001', 9, 10)
+=> '1'
+=== base_convert('0000000000000000000000000000000000000000000000000000000000000000000000001', 3, 7)
+=> '1'
+=== bindec('777777777777777777777')
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> 0
+=== hexdec('777777777777777777777')
+=> 9.026646119789231E+24
+=== octdec('777777777777777777777')
+=> 9223372036854775807
+=== base_convert('777777777777777777777', 2, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert('777777777777777777777', 8, 10)
+=> '9223372036854775807'
+=== base_convert('777777777777777777777', 10, 2)
+=> '0010100111010101110000000000101110101101001001100000000000000000'
+=== base_convert('777777777777777777777', 10, 16)
+=> '2a29d5c00bad260000'
+=== base_convert('777777777777777777777', 16, 10)
+=> '9026646119789232048000884'
+=== base_convert('777777777777777777777', 16, 2)
+=> '0111011101110111011101110111011110000000000000000000000000000000'
+=== base_convert('777777777777777777777', 16, 15)
+=> '1c22bb9e99d0de42330269'
+=== base_convert('777777777777777777777', 36, 10)
+=> '96245960679674880002260222248684'
+=== base_convert('777777777777777777777', 36, 16)
+=> '4becb78b5f4e580000000000000'
+=== base_convert('777777777777777777777', 10, 36)
+=> '4k56vfrepxmosw'
+=== base_convert('777777777777777777777', 36, 2)
+=> '1110010110000000000000000000000000000000000000000000000000000000'
+=== base_convert('777777777777777777777', 2, 36)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert('777777777777777777777', 9, 10)
+=> '95741615490073328264'
+=== base_convert('777777777777777777777', 3, 7)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== bindec('1777777777777777777777')
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> 1
+=== hexdec('1777777777777777777777')
+=> 2.8369459233623296E+25
+=== octdec('1777777777777777777777')
+=> 1.8446744073709552E+19
+=== base_convert('1777777777777777777777', 2, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '1'
+=== base_convert('1777777777777777777777', 8, 10)
+=> '18446744073709552046'
+=== base_convert('1777777777777777777777', 10, 2)
+=> '0101111110011111011011011101000110001011110010000000000000000000'
+=== base_convert('1777777777777777777777', 10, 16)
+=> '605f9f6dd18bc80000'
+=== base_convert('1777777777777777777777', 16, 10)
+=> '28369459233623296008806242'
+=== base_convert('1777777777777777777777', 16, 2)
+=> '0111011101110111011101110111011100000000000000000000000000000000'
+=== base_convert('1777777777777777777777', 16, 15)
+=> '5a4ad69dd327343c3edac2'
+=== base_convert('1777777777777777777777', 36, 10)
+=> '577475764078049448420646400468840'
+=== base_convert('1777777777777777777777', 36, 16)
+=> '1c78c4d443bd6200000000000000'
+=== base_convert('1777777777777777777777', 10, 36)
+=> 'af6pzuvsi54c4k'
+=== base_convert('1777777777777777777777', 36, 2)
+=> '0110001000000000000000000000000000000000000000000000000000000000'
+=== base_convert('1777777777777777777777', 2, 36)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '1'
+=== base_convert('1777777777777777777777', 9, 10)
+=> '205160604621585686624'
+=== base_convert('1777777777777777777777', 3, 7)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '1'
+=== bindec('7777777777777777777777')
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> 0
+=== hexdec('7777777777777777777777')
+=> 1.444263379166277E+26
+=== octdec('7777777777777777777777')
+=> 7.378697629483821E+19
+=== base_convert('7777777777777777777777', 2, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert('7777777777777777777777', 8, 10)
+=> '73786976294838218064'
+=== base_convert('7777777777777777777777', 10, 2)
+=> '1010001001011001100000000111010011000011100000000000000000000000'
+=== base_convert('7777777777777777777777', 10, 16)
+=> '1a5a2598074c3800000'
+=== base_convert('7777777777777777777777', 16, 10)
+=> '144426337916627722048000884'
+=== base_convert('7777777777777777777777', 16, 2)
+=> '0111011101110111011101110111100000000000000000000000000000000000'
+=== base_convert('7777777777777777777777', 16, 15)
+=> '1de4e869947ded742330269'
+=== base_convert('7777777777777777777777', 36, 10)
+=> '3464854584468296422626680406040246'
+=== base_convert('7777777777777777777777', 36, 16)
+=> 'aad49cf996704800000000000000'
+=== base_convert('7777777777777777777777', 10, 36)
+=> '19lfwqdm37c0k8o'
+=== base_convert('7777777777777777777777', 36, 2)
+=> '0100100000000000000000000000000000000000000000000000000000000000'
+=== base_convert('7777777777777777777777', 2, 36)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert('7777777777777777777777', 9, 10)
+=> '861674539410660266884'
+=== base_convert('7777777777777777777777', 3, 7)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== bindec('9223372036854775807')
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> 0
+=== hexdec('9223372036854775807')
+=> 4.313219467352284E+22
+=== octdec('9223372036854775807')
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> 81082604486471
+=== base_convert('9223372036854775807', 2, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert('9223372036854775807', 8, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '81082604486471'
+=== base_convert('9223372036854775807', 10, 2)
+=> '111111111111111111111111111111111111111111111111111111111111111'
+=== base_convert('9223372036854775807', 10, 16)
+=> '7fffffffffffffff'
+=== base_convert('9223372036854775807', 16, 10)
+=> '43132194673522832286042'
+=== base_convert('9223372036854775807', 16, 2)
+=> '0011001101110010000000110110100001010100100000000000000000000000'
+=== base_convert('9223372036854775807', 16, 15)
+=> '1e2b92d53699420833b2'
+=== base_convert('9223372036854775807', 36, 10)
+=> '93419446956697120680808620020'
+=== base_convert('9223372036854775807', 36, 16)
+=> '12ddac15f246ba00000000000'
+=== base_convert('9223372036854775807', 10, 36)
+=> '1y2p0ij32e8e7'
+=== base_convert('9223372036854775807', 36, 2)
+=> '0010010001101011101000000000000000000000000000000000000000000000'
+=== base_convert('9223372036854775807', 2, 36)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert('9223372036854775807', 9, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '37765078626310999'
+=== base_convert('9223372036854775807', 3, 7)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '453'
+=== bindec('9223372036854775808')
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> 0
+=== hexdec('9223372036854775808')
+=> 4.313219467352284E+22
+=== octdec('9223372036854775808')
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> 10135325560808
+=== base_convert('9223372036854775808', 2, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert('9223372036854775808', 8, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '10135325560808'
+=== base_convert('9223372036854775808', 10, 2)
+=> '1000000000000000000000000000000000000000000000000000000000000000'
+=== base_convert('9223372036854775808', 10, 16)
+=> '8000000000000000'
+=== base_convert('9223372036854775808', 16, 10)
+=> '43132194673522832286042'
+=== base_convert('9223372036854775808', 16, 2)
+=> '0011001101110010000000110110100001010100100000000000000000000000'
+=== base_convert('9223372036854775808', 16, 15)
+=> '1e2b92d53699420833b2'
+=== base_convert('9223372036854775808', 36, 10)
+=> '93419446956697120680808620020'
+=== base_convert('9223372036854775808', 36, 16)
+=> '12ddac15f246ba00000000000'
+=== base_convert('9223372036854775808', 10, 36)
+=> '1y2p0ij32e808'
+=== base_convert('9223372036854775808', 36, 2)
+=> '0010010001101011101000000000000000000000000000000000000000000000'
+=== base_convert('9223372036854775808', 2, 36)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert('9223372036854775808', 9, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '37765078626311000'
+=== base_convert('9223372036854775808', 3, 7)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '453'
+=== bindec('99999999999999999999999')
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> 0
+=== hexdec('99999999999999999999999')
+=> 2.9710560942849125E+27
+=== octdec('99999999999999999999999')
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> 0
+=== base_convert('99999999999999999999999', 2, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert('99999999999999999999999', 8, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert('99999999999999999999999', 10, 2)
+=> '0000001011000111111000010100101011110110000000000000000000000000'
+=== base_convert('99999999999999999999999', 10, 16)
+=> '152d02c7e14af6000000'
+=== base_convert('99999999999999999999999', 16, 10)
+=> '2971056094284913282600622260'
+=== base_convert('99999999999999999999999', 16, 2)
+=> '1001100110011001100110011000000000000000000000000000000000000000'
+=== base_convert('99999999999999999999999', 16, 15)
+=> '29a9c3ce72bb0b58746c3ba5'
+=== base_convert('99999999999999999999999', 36, 10)
+=> '160373269338246880488000668804086022'
+=== base_convert('99999999999999999999999', 36, 16)
+=> '1ee3033d2057bb0000000000000000'
+=== base_convert('99999999999999999999999', 10, 36)
+=> 'ga894a06abs40sw'
+=== base_convert('99999999999999999999999', 36, 2)
+=> '0000000000000000000000000000000000000000000000000000000000000000'
+=== base_convert('99999999999999999999999', 2, 36)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert('99999999999999999999999', 9, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert('99999999999999999999999', 3, 7)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== bindec('1y2p0ij32e8e7')
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> 2
+=== hexdec('1y2p0ij32e8e7')
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> 4835174631
+=== octdec('1y2p0ij32e8e7')
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> 41175
+=== base_convert('1y2p0ij32e8e7', 2, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '2'
+=== base_convert('1y2p0ij32e8e7', 8, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '41175'
+=== base_convert('1y2p0ij32e8e7', 10, 2)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '100100101110001010111'
+=== base_convert('1y2p0ij32e8e7', 10, 16)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '125c57'
+=== base_convert('1y2p0ij32e8e7', 16, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '4835174631'
+=== base_convert('1y2p0ij32e8e7', 16, 2)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '100100000001100101110100011100111'
+=== base_convert('1y2p0ij32e8e7', 16, 15)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '1d4749506'
+=== base_convert('1y2p0ij32e8e7', 36, 10)
+=> '9223372036854775807'
+=== base_convert('1y2p0ij32e8e7', 36, 16)
+=> '7fffffffffffffff'
+=== base_convert('1y2p0ij32e8e7', 10, 36)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> 'psgn'
+=== base_convert('1y2p0ij32e8e7', 36, 2)
+=> '111111111111111111111111111111111111111111111111111111111111111'
+=== base_convert('1y2p0ij32e8e7', 2, 36)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '2'
+=== base_convert('1y2p0ij32e8e7', 9, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '651967'
+=== base_convert('1y2p0ij32e8e7', 3, 7)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '65'
+=== bindec('1y2p0ij32e8e8')
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> 2
+=== hexdec('1y2p0ij32e8e8')
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> 4835174632
+=== octdec('1y2p0ij32e8e8')
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> 5146
+=== base_convert('1y2p0ij32e8e8', 2, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '2'
+=== base_convert('1y2p0ij32e8e8', 8, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '5146'
+=== base_convert('1y2p0ij32e8e8', 10, 2)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '100100101110001011000'
+=== base_convert('1y2p0ij32e8e8', 10, 16)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '125c58'
+=== base_convert('1y2p0ij32e8e8', 16, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '4835174632'
+=== base_convert('1y2p0ij32e8e8', 16, 2)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '100100000001100101110100011101000'
+=== base_convert('1y2p0ij32e8e8', 16, 15)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '1d4749507'
+=== base_convert('1y2p0ij32e8e8', 36, 10)
+=> '9223372036854776028'
+=== base_convert('1y2p0ij32e8e8', 36, 16)
+=> '8000000000000000'
+=== base_convert('1y2p0ij32e8e8', 10, 36)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> 'psgo'
+=== base_convert('1y2p0ij32e8e8', 36, 2)
+=> '1000000000000000000000000000000000000000000000000000000000000000'
+=== base_convert('1y2p0ij32e8e8', 2, 36)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '2'
+=== base_convert('1y2p0ij32e8e8', 9, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '651968'
+=== base_convert('1y2p0ij32e8e8', 3, 7)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '65'
+=== bindec('zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz')
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> 0
+=== hexdec('zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz')
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> 0
+=== octdec('zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz')
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> 0
+=== base_convert('zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz', 2, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert('zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz', 8, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert('zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz', 10, 2)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert('zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz', 10, 16)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert('zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz', 16, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert('zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz', 16, 2)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert('zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz', 16, 15)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert('zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz', 36, 10)
+=> '6404682862028604606022664684408022864648266802444804488820802644'
+=== base_convert('zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz', 36, 16)
+=> '0e80000000000000000000000000000000000000000000000000000000000000'
+=== base_convert('zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz', 10, 36)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert('zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz', 36, 2)
+=> '0000000000000000000000000000000000000000000000000000000000000000'
+=== base_convert('zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz', 2, 36)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert('zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz', 9, 10)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert('zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz', 3, 7)
+Deprecated: Invalid characters passed for attempted conversion, these have been ignored
+=> '0'
+=== base_convert('10', 1, 10)
+!! ValueError: base_convert(): Argument #2 ($from_base) must be between 2 and 36 (inclusive)
+=== base_convert('10', 0, 10)
+!! ValueError: base_convert(): Argument #2 ($from_base) must be between 2 and 36 (inclusive)
+=== base_convert('10', 37, 10)
+!! ValueError: base_convert(): Argument #2 ($from_base) must be between 2 and 36 (inclusive)
+=== base_convert('10', -5, 10)
+!! ValueError: base_convert(): Argument #2 ($from_base) must be between 2 and 36 (inclusive)
+=== base_convert('10', 10, 1)
+!! ValueError: base_convert(): Argument #3 ($to_base) must be between 2 and 36 (inclusive)
+=== base_convert('10', 10, 37)
+!! ValueError: base_convert(): Argument #3 ($to_base) must be between 2 and 36 (inclusive)
+=== base_convert('10', 1, 1)
+!! ValueError: base_convert(): Argument #2 ($from_base) must be between 2 and 36 (inclusive)
+=== base_convert('zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz', 36, 2)
+!! ValueError: An infinite value cannot be converted to base 2
+=== base_convert('ffffffffffffffffff', 16, 2)
+=> '0000000000000000000000000000000000000000000000000000000000000000'
+=== base_convert('ffffffffffffffffffffffffffffffff', 16, 3)
+=> '1012000211012011100010121102021212001111022121102111002112210001'
+=== decbin(0)
+=> '0'
+=== decoct(0)
+=> '0'
+=== dechex(0)
+=> '0'
+=== abs(0)
+=> 0
+=== floor(0)
+=> 0.0
+=== ceil(0)
+=> 0.0
+=== round(0, 0)
+=> 0.0
+=== round(0, 1)
+=> 0.0
+=== round(0, 5)
+=> 0.0
+=== round(0, 9223372036854775807)
+=> 0.0
+=== intdiv(0, 0)
+!! DivisionByZeroError: Division by zero
+=== 0 % 0
+!! DivisionByZeroError: Modulo by zero
+=== intdiv(0, 1)
+=> 0
+=== 0 % 1
+=> 0
+=== intdiv(0, (-1))
+=> 0
+=== 0 % (-1)
+=> 0
+=== intdiv(0, 2)
+=> 0
+=== 0 % 2
+=> 0
+=== intdiv(0, (-2))
+=> 0
+=== 0 % (-2)
+=> 0
+=== intdiv(0, 3)
+=> 0
+=== 0 % 3
+=> 0
+=== intdiv(0, 7)
+=> 0
+=== 0 % 7
+=> 0
+=== intdiv(0, (-7))
+=> 0
+=== 0 % (-7)
+=> 0
+=== intdiv(0, 10)
+=> 0
+=== 0 % 10
+=> 0
+=== intdiv(0, 9223372036854775807)
+=> 0
+=== 0 % 9223372036854775807
+=> 0
+=== intdiv(0, PHP_INT_MIN)
+=> 0
+=== 0 % PHP_INT_MIN
+=> 0
+=== decbin(1)
+=> '1'
+=== decoct(1)
+=> '1'
+=== dechex(1)
+=> '1'
+=== abs(1)
+=> 1
+=== floor(1)
+=> 1.0
+=== ceil(1)
+=> 1.0
+=== round(1, 0)
+=> 1.0
+=== round(1, 1)
+=> 1.0
+=== round(1, 5)
+=> 1.0
+=== round(1, 9223372036854775807)
+=> 1.0
+=== intdiv(1, 0)
+!! DivisionByZeroError: Division by zero
+=== 1 % 0
+!! DivisionByZeroError: Modulo by zero
+=== intdiv(1, 1)
+=> 1
+=== 1 % 1
+=> 0
+=== intdiv(1, (-1))
+=> -1
+=== 1 % (-1)
+=> 0
+=== intdiv(1, 2)
+=> 0
+=== 1 % 2
+=> 1
+=== intdiv(1, (-2))
+=> 0
+=== 1 % (-2)
+=> 1
+=== intdiv(1, 3)
+=> 0
+=== 1 % 3
+=> 1
+=== intdiv(1, 7)
+=> 0
+=== 1 % 7
+=> 1
+=== intdiv(1, (-7))
+=> 0
+=== 1 % (-7)
+=> 1
+=== intdiv(1, 10)
+=> 0
+=== 1 % 10
+=> 1
+=== intdiv(1, 9223372036854775807)
+=> 0
+=== 1 % 9223372036854775807
+=> 1
+=== intdiv(1, PHP_INT_MIN)
+=> 0
+=== 1 % PHP_INT_MIN
+=> 1
+=== decbin((-1))
+=> '1111111111111111111111111111111111111111111111111111111111111111'
+=== decoct((-1))
+=> '1777777777777777777777'
+=== dechex((-1))
+=> 'ffffffffffffffff'
+=== abs((-1))
+=> 1
+=== floor((-1))
+=> -1.0
+=== ceil((-1))
+=> -1.0
+=== round((-1), 0)
+=> -1.0
+=== round((-1), 1)
+=> -1.0
+=== round((-1), 5)
+=> -1.0
+=== round((-1), 9223372036854775807)
+=> -1.0
+=== intdiv((-1), 0)
+!! DivisionByZeroError: Division by zero
+=== (-1) % 0
+!! DivisionByZeroError: Modulo by zero
+=== intdiv((-1), 1)
+=> -1
+=== (-1) % 1
+=> 0
+=== intdiv((-1), (-1))
+=> 1
+=== (-1) % (-1)
+=> 0
+=== intdiv((-1), 2)
+=> 0
+=== (-1) % 2
+=> -1
+=== intdiv((-1), (-2))
+=> 0
+=== (-1) % (-2)
+=> -1
+=== intdiv((-1), 3)
+=> 0
+=== (-1) % 3
+=> -1
+=== intdiv((-1), 7)
+=> 0
+=== (-1) % 7
+=> -1
+=== intdiv((-1), (-7))
+=> 0
+=== (-1) % (-7)
+=> -1
+=== intdiv((-1), 10)
+=> 0
+=== (-1) % 10
+=> -1
+=== intdiv((-1), 9223372036854775807)
+=> 0
+=== (-1) % 9223372036854775807
+=> -1
+=== intdiv((-1), PHP_INT_MIN)
+=> 0
+=== (-1) % PHP_INT_MIN
+=> -1
+=== decbin(2)
+=> '10'
+=== decoct(2)
+=> '2'
+=== dechex(2)
+=> '2'
+=== abs(2)
+=> 2
+=== floor(2)
+=> 2.0
+=== ceil(2)
+=> 2.0
+=== round(2, 0)
+=> 2.0
+=== round(2, 1)
+=> 2.0
+=== round(2, 5)
+=> 2.0
+=== round(2, 9223372036854775807)
+=> 2.0
+=== intdiv(2, 0)
+!! DivisionByZeroError: Division by zero
+=== 2 % 0
+!! DivisionByZeroError: Modulo by zero
+=== intdiv(2, 1)
+=> 2
+=== 2 % 1
+=> 0
+=== intdiv(2, (-1))
+=> -2
+=== 2 % (-1)
+=> 0
+=== intdiv(2, 2)
+=> 1
+=== 2 % 2
+=> 0
+=== intdiv(2, (-2))
+=> -1
+=== 2 % (-2)
+=> 0
+=== intdiv(2, 3)
+=> 0
+=== 2 % 3
+=> 2
+=== intdiv(2, 7)
+=> 0
+=== 2 % 7
+=> 2
+=== intdiv(2, (-7))
+=> 0
+=== 2 % (-7)
+=> 2
+=== intdiv(2, 10)
+=> 0
+=== 2 % 10
+=> 2
+=== intdiv(2, 9223372036854775807)
+=> 0
+=== 2 % 9223372036854775807
+=> 2
+=== intdiv(2, PHP_INT_MIN)
+=> 0
+=== 2 % PHP_INT_MIN
+=> 2
+=== decbin(7)
+=> '111'
+=== decoct(7)
+=> '7'
+=== dechex(7)
+=> '7'
+=== abs(7)
+=> 7
+=== floor(7)
+=> 7.0
+=== ceil(7)
+=> 7.0
+=== round(7, 0)
+=> 7.0
+=== round(7, 1)
+=> 7.0
+=== round(7, 5)
+=> 7.0
+=== round(7, 9223372036854775807)
+=> 7.0
+=== intdiv(7, 0)
+!! DivisionByZeroError: Division by zero
+=== 7 % 0
+!! DivisionByZeroError: Modulo by zero
+=== intdiv(7, 1)
+=> 7
+=== 7 % 1
+=> 0
+=== intdiv(7, (-1))
+=> -7
+=== 7 % (-1)
+=> 0
+=== intdiv(7, 2)
+=> 3
+=== 7 % 2
+=> 1
+=== intdiv(7, (-2))
+=> -3
+=== 7 % (-2)
+=> 1
+=== intdiv(7, 3)
+=> 2
+=== 7 % 3
+=> 1
+=== intdiv(7, 7)
+=> 1
+=== 7 % 7
+=> 0
+=== intdiv(7, (-7))
+=> -1
+=== 7 % (-7)
+=> 0
+=== intdiv(7, 10)
+=> 0
+=== 7 % 10
+=> 7
+=== intdiv(7, 9223372036854775807)
+=> 0
+=== 7 % 9223372036854775807
+=> 7
+=== intdiv(7, PHP_INT_MIN)
+=> 0
+=== 7 % PHP_INT_MIN
+=> 7
+=== decbin(8)
+=> '1000'
+=== decoct(8)
+=> '10'
+=== dechex(8)
+=> '8'
+=== abs(8)
+=> 8
+=== floor(8)
+=> 8.0
+=== ceil(8)
+=> 8.0
+=== round(8, 0)
+=> 8.0
+=== round(8, 1)
+=> 8.0
+=== round(8, 5)
+=> 8.0
+=== round(8, 9223372036854775807)
+=> 8.0
+=== intdiv(8, 0)
+!! DivisionByZeroError: Division by zero
+=== 8 % 0
+!! DivisionByZeroError: Modulo by zero
+=== intdiv(8, 1)
+=> 8
+=== 8 % 1
+=> 0
+=== intdiv(8, (-1))
+=> -8
+=== 8 % (-1)
+=> 0
+=== intdiv(8, 2)
+=> 4
+=== 8 % 2
+=> 0
+=== intdiv(8, (-2))
+=> -4
+=== 8 % (-2)
+=> 0
+=== intdiv(8, 3)
+=> 2
+=== 8 % 3
+=> 2
+=== intdiv(8, 7)
+=> 1
+=== 8 % 7
+=> 1
+=== intdiv(8, (-7))
+=> -1
+=== 8 % (-7)
+=> 1
+=== intdiv(8, 10)
+=> 0
+=== 8 % 10
+=> 8
+=== intdiv(8, 9223372036854775807)
+=> 0
+=== 8 % 9223372036854775807
+=> 8
+=== intdiv(8, PHP_INT_MIN)
+=> 0
+=== 8 % PHP_INT_MIN
+=> 8
+=== decbin(10)
+=> '1010'
+=== decoct(10)
+=> '12'
+=== dechex(10)
+=> 'a'
+=== abs(10)
+=> 10
+=== floor(10)
+=> 10.0
+=== ceil(10)
+=> 10.0
+=== round(10, 0)
+=> 10.0
+=== round(10, 1)
+=> 10.0
+=== round(10, 5)
+=> 10.0
+=== round(10, 9223372036854775807)
+=> 10.0
+=== intdiv(10, 0)
+!! DivisionByZeroError: Division by zero
+=== 10 % 0
+!! DivisionByZeroError: Modulo by zero
+=== intdiv(10, 1)
+=> 10
+=== 10 % 1
+=> 0
+=== intdiv(10, (-1))
+=> -10
+=== 10 % (-1)
+=> 0
+=== intdiv(10, 2)
+=> 5
+=== 10 % 2
+=> 0
+=== intdiv(10, (-2))
+=> -5
+=== 10 % (-2)
+=> 0
+=== intdiv(10, 3)
+=> 3
+=== 10 % 3
+=> 1
+=== intdiv(10, 7)
+=> 1
+=== 10 % 7
+=> 3
+=== intdiv(10, (-7))
+=> -1
+=== 10 % (-7)
+=> 3
+=== intdiv(10, 10)
+=> 1
+=== 10 % 10
+=> 0
+=== intdiv(10, 9223372036854775807)
+=> 0
+=== 10 % 9223372036854775807
+=> 10
+=== intdiv(10, PHP_INT_MIN)
+=> 0
+=== 10 % PHP_INT_MIN
+=> 10
+=== decbin(15)
+=> '1111'
+=== decoct(15)
+=> '17'
+=== dechex(15)
+=> 'f'
+=== abs(15)
+=> 15
+=== floor(15)
+=> 15.0
+=== ceil(15)
+=> 15.0
+=== round(15, 0)
+=> 15.0
+=== round(15, 1)
+=> 15.0
+=== round(15, 5)
+=> 15.0
+=== round(15, 9223372036854775807)
+=> 15.0
+=== intdiv(15, 0)
+!! DivisionByZeroError: Division by zero
+=== 15 % 0
+!! DivisionByZeroError: Modulo by zero
+=== intdiv(15, 1)
+=> 15
+=== 15 % 1
+=> 0
+=== intdiv(15, (-1))
+=> -15
+=== 15 % (-1)
+=> 0
+=== intdiv(15, 2)
+=> 7
+=== 15 % 2
+=> 1
+=== intdiv(15, (-2))
+=> -7
+=== 15 % (-2)
+=> 1
+=== intdiv(15, 3)
+=> 5
+=== 15 % 3
+=> 0
+=== intdiv(15, 7)
+=> 2
+=== 15 % 7
+=> 1
+=== intdiv(15, (-7))
+=> -2
+=== 15 % (-7)
+=> 1
+=== intdiv(15, 10)
+=> 1
+=== 15 % 10
+=> 5
+=== intdiv(15, 9223372036854775807)
+=> 0
+=== 15 % 9223372036854775807
+=> 15
+=== intdiv(15, PHP_INT_MIN)
+=> 0
+=== 15 % PHP_INT_MIN
+=> 15
+=== decbin(16)
+=> '10000'
+=== decoct(16)
+=> '20'
+=== dechex(16)
+=> '10'
+=== abs(16)
+=> 16
+=== floor(16)
+=> 16.0
+=== ceil(16)
+=> 16.0
+=== round(16, 0)
+=> 16.0
+=== round(16, 1)
+=> 16.0
+=== round(16, 5)
+=> 16.0
+=== round(16, 9223372036854775807)
+=> 16.0
+=== intdiv(16, 0)
+!! DivisionByZeroError: Division by zero
+=== 16 % 0
+!! DivisionByZeroError: Modulo by zero
+=== intdiv(16, 1)
+=> 16
+=== 16 % 1
+=> 0
+=== intdiv(16, (-1))
+=> -16
+=== 16 % (-1)
+=> 0
+=== intdiv(16, 2)
+=> 8
+=== 16 % 2
+=> 0
+=== intdiv(16, (-2))
+=> -8
+=== 16 % (-2)
+=> 0
+=== intdiv(16, 3)
+=> 5
+=== 16 % 3
+=> 1
+=== intdiv(16, 7)
+=> 2
+=== 16 % 7
+=> 2
+=== intdiv(16, (-7))
+=> -2
+=== 16 % (-7)
+=> 2
+=== intdiv(16, 10)
+=> 1
+=== 16 % 10
+=> 6
+=== intdiv(16, 9223372036854775807)
+=> 0
+=== 16 % 9223372036854775807
+=> 16
+=== intdiv(16, PHP_INT_MIN)
+=> 0
+=== 16 % PHP_INT_MIN
+=> 16
+=== decbin(255)
+=> '11111111'
+=== decoct(255)
+=> '377'
+=== dechex(255)
+=> 'ff'
+=== abs(255)
+=> 255
+=== floor(255)
+=> 255.0
+=== ceil(255)
+=> 255.0
+=== round(255, 0)
+=> 255.0
+=== round(255, 1)
+=> 255.0
+=== round(255, 5)
+=> 255.0
+=== round(255, 9223372036854775807)
+=> 255.0
+=== intdiv(255, 0)
+!! DivisionByZeroError: Division by zero
+=== 255 % 0
+!! DivisionByZeroError: Modulo by zero
+=== intdiv(255, 1)
+=> 255
+=== 255 % 1
+=> 0
+=== intdiv(255, (-1))
+=> -255
+=== 255 % (-1)
+=> 0
+=== intdiv(255, 2)
+=> 127
+=== 255 % 2
+=> 1
+=== intdiv(255, (-2))
+=> -127
+=== 255 % (-2)
+=> 1
+=== intdiv(255, 3)
+=> 85
+=== 255 % 3
+=> 0
+=== intdiv(255, 7)
+=> 36
+=== 255 % 7
+=> 3
+=== intdiv(255, (-7))
+=> -36
+=== 255 % (-7)
+=> 3
+=== intdiv(255, 10)
+=> 25
+=== 255 % 10
+=> 5
+=== intdiv(255, 9223372036854775807)
+=> 0
+=== 255 % 9223372036854775807
+=> 255
+=== intdiv(255, PHP_INT_MIN)
+=> 0
+=== 255 % PHP_INT_MIN
+=> 255
+=== decbin(256)
+=> '100000000'
+=== decoct(256)
+=> '400'
+=== dechex(256)
+=> '100'
+=== abs(256)
+=> 256
+=== floor(256)
+=> 256.0
+=== ceil(256)
+=> 256.0
+=== round(256, 0)
+=> 256.0
+=== round(256, 1)
+=> 256.0
+=== round(256, 5)
+=> 256.0
+=== round(256, 9223372036854775807)
+=> 256.0
+=== intdiv(256, 0)
+!! DivisionByZeroError: Division by zero
+=== 256 % 0
+!! DivisionByZeroError: Modulo by zero
+=== intdiv(256, 1)
+=> 256
+=== 256 % 1
+=> 0
+=== intdiv(256, (-1))
+=> -256
+=== 256 % (-1)
+=> 0
+=== intdiv(256, 2)
+=> 128
+=== 256 % 2
+=> 0
+=== intdiv(256, (-2))
+=> -128
+=== 256 % (-2)
+=> 0
+=== intdiv(256, 3)
+=> 85
+=== 256 % 3
+=> 1
+=== intdiv(256, 7)
+=> 36
+=== 256 % 7
+=> 4
+=== intdiv(256, (-7))
+=> -36
+=== 256 % (-7)
+=> 4
+=== intdiv(256, 10)
+=> 25
+=== 256 % 10
+=> 6
+=== intdiv(256, 9223372036854775807)
+=> 0
+=== 256 % 9223372036854775807
+=> 256
+=== intdiv(256, PHP_INT_MIN)
+=> 0
+=== 256 % PHP_INT_MIN
+=> 256
+=== decbin((-256))
+=> '1111111111111111111111111111111111111111111111111111111100000000'
+=== decoct((-256))
+=> '1777777777777777777400'
+=== dechex((-256))
+=> 'ffffffffffffff00'
+=== abs((-256))
+=> 256
+=== floor((-256))
+=> -256.0
+=== ceil((-256))
+=> -256.0
+=== round((-256), 0)
+=> -256.0
+=== round((-256), 1)
+=> -256.0
+=== round((-256), 5)
+=> -256.0
+=== round((-256), 9223372036854775807)
+=> -256.0
+=== intdiv((-256), 0)
+!! DivisionByZeroError: Division by zero
+=== (-256) % 0
+!! DivisionByZeroError: Modulo by zero
+=== intdiv((-256), 1)
+=> -256
+=== (-256) % 1
+=> 0
+=== intdiv((-256), (-1))
+=> 256
+=== (-256) % (-1)
+=> 0
+=== intdiv((-256), 2)
+=> -128
+=== (-256) % 2
+=> 0
+=== intdiv((-256), (-2))
+=> 128
+=== (-256) % (-2)
+=> 0
+=== intdiv((-256), 3)
+=> -85
+=== (-256) % 3
+=> -1
+=== intdiv((-256), 7)
+=> -36
+=== (-256) % 7
+=> -4
+=== intdiv((-256), (-7))
+=> 36
+=== (-256) % (-7)
+=> -4
+=== intdiv((-256), 10)
+=> -25
+=== (-256) % 10
+=> -6
+=== intdiv((-256), 9223372036854775807)
+=> 0
+=== (-256) % 9223372036854775807
+=> -256
+=== intdiv((-256), PHP_INT_MIN)
+=> 0
+=== (-256) % PHP_INT_MIN
+=> -256
+=== decbin(1023)
+=> '1111111111'
+=== decoct(1023)
+=> '1777'
+=== dechex(1023)
+=> '3ff'
+=== abs(1023)
+=> 1023
+=== floor(1023)
+=> 1023.0
+=== ceil(1023)
+=> 1023.0
+=== round(1023, 0)
+=> 1023.0
+=== round(1023, 1)
+=> 1023.0
+=== round(1023, 5)
+=> 1023.0
+=== round(1023, 9223372036854775807)
+=> 1023.0
+=== intdiv(1023, 0)
+!! DivisionByZeroError: Division by zero
+=== 1023 % 0
+!! DivisionByZeroError: Modulo by zero
+=== intdiv(1023, 1)
+=> 1023
+=== 1023 % 1
+=> 0
+=== intdiv(1023, (-1))
+=> -1023
+=== 1023 % (-1)
+=> 0
+=== intdiv(1023, 2)
+=> 511
+=== 1023 % 2
+=> 1
+=== intdiv(1023, (-2))
+=> -511
+=== 1023 % (-2)
+=> 1
+=== intdiv(1023, 3)
+=> 341
+=== 1023 % 3
+=> 0
+=== intdiv(1023, 7)
+=> 146
+=== 1023 % 7
+=> 1
+=== intdiv(1023, (-7))
+=> -146
+=== 1023 % (-7)
+=> 1
+=== intdiv(1023, 10)
+=> 102
+=== 1023 % 10
+=> 3
+=== intdiv(1023, 9223372036854775807)
+=> 0
+=== 1023 % 9223372036854775807
+=> 1023
+=== intdiv(1023, PHP_INT_MIN)
+=> 0
+=== 1023 % PHP_INT_MIN
+=> 1023
+=== decbin(4096)
+=> '1000000000000'
+=== decoct(4096)
+=> '10000'
+=== dechex(4096)
+=> '1000'
+=== abs(4096)
+=> 4096
+=== floor(4096)
+=> 4096.0
+=== ceil(4096)
+=> 4096.0
+=== round(4096, 0)
+=> 4096.0
+=== round(4096, 1)
+=> 4096.0
+=== round(4096, 5)
+=> 4096.0
+=== round(4096, 9223372036854775807)
+=> 4096.0
+=== intdiv(4096, 0)
+!! DivisionByZeroError: Division by zero
+=== 4096 % 0
+!! DivisionByZeroError: Modulo by zero
+=== intdiv(4096, 1)
+=> 4096
+=== 4096 % 1
+=> 0
+=== intdiv(4096, (-1))
+=> -4096
+=== 4096 % (-1)
+=> 0
+=== intdiv(4096, 2)
+=> 2048
+=== 4096 % 2
+=> 0
+=== intdiv(4096, (-2))
+=> -2048
+=== 4096 % (-2)
+=> 0
+=== intdiv(4096, 3)
+=> 1365
+=== 4096 % 3
+=> 1
+=== intdiv(4096, 7)
+=> 585
+=== 4096 % 7
+=> 1
+=== intdiv(4096, (-7))
+=> -585
+=== 4096 % (-7)
+=> 1
+=== intdiv(4096, 10)
+=> 409
+=== 4096 % 10
+=> 6
+=== intdiv(4096, 9223372036854775807)
+=> 0
+=== 4096 % 9223372036854775807
+=> 4096
+=== intdiv(4096, PHP_INT_MIN)
+=> 0
+=== 4096 % PHP_INT_MIN
+=> 4096
+=== decbin(12345)
+=> '11000000111001'
+=== decoct(12345)
+=> '30071'
+=== dechex(12345)
+=> '3039'
+=== abs(12345)
+=> 12345
+=== floor(12345)
+=> 12345.0
+=== ceil(12345)
+=> 12345.0
+=== round(12345, 0)
+=> 12345.0
+=== round(12345, 1)
+=> 12345.0
+=== round(12345, 5)
+=> 12345.0
+=== round(12345, 9223372036854775807)
+=> 12345.0
+=== intdiv(12345, 0)
+!! DivisionByZeroError: Division by zero
+=== 12345 % 0
+!! DivisionByZeroError: Modulo by zero
+=== intdiv(12345, 1)
+=> 12345
+=== 12345 % 1
+=> 0
+=== intdiv(12345, (-1))
+=> -12345
+=== 12345 % (-1)
+=> 0
+=== intdiv(12345, 2)
+=> 6172
+=== 12345 % 2
+=> 1
+=== intdiv(12345, (-2))
+=> -6172
+=== 12345 % (-2)
+=> 1
+=== intdiv(12345, 3)
+=> 4115
+=== 12345 % 3
+=> 0
+=== intdiv(12345, 7)
+=> 1763
+=== 12345 % 7
+=> 4
+=== intdiv(12345, (-7))
+=> -1763
+=== 12345 % (-7)
+=> 4
+=== intdiv(12345, 10)
+=> 1234
+=== 12345 % 10
+=> 5
+=== intdiv(12345, 9223372036854775807)
+=> 0
+=== 12345 % 9223372036854775807
+=> 12345
+=== intdiv(12345, PHP_INT_MIN)
+=> 0
+=== 12345 % PHP_INT_MIN
+=> 12345
+=== decbin(2147483647)
+=> '1111111111111111111111111111111'
+=== decoct(2147483647)
+=> '17777777777'
+=== dechex(2147483647)
+=> '7fffffff'
+=== abs(2147483647)
+=> 2147483647
+=== floor(2147483647)
+=> 2147483647.0
+=== ceil(2147483647)
+=> 2147483647.0
+=== round(2147483647, 0)
+=> 2147483647.0
+=== round(2147483647, 1)
+=> 2147483647.0
+=== round(2147483647, 5)
+=> 2147483647.0
+=== round(2147483647, 9223372036854775807)
+=> 2147483647.0
+=== intdiv(2147483647, 0)
+!! DivisionByZeroError: Division by zero
+=== 2147483647 % 0
+!! DivisionByZeroError: Modulo by zero
+=== intdiv(2147483647, 1)
+=> 2147483647
+=== 2147483647 % 1
+=> 0
+=== intdiv(2147483647, (-1))
+=> -2147483647
+=== 2147483647 % (-1)
+=> 0
+=== intdiv(2147483647, 2)
+=> 1073741823
+=== 2147483647 % 2
+=> 1
+=== intdiv(2147483647, (-2))
+=> -1073741823
+=== 2147483647 % (-2)
+=> 1
+=== intdiv(2147483647, 3)
+=> 715827882
+=== 2147483647 % 3
+=> 1
+=== intdiv(2147483647, 7)
+=> 306783378
+=== 2147483647 % 7
+=> 1
+=== intdiv(2147483647, (-7))
+=> -306783378
+=== 2147483647 % (-7)
+=> 1
+=== intdiv(2147483647, 10)
+=> 214748364
+=== 2147483647 % 10
+=> 7
+=== intdiv(2147483647, 9223372036854775807)
+=> 0
+=== 2147483647 % 9223372036854775807
+=> 2147483647
+=== intdiv(2147483647, PHP_INT_MIN)
+=> 0
+=== 2147483647 % PHP_INT_MIN
+=> 2147483647
+=== decbin((-2147483648))
+=> '1111111111111111111111111111111110000000000000000000000000000000'
+=== decoct((-2147483648))
+=> '1777777777760000000000'
+=== dechex((-2147483648))
+=> 'ffffffff80000000'
+=== abs((-2147483648))
+=> 2147483648
+=== floor((-2147483648))
+=> -2147483648.0
+=== ceil((-2147483648))
+=> -2147483648.0
+=== round((-2147483648), 0)
+=> -2147483648.0
+=== round((-2147483648), 1)
+=> -2147483648.0
+=== round((-2147483648), 5)
+=> -2147483648.0
+=== round((-2147483648), 9223372036854775807)
+=> -2147483648.0
+=== intdiv((-2147483648), 0)
+!! DivisionByZeroError: Division by zero
+=== (-2147483648) % 0
+!! DivisionByZeroError: Modulo by zero
+=== intdiv((-2147483648), 1)
+=> -2147483648
+=== (-2147483648) % 1
+=> 0
+=== intdiv((-2147483648), (-1))
+=> 2147483648
+=== (-2147483648) % (-1)
+=> 0
+=== intdiv((-2147483648), 2)
+=> -1073741824
+=== (-2147483648) % 2
+=> 0
+=== intdiv((-2147483648), (-2))
+=> 1073741824
+=== (-2147483648) % (-2)
+=> 0
+=== intdiv((-2147483648), 3)
+=> -715827882
+=== (-2147483648) % 3
+=> -2
+=== intdiv((-2147483648), 7)
+=> -306783378
+=== (-2147483648) % 7
+=> -2
+=== intdiv((-2147483648), (-7))
+=> 306783378
+=== (-2147483648) % (-7)
+=> -2
+=== intdiv((-2147483648), 10)
+=> -214748364
+=== (-2147483648) % 10
+=> -8
+=== intdiv((-2147483648), 9223372036854775807)
+=> 0
+=== (-2147483648) % 9223372036854775807
+=> -2147483648
+=== intdiv((-2147483648), PHP_INT_MIN)
+=> 0
+=== (-2147483648) % PHP_INT_MIN
+=> -2147483648
+=== decbin(4294967295)
+=> '11111111111111111111111111111111'
+=== decoct(4294967295)
+=> '37777777777'
+=== dechex(4294967295)
+=> 'ffffffff'
+=== abs(4294967295)
+=> 4294967295
+=== floor(4294967295)
+=> 4294967295.0
+=== ceil(4294967295)
+=> 4294967295.0
+=== round(4294967295, 0)
+=> 4294967295.0
+=== round(4294967295, 1)
+=> 4294967295.0
+=== round(4294967295, 5)
+=> 4294967295.0
+=== round(4294967295, 9223372036854775807)
+=> 4294967295.0
+=== intdiv(4294967295, 0)
+!! DivisionByZeroError: Division by zero
+=== 4294967295 % 0
+!! DivisionByZeroError: Modulo by zero
+=== intdiv(4294967295, 1)
+=> 4294967295
+=== 4294967295 % 1
+=> 0
+=== intdiv(4294967295, (-1))
+=> -4294967295
+=== 4294967295 % (-1)
+=> 0
+=== intdiv(4294967295, 2)
+=> 2147483647
+=== 4294967295 % 2
+=> 1
+=== intdiv(4294967295, (-2))
+=> -2147483647
+=== 4294967295 % (-2)
+=> 1
+=== intdiv(4294967295, 3)
+=> 1431655765
+=== 4294967295 % 3
+=> 0
+=== intdiv(4294967295, 7)
+=> 613566756
+=== 4294967295 % 7
+=> 3
+=== intdiv(4294967295, (-7))
+=> -613566756
+=== 4294967295 % (-7)
+=> 3
+=== intdiv(4294967295, 10)
+=> 429496729
+=== 4294967295 % 10
+=> 5
+=== intdiv(4294967295, 9223372036854775807)
+=> 0
+=== 4294967295 % 9223372036854775807
+=> 4294967295
+=== intdiv(4294967295, PHP_INT_MIN)
+=> 0
+=== 4294967295 % PHP_INT_MIN
+=> 4294967295
+=== decbin(4294967296)
+=> '100000000000000000000000000000000'
+=== decoct(4294967296)
+=> '40000000000'
+=== dechex(4294967296)
+=> '100000000'
+=== abs(4294967296)
+=> 4294967296
+=== floor(4294967296)
+=> 4294967296.0
+=== ceil(4294967296)
+=> 4294967296.0
+=== round(4294967296, 0)
+=> 4294967296.0
+=== round(4294967296, 1)
+=> 4294967296.0
+=== round(4294967296, 5)
+=> 4294967296.0
+=== round(4294967296, 9223372036854775807)
+=> 4294967296.0
+=== intdiv(4294967296, 0)
+!! DivisionByZeroError: Division by zero
+=== 4294967296 % 0
+!! DivisionByZeroError: Modulo by zero
+=== intdiv(4294967296, 1)
+=> 4294967296
+=== 4294967296 % 1
+=> 0
+=== intdiv(4294967296, (-1))
+=> -4294967296
+=== 4294967296 % (-1)
+=> 0
+=== intdiv(4294967296, 2)
+=> 2147483648
+=== 4294967296 % 2
+=> 0
+=== intdiv(4294967296, (-2))
+=> -2147483648
+=== 4294967296 % (-2)
+=> 0
+=== intdiv(4294967296, 3)
+=> 1431655765
+=== 4294967296 % 3
+=> 1
+=== intdiv(4294967296, 7)
+=> 613566756
+=== 4294967296 % 7
+=> 4
+=== intdiv(4294967296, (-7))
+=> -613566756
+=== 4294967296 % (-7)
+=> 4
+=== intdiv(4294967296, 10)
+=> 429496729
+=== 4294967296 % 10
+=> 6
+=== intdiv(4294967296, 9223372036854775807)
+=> 0
+=== 4294967296 % 9223372036854775807
+=> 4294967296
+=== intdiv(4294967296, PHP_INT_MIN)
+=> 0
+=== 4294967296 % PHP_INT_MIN
+=> 4294967296
+=== decbin(1234567890123)
+=> '10001111101110001111110110000010011001011'
+=== decoct(1234567890123)
+=> '21756176602313'
+=== dechex(1234567890123)
+=> '11f71fb04cb'
+=== abs(1234567890123)
+=> 1234567890123
+=== floor(1234567890123)
+=> 1234567890123.0
+=== ceil(1234567890123)
+=> 1234567890123.0
+=== round(1234567890123, 0)
+=> 1234567890123.0
+=== round(1234567890123, 1)
+=> 1234567890123.0
+=== round(1234567890123, 5)
+=> 1234567890123.0
+=== round(1234567890123, 9223372036854775807)
+=> 1234567890123.0
+=== intdiv(1234567890123, 0)
+!! DivisionByZeroError: Division by zero
+=== 1234567890123 % 0
+!! DivisionByZeroError: Modulo by zero
+=== intdiv(1234567890123, 1)
+=> 1234567890123
+=== 1234567890123 % 1
+=> 0
+=== intdiv(1234567890123, (-1))
+=> -1234567890123
+=== 1234567890123 % (-1)
+=> 0
+=== intdiv(1234567890123, 2)
+=> 617283945061
+=== 1234567890123 % 2
+=> 1
+=== intdiv(1234567890123, (-2))
+=> -617283945061
+=== 1234567890123 % (-2)
+=> 1
+=== intdiv(1234567890123, 3)
+=> 411522630041
+=== 1234567890123 % 3
+=> 0
+=== intdiv(1234567890123, 7)
+=> 176366841446
+=== 1234567890123 % 7
+=> 1
+=== intdiv(1234567890123, (-7))
+=> -176366841446
+=== 1234567890123 % (-7)
+=> 1
+=== intdiv(1234567890123, 10)
+=> 123456789012
+=== 1234567890123 % 10
+=> 3
+=== intdiv(1234567890123, 9223372036854775807)
+=> 0
+=== 1234567890123 % 9223372036854775807
+=> 1234567890123
+=== intdiv(1234567890123, PHP_INT_MIN)
+=> 0
+=== 1234567890123 % PHP_INT_MIN
+=> 1234567890123
+=== decbin(9223372036854775807)
+=> '111111111111111111111111111111111111111111111111111111111111111'
+=== decoct(9223372036854775807)
+=> '777777777777777777777'
+=== dechex(9223372036854775807)
+=> '7fffffffffffffff'
+=== abs(9223372036854775807)
+=> 9223372036854775807
+=== floor(9223372036854775807)
+=> 9.223372036854776E+18
+=== ceil(9223372036854775807)
+=> 9.223372036854776E+18
+=== round(9223372036854775807, 0)
+=> 9.223372036854776E+18
+=== round(9223372036854775807, 1)
+=> 9.223372036854776E+18
+=== round(9223372036854775807, 5)
+=> 9.223372036854776E+18
+=== round(9223372036854775807, 9223372036854775807)
+=> 9.223372036854776E+18
+=== intdiv(9223372036854775807, 0)
+!! DivisionByZeroError: Division by zero
+=== 9223372036854775807 % 0
+!! DivisionByZeroError: Modulo by zero
+=== intdiv(9223372036854775807, 1)
+=> 9223372036854775807
+=== 9223372036854775807 % 1
+=> 0
+=== intdiv(9223372036854775807, (-1))
+=> -9223372036854775807
+=== 9223372036854775807 % (-1)
+=> 0
+=== intdiv(9223372036854775807, 2)
+=> 4611686018427387903
+=== 9223372036854775807 % 2
+=> 1
+=== intdiv(9223372036854775807, (-2))
+=> -4611686018427387903
+=== 9223372036854775807 % (-2)
+=> 1
+=== intdiv(9223372036854775807, 3)
+=> 3074457345618258602
+=== 9223372036854775807 % 3
+=> 1
+=== intdiv(9223372036854775807, 7)
+=> 1317624576693539401
+=== 9223372036854775807 % 7
+=> 0
+=== intdiv(9223372036854775807, (-7))
+=> -1317624576693539401
+=== 9223372036854775807 % (-7)
+=> 0
+=== intdiv(9223372036854775807, 10)
+=> 922337203685477580
+=== 9223372036854775807 % 10
+=> 7
+=== intdiv(9223372036854775807, 9223372036854775807)
+=> 1
+=== 9223372036854775807 % 9223372036854775807
+=> 0
+=== intdiv(9223372036854775807, PHP_INT_MIN)
+=> 0
+=== 9223372036854775807 % PHP_INT_MIN
+=> 9223372036854775807
+=== decbin(PHP_INT_MIN)
+=> '1000000000000000000000000000000000000000000000000000000000000000'
+=== decoct(PHP_INT_MIN)
+=> '1000000000000000000000'
+=== dechex(PHP_INT_MIN)
+=> '8000000000000000'
+=== abs(PHP_INT_MIN)
+=> 9.223372036854776E+18
+=== floor(PHP_INT_MIN)
+=> -9.223372036854776E+18
+=== ceil(PHP_INT_MIN)
+=> -9.223372036854776E+18
+=== round(PHP_INT_MIN, 0)
+=> -9.223372036854776E+18
+=== round(PHP_INT_MIN, 1)
+=> -9.223372036854776E+18
+=== round(PHP_INT_MIN, 5)
+=> -9.223372036854776E+18
+=== round(PHP_INT_MIN, 9223372036854775807)
+=> -9.223372036854776E+18
+=== intdiv(PHP_INT_MIN, 0)
+!! DivisionByZeroError: Division by zero
+=== PHP_INT_MIN % 0
+!! DivisionByZeroError: Modulo by zero
+=== intdiv(PHP_INT_MIN, 1)
+=> -9223372036854775807-1
+=== PHP_INT_MIN % 1
+=> 0
+=== intdiv(PHP_INT_MIN, (-1))
+!! ArithmeticError: Division of PHP_INT_MIN by -1 is not an integer
+=== PHP_INT_MIN % (-1)
+=> 0
+=== intdiv(PHP_INT_MIN, 2)
+=> -4611686018427387904
+=== PHP_INT_MIN % 2
+=> 0
+=== intdiv(PHP_INT_MIN, (-2))
+=> 4611686018427387904
+=== PHP_INT_MIN % (-2)
+=> 0
+=== intdiv(PHP_INT_MIN, 3)
+=> -3074457345618258602
+=== PHP_INT_MIN % 3
+=> -2
+=== intdiv(PHP_INT_MIN, 7)
+=> -1317624576693539401
+=== PHP_INT_MIN % 7
+=> -1
+=== intdiv(PHP_INT_MIN, (-7))
+=> 1317624576693539401
+=== PHP_INT_MIN % (-7)
+=> -1
+=== intdiv(PHP_INT_MIN, 10)
+=> -922337203685477580
+=== PHP_INT_MIN % 10
+=> -8
+=== intdiv(PHP_INT_MIN, 9223372036854775807)
+=> -1
+=== PHP_INT_MIN % 9223372036854775807
+=> -1
+=== intdiv(PHP_INT_MIN, PHP_INT_MIN)
+=> 1
+=== PHP_INT_MIN % PHP_INT_MIN
+=> 0
+=== decbin((-9223372036854775807))
+=> '1000000000000000000000000000000000000000000000000000000000000001'
+=== decoct((-9223372036854775807))
+=> '1000000000000000000001'
+=== dechex((-9223372036854775807))
+=> '8000000000000001'
+=== abs((-9223372036854775807))
+=> 9223372036854775807
+=== floor((-9223372036854775807))
+=> -9.223372036854776E+18
+=== ceil((-9223372036854775807))
+=> -9.223372036854776E+18
+=== round((-9223372036854775807), 0)
+=> -9.223372036854776E+18
+=== round((-9223372036854775807), 1)
+=> -9.223372036854776E+18
+=== round((-9223372036854775807), 5)
+=> -9.223372036854776E+18
+=== round((-9223372036854775807), 9223372036854775807)
+=> -9.223372036854776E+18
+=== intdiv((-9223372036854775807), 0)
+!! DivisionByZeroError: Division by zero
+=== (-9223372036854775807) % 0
+!! DivisionByZeroError: Modulo by zero
+=== intdiv((-9223372036854775807), 1)
+=> -9223372036854775807
+=== (-9223372036854775807) % 1
+=> 0
+=== intdiv((-9223372036854775807), (-1))
+=> 9223372036854775807
+=== (-9223372036854775807) % (-1)
+=> 0
+=== intdiv((-9223372036854775807), 2)
+=> -4611686018427387903
+=== (-9223372036854775807) % 2
+=> -1
+=== intdiv((-9223372036854775807), (-2))
+=> 4611686018427387903
+=== (-9223372036854775807) % (-2)
+=> -1
+=== intdiv((-9223372036854775807), 3)
+=> -3074457345618258602
+=== (-9223372036854775807) % 3
+=> -1
+=== intdiv((-9223372036854775807), 7)
+=> -1317624576693539401
+=== (-9223372036854775807) % 7
+=> 0
+=== intdiv((-9223372036854775807), (-7))
+=> 1317624576693539401
+=== (-9223372036854775807) % (-7)
+=> 0
+=== intdiv((-9223372036854775807), 10)
+=> -922337203685477580
+=== (-9223372036854775807) % 10
+=> -7
+=== intdiv((-9223372036854775807), 9223372036854775807)
+=> -1
+=== (-9223372036854775807) % 9223372036854775807
+=> 0
+=== intdiv((-9223372036854775807), PHP_INT_MIN)
+=> 0
+=== (-9223372036854775807) % PHP_INT_MIN
+=> -9223372036854775807
+=== decbin((-12345))
+=> '1111111111111111111111111111111111111111111111111100111111000111'
+=== decoct((-12345))
+=> '1777777777777777747707'
+=== dechex((-12345))
+=> 'ffffffffffffcfc7'
+=== abs((-12345))
+=> 12345
+=== floor((-12345))
+=> -12345.0
+=== ceil((-12345))
+=> -12345.0
+=== round((-12345), 0)
+=> -12345.0
+=== round((-12345), 1)
+=> -12345.0
+=== round((-12345), 5)
+=> -12345.0
+=== round((-12345), 9223372036854775807)
+=> -12345.0
+=== intdiv((-12345), 0)
+!! DivisionByZeroError: Division by zero
+=== (-12345) % 0
+!! DivisionByZeroError: Modulo by zero
+=== intdiv((-12345), 1)
+=> -12345
+=== (-12345) % 1
+=> 0
+=== intdiv((-12345), (-1))
+=> 12345
+=== (-12345) % (-1)
+=> 0
+=== intdiv((-12345), 2)
+=> -6172
+=== (-12345) % 2
+=> -1
+=== intdiv((-12345), (-2))
+=> 6172
+=== (-12345) % (-2)
+=> -1
+=== intdiv((-12345), 3)
+=> -4115
+=== (-12345) % 3
+=> 0
+=== intdiv((-12345), 7)
+=> -1763
+=== (-12345) % 7
+=> -4
+=== intdiv((-12345), (-7))
+=> 1763
+=== (-12345) % (-7)
+=> -4
+=== intdiv((-12345), 10)
+=> -1234
+=== (-12345) % 10
+=> -5
+=== intdiv((-12345), 9223372036854775807)
+=> 0
+=== (-12345) % 9223372036854775807
+=> -12345
+=== intdiv((-12345), PHP_INT_MIN)
+=> 0
+=== (-12345) % PHP_INT_MIN
+=> -12345
+=== abs(0.0)
+=> 0.0
+=== floor(0.0)
+=> 0.0
+=== ceil(0.0)
+=> 0.0
+=== deg2rad(0.0)
+=> 0.0
+=== rad2deg(0.0)
+=> 0.0
+=== log(0.0)
+=> -INF
+=== is_nan(0.0)
+=> false
+=== fmod(0.0, 0.0)
+=> NAN
+=== fdiv(0.0, 0.0)
+=> NAN
+=== hypot(0.0, 0.0)
+=> 0.0
+=== log(0.0, 0.0)
+!! ValueError: log(): Argument #2 ($base) must be greater than 0
+=== fmod(0.0, (-0.0))
+=> NAN
+=== fdiv(0.0, (-0.0))
+=> NAN
+=== hypot(0.0, (-0.0))
+=> 0.0
+=== log(0.0, (-0.0))
+!! ValueError: log(): Argument #2 ($base) must be greater than 0
+=== fmod(0.0, 1.0)
+=> 0.0
+=== fdiv(0.0, 1.0)
+=> 0.0
+=== hypot(0.0, 1.0)
+=> 1.0
+=== log(0.0, 1.0)
+=> NAN
+=== fmod(0.0, 2.0)
+=> 0.0
+=== fdiv(0.0, 2.0)
+=> 0.0
+=== hypot(0.0, 2.0)
+=> 2.0
+=== log(0.0, 2.0)
+=> -INF
+=== fmod(0.0, 10.0)
+=> 0.0
+=== fdiv(0.0, 10.0)
+=> 0.0
+=== hypot(0.0, 10.0)
+=> 10.0
+=== log(0.0, 10.0)
+=> -INF
+=== fmod(0.0, (-4.0))
+=> 0.0
+=== fdiv(0.0, (-4.0))
+=> -0.0
+=== hypot(0.0, (-4.0))
+=> 4.0
+=== log(0.0, (-4.0))
+!! ValueError: log(): Argument #2 ($base) must be greater than 0
+=== fmod(0.0, 3.0)
+=> 0.0
+=== fdiv(0.0, 3.0)
+=> 0.0
+=== hypot(0.0, 3.0)
+=> 3.0
+=== log(0.0, 3.0)
+=> -INF
+=== fmod(0.0, 0.5)
+=> 0.0
+=== fdiv(0.0, 0.5)
+=> 0.0
+=== hypot(0.0, 0.5)
+=> 0.5
+=== log(0.0, 0.5)
+=> INF
+=== fmod(0.0, INF)
+=> 0.0
+=== fdiv(0.0, INF)
+=> 0.0
+=== hypot(0.0, INF)
+=> INF
+=== log(0.0, INF)
+=> NAN
+=== fmod(0.0, NAN)
+=> NAN
+=== fdiv(0.0, NAN)
+=> NAN
+=== hypot(0.0, NAN)
+=> NAN
+=== log(0.0, NAN)
+=> NAN
+=== fmod(0.0, (-7.5))
+=> 0.0
+=== fdiv(0.0, (-7.5))
+=> -0.0
+=== hypot(0.0, (-7.5))
+=> 7.5
+=== log(0.0, (-7.5))
+!! ValueError: log(): Argument #2 ($base) must be greater than 0
+=== abs((-0.0))
+=> 0.0
+=== floor((-0.0))
+=> -0.0
+=== ceil((-0.0))
+=> -0.0
+=== deg2rad((-0.0))
+=> -0.0
+=== rad2deg((-0.0))
+=> -0.0
+=== log((-0.0))
+=> -INF
+=== is_nan((-0.0))
+=> false
+=== fmod((-0.0), 0.0)
+=> NAN
+=== fdiv((-0.0), 0.0)
+=> NAN
+=== hypot((-0.0), 0.0)
+=> 0.0
+=== log((-0.0), 0.0)
+!! ValueError: log(): Argument #2 ($base) must be greater than 0
+=== fmod((-0.0), (-0.0))
+=> NAN
+=== fdiv((-0.0), (-0.0))
+=> NAN
+=== hypot((-0.0), (-0.0))
+=> 0.0
+=== log((-0.0), (-0.0))
+!! ValueError: log(): Argument #2 ($base) must be greater than 0
+=== fmod((-0.0), 1.0)
+=> -0.0
+=== fdiv((-0.0), 1.0)
+=> -0.0
+=== hypot((-0.0), 1.0)
+=> 1.0
+=== log((-0.0), 1.0)
+=> NAN
+=== fmod((-0.0), 2.0)
+=> -0.0
+=== fdiv((-0.0), 2.0)
+=> -0.0
+=== hypot((-0.0), 2.0)
+=> 2.0
+=== log((-0.0), 2.0)
+=> -INF
+=== fmod((-0.0), 10.0)
+=> -0.0
+=== fdiv((-0.0), 10.0)
+=> -0.0
+=== hypot((-0.0), 10.0)
+=> 10.0
+=== log((-0.0), 10.0)
+=> -INF
+=== fmod((-0.0), (-4.0))
+=> -0.0
+=== fdiv((-0.0), (-4.0))
+=> 0.0
+=== hypot((-0.0), (-4.0))
+=> 4.0
+=== log((-0.0), (-4.0))
+!! ValueError: log(): Argument #2 ($base) must be greater than 0
+=== fmod((-0.0), 3.0)
+=> -0.0
+=== fdiv((-0.0), 3.0)
+=> -0.0
+=== hypot((-0.0), 3.0)
+=> 3.0
+=== log((-0.0), 3.0)
+=> -INF
+=== fmod((-0.0), 0.5)
+=> -0.0
+=== fdiv((-0.0), 0.5)
+=> -0.0
+=== hypot((-0.0), 0.5)
+=> 0.5
+=== log((-0.0), 0.5)
+=> INF
+=== fmod((-0.0), INF)
+=> -0.0
+=== fdiv((-0.0), INF)
+=> -0.0
+=== hypot((-0.0), INF)
+=> INF
+=== log((-0.0), INF)
+=> NAN
+=== fmod((-0.0), NAN)
+=> NAN
+=== fdiv((-0.0), NAN)
+=> NAN
+=== hypot((-0.0), NAN)
+=> NAN
+=== log((-0.0), NAN)
+=> NAN
+=== fmod((-0.0), (-7.5))
+=> -0.0
+=== fdiv((-0.0), (-7.5))
+=> 0.0
+=== hypot((-0.0), (-7.5))
+=> 7.5
+=== log((-0.0), (-7.5))
+!! ValueError: log(): Argument #2 ($base) must be greater than 0
+=== abs(0.5)
+=> 0.5
+=== floor(0.5)
+=> 0.0
+=== ceil(0.5)
+=> 1.0
+=== deg2rad(0.5)
+=> 0.008726646259971648
+=== rad2deg(0.5)
+=> 28.64788975654116
+=== log(0.5)
+=> -0.6931471805599453
+=== is_nan(0.5)
+=> false
+=== fmod(0.5, 0.0)
+=> NAN
+=== fdiv(0.5, 0.0)
+=> INF
+=== hypot(0.5, 0.0)
+=> 0.5
+=== log(0.5, 0.0)
+!! ValueError: log(): Argument #2 ($base) must be greater than 0
+=== fmod(0.5, (-0.0))
+=> NAN
+=== fdiv(0.5, (-0.0))
+=> -INF
+=== hypot(0.5, (-0.0))
+=> 0.5
+=== log(0.5, (-0.0))
+!! ValueError: log(): Argument #2 ($base) must be greater than 0
+=== fmod(0.5, 1.0)
+=> 0.5
+=== fdiv(0.5, 1.0)
+=> 0.5
+=== hypot(0.5, 1.0)
+=> 1.118033988749895
+=== log(0.5, 1.0)
+=> NAN
+=== fmod(0.5, 2.0)
+=> 0.5
+=== fdiv(0.5, 2.0)
+=> 0.25
+=== hypot(0.5, 2.0)
+=> 2.0615528128088303
+=== log(0.5, 2.0)
+=> -1.0
+=== fmod(0.5, 10.0)
+=> 0.5
+=== fdiv(0.5, 10.0)
+=> 0.05
+=== hypot(0.5, 10.0)
+=> 10.012492197250394
+=== log(0.5, 10.0)
+=> -0.3010299956639812
+=== fmod(0.5, (-4.0))
+=> 0.5
+=== fdiv(0.5, (-4.0))
+=> -0.125
+=== hypot(0.5, (-4.0))
+=> 4.031128874149275
+=== log(0.5, (-4.0))
+!! ValueError: log(): Argument #2 ($base) must be greater than 0
+=== fmod(0.5, 3.0)
+=> 0.5
+=== fdiv(0.5, 3.0)
+=> 0.16666666666666666
+=== hypot(0.5, 3.0)
+=> 3.0413812651491097
+=== log(0.5, 3.0)
+=> -0.6309297535714574
+=== fmod(0.5, 0.5)
+=> 0.0
+=== fdiv(0.5, 0.5)
+=> 1.0
+=== hypot(0.5, 0.5)
+=> 0.7071067811865476
+=== log(0.5, 0.5)
+=> 1.0
+=== fmod(0.5, INF)
+=> 0.5
+=== fdiv(0.5, INF)
+=> 0.0
+=== hypot(0.5, INF)
+=> INF
+=== log(0.5, INF)
+=> -0.0
+=== fmod(0.5, NAN)
+=> NAN
+=== fdiv(0.5, NAN)
+=> NAN
+=== hypot(0.5, NAN)
+=> NAN
+=== log(0.5, NAN)
+=> NAN
+=== fmod(0.5, (-7.5))
+=> 0.5
+=== fdiv(0.5, (-7.5))
+=> -0.06666666666666667
+=== hypot(0.5, (-7.5))
+=> 7.516648189186454
+=== log(0.5, (-7.5))
+!! ValueError: log(): Argument #2 ($base) must be greater than 0
+=== abs((-0.5))
+=> 0.5
+=== floor((-0.5))
+=> -1.0
+=== ceil((-0.5))
+=> -0.0
+=== deg2rad((-0.5))
+=> -0.008726646259971648
+=== rad2deg((-0.5))
+=> -28.64788975654116
+=== log((-0.5))
+=> NAN
+=== is_nan((-0.5))
+=> false
+=== fmod((-0.5), 0.0)
+=> NAN
+=== fdiv((-0.5), 0.0)
+=> -INF
+=== hypot((-0.5), 0.0)
+=> 0.5
+=== log((-0.5), 0.0)
+!! ValueError: log(): Argument #2 ($base) must be greater than 0
+=== fmod((-0.5), (-0.0))
+=> NAN
+=== fdiv((-0.5), (-0.0))
+=> INF
+=== hypot((-0.5), (-0.0))
+=> 0.5
+=== log((-0.5), (-0.0))
+!! ValueError: log(): Argument #2 ($base) must be greater than 0
+=== fmod((-0.5), 1.0)
+=> -0.5
+=== fdiv((-0.5), 1.0)
+=> -0.5
+=== hypot((-0.5), 1.0)
+=> 1.118033988749895
+=== log((-0.5), 1.0)
+=> NAN
+=== fmod((-0.5), 2.0)
+=> -0.5
+=== fdiv((-0.5), 2.0)
+=> -0.25
+=== hypot((-0.5), 2.0)
+=> 2.0615528128088303
+=== log((-0.5), 2.0)
+=> NAN
+=== fmod((-0.5), 10.0)
+=> -0.5
+=== fdiv((-0.5), 10.0)
+=> -0.05
+=== hypot((-0.5), 10.0)
+=> 10.012492197250394
+=== log((-0.5), 10.0)
+=> NAN
+=== fmod((-0.5), (-4.0))
+=> -0.5
+=== fdiv((-0.5), (-4.0))
+=> 0.125
+=== hypot((-0.5), (-4.0))
+=> 4.031128874149275
+=== log((-0.5), (-4.0))
+!! ValueError: log(): Argument #2 ($base) must be greater than 0
+=== fmod((-0.5), 3.0)
+=> -0.5
+=== fdiv((-0.5), 3.0)
+=> -0.16666666666666666
+=== hypot((-0.5), 3.0)
+=> 3.0413812651491097
+=== log((-0.5), 3.0)
+=> NAN
+=== fmod((-0.5), 0.5)
+=> -0.0
+=== fdiv((-0.5), 0.5)
+=> -1.0
+=== hypot((-0.5), 0.5)
+=> 0.7071067811865476
+=== log((-0.5), 0.5)
+=> NAN
+=== fmod((-0.5), INF)
+=> -0.5
+=== fdiv((-0.5), INF)
+=> -0.0
+=== hypot((-0.5), INF)
+=> INF
+=== log((-0.5), INF)
+=> NAN
+=== fmod((-0.5), NAN)
+=> NAN
+=== fdiv((-0.5), NAN)
+=> NAN
+=== hypot((-0.5), NAN)
+=> NAN
+=== log((-0.5), NAN)
+=> NAN
+=== fmod((-0.5), (-7.5))
+=> -0.5
+=== fdiv((-0.5), (-7.5))
+=> 0.06666666666666667
+=== hypot((-0.5), (-7.5))
+=> 7.516648189186454
+=== log((-0.5), (-7.5))
+!! ValueError: log(): Argument #2 ($base) must be greater than 0
+=== abs(1.0)
+=> 1.0
+=== floor(1.0)
+=> 1.0
+=== ceil(1.0)
+=> 1.0
+=== deg2rad(1.0)
+=> 0.017453292519943295
+=== rad2deg(1.0)
+=> 57.29577951308232
+=== log(1.0)
+=> 0.0
+=== is_nan(1.0)
+=> false
+=== fmod(1.0, 0.0)
+=> NAN
+=== fdiv(1.0, 0.0)
+=> INF
+=== hypot(1.0, 0.0)
+=> 1.0
+=== log(1.0, 0.0)
+!! ValueError: log(): Argument #2 ($base) must be greater than 0
+=== fmod(1.0, (-0.0))
+=> NAN
+=== fdiv(1.0, (-0.0))
+=> -INF
+=== hypot(1.0, (-0.0))
+=> 1.0
+=== log(1.0, (-0.0))
+!! ValueError: log(): Argument #2 ($base) must be greater than 0
+=== fmod(1.0, 1.0)
+=> 0.0
+=== fdiv(1.0, 1.0)
+=> 1.0
+=== hypot(1.0, 1.0)
+=> 1.4142135623730951
+=== log(1.0, 1.0)
+=> NAN
+=== fmod(1.0, 2.0)
+=> 1.0
+=== fdiv(1.0, 2.0)
+=> 0.5
+=== hypot(1.0, 2.0)
+=> 2.23606797749979
+=== log(1.0, 2.0)
+=> 0.0
+=== fmod(1.0, 10.0)
+=> 1.0
+=== fdiv(1.0, 10.0)
+=> 0.1
+=== hypot(1.0, 10.0)
+=> 10.04987562112089
+=== log(1.0, 10.0)
+=> 0.0
+=== fmod(1.0, (-4.0))
+=> 1.0
+=== fdiv(1.0, (-4.0))
+=> -0.25
+=== hypot(1.0, (-4.0))
+=> 4.123105625617661
+=== log(1.0, (-4.0))
+!! ValueError: log(): Argument #2 ($base) must be greater than 0
+=== fmod(1.0, 3.0)
+=> 1.0
+=== fdiv(1.0, 3.0)
+=> 0.3333333333333333
+=== hypot(1.0, 3.0)
+=> 3.1622776601683795
+=== log(1.0, 3.0)
+=> 0.0
+=== fmod(1.0, 0.5)
+=> 0.0
+=== fdiv(1.0, 0.5)
+=> 2.0
+=== hypot(1.0, 0.5)
+=> 1.118033988749895
+=== log(1.0, 0.5)
+=> -0.0
+=== fmod(1.0, INF)
+=> 1.0
+=== fdiv(1.0, INF)
+=> 0.0
+=== hypot(1.0, INF)
+=> INF
+=== log(1.0, INF)
+=> 0.0
+=== fmod(1.0, NAN)
+=> NAN
+=== fdiv(1.0, NAN)
+=> NAN
+=== hypot(1.0, NAN)
+=> NAN
+=== log(1.0, NAN)
+=> NAN
+=== fmod(1.0, (-7.5))
+=> 1.0
+=== fdiv(1.0, (-7.5))
+=> -0.13333333333333333
+=== hypot(1.0, (-7.5))
+=> 7.566372975210778
+=== log(1.0, (-7.5))
+!! ValueError: log(): Argument #2 ($base) must be greater than 0
+=== abs(1.5)
+=> 1.5
+=== floor(1.5)
+=> 1.0
+=== ceil(1.5)
+=> 2.0
+=== deg2rad(1.5)
+=> 0.02617993877991494
+=== rad2deg(1.5)
+=> 85.94366926962348
+=== log(1.5)
+=> 0.4054651081081644
+=== is_nan(1.5)
+=> false
+=== fmod(1.5, 0.0)
+=> NAN
+=== fdiv(1.5, 0.0)
+=> INF
+=== hypot(1.5, 0.0)
+=> 1.5
+=== log(1.5, 0.0)
+!! ValueError: log(): Argument #2 ($base) must be greater than 0
+=== fmod(1.5, (-0.0))
+=> NAN
+=== fdiv(1.5, (-0.0))
+=> -INF
+=== hypot(1.5, (-0.0))
+=> 1.5
+=== log(1.5, (-0.0))
+!! ValueError: log(): Argument #2 ($base) must be greater than 0
+=== fmod(1.5, 1.0)
+=> 0.5
+=== fdiv(1.5, 1.0)
+=> 1.5
+=== hypot(1.5, 1.0)
+=> 1.8027756377319946
+=== log(1.5, 1.0)
+=> NAN
+=== fmod(1.5, 2.0)
+=> 1.5
+=== fdiv(1.5, 2.0)
+=> 0.75
+=== hypot(1.5, 2.0)
+=> 2.5
+=== log(1.5, 2.0)
+=> 0.5849625007211562
+=== fmod(1.5, 10.0)
+=> 1.5
+=== fdiv(1.5, 10.0)
+=> 0.15
+=== hypot(1.5, 10.0)
+=> 10.111874208078342
+=== log(1.5, 10.0)
+=> 0.17609125905568124
+=== fmod(1.5, (-4.0))
+=> 1.5
+=== fdiv(1.5, (-4.0))
+=> -0.375
+=== hypot(1.5, (-4.0))
+=> 4.272001872658765
+=== log(1.5, (-4.0))
+!! ValueError: log(): Argument #2 ($base) must be greater than 0
+=== fmod(1.5, 3.0)
+=> 1.5
+=== fdiv(1.5, 3.0)
+=> 0.5
+=== hypot(1.5, 3.0)
+=> 3.3541019662496847
+=== log(1.5, 3.0)
+=> 0.3690702464285425
+=== fmod(1.5, 0.5)
+=> 0.0
+=== fdiv(1.5, 0.5)
+=> 3.0
+=== hypot(1.5, 0.5)
+=> 1.5811388300841898
+=== log(1.5, 0.5)
+=> -0.5849625007211562
+=== fmod(1.5, INF)
+=> 1.5
+=== fdiv(1.5, INF)
+=> 0.0
+=== hypot(1.5, INF)
+=> INF
+=== log(1.5, INF)
+=> 0.0
+=== fmod(1.5, NAN)
+=> NAN
+=== fdiv(1.5, NAN)
+=> NAN
+=== hypot(1.5, NAN)
+=> NAN
+=== log(1.5, NAN)
+=> NAN
+=== fmod(1.5, (-7.5))
+=> 1.5
+=== fdiv(1.5, (-7.5))
+=> -0.2
+=== hypot(1.5, (-7.5))
+=> 7.648529270389178
+=== log(1.5, (-7.5))
+!! ValueError: log(): Argument #2 ($base) must be greater than 0
+=== abs((-1.5))
+=> 1.5
+=== floor((-1.5))
+=> -2.0
+=== ceil((-1.5))
+=> -1.0
+=== deg2rad((-1.5))
+=> -0.02617993877991494
+=== rad2deg((-1.5))
+=> -85.94366926962348
+=== log((-1.5))
+=> NAN
+=== is_nan((-1.5))
+=> false
+=== fmod((-1.5), 0.0)
+=> NAN
+=== fdiv((-1.5), 0.0)
+=> -INF
+=== hypot((-1.5), 0.0)
+=> 1.5
+=== log((-1.5), 0.0)
+!! ValueError: log(): Argument #2 ($base) must be greater than 0
+=== fmod((-1.5), (-0.0))
+=> NAN
+=== fdiv((-1.5), (-0.0))
+=> INF
+=== hypot((-1.5), (-0.0))
+=> 1.5
+=== log((-1.5), (-0.0))
+!! ValueError: log(): Argument #2 ($base) must be greater than 0
+=== fmod((-1.5), 1.0)
+=> -0.5
+=== fdiv((-1.5), 1.0)
+=> -1.5
+=== hypot((-1.5), 1.0)
+=> 1.8027756377319946
+=== log((-1.5), 1.0)
+=> NAN
+=== fmod((-1.5), 2.0)
+=> -1.5
+=== fdiv((-1.5), 2.0)
+=> -0.75
+=== hypot((-1.5), 2.0)
+=> 2.5
+=== log((-1.5), 2.0)
+=> NAN
+=== fmod((-1.5), 10.0)
+=> -1.5
+=== fdiv((-1.5), 10.0)
+=> -0.15
+=== hypot((-1.5), 10.0)
+=> 10.111874208078342
+=== log((-1.5), 10.0)
+=> NAN
+=== fmod((-1.5), (-4.0))
+=> -1.5
+=== fdiv((-1.5), (-4.0))
+=> 0.375
+=== hypot((-1.5), (-4.0))
+=> 4.272001872658765
+=== log((-1.5), (-4.0))
+!! ValueError: log(): Argument #2 ($base) must be greater than 0
+=== fmod((-1.5), 3.0)
+=> -1.5
+=== fdiv((-1.5), 3.0)
+=> -0.5
+=== hypot((-1.5), 3.0)
+=> 3.3541019662496847
+=== log((-1.5), 3.0)
+=> NAN
+=== fmod((-1.5), 0.5)
+=> -0.0
+=== fdiv((-1.5), 0.5)
+=> -3.0
+=== hypot((-1.5), 0.5)
+=> 1.5811388300841898
+=== log((-1.5), 0.5)
+=> NAN
+=== fmod((-1.5), INF)
+=> -1.5
+=== fdiv((-1.5), INF)
+=> -0.0
+=== hypot((-1.5), INF)
+=> INF
+=== log((-1.5), INF)
+=> NAN
+=== fmod((-1.5), NAN)
+=> NAN
+=== fdiv((-1.5), NAN)
+=> NAN
+=== hypot((-1.5), NAN)
+=> NAN
+=== log((-1.5), NAN)
+=> NAN
+=== fmod((-1.5), (-7.5))
+=> -1.5
+=== fdiv((-1.5), (-7.5))
+=> 0.2
+=== hypot((-1.5), (-7.5))
+=> 7.648529270389178
+=== log((-1.5), (-7.5))
+!! ValueError: log(): Argument #2 ($base) must be greater than 0
+=== abs(2.5)
+=> 2.5
+=== floor(2.5)
+=> 2.0
+=== ceil(2.5)
+=> 3.0
+=== deg2rad(2.5)
+=> 0.04363323129985824
+=== rad2deg(2.5)
+=> 143.2394487827058
+=== log(2.5)
+=> 0.9162907318741551
+=== is_nan(2.5)
+=> false
+=== fmod(2.5, 0.0)
+=> NAN
+=== fdiv(2.5, 0.0)
+=> INF
+=== hypot(2.5, 0.0)
+=> 2.5
+=== log(2.5, 0.0)
+!! ValueError: log(): Argument #2 ($base) must be greater than 0
+=== fmod(2.5, (-0.0))
+=> NAN
+=== fdiv(2.5, (-0.0))
+=> -INF
+=== hypot(2.5, (-0.0))
+=> 2.5
+=== log(2.5, (-0.0))
+!! ValueError: log(): Argument #2 ($base) must be greater than 0
+=== fmod(2.5, 1.0)
+=> 0.5
+=== fdiv(2.5, 1.0)
+=> 2.5
+=== hypot(2.5, 1.0)
+=> 2.692582403567252
+=== log(2.5, 1.0)
+=> NAN
+=== fmod(2.5, 2.0)
+=> 0.5
+=== fdiv(2.5, 2.0)
+=> 1.25
+=== hypot(2.5, 2.0)
+=> 3.2015621187164243
+=== log(2.5, 2.0)
+=> 1.3219280948873624
+=== fmod(2.5, 10.0)
+=> 2.5
+=== fdiv(2.5, 10.0)
+=> 0.25
+=== hypot(2.5, 10.0)
+=> 10.307764064044152
+=== log(2.5, 10.0)
+=> 0.3979400086720376
+=== fmod(2.5, (-4.0))
+=> 2.5
+=== fdiv(2.5, (-4.0))
+=> -0.625
+=== hypot(2.5, (-4.0))
+=> 4.716990566028302
+=== log(2.5, (-4.0))
+!! ValueError: log(): Argument #2 ($base) must be greater than 0
+=== fmod(2.5, 3.0)
+=> 2.5
+=== fdiv(2.5, 3.0)
+=> 0.8333333333333334
+=== hypot(2.5, 3.0)
+=> 3.905124837953327
+=== log(2.5, 3.0)
+=> 0.8340437671464697
+=== fmod(2.5, 0.5)
+=> 0.0
+=== fdiv(2.5, 0.5)
+=> 5.0
+=== hypot(2.5, 0.5)
+=> 2.5495097567963922
+=== log(2.5, 0.5)
+=> -1.3219280948873624
+=== fmod(2.5, INF)
+=> 2.5
+=== fdiv(2.5, INF)
+=> 0.0
+=== hypot(2.5, INF)
+=> INF
+=== log(2.5, INF)
+=> 0.0
+=== fmod(2.5, NAN)
+=> NAN
+=== fdiv(2.5, NAN)
+=> NAN
+=== hypot(2.5, NAN)
+=> NAN
+=== log(2.5, NAN)
+=> NAN
+=== fmod(2.5, (-7.5))
+=> 2.5
+=== fdiv(2.5, (-7.5))
+=> -0.3333333333333333
+=== hypot(2.5, (-7.5))
+=> 7.905694150420948
+=== log(2.5, (-7.5))
+!! ValueError: log(): Argument #2 ($base) must be greater than 0
+=== abs((-2.5))
+=> 2.5
+=== floor((-2.5))
+=> -3.0
+=== ceil((-2.5))
+=> -2.0
+=== deg2rad((-2.5))
+=> -0.04363323129985824
+=== rad2deg((-2.5))
+=> -143.2394487827058
+=== log((-2.5))
+=> NAN
+=== is_nan((-2.5))
+=> false
+=== fmod((-2.5), 0.0)
+=> NAN
+=== fdiv((-2.5), 0.0)
+=> -INF
+=== hypot((-2.5), 0.0)
+=> 2.5
+=== log((-2.5), 0.0)
+!! ValueError: log(): Argument #2 ($base) must be greater than 0
+=== fmod((-2.5), (-0.0))
+=> NAN
+=== fdiv((-2.5), (-0.0))
+=> INF
+=== hypot((-2.5), (-0.0))
+=> 2.5
+=== log((-2.5), (-0.0))
+!! ValueError: log(): Argument #2 ($base) must be greater than 0
+=== fmod((-2.5), 1.0)
+=> -0.5
+=== fdiv((-2.5), 1.0)
+=> -2.5
+=== hypot((-2.5), 1.0)
+=> 2.692582403567252
+=== log((-2.5), 1.0)
+=> NAN
+=== fmod((-2.5), 2.0)
+=> -0.5
+=== fdiv((-2.5), 2.0)
+=> -1.25
+=== hypot((-2.5), 2.0)
+=> 3.2015621187164243
+=== log((-2.5), 2.0)
+=> NAN
+=== fmod((-2.5), 10.0)
+=> -2.5
+=== fdiv((-2.5), 10.0)
+=> -0.25
+=== hypot((-2.5), 10.0)
+=> 10.307764064044152
+=== log((-2.5), 10.0)
+=> NAN
+=== fmod((-2.5), (-4.0))
+=> -2.5
+=== fdiv((-2.5), (-4.0))
+=> 0.625
+=== hypot((-2.5), (-4.0))
+=> 4.716990566028302
+=== log((-2.5), (-4.0))
+!! ValueError: log(): Argument #2 ($base) must be greater than 0
+=== fmod((-2.5), 3.0)
+=> -2.5
+=== fdiv((-2.5), 3.0)
+=> -0.8333333333333334
+=== hypot((-2.5), 3.0)
+=> 3.905124837953327
+=== log((-2.5), 3.0)
+=> NAN
+=== fmod((-2.5), 0.5)
+=> -0.0
+=== fdiv((-2.5), 0.5)
+=> -5.0
+=== hypot((-2.5), 0.5)
+=> 2.5495097567963922
+=== log((-2.5), 0.5)
+=> NAN
+=== fmod((-2.5), INF)
+=> -2.5
+=== fdiv((-2.5), INF)
+=> -0.0
+=== hypot((-2.5), INF)
+=> INF
+=== log((-2.5), INF)
+=> NAN
+=== fmod((-2.5), NAN)
+=> NAN
+=== fdiv((-2.5), NAN)
+=> NAN
+=== hypot((-2.5), NAN)
+=> NAN
+=== log((-2.5), NAN)
+=> NAN
+=== fmod((-2.5), (-7.5))
+=> -2.5
+=== fdiv((-2.5), (-7.5))
+=> 0.3333333333333333
+=== hypot((-2.5), (-7.5))
+=> 7.905694150420948
+=== log((-2.5), (-7.5))
+!! ValueError: log(): Argument #2 ($base) must be greater than 0
+=== abs(3.7)
+=> 3.7
+=== floor(3.7)
+=> 3.0
+=== ceil(3.7)
+=> 4.0
+=== deg2rad(3.7)
+=> 0.0645771823237902
+=== rad2deg(3.7)
+=> 211.99438419840462
+=== log(3.7)
+=> 1.308332819650179
+=== is_nan(3.7)
+=> false
+=== fmod(3.7, 0.0)
+=> NAN
+=== fdiv(3.7, 0.0)
+=> INF
+=== hypot(3.7, 0.0)
+=> 3.7
+=== log(3.7, 0.0)
+!! ValueError: log(): Argument #2 ($base) must be greater than 0
+=== fmod(3.7, (-0.0))
+=> NAN
+=== fdiv(3.7, (-0.0))
+=> -INF
+=== hypot(3.7, (-0.0))
+=> 3.7
+=== log(3.7, (-0.0))
+!! ValueError: log(): Argument #2 ($base) must be greater than 0
+=== fmod(3.7, 1.0)
+=> 0.7000000000000002
+=== fdiv(3.7, 1.0)
+=> 3.7
+=== hypot(3.7, 1.0)
+=> 3.83275357934736
+=== log(3.7, 1.0)
+=> NAN
+=== fmod(3.7, 2.0)
+=> 1.7000000000000002
+=== fdiv(3.7, 2.0)
+=> 1.85
+=== hypot(3.7, 2.0)
+=> 4.205948168962618
+=== log(3.7, 2.0)
+=> 1.8875252707415875
+=== fmod(3.7, 10.0)
+=> 3.7
+=== fdiv(3.7, 10.0)
+=> 0.37
+=== hypot(3.7, 10.0)
+=> 10.662551289442879
+=== log(3.7, 10.0)
+=> 0.568201724066995
+=== fmod(3.7, (-4.0))
+=> 3.7
+=== fdiv(3.7, (-4.0))
+=> -0.925
+=== hypot(3.7, (-4.0))
+=> 5.448853090330111
+=== log(3.7, (-4.0))
+!! ValueError: log(): Argument #2 ($base) must be greater than 0
+=== fmod(3.7, 3.0)
+=> 0.7000000000000002
+=== fdiv(3.7, 3.0)
+=> 1.2333333333333334
+=== hypot(3.7, 3.0)
+=> 4.763402145525822
+=== log(3.7, 3.0)
+=> 1.1908958539288883
+=== fmod(3.7, 0.5)
+=> 0.20000000000000018
+=== fdiv(3.7, 0.5)
+=> 7.4
+=== hypot(3.7, 0.5)
+=> 3.733630940518894
+=== log(3.7, 0.5)
+=> -1.8875252707415877
+=== fmod(3.7, INF)
+=> 3.7
+=== fdiv(3.7, INF)
+=> 0.0
+=== hypot(3.7, INF)
+=> INF
+=== log(3.7, INF)
+=> 0.0
+=== fmod(3.7, NAN)
+=> NAN
+=== fdiv(3.7, NAN)
+=> NAN
+=== hypot(3.7, NAN)
+=> NAN
+=== log(3.7, NAN)
+=> NAN
+=== fmod(3.7, (-7.5))
+=> 3.7
+=== fdiv(3.7, (-7.5))
+=> -0.49333333333333335
+=== hypot(3.7, (-7.5))
+=> 8.363013810822029
+=== log(3.7, (-7.5))
+!! ValueError: log(): Argument #2 ($base) must be greater than 0
+=== abs((-3.7))
+=> 3.7
+=== floor((-3.7))
+=> -4.0
+=== ceil((-3.7))
+=> -3.0
+=== deg2rad((-3.7))
+=> -0.0645771823237902
+=== rad2deg((-3.7))
+=> -211.99438419840462
+=== log((-3.7))
+=> NAN
+=== is_nan((-3.7))
+=> false
+=== fmod((-3.7), 0.0)
+=> NAN
+=== fdiv((-3.7), 0.0)
+=> -INF
+=== hypot((-3.7), 0.0)
+=> 3.7
+=== log((-3.7), 0.0)
+!! ValueError: log(): Argument #2 ($base) must be greater than 0
+=== fmod((-3.7), (-0.0))
+=> NAN
+=== fdiv((-3.7), (-0.0))
+=> INF
+=== hypot((-3.7), (-0.0))
+=> 3.7
+=== log((-3.7), (-0.0))
+!! ValueError: log(): Argument #2 ($base) must be greater than 0
+=== fmod((-3.7), 1.0)
+=> -0.7000000000000002
+=== fdiv((-3.7), 1.0)
+=> -3.7
+=== hypot((-3.7), 1.0)
+=> 3.83275357934736
+=== log((-3.7), 1.0)
+=> NAN
+=== fmod((-3.7), 2.0)
+=> -1.7000000000000002
+=== fdiv((-3.7), 2.0)
+=> -1.85
+=== hypot((-3.7), 2.0)
+=> 4.205948168962618
+=== log((-3.7), 2.0)
+=> NAN
+=== fmod((-3.7), 10.0)
+=> -3.7
+=== fdiv((-3.7), 10.0)
+=> -0.37
+=== hypot((-3.7), 10.0)
+=> 10.662551289442879
+=== log((-3.7), 10.0)
+=> NAN
+=== fmod((-3.7), (-4.0))
+=> -3.7
+=== fdiv((-3.7), (-4.0))
+=> 0.925
+=== hypot((-3.7), (-4.0))
+=> 5.448853090330111
+=== log((-3.7), (-4.0))
+!! ValueError: log(): Argument #2 ($base) must be greater than 0
+=== fmod((-3.7), 3.0)
+=> -0.7000000000000002
+=== fdiv((-3.7), 3.0)
+=> -1.2333333333333334
+=== hypot((-3.7), 3.0)
+=> 4.763402145525822
+=== log((-3.7), 3.0)
+=> NAN
+=== fmod((-3.7), 0.5)
+=> -0.20000000000000018
+=== fdiv((-3.7), 0.5)
+=> -7.4
+=== hypot((-3.7), 0.5)
+=> 3.733630940518894
+=== log((-3.7), 0.5)
+=> NAN
+=== fmod((-3.7), INF)
+=> -3.7
+=== fdiv((-3.7), INF)
+=> -0.0
+=== hypot((-3.7), INF)
+=> INF
+=== log((-3.7), INF)
+=> NAN
+=== fmod((-3.7), NAN)
+=> NAN
+=== fdiv((-3.7), NAN)
+=> NAN
+=== hypot((-3.7), NAN)
+=> NAN
+=== log((-3.7), NAN)
+=> NAN
+=== fmod((-3.7), (-7.5))
+=> -3.7
+=== fdiv((-3.7), (-7.5))
+=> 0.49333333333333335
+=== hypot((-3.7), (-7.5))
+=> 8.363013810822029
+=== log((-3.7), (-7.5))
+!! ValueError: log(): Argument #2 ($base) must be greater than 0
+=== abs(10.0)
+=> 10.0
+=== floor(10.0)
+=> 10.0
+=== ceil(10.0)
+=> 10.0
+=== deg2rad(10.0)
+=> 0.17453292519943295
+=== rad2deg(10.0)
+=> 572.9577951308232
+=== log(10.0)
+=> 2.302585092994046
+=== is_nan(10.0)
+=> false
+=== fmod(10.0, 0.0)
+=> NAN
+=== fdiv(10.0, 0.0)
+=> INF
+=== hypot(10.0, 0.0)
+=> 10.0
+=== log(10.0, 0.0)
+!! ValueError: log(): Argument #2 ($base) must be greater than 0
+=== fmod(10.0, (-0.0))
+=> NAN
+=== fdiv(10.0, (-0.0))
+=> -INF
+=== hypot(10.0, (-0.0))
+=> 10.0
+=== log(10.0, (-0.0))
+!! ValueError: log(): Argument #2 ($base) must be greater than 0
+=== fmod(10.0, 1.0)
+=> 0.0
+=== fdiv(10.0, 1.0)
+=> 10.0
+=== hypot(10.0, 1.0)
+=> 10.04987562112089
+=== log(10.0, 1.0)
+=> NAN
+=== fmod(10.0, 2.0)
+=> 0.0
+=== fdiv(10.0, 2.0)
+=> 5.0
+=== hypot(10.0, 2.0)
+=> 10.198039027185569
+=== log(10.0, 2.0)
+=> 3.321928094887362
+=== fmod(10.0, 10.0)
+=> 0.0
+=== fdiv(10.0, 10.0)
+=> 1.0
+=== hypot(10.0, 10.0)
+=> 14.142135623730951
+=== log(10.0, 10.0)
+=> 1.0
+=== fmod(10.0, (-4.0))
+=> 2.0
+=== fdiv(10.0, (-4.0))
+=> -2.5
+=== hypot(10.0, (-4.0))
+=> 10.770329614269007
+=== log(10.0, (-4.0))
+!! ValueError: log(): Argument #2 ($base) must be greater than 0
+=== fmod(10.0, 3.0)
+=> 1.0
+=== fdiv(10.0, 3.0)
+=> 3.3333333333333335
+=== hypot(10.0, 3.0)
+=> 10.44030650891055
+=== log(10.0, 3.0)
+=> 2.095903274289385
+=== fmod(10.0, 0.5)
+=> 0.0
+=== fdiv(10.0, 0.5)
+=> 20.0
+=== hypot(10.0, 0.5)
+=> 10.012492197250394
+=== log(10.0, 0.5)
+=> -3.3219280948873626
+=== fmod(10.0, INF)
+=> 10.0
+=== fdiv(10.0, INF)
+=> 0.0
+=== hypot(10.0, INF)
+=> INF
+=== log(10.0, INF)
+=> 0.0
+=== fmod(10.0, NAN)
+=> NAN
+=== fdiv(10.0, NAN)
+=> NAN
+=== hypot(10.0, NAN)
+=> NAN
+=== log(10.0, NAN)
+=> NAN
+=== fmod(10.0, (-7.5))
+=> 2.5
+=== fdiv(10.0, (-7.5))
+=> -1.3333333333333333
+=== hypot(10.0, (-7.5))
+=> 12.5
+=== log(10.0, (-7.5))
+!! ValueError: log(): Argument #2 ($base) must be greater than 0
+=== abs(100.0)
+=> 100.0
+=== floor(100.0)
+=> 100.0
+=== ceil(100.0)
+=> 100.0
+=== deg2rad(100.0)
+=> 1.7453292519943295
+=== rad2deg(100.0)
+=> 5729.577951308232
+=== log(100.0)
+=> 4.605170185988092
+=== is_nan(100.0)
+=> false
+=== fmod(100.0, 0.0)
+=> NAN
+=== fdiv(100.0, 0.0)
+=> INF
+=== hypot(100.0, 0.0)
+=> 100.0
+=== log(100.0, 0.0)
+!! ValueError: log(): Argument #2 ($base) must be greater than 0
+=== fmod(100.0, (-0.0))
+=> NAN
+=== fdiv(100.0, (-0.0))
+=> -INF
+=== hypot(100.0, (-0.0))
+=> 100.0
+=== log(100.0, (-0.0))
+!! ValueError: log(): Argument #2 ($base) must be greater than 0
+=== fmod(100.0, 1.0)
+=> 0.0
+=== fdiv(100.0, 1.0)
+=> 100.0
+=== hypot(100.0, 1.0)
+=> 100.00499987500625
+=== log(100.0, 1.0)
+=> NAN
+=== fmod(100.0, 2.0)
+=> 0.0
+=== fdiv(100.0, 2.0)
+=> 50.0
+=== hypot(100.0, 2.0)
+=> 100.0199980003999
+=== log(100.0, 2.0)
+=> 6.643856189774724
+=== fmod(100.0, 10.0)
+=> 0.0
+=== fdiv(100.0, 10.0)
+=> 10.0
+=== hypot(100.0, 10.0)
+=> 100.4987562112089
+=== log(100.0, 10.0)
+=> 2.0
+=== fmod(100.0, (-4.0))
+=> 0.0
+=== fdiv(100.0, (-4.0))
+=> -25.0
+=== hypot(100.0, (-4.0))
+=> 100.07996802557443
+=== log(100.0, (-4.0))
+!! ValueError: log(): Argument #2 ($base) must be greater than 0
+=== fmod(100.0, 3.0)
+=> 1.0
+=== fdiv(100.0, 3.0)
+=> 33.333333333333336
+=== hypot(100.0, 3.0)
+=> 100.04498987955368
+=== log(100.0, 3.0)
+=> 4.19180654857877
+=== fmod(100.0, 0.5)
+=> 0.0
+=== fdiv(100.0, 0.5)
+=> 200.0
+=== hypot(100.0, 0.5)
+=> 100.0012499921876
+=== log(100.0, 0.5)
+=> -6.643856189774725
+=== fmod(100.0, INF)
+=> 100.0
+=== fdiv(100.0, INF)
+=> 0.0
+=== hypot(100.0, INF)
+=> INF
+=== log(100.0, INF)
+=> 0.0
+=== fmod(100.0, NAN)
+=> NAN
+=== fdiv(100.0, NAN)
+=> NAN
+=== hypot(100.0, NAN)
+=> NAN
+=== log(100.0, NAN)
+=> NAN
+=== fmod(100.0, (-7.5))
+=> 2.5
+=== fdiv(100.0, (-7.5))
+=> -13.333333333333334
+=== hypot(100.0, (-7.5))
+=> 100.2808556006579
+=== log(100.0, (-7.5))
+!! ValueError: log(): Argument #2 ($base) must be greater than 0
+=== abs(1000000000000000.0)
+=> 1000000000000000.0
+=== floor(1000000000000000.0)
+=> 1000000000000000.0
+=== ceil(1000000000000000.0)
+=> 1000000000000000.0
+=== deg2rad(1000000000000000.0)
+=> 17453292519943.295
+=== rad2deg(1000000000000000.0)
+=> 57295779513082320.0
+=== log(1000000000000000.0)
+=> 34.538776394910684
+=== is_nan(1000000000000000.0)
+=> false
+=== fmod(1000000000000000.0, 0.0)
+=> NAN
+=== fdiv(1000000000000000.0, 0.0)
+=> INF
+=== hypot(1000000000000000.0, 0.0)
+=> 1000000000000000.0
+=== log(1000000000000000.0, 0.0)
+!! ValueError: log(): Argument #2 ($base) must be greater than 0
+=== fmod(1000000000000000.0, (-0.0))
+=> NAN
+=== fdiv(1000000000000000.0, (-0.0))
+=> -INF
+=== hypot(1000000000000000.0, (-0.0))
+=> 1000000000000000.0
+=== log(1000000000000000.0, (-0.0))
+!! ValueError: log(): Argument #2 ($base) must be greater than 0
+=== fmod(1000000000000000.0, 1.0)
+=> 0.0
+=== fdiv(1000000000000000.0, 1.0)
+=> 1000000000000000.0
+=== hypot(1000000000000000.0, 1.0)
+=> 1000000000000000.0
+=== log(1000000000000000.0, 1.0)
+=> NAN
+=== fmod(1000000000000000.0, 2.0)
+=> 0.0
+=== fdiv(1000000000000000.0, 2.0)
+=> 500000000000000.0
+=== hypot(1000000000000000.0, 2.0)
+=> 1000000000000000.0
+=== log(1000000000000000.0, 2.0)
+=> 49.82892142331043
+=== fmod(1000000000000000.0, 10.0)
+=> 0.0
+=== fdiv(1000000000000000.0, 10.0)
+=> 100000000000000.0
+=== hypot(1000000000000000.0, 10.0)
+=> 1000000000000000.0
+=== log(1000000000000000.0, 10.0)
+=> 15.0
+=== fmod(1000000000000000.0, (-4.0))
+=> 0.0
+=== fdiv(1000000000000000.0, (-4.0))
+=> -250000000000000.0
+=== hypot(1000000000000000.0, (-4.0))
+=> 1000000000000000.0
+=== log(1000000000000000.0, (-4.0))
+!! ValueError: log(): Argument #2 ($base) must be greater than 0
+=== fmod(1000000000000000.0, 3.0)
+=> 1.0
+=== fdiv(1000000000000000.0, 3.0)
+=> 333333333333333.3
+=== hypot(1000000000000000.0, 3.0)
+=> 1000000000000000.0
+=== log(1000000000000000.0, 3.0)
+=> 31.438549114340766
+=== fmod(1000000000000000.0, 0.5)
+=> 0.0
+=== fdiv(1000000000000000.0, 0.5)
+=> 2000000000000000.0
+=== hypot(1000000000000000.0, 0.5)
+=> 1000000000000000.0
+=== log(1000000000000000.0, 0.5)
+=> -49.82892142331043
+=== fmod(1000000000000000.0, INF)
+=> 1000000000000000.0
+=== fdiv(1000000000000000.0, INF)
+=> 0.0
+=== hypot(1000000000000000.0, INF)
+=> INF
+=== log(1000000000000000.0, INF)
+=> 0.0
+=== fmod(1000000000000000.0, NAN)
+=> NAN
+=== fdiv(1000000000000000.0, NAN)
+=> NAN
+=== hypot(1000000000000000.0, NAN)
+=> NAN
+=== log(1000000000000000.0, NAN)
+=> NAN
+=== fmod(1000000000000000.0, (-7.5))
+=> 2.5
+=== fdiv(1000000000000000.0, (-7.5))
+=> -133333333333333.33
+=== hypot(1000000000000000.0, (-7.5))
+=> 1000000000000000.0
+=== log(1000000000000000.0, (-7.5))
+!! ValueError: log(): Argument #2 ($base) must be greater than 0
+=== abs(9.223372036854776E+18)
+=> 9.223372036854776E+18
+=== floor(9.223372036854776E+18)
+=> 9.223372036854776E+18
+=== ceil(9.223372036854776E+18)
+=> 9.223372036854776E+18
+=== deg2rad(9.223372036854776E+18)
+=> 1.6097821017949162E+17
+=== rad2deg(9.223372036854776E+18)
+=> 5.2846029059076024E+20
+=== log(9.223372036854776E+18)
+=> 43.66827237527655
+=== is_nan(9.223372036854776E+18)
+=> false
+=== fmod(9.223372036854776E+18, 0.0)
+=> NAN
+=== fdiv(9.223372036854776E+18, 0.0)
+=> INF
+=== hypot(9.223372036854776E+18, 0.0)
+=> 9.223372036854776E+18
+=== log(9.223372036854776E+18, 0.0)
+!! ValueError: log(): Argument #2 ($base) must be greater than 0
+=== fmod(9.223372036854776E+18, (-0.0))
+=> NAN
+=== fdiv(9.223372036854776E+18, (-0.0))
+=> -INF
+=== hypot(9.223372036854776E+18, (-0.0))
+=> 9.223372036854776E+18
+=== log(9.223372036854776E+18, (-0.0))
+!! ValueError: log(): Argument #2 ($base) must be greater than 0
+=== fmod(9.223372036854776E+18, 1.0)
+=> 0.0
+=== fdiv(9.223372036854776E+18, 1.0)
+=> 9.223372036854776E+18
+=== hypot(9.223372036854776E+18, 1.0)
+=> 9.223372036854776E+18
+=== log(9.223372036854776E+18, 1.0)
+=> NAN
+=== fmod(9.223372036854776E+18, 2.0)
+=> 0.0
+=== fdiv(9.223372036854776E+18, 2.0)
+=> 4.611686018427388E+18
+=== hypot(9.223372036854776E+18, 2.0)
+=> 9.223372036854776E+18
+=== log(9.223372036854776E+18, 2.0)
+=> 63.0
+=== fmod(9.223372036854776E+18, 10.0)
+=> 8.0
+=== fdiv(9.223372036854776E+18, 10.0)
+=> 9.223372036854776E+17
+=== hypot(9.223372036854776E+18, 10.0)
+=> 9.223372036854776E+18
+=== log(9.223372036854776E+18, 10.0)
+=> 18.964889726830815
+=== fmod(9.223372036854776E+18, (-4.0))
+=> 0.0
+=== fdiv(9.223372036854776E+18, (-4.0))
+=> -2.305843009213694E+18
+=== hypot(9.223372036854776E+18, (-4.0))
+=> 9.223372036854776E+18
+=== log(9.223372036854776E+18, (-4.0))
+!! ValueError: log(): Argument #2 ($base) must be greater than 0
+=== fmod(9.223372036854776E+18, 3.0)
+=> 2.0
+=== fdiv(9.223372036854776E+18, 3.0)
+=> 3.0744573456182584E+18
+=== hypot(9.223372036854776E+18, 3.0)
+=> 9.223372036854776E+18
+=== log(9.223372036854776E+18, 3.0)
+=> 39.74857447500181
+=== fmod(9.223372036854776E+18, 0.5)
+=> 0.0
+=== fdiv(9.223372036854776E+18, 0.5)
+=> 1.8446744073709552E+19
+=== hypot(9.223372036854776E+18, 0.5)
+=> 9.223372036854776E+18
+=== log(9.223372036854776E+18, 0.5)
+=> -63.0
+=== fmod(9.223372036854776E+18, INF)
+=> 9.223372036854776E+18
+=== fdiv(9.223372036854776E+18, INF)
+=> 0.0
+=== hypot(9.223372036854776E+18, INF)
+=> INF
+=== log(9.223372036854776E+18, INF)
+=> 0.0
+=== fmod(9.223372036854776E+18, NAN)
+=> NAN
+=== fdiv(9.223372036854776E+18, NAN)
+=> NAN
+=== hypot(9.223372036854776E+18, NAN)
+=> NAN
+=== log(9.223372036854776E+18, NAN)
+=> NAN
+=== fmod(9.223372036854776E+18, (-7.5))
+=> 0.5
+=== fdiv(9.223372036854776E+18, (-7.5))
+=> -1.2297829382473034E+18
+=== hypot(9.223372036854776E+18, (-7.5))
+=> 9.223372036854776E+18
+=== log(9.223372036854776E+18, (-7.5))
+!! ValueError: log(): Argument #2 ($base) must be greater than 0
+=== abs(1.0E+100)
+=> 1.0E+100
+=== floor(1.0E+100)
+=> 1.0E+100
+=== ceil(1.0E+100)
+=> 1.0E+100
+=== deg2rad(1.0E+100)
+=> 1.7453292519943295E+98
+=== rad2deg(1.0E+100)
+=> 5.729577951308232E+101
+=== log(1.0E+100)
+=> 230.25850929940458
+=== is_nan(1.0E+100)
+=> false
+=== fmod(1.0E+100, 0.0)
+=> NAN
+=== fdiv(1.0E+100, 0.0)
+=> INF
+=== hypot(1.0E+100, 0.0)
+=> 1.0E+100
+=== log(1.0E+100, 0.0)
+!! ValueError: log(): Argument #2 ($base) must be greater than 0
+=== fmod(1.0E+100, (-0.0))
+=> NAN
+=== fdiv(1.0E+100, (-0.0))
+=> -INF
+=== hypot(1.0E+100, (-0.0))
+=> 1.0E+100
+=== log(1.0E+100, (-0.0))
+!! ValueError: log(): Argument #2 ($base) must be greater than 0
+=== fmod(1.0E+100, 1.0)
+=> 0.0
+=== fdiv(1.0E+100, 1.0)
+=> 1.0E+100
+=== hypot(1.0E+100, 1.0)
+=> 1.0E+100
+=== log(1.0E+100, 1.0)
+=> NAN
+=== fmod(1.0E+100, 2.0)
+=> 0.0
+=== fdiv(1.0E+100, 2.0)
+=> 5.0E+99
+=== hypot(1.0E+100, 2.0)
+=> 1.0E+100
+=== log(1.0E+100, 2.0)
+=> 332.19280948873626
+=== fmod(1.0E+100, 10.0)
+=> 4.0
+=== fdiv(1.0E+100, 10.0)
+=> 1.0E+99
+=== hypot(1.0E+100, 10.0)
+=> 1.0E+100
+=== log(1.0E+100, 10.0)
+=> 100.0
+=== fmod(1.0E+100, (-4.0))
+=> 0.0
+=== fdiv(1.0E+100, (-4.0))
+=> -2.5E+99
+=== hypot(1.0E+100, (-4.0))
+=> 1.0E+100
+=== log(1.0E+100, (-4.0))
+!! ValueError: log(): Argument #2 ($base) must be greater than 0
+=== fmod(1.0E+100, 3.0)
+=> 1.0
+=== fdiv(1.0E+100, 3.0)
+=> 3.333333333333333E+99
+=== hypot(1.0E+100, 3.0)
+=> 1.0E+100
+=== log(1.0E+100, 3.0)
+=> 209.59032742893845
+=== fmod(1.0E+100, 0.5)
+=> 0.0
+=== fdiv(1.0E+100, 0.5)
+=> 2.0E+100
+=== hypot(1.0E+100, 0.5)
+=> 1.0E+100
+=== log(1.0E+100, 0.5)
+=> -332.19280948873626
+=== fmod(1.0E+100, INF)
+=> 1.0E+100
+=== fdiv(1.0E+100, INF)
+=> 0.0
+=== hypot(1.0E+100, INF)
+=> INF
+=== log(1.0E+100, INF)
+=> 0.0
+=== fmod(1.0E+100, NAN)
+=> NAN
+=== fdiv(1.0E+100, NAN)
+=> NAN
+=== hypot(1.0E+100, NAN)
+=> NAN
+=== log(1.0E+100, NAN)
+=> NAN
+=== fmod(1.0E+100, (-7.5))
+=> 4.0
+=== fdiv(1.0E+100, (-7.5))
+=> -1.3333333333333333E+99
+=== hypot(1.0E+100, (-7.5))
+=> 1.0E+100
+=== log(1.0E+100, (-7.5))
+!! ValueError: log(): Argument #2 ($base) must be greater than 0
+=== abs((-1.0E+100))
+=> 1.0E+100
+=== floor((-1.0E+100))
+=> -1.0E+100
+=== ceil((-1.0E+100))
+=> -1.0E+100
+=== deg2rad((-1.0E+100))
+=> -1.7453292519943295E+98
+=== rad2deg((-1.0E+100))
+=> -5.729577951308232E+101
+=== log((-1.0E+100))
+=> NAN
+=== is_nan((-1.0E+100))
+=> false
+=== fmod((-1.0E+100), 0.0)
+=> NAN
+=== fdiv((-1.0E+100), 0.0)
+=> -INF
+=== hypot((-1.0E+100), 0.0)
+=> 1.0E+100
+=== log((-1.0E+100), 0.0)
+!! ValueError: log(): Argument #2 ($base) must be greater than 0
+=== fmod((-1.0E+100), (-0.0))
+=> NAN
+=== fdiv((-1.0E+100), (-0.0))
+=> INF
+=== hypot((-1.0E+100), (-0.0))
+=> 1.0E+100
+=== log((-1.0E+100), (-0.0))
+!! ValueError: log(): Argument #2 ($base) must be greater than 0
+=== fmod((-1.0E+100), 1.0)
+=> -0.0
+=== fdiv((-1.0E+100), 1.0)
+=> -1.0E+100
+=== hypot((-1.0E+100), 1.0)
+=> 1.0E+100
+=== log((-1.0E+100), 1.0)
+=> NAN
+=== fmod((-1.0E+100), 2.0)
+=> -0.0
+=== fdiv((-1.0E+100), 2.0)
+=> -5.0E+99
+=== hypot((-1.0E+100), 2.0)
+=> 1.0E+100
+=== log((-1.0E+100), 2.0)
+=> NAN
+=== fmod((-1.0E+100), 10.0)
+=> -4.0
+=== fdiv((-1.0E+100), 10.0)
+=> -1.0E+99
+=== hypot((-1.0E+100), 10.0)
+=> 1.0E+100
+=== log((-1.0E+100), 10.0)
+=> NAN
+=== fmod((-1.0E+100), (-4.0))
+=> -0.0
+=== fdiv((-1.0E+100), (-4.0))
+=> 2.5E+99
+=== hypot((-1.0E+100), (-4.0))
+=> 1.0E+100
+=== log((-1.0E+100), (-4.0))
+!! ValueError: log(): Argument #2 ($base) must be greater than 0
+=== fmod((-1.0E+100), 3.0)
+=> -1.0
+=== fdiv((-1.0E+100), 3.0)
+=> -3.333333333333333E+99
+=== hypot((-1.0E+100), 3.0)
+=> 1.0E+100
+=== log((-1.0E+100), 3.0)
+=> NAN
+=== fmod((-1.0E+100), 0.5)
+=> -0.0
+=== fdiv((-1.0E+100), 0.5)
+=> -2.0E+100
+=== hypot((-1.0E+100), 0.5)
+=> 1.0E+100
+=== log((-1.0E+100), 0.5)
+=> NAN
+=== fmod((-1.0E+100), INF)
+=> -1.0E+100
+=== fdiv((-1.0E+100), INF)
+=> -0.0
+=== hypot((-1.0E+100), INF)
+=> INF
+=== log((-1.0E+100), INF)
+=> NAN
+=== fmod((-1.0E+100), NAN)
+=> NAN
+=== fdiv((-1.0E+100), NAN)
+=> NAN
+=== hypot((-1.0E+100), NAN)
+=> NAN
+=== log((-1.0E+100), NAN)
+=> NAN
+=== fmod((-1.0E+100), (-7.5))
+=> -4.0
+=== fdiv((-1.0E+100), (-7.5))
+=> 1.3333333333333333E+99
+=== hypot((-1.0E+100), (-7.5))
+=> 1.0E+100
+=== log((-1.0E+100), (-7.5))
+!! ValueError: log(): Argument #2 ($base) must be greater than 0
+=== abs(1.0E-10)
+=> 1.0E-10
+=== floor(1.0E-10)
+=> 0.0
+=== ceil(1.0E-10)
+=> 1.0
+=== deg2rad(1.0E-10)
+=> 1.7453292519943296E-12
+=== rad2deg(1.0E-10)
+=> 5.729577951308233E-9
+=== log(1.0E-10)
+=> -23.025850929940457
+=== is_nan(1.0E-10)
+=> false
+=== fmod(1.0E-10, 0.0)
+=> NAN
+=== fdiv(1.0E-10, 0.0)
+=> INF
+=== hypot(1.0E-10, 0.0)
+=> 1.0E-10
+=== log(1.0E-10, 0.0)
+!! ValueError: log(): Argument #2 ($base) must be greater than 0
+=== fmod(1.0E-10, (-0.0))
+=> NAN
+=== fdiv(1.0E-10, (-0.0))
+=> -INF
+=== hypot(1.0E-10, (-0.0))
+=> 1.0E-10
+=== log(1.0E-10, (-0.0))
+!! ValueError: log(): Argument #2 ($base) must be greater than 0
+=== fmod(1.0E-10, 1.0)
+=> 1.0E-10
+=== fdiv(1.0E-10, 1.0)
+=> 1.0E-10
+=== hypot(1.0E-10, 1.0)
+=> 1.0
+=== log(1.0E-10, 1.0)
+=> NAN
+=== fmod(1.0E-10, 2.0)
+=> 1.0E-10
+=== fdiv(1.0E-10, 2.0)
+=> 5.0E-11
+=== hypot(1.0E-10, 2.0)
+=> 2.0
+=== log(1.0E-10, 2.0)
+=> -33.219280948873624
+=== fmod(1.0E-10, 10.0)
+=> 1.0E-10
+=== fdiv(1.0E-10, 10.0)
+=> 1.0000000000000001E-11
+=== hypot(1.0E-10, 10.0)
+=> 10.0
+=== log(1.0E-10, 10.0)
+=> -10.0
+=== fmod(1.0E-10, (-4.0))
+=> 1.0E-10
+=== fdiv(1.0E-10, (-4.0))
+=> -2.5E-11
+=== hypot(1.0E-10, (-4.0))
+=> 4.0
+=== log(1.0E-10, (-4.0))
+!! ValueError: log(): Argument #2 ($base) must be greater than 0
+=== fmod(1.0E-10, 3.0)
+=> 1.0E-10
+=== fdiv(1.0E-10, 3.0)
+=> 3.3333333333333335E-11
+=== hypot(1.0E-10, 3.0)
+=> 3.0
+=== log(1.0E-10, 3.0)
+=> -20.959032742893843
+=== fmod(1.0E-10, 0.5)
+=> 1.0E-10
+=== fdiv(1.0E-10, 0.5)
+=> 2.0E-10
+=== hypot(1.0E-10, 0.5)
+=> 0.5
+=== log(1.0E-10, 0.5)
+=> 33.219280948873624
+=== fmod(1.0E-10, INF)
+=> 1.0E-10
+=== fdiv(1.0E-10, INF)
+=> 0.0
+=== hypot(1.0E-10, INF)
+=> INF
+=== log(1.0E-10, INF)
+=> -0.0
+=== fmod(1.0E-10, NAN)
+=> NAN
+=== fdiv(1.0E-10, NAN)
+=> NAN
+=== hypot(1.0E-10, NAN)
+=> NAN
+=== log(1.0E-10, NAN)
+=> NAN
+=== fmod(1.0E-10, (-7.5))
+=> 1.0E-10
+=== fdiv(1.0E-10, (-7.5))
+=> -1.3333333333333334E-11
+=== hypot(1.0E-10, (-7.5))
+=> 7.5
+=== log(1.0E-10, (-7.5))
+!! ValueError: log(): Argument #2 ($base) must be greater than 0
+=== abs(123.456)
+=> 123.456
+=== floor(123.456)
+=> 123.0
+=== ceil(123.456)
+=> 124.0
+=== deg2rad(123.456)
+=> 2.1547136813421197
+=== rad2deg(123.456)
+=> 7073.507755567092
+=== log(123.456)
+=> 4.815884817283264
+=== is_nan(123.456)
+=> false
+=== fmod(123.456, 0.0)
+=> NAN
+=== fdiv(123.456, 0.0)
+=> INF
+=== hypot(123.456, 0.0)
+=> 123.456
+=== log(123.456, 0.0)
+!! ValueError: log(): Argument #2 ($base) must be greater than 0
+=== fmod(123.456, (-0.0))
+=> NAN
+=== fdiv(123.456, (-0.0))
+=> -INF
+=== hypot(123.456, (-0.0))
+=> 123.456
+=== log(123.456, (-0.0))
+!! ValueError: log(): Argument #2 ($base) must be greater than 0
+=== fmod(123.456, 1.0)
+=> 0.45600000000000307
+=== fdiv(123.456, 1.0)
+=> 123.456
+=== hypot(123.456, 1.0)
+=> 123.46004995949095
+=== log(123.456, 1.0)
+=> NAN
+=== fmod(123.456, 2.0)
+=> 1.456000000000003
+=== fdiv(123.456, 2.0)
+=> 61.728
+=== hypot(123.456, 2.0)
+=> 123.47219904091772
+=== log(123.456, 2.0)
+=> 6.947853143387016
+=== fmod(123.456, 10.0)
+=> 3.456000000000003
+=== fdiv(123.456, 10.0)
+=> 12.345600000000001
+=== hypot(123.456, 10.0)
+=> 123.86034044842603
+=== log(123.456, 10.0)
+=> 2.0915122016277716
+=== fmod(123.456, (-4.0))
+=> 3.456000000000003
+=== fdiv(123.456, (-4.0))
+=> -30.864
+=== hypot(123.456, (-4.0))
+=> 123.52078341720474
+=== log(123.456, (-4.0))
+!! ValueError: log(): Argument #2 ($base) must be greater than 0
+=== fmod(123.456, 3.0)
+=> 0.45600000000000307
+=== fdiv(123.456, 3.0)
+=> 41.152
+=== hypot(123.456, 3.0)
+=> 123.49244485392619
+=== log(123.456, 3.0)
+=> 4.383607271607846
+=== fmod(123.456, 0.5)
+=> 0.45600000000000307
+=== fdiv(123.456, 0.5)
+=> 246.912
+=== hypot(123.456, 0.5)
+=> 123.45701250232811
+=== log(123.456, 0.5)
+=> -6.947853143387016
+=== fmod(123.456, INF)
+=> 123.456
+=== fdiv(123.456, INF)
+=> 0.0
+=== hypot(123.456, INF)
+=> INF
+=== log(123.456, INF)
+=> 0.0
+=== fmod(123.456, NAN)
+=> NAN
+=== fdiv(123.456, NAN)
+=> NAN
+=== hypot(123.456, NAN)
+=> NAN
+=== log(123.456, NAN)
+=> NAN
+=== fmod(123.456, (-7.5))
+=> 3.456000000000003
+=== fdiv(123.456, (-7.5))
+=> -16.4608
+=== hypot(123.456, (-7.5))
+=> 123.68360415188425
+=== log(123.456, (-7.5))
+!! ValueError: log(): Argument #2 ($base) must be greater than 0
+=== abs((-123.456))
+=> 123.456
+=== floor((-123.456))
+=> -124.0
+=== ceil((-123.456))
+=> -123.0
+=== deg2rad((-123.456))
+=> -2.1547136813421197
+=== rad2deg((-123.456))
+=> -7073.507755567092
+=== log((-123.456))
+=> NAN
+=== is_nan((-123.456))
+=> false
+=== fmod((-123.456), 0.0)
+=> NAN
+=== fdiv((-123.456), 0.0)
+=> -INF
+=== hypot((-123.456), 0.0)
+=> 123.456
+=== log((-123.456), 0.0)
+!! ValueError: log(): Argument #2 ($base) must be greater than 0
+=== fmod((-123.456), (-0.0))
+=> NAN
+=== fdiv((-123.456), (-0.0))
+=> INF
+=== hypot((-123.456), (-0.0))
+=> 123.456
+=== log((-123.456), (-0.0))
+!! ValueError: log(): Argument #2 ($base) must be greater than 0
+=== fmod((-123.456), 1.0)
+=> -0.45600000000000307
+=== fdiv((-123.456), 1.0)
+=> -123.456
+=== hypot((-123.456), 1.0)
+=> 123.46004995949095
+=== log((-123.456), 1.0)
+=> NAN
+=== fmod((-123.456), 2.0)
+=> -1.456000000000003
+=== fdiv((-123.456), 2.0)
+=> -61.728
+=== hypot((-123.456), 2.0)
+=> 123.47219904091772
+=== log((-123.456), 2.0)
+=> NAN
+=== fmod((-123.456), 10.0)
+=> -3.456000000000003
+=== fdiv((-123.456), 10.0)
+=> -12.345600000000001
+=== hypot((-123.456), 10.0)
+=> 123.86034044842603
+=== log((-123.456), 10.0)
+=> NAN
+=== fmod((-123.456), (-4.0))
+=> -3.456000000000003
+=== fdiv((-123.456), (-4.0))
+=> 30.864
+=== hypot((-123.456), (-4.0))
+=> 123.52078341720474
+=== log((-123.456), (-4.0))
+!! ValueError: log(): Argument #2 ($base) must be greater than 0
+=== fmod((-123.456), 3.0)
+=> -0.45600000000000307
+=== fdiv((-123.456), 3.0)
+=> -41.152
+=== hypot((-123.456), 3.0)
+=> 123.49244485392619
+=== log((-123.456), 3.0)
+=> NAN
+=== fmod((-123.456), 0.5)
+=> -0.45600000000000307
+=== fdiv((-123.456), 0.5)
+=> -246.912
+=== hypot((-123.456), 0.5)
+=> 123.45701250232811
+=== log((-123.456), 0.5)
+=> NAN
+=== fmod((-123.456), INF)
+=> -123.456
+=== fdiv((-123.456), INF)
+=> -0.0
+=== hypot((-123.456), INF)
+=> INF
+=== log((-123.456), INF)
+=> NAN
+=== fmod((-123.456), NAN)
+=> NAN
+=== fdiv((-123.456), NAN)
+=> NAN
+=== hypot((-123.456), NAN)
+=> NAN
+=== log((-123.456), NAN)
+=> NAN
+=== fmod((-123.456), (-7.5))
+=> -3.456000000000003
+=== fdiv((-123.456), (-7.5))
+=> 16.4608
+=== hypot((-123.456), (-7.5))
+=> 123.68360415188425
+=== log((-123.456), (-7.5))
+!! ValueError: log(): Argument #2 ($base) must be greater than 0
+=== abs(INF)
+=> INF
+=== floor(INF)
+=> INF
+=== ceil(INF)
+=> INF
+=== deg2rad(INF)
+=> INF
+=== rad2deg(INF)
+=> INF
+=== log(INF)
+=> INF
+=== is_nan(INF)
+=> false
+=== fmod(INF, 0.0)
+=> NAN
+=== fdiv(INF, 0.0)
+=> INF
+=== hypot(INF, 0.0)
+=> INF
+=== log(INF, 0.0)
+!! ValueError: log(): Argument #2 ($base) must be greater than 0
+=== fmod(INF, (-0.0))
+=> NAN
+=== fdiv(INF, (-0.0))
+=> -INF
+=== hypot(INF, (-0.0))
+=> INF
+=== log(INF, (-0.0))
+!! ValueError: log(): Argument #2 ($base) must be greater than 0
+=== fmod(INF, 1.0)
+=> NAN
+=== fdiv(INF, 1.0)
+=> INF
+=== hypot(INF, 1.0)
+=> INF
+=== log(INF, 1.0)
+=> NAN
+=== fmod(INF, 2.0)
+=> NAN
+=== fdiv(INF, 2.0)
+=> INF
+=== hypot(INF, 2.0)
+=> INF
+=== log(INF, 2.0)
+=> INF
+=== fmod(INF, 10.0)
+=> NAN
+=== fdiv(INF, 10.0)
+=> INF
+=== hypot(INF, 10.0)
+=> INF
+=== log(INF, 10.0)
+=> INF
+=== fmod(INF, (-4.0))
+=> NAN
+=== fdiv(INF, (-4.0))
+=> -INF
+=== hypot(INF, (-4.0))
+=> INF
+=== log(INF, (-4.0))
+!! ValueError: log(): Argument #2 ($base) must be greater than 0
+=== fmod(INF, 3.0)
+=> NAN
+=== fdiv(INF, 3.0)
+=> INF
+=== hypot(INF, 3.0)
+=> INF
+=== log(INF, 3.0)
+=> INF
+=== fmod(INF, 0.5)
+=> NAN
+=== fdiv(INF, 0.5)
+=> INF
+=== hypot(INF, 0.5)
+=> INF
+=== log(INF, 0.5)
+=> -INF
+=== fmod(INF, INF)
+=> NAN
+=== fdiv(INF, INF)
+=> NAN
+=== hypot(INF, INF)
+=> INF
+=== log(INF, INF)
+=> NAN
+=== fmod(INF, NAN)
+=> NAN
+=== fdiv(INF, NAN)
+=> NAN
+=== hypot(INF, NAN)
+=> INF
+=== log(INF, NAN)
+=> NAN
+=== fmod(INF, (-7.5))
+=> NAN
+=== fdiv(INF, (-7.5))
+=> -INF
+=== hypot(INF, (-7.5))
+=> INF
+=== log(INF, (-7.5))
+!! ValueError: log(): Argument #2 ($base) must be greater than 0
+=== abs((-INF))
+=> INF
+=== floor((-INF))
+=> -INF
+=== ceil((-INF))
+=> -INF
+=== deg2rad((-INF))
+=> -INF
+=== rad2deg((-INF))
+=> -INF
+=== log((-INF))
+=> NAN
+=== is_nan((-INF))
+=> false
+=== fmod((-INF), 0.0)
+=> NAN
+=== fdiv((-INF), 0.0)
+=> -INF
+=== hypot((-INF), 0.0)
+=> INF
+=== log((-INF), 0.0)
+!! ValueError: log(): Argument #2 ($base) must be greater than 0
+=== fmod((-INF), (-0.0))
+=> NAN
+=== fdiv((-INF), (-0.0))
+=> INF
+=== hypot((-INF), (-0.0))
+=> INF
+=== log((-INF), (-0.0))
+!! ValueError: log(): Argument #2 ($base) must be greater than 0
+=== fmod((-INF), 1.0)
+=> NAN
+=== fdiv((-INF), 1.0)
+=> -INF
+=== hypot((-INF), 1.0)
+=> INF
+=== log((-INF), 1.0)
+=> NAN
+=== fmod((-INF), 2.0)
+=> NAN
+=== fdiv((-INF), 2.0)
+=> -INF
+=== hypot((-INF), 2.0)
+=> INF
+=== log((-INF), 2.0)
+=> NAN
+=== fmod((-INF), 10.0)
+=> NAN
+=== fdiv((-INF), 10.0)
+=> -INF
+=== hypot((-INF), 10.0)
+=> INF
+=== log((-INF), 10.0)
+=> NAN
+=== fmod((-INF), (-4.0))
+=> NAN
+=== fdiv((-INF), (-4.0))
+=> INF
+=== hypot((-INF), (-4.0))
+=> INF
+=== log((-INF), (-4.0))
+!! ValueError: log(): Argument #2 ($base) must be greater than 0
+=== fmod((-INF), 3.0)
+=> NAN
+=== fdiv((-INF), 3.0)
+=> -INF
+=== hypot((-INF), 3.0)
+=> INF
+=== log((-INF), 3.0)
+=> NAN
+=== fmod((-INF), 0.5)
+=> NAN
+=== fdiv((-INF), 0.5)
+=> -INF
+=== hypot((-INF), 0.5)
+=> INF
+=== log((-INF), 0.5)
+=> NAN
+=== fmod((-INF), INF)
+=> NAN
+=== fdiv((-INF), INF)
+=> NAN
+=== hypot((-INF), INF)
+=> INF
+=== log((-INF), INF)
+=> NAN
+=== fmod((-INF), NAN)
+=> NAN
+=== fdiv((-INF), NAN)
+=> NAN
+=== hypot((-INF), NAN)
+=> INF
+=== log((-INF), NAN)
+=> NAN
+=== fmod((-INF), (-7.5))
+=> NAN
+=== fdiv((-INF), (-7.5))
+=> INF
+=== hypot((-INF), (-7.5))
+=> INF
+=== log((-INF), (-7.5))
+!! ValueError: log(): Argument #2 ($base) must be greater than 0
+=== abs(NAN)
+=> NAN
+=== floor(NAN)
+=> NAN
+=== ceil(NAN)
+=> NAN
+=== deg2rad(NAN)
+=> NAN
+=== rad2deg(NAN)
+=> NAN
+=== log(NAN)
+=> NAN
+=== is_nan(NAN)
+=> true
+=== fmod(NAN, 0.0)
+=> NAN
+=== fdiv(NAN, 0.0)
+=> NAN
+=== hypot(NAN, 0.0)
+=> NAN
+=== log(NAN, 0.0)
+!! ValueError: log(): Argument #2 ($base) must be greater than 0
+=== fmod(NAN, (-0.0))
+=> NAN
+=== fdiv(NAN, (-0.0))
+=> NAN
+=== hypot(NAN, (-0.0))
+=> NAN
+=== log(NAN, (-0.0))
+!! ValueError: log(): Argument #2 ($base) must be greater than 0
+=== fmod(NAN, 1.0)
+=> NAN
+=== fdiv(NAN, 1.0)
+=> NAN
+=== hypot(NAN, 1.0)
+=> NAN
+=== log(NAN, 1.0)
+=> NAN
+=== fmod(NAN, 2.0)
+=> NAN
+=== fdiv(NAN, 2.0)
+=> NAN
+=== hypot(NAN, 2.0)
+=> NAN
+=== log(NAN, 2.0)
+=> NAN
+=== fmod(NAN, 10.0)
+=> NAN
+=== fdiv(NAN, 10.0)
+=> NAN
+=== hypot(NAN, 10.0)
+=> NAN
+=== log(NAN, 10.0)
+=> NAN
+=== fmod(NAN, (-4.0))
+=> NAN
+=== fdiv(NAN, (-4.0))
+=> NAN
+=== hypot(NAN, (-4.0))
+=> NAN
+=== log(NAN, (-4.0))
+!! ValueError: log(): Argument #2 ($base) must be greater than 0
+=== fmod(NAN, 3.0)
+=> NAN
+=== fdiv(NAN, 3.0)
+=> NAN
+=== hypot(NAN, 3.0)
+=> NAN
+=== log(NAN, 3.0)
+=> NAN
+=== fmod(NAN, 0.5)
+=> NAN
+=== fdiv(NAN, 0.5)
+=> NAN
+=== hypot(NAN, 0.5)
+=> NAN
+=== log(NAN, 0.5)
+=> NAN
+=== fmod(NAN, INF)
+=> NAN
+=== fdiv(NAN, INF)
+=> NAN
+=== hypot(NAN, INF)
+=> INF
+=== log(NAN, INF)
+=> NAN
+=== fmod(NAN, NAN)
+=> NAN
+=== fdiv(NAN, NAN)
+=> NAN
+=== hypot(NAN, NAN)
+=> NAN
+=== log(NAN, NAN)
+=> NAN
+=== fmod(NAN, (-7.5))
+=> NAN
+=== fdiv(NAN, (-7.5))
+=> NAN
+=== hypot(NAN, (-7.5))
+=> NAN
+=== log(NAN, (-7.5))
+!! ValueError: log(): Argument #2 ($base) must be greater than 0
+=== abs(3.141592653589793)
+=> 3.141592653589793
+=== floor(3.141592653589793)
+=> 3.0
+=== ceil(3.141592653589793)
+=> 4.0
+=== deg2rad(3.141592653589793)
+=> 0.05483113556160755
+=== rad2deg(3.141592653589793)
+=> 180.0
+=== log(3.141592653589793)
+=> 1.1447298858494002
+=== is_nan(3.141592653589793)
+=> false
+=== fmod(3.141592653589793, 0.0)
+=> NAN
+=== fdiv(3.141592653589793, 0.0)
+=> INF
+=== hypot(3.141592653589793, 0.0)
+=> 3.141592653589793
+=== log(3.141592653589793, 0.0)
+!! ValueError: log(): Argument #2 ($base) must be greater than 0
+=== fmod(3.141592653589793, (-0.0))
+=> NAN
+=== fdiv(3.141592653589793, (-0.0))
+=> -INF
+=== hypot(3.141592653589793, (-0.0))
+=> 3.141592653589793
+=== log(3.141592653589793, (-0.0))
+!! ValueError: log(): Argument #2 ($base) must be greater than 0
+=== fmod(3.141592653589793, 1.0)
+=> 0.14159265358979312
+=== fdiv(3.141592653589793, 1.0)
+=> 3.141592653589793
+=== hypot(3.141592653589793, 1.0)
+=> 3.296908309475615
+=== log(3.141592653589793, 1.0)
+=> NAN
+=== fmod(3.141592653589793, 2.0)
+=> 1.1415926535897931
+=== fdiv(3.141592653589793, 2.0)
+=> 1.5707963267948966
+=== hypot(3.141592653589793, 2.0)
+=> 3.724191778237173
+=== log(3.141592653589793, 2.0)
+=> 1.6514961294723187
+=== fmod(3.141592653589793, 10.0)
+=> 3.141592653589793
+=== fdiv(3.141592653589793, 10.0)
+=> 0.3141592653589793
+=== hypot(3.141592653589793, 10.0)
+=> 10.481870272097883
+=== log(3.141592653589793, 10.0)
+=> 0.4971498726941338
+=== fmod(3.141592653589793, (-4.0))
+=> 3.141592653589793
+=== fdiv(3.141592653589793, (-4.0))
+=> -0.7853981633974483
+=== hypot(3.141592653589793, (-4.0))
+=> 5.0862171012540704
+=== log(3.141592653589793, (-4.0))
+!! ValueError: log(): Argument #2 ($base) must be greater than 0
+=== fmod(3.141592653589793, 3.0)
+=> 0.14159265358979312
+=== fdiv(3.141592653589793, 3.0)
+=> 1.0471975511965976
+=== hypot(3.141592653589793, 3.0)
+=> 4.343915791206059
+=== log(3.141592653589793, 3.0)
+=> 1.0419780459921857
+=== fmod(3.141592653589793, 0.5)
+=> 0.14159265358979312
+=== fdiv(3.141592653589793, 0.5)
+=> 6.283185307179586
+=== hypot(3.141592653589793, 0.5)
+=> 3.181132565783664
+=== log(3.141592653589793, 0.5)
+=> -1.651496129472319
+=== fmod(3.141592653589793, INF)
+=> 3.141592653589793
+=== fdiv(3.141592653589793, INF)
+=> 0.0
+=== hypot(3.141592653589793, INF)
+=> INF
+=== log(3.141592653589793, INF)
+=> 0.0
+=== fmod(3.141592653589793, NAN)
+=> NAN
+=== fdiv(3.141592653589793, NAN)
+=> NAN
+=== hypot(3.141592653589793, NAN)
+=> NAN
+=== log(3.141592653589793, NAN)
+=> NAN
+=== fmod(3.141592653589793, (-7.5))
+=> 3.141592653589793
+=== fdiv(3.141592653589793, (-7.5))
+=> -0.41887902047863906
+=== hypot(3.141592653589793, (-7.5))
+=> 8.131396214740084
+=== log(3.141592653589793, (-7.5))
+!! ValueError: log(): Argument #2 ($base) must be greater than 0
+=== abs(0.1)
+=> 0.1
+=== floor(0.1)
+=> 0.0
+=== ceil(0.1)
+=> 1.0
+=== deg2rad(0.1)
+=> 0.0017453292519943296
+=== rad2deg(0.1)
+=> 5.729577951308232
+=== log(0.1)
+=> -2.3025850929940455
+=== is_nan(0.1)
+=> false
+=== fmod(0.1, 0.0)
+=> NAN
+=== fdiv(0.1, 0.0)
+=> INF
+=== hypot(0.1, 0.0)
+=> 0.1
+=== log(0.1, 0.0)
+!! ValueError: log(): Argument #2 ($base) must be greater than 0
+=== fmod(0.1, (-0.0))
+=> NAN
+=== fdiv(0.1, (-0.0))
+=> -INF
+=== hypot(0.1, (-0.0))
+=> 0.1
+=== log(0.1, (-0.0))
+!! ValueError: log(): Argument #2 ($base) must be greater than 0
+=== fmod(0.1, 1.0)
+=> 0.1
+=== fdiv(0.1, 1.0)
+=> 0.1
+=== hypot(0.1, 1.0)
+=> 1.004987562112089
+=== log(0.1, 1.0)
+=> NAN
+=== fmod(0.1, 2.0)
+=> 0.1
+=== fdiv(0.1, 2.0)
+=> 0.05
+=== hypot(0.1, 2.0)
+=> 2.0024984394500787
+=== log(0.1, 2.0)
+=> -3.321928094887362
+=== fmod(0.1, 10.0)
+=> 0.1
+=== fdiv(0.1, 10.0)
+=> 0.01
+=== hypot(0.1, 10.0)
+=> 10.000499987500625
+=== log(0.1, 10.0)
+=> -1.0
+=== fmod(0.1, (-4.0))
+=> 0.1
+=== fdiv(0.1, (-4.0))
+=> -0.025
+=== hypot(0.1, (-4.0))
+=> 4.001249804748511
+=== log(0.1, (-4.0))
+!! ValueError: log(): Argument #2 ($base) must be greater than 0
+=== fmod(0.1, 3.0)
+=> 0.1
+=== fdiv(0.1, 3.0)
+=> 0.03333333333333333
+=== hypot(0.1, 3.0)
+=> 3.0016662039607267
+=== log(0.1, 3.0)
+=> -2.0959032742893844
+=== fmod(0.1, 0.5)
+=> 0.1
+=== fdiv(0.1, 0.5)
+=> 0.2
+=== hypot(0.1, 0.5)
+=> 0.5099019513592785
+=== log(0.1, 0.5)
+=> 3.321928094887362
+=== fmod(0.1, INF)
+=> 0.1
+=== fdiv(0.1, INF)
+=> 0.0
+=== hypot(0.1, INF)
+=> INF
+=== log(0.1, INF)
+=> -0.0
+=== fmod(0.1, NAN)
+=> NAN
+=== fdiv(0.1, NAN)
+=> NAN
+=== hypot(0.1, NAN)
+=> NAN
+=== log(0.1, NAN)
+=> NAN
+=== fmod(0.1, (-7.5))
+=> 0.1
+=== fdiv(0.1, (-7.5))
+=> -0.013333333333333334
+=== hypot(0.1, (-7.5))
+=> 7.500666637039671
+=== log(0.1, (-7.5))
+!! ValueError: log(): Argument #2 ($base) must be greater than 0
+=== abs((-7.5))
+=> 7.5
+=== floor((-7.5))
+=> -8.0
+=== ceil((-7.5))
+=> -7.0
+=== deg2rad((-7.5))
+=> -0.1308996938995747
+=== rad2deg((-7.5))
+=> -429.71834634811745
+=== log((-7.5))
+=> NAN
+=== is_nan((-7.5))
+=> false
+=== fmod((-7.5), 0.0)
+=> NAN
+=== fdiv((-7.5), 0.0)
+=> -INF
+=== hypot((-7.5), 0.0)
+=> 7.5
+=== log((-7.5), 0.0)
+!! ValueError: log(): Argument #2 ($base) must be greater than 0
+=== fmod((-7.5), (-0.0))
+=> NAN
+=== fdiv((-7.5), (-0.0))
+=> INF
+=== hypot((-7.5), (-0.0))
+=> 7.5
+=== log((-7.5), (-0.0))
+!! ValueError: log(): Argument #2 ($base) must be greater than 0
+=== fmod((-7.5), 1.0)
+=> -0.5
+=== fdiv((-7.5), 1.0)
+=> -7.5
+=== hypot((-7.5), 1.0)
+=> 7.566372975210778
+=== log((-7.5), 1.0)
+=> NAN
+=== fmod((-7.5), 2.0)
+=> -1.5
+=== fdiv((-7.5), 2.0)
+=> -3.75
+=== hypot((-7.5), 2.0)
+=> 7.762087348130012
+=== log((-7.5), 2.0)
+=> NAN
+=== fmod((-7.5), 10.0)
+=> -7.5
+=== fdiv((-7.5), 10.0)
+=> -0.75
+=== hypot((-7.5), 10.0)
+=> 12.5
+=== log((-7.5), 10.0)
+=> NAN
+=== fmod((-7.5), (-4.0))
+=> -3.5
+=== fdiv((-7.5), (-4.0))
+=> 1.875
+=== hypot((-7.5), (-4.0))
+=> 8.5
+=== log((-7.5), (-4.0))
+!! ValueError: log(): Argument #2 ($base) must be greater than 0
+=== fmod((-7.5), 3.0)
+=> -1.5
+=== fdiv((-7.5), 3.0)
+=> -2.5
+=== hypot((-7.5), 3.0)
+=> 8.077747210701755
+=== log((-7.5), 3.0)
+=> NAN
+=== fmod((-7.5), 0.5)
+=> -0.0
+=== fdiv((-7.5), 0.5)
+=> -15.0
+=== hypot((-7.5), 0.5)
+=> 7.516648189186454
+=== log((-7.5), 0.5)
+=> NAN
+=== fmod((-7.5), INF)
+=> -7.5
+=== fdiv((-7.5), INF)
+=> -0.0
+=== hypot((-7.5), INF)
+=> INF
+=== log((-7.5), INF)
+=> NAN
+=== fmod((-7.5), NAN)
+=> NAN
+=== fdiv((-7.5), NAN)
+=> NAN
+=== hypot((-7.5), NAN)
+=> NAN
+=== log((-7.5), NAN)
+=> NAN
+=== fmod((-7.5), (-7.5))
+=> -0.0
+=== fdiv((-7.5), (-7.5))
+=> 1.0
+=== hypot((-7.5), (-7.5))
+=> 10.606601717798213
+=== log((-7.5), (-7.5))
+!! ValueError: log(): Argument #2 ($base) must be greater than 0
+=== abs(360.0)
+=> 360.0
+=== floor(360.0)
+=> 360.0
+=== ceil(360.0)
+=> 360.0
+=== deg2rad(360.0)
+=> 6.283185307179586
+=== rad2deg(360.0)
+=> 20626.480624709635
+=== log(360.0)
+=> 5.886104031450156
+=== is_nan(360.0)
+=> false
+=== fmod(360.0, 0.0)
+=> NAN
+=== fdiv(360.0, 0.0)
+=> INF
+=== hypot(360.0, 0.0)
+=> 360.0
+=== log(360.0, 0.0)
+!! ValueError: log(): Argument #2 ($base) must be greater than 0
+=== fmod(360.0, (-0.0))
+=> NAN
+=== fdiv(360.0, (-0.0))
+=> -INF
+=== hypot(360.0, (-0.0))
+=> 360.0
+=== log(360.0, (-0.0))
+!! ValueError: log(): Argument #2 ($base) must be greater than 0
+=== fmod(360.0, 1.0)
+=> 0.0
+=== fdiv(360.0, 1.0)
+=> 360.0
+=== hypot(360.0, 1.0)
+=> 360.0013888862097
+=== log(360.0, 1.0)
+=> NAN
+=== fmod(360.0, 2.0)
+=> 0.0
+=== fdiv(360.0, 2.0)
+=> 180.0
+=== hypot(360.0, 2.0)
+=> 360.0055555126893
+=== log(360.0, 2.0)
+=> 8.491853096329674
+=== fmod(360.0, 10.0)
+=> 0.0
+=== fdiv(360.0, 10.0)
+=> 36.0
+=== hypot(360.0, 10.0)
+=> 360.1388621073821
+=== log(360.0, 10.0)
+=> 2.5563025007672873
+=== fmod(360.0, (-4.0))
+=> 0.0
+=== fdiv(360.0, (-4.0))
+=> -90.0
+=== hypot(360.0, (-4.0))
+=> 360.0222215363935
+=== log(360.0, (-4.0))
+!! ValueError: log(): Argument #2 ($base) must be greater than 0
+=== fmod(360.0, 3.0)
+=> 0.0
+=== fdiv(360.0, 3.0)
+=> 120.0
+=== hypot(360.0, 3.0)
+=> 360.01249978299364
+=== log(360.0, 3.0)
+=> 5.3577627814322994
+=== fmod(360.0, 0.5)
+=> 0.0
+=== fdiv(360.0, 0.5)
+=> 720.0
+=== hypot(360.0, 0.5)
+=> 360.00034722205476
+=== log(360.0, 0.5)
+=> -8.491853096329676
+=== fmod(360.0, INF)
+=> 360.0
+=== fdiv(360.0, INF)
+=> 0.0
+=== hypot(360.0, INF)
+=> INF
+=== log(360.0, INF)
+=> 0.0
+=== fmod(360.0, NAN)
+=> NAN
+=== fdiv(360.0, NAN)
+=> NAN
+=== hypot(360.0, NAN)
+=> NAN
+=== log(360.0, NAN)
+=> NAN
+=== fmod(360.0, (-7.5))
+=> 0.0
+=== fdiv(360.0, (-7.5))
+=> -48.0
+=== hypot(360.0, (-7.5))
+=> 360.0781165247341
+=== log(360.0, (-7.5))
+!! ValueError: log(): Argument #2 ($base) must be greater than 0
+=== abs((-45.0))
+=> 45.0
+=== floor((-45.0))
+=> -45.0
+=== ceil((-45.0))
+=> -45.0
+=== deg2rad((-45.0))
+=> -0.7853981633974483
+=== rad2deg((-45.0))
+=> -2578.3100780887044
+=== log((-45.0))
+=> NAN
+=== is_nan((-45.0))
+=> false
+=== fmod((-45.0), 0.0)
+=> NAN
+=== fdiv((-45.0), 0.0)
+=> -INF
+=== hypot((-45.0), 0.0)
+=> 45.0
+=== log((-45.0), 0.0)
+!! ValueError: log(): Argument #2 ($base) must be greater than 0
+=== fmod((-45.0), (-0.0))
+=> NAN
+=== fdiv((-45.0), (-0.0))
+=> INF
+=== hypot((-45.0), (-0.0))
+=> 45.0
+=== log((-45.0), (-0.0))
+!! ValueError: log(): Argument #2 ($base) must be greater than 0
+=== fmod((-45.0), 1.0)
+=> -0.0
+=== fdiv((-45.0), 1.0)
+=> -45.0
+=== hypot((-45.0), 1.0)
+=> 45.0111097397076
+=== log((-45.0), 1.0)
+=> NAN
+=== fmod((-45.0), 2.0)
+=> -1.0
+=== fdiv((-45.0), 2.0)
+=> -22.5
+=== hypot((-45.0), 2.0)
+=> 45.044422518220834
+=== log((-45.0), 2.0)
+=> NAN
+=== fmod((-45.0), 10.0)
+=> -5.0
+=== fdiv((-45.0), 10.0)
+=> -4.5
+=== hypot((-45.0), 10.0)
+=> 46.09772228646444
+=== log((-45.0), 10.0)
+=> NAN
+=== fmod((-45.0), (-4.0))
+=> -1.0
+=== fdiv((-45.0), (-4.0))
+=> 11.25
+=== hypot((-45.0), (-4.0))
+=> 45.17742799230607
+=== log((-45.0), (-4.0))
+!! ValueError: log(): Argument #2 ($base) must be greater than 0
+=== fmod((-45.0), 3.0)
+=> -0.0
+=== fdiv((-45.0), 3.0)
+=> -15.0
+=== hypot((-45.0), 3.0)
+=> 45.09988913511872
+=== log((-45.0), 3.0)
+=> NAN
+=== fmod((-45.0), 0.5)
+=> -0.0
+=== fdiv((-45.0), 0.5)
+=> -90.0
+=== hypot((-45.0), 0.5)
+=> 45.002777692049186
+=== log((-45.0), 0.5)
+=> NAN
+=== fmod((-45.0), INF)
+=> -45.0
+=== fdiv((-45.0), INF)
+=> -0.0
+=== hypot((-45.0), INF)
+=> INF
+=== log((-45.0), INF)
+=> NAN
+=== fmod((-45.0), NAN)
+=> NAN
+=== fdiv((-45.0), NAN)
+=> NAN
+=== hypot((-45.0), NAN)
+=> NAN
+=== log((-45.0), NAN)
+=> NAN
+=== fmod((-45.0), (-7.5))
+=> -0.0
+=== fdiv((-45.0), (-7.5))
+=> 6.0
+=== hypot((-45.0), (-7.5))
+=> 45.62071897723665
+=== log((-45.0), (-7.5))
+!! ValueError: log(): Argument #2 ($base) must be greater than 0
+=== log(36, -4)
+!! ValueError: log(): Argument #2 ($base) must be greater than 0
+=== log(8, 2)
+=> 3.0
+=== log(1000, 10)
+=> 3.0
+=== log(27, 3)
+=> 3.0
