@@ -567,11 +567,12 @@ fn has_property(vm: &mut Vm, o: &Obj, name: &ZStr, check_empty: bool) -> VmResul
     }
     let p = period_of(o);
     if !p.initialized {
-        return Ok(Some(false));
+        // isset() is false and empty() is true.
+        return Ok(Some(check_empty));
     }
     let v = read_one(vm, &p, name.as_bytes())?;
     if check_empty {
-        Ok(Some(vm.value_to_bool(&v)?))
+        Ok(Some(!vm.value_to_bool(&v)?))
     } else {
         Ok(Some(!matches!(v, Value::Null)))
     }
@@ -701,7 +702,7 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
             ps,
             create_from_iso,
         )
-        .method("__construct($start, $interval = UNKNOWN, $end = UNKNOWN, $options = UNKNOWN)", p, construct)
+        .method("__construct($start = UNKNOWN, $interval = UNKNOWN, $end = UNKNOWN, $options = UNKNOWN)", p, construct)
         .method("getStartDate(): DateTimeInterface", p, get_start_date)
         .method("getEndDate(): ?DateTimeInterface", p, get_end_date)
         .method("getDateInterval(): DateInterval", p, get_date_interval)

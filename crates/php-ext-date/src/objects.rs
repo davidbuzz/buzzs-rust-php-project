@@ -5,10 +5,10 @@
 
 use std::rc::Rc;
 
-use php_date::api::Interval;
+use php_date::api::{self, Interval};
 use php_date::parse::TimezoneSpec;
 use php_date::{RelTime, Time};
-use php_runtime::{ArrayKey, Obj, Value, ZArray, ZStr};
+use php_runtime::{ArrayKey, HashTable, Obj, Value, ZArray, ZStr};
 use php_vm::class::{cflags, Class};
 use php_vm::ext::{Throw, VmResult};
 use php_vm::func::flags;
@@ -103,11 +103,41 @@ pub(crate) fn interval_of(o: &Obj) -> Option<Interval> {
     object::internal::<IntervalObj, _>(o, |s| s.iv.clone()).flatten()
 }
 
-/// Sets the interval of a `DateInterval` object.
+/// Sets the interval of a `DateInterval` object and mirrors its fields into
+/// the property table, like `date_object_get_properties_interval()` does
+/// (so `(array)`, `get_object_vars()` and `foreach` see them).
 pub(crate) fn set_interval(o: &Obj, iv: Option<Interval>) {
+    if let Some(iv) = &iv {
+        if let api::Value::Array(items) = iv.props() {
+            for (k, v) in items {
+                if let api::Key::Str(k) = k {
+                    write_table_prop(o, &k, crate::common::to_php(&v));
+                }
+            }
+        }
+    }
     if object::internal::<IntervalObj, _>(o, |s| s.iv = iv.clone()).is_none() {
         object::set_internal(o, IntervalObj { iv });
     }
+}
+
+/// `zend_hash_str_update()` on the object's property table: the declared
+/// slot when there is one, the dynamic table otherwise.
+pub(crate) fn write_table_prop(o: &Obj, name: &str, v: Value) {
+    let d = object::data(o);
+    let key = ZStr::from(name);
+    if let Some(pi) = d.class.prop_map.get(&key) {
+        if pi.flags & flags::STATIC == 0 && !pi.is_virtual() {
+            if let Some(s) = d.slots.borrow_mut().get_mut(pi.slot as usize) {
+                *s = Some(v);
+                return;
+            }
+        }
+    }
+    d.dynamic
+        .borrow_mut()
+        .get_or_insert_with(HashTable::new)
+        .insert(ArrayKey::Str(key), v);
 }
 
 /// The interval of `o` or the uninitialised error.

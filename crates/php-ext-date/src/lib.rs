@@ -8,12 +8,14 @@
 //! * [`timezone`] — `DateTimeZone` and `timezone_*()`.
 //! * [`interval`] — `DateInterval` with its property handlers.
 //! * [`period`] — `DatePeriod`, its overloaded constructor and iteration.
+//! * [`duration`] — `Time\Duration` (PHP 8.6).
 //!
 //! Native state lives in the objects (see [`objects`]); the per-request
 //! globals (`DATEG(timezone)`, `DATEG(last_errors)`) in [`common`].
 
 mod common;
 mod datetime;
+mod duration;
 mod functions;
 mod interval;
 mod objects;
@@ -77,10 +79,26 @@ impl Extension for Date {
         timezone::register(m);
         interval::register(m);
         period::register(m);
+        duration::register(m);
 
         functions::register(m);
         datetime::register_functions(m);
 
-        m.on_request_shutdown(|_| common::reset_request_state());
+        // OnUpdate_date_timezone at startup.
+        let vm = m.vm();
+        if let Some(v) = vm.ini_string("date.timezone") {
+            let name = String::from_utf8_lossy(&v).into_owned();
+            if !php_date::tz::is_valid_id(&name) {
+                let _ = vm.raise(
+                    common::E_WARNING,
+                    &format!("PHP Startup: Invalid date.timezone value '{name}', using 'UTC' instead"),
+                );
+            }
+        }
+
+        m.on_request_shutdown(|_| {
+            common::reset_request_state();
+            duration::reset_cache();
+        });
     }
 }

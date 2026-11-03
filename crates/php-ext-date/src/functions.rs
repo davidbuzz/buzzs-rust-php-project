@@ -9,7 +9,7 @@ use php_vm::ext::{Args, ModuleBuilder, VmResult};
 use php_vm::Vm;
 
 use crate::common::{
-    default_tz, default_tz_name, ini_double, last_errors, lossy, php_time, set_tz_override,
+    default_tz, ini_double, last_errors, lossy, php_time, set_tz_override,
     to_php, E_DEPRECATED,
 };
 
@@ -144,8 +144,8 @@ fn date_parse(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     Ok(to_php(&api::date_parse(a.str(0).as_bytes())))
 }
 
-#[allow(clippy::unnecessary_wraps)]
-fn date_parse_from_format(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+fn date_parse_from_format(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    crate::datetime::null_byte_check(vm, a, 2, &a.str(1))?;
     Ok(to_php(&api::date_parse_from_format(
         a.str(0).as_bytes(),
         a.str(1).as_bytes(),
@@ -208,8 +208,6 @@ fn date_default_timezone_set(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 fn date_default_timezone_get(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
     let tz = default_tz(vm)?;
-    // The zone keeps the spelling it was requested with.
-    let _ = default_tz_name(vm);
     Ok(Value::Str(ZStr::from(tz.name.as_str())))
 }
 

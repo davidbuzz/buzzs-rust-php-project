@@ -8,7 +8,9 @@ use php_date::parse::TimezoneSpec;
 use php_date::Time;
 use php_runtime::{ArrayKey, Obj, PropertyPurpose, Value, ZArray, ZStr};
 use php_vm::class::Class;
-use php_vm::ext::{acc, class_flags, Args, ClassBuilder, ClassHooks, ModuleBuilder, VmResult};
+use php_vm::ext::{
+    acc, class_flags, Args, ClassBuilder, ClassHooks, ModuleBuilder, Throw, VmResult,
+};
 use php_vm::object;
 use php_vm::Vm;
 
@@ -129,10 +131,59 @@ fn date_create_immutable(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     date_create_impl(vm, a, &cls)
 }
 
+/// `zend_argument_value_error()` with the full `Class::method` name.
+pub(crate) fn arg_value_error(vm: &mut Vm, func: &str, n: usize, pname: &str, msg: &str) -> Throw {
+    vm.throw(
+        "ValueError",
+        &format!("{func}(): Argument #{n} (${pname}) {msg}"),
+    )
+}
+
+/// The `Class::method` (or function) name of the running native call.
+pub(crate) fn func_display(a: &Args) -> String {
+    let name = a.func_name();
+    match (&a.this, &a.called) {
+        (Some(o), _) => {
+            let cls = object::class_of(o);
+            let decl = declaring_class(cls, &name);
+            format!("{decl}::{name}")
+        }
+        (None, Some(c)) => {
+            let decl = declaring_class(c, &name);
+            format!("{decl}::{name}")
+        }
+        _ => name,
+    }
+}
+
+/// The internal class declaring method `name` (walking up from `cls`).
+fn declaring_class(cls: &Rc<Class>, name: &str) -> String {
+    let lc = name.to_ascii_lowercase();
+    match cls.methods.get(&ZStr::from(lc.as_str())) {
+        Some(m) => m
+            .scope
+            .upgrade()
+            .map_or_else(|| cls.name.to_string_lossy(), |c| c.name.to_string_lossy()),
+        None => cls.name.to_string_lossy(),
+    }
+}
+
 /// `Z_PARAM_PATH`: rejects strings with NUL bytes.
 pub(crate) fn null_byte_check(vm: &mut Vm, a: &Args, n: usize, s: &ZStr) -> VmResult<()> {
     if s.as_bytes().contains(&0) {
-        return Err(a.value_error(vm, n, "must not contain any null bytes"));
+        let pname = a
+            .func
+            .as_ref()
+            .and_then(|f| f.params.get(n - 1).map(|p| p.name.to_string_lossy()))
+            .unwrap_or_default();
+        let func = func_display(a);
+        return Err(arg_value_error(
+            vm,
+            &func,
+            n,
+            &pname,
+            "must not contain any null bytes",
+        ));
     }
     Ok(())
 }
@@ -217,6 +268,11 @@ fn create_from_timestamp(vm: &mut Vm, a: &Args, kind: Kind) -> VmResult<Value> {
         Value::Float(f) => match api::from_timestamp_float(f) {
             Ok(t) => t,
             Err(m) => {
+                // C's `%g` prints non-finite values in upper case.
+                let m = m
+                    .replace(", nan given", ", NAN given")
+                    .replace(", -inf given", ", -INF given")
+                    .replace(", inf given", ", INF given");
                 let msg = format!(
                     "{}::createFromTimestamp(): Argument #1 ($timestamp) {m}",
                     kind.class_name()
@@ -281,7 +337,7 @@ fn init_from_hash(vm: &mut Vm, o: &Obj, h: &ZArray) -> VmResult<bool> {
 }
 
 /// `Invalid serialization data for X object`.
-pub(crate) fn invalid_serialization(vm: &mut Vm, cls: &str) -> php_vm::ext::Throw {
+pub(crate) fn invalid_serialization(vm: &mut Vm, cls: &str) -> Throw {
     vm.throw(
         "Error",
         &format!("Invalid serialization data for {cls} object"),

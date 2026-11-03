@@ -266,7 +266,7 @@ fn has_property(vm: &mut Vm, o: &Obj, name: &ZStr, check_empty: bool) -> VmResul
         return Ok(None);
     };
     if check_empty {
-        Ok(Some(vm.value_to_bool(&v)?))
+        Ok(Some(!vm.value_to_bool(&v)?))
     } else {
         Ok(Some(!matches!(v, Value::Null)))
     }
