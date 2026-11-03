@@ -1915,6 +1915,22 @@ impl Vm {
     /// and its options. Returns the value and the offset after it, or the
     /// failure offset. Outside an `unserialize()` call a fresh context is
     /// used (and its delayed `__wakeup()`/`__unserialize()` calls run).
+    /// `PHP_VAR_UNSERIALIZE_INIT` … `PHP_VAR_UNSERIALIZE_DESTROY` around
+    /// `f`: [`Vm::unserialize_nested`] calls inside share one `var_hash`
+    /// (a native `Serializable::unserialize()` called directly), and the
+    /// delayed `__wakeup()`/`__unserialize()` calls run at the end. Inside
+    /// an active `unserialize()` it only joins that call's context.
+    pub fn with_unserialize_context<R>(&mut self, f: impl FnOnce(&mut Vm) -> VmResult<R>) -> VmResult<R> {
+        let (d, outermost) = unser_init(self);
+        let r = f(self);
+        let ok = r.is_ok();
+        let destroyed = unser_destroy(self, &d, outermost, ok);
+        match (r, destroyed) {
+            (Err(t), _) | (Ok(_), Err(t)) => Err(t),
+            (Ok(v), Ok(())) => Ok(v),
+        }
+    }
+
     pub fn unserialize_nested(&mut self, data: &[u8], offset: usize) -> VmResult<Result<(Value, usize), usize>> {
         let (d, outermost) = unser_init(self);
         let first_slot = d.borrow().slots.len();

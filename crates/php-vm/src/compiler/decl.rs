@@ -758,12 +758,13 @@ impl Compiler {
                                 t.span.line,
                             );
                         }
+                        // `zend_compile_single_typename`: self/parent are not
+                        // substituted in traits or anonymous classes (GH-18373).
+                        let known = self.current_class().filter(|c| !c.is_trait && !c.is_anon);
                         let resolved = if lc.as_slice() == b"self" {
-                            self.current_class()
-                                .filter(|c| !c.is_trait)
-                                .map_or_else(|| ZStr::from("self"), |c| c.name.clone())
+                            known.map_or_else(|| ZStr::from("self"), |c| c.name.clone())
                         } else {
-                            self.current_class()
+                            known
                                 .and_then(|c| c.parent.clone())
                                 .unwrap_or_else(|| ZStr::from("parent"))
                         };
@@ -815,7 +816,7 @@ impl Compiler {
         let lc = n.name.to_ascii_lowercase();
         if n.kind == ast::NameKind::Unqualified && lc.as_slice() == b"self" {
             if let Some(c) = self.current_class() {
-                if !c.is_trait {
+                if !c.is_trait && !c.is_anon {
                     return c.name.as_bytes().to_vec();
                 }
             }
@@ -856,12 +857,32 @@ impl Compiler {
         top_level: bool,
     ) -> CResult<()> {
         let idx = self.compile_class_decl(cd, false)?;
-        if top_level {
+        if top_level && self.can_early_bind(idx) {
             self.hoisted_classes.push(idx);
         }
         self.f().line = cd.span.line;
         self.emit(Op::DeclareClass(idx));
         Ok(())
+    }
+
+    /// `zend_compile_class_decl`: only classes that implement no interface
+    /// (enums and non-trait classes with `__toString()` implement one
+    /// implicitly) and
+    /// use no trait are bound at compile time; the others are declared when
+    /// their statement runs.
+    fn can_early_bind(&self, idx: u32) -> bool {
+        let classes = self.decls.classes.borrow();
+        let Some(d) = classes.get(idx as usize) else {
+            return false;
+        };
+        d.kind != ClassKind::Enum
+            && d.interfaces.is_empty()
+            && d.traits.is_empty()
+            && (d.kind == ClassKind::Trait
+                || !d
+                    .methods
+                    .iter()
+                    .any(|m| m.name.eq_ignore_ascii_case(b"__tostring")))
     }
 
     /// Compiles a class-like declaration; returns its index.
@@ -947,7 +968,7 @@ impl Compiler {
             cflag |= cflags::READONLY;
         }
         if is_anon {
-            cflag |= cflags::ANON | cflags::FINAL;
+            cflag |= cflags::ANON;
         }
         let attributes = self.attributes(&cd.attributes)?;
         self.validate_attributes(
@@ -1060,56 +1081,53 @@ impl Compiler {
         for m in &cd.members {
             match &m.kind {
                 ClassMemberKind::Property(pg) => {
+                    // `zend_compile_prop_decl`: a readonly class makes every
+                    // property readonly (static ones are then rejected below).
                     let fl = modifiers_to_flags(pg.modifiers)
-                        | if cflag & cflags::READONLY != 0
-                            && pg.modifiers.contains(ast::Modifiers::STATIC) == false
-                        {
+                        | if cflag & cflags::READONLY != 0 {
                             flags::READONLY
                         } else {
                             0
                         };
-                    if kind == ClassKind::Interface
-                        && pg
-                            .modifiers
-                            .intersects(ast::Modifiers::PROTECTED | ast::Modifiers::PRIVATE)
-                    {
-                        return self.err(
-                            "Property in interface cannot be protected or private",
-                            m.span.line,
-                        );
-                    }
-                    if kind == ClassKind::Interface
-                        && pg.modifiers.contains(ast::Modifiers::ABSTRACT)
-                    {
-                        return self.err("Property in interface cannot be explicitly abstract. All interface members are implicitly abstract", m.span.line);
-                    }
-                    if kind == ClassKind::Interface && pg.modifiers.contains(ast::Modifiers::FINAL)
-                    {
-                        return self.err("Property in interface cannot be final", m.span.line);
-                    }
-                    if pg.modifiers.contains(ast::Modifiers::FINAL)
-                        && pg.modifiers.contains(ast::Modifiers::PRIVATE)
-                    {
-                        return self.err("Property cannot be both final and private", m.span.line);
-                    }
-                    if kind == ClassKind::Interface && pg.props.iter().all(|p| p.hooks.is_none()) {
-                        return self.err("Interfaces may not include properties", m.span.line);
-                    }
                     if kind == ClassKind::Enum {
                         return self.err(
                             format!("Enum {cname} cannot include properties"),
                             m.span.line,
                         );
                     }
-                    if pg.modifiers.contains(ast::Modifiers::ABSTRACT)
-                        && pg.props.iter().all(|p| p.hooks.is_none())
-                    {
-                        return self.err("Properties cannot be declared abstract", m.span.line);
-                    }
                     if pg.modifiers.contains(ast::Modifiers::FINAL)
-                        && pg.props.iter().all(|p| p.hooks.is_none())
+                        && pg.modifiers.contains(ast::Modifiers::PRIVATE)
                     {
-                        return self.err("Cannot declare property final, the final modifier is allowed only on methods, classes, and properties with hooks", m.span.line);
+                        return self.err("Property cannot be both final and private", m.span.line);
+                    }
+                    if kind == ClassKind::Interface {
+                        if pg.modifiers.contains(ast::Modifiers::FINAL) {
+                            return self.err("Property in interface cannot be final", m.span.line);
+                        }
+                        if pg
+                            .modifiers
+                            .intersects(ast::Modifiers::PROTECTED | ast::Modifiers::PRIVATE)
+                        {
+                            return self.err(
+                                "Property in interface cannot be protected or private",
+                                m.span.line,
+                            );
+                        }
+                        if pg.modifiers.contains(ast::Modifiers::ABSTRACT) {
+                            return self.err("Property in interface cannot be explicitly abstract. All interface members are implicitly abstract", m.span.line);
+                        }
+                    }
+                    if pg.props.iter().any(|p| p.hooks.is_none()) {
+                        if kind == ClassKind::Interface {
+                            return self
+                                .err("Interfaces may only include hooked properties", m.span.line);
+                        }
+                        if pg.modifiers.contains(ast::Modifiers::ABSTRACT) {
+                            return self.err(
+                                "Only hooked properties may be declared abstract",
+                                m.span.line,
+                            );
+                        }
                     }
                     let ty = match &pg.ty {
                         Some(t) => {
@@ -1169,15 +1187,6 @@ impl Compiler {
                                 return self.err(
                                     format!(
                                         "Readonly property {cname}::${} must have type",
-                                        p.name.as_str_lossy()
-                                    ),
-                                    p.span.line,
-                                );
-                            }
-                            if p.default.is_some() {
-                                return self.err(
-                                    format!(
-                                        "Readonly property {cname}::${} cannot have default value",
                                         p.name.as_str_lossy()
                                     ),
                                     p.span.line,

@@ -266,11 +266,48 @@ impl Vm {
             }
         };
         let cls = self.resolve_class_spec(spec)?;
+        // Inside a constant expression php-src goes through
+        // `zend_get_class_constant_ex`, whose errors name the class as
+        // written (`self::X`) and which marks the constant while evaluating
+        // it; the `FETCH_CLASS_CONSTANT` opcode does neither.
+        let in_const_expr = self
+            .frames
+            .last()
+            .is_some_and(|f| f.kind == FrameKind::ConstExpr);
+        if in_const_expr {
+            let shown = match spec {
+                ClassSpec::SelfClass => ZStr::from("self"),
+                ClassSpec::Parent => ZStr::from("parent"),
+                ClassSpec::Static => ZStr::from("static"),
+                ClassSpec::Named(l) => self.lit_str(*l),
+                ClassSpec::Dyn(_) => cls.name.clone(),
+            };
+            self.class_constant_ex(&cls, &name, Some(&shown), true)?;
+        } else if cls
+            .find_const(name.as_bytes())
+            .is_some_and(|c| !c.is_case && c.value.borrow().is_none())
+        {
+            self.class_constant_ex(&cls, &name, None, false)?;
+        }
         self.fetch_class_constant(&cls, &name)
     }
 
     /// Reads a class constant (evaluating it lazily).
     pub(crate) fn class_constant(&mut self, cls: &Rc<Class>, name: &ZStr) -> VmResult<Value> {
+        self.class_constant_ex(cls, name, None, true)
+    }
+
+    /// [`Self::class_constant`] with the class named `shown` in errors
+    /// (instead of its resolved name) and optional recursion marking of an
+    /// unevaluated constant (`mark`).
+    fn class_constant_ex(
+        &mut self,
+        cls: &Rc<Class>,
+        name: &ZStr,
+        shown: Option<&ZStr>,
+        mark: bool,
+    ) -> VmResult<Value> {
+        let shown_name = |c: &ZStr| shown.map_or_else(|| object::display_name(c), Clone::clone);
         if name.as_bytes() == b"class" {
             return Ok(Value::Str(cls.name.clone()));
         }
@@ -279,7 +316,7 @@ impl Vm {
                 "Error",
                 &format!(
                     "Undefined constant {}::{}",
-                    object::display_name(&cls.name),
+                    shown_name(&cls.name),
                     name.to_string_lossy()
                 ),
             ));
@@ -303,7 +340,7 @@ impl Vm {
                     "Error",
                     &format!(
                         "Cannot access {vis} constant {}::{}",
-                        object::display_name(&cls.name),
+                        shown_name(&cls.name),
                         name.to_string_lossy()
                     ),
                 ));
@@ -320,17 +357,21 @@ impl Vm {
                 "Error",
                 &format!(
                     "Cannot declare self-referencing constant {}::{}",
-                    object::display_name(&c.class),
+                    shown_name(&c.class),
                     name.to_string_lossy()
                 ),
             ));
         }
-        c.evaluating.set(true);
+        if mark {
+            c.evaluating.set(true);
+        }
         let decl = self
             .find_class(c.class.as_bytes())
             .unwrap_or_else(|| cls.clone());
         let r = self.eval_const_expr(&c.expr, Some(&decl));
-        c.evaluating.set(false);
+        if mark {
+            c.evaluating.set(false);
+        }
         let mut v = r?;
         if let Some(ty) = &c.ty {
             let ctx = crate::typecheck::TypeCtx {
@@ -569,6 +610,9 @@ impl Vm {
     fn link_class(&mut self, decl: &Rc<ClassDecl>, is_anon: bool) -> VmResult<Rc<Class>> {
         let name = decl.name.clone();
         let display = object::display_name(&name);
+        // Messages formatted with `%pS` print the whole name, including the
+        // NUL-separated suffix of an anonymous class.
+        let full = name.to_string_lossy();
         let line = decl.line_start;
         // Parent.
         let parent = match &decl.parent {
@@ -586,20 +630,20 @@ impl Vm {
                 };
                 if pc.is_interface() && decl.kind == ClassKind::Class {
                     return Err(self.fatal_at(
-                        &format!("Class {display} cannot extend interface {}", pc.name),
+                        &format!("Class {full} cannot extend interface {}", pc.name),
                         line,
                     ));
                 }
                 if pc.is_trait() {
                     return Err(self.fatal_at(
-                        &format!("Class {display} cannot extend trait {}", pc.name),
+                        &format!("Class {full} cannot extend trait {}", pc.name),
                         line,
                     ));
                 }
                 if pc.flags & cflags::FINAL != 0 {
                     let what = if pc.is_enum() { "enum" } else { "final class" };
                     return Err(self.fatal_at(
-                        &format!("Class {display} cannot extend {what} {}", pc.name),
+                        &format!("Class {full} cannot extend {what} {}", pc.name),
                         line,
                     ));
                 }
@@ -609,10 +653,9 @@ impl Vm {
                     } else {
                         ("Non-readonly class", "readonly class")
                     };
-                    return Err(self.fatal_at(
-                        &format!("{a} {display} cannot extend {b} {}", pc.name),
-                        line,
-                    ));
+                    return Err(
+                        self.fatal_at(&format!("{a} {full} cannot extend {b} {}", pc.name), line)
+                    );
                 }
                 Some(pc)
             }
@@ -811,10 +854,10 @@ impl Vm {
                 let what = if cls.is_enum() { "Enum" } else { "Class" };
                 let s = if n == 1 { "" } else { "s" };
                 let msg = if cls.is_enum() || cls.flags & crate::class::cflags::ANON != 0 {
-                    format!("{what} {display} must implement {n} abstract method{s} ({list})")
+                    format!("{what} {full} must implement {n} abstract method{s} ({list})")
                 } else {
                     format!(
-                        "{what} {display} contains {n} abstract method{s} and must therefore be declared abstract or implement the remaining method{s} ({list})"
+                        "{what} {full} contains {n} abstract method{s} and must therefore be declared abstract or implement the remaining method{s} ({list})"
                     )
                 };
                 return Err(self.fatal_at(&msg, line));
@@ -869,6 +912,78 @@ fn is_valid_class_name(n: &[u8]) -> bool {
     !n.is_empty()
         && n.iter()
             .all(|&c| c.is_ascii_alphanumeric() || c == b'_' || c == b'\\' || c >= 0x80)
+}
+
+/// `zend_do_traits_property_binding`: the error for a property of trait
+/// `traits[ti]` that collides with an own (or earlier trait's) property of
+/// `class` in an incompatible way. Traits are bound before inheritance, so
+/// inherited properties are not considered here.
+#[allow(clippy::mutable_key_type)] // `ZStr` keys hash by content only.
+fn trait_property_conflict(
+    class: &ZStr,
+    traits: &[Rc<Class>],
+    ti: usize,
+    pd: &crate::class::PropDecl,
+    prop_map: &HashMap<ZStr, Rc<PropInfo>>,
+    static_map: &HashMap<ZStr, usize>,
+    static_props: &[StaticProp],
+) -> Option<String> {
+    let (cflags_, cty, cdefault, chooked) =
+        if let Some(e) = prop_map.get(&pd.name).filter(|e| e.class == *class) {
+            (
+                e.flags,
+                e.ty.as_ref(),
+                e.default.as_ref(),
+                e.hooks.is_some(),
+            )
+        } else {
+            let sp = static_map
+                .get(&pd.name)
+                .map(|&i| &static_props[i])
+                .filter(|sp| sp.class == *class)?;
+            (sp.flags, sp.ty.as_ref(), sp.default.as_ref(), false)
+        };
+    // `find_first_property_definition`.
+    let first = traits[..ti]
+        .iter()
+        .find(|t| {
+            t.decl
+                .as_ref()
+                .is_some_and(|d| d.props.iter().any(|p| p.name == pd.name))
+        })
+        .map_or_else(|| class.clone(), |t| t.name.clone());
+    let tname = &traits[ti].name;
+    if chooked || pd.hooks.is_some() {
+        return Some(format!(
+            "{first} and {tname} define the same hooked property (${}) in the composition of {class}. Conflict resolution between hooked properties is currently not supported. Class was composed",
+            pd.name
+        ));
+    }
+    let mask = flags::VISIBILITY | flags::STATIC | flags::READONLY;
+    let compatible = cflags_ & mask == pd.flags & mask
+        && cty == pd.ty.as_ref()
+        && trait_defaults_identical(cdefault, pd.default.as_ref());
+    (!compatible).then(|| {
+        format!(
+            "{first} and {tname} define the same property (${}) in the composition of {class}. However, the definition differs and is considered incompatible. Class was composed",
+            pd.name
+        )
+    })
+}
+
+/// `check_trait_property_or_constant_value_compatibility` for defaults
+/// known at link time; defaults that still need evaluation are assumed
+/// compatible.
+fn trait_defaults_identical(a: Option<&ConstExpr>, b: Option<&ConstExpr>) -> bool {
+    match (a, b) {
+        (None, None)
+        | (Some(ConstExpr::Code(_)), Some(_))
+        | (Some(_), Some(ConstExpr::Code(_))) => true,
+        (Some(ConstExpr::Value(x)), Some(ConstExpr::Value(y))) => {
+            php_runtime::ops::is_identical(x, y).unwrap_or(false)
+        }
+        _ => false,
+    }
 }
 
 fn visibility_name(f: u32) -> &'static str {
@@ -1102,7 +1217,8 @@ fn build_class(
             }
         }
     }
-    let mut all_props: Vec<(crate::class::PropDecl, ZStr)> = Vec::new();
+    // (declaration, owner, index of the trait it comes from)
+    let mut all_props: Vec<(crate::class::PropDecl, ZStr, Option<usize>)> = Vec::new();
     if decl.kind == ClassKind::Enum {
         let mk = |n: &str, ty: crate::types::TypeDecl| crate::class::PropDecl {
             name: ZStr::from(n),
@@ -1120,22 +1236,103 @@ fn build_class(
                 crate::types::TypeDecl::simple(crate::types::mask::STRING),
             ),
             name.clone(),
+            None,
         ));
         if let Some(b) = decl.backing {
-            all_props.push((mk("value", crate::types::TypeDecl::simple(b)), name.clone()));
+            all_props.push((
+                mk("value", crate::types::TypeDecl::simple(b)),
+                name.clone(),
+                None,
+            ));
         }
     }
-    for t in &traits {
+    // Own properties first; trait properties are bound after them
+    // (`zend_do_traits_property_binding`).
+    for p in &decl.props {
+        all_props.push((p.clone(), name.clone(), None));
+    }
+    for (ti, t) in traits.iter().enumerate() {
         if let Some(td) = &t.decl {
             for p in &td.props {
-                all_props.push((p.clone(), name.clone()));
+                all_props.push((p.clone(), name.clone(), Some(ti)));
             }
         }
     }
-    for p in &decl.props {
-        all_props.push((p.clone(), name.clone()));
-    }
-    for (pd, owner) in all_props {
+    for (pd, owner, from_trait) in all_props {
+        if let Some(ti) = from_trait {
+            if let Some(e) = trait_property_conflict(
+                &name,
+                &traits,
+                ti,
+                &pd,
+                &prop_map,
+                &static_map,
+                &static_props,
+            ) {
+                if err.is_none() {
+                    *err = Some(e);
+                }
+                continue;
+            }
+            let own = |c: &ZStr| *c == name;
+            if prop_map.get(&pd.name).is_some_and(|e| own(&e.class))
+                || static_map
+                    .get(&pd.name)
+                    .is_some_and(|&i| own(&static_props[i].class))
+            {
+                // Compatible with the own declaration: nothing to add.
+                continue;
+            }
+            if cflag & cflags::READONLY != 0 && pd.flags & flags::READONLY == 0 && err.is_none() {
+                *err = Some(format!(
+                    "Readonly class {} cannot use trait with a non-readonly property {}::${}",
+                    name, traits[ti].name, pd.name
+                ));
+            }
+        }
+        // `do_inherit_property`: a final parent property cannot be redeclared.
+        let inherited_final = prop_map
+            .get(&pd.name)
+            .filter(|e| e.class != name)
+            .map(|e| (e.flags, e.class.clone()))
+            .or_else(|| {
+                static_map
+                    .get(&pd.name)
+                    .map(|&i| &static_props[i])
+                    .filter(|sp| sp.class != name)
+                    .map(|sp| (sp.flags, sp.class.clone()))
+            });
+        if let Some((f, owner_class)) = inherited_final {
+            if f & flags::FINAL != 0 && err.is_none() {
+                *err = Some(format!(
+                    "Cannot override final property {owner_class}::${}",
+                    pd.name
+                ));
+            }
+        }
+        if let (Some(ph), Some(ch)) = (
+            prop_map
+                .get(&pd.name)
+                .filter(|e| e.class != name)
+                .and_then(|e| e.hooks.as_ref()),
+            pd.hooks.as_ref(),
+        ) {
+            let fin = if ph.final_get && ch.get.is_some() {
+                Some("get")
+            } else if ph.final_set && ch.set.is_some() {
+                Some("set")
+            } else {
+                None
+            };
+            if let Some(kind) = fin {
+                if err.is_none() {
+                    *err = Some(format!(
+                        "Cannot override final property hook {}::${}::{kind}()",
+                        ph.class, pd.name
+                    ));
+                }
+            }
+        }
         if pd.flags & flags::STATIC != 0 {
             let sp = StaticProp {
                 name: pd.name.clone(),
@@ -1178,7 +1375,12 @@ fn build_class(
                             }
                         ));
                     }
-                    if e.flags & flags::READONLY != pd.flags & flags::READONLY && err.is_none() {
+                    // `do_inherit_property`: an abstract (hooked) parent
+                    // property may be implemented by a readonly one.
+                    if e.flags & flags::READONLY != pd.flags & flags::READONLY
+                        && e.flags & flags::ABSTRACT == 0
+                        && err.is_none()
+                    {
                         *err =
                             Some(format!(
                             "Cannot redeclare {}readonly property {}::${} as {}readonly {}::${}",
@@ -1189,6 +1391,42 @@ fn build_class(
                             display,
                             pd.name
                         ));
+                    }
+                    // Set visibility may only be the parent's (or weaker);
+                    // get-only virtual parents have none.
+                    let parent_get_only = e.is_virtual()
+                        && e.hooks
+                            .as_ref()
+                            .is_some_and(|h| h.set.is_none() && !h.abstract_set);
+                    if pd.flags & flags::SET_MASK != 0 && !parent_get_only && err.is_none() {
+                        let parent_set = match e.flags & flags::SET_MASK {
+                            0 => match e.visibility() {
+                                flags::PRIVATE => flags::SET_PRIVATE,
+                                flags::PROTECTED => flags::SET_PROTECTED,
+                                _ => flags::SET_PUBLIC,
+                            },
+                            s => s,
+                        };
+                        if pd.flags & flags::SET_MASK > parent_set {
+                            let shown = if e.flags & flags::SET_PRIVATE != 0 {
+                                "private(set)"
+                            } else if e.flags & flags::SET_PROTECTED != 0 {
+                                "protected(set)"
+                            } else {
+                                "omitted"
+                            };
+                            *err = Some(format!(
+                                "Set access level of {}::${} must be {shown} (as in class {}){}",
+                                name,
+                                pd.name,
+                                e.class,
+                                if e.flags & flags::SET_MASK == 0 {
+                                    ""
+                                } else {
+                                    " or weaker"
+                                }
+                            ));
+                        }
                     }
                     e.slot
                 } else {
