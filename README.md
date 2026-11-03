@@ -54,11 +54,12 @@ target/debug/php script.php
 Run the php-src suite (or any subdirectory of it) against our binary:
 
 ```sh
-target/debug/phpt-runner --php target/debug/php -j 8 -q --no-artifacts --summary-depth 2 modules/php-src/tests
+env -u LANGUAGE target/debug/phpt-runner --php target/debug/php -j 8 -q --no-artifacts --summary-depth 2 modules/php-src/tests
 target/debug/phpt-runner --php target/debug/php -j 8 -q --no-artifacts modules/php-src/Zend/tests
 ```
 
-Drop `-q` to list every test; add `--show-diff` to see expected-vs-actual for failures.
+`env -u LANGUAGE` matters only if your shell exports `LANGUAGE` (glibc's gettext lets it override
+`LC_ALL`, which fails six ext/gettext tests under any PHP, including `/usr/bin/php`). Drop `-q` to list every test; add `--show-diff` to see expected-vs-actual for failures.
 `--json report.json` plus `scripts/update_feature_gap.py report.json` rewrites the `%` column
 of FEATURE_GAP.md from a run. `phpt-baseline.txt` lists known failures so CI only fails on
 regressions (`--baseline phpt-baseline.txt`, refresh with `--update-baseline`).
