@@ -598,6 +598,57 @@ impl Vm {
         decl.parent.as_ref().is_none_or(has)
             && decl.interfaces.iter().all(has)
             && decl.traits.iter().all(has)
+            && !self.has_unresolved_variance(decl)
+    }
+
+    /// `zend_try_early_bind` gives up when a method signature check against
+    /// the parent is `INHERITANCE_UNRESOLVED`: approximated as an overriding
+    /// method whose signature differs from the parent's in a class name
+    /// that is not declared yet. The class is then declared when its
+    /// statement runs, where the check can report the error.
+    fn has_unresolved_variance(&self, decl: &ClassDecl) -> bool {
+        fn names(f: &UserFunction, out: &mut Vec<Vec<u8>>) {
+            let types = f
+                .params
+                .iter()
+                .filter_map(|p| p.ty.as_ref())
+                .chain(f.return_type.as_ref());
+            for t in types {
+                for n in t.classes.iter().chain(t.intersections.iter().flatten()) {
+                    out.push(n.as_bytes().to_ascii_lowercase());
+                }
+            }
+        }
+        let Some(parent) = decl
+            .parent
+            .as_ref()
+            .and_then(|p| self.find_class(p.as_bytes()))
+        else {
+            return false;
+        };
+        let own = decl.name.as_bytes().to_ascii_lowercase();
+        decl.methods.iter().any(|md| {
+            let Some(pm) = parent.find_method(&md.name.as_bytes().to_ascii_lowercase()) else {
+                return false;
+            };
+            let Func::User(pf) = &pm.func else {
+                return false;
+            };
+            if pm.visibility() == flags::PRIVATE {
+                return false;
+            }
+            let (mut a, mut b) = (Vec::new(), Vec::new());
+            names(&md.func, &mut a);
+            names(pf, &mut b);
+            a.iter()
+                .filter(|n| !b.contains(n))
+                .chain(b.iter().filter(|n| !a.contains(n)))
+                .any(|n| {
+                    !matches!(n.as_slice(), b"self" | b"parent" | b"static")
+                        && *n != own.as_slice()
+                        && self.find_class(n).is_none()
+                })
+        })
     }
 
     fn fatal_at(&mut self, msg: &str, line: u32) -> Throw {
