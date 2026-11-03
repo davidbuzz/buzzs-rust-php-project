@@ -218,9 +218,9 @@ pub fn run(opts: &Options, extensions: ExtensionFactory) -> i32 {
         ini,
         extensions,
     };
+    let mut srv = server::Server::new(listener, config, post_max_size);
     server::banner(&host, port);
     server::install_sigint();
-    let mut srv = server::Server::new(listener, config, post_max_size);
     let r = srv.run();
     server::wait_workers(&workers);
     r
