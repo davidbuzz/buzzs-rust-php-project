@@ -222,7 +222,9 @@ impl RuntimeContext for Vm {
         let kind = if cls.lc_name.as_bytes() == b"stdclass" {
             ObjectKind::StdClass
         } else {
-            ObjectKind::Regular { lazy_prefix: "" }
+            ObjectKind::Regular {
+                lazy_prefix: self.lazy_prefix(obj),
+            }
         };
         let custom = purpose == PropertyPurpose::Debug && cls.magic.debug_info.is_some()
             || self.has_internal_array(obj);

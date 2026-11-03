@@ -143,6 +143,8 @@ impl Vm {
 
     /// Reads `$o->name`.
     pub(crate) fn read_property(&mut self, o: &Obj, name: &ZStr, mode: FetchMode) -> VmResult<Value> {
+        let lazy_target = self.lazy_object_for(o, Some(name))?;
+        let o = &lazy_target;
         let cls = object::class_of(o).clone();
         if let Some(f) = cls.hooks.as_ref().and_then(|h| h.read_property) {
             if let Some(v) = f(self, o, name)? {
@@ -326,6 +328,8 @@ impl Vm {
 
     /// Writes `$o->name = v`; returns the assigned value.
     pub(crate) fn write_property(&mut self, o: &Obj, name: &ZStr, v: Value) -> VmResult<Value> {
+        let lazy_target = self.lazy_object_for(o, Some(name))?;
+        let o = &lazy_target;
         let cls = object::class_of(o).clone();
         if let Some(f) = cls.hooks.as_ref().and_then(|h| h.write_property) {
             if f(self, o, name, &v)? {
@@ -474,6 +478,8 @@ impl Vm {
 
     /// The storage of a property for nested writes (`$o->a[] = 1`).
     pub(crate) fn property_container(&mut self, o: &Obj, name: &ZStr) -> VmResult<PropContainer> {
+        let lazy_target = self.lazy_object_for(o, Some(name))?;
+        let o = &lazy_target;
         let cls = object::class_of(o).clone();
         let scope = self.scope();
         match self.lookup_prop(&cls, name, scope.as_ref()) {
@@ -586,6 +592,8 @@ impl Vm {
 
     /// `unset($o->name)`.
     pub(crate) fn unset_property(&mut self, o: &Obj, name: &ZStr) -> VmResult<()> {
+        let lazy_target = self.lazy_object_for(o, Some(name))?;
+        let o = &lazy_target;
         let cls = object::class_of(o).clone();
         if let Some(f) = cls.hooks.as_ref().and_then(|h| h.unset_property) {
             if f(self, o, name)? {
@@ -682,6 +690,8 @@ impl Vm {
 
     /// `isset($o->name)` / `empty($o->name)`.
     pub(crate) fn has_property(&mut self, o: &Obj, name: &ZStr, empty: bool) -> VmResult<bool> {
+        let lazy_target = self.lazy_object_for(o, Some(name))?;
+        let o = &lazy_target;
         let cls = object::class_of(o).clone();
         if let Some(f) = cls.hooks.as_ref().and_then(|h| h.has_property) {
             if let Some(r) = f(self, o, name, empty)? {
@@ -840,6 +850,8 @@ impl Vm {
 
     /// `(array) $obj`.
     pub(crate) fn object_to_array(&mut self, o: &Obj) -> VmResult<ZArray> {
+        let target = self.lazy_object_for(o, None)?;
+        let o = &target;
         if let Some(a) = self.internal_object_array(o)? {
             return Ok(a);
         }

@@ -28,6 +28,7 @@ pub mod func;
 mod generator;
 mod include;
 mod iter;
+mod lazy;
 pub mod object;
 pub mod opcode;
 mod place;

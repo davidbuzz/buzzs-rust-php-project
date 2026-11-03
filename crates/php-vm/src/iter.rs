@@ -42,6 +42,8 @@ impl Vm {
     /// Visible property names of an object for iteration from the current
     /// scope: (key value, unmangled name, declaring class for privates).
     pub(crate) fn visible_props(&mut self, o: &Obj) -> Vec<(Value, ZStr, Option<ZStr>)> {
+        let target = self.lazy_object_for(o, None).unwrap_or_else(|_| o.clone());
+        let o = &target;
         let scope = self.scope();
         let cls = object::class_of(o).clone();
         let mut out = Vec::new();
