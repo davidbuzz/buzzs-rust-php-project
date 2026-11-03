@@ -1,5 +1,6 @@
 [package]
 name = "php-stdstr"
+description = "Byte-exact ports of PHP's ext/standard string, URL, encoding and math algorithms"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
