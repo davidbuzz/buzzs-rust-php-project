@@ -10,6 +10,8 @@
 //!   connection state, `getopt`, `get_cfg_var`.
 //! * [`text`]: highlighting, `php_strip_whitespace`, `http_build_query`,
 //!   `parse_str`, locale functions.
+//! * [`ini`]: `ini_get_all`, `parse_ini_string`/`parse_ini_file`,
+//!   `get_included_files`.
 //! * [`misc`]: `mail`, `error_log`, `assert_options`, `phpinfo`,
 //!   `phpcredits`.
 //!
@@ -21,6 +23,7 @@ mod crypt;
 mod ctx;
 mod env;
 mod exec;
+mod ini;
 mod misc;
 mod net;
 mod text;
@@ -44,5 +47,6 @@ impl Extension for StdMisc {
         env::register(m);
         text::register(m);
         misc::register(m);
+        ini::register(m);
     }
 }
