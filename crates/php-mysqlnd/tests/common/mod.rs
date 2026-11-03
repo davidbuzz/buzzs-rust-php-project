@@ -92,6 +92,9 @@ pub fn php(code: &str) -> String {
         .args(["-d", "memory_limit=1G", "-d", "display_errors=stderr", "-r", &script])
         .output()
         .expect("run php");
+    if !out.stderr.is_empty() {
+        eprintln!("php stderr: {}", String::from_utf8_lossy(&out.stderr));
+    }
     String::from_utf8_lossy(&out.stdout).into_owned()
 }
 
