@@ -20,6 +20,7 @@ php-ext-json = { path = "../php-ext-json" }
 php-ext-spl = { path = "../php-ext-spl" }
 php-ext-hash = { path = "../php-ext-hash" }
 php-ext-random = { path = "../php-ext-random" }
+php-ext-mbstring = { path = "../php-ext-mbstring" }
 php-ext-filter = { path = "../php-ext-filter" }
 php-ext-pdo = { path = "../php-ext-pdo" }
 php-ext-date = { path = "../php-ext-date" }
