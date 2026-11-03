@@ -278,12 +278,17 @@ fn capture<R>(f: impl FnOnce() -> R) -> (R, Vec<Diagnostic>) {
     (r, got)
 }
 
-fn diag_message(func: &str, d: &Diagnostic) -> String {
-    let params: Vec<String> = d
+fn diag_message(func: &str, d: &Diagnostic, param: Option<&[u8]>) -> String {
+    let mut params: Vec<String> = d
         .params
         .iter()
         .map(|p| String::from_utf8_lossy(p).into_owned())
         .collect();
+    if params.is_empty() {
+        if let Some(p) = param {
+            params.push(String::from_utf8_lossy(p).into_owned());
+        }
+    }
     format!("{func}({}): {}", params.join(","), d.text())
 }
 
@@ -296,17 +301,22 @@ fn emit_diags(host: &mut dyn SplHost, func: &str, diags: &[Diagnostic]) -> RtRes
             Severity::Deprecated => ErrorLevel::Deprecated,
             Severity::Error => ErrorLevel::Error,
         };
-        host.diagnostic(level, &diag_message(func, d))?;
+        host.diagnostic(level, &diag_message(func, d, None))?;
     }
     Ok(())
 }
 
 /// `EH_THROW`: the first warning becomes an exception of `class`.
-fn diags_to_exception(class: &str, func: &str, diags: &[Diagnostic]) -> Option<RuntimeError> {
+fn diags_to_exception(
+    class: &str,
+    func: &str,
+    diags: &[Diagnostic],
+    param: Option<&[u8]>,
+) -> Option<RuntimeError> {
     diags
         .iter()
         .find(|d| d.severity == Severity::Warning)
-        .map(|d| throw(class, diag_message(func, d)))
+        .map(|d| throw(class, diag_message(func, d, param)))
 }
 
 // ---------------------------------------------------------------------------
@@ -327,7 +337,7 @@ fn dir_open(fs: &mut FileState, func: &str, path: &[u8]) -> RtResult<()> {
         ZStr::from(path)
     });
     fs.index = 0;
-    if let Some(e) = diags_to_exception("UnexpectedValueException", func, &diags) {
+    if let Some(e) = diags_to_exception("UnexpectedValueException", func, &diags, Some(path)) {
         fs.entry.clear();
         return Err(e);
     }
@@ -361,7 +371,7 @@ fn file_open(fs: &mut FileState, func: &str, use_include_path: bool) -> RtResult
     let (stream, diags) = capture(|| {
         php_streams::open::fopen(name.as_bytes(), &mode, use_include_path, None)
     });
-    if let Some(e) = diags_to_exception("RuntimeException", func, &diags) {
+    if let Some(e) = diags_to_exception("RuntimeException", func, &diags, Some(name.as_bytes())) {
         fs.open_mode = None;
         fs.file_name = None;
         return Err(e);
@@ -828,7 +838,7 @@ pub(crate) fn call(
                     _ => FsType::IsLink,
                 };
                 let (r, diags) = capture(|| php_stat(fname.as_bytes(), ty));
-                if let Some(e) = diags_to_exception("RuntimeException", func, &diags) {
+                if let Some(e) = diags_to_exception("RuntimeException", func, &diags, Some(fname.as_bytes())) {
                     return Err(e);
                 }
                 Ok(stat_value(&r))

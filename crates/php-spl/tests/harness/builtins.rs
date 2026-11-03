@@ -196,8 +196,27 @@ pub fn register_classes(it: &mut Interp) {
         ],
     );
     register_exceptions(it);
-    // SPL classes
-    for def in php_spl::classes::class_table() {
+    // SPL classes, parents and interfaces first
+    let mut defs: Vec<&php_spl::classes::ClassDef> = php_spl::classes::class_table().iter().collect();
+    let mut ordered = Vec::new();
+    while !defs.is_empty() {
+        let before = defs.len();
+        defs.retain(|d| {
+            let deps_ok = d.parent.iter().chain(d.interfaces.iter()).all(|n| {
+                it.find_class(n.as_bytes()).is_some() || ordered.iter().any(|o: &&php_spl::classes::ClassDef| o.name == *n)
+            });
+            if deps_ok {
+                ordered.push(*d);
+                false
+            } else {
+                true
+            }
+        });
+        if defs.len() == before {
+            ordered.extend(defs.drain(..));
+        }
+    }
+    for def in ordered {
         let parent = def.parent.and_then(|p| it.find_class(p.as_bytes()));
         let mut ifaces: Vec<String> = Vec::new();
         for i in def.interfaces {
@@ -1048,6 +1067,7 @@ pub fn call(it: &mut Interp, name: &str, args: &[Value]) -> RtResult<Value> {
             Ok(d) => Value::Str(ZStr::from(d)),
             Err(_) => Value::Bool(false),
         },
+        "getmypid" => Value::Int(i64::from(std::process::id())),
         "sys_get_temp_dir" => Value::from(std::env::temp_dir().to_string_lossy().into_owned()),
         "tempnam" => {
             let dir = zstr(it, &a0())?.to_string_lossy();

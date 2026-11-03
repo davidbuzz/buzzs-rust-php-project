@@ -40,6 +40,10 @@ fn oracle_scripts() {
             .expect("spawn")
             .join()
             .unwrap_or_else(|_| b"PANIC".to_vec());
+        if let Ok(d) = std::env::var("SPL_ORACLE_DUMP") {
+            let f = p.file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_default();
+            let _ = std::fs::write(Path::new(&d).join(f + ".got"), &got);
+        }
         let (e, g) = (harness::normalize(&expected), harness::normalize(&got));
         if e != g {
             failures.push(format!(

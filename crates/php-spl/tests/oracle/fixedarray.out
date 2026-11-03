@@ -6,8 +6,8 @@ string(1) "b"
 string(1) "b"
 string(1) "a"
 TypeError: Cannot access offset of type string on SplFixedArray
-RuntimeException: Index invalid or out of range
-RuntimeException: Index invalid or out of range
+OutOfBoundsException: Index invalid or out of range
+OutOfBoundsException: Index invalid or out of range
 TypeError: Cannot access offset of type null on SplFixedArray
 TypeError: Cannot access offset of type array on SplFixedArray
 TypeError: Cannot access offset of type stdClass on SplFixedArray

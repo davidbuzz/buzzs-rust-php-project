@@ -62,7 +62,7 @@ object(ArrayObject)#5 (1) {
 2=4
 bool(true)
 bool(false)
-ArrayObject::setIteratorClass(): Argument #1 ($iteratorClass) must be a class name derived from ArrayIterator, stdClass given
+ArrayObject::setIteratorClass(): Argument #1 ($iteratorClass) must be a class name derived from ArrayIterator, "stdClass" given
 array(1) {
   ["k"]=>
   string(1) "v"

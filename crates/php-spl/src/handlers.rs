@@ -380,6 +380,11 @@ pub fn native_iterator(
             None => return Ok(None),
         },
         Family::Recursive => {
+            // RecursiveTreeIterator overrides key()/current() internally, so
+            // zend_implement_iterator switched it to method iteration.
+            if host.instance_of(obj, "RecursiveTreeIterator") {
+                return Ok(None);
+            }
             crate::iterators::check_recursive_initialized(&st)?;
             Box::new(crate::iterators::RecursiveItIter::new(obj.clone()))
         }

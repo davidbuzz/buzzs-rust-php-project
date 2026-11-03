@@ -327,6 +327,18 @@ fn class_info(cls: &Rc<Class>) -> ClassInfo {
         p = k.parent.clone();
     }
     let mut interfaces: Vec<ZStr> = Vec::new();
+    let mut base = Some(cls.clone());
+    while let Some(b) = base.clone() {
+        if b.internal {
+            break;
+        }
+        base = b.parent.clone();
+    }
+    if let Some(b) = &base {
+        for i in php_spl::classes::interfaces_of(&b.name) {
+            interfaces.push(ZStr::from(i));
+        }
+    }
     let mut c = Some(cls.clone());
     while let Some(k) = c {
         for i in &k.interfaces {

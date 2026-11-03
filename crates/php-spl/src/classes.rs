@@ -249,6 +249,73 @@ const ENGINE_INTERFACES: &[(&str, &[&str])] = &[
     ("Exception", &["Throwable"]),
 ];
 
+fn engine_interfaces(name: &str) -> Option<Vec<&'static str>> {
+    Some(match name {
+        "Traversable" | "ArrayAccess" | "Countable" | "Serializable" | "Stringable"
+        | "JsonSerializable" => Vec::new(),
+        "Iterator" | "IteratorAggregate" => vec!["Traversable"],
+        "Throwable" => vec!["Stringable"],
+        "Exception" => vec!["Stringable", "Throwable"],
+        _ => return None,
+    })
+}
+
+fn canonical_iface(name: &str) -> &'static str {
+    const ENGINE: &[&str] = &[
+        "Traversable", "Iterator", "IteratorAggregate", "ArrayAccess", "Countable",
+        "Serializable", "Stringable", "JsonSerializable", "Throwable",
+    ];
+    ENGINE
+        .iter()
+        .copied()
+        .find(|n| n.eq_ignore_ascii_case(name))
+        .or_else(|| canonical_name(name))
+        .unwrap_or("Traversable")
+}
+
+/// The interfaces of an SPL class in `ce->interfaces` order, as built by
+/// internal class registration (`zend_register_internal_class_ex` adds
+/// `Stringable` for a declared `__toString()`, inheritance appends the
+/// parent's interfaces in reverse, `zend_do_inherit_interfaces` appends an
+/// interface's own interfaces in reverse). This is the order
+/// `class_implements()` reports.
+#[must_use]
+pub fn interfaces_of(class: &str) -> Vec<&'static str> {
+    if let Some(v) = engine_interfaces(class) {
+        return v;
+    }
+    let Some(c) = find_class(class) else {
+        return Vec::new();
+    };
+    let mut out: Vec<&'static str> = Vec::new();
+    let push = |out: &mut Vec<&'static str>, n: &'static str| {
+        if !out.contains(&n) {
+            out.push(n);
+        }
+    };
+    if c.kind != ClassKind::Interface
+        && c.methods.iter().any(|m| m.name.eq_ignore_ascii_case("__toString"))
+    {
+        push(&mut out, "Stringable");
+    }
+    if let Some(p) = c.parent {
+        for i in interfaces_of(p).into_iter().rev() {
+            push(&mut out, i);
+        }
+    }
+    for i in c.interfaces {
+        let i = canonical_iface(i);
+        if out.contains(&i) {
+            continue;
+        }
+        out.push(i);
+        for j in interfaces_of(i).into_iter().rev() {
+            push(&mut out, j);
+        }
+    }
+    out
+}
+
 /// The SPL functions.
 #[must_use]
 pub fn function_table() -> &'static [MethodDef] {
@@ -272,6 +339,23 @@ mod tests {
         assert!(is_subclass_of("SplTempFileObject", "SplFileInfo"));
         assert!(is_subclass_of("BadMethodCallException", "LogicException"));
         assert_eq!(constant("RecursiveTreeIterator", "LEAVES_ONLY"), Some(0));
+        assert_eq!(
+            interfaces_of("RecursiveArrayIterator"),
+            ["Countable", "Serializable", "ArrayAccess", "Iterator", "Traversable", "SeekableIterator", "RecursiveIterator"]
+        );
+        assert_eq!(
+            interfaces_of("SplFileObject"),
+            ["Stringable", "RecursiveIterator", "Traversable", "Iterator", "SeekableIterator"]
+        );
+        assert_eq!(
+            interfaces_of("CachingIterator"),
+            ["Stringable", "Iterator", "Traversable", "OuterIterator", "ArrayAccess", "Countable"]
+        );
+        assert_eq!(interfaces_of("BadMethodCallException"), ["Throwable", "Stringable"]);
+        assert_eq!(
+            interfaces_of("ArrayObject"),
+            ["IteratorAggregate", "Traversable", "ArrayAccess", "Serializable", "Countable"]
+        );
         let (_, fa) = find_method("SplFixedArray", "fromArray").unwrap();
         assert_ne!(fa.flags & MethodFlags::STATIC, 0);
     }
