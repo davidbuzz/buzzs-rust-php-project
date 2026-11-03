@@ -25,8 +25,9 @@ crates/php-cli/Cargo.toml.
 3. `Vm::call_function` (native code calling a native helper by name, e.g.
    realpath() from SoapClient) is not observed: it is a C call in php-src.
 
-Measured with these applied: ext/zend_test/tests 99/168 (56 without),
-the zend_test-gated tests elsewhere 102/136 (95 without).
+Measured on 3be3cf4 (4 Nov 2026) with these applied: ext/zend_test/tests
+105/168 (64 without), the zend_test-gated tests elsewhere 104/136 (99
+without).
 
 diff --git a/crates/php-vm/src/call.rs b/crates/php-vm/src/call.rs
 index 76403bf..af6ef61 100644
