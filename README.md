@@ -30,9 +30,10 @@ is in progress and will replace them (the owner's partial runs since then are ar
 | ext/mysqli, session, curl, ftp, sockets, phar, zip, bz2, fileinfo | 90–98% | |
 | ext/exif, calendar, gettext, posix, sysv*, shmop, ctype, pcntl | 98–100% | |
 | sapi/cli | 88.3% | 98/111; the built-in server (`php -S`) 77% |
+| ext/gd | 99.6% | 281/282 (system libgd 2.3.3) |
 
-Not yet started: ext/gd and ext/zend_test (both in progress; zend_test gates about 340
-currently-skipped engine tests). What is deliberately out of scope (opcache, FPM, pgsql,
+In progress: ext/zend_test (gates about 340 currently-skipped engine tests) and typed
+references in the engine. What is deliberately out of scope (opcache, FPM, pgsql,
 ffi, …) and the row-by-row detail are in [FEATURE_GAP.md](FEATURE_GAP.md).
 
 ## Layout
