@@ -392,3 +392,47 @@ quote 'a/b' '/x'
 quote 'abc' ''
 quote "\xe9t\xc3\xa9" "\xe9"
 quote 'nothing'
+
+# --- extra shapes ---
+match_all '/(?<x>a)(b)?/' 'zzz'
+match_all '/(?<x>a)(b)?/' 'zzz' 2
+match_all '/(?<x>a)(b)?/' 'a ab' 1
+match_all '/(?<x>a)(b)?/' 'a ab' 257
+match_all '/(?<x>a)(b)?/' 'a ab' 513
+match_all '/(?<x>a)(b)?/' 'a ab' 769
+match_all '/(?<x>a)(b)?/' 'a ab' 770
+match_all '/(?J)(?<n>a)|(?<n>b)/' 'ab'
+match_all '/(?J)(?<n>a)|(?<n>b)/' 'ab' 2
+match_all '/(?J)(?<n>a)|(?<n>b)/' 'ab' 514
+match '/(?J)(?<n>a)|(?<n>b)/' 'b' 512
+match '/(?J)(?<n>a)|(?<n>b)/' 'b' 768
+match '/(?<n>a)?(?<m>b)?c/' 'c'
+match '/(?<n>a)?(?<m>b)?c/' 'c' 256
+match '/(?<n>a)?(?<m>b)?(c)/' 'c'
+match_all '//' ''
+match_all '//' '' 2
+match_all '/$/' 'ab' 0 1
+match_all '/\b/' 'ab cd'
+match_all '/(*MARK:m)a/' 'aa' 1
+match_all '/(*MARK:m)a|b/' 'ab' 1
+match_all '/(*MARK:m)a|b/' 'ab' 2
+match_all '/a/' 'aaa' 0 -2
+match_all '/a/u' "\xc3\xa9a" 0 1
+match '/a/u' "\xc3\xa9a" 0 -1
+match '/a/u' "\xc3\xa9a" 0 -2
+replace '/(?<w>\w+)/' '<$1>' 'hello world'
+replace '/a/u' 'b' "\xc3\xa9a"
+replace '/(a)(?:(b)|c)/' '[$2]' 'ac ab'
+replace '/(a)(?:(b)|c)/' '[\2]' 'ac ab'
+replace '/(.)/' '$1$1' ''
+replace '/^/m' '> ' "a\nb"
+callback '/(?<n>a)?(?<m>b)?c/' 'c x c'
+callback '/(?<n>a)?(?<m>b)?c/' 'c x c' -1 768
+callback '/(*MARK:A)a|(*MARK:B)b/' 'ab' -1 256
+split '/(?<n>-)/' 'a-b' -1 2
+split '/\s*/' 'a b  c'
+split '/\s*/' 'a b  c' -1 1
+split '/(\s)*/' 'a b' -1 3
+split '//' "\xc3\xa9t" -1 1
+split '//u' "\xc3\xa9t" -1 5
+grep '/a/u' ['a', "\xc3\xa9"]

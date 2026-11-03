@@ -265,3 +265,33 @@ fn constants() {
     assert_eq!(PREG_JIT_STACKLIMIT_ERROR, PregError::JitStackLimit.code());
     assert_eq!(PREG_BAD_UTF8_OFFSET_ERROR, PregError::BadUtf8Offset.code());
 }
+
+/// `locales.phpt`: locale-aware patterns are cached per `LC_CTYPE` name and
+/// use character tables built from the process locale (the C locale here).
+#[test]
+fn locale_aware_cache_keys() {
+    let mut pcre = Pcre::new();
+    let plain = pcre.compile(b"/^\\w$/").unwrap();
+    let localized = pcre
+        .compile_with_locale(b"/^\\w$/", Some(b"de_DE"))
+        .unwrap();
+    assert!(!Regex::ptr_eq(&plain, &localized));
+    let again = pcre
+        .compile_with_locale(b"/^\\w$/", Some(b"de_DE"))
+        .unwrap();
+    assert!(Regex::ptr_eq(&localized, &again));
+    assert_eq!(pcre.cache().len(), 2);
+    let cfg = pcre.config();
+    // In the C locale \xe4 is not a word character.
+    assert_eq!(
+        match_one(&localized, &cfg, b"\xe4", false, 0, 0).result,
+        Ok(0)
+    );
+    assert_eq!(match_one(&localized, &cfg, b"a", false, 0, 0).result, Ok(1));
+    // Delimiter errors are reported before any table work.
+    assert_eq!(
+        pcre.compile_with_locale(b"abc", Some(b"de_DE"))
+            .unwrap_err(),
+        CompileError::BadDelimiter
+    );
+}
