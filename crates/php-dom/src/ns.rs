@@ -41,7 +41,7 @@ pub(crate) static XML_TOKEN: Token = Token(XML_NS);
 pub(crate) static XMLNS_TOKEN: Token = Token(XMLNS_NS);
 
 impl Token {
-    fn addr(&'static self) -> *mut c_void {
+    pub(crate) fn addr(&'static self) -> *mut c_void {
         ptr::from_ref(self).cast_mut().cast()
     }
 }

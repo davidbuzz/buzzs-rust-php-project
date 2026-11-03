@@ -340,6 +340,11 @@ pub(crate) fn with_generic_errors<R>(f: impl FnOnce() -> R) -> R {
     f()
 }
 
+/// `php_libxml_sanitize_parse_ctxt_options` (crate-visible).
+pub(crate) fn sanitize_ctxt_pub(ctxt: *mut ffi::xmlParserCtxt) {
+    sanitize_ctxt(ctxt);
+}
+
 /// `php_libxml_sanitize_parse_ctxt_options`.
 fn sanitize_ctxt(ctxt: *mut ffi::xmlParserCtxt) {
     // SAFETY: live parser context.

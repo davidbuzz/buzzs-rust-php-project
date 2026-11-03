@@ -37,6 +37,37 @@ pub enum XPathReturn {
     Str(Vec<u8>),
 }
 
+/// A stream opened for reading by the host (`php_stream_open_wrapper_ex`).
+pub struct HostStream {
+    /// The byte source.
+    pub reader: Box<dyn std::io::Read>,
+    /// Charset sniffed from transport metadata (HTTP `Content-Type`).
+    pub charset: Option<Vec<u8>>,
+    /// The resolved path when this is a plain file (`opened_path` with the
+    /// plain-files wrapper); used for the document URI.
+    pub plain_file_path: Option<Vec<u8>>,
+}
+
+impl std::fmt::Debug for HostStream {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HostStream")
+            .field("charset", &self.charset)
+            .field("plain_file_path", &self.plain_file_path)
+            .finish_non_exhaustive()
+    }
+}
+
+fn os_error_text(e: &std::io::Error) -> String {
+    match e.kind() {
+        std::io::ErrorKind::NotFound => "No such file or directory".into(),
+        std::io::ErrorKind::PermissionDenied => "Permission denied".into(),
+        _ => {
+            let s = e.to_string();
+            s.split(" (os error").next().unwrap_or(&s).to_string()
+        }
+    }
+}
+
 /// The engine services the DOM extension needs.
 pub trait DomHost {
     /// `instanceof`: whether class `class` (case-insensitive) is `base` or a
@@ -71,6 +102,41 @@ pub trait DomHost {
     /// family (always true for nodes produced by this crate).
     fn is_dom_node(&self, node: &Node, modern: bool) -> bool {
         node.family_is_modern() == modern
+    }
+
+    /// Opens `path` for reading through the stream layer with
+    /// `REPORT_ERRORS` (the host emits "Failed to open stream" warnings
+    /// itself). `Err` carries an exception thrown by a user wrapper. The
+    /// default opens plain files.
+    fn open_read_stream(&self, path: &[u8]) -> Result<Option<HostStream>, DomError> {
+        let p = std::path::PathBuf::from(String::from_utf8_lossy(path).into_owned());
+        let p = p.strip_prefix("file://").map(std::path::Path::to_path_buf).unwrap_or(p);
+        match std::fs::File::open(&p) {
+            Ok(f) => {
+                let abs = std::fs::canonicalize(&p).unwrap_or(p);
+                Ok(Some(HostStream {
+                    reader: Box::new(f),
+                    charset: None,
+                    plain_file_path: Some(abs.to_string_lossy().into_owned().into_bytes()),
+                }))
+            }
+            Err(e) => {
+                crate::error::warning(format!("Failed to open stream: {}", os_error_text(&e)));
+                Ok(None)
+            }
+        }
+    }
+
+    /// Opens `path` for writing (mode `"wb"`) with `REPORT_ERRORS`.
+    fn open_write_stream(&self, path: &[u8]) -> Result<Option<Box<dyn std::io::Write>>, DomError> {
+        let p = String::from_utf8_lossy(path).into_owned();
+        match std::fs::File::create(&p) {
+            Ok(f) => Ok(Some(Box::new(f))),
+            Err(e) => {
+                crate::error::warning(format!("Failed to open stream: {}", os_error_text(&e)));
+                Ok(None)
+            }
+        }
     }
 }
 

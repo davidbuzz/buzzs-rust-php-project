@@ -306,6 +306,7 @@ pub const XML_C14N_EXCLUSIVE_1_0: c_int = 1;
 extern "C" {
     pub static xmlMalloc: xmlMallocFunc;
     pub static xmlFree: xmlFreeFunc;
+    pub static xmlStringText: [xmlChar; 5];
     pub fn __xmlStructuredError() -> *mut xmlStructuredErrorFunc;
     pub fn __xmlStructuredErrorContext() -> *mut *mut c_void;
     pub fn __xmlSaveNoEmptyTags() -> *mut c_int;

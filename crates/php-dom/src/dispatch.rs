@@ -717,7 +717,7 @@ pub fn call_static(class: &str, method: &str, args: &[DomValue], host: &dyn DomH
             let src = a.str(0)?;
             let opts = a.int_or(1, 0)?;
             let enc = a.opt_str(2)?;
-            Ok(DomValue::Node(crate::html::create_from(&src, opts, enc.as_deref(), m == "createfromfile")?))
+            Ok(DomValue::Node(crate::html::create_from(&src, opts, enc.as_deref(), m == "createfromfile", host)?))
         }
         _ => Err(DomError::Error(format!("Call to undefined method {class}::{method}()"))),
     }
@@ -1167,7 +1167,7 @@ fn call_document(
         }
         "savehtmlfile" => {
             if modern {
-                false_on_none(crate::html::save_html_file(n, &a.path(0)?)?, DomValue::Int)
+                false_on_none(crate::html::save_html_file(n, &a.path(0)?, host)?, DomValue::Int)
             } else {
                 false_on_none(n.save_html_file(&a.path(0)?)?, DomValue::Int)
             }
