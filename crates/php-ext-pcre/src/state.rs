@@ -9,6 +9,7 @@
 use std::cell::{Cell, RefCell};
 
 use php_pcre::{MatchConfig, Pcre, PregError, Regex};
+use php_runtime::ZStr;
 use php_vm::ext::VmResult;
 use php_vm::Vm;
 
@@ -17,6 +18,35 @@ thread_local! {
     /// Whether the `pcre.*` INI values must be re-read (set by the
     /// on-modify handlers and at request boundaries).
     static CONFIG_STALE: Cell<bool> = const { Cell::new(true) };
+    /// The last large subject a `/u` match proved to be valid UTF-8.
+    ///
+    /// Stand-in for PHP's `IS_STR_VALID_UTF8` string flag (which `ZStr`
+    /// does not have yet, see `PROPOSALS.md`). Holding a handle keeps the
+    /// instance alive, so a pointer match can never hit a different (freed
+    /// and reallocated) string, and `ZStr` is never mutated while shared.
+    static VALID_UTF8: RefCell<Option<ZStr>> = const { RefCell::new(None) };
+}
+
+/// Subjects shorter than this are not remembered: validating them is cheap,
+/// and not holding on to them keeps refcounts and `memory_get_usage()`
+/// exactly as in PHP for ordinary strings.
+const VALID_UTF8_MIN_LEN: usize = 4096;
+
+/// Whether `s` is known to be valid UTF-8 (see [`remember_valid_utf8`]).
+pub(crate) fn known_valid_utf8(s: &ZStr) -> bool {
+    VALID_UTF8.with(|c| c.borrow().as_ref().is_some_and(|k| ZStr::ptr_eq(k, s)))
+}
+
+/// Records that a `/u` match validated `s` (`MatchOutcome::subject_valid_utf8`).
+pub(crate) fn remember_valid_utf8(s: &ZStr) {
+    if s.len() >= VALID_UTF8_MIN_LEN && !s.is_interned() {
+        VALID_UTF8.with(|c| *c.borrow_mut() = Some(s.clone()));
+    }
+}
+
+/// The match configuration for `subject`, carrying the UTF-8 validity hint.
+pub(crate) fn config_for(subject: &ZStr) -> MatchConfig {
+    with(|p| p.config()).with_known_valid_utf8(known_valid_utf8(subject))
 }
 
 /// Marks the cached `pcre.*` settings stale (INI on-modify).
@@ -42,6 +72,7 @@ pub(crate) fn last_error() -> PregError {
 /// `RINIT`/`RSHUTDOWN`: drops the cache and resets the error state.
 pub(crate) fn reset() {
     with(|p| *p = Pcre::new());
+    VALID_UTF8.with(|c| c.borrow_mut().take());
     invalidate_config();
 }
 
@@ -129,6 +160,24 @@ mod tests {
         assert!(is_c_locale(b"C.UTF-8"));
         assert!(is_c_locale(b"POSIX"));
         assert!(!is_c_locale(b"de_DE.ISO-8859-1"));
+    }
+
+    #[test]
+    fn valid_utf8_cache_is_by_identity() {
+        reset();
+        let big = ZStr::from(vec![b'a'; VALID_UTF8_MIN_LEN]);
+        let same_bytes = ZStr::from(vec![b'a'; VALID_UTF8_MIN_LEN]);
+        assert!(!known_valid_utf8(&big));
+        remember_valid_utf8(&big);
+        assert!(known_valid_utf8(&big));
+        assert!(known_valid_utf8(&big.clone()));
+        assert!(!known_valid_utf8(&same_bytes));
+        let small = ZStr::from("abc");
+        remember_valid_utf8(&small);
+        assert!(!known_valid_utf8(&small));
+        assert!(known_valid_utf8(&big));
+        reset();
+        assert!(!known_valid_utf8(&big));
     }
 
     #[test]

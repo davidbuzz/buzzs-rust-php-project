@@ -10,7 +10,9 @@
 //! plus their hash slots.
 
 use php_pcre::{
-    Key, MatchArray, MatchConfig, Regex, Replacement, ReplacementPiece, Value as PValue,
+    Key, MatchArray, MatchConfig, MatchRef, MatchSpans, Regex, Replacement, ReplacementPiece,
+    Value as PValue, PREG_OFFSET_CAPTURE, PREG_PATTERN_ORDER, PREG_SET_ORDER,
+    PREG_UNMATCHED_AS_NULL,
 };
 use php_vm::ext::VmResult;
 use php_vm::Vm;
@@ -144,6 +146,71 @@ pub(crate) fn precheck_match_all(
     check(vm, groups * (ARRAY_HEADER + n * 16))
 }
 
+/// Bytes of an array table with `entries` slots (packed or hashed).
+fn table_size(entries: u64, hashed: bool) -> u64 {
+    if hashed {
+        entries * 32 + entries.next_power_of_two() * 4
+    } else {
+        entries * 16
+    }
+}
+
+/// Bytes PHP would allocate for the `$matches` that
+/// [`MatchSpans::into_outcome`] is about to build (computed from the
+/// offsets alone, before any capture is copied; mirrors [`array_size`]).
+pub(crate) fn spans_size(spans: &MatchSpans<'_>, re: &Regex, global: bool, flags: i64) -> u64 {
+    let offset_capture = flags & PREG_OFFSET_CAPTURE != 0;
+    let unmatched_as_null = flags & PREG_UNMATCHED_AS_NULL != 0;
+    let order = match flags & 0xff {
+        0 if global => PREG_PATTERN_ORDER,
+        o => o,
+    };
+    let groups = re.capture_count() as u64 + 1;
+    let names = re.name_count() as u64;
+    // A matched value: its string, plus the `[string, offset]` pair array.
+    let value = |span: Option<(usize, usize)>| -> u64 {
+        let s = span.map_or(0, |(s, e)| string_size(e - s));
+        if offset_capture && span.is_some() {
+            ARRAY_HEADER + table_size(2, false) + s
+        } else {
+            s
+        }
+    };
+    let set = |m: &MatchRef<'_>| -> u64 {
+        let n = if unmatched_as_null {
+            groups
+        } else {
+            m.count() as u64
+        };
+        let hashed = names > 0 || m.mark().is_some();
+        let keys = n + if hashed {
+            names + u64::from(m.mark().is_some())
+        } else {
+            0
+        };
+        let values: u64 = (0..m.count()).map(|i| value(m.span(i))).sum();
+        ARRAY_HEADER
+            + table_size(keys, hashed)
+            + values
+            + m.mark().map_or(0, |k| string_size(k.len()))
+    };
+    let n = spans.match_count() as u64;
+    if !global {
+        spans.matches().next().map_or(0, |m| set(&m))
+    } else if order == PREG_SET_ORDER {
+        ARRAY_HEADER + table_size(n, false) + spans.matches().map(|m| set(&m)).sum::<u64>()
+    } else {
+        let values: u64 = spans
+            .matches()
+            .map(|m| (0..m.count()).map(|i| value(m.span(i))).sum::<u64>())
+            .sum();
+        ARRAY_HEADER
+            + table_size(groups + names, names > 0)
+            + groups * (ARRAY_HEADER + table_size(n, false))
+            + values
+    }
+}
+
 /// Whether `bytes` more would stay within `memory_limit`.
 fn fits(bytes: u64) -> bool {
     php_memlimit::would_fit(usize::try_from(bytes).unwrap_or(usize::MAX))
@@ -163,6 +230,31 @@ mod tests {
         assert_eq!(string_size(1), 0);
         assert_eq!(string_size(2), 32);
         assert_eq!(string_size(8), 40);
+    }
+
+    #[test]
+    fn spans_size_counts_captures_before_copying() {
+        let re = Regex::compile(b"/(a+)(b)?/").unwrap();
+        let cfg = MatchConfig::default();
+        let subject = vec![b'a'; 100];
+        let spans = php_pcre::match_one_spans(&re, &cfg, &subject, true, 0, 0);
+        // [0] and [1] are both 100 bytes; [2] is trimmed.
+        assert_eq!(
+            spans_size(&spans, &re, false, 0),
+            ARRAY_HEADER + 32 + 2 * string_size(100)
+        );
+        let built = spans.into_outcome().matches.unwrap();
+        assert_eq!(array_size(&built), ARRAY_HEADER + 32 + 2 * string_size(100));
+
+        let spans = php_pcre::match_all_spans(&re, &cfg, b"ab a", true, 0, 0);
+        let estimate = spans_size(&spans, &re, true, 0);
+        let built = spans.into_outcome().matches.unwrap();
+        assert_eq!(estimate, array_size(&built));
+
+        let spans = php_pcre::match_all_spans(&re, &cfg, b"aab a", true, PREG_SET_ORDER, 0);
+        let estimate = spans_size(&spans, &re, true, PREG_SET_ORDER);
+        let built = spans.into_outcome().matches.unwrap();
+        assert_eq!(estimate, array_size(&built));
     }
 
     #[test]

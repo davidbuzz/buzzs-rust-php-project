@@ -69,6 +69,11 @@ fn preg_match_all(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 }
 
 /// `php_do_pcre_match()`.
+///
+/// Matching first records only capture offsets; the size of the PHP array
+/// they imply is reserved against `memory_limit` before any capture is
+/// copied, so an oversized result raises PHP's "Allowed memory size"
+/// fatal instead of being built.
 fn do_match(vm: &mut Vm, a: &Args, global: bool) -> VmResult<Value> {
     let pattern = a.str(0);
     let subject = a.str(1);
@@ -78,21 +83,27 @@ fn do_match(vm: &mut Vm, a: &Args, global: bool) -> VmResult<Value> {
     let Some(re) = state::compile(vm, pattern.as_bytes())? else {
         return Ok(Value::Bool(false));
     };
-    let cfg = config();
+    let cfg = state::config_for(&subject);
     if global && capture {
         memory::precheck_match_all(vm, &re, &cfg, subject.as_bytes())?;
     }
-    let out = if global {
-        php_pcre::match_all(&re, &cfg, subject.as_bytes(), capture, flags, offset)
+    let spans = if global {
+        php_pcre::match_all_spans(&re, &cfg, subject.as_bytes(), capture, flags, offset)
     } else {
-        php_pcre::match_one(&re, &cfg, subject.as_bytes(), capture, flags, offset)
+        php_pcre::match_one_spans(&re, &cfg, subject.as_bytes(), capture, flags, offset)
     };
+    if capture {
+        memory::check(vm, memory::spans_size(&spans, &re, global, flags))?;
+    }
+    let out = spans.into_outcome();
+    if out.subject_valid_utf8 {
+        state::remember_valid_utf8(&subject);
+    }
     if let Some(e) = out.last_error {
         state::set_last_error(e);
     }
     if capture {
         if let Some(m) = out.matches {
-            memory::check(vm, memory::array_size(&m))?;
             a.set_ref(2, Value::Array(to_zarray(m)));
         }
     }
@@ -146,7 +157,7 @@ fn replace_common(vm: &mut Vm, a: &Args, is_filter: bool) -> VmResult<Value> {
             if pending.is_set() {
                 continue;
             }
-            let r = replace_in_subject(vm, &regex, &replacement, s.as_bytes(), limit, &mut count);
+            let r = replace_in_subject(vm, &regex, &replacement, &s, limit, &mut count);
             if let Some(Some(r)) = pending.absorb(r)? {
                 if !is_filter || count > old {
                     out.insert(key, Value::Str(exact(r)));
@@ -156,7 +167,7 @@ fn replace_common(vm: &mut Vm, a: &Args, is_filter: bool) -> VmResult<Value> {
         pending.finish(Value::Array(ZArray::from(out)))?
     } else {
         let s = vm.value_to_string(&subject)?;
-        match replace_in_subject(vm, &regex, &replacement, s.as_bytes(), limit, &mut count)? {
+        match replace_in_subject(vm, &regex, &replacement, &s, limit, &mut count)? {
             Some(r) if !is_filter || count > 0 => Value::Str(exact(r)),
             _ => Value::Null,
         }
@@ -220,10 +231,11 @@ fn replace_in_subject(
     vm: &mut Vm,
     regex: &Value,
     replacement: &Value,
-    subject: &[u8],
+    subject_str: &ZStr,
     limit: usize,
     count: &mut usize,
 ) -> VmResult<Option<Vec<u8>>> {
+    let subject = subject_str.as_bytes();
     let Value::Array(patterns) = regex else {
         let pattern = vm.value_to_string(regex)?;
         let rep = vm.value_to_string(replacement)?;
@@ -232,6 +244,7 @@ fn replace_in_subject(
             pattern.as_bytes(),
             rep.as_bytes(),
             subject,
+            state::known_valid_utf8(subject_str),
             limit,
             count,
         );
@@ -262,6 +275,7 @@ fn replace_in_subject(
             pattern.as_bytes(),
             rep.as_bytes(),
             &current,
+            false,
             limit,
             count,
         )? {
@@ -278,13 +292,14 @@ fn replace_one(
     pattern: &[u8],
     replacement: &[u8],
     subject: &[u8],
+    valid_utf8: bool,
     limit: usize,
     count: &mut usize,
 ) -> VmResult<Option<Vec<u8>>> {
     let Some(re) = state::compile(vm, pattern)? else {
         return Ok(None);
     };
-    let cfg = config();
+    let cfg = config().with_known_valid_utf8(valid_utf8);
     let replacement = Replacement::parse(replacement);
     memory::precheck_replace(vm, &re, &cfg, subject, &replacement, limit)?;
     let out = php_pcre::replace(&re, &cfg, subject, &replacement, limit);
@@ -379,7 +394,7 @@ fn replace_func_impl(
             if pending.is_set() {
                 continue;
             }
-            let r = replace_func_in_subject(vm, regex, callback, s.as_bytes(), limit, flags, count);
+            let r = replace_func_in_subject(vm, regex, callback, &s, limit, flags, count);
             if let Some(Some(r)) = pending.absorb(r)? {
                 out.insert(key, Value::Str(exact(r)));
             }
@@ -388,7 +403,7 @@ fn replace_func_impl(
     }
     let s = vm.value_to_string(subject)?;
     Ok(
-        match replace_func_in_subject(vm, regex, callback, s.as_bytes(), limit, flags, count)? {
+        match replace_func_in_subject(vm, regex, callback, &s, limit, flags, count)? {
             Some(r) => Value::Str(exact(r)),
             None => Value::Null,
         },
@@ -400,11 +415,12 @@ fn replace_func_in_subject(
     vm: &mut Vm,
     regex: &Value,
     callback: &Value,
-    subject: &[u8],
+    subject_str: &ZStr,
     limit: usize,
     flags: i64,
     count: &mut usize,
 ) -> VmResult<Option<Vec<u8>>> {
+    let subject = subject_str.as_bytes();
     let Value::Array(patterns) = regex else {
         let pattern = vm.value_to_string(regex)?;
         return replace_func(
@@ -412,6 +428,7 @@ fn replace_func_in_subject(
             pattern.as_bytes(),
             callback,
             subject,
+            state::known_valid_utf8(subject_str),
             limit,
             flags,
             count,
@@ -425,6 +442,7 @@ fn replace_func_in_subject(
             pattern.as_bytes(),
             callback,
             &current,
+            false,
             limit,
             flags,
             count,
@@ -437,11 +455,13 @@ fn replace_func_in_subject(
 }
 
 /// `php_pcre_replace_func()`: one pattern, one subject.
+#[allow(clippy::too_many_arguments)]
 fn replace_func(
     vm: &mut Vm,
     pattern: &[u8],
     callback: &Value,
     subject: &[u8],
+    valid_utf8: bool,
     limit: usize,
     flags: i64,
     count: &mut usize,
@@ -449,7 +469,7 @@ fn replace_func(
     let Some(re) = state::compile(vm, pattern)? else {
         return Ok(None);
     };
-    let cfg = config();
+    let cfg = config().with_known_valid_utf8(valid_utf8);
     state::set_last_error(PregError::NoError);
     let mut thrown = None;
     let out = php_pcre::replace_callback(&re, &cfg, subject, limit, flags, |m| {
@@ -494,7 +514,7 @@ fn preg_split(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let Some(re) = state::compile(vm, pattern.as_bytes())? else {
         return Ok(Value::Bool(false));
     };
-    let cfg = config();
+    let cfg = state::config_for(&subject);
     let no_empty = flags & php_pcre::PREG_SPLIT_NO_EMPTY != 0;
     memory::precheck_split(vm, &re, &cfg, subject.as_bytes(), no_empty)?;
     match php_pcre::split(&re, &cfg, subject.as_bytes(), limit, flags) {
