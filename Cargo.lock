@@ -471,6 +471,13 @@ name = "php-runtime"
 version = "0.1.0"
 
 [[package]]
+name = "php-session"
+version = "0.1.0"
+dependencies = [
+ "php-runtime",
+]
+
+[[package]]
 name = "php-sockets"
 version = "0.1.0"
 
