@@ -1073,6 +1073,7 @@ impl Wrapper for PharWrapper {
         Some(true)
     }
 
+    #[allow(clippy::too_many_lines)]
     fn mkdir(
         &self,
         url: &[u8],
@@ -1193,6 +1194,7 @@ impl Wrapper for PharWrapper {
         Some(true)
     }
 
+    #[allow(clippy::too_many_lines)]
     fn rmdir(&self, url: &[u8], options: u32, _context: Option<&ContextRef>) -> Option<bool> {
         let u = s(url);
         let Ok((arch, _)) = reg::split_fname(url, 2, 2) else {
