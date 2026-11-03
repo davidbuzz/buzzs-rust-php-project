@@ -45,6 +45,7 @@ php-ext-calendar = { path = "../php-ext-calendar" }
 php-ext-bcmath = { path = "../php-ext-bcmath" }
 php-ext-gmp = { path = "../php-ext-gmp" }
 php-ext-xml = { path = "../php-ext-xml" }
+php-ext-xmlreader = { path = "../php-ext-xmlreader" }
 libc = "0.2"
 
 [lints]

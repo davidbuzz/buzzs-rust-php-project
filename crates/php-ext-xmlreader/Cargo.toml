@@ -1,5 +1,6 @@
 [package]
 name = "php-ext-xmlreader"
+description = "ext/xmlreader binding for the phprust VM"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -8,6 +9,9 @@ rust-version.workspace = true
 [dependencies]
 php-vm = { path = "../php-vm" }
 php-runtime = { path = "../php-runtime" }
+php-xmlreader = { path = "../php-xmlreader" }
+php-ext-xml = { path = "../php-ext-xml" }
+php-ext-streams = { path = "../php-ext-streams" }
 
 [lints]
 workspace = true
