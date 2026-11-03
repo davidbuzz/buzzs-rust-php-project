@@ -140,6 +140,9 @@ pub struct MbState {
     http_output_set: bool,
     http_input_set: bool,
     default_charset: Vec<u8>,
+    php_internal_encoding: Option<Vec<u8>>,
+    php_input_encoding: Option<Vec<u8>>,
+    php_output_encoding: Option<Vec<u8>>,
     pub(crate) regex: crate::mbregex::RegexState,
     /// Warnings / deprecations emitted since last drained.
     pub diagnostics: Vec<Diagnostic>,
@@ -155,6 +158,15 @@ impl MbState {
     /// State after `MINIT` + `RINIT` with no `mbstring.*` INI settings and
     /// `default_charset=UTF-8`.
     pub fn new() -> Self {
+        Self::with_ini(&[])
+    }
+
+    /// State after `MINIT` + `RINIT` given startup INI settings (php.ini /
+    /// `-d`): `mbstring.*` entries and PHP's `default_charset`,
+    /// `internal_encoding`, `input_encoding`, `output_encoding`. Warnings and
+    /// deprecations raised by the INI handlers ("PHP Startup") are left in
+    /// [`MbState::diagnostics`].
+    pub fn with_ini(settings: &[(&str, &[u8])]) -> Self {
         let utf8 = encoding::utf8();
         let neutral = &LANGUAGES[11];
         let mut s = Self {
@@ -183,9 +195,41 @@ impl MbState {
             http_output_set: false,
             http_input_set: false,
             default_charset: b"UTF-8".to_vec(),
+            php_internal_encoding: None,
+            php_input_encoding: None,
+            php_output_encoding: None,
             regex: crate::mbregex::RegexState::default(),
             diagnostics: Vec::new(),
         };
+        let get = |k: &str| settings.iter().rev().find(|(n, _)| *n == k).map(|(_, v)| *v);
+        // PHP core settings are registered before mbstring's MINIT.
+        if let Some(v) = get("default_charset") {
+            s.default_charset = v.to_vec();
+        }
+        for (key, slot) in [
+            ("internal_encoding", 0),
+            ("input_encoding", 1),
+            ("output_encoding", 2),
+        ] {
+            if let Some(v) = get(key).filter(|v| !v.is_empty()) {
+                let v = Some(v.to_vec());
+                match slot {
+                    0 => s.php_internal_encoding = v,
+                    1 => s.php_input_encoding = v,
+                    _ => s.php_output_encoding = v,
+                }
+            }
+        }
+        // mbstring INI entries, in registration order (PHP_INI_BEGIN).
+        s.ini_set_language(get("mbstring.language").unwrap_or(b"neutral"));
+        s.ini_set_detect_order(get("mbstring.detect_order"), false);
+        s.ini_set_http_input(get("mbstring.http_input"));
+        s.ini_set_http_output(get("mbstring.http_output"));
+        s.ini_set_internal_encoding(get("mbstring.internal_encoding"));
+        s.ini_set_substitute_character(get("mbstring.substitute_character"));
+        s.encoding_translation = get("mbstring.encoding_translation").is_some_and(ini_bool);
+        s.strict_detection = get("mbstring.strict_detection").is_some_and(ini_bool);
+        // MINIT: the internal-encoding hook, then RINIT.
         s.internal_encoding_changed_hook();
         s.request_startup();
         s
@@ -280,26 +324,91 @@ impl MbState {
         };
     }
 
+    /// `php_get_internal_encoding()`.
+    fn php_internal(&self) -> Vec<u8> {
+        self.php_internal_encoding.clone().unwrap_or_else(|| self.default_charset.clone())
+    }
+
+    /// `php_get_input_encoding()`.
+    fn php_input(&self) -> Vec<u8> {
+        self.php_input_encoding.clone().unwrap_or_else(|| self.default_charset.clone())
+    }
+
+    /// `php_get_output_encoding()`.
+    fn php_output(&self) -> Vec<u8> {
+        self.php_output_encoding.clone().unwrap_or_else(|| self.default_charset.clone())
+    }
+
     fn internal_encoding_changed_hook(&mut self) {
-        let cs = self.default_charset.clone();
         if !self.internal_encoding_set {
-            self.internal_encoding_set_value(Some(&cs));
+            let v = self.php_internal();
+            self.internal_encoding_set_value(Some(&v));
         }
         if !self.http_output_set {
-            self.http_output_set_value(&cs);
+            let v = self.php_output();
+            self.http_output_set_value(&v);
         }
         if !self.http_input_set {
-            self.http_input_set_value(&cs);
+            let v = self.php_input();
+            self.http_input_set_value(&v);
         }
     }
 
     // ---- INI handlers -------------------------------------------------
 
-    /// The `default_charset` INI setting changed (PHP's
-    /// `php_internal_encoding_changed` hook). `value` is the new value.
-    pub fn set_default_charset(&mut self, value: &[u8]) {
-        self.default_charset = value.to_vec();
+    /// One of PHP's core encoding INI settings changed (`default_charset`,
+    /// `internal_encoding`, `input_encoding`, `output_encoding`); runs the
+    /// `php_internal_encoding_changed` hook. Empty values count as unset.
+    /// Returns `false` for other keys.
+    pub fn set_php_encoding_ini(&mut self, key: &str, value: &[u8]) -> bool {
+        let v = (!value.is_empty()).then(|| value.to_vec());
+        match key {
+            "default_charset" => self.default_charset = value.to_vec(),
+            "internal_encoding" => self.php_internal_encoding = v,
+            "input_encoding" => self.php_input_encoding = v,
+            "output_encoding" => self.php_output_encoding = v,
+            _ => return false,
+        }
         self.internal_encoding_changed_hook();
+        true
+    }
+
+    /// Apply an `mbstring.*` (or PHP core encoding) INI setting by name, as
+    /// at startup (`runtime == false`) or via `ini_set` (`runtime == true`).
+    /// Returns whether the setting was accepted.
+    pub fn ini_set(&mut self, key: &str, value: Option<&[u8]>, runtime: bool) -> bool {
+        match key {
+            "mbstring.language" => self.ini_set_language(value.unwrap_or(b"neutral")),
+            "mbstring.detect_order" => {
+                let ok = self.ini_set_detect_order(value, runtime);
+                if !runtime {
+                    self.populate_current_detect_order_list();
+                }
+                ok
+            }
+            "mbstring.http_input" => self.ini_set_http_input(value),
+            "mbstring.http_output" => self.ini_set_http_output(value),
+            "mbstring.internal_encoding" => {
+                let ok = self.ini_set_internal_encoding(value);
+                if !runtime {
+                    self.current_internal_encoding = self.internal_encoding;
+                }
+                ok
+            }
+            "mbstring.substitute_character" => self.ini_set_substitute_character(value),
+            "mbstring.strict_detection" => {
+                self.strict_detection = value.is_some_and(ini_bool);
+                true
+            }
+            "mbstring.encoding_translation" => {
+                self.encoding_translation = value.is_some_and(ini_bool);
+                true
+            }
+            "default_charset" | "internal_encoding" | "input_encoding" | "output_encoding" => {
+                self.set_php_encoding_ini(key, value.unwrap_or(b""))
+            }
+            _ => false,
+        }
     }
 
     /// `mbstring.language` INI handler; returns `false` on failure.
@@ -360,7 +469,7 @@ impl MbState {
             }
             _ => {
                 self.http_input_set = false;
-                let cs = self.default_charset.clone();
+                let cs = self.php_input();
                 self.http_input_set_value(&cs);
                 true
             }
@@ -390,7 +499,7 @@ impl MbState {
             }
             _ => {
                 self.http_output_set = false;
-                let cs = self.default_charset.clone();
+                let cs = self.php_output();
                 self.http_output_set_value(&cs);
                 true
             }
@@ -433,7 +542,7 @@ impl MbState {
             }
             _ => {
                 self.internal_encoding_set = false;
-                let cs = self.default_charset.clone();
+                let cs = self.php_internal();
                 self.internal_encoding_set_value(Some(&cs));
             }
         }
@@ -553,7 +662,8 @@ impl MbState {
             } else if let Some(enc) = encoding::by_name(item) {
                 list.push(enc);
             } else {
-                let shown = String::from_utf8_lossy(item);
+                // Printed with "%.*s", which stops at a NUL byte.
+                let shown = String::from_utf8_lossy(c_str(item));
                 if arg_num == 0 {
                     self.warn(format!("INI setting contains invalid encoding \"{shown}\""));
                     return Err(None);
@@ -817,6 +927,18 @@ pub enum HttpInput {
 /// `mb_list_encodings()`.
 pub fn mb_list_encodings() -> Vec<&'static str> {
     encoding::list().map(|e| e.name).collect()
+}
+
+/// PHP's INI boolean parsing (`zend_ini_parse_bool`).
+fn ini_bool(v: &[u8]) -> bool {
+    let l = v.to_ascii_lowercase();
+    match l.as_slice() {
+        b"true" | b"yes" | b"on" => true,
+        _ => std::str::from_utf8(v)
+            .ok()
+            .and_then(|s| s.trim().parse::<i64>().ok())
+            .is_some_and(|n| n != 0),
+    }
 }
 
 /// `php_mb_get_encoding_or_pass`.
