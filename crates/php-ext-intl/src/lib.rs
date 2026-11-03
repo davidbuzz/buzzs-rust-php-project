@@ -24,7 +24,9 @@ mod newfmt;
 mod numfmt;
 mod registry;
 mod stubs;
+mod text;
 mod timezone;
+mod translit;
 
 use std::cell::Cell;
 use std::collections::HashMap;
@@ -117,6 +119,8 @@ fn all_handlers() -> HashMap<&'static str, NativeFn> {
         numfmt::handlers(),
         msgformat::handlers(),
         newfmt::handlers(),
+        text::handlers(),
+        translit::handlers(),
     ] {
         for (k, f) in list {
             h.insert(k, f);
@@ -148,6 +152,9 @@ fn class_opts(name: &str) -> registry::ClassOpts {
         }
         "MessageFormatter" => {
             o.hooks = ClassHooks { clone: Some(msgformat::clone), ..ClassHooks::default() };
+        }
+        "Transliterator" => {
+            o.hooks = ClassHooks { clone: Some(translit::clone), ..ClassHooks::default() };
         }
         "IntlDateFormatter" => {
             o.hooks = ClassHooks { clone: Some(dateformat::clone), ..ClassHooks::default() };
