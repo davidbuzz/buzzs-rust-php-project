@@ -3355,3 +3355,77 @@ impl EncodeCtx<'_> {
         Ok(Value::Array(ret))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn base64_matches_php() {
+        assert_eq!(base64_encode(b"\x00\xff\xfe abc"), b"AP/+IGFiYw==");
+        assert_eq!(base64_encode(b""), b"");
+        assert_eq!(base64_encode(b"a"), b"YQ==");
+        assert_eq!(base64_encode(b"ab"), b"YWI=");
+        // Non-strict decoding skips foreign characters and padding.
+        assert_eq!(base64_decode(b"QU Jj\nZA=="), b"ABcd");
+        assert_eq!(base64_decode(b"QUJ*jZA"), b"ABcd");
+        for data in [&b""[..], b"x", b"xy", b"xyz", b"\x00\x01\x02\x03\xff"] {
+            assert_eq!(base64_decode(&base64_encode(data)), data);
+        }
+    }
+
+    #[test]
+    fn utf8_validation_stops_at_nul() {
+        assert!(check_utf8(b"plain"));
+        assert!(check_utf8("caf\u{e9} \u{20ac} \u{1f600}".as_bytes()));
+        assert!(!check_utf8(b"ab\xffcd"));
+        assert!(!check_utf8(b"x\xc3"));
+        assert!(check_utf8(b"ok\x00\xff"));
+        assert_eq!(utf8_error_excerpt(b"ab\xffcd"), "ab\\xff...");
+        assert_eq!(utf8_error_excerpt(b"x\xc3"), "x\\xc3...");
+    }
+
+    #[test]
+    fn soap12_array_dimensions() {
+        assert_eq!(calc_dimension_12(b"2 3").unwrap(), 2);
+        assert_eq!(calc_dimension_12(b"* 3").unwrap(), 2);
+        assert_eq!(calc_dimension_12(b"5").unwrap(), 1);
+        assert!(calc_dimension_12(b"3 *").is_err());
+        assert_eq!(get_position_12(2, b"1 12").unwrap(), vec![1, 12]);
+        assert!(get_position_12(1, b"99999999999").is_err());
+    }
+
+    #[test]
+    fn soap11_array_positions() {
+        assert_eq!(calc_dimension(b"[2,3]"), 2);
+        assert_eq!(calc_dimension(b"[4]"), 1);
+        let mut pos = [0; 2];
+        get_position_ex(2, b"[1,2]", &mut pos).unwrap();
+        assert_eq!(pos, [1, 2]);
+        get_position_ex(2, b"[7]", &mut pos).unwrap();
+        assert_eq!(pos, [7, 0]);
+        let mut arr = ZArray::new();
+        insert_at(&mut arr, &[1, 0], Value::Int(5));
+        let Some(Value::Array(inner)) = arr.get(&ArrayKey::Int(1)) else {
+            panic!("nested array expected");
+        };
+        assert!(matches!(inner.get(&ArrayKey::Int(0)), Some(Value::Int(5))));
+    }
+
+    #[test]
+    fn value_classification() {
+        assert_eq!(type_code(&Value::Null), IS_NULL);
+        assert_eq!(type_code(&Value::Bool(true)), IS_TRUE);
+        assert_eq!(type_code(&Value::Int(1)), IS_LONG);
+        assert_eq!(type_code(&Value::from("s")), IS_STRING);
+        let mut a = ZArray::new();
+        a.make_mut().insert(0i64, Value::Int(1));
+        a.make_mut().insert(1i64, Value::Int(2));
+        assert!(is_list(&a));
+        a.make_mut().insert(5i64, Value::Int(3));
+        assert!(!is_list(&a));
+        assert_eq!(unmangle(b"\0Foo\0bar"), b"bar");
+        assert_eq!(unmangle(b"\0*\0prot"), b"prot");
+        assert_eq!(unmangle(b"plain"), b"plain");
+    }
+}

@@ -1482,4 +1482,15 @@ mod tests {
         assert_eq!(parse_qname(b"xsd:int"), (Some(&b"xsd"[..]), &b"int"[..]));
         assert_eq!(parse_qname(b":int"), (None, &b":int"[..]));
     }
+
+    #[test]
+    fn whitespace_facets() {
+        assert_eq!(whitespace_replace(b"a\tb\nc\rd"), b"a b c d");
+        assert_eq!(whitespace_collapse(b"  a \t\n b  "), b"a b");
+        assert_eq!(whitespace_collapse(b"   "), b"");
+        assert_eq!(parse_qname(b"ns:local"), (Some(&b"ns"[..]), &b"local"[..]));
+        assert_eq!(parse_qname(b":local"), (None, &b":local"[..]));
+        assert_eq!(parse_qname(b"a:b:c"), (Some(&b"a:b"[..]), &b"c"[..]));
+        assert_eq!(parse_qname(b"plain"), (None, &b"plain"[..]));
+    }
 }

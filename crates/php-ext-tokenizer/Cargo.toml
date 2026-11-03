@@ -1,0 +1,15 @@
+[package]
+name = "php-ext-tokenizer"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+php-vm = { path = "../php-vm" }
+php-runtime = { path = "../php-runtime" }
+php-lexer = { path = "../php-lexer" }
+php-parser = { path = "../php-parser" }
+
+[lints]
+workspace = true

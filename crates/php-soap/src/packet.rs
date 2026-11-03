@@ -1858,3 +1858,16 @@ fn html_escape(s: &[u8]) -> Vec<u8> {
     }
     out
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fault_string_escaping() {
+        assert_eq!(html_escape(b"a<b>&c\"'"), b"a&lt;b&gt;&amp;c\"'");
+        assert_eq!(html_escape(b"bad \xff utf8"), b"");
+        assert_eq!(env_ns(SOAP_1_1).0, SOAP_1_1_ENV_NAMESPACE);
+        assert_eq!(env_ns(SOAP_1_2).0, SOAP_1_2_ENV_NAMESPACE);
+    }
+}

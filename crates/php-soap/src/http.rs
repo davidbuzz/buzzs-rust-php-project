@@ -1258,4 +1258,101 @@ mod tests {
             vec![b"a=1".to_vec(), b"b=2; path=/x".to_vec()]
         );
     }
+
+    struct MemStream(Vec<u8>, usize);
+
+    impl HttpStream for MemStream {
+        fn write(&mut self, data: &[u8]) -> usize {
+            data.len()
+        }
+        fn read_line(&mut self) -> Option<Vec<u8>> {
+            if self.1 >= self.0.len() {
+                return None;
+            }
+            let end = self.0[self.1..]
+                .iter()
+                .position(|&c| c == b'\n')
+                .map_or(self.0.len(), |p| self.1 + p + 1);
+            let line = self.0[self.1..end].to_vec();
+            self.1 = end;
+            Some(line)
+        }
+        fn read(&mut self, n: usize) -> Vec<u8> {
+            let end = (self.1 + n).min(self.0.len());
+            let out = self.0[self.1..end].to_vec();
+            self.1 = end;
+            out
+        }
+        fn eof(&mut self) -> bool {
+            self.1 >= self.0.len()
+        }
+    }
+
+    #[test]
+    fn response_framing() {
+        let mut s = MemStream(b"HTTP/1.1 200 OK\r\nA: b\r\n\r\nrest".to_vec(), 0);
+        assert_eq!(
+            read_headers(&mut s).unwrap(),
+            b"HTTP/1.1 200 OK\r\nA: b\r\n"
+        );
+        let chunked = b"Transfer-Encoding: chunked\r\n";
+        let mut s = MemStream(b"4\r\nWiki\r\n5;ext=1\r\npedia\r\n0\r\n\r\n".to_vec(), 0);
+        assert_eq!(read_body(&mut s, false, chunked).unwrap(), b"Wikipedia");
+        let mut s = MemStream(b"hello world".to_vec(), 0);
+        assert_eq!(
+            read_body(&mut s, false, b"Content-Length: 5\r\n").unwrap(),
+            b"hello"
+        );
+        let mut s = MemStream(b"abc".to_vec(), 0);
+        assert!(read_body(&mut s, false, b"Content-Length: 5\r\n").is_none());
+        let mut s = MemStream(b"until close".to_vec(), 0);
+        assert_eq!(read_body(&mut s, true, b"").unwrap(), b"until close");
+    }
+
+    #[test]
+    fn context_header_filtering() {
+        let mut out = Vec::new();
+        context_headers(
+            b"Host: x\r\nX-A: 1\r\n  user-agent: y\nAuthorization: z\r\nCookie: c\r\nbogus\r\n",
+            true,
+            false,
+            false,
+            &mut out,
+        );
+        assert_eq!(out, b"X-A: 1\r\nCookie: c\r\n");
+        let mut out = Vec::new();
+        context_headers(
+            b"Authorization: z\r\nCookie: c",
+            false,
+            false,
+            true,
+            &mut out,
+        );
+        assert_eq!(out, b"Authorization: z\r\n");
+    }
+
+    #[test]
+    fn redirect_origin_rules() {
+        let from = parse_url(b"http://example.com:8080/svc").unwrap();
+        let ok = |to: &[u8]| is_allowed_redirect(&from, &parse_url(to).unwrap());
+        assert!(ok(b"http://EXAMPLE.com:8080/other"));
+        assert!(ok(b"/relative"));
+        assert!(!ok(b"http://example.com:8081/x"));
+        assert!(!ok(b"http://other.com:8080/x"));
+        assert!(!ok(b"https://example.com:8080/x"));
+        let plain = parse_url(b"http://example.com/svc").unwrap();
+        assert!(is_allowed_redirect(
+            &plain,
+            &parse_url(b"https://example.com/x").unwrap()
+        ));
+        assert!(in_domain(b"a.example.com", b".example.com"));
+        assert!(!in_domain(b"a.example.com", b"example.com"));
+        assert!(in_domain(b"example.com", b"example.com"));
+    }
+
+    #[test]
+    fn digest_helpers() {
+        assert_eq!(hex_lower(&[0x00, 0xab, 0x10]), "00ab10");
+        assert_eq!(md5_hex(&[b"a", b"bc"]), "900150983cd24fb0d6963f7d28e17f72");
+    }
 }
