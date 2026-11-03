@@ -2,7 +2,9 @@
 //! VM runs real scripts and the test inspects status, headers, body and
 //! log entries the SAPI produced.
 
-use phprust_apache2::backend::{Backend, DirEntry, DirStatus, IntField, LogLevel, MockBackend, StrField, Table};
+use phprust_apache2::backend::{
+    Backend, DirEntry, DirStatus, IntField, LogLevel, MockBackend, StrField, Table,
+};
 use phprust_apache2::config::ProcessConfig;
 use phprust_apache2::request::{self, RunParams, Timer};
 use std::path::{Path, PathBuf};
@@ -48,14 +50,36 @@ fn run(name: &str, req: Req) -> Response {
             let mut m = MockBackend::default()
                 .with_str(StrField::Handler, b"application/x-httpd-php")
                 .with_str(StrField::Filename, path_s.as_bytes())
-                .with_str(StrField::Uri, format!("/{}", Path::new(&path_s).file_name().unwrap().to_string_lossy()).as_bytes())
-                .with_str(StrField::Method, if req.method.is_empty() { b"GET" } else { req.method.as_bytes() })
+                .with_str(
+                    StrField::Uri,
+                    format!(
+                        "/{}",
+                        Path::new(&path_s).file_name().unwrap().to_string_lossy()
+                    )
+                    .as_bytes(),
+                )
+                .with_str(
+                    StrField::Method,
+                    if req.method.is_empty() {
+                        b"GET"
+                    } else {
+                        req.method.as_bytes()
+                    },
+                )
                 .with_int(IntField::FileType, 1)
                 .with_int(IntField::ProtoNum, 1001)
                 .with_int(IntField::RequestTime, 1_700_000_000_250_000)
                 .with_int(IntField::IsMain, 1)
                 .with_entry(Table::SubprocessEnv, b"SCRIPT_FILENAME", path_s.as_bytes())
-                .with_entry(Table::SubprocessEnv, b"REQUEST_METHOD", if req.method.is_empty() { b"GET" } else { req.method.as_bytes() });
+                .with_entry(
+                    Table::SubprocessEnv,
+                    b"REQUEST_METHOD",
+                    if req.method.is_empty() {
+                        b"GET"
+                    } else {
+                        req.method.as_bytes()
+                    },
+                );
             if !req.query.is_empty() {
                 m = m.with_str(StrField::Args, req.query.as_bytes());
             }
@@ -67,7 +91,11 @@ fn run(name: &str, req: Req) -> Response {
                 m.dir.borrow_mut().push(DirEntry {
                     name: (*n).to_string(),
                     value: v.as_bytes().to_vec(),
-                    status: if *admin { DirStatus::System } else { DirStatus::PerDir },
+                    status: if *admin {
+                        DirStatus::System
+                    } else {
+                        DirStatus::PerDir
+                    },
                     htaccess: false,
                 });
             }
@@ -92,7 +120,12 @@ fn run(name: &str, req: Req) -> Response {
                     .map(|(k, v)| (s(k), s(v)))
                     .collect(),
                 body: s(&shared.body_out.borrow()),
-                logs: shared.logs.borrow().iter().map(|(l, m)| (*l, s(m))).collect(),
+                logs: shared
+                    .logs
+                    .borrow()
+                    .iter()
+                    .map(|(l, m)| (*l, s(m)))
+                    .collect(),
             };
             resp
         })
@@ -103,16 +136,34 @@ fn run(name: &str, req: Req) -> Response {
 
 #[test]
 fn hello_world_defaults() {
-    let r = run("hello.php", Req { script: "<?php echo 'Hi ', PHP_SAPI, ' ', php_sapi_name();", ..Req::default() });
+    let r = run(
+        "hello.php",
+        Req {
+            script: "<?php echo 'Hi ', PHP_SAPI, ' ', php_sapi_name();",
+            ..Req::default()
+        },
+    );
     assert_eq!(r.body, "Hi apache2handler apache2handler");
     assert_eq!(r.status, Some((200, None, 0)));
     assert_eq!(r.content_type.as_deref(), Some("text/html; charset=UTF-8"));
-    assert_eq!(r.headers_out, vec![("X-Powered-By".to_string(), format!("PHP/{}", php_vm::PHP_VERSION))]);
+    assert_eq!(
+        r.headers_out,
+        vec![(
+            "X-Powered-By".to_string(),
+            format!("PHP/{}", php_vm::PHP_VERSION)
+        )]
+    );
 }
 
 #[test]
 fn no_output_still_sends_headers() {
-    let r = run("empty.php", Req { script: "<?php http_response_code(204);", ..Req::default() });
+    let r = run(
+        "empty.php",
+        Req {
+            script: "<?php http_response_code(204);",
+            ..Req::default()
+        },
+    );
     assert_eq!(r.body, "");
     assert_eq!(r.status, Some((204, None, 0)));
 }
@@ -137,27 +188,56 @@ fn headers_and_cookies() {
     );
     assert_eq!(r.content_type.as_deref(), Some("text/plain;charset=UTF-8"));
     let names: Vec<&str> = r.headers_out.iter().map(|(k, _)| k.as_str()).collect();
-    assert_eq!(names, vec!["X-Powered-By", "X-A", "X-A", "Set-Cookie", "Set-Cookie"]);
+    assert_eq!(
+        names,
+        vec!["X-Powered-By", "X-A", "X-A", "Set-Cookie", "Set-Cookie"]
+    );
 }
 
 #[test]
 fn status_line_and_redirects() {
-    let r = run("nf.php", Req { script: "<?php header('HTTP/1.1 404 Not Found'); echo 'x';", ..Req::default() });
+    let r = run(
+        "nf.php",
+        Req {
+            script: "<?php header('HTTP/1.1 404 Not Found'); echo 'x';",
+            ..Req::default()
+        },
+    );
     assert_eq!(r.status, Some((404, Some(b"404 Not Found".to_vec()), 1001)));
-    let r = run("loc.php", Req { script: "<?php header('Location: /there');", method: "POST", ..Req::default() });
+    let r = run(
+        "loc.php",
+        Req {
+            script: "<?php header('Location: /there');",
+            method: "POST",
+            ..Req::default()
+        },
+    );
     assert_eq!(r.status.map(|s| s.0), Some(303));
-    assert!(r.headers_out.contains(&("Location".to_string(), "/there".to_string())));
+    assert!(r
+        .headers_out
+        .contains(&("Location".to_string(), "/there".to_string())));
 }
 
 #[test]
 fn late_header_warns() {
-    let r = run("late.php", Req { script: "<?php echo 'a'; header('X: y'); var_dump(headers_sent());", ..Req::default() });
+    let r = run(
+        "late.php",
+        Req {
+            script: "<?php echo 'a'; header('X: y'); var_dump(headers_sent());",
+            ..Req::default()
+        },
+    );
     assert!(
         r.body.starts_with("a<br />\n<b>Warning</b>:  Cannot modify header information - headers already sent in <b>"),
         "{}",
         r.body
     );
-    assert!(r.body.ends_with("late.php</b> on line <b>1</b><br />\nbool(true)\n"), "{}", r.body);
+    assert!(
+        r.body
+            .ends_with("late.php</b> on line <b>1</b><br />\nbool(true)\n"),
+        "{}",
+        r.body
+    );
 }
 
 #[test]
@@ -227,8 +307,16 @@ fn multipart_upload() {
         },
     );
     let parts: Vec<&str> = r.body.split('|').collect();
-    assert_eq!(&parts[..8], &["v", "a.txt", "text/plain", "4", "0", "DATA", "true", "0"], "{}", r.body);
-    assert!(!Path::new(parts[8]).exists(), "temporary upload must be removed");
+    assert_eq!(
+        &parts[..8],
+        &["v", "a.txt", "text/plain", "4", "0", "DATA", "true", "0"],
+        "{}",
+        r.body
+    );
+    assert!(
+        !Path::new(parts[8]).exists(),
+        "temporary upload must be removed"
+    );
 }
 
 #[test]
@@ -290,23 +378,50 @@ fn fatal_without_display_is_500() {
 fn error_log_goes_to_httpd() {
     let r = run(
         "log.php",
-        Req { script: "<?php error_log('hello'); error_log('sapi', 4);", ..Req::default() },
+        Req {
+            script: "<?php error_log('hello'); error_log('sapi', 4);",
+            ..Req::default()
+        },
     );
     assert_eq!(
         r.logs,
-        vec![(LogLevel::Notice, "hello".to_string()), (LogLevel::Err, "sapi".to_string())]
+        vec![
+            (LogLevel::Notice, "hello".to_string()),
+            (LogLevel::Err, "sapi".to_string())
+        ]
     );
 }
 
 #[test]
 fn display_errors_html() {
-    let r = run("warn.php", Req { script: "<?php\necho $x;", ..Req::default() });
-    assert!(r.body.starts_with("<br />\n<b>Warning</b>:  Undefined variable $x in <b>"), "{}", r.body);
-    assert!(r.body.ends_with("warn.php</b> on line <b>2</b><br />\n"), "{}", r.body);
+    let r = run(
+        "warn.php",
+        Req {
+            script: "<?php\necho $x;",
+            ..Req::default()
+        },
+    );
+    assert!(
+        r.body
+            .starts_with("<br />\n<b>Warning</b>:  Undefined variable $x in <b>"),
+        "{}",
+        r.body
+    );
+    assert!(
+        r.body.ends_with("warn.php</b> on line <b>2</b><br />\n"),
+        "{}",
+        r.body
+    );
 }
 
 #[test]
 fn cwd_is_script_dir() {
-    let r = run("cwd.php", Req { script: "<?php echo getcwd();", ..Req::default() });
+    let r = run(
+        "cwd.php",
+        Req {
+            script: "<?php echo getcwd();",
+            ..Req::default()
+        },
+    );
     assert_eq!(r.body, scratch().canonicalize().unwrap().to_string_lossy());
 }

@@ -51,14 +51,14 @@ pub type BackendFactory = Box<dyn FnOnce() -> Option<Box<dyn Backend>> + Send>;
 /// `php_handler()`.
 pub fn handle(r: &dyn Backend, make: BackendFactory) -> i32 {
     let handler = r.str_field(StrField::Handler).unwrap_or_default();
-    let is_php = handler == PHP_MAGIC_TYPE || handler == PHP_SOURCE_MAGIC_TYPE || handler == PHP_SCRIPT;
+    let is_php =
+        handler == PHP_MAGIC_TYPE || handler == PHP_SOURCE_MAGIC_TYPE || handler == PHP_SCRIPT;
     let cfg = crate::config::current();
     let dir = r.dir_config();
-    if !is_php
-        && !(cfg.effective_bool("xbithack", &dir, false)
-            && handler == b"text/html"
-            && r.int_field(IntField::UserExec) != 0)
-    {
+    let xbithack = cfg.effective_bool("xbithack", &dir, false)
+        && handler == b"text/html"
+        && r.int_field(IntField::UserExec) != 0;
+    if !(is_php || xbithack) {
         return DECLINED;
     }
     if r.int_field(IntField::PathInfoRejected) != 0 {
@@ -170,9 +170,9 @@ fn clock_ns(clock: libc::clockid_t) -> i64 {
     unsafe {
         libc::clock_gettime(clock, &raw mut ts);
     }
-    i64::from(ts.tv_sec)
+    ts.tv_sec
         .saturating_mul(1_000_000_000)
-        .saturating_add(i64::from(ts.tv_nsec))
+        .saturating_add(ts.tv_nsec)
 }
 
 /// `max_execution_time` exceeded.  The VM cannot be interrupted, and the
@@ -202,7 +202,7 @@ fn hard_timeout(r: &dyn Backend, capture: Option<&StderrCapture>, secs: i64) -> 
 fn forward_log(r: &dyn Backend, data: &[u8]) {
     use std::io::Write;
     let mut pending: Vec<u8> = Vec::new();
-    let mut flush_pending = |pending: &mut Vec<u8>| {
+    let flush_pending = |pending: &mut Vec<u8>| {
         for msg in split_log_messages(pending) {
             r.log(log_level_of(&msg), &msg);
         }
@@ -226,11 +226,7 @@ fn forward_log(r: &dyn Backend, data: &[u8]) {
 /// Whether a captured line was written by httpd's logger
 /// (`[date] [module:level] ...`).
 fn is_httpd_log_line(line: &[u8]) -> bool {
-    line.first() == Some(&b'[')
-        && line
-            .windows(3)
-            .take(64)
-            .any(|w| w == b"] [")
+    line.first() == Some(&b'[') && line.windows(3).take(64).any(|w| w == b"] [")
 }
 
 /// The httpd level `php_error_cb` uses for a logged PHP message.
@@ -395,7 +391,9 @@ mod tests {
 
     #[test]
     fn httpd_lines_are_recognised() {
-        assert!(is_httpd_log_line(b"[Tue Nov 03 20:03:58.704347 2026] [php:notice] [pid 1] x\n"));
+        assert!(is_httpd_log_line(
+            b"[Tue Nov 03 20:03:58.704347 2026] [php:notice] [pid 1] x\n"
+        ));
         assert!(!is_httpd_log_line(b"PHP Warning:  x"));
         assert!(!is_httpd_log_line(b"[just brackets]"));
     }
@@ -414,6 +412,9 @@ mod tests {
             b"PHP Warning:  a in x on line 1\nPHP Fatal error:  Uncaught E\nStack trace:\n#0 {main}\nplain\n",
         );
         assert_eq!(v.len(), 2);
-        assert_eq!(v[1], b"PHP Fatal error:  Uncaught E\nStack trace:\n#0 {main}\nplain");
+        assert_eq!(
+            v[1],
+            b"PHP Fatal error:  Uncaught E\nStack trace:\n#0 {main}\nplain"
+        );
     }
 }

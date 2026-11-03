@@ -2,7 +2,7 @@
 //! `main/SAPI.c` combined with the apache2handler header handler
 //! (`php_apache_sapi_header_handler` / `php_apache_sapi_send_headers`).
 //!
-//! As in mod_php, every header change is mirrored into `r->headers_out`
+//! As in `mod_php`, every header change is mirrored into `r->headers_out`
 //! immediately (so `apache_response_headers()` sees it), while the SAPI's
 //! own list backs `headers_list()`.  `Content-Type` and `Content-Length`
 //! are routed to `ap_set_content_type` / `ap_set_content_length` instead
@@ -228,7 +228,12 @@ impl SapiHeaders {
 
     /// `php_apache_sapi_header_handler()` for ADD/REPLACE: returns whether
     /// the header is kept in the SAPI list (`SAPI_HEADER_ADD`).
-    fn apache_header_handler(&mut self, replace: bool, header: &[u8], backend: &dyn Backend) -> bool {
+    fn apache_header_handler(
+        &mut self,
+        replace: bool,
+        header: &[u8],
+        backend: &dyn Backend,
+    ) -> bool {
         let Some(colon) = header.iter().position(|&c| c == b':') else {
             return false;
         };
@@ -268,9 +273,10 @@ impl SapiHeaders {
         }
         self.sent = true;
         let (status_line, proto_num) = match &self.status_line {
-            Some(s) if s.len() > 12 && s.starts_with(b"HTTP/1.") && s[8] == b' ' => {
-                (Some(s[9..].to_vec()), 1000 + i32::from(s[7].wrapping_sub(b'0')))
-            }
+            Some(s) if s.len() > 12 && s.starts_with(b"HTTP/1.") && s[8] == b' ' => (
+                Some(s[9..].to_vec()),
+                1000 + i32::from(s[7].wrapping_sub(b'0')),
+            ),
             _ => (None, 0),
         };
         backend.set_status(self.response_code, status_line.as_deref(), proto_num);
@@ -371,7 +377,10 @@ pub fn default_content_type(facts: &HeaderFacts) -> Vec<u8> {
         &facts.default_mimetype
     };
     let mut out = mimetype.to_vec();
-    if !facts.default_charset.is_empty() && mimetype.len() >= 5 && mimetype[..5].eq_ignore_ascii_case(b"text/") {
+    if !facts.default_charset.is_empty()
+        && mimetype.len() >= 5
+        && mimetype[..5].eq_ignore_ascii_case(b"text/")
+    {
         out.extend_from_slice(b"; charset=");
         out.extend_from_slice(&facts.default_charset);
     }
@@ -384,7 +393,11 @@ mod tests {
     use crate::backend::MockBackend;
 
     fn setup() -> (SapiHeaders, HeaderFacts, MockBackend) {
-        (SapiHeaders::new(0), HeaderFacts::default(), MockBackend::default())
+        (
+            SapiHeaders::new(0),
+            HeaderFacts::default(),
+            MockBackend::default(),
+        )
     }
 
     #[test]
@@ -410,16 +423,26 @@ mod tests {
             h.op(HeaderOp::Replace(b"X-A: 1\r\nX-B: 2", 0), &f, &b),
             Err(HeaderError::NewLine)
         );
-        assert_eq!(h.op(HeaderOp::Replace(b"X-A: \0", 0), &f, &b), Err(HeaderError::Nul));
+        assert_eq!(
+            h.op(HeaderOp::Replace(b"X-A: \0", 0), &f, &b),
+            Err(HeaderError::Nul)
+        );
         assert_eq!(h.op(HeaderOp::Replace(b"", 0), &f, &b), Ok(false));
     }
 
     #[test]
     fn content_type_gets_charset() {
         let (mut h, f, b) = setup();
-        h.op(HeaderOp::Replace(b"Content-Type: text/plain", 0), &f, &b).unwrap();
-        assert_eq!(h.headers, vec![b"Content-type: text/plain;charset=UTF-8".to_vec()]);
-        assert_eq!(h.content_type.as_deref(), Some(&b"text/plain;charset=UTF-8"[..]));
+        h.op(HeaderOp::Replace(b"Content-Type: text/plain", 0), &f, &b)
+            .unwrap();
+        assert_eq!(
+            h.headers,
+            vec![b"Content-type: text/plain;charset=UTF-8".to_vec()]
+        );
+        assert_eq!(
+            h.content_type.as_deref(),
+            Some(&b"text/plain;charset=UTF-8"[..])
+        );
         assert!(!h.send_default_content_type);
         h.send(&f, &b);
         assert_eq!(
@@ -433,7 +456,12 @@ mod tests {
     #[test]
     fn non_text_content_type_untouched() {
         let (mut h, f, b) = setup();
-        h.op(HeaderOp::Replace(b"Content-Type: application/json", 0), &f, &b).unwrap();
+        h.op(
+            HeaderOp::Replace(b"Content-Type: application/json", 0),
+            &f,
+            &b,
+        )
+        .unwrap();
         assert_eq!(h.headers, vec![b"Content-Type: application/json".to_vec()]);
     }
 
@@ -441,7 +469,10 @@ mod tests {
     fn default_content_type_on_send() {
         let (mut h, f, b) = setup();
         assert!(h.send(&f, &b));
-        assert_eq!(h.headers, vec![b"Content-type: text/html; charset=UTF-8".to_vec()]);
+        assert_eq!(
+            h.headers,
+            vec![b"Content-type: text/html; charset=UTF-8".to_vec()]
+        );
         assert_eq!(*b.status.borrow(), Some((200, None, 0)));
         assert_eq!(
             b.content_type.borrow().as_deref(),
@@ -457,7 +488,8 @@ mod tests {
     #[test]
     fn status_lines() {
         let (mut h, f, b) = setup();
-        h.op(HeaderOp::Replace(b"HTTP/1.0 404 Not Found", 0), &f, &b).unwrap();
+        h.op(HeaderOp::Replace(b"HTTP/1.0 404 Not Found", 0), &f, &b)
+            .unwrap();
         assert_eq!(h.response_code, 404);
         assert!(h.headers.is_empty());
         h.send(&f, &b);
@@ -477,17 +509,20 @@ mod tests {
             method: b"POST".to_vec(),
             ..HeaderFacts::default()
         };
-        h.op(HeaderOp::Replace(b"Location: /x", 0), &post, &b).unwrap();
+        h.op(HeaderOp::Replace(b"Location: /x", 0), &post, &b)
+            .unwrap();
         assert_eq!(h.response_code, 303);
         let mut h = SapiHeaders::new(0);
         h.op(HeaderOp::SetStatus(301), &f, &b).unwrap();
         h.op(HeaderOp::Replace(b"Location: /x", 0), &f, &b).unwrap();
         assert_eq!(h.response_code, 301);
         let mut h = SapiHeaders::new(0);
-        h.op(HeaderOp::Replace(b"Location: /x", 307), &f, &b).unwrap();
+        h.op(HeaderOp::Replace(b"Location: /x", 307), &f, &b)
+            .unwrap();
         assert_eq!(h.response_code, 307);
         let mut h = SapiHeaders::new(0);
-        h.op(HeaderOp::Replace(b"WWW-Authenticate: Basic", 0), &f, &b).unwrap();
+        h.op(HeaderOp::Replace(b"WWW-Authenticate: Basic", 0), &f, &b)
+            .unwrap();
         assert_eq!(h.response_code, 401);
     }
 
@@ -500,7 +535,10 @@ mod tests {
         h.op(HeaderOp::Delete(b"x-a"), &f, &b).unwrap();
         assert_eq!(h.headers, vec![b"X-B: 2".to_vec()]);
         assert_eq!(b.table_entries(Table::HeadersOut).len(), 1);
-        assert_eq!(h.op(HeaderOp::Delete(b"X-B: 2"), &f, &b), Err(HeaderError::DeleteColon));
+        assert_eq!(
+            h.op(HeaderOp::Delete(b"X-B: 2"), &f, &b),
+            Err(HeaderError::DeleteColon)
+        );
         h.op(HeaderOp::DeleteAll, &f, &b).unwrap();
         assert!(h.headers.is_empty());
         assert!(b.table_entries(Table::HeadersOut).is_empty());
@@ -509,7 +547,8 @@ mod tests {
     #[test]
     fn content_length_goes_to_apache() {
         let (mut h, f, b) = setup();
-        h.op(HeaderOp::Replace(b"Content-Length: 42", 0), &f, &b).unwrap();
+        h.op(HeaderOp::Replace(b"Content-Length: 42", 0), &f, &b)
+            .unwrap();
         assert_eq!(*b.content_length.borrow(), Some(42));
         assert_eq!(h.headers, vec![b"Content-Length: 42".to_vec()]);
     }

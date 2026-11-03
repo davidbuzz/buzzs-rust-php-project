@@ -94,7 +94,9 @@ impl Cookie {
         buf.extend_from_slice(&self.name);
         match self.value.as_deref().filter(|v| !v.is_empty()) {
             None => {
-                buf.extend_from_slice(b"=deleted; expires=Thu, 01 Jan 1970 00:00:01 GMT; Max-Age=0");
+                buf.extend_from_slice(
+                    b"=deleted; expires=Thu, 01 Jan 1970 00:00:01 GMT; Max-Age=0",
+                );
             }
             Some(v) => {
                 buf.push(b'=');
@@ -224,14 +226,19 @@ mod tests {
             String::from_utf8(c.header_line(true, 1_700_000_000).unwrap()).unwrap(),
             "Set-Cookie: a=1; expires=Tue, 14 Nov 2023 22:15:00 GMT; Max-Age=100"
         );
-        assert!(String::from_utf8(c.header_line(true, 1_800_000_000).unwrap())
-            .unwrap()
-            .ends_with("Max-Age=0"));
+        assert!(
+            String::from_utf8(c.header_line(true, 1_800_000_000).unwrap())
+                .unwrap()
+                .ends_with("Max-Age=0")
+        );
     }
 
     #[test]
     fn errors() {
-        assert_eq!(cookie("", None).header_line(true, 0), Err(CookieError::ArgumentEmpty(1)));
+        assert_eq!(
+            cookie("", None).header_line(true, 0),
+            Err(CookieError::ArgumentEmpty(1))
+        );
         assert_eq!(
             cookie("a=b", None).header_line(true, 0),
             Err(CookieError::ArgumentValue(1, ILLEGAL_NAME))

@@ -40,7 +40,11 @@ fn main() {
             }
         }
     }
-    for fallback in ["/usr/include/apache2", "/usr/include/apr-1.0", "/usr/include/apr-1"] {
+    for fallback in [
+        "/usr/include/apache2",
+        "/usr/include/apr-1.0",
+        "/usr/include/apr-1",
+    ] {
         let p = PathBuf::from(fallback);
         if p.is_dir() {
             includes.push(p);
@@ -55,7 +59,10 @@ fn main() {
     }
 
     let mut build = cc::Build::new();
-    build.file("csrc/mod_phprust.c").include("csrc").warnings(true);
+    build
+        .file("csrc/mod_phprust.c")
+        .include("csrc")
+        .warnings(true);
     for dir in &includes {
         build.include(dir);
     }

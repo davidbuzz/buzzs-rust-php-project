@@ -250,7 +250,10 @@ impl MultipartBuffer<'_> {
             };
             if let Some(colon) = colon {
                 if let (Some(_), Some(_)) = (&buf_value, &key) {
-                    headers.push((key.take().unwrap_or_default(), buf_value.take().unwrap_or_default()));
+                    headers.push((
+                        key.take().unwrap_or_default(),
+                        buf_value.take().unwrap_or_default(),
+                    ));
                 }
                 let name = &line[..colon];
                 if !should_save_header(name) || header_value(&headers, name).is_some() {
@@ -262,7 +265,9 @@ impl MultipartBuffer<'_> {
                         .copied()
                         .skip_while(|&c| is_space(c))
                         .collect();
-                    buf_value.get_or_insert_with(Vec::new).extend_from_slice(&value);
+                    buf_value
+                        .get_or_insert_with(Vec::new)
+                        .extend_from_slice(&value);
                 }
             } else if let Some(b) = buf_value.as_mut() {
                 b.extend_from_slice(line);
@@ -490,7 +495,13 @@ impl Parser {
     }
 
     /// `safe_php_register_variable()`.
-    fn register(&mut self, target: Target, name: &[u8], value: RegValue, override_protection: bool) {
+    fn register(
+        &mut self,
+        target: Target,
+        name: &[u8],
+        value: RegValue,
+        override_protection: bool,
+    ) {
         let name = normalize_protected_variable(name);
         if override_protection || !self.protected.contains(&name) {
             self.out.registrations.push(Registration {
@@ -521,7 +532,10 @@ fn boundary_of(content_type: &[u8]) -> Result<Vec<u8>, &'static str> {
             .ok_or("Invalid boundary in multipart/form-data POST data")?;
         Ok(b[..end].to_vec())
     } else {
-        let end = b.iter().position(|&c| c == b',' || c == b';').unwrap_or(b.len());
+        let end = b
+            .iter()
+            .position(|&c| c == b',' || c == b';')
+            .unwrap_or(b.len());
         Ok(b[..end].to_vec())
     }
 }
@@ -563,7 +577,10 @@ pub fn parse(
         }
     };
     if boundary.len() > FILLUNIT - 4 {
-        p.warn("Boundary too large in multipart/form-data POST data".to_string(), false);
+        p.warn(
+            "Boundary too large in multipart/form-data POST data".to_string(),
+            false,
+        );
         return p.out;
     }
     let bufsize = (boundary.len() + 6).max(FILLUNIT);
@@ -608,7 +625,10 @@ pub fn parse(
         let mut filename: Option<Vec<u8>> = None;
         while !cd.is_empty() {
             let (pair, rest) = getword(cd, b';');
-            cd = &rest[rest.iter().position(|&c| !is_space(c)).unwrap_or(rest.len())..];
+            cd = &rest[rest
+                .iter()
+                .position(|&c| !is_space(c))
+                .unwrap_or(rest.len())..];
             if pair.contains(&b'=') {
                 let (key, value) = getword(&pair, b'=');
                 if key.eq_ignore_ascii_case(b"name") {
@@ -649,7 +669,10 @@ pub fn parse(
             skip_upload = true;
             if upload_cnt == 0 {
                 upload_cnt -= 1;
-                p.warn("Maximum number of allowable file uploads has been exceeded".to_string(), true);
+                p.warn(
+                    "Maximum number of allowable file uploads has been exceeded".to_string(),
+                    true,
+                );
             }
         }
         if param.is_none() && filename.is_none() {
@@ -699,15 +722,15 @@ pub fn parse(
         if cancel == 0 {
             let mut chunk = mb.read_part(FILLUNIT, Some(&mut end));
             let mut file = None;
-            match open_temporary(&settings.tmp_dirs) {
-                Some((f, path)) => {
-                    file = Some(f);
-                    temp = Some(path);
-                }
-                None => {
-                    p.warn("File upload error - unable to create a temporary file".to_string(), true);
-                    cancel = upload_err::NO_TMP_DIR;
-                }
+            if let Some((f, path)) = open_temporary(&settings.tmp_dirs) {
+                file = Some(f);
+                temp = Some(path);
+            } else {
+                p.warn(
+                    "File upload error - unable to create a temporary file".to_string(),
+                    true,
+                );
+                cancel = upload_err::NO_TMP_DIR;
             }
             upload_cnt -= 1;
             while cancel == 0 && !chunk.is_empty() {
@@ -736,11 +759,9 @@ pub fn parse(
             if let Some(t) = &temp {
                 p.out.uploaded.push(t.clone());
             }
-        } else {
-            if let Some(t) = temp.take() {
-                if cancel != upload_err::NO_TMP_DIR {
-                    let _ = std::fs::remove_file(t);
-                }
+        } else if let Some(t) = temp.take() {
+            if cancel != upload_err::NO_TMP_DIR {
+                let _ = std::fs::remove_file(t);
             }
         }
 
@@ -750,21 +771,18 @@ pub fn parse(
             .filter(|_| param.last() == Some(&b']'));
         let name_of = |base: &[u8], field: &str| -> Vec<u8> {
             let mut n = Vec::new();
-            match arr {
-                Some(start) => {
-                    n.extend_from_slice(&base[..start.min(base.len())]);
-                    n.push(b'[');
-                    n.extend_from_slice(field.as_bytes());
-                    n.extend_from_slice(b"][");
-                    n.extend_from_slice(&param[start + 1..param.len() - 1]);
-                    n.push(b']');
-                }
-                None => {
-                    n.extend_from_slice(base);
-                    n.push(b'[');
-                    n.extend_from_slice(field.as_bytes());
-                    n.push(b']');
-                }
+            if let Some(start) = arr {
+                n.extend_from_slice(&base[..start.min(base.len())]);
+                n.push(b'[');
+                n.extend_from_slice(field.as_bytes());
+                n.extend_from_slice(b"][");
+                n.extend_from_slice(&param[start + 1..param.len() - 1]);
+                n.push(b']');
+            } else {
+                n.extend_from_slice(base);
+                n.push(b'[');
+                n.extend_from_slice(field.as_bytes());
+                n.push(b']');
             }
             n
         };
@@ -787,7 +805,12 @@ pub fn parse(
                 .map(|v| v.split(|&c| c == b';').next().unwrap_or_default().to_vec())
                 .unwrap_or_default()
         };
-        p.register(Target::Files, &name_of(&param, "type"), RegValue::Str(ctype), false);
+        p.register(
+            Target::Files,
+            &name_of(&param, "type"),
+            RegValue::Str(ctype),
+            false,
+        );
         // add_protected_variable() normalises `param` in place.
         let nparam = normalize_protected_variable(&param);
         p.protected.insert(nparam.clone());
@@ -799,7 +822,12 @@ pub fn parse(
             .map(|t| t.as_os_str().as_bytes().to_vec())
             .unwrap_or_default();
         p.register(Target::Files, &tmp_name, RegValue::Str(tmp_value), true);
-        p.register(Target::Files, &name_of(&param, "error"), RegValue::Long(cancel), false);
+        p.register(
+            Target::Files,
+            &name_of(&param, "error"),
+            RegValue::Long(cancel),
+            false,
+        );
         p.register(
             Target::Files,
             &name_of(&param, "size"),
@@ -886,8 +914,14 @@ mod tests {
         );
         assert_eq!(o.registrations[0].value, RegValue::Str(b"hello".to_vec()));
         assert_eq!(o.registrations[1].value, RegValue::Str(b"x.txt".to_vec()));
-        assert_eq!(o.registrations[2].value, RegValue::Str(b"C:\\dir\\x.txt".to_vec()));
-        assert_eq!(o.registrations[3].value, RegValue::Str(b"text/plain".to_vec()));
+        assert_eq!(
+            o.registrations[2].value,
+            RegValue::Str(b"C:\\dir\\x.txt".to_vec())
+        );
+        assert_eq!(
+            o.registrations[3].value,
+            RegValue::Str(b"text/plain".to_vec())
+        );
         assert_eq!(o.registrations[5].value, RegValue::Long(0));
         assert_eq!(o.registrations[6].value, RegValue::Long(13));
         assert_eq!(o.uploaded.len(), 1);
@@ -910,7 +944,10 @@ mod tests {
                 (Target::Files, "u[size][]".into()),
             ]
         );
-        assert_eq!(o.registrations[4].value, RegValue::Long(upload_err::NO_FILE));
+        assert_eq!(
+            o.registrations[4].value,
+            RegValue::Long(upload_err::NO_FILE)
+        );
         assert!(o.uploaded.is_empty());
     }
 
@@ -919,13 +956,21 @@ mod tests {
         let body = b"--XyZ\r\nContent-Disposition: form-data; name=\"MAX_FILE_SIZE\"\r\n\r\n3\r\n\
 --XyZ\r\nContent-Disposition: form-data; name=\"f\"; filename=\"a\"\r\n\r\n12345\r\n--XyZ--\r\n";
         let o = run(CT, body, &tmp_settings());
-        let err = o.registrations.iter().find(|r| r.name == b"f[error]").unwrap();
+        let err = o
+            .registrations
+            .iter()
+            .find(|r| r.name == b"f[error]")
+            .unwrap();
         assert_eq!(err.value, RegValue::Long(upload_err::FORM_SIZE));
         let mut s = tmp_settings();
         s.upload_max_filesize = 2;
         let body = b"--XyZ\r\nContent-Disposition: form-data; name=\"f\"; filename=\"a\"\r\n\r\n12345\r\n--XyZ--\r\n";
         let o = run(CT, body, &s);
-        let err = o.registrations.iter().find(|r| r.name == b"f[error]").unwrap();
+        let err = o
+            .registrations
+            .iter()
+            .find(|r| r.name == b"f[error]")
+            .unwrap();
         assert_eq!(err.value, RegValue::Long(upload_err::INI_SIZE));
         assert!(o.uploaded.is_empty());
     }
@@ -940,17 +985,27 @@ mod tests {
             "POST Content-Length of 10 bytes exceeds the limit of 4 bytes"
         );
         let o = run("multipart/form-data", b"x", &tmp_settings());
-        assert_eq!(o.warnings[0].message, "Missing boundary in multipart/form-data POST data");
+        assert_eq!(
+            o.warnings[0].message,
+            "Missing boundary in multipart/form-data POST data"
+        );
         let o = run("multipart/form-data; boundary=\"abc", b"x", &tmp_settings());
-        assert_eq!(o.warnings[0].message, "Invalid boundary in multipart/form-data POST data");
-        assert_eq!(boundary_of(b"multipart/form-data; BOUNDARY=\"q q\"").unwrap(), b"q q");
+        assert_eq!(
+            o.warnings[0].message,
+            "Invalid boundary in multipart/form-data POST data"
+        );
+        assert_eq!(
+            boundary_of(b"multipart/form-data; BOUNDARY=\"q q\"").unwrap(),
+            b"q q"
+        );
     }
 
     #[test]
     fn max_file_uploads() {
         let mut s = tmp_settings();
         s.max_file_uploads = 1;
-        let body = b"--XyZ\r\nContent-Disposition: form-data; name=\"a\"; filename=\"1\"\r\n\r\n1\r\n\
+        let body =
+            b"--XyZ\r\nContent-Disposition: form-data; name=\"a\"; filename=\"1\"\r\n\r\n1\r\n\
 --XyZ\r\nContent-Disposition: form-data; name=\"b\"; filename=\"2\"\r\n\r\n2\r\n--XyZ--\r\n";
         let o = run(CT, body, &s);
         assert_eq!(
@@ -963,7 +1018,8 @@ mod tests {
 
     #[test]
     fn protected_names_are_not_overwritten() {
-        let body = b"--XyZ\r\nContent-Disposition: form-data; name=\"f\"; filename=\"a\"\r\n\r\n1\r\n\
+        let body =
+            b"--XyZ\r\nContent-Disposition: form-data; name=\"f\"; filename=\"a\"\r\n\r\n1\r\n\
 --XyZ\r\nContent-Disposition: form-data; name=\"f\"\r\n\r\nx\r\n--XyZ--\r\n";
         let o = run(CT, body, &tmp_settings());
         assert!(o.registrations.iter().all(|r| r.target == Target::Files));

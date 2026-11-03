@@ -156,7 +156,11 @@ pub fn populate(vm: &mut Vm, ctx: &RequestCtx, auth: &Auth) {
     let b = &*ctx.backend;
     let order = {
         let o = ini_bytes(vm, "variables_order");
-        if o.is_empty() { b"EGPCS".to_vec() } else { o }
+        if o.is_empty() {
+            b"EGPCS".to_vec()
+        } else {
+            o
+        }
     };
     let has = |c: u8| order.iter().any(|x| x.eq_ignore_ascii_case(&c));
     let settings = input_settings(vm);
@@ -186,7 +190,15 @@ pub fn populate(vm: &mut Vm, ctx: &RequestCtx, auth: &Auth) {
                             Body::Buffered(d) => d.clone(),
                             _ => Vec::new(),
                         };
-                        let _ = query::treat_data(ParseKind::Post, &data, &mut post, &settings, "", None, vm);
+                        let _ = query::treat_data(
+                            ParseKind::Post,
+                            &data,
+                            &mut post,
+                            &settings,
+                            "",
+                            None,
+                            vm,
+                        );
                     }
                 }
                 b"multipart/form-data" => {
@@ -242,7 +254,13 @@ pub fn populate(vm: &mut Vm, ctx: &RequestCtx, auth: &Auth) {
             register(vm, &k, Value::Str(ZStr::from(v)), &mut server, false);
         }
         let uri = b.str_field(StrField::Uri).unwrap_or_default();
-        register(vm, b"PHP_SELF", Value::Str(ZStr::from(uri)), &mut server, false);
+        register(
+            vm,
+            b"PHP_SELF",
+            Value::Str(ZStr::from(uri)),
+            &mut server,
+            false,
+        );
         let t = server.make_mut();
         let s = |v: &[u8]| Value::Str(ZStr::from(v));
         if let Some(u) = &auth.user {
@@ -261,14 +279,16 @@ pub fn populate(vm: &mut Vm, ctx: &RequestCtx, auth: &Auth) {
         t.insert("REQUEST_TIME", Value::Int(now as i64));
         if vm.ini_bool("register_argc_argv") {
             let q = b.str_field(StrField::Args).unwrap_or_default();
-            let argv = build_argv(&q);
-            let argc = i64::try_from(argv.len()).unwrap_or(0);
+            let args = build_argv(&q);
+            let count = i64::try_from(args.len()).unwrap_or(0);
             let t = server.make_mut();
             t.insert(
                 "argv",
-                Value::Array(ZArray::from_values(argv.into_iter().map(|a| Value::Str(ZStr::from(a))))),
+                Value::Array(ZArray::from_values(
+                    args.into_iter().map(|a| Value::Str(ZStr::from(a))),
+                )),
             );
-            t.insert("argc", Value::Int(argc));
+            t.insert("argc", Value::Int(count));
         }
     }
 
@@ -316,7 +336,10 @@ mod tests {
 
     #[test]
     fn content_type_keys() {
-        assert_eq!(content_type_key(b"Multipart/Form-Data; boundary=x"), b"multipart/form-data");
+        assert_eq!(
+            content_type_key(b"Multipart/Form-Data; boundary=x"),
+            b"multipart/form-data"
+        );
         assert_eq!(
             content_type_key(b"application/x-www-form-urlencoded"),
             b"application/x-www-form-urlencoded"
@@ -325,7 +348,10 @@ mod tests {
 
     #[test]
     fn argv_from_query() {
-        assert_eq!(build_argv(b"a+b+c"), vec![b"a".to_vec(), b"b".to_vec(), b"c".to_vec()]);
+        assert_eq!(
+            build_argv(b"a+b+c"),
+            vec![b"a".to_vec(), b"b".to_vec(), b"c".to_vec()]
+        );
         assert!(build_argv(b"").is_empty());
     }
 

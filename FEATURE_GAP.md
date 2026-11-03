@@ -63,7 +63,7 @@ Keep rows when they reach 100%; they become the completion record. Add rows as g
 | CGI | n/a | out | **Out of scope** (non-CLI SAPI). Ref: `sapi/cgi` (24). |
 | FPM | n/a | out | **Out of scope** (non-CLI SAPI). Ref: `sapi/fpm` (151). |
 | phpdbg | n/a | out | **Out of scope** (debugger SAPI). Ref: `sapi/phpdbg` (74). |
-| apache2handler (mod_php) | 0% | med | **In scope** (user request): Apache module SAPI — needs apache2-dev/apxs; no .phpt tests of its own, verified by loading into httpd. Ref: `sapi/apache2handler`. |
+| apache2handler (mod_php) | 75% | med | `crates/php-sapi-apache2` → `libphprust_apache2.so` (`LoadModule php_module`), prefork (threaded MPMs only with `PhpRustAllowThreads On`, serialised). Done: php_value/php_flag/php_admin_* (+.htaccess, admin lock-out), PHPINIDir/php.ini, $_SERVER/$_GET/$_POST/$_COOKIE/$_FILES/$_ENV/$_REQUEST, rfc1867 uploads, php://input, header()/setcookie()/http_response_code(), flush(), error display/log ([php:warn]…), error_log(), apache_*()/getallheaders()/virtual(), fatal→500, max_execution_time (child exits). Missing: output-start file:line in header warnings, implicit_flush, abort bailout, header_register_callback before implicit sends, session upload progress, real interruptible timeout. E2E: `cargo test -p php-sapi-apache2 --test httpd -- --ignored`. Ref: `sapi/apache2handler`. |
 | Embed / litespeed / fuzzer | n/a | out | **Out of scope** (non-CLI SAPIs without tests). |
 | **Core extensions (always enabled)** | | | |
 | ext/standard | 0% | high | Strings, arrays, math, files, `var_dump`/`print_r`/`var_export`, `serialize`, `sprintf`, `preg`-free string functions, URLs, base64, crc32, md5/sha1, `proc_open`, `mail`… The largest extension (4,068 `.phpt`). Split into sub-rows as work starts. |

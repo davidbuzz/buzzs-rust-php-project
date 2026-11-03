@@ -305,6 +305,12 @@ impl<T: Backend + ?Sized> Backend for std::rc::Rc<T> {
     }
 }
 
+/// The entries of a table.
+pub type Entries = Vec<(Vec<u8>, Vec<u8>)>;
+
+/// The arguments of a `set_status` call: status, status line, protocol.
+pub type StatusCall = (i32, Option<Vec<u8>>, i32);
+
 /// An in-memory [`Backend`] for tests: tables are ordered lists with
 /// case-insensitive keys, output and log lines are recorded.
 #[derive(Debug, Default)]
@@ -315,9 +321,9 @@ pub struct MockBackend {
     /// Integer fields.
     pub ints: RefCell<Vec<(IntField, i64)>>,
     /// Tables.
-    pub tables: RefCell<Vec<(Table, Vec<(Vec<u8>, Vec<u8>)>)>>,
+    pub tables: RefCell<Vec<(Table, Entries)>>,
     /// `(status, status_line, proto_num)` of the last `set_status`.
-    pub status: RefCell<Option<(i32, Option<Vec<u8>>, i32)>>,
+    pub status: RefCell<Option<StatusCall>>,
     /// Last content type.
     pub content_type: RefCell<Option<Vec<u8>>>,
     /// Last content length.
@@ -338,18 +344,21 @@ pub struct MockBackend {
 
 impl MockBackend {
     /// Sets a string field.
+    #[must_use]
     pub fn with_str(self, f: StrField, v: &[u8]) -> Self {
         self.strs.borrow_mut().push((f, v.to_vec()));
         self
     }
 
     /// Sets an integer field.
+    #[must_use]
     pub fn with_int(self, f: IntField, v: i64) -> Self {
         self.ints.borrow_mut().push((f, v));
         self
     }
 
     /// Adds a table entry.
+    #[must_use]
     pub fn with_entry(self, t: Table, k: &[u8], v: &[u8]) -> Self {
         self.table_op(t, TableOp::Add, k, v);
         self
@@ -477,7 +486,10 @@ mod tests {
         m.table_op(Table::HeadersOut, TableOp::Add, b"x-a", b"2");
         assert_eq!(m.table_get(Table::HeadersOut, b"X-a"), Some(b"1".to_vec()));
         m.table_op(Table::HeadersOut, TableOp::Set, b"X-A", b"3");
-        assert_eq!(m.table_entries(Table::HeadersOut), vec![(b"X-A".to_vec(), b"3".to_vec())]);
+        assert_eq!(
+            m.table_entries(Table::HeadersOut),
+            vec![(b"X-A".to_vec(), b"3".to_vec())]
+        );
         m.table_op(Table::HeadersOut, TableOp::Unset, b"x-A", b"");
         assert!(m.table_entries(Table::HeadersOut).is_empty());
     }

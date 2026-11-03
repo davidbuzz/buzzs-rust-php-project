@@ -49,7 +49,9 @@ impl Timer {
     /// Whether `cpu_ns` (CPU time of the request thread) exceeds the limit.
     pub fn expired(&self, cpu_ns: i64) -> bool {
         let limit = self.limit();
-        limit > 0 && cpu_ns - self.start_cpu_ns.load(Ordering::SeqCst) >= limit.saturating_mul(1_000_000_000)
+        limit > 0
+            && cpu_ns - self.start_cpu_ns.load(Ordering::SeqCst)
+                >= limit.saturating_mul(1_000_000_000)
     }
 }
 
@@ -63,9 +65,9 @@ pub fn thread_cpu_ns() -> i64 {
     unsafe {
         libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &raw mut ts);
     }
-    i64::from(ts.tv_sec)
+    ts.tv_sec
         .saturating_mul(1_000_000_000)
-        .saturating_add(i64::from(ts.tv_nsec))
+        .saturating_add(ts.tv_nsec)
 }
 
 /// The request body as seen by `php://input`.
@@ -321,8 +323,13 @@ pub fn apply_dir_config(vm: &mut Vm, entries: &[crate::backend::DirEntry]) {
             crate::backend::DirStatus::PerDir => Access::PERDIR,
             crate::backend::DirStatus::System => Access::SYSTEM,
         };
-        let stage = if e.htaccess { Stage::Htaccess } else { Stage::Activate };
-        vm.ini.alter(&e.name, &e.value, access, stage, false, &mut sink);
+        let stage = if e.htaccess {
+            Stage::Htaccess
+        } else {
+            Stage::Activate
+        };
+        vm.ini
+            .alter(&e.name, &e.value, access, stage, false, &mut sink);
     }
     sync_cached_ini(vm);
 }
@@ -352,9 +359,12 @@ pub struct RunParams {
     pub highlight: bool,
 }
 
+/// `(user, password, digest)` of HTTP authentication.
+pub type AuthData = (Option<Vec<u8>>, Option<Vec<u8>>, Option<Vec<u8>>);
+
 /// `php_handle_auth_data()`: `(user, password, digest)` from an
 /// `Authorization` header.
-pub fn auth_data(auth: Option<&[u8]>) -> (Option<Vec<u8>>, Option<Vec<u8>>, Option<Vec<u8>>) {
+pub fn auth_data(auth: Option<&[u8]>) -> AuthData {
     let Some(auth) = auth.filter(|a| !a.is_empty()) else {
         return (None, None, None);
     };
@@ -438,7 +448,8 @@ pub fn run(backend: Box<dyn Backend>, params: &RunParams) {
     }
     ctx.backend.set_user(user.as_deref());
     for h in ["Content-Length", "Last-Modified", "Expires", "ETag"] {
-        ctx.backend.table_op(Table::HeadersOut, TableOp::Unset, h.as_bytes(), b"");
+        ctx.backend
+            .table_op(Table::HeadersOut, TableOp::Unset, h.as_bytes(), b"");
     }
     if vm.ini_bool("last_modified") {
         ctx.backend.set_last_modified();
@@ -463,7 +474,10 @@ pub fn run(backend: Box<dyn Backend>, params: &RunParams) {
     vm.shutdown_functions
         .insert(0, (Value::from(crate::functions::FATAL_CHECK), Vec::new()));
 
-    let filename = ctx.backend.str_field(StrField::Filename).unwrap_or_default();
+    let filename = ctx
+        .backend
+        .str_field(StrField::Filename)
+        .unwrap_or_default();
     let path = PathBuf::from(std::ffi::OsStr::from_bytes(&filename));
     let saved_cwd = std::env::current_dir().ok();
     if let Some(dir) = path.parent() {
@@ -572,7 +586,10 @@ mod tests {
     fn ctx_output_sends_headers_once() {
         let ctx = RequestCtx::new(Box::new(MockBackend::default()), Arc::new(Timer::default()));
         ctx.flush();
-        assert!(!ctx.headers_sent(), "flush before output must not send headers");
+        assert!(
+            !ctx.headers_sent(),
+            "flush before output must not send headers"
+        );
         ctx.write(b"hi");
         assert!(ctx.headers_sent());
         ctx.write(b" there");

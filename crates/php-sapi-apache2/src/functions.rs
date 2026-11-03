@@ -14,6 +14,7 @@ use php_vm::ext::{Args, Extension, ModuleBuilder, NativeFn};
 use php_vm::{Vm, VmResult};
 use std::cell::Cell;
 use std::os::unix::ffi::OsStrExt;
+use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 
 /// Internal shutdown function applying the fatal-error 500 status.
@@ -91,7 +92,9 @@ fn headers_sent(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 #[allow(clippy::unnecessary_wraps)]
 fn headers_list(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
     let list = ctx_or(Vec::new(), |c| c.headers.borrow().headers.clone());
-    Ok(Value::Array(ZArray::from_values(list.into_iter().map(str_value))))
+    Ok(Value::Array(ZArray::from_values(
+        list.into_iter().map(str_value),
+    )))
 }
 
 fn http_response_code(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -124,9 +127,9 @@ fn http_response_code(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     Ok(Value::Int(i64::from(current)))
 }
 
-fn header_register_callback(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+#[allow(clippy::unnecessary_wraps)]
+fn header_register_callback(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let cb = a.at(0);
-    let _ = vm;
     with_ctx(|c| *c.header_callback.borrow_mut() = Some(cb));
     Ok(Value::Bool(true))
 }
@@ -197,7 +200,9 @@ fn setcookie_common(vm: &mut Vm, a: &mut Args, raw: bool) -> VmResult<Value> {
     }
     let line = match c.header_line(!raw, now()) {
         Ok(l) => l,
-        Err(CookieError::ArgumentEmpty(n)) => return Err(a.value_error(vm, n, "must not be empty")),
+        Err(CookieError::ArgumentEmpty(n)) => {
+            return Err(a.value_error(vm, n, "must not be empty"))
+        }
         Err(CookieError::ArgumentValue(n, msg)) => return Err(a.value_error(vm, n, msg)),
         Err(CookieError::Value(msg)) => {
             return Err(vm.throw("ValueError", &format!("{func}(): {msg}")))
@@ -218,7 +223,13 @@ fn setrawcookie(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 /// `flush()`: `sapi_flush()` → headers, then `ap_rflush`.
 #[allow(clippy::unnecessary_wraps)]
 fn flush(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
-    if let Some(cb) = with_ctx(|c| (!c.headers_sent()).then(|| c.header_callback.borrow_mut().take()).flatten()).flatten() {
+    if let Some(cb) = with_ctx(|c| {
+        (!c.headers_sent())
+            .then(|| c.header_callback.borrow_mut().take())
+            .flatten()
+    })
+    .flatten()
+    {
         let _ = vm.call_value(&cb, Vec::new());
     }
     with_ctx(|c| {
@@ -342,7 +353,9 @@ fn path_of(s: &ZStr) -> PathBuf {
 #[allow(clippy::unnecessary_wraps)]
 fn is_uploaded_file(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let p = path_of(&a.str(0));
-    Ok(Value::Bool(ctx_or(false, |c| c.uploaded.borrow().contains(&p))))
+    Ok(Value::Bool(ctx_or(false, |c| {
+        c.uploaded.borrow().contains(&p)
+    })))
 }
 
 fn move_uploaded_file(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -362,8 +375,9 @@ fn move_uploaded_file(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             libc::umask(m);
             m
         };
-        use std::os::unix::fs::PermissionsExt;
-        if let Err(e) = std::fs::set_permissions(&to, std::fs::Permissions::from_mode(0o666 & !mask)) {
+        if let Err(e) =
+            std::fs::set_permissions(&to, std::fs::Permissions::from_mode(0o666 & !mask))
+        {
             vm.php_warning(&e.to_string())?;
         }
     } else if std::fs::copy(&from, &to).is_ok() {
@@ -436,7 +450,12 @@ fn apache_setenv(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let top = a.has(2) && a.bool(2);
     with_ctx(|c| {
         with_target(c, top, |b| {
-            b.table_op(Table::SubprocessEnv, TableOp::Set, var.as_bytes(), val.as_bytes());
+            b.table_op(
+                Table::SubprocessEnv,
+                TableOp::Set,
+                var.as_bytes(),
+                val.as_bytes(),
+            );
         });
     });
     Ok(Value::Bool(true))
@@ -447,8 +466,10 @@ fn apache_getenv(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let var = a.str(0);
     let top = a.has(1) && a.bool(1);
     Ok(ctx_or(Value::Bool(false), |c| {
-        with_target(c, top, |b| b.table_get(Table::SubprocessEnv, var.as_bytes()))
-            .map_or(Value::Bool(false), str_value)
+        with_target(c, top, |b| {
+            b.table_get(Table::SubprocessEnv, var.as_bytes())
+        })
+        .map_or(Value::Bool(false), str_value)
     }))
 }
 
@@ -465,10 +486,12 @@ fn apache_get_version(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
 #[allow(clippy::unnecessary_wraps)]
 fn apache_get_modules(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
     let mods = ctx_or(Vec::new(), |c| c.backend.loaded_modules());
-    Ok(Value::Array(ZArray::from_values(mods.into_iter().map(|m| {
-        let end = m.iter().position(|&c| c == b'.').unwrap_or(m.len());
-        str_value(&m[..end])
-    }))))
+    Ok(Value::Array(ZArray::from_values(mods.into_iter().map(
+        |m| {
+            let end = m.iter().position(|&c| c == b'.').unwrap_or(m.len());
+            str_value(&m[..end])
+        },
+    ))))
 }
 
 fn lookup_warning(vm: &mut Vm, what: &str, uri: &ZStr) -> VmResult<()> {

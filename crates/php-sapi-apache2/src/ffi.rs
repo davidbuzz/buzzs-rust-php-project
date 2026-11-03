@@ -34,7 +34,8 @@ pub struct ApiTable {
     set_user: unsafe extern "C" fn(*mut c_void, *const c_char),
     add_cgi_vars: unsafe extern "C" fn(*mut c_void),
     table_count: unsafe extern "C" fn(*mut c_void, c_int) -> c_int,
-    table_entry: unsafe extern "C" fn(*mut c_void, c_int, c_int, *mut *const c_char, *mut *const c_char),
+    table_entry:
+        unsafe extern "C" fn(*mut c_void, c_int, c_int, *mut *const c_char, *mut *const c_char),
     table_get: unsafe extern "C" fn(*mut c_void, c_int, *const c_char) -> *const c_char,
     table_op: unsafe extern "C" fn(*mut c_void, c_int, c_int, *const c_char, *const c_char),
     set_status: unsafe extern "C" fn(*mut c_void, c_int, *const c_char, c_int),
@@ -50,7 +51,14 @@ pub struct ApiTable {
     module_count: unsafe extern "C" fn() -> c_int,
     module_name: unsafe extern "C" fn(c_int) -> *const c_char,
     dir_count: unsafe extern "C" fn(*mut c_void) -> c_int,
-    dir_entry: unsafe extern "C" fn(*mut c_void, c_int, *mut *const c_char, *mut *const c_char, *mut c_int, *mut c_int),
+    dir_entry: unsafe extern "C" fn(
+        *mut c_void,
+        c_int,
+        *mut *const c_char,
+        *mut *const c_char,
+        *mut c_int,
+        *mut c_int,
+    ),
     sub_lookup: unsafe extern "C" fn(*mut c_void, *const c_char) -> *mut c_void,
     sub_run: unsafe extern "C" fn(*mut c_void) -> c_int,
     sub_destroy: unsafe extern "C" fn(*mut c_void),
@@ -278,7 +286,14 @@ impl Backend for ApacheRequest {
                 let mut value: *const c_char = std::ptr::null();
                 let mut status: c_int = 0;
                 let mut htaccess: c_int = 0;
-                (self.api.dir_entry)(self.r, i, &raw mut name, &raw mut value, &raw mut status, &raw mut htaccess);
+                (self.api.dir_entry)(
+                    self.r,
+                    i,
+                    &raw mut name,
+                    &raw mut value,
+                    &raw mut status,
+                    &raw mut htaccess,
+                );
                 let Some(name) = bytes_of(name) else {
                     continue;
                 };
@@ -328,7 +343,10 @@ impl Backend for ApacheRequest {
             return None;
         }
         Some(Box::new(ApacheSubRequest {
-            req: ApacheRequest { r: rr, api: self.api },
+            req: ApacheRequest {
+                r: rr,
+                api: self.api,
+            },
         }))
     }
 
@@ -338,7 +356,10 @@ impl Backend for ApacheRequest {
         if top.is_null() || top == self.r {
             return None;
         }
-        Some(Box::new(ApacheRequest { r: top, api: self.api }))
+        Some(Box::new(ApacheRequest {
+            r: top,
+            api: self.api,
+        }))
     }
 }
 
@@ -384,7 +405,10 @@ impl SubRequest for ApacheSubRequest {
         out.push(("sent_bodyct", int(IntField::SentBodyct)));
         out.push(("bytes_sent", int(IntField::BytesSent)));
         out.push(("mtime", int(IntField::Mtime)));
-        out.push(("request_time", Int(r.sint(IntField::RequestTime as c_int) / 1_000_000)));
+        out.push((
+            "request_time",
+            Int(r.sint(IntField::RequestTime as c_int) / 1_000_000),
+        ));
         out
     }
 

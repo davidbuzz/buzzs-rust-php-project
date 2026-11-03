@@ -48,7 +48,8 @@ impl ProcessConfig {
         if let Some(e) = dir.iter().rev().find(|e| e.name == name) {
             return ini::parse_bool(&e.value);
         }
-        self.get(name).map_or(default, |v| ini::parse_bool(v.as_bytes()))
+        self.get(name)
+            .map_or(default, |v| ini::parse_bool(v.as_bytes()))
     }
 }
 
@@ -138,7 +139,13 @@ impl ProcessConfig {
     /// Parses ini text into the configuration hash.
     pub fn load_str(&mut self, data: &[u8], filename: &str) -> Result<(), String> {
         let mut collector = Collector::default();
-        let r = ini::parse_ini(data, filename, ScannerMode::Normal, &mut ConstHooks, &mut collector);
+        let r = ini::parse_ini(
+            data,
+            filename,
+            ScannerMode::Normal,
+            &mut ConstHooks,
+            &mut collector,
+        );
         self.ini.extend(collector.entries);
         r.map_err(|d| d.message.trim_end().to_string())
     }
@@ -156,7 +163,13 @@ fn scalar_bytes(v: &IniScalar) -> Vec<u8> {
         IniScalar::Str(s) => s.clone(),
         IniScalar::Long(l) => l.to_string().into_bytes(),
         IniScalar::Double(d) => d.to_string().into_bytes(),
-        IniScalar::Bool(b) => if *b { b"1".to_vec() } else { Vec::new() },
+        IniScalar::Bool(b) => {
+            if *b {
+                b"1".to_vec()
+            } else {
+                Vec::new()
+            }
+        }
         IniScalar::Null => Vec::new(),
     }
 }
