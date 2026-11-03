@@ -1,5 +1,6 @@
 [package]
 name = "php-ext-xml"
+description = "ext/libxml, ext/xml and ext/xmlwriter bindings for the phprust VM"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -8,6 +9,9 @@ rust-version.workspace = true
 [dependencies]
 php-vm = { path = "../php-vm" }
 php-runtime = { path = "../php-runtime" }
+php-libxml = { path = "../php-libxml" }
+php-streams = { path = "../php-streams" }
+php-ext-streams = { path = "../php-ext-streams" }
 
 [lints]
 workspace = true
