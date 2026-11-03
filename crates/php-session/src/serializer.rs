@@ -169,7 +169,8 @@ pub fn encode(
                 out.push(u8::try_from(key.len()).unwrap_or(0));
                 out.extend_from_slice(key.as_bytes());
             }
-            Serializer::PhpSerialize => unreachable!("handled above"),
+            // Returned early above.
+            Serializer::PhpSerialize => {}
         }
         out.extend_from_slice(&payload);
     }

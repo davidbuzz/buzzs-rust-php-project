@@ -351,6 +351,17 @@ fn headers_sent_blocks_start() {
               already been sent (sent from /t/out.php on line 7)"
         ]
     );
+    assert_eq!(
+        h.call("ini_set", |h| ini::ini_set(h, "session.gc_divisor", b"10")),
+        Some(false)
+    );
+    assert_eq!(
+        h.take_log(),
+        vec![
+            "Warning: ini_set(): Session ini settings cannot be changed after headers have \
+              already been sent (sent from /t/out.php on line 7)"
+        ]
+    );
     // session_id() only cares when cookies are used.
     h.call("ini_set", |h| ini::ini_set(h, "session.use_cookies", b"0"));
     h.take_log();

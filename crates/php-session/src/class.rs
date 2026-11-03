@@ -234,6 +234,10 @@ pub fn session_handler_open(h: &mut dyn SessionHost, path: &[u8], name: &[u8]) -
 }
 
 /// `SessionHandler::close(): bool`.
+///
+/// PHP closes the parent even when argument parsing fails
+/// (`zend_parse_parameters_none()` is not checked), so the VM should call
+/// this after raising the `ArgumentCountError` for extra arguments.
 pub fn session_handler_close(h: &mut dyn SessionHost) -> RtResult<bool> {
     let Some(m) = sanity_open(h)? else {
         return Ok(false);
