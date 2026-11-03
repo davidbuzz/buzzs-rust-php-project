@@ -369,6 +369,7 @@ pub fn offset_exists(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         state::sweep();
         this_state(a)
     };
+    refresh(&st);
     let name = string_arg(vm, a, 0, true)?;
     let is_info = info_class(&this).is_none_or(|c| {
         vm.find_class(c.as_bytes())
@@ -384,6 +385,7 @@ pub fn offset_get(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         state::sweep();
         this_state(a)
     };
+    refresh(&st);
     let name = string_arg(vm, a, 0, true)?;
     let path = run(vm, || st.borrow().offset_get(&name))?;
     let class = info_class(&this).unwrap_or_else(|| ZStr::from("PharFileInfo"));

@@ -11,18 +11,30 @@ use std::collections::HashMap;
 use std::rc::{Rc, Weak};
 
 use php_phar::object::{PharFileInfo, PharObject};
-use php_runtime::{Obj, PhpObject};
+use php_runtime::Obj;
+use php_vm::object::{ObjBox, ObjectData};
+
+/// The object's data cell: unlike the `Obj` handle it survives the
+/// revival of an object for its deferred `__destruct()` call.
+fn data_of(o: &Obj) -> Option<&Rc<ObjectData>> {
+    o.downcast_ref::<ObjBox>().map(|b| &b.0)
+}
+
+fn key_of(o: &Obj) -> usize {
+    data_of(o).map_or_else(|| o.addr(), |d| Rc::as_ptr(d) as usize)
+}
 
 struct Slot<T> {
-    weak: Weak<dyn PhpObject>,
+    weak: Weak<ObjectData>,
     state: Rc<RefCell<T>>,
 }
 
 impl<T> Slot<T> {
     fn alive_for(&self, o: &Obj) -> bool {
-        self.weak
-            .upgrade()
-            .is_some_and(|rc| Rc::ptr_eq(&rc, o.rc()))
+        match (self.weak.upgrade(), data_of(o)) {
+            (Some(rc), Some(d)) => Rc::ptr_eq(&rc, d),
+            _ => false,
+        }
     }
 }
 
@@ -53,7 +65,7 @@ fn get_or_create<T: Release>(
     o: &Obj,
     make: impl FnOnce() -> T,
 ) -> Rc<RefCell<T>> {
-    let key = o.addr();
+    let key = key_of(o);
     let stale = table.with(|t| {
         let mut t = t.borrow_mut();
         match t.get(&key) {
@@ -77,7 +89,7 @@ fn get_or_create<T: Release>(
         t.borrow_mut().insert(
             key,
             Slot {
-                weak: Rc::downgrade(o.rc()),
+                weak: data_of(o).map_or_else(Weak::new, Rc::downgrade),
                 state: state.clone(),
             },
         );
@@ -89,7 +101,7 @@ fn remove<T: Release>(
     table: &'static std::thread::LocalKey<RefCell<HashMap<usize, Slot<T>>>>,
     o: &Obj,
 ) {
-    let key = o.addr();
+    let key = key_of(o);
     let s = table.with(|t| {
         let mut t = t.borrow_mut();
         if t.get(&key).is_some_and(|s| s.alive_for(o)) {
