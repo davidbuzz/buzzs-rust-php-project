@@ -14,6 +14,7 @@ pub mod breakiterator;
 pub mod calendar;
 pub mod collator;
 pub mod common;
+pub mod constants;
 pub mod converter;
 pub mod dateformat;
 pub mod datepatterngenerator;
