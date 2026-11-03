@@ -41,6 +41,9 @@ pub struct StreamCell {
     /// The context resource state attached to the stream (kept alive like
     /// PHP's `stream->ctx` reference).
     ctx_keep: RefCell<Option<Rc<CtxCell>>>,
+    /// `fclose()` was called while the stream was in use: close it when
+    /// the running operation ends.
+    close_requested: Cell<bool>,
     /// A stand-in for a stream that has no resource of its own (opened by
     /// `file_get_contents()`, `include`, ...) while its user filter runs:
     /// never holds the stream, which is busy.
@@ -63,6 +66,11 @@ impl StreamCell {
     /// Removes the stream (for closing).
     pub fn take(&self) -> Option<Stream> {
         self.stream.try_borrow_mut().ok()?.take()
+    }
+
+    /// Asks for the stream to be closed when its running operation ends.
+    pub fn request_close(&self) {
+        self.close_requested.set(true);
     }
 
     /// The library stream id.
@@ -206,6 +214,7 @@ pub fn new_stream_ex(mut stream: Stream, wrapper_data: Option<Value>, persistent
         wrapper_data: RefCell::new(wrapper_data),
         persistent,
         proxy: false,
+        close_requested: Cell::new(false),
     });
     let ty = if persistent {
         PERSISTENT_STREAM
@@ -250,6 +259,7 @@ pub fn new_stream_with_handle(stream: Stream, handle: i64) -> Value {
         persistent: false,
         ctx_keep: RefCell::new(None),
         proxy: false,
+        close_requested: Cell::new(false),
     });
     let r = Resource::with_handle(handle, STREAM, Some(Box::new(StreamRes(Rc::clone(&cell)))));
     STREAMS.with(|m| m.borrow_mut().insert(id, Rc::downgrade(&cell)));
@@ -321,6 +331,7 @@ pub fn filter_stream_value(id: u64) -> Value {
                 persistent: false,
                 ctx_keep: RefCell::new(None),
                 proxy: true,
+                close_requested: Cell::new(false),
             });
             let r = Resource::new(STREAM, Some(Box::new(StreamRes(Rc::clone(&cell)))));
             cell.handle.set(r.handle());
@@ -633,7 +644,13 @@ pub fn with_stream<R>(
     f: impl FnOnce(&mut Stream) -> R,
 ) -> VmResult<Option<R>> {
     crate::errors::set_operation_context(cell.get().and_then(|s| s.context.clone()));
-    bridge::run_stream(vm, || cell.get().map(|mut s| f(&mut s)))
+    let r = bridge::run_stream(vm, || cell.get().map(|mut s| f(&mut s)));
+    if cell.close_requested.replace(false) {
+        if let Some(mut s) = cell.take() {
+            bridge::run(vm, || s.close())?;
+        }
+    }
+    r
 }
 
 #[cfg(test)]

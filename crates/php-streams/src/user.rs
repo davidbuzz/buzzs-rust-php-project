@@ -460,6 +460,19 @@ pub struct UserStreamOps {
     dir: bool,
 }
 
+thread_local! {
+    /// Streams running a user-space method with `PHP_STREAM_FLAG_NO_FCLOSE`
+    /// set (read, write, eof, seek, tell, cast, set_option).
+    static GUARDED: std::cell::RefCell<Vec<u64>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Whether stream `id` is inside a user-space call that forbids
+/// `fclose()` (its flags are not reachable while the stream is in use).
+pub fn in_guarded_call(id: u64) -> bool {
+    // User filters run with the flag set too (`userfilter_filter`).
+    GUARDED.with(|g| g.borrow().contains(&id)) || crate::filter::user::filtering_eof(id).is_some()
+}
+
 impl UserStreamOps {
     /// The wrapper object (`wrapper_data` in the meta data).
     pub fn object(&self) -> &dyn UserStreamObject {
@@ -474,7 +487,11 @@ impl UserStreamOps {
     fn guarded(&mut self, st: &mut StreamState, method: &str, args: &mut [Value]) -> UserCall {
         let orig = st.flags & flags::NO_FCLOSE;
         st.flags |= flags::NO_FCLOSE;
+        GUARDED.with(|g| g.borrow_mut().push(st.id));
         let r = self.obj.call(method, args);
+        GUARDED.with(|g| {
+            g.borrow_mut().pop();
+        });
         st.flags &= !flags::NO_FCLOSE;
         st.flags |= orig;
         r

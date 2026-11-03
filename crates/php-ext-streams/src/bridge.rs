@@ -126,9 +126,15 @@ pub fn run_stream<R>(vm: &mut Vm, f: impl FnOnce() -> R) -> VmResult<R> {
 fn run_ex<R>(vm: &mut Vm, sync: bool, f: impl FnOnce() -> R) -> VmResult<R> {
     // Diagnostics queued by library calls made outside a bridge scope
     // belong to their caller, which collects them with `take_diagnostics`.
-    if !has_vm() {
+    // A nested call (from PHP code a callback runs) is its own error
+    // operation: the enclosing operation's errors stay queued until it
+    // ends (`php_stream_error_operation_begin/end`).
+    let enclosing = if has_vm() {
+        diag::take()
+    } else {
         let _ = diag::take();
-    }
+        Vec::new()
+    };
     let outer = take_pending();
     let r = if sync {
         enter(vm, f)
@@ -136,6 +142,9 @@ fn run_ex<R>(vm: &mut Vm, sync: bool, f: impl FnOnce() -> R) -> VmResult<R> {
         enter_nosync(vm, f)
     };
     flush_diags(vm);
+    for d in enclosing.into_iter().rev() {
+        diag::push_front(d);
+    }
     let inner = take_pending();
     if let Some(t) = outer {
         set_pending(t);

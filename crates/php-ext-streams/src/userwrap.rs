@@ -64,7 +64,6 @@ impl UserWrapperClass for WrapperClass {
 
     fn instantiate(&self, context: Option<&ContextRef>) -> Option<Box<dyn UserStreamObject>> {
         bridge::with_vm(|vm| {
-            bridge::flush_diags(vm);
             if bridge::has_pending() {
                 return None;
             }
@@ -97,7 +96,6 @@ impl UserWrapperClass for WrapperClass {
 /// arguments (`by_ref[i]`) back. Shared with user filters.
 pub fn call_method(obj: &Obj, method: &str, args: &mut [SValue], by_ref: &[usize]) -> UserCall {
     bridge::with_vm(|vm| {
-        bridge::flush_diags(vm);
         if bridge::has_pending() {
             return UserCall::Threw;
         }
@@ -173,7 +171,7 @@ impl UserStreamObject for WrapperObject {
         };
         let cell = res::cell_of(&r)?;
         let mut s = cell.get()?;
-        s.cast(kind, false)
+        s.cast(kind, true)
     }
 }
 

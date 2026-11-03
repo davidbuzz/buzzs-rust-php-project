@@ -258,6 +258,12 @@ pub fn take() -> Vec<Diagnostic> {
     QUEUE.with(|q| std::mem::take(&mut *q.borrow_mut()))
 }
 
+/// Puts a diagnostic back at the front of the queue (an enclosing
+/// operation's error kept while a nested one reports its own).
+pub fn push_front(diag: Diagnostic) {
+    QUEUE.with(|q| q.borrow_mut().insert(0, diag));
+}
+
 /// Emits an `E_WARNING` via plain `php_error_docref()`.
 pub fn warning(message: impl Into<Vec<u8>>) {
     emit(Diagnostic::new(Severity::Warning, message));

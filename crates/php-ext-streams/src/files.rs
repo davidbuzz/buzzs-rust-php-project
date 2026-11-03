@@ -114,9 +114,19 @@ fn fclose(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let (r, cell) = res::stream_arg_res(vm, a, 0)?;
     // A stream in use by one of its own callbacks cannot be closed
     // (PHP_STREAM_FLAG_NO_FCLOSE is set around user-space calls).
-    let no_fclose = cell
-        .get()
-        .is_none_or(|s| s.has_flag(php_streams::stream::flags::NO_FCLOSE));
+    let busy = cell.get().is_none();
+    if busy && !php_streams::user::in_guarded_call(cell.id()) {
+        // In use by an operation whose callback (e.g. `stream_flush`) may
+        // close it: the resource goes now, the stream once the operation
+        // ends.
+        r.close();
+        cell.request_close();
+        return Ok(Value::Bool(true));
+    }
+    let no_fclose = busy
+        || cell
+            .get()
+            .is_some_and(|s| s.has_flag(php_streams::stream::flags::NO_FCLOSE));
     if no_fclose {
         vm.php_warning("cannot close the provided stream, as it must not be manually closed")?;
         return Ok(Value::Bool(false));

@@ -1197,9 +1197,10 @@ impl Stream {
             Some(_) => {
                 let unread = self.writepos - self.readpos;
                 if report_errors && unread > 0 && kind != CastAs::FdForSelect {
-                    diag::warning(format!(
-                        "{unread} bytes of buffered data lost during stream conversion!"
-                    ));
+                    self.state.warn_nt(
+                        StreamErrorCode::BufferedDataLost,
+                        format!("{unread} bytes of buffered data lost during stream conversion!"),
+                    );
                 }
             }
             None if report_errors => {
@@ -1209,10 +1210,13 @@ impl Stream {
                     CastAs::SocketFd => "Socket Descriptor",
                     CastAs::FdForSelect => "select()able descriptor",
                 };
-                diag::warning(format!(
-                    "Cannot represent a stream of type {} as a {name}",
-                    self.ops.label()
-                ));
+                self.state.warn(
+                    StreamErrorCode::CastNotSupported,
+                    format!(
+                        "Cannot represent a stream of type {} as a {name}",
+                        self.ops.label()
+                    ),
+                );
             }
             None => {}
         }
