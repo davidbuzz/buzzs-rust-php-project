@@ -1,0 +1,16 @@
+[package]
+name = "php-gd"
+description = "libgd binding with ext/gd semantics (image resources, drawing, formats)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+links = "gd"
+
+[dependencies]
+
+[build-dependencies]
+pkg-config = "0.3"
+
+[lints]
+workspace = true

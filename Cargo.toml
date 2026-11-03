@@ -98,6 +98,8 @@ members = [
     "crates/php-ext-streams",
     "crates/php-ext-ctype",
     "crates/php-ext-zendtest",
+    "crates/php-gd",
+    "crates/php-ext-gd",
     "crates/php-ext-xsl",
 ]
 

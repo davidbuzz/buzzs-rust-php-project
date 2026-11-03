@@ -1,0 +1,15 @@
+[package]
+name = "php-ext-gd"
+description = "ext/gd binding for the phprust VM (GdImage, image* functions)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+php-vm = { path = "../php-vm" }
+php-runtime = { path = "../php-runtime" }
+php-gd = { path = "../php-gd" }
+
+[lints]
+workspace = true
