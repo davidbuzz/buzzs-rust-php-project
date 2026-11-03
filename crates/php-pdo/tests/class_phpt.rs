@@ -446,3 +446,128 @@ fn pecl_bugs() {
     h.dump(&Value::Array(values));
     assert_phpt!(h, "pecl_bug_5809.phpt");
 }
+
+fn statement_x(h: &mut TestHost, set_assoc: bool) {
+    h.add_class(
+        Class::new("PDOStatementX")
+            .extends("PDOStatement")
+            .prop("dbh")
+            .private_ctor()
+            .ctor(move |h, this, args| {
+                let dbh = args.unwrap().get_int(0).unwrap().clone();
+                TestHost::set_prop(this, "dbh", dbh);
+                if set_assoc {
+                    h.set_fetch_mode(this, FETCH_ASSOC, &[])?;
+                }
+                h.echo("PDOStatementX::__construct()\n");
+                Ok(())
+            }),
+    );
+    h.add_class(Class::new("PDODatabase").extends("PDO"));
+}
+
+fn insert_data(h: &mut TestHost, db: &Value, table: &str) {
+    h.exec(
+        db,
+        &format!(
+            "CREATE TABLE {table}(id INT NOT NULL PRIMARY KEY, val VARCHAR(10), val2 VARCHAR(16))"
+        ),
+    )
+    .unwrap();
+    let st = h
+        .prepare(db, &format!("INSERT INTO {table} VALUES(?, ?, ?)"))
+        .unwrap();
+    let class = TestHost::obj(&st).class_name().to_string_lossy();
+    h.dump(&s(&class));
+    for row in [
+        ["10", "Abc", "zxy"],
+        ["20", "Def", "wvu"],
+        ["30", "Ghi", "tsr"],
+    ] {
+        h.execute(&st, Some(arr(row.iter().map(|v| s(v)).collect())))
+            .unwrap();
+    }
+}
+
+#[test]
+fn pdo_026_and_030_statement_class_with_pdo_arg() {
+    // pdo_026: PDODatabase::query() prepares with ATTR_STATEMENT_CLASS
+    let mut h = TestHost::new();
+    statement_x(&mut h, false);
+    let db = h.factory_class("PDODatabase", None);
+    h.dump(&s("PDODatabase"));
+    insert_data(&mut h, &db, "test026");
+    h.echo("PDODatabase::query()\n");
+    let mut opts = ZArray::new();
+    opts.make_mut().insert(
+        ArrayKey::Int(ATTR_STATEMENT_CLASS),
+        sc("PDOStatementx", Some(vec![db.clone()])),
+    );
+    let st = h
+        .prepare_opts(&db, "SELECT * FROM test026", Some(opts))
+        .unwrap();
+    h.set_fetch_mode(&st, FETCH_ASSOC, &[]).unwrap();
+    h.execute(&st, None).unwrap();
+    let class = TestHost::obj(&st).class_name().to_string_lossy();
+    h.dump(&s(&class));
+    let dbh = TestHost::get_prop(&st, "dbh").unwrap();
+    let dbh_class = TestHost::obj(&dbh).class_name().to_string_lossy();
+    h.dump(&s(&dbh_class));
+    h.foreach(&st, |h, _, v| h.dump(&v)).unwrap();
+    h.echo("===DONE===\n");
+    // destructors run by the VM at shutdown
+    h.echo("PDOStatementX::__destruct()\nPDODatabase::__destruct()\n");
+    assert_phpt!(h, "pdo_026.phpt");
+
+    // pdo_030: the statement class set as attribute, used by query()
+    let mut h = TestHost::new();
+    statement_x(&mut h, true);
+    let db = h.factory_class("PDODatabase", None);
+    h.dump(&s("PDODatabase"));
+    insert_data(&mut h, &db, "test030");
+    h.echo("===QUERY===\n");
+    let a = h.get_attr(&db, ATTR_STATEMENT_CLASS).unwrap();
+    h.dump(&a);
+    h.set_attr(
+        &db,
+        ATTR_STATEMENT_CLASS,
+        sc("PDOStatementx", Some(vec![db.clone()])),
+    )
+    .unwrap();
+    let a = h.get_attr(&db, ATTR_STATEMENT_CLASS).unwrap();
+    h.dump(&a);
+    let bad = Value::Array(arr(vec![s("PDOStatement"), s("invalid-args")]));
+    if let Err(e) = h.set_attr(&db, ATTR_STATEMENT_CLASS, bad.clone()) {
+        print_err(&mut h, &e);
+    }
+    let a = h.get_attr(&db, ATTR_STATEMENT_CLASS).unwrap();
+    h.dump(&a);
+    let mut opts = ZArray::new();
+    opts.make_mut()
+        .insert(ArrayKey::Int(ATTR_STATEMENT_CLASS), bad);
+    if let Err(e) = h.prepare_opts(&db, "SELECT * FROM test030", Some(opts)) {
+        print_err(&mut h, &e);
+    }
+    h.echo("PDODatabase::query()\n");
+    let st = h.query(&db, "SELECT * FROM test030").unwrap();
+    let class = TestHost::obj(&st).class_name().to_string_lossy();
+    h.dump(&s(&class));
+    let dbh = TestHost::get_prop(&st, "dbh").unwrap();
+    let dbh_class = TestHost::obj(&dbh).class_name().to_string_lossy();
+    h.dump(&s(&dbh_class));
+    h.echo("===FOREACH===\n");
+    h.foreach(&st, |h, _, v| h.dump(&v)).unwrap();
+    h.echo("===DONE===\n");
+    h.echo("PDOStatementX::__destruct()\nPDODatabase::__destruct()\n");
+    assert_phpt!(h, "pdo_030.phpt");
+}
+
+#[test]
+fn pdo_drivers_basic() {
+    let drivers = php_pdo::Pdo::get_available_drivers();
+    assert!(!drivers.is_empty());
+    let mut h = TestHost::new();
+    h.dump(&Value::Bool(true));
+    h.dump(&Value::Bool(true));
+    assert_phpt!(h, "pdo_drivers_basic.phpt");
+}
