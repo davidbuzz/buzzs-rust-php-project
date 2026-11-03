@@ -33,6 +33,28 @@
 //! * `extract()` / `compact()` access the caller's variables through the
 //!   [`SymbolTable`](symbols::SymbolTable) trait.
 //!
+//! # Example
+//!
+//! ```
+//! use php_runtime::{ops, CollectingContext, PhpRef, Value, ZArray};
+//! use php_stdarr::{callback, sort, SORT_STRING};
+//!
+//! let mut ctx = CollectingContext::new();
+//! // sort($a, SORT_STRING) on a by-reference argument
+//! let a = PhpRef::new(Value::Array(ZArray::from_values([
+//!     Value::Int(10),
+//!     Value::Int(9),
+//!     Value::Int(100),
+//! ])));
+//! sort::sort(&mut ctx, &a, SORT_STRING).unwrap();
+//! // array_map(fn($x) => $x * 2, $a)
+//! let Value::Array(sorted) = a.get() else { unreachable!() };
+//! let mut double = |c: &mut CollectingContext, args: &[Value]| ops::mul(&args[0], &Value::Int(2), c);
+//! let mapped = callback::array_map(&mut ctx, Some(&mut double), &[Value::Array(sorted)]).unwrap();
+//! let values: Vec<i64> = mapped.values().filter_map(Value::as_int).collect();
+//! assert_eq!(values, [20, 200, 18]);
+//! ```
+//!
 //! Functions are grouped by module: [`sort`], [`pointer`] (internal
 //! pointer), [`basic`], [`stack`] (push/pop/shift/unshift/splice),
 //! [`merge`], [`setops`] (unique/intersect/diff), [`callback`]
