@@ -463,13 +463,21 @@ fn replace_all(haystack: &[u8], needle: &[u8], rep: &[u8], ci: bool) -> (Vec<u8>
 
 /// The `$search`/`$replace` argument of `str_replace()`: a single string or
 /// the (already `zval_get_string`-converted) values of an array.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug)]
 pub enum ReplaceArg<'a, T: AsRef<[u8]>> {
     /// A string argument.
     One(&'a [u8]),
     /// An array argument (values in order).
     Many(&'a [T]),
 }
+
+impl<T: AsRef<[u8]>> Clone for ReplaceArg<'_, T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<T: AsRef<[u8]>> Copy for ReplaceArg<'_, T> {}
 
 /// `php_str_replace_in_subject()`; backs `str_replace()` (`ci = false`)
 /// and `str_ireplace()` (`ci = true`) for one subject string.  Returns the
@@ -732,6 +740,7 @@ fn is_newline(c: u8) -> bool {
 
 /// Backs `hebrev(string $string, int $max_chars_per_line = 0)`: converts
 /// logical Hebrew text (ISO-8859-8) to visual order.
+#[allow(clippy::too_many_lines)]
 pub fn hebrev(s: &[u8], max_chars: i64) -> Vec<u8> {
     let n = s.len();
     if n == 0 {

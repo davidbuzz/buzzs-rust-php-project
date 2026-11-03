@@ -1,5 +1,6 @@
 //! Oracle tests for `transform.rs`: case mapping, trim, pad, wrap, split,
-//! strtr, str_replace, chr/ord, hex, utf8, str_increment, hebrev, paths.
+//! `strtr`, `str_replace`, `chr`/`ord`, hex, utf8, `str_increment`,
+//! `hebrev`, paths.
 mod common;
 use common::{assoc, case, check_mapped, lit, pure, regenerate, Case, V};
 use php_stdstr::transform::{
@@ -58,7 +59,7 @@ fn path_v(p: PathInfo) -> V {
     }
 }
 
-#[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_lines, clippy::many_single_char_names)]
 fn cases() -> Vec<Case> {
     let mut v = Vec::new();
     for s in STRS {
