@@ -45,6 +45,18 @@ members = [
     "crates/php-xmlreader",
     "crates/php-pdo",
     "crates/php-soap",
+    "crates/php-ext-filter",
+    "crates/php-ext-stdarr",
+    "crates/php-ext-mbstring",
+    "crates/php-ext-random",
+    "crates/php-ext-hash",
+    "crates/php-ext-spl",
+    "crates/php-ext-date",
+    "crates/php-ext-pcre",
+    "crates/php-ext-stdstr",
+    "crates/php-ext-json",
+    "crates/php-ext-streams",
+    "crates/php-ext-ctype",
 ]
 
 [workspace.package]
