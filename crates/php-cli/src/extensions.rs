@@ -8,6 +8,7 @@ use php_vm::ext::Extension;
 /// All linked extensions, in registration order.
 pub fn all() -> Vec<Box<dyn Extension>> {
     vec![
+        Box::new(php_ext_stdstr::StdStr),
         // Box::new(php_ext_ctype::Ctype),
         Box::new(php_ext_json::Json),
         Box::new(php_ext_pcre::Pcre),

@@ -1,5 +1,6 @@
 [package]
 name = "php-ext-stdstr"
+description = "ext/standard string/url/math/html/pack/scanf bindings for the phprust VM"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -8,6 +9,8 @@ rust-version.workspace = true
 [dependencies]
 php-vm = { path = "../php-vm" }
 php-runtime = { path = "../php-runtime" }
+php-stdstr = { path = "../php-stdstr" }
+php-support = { path = "../php-support" }
 
 [lints]
 workspace = true
