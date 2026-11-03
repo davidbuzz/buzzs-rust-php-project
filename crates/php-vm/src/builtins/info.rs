@@ -7,6 +7,9 @@
 //! (the `zend_builtin_functions` set and the engine constants) and
 //! `standard`.
 
+// `ZStr` caches its hash in a `Cell`; `Hash`/`Eq` only use the bytes.
+#![allow(clippy::mutable_key_type)]
+
 use super::reg;
 use super::util::{b, s};
 use crate::func::{Args, Func};
@@ -84,9 +87,11 @@ const CORE_FUNCTIONS: &[&str] = &[
 struct Registry {
     /// Lowercase function name → module, in registration order.
     functions: Vec<(ZStr, &'static str)>,
+    #[allow(dead_code)]
     function_index: HashMap<ZStr, usize>,
     /// Constant name → module, in registration order.
     constants: Vec<(ZStr, &'static str)>,
+    #[allow(dead_code)]
     constant_index: HashMap<ZStr, usize>,
     /// The VM's own builtin functions (snapshot at registration).
     builtin_functions: HashSet<ZStr>,
@@ -98,6 +103,7 @@ thread_local! {
 
 /// Records that `module` registered the function `lc_name` (called by the
 /// extension API).
+#[allow(dead_code)] // for the extension API (module attribution)
 pub fn note_function(lc_name: &ZStr, module: &'static str) {
     REGISTRY.with(|r| {
         let mut r = r.borrow_mut();
@@ -112,6 +118,7 @@ pub fn note_function(lc_name: &ZStr, module: &'static str) {
 }
 
 /// Records that `module` registered the constant `name`.
+#[allow(dead_code)] // for the extension API (module attribution)
 pub fn note_constant(name: &ZStr, module: &'static str) {
     REGISTRY.with(|r| {
         let mut r = r.borrow_mut();
@@ -158,6 +165,7 @@ fn canonical_module(vm: &Vm, lc: &str) -> Option<String> {
         .find(|e| e.eq_ignore_ascii_case(lc))
 }
 
+#[allow(clippy::unnecessary_wraps)] // native handler signature
 fn get_extension_funcs(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let name = s(a, 0).to_string_lossy();
     // "zend*" names the Core module.
@@ -204,6 +212,7 @@ fn get_extension_funcs(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     Ok(Value::Array(ZArray::from_values(out)))
 }
 
+#[allow(clippy::unnecessary_wraps)] // native handler signature
 fn get_defined_constants(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let categorize = b(a, 0);
     let user: HashSet<&ZStr> = vm.user_constants.iter().collect();
@@ -259,12 +268,11 @@ fn get_defined_constants(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         let Some(v) = value_of(n) else {
             continue;
         };
-        let idx = match groups.iter().position(|(g, _)| g == m) {
-            Some(i) => i,
-            None => {
-                groups.push((m.clone(), HashTable::new()));
-                groups.len() - 1
-            }
+        let idx = if let Some(i) = groups.iter().position(|(g, _)| g == m) {
+            i
+        } else {
+            groups.push((m.clone(), HashTable::new()));
+            groups.len() - 1
         };
         groups[idx].1.insert(ArrayKey::Str(n.clone()), v);
     }

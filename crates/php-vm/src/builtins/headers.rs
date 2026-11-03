@@ -72,11 +72,6 @@ pub fn send_headers(vm: &mut Vm) -> bool {
     true
 }
 
-/// Request shutdown (`sapi_deactivate`): forgets the per-request state.
-pub fn reset() {
-    with(|s| *s = HeaderState::default());
-}
-
 /// The "headers already sent" warning of `sapi_header_op()`.
 fn already_sent(vm: &mut Vm) -> VmResult<()> {
     let msg = match output_start() {
@@ -207,6 +202,7 @@ fn header_remove(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     Ok(Value::Null)
 }
 
+#[allow(clippy::unnecessary_wraps)] // native handler signature
 fn headers_sent(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let sent = vm.headers_sent;
     let (file, line) = if sent {
@@ -223,6 +219,7 @@ fn headers_sent(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     Ok(Value::Bool(sent))
 }
 
+#[allow(clippy::unnecessary_wraps)] // native handler signature
 fn headers_list(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
     Ok(Value::Array(ZArray::new()))
 }
@@ -262,6 +259,7 @@ fn http_response_code(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     })
 }
 
+#[allow(clippy::unnecessary_wraps)] // native handler signature
 fn header_register_callback(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let cb = a.at(0);
     // Not kept once the headers are out: it would never run.
