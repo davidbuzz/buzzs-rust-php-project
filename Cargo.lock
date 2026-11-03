@@ -482,6 +482,7 @@ version = "0.1.0"
 dependencies = [
  "php-curl",
  "php-ext-streams",
+ "php-memlimit",
  "php-runtime",
  "php-streams",
  "php-support",
@@ -759,6 +760,7 @@ dependencies = [
 name = "php-ext-soap"
 version = "0.1.0"
 dependencies = [
+ "php-ext-stdstr",
  "php-ext-streams",
  "php-memlimit",
  "php-runtime",
