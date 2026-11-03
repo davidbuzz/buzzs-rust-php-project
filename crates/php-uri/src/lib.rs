@@ -6,6 +6,7 @@
 //! method with plain Rust types, and failures are described by
 //! [`UriError`] values carrying the PHP class name and message.
 
+pub mod api;
 pub mod error;
 pub mod rfc3986;
 pub mod whatwg;
