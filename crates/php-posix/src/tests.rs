@@ -16,12 +16,23 @@ fn php(code: &str) -> Option<String> {
         return None;
     }
     let out = Command::new(ORACLE)
-        .args(["-n", "-d", "extension=posix", "-r", code])
+        .args([
+            "-n",
+            "-d",
+            "memory_limit=1G",
+            "-d",
+            "extension=posix",
+            "-r",
+            code,
+        ])
         .output()
         .ok()?;
     let out2;
     let out = if String::from_utf8_lossy(&out.stdout).contains("Call to undefined function") {
-        out2 = Command::new(ORACLE).args(["-r", code]).output().ok()?;
+        out2 = Command::new(ORACLE)
+            .args(["-d", "memory_limit=1G", "-r", code])
+            .output()
+            .ok()?;
         &out2
     } else {
         &out
