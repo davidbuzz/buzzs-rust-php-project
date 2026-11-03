@@ -22,6 +22,7 @@ A Rust re-implementation of PHP whose goal is to pass the php-src `.phpt` test s
 - `crates/php-hash`    — hash()/md5/sha*/crc32 etc. (ref: ext/hash, ext/standard/{md5,sha1,crc32}.c)
 - `crates/php-random`  — Mt19937/PCG/Xoshiro/Secure engines, rand/mt_rand/lcg exact sequences (ref: ext/random)
 - `crates/php-date`    — timelib port: strtotime parser, date() formatting, tz database, DateTime arithmetic (ref: ext/date/lib, ext/date/php_date.c)
+- `crates/php-pcre`    — preg_* semantics over PCRE2: pattern/modifier parsing, replace/split/quote, error constants (ref: ext/pcre/php_pcre.c)
 
 ## Parallel work
 Several agents work concurrently, one crate each. Only edit files inside your own crate (plus your row(s) in FEATURE_GAP.md). Never edit workspace Cargo.toml; crates are pre-registered. Commit your own crate's files with `git add crates/<yours>` only.

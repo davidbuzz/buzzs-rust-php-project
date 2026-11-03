@@ -2,3 +2,4 @@
 /modules/php-src
 *.phpt.out
 *.phpt.diff
+/build
