@@ -77,11 +77,11 @@ impl SkeletonFormatter {
     }
 
     /// `unumf_formatDecimal()`.
-    pub fn format_decimal(&self, v: &str) -> Result<Vec<u16>, UErrorCode> {
-        let c = ffi::cstring(v);
-        // SAFETY: self.0 and the result are live; c is NUL-terminated.
+    pub fn format_decimal(&self, v: &[u8]) -> Result<Vec<u16>, UErrorCode> {
+        // SAFETY: self.0 and the result are live; v is passed with its
+        // explicit length.
         Self::run(|r, st| unsafe {
-            ffi::unumf_formatDecimal(self.0, c.as_ptr(), len32(v.as_bytes()), r, st);
+            ffi::unumf_formatDecimal(self.0, v.as_ptr().cast(), len32(v), r, st);
         })
     }
 }

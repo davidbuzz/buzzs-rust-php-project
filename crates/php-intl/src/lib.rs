@@ -25,6 +25,7 @@ pub mod locale;
 pub mod msgformat;
 pub mod msgpattern;
 pub mod normalizer;
+pub mod numberformatter;
 pub mod numfmt;
 pub mod resourcebundle;
 pub mod spoofchecker;
