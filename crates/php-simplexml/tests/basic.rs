@@ -827,3 +827,144 @@ fn t028_create_with_attribute() {
     traverse2(&mut t, &people, "");
     t.expect("028.phpt");
 }
+
+const PEOPLE_029: &str = "<people>\n  <person name=\"Joe\"/>\n  <person name=\"John\">\n    <children>\n      <person name=\"Joe\"/>\n    </children>\n  </person>\n  <person name=\"Jane\"/>\n</people>";
+
+#[test]
+fn t029_count_in_foreach() {
+    let mut t = T::new("029");
+    let people = t.load_string(PEOPLE_029);
+    let p2 = people.clone();
+    t.foreach(&people, |t, _, person| {
+        let n = t.dim(&person, s("name"));
+        let st = t.str(&n);
+        t.var_dump(&s(&st));
+        let c = t.count(&p2);
+        t.var_dump(&Value::Int(c));
+        let c = t.count(&person);
+        t.var_dump(&Value::Int(c));
+    });
+    t.expect("029.phpt");
+}
+
+const XML_030: &str = "<root s:att1=\"b\" att1=\"a\"\n      xmlns:s=\"urn::test\" xmlns:t=\"urn::test-t\">\n   <child1>test</child1>\n   <child1>test 2</child1>\n   <s:child3 />\n</root>";
+
+#[test]
+fn t030_isset_unset_offsets() {
+    let mut t = T::new("030");
+    let sxe = t.load_string(XML_030);
+    let c = t.prop(&sxe, "child1");
+    let v = t.dim(&c, Value::Int(0));
+    let st = t.str(&v);
+    t.echo(st + "\n");
+    let v = t.dim(&c, Value::Int(1));
+    let st = t.str(&v);
+    t.echo(st + "\n\n");
+    let b = t.isset_dim(&c, Value::Int(1));
+    t.var_dump(&Value::Bool(b));
+    t.unset_dim(&c, Value::Int(1));
+    let b = t.isset_dim(&c, Value::Int(1));
+    t.var_dump(&Value::Bool(b));
+    t.echo("\n");
+    let atts = t.attributes(&sxe, Some("urn::test"), false);
+    let b = t.isset_dim(&atts, Value::Int(0));
+    t.var_dump(&Value::Bool(b));
+    t.unset_dim(&atts, Value::Int(0));
+    let b = t.isset_dim(&atts, Value::Int(0));
+    t.var_dump(&Value::Bool(b));
+    let b = t.isset_dim(&atts, Value::Bool(true));
+    t.var_dump(&Value::Bool(b));
+    t.expect("030.phpt");
+}
+
+#[test]
+fn t031_add_child_attribute() {
+    let mut t = T::new("031");
+    let sxe = t.load_string(XML_030);
+    t.add_attribute(&sxe, "v:att11", "xxx", Some("urn::test-v"));
+    t.add_attribute(&sxe, "v:att11", "xxx", Some("urn::test-v"));
+    t.add_attribute(&sxe, "att2", "no-ns", None);
+    let d = t.attributes(&sxe, None, false);
+    t.add_child(&d, "m:test", Some("myval"), Some("urn::test"));
+    t.add_child(&sxe, "m:test1", Some("myval"), Some("urn::test"));
+    let _n = t.add_child(&sxe, "m:test2", Some("myval"), Some("urn::testnew"));
+    t.add_child(&sxe, "test3", Some("myval"), Some("urn::testnew"));
+    t.add_child(&sxe, "test4", Some("myval"), None);
+    t.add_child(&sxe, "s:test5", Some("myval"), None);
+    let x = t.as_xml(&sxe);
+    let st = t.str(&x);
+    t.echo(st);
+    t.expect("031.phpt");
+}
+
+#[test]
+fn t032_compare() {
+    let mut t = T::new("032");
+    let xml1 = "<people>\n  <person name=\"John\">\n    <children>\n      <person name=\"Joe\"/>\n    </children>\n  </person>\n  <person name=\"Jane\"/>\n</people>";
+    let people = t.load_string(PEOPLE_029);
+    let people1 = t.load_string(PEOPLE_029);
+    let people2 = t.load_string(xml1);
+    for (a, b) in [(&people1, &people), (&people2, &people), (&people2, &people1)] {
+        let eq = php_runtime::ops::is_equal(a, b, &mut t.h).unwrap();
+        t.var_dump(&Value::Bool(eq));
+    }
+    t.expect("032.phpt");
+}
+
+#[test]
+fn t033_casts() {
+    let mut t = T::new("033");
+    let foo = t.load_string("<foo />");
+    let people = t.load_string("<people>\ntest\n  <person name=\"Joe\"/>\n  <person name=\"John\">\n    <children>\n      <person name=\"Joe\"/>\n    </children>\n  </person>\n  <person name=\"Jane\"/>\n</people>");
+    for v in [&foo, &people] {
+        let b = t.bool(v);
+        t.var_dump(&Value::Bool(b));
+    }
+    for v in [&foo, &people] {
+        let i = v.to_long(&mut t.h).unwrap();
+        t.var_dump(&Value::Int(i));
+    }
+    for v in [&foo, &people] {
+        let f = v.to_double(&mut t.h).unwrap();
+        t.var_dump(&Value::Float(f));
+    }
+    for v in [&foo, &people] {
+        let st = t.str(v);
+        t.var_dump(&s(&st));
+    }
+    for v in [&foo, &people] {
+        let a = t.array(v);
+        t.var_dump(&a);
+    }
+    for v in [&foo, &people] {
+        t.var_dump(v);
+    }
+    t.expect("033.phpt");
+}
+
+const XML_034: &str = "<?xml version=\"1.0\"?>\n<foo><bar>\n   <p>Blah 1</p>\n   <p>Blah 2</p>\n   <p>Blah 3</p>\n   <tt>Blah 4</tt>\n</bar></foo>\n";
+
+#[test]
+fn t034_count_array_cast() {
+    let mut t = T::new("034");
+    let foo = t.load_string(XML_034);
+    let p = t.path(&foo, &["bar", "p"]);
+    let c = t.count(&p);
+    t.echo(c.to_string());
+    let a = t.array(&p);
+    let n = a.as_array().map_or(0, |a| a.len());
+    t.echo(n.to_string());
+    t.expect("034.phpt");
+}
+
+#[test]
+fn t035_to_string() {
+    let mut t = T::new("035");
+    let foo = t.load_string(XML_034);
+    let p = t.path(&foo, &["bar", "p"]);
+    for _ in 0..3 {
+        let st = t.str(&p);
+        t.echo(st + "\n");
+    }
+    t.expect("035.phpt");
+}

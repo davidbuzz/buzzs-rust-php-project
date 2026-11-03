@@ -477,7 +477,7 @@ impl T {
         let text = std::fs::read_to_string(fixtures().join(phpt)).expect("phpt");
         let (expect, is_f) = section(&text);
         let got = self.output();
-        let got = got.trim_end_matches(['\n', '\r', ' ']).to_string();
+        let got = got.trim().to_string();
         let ok = if is_f {
             fmatch(expect.as_bytes(), got.as_bytes())
         } else {
@@ -490,8 +490,8 @@ impl T {
     #[track_caller]
     pub fn expect_text(&self, expect: &str) {
         let got = self.output();
-        let got = got.trim_end_matches(['\n', '\r', ' ']).to_string();
-        let expect = expect.trim_end_matches(['\n', '\r', ' ']);
+        let got = got.trim().to_string();
+        let expect = expect.trim();
         assert!(
             fmatch(expect.as_bytes(), got.as_bytes()),
             "output mismatch\n--- expected ---\n{expect}\n--- got ---\n{got}\n"
@@ -530,7 +530,7 @@ fn section(text: &str) -> (String, bool) {
         found = Some((lines.join("\n"), f));
     }
     let (s, f) = found.expect("no EXPECT section");
-    (s.trim_end_matches(['\n', '\r', ' ']).to_string(), f)
+    (s.trim().to_string(), f)
 }
 
 /// `run-tests.php`'s EXPECTF matching (subset: %s %S %a %A %d %i %w %x %f %c %e %%).
