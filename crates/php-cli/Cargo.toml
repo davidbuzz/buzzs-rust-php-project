@@ -16,6 +16,7 @@ php-ext-stdstr = { path = "../php-ext-stdstr" }
 php-ext-stdarr = { path = "../php-ext-stdarr" }
 php-ext-pcre = { path = "../php-ext-pcre" }
 php-ext-json = { path = "../php-ext-json" }
+php-ext-spl = { path = "../php-ext-spl" }
 php-ext-hash = { path = "../php-ext-hash" }
 libc = "0.2"
 
