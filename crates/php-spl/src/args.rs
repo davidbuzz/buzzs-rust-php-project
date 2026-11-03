@@ -366,3 +366,21 @@ fn float_to_long_arg(host: &mut dyn SplHost, d: f64, from: Option<&ZStr>) -> RtR
     }
     Ok(Some(l))
 }
+
+/// Extension for type errors whose expected "type" is a phrase (`a valid
+/// class name`): turns "must be of type a valid class name" into "must be
+/// a valid class name".
+pub trait IntoValid {
+    /// Rewrites the message.
+    #[must_use]
+    fn into_valid(self) -> Self;
+}
+
+impl IntoValid for RuntimeError {
+    fn into_valid(self) -> Self {
+        match self {
+            RuntimeError::TypeError(m) => RuntimeError::TypeError(m.replacen("must be of type a ", "must be a ", 1)),
+            other => other,
+        }
+    }
+}

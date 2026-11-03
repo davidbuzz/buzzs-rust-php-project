@@ -133,6 +133,11 @@ pub fn expectf_match(pattern: &[u8], output: &[u8]) -> bool {
                     }
                     None
                 }
+                b'0' => {
+                    lit.push(0);
+                    i += 2;
+                    continue;
+                }
                 b'%' => {
                     lit.push(b'%');
                     i += 2;
@@ -254,6 +259,12 @@ pub fn run_phpt(path: &std::path::Path) -> Outcome {
         }
         if t.get(unsupported).is_some() {
             return Outcome::Skip(format!("section {unsupported}"));
+        }
+    }
+    if let Some(ext) = t.get("EXTENSIONS") {
+        let e = String::from_utf8_lossy(ext);
+        if e.contains("zend_test") || e.contains("opcache") {
+            return Outcome::Skip("extension".into());
         }
     }
     let Some(file) = t.get("FILE") else {

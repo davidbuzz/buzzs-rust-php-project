@@ -194,8 +194,11 @@ impl Interp {
                     NewClass::Anonymous(decl) => self.declare_class(decl)?,
                 };
                 let by_ref = self.ctor_by_ref(&c);
+                let o = self.new_object_raw(&c)?;
                 let argv = self.eval_args(args, &|i| by_ref.get(i).copied().unwrap_or(false))?;
-                let o = self.instantiate(&c, &argv)?;
+                if let Some(m) = c.find_method("__construct") {
+                    self.call_method_h(Some(&o), &c, &m, &argv)?;
+                }
                 Ok(Value::Object(o))
             }
             ExprKind::Assign { target, value } => {
@@ -1270,7 +1273,7 @@ impl Interp {
                             Ok(Value::Null)
                         }
                         Op::AssignOp(bop, rhs) => {
-                            let cur = self.obj_read_dim(&o, key.as_ref(), DimKind::ReadWrite)?;
+                            let cur = self.obj_read_dim(&o, key.as_ref(), DimKind::Read)?.deref();
                             let nv = self.binop(bop, &cur, &rhs)?;
                             self.obj_write_dim(&o, key.as_ref(), nv.clone())?;
                             Ok(nv)
@@ -1615,6 +1618,17 @@ impl Interp {
                 self.emit(ErrorLevel::Deprecated, &msg)?;
             }
         }
+        self.depth += 1;
+        if self.depth > 3000 {
+            self.depth -= 1;
+            return Err(RuntimeError::Error("Maximum call stack size reached. Infinite recursion?".into()));
+        }
+        let r = self.call_method_h_inner(this, cls, m, args);
+        self.depth -= 1;
+        r
+    }
+
+    fn call_method_h_inner(&mut self, this: Option<&Obj>, cls: &Rc<Class>, m: &Rc<MethodH>, args: &[Value]) -> RtResult<Value> {
         match &m.kind {
             MKind::User(def) => {
                 let scope = self.find_class(m.class.as_bytes()).or_else(|| Some(cls.clone()));

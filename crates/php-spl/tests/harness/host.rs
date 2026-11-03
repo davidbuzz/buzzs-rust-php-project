@@ -267,6 +267,13 @@ impl SplHost for Interp {
         tobj(obj).props.borrow().clone()
     }
 
+    fn std_has_property(&mut self, obj: &Obj, name: &ZStr) -> bool {
+        match self.find_prop_key(obj, &name.to_string_lossy()) {
+            Some(k) => self.prop_visible(obj, &k),
+            None => false,
+        }
+    }
+
     fn set_std_properties(&mut self, obj: &Obj, props: ZArray) -> RtResult<()> {
         *tobj(obj).props.borrow_mut() = props;
         Ok(())

@@ -82,9 +82,25 @@ pub trait SplHost: ArrayContext {
         None
     }
 
+    /// Whether a non-SPL object has custom `get_properties` /
+    /// `get_properties_for` handlers (e.g. `DateTime`, `Closure`), which
+    /// makes it unusable as `ArrayObject` storage ("Overloaded object of
+    /// type %s is not compatible with %s").
+    fn is_overloaded_object(&mut self, obj: &Obj) -> bool {
+        let _ = obj;
+        false
+    }
+
     /// `zend_std_get_properties`: the object's property table with mangled
     /// keys (declared and dynamic properties).
     fn std_properties(&mut self, obj: &Obj) -> ZArray;
+
+    /// `zend_std_has_property(obj, name, ZEND_PROPERTY_EXISTS)`: whether a
+    /// property `name` exists and is accessible from the calling scope.
+    /// The default checks for a public (unmangled) key.
+    fn std_has_property(&mut self, obj: &Obj, name: &ZStr) -> bool {
+        self.std_properties(obj).get_str(name.as_bytes()).is_some()
+    }
 
     /// Replaces the object's property table (used when an `ArrayObject`
     /// wraps an object and writes to it). Keys are mangled names.

@@ -72,6 +72,9 @@ fn phpt_survey() {
         if !filter.is_empty() && !r.contains(&filter) {
             continue;
         }
+        if std::env::var("SPL_PHPT_TRACE").is_ok() {
+            eprintln!("RUN {r}");
+        }
         match run_isolated(&p) {
             harness::Outcome::Pass => pass.push(r),
             harness::Outcome::Fail { expected, got } => {
@@ -94,4 +97,15 @@ fn phpt_survey() {
         )
         .expect("write list");
     }
+}
+
+/// Runs `$SPL_RUN_FILE` (a PHP script) through the interpreter and prints
+/// the output: `SPL_RUN_FILE=x.php cargo test -p php-spl --test phpt run_file -- --ignored --nocapture`.
+#[test]
+#[ignore]
+fn run_file() {
+    let Ok(f) = std::env::var("SPL_RUN_FILE") else { return };
+    let src = std::fs::read(&f).expect("read");
+    let out = harness::run(&src, &f);
+    println!("{}", String::from_utf8_lossy(&out));
 }
