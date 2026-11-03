@@ -177,7 +177,7 @@ impl JsonHost for VmJsonHost<'_> {
             table.insert(ArrayKey::Str(pi.name.clone()), value);
         }
         if let Some(dynamic) = php_vm::object::data(obj).dynamic.borrow().as_ref() {
-            for (k, v) in dynamic.iter() {
+            for (k, v) in dynamic {
                 table.insert(k.clone(), v.clone());
             }
         }

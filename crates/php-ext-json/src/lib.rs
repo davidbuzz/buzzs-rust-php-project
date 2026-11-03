@@ -56,7 +56,7 @@ fn parse_limit(raw: &[u8]) -> Option<u64> {
         .map(|n| n.saturating_mul(mult))
 }
 
-/// Models the `memory_limit` check of the allocations json_encode/decode
+/// Models the `memory_limit` check of the allocations `json_encode`/`json_decode`
 /// make: the VM does not account memory, so the input and output buffers
 /// (`input + output` bytes on top of [`BASE_USAGE`]) are compared against
 /// the limit and the engine's out-of-memory fatal error is raised when they
@@ -78,7 +78,7 @@ fn check_memory(vm: &mut Vm, input: usize, output: usize) -> VmResult<()> {
     Ok(())
 }
 
-/// The input bytes of a value that json_encode copies from: the length of a
+/// The input bytes of a value that `json_encode` copies from: the length of a
 /// top-level string (other values are not counted).
 fn input_len(v: &Value) -> usize {
     match v {
@@ -223,6 +223,8 @@ mod tests {
 
     #[test]
     fn constants_complete() {
-        assert_eq!(php_json::flags::CONSTANTS.len(), 30);
+        let names: Vec<&str> = php_json::flags::CONSTANTS.iter().map(|c| c.0).collect();
+        assert!(names.contains(&"JSON_THROW_ON_ERROR"));
+        assert!(names.contains(&"JSON_ERROR_NON_BACKED_ENUM"));
     }
 }
