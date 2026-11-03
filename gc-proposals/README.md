@@ -97,5 +97,26 @@ over-reporting is not. When the object is garbage the collector drops the
 state (`free_obj`). No `ClassHooks` field is needed: the registry is keyed
 by the state's `TypeId`.
 
+## Shared arrays and references
+Arrays and references whose count is above the number of references
+coming from inside the candidate subgraph are live (treated as opaque):
+the collector never frees or clears anything that has a holder it did not
+enumerate. A shared array/reference is freed only when *every* handle to
+it is owned by garbage — the same condition php-src's trial deletion
+checks.
+
 ## Measurements
-See the commit message / FEATURE_GAP.md "Garbage collection" row.
+`phpt-runner -j 4 -q` (debug build):
+
+| | Zend/tests/gc | Zend/tests/weakrefs | Zend/tests/fibers |
+|---|---|---|---|
+| before (no collector) | 34/85 | 23/38 | 103/122 |
+| master (gc.rs only) | 62/85 | 24/38 | 103/122 |
+| master + 01..06 | 75/85 | 34/38 | 105/122 |
+
+Plus `Zend/tests/magic_methods/bug71818.phpt` (memory_limit 20M with
+100k self-referencing objects) passes with 03 applied. Remaining gc
+failures: exact root counts / automatic-run timing where the VM clones
+more than php-src (gc_023, gc_045, bug70805_1/2); bug77345_gc_2 (the
+300k-node list alone takes ~120 MB in this VM, the GC graph tips it over
+128M); non-GC diffs (gc_043, bug65372).
