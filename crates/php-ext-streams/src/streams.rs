@@ -574,6 +574,14 @@ fn default_cell() -> (Resource, Option<Rc<CtxCell>>) {
 }
 
 fn stream_context_get_default(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    if let Some(Value::Array(o)) = a.opt(0) {
+        if crate::errors::has_error_settings(&o) {
+            return Err(vm.throw(
+                "ValueError",
+                "Stream error handling options cannot be set on the default context",
+            ));
+        }
+    }
     let (r, c) = default_cell();
     if let (Some(Value::Array(o)), Some(c)) = (a.opt(0), c) {
         parse_options(vm, &c, &o)?;
@@ -582,8 +590,14 @@ fn stream_context_get_default(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 }
 
 fn stream_context_set_default(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let (r, c) = default_cell();
     let o = a.array(0);
+    if crate::errors::has_error_settings(&o) {
+        return Err(vm.throw(
+            "ValueError",
+            "Stream error handling options cannot be set on the default context",
+        ));
+    }
+    let (r, c) = default_cell();
     if let Some(c) = c {
         parse_options(vm, &c, &o)?;
     }

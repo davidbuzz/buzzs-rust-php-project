@@ -100,22 +100,9 @@ pub fn take_pending() -> Option<Throw> {
 
 /// Emits the queued library diagnostics through the VM.
 pub fn flush_diags(vm: &mut Vm) {
-    for d in diag::take() {
-        // php_stream_display_wrapper_errors() stays silent when an
-        // exception has already been thrown.
-        if d.code == php_streams::diag::StreamErrorCode::OpenFailed && has_pending() {
-            continue;
-        }
-        let text = d.text();
-        let r = match d.severity {
-            Severity::Warning => vm.php_warning(&text),
-            Severity::Notice => vm.php_notice(&text),
-            Severity::Deprecated => vm.php_deprecated(&text),
-            Severity::Error => vm.raise(1, &text),
-        };
-        if let Err(t) = r {
-            set_pending(t);
-        }
+    let diags = diag::take();
+    if !diags.is_empty() {
+        crate::errors::report(vm, diags);
     }
 }
 
@@ -159,7 +146,7 @@ pub fn take_diagnostics() -> Vec<String> {
 fn sync_settings(vm: &Vm) {
     let get = |n: &str| vm.ini_string(n).unwrap_or_default();
     let include_path = get("include_path");
-    let open_basedir = get("open_basedir");
+    let open_basedir = crate::ini::effective_open_basedir(get("open_basedir"));
     let sys_temp_dir = get("sys_temp_dir");
     let upload_tmp_dir = get("upload_tmp_dir");
     let allow_url_fopen = vm.ini_bool("allow_url_fopen");

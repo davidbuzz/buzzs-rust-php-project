@@ -393,6 +393,16 @@ pub fn ctx_cell_of_lib(ctx: &ContextRef) -> Option<Rc<CtxCell>> {
     })
 }
 
+/// `FG(default_context)` if it has been created.
+pub fn existing_default_context() -> Option<ContextRef> {
+    DEFAULT_CONTEXT.with(|d| {
+        d.borrow()
+            .as_ref()
+            .and_then(ctx_cell_of)
+            .map(|c| Rc::clone(&c.ctx))
+    })
+}
+
 /// `FG(default_context)`, created on first use.
 pub fn default_context() -> Resource {
     DEFAULT_CONTEXT.with(|d| {
@@ -478,13 +488,19 @@ pub fn context_arg(
     match a.at(n) {
         Value::Null => {
             if no_default {
+                crate::errors::set_operation_context(None);
                 Ok(None)
             } else {
-                Ok(ctx_cell_of(&default_context()).map(|c| Rc::clone(&c.ctx)))
+                let c = ctx_cell_of(&default_context()).map(|c| Rc::clone(&c.ctx));
+                crate::errors::set_operation_context(c.clone());
+                Ok(c)
             }
         }
         Value::Resource(r) => match ctx_cell_of(&r) {
-            Some(c) => Ok(Some(Rc::clone(&c.ctx))),
+            Some(c) => {
+                crate::errors::set_operation_context(Some(Rc::clone(&c.ctx)));
+                Ok(Some(Rc::clone(&c.ctx)))
+            }
             None => Err(vm.throw(
                 "TypeError",
                 &format!(
@@ -525,6 +541,7 @@ pub fn with_stream<R>(
     cell: &StreamCell,
     f: impl FnOnce(&mut Stream) -> R,
 ) -> VmResult<Option<R>> {
+    crate::errors::set_operation_context(cell.get().and_then(|s| s.context.clone()));
     bridge::run_stream(vm, || cell.get().map(|mut s| f(&mut s)))
 }
 

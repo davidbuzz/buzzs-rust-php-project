@@ -18,7 +18,10 @@
 
 pub mod bridge;
 pub mod dirs;
+pub mod errors;
 pub mod files;
+pub mod include;
+pub mod ini;
 pub mod meta;
 pub mod net;
 pub mod process;
@@ -73,6 +76,7 @@ impl Extension for Streams {
     fn register(&self, m: &mut ModuleBuilder<'_>) {
         bridge::install_hooks();
         register_std_streams(m);
+        errors::register(m);
         files::register(m);
         stat::register(m);
         dirs::register(m);
@@ -85,6 +89,8 @@ impl Extension for Streams {
             m.constant(n, Value::Int(*v));
         }
         m.on_request_shutdown(shutdown);
+        include::install(m.vm());
+        ini::register(m);
     }
 }
 

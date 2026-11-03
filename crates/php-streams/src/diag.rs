@@ -47,6 +47,10 @@ macro_rules! error_codes {
         pub enum StreamErrorCode { $($name),* }
 
         impl StreamErrorCode {
+            /// All case names, in declaration order (the enum's case ids
+            /// are the 1-based positions).
+            pub const NAMES: &'static [&'static str] = &[$(stringify!($name)),*];
+
             /// The enum case name.
             pub fn name(self) -> &'static str {
                 match self { $(StreamErrorCode::$name => stringify!($name)),* }
