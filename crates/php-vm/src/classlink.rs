@@ -249,7 +249,7 @@ impl Vm {
             }
         };
         let cls = self.resolve_class_spec(spec)?;
-        self.class_constant(&cls, &name)
+        self.fetch_class_constant(&cls, &name)
     }
 
     /// Reads a class constant (evaluating it lazily).

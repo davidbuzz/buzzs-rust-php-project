@@ -7,8 +7,8 @@ mod array;
 mod classes;
 mod math;
 mod output;
-mod string;
 pub mod sig;
+mod string;
 pub(crate) mod util;
 mod var;
 
@@ -28,7 +28,7 @@ pub struct ExtState {
 }
 
 /// Registers a builtin function from a stub signature.
-pub(crate) fn reg(vm: &mut Vm, sig: &str, f: BuiltinFn) {
+pub(crate) fn reg(vm: &mut Vm, sig: &str, f: BuiltinFn) -> ZStr {
     let s = sig::parse_sig(sig);
     let mut fl = 0;
     if s.variadic {
@@ -47,7 +47,8 @@ pub(crate) fn reg(vm: &mut Vm, sig: &str, f: BuiltinFn) {
         flags: fl,
         handler: f,
     };
-    vm.functions.insert(lc, Func::Builtin(Rc::new(b)));
+    vm.functions.insert(lc.clone(), Func::Builtin(Rc::new(b)));
+    lc
 }
 
 /// Registers an alias for an existing function.
@@ -62,7 +63,10 @@ pub(crate) fn alias(vm: &mut Vm, alias: &str, target: &str) {
             flags: b.flags,
             handler: b.handler,
         };
-        vm.functions.insert(ZStr::from(alias.to_ascii_lowercase()), Func::Builtin(Rc::new(nb)));
+        vm.functions.insert(
+            ZStr::from(alias.to_ascii_lowercase()),
+            Func::Builtin(Rc::new(nb)),
+        );
     }
 }
 
@@ -91,7 +95,9 @@ pub(crate) fn time_now_string() -> String {
     let days = secs / 86400;
     let rem = secs % 86400;
     let (y, m, d) = civil_from_days(i64::try_from(days).unwrap_or(0));
-    const MONTHS: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    const MONTHS: [&str; 12] = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ];
     format!(
         "{:02}-{}-{} {:02}:{:02}:{:02} UTC",
         d,

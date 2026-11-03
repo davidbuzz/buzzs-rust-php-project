@@ -262,7 +262,9 @@ pub(crate) fn descend(
     if let Value::Reference(r) = v {
         let r = r.clone();
         if r.try_borrow().is_none() {
-            return Step::Err(WalkErr::Error("Cannot modify a value while it is being iterated".into()));
+            return Step::Err(WalkErr::Error(
+                "Cannot modify a value while it is being iterated".into(),
+            ));
         }
         let mut b = r.borrow_mut();
         return descend(&mut b, segs, i, wop, diags, false);
@@ -316,9 +318,7 @@ pub(crate) fn descend(
                         if last {
                             return Step::Err(WalkErr::Error("Cannot unset string offsets".into()));
                         }
-                        return Step::Err(WalkErr::Error(
-                            "Cannot unset string offsets".into(),
-                        ));
+                        return Step::Err(WalkErr::Error("Cannot unset string offsets".into()));
                     }
                     if !last {
                         return Step::Err(WalkErr::Error(
@@ -347,7 +347,9 @@ pub(crate) fn descend(
                         WOp::MakeRef | WOp::AssignRef(_) => Step::Err(WalkErr::Error(
                             "Cannot create references to/from string offsets".into(),
                         )),
-                        WOp::Unset => Step::Err(WalkErr::Error("Cannot unset string offsets".into())),
+                        WOp::Unset => {
+                            Step::Err(WalkErr::Error("Cannot unset string offsets".into()))
+                        }
                     };
                 }
                 other => {
@@ -417,7 +419,11 @@ pub(crate) fn descend(
                     }
                 }
                 RSeg::Dim(k) => {
-                    let ctx = if is_unset { KeyCtx::Unset } else { KeyCtx::Write };
+                    let ctx = if is_unset {
+                        KeyCtx::Unset
+                    } else {
+                        KeyCtx::Write
+                    };
                     let key = match key_of(k, diags, ctx) {
                         Ok(k) => k,
                         Err(e) => return Step::Err(e),
@@ -441,8 +447,8 @@ pub(crate) fn descend(
                     }
                     let t = arr.make_mut();
                     let rw = matches!(wop, WOp::FetchRw);
-                    let (slot, existed) = t.lookup_ex(key.clone());
-                    let _ = existed;
+                    let (slot, inserted) = t.lookup_ex(key.clone());
+                    let existed = !inserted;
                     if !existed && rw {
                         diags.push((E_WARNING, undefined_key_msg(&key)));
                     }
@@ -498,7 +504,11 @@ pub(crate) fn apply_final(v: &mut Value, wop: &mut WOp) -> Step {
 
 impl Vm {
     /// Resolves a place's base and segments.
-    pub(crate) fn resolve_place(&mut self, pid: PlaceId, write: bool) -> VmResult<(RBase, Vec<RSeg>)> {
+    pub(crate) fn resolve_place(
+        &mut self,
+        pid: PlaceId,
+        write: bool,
+    ) -> VmResult<(RBase, Vec<RSeg>)> {
         let code = self.frame().code.clone();
         let p = &code.places[pid as usize];
         let base = match &p.base {
@@ -587,7 +597,12 @@ impl Vm {
 
     /// Runs a write operation on a place.
     #[allow(clippy::too_many_lines)]
-    pub(crate) fn write_place(&mut self, base: RBase, segs: &[RSeg], mut wop: WOp) -> VmResult<Value> {
+    pub(crate) fn write_place(
+        &mut self,
+        base: RBase,
+        segs: &[RSeg],
+        mut wop: WOp,
+    ) -> VmResult<Value> {
         let mut diags = Vec::new();
         let step = match base {
             RBase::Var(store, idx) => {
@@ -672,7 +687,12 @@ impl Vm {
         }
     }
 
-    fn write_var_root(&mut self, store: &Rc<RefCell<VarStore>>, idx: usize, wop: WOp) -> VmResult<Value> {
+    fn write_var_root(
+        &mut self,
+        store: &Rc<RefCell<VarStore>>,
+        idx: usize,
+        wop: WOp,
+    ) -> VmResult<Value> {
         match wop {
             WOp::Assign(v) => {
                 let mut st = store.borrow_mut();
@@ -715,7 +735,13 @@ impl Vm {
 
     /// Continues a write walk at an object.
     #[allow(clippy::too_many_lines)]
-    pub(crate) fn obj_walk(&mut self, obj: Obj, segs: &[RSeg], i: usize, wop: WOp) -> VmResult<Value> {
+    pub(crate) fn obj_walk(
+        &mut self,
+        obj: Obj,
+        segs: &[RSeg],
+        i: usize,
+        wop: WOp,
+    ) -> VmResult<Value> {
         let last = i + 1 == segs.len();
         match &segs[i] {
             RSeg::Prop(name) => {
@@ -850,7 +876,14 @@ impl Vm {
                                     mut other => {
                                         let mut diags = Vec::new();
                                         let mut w = wop;
-                                        let s = descend(&mut other, segs, i + 1, &mut w, &mut diags, false);
+                                        let s = descend(
+                                            &mut other,
+                                            segs,
+                                            i + 1,
+                                            &mut w,
+                                            &mut diags,
+                                            false,
+                                        );
                                         self.flush_diags(diags)?;
                                         self.finish_step(s, segs, w)
                                     }
@@ -945,7 +978,12 @@ impl Vm {
     }
 
     /// `place op= v`
-    pub(crate) fn place_assign_op(&mut self, pid: PlaceId, op: BinaryOp, v: Value) -> VmResult<Value> {
+    pub(crate) fn place_assign_op(
+        &mut self,
+        pid: PlaceId,
+        op: BinaryOp,
+        v: Value,
+    ) -> VmResult<Value> {
         let (base, segs) = self.resolve_place(pid, true)?;
         // Fast path: plain variable holding a string being appended to.
         let base2 = match &base {
@@ -997,7 +1035,11 @@ impl Vm {
                     };
                     if let Some(Value::Int(i)) = target {
                         let old = *i;
-                        let new = if kind.is_inc() { old.checked_add(1) } else { old.checked_sub(1) };
+                        let new = if kind.is_inc() {
+                            old.checked_add(1)
+                        } else {
+                            old.checked_sub(1)
+                        };
                         if let Some(n) = new {
                             *i = n;
                             return Ok(Value::Int(if kind.is_post() { old } else { n }));
@@ -1081,7 +1123,9 @@ impl Vm {
                     if mode == FetchMode::Is {
                         Value::Null
                     } else {
-                        return Err(self.make_throw("Error", "Using $this when not in object context"));
+                        return Err(
+                            self.make_throw("Error", "Using $this when not in object context")
+                        );
                     }
                 }
             },
@@ -1127,7 +1171,11 @@ impl Vm {
         match cur {
             Value::Array(a) => {
                 let mut diags = Vec::new();
-                let ctx = if mode == FetchMode::Is { KeyCtx::Isset } else { KeyCtx::Read };
+                let ctx = if mode == FetchMode::Is {
+                    KeyCtx::Isset
+                } else {
+                    KeyCtx::Read
+                };
                 let key = match key_of(k, &mut diags, ctx) {
                     Ok(k) => k,
                     Err(e) => {
@@ -1196,7 +1244,9 @@ impl Vm {
                     self.warning(&format!("Uninitialized string offset {off}"))?;
                     return Ok(Value::Str(ZStr::empty()));
                 }
-                Ok(Value::Str(ZStr::from_byte(s.as_bytes()[usize::try_from(real).unwrap_or(0)])))
+                Ok(Value::Str(ZStr::from_byte(
+                    s.as_bytes()[usize::try_from(real).unwrap_or(0)],
+                )))
             }
             Value::Object(o) => {
                 if let Some(h) = crate::ext::hooks_of(&o) {
@@ -1264,7 +1314,9 @@ impl Vm {
             RBase::Cell(c) => Some(c.borrow().deref()),
             RBase::Value(v) => Some(v.deref()),
             RBase::Undef(_) => None,
-            RBase::Globals => Some(Value::Array(ZArray::from_table(self.globals.borrow().to_array()))),
+            RBase::Globals => Some(Value::Array(ZArray::from_table(
+                self.globals.borrow().to_array(),
+            ))),
         };
         let n = segs.len();
         if n == 0 {
@@ -1294,7 +1346,9 @@ impl Vm {
                         Value::Object(o) => self.read_property(&o, name, FetchMode::Is)?,
                         _ => Value::Null,
                     },
-                    RSeg::Append => return Err(self.make_throw("Error", "Cannot use [] for reading")),
+                    RSeg::Append => {
+                        return Err(self.make_throw("Error", "Cannot use [] for reading"))
+                    }
                 };
                 cur = Some(v);
                 continue;
@@ -1325,7 +1379,10 @@ impl Vm {
                     Value::Str(s) => {
                         let off = match k {
                             Value::Int(i) => Some(*i),
-                            Value::Str(ks) => match php_runtime::numeric::is_numeric_string_ex(ks.as_bytes(), false) {
+                            Value::Str(ks) => match php_runtime::numeric::is_numeric_string_ex(
+                                ks.as_bytes(),
+                                false,
+                            ) {
                                 Some(n) => match n.value {
                                     php_runtime::numeric::Number::Int(i) => Some(i),
                                     php_runtime::numeric::Number::Float(_) => None,
@@ -1403,7 +1460,14 @@ impl Vm {
 fn is_superglobal_name(n: &[u8]) -> bool {
     matches!(
         n,
-        b"_GET" | b"_POST" | b"_COOKIE" | b"_SERVER" | b"_ENV" | b"_REQUEST" | b"_FILES" | b"_SESSION"
+        b"_GET"
+            | b"_POST"
+            | b"_COOKIE"
+            | b"_SERVER"
+            | b"_ENV"
+            | b"_REQUEST"
+            | b"_FILES"
+            | b"_SESSION"
     )
 }
 
@@ -1416,4 +1480,3 @@ pub(crate) enum PropContainer {
     /// A value returned by `__get` (modifications are lost).
     Value(Value),
 }
-

@@ -130,6 +130,7 @@ impl UserFunction {
 pub type BuiltinFn = fn(&mut Vm, &mut Args) -> VmResult<Value>;
 
 /// A builtin (internal) function or method.
+#[derive(Clone)]
 pub struct Builtin {
     /// Name as declared.
     pub name: ZStr,
@@ -345,7 +346,9 @@ impl Args {
 
     /// `$this` (panics if missing — only for instance methods).
     pub fn this_obj(&self) -> Obj {
-        self.this.clone().expect("instance method called without $this")
+        self.this
+            .clone()
+            .expect("instance method called without $this")
     }
 
     /// The function name (for messages).

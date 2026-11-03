@@ -77,7 +77,10 @@ fn limit_memory() {
 
 fn main() {
     limit_memory();
-    let raw: Vec<Vec<u8>> = std::env::args_os().skip(1).map(OsStringExt::into_vec).collect();
+    let raw: Vec<Vec<u8>> = std::env::args_os()
+        .skip(1)
+        .map(OsStringExt::into_vec)
+        .collect();
     std::process::exit(run(&raw));
 }
 
@@ -164,7 +167,12 @@ fn run(raw: &[Vec<u8>]) -> i32 {
                         return 1;
                     };
                     mode = Some(Mode::Code(v));
-                    script_args.extend(raw[i + 1..].iter().filter(|x| x.as_slice() != b"--").cloned());
+                    script_args.extend(
+                        raw[i + 1..]
+                            .iter()
+                            .filter(|x| x.as_slice() != b"--")
+                            .cloned(),
+                    );
                     break;
                 } else if let Some(rest) = opt.strip_prefix("-f") {
                     let Some(v) = take_val(&mut i, rest) else {
@@ -184,7 +192,11 @@ fn run(raw: &[Vec<u8>]) -> i32 {
                 } else if let Some(rest) = opt.strip_prefix("-z") {
                     let _ = take_val(&mut i, rest);
                 } else {
-                    eprintln!("Error in argument {}, char 2: no argument for option {}", i + 1, &opt[1..]);
+                    eprintln!(
+                        "Error in argument {}, char 2: no argument for option {}",
+                        i + 1,
+                        &opt[1..]
+                    );
                     print!("{USAGE}");
                     return 1;
                 }
@@ -197,7 +209,13 @@ fn run(raw: &[Vec<u8>]) -> i32 {
         Mode::File(p) => {
             let path = std::path::Path::new(std::ffi::OsStr::from_bytes(&p));
             match std::fs::read(path) {
-                Ok(s) => (s, p.clone(), p),
+                // `php_execute_script` expands the primary script to an
+                // absolute, symlink-resolved path (`__FILE__`, errors).
+                Ok(s) => {
+                    let full = std::fs::canonicalize(path)
+                        .map_or_else(|_| p.clone(), |c| c.into_os_string().into_vec());
+                    (s, full, p)
+                }
                 Err(_) => {
                     println!("Could not open input file: {}", String::from_utf8_lossy(&p));
                     return 1;
@@ -207,27 +225,38 @@ fn run(raw: &[Vec<u8>]) -> i32 {
         Mode::Code(c) => {
             let mut s = b"<?php ".to_vec();
             s.extend_from_slice(&c);
-            (s, b"Command line code".to_vec(), b"Standard input code".to_vec())
+            (
+                s,
+                b"Command line code".to_vec(),
+                b"Standard input code".to_vec(),
+            )
         }
         Mode::Stdin => {
             let mut s = Vec::new();
             let _ = std::io::stdin().read_to_end(&mut s);
-            (s, b"Standard input code".to_vec(), b"Standard input code".to_vec())
+            (
+                s,
+                b"Standard input code".to_vec(),
+                b"Standard input code".to_vec(),
+            )
         }
     };
     if lint {
         return match Vm::lint(&src) {
             Ok(()) => {
-                println!("No syntax errors detected in {}", String::from_utf8_lossy(&path));
+                println!(
+                    "No syntax errors detected in {}",
+                    String::from_utf8_lossy(&display)
+                );
                 0
             }
             Err((msg, line, parse)) => {
                 let label = if parse { "Parse error" } else { "Fatal error" };
                 println!(
                     "PHP {label}:  {msg} in {} on line {line}\n{label}: {msg} in {} on line {line}\nErrors parsing {}",
-                    String::from_utf8_lossy(&path),
-                    String::from_utf8_lossy(&path),
-                    String::from_utf8_lossy(&path)
+                    String::from_utf8_lossy(&display),
+                    String::from_utf8_lossy(&display),
+                    String::from_utf8_lossy(&display)
                 );
                 255
             }
@@ -240,8 +269,10 @@ fn run(raw: &[Vec<u8>]) -> i32 {
     let r = std::thread::Builder::new()
         .stack_size(256 << 20)
         .spawn(move || {
-            let stdout: Box<dyn Write> =
-                Box::new(std::io::BufWriter::with_capacity(1 << 16, std::io::stdout()));
+            let stdout: Box<dyn Write> = Box::new(std::io::BufWriter::with_capacity(
+                1 << 16,
+                std::io::stdout(),
+            ));
             let exts = extensions::all();
             let refs: Vec<&dyn php_vm::ext::Extension> = exts.iter().map(AsRef::as_ref).collect();
             let mut vm = Vm::with_extensions(&opts, stdout, &refs);

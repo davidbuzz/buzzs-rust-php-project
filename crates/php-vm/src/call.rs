@@ -677,13 +677,31 @@ impl Vm {
 
     fn check_deprecated_call(&mut self, call: &PendingCall) -> VmResult<()> {
         if call.func.flags() & flags::DEPRECATED != 0 {
-            let name = self.func_display(&call.func, call.scope.as_ref());
+            // `zend_deprecated_function`.
+            let (suffix, scope, code) = match &call.func {
+                Func::User(uf) => {
+                    let scope = call.scope.clone();
+                    let suffix = self.deprecation_suffix(&uf.attributes, scope.as_ref())?;
+                    (suffix, scope, crate::errors::level::USER_DEPRECATED)
+                }
+                Func::Builtin(b) => {
+                    let suffix = self
+                        .builtin_deprecations
+                        .get(&ZStr::from(b.name.to_ascii_lowercase()))
+                        .cloned()
+                        .unwrap_or_default();
+                    (suffix, call.scope.clone(), crate::errors::level::DEPRECATED)
+                }
+            };
+            let name = self.func_display(&call.func, scope.as_ref());
             let kind = if call.scope.is_some() {
                 "Method"
             } else {
                 "Function"
             };
-            self.deprecated(&format!("{kind} {name}() is deprecated"))?;
+            let mut msg = format!("{kind} {name}() is deprecated").into_bytes();
+            msg.extend_from_slice(&suffix);
+            self.error_bytes(code, &msg)?;
         }
         Ok(())
     }
@@ -752,6 +770,10 @@ impl Vm {
         let mut values: Vec<Value> = Vec::with_capacity(call.args.len());
         let mut passed: Vec<bool> = Vec::with_capacity(call.args.len());
         let npassed = call.args.len();
+        if b.flags & flags::DEPRECATED != 0 {
+            // Before zpp, like ZEND_DO_ICALL.
+            self.check_deprecated_call(&call)?;
+        }
         // Arity.
         let positional_count = call.args.iter().filter(|a| a.is_some()).count();
         if !call.has_named && npassed < b.required as usize {
@@ -810,6 +832,22 @@ impl Vm {
                 &format!("{fname}(): Argument #{} (${pname}) not passed", i + 1),
             ));
         }
+        // Builtin frame (for backtraces and func_get_args of callers),
+        // pushed before zpp so argument errors show it in the trace.
+        let mut f = Frame::with_vars(
+            self.empty_code.clone(),
+            FrameKind::Builtin,
+            self.empty_vars.clone(),
+            None,
+        );
+        f.func = Some(Func::Builtin(b.clone()));
+        f.builtin_name = Some(b.name.clone());
+        f.args = values.iter().take(nframe_args).cloned().map(Some).collect();
+        f.this.clone_from(&call.this);
+        f.scope = call.scope.clone();
+        f.called.clone_from(&call.called);
+        self.frames.push(f);
+        let depth = self.frames.len();
         // Type coercion.
         for (i, v) in values.iter_mut().enumerate() {
             if !passed[i] {
@@ -834,7 +872,14 @@ impl Vm {
                 internal_arg: Some((&fname, i + 1, &pname)),
             };
             let ty = ty.clone();
-            if !self.verify_type(&ty, v, &ctx)? {
+            let ok = match self.verify_type(&ty, v, &ctx) {
+                Ok(ok) => ok,
+                Err(e) => {
+                    self.pop_frames_to(depth);
+                    return Err(e);
+                }
+            };
+            if !ok {
                 let msg = if ty.mask & crate::types::mask::CALLABLE != 0
                     && !ty.has_classes()
                     && ty.mask & !(crate::types::mask::CALLABLE | crate::types::mask::NULL) == 0
@@ -853,11 +898,13 @@ impl Vm {
                         given_type(v)
                     )
                 };
-                return Err(self.make_throw("TypeError", &msg));
+                let e = self.make_throw("TypeError", &msg);
+                self.pop_frames_to(depth);
+                return Err(e);
             }
         }
-        if b.flags & flags::DEPRECATED != 0 {
-            self.deprecated(&format!("Function {fname}() is deprecated"))?;
+        if let Some(f) = self.frames.get_mut(depth - 1) {
+            f.args = values.iter().take(nframe_args).cloned().map(Some).collect();
         }
         let mut args = Args {
             values,
@@ -867,32 +914,18 @@ impl Vm {
             called: call.called,
             func: Some(b.clone()),
         };
-        // Builtin frame (for backtraces and func_get_args of callers).
-        let mut f = Frame::with_vars(
-            self.empty_code.clone(),
-            FrameKind::Builtin,
-            self.empty_vars.clone(),
-            None,
-        );
-        f.func = Some(Func::Builtin(b.clone()));
-        f.builtin_name = Some(b.name.clone());
-        f.args = args
-            .values
-            .iter()
-            .take(nframe_args)
-            .cloned()
-            .map(Some)
-            .collect();
-        f.this.clone_from(&args.this);
-        f.scope = call.scope;
-        f.called.clone_from(&args.called);
-        self.frames.push(f);
-        let depth = self.frames.len();
         let r = (b.handler)(self, &mut args);
         if self.frames.len() >= depth {
             self.frames.truncate(depth - 1);
         }
         r
+    }
+
+    /// Pops frames above `depth - 1` (the builtin frame pushed at `depth`).
+    fn pop_frames_to(&mut self, depth: usize) {
+        if self.frames.len() >= depth {
+            self.frames.truncate(depth - 1);
+        }
     }
 
     fn arg_count_error_builtin(&mut self, fname: &str, b: &Builtin, given: usize) -> Throw {
@@ -983,6 +1016,13 @@ impl Vm {
                 internal_arg: None,
             };
             if !self.verify_type(&ty, &mut v, &ctx)? {
+                // php-src already holds the rejected value in the CV, so
+                // the TypeError's trace shows it: keep it visible.
+                if let Some(slot) = self.frame_mut().args.get_mut(n as usize) {
+                    if slot.is_none() {
+                        *slot = Some(v.clone());
+                    }
+                }
                 return Err(self.recv_type_error(n, &v));
             }
         }
@@ -1058,7 +1098,9 @@ impl Vm {
     }
 
     pub(crate) fn op_recv_default(&mut self, n: u32, cv: u32, v: Value) -> VmResult<()> {
-        let _ = n;
+        // RECV_INIT verifies the (possibly constant-expression) default and
+        // coerces it (`float $x = 0` gives float(0)).
+        let v = self.recv_check(n, v)?;
         self.cv_bind(cv, v);
         Ok(())
     }

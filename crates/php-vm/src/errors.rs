@@ -359,16 +359,32 @@ impl Vm {
             self.report_compile_error(&msg, &file, line, cls.lc_name.as_bytes() == b"parseerror");
             return;
         }
-        let s = self.call_method_name(e, "__toString", Vec::new());
-        let s = match s {
-            Ok(Value::Str(s)) => s,
-            Ok(_) => ZStr::from(""),
+        // `zend_exception_error`.
+        match self.call_method_name(e, "__toString", Vec::new()) {
+            Ok(v) => match v.deref() {
+                Value::Str(s) => self.set_exc_prop(e, "string", Value::Str(s)),
+                _ => {
+                    let _ =
+                        self.warning(&format!("{}::__toString() must return a string", cls.name));
+                }
+            },
             Err(Throw::Exception(inner)) => {
+                // Thrown with no executing frame: php-src reports the inner
+                // exception right away (`zend_throw_exception_internal`).
+                if !self.is_executing() {
+                    self.report_uncaught(&inner);
+                    return;
+                }
                 let file = self
                     .exc_prop(&inner, "file")
                     .as_str()
                     .cloned()
                     .unwrap_or_default();
+                let file = if file.is_empty() {
+                    ZStr::from("Unknown")
+                } else {
+                    file
+                };
                 let line =
                     u32::try_from(self.exc_prop(&inner, "line").as_int().unwrap_or(0)).unwrap_or(0);
                 let msg = format!(
@@ -377,21 +393,21 @@ impl Vm {
                     cls.name
                 );
                 let _ = self.error_at(level::WARNING, &msg, &file, line);
-                self.exc_prop(e, "string")
-                    .as_str()
-                    .cloned()
-                    .unwrap_or_default()
             }
-            Err(_) => ZStr::from(""),
-        };
-        if !s.is_empty() || true {
-            self.set_exc_prop(e, "string", Value::Str(s.clone()));
+            Err(_) => {}
         }
+        let s = self.exc_prop(e, "string");
+        let s = s.as_str().cloned().unwrap_or_default();
         let file = self
             .exc_prop(e, "file")
             .as_str()
             .cloned()
             .unwrap_or_default();
+        let file = if file.is_empty() {
+            ZStr::from("Unknown")
+        } else {
+            file
+        };
         let line = u32::try_from(self.exc_prop(e, "line").as_int().unwrap_or(0)).unwrap_or(0);
         let msg = format!("Uncaught {}\n  thrown", s.to_string_lossy());
         self.report_fatal(&msg, &file, line);

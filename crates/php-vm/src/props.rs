@@ -39,7 +39,12 @@ impl Vm {
     }
 
     /// Property visibility lookup.
-    pub(crate) fn lookup_prop(&self, cls: &Rc<Class>, name: &ZStr, scope: Option<&Rc<Class>>) -> PropLookup {
+    pub(crate) fn lookup_prop(
+        &self,
+        cls: &Rc<Class>,
+        name: &ZStr,
+        scope: Option<&Rc<Class>>,
+    ) -> PropLookup {
         if let Some(s) = scope {
             if !Rc::ptr_eq(s, cls) {
                 if let Some(pi) = s.prop_map.get(name) {
@@ -69,11 +74,9 @@ impl Vm {
                 }
             }
             _ => {
-                let ok = scope.is_some_and(|s| {
-                    match self.class_by_name(&pi.class) {
-                        Some(decl) => s.is_subclass_of(&decl) || decl.is_subclass_of(s),
-                        None => true,
-                    }
+                let ok = scope.is_some_and(|s| match self.class_by_name(&pi.class) {
+                    Some(decl) => s.is_subclass_of(&decl) || decl.is_subclass_of(s),
+                    None => true,
                 });
                 if ok {
                     PropLookup::Found(pi.clone())
@@ -120,8 +123,17 @@ impl Vm {
         m && !self.guard_active(o, name, kind)
     }
 
-    fn inaccessible_error(&mut self, cls: &Rc<Class>, pi: &PropInfo, verb: &str) -> crate::vm::Throw {
-        let vis = if pi.visibility() == flags::PRIVATE { "private" } else { "protected" };
+    fn inaccessible_error(
+        &mut self,
+        cls: &Rc<Class>,
+        pi: &PropInfo,
+        verb: &str,
+    ) -> crate::vm::Throw {
+        let vis = if pi.visibility() == flags::PRIVATE {
+            "private"
+        } else {
+            "protected"
+        };
         let _ = cls;
         self.make_throw(
             "Error",
@@ -143,7 +155,12 @@ impl Vm {
 
     /// Whether the current code is a hook of property `pi` on `o`.
     fn in_hook(&self, pi: &PropInfo, o: &Obj) -> bool {
-        let Some(f) = self.frames.iter().rev().find(|f| f.kind != crate::vm::FrameKind::Builtin) else {
+        let Some(f) = self
+            .frames
+            .iter()
+            .rev()
+            .find(|f| f.kind != crate::vm::FrameKind::Builtin)
+        else {
             return false;
         };
         let Some(uf) = &f.ufunc else { return false };
@@ -153,7 +170,13 @@ impl Vm {
         }
     }
 
-    fn call_hook(&mut self, o: &Obj, f: &Rc<crate::func::UserFunction>, pi: &PropInfo, args: Vec<Value>) -> VmResult<Value> {
+    fn call_hook(
+        &mut self,
+        o: &Obj,
+        f: &Rc<crate::func::UserFunction>,
+        pi: &PropInfo,
+        args: Vec<Value>,
+    ) -> VmResult<Value> {
         let decl = self
             .class_by_name(f.class_name.as_ref().unwrap_or(&pi.class))
             .unwrap_or_else(|| object::class_of(o).clone());
@@ -170,12 +193,21 @@ impl Vm {
     fn virtual_error(&mut self, o: &Obj, pi: &PropInfo, msg: &str) -> crate::vm::Throw {
         self.make_throw(
             "Error",
-            &format!("{msg} {}::${}", object::display_name(&object::class_of(o).name), pi.name),
+            &format!(
+                "{msg} {}::${}",
+                object::display_name(&object::class_of(o).name),
+                pi.name
+            ),
         )
     }
 
     /// Reads `$o->name`.
-    pub(crate) fn read_property(&mut self, o: &Obj, name: &ZStr, mode: FetchMode) -> VmResult<Value> {
+    pub(crate) fn read_property(
+        &mut self,
+        o: &Obj,
+        name: &ZStr,
+        mode: FetchMode,
+    ) -> VmResult<Value> {
         let lazy_target = self.lazy_object_for(o, Some(name))?;
         let o = &lazy_target;
         let cls = object::class_of(o).clone();
@@ -193,17 +225,30 @@ impl Vm {
                             return Ok(self.call_hook(o, g, &pi, Vec::new())?.deref());
                         }
                         if pi.is_virtual() {
-                            return Err(self.virtual_error(o, &pi, "Cannot read from set-only virtual property"));
+                            return Err(self.virtual_error(
+                                o,
+                                &pi,
+                                "Cannot read from set-only virtual property",
+                            ));
                         }
                     } else if pi.is_virtual() {
-                        return Err(self.virtual_error(o, &pi, "Must not read from virtual property"));
+                        return Err(self.virtual_error(
+                            o,
+                            &pi,
+                            "Must not read from virtual property",
+                        ));
                     }
                 }
                 let v = object::data(o).slots.borrow()[pi.slot as usize].clone();
                 if let Some(v) = v {
                     return Ok(v.deref());
                 }
-                let was_unset = object::data(o).readonly_init.borrow().get(pi.slot as usize).copied().unwrap_or(false);
+                let was_unset = object::data(o)
+                    .readonly_init
+                    .borrow()
+                    .get(pi.slot as usize)
+                    .copied()
+                    .unwrap_or(false);
                 if (pi.ty.is_none() || was_unset) && self.has_magic(o, name, G_GET) {
                     return self.magic_read(o, name, mode);
                 }
@@ -278,7 +323,10 @@ impl Vm {
             if let Some(decl) = self.class_by_name(&pi.class) {
                 let mut root = decl.clone();
                 while let Some(p) = root.parent.clone() {
-                    if p.prop_map.get(&pi.name).is_some_and(|x| x.visibility() != flags::PRIVATE) {
+                    if p.prop_map
+                        .get(&pi.name)
+                        .is_some_and(|x| x.visibility() != flags::PRIVATE)
+                    {
                         root = p;
                     } else {
                         break;
@@ -317,16 +365,30 @@ impl Vm {
     }
 
     /// Readonly / set-visibility checks for writes (`zend_std_write_property`).
-    fn check_write_access(&mut self, o: &Obj, pi: &PropInfo, initialized: bool, op: &str) -> VmResult<()> {
+    fn check_write_access(
+        &mut self,
+        o: &Obj,
+        pi: &PropInfo,
+        initialized: bool,
+        op: &str,
+    ) -> VmResult<()> {
         if pi.flags & (flags::READONLY | flags::SET_MASK) == 0 {
             return Ok(());
         }
         let d = object::data(o);
         if pi.flags & flags::READONLY != 0 && initialized && d.flags.get() & oflags::CLONING == 0 {
             let msg = if op == "unset" {
-                format!("Cannot unset readonly property {}::${}", object::display_name(&pi.class), pi.name)
+                format!(
+                    "Cannot unset readonly property {}::${}",
+                    object::display_name(&pi.class),
+                    pi.name
+                )
             } else {
-                format!("Cannot modify readonly property {}::${}", object::display_name(&pi.class), pi.name)
+                format!(
+                    "Cannot modify readonly property {}::${}",
+                    object::display_name(&pi.class),
+                    pi.name
+                )
             };
             return Err(self.make_throw("Error", &msg));
         }
@@ -338,11 +400,21 @@ impl Vm {
     }
 
     /// Coerces a value for a typed property.
-    pub(crate) fn coerce_prop(&mut self, o: Option<&Obj>, pi: &PropInfo, mut v: Value) -> VmResult<Value> {
+    pub(crate) fn coerce_prop(
+        &mut self,
+        o: Option<&Obj>,
+        pi: &PropInfo,
+        mut v: Value,
+    ) -> VmResult<Value> {
         let Some(ty) = &pi.ty else {
             return Ok(v);
         };
-        let strict = self.frames.iter().rev().find(|f| f.kind != crate::vm::FrameKind::Builtin).is_some_and(|f| f.code.strict_types);
+        let strict = self
+            .frames
+            .iter()
+            .rev()
+            .find(|f| f.kind != crate::vm::FrameKind::Builtin)
+            .is_some_and(|f| f.code.strict_types);
         let decl = self.class_by_name(&pi.class);
         let called = o.map(|o| object::class_of(o).clone());
         let ctx = TypeCtx {
@@ -395,16 +467,30 @@ impl Vm {
                             return Ok(v);
                         }
                         if pi.is_virtual() {
-                            return Err(self.virtual_error(o, &pi, "Cannot write to get-only virtual property"));
+                            return Err(self.virtual_error(
+                                o,
+                                &pi,
+                                "Cannot write to get-only virtual property",
+                            ));
                         }
                     } else if pi.is_virtual() {
-                        return Err(self.virtual_error(o, &pi, "Must not write to virtual property"));
+                        return Err(self.virtual_error(
+                            o,
+                            &pi,
+                            "Must not write to virtual property",
+                        ));
                     }
                 }
                 let idx = pi.slot as usize;
                 let cur_defined = object::data(o).slots.borrow()[idx].is_some();
                 let magic_ok = !cur_defined
-                    && (pi.ty.is_none() || object::data(o).readonly_init.borrow().get(idx).copied().unwrap_or(false));
+                    && (pi.ty.is_none()
+                        || object::data(o)
+                            .readonly_init
+                            .borrow()
+                            .get(idx)
+                            .copied()
+                            .unwrap_or(false));
                 if magic_ok && self.has_magic(o, name, G_SET) {
                     return self.magic_write(o, name, v);
                 }
@@ -555,14 +641,22 @@ impl Vm {
                         let v = match v {
                             Some(v) => Some(v),
                             None if pi.is_virtual() => {
-                                return Err(self.virtual_error(o, &pi, "Cannot read from set-only virtual property"));
+                                return Err(self.virtual_error(
+                                    o,
+                                    &pi,
+                                    "Cannot read from set-only virtual property",
+                                ));
                             }
                             None if h.set.is_some() => None,
                             None => None,
                         };
                         match v {
-                            Some(Value::Object(x)) => return Ok(PropContainer::Value(Value::Object(x))),
-                            Some(Value::Reference(r)) => return Ok(PropContainer::Value(Value::Reference(r))),
+                            Some(Value::Object(x)) => {
+                                return Ok(PropContainer::Value(Value::Object(x)))
+                            }
+                            Some(Value::Reference(r)) => {
+                                return Ok(PropContainer::Value(Value::Reference(r)))
+                            }
                             Some(_) => {
                                 return Err(self.make_throw(
                                     "Error",
@@ -575,8 +669,12 @@ impl Vm {
                             }
                             None => {
                                 if h.set.is_some() {
-                                    let cur = object::data(o).slots.borrow()[pi.slot as usize].clone();
-                                    if !matches!(cur.as_ref().map(Value::deref), Some(Value::Object(_))) {
+                                    let cur =
+                                        object::data(o).slots.borrow()[pi.slot as usize].clone();
+                                    if !matches!(
+                                        cur.as_ref().map(Value::deref),
+                                        Some(Value::Object(_))
+                                    ) {
                                         return Err(self.make_throw(
                                             "Error",
                                             &format!(
@@ -590,7 +688,11 @@ impl Vm {
                             }
                         }
                     } else if pi.is_virtual() {
-                        return Err(self.virtual_error(o, &pi, "Must not read from virtual property"));
+                        return Err(self.virtual_error(
+                            o,
+                            &pi,
+                            "Must not read from virtual property",
+                        ));
                     }
                 }
                 let idx = pi.slot as usize;
@@ -601,7 +703,12 @@ impl Vm {
                 if pi.flags & (flags::READONLY | flags::SET_MASK) != 0
                     && (pi.flags & flags::READONLY != 0 || !self.has_set_access(&pi))
                 {
-                    let is_obj = matches!(object::data(o).slots.borrow()[idx].as_ref().map(Value::deref), Some(Value::Object(_)));
+                    let is_obj = matches!(
+                        object::data(o).slots.borrow()[idx]
+                            .as_ref()
+                            .map(Value::deref),
+                        Some(Value::Object(_))
+                    );
                     if !is_obj {
                         if pi.flags & flags::READONLY != 0 {
                             if defined || !self.has_set_access(&pi) {
@@ -677,7 +784,12 @@ impl Vm {
     }
 
     /// `$o->name =& r`.
-    pub(crate) fn assign_property_ref(&mut self, o: &Obj, name: &ZStr, r: Value) -> VmResult<Value> {
+    pub(crate) fn assign_property_ref(
+        &mut self,
+        o: &Obj,
+        name: &ZStr,
+        r: Value,
+    ) -> VmResult<Value> {
         match self.property_container(o, name)? {
             PropContainer::Declared(idx) => {
                 let d = object::data(o);
@@ -761,7 +873,11 @@ impl Vm {
 
     /// Value of a property for nested unset (no magic `__get` side effects
     /// beyond PHP's).
-    pub(crate) fn read_property_for_unset(&mut self, o: &Obj, name: &ZStr) -> VmResult<Option<Value>> {
+    pub(crate) fn read_property_for_unset(
+        &mut self,
+        o: &Obj,
+        name: &ZStr,
+    ) -> VmResult<Option<Value>> {
         let cls = object::class_of(o).clone();
         let scope = self.scope();
         match self.lookup_prop(&cls, name, scope.as_ref()) {
@@ -812,10 +928,20 @@ impl Vm {
         }
         let scope = self.scope();
         let direct: Option<Option<Value>> = match self.lookup_prop(&cls, name, scope.as_ref()) {
-            PropLookup::Found(pi) if pi.hooks.as_ref().is_some_and(|h| h.get.is_some()) && !self.in_hook(&pi, o) => {
-                let g = pi.hooks.as_ref().and_then(|h| h.get.clone()).expect("get hook");
+            PropLookup::Found(pi)
+                if pi.hooks.as_ref().is_some_and(|h| h.get.is_some()) && !self.in_hook(&pi, o) =>
+            {
+                let g = pi
+                    .hooks
+                    .as_ref()
+                    .and_then(|h| h.get.clone())
+                    .expect("get hook");
                 let v = self.call_hook(o, &g, &pi, Vec::new())?.deref();
-                return Ok(if empty { !self.to_bool(&v)? } else { !v.is_null() });
+                return Ok(if empty {
+                    !self.to_bool(&v)?
+                } else {
+                    !v.is_null()
+                });
             }
             PropLookup::Found(pi) => {
                 let v = object::data(o).slots.borrow()[pi.slot as usize].clone();
@@ -832,7 +958,11 @@ impl Vm {
                 .and_then(|t| t.get(&ArrayKey::Str(name.clone())).map(|v| Some(v.deref()))),
         };
         if let Some(Some(v)) = direct {
-            return Ok(if empty { !self.to_bool(&v)? } else { !v.is_null() });
+            return Ok(if empty {
+                !self.to_bool(&v)?
+            } else {
+                !v.is_null()
+            });
         }
         if self.has_magic(o, name, G_ISSET) {
             let m = object::class_of(o).magic.isset.clone().expect("__isset");
@@ -904,6 +1034,13 @@ impl Vm {
                 &format!("Cannot instantiate abstract class {}", cls.name),
             ));
         }
+        if cls.lc_name.as_bytes() == b"generator" {
+            // `zend_generator_get_constructor`.
+            return Err(self.make_throw(
+                "Error",
+                "The \"Generator\" class is reserved for internal use and cannot be manually instantiated",
+            ));
+        }
         if cls.flags & cflags::NO_NEW != 0 {
             return Err(self.make_throw(
                 "Error",
@@ -938,12 +1075,20 @@ impl Vm {
 
     /// A new `stdClass` instance.
     pub(crate) fn create_std_object_vm(&mut self) -> VmResult<Value> {
-        let cls = self.classes.get(&ZStr::from("stdclass")).cloned().expect("stdClass");
+        let cls = self
+            .classes
+            .get(&ZStr::from("stdclass"))
+            .cloned()
+            .expect("stdClass");
         Ok(Value::Object(object::new_object(cls, Vec::new())))
     }
 
     /// The property table with mangled names (`(array)` cast, var_dump).
-    pub(crate) fn object_prop_table(&mut self, o: &Obj, include_uninit: bool) -> Vec<(ArrayKey, Option<Value>, Option<Rc<PropInfo>>)> {
+    pub(crate) fn object_prop_table(
+        &mut self,
+        o: &Obj,
+        include_uninit: bool,
+    ) -> Vec<(ArrayKey, Option<Value>, Option<Rc<PropInfo>>)> {
         let cls = object::class_of(o).clone();
         let d = object::data(o);
         let slots = d.slots.borrow();
@@ -970,6 +1115,10 @@ impl Vm {
 
     /// `(array) $obj`.
     pub(crate) fn object_to_array(&mut self, o: &Obj) -> VmResult<ZArray> {
+        // `convert_to_array`: a Closure becomes `[closure]`.
+        if object::class_of(o).lc_name.as_bytes() == b"closure" {
+            return Ok(ZArray::from_values([Value::Object(o.clone())]));
+        }
         let target = self.lazy_object_for(o, None)?;
         let o = &target;
         if let Some(a) = self.internal_object_array(o)? {
@@ -996,7 +1145,10 @@ impl Vm {
         if cls.is_enum() {
             return Err(self.make_throw(
                 "Error",
-                &format!("Trying to clone an uncloneable object of class {}", cls.name),
+                &format!(
+                    "Trying to clone an uncloneable object of class {}",
+                    cls.name
+                ),
             ));
         }
         if cls.flags & cflags::NO_CLONE != 0 {
@@ -1011,7 +1163,11 @@ impl Vm {
         if let Some(m) = &cls.magic.clone {
             let scope = self.scope();
             if !self.can_access_method(m, scope.as_ref()) {
-                let vis = if m.visibility() == flags::PRIVATE { "private" } else { "protected" };
+                let vis = if m.visibility() == flags::PRIVATE {
+                    "private"
+                } else {
+                    "protected"
+                };
                 return Err(self.make_throw(
                     "Error",
                     &format!(
@@ -1083,7 +1239,10 @@ fn parent_backing_get(vm: &mut Vm, a: &mut crate::func::Args) -> VmResult<Value>
             Some(v) => Ok(v.deref()),
             None => Err(vm.make_throw(
                 "Error",
-                &format!("Typed property {}::${} must not be accessed before initialization", pi.class, pi.name),
+                &format!(
+                    "Typed property {}::${} must not be accessed before initialization",
+                    pi.class, pi.name
+                ),
             )),
         };
     }
@@ -1116,10 +1275,17 @@ impl Vm {
         let Some(pi) = pi else {
             return Err(self.make_throw(
                 "Error",
-                &format!("Undefined property {}::${}", parent.map(|p| p.name.to_string_lossy()).unwrap_or_default(), prop),
+                &format!(
+                    "Undefined property {}::${}",
+                    parent.map(|p| p.name.to_string_lossy()).unwrap_or_default(),
+                    prop
+                ),
             ));
         };
-        let hook = pi.hooks.as_ref().and_then(|h| if set { h.set.clone() } else { h.get.clone() });
+        let hook = pi
+            .hooks
+            .as_ref()
+            .and_then(|h| if set { h.set.clone() } else { h.get.clone() });
         let call = match hook {
             Some(f) => {
                 let decl = self.class_by_name(f.class_name.as_ref().unwrap_or(&pi.class));
@@ -1131,7 +1297,11 @@ impl Vm {
                 }
             }
             None => {
-                let sig = if set { "set(string $name, mixed $value): mixed" } else { "get(string $name): mixed" };
+                let sig = if set {
+                    "set(string $name, mixed $value): mixed"
+                } else {
+                    "get(string $name): mixed"
+                };
                 let s = crate::builtins::sig::parse_sig(sig);
                 let b = crate::func::Builtin {
                     name: ZStr::from(format!("${prop}::{}", if set { "set" } else { "get" })),
@@ -1140,7 +1310,11 @@ impl Vm {
                     required: s.required,
                     return_type: None,
                     flags: 0,
-                    handler: if set { parent_backing_set } else { parent_backing_get },
+                    handler: if set {
+                        parent_backing_set
+                    } else {
+                        parent_backing_get
+                    },
                 };
                 let mut c = crate::vm::PendingCall {
                     this,

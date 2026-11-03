@@ -11,6 +11,7 @@
 
 pub use php_parser::ast;
 
+mod attrs;
 mod builtins;
 mod call;
 pub mod class;
@@ -35,8 +36,8 @@ mod place;
 mod props;
 mod reflection;
 mod typecheck;
-mod variance;
 pub mod types;
+mod variance;
 pub mod vm;
 mod weakref;
 
@@ -54,7 +55,16 @@ pub const PHP_VERSION: &str = "8.7.0-dev";
 /// The Zend engine version.
 pub const ZEND_VERSION: &str = "4.7.0-dev";
 /// Extensions reported by `get_loaded_extensions()`.
-pub const LOADED_EXTENSIONS: &[&str] = &["Core", "date", "pcre", "random", "Reflection", "SPL", "standard", "hash"];
+pub const LOADED_EXTENSIONS: &[&str] = &[
+    "Core",
+    "date",
+    "pcre",
+    "random",
+    "Reflection",
+    "SPL",
+    "standard",
+    "hash",
+];
 
 /// Options for creating a VM.
 #[derive(Debug, Default, Clone)]
@@ -64,10 +74,20 @@ pub struct VmOptions {
 }
 
 fn extra_directives() -> Vec<IniDirective> {
-    let d = |n: &str, v: Option<&str>, h: ModifyHandler| IniDirective::new(n, v, Access::ALL, h, "Core");
+    let d = |n: &str, v: Option<&str>, h: ModifyHandler| {
+        IniDirective::new(n, v, Access::ALL, h, "Core")
+    };
     vec![
-        d("include_path", Some(".:/usr/share/php"), ModifyHandler::None),
-        d("zend.exception_string_param_max_len", Some("15"), ModifyHandler::ExceptionStringParamMaxLen),
+        d(
+            "include_path",
+            Some(".:/usr/share/php"),
+            ModifyHandler::None,
+        ),
+        d(
+            "zend.exception_string_param_max_len",
+            Some("15"),
+            ModifyHandler::ExceptionStringParamMaxLen,
+        ),
         d("assert.active", Some("1"), ModifyHandler::Bool),
         d("assert.bail", Some("0"), ModifyHandler::Bool),
         d("assert.warning", Some("1"), ModifyHandler::Bool),
@@ -140,6 +160,9 @@ impl Vm {
             fibers: Vec::new(),
             loaded_extensions: Vec::new(),
             shutdown_hooks: Vec::new(),
+            startup_hooks: Vec::new(),
+            builtin_deprecations: std::collections::HashMap::new(),
+            const_deprecation_guard: std::collections::HashSet::new(),
             pending_call_dst: None,
             empty_code,
             empty_vars: Rc::new(RefCell::new(vm::VarStore::default())),
@@ -165,7 +188,9 @@ impl Vm {
                 };
             }
             "precision" => self.precision = self.ini.get_long("precision"),
-            "serialize_precision" => self.serialize_precision = self.ini.get_long("serialize_precision"),
+            "serialize_precision" => {
+                self.serialize_precision = self.ini.get_long("serialize_precision")
+            }
             _ => {}
         }
     }
@@ -179,7 +204,10 @@ impl Vm {
         let mut server = HashTable::new();
         for (k, v) in std::env::vars_os() {
             use std::os::unix::ffi::OsStrExt;
-            server.insert(ArrayKey::from_bytes(k.as_bytes()), Value::Str(ZStr::from(v.as_bytes())));
+            server.insert(
+                ArrayKey::from_bytes(k.as_bytes()),
+                Value::Str(ZStr::from(v.as_bytes())),
+            );
         }
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -190,7 +218,10 @@ impl Vm {
         server.insert(ArrayKey::from("SCRIPT_FILENAME"), s(script));
         server.insert(ArrayKey::from("PATH_TRANSLATED"), s(script));
         server.insert(ArrayKey::from("DOCUMENT_ROOT"), s(""));
-        server.insert(ArrayKey::from("REQUEST_TIME_FLOAT"), Value::Float(now.as_secs_f64()));
+        server.insert(
+            ArrayKey::from("REQUEST_TIME_FLOAT"),
+            Value::Float(now.as_secs_f64()),
+        );
         server.insert(
             ArrayKey::from("REQUEST_TIME"),
             Value::Int(i64::try_from(now.as_secs()).unwrap_or(0)),
@@ -200,7 +231,10 @@ impl Vm {
         let mut env = HashTable::new();
         for (k, v) in std::env::vars_os() {
             use std::os::unix::ffi::OsStrExt;
-            env.insert(ArrayKey::from_bytes(k.as_bytes()), Value::Str(ZStr::from(v.as_bytes())));
+            env.insert(
+                ArrayKey::from_bytes(k.as_bytes()),
+                Value::Str(ZStr::from(v.as_bytes())),
+            );
         }
         let mut g = self.globals.borrow_mut();
         let mut set = |name: &str, v: Value| {
@@ -228,9 +262,16 @@ impl Vm {
             self.ini.get_long("output_buffering"),
             self.ini.get_bool("implicit_flush"),
         );
+        for hook in self.startup_hooks.clone() {
+            hook(self);
+        }
         let p = ZStr::from(path);
         let mut r = Ok(());
-        let prepend = self.ini.get("auto_prepend_file").map(<[u8]>::to_vec).unwrap_or_default();
+        let prepend = self
+            .ini
+            .get("auto_prepend_file")
+            .map(<[u8]>::to_vec)
+            .unwrap_or_default();
         if !prepend.is_empty() {
             r = self.include_file(&String::from_utf8_lossy(&prepend));
         }
@@ -238,7 +279,11 @@ impl Vm {
             r = self.run_main(src, &p);
         }
         if r.is_ok() {
-            let append = self.ini.get("auto_append_file").map(<[u8]>::to_vec).unwrap_or_default();
+            let append = self
+                .ini
+                .get("auto_append_file")
+                .map(<[u8]>::to_vec)
+                .unwrap_or_default();
             if !append.is_empty() {
                 r = self.include_file(&String::from_utf8_lossy(&append));
             }

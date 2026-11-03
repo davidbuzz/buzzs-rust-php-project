@@ -54,6 +54,7 @@ pub trait Extension {
 pub struct ModuleBuilder<'a> {
     vm: &'a mut Vm,
     name: &'static str,
+    last_function: Option<ZStr>,
 }
 
 impl std::fmt::Debug for ModuleBuilder<'_> {
@@ -64,7 +65,11 @@ impl std::fmt::Debug for ModuleBuilder<'_> {
 
 impl<'a> ModuleBuilder<'a> {
     pub(crate) fn new(vm: &'a mut Vm, name: &'static str) -> Self {
-        ModuleBuilder { vm, name }
+        ModuleBuilder {
+            vm,
+            name,
+            last_function: None,
+        }
     }
 
     /// The VM (for registrations needing other classes, e.g. parents).
@@ -81,7 +86,30 @@ impl<'a> ModuleBuilder<'a> {
     /// (`"name(type $param = default, ...): ret"`; `&$x` for by-reference,
     /// `...$rest` for variadics). Re-registering a name replaces it.
     pub fn function(&mut self, signature: &str, handler: NativeFn) -> &mut Self {
-        crate::builtins::reg(self.vm, signature, handler);
+        let name = crate::builtins::reg(self.vm, signature, handler);
+        self.last_function = Some(name);
+        self
+    }
+
+    /// Marks the function registered last as `#[\Deprecated]`
+    /// (`since`/`message` may be empty): calls emit
+    /// `Deprecated: Function f() is deprecated since 8.4, message` before
+    /// argument parsing.
+    pub fn deprecated(&mut self, since: &str, message: &str) -> &mut Self {
+        if let Some(lc) = self.last_function.clone() {
+            if let Some(crate::func::Func::Builtin(b)) = self.vm.functions.get(&lc).cloned() {
+                let mut nb = (*b).clone();
+                nb.flags |= crate::func::flags::DEPRECATED;
+                self.vm
+                    .functions
+                    .insert(lc.clone(), crate::func::Func::Builtin(Rc::new(nb)));
+                let suffix = crate::attrs::format_suffix(
+                    Some(&ZStr::from(since)),
+                    Some(&ZStr::from(message)),
+                );
+                self.vm.builtin_deprecations.insert(lc, suffix);
+            }
+        }
         self
     }
 
@@ -109,6 +137,13 @@ impl<'a> ModuleBuilder<'a> {
     /// functions and destructors, before output is flushed (`RSHUTDOWN`).
     pub fn on_request_shutdown(&mut self, f: fn(&mut Vm)) -> &mut Self {
         self.vm.shutdown_hooks.push(f);
+        self
+    }
+
+    /// Registers a callback run at request startup, before the script
+    /// (`RINIT`): reset per-request state here.
+    pub fn on_request_startup(&mut self, f: fn(&mut Vm)) -> &mut Self {
+        self.vm.startup_hooks.push(f);
         self
     }
 
@@ -203,7 +238,25 @@ impl Vm {
             let mut m = ModuleBuilder::new(&mut vm, e.name());
             e.register(&mut m);
         }
+        vm.disable_functions();
         vm
+    }
+
+    /// `zend_disable_functions`: functions named in `disable_functions`
+    /// are removed after module startup.
+    pub(crate) fn disable_functions(&mut self) {
+        let list = self
+            .ini
+            .get("disable_functions")
+            .map(<[u8]>::to_vec)
+            .unwrap_or_default();
+        for name in list
+            .split(|&c| c == b',' || c == b' ' || c == b'\t')
+            .filter(|n| !n.is_empty())
+        {
+            self.functions
+                .remove(&ZStr::from(name.to_ascii_lowercase()));
+        }
     }
 
     /// Throws an exception of class `class` (any registered `Throwable`)

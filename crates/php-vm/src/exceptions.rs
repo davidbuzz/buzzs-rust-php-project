@@ -19,7 +19,12 @@ const PRIV: u32 = flags::PRIVATE;
 /// `previous` chain unless that would create a cycle.
 pub(crate) fn chain_previous(exc: &Obj, prev: &Obj) {
     const MAX_DEPTH: usize = 100_000;
-    if Obj::ptr_eq(exc, prev) {
+    // `zend_exception_set_previous`: the unwind-exit marker (fiber
+    // graceful exit) is never chained.
+    if Obj::ptr_eq(exc, prev)
+        || crate::fiber::is_graceful_exit(exc)
+        || crate::fiber::is_graceful_exit(prev)
+    {
         return;
     }
     let previous_of = |o: &Obj| match get_base_prop(o, "previous") {

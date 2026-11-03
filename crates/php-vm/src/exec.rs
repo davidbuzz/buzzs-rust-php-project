@@ -74,7 +74,12 @@ impl Vm {
     pub(crate) fn read_cv(&mut self, cv: u32) -> VmResult<Value> {
         let f = self.frame();
         let idx = f.cv_idx(cv);
-        let v = f.vars.borrow().slots.get(idx).and_then(|s| s.as_ref().map(Value::deref));
+        let v = f
+            .vars
+            .borrow()
+            .slots
+            .get(idx)
+            .and_then(|s| s.as_ref().map(Value::deref));
         match v {
             Some(v) => Ok(v),
             None => {
@@ -266,19 +271,18 @@ impl Vm {
                     }
                     Op::Unary { op, a, dst } => {
                         let x = self.read(*a)?;
-                        let r = match op {
-                            UnKind::Not => Value::Bool(!self.to_bool(&x)?),
-                            UnKind::Bool => Value::Bool(self.to_bool(&x)?),
-                            UnKind::BitNot => {
-                                ops::bit_not(&x, self).map_err(|e| self.rt_throw(e))?
-                            }
-                            UnKind::Neg => {
-                                ops::mul(&x, &Value::Int(-1), self).map_err(|e| self.rt_throw(e))?
-                            }
-                            UnKind::Plus => {
-                                ops::mul(&x, &Value::Int(1), self).map_err(|e| self.rt_throw(e))?
-                            }
-                        };
+                        let r =
+                            match op {
+                                UnKind::Not => Value::Bool(!self.to_bool(&x)?),
+                                UnKind::Bool => Value::Bool(self.to_bool(&x)?),
+                                UnKind::BitNot => {
+                                    ops::bit_not(&x, self).map_err(|e| self.rt_throw(e))?
+                                }
+                                UnKind::Neg => ops::mul(&x, &Value::Int(-1), self)
+                                    .map_err(|e| self.rt_throw(e))?,
+                                UnKind::Plus => ops::mul(&x, &Value::Int(1), self)
+                                    .map_err(|e| self.rt_throw(e))?,
+                            };
                         self.set_tmp(*dst, r);
                         Flow::Next
                     }
@@ -376,7 +380,9 @@ impl Vm {
                     }
                     Op::Coalesce { a, dst, target } => {
                         let v = match a {
-                            Operand::Cv(cv) => self.cv_get(*cv).map(|v| v.deref()).unwrap_or_default(),
+                            Operand::Cv(cv) => {
+                                self.cv_get(*cv).map(|v| v.deref()).unwrap_or_default()
+                            }
                             o => self.read(*o)?,
                         };
                         if !v.is_null() {
@@ -421,7 +427,12 @@ impl Vm {
                         self.set_dst(*dst, r);
                         Flow::Next
                     }
-                    Op::AssignOp { place, op, val, dst } => {
+                    Op::AssignOp {
+                        place,
+                        op,
+                        val,
+                        dst,
+                    } => {
                         let v = self.read(*val)?;
                         let r = self.place_assign_op(*place, *op, v)?;
                         self.set_dst(*dst, r);
@@ -486,10 +497,8 @@ impl Vm {
                         match t {
                             Some(o) => self.set_tmp(*dst, Value::Object(o)),
                             None => {
-                                return Err(self.make_throw(
-                                    "Error",
-                                    "Using $this when not in object context",
-                                ))
+                                return Err(self
+                                    .make_throw("Error", "Using $this when not in object context"))
                             }
                         }
                         Flow::Next
@@ -804,7 +813,12 @@ impl Vm {
                         }
                         Flow::Next
                     }
-                    Op::FeFetch { iter, end, val, key } => {
+                    Op::FeFetch {
+                        iter,
+                        end,
+                        val,
+                        key,
+                    } => {
                         let has = self.op_fe_fetch(*iter, *val, *key)?;
                         if !has {
                             self.frame_mut().ip = *end as usize;
@@ -1039,7 +1053,10 @@ impl Vm {
             }
             other => Err(self.make_throw(
                 "Error",
-                &format!("Only arrays and Traversables can be unpacked, {} given", crate::typecheck::given_type(&other)),
+                &format!(
+                    "Only arrays and Traversables can be unpacked, {} given",
+                    crate::typecheck::given_type(&other)
+                ),
             )),
         }
     }
@@ -1090,15 +1107,23 @@ impl Vm {
             if pending.is_empty() {
                 return Ok(());
             }
-            let mut first_err = None;
+            // `zend_objects_destroy_object`: a destructor runs with the
+            // pending exception set aside; a new exception gets the pending
+            // one as its innermost `previous`.
+            let mut pending_err: Option<Throw> = None;
             for o in pending {
                 if let Err(e) = self.call_destructor(&o) {
-                    if first_err.is_none() {
-                        first_err = Some(e);
-                    }
+                    pending_err = Some(match (pending_err.take(), e) {
+                        (Some(Throw::Exception(old)), Throw::Exception(new)) => {
+                            crate::exceptions::chain_previous(&new, &old);
+                            Throw::Exception(new)
+                        }
+                        (Some(old), Throw::Exception(_)) => old,
+                        (_, e) => e,
+                    });
                 }
             }
-            if let Some(e) = first_err {
+            if let Some(e) = pending_err {
                 return Err(e);
             }
         }

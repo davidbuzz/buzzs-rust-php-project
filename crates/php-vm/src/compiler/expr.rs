@@ -16,7 +16,14 @@ use php_runtime::{BinaryOp, CollectingContext, Value, ZArray, ZStr};
 pub(crate) fn is_superglobal(name: &[u8]) -> bool {
     matches!(
         name,
-        b"_GET" | b"_POST" | b"_COOKIE" | b"_SERVER" | b"_ENV" | b"_REQUEST" | b"_FILES" | b"_SESSION"
+        b"_GET"
+            | b"_POST"
+            | b"_COOKIE"
+            | b"_SERVER"
+            | b"_ENV"
+            | b"_REQUEST"
+            | b"_FILES"
+            | b"_SESSION"
     )
 }
 
@@ -58,10 +65,7 @@ impl Compiler {
     pub(crate) fn finish_short_circuit(&mut self, jumps: Vec<usize>, dst: u32) {
         let here = self.here();
         for j in jumps {
-            if let Op::JmpNull {
-                dst: d, target, ..
-            } = &mut self.f().ops[j]
-            {
+            if let Op::JmpNull { dst: d, target, .. } = &mut self.f().ops[j] {
                 *d = dst;
                 *target = here;
             }
@@ -121,7 +125,9 @@ impl Compiler {
                     fallback: None,
                     display: name,
                 });
-                self.emit(Op::Send { src: ArgSrc::Val(r) });
+                self.emit(Op::Send {
+                    src: ArgSrc::Val(r),
+                });
                 let t = self.tmp();
                 self.emit(Op::DoCall { dst: Some(t) });
                 Operand::Tmp(t)
@@ -197,7 +203,10 @@ impl Compiler {
                 }
                 let spec = self.class_spec(class)?;
                 let t = self.tmp();
-                self.emit(Op::FetchClassName { class: spec, dst: t });
+                self.emit(Op::FetchClassName {
+                    class: spec,
+                    dst: t,
+                });
                 Operand::Tmp(t)
             }
             ExprKind::Var(VarName::Name(id)) => {
@@ -239,13 +248,13 @@ impl Compiler {
             ExprKind::Call { .. }
             | ExprKind::MethodCall { .. }
             | ExprKind::StaticCall { .. }
-            | ExprKind::New { .. } => self
-                .compile_call_like(e, true)?
-                .unwrap_or(Operand::Unused),
+            | ExprKind::New { .. } => self.compile_call_like(e, true)?.unwrap_or(Operand::Unused),
             ExprKind::Assign { target, value } => self
                 .compile_assign(target, value, line, true)?
                 .unwrap_or(Operand::Unused),
-            ExprKind::AssignRef { target, value } => self.compile_assign_ref(target, value, line)?,
+            ExprKind::AssignRef { target, value } => {
+                self.compile_assign_ref(target, value, line)?
+            }
             ExprKind::AssignOp { op, target, value } => self
                 .compile_assign_op(*op, target, value, true, line)?
                 .unwrap_or(Operand::Unused),
@@ -345,7 +354,8 @@ impl Compiler {
             }
             ExprKind::Empty(inner) => {
                 let t = self.tmp();
-                if is_ref_expr(inner) && !matches!(inner.kind, ExprKind::Var(VarName::Name(ref id)) if id.name == b"this")
+                if is_ref_expr(inner)
+                    && !matches!(inner.kind, ExprKind::Var(VarName::Name(ref id)) if id.name == b"this")
                 {
                     let saved = std::mem::take(&mut self.f().sc_jumps);
                     let p = self.compile_place(inner, false);
@@ -417,7 +427,10 @@ impl Compiler {
                     expr.kind,
                     ExprKind::Int(_) | ExprKind::Float(_) | ExprKind::String(_)
                 ) {
-                    return self.err("instanceof expects an object instance, constant given", line);
+                    return self.err(
+                        "instanceof expects an object instance, constant given",
+                        line,
+                    );
                 }
                 let a = self.compile_expr(expr)?;
                 let spec = self.class_spec(class)?;
@@ -493,7 +506,10 @@ impl Compiler {
                 let v = self.compile_expr(inner)?;
                 self.f().line = line;
                 let t = self.tmp();
-                self.emit(Op::YieldFrom { src: v, dst: Some(t) });
+                self.emit(Op::YieldFrom {
+                    src: v,
+                    dst: Some(t),
+                });
                 Operand::Tmp(t)
             }
             ExprKind::Throw(inner) => {
@@ -523,7 +539,9 @@ impl Compiler {
                         self.emit(Op::InitDynCall { callee: c });
                     }
                 }
-                self.emit(Op::Send { src: ArgSrc::Val(l) });
+                self.emit(Op::Send {
+                    src: ArgSrc::Val(l),
+                });
                 let t = self.tmp();
                 self.f().line = line;
                 self.emit(Op::DoCall { dst: Some(t) });
@@ -535,7 +553,10 @@ impl Compiler {
     fn check_yield(&mut self, line: u32) -> CResult<()> {
         let k = self.fref().kind;
         if matches!(k, FnKind::Main | FnKind::ConstExpr) {
-            return self.err("The \"yield\" expression can only be used inside a function", line);
+            return self.err(
+                "The \"yield\" expression can only be used inside a function",
+                line,
+            );
         }
         Ok(())
     }
@@ -602,7 +623,10 @@ impl Compiler {
             };
             if it.by_ref {
                 if !is_ref_expr(&it.value) {
-                    return self.err("Cannot create references to/from string offsets nor overloaded objects", line);
+                    return self.err(
+                        "Cannot create references to/from string offsets nor overloaded objects",
+                        line,
+                    );
                 }
                 let p = self.compile_place(&it.value, false)?;
                 let pid = self.place(p);
@@ -613,7 +637,11 @@ impl Compiler {
                 });
             } else {
                 let v = self.compile_expr(&it.value)?;
-                self.emit(Op::ArrayAdd { arr: t, key, val: v });
+                self.emit(Op::ArrayAdd {
+                    arr: t,
+                    key,
+                    val: v,
+                });
             }
         }
         Ok(Operand::Tmp(t))
@@ -794,7 +822,10 @@ impl Compiler {
                     VarName::Expr(ex) => self.compile_expr(ex)?,
                 };
                 Place {
-                    base: PlaceBase::StaticProp { class: spec, name: n },
+                    base: PlaceBase::StaticProp {
+                        class: spec,
+                        name: n,
+                    },
                     segs: Vec::new(),
                 }
             }
@@ -810,9 +841,10 @@ impl Compiler {
 
     fn compile_place_base(&mut self, base: &Expr) -> CResult<Place> {
         match base.kind {
-            ExprKind::Var(_) | ExprKind::Dim { .. } | ExprKind::Prop { .. } | ExprKind::StaticProp { .. } => {
-                self.compile_place(base, false)
-            }
+            ExprKind::Var(_)
+            | ExprKind::Dim { .. }
+            | ExprKind::Prop { .. }
+            | ExprKind::StaticProp { .. } => self.compile_place(base, false),
             _ => {
                 let v = self.compile_chain(base)?;
                 Ok(Place {
@@ -829,12 +861,21 @@ impl Compiler {
             return self.err("Can't use nullsafe operator in write context", e.span.line);
         }
         match &e.kind {
-            ExprKind::Var(_) | ExprKind::Dim { .. } | ExprKind::Prop { .. } | ExprKind::StaticProp { .. } => {}
+            ExprKind::Var(_)
+            | ExprKind::Dim { .. }
+            | ExprKind::Prop { .. }
+            | ExprKind::StaticProp { .. } => {}
             ExprKind::Call { .. } | ExprKind::MethodCall { .. } | ExprKind::StaticCall { .. } => {
-                return self.err("Can't use function return value in write context", e.span.line);
+                return self.err(
+                    "Can't use function return value in write context",
+                    e.span.line,
+                );
             }
             _ => {
-                return self.err("Cannot use temporary expression in write context", e.span.line);
+                return self.err(
+                    "Cannot use temporary expression in write context",
+                    e.span.line,
+                );
             }
         }
         if let ExprKind::Var(VarName::Name(id)) = &e.kind {
@@ -896,6 +937,17 @@ impl Compiler {
         match op {
             AB::BoolAnd | AB::BoolOr => {
                 let l = self.compile_expr(left)?;
+                // `zend_compile_short_circuiting`: a constant left side
+                // that decides the result means the right side is never
+                // compiled.
+                if let Operand::Lit(i) = l {
+                    let lv = self.f().literals.get(i as usize).cloned();
+                    if let Some(truthy) = lv.as_ref().and_then(const_truthiness) {
+                        if (op == AB::BoolAnd) != truthy {
+                            return Ok(self.lit(Value::Bool(truthy)));
+                        }
+                    }
+                }
                 let j = if op == AB::BoolAnd {
                     self.emit(Op::JmpZEx {
                         a: l,
@@ -1005,7 +1057,9 @@ impl Compiler {
         need: bool,
     ) -> CResult<Option<Operand>> {
         match &target.kind {
-            ExprKind::Var(VarName::Name(id)) if id.name != b"GLOBALS" && !is_superglobal(&id.name) => {
+            ExprKind::Var(VarName::Name(id))
+                if id.name != b"GLOBALS" && !is_superglobal(&id.name) =>
+            {
                 if id.name == b"this" {
                     return self.err("Cannot re-assign $this", line);
                 }
@@ -1017,7 +1071,10 @@ impl Compiler {
                 Ok(dst.map(Operand::Tmp))
             }
             ExprKind::Array { items, .. } => {
-                let has_ref = items.iter().flatten().any(|i| i.by_ref || has_nested_ref(i));
+                let has_ref = items
+                    .iter()
+                    .flatten()
+                    .any(|i| i.by_ref || has_nested_ref(i));
                 if has_ref && is_ref_expr(value) {
                     let src = self.compile_place(value, false)?;
                     self.compile_destructure_ref(items, &src, line)?;
@@ -1096,7 +1153,10 @@ impl Compiler {
         let keyed = items.iter().flatten().any(|i| i.key.is_some());
         let unkeyed = items.iter().flatten().any(|i| i.key.is_none());
         if keyed && unkeyed {
-            return self.err("Cannot mix keyed and unkeyed array entries in assignments", line);
+            return self.err(
+                "Cannot mix keyed and unkeyed array entries in assignments",
+                line,
+            );
         }
         let mut idx = 0i64;
         for it in items {
@@ -1253,7 +1313,12 @@ impl Compiler {
         Ok(dst.map(Operand::Tmp))
     }
 
-    fn compile_match(&mut self, subject: &Expr, arms: &[ast::MatchArm], line: u32) -> CResult<Operand> {
+    fn compile_match(
+        &mut self,
+        subject: &Expr,
+        arms: &[ast::MatchArm],
+        line: u32,
+    ) -> CResult<Operand> {
         let s = self.compile_expr(subject)?;
         let s = match s {
             Operand::Cv(_) => {
@@ -1285,7 +1350,10 @@ impl Compiler {
                 }
                 None => {
                     if default_arm.is_some() {
-                        return self.err("Match expressions may only contain one default arm", arm.span.line);
+                        return self.err(
+                            "Match expressions may only contain one default arm",
+                            arm.span.line,
+                        );
                     }
                     default_arm = Some(i);
                 }
@@ -1298,7 +1366,10 @@ impl Compiler {
             starts.push(self.here());
             self.f().line = arm.body.span.line;
             let v = self.compile_expr(&arm.body)?;
-            self.emit(Op::Move { src: v, dst: result });
+            self.emit(Op::Move {
+                src: v,
+                dst: result,
+            });
             ends.push(self.emit(Op::Jmp(0)));
         }
         for (i, j) in arm_jumps {
@@ -1357,11 +1428,7 @@ impl Compiler {
                 nullsafe,
             } => {
                 let o = self.compile_chain(object)?;
-                let o = if let Operand::Cv(_) = o {
-                    o
-                } else {
-                    o
-                };
+                let o = if let Operand::Cv(_) = o { o } else { o };
                 if *nullsafe {
                     let j = self.emit(Op::JmpNull {
                         a: Compiler::keep(o),
@@ -1376,17 +1443,28 @@ impl Compiler {
                 self.finish_call(args, line, need)
             }
             ExprKind::StaticCall { class, name, args } if class.is_parent_hook_call(name) => {
-                let ast::ClassRef::Expr(sp) = &**class else { unreachable!("parent hook call") };
-                let ExprKind::StaticProp { name: VarName::Name(prop), .. } = &sp.kind else {
+                let ast::ClassRef::Expr(sp) = &**class else {
                     unreachable!("parent hook call")
                 };
-                let MemberName::Ident(kind) = name else { unreachable!("parent hook call") };
+                let ExprKind::StaticProp {
+                    name: VarName::Name(prop),
+                    ..
+                } = &sp.kind
+                else {
+                    unreachable!("parent hook call")
+                };
+                let MemberName::Ident(kind) = name else {
+                    unreachable!("parent hook call")
+                };
                 let is_set = kind.eq_ignore_case("set");
                 let kname = if is_set { "set" } else { "get" };
                 match self.hook_prop.clone() {
                     None => {
                         return self.err(
-                            format!("Must not use parent::${}::{kname}() outside a property hook", prop.as_str_lossy()),
+                            format!(
+                                "Must not use parent::${}::{kname}() outside a property hook",
+                                prop.as_str_lossy()
+                            ),
                             line,
                         )
                     }
@@ -1416,14 +1494,20 @@ impl Compiler {
                 }
                 let p = self.lit_str(&prop.name);
                 self.f().line = line;
-                self.emit(Op::InitParentHook { prop: p, set: is_set });
+                self.emit(Op::InitParentHook {
+                    prop: p,
+                    set: is_set,
+                });
                 self.finish_call(args, line, need)
             }
             ExprKind::StaticCall { class, name, args } => {
                 let spec = self.class_spec(class)?;
                 let n = self.member_name(name)?;
                 self.f().line = line;
-                self.emit(Op::InitStaticCall { class: spec, name: n });
+                self.emit(Op::InitStaticCall {
+                    class: spec,
+                    name: n,
+                });
                 self.finish_call(args, line, need)
             }
             ExprKind::New { class, args } => {
@@ -1486,7 +1570,10 @@ impl Compiler {
             match &a.kind {
                 ArgKind::Positional(ex) => {
                     if seen_named {
-                        return self.err("Cannot use positional argument after named argument", a.span.line);
+                        return self.err(
+                            "Cannot use positional argument after named argument",
+                            a.span.line,
+                        );
                     }
                     if seen_unpack {
                         return self.err(
@@ -1499,7 +1586,10 @@ impl Compiler {
                 }
                 ArgKind::Unpack(ex) => {
                     if seen_named {
-                        return self.err("Cannot use argument unpacking after named arguments", a.span.line);
+                        return self.err(
+                            "Cannot use argument unpacking after named arguments",
+                            a.span.line,
+                        );
                     }
                     seen_unpack = true;
                     let v = self.compile_expr(ex)?;
@@ -1511,7 +1601,9 @@ impl Compiler {
                     let src = self.arg_src_for(value)?;
                     self.emit(Op::SendNamed { name: n, src });
                 }
-                ArgKind::Placeholder | ArgKind::VariadicPlaceholder | ArgKind::NamedPlaceholder(_) => {}
+                ArgKind::Placeholder
+                | ArgKind::VariadicPlaceholder
+                | ArgKind::NamedPlaceholder(_) => {}
             }
         }
         Ok(())
@@ -1568,7 +1660,9 @@ impl Compiler {
                 if args.args.len() == 1 && matches!(args.args[0].kind, ArgKind::Positional(_)) {
                     let msg = php_parser::export::assert_message(&args.args[0]);
                     let l = self.lit(Value::Str(ZStr::from(msg)));
-                    self.emit(Op::Send { src: ArgSrc::Val(l) });
+                    self.emit(Op::Send {
+                        src: ArgSrc::Val(l),
+                    });
                 }
                 self.f().line = line;
                 self.emit(Op::DoCall { dst: Some(t) });
@@ -1711,7 +1805,10 @@ fn contains_nullsafe(e: &Expr) -> bool {
 
 fn has_nested_ref(i: &ArrayItem) -> bool {
     if let ExprKind::Array { items, .. } = &i.value.kind {
-        items.iter().flatten().any(|x| x.by_ref || has_nested_ref(x))
+        items
+            .iter()
+            .flatten()
+            .any(|x| x.by_ref || has_nested_ref(x))
     } else {
         false
     }
@@ -1723,5 +1820,19 @@ pub(crate) fn dirname(path: &[u8]) -> Vec<u8> {
         Some(0) => b"/".to_vec(),
         Some(p) => path[..p].to_vec(),
         None => b".".to_vec(),
+    }
+}
+
+/// `zend_is_true` of a compile-time literal (`None` for values whose
+/// truthiness is not static).
+fn const_truthiness(v: &Value) -> Option<bool> {
+    match v {
+        Value::Null => Some(false),
+        Value::Bool(b) => Some(*b),
+        Value::Int(i) => Some(*i != 0),
+        Value::Float(f) => Some(*f != 0.0),
+        Value::Str(s) => Some(!(s.is_empty() || s.as_bytes() == b"0")),
+        Value::Array(a) => Some(!a.is_empty()),
+        _ => None,
     }
 }

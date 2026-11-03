@@ -61,7 +61,9 @@ impl Vm {
                         _ => {
                             // Private props of other classes / inaccessible.
                             if pi.visibility() == flags::PRIVATE
-                                && scope.as_ref().is_some_and(|s| s.name.eq_ignore_ascii_case(pi.class.as_bytes()))
+                                && scope.as_ref().is_some_and(|s| {
+                                    s.name.eq_ignore_ascii_case(pi.class.as_bytes())
+                                })
                             {
                                 out.push((Value::Str(name.clone()), name, Some(pi.class.clone())));
                             }
@@ -166,25 +168,60 @@ impl Vm {
                 ));
             }
             if self.gen_finished(&o) {
-                return Err(self.make_throw("Exception", "Cannot traverse an already closed generator"));
+                return Err(
+                    self.make_throw("Exception", "Cannot traverse an already closed generator")
+                );
             }
             self.gen_rewind(&o)?;
-            return Ok(ForeachIter::Generator { obj: o, started: false });
+            return Ok(ForeachIter::Generator {
+                obj: o,
+                started: false,
+            });
         }
         if self.instance_of(&o, b"traversable") {
             if by_ref {
-                return Err(self.make_throw("Error", "An iterator cannot be used with foreach by reference"));
+                // `zend_user_it_get_new_iterator`: an IteratorAggregate
+                // delegates to its iterator's own by-ref support (a
+                // by-reference generator); user Iterators have none.
+                if !self.instance_of(&o, b"iterator") && self.instance_of(&o, b"iteratoraggregate")
+                {
+                    let r = self.call_method_name(&o, "getIterator", Vec::new())?;
+                    if let Value::Object(n) = r {
+                        if self.instance_of(&n, b"traversable") {
+                            return self.object_iter(n, true);
+                        }
+                    }
+                    return Err(self.make_throw(
+                        "Exception",
+                        &format!(
+                            "Objects returned by {}::getIterator() must be traversable or implement interface Iterator",
+                            object::display_name(&object::class_of(&o).name)
+                        ),
+                    ));
+                }
+                return Err(self.make_throw(
+                    "Error",
+                    "An iterator cannot be used with foreach by reference",
+                ));
             }
             let it = self.get_iterator(&o)?;
             if object::has_internal::<crate::generator::GenData>(&it) {
                 if self.gen_finished(&it) {
-                    return Err(self.make_throw("Exception", "Cannot traverse an already closed generator"));
+                    return Err(
+                        self.make_throw("Exception", "Cannot traverse an already closed generator")
+                    );
                 }
                 self.gen_rewind(&it)?;
-                return Ok(ForeachIter::Generator { obj: it, started: false });
+                return Ok(ForeachIter::Generator {
+                    obj: it,
+                    started: false,
+                });
             }
             self.call_method_name(&it, "rewind", Vec::new())?;
-            return Ok(ForeachIter::Iterator { obj: it, started: false });
+            return Ok(ForeachIter::Iterator {
+                obj: it,
+                started: false,
+            });
         }
         let keys = self.visible_props(&o);
         if keys.is_empty() {
@@ -358,7 +395,11 @@ impl Vm {
         let cls = object::class_of(o);
         if let Some(pi) = cls.prop_map.get(name) {
             if pi.flags & flags::STATIC == 0 {
-                return object::data(o).slots.borrow().get(pi.slot as usize).is_some_and(Option::is_some);
+                return object::data(o)
+                    .slots
+                    .borrow()
+                    .get(pi.slot as usize)
+                    .is_some_and(Option::is_some);
             }
         }
         object::data(o)
@@ -369,7 +410,11 @@ impl Vm {
     }
 
     pub(crate) fn op_fe_free(&mut self, iter: u32) {
-        let it = self.frame_mut().iters.get_mut(iter as usize).and_then(Option::take);
+        let it = self
+            .frame_mut()
+            .iters
+            .get_mut(iter as usize)
+            .and_then(Option::take);
         if let Some(ForeachIter::ArrayRef { r, id }) = it {
             if r.try_borrow().is_some() {
                 let mut b = r.borrow_mut();
@@ -401,7 +446,10 @@ impl Vm {
                 }
                 if object::has_internal::<crate::generator::GenData>(o) {
                     if self.gen_finished(o) {
-                        return Err(self.make_throw("Exception", "Cannot traverse an already closed generator"));
+                        return Err(self.make_throw(
+                            "Exception",
+                            "Cannot traverse an already closed generator",
+                        ));
                     }
                     self.gen_rewind(o)?;
                     while self.gen_valid(o)? {
@@ -439,7 +487,11 @@ impl Vm {
     }
 
     /// Converts iteration results to an array (`iterator_to_array`).
-    pub(crate) fn pairs_to_array(&mut self, pairs: Vec<(Value, Value)>, preserve_keys: bool) -> VmResult<ZArray> {
+    pub(crate) fn pairs_to_array(
+        &mut self,
+        pairs: Vec<(Value, Value)>,
+        preserve_keys: bool,
+    ) -> VmResult<ZArray> {
         let mut t = php_runtime::HashTable::new();
         for (k, v) in pairs {
             if preserve_keys {
@@ -461,7 +513,11 @@ impl Vm {
     }
 
     /// Converts an offset to an array key; `None` after an error was thrown.
-    pub(crate) fn array_key(&mut self, k: &Value, ctx: crate::exec::KeyCtx) -> VmResult<Option<ArrayKey>> {
+    pub(crate) fn array_key(
+        &mut self,
+        k: &Value,
+        ctx: crate::exec::KeyCtx,
+    ) -> VmResult<Option<ArrayKey>> {
         let mut diags = Vec::new();
         let r = crate::place::key_of(k, &mut diags, ctx);
         self.flush_diags(diags)?;

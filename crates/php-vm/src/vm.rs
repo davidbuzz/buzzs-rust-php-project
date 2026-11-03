@@ -461,6 +461,13 @@ pub struct Vm {
     pub loaded_extensions: Vec<String>,
     /// Request shutdown hooks of extensions.
     pub shutdown_hooks: Vec<fn(&mut Vm)>,
+    /// Request startup hooks of extensions (`RINIT`).
+    pub startup_hooks: Vec<fn(&mut Vm)>,
+    /// `#[\Deprecated]` suffixes (" since X, msg") of native functions,
+    /// by lowercase name.
+    pub builtin_deprecations: HashMap<ZStr, Vec<u8>>,
+    /// Class constants whose `#[\Deprecated]` notice is being built.
+    pub(crate) const_deprecation_guard: HashSet<usize>,
     /// Shared empty code for builtin frames.
     pub empty_code: Rc<OpArray>,
     /// Shared empty variable store for builtin frames.
