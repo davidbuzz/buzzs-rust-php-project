@@ -96,7 +96,7 @@ Keep rows when they reach 100%; they become the completion record. Add rows as g
 | ext/sockets | 0% | low | Low-level sockets API (133). |
 | ext/fileinfo | 0% | low | libmagic-compatible detection (66). |
 | ext/exif | 0% | low | (107). |
-| ext/calendar | 0% | low | (55). |
+| ext/calendar | 60% | low | (55). `crates/php-calendar` is complete as a library (php-src master semantics): ports of gregor.c/julian.c/jewish.c/french.c/dow.c/easter.c/cal_unix.c including the C `int`/`zend_long` overflow guards; every userland function (`cal_days_in_month`, `cal_from_jd` array shape, `cal_to_jd`, `cal_info`, `easter_date`/`easter_days` with all `CAL_EASTER_*` modes and year-range ValueErrors, `*tojd`/`jdto*`, `jddayofweek`, `jdmonthname`, `jdtojewish` with ISO-8859-8 Hebrew output and `CAL_JEWISH_*` flags, `jdtounix`/`unixtojd`), all constants and exact error texts. Verified by 40k `/usr/bin/php` oracle records (`tests/data/gen_oracle.php`) plus every phpt expectation (incl. master-only fixes). Remaining: VM bindings (the VM supplies `mktime`/`localtime` closures for `easter_date`/`unixtojd` and the current year for `easter_*(null)`). |
 | ext/gettext | 0% | low | (19). |
 | ext/intl | 0% | low | ICU-backed i18n; large (595). |
 | ext/gd | 0% | low | Image processing (341). |
