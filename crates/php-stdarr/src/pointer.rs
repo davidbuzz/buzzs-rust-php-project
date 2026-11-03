@@ -1,7 +1,7 @@
 //! The internal array pointer: `current`/`pos`, `key`, `next`, `prev`,
 //! `reset`, `end`.
 //!
-//! Objects are accepted with the "Calling X() on an object is deprecated"
+//! Objects are accepted with the "Calling `X()` on an object is deprecated"
 //! deprecation and operate on a snapshot of the object's property table
 //! (the VM owns property tables, so pointer movement on objects does not
 //! persist).

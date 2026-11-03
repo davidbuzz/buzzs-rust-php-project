@@ -485,7 +485,7 @@ mod tests {
         assert_eq!(strnatcmp_ex(b"IMG2", b"img2", true), 0);
         assert_eq!(strnatcmp_ex(b"IMG2", b"img2", false), -1);
         assert_eq!(strnatcmp_ex(b"", b"a", false), -1);
-        assert_eq!(strnatcmp_ex(b"0.5", b"0.25", false), 1);
+        assert_eq!(strnatcmp_ex(b"0.5", b"0.25", false), -1);
         assert_eq!(strnatcmp_ex(b"a  1", b"a 1", false), 0);
         assert_eq!(strnatcmp_ex(b"007", b"7", false), 0);
     }

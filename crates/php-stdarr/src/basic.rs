@@ -819,21 +819,22 @@ fn binop<C: RuntimeContext + ?Sized>(
             }
             continue;
         }
-        match op(&acc, entry, ctx) {
-            Ok(v) => acc = v,
-            Err(_) => {
-                match entry {
-                    Value::Resource(r) => acc = op(&acc, &Value::Int(r.handle()), ctx)?,
-                    Value::Str(_) => acc = op(&acc, &Value::Int(0), ctx)?,
-                    _ => {}
-                }
-                warn(
-                    ctx,
-                    func,
-                    &format!("{op_name} is not supported on type {}", entry.type_name()),
-                )?;
-            }
+        if let Ok(v) = op(&acc, entry, ctx) {
+            acc = v;
+            continue;
         }
+        // The operation threw (and PHP clears the exception): resources and
+        // strings keep their pre-8.3 integer behaviour, then warn.
+        match entry {
+            Value::Resource(r) => acc = op(&acc, &Value::Int(r.handle()), ctx)?,
+            Value::Str(_) => acc = op(&acc, &Value::Int(0), ctx)?,
+            _ => {}
+        }
+        warn(
+            ctx,
+            func,
+            &format!("{op_name} is not supported on type {}", entry.type_name()),
+        )?;
     }
     Ok(acc)
 }

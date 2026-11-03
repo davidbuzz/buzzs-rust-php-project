@@ -189,6 +189,7 @@ fn long_size(start: i64, end: i64, step: u64) -> RtResult<u32> {
 /// `range(string|int|float $start, string|int|float $end, int|float $step = 1): array`.
 #[allow(
     clippy::too_many_lines,
+    clippy::comparison_chain,
     clippy::cast_precision_loss,
     clippy::cast_possible_wrap,
     clippy::cast_sign_loss

@@ -119,12 +119,12 @@ fn key_based<C: RuntimeContext + ?Sized>(
     mut data: DataCmp<'_, '_, C>,
     intersect: bool,
 ) -> RtResult<ZArray> {
-    let arrs = check_arrays(func, args)?;
+    let tables = check_arrays(func, args)?;
     let mut out = HashTable::new();
-    for (k, val) in arrs[0].iter() {
+    for (k, val) in tables[0].iter() {
         let val = copy_elem(val);
         let mut ok = true;
-        for other in &arrs[1..] {
+        for other in &tables[1..] {
             let matched = match other.get(k) {
                 None => false,
                 Some(d) => match &mut data {
@@ -209,15 +209,15 @@ impl<C: ArrayContext + ?Sized> Cmps<'_, '_, C> {
 
 type List = Vec<(ArrayKey, Value)>;
 
-/// Builds and sorts the per-argument bucket lists.
+/// Builds and sorts the per-argument bucket buckets.
 fn sorted_lists<C: ArrayContext + ?Sized>(
     ctx: &mut C,
-    arrs: &[&ZArray],
+    tables: &[&ZArray],
     behavior: Behavior,
     cmps: &mut Cmps<'_, '_, C>,
 ) -> Vec<List> {
-    let mut lists = Vec::with_capacity(arrs.len());
-    for a in arrs {
+    let mut buckets = Vec::with_capacity(tables.len());
+    for a in tables {
         let mut list: List = a.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
         if list.len() > 1 {
             if behavior == Behavior::Normal {
@@ -232,9 +232,9 @@ fn sorted_lists<C: ArrayContext + ?Sized>(
                 );
             }
         }
-        lists.push(list);
+        buckets.push(list);
     }
-    lists
+    buckets
 }
 
 /// Port of `php_array_intersect`.
@@ -257,40 +257,40 @@ fn intersect_generic<'b, C: ArrayContext + ?Sized>(
         warned: false,
         slot: ErrSlot::default(),
     };
-    let arrs = check_arrays(func, args)?;
-    let lists = sorted_lists(ctx, &arrs, behavior, &mut cmps);
-    let mut result: HashTable = (**arrs[0]).clone();
-    let argc = lists.len();
-    let lens: Vec<usize> = lists.iter().map(Vec::len).collect();
-    let mut ptrs = vec![0usize; argc];
+    let tables = check_arrays(func, args)?;
+    let buckets = sorted_lists(ctx, &tables, behavior, &mut cmps);
+    let mut result: HashTable = (**tables[0]).clone();
+    let n_args = buckets.len();
+    let sizes: Vec<usize> = buckets.iter().map(Vec::len).collect();
+    let mut ptrs = vec![0usize; n_args];
     let mut c: i32 = 0;
-    'outer: while ptrs[0] < lens[0] {
+    'outer: while ptrs[0] < sizes[0] {
         if behavior != Behavior::Normal && key_user {
             cmps.current_is_key = true;
         }
         let mut i = 1;
-        while i < argc {
+        while i < n_args {
             if behavior == Behavior::Normal {
-                while ptrs[i] < lens[i] {
-                    c = cmps.data(ctx, &lists[0][ptrs[0]], &lists[i][ptrs[i]]);
+                while ptrs[i] < sizes[i] {
+                    c = cmps.data(ctx, &buckets[0][ptrs[0]], &buckets[i][ptrs[i]]);
                     if c <= 0 {
                         break;
                     }
                     ptrs[i] += 1;
                 }
             } else {
-                while ptrs[i] < lens[i] {
-                    c = cmps.key(ctx, &lists[0][ptrs[0]], &lists[i][ptrs[i]]);
+                while ptrs[i] < sizes[i] {
+                    c = cmps.key(ctx, &buckets[0][ptrs[0]], &buckets[i][ptrs[i]]);
                     if c <= 0 {
                         break;
                     }
                     ptrs[i] += 1;
                 }
-                if c == 0 && ptrs[i] < lens[i] && behavior == Behavior::Assoc {
+                if c == 0 && ptrs[i] < sizes[i] && behavior == Behavior::Assoc {
                     if data_user {
                         cmps.current_is_key = false;
                     }
-                    if cmps.data(ctx, &lists[0][ptrs[0]], &lists[i][ptrs[i]]) != 0 {
+                    if cmps.data(ctx, &buckets[0][ptrs[0]], &buckets[i][ptrs[i]]) != 0 {
                         c = 1;
                         if key_user {
                             cmps.current_is_key = true;
@@ -298,9 +298,9 @@ fn intersect_generic<'b, C: ArrayContext + ?Sized>(
                     }
                 }
             }
-            if ptrs[i] == lens[i] {
-                while ptrs[0] < lens[0] {
-                    result.remove(&lists[0][ptrs[0]].0);
+            if ptrs[i] == sizes[i] {
+                while ptrs[0] < sizes[0] {
+                    result.remove(&buckets[0][ptrs[0]].0);
                     ptrs[0] += 1;
                 }
                 break 'outer;
@@ -313,13 +313,13 @@ fn intersect_generic<'b, C: ArrayContext + ?Sized>(
         }
         if c != 0 {
             loop {
-                result.remove(&lists[0][ptrs[0]].0);
+                result.remove(&buckets[0][ptrs[0]].0);
                 ptrs[0] += 1;
-                if ptrs[0] == lens[0] {
+                if ptrs[0] == sizes[0] {
                     break 'outer;
                 }
                 if behavior == Behavior::Normal {
-                    if cmps.data(ctx, &lists[0][ptrs[0]], &lists[i][ptrs[i]]) >= 0 {
+                    if cmps.data(ctx, &buckets[0][ptrs[0]], &buckets[i][ptrs[i]]) >= 0 {
                         break;
                     }
                 } else {
@@ -329,11 +329,11 @@ fn intersect_generic<'b, C: ArrayContext + ?Sized>(
         } else {
             loop {
                 ptrs[0] += 1;
-                if ptrs[0] == lens[0] {
+                if ptrs[0] == sizes[0] {
                     break 'outer;
                 }
                 if behavior == Behavior::Normal {
-                    if cmps.data(ctx, &lists[0][ptrs[0] - 1], &lists[0][ptrs[0]]) != 0 {
+                    if cmps.data(ctx, &buckets[0][ptrs[0] - 1], &buckets[0][ptrs[0]]) != 0 {
                         break;
                     }
                 } else {
@@ -366,30 +366,30 @@ fn diff_generic<'b, C: ArrayContext + ?Sized>(
         warned: false,
         slot: ErrSlot::default(),
     };
-    let arrs = check_arrays(func, args)?;
-    let lists = sorted_lists(ctx, &arrs, behavior, &mut cmps);
-    let mut result: HashTable = (**arrs[0]).clone();
-    let argc = lists.len();
-    let lens: Vec<usize> = lists.iter().map(Vec::len).collect();
-    let mut ptrs = vec![0usize; argc];
-    'outer: while ptrs[0] < lens[0] {
+    let tables = check_arrays(func, args)?;
+    let buckets = sorted_lists(ctx, &tables, behavior, &mut cmps);
+    let mut result: HashTable = (**tables[0]).clone();
+    let n_args = buckets.len();
+    let sizes: Vec<usize> = buckets.iter().map(Vec::len).collect();
+    let mut ptrs = vec![0usize; n_args];
+    'outer: while ptrs[0] < sizes[0] {
         if behavior != Behavior::Normal && key_user {
             cmps.current_is_key = true;
         }
         let mut c: i32 = 1;
-        for i in 1..argc {
+        for i in 1..n_args {
             let mut ptr = ptrs[i];
             if behavior == Behavior::Normal {
-                while ptrs[i] < lens[i] {
-                    c = cmps.data(ctx, &lists[0][ptrs[0]], &lists[i][ptrs[i]]);
+                while ptrs[i] < sizes[i] {
+                    c = cmps.data(ctx, &buckets[0][ptrs[0]], &buckets[i][ptrs[i]]);
                     if c <= 0 {
                         break;
                     }
                     ptrs[i] += 1;
                 }
             } else {
-                while ptr < lens[i] {
-                    c = cmps.key(ctx, &lists[0][ptrs[0]], &lists[i][ptr]);
+                while ptr < sizes[i] {
+                    c = cmps.key(ctx, &buckets[0][ptrs[0]], &buckets[i][ptr]);
                     if c == 0 {
                         break;
                     }
@@ -399,17 +399,17 @@ fn diff_generic<'b, C: ArrayContext + ?Sized>(
             if c == 0 {
                 match behavior {
                     Behavior::Normal => {
-                        if ptrs[i] < lens[i] {
+                        if ptrs[i] < sizes[i] {
                             ptrs[i] += 1;
                         }
                         break;
                     }
                     Behavior::Assoc => {
-                        if ptr < lens[i] {
+                        if ptr < sizes[i] {
                             if data_user {
                                 cmps.current_is_key = false;
                             }
-                            if cmps.data(ctx, &lists[0][ptrs[0]], &lists[i][ptr]) != 0 {
+                            if cmps.data(ctx, &buckets[0][ptrs[0]], &buckets[i][ptr]) != 0 {
                                 c = -1;
                                 if key_user {
                                     cmps.current_is_key = true;
@@ -425,13 +425,13 @@ fn diff_generic<'b, C: ArrayContext + ?Sized>(
         }
         if c == 0 {
             loop {
-                result.remove(&lists[0][ptrs[0]].0);
+                result.remove(&buckets[0][ptrs[0]].0);
                 ptrs[0] += 1;
-                if ptrs[0] == lens[0] {
+                if ptrs[0] == sizes[0] {
                     break 'outer;
                 }
                 if behavior == Behavior::Normal {
-                    if cmps.data(ctx, &lists[0][ptrs[0] - 1], &lists[0][ptrs[0]]) != 0 {
+                    if cmps.data(ctx, &buckets[0][ptrs[0] - 1], &buckets[0][ptrs[0]]) != 0 {
                         break;
                     }
                 } else {
@@ -441,11 +441,11 @@ fn diff_generic<'b, C: ArrayContext + ?Sized>(
         } else {
             loop {
                 ptrs[0] += 1;
-                if ptrs[0] == lens[0] {
+                if ptrs[0] == sizes[0] {
                     break 'outer;
                 }
                 if behavior == Behavior::Normal {
-                    if cmps.data(ctx, &lists[0][ptrs[0] - 1], &lists[0][ptrs[0]]) != 0 {
+                    if cmps.data(ctx, &buckets[0][ptrs[0] - 1], &buckets[0][ptrs[0]]) != 0 {
                         break;
                     }
                 } else {
@@ -473,21 +473,21 @@ fn value_set_key<C: RuntimeContext + ?Sized>(ctx: &mut C, v: &Value) -> RtResult
 }
 
 /// `php_array_intersect_hash` (master's hash-based `array_intersect()`).
-fn intersect_hash<C: RuntimeContext + ?Sized>(ctx: &mut C, arrs: &[&ZArray]) -> RtResult<ZArray> {
-    let mut result: HashTable = (**arrs[0]).clone();
-    if arrs.iter().any(|a| a.is_empty()) {
+fn intersect_hash<C: RuntimeContext + ?Sized>(ctx: &mut C, tables: &[&ZArray]) -> RtResult<ZArray> {
+    let mut result: HashTable = (**tables[0]).clone();
+    if tables.iter().any(|a| a.is_empty()) {
         let keys: Vec<ArrayKey> = result.keys().cloned().collect();
         for k in &keys {
             result.remove(k);
         }
         return Ok(ZArray::from_table(result));
     }
-    let mut set: HashTable = HashTable::with_capacity(arrs[1].len());
-    for v in arrs[1].values() {
+    let mut set: HashTable = HashTable::with_capacity(tables[1].len());
+    for v in tables[1].values() {
         let k = value_set_key(ctx, v)?;
         set.insert(k, Value::Int(1));
     }
-    for (i, a) in arrs.iter().enumerate().skip(2) {
+    for (i, a) in tables.iter().enumerate().skip(2) {
         let i = i64::try_from(i).unwrap_or(i64::MAX);
         for v in a.values() {
             let k = value_set_key(ctx, v)?;
@@ -498,9 +498,9 @@ fn intersect_hash<C: RuntimeContext + ?Sized>(ctx: &mut C, arrs: &[&ZArray]) -> 
             }
         }
     }
-    let want = i64::try_from(arrs.len() - 1).unwrap_or(i64::MAX);
+    let want = i64::try_from(tables.len() - 1).unwrap_or(i64::MAX);
     let mut delete = Vec::new();
-    for (k, v) in result.iter() {
+    for (k, v) in &result {
         let sk = value_set_key(ctx, v)?;
         if !matches!(set.get(&sk), Some(Value::Int(n)) if *n == want) {
             delete.push(k.clone());
@@ -515,8 +515,8 @@ fn intersect_hash<C: RuntimeContext + ?Sized>(ctx: &mut C, arrs: &[&ZArray]) -> 
 /// `array_intersect(array $array, array ...$arrays): array`.
 pub fn array_intersect<C: ArrayContext + ?Sized>(ctx: &mut C, args: &[Value]) -> RtResult<ZArray> {
     if args.len() >= 2 {
-        let arrs = check_arrays("array_intersect", args)?;
-        return intersect_hash(ctx, &arrs);
+        let tables = check_arrays("array_intersect", args)?;
+        return intersect_hash(ctx, &tables);
     }
     intersect_generic(ctx, "array_intersect", args, Behavior::Normal, None, None)
 }

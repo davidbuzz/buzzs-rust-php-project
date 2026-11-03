@@ -5,16 +5,25 @@
 //! Regenerate the fixture with
 //! `cargo test -p php-stdarr --test oracle -- --ignored regenerate_oracle`.
 
+// The Mt19937 emulation mirrors C's unsigned/signed conversions.
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_possible_wrap
+)]
+
 use php_runtime::serialize::{serialize, unserialize, UnserializeOptions};
 use php_runtime::{
     ops, ArrayKey, CollectingContext, HashTable, PhpRef, RtResult, RuntimeError, Value, ZArray,
     ZStr,
 };
 use php_stdarr::symbols::{SymbolTable, VarSlot};
-use php_stdarr::{basic, callback, merge, pointer, random, range, setops, sort, stack, symbols};
+use php_stdarr::{basic, callback, merge, random, range, setops, sort, stack, symbols};
 
 type Ctx = CollectingContext;
 type Cb = Box<dyn FnMut(&mut Ctx, &[Value]) -> RtResult<Value>>;
+/// A by-reference function under test: `(ctx, &$array, other args)`.
+type ByRefFn<'a> = dyn Fn(&mut Ctx, &PhpRef, &[Value]) -> RtResult<Value> + 'a;
 
 // ---------------------------------------------------------------------------
 // Fixture decoding
@@ -315,7 +324,7 @@ impl Mt {
                 return result as i64;
             }
             let umax = umax + 1;
-            if umax & (umax - 1) == 0 {
+            if umax.is_power_of_two() {
                 return (result & (umax - 1)).wrapping_add(min as u64) as i64;
             }
             let limit = u64::MAX - (u64::MAX % umax) - 1;
@@ -330,7 +339,7 @@ impl Mt {
             return i64::from(result).wrapping_add(min);
         }
         let umax = umax + 1;
-        if umax & (umax - 1) == 0 {
+        if umax.is_power_of_two() {
             return i64::from(result & (umax - 1)) + min;
         }
         let limit = u32::MAX - (u32::MAX % umax) - 1;
@@ -439,7 +448,7 @@ fn dispatch(ctx: &mut Ctx, func: &str, args: &[Value]) -> Outcome {
         result,
         byref: None,
     };
-    let byref_fn = |ctx: &mut Ctx, f: &dyn Fn(&mut Ctx, &PhpRef, &[Value]) -> RtResult<Value>| {
+    let byref_fn = |ctx: &mut Ctx, f: &ByRefFn<'_>| {
         let r = PhpRef::new(args[0].clone());
         let result = f(ctx, &r, &args[1..]);
         let mut after = vec![r.get()];
@@ -642,27 +651,27 @@ fn dispatch(ctx: &mut Ctx, func: &str, args: &[Value]) -> Outcome {
         | "array_intersect_uassoc"
         | "array_udiff_assoc"
         | "array_uintersect_assoc" => {
-            let (arrs, mut cbs) = split_callbacks(args, 1);
+            let (arrays, mut cbs) = split_callbacks(args, 1);
             let cb = &mut *cbs[0];
             simple(ok(match func {
-                "array_udiff" => setops::array_udiff(ctx, &arrs, cb),
-                "array_uintersect" => setops::array_uintersect(ctx, &arrs, cb),
-                "array_diff_ukey" => setops::array_diff_ukey(ctx, &arrs, cb),
-                "array_intersect_ukey" => setops::array_intersect_ukey(ctx, &arrs, cb),
-                "array_diff_uassoc" => setops::array_diff_uassoc(ctx, &arrs, cb),
-                "array_intersect_uassoc" => setops::array_intersect_uassoc(ctx, &arrs, cb),
-                "array_udiff_assoc" => setops::array_udiff_assoc(ctx, &arrs, cb),
-                _ => setops::array_uintersect_assoc(ctx, &arrs, cb),
+                "array_udiff" => setops::array_udiff(ctx, &arrays, cb),
+                "array_uintersect" => setops::array_uintersect(ctx, &arrays, cb),
+                "array_diff_ukey" => setops::array_diff_ukey(ctx, &arrays, cb),
+                "array_intersect_ukey" => setops::array_intersect_ukey(ctx, &arrays, cb),
+                "array_diff_uassoc" => setops::array_diff_uassoc(ctx, &arrays, cb),
+                "array_intersect_uassoc" => setops::array_intersect_uassoc(ctx, &arrays, cb),
+                "array_udiff_assoc" => setops::array_udiff_assoc(ctx, &arrays, cb),
+                _ => setops::array_uintersect_assoc(ctx, &arrays, cb),
             }))
         }
         "array_udiff_uassoc" | "array_uintersect_uassoc" => {
-            let (arrs, mut cbs) = split_callbacks(args, 2);
+            let (arrays, mut cbs) = split_callbacks(args, 2);
             let mut k = cbs.pop().expect("key cb");
             let mut dcb = cbs.pop().expect("data cb");
             simple(ok(if func == "array_udiff_uassoc" {
-                setops::array_udiff_uassoc(ctx, &arrs, &mut *dcb, &mut *k)
+                setops::array_udiff_uassoc(ctx, &arrays, &mut *dcb, &mut *k)
             } else {
-                setops::array_uintersect_uassoc(ctx, &arrs, &mut *dcb, &mut *k)
+                setops::array_uintersect_uassoc(ctx, &arrays, &mut *dcb, &mut *k)
             }))
         }
         "extract" => {
@@ -744,7 +753,8 @@ fn oracle_cases() {
     let cases = load_cases();
     assert!(cases.len() > 1000, "fixture too small: {}", cases.len());
     let mut failures = Vec::new();
-    let mut per_func: std::collections::BTreeMap<String, (usize, usize)> = Default::default();
+    let mut per_func: std::collections::BTreeMap<String, (usize, usize)> =
+        std::collections::BTreeMap::default();
     let runs = cases.iter().flat_map(|c| {
         let natural = (c.func != "seed:array_rand").then_some((c, &c.natural_args, " [packed]"));
         std::iter::once((c, &c.args, "")).chain(natural)
@@ -825,9 +835,4 @@ fn regenerate_oracle() {
         String::from_utf8_lossy(&out.stderr)
     );
     std::fs::write(format!("{dir}/oracle.txt"), out.stdout).expect("write fixture");
-}
-
-#[allow(dead_code)]
-fn _unused(ctx: &mut Ctx) -> RtResult<Value> {
-    pointer::current(ctx, "current", &Value::Null)
 }

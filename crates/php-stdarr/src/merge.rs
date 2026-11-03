@@ -122,12 +122,12 @@ fn merge_wrapper<C: RuntimeContext + ?Sized>(
     if args.is_empty() {
         return Ok(ZArray::new());
     }
-    let arrs = arrays(func, args, None)?;
-    let count: u64 = arrs.iter().map(|a| a.len() as u64).sum();
+    let tables = arrays(func, args, None)?;
+    let count: u64 = tables.iter().map(|a| a.len() as u64).sum();
     if count >= u64::from(HT_MAX_SIZE) {
         return Err(too_many());
     }
-    if let [a, b] = arrs[..] {
+    if let [a, b] = tables[..] {
         let ret = if a.is_empty() {
             Some(b)
         } else if b.is_empty() {
@@ -145,7 +145,7 @@ fn merge_wrapper<C: RuntimeContext + ?Sized>(
             }
         }
     }
-    let src = arrs[0];
+    let src = tables[0];
     let mut dest = HashTable::with_capacity(usize::try_from(count).unwrap_or(0));
     for (k, v) in src.iter() {
         match k {
@@ -157,7 +157,7 @@ fn merge_wrapper<C: RuntimeContext + ?Sized>(
             }
         }
     }
-    for a in &arrs[1..] {
+    for a in &tables[1..] {
         if recursive {
             php_array_merge_recursive(ctx, &mut dest, a)?;
         } else {
@@ -224,12 +224,12 @@ fn replace_recursive(dest: &mut HashTable, src: &HashTable, guard: &mut Guard) -
 }
 
 fn replace_wrapper(func: &str, args: &[Value], recursive: bool) -> RtResult<ZArray> {
-    let arrs = arrays(func, args, Some("array"))?;
-    let Some(first) = arrs.first() else {
+    let tables = arrays(func, args, Some("array"))?;
+    let Some(first) = tables.first() else {
         return Ok(ZArray::new());
     };
     let mut dest: HashTable = (***first).clone();
-    for a in &arrs[1..] {
+    for a in &tables[1..] {
         if recursive {
             php_array_replace_recursive(&mut dest, a)?;
         } else {

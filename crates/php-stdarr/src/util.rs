@@ -44,13 +44,13 @@ pub fn arg_label(n: usize, name: Option<&str>) -> String {
     }
 }
 
-/// `zend_argument_value_error`: a `ValueError` "func(): Argument #n ($name) msg".
+/// `zend_argument_value_error`: a `ValueError` "`func(): Argument #n ($name) msg`".
 #[must_use]
 pub fn arg_value_error(func: &str, n: usize, name: Option<&str>, msg: &str) -> RuntimeError {
     RuntimeError::ValueError(format!("{func}(): {} {msg}", arg_label(n, name)))
 }
 
-/// `zend_argument_type_error`: a `TypeError` "func(): Argument #n ($name) msg".
+/// `zend_argument_type_error`: a `TypeError` "`func(): Argument #n ($name) msg`".
 #[must_use]
 pub fn arg_type_error(func: &str, n: usize, name: Option<&str>, msg: &str) -> RuntimeError {
     RuntimeError::TypeError(format!("{func}(): {} {msg}", arg_label(n, name)))
