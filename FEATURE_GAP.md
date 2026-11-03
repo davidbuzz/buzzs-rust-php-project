@@ -21,10 +21,10 @@ Keep rows when they reach 100%; they become the completion record. Add rows as g
 | Compiler (AST → IR/opcodes) | 0% | high | Scope resolution, constant folding, compile-time errors that exactly match PHP's messages. Ref: `Zend/zend_compile.c`. |
 | Compile-time diagnostics | 0% | high | Fatal/parse error text and line numbers that match byte for byte, since most tests compare output exactly. Ref: `Zend/tests/errmsg`. |
 | **Runtime core** | | | |
-| Value model (zval) | 0% | high | null/bool/int/float/string/array/object/resource/reference, refcounting and copy-on-write semantics. |
-| Strings (zend_string) | 0% | high | Binary-safe byte strings, interning, numeric-string rules. |
-| Ordered hash table (arrays) | 0% | high | Insertion-ordered map with int/string keys, packed arrays, iteration that survives modification, `next_free_element`. Ref: `Zend/zend_hash.c`. |
-| Type juggling and comparison | 0% | high | PHP 8 comparison rules, `==`/`<=>`, int overflow to float, string↔number conversion, float printing (`precision`, `serialize_precision`). Ref: `Zend/zend_operators.c`, `Zend/tests/comparison`. |
+| Value model (zval) | 70% | high | null/bool/int/float/string/array/object/resource/reference, refcounting and copy-on-write semantics. `php-runtime::Value` done (Rc-based COW arrays, `PhpRef` references, `Obj` trait objects, resources); objects/GC/typed-reference sources are the VM's job. |
+| Strings (zend_string) | 70% | high | Binary-safe byte strings, interning, numeric-string rules. `php-runtime::ZStr` (cached DJB hash, interning, in-place append) and `is_numeric_string_ex`/`zend_strtod` ports done; string *functions* belong to ext/standard. |
+| Ordered hash table (arrays) | 85% | high | Insertion-ordered map with int/string keys, packed arrays, iteration that survives modification, `next_free_element`. Ref: `Zend/zend_hash.c`. `php-runtime::ZArray` mirrors Zend's layout (packed/hash, holes, table sizes, iterator remapping, `zend_sort`, splice/shift/pop/unshift); property-tested against a model. Missing: `HASH_FLAG_HAS_EMPTY_IND`/INDIRECT slots (VM symbol tables). |
+| Type juggling and comparison | 80% | high | PHP 8 comparison rules, `==`/`<=>`, int overflow to float, string↔number conversion, float printing (`precision`, `serialize_precision`). Ref: `Zend/zend_operators.c`, `Zend/tests/comparison`. `php-runtime::{ops,convert,float}`: 23k-case operator matrix and cast table verified against the oracle; object handlers (`cast_object`, `compare`, `do_operation`) are hooks the VM must implement. |
 | Executor / VM | 0% | high | Opcode dispatch, call frames, by-ref args, variadics, named args, defaults. Ref: `Zend/zend_execute.c`, `Zend/zend_vm_def.h`. |
 | Error and warning system | 0% | high | `E_*` levels, `error_reporting`, `@` suppression, `set_error_handler`, deprecations, uncaught exception output. Ref: `Zend/tests/error_handler`, `Zend/tests/error_reporting`. |
 | Exceptions | 0% | high | `throw`, try/catch/finally, `Throwable` hierarchy, chaining, stack traces in the exact format PHP prints. Ref: `Zend/zend_exceptions.c`, `Zend/tests/exceptions`. |
@@ -65,6 +65,7 @@ Keep rows when they reach 100%; they become the completion record. Add rows as g
 | Embed / apache2handler / litespeed / fuzzer | 0% | low | No tests of their own; probably out of scope. |
 | **Core extensions (always enabled)** | | | |
 | ext/standard | 0% | high | Strings, arrays, math, files, `var_dump`/`print_r`/`var_export`, `serialize`, `sprintf`, `preg`-free string functions, URLs, base64, crc32, md5/sha1, `proc_open`, `mail`… The largest extension (4,068 `.phpt`). Split into sub-rows as work starts. |
+| ext/standard: var_dump/print_r/var_export/serialize | 60% | high | `php-runtime::{dump,serialize}`: exact output for scalars/arrays/references, recursion detection, object output via `RuntimeContext::object_dump`/`serialize_object` hooks. Missing: `debug_zval_dump` refcounts, `__PHP_Incomplete_Class`, `allowed_classes`, `__wakeup`/`__unserialize` semantics (VM). |
 | ext/spl | 0% | high | Data structures, iterators, `ArrayObject`, `SplFileObject`, exceptions, autoload (820). |
 | ext/pcre | 0% | high | `preg_*` with PCRE2-compatible semantics; choose between binding pcre2 and a pure Rust engine (178). |
 | ext/date | 0% | high | `DateTime*`, timezones, `strtotime` parser, `date()` formats (744). |
