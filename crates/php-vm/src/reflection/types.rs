@@ -314,7 +314,7 @@ fn clone_error(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
 /// Registers the type classes.
 pub(crate) fn register(vm: &mut Vm) {
     ClassBuilder::new("ReflectionType")
-        .flags(cflags::ABSTRACT | cflags::EXPLICIT_ABSTRACT | cflags::NOT_SERIALIZABLE)
+        .flags(cflags::ABSTRACT | cflags::EXPLICIT_ABSTRACT | cflags::NOT_SERIALIZABLE | cflags::NO_CLONE)
         .implements(vm, &["Stringable"])
         .method("__clone(): void", PRIV, clone_error)
         .method("allowsNull(): bool", PUB, rt_allows_null)
@@ -322,15 +322,18 @@ pub(crate) fn register(vm: &mut Vm) {
         .register(vm);
     ClassBuilder::new("ReflectionNamedType")
         .extends(vm, "ReflectionType")
+        .flags(cflags::NOT_SERIALIZABLE | cflags::NO_CLONE)
         .method("getName(): string", PUB, rt_get_name)
         .method("isBuiltin(): bool", PUB, rt_is_builtin)
         .register(vm);
     ClassBuilder::new("ReflectionUnionType")
         .extends(vm, "ReflectionType")
+        .flags(cflags::NOT_SERIALIZABLE | cflags::NO_CLONE)
         .method("getTypes(): array", PUB, rt_get_types)
         .register(vm);
     ClassBuilder::new("ReflectionIntersectionType")
         .extends(vm, "ReflectionType")
+        .flags(cflags::NOT_SERIALIZABLE | cflags::NO_CLONE)
         .method("getTypes(): array", PUB, rt_get_types)
         .register(vm);
 }

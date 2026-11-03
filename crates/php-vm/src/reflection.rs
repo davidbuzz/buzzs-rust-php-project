@@ -161,6 +161,8 @@ pub(crate) struct AttrRef {
     pub repeated: bool,
     /// Scope for evaluating the arguments.
     pub scope: Option<Rc<Class>>,
+    /// The file declaring the attribute.
+    pub file: Option<ZStr>,
 }
 
 /// A reflected global constant (`ReflectionConstant`).

@@ -13,6 +13,18 @@ use std::rc::Rc;
 /// `reflect_attributes`: the `getAttributes(?string $name, int $flags)`
 /// implementation.
 pub(crate) fn attributes_array(vm: &mut Vm, attrs: &[AttributeInfo], tgt: i64, scope: Option<&Rc<Class>>, a: &Args) -> VmResult<Value> {
+    attributes_array_in(vm, attrs, tgt, scope, None, a)
+}
+
+/// [`attributes_array`] with the declaring file.
+pub(crate) fn attributes_array_in(
+    vm: &mut Vm,
+    attrs: &[AttributeInfo],
+    tgt: i64,
+    scope: Option<&Rc<Class>>,
+    file: Option<ZStr>,
+    a: &Args,
+) -> VmResult<Value> {
     let name = match a.get(0) {
         Some(Value::Str(s)) => Some(s),
         _ => None,
@@ -50,7 +62,7 @@ pub(crate) fn attributes_array(vm: &mut Vm, attrs: &[AttributeInfo], tgt: i64, s
             }
         }
         let repeated = attrs.iter().filter(|x| x.name.eq_ignore_ascii_case(at.name.as_bytes())).count() > 1;
-        let r = AttrRef { info: at.clone(), target: tgt, repeated, scope: scope.cloned() };
+        let r = AttrRef { info: at.clone(), target: tgt, repeated, scope: scope.cloned(), file: file.clone() };
         out.push(super::new_refl(vm, "ReflectionAttribute", Refl::Attr(Rc::new(r)), Some(&at.name), None)?);
     }
     Ok(Value::Array(ZArray::from_values(out)))
@@ -149,10 +161,13 @@ fn ra_to_string(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             }
             let repr = match e {
                 ConstExpr::Value(v) => super::export::format_default_value(vm, v),
-                ConstExpr::Code(_) => {
-                    let v = vm.eval_const_expr(e, r.scope.as_ref())?;
-                    super::export::format_default_value(vm, &v)
-                }
+                ConstExpr::Code(_) => match source_arg(vm, &r, i) {
+                    Some(x) => x,
+                    None => {
+                        let v = vm.eval_const_expr(e, r.scope.as_ref())?;
+                        super::export::format_default_value(vm, &v)
+                    }
+                },
             };
             out.extend_from_slice(&repr);
             out.extend_from_slice(b" ]\n");
@@ -160,6 +175,19 @@ fn ra_to_string(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         out.extend_from_slice(b"  }\n}\n");
     }
     Ok(Value::Str(ZStr::from(out)))
+}
+
+/// The exported source of argument `i` of an attribute.
+fn source_arg(vm: &Vm, r: &AttrRef, i: usize) -> Option<Vec<u8>> {
+    let file = r.file.clone().or_else(|| vm.frames.iter().rev().find(|f| f.kind != crate::vm::FrameKind::Builtin).map(|f| f.code.filename.clone()))?;
+    let args = super::source::attribute_args(file.as_bytes(), r.info.line, r.info.name.as_bytes())?;
+    let a = args.get(i)?;
+    let ns = super::export::namespace_of(&r.info.name);
+    let e = match &a.kind {
+        php_parser::ast::ArgKind::Positional(x) | php_parser::ast::ArgKind::Named { value: x, .. } => x.clone(),
+        _ => return None,
+    };
+    Some(super::export::export_expr_ns(e, &ns))
 }
 
 /// `zend_get_attribute_target_names`.
@@ -278,7 +306,7 @@ fn clone_error(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
 pub(crate) fn register(vm: &mut Vm) {
     ClassBuilder::new("ReflectionAttribute")
         .implements(vm, &["Reflector"])
-        .flags(cflags::NOT_SERIALIZABLE)
+        .flags(cflags::NOT_SERIALIZABLE | cflags::NO_CLONE)
         .hooks(super::constant::hooks())
         .constant("IS_INSTANCEOF", Value::Int(2))
         .prop("name", super::RO, Some("string"), None)
@@ -292,6 +320,6 @@ pub(crate) fn register(vm: &mut Vm) {
         .method("newInstance(): object", PUB, ra_new_instance)
         .method("__toString(): string", PUB, ra_to_string)
         .method("__clone(): void", PRIV, clone_error)
-        .method("__construct()", PRIV, ra_construct)
+        .method("__construct(mixed ...$args)", PRIV, ra_construct)
         .register(vm);
 }

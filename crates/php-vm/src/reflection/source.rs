@@ -112,3 +112,149 @@ pub(crate) fn const_value(file: &[u8], line: u32, name: &[u8]) -> Option<(Expr, 
     }
     None
 }
+
+/// The doc comment of enum case `name` declared in the class at `file:line`.
+pub(crate) fn case_doc_comment(file: &[u8], line: u32, name: &[u8]) -> Option<Vec<u8>> {
+    let (c, _) = class_ast(file, line)?;
+    c.members.iter().find_map(|m| match &m.kind {
+        ClassMemberKind::EnumCase(ec) if ec.name.name == name => ec.doc_comment.clone(),
+        _ => None,
+    })
+}
+
+/// Collects the parameter lists of every function-like declaration.
+struct ParamCollector {
+    line: u32,
+    end: u32,
+    found: Option<Vec<ast::Param>>,
+}
+
+impl ParamCollector {
+    fn check(&mut self, start: u32, end: u32, params: &[ast::Param]) {
+        if self.found.is_none() && start == self.line && (end == self.end || self.end == 0) {
+            self.found = Some(params.to_vec());
+        }
+    }
+}
+
+impl php_parser::visit::Visitor for ParamCollector {
+    fn visit_stmt(&mut self, s: &Stmt) {
+        if let StmtKind::Function(f) = &s.kind {
+            self.check(f.span.line, f.end_line, &f.params);
+        }
+        php_parser::visit::walk_stmt(self, s);
+    }
+    fn visit_expr(&mut self, e: &Expr) {
+        match &e.kind {
+            ast::ExprKind::Closure(c) => self.check(c.span.line, c.end_line, &c.params),
+            ast::ExprKind::ArrowFn(c) => self.check(c.span.line, 0, &c.params),
+            _ => {}
+        }
+        php_parser::visit::walk_expr(self, e);
+    }
+    fn visit_class(&mut self, c: &ClassDecl) {
+        for m in &c.members {
+            if let ClassMemberKind::Method(md) = &m.kind {
+                self.check(md.span.line, md.end_line, &md.params);
+            }
+        }
+        php_parser::visit::walk_class(self, c);
+    }
+}
+
+/// The doc comment of parameter `idx` of the function declared at
+/// `file:line-end`.
+pub(crate) fn param_doc_comment(file: &[u8], line: u32, end: u32, idx: usize) -> Option<Vec<u8>> {
+    let p = program(file)?;
+    let mut v = ParamCollector { line, end, found: None };
+    php_parser::visit::walk_stmts(&mut v, &p.statements);
+    v.found?.get(idx)?.doc_comment.clone()
+}
+
+/// Reads the source line `line` (1-based) and everything after it.
+fn text_from_line(file: &[u8], line: u32) -> Option<Vec<u8>> {
+    let src = std::fs::read(String::from_utf8_lossy(file).into_owned()).ok()?;
+    let mut cur = 1u32;
+    let mut start = 0usize;
+    for (i, &b) in src.iter().enumerate() {
+        if cur == line {
+            start = i;
+            break;
+        }
+        if b == b'\n' {
+            cur += 1;
+            if cur == line {
+                start = i + 1;
+                break;
+            }
+        }
+    }
+    if cur != line {
+        return None;
+    }
+    Some(src[start..].to_vec())
+}
+
+/// Extracts the attribute group starting at the first `#[` of `text`.
+fn attribute_group(text: &[u8]) -> Option<Vec<u8>> {
+    let start = text.windows(2).position(|w| w == b"#[")?;
+    let mut depth = 0i32;
+    let mut quote: Option<u8> = None;
+    let mut i = start + 1;
+    while i < text.len() {
+        let c = text[i];
+        if let Some(q) = quote {
+            if c == b'\\' {
+                i += 2;
+                continue;
+            }
+            if c == q {
+                quote = None;
+            }
+        } else {
+            match c {
+                b'\'' | b'"' => quote = Some(c),
+                b'[' | b'(' => depth += 1,
+                b']' | b')' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Some(text[start..=i].to_vec());
+                    }
+                }
+                _ => {}
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
+/// The argument expressions of the attribute `name` written at `file:line`
+/// (the `n`-th attribute of that name in the group).
+pub(crate) fn attribute_args(file: &[u8], line: u32, name: &[u8]) -> Option<Vec<ast::Arg>> {
+    let text = text_from_line(file, line)?;
+    let mut rest: &[u8] = &text;
+    // An attribute may be the 2nd+ group on the line: try each group.
+    for _ in 0..8 {
+        let g = attribute_group(rest)?;
+        let mut src = b"<?php ".to_vec();
+        src.extend_from_slice(&g);
+        src.extend_from_slice(b" function __reflection_attribute_probe() {}");
+        if let Ok(p) = php_parser::parse(&src, &php_parser::ParseOptions::default()) {
+            if let Some(StmtKind::Function(f)) = p.statements.first().map(|s| &s.kind) {
+                for grp in &f.attributes {
+                    for at in &grp.attributes {
+                        let short = at.name.name.rsplit(|&c| c == b'\\').next().unwrap_or(&at.name.name);
+                        let want = name.rsplit(|&c| c == b'\\').next().unwrap_or(name);
+                        if short.eq_ignore_ascii_case(want) {
+                            return Some(at.args.as_ref().map(|a| a.args.clone()).unwrap_or_default());
+                        }
+                    }
+                }
+            }
+        }
+        let pos = rest.windows(2).position(|w| w == b"#[")?;
+        rest = &rest[pos + g.len()..];
+    }
+    None
+}

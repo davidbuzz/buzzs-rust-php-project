@@ -43,13 +43,20 @@ pub(crate) fn interfaces_order(vm: &Vm, c: &Rc<Class>) -> Vec<Rc<Class>> {
             }
         }
     }
+    let nparent = out.len();
     for i in direct {
-        if out.iter().any(|x| Rc::ptr_eq(x, &i)) {
-            continue;
+        if !out.iter().any(|x| Rc::ptr_eq(x, &i)) {
+            out.push(i);
         }
-        out.push(i.clone());
-        for sub in interfaces_order(vm, &i) {
-            if !out.iter().any(|x| Rc::ptr_eq(x, &sub)) {
+    }
+    // `zend_do_inherit_interfaces`: each new interface's own interfaces are
+    // appended in reverse order.
+    let ndirect = out.len();
+    for k in nparent..ndirect {
+        let iface = out[k].clone();
+        let ce_num = out.len();
+        for sub in interfaces_order(vm, &iface).into_iter().rev() {
+            if !out[..ce_num].iter().any(|x| Rc::ptr_eq(x, &sub)) {
                 out.push(sub);
             }
         }
@@ -85,6 +92,12 @@ pub(crate) fn class_arg(vm: &mut Vm, v: &Value, what: &str) -> VmResult<Rc<Class
             }
         }
     }
+}
+
+/// Whether a typed static property holds no value yet (`IS_UNDEF`); the VM
+/// keeps `null` in the slot of a typed static property without default.
+pub(crate) fn static_uninit(c: &Rc<Class>, name: &[u8], cell: &Value) -> bool {
+    c.find_static(name).is_some_and(|sp| sp.ty.is_some() && sp.default.is_none() && cell.is_null())
 }
 
 /// `zend_update_class_constants`: evaluates default property values.
@@ -303,6 +316,38 @@ fn filter_arg(a: &Args, default: i64) -> i64 {
     }
 }
 
+fn invoke_closure(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let Some(o) = a.this.clone() else { return Ok(Value::Null) };
+    let Some(mut call) = vm.closure_call(&o) else { return Ok(Value::Null) };
+    let args = a.values.clone();
+    let named = std::mem::take(&mut a.named);
+    bind_args(vm, &mut call, args, named)?;
+    vm.call_pending(call)
+}
+
+/// The `Closure::__invoke` handler method (`zend_get_closure_invoke_method`
+/// of an object-less closure).
+pub(crate) fn closure_invoke_method(c: &Rc<Class>) -> Rc<Method> {
+    let s = crate::builtins::sig::parse_sig("__invoke(mixed ...$args): mixed");
+    let b = crate::func::Builtin {
+        name: ZStr::from("__invoke"),
+        params: Vec::new(),
+        defaults: Vec::new(),
+        required: 0,
+        return_type: None,
+        flags: flags::PUBLIC,
+        handler: invoke_closure,
+    };
+    let _ = s;
+    Rc::new(Method {
+        name: ZStr::from("__invoke"),
+        func: Func::Builtin(Rc::new(b)),
+        flags: flags::PUBLIC,
+        scope: Rc::downgrade(c),
+        proto_scope: Rc::downgrade(c),
+    })
+}
+
 /// The `__invoke` method of a closure object as a `FnRef`.
 fn closure_invoke(vm: &Vm, c: &Rc<Class>, o: &Obj) -> Option<FnRef> {
     let d = vm.closure_data(o)?;
@@ -322,6 +367,10 @@ fn rc_get_methods(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             out.push(method_value(vm, &m, &c)?);
         }
     }
+    if c.lc_name.as_bytes() == b"closure" && c.find_method(b"__invoke").is_none() && filter & 1 != 0 {
+        let m = closure_invoke_method(&c);
+        out.push(method_value(vm, &m, &c)?);
+    }
     Ok(Value::Array(ZArray::from_values(out)))
 }
 
@@ -338,6 +387,10 @@ fn rc_get_method(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     }
     match c.find_method(n.as_bytes()).cloned() {
         Some(m) => method_value(vm, &m, &c),
+        None if c.lc_name.as_bytes() == b"closure" && n.eq_ignore_ascii_case(b"__invoke") => {
+            let m = closure_invoke_method(&c);
+            method_value(vm, &m, &c)
+        }
         None => Err(rexc(vm, &format!("Method {}::{}() does not exist", c.name, n.to_string_lossy()))),
     }
 }
@@ -369,7 +422,11 @@ pub(crate) fn prop_value(vm: &mut Vm, class: &Rc<Class>, name: &ZStr, meta: Opti
 
 /// Whether `o` has a dynamic property `name`.
 pub(crate) fn has_dynamic(o: &Obj, name: &ZStr) -> bool {
-    object::data(o).dynamic.borrow().as_ref().is_some_and(|t| t.contains_key(&ArrayKey::from_zstr(name)))
+    object::data(o)
+        .dynamic
+        .borrow()
+        .as_ref()
+        .is_some_and(|t| t.contains_key(&ArrayKey::from_zstr(name)) || t.contains_key(&ArrayKey::Str(name.clone())))
 }
 
 fn rc_get_properties(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -656,7 +713,7 @@ fn rc_new_instance_without_ctor(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 fn rc_get_attributes(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let c = this_class(vm, a)?;
     let attrs = c.attributes.clone();
-    super::attribute::attributes_array(vm, &attrs, super::target::CLASS, Some(&c), a)
+    super::attribute::attributes_array_in(vm, &attrs, super::target::CLASS, Some(&c), c.filename.clone(), a)
 }
 
 fn rc_get_doc_comment(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -688,6 +745,15 @@ fn rc_get_static_property_value(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     if visible {
         let cell = with_scope(vm, Some(c.clone()), |vm| vm.static_prop_cell(&c, &n))?;
         let v = cell.borrow().deref();
+        if static_uninit(&c, n.as_bytes(), &v) {
+            if a.has(1) {
+                return Ok(a.at(1));
+            }
+            return Err(vm.make_throw(
+                "Error",
+                &format!("Typed property {}::${} must not be accessed before initialization", c.name, n.to_string_lossy()),
+            ));
+        }
         return Ok(v);
     }
     if a.has(1) {
@@ -701,7 +767,7 @@ fn rc_set_static_property_value(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let n = str_arg(a, 0);
     update_class_constants(vm, &c)?;
     let Some(sp) = c.find_static(n.as_bytes()).cloned() else {
-        return Err(rexc(vm, &format!("Class {} does not have a property named {}", c.name, n.to_string_lossy())));
+        return Err(rexc(vm, &format!("Property {}::${} does not exist", c.name, n.to_string_lossy())));
     };
     let cell = with_scope(vm, Some(c.clone()), |vm| vm.static_prop_cell(&c, &n))?;
     let mut v = a.at(1);
@@ -727,7 +793,11 @@ fn rc_get_static_properties(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             continue;
         }
         let cell = with_scope(vm, Some(c.clone()), |vm| vm.static_prop_cell(&c, &p.name))?;
-        t.insert(ArrayKey::Str(p.name.clone()), cell.borrow().deref());
+        let v = cell.borrow().deref();
+        if static_uninit(&c, p.name.as_bytes(), &v) {
+            continue;
+        }
+        t.insert(ArrayKey::Str(p.name.clone()), v);
     }
     Ok(Value::Array(ZArray::from_table(t)))
 }
@@ -859,7 +929,7 @@ pub(crate) fn register(vm: &mut Vm) {
     ClassBuilder::new("ReflectionClass")
         .implements(vm, &["Reflector"])
         .hooks(super::constant::hooks())
-        .flags(cflags::NOT_SERIALIZABLE)
+        .flags(cflags::NOT_SERIALIZABLE | cflags::NO_CLONE)
         .prop("name", RO, Some("string"), None)
         .constant("IS_IMPLICIT_ABSTRACT", Value::Int(16))
         .constant("IS_EXPLICIT_ABSTRACT", Value::Int(64))
@@ -934,6 +1004,7 @@ pub(crate) fn register(vm: &mut Vm) {
         .register(vm);
     ClassBuilder::new("ReflectionObject")
         .extends(vm, "ReflectionClass")
+        .flags(cflags::NOT_SERIALIZABLE | cflags::NO_CLONE)
         .method("__construct(object $object)", PUB, ro_construct)
         .register(vm);
 }
@@ -942,6 +1013,7 @@ pub(crate) fn register(vm: &mut Vm) {
 pub(crate) fn register_enum(vm: &mut Vm) {
     ClassBuilder::new("ReflectionEnum")
         .extends(vm, "ReflectionClass")
+        .flags(cflags::NOT_SERIALIZABLE | cflags::NO_CLONE)
         .method("__construct(object|string $objectOrClass)", PUB, re_construct)
         .method("hasCase(string $name): bool", PUB, re_has_case)
         .method("getCase(string $name): ReflectionEnumUnitCase", PUB, re_get_case)

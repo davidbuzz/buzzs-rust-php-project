@@ -398,7 +398,7 @@ fn rg_get_trace(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 /// Registers `ReflectionGenerator`.
 pub(crate) fn register_generator(vm: &mut Vm) {
     ClassBuilder::new("ReflectionGenerator")
-        .flags(cflags::FINAL | cflags::NOT_SERIALIZABLE)
+        .flags(cflags::FINAL | cflags::NOT_SERIALIZABLE | cflags::NO_CLONE)
         .method("__construct(Generator $generator)", PUB, rg_construct)
         .method("getExecutingLine(): int", PUB, rg_get_executing_line)
         .method("getExecutingFile(): string", PUB, rg_get_executing_file)
@@ -492,7 +492,7 @@ fn rfb_get_trace(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 /// Registers `ReflectionFiber`.
 pub(crate) fn register_fiber(vm: &mut Vm) {
     ClassBuilder::new("ReflectionFiber")
-        .flags(cflags::FINAL | cflags::NOT_SERIALIZABLE)
+        .flags(cflags::FINAL | cflags::NOT_SERIALIZABLE | cflags::NO_CLONE)
         .method("__construct(Fiber $fiber)", PUB, rfb_construct)
         .method("getFiber(): Fiber", PUB, rfb_get_fiber)
         .method("getExecutingFile(): ?string", PUB, rfb_get_executing_file)
@@ -519,7 +519,13 @@ fn rr_from_array_element(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     };
     match arr.get(&key) {
         None => Err(rexc(vm, "Array key not found")),
-        Some(Value::Reference(r)) => super::new_refl(vm, "ReflectionReference", Refl::Reference(r.clone()), None, None),
+        Some(Value::Reference(r)) => {
+            let self_ref = matches!(&*r.borrow(), Value::Array(x) if ZArray::ptr_eq(x, &arr));
+            if r.refcount() == 1 && !self_ref {
+                return Ok(Value::Null);
+            }
+            super::new_refl(vm, "ReflectionReference", Refl::Reference(r.clone()), None, None)
+        }
         Some(_) => Ok(Value::Null),
     }
 }
@@ -784,7 +790,7 @@ fn rze_empty(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 pub(crate) fn register_extension(vm: &mut Vm) {
     ClassBuilder::new("ReflectionExtension")
         .implements(vm, &["Reflector"])
-        .flags(cflags::NOT_SERIALIZABLE)
+        .flags(cflags::NOT_SERIALIZABLE | cflags::NO_CLONE)
         .hooks(super::constant::hooks())
         .prop("name", RO, Some("string"), None)
         .method("__clone(): void", PRIV, clone_error)
@@ -804,7 +810,7 @@ pub(crate) fn register_extension(vm: &mut Vm) {
         .register(vm);
     ClassBuilder::new("ReflectionZendExtension")
         .implements(vm, &["Reflector"])
-        .flags(cflags::NOT_SERIALIZABLE)
+        .flags(cflags::NOT_SERIALIZABLE | cflags::NO_CLONE)
         .hooks(super::constant::hooks())
         .prop("name", RO, Some("string"), None)
         .method("__clone(): void", PRIV, clone_error)

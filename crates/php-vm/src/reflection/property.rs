@@ -210,6 +210,13 @@ fn rp_get_value(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     if p.meta.as_ref().is_some_and(|m| m.is_static) {
         let cell = static_cell(vm, &p)?;
         let v = cell.borrow().deref();
+        if super::class::static_uninit(&p.class, p.name.as_bytes(), &v) {
+            let dc = decl_class(vm, &p);
+            return Err(vm.make_throw(
+                "Error",
+                &format!("Typed static property {}::${} must not be accessed before initialization", super::dn(&dc.name), p.name),
+            ));
+        }
         return Ok(v);
     }
     let Some(o) = object_arg(a, 0) else {
@@ -372,8 +379,9 @@ fn rp_set_raw_value(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 fn rp_is_initialized(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let p = this_prop(vm, a)?;
     if p.meta.as_ref().is_some_and(|m| m.is_static) {
-        static_cell(vm, &p)?;
-        return Ok(Value::Bool(true));
+        let cell = static_cell(vm, &p)?;
+        let v = cell.borrow().deref();
+        return Ok(Value::Bool(!super::class::static_uninit(&p.class, p.name.as_bytes(), &v)));
     }
     let Some(o) = object_arg(a, 0) else {
         return Err(vm.make_throw(
@@ -390,7 +398,7 @@ fn rp_is_initialized(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     Ok(Value::Bool(match m.as_ref().and_then(|m| m.info.clone()) {
         Some(pi) => {
             if pi.is_virtual() {
-                pi.hooks.as_ref().is_some_and(|h| h.get.is_some())
+                true
             } else {
                 object::data(&target).slots.borrow().get(pi.slot as usize).is_some_and(Option::is_some)
             }
@@ -414,7 +422,7 @@ fn rp_get_attributes(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let p = this_prop(vm, a)?;
     let Some(m) = &p.meta else { return Ok(Value::Array(php_runtime::ZArray::new())) };
     let dc = decl_class(vm, &p);
-    super::attribute::attributes_array(vm, &m.attributes, super::target::PROPERTY, Some(&dc), a)
+    super::attribute::attributes_array_in(vm, &m.attributes, super::target::PROPERTY, Some(&dc), dc.filename.clone(), a)
 }
 
 fn rp_set_accessible(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
@@ -651,6 +659,11 @@ fn rp_is_readable(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     if prop.flags & flags::VIRTUAL != 0 && prop.hooks.is_some() {
         return Ok(Value::Bool(has_get));
     }
+    if prop.is_static {
+        let cell = static_cell(vm, &p)?;
+        let v = cell.borrow().deref();
+        return Ok(Value::Bool(!super::class::static_uninit(&p.class, p.name.as_bytes(), &v)));
+    }
     if let (Some(o), false) = (&obj, has_get) {
         if let Some(pi) = &prop.info {
             let mut o = o.clone();
@@ -732,7 +745,7 @@ pub(crate) fn register(vm: &mut Vm) {
     ClassBuilder::new("ReflectionProperty")
         .implements(vm, &["Reflector"])
         .hooks(super::constant::hooks())
-        .flags(cflags::NOT_SERIALIZABLE)
+        .flags(cflags::NOT_SERIALIZABLE | cflags::NO_CLONE)
         .prop("name", RO, Some("string"), None)
         .prop("class", RO, Some("string"), None)
         .constant("IS_STATIC", Value::Int(16))

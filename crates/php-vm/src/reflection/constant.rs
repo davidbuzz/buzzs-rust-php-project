@@ -130,10 +130,27 @@ fn rcc_is_enum_case(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 fn rcc_get_attributes(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let (c, cc) = this_const(vm, a)?;
     let attrs = cc.attributes.clone();
-    super::attribute::attributes_array(vm, &attrs, super::target::CLASS_CONSTANT, Some(&c), a)
+    super::attribute::attributes_array_in(vm, &attrs, super::target::CLASS_CONSTANT, Some(&c), c.filename.clone(), a)
 }
 fn rcc_get_doc_comment(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    Ok(this_const(vm, a)?.1.doc_comment.clone().map_or(Value::Bool(false), Value::Str))
+    let (c, cc) = this_const(vm, a)?;
+    Ok(const_doc_comment(&c, &cc).map_or(Value::Bool(false), Value::Str))
+}
+
+/// The doc comment of a constant (enum case doc comments come from the
+/// source, the compiler does not keep them).
+pub(crate) fn const_doc_comment(c: &Class, cc: &ClassConst) -> Option<ZStr> {
+    if let Some(d) = &cc.doc_comment {
+        return Some(d.clone());
+    }
+    if !cc.is_case {
+        return None;
+    }
+    let file = c.filename.clone()?;
+    [c.line_start, c.line_end]
+        .iter()
+        .find_map(|&l| super::source::case_doc_comment(file.as_bytes(), l, cc.name.as_bytes()))
+        .map(ZStr::from)
 }
 fn rcc_get_type(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let (c, cc) = this_const(vm, a)?;
@@ -316,7 +333,7 @@ pub(crate) fn register_class_constant(vm: &mut Vm) {
     ClassBuilder::new("ReflectionClassConstant")
         .implements(vm, &["Reflector"])
         .hooks(super::constant::hooks())
-        .flags(cflags::NOT_SERIALIZABLE)
+        .flags(cflags::NOT_SERIALIZABLE | cflags::NO_CLONE)
         .prop("name", RO, Some("string"), None)
         .prop("class", RO, Some("string"), None)
         .constant("IS_PUBLIC", Value::Int(1))
@@ -347,12 +364,14 @@ pub(crate) fn register_class_constant(vm: &mut Vm) {
 pub(crate) fn register_cases(vm: &mut Vm) {
     ClassBuilder::new("ReflectionEnumUnitCase")
         .extends(vm, "ReflectionClassConstant")
+        .flags(cflags::NOT_SERIALIZABLE | cflags::NO_CLONE)
         .method("__construct(object|string $class, string $constant)", PUB, case_construct)
         .method("getEnum(): ReflectionEnum", PUB, rcase_get_enum)
         .method("getValue(): UnitEnum", PUB, rcc_get_value)
         .register(vm);
     ClassBuilder::new("ReflectionEnumBackedCase")
         .extends(vm, "ReflectionEnumUnitCase")
+        .flags(cflags::NOT_SERIALIZABLE | cflags::NO_CLONE)
         .method("__construct(object|string $class, string $constant)", PUB, backed_case_construct)
         .method("getBackingValue(): int|string", PUB, rcase_get_backing_value)
         .register(vm);
@@ -363,7 +382,7 @@ pub(crate) fn register_constant(vm: &mut Vm) {
     ClassBuilder::new("ReflectionConstant")
         .implements(vm, &["Reflector"])
         .hooks(super::constant::hooks())
-        .flags(cflags::NOT_SERIALIZABLE)
+        .flags(cflags::NOT_SERIALIZABLE | cflags::NO_CLONE)
         .prop("name", RO, Some("string"), None)
         .method("__construct(string $name)", PUB, rk_construct)
         .method("getName(): string", PUB, rk_get_name)

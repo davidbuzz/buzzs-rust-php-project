@@ -5,7 +5,7 @@ use super::class::{bind_args, class_arg, method_php_flags, split_args};
 use super::{class_value, method_value, new_refl, rexc, set_name_props, this, this_refl, zs, FnRef, Refl, PRIV, PUB, RO, STAT};
 use crate::builtins::classbuilder::ClassBuilder;
 use crate::class::{cflags, Class};
-use crate::func::{flags, Args, Func};
+use crate::func::{flags, Args, Func, Method};
 use crate::object;
 use crate::opcode::{Op, Operand};
 use crate::types::TypeDecl;
@@ -34,9 +34,20 @@ fn is_tentative(f: &FnRef) -> bool {
     let (Func::Builtin(_), Some(m)) = (&f.func, &f.method) else { return false };
     let scope = m.scope();
     let lc = String::from_utf8_lossy(&m.name.to_ascii_lowercase()).into_owned();
-    TENTATIVE
-        .iter()
-        .any(|(c, ms)| scope.lc_name.as_bytes() == c.as_bytes() && ms.split(' ').any(|x| x == lc))
+    if scope.lc_name.starts_with(b"reflect") {
+        return TENTATIVE
+            .iter()
+            .any(|(c, ms)| scope.lc_name.as_bytes() == c.as_bytes() && ms.split(' ').any(|x| x == lc));
+    }
+    // Other internal classes: non-final methods of non-final classes have
+    // tentative return types (php-src stubs), except magic methods and the
+    // enum interfaces.
+    scope.flags & cflags::INTERNAL != 0
+        && m.flags & flags::FINAL == 0
+        && scope.flags & cflags::FINAL == 0
+        && !lc.starts_with("__")
+        && !matches!(scope.lc_name.as_bytes(), b"unitenum" | b"backedenum" | b"stringable")
+        && !scope.instance_of_name(b"throwable")
 }
 
 /// The return type and whether it is tentative.
@@ -46,8 +57,20 @@ pub(crate) fn return_type(_vm: &Vm, f: &FnRef) -> Option<(TypeDecl, bool)> {
 }
 
 /// The doc comment of parameter `idx` (not tracked by the compiler).
-pub(crate) fn param_doc_comment(_f: &FnRef, _idx: usize) -> Option<ZStr> {
-    None
+pub(crate) fn param_doc_comment(f: &FnRef, idx: usize) -> Option<ZStr> {
+    let Func::User(u) = &f.func else { return None };
+    if u.hook_prop.is_some() && u.params.len() <= idx {
+        return None;
+    }
+    super::source::param_doc_comment(u.code.filename.as_bytes(), u.line_start, u.line_end, idx).map(ZStr::from)
+}
+
+/// The file declaring a user function.
+pub(crate) fn fn_file(f: &FnRef) -> Option<ZStr> {
+    match &f.func {
+        Func::User(u) => Some(u.code.filename.clone()),
+        Func::Builtin(_) => None,
+    }
 }
 
 /// The reflected function.
@@ -103,7 +126,7 @@ pub(crate) fn static_vars(vm: &Vm, f: &FnRef) -> Vec<(ZStr, Value)> {
     for (idx, cv, lit) in inits {
         let name = u.code.cv_names.get(cv as usize).cloned().unwrap_or_default();
         let v = match store.get(idx as usize).cloned().flatten() {
-            Some(r) => r.get(),
+            Some(r) => Value::Reference(r),
             None => lit.unwrap_or(Value::Null),
         };
         if let Some(e) = out.iter_mut().find(|(n, _)| *n == name) {
@@ -287,7 +310,7 @@ fn rf_get_attributes(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         Func::User(u) => u.attributes.clone(),
         Func::Builtin(_) => Vec::new(),
     };
-    super::attribute::attributes_array(vm, &attrs, t, scope.as_ref(), a)
+    super::attribute::attributes_array_in(vm, &attrs, t, scope.as_ref(), fn_file(&f), a)
 }
 
 fn rf_get_static_variables(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -308,7 +331,7 @@ fn rf_get_closure_used_variables(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     if let Some(d) = vm.closure_data(c) {
         for us in &u.uses {
             if let Some((_, v)) = d.vars.iter().find(|(cv, _)| *cv == us.cv) {
-                t.insert(ArrayKey::Str(us.name.clone()), v.deref());
+                t.insert(ArrayKey::Str(us.name.clone()), v.clone());
             }
         }
     }
@@ -428,8 +451,12 @@ fn instantiate_method(vm: &mut Vm, a: &Args, is_ctor: bool) -> VmResult<(Rc<Clas
         (v, None) => {
             let s = vm.to_zstr(v)?;
             let Some(p) = crate::call::find_double_colon(s.as_bytes()) else {
-                let fname = if is_ctor { "ReflectionMethod::__construct" } else { "ReflectionMethod::createFromMethodName" };
-                return Err(rexc(vm, &format!("{fname}(): Argument #1 ($objectOrMethod) must be a valid method name")));
+                let msg = if is_ctor {
+                    "ReflectionMethod::__construct(): Argument #1 ($objectOrMethod) must be a valid method name"
+                } else {
+                    "ReflectionMethod::createFromMethodName(): Argument #1 ($method) must be a valid method name"
+                };
+                return Err(rexc(vm, msg));
             };
             let cn = ZStr::from(&s.as_bytes()[..p]);
             let c = class_arg(vm, &Value::Str(cn), "Class")?;
@@ -439,8 +466,14 @@ fn instantiate_method(vm: &mut Vm, a: &Args, is_ctor: bool) -> VmResult<(Rc<Clas
     if cls.lc_name.as_bytes() == b"closure" && mname.eq_ignore_ascii_case(b"__invoke") {
         if let Some(o) = &orig {
             if let Some(d) = vm.closure_data(o) {
-                let m = cls.find_method(b"__invoke").cloned();
-                return Ok((cls.clone(), FnRef { func: d.func, method: m, class: Some(cls.clone()), closure: Some(o.clone()) }));
+                let m = Rc::new(Method {
+                    name: ZStr::from("__invoke"),
+                    func: d.func.clone(),
+                    flags: flags::PUBLIC,
+                    scope: Rc::downgrade(&cls),
+                    proto_scope: Rc::downgrade(&cls),
+                });
+                return Ok((cls.clone(), FnRef { func: d.func, method: Some(m), class: Some(cls.clone()), closure: Some(o.clone()) }));
             }
         }
     }
@@ -451,7 +484,7 @@ fn instantiate_method(vm: &mut Vm, a: &Args, is_ctor: bool) -> VmResult<(Rc<Clas
 }
 
 fn rm_construct(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    if a.values.len() == 1 {
+    if !a.has(1) {
         vm.deprecated(
             "Calling ReflectionMethod::__construct() with 1 argument is deprecated, use ReflectionMethod::createFromMethodName() instead",
         )?;
@@ -466,6 +499,11 @@ fn rm_construct(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 fn rm_create_from_method_name(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let (_, f) = instantiate_method(vm, a, false)?;
+    if let Some(c) = &a.called {
+        if c.flags & (cflags::ABSTRACT | cflags::EXPLICIT_ABSTRACT) != 0 {
+            return Err(vm.make_throw("Error", &format!("Cannot instantiate abstract class {}", c.name)));
+        }
+    }
     let called = a.called.clone().map_or_else(|| "ReflectionMethod".to_string(), |c| c.name.to_string_lossy());
     let scope_name = f.scope(vm).map(|c| c.name.clone()).unwrap_or_default();
     let n = f.name();
@@ -589,9 +627,31 @@ fn invoke_method(vm: &mut Vm, f: &FnRef, obj: Value, args: Vec<Value>, named: Ve
     Ok(vm.call_pending(call)?.deref())
 }
 
+/// `Z_PARAM_OBJECT_OR_NULL` for argument #1 of `invoke`/`invokeArgs`.
+fn object_or_null(vm: &mut Vm, f: &FnRef, a: &Args, method: &str) -> VmResult<Value> {
+    if f.flags() & flags::ABSTRACT != 0 {
+        let scope = f.scope(vm).map(|c| c.name.clone()).unwrap_or_default();
+        return Err(rexc(vm, &format!("Trying to invoke abstract method {}::{}()", scope, f.name())));
+    }
+    let v = a.at(0);
+    if !matches!(v, Value::Null | Value::Object(_)) {
+        return Err(vm.make_throw(
+            "TypeError",
+            &format!(
+                "ReflectionMethod::{method}(): Argument #1 ($object) must be of type ?object, {} given",
+                crate::typecheck::given_type(&v)
+            ),
+        ));
+    }
+    Ok(v)
+}
+
 fn rm_invoke(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let f = this_fn(vm, a)?;
-    let obj = a.at(0);
+    if !a.has(0) {
+        return Err(vm.make_throw("ArgumentCountError", "ReflectionMethod::invoke() expects at least 1 argument, 0 given"));
+    }
+    let obj = object_or_null(vm, &f, a, "invoke")?;
     let args: Vec<Value> = a.values.iter().skip(1).cloned().collect();
     let named = std::mem::take(&mut a.named);
     invoke_method(vm, &f, obj, args, named, true)
@@ -599,10 +659,25 @@ fn rm_invoke(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 fn rm_invoke_args(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let f = this_fn(vm, a)?;
-    let obj = a.at(0);
+    if f.flags() & flags::ABSTRACT == 0 && !a.has(1) {
+        let n = usize::from(a.has(0));
+        return Err(vm.make_throw(
+            "ArgumentCountError",
+            &format!("ReflectionMethod::invokeArgs() expects exactly 2 arguments, {n} given"),
+        ));
+    }
+    let obj = object_or_null(vm, &f, a, "invokeArgs")?;
     let (args, named) = match a.at(1) {
         Value::Array(x) => split_args(vm, &x)?,
-        _ => (Vec::new(), Vec::new()),
+        v => {
+            return Err(vm.make_throw(
+                "TypeError",
+                &format!(
+                    "ReflectionMethod::invokeArgs(): Argument #2 ($args) must be of type array, {} given",
+                    crate::typecheck::given_type(&v)
+                ),
+            ))
+        }
     };
     invoke_method(vm, &f, obj, args, named, false)
 }
@@ -646,7 +721,7 @@ fn clone_error(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
 pub(crate) fn register_abstract(vm: &mut Vm) {
     ClassBuilder::new("ReflectionFunctionAbstract")
         .hooks(super::constant::hooks())
-        .flags(cflags::ABSTRACT | cflags::EXPLICIT_ABSTRACT | cflags::NOT_SERIALIZABLE)
+        .flags(cflags::ABSTRACT | cflags::EXPLICIT_ABSTRACT | cflags::NOT_SERIALIZABLE | cflags::NO_CLONE)
         .implements(vm, &["Reflector"])
         .prop("name", RO, Some("string"), None)
         .method("__clone(): void", PRIV, clone_error)
@@ -688,6 +763,7 @@ pub(crate) fn register_abstract(vm: &mut Vm) {
 pub(crate) fn register_function(vm: &mut Vm) {
     ClassBuilder::new("ReflectionFunction")
         .extends(vm, "ReflectionFunctionAbstract")
+        .flags(cflags::NOT_SERIALIZABLE | cflags::NO_CLONE)
         .constant("IS_DEPRECATED", Value::Int(super::acc::DEPRECATED))
         .method("__construct(Closure|string $function)", PUB, rf_construct)
         .method("__toString(): string", PUB, rf_to_string)
@@ -703,6 +779,7 @@ pub(crate) fn register_function(vm: &mut Vm) {
 pub(crate) fn register_method(vm: &mut Vm) {
     ClassBuilder::new("ReflectionMethod")
         .extends(vm, "ReflectionFunctionAbstract")
+        .flags(cflags::NOT_SERIALIZABLE | cflags::NO_CLONE)
         .prop("class", RO, Some("string"), None)
         .constant("IS_STATIC", Value::Int(16))
         .constant("IS_PUBLIC", Value::Int(1))
@@ -722,8 +799,8 @@ pub(crate) fn register_method(vm: &mut Vm) {
         .method("isDestructor(): bool", PUB, rm_is_dtor)
         .method("getClosure(?object $object = null): Closure", PUB, rm_get_closure)
         .method("getModifiers(): int", PUB, rm_get_modifiers)
-        .method("invoke(?object $object, mixed ...$args): mixed", PUB, rm_invoke)
-        .method("invokeArgs(?object $object, array $args): mixed", PUB, rm_invoke_args)
+        .method("invoke(mixed $object = UNKNOWN, mixed ...$args): mixed", PUB, rm_invoke)
+        .method("invokeArgs(mixed $object = UNKNOWN, mixed $args = UNKNOWN): mixed", PUB, rm_invoke_args)
         .method("getDeclaringClass(): ReflectionClass", PUB, rm_get_declaring_class)
         .method("getPrototype(): ReflectionMethod", PUB, rm_get_prototype)
         .method("hasPrototype(): bool", PUB, rm_has_prototype)

@@ -162,6 +162,20 @@ fn is_special_class(n: &[u8]) -> bool {
 /// Resolves class and constant names like the compiler does for constant
 /// expressions (relative to namespace `ns`).
 fn resolve_expr(e: &mut Expr, ns: &[u8]) {
+    resolve_expr_in(e, ns, None);
+}
+
+/// Like [`resolve_expr`], folding `self::class` to the class name like the
+/// compiler does when the class is known.
+fn resolve_expr_in(e: &mut Expr, ns: &[u8], self_name: Option<&[u8]>) {
+    if let (ExprKind::ClassName(class), Some(sn)) = (&e.kind, self_name) {
+        if let ClassRef::Name(n) = class.as_ref() {
+            if n.kind == NameKind::Unqualified && n.name.eq_ignore_ascii_case(b"self") {
+                e.kind = ExprKind::String(sn.to_vec());
+                return;
+            }
+        }
+    }
     match &mut e.kind {
         ExprKind::ClassConst { class, .. } | ExprKind::ClassName(class) | ExprKind::StaticProp { class, .. } => {
             if let ClassRef::Name(n) = class.as_mut() {
@@ -264,13 +278,24 @@ fn strip_parens(e: Expr) -> Expr {
 /// `zend_ast_export` of a not yet evaluated constant expression, given its
 /// source text and the namespace it was compiled in.
 pub(crate) fn export_const_expr(text: &str, ns: &[u8]) -> Vec<u8> {
+    export_const_expr_in(text, ns, None)
+}
+
+/// [`export_const_expr`] inside class `self_name`.
+pub(crate) fn export_const_expr_in(text: &str, ns: &[u8], self_name: Option<&[u8]>) -> Vec<u8> {
     match parse_const_expr(text) {
         Some(mut e) => {
-            resolve_expr(&mut e, ns);
+            resolve_expr_in(&mut e, ns, self_name);
             php_parser::export::export_expr(&e)
         }
         None => text.as_bytes().to_vec(),
     }
+}
+
+/// `zend_ast_export` of an attribute argument expression.
+pub(crate) fn export_expr_ns(mut e: Expr, ns: &[u8]) -> Vec<u8> {
+    resolve_expr(&mut e, ns);
+    php_parser::export::export_expr(&e)
 }
 
 /// The namespace a function or class was declared in.
@@ -315,7 +340,9 @@ pub(crate) fn param_default_repr(vm: &Vm, f: &FnRef, p: &ParamInfo) -> Option<Ve
         Some(ConstExpr::Value(v)) => Some(format_default_value(vm, v)),
         Some(ConstExpr::Code(_)) => {
             let text = p.default_text.clone().unwrap_or_default();
-            Some(export_const_expr(&text, &fn_namespace(vm, f)))
+            let scope = f.scope(vm).filter(|c| !c.is_trait() && f.closure.is_none());
+            let sn = scope.as_ref().map(|c| c.name.as_bytes().to_vec());
+            Some(export_const_expr_in(&text, &fn_namespace(vm, f), sn.as_deref()))
         }
         None => None,
     }
@@ -352,7 +379,7 @@ pub(crate) fn parameter_string(vm: &Vm, f: &FnRef, idx: usize, required: bool) -
                 };
             }
             Func::User(_) => {
-                if let Some(d) = param_default_repr(vm, f, p) {
+                if let Some(d) = param_default_repr(vm, f, p).filter(|_| idx >= f.func.required() as usize) {
                     b.s(" = ").b(&d);
                 }
             }
@@ -622,8 +649,7 @@ fn const_value_text(vm: &mut Vm, v: &Value) -> VmResult<Vec<u8>> {
 
 /// `_class_const_string`.
 pub(crate) fn class_const_string(vm: &mut Vm, cls: &Rc<Class>, c: &Rc<ClassConst>, indent: &str) -> VmResult<Vec<u8>> {
-    let decl = vm.find_class(c.class.as_bytes()).unwrap_or_else(|| cls.clone());
-    let v = vm.class_constant(&decl, &c.name)?;
+    let v = super::constant::const_value_of(vm, cls, c)?;
     let mut b = Buf::default();
     if let Some(d) = &c.doc_comment {
         b.s(indent).z(d).c(b'\n');
@@ -648,7 +674,7 @@ pub(crate) fn class_const_string(vm: &mut Vm, cls: &Rc<Class>, c: &Rc<ClassConst
 pub(crate) fn enum_case_string(vm: &mut Vm, cls: &Rc<Class>, c: &Rc<ClassConst>, indent: &str) -> VmResult<Vec<u8>> {
     let v = vm.enum_case(cls, &c.name)?;
     let mut b = Buf::default();
-    if let Some(d) = &c.doc_comment {
+    if let Some(d) = &super::constant::const_doc_comment(cls, c) {
         b.s(indent).z(d).c(b'\n');
     }
     b.s(indent).s("Case ").z(&c.name);
@@ -688,6 +714,11 @@ fn has_iterator(c: &Rc<Class>) -> bool {
         return true;
     }
     if c.lc_name.as_bytes() == b"generator" {
+        return true;
+    }
+    if c.props.iter().any(|p| p.hooks.is_some())
+        || c.decl.as_ref().is_some_and(|d| d.props.iter().any(|p| p.hooks.is_some()))
+    {
         return true;
     }
     c.interfaces.iter().any(|i| matches!(i.lc_name.as_bytes(), b"iterator" | b"iteratoraggregate"))
@@ -847,7 +878,7 @@ pub(crate) fn class_string(vm: &mut Vm, c: &Rc<Class>, obj: Option<&Obj>, indent
             if name.is_empty() || name.as_bytes()[0] == 0 {
                 continue;
             }
-            if order::find_prop(vm, c, name.as_bytes()).is_some() {
+            if c.props.iter().any(|p| p.name == name) || c.find_static(name.as_bytes()).is_some() {
                 continue;
             }
             n += 1;

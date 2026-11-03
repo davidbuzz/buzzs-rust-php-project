@@ -151,8 +151,8 @@ fn rp_is_optional(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 }
 
 /// Whether the parameter has a default value (`RECV_INIT` / arginfo default).
-fn has_default(p: &ParamInfo, f: &FnRef) -> bool {
-    if p.variadic {
+fn has_default(p: &ParamInfo, f: &FnRef, idx: usize) -> bool {
+    if p.variadic || (f.func.is_user() && idx < f.func.required() as usize) {
         return false;
     }
     match &f.func {
@@ -162,8 +162,8 @@ fn has_default(p: &ParamInfo, f: &FnRef) -> bool {
 }
 
 fn rp_has_default(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let (f, _, p) = this_param(vm, a)?;
-    Ok(Value::Bool(has_default(&p, &f)))
+    let (f, idx, p) = this_param(vm, a)?;
+    Ok(Value::Bool(has_default(&p, &f, idx)))
 }
 
 fn no_default(vm: &mut Vm) -> crate::vm::Throw {
@@ -199,7 +199,7 @@ fn builtin_default(vm: &mut Vm, f: &FnRef, idx: usize, text: &str) -> VmResult<V
 
 fn rp_get_default(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let (f, idx, p) = this_param(vm, a)?;
-    if !has_default(&p, &f) {
+    if !has_default(&p, &f, idx) {
         return Err(no_default(vm));
     }
     match &f.func {
@@ -272,16 +272,16 @@ fn default_constant_name(vm: &Vm, f: &FnRef, p: &ParamInfo) -> Option<Option<Str
 }
 
 fn rp_is_default_constant(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let (f, _, p) = this_param(vm, a)?;
-    if !has_default(&p, &f) {
+    let (f, idx, p) = this_param(vm, a)?;
+    if !has_default(&p, &f, idx) {
         return Err(no_default(vm));
     }
     Ok(Value::Bool(default_constant_name(vm, &f, &p).is_some()))
 }
 
 fn rp_get_default_constant_name(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let (f, _, p) = this_param(vm, a)?;
-    if !has_default(&p, &f) {
+    let (f, idx, p) = this_param(vm, a)?;
+    if !has_default(&p, &f, idx) {
         return Err(no_default(vm));
     }
     Ok(match default_constant_name(vm, &f, &p) {
@@ -331,7 +331,7 @@ fn rp_is_callable(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 fn rp_get_attributes(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let (f, _, p) = this_param(vm, a)?;
     let scope = f.scope(vm);
-    super::attribute::attributes_array(vm, &p.attributes, super::target::PARAMETER, scope.as_ref(), a)
+    super::attribute::attributes_array_in(vm, &p.attributes, super::target::PARAMETER, scope.as_ref(), super::function::fn_file(&f), a)
 }
 fn rp_get_declaring_function(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let (f, _, _) = this_param(vm, a)?;
@@ -409,7 +409,7 @@ pub(crate) fn register(vm: &mut Vm) {
     ClassBuilder::new("ReflectionParameter")
         .implements(vm, &["Reflector"])
         .hooks(super::constant::hooks())
-        .flags(cflags::NOT_SERIALIZABLE)
+        .flags(cflags::NOT_SERIALIZABLE | cflags::NO_CLONE)
         .prop("name", RO, Some("string"), None)
         .method("__clone(): void", PRIV, clone_error)
         .method("__construct($function, int|string $param)", PUB, rp_construct)
