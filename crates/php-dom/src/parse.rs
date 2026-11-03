@@ -405,7 +405,12 @@ pub(crate) fn valid_file_path(source: &[u8]) -> Option<Vec<u8>> {
         }
     }
     if !has_scheme || is_file_uri {
-        return Some(realpath_or_expand(&src));
+        let r = realpath_or_expand(&src);
+        // MAXPATHLEN: longer paths cannot be resolved by PHP.
+        if r.len() >= 4096 {
+            return None;
+        }
+        return Some(r);
     }
     Some(src)
 }

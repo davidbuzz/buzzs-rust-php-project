@@ -82,7 +82,7 @@ pub enum DomIterator {
 
 impl DomIterator {
     /// Whether the iterator is positioned on an element.
-    pub fn valid(&self) -> bool {
+    pub fn valid(&mut self) -> bool {
         match self {
             DomIterator::Collection(c) => c.valid(),
             DomIterator::Tokens(t) => t.valid(),
@@ -98,7 +98,7 @@ impl DomIterator {
     }
 
     /// The current key.
-    pub fn key(&self) -> DomValue {
+    pub fn key(&mut self) -> DomValue {
         match self {
             DomIterator::Collection(c) => match c.key() {
                 IterKey::Int(i) => DomValue::Int(i),
@@ -739,8 +739,8 @@ pub fn construct(obj: &DomObject, args: &[DomValue], host: &dyn DomHost) -> DomR
                     n.construct_element(&name, v.as_deref(), &ns)?;
                 }
                 "DOMAttr" => n.construct_attr(&a.str(0)?, &a.str_or(1, b"")?)?,
-                "DOMText" => n.construct_text(&a.str_or(0, b"")?)?,
-                "DOMComment" => n.construct_comment(&a.str_or(0, b"")?)?,
+                "DOMText" => n.construct_text(a.opt_str(0)?.as_deref())?,
+                "DOMComment" => n.construct_comment(a.opt_str(0)?.as_deref())?,
                 "DOMCdataSection" => n.construct_cdata(&a.str(0)?)?,
                 "DOMProcessingInstruction" => {
                     let name = a.str(0)?;
@@ -997,7 +997,11 @@ fn call_node_2(
         }
         "getelementsbytagnamens" => {
             let ns = a.opt_str(0)?;
-            DomValue::NodeList(n.get_elements_by_tag_name_ns(ns.as_deref(), &a.str(1)?)?)
+            if ns.as_ref().is_some_and(|s| s.contains(&0)) {
+                return Err(DomError::arg_value(1, "must not contain any null bytes"));
+            }
+            let local = a.path(1)?;
+            DomValue::NodeList(n.get_elements_by_tag_name_ns(ns.as_deref(), &local)?)
         }
         "getelementsbyclassname" => DomValue::NodeList(n.get_elements_by_class_name(&a.str(0)?)?),
         "hasattribute" => DomValue::Bool(n.has_attribute(&a.str(0)?)?),

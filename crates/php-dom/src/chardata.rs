@@ -209,19 +209,21 @@ impl Node {
     }
 
     /// `new DOMText($data)`.
-    pub fn construct_text(&self, value: &[u8]) -> DomResult<()> {
-        let c = cs(value);
-        // SAFETY: valid C string.
-        let n = N::new(unsafe { ffi::xmlNewText(c.as_ptr().cast()) }).ok_or_else(|| DomError::dom(C::InvalidState))?;
+    pub fn construct_text(&self, value: Option<&[u8]>) -> DomResult<()> {
+        let c = value.map(cs);
+        // SAFETY: valid C string or NULL.
+        let n = N::new(unsafe { ffi::xmlNewText(c.as_ref().map_or(ptr::null(), |c| c.as_ptr().cast())) })
+            .ok_or_else(|| DomError::dom(C::InvalidState))?;
         self.bind_constructed(n);
         Ok(())
     }
 
     /// `new DOMComment($data)`.
-    pub fn construct_comment(&self, value: &[u8]) -> DomResult<()> {
-        let c = cs(value);
-        // SAFETY: valid C string.
-        let n = N::new(unsafe { ffi::xmlNewComment(c.as_ptr().cast()) }).ok_or_else(|| DomError::dom(C::InvalidState))?;
+    pub fn construct_comment(&self, value: Option<&[u8]>) -> DomResult<()> {
+        let c = value.map(cs);
+        // SAFETY: valid C string or NULL.
+        let n = N::new(unsafe { ffi::xmlNewComment(c.as_ref().map_or(ptr::null(), |c| c.as_ptr().cast())) })
+            .ok_or_else(|| DomError::dom(C::InvalidState))?;
         self.bind_constructed(n);
         Ok(())
     }

@@ -959,7 +959,7 @@ impl Interp {
         let k = &*o.kind.borrow();
         match k {
             ObjKind::Iter(h) => {
-                let i = h.0.borrow();
+                let mut i = h.0.borrow_mut();
                 if !i.valid() {
                     return Ok((false, V::Null, V::Null));
                 }
