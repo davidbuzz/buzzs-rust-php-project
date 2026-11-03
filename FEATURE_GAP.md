@@ -32,13 +32,13 @@ Keep rows when they reach 100%; they become the completion record. Add rows as g
 | Memory limit and resource limits | 0% | low | `memory_limit`, `max_execution_time`, stack-overflow detection. Ref: `Zend/zend_alloc.c`, `Zend/zend_call_stack.c`. |
 | INI system | 0% | high | `php.ini` parsing, `ini_get`/`ini_set`, per-test `--INI--`. Ref: `Zend/zend_ini*.c`, `main/php_ini.c`. **Done in `php-support::ini`:** scanner/parser port (Bison tables, byte-identical syntax errors, NORMAL/RAW/TYPED, `${VAR:-fb}`, constants hook, expressions, `a[]=`), `parse_ini_string()` arrays (125 oracle cases incl. the phpt fixtures), `zend_ini_parse_quantity`/`parse_bool`, `IniRegistry` with core directives, access levels, typed modify handlers, `ini_get/set/restore/get_all`. **Missing:** `php.ini` file discovery/loading (`main/php_ini.c`), `[PATH=]`/`[HOST=]` sections, extension directives beyond core/standard samples, VM wiring of the userland functions. |
 | **Language features** | | | |
-| Functions and closures | 53% | high | User functions, closures, `use`, arrow functions, static vars, first-class callable syntax, `callable` checks. Ref: `Zend/tests/closures`, `arrow_functions`, `first_class_callable`. |
+| Functions and closures | 79% | high | User functions, closures, `use`, arrow functions, static vars, first-class callable syntax, `callable` checks. Ref: `Zend/tests/closures`, `arrow_functions`, `first_class_callable`. |
 | Classes and objects | 55% | high | Properties, methods, constants, static, visibility, `readonly`, constructor promotion, `clone`, magic methods. Ref: `Zend/zend_object_handlers.c`, `tests/classes` (283). |
 | Inheritance, interfaces, traits | 59% | high | Signature compatibility checks, abstract, final, LSB, trait conflict resolution. Ref: `Zend/zend_inheritance.c`, `Zend/tests/traits`, `Zend/tests/inheritance`. |
 | Type system | 48% | high | Scalar, union, intersection and DNF types, nullable, `never`, `static`, coercion vs `strict_types`. Ref: `Zend/tests/type_declarations`. |
 | Namespaces and `use` | 82% | high | Name resolution, group use, function and constant fallback. Ref: `Zend/tests/namespaces`. |
 | Autoloading | 50% | high | `spl_autoload_register`, class loading order. Ref: `Zend/zend_autoload.c`. |
-| Enums | 56% | med | Pure and backed enums, `cases()`, `from`/`tryFrom`, interface implementation. Ref: `Zend/zend_enum.c`, `Zend/tests/enum`. |
+| Enums | 68% | med | Pure and backed enums, `cases()`, `from`/`tryFrom`, interface implementation. Ref: `Zend/zend_enum.c`, `Zend/tests/enum`. |
 | Generators | 60% | med | `yield`, `yield from`, send/throw, generators as iterators. Ref: `Zend/zend_generators.c`, `Zend/tests/generators`. |
 | Fibers | 34% | med | `Fiber` start/suspend/resume, needs a separate stack or a CPS design. Ref: `Zend/zend_fibers.c`, `Zend/tests/fibers`. |
 | Attributes | 22% | med | Parsing, `#[Attribute]` validation, reflection access, built-ins (`Override`, `Deprecated`, `SensitiveParameter`…). Ref: `Zend/zend_attributes.c`. |
