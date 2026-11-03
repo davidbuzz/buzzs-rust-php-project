@@ -263,6 +263,9 @@ version = "0.1.0"
 [[package]]
 name = "php-parser"
 version = "0.1.0"
+dependencies = [
+ "php-lexer",
+]
 
 [[package]]
 name = "php-pcre"
@@ -283,12 +286,19 @@ name = "php-runtime"
 version = "0.1.0"
 
 [[package]]
+name = "php-stdarr"
+version = "0.1.0"
+
+[[package]]
 name = "php-stdstr"
 version = "0.1.0"
 
 [[package]]
 name = "php-streams"
 version = "0.1.0"
+dependencies = [
+ "libc",
+]
 
 [[package]]
 name = "php-support"

@@ -26,6 +26,7 @@ A Rust re-implementation of PHP whose goal is to pass the php-src `.phpt` test s
 - `crates/php-stdstr`  — pure byte-level algorithms behind ext/standard string/html/url/math functions (ref: ext/standard/{string,html,url,base64,...}.c)
 - `crates/php-streams` — stream layer: wrappers (file, php://, data:, glob), memory/temp streams, filters, fopen modes, stat (ref: main/streams/, ext/standard/file.c)
 - `crates/php-stdarr`  — ext/standard array functions over php-runtime Value/ZArray (ref: ext/standard/array.c)
+- `crates/php-mbstring` — libmbfl port: encodings, conversion, mb_* string algorithms (ref: ext/mbstring, ext/mbstring/libmbfl)
 
 ## Parallel work
 Several agents work concurrently, one crate each. Only edit files inside your own crate (plus your row(s) in FEATURE_GAP.md). Never edit workspace Cargo.toml; crates are pre-registered. Commit your own crate's files with `git add crates/<yours>` only.
