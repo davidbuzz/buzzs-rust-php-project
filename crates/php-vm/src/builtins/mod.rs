@@ -2,6 +2,7 @@
 
 pub mod classbuilder;
 mod core;
+mod dump;
 pub(crate) use self::core::enum_methods;
 mod array;
 mod classes;

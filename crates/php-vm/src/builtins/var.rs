@@ -1,48 +1,63 @@
 //! `ext/standard/var.c`, `type.c`: dumping, type inspection and conversion.
 
+use super::dump::{self, Out};
 use super::reg;
 use super::util::{b, i, s, sv};
 use crate::func::Args;
 use crate::object;
 use crate::vm::{Vm, VmResult};
-use php_runtime::{dump, serialize, Value, ZArray, ZStr};
+use php_runtime::{serialize, Value, ZArray, ZStr};
 
 fn var_dump(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let vals: Vec<Value> = a.values.iter().map(Value::deref).collect();
-    for v in vals {
-        let mut out = Vec::new();
-        let r = dump::var_dump(&mut out, &v, vm);
-        vm.echo(&out);
-        r.map_err(|e| vm.rt_throw(e))?;
+    for i in 0..a.values.len() {
+        let v = a.values[i].deref();
+        let mut out = Out::stream();
+        let r = dump::var_dump(vm, &mut out, &v, 1, None);
+        out.flush(vm);
+        r?;
+    }
+    Ok(Value::Null)
+}
+
+fn debug_zval_dump(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    for i in 0..a.values.len() {
+        let v = a.values[i].clone();
+        let mut out = Out::stream();
+        // Our clone and the VM's argument copy are not counted by PHP.
+        let r = dump::debug_zval_dump(vm, &mut out, &v, 2);
+        out.flush(vm);
+        r?;
     }
     Ok(Value::Null)
 }
 
 fn print_r(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let v = a.at(0);
-    let ret = b(a, 1);
-    if ret {
-        // Output produced while formatting goes into the result.
-        let out = dump::print_r(&v, vm).map_err(|e| vm.rt_throw(e))?;
-        return Ok(sv(out));
+    if b(a, 1) {
+        // Output produced by `__debugInfo()` is not captured.
+        let mut out = Out::collect();
+        dump::print_r(vm, &mut out, &v, 0)?;
+        return Ok(sv(out.finish(vm)));
     }
-    let out = dump::print_r(&v, vm).map_err(|e| vm.rt_throw(e))?;
-    vm.echo(&out);
+    let mut out = Out::stream();
+    let r = dump::print_r(vm, &mut out, &v, 0);
+    out.flush(vm);
+    r?;
     Ok(Value::Bool(true))
 }
 
 fn var_export(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let v = a.at(0);
-    let out = dump::var_export(&v, vm).map_err(|e| vm.rt_throw(e))?;
     if b(a, 1) {
-        return Ok(sv(out));
+        let mut out = Out::collect();
+        dump::var_export(vm, &mut out, &v, 1)?;
+        return Ok(sv(out.finish(vm)));
     }
-    vm.echo(&out);
+    let mut out = Out::stream();
+    let r = dump::var_export(vm, &mut out, &v, 1);
+    out.flush(vm);
+    r?;
     Ok(Value::Null)
-}
-
-fn debug_zval_refcount(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    var_dump(vm, a)
 }
 
 fn serialize_fn(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -75,15 +90,22 @@ fn get_debug_type(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             if r.is_closed() {
                 "resource (closed)".into()
             } else {
-                format!("resource ({})", r.type_name().map(|t| t.to_string_lossy()).unwrap_or_default())
+                format!(
+                    "resource ({})",
+                    r.type_name()
+                        .map(|t| t.to_string_lossy())
+                        .unwrap_or_default()
+                )
             }
         }
         Value::Object(o) => {
             let c = object::class_of(o);
             if c.flags & crate::class::cflags::ANON != 0 {
-                let parent = c.parent.as_ref().map(|p| p.name.to_string_lossy()).or_else(|| {
-                    c.interfaces.first().map(|i| i.name.to_string_lossy())
-                });
+                let parent = c
+                    .parent
+                    .as_ref()
+                    .map(|p| p.name.to_string_lossy())
+                    .or_else(|| c.interfaces.first().map(|i| i.name.to_string_lossy()));
                 format!("{}@anonymous", parent.unwrap_or_else(|| "class".into()))
             } else {
                 c.name.to_string_lossy()
@@ -94,7 +116,9 @@ fn get_debug_type(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 }
 
 fn settype(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let Some(r) = a.reference(0) else { return Ok(Value::Bool(false)) };
+    let Some(r) = a.reference(0) else {
+        return Ok(Value::Bool(false));
+    };
     let t = s(a, 1).to_ascii_lowercase();
     let v = r.get();
     let nv = match t.as_bytes() {
@@ -142,11 +166,26 @@ fn intval(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
                 None => (false, t.strip_prefix('+').unwrap_or(t)),
             };
             let (base, t) = if base == 16 {
-                (16, t.strip_prefix("0x").or_else(|| t.strip_prefix("0X")).unwrap_or(t))
+                (
+                    16,
+                    t.strip_prefix("0x")
+                        .or_else(|| t.strip_prefix("0X"))
+                        .unwrap_or(t),
+                )
             } else if base == 8 {
-                (8, t.strip_prefix("0o").or_else(|| t.strip_prefix("0O")).unwrap_or(t))
+                (
+                    8,
+                    t.strip_prefix("0o")
+                        .or_else(|| t.strip_prefix("0O"))
+                        .unwrap_or(t),
+                )
             } else if base == 2 {
-                (2, t.strip_prefix("0b").or_else(|| t.strip_prefix("0B")).unwrap_or(t))
+                (
+                    2,
+                    t.strip_prefix("0b")
+                        .or_else(|| t.strip_prefix("0B"))
+                        .unwrap_or(t),
+                )
             } else if base == 0 {
                 if let Some(r) = t.strip_prefix("0x").or_else(|| t.strip_prefix("0X")) {
                     (16, r)
@@ -205,10 +244,15 @@ is_fn!(is_bool, Value::Bool(_));
 is_fn!(is_array, Value::Array(_));
 is_fn!(is_object, Value::Object(_));
 is_fn!(is_null, Value::Null);
-is_fn!(is_scalar, Value::Int(_) | Value::Float(_) | Value::Str(_) | Value::Bool(_));
+is_fn!(
+    is_scalar,
+    Value::Int(_) | Value::Float(_) | Value::Str(_) | Value::Bool(_)
+);
 
 fn is_resource(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    Ok(Value::Bool(matches!(a.at(0), Value::Resource(r) if !r.is_closed())))
+    Ok(Value::Bool(
+        matches!(a.at(0), Value::Resource(r) if !r.is_closed()),
+    ))
 }
 
 fn is_numeric(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -237,12 +281,32 @@ fn is_countable(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 /// Registers the var functions.
 pub(crate) fn register(vm: &mut Vm) {
-    reg(vm, "var_dump(mixed $value, mixed ...$values): void", var_dump);
-    reg(vm, "debug_zval_refcount(mixed $value, mixed ...$values): void", debug_zval_refcount);
-    reg(vm, "print_r(mixed $value, bool $return = false): string|true", print_r);
-    reg(vm, "var_export(mixed $value, bool $return = false): ?string", var_export);
+    reg(
+        vm,
+        "var_dump(mixed $value, mixed ...$values): void",
+        var_dump,
+    );
+    reg(
+        vm,
+        "debug_zval_dump(mixed $value, mixed ...$values): void",
+        debug_zval_dump,
+    );
+    reg(
+        vm,
+        "print_r(mixed $value, bool $return = false): string|true",
+        print_r,
+    );
+    reg(
+        vm,
+        "var_export(mixed $value, bool $return = false): ?string",
+        var_export,
+    );
     reg(vm, "serialize(mixed $value): string", serialize_fn);
-    reg(vm, "unserialize(string $data, array $options = []): mixed", unserialize_fn);
+    reg(
+        vm,
+        "unserialize(string $data, array $options = []): mixed",
+        unserialize_fn,
+    );
     reg(vm, "gettype(mixed $value): string", gettype);
     reg(vm, "get_debug_type(mixed $value): string", get_debug_type);
     reg(vm, "settype(mixed &$var, string $type): bool", settype);
