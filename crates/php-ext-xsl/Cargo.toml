@@ -11,6 +11,9 @@ php-vm = { path = "../php-vm" }
 php-runtime = { path = "../php-runtime" }
 php-xsl = { path = "../php-xsl" }
 php-libxml = { path = "../php-libxml" }
+php-ext-xml = { path = "../php-ext-xml" }
+php-ext-streams = { path = "../php-ext-streams" }
+php-streams = { path = "../php-streams" }
 
 [lints]
 workspace = true
