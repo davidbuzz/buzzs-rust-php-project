@@ -902,3 +902,12 @@ fn pdo_039_error_code() {
     h.dump(&v);
     assert_phpt!(h, "pdo_039.phpt");
 }
+
+#[test]
+fn harness_rejects_wrong_output() {
+    assert!(!check_phpt("pdo", "pdo_001.phpt", "garbage"));
+    assert!(!check_phpt("pdo", "pdo_034.phpt", ""));
+    assert!(expectf_match("a %s b", "a xyz b"));
+    assert!(!expectf_match("a %d b", "a x b"));
+    assert!(expectf_match("x%Ay", "x\n\ny"));
+}
