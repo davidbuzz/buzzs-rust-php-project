@@ -38,6 +38,8 @@ members = [
     "crates/php-pcntl",
     "crates/php-spl",
     "crates/php-session",
+    "crates/php-stdmisc",
+    "crates/php-phar",
 ]
 
 [workspace.package]

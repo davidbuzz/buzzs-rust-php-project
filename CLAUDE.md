@@ -49,6 +49,8 @@ A Rust re-implementation of PHP whose goal is to pass the php-src `.phpt` test s
 - `crates/php-pcntl`    — ext/pcntl over libc (signal dispatch hooks for the VM)
 - `crates/php-spl`      — SPL data structures, iterators, ArrayObject core over php-runtime (ref: ext/spl)
 - `crates/php-session`  — session core: serializers, save handlers, ID generation, INI semantics (ref: ext/session)
+- `crates/php-stdmisc`  — ext/standard: crypt/password, exec/proc_open, network/dns, env/info, highlight, getopt, http_build_query/parse_str, locale
+- `crates/php-phar`     — phar/tar/zip archive formats, manifest, signatures, stub, phar:// semantics (ref: ext/phar)
 
 ## Parallel work
 Several agents work concurrently, one crate each. Only edit files inside your own crate (plus your row(s) in FEATURE_GAP.md). Never edit workspace Cargo.toml; crates are pre-registered. Commit your own crate's files with `git add crates/<yours>` only.
