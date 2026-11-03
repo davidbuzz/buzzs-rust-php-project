@@ -36,7 +36,13 @@ pub(crate) struct Ancillary {
 
 /// `get_ancillary_reg_entry()`.
 pub(crate) fn ancillary(level: i32, ty: i32) -> Option<Ancillary> {
-    let e = |size, var_el_size, kind| Some(Ancillary { size, var_el_size, kind });
+    let e = |size, var_el_size, kind| {
+        Some(Ancillary {
+            size,
+            var_el_size,
+            kind,
+        })
+    };
     match (level, ty) {
         (libc::IPPROTO_IPV6, libc::IPV6_PKTINFO) => e(PKTINFO_SIZE, 0, AncKind::Pktinfo),
         (libc::IPPROTO_IPV6, libc::IPV6_HOPLIMIT | libc::IPV6_TCLASS) => e(4, 0, AncKind::Int),
@@ -68,8 +74,15 @@ impl Ser<'_> {
             return;
         }
         let path = self.keys.join(" > ");
-        let path = if path.is_empty() { "unavailable".to_owned() } else { path };
-        self.err = Some(format!("error converting user data (path: {path}): {}", msg.into()));
+        let path = if path.is_empty() {
+            "unavailable".to_owned()
+        } else {
+            path
+        };
+        self.err = Some(format!(
+            "error converting user data (path: {path}): {}",
+            msg.into()
+        ));
     }
 
     fn with_key<T>(&mut self, key: &str, f: impl FnOnce(&mut Self) -> T) -> T {
@@ -120,7 +133,9 @@ impl Ser<'_> {
                 }
             }
             _ => {
-                self.error("expected an integer, either of a PHP integer type or of a convertible type");
+                self.error(
+                    "expected an integer, either of a PHP integer type or of a convertible type",
+                );
                 0
             }
         }
@@ -300,20 +315,29 @@ impl Ser<'_> {
         match family {
             libc::AF_INET => {
                 if sock_family != libc::AF_INET && sock_family != libc::AF_INET6 {
-                    self.error(format!("the specified family (number {family}) is not supported on this socket"));
+                    self.error(format!(
+                        "the specified family (number {family}) is not supported on this socket"
+                    ));
                     return None;
                 }
                 if !self.fill_sockaddr {
-                    return Some(SockAddr::from_raw(&[], std::mem::size_of::<libc::sockaddr_in>()));
+                    return Some(SockAddr::from_raw(
+                        &[],
+                        std::mem::size_of::<libc::sockaddr_in>(),
+                    ));
                 }
                 let (mut ip, mut port) = ([0u8; 4], 0u16);
-                self.aggregate(container, &[("family", false), ("addr", false), ("port", false)], |s, k, v| match k {
-                    "family" => {
-                        s.sa_family(v);
-                    }
-                    "addr" => ip = s.sin_addr(v),
-                    _ => port = s.uint16(v),
-                });
+                self.aggregate(
+                    container,
+                    &[("family", false), ("addr", false), ("port", false)],
+                    |s, k, v| match k {
+                        "family" => {
+                            s.sa_family(v);
+                        }
+                        "addr" => ip = s.sin_addr(v),
+                        _ => port = s.uint16(v),
+                    },
+                );
                 Some(SockAddr::inet(ip, port))
             }
             libc::AF_INET6 => {
@@ -322,12 +346,21 @@ impl Ser<'_> {
                     return None;
                 }
                 if !self.fill_sockaddr {
-                    return Some(SockAddr::from_raw(&[], std::mem::size_of::<libc::sockaddr_in6>()));
+                    return Some(SockAddr::from_raw(
+                        &[],
+                        std::mem::size_of::<libc::sockaddr_in6>(),
+                    ));
                 }
                 let (mut ip, mut port, mut flow, mut scope) = ([0u8; 16], 0u16, 0u32, 0u32);
                 self.aggregate(
                     container,
-                    &[("family", false), ("addr", false), ("port", false), ("flowinfo", false), ("scope_id", false)],
+                    &[
+                        ("family", false),
+                        ("addr", false),
+                        ("port", false),
+                        ("flowinfo", false),
+                        ("scope_id", false),
+                    ],
                     |s, k, v| match k {
                         "family" => {
                             s.sa_family(v);
@@ -346,29 +379,36 @@ impl Ser<'_> {
                     return None;
                 }
                 if !self.fill_sockaddr {
-                    return Some(SockAddr::from_raw(&[], std::mem::size_of::<libc::sockaddr_un>()));
+                    return Some(SockAddr::from_raw(
+                        &[],
+                        std::mem::size_of::<libc::sockaddr_un>(),
+                    ));
                 }
                 let mut path: Vec<u8> = Vec::new();
-                self.aggregate(container, &[("family", false), ("path", false)], |s, k, v| {
-                    if k == "family" {
-                        s.sa_family(v);
-                        return;
-                    }
-                    let p = s.string(v);
-                    if s.thrown.is_some() {
-                        return;
-                    }
-                    if p.is_empty() {
-                        s.error("the path is must not be empty");
-                    } else if p.len() >= sys::SUN_PATH_LEN {
-                        s.error(format!(
-                            "the path is too long, the maximum permitted length is {}",
-                            sys::SUN_PATH_LEN - 1
-                        ));
-                    } else {
-                        path = p;
-                    }
-                });
+                self.aggregate(
+                    container,
+                    &[("family", false), ("path", false)],
+                    |s, k, v| {
+                        if k == "family" {
+                            s.sa_family(v);
+                            return;
+                        }
+                        let p = s.string(v);
+                        if s.thrown.is_some() {
+                            return;
+                        }
+                        if p.is_empty() {
+                            s.error("the path is must not be empty");
+                        } else if p.len() >= sys::SUN_PATH_LEN {
+                            s.error(format!(
+                                "the path is too long, the maximum permitted length is {}",
+                                sys::SUN_PATH_LEN - 1
+                            ));
+                        } else {
+                            path = p;
+                        }
+                    },
+                );
                 let strlen = |b: &[u8]| b.iter().position(|&c| c == 0).unwrap_or(b.len());
                 let len = if path.first() == Some(&0) {
                     1 + strlen(&path[1..])
@@ -378,7 +418,9 @@ impl Ser<'_> {
                 Some(SockAddr::unix(&path, sys::SUN_PATH_OFFSET + len))
             }
             _ => {
-                self.error("the only families currently supported are AF_INET, AF_INET6 and AF_UNIX");
+                self.error(
+                    "the only families currently supported are AF_INET, AF_INET6 and AF_UNIX",
+                );
                 None
             }
         }
@@ -402,11 +444,15 @@ impl Ser<'_> {
 
     fn ucred(&mut self, v: &Value) -> Vec<u8> {
         let (mut pid, mut uid, mut gid) = (0i32, 0u32, 0u32);
-        self.aggregate(v, &[("pid", true), ("uid", true), ("gid", true)], |s, k, v| match k {
-            "pid" => pid = s.pid(v),
-            "uid" => uid = s.uid(v),
-            _ => gid = s.uid(v),
-        });
+        self.aggregate(
+            v,
+            &[("pid", true), ("uid", true), ("gid", true)],
+            |s, k, v| match k {
+                "pid" => pid = s.pid(v),
+                "uid" => uid = s.uid(v),
+                _ => gid = s.uid(v),
+            },
+        );
         let mut out = pid.to_ne_bytes().to_vec();
         out.extend_from_slice(&uid.to_ne_bytes());
         out.extend_from_slice(&gid.to_ne_bytes());
@@ -460,7 +506,9 @@ impl Ser<'_> {
             return;
         }
         let Some(entry) = ancillary(level, ty) else {
-            self.error(format!("cmsghdr with level {level} and type {ty} not supported"));
+            self.error(format!(
+                "cmsghdr with level {level} and type {ty} not supported"
+            ));
             return;
         };
         let data_len = if entry.kind == AncKind::Rights {
@@ -514,7 +562,9 @@ impl Ser<'_> {
             if self.failed() {
                 break;
             }
-            self.with_key(&format!("element #{i}"), |s| s.control_element(elem, &mut buf));
+            self.with_key(&format!("element #{i}"), |s| {
+                s.control_element(elem, &mut buf)
+            });
         }
         buf
     }
@@ -536,7 +586,12 @@ struct RecvSpec {
     controllen: usize,
 }
 
-fn finish<T>(st: &mut Sockets, ser_err: Option<String>, thrown: Option<SocketError>, v: T) -> SocketResult<T> {
+fn finish<T>(
+    st: &mut Sockets,
+    ser_err: Option<String>,
+    thrown: Option<SocketError>,
+    v: T,
+) -> SocketResult<T> {
     if let Some(t) = thrown {
         return Err(t);
     }
@@ -561,8 +616,15 @@ impl Res {
             return;
         }
         let path = self.keys.join(" > ");
-        let path = if path.is_empty() { "unavailable".to_owned() } else { path };
-        self.err = Some(format!("error converting native data (path: {path}): {}", msg.into()));
+        let path = if path.is_empty() {
+            "unavailable".to_owned()
+        } else {
+            path
+        };
+        self.err = Some(format!(
+            "error converting native data (path: {path}): {}",
+            msg.into()
+        ));
     }
 
     fn with_key<T>(&mut self, key: &str, f: impl FnOnce(&mut Self) -> T) -> T {
@@ -601,7 +663,9 @@ impl Res {
                 OutValue::assoc(vec![("family", family()), ("path", path)])
             }
             _ => {
-                self.error(format!("cannot read struct sockaddr with family {fam}; not supported"));
+                self.error(format!(
+                    "cannot read struct sockaddr with family {fam}; not supported"
+                ));
                 OutValue::Array(Vec::new())
             }
         }
@@ -719,36 +783,63 @@ impl Res {
 
 impl Sockets {
     /// `socket_sendmsg(Socket $socket, array $message, int $flags = 0)`.
-    pub fn sendmsg(&mut self, socket: &mut Socket, message: &Value, flags: i64) -> SocketResult<i64> {
+    pub fn sendmsg(
+        &mut self,
+        socket: &mut Socket,
+        message: &Value,
+        flags: i64,
+    ) -> SocketResult<i64> {
         const F: &str = "socket_sendmsg";
         let flags = i32::try_from(flags).map_err(|_| {
-            crate::arg_value_error(F, 3, "flags", &format!("must be between {} and {}", i32::MIN, i32::MAX))
+            crate::arg_value_error(
+                F,
+                3,
+                "flags",
+                &format!("must be between {} and {}", i32::MIN, i32::MAX),
+            )
         })?;
         crate::ensure_open(F, socket)?;
         let mut msg = SendMsg::default();
         let (err, thrown) = {
-            let mut s = Ser { keys: vec!["msghdr".into()], err: None, thrown: None, st: self, sock: socket, fill_sockaddr: true };
-            s.aggregate(message, &[("name", false), ("iov", false), ("control", false)], |s, k, v| match k {
-                "name" => msg.name = s.sockaddr(v),
-                "iov" => {
-                    let Value::Array(t) = v else {
-                        s.error("expected an array here");
-                        return;
-                    };
-                    for (i, (_, e)) in t.iter().enumerate() {
-                        let b = s.with_key(&format!("element #{}", i + 1), |s| s.string(e));
-                        if s.failed() {
-                            break;
+            let mut s = Ser {
+                keys: vec!["msghdr".into()],
+                err: None,
+                thrown: None,
+                st: self,
+                sock: socket,
+                fill_sockaddr: true,
+            };
+            s.aggregate(
+                message,
+                &[("name", false), ("iov", false), ("control", false)],
+                |s, k, v| match k {
+                    "name" => msg.name = s.sockaddr(v),
+                    "iov" => {
+                        let Value::Array(t) = v else {
+                            s.error("expected an array here");
+                            return;
+                        };
+                        for (i, (_, e)) in t.iter().enumerate() {
+                            let b = s.with_key(&format!("element #{}", i + 1), |s| s.string(e));
+                            if s.failed() {
+                                break;
+                            }
+                            msg.iov.push(b);
                         }
-                        msg.iov.push(b);
                     }
-                }
-                _ => msg.control = s.control_array(v),
-            });
+                    _ => msg.control = s.control_array(v),
+                },
+            );
             (s.err, s.thrown)
         };
         let msg = finish(self, err, thrown, msg)?;
-        match sys::sendmsg(socket.fd(), msg.name.as_ref(), &msg.iov, &msg.control, flags) {
+        match sys::sendmsg(
+            socket.fd(),
+            msg.name.as_ref(),
+            &msg.iov,
+            &msg.control,
+            flags,
+        ) {
             Ok(n) => Ok(i64::try_from(n).unwrap_or(i64::MAX)),
             Err(e) => {
                 self.sock_error(socket, "Error in sendmsg", e);
@@ -762,15 +853,36 @@ impl Sockets {
     /// On success returns the byte count and the new value of `$message`
     /// ([`OutValue::False`] when converting the received data failed — a
     /// warning is then queued but the count is still returned).
-    pub fn recvmsg(&mut self, socket: &mut Socket, message: &Value, flags: i64) -> SocketResult<(i64, OutValue)> {
+    pub fn recvmsg(
+        &mut self,
+        socket: &mut Socket,
+        message: &Value,
+        flags: i64,
+    ) -> SocketResult<(i64, OutValue)> {
         const F: &str = "socket_recvmsg";
         let flags = i32::try_from(flags).map_err(|_| {
-            crate::arg_value_error(F, 3, "flags", &format!("must be between {} and {}", i32::MIN, i32::MAX))
+            crate::arg_value_error(
+                F,
+                3,
+                "flags",
+                &format!("must be between {} and {}", i32::MIN, i32::MAX),
+            )
         })?;
         crate::ensure_open(F, socket)?;
-        let mut spec = RecvSpec { name_len: None, iov: Vec::new(), controllen: 0 };
+        let mut spec = RecvSpec {
+            name_len: None,
+            iov: Vec::new(),
+            controllen: 0,
+        };
         let (err, thrown) = {
-            let mut s = Ser { keys: vec!["msghdr".into()], err: None, thrown: None, st: self, sock: socket, fill_sockaddr: false };
+            let mut s = Ser {
+                keys: vec!["msghdr".into()],
+                err: None,
+                thrown: None,
+                st: self,
+                sock: socket,
+                fill_sockaddr: false,
+            };
             s.aggregate(message, &[("name", false), ("buffer_size", false), ("controllen", true)], |s, k, v| match k {
                 "name" => spec.name_len = s.sockaddr(v).map(|a| a.raw().1),
                 "buffer_size" => {
@@ -802,16 +914,30 @@ impl Sockets {
         if spec.iov.is_empty() {
             spec.iov = vec![DEFAULT_BUFF_SIZE];
         }
-        let r = match sys::recvmsg(socket.fd(), spec.name_len, &spec.iov, spec.controllen, flags) {
+        let r = match sys::recvmsg(
+            socket.fd(),
+            spec.name_len,
+            &spec.iov,
+            spec.controllen,
+            flags,
+        ) {
             Ok(r) => r,
             Err(e) => {
                 self.last_error = e;
-                self.warn(format!("Error in recvmsg [{e}]: {}", crate::sockets_strerror(e)));
+                self.warn(format!(
+                    "Error in recvmsg [{e}]: {}",
+                    crate::sockets_strerror(e)
+                ));
                 return Err(SocketError::Failed);
             }
         };
-        let mut res = Res { keys: vec!["msghdr".into()], err: None };
-        let name = res.with_key("name", |s| r.name.as_ref().map_or(OutValue::Null, |a| s.sockaddr(a)));
+        let mut res = Res {
+            keys: vec!["msghdr".into()],
+            err: None,
+        };
+        let name = res.with_key("name", |s| {
+            r.name.as_ref().map_or(OutValue::Null, |a| s.sockaddr(a))
+        });
         let control = if res.err.is_none() {
             res.with_key("control", |s| s.control(&r.control, self))
         } else {
@@ -824,7 +950,10 @@ impl Sockets {
                 break;
             }
             let n = b.len().min(left);
-            iov.push((Key::Int(i64::try_from(i).unwrap_or(0)), OutValue::Str(b[..n].to_vec())));
+            iov.push((
+                Key::Int(i64::try_from(i).unwrap_or(0)),
+                OutValue::Str(b[..n].to_vec()),
+            ));
             left -= n;
         }
         let count = i64::try_from(r.len).unwrap_or(i64::MAX);
@@ -844,9 +973,20 @@ impl Sockets {
     }
 
     /// `php_do_setsockopt_ipv6_rfc3542()` for `IPV6_PKTINFO`.
-    pub(crate) fn set_ipv6_pktinfo(&mut self, socket: &mut Socket, value: &Value) -> SocketResult<()> {
+    pub(crate) fn set_ipv6_pktinfo(
+        &mut self,
+        socket: &mut Socket,
+        value: &Value,
+    ) -> SocketResult<()> {
         let (bytes, err, thrown) = {
-            let mut s = Ser { keys: vec!["in6_pktinfo".into()], err: None, thrown: None, st: self, sock: socket, fill_sockaddr: true };
+            let mut s = Ser {
+                keys: vec!["in6_pktinfo".into()],
+                err: None,
+                thrown: None,
+                st: self,
+                sock: socket,
+                fill_sockaddr: true,
+            };
             let b = s.pktinfo(value);
             (b, s.err, s.thrown)
         };
@@ -860,7 +1000,12 @@ impl Sockets {
     /// `php_do_getsockopt_ipv6_rfc3542()` for `IPV6_PKTINFO`.
     pub(crate) fn get_ipv6_pktinfo(&mut self, socket: &mut Socket) -> SocketResult<OutValue> {
         let mut buf = [0u8; PKTINFO_SIZE];
-        match sys::getsockopt(socket.fd(), libc::IPPROTO_IPV6, libc::IPV6_PKTINFO, &mut buf) {
+        match sys::getsockopt(
+            socket.fd(),
+            libc::IPPROTO_IPV6,
+            libc::IPV6_PKTINFO,
+            &mut buf,
+        ) {
             Ok(_) => Ok(Res::pktinfo(&buf)),
             Err(e) => {
                 self.sock_error(socket, "unable to get socket option", e);

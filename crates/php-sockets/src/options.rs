@@ -3,7 +3,9 @@
 
 use crate::sys::{self, SockAddr};
 use crate::value::{OutValue, Value};
-use crate::{arg_type_error, arg_value_error, ensure_open, Socket, SocketError, SocketResult, Sockets};
+use crate::{
+    arg_type_error, arg_value_error, ensure_open, Socket, SocketError, SocketResult, Sockets,
+};
 
 const SO_LINGER: i64 = libc::SO_LINGER as i64;
 const SO_RCVTIMEO: i64 = libc::SO_RCVTIMEO as i64;
@@ -49,7 +51,13 @@ impl Sockets {
     /// `socket_get_option(Socket $socket, int $level, int $option)`;
     /// `func` is the name the script called (`socket_get_option` or the
     /// alias `socket_getopt`).
-    pub fn get_option(&mut self, func: &str, socket: &mut Socket, level: i64, option: i64) -> SocketResult<OutValue> {
+    pub fn get_option(
+        &mut self,
+        func: &str,
+        socket: &mut Socket,
+        level: i64,
+        option: i64,
+    ) -> SocketResult<OutValue> {
         ensure_open(func, socket)?;
         let fd = socket.fd;
         let (lvl, opt) = (c_int(level), c_int(option));
@@ -65,21 +73,32 @@ impl Sockets {
             let mut name = [0u8; 16];
             sys::getsockopt(fd, lvl, opt, &mut name).map_err(|e| self.retrieve_err(socket, e))?;
             let end = name.iter().position(|&b| b == 0).unwrap_or(name.len());
-            return Ok(OutValue::assoc(vec![("name", OutValue::Str(name[..end].to_vec()))]));
+            return Ok(OutValue::assoc(vec![(
+                "name",
+                OutValue::Str(name[..end].to_vec()),
+            )]));
         }
         if level_is(level, libc::SOL_SOCKET) {
             match option {
                 SO_LINGER => {
                     let mut b = [0u8; 8];
-                    sys::getsockopt(fd, lvl, opt, &mut b).map_err(|e| self.retrieve_err(socket, e))?;
+                    sys::getsockopt(fd, lvl, opt, &mut b)
+                        .map_err(|e| self.retrieve_err(socket, e))?;
                     return Ok(OutValue::assoc(vec![
-                        ("l_onoff", OutValue::Int(i32::from_ne_bytes([b[0], b[1], b[2], b[3]]).into())),
-                        ("l_linger", OutValue::Int(i32::from_ne_bytes([b[4], b[5], b[6], b[7]]).into())),
+                        (
+                            "l_onoff",
+                            OutValue::Int(i32::from_ne_bytes([b[0], b[1], b[2], b[3]]).into()),
+                        ),
+                        (
+                            "l_linger",
+                            OutValue::Int(i32::from_ne_bytes([b[4], b[5], b[6], b[7]]).into()),
+                        ),
                     ]));
                 }
                 SO_RCVTIMEO | SO_SNDTIMEO => {
                     let mut b = [0u8; 16];
-                    sys::getsockopt(fd, lvl, opt, &mut b).map_err(|e| self.retrieve_err(socket, e))?;
+                    sys::getsockopt(fd, lvl, opt, &mut b)
+                        .map_err(|e| self.retrieve_err(socket, e))?;
                     let word = |o: usize| {
                         let mut w = [0u8; 8];
                         w.copy_from_slice(&b[o..o + 8]);
@@ -92,20 +111,34 @@ impl Sockets {
                 }
                 SO_MEMINFO => {
                     let mut b = [0u8; 36];
-                    let n = sys::getsockopt(fd, lvl, opt, &mut b).map_err(|e| self.retrieve_err(socket, e))?;
+                    let n = sys::getsockopt(fd, lvl, opt, &mut b)
+                        .map_err(|e| self.retrieve_err(socket, e))?;
                     if n != b.len() {
                         self.warn("Unable to retrieve all socket meminfo data");
                         return Err(SocketError::Failed);
                     }
                     let names = [
-                        "rmem_alloc", "rcvbuf", "wmem_alloc", "sndbuf", "fwd_alloc", "wmem_queued", "optmem", "backlog", "drops",
+                        "rmem_alloc",
+                        "rcvbuf",
+                        "wmem_alloc",
+                        "sndbuf",
+                        "fwd_alloc",
+                        "wmem_queued",
+                        "optmem",
+                        "backlog",
+                        "drops",
                     ];
                     return Ok(OutValue::assoc(
                         names
                             .iter()
                             .enumerate()
                             .map(|(i, n)| {
-                                let v = u32::from_ne_bytes([b[i * 4], b[i * 4 + 1], b[i * 4 + 2], b[i * 4 + 3]]);
+                                let v = u32::from_ne_bytes([
+                                    b[i * 4],
+                                    b[i * 4 + 1],
+                                    b[i * 4 + 2],
+                                    b[i * 4 + 3],
+                                ]);
                                 (*n, OutValue::Int(v.into()))
                             })
                             .collect(),
@@ -130,7 +163,14 @@ impl Sockets {
     /// `socket_set_option(Socket $socket, int $level, int $option, $value)`;
     /// `func` is `socket_set_option` or the alias `socket_setopt`.
     #[allow(clippy::too_many_lines)]
-    pub fn set_option(&mut self, func: &str, socket: &mut Socket, level: i64, option: i64, value: &Value) -> SocketResult<()> {
+    pub fn set_option(
+        &mut self,
+        func: &str,
+        socket: &mut Socket,
+        level: i64,
+        option: i64,
+        value: &Value,
+    ) -> SocketResult<()> {
         ensure_open(func, socket)?;
         sys::set_errno(0);
         let fd = socket.fd;
@@ -165,32 +205,54 @@ impl Sockets {
             if option == TCP_USER_TIMEOUT {
                 let t = value.to_long();
                 let t = u32::try_from(t).map_err(|_| {
-                    arg_value_error(func, 4, "value", &format!("must be between 0 and {}", u32::MAX))
+                    arg_value_error(
+                        func,
+                        4,
+                        "value",
+                        &format!("must be between 0 and {}", u32::MAX),
+                    )
                 })?;
-                return sys::setsockopt(fd, lvl, opt, &t.to_ne_bytes()).map_err(|e| self.set_err(socket, e));
+                return sys::setsockopt(fd, lvl, opt, &t.to_ne_bytes())
+                    .map_err(|e| self.set_err(socket, e));
             }
         }
         let bytes: Vec<u8> = match option {
             _ if skip_switch => c_int(value.to_long()).to_ne_bytes().to_vec(),
             SO_LINGER => {
                 let t = self.option_table(func, value, "SO_LINGER")?;
-                let onoff = crate::value::find(t, "l_onoff")
-                    .ok_or_else(|| arg_value_error(func, 4, "value", "must have key \"l_onoff\""))?;
-                let linger = crate::value::find(t, "l_linger")
-                    .ok_or_else(|| arg_value_error(func, 4, "value", "must have key \"l_linger\""))?;
+                let onoff = crate::value::find(t, "l_onoff").ok_or_else(|| {
+                    arg_value_error(func, 4, "value", "must have key \"l_onoff\"")
+                })?;
+                let linger = crate::value::find(t, "l_linger").ok_or_else(|| {
+                    arg_value_error(func, 4, "value", "must have key \"l_linger\"")
+                })?;
                 let (on, li) = (onoff.to_long(), linger.to_long());
                 if !(0..=65535).contains(&on) {
-                    return Err(arg_value_error(func, 4, "value", "\"l_onoff\" must be between 0 and 65535"));
+                    return Err(arg_value_error(
+                        func,
+                        4,
+                        "value",
+                        "\"l_onoff\" must be between 0 and 65535",
+                    ));
                 }
                 if !(0..=65535).contains(&li) {
-                    return Err(arg_value_error(func, 4, "value", "\"l_linger\" must be between 0 and 65535"));
+                    return Err(arg_value_error(
+                        func,
+                        4,
+                        "value",
+                        "\"l_linger\" must be between 0 and 65535",
+                    ));
                 }
                 let mut b = c_int(on).to_ne_bytes().to_vec();
                 b.extend_from_slice(&c_int(li).to_ne_bytes());
                 b
             }
             SO_RCVTIMEO | SO_SNDTIMEO => {
-                let name = if option == SO_RCVTIMEO { "SO_RCVTIMEO" } else { "SO_SNDTIMEO" };
+                let name = if option == SO_RCVTIMEO {
+                    "SO_RCVTIMEO"
+                } else {
+                    "SO_SNDTIMEO"
+                };
                 let t = self.option_table(func, value, name)?;
                 let sec = crate::value::find(t, "sec")
                     .ok_or_else(|| arg_value_error(func, 4, "value", "must have key \"sec\""))?;
@@ -236,7 +298,12 @@ impl Sockets {
             UDP_SEGMENT => {
                 let ov = c_int(value.to_long());
                 if !(0..=65535).contains(&ov) {
-                    return Err(arg_value_error(func, 4, "value", "must be between 0 and 65535"));
+                    return Err(arg_value_error(
+                        func,
+                        4,
+                        "value",
+                        "must be between 0 and 65535",
+                    ));
                 }
                 ov.to_ne_bytes().to_vec()
             }
@@ -246,13 +313,23 @@ impl Sockets {
     }
 
     /// The array (or object properties) of an option value.
-    fn option_table<'v>(&self, func: &str, value: &'v Value, name: &str) -> SocketResult<&'v [(crate::Key, Value)]> {
+    fn option_table<'v>(
+        &self,
+        func: &str,
+        value: &'v Value,
+        name: &str,
+    ) -> SocketResult<&'v [(crate::Key, Value)]> {
         match value {
             Value::Array(t) | Value::Object { props: t, .. } => Ok(t),
-            _ => Err(arg_type_error(func, 4, "value", &format!(
-                "must be of type array when argument #3 ($option) is {name}, {} given",
-                value.value_name()
-            ))),
+            _ => Err(arg_type_error(
+                func,
+                4,
+                "value",
+                &format!(
+                    "must be of type array when argument #3 ($option) is {name}, {} given",
+                    value.value_name()
+                ),
+            )),
         }
     }
 
@@ -266,7 +343,10 @@ impl Sockets {
         match sys::addr4_to_if_index(ip) {
             Ok(Some(i)) => Ok(i),
             Ok(None) => {
-                self.warn(format!("The interface with IP address {} was not found", sys::ntop4(ip)));
+                self.warn(format!(
+                    "The interface with IP address {} was not found",
+                    sys::ntop4(ip)
+                ));
                 Err(SocketError::Failed)
             }
             Err(e) => {
@@ -282,7 +362,9 @@ impl Sockets {
             return Ok([0; 4]);
         }
         sys::if_index_to_addr4(socket.fd, index).map_err(|e| {
-            self.warn(format!("Failed obtaining address for interface {index}: error {e}"));
+            self.warn(format!(
+                "Failed obtaining address for interface {index}: error {e}"
+            ));
             SocketError::Failed
         })
     }
@@ -290,8 +372,9 @@ impl Sockets {
     /// `php_get_if_index_from_zval()`.
     fn if_index_from_value(&mut self, value: &Value) -> SocketResult<u32> {
         if let Value::Int(i) = value {
-            return u32::try_from(*i)
-                .map_err(|_| SocketError::ValueError(format!("Index must be between 0 and {}", u32::MAX)));
+            return u32::try_from(*i).map_err(|_| {
+                SocketError::ValueError(format!("Index must be between 0 and {}", u32::MAX))
+            });
         }
         let (s, warn) = value.to_php_string().map_err(|e| SocketError::Error(e.0))?;
         if warn {
@@ -301,7 +384,12 @@ impl Sockets {
     }
 
     /// `php_get_address_from_array()` + `php_set_inet46_addr()`.
-    fn mcast_address(&mut self, socket: &mut Socket, t: &[(crate::Key, Value)], key: &str) -> SocketResult<SockAddr> {
+    fn mcast_address(
+        &mut self,
+        socket: &mut Socket,
+        t: &[(crate::Key, Value)],
+        key: &str,
+    ) -> SocketResult<SockAddr> {
         let v = crate::value::find(t, key)
             .ok_or_else(|| SocketError::ValueError(format!("No key \"{key}\" passed in optval")))?;
         let (s, warn) = v.to_php_string().map_err(|e| SocketError::Error(e.0))?;
@@ -309,30 +397,55 @@ impl Sockets {
             self.warn("Array to string conversion");
         }
         match socket.family {
-            libc::AF_INET => self.inet_addr(socket, &s).map(|ip| SockAddr::inet(ip, 0)).ok_or(SocketError::Failed),
+            libc::AF_INET => self
+                .inet_addr(socket, &s)
+                .map(|ip| SockAddr::inet(ip, 0))
+                .ok_or(SocketError::Failed),
             libc::AF_INET6 => self
                 .inet6_addr(socket, &s)
                 .map(|(ip, scope)| SockAddr::inet6(ip, 0, 0, scope.unwrap_or(0)))
                 .ok_or(SocketError::Failed),
-            _ => Err(SocketError::ValueError("IP address used in the context of an unexpected type of socket".into())),
+            _ => Err(SocketError::ValueError(
+                "IP address used in the context of an unexpected type of socket".into(),
+            )),
         }
     }
 
     /// `php_do_mcast_opt()` (RFC 3678 API: `group_req`/`group_source_req`).
-    fn mcast_opt(&mut self, func: &str, socket: &mut Socket, level: i32, option: i64, value: &Value) -> SocketResult<()> {
+    fn mcast_opt(
+        &mut self,
+        func: &str,
+        socket: &mut Socket,
+        level: i32,
+        option: i64,
+        value: &Value,
+    ) -> SocketResult<()> {
         let source_op = !matches!(option, MCAST_JOIN_GROUP | MCAST_LEAVE_GROUP);
         let t = match value {
             Value::Array(t) | Value::Object { props: t, .. } => t,
             _ => {
-                let name = if source_op { "MCAST_LEAVE_SOURCE_GROUP" } else { "MCAST_LEAVE_GROUP" };
-                return Err(arg_type_error(func, 4, "value", &format!(
-                    "must be of type array when argument #3 ($option) is {name}, {} given",
-                    value.value_name()
-                )));
+                let name = if source_op {
+                    "MCAST_LEAVE_SOURCE_GROUP"
+                } else {
+                    "MCAST_LEAVE_GROUP"
+                };
+                return Err(arg_type_error(
+                    func,
+                    4,
+                    "value",
+                    &format!(
+                        "must be of type array when argument #3 ($option) is {name}, {} given",
+                        value.value_name()
+                    ),
+                ));
             }
         };
         let group = self.mcast_address(socket, t, "group")?;
-        let source = if source_op { Some(self.mcast_address(socket, t, "source")?) } else { None };
+        let source = if source_op {
+            Some(self.mcast_address(socket, t, "source")?)
+        } else {
+            None
+        };
         let if_index = match crate::value::find(t, "interface") {
             None => 0,
             Some(v) => self.if_index_from_value(v)?,
@@ -352,7 +465,12 @@ impl Sockets {
     fn is_mcast_group_opt(option: i64) -> bool {
         matches!(
             option,
-            MCAST_JOIN_GROUP | MCAST_LEAVE_GROUP | MCAST_BLOCK_SOURCE | MCAST_UNBLOCK_SOURCE | MCAST_JOIN_SOURCE_GROUP | MCAST_LEAVE_SOURCE_GROUP
+            MCAST_JOIN_GROUP
+                | MCAST_LEAVE_GROUP
+                | MCAST_BLOCK_SOURCE
+                | MCAST_UNBLOCK_SOURCE
+                | MCAST_JOIN_SOURCE_GROUP
+                | MCAST_LEAVE_SOURCE_GROUP
         )
     }
 
@@ -377,13 +495,21 @@ impl Sockets {
             libc::IP_MULTICAST_TTL => {
                 let v = value.to_long();
                 if !(0..=255).contains(&v) {
-                    return Sub::Done(Err(arg_value_error(func, 4, "value", "must be between 0 and 255")));
+                    return Sub::Done(Err(arg_value_error(
+                        func,
+                        4,
+                        "value",
+                        "must be between 0 and 255",
+                    )));
                 }
                 vec![u8::try_from(v).unwrap_or(0)]
             }
             _ => return Sub::NotHandled,
         };
-        Sub::Done(sys::setsockopt(socket.fd, level, c_int(option), &bytes).map_err(|e| self.set_err(socket, e)))
+        Sub::Done(
+            sys::setsockopt(socket.fd, level, c_int(option), &bytes)
+                .map_err(|e| self.set_err(socket, e)),
+        )
     }
 
     /// `php_do_setsockopt_ipv6_mcast()`.
@@ -402,12 +528,20 @@ impl Sockets {
             libc::IPV6_MULTICAST_HOPS => {
                 let v = value.to_long();
                 if !(-1..=255).contains(&v) {
-                    return Sub::Done(Err(arg_value_error(func, 4, "value", "must be between -1 and 255")));
+                    return Sub::Done(Err(arg_value_error(
+                        func,
+                        4,
+                        "value",
+                        "must be between -1 and 255",
+                    )));
                 }
                 c_int(v).to_ne_bytes().to_vec()
             }
             _ => return Sub::NotHandled,
         };
-        Sub::Done(sys::setsockopt(socket.fd, level, c_int(option), &bytes).map_err(|e| self.set_err(socket, e)))
+        Sub::Done(
+            sys::setsockopt(socket.fd, level, c_int(option), &bytes)
+                .map_err(|e| self.set_err(socket, e)),
+        )
     }
 }

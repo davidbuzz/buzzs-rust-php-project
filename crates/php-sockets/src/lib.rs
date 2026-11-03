@@ -68,9 +68,10 @@ pub enum SocketError {
 impl fmt::Display for SocketError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::ValueError(m) | Self::TypeError(m) | Self::ArgumentCountError(m) | Self::Error(m) => {
-                f.write_str(m)
-            }
+            Self::ValueError(m)
+            | Self::TypeError(m)
+            | Self::ArgumentCountError(m)
+            | Self::Error(m) => f.write_str(m),
             Self::Failed => f.write_str("failed"),
         }
     }
@@ -93,7 +94,11 @@ pub(crate) fn arg_type_error(func: &str, n: u32, name: &str, msg: &str) -> Socke
 /// `-10000`), `strerror()` otherwise.
 pub fn sockets_strerror(error: i32) -> String {
     if error < -10000 {
-        let e = if error == i32::MIN { 2_147_473_648 } else { -error - 10000 };
+        let e = if error == i32::MIN {
+            2_147_473_648
+        } else {
+            -error - 10000
+        };
         sys::hstrerror(e)
     } else {
         sys::strerror(error)
@@ -183,7 +188,9 @@ impl Socket {
         };
         match self.family {
             libc::AF_INET | libc::AF_INET6 => match int_opt(libc::SO_TYPE)? {
-                libc::SOCK_STREAM => (int_opt(libc::SO_PROTOCOL)? == libc::IPPROTO_TCP).then_some("tcp://"),
+                libc::SOCK_STREAM => {
+                    (int_opt(libc::SO_PROTOCOL)? == libc::IPPROTO_TCP).then_some("tcp://")
+                }
                 libc::SOCK_DGRAM => Some("udp://"),
                 _ => None,
             },
@@ -332,9 +339,14 @@ impl Sockets {
 
     /// `socket_create(int $domain, int $type, int $protocol)`.
     pub fn create(&mut self, domain: i64, ty: i64, protocol: i64) -> SocketResult<Socket> {
-        if ![libc::AF_UNIX, libc::AF_INET6, libc::AF_PACKET, libc::AF_INET]
-            .iter()
-            .any(|&d| i64::from(d) == domain)
+        if ![
+            libc::AF_UNIX,
+            libc::AF_INET6,
+            libc::AF_PACKET,
+            libc::AF_INET,
+        ]
+        .iter()
+        .any(|&d| i64::from(d) == domain)
         {
             return Err(arg_value_error(
                 "socket_create",
@@ -349,7 +361,10 @@ impl Sockets {
             Ok(fd) => Ok(Socket::new(fd, c_int(domain))),
             Err(e) => {
                 self.last_error = e;
-                self.warn(format!("Unable to create socket [{e}]: {}", sockets_strerror(e)));
+                self.warn(format!(
+                    "Unable to create socket [{e}]: {}",
+                    sockets_strerror(e)
+                ));
                 Err(SocketError::Failed)
             }
         }
@@ -358,7 +373,12 @@ impl Sockets {
     /// `socket_create_listen(int $port, int $backlog = SOMAXCONN)`.
     pub fn create_listen(&mut self, port: i64, backlog: i64) -> SocketResult<Socket> {
         let port = u16::try_from(port).map_err(|_| {
-            arg_value_error("socket_create_listen", 1, "port", "must be between 0 and 65535")
+            arg_value_error(
+                "socket_create_listen",
+                1,
+                "port",
+                "must be between 0 and 65535",
+            )
         })?;
         let mut sock = Socket::new(-1, libc::AF_INET);
         let fd = match sys::socket(libc::AF_INET, libc::SOCK_STREAM, 0) {
@@ -381,7 +401,12 @@ impl Sockets {
     }
 
     /// `socket_create_pair(int $domain, int $type, int $protocol, &$pair)`.
-    pub fn create_pair(&mut self, domain: i64, ty: i64, protocol: i64) -> SocketResult<(Socket, Socket)> {
+    pub fn create_pair(
+        &mut self,
+        domain: i64,
+        ty: i64,
+        protocol: i64,
+    ) -> SocketResult<(Socket, Socket)> {
         if ![libc::AF_INET, libc::AF_INET6, libc::AF_UNIX]
             .iter()
             .any(|&d| i64::from(d) == domain)
@@ -398,7 +423,10 @@ impl Sockets {
             Ok((a, b)) => Ok((Socket::new(a, c_int(domain)), Socket::new(b, c_int(domain)))),
             Err(e) => {
                 self.last_error = e;
-                self.warn(format!("Unable to create socket pair [{e}]: {}", sockets_strerror(e)));
+                self.warn(format!(
+                    "Unable to create socket pair [{e}]: {}",
+                    sockets_strerror(e)
+                ));
                 Err(SocketError::Failed)
             }
         }
@@ -461,7 +489,11 @@ impl Sockets {
                 Ok(())
             }
             Err(e) => {
-                let msg = if block { "unable to set blocking mode" } else { "unable to set nonblocking mode" };
+                let msg = if block {
+                    "unable to set blocking mode"
+                } else {
+                    "unable to set nonblocking mode"
+                };
                 self.sock_error(socket, msg, e);
                 Err(SocketError::Failed)
             }
@@ -534,7 +566,11 @@ impl Sockets {
         if let Some(ip) = sys::pton4(&c) {
             return Some(ip);
         }
-        let res = if addr.len() > 255 { Err(1) } else { sys::gethostbyname(&c) };
+        let res = if addr.len() > 255 {
+            Err(1)
+        } else {
+            sys::gethostbyname(&c)
+        };
         match res {
             Err(h) => {
                 self.sock_error(sock, "Host lookup failed", -10000 - h);
@@ -555,12 +591,23 @@ impl Sockets {
 
     /// `php_set_inet6_addr()`: the address and the scope id when a `%scope`
     /// suffix was given.
-    pub(crate) fn inet6_addr(&mut self, sock: &mut Socket, addr: &[u8]) -> Option<([u8; 16], Option<u32>)> {
+    pub(crate) fn inet6_addr(
+        &mut self,
+        sock: &mut Socket,
+        addr: &[u8],
+    ) -> Option<([u8; 16], Option<u32>)> {
         let c = sys::cstr(addr);
         let ip = if let Some(ip) = sys::pton6(&c) {
             ip
         } else {
-            match sys::getaddrinfo(&c, None, libc::AI_V4MAPPED | libc::AI_ADDRCONFIG, libc::AF_INET6, 0, 0) {
+            match sys::getaddrinfo(
+                &c,
+                None,
+                libc::AI_V4MAPPED | libc::AI_ADDRCONFIG,
+                libc::AF_INET6,
+                0,
+                0,
+            ) {
                 Err((_, h)) => {
                     self.sock_error(sock, "Host lookup failed", -10000 - h);
                     return None;
@@ -570,8 +617,12 @@ impl Sockets {
                         self.sock_error(sock, "Host lookup failed", -10000 - sys::h_errno());
                         return None;
                     };
-                    if first.family != libc::AF_INET6 || first.addr.raw().1 != std::mem::size_of::<libc::sockaddr_in6>() {
-                        self.warn("Host lookup failed: Non AF_INET6 domain returned on AF_INET6 socket");
+                    if first.family != libc::AF_INET6
+                        || first.addr.raw().1 != std::mem::size_of::<libc::sockaddr_in6>()
+                    {
+                        self.warn(
+                            "Host lookup failed: Non AF_INET6 domain returned on AF_INET6 socket",
+                        );
                         return None;
                     }
                     first.addr.ip6()
@@ -582,7 +633,9 @@ impl Sockets {
         let scope = cbytes.iter().position(|&b| b == b'%').map(|p| {
             let s = &cbytes[p + 1..];
             match value::is_numeric(s) {
-                Some(value::Numeric::Int(l)) => u32::try_from(l).ok().filter(|&v| v > 0).unwrap_or(0),
+                Some(value::Numeric::Int(l)) => {
+                    u32::try_from(l).ok().filter(|&v| v > 0).unwrap_or(0)
+                }
                 Some(value::Numeric::Float(_)) | None => self.string_to_if_index(s).unwrap_or(0),
             }
         });
@@ -605,26 +658,50 @@ impl Sockets {
 
     fn unix_addr(func: &str, arg: u32, addr: &[u8]) -> SocketResult<sys::SockAddr> {
         if addr.len() >= sys::SUN_PATH_LEN {
-            return Err(arg_value_error(func, arg, "address", &format!("must be less than {}", sys::SUN_PATH_LEN)));
+            return Err(arg_value_error(
+                func,
+                arg,
+                "address",
+                &format!("must be less than {}", sys::SUN_PATH_LEN),
+            ));
         }
         Ok(sys::SockAddr::unix(addr, sys::SUN_PATH_OFFSET + addr.len()))
     }
 
     /// `socket_connect(Socket $socket, string $address, ?int $port = null)`.
-    pub fn connect(&mut self, socket: &mut Socket, address: &[u8], port: Option<i64>) -> SocketResult<()> {
+    pub fn connect(
+        &mut self,
+        socket: &mut Socket,
+        address: &[u8],
+        port: Option<i64>,
+    ) -> SocketResult<()> {
         const F: &str = "socket_connect";
         ensure_open(F, socket)?;
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let addr = match socket.family {
             libc::AF_INET6 => {
-                let p = port.ok_or_else(|| arg_value_error(F, 3, "port", "cannot be null when the socket type is AF_INET6"))?;
+                let p = port.ok_or_else(|| {
+                    arg_value_error(
+                        F,
+                        3,
+                        "port",
+                        "cannot be null when the socket type is AF_INET6",
+                    )
+                })?;
                 let Some((ip, scope)) = self.inet6_addr(socket, address) else {
                     return Err(SocketError::Failed);
                 };
                 sys::SockAddr::inet6(ip, p as u16, 0, scope.unwrap_or(0))
             }
             libc::AF_INET => {
-                let p = port.ok_or_else(|| arg_value_error(F, 3, "port", "cannot be null when the socket type is AF_INET"))?;
+                let p = port.ok_or_else(|| {
+                    arg_value_error(
+                        F,
+                        3,
+                        "port",
+                        "cannot be null when the socket type is AF_INET",
+                    )
+                })?;
                 let Some(ip) = self.inet_addr(socket, address) else {
                     return Err(SocketError::Failed);
                 };
@@ -632,7 +709,12 @@ impl Sockets {
             }
             libc::AF_UNIX => Self::unix_addr(F, 2, address)?,
             _ => {
-                return Err(arg_value_error(F, 1, "socket", "must be one of AF_UNIX, AF_INET, or AF_INET6"));
+                return Err(arg_value_error(
+                    F,
+                    1,
+                    "socket",
+                    "must be one of AF_UNIX, AF_INET, or AF_INET6",
+                ));
             }
         };
         sys::connect(socket.fd, &addr).map_err(|e| {
@@ -645,7 +727,8 @@ impl Sockets {
     pub fn bind(&mut self, socket: &mut Socket, address: &[u8], port: i64) -> SocketResult<()> {
         const F: &str = "socket_bind";
         ensure_open(F, socket)?;
-        let port = u16::try_from(port).map_err(|_| arg_value_error(F, 3, "port", "must be between 0 and 65535"))?;
+        let port = u16::try_from(port)
+            .map_err(|_| arg_value_error(F, 3, "port", "must be between 0 and 65535"))?;
         let addr = match socket.family {
             libc::AF_UNIX => Self::unix_addr(F, 2, address)?,
             libc::AF_INET => {
@@ -671,7 +754,12 @@ impl Sockets {
                 a
             }
             _ => {
-                return Err(arg_value_error(F, 1, "socket", "must be one of AF_UNIX, AF_PACKET, AF_INET, or AF_INET6"));
+                return Err(arg_value_error(
+                    F,
+                    1,
+                    "socket",
+                    "must be one of AF_UNIX, AF_PACKET, AF_INET, or AF_INET6",
+                ));
             }
         };
         sys::bind(socket.fd, &addr).map_err(|e| {
@@ -682,25 +770,45 @@ impl Sockets {
 
     fn name_of(&mut self, func: &str, socket: &mut Socket, peer: bool) -> SocketResult<SocketName> {
         ensure_open(func, socket)?;
-        let r = if peer { sys::getpeername(socket.fd) } else { sys::getsockname(socket.fd) };
+        let r = if peer {
+            sys::getpeername(socket.fd)
+        } else {
+            sys::getsockname(socket.fd)
+        };
         let a = r.map_err(|e| {
-            let msg = if peer { "unable to retrieve peer name" } else { "unable to retrieve socket name" };
+            let msg = if peer {
+                "unable to retrieve peer name"
+            } else {
+                "unable to retrieve socket name"
+            };
             self.sock_error(socket, msg, e);
             SocketError::Failed
         })?;
         match a.family() {
-            libc::AF_INET6 => Ok(SocketName { address: sys::ntop6(a.ip6()).into_bytes(), port: Some(a.port().into()) }),
-            libc::AF_INET => Ok(SocketName { address: sys::ntop4(a.ip4()).into_bytes(), port: Some(a.port().into()) }),
+            libc::AF_INET6 => Ok(SocketName {
+                address: sys::ntop6(a.ip6()).into_bytes(),
+                port: Some(a.port().into()),
+            }),
+            libc::AF_INET => Ok(SocketName {
+                address: sys::ntop4(a.ip4()).into_bytes(),
+                port: Some(a.port().into()),
+            }),
             libc::AF_UNIX => {
                 let p = a.sun_path();
                 let end = p.iter().position(|&b| b == 0).unwrap_or(p.len());
-                Ok(SocketName { address: p[..end].to_vec(), port: None })
+                Ok(SocketName {
+                    address: p[..end].to_vec(),
+                    port: None,
+                })
             }
             #[allow(clippy::cast_sign_loss)]
             libc::AF_PACKET if !peer => {
                 let name = sys::if_indextoname(a.ll_ifindex() as u32)
                     .ok_or_else(|| SocketError::Error("invalid interface index".into()))?;
-                Ok(SocketName { address: name, port: Some(a.ll_ifindex().into()) })
+                Ok(SocketName {
+                    address: name,
+                    port: Some(a.ll_ifindex().into()),
+                })
             }
             _ => Err(arg_value_error(
                 func,
@@ -728,12 +836,24 @@ impl Sockets {
     // ------------------------------------------------------ I/O
 
     /// `socket_write(Socket $socket, string $data, ?int $length = null)`.
-    pub fn write(&mut self, socket: &mut Socket, data: &[u8], length: Option<i64>) -> SocketResult<i64> {
+    pub fn write(
+        &mut self,
+        socket: &mut Socket,
+        data: &[u8],
+        length: Option<i64>,
+    ) -> SocketResult<i64> {
         ensure_open("socket_write", socket)?;
         if length.is_some_and(|l| l < 0) {
-            return Err(arg_value_error("socket_write", 3, "length", "must be greater than or equal to 0"));
+            return Err(arg_value_error(
+                "socket_write",
+                3,
+                "length",
+                "must be greater than or equal to 0",
+            ));
         }
-        let n = length.map_or(data.len(), |l| usize::try_from(l).unwrap_or(usize::MAX).min(data.len()));
+        let n = length.map_or(data.len(), |l| {
+            usize::try_from(l).unwrap_or(usize::MAX).min(data.len())
+        });
         match sys::write(socket.fd, &data[..n]) {
             Ok(w) => Ok(i64::try_from(w).unwrap_or(i64::MAX)),
             Err(e) => {
@@ -781,25 +901,47 @@ impl Sockets {
         }
         let mut buf = vec![0u8; recv_buffer_len(length)];
         match sys::recv(socket.fd, &mut buf, c_int(flags)) {
-            Ok(0) => Ok(Recv { data: None, result: Some(0) }),
+            Ok(0) => Ok(Recv {
+                data: None,
+                result: Some(0),
+            }),
             Ok(n) => {
                 buf.truncate(n);
-                Ok(Recv { data: Some(buf), result: Some(i64::try_from(n).unwrap_or(i64::MAX)) })
+                Ok(Recv {
+                    data: Some(buf),
+                    result: Some(i64::try_from(n).unwrap_or(i64::MAX)),
+                })
             }
             Err(e) => {
                 self.sock_error(socket, "Unable to read from socket", e);
-                Ok(Recv { data: None, result: None })
+                Ok(Recv {
+                    data: None,
+                    result: None,
+                })
             }
         }
     }
 
     /// `socket_send(Socket $socket, string $data, int $length, int $flags)`.
-    pub fn send(&mut self, socket: &mut Socket, data: &[u8], length: i64, flags: i64) -> SocketResult<i64> {
+    pub fn send(
+        &mut self,
+        socket: &mut Socket,
+        data: &[u8],
+        length: i64,
+        flags: i64,
+    ) -> SocketResult<i64> {
         ensure_open("socket_send", socket)?;
         if length < 0 {
-            return Err(arg_value_error("socket_send", 3, "length", "must be greater than or equal to 0"));
+            return Err(arg_value_error(
+                "socket_send",
+                3,
+                "length",
+                "must be greater than or equal to 0",
+            ));
         }
-        let n = usize::try_from(length).unwrap_or(usize::MAX).min(data.len());
+        let n = usize::try_from(length)
+            .unwrap_or(usize::MAX)
+            .min(data.len());
         match sys::send(socket.fd, &data[..n], c_int(flags)) {
             Ok(w) => Ok(i64::try_from(w).unwrap_or(i64::MAX)),
             Err(e) => {
@@ -812,11 +954,22 @@ impl Sockets {
     /// `socket_recvfrom(Socket $socket, &$data, int $length, int $flags,
     /// &$address, &$port = null)`; `port_given` tells whether `$port` was
     /// passed.
-    pub fn recvfrom(&mut self, socket: &mut Socket, length: i64, flags: i64, port_given: bool) -> SocketResult<RecvFrom> {
+    pub fn recvfrom(
+        &mut self,
+        socket: &mut Socket,
+        length: i64,
+        flags: i64,
+        port_given: bool,
+    ) -> SocketResult<RecvFrom> {
         const F: &str = "socket_recvfrom";
         ensure_open(F, socket)?;
         if socket.family == libc::AF_PACKET {
-            let allowed = libc::MSG_OOB | libc::MSG_PEEK | libc::MSG_WAITALL | libc::MSG_DONTWAIT | libc::MSG_ERRQUEUE | libc::MSG_CMSG_CLOEXEC;
+            let allowed = libc::MSG_OOB
+                | libc::MSG_PEEK
+                | libc::MSG_WAITALL
+                | libc::MSG_DONTWAIT
+                | libc::MSG_ERRQUEUE
+                | libc::MSG_CMSG_CLOEXEC;
             if flags & !i64::from(allowed) != 0 {
                 return Err(arg_value_error(F, 4, "flags", "must be a combination of MSG_OOB, MSG_PEEK, MSG_WAITALL, MSG_DONTWAIT, MSG_ERRQUEUE, and MSG_CMSG_CLOEXEC for AF_PACKET sockets"));
             }
@@ -830,22 +983,43 @@ impl Sockets {
             )
         };
         let (init, init_len, fail_msg) = match socket.family {
-            libc::AF_UNIX => (sys::SockAddr::unix(&[], 0), std::mem::size_of::<libc::sockaddr_un>(), "Unable to recvfrom"),
+            libc::AF_UNIX => (
+                sys::SockAddr::unix(&[], 0),
+                std::mem::size_of::<libc::sockaddr_un>(),
+                "Unable to recvfrom",
+            ),
             libc::AF_INET => {
                 if !port_given {
                     return Err(need_port());
                 }
-                (sys::SockAddr::inet([0; 4], 0), std::mem::size_of::<libc::sockaddr_in>(), "Unable to recvfrom")
+                (
+                    sys::SockAddr::inet([0; 4], 0),
+                    std::mem::size_of::<libc::sockaddr_in>(),
+                    "Unable to recvfrom",
+                )
             }
             libc::AF_INET6 => {
                 if !port_given {
                     return Err(need_port());
                 }
-                (sys::SockAddr::inet6([0; 16], 0, 0, 0), std::mem::size_of::<libc::sockaddr_in6>(), "unable to recvfrom")
+                (
+                    sys::SockAddr::inet6([0; 16], 0, 0, 0),
+                    std::mem::size_of::<libc::sockaddr_in6>(),
+                    "unable to recvfrom",
+                )
             }
-            libc::AF_PACKET => (sys::SockAddr::from_raw(&[], 0), std::mem::size_of::<libc::sockaddr_ll>(), "unable to recvfrom"),
+            libc::AF_PACKET => (
+                sys::SockAddr::from_raw(&[], 0),
+                std::mem::size_of::<libc::sockaddr_ll>(),
+                "unable to recvfrom",
+            ),
             _ => {
-                return Err(arg_value_error(F, 1, "socket", "must be one of AF_UNIX, AF_PACKET, AF_INET, or AF_INET6"));
+                return Err(arg_value_error(
+                    F,
+                    1,
+                    "socket",
+                    "must be one of AF_UNIX, AF_PACKET, AF_INET, or AF_INET6",
+                ));
             }
         };
         let mut buf = vec![0u8; recv_buffer_len(length)];
@@ -864,10 +1038,20 @@ impl Sockets {
                 let end = p.iter().position(|&b| b == 0).unwrap_or(p.len());
                 (p[..end].to_vec(), None)
             }
-            libc::AF_INET => (sys::ntop4(addr.ip4()).into_bytes(), Some(addr.port().into())),
+            libc::AF_INET => (
+                sys::ntop4(addr.ip4()).into_bytes(),
+                Some(addr.port().into()),
+            ),
             libc::AF_INET6 => {
                 let s = sys::ntop6(addr.ip6());
-                (if s.is_empty() { b"::".to_vec() } else { s.into_bytes() }, Some(addr.port().into()))
+                (
+                    if s.is_empty() {
+                        b"::".to_vec()
+                    } else {
+                        s.into_bytes()
+                    },
+                    Some(addr.port().into()),
+                )
             }
             _ => {
                 #[allow(clippy::cast_sign_loss)]
@@ -879,51 +1063,105 @@ impl Sockets {
                 (name, port_given.then(|| addr.ll_ifindex().into()))
             }
         };
-        Ok(RecvFrom { data: buf, address, port, result })
+        Ok(RecvFrom {
+            data: buf,
+            address,
+            port,
+            result,
+        })
     }
 
     /// `socket_sendto(Socket $socket, string $data, int $length, int $flags,
     /// string $address, ?int $port = null)`.
-    pub fn sendto(&mut self, socket: &mut Socket, data: &[u8], length: i64, flags: i64, address: &[u8], port: Option<i64>) -> SocketResult<i64> {
+    pub fn sendto(
+        &mut self,
+        socket: &mut Socket,
+        data: &[u8],
+        length: i64,
+        flags: i64,
+        address: &[u8],
+        port: Option<i64>,
+    ) -> SocketResult<i64> {
         const F: &str = "socket_sendto";
         ensure_open(F, socket)?;
         if socket.family != libc::AF_PACKET && !(0..=65535).contains(&port.unwrap_or(0)) {
             return Err(arg_value_error(F, 6, "port", "must be between 0 and 65535"));
         }
         if length < 0 {
-            return Err(arg_value_error(F, 3, "length", "must be greater than or equal to 0"));
+            return Err(arg_value_error(
+                F,
+                3,
+                "length",
+                "must be greater than or equal to 0",
+            ));
         }
-        let n = usize::try_from(length).unwrap_or(usize::MAX).min(data.len());
+        let n = usize::try_from(length)
+            .unwrap_or(usize::MAX)
+            .min(data.len());
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let addr = match socket.family {
             libc::AF_UNIX => {
                 if address.len() >= sys::SUN_PATH_LEN {
-                    return Err(arg_value_error(F, 5, "address", &format!("must be less than {}", sys::SUN_PATH_LEN)));
+                    return Err(arg_value_error(
+                        F,
+                        5,
+                        "address",
+                        &format!("must be less than {}", sys::SUN_PATH_LEN),
+                    ));
                 }
                 // SUN_LEN: up to the first NUL of the copied path.
-                let end = address.iter().position(|&b| b == 0).unwrap_or(address.len());
+                let end = address
+                    .iter()
+                    .position(|&b| b == 0)
+                    .unwrap_or(address.len());
                 sys::SockAddr::unix(address, sys::SUN_PATH_OFFSET + end)
             }
             libc::AF_INET => {
-                let p = port.ok_or_else(|| arg_value_error(F, 6, "port", "cannot be null when the socket type is AF_INET"))?;
+                let p = port.ok_or_else(|| {
+                    arg_value_error(
+                        F,
+                        6,
+                        "port",
+                        "cannot be null when the socket type is AF_INET",
+                    )
+                })?;
                 let Some(ip) = self.inet_addr(socket, address) else {
                     return Err(SocketError::Failed);
                 };
                 sys::SockAddr::inet(ip, p as u16)
             }
             libc::AF_INET6 => {
-                let p = port.ok_or_else(|| arg_value_error(F, 6, "port", "cannot be null when the socket type is AF_INET6"))?;
+                let p = port.ok_or_else(|| {
+                    arg_value_error(
+                        F,
+                        6,
+                        "port",
+                        "cannot be null when the socket type is AF_INET6",
+                    )
+                })?;
                 let Some((ip, scope)) = self.inet6_addr(socket, address) else {
                     return Err(SocketError::Failed);
                 };
                 sys::SockAddr::inet6(ip, p as u16, 0, scope.unwrap_or(0))
             }
             libc::AF_PACKET => {
-                let p = port.ok_or_else(|| arg_value_error(F, 6, "port", "cannot be null when the socket type is AF_PACKET"))?;
+                let p = port.ok_or_else(|| {
+                    arg_value_error(
+                        F,
+                        6,
+                        "port",
+                        "cannot be null when the socket type is AF_PACKET",
+                    )
+                })?;
                 sys::SockAddr::packet(p as i32)
             }
             _ => {
-                return Err(arg_value_error(F, 1, "socket", "must be one of AF_UNIX, AF_PACKET, AF_INET, or AF_INET6"));
+                return Err(arg_value_error(
+                    F,
+                    1,
+                    "socket",
+                    "must be one of AF_UNIX, AF_PACKET, AF_INET, or AF_INET6",
+                ));
             }
         };
         match sys::sendto(socket.fd, &data[..n], c_int(flags), &addr) {
@@ -944,7 +1182,12 @@ impl Sockets {
     /// argument).  Returns the count and, per array, the positions of the
     /// ready elements; the VM rebuilds each array from those elements,
     /// keeping their keys.
-    pub fn select(&mut self, arrays: [Option<&[Value]>; 3], seconds: Option<i64>, microseconds: i64) -> SocketResult<(i64, [Option<Vec<usize>>; 3])> {
+    pub fn select(
+        &mut self,
+        arrays: [Option<&[Value]>; 3],
+        seconds: Option<i64>,
+        microseconds: i64,
+    ) -> SocketResult<(i64, [Option<Vec<usize>>; 3])> {
         const F: &str = "socket_select";
         let names = ["read", "write", "except"];
         let mut fds: [Vec<i32>; 3] = Default::default();
@@ -963,14 +1206,24 @@ impl Sockets {
                         max_fd = max_fd.max(*fd);
                     }
                     other => {
-                        return Err(arg_type_error(F, n, names[i], &format!("must only have elements of type Socket, {} given", other.value_name())));
+                        return Err(arg_type_error(
+                            F,
+                            n,
+                            names[i],
+                            &format!(
+                                "must only have elements of type Socket, {} given",
+                                other.value_name()
+                            ),
+                        ));
                     }
                 }
             }
             max_count = max_count.max(arr.len());
         }
         if max_count == 0 {
-            return Err(SocketError::ValueError("socket_select(): At least one array argument must be passed".into()));
+            return Err(SocketError::ValueError(
+                "socket_select(): At least one array argument must be passed".into(),
+            ));
         }
         if max_fd >= FD_SETSIZE {
             self.warn(format!(
@@ -1016,33 +1269,67 @@ impl Sockets {
     /// `socket_addrinfo_lookup(string $host, ?string $service = null, array
     /// $hints = [], &$error_code = null)`.  `Ok(Err(code))` is PHP's
     /// `false` with `$error_code = code`.
-    pub fn addrinfo_lookup(&mut self, host: &[u8], service: Option<&[u8]>, hints: Option<&Value>) -> SocketResult<Result<Vec<AddressInfo>, i64>> {
+    pub fn addrinfo_lookup(
+        &mut self,
+        host: &[u8],
+        service: Option<&[u8]>,
+        hints: Option<&Value>,
+    ) -> SocketResult<Result<Vec<AddressInfo>, i64>> {
         const F: &str = "socket_addrinfo_lookup";
-        let keys_err = || arg_value_error(F, 3, "hints", "must only contain array keys \"ai_flags\", \"ai_socktype\", \"ai_protocol\", or \"ai_family\"");
+        let keys_err = || {
+            arg_value_error(F, 3, "hints", "must only contain array keys \"ai_flags\", \"ai_socktype\", \"ai_protocol\", or \"ai_family\"")
+        };
         let (mut flags, mut socktype, mut protocol, mut family) = (0, 0, 0, 0);
         if let Some(Value::Array(t)) = hints {
-            let packed = !t.is_empty() && t.iter().enumerate().all(|(i, (k, _))| *k == Key::Int(i64::try_from(i).unwrap_or(-1)));
+            let packed = !t.is_empty()
+                && t.iter()
+                    .enumerate()
+                    .all(|(i, (k, _))| *k == Key::Int(i64::try_from(i).unwrap_or(-1)));
             if packed {
                 return Err(keys_err());
             }
             for (k, v) in t {
-                let Key::Str(k) = k else { return Err(keys_err()) };
+                let Key::Str(k) = k else {
+                    return Err(keys_err());
+                };
                 let name = String::from_utf8_lossy(k).into_owned();
-                if !["ai_flags", "ai_socktype", "ai_protocol", "ai_family"].contains(&name.as_str()) {
+                if !["ai_flags", "ai_socktype", "ai_protocol", "ai_family"].contains(&name.as_str())
+                {
                     return Err(keys_err());
                 }
                 let val = v.try_long().ok_or_else(|| {
-                    arg_type_error(F, 3, "hints", &format!("\"{name}\" key must be of type int, {} given", v.type_name()))
+                    arg_type_error(
+                        F,
+                        3,
+                        "hints",
+                        &format!(
+                            "\"{name}\" key must be of type int, {} given",
+                            v.type_name()
+                        ),
+                    )
                 })?;
                 if name == "ai_family" {
-                    if val != 0 && val != i64::from(libc::AF_INET) && val != i64::from(libc::AF_INET6) {
-                        return Err(arg_value_error(F, 3, "hints", "\"ai_family\" key must be AF_INET or AF_INET6"));
+                    if val != 0
+                        && val != i64::from(libc::AF_INET)
+                        && val != i64::from(libc::AF_INET6)
+                    {
+                        return Err(arg_value_error(
+                            F,
+                            3,
+                            "hints",
+                            "\"ai_family\" key must be AF_INET or AF_INET6",
+                        ));
                     }
                     family = c_int(val);
                     continue;
                 }
                 if !(0..=i64::from(i32::MAX)).contains(&val) {
-                    return Err(arg_value_error(F, 3, "hints", &format!("\"{name}\" key must be between 0 and {}", i32::MAX)));
+                    return Err(arg_value_error(
+                        F,
+                        3,
+                        "hints",
+                        &format!("\"{name}\" key must be between 0 and {}", i32::MAX),
+                    ));
                 }
                 match name.as_str() {
                     "ai_flags" => flags = c_int(val),
@@ -1052,7 +1339,14 @@ impl Sockets {
             }
         }
         let svc = service.map(sys::cstr);
-        match sys::getaddrinfo(&sys::cstr(host), svc.as_deref(), flags, family, socktype, protocol) {
+        match sys::getaddrinfo(
+            &sys::cstr(host),
+            svc.as_deref(),
+            flags,
+            family,
+            socktype,
+            protocol,
+        ) {
             Err((code, _)) => Ok(Err(code.into())),
             Ok(list) => Ok(Ok(list
                 .into_iter()
@@ -1069,14 +1363,25 @@ impl Sockets {
             Ok(fd) => fd,
             Err(err) => {
                 self.last_error = err;
-                self.warn(format!("Unable to create socket [{err}]: {}", sockets_strerror(err)));
+                self.warn(format!(
+                    "Unable to create socket [{err}]: {}",
+                    sockets_strerror(err)
+                ));
                 return Err(SocketError::Failed);
             }
         };
         let mut sock = Socket::new(fd, e.family);
-        let r = if connect { sys::connect(fd, &e.addr) } else { sys::bind(fd, &e.addr) };
+        let r = if connect {
+            sys::connect(fd, &e.addr)
+        } else {
+            sys::bind(fd, &e.addr)
+        };
         if let Err(err) = r {
-            let msg = if connect { "Unable to connect address" } else { "Unable to bind address" };
+            let msg = if connect {
+                "Unable to connect address"
+            } else {
+                "Unable to bind address"
+            };
             self.sock_error(&mut sock, msg, err);
             return Err(SocketError::Failed);
         }
@@ -1103,10 +1408,17 @@ impl Sockets {
         let typ = i32::try_from(ty).map_err(|_| arg_value_error(F, 2, "type", &range))?;
         let n = i32::try_from(num).map_err(|_| arg_value_error(F, 3, "num", &range))?;
         if n < 0 {
-            return Err(arg_value_error(F, 3, "num", "must be greater than or equal to 0"));
+            return Err(arg_value_error(
+                F,
+                3,
+                "num",
+                "must be greater than or equal to 0",
+            ));
         }
         let entry = conversions::ancillary(lvl, typ).ok_or_else(|| {
-            SocketError::ValueError(format!("Pair level {level} and/or type {ty} is not supported"))
+            SocketError::ValueError(format!(
+                "Pair level {level} and/or type {ty} is not supported"
+            ))
         })?;
         let n = usize::try_from(n).unwrap_or(0);
         let size = entry.size + n * entry.var_el_size;
@@ -1136,11 +1448,17 @@ impl AddressInfo {
         let sockaddr = match e.family {
             libc::AF_INET => OutValue::assoc(vec![
                 ("sin_port", OutValue::Int(e.addr.port().into())),
-                ("sin_addr", OutValue::Str(sys::ntop4(e.addr.ip4()).into_bytes())),
+                (
+                    "sin_addr",
+                    OutValue::Str(sys::ntop4(e.addr.ip4()).into_bytes()),
+                ),
             ]),
             libc::AF_INET6 => OutValue::assoc(vec![
                 ("sin6_port", OutValue::Int(e.addr.port().into())),
-                ("sin6_addr", OutValue::Str(sys::ntop6(e.addr.ip6()).into_bytes())),
+                (
+                    "sin6_addr",
+                    OutValue::Str(sys::ntop6(e.addr.ip6()).into_bytes()),
+                ),
             ]),
             _ => OutValue::Array(Vec::new()),
         };

@@ -22,7 +22,12 @@ extern "C" {
     ) -> c_int;
     fn __h_errno_location() -> *mut c_int;
     fn inet_pton(af: c_int, src: *const c_char, dst: *mut c_void) -> c_int;
-    fn inet_ntop(af: c_int, src: *const c_void, dst: *mut c_char, size: libc::socklen_t) -> *const c_char;
+    fn inet_ntop(
+        af: c_int,
+        src: *const c_void,
+        dst: *mut c_char,
+        size: libc::socklen_t,
+    ) -> *const c_char;
 }
 
 /// Reads the calling thread's `errno`.
@@ -64,7 +69,11 @@ pub fn hstrerror(code: i32) -> String {
 
 fn cbuf_string(buf: &[c_char]) -> String {
     #[allow(clippy::cast_sign_loss)]
-    let bytes: Vec<u8> = buf.iter().take_while(|&&c| c != 0).map(|&c| c as u8).collect();
+    let bytes: Vec<u8> = buf
+        .iter()
+        .take_while(|&&c| c != 0)
+        .map(|&c| c as u8)
+        .collect();
     String::from_utf8_lossy(&bytes).into_owned()
 }
 
@@ -284,7 +293,14 @@ fn ntop(af: c_int, src: &[u8]) -> String {
     let mut buf = [0 as c_char; 64];
     // SAFETY: `src` holds an in_addr/in6_addr for `af`; `buf` is larger
     // than INET6_ADDRSTRLEN.
-    let p = unsafe { inet_ntop(af, src.as_ptr().cast(), buf.as_mut_ptr(), socklen(buf.len())) };
+    let p = unsafe {
+        inet_ntop(
+            af,
+            src.as_ptr().cast(),
+            buf.as_mut_ptr(),
+            socklen(buf.len()),
+        )
+    };
     if p.is_null() {
         String::new()
     } else {
@@ -311,7 +327,14 @@ pub fn gethostbyname(name: &CStr) -> Result<(i32, Vec<u8>), i32> {
     let mut herr: c_int = 0;
     // SAFETY: all pointers are valid for the sizes passed.
     let r = unsafe {
-        gethostbyname_r(name.as_ptr(), &raw mut he, buf.as_mut_ptr(), buf.len(), &raw mut result, &raw mut herr)
+        gethostbyname_r(
+            name.as_ptr(),
+            &raw mut he,
+            buf.as_mut_ptr(),
+            buf.len(),
+            &raw mut result,
+            &raw mut herr,
+        )
     };
     if r != 0 || result.is_null() {
         return Err(if herr == 0 { 1 } else { herr });
@@ -387,7 +410,11 @@ pub fn getaddrinfo(
             None
         } else {
             // SAFETY: NUL-terminated string owned by the list.
-            Some(unsafe { CStr::from_ptr(ai.ai_canonname) }.to_bytes().to_vec())
+            Some(
+                unsafe { CStr::from_ptr(ai.ai_canonname) }
+                    .to_bytes()
+                    .to_vec(),
+            )
         };
         out.push(AddrInfoEntry {
             flags: ai.ai_flags,
@@ -438,7 +465,12 @@ pub fn if_index_to_addr4(fd: c_int, index: u32) -> Result<[u8; 4], i32> {
     // SAFETY: after SIOCGIFADDR the union holds a sockaddr (AF_INET).
     let sa = unsafe { req.ifr_ifru.ifru_addr };
     #[allow(clippy::cast_sign_loss)]
-    Ok([sa.sa_data[2] as u8, sa.sa_data[3] as u8, sa.sa_data[4] as u8, sa.sa_data[5] as u8])
+    Ok([
+        sa.sa_data[2] as u8,
+        sa.sa_data[3] as u8,
+        sa.sa_data[4] as u8,
+        sa.sa_data[5] as u8,
+    ])
 }
 
 /// The interface index owning an IPv4 address (via `getifaddrs`).
@@ -562,11 +594,24 @@ pub fn send(fd: c_int, data: &[u8], flags: c_int) -> Result<usize, i32> {
 
 /// `recvfrom(2)`; `addr` is the initial address buffer (family preset as
 /// PHP does) and `addr_len` the length passed in.
-pub fn recvfrom(fd: c_int, buf: &mut [u8], flags: c_int, mut addr: SockAddr, addr_len: usize) -> Result<(usize, SockAddr), i32> {
+pub fn recvfrom(
+    fd: c_int,
+    buf: &mut [u8],
+    flags: c_int,
+    mut addr: SockAddr,
+    addr_len: usize,
+) -> Result<(usize, SockAddr), i32> {
     let mut len = socklen(addr_len);
     // SAFETY: `buf` is writable; `addr` has room for `addr_len` bytes.
     let n = check_size(unsafe {
-        libc::recvfrom(fd, buf.as_mut_ptr().cast(), buf.len(), flags, addr.as_mut_ptr(), &raw mut len)
+        libc::recvfrom(
+            fd,
+            buf.as_mut_ptr().cast(),
+            buf.len(),
+            flags,
+            addr.as_mut_ptr(),
+            &raw mut len,
+        )
     })?;
     addr.len = len;
     Ok((n, addr))
@@ -575,7 +620,16 @@ pub fn recvfrom(fd: c_int, buf: &mut [u8], flags: c_int, mut addr: SockAddr, add
 /// `sendto(2)`.
 pub fn sendto(fd: c_int, data: &[u8], flags: c_int, addr: &SockAddr) -> Result<usize, i32> {
     // SAFETY: `data` readable; `addr` valid for its length.
-    check_size(unsafe { libc::sendto(fd, data.as_ptr().cast(), data.len(), flags, addr.as_ptr(), addr.len) })
+    check_size(unsafe {
+        libc::sendto(
+            fd,
+            data.as_ptr().cast(),
+            data.len(),
+            flags,
+            addr.as_ptr(),
+            addr.len,
+        )
+    })
 }
 
 /// `getsockopt(2)` into `buf`; returns the length written.
@@ -588,7 +642,11 @@ pub fn getsockopt(fd: c_int, level: c_int, name: c_int, buf: &mut [u8]) -> Resul
 
 /// `setsockopt(2)`.
 pub fn setsockopt(fd: c_int, level: c_int, name: c_int, value: &[u8]) -> Result<(), i32> {
-    let p: *const c_void = if value.is_empty() { std::ptr::null() } else { value.as_ptr().cast() };
+    let p: *const c_void = if value.is_empty() {
+        std::ptr::null()
+    } else {
+        value.as_ptr().cast()
+    };
     // SAFETY: `value` readable for its length (or null with length 0).
     check(unsafe { libc::setsockopt(fd, level, name, p, socklen(value.len())) }).map(|_| ())
 }
@@ -602,7 +660,11 @@ pub fn get_flags(fd: c_int) -> Result<c_int, i32> {
 /// `php_set_sock_blocking()`.
 pub fn set_blocking(fd: c_int, block: bool) -> Result<(), i32> {
     let flags = get_flags(fd)?;
-    let new = if block { flags & !libc::O_NONBLOCK } else { flags | libc::O_NONBLOCK };
+    let new = if block {
+        flags & !libc::O_NONBLOCK
+    } else {
+        flags | libc::O_NONBLOCK
+    };
     // SAFETY: no memory-safety preconditions.
     check(unsafe { libc::fcntl(fd, libc::F_SETFL, new) }).map(|_| ())
 }
@@ -651,7 +713,10 @@ pub fn select(
             }
         }
     }
-    let mut tv = libc::timeval { tv_sec: 0, tv_usec: 0 };
+    let mut tv = libc::timeval {
+        tv_sec: 0,
+        tv_usec: 0,
+    };
     let tvp = match timeout {
         Some((s, us)) => {
             tv.tv_sec = s;
@@ -695,10 +760,19 @@ pub fn cmsg_space(data: usize) -> usize {
 
 /// `sendmsg(2)` from owned parts; `control` is a fully encoded control
 /// buffer (see [`cmsg_len`]/[`cmsg_space`]).
-pub fn sendmsg(fd: c_int, name: Option<&SockAddr>, iov: &[Vec<u8>], control: &[u8], flags: c_int) -> Result<usize, i32> {
+pub fn sendmsg(
+    fd: c_int,
+    name: Option<&SockAddr>,
+    iov: &[Vec<u8>],
+    control: &[u8],
+    flags: c_int,
+) -> Result<usize, i32> {
     let mut iovecs: Vec<libc::iovec> = iov
         .iter()
-        .map(|b| libc::iovec { iov_base: b.as_ptr().cast_mut().cast(), iov_len: b.len() })
+        .map(|b| libc::iovec {
+            iov_base: b.as_ptr().cast_mut().cast(),
+            iov_len: b.len(),
+        })
         .collect();
     // SAFETY: msghdr is plain old data; zero is valid.
     let mut msg: libc::msghdr = unsafe { std::mem::zeroed() };
@@ -733,11 +807,20 @@ pub struct Received {
 
 /// `recvmsg(2)` into one buffer per `iov_sizes` entry, a name buffer when
 /// `name_len` is given and a control buffer of `control_len` bytes.
-pub fn recvmsg(fd: c_int, name_len: Option<usize>, iov_sizes: &[usize], control_len: usize, flags: c_int) -> Result<Received, i32> {
+pub fn recvmsg(
+    fd: c_int,
+    name_len: Option<usize>,
+    iov_sizes: &[usize],
+    control_len: usize,
+    flags: c_int,
+) -> Result<Received, i32> {
     let mut bufs: Vec<Vec<u8>> = iov_sizes.iter().map(|&n| vec![0u8; n]).collect();
     let mut iovecs: Vec<libc::iovec> = bufs
         .iter_mut()
-        .map(|b| libc::iovec { iov_base: b.as_mut_ptr().cast(), iov_len: b.len() })
+        .map(|b| libc::iovec {
+            iov_base: b.as_mut_ptr().cast(),
+            iov_len: b.len(),
+        })
         .collect();
     // SAFETY: msghdr is plain old data; zero is valid.
     let mut msg: libc::msghdr = unsafe { std::mem::zeroed() };
@@ -786,10 +869,23 @@ pub fn cstr(bytes: &[u8]) -> CString {
 /// (`LD W ABS SKF_AD_OFF + k; RET A`).
 pub fn attach_reuseport_cbpf(fd: c_int, k: u32) -> Result<(), i32> {
     let mut prog = [
-        libc::sock_filter { code: 0x20, jt: 0, jf: 0, k: (libc::SKF_AD_OFF as u32).wrapping_add(k) },
-        libc::sock_filter { code: 0x16, jt: 0, jf: 0, k: 0 },
+        libc::sock_filter {
+            code: 0x20,
+            jt: 0,
+            jf: 0,
+            k: (libc::SKF_AD_OFF as u32).wrapping_add(k),
+        },
+        libc::sock_filter {
+            code: 0x16,
+            jt: 0,
+            jf: 0,
+            k: 0,
+        },
     ];
-    let fprog = libc::sock_fprog { len: 2, filter: prog.as_mut_ptr() };
+    let fprog = libc::sock_fprog {
+        len: 2,
+        filter: prog.as_mut_ptr(),
+    };
     // SAFETY: `fprog` points to `prog`, which outlives the call.
     check(unsafe {
         libc::setsockopt(

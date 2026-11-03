@@ -345,7 +345,11 @@ pub fn float_to_string(f: f64) -> String {
         return if f > 0.0 { "INF".into() } else { "-INF".into() };
     }
     if f == 0.0 {
-        return if f.is_sign_negative() { "-0".into() } else { "0".into() };
+        return if f.is_sign_negative() {
+            "-0".into()
+        } else {
+            "0".into()
+        };
     }
     let s = format!("{f:e}");
     let (mant, exp) = s.split_once('e').unwrap_or((&s, "0"));
@@ -451,7 +455,10 @@ mod tests {
         assert_eq!(float_to_string(-2.5e-7), "-2.5E-7");
         assert_eq!(handle_numeric(b"12"), Some(12));
         assert_eq!(handle_numeric(b"012"), None);
-        let a = Value::Array(vec![(Key::Int(5), Value::Int(1)), (Key::s("x"), Value::Int(2))]);
+        let a = Value::Array(vec![
+            (Key::Int(5), Value::Int(1)),
+            (Key::s("x"), Value::Int(2)),
+        ]);
         assert_eq!(a.get("5"), Some(&Value::Int(1)));
         assert_eq!(a.get("x"), Some(&Value::Int(2)));
         assert_eq!(a.get("y"), None);
