@@ -397,7 +397,7 @@ fn collecting_context_is_a_host() {
         encode(&v, 0, 512, &mut ctx).expect("encode"),
         b"[\"a\\/b\",0.1]"
     );
-    assert!(decode(b"{}", Some(false), 512, 0, &mut ctx).is_err());
+    assert!(matches!(decode(b"{}", Some(false), 512, 0, &mut ctx), Ok(Value::Object(_))));
     assert!(matches!(
         decode(b"{}", Some(true), 512, 0, &mut ctx),
         Ok(Value::Array(a)) if a.is_empty()
