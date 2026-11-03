@@ -147,7 +147,7 @@ pub(crate) fn implementation_check(
     if proto.required() < fe.required() {
         return Status::Error;
     }
-    if proto_flags & flags::RETURN_REF != 0 && fe_flags & flags::RETURN_REF == 0 {
+    if returns_ref(proto, proto_flags) && !returns_ref(fe, fe_flags) {
         return Status::Error;
     }
     let pv = proto.is_variadic();
@@ -201,7 +201,21 @@ pub(crate) fn implementation_check(
     Status::Ok
 }
 
-fn render_default(p: &ParamInfo, f: &Func) -> String {
+/// Whether a method returns by reference (the flag is on the function).
+fn returns_ref(f: &Func, fflags: u32) -> bool {
+    fflags & flags::RETURN_REF != 0 || matches!(f, Func::User(u) if u.flags & flags::RETURN_REF != 0)
+}
+
+/// The file and first line of a function, for errors about it
+/// (`func_filename` / `func_lineno`).
+pub(crate) fn func_location(f: &Func) -> (ZStr, u32) {
+    match f {
+        Func::User(u) => (u.code.filename.clone(), u.line_start),
+        Func::Builtin(_) => (ZStr::from("Unknown"), 0),
+    }
+}
+
+fn render_default(p: &ParamInfo, f: &Func, scope: &ZStr) -> String {
     if !f.is_user() {
         return p.default_text.clone().unwrap_or_else(|| "<default>".to_string());
     }
@@ -222,12 +236,24 @@ fn render_default(p: &ParamInfo, f: &Func) -> String {
             }
             Value::Array(a) => if a.is_empty() { "[]".into() } else { "[...]".into() },
             Value::Int(i) => i.to_string(),
-            Value::Float(f) => php_runtime::float::format_double(*f, 17, false),
+            // `smart_str_append_double(.., EG(precision))`.
+            Value::Float(f) => php_runtime::float::format_double(*f, 14, false),
             _ => "<expression>".into(),
         },
         _ => {
             let t = p.default_text.clone().unwrap_or_default();
             let t = t.trim();
+            // `self::class` outside a trait is compiled to the class name.
+            if t.eq_ignore_ascii_case("self::class") && !scope.is_empty() {
+                return render_default(
+                    &ParamInfo {
+                        default_expr: Some(ConstExpr::Value(Value::Str(scope.clone()))),
+                        ..p.clone()
+                    },
+                    f,
+                    scope,
+                );
+            }
             let ident = |s: &str| !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '\\');
             if ident(t) {
                 t.trim_start_matches('\\').to_string()
@@ -254,7 +280,7 @@ pub(crate) fn declaration(f: &Func, fflags: u32, scope: &Rc<Class>) -> String {
 /// differs for trait methods).
 pub(crate) fn declaration_as(f: &Func, fflags: u32, shown: &ZStr, scope: &Rc<Class>) -> String {
     let mut s = String::new();
-    if fflags & flags::RETURN_REF != 0 {
+    if returns_ref(f, fflags) {
         s.push('&');
     }
     s.push_str(&shown.to_string_lossy());
@@ -281,7 +307,11 @@ pub(crate) fn declaration_as(f: &Func, fflags: u32, shown: &ZStr, scope: &Rc<Cla
         s.push_str(&p.name.to_string_lossy());
         if i >= req && !p.variadic {
             s.push_str(" = ");
-            s.push_str(&render_default(p, f));
+            let declaring = match f {
+                Func::User(u) if !scope.is_trait() => u.class_name.clone().unwrap_or_default(),
+                _ => ZStr::default(),
+            };
+            s.push_str(&render_default(p, f, &declaring));
         }
     }
     s.push(')');
@@ -294,7 +324,10 @@ pub(crate) fn declaration_as(f: &Func, fflags: u32, shown: &ZStr, scope: &Rc<Cla
 
 /// Checks the overriding methods of a freshly linked class; returns the
 /// fatal error (message, line) or deprecations to emit.
-pub(crate) fn check_class(vm: &Vm, cls: &Rc<Class>) -> (Option<(String, u32)>, Vec<(String, u32)>) {
+pub(crate) fn check_class(
+    vm: &Vm,
+    cls: &Rc<Class>,
+) -> (Option<(String, ZStr, u32)>, Vec<(String, u32)>) {
     let mut warnings = Vec::new();
     let mut protos: Vec<(Rc<Method>, Rc<Method>)> = Vec::new();
     for lc in &cls.method_order {
@@ -317,20 +350,30 @@ pub(crate) fn check_class(vm: &Vm, cls: &Rc<Class>) -> (Option<(String, u32)>, V
             }
         }
     }
-    for (m, pm) in protos {
-        let ps = pm.scope();
+    for (m, mut pm) in protos {
+        let mut ps = pm.scope();
         let is_ctor = m.name.eq_ignore_ascii_case(b"__construct");
         if is_ctor && !ps.is_interface() && !pm.is_abstract() {
-            continue;
+            // A constructor is only checked against an abstract (or
+            // interface) prototype, which may be further up.
+            let proto = pm
+                .proto_scope
+                .upgrade()
+                .and_then(|c| c.methods.get(b"__construct".as_slice()).cloned())
+                .filter(|p| p.is_abstract() || p.scope().is_interface());
+            match proto {
+                Some(p) => {
+                    ps = p.scope();
+                    pm = p;
+                }
+                None => continue,
+            }
         }
         let st = implementation_check(vm, &m.func, m.flags, &m.scope(), &pm.func, pm.flags, &ps);
         if st == Status::Ok {
             continue;
         }
-        let line = match &m.func {
-            Func::User(u) => u.line_start,
-            Func::Builtin(_) => 0,
-        };
+        let (file, line) = func_location(&m.func);
         let child = declaration(&m.func, m.flags, &m.scope());
         let parent = declaration(&pm.func, pm.flags, &ps);
         if st == Status::Warning {
@@ -349,7 +392,10 @@ pub(crate) fn check_class(vm: &Vm, cls: &Rc<Class>) -> (Option<(String, u32)>, V
             continue;
         }
         let _ = cflags::INTERNAL;
-        return (Some((format!("Declaration of {child} must be compatible with {parent}"), line)), warnings);
+        return (
+            Some((format!("Declaration of {child} must be compatible with {parent}"), file, line)),
+            warnings,
+        );
     }
     (None, warnings)
 }

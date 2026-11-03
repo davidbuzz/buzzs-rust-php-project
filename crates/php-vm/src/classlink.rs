@@ -591,9 +591,15 @@ impl Vm {
                 decl.line_start,
             ));
         }
-        let cls = self.link_class(decl, is_anon)?;
+        let (cls, recorded) = self.link_class(decl, is_anon)?;
         self.bound_decls.insert(key, cls.clone());
         self.register_class(cls.clone());
+        // `zend_emit_recorded_errors`: warnings raised while linking are
+        // emitted once the class is declared (an exception thrown by an
+        // error handler then leaves the class declared).
+        for (level, msg, l) in recorded {
+            self.error_at(level, &msg, &decl.filename, l)?;
+        }
         Ok(cls)
     }
 
@@ -862,7 +868,13 @@ impl Vm {
     }
 
     #[allow(clippy::too_many_lines)]
-    fn link_class(&mut self, decl: &Rc<ClassDecl>, is_anon: bool) -> VmResult<Rc<Class>> {
+    /// Links a class; also returns the warnings recorded while linking
+    /// (level, message, line), to be emitted after the class is declared.
+    fn link_class(
+        &mut self,
+        decl: &Rc<ClassDecl>,
+        is_anon: bool,
+    ) -> VmResult<(Rc<Class>, Vec<(i64, String, u32)>)> {
         let name = decl.name.clone();
         let display = object::display_name(&name);
         // Messages formatted with `%pS` print the whole name, including the
@@ -989,7 +1001,10 @@ impl Vm {
             }
         }
         // Traversable must be implemented via Iterator or IteratorAggregate.
+        // (`zend_implement_traversable`: an abstract class may implement
+        // Traversable alone; the error is an E_CORE_ERROR without location.)
         if decl.kind == ClassKind::Class
+            && decl.flags & cflags::EXPLICIT_ABSTRACT == 0
             && interfaces
                 .iter()
                 .any(|i| i.lc_name.as_bytes() == b"traversable")
@@ -1000,12 +1015,30 @@ impl Vm {
                 .as_ref()
                 .is_some_and(|p| p.flags & cflags::INTERNAL != 0)
         {
-            return Err(self.fatal_at(
+            self.report_fatal(
                 &format!(
                     "Class {display} must implement interface Traversable as part of either Iterator or IteratorAggregate"
                 ),
-                line,
-            ));
+                &ZStr::from("Unknown"),
+                0,
+            );
+            return Err(Throw::Fatal);
+        }
+        // An enum-only interface reached through another interface
+        // (`zend_implement_unit_enum` runs for every implemented interface).
+        if decl.kind == ClassKind::Class {
+            if let Some(ic) = interfaces
+                .iter()
+                .find(|i| matches!(i.lc_name.as_bytes(), b"unitenum" | b"backedenum"))
+            {
+                return Err(self.fatal_at(
+                    &format!(
+                        "Non-enum class {display} cannot implement interface {}",
+                        ic.name
+                    ),
+                    line,
+                ));
+            }
         }
         // Traits.
         let mut traits = Vec::new();
@@ -1081,14 +1114,11 @@ impl Vm {
         if let Some(e) = err {
             return Err(self.fatal_at(&e, line));
         }
-        for w in &link_out.warnings {
-            self.error_at(
-                crate::errors::level::COMPILE_WARNING,
-                w,
-                &decl.filename,
-                line,
-            )?;
-        }
+        let mut recorded: Vec<(i64, String, u32)> = link_out
+            .warnings
+            .iter()
+            .map(|w| (crate::errors::level::COMPILE_WARNING, w.clone(), line))
+            .collect();
         for (a, b, msg) in &link_out.value_checks {
             // A failed evaluation makes the values incompatible.
             let mut eval = |e: &ConstExpr| match self.eval_const_expr(e, Some(&cls)) {
@@ -1105,8 +1135,8 @@ impl Vm {
             }
         }
         // Inheritance checks for overridden methods.
-        if let Some(e) = check_method_inheritance(&cls) {
-            return Err(self.fatal_at(&e.0, e.1));
+        if let Some((e, l)) = check_method_inheritance(&cls) {
+            return Err(self.fatal_at(&e, l));
         }
         for c in &link_out.trait_checks {
             if let Some((e, file, l)) = self.check_trait_abstract(&cls, c) {
@@ -1115,12 +1145,12 @@ impl Vm {
             }
         }
         let (err, warnings) = crate::variance::check_class(self, &cls);
-        if let Some(e) = err {
-            return Err(self.fatal_at(&e.0, e.1));
+        if let Some((e, file, l)) = err {
+            self.report_fatal(&e, &file, l);
+            return Err(Throw::Fatal);
         }
         for (w, l) in warnings {
-            let file = decl.filename.clone();
-            self.error_at(crate::errors::level::DEPRECATED, &w, &file, l)?;
+            recorded.push((crate::errors::level::DEPRECATED, w, l));
         }
         // Abstract method check.
         // (`zend_verify_abstract_class`: an explicitly abstract class must
@@ -1211,9 +1241,9 @@ impl Vm {
                 "{} implements the Serializable interface, which is deprecated. Implement __serialize() and __unserialize() instead (or in addition, if support for old PHP versions is necessary)",
                 object::display_name(&cls.name)
             );
-            self.error_at(crate::errors::level::DEPRECATED, &msg, &decl.filename, line)?;
+            recorded.push((crate::errors::level::DEPRECATED, msg, line));
         }
-        Ok(cls)
+        Ok((cls, recorded))
     }
 }
 
