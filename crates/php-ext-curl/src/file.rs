@@ -1,4 +1,4 @@
-//! `CURLFile` and `CURLStringFile` (curl_file.c).
+//! `CURLFile` and `CURLStringFile` (`curl_file.c`).
 
 use php_runtime::Value;
 use php_vm::ext::{acc, class_flags, Args, ClassBuilder, ModuleBuilder, VmResult};

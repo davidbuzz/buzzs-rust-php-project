@@ -4,8 +4,8 @@
 use crate::easy::{ctor_fn, not_comparable, NO_DYNAMIC_PROPERTIES};
 use crate::state::{share_of, CurlShare};
 use php_curl::consts::{
-    CURLSHOPT_SHARE, CURLSHOPT_UNSHARE, CURL_LOCK_DATA_CONNECT, CURL_LOCK_DATA_COOKIE, CURL_LOCK_DATA_DNS,
-    CURL_LOCK_DATA_PSL, CURL_LOCK_DATA_SSL_SESSION,
+    CURLSHOPT_SHARE, CURLSHOPT_UNSHARE, CURL_LOCK_DATA_CONNECT, CURL_LOCK_DATA_COOKIE,
+    CURL_LOCK_DATA_DNS, CURL_LOCK_DATA_PSL, CURL_LOCK_DATA_SSL_SESSION,
 };
 use php_curl::Share;
 use php_runtime::{Obj, Value, ZArray};
@@ -33,12 +33,22 @@ pub(crate) fn register_classes(m: &mut ModuleBuilder<'_>) {
         ..Default::default()
     };
     ClassBuilder::new("CurlShareHandle")
-        .flags(class_flags::FINAL | class_flags::NOT_SERIALIZABLE | class_flags::NO_CLONE | NO_DYNAMIC_PROPERTIES)
+        .flags(
+            class_flags::FINAL
+                | class_flags::NOT_SERIALIZABLE
+                | class_flags::NO_CLONE
+                | NO_DYNAMIC_PROPERTIES,
+        )
         .method("__construct()", acc::PUBLIC, ctor_fn())
         .hooks(hooks.clone())
         .register(m.vm());
     ClassBuilder::new("CurlSharePersistentHandle")
-        .flags(class_flags::FINAL | class_flags::NOT_SERIALIZABLE | class_flags::NO_CLONE | NO_DYNAMIC_PROPERTIES)
+        .flags(
+            class_flags::FINAL
+                | class_flags::NOT_SERIALIZABLE
+                | class_flags::NO_CLONE
+                | NO_DYNAMIC_PROPERTIES,
+        )
         .prop("options", acc::PUBLIC | acc::READONLY, Some("array"), None)
         .method("__construct()", acc::PUBLIC, ctor_fn())
         .hooks(hooks)
@@ -62,7 +72,10 @@ fn new_share_obj(vm: &mut Vm, class: &str, share: Share) -> VmResult<Obj> {
 
 fn curl_share_init(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
     let Some(share) = Share::new() else {
-        return Err(vm.throw("Error", "curl_share_init(): Could not initialize a new cURL share handle"));
+        return Err(vm.throw(
+            "Error",
+            "curl_share_init(): Could not initialize a new cURL share handle",
+        ));
     };
     Ok(Value::Object(new_share_obj(vm, "CurlShareHandle", share)?))
 }
@@ -169,17 +182,26 @@ fn curl_share_init_persistent(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 /// Registers the share functions.
 pub(crate) fn register_functions(m: &mut ModuleBuilder<'_>) {
-    m.function("curl_share_close(CurlShareHandle $share_handle): void", curl_share_close)
-        .deprecated("8.5", "as it has no effect since PHP 8.0")
-        .function("curl_share_errno(CurlShareHandle $share_handle): int", curl_share_errno)
-        .function("curl_share_init(): CurlShareHandle", curl_share_init)
-        .function(
-            "curl_share_setopt(CurlShareHandle $share_handle, int $option, mixed $value): bool",
-            curl_share_setopt,
-        )
-        .function("curl_share_strerror(int $error_code): ?string", curl_share_strerror)
-        .function(
-            "curl_share_init_persistent(array $share_options): CurlSharePersistentHandle",
-            curl_share_init_persistent,
-        );
+    m.function(
+        "curl_share_close(CurlShareHandle $share_handle): void",
+        curl_share_close,
+    )
+    .deprecated("8.5", "as it has no effect since PHP 8.0")
+    .function(
+        "curl_share_errno(CurlShareHandle $share_handle): int",
+        curl_share_errno,
+    )
+    .function("curl_share_init(): CurlShareHandle", curl_share_init)
+    .function(
+        "curl_share_setopt(CurlShareHandle $share_handle, int $option, mixed $value): bool",
+        curl_share_setopt,
+    )
+    .function(
+        "curl_share_strerror(int $error_code): ?string",
+        curl_share_strerror,
+    )
+    .function(
+        "curl_share_init_persistent(array $share_options): CurlSharePersistentHandle",
+        curl_share_init_persistent,
+    );
 }

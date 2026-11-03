@@ -4,7 +4,12 @@
 //! `unsafe` to call; the safe wrappers live in [`crate::easy`],
 //! [`crate::multi`], [`crate::share`] and [`crate::version`].
 
-#![allow(non_camel_case_types, missing_docs, dead_code)]
+#![allow(
+    non_camel_case_types,
+    missing_docs,
+    dead_code,
+    clippy::upper_case_acronyms
+)]
 
 use std::os::raw::{c_char, c_double, c_int, c_long, c_uint, c_void};
 
@@ -146,13 +151,17 @@ pub type curl_write_callback = extern "C" fn(*mut c_char, usize, usize, *mut c_v
 pub type curl_read_callback = extern "C" fn(*mut c_char, usize, usize, *mut c_void) -> usize;
 pub type curl_seek_callback = extern "C" fn(*mut c_void, curl_off_t, c_int) -> c_int;
 pub type curl_free_callback = extern "C" fn(*mut c_void);
-pub type curl_progress_callback = extern "C" fn(*mut c_void, c_double, c_double, c_double, c_double) -> c_int;
+pub type curl_progress_callback =
+    extern "C" fn(*mut c_void, c_double, c_double, c_double, c_double) -> c_int;
 pub type curl_xferinfo_callback =
     extern "C" fn(*mut c_void, curl_off_t, curl_off_t, curl_off_t, curl_off_t) -> c_int;
 pub type curl_fnmatch_callback = extern "C" fn(*mut c_void, *const c_char, *const c_char) -> c_int;
-pub type curl_debug_callback = extern "C" fn(*mut CURL, c_int, *mut c_char, usize, *mut c_void) -> c_int;
-pub type curl_prereq_callback = extern "C" fn(*mut c_void, *mut c_char, *mut c_char, c_int, c_int) -> c_int;
-pub type curl_sshhostkey_callback = extern "C" fn(*mut c_void, c_int, *const c_char, usize) -> c_int;
+pub type curl_debug_callback =
+    extern "C" fn(*mut CURL, c_int, *mut c_char, usize, *mut c_void) -> c_int;
+pub type curl_prereq_callback =
+    extern "C" fn(*mut c_void, *mut c_char, *mut c_char, c_int, c_int) -> c_int;
+pub type curl_sshhostkey_callback =
+    extern "C" fn(*mut c_void, c_int, *const c_char, usize) -> c_int;
 pub type curl_push_callback =
     extern "C" fn(*mut CURL, *mut CURL, usize, *mut curl_pushheaders, *mut c_void) -> c_int;
 
@@ -170,7 +179,12 @@ extern "C" {
     pub fn curl_easy_duphandle(h: *mut CURL) -> *mut CURL;
     pub fn curl_easy_strerror(code: CURLcode) -> *const c_char;
     pub fn curl_easy_escape(h: *mut CURL, s: *const c_char, len: c_int) -> *mut c_char;
-    pub fn curl_easy_unescape(h: *mut CURL, s: *const c_char, len: c_int, outlen: *mut c_int) -> *mut c_char;
+    pub fn curl_easy_unescape(
+        h: *mut CURL,
+        s: *const c_char,
+        len: c_int,
+        outlen: *mut c_int,
+    ) -> *mut c_char;
     pub fn curl_easy_pause(h: *mut CURL, bitmask: c_int) -> CURLcode;
     pub fn curl_easy_upkeep(h: *mut CURL) -> CURLcode;
     pub fn curl_easy_option_by_id(id: CURLoption) -> *const curl_easyoption;

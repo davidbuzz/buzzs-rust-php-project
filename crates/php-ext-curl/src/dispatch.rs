@@ -4,15 +4,20 @@
 use crate::state::{curl_of, Curl, CurlMulti, Method};
 use crate::streams;
 use php_curl::consts::{
-    CURLINFO_HEADER_OUT, CURLKHMATCH_MISMATCH, CURLKHMATCH_OK, CURL_FNMATCHFUNC_FAIL, CURL_PREREQFUNC_ABORT,
-    CURL_PREREQFUNC_OK, CURL_PUSH_DENY, CURL_READFUNC_ABORT, CURL_READFUNC_PAUSE, CURL_SEEKFUNC_CANTSEEK,
-    CURL_SEEKFUNC_FAIL, CURL_SEEKFUNC_OK,
+    CURLINFO_HEADER_OUT, CURLKHMATCH_MISMATCH, CURLKHMATCH_OK, CURL_FNMATCHFUNC_FAIL,
+    CURL_PREREQFUNC_ABORT, CURL_PREREQFUNC_OK, CURL_PUSH_DENY, CURL_READFUNC_ABORT,
+    CURL_READFUNC_PAUSE, CURL_SEEKFUNC_CANTSEEK, CURL_SEEKFUNC_FAIL, CURL_SEEKFUNC_OK,
+    CURL_WRITEFUNC_ERROR,
 };
 use php_curl::{Easy, Handler};
 use php_runtime::{Obj, Value, ZArray};
 use php_vm::ext::{Throw, VmResult};
 use php_vm::Vm;
 use std::rc::Rc;
+
+const SEEK_MSG: &str = "The CURLOPT_SEEKFUNCTION callback must return one of CURL_SEEKFUNC_OK, CURL_SEEKFUNC_FAIL or CURL_SEEKFUNC_CANTSEEK";
+const PREREQ_MSG: &str =
+    "The CURLOPT_PREREQFUNCTION callback must return either CURL_PREREQFUNC_OK or CURL_PREREQFUNC_ABORT";
 
 /// A handle taking part in the transfer.
 struct Entry {
@@ -98,15 +103,20 @@ impl<'a> Dispatch<'a> {
     }
 
     /// `php_curl_call_callback()`: `None` when the call did not produce a
-    /// value (exception pending or thrown).
-    fn call(&mut self, curl: &Curl, cb: &Value, args: Vec<Value>) -> Option<Value> {
+    /// value (exception pending or thrown). The callable is released while
+    /// the callback guard is still set, so destructors it triggers see it.
+    fn call(&mut self, curl: &Curl, cb: Value, args: Vec<Value>) -> Option<Value> {
         if self.pending.is_some() {
             return None;
         }
         let was = curl.in_callback.replace(true);
-        let r = self.vm.call_value(cb, args);
+        let r = self.vm.call_value(&cb, args);
+        drop(cb);
+        let d = run_destructors(self.vm);
         curl.in_callback.set(was);
-        self.check(r)
+        let r = self.check(r);
+        self.check(d);
+        r
     }
 
     /// `_php_curl_verify_handlers(ch, 1)` after a callback returned.
@@ -124,13 +134,13 @@ impl<'a> Dispatch<'a> {
         self.check(r).unwrap_or(0)
     }
 
-    fn user_write(&mut self, obj: &Obj, curl: &Curl, cb: &Value, data: &[u8]) -> usize {
+    fn user_write(&mut self, obj: &Obj, curl: &Curl, cb: Value, data: &[u8]) -> usize {
         let args = vec![Value::Object(obj.clone()), Value::from(data)];
         match self.call(curl, cb, args) {
             Some(v) => {
                 self.verify(curl);
                 let r = get_long(self.vm, &v);
-                #[allow(clippy::cast_sign_loss)]
+                #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
                 self.check(r).map_or(usize::MAX, |n| n as usize)
             }
             None => usize::MAX,
@@ -145,7 +155,11 @@ impl Handler for Dispatch<'_> {
         };
         let (method, fcc, stream) = {
             let st = curl.st.borrow();
-            (st.write.method, st.write.fcc.clone(), st.write.stream.clone())
+            (
+                st.write.method,
+                st.write.fcc.clone(),
+                st.write.stream.clone(),
+            )
         };
         match method {
             Method::Stdout => {
@@ -155,17 +169,21 @@ impl Handler for Dispatch<'_> {
             Method::File => self.write_stream(stream.as_ref(), data),
             Method::Return => {
                 if !data.is_empty() {
-                    curl.st
-                        .borrow_mut()
-                        .write
-                        .buf
-                        .get_or_insert_with(Vec::new)
-                        .extend_from_slice(data);
+                    let mut st = curl.st.borrow_mut();
+                    let buf = st.write.buf.get_or_insert_with(Vec::new);
+                    // `smart_str_fappendl_ex(..., fallible)`: over the memory
+                    // limit the transfer fails (the VM raises the delayed
+                    // fatal once curl_exec() returns).
+                    if php_memlimit::fallible(|| buf.try_reserve(data.len())).is_err() {
+                        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                        return CURL_WRITEFUNC_ERROR as usize;
+                    }
+                    buf.extend_from_slice(data);
                 }
                 data.len()
             }
             Method::User => match fcc {
-                Some(cb) => self.user_write(&obj, &curl, &cb, data),
+                Some(cb) => self.user_write(&obj, &curl, cb, data),
                 None => data.len(),
             },
             Method::Direct | Method::Ignore => data.len(),
@@ -201,7 +219,7 @@ impl Handler for Dispatch<'_> {
             }
             Method::File => self.write_stream(stream.as_ref(), data),
             Method::User => match fcc {
-                Some(cb) => self.user_write(&obj, &curl, &cb, data),
+                Some(cb) => self.user_write(&obj, &curl, cb, data),
                 None => data.len(),
             },
             Method::Ignore => data.len(),
@@ -217,7 +235,7 @@ impl Handler for Dispatch<'_> {
             let st = curl.st.borrow();
             (st.read.method, st.read.fcc.clone(), st.read.stream.clone())
         };
-        #[allow(clippy::cast_sign_loss)]
+        #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
         let abort = CURL_READFUNC_ABORT as usize;
         match method {
             Method::Direct => match stream {
@@ -232,7 +250,7 @@ impl Handler for Dispatch<'_> {
                 let res = stream.unwrap_or(Value::Null);
                 let nmemb = i64::try_from(buf.len()).unwrap_or(i64::MAX);
                 let args = vec![Value::Object(obj.clone()), res, Value::Int(nmemb)];
-                let Some(v) = self.call(&curl, &cb, args) else {
+                let Some(v) = self.call(&curl, cb, args) else {
                     return abort;
                 };
                 self.verify(&curl);
@@ -271,23 +289,30 @@ impl Handler for Dispatch<'_> {
         let Some(cb) = curl.st.borrow().seek.clone() else {
             return cantseek;
         };
-        let args = vec![Value::Object(obj), Value::Int(offset), Value::Int(i64::from(origin))];
-        let Some(v) = self.call(&curl, &cb, args) else {
+        let args = vec![
+            Value::Object(obj),
+            Value::Int(offset),
+            Value::Int(i64::from(origin)),
+        ];
+        let Some(v) = self.call(&curl, cb, args) else {
             return cantseek;
         };
         self.verify(&curl);
-        const MSG: &str = "The CURLOPT_SEEKFUNCTION callback must return one of CURL_SEEKFUNC_OK, CURL_SEEKFUNC_FAIL or CURL_SEEKFUNC_CANTSEEK";
         match v {
-            Value::Int(l) if l == CURL_SEEKFUNC_OK || l == CURL_SEEKFUNC_FAIL || l == CURL_SEEKFUNC_CANTSEEK => {
+            Value::Int(l)
+                if l == CURL_SEEKFUNC_OK
+                    || l == CURL_SEEKFUNC_FAIL
+                    || l == CURL_SEEKFUNC_CANTSEEK =>
+            {
                 as_c_int(l)
             }
             Value::Int(_) => {
-                let t = self.vm.throw("ValueError", MSG);
+                let t = self.vm.throw("ValueError", SEEK_MSG);
                 self.fail(t);
                 cantseek
             }
             _ => {
-                let t = self.vm.throw("TypeError", MSG);
+                let t = self.vm.throw("TypeError", SEEK_MSG);
                 self.fail(t);
                 cantseek
             }
@@ -309,7 +334,7 @@ impl Handler for Dispatch<'_> {
             Value::Int(ultotal as i64),
             Value::Int(ulnow as i64),
         ];
-        self.progress_result(&curl, &cb, args)
+        self.progress_result(&curl, cb, args)
     }
 
     fn xferinfo(&mut self, key: u64, dltotal: i64, dlnow: i64, ultotal: i64, ulnow: i64) -> i32 {
@@ -326,7 +351,7 @@ impl Handler for Dispatch<'_> {
             Value::Int(ultotal),
             Value::Int(ulnow),
         ];
-        self.progress_result(&curl, &cb, args)
+        self.progress_result(&curl, cb, args)
     }
 
     fn fnmatch(&mut self, key: u64, pattern: &[u8], string: &[u8]) -> i32 {
@@ -337,8 +362,12 @@ impl Handler for Dispatch<'_> {
         let Some(cb) = curl.st.borrow().fnmatch.clone() else {
             return fail;
         };
-        let args = vec![Value::Object(obj), Value::from(pattern), Value::from(string)];
-        let Some(v) = self.call(&curl, &cb, args) else {
+        let args = vec![
+            Value::Object(obj),
+            Value::from(pattern),
+            Value::from(string),
+        ];
+        let Some(v) = self.call(&curl, cb, args) else {
             return fail;
         };
         self.verify(&curl);
@@ -356,11 +385,22 @@ impl Handler for Dispatch<'_> {
         let Some(cb) = curl.st.borrow().debug.clone() else {
             return;
         };
-        let args = vec![Value::Object(obj), Value::Int(i64::from(kind)), Value::from(data)];
-        let _ = self.call(&curl, &cb, args);
+        let args = vec![
+            Value::Object(obj),
+            Value::Int(i64::from(kind)),
+            Value::from(data),
+        ];
+        let _ = self.call(&curl, cb, args);
     }
 
-    fn prereq(&mut self, key: u64, primary_ip: &[u8], local_ip: &[u8], primary_port: i32, local_port: i32) -> i32 {
+    fn prereq(
+        &mut self,
+        key: u64,
+        primary_ip: &[u8],
+        local_ip: &[u8],
+        primary_port: i32,
+        local_port: i32,
+    ) -> i32 {
         let abort = as_c_int(CURL_PREREQFUNC_ABORT);
         let Some((obj, curl)) = self.lookup(key) else {
             return as_c_int(CURL_PREREQFUNC_OK);
@@ -375,21 +415,19 @@ impl Handler for Dispatch<'_> {
             Value::Int(i64::from(primary_port)),
             Value::Int(i64::from(local_port)),
         ];
-        let Some(v) = self.call(&curl, &cb, args) else {
+        let Some(v) = self.call(&curl, cb, args) else {
             return abort;
         };
         self.verify(&curl);
-        const MSG: &str =
-            "The CURLOPT_PREREQFUNCTION callback must return either CURL_PREREQFUNC_OK or CURL_PREREQFUNC_ABORT";
         match v {
             Value::Int(l) if l == CURL_PREREQFUNC_OK || l == CURL_PREREQFUNC_ABORT => as_c_int(l),
             Value::Int(_) => {
-                let t = self.vm.throw("ValueError", MSG);
+                let t = self.vm.throw("ValueError", PREREQ_MSG);
                 self.fail(t);
                 abort
             }
             _ => {
-                let t = self.vm.throw("TypeError", MSG);
+                let t = self.vm.throw("TypeError", PREREQ_MSG);
                 self.fail(t);
                 abort
             }
@@ -410,7 +448,7 @@ impl Handler for Dispatch<'_> {
             Value::from(hostkey),
             Value::Int(i64::try_from(hostkey.len()).unwrap_or(0)),
         ];
-        let Some(v) = self.call(&curl, &cb, args) else {
+        let Some(v) = self.call(&curl, cb, args) else {
             return mismatch;
         };
         self.verify(&curl);
@@ -453,7 +491,11 @@ impl Handler for Dispatch<'_> {
         for h in headers {
             let _ = arr.make_mut().push(Value::from(h.as_slice()));
         }
-        let args = vec![Value::Object(pobj), Value::Object(cobj.clone()), Value::Array(arr)];
+        let args = vec![
+            Value::Object(pobj),
+            Value::Object(cobj.clone()),
+            Value::Array(arr),
+        ];
         let accepted = if self.pending.is_some() {
             None
         } else {
@@ -482,7 +524,7 @@ impl Handler for Dispatch<'_> {
 }
 
 impl Dispatch<'_> {
-    fn progress_result(&mut self, curl: &Curl, cb: &Value, args: Vec<Value>) -> i32 {
+    fn progress_result(&mut self, curl: &Curl, cb: Value, args: Vec<Value>) -> i32 {
         let Some(v) = self.call(curl, cb, args) else {
             return 1;
         };
@@ -490,6 +532,20 @@ impl Dispatch<'_> {
         let r = get_long(self.vm, &v);
         i32::from(self.check(r) != Some(0))
     }
+}
+
+/// Runs the destructors of objects released by native code right away
+/// (the VM otherwise runs them after the next opcode).
+pub(crate) fn run_destructors(vm: &mut Vm) -> VmResult<()> {
+    while php_vm::object::has_pending_destructors() {
+        for o in php_vm::object::take_pending_destructors() {
+            let has = php_vm::object::class_of(&o).magic.destruct.is_some();
+            if has {
+                vm.call_method_by_name(&o, "__destruct", Vec::new())?;
+            }
+        }
+    }
+    Ok(())
 }
 
 /// `_php_curl_verify_handlers()`: resets handlers whose stream resource was

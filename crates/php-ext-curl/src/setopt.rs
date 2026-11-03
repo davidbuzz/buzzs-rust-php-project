@@ -3,7 +3,11 @@
 use crate::mime;
 use crate::state::{Curl, Method};
 use crate::streams;
-use php_curl::consts::{CURLE_OK, CURLE_UNKNOWN_OPTION, CURLOPT_FILE, CURLOPT_INFILE, CURLOPT_PROTOCOLS, CURLOPT_PROTOCOLS_STR, CURLOPT_REDIR_PROTOCOLS, CURLOPT_REDIR_PROTOCOLS_STR, CURLOPT_SSL_VERIFYHOST, CURLOPT_STDERR, CURLOPT_WRITEHEADER, CURLPROTO_FILE, CURL_REDIR_POST_ALL};
+use php_curl::consts::{
+    CURLE_UNKNOWN_OPTION, CURLOPT_FILE, CURLOPT_INFILE, CURLOPT_PROTOCOLS, CURLOPT_PROTOCOLS_STR,
+    CURLOPT_REDIR_PROTOCOLS, CURLOPT_REDIR_PROTOCOLS_STR, CURLOPT_SSL_VERIFYHOST, CURLOPT_STDERR,
+    CURLOPT_WRITEHEADER, CURLPROTO_FILE, CURL_REDIR_POST_ALL,
+};
 use php_curl::{option_kind, Callback, OptKind};
 use php_runtime::{Obj, Value};
 use php_vm::ext::{Args, VmResult};
@@ -30,7 +34,8 @@ pub(crate) fn basedir_denied(vm: &mut Vm, path: &[u8]) -> VmResult<bool> {
     if !open_basedir_active(vm) {
         return Ok(false);
     }
-    let allowed = php_ext_streams::bridge::run(vm, || php_streams::paths::check_open_basedir(path))?;
+    let allowed =
+        php_ext_streams::bridge::run(vm, || php_streams::paths::check_open_basedir(path))?;
     Ok(!allowed)
 }
 
@@ -78,7 +83,10 @@ fn callable(vm: &mut Vm, cx: &Ctx<'_>, value: &Value, cb: Callback) -> VmResult<
     Err(cx.args.type_error(
         vm,
         n,
-        &format!("must be a valid callback for option {}, {why}", cb.option_name()),
+        &format!(
+            "must be a valid callback for option {}, {why}",
+            cb.option_name()
+        ),
     ))
 }
 
@@ -98,7 +106,13 @@ fn slot(st: &mut crate::state::State, cb: Callback) -> &mut Option<Value> {
     }
 }
 
-fn set_callable(vm: &mut Vm, cx: &Ctx<'_>, curl: &Curl, value: &Value, cb: Callback) -> VmResult<bool> {
+fn set_callable(
+    vm: &mut Vm,
+    cx: &Ctx<'_>,
+    curl: &Curl,
+    value: &Value,
+    cb: Callback,
+) -> VmResult<bool> {
     // The old callback is released first, even when the new one is invalid.
     *slot(&mut curl.st.borrow_mut(), cb) = None;
     let r = callable(vm, cx, value, cb);
@@ -151,13 +165,19 @@ fn set_file(vm: &mut Vm, cx: &Ctx<'_>, curl: &Curl, opt: i64, value: &Value) -> 
         let Value::Resource(r) = value else {
             return Err(vm.throw(
                 "TypeError",
-                &format!("{}(): supplied argument is not a valid File-Handle resource", cx.fname),
+                &format!(
+                    "{}(): supplied argument is not a valid File-Handle resource",
+                    cx.fname
+                ),
             ));
         };
         if !streams::is_open(r) {
             return Err(vm.throw(
                 "TypeError",
-                &format!("{}(): supplied resource is not a valid File-Handle resource", cx.fname),
+                &format!(
+                    "{}(): supplied resource is not a valid File-Handle resource",
+                    cx.fname
+                ),
             ));
         }
         match streams::cast_stdio(vm, r)? {
@@ -184,18 +204,34 @@ fn set_file(vm: &mut Vm, cx: &Ctx<'_>, curl: &Curl, opt: i64, value: &Value) -> 
             match &info {
                 None => {
                     let mut st = curl.st.borrow_mut();
-                    let io = if header { &mut st.write_header } else { &mut st.write };
+                    let io = if header {
+                        &mut st.write_header
+                    } else {
+                        &mut st.write
+                    };
                     io.stream = None;
-                    io.method = if header { Method::Ignore } else { Method::Stdout };
+                    io.method = if header {
+                        Method::Ignore
+                    } else {
+                        Method::Stdout
+                    };
                 }
                 Some(i) if writable(&i.mode) => {
                     let mut st = curl.st.borrow_mut();
-                    let io = if header { &mut st.write_header } else { &mut st.write };
+                    let io = if header {
+                        &mut st.write_header
+                    } else {
+                        &mut st.write
+                    };
                     io.stream = Some(value.clone());
                     io.method = Method::File;
                 }
                 Some(_) => {
-                    let name = if header { "CURLOPT_WRITEHEADER" } else { "CURLOPT_FILE" };
+                    let name = if header {
+                        "CURLOPT_WRITEHEADER"
+                    } else {
+                        "CURLOPT_FILE"
+                    };
                     return Err(not_writable(vm, name));
                 }
             }
@@ -262,7 +298,14 @@ fn save(curl: &Curl, rc: i32) -> bool {
 
 /// `_php_curl_setopt()`.
 #[allow(clippy::too_many_lines)]
-pub(crate) fn setopt(vm: &mut Vm, cx: &Ctx<'_>, obj: &Obj, curl: &Rc<Curl>, opt: i64, value: &Value) -> VmResult<bool> {
+pub(crate) fn setopt(
+    vm: &mut Vm,
+    cx: &Ctx<'_>,
+    obj: &Obj,
+    curl: &Rc<Curl>,
+    opt: i64,
+    value: &Value,
+) -> VmResult<bool> {
     let _ = obj;
     let Some(kind) = option_kind(opt) else {
         let msg = if cx.is_array {
@@ -270,7 +313,8 @@ pub(crate) fn setopt(vm: &mut Vm, cx: &Ctx<'_>, obj: &Obj, curl: &Rc<Curl>, opt:
         } else {
             "is not a valid cURL option"
         };
-        curl.err_no.set(i32::try_from(CURLE_UNKNOWN_OPTION).unwrap_or(48));
+        curl.err_no
+            .set(i32::try_from(CURLE_UNKNOWN_OPTION).unwrap_or(48));
         return Err(cx.args.value_error(vm, 2, msg));
     };
     match kind {
@@ -295,7 +339,10 @@ pub(crate) fn setopt(vm: &mut Vm, cx: &Ctx<'_>, obj: &Obj, curl: &Rc<Curl>, opt:
             if !vm.value_to_bool(value)? {
                 return Err(vm.throw(
                     "ValueError",
-                    &format!("{}(): Disabling safe uploads is no longer supported", cx.fname),
+                    &format!(
+                        "{}(): Disabling safe uploads is no longer supported",
+                        cx.fname
+                    ),
                 ));
             }
             Ok(save(curl, 0))
@@ -303,11 +350,15 @@ pub(crate) fn setopt(vm: &mut Vm, cx: &Ctx<'_>, obj: &Obj, curl: &Rc<Curl>, opt:
         OptKind::Str => {
             let s = vm.value_to_string(value)?;
             let b = s.as_bytes();
-            if (opt == CURLOPT_PROTOCOLS_STR || opt == CURLOPT_REDIR_PROTOCOLS_STR) && open_basedir_active(vm) {
+            if (opt == CURLOPT_PROTOCOLS_STR || opt == CURLOPT_REDIR_PROTOCOLS_STR)
+                && open_basedir_active(vm)
+            {
                 let lc = b.to_ascii_lowercase();
                 let has = |n: &[u8]| lc.windows(n.len()).any(|w| w == n);
                 if has(b"file") || has(b"all") {
-                    vm.php_warning("The FILE protocol cannot be activated when an open_basedir is set")?;
+                    vm.php_warning(
+                        "The FILE protocol cannot be activated when an open_basedir is set",
+                    )?;
                     return Ok(false);
                 }
             }
@@ -394,6 +445,3 @@ pub(crate) fn setopt(vm: &mut Vm, cx: &Ctx<'_>, obj: &Obj, curl: &Rc<Curl>, opt:
         }
     }
 }
-
-/// Keeps the generated-constant imports honest.
-const _: () = assert!(CURLE_OK == 0 && CURLOPT_INFILE != CURLOPT_STDERR);

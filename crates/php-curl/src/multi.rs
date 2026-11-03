@@ -70,7 +70,7 @@ impl Multi {
         let mut r: c_int = running;
         let raw = self.raw;
         // SAFETY: live handle; callbacks reach `h` through the handler slot.
-        let rc = handler::with_handler(h, || unsafe { ffi::curl_multi_perform(raw, &mut r) });
+        let rc = handler::with_handler(h, || unsafe { ffi::curl_multi_perform(raw, &raw mut r) });
         (rc, r)
     }
 
@@ -79,7 +79,9 @@ impl Multi {
     pub fn wait(&self, timeout_ms: i32) -> Result<i32, i32> {
         let mut n: c_int = 0;
         // SAFETY: live handle, no extra fds.
-        let rc = unsafe { ffi::curl_multi_wait(self.raw, std::ptr::null_mut(), 0, timeout_ms, &mut n) };
+        let rc = unsafe {
+            ffi::curl_multi_wait(self.raw, std::ptr::null_mut(), 0, timeout_ms, &raw mut n)
+        };
         if rc == 0 {
             Ok(n)
         } else {
@@ -91,7 +93,7 @@ impl Multi {
     pub fn info_read(&self) -> Option<InfoMsg> {
         let mut queued: c_int = 0;
         // SAFETY: live handle; the message stays valid until the next call.
-        let m = unsafe { ffi::curl_multi_info_read(self.raw, &mut queued) };
+        let m = unsafe { ffi::curl_multi_info_read(self.raw, &raw mut queued) };
         if m.is_null() {
             return None;
         }
@@ -122,11 +124,16 @@ impl Multi {
         let f: ffi::curl_push_callback = handler::push_cb;
         // SAFETY: live handle; function and data options take pointers.
         unsafe {
-            let rc = ffi::curl_multi_setopt(self.raw, cint(CURLMOPT_PUSHFUNCTION), f as *const c_void);
+            let rc =
+                ffi::curl_multi_setopt(self.raw, cint(CURLMOPT_PUSHFUNCTION), f as *const c_void);
             if rc != 0 {
                 return rc;
             }
-            ffi::curl_multi_setopt(self.raw, cint(CURLMOPT_PUSHDATA), std::ptr::null::<c_void>())
+            ffi::curl_multi_setopt(
+                self.raw,
+                cint(CURLMOPT_PUSHDATA),
+                std::ptr::null::<c_void>(),
+            )
         }
     }
 }

@@ -4,10 +4,10 @@
 //! options of `_php_curl_set_default_options()`.
 
 use crate::consts::{
-    CURLE_OK, CURLE_UNKNOWN_OPTION, CURLINFO_PRIVATE, CURLOPT_COPYPOSTFIELDS, CURLOPT_DNS_CACHE_TIMEOUT,
-    CURLOPT_ERRORBUFFER, CURLOPT_MAXREDIRS, CURLOPT_MIMEPOST, CURLOPT_NOPROGRESS, CURLOPT_POSTFIELDS,
-    CURLOPT_POSTFIELDSIZE_LARGE, CURLOPT_PRIVATE, CURLOPT_PROTOCOLS, CURLOPT_SHARE, CURLOPT_STDERR,
-    CURLOPT_VERBOSE, CURLPROTO_ALL,
+    CURLE_OK, CURLE_UNKNOWN_OPTION, CURLINFO_PRIVATE, CURLOPT_COPYPOSTFIELDS,
+    CURLOPT_DNS_CACHE_TIMEOUT, CURLOPT_ERRORBUFFER, CURLOPT_MAXREDIRS, CURLOPT_MIMEPOST,
+    CURLOPT_NOPROGRESS, CURLOPT_POSTFIELDS, CURLOPT_POSTFIELDSIZE_LARGE, CURLOPT_PRIVATE,
+    CURLOPT_PROTOCOLS, CURLOPT_SHARE, CURLOPT_STDERR, CURLOPT_VERBOSE, CURLPROTO_ALL,
     CURLPROTO_FILE, CURL_ERROR_SIZE, CURL_READFUNC_ABORT, CURL_SEEKFUNC_CANTSEEK, CURL_SEEKFUNC_OK,
 };
 use crate::ffi;
@@ -25,6 +25,7 @@ const CURLE_BAD_FUNCTION_ARGUMENT: i32 = 43;
 /// `CURLE_OUT_OF_MEMORY`.
 const CURLE_OUT_OF_MEMORY: i32 = 27;
 /// Size of the error buffer (`CURL_ERROR_SIZE + 1`).
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 const ERRBUF_LEN: usize = CURL_ERROR_SIZE as usize + 1;
 
 static GLOBAL_INIT: Once = Once::new();
@@ -160,8 +161,8 @@ pub(crate) fn key_of_raw(raw: *mut ffi::CURL) -> Option<u64> {
     let mut p: *mut c_char = std::ptr::null_mut();
     // SAFETY: `raw` is a live easy handle given to us by libcurl and
     // CURLINFO_PRIVATE writes a `char *`.
-    let rc = unsafe { ffi::curl_easy_getinfo(raw, cint(CURLINFO_PRIVATE), &mut p as *mut *mut c_char) };
-    (rc == 0 && !p.is_null()).then(|| p as usize as u64)
+    let rc = unsafe { ffi::curl_easy_getinfo(raw, cint(CURLINFO_PRIVATE), &raw mut p) };
+    (rc == 0 && !p.is_null()).then_some(p as usize as u64)
 }
 
 /// A libcurl easy handle.
@@ -174,7 +175,9 @@ pub struct Easy {
 
 impl std::fmt::Debug for Easy {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Easy").field("key", &self.key).finish_non_exhaustive()
+        f.debug_struct("Easy")
+            .field("key", &self.key)
+            .finish_non_exhaustive()
     }
 }
 
@@ -251,6 +254,7 @@ impl Easy {
         self.raw.get()
     }
 
+    #[allow(clippy::cast_possible_truncation)]
     fn ud(&self) -> *mut c_void {
         self.key as usize as *mut c_void
     }
@@ -425,7 +429,7 @@ impl Easy {
         let len = i64::try_from(data.len()).unwrap_or(i64::MAX);
         self.setopt_off_raw(CURLOPT_POSTFIELDSIZE_LARGE, len);
         let p: *const c_void = if data.is_empty() {
-            b"\0".as_ptr().cast::<c_void>()
+            c"".as_ptr().cast::<c_void>()
         } else {
             data.as_ptr().cast::<c_void>()
         };
@@ -594,7 +598,7 @@ impl Easy {
         let mut v = T::default();
         // SAFETY: live handle; callers pick `T` matching the info's type
         // class (long / double / curl_off_t / pointer).
-        let rc = unsafe { ffi::curl_easy_getinfo(raw, o, &mut v as *mut T) };
+        let rc = unsafe { ffi::curl_easy_getinfo(raw, o, &raw mut v) };
         (rc == 0).then_some(v)
     }
 
@@ -622,7 +626,7 @@ impl Easy {
         }
         let mut p: *const c_char = std::ptr::null();
         // SAFETY: live handle; string infos write a `char *`.
-        let rc = unsafe { ffi::curl_easy_getinfo(raw, o, &mut p as *mut *const c_char) };
+        let rc = unsafe { ffi::curl_easy_getinfo(raw, o, &raw mut p) };
         if rc != 0 {
             return None;
         }
@@ -642,7 +646,7 @@ impl Easy {
         }
         let mut p: *mut ffi::curl_slist = std::ptr::null_mut();
         // SAFETY: live handle; slist infos write a `struct curl_slist *`.
-        let rc = unsafe { ffi::curl_easy_getinfo(raw, o, &mut p as *mut *mut ffi::curl_slist) };
+        let rc = unsafe { ffi::curl_easy_getinfo(raw, o, &raw mut p) };
         if rc != 0 {
             return None;
         }
@@ -662,11 +666,7 @@ impl Easy {
         // SAFETY: live handle; CURLINFO_CERTINFO writes a pointer to a
         // struct owned by the handle.
         let rc = unsafe {
-            ffi::curl_easy_getinfo(
-                raw,
-                cint(crate::consts::CURLINFO_CERTINFO),
-                &mut p as *mut *mut ffi::curl_certinfo,
-            )
+            ffi::curl_easy_getinfo(raw, cint(crate::consts::CURLINFO_CERTINFO), &raw mut p)
         };
         if rc != 0 {
             return None;
@@ -708,7 +708,8 @@ impl Easy {
         let mut out_len: c_int = 0;
         // SAFETY: as in `escape`; `out_len` receives the decoded length.
         unsafe {
-            let r = ffi::curl_easy_unescape(raw, s.as_ptr().cast::<c_char>(), len, &mut out_len);
+            let r =
+                ffi::curl_easy_unescape(raw, s.as_ptr().cast::<c_char>(), len, &raw mut out_len);
             if r.is_null() {
                 return None;
             }
@@ -719,8 +720,8 @@ impl Easy {
         }
     }
 
-    /// `curl_easy_pause()`.
-    pub fn pause(&self, bitmask: i64) -> i32 {
+    /// `curl_easy_pause()`; unpausing may run callbacks, which reach `h`.
+    pub fn pause(&self, bitmask: i64, h: &mut dyn Handler) -> i32 {
         let raw = self.raw();
         if raw.is_null() {
             return CURLE_BAD_FUNCTION_ARGUMENT;
@@ -728,9 +729,7 @@ impl Easy {
         // SAFETY: live handle. The mask is truncated like the C `int`
         // parameter.
         #[allow(clippy::cast_possible_truncation)]
-        unsafe {
-            ffi::curl_easy_pause(raw, bitmask as c_int)
-        }
+        handler::with_handler(h, || unsafe { ffi::curl_easy_pause(raw, bitmask as c_int) })
     }
 
     /// `curl_easy_upkeep()`.
@@ -765,7 +764,12 @@ fn c_trunc(s: &[u8]) -> CString {
     CString::new(&s[..end]).unwrap_or_default()
 }
 
-extern "C" fn mime_read_cb(buf: *mut c_char, size: usize, nitems: usize, arg: *mut c_void) -> usize {
+extern "C" fn mime_read_cb(
+    buf: *mut c_char,
+    size: usize,
+    nitems: usize,
+    arg: *mut c_void,
+) -> usize {
     let len = size.saturating_mul(nitems);
     // SAFETY: `arg` is the `Box<dyn MimeSource>` registered with this part,
     // kept alive by `Retained` until after the MIME structure is freed.
@@ -775,7 +779,7 @@ extern "C" fn mime_read_cb(buf: *mut c_char, size: usize, nitems: usize, arg: *m
     }
     // SAFETY: libcurl hands over a writable buffer of `len` bytes.
     let out = unsafe { std::slice::from_raw_parts_mut(buf.cast::<u8>(), len) };
-    #[allow(clippy::cast_sign_loss)]
+    #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
     src.read(out).unwrap_or(CURL_READFUNC_ABORT as usize)
 }
 
@@ -846,7 +850,8 @@ fn add_part(mime: *mut ffi::curl_mime, part: MimePart, shared: &Rc<RefCell<Retai
             let arg: *mut Box<dyn MimeSource> = Box::into_raw(Box::new(source));
             shared.borrow_mut().sources.push(arg);
             let (n, f, t) = (c_trunc(&name), c_trunc(&filename), c_trunc(&mime_type));
-            let seek: Option<ffi::curl_seek_callback> = if seekable { Some(mime_seek_cb) } else { None };
+            let seek: Option<ffi::curl_seek_callback> =
+                if seekable { Some(mime_seek_cb) } else { None };
             chain(&[
                 &|| unsafe { ffi::curl_mime_name(p, n.as_ptr()) },
                 &|| unsafe {
@@ -894,7 +899,11 @@ pub fn option_name(opt: i64) -> Option<String> {
         return None;
     }
     // SAFETY: static NUL-terminated string.
-    Some(unsafe { CStr::from_ptr(name) }.to_string_lossy().into_owned())
+    Some(
+        unsafe { CStr::from_ptr(name) }
+            .to_string_lossy()
+            .into_owned(),
+    )
 }
 
 /// Checks `CURLE_OK`.
@@ -905,7 +914,9 @@ pub fn is_ok(code: i32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::consts::{CURLINFO_EFFECTIVE_URL, CURLINFO_HTTP_CODE, CURLOPT_HTTPHEADER, CURLOPT_URL};
+    use crate::consts::{
+        CURLINFO_EFFECTIVE_URL, CURLINFO_HTTP_CODE, CURLOPT_HTTPHEADER, CURLOPT_URL,
+    };
 
     #[test]
     fn create_and_info() {
@@ -920,7 +931,10 @@ mod tests {
         let d = e.duplicate().expect("dup");
         assert_ne!(d.key(), e.key());
         assert_eq!(key_of_raw(d.raw()), Some(d.key()));
-        assert_eq!(e.set_slist(CURLOPT_HTTPHEADER, &[b"A: b".to_vec()]), Some(0));
+        assert_eq!(
+            e.set_slist(CURLOPT_HTTPHEADER, &[b"A: b".to_vec()]),
+            Some(0)
+        );
     }
 
     #[test]
@@ -932,7 +946,10 @@ mod tests {
 
     #[test]
     fn names_and_errors() {
-        assert_eq!(option_name(CURLOPT_HTTPHEADER).as_deref(), Some("HTTPHEADER"));
+        assert_eq!(
+            option_name(CURLOPT_HTTPHEADER).as_deref(),
+            Some("HTTPHEADER")
+        );
         assert_eq!(strerror(0), "No error");
         assert_eq!(strerror(1), "Unsupported protocol");
     }

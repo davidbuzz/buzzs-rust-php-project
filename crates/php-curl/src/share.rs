@@ -39,7 +39,10 @@ impl Share {
         crate::easy::global_init();
         // SAFETY: plain constructor.
         let raw = unsafe { ffi::curl_share_init() };
-        (!raw.is_null()).then_some(Share { raw, persistent: false })
+        (!raw.is_null()).then_some(Share {
+            raw,
+            persistent: false,
+        })
     }
 
     /// The persistent handle for the option set `id` (bit set over
@@ -62,7 +65,10 @@ impl Share {
         PERSISTENT.with(|p| p.borrow_mut().insert(id, s.raw as usize));
         let raw = s.raw;
         std::mem::forget(s);
-        Ok(Share { raw, persistent: true })
+        Ok(Share {
+            raw,
+            persistent: true,
+        })
     }
 
     pub(crate) fn raw(&self) -> *mut ffi::CURLSH {

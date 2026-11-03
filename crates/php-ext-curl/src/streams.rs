@@ -31,7 +31,7 @@ pub(crate) fn read(vm: &mut Vm, r: &Resource, buf: &mut [u8]) -> VmResult<usize>
 /// Flushes the stream.
 pub(crate) fn flush(vm: &mut Vm, r: &Resource) -> VmResult<()> {
     if let Some(cell) = res::cell_of(r).filter(|_| !r.is_closed()) {
-        res::with_stream(vm, &cell, |s| s.flush())?;
+        res::with_stream(vm, &cell, php_streams::stream::Stream::flush)?;
     }
     Ok(())
 }
@@ -52,7 +52,8 @@ pub(crate) fn cast_stdio(vm: &mut Vm, r: &Resource) -> VmResult<Option<StreamInf
     };
     let out = res::with_stream(vm, &cell, |s| {
         let mode = s.mode.clone();
-        s.cast(CastAs::Stdio, true).map(|fd| StreamInfo { mode, fd: Some(fd) })
+        s.cast(CastAs::Stdio, true)
+            .map(|fd| StreamInfo { mode, fd: Some(fd) })
     })?;
     Ok(out.flatten())
 }

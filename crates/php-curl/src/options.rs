@@ -423,7 +423,10 @@ mod tests {
     fn kinds() {
         assert_eq!(option_kind(CURLOPT_URL), Some(OptKind::Url));
         assert_eq!(option_kind(CURLOPT_HTTPHEADER), Some(OptKind::Slist));
-        assert_eq!(option_kind(CURLOPT_RETURNTRANSFER), Some(OptKind::ReturnTransfer));
+        assert_eq!(
+            option_kind(CURLOPT_RETURNTRANSFER),
+            Some(OptKind::ReturnTransfer)
+        );
         assert_eq!(option_kind(CURLOPT_FOLLOWLOCATION), Some(OptKind::Long));
         assert_eq!(option_kind(CURLINFO_HEADER_OUT), Some(OptKind::HeaderOut));
         assert_eq!(option_kind(1234), None);
@@ -433,7 +436,10 @@ mod tests {
     #[test]
     fn callbacks() {
         for cb in Callback::ALL {
-            assert_eq!(option_kind(cb.function_option()), Some(OptKind::Callable(cb)));
+            assert_eq!(
+                option_kind(cb.function_option()),
+                Some(OptKind::Callable(cb))
+            );
             assert!(cb.option_name().starts_with("CURLOPT_"));
         }
     }

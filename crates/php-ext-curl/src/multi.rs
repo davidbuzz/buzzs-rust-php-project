@@ -1,7 +1,9 @@
 //! `CurlMultiHandle` and `curl_multi_*` (multi.c).
 
 use crate::dispatch::{verify_handlers, Dispatch};
-use crate::easy::{cast_hook, cleanup_handle, ctor_fn, handle_arg, not_comparable, NO_DYNAMIC_PROPERTIES};
+use crate::easy::{
+    cast_hook, cleanup_handle, ctor_fn, handle_arg, not_comparable, NO_DYNAMIC_PROPERTIES,
+};
 use crate::state::{curl_of, multi_of, CurlMulti, Method};
 use php_curl::consts::{
     CURLMOPT_CHUNK_LENGTH_PENALTY_SIZE, CURLMOPT_CONTENT_LENGTH_PENALTY_SIZE, CURLMOPT_MAXCONNECTS,
@@ -30,7 +32,12 @@ fn multi_arg(vm: &mut Vm, a: &Args, n: usize) -> VmResult<(Obj, Rc<CurlMulti>)> 
 /// Registers `CurlMultiHandle`.
 pub(crate) fn register_class(m: &mut ModuleBuilder<'_>) {
     ClassBuilder::new("CurlMultiHandle")
-        .flags(class_flags::FINAL | class_flags::NOT_SERIALIZABLE | class_flags::NO_CLONE | NO_DYNAMIC_PROPERTIES)
+        .flags(
+            class_flags::FINAL
+                | class_flags::NOT_SERIALIZABLE
+                | class_flags::NO_CLONE
+                | NO_DYNAMIC_PROPERTIES,
+        )
         .method("__construct()", acc::PUBLIC, ctor_fn())
         .hooks(ClassHooks {
             cast: Some(cast_hook),
@@ -42,7 +49,10 @@ pub(crate) fn register_class(m: &mut ModuleBuilder<'_>) {
 
 fn curl_multi_init(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
     let Some(multi) = Multi::new() else {
-        return Err(vm.throw("Error", "curl_multi_init(): Could not initialize a new cURL multi handle"));
+        return Err(vm.throw(
+            "Error",
+            "curl_multi_init(): Could not initialize a new cURL multi handle",
+        ));
     };
     let Some(cls) = vm.find_class(b"CurlMultiHandle") else {
         return Err(vm.throw("Error", "Class \"CurlMultiHandle\" not found"));
@@ -132,7 +142,11 @@ fn curl_multi_exec(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         _ => None,
     };
     let Some(running) = running else {
-        return Err(a.type_error(vm, 2, &format!("must be of type int, {} given", cur.value_name())));
+        return Err(a.type_error(
+            vm,
+            2,
+            &format!("must be of type int, {} given", cur.value_name()),
+        ));
     };
     let (rc, still, pending) = {
         let mut d = Dispatch::new(vm, &handles).with_multi(mo, Rc::clone(&m));
@@ -167,7 +181,8 @@ fn curl_multi_info_read(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     }
     let mut r = ZArray::new();
     r.make_mut().insert("msg", Value::Int(i64::from(msg.msg)));
-    r.make_mut().insert("result", Value::Int(i64::from(msg.result)));
+    r.make_mut()
+        .insert("result", Value::Int(i64::from(msg.result)));
     if let Some(key) = msg.easy {
         let found = m
             .easyh

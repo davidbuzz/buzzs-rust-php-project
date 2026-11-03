@@ -25,17 +25,17 @@ impl MimeSource for FileSource {
     fn read(&mut self, buf: &mut [u8]) -> Option<usize> {
         if self.stream.is_none() {
             let mut opened = None;
-            self.stream = php_streams::open::open_wrapper(&self.filename, "rb", 0, &mut opened, None);
+            self.stream =
+                php_streams::open::open_wrapper(&self.filename, "rb", 0, &mut opened, None);
         }
         let s = self.stream.as_mut()?;
-        match s.read(buf) {
-            Ok(n) => Some(n),
-            Err(_) => {
-                if let Some(mut s) = self.stream.take() {
-                    s.close();
-                }
-                None
+        if let Ok(n) = s.read(buf) {
+            Some(n)
+        } else {
+            if let Some(mut s) = self.stream.take() {
+                s.close();
             }
+            None
         }
     }
 
@@ -77,6 +77,7 @@ fn add_form_field(
 ) -> VmResult<Result<(), i32>> {
     let current = current.deref();
     if let Value::Array(_) = current {
+        curl.err_no.set(CURLE_BAD_FUNCTION_ARGUMENT);
         return Err(vm.throw(
             "TypeError",
             &format!(
@@ -88,7 +89,10 @@ fn add_form_field(
     if let Value::Object(o) = &current {
         if instance_of(o, b"curlfile") {
             let Some(name) = prop_string(vm, o, "name")? else {
-                vm.php_warning(&format!("Invalid filename for key {}", String::from_utf8_lossy(key)))?;
+                vm.php_warning(&format!(
+                    "Invalid filename for key {}",
+                    String::from_utf8_lossy(key)
+                ))?;
                 return Ok(Ok(()));
             };
             if basedir_denied(vm, &name)? {
@@ -99,7 +103,13 @@ fn add_form_field(
             curl.st.borrow_mut().postfields = Some(postfields.clone());
             let mut opened = None;
             let stream = php_ext_streams::bridge::run(vm, || {
-                php_streams::open::open_wrapper(&name, "rb", php_streams::wrapper::STREAM_MUST_SEEK, &mut opened, None)
+                php_streams::open::open_wrapper(
+                    &name,
+                    "rb",
+                    php_streams::wrapper::STREAM_MUST_SEEK,
+                    &mut opened,
+                    None,
+                )
             })?;
             let mut size = -1;
             let seekable = stream.is_some();
@@ -117,7 +127,10 @@ fn add_form_field(
                 mime_type: mime_type.unwrap_or_else(|| b"application/octet-stream".to_vec()),
                 size,
                 seekable,
-                source: Box::new(FileSource { filename: name, stream }),
+                source: Box::new(FileSource {
+                    filename: name,
+                    stream,
+                }),
             });
             return Ok(Ok(()));
         }
@@ -144,7 +157,12 @@ fn add_form_field(
 }
 
 /// `build_mime_structure_from_hash()`.
-pub(crate) fn build_from_hash(vm: &mut Vm, fname: &str, curl: &Curl, postfields: &Value) -> VmResult<bool> {
+pub(crate) fn build_from_hash(
+    vm: &mut Vm,
+    fname: &str,
+    curl: &Curl,
+    postfields: &Value,
+) -> VmResult<bool> {
     let Value::Array(arr) = postfields else {
         return Ok(false);
     };
@@ -173,6 +191,5 @@ pub(crate) fn build_from_hash(vm: &mut Vm, fname: &str, curl: &Curl, postfields:
     }
     let rc = curl.easy.set_mime(parts);
     curl.err_no.set(rc);
-    let _ = CURLE_BAD_FUNCTION_ARGUMENT;
     Ok(rc == 0)
 }

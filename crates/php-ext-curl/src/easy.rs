@@ -5,17 +5,20 @@ use crate::setopt::{self, Ctx};
 use crate::state::{curl_of, Curl, Method, State};
 use crate::streams;
 use php_curl::consts::{
-    CURLINFO_APPCONNECT_TIME_T, CURLINFO_CAINFO, CURLINFO_CAPATH, CURLINFO_CERTINFO, CURLINFO_CONNECT_TIME,
-    CURLINFO_CONNECT_TIME_T, CURLINFO_CONN_ID, CURLINFO_CONTENT_LENGTH_DOWNLOAD, CURLINFO_CONTENT_LENGTH_UPLOAD,
-    CURLINFO_CONTENT_TYPE, CURLINFO_DOUBLE, CURLINFO_EFFECTIVE_METHOD, CURLINFO_EFFECTIVE_URL, CURLINFO_FILETIME,
-    CURLINFO_HEADER_OUT, CURLINFO_HEADER_SIZE, CURLINFO_HTTP_CODE, CURLINFO_HTTP_VERSION, CURLINFO_LOCAL_IP,
-    CURLINFO_LOCAL_PORT, CURLINFO_LONG, CURLINFO_NAMELOOKUP_TIME, CURLINFO_NAMELOOKUP_TIME_T, CURLINFO_OFF_T,
-    CURLINFO_PRETRANSFER_TIME, CURLINFO_PRETRANSFER_TIME_T, CURLINFO_PRIMARY_IP, CURLINFO_PRIMARY_PORT,
-    CURLINFO_PRIVATE, CURLINFO_PROTOCOL, CURLINFO_PROXY_SSL_VERIFYRESULT, CURLINFO_REDIRECT_COUNT,
+    CURLINFO_APPCONNECT_TIME_T, CURLINFO_CAINFO, CURLINFO_CAPATH, CURLINFO_CERTINFO,
+    CURLINFO_CONNECT_TIME, CURLINFO_CONNECT_TIME_T, CURLINFO_CONN_ID,
+    CURLINFO_CONTENT_LENGTH_DOWNLOAD, CURLINFO_CONTENT_LENGTH_UPLOAD, CURLINFO_CONTENT_TYPE,
+    CURLINFO_DOUBLE, CURLINFO_EFFECTIVE_METHOD, CURLINFO_EFFECTIVE_URL, CURLINFO_FILETIME,
+    CURLINFO_HEADER_OUT, CURLINFO_HEADER_SIZE, CURLINFO_HTTP_CODE, CURLINFO_HTTP_VERSION,
+    CURLINFO_LOCAL_IP, CURLINFO_LOCAL_PORT, CURLINFO_LONG, CURLINFO_NAMELOOKUP_TIME,
+    CURLINFO_NAMELOOKUP_TIME_T, CURLINFO_OFF_T, CURLINFO_PRETRANSFER_TIME,
+    CURLINFO_PRETRANSFER_TIME_T, CURLINFO_PRIMARY_IP, CURLINFO_PRIMARY_PORT, CURLINFO_PRIVATE,
+    CURLINFO_PROTOCOL, CURLINFO_PROXY_SSL_VERIFYRESULT, CURLINFO_REDIRECT_COUNT,
     CURLINFO_REDIRECT_TIME, CURLINFO_REDIRECT_TIME_T, CURLINFO_REDIRECT_URL, CURLINFO_REQUEST_SIZE,
-    CURLINFO_SCHEME, CURLINFO_SIZE_DOWNLOAD, CURLINFO_SIZE_UPLOAD, CURLINFO_SLIST, CURLINFO_SPEED_DOWNLOAD,
-    CURLINFO_SPEED_UPLOAD, CURLINFO_SSL_VERIFYRESULT, CURLINFO_STARTTRANSFER_TIME, CURLINFO_STARTTRANSFER_TIME_T,
-    CURLINFO_STRING, CURLINFO_TOTAL_TIME, CURLINFO_TOTAL_TIME_T, CURLINFO_TYPEMASK,
+    CURLINFO_SCHEME, CURLINFO_SIZE_DOWNLOAD, CURLINFO_SIZE_UPLOAD, CURLINFO_SLIST,
+    CURLINFO_SPEED_DOWNLOAD, CURLINFO_SPEED_UPLOAD, CURLINFO_SSL_VERIFYRESULT,
+    CURLINFO_STARTTRANSFER_TIME, CURLINFO_STARTTRANSFER_TIME_T, CURLINFO_STRING,
+    CURLINFO_TOTAL_TIME, CURLINFO_TOTAL_TIME_T, CURLINFO_TYPEMASK,
 };
 use php_curl::Easy;
 use php_runtime::{CastTarget, Obj, Value, ZArray};
@@ -77,7 +80,7 @@ pub(crate) fn copy_state(src: &State) -> State {
 }
 
 /// `curl_clone_obj()`: duplicates the handle; `Ok(None)` when libcurl
-/// failed ("Failed to clone CurlHandle").
+/// failed ("Failed to clone `CurlHandle`").
 fn clone_curl(vm: &mut Vm, src: &Curl) -> VmResult<Option<Rc<Curl>>> {
     let Some(dup) = src.easy.duplicate() else {
         return Ok(None);
@@ -186,12 +189,11 @@ fn curl_init(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 fn curl_copy_handle(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let (_, c) = handle_arg(vm, a, 0)?;
-    match clone_curl(vm, &c) {
-        Ok(Some(n)) => Ok(Value::Object(wrap_curl(vm, n)?)),
-        Ok(None) | Err(_) => {
-            vm.php_warning("Cannot duplicate cURL handle")?;
-            Ok(Value::Bool(false))
-        }
+    if let Ok(Some(n)) = clone_curl(vm, &c) {
+        Ok(Value::Object(wrap_curl(vm, n)?))
+    } else {
+        vm.php_warning("Cannot duplicate cURL handle")?;
+        Ok(Value::Bool(false))
     }
 }
 
@@ -352,7 +354,10 @@ fn getinfo_all(vm: &mut Vm, c: &Curl) -> VmResult<Value> {
     }
     s!("url", CURLINFO_EFFECTIVE_URL);
     if let Some(v) = e.info_str(CURLINFO_CONTENT_TYPE) {
-        r.make_mut().insert("content_type", v.map_or(Value::Null, |b| Value::from(b.as_slice())));
+        r.make_mut().insert(
+            "content_type",
+            v.map_or(Value::Null, |b| Value::from(b.as_slice())),
+        );
     }
     l!("http_code", CURLINFO_HTTP_CODE);
     l!("header_size", CURLINFO_HEADER_SIZE);
@@ -393,7 +398,8 @@ fn getinfo_all(vm: &mut Vm, c: &Curl) -> VmResult<Value> {
     o!("starttransfer_time_us", CURLINFO_STARTTRANSFER_TIME_T);
     o!("total_time_us", CURLINFO_TOTAL_TIME_T);
     if let Some(h) = c.st.borrow().header_out.clone() {
-        r.make_mut().insert("request_header", Value::from(h.as_slice()));
+        r.make_mut()
+            .insert("request_header", Value::from(h.as_slice()));
     }
     s!("effective_method", CURLINFO_EFFECTIVE_METHOD);
     s!("capath", CURLINFO_CAPATH);
@@ -409,12 +415,12 @@ fn curl_getinfo(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     };
     let e = &c.easy;
     Ok(match opt {
-        CURLINFO_HEADER_OUT => c
-            .st
-            .borrow()
-            .header_out
-            .as_ref()
-            .map_or(Value::Bool(false), |h| Value::from(h.as_slice())),
+        CURLINFO_HEADER_OUT => {
+            c.st.borrow()
+                .header_out
+                .as_ref()
+                .map_or(Value::Bool(false), |h| Value::from(h.as_slice()))
+        }
         CURLINFO_CERTINFO => match e.info_certinfo() {
             Some(ci) => Value::Array(certinfo_array(vm, ci)?),
             None => Value::Bool(false),
@@ -520,8 +526,16 @@ fn curl_unescape(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 }
 
 fn curl_pause(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let (_, c) = handle_arg(vm, a, 0)?;
-    Ok(Value::Int(i64::from(c.easy.pause(a.int(1)))))
+    let (o, c) = handle_arg(vm, a, 0)?;
+    let (rc, pending) = {
+        let mut d = Dispatch::new(vm, std::slice::from_ref(&o));
+        let rc = c.easy.pause(a.int(1), &mut d);
+        (rc, d.pending.take())
+    };
+    if let Some(t) = pending {
+        return Err(t);
+    }
+    Ok(Value::Int(i64::from(rc)))
 }
 
 fn curl_upkeep(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -537,15 +551,19 @@ fn curl_version(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
     };
     let mut r = ZArray::new();
     let b = |v: &[u8]| Value::from(v);
-    r.make_mut().insert("version_number", Value::Int(i64::from(d.version_num)));
+    r.make_mut()
+        .insert("version_number", Value::Int(i64::from(d.version_num)));
     r.make_mut().insert("age", Value::Int(i64::from(d.age)));
-    r.make_mut().insert("features", Value::Int(i64::from(d.features)));
+    r.make_mut()
+        .insert("features", Value::Int(i64::from(d.features)));
     let mut fl = ZArray::new();
     for (name, bit) in php_curl::version::FEATURES {
-        fl.make_mut().insert(*name, Value::Bool(i64::from(d.features) & bit != 0));
+        fl.make_mut()
+            .insert(*name, Value::Bool(i64::from(d.features) & bit != 0));
     }
     r.make_mut().insert("feature_list", Value::Array(fl));
-    r.make_mut().insert("ssl_version_number", Value::Int(d.ssl_version_num));
+    r.make_mut()
+        .insert("ssl_version_number", Value::Int(d.ssl_version_num));
     r.make_mut().insert("version", b(&d.version));
     r.make_mut().insert("host", b(&d.host));
     r.make_mut().insert("ssl_version", b(&d.ssl_version));
@@ -557,17 +575,20 @@ fn curl_version(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
     r.make_mut().insert("protocols", Value::Array(pl));
     if d.age >= 1 {
         r.make_mut().insert("ares", b(&d.ares));
-        r.make_mut().insert("ares_num", Value::Int(i64::from(d.ares_num)));
+        r.make_mut()
+            .insert("ares_num", Value::Int(i64::from(d.ares_num)));
     }
     if d.age >= 2 {
         r.make_mut().insert("libidn", b(&d.libidn));
     }
     if d.age >= 3 {
-        r.make_mut().insert("iconv_ver_num", Value::Int(i64::from(d.iconv_ver_num)));
+        r.make_mut()
+            .insert("iconv_ver_num", Value::Int(i64::from(d.iconv_ver_num)));
         r.make_mut().insert("libssh_version", b(&d.libssh_version));
     }
     if d.age >= 4 {
-        r.make_mut().insert("brotli_ver_num", Value::Int(i64::from(d.brotli_ver_num)));
+        r.make_mut()
+            .insert("brotli_ver_num", Value::Int(i64::from(d.brotli_ver_num)));
         r.make_mut().insert("brotli_version", b(&d.brotli_version));
     }
     Ok(Value::Array(r))
@@ -577,19 +598,43 @@ fn curl_version(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
 pub(crate) fn register_functions(m: &mut ModuleBuilder<'_>) {
     m.function("curl_close(CurlHandle $handle): void", curl_close)
         .deprecated("8.5", "as it has no effect since PHP 8.0")
-        .function("curl_copy_handle(CurlHandle $handle): CurlHandle|false", curl_copy_handle)
+        .function(
+            "curl_copy_handle(CurlHandle $handle): CurlHandle|false",
+            curl_copy_handle,
+        )
         .function("curl_errno(CurlHandle $handle): int", curl_errno)
         .function("curl_error(CurlHandle $handle): string", curl_error)
-        .function("curl_escape(CurlHandle $handle, string $string): string|false", curl_escape)
-        .function("curl_unescape(CurlHandle $handle, string $string): string|false", curl_unescape)
+        .function(
+            "curl_escape(CurlHandle $handle, string $string): string|false",
+            curl_escape,
+        )
+        .function(
+            "curl_unescape(CurlHandle $handle, string $string): string|false",
+            curl_unescape,
+        )
         .function("curl_exec(CurlHandle $handle): string|bool", curl_exec)
-        .function("curl_getinfo(CurlHandle $handle, ?int $option = null): mixed", curl_getinfo)
-        .function("curl_init(?string $url = null): CurlHandle|false", curl_init)
+        .function(
+            "curl_getinfo(CurlHandle $handle, ?int $option = null): mixed",
+            curl_getinfo,
+        )
+        .function(
+            "curl_init(?string $url = null): CurlHandle|false",
+            curl_init,
+        )
         .function("curl_upkeep(CurlHandle $handle): bool", curl_upkeep)
-        .function("curl_pause(CurlHandle $handle, int $flags): int", curl_pause)
+        .function(
+            "curl_pause(CurlHandle $handle, int $flags): int",
+            curl_pause,
+        )
         .function("curl_reset(CurlHandle $handle): void", curl_reset)
-        .function("curl_setopt_array(CurlHandle $handle, array $options): bool", curl_setopt_array)
-        .function("curl_setopt(CurlHandle $handle, int $option, mixed $value): bool", curl_setopt)
+        .function(
+            "curl_setopt_array(CurlHandle $handle, array $options): bool",
+            curl_setopt_array,
+        )
+        .function(
+            "curl_setopt(CurlHandle $handle, int $option, mixed $value): bool",
+            curl_setopt,
+        )
         .function("curl_strerror(int $error_code): ?string", curl_strerror)
         .function("curl_version(): array|false", curl_version);
 }

@@ -63,7 +63,14 @@ pub trait Handler {
         let _ = (key, kind, data);
     }
     /// `CURLOPT_PREREQFUNCTION`.
-    fn prereq(&mut self, key: u64, primary_ip: &[u8], local_ip: &[u8], primary_port: i32, local_port: i32) -> i32 {
+    fn prereq(
+        &mut self,
+        key: u64,
+        primary_ip: &[u8],
+        local_ip: &[u8],
+        primary_port: i32,
+        local_port: i32,
+    ) -> i32 {
         let _ = (key, primary_ip, local_ip, primary_port, local_port);
         cint(CURL_PREREQFUNC_OK)
     }
@@ -160,19 +167,34 @@ fn cstr_bytes<'a>(ptr: *const c_char) -> &'a [u8] {
     unsafe { CStr::from_ptr(ptr) }.to_bytes()
 }
 
-pub(crate) extern "C" fn write_cb(ptr: *mut c_char, size: usize, nmemb: usize, ud: *mut c_void) -> usize {
+pub(crate) extern "C" fn write_cb(
+    ptr: *mut c_char,
+    size: usize,
+    nmemb: usize,
+    ud: *mut c_void,
+) -> usize {
     let len = size.saturating_mul(nmemb);
     let data = bytes(ptr, len);
     dispatch(|h| h.write(key_of(ud), data)).unwrap_or(len)
 }
 
-pub(crate) extern "C" fn header_cb(ptr: *mut c_char, size: usize, nmemb: usize, ud: *mut c_void) -> usize {
+pub(crate) extern "C" fn header_cb(
+    ptr: *mut c_char,
+    size: usize,
+    nmemb: usize,
+    ud: *mut c_void,
+) -> usize {
     let len = size.saturating_mul(nmemb);
     let data = bytes(ptr, len);
     dispatch(|h| h.header(key_of(ud), data)).unwrap_or(len)
 }
 
-pub(crate) extern "C" fn read_cb(ptr: *mut c_char, size: usize, nmemb: usize, ud: *mut c_void) -> usize {
+pub(crate) extern "C" fn read_cb(
+    ptr: *mut c_char,
+    size: usize,
+    nmemb: usize,
+    ud: *mut c_void,
+) -> usize {
     let len = size.saturating_mul(nmemb);
     if ptr.is_null() || len == 0 {
         return 0;
@@ -187,7 +209,13 @@ pub(crate) extern "C" fn seek_cb(ud: *mut c_void, offset: ffi::curl_off_t, origi
     dispatch(|h| h.seek(key_of(ud), offset, origin)).unwrap_or(cint(CURL_SEEKFUNC_CANTSEEK))
 }
 
-pub(crate) extern "C" fn progress_cb(ud: *mut c_void, dt: c_double, dn: c_double, ut: c_double, un: c_double) -> c_int {
+pub(crate) extern "C" fn progress_cb(
+    ud: *mut c_void,
+    dt: c_double,
+    dn: c_double,
+    ut: c_double,
+    un: c_double,
+) -> c_int {
     dispatch(|h| h.progress(key_of(ud), dt, dn, ut, un)).unwrap_or(0)
 }
 
@@ -201,7 +229,11 @@ pub(crate) extern "C" fn xferinfo_cb(
     dispatch(|h| h.xferinfo(key_of(ud), dt, dn, ut, un)).unwrap_or(0)
 }
 
-pub(crate) extern "C" fn fnmatch_cb(ud: *mut c_void, pattern: *const c_char, string: *const c_char) -> c_int {
+pub(crate) extern "C" fn fnmatch_cb(
+    ud: *mut c_void,
+    pattern: *const c_char,
+    string: *const c_char,
+) -> c_int {
     let (p, s) = (cstr_bytes(pattern), cstr_bytes(string));
     dispatch(|h| h.fnmatch(key_of(ud), p, s)).unwrap_or(cint(CURL_FNMATCHFUNC_FAIL))
 }
@@ -226,10 +258,16 @@ pub(crate) extern "C" fn prereq_cb(
     local_port: c_int,
 ) -> c_int {
     let (p, l) = (cstr_bytes(primary_ip), cstr_bytes(local_ip));
-    dispatch(|h| h.prereq(key_of(ud), p, l, primary_port, local_port)).unwrap_or(cint(CURL_PREREQFUNC_OK))
+    dispatch(|h| h.prereq(key_of(ud), p, l, primary_port, local_port))
+        .unwrap_or(cint(CURL_PREREQFUNC_OK))
 }
 
-pub(crate) extern "C" fn sshhostkey_cb(ud: *mut c_void, keytype: c_int, key: *const c_char, keylen: usize) -> c_int {
+pub(crate) extern "C" fn sshhostkey_cb(
+    ud: *mut c_void,
+    keytype: c_int,
+    key: *const c_char,
+    keylen: usize,
+) -> c_int {
     let k = bytes(key, keylen);
     dispatch(|h| h.ssh_hostkey(key_of(ud), keytype, k)).unwrap_or(cint(CURLKHMATCH_MISMATCH))
 }
