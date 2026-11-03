@@ -414,3 +414,86 @@ fn libxml_global_state_entity_loader_bypass() {
     let out = t.output();
     assert!(out.starts_with("object(SimpleXMLElement)"), "{out}");
 }
+
+#[test]
+fn t023_entity_in_attribute() {
+    let mut t = T::new("023");
+    let xml = "<?xml version='1.0'?>\n<!DOCTYPE talks SYSTEM \"nbsp.dtd\" [\n<!ELEMENT root  EMPTY>\n<!ATTLIST root  attr1 CDATA #IMPLIED>\n<!ENTITY  nbsp   \"&#38;#x00A0;\">\n]>\n<root attr='foo&nbsp;bar&nbsp;baz'></root>";
+    let sxe = t.load_string(xml);
+    t.var_dump(&sxe);
+    let a = t.dim(&sxe, s("attr"));
+    t.var_dump(&a);
+    t.expect("023.phpt");
+}
+
+#[test]
+fn gh12223_nested_entities() {
+    let mut t = T::new("gh12223");
+    let xml = "<?xml version=\"1.0\"?>\n<!DOCTYPE somedoc [\n  <!ENTITY a \"something\">\n  <!ENTITY b \"&a;\">\n  <!ENTITY c \"&b;\">\n]>\n<somedoc>&c;</somedoc>";
+    let sxe = t.load_string(xml);
+    t.var_dump(&sxe);
+    t.print_r(&sxe);
+    t.expect("gh12223.phpt");
+}
+
+#[test]
+fn gh15837_leaves_with_xpath() {
+    let mut t = T::new("gh15837");
+    let xml = "<xml>\n<fieldset1>\n</fieldset1>\n<fieldset2>\n<options>\n</options>\n</fieldset2>\n</xml>";
+    let sxe = t.new_sxe_ex("SimpleXMLIterator", xml, 0, false, "", false).unwrap();
+    for (_, child) in t.rii(&sxe, 0) {
+        let _ = t.xpath(&child, "ancestor-or-self::*");
+    }
+    let sx = t.sxe(&sxe);
+    assert!(!Sxe::valid(&sx));
+}
+
+#[test]
+fn gh16808_current_before_rewind() {
+    let mut t = T::new("gh16808");
+    let sxe = t.new_sxe("<root />");
+    let sx = t.sxe(&sxe);
+    assert!(Sxe::iter_current(&sx).is_none());
+}
+
+#[test]
+fn simplexml_import_old_dom() {
+    let mut t = T::new("simplexml_import_old_dom");
+    let doc = php_libxml::tree::Document::parse_file(
+        fixture("book.xml").as_bytes(),
+        &php_libxml::tree::ParseOptions::default(),
+    )
+    .unwrap();
+    let sv = Sxe::import_dom(&mut t.h, Some(doc.as_node()), None).unwrap();
+    let books = t.prop(&sv, "book");
+    t.foreach(&books, |t, _, book| {
+        let title = t.prop(&book, "title");
+        let author = t.prop(&book, "author");
+        let line = format!("{} was written by {}\n", t.str(&title), t.str(&author));
+        t.echo(line);
+    });
+    t.expect("simplexml_import_old_dom.phpt");
+}
+
+#[test]
+fn bug79971_1_nul_in_uri() {
+    let mut t = T::new("bug79971_1");
+    php_libxml::io::set_stream_hooks(Some(php_libxml::io::StreamHooks {
+        open_read: Some(Box::new(|p: &[u8]| {
+            let path = String::from_utf8_lossy(p).into_owned();
+            std::fs::File::open(path).ok().map(|f| php_libxml::io::InputStream {
+                reader: Box::new(f),
+                charset: None,
+            })
+        })),
+        open_write: None,
+    }));
+    t.func("simplexml_load_file");
+    let uri = format!("file://{}%00foo", fixture("bug79971_1.xml"));
+    let v = t.load_file(&uri);
+    t.var_dump(&v);
+    php_libxml::io::set_stream_hooks(None);
+    let out = t.output();
+    assert!(out.ends_with("bool(false)\n"), "{out}");
+    assert!(out.contains("URI must not contain percent-encoded NUL bytes"), "{out}");
+}

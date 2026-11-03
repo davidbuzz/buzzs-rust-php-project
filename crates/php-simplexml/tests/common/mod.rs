@@ -676,3 +676,10 @@ impl T {
         }
     }
 }
+
+impl Host {
+    /// The `SimpleXML` state of an object.
+    pub fn unwrap(&mut self, obj: &Obj) -> Option<SxeRef> {
+        self.sxe_unwrap(obj)
+    }
+}

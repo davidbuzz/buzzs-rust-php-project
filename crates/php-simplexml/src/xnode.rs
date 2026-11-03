@@ -341,21 +341,26 @@ impl XNode {
         if target == self.ptr.as_ptr() {
             return Some(self.clone());
         }
-        let doc_ptr = self.doc.as_ptr().cast::<lx::xmlNode>();
+        // Handles for this node and all its ancestors (up to the document
+        // node or a detached root): the target is reached from the nearest
+        // of them.
+        let mut anchors: Vec<Node> = Vec::new();
+        let mut up = self.pin.clone().or_else(|| Some(self.doc.as_node()));
+        while let Some(n) = up {
+            up = n.parent();
+            anchors.push(n);
+        }
+        if anchors.iter().all(|a| a.node_type() != php_libxml::tree::NodeType::Document) {
+            anchors.push(self.doc.as_node());
+        }
         let mut chain = Vec::new();
         let mut cur = target;
         let anchor: Node = loop {
             if cur.is_null() {
                 return self.wrap_raw(target);
             }
-            if cur == self.ptr.as_ptr() {
-                match &self.pin {
-                    Some(p) => break p.clone(),
-                    None => return self.wrap_raw(target),
-                }
-            }
-            if cur == doc_ptr {
-                break self.doc.as_node();
+            if let Some(a) = anchors.iter().find(|a| a.as_ptr() == cur) {
+                break a.clone();
             }
             chain.push(cur);
             // SAFETY: walking parent links of live nodes.
@@ -385,9 +390,29 @@ impl XNode {
         Some(XNode::from_node(handle))
     }
 
+    /// Whether the node belongs to the document tree proper (not to the
+    /// DTD: entity declarations and their content are shared with every
+    /// entity reference and are never modified by `SimpleXML` here).
+    pub(crate) fn is_mutable(&self) -> bool {
+        let mut cur = self.ptr.as_ptr();
+        while !cur.is_null() {
+            // SAFETY: walking parent links of live nodes.
+            let t = unsafe { (*cur).type_ };
+            if matches!(t, lx::XML_DTD_NODE | lx::XML_ENTITY_DECL | lx::XML_ENTITY_NODE) {
+                return false;
+            }
+            // SAFETY: as above.
+            cur = unsafe { (*cur).parent };
+        }
+        true
+    }
+
     /// `sxe_unlink_node`: unlinks the node; it is freed once nothing
     /// references it any more.
     pub(crate) fn unlink(self) {
+        if !self.is_mutable() {
+            return;
+        }
         if let Some(pin) = &self.pin {
             pin.unlink();
         }
@@ -397,6 +422,11 @@ impl XNode {
     /// `xmlEncodeEntitiesReentrant` and re-parsed by `xmlNodeSetContent`.
     pub(crate) fn set_value(&self, value: &[u8]) {
         let Some(pin) = &self.pin else { return };
+        // An entity reference's "children" are its declaration, which
+        // xmlNodeSetContent would free.
+        if !self.is_mutable() || self.kind() == lx::XML_ENTITY_REF_NODE {
+            return;
+        }
         let c = c_string(value);
         // SAFETY: the document is live; the result is a fresh string.
         let encoded = unsafe {
@@ -417,6 +447,9 @@ impl XNode {
         name: &[u8],
         content: Option<&[u8]>,
     ) -> Option<XNode> {
+        if !self.is_mutable() {
+            return None;
+        }
         let n = c_string(name);
         let c = content.map(c_string);
         // SAFETY: self is a live node; the new child is attached to it.
@@ -439,6 +472,9 @@ impl XNode {
         name: &[u8],
         content: Option<&[u8]>,
     ) -> Option<XNode> {
+        if !self.is_mutable() {
+            return None;
+        }
         let n = c_string(name);
         let c = content.map(c_string);
         // SAFETY: self is a live node; the new child is attached to it.
@@ -460,7 +496,7 @@ impl XNode {
         name: &[u8],
         value: Option<&[u8]>,
     ) -> Option<XNode> {
-        if !self.is_element() {
+        if !self.is_element() || !self.is_mutable() {
             return None;
         }
         let n = c_string(name);
@@ -486,7 +522,7 @@ impl XNode {
 
     /// `xmlNewNs(self, href, prefix)` (declared on this element).
     pub(crate) fn new_ns(&self, href: &[u8], prefix: Option<&[u8]>) -> *mut lx::xmlNs {
-        if !self.is_element() {
+        if !self.is_element() || !self.is_mutable() {
             return std::ptr::null_mut();
         }
         let h = c_string(href);
