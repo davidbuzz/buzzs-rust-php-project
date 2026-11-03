@@ -1,0 +1,459 @@
+//! The `preg_*` functions (the `PHP_FUNCTION`s of `ext/pcre/php_pcre.c`).
+
+use php_pcre::{limit_from_php, MatchFailure, PregError, Regex, Replacement};
+use php_runtime::{ArrayKey, HashTable, Value, ZArray, ZStr};
+use php_vm::ext::{Args, ModuleBuilder, VmResult};
+use php_vm::Vm;
+
+use crate::convert::to_zarray;
+use crate::state;
+
+/// Registers the functions of the extension.
+pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
+    m.function(
+        "preg_match(string $pattern, string $subject, &$matches = null, int $flags = 0, int $offset = 0): int|false",
+        preg_match,
+    )
+    .function(
+        "preg_match_all(string $pattern, string $subject, &$matches = null, int $flags = 0, int $offset = 0): int|false",
+        preg_match_all,
+    )
+    .function(
+        "preg_replace(string|array $pattern, string|array $replacement, string|array $subject, int $limit = -1, &$count = null): string|array|null",
+        preg_replace,
+    )
+    .function(
+        "preg_filter(string|array $pattern, string|array $replacement, string|array $subject, int $limit = -1, &$count = null): string|array|null",
+        preg_filter,
+    )
+    .function(
+        "preg_replace_callback(string|array $pattern, callable $callback, string|array $subject, int $limit = -1, &$count = null, int $flags = 0): string|array|null",
+        preg_replace_callback,
+    )
+    .function(
+        "preg_replace_callback_array(array $pattern, string|array $subject, int $limit = -1, &$count = null, int $flags = 0): string|array|null",
+        preg_replace_callback_array,
+    )
+    .function(
+        "preg_split(string $pattern, string $subject, int $limit = -1, int $flags = 0): array|false",
+        preg_split,
+    )
+    .function(
+        "preg_quote(string $str, ?string $delimiter = null): string",
+        preg_quote,
+    )
+    .function(
+        "preg_grep(string $pattern, array $array, int $flags = 0): array|false",
+        preg_grep,
+    )
+    .function("preg_last_error(): int", preg_last_error)
+    .function("preg_last_error_msg(): string", preg_last_error_msg);
+}
+
+/// The configuration the last [`state::compile`] synchronised.
+fn config() -> php_pcre::MatchConfig {
+    state::with(|p| p.config())
+}
+
+// ---------------------------------------------------------------------------
+// preg_match / preg_match_all
+// ---------------------------------------------------------------------------
+
+fn preg_match(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    do_match(vm, a, false)
+}
+
+fn preg_match_all(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    do_match(vm, a, true)
+}
+
+/// `php_do_pcre_match()`.
+fn do_match(vm: &mut Vm, a: &Args, global: bool) -> VmResult<Value> {
+    let pattern = a.str(0);
+    let subject = a.str(1);
+    let capture = a.has(2);
+    let flags = a.int(3);
+    let offset = a.int(4);
+    let Some(re) = state::compile(vm, pattern.as_bytes())? else {
+        return Ok(Value::Bool(false));
+    };
+    let cfg = config();
+    let out = if global {
+        php_pcre::match_all(&re, &cfg, subject.as_bytes(), capture, flags, offset)
+    } else {
+        php_pcre::match_one(&re, &cfg, subject.as_bytes(), capture, flags, offset)
+    };
+    if let Some(e) = out.last_error {
+        state::set_last_error(e);
+    }
+    if capture {
+        if let Some(m) = out.matches {
+            a.set_ref(2, Value::Array(to_zarray(m)));
+        }
+    }
+    if let Some(w) = out.warning {
+        vm.php_warning(w)?;
+    }
+    match out.result {
+        Ok(n) => Ok(Value::Int(i64::try_from(n).unwrap_or(i64::MAX))),
+        Err(MatchFailure::InvalidFlags) => Err(a.value_error(vm, 4, "must be a PREG_* constant")),
+        Err(MatchFailure::InvalidOffset) => Err(a.value_error(
+            vm,
+            5,
+            &format!("must be greater than {}", i64::MIN),
+        )),
+        Err(MatchFailure::Failed) => Ok(Value::Bool(false)),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// preg_replace / preg_filter
+// ---------------------------------------------------------------------------
+
+fn preg_replace(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    replace_common(vm, a, false)
+}
+
+fn preg_filter(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    replace_common(vm, a, true)
+}
+
+/// `_preg_replace_common()`.
+fn replace_common(vm: &mut Vm, a: &Args, is_filter: bool) -> VmResult<Value> {
+    let regex = a.at(0);
+    let replacement = a.at(1);
+    let subject = a.at(2);
+    let limit = limit_from_php(a.int(3));
+    if matches!(replacement, Value::Array(_)) && !matches!(regex, Value::Array(_)) {
+        return Err(a.type_error(
+            vm,
+            1,
+            "must be of type array when argument #2 ($replacement) is an array, string given",
+        ));
+    }
+    let mut count = 0usize;
+    let result = if let Value::Array(subjects) = &subject {
+        let mut out = HashTable::with_capacity(subjects.len());
+        for (key, entry) in entries(subjects) {
+            let old = count;
+            let s = vm.value_to_string(&entry)?;
+            let r = replace_in_subject(vm, &regex, &replacement, s.as_bytes(), limit, &mut count)?;
+            if let Some(r) = r {
+                if !is_filter || count > old {
+                    out.insert(key, Value::Str(ZStr::from(r)));
+                }
+            }
+        }
+        Value::Array(ZArray::from(out))
+    } else {
+        let s = vm.value_to_string(&subject)?;
+        match replace_in_subject(vm, &regex, &replacement, s.as_bytes(), limit, &mut count)? {
+            Some(r) if !is_filter || count > 0 => Value::Str(ZStr::from(r)),
+            _ => Value::Null,
+        }
+    };
+    if a.has(4) {
+        a.set_ref(4, Value::Int(count_value(count)));
+    }
+    Ok(result)
+}
+
+/// The `(key, value)` pairs of an array, copied out so the VM can be
+/// re-entered while iterating.
+fn entries(arr: &ZArray) -> Vec<(ArrayKey, Value)> {
+    arr.iter().map(|(k, v)| (k.clone(), v.deref())).collect()
+}
+
+fn count_value(count: usize) -> i64 {
+    i64::try_from(count).unwrap_or(i64::MAX)
+}
+
+/// `php_replace_in_subject()`: `Ok(None)` is PHP's `NULL` result.
+fn replace_in_subject(
+    vm: &mut Vm,
+    regex: &Value,
+    replacement: &Value,
+    subject: &[u8],
+    limit: usize,
+    count: &mut usize,
+) -> VmResult<Option<Vec<u8>>> {
+    let Value::Array(patterns) = regex else {
+        let pattern = vm.value_to_string(regex)?;
+        let rep = vm.value_to_string(replacement)?;
+        return replace_one(vm, pattern.as_bytes(), rep.as_bytes(), subject, limit, count);
+    };
+    // php_pcre_replace_array()
+    let replacements = match replacement {
+        Value::Array(r) => Some(entries(r)),
+        _ => None,
+    };
+    let single = match replacement {
+        Value::Array(_) => None,
+        other => Some(vm.value_to_string(other)?),
+    };
+    let mut next_replacement = replacements.map(Vec::into_iter);
+    let mut current = subject.to_vec();
+    for (_, entry) in entries(patterns) {
+        let pattern = vm.value_to_string(&entry)?;
+        let rep = match (&mut next_replacement, &single) {
+            (Some(it), _) => match it.next() {
+                Some((_, v)) => vm.value_to_string(&v)?,
+                None => ZStr::from(""),
+            },
+            (None, Some(s)) => s.clone(),
+            (None, None) => ZStr::from(""),
+        };
+        match replace_one(vm, pattern.as_bytes(), rep.as_bytes(), &current, limit, count)? {
+            Some(r) => current = r,
+            None => return Ok(None),
+        }
+    }
+    Ok(Some(current))
+}
+
+/// `php_pcre_replace()` for one pattern and one replacement string.
+fn replace_one(
+    vm: &mut Vm,
+    pattern: &[u8],
+    replacement: &[u8],
+    subject: &[u8],
+    limit: usize,
+    count: &mut usize,
+) -> VmResult<Option<Vec<u8>>> {
+    let Some(re) = state::compile(vm, pattern)? else {
+        return Ok(None);
+    };
+    let cfg = config();
+    let out = php_pcre::replace(&re, &cfg, subject, &Replacement::parse(replacement), limit);
+    *count += out.count;
+    state::set_last_error(out.last_error());
+    Ok(out.result.ok())
+}
+
+// ---------------------------------------------------------------------------
+// preg_replace_callback / preg_replace_callback_array
+// ---------------------------------------------------------------------------
+
+fn preg_replace_callback(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let regex = a.at(0);
+    let callback = a.at(1);
+    let subject = a.at(2);
+    let limit = limit_from_php(a.int(3));
+    let flags = a.int(5);
+    let mut count = 0usize;
+    let result = replace_func_impl(vm, &regex, &callback, &subject, limit, flags, &mut count)?;
+    if a.has(4) {
+        a.set_ref(4, Value::Int(count_value(count)));
+    }
+    Ok(result)
+}
+
+fn preg_replace_callback_array(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let patterns = a.array(0);
+    let mut subject = a.at(1);
+    let limit = limit_from_php(a.int(2));
+    let flags = a.int(4);
+    let mut count = 0usize;
+    for (key, callback) in entries(&patterns) {
+        let ArrayKey::Str(pattern) = key else {
+            return Err(a.type_error(vm, 1, "must contain only string patterns as keys"));
+        };
+        if !vm.is_callable(&callback) {
+            return Err(a.type_error(vm, 1, "must contain only valid callbacks"));
+        }
+        let result = replace_func_impl(
+            vm,
+            &Value::Str(pattern),
+            &callback,
+            &subject,
+            limit,
+            flags,
+            &mut count,
+        )?;
+        if matches!(result, Value::Null) {
+            return Ok(Value::Null);
+        }
+        subject = result;
+    }
+    if a.has(3) {
+        a.set_ref(3, Value::Int(count_value(count)));
+    }
+    Ok(subject)
+}
+
+/// `php_preg_replace_func_impl()`.
+fn replace_func_impl(
+    vm: &mut Vm,
+    regex: &Value,
+    callback: &Value,
+    subject: &Value,
+    limit: usize,
+    flags: i64,
+    count: &mut usize,
+) -> VmResult<Value> {
+    if let Value::Array(subjects) = subject {
+        let mut out = HashTable::with_capacity(subjects.len());
+        for (key, entry) in entries(subjects) {
+            let s = vm.value_to_string(&entry)?;
+            if let Some(r) =
+                replace_func_in_subject(vm, regex, callback, s.as_bytes(), limit, flags, count)?
+            {
+                out.insert(key, Value::Str(ZStr::from(r)));
+            }
+        }
+        return Ok(Value::Array(ZArray::from(out)));
+    }
+    let s = vm.value_to_string(subject)?;
+    Ok(
+        match replace_func_in_subject(vm, regex, callback, s.as_bytes(), limit, flags, count)? {
+            Some(r) => Value::Str(ZStr::from(r)),
+            None => Value::Null,
+        },
+    )
+}
+
+/// `php_replace_in_subject_func()`.
+fn replace_func_in_subject(
+    vm: &mut Vm,
+    regex: &Value,
+    callback: &Value,
+    subject: &[u8],
+    limit: usize,
+    flags: i64,
+    count: &mut usize,
+) -> VmResult<Option<Vec<u8>>> {
+    let Value::Array(patterns) = regex else {
+        let pattern = vm.value_to_string(regex)?;
+        return replace_func(vm, pattern.as_bytes(), callback, subject, limit, flags, count);
+    };
+    let mut current = subject.to_vec();
+    for (_, entry) in entries(patterns) {
+        let pattern = vm.value_to_string(&entry)?;
+        match replace_func(vm, pattern.as_bytes(), callback, &current, limit, flags, count)? {
+            Some(r) => current = r,
+            None => return Ok(None),
+        }
+    }
+    Ok(Some(current))
+}
+
+/// `php_pcre_replace_func()`: one pattern, one subject.
+fn replace_func(
+    vm: &mut Vm,
+    pattern: &[u8],
+    callback: &Value,
+    subject: &[u8],
+    limit: usize,
+    flags: i64,
+    count: &mut usize,
+) -> VmResult<Option<Vec<u8>>> {
+    let Some(re) = state::compile(vm, pattern)? else {
+        return Ok(None);
+    };
+    let cfg = config();
+    state::set_last_error(PregError::NoError);
+    let mut thrown = None;
+    let out = php_pcre::replace_callback(&re, &cfg, subject, limit, flags, |m| {
+        if thrown.is_some() {
+            return None;
+        }
+        match call_replacement(vm, callback, m) {
+            Ok(s) => Some(s),
+            Err(t) => {
+                thrown = Some(t);
+                None
+            }
+        }
+    });
+    *count += out.count;
+    state::set_last_error(out.last_error());
+    if let Some(t) = thrown {
+        return Err(t);
+    }
+    Ok(out.result.ok())
+}
+
+/// `preg_do_repl_func()`: calls the user callback with the match array and
+/// converts its return value to a string.
+fn call_replacement(vm: &mut Vm, callback: &Value, m: php_pcre::MatchArray) -> VmResult<Vec<u8>> {
+    let ret = vm.call_value(callback, vec![Value::Array(to_zarray(m))])?;
+    match ret.deref() {
+        Value::Str(s) => Ok(s.as_bytes().to_vec()),
+        other => Ok(vm.value_to_string(&other)?.as_bytes().to_vec()),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// preg_split / preg_grep / preg_quote / preg_last_error
+// ---------------------------------------------------------------------------
+
+fn preg_split(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let pattern = a.str(0);
+    let subject = a.str(1);
+    let limit = a.int(2);
+    let flags = a.int(3);
+    let Some(re) = state::compile(vm, pattern.as_bytes())? else {
+        return Ok(Value::Bool(false));
+    };
+    let cfg = config();
+    match php_pcre::split(&re, &cfg, subject.as_bytes(), limit, flags) {
+        Ok(parts) => {
+            state::set_last_error(PregError::NoError);
+            Ok(Value::Array(to_zarray(parts)))
+        }
+        Err(e) => {
+            state::set_last_error(e);
+            Ok(Value::Bool(false))
+        }
+    }
+}
+
+fn preg_grep(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let pattern = a.str(0);
+    let input = a.array(1);
+    let invert = a.int(2) & php_pcre::PREG_GREP_INVERT != 0;
+    let Some(re) = state::compile(vm, pattern.as_bytes())? else {
+        return Ok(Value::Bool(false));
+    };
+    grep_impl(vm, &re, &input, invert)
+}
+
+/// `php_pcre_grep_impl()`.
+fn grep_impl(vm: &mut Vm, re: &Regex, input: &ZArray, invert: bool) -> VmResult<Value> {
+    let cfg = config();
+    state::set_last_error(PregError::NoError);
+    let mut out = HashTable::new();
+    for (key, entry) in entries(input) {
+        let s = vm.value_to_string(&entry)?;
+        match php_pcre::grep(re, &cfg, [s.as_bytes()], invert) {
+            Ok(kept) => {
+                if !kept.is_empty() {
+                    out.insert(key, entry);
+                }
+            }
+            Err(e) => {
+                state::set_last_error(e);
+                return Ok(Value::Bool(false));
+            }
+        }
+    }
+    Ok(Value::Array(ZArray::from(out)))
+}
+
+fn preg_quote(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let s = a.str(0);
+    let delim = match a.opt(1) {
+        Some(Value::Str(d)) => Some(d),
+        _ => None,
+    };
+    let out = php_pcre::quote(s.as_bytes(), delim.as_ref().map(ZStr::as_bytes));
+    Ok(Value::Str(ZStr::from(out)))
+}
+
+fn preg_last_error(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
+    Ok(Value::Int(state::last_error().code()))
+}
+
+fn preg_last_error_msg(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
+    Ok(Value::from(state::last_error().message()))
+}
