@@ -582,6 +582,15 @@ mod tests {
     }
 
     #[test]
+    fn default_port_validation() {
+        let opts = php_vm::VmOptions::default();
+        let mut vm = Vm::new(&opts, Box::new(std::io::sink()));
+        for (v, ok) in [("3306", true), ("0", true), ("65535", true), ("65536", false), ("-1", false), ("x", true)] {
+            assert_eq!(on_update_default_port(&mut vm, v.as_bytes()).ok(), Some(ok), "{v}");
+        }
+    }
+
+    #[test]
     fn suffix_format() {
         assert_eq!(deprecation_suffix("8.4", "x"), b" since 8.4, x");
         assert_eq!(deprecation_suffix("", ""), b"");
