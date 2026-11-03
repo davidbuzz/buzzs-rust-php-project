@@ -49,6 +49,21 @@ pub trait SplHost: ArrayContext {
         UnserializeOptions::default()
     }
 
+    /// `php_var_unserialize()` of the one value at `offset` in `data` within
+    /// the active `unserialize()` call's shared `var_hash` (so `r:`/`R:`
+    /// back-references cross the boundaries of nested `C:` payloads):
+    /// `Ok(Ok((value, end)))`, `Ok(Err(failure_offset))`, or `Err` for an
+    /// exception. `None` (the default) makes SPL parse the value itself
+    /// with a fresh table and [`SplHost::unserialize_options`].
+    fn unserialize_nested(
+        &mut self,
+        data: &[u8],
+        offset: usize,
+    ) -> Option<RtResult<Result<(Value, usize), usize>>> {
+        let _ = (data, offset);
+        None
+    }
+
     /// `zend_call_method`: calls `$obj->name(...$args)` with normal method
     /// dispatch. When the method resolves to an internal SPL method the VM
     /// routes the call back to [`crate::call_method`].

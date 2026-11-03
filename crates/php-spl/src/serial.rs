@@ -191,6 +191,11 @@ pub fn unserialize_at(
     buf: &[u8],
     p: usize,
 ) -> Result<(Value, usize), usize> {
+    match host.unserialize_nested(buf, p) {
+        Some(Ok(r)) => return r,
+        Some(Err(_)) => return Err(p),
+        None => {}
+    }
     let opts = host.unserialize_options();
     let mut q = Quiet(host);
     match unserialize_partial(buf, p, &opts, &mut q) {

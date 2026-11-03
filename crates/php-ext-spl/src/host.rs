@@ -413,6 +413,15 @@ impl SplHost for VmHost<'_> {
         self.vm.unserialize_options_in_effect()
     }
 
+    fn unserialize_nested(
+        &mut self,
+        data: &[u8],
+        offset: usize,
+    ) -> Option<RtResult<Result<(Value, usize), usize>>> {
+        let r = self.vm.unserialize_nested(data, offset);
+        Some(self.vm_rt(r))
+    }
+
     fn call_method(&mut self, obj: &Obj, name: &str, args: &[Value]) -> RtResult<Value> {
         let r = self.vm.call_method_by_name(obj, name, args.to_vec());
         self.vm_rt(r)
@@ -768,6 +777,13 @@ impl SplHost for BridgedHost {
     }
     fn unserialize_options(&mut self) -> php_runtime::serialize::UnserializeOptions {
         lent(|h| h.unserialize_options()).unwrap_or_default()
+    }
+    fn unserialize_nested(
+        &mut self,
+        data: &[u8],
+        offset: usize,
+    ) -> Option<RtResult<Result<(Value, usize), usize>>> {
+        lent(|h| h.unserialize_nested(data, offset)).flatten()
     }
     fn call_method(&mut self, obj: &Obj, name: &str, args: &[Value]) -> RtResult<Value> {
         lent_rt(|h| h.call_method(obj, name, args))
