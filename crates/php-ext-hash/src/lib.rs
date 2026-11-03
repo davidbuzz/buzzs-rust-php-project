@@ -12,13 +12,11 @@
 //! * `md5()`, `md5_file()`, `sha1()`, `sha1_file()` and `crc32()` of
 //!   `ext/standard`, which share the algorithms.
 //!
-//! Files are read through the `php-streams` layer (see [`files`]); stream
-//! resources passed to `hash_update_stream()` are read with `fread()`.
+//! Files and stream resources go through `php-ext-streams` (see
+//! [`files`]).
 //!
-//! Known gaps: the `MHASH_*` constants are not reported as deprecated (the
-//! extension API has no deprecated-constant flag), and the
-//! `$stream_context` argument of `hash_update_file()` is not forwarded to
-//! the opener (the context resource payload belongs to `php-ext-streams`).
+//! Known gap: the `MHASH_*` constants are not reported as deprecated (the
+//! extension API has no deprecated-constant flag).
 
 // Native handlers and object hooks must match the VM's fn-pointer
 // signatures (`NativeFn`, `ClassHooks`), even when they cannot fail.
@@ -146,12 +144,16 @@ fn hash_file(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         Ok(c) => c,
         Err(e) => return Err(fail(vm, a, &e)),
     };
-    let func = a.func_name();
-    let read = files::read_path(vm, &func, path.as_bytes(), |chunk| {
-        let _ = ctx.update(chunk);
-    })?;
+    let read = files::read_path(
+        vm,
+        path.as_bytes(),
+        files::default_context().as_ref(),
+        |chunk| {
+            let _ = ctx.update(chunk);
+        },
+    )?;
     emit(vm, ctx.take_diagnostics())?;
-    if read != Some(true) {
+    if read.is_none_or(|r| r.error) {
         return Ok(Value::Bool(false));
     }
     match ctx.finalize() {
@@ -178,11 +180,15 @@ fn hash_hmac_file(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     };
     let path = a.str(1);
     files::check_path(vm, a, 2, path.as_bytes())?;
-    let func = a.func_name();
-    let read = files::read_path(vm, &func, path.as_bytes(), |chunk| {
-        let _ = ctx.update(chunk);
-    })?;
-    if read != Some(true) {
+    let read = files::read_path(
+        vm,
+        path.as_bytes(),
+        files::default_context().as_ref(),
+        |chunk| {
+            let _ = ctx.update(chunk);
+        },
+    )?;
+    if read.is_none_or(|r| r.error) {
         return Ok(Value::Bool(false));
     }
     match ctx.finalize() {
@@ -212,18 +218,13 @@ fn hash_update(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 }
 
 fn hash_update_stream(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let stream = a.at(1);
-    if !matches!(stream, Value::Resource(_)) {
-        let msg = format!("must be of type resource, {} given", stream.value_name());
-        return Err(a.type_error(vm, 2, &msg));
-    }
-    // Verify the context before reading anything.
+    // ZPP validates the stream resource before the context is verified.
+    php_ext_streams::res::stream_arg(vm, a, 1)?;
     context::with_live(vm, a, 0, |_| ())?;
     let length = if a.has(2) { a.int(2) } else { -1 };
-    let mut data = Vec::new();
-    let did = files::read_stream(vm, &stream, length, |chunk| data.extend_from_slice(chunk))?;
+    let data = files::read_stream(vm, a, 1, length)?;
     context::with_live(vm, a, 0, |c| c.update(&data))?.map_err(|e| fail(vm, a, &e))?;
-    Ok(Value::Int(did))
+    Ok(Value::Int(i64::try_from(data.len()).unwrap_or(i64::MAX)))
 }
 
 fn hash_update_file(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -239,16 +240,20 @@ fn hash_update_file(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         }
     }
     context::with_live(vm, a, 0, |_| ())?;
-    let func = a.func_name();
+    // php_stream_context_from_zval(zcontext, 0): null means the default.
+    let stream_context = match files::context_arg(vm, a, 2)? {
+        Some(c) => Some(c),
+        None => files::default_context(),
+    };
     let mut data = Vec::new();
-    let read = files::read_path(vm, &func, path.as_bytes(), |chunk| {
+    let read = files::read_path(vm, path.as_bytes(), stream_context.as_ref(), |chunk| {
         data.extend_from_slice(chunk);
     })?;
-    let Some(ok) = read else {
+    let Some(end) = read else {
         return Ok(Value::Bool(false));
     };
     context::with_live(vm, a, 0, |c| c.update(&data))?.map_err(|e| fail(vm, a, &e))?;
-    Ok(Value::Bool(ok))
+    Ok(Value::Bool(!end.error))
 }
 
 fn hash_final(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -428,11 +433,17 @@ fn file_digest(vm: &mut Vm, a: &Args, algo: &str) -> VmResult<Value> {
         Ok(c) => c,
         Err(e) => return Err(fail(vm, a, &e)),
     };
-    let func = a.func_name();
-    let read = files::read_path(vm, &func, path.as_bytes(), |chunk| {
-        let _ = ctx.update(chunk);
-    })?;
-    if read != Some(true) {
+    let read = files::read_path(
+        vm,
+        path.as_bytes(),
+        files::default_context().as_ref(),
+        |chunk| {
+            let _ = ctx.update(chunk);
+        },
+    )?;
+    // md5_file()/sha1_file() (unlike hash_file()) also fail when the
+    // stream stopped before EOF.
+    if read.is_none_or(|r| r.error || !r.eof) {
         return Ok(Value::Bool(false));
     }
     match ctx.finalize() {
