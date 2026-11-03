@@ -9,7 +9,7 @@ use php_stdstr::{analysis, quoted_printable, uuencode, versioning};
 use php_vm::ext::{Args, ModuleBuilder, VmResult};
 use php_vm::Vm;
 
-use crate::{assoc, bytes, check, deprecated_function, emit, opt_bytes, to_str};
+use crate::{assoc, bytes, check, deprecated_function, emit, mem, opt_bytes, to_str};
 
 /// A `pack()` argument with its conversions computed up front (the
 /// library's [`PackValue`] has no access to the VM).
@@ -87,7 +87,17 @@ fn unpack_fn(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let mut n = Notices::new();
     let r = pack::unpack(a.str(0).as_bytes(), a.str(1).as_bytes(), a.int(2), &mut n);
     emit(vm, n)?;
-    Ok(match check(vm, r)? {
+    let r = check(vm, r)?;
+    if let Some(items) = &r {
+        let size = items.iter().fold(0usize, |acc, (_, v)| {
+            acc.saturating_add(match v {
+                UnpackValue::Str(s) => mem::BUCKET + mem::zstr(s.len()),
+                _ => mem::BUCKET,
+            })
+        });
+        mem::check(vm, 0, size)?;
+    }
+    Ok(match r {
         None => Value::Bool(false),
         Some(items) => assoc(items.into_iter().map(|(k, v)| {
             let key = match k {
@@ -184,15 +194,15 @@ fn metaphone(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     Ok(bytes(check(vm, r)?))
 }
 
-fn levenshtein(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+fn levenshtein(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let cost = |n: usize| if a.has(n) { a.int(n) } else { 1 };
-    let r = analysis::levenshtein(
-        a.str(0).as_bytes(),
-        a.str(1).as_bytes(),
-        cost(2),
-        cost(3),
-        cost(4),
-    );
+    let (s1, s2) = (a.str(0), a.str(1));
+    if !s1.is_empty() && !s2.is_empty() {
+        // The first of the two workspace rows.
+        let row = (s2.len() + 1).saturating_mul(8);
+        mem::check(vm, mem::zstr(s1.len()) + mem::zstr(s2.len()), row)?;
+    }
+    let r = analysis::levenshtein(s1.as_bytes(), s2.as_bytes(), cost(2), cost(3), cost(4));
     Ok(Value::Int(r))
 }
 

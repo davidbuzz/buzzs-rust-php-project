@@ -11,7 +11,7 @@ use php_stdstr::{compare, slashes, strip_tags};
 use php_vm::ext::{Args, ModuleBuilder, VmResult};
 use php_vm::Vm;
 
-use crate::{assoc, bytes, check, deprecated_function, emit, opt_bytes, str_list, to_str};
+use crate::{assoc, bytes, check, deprecated_function, emit, mem, opt_bytes, str_list, to_str};
 
 thread_local! {
     /// `BG(strtok_string)` / `BG(strtok_last)`.
@@ -96,14 +96,32 @@ fn rtrim(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 fn wordwrap(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let width = if a.has(1) { a.int(1) } else { 75 };
     let brk = if a.has(2) { a.str(2) } else { ZStr::from("\n") };
-    let r = transform::wordwrap(a.str(0).as_bytes(), width, brk.as_bytes(), a.bool(3));
+    let text = a.str(0);
+    let cut = a.bool(3);
+    if !text.is_empty() && !brk.is_empty() && (width != 0 || !cut) {
+        // The buffer php_wordwrap() allocates up front.
+        let tl = text.len();
+        let alloc = if brk.len() == 1 && !cut {
+            tl
+        } else if width > 0 {
+            let chk = tl / usize::try_from(width).unwrap_or(usize::MAX) + 1;
+            tl.saturating_add(chk.saturating_mul(brk.len()))
+        } else {
+            tl.saturating_mul(brk.len() + 1)
+        };
+        mem::check(vm, mem::zstr(tl) + mem::zstr(brk.len()), mem::zstr(alloc))?;
+    }
+    let r = transform::wordwrap(text.as_bytes(), width, brk.as_bytes(), cut);
     Ok(bytes(check(vm, r)?))
 }
 
 fn explode(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let limit = if a.has(2) { a.int(2) } else { i64::MAX };
-    let r = search::explode(a.str(0).as_bytes(), a.str(1).as_bytes(), limit);
-    Ok(str_list(check(vm, r)?))
+    let s = a.str(1);
+    let r = search::explode(a.str(0).as_bytes(), s.as_bytes(), limit);
+    let parts = check(vm, r)?;
+    mem::check(vm, mem::zstr(s.len()), mem::str_list(&parts))?;
+    Ok(str_list(parts))
 }
 
 /// `php_implode()`.
@@ -148,7 +166,9 @@ fn implode(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             return Err(a.type_error(vm, 2, &msg));
         }
     };
-    Ok(bytes(implode_array(vm, glue.as_bytes(), &pieces)?))
+    let out = implode_array(vm, glue.as_bytes(), &pieces)?;
+    mem::check(vm, mem::zstr(glue.len()), mem::zstr(out.len()))?;
+    Ok(bytes(out))
 }
 
 fn strtok(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -257,7 +277,17 @@ fn chunk_split(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     } else {
         ZStr::from("\r\n")
     };
-    let r = transform::chunk_split(a.str(0).as_bytes(), len, end.as_bytes());
+    let s = a.str(0);
+    if len > 0 {
+        let chunks = s.len() / usize::try_from(len).unwrap_or(usize::MAX) + 1;
+        let alloc = s.len().saturating_add(chunks.saturating_mul(end.len()));
+        mem::check(
+            vm,
+            mem::zstr(s.len()) + mem::zstr(end.len()),
+            mem::zstr(alloc),
+        )?;
+    }
+    let r = transform::chunk_split(s.as_bytes(), len, end.as_bytes());
     Ok(bytes(check(vm, r)?))
 }
 
@@ -343,6 +373,7 @@ fn substr_replace(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         _ => None,
     };
     let mut out = HashTable::new();
+    let mut total = 0usize;
     for (k, v) in subjects.iter() {
         let orig = to_str(vm, &v.deref())?;
         let f = match &mut from_cur {
@@ -366,10 +397,10 @@ fn substr_replace(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             },
             None => repl_str.clone(),
         };
-        out.insert(
-            k.clone(),
-            bytes(search::substr_replace(orig.as_bytes(), r.as_bytes(), f, l)),
-        );
+        let piece = search::substr_replace(orig.as_bytes(), r.as_bytes(), f, l);
+        total = total.saturating_add(mem::BUCKET + mem::zstr(piece.len()));
+        mem::check(vm, mem::zstr(r.len()), total)?;
+        out.insert(k.clone(), bytes(piece));
     }
     Ok(Value::Array(ZArray::from_table(out)))
 }
@@ -449,6 +480,7 @@ fn strtr(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let mut n = Notices::new();
     let r = transform::strtr_pairs(s.as_bytes(), &ps, &mut n);
     emit(vm, n)?;
+    mem::check(vm, mem::zstr(s.len()), mem::zstr(r.len()))?;
     Ok(bytes(r))
 }
 
@@ -507,6 +539,13 @@ fn replace_in_subject(
             ci,
         );
         let (out, n) = check(vm, res)?;
+        if out.len() > subject.len() {
+            mem::check(
+                vm,
+                mem::zstr(subject.len()) + mem::zstr(r.len()),
+                mem::zstr(out.len()),
+            )?;
+        }
         return Ok((if n == 0 { subject } else { ZStr::from(out) }, n));
     };
     let mut repl_cur = Cursor::new(replace);
@@ -536,6 +575,13 @@ fn replace_in_subject(
             ci,
         );
         let (out, n) = check(vm, res)?;
+        if out.len() > subject.len() {
+            mem::check(
+                vm,
+                mem::zstr(subject.len()) + mem::zstr(r.len()),
+                mem::zstr(out.len()),
+            )?;
+        }
         if n > 0 {
             count += n;
             subject = ZStr::from(out);
@@ -592,9 +638,14 @@ fn hebrev(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     Ok(bytes(transform::hebrev(a.str(0).as_bytes(), a.int(1))))
 }
 
-fn nl2br(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+fn nl2br(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let xhtml = !a.has(1) || a.bool(1);
-    Ok(bytes(transform::nl2br(a.str(0).as_bytes(), xhtml)))
+    let s = a.str(0);
+    let out = transform::nl2br(s.as_bytes(), xhtml);
+    if out.len() > s.len() {
+        mem::check(vm, mem::zstr(s.len()), mem::zstr(out.len()))?;
+    }
+    Ok(bytes(out))
 }
 
 fn strip_tags_fn(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -617,7 +668,15 @@ fn strip_tags_fn(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 }
 
 fn str_repeat(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let r = transform::str_repeat(a.str(0).as_bytes(), a.int(1));
+    let s = a.str(0);
+    let times = a.int(1);
+    if times > 0 {
+        let total = s
+            .len()
+            .saturating_mul(usize::try_from(times).unwrap_or(usize::MAX));
+        mem::check(vm, mem::zstr(s.len()), mem::zstr(total))?;
+    }
+    let r = transform::str_repeat(s.as_bytes(), times);
     Ok(bytes(check(vm, r)?))
 }
 
@@ -690,7 +749,13 @@ fn str_pad(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     } else {
         transform::STR_PAD_RIGHT
     };
-    let r = transform::str_pad(a.str(0).as_bytes(), a.int(1), pad.as_bytes(), ty);
+    let s = a.str(0);
+    let len = a.int(1);
+    let target = usize::try_from(len).unwrap_or(0);
+    if target > s.len() && !pad.is_empty() && (0..=2).contains(&ty) {
+        mem::check(vm, mem::zstr(s.len()), mem::zstr(target))?;
+    }
+    let r = transform::str_pad(s.as_bytes(), len, pad.as_bytes(), ty);
     Ok(bytes(check(vm, r)?))
 }
 
@@ -729,15 +794,21 @@ fn str_word_count(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     emit(vm, n)?;
     Ok(match check(vm, r)? {
         WordCount::Count(c) => Value::Int(c),
-        WordCount::Words(w) => str_list(w),
+        WordCount::Words(w) => {
+            mem::check(vm, 0, mem::str_list(&w))?;
+            str_list(w)
+        }
         WordCount::Positions(p) => assoc(p.into_iter().map(|(pos, w)| (pos, bytes(w)))),
     })
 }
 
 fn str_split(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let len = if a.has(1) { a.int(1) } else { 1 };
-    let r = transform::str_split(a.str(0).as_bytes(), len);
-    Ok(str_list(check(vm, r)?))
+    let s = a.str(0);
+    let r = transform::str_split(s.as_bytes(), len);
+    let parts = check(vm, r)?;
+    mem::check(vm, mem::zstr(s.len()), mem::str_list(&parts))?;
+    Ok(str_list(parts))
 }
 
 fn strpbrk(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -785,7 +856,10 @@ fn str_getcsv(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     emit(vm, n)?;
     let opts = check(vm, opts)?;
     Ok(match csv::str_getcsv(a.str(0).as_bytes(), &opts) {
-        Some(fields) => str_list(fields),
+        Some(fields) => {
+            mem::check(vm, 0, mem::str_list(&fields))?;
+            str_list(fields)
+        }
         None => Value::Array(ZArray::from_values([Value::Null])),
     })
 }

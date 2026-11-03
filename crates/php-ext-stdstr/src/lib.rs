@@ -129,3 +129,51 @@ pub(crate) fn to_str(vm: &mut Vm, v: &Value) -> VmResult<ZStr> {
         other => vm.value_to_string(other),
     }
 }
+
+/// Approximate Zend MM accounting for the allocations this crate makes on
+/// behalf of PHP code, so that `memory_limit` is enforced for the large
+/// results string functions can build (the VM has no allocator-level
+/// limit).
+pub(crate) mod mem {
+    use php_vm::ext::VmResult;
+    use php_vm::Vm;
+
+    /// Size of a hash bucket holding one zval (`Bucket`).
+    pub(crate) const BUCKET: usize = 32;
+
+    /// Allocation size of a `zend_string` of `len` bytes.
+    pub(crate) const fn zstr(len: usize) -> usize {
+        (24 + len + 1 + 7) & !7
+    }
+
+    /// Bytes held by the elements of a list of strings.
+    pub(crate) fn str_list<T: AsRef<[u8]>>(items: &[T]) -> usize {
+        items.iter().fold(0usize, |acc, s| {
+            acc.saturating_add(BUCKET + zstr(s.as_ref().len()))
+        })
+    }
+
+    /// The effective `memory_limit` in bytes (`None` for unlimited).
+    fn limit(vm: &Vm) -> Option<usize> {
+        let raw = vm
+            .ini_string("memory_limit")
+            .unwrap_or_else(|| b"128M".to_vec());
+        let (v, _) = php_support::ini::parse_quantity(&raw);
+        usize::try_from(v).ok().filter(|&v| v > 0)
+    }
+
+    /// Raises PHP's out-of-memory fatal error when `live` bytes (the
+    /// inputs still referenced) plus a new allocation of `alloc` bytes
+    /// exceed `memory_limit`.
+    pub(crate) fn check(vm: &mut Vm, live: usize, alloc: usize) -> VmResult<()> {
+        let Some(limit) = limit(vm) else {
+            return Ok(());
+        };
+        if live.saturating_add(alloc) > limit {
+            return Err(vm.fatal(&format!(
+                "Allowed memory size of {limit} bytes exhausted (tried to allocate {alloc} bytes)"
+            )));
+        }
+        Ok(())
+    }
+}
