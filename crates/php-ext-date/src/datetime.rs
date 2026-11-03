@@ -459,8 +459,8 @@ fn subject(a: &Args) -> (Obj, usize) {
 fn format(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let (o, n) = subject(a);
     let f = a.str(n);
-    let t = require_time(vm, &o)?;
-    Ok(Value::Str(ZStr::from(api::format(&t, f.as_bytes()))))
+    let s = with_time(vm, &o, |t| api::format(t, f.as_bytes()))?;
+    Ok(Value::Str(ZStr::from(s)))
 }
 
 fn get_timezone(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -474,8 +474,8 @@ fn get_timezone(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 fn get_offset(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let (o, _) = subject(a);
-    let t = require_time(vm, &o)?;
-    Ok(Value::Int(api::offset(&t)))
+    let off = with_time(vm, &o, |t| api::offset(t))?;
+    Ok(Value::Int(off))
 }
 
 fn get_timestamp(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -496,9 +496,9 @@ fn diff(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         return Ok(Value::Null);
     };
     let absolute = a.has(n + 1) && a.bool(n + 1);
-    let t1 = require_time(vm, &o)?;
+    with_time(vm, &o, |_| ())?;
     let t2 = require_time(vm, &other)?;
-    let iv = api::diff(&t1, &t2, absolute);
+    let iv = with_time(vm, &o, |t1| api::diff(t1, &t2, absolute))?;
     Ok(Value::Object(new_interval(vm, iv)?))
 }
 

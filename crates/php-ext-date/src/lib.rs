@@ -84,18 +84,6 @@ impl Extension for Date {
         functions::register(m);
         datetime::register_functions(m);
 
-        // OnUpdate_date_timezone at startup.
-        let vm = m.vm();
-        if let Some(v) = vm.ini_string("date.timezone") {
-            let name = String::from_utf8_lossy(&v).into_owned();
-            if !php_date::tz::is_valid_id(&name) {
-                let _ = vm.raise(
-                    common::E_WARNING,
-                    &format!("PHP Startup: Invalid date.timezone value '{name}', using 'UTC' instead"),
-                );
-            }
-        }
-
         m.on_request_shutdown(|_| {
             common::reset_request_state();
             duration::reset_cache();

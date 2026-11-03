@@ -108,6 +108,15 @@ pub(crate) fn interval_of(o: &Obj) -> Option<Interval> {
 /// (so `(array)`, `get_object_vars()` and `foreach` see them).
 pub(crate) fn set_interval(o: &Obj, iv: Option<Interval>) {
     if let Some(iv) = &iv {
+        if iv.from_string {
+            // Only `from_string`/`date_string` describe such an interval;
+            // drop mirrored numeric fields (PHP fills the table lazily).
+            if let Some(t) = object::data(o).dynamic.borrow_mut().as_mut() {
+                for k in ["y", "m", "d", "h", "i", "s", "f", "invert", "days"] {
+                    t.remove(&ArrayKey::Str(ZStr::from(k)));
+                }
+            }
+        }
         if let api::Value::Array(items) = iv.props() {
             for (k, v) in items {
                 if let api::Key::Str(k) = k {

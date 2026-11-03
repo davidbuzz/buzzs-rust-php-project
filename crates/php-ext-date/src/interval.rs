@@ -7,7 +7,7 @@ use php_vm::ext::{acc, Args, ClassBuilder, ClassHooks, ModuleBuilder, VmResult};
 use php_vm::object;
 use php_vm::Vm;
 
-use crate::common::{get_str, lossy, to_php};
+use crate::common::{dval_to_lval, get_str, lossy, to_php};
 use crate::datetime::{
     add_common_properties, clone_hook, obj_arg, restore_custom, wakeup_deprecation,
 };
@@ -139,11 +139,7 @@ fn from_hash(vm: &mut Vm, h: &ZArray) -> VmResult<Interval> {
     r.s = long(vm, "s", -1)?;
     if let Some(v) = get_str(h, "f").map(Value::deref) {
         let f = vm.value_to_float(&v)? * 1_000_000.0;
-        r.us = if f.is_finite() && f.abs() < 9.2e18 {
-            f as i64
-        } else {
-            0
-        };
+        r.us = dval_to_lval(vm, f)?;
     }
     r.weekday = long(vm, "weekday", -1)? as i32;
     r.weekday_behavior = long(vm, "weekday_behavior", -1)? as i32;
@@ -248,8 +244,8 @@ fn write_property(vm: &mut Vm, o: &Obj, name: &ZStr, v: &Value) -> VmResult<bool
     };
     let n = name.as_bytes();
     if n == b"f" {
-        let f = vm.value_to_float(v)?;
-        iv.write_f(f);
+        let f = vm.value_to_float(v)? * 1_000_000.0;
+        iv.rel.us = dval_to_lval(vm, f)?;
     } else if matches!(n, b"y" | b"m" | b"d" | b"h" | b"i" | b"s" | b"invert") {
         let i = vm.value_to_int(v)?;
         iv.write_prop(&lossy(n), i);

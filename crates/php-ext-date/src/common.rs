@@ -184,6 +184,22 @@ pub(crate) fn strtod(s: &[u8]) -> f64 {
     s[..end].parse().unwrap_or(0.0)
 }
 
+/// `zend_dval_to_lval()`: warns about non-representable floats and wraps
+/// like the engine does.
+pub(crate) fn dval_to_lval(vm: &mut Vm, d: f64) -> VmResult<i64> {
+    use php_runtime::convert::{double_fits_long, dval_to_lval_silent};
+    if !d.is_finite() || !double_fits_long(d) {
+        vm.raise(
+            E_WARNING,
+            &format!(
+                "The float {} is not representable as an int, cast occurred",
+                php_runtime::float::format_double_h(d, -1)
+            ),
+        )?;
+    }
+    Ok(dval_to_lval_silent(d))
+}
+
 /// An INI value as a float (`zend_ini_double`).
 pub(crate) fn ini_double(vm: &Vm, name: &str) -> f64 {
     vm.ini_string(name).map_or(0.0, |v| strtod(&v))
