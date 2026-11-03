@@ -423,6 +423,16 @@ impl Compiler {
                         line,
                     );
                 }
+                if matches!(lc.as_slice(), b"_" | b"let" | b"is") {
+                    self.warnings.push((
+                        8192,
+                        format!(
+                            "Using \"{}\" as a class name is deprecated",
+                            String::from_utf8_lossy(&short)
+                        ),
+                        line,
+                    ));
+                }
                 if let Some(prev) = self.class_uses.get(&lc) {
                     if !prev.eq_ignore_ascii_case(full) {
                         return self.err(
@@ -438,10 +448,32 @@ impl Compiler {
                 self.class_uses.insert(lc, full.to_vec());
             }
             ast::UseKind::Function => {
+                let lc = short.to_ascii_lowercase();
+                if matches!(lc.as_slice(), b"let" | b"is") {
+                    self.warnings.push((
+                        8192,
+                        format!(
+                            "Using \"{}\" as a function name is deprecated since 8.6",
+                            String::from_utf8_lossy(&short)
+                        ),
+                        line,
+                    ));
+                }
                 self.fn_uses
                     .insert(short.to_ascii_lowercase(), full.to_vec());
             }
             ast::UseKind::Const => {
+                let lc = short.to_ascii_lowercase();
+                if matches!(lc.as_slice(), b"_" | b"let" | b"is") {
+                    self.warnings.push((
+                        8192,
+                        format!(
+                            "Using \"{}\" as a constant name is deprecated since 8.6",
+                            String::from_utf8_lossy(&short)
+                        ),
+                        line,
+                    ));
+                }
                 self.const_uses.insert(short, full.to_vec());
             }
         }

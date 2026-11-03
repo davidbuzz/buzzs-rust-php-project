@@ -415,6 +415,20 @@ impl Vm {
 
     /// Defines a global constant (`const X = ...;` / `define`).
     pub(crate) fn declare_constant(&mut self, name: ZStr, v: Value) -> VmResult<bool> {
+        // `zend_register_constant()` identifier deprecations (the namespace
+        // part is already lowercased by the callers).
+        let short = name
+            .as_bytes()
+            .rsplit(|&c| c == b'\\')
+            .next()
+            .unwrap_or_default();
+        if short == b"_" {
+            self.deprecated("Calling a constant \"_\" is deprecated since 8.6")?;
+        } else if short.eq_ignore_ascii_case(b"let") {
+            self.deprecated("Calling a constant \"let\" is deprecated since 8.6")?;
+        } else if short.eq_ignore_ascii_case(b"is") {
+            self.deprecated("Calling a constant \"is\" is deprecated since 8.6")?;
+        }
         if self.constants.contains_key(&name) {
             self.warning(&format!(
                 "Constant {} already defined, this will be an error in PHP 9",

@@ -98,6 +98,21 @@ impl Compiler {
             }
             self.declared_functions.insert(lc, fd.span.line);
         }
+        // `zend_begin_func_decl` identifier deprecation.
+        let unq = &fd.name.name;
+        if unq.eq_ignore_ascii_case(b"readonly")
+            || unq.eq_ignore_ascii_case(b"let")
+            || unq.eq_ignore_ascii_case(b"is")
+        {
+            self.warnings.push((
+                8192,
+                format!(
+                    "Calling a function \"{}\" is deprecated since 8.6",
+                    String::from_utf8_lossy(unq)
+                ),
+                fd.span.line,
+            ));
+        }
         let spec = BodySpec {
             kind: FnKind::Function,
             name: ZStr::from(name),
@@ -936,6 +951,32 @@ impl Compiler {
                     ),
                     cd.span.line,
                 );
+            }
+            // `zend_assert_valid_class_name()` identifier deprecations.
+            let ty = match kind {
+                ClassKind::Interface => "an interface name",
+                ClassKind::Trait => "a trait name",
+                ClassKind::Enum => "an enum name",
+                ClassKind::Class => "a class name",
+            };
+            if n.as_slice() == b"_" {
+                self.warnings.push((
+                    8192,
+                    format!("Using \"_\" as {ty} is deprecated since 8.4"),
+                    cd.span.line,
+                ));
+            } else if lc == b"let" {
+                self.warnings.push((
+                    8192,
+                    format!("Using \"let\" as {ty} is deprecated since 8.6"),
+                    cd.span.line,
+                ));
+            } else if lc == b"is" {
+                self.warnings.push((
+                    8192,
+                    format!("Using \"is\" as {ty} is deprecated since 8.6"),
+                    cd.span.line,
+                ));
             }
             ZStr::from(self.ns_prefixed_pub(&n))
         };

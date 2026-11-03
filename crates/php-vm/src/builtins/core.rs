@@ -2,7 +2,7 @@
 
 use super::util::{arr, b, i, opt, s, sv, value_error};
 use super::{alias, constant, reg};
-use crate::class::{cflags, Class};
+use crate::class::Class;
 use crate::func::{flags, Args, Func};
 use crate::object;
 use crate::vm::{ErrorHandler, FrameKind, Throw, Vm, VmResult};
@@ -129,18 +129,6 @@ fn define(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         }
         None => name,
     };
-    let short = name
-        .as_bytes()
-        .rsplit(|&c| c == b'\\')
-        .next()
-        .unwrap_or_default();
-    if short == b"_" {
-        vm.deprecated("Calling a constant \"_\" is deprecated since 8.6")?;
-    } else if short.eq_ignore_ascii_case(b"let") {
-        vm.deprecated("Calling a constant \"let\" is deprecated since 8.6")?;
-    } else if short.eq_ignore_ascii_case(b"is") {
-        vm.deprecated("Calling a constant \"is\" is deprecated since 8.6")?;
-    }
     let special = name.as_bytes() == b"__COMPILER_HALT_OFFSET__"
         || [&b"true"[..], b"false", b"null"]
             .iter()
@@ -973,14 +961,6 @@ fn class_alias(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         vm.warning(&format!("Class \"{}\" not found", orig.to_string_lossy()))?;
         return Ok(Value::Bool(false));
     };
-    if c.flags & cflags::INTERNAL != 0 {
-        return Err(super::util::value_error(
-            vm,
-            a,
-            1,
-            "must be a user-defined class name, internal class name given",
-        ));
-    }
     let an = alias
         .as_bytes()
         .strip_prefix(b"\\")
@@ -1027,6 +1007,14 @@ fn class_alias(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             "Cannot use '{}' as class name as it is reserved",
             String::from_utf8_lossy(an)
         )));
+    }
+    // `zend_assert_valid_class_name(lcname, "a class alias")`.
+    if lc.as_bytes() == b"_" || lc.as_bytes().ends_with(b"\\_") {
+        vm.deprecated("Using \"_\" as a class alias is deprecated since 8.4")?;
+    } else if lc.as_bytes() == b"let" || lc.as_bytes().ends_with(b"\\let") {
+        vm.deprecated("Using \"let\" as a class alias is deprecated since 8.6")?;
+    } else if lc.as_bytes() == b"is" || lc.as_bytes().ends_with(b"\\is") {
+        vm.deprecated("Using \"is\" as a class alias is deprecated since 8.6")?;
     }
     vm.class_order.push(lc.clone());
     vm.classes.insert(lc, c);
