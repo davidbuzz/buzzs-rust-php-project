@@ -238,6 +238,73 @@ pub trait Backend {
     }
 }
 
+/// Shared backends (tests keep a handle to inspect what a request did).
+impl<T: Backend + ?Sized> Backend for std::rc::Rc<T> {
+    fn str_field(&self, field: StrField) -> Option<Vec<u8>> {
+        (**self).str_field(field)
+    }
+    fn int_field(&self, field: IntField) -> i64 {
+        (**self).int_field(field)
+    }
+    fn set_user(&self, user: Option<&[u8]>) {
+        (**self).set_user(user);
+    }
+    fn add_cgi_vars(&self) {
+        (**self).add_cgi_vars();
+    }
+    fn table_entries(&self, table: Table) -> Vec<(Vec<u8>, Vec<u8>)> {
+        (**self).table_entries(table)
+    }
+    fn table_get(&self, table: Table, key: &[u8]) -> Option<Vec<u8>> {
+        (**self).table_get(table, key)
+    }
+    fn table_op(&self, table: Table, op: TableOp, key: &[u8], value: &[u8]) {
+        (**self).table_op(table, op, key, value);
+    }
+    fn set_status(&self, status: i32, status_line: Option<&[u8]>, proto_num: i32) {
+        (**self).set_status(status, status_line, proto_num);
+    }
+    fn set_content_type(&self, content_type: &[u8]) {
+        (**self).set_content_type(content_type);
+    }
+    fn set_content_length(&self, len: i64) {
+        (**self).set_content_length(len);
+    }
+    fn write(&self, data: &[u8]) -> bool {
+        (**self).write(data)
+    }
+    fn flush(&self) -> bool {
+        (**self).flush()
+    }
+    fn body_setup(&self) -> Result<bool, i32> {
+        (**self).body_setup()
+    }
+    fn body_read(&self, buf: &mut [u8]) -> isize {
+        (**self).body_read(buf)
+    }
+    fn log(&self, level: LogLevel, msg: &[u8]) {
+        (**self).log(level, msg);
+    }
+    fn dir_config(&self) -> Vec<DirEntry> {
+        (**self).dir_config()
+    }
+    fn set_last_modified(&self) {
+        (**self).set_last_modified();
+    }
+    fn server_banner(&self) -> Vec<u8> {
+        (**self).server_banner()
+    }
+    fn loaded_modules(&self) -> Vec<Vec<u8>> {
+        (**self).loaded_modules()
+    }
+    fn lookup_uri(&self, uri: &[u8]) -> Option<Box<dyn SubRequest>> {
+        (**self).lookup_uri(uri)
+    }
+    fn top_request(&self) -> Option<Box<dyn Backend>> {
+        (**self).top_request()
+    }
+}
+
 /// An in-memory [`Backend`] for tests: tables are ordered lists with
 /// case-insensitive keys, output and log lines are recorded.
 #[derive(Debug, Default)]
