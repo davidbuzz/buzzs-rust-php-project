@@ -260,7 +260,7 @@ fn register_class(vm: &mut Vm, c: &'static ClassDef) {
         // `spl_dual_it_get_method` / `spl_recursive_it_get_method` forward
         // calls of unknown methods to the inner iterator; the VM has no
         // `get_method` hook, so this is modelled with `__call`.
-        b = b.method("__call($name, $arguments)", acc::PUBLIC, forward_call);
+        b = b.method("__call(...$arguments)", acc::PUBLIC, forward_call);
     }
     let cls = b.register(vm);
     METHODS.with(|m| {
@@ -504,9 +504,9 @@ pub fn function_signature(d: &MethodDef) -> String {
     signature(d)
 }
 
-/// The method name of the call being dispatched to `__call`: the VM does
-/// not pass it to native `__call` handlers, so it is recovered from the
-/// calling frame's pending `InitMethodCall` (matched by call nesting).
+/// The method name of the user-code call being executed, recovered from
+/// the calling frame's pending `InitMethodCall` (matched by call
+/// nesting); `None` for calls made by the engine.
 fn pending_method_name(vm: &Vm) -> Option<ZStr> {
     let f = vm
         .frames
@@ -592,19 +592,14 @@ pub fn current_op_is_assign_ref(vm: &Vm) -> bool {
 }
 
 /// Forwards an unknown method call to the inner (current sub-) iterator.
-/// The VM packs a native `__call`'s arguments as `($name, $arguments)`.
+/// A native `__call` receives the call's own arguments (unpacked); the
+/// method name comes from [`Vm::magic_call_name`].
 fn forward_call(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let Some(this) = a.this.clone() else {
         return Ok(Value::Null);
     };
-    let name = match a.at(0) {
-        Value::Str(s) => Some(s),
-        _ => None,
-    };
-    let call_args: Vec<Value> = match a.at(1) {
-        Value::Array(arr) => arr.values().map(Value::deref).collect(),
-        _ => Vec::new(),
-    };
+    let name = vm.magic_call_name().or_else(|| pending_method_name(vm));
+    let call_args: Vec<Value> = a.values.iter().map(Value::deref).collect();
     let target = {
         let mut host = VmHost::new(vm);
         php_spl::handlers::method_target(&mut host, &this)
