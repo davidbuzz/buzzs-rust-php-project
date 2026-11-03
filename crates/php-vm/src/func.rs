@@ -49,6 +49,14 @@ pub mod flags {
     pub const FAKE_CLOSURE: u32 = 1 << 17;
     /// `#[\NoDiscard]`
     pub const NODISCARD: u32 = 1 << 18;
+    /// `public(set)`
+    pub const SET_PUBLIC: u32 = 1 << 19;
+    /// `protected(set)`
+    pub const SET_PROTECTED: u32 = 1 << 20;
+    /// `private(set)`
+    pub const SET_PRIVATE: u32 = 1 << 21;
+    /// Set-visibility mask.
+    pub const SET_MASK: u32 = SET_PUBLIC | SET_PROTECTED | SET_PRIVATE;
 }
 
 /// A closure `use` binding.

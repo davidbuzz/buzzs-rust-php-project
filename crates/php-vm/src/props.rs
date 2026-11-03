@@ -156,7 +156,8 @@ impl Vm {
                 if let Some(v) = v {
                     return Ok(v.deref());
                 }
-                if self.has_magic(o, name, G_GET) {
+                let was_unset = object::data(o).readonly_init.borrow().get(pi.slot as usize).copied().unwrap_or(false);
+                if (pi.ty.is_none() || was_unset) && self.has_magic(o, name, G_GET) {
                     return self.magic_read(o, name, mode);
                 }
                 if pi.ty.is_some() {
@@ -219,35 +220,72 @@ impl Vm {
         Ok(self.call_magic_get(o, name)?.deref())
     }
 
-    fn check_readonly_write(&mut self, o: &Obj, pi: &PropInfo, initialized: bool) -> VmResult<()> {
-        if pi.flags & flags::READONLY == 0 {
+    /// `zend_asymmetric_property_has_set_access`.
+    pub(crate) fn has_set_access(&self, pi: &PropInfo) -> bool {
+        let scope = self.scope();
+        let Some(s) = scope else { return false };
+        if s.name.eq_ignore_ascii_case(pi.class.as_bytes()) {
+            return true;
+        }
+        if pi.flags & flags::SET_PROTECTED != 0 {
+            if let Some(decl) = self.class_by_name(&pi.class) {
+                let mut root = decl.clone();
+                while let Some(p) = root.parent.clone() {
+                    if p.prop_map.get(&pi.name).is_some_and(|x| x.visibility() != flags::PRIVATE) {
+                        root = p;
+                    } else {
+                        break;
+                    }
+                }
+                return s.is_subclass_of(&root) || root.is_subclass_of(&s);
+            }
+        }
+        false
+    }
+
+    fn asym_error(&mut self, cls_name: &ZStr, pi: &PropInfo, op: &str) -> crate::vm::Throw {
+        let vis = if pi.flags & flags::SET_PRIVATE != 0 {
+            "private(set)"
+        } else if pi.flags & flags::READONLY != 0 {
+            "protected(set) readonly"
+        } else {
+            "protected(set)"
+        };
+        let _ = cls_name;
+        let called = self
+            .frames
+            .iter()
+            .rev()
+            .find(|f| f.kind != crate::vm::FrameKind::Builtin)
+            .and_then(|f| f.called.clone().or_else(|| f.scope.clone()));
+        self.make_throw(
+            "Error",
+            &format!(
+                "Cannot {op} {vis} property {}::${} from {}",
+                object::display_name(&pi.class),
+                pi.name,
+                scope_display(called.as_ref())
+            ),
+        )
+    }
+
+    /// Readonly / set-visibility checks for writes (`zend_std_write_property`).
+    fn check_write_access(&mut self, o: &Obj, pi: &PropInfo, initialized: bool, op: &str) -> VmResult<()> {
+        if pi.flags & (flags::READONLY | flags::SET_MASK) == 0 {
             return Ok(());
         }
         let d = object::data(o);
-        if initialized && d.flags.get() & oflags::CLONING == 0 {
-            return Err(self.make_throw(
-                "Error",
-                &format!(
-                    "Cannot modify readonly property {}::${}",
-                    object::display_name(&object::class_of(o).name),
-                    pi.name
-                ),
-            ));
+        if pi.flags & flags::READONLY != 0 && initialized && d.flags.get() & oflags::CLONING == 0 {
+            let msg = if op == "unset" {
+                format!("Cannot unset readonly property {}::${}", object::display_name(&pi.class), pi.name)
+            } else {
+                format!("Cannot modify readonly property {}::${}", object::display_name(&pi.class), pi.name)
+            };
+            return Err(self.make_throw("Error", &msg));
         }
-        let scope = self.scope();
-        let in_scope = scope
-            .as_ref()
-            .is_some_and(|s| s.name.eq_ignore_ascii_case(pi.class.as_bytes()));
-        if !in_scope {
-            return Err(self.make_throw(
-                "Error",
-                &format!(
-                    "Cannot initialize readonly property {}::${} from {}",
-                    object::display_name(&object::class_of(o).name),
-                    pi.name,
-                    scope_display(scope.as_ref())
-                ),
-            ));
+        if pi.flags & flags::SET_MASK != 0 && !self.has_set_access(pi) {
+            let cn = object::class_of(o).name.clone();
+            return Err(self.asym_error(&cn, pi, op));
         }
         Ok(())
     }
@@ -299,11 +337,16 @@ impl Vm {
             PropLookup::Found(pi) => {
                 let idx = pi.slot as usize;
                 let cur_defined = object::data(o).slots.borrow()[idx].is_some();
-                if !cur_defined && pi.ty.is_none() && self.has_magic(o, name, G_SET) {
+                let magic_ok = !cur_defined
+                    && (pi.ty.is_none() || object::data(o).readonly_init.borrow().get(idx).copied().unwrap_or(false));
+                if magic_ok && self.has_magic(o, name, G_SET) {
                     return self.magic_write(o, name, v);
                 }
-                self.check_readonly_write(o, &pi, cur_defined)?;
+                self.check_write_access(o, &pi, cur_defined, "modify")?;
                 let v = self.coerce_prop(Some(o), &pi, v)?;
+                if let Some(f) = object::data(o).readonly_init.borrow_mut().get_mut(idx) {
+                    *f = false;
+                }
                 let old = {
                     let d = object::data(o);
                     let mut slots = d.slots.borrow_mut();
@@ -440,20 +483,26 @@ impl Vm {
                 if !defined && self.has_magic(o, name, G_GET) {
                     return self.magic_container(o, name);
                 }
-                if pi.flags & flags::READONLY != 0 {
+                if pi.flags & (flags::READONLY | flags::SET_MASK) != 0
+                    && (pi.flags & flags::READONLY != 0 || !self.has_set_access(&pi))
+                {
                     let is_obj = matches!(object::data(o).slots.borrow()[idx].as_ref().map(Value::deref), Some(Value::Object(_)));
                     if !is_obj {
-                        if defined {
-                            return Err(self.make_throw(
-                                "Error",
-                                &format!(
-                                    "Cannot modify readonly property {}::${}",
-                                    object::display_name(&cls.name),
-                                    pi.name
-                                ),
-                            ));
+                        if pi.flags & flags::READONLY != 0 {
+                            if defined || !self.has_set_access(&pi) {
+                                return Err(self.make_throw(
+                                    "Error",
+                                    &format!(
+                                        "Cannot indirectly modify readonly property {}::${}",
+                                        object::display_name(&pi.class),
+                                        pi.name
+                                    ),
+                                ));
+                            }
+                        } else {
+                            let cn = cls.name.clone();
+                            return Err(self.asym_error(&cn, &pi, "indirectly modify"));
                         }
-                        self.check_readonly_write(o, &pi, false)?;
                     }
                 }
                 if !defined {
@@ -547,32 +596,16 @@ impl Vm {
         match self.lookup_prop(&cls, name, scope.as_ref()) {
             PropLookup::Found(pi) => {
                 let idx = pi.slot as usize;
-                if pi.flags & flags::READONLY != 0 {
-                    let init = object::data(o).slots.borrow()[idx].is_some();
-                    let in_scope = scope
-                        .as_ref()
-                        .is_some_and(|s| s.name.eq_ignore_ascii_case(pi.class.as_bytes()));
-                    if init || !in_scope {
-                        return Err(self.make_throw(
-                            "Error",
-                            &format!(
-                                "Cannot unset readonly property {}::${}{}",
-                                object::display_name(&cls.name),
-                                pi.name,
-                                if !in_scope && !init {
-                                    format!(" from {}", scope_display(scope.as_ref()))
-                                } else {
-                                    String::new()
-                                }
-                            ),
-                        ));
-                    }
-                }
+                let init = object::data(o).slots.borrow()[idx].is_some();
+                self.check_write_access(o, &pi, init, "unset")?;
                 let defined = object::data(o).slots.borrow()[idx].is_some();
                 if !defined && self.has_magic(o, name, G_UNSET) {
                     return self.magic_unset(o, name);
                 }
                 let old = object::data(o).slots.borrow_mut()[idx].take();
+                if let Some(f) = object::data(o).readonly_init.borrow_mut().get_mut(idx) {
+                    *f = true;
+                }
                 drop(old);
                 Ok(())
             }

@@ -42,6 +42,15 @@ fn modifiers_to_flags(m: ast::Modifiers) -> u32 {
     if m.contains(ast::Modifiers::READONLY) {
         f |= flags::READONLY;
     }
+    if m.contains(ast::Modifiers::PUBLIC_SET) {
+        f |= flags::SET_PUBLIC;
+    }
+    if m.contains(ast::Modifiers::PROTECTED_SET) {
+        f |= flags::SET_PROTECTED;
+    }
+    if m.contains(ast::Modifiers::PRIVATE_SET) {
+        f |= flags::SET_PRIVATE;
+    }
     if f & flags::VISIBILITY == 0 {
         f |= flags::PUBLIC;
     }
@@ -1011,6 +1020,7 @@ impl Compiler {
                                 }
                             }
                         };
+                        let fl = normalize_set_visibility(self, fl, ty.is_some(), &cname, &p.name.as_str_lossy(), p.span.line)?;
                         props.push(PropDecl {
                             name: ZStr::from(p.name.name.as_slice()),
                             default,
@@ -1180,6 +1190,7 @@ impl Compiler {
                                 );
                             }
                             let attrs = self.attributes(&p.attributes)?;
+                            let pfl = normalize_set_visibility(self, pfl, ty.is_some(), &cname, &p.name.as_str_lossy(), p.span.line)?;
                             props.push(PropDecl {
                                 name: ZStr::from(p.name.name.as_slice()),
                                 default: if ty.is_none() {
@@ -1333,6 +1344,45 @@ impl Compiler {
         }
         Ok((consts, props, methods, traits, rules, cases))
     }
+}
+
+/// `zend_declare_typed_property` set-visibility normalization.
+fn normalize_set_visibility(
+    c: &Compiler,
+    fl: u32,
+    has_type: bool,
+    cname: &str,
+    pname: &str,
+    line: u32,
+) -> CResult<u32> {
+    let mut fl = fl;
+    if fl & flags::PUBLIC != 0 && fl & flags::READONLY != 0 && fl & flags::SET_MASK == 0 {
+        fl |= flags::SET_PROTECTED;
+    } else if fl & flags::SET_MASK != 0 {
+        if !has_type {
+            return c.err(
+                format!("Property with asymmetric visibility {cname}::${pname} must have type"),
+                line,
+            );
+        }
+        let rank = |v: u32| if v & (flags::PUBLIC | flags::SET_PUBLIC) != 0 { 0 } else if v & (flags::PROTECTED | flags::SET_PROTECTED) != 0 { 1 } else { 2 };
+        if rank(fl & flags::VISIBILITY) > rank(fl & flags::SET_MASK) {
+            return c.err(
+                format!("Visibility of property {cname}::${pname} must not be weaker than set visibility"),
+                line,
+            );
+        }
+        if (fl & flags::PUBLIC != 0 && fl & flags::SET_PUBLIC != 0)
+            || (fl & flags::PROTECTED != 0 && fl & flags::SET_PROTECTED != 0)
+            || (fl & flags::PRIVATE != 0 && fl & flags::SET_PRIVATE != 0)
+        {
+            fl &= !flags::SET_MASK;
+        }
+        if fl & flags::SET_PRIVATE != 0 {
+            fl |= flags::FINAL;
+        }
+    }
+    Ok(fl)
 }
 
 enum BodyKind<'a> {
