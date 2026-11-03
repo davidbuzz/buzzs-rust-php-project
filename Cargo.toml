@@ -13,6 +13,7 @@ members = [
     "crates/php-date",
     "crates/php-pcre",
     "crates/php-stdstr",
+    "crates/php-streams",
 ]
 
 [workspace.package]
