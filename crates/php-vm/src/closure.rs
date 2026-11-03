@@ -5,7 +5,7 @@ use crate::builtins::classbuilder::ClassBuilder;
 use crate::class::{cflags, Class, InternalKind};
 use crate::func::{flags, Args, Builtin, Func, UserFunction};
 use crate::object;
-use crate::opcode::{Op, ParamInfo, PlaceBase};
+use crate::opcode::{Op, Operand, ParamInfo, PlaceBase};
 use crate::vm::{Frame, FrameKind, PendingCall, Vm, VmResult};
 use php_runtime::{ArrayKey, HashTable, Obj, PhpRef, Value, ZArray, ZStr};
 use std::cell::RefCell;
@@ -163,15 +163,13 @@ impl Vm {
                 }
             }
         }
-        if !self.is_callable_value(v) {
-            let err = self.callable_error(v);
-            return Err(self.make_throw(
+        match self.zend_is_callable(v, false)? {
+            Ok(call) => Ok(self.fake_closure(call)),
+            Err(err) => Err(self.make_throw(
                 "TypeError",
                 &format!("Failed to create closure from callable: {err}"),
-            ));
+            )),
         }
-        let call = self.resolve_callable_for_call(v)?;
-        Ok(self.fake_closure(call))
     }
 
     /// The closure data of a `Closure` object.
@@ -199,7 +197,7 @@ impl Vm {
             return None;
         }
         let d = self.closure_data(o)?;
-        let params: Vec<ParamInfo> = d
+        let mut params: Vec<ParamInfo> = d
             .func
             .params()
             .iter()
@@ -209,6 +207,20 @@ impl Vm {
                 ..p.clone()
             })
             .collect();
+        if !d.func.is_variadic() {
+            params.push(ParamInfo {
+                name: ZStr::from("args"),
+                by_ref: false,
+                variadic: true,
+                ty: None,
+                has_default: true,
+                default_text: None,
+                promote: 0,
+                sensitive: false,
+                default_expr: None,
+                attributes: Vec::new(),
+            });
+        }
         let tramp = Builtin {
             name: ZStr::from("__invoke"),
             defaults: vec![None; params.len()],
@@ -608,11 +620,11 @@ fn closure_debug_table(d: &ClosureData) -> HashTable {
             let store = if d.fake { None } else { Some(d.statics.borrow()) };
             let fstore = u.statics.borrow();
             let slots: &Vec<Option<PhpRef>> = store.as_deref().unwrap_or(&fstore);
-            for (idx, name) in names {
-                let v = match slots.get(idx as usize).cloned().flatten() {
+            for (idx, name, init) in names {
+                let v = match slots.get(idx as usize).and_then(Option::as_ref) {
                     Some(r) if r.refcount() == 1 => r.get(),
-                    Some(r) => Value::Reference(r),
-                    None => Value::Null,
+                    Some(r) => Value::Reference(r.clone()),
+                    None => init,
                 };
                 st.insert(ArrayKey::Str(name), v);
             }
@@ -640,18 +652,35 @@ fn closure_debug_table(d: &ClosureData) -> HashTable {
     t
 }
 
-/// `static $x` declarations of a function: (slot, name) in slot order.
-fn static_var_names(u: &UserFunction) -> Vec<(u32, ZStr)> {
-    let mut out: Vec<(u32, ZStr)> = Vec::new();
+/// `static $x` declarations of a function: (slot, name, value before the
+/// declaration runs) in slot order. Literal initializers are known at
+/// compile time; others start as `null`.
+fn static_var_names(u: &UserFunction) -> Vec<(u32, ZStr, Value)> {
+    let mut out: Vec<(u32, ZStr, Value)> = Vec::new();
     for op in &u.code.ops {
-        if let Op::BindStatic { cv, idx, .. } | Op::InitStatic { cv, idx, .. } = op {
-            if !out.iter().any(|(i, _)| i == idx) {
-                let n = u.code.cv_names.get(*cv as usize).cloned().unwrap_or_default();
-                out.push((*idx, n));
+        let (cv, idx, init) = match op {
+            Op::BindStatic { cv, idx, .. } => (cv, idx, None),
+            Op::InitStatic { cv, idx, val } => (
+                cv,
+                idx,
+                match val {
+                    Operand::Lit(n) => u.code.literals.get(*n as usize).cloned(),
+                    _ => None,
+                },
+            ),
+            _ => continue,
+        };
+        let name = u.code.cv_names.get(*cv as usize).cloned().unwrap_or_default();
+        match out.iter_mut().find(|(i, _, _)| i == idx) {
+            Some(e) => {
+                if let Some(v) = init {
+                    e.2 = v;
+                }
             }
+            None => out.push((*idx, name, init.unwrap_or_default())),
         }
     }
-    out.sort_by_key(|(i, _)| *i);
+    out.sort_by_key(|(i, _, _)| *i);
     out
 }
 

@@ -8,6 +8,8 @@ use php_runtime::{ArrayKey, Obj, Value, ZArray, ZStr};
 use std::cell::RefCell;
 use std::rc::Rc;
 
+mod callable;
+
 thread_local! {
     /// Backed enums whose case table is being built (guards against
     /// re-entrance from case value expressions).
@@ -231,18 +233,34 @@ impl Vm {
         self.closure_data(o).is_some()
     }
 
-    /// Comparison of internal objects (`None`: default).
+    /// Comparison of internal objects (`None`: default). Closures compare
+    /// equal only when both are fake closures of the same function, scope,
+    /// called scope and `$this` (`zend_closure_compare`).
     pub(crate) fn internal_compare(&mut self, a: &Obj, b: &Obj) -> VmResult<Option<i32>> {
-        if let (Some(x), Some(y)) = (self.closure_data(a), self.closure_data(b)) {
-            let same = crate::func::Func::ptr_eq(&x.func, &y.func)
-                && match (&x.this, &y.this) {
-                    (Some(p), Some(q)) => Obj::ptr_eq(p, q),
-                    (None, None) => true,
-                    _ => false,
-                };
-            return Ok(Some(i32::from(!same)));
-        }
-        Ok(None)
+        let (Some(x), Some(y)) = (self.closure_data(a), self.closure_data(b)) else {
+            return Ok(None);
+        };
+        let same_class = |p: Option<&Rc<Class>>, q: Option<&Rc<Class>>| match (p, q) {
+            (Some(p), Some(q)) => Rc::ptr_eq(p, q),
+            (None, None) => true,
+            _ => false,
+        };
+        let same = x.fake
+            && y.fake
+            && match (&x.this, &y.this) {
+                (Some(p), Some(q)) => Obj::ptr_eq(p, q),
+                (None, None) => true,
+                _ => false,
+            }
+            && same_class(x.called.as_ref(), y.called.as_ref())
+            && same_class(x.scope.as_ref(), y.scope.as_ref())
+            && matches!(
+                (&x.func, &y.func),
+                (crate::func::Func::User(_), crate::func::Func::User(_))
+                    | (crate::func::Func::Builtin(_), crate::func::Func::Builtin(_))
+            )
+            && crate::closure::closure_callable_name(&x) == crate::closure::closure_callable_name(&y);
+        Ok(Some(i32::from(!same)))
     }
 
     /// Copies internal state when cloning.
@@ -253,85 +271,37 @@ impl Vm {
         Ok(())
     }
 
-    /// `zend_is_callable`.
+    /// `zend_is_callable` (deprecations suppressed, exceptions discarded).
     pub(crate) fn is_callable_value(&mut self, v: &Value) -> bool {
-        match v {
-            Value::Str(s) => {
-                if let Some(p) = crate::call::find_double_colon(s.as_bytes()) {
-                    let cn = ZStr::from(&s.as_bytes()[..p]);
-                    let m = &s.as_bytes()[p + 2..];
-                    return match self.lookup_class(&cn) {
-                        Ok(Some(c)) => c.find_method(m).is_some_and(|mm| {
-                            let scope = self.scope();
-                            self.can_access_method(mm, scope.as_ref()) && mm.is_static()
-                        }) || c.magic.call_static.is_some(),
-                        _ => false,
-                    };
-                }
-                let n = s.as_bytes().strip_prefix(b"\\").unwrap_or(s.as_bytes());
-                self.functions.contains_key(n.to_ascii_lowercase().as_slice())
-            }
-            Value::Array(a) => {
-                if a.len() != 2 {
-                    return false;
-                }
-                let (Some(t), Some(m)) = (a.get(&ArrayKey::Int(0)), a.get(&ArrayKey::Int(1))) else {
-                    return false;
-                };
-                let Value::Str(m) = m.deref() else { return false };
-                let cls = match t.deref() {
-                    Value::Object(o) => object::class_of(&o).clone(),
-                    Value::Str(cn) => match self.lookup_class(&cn) {
-                        Ok(Some(c)) => c,
-                        _ => return false,
-                    },
-                    _ => return false,
-                };
-                let mname = match crate::call::find_double_colon(m.as_bytes()) {
-                    Some(p) => &m.as_bytes()[p + 2..],
-                    None => m.as_bytes(),
-                };
-                if let Some(mm) = cls.find_method(mname).cloned() {
-                    let scope = self.scope();
-                    if self.can_access_method(&mm, scope.as_ref()) {
-                        return true;
-                    }
-                }
-                let is_obj = matches!(t.deref(), Value::Object(_));
-                (is_obj && cls.magic.call.is_some()) || cls.magic.call_static.is_some()
-            }
-            Value::Object(o) => self.closure_data(o).is_some() || object::class_of(o).magic.invoke.is_some(),
-            Value::Reference(r) => {
-                let inner = r.get();
-                self.is_callable_value(&inner)
-            }
-            _ => false,
-        }
+        matches!(self.zend_is_callable(v, true), Ok(Ok(_)))
     }
 
-    /// The callable name (`is_callable($v, false, $name)`).
+    /// The callable name (`zend_get_callable_name_ex`).
     pub(crate) fn callable_name(&mut self, v: &Value) -> String {
         match v {
             Value::Str(s) => s.to_string_lossy(),
-            Value::Array(a) => {
-                let t = a.get(&ArrayKey::Int(0)).map(Value::deref);
-                let m = a.get(&ArrayKey::Int(1)).map(Value::deref);
-                match (t, m) {
-                    (Some(Value::Object(o)), Some(Value::Str(m))) => {
+            Value::Array(arr) => {
+                let target = arr.get(&ArrayKey::Int(0)).map(Value::deref);
+                let method = arr.get(&ArrayKey::Int(1)).map(Value::deref);
+                match (arr.len(), target, method) {
+                    (2, Some(Value::Object(o)), Some(Value::Str(m))) => {
                         format!("{}::{}", object::class_of(&o).name, m.to_string_lossy())
                     }
-                    (Some(Value::Str(c)), Some(Value::Str(m))) => {
+                    (2, Some(Value::Str(c)), Some(Value::Str(m))) => {
                         format!("{}::{}", c.to_string_lossy(), m.to_string_lossy())
                     }
                     _ => "Array".to_string(),
                 }
             }
-            Value::Object(o) => {
-                if self.closure_data(o).is_some() {
-                    "Closure::__invoke".to_string()
-                } else {
-                    format!("{}::__invoke", object::class_of(o).name)
-                }
+            Value::Object(o) => match object::internal::<crate::closure::ClosureData, _>(o, |d| {
+                crate::closure::closure_callable_name(d)
+            }) {
+                Some(n) => n,
+                None => format!("{}::__invoke", object::class_of(o).name),
+            },
+            Value::Reference(r) => {
+                let inner = r.get();
+                self.callable_name(&inner)
             }
             other => match other.to_zstr(self) {
                 Ok(s) => s.to_string_lossy(),
@@ -342,57 +312,8 @@ impl Vm {
 
     /// The reason a value is not callable (for "must be a valid callback").
     pub(crate) fn callable_error(&mut self, v: &Value) -> String {
-        match v {
-            Value::Str(s) => {
-                if let Some(p) = crate::call::find_double_colon(s.as_bytes()) {
-                    let cn = String::from_utf8_lossy(&s.as_bytes()[..p]).into_owned();
-                    let m = String::from_utf8_lossy(&s.as_bytes()[p + 2..]).into_owned();
-                    return match self.lookup_class(&ZStr::from(cn.as_str())) {
-                        Ok(Some(c)) => format!("class {} does not have a method \"{m}\"", c.name),
-                        _ => format!("class \"{cn}\" not found"),
-                    };
-                }
-                format!("function \"{}\" not found or invalid function name", s.to_string_lossy())
-            }
-            Value::Array(a) => {
-                if a.len() != 2 {
-                    return "array callback must have exactly two members".to_string();
-                }
-                let t = a.get(&ArrayKey::Int(0)).map(Value::deref);
-                let m = a.get(&ArrayKey::Int(1)).map(Value::deref);
-                match (t, m) {
-                    (Some(Value::Object(o)), Some(Value::Str(m))) => {
-                        let c = object::class_of(&o).clone();
-                        match c.find_method(m.as_bytes()) {
-                            Some(mm) => format!(
-                                "cannot access {} method {}::{}()",
-                                if mm.visibility() == crate::func::flags::PRIVATE { "private" } else { "protected" },
-                                c.name,
-                                mm.name
-                            ),
-                            None => format!("class {} does not have a method \"{}\"", c.name, m.to_string_lossy()),
-                        }
-                    }
-                    (Some(Value::Str(cn)), Some(Value::Str(m))) => match self.lookup_class(&cn) {
-                        Ok(Some(c)) => match c.find_method(m.as_bytes()) {
-                            Some(mm) if !mm.is_static() => format!(
-                                "non-static method {}::{}() cannot be called statically",
-                                c.name, mm.name
-                            ),
-                            Some(mm) => format!(
-                                "cannot access {} method {}::{}()",
-                                if mm.visibility() == crate::func::flags::PRIVATE { "private" } else { "protected" },
-                                c.name,
-                                mm.name
-                            ),
-                            None => format!("class {} does not have a method \"{}\"", c.name, m.to_string_lossy()),
-                        },
-                        _ => format!("class \"{}\" not found", cn.to_string_lossy()),
-                    },
-                    _ => "first array member is not a valid class name or object".to_string(),
-                }
-            }
-            Value::Object(_) => "no array or string given".to_string(),
+        match self.zend_is_callable(v, true) {
+            Ok(Err(e)) => e,
             _ => "no array or string given".to_string(),
         }
     }
