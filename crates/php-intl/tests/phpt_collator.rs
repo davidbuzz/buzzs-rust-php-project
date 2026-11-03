@@ -1,0 +1,76 @@
+//! Ports of `ext/intl/tests/collator_sort_conversion_error*.phpt`
+//! (php-src master).
+
+use php_intl::collator::{sort_flags, Collator, SortValue};
+use php_intl::error::UErrorCode;
+
+fn coll() -> Collator {
+    Collator::new("en_US").expect("collator").0
+}
+
+const BAD: SortValue<'static> = SortValue::Object {
+    as_string: Some(b"\xFF"),
+};
+
+#[test]
+fn sort_string_conversion_error() {
+    let c = coll();
+    let e = c
+        .sort_order(
+            &[SortValue::Str(b"b"), BAD, SortValue::Str(b"a")],
+            sort_flags::STRING,
+        )
+        .unwrap_err();
+    assert_eq!(e.intl_code(), UErrorCode::INVALID_CHAR_FOUND);
+    assert_eq!(
+        e.intl_message(),
+        Some("Error converting string from UTF-8 to UTF-16")
+    );
+}
+
+#[test]
+fn sort_regular_conversion_error() {
+    let c = coll();
+    for values in [
+        vec![BAD, SortValue::Int(1)],
+        vec![SortValue::Str(b"a"), BAD],
+    ] {
+        let e = c.sort_order(&values, sort_flags::REGULAR).unwrap_err();
+        assert_eq!(e.intl_code(), UErrorCode::INVALID_CHAR_FOUND);
+        assert_eq!(
+            e.intl_message(),
+            Some("Error converting object string from UTF-8 to UTF-16")
+        );
+    }
+    let order = c
+        .sort_order(
+            &[SortValue::Str(b"10"), SortValue::Str(b"9")],
+            sort_flags::REGULAR,
+        )
+        .expect("sort");
+    assert_eq!(order, [1, 0]);
+    let order = c
+        .sort_order(
+            &[SortValue::Str(b"b"), SortValue::Str(b"9")],
+            sort_flags::REGULAR,
+        )
+        .expect("sort");
+    assert_eq!(order, [1, 0]);
+}
+
+#[test]
+fn good_objects_sort_as_strings() {
+    let c = coll();
+    let order = c
+        .sort_order(
+            &[
+                SortValue::Str(b"b"),
+                SortValue::Object {
+                    as_string: Some(b"a"),
+                },
+            ],
+            sort_flags::STRING,
+        )
+        .expect("sort");
+    assert_eq!(order, [1, 0]);
+}

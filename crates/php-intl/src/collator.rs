@@ -56,6 +56,9 @@ enum Op {
     /// UTF-16 string (and its UTF-8 original).
     Str(Vec<u16>, Vec<u8>),
     Other,
+    /// An object whose `__toString()` result is not valid UTF-8: comparing
+    /// it fails (lazily, as php-src converts objects in the comparator).
+    BadObject(UErrorCode),
 }
 
 /// `collator_is_numeric()` (no errors allowed) on a UTF-16 string.
@@ -229,17 +232,25 @@ impl Collator {
         Ok(self.coll.sort_key(&u))
     }
 
-    fn convert(v: &SortValue<'_>) -> Result<Op> {
+    /// Converts an element up front (`collator_convert_hash_from_utf8_to_utf16`
+    /// for strings; objects are converted as the comparator would).
+    fn convert(v: &SortValue<'_>, flags: i64) -> Result<Op> {
         Ok(match v {
             SortValue::Null => Op::Null,
             SortValue::Bool(b) => Op::Bool(*b),
             SortValue::Int(i) => Op::Int(*i),
             SortValue::Float(f) => Op::Float(*f),
-            SortValue::Str(s) | SortValue::Object { as_string: Some(s) } => Op::Str(
+            SortValue::Str(s) => Op::Str(
                 ustr::to_u16(s)
                     .map_err(|c| Error::intl(c, "Error converting hash from UTF-8 to UTF-16"))?,
                 s.to_vec(),
             ),
+            // numeric_compare_function(): zval_get_double(object) is 1.0
+            SortValue::Object { .. } if flags == sort_flags::NUMERIC => Op::Float(1.0),
+            SortValue::Object { as_string: Some(s) } => match ustr::to_u16(s) {
+                Ok(u) => Op::Str(u, s.to_vec()),
+                Err(c) => Op::BadObject(c),
+            },
             SortValue::Object { as_string: None } | SortValue::Array => Op::Other,
         })
     }
@@ -248,7 +259,7 @@ impl Collator {
         let s = |o: &Op| -> Vec<u16> {
             match o {
                 Op::Str(u, _) => u.clone(),
-                Op::Null | Op::Bool(false) | Op::Other => Vec::new(),
+                Op::Null | Op::Bool(false) | Op::Other | Op::BadObject(_) => Vec::new(),
                 Op::Bool(true) => vec![u16::from(b'1')],
                 Op::Int(i) => ustr::str_u16(&i.to_string()),
                 Op::Float(f) => ustr::str_u16(&common::php_float_to_string(*f)),
@@ -260,7 +271,7 @@ impl Collator {
     fn numeric_of(o: &Op) -> f64 {
         #[allow(clippy::cast_precision_loss)]
         match o {
-            Op::Null | Op::Bool(false) | Op::Other => 0.0,
+            Op::Null | Op::Bool(false) | Op::Other | Op::BadObject(_) => 0.0,
             Op::Bool(true) => 1.0,
             Op::Int(i) => *i as f64,
             Op::Float(f) => *f,
@@ -299,22 +310,62 @@ impl Collator {
 
     /// `sort()`/`asort()`: the sorted order of `values` as a permutation
     /// of indexes (the VM rebuilds the array, renumbering for `sort()`).
+    ///
+    /// An object whose string form is not valid UTF-8 makes the first
+    /// comparison involving it fail; every later comparison then returns
+    /// 0 and the sort reports `"Error converting string from UTF-8 to
+    /// UTF-16"` (`SORT_STRING`) or `"Error converting object string from
+    /// UTF-8 to UTF-16"` (`SORT_REGULAR`); the array stays unchanged.
     pub fn sort_order(&self, values: &[SortValue<'_>], flags: i64) -> Result<Vec<usize>> {
-        let ops: Vec<Op> = values.iter().map(Self::convert).collect::<Result<_>>()?;
+        let ops: Vec<Op> = values
+            .iter()
+            .map(|v| Self::convert(v, flags))
+            .collect::<Result<_>>()?;
         let mut idx: Vec<usize> = (0..ops.len()).collect();
         let ord = |o: Ordering| o as i32;
+        let mut failure: Option<UErrorCode> = None;
+        let mut guard = |a: &Op, b: &Op| -> bool {
+            if failure.is_some() {
+                return false;
+            }
+            for o in [a, b] {
+                if let Op::BadObject(c) = o {
+                    failure = Some(*c);
+                    return false;
+                }
+            }
+            true
+        };
         match flags {
             sort_flags::NUMERIC => common::zend_sort(&mut idx, &mut |&x, &y| {
                 ord(Self::numeric_of(&ops[x])
                     .partial_cmp(&Self::numeric_of(&ops[y]))
                     .unwrap_or(Ordering::Equal))
             }),
-            sort_flags::STRING => {
-                common::zend_sort(&mut idx, &mut |&x, &y| ord(self.icu_cmp(&ops[x], &ops[y])));
-            }
-            _ => common::zend_sort(&mut idx, &mut |&x, &y| {
-                ord(self.regular_cmp(&ops[x], &ops[y]))
+            sort_flags::STRING => common::zend_sort(&mut idx, &mut |&x, &y| {
+                if guard(&ops[x], &ops[y]) {
+                    ord(self.icu_cmp(&ops[x], &ops[y]))
+                } else {
+                    0
+                }
             }),
+            _ => common::zend_sort(&mut idx, &mut |&x, &y| {
+                if guard(&ops[x], &ops[y]) {
+                    ord(self.regular_cmp(&ops[x], &ops[y]))
+                } else {
+                    0
+                }
+            }),
+        }
+        if let Some(c) = failure {
+            return Err(Error::intl(
+                c,
+                if flags == sort_flags::STRING {
+                    "Error converting string from UTF-8 to UTF-16"
+                } else {
+                    "Error converting object string from UTF-8 to UTF-16"
+                },
+            ));
         }
         Ok(idx)
     }
@@ -355,7 +406,7 @@ fn i32_of(v: i64) -> i32 {
 fn php_compare(a: &Op, b: &Op) -> Ordering {
     let truthy = |o: &Op| match o {
         Op::Null | Op::Bool(false) => false,
-        Op::Bool(true) | Op::Other => true,
+        Op::Bool(true) | Op::Other | Op::BadObject(_) => true,
         Op::Int(i) => *i != 0,
         Op::Float(f) => *f != 0.0,
         Op::Str(_, raw) => !(raw.is_empty() || raw.as_slice() == b"0"),
@@ -417,9 +468,9 @@ fn php_compare(a: &Op, b: &Op) -> Ordering {
         }
         (Op::Str(_, s), Op::Int(_) | Op::Float(_)) => php_num_vs_string(&num_str(b), s).reverse(),
         (Op::Str(_, x), Op::Str(_, y)) => x.cmp(y),
-        (Op::Other, Op::Other) => Ordering::Equal,
-        (Op::Other, _) => Ordering::Greater,
-        (_, Op::Other) => Ordering::Less,
+        (Op::Other | Op::BadObject(_), Op::Other | Op::BadObject(_)) => Ordering::Equal,
+        (Op::Other | Op::BadObject(_), _) => Ordering::Greater,
+        (_, Op::Other | Op::BadObject(_)) => Ordering::Less,
     }
 }
 
