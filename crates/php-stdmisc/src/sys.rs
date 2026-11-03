@@ -989,3 +989,20 @@ pub fn ftok(path: &[u8], proj: u8) -> i64 {
     // SAFETY: valid C string.
     i64::from(unsafe { libc::ftok(c.as_ptr(), i32::from(proj)) })
 }
+
+/// `strsignal(sig)`.
+#[must_use]
+pub fn strsignal(sig: i32) -> String {
+    // SAFETY: strsignal returns a pointer to a static or thread-local
+    // string, copied immediately.
+    from_cstr(unsafe { libc::strsignal(sig) }).map_or_else(
+        || format!("Unknown signal {sig}"),
+        |b| String::from_utf8_lossy(&b).into_owned(),
+    )
+}
+
+/// `time(NULL)`.
+#[must_use]
+pub fn now() -> i64 {
+    gettimeofday().0
+}

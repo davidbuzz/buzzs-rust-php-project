@@ -23,6 +23,7 @@ pub mod getopt;
 pub mod highlight;
 pub mod info;
 pub mod locale;
+pub mod mail;
 pub mod net;
 pub mod process;
 pub mod query;
