@@ -8,6 +8,7 @@ function esc($v): string {
     if (is_int($v)) return 'i:' . $v;
     if (is_float($v)) return 'd:' . var_export($v, true);
     if (is_array($v)) return 'a:' . json_encode($v, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PRESERVE_ZERO_FRACTION | JSON_INVALID_UTF8_SUBSTITUTE);
+    if (!mb_check_encoding((string)$v, 'UTF-8')) return 'b:' . bin2hex((string)$v);
     return 's:' . strtr((string)$v, ["\\" => "\\\\", "\t" => "\\t", "\n" => "\\n", "\r" => "\\r"]);
 }
 function row(...$fields) {

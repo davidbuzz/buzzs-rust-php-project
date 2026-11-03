@@ -15,6 +15,8 @@ pub enum V {
     Str(String),
     /// JSON text of an array.
     Arr(String),
+    /// A non-UTF-8 string.
+    Bytes(Vec<u8>),
 }
 
 impl V {
@@ -22,6 +24,15 @@ impl V {
         match self {
             V::Str(s) => s,
             other => panic!("expected string, got {other:?}"),
+        }
+    }
+
+    /// The raw bytes of a string field (UTF-8 or not).
+    pub fn b(&self) -> &[u8] {
+        match self {
+            V::Str(s) => s.as_bytes(),
+            V::Bytes(b) => b,
+            other => panic!("expected bytes, got {other:?}"),
         }
     }
 
@@ -65,6 +76,13 @@ impl V {
             V::Float(f) => format!("d:{}", php_float(*f)),
             V::Str(s) => format!("s:{s}"),
             V::Arr(a) => format!("a:{a}"),
+            V::Bytes(b) => format!(
+                "b:{}",
+                b.iter().fold(String::new(), |mut acc, x| {
+                    let _ = std::fmt::Write::write_fmt(&mut acc, format_args!("{x:02x}"));
+                    acc
+                })
+            ),
         }
     }
 }
@@ -132,6 +150,12 @@ fn parse_field(f: &str) -> V {
         }),
         "s:" => V::Str(unescape(rest)),
         "a:" => V::Arr(rest.to_owned()),
+        "b:" => V::Bytes(
+            (0..rest.len())
+                .step_by(2)
+                .map(|i| u8::from_str_radix(&rest[i..i + 2], 16).expect("hex"))
+                .collect(),
+        ),
         _ => panic!("bad field {f:?}"),
     }
 }
@@ -225,6 +249,8 @@ pub fn json_str(s: &str) -> String {
             '\t' => out.push_str("\\t"),
             '\u{8}' => out.push_str("\\b"),
             '\u{c}' => out.push_str("\\f"),
+            '\u{2028}' => out.push_str("\\u2028"),
+            '\u{2029}' => out.push_str("\\u2029"),
             c if (c as u32) < 0x20 => {
                 let _ = std::fmt::Write::write_fmt(&mut out, format_args!("\\u{:04x}", c as u32));
             }

@@ -10,6 +10,7 @@ pub mod error;
 pub mod ffi;
 pub mod ustr;
 
+pub mod breakiterator;
 pub mod calendar;
 pub mod collator;
 pub mod common;

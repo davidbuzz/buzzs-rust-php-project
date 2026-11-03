@@ -73,6 +73,7 @@ opaque!(
     UConstrainedFieldPosition,
     UCharsetDetector,
     UNumberingSystem,
+    UText,
 );
 
 /// `UParseError`.
@@ -461,6 +462,7 @@ icu! {
     fn ubrk_clone(bi: *const UBreakIterator, status: *mut UErrorCode) -> *mut UBreakIterator;
     fn ubrk_close(bi: *mut UBreakIterator);
     fn ubrk_setText(bi: *mut UBreakIterator, text: *const UChar, textLength: i32, status: *mut UErrorCode);
+    fn ubrk_setUText(bi: *mut UBreakIterator, text: *mut UText, status: *mut UErrorCode);
     fn ubrk_current(bi: *const UBreakIterator) -> i32;
     fn ubrk_next(bi: *mut UBreakIterator) -> i32;
     fn ubrk_previous(bi: *mut UBreakIterator) -> i32;
@@ -474,6 +476,7 @@ icu! {
     fn ubrk_getRuleStatus(bi: *mut UBreakIterator) -> i32;
     fn ubrk_getRuleStatusVec(bi: *mut UBreakIterator, fillInVec: *mut i32, capacity: i32, status: *mut UErrorCode) -> i32;
     fn ubrk_getLocaleByType(bi: *const UBreakIterator, type_: i32, status: *mut UErrorCode) -> *const c_char;
+    fn ubrk_refreshUText(bi: *mut UBreakIterator, text: *mut UText, status: *mut UErrorCode);
     fn ubrk_getBinaryRules(bi: *mut UBreakIterator, binaryRules: *mut u8, rulesCapacity: i32, status: *mut UErrorCode) -> i32;
     fn utrans_openU(id: *const UChar, idLength: i32, dir: i32, rules: *const UChar, rulesLength: i32, parseError: *mut UParseError, pErrorCode: *mut UErrorCode) -> *mut UTransliterator;
     fn utrans_openInverse(trans: *const UTransliterator, status: *mut UErrorCode) -> *mut UTransliterator;
@@ -977,6 +980,30 @@ icu! {
     fn ufmt_getArrayLength(fmt: *const *mut c_void, status: *mut UErrorCode) -> i32;
     fn ufmt_getArrayItemByIndex(fmt: *mut *mut c_void, n: i32, status: *mut UErrorCode) -> *mut *mut c_void;
     fn ufmt_getDecNumChars(fmt: *mut *mut c_void, len: *mut i32, status: *mut UErrorCode) -> *const c_char;
+    fn utext_close(ut: *mut UText) -> *mut UText;
+    fn utext_openUTF8(ut: *mut UText, s: *const c_char, length: i64, status: *mut UErrorCode) -> *mut UText;
+    fn utext_openUChars(ut: *mut UText, s: *const UChar, length: i64, status: *mut UErrorCode) -> *mut UText;
+    fn utext_clone(dest: *mut UText, src: *const UText, deep: UBool, readOnly: UBool, status: *mut UErrorCode) -> *mut UText;
+    fn utext_equals(a: *const UText, b: *const UText) -> UBool;
+    fn utext_nativeLength(ut: *mut UText) -> i64;
+    fn utext_isLengthExpensive(ut: *const UText) -> UBool;
+    fn utext_char32At(ut: *mut UText, nativeIndex: i64) -> UChar32;
+    fn utext_current32(ut: *mut UText) -> UChar32;
+    fn utext_next32(ut: *mut UText) -> UChar32;
+    fn utext_previous32(ut: *mut UText) -> UChar32;
+    fn utext_next32From(ut: *mut UText, nativeIndex: i64) -> UChar32;
+    fn utext_previous32From(ut: *mut UText, nativeIndex: i64) -> UChar32;
+    fn utext_getNativeIndex(ut: *const UText) -> i64;
+    fn utext_setNativeIndex(ut: *mut UText, nativeIndex: i64);
+    fn utext_moveIndex32(ut: *mut UText, delta: i32) -> UBool;
+    fn utext_getPreviousNativeIndex(ut: *mut UText) -> i64;
+    fn utext_extract(ut: *mut UText, nativeStart: i64, nativeLimit: i64, dest: *mut UChar, destCapacity: i32, status: *mut UErrorCode) -> i32;
+    fn utext_isWritable(ut: *const UText) -> UBool;
+    fn utext_hasMetaData(ut: *const UText) -> UBool;
+    fn utext_replace(ut: *mut UText, nativeStart: i64, nativeLimit: i64, replacementText: *const UChar, replacementLength: i32, status: *mut UErrorCode) -> i32;
+    fn utext_copy(ut: *mut UText, nativeStart: i64, nativeLimit: i64, destIndex: i64, move_: UBool, status: *mut UErrorCode);
+    fn utext_freeze(ut: *mut UText);
+    fn utext_setup(ut: *mut UText, extraSpace: i32, status: *mut UErrorCode) -> *mut UText;
 }
 // DECLS-END
 

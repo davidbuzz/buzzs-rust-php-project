@@ -92,6 +92,16 @@ pub fn locale_keyword_value(locale: &str, keyword: &str) -> Option<String> {
         .filter(|v| !v.is_empty())
 }
 
+/// `icu::Locale(id).getName()` for a locale ID returned by ICU: the root
+/// locale is represented by the empty string.
+pub fn icu_locale_name(id: &str) -> String {
+    if id == "root" {
+        String::new()
+    } else {
+        id.to_owned()
+    }
+}
+
 /// The result of PHP's `is_numeric_string()`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Numeric {

@@ -15,10 +15,10 @@ OPAQUE = set('''UNumberFormat UDateFormat UCollator UEnumeration UCalendar UBrea
 UResourceBundle USpoofChecker USpoofCheckResult UConverter UDateTimePatternGenerator UListFormatter
 UFormattedList UIDNA UNormalizer2 UPluralRules UNumberFormatter UFormattedNumber UNumberRangeFormatter
 UFormattedNumberRange URelativeDateTimeFormatter UStringSearch USet UFieldPositionIterator
-ULocaleDisplayNames UFormattedValue UConstrainedFieldPosition UCharsetDetector UNumberingSystem'''.split())
+ULocaleDisplayNames UFormattedValue UConstrainedFieldPosition UCharsetDetector UNumberingSystem UText'''.split())
 STRUCTS = {'UParseError', 'UFieldPosition', 'UIDNAInfo', 'UTransPosition', 'UConverterFromUnicodeArgs',
            'UConverterToUnicodeArgs'}
-SKIP_TYPES = {'UText', 'UCharIterator', 'UCaseMap', 'UReplaceable', 'UReplaceableCallbacks',
+SKIP_TYPES = {'UCharIterator', 'UCaseMap', 'UReplaceable', 'UReplaceableCallbacks',
               'va_list', 'UDataInfo', 'UCollationElements', 'UBreakIterator*const',
               'UDateFormatOpener', 'UCPMap', 'UCPTrie', 'UMutableCPTrie', 'UTraceEntry',
               'UCharNameChoice_', 'UCollationResult_', 'ULocaleData', 'USerializedSet', 'UStringPrepProfile',
