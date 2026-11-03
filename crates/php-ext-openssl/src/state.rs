@@ -131,3 +131,15 @@ pub(crate) fn check_paths(vm: &mut Vm, a: &Args, indices: &[usize]) -> VmResult<
     }
     Ok(())
 }
+
+/// Runs `f` on the request state without raising its diagnostics (for
+/// internal conversions that cannot warn).
+pub(crate) fn with_lib<R>(f: impl FnOnce(&mut php_openssl::OpenSsl) -> R) -> R {
+    STATE.with(|s| {
+        let mut slot = s.borrow_mut();
+        let ssl = slot.get_or_insert_with(php_openssl::OpenSsl::new);
+        let r = f(ssl);
+        let _ = ssl.take_diagnostics();
+        r
+    })
+}

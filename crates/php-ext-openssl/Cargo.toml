@@ -11,6 +11,9 @@ php-vm = { path = "../php-vm" }
 php-runtime = { path = "../php-runtime" }
 php-openssl = { path = "../php-openssl" }
 php-support = { path = "../php-support" }
+php-streams = { path = "../php-streams" }
+php-ext-streams = { path = "../php-ext-streams" }
+libc = "0.2"
 # `Openssl\Session` wraps an `SSL_SESSION` (the library has no session API).
 openssl = "0.10"
 openssl-sys = "0.9"
