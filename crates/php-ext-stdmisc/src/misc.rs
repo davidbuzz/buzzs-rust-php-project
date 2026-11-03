@@ -113,6 +113,10 @@ fn error_log(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             .and_then(|v| i64::from_str_radix(String::from_utf8_lossy(&v).trim(), 8).ok())
             .unwrap_or(0o644),
     };
+    if ty == 3 && dest.as_ref().is_none_or(|d| d.is_empty()) {
+        // `php_stream_open_wrapper()` on an empty path.
+        return Err(vm.throw("ValueError", "Path must not be empty"));
+    }
     let mail_settings = mail_settings(vm);
     let script = script_info(vm);
     let mut target = VmLog {
@@ -357,10 +361,28 @@ fn phpinfo(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         php_vars: &php_vars,
         gpcse: &gpcse,
     };
-    let out = info::print_info(flag, &src, true, vm).vm(vm)?;
+    // `php-stdmisc` does not render the credits section: print everything
+    // up to the variables, then the credits, then the license.
+    let mut out = info::print_info(flag & !(info::INFO_CREDITS | info::INFO_LICENSE), &src, true, vm)
+        .vm(vm)?;
+    if flag & info::INFO_CREDITS != 0 {
+        let mut p = InfoPrinter::new(true);
+        p.hr();
+        out.extend_from_slice(&p.out);
+        out.extend_from_slice(&credits_text(CREDITS_ALL & !CREDITS_FULLPAGE));
+    }
+    if flag & info::INFO_LICENSE != 0 {
+        let lic = info::print_info(info::INFO_LICENSE, &src, true, vm).vm(vm)?;
+        out.extend_from_slice(lic.strip_prefix(b"phpinfo()\n".as_slice()).unwrap_or(&lic));
+    }
     vm.output(&out);
     Ok(Value::Bool(true))
 }
+
+/// `PHP_CREDITS_ALL`.
+const CREDITS_ALL: i64 = 0xFFFF_FFFF;
+/// `PHP_CREDITS_FULLPAGE`.
+const CREDITS_FULLPAGE: i64 = 32;
 
 /// `php_print_credits()` in text mode.
 fn credits_text(flag: i64) -> Vec<u8> {
@@ -426,7 +448,7 @@ fn credits_text(flag: i64) -> Vec<u8> {
 
 #[allow(clippy::unnecessary_wraps)] // native handler signature
 fn phpcredits(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let flag = if a.has(0) { a.int(0) } else { 0xFFFF_FFFF };
+    let flag = if a.has(0) { a.int(0) } else { CREDITS_ALL };
     vm.output(&credits_text(flag));
     Ok(Value::Bool(true))
 }

@@ -54,10 +54,33 @@ fn highlight_string(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     Ok(emit(vm, &html, ret))
 }
 
-/// Reads a script for highlighting/stripping like `zend_stream_open`
-/// (reporting "Failed to open stream" on failure).
-fn read_script(vm: &mut Vm, func: &str, path: &[u8]) -> VmResult<Option<Vec<u8>>> {
+/// Whether `path` names a stream wrapper URL (`scheme://...` or `data:`).
+fn is_url(path: &[u8]) -> bool {
+    path.starts_with(b"data:")
+        || path
+            .iter()
+            .position(|&c| c == b':')
+            .is_some_and(|i| i > 1 && path[i..].starts_with(b"://") && path[..i].iter().all(|c| c.is_ascii_alphanumeric() || matches!(c, b'+' | b'-' | b'.')))
+}
+
+/// Reads a script for highlighting/stripping like `zend_stream_open()`:
+/// plain files directly, URLs through the stream layer's
+/// `file_get_contents()` (when linked). Reports "Failed to open stream" on
+/// failure.
+fn read_script(vm: &mut Vm, path: &[u8]) -> VmResult<Option<Vec<u8>>> {
     use std::os::unix::ffi::OsStrExt;
+    if is_url(path) && vm.native_function("file_get_contents").is_some() {
+        let saved = vm.error_reporting;
+        vm.error_reporting = 0;
+        let r = vm.call_value(
+            &Value::from("file_get_contents"),
+            vec![Value::Str(ZStr::from(path))],
+        );
+        vm.error_reporting = saved;
+        if let Value::Str(s) = r? {
+            return Ok(Some(s.as_bytes().to_vec()));
+        }
+    }
     let p = std::ffi::OsStr::from_bytes(path);
     match std::fs::read(p) {
         Ok(s) => Ok(Some(s)),
@@ -65,16 +88,12 @@ fn read_script(vm: &mut Vm, func: &str, path: &[u8]) -> VmResult<Option<Vec<u8>>
             let reason = match e.kind() {
                 std::io::ErrorKind::NotFound => "No such file or directory".to_string(),
                 std::io::ErrorKind::PermissionDenied => "Permission denied".to_string(),
-                _ if std::fs::metadata(p).is_ok_and(|m| m.is_dir()) => "Is a directory".to_string(),
+                _ if std::fs::metadata(p).is_ok_and(|m| m.is_dir()) => {
+                    "Is a directory".to_string()
+                }
                 _ => e.to_string(),
             };
-            vm.raise(
-                2,
-                &format!(
-                    "{func}({}): Failed to open stream: {reason}",
-                    String::from_utf8_lossy(path)
-                ),
-            )?;
+            vm.php_warning(&format!("Failed to open stream: {reason}"))?;
             Ok(None)
         }
     }
@@ -83,11 +102,10 @@ fn read_script(vm: &mut Vm, func: &str, path: &[u8]) -> VmResult<Option<Vec<u8>>
 fn highlight_file(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let path = a.str(0);
     let ret = a.has(1) && a.bool(1);
-    let func = a.func_name();
     if path.as_bytes().contains(&0) {
         return Err(a.value_error(vm, 1, "must not contain any null bytes"));
     }
-    let Some(src) = read_script(vm, &func, path.as_bytes())? else {
+    let Some(src) = read_script(vm, path.as_bytes())? else {
         vm.php_warning(&format!(
             "Failed opening '{}' for highlighting",
             String::from_utf8_lossy(path.as_bytes())
@@ -103,7 +121,7 @@ fn php_strip_whitespace(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     if path.as_bytes().contains(&0) {
         return Err(a.value_error(vm, 1, "must not contain any null bytes"));
     }
-    let Some(src) = read_script(vm, "php_strip_whitespace", path.as_bytes())? else {
+    let Some(src) = read_script(vm, path.as_bytes())? else {
         return Ok(Value::from(""));
     };
     let (out, warnings) = highlight::strip_whitespace(&src, short_tags(vm));
@@ -168,9 +186,43 @@ fn parse_str(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     Ok(Value::Null)
 }
 
+/// ZPP of `setlocale()`'s `$rest` arguments (`?string`, path semantics,
+/// reported without a parameter name since they are variadic): objects are
+/// converted to strings so that the library sees plain values.
+fn setlocale_args(vm: &mut Vm, a: &Args) -> VmResult<Vec<Value>> {
+    let mut out = Vec::with_capacity(a.values.len().saturating_sub(1));
+    for (i, v) in a.values.iter().skip(1).map(Value::deref).enumerate() {
+        let n = i + 2;
+        if i == 0 {
+            out.push(v);
+            continue;
+        }
+        let v = match v {
+            Value::Array(_) => {
+                return Err(vm.throw(
+                    "TypeError",
+                    &format!("setlocale(): Argument #{n} must be of type ?string, array given"),
+                ))
+            }
+            Value::Object(_) => Value::Str(vm.value_to_string(&v)?),
+            other => other,
+        };
+        if let Value::Str(s) = &v {
+            if s.as_bytes().contains(&0) {
+                return Err(vm.throw(
+                    "ValueError",
+                    &format!("setlocale(): Argument #{n} must not contain any null bytes"),
+                ));
+            }
+        }
+        out.push(v);
+    }
+    Ok(out)
+}
+
 fn setlocale(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let cat = a.int(0);
-    let args: Vec<Value> = a.values.iter().skip(1).map(Value::deref).collect();
+    let args = setlocale_args(vm, a)?;
     LOCALE
         .with(|l| {
             let mut st = l.borrow().clone();

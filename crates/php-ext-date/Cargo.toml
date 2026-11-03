@@ -8,6 +8,8 @@ rust-version.workspace = true
 [dependencies]
 php-vm = { path = "../php-vm" }
 php-runtime = { path = "../php-runtime" }
+php-support = { path = "../php-support" }
+php-date = { path = "../php-date" }
 
 [lints]
 workspace = true

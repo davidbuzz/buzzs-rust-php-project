@@ -1,5 +1,6 @@
 [package]
 name = "php-ext-random"
+description = "ext/random binding for the phprust VM (engines, Randomizer, mt_rand & co)"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -8,6 +9,7 @@ rust-version.workspace = true
 [dependencies]
 php-vm = { path = "../php-vm" }
 php-runtime = { path = "../php-runtime" }
+php-random = { path = "../php-random" }
 
 [lints]
 workspace = true

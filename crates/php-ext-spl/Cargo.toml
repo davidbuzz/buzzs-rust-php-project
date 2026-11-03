@@ -1,5 +1,6 @@
 [package]
 name = "php-ext-spl"
+description = "ext/spl bindings: registers the php-spl classes, handlers and functions with the phprust VM"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -8,6 +9,9 @@ rust-version.workspace = true
 [dependencies]
 php-vm = { path = "../php-vm" }
 php-runtime = { path = "../php-runtime" }
+php-spl = { path = "../php-spl" }
+php-stdarr = { path = "../php-stdarr" }
+php-pcre = { path = "../php-pcre" }
 
 [lints]
 workspace = true

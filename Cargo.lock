@@ -372,6 +372,7 @@ name = "php-dom"
 version = "0.1.0"
 dependencies = [
  "cc",
+ "php-lexer",
  "php-libxml",
  "php-parser",
  "phpt-runner",
@@ -382,6 +383,22 @@ name = "php-exif"
 version = "0.1.0"
 dependencies = [
  "php-runtime",
+]
+
+[[package]]
+name = "php-ext-bcmath"
+version = "0.1.0"
+dependencies = [
+ "php-runtime",
+ "php-vm",
+]
+
+[[package]]
+name = "php-ext-calendar"
+version = "0.1.0"
+dependencies = [
+ "php-runtime",
+ "php-vm",
 ]
 
 [[package]]
@@ -404,7 +421,47 @@ dependencies = [
 ]
 
 [[package]]
+name = "php-ext-dom"
+version = "0.1.0"
+dependencies = [
+ "php-runtime",
+ "php-vm",
+]
+
+[[package]]
+name = "php-ext-exif"
+version = "0.1.0"
+dependencies = [
+ "php-runtime",
+ "php-vm",
+]
+
+[[package]]
+name = "php-ext-fileinfo"
+version = "0.1.0"
+dependencies = [
+ "php-runtime",
+ "php-vm",
+]
+
+[[package]]
 name = "php-ext-filter"
+version = "0.1.0"
+dependencies = [
+ "php-runtime",
+ "php-vm",
+]
+
+[[package]]
+name = "php-ext-gettext"
+version = "0.1.0"
+dependencies = [
+ "php-runtime",
+ "php-vm",
+]
+
+[[package]]
+name = "php-ext-gmp"
 version = "0.1.0"
 dependencies = [
  "php-runtime",
@@ -418,6 +475,22 @@ dependencies = [
  "php-hash",
  "php-runtime",
  "php-streams",
+ "php-vm",
+]
+
+[[package]]
+name = "php-ext-iconv"
+version = "0.1.0"
+dependencies = [
+ "php-runtime",
+ "php-vm",
+]
+
+[[package]]
+name = "php-ext-intl"
+version = "0.1.0"
+dependencies = [
+ "php-runtime",
  "php-vm",
 ]
 
@@ -443,6 +516,22 @@ name = "php-ext-mysqli"
 version = "0.1.0"
 
 [[package]]
+name = "php-ext-openssl"
+version = "0.1.0"
+dependencies = [
+ "php-runtime",
+ "php-vm",
+]
+
+[[package]]
+name = "php-ext-pcntl"
+version = "0.1.0"
+dependencies = [
+ "php-runtime",
+ "php-vm",
+]
+
+[[package]]
 name = "php-ext-pcre"
 version = "0.1.0"
 dependencies = [
@@ -453,7 +542,72 @@ dependencies = [
 ]
 
 [[package]]
+name = "php-ext-pdo"
+version = "0.1.0"
+dependencies = [
+ "php-runtime",
+ "php-vm",
+]
+
+[[package]]
+name = "php-ext-phar"
+version = "0.1.0"
+dependencies = [
+ "php-runtime",
+ "php-vm",
+]
+
+[[package]]
+name = "php-ext-posix"
+version = "0.1.0"
+dependencies = [
+ "php-runtime",
+ "php-vm",
+]
+
+[[package]]
 name = "php-ext-random"
+version = "0.1.0"
+dependencies = [
+ "php-random",
+ "php-runtime",
+ "php-vm",
+]
+
+[[package]]
+name = "php-ext-session"
+version = "0.1.0"
+dependencies = [
+ "php-runtime",
+ "php-vm",
+]
+
+[[package]]
+name = "php-ext-simplexml"
+version = "0.1.0"
+dependencies = [
+ "php-runtime",
+ "php-vm",
+]
+
+[[package]]
+name = "php-ext-soap"
+version = "0.1.0"
+dependencies = [
+ "php-runtime",
+ "php-vm",
+]
+
+[[package]]
+name = "php-ext-sockets"
+version = "0.1.0"
+dependencies = [
+ "php-runtime",
+ "php-vm",
+]
+
+[[package]]
+name = "php-ext-sodium"
 version = "0.1.0"
 dependencies = [
  "php-runtime",
@@ -511,6 +665,54 @@ dependencies = [
  "php-stdstr",
  "php-streams",
  "php-support",
+ "php-vm",
+]
+
+[[package]]
+name = "php-ext-sysv"
+version = "0.1.0"
+dependencies = [
+ "php-runtime",
+ "php-vm",
+]
+
+[[package]]
+name = "php-ext-uri"
+version = "0.1.0"
+dependencies = [
+ "php-runtime",
+ "php-vm",
+]
+
+[[package]]
+name = "php-ext-xml"
+version = "0.1.0"
+dependencies = [
+ "php-runtime",
+ "php-vm",
+]
+
+[[package]]
+name = "php-ext-xmlreader"
+version = "0.1.0"
+dependencies = [
+ "php-runtime",
+ "php-vm",
+]
+
+[[package]]
+name = "php-ext-zip"
+version = "0.1.0"
+dependencies = [
+ "php-runtime",
+ "php-vm",
+]
+
+[[package]]
+name = "php-ext-zlib"
+version = "0.1.0"
+dependencies = [
+ "php-runtime",
  "php-vm",
 ]
 
@@ -579,6 +781,11 @@ version = "0.1.0"
 [[package]]
 name = "php-mysqlnd"
 version = "0.1.0"
+dependencies = [
+ "openssl",
+ "php-hash",
+ "php-runtime",
+]
 
 [[package]]
 name = "php-openssl"
@@ -783,6 +990,13 @@ version = "0.1.0"
 [[package]]
 name = "php-zip"
 version = "0.1.0"
+dependencies = [
+ "libc",
+ "php-pcre",
+ "php-runtime",
+ "php-streams",
+ "pkg-config",
+]
 
 [[package]]
 name = "php-zlib"

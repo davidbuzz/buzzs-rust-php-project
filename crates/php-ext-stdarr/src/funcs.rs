@@ -6,6 +6,7 @@
 #![allow(clippy::unnecessary_wraps)]
 
 use crate::bridge::{by_ref, callback, check_callable, rest, rt, with_rng};
+use crate::memory;
 use crate::symtab::CallerSymbols;
 use php_runtime::{Value, ZArray, ZStr};
 use php_stdarr as sa;
@@ -123,7 +124,19 @@ pub fn array_key_exists(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 // ---------------------------------------------------------------------
 
 pub fn array_fill(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let r = sa::basic::array_fill(a.int(0), a.int(1), &a.at(2));
+    let (start, num) = (a.int(0), a.int(1));
+    if num > 0 && num <= i64::from(i32::MAX) && start <= i64::MAX - num + 1 {
+        // `array_finit_size_packed` / `array_finit_size_mixed`.
+        if (0..num).contains(&start) {
+            let size = start.unsigned_abs() + num.unsigned_abs();
+            memory::check_table(vm, size)?;
+            memory::check(vm, memory::packed_data(size))?;
+        } else {
+            memory::check_table(vm, num.unsigned_abs())?;
+            memory::check(vm, memory::hash_data(num.unsigned_abs()))?;
+        }
+    }
+    let r = sa::basic::array_fill(start, num, &a.at(2));
     Ok(Value::Array(rt(vm, r)?))
 }
 
@@ -134,7 +147,12 @@ pub fn array_fill_keys(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 }
 
 pub fn array_pad(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let r = sa::basic::array_pad(&a.array(0), a.int(1), &a.at(2));
+    let (h, len) = (a.array(0), a.int(1));
+    let n = len.unsigned_abs();
+    if n > h.len() as u64 && n <= memory::HT_MAX_SIZE {
+        memory::check(vm, memory::packed_data(n))?;
+    }
+    let r = sa::basic::array_pad(&h, len, &a.at(2));
     Ok(Value::Array(rt(vm, r)?))
 }
 
@@ -156,7 +174,12 @@ pub fn array_slice(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 }
 
 pub fn array_chunk(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let r = sa::basic::array_chunk(&a.array(0), a.int(1), a.bool(2));
+    let (h, size) = (a.array(0), a.int(1));
+    if size >= 1 && !h.is_empty() {
+        let (len, size) = (h.len() as u64, size.unsigned_abs());
+        memory::check_nested(vm, len.div_ceil(size), size.min(len))?;
+    }
+    let r = sa::basic::array_chunk(&h, size, a.bool(2));
     Ok(Value::Array(rt(vm, r)?))
 }
 
@@ -212,9 +235,29 @@ pub fn max(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     rt(vm, r)
 }
 
+/// The number of elements of a numeric `range()`, if cheaply known.
+#[allow(clippy::cast_precision_loss)]
+fn range_len(start: &Value, end: &Value, step: Option<&Value>) -> Option<f64> {
+    let num = |v: &Value| match v {
+        Value::Int(i) => Some(*i as f64),
+        Value::Float(f) => Some(*f),
+        _ => None,
+    };
+    let step = step.map_or(Some(1.0), num)?.abs();
+    let span = (num(end)? - num(start)?).abs();
+    (step > 0.0 && span.is_finite()).then(|| (span / step).floor() + 1.0)
+}
+
 pub fn range(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let (s, e) = (a.at(0), a.at(1));
     let st = a.get(2);
+    if let Some(n) = range_len(&s, &e, st.as_ref()) {
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let n = n as u64;
+        if n > 1024 && n < memory::HT_MAX_SIZE {
+            memory::check(vm, memory::packed_data(n))?;
+        }
+    }
     let r = sa::range::range(vm, &s, &e, st.as_ref());
     Ok(Value::Array(rt(vm, r)?))
 }
@@ -456,6 +499,17 @@ pub fn array_map(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let cbv = a.at(0);
     check_callable(vm, a, 1, true, true, &cbv)?;
     let arrays = rest(a, 1);
+    if cbv.is_null() && arrays.len() > 1 {
+        let longest = arrays
+            .iter()
+            .map(|v| match v {
+                Value::Array(x) => x.len() as u64,
+                _ => 0,
+            })
+            .max()
+            .unwrap_or(0);
+        memory::check_nested(vm, longest, arrays.len() as u64)?;
+    }
     let r = if cbv.is_null() {
         sa::callback::array_map::<Vm>(vm, None, &arrays)
     } else {
