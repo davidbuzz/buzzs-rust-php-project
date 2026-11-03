@@ -555,6 +555,18 @@ fn method_handler(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             php_spl::call_method(host, t.class, t.def.name, this.as_ref(), &args)
         });
     }
+    if t.def.name == "unserialize" {
+        // `Serializable::unserialize()`: all parts of the payload share one
+        // var_hash (`PHP_VAR_UNSERIALIZE_INIT`), joined with the active
+        // `unserialize()` call's when there is one.
+        return vm.with_unserialize_context(|vm| {
+            let r = {
+                let mut host = VmHost::new(vm);
+                php_spl::call_method(&mut host, t.class, t.def.name, this.as_ref(), &args)
+            };
+            crate::iter::finish(vm, r)
+        });
+    }
     let r = {
         let mut host = VmHost::new(vm);
         php_spl::call_method(&mut host, t.class, t.def.name, this.as_ref(), &args)
