@@ -64,12 +64,148 @@ pub fn default_cache_mode(host: &mut dyn SoapHost) -> i64 {
 struct HostLoader<'a> {
     host: &'a mut dyn SoapHost,
     context: Option<Value>,
+    source: String,
+    keep_headers: i64,
 }
 
 impl ResourceLoader for HostLoader<'_> {
     fn load(&mut self, url: &str) -> Result<Vec<u8>, String> {
-        self.host.load_resource(url, self.context.as_ref())
+        // `sdl_set_uri_credentials`: credentials are not sent to other hosts.
+        let mut saved = None;
+        if let Some(ctx) = &self.context {
+            if !same_origin(&self.source, url) {
+                if let Some(h) = self.host.context_get_option(ctx, "http", "header") {
+                    if let Some(redacted) = redact_headers(&flatten_headers(&h), self.keep_headers)
+                    {
+                        self.host.context_set_option(
+                            ctx,
+                            "http",
+                            "header",
+                            Value::from(redacted.as_slice()),
+                        );
+                        saved = Some(h);
+                    }
+                }
+            }
+        }
+        let r = self.host.load_resource(url, self.context.as_ref());
+        if let (Some(ctx), Some(h)) = (&self.context, saved) {
+            self.host.context_set_option(ctx, "http", "header", h);
+        }
+        r
     }
+}
+
+/// The scheme+authority prefix length of `s` (`sdl_set_uri_credentials`),
+/// `None` when it is not a URL.
+fn origin_len(s: &str) -> Option<usize> {
+    let p = s.find("://")?;
+    Some(s[p + 3..].find('/').map_or(s.len(), |q| p + 3 + q))
+}
+
+/// Whether two URIs address the same server (default ports ignored).
+#[must_use]
+pub fn same_origin(source: &str, uri: &str) -> bool {
+    let (Some(mut l1), Some(mut l2)) = (origin_len(source), origin_len(uri)) else {
+        return true;
+    };
+    let (a, b) = (source.as_bytes(), uri.as_bytes());
+    if l1 != l2 {
+        let strip = |s: &[u8], l: &mut usize| {
+            if *l > 11 && s.get(4) == Some(&b':') && s[..*l].ends_with(b":80") {
+                *l -= 3;
+            }
+            if *l > 13 && s.get(4) == Some(&b's') && s[..*l].ends_with(b":443") {
+                *l -= 4;
+            }
+        };
+        strip(a, &mut l1);
+        strip(b, &mut l2);
+    }
+    l1 == l2 && a[..l1] == b[..l2]
+}
+
+fn flatten_headers(h: &Value) -> Vec<u8> {
+    match h.deref() {
+        Value::Str(s) => s.as_bytes().to_vec(),
+        Value::Array(a) => {
+            let mut out = Vec::new();
+            for v in a.values() {
+                if let Value::Str(s) = v.deref() {
+                    if !s.is_empty() {
+                        if !out.is_empty() {
+                            out.extend_from_slice(b"\r\n");
+                        }
+                        out.extend_from_slice(s.as_bytes());
+                    }
+                }
+            }
+            out
+        }
+        _ => Vec::new(),
+    }
+}
+
+const REDACT_AUTHORIZATION: i64 = 1;
+const REDACT_PROXY_AUTH: i64 = 2;
+const REDACT_COOKIE: i64 = 4;
+
+/// Removes `Authorization`, `Proxy-Authorization` and `Cookie` headers
+/// (unless kept with the `keep_headers` option); `None` when nothing has to
+/// be removed.
+#[must_use]
+pub fn redact_headers(flat: &[u8], keep: i64) -> Option<Vec<u8>> {
+    let lc = flat.to_ascii_lowercase();
+    let at_line_start = |name: &[u8]| {
+        let mut i = 0;
+        while let Some(p) = lc[i..].windows(name.len()).position(|w| w == name) {
+            let pos = i + p;
+            if pos == 0 || lc[pos - 1] == b'\n' {
+                return true;
+            }
+            i = pos + 1;
+        }
+        false
+    };
+    let mut redaction = 0;
+    if at_line_start(b"authorization:") {
+        redaction |= REDACT_AUTHORIZATION;
+    }
+    if at_line_start(b"proxy-authorization:") {
+        redaction |= REDACT_PROXY_AUTH;
+    }
+    if at_line_start(b"cookie:") {
+        redaction |= REDACT_COOKIE;
+    }
+    if keep & WSDL_HEADER_KEEP_AUTHORIZATION != 0 {
+        redaction &= !REDACT_AUTHORIZATION;
+    }
+    if keep & WSDL_HEADER_KEEP_PROXY_AUTHORIZATION != 0 {
+        redaction &= !REDACT_PROXY_AUTH;
+    }
+    if keep & WSDL_HEADER_KEEP_COOKIES != 0 {
+        redaction &= !REDACT_COOKIE;
+    }
+    if redaction == 0 {
+        return None;
+    }
+    let mut out = Vec::new();
+    let mut off = 0;
+    while off < flat.len() {
+        let line_end = flat[off..]
+            .iter()
+            .position(|&c| c == b'\n')
+            .map_or(flat.len(), |p| off + p + 1);
+        let l = &lc[off..];
+        let drop = (redaction & REDACT_AUTHORIZATION != 0 && l.starts_with(b"authorization:"))
+            || (redaction & REDACT_PROXY_AUTH != 0 && l.starts_with(b"proxy-authorization:"))
+            || (redaction & REDACT_COOKIE != 0 && l.starts_with(b"cookie:"));
+        if !drop {
+            out.extend_from_slice(&flat[off..line_end]);
+        }
+        off = line_end;
+    }
+    Some(out)
 }
 
 fn basic_auth(login: &[u8], password: Option<&[u8]>) -> Vec<u8> {
@@ -187,7 +323,16 @@ pub fn get_sdl(
     let context = Some(wsdl_context(host, client, &uri));
     let old = globals::set_error_code(Some("WSDL"));
     let result = {
-        let mut loader = HostLoader { host, context };
+        let keep_headers = match client.and_then(|c| host.read_slot(c, "_keep_headers")) {
+            Some(Value::Int(k)) => k,
+            _ => 0,
+        };
+        let mut loader = HostLoader {
+            host,
+            context,
+            source: uri.clone(),
+            keep_headers,
+        };
         load_wsdl(&uri, &mut loader)
     };
     globals::set_error_code(old);
@@ -216,4 +361,34 @@ pub fn get_sdl(
         });
     }
     Ok(sdl)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn origins() {
+        assert!(same_origin(
+            "http://a.example/x.wsdl",
+            "http://a.example:80/y.xsd"
+        ));
+        assert!(same_origin(
+            "https://a.example:443/x",
+            "https://a.example/y"
+        ));
+        assert!(!same_origin("http://a.example/x", "http://b.example/y"));
+        assert!(same_origin("/local/file.wsdl", "http://b.example/y"));
+    }
+
+    #[test]
+    fn redaction() {
+        let h = b"X-A: 1\r\nAuthorization: Basic x\r\nCookie: c=1\r\nX-B: 2";
+        assert_eq!(redact_headers(h, 0).unwrap(), b"X-A: 1\r\nX-B: 2".to_vec());
+        assert_eq!(
+            redact_headers(h, WSDL_HEADER_KEEP_COOKIES).unwrap(),
+            b"X-A: 1\r\nCookie: c=1\r\nX-B: 2".to_vec()
+        );
+        assert!(redact_headers(b"X-Authorization: 1", 0).is_none());
+    }
 }

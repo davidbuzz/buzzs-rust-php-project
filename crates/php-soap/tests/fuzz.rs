@@ -24,9 +24,30 @@ impl Rng {
 }
 
 const TOKENS: &[&[u8]] = &[
-    b"<", b">", b"/>", b"</", b"\"", b"'", b"=", b":", b"xsi:type=\"xsd:int\"", b"href=\"#a\"", b"id=\"a\"",
-    b"SOAP-ENC:arrayType=\"xsd:int[2,3]\"", b"xsi:nil=\"1\"", b"&amp;", b"\xff", b"\x00", b"maxOccurs=\"unbounded\"",
-    b"minOccurs=\"-1\"", b"<xsd:element name=\"x\"/>", b"ref=\"tns:x\"", b"[", b"]", b",", b"*",
+    b"<",
+    b">",
+    b"/>",
+    b"</",
+    b"\"",
+    b"'",
+    b"=",
+    b":",
+    b"xsi:type=\"xsd:int\"",
+    b"href=\"#a\"",
+    b"id=\"a\"",
+    b"SOAP-ENC:arrayType=\"xsd:int[2,3]\"",
+    b"xsi:nil=\"1\"",
+    b"&amp;",
+    b"\xff",
+    b"\x00",
+    b"maxOccurs=\"unbounded\"",
+    b"minOccurs=\"-1\"",
+    b"<xsd:element name=\"x\"/>",
+    b"ref=\"tns:x\"",
+    b"[",
+    b"]",
+    b",",
+    b"*",
 ];
 
 fn mutate(rng: &mut Rng, seed: &[u8]) -> Vec<u8> {
@@ -67,7 +88,9 @@ fn seeds(ext: &str, limit: usize) -> Vec<Vec<u8>> {
     let mut out = Vec::new();
     let mut stack = vec![dir];
     while let Some(d) = stack.pop() {
-        let Ok(rd) = std::fs::read_dir(&d) else { continue };
+        let Ok(rd) = std::fs::read_dir(&d) else {
+            continue;
+        };
         let mut entries: Vec<_> = rd.filter_map(Result::ok).map(|e| e.path()).collect();
         entries.sort();
         for p in entries {
@@ -101,7 +124,11 @@ fn wsdl_loader_never_panics() {
                         let _ = php_soap::sdl_print::get_types(&sdl);
                     }
                 }));
-                assert!(r.is_ok(), "panic on input:\n{}", String::from_utf8_lossy(&data));
+                assert!(
+                    r.is_ok(),
+                    "panic on input:\n{}",
+                    String::from_utf8_lossy(&data)
+                );
             }
         }
     });
@@ -120,14 +147,20 @@ fn server_request_parsing_never_panics() {
                 let data = mutate(&mut rng, seed);
                 let r = catch_unwind(AssertUnwindSafe(|| {
                     let mut h = TestHost::new();
-                    h.add_function("f", |_, args| Ok(Value::Array(ZArray::from_values(args.iter().cloned()))));
+                    h.add_function("f", |_, args| {
+                        Ok(Value::Array(ZArray::from_values(args.iter().cloned())))
+                    });
                     let opts = ZArray::from_pairs([("uri", Value::from("urn:t"))]);
                     let s = h.new_server(None, &opts).expect("server");
                     php_soap::server::add_function(&mut h, &s, &Value::from("f")).expect("add");
                     let _ = php_soap::server::handle(&mut h, &s, Some(&data));
                     h.finish()
                 }));
-                assert!(r.is_ok(), "panic on request:\n{}", String::from_utf8_lossy(&data));
+                assert!(
+                    r.is_ok(),
+                    "panic on request:\n{}",
+                    String::from_utf8_lossy(&data)
+                );
             }
         }
     });
@@ -136,7 +169,13 @@ fn server_request_parsing_never_panics() {
 #[test]
 fn url_and_header_parsers_never_panic() {
     let mut rng = Rng(0xfeed_beef_0000_0001);
-    let urls: &[&[u8]] = &[b"http://u:p@h:80/p?q#f", b"https://[::1]:443/x", b"h:80/p", b"//x/y", b"mailto:a@b"];
+    let urls: &[&[u8]] = &[
+        b"http://u:p@h:80/p?q#f",
+        b"https://[::1]:443/x",
+        b"h:80/p",
+        b"//x/y",
+        b"mailto:a@b",
+    ];
     for u in urls {
         for _ in 0..500 {
             let data = mutate(&mut rng, u);
