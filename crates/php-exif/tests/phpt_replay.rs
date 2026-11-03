@@ -933,12 +933,17 @@ fn getimagesize_phpt_replays() {
     if let Err(e) = check("image_getimagesize.phpt", &o.0) {
         failures.push(e);
     }
-    // getimagesize_variation*.phpt-style single checks.
-    let mut o = Out::default();
-    let (v, _) = gis(&mut o, "gh20201.avif", false);
-    o.var_dump(&v);
-    if let Err(e) = check("image_gh20201.phpt", &o.0) {
-        failures.push(e);
+    for (phpt, script) in image_cases() {
+        let mut o = Out(
+            Vec::new(),
+            phpt.trim_start_matches("image_")
+                .trim_end_matches(".phpt")
+                .to_owned(),
+        );
+        script(&mut o);
+        if let Err(e) = check(phpt, &o.0) {
+            failures.push(e);
+        }
     }
     for f in &failures {
         eprintln!("=========== FAIL {f}\n");
@@ -970,4 +975,228 @@ fn getimagesizefromstring_matches_getimagesize() {
         var_dump(&mut y, &b, &mut CollectingContext::new()).expect("dump");
         assert_eq!(x, y, "{f}");
     }
+}
+
+fn dump_gis(o: &mut Out, rel: &str, with_info: bool) {
+    let (v, info) = gis(o, rel, with_info);
+    o.var_dump(&v);
+    if with_info {
+        o.var_dump(&info);
+    }
+}
+
+fn image_cases() -> Vec<(&'static str, Script)> {
+    let mut c: Vec<(&'static str, Script)> = Vec::new();
+    c.push((
+        "image_gh20201.phpt",
+        Box::new(|o: &mut Out| dump_gis(o, "gh20201.avif", false)),
+    ));
+    c.push((
+        "image_bug13213.phpt",
+        Box::new(|o: &mut Out| dump_gis(o, "bug13213.jpg", false)),
+    ));
+    c.push((
+        "image_bug72278.phpt",
+        Box::new(|o: &mut Out| dump_gis(o, "bug72278.jpg", false)),
+    ));
+    c.push((
+        "image_bug70052.phpt",
+        Box::new(|o: &mut Out| {
+            dump_gis(o, "bug70052_1.wbmp", false);
+            dump_gis(o, "bug70052_2.wbmp", false);
+        }),
+    ));
+    c.push((
+        "image_bug71848.phpt",
+        Box::new(|o: &mut Out| {
+            let (v, info) = gis(o, "bug71848.jpg", true);
+            o.var_dump(&v);
+            let keys: Vec<Value> = info
+                .as_array()
+                .map(|a| a.keys().map(php_runtime::ArrayKey::to_value).collect())
+                .unwrap_or_default();
+            o.var_dump(&Value::Array(keys.into_iter().collect()));
+        }),
+    ));
+    c.push((
+        "image_getimagesize_256_ico.phpt",
+        Box::new(|o: &mut Out| {
+            o.echo("*** Testing getimagesize() : 256px ico ***\n");
+            dump_gis(o, "32x256.ico", false);
+            o.echo("===DONE===");
+        }),
+    ));
+    for (phpt, prefix) in [
+        ("image_getimagesize_246x247.phpt", "246x247."),
+        ("image_getimagesize_384x385.phpt", "384x385."),
+    ] {
+        c.push((
+            phpt,
+            Box::new(move |o: &mut Out| {
+                let mut files: Vec<String> = std::fs::read_dir(fixtures().join("image"))
+                    .expect("dir")
+                    .flatten()
+                    .map(|e| e.file_name().to_string_lossy().into_owned())
+                    .filter(|f| f.starts_with(prefix))
+                    .collect();
+                files.sort();
+                let mut arr = php_runtime::HashTable::new();
+                for f in &files {
+                    let (v, _) = gis(o, f, false);
+                    arr.insert(php_runtime::ArrayKey::from_bytes(f.as_bytes()), v);
+                }
+                o.var_dump(&Value::Array(arr.into()));
+            }),
+        ));
+    }
+    c.push((
+        "image_getimagesize_basic.phpt",
+        Box::new(|o: &mut Out| {
+            o.echo("*** Testing getimagesize() : basic functionality ***\n");
+            for (k, f) in [
+                ("GIF image file", "200x100.gif"),
+                ("JPEG image file", "200x100.jpg"),
+                ("PNG image file", "200x100.png"),
+                ("SWF image file", "200x100.swf"),
+                ("BMP image file", "200x100.bmp"),
+                ("TIFF intel byte order image file", "200x100.tiff"),
+                ("JPC image file", "test1pix.jpc"),
+                ("JP2 image file", "test1pix.jp2"),
+                ("IFF image file", "test4pix.iff"),
+            ] {
+                o.echo(format!("\n-- {k} ({f}) --\n"));
+                dump_gis(o, f, true);
+            }
+        }),
+    ));
+    c.push((
+        "image_getimagesizefromstring1.phpt",
+        Box::new(|o: &mut Out| {
+            let (a, _) = gis(o, "test.gif", false);
+            let data = std::fs::read(image("test.gif")).expect("read");
+            let b = getimagesizefromstring(&data, false).to_value();
+            o.var_dump(&a);
+            o.var_dump(&b);
+        }),
+    ));
+    c.push((
+        "image_getimagesizefromstring_iff_overflow.phpt",
+        Box::new(|o: &mut Out| {
+            let payload = b"FORM\x00\x00\x00\x00ILBMABCD\x7f\xff\xff\xff";
+            let r = getimagesizefromstring(payload, false);
+            o.diags("getimagesizefromstring", &r.diagnostics);
+            o.var_dump(&r.to_value());
+            let r = getimagesize(Cursor::new(&payload[..]), b"x", false);
+            o.diags("getimagesize", &r.diagnostics);
+            o.var_dump(&r.to_value());
+        }),
+    ));
+    c.push((
+        "image_getimagesize_swc.phpt",
+        Box::new(|o: &mut Out| dump_gis(o, "test13pix.swf", false)),
+    ));
+    for (phpt, head, f) in [
+        (
+            "image_getimagesize_tif_mm.phpt",
+            "*** Testing getimagesize() : tiff_mm format ***\n",
+            "2x2mm.tiff",
+        ),
+        (
+            "image_getimagesize_variation_005.phpt",
+            "*** Testing getimagesize() : basic functionality ***\n",
+            "test13pix.swf",
+        ),
+        (
+            "image_getimagesize_variation4.phpt",
+            "*** Testing getimagesize() : variation ***\n",
+            "test13pix.swf",
+        ),
+        (
+            "image_getimagesize_wbmp.phpt",
+            "*** Testing getimagesize() : wbmp format ***\n",
+            "75x50.wbmp",
+        ),
+        (
+            "image_getimagesize_xbm.phpt",
+            "*** Testing getimagesize() : xbm format ***\n",
+            "75x50.xbm",
+        ),
+    ] {
+        c.push((
+            phpt,
+            Box::new(move |o: &mut Out| {
+                o.echo(head);
+                dump_gis(o, f, true);
+            }),
+        ));
+    }
+    c.push((
+        "image_getimagesize_variation3.phpt",
+        Box::new(|o: &mut Out| {
+            o.echo("*** Testing getimagesize() : variation ***\n");
+            for (k, f) in [
+                ("File with text data", "test.txt"),
+                ("File with corrupted BMP data", "200x100_unknown.unknown"),
+                ("Non-existent file", "nofile.ext"),
+                ("Empty File", "blank_file.bmp"),
+            ] {
+                o.echo(format!("\n-- {k} ({f}) --\n"));
+                for with_info in [false, true] {
+                    if image(f).exists() {
+                        let (v, _) = gis(o, f, with_info);
+                        o.var_dump(&v);
+                    } else {
+                        // The stream layer's warning (not this crate's job).
+                        o.echo("\nWarning: getimagesize(): Failed to open stream: No such file or directory in x on line 2\n");
+                        o.var_dump(&Value::Bool(false));
+                    }
+                }
+                o.var_dump(&Value::empty_array());
+            }
+        }),
+    ));
+    c.push((
+        "image_gh20584.phpt",
+        Box::new(|o: &mut Out| {
+            let mut payload = vec![b'A'; 8192];
+            payload.extend(std::iter::repeat_n(b'B', 8192));
+            payload.extend(std::iter::repeat_n(b'Z', 123));
+            let app1_len = u16::try_from(2 + payload.len()).expect("len");
+            let mut jpeg = b"\xFF\xD8\xFF\xE1".to_vec();
+            jpeg.extend_from_slice(&app1_len.to_be_bytes());
+            jpeg.extend_from_slice(&payload);
+            jpeg.extend_from_slice(b"\xFF\xC0\x00\x0b\x08\x00\x01\x00\x01\x01\x11\x00\xFF\xD9");
+            let r = getimagesize(Cursor::new(jpeg), b"x", true);
+            let ok = r
+                .app_markers
+                .as_ref()
+                .and_then(|h| h.get_str(b"APP1"))
+                .and_then(Value::as_str)
+                .is_some_and(|s| s.as_bytes() == payload.as_slice());
+            o.var_dump(&Value::Bool(ok));
+        }),
+    ));
+    c.push((
+        "image_image_type_to_mime_type_variation3.phpt",
+        Box::new(|o: &mut Out| {
+            o.echo("*** Testing image_type_to_mime_type() : usage variations ***\n");
+            for t in (0..=20).chain([999]) {
+                o.echo(format!("\n-- Iteration {t} --\n"));
+                o.var_dump(&Value::from(php_exif::imagetype::image_type_to_mime_type(
+                    t,
+                )));
+            }
+        }),
+    ));
+    c.push((
+        "image_image_type_to_mime_type_variation4.phpt",
+        Box::new(|o: &mut Out| {
+            use php_exif::imagetype as it;
+            o.echo("*** Testing image_type_to_mime_type() : usage variations ***\n");
+            for t in [it::IMAGETYPE_ICO, it::IMAGETYPE_SWC] {
+                o.var_dump(&Value::from(it::image_type_to_mime_type(t)));
+            }
+        }),
+    ));
+    c
 }
