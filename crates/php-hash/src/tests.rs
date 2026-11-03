@@ -386,3 +386,52 @@ fn mhash_helpers() {
         "mhash_keygen_s2k(): Argument #4 ($length) must be a greater than 0"
     );
 }
+
+#[test]
+fn pbkdf2_huge_length_does_not_panic() {
+    let size = hash_pbkdf2_alloc_size(b"sha256", i64::MAX, true).unwrap();
+    assert_eq!(
+        size,
+        (usize::try_from(i64::MAX).unwrap() - 1) / 32 * 32 + 32
+    );
+    let e = hash_pbkdf2(b"sha256", b"p", b"s", 1, i64::MAX, true).unwrap_err();
+    assert_eq!(e.out_of_memory, Some(size));
+    assert_eq!(e.class, ErrorClass::Error);
+    let e = hash_pbkdf2(b"md5", b"p", b"s", 1, i64::MAX - 1, false).unwrap_err();
+    assert!(e.out_of_memory.is_some());
+    assert_eq!(hash_pbkdf2_alloc_size(b"sha1", 0, false), Some(20));
+    assert_eq!(hash_pbkdf2_alloc_size(b"crc32", 10, true), None);
+    assert_eq!(hash_pbkdf2_alloc_size(b"sha1", -1, true), None);
+}
+
+#[test]
+fn diagnostics_survive_error_path() {
+    let opts = HashOptions {
+        seed: None,
+        secret: Some(SecretOption {
+            bytes: b"short".to_vec(),
+            was_string: false,
+        }),
+    };
+    let e = HashContext::new(b"xxh3", 0, b"", &opts).unwrap_err();
+    assert_eq!(
+        e.message,
+        "xxh3: Secret length must be >= 136 bytes, 5 bytes passed"
+    );
+    assert_eq!(e.diagnostics.len(), 1);
+    assert_eq!(e.diagnostics[0].level, DiagnosticLevel::Deprecated);
+    assert!(e.diagnostics[0]
+        .message
+        .starts_with("Passing a secret of a type other than string"));
+    let e = hash(b"xxh128", b"x", &opts).unwrap_err();
+    assert_eq!(e.diagnostics.len(), 1);
+    // Errors without preceding diagnostics carry none.
+    let e = HashContext::new(
+        b"xxh3",
+        0,
+        b"",
+        &HashOptions::with_secret(b"short".to_vec()),
+    )
+    .unwrap_err();
+    assert!(e.diagnostics.is_empty());
+}

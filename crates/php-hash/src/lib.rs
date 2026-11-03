@@ -71,6 +71,15 @@ pub struct HashError {
     pub argument: Option<(u32, &'static str)>,
     /// The message (without the `func(): Argument #n ($name) ` prefix).
     pub message: String,
+    /// Set when PHP would fail the request with a memory-allocation fatal
+    /// error rather than throw: the number of bytes PHP tried to `emalloc`.
+    /// The binding should report `Allowed memory size of %zu bytes
+    /// exhausted (tried to allocate %zu bytes)` (or `Out of memory`) itself,
+    /// since only it knows `memory_limit`.
+    pub out_of_memory: Option<usize>,
+    /// Diagnostics PHP emits *before* throwing this error (e.g. the
+    /// non-string secret deprecation preceding a too-short-secret `Error`).
+    pub diagnostics: Vec<Diagnostic>,
 }
 
 impl HashError {
@@ -79,6 +88,8 @@ impl HashError {
             class,
             argument: Some((n, name)),
             message: message.into(),
+            out_of_memory: None,
+            diagnostics: Vec::new(),
         }
     }
 
@@ -87,6 +98,8 @@ impl HashError {
             class,
             argument: None,
             message: message.into(),
+            out_of_memory: None,
+            diagnostics: Vec::new(),
         }
     }
 
@@ -975,6 +988,59 @@ pub fn hash_hkdf(
     Ok(out)
 }
 
+fn out_of_memory(size: usize) -> HashError {
+    HashError {
+        out_of_memory: Some(size),
+        ..HashError::plain(
+            ErrorClass::Error,
+            format!("Out of memory (tried to allocate {size} bytes)"),
+        )
+    }
+}
+
+/// Computes `(length, digest_length, result_size)` for `hash_pbkdf2` with
+/// checked arithmetic; `length` must already be validated as non-negative.
+fn pbkdf2_sizes(
+    a: Algorithm,
+    length: i64,
+    binary: bool,
+) -> Result<(usize, usize, usize), HashError> {
+    let ds = a.digest_size();
+    let mut length = usize::try_from(length).map_err(|_| out_of_memory(usize::MAX))?;
+    if length == 0 {
+        length = if binary { ds } else { ds * 2 };
+    }
+    let digest_length = if binary {
+        length
+    } else {
+        length / 2 + length % 2
+    };
+    let loops = (digest_length - 1) / ds + 1;
+    // `safe_emalloc(loops, digest_size, 0)`.
+    let size = loops.checked_mul(ds).ok_or_else(|| HashError {
+        out_of_memory: Some(usize::MAX),
+        ..HashError::plain(
+            ErrorClass::Error,
+            format!("Possible integer overflow in memory allocation ({loops} * {ds} + 0)"),
+        )
+    })?;
+    Ok((length, digest_length, size))
+}
+
+/// The size of the first large buffer `hash_pbkdf2()` allocates
+/// (`safe_emalloc(loops, digest_size, 0)`), so the binding can enforce
+/// `memory_limit` before doing any work. `None` for an unknown or
+/// non-cryptographic algorithm or a negative length.
+pub fn hash_pbkdf2_alloc_size(algo: &[u8], length: i64, binary: bool) -> Option<usize> {
+    let a = find_crypto(algo).ok()?;
+    if length < 0 {
+        return None;
+    }
+    pbkdf2_sizes(a, length, binary)
+        .ok()
+        .map(|(_, _, size)| size)
+}
+
 /// `hash_pbkdf2($algo, $password, $salt, $iterations, $length, $binary)`:
 /// returns exactly what PHP returns (hex unless `binary`).
 pub fn hash_pbkdf2(
@@ -1010,18 +1076,9 @@ pub fn hash_pbkdf2(
             "must be greater than or equal to 0",
         ));
     }
+    let (length, digest_length, result_size) = pbkdf2_sizes(a, length, binary)?;
     let ds = a.digest_size();
-    #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
-    let mut length = length as usize;
-    if length == 0 {
-        length = if binary { ds } else { ds * 2 };
-    }
-    let digest_length = if binary {
-        length
-    } else {
-        length / 2 + length % 2
-    };
-    let loops = (digest_length - 1) / ds + 1;
+    let loops = result_size / ds;
 
     let k1 = hmac_prep_key(a, password);
     let k2: Vec<u8> = k1.iter().map(|b| b ^ 0x6A).collect();
@@ -1029,7 +1086,10 @@ pub fn hash_pbkdf2(
         let inner = digest_of(a, &[&k1, data]);
         digest_of(a, &[&k2, &inner])
     };
-    let mut result = Vec::with_capacity(loops * ds);
+    let mut result = Vec::new();
+    if result.try_reserve_exact(result_size).is_err() {
+        return Err(out_of_memory(result_size));
+    }
     let mut computed_salt = salt.to_vec();
     for i in 1..=loops {
         computed_salt.truncate(salt.len());
@@ -1177,7 +1237,12 @@ impl HashContext {
             }
         }
         let mut diagnostics = Vec::new();
-        let args = a.resolve_options(options, &mut diagnostics)?;
+        let args = a
+            .resolve_options(options, &mut diagnostics)
+            .map_err(|mut e| {
+                e.diagnostics = std::mem::take(&mut diagnostics);
+                e
+            })?;
         let mut ctx = Self {
             algo: a,
             state: Some(a.state(&args)),
