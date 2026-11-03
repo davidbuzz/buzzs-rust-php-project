@@ -12,6 +12,8 @@ path = "src/main.rs"
 [dependencies]
 php-vm = { path = "../php-vm" }
 php-memlimit = { path = "../php-memlimit" }
+php-runtime = { path = "../php-runtime" }
+php-support = { path = "../php-support" }
 php-ext-stdmisc = { path = "../php-ext-stdmisc" }
 php-ext-stdstr = { path = "../php-ext-stdstr" }
 php-ext-streams = { path = "../php-ext-streams" }
