@@ -65,8 +65,9 @@
 //! returns [`ImportedNode::Node`] with [`XmlSource::Node`] (the element's
 //! `php_libxml::tree::Node`), and `wrap_document` wraps
 //! `ResultDocument::into_document()` in an instance of `class` (the
-//! `$returnClass`, a `SimpleXMLElement` subclass) positioned on the root
-//! element. Callback node-sets are always DOM objects, so the SimpleXML
+//! `$returnClass`, a `SimpleXMLElement` subclass) positioned on the
+//! *document node* (PHP attaches the object to `newdocp` itself, so
+//! `getName()` is `""` and the root element appears as a child). Callback node-sets are always DOM objects, so the SimpleXML
 //! provider leaves `node_value`/`returned_node` at their defaults.
 
 use std::any::Any;

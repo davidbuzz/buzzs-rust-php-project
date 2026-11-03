@@ -90,10 +90,12 @@ impl<'a> BridgeHost<'a> {
                 None => None,
             };
             let Some(value) = value else {
-                return Err(vm.throw(
-                    "Error",
-                    "XPath node-sets cannot be passed to PHP callbacks: the dom extension is not available",
-                ));
+                let msg = if self.dom.is_some() {
+                    "XPath node-set member cannot be represented as a DOM node"
+                } else {
+                    "XPath node-sets cannot be passed to PHP callbacks: the dom extension is not available"
+                };
+                return Err(vm.throw("Error", msg));
             };
             let _ = arr.make_mut().push(value);
         }
@@ -194,8 +196,14 @@ impl XslHost<Value> for BridgeHost<'_> {
     }
 
     fn transformation_finished(&mut self) {
-        if let Some(dom) = self.dom {
-            bridge::with_vm(|vm| dom.transformation_finished(vm));
-        }
+        // The node list is torn down while the transformation is still in
+        // progress: destructors of released node objects run now (PHP frees
+        // them synchronously), so they still see the "in progress" state.
+        with_vm(|vm| {
+            if let Some(dom) = self.dom {
+                dom.transformation_finished(vm);
+            }
+            vm.run_released_destructors()
+        });
     }
 }
