@@ -374,6 +374,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "php-gettext"
+version = "0.1.0"
+
+[[package]]
 name = "php-gmp"
 version = "0.1.0"
 
@@ -435,6 +439,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "php-pcntl"
+version = "0.1.0"
+
+[[package]]
 name = "php-pcre"
 version = "0.1.0"
 dependencies = [
@@ -457,6 +465,10 @@ dependencies = [
 
 [[package]]
 name = "php-runtime"
+version = "0.1.0"
+
+[[package]]
+name = "php-sockets"
 version = "0.1.0"
 
 [[package]]
@@ -488,6 +500,10 @@ dependencies = [
 
 [[package]]
 name = "php-support"
+version = "0.1.0"
+
+[[package]]
+name = "php-sysv"
 version = "0.1.0"
 
 [[package]]

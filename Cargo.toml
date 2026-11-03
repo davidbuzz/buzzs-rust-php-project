@@ -36,6 +36,7 @@ members = [
     "crates/php-sysv",
     "crates/php-gettext",
     "crates/php-pcntl",
+    "crates/php-spl",
 ]
 
 [workspace.package]

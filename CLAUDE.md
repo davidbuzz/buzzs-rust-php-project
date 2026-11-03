@@ -47,6 +47,7 @@ A Rust re-implementation of PHP whose goal is to pass the php-src `.phpt` test s
 - `crates/php-sysv`     — ext/sysvmsg, sysvsem, sysvshm, shmop over libc
 - `crates/php-gettext`  — ext/gettext over libc
 - `crates/php-pcntl`    — ext/pcntl over libc (signal dispatch hooks for the VM)
+- `crates/php-spl`      — SPL data structures, iterators, ArrayObject core over php-runtime (ref: ext/spl)
 
 ## Parallel work
 Several agents work concurrently, one crate each. Only edit files inside your own crate (plus your row(s) in FEATURE_GAP.md). Never edit workspace Cargo.toml; crates are pre-registered. Commit your own crate's files with `git add crates/<yours>` only.
