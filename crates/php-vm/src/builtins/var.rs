@@ -111,7 +111,14 @@ fn settype(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let nv = match t.as_bytes() {
         b"int" | b"integer" => Value::Int(vm.to_long(&v)?),
         b"float" | b"double" => Value::Float(vm.to_double(&v)?),
-        b"string" => Value::Str(vm.to_zstr(&v)?),
+        // `convert_to_string()` leaves "" behind when it throws.
+        b"string" => match vm.to_zstr(&v) {
+            Ok(s) => Value::Str(s),
+            Err(e) => {
+                r.set(Value::Str(ZStr::empty()));
+                return Err(e);
+            }
+        },
         b"bool" | b"boolean" => Value::Bool(vm.to_bool(&v)?),
         b"array" => match v {
             Value::Array(_) => v,
@@ -266,6 +273,18 @@ fn is_countable(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     }))
 }
 
+/// Marks a registered builtin `#[\Deprecated(since: ..., message: ...)]`.
+fn deprecate(vm: &mut Vm, name: &str, since: &str, message: &str) {
+    let lc = ZStr::from(name);
+    if let Some(crate::func::Func::Builtin(b)) = vm.functions.get(&lc).cloned() {
+        let mut nb = (*b).clone();
+        nb.flags |= crate::func::flags::DEPRECATED;
+        vm.functions.insert(lc.clone(), crate::func::Func::Builtin(std::rc::Rc::new(nb)));
+        let suffix = crate::attrs::format_suffix(Some(&ZStr::from(since)), Some(&ZStr::from(message)));
+        vm.builtin_deprecations.insert(lc, suffix);
+    }
+}
+
 /// Registers the var functions.
 pub(crate) fn register(vm: &mut Vm) {
     reg(
@@ -312,4 +331,8 @@ pub(crate) fn register(vm: &mut Vm) {
     reg(vm, "is_numeric(mixed $value): bool", is_numeric);
     reg(vm, "is_iterable(mixed $value): bool", is_iterable);
     reg(vm, "is_countable(mixed $value): bool", is_countable);
+    deprecate(vm, "doubleval", "8.6", "use floatval() instead");
+    deprecate(vm, "is_integer", "8.6", "use is_int() instead");
+    deprecate(vm, "is_long", "8.6", "use is_int() instead");
+    deprecate(vm, "is_double", "8.6", "use is_float() instead");
 }

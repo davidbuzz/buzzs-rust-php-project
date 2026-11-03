@@ -177,7 +177,8 @@ fn defined(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 fn constant_fn(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let name = s(a, 0);
     if let Some(p) = crate::call::find_double_colon(name.as_bytes()) {
-        let cls = ZStr::from(&name.as_bytes()[..p]);
+        let cb = &name.as_bytes()[..p];
+        let cls = ZStr::from(cb.strip_prefix(b"\\").unwrap_or(cb));
         let cn = ZStr::from(&name.as_bytes()[p + 2..]);
         let c = vm.lookup_class_or_error(&cls)?;
         return vm.fetch_class_constant(&c, &cn);
@@ -207,7 +208,10 @@ fn get_class(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             .get(vm.frames.len().wrapping_sub(2))
             .and_then(|f| f.scope.clone())
         {
-            Some(c) => Ok(Value::Str(c.name.clone())),
+            Some(c) => {
+                vm.deprecated("Calling get_class() without arguments is deprecated")?;
+                Ok(Value::Str(c.name.clone()))
+            }
             None => Err(vm.make_throw(
                 "Error",
                 "get_class() without arguments must be called from within a class",
@@ -219,11 +223,32 @@ fn get_class(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 fn get_parent_class(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let cls = match a.get(0) {
         Some(Value::Object(o)) => Some(object::class_of(&o).clone()),
-        Some(Value::Str(s)) => vm.lookup_class(&s)?,
-        _ => vm
-            .frames
-            .get(vm.frames.len().wrapping_sub(2))
-            .and_then(|f| f.scope.clone()),
+        // `Z_PARAM_OBJ_OR_CLASS_NAME`.
+        Some(v) => {
+            let found = match &v {
+                Value::Str(s) => vm.lookup_class(s)?,
+                _ => None,
+            };
+            if found.is_none() {
+                let given = match &v {
+                    Value::Str(s) => format!("\"{}\"", s.to_string_lossy()),
+                    other => crate::typecheck::given_type(other),
+                };
+                return Err(super::util::type_error(
+                    vm,
+                    a,
+                    1,
+                    &format!("must be an object or a valid class name, {given} given"),
+                ));
+            }
+            found
+        }
+        None => {
+            vm.deprecated("Calling get_parent_class() without arguments is deprecated")?;
+            vm.frames
+                .get(vm.frames.len().wrapping_sub(2))
+                .and_then(|f| f.scope.clone())
+        }
     };
     Ok(match cls.and_then(|c| c.parent.clone()) {
         Some(p) => Value::Str(p.name.clone()),
@@ -302,34 +327,90 @@ fn get_object_vars(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     Ok(Value::Array(ZArray::from_table(t)))
 }
 
+/// A property in `properties_info` order: (name, declaring class, flags,
+/// instance slot or `None` for a static).
+type InfoEntry = (ZStr, ZStr, u32, Option<u32>);
+
+/// `ce->properties_info` order: own declarations first, then the parent's.
+fn properties_info(c: &Rc<Class>, out: &mut Vec<InfoEntry>) {
+    let own = |decl: &ZStr| decl.eq_ignore_ascii_case(&c.name);
+    let mut add = |out: &mut Vec<InfoEntry>, e: InfoEntry| {
+        if !out.iter().any(|x| x.0 == e.0) {
+            out.push(e);
+        }
+    };
+    for p in c.props.iter().filter(|p| own(&p.class)) {
+        add(out, (p.name.clone(), p.class.clone(), p.flags, Some(p.slot)));
+    }
+    for sp in c.static_props.iter().filter(|p| own(&p.class)) {
+        add(out, (sp.name.clone(), sp.class.clone(), sp.flags, None));
+    }
+    if let Some(parent) = &c.parent {
+        let mut inherited = Vec::new();
+        properties_info(parent, &mut inherited);
+        for e in inherited {
+            add(out, e);
+        }
+    }
+}
+
 fn get_class_vars(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let name = s(a, 0);
     let Some(cls) = vm.lookup_class(&name)? else {
-        return Ok(Value::Bool(false));
+        return Err(super::util::type_error(
+            vm,
+            a,
+            1,
+            &format!("must be a valid class name, \"{}\" given", name.to_string_lossy()),
+        ));
     };
     let scope = vm
         .frames
         .get(vm.frames.len().wrapping_sub(2))
         .and_then(|f| f.scope.clone());
     let defaults = vm.class_defaults(&cls)?;
+    let mut info = Vec::new();
+    properties_info(&cls, &mut info);
+    let visible = |decl: &ZStr, fl: u32| -> bool {
+        if fl & flags::VIRTUAL != 0 {
+            return false;
+        }
+        let decl_cls = vm.find_class(decl.as_bytes());
+        if fl & flags::PRIVATE != 0 {
+            return scope.as_ref().is_some_and(|s| s.name.eq_ignore_ascii_case(decl));
+        }
+        if fl & flags::PROTECTED != 0 {
+            let (Some(s), Some(d)) = (scope.as_ref(), decl_cls.as_ref()) else {
+                return false;
+            };
+            return s.is_subclass_of(d) || d.is_subclass_of(s);
+        }
+        true
+    };
+    let shown: Vec<InfoEntry> = info.into_iter().filter(|(_, d, fl, _)| visible(d, *fl)).collect();
     let mut t = HashTable::new();
-    for pi in &cls.props {
-        if let PropLookup::Found(f) = vm.lookup_prop(&cls, &pi.name, scope.as_ref()) {
-            if f.slot != pi.slot {
-                continue;
-            }
-            if let Some(Some(v)) = defaults.get(pi.slot as usize) {
-                t.insert(ArrayKey::Str(pi.name.clone()), v.clone());
-            }
+    for (n, _, _, slot) in &shown {
+        if let Some(slot) = slot {
+            // Uninitialized typed properties are reported as null.
+            let v = defaults.get(*slot as usize).cloned().flatten().unwrap_or_default();
+            t.insert(ArrayKey::Str(n.clone()), v);
         }
     }
-    for sp in cls.static_props.clone() {
-        let cell = match vm.static_prop_cell(&cls, &sp.name) {
-            Ok(c) => c,
-            Err(Throw::Exception(_)) => continue,
-            Err(e) => return Err(e),
-        };
-        t.insert(ArrayKey::Str(sp.name.clone()), cell.borrow().deref());
+    for (n, _, _, slot) in &shown {
+        if slot.is_none() {
+            let decl = shown
+                .iter()
+                .find(|e| e.0 == *n)
+                .and_then(|e| vm.find_class(e.1.as_bytes()))
+                .unwrap_or_else(|| cls.clone());
+            let cell = match vm.static_prop_cell(&decl, n) {
+                Ok(c) => c,
+                Err(Throw::Exception(_)) => continue,
+                Err(e) => return Err(e),
+            };
+            let v = cell.borrow().deref();
+            t.insert(ArrayKey::Str(n.clone()), v);
+        }
     }
     Ok(Value::Array(ZArray::from_table(t)))
 }
@@ -351,6 +432,10 @@ fn get_class_methods(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         .get(vm.frames.len().wrapping_sub(2))
         .and_then(|f| f.scope.clone());
     let mut out = HashTable::new();
+    // `Closure::__invoke` is not in the method table (GH-17126).
+    if cls.lc_name.as_bytes() == b"closure" && cls.find_method(b"__invoke").is_none() {
+        let _ = out.push(sv("__invoke"));
+    }
     for lc in &cls.method_order {
         let m = &cls.methods[lc];
         if vm.can_access_method(m, scope.as_ref()) {
@@ -1031,9 +1116,19 @@ fn is_callable(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let v = a.at(0);
     let syntax_only = b(a, 1);
     let r = if syntax_only {
+        // `IS_CALLABLE_CHECK_SYNTAX_ONLY`: `[0 => object|string, 1 => string]`;
+        // objects still need a closure (`get_closure`).
         match &v {
-            Value::Str(_) | Value::Object(_) => true,
-            Value::Array(x) => x.len() == 2,
+            Value::Str(_) => true,
+            Value::Object(_) => vm.is_callable_value(&v),
+            Value::Array(x) => {
+                x.len() == 2
+                    && matches!(
+                        x.get(&ArrayKey::Int(0)).map(Value::deref),
+                        Some(Value::Object(_) | Value::Str(_))
+                    )
+                    && matches!(x.get(&ArrayKey::Int(1)).map(Value::deref), Some(Value::Str(_)))
+            }
             _ => false,
         }
     } else {
@@ -1722,7 +1817,7 @@ pub(crate) fn register(vm: &mut Vm) {
     reg(vm, "get_called_class(): string", get_called_class);
     reg(
         vm,
-        "get_parent_class(object|string $object_or_class = UNKNOWN): string|false",
+        "get_parent_class($object_or_class = UNKNOWN): string|false",
         get_parent_class,
     );
     reg(
