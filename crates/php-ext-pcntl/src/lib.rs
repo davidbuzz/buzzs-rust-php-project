@@ -256,7 +256,6 @@ pcntl_fns! {
     pcntl_get_last_error => last_error_impl,
     pcntl_getpriority => getpriority_impl,
     pcntl_setpriority => setpriority_impl,
-    pcntl_async_signals => async_signals_impl,
     pcntl_unshare => unshare_impl,
     pcntl_setns => setns_impl,
     pcntl_getcpuaffinity => getcpuaffinity_impl,
@@ -323,27 +322,23 @@ fn waitid_impl(_vm: &mut Vm, a: &Args) -> VmResult<Value> {
     };
     let want_rusage = a.has(4);
     let r = with(|p| p.waitid(idtype, opt_int(a, 1), flags, want_rusage));
-    match r {
-        Ok((info, ru)) => {
-            if a.has(2) {
-                let sigchld = i64::from(libc::SIGCHLD);
-                a.set_ref(
-                    2,
-                    siginfo_value(&info, sigchld).unwrap_or_else(|| Value::Array(ZArray::new())),
-                );
-            }
-            if want_rusage {
-                a.set_ref(4, rusage_value(ru.as_ref()));
-            }
-            Ok(Value::Bool(true))
+    let Ok((info, ru)) = r else {
+        if want_rusage {
+            a.set_ref(4, Value::Array(ZArray::new()));
         }
-        Err(_) => {
-            if want_rusage {
-                a.set_ref(4, Value::Array(ZArray::new()));
-            }
-            Ok(Value::Bool(false))
-        }
+        return Ok(Value::Bool(false));
+    };
+    if a.has(2) {
+        let sigchld = i64::from(libc::SIGCHLD);
+        a.set_ref(
+            2,
+            siginfo_value(&info, sigchld).unwrap_or_else(|| Value::Array(ZArray::new())),
+        );
     }
+    if want_rusage {
+        a.set_ref(4, rusage_value(ru.as_ref()));
+    }
+    Ok(Value::Bool(true))
 }
 
 fn exec_impl(vm: &mut Vm, a: &Args) -> VmResult<Value> {
@@ -530,7 +525,9 @@ fn sigtimedwait_impl(vm: &mut Vm, a: &Args) -> VmResult<Value> {
     finish(vm, a, r, |(signo, info)| waited(a, 1, signo, &info))
 }
 
-fn async_signals_impl(_vm: &mut Vm, a: &Args) -> VmResult<Value> {
+/// Not an asynchronous dispatch point: signals queued while async
+/// signals were off do not raise a VM interrupt in PHP either.
+fn pcntl_async_signals(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     host::route_signals_to_vm_thread();
     let enable = a.opt(0).map(|_| a.bool(0));
     Ok(Value::Bool(with(|p| p.async_signals(enable))))
