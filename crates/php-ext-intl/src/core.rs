@@ -200,9 +200,11 @@ pub(crate) fn record(vm: &mut Vm, o: Option<&Obj>, e: &IntlError) -> VmResult<()
     let func = active_function(vm);
     if e.always_throw {
         let text = String::from_utf8_lossy(e.message_bytes().unwrap_or_default()).into_owned();
-        with_global(|g| g.code = e.code);
-        if let Some(o) = o {
-            with_obj_error(o, |s| s.code = e.code);
+        if e.scope != Scope::ObjectCode {
+            with_global(|g| g.record(func.as_deref(), e));
+        }
+        if let (Some(o), false) = (o, e.scope == Scope::Global) {
+            with_obj_error(o, |s| s.record(func.as_deref(), e));
         }
         let prefixed = php_intl::error::prefix_message(func.as_deref(), &text);
         return Err(vm.throw("IntlException", &prefixed));

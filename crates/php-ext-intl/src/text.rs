@@ -111,6 +111,10 @@ fn idn_common(vm: &mut Vm, a: &Args, to_ascii: bool) -> VmResult<Value> {
     core::reset_global();
     let d = a.str(0);
     let r = if to_ascii { idn::to_ascii(d.as_bytes(), a.int(1), a.int(2)) } else { idn::to_utf8(d.as_bytes(), a.int(1), a.int(2)) };
+    // `zend_try_array_init($idna_info)` happens once the arguments are valid.
+    if a.has(3) && !matches!(r, Err(php_intl::Error::ArgumentValue { .. } | php_intl::Error::ArgumentType { .. })) {
+        a.set_ref(3, Value::Array(ZArray::new()));
+    }
     match r {
         Ok(out) => {
             if a.has(3) {

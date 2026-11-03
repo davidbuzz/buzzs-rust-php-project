@@ -83,7 +83,7 @@ fn transliterate(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
                     Ok(t) => object(vm, t)?,
                     Err(e) => {
                         if let php_intl::Error::Intl(ie) = &e {
-                            core::with_global(|g| g.record(core::active_function(vm).as_deref(), ie));
+                            core::record(vm, None, ie)?;
                         } else {
                             return Err(core::throw_engine(vm, a, e, 0));
                         }

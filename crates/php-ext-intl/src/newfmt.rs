@@ -129,7 +129,7 @@ fn range_value(v: &Value) -> RangeValue {
 
 fn range_format(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let o = a.this_obj();
-    core::with_obj_error(&o, php_intl::ErrorState::reset);
+    core::reset_both(&o);
     let (x, y) = (range_value(&a.at(0)), range_value(&a.at(1)));
     match core::with::<IntlNumberRangeFormatter, _>(&o, |f| f.format(x, y)) {
         Some(Ok(v)) => Ok(bytes(v)),
