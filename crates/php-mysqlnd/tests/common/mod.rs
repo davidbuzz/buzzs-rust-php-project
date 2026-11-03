@@ -105,7 +105,7 @@ pub fn r(v: &Value) -> String {
         Value::Null => "N".into(),
         Value::Bool(b) => format!("b:{}", u8::from(*b)),
         Value::Int(i) => format!("i:{i}"),
-        Value::Float(f) => format!("d:{}", hex(&f.to_le_bytes())),
+        Value::Float(f) => format!("d:{}", hex(&f.to_be_bytes())),
         Value::Str(s) => format!("s:{}", hex(s.as_bytes())),
         Value::Array(a) => ra(a),
         _ => "?".into(),
@@ -147,4 +147,29 @@ pub fn h(b: &[u8]) -> String {
 /// A per-test table name.
 pub fn table(name: &str) -> String {
     format!("mysqlnd_rs_{name}")
+}
+
+/// Compares multi-line outputs, reporting the first differing line.
+pub fn assert_lines_eq(mine: &str, theirs: &str) {
+    if mine == theirs {
+        return;
+    }
+    let a: Vec<&str> = mine.lines().collect();
+    let b: Vec<&str> = theirs.lines().collect();
+    for i in 0..a.len().max(b.len()) {
+        let (x, y) = (a.get(i).copied().unwrap_or("<missing>"), b.get(i).copied().unwrap_or("<missing>"));
+        if x != y {
+            // show the first differing item inside the line
+            let xs: Vec<&str> = x.split(',').collect();
+            let ys: Vec<&str> = y.split(',').collect();
+            let j = (0..xs.len().max(ys.len())).find(|&j| xs.get(j) != ys.get(j)).unwrap_or(0);
+            panic!(
+                "line {i} differs at item {j}:\n mine:   {:?}\n oracle: {:?}\n(lines: mine {}, oracle {})",
+                xs.get(j),
+                ys.get(j),
+                a.len(),
+                b.len()
+            );
+        }
+    }
 }
