@@ -26,8 +26,11 @@ Per-extension rows (measured from the same run, with skips excluded) are in
 [FEATURE_GAP.md](FEATURE_GAP.md).
 
 In progress: ext/zend_test (gates about 340 currently-skipped engine tests) and engine
-work on traits/inheritance, property hooks, magic methods and class diagnostics (typed
-references landed after the run above: +39 type_declarations tests). What is deliberately out of scope (opcache, FPM, pgsql,
+work on magic methods and class diagnostics. Landed after the run above: typed references,
+trait linking/variance rewrite, property-hook inheritance, native stack-limit checks —
+405 additional tests pass across Zend/tests, tests/, ext/standard, ext/date and
+ext/openssl (baseline refreshed 4 Nov: 1,628 → 1,226 known failures). What is
+deliberately out of scope (opcache, FPM, pgsql,
 ffi, …) and the row-by-row detail are in [FEATURE_GAP.md](FEATURE_GAP.md).
 
 ## Layout
