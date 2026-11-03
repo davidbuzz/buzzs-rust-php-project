@@ -314,6 +314,9 @@ impl OpenSsl {
 
     /// `php_openssl_add_oid_section`.
     fn add_oid_section(&mut self, conf: &Conf) -> bool {
+        // OpenSSL's object table is process-global; make PHP's
+        // check-then-create atomic for multi-threaded embedders.
+        static OID_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
         let Some(sect) = conf_get_string(conf, None, "oid_section") else {
             return true;
         };
@@ -322,9 +325,6 @@ impl OpenSsl {
             self.warn(format!("Problem loading oid section {}", lossy(&sect)));
             return false;
         };
-        // OpenSSL's object table is process-global; make PHP's
-        // check-then-create atomic for multi-threaded embedders.
-        static OID_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
         let _guard = OID_LOCK
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);

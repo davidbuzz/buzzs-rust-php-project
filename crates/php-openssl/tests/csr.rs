@@ -1,6 +1,8 @@
 //! CSR functions (expected values from php-src master tests and the
 //! `/usr/bin/php` oracle).
 
+#![allow(clippy::too_many_lines)]
+
 mod common;
 use common::*;
 use php_openssl::csr::CsrNewReturn;
