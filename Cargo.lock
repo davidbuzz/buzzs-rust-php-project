@@ -521,6 +521,7 @@ dependencies = [
  "php-exif",
  "php-ext-streams",
  "php-mbstring",
+ "php-memlimit",
  "php-runtime",
  "php-streams",
  "php-support",
@@ -874,8 +875,8 @@ dependencies = [
 name = "php-ext-uri"
 version = "0.1.0"
 dependencies = [
+ "php-memlimit",
  "php-runtime",
- "php-support",
  "php-uri",
  "php-vm",
 ]
