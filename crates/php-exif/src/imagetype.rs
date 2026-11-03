@@ -209,7 +209,9 @@ pub(crate) fn getimagetype<R: Read + Seek>(
         if &ft[..8] == sig::PNG {
             return IMAGETYPE_PNG;
         }
-        diags.push(Diagnostic::warning("PNG file corrupted by ASCII conversion"));
+        diags.push(Diagnostic::warning(
+            "PNG file corrupted by ASCII conversion",
+        ));
         return IMAGETYPE_UNKNOWN;
     } else if &ft[..3] == sig::SWF {
         return IMAGETYPE_SWF;
@@ -281,7 +283,10 @@ mod tests {
     #[test]
     fn mime_and_extension_tables() {
         assert_eq!(image_type_to_mime_type(IMAGETYPE_JPEG), "image/jpeg");
-        assert_eq!(image_type_to_mime_type(IMAGETYPE_JPC), "application/octet-stream");
+        assert_eq!(
+            image_type_to_mime_type(IMAGETYPE_JPC),
+            "application/octet-stream"
+        );
         assert_eq!(image_type_to_mime_type(-1), "application/octet-stream");
         assert_eq!(image_type_to_mime_type(IMAGETYPE_HEIF), "image/heif");
         assert_eq!(image_type_to_extension(IMAGETYPE_WBMP, true), Some(".bmp"));

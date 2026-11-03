@@ -1,8 +1,12 @@
 //! PHP's `ext/exif` (work in progress): tag tables, diagnostics, stream
-//! model, encoding conversion and `spprintf` helpers.
+//! model, encoding conversion, image identification and `getimagesize`.
 
+mod avif;
 pub mod diag;
 pub mod encoding;
 pub mod fmt;
+pub mod imagesize;
+pub mod imagetype;
+mod inflate;
 pub mod stream;
 pub mod tags;
