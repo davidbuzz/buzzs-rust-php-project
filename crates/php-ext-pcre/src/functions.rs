@@ -28,7 +28,7 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
         preg_filter,
     )
     .function(
-        "preg_replace_callback(string|array $pattern, callable $callback, string|array $subject, int $limit = -1, &$count = null, int $flags = 0): string|array|null",
+        "preg_replace_callback(string|array $pattern, $callback, string|array $subject, int $limit = -1, &$count = null, int $flags = 0): string|array|null",
         preg_replace_callback,
     )
     .function(
@@ -312,6 +312,11 @@ fn checked(vm: &mut Vm, result: Option<Vec<u8>>) -> VmResult<Option<Vec<u8>>> {
 fn preg_replace_callback(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let regex = a.at(0);
     let callback = a.at(1);
+    // `Z_PARAM_FUNC`: the error names the reason the value is not callable.
+    if !vm.is_callable(&callback) {
+        let reason = vm.callable_error_message(&callback);
+        return Err(a.type_error(vm, 2, &format!("must be a valid callback, {reason}")));
+    }
     let subject = a.at(2);
     let limit = limit_from_php(int_or(a, 3, -1));
     let flags = int_or(a, 5, 0);
