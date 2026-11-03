@@ -651,6 +651,117 @@ impl Vm {
         })
     }
 
+    /// `zend_traits_init_trait_structures`: resolves the traits named by
+    /// `insteadof` and `as` rules (without autoloading) and validates them.
+    fn init_trait_structures(
+        &self,
+        decl: &ClassDecl,
+        traits: &[Rc<Class>],
+    ) -> Result<TraitRules, String> {
+        let find = |n: &ZStr| -> Result<usize, String> {
+            let Some(t) = self.find_class(n.as_bytes()).filter(|c| c.linked.get()) else {
+                return Err(format!("Could not find trait {n}"));
+            };
+            // `zend_check_trait_usage`.
+            if !t.is_trait() {
+                return Err(format!(
+                    "Class {} is not a trait, Only traits may be used in 'as' and 'insteadof' statements",
+                    t.name
+                ));
+            }
+            traits
+                .iter()
+                .position(|x| Rc::ptr_eq(x, &t))
+                .ok_or_else(|| format!("Required Trait {} wasn't added to {}", t.name, decl.name))
+        };
+        let mut out = TraitRules {
+            excluded: Vec::new(),
+            alias_trait: vec![None; decl.trait_rules.len()],
+        };
+        for r in &decl.trait_rules {
+            let TraitRule::Precedence {
+                trait_name,
+                method,
+                insteadof,
+            } = r
+            else {
+                continue;
+            };
+            let ti = find(trait_name)?;
+            let lc = ZStr::from(method.to_ascii_lowercase());
+            if !traits[ti].methods.contains_key(&lc) {
+                return Err(format!(
+                    "A precedence rule was defined for {}::{method} but this method does not exist",
+                    traits[ti].name
+                ));
+            }
+            for ex in insteadof {
+                let ei = find(ex)?;
+                if out.excluded.contains(&(ei, lc.clone())) {
+                    return Err(format!(
+                        "Failed to evaluate a trait precedence ({method}). Method of trait {} was defined to be excluded multiple times",
+                        traits[ei].name
+                    ));
+                }
+                out.excluded.push((ei, lc.clone()));
+                if ei == ti {
+                    let t = &traits[ti].name;
+                    return Err(format!(
+                        "Inconsistent insteadof definition. The method {method} is to be used from {t}, but {t} is also on the exclude list"
+                    ));
+                }
+            }
+        }
+        for (i, r) in decl.trait_rules.iter().enumerate() {
+            let TraitRule::Alias {
+                trait_name,
+                method,
+                alias,
+                ..
+            } = r
+            else {
+                continue;
+            };
+            let lc = ZStr::from(method.to_ascii_lowercase());
+            if let Some(tn) = trait_name {
+                let ti = find(tn)?;
+                if !traits[ti].methods.contains_key(&lc) {
+                    return Err(format!(
+                        "An alias was defined for {}::{method} but this method does not exist",
+                        traits[ti].name
+                    ));
+                }
+                out.alias_trait[i] = Some(ti);
+                continue;
+            }
+            let mut found: Option<usize> = None;
+            for (j, t) in traits.iter().enumerate() {
+                if !t.methods.contains_key(&lc) {
+                    continue;
+                }
+                if let Some(f) = found {
+                    let (a, b) = (&traits[f].name, &t.name);
+                    return Err(format!(
+                        "An alias was defined for method {method}(), which exists in both {a} and {b}. Use {a}::{method} or {b}::{method} to resolve the ambiguity"
+                    ));
+                }
+                found = Some(j);
+            }
+            if found.is_none() {
+                return Err(match alias {
+                    Some(a) => format!(
+                        "An alias ({a}) was defined for method {method}(), but this method does not exist"
+                    ),
+                    None => format!(
+                        "The modifiers of the trait method {method}() are changed, but this method does not exist. Error"
+                    ),
+                });
+            }
+            out.alias_trait[i] = found;
+        }
+        Ok(out)
+    }
+
     fn fatal_at(&mut self, msg: &str, line: u32) -> Throw {
         let (file, _) = self.current_location();
         self.report_fatal(msg, &file, line);
@@ -813,9 +924,9 @@ impl Vm {
                 ));
             };
             if !tc.is_trait() {
-                return Err(self.fatal_at(
+                return Err(self.make_throw(
+                    "Error",
                     &format!("{display} cannot use {} - it is not a trait", tc.name),
-                    line,
                 ));
             }
             if tc
@@ -835,8 +946,19 @@ impl Vm {
                 msg.extend_from_slice(&suffix);
                 self.error_bytes(code, &msg)?;
             }
-            traits.push(tc);
+            // `zend_do_link_class` skips duplicated trait uses.
+            if !traits.iter().any(|t: &Rc<Class>| Rc::ptr_eq(t, &tc)) {
+                traits.push(tc);
+            }
         }
+        let trait_rules = if traits.is_empty() {
+            TraitRules::default()
+        } else {
+            match self.init_trait_structures(decl, &traits) {
+                Ok(r) => r,
+                Err(e) => return Err(self.fatal_at(&e, line)),
+            }
+        };
         let mut cflag = decl.flags;
         if let Some(p) = &parent {
             if p.flags & cflags::ALLOW_DYNAMIC != 0 {
@@ -855,6 +977,7 @@ impl Vm {
                 parent_c,
                 interfaces_c,
                 traits_c,
+                &trait_rules,
                 cflag,
                 is_anon,
                 &mut err,
@@ -957,6 +1080,18 @@ impl Vm {
         }
         Ok(cls)
     }
+}
+
+/// The resolved trait adaptation rules of a class
+/// (`zend_traits_init_trait_structures`).
+#[derive(Default)]
+struct TraitRules {
+    /// (index into the used traits, lowercase method) excluded by
+    /// `insteadof`.
+    excluded: Vec<(usize, ZStr)>,
+    /// For each rule of the declaration: the index of the trait an `as`
+    /// rule applies to (`None` for precedence rules).
+    alias_trait: Vec<Option<usize>>,
 }
 
 fn is_valid_class_name(n: &[u8]) -> bool {
@@ -1152,6 +1287,7 @@ fn build_class(
     parent: Option<Rc<Class>>,
     interfaces: Vec<Rc<Class>>,
     traits: Vec<Rc<Class>>,
+    rules: &TraitRules,
     cflag: u32,
     is_anon: bool,
     err: &mut Option<String>,
@@ -1560,41 +1696,24 @@ fn build_class(
     // Trait methods.
     let mut trait_methods: Vec<(ZStr, Rc<Method>)> = Vec::new();
     if !traits.is_empty() {
-        let mut excluded: Vec<(ZStr, ZStr)> = Vec::new(); // (trait lc, method lc)
-        for r in &decl.trait_rules {
-            if let TraitRule::Precedence {
-                method, insteadof, ..
-            } = r
-            {
-                for t in insteadof {
-                    excluded.push((
-                        ZStr::from(t.to_ascii_lowercase()),
-                        ZStr::from(method.to_ascii_lowercase()),
-                    ));
-                }
-            }
-        }
-        for t in &traits {
+        for (ti, t) in traits.iter().enumerate() {
             for lcm in &t.method_order {
                 let Some(tm) = t.methods.get(lcm) else {
                     continue;
                 };
                 // Aliases.
-                for r in &decl.trait_rules {
+                for (ri, r) in decl.trait_rules.iter().enumerate() {
                     if let TraitRule::Alias {
-                        trait_name,
                         method,
                         flags: f,
                         alias,
+                        ..
                     } = r
                     {
-                        if !method.eq_ignore_ascii_case(lcm.as_bytes()) {
+                        if !method.eq_ignore_ascii_case(lcm.as_bytes())
+                            || rules.alias_trait.get(ri).copied().flatten() != Some(ti)
+                        {
                             continue;
-                        }
-                        if let Some(tn) = trait_name {
-                            if !tn.eq_ignore_ascii_case(t.name.as_bytes()) {
-                                continue;
-                            }
                         }
                         if let Some(a) = alias {
                             let mut fl = tm.flags;
@@ -1617,25 +1736,20 @@ fn build_class(
                         }
                     }
                 }
-                if excluded
-                    .iter()
-                    .any(|(tl, ml)| tl.as_bytes() == t.lc_name.as_bytes() && ml == lcm)
-                {
+                if rules.excluded.iter().any(|(i, ml)| *i == ti && ml == lcm) {
                     continue;
                 }
                 let mut fl = tm.flags;
-                for r in &decl.trait_rules {
+                for (ri, r) in decl.trait_rules.iter().enumerate() {
                     if let TraitRule::Alias {
-                        trait_name,
                         method,
                         flags: f,
                         alias: None,
+                        ..
                     } = r
                     {
                         if method.eq_ignore_ascii_case(lcm.as_bytes())
-                            && trait_name
-                                .as_ref()
-                                .is_none_or(|tn| tn.eq_ignore_ascii_case(t.name.as_bytes()))
+                            && rules.alias_trait.get(ri).copied().flatten() == Some(ti)
                         {
                             if *f & flags::VISIBILITY != 0 {
                                 fl = (fl & !flags::VISIBILITY) | (*f & flags::VISIBILITY);
