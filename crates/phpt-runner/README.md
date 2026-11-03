@@ -32,6 +32,7 @@ target/debug/phpt-runner [OPTIONS] <PATHS>...
 | `--scope <FILE>` | Out-of-scope prefixes (default: `phpt-scope.txt` in the php-src root or an ancestor, i.e. the repository root). |
 | `--no-scope` | Run and count every selected test. |
 | `--env KEY=VALUE` | Extra environment variable for every test (repeatable). |
+| `--resume <FILE>` | Append each result to a JSON-lines log as it completes; tests already in the log are not rerun (their results are reused), so a killed full-suite run can be continued. |
 
 Examples:
 
@@ -97,7 +98,9 @@ target/debug/phpt-runner -q -j 4 --no-artifacts --baseline phpt-baseline.txt \
     modules/php-src/Zend modules/php-src/tests modules/php-src/ext modules/php-src/sapi
 ```
 
-A subset run (e.g. just `modules/php-src/Zend/tests`) can be checked against the same file.
+A full run takes over an hour with the debug binary; add `--resume /tmp/full.jsonl` so it can be
+continued if it is interrupted. A subset run (e.g. just `modules/php-src/Zend/tests`) can be
+checked against the same file.
 
 The run fails (exit 1) only if a test outside the baseline fails (`NEW FAILURE`) or a baseline
 test now passes (`UNEXPECTED PASS`, so the baseline can shrink). After making tests pass, rerun

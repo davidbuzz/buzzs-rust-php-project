@@ -302,6 +302,32 @@ fn scope_file_excludes_tests() {
 }
 
 #[test]
+fn resume_log_reuses_results() {
+    let Some(php) = reference_php() else {
+        eprintln!("skipping: {REFERENCE_PHP} not found");
+        return;
+    };
+    let dir = fixture_copy("resume");
+    let log = dir.join("results.jsonl");
+    let files: Vec<PathBuf> = ["pass_expect.phpt", "fail_expect.phpt"]
+        .iter()
+        .map(|f| dir.join(f))
+        .collect();
+    let paths: Vec<&Path> = files.iter().map(PathBuf::as_path).collect();
+    let args = ["--php", php, "--resume", log.to_str().unwrap()];
+    let (first, _, _) = run_runner(&args, &paths[..1]);
+    assert_eq!(first.totals.pass, 1);
+    assert_eq!(fs::read_to_string(&log).unwrap().lines().count(), 1);
+    // The second run only executes the test that is not in the log yet.
+    let (second, _, stdout) = run_runner(&args, &paths);
+    assert!(stdout.contains("Resuming: 1 result(s) reused"), "{stdout}");
+    assert!(stdout.contains("Running 1 test "), "{stdout}");
+    assert_eq!((second.totals.pass, second.totals.fail), (1, 1), "{stdout}");
+    assert_eq!(fs::read_to_string(&log).unwrap().lines().count(), 2);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn env_option_reaches_tests() {
     let Some(php) = reference_php() else {
         eprintln!("skipping: {REFERENCE_PHP} not found");

@@ -85,6 +85,11 @@ struct Cli {
     /// Ignore the scope file: run and count every selected test.
     #[arg(long, conflicts_with = "scope")]
     no_scope: bool,
+    /// Append each result to this JSON-lines file as soon as it completes; tests already
+    /// recorded there are not run again (their recorded results are reused). Makes long runs
+    /// resumable after the runner is killed.
+    #[arg(long, value_name = "FILE")]
+    resume: Option<PathBuf>,
     /// Extra environment variable for every test, e.g. `--env MYSQL_TEST_HOST=127.0.0.1`
     /// (repeatable).
     #[arg(long, value_name = "KEY=VALUE")]
@@ -336,7 +341,24 @@ fn make_runner(cli: &Cli, srcdir: &Path) -> Result<(Runner, Option<SharedProbeCa
 }
 
 /// Run all tests in parallel, printing result lines as they complete.
-fn execute(cli: &Cli, runner: &Runner, tests: &[PathBuf]) -> Vec<TestResult> {
+/// Results already recorded in the `--resume` log (unparsable lines are ignored).
+fn load_resume_log(path: &Path) -> Result<Vec<TestResult>, String> {
+    match std::fs::read_to_string(path) {
+        Ok(text) => Ok(text
+            .lines()
+            .filter_map(|l| serde_json::from_str(l).ok())
+            .collect()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+        Err(e) => Err(format!("cannot read {}: {e}", path.display())),
+    }
+}
+
+fn execute(
+    cli: &Cli,
+    runner: &Runner,
+    tests: &[PathBuf],
+    mut log: Option<&mut std::fs::File>,
+) -> Vec<TestResult> {
     let mut resolver = ConflictResolver::default();
     let jobs: Vec<Job> = tests
         .iter()
@@ -368,6 +390,11 @@ fn execute(cli: &Cli, runner: &Runner, tests: &[PathBuf]) -> Vec<TestResult> {
         |batch| {
             for r in batch {
                 print_result(&r, cli, color, show_diff);
+                if let Some(log) = log.as_deref_mut() {
+                    if let Ok(line) = serde_json::to_string(&r) {
+                        let _ = writeln!(log, "{line}");
+                    }
+                }
                 results.push(r);
             }
         },
@@ -445,8 +472,35 @@ fn run(cli: &Cli) -> Result<ExitCode, String> {
     }
     let (runner, _probe_cache) = make_runner(cli, &srcdir)?;
 
+    let mut previous = Vec::new();
+    let mut log = None;
+    if let Some(path) = &cli.resume {
+        previous = load_resume_log(path)?;
+        let selected: std::collections::HashSet<String> =
+            tests.iter().map(|t| shortname(t, &srcdir)).collect();
+        previous.retain(|r| selected.contains(&r.path));
+        let done: std::collections::HashSet<&str> =
+            previous.iter().map(|r| r.path.as_str()).collect();
+        tests.retain(|t| !done.contains(shortname(t, &srcdir).as_str()));
+        let reused = previous.len();
+        if reused > 0 {
+            println!(
+                "Resuming: {reused} result(s) reused from {}",
+                path.display()
+            );
+        }
+        log = Some(
+            std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(path)
+                .map_err(|e| format!("cannot open {}: {e}", path.display()))?,
+        );
+    }
+
     let start = Instant::now();
-    let mut results = execute(cli, &runner, &tests);
+    let mut results = execute(cli, &runner, &tests, log.as_mut());
+    results.append(&mut previous);
     results.extend(out_of_scope);
     let elapsed = start.elapsed().as_secs_f64();
 
