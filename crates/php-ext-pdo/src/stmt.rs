@@ -174,18 +174,7 @@ fn set_fetch_mode(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 fn get_iterator(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let o = a.this_obj();
     let it = native_iterator(vm, &o, false)?;
-    let Some(cls) = vm.find_class(ITERATOR_CLASS.as_bytes()) else {
-        return Err(vm.throw("Error", "Class \"InternalIterator\" not found"));
-    };
-    let io = vm.new_object(&cls)?;
-    php_vm::object::set_internal(
-        &io,
-        WrappedIter {
-            it: Some(it),
-            rewound: false,
-        },
-    );
-    Ok(Value::Object(io))
+    vm.new_internal_iterator(it).map(Value::Object)
 }
 
 // ---------------------------------------------------------------------------
@@ -305,78 +294,6 @@ fn stmt_unset_property(vm: &mut Vm, _o: &Obj, name: &ZStr) -> VmResult<bool> {
 }
 
 // ---------------------------------------------------------------------------
-// The iterator object returned by getIterator()
-// ---------------------------------------------------------------------------
-
-/// The class of the object `PDOStatement::getIterator()` returns (the
-/// engine's `InternalIterator` cannot wrap extension iterators yet).
-const ITERATOR_CLASS: &str = "PDOStatementIterator";
-
-struct WrappedIter {
-    it: Option<Box<dyn NativeIterator>>,
-    rewound: bool,
-}
-
-#[derive(Clone, Copy)]
-enum Op {
-    Current,
-    Key,
-    Next,
-    Valid,
-    Rewind,
-}
-
-fn wrapped_op(vm: &mut Vm, a: &Args, op: Op) -> VmResult<Value> {
-    let this = a.this_obj();
-    let taken = php_vm::object::internal::<WrappedIter, _>(&this, |s| {
-        s.it.take().map(|it| (it, s.rewound))
-    })
-    .flatten();
-    let Some((mut it, rewound)) = taken else {
-        return Err(vm.throw(
-            "Error",
-            "The InternalIterator object has not been properly initialized",
-        ));
-    };
-    let r = (|| -> VmResult<Value> {
-        if !rewound || matches!(op, Op::Rewind) {
-            it.rewind(vm)?;
-        }
-        Ok(match op {
-            Op::Current => it.current(vm)?,
-            Op::Key => it.key(vm)?,
-            Op::Next => {
-                it.next(vm)?;
-                Value::Null
-            }
-            Op::Valid => Value::Bool(it.valid(vm)?),
-            Op::Rewind => Value::Null,
-        })
-    })();
-    php_vm::object::internal::<WrappedIter, _>(&this, |s| {
-        s.it = Some(it);
-        s.rewound = true;
-    });
-    r
-}
-
-fn ii_current(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    wrapped_op(vm, a, Op::Current)
-}
-fn ii_key(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    wrapped_op(vm, a, Op::Key)
-}
-fn ii_next(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    wrapped_op(vm, a, Op::Next)
-}
-fn ii_valid(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    wrapped_op(vm, a, Op::Valid)
-}
-fn ii_rewind(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    wrapped_op(vm, a, Op::Rewind)
-}
-
-// ---------------------------------------------------------------------------
 // PDORow
 // ---------------------------------------------------------------------------
 
@@ -394,10 +311,8 @@ fn row_write_property(vm: &mut Vm, _o: &Obj, _name: &ZStr, _v: &Value) -> VmResu
 }
 
 fn row_has_property(vm: &mut Vm, o: &Obj, name: &ZStr, empty: bool) -> VmResult<Option<bool>> {
-    // The VM's hook answers `empty()` itself; `PdoRow` follows
-    // `has_property(check_empty)` ("set and truthy").
     let row = row_of(o);
-    with_host(vm, |h| row.has_property(h, name, empty)).map(|r| Some(if empty { !r } else { r }))
+    with_host(vm, |h| row.has_property(h, name, empty)).map(Some)
 }
 
 fn row_unset_property(vm: &mut Vm, _o: &Obj, _name: &ZStr) -> VmResult<bool> {
@@ -464,19 +379,18 @@ pub fn create_row(vm: &mut Vm, row: PdoRow) -> VmResult<Obj> {
     Ok(o)
 }
 
-/// Registers `PDOStatement`, `PDORow` and the statement iterator class.
-pub fn register(vm: &mut Vm) {
-    let pub_ = acc::PUBLIC;
-    ClassBuilder::new(ITERATOR_CLASS)
-        .flags(class_flags::FINAL | class_flags::NOT_SERIALIZABLE | class_flags::NO_NEW)
-        .implements(vm, &["Iterator"])
-        .method("current(): mixed", pub_, ii_current)
-        .method("key(): mixed", pub_, ii_key)
-        .method("next(): void", pub_, ii_next)
-        .method("valid(): bool", pub_, ii_valid)
-        .method("rewind(): void", pub_, ii_rewind)
-        .register(vm);
+/// `dbstmt_get_gc`: the bound variables and driver options, the fetch
+/// target/constructor arguments and the owning `PDO` object.
+fn stmt_gc(s: &PdoStatement, v: &mut php_vm::gc::GcVisitor<'_>) {
+    for x in s.gc_values() {
+        v.value(&x);
+    }
+}
 
+/// Registers `PDOStatement` and `PDORow`.
+pub fn register(vm: &mut Vm) {
+    php_vm::gc::register_traverse_with::<PdoStatement>(stmt_gc);
+    let pub_ = acc::PUBLIC;
     ClassBuilder::new("PDOStatement")
         .flags(class_flags::NOT_SERIALIZABLE | class_flags::NO_CLONE)
         .implements(vm, &["IteratorAggregate"])

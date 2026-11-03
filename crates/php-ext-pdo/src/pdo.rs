@@ -374,9 +374,17 @@ fn const_value(v: ConstValue) -> Value {
     }
 }
 
+/// `dbh_get_gc`: the default statement constructor arguments.
+fn pdo_gc(p: &Pdo, v: &mut php_vm::gc::GcVisitor<'_>) {
+    for x in p.gc_values() {
+        v.value(&x);
+    }
+}
+
 /// Registers `PDOException`, `PDO`, `Pdo\Sqlite` and `pdo_drivers()`.
 #[allow(clippy::too_many_lines)] // one declarative class table
 pub fn register(vm: &mut Vm) {
+    php_vm::gc::register_traverse_with::<Pdo>(pdo_gc);
     ClassBuilder::new("PDOException")
         .extends(vm, "RuntimeException")
         .prop("code", acc::PROTECTED, None, Some(Value::Int(0)))
@@ -392,17 +400,18 @@ pub fn register(vm: &mut Vm) {
     for (name, v) in pdo_class_constants() {
         pdo = pdo.constant(name, const_value(v));
     }
-    for &(name, _, v) in php_sqlite::constants::PDO_SQLITE_DEPRECATED_ALIASES {
-        pdo = pdo.constant(name, Value::Int(v));
+    for &(name, new, v) in php_sqlite::constants::PDO_SQLITE_DEPRECATED_ALIASES {
+        let msg = format!("use Pdo\\Sqlite::{new} instead");
+        pdo = pdo.deprecated_constant(name, Value::Int(v), "8.5", &msg);
     }
     let pub_ = acc::PUBLIC;
     pdo.method(
-        "__construct(string $dsn, ?string $username = null, ?string $password = null, ?array $options = null)",
+        "__construct(string $dsn, ?string $username = null, #[\\SensitiveParameter] ?string $password = null, ?array $options = null)",
         pub_,
         construct,
     )
     .method(
-        "connect(string $dsn, ?string $username = null, ?string $password = null, ?array $options = null): static",
+        "connect(string $dsn, ?string $username = null, #[\\SensitiveParameter] ?string $password = null, ?array $options = null): static",
         pub_ | acc::STATIC,
         connect,
     )

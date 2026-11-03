@@ -488,12 +488,12 @@ pub fn register(vm: &mut Vm) {
         db = db.constant(name, Value::Int(v));
     }
     db.method(
-        "__construct(string $filename, int $flags = SQLITE3_OPEN_READWRITE | SQLITE3_OPEN_CREATE, string $encryptionKey = \"\")",
+        "__construct(string $filename, int $flags = SQLITE3_OPEN_READWRITE | SQLITE3_OPEN_CREATE, #[\\SensitiveParameter] string $encryptionKey = \"\")",
         pub_,
         open,
     )
     .method(
-        "open(string $filename, int $flags = SQLITE3_OPEN_READWRITE | SQLITE3_OPEN_CREATE, string $encryptionKey = \"\"): void",
+        "open(string $filename, int $flags = SQLITE3_OPEN_READWRITE | SQLITE3_OPEN_CREATE, #[\\SensitiveParameter] string $encryptionKey = \"\"): void",
         pub_,
         open,
     )

@@ -30,6 +30,10 @@ fn run(code: &str) -> String {
     let mut vm = Vm::with_extensions(&opts, Box::new(sink.clone()), &exts);
     let src = format!("<?php\n{code}");
     vm.run_script(src.as_bytes(), "test.php");
+    // The streams extension's STDIN/STDOUT/STDERR resources close the
+    // process descriptors when dropped, which would take the test
+    // harness's output with them: keep the VM alive.
+    std::mem::forget(vm);
     let out = sink.0.borrow().clone();
     String::from_utf8_lossy(&out).into_owned()
 }

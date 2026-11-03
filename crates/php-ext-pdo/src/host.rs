@@ -228,8 +228,7 @@ pub fn instantiate(vm: &mut Vm, cls: &Rc<Class>) -> VmResult<Obj> {
 }
 
 /// Writes a property as code running in `scope` would
-/// (`zend_update_property_ex(scope, ...)`): the scope of the innermost user
-/// frame is swapped for the duration of the write.
+/// (`zend_update_property_ex(scope, ...)`).
 pub fn write_property_scoped(
     vm: &mut Vm,
     obj: &Obj,
@@ -237,15 +236,11 @@ pub fn write_property_scoped(
     name: &ZStr,
     value: Value,
 ) -> VmResult<()> {
-    let idx = vm.frames.iter().rposition(|f| f.kind != FrameKind::Builtin);
-    let saved = idx.map(|i| std::mem::replace(&mut vm.frames[i].scope, scope.cloned()));
-    let r = vm.set_property(obj, &name.to_string_lossy(), value);
-    if let (Some(i), Some(s)) = (idx, saved) {
-        if let Some(f) = vm.frames.get_mut(i) {
-            f.scope = s;
-        }
+    let name = name.to_string_lossy();
+    match scope {
+        Some(s) => vm.set_property_scoped(obj, &name, value, s),
+        None => vm.set_property(obj, &name, value),
     }
-    r
 }
 
 fn class_info_of(cls: &Rc<Class>) -> ClassInfo {
@@ -513,28 +508,32 @@ impl PdoHost for VmHost<'_> {
         if class_of(o).magic.construct.is_none() {
             return Ok(());
         }
-        let named = args.is_some_and(|a| {
-            a.iter()
-                .any(|(k, _)| matches!(k, php_runtime::ArrayKey::Str(_)))
-        });
-        let public = class_info_of(class_of(o)).constructor_is_public;
-        if named && public {
-            // String keys are named arguments; only the generic call path
-            // of the VM resolves them.
-            let callable = Value::Array(ZArray::from_values([
-                Value::Object(o.clone()),
-                Value::from("__construct"),
-            ]));
-            let arr = Value::Array(args.cloned().unwrap_or_default());
-            let r = self
-                .vm
-                .call_function("call_user_func_array", vec![callable, arr]);
-            return self.rt(r).map(|_| ());
+        // String keys are named arguments (`zend_call_known_function`
+        // with `named_params`).
+        let mut positional = Vec::new();
+        let mut named = Vec::new();
+        for (k, v) in args
+            .map(|a| a.iter().collect::<Vec<_>>())
+            .unwrap_or_default()
+        {
+            match k {
+                php_runtime::ArrayKey::Str(n) => named.push((n.clone(), v.clone())),
+                php_runtime::ArrayKey::Int(_) => {
+                    if !named.is_empty() {
+                        return Err(RuntimeError::Error(
+                            "Cannot use positional argument after named argument".into(),
+                        ));
+                    }
+                    positional.push(v.clone());
+                }
+            }
         }
-        let args: Vec<Value> = args
-            .map(|a| a.iter().map(|(_, v)| v.clone()).collect())
-            .unwrap_or_default();
-        let r = self.vm.call_method_by_name(o, "__construct", args);
+        let r = if named.is_empty() {
+            self.vm.call_method_by_name(o, "__construct", positional)
+        } else {
+            self.vm
+                .call_method_named(o, "__construct", positional, named)
+        };
         self.rt(r).map(|_| ())
     }
 
