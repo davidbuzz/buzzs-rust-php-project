@@ -11,6 +11,7 @@ path = "src/main.rs"
 
 [dependencies]
 php-vm = { path = "../php-vm" }
+php-ext-stdmisc = { path = "../php-ext-stdmisc" }
 php-ext-stdstr = { path = "../php-ext-stdstr" }
 php-ext-stdarr = { path = "../php-ext-stdarr" }
 php-ext-pcre = { path = "../php-ext-pcre" }

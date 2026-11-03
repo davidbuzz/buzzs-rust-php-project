@@ -1,1 +1,48 @@
-//! TODO
+//! The "misc" of `ext/standard` for the phprust VM: binds the
+//! `php-stdmisc` library through the `php_vm::ext` extension API.
+//!
+//! * [`crypt`]: `crypt()` and `password_*`.
+//! * [`exec`]: `escapeshell*`, `exec`/`system`/`passthru`/`shell_exec`,
+//!   `proc_nice`.
+//! * [`net`]: address conversion, host/service/protocol lookups, DNS,
+//!   `net_get_interfaces`, syslog.
+//! * [`env`]: environment/process information, time and sleep functions,
+//!   connection state, `getopt`, `get_cfg_var`.
+//! * [`text`]: highlighting, `php_strip_whitespace`, `http_build_query`,
+//!   `parse_str`, locale functions.
+//! * [`misc`]: `mail`, `error_log`, `assert_options`, `phpinfo`,
+//!   `phpcredits`.
+//!
+//! Per-request state (locale, `putenv` changes, syslog, assert callback)
+//! lives in thread-locals and is reset by request-shutdown hooks.
+
+mod credits;
+mod crypt;
+mod ctx;
+mod env;
+mod exec;
+mod misc;
+mod net;
+mod text;
+
+use php_vm::ext::{Extension, ModuleBuilder};
+
+/// The `ext/standard` misc functions (registered under the `standard`
+/// extension name).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct StdMisc;
+
+impl Extension for StdMisc {
+    fn name(&self) -> &'static str {
+        "standard"
+    }
+
+    fn register(&self, m: &mut ModuleBuilder<'_>) {
+        crypt::register(m);
+        exec::register(m);
+        net::register(m);
+        env::register(m);
+        text::register(m);
+        misc::register(m);
+    }
+}
