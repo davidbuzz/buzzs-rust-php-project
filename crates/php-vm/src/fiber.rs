@@ -23,7 +23,7 @@ use crate::builtins::classbuilder::ClassBuilder;
 use crate::class::{cflags, Class};
 use crate::func::{flags, Args};
 use crate::object;
-use crate::vm::{Frame, FrameKind, Throw, Vm, VmResult};
+use crate::vm::{Frame, FrameKind, PendingCall, Throw, Vm, VmResult};
 use php_runtime::{Obj, Value, ZStr};
 use stack::{Coroutine, StackError, Suspender};
 use std::cell::RefCell;
@@ -47,6 +47,9 @@ pub enum FiberState {
 pub struct FiberData {
     /// The callable.
     pub callable: Value,
+    /// The callable resolved by the constructor (`fci`/`fcc`: keeps the
+    /// object a `[A::class, 'm']` callable bound to); taken by `start()`.
+    call: Option<PendingCall>,
     /// Status.
     pub state: FiberState,
     /// `ZEND_FIBER_FLAG_THREW`.
@@ -75,9 +78,10 @@ pub struct FiberData {
 }
 
 impl FiberData {
-    fn new(callable: Value) -> Self {
+    fn new(callable: Value, call: PendingCall) -> Self {
         FiberData {
             callable,
+            call: Some(call),
             state: FiberState::Init,
             threw: false,
             bailout: false,
@@ -261,6 +265,43 @@ impl Vm {
         out.unwrap_or(Ok(Value::Null))
     }
 
+    /// Adds the `start()` arguments to the resolved call (the named
+    /// argument rules of `zend_call_function`).
+    fn fiber_bind_args(&mut self, mut call: PendingCall, args: Vec<Value>, named: Vec<(ZStr, Value)>) -> VmResult<PendingCall> {
+        call.args = args.into_iter().map(Some).collect();
+        for (k, v) in named {
+            let pos = if call.magic_name.is_some() {
+                None
+            } else {
+                call.func.params().iter().position(|p| p.name == k && !p.variadic)
+            };
+            match pos {
+                Some(p) => {
+                    if call.args.len() <= p {
+                        call.args.resize(p + 1, None);
+                    } else if call.args[p].is_some() {
+                        return Err(self.make_throw(
+                            "Error",
+                            &format!("Named parameter ${} overwrites previous argument", k.to_string_lossy()),
+                        ));
+                    }
+                    call.args[p] = Some(v);
+                }
+                None => {
+                    if !call.func.is_variadic() && call.magic_name.is_none() {
+                        return Err(self.make_throw(
+                            "Error",
+                            &format!("Unknown named parameter ${}", k.to_string_lossy()),
+                        ));
+                    }
+                    call.named.push((k, v));
+                }
+            }
+            call.has_named = true;
+        }
+        Ok(call)
+    }
+
     /// Creates the native stack of a fiber about to start.
     fn fiber_create_context(&mut self, fiber: &Obj, args: Vec<Value>, named: Vec<(ZStr, Value)>) -> VmResult<()> {
         let requested = match self.ini.typed("fiber.stack_size") {
@@ -274,7 +315,10 @@ impl Vm {
             ));
         }
         let size = requested.saturating_mul(STACK_SCALE).max(1 << 20);
-        let cb = with(fiber, |d| d.callable.clone()).unwrap_or_default();
+        let Some(call) = with(fiber, |d| d.call.take()).flatten() else {
+            return Err(self.fiber_error("Cannot start a fiber that has already been started"));
+        };
+        let call = self.fiber_bind_args(call, args, named)?;
         let vm_ptr: *mut Vm = self;
         let body = Box::new(move |s: &Suspender| {
             // SAFETY: the body only runs inside `Coroutine::resume`, called
@@ -282,7 +326,7 @@ impl Vm {
             // it until `resume` returns: control is handed back and forth,
             // never shared. The VM does not move while scripts run.
             let vm = unsafe { &mut *vm_ptr };
-            fiber_body(vm, *s, &cb, args, named);
+            fiber_body(vm, *s, call);
         });
         match Coroutine::new(size, body) {
             Ok(co) => {
@@ -320,13 +364,13 @@ impl Vm {
 }
 
 /// `zend_fiber_execute`: runs on the fiber's own stack.
-fn fiber_body(vm: &mut Vm, s: Suspender, cb: &Value, args: Vec<Value>, named: Vec<(ZStr, Value)>) {
+fn fiber_body(vm: &mut Vm, s: Suspender, call: PendingCall) {
     // No strong reference to the fiber may live on its own stack, or an
     // unreferenced suspended fiber would never be destroyed.
     let Some(()) = vm.fibers.last().and_then(|f| with(f, |d| d.suspender = Some(s))) else {
         return;
     };
-    let r = vm.call_value_named(cb, args, named);
+    let r = vm.call_pending(call);
     let Some(fiber) = vm.fibers.last().cloned() else {
         return;
     };
@@ -362,7 +406,9 @@ fn fiber_construct(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     if object::has_internal::<FiberData>(&o) {
         return Err(vm.fiber_error("Cannot call constructor twice"));
     }
-    object::set_internal(&o, FiberData::new(a.at(0)));
+    let cb = a.at(0);
+    let call = vm.resolve_callable_for_call(&cb)?;
+    object::set_internal(&o, FiberData::new(cb, call));
     Ok(Value::Null)
 }
 
@@ -465,7 +511,17 @@ fn fiber_destroy(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         return Ok(Value::Null);
     };
     with(&o, |d| d.destroyed = true);
-    vm.fiber_switch_in(&o, Err(Throw::Exception(g))).map(|_| Value::Null)
+    // php-src destroys from the `dtor_obj` handler, without a call frame:
+    // replace our `__destruct` frame by one backtraces skip.
+    let own = vm.frames.pop();
+    let hidden = Frame::with_vars(vm.empty_code.clone(), FrameKind::Builtin, vm.empty_vars.clone(), None);
+    vm.frames.push(hidden);
+    let r = vm.fiber_switch_in(&o, Err(Throw::Exception(g)));
+    vm.frames.pop();
+    if let Some(f) = own {
+        vm.frames.push(f);
+    }
+    r.map(|_| Value::Null)
 }
 
 fn fiber_error_construct(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
