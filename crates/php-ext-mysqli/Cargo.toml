@@ -1,11 +1,16 @@
 [package]
 name = "php-ext-mysqli"
+description = "ext/mysqli bound to the phprust VM over the pure-Rust php-mysqlnd client"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+php-vm = { path = "../php-vm" }
+php-runtime = { path = "../php-runtime" }
+php-support = { path = "../php-support" }
+php-mysqlnd = { path = "../php-mysqlnd" }
 
 [lints]
 workspace = true
