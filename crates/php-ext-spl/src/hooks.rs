@@ -203,6 +203,13 @@ fn unset_dimension(vm: &mut Vm, o: &Obj, k: &Value) -> VmResult<bool> {
 }
 
 fn get_iterator(vm: &mut Vm, o: &Obj, by_ref: bool) -> VmResult<Box<dyn NativeIterator>> {
+    if by_ref && php_vm::object::class_of(o).instance_of_name(b"directoryiterator") {
+        // `spl_filesystem_dir_get_iterator` / `spl_filesystem_tree_get_iterator`.
+        return Err(vm.throw(
+            "Error",
+            "An iterator cannot be used with foreach by reference",
+        ));
+    }
     let it = with_host(vm, |host| php_spl::iter::get_iterator(host, o, by_ref))?;
     Ok(Box::new(SplNativeIter::new(it)))
 }
