@@ -78,10 +78,17 @@ pub(crate) fn call(h: &mut dyn SessionHost, slot: Slot, args: &[Value]) -> Optio
     }
     h.session().in_save_handler = true;
     let r = h.call_handler(&func, args);
-    h.session().in_save_handler = false;
     match r {
-        Ok(v) => v,
+        Ok(v) => {
+            h.session().in_save_handler = false;
+            v
+        }
         Err(e) => {
+            // A fatal error (bailout) longjmps past the reset, so the next
+            // handler call reports the recursion, as PHP does at shutdown.
+            if !matches!(e, RuntimeError::Fatal(_)) {
+                h.session().in_save_handler = false;
+            }
             h.session().set_exception(e);
             None
         }

@@ -29,7 +29,11 @@ pub trait SessionHost: RuntimeContext {
     /// `call_user_function()` on a user save-handler callable (a string, an
     /// `[object, "method"]` array or a closure). `Ok(None)` means the call
     /// failed without an exception (the retval is `UNDEF`); `Err` is a
-    /// thrown exception (or `exit`).
+    /// thrown exception. When the exception cannot propagate (no user frame,
+    /// e.g. during request shutdown) PHP turns it into a fatal error and
+    /// bails out: the host prints it and returns [`RuntimeError::Fatal`]
+    /// (also used for `exit`), after which the module behaves as after a
+    /// `longjmp` (the next handler call reports the recursion).
     fn call_handler(&mut self, callable: &Value, args: &[Value]) -> RtResult<Option<Value>>;
 
     /// `zend_get_callable_name()` (closures are named after their function,

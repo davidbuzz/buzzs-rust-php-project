@@ -661,7 +661,7 @@ pub fn session_regenerate_id(h: &mut dyn SessionHost, delete_old_session: bool) 
                 }
                 h.session().id = None;
                 if let Some(id) = mod_create_sid(h, &m) {
-                    h.session().id = Some(ZStr::from(id))
+                    h.session().id = Some(ZStr::from(id));
                 } else {
                     mod_close(h, &m);
                     h.session().status = SessionStatus::None;
