@@ -190,36 +190,40 @@ fn resolve_path(vm: &Vm, p: &str, option: &str) -> Option<String> {
     Some(String::from_utf8_lossy(&real).into_owned())
 }
 
-/// `php_openssl_load_stream_cafile`: adds the PEM certificates of a file.
-fn load_stream_cafile(b: &mut SslContextBuilder, cafile: &str) -> bool {
-    let path = cafile.strip_prefix("file://").unwrap_or(cafile);
-    if let Some(i) = path.find("://") {
-        if path[..i]
-            .bytes()
-            .all(|c| c.is_ascii_alphanumeric() || b"+-.".contains(&c))
-        {
+/// `php_openssl_load_stream_cafile`: reads `cafile` through the stream
+/// layer (so `phar://` and other local wrappers work) and adds its PEM
+/// certificates to the context's store; streams of URL wrappers are
+/// refused.
+fn load_stream_cafile(vm: &mut Vm, b: &mut SslContextBuilder, cafile: &str) -> bool {
+    let read = php_ext_streams::bridge::enter(vm, || {
+        let mut opened = None;
+        let mut s = php_streams::open::open_wrapper(cafile.as_bytes(), "rb", 0, &mut opened, None)?;
+        if s.wrapper.as_ref().is_some_and(|w| w.is_url) {
+            s.close();
+            return Some(None);
+        }
+        let data = s.copy_to_mem(None).unwrap_or_default();
+        s.close();
+        Some(Some(data))
+    });
+    let data = match read {
+        None => {
+            warn(
+                Code::OpenFailed,
+                format!("failed loading cafile stream: `{cafile}'"),
+            );
+            return false;
+        }
+        Some(None) => {
             warn(
                 Code::PermissionDenied,
                 "remote cafile streams are disabled for security purposes",
             );
             return false;
         }
-    }
-    let Ok(data) = std::fs::read(path) else {
-        warn(
-            Code::OpenFailed,
-            format!("failed loading cafile stream: `{cafile}'"),
-        );
-        return false;
+        Some(Some(data)) => data,
     };
-    let mut added = 0;
-    if let Ok(certs) = openssl::x509::X509::stack_from_pem(&data) {
-        for c in certs {
-            if b.cert_store_mut().add_cert(c).is_ok() {
-                added += 1;
-            }
-        }
-    }
+    let added = php_openssl::tls::add_cafile_certs(b.cert_store_mut(), &data);
     if added == 0 {
         warn(
             Code::DecodingFailed,
@@ -270,7 +274,7 @@ fn enable_peer_verification(
             .is_ok();
         if !ok {
             if let Some(f) = &cafile {
-                if !load_stream_cafile(b, f) {
+                if !load_stream_cafile(vm, b, f) {
                     return Ok(false);
                 }
             }

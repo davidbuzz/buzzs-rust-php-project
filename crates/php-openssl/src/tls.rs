@@ -515,6 +515,61 @@ pub fn connect<S: Read + Write>(
     })
 }
 
+/// The certificate blocks `php_openssl_load_stream_cafile()` hands to
+/// `PEM_read_bio_X509()`: each runs from a line that is exactly
+/// `-----BEGIN CERTIFICATE-----` (with a `\n` or `\r\n` ending) to the next
+/// `-----END CERTIFICATE-----` line (which may lack its line ending at the
+/// end of the data), both included. A block left open at the end of the
+/// data is dropped, and so is anything between blocks.
+#[must_use]
+pub fn cafile_pem_blocks(data: &[u8]) -> Vec<&[u8]> {
+    const BEGIN: &[u8] = b"-----BEGIN CERTIFICATE-----";
+    const END: &[u8] = b"-----END CERTIFICATE-----";
+    let mut blocks = Vec::new();
+    let mut start = None;
+    let mut pos = 0;
+    while pos < data.len() {
+        // `php_stream_get_line()`: a line keeps its `\n`.
+        let end = data[pos..]
+            .iter()
+            .position(|&b| b == b'\n')
+            .map_or(data.len(), |i| pos + i + 1);
+        let line = &data[pos..end];
+        let body = line
+            .strip_suffix(b"\r\n")
+            .or_else(|| line.strip_suffix(b"\n"));
+        match start {
+            None if body == Some(BEGIN) => start = Some(pos),
+            Some(s) if body.unwrap_or(line) == END => {
+                blocks.push(&data[s..end]);
+                start = None;
+            }
+            _ => {}
+        }
+        pos = end;
+    }
+    blocks
+}
+
+/// `php_openssl_load_stream_cafile()` once the stream has been read: adds
+/// every certificate block of `pem` (see [`cafile_pem_blocks`]) that
+/// parses to `store`. Returns how many were added; `0` is the caller's cue
+/// for the "no valid certs found cafile stream" warning.
+pub fn add_cafile_certs(
+    store: &mut openssl::x509::store::X509StoreBuilderRef,
+    pem: &[u8],
+) -> usize {
+    let mut added = 0;
+    for block in cafile_pem_blocks(pem) {
+        if let Ok(cert) = openssl::x509::X509::from_pem(block) {
+            if store.add_cert(cert).is_ok() {
+                added += 1;
+            }
+        }
+    }
+    added
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -584,5 +639,70 @@ mod tests {
                 "Failed to enable crypto"
             ]
         );
+    }
+
+    fn ca_pem(cn: &str) -> Vec<u8> {
+        use openssl::x509::{X509Builder, X509NameBuilder};
+        let key = openssl::pkey::PKey::from_ec_key(
+            openssl::ec::EcKey::generate(
+                &openssl::ec::EcGroup::from_curve_name(openssl::nid::Nid::X9_62_PRIME256V1)
+                    .expect("curve"),
+            )
+            .expect("ec key"),
+        )
+        .expect("pkey");
+        let mut name = X509NameBuilder::new().expect("name");
+        name.append_entry_by_text("CN", cn).expect("cn");
+        let name = name.build();
+        let mut b = X509Builder::new().expect("builder");
+        b.set_version(2).expect("version");
+        b.set_subject_name(&name).expect("subject");
+        b.set_issuer_name(&name).expect("issuer");
+        b.set_pubkey(&key).expect("pubkey");
+        b.set_not_before(&openssl::asn1::Asn1Time::days_from_now(0).expect("time"))
+            .expect("nb");
+        b.set_not_after(&openssl::asn1::Asn1Time::days_from_now(1).expect("time"))
+            .expect("na");
+        b.sign(&key, openssl::hash::MessageDigest::sha256())
+            .expect("sign");
+        b.build().to_pem().expect("pem")
+    }
+
+    #[test]
+    fn cafile_blocks_follow_the_line_scanner() {
+        let a = ca_pem("a");
+        let crlf: Vec<u8> = String::from_utf8_lossy(&ca_pem("b"))
+            .replace('\n', "\r\n")
+            .into_bytes();
+        let mut data = b"junk\n -----BEGIN CERTIFICATE-----\n".to_vec();
+        data.extend_from_slice(&a);
+        data.extend_from_slice(b"between\n");
+        data.extend_from_slice(&crlf);
+        // The last END line may lack its newline.
+        let tail = ca_pem("c");
+        data.extend_from_slice(&tail[..tail.len() - 1]);
+        let blocks = cafile_pem_blocks(&data);
+        assert_eq!(blocks.len(), 3);
+        assert_eq!(blocks[0], a.as_slice());
+        assert_eq!(blocks[1], crlf.as_slice());
+        assert_eq!(blocks[2], &tail[..tail.len() - 1]);
+        // An unterminated block is dropped.
+        assert!(cafile_pem_blocks(&a[..a.len() - 10]).is_empty());
+        assert!(cafile_pem_blocks(b"").is_empty());
+        assert!(cafile_pem_blocks(b"plain text\n").is_empty());
+    }
+
+    #[test]
+    fn cafile_certs_are_added_to_the_store() {
+        let mut data = ca_pem("one");
+        data.extend_from_slice(
+            b"-----BEGIN CERTIFICATE-----\nnot base64\n-----END CERTIFICATE-----\n",
+        );
+        data.extend_from_slice(&ca_pem("two"));
+        let mut store = openssl::x509::store::X509StoreBuilder::new().expect("store");
+        assert_eq!(add_cafile_certs(&mut store, &data), 2);
+        assert_eq!(store.build().all_certificates().len(), 2);
+        let mut empty = openssl::x509::store::X509StoreBuilder::new().expect("store");
+        assert_eq!(add_cafile_certs(&mut empty, b"no certs here\n"), 0);
     }
 }
