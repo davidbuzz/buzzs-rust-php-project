@@ -358,6 +358,7 @@ dependencies = [
  "php-ext-fileinfo",
  "php-ext-filter",
  "php-ext-ftp",
+ "php-ext-gd",
  "php-ext-gettext",
  "php-ext-gmp",
  "php-ext-hash",
@@ -389,6 +390,7 @@ dependencies = [
  "php-ext-xml",
  "php-ext-xmlreader",
  "php-ext-xsl",
+ "php-ext-zendtest",
  "php-ext-zip",
  "php-ext-zlib",
  "php-memlimit",
@@ -569,8 +571,13 @@ dependencies = [
 name = "php-ext-gd"
 version = "0.1.0"
 dependencies = [
+ "libc",
+ "php-ext-stdstr",
+ "php-ext-streams",
  "php-gd",
  "php-runtime",
+ "php-streams",
+ "php-support",
  "php-vm",
 ]
 
@@ -942,7 +949,11 @@ dependencies = [
 name = "php-ext-zendtest"
 version = "0.1.0"
 dependencies = [
+ "libc",
+ "php-memlimit",
+ "php-parser",
  "php-runtime",
+ "php-support",
  "php-vm",
 ]
 
@@ -995,6 +1006,7 @@ dependencies = [
 name = "php-gd"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "pkg-config",
 ]
 
