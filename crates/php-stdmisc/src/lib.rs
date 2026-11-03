@@ -9,6 +9,7 @@
 //!   `proc_terminate`.
 //! * [`query`] — `http_build_query`, `parse_str` and the SAPI's request
 //!   variable registration (`php_register_variable_ex`).
+//! * [`getopt`] — `getopt()`.
 //! * [`highlight`] — `highlight_string`/`highlight_file` HTML and
 //!   `php_strip_whitespace`.
 //! * [`locale`] — `setlocale`, `localeconv`, `nl_langinfo`.
@@ -17,6 +18,7 @@
 
 pub mod crypt;
 pub mod exec;
+pub mod getopt;
 pub mod highlight;
 pub mod locale;
 pub mod process;
