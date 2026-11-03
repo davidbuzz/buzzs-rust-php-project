@@ -83,7 +83,14 @@ fn stream_get_meta_data(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             .insert(ArrayKey::Str(ZStr::from(k.as_str())), bridge::from_lib(&v));
     }
     if let Some(c) = crypto {
-        arr.make_mut().insert("crypto", c);
+        // "crypto" comes first (php_openssl_sockop_set_option adds it
+        // before the generic keys).
+        let mut first = ZArray::new();
+        first.make_mut().insert("crypto", c);
+        for (k, v) in arr.iter() {
+            first.make_mut().insert(k.clone(), v.clone());
+        }
+        arr = first;
     }
     Ok(Value::Array(arr))
 }
@@ -175,11 +182,16 @@ fn stream_get_wrappers(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
 
 fn stream_get_transports(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
     let mut arr = ZArray::new();
-    for p in transports::transports() {
-        let _ = arr.make_mut().push(bytes(p));
-    }
-    for p in crate::xport::schemes() {
-        let _ = arr.make_mut().push(bytes(p));
+    let mut seen: Vec<String> = Vec::new();
+    for p in transports::transports()
+        .into_iter()
+        .map(str::to_string)
+        .chain(crate::xport::schemes())
+    {
+        if !seen.contains(&p) {
+            let _ = arr.make_mut().push(bytes(p.as_bytes()));
+            seen.push(p);
+        }
     }
     Ok(Value::Array(arr))
 }

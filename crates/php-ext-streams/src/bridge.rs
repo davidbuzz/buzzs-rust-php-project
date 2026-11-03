@@ -26,6 +26,9 @@ thread_local! {
     /// The first exception (or exit) raised inside a callback, re-raised
     /// when control returns to the native function.
     static PENDING: RefCell<Option<Throw>> = const { RefCell::new(None) };
+    /// While set, [`flush_diags`] leaves the diagnostics queued (a hook is
+    /// running with its stream taken out of the resource).
+    static DEFER_FLUSH: Cell<bool> = const { Cell::new(false) };
 }
 
 /// Restores the previous VM pointer when a scope ends (also on unwind).
@@ -100,6 +103,9 @@ pub fn take_pending() -> Option<Throw> {
 
 /// Emits the queued library diagnostics through the VM.
 pub fn flush_diags(vm: &mut Vm) {
+    if DEFER_FLUSH.with(Cell::get) {
+        return;
+    }
     let diags = diag::take();
     if !diags.is_empty() {
         crate::errors::report(vm, diags);
@@ -140,6 +146,14 @@ fn run_ex<R>(vm: &mut Vm, sync: bool, f: impl FnOnce() -> R) -> VmResult<R> {
 /// the queued diagnostic texts (without the `func(): ` prefix).
 pub fn take_diagnostics() -> Vec<String> {
     diag::take().iter().map(php_streams::diag::Diagnostic::text).collect()
+}
+
+/// Defers [`flush_diags`] while `f` runs.
+pub fn deferring_flush<R>(f: impl FnOnce() -> R) -> R {
+    let old = DEFER_FLUSH.with(|d| d.replace(true));
+    let r = f();
+    DEFER_FLUSH.with(|d| d.set(old));
+    r
 }
 
 /// Copies the INI settings consulted by the streams layer.

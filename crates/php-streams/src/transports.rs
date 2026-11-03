@@ -19,7 +19,7 @@ use crate::value::Value;
 
 /// `stream_get_transports()` for the transports implemented here.
 pub fn transports() -> Vec<&'static str> {
-    vec!["tcp", "udp", "unix"]
+    vec!["tcp", "udp", "unix", "udg"]
 }
 
 #[derive(Debug)]

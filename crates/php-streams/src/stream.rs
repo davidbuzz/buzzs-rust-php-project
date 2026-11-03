@@ -144,6 +144,10 @@ pub struct StreamState {
     pub flags: u32,
     /// The wrapper label used in error reports (`"stream"` when none).
     pub wrapper_label: &'static str,
+    /// `stream->has_buffered_data`: data was already returned by the
+    /// running `read()` before this low-level read (socket ops then avoid
+    /// blocking).
+    pub has_buffered_data: bool,
     /// `errno` of the last failed operation that PHP inspects afterwards
     /// (e.g. `EWOULDBLOCK` after a failed non-blocking `flock()`).
     pub last_errno: i32,
@@ -353,6 +357,7 @@ impl Stream {
                 fatal_error: false,
                 flags: 0,
                 wrapper_label: "stream",
+                has_buffered_data: false,
                 last_errno: 0,
             },
             mode: mode.to_string(),
@@ -563,6 +568,7 @@ impl Stream {
                     .copy_from_slice(&self.readbuf[self.readpos..self.readpos + toread]);
                 self.readpos += toread;
                 size -= toread;
+                self.state.has_buffered_data = true;
                 off += toread;
                 didread += toread;
             }
@@ -600,6 +606,7 @@ impl Stream {
                 didread += toread;
                 off += toread;
                 size -= toread;
+                self.state.has_buffered_data = true;
             } else {
                 break;
             }
@@ -609,6 +616,7 @@ impl Stream {
         }
         if didread > 0 {
             self.position += to_i64(didread);
+            self.state.has_buffered_data = false;
         }
         Ok(didread)
     }

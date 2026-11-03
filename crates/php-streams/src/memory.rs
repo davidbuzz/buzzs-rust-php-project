@@ -254,6 +254,7 @@ fn dummy_state() -> StreamState {
         fatal_error: false,
         flags: 0,
         wrapper_label: "stream",
+        has_buffered_data: false,
         last_errno: 0,
     }
 }

@@ -74,12 +74,18 @@ impl StreamOps for FdSockOps {
     fn read(&mut self, st: &mut StreamState, buf: &mut [u8]) -> Result<usize, OpFailed> {
         let fd = self.raw().ok_or(OpFailed)?;
         self.timed_out = false;
-        if self.blocked && !wait_fd(fd, libc::POLLIN, self.timeout) {
-            self.timed_out = true;
-            return Err(OpFailed);
+        let buffered = st.has_buffered_data;
+        let mut flags = 0;
+        if self.blocked {
+            if buffered {
+                flags = libc::MSG_DONTWAIT;
+            } else if !wait_fd(fd, libc::POLLIN, self.timeout) {
+                self.timed_out = true;
+                return Err(OpFailed);
+            }
         }
         // SAFETY: `buf` is a valid writable buffer of `buf.len()` bytes.
-        let n = unsafe { libc::recv(fd, buf.as_mut_ptr().cast(), buf.len(), 0) };
+        let n = unsafe { libc::recv(fd, buf.as_mut_ptr().cast(), buf.len(), flags) };
         if n < 0 {
             let e = errno();
             if e == libc::EAGAIN || e == libc::EWOULDBLOCK || e == libc::EINTR {
@@ -497,29 +503,37 @@ fn stream_socket_enable_crypto(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         return Ok(Value::Bool(false));
     };
     let mut sess = session.as_ref().and_then(|c| c.take());
-    let r = hook(vm, &mut s, enable, method, sess.as_mut());
+    // The hook's warnings are emitted once the stream is back in its
+    // resource (a user error handler may use or close it).
+    let r = bridge::deferring_flush(|| hook(vm, &mut s, enable, method, sess.as_mut()));
     if let (Some(c), Some(ss)) = (session.as_ref(), sess) {
         c.replace_stream(ss);
     }
-    let (v, replacement) = match r {
-        Ok(x) => x,
+    let r = match r {
+        Ok((v, replacement)) => {
+            match replacement {
+                Some(new) => {
+                    let mut old = s;
+                    old.add_flags(flags::NO_CLOSE);
+                    drop(old);
+                    cell.replace_stream(new);
+                }
+                None => {
+                    cell.replace_stream(s);
+                }
+            }
+            Ok(v)
+        }
         Err(t) => {
             cell.replace_stream(s);
-            return Err(t);
+            Err(t)
         }
     };
-    match replacement {
-        Some(new) => {
-            let mut old = s;
-            old.add_flags(flags::NO_CLOSE);
-            drop(old);
-            cell.replace_stream(new);
-        }
-        None => {
-            cell.replace_stream(s);
-        }
+    bridge::flush_diags(vm);
+    if let Some(t) = bridge::take_pending() {
+        return Err(t);
     }
-    Ok(v)
+    r
 }
 
 fn stream_socket_get_crypto_status(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
