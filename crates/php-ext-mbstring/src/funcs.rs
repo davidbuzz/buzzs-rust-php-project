@@ -60,6 +60,11 @@ impl OwnedList {
     }
 }
 
+/// Inputs above this size get `memory_limit` reservations.
+const LARGE: usize = 64 * 1024;
+/// Inputs above this size get reservations for worst-case expansion.
+const HUGE: usize = 1024 * 1024;
+
 fn opt_bytes(s: Option<&ZStr>) -> Option<&[u8]> {
     s.map(ZStr::as_bytes)
 }
@@ -182,6 +187,13 @@ fn mb_get_info(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 fn mb_str_split(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let (s, len, enc) = (a.str(0), a.int(1), opt_str(a, 2));
+    if s.as_bytes().len() > LARGE && len > 0 {
+        // array_init_size() for every chunk (one-byte strings are interned).
+        let chunk = usize::try_from(len).unwrap_or(usize::MAX);
+        let n = s.as_bytes().len().div_ceil(chunk);
+        let each = if chunk > 1 { mem::zstr(chunk) } else { 0 };
+        mem::check(vm, 0, mem::packed(n).saturating_add(n.saturating_mul(each)))?;
+    }
     let v = call(vm, a, |st| {
         st.mb_str_split(s.as_bytes(), len, opt_bytes(enc.as_ref()))
     })
@@ -293,31 +305,21 @@ fn mb_substr(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 fn mb_strcut(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let (s, start, len, enc) = (a.str(0), a.int(1), opt_int(a, 2), opt_str(a, 3));
+    // Encodings without a length table are cut through a filter chain into
+    // a memory device holding the re-encoded input (up to ~2.7 bytes per
+    // byte for UTF-7), which grows while the old block is still live.
+    let filtered = enc
+        .as_ref()
+        .and_then(|e| php_mbstring::encoding::by_cname(e.as_bytes()))
+        .is_some_and(|e| e.mblen_table.is_none() && e.fixed_width().is_none() && !e.is_utf8());
+    if filtered && s.as_bytes().len() > LARGE {
+        mem::check(vm, 0, s.as_bytes().len().saturating_mul(4))?;
+    }
     let v = call(vm, a, |st| {
         st.mb_strcut(s.as_bytes(), start, len, opt_bytes(enc.as_ref()))
     })
     .map(bytes)?;
-    // Encodings without a length table are cut through a filter chain
-    // into a growing memory device: the old and new device coexist.
-    let filtered = enc
-        .as_ref()
-        .and_then(|e| php_mbstring::encoding::by_cname(e.as_bytes()))
-        .filter(|e| e.mblen_table.is_none() && e.fixed_width().is_none() && !e.is_utf8());
-    let live = mem::zstr(s.as_bytes().len());
-    if let Some(e) = filtered.filter(|_| s.as_bytes().len() > 64 * 1024) {
-        // The whole input is re-encoded into the device before cutting.
-        let device = php_mbstring::convert::fast_convert(
-            s.as_bytes(),
-            e,
-            e,
-            u32::from(b'?'),
-            php_mbstring::ErrorMode::Char,
-        )
-        .0
-        .len();
-        mem::check(vm, live + device, device)?;
-    }
-    mem::result(vm, live, v)
+    mem::result(vm, mem::zstr(s.as_bytes().len()), v)
 }
 
 fn mb_strwidth(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -409,6 +411,10 @@ fn mb_detect_encoding(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 fn mb_encode_mimeheader(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let (s, charset, te, nl, indent) = (a.str(0), opt_str(a, 1), opt_str(a, 2), a.str(3), a.int(4));
+    if s.as_bytes().len() > HUGE {
+        // Encoded words take up to four times the input.
+        mem::check(vm, 0, s.as_bytes().len().saturating_mul(4))?;
+    }
     let v = call(vm, a, |st| {
         st.mb_encode_mimeheader(
             s.as_bytes(),
@@ -424,6 +430,10 @@ fn mb_encode_mimeheader(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 fn mb_decode_mimeheader(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let s = a.str(0);
+    if s.as_bytes().len() > HUGE {
+        // The decoder's output device is sized for the input.
+        mem::check(vm, 0, s.as_bytes().len())?;
+    }
     let v = call(vm, a, |st| Ok(st.mb_decode_mimeheader(s.as_bytes()))).map(bytes)?;
     mem::result(vm, 2 * mem::zstr(s.as_bytes().len()), v)
 }
@@ -451,6 +461,10 @@ fn conversion_map(vm: &mut Vm, arr: &ZArray) -> Vec<Option<i64>> {
 fn mb_encode_numericentity(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let (s, map, enc, hex) = (a.str(0), a.array(1), opt_str(a, 2), a.bool(3));
     let map = conversion_map(vm, &map);
+    if s.as_bytes().len() > HUGE {
+        // Every character may become a `&#xHHHHHH;` entity.
+        mem::check(vm, 0, s.as_bytes().len().saturating_mul(6))?;
+    }
     let v = call(vm, a, |st| {
         st.mb_encode_numericentity(s.as_bytes(), &map, opt_bytes(enc.as_ref()), hex)
     })
@@ -481,6 +495,11 @@ fn mb_str_pad(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     // `STR_PAD_RIGHT` is not a literal the stub parser knows.
     let ty = if a.has(3) { a.int(3) } else { 1 };
     let (s, len, pad, enc) = (a.str(0), a.int(1), a.str(2), opt_str(a, 4));
+    if let Ok(n) = usize::try_from(len) {
+        if n > LARGE && !pad.as_bytes().is_empty() {
+            mem::check(vm, 0, mem::zstr(n))?;
+        }
+    }
     let v = call(vm, a, |st| {
         st.mb_str_pad(
             s.as_bytes(),

@@ -61,6 +61,9 @@ impl Converter<'_> {
         }
         let mut out = HashTable::with_capacity(input.len());
         for (key, entry) in input.iter() {
+            if mem::pending() {
+                break;
+            }
             let key = match key {
                 ArrayKey::Str(k) => {
                     let conv = self.string(k.as_bytes());
@@ -353,6 +356,10 @@ impl VarConverter {
                     if let Some(s) = t.get_mut(&k) {
                         *s = e;
                     }
+                    if mem::pending() {
+                        self.arrays.pop();
+                        return Ok(Err(Stop::Recursion));
+                    }
                     if res?.is_err() {
                         self.arrays.pop();
                         return Ok(Err(Stop::Recursion));
@@ -489,14 +496,13 @@ fn mb_convert_variables(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         };
         conv.refs.push(r.clone());
         let previous = r.get();
-        let live = mem::value_size(&previous);
         let res = conv.value(vm, i + 3, previous)?;
         conv.refs.pop();
         match res {
             Ok(nv) => {
-                mem::check(vm, live, mem::value_size(&nv))?;
                 r.set(nv);
             }
+            Err(Stop::Recursion) if mem::pending() => return Ok(Value::Bool(false)),
             Err(Stop::Recursion) => {
                 vm.php_warning("Cannot handle recursive references")?;
                 return Ok(Value::Bool(false));

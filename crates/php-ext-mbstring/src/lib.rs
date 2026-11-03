@@ -15,12 +15,14 @@ mod gpc;
 mod ini;
 mod mail;
 mod mem;
+mod multibyte;
 mod output;
 pub mod regex;
 mod state;
 
 use php_runtime::Value;
-use php_vm::ext::{Extension, ModuleBuilder};
+use php_vm::ext::{Extension, InfoItem, ModuleBuilder};
+use php_vm::Vm;
 
 /// The `mbstring` extension.
 #[derive(Debug, Clone, Copy, Default)]
@@ -40,9 +42,11 @@ impl Extension for Mbstring {
         gpc::register(m);
         output::register(m);
         regex::register(m);
-        ini::install_hooks(m);
+        ini::register_hooks(m);
         output::install_hooks(m);
         ini::startup(m.vm());
+        multibyte::install(m.vm());
+        m.info(module_info);
         m.on_request_startup(output::request_startup);
         m.on_request_shutdown(|_| {
             state::with(php_mbstring::MbState::request_shutdown);
@@ -70,4 +74,33 @@ fn register_constants(m: &mut ModuleBuilder<'_>) {
         "MB_ONIGURUMA_VERSION",
         Value::from(regex::ONIGURUMA_VERSION),
     );
+}
+
+/// `PHP_MINFO_FUNCTION(mbstring)` (with `PHP_MINFO(mb_regex)`).
+fn module_info(vm: &mut Vm) -> Vec<InfoItem> {
+    let row = |a: &str, b: &str| InfoItem::Row(vec![a.to_string(), b.to_string()]);
+    let translation = if vm.ini_bool("mbstring.encoding_translation") {
+        "enabled"
+    } else {
+        "disabled"
+    };
+    vec![
+        InfoItem::TableStart,
+        row("Multibyte Support", "enabled"),
+        row("Multibyte string engine", "libmbfl"),
+        row("HTTP input encoding translation", translation),
+        row("libmbfl version", "1.3.2"),
+        InfoItem::TableEnd,
+        InfoItem::TableStart,
+        InfoItem::Header(vec![
+            "mbstring extension makes use of \"streamable kanji code filter and converter\", which is distributed under the GNU Lesser General Public License version 2.1."
+                .to_string(),
+        ]),
+        InfoItem::TableEnd,
+        InfoItem::TableStart,
+        row("Multibyte (japanese) regex support", "enabled"),
+        row("Multibyte regex (oniguruma) version", regex::ONIGURUMA_VERSION),
+        InfoItem::TableEnd,
+        InfoItem::IniEntries,
+    ]
 }

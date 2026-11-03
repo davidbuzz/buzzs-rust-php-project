@@ -1,17 +1,15 @@
-//! A model of the Zend allocator's `memory_limit` for the `mb_*` functions
-//! whose output size the caller controls.
+//! `memory_limit` checks for the `mb_*` functions whose output size the
+//! caller controls.
 //!
-//! The VM does not account memory, so PHP's "Allowed memory size of N
-//! bytes exhausted" fatal error is reproduced from the sizes PHP would
-//! allocate: the inputs still referenced plus the result being built.
+//! Live memory is counted by `php-memlimit`'s allocator; an allocation that
+//! crosses the limit is turned into PHP's fatal error by the VM after the
+//! call. Where PHP allocates a buffer up front (or a larger one than this
+//! implementation needs), [`check`] reserves that size first with
+//! [`php_memlimit::try_reserve`], as PHP's fallible allocations do.
 
 use php_runtime::Value;
 use php_vm::ext::VmResult;
 use php_vm::Vm;
-
-/// Memory in use before the script allocates anything
-/// (`memory_get_usage()` at startup).
-const BASELINE: usize = 400 * 1024;
 
 /// `sizeof(Bucket)` of a packed array element (a `zval`).
 const PACKED_SLOT: usize = 16;
@@ -56,32 +54,30 @@ pub(crate) fn value_size(v: &Value) -> usize {
     }
 }
 
-/// The effective `memory_limit` in bytes (`None` for unlimited).
-fn limit(vm: &Vm) -> Option<usize> {
-    let raw = vm
-        .ini_string("memory_limit")
-        .unwrap_or_else(|| b"128M".to_vec());
-    let (v, _) = php_support::ini::parse_quantity(&raw);
-    usize::try_from(v).ok().filter(|&v| v > 0)
-}
-
-/// Raises PHP's out-of-memory fatal error when `live` bytes plus a new
-/// allocation of `alloc` bytes exceed `memory_limit`.
+/// Reserves `alloc` bytes PHP would allocate now (`live` documents what
+/// PHP holds at that point; the allocator already counts it). Over the
+/// limit, raises `Allowed memory size of N bytes exhausted (tried to
+/// allocate M bytes)` at the current line.
 pub(crate) fn check(vm: &mut Vm, live: usize, alloc: usize) -> VmResult<()> {
-    let Some(limit) = limit(vm) else {
-        return Ok(());
-    };
-    if BASELINE.saturating_add(live).saturating_add(alloc) > limit {
-        return Err(vm.fatal(&format!(
-            "Allowed memory size of {limit} bytes exhausted (tried to allocate {alloc} bytes)"
-        )));
+    let _ = live;
+    if let Err(over) = php_memlimit::try_reserve(alloc) {
+        // Handled here so the VM's post-call poll does not raise it twice.
+        let _ = php_memlimit::take();
+        return Err(vm.fatal(&over.to_string()));
     }
     Ok(())
 }
 
-/// [`check`] for a computed result value.
-pub(crate) fn result(vm: &mut Vm, live: usize, v: Value) -> VmResult<Value> {
-    check(vm, live, value_size(&v))?;
+/// Whether an allocation already crossed `memory_limit` (the VM raises
+/// the fatal error after the call; loops building results stop early).
+pub(crate) fn pending() -> bool {
+    php_memlimit::is_pending()
+}
+
+/// A computed result: its allocation is already accounted for (the VM
+/// raises the fatal error after the call if it crossed the limit).
+#[allow(clippy::unnecessary_wraps)]
+pub(crate) fn result(_vm: &mut Vm, _live: usize, v: Value) -> VmResult<Value> {
     Ok(v)
 }
 

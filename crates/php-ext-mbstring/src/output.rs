@@ -130,17 +130,28 @@ impl OutputSapi for CliSapi {
     }
 }
 
-fn mb_output_handler(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let (s, status) = (a.str(0), a.int(1));
+/// Runs the handler over one buffer.
+fn handle(vm: &mut Vm, s: &[u8], status: i64) -> VmResult<Vec<u8>> {
     let mut sapi = CliSapi {
         default_mimetype: vm
             .ini_string("default_mimetype")
             .filter(|m| !m.is_empty())
             .unwrap_or_else(|| b"text/html".to_vec()),
     };
-    let out = state::with(|st| st.mb_output_handler(s.as_bytes(), status, &mut sapi));
+    let out = state::with(|st| st.mb_output_handler(s, status, &mut sapi));
     state::flush_diagnostics(vm)?;
-    Ok(bytes(out))
+    Ok(out)
+}
+
+fn mb_output_handler(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let (s, status) = (a.str(0), a.int(1));
+    handle(vm, s.as_bytes(), status).map(bytes)
+}
+
+/// The named native handler (`php_mb_output_handler_init` alias), used by
+/// `ob_start('mb_output_handler')` and `output_handler=mb_output_handler`.
+fn native_handler(vm: &mut Vm, buf: &[u8], mode: i32) -> VmResult<Option<Vec<u8>>> {
+    handle(vm, buf, i64::from(mode)).map(Some)
 }
 
 /// Registers `mb_output_handler`.
@@ -149,4 +160,5 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
         "mb_output_handler(string $string, int $status): string",
         mb_output_handler,
     );
+    m.output_handler("mb_output_handler", native_handler);
 }

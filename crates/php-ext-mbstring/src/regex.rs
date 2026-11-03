@@ -654,29 +654,40 @@ fn regs_from(c: &Compiled, subj: &Subject, m: &php_pcre::MatchArray) -> Regs {
     Regs(regs)
 }
 
-/// All successive matches (`preg_match_all` iteration), for the global
-/// operations; `Err` is a match-time error.
-fn search_all(vm: &Vm, c: &Compiled, subj: &Subject) -> Result<Vec<Regs>, String> {
-    let cfg = match_config(vm);
-    let flags =
-        php_pcre::PREG_SET_ORDER | php_pcre::PREG_OFFSET_CAPTURE | php_pcre::PREG_UNMATCHED_AS_NULL;
-    let out = php_pcre::match_all(&c.re, &cfg, &subj.text, true, flags, 0);
-    if out.result.is_err() {
-        return match out.last_error {
-            Some(php_pcre::PregError::BacktrackLimit) => Err("retry-limit-in-match over".into()),
-            Some(php_pcre::PregError::RecursionLimit | php_pcre::PregError::JitStackLimit) => {
-                Err("match-stack limit over".into())
-            }
-            _ => Ok(Vec::new()),
-        };
+/// Streams the successive matches (`preg_replace_callback` iteration) to
+/// `f` until it returns `false`; `Err` is a match-time error. Matches are
+/// never collected, so huge subjects stay within `memory_limit`.
+fn for_each_match(
+    cfg: &php_pcre::MatchConfig,
+    c: &Compiled,
+    subj: &Subject,
+    mut f: impl FnMut(Regs) -> bool,
+) -> Result<(), String> {
+    let flags = php_pcre::PREG_OFFSET_CAPTURE | php_pcre::PREG_UNMATCHED_AS_NULL;
+    let mut stopped = false;
+    let out = php_pcre::replace_callback(&c.re, cfg, &subj.text, usize::MAX, flags, |m| {
+        if stopped {
+            return Some(Vec::new());
+        }
+        if f(regs_from(c, subj, &m)) {
+            Some(Vec::new())
+        } else {
+            // Stop: report "the callback failed", which ends the loop.
+            stopped = true;
+            None
+        }
+    });
+    match out.result {
+        Err(php_pcre::PregError::BacktrackLimit) if !stopped => {
+            Err("retry-limit-in-match over".into())
+        }
+        Err(php_pcre::PregError::RecursionLimit | php_pcre::PregError::JitStackLimit)
+            if !stopped =>
+        {
+            Err("match-stack limit over".into())
+        }
+        _ => Ok(()),
     }
-    let Some(m) = out.matches else {
-        return Ok(Vec::new());
-    };
-    Ok(m.values()
-        .filter_map(php_pcre::Value::as_array)
-        .map(|set| regs_from(c, subj, set))
-        .collect())
 }
 
 // ---- result arrays ---------------------------------------------------------
@@ -925,16 +936,6 @@ fn replace_common(vm: &mut Vm, a: &mut Args, base_opts: u32, callable: bool) -> 
     let subj = to_subject(s, enc);
     let mut out = Vec::with_capacity(s.len());
     let mut pos = 0usize;
-    let mut next_check = s.len().max(1 << 16);
-    let matches = match search_all(vm, &c, &subj) {
-        Ok(m) => m,
-        Err(e) => {
-            vm.php_warning(&format!(
-                "mbregex search failure in php_mbereg_replace_exec(): {e}"
-            ))?;
-            return Ok(Value::Bool(false));
-        }
-    };
     let nullable = matches!(
         search(vm, &c, &to_subject(b"", enc), 0, false),
         Found::Match(_)
@@ -958,22 +959,22 @@ fn replace_common(vm: &mut Vm, a: &mut Args, base_opts: u32, callable: bool) -> 
         }
         Ok(())
     };
-    // Replay Oniguruma's search loop over the match list: each search
-    // from `pos` finds the first listed match starting at or after it.
-    let mut next = matches.into_iter().peekable();
-    loop {
-        while next
-            .peek()
-            .is_some_and(|r| r.get(0).is_none_or(|(b, _)| b < pos))
-        {
-            next.next();
-        }
-        let Some(regs) = next.next() else {
-            break;
+    // Replay Oniguruma's search loop over the match stream: each search
+    // from `pos` finds the first match starting at or after it.
+    let cfg = match_config(vm);
+    let mut thrown = None;
+    let res = for_each_match(&cfg, &c, &subj, |regs| {
+        let Some((beg, end)) = regs.get(0).filter(|&(b, _)| b >= pos) else {
+            return true;
         };
-        let (beg, end) = regs.get(0).unwrap_or((pos, pos));
         out.extend_from_slice(&s[pos..beg]);
-        emit(vm, &mut out, &regs)?;
+        if let Err(t) = emit(vm, &mut out, &regs) {
+            thrown = Some(t);
+            return false;
+        }
+        if crate::mem::pending() {
+            return false;
+        }
         if pos < end {
             pos = end;
         } else if pos < s.len() {
@@ -986,19 +987,31 @@ fn replace_common(vm: &mut Vm, a: &mut Args, base_opts: u32, callable: bool) -> 
                 if nullable {
                     let mut mid = Regs(vec![None; regs.0.len()]);
                     mid.0[0] = Some((pos + k, pos + k));
-                    emit(vm, &mut out, &mid)?;
+                    if let Err(t) = emit(vm, &mut out, &mid) {
+                        thrown = Some(t);
+                        return false;
+                    }
                 }
             }
             out.push(s[pos + n - 1]);
             pos += n;
         } else {
-            break;
+            pos += 1;
+            return false;
         }
-        if out.len() >= next_check {
-            // smart_str growth.
-            crate::mem::check(vm, crate::mem::zstr(s.len()), crate::mem::zstr(out.len()))?;
-            next_check = out.len() * 2;
-        }
+        true
+    });
+    if let Some(t) = thrown {
+        return Err(t);
+    }
+    if crate::mem::pending() {
+        return Ok(Value::Bool(false));
+    }
+    if let Err(e) = res {
+        vm.php_warning(&format!(
+            "mbregex search failure in php_mbereg_replace_exec(): {e}"
+        ))?;
+        return Ok(Value::Bool(false));
     }
     if pos < s.len() {
         out.extend_from_slice(&s[pos..]);
@@ -1038,41 +1051,41 @@ fn mb_split(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let t = out.make_mut();
     let mut pos = 0usize;
     let mut chunk = 0usize;
-    let matches = match search_all(vm, &c, &subj) {
-        Ok(m) => m,
-        Err(e) => {
-            vm.php_warning(&format!("mbregex search failure in mbsplit(): {e}"))?;
-            return Ok(Value::Bool(false));
-        }
-    };
-    let mut next = matches.into_iter().peekable();
-    while count != 0 && pos < s.len() {
-        while next
-            .peek()
-            .is_some_and(|r| r.get(0).is_none_or(|(b, _)| b < pos))
-        {
-            next.next();
-        }
-        let Some(regs) = next.next() else {
-            break;
-        };
-        let (beg, end) = regs.get(0).unwrap_or((pos, pos));
-        if pos < end {
-            if beg < s.len() && beg >= chunk {
-                let _ = t.push(bytes(&s[chunk..beg]));
-                count = count.wrapping_sub(1);
-                if t.len().is_power_of_two() && t.len() >= 1024 {
-                    crate::mem::check(vm, crate::mem::zstr(s.len()), crate::mem::packed(t.len()))?;
+    let mut corrupt = false;
+    let cfg = match_config(vm);
+    let res = if count != 0 && !s.is_empty() {
+        for_each_match(&cfg, &c, &subj, |regs| {
+            let Some((beg, end)) = regs.get(0).filter(|&(b, _)| b >= pos) else {
+                return true;
+            };
+            if pos < end {
+                if beg < s.len() && beg >= chunk {
+                    let _ = t.push(bytes(&s[chunk..beg]));
+                    count = count.wrapping_sub(1);
+                } else {
+                    corrupt = true;
+                    return false;
                 }
+                pos = end;
+                chunk = end;
             } else {
-                vm.php_warning("mbregex search failure in mbsplit(): ")?;
-                return Ok(Value::Bool(false));
+                pos += char_len(enc, s, pos);
             }
-            pos = end;
-            chunk = end;
-        } else {
-            pos += char_len(enc, s, pos);
-        }
+            count != 0 && pos < s.len() && !crate::mem::pending()
+        })
+    } else {
+        Ok(())
+    };
+    if crate::mem::pending() {
+        return Ok(Value::Bool(false));
+    }
+    if corrupt {
+        vm.php_warning("mbregex search failure in mbsplit(): ")?;
+        return Ok(Value::Bool(false));
+    }
+    if let Err(e) = res {
+        vm.php_warning(&format!("mbregex search failure in mbsplit(): {e}"))?;
+        return Ok(Value::Bool(false));
     }
     if s.len() > chunk {
         let _ = t.push(bytes(&s[chunk..]));

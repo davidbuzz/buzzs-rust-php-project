@@ -1,21 +1,18 @@
 //! The `mbstring.*` INI table and its on-modify semantics.
 //!
-//! The VM's INI registry has no extension callbacks, so the directives are
-//! registered without a modify handler and the `OnUpdate_mbstring_*`
-//! handlers of `php-mbstring` ([`MbState::ini_set`]) are run by wrapping
-//! `ini_set()`/`ini_alter()`/`ini_restore()`: the wrapper runs the handler
-//! first and only lets the VM store the value when it accepts it, exactly
-//! like `zend_alter_ini_entry_ex()`. PHP's own `default_charset`,
-//! `internal_encoding`, `input_encoding` and `output_encoding` run
-//! mbstring's `php_internal_encoding_changed` hook the same way.
-
-use std::cell::Cell;
+//! The directives are registered without a built-in modify handler; the
+//! `OnUpdate_mbstring_*` handlers of `php-mbstring` ([`MbState::ini_set`])
+//! run as `ini_on_modify` hooks, before `ini_set()` stores a value (a
+//! rejected value is not stored) and after `ini_restore()`. PHP's own
+//! `default_charset`, `internal_encoding`, `input_encoding` and
+//! `output_encoding` run mbstring's `php_internal_encoding_changed` hook
+//! the same way.
 
 use php_mbstring::MbState;
-use php_runtime::{Value, ZStr};
+use php_runtime::ZStr;
 use php_support::ini::{Access, IniDirective, ModifyHandler};
 use php_support::Diagnostic;
-use php_vm::ext::{Args, ModuleBuilder, NativeFn, VmResult};
+use php_vm::ext::{IniStage, ModuleBuilder, VmResult};
 use php_vm::Vm;
 
 use crate::state;
@@ -47,11 +44,6 @@ const CORE_HOOKED: [&str; 4] = [
     "input_encoding",
     "output_encoding",
 ];
-
-thread_local! {
-    static ORIG_INI_SET: Cell<Option<NativeFn>> = const { Cell::new(None) };
-    static ORIG_INI_RESTORE: Cell<Option<NativeFn>> = const { Cell::new(None) };
-}
 
 /// Registers the INI entries (`PHP_INI_BEGIN` in `mbstring.c`).
 pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
@@ -136,26 +128,6 @@ pub(crate) fn startup(vm: &mut Vm) {
     vm.headers_sent = headers_sent;
 }
 
-/// Installs the `ini_set()`/`ini_alter()`/`ini_restore()` wrappers.
-pub(crate) fn install_hooks(m: &mut ModuleBuilder<'_>) {
-    let vm = m.vm();
-    if let Some(b) = vm.native_function("ini_set") {
-        ORIG_INI_SET.with(|c| c.set(Some(b.handler)));
-        vm.register_function(
-            "ini_set(string $option, string|int|float|bool|null $value): string|false",
-            ini_set_hook,
-        );
-        vm.register_function(
-            "ini_alter(string $option, string|int|float|bool|null $value): string|false",
-            ini_set_hook,
-        );
-    }
-    if let Some(b) = vm.native_function("ini_restore") {
-        ORIG_INI_RESTORE.with(|c| c.set(Some(b.handler)));
-        vm.register_function("ini_restore(string $option): void", ini_restore_hook);
-    }
-}
-
 /// Stores a value without running any handler (`zend_alter_ini_entry` from
 /// `mb_language()`, whose handler already ran).
 pub(crate) fn store_raw(vm: &mut Vm, name: &str, value: &[u8]) {
@@ -168,62 +140,43 @@ fn raw(vm: &Vm, name: &str) -> Option<Vec<u8>> {
     vm.ini.raw(name).map(<[u8]>::to_vec)
 }
 
-fn is_hooked(name: &str) -> bool {
-    HANDLED.contains(&name) || CORE_HOOKED.contains(&name)
-}
-
-/// The string `ini_set()` stores for its `$value`.
-fn ini_value(vm: &mut Vm, v: &Value) -> VmResult<Vec<u8>> {
-    Ok(match v {
-        Value::Bool(true) => b"1".to_vec(),
-        Value::Bool(false) | Value::Null => Vec::new(),
-        other => vm.value_to_string(other)?.as_bytes().to_vec(),
-    })
-}
-
-fn run_orig(
-    cell: &'static std::thread::LocalKey<Cell<Option<NativeFn>>>,
-    vm: &mut Vm,
-    a: &mut Args,
-) -> VmResult<Value> {
-    match cell.with(Cell::get) {
-        Some(f) => f(vm, a),
-        None => Ok(Value::Bool(false)),
-    }
-}
-
-fn ini_set_hook(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let name = a.str(0).to_string_lossy();
-    if !is_hooked(&name) || !vm.ini.contains(&name) {
-        return run_orig(&ORIG_INI_SET, vm, a);
-    }
-    let value = ini_value(vm, &a.at(1))?;
-    if CORE_HOOKED.contains(&name.as_str()) || name == "mbstring.encoding_translation" {
-        let r = run_orig(&ORIG_INI_SET, vm, a)?;
-        if !matches!(r, Value::Bool(false)) {
-            let stored = raw(vm, &name);
-            state::with(|s| s.ini_set(&name, stored.as_deref(), true));
-            state::flush_diagnostics(vm)?;
-        }
-        return Ok(r);
-    }
-    // The handler runs before the value is stored (and its side effects
-    // stay even when it fails, as in PHP).
-    let ok = state::with(|s| s.ini_set(&name, Some(&value), true));
+/// `on_modify` for directive `name`: `value` is the new value (runtime)
+/// or the restored one (`ini_restore()`, read back as stored so `NULL`
+/// stays `NULL`).
+fn on_modify(vm: &mut Vm, name: &str, value: &[u8]) -> VmResult<bool> {
+    let value = match vm.ini_modify_stage() {
+        IniStage::Runtime => Some(value.to_vec()),
+        IniStage::Restore => raw(vm, name),
+    };
+    let ok = state::with(|s| s.ini_set(name, value.as_deref(), true));
     state::flush_diagnostics(vm)?;
-    if !ok {
-        return Ok(Value::Bool(false));
-    }
-    run_orig(&ORIG_INI_SET, vm, a)
+    Ok(ok)
 }
 
-fn ini_restore_hook(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let name = a.str(0).to_string_lossy();
-    let r = run_orig(&ORIG_INI_RESTORE, vm, a)?;
-    if is_hooked(&name) {
-        let stored = raw(vm, &name);
-        state::with(|s| s.ini_set(&name, stored.as_deref(), true));
-        state::flush_diagnostics(vm)?;
-    }
-    Ok(r)
+macro_rules! hooks {
+    ($($f:ident => $name:literal),* $(,)?) => {
+        $(fn $f(vm: &mut Vm, value: &[u8]) -> VmResult<bool> {
+            on_modify(vm, $name, value)
+        })*
+
+        /// Registers the `on_modify` hooks.
+        pub(crate) fn register_hooks(m: &mut ModuleBuilder<'_>) {
+            $(m.ini_on_modify($name, $f);)*
+        }
+    };
+}
+
+hooks! {
+    language => "mbstring.language",
+    detect_order => "mbstring.detect_order",
+    http_input => "mbstring.http_input",
+    http_output => "mbstring.http_output",
+    internal_encoding => "mbstring.internal_encoding",
+    substitute_character => "mbstring.substitute_character",
+    conv_mimetypes => "mbstring.http_output_conv_mimetypes",
+    strict_detection => "mbstring.strict_detection",
+    default_charset => "default_charset",
+    php_internal_encoding => "internal_encoding",
+    php_input_encoding => "input_encoding",
+    php_output_encoding => "output_encoding",
 }
