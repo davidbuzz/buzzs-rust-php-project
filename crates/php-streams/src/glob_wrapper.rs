@@ -154,3 +154,37 @@ impl Wrapper for GlobWrapper {
         Ok(s)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::open;
+    use crate::test_util::TempDir;
+    use crate::wrapper::REPORT_ERRORS;
+
+    #[test]
+    fn glob_dir_stream() {
+        let d = TempDir::new();
+        for n in ["b.txt", "a.txt", "c.dat"] {
+            std::fs::write(crate::util::os_path(&d.file(n)), b"").unwrap();
+        }
+        let mut url = b"glob://".to_vec();
+        url.extend_from_slice(&d.file("*.txt"));
+        let mut s = open::opendir(&url, REPORT_ERRORS, None).unwrap();
+        assert_eq!(s.ops_label(), "glob");
+        assert_eq!(s.readdir().unwrap(), b"a.txt");
+        assert_eq!(
+            s.ops_as::<super::GlobOps>().unwrap().path().unwrap(),
+            &d.path()[..]
+        );
+        assert_eq!(s.ops_as::<super::GlobOps>().unwrap().pattern(), b"*.txt");
+        assert_eq!(s.readdir().unwrap(), b"b.txt");
+        assert!(s.readdir().is_none());
+        assert_eq!(s.rewinddir(), 0);
+        assert_eq!(s.readdir().unwrap(), b"a.txt");
+        let mut none = b"glob://".to_vec();
+        none.extend_from_slice(&d.file("*.zzz"));
+        let mut s = open::opendir(&none, REPORT_ERRORS, None).unwrap();
+        assert!(s.readdir().is_none());
+        assert_eq!(s.ops_as::<super::GlobOps>().unwrap().count(), 0);
+    }
+}

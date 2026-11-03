@@ -361,3 +361,136 @@ impl Wrapper for PhpWrapper {
         Err(OpenError::silent())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::diag;
+    use crate::open;
+    use crate::wrapper::REPORT_ERRORS;
+
+    fn msgs() -> Vec<String> {
+        diag::take().iter().map(diag::Diagnostic::text).collect()
+    }
+
+    #[test]
+    fn memory_and_temp_modes() {
+        let s = open::fopen(b"php://memory", "r", false, None).unwrap();
+        assert_eq!(s.mode, "rb");
+        assert_eq!(s.ops_label(), "MEMORY");
+        let mut s = open::fopen(b"PHP://Temp/maxmemory:10", "w", false, None).unwrap();
+        assert_eq!(s.mode, "w+b");
+        let meta = s.meta_data();
+        assert_eq!(meta[0], ("wrapper_type".to_string(), Value::str("PHP")));
+        assert_eq!(
+            meta.last().unwrap().1,
+            Value::str("PHP://Temp/maxmemory:10")
+        );
+        let mut opened = None;
+        assert!(open::open_wrapper(
+            b"php://temp/maxmemory:-1",
+            "w",
+            REPORT_ERRORS,
+            &mut opened,
+            None
+        )
+        .is_none());
+        assert_eq!(take_exception(), Some(PhpUrlException::NegativeMaxMemory));
+    }
+
+    #[test]
+    fn output_and_input_hooks() {
+        let captured = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let c2 = std::rc::Rc::clone(&captured);
+        state::set_hooks(state::Hooks {
+            output: Some(Box::new(move |b| c2.borrow_mut().extend_from_slice(b))),
+            request_body: Some(Box::new(|| b"body=1".to_vec())),
+            executed_filename: None,
+        });
+        state::reset_request();
+        let mut out = open::fopen(b"php://output", "w", false, None).unwrap();
+        assert_eq!(out.write(b"hi"), Ok(2));
+        assert_eq!(&*captured.borrow(), b"hi");
+        assert_eq!(out.mode, "wb");
+        let mut inp = open::fopen(b"php://input", "r", false, None).unwrap();
+        assert_eq!(inp.copy_to_mem(None).unwrap(), b"body=1");
+        inp.rewind();
+        assert_eq!(inp.read_vec(4).unwrap(), b"body");
+        state::set_hooks(state::Hooks::default());
+    }
+
+    #[test]
+    fn fd_errors() {
+        let _ = diag::take();
+        assert!(open::fopen(b"php://fd/x", "r", false, None).is_none());
+        assert!(open::fopen(b"php://fd/-1", "r", false, None).is_none());
+        assert!(open::fopen(b"php://foo", "r", false, None).is_none());
+        let m = msgs();
+        assert_eq!(m[0], "Failed to open stream: php://fd/ stream must be specified in the form php://fd/<orig fd>");
+        assert!(m[1].starts_with("Failed to open stream: The file descriptors must be non-negative numbers smaller than "));
+        assert_eq!(m[2], "Failed to open stream: operation failed");
+        let s = open::fopen(b"php://fd/2", "w", false, None).unwrap();
+        assert_eq!(s.ops_label(), "STDIO");
+    }
+
+    #[test]
+    fn filter_urls() {
+        let _ = diag::take();
+        let mut s = open::fopen(
+            b"php://filter/read=string.toupper|string.rot13/resource=data:,abc",
+            "r",
+            false,
+            None,
+        )
+        .unwrap();
+        assert_eq!(s.copy_to_mem(None).unwrap(), b"NOP");
+        let mut s = open::fopen(
+            b"php://filter/read=string.rot13|nope/resource=data:,abc",
+            "r",
+            false,
+            None,
+        )
+        .unwrap();
+        assert_eq!(s.copy_to_mem(None).unwrap(), b"nop");
+        assert_eq!(
+            msgs(),
+            [
+                "Unable to locate filter \"nope\"",
+                "Unable to create filter (nope)"
+            ]
+        );
+        let mut opened = None;
+        assert!(open::open_wrapper(
+            b"php://filter/read=string.rot13",
+            "r",
+            REPORT_ERRORS,
+            &mut opened,
+            None
+        )
+        .is_none());
+        assert_eq!(take_exception(), Some(PhpUrlException::NoResource));
+        assert!(msgs().is_empty());
+        let ctx = crate::context::StreamContext::new().shared();
+        ctx.borrow_mut()
+            .set("filter", "max_filter_count", Value::Int(1));
+        assert!(open::fopen(
+            b"php://filter/string.rot13|string.rot13/resource=data:,abc",
+            "r",
+            false,
+            Some(&ctx)
+        )
+        .is_none());
+        assert_eq!(msgs(), ["Failed to open stream: too many filters"]);
+        // a write chain on php://memory
+        let mut s = open::fopen(
+            b"php://filter/write=string.toupper/resource=php://memory",
+            "w+",
+            false,
+            None,
+        )
+        .unwrap();
+        s.write(b"abc").unwrap();
+        s.rewind();
+        assert_eq!(s.copy_to_mem(None).unwrap(), b"ABC");
+    }
+}
