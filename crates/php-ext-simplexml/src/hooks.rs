@@ -177,6 +177,7 @@ fn unset_property(vm: &mut Vm, o: &Obj, name: &ZStr) -> VmResult<bool> {
     let Some(st) = sxe_of(o) else {
         return Ok(false);
     };
+    crate::foreign::pin_for_unset(&st);
     direct(vm, |h| Sxe::unset_property(&st, h, name.as_bytes()))?;
     Ok(true)
 }
@@ -234,6 +235,7 @@ fn unset_dimension(vm: &mut Vm, o: &Obj, k: &Value) -> VmResult<bool> {
         return Ok(false);
     };
     let key = k.deref();
+    crate::foreign::pin_for_unset(&st);
     direct(vm, |h| Sxe::unset_dimension(&st, h, &key))?;
     Ok(true)
 }

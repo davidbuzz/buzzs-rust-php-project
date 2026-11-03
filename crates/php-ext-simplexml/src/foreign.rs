@@ -75,3 +75,25 @@ pub fn node_by_path(doc: &Document, path: &[u8]) -> Option<Node> {
     }
     None
 }
+
+/// Before `SimpleXML` unlinks nodes of a foreign document (`unset()`):
+/// leaks one handle on every node of the subtree so `php-libxml` never
+/// frees a node the owning object model may still reference (PHP shares
+/// one node registry between the extensions; here the other model keeps
+/// owning the detached nodes).
+pub fn pin_for_unset(sxe: &php_simplexml::Sxe) {
+    let Some(doc) = sxe.document() else { return };
+    if keepalive_for(&doc).is_none() {
+        return;
+    }
+    let start = sxe
+        .node()
+        .and_then(|x| x.node().cloned())
+        .unwrap_or_else(|| doc.as_node());
+    let mut stack = vec![start];
+    while let Some(n) = stack.pop() {
+        stack.extend(n.attributes());
+        stack.extend(n.children());
+        std::mem::forget(n);
+    }
+}

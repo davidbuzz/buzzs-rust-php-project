@@ -397,12 +397,16 @@ fn expand(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     if vm.find_class(b"DOMNode").is_none() {
         return Err(vm.throw("Error", NO_DOM));
     }
-    if !st.borrow().reader.is_loaded() {
-        return Err(vm.throw("Error", "Data must be loaded before expanding"));
+    let mut host = CollectingHost::default();
+    let r = with_reader(vm, a, &st, |r| r.expand(None, &mut host))?;
+    let node = r.map_err(|e| throw(vm, &e))?;
+    flush_host(vm, host)?;
+    match node {
+        None => Ok(Value::Bool(false)),
+        // Handing a libxml2 node to the DOM binding as a PHP object needs
+        // an API php-ext-dom does not expose yet.
+        Some(_) => Err(vm.throw("Error", NO_DOM)),
     }
-    // Wrapping a libxml2 node as a DOM object needs an API of the DOM
-    // binding, which does not exist yet.
-    Err(vm.throw("Error", NO_DOM))
 }
 
 /// Instantiates the class of a static constructor (calling its
