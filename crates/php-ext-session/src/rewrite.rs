@@ -55,7 +55,8 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
                 Some(default),
                 Access::ALL,
                 ModifyHandler::String,
-                "session",
+                // Registered by ext/standard's URL scanner in PHP.
+                "standard",
             ));
         }
     }
