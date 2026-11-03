@@ -92,6 +92,7 @@ const USING_TABS: u8 = 2;
 pub struct Lexer<'a> {
     src: &'a [u8],
     pos: usize,
+    tok_start: usize,
     line: u32,
     increment_line: bool,
     state: State,
@@ -219,6 +220,7 @@ impl<'a> Lexer<'a> {
         Self {
             src,
             pos: 0,
+            tok_start: 0,
             line: 1,
             increment_line: false,
             state,
@@ -261,7 +263,9 @@ impl<'a> Lexer<'a> {
         self.error.as_ref()
     }
 
-    /// Warnings and deprecations raised while scanning (parser mode).
+    /// Warnings and deprecations raised while scanning. Octal escape overflow
+    /// warnings are raised in both modes (as `token_get_all()` does);
+    /// non-canonical cast deprecations only in parser mode.
     pub fn warnings(&self) -> &[LexWarning] {
         &self.warnings
     }
@@ -322,7 +326,7 @@ impl<'a> Lexer<'a> {
     }
 
     fn warn(&mut self, kind: WarningKind, message: String, line: u32) {
-        if self.parser_mode() && !self.heredoc_scan_ahead {
+        if !self.heredoc_scan_ahead {
             self.warnings.push(LexWarning {
                 kind,
                 message,
@@ -395,9 +399,9 @@ impl<'a> Lexer<'a> {
         if self.parser_mode() {
             self.error = None;
         }
-        let start = self.pos;
         let start_line = self.line;
         let kind = self.scan();
+        let start = self.tok_start;
         let end = self.pos;
         if kind == TokenKind::End {
             self.done = true;
@@ -431,8 +435,12 @@ impl<'a> Lexer<'a> {
         self.line += count_newlines(self.src, start, end);
     }
 
+    /// Runs the scanner rules; a rule returning `None` restarts scanning
+    /// (re2c's `goto restart`), which resets the token start but not the
+    /// token's line, exactly like `lex_scan`.
     fn scan(&mut self) -> TokenKind {
         loop {
+            self.tok_start = self.pos;
             let r = match self.state {
                 State::Shebang => self.scan_shebang(),
                 State::Initial => Some(self.scan_initial()),
@@ -455,23 +463,17 @@ impl<'a> Lexer<'a> {
     // ---- SHEBANG -----------------------------------------------------------
 
     fn scan_shebang(&mut self) -> Option<TokenKind> {
+        // <SHEBANG>"#!" .* {NEWLINE}: `.` matches anything but `\n`, so the
+        // match ends at the first `\n`, or failing that at the last `\r`.
         self.state = State::Initial;
         if self.cur() == b'#' && self.at(self.pos + 1) == b'!' {
-            if let Some(nl) = self.src[self.pos..]
+            let rest = &self.src[self.pos..];
+            let end = rest
                 .iter()
-                .position(|&c| c == b'\n' || c == b'\r')
-            {
-                let mut p = self.pos + nl;
-                // `.*` matches `\r` too, so the newline is the first `\n` if
-                // there is one before another line ends with a bare `\r`.
-                if let Some(lf) = self.src[self.pos..].iter().position(|&c| c == b'\n') {
-                    p = self.pos + lf;
-                } else if self.src[p] == b'\r' {
-                    // bare \r line end: `.*` consumes it, NEWLINE needs another
-                    // newline char, so the pattern does not match unless more
-                    // follow; treat `\r` as the NEWLINE.
-                }
-                self.pos = p + 1;
+                .position(|&c| c == b'\n')
+                .or_else(|| rest.iter().rposition(|&c| c == b'\r'));
+            if let Some(nl) = end {
+                self.pos += nl + 1;
                 self.line += 1;
             }
         }
@@ -1075,7 +1077,7 @@ impl<'a> Lexer<'a> {
             _ => return None,
         };
         self.pos = q + 1;
-        if let Some((old, new)) = deprecated {
+        if let Some((old, new)) = deprecated.filter(|_| self.parser_mode()) {
             self.warn(
                 WarningKind::Deprecated,
                 format!("Non-canonical cast ({old}) is deprecated, use the ({new}) cast instead"),
@@ -1453,6 +1455,7 @@ impl<'a> Lexer<'a> {
         let mut ahead = Lexer {
             src: self.src,
             pos: self.pos,
+            tok_start: self.pos,
             line: self.line,
             increment_line: self.increment_line,
             state: self.state,

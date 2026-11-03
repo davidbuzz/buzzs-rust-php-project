@@ -16,6 +16,8 @@
 //! assert_eq!(toks[1].text, b"echo");
 //! ```
 
+#![warn(missing_docs)]
+
 mod lexer;
 mod literal;
 mod token;
