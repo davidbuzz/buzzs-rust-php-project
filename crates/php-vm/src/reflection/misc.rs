@@ -368,6 +368,13 @@ impl GenFrame {
     }
 }
 
+thread_local! {
+    /// Generator handle → function, remembered while the frame was seen
+    /// (a frame lent to a running delegate is not marked with its
+    /// generator).
+    static GEN_FUNCS: RefCell<HashMap<u32, Func>> = RefCell::new(HashMap::new());
+}
+
 fn gen_frame(vm: &Vm, g: &Obj) -> Option<GenFrame> {
     let suspended = object::internal::<crate::generator::GenData, _>(g, |d| {
         if d.state == crate::generator::GenState::Finished {
@@ -376,15 +383,37 @@ fn gen_frame(vm: &Vm, g: &Obj) -> Option<GenFrame> {
         d.frame.as_ref().map(|f| Some(GenFrame::of(f)))
     })
     .flatten();
-    match suspended {
+    let found = match suspended {
         Some(x) => x,
-        None => vm
-            .frames
-            .iter()
-            .rev()
-            .find(|f| f.generator.as_ref().is_some_and(|x| Obj::ptr_eq(x, g)))
-            .map(GenFrame::of),
+        None => {
+            let own = vm.frames.iter().rev().find(|f| {
+                f.generator
+                    .as_ref()
+                    .is_some_and(|x| x.handle() == g.handle())
+            });
+            match own {
+                Some(f) => Some(GenFrame::of(f)),
+                None => {
+                    // Lent to a delegate: find the frame running its function.
+                    let func = GEN_FUNCS.with(|m| m.borrow().get(&g.handle()).cloned());
+                    func.and_then(|func| {
+                        vm.frames
+                            .iter()
+                            .rev()
+                            .find(|f| {
+                                f.generator.is_none()
+                                    && f.func.as_ref().is_some_and(|x| Func::ptr_eq(x, &func))
+                            })
+                            .map(GenFrame::of)
+                    })
+                }
+            }
+        }
+    };
+    if let Some(f) = found.as_ref().and_then(|f| f.func.clone()) {
+        GEN_FUNCS.with(|m| m.borrow_mut().insert(g.handle(), f));
     }
+    found
 }
 
 fn gen_closed(vm: &mut Vm) -> crate::vm::Throw {
@@ -444,6 +473,36 @@ fn gen_fnref(f: &GenFrame) -> Option<FnRef> {
     Some(FnRef::function(func))
 }
 
+/// The function of a finished generator, found from the name its debug
+/// info reports (`Generator::__debugInfo()` keeps `func_name`).
+fn gen_fnref_by_name(vm: &mut Vm, g: &Obj) -> Option<FnRef> {
+    let props = vm
+        .props_for(g, php_runtime::PropertyPurpose::Debug)
+        .ok()??;
+    let name = match props.get(&ArrayKey::from("function"))? {
+        Value::Str(s) => s.clone(),
+        _ => return None,
+    };
+    if let Some(p) = crate::call::find_double_colon(name.as_bytes()) {
+        let c = vm.find_class(&name.as_bytes()[..p])?;
+        let m = c.find_method(&name.as_bytes()[p + 2..])?.clone();
+        return Some(FnRef::method(&m, &c));
+    }
+    if let Some(f) = vm.functions.get(&name.to_ascii_lowercase()).cloned() {
+        return Some(FnRef::function(f));
+    }
+    // A closure: find its compiled body by name.
+    vm.units.iter().find_map(|u| {
+        u.decls
+            .functions
+            .borrow()
+            .iter()
+            .find(|f| f.name == name)
+            .cloned()
+            .map(|f| FnRef::function(Func::User(f)))
+    })
+}
+
 fn rg_get_function(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let Refl::Generator(g, saved) = this_refl(vm, a)? else {
         return Err(vm.make_throw(
@@ -451,7 +510,10 @@ fn rg_get_function(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             "Internal error: Failed to retrieve the reflection object",
         ));
     };
-    let f = gen_frame(vm, &g).and_then(|f| gen_fnref(&f)).or(saved);
+    let f = gen_frame(vm, &g)
+        .and_then(|f| gen_fnref(&f))
+        .or(saved)
+        .or_else(|| gen_fnref_by_name(vm, &g));
     let Some(f) = f else {
         return Err(gen_closed(vm));
     };
@@ -937,20 +999,56 @@ fn re_get_class_names(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     )))
 }
 
+/// `zend_module_entry.deps` of the bundled extensions (`ZEND_MOD_*`).
+fn module_deps(m: &str) -> &'static [(&'static str, &'static str)] {
+    match m.to_ascii_lowercase().as_str() {
+        "dom" => &[
+            ("libxml", "Required"),
+            ("lexbor", "Required"),
+            ("domxml", "Conflicts"),
+        ],
+        "exif" => &[("standard", "Required"), ("mbstring", "Optional")],
+        "libxml" | "mysqlnd" | "openssl" | "sodium" => &[("standard", "Required")],
+        "mbstring" | "pgsql" | "zip" => &[("pcre", "Required")],
+        "mysqli" => &[("spl", "Required"), ("mysqlnd", "Required")],
+        "pdo" | "snmp" => &[("spl", "Required")],
+        "pdo_dblib" | "pdo_firebird" | "pdo_odbc" | "pdo_pgsql" | "pdo_sqlite" => {
+            &[("pdo", "Required")]
+        }
+        "pdo_mysql" => &[("pdo", "Required"), ("mysqlnd", "Required")],
+        "phar" => &[
+            ("apc", "Optional"),
+            ("bz2", "Optional"),
+            ("openssl", "Optional"),
+            ("zlib", "Optional"),
+            ("standard", "Optional"),
+            ("hash", "Required"),
+            ("spl", "Required"),
+        ],
+        "simplexml" => &[("libxml", "Required"), ("spl", "Required")],
+        "soap" => &[
+            ("date", "Required"),
+            ("libxml", "Required"),
+            ("session", "Optional"),
+        ],
+        "spl" => &[("json", "Required")],
+        "standard" => &[
+            ("random", "Required"),
+            ("uri", "Required"),
+            ("session", "Optional"),
+        ],
+        "uri" => &[("lexbor", "Required")],
+        "xml" | "xmlwriter" => &[("libxml", "Required")],
+        "xmlreader" => &[("dom", "Required"), ("libxml", "Required")],
+        "xsl" => &[("libxml", "Required"), ("dom", "Required")],
+        _ => &[],
+    }
+}
+
 fn re_get_dependencies(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let m = this_ext(vm, a)?;
-    let deps: &[(&str, &str)] = match m.to_ascii_lowercase().as_str() {
-        "spl" => &[("pcre", "Required"), ("standard", "Required")],
-        "standard" => &[("session", "Optional")],
-        "dom" => &[("libxml", "Required")],
-        "simplexml" => &[("libxml", "Required"), ("spl", "Required")],
-        "xml" | "xmlreader" | "xmlwriter" => &[("libxml", "Required")],
-        "pdo_sqlite" => &[("pdo", "Required")],
-        "mysqli" => &[("mysqlnd", "Required")],
-        _ => &[],
-    };
     let mut t = HashTable::new();
-    for (k, v) in deps {
+    for (k, v) in module_deps(&m) {
         t.insert(ArrayKey::from(*k), zs(v));
     }
     Ok(Value::Array(ZArray::from_table(t)))
@@ -1087,6 +1185,14 @@ fn re_to_string(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         crate::PHP_VERSION
     )
     .into_bytes();
+    let deps = module_deps(&m);
+    if !deps.is_empty() {
+        out.extend_from_slice(b"\n  - Dependencies {\n");
+        for (n, k) in deps {
+            out.extend_from_slice(format!("    Dependency [ {n} ({k}) ]\n").as_bytes());
+        }
+        out.extend_from_slice(b"  }\n");
+    }
     if let Some(entries) = module_ini(vm, &m) {
         if !entries.is_empty() {
             out.extend_from_slice(b"\n  - INI {\n");

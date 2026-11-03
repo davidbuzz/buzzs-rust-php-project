@@ -410,7 +410,7 @@ fn rp_by_ref(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 fn rp_by_val(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let (f, _, p) = this_param(vm, a)?;
     // `ZEND_SEND_PREFER_REF` parameters of internal functions accept both.
-    let prefer_ref = !f.func.is_user() && p.by_ref && p.default_text.is_some();
+    let prefer_ref = !f.func.is_user() && p.by_ref && p.promote & crate::opcode::PREFER_REF != 0;
     Ok(Value::Bool(!p.by_ref || prefer_ref))
 }
 fn rp_is_variadic(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
