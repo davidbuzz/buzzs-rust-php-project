@@ -1,0 +1,1908 @@
+=== version_compare('', '')
+=> 0
+=== version_compare('', '1')
+=> -1
+=== version_compare('', '2')
+=> -1
+=== version_compare('', '10')
+=> -1
+=== version_compare('', '1.0')
+=> -1
+=== version_compare('', '1.0.0')
+=> -1
+=== version_compare('', '1.0.1')
+=> -1
+=== version_compare('', '1.1')
+=> -1
+=== version_compare('', '1..2')
+=> -1
+=== version_compare('', '1.0-dev')
+=> -1
+=== version_compare('', '1.0a1')
+=> -1
+=== version_compare('', '1.0alpha2')
+=> -1
+=== version_compare('', '1.0b1')
+=> -1
+=== version_compare('', '1.0beta')
+=> -1
+=== version_compare('', '1.0RC1')
+=> -1
+=== version_compare('', '1.0rc2')
+=> -1
+=== version_compare('', '1.0pl1')
+=> -1
+=== version_compare('', '1.0p')
+=> -1
+=== version_compare('', '1.0#1')
+=> -1
+=== version_compare('', '#1')
+=> -1
+=== version_compare('', '1.0foo')
+=> -1
+=== version_compare('', '-1')
+=> -1
+=== version_compare('', 'a')
+=> -1
+=== version_compare('', 'dev')
+=> -1
+=== version_compare('', '1.0_dev+x')
+=> -1
+=== version_compare('', '5.3.0-dev')
+=> -1
+=== version_compare('', '5.3.0')
+=> -1
+=== version_compare('', '99999999999999999999.1')
+=> -1
+=== version_compare('', '1.0 rc 1')
+=> -1
+=== version_compare('', "1.0\x00z")
+=> -1
+=== version_compare('1', '')
+=> 1
+=== version_compare('1', '1')
+=> 0
+=== version_compare('1', '2')
+=> -1
+=== version_compare('1', '10')
+=> -1
+=== version_compare('1', '1.0')
+=> -1
+=== version_compare('1', '1.0.0')
+=> -1
+=== version_compare('1', '1.0.1')
+=> -1
+=== version_compare('1', '1.1')
+=> -1
+=== version_compare('1', '1..2')
+=> -1
+=== version_compare('1', '1.0-dev')
+=> -1
+=== version_compare('1', '1.0a1')
+=> -1
+=== version_compare('1', '1.0alpha2')
+=> -1
+=== version_compare('1', '1.0b1')
+=> -1
+=== version_compare('1', '1.0beta')
+=> -1
+=== version_compare('1', '1.0RC1')
+=> -1
+=== version_compare('1', '1.0rc2')
+=> -1
+=== version_compare('1', '1.0pl1')
+=> -1
+=== version_compare('1', '1.0p')
+=> -1
+=== version_compare('1', '1.0#1')
+=> -1
+=== version_compare('1', '#1')
+=> 0
+=== version_compare('1', '1.0foo')
+=> -1
+=== version_compare('1', '-1')
+=> 1
+=== version_compare('1', 'a')
+=> 1
+=== version_compare('1', 'dev')
+=> 1
+=== version_compare('1', '1.0_dev+x')
+=> -1
+=== version_compare('1', '5.3.0-dev')
+=> -1
+=== version_compare('1', '5.3.0')
+=> -1
+=== version_compare('1', '99999999999999999999.1')
+=> -1
+=== version_compare('1', '1.0 rc 1')
+=> -1
+=== version_compare('1', "1.0\x00z")
+=> -1
+=== version_compare('2', '')
+=> 1
+=== version_compare('2', '1')
+=> 1
+=== version_compare('2', '2')
+=> 0
+=== version_compare('2', '10')
+=> -1
+=== version_compare('2', '1.0')
+=> 1
+=== version_compare('2', '1.0.0')
+=> 1
+=== version_compare('2', '1.0.1')
+=> 1
+=== version_compare('2', '1.1')
+=> 1
+=== version_compare('2', '1..2')
+=> 1
+=== version_compare('2', '1.0-dev')
+=> 1
+=== version_compare('2', '1.0a1')
+=> 1
+=== version_compare('2', '1.0alpha2')
+=> 1
+=== version_compare('2', '1.0b1')
+=> 1
+=== version_compare('2', '1.0beta')
+=> 1
+=== version_compare('2', '1.0RC1')
+=> 1
+=== version_compare('2', '1.0rc2')
+=> 1
+=== version_compare('2', '1.0pl1')
+=> 1
+=== version_compare('2', '1.0p')
+=> 1
+=== version_compare('2', '1.0#1')
+=> 1
+=== version_compare('2', '#1')
+=> 0
+=== version_compare('2', '1.0foo')
+=> 1
+=== version_compare('2', '-1')
+=> 1
+=== version_compare('2', 'a')
+=> 1
+=== version_compare('2', 'dev')
+=> 1
+=== version_compare('2', '1.0_dev+x')
+=> 1
+=== version_compare('2', '5.3.0-dev')
+=> -1
+=== version_compare('2', '5.3.0')
+=> -1
+=== version_compare('2', '99999999999999999999.1')
+=> -1
+=== version_compare('2', '1.0 rc 1')
+=> 1
+=== version_compare('2', "1.0\x00z")
+=> 1
+=== version_compare('10', '')
+=> 1
+=== version_compare('10', '1')
+=> 1
+=== version_compare('10', '2')
+=> 1
+=== version_compare('10', '10')
+=> 0
+=== version_compare('10', '1.0')
+=> 1
+=== version_compare('10', '1.0.0')
+=> 1
+=== version_compare('10', '1.0.1')
+=> 1
+=== version_compare('10', '1.1')
+=> 1
+=== version_compare('10', '1..2')
+=> 1
+=== version_compare('10', '1.0-dev')
+=> 1
+=== version_compare('10', '1.0a1')
+=> 1
+=== version_compare('10', '1.0alpha2')
+=> 1
+=== version_compare('10', '1.0b1')
+=> 1
+=== version_compare('10', '1.0beta')
+=> 1
+=== version_compare('10', '1.0RC1')
+=> 1
+=== version_compare('10', '1.0rc2')
+=> 1
+=== version_compare('10', '1.0pl1')
+=> 1
+=== version_compare('10', '1.0p')
+=> 1
+=== version_compare('10', '1.0#1')
+=> 1
+=== version_compare('10', '#1')
+=> 0
+=== version_compare('10', '1.0foo')
+=> 1
+=== version_compare('10', '-1')
+=> 1
+=== version_compare('10', 'a')
+=> 1
+=== version_compare('10', 'dev')
+=> 1
+=== version_compare('10', '1.0_dev+x')
+=> 1
+=== version_compare('10', '5.3.0-dev')
+=> 1
+=== version_compare('10', '5.3.0')
+=> 1
+=== version_compare('10', '99999999999999999999.1')
+=> -1
+=== version_compare('10', '1.0 rc 1')
+=> 1
+=== version_compare('10', "1.0\x00z")
+=> 1
+=== version_compare('1.0', '')
+=> 1
+=== version_compare('1.0', '1')
+=> 1
+=== version_compare('1.0', '2')
+=> -1
+=== version_compare('1.0', '10')
+=> -1
+=== version_compare('1.0', '1.0')
+=> 0
+=== version_compare('1.0', '1.0.0')
+=> -1
+=== version_compare('1.0', '1.0.1')
+=> -1
+=== version_compare('1.0', '1.1')
+=> -1
+=== version_compare('1.0', '1..2')
+=> -1
+=== version_compare('1.0', '1.0-dev')
+=> 1
+=== version_compare('1.0', '1.0a1')
+=> 1
+=== version_compare('1.0', '1.0alpha2')
+=> 1
+=== version_compare('1.0', '1.0b1')
+=> 1
+=== version_compare('1.0', '1.0beta')
+=> 1
+=== version_compare('1.0', '1.0RC1')
+=> 1
+=== version_compare('1.0', '1.0rc2')
+=> 1
+=== version_compare('1.0', '1.0pl1')
+=> -1
+=== version_compare('1.0', '1.0p')
+=> -1
+=== version_compare('1.0', '1.0#1')
+=> -1
+=== version_compare('1.0', '#1')
+=> 1
+=== version_compare('1.0', '1.0foo')
+=> 1
+=== version_compare('1.0', '-1')
+=> 1
+=== version_compare('1.0', 'a')
+=> 1
+=== version_compare('1.0', 'dev')
+=> 1
+=== version_compare('1.0', '1.0_dev+x')
+=> 1
+=== version_compare('1.0', '5.3.0-dev')
+=> -1
+=== version_compare('1.0', '5.3.0')
+=> -1
+=== version_compare('1.0', '99999999999999999999.1')
+=> -1
+=== version_compare('1.0', '1.0 rc 1')
+=> 1
+=== version_compare('1.0', "1.0\x00z")
+=> 0
+=== version_compare('1.0.0', '')
+=> 1
+=== version_compare('1.0.0', '1')
+=> 1
+=== version_compare('1.0.0', '2')
+=> -1
+=== version_compare('1.0.0', '10')
+=> -1
+=== version_compare('1.0.0', '1.0')
+=> 1
+=== version_compare('1.0.0', '1.0.0')
+=> 0
+=== version_compare('1.0.0', '1.0.1')
+=> -1
+=== version_compare('1.0.0', '1.1')
+=> -1
+=== version_compare('1.0.0', '1..2')
+=> -1
+=== version_compare('1.0.0', '1.0-dev')
+=> 1
+=== version_compare('1.0.0', '1.0a1')
+=> 1
+=== version_compare('1.0.0', '1.0alpha2')
+=> 1
+=== version_compare('1.0.0', '1.0b1')
+=> 1
+=== version_compare('1.0.0', '1.0beta')
+=> 1
+=== version_compare('1.0.0', '1.0RC1')
+=> 1
+=== version_compare('1.0.0', '1.0rc2')
+=> 1
+=== version_compare('1.0.0', '1.0pl1')
+=> -1
+=== version_compare('1.0.0', '1.0p')
+=> -1
+=== version_compare('1.0.0', '1.0#1')
+=> -1
+=== version_compare('1.0.0', '#1')
+=> 1
+=== version_compare('1.0.0', '1.0foo')
+=> 1
+=== version_compare('1.0.0', '-1')
+=> 1
+=== version_compare('1.0.0', 'a')
+=> 1
+=== version_compare('1.0.0', 'dev')
+=> 1
+=== version_compare('1.0.0', '1.0_dev+x')
+=> 1
+=== version_compare('1.0.0', '5.3.0-dev')
+=> -1
+=== version_compare('1.0.0', '5.3.0')
+=> -1
+=== version_compare('1.0.0', '99999999999999999999.1')
+=> -1
+=== version_compare('1.0.0', '1.0 rc 1')
+=> 1
+=== version_compare('1.0.0', "1.0\x00z")
+=> 1
+=== version_compare('1.0.1', '')
+=> 1
+=== version_compare('1.0.1', '1')
+=> 1
+=== version_compare('1.0.1', '2')
+=> -1
+=== version_compare('1.0.1', '10')
+=> -1
+=== version_compare('1.0.1', '1.0')
+=> 1
+=== version_compare('1.0.1', '1.0.0')
+=> 1
+=== version_compare('1.0.1', '1.0.1')
+=> 0
+=== version_compare('1.0.1', '1.1')
+=> -1
+=== version_compare('1.0.1', '1..2')
+=> -1
+=== version_compare('1.0.1', '1.0-dev')
+=> 1
+=== version_compare('1.0.1', '1.0a1')
+=> 1
+=== version_compare('1.0.1', '1.0alpha2')
+=> 1
+=== version_compare('1.0.1', '1.0b1')
+=> 1
+=== version_compare('1.0.1', '1.0beta')
+=> 1
+=== version_compare('1.0.1', '1.0RC1')
+=> 1
+=== version_compare('1.0.1', '1.0rc2')
+=> 1
+=== version_compare('1.0.1', '1.0pl1')
+=> -1
+=== version_compare('1.0.1', '1.0p')
+=> -1
+=== version_compare('1.0.1', '1.0#1')
+=> -1
+=== version_compare('1.0.1', '#1')
+=> 1
+=== version_compare('1.0.1', '1.0foo')
+=> 1
+=== version_compare('1.0.1', '-1')
+=> 1
+=== version_compare('1.0.1', 'a')
+=> 1
+=== version_compare('1.0.1', 'dev')
+=> 1
+=== version_compare('1.0.1', '1.0_dev+x')
+=> 1
+=== version_compare('1.0.1', '5.3.0-dev')
+=> -1
+=== version_compare('1.0.1', '5.3.0')
+=> -1
+=== version_compare('1.0.1', '99999999999999999999.1')
+=> -1
+=== version_compare('1.0.1', '1.0 rc 1')
+=> 1
+=== version_compare('1.0.1', "1.0\x00z")
+=> 1
+=== version_compare('1.1', '')
+=> 1
+=== version_compare('1.1', '1')
+=> 1
+=== version_compare('1.1', '2')
+=> -1
+=== version_compare('1.1', '10')
+=> -1
+=== version_compare('1.1', '1.0')
+=> 1
+=== version_compare('1.1', '1.0.0')
+=> 1
+=== version_compare('1.1', '1.0.1')
+=> 1
+=== version_compare('1.1', '1.1')
+=> 0
+=== version_compare('1.1', '1..2')
+=> -1
+=== version_compare('1.1', '1.0-dev')
+=> 1
+=== version_compare('1.1', '1.0a1')
+=> 1
+=== version_compare('1.1', '1.0alpha2')
+=> 1
+=== version_compare('1.1', '1.0b1')
+=> 1
+=== version_compare('1.1', '1.0beta')
+=> 1
+=== version_compare('1.1', '1.0RC1')
+=> 1
+=== version_compare('1.1', '1.0rc2')
+=> 1
+=== version_compare('1.1', '1.0pl1')
+=> 1
+=== version_compare('1.1', '1.0p')
+=> 1
+=== version_compare('1.1', '1.0#1')
+=> 1
+=== version_compare('1.1', '#1')
+=> 1
+=== version_compare('1.1', '1.0foo')
+=> 1
+=== version_compare('1.1', '-1')
+=> 1
+=== version_compare('1.1', 'a')
+=> 1
+=== version_compare('1.1', 'dev')
+=> 1
+=== version_compare('1.1', '1.0_dev+x')
+=> 1
+=== version_compare('1.1', '5.3.0-dev')
+=> -1
+=== version_compare('1.1', '5.3.0')
+=> -1
+=== version_compare('1.1', '99999999999999999999.1')
+=> -1
+=== version_compare('1.1', '1.0 rc 1')
+=> 1
+=== version_compare('1.1', "1.0\x00z")
+=> 1
+=== version_compare('1..2', '')
+=> 1
+=== version_compare('1..2', '1')
+=> 1
+=== version_compare('1..2', '2')
+=> -1
+=== version_compare('1..2', '10')
+=> -1
+=== version_compare('1..2', '1.0')
+=> 1
+=== version_compare('1..2', '1.0.0')
+=> 1
+=== version_compare('1..2', '1.0.1')
+=> 1
+=== version_compare('1..2', '1.1')
+=> 1
+=== version_compare('1..2', '1..2')
+=> 0
+=== version_compare('1..2', '1.0-dev')
+=> 1
+=== version_compare('1..2', '1.0a1')
+=> 1
+=== version_compare('1..2', '1.0alpha2')
+=> 1
+=== version_compare('1..2', '1.0b1')
+=> 1
+=== version_compare('1..2', '1.0beta')
+=> 1
+=== version_compare('1..2', '1.0RC1')
+=> 1
+=== version_compare('1..2', '1.0rc2')
+=> 1
+=== version_compare('1..2', '1.0pl1')
+=> 1
+=== version_compare('1..2', '1.0p')
+=> 1
+=== version_compare('1..2', '1.0#1')
+=> 1
+=== version_compare('1..2', '#1')
+=> 1
+=== version_compare('1..2', '1.0foo')
+=> 1
+=== version_compare('1..2', '-1')
+=> 1
+=== version_compare('1..2', 'a')
+=> 1
+=== version_compare('1..2', 'dev')
+=> 1
+=== version_compare('1..2', '1.0_dev+x')
+=> 1
+=== version_compare('1..2', '5.3.0-dev')
+=> -1
+=== version_compare('1..2', '5.3.0')
+=> -1
+=== version_compare('1..2', '99999999999999999999.1')
+=> -1
+=== version_compare('1..2', '1.0 rc 1')
+=> 1
+=== version_compare('1..2', "1.0\x00z")
+=> 1
+=== version_compare('1.0-dev', '')
+=> 1
+=== version_compare('1.0-dev', '1')
+=> 1
+=== version_compare('1.0-dev', '2')
+=> -1
+=== version_compare('1.0-dev', '10')
+=> -1
+=== version_compare('1.0-dev', '1.0')
+=> -1
+=== version_compare('1.0-dev', '1.0.0')
+=> -1
+=== version_compare('1.0-dev', '1.0.1')
+=> -1
+=== version_compare('1.0-dev', '1.1')
+=> -1
+=== version_compare('1.0-dev', '1..2')
+=> -1
+=== version_compare('1.0-dev', '1.0-dev')
+=> 0
+=== version_compare('1.0-dev', '1.0a1')
+=> -1
+=== version_compare('1.0-dev', '1.0alpha2')
+=> -1
+=== version_compare('1.0-dev', '1.0b1')
+=> -1
+=== version_compare('1.0-dev', '1.0beta')
+=> -1
+=== version_compare('1.0-dev', '1.0RC1')
+=> -1
+=== version_compare('1.0-dev', '1.0rc2')
+=> -1
+=== version_compare('1.0-dev', '1.0pl1')
+=> -1
+=== version_compare('1.0-dev', '1.0p')
+=> -1
+=== version_compare('1.0-dev', '1.0#1')
+=> -1
+=== version_compare('1.0-dev', '#1')
+=> 1
+=== version_compare('1.0-dev', '1.0foo')
+=> 1
+=== version_compare('1.0-dev', '-1')
+=> 1
+=== version_compare('1.0-dev', 'a')
+=> 1
+=== version_compare('1.0-dev', 'dev')
+=> 1
+=== version_compare('1.0-dev', '1.0_dev+x')
+=> 1
+=== version_compare('1.0-dev', '5.3.0-dev')
+=> -1
+=== version_compare('1.0-dev', '5.3.0')
+=> -1
+=== version_compare('1.0-dev', '99999999999999999999.1')
+=> -1
+=== version_compare('1.0-dev', '1.0 rc 1')
+=> 1
+=== version_compare('1.0-dev', "1.0\x00z")
+=> -1
+=== version_compare('1.0a1', '')
+=> 1
+=== version_compare('1.0a1', '1')
+=> 1
+=== version_compare('1.0a1', '2')
+=> -1
+=== version_compare('1.0a1', '10')
+=> -1
+=== version_compare('1.0a1', '1.0')
+=> -1
+=== version_compare('1.0a1', '1.0.0')
+=> -1
+=== version_compare('1.0a1', '1.0.1')
+=> -1
+=== version_compare('1.0a1', '1.1')
+=> -1
+=== version_compare('1.0a1', '1..2')
+=> -1
+=== version_compare('1.0a1', '1.0-dev')
+=> 1
+=== version_compare('1.0a1', '1.0a1')
+=> 0
+=== version_compare('1.0a1', '1.0alpha2')
+=> -1
+=== version_compare('1.0a1', '1.0b1')
+=> -1
+=== version_compare('1.0a1', '1.0beta')
+=> -1
+=== version_compare('1.0a1', '1.0RC1')
+=> -1
+=== version_compare('1.0a1', '1.0rc2')
+=> -1
+=== version_compare('1.0a1', '1.0pl1')
+=> -1
+=== version_compare('1.0a1', '1.0p')
+=> -1
+=== version_compare('1.0a1', '1.0#1')
+=> -1
+=== version_compare('1.0a1', '#1')
+=> 1
+=== version_compare('1.0a1', '1.0foo')
+=> 1
+=== version_compare('1.0a1', '-1')
+=> 1
+=== version_compare('1.0a1', 'a')
+=> 1
+=== version_compare('1.0a1', 'dev')
+=> 1
+=== version_compare('1.0a1', '1.0_dev+x')
+=> 1
+=== version_compare('1.0a1', '5.3.0-dev')
+=> -1
+=== version_compare('1.0a1', '5.3.0')
+=> -1
+=== version_compare('1.0a1', '99999999999999999999.1')
+=> -1
+=== version_compare('1.0a1', '1.0 rc 1')
+=> 1
+=== version_compare('1.0a1', "1.0\x00z")
+=> -1
+=== version_compare('1.0alpha2', '')
+=> 1
+=== version_compare('1.0alpha2', '1')
+=> 1
+=== version_compare('1.0alpha2', '2')
+=> -1
+=== version_compare('1.0alpha2', '10')
+=> -1
+=== version_compare('1.0alpha2', '1.0')
+=> -1
+=== version_compare('1.0alpha2', '1.0.0')
+=> -1
+=== version_compare('1.0alpha2', '1.0.1')
+=> -1
+=== version_compare('1.0alpha2', '1.1')
+=> -1
+=== version_compare('1.0alpha2', '1..2')
+=> -1
+=== version_compare('1.0alpha2', '1.0-dev')
+=> 1
+=== version_compare('1.0alpha2', '1.0a1')
+=> 1
+=== version_compare('1.0alpha2', '1.0alpha2')
+=> 0
+=== version_compare('1.0alpha2', '1.0b1')
+=> -1
+=== version_compare('1.0alpha2', '1.0beta')
+=> -1
+=== version_compare('1.0alpha2', '1.0RC1')
+=> -1
+=== version_compare('1.0alpha2', '1.0rc2')
+=> -1
+=== version_compare('1.0alpha2', '1.0pl1')
+=> -1
+=== version_compare('1.0alpha2', '1.0p')
+=> -1
+=== version_compare('1.0alpha2', '1.0#1')
+=> -1
+=== version_compare('1.0alpha2', '#1')
+=> 1
+=== version_compare('1.0alpha2', '1.0foo')
+=> 1
+=== version_compare('1.0alpha2', '-1')
+=> 1
+=== version_compare('1.0alpha2', 'a')
+=> 1
+=== version_compare('1.0alpha2', 'dev')
+=> 1
+=== version_compare('1.0alpha2', '1.0_dev+x')
+=> 1
+=== version_compare('1.0alpha2', '5.3.0-dev')
+=> -1
+=== version_compare('1.0alpha2', '5.3.0')
+=> -1
+=== version_compare('1.0alpha2', '99999999999999999999.1')
+=> -1
+=== version_compare('1.0alpha2', '1.0 rc 1')
+=> 1
+=== version_compare('1.0alpha2', "1.0\x00z")
+=> -1
+=== version_compare('1.0b1', '')
+=> 1
+=== version_compare('1.0b1', '1')
+=> 1
+=== version_compare('1.0b1', '2')
+=> -1
+=== version_compare('1.0b1', '10')
+=> -1
+=== version_compare('1.0b1', '1.0')
+=> -1
+=== version_compare('1.0b1', '1.0.0')
+=> -1
+=== version_compare('1.0b1', '1.0.1')
+=> -1
+=== version_compare('1.0b1', '1.1')
+=> -1
+=== version_compare('1.0b1', '1..2')
+=> -1
+=== version_compare('1.0b1', '1.0-dev')
+=> 1
+=== version_compare('1.0b1', '1.0a1')
+=> 1
+=== version_compare('1.0b1', '1.0alpha2')
+=> 1
+=== version_compare('1.0b1', '1.0b1')
+=> 0
+=== version_compare('1.0b1', '1.0beta')
+=> 1
+=== version_compare('1.0b1', '1.0RC1')
+=> -1
+=== version_compare('1.0b1', '1.0rc2')
+=> -1
+=== version_compare('1.0b1', '1.0pl1')
+=> -1
+=== version_compare('1.0b1', '1.0p')
+=> -1
+=== version_compare('1.0b1', '1.0#1')
+=> -1
+=== version_compare('1.0b1', '#1')
+=> 1
+=== version_compare('1.0b1', '1.0foo')
+=> 1
+=== version_compare('1.0b1', '-1')
+=> 1
+=== version_compare('1.0b1', 'a')
+=> 1
+=== version_compare('1.0b1', 'dev')
+=> 1
+=== version_compare('1.0b1', '1.0_dev+x')
+=> 1
+=== version_compare('1.0b1', '5.3.0-dev')
+=> -1
+=== version_compare('1.0b1', '5.3.0')
+=> -1
+=== version_compare('1.0b1', '99999999999999999999.1')
+=> -1
+=== version_compare('1.0b1', '1.0 rc 1')
+=> 1
+=== version_compare('1.0b1', "1.0\x00z")
+=> -1
+=== version_compare('1.0beta', '')
+=> 1
+=== version_compare('1.0beta', '1')
+=> 1
+=== version_compare('1.0beta', '2')
+=> -1
+=== version_compare('1.0beta', '10')
+=> -1
+=== version_compare('1.0beta', '1.0')
+=> -1
+=== version_compare('1.0beta', '1.0.0')
+=> -1
+=== version_compare('1.0beta', '1.0.1')
+=> -1
+=== version_compare('1.0beta', '1.1')
+=> -1
+=== version_compare('1.0beta', '1..2')
+=> -1
+=== version_compare('1.0beta', '1.0-dev')
+=> 1
+=== version_compare('1.0beta', '1.0a1')
+=> 1
+=== version_compare('1.0beta', '1.0alpha2')
+=> 1
+=== version_compare('1.0beta', '1.0b1')
+=> -1
+=== version_compare('1.0beta', '1.0beta')
+=> 0
+=== version_compare('1.0beta', '1.0RC1')
+=> -1
+=== version_compare('1.0beta', '1.0rc2')
+=> -1
+=== version_compare('1.0beta', '1.0pl1')
+=> -1
+=== version_compare('1.0beta', '1.0p')
+=> -1
+=== version_compare('1.0beta', '1.0#1')
+=> -1
+=== version_compare('1.0beta', '#1')
+=> 1
+=== version_compare('1.0beta', '1.0foo')
+=> 1
+=== version_compare('1.0beta', '-1')
+=> 1
+=== version_compare('1.0beta', 'a')
+=> 1
+=== version_compare('1.0beta', 'dev')
+=> 1
+=== version_compare('1.0beta', '1.0_dev+x')
+=> 1
+=== version_compare('1.0beta', '5.3.0-dev')
+=> -1
+=== version_compare('1.0beta', '5.3.0')
+=> -1
+=== version_compare('1.0beta', '99999999999999999999.1')
+=> -1
+=== version_compare('1.0beta', '1.0 rc 1')
+=> 1
+=== version_compare('1.0beta', "1.0\x00z")
+=> -1
+=== version_compare('1.0RC1', '')
+=> 1
+=== version_compare('1.0RC1', '1')
+=> 1
+=== version_compare('1.0RC1', '2')
+=> -1
+=== version_compare('1.0RC1', '10')
+=> -1
+=== version_compare('1.0RC1', '1.0')
+=> -1
+=== version_compare('1.0RC1', '1.0.0')
+=> -1
+=== version_compare('1.0RC1', '1.0.1')
+=> -1
+=== version_compare('1.0RC1', '1.1')
+=> -1
+=== version_compare('1.0RC1', '1..2')
+=> -1
+=== version_compare('1.0RC1', '1.0-dev')
+=> 1
+=== version_compare('1.0RC1', '1.0a1')
+=> 1
+=== version_compare('1.0RC1', '1.0alpha2')
+=> 1
+=== version_compare('1.0RC1', '1.0b1')
+=> 1
+=== version_compare('1.0RC1', '1.0beta')
+=> 1
+=== version_compare('1.0RC1', '1.0RC1')
+=> 0
+=== version_compare('1.0RC1', '1.0rc2')
+=> -1
+=== version_compare('1.0RC1', '1.0pl1')
+=> -1
+=== version_compare('1.0RC1', '1.0p')
+=> -1
+=== version_compare('1.0RC1', '1.0#1')
+=> -1
+=== version_compare('1.0RC1', '#1')
+=> 1
+=== version_compare('1.0RC1', '1.0foo')
+=> 1
+=== version_compare('1.0RC1', '-1')
+=> 1
+=== version_compare('1.0RC1', 'a')
+=> 1
+=== version_compare('1.0RC1', 'dev')
+=> 1
+=== version_compare('1.0RC1', '1.0_dev+x')
+=> 1
+=== version_compare('1.0RC1', '5.3.0-dev')
+=> -1
+=== version_compare('1.0RC1', '5.3.0')
+=> -1
+=== version_compare('1.0RC1', '99999999999999999999.1')
+=> -1
+=== version_compare('1.0RC1', '1.0 rc 1')
+=> 1
+=== version_compare('1.0RC1', "1.0\x00z")
+=> -1
+=== version_compare('1.0rc2', '')
+=> 1
+=== version_compare('1.0rc2', '1')
+=> 1
+=== version_compare('1.0rc2', '2')
+=> -1
+=== version_compare('1.0rc2', '10')
+=> -1
+=== version_compare('1.0rc2', '1.0')
+=> -1
+=== version_compare('1.0rc2', '1.0.0')
+=> -1
+=== version_compare('1.0rc2', '1.0.1')
+=> -1
+=== version_compare('1.0rc2', '1.1')
+=> -1
+=== version_compare('1.0rc2', '1..2')
+=> -1
+=== version_compare('1.0rc2', '1.0-dev')
+=> 1
+=== version_compare('1.0rc2', '1.0a1')
+=> 1
+=== version_compare('1.0rc2', '1.0alpha2')
+=> 1
+=== version_compare('1.0rc2', '1.0b1')
+=> 1
+=== version_compare('1.0rc2', '1.0beta')
+=> 1
+=== version_compare('1.0rc2', '1.0RC1')
+=> 1
+=== version_compare('1.0rc2', '1.0rc2')
+=> 0
+=== version_compare('1.0rc2', '1.0pl1')
+=> -1
+=== version_compare('1.0rc2', '1.0p')
+=> -1
+=== version_compare('1.0rc2', '1.0#1')
+=> -1
+=== version_compare('1.0rc2', '#1')
+=> 1
+=== version_compare('1.0rc2', '1.0foo')
+=> 1
+=== version_compare('1.0rc2', '-1')
+=> 1
+=== version_compare('1.0rc2', 'a')
+=> 1
+=== version_compare('1.0rc2', 'dev')
+=> 1
+=== version_compare('1.0rc2', '1.0_dev+x')
+=> 1
+=== version_compare('1.0rc2', '5.3.0-dev')
+=> -1
+=== version_compare('1.0rc2', '5.3.0')
+=> -1
+=== version_compare('1.0rc2', '99999999999999999999.1')
+=> -1
+=== version_compare('1.0rc2', '1.0 rc 1')
+=> 1
+=== version_compare('1.0rc2', "1.0\x00z")
+=> -1
+=== version_compare('1.0pl1', '')
+=> 1
+=== version_compare('1.0pl1', '1')
+=> 1
+=== version_compare('1.0pl1', '2')
+=> -1
+=== version_compare('1.0pl1', '10')
+=> -1
+=== version_compare('1.0pl1', '1.0')
+=> 1
+=== version_compare('1.0pl1', '1.0.0')
+=> 1
+=== version_compare('1.0pl1', '1.0.1')
+=> 1
+=== version_compare('1.0pl1', '1.1')
+=> -1
+=== version_compare('1.0pl1', '1..2')
+=> -1
+=== version_compare('1.0pl1', '1.0-dev')
+=> 1
+=== version_compare('1.0pl1', '1.0a1')
+=> 1
+=== version_compare('1.0pl1', '1.0alpha2')
+=> 1
+=== version_compare('1.0pl1', '1.0b1')
+=> 1
+=== version_compare('1.0pl1', '1.0beta')
+=> 1
+=== version_compare('1.0pl1', '1.0RC1')
+=> 1
+=== version_compare('1.0pl1', '1.0rc2')
+=> 1
+=== version_compare('1.0pl1', '1.0pl1')
+=> 0
+=== version_compare('1.0pl1', '1.0p')
+=> 1
+=== version_compare('1.0pl1', '1.0#1')
+=> 1
+=== version_compare('1.0pl1', '#1')
+=> 1
+=== version_compare('1.0pl1', '1.0foo')
+=> 1
+=== version_compare('1.0pl1', '-1')
+=> 1
+=== version_compare('1.0pl1', 'a')
+=> 1
+=== version_compare('1.0pl1', 'dev')
+=> 1
+=== version_compare('1.0pl1', '1.0_dev+x')
+=> 1
+=== version_compare('1.0pl1', '5.3.0-dev')
+=> -1
+=== version_compare('1.0pl1', '5.3.0')
+=> -1
+=== version_compare('1.0pl1', '99999999999999999999.1')
+=> -1
+=== version_compare('1.0pl1', '1.0 rc 1')
+=> 1
+=== version_compare('1.0pl1', "1.0\x00z")
+=> 1
+=== version_compare('1.0p', '')
+=> 1
+=== version_compare('1.0p', '1')
+=> 1
+=== version_compare('1.0p', '2')
+=> -1
+=== version_compare('1.0p', '10')
+=> -1
+=== version_compare('1.0p', '1.0')
+=> 1
+=== version_compare('1.0p', '1.0.0')
+=> 1
+=== version_compare('1.0p', '1.0.1')
+=> 1
+=== version_compare('1.0p', '1.1')
+=> -1
+=== version_compare('1.0p', '1..2')
+=> -1
+=== version_compare('1.0p', '1.0-dev')
+=> 1
+=== version_compare('1.0p', '1.0a1')
+=> 1
+=== version_compare('1.0p', '1.0alpha2')
+=> 1
+=== version_compare('1.0p', '1.0b1')
+=> 1
+=== version_compare('1.0p', '1.0beta')
+=> 1
+=== version_compare('1.0p', '1.0RC1')
+=> 1
+=== version_compare('1.0p', '1.0rc2')
+=> 1
+=== version_compare('1.0p', '1.0pl1')
+=> -1
+=== version_compare('1.0p', '1.0p')
+=> 0
+=== version_compare('1.0p', '1.0#1')
+=> 1
+=== version_compare('1.0p', '#1')
+=> 1
+=== version_compare('1.0p', '1.0foo')
+=> 1
+=== version_compare('1.0p', '-1')
+=> 1
+=== version_compare('1.0p', 'a')
+=> 1
+=== version_compare('1.0p', 'dev')
+=> 1
+=== version_compare('1.0p', '1.0_dev+x')
+=> 1
+=== version_compare('1.0p', '5.3.0-dev')
+=> -1
+=== version_compare('1.0p', '5.3.0')
+=> -1
+=== version_compare('1.0p', '99999999999999999999.1')
+=> -1
+=== version_compare('1.0p', '1.0 rc 1')
+=> 1
+=== version_compare('1.0p', "1.0\x00z")
+=> 1
+=== version_compare('1.0#1', '')
+=> 1
+=== version_compare('1.0#1', '1')
+=> 1
+=== version_compare('1.0#1', '2')
+=> -1
+=== version_compare('1.0#1', '10')
+=> -1
+=== version_compare('1.0#1', '1.0')
+=> 1
+=== version_compare('1.0#1', '1.0.0')
+=> 1
+=== version_compare('1.0#1', '1.0.1')
+=> 1
+=== version_compare('1.0#1', '1.1')
+=> -1
+=== version_compare('1.0#1', '1..2')
+=> -1
+=== version_compare('1.0#1', '1.0-dev')
+=> 1
+=== version_compare('1.0#1', '1.0a1')
+=> 1
+=== version_compare('1.0#1', '1.0alpha2')
+=> 1
+=== version_compare('1.0#1', '1.0b1')
+=> 1
+=== version_compare('1.0#1', '1.0beta')
+=> 1
+=== version_compare('1.0#1', '1.0RC1')
+=> 1
+=== version_compare('1.0#1', '1.0rc2')
+=> 1
+=== version_compare('1.0#1', '1.0pl1')
+=> -1
+=== version_compare('1.0#1', '1.0p')
+=> -1
+=== version_compare('1.0#1', '1.0#1')
+=> 0
+=== version_compare('1.0#1', '#1')
+=> 1
+=== version_compare('1.0#1', '1.0foo')
+=> 1
+=== version_compare('1.0#1', '-1')
+=> 1
+=== version_compare('1.0#1', 'a')
+=> 1
+=== version_compare('1.0#1', 'dev')
+=> 1
+=== version_compare('1.0#1', '1.0_dev+x')
+=> 1
+=== version_compare('1.0#1', '5.3.0-dev')
+=> -1
+=== version_compare('1.0#1', '5.3.0')
+=> -1
+=== version_compare('1.0#1', '99999999999999999999.1')
+=> -1
+=== version_compare('1.0#1', '1.0 rc 1')
+=> 1
+=== version_compare('1.0#1', "1.0\x00z")
+=> 1
+=== version_compare('#1', '')
+=> 1
+=== version_compare('#1', '1')
+=> 0
+=== version_compare('#1', '2')
+=> 0
+=== version_compare('#1', '10')
+=> 0
+=== version_compare('#1', '1.0')
+=> -1
+=== version_compare('#1', '1.0.0')
+=> -1
+=== version_compare('#1', '1.0.1')
+=> -1
+=== version_compare('#1', '1.1')
+=> -1
+=== version_compare('#1', '1..2')
+=> -1
+=== version_compare('#1', '1.0-dev')
+=> -1
+=== version_compare('#1', '1.0a1')
+=> -1
+=== version_compare('#1', '1.0alpha2')
+=> -1
+=== version_compare('#1', '1.0b1')
+=> -1
+=== version_compare('#1', '1.0beta')
+=> -1
+=== version_compare('#1', '1.0RC1')
+=> -1
+=== version_compare('#1', '1.0rc2')
+=> -1
+=== version_compare('#1', '1.0pl1')
+=> -1
+=== version_compare('#1', '1.0p')
+=> -1
+=== version_compare('#1', '1.0#1')
+=> -1
+=== version_compare('#1', '#1')
+=> 0
+=== version_compare('#1', '1.0foo')
+=> -1
+=== version_compare('#1', '-1')
+=> 1
+=== version_compare('#1', 'a')
+=> 1
+=== version_compare('#1', 'dev')
+=> 1
+=== version_compare('#1', '1.0_dev+x')
+=> -1
+=== version_compare('#1', '5.3.0-dev')
+=> -1
+=== version_compare('#1', '5.3.0')
+=> -1
+=== version_compare('#1', '99999999999999999999.1')
+=> -1
+=== version_compare('#1', '1.0 rc 1')
+=> -1
+=== version_compare('#1', "1.0\x00z")
+=> -1
+=== version_compare('1.0foo', '')
+=> 1
+=== version_compare('1.0foo', '1')
+=> 1
+=== version_compare('1.0foo', '2')
+=> -1
+=== version_compare('1.0foo', '10')
+=> -1
+=== version_compare('1.0foo', '1.0')
+=> -1
+=== version_compare('1.0foo', '1.0.0')
+=> -1
+=== version_compare('1.0foo', '1.0.1')
+=> -1
+=== version_compare('1.0foo', '1.1')
+=> -1
+=== version_compare('1.0foo', '1..2')
+=> -1
+=== version_compare('1.0foo', '1.0-dev')
+=> -1
+=== version_compare('1.0foo', '1.0a1')
+=> -1
+=== version_compare('1.0foo', '1.0alpha2')
+=> -1
+=== version_compare('1.0foo', '1.0b1')
+=> -1
+=== version_compare('1.0foo', '1.0beta')
+=> -1
+=== version_compare('1.0foo', '1.0RC1')
+=> -1
+=== version_compare('1.0foo', '1.0rc2')
+=> -1
+=== version_compare('1.0foo', '1.0pl1')
+=> -1
+=== version_compare('1.0foo', '1.0p')
+=> -1
+=== version_compare('1.0foo', '1.0#1')
+=> -1
+=== version_compare('1.0foo', '#1')
+=> 1
+=== version_compare('1.0foo', '1.0foo')
+=> 0
+=== version_compare('1.0foo', '-1')
+=> 1
+=== version_compare('1.0foo', 'a')
+=> 1
+=== version_compare('1.0foo', 'dev')
+=> 1
+=== version_compare('1.0foo', '1.0_dev+x')
+=> -1
+=== version_compare('1.0foo', '5.3.0-dev')
+=> -1
+=== version_compare('1.0foo', '5.3.0')
+=> -1
+=== version_compare('1.0foo', '99999999999999999999.1')
+=> -1
+=== version_compare('1.0foo', '1.0 rc 1')
+=> -1
+=== version_compare('1.0foo', "1.0\x00z")
+=> -1
+=== version_compare('-1', '')
+=> 1
+=== version_compare('-1', '1')
+=> -1
+=== version_compare('-1', '2')
+=> -1
+=== version_compare('-1', '10')
+=> -1
+=== version_compare('-1', '1.0')
+=> -1
+=== version_compare('-1', '1.0.0')
+=> -1
+=== version_compare('-1', '1.0.1')
+=> -1
+=== version_compare('-1', '1.1')
+=> -1
+=== version_compare('-1', '1..2')
+=> -1
+=== version_compare('-1', '1.0-dev')
+=> -1
+=== version_compare('-1', '1.0a1')
+=> -1
+=== version_compare('-1', '1.0alpha2')
+=> -1
+=== version_compare('-1', '1.0b1')
+=> -1
+=== version_compare('-1', '1.0beta')
+=> -1
+=== version_compare('-1', '1.0RC1')
+=> -1
+=== version_compare('-1', '1.0rc2')
+=> -1
+=== version_compare('-1', '1.0pl1')
+=> -1
+=== version_compare('-1', '1.0p')
+=> -1
+=== version_compare('-1', '1.0#1')
+=> -1
+=== version_compare('-1', '#1')
+=> -1
+=== version_compare('-1', '1.0foo')
+=> -1
+=== version_compare('-1', '-1')
+=> 0
+=== version_compare('-1', 'a')
+=> -1
+=== version_compare('-1', 'dev')
+=> -1
+=== version_compare('-1', '1.0_dev+x')
+=> -1
+=== version_compare('-1', '5.3.0-dev')
+=> -1
+=== version_compare('-1', '5.3.0')
+=> -1
+=== version_compare('-1', '99999999999999999999.1')
+=> -1
+=== version_compare('-1', '1.0 rc 1')
+=> -1
+=== version_compare('-1', "1.0\x00z")
+=> -1
+=== version_compare('a', '')
+=> 1
+=== version_compare('a', '1')
+=> -1
+=== version_compare('a', '2')
+=> -1
+=== version_compare('a', '10')
+=> -1
+=== version_compare('a', '1.0')
+=> -1
+=== version_compare('a', '1.0.0')
+=> -1
+=== version_compare('a', '1.0.1')
+=> -1
+=== version_compare('a', '1.1')
+=> -1
+=== version_compare('a', '1..2')
+=> -1
+=== version_compare('a', '1.0-dev')
+=> -1
+=== version_compare('a', '1.0a1')
+=> -1
+=== version_compare('a', '1.0alpha2')
+=> -1
+=== version_compare('a', '1.0b1')
+=> -1
+=== version_compare('a', '1.0beta')
+=> -1
+=== version_compare('a', '1.0RC1')
+=> -1
+=== version_compare('a', '1.0rc2')
+=> -1
+=== version_compare('a', '1.0pl1')
+=> -1
+=== version_compare('a', '1.0p')
+=> -1
+=== version_compare('a', '1.0#1')
+=> -1
+=== version_compare('a', '#1')
+=> -1
+=== version_compare('a', '1.0foo')
+=> -1
+=== version_compare('a', '-1')
+=> 1
+=== version_compare('a', 'a')
+=> 0
+=== version_compare('a', 'dev')
+=> 1
+=== version_compare('a', '1.0_dev+x')
+=> -1
+=== version_compare('a', '5.3.0-dev')
+=> -1
+=== version_compare('a', '5.3.0')
+=> -1
+=== version_compare('a', '99999999999999999999.1')
+=> -1
+=== version_compare('a', '1.0 rc 1')
+=> -1
+=== version_compare('a', "1.0\x00z")
+=> -1
+=== version_compare('dev', '')
+=> 1
+=== version_compare('dev', '1')
+=> -1
+=== version_compare('dev', '2')
+=> -1
+=== version_compare('dev', '10')
+=> -1
+=== version_compare('dev', '1.0')
+=> -1
+=== version_compare('dev', '1.0.0')
+=> -1
+=== version_compare('dev', '1.0.1')
+=> -1
+=== version_compare('dev', '1.1')
+=> -1
+=== version_compare('dev', '1..2')
+=> -1
+=== version_compare('dev', '1.0-dev')
+=> -1
+=== version_compare('dev', '1.0a1')
+=> -1
+=== version_compare('dev', '1.0alpha2')
+=> -1
+=== version_compare('dev', '1.0b1')
+=> -1
+=== version_compare('dev', '1.0beta')
+=> -1
+=== version_compare('dev', '1.0RC1')
+=> -1
+=== version_compare('dev', '1.0rc2')
+=> -1
+=== version_compare('dev', '1.0pl1')
+=> -1
+=== version_compare('dev', '1.0p')
+=> -1
+=== version_compare('dev', '1.0#1')
+=> -1
+=== version_compare('dev', '#1')
+=> -1
+=== version_compare('dev', '1.0foo')
+=> -1
+=== version_compare('dev', '-1')
+=> 1
+=== version_compare('dev', 'a')
+=> -1
+=== version_compare('dev', 'dev')
+=> 0
+=== version_compare('dev', '1.0_dev+x')
+=> -1
+=== version_compare('dev', '5.3.0-dev')
+=> -1
+=== version_compare('dev', '5.3.0')
+=> -1
+=== version_compare('dev', '99999999999999999999.1')
+=> -1
+=== version_compare('dev', '1.0 rc 1')
+=> -1
+=== version_compare('dev', "1.0\x00z")
+=> -1
+=== version_compare('1.0_dev+x', '')
+=> 1
+=== version_compare('1.0_dev+x', '1')
+=> 1
+=== version_compare('1.0_dev+x', '2')
+=> -1
+=== version_compare('1.0_dev+x', '10')
+=> -1
+=== version_compare('1.0_dev+x', '1.0')
+=> -1
+=== version_compare('1.0_dev+x', '1.0.0')
+=> -1
+=== version_compare('1.0_dev+x', '1.0.1')
+=> -1
+=== version_compare('1.0_dev+x', '1.1')
+=> -1
+=== version_compare('1.0_dev+x', '1..2')
+=> -1
+=== version_compare('1.0_dev+x', '1.0-dev')
+=> -1
+=== version_compare('1.0_dev+x', '1.0a1')
+=> -1
+=== version_compare('1.0_dev+x', '1.0alpha2')
+=> -1
+=== version_compare('1.0_dev+x', '1.0b1')
+=> -1
+=== version_compare('1.0_dev+x', '1.0beta')
+=> -1
+=== version_compare('1.0_dev+x', '1.0RC1')
+=> -1
+=== version_compare('1.0_dev+x', '1.0rc2')
+=> -1
+=== version_compare('1.0_dev+x', '1.0pl1')
+=> -1
+=== version_compare('1.0_dev+x', '1.0p')
+=> -1
+=== version_compare('1.0_dev+x', '1.0#1')
+=> -1
+=== version_compare('1.0_dev+x', '#1')
+=> 1
+=== version_compare('1.0_dev+x', '1.0foo')
+=> 1
+=== version_compare('1.0_dev+x', '-1')
+=> 1
+=== version_compare('1.0_dev+x', 'a')
+=> 1
+=== version_compare('1.0_dev+x', 'dev')
+=> 1
+=== version_compare('1.0_dev+x', '1.0_dev+x')
+=> 0
+=== version_compare('1.0_dev+x', '5.3.0-dev')
+=> -1
+=== version_compare('1.0_dev+x', '5.3.0')
+=> -1
+=== version_compare('1.0_dev+x', '99999999999999999999.1')
+=> -1
+=== version_compare('1.0_dev+x', '1.0 rc 1')
+=> 1
+=== version_compare('1.0_dev+x', "1.0\x00z")
+=> -1
+=== version_compare('5.3.0-dev', '')
+=> 1
+=== version_compare('5.3.0-dev', '1')
+=> 1
+=== version_compare('5.3.0-dev', '2')
+=> 1
+=== version_compare('5.3.0-dev', '10')
+=> -1
+=== version_compare('5.3.0-dev', '1.0')
+=> 1
+=== version_compare('5.3.0-dev', '1.0.0')
+=> 1
+=== version_compare('5.3.0-dev', '1.0.1')
+=> 1
+=== version_compare('5.3.0-dev', '1.1')
+=> 1
+=== version_compare('5.3.0-dev', '1..2')
+=> 1
+=== version_compare('5.3.0-dev', '1.0-dev')
+=> 1
+=== version_compare('5.3.0-dev', '1.0a1')
+=> 1
+=== version_compare('5.3.0-dev', '1.0alpha2')
+=> 1
+=== version_compare('5.3.0-dev', '1.0b1')
+=> 1
+=== version_compare('5.3.0-dev', '1.0beta')
+=> 1
+=== version_compare('5.3.0-dev', '1.0RC1')
+=> 1
+=== version_compare('5.3.0-dev', '1.0rc2')
+=> 1
+=== version_compare('5.3.0-dev', '1.0pl1')
+=> 1
+=== version_compare('5.3.0-dev', '1.0p')
+=> 1
+=== version_compare('5.3.0-dev', '1.0#1')
+=> 1
+=== version_compare('5.3.0-dev', '#1')
+=> 1
+=== version_compare('5.3.0-dev', '1.0foo')
+=> 1
+=== version_compare('5.3.0-dev', '-1')
+=> 1
+=== version_compare('5.3.0-dev', 'a')
+=> 1
+=== version_compare('5.3.0-dev', 'dev')
+=> 1
+=== version_compare('5.3.0-dev', '1.0_dev+x')
+=> 1
+=== version_compare('5.3.0-dev', '5.3.0-dev')
+=> 0
+=== version_compare('5.3.0-dev', '5.3.0')
+=> -1
+=== version_compare('5.3.0-dev', '99999999999999999999.1')
+=> -1
+=== version_compare('5.3.0-dev', '1.0 rc 1')
+=> 1
+=== version_compare('5.3.0-dev', "1.0\x00z")
+=> 1
+=== version_compare('5.3.0', '')
+=> 1
+=== version_compare('5.3.0', '1')
+=> 1
+=== version_compare('5.3.0', '2')
+=> 1
+=== version_compare('5.3.0', '10')
+=> -1
+=== version_compare('5.3.0', '1.0')
+=> 1
+=== version_compare('5.3.0', '1.0.0')
+=> 1
+=== version_compare('5.3.0', '1.0.1')
+=> 1
+=== version_compare('5.3.0', '1.1')
+=> 1
+=== version_compare('5.3.0', '1..2')
+=> 1
+=== version_compare('5.3.0', '1.0-dev')
+=> 1
+=== version_compare('5.3.0', '1.0a1')
+=> 1
+=== version_compare('5.3.0', '1.0alpha2')
+=> 1
+=== version_compare('5.3.0', '1.0b1')
+=> 1
+=== version_compare('5.3.0', '1.0beta')
+=> 1
+=== version_compare('5.3.0', '1.0RC1')
+=> 1
+=== version_compare('5.3.0', '1.0rc2')
+=> 1
+=== version_compare('5.3.0', '1.0pl1')
+=> 1
+=== version_compare('5.3.0', '1.0p')
+=> 1
+=== version_compare('5.3.0', '1.0#1')
+=> 1
+=== version_compare('5.3.0', '#1')
+=> 1
+=== version_compare('5.3.0', '1.0foo')
+=> 1
+=== version_compare('5.3.0', '-1')
+=> 1
+=== version_compare('5.3.0', 'a')
+=> 1
+=== version_compare('5.3.0', 'dev')
+=> 1
+=== version_compare('5.3.0', '1.0_dev+x')
+=> 1
+=== version_compare('5.3.0', '5.3.0-dev')
+=> 1
+=== version_compare('5.3.0', '5.3.0')
+=> 0
+=== version_compare('5.3.0', '99999999999999999999.1')
+=> -1
+=== version_compare('5.3.0', '1.0 rc 1')
+=> 1
+=== version_compare('5.3.0', "1.0\x00z")
+=> 1
+=== version_compare('99999999999999999999.1', '')
+=> 1
+=== version_compare('99999999999999999999.1', '1')
+=> 1
+=== version_compare('99999999999999999999.1', '2')
+=> 1
+=== version_compare('99999999999999999999.1', '10')
+=> 1
+=== version_compare('99999999999999999999.1', '1.0')
+=> 1
+=== version_compare('99999999999999999999.1', '1.0.0')
+=> 1
+=== version_compare('99999999999999999999.1', '1.0.1')
+=> 1
+=== version_compare('99999999999999999999.1', '1.1')
+=> 1
+=== version_compare('99999999999999999999.1', '1..2')
+=> 1
+=== version_compare('99999999999999999999.1', '1.0-dev')
+=> 1
+=== version_compare('99999999999999999999.1', '1.0a1')
+=> 1
+=== version_compare('99999999999999999999.1', '1.0alpha2')
+=> 1
+=== version_compare('99999999999999999999.1', '1.0b1')
+=> 1
+=== version_compare('99999999999999999999.1', '1.0beta')
+=> 1
+=== version_compare('99999999999999999999.1', '1.0RC1')
+=> 1
+=== version_compare('99999999999999999999.1', '1.0rc2')
+=> 1
+=== version_compare('99999999999999999999.1', '1.0pl1')
+=> 1
+=== version_compare('99999999999999999999.1', '1.0p')
+=> 1
+=== version_compare('99999999999999999999.1', '1.0#1')
+=> 1
+=== version_compare('99999999999999999999.1', '#1')
+=> 1
+=== version_compare('99999999999999999999.1', '1.0foo')
+=> 1
+=== version_compare('99999999999999999999.1', '-1')
+=> 1
+=== version_compare('99999999999999999999.1', 'a')
+=> 1
+=== version_compare('99999999999999999999.1', 'dev')
+=> 1
+=== version_compare('99999999999999999999.1', '1.0_dev+x')
+=> 1
+=== version_compare('99999999999999999999.1', '5.3.0-dev')
+=> 1
+=== version_compare('99999999999999999999.1', '5.3.0')
+=> 1
+=== version_compare('99999999999999999999.1', '99999999999999999999.1')
+=> 0
+=== version_compare('99999999999999999999.1', '1.0 rc 1')
+=> 1
+=== version_compare('99999999999999999999.1', "1.0\x00z")
+=> 1
+=== version_compare('1.0 rc 1', '')
+=> 1
+=== version_compare('1.0 rc 1', '1')
+=> 1
+=== version_compare('1.0 rc 1', '2')
+=> -1
+=== version_compare('1.0 rc 1', '10')
+=> -1
+=== version_compare('1.0 rc 1', '1.0')
+=> -1
+=== version_compare('1.0 rc 1', '1.0.0')
+=> -1
+=== version_compare('1.0 rc 1', '1.0.1')
+=> -1
+=== version_compare('1.0 rc 1', '1.1')
+=> -1
+=== version_compare('1.0 rc 1', '1..2')
+=> -1
+=== version_compare('1.0 rc 1', '1.0-dev')
+=> -1
+=== version_compare('1.0 rc 1', '1.0a1')
+=> -1
+=== version_compare('1.0 rc 1', '1.0alpha2')
+=> -1
+=== version_compare('1.0 rc 1', '1.0b1')
+=> -1
+=== version_compare('1.0 rc 1', '1.0beta')
+=> -1
+=== version_compare('1.0 rc 1', '1.0RC1')
+=> -1
+=== version_compare('1.0 rc 1', '1.0rc2')
+=> -1
+=== version_compare('1.0 rc 1', '1.0pl1')
+=> -1
+=== version_compare('1.0 rc 1', '1.0p')
+=> -1
+=== version_compare('1.0 rc 1', '1.0#1')
+=> -1
+=== version_compare('1.0 rc 1', '#1')
+=> 1
+=== version_compare('1.0 rc 1', '1.0foo')
+=> 1
+=== version_compare('1.0 rc 1', '-1')
+=> 1
+=== version_compare('1.0 rc 1', 'a')
+=> 1
+=== version_compare('1.0 rc 1', 'dev')
+=> 1
+=== version_compare('1.0 rc 1', '1.0_dev+x')
+=> -1
+=== version_compare('1.0 rc 1', '5.3.0-dev')
+=> -1
+=== version_compare('1.0 rc 1', '5.3.0')
+=> -1
+=== version_compare('1.0 rc 1', '99999999999999999999.1')
+=> -1
+=== version_compare('1.0 rc 1', '1.0 rc 1')
+=> 0
+=== version_compare('1.0 rc 1', "1.0\x00z")
+=> -1
+=== version_compare("1.0\x00z", '')
+=> 1
+=== version_compare("1.0\x00z", '1')
+=> 1
+=== version_compare("1.0\x00z", '2')
+=> -1
+=== version_compare("1.0\x00z", '10')
+=> -1
+=== version_compare("1.0\x00z", '1.0')
+=> 0
+=== version_compare("1.0\x00z", '1.0.0')
+=> -1
+=== version_compare("1.0\x00z", '1.0.1')
+=> -1
+=== version_compare("1.0\x00z", '1.1')
+=> -1
+=== version_compare("1.0\x00z", '1..2')
+=> -1
+=== version_compare("1.0\x00z", '1.0-dev')
+=> 1
+=== version_compare("1.0\x00z", '1.0a1')
+=> 1
+=== version_compare("1.0\x00z", '1.0alpha2')
+=> 1
+=== version_compare("1.0\x00z", '1.0b1')
+=> 1
+=== version_compare("1.0\x00z", '1.0beta')
+=> 1
+=== version_compare("1.0\x00z", '1.0RC1')
+=> 1
+=== version_compare("1.0\x00z", '1.0rc2')
+=> 1
+=== version_compare("1.0\x00z", '1.0pl1')
+=> -1
+=== version_compare("1.0\x00z", '1.0p')
+=> -1
+=== version_compare("1.0\x00z", '1.0#1')
+=> -1
+=== version_compare("1.0\x00z", '#1')
+=> 1
+=== version_compare("1.0\x00z", '1.0foo')
+=> 1
+=== version_compare("1.0\x00z", '-1')
+=> 1
+=== version_compare("1.0\x00z", 'a')
+=> 1
+=== version_compare("1.0\x00z", 'dev')
+=> 1
+=== version_compare("1.0\x00z", '1.0_dev+x')
+=> 1
+=== version_compare("1.0\x00z", '5.3.0-dev')
+=> -1
+=== version_compare("1.0\x00z", '5.3.0')
+=> -1
+=== version_compare("1.0\x00z", '99999999999999999999.1')
+=> -1
+=== version_compare("1.0\x00z", '1.0 rc 1')
+=> 1
+=== version_compare("1.0\x00z", "1.0\x00z")
+=> 0
+=== version_compare('1.0', '1.0.1', '<')
+=> true
+=== version_compare('1.0', '1.0', '<')
+=> false
+=== version_compare('1.0pl1', '1.0', '<')
+=> false
+=== version_compare('1.0', '1.0.1', 'lt')
+=> true
+=== version_compare('1.0', '1.0', 'lt')
+=> false
+=== version_compare('1.0pl1', '1.0', 'lt')
+=> false
+=== version_compare('1.0', '1.0.1', '<=')
+=> true
+=== version_compare('1.0', '1.0', '<=')
+=> true
+=== version_compare('1.0pl1', '1.0', '<=')
+=> false
+=== version_compare('1.0', '1.0.1', 'le')
+=> true
+=== version_compare('1.0', '1.0', 'le')
+=> true
+=== version_compare('1.0pl1', '1.0', 'le')
+=> false
+=== version_compare('1.0', '1.0.1', '>')
+=> false
+=== version_compare('1.0', '1.0', '>')
+=> false
+=== version_compare('1.0pl1', '1.0', '>')
+=> true
+=== version_compare('1.0', '1.0.1', 'gt')
+=> false
+=== version_compare('1.0', '1.0', 'gt')
+=> false
+=== version_compare('1.0pl1', '1.0', 'gt')
+=> true
+=== version_compare('1.0', '1.0.1', '>=')
+=> false
+=== version_compare('1.0', '1.0', '>=')
+=> true
+=== version_compare('1.0pl1', '1.0', '>=')
+=> true
+=== version_compare('1.0', '1.0.1', 'ge')
+=> false
+=== version_compare('1.0', '1.0', 'ge')
+=> true
+=== version_compare('1.0pl1', '1.0', 'ge')
+=> true
+=== version_compare('1.0', '1.0.1', '==')
+=> false
+=== version_compare('1.0', '1.0', '==')
+=> true
+=== version_compare('1.0pl1', '1.0', '==')
+=> false
+=== version_compare('1.0', '1.0.1', '=')
+=> false
+=== version_compare('1.0', '1.0', '=')
+=> true
+=== version_compare('1.0pl1', '1.0', '=')
+=> false
+=== version_compare('1.0', '1.0.1', 'eq')
+=> false
+=== version_compare('1.0', '1.0', 'eq')
+=> true
+=== version_compare('1.0pl1', '1.0', 'eq')
+=> false
+=== version_compare('1.0', '1.0.1', '!=')
+=> true
+=== version_compare('1.0', '1.0', '!=')
+=> false
+=== version_compare('1.0pl1', '1.0', '!=')
+=> true
+=== version_compare('1.0', '1.0.1', '<>')
+=> true
+=== version_compare('1.0', '1.0', '<>')
+=> false
+=== version_compare('1.0pl1', '1.0', '<>')
+=> true
+=== version_compare('1.0', '1.0.1', 'ne')
+=> true
+=== version_compare('1.0', '1.0', 'ne')
+=> false
+=== version_compare('1.0pl1', '1.0', 'ne')
+=> true
+=== version_compare('1.0', '1.0.1', '')
+!! ValueError: version_compare(): Argument #3 ($operator) must be a valid comparison operator
+=== version_compare('1.0', '1.0', '')
+!! ValueError: version_compare(): Argument #3 ($operator) must be a valid comparison operator
+=== version_compare('1.0pl1', '1.0', '')
+!! ValueError: version_compare(): Argument #3 ($operator) must be a valid comparison operator
+=== version_compare('1.0', '1.0.1', 'l')
+!! ValueError: version_compare(): Argument #3 ($operator) must be a valid comparison operator
+=== version_compare('1.0', '1.0', 'l')
+!! ValueError: version_compare(): Argument #3 ($operator) must be a valid comparison operator
+=== version_compare('1.0pl1', '1.0', 'l')
+!! ValueError: version_compare(): Argument #3 ($operator) must be a valid comparison operator
+=== version_compare('1.0', '1.0.1', '??')
+!! ValueError: version_compare(): Argument #3 ($operator) must be a valid comparison operator
+=== version_compare('1.0', '1.0', '??')
+!! ValueError: version_compare(): Argument #3 ($operator) must be a valid comparison operator
+=== version_compare('1.0pl1', '1.0', '??')
+!! ValueError: version_compare(): Argument #3 ($operator) must be a valid comparison operator
+=== version_compare('1.0', '1.0.1', 'LT')
+!! ValueError: version_compare(): Argument #3 ($operator) must be a valid comparison operator
+=== version_compare('1.0', '1.0', 'LT')
+!! ValueError: version_compare(): Argument #3 ($operator) must be a valid comparison operator
+=== version_compare('1.0pl1', '1.0', 'LT')
+!! ValueError: version_compare(): Argument #3 ($operator) must be a valid comparison operator

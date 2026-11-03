@@ -1,0 +1,4050 @@
+=== bin2hex(pack('c', 0))
+=> '00'
+=== unpack('c', pack('c', 0))
+=> array (
+  1 => 0,
+)
+=== bin2hex(pack('c', 1))
+=> '01'
+=== unpack('c', pack('c', 1))
+=> array (
+  1 => 1,
+)
+=== bin2hex(pack('c', -1))
+=> 'ff'
+=== unpack('c', pack('c', -1))
+=> array (
+  1 => -1,
+)
+=== bin2hex(pack('c', 127))
+=> '7f'
+=== unpack('c', pack('c', 127))
+=> array (
+  1 => 127,
+)
+=== bin2hex(pack('c', 128))
+=> '80'
+=== unpack('c', pack('c', 128))
+=> array (
+  1 => -128,
+)
+=== bin2hex(pack('c', -127))
+=> '81'
+=== unpack('c', pack('c', -127))
+=> array (
+  1 => -127,
+)
+=== bin2hex(pack('c', -128))
+=> '80'
+=== unpack('c', pack('c', -128))
+=> array (
+  1 => -128,
+)
+=== bin2hex(pack('c', -129))
+=> '7f'
+=== unpack('c', pack('c', -129))
+=> array (
+  1 => 127,
+)
+=== bin2hex(pack('c', 255))
+=> 'ff'
+=== unpack('c', pack('c', 255))
+=> array (
+  1 => -1,
+)
+=== bin2hex(pack('c', 256))
+=> '00'
+=== unpack('c', pack('c', 256))
+=> array (
+  1 => 0,
+)
+=== bin2hex(pack('c', 32767))
+=> 'ff'
+=== unpack('c', pack('c', 32767))
+=> array (
+  1 => -1,
+)
+=== bin2hex(pack('c', 32768))
+=> '00'
+=== unpack('c', pack('c', 32768))
+=> array (
+  1 => 0,
+)
+=== bin2hex(pack('c', 65534))
+=> 'fe'
+=== unpack('c', pack('c', 65534))
+=> array (
+  1 => -2,
+)
+=== bin2hex(pack('c', 65535))
+=> 'ff'
+=== unpack('c', pack('c', 65535))
+=> array (
+  1 => -1,
+)
+=== bin2hex(pack('c', 65537))
+=> '01'
+=== unpack('c', pack('c', 65537))
+=> array (
+  1 => 1,
+)
+=== bin2hex(pack('c', -1000))
+=> '18'
+=== unpack('c', pack('c', -1000))
+=> array (
+  1 => 24,
+)
+=== bin2hex(pack('c', -64434))
+=> '4e'
+=== unpack('c', pack('c', -64434))
+=> array (
+  1 => 78,
+)
+=== bin2hex(pack('c', -65535))
+=> '01'
+=== unpack('c', pack('c', -65535))
+=> array (
+  1 => 1,
+)
+=== bin2hex(pack('c', 2147483647))
+=> 'ff'
+=== unpack('c', pack('c', 2147483647))
+=> array (
+  1 => -1,
+)
+=== bin2hex(pack('c', 2147483648))
+=> '00'
+=== unpack('c', pack('c', 2147483648))
+=> array (
+  1 => 0,
+)
+=== bin2hex(pack('c', 2147483650))
+=> '02'
+=== unpack('c', pack('c', 2147483650))
+=> array (
+  1 => 2,
+)
+=== bin2hex(pack('c', -2147483648))
+=> '00'
+=== unpack('c', pack('c', -2147483648))
+=> array (
+  1 => 0,
+)
+=== bin2hex(pack('c', 4294967295))
+=> 'ff'
+=== unpack('c', pack('c', 4294967295))
+=> array (
+  1 => -1,
+)
+=== bin2hex(pack('c', 4294967296))
+=> '00'
+=== unpack('c', pack('c', 4294967296))
+=> array (
+  1 => 0,
+)
+=== bin2hex(pack('c', -4294967296))
+=> '00'
+=== unpack('c', pack('c', -4294967296))
+=> array (
+  1 => 0,
+)
+=== bin2hex(pack('c', 281474976710654))
+=> 'fe'
+=== unpack('c', pack('c', 281474976710654))
+=> array (
+  1 => -2,
+)
+=== bin2hex(pack('c', 9223372036854775807))
+=> 'ff'
+=== unpack('c', pack('c', 9223372036854775807))
+=> array (
+  1 => -1,
+)
+=== bin2hex(pack('c', PHP_INT_MIN))
+=> '00'
+=== unpack('c', pack('c', PHP_INT_MIN))
+=> array (
+  1 => 0,
+)
+=== bin2hex(pack('C', 0))
+=> '00'
+=== unpack('C', pack('C', 0))
+=> array (
+  1 => 0,
+)
+=== bin2hex(pack('C', 1))
+=> '01'
+=== unpack('C', pack('C', 1))
+=> array (
+  1 => 1,
+)
+=== bin2hex(pack('C', -1))
+=> 'ff'
+=== unpack('C', pack('C', -1))
+=> array (
+  1 => 255,
+)
+=== bin2hex(pack('C', 127))
+=> '7f'
+=== unpack('C', pack('C', 127))
+=> array (
+  1 => 127,
+)
+=== bin2hex(pack('C', 128))
+=> '80'
+=== unpack('C', pack('C', 128))
+=> array (
+  1 => 128,
+)
+=== bin2hex(pack('C', -127))
+=> '81'
+=== unpack('C', pack('C', -127))
+=> array (
+  1 => 129,
+)
+=== bin2hex(pack('C', -128))
+=> '80'
+=== unpack('C', pack('C', -128))
+=> array (
+  1 => 128,
+)
+=== bin2hex(pack('C', -129))
+=> '7f'
+=== unpack('C', pack('C', -129))
+=> array (
+  1 => 127,
+)
+=== bin2hex(pack('C', 255))
+=> 'ff'
+=== unpack('C', pack('C', 255))
+=> array (
+  1 => 255,
+)
+=== bin2hex(pack('C', 256))
+=> '00'
+=== unpack('C', pack('C', 256))
+=> array (
+  1 => 0,
+)
+=== bin2hex(pack('C', 32767))
+=> 'ff'
+=== unpack('C', pack('C', 32767))
+=> array (
+  1 => 255,
+)
+=== bin2hex(pack('C', 32768))
+=> '00'
+=== unpack('C', pack('C', 32768))
+=> array (
+  1 => 0,
+)
+=== bin2hex(pack('C', 65534))
+=> 'fe'
+=== unpack('C', pack('C', 65534))
+=> array (
+  1 => 254,
+)
+=== bin2hex(pack('C', 65535))
+=> 'ff'
+=== unpack('C', pack('C', 65535))
+=> array (
+  1 => 255,
+)
+=== bin2hex(pack('C', 65537))
+=> '01'
+=== unpack('C', pack('C', 65537))
+=> array (
+  1 => 1,
+)
+=== bin2hex(pack('C', -1000))
+=> '18'
+=== unpack('C', pack('C', -1000))
+=> array (
+  1 => 24,
+)
+=== bin2hex(pack('C', -64434))
+=> '4e'
+=== unpack('C', pack('C', -64434))
+=> array (
+  1 => 78,
+)
+=== bin2hex(pack('C', -65535))
+=> '01'
+=== unpack('C', pack('C', -65535))
+=> array (
+  1 => 1,
+)
+=== bin2hex(pack('C', 2147483647))
+=> 'ff'
+=== unpack('C', pack('C', 2147483647))
+=> array (
+  1 => 255,
+)
+=== bin2hex(pack('C', 2147483648))
+=> '00'
+=== unpack('C', pack('C', 2147483648))
+=> array (
+  1 => 0,
+)
+=== bin2hex(pack('C', 2147483650))
+=> '02'
+=== unpack('C', pack('C', 2147483650))
+=> array (
+  1 => 2,
+)
+=== bin2hex(pack('C', -2147483648))
+=> '00'
+=== unpack('C', pack('C', -2147483648))
+=> array (
+  1 => 0,
+)
+=== bin2hex(pack('C', 4294967295))
+=> 'ff'
+=== unpack('C', pack('C', 4294967295))
+=> array (
+  1 => 255,
+)
+=== bin2hex(pack('C', 4294967296))
+=> '00'
+=== unpack('C', pack('C', 4294967296))
+=> array (
+  1 => 0,
+)
+=== bin2hex(pack('C', -4294967296))
+=> '00'
+=== unpack('C', pack('C', -4294967296))
+=> array (
+  1 => 0,
+)
+=== bin2hex(pack('C', 281474976710654))
+=> 'fe'
+=== unpack('C', pack('C', 281474976710654))
+=> array (
+  1 => 254,
+)
+=== bin2hex(pack('C', 9223372036854775807))
+=> 'ff'
+=== unpack('C', pack('C', 9223372036854775807))
+=> array (
+  1 => 255,
+)
+=== bin2hex(pack('C', PHP_INT_MIN))
+=> '00'
+=== unpack('C', pack('C', PHP_INT_MIN))
+=> array (
+  1 => 0,
+)
+=== bin2hex(pack('s', 0))
+=> '0000'
+=== unpack('s', pack('s', 0))
+=> array (
+  1 => 0,
+)
+=== bin2hex(pack('s', 1))
+=> '0100'
+=== unpack('s', pack('s', 1))
+=> array (
+  1 => 1,
+)
+=== bin2hex(pack('s', -1))
+=> 'ffff'
+=== unpack('s', pack('s', -1))
+=> array (
+  1 => -1,
+)
+=== bin2hex(pack('s', 127))
+=> '7f00'
+=== unpack('s', pack('s', 127))
+=> array (
+  1 => 127,
+)
+=== bin2hex(pack('s', 128))
+=> '8000'
+=== unpack('s', pack('s', 128))
+=> array (
+  1 => 128,
+)
+=== bin2hex(pack('s', -127))
+=> '81ff'
+=== unpack('s', pack('s', -127))
+=> array (
+  1 => -127,
+)
+=== bin2hex(pack('s', -128))
+=> '80ff'
+=== unpack('s', pack('s', -128))
+=> array (
+  1 => -128,
+)
+=== bin2hex(pack('s', -129))
+=> '7fff'
+=== unpack('s', pack('s', -129))
+=> array (
+  1 => -129,
+)
+=== bin2hex(pack('s', 255))
+=> 'ff00'
+=== unpack('s', pack('s', 255))
+=> array (
+  1 => 255,
+)
+=== bin2hex(pack('s', 256))
+=> '0001'
+=== unpack('s', pack('s', 256))
+=> array (
+  1 => 256,
+)
+=== bin2hex(pack('s', 32767))
+=> 'ff7f'
+=== unpack('s', pack('s', 32767))
+=> array (
+  1 => 32767,
+)
+=== bin2hex(pack('s', 32768))
+=> '0080'
+=== unpack('s', pack('s', 32768))
+=> array (
+  1 => -32768,
+)
+=== bin2hex(pack('s', 65534))
+=> 'feff'
+=== unpack('s', pack('s', 65534))
+=> array (
+  1 => -2,
+)
+=== bin2hex(pack('s', 65535))
+=> 'ffff'
+=== unpack('s', pack('s', 65535))
+=> array (
+  1 => -1,
+)
+=== bin2hex(pack('s', 65537))
+=> '0100'
+=== unpack('s', pack('s', 65537))
+=> array (
+  1 => 1,
+)
+=== bin2hex(pack('s', -1000))
+=> '18fc'
+=== unpack('s', pack('s', -1000))
+=> array (
+  1 => -1000,
+)
+=== bin2hex(pack('s', -64434))
+=> '4e04'
+=== unpack('s', pack('s', -64434))
+=> array (
+  1 => 1102,
+)
+=== bin2hex(pack('s', -65535))
+=> '0100'
+=== unpack('s', pack('s', -65535))
+=> array (
+  1 => 1,
+)
+=== bin2hex(pack('s', 2147483647))
+=> 'ffff'
+=== unpack('s', pack('s', 2147483647))
+=> array (
+  1 => -1,
+)
+=== bin2hex(pack('s', 2147483648))
+=> '0000'
+=== unpack('s', pack('s', 2147483648))
+=> array (
+  1 => 0,
+)
+=== bin2hex(pack('s', 2147483650))
+=> '0200'
+=== unpack('s', pack('s', 2147483650))
+=> array (
+  1 => 2,
+)
+=== bin2hex(pack('s', -2147483648))
+=> '0000'
+=== unpack('s', pack('s', -2147483648))
+=> array (
+  1 => 0,
+)
+=== bin2hex(pack('s', 4294967295))
+=> 'ffff'
+=== unpack('s', pack('s', 4294967295))
+=> array (
+  1 => -1,
+)
+=== bin2hex(pack('s', 4294967296))
+=> '0000'
+=== unpack('s', pack('s', 4294967296))
+=> array (
+  1 => 0,
+)
+=== bin2hex(pack('s', -4294967296))
+=> '0000'
+=== unpack('s', pack('s', -4294967296))
+=> array (
+  1 => 0,
+)
+=== bin2hex(pack('s', 281474976710654))
+=> 'feff'
+=== unpack('s', pack('s', 281474976710654))
+=> array (
+  1 => -2,
+)
+=== bin2hex(pack('s', 9223372036854775807))
+=> 'ffff'
+=== unpack('s', pack('s', 9223372036854775807))
+=> array (
+  1 => -1,
+)
+=== bin2hex(pack('s', PHP_INT_MIN))
+=> '0000'
+=== unpack('s', pack('s', PHP_INT_MIN))
+=> array (
+  1 => 0,
+)
+=== bin2hex(pack('S', 0))
+=> '0000'
+=== unpack('S', pack('S', 0))
+=> array (
+  1 => 0,
+)
+=== bin2hex(pack('S', 1))
+=> '0100'
+=== unpack('S', pack('S', 1))
+=> array (
+  1 => 1,
+)
+=== bin2hex(pack('S', -1))
+=> 'ffff'
+=== unpack('S', pack('S', -1))
+=> array (
+  1 => 65535,
+)
+=== bin2hex(pack('S', 127))
+=> '7f00'
+=== unpack('S', pack('S', 127))
+=> array (
+  1 => 127,
+)
+=== bin2hex(pack('S', 128))
+=> '8000'
+=== unpack('S', pack('S', 128))
+=> array (
+  1 => 128,
+)
+=== bin2hex(pack('S', -127))
+=> '81ff'
+=== unpack('S', pack('S', -127))
+=> array (
+  1 => 65409,
+)
+=== bin2hex(pack('S', -128))
+=> '80ff'
+=== unpack('S', pack('S', -128))
+=> array (
+  1 => 65408,
+)
+=== bin2hex(pack('S', -129))
+=> '7fff'
+=== unpack('S', pack('S', -129))
+=> array (
+  1 => 65407,
+)
+=== bin2hex(pack('S', 255))
+=> 'ff00'
+=== unpack('S', pack('S', 255))
+=> array (
+  1 => 255,
+)
+=== bin2hex(pack('S', 256))
+=> '0001'
+=== unpack('S', pack('S', 256))
+=> array (
+  1 => 256,
+)
+=== bin2hex(pack('S', 32767))
+=> 'ff7f'
+=== unpack('S', pack('S', 32767))
+=> array (
+  1 => 32767,
+)
+=== bin2hex(pack('S', 32768))
+=> '0080'
+=== unpack('S', pack('S', 32768))
+=> array (
+  1 => 32768,
+)
+=== bin2hex(pack('S', 65534))
+=> 'feff'
+=== unpack('S', pack('S', 65534))
+=> array (
+  1 => 65534,
+)
+=== bin2hex(pack('S', 65535))
+=> 'ffff'
+=== unpack('S', pack('S', 65535))
+=> array (
+  1 => 65535,
+)
+=== bin2hex(pack('S', 65537))
+=> '0100'
+=== unpack('S', pack('S', 65537))
+=> array (
+  1 => 1,
+)
+=== bin2hex(pack('S', -1000))
+=> '18fc'
+=== unpack('S', pack('S', -1000))
+=> array (
+  1 => 64536,
+)
+=== bin2hex(pack('S', -64434))
+=> '4e04'
+=== unpack('S', pack('S', -64434))
+=> array (
+  1 => 1102,
+)
+=== bin2hex(pack('S', -65535))
+=> '0100'
+=== unpack('S', pack('S', -65535))
+=> array (
+  1 => 1,
+)
+=== bin2hex(pack('S', 2147483647))
+=> 'ffff'
+=== unpack('S', pack('S', 2147483647))
+=> array (
+  1 => 65535,
+)
+=== bin2hex(pack('S', 2147483648))
+=> '0000'
+=== unpack('S', pack('S', 2147483648))
+=> array (
+  1 => 0,
+)
+=== bin2hex(pack('S', 2147483650))
+=> '0200'
+=== unpack('S', pack('S', 2147483650))
+=> array (
+  1 => 2,
+)
+=== bin2hex(pack('S', -2147483648))
+=> '0000'
+=== unpack('S', pack('S', -2147483648))
+=> array (
+  1 => 0,
+)
+=== bin2hex(pack('S', 4294967295))
+=> 'ffff'
+=== unpack('S', pack('S', 4294967295))
+=> array (
+  1 => 65535,
+)
+=== bin2hex(pack('S', 4294967296))
+=> '0000'
+=== unpack('S', pack('S', 4294967296))
+=> array (
+  1 => 0,
+)
+=== bin2hex(pack('S', -4294967296))
+=> '0000'
+=== unpack('S', pack('S', -4294967296))
+=> array (
+  1 => 0,
+)
+=== bin2hex(pack('S', 281474976710654))
+=> 'feff'
+=== unpack('S', pack('S', 281474976710654))
+=> array (
+  1 => 65534,
+)
+=== bin2hex(pack('S', 9223372036854775807))
+=> 'ffff'
+=== unpack('S', pack('S', 9223372036854775807))
+=> array (
+  1 => 65535,
+)
+=== bin2hex(pack('S', PHP_INT_MIN))
+=> '0000'
+=== unpack('S', pack('S', PHP_INT_MIN))
+=> array (
+  1 => 0,
+)
+=== bin2hex(pack('n', 0))
+=> '0000'
+=== unpack('n', pack('n', 0))
+=> array (
+  1 => 0,
+)
+=== bin2hex(pack('n', 1))
+=> '0001'
+=== unpack('n', pack('n', 1))
+=> array (
+  1 => 1,
+)
+=== bin2hex(pack('n', -1))
+=> 'ffff'
+=== unpack('n', pack('n', -1))
+=> array (
+  1 => 65535,
+)
+=== bin2hex(pack('n', 127))
+=> '007f'
+=== unpack('n', pack('n', 127))
+=> array (
+  1 => 127,
+)
+=== bin2hex(pack('n', 128))
+=> '0080'
+=== unpack('n', pack('n', 128))
+=> array (
+  1 => 128,
+)
+=== bin2hex(pack('n', -127))
+=> 'ff81'
+=== unpack('n', pack('n', -127))
+=> array (
+  1 => 65409,
+)
+=== bin2hex(pack('n', -128))
+=> 'ff80'
+=== unpack('n', pack('n', -128))
+=> array (
+  1 => 65408,
+)
+=== bin2hex(pack('n', -129))
+=> 'ff7f'
+=== unpack('n', pack('n', -129))
+=> array (
+  1 => 65407,
+)
+=== bin2hex(pack('n', 255))
+=> '00ff'
+=== unpack('n', pack('n', 255))
+=> array (
+  1 => 255,
+)
+=== bin2hex(pack('n', 256))
+=> '0100'
+=== unpack('n', pack('n', 256))
+=> array (
+  1 => 256,
+)
+=== bin2hex(pack('n', 32767))
+=> '7fff'
+=== unpack('n', pack('n', 32767))
+=> array (
+  1 => 32767,
+)
+=== bin2hex(pack('n', 32768))
+=> '8000'
+=== unpack('n', pack('n', 32768))
+=> array (
+  1 => 32768,
+)
+=== bin2hex(pack('n', 65534))
+=> 'fffe'
+=== unpack('n', pack('n', 65534))
+=> array (
+  1 => 65534,
+)
+=== bin2hex(pack('n', 65535))
+=> 'ffff'
+=== unpack('n', pack('n', 65535))
+=> array (
+  1 => 65535,
+)
+=== bin2hex(pack('n', 65537))
+=> '0001'
+=== unpack('n', pack('n', 65537))
+=> array (
+  1 => 1,
+)
+=== bin2hex(pack('n', -1000))
+=> 'fc18'
+=== unpack('n', pack('n', -1000))
+=> array (
+  1 => 64536,
+)
+=== bin2hex(pack('n', -64434))
+=> '044e'
+=== unpack('n', pack('n', -64434))
+=> array (
+  1 => 1102,
+)
+=== bin2hex(pack('n', -65535))
+=> '0001'
+=== unpack('n', pack('n', -65535))
+=> array (
+  1 => 1,
+)
+=== bin2hex(pack('n', 2147483647))
+=> 'ffff'
+=== unpack('n', pack('n', 2147483647))
+=> array (
+  1 => 65535,
+)
+=== bin2hex(pack('n', 2147483648))
+=> '0000'
+=== unpack('n', pack('n', 2147483648))
+=> array (
+  1 => 0,
+)
+=== bin2hex(pack('n', 2147483650))
+=> '0002'
+=== unpack('n', pack('n', 2147483650))
+=> array (
+  1 => 2,
+)
+=== bin2hex(pack('n', -2147483648))
+=> '0000'
+=== unpack('n', pack('n', -2147483648))
+=> array (
+  1 => 0,
+)
+=== bin2hex(pack('n', 4294967295))
+=> 'ffff'
+=== unpack('n', pack('n', 4294967295))
+=> array (
+  1 => 65535,
+)
+=== bin2hex(pack('n', 4294967296))
+=> '0000'
+=== unpack('n', pack('n', 4294967296))
+=> array (
+  1 => 0,
+)
+=== bin2hex(pack('n', -4294967296))
+=> '0000'
+=== unpack('n', pack('n', -4294967296))
+=> array (
+  1 => 0,
+)
+=== bin2hex(pack('n', 281474976710654))
+=> 'fffe'
+=== unpack('n', pack('n', 281474976710654))
+=> array (
+  1 => 65534,
+)
+=== bin2hex(pack('n', 9223372036854775807))
+=> 'ffff'
+=== unpack('n', pack('n', 9223372036854775807))
+=> array (
+  1 => 65535,
+)
+=== bin2hex(pack('n', PHP_INT_MIN))
+=> '0000'
+=== unpack('n', pack('n', PHP_INT_MIN))
+=> array (
+  1 => 0,
+)
+=== bin2hex(pack('v', 0))
+=> '0000'
+=== unpack('v', pack('v', 0))
+=> array (
+  1 => 0,
+)
+=== bin2hex(pack('v', 1))
+=> '0100'
+=== unpack('v', pack('v', 1))
+=> array (
+  1 => 1,
+)
+=== bin2hex(pack('v', -1))
+=> 'ffff'
+=== unpack('v', pack('v', -1))
+=> array (
+  1 => 65535,
+)
+=== bin2hex(pack('v', 127))
+=> '7f00'
+=== unpack('v', pack('v', 127))
+=> array (
+  1 => 127,
+)
+=== bin2hex(pack('v', 128))
+=> '8000'
+=== unpack('v', pack('v', 128))
+=> array (
+  1 => 128,
+)
+=== bin2hex(pack('v', -127))
+=> '81ff'
+=== unpack('v', pack('v', -127))
+=> array (
+  1 => 65409,
+)
+=== bin2hex(pack('v', -128))
+=> '80ff'
+=== unpack('v', pack('v', -128))
+=> array (
+  1 => 65408,
+)
+=== bin2hex(pack('v', -129))
+=> '7fff'
+=== unpack('v', pack('v', -129))
+=> array (
+  1 => 65407,
+)
+=== bin2hex(pack('v', 255))
+=> 'ff00'
+=== unpack('v', pack('v', 255))
+=> array (
+  1 => 255,
+)
+=== bin2hex(pack('v', 256))
+=> '0001'
+=== unpack('v', pack('v', 256))
+=> array (
+  1 => 256,
+)
+=== bin2hex(pack('v', 32767))
+=> 'ff7f'
+=== unpack('v', pack('v', 32767))
+=> array (
+  1 => 32767,
+)
+=== bin2hex(pack('v', 32768))
+=> '0080'
+=== unpack('v', pack('v', 32768))
+=> array (
+  1 => 32768,
+)
+=== bin2hex(pack('v', 65534))
+=> 'feff'
+=== unpack('v', pack('v', 65534))
+=> array (
+  1 => 65534,
+)
+=== bin2hex(pack('v', 65535))
+=> 'ffff'
+=== unpack('v', pack('v', 65535))
+=> array (
+  1 => 65535,
+)
+=== bin2hex(pack('v', 65537))
+=> '0100'
+=== unpack('v', pack('v', 65537))
+=> array (
+  1 => 1,
+)
+=== bin2hex(pack('v', -1000))
+=> '18fc'
+=== unpack('v', pack('v', -1000))
+=> array (
+  1 => 64536,
+)
+=== bin2hex(pack('v', -64434))
+=> '4e04'
+=== unpack('v', pack('v', -64434))
+=> array (
+  1 => 1102,
+)
+=== bin2hex(pack('v', -65535))
+=> '0100'
+=== unpack('v', pack('v', -65535))
+=> array (
+  1 => 1,
+)
+=== bin2hex(pack('v', 2147483647))
+=> 'ffff'
+=== unpack('v', pack('v', 2147483647))
+=> array (
+  1 => 65535,
+)
+=== bin2hex(pack('v', 2147483648))
+=> '0000'
+=== unpack('v', pack('v', 2147483648))
+=> array (
+  1 => 0,
+)
+=== bin2hex(pack('v', 2147483650))
+=> '0200'
+=== unpack('v', pack('v', 2147483650))
+=> array (
+  1 => 2,
+)
+=== bin2hex(pack('v', -2147483648))
+=> '0000'
+=== unpack('v', pack('v', -2147483648))
+=> array (
+  1 => 0,
+)
+=== bin2hex(pack('v', 4294967295))
+=> 'ffff'
+=== unpack('v', pack('v', 4294967295))
+=> array (
+  1 => 65535,
+)
+=== bin2hex(pack('v', 4294967296))
+=> '0000'
+=== unpack('v', pack('v', 4294967296))
+=> array (
+  1 => 0,
+)
+=== bin2hex(pack('v', -4294967296))
+=> '0000'
+=== unpack('v', pack('v', -4294967296))
+=> array (
+  1 => 0,
+)
+=== bin2hex(pack('v', 281474976710654))
+=> 'feff'
+=== unpack('v', pack('v', 281474976710654))
+=> array (
+  1 => 65534,
+)
+=== bin2hex(pack('v', 9223372036854775807))
+=> 'ffff'
+=== unpack('v', pack('v', 9223372036854775807))
+=> array (
+  1 => 65535,
+)
+=== bin2hex(pack('v', PHP_INT_MIN))
+=> '0000'
+=== unpack('v', pack('v', PHP_INT_MIN))
+=> array (
+  1 => 0,
+)
+=== bin2hex(pack('i', 0))
+=> '00000000'
+=== unpack('i', pack('i', 0))
+=> array (
+  1 => 0,
+)
+=== bin2hex(pack('i', 1))
+=> '01000000'
+=== unpack('i', pack('i', 1))
+=> array (
+  1 => 1,
+)
+=== bin2hex(pack('i', -1))
+=> 'ffffffff'
+=== unpack('i', pack('i', -1))
+=> array (
+  1 => -1,
+)
+=== bin2hex(pack('i', 127))
+=> '7f000000'
+=== unpack('i', pack('i', 127))
+=> array (
+  1 => 127,
+)
+=== bin2hex(pack('i', 128))
+=> '80000000'
+=== unpack('i', pack('i', 128))
+=> array (
+  1 => 128,
+)
+=== bin2hex(pack('i', -127))
+=> '81ffffff'
+=== unpack('i', pack('i', -127))
+=> array (
+  1 => -127,
+)
+=== bin2hex(pack('i', -128))
+=> '80ffffff'
+=== unpack('i', pack('i', -128))
+=> array (
+  1 => -128,
+)
+=== bin2hex(pack('i', -129))
+=> '7fffffff'
+=== unpack('i', pack('i', -129))
+=> array (
+  1 => -129,
+)
+=== bin2hex(pack('i', 255))
+=> 'ff000000'
+=== unpack('i', pack('i', 255))
+=> array (
+  1 => 255,
+)
+=== bin2hex(pack('i', 256))
+=> '00010000'
+=== unpack('i', pack('i', 256))
+=> array (
+  1 => 256,
+)
+=== bin2hex(pack('i', 32767))
+=> 'ff7f0000'
+=== unpack('i', pack('i', 32767))
+=> array (
+  1 => 32767,
+)
+=== bin2hex(pack('i', 32768))
+=> '00800000'
+=== unpack('i', pack('i', 32768))
+=> array (
+  1 => 32768,
+)
+=== bin2hex(pack('i', 65534))
+=> 'feff0000'
+=== unpack('i', pack('i', 65534))
+=> array (
+  1 => 65534,
+)
+=== bin2hex(pack('i', 65535))
+=> 'ffff0000'
+=== unpack('i', pack('i', 65535))
+=> array (
+  1 => 65535,
+)
+=== bin2hex(pack('i', 65537))
+=> '01000100'
+=== unpack('i', pack('i', 65537))
+=> array (
+  1 => 65537,
+)
+=== bin2hex(pack('i', -1000))
+=> '18fcffff'
+=== unpack('i', pack('i', -1000))
+=> array (
+  1 => -1000,
+)
+=== bin2hex(pack('i', -64434))
+=> '4e04ffff'
+=== unpack('i', pack('i', -64434))
+=> array (
+  1 => -64434,
+)
+=== bin2hex(pack('i', -65535))
+=> '0100ffff'
+=== unpack('i', pack('i', -65535))
+=> array (
+  1 => -65535,
+)
+=== bin2hex(pack('i', 2147483647))
+=> 'ffffff7f'
+=== unpack('i', pack('i', 2147483647))
+=> array (
+  1 => 2147483647,
+)
+=== bin2hex(pack('i', 2147483648))
+=> '00000080'
+=== unpack('i', pack('i', 2147483648))
+=> array (
+  1 => -2147483648,
+)
+=== bin2hex(pack('i', 2147483650))
+=> '02000080'
+=== unpack('i', pack('i', 2147483650))
+=> array (
+  1 => -2147483646,
+)
+=== bin2hex(pack('i', -2147483648))
+=> '00000080'
+=== unpack('i', pack('i', -2147483648))
+=> array (
+  1 => -2147483648,
+)
+=== bin2hex(pack('i', 4294967295))
+=> 'ffffffff'
+=== unpack('i', pack('i', 4294967295))
+=> array (
+  1 => -1,
+)
+=== bin2hex(pack('i', 4294967296))
+=> '00000000'
+=== unpack('i', pack('i', 4294967296))
+=> array (
+  1 => 0,
+)
+=== bin2hex(pack('i', -4294967296))
+=> '00000000'
+=== unpack('i', pack('i', -4294967296))
+=> array (
+  1 => 0,
+)
+=== bin2hex(pack('i', 281474976710654))
+=> 'feffffff'
+=== unpack('i', pack('i', 281474976710654))
+=> array (
+  1 => -2,
+)
+=== bin2hex(pack('i', 9223372036854775807))
+=> 'ffffffff'
+=== unpack('i', pack('i', 9223372036854775807))
+=> array (
+  1 => -1,
+)
+=== bin2hex(pack('i', PHP_INT_MIN))
+=> '00000000'
+=== unpack('i', pack('i', PHP_INT_MIN))
+=> array (
+  1 => 0,
+)
+=== bin2hex(pack('I', 0))
+=> '00000000'
+=== unpack('I', pack('I', 0))
+=> array (
+  1 => 0,
+)
+=== bin2hex(pack('I', 1))
+=> '01000000'
+=== unpack('I', pack('I', 1))
+=> array (
+  1 => 1,
+)
+=== bin2hex(pack('I', -1))
+=> 'ffffffff'
+=== unpack('I', pack('I', -1))
+=> array (
+  1 => 4294967295,
+)
+=== bin2hex(pack('I', 127))
+=> '7f000000'
+=== unpack('I', pack('I', 127))
+=> array (
+  1 => 127,
+)
+=== bin2hex(pack('I', 128))
+=> '80000000'
+=== unpack('I', pack('I', 128))
+=> array (
+  1 => 128,
+)
+=== bin2hex(pack('I', -127))
+=> '81ffffff'
+=== unpack('I', pack('I', -127))
+=> array (
+  1 => 4294967169,
+)
+=== bin2hex(pack('I', -128))
+=> '80ffffff'
+=== unpack('I', pack('I', -128))
+=> array (
+  1 => 4294967168,
+)
+=== bin2hex(pack('I', -129))
+=> '7fffffff'
+=== unpack('I', pack('I', -129))
+=> array (
+  1 => 4294967167,
+)
+=== bin2hex(pack('I', 255))
+=> 'ff000000'
+=== unpack('I', pack('I', 255))
+=> array (
+  1 => 255,
+)
+=== bin2hex(pack('I', 256))
+=> '00010000'
+=== unpack('I', pack('I', 256))
+=> array (
+  1 => 256,
+)
+=== bin2hex(pack('I', 32767))
+=> 'ff7f0000'
+=== unpack('I', pack('I', 32767))
+=> array (
+  1 => 32767,
+)
+=== bin2hex(pack('I', 32768))
+=> '00800000'
+=== unpack('I', pack('I', 32768))
+=> array (
+  1 => 32768,
+)
+=== bin2hex(pack('I', 65534))
+=> 'feff0000'
+=== unpack('I', pack('I', 65534))
+=> array (
+  1 => 65534,
+)
+=== bin2hex(pack('I', 65535))
+=> 'ffff0000'
+=== unpack('I', pack('I', 65535))
+=> array (
+  1 => 65535,
+)
+=== bin2hex(pack('I', 65537))
+=> '01000100'
+=== unpack('I', pack('I', 65537))
+=> array (
+  1 => 65537,
+)
+=== bin2hex(pack('I', -1000))
+=> '18fcffff'
+=== unpack('I', pack('I', -1000))
+=> array (
+  1 => 4294966296,
+)
+=== bin2hex(pack('I', -64434))
+=> '4e04ffff'
+=== unpack('I', pack('I', -64434))
+=> array (
+  1 => 4294902862,
+)
+=== bin2hex(pack('I', -65535))
+=> '0100ffff'
+=== unpack('I', pack('I', -65535))
+=> array (
+  1 => 4294901761,
+)
+=== bin2hex(pack('I', 2147483647))
+=> 'ffffff7f'
+=== unpack('I', pack('I', 2147483647))
+=> array (
+  1 => 2147483647,
+)
+=== bin2hex(pack('I', 2147483648))
+=> '00000080'
+=== unpack('I', pack('I', 2147483648))
+=> array (
+  1 => 2147483648,
+)
+=== bin2hex(pack('I', 2147483650))
+=> '02000080'
+=== unpack('I', pack('I', 2147483650))
+=> array (
+  1 => 2147483650,
+)
+=== bin2hex(pack('I', -2147483648))
+=> '00000080'
+=== unpack('I', pack('I', -2147483648))
+=> array (
+  1 => 2147483648,
+)
+=== bin2hex(pack('I', 4294967295))
+=> 'ffffffff'
+=== unpack('I', pack('I', 4294967295))
+=> array (
+  1 => 4294967295,
+)
+=== bin2hex(pack('I', 4294967296))
+=> '00000000'
+=== unpack('I', pack('I', 4294967296))
+=> array (
+  1 => 0,
+)
+=== bin2hex(pack('I', -4294967296))
+=> '00000000'
+=== unpack('I', pack('I', -4294967296))
+=> array (
+  1 => 0,
+)
+=== bin2hex(pack('I', 281474976710654))
+=> 'feffffff'
+=== unpack('I', pack('I', 281474976710654))
+=> array (
+  1 => 4294967294,
+)
+=== bin2hex(pack('I', 9223372036854775807))
+=> 'ffffffff'
+=== unpack('I', pack('I', 9223372036854775807))
+=> array (
+  1 => 4294967295,
+)
+=== bin2hex(pack('I', PHP_INT_MIN))
+=> '00000000'
+=== unpack('I', pack('I', PHP_INT_MIN))
+=> array (
+  1 => 0,
+)
+=== bin2hex(pack('l', 0))
+=> '00000000'
+=== unpack('l', pack('l', 0))
+=> array (
+  1 => 0,
+)
+=== bin2hex(pack('l', 1))
+=> '01000000'
+=== unpack('l', pack('l', 1))
+=> array (
+  1 => 1,
+)
+=== bin2hex(pack('l', -1))
+=> 'ffffffff'
+=== unpack('l', pack('l', -1))
+=> array (
+  1 => -1,
+)
+=== bin2hex(pack('l', 127))
+=> '7f000000'
+=== unpack('l', pack('l', 127))
+=> array (
+  1 => 127,
+)
+=== bin2hex(pack('l', 128))
+=> '80000000'
+=== unpack('l', pack('l', 128))
+=> array (
+  1 => 128,
+)
+=== bin2hex(pack('l', -127))
+=> '81ffffff'
+=== unpack('l', pack('l', -127))
+=> array (
+  1 => -127,
+)
+=== bin2hex(pack('l', -128))
+=> '80ffffff'
+=== unpack('l', pack('l', -128))
+=> array (
+  1 => -128,
+)
+=== bin2hex(pack('l', -129))
+=> '7fffffff'
+=== unpack('l', pack('l', -129))
+=> array (
+  1 => -129,
+)
+=== bin2hex(pack('l', 255))
+=> 'ff000000'
+=== unpack('l', pack('l', 255))
+=> array (
+  1 => 255,
+)
+=== bin2hex(pack('l', 256))
+=> '00010000'
+=== unpack('l', pack('l', 256))
+=> array (
+  1 => 256,
+)
+=== bin2hex(pack('l', 32767))
+=> 'ff7f0000'
+=== unpack('l', pack('l', 32767))
+=> array (
+  1 => 32767,
+)
+=== bin2hex(pack('l', 32768))
+=> '00800000'
+=== unpack('l', pack('l', 32768))
+=> array (
+  1 => 32768,
+)
+=== bin2hex(pack('l', 65534))
+=> 'feff0000'
+=== unpack('l', pack('l', 65534))
+=> array (
+  1 => 65534,
+)
+=== bin2hex(pack('l', 65535))
+=> 'ffff0000'
+=== unpack('l', pack('l', 65535))
+=> array (
+  1 => 65535,
+)
+=== bin2hex(pack('l', 65537))
+=> '01000100'
+=== unpack('l', pack('l', 65537))
+=> array (
+  1 => 65537,
+)
+=== bin2hex(pack('l', -1000))
+=> '18fcffff'
+=== unpack('l', pack('l', -1000))
+=> array (
+  1 => -1000,
+)
+=== bin2hex(pack('l', -64434))
+=> '4e04ffff'
+=== unpack('l', pack('l', -64434))
+=> array (
+  1 => -64434,
+)
+=== bin2hex(pack('l', -65535))
+=> '0100ffff'
+=== unpack('l', pack('l', -65535))
+=> array (
+  1 => -65535,
+)
+=== bin2hex(pack('l', 2147483647))
+=> 'ffffff7f'
+=== unpack('l', pack('l', 2147483647))
+=> array (
+  1 => 2147483647,
+)
+=== bin2hex(pack('l', 2147483648))
+=> '00000080'
+=== unpack('l', pack('l', 2147483648))
+=> array (
+  1 => -2147483648,
+)
+=== bin2hex(pack('l', 2147483650))
+=> '02000080'
+=== unpack('l', pack('l', 2147483650))
+=> array (
+  1 => -2147483646,
+)
+=== bin2hex(pack('l', -2147483648))
+=> '00000080'
+=== unpack('l', pack('l', -2147483648))
+=> array (
+  1 => -2147483648,
+)
+=== bin2hex(pack('l', 4294967295))
+=> 'ffffffff'
+=== unpack('l', pack('l', 4294967295))
+=> array (
+  1 => -1,
+)
+=== bin2hex(pack('l', 4294967296))
+=> '00000000'
+=== unpack('l', pack('l', 4294967296))
+=> array (
+  1 => 0,
+)
+=== bin2hex(pack('l', -4294967296))
+=> '00000000'
+=== unpack('l', pack('l', -4294967296))
+=> array (
+  1 => 0,
+)
+=== bin2hex(pack('l', 281474976710654))
+=> 'feffffff'
+=== unpack('l', pack('l', 281474976710654))
+=> array (
+  1 => -2,
+)
+=== bin2hex(pack('l', 9223372036854775807))
+=> 'ffffffff'
+=== unpack('l', pack('l', 9223372036854775807))
+=> array (
+  1 => -1,
+)
+=== bin2hex(pack('l', PHP_INT_MIN))
+=> '00000000'
+=== unpack('l', pack('l', PHP_INT_MIN))
+=> array (
+  1 => 0,
+)
+=== bin2hex(pack('L', 0))
+=> '00000000'
+=== unpack('L', pack('L', 0))
+=> array (
+  1 => 0,
+)
+=== bin2hex(pack('L', 1))
+=> '01000000'
+=== unpack('L', pack('L', 1))
+=> array (
+  1 => 1,
+)
+=== bin2hex(pack('L', -1))
+=> 'ffffffff'
+=== unpack('L', pack('L', -1))
+=> array (
+  1 => 4294967295,
+)
+=== bin2hex(pack('L', 127))
+=> '7f000000'
+=== unpack('L', pack('L', 127))
+=> array (
+  1 => 127,
+)
+=== bin2hex(pack('L', 128))
+=> '80000000'
+=== unpack('L', pack('L', 128))
+=> array (
+  1 => 128,
+)
+=== bin2hex(pack('L', -127))
+=> '81ffffff'
+=== unpack('L', pack('L', -127))
+=> array (
+  1 => 4294967169,
+)
+=== bin2hex(pack('L', -128))
+=> '80ffffff'
+=== unpack('L', pack('L', -128))
+=> array (
+  1 => 4294967168,
+)
+=== bin2hex(pack('L', -129))
+=> '7fffffff'
+=== unpack('L', pack('L', -129))
+=> array (
+  1 => 4294967167,
+)
+=== bin2hex(pack('L', 255))
+=> 'ff000000'
+=== unpack('L', pack('L', 255))
+=> array (
+  1 => 255,
+)
+=== bin2hex(pack('L', 256))
+=> '00010000'
+=== unpack('L', pack('L', 256))
+=> array (
+  1 => 256,
+)
+=== bin2hex(pack('L', 32767))
+=> 'ff7f0000'
+=== unpack('L', pack('L', 32767))
+=> array (
+  1 => 32767,
+)
+=== bin2hex(pack('L', 32768))
+=> '00800000'
+=== unpack('L', pack('L', 32768))
+=> array (
+  1 => 32768,
+)
+=== bin2hex(pack('L', 65534))
+=> 'feff0000'
+=== unpack('L', pack('L', 65534))
+=> array (
+  1 => 65534,
+)
+=== bin2hex(pack('L', 65535))
+=> 'ffff0000'
+=== unpack('L', pack('L', 65535))
+=> array (
+  1 => 65535,
+)
+=== bin2hex(pack('L', 65537))
+=> '01000100'
+=== unpack('L', pack('L', 65537))
+=> array (
+  1 => 65537,
+)
+=== bin2hex(pack('L', -1000))
+=> '18fcffff'
+=== unpack('L', pack('L', -1000))
+=> array (
+  1 => 4294966296,
+)
+=== bin2hex(pack('L', -64434))
+=> '4e04ffff'
+=== unpack('L', pack('L', -64434))
+=> array (
+  1 => 4294902862,
+)
+=== bin2hex(pack('L', -65535))
+=> '0100ffff'
+=== unpack('L', pack('L', -65535))
+=> array (
+  1 => 4294901761,
+)
+=== bin2hex(pack('L', 2147483647))
+=> 'ffffff7f'
+=== unpack('L', pack('L', 2147483647))
+=> array (
+  1 => 2147483647,
+)
+=== bin2hex(pack('L', 2147483648))
+=> '00000080'
+=== unpack('L', pack('L', 2147483648))
+=> array (
+  1 => 2147483648,
+)
+=== bin2hex(pack('L', 2147483650))
+=> '02000080'
+=== unpack('L', pack('L', 2147483650))
+=> array (
+  1 => 2147483650,
+)
+=== bin2hex(pack('L', -2147483648))
+=> '00000080'
+=== unpack('L', pack('L', -2147483648))
+=> array (
+  1 => 2147483648,
+)
+=== bin2hex(pack('L', 4294967295))
+=> 'ffffffff'
+=== unpack('L', pack('L', 4294967295))
+=> array (
+  1 => 4294967295,
+)
+=== bin2hex(pack('L', 4294967296))
+=> '00000000'
+=== unpack('L', pack('L', 4294967296))
+=> array (
+  1 => 0,
+)
+=== bin2hex(pack('L', -4294967296))
+=> '00000000'
+=== unpack('L', pack('L', -4294967296))
+=> array (
+  1 => 0,
+)
+=== bin2hex(pack('L', 281474976710654))
+=> 'feffffff'
+=== unpack('L', pack('L', 281474976710654))
+=> array (
+  1 => 4294967294,
+)
+=== bin2hex(pack('L', 9223372036854775807))
+=> 'ffffffff'
+=== unpack('L', pack('L', 9223372036854775807))
+=> array (
+  1 => 4294967295,
+)
+=== bin2hex(pack('L', PHP_INT_MIN))
+=> '00000000'
+=== unpack('L', pack('L', PHP_INT_MIN))
+=> array (
+  1 => 0,
+)
+=== bin2hex(pack('N', 0))
+=> '00000000'
+=== unpack('N', pack('N', 0))
+=> array (
+  1 => 0,
+)
+=== bin2hex(pack('N', 1))
+=> '00000001'
+=== unpack('N', pack('N', 1))
+=> array (
+  1 => 1,
+)
+=== bin2hex(pack('N', -1))
+=> 'ffffffff'
+=== unpack('N', pack('N', -1))
+=> array (
+  1 => 4294967295,
+)
+=== bin2hex(pack('N', 127))
+=> '0000007f'
+=== unpack('N', pack('N', 127))
+=> array (
+  1 => 127,
+)
+=== bin2hex(pack('N', 128))
+=> '00000080'
+=== unpack('N', pack('N', 128))
+=> array (
+  1 => 128,
+)
+=== bin2hex(pack('N', -127))
+=> 'ffffff81'
+=== unpack('N', pack('N', -127))
+=> array (
+  1 => 4294967169,
+)
+=== bin2hex(pack('N', -128))
+=> 'ffffff80'
+=== unpack('N', pack('N', -128))
+=> array (
+  1 => 4294967168,
+)
+=== bin2hex(pack('N', -129))
+=> 'ffffff7f'
+=== unpack('N', pack('N', -129))
+=> array (
+  1 => 4294967167,
+)
+=== bin2hex(pack('N', 255))
+=> '000000ff'
+=== unpack('N', pack('N', 255))
+=> array (
+  1 => 255,
+)
+=== bin2hex(pack('N', 256))
+=> '00000100'
+=== unpack('N', pack('N', 256))
+=> array (
+  1 => 256,
+)
+=== bin2hex(pack('N', 32767))
+=> '00007fff'
+=== unpack('N', pack('N', 32767))
+=> array (
+  1 => 32767,
+)
+=== bin2hex(pack('N', 32768))
+=> '00008000'
+=== unpack('N', pack('N', 32768))
+=> array (
+  1 => 32768,
+)
+=== bin2hex(pack('N', 65534))
+=> '0000fffe'
+=== unpack('N', pack('N', 65534))
+=> array (
+  1 => 65534,
+)
+=== bin2hex(pack('N', 65535))
+=> '0000ffff'
+=== unpack('N', pack('N', 65535))
+=> array (
+  1 => 65535,
+)
+=== bin2hex(pack('N', 65537))
+=> '00010001'
+=== unpack('N', pack('N', 65537))
+=> array (
+  1 => 65537,
+)
+=== bin2hex(pack('N', -1000))
+=> 'fffffc18'
+=== unpack('N', pack('N', -1000))
+=> array (
+  1 => 4294966296,
+)
+=== bin2hex(pack('N', -64434))
+=> 'ffff044e'
+=== unpack('N', pack('N', -64434))
+=> array (
+  1 => 4294902862,
+)
+=== bin2hex(pack('N', -65535))
+=> 'ffff0001'
+=== unpack('N', pack('N', -65535))
+=> array (
+  1 => 4294901761,
+)
+=== bin2hex(pack('N', 2147483647))
+=> '7fffffff'
+=== unpack('N', pack('N', 2147483647))
+=> array (
+  1 => 2147483647,
+)
+=== bin2hex(pack('N', 2147483648))
+=> '80000000'
+=== unpack('N', pack('N', 2147483648))
+=> array (
+  1 => 2147483648,
+)
+=== bin2hex(pack('N', 2147483650))
+=> '80000002'
+=== unpack('N', pack('N', 2147483650))
+=> array (
+  1 => 2147483650,
+)
+=== bin2hex(pack('N', -2147483648))
+=> '80000000'
+=== unpack('N', pack('N', -2147483648))
+=> array (
+  1 => 2147483648,
+)
+=== bin2hex(pack('N', 4294967295))
+=> 'ffffffff'
+=== unpack('N', pack('N', 4294967295))
+=> array (
+  1 => 4294967295,
+)
+=== bin2hex(pack('N', 4294967296))
+=> '00000000'
+=== unpack('N', pack('N', 4294967296))
+=> array (
+  1 => 0,
+)
+=== bin2hex(pack('N', -4294967296))
+=> '00000000'
+=== unpack('N', pack('N', -4294967296))
+=> array (
+  1 => 0,
+)
+=== bin2hex(pack('N', 281474976710654))
+=> 'fffffffe'
+=== unpack('N', pack('N', 281474976710654))
+=> array (
+  1 => 4294967294,
+)
+=== bin2hex(pack('N', 9223372036854775807))
+=> 'ffffffff'
+=== unpack('N', pack('N', 9223372036854775807))
+=> array (
+  1 => 4294967295,
+)
+=== bin2hex(pack('N', PHP_INT_MIN))
+=> '00000000'
+=== unpack('N', pack('N', PHP_INT_MIN))
+=> array (
+  1 => 0,
+)
+=== bin2hex(pack('V', 0))
+=> '00000000'
+=== unpack('V', pack('V', 0))
+=> array (
+  1 => 0,
+)
+=== bin2hex(pack('V', 1))
+=> '01000000'
+=== unpack('V', pack('V', 1))
+=> array (
+  1 => 1,
+)
+=== bin2hex(pack('V', -1))
+=> 'ffffffff'
+=== unpack('V', pack('V', -1))
+=> array (
+  1 => 4294967295,
+)
+=== bin2hex(pack('V', 127))
+=> '7f000000'
+=== unpack('V', pack('V', 127))
+=> array (
+  1 => 127,
+)
+=== bin2hex(pack('V', 128))
+=> '80000000'
+=== unpack('V', pack('V', 128))
+=> array (
+  1 => 128,
+)
+=== bin2hex(pack('V', -127))
+=> '81ffffff'
+=== unpack('V', pack('V', -127))
+=> array (
+  1 => 4294967169,
+)
+=== bin2hex(pack('V', -128))
+=> '80ffffff'
+=== unpack('V', pack('V', -128))
+=> array (
+  1 => 4294967168,
+)
+=== bin2hex(pack('V', -129))
+=> '7fffffff'
+=== unpack('V', pack('V', -129))
+=> array (
+  1 => 4294967167,
+)
+=== bin2hex(pack('V', 255))
+=> 'ff000000'
+=== unpack('V', pack('V', 255))
+=> array (
+  1 => 255,
+)
+=== bin2hex(pack('V', 256))
+=> '00010000'
+=== unpack('V', pack('V', 256))
+=> array (
+  1 => 256,
+)
+=== bin2hex(pack('V', 32767))
+=> 'ff7f0000'
+=== unpack('V', pack('V', 32767))
+=> array (
+  1 => 32767,
+)
+=== bin2hex(pack('V', 32768))
+=> '00800000'
+=== unpack('V', pack('V', 32768))
+=> array (
+  1 => 32768,
+)
+=== bin2hex(pack('V', 65534))
+=> 'feff0000'
+=== unpack('V', pack('V', 65534))
+=> array (
+  1 => 65534,
+)
+=== bin2hex(pack('V', 65535))
+=> 'ffff0000'
+=== unpack('V', pack('V', 65535))
+=> array (
+  1 => 65535,
+)
+=== bin2hex(pack('V', 65537))
+=> '01000100'
+=== unpack('V', pack('V', 65537))
+=> array (
+  1 => 65537,
+)
+=== bin2hex(pack('V', -1000))
+=> '18fcffff'
+=== unpack('V', pack('V', -1000))
+=> array (
+  1 => 4294966296,
+)
+=== bin2hex(pack('V', -64434))
+=> '4e04ffff'
+=== unpack('V', pack('V', -64434))
+=> array (
+  1 => 4294902862,
+)
+=== bin2hex(pack('V', -65535))
+=> '0100ffff'
+=== unpack('V', pack('V', -65535))
+=> array (
+  1 => 4294901761,
+)
+=== bin2hex(pack('V', 2147483647))
+=> 'ffffff7f'
+=== unpack('V', pack('V', 2147483647))
+=> array (
+  1 => 2147483647,
+)
+=== bin2hex(pack('V', 2147483648))
+=> '00000080'
+=== unpack('V', pack('V', 2147483648))
+=> array (
+  1 => 2147483648,
+)
+=== bin2hex(pack('V', 2147483650))
+=> '02000080'
+=== unpack('V', pack('V', 2147483650))
+=> array (
+  1 => 2147483650,
+)
+=== bin2hex(pack('V', -2147483648))
+=> '00000080'
+=== unpack('V', pack('V', -2147483648))
+=> array (
+  1 => 2147483648,
+)
+=== bin2hex(pack('V', 4294967295))
+=> 'ffffffff'
+=== unpack('V', pack('V', 4294967295))
+=> array (
+  1 => 4294967295,
+)
+=== bin2hex(pack('V', 4294967296))
+=> '00000000'
+=== unpack('V', pack('V', 4294967296))
+=> array (
+  1 => 0,
+)
+=== bin2hex(pack('V', -4294967296))
+=> '00000000'
+=== unpack('V', pack('V', -4294967296))
+=> array (
+  1 => 0,
+)
+=== bin2hex(pack('V', 281474976710654))
+=> 'feffffff'
+=== unpack('V', pack('V', 281474976710654))
+=> array (
+  1 => 4294967294,
+)
+=== bin2hex(pack('V', 9223372036854775807))
+=> 'ffffffff'
+=== unpack('V', pack('V', 9223372036854775807))
+=> array (
+  1 => 4294967295,
+)
+=== bin2hex(pack('V', PHP_INT_MIN))
+=> '00000000'
+=== unpack('V', pack('V', PHP_INT_MIN))
+=> array (
+  1 => 0,
+)
+=== bin2hex(pack('q', 0))
+=> '0000000000000000'
+=== unpack('q', pack('q', 0))
+=> array (
+  1 => 0,
+)
+=== bin2hex(pack('q', 1))
+=> '0100000000000000'
+=== unpack('q', pack('q', 1))
+=> array (
+  1 => 1,
+)
+=== bin2hex(pack('q', -1))
+=> 'ffffffffffffffff'
+=== unpack('q', pack('q', -1))
+=> array (
+  1 => -1,
+)
+=== bin2hex(pack('q', 127))
+=> '7f00000000000000'
+=== unpack('q', pack('q', 127))
+=> array (
+  1 => 127,
+)
+=== bin2hex(pack('q', 128))
+=> '8000000000000000'
+=== unpack('q', pack('q', 128))
+=> array (
+  1 => 128,
+)
+=== bin2hex(pack('q', -127))
+=> '81ffffffffffffff'
+=== unpack('q', pack('q', -127))
+=> array (
+  1 => -127,
+)
+=== bin2hex(pack('q', -128))
+=> '80ffffffffffffff'
+=== unpack('q', pack('q', -128))
+=> array (
+  1 => -128,
+)
+=== bin2hex(pack('q', -129))
+=> '7fffffffffffffff'
+=== unpack('q', pack('q', -129))
+=> array (
+  1 => -129,
+)
+=== bin2hex(pack('q', 255))
+=> 'ff00000000000000'
+=== unpack('q', pack('q', 255))
+=> array (
+  1 => 255,
+)
+=== bin2hex(pack('q', 256))
+=> '0001000000000000'
+=== unpack('q', pack('q', 256))
+=> array (
+  1 => 256,
+)
+=== bin2hex(pack('q', 32767))
+=> 'ff7f000000000000'
+=== unpack('q', pack('q', 32767))
+=> array (
+  1 => 32767,
+)
+=== bin2hex(pack('q', 32768))
+=> '0080000000000000'
+=== unpack('q', pack('q', 32768))
+=> array (
+  1 => 32768,
+)
+=== bin2hex(pack('q', 65534))
+=> 'feff000000000000'
+=== unpack('q', pack('q', 65534))
+=> array (
+  1 => 65534,
+)
+=== bin2hex(pack('q', 65535))
+=> 'ffff000000000000'
+=== unpack('q', pack('q', 65535))
+=> array (
+  1 => 65535,
+)
+=== bin2hex(pack('q', 65537))
+=> '0100010000000000'
+=== unpack('q', pack('q', 65537))
+=> array (
+  1 => 65537,
+)
+=== bin2hex(pack('q', -1000))
+=> '18fcffffffffffff'
+=== unpack('q', pack('q', -1000))
+=> array (
+  1 => -1000,
+)
+=== bin2hex(pack('q', -64434))
+=> '4e04ffffffffffff'
+=== unpack('q', pack('q', -64434))
+=> array (
+  1 => -64434,
+)
+=== bin2hex(pack('q', -65535))
+=> '0100ffffffffffff'
+=== unpack('q', pack('q', -65535))
+=> array (
+  1 => -65535,
+)
+=== bin2hex(pack('q', 2147483647))
+=> 'ffffff7f00000000'
+=== unpack('q', pack('q', 2147483647))
+=> array (
+  1 => 2147483647,
+)
+=== bin2hex(pack('q', 2147483648))
+=> '0000008000000000'
+=== unpack('q', pack('q', 2147483648))
+=> array (
+  1 => 2147483648,
+)
+=== bin2hex(pack('q', 2147483650))
+=> '0200008000000000'
+=== unpack('q', pack('q', 2147483650))
+=> array (
+  1 => 2147483650,
+)
+=== bin2hex(pack('q', -2147483648))
+=> '00000080ffffffff'
+=== unpack('q', pack('q', -2147483648))
+=> array (
+  1 => -2147483648,
+)
+=== bin2hex(pack('q', 4294967295))
+=> 'ffffffff00000000'
+=== unpack('q', pack('q', 4294967295))
+=> array (
+  1 => 4294967295,
+)
+=== bin2hex(pack('q', 4294967296))
+=> '0000000001000000'
+=== unpack('q', pack('q', 4294967296))
+=> array (
+  1 => 4294967296,
+)
+=== bin2hex(pack('q', -4294967296))
+=> '00000000ffffffff'
+=== unpack('q', pack('q', -4294967296))
+=> array (
+  1 => -4294967296,
+)
+=== bin2hex(pack('q', 281474976710654))
+=> 'feffffffffff0000'
+=== unpack('q', pack('q', 281474976710654))
+=> array (
+  1 => 281474976710654,
+)
+=== bin2hex(pack('q', 9223372036854775807))
+=> 'ffffffffffffff7f'
+=== unpack('q', pack('q', 9223372036854775807))
+=> array (
+  1 => 9223372036854775807,
+)
+=== bin2hex(pack('q', PHP_INT_MIN))
+=> '0000000000000080'
+=== unpack('q', pack('q', PHP_INT_MIN))
+=> array (
+  1 => -9223372036854775807-1,
+)
+=== bin2hex(pack('Q', 0))
+=> '0000000000000000'
+=== unpack('Q', pack('Q', 0))
+=> array (
+  1 => 0,
+)
+=== bin2hex(pack('Q', 1))
+=> '0100000000000000'
+=== unpack('Q', pack('Q', 1))
+=> array (
+  1 => 1,
+)
+=== bin2hex(pack('Q', -1))
+=> 'ffffffffffffffff'
+=== unpack('Q', pack('Q', -1))
+=> array (
+  1 => -1,
+)
+=== bin2hex(pack('Q', 127))
+=> '7f00000000000000'
+=== unpack('Q', pack('Q', 127))
+=> array (
+  1 => 127,
+)
+=== bin2hex(pack('Q', 128))
+=> '8000000000000000'
+=== unpack('Q', pack('Q', 128))
+=> array (
+  1 => 128,
+)
+=== bin2hex(pack('Q', -127))
+=> '81ffffffffffffff'
+=== unpack('Q', pack('Q', -127))
+=> array (
+  1 => -127,
+)
+=== bin2hex(pack('Q', -128))
+=> '80ffffffffffffff'
+=== unpack('Q', pack('Q', -128))
+=> array (
+  1 => -128,
+)
+=== bin2hex(pack('Q', -129))
+=> '7fffffffffffffff'
+=== unpack('Q', pack('Q', -129))
+=> array (
+  1 => -129,
+)
+=== bin2hex(pack('Q', 255))
+=> 'ff00000000000000'
+=== unpack('Q', pack('Q', 255))
+=> array (
+  1 => 255,
+)
+=== bin2hex(pack('Q', 256))
+=> '0001000000000000'
+=== unpack('Q', pack('Q', 256))
+=> array (
+  1 => 256,
+)
+=== bin2hex(pack('Q', 32767))
+=> 'ff7f000000000000'
+=== unpack('Q', pack('Q', 32767))
+=> array (
+  1 => 32767,
+)
+=== bin2hex(pack('Q', 32768))
+=> '0080000000000000'
+=== unpack('Q', pack('Q', 32768))
+=> array (
+  1 => 32768,
+)
+=== bin2hex(pack('Q', 65534))
+=> 'feff000000000000'
+=== unpack('Q', pack('Q', 65534))
+=> array (
+  1 => 65534,
+)
+=== bin2hex(pack('Q', 65535))
+=> 'ffff000000000000'
+=== unpack('Q', pack('Q', 65535))
+=> array (
+  1 => 65535,
+)
+=== bin2hex(pack('Q', 65537))
+=> '0100010000000000'
+=== unpack('Q', pack('Q', 65537))
+=> array (
+  1 => 65537,
+)
+=== bin2hex(pack('Q', -1000))
+=> '18fcffffffffffff'
+=== unpack('Q', pack('Q', -1000))
+=> array (
+  1 => -1000,
+)
+=== bin2hex(pack('Q', -64434))
+=> '4e04ffffffffffff'
+=== unpack('Q', pack('Q', -64434))
+=> array (
+  1 => -64434,
+)
+=== bin2hex(pack('Q', -65535))
+=> '0100ffffffffffff'
+=== unpack('Q', pack('Q', -65535))
+=> array (
+  1 => -65535,
+)
+=== bin2hex(pack('Q', 2147483647))
+=> 'ffffff7f00000000'
+=== unpack('Q', pack('Q', 2147483647))
+=> array (
+  1 => 2147483647,
+)
+=== bin2hex(pack('Q', 2147483648))
+=> '0000008000000000'
+=== unpack('Q', pack('Q', 2147483648))
+=> array (
+  1 => 2147483648,
+)
+=== bin2hex(pack('Q', 2147483650))
+=> '0200008000000000'
+=== unpack('Q', pack('Q', 2147483650))
+=> array (
+  1 => 2147483650,
+)
+=== bin2hex(pack('Q', -2147483648))
+=> '00000080ffffffff'
+=== unpack('Q', pack('Q', -2147483648))
+=> array (
+  1 => -2147483648,
+)
+=== bin2hex(pack('Q', 4294967295))
+=> 'ffffffff00000000'
+=== unpack('Q', pack('Q', 4294967295))
+=> array (
+  1 => 4294967295,
+)
+=== bin2hex(pack('Q', 4294967296))
+=> '0000000001000000'
+=== unpack('Q', pack('Q', 4294967296))
+=> array (
+  1 => 4294967296,
+)
+=== bin2hex(pack('Q', -4294967296))
+=> '00000000ffffffff'
+=== unpack('Q', pack('Q', -4294967296))
+=> array (
+  1 => -4294967296,
+)
+=== bin2hex(pack('Q', 281474976710654))
+=> 'feffffffffff0000'
+=== unpack('Q', pack('Q', 281474976710654))
+=> array (
+  1 => 281474976710654,
+)
+=== bin2hex(pack('Q', 9223372036854775807))
+=> 'ffffffffffffff7f'
+=== unpack('Q', pack('Q', 9223372036854775807))
+=> array (
+  1 => 9223372036854775807,
+)
+=== bin2hex(pack('Q', PHP_INT_MIN))
+=> '0000000000000080'
+=== unpack('Q', pack('Q', PHP_INT_MIN))
+=> array (
+  1 => -9223372036854775807-1,
+)
+=== bin2hex(pack('J', 0))
+=> '0000000000000000'
+=== unpack('J', pack('J', 0))
+=> array (
+  1 => 0,
+)
+=== bin2hex(pack('J', 1))
+=> '0000000000000001'
+=== unpack('J', pack('J', 1))
+=> array (
+  1 => 1,
+)
+=== bin2hex(pack('J', -1))
+=> 'ffffffffffffffff'
+=== unpack('J', pack('J', -1))
+=> array (
+  1 => -1,
+)
+=== bin2hex(pack('J', 127))
+=> '000000000000007f'
+=== unpack('J', pack('J', 127))
+=> array (
+  1 => 127,
+)
+=== bin2hex(pack('J', 128))
+=> '0000000000000080'
+=== unpack('J', pack('J', 128))
+=> array (
+  1 => 128,
+)
+=== bin2hex(pack('J', -127))
+=> 'ffffffffffffff81'
+=== unpack('J', pack('J', -127))
+=> array (
+  1 => -127,
+)
+=== bin2hex(pack('J', -128))
+=> 'ffffffffffffff80'
+=== unpack('J', pack('J', -128))
+=> array (
+  1 => -128,
+)
+=== bin2hex(pack('J', -129))
+=> 'ffffffffffffff7f'
+=== unpack('J', pack('J', -129))
+=> array (
+  1 => -129,
+)
+=== bin2hex(pack('J', 255))
+=> '00000000000000ff'
+=== unpack('J', pack('J', 255))
+=> array (
+  1 => 255,
+)
+=== bin2hex(pack('J', 256))
+=> '0000000000000100'
+=== unpack('J', pack('J', 256))
+=> array (
+  1 => 256,
+)
+=== bin2hex(pack('J', 32767))
+=> '0000000000007fff'
+=== unpack('J', pack('J', 32767))
+=> array (
+  1 => 32767,
+)
+=== bin2hex(pack('J', 32768))
+=> '0000000000008000'
+=== unpack('J', pack('J', 32768))
+=> array (
+  1 => 32768,
+)
+=== bin2hex(pack('J', 65534))
+=> '000000000000fffe'
+=== unpack('J', pack('J', 65534))
+=> array (
+  1 => 65534,
+)
+=== bin2hex(pack('J', 65535))
+=> '000000000000ffff'
+=== unpack('J', pack('J', 65535))
+=> array (
+  1 => 65535,
+)
+=== bin2hex(pack('J', 65537))
+=> '0000000000010001'
+=== unpack('J', pack('J', 65537))
+=> array (
+  1 => 65537,
+)
+=== bin2hex(pack('J', -1000))
+=> 'fffffffffffffc18'
+=== unpack('J', pack('J', -1000))
+=> array (
+  1 => -1000,
+)
+=== bin2hex(pack('J', -64434))
+=> 'ffffffffffff044e'
+=== unpack('J', pack('J', -64434))
+=> array (
+  1 => -64434,
+)
+=== bin2hex(pack('J', -65535))
+=> 'ffffffffffff0001'
+=== unpack('J', pack('J', -65535))
+=> array (
+  1 => -65535,
+)
+=== bin2hex(pack('J', 2147483647))
+=> '000000007fffffff'
+=== unpack('J', pack('J', 2147483647))
+=> array (
+  1 => 2147483647,
+)
+=== bin2hex(pack('J', 2147483648))
+=> '0000000080000000'
+=== unpack('J', pack('J', 2147483648))
+=> array (
+  1 => 2147483648,
+)
+=== bin2hex(pack('J', 2147483650))
+=> '0000000080000002'
+=== unpack('J', pack('J', 2147483650))
+=> array (
+  1 => 2147483650,
+)
+=== bin2hex(pack('J', -2147483648))
+=> 'ffffffff80000000'
+=== unpack('J', pack('J', -2147483648))
+=> array (
+  1 => -2147483648,
+)
+=== bin2hex(pack('J', 4294967295))
+=> '00000000ffffffff'
+=== unpack('J', pack('J', 4294967295))
+=> array (
+  1 => 4294967295,
+)
+=== bin2hex(pack('J', 4294967296))
+=> '0000000100000000'
+=== unpack('J', pack('J', 4294967296))
+=> array (
+  1 => 4294967296,
+)
+=== bin2hex(pack('J', -4294967296))
+=> 'ffffffff00000000'
+=== unpack('J', pack('J', -4294967296))
+=> array (
+  1 => -4294967296,
+)
+=== bin2hex(pack('J', 281474976710654))
+=> '0000fffffffffffe'
+=== unpack('J', pack('J', 281474976710654))
+=> array (
+  1 => 281474976710654,
+)
+=== bin2hex(pack('J', 9223372036854775807))
+=> '7fffffffffffffff'
+=== unpack('J', pack('J', 9223372036854775807))
+=> array (
+  1 => 9223372036854775807,
+)
+=== bin2hex(pack('J', PHP_INT_MIN))
+=> '8000000000000000'
+=== unpack('J', pack('J', PHP_INT_MIN))
+=> array (
+  1 => -9223372036854775807-1,
+)
+=== bin2hex(pack('P', 0))
+=> '0000000000000000'
+=== unpack('P', pack('P', 0))
+=> array (
+  1 => 0,
+)
+=== bin2hex(pack('P', 1))
+=> '0100000000000000'
+=== unpack('P', pack('P', 1))
+=> array (
+  1 => 1,
+)
+=== bin2hex(pack('P', -1))
+=> 'ffffffffffffffff'
+=== unpack('P', pack('P', -1))
+=> array (
+  1 => -1,
+)
+=== bin2hex(pack('P', 127))
+=> '7f00000000000000'
+=== unpack('P', pack('P', 127))
+=> array (
+  1 => 127,
+)
+=== bin2hex(pack('P', 128))
+=> '8000000000000000'
+=== unpack('P', pack('P', 128))
+=> array (
+  1 => 128,
+)
+=== bin2hex(pack('P', -127))
+=> '81ffffffffffffff'
+=== unpack('P', pack('P', -127))
+=> array (
+  1 => -127,
+)
+=== bin2hex(pack('P', -128))
+=> '80ffffffffffffff'
+=== unpack('P', pack('P', -128))
+=> array (
+  1 => -128,
+)
+=== bin2hex(pack('P', -129))
+=> '7fffffffffffffff'
+=== unpack('P', pack('P', -129))
+=> array (
+  1 => -129,
+)
+=== bin2hex(pack('P', 255))
+=> 'ff00000000000000'
+=== unpack('P', pack('P', 255))
+=> array (
+  1 => 255,
+)
+=== bin2hex(pack('P', 256))
+=> '0001000000000000'
+=== unpack('P', pack('P', 256))
+=> array (
+  1 => 256,
+)
+=== bin2hex(pack('P', 32767))
+=> 'ff7f000000000000'
+=== unpack('P', pack('P', 32767))
+=> array (
+  1 => 32767,
+)
+=== bin2hex(pack('P', 32768))
+=> '0080000000000000'
+=== unpack('P', pack('P', 32768))
+=> array (
+  1 => 32768,
+)
+=== bin2hex(pack('P', 65534))
+=> 'feff000000000000'
+=== unpack('P', pack('P', 65534))
+=> array (
+  1 => 65534,
+)
+=== bin2hex(pack('P', 65535))
+=> 'ffff000000000000'
+=== unpack('P', pack('P', 65535))
+=> array (
+  1 => 65535,
+)
+=== bin2hex(pack('P', 65537))
+=> '0100010000000000'
+=== unpack('P', pack('P', 65537))
+=> array (
+  1 => 65537,
+)
+=== bin2hex(pack('P', -1000))
+=> '18fcffffffffffff'
+=== unpack('P', pack('P', -1000))
+=> array (
+  1 => -1000,
+)
+=== bin2hex(pack('P', -64434))
+=> '4e04ffffffffffff'
+=== unpack('P', pack('P', -64434))
+=> array (
+  1 => -64434,
+)
+=== bin2hex(pack('P', -65535))
+=> '0100ffffffffffff'
+=== unpack('P', pack('P', -65535))
+=> array (
+  1 => -65535,
+)
+=== bin2hex(pack('P', 2147483647))
+=> 'ffffff7f00000000'
+=== unpack('P', pack('P', 2147483647))
+=> array (
+  1 => 2147483647,
+)
+=== bin2hex(pack('P', 2147483648))
+=> '0000008000000000'
+=== unpack('P', pack('P', 2147483648))
+=> array (
+  1 => 2147483648,
+)
+=== bin2hex(pack('P', 2147483650))
+=> '0200008000000000'
+=== unpack('P', pack('P', 2147483650))
+=> array (
+  1 => 2147483650,
+)
+=== bin2hex(pack('P', -2147483648))
+=> '00000080ffffffff'
+=== unpack('P', pack('P', -2147483648))
+=> array (
+  1 => -2147483648,
+)
+=== bin2hex(pack('P', 4294967295))
+=> 'ffffffff00000000'
+=== unpack('P', pack('P', 4294967295))
+=> array (
+  1 => 4294967295,
+)
+=== bin2hex(pack('P', 4294967296))
+=> '0000000001000000'
+=== unpack('P', pack('P', 4294967296))
+=> array (
+  1 => 4294967296,
+)
+=== bin2hex(pack('P', -4294967296))
+=> '00000000ffffffff'
+=== unpack('P', pack('P', -4294967296))
+=> array (
+  1 => -4294967296,
+)
+=== bin2hex(pack('P', 281474976710654))
+=> 'feffffffffff0000'
+=== unpack('P', pack('P', 281474976710654))
+=> array (
+  1 => 281474976710654,
+)
+=== bin2hex(pack('P', 9223372036854775807))
+=> 'ffffffffffffff7f'
+=== unpack('P', pack('P', 9223372036854775807))
+=> array (
+  1 => 9223372036854775807,
+)
+=== bin2hex(pack('P', PHP_INT_MIN))
+=> '0000000000000080'
+=== unpack('P', pack('P', PHP_INT_MIN))
+=> array (
+  1 => -9223372036854775807-1,
+)
+=== bin2hex(pack('f', 0.0))
+=> '00000000'
+=== unpack('f', pack('f', 0.0))
+=> array (
+  1 => 0.0,
+)
+=== bin2hex(pack('f', -0.0))
+=> '00000080'
+=== unpack('f', pack('f', -0.0))
+=> array (
+  1 => -0.0,
+)
+=== bin2hex(pack('f', 1.0))
+=> '0000803f'
+=== unpack('f', pack('f', 1.0))
+=> array (
+  1 => 1.0,
+)
+=== bin2hex(pack('f', -1.0))
+=> '000080bf'
+=== unpack('f', pack('f', -1.0))
+=> array (
+  1 => -1.0,
+)
+=== bin2hex(pack('f', 1.5))
+=> '0000c03f'
+=== unpack('f', pack('f', 1.5))
+=> array (
+  1 => 1.5,
+)
+=== bin2hex(pack('f', 0.1))
+=> 'cdcccc3d'
+=== unpack('f', pack('f', 0.1))
+=> array (
+  1 => 0.10000000149011612,
+)
+=== bin2hex(pack('f', 0.591234709823149))
+=> '285b173f'
+=== unpack('f', pack('f', 0.591234709823149))
+=> array (
+  1 => 0.5912346839904785,
+)
+=== bin2hex(pack('f', -0.591234709823149))
+=> '285b17bf'
+=== unpack('f', pack('f', -0.591234709823149))
+=> array (
+  1 => -0.5912346839904785,
+)
+=== bin2hex(pack('f', 1e16))
+=> 'ca1b0e5a'
+=== unpack('f', pack('f', 1e16))
+=> array (
+  1 => 10000000272564224.0,
+)
+=== bin2hex(pack('f', -1e16))
+=> 'ca1b0eda'
+=== unpack('f', pack('f', -1e16))
+=> array (
+  1 => -10000000272564224.0,
+)
+=== bin2hex(pack('f', 1.2345678901234567e19))
+=> 'aa542b5f'
+=== unpack('f', pack('f', 1.2345678901234567e19))
+=> array (
+  1 => 1.2345679395506094E+19,
+)
+=== bin2hex(pack('f', 3.4e38))
+=> '9ec97f7f'
+=== unpack('f', pack('f', 3.4e38))
+=> array (
+  1 => 3.3999999521443642E+38,
+)
+=== bin2hex(pack('f', 3.5e38))
+=> '0000807f'
+=== unpack('f', pack('f', 3.5e38))
+=> array (
+  1 => INF,
+)
+=== bin2hex(pack('f', 1e-40))
+=> 'c2160100'
+=== unpack('f', pack('f', 1e-40))
+=> array (
+  1 => 9.99994610111476E-41,
+)
+=== bin2hex(pack('f', 1e300))
+=> '0000807f'
+=== unpack('f', pack('f', 1e300))
+=> array (
+  1 => INF,
+)
+=== bin2hex(pack('f', INF))
+=> '0000807f'
+=== unpack('f', pack('f', INF))
+=> array (
+  1 => INF,
+)
+=== bin2hex(pack('f', -INF))
+=> '000080ff'
+=== unpack('f', pack('f', -INF))
+=> array (
+  1 => -INF,
+)
+=== bin2hex(pack('f', NAN))
+=> '0000c07f'
+=== bin2hex(pack('f', ''))
+=> '00000000'
+=== bin2hex(pack('f', 'a'))
+=> '00000000'
+=== bin2hex(pack('f', ' '))
+=> '00000000'
+=== bin2hex(pack('f', '1.5abc'))
+=> '0000c03f'
+=== bin2hex(pack('f', ' 2e3'))
+=> '0000fa44'
+=== bin2hex(pack('f', null))
+=> '00000000'
+=== bin2hex(pack('f', 1))
+=> '0000803f'
+=== bin2hex(pack('f', -1))
+=> '000080bf'
+=== bin2hex(pack('f', true))
+=> '0000803f'
+=== bin2hex(pack('g', 0.0))
+=> '00000000'
+=== unpack('g', pack('g', 0.0))
+=> array (
+  1 => 0.0,
+)
+=== bin2hex(pack('g', -0.0))
+=> '00000080'
+=== unpack('g', pack('g', -0.0))
+=> array (
+  1 => -0.0,
+)
+=== bin2hex(pack('g', 1.0))
+=> '0000803f'
+=== unpack('g', pack('g', 1.0))
+=> array (
+  1 => 1.0,
+)
+=== bin2hex(pack('g', -1.0))
+=> '000080bf'
+=== unpack('g', pack('g', -1.0))
+=> array (
+  1 => -1.0,
+)
+=== bin2hex(pack('g', 1.5))
+=> '0000c03f'
+=== unpack('g', pack('g', 1.5))
+=> array (
+  1 => 1.5,
+)
+=== bin2hex(pack('g', 0.1))
+=> 'cdcccc3d'
+=== unpack('g', pack('g', 0.1))
+=> array (
+  1 => 0.10000000149011612,
+)
+=== bin2hex(pack('g', 0.591234709823149))
+=> '285b173f'
+=== unpack('g', pack('g', 0.591234709823149))
+=> array (
+  1 => 0.5912346839904785,
+)
+=== bin2hex(pack('g', -0.591234709823149))
+=> '285b17bf'
+=== unpack('g', pack('g', -0.591234709823149))
+=> array (
+  1 => -0.5912346839904785,
+)
+=== bin2hex(pack('g', 1e16))
+=> 'ca1b0e5a'
+=== unpack('g', pack('g', 1e16))
+=> array (
+  1 => 10000000272564224.0,
+)
+=== bin2hex(pack('g', -1e16))
+=> 'ca1b0eda'
+=== unpack('g', pack('g', -1e16))
+=> array (
+  1 => -10000000272564224.0,
+)
+=== bin2hex(pack('g', 1.2345678901234567e19))
+=> 'aa542b5f'
+=== unpack('g', pack('g', 1.2345678901234567e19))
+=> array (
+  1 => 1.2345679395506094E+19,
+)
+=== bin2hex(pack('g', 3.4e38))
+=> '9ec97f7f'
+=== unpack('g', pack('g', 3.4e38))
+=> array (
+  1 => 3.3999999521443642E+38,
+)
+=== bin2hex(pack('g', 3.5e38))
+=> '0000807f'
+=== unpack('g', pack('g', 3.5e38))
+=> array (
+  1 => INF,
+)
+=== bin2hex(pack('g', 1e-40))
+=> 'c2160100'
+=== unpack('g', pack('g', 1e-40))
+=> array (
+  1 => 9.99994610111476E-41,
+)
+=== bin2hex(pack('g', 1e300))
+=> '0000807f'
+=== unpack('g', pack('g', 1e300))
+=> array (
+  1 => INF,
+)
+=== bin2hex(pack('g', INF))
+=> '0000807f'
+=== unpack('g', pack('g', INF))
+=> array (
+  1 => INF,
+)
+=== bin2hex(pack('g', -INF))
+=> '000080ff'
+=== unpack('g', pack('g', -INF))
+=> array (
+  1 => -INF,
+)
+=== bin2hex(pack('g', NAN))
+=> '0000c07f'
+=== bin2hex(pack('g', ''))
+=> '00000000'
+=== bin2hex(pack('g', 'a'))
+=> '00000000'
+=== bin2hex(pack('g', ' '))
+=> '00000000'
+=== bin2hex(pack('g', '1.5abc'))
+=> '0000c03f'
+=== bin2hex(pack('g', ' 2e3'))
+=> '0000fa44'
+=== bin2hex(pack('g', null))
+=> '00000000'
+=== bin2hex(pack('g', 1))
+=> '0000803f'
+=== bin2hex(pack('g', -1))
+=> '000080bf'
+=== bin2hex(pack('g', true))
+=> '0000803f'
+=== bin2hex(pack('G', 0.0))
+=> '00000000'
+=== unpack('G', pack('G', 0.0))
+=> array (
+  1 => 0.0,
+)
+=== bin2hex(pack('G', -0.0))
+=> '80000000'
+=== unpack('G', pack('G', -0.0))
+=> array (
+  1 => -0.0,
+)
+=== bin2hex(pack('G', 1.0))
+=> '3f800000'
+=== unpack('G', pack('G', 1.0))
+=> array (
+  1 => 1.0,
+)
+=== bin2hex(pack('G', -1.0))
+=> 'bf800000'
+=== unpack('G', pack('G', -1.0))
+=> array (
+  1 => -1.0,
+)
+=== bin2hex(pack('G', 1.5))
+=> '3fc00000'
+=== unpack('G', pack('G', 1.5))
+=> array (
+  1 => 1.5,
+)
+=== bin2hex(pack('G', 0.1))
+=> '3dcccccd'
+=== unpack('G', pack('G', 0.1))
+=> array (
+  1 => 0.10000000149011612,
+)
+=== bin2hex(pack('G', 0.591234709823149))
+=> '3f175b28'
+=== unpack('G', pack('G', 0.591234709823149))
+=> array (
+  1 => 0.5912346839904785,
+)
+=== bin2hex(pack('G', -0.591234709823149))
+=> 'bf175b28'
+=== unpack('G', pack('G', -0.591234709823149))
+=> array (
+  1 => -0.5912346839904785,
+)
+=== bin2hex(pack('G', 1e16))
+=> '5a0e1bca'
+=== unpack('G', pack('G', 1e16))
+=> array (
+  1 => 10000000272564224.0,
+)
+=== bin2hex(pack('G', -1e16))
+=> 'da0e1bca'
+=== unpack('G', pack('G', -1e16))
+=> array (
+  1 => -10000000272564224.0,
+)
+=== bin2hex(pack('G', 1.2345678901234567e19))
+=> '5f2b54aa'
+=== unpack('G', pack('G', 1.2345678901234567e19))
+=> array (
+  1 => 1.2345679395506094E+19,
+)
+=== bin2hex(pack('G', 3.4e38))
+=> '7f7fc99e'
+=== unpack('G', pack('G', 3.4e38))
+=> array (
+  1 => 3.3999999521443642E+38,
+)
+=== bin2hex(pack('G', 3.5e38))
+=> '7f800000'
+=== unpack('G', pack('G', 3.5e38))
+=> array (
+  1 => INF,
+)
+=== bin2hex(pack('G', 1e-40))
+=> '000116c2'
+=== unpack('G', pack('G', 1e-40))
+=> array (
+  1 => 9.99994610111476E-41,
+)
+=== bin2hex(pack('G', 1e300))
+=> '7f800000'
+=== unpack('G', pack('G', 1e300))
+=> array (
+  1 => INF,
+)
+=== bin2hex(pack('G', INF))
+=> '7f800000'
+=== unpack('G', pack('G', INF))
+=> array (
+  1 => INF,
+)
+=== bin2hex(pack('G', -INF))
+=> 'ff800000'
+=== unpack('G', pack('G', -INF))
+=> array (
+  1 => -INF,
+)
+=== bin2hex(pack('G', NAN))
+=> '7fc00000'
+=== bin2hex(pack('G', ''))
+=> '00000000'
+=== bin2hex(pack('G', 'a'))
+=> '00000000'
+=== bin2hex(pack('G', ' '))
+=> '00000000'
+=== bin2hex(pack('G', '1.5abc'))
+=> '3fc00000'
+=== bin2hex(pack('G', ' 2e3'))
+=> '44fa0000'
+=== bin2hex(pack('G', null))
+=> '00000000'
+=== bin2hex(pack('G', 1))
+=> '3f800000'
+=== bin2hex(pack('G', -1))
+=> 'bf800000'
+=== bin2hex(pack('G', true))
+=> '3f800000'
+=== bin2hex(pack('d', 0.0))
+=> '0000000000000000'
+=== unpack('d', pack('d', 0.0))
+=> array (
+  1 => 0.0,
+)
+=== bin2hex(pack('d', -0.0))
+=> '0000000000000080'
+=== unpack('d', pack('d', -0.0))
+=> array (
+  1 => -0.0,
+)
+=== bin2hex(pack('d', 1.0))
+=> '000000000000f03f'
+=== unpack('d', pack('d', 1.0))
+=> array (
+  1 => 1.0,
+)
+=== bin2hex(pack('d', -1.0))
+=> '000000000000f0bf'
+=== unpack('d', pack('d', -1.0))
+=> array (
+  1 => -1.0,
+)
+=== bin2hex(pack('d', 1.5))
+=> '000000000000f83f'
+=== unpack('d', pack('d', 1.5))
+=> array (
+  1 => 1.5,
+)
+=== bin2hex(pack('d', 0.1))
+=> '9a9999999999b93f'
+=== unpack('d', pack('d', 0.1))
+=> array (
+  1 => 0.1,
+)
+=== bin2hex(pack('d', 0.591234709823149))
+=> '4a6ade0d65ebe23f'
+=== unpack('d', pack('d', 0.591234709823149))
+=> array (
+  1 => 0.591234709823149,
+)
+=== bin2hex(pack('d', -0.591234709823149))
+=> '4a6ade0d65ebe2bf'
+=== unpack('d', pack('d', -0.591234709823149))
+=> array (
+  1 => -0.591234709823149,
+)
+=== bin2hex(pack('d', 1e16))
+=> '0080e03779c34143'
+=== unpack('d', pack('d', 1e16))
+=> array (
+  1 => 10000000000000000.0,
+)
+=== bin2hex(pack('d', -1e16))
+=> '0080e03779c341c3'
+=== unpack('d', pack('d', -1e16))
+=> array (
+  1 => -10000000000000000.0,
+)
+=== bin2hex(pack('d', 1.2345678901234567e19))
+=> 'e1639d31956ae543'
+=== unpack('d', pack('d', 1.2345678901234567e19))
+=> array (
+  1 => 1.2345678901234567E+19,
+)
+=== bin2hex(pack('d', 3.4e38))
+=> 'addf8cc733f9ef47'
+=== unpack('d', pack('d', 3.4e38))
+=> array (
+  1 => 3.4E+38,
+)
+=== bin2hex(pack('d', 3.5e38))
+=> '7bcdd3c4f874f047'
+=== unpack('d', pack('d', 3.5e38))
+=> array (
+  1 => 3.5E+38,
+)
+=== bin2hex(pack('d', 1e-40))
+=> '9c577727266ca137'
+=== unpack('d', pack('d', 1e-40))
+=> array (
+  1 => 1.0E-40,
+)
+=== bin2hex(pack('d', 1e300))
+=> '9c7500883ce4377e'
+=== unpack('d', pack('d', 1e300))
+=> array (
+  1 => 1.0E+300,
+)
+=== bin2hex(pack('d', INF))
+=> '000000000000f07f'
+=== unpack('d', pack('d', INF))
+=> array (
+  1 => INF,
+)
+=== bin2hex(pack('d', -INF))
+=> '000000000000f0ff'
+=== unpack('d', pack('d', -INF))
+=> array (
+  1 => -INF,
+)
+=== bin2hex(pack('d', NAN))
+=> '000000000000f87f'
+=== bin2hex(pack('d', ''))
+=> '0000000000000000'
+=== bin2hex(pack('d', 'a'))
+=> '0000000000000000'
+=== bin2hex(pack('d', ' '))
+=> '0000000000000000'
+=== bin2hex(pack('d', '1.5abc'))
+=> '000000000000f83f'
+=== bin2hex(pack('d', ' 2e3'))
+=> '0000000000409f40'
+=== bin2hex(pack('d', null))
+=> '0000000000000000'
+=== bin2hex(pack('d', 1))
+=> '000000000000f03f'
+=== bin2hex(pack('d', -1))
+=> '000000000000f0bf'
+=== bin2hex(pack('d', true))
+=> '000000000000f03f'
+=== bin2hex(pack('e', 0.0))
+=> '0000000000000000'
+=== unpack('e', pack('e', 0.0))
+=> array (
+  1 => 0.0,
+)
+=== bin2hex(pack('e', -0.0))
+=> '0000000000000080'
+=== unpack('e', pack('e', -0.0))
+=> array (
+  1 => -0.0,
+)
+=== bin2hex(pack('e', 1.0))
+=> '000000000000f03f'
+=== unpack('e', pack('e', 1.0))
+=> array (
+  1 => 1.0,
+)
+=== bin2hex(pack('e', -1.0))
+=> '000000000000f0bf'
+=== unpack('e', pack('e', -1.0))
+=> array (
+  1 => -1.0,
+)
+=== bin2hex(pack('e', 1.5))
+=> '000000000000f83f'
+=== unpack('e', pack('e', 1.5))
+=> array (
+  1 => 1.5,
+)
+=== bin2hex(pack('e', 0.1))
+=> '9a9999999999b93f'
+=== unpack('e', pack('e', 0.1))
+=> array (
+  1 => 0.1,
+)
+=== bin2hex(pack('e', 0.591234709823149))
+=> '4a6ade0d65ebe23f'
+=== unpack('e', pack('e', 0.591234709823149))
+=> array (
+  1 => 0.591234709823149,
+)
+=== bin2hex(pack('e', -0.591234709823149))
+=> '4a6ade0d65ebe2bf'
+=== unpack('e', pack('e', -0.591234709823149))
+=> array (
+  1 => -0.591234709823149,
+)
+=== bin2hex(pack('e', 1e16))
+=> '0080e03779c34143'
+=== unpack('e', pack('e', 1e16))
+=> array (
+  1 => 10000000000000000.0,
+)
+=== bin2hex(pack('e', -1e16))
+=> '0080e03779c341c3'
+=== unpack('e', pack('e', -1e16))
+=> array (
+  1 => -10000000000000000.0,
+)
+=== bin2hex(pack('e', 1.2345678901234567e19))
+=> 'e1639d31956ae543'
+=== unpack('e', pack('e', 1.2345678901234567e19))
+=> array (
+  1 => 1.2345678901234567E+19,
+)
+=== bin2hex(pack('e', 3.4e38))
+=> 'addf8cc733f9ef47'
+=== unpack('e', pack('e', 3.4e38))
+=> array (
+  1 => 3.4E+38,
+)
+=== bin2hex(pack('e', 3.5e38))
+=> '7bcdd3c4f874f047'
+=== unpack('e', pack('e', 3.5e38))
+=> array (
+  1 => 3.5E+38,
+)
+=== bin2hex(pack('e', 1e-40))
+=> '9c577727266ca137'
+=== unpack('e', pack('e', 1e-40))
+=> array (
+  1 => 1.0E-40,
+)
+=== bin2hex(pack('e', 1e300))
+=> '9c7500883ce4377e'
+=== unpack('e', pack('e', 1e300))
+=> array (
+  1 => 1.0E+300,
+)
+=== bin2hex(pack('e', INF))
+=> '000000000000f07f'
+=== unpack('e', pack('e', INF))
+=> array (
+  1 => INF,
+)
+=== bin2hex(pack('e', -INF))
+=> '000000000000f0ff'
+=== unpack('e', pack('e', -INF))
+=> array (
+  1 => -INF,
+)
+=== bin2hex(pack('e', NAN))
+=> '000000000000f87f'
+=== bin2hex(pack('e', ''))
+=> '0000000000000000'
+=== bin2hex(pack('e', 'a'))
+=> '0000000000000000'
+=== bin2hex(pack('e', ' '))
+=> '0000000000000000'
+=== bin2hex(pack('e', '1.5abc'))
+=> '000000000000f83f'
+=== bin2hex(pack('e', ' 2e3'))
+=> '0000000000409f40'
+=== bin2hex(pack('e', null))
+=> '0000000000000000'
+=== bin2hex(pack('e', 1))
+=> '000000000000f03f'
+=== bin2hex(pack('e', -1))
+=> '000000000000f0bf'
+=== bin2hex(pack('e', true))
+=> '000000000000f03f'
+=== bin2hex(pack('E', 0.0))
+=> '0000000000000000'
+=== unpack('E', pack('E', 0.0))
+=> array (
+  1 => 0.0,
+)
+=== bin2hex(pack('E', -0.0))
+=> '8000000000000000'
+=== unpack('E', pack('E', -0.0))
+=> array (
+  1 => -0.0,
+)
+=== bin2hex(pack('E', 1.0))
+=> '3ff0000000000000'
+=== unpack('E', pack('E', 1.0))
+=> array (
+  1 => 1.0,
+)
+=== bin2hex(pack('E', -1.0))
+=> 'bff0000000000000'
+=== unpack('E', pack('E', -1.0))
+=> array (
+  1 => -1.0,
+)
+=== bin2hex(pack('E', 1.5))
+=> '3ff8000000000000'
+=== unpack('E', pack('E', 1.5))
+=> array (
+  1 => 1.5,
+)
+=== bin2hex(pack('E', 0.1))
+=> '3fb999999999999a'
+=== unpack('E', pack('E', 0.1))
+=> array (
+  1 => 0.1,
+)
+=== bin2hex(pack('E', 0.591234709823149))
+=> '3fe2eb650dde6a4a'
+=== unpack('E', pack('E', 0.591234709823149))
+=> array (
+  1 => 0.591234709823149,
+)
+=== bin2hex(pack('E', -0.591234709823149))
+=> 'bfe2eb650dde6a4a'
+=== unpack('E', pack('E', -0.591234709823149))
+=> array (
+  1 => -0.591234709823149,
+)
+=== bin2hex(pack('E', 1e16))
+=> '4341c37937e08000'
+=== unpack('E', pack('E', 1e16))
+=> array (
+  1 => 10000000000000000.0,
+)
+=== bin2hex(pack('E', -1e16))
+=> 'c341c37937e08000'
+=== unpack('E', pack('E', -1e16))
+=> array (
+  1 => -10000000000000000.0,
+)
+=== bin2hex(pack('E', 1.2345678901234567e19))
+=> '43e56a95319d63e1'
+=== unpack('E', pack('E', 1.2345678901234567e19))
+=> array (
+  1 => 1.2345678901234567E+19,
+)
+=== bin2hex(pack('E', 3.4e38))
+=> '47eff933c78cdfad'
+=== unpack('E', pack('E', 3.4e38))
+=> array (
+  1 => 3.4E+38,
+)
+=== bin2hex(pack('E', 3.5e38))
+=> '47f074f8c4d3cd7b'
+=== unpack('E', pack('E', 3.5e38))
+=> array (
+  1 => 3.5E+38,
+)
+=== bin2hex(pack('E', 1e-40))
+=> '37a16c262777579c'
+=== unpack('E', pack('E', 1e-40))
+=> array (
+  1 => 1.0E-40,
+)
+=== bin2hex(pack('E', 1e300))
+=> '7e37e43c8800759c'
+=== unpack('E', pack('E', 1e300))
+=> array (
+  1 => 1.0E+300,
+)
+=== bin2hex(pack('E', INF))
+=> '7ff0000000000000'
+=== unpack('E', pack('E', INF))
+=> array (
+  1 => INF,
+)
+=== bin2hex(pack('E', -INF))
+=> 'fff0000000000000'
+=== unpack('E', pack('E', -INF))
+=> array (
+  1 => -INF,
+)
+=== bin2hex(pack('E', NAN))
+=> '7ff8000000000000'
+=== bin2hex(pack('E', ''))
+=> '0000000000000000'
+=== bin2hex(pack('E', 'a'))
+=> '0000000000000000'
+=== bin2hex(pack('E', ' '))
+=> '0000000000000000'
+=== bin2hex(pack('E', '1.5abc'))
+=> '3ff8000000000000'
+=== bin2hex(pack('E', ' 2e3'))
+=> '409f400000000000'
+=== bin2hex(pack('E', null))
+=> '0000000000000000'
+=== bin2hex(pack('E', 1))
+=> '3ff0000000000000'
+=== bin2hex(pack('E', -1))
+=> 'bff0000000000000'
+=== bin2hex(pack('E', true))
+=> '3ff0000000000000'
+=== bin2hex(pack('N', '12abc'))
+=> '0000000c'
+=== bin2hex(pack('N', '  42'))
+=> '0000002a'
+=== bin2hex(pack('N', '1e3'))
+=> '000003e8'
+=== bin2hex(pack('N', '0x1A'))
+=> '00000000'
+=== bin2hex(pack('N', 'abc'))
+=> '00000000'
+=== bin2hex(pack('N', '-7.9'))
+=> 'fffffff9'
+=== bin2hex(pack('N', 3.99))
+=> '00000003'
+=== bin2hex(pack('N', -3.99))
+=> 'fffffffd'
+=== bin2hex(pack('N', 1e19))
+=> '89e80000'
+=== bin2hex(pack('N', -1e19))
+=> '76180000'
+=== bin2hex(pack('N', 3e19))
+=> '9db80000'
+=== bin2hex(pack('N', NAN))
+=> '00000000'
+=== bin2hex(pack('N', INF))
+=> '00000000'
+=== bin2hex(pack('N', null))
+=> '00000000'
+=== bin2hex(pack('N', true))
+=> '00000001'
+=== bin2hex(pack('N', false))
+=> '00000000'
+=== bin2hex(pack('a', 'hello world'))
+=> '68'
+=== bin2hex(pack('a*', 'hello world'))
+=> '68656c6c6f20776f726c64'
+=== bin2hex(pack('a0', 'hello'))
+=> ''
+=== bin2hex(pack('a9', 'hello'))
+=> '68656c6c6f00000000'
+=== bin2hex(pack('A', 'hello world'))
+=> '68'
+=== bin2hex(pack('A*', 'hello world'))
+=> '68656c6c6f20776f726c64'
+=== bin2hex(pack('A9', 'hello'))
+=> '68656c6c6f20202020'
+=== bin2hex(pack('A5', 'foo '))
+=> '666f6f2020'
+=== bin2hex(pack('A4', 'fooo'))
+=> '666f6f6f'
+=== bin2hex(pack('Z0', 'f'))
+=> ''
+=== bin2hex(pack('Z5', "foo\x00"))
+=> '666f6f0000'
+=== bin2hex(pack('Z4', 'fooo'))
+=> '666f6f00'
+=== bin2hex(pack('Z4', 'foo'))
+=> '666f6f00'
+=== bin2hex(pack('Z*', 'foo'))
+=> '666f6f00'
+=== bin2hex(pack('Z', 'foo'))
+=> '00'
+=== bin2hex(pack('Z1', 'foo'))
+=> '00'
+=== bin2hex(pack('a*', 123))
+=> '313233'
+=== bin2hex(pack('a*', 1.5))
+=> '312e35'
+=== bin2hex(pack('a*', 0.1))
+=> '302e31'
+=== bin2hex(pack('a*', 1e25))
+=> '312e30452b3235'
+=== bin2hex(pack('a*', -1e-7))
+=> '2d312e30452d37'
+=== bin2hex(pack('a*', 100.0))
+=> '313030'
+=== bin2hex(pack('a*', true))
+=> '31'
+=== bin2hex(pack('a*', false))
+=> ''
+=== bin2hex(pack('a*', null))
+=> ''
+=== bin2hex(pack('A*', ''))
+=> ''
+=== bin2hex(pack('Z*', ''))
+=> '00'
+=== bin2hex(pack('H', 4))
+=> '40'
+=== bin2hex(pack('H*', '48656c6c6f'))
+=> '48656c6c6f'
+=== bin2hex(pack('H*', '4865x6c6c6f'))
+Warning: pack(): Type H: illegal hex digit x
+=> '486506c6c6f0'
+=== bin2hex(pack('H*', 'abc'))
+=> 'abc0'
+=== bin2hex(pack('H3', 'abcd'))
+=> 'abc0'
+=== bin2hex(pack('H5', 'abc'))
+Warning: pack(): Type H: not enough characters in string
+=> 'abc0'
+=== bin2hex(pack('H*', 'ABCDEF'))
+=> 'abcdef'
+=== bin2hex(pack('h*', '48656c6c6f'))
+=> '8456c6c6f6'
+=== bin2hex(pack('h3', '123'))
+=> '2103'
+=== bin2hex(pack('h', 3000000))
+=> '03'
+=== bin2hex(pack('H0', 'ab'))
+=> ''
+=== bin2hex(pack('H*', ''))
+=> ''
+=== bin2hex(pack('H2', 'g!z'))
+Warning: pack(): Type H: illegal hex digit g
+Warning: pack(): Type H: illegal hex digit !
+=> '00'
+=== bin2hex(pack('a2147483648', 'x'))
+=> '78'
+=== bin2hex(pack('nvc*', 4660, 22136, 65, 66))
+=> '123478564142'
+=== bin2hex(pack('C*'))
+=> ''
+=== bin2hex(pack('C*', 1, 2, 3))
+=> '010203'
+=== bin2hex(pack('C0'))
+=> ''
+=== bin2hex(pack('NnC', 1, 2, 3))
+=> '00000001000203'
+=== bin2hex(pack('x'))
+=> '00'
+=== bin2hex(pack('x5'))
+=> '0000000000'
+=== bin2hex(pack('x*'))
+Warning: pack(): Type x: '*' ignored
+=> '00'
+=== bin2hex(pack('X'))
+Warning: pack(): Type X: outside of string
+=> ''
+=== bin2hex(pack('X*'))
+Warning: pack(): Type X: '*' ignored
+Warning: pack(): Type X: outside of string
+=> ''
+=== bin2hex(pack('a4X2', 'abcd'))
+=> '6162'
+=== bin2hex(pack('a4X5a1', 'abcd', 'z'))
+Warning: pack(): Type X: outside of string
+=> '7a'
+=== bin2hex(pack('a4X2a1', 'abcd', 'z'))
+=> '61627a'
+=== bin2hex(pack('@4'))
+=> '00000000'
+=== bin2hex(pack('@*'))
+Warning: pack(): Type @: '*' ignored
+=> '00'
+=== bin2hex(pack('a6@2', 'abcdef'))
+=> '6162'
+=== bin2hex(pack('a2@5a1', 'ab', 'c'))
+=> '616200000063'
+=== bin2hex(pack('@0'))
+=> ''
+=== bin2hex(pack('x4294967295'))
+Warning: pack(): Type x: '*' ignored
+=> '00'
+=== bin2hex(pack('a4294967297', 'q'))
+=> '71'
+=== bin2hex(pack('x2147483647x'))
+!! ValueError: Type x: integer overflow in format string
+=== bin2hex(pack('N4294967296', 1))
+Warning: pack(): 1 arguments unused
+=> ''
+=== bin2hex(pack('a'))
+!! ValueError: Type a: not enough arguments
+=== bin2hex(pack('H'))
+!! ValueError: Type H: not enough arguments
+=== bin2hex(pack('N'))
+!! ValueError: Type N: too few arguments
+=== bin2hex(pack('N2', 1))
+!! ValueError: Type N: too few arguments
+=== bin2hex(pack('N', 1, 2, 3))
+Warning: pack(): 2 arguments unused
+=> '00000001'
+=== bin2hex(pack('B'))
+!! ValueError: Type B: unknown format code
+=== bin2hex(pack('nB', 1))
+!! ValueError: Type B: unknown format code
+=== bin2hex(pack(''))
+=> ''
+=== bin2hex(pack("\x00"))
+!! ValueError: Type 
+=== bin2hex(pack('H', "\x00"))
+Warning: pack(): Type H: illegal hex digit 
+=> '00'
+=== unpack("\x00", 'a')
+!! ValueError: Invalid format type 
+=== bin2hex(pack('', 1))
+Warning: pack(): 1 arguments unused
+=> ''
+=== bin2hex(pack('C2147483647', 1))
+!! ValueError: Type C: too few arguments
+=== bin2hex(pack('CC2147483647', 1, 1))
+!! ValueError: Type C: too few arguments
+=== bin2hex(pack('d*', 1.0, 2.0))
+=> '000000000000f03f0000000000000040'
+=== bin2hex(pack('aaaa', '1', '2', '3'))
+!! ValueError: Type a: not enough arguments
+=== unpack('nlen/a*data', "\x00\x05hello")
+=> array (
+  'len' => 5,
+  'data' => 'hello',
+)
+=== unpack('c2chars/nint', "\x04\x00\xa0\x00")
+=> array (
+  'chars1' => 4,
+  'chars2' => 0,
+  'int' => 40960,
+)
+=== unpack('C*', "\x01\x02\x03")
+=> array (
+  1 => 1,
+  2 => 2,
+  3 => 3,
+)
+=== unpack('C*x/C', "\x01\x02\x03")
+Warning: unpack(): Type C: not enough input values, need 1 values but only 0 were provided
+=> false
+=== unpack('C*', '')
+=> array (
+)
+=== unpack('Cfoo*', "\x01\x02\x03")
+=> array (
+  'foo*' => 1,
+)
+=== unpack('C2', "\x01")
+Warning: unpack(): Type C: not enough input values, need 1 values but only 0 were provided
+=> false
+=== unpack('C2', '')
+Warning: unpack(): Type C: not enough input values, need 1 values but only 0 were provided
+=> false
+=== unpack('N', "\x01\x02")
+Warning: unpack(): Type N: not enough input values, need 4 values but only 2 were provided
+=> false
+=== unpack('N', "\x01")
+Warning: unpack(): Type N: not enough input values, need 4 values but only 1 was provided
+=> false
+=== unpack('N2', "\x00\x00\x00\x01\x00\x00\x00\x02")
+=> array (
+  1 => 1,
+  2 => 2,
+)
+=== unpack('N2x/C', "\x00\x00\x00\x01\x00\x00\x00\x02\x09")
+=> array (
+  'x1' => 1,
+  'x2' => 2,
+  1 => 9,
+)
+=== unpack('C0', "\x01")
+=> array (
+)
+=== unpack('a', 'hello')
+=> array (
+  1 => 'h',
+)
+=== unpack('a*', 'hello')
+=> array (
+  1 => 'hello',
+)
+=== unpack('a0', 'hello')
+=> array (
+  1 => '',
+)
+=== unpack('a10', 'hello')
+Warning: unpack(): Type a: not enough input values, need 10 values but only 5 were provided
+=> false
+=== unpack('A*', "foo\x00\x0dbar\x00 \x09\x0d\x0a")
+=> array (
+  1 => 'foo' . "\0" . 'bar',
+)
+=== unpack('A4', "foo\x00\x0dbar\x00 \x09\x0d\x0a")
+=> array (
+  1 => 'foo',
+)
+=== unpack('A*', "  \x00")
+=> array (
+  1 => '',
+)
+=== unpack('Z*', "foo\x00\x0dbar\x00 \x09\x0d\x0a")
+=> array (
+  1 => 'foo',
+)
+=== unpack('Z9', "foo\x00\x0dbar\x00 \x09\x0d\x0a")
+=> array (
+  1 => 'foo',
+)
+=== unpack('Z2', "\x00")
+Warning: unpack(): Type Z: not enough input values, need 2 values but only 1 was provided
+=> false
+=== unpack('Z2', "\x00\x00")
+=> array (
+  1 => '',
+)
+=== unpack('Z2', "A\x00")
+=> array (
+  1 => 'A',
+)
+=== unpack('Z2', "AB\x00")
+=> array (
+  1 => 'AB',
+)
+=== unpack('Z2', 'ABC')
+=> array (
+  1 => 'AB',
+)
+=== unpack('H*', "\x124\xab")
+=> array (
+  1 => '1234ab',
+)
+=== unpack('h*', "\x124\xab")
+=> array (
+  1 => '2143ba',
+)
+=== unpack('H3', "\x124\xab")
+=> array (
+  1 => '123',
+)
+=== unpack('H4', "\x124\xab")
+=> array (
+  1 => '1234',
+)
+=== unpack('H5', "\x124\xab")
+=> array (
+  1 => '1234a',
+)
+=== unpack('H7', "\x124\xab")
+Warning: unpack(): Type H: not enough input values, need 4 values but only 3 were provided
+=> false
+=== unpack('H8', "\x124\xab")
+Warning: unpack(): Type H: not enough input values, need 4 values but only 3 were provided
+=> false
+=== unpack('H0', "\x124\xab")
+=> array (
+  1 => '',
+)
+=== unpack('H', "\x124\xab")
+=> array (
+  1 => '1',
+)
+=== unpack('H*a/Cb', "\x124")
+=> array (
+  'a' => '1234',
+  'b' => 18,
+)
+=== unpack('H2a/Cb', "\x124")
+=> array (
+  'a' => '12',
+  'b' => 52,
+)
+=== unpack('H*', '')
+=> array (
+  1 => '',
+)
+=== unpack('H2147483647', "\x12")
+Warning: unpack(): Type H: not enough input values, need 1073741824 values but only 1 was provided
+=> false
+=== unpack('h1073741824', "\x12")
+Warning: unpack(): Type h: not enough input values, need 536870912 values but only 1 was provided
+=> false
+=== unpack('H1073741823', "\x12")
+Warning: unpack(): Type H: not enough input values, need 536870912 values but only 1 was provided
+=> false
+=== unpack('x', '')
+Warning: unpack(): Type x: not enough input values, need 1 values but only 0 were provided
+=> false
+=== unpack('x*', 'abc')
+=> array (
+)
+=== unpack('x2/a', 'abc')
+=> array (
+  1 => 'c',
+)
+=== unpack('x4/a', 'abc')
+Warning: unpack(): Type x: not enough input values, need 1 values but only 0 were provided
+=> false
+=== unpack('X', 'abc')
+=> array (
+)
+=== unpack('X*', 'abc')
+Warning: unpack(): Type X: '*' ignored
+=> array (
+)
+=== unpack('a2/X3/a', 'abcdef')
+=> array (
+  1 => 'a',
+)
+=== unpack('a2/X/a', 'abcdef')
+=> array (
+  1 => 'b',
+)
+=== unpack('a2/X2/a', 'abcdef')
+=> array (
+  1 => 'a',
+)
+=== unpack('Va/X', "\x01\x00\x00\x00\x02\x00\x00\x00")
+=> array (
+  'a' => 1,
+)
+=== unpack('Va/X4', "\x01\x00\x00\x00\x02\x00\x00\x00")
+=> array (
+  'a' => 1,
+)
+=== unpack('V1a/X4/V1b/V1c/X4/V1d', "\x01\x00\x00\x00\x02\x00\x00\x00")
+=> array (
+  'a' => 1,
+  'b' => 1,
+  'c' => 2,
+  'd' => 2,
+)
+=== unpack('@', 'abc')
+=> array (
+)
+=== unpack('@0/a', 'abc')
+=> array (
+  1 => 'a',
+)
+=== unpack('@2/a', 'abc')
+=> array (
+  1 => 'c',
+)
+=== unpack('@3/a', 'abc')
+Warning: unpack(): Type a: not enough input values, need 1 values but only 0 were provided
+=> false
+=== unpack('@4/a', 'abc')
+Warning: unpack(): Type @: outside of string
+=> array (
+  1 => 'a',
+)
+=== unpack('@*', 'abc')
+Warning: unpack(): Type @: outside of string
+=> array (
+)
+=== unpack('a/@*/a', 'abc')
+Warning: unpack(): Type @: outside of string
+=> array (
+  1 => 'a',
+)
+=== unpack('c', "\xff")
+=> array (
+  1 => -1,
+)
+=== unpack('C', "\xff")
+=> array (
+  1 => 255,
+)
+=== unpack('s', "\xff\xff")
+=> array (
+  1 => -1,
+)
+=== unpack('S', "\xff\xff")
+=> array (
+  1 => 65535,
+)
+=== unpack('n', "\xff\xfe")
+=> array (
+  1 => 65534,
+)
+=== unpack('v', "\xff\xfe")
+=> array (
+  1 => 65279,
+)
+=== unpack('i', "\xff\xff\xff\xff")
+=> array (
+  1 => -1,
+)
+=== unpack('I', "\xff\xff\xff\xff")
+=> array (
+  1 => 4294967295,
+)
+=== unpack('l', "\xff\xff\xff\xff")
+=> array (
+  1 => -1,
+)
+=== unpack('L', "\xff\xff\xff\xff")
+=> array (
+  1 => 4294967295,
+)
+=== unpack('N', "\xff\xff\xff\xfe")
+=> array (
+  1 => 4294967294,
+)
+=== unpack('V', "\xff\xff\xff\xfe")
+=> array (
+  1 => 4278190079,
+)
+=== unpack('q', "\xff\xff\xff\xff\xff\xff\xff\xff")
+=> array (
+  1 => -1,
+)
+=== unpack('Q', "\xfe\xff\xff\xff\xff\xff\xff\xff")
+=> array (
+  1 => -2,
+)
+=== unpack('J', "\x80\x00\x00\x00\x00\x00\x00\x01")
+=> array (
+  1 => -9223372036854775807,
+)
+=== unpack('P', "\x01\x00\x00\x00\x00\x00\x00\x80")
+=> array (
+  1 => -9223372036854775807,
+)
+=== unpack('f', "\x00\x00\x80?")
+=> array (
+  1 => 1.0,
+)
+=== unpack('g', "\x00\x00\x80?")
+=> array (
+  1 => 1.0,
+)
+=== unpack('G', "?\x80\x00\x00")
+=> array (
+  1 => 1.0,
+)
+=== unpack('d', "\x00\x00\x00\x00\x00\x00\xf0?")
+=> array (
+  1 => 1.0,
+)
+=== unpack('e', "\x00\x00\x00\x00\x00\x00\xf0?")
+=> array (
+  1 => 1.0,
+)
+=== unpack('E', "?\xf0\x00\x00\x00\x00\x00\x00")
+=> array (
+  1 => 1.0,
+)
+=== unpack('f', "\x00\x00\xc0\x7f")
+=> array (
+  1 => NAN,
+)
+=== unpack('B', 'abc')
+!! ValueError: Invalid format type B
+=== unpack('CB', 'abc')
+=> array (
+  'B' => 97,
+)
+=== unpack('', 'abc')
+=> array (
+)
+=== unpack('C1/C1', 'ab')
+=> array (
+  1 => 98,
+)
+=== unpack('Ca/Ca', 'ab')
+=> array (
+  'a' => 98,
+)
+=== unpack('C2a/Ca1', 'abc')
+=> array (
+  'a1' => 99,
+  'a2' => 98,
+)
+=== unpack('C5/C1', 'abcdefg')
+=> array (
+  1 => 102,
+  2 => 98,
+  3 => 99,
+  4 => 100,
+  5 => 101,
+)
+=== unpack('C0x/C', 'ab')
+=> array (
+  1 => 97,
+)
+=== unpack('C-1/C1', 'abc')
+=> array (
+  -1 => 97,
+  1 => 98,
+)
+=== unpack('Cfoo/Cbar', 'ab')
+=> array (
+  'foo' => 97,
+  'bar' => 98,
+)
+=== unpack('Cfoo/Cbar/', 'ab')
+=> array (
+  'foo' => 97,
+  'bar' => 98,
+)
+=== unpack('C/', 'ab')
+=> array (
+  1 => 97,
+)
+=== unpack('C//C', 'ab')
+!! ValueError: Invalid format type /
+=== unpack('C*-1/C', 'ab')
+Warning: unpack(): Type C: not enough input values, need 1 values but only 0 were provided
+=> false
+=== unpack('C2147483648', 'ab')
+Warning: unpack(): Type C: integer overflow
+=> false
+=== unpack('C99999999999999999999', 'ab')
+Warning: unpack(): Type C: integer overflow
+=> false
+=== unpack('C2147483647', 'ab')
+Warning: unpack(): Type C: not enough input values, need 1 values but only 0 were provided
+=> false
+=== unpack('a2147483647', 'ab')
+Warning: unpack(): Type a: not enough input values, need 2147483647 values but only 2 were provided
+=> false
+=== unpack('Cxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx', 'a')
+=> array (
+  'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx' => 97,
+)
+=== unpack('C', 'abc', 1)
+=> array (
+  1 => 98,
+)
+=== unpack('a*', 'abc', 3)
+=> array (
+  1 => '',
+)
+=== unpack('C', 'abc', 3)
+Warning: unpack(): Type C: not enough input values, need 1 values but only 0 were provided
+=> false
+=== unpack('l2', "pad\x04\x03\x02\x01\x08\x07\x06\x05", 3)
+=> array (
+  1 => 16909060,
+  2 => 84281096,
+)
+=== unpack('@4/l', "pad\x04\x03\x02\x01\x08\x07\x06\x05", 3)
+=> array (
+  1 => 84281096,
+)
