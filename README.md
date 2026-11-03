@@ -22,22 +22,8 @@ tests under out-of-scope directories ([phpt-scope.txt](phpt-scope.txt)) are not 
 | `sapi/` | 127 | 110 | 2 | 15 | 98.2% | 86.6% |
 | **in scope, total** | **21,414** | **18,378** | **1,627** | **1,399** | **91.8%** | **85.8%** |
 
-Earlier per-extension measurements (owners' runs, 3 Nov):
-
-| Suite | pass % | detail |
-|---|---|---|
-| ext/standard strings, arrays, files, dir | 95–100% | |
-| ext/date, json, random, bcmath, uri, iconv, tokenizer | 98–99% | |
-| ext/pcre, hash, mbstring, intl, gmp, openssl, sodium, zlib, filter | 95–98% | |
-| ext/pdo + pdo_sqlite + sqlite3 | 98.5% | 323/327 |
-| ext/dom | 97.4% | 876/899 |
-| ext/reflection | 94.2% | 536/569 |
-| ext/spl | 93.0% | 759/820 |
-| ext/simplexml, xmlreader, xmlwriter, xml, libxml, xsl, soap | 82–100% | |
-| ext/mysqli, session, curl, ftp, sockets, phar, zip, bz2, fileinfo | 90–98% | |
-| ext/exif, calendar, gettext, posix, sysv*, shmop, ctype, pcntl | 98–100% | |
-| sapi/cli | 88.3% | 98/111; the built-in server (`php -S`) 77% |
-| ext/gd | 99.6% | 281/282 (system libgd 2.3.3) |
+Per-extension rows (measured from the same run, with skips excluded) are in
+[FEATURE_GAP.md](FEATURE_GAP.md).
 
 In progress: ext/zend_test (gates about 340 currently-skipped engine tests) and typed
 references in the engine. What is deliberately out of scope (opcache, FPM, pgsql,
