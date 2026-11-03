@@ -14,7 +14,7 @@ use std::collections::HashMap;
 use crate::calendar::{IntlCalendar, PhpDateTime};
 use crate::common;
 use crate::dateformat::{self, DateArg};
-use crate::error::{Error, Result, UErrorCode};
+use crate::error::{Error, IntlError, Result, UErrorCode};
 use crate::ffi::UParseError;
 use crate::msgpattern::{ArgType, MessagePattern, PartType};
 use crate::sys::udat::DateFormat;
@@ -627,13 +627,10 @@ impl MessageFormatter {
                 }
                 MsgKey::Name(s) => {
                     let k = ustr::to_u16(s).map_err(|c| {
-                        Error::intl(
+                        Error::Intl(IntlError::from_bytes(
                             c,
-                            format!(
-                                "Invalid UTF-8 data in argument key: '{}'",
-                                String::from_utf8_lossy(s)
-                            ),
-                        )
+                            [&b"Invalid UTF-8 data in argument key: '"[..], s, b"'"].concat(),
+                        ))
                     })?;
                     (ArgId::Name(k.clone()), k)
                 }
@@ -1085,13 +1082,10 @@ fn convert_arg(ty: FType, val: MsgValue<'_>, key: &[u16]) -> Result<Fmt> {
     let string_arg = |val: MsgValue<'_>| -> Result<Fmt> {
         let s = val.to_php_string()?;
         let us = ustr::to_u16(&s).map_err(|c| {
-            Error::intl(
+            Error::Intl(IntlError::from_bytes(
                 c,
-                format!(
-                    "Invalid UTF-8 data in string argument: '{}'",
-                    String::from_utf8_lossy(&s)
-                ),
-            )
+                [&b"Invalid UTF-8 data in string argument: '"[..], &s, b"'"].concat(),
+            ))
         })?;
         Ok(Fmt::Str(us))
     };

@@ -2,7 +2,7 @@
 
 use crate::calendar::{IntlCalendar, PhpDateTime};
 use crate::common;
-use crate::error::{Error, Result, StatusExt, UErrorCode};
+use crate::error::{Error, IntlError, Result, StatusExt, UErrorCode};
 use crate::sys::ucal::{caltype, Calendar};
 use crate::sys::udat::DateFormat;
 use crate::timezone::{self, TimeZone, TimeZoneArg};
@@ -121,13 +121,15 @@ pub fn zval_to_millis(arg: DateArg<'_>) -> Result<f64> {
         DateArg::Str(s) => match common::numeric_string(s) {
             Some(common::Numeric::Long(l)) => Ok(1000.0 * l as f64),
             Some(common::Numeric::Double(d)) => Ok(d * 1000.0),
-            None => Err(Error::intl(
+            None => Err(Error::Intl(IntlError::from_bytes(
                 UErrorCode::ILLEGAL_ARGUMENT_ERROR,
-                format!(
-                    "string '{}' is not numeric, which would be required for it to be a valid date",
-                    String::from_utf8_lossy(s)
-                ),
-            )),
+                [
+                    &b"string '"[..],
+                    s,
+                    b"' is not numeric, which would be required for it to be a valid date",
+                ]
+                .concat(),
+            ))),
         },
         DateArg::DateTime(dt) => Ok(dt.millis()),
         DateArg::Calendar(c) => c.get_time().map_err(|e| {

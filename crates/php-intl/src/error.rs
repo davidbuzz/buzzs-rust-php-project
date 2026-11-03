@@ -155,6 +155,9 @@ pub struct IntlError {
     /// `IntlException` with the prefixed message and never warns
     /// (`IntlNumberRangeFormatter`).
     pub always_throw: bool,
+    /// The exact message bytes when they are not valid UTF-8 (user data
+    /// quoted in the message); `message` then holds a lossy copy.
+    pub raw_message: Option<Vec<u8>>,
 }
 
 impl IntlError {
@@ -165,6 +168,7 @@ impl IntlError {
             message: Some(message.into()),
             scope: Scope::Both,
             always_throw: false,
+            raw_message: None,
         }
     }
 
@@ -175,6 +179,7 @@ impl IntlError {
             message: None,
             scope: Scope::Both,
             always_throw: false,
+            raw_message: None,
         }
     }
 
@@ -183,6 +188,27 @@ impl IntlError {
     pub fn with_scope(mut self, scope: Scope) -> Self {
         self.scope = scope;
         self
+    }
+
+    /// An error whose message is built from raw bytes (see
+    /// [`IntlError::raw_message`]).
+    pub fn from_bytes(code: UErrorCode, message: Vec<u8>) -> Self {
+        match String::from_utf8(message) {
+            Ok(m) => Self::new(code, m),
+            Err(e) => {
+                let raw = e.into_bytes();
+                let mut out = Self::new(code, String::from_utf8_lossy(&raw).into_owned());
+                out.raw_message = Some(raw);
+                out
+            }
+        }
+    }
+
+    /// The message as bytes (exact, even when not valid UTF-8).
+    pub fn message_bytes(&self) -> Option<&[u8]> {
+        self.raw_message
+            .as_deref()
+            .or_else(|| self.message.as_deref().map(str::as_bytes))
     }
 
     /// Marks the error as always throwing (see [`IntlError::always_throw`]).
@@ -279,6 +305,14 @@ impl Error {
     pub fn intl_message(&self) -> Option<&str> {
         match self {
             Self::Intl(e) => e.message.as_deref(),
+            _ => None,
+        }
+    }
+
+    /// The intl message as exact bytes (see [`IntlError::raw_message`]).
+    pub fn intl_message_bytes(&self) -> Option<&[u8]> {
+        match self {
+            Self::Intl(e) => e.message_bytes(),
             _ => None,
         }
     }
