@@ -137,6 +137,23 @@ def gen(rng):
             reqs.append([op, number(rng)])
     for _ in range(200):
         reqs.append(["nnew", operand(rng)])
+
+    # A few heavy cases: thousands of digits (multi-limb / Karatsuba paths).
+    def d(n):
+        return "".join(rng.choice("0123456789") for _ in range(n)).lstrip("0") or "1"
+
+    reqs.append(["sqrt", "2", "3000"])
+    reqs.append(["sqrt", d(400) + "." + d(150), "600"])
+    for _ in range(6):
+        reqs.append(["div", d(rng.randint(100, 2000)) + "." + d(rng.randint(0, 300)),
+                     d(rng.randint(50, 900)) + "." + d(rng.randint(0, 200)), str(rng.randint(0, 400))])
+        reqs.append(["mul", d(rng.randint(100, 1500)), "-" + d(rng.randint(100, 1500)) + "." + d(100),
+                     str(rng.randint(0, 200))])
+        reqs.append(["mod", d(rng.randint(100, 1000)) + "." + d(40), d(rng.randint(30, 300)) + "." + d(20),
+                     str(rng.randint(0, 60))])
+        reqs.append(["powmod", d(rng.randint(10, 120)), d(rng.randint(10, 80)), d(rng.randint(10, 120)), "0"])
+        reqs.append(["pow", d(rng.randint(1, 20)) + "." + d(rng.randint(0, 8)), str(rng.randint(-40, 120)),
+                     str(rng.randint(0, 200))])
     return reqs
 
 

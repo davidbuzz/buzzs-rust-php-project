@@ -138,7 +138,9 @@ fn libbcmath_oracle() {
             ));
         }
     }
-    assert!(total > 10_000, "fixture too small: {total}");
+    if std::env::var_os("BCMATH_ORACLE_FILE").is_none() {
+        assert!(total > 10_000, "fixture too small: {total}");
+    }
     assert!(
         failures.is_empty(),
         "{} of {total} oracle cases failed:\n{}",
