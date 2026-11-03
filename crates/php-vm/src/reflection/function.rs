@@ -263,15 +263,18 @@ macro_rules! rf_bool {
 rf_bool!(rf_is_variadic, |f| f.func.is_variadic());
 rf_bool!(rf_returns_ref, |f| f.func.flags() & flags::RETURN_REF != 0);
 rf_bool!(rf_is_generator, |f| f.func.flags() & flags::GENERATOR != 0);
-rf_bool!(rf_is_closure, |f| f.method.is_none() && f.func.flags() & flags::CLOSURE != 0);
-rf_bool!(rf_is_internal, |f| !f.func.is_user());
-rf_bool!(rf_is_user, |f| f.func.is_user());
+rf_bool!(rf_is_closure, |f| f.method.is_none() && (f.func.flags() & flags::CLOSURE != 0 || f.closure.is_some()));
+rf_bool!(rf_is_internal, |f| !f.is_user());
+rf_bool!(rf_is_user, |f| f.is_user());
 rf_bool!(rf_is_deprecated, |f| f.func.flags() & flags::DEPRECATED != 0);
 rf_bool!(rf_is_static, |f| f.flags() & flags::STATIC != 0);
 rf_bool!(rf_is_anonymous, |f| is_real_closure(&f));
 
 fn rf_get_doc_comment(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let f = this_fn(vm, a)?;
+    if f.is_trampoline() {
+        return Ok(Value::Bool(false));
+    }
     Ok(match &f.func {
         Func::User(u) => u.doc_comment.clone().map_or(Value::Bool(false), Value::Str),
         Func::Builtin(_) => Value::Bool(false),
@@ -280,6 +283,9 @@ fn rf_get_doc_comment(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 fn rf_get_start_line(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let f = this_fn(vm, a)?;
+    if f.is_trampoline() {
+        return Ok(Value::Bool(false));
+    }
     Ok(match &f.func {
         Func::User(u) => Value::Int(i64::from(u.line_start)),
         Func::Builtin(_) => Value::Bool(false),
@@ -288,6 +294,9 @@ fn rf_get_start_line(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 fn rf_get_end_line(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let f = this_fn(vm, a)?;
+    if f.is_trampoline() {
+        return Ok(Value::Bool(false));
+    }
     Ok(match &f.func {
         Func::User(u) => Value::Int(i64::from(u.line_end)),
         Func::Builtin(_) => Value::Bool(false),
@@ -296,6 +305,9 @@ fn rf_get_end_line(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 fn rf_get_file_name(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let f = this_fn(vm, a)?;
+    if f.is_trampoline() {
+        return Ok(Value::Bool(false));
+    }
     Ok(match &f.func {
         Func::User(u) => Value::Str(u.code.filename.clone()),
         Func::Builtin(_) => Value::Bool(false),

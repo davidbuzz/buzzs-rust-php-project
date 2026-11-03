@@ -12,6 +12,7 @@ use crate::types::mask;
 use crate::vm::{Vm, VmResult};
 use php_parser::ast::{ClassRef, ExprKind, MagicConst, MemberName, NameKind};
 use php_runtime::{ArrayKey, Value, ZStr};
+use std::rc::Rc;
 
 fn this_param(vm: &mut Vm, a: &Args) -> VmResult<(FnRef, usize, ParamInfo)> {
     match this_refl(vm, a)? {
@@ -72,7 +73,16 @@ fn rp_construct(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
                 None => {
                     if let (Value::Object(ob), true) = (&cr, c.lc_name.as_bytes() == b"closure" && mn.eq_ignore_ascii_case(b"__invoke")) {
                         match vm.closure_data(ob) {
-                            Some(d) => FnRef { func: d.func, method: None, class: Some(c.clone()), closure: None },
+                            Some(d) => {
+                                let m = Rc::new(crate::func::Method {
+                                    name: ZStr::from("__invoke"),
+                                    func: d.func.clone(),
+                                    flags: crate::func::flags::PUBLIC,
+                                    scope: Rc::downgrade(&c),
+                                    proto_scope: Rc::downgrade(&c),
+                                });
+                                FnRef { func: d.func, method: Some(m), class: Some(c.clone()), closure: None }
+                            }
                             None => return Err(rexc(vm, &format!("Method {}::{}() does not exist", c.name, mn.to_string_lossy()))),
                         }
                     } else {
@@ -152,7 +162,7 @@ fn rp_is_optional(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 /// Whether the parameter has a default value (`RECV_INIT` / arginfo default).
 fn has_default(p: &ParamInfo, f: &FnRef, idx: usize) -> bool {
-    if p.variadic || (f.func.is_user() && idx < f.func.required() as usize) {
+    if p.variadic || f.is_trampoline() || (f.func.is_user() && idx < f.func.required() as usize) {
         return false;
     }
     match &f.func {

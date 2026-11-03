@@ -131,7 +131,7 @@ struct ParamCollector {
 
 impl ParamCollector {
     fn check(&mut self, start: u32, end: u32, params: &[ast::Param]) {
-        if self.found.is_none() && start == self.line && (end == self.end || self.end == 0) {
+        if self.found.is_none() && start == self.line && (end == self.end || self.end == 0 || end == 0) {
             self.found = Some(params.to_vec());
         }
     }
@@ -257,4 +257,58 @@ pub(crate) fn attribute_args(file: &[u8], line: u32, name: &[u8]) -> Option<Vec<
         rest = &rest[pos + g.len()..];
     }
     None
+}
+
+/// The attributes of enum case `name` (name, arguments) declared in the class
+/// at `file:line`, with the namespace of the declaration.
+pub(crate) fn case_attributes(file: &[u8], line: u32, name: &[u8]) -> Option<(ast::Attributes, Vec<u8>)> {
+    let (c, ns) = class_ast(file, line)?;
+    c.members.iter().find_map(|m| match &m.kind {
+        ClassMemberKind::EnumCase(ec) if ec.name.name == name => Some((ec.attributes.clone(), ns.clone())),
+        _ => None,
+    })
+}
+
+/// Evaluates a literal constant expression (no constants or calls).
+pub(crate) fn literal_value(e: &Expr) -> Option<php_runtime::Value> {
+    use php_runtime::{Value, ZArray, ZStr};
+    Some(match &e.kind {
+        ast::ExprKind::Int(i) => Value::Int(*i),
+        ast::ExprKind::Float(f) => Value::Float(*f),
+        ast::ExprKind::String(s) => Value::Str(ZStr::from(s.as_slice())),
+        ast::ExprKind::Const(n) => match n.name.to_ascii_lowercase().as_slice() {
+            b"true" => Value::Bool(true),
+            b"false" => Value::Bool(false),
+            b"null" => Value::Null,
+            _ => return None,
+        },
+        ast::ExprKind::Array { items, .. } => {
+            let mut t = php_runtime::HashTable::new();
+            for it in items {
+                let it = it.as_ref()?;
+                let v = literal_value(&it.value)?;
+                match &it.key {
+                    Some(k) => {
+                        let kv = literal_value(k)?;
+                        let key = match kv {
+                            Value::Int(i) => php_runtime::ArrayKey::Int(i),
+                            Value::Str(s) => php_runtime::ArrayKey::from_zstr(&s),
+                            _ => return None,
+                        };
+                        t.insert(key, v);
+                    }
+                    None => {
+                        let _ = t.push(v);
+                    }
+                }
+            }
+            Value::Array(ZArray::from_table(t))
+        }
+        ast::ExprKind::Unary { op: ast::UnaryOp::Minus, expr } => match literal_value(expr)? {
+            Value::Int(i) => Value::Int(-i),
+            Value::Float(f) => Value::Float(-f),
+            _ => return None,
+        },
+        _ => return None,
+    })
 }

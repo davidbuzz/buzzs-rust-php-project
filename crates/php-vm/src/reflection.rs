@@ -104,6 +104,20 @@ impl FnRef {
         FnRef { func: m.func.clone(), method: Some(m.clone()), class: Some(class.clone()), closure: None }
     }
 
+    /// `Closure::__invoke` of a closure object: an internal trampoline
+    /// with the closure's (userland) arginfo (`ZEND_ACC_USER_ARG_INFO`).
+    pub fn is_trampoline(&self) -> bool {
+        self.func.is_user()
+            && self.method.as_ref().is_some_and(|m| {
+                m.name.as_bytes() == b"__invoke" && m.scope.upgrade().is_some_and(|c| c.lc_name.as_bytes() == b"closure")
+            })
+    }
+
+    /// Whether this is user code (`ZEND_USER_FUNCTION`).
+    pub fn is_user(&self) -> bool {
+        self.func.is_user() && !self.is_trampoline()
+    }
+
     /// The function name (`common.function_name`).
     pub fn name(&self) -> ZStr {
         match &self.method {

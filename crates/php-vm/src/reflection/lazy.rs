@@ -59,6 +59,10 @@ pub(crate) fn object_for(vm: &mut Vm, o: &Obj, name: Option<&ZStr>) -> VmResult<
         return Ok(o.clone());
     }
     if let Some(n) = name {
+        let c = object::class_of(o).clone();
+        if c.prop_map.get(n).is_some_and(|p| p.hooks.is_some()) {
+            return Ok(o.clone());
+        }
         if let Some(slot) = slot_of(o, n) {
             if !slot_is_lazy(o, slot) {
                 return Ok(o.clone());

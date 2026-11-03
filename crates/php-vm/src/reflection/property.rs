@@ -468,17 +468,16 @@ fn rp_has_type(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 /// The default value, `None` when the property has none (`UNDEF`).
 fn default_value(vm: &mut Vm, p: &PropRef) -> VmResult<Option<Value>> {
     let Some(m) = &p.meta else { return Ok(None) };
-    if m.flags & flags::VIRTUAL != 0 {
+    if m.flags & flags::VIRTUAL != 0 || (m.hooks.is_some() && is_promoted(vm, m)) {
         return Ok(None);
     }
     let dc = decl_class(vm, p);
     if m.is_static {
-        if m.default.is_none() && m.ty.is_some() {
-            return Ok(None);
-        }
-        let cell = with_scope(vm, Some(dc.clone()), |vm| vm.static_prop_cell(&dc, &m.name))?;
-        let v = cell.borrow().deref();
-        return Ok(Some(v));
+        return match &m.default {
+            Some(e) => Ok(Some(vm.eval_const_expr(e, Some(&dc))?)),
+            None if m.ty.is_none() => Ok(Some(Value::Null)),
+            None => Ok(None),
+        };
     }
     let Some(e) = &m.default else { return Ok(None) };
     Ok(Some(vm.eval_const_expr(e, Some(&dc))?))
@@ -487,7 +486,7 @@ fn default_value(vm: &mut Vm, p: &PropRef) -> VmResult<Option<Value>> {
 fn rp_has_default(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let p = this_prop(vm, a)?;
     let Some(m) = &p.meta else { return Ok(Value::Bool(false)) };
-    if m.flags & flags::VIRTUAL != 0 {
+    if m.flags & flags::VIRTUAL != 0 || (m.hooks.is_some() && is_promoted(vm, m)) {
         return Ok(Value::Bool(false));
     }
     Ok(Value::Bool(m.default.is_some() || (m.is_static && m.ty.is_none())))

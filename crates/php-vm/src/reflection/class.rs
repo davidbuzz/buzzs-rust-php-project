@@ -331,14 +331,13 @@ pub(crate) fn closure_invoke_method(c: &Rc<Class>) -> Rc<Method> {
     let s = crate::builtins::sig::parse_sig("__invoke(mixed ...$args): mixed");
     let b = crate::func::Builtin {
         name: ZStr::from("__invoke"),
-        params: Vec::new(),
-        defaults: Vec::new(),
+        params: s.params,
+        defaults: s.defaults,
         required: 0,
         return_type: None,
-        flags: flags::PUBLIC,
+        flags: flags::PUBLIC | flags::VARIADIC,
         handler: invoke_closure,
     };
-    let _ = s;
     Rc::new(Method {
         name: ZStr::from("__invoke"),
         func: Func::Builtin(Rc::new(b)),
@@ -351,12 +350,18 @@ pub(crate) fn closure_invoke_method(c: &Rc<Class>) -> Rc<Method> {
 /// The `__invoke` method of a closure object as a `FnRef`.
 fn closure_invoke(vm: &Vm, c: &Rc<Class>, o: &Obj) -> Option<FnRef> {
     let d = vm.closure_data(o)?;
-    let m = c.find_method(b"__invoke").cloned();
-    Some(FnRef { func: d.func, method: m, class: Some(c.clone()), closure: None })
+    let m = Rc::new(Method {
+        name: ZStr::from("__invoke"),
+        func: d.func.clone(),
+        flags: flags::PUBLIC,
+        scope: Rc::downgrade(c),
+        proto_scope: Rc::downgrade(c),
+    });
+    Some(FnRef { func: d.func, method: Some(m), class: Some(c.clone()), closure: None })
 }
 
 fn rc_get_methods(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let (c, _) = this_class_obj(vm, a)?;
+    let (c, obj) = this_class_obj(vm, a)?;
     let filter = filter_arg(a, 0x7f);
     let mut out = Vec::new();
     for m in order::methods(&c) {
@@ -368,8 +373,16 @@ fn rc_get_methods(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         }
     }
     if c.lc_name.as_bytes() == b"closure" && c.find_method(b"__invoke").is_none() && filter & 1 != 0 {
-        let m = closure_invoke_method(&c);
-        out.push(method_value(vm, &m, &c)?);
+        match obj.as_ref().and_then(|o| closure_invoke(vm, &c, o)) {
+            Some(f) => {
+                let name = ZStr::from("__invoke");
+                out.push(new_refl(vm, "ReflectionMethod", Refl::Function(f), Some(&name), Some(&c.name))?);
+            }
+            None => {
+                let m = closure_invoke_method(&c);
+                out.push(method_value(vm, &m, &c)?);
+            }
+        }
     }
     Ok(Value::Array(ZArray::from_values(out)))
 }
@@ -712,7 +725,17 @@ fn rc_new_instance_without_ctor(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 fn rc_get_attributes(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let c = this_class(vm, a)?;
-    let attrs = c.attributes.clone();
+    let mut attrs = c.attributes.clone();
+    if c.flags & cflags::INTERNAL != 0 && attrs.is_empty() {
+        // Internal attribute classes carry `#[Attribute(flags)]`.
+        if let Some(fl) = super::attribute::attribute_flags(vm, &c)? {
+            attrs.push(crate::class::AttributeInfo {
+                name: ZStr::from("Attribute"),
+                args: vec![(None, crate::class::ConstExpr::Value(Value::Int(fl)))],
+                line: 0,
+            });
+        }
+    }
     super::attribute::attributes_array_in(vm, &attrs, super::target::CLASS, Some(&c), c.filename.clone(), a)
 }
 

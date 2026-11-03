@@ -127,9 +127,58 @@ fn rcc_is_deprecated(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 fn rcc_is_enum_case(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     Ok(Value::Bool(this_const(vm, a)?.1.is_case))
 }
+/// Attributes of enum cases (not kept by the compiler): literal arguments
+/// re-read from the source.
+fn case_attributes(c: &Class, cc: &ClassConst) -> Vec<crate::class::AttributeInfo> {
+    let Some(file) = c.filename.clone() else { return Vec::new() };
+    let Some((groups, ns)) = [c.line_start, c.line_end]
+        .iter()
+        .find_map(|&l| super::source::case_attributes(file.as_bytes(), l, cc.name.as_bytes()))
+    else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for g in &groups {
+        for at in &g.attributes {
+            let n = &at.name;
+            let full = if n.kind == php_parser::ast::NameKind::FullyQualified || ns.is_empty() {
+                n.name.clone()
+            } else {
+                let mut v = ns.clone();
+                v.push(b'\\');
+                v.extend_from_slice(&n.name);
+                v
+            };
+            let mut args = Vec::new();
+            let mut ok = true;
+            for arg in at.args.as_ref().map(|l| l.args.as_slice()).unwrap_or_default() {
+                let (name, e) = match &arg.kind {
+                    php_parser::ast::ArgKind::Positional(e) => (None, e),
+                    php_parser::ast::ArgKind::Named { name, value } => (Some(ZStr::from(name.name.as_slice())), value),
+                    _ => {
+                        ok = false;
+                        break;
+                    }
+                };
+                match super::source::literal_value(e) {
+                    Some(v) => args.push((name, crate::class::ConstExpr::Value(v))),
+                    None => {
+                        ok = false;
+                        break;
+                    }
+                }
+            }
+            if ok {
+                out.push(crate::class::AttributeInfo { name: ZStr::from(full), args, line: at.span.line });
+            }
+        }
+    }
+    out
+}
+
 fn rcc_get_attributes(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let (c, cc) = this_const(vm, a)?;
-    let attrs = cc.attributes.clone();
+    let attrs = if cc.is_case && cc.attributes.is_empty() { case_attributes(&c, &cc) } else { cc.attributes.clone() };
     super::attribute::attributes_array_in(vm, &attrs, super::target::CLASS_CONSTANT, Some(&c), c.filename.clone(), a)
 }
 fn rcc_get_doc_comment(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {

@@ -340,7 +340,11 @@ pub(crate) fn param_default_repr(vm: &Vm, f: &FnRef, p: &ParamInfo) -> Option<Ve
         Some(ConstExpr::Value(v)) => Some(format_default_value(vm, v)),
         Some(ConstExpr::Code(_)) => {
             let text = p.default_text.clone().unwrap_or_default();
-            let scope = f.scope(vm).filter(|c| !c.is_trait() && f.closure.is_none());
+            let declared_in_trait = match &f.func {
+                Func::User(u) => u.class_name.as_ref().and_then(|n| vm.find_class(n.as_bytes())).is_some_and(|c| c.is_trait()),
+                Func::Builtin(_) => false,
+            };
+            let scope = f.scope(vm).filter(|c| !c.is_trait() && f.closure.is_none() && !declared_in_trait);
             let sn = scope.as_ref().map(|c| c.name.as_bytes().to_vec());
             Some(export_const_expr_in(&text, &fn_namespace(vm, f), sn.as_deref()))
         }
@@ -371,6 +375,9 @@ pub(crate) fn parameter_string(vm: &Vm, f: &FnRef, idx: usize, required: bool) -
     b.c(b'$').z(&p.name);
     if !required && !p.variadic {
         match &f.func {
+            Func::User(_) if f.is_trampoline() => {
+                b.s(" = <default>");
+            }
             Func::Builtin(_) => {
                 b.s(" = ");
                 match p.default_text.as_deref() {
@@ -399,7 +406,7 @@ pub(crate) fn function_string(vm: &mut Vm, f: &FnRef, scope: Option<&Rc<Class>>,
     let mut b = Buf::default();
     let fl = f.flags();
     let fscope = f.scope(vm);
-    if let Func::User(u) = &f.func {
+    if let (Func::User(u), true) = (&f.func, f.is_user()) {
         if let Some(d) = &u.doc_comment {
             b.s(indent).z(d).c(b'\n');
         }
@@ -413,7 +420,7 @@ pub(crate) fn function_string(vm: &mut Vm, f: &FnRef, scope: Option<&Rc<Class>>,
     } else {
         "Function [ "
     });
-    b.s(if f.func.is_user() { "<user" } else { "<internal" });
+    b.s(if f.is_user() { "<user" } else { "<internal" });
     if fl & flags::DEPRECATED != 0 {
         b.s(", deprecated");
     }
@@ -467,7 +474,7 @@ pub(crate) fn function_string(vm: &mut Vm, f: &FnRef, scope: Option<&Rc<Class>>,
         b.c(b'&');
     }
     b.z(&f.name()).s(" ] {\n");
-    if let Func::User(u) = &f.func {
+    if let (Func::User(u), true) = (&f.func, f.is_user()) {
         b.s(indent).s("  @@ ").z(&u.code.filename).s(&format!(" {} - {}\n", u.line_start, u.line_end));
     }
     let pind = format!("{indent}  ");
@@ -484,7 +491,7 @@ pub(crate) fn function_string(vm: &mut Vm, f: &FnRef, scope: Option<&Rc<Class>>,
     }
     let params = f.func.params();
     let required = f.func.required() as usize;
-    if !params.is_empty() || !f.func.is_user() || f.func.return_type().is_some() {
+    if !params.is_empty() || !f.is_user() || f.func.return_type().is_some() {
         b.c(b'\n');
         b.s(&pind).s(&format!("- Parameters [{}] {{\n", params.len()));
         for i in 0..params.len() {
@@ -513,9 +520,8 @@ fn prop_default_repr(vm: &mut Vm, p: &PropMeta, cls: &Rc<Class>) -> Option<Vec<u
         let decl = vm.find_class(p.class.as_bytes()).unwrap_or_else(|| cls.clone());
         let cell = decl.find_static(p.name.as_bytes()).map(|s| (s.cell.clone(), s.initialized.get(), s.default.clone()));
         return match cell {
-            Some((c, true, _)) => Some(format_default_value(vm, &c.borrow().deref())),
-            Some((_, false, Some(e))) => Some(const_expr_repr(vm, &e, &p.class, &p.name, false)),
-            Some((_, false, None)) => {
+            Some((_, _, Some(e))) => Some(const_expr_repr(vm, &e, &p.class, &p.name, false)),
+            Some((_, _, None)) => {
                 if p.ty.is_some() {
                     None
                 } else {
