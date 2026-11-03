@@ -143,15 +143,15 @@ fn pattern_to_ascii(re: &[u8]) -> String {
     out
 }
 
-/// Largest JIT stack for whole-output matches. PCRE2 reserves it as virtual memory per regex,
-/// so it is only used for the one-off full match, never for cached line patterns.
-const JIT_STACK_SIZE: usize = 64 * 1024 * 1024;
-
+/// Compile a pattern. No custom JIT stack is configured: a dedicated stack is an mmap
+/// reservation per match-data object, and with the pcre2 crate's per-thread pools those
+/// reservations were never returned when matching from worker threads (tens of GB of virtual
+/// memory after a thousand tests, which made `fork` fail). If the default JIT stack is too small
+/// for a match, [`regex_matches`] falls back to the interpreter.
 fn build(pattern: &str, jit: bool) -> Option<Regex> {
     RegexBuilder::new()
         .dotall(true)
         .jit_if_available(jit)
-        .max_jit_stack_size(jit.then_some(JIT_STACK_SIZE))
         .build(pattern)
         .ok()
 }
