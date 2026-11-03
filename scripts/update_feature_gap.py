@@ -26,8 +26,6 @@ from pathlib import Path
 
 # Row name in FEATURE_GAP.md -> list of path prefixes (directories end with "/").
 MAPPING: dict[str, list[str]] = {
-    # Infrastructure: the runner validates itself against tests/run-test.
-    ".phpt test runner": ["tests/run-test/"],
     # Language front end / compiler.
     "Parser and AST": ["Zend/tests/grammar/", "Zend/tests/ast/"],
     "Compile-time diagnostics": ["Zend/tests/errmsg/"],
