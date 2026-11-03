@@ -664,7 +664,77 @@ impl NativeIterator for PeriodIter {
     }
 }
 
+/// `zend_user_it_get_new_iterator()`: drives the `Iterator` returned by a
+/// user override of `getIterator()`.
+struct UserIter {
+    it: Obj,
+}
+
+impl NativeIterator for UserIter {
+    fn rewind(&mut self, vm: &mut Vm) -> VmResult<()> {
+        vm.call_method_by_name(&self.it, "rewind", Vec::new())
+            .map(|_| ())
+    }
+
+    fn valid(&mut self, vm: &mut Vm) -> VmResult<bool> {
+        let v = vm.call_method_by_name(&self.it, "valid", Vec::new())?;
+        vm.value_to_bool(&v)
+    }
+
+    fn current(&mut self, vm: &mut Vm) -> VmResult<Value> {
+        vm.call_method_by_name(&self.it, "current", Vec::new())
+    }
+
+    fn key(&mut self, vm: &mut Vm) -> VmResult<Value> {
+        vm.call_method_by_name(&self.it, "key", Vec::new())
+    }
+
+    fn next(&mut self, vm: &mut Vm) -> VmResult<()> {
+        vm.call_method_by_name(&self.it, "next", Vec::new())
+            .map(|_| ())
+    }
+}
+
+/// Whether a subclass overrides `getIterator()`.
+fn user_get_iterator(o: &Obj) -> bool {
+    object::class_of(o)
+        .find_method(b"getiterator")
+        .and_then(|m| m.scope.upgrade())
+        .is_some_and(|c| c.lc_name.as_bytes() != b"dateperiod")
+}
+
+/// Resolves the `Iterator` a user `getIterator()` returns (following nested
+/// `IteratorAggregate`s).
+fn user_iterator(vm: &mut Vm, o: &Obj) -> VmResult<Obj> {
+    let mut cur = o.clone();
+    loop {
+        let r = vm.call_method_by_name(&cur, "getIterator", Vec::new())?;
+        let Value::Object(it) = r else {
+            let cls = object::display_name(&object::class_of(o).name).to_string_lossy();
+            return Err(vm.throw(
+                "Exception",
+                &format!("Objects returned by {cls}::getIterator() must be traversable or implement interface Iterator"),
+            ));
+        };
+        if object::class_of(&it).instance_of_name(b"iterator") {
+            return Ok(it);
+        }
+        if !object::class_of(&it).instance_of_name(b"iteratoraggregate") {
+            let cls = object::display_name(&object::class_of(o).name).to_string_lossy();
+            return Err(vm.throw(
+                "Exception",
+                &format!("Objects returned by {cls}::getIterator() must be traversable or implement interface Iterator"),
+            ));
+        }
+        cur = it;
+    }
+}
+
 fn get_iterator(vm: &mut Vm, o: &Obj, by_ref: bool) -> VmResult<Box<dyn NativeIterator>> {
+    if user_get_iterator(o) {
+        let it = user_iterator(vm, o)?;
+        return Ok(Box::new(UserIter { it }));
+    }
     if by_ref {
         return Err(vm.throw("Error", api::messages::PERIOD_BY_REFERENCE));
     }
