@@ -21,16 +21,11 @@ fn regenerate_fixtures() {
             .expect("stem")
             .to_string_lossy()
             .into_owned();
-        let out = Command::new("php")
-            .arg("-n")
-            .arg("-d")
-            .arg("extension=intl")
+        let out = Command::new("/usr/bin/php")
+            .args(["-d", "memory_limit=1G"])
             .arg(&script)
-            .output();
-        let out = match out {
-            Ok(o) if o.status.success() => o,
-            _ => Command::new("php").arg(&script).output().expect("run php"),
-        };
+            .output()
+            .expect("run php");
         assert!(
             out.status.success(),
             "{name}: {}",
