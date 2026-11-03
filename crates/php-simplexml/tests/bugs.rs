@@ -1,5 +1,16 @@
 //! Ports of `ext/simplexml/tests/bug*.phpt`.
 
+#![allow(
+    clippy::many_single_char_names,
+    clippy::too_many_lines,
+    clippy::needless_pass_by_value,
+    clippy::doc_markdown,
+    clippy::format_push_string,
+    clippy::items_after_statements,
+    clippy::redundant_closure,
+    clippy::type_complexity
+)]
+
 mod common;
 
 use common::{fixture, s, T};
@@ -13,7 +24,13 @@ fn bug12170_xpath_comments() {
     let v = t.xpath(&sxe, "//bar");
     t.var_dump(&v);
     let list = t.xpath(&sxe, "//comment()");
-    for c in list.as_array().unwrap().values().cloned().collect::<Vec<_>>() {
+    for c in list
+        .as_array()
+        .unwrap()
+        .values()
+        .cloned()
+        .collect::<Vec<_>>()
+    {
         let n = t.get_name(&c);
         t.var_dump(&s(&n));
         let x = t.as_xml(&c);
@@ -169,9 +186,17 @@ fn bug38347_unknown_element() {
 #[test]
 fn bug38354_xpath_as_xml() {
     let mut t = T::new("bug38354");
-    let xml = t.load_string("<code>\n    <a href=\"javascript:alert('1');\"><strong>Item Two</strong></a>\n</code>");
+    let xml = t.load_string(
+        "<code>\n    <a href=\"javascript:alert('1');\"><strong>Item Two</strong></a>\n</code>",
+    );
     let list = t.xpath(&xml, "//*");
-    for e in list.as_array().unwrap().values().cloned().collect::<Vec<_>>() {
+    for e in list
+        .as_array()
+        .unwrap()
+        .values()
+        .cloned()
+        .collect::<Vec<_>>()
+    {
         let x = t.as_xml(&e);
         t.var_dump(&x);
     }
@@ -288,16 +313,26 @@ fn bug41861_namespaces_of_children() {
     let xml = t.load_string("<root>\n    <first_node_no_ns />\n    <ns1:node1 xmlns:ns1=\"#ns1\" />\n    <ns2:node2 xmlns:ns2=\"#ns2\" />\n    <ns3:node3 xmlns:ns3=\"#ns3\" />\n    <last_node_no_ns />\n</root>");
     let implode = |a: &php_runtime::ZArray| {
         a.values()
-            .map(|v| v.as_str().map(|s| s.to_string_lossy()).unwrap_or_default())
+            .map(|v| {
+                v.as_str()
+                    .map(php_runtime::ZStr::to_string_lossy)
+                    .unwrap_or_default()
+            })
             .collect::<Vec<_>>()
             .join(", ")
     };
     let name = t.get_name(&xml);
     let sx = t.sxe(&xml);
     let ns = php_simplexml::Sxe::get_namespaces(&sx, true).unwrap();
-    t.echo(format!("root(recursive): '{name}' -- namespaces: {}\n", implode(&ns)));
+    t.echo(format!(
+        "root(recursive): '{name}' -- namespaces: {}\n",
+        implode(&ns)
+    ));
     let ns = php_simplexml::Sxe::get_namespaces(&sx, false).unwrap();
-    t.echo(format!("root(non-recursive): '{name}' -- namespaces: {}\n", implode(&ns)));
+    t.echo(format!(
+        "root(non-recursive): '{name}' -- namespaces: {}\n",
+        implode(&ns)
+    ));
     for ns in [None, Some("#ns1"), Some("#ns2"), Some("#ns3")] {
         let c = t.children(&xml, ns, false);
         t.foreach(&c, |t, _, child| {
@@ -329,7 +364,9 @@ fn bug41867_get_name() {
 #[test]
 fn bug41947_empty_namespace() {
     let mut t = T::new("bug41947");
-    let xml = t.load_string("<?xml version=\"1.0\" encoding=\"utf-8\"?><root xmlns:myns=\"http://myns\" />");
+    let xml = t.load_string(
+        "<?xml version=\"1.0\" encoding=\"utf-8\"?><root xmlns:myns=\"http://myns\" />",
+    );
     let c = t.add_child(&xml, "child", None, Some("http://myns"));
     let _g = t.add_child(&c, "grandchild", Some("hello"), Some(""));
     let g = t.xpath(&xml, "//grandchild");
@@ -359,7 +396,9 @@ fn leaves(t: &mut T, it: &Value, out: &mut Vec<Value>) {
 fn bug42259_recursive_iteration() {
     let mut t = T::new("bug42259");
     let xml = "<xml>\n  <fieldset1>\n    <field1/>\n    <field2/>\n  </fieldset1>\n  <fieldset2>\n    <options>\n      <option1/>\n      <option2/>\n      <option3/>\n    </options>\n    <field1/>\n    <field2/>\n  </fieldset2>\n</xml>";
-    let sxe = t.new_sxe_ex("SimpleXMLIterator", xml, 0, false, "", false).unwrap();
+    let sxe = t
+        .new_sxe_ex("SimpleXMLIterator", xml, 0, false, "", false)
+        .unwrap();
     let mut out = Vec::new();
     leaves(&mut t, &sxe, &mut out);
     for child in out {
@@ -440,7 +479,11 @@ fn bug45553_xpath_namespaced_attributes() {
     let at = t.attributes(&a, None, false);
     let o = t.str(&at);
     t.echo(o + "\n");
-    for q in ["/xml/a:data/@a:label", "/xml/a:data/@label", "/xml/data/@label"] {
+    for q in [
+        "/xml/a:data/@a:label",
+        "/xml/a:data/@label",
+        "/xml/data/@label",
+    ] {
         let a = first(&mut t, q);
         let o = t.str(&a);
         t.echo(o + "\n");
@@ -451,10 +494,18 @@ fn bug45553_xpath_namespaced_attributes() {
 #[test]
 fn bug46003_isset_nested() {
     let mut t = T::new("bug46003");
-    let x = t.load_string("<r>\n  <p>Test</p>\n  <o d='h'>\n    <xx rr='info' />\n    <yy rr='data' />\n  </o>\n</r>");
+    let x = t.load_string(
+        "<r>\n  <p>Test</p>\n  <o d='h'>\n    <xx rr='info' />\n    <yy rr='data' />\n  </o>\n</r>",
+    );
     let b = t.isset_prop(&x, "p");
     t.var_dump(&Value::Bool(b));
-    for (a, b) in [("p", "o"), ("o", "yy"), ("o", "zz"), ("o", "text"), ("o", "xx")] {
+    for (a, b) in [
+        ("p", "o"),
+        ("o", "yy"),
+        ("o", "zz"),
+        ("o", "text"),
+        ("o", "xx"),
+    ] {
         let first = t.prop_mode(&x, a, FetchMode::IsSet);
         let r = matches!(first, Value::Object(_)) && t.isset_prop(&first, b);
         t.var_dump(&Value::Bool(r));
@@ -466,7 +517,14 @@ fn bug46003_isset_nested() {
 fn bug46047_empty_children() {
     let mut t = T::new("bug46047");
     let xml = t
-        .new_sxe_ex("SimpleXMLElement", "<foo><bar><![CDATA[]]></bar><baz/></foo>", 16384, false, "", false)
+        .new_sxe_ex(
+            "SimpleXMLElement",
+            "<foo><bar><![CDATA[]]></bar><baz/></foo>",
+            16384,
+            false,
+            "",
+            false,
+        )
         .unwrap();
     t.print_r(&xml);
     let xml = t.new_sxe("<foo><bar></bar><baz/></foo>");
@@ -508,7 +566,13 @@ fn bug52751_processing_instructions() {
     t.var_dump(&v);
     drop(v);
     let list = t.xpath(&sxe, "//processing-instruction()");
-    for pi in list.as_array().unwrap().values().cloned().collect::<Vec<_>>() {
+    for pi in list
+        .as_array()
+        .unwrap()
+        .values()
+        .cloned()
+        .collect::<Vec<_>>()
+    {
         let n = t.get_name(&pi);
         t.var_dump(&s(&n));
     }
@@ -734,7 +798,10 @@ fn bug67572_empty() {
 fn bug69169_print_r() {
     let mut t = T::new("bug69169");
     let a = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<root a=\"b\">\n    <row b=\"y\">\n        <item s=\"t\" />\n    </row>\n    <row p=\"c\">\n        <item y=\"n\" />\n    </row>\n</root>";
-    let b: String = a.chars().filter(|c| !matches!(c, '\n' | '\r' | '\t')).collect();
+    let b: String = a
+        .chars()
+        .filter(|c| !matches!(c, '\n' | '\r' | '\t'))
+        .collect();
     let x = t.load_string(&b);
     t.print_r(&x);
     t.expect("bug69169.phpt");
@@ -769,7 +836,11 @@ fn bug72957_coalesce() {
     let mut t = T::new("bug72957");
     let xml = t.new_sxe("<root><elem>Text</elem></root>");
     let v = t.prop_mode(&xml, "elem2", FetchMode::IsSet);
-    let st = if v.is_null() { "backup string".to_string() } else { t.str(&v) };
+    let st = if v.is_null() {
+        "backup string".to_string()
+    } else {
+        t.str(&v)
+    };
     t.echo(format!("elem2 is: {st}\n"));
     let st = if t.isset_prop(&xml, "elem2") {
         let v = t.prop(&xml, "elem2");
@@ -822,7 +893,9 @@ fn bug72971_2_namespaced_write() {
 #[test]
 fn bug74950_invalid_options() {
     let mut t = T::new("bug74950");
-    let e = t.new_sxe_ex("SimpleXMLElement", "0", 9_000_000_000, false, "", false).unwrap_err();
+    let e = t
+        .new_sxe_ex("SimpleXMLElement", "0", 9_000_000_000, false, "", false)
+        .unwrap_err();
     assert_eq!(e.exception_class().as_deref(), Some("Exception"));
     assert_eq!(
         e.message(),

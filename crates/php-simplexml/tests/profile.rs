@@ -1,5 +1,16 @@
 //! Ports of `ext/simplexml/tests/profile*.phpt`.
 
+#![allow(
+    clippy::many_single_char_names,
+    clippy::too_many_lines,
+    clippy::needless_pass_by_value,
+    clippy::doc_markdown,
+    clippy::format_push_string,
+    clippy::items_after_statements,
+    clippy::redundant_closure,
+    clippy::type_complexity
+)]
+
 mod common;
 
 use common::{s, T};
@@ -26,7 +37,9 @@ fn profile01() {
 #[test]
 fn profile02() {
     let mut t = T::new("profile02");
-    let root = t.load_string("<?xml version=\"1.0\"?>\n<root>\n <child>Hello</child>\n <child>World</child>\n</root>\n");
+    let root = t.load_string(
+        "<?xml version=\"1.0\"?>\n<root>\n <child>Hello</child>\n <child>World</child>\n</root>\n",
+    );
     let c = t.prop(&root, "child");
     t.foreach(&c, |t, _, child| {
         let st = t.str(&child);
@@ -39,7 +52,8 @@ fn profile02() {
 #[test]
 fn profile03() {
     let mut t = T::new("profile03");
-    let root = t.load_string("<?xml version=\"1.0\"?>\n<root>\n <child attribute=\"Sample\" />\n</root>\n");
+    let root = t
+        .load_string("<?xml version=\"1.0\"?>\n<root>\n <child attribute=\"Sample\" />\n</root>\n");
     let c = t.prop(&root, "child");
     let a = t.dim(&c, s("attribute"));
     echo_value(&mut t, &a);
@@ -49,7 +63,11 @@ fn profile03() {
 
 #[test]
 fn profile04_05_09() {
-    for (name, ns) in [("profile04", Some("reserved-ns")), ("profile05", Some("reserved")), ("profile09", None)] {
+    for (name, ns) in [
+        ("profile04", Some("reserved-ns")),
+        ("profile05", Some("reserved")),
+        ("profile09", None),
+    ] {
         let mut t = T::new(name);
         let root = t.load_string(NS_CHILD);
         let c = match ns {
@@ -159,7 +177,12 @@ fn profile12() {
     let nsl = php_simplexml::Sxe::get_namespaces(&sx, false).unwrap();
     drop(sx);
     t.var_dump(&Value::Array(nsl.clone()));
-    let soap = nsl.get_str(b"soap").unwrap().as_str().unwrap().to_string_lossy();
+    let soap = nsl
+        .get_str(b"soap")
+        .unwrap()
+        .as_str()
+        .unwrap()
+        .to_string_lossy();
     drop(sxe);
     let sxe = t.load_string_ex(SOAP, None, 0, &soap, false);
     soap_tail(&mut t, &sxe);

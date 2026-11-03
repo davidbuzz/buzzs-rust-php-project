@@ -1,5 +1,16 @@
 //! Ports of the numbered `ext/simplexml/tests/0xx.phpt` tests.
 
+#![allow(
+    clippy::many_single_char_names,
+    clippy::too_many_lines,
+    clippy::needless_pass_by_value,
+    clippy::doc_markdown,
+    clippy::format_push_string,
+    clippy::items_after_statements,
+    clippy::redundant_closure,
+    clippy::type_complexity
+)]
+
 mod common;
 
 use common::{fixture, s, trim, T};
@@ -112,7 +123,11 @@ const XML_005: &str = r#"<?xml version='1.0'?>
 fn t005_text() {
     let mut t = T::new("005");
     let sxe = t.load_string(XML_005);
-    for path in [&["elem1", "elem2"][..], &["elem1", "elem2", "elem3"], &["elem1", "elem2", "elem3", "elem4"]] {
+    for path in [
+        &["elem1", "elem2"][..],
+        &["elem1", "elem2", "elem3"],
+        &["elem1", "elem2", "elem3", "elem4"],
+    ] {
         let v = t.path(&sxe, path);
         let st = trim(&t.str(&v));
         t.var_dump(&s(&st));
@@ -273,7 +288,8 @@ fn t009_children_foreach() {
 #[test]
 fn t009b_children_dump() {
     let mut t = T::new("009b");
-    let sxe = t.load_string(r#"<?xml version='1.0'?>
+    let sxe = t.load_string(
+        r#"<?xml version='1.0'?>
 <!DOCTYPE sxe SYSTEM "notfound.dtd">
 <sxe id="elem1">
  Plain text.
@@ -281,7 +297,8 @@ fn t009b_children_dump() {
    Here we have some text data.
   </elem2></elem1>
  <elem11 attr2='second'>Bla bla 2.</elem11>
-</sxe>"#);
+</sxe>"#,
+    );
     let c = t.children(&sxe, None, false);
     t.var_dump(&c);
     t.expect("009b.phpt");
@@ -339,7 +356,8 @@ fn t012_attribute_write() {
 #[test]
 fn t013_string_cast_mixed() {
     let mut t = T::new("013");
-    let sxe = t.load_string("<?xml version=\"1.0\" encoding=\"ISO-8859-1\" ?>\n<foo>bar<baz/>bar</foo>");
+    let sxe =
+        t.load_string("<?xml version=\"1.0\" encoding=\"ISO-8859-1\" ?>\n<foo>bar<baz/>bar</foo>");
     let st = t.str(&sxe);
     t.var_dump(&s(&st));
     t.expect("013.phpt");
@@ -383,7 +401,8 @@ fn t014_attribute_ops() {
 }
 
 const PEOPLE1: &str = "<people>\n   <person name=\"Joe\"></person>\n</people>";
-const PEOPLE2: &str = "<people>\n   <person name=\"Joe\"></person>\n   <person name=\"Boe\"></person>\n</people>";
+const PEOPLE2: &str =
+    "<people>\n   <person name=\"Joe\"></person>\n   <person name=\"Boe\"></person>\n</people>";
 
 fn add5(t: &mut T, v: Value) -> Value {
     php_runtime::ops::add(&v, &Value::Int(5), &mut t.h).unwrap()
@@ -535,7 +554,8 @@ fn t016a_concat_assign() {
 }
 
 const XML_017: &str = "<people>\n   <person name=\"Joe\">\n     <child name=\"Ann\" />\n     <child name=\"Marray\" />\n   </person>\n   <person name=\"Boe\">\n     <child name=\"Joe\" />\n     <child name=\"Ann\" />\n   </person>\n</people>";
-const XML1_017: &str = "<people>\n   <person name=\"Joe\">\n     <child name=\"Ann\" />\n   </person>\n</people>";
+const XML1_017: &str =
+    "<people>\n   <person name=\"Joe\">\n     <child name=\"Ann\" />\n   </person>\n</people>";
 
 fn print_xml(t: &mut T, xml: &Value) {
     let c = t.children(xml, None, false);
@@ -620,7 +640,8 @@ fn t018_traverse() {
     let x = t.load_string("<people>\n   <person name=\"Joe\">\n     Text1\n     <child name=\"Ann\" />\n     Text2\n     <child name=\"Marray\" />\n     Text3\n   </person>\n   <person name=\"Boe\">\n     <child name=\"Joe\" />\n     <child name=\"Ann\" />\n   </person>\n</people>");
     traverse_xml(&mut t, "", &x);
     t.echo("----------\n");
-    let x = t.load_string("<people>\n   <person name=\"Joe\">\n     <child />\n   </person>\n</people>");
+    let x = t
+        .load_string("<people>\n   <person name=\"Joe\">\n     <child />\n   </person>\n</people>");
     traverse_xml(&mut t, "", &x);
     t.echo("---Done---\n");
     t.expect("018.phpt");
@@ -701,7 +722,9 @@ fn t021_isset() {
 #[test]
 fn t022_empty_element() {
     let mut t = T::new("022");
-    let sxe = t.load_string("<?xml version='1.0'?>\n<pres><content><file glob=\"slide_*.xml\"/></content></pres>");
+    let sxe = t.load_string(
+        "<?xml version='1.0'?>\n<pres><content><file glob=\"slide_*.xml\"/></content></pres>",
+    );
     t.echo("===CONTENT===\n");
     let c = t.prop(&sxe, "content");
     t.var_dump(&c);
@@ -752,7 +775,11 @@ fn t025_namespaces() {
 <foo:bar xmlns:foo='foobar' xmlns:baz='foobarbaz'/>
 </xhtml:body>
 </xhtml:html>"#);
-    ns_dump(&mut t, &sxe, &[(false, false), (false, true), (true, false), (true, true)]);
+    ns_dump(
+        &mut t,
+        &sxe,
+        &[(false, false), (false, true), (true, false), (true, true)],
+    );
     let sxe = t.load_string("<?xml version='1.0'?>\n<html xmlns='http://www.w3.org/1999/xhtml'>\n<head><title xmlns='http://www.w3.org/TR/REC-html40'>bla</title></head>\n</html>");
     ns_dump(&mut t, &sxe, &[(false, false), (true, false)]);
     let sxe = t.load_string("<?xml version='1.0'?>\n<root/>");
@@ -904,7 +931,11 @@ fn t032_compare() {
     let people = t.load_string(PEOPLE_029);
     let people1 = t.load_string(PEOPLE_029);
     let people2 = t.load_string(xml1);
-    for (a, b) in [(&people1, &people), (&people2, &people), (&people2, &people1)] {
+    for (a, b) in [
+        (&people1, &people),
+        (&people2, &people),
+        (&people2, &people1),
+    ] {
         let eq = php_runtime::ops::is_equal(a, b, &mut t.h).unwrap();
         t.var_dump(&Value::Bool(eq));
     }

@@ -333,7 +333,7 @@ impl XNode {
 
     /// A pinned reference to `target`, a node reachable from this node or
     /// from the document node through parent links (descendants, newly
-    /// created children, XPath results, entity declarations).
+    /// created children, `XPath` results, entity declarations).
     pub(crate) fn locate(&self, target: *mut lx::xmlNode) -> Option<XNode> {
         if target.is_null() {
             return None;
@@ -350,7 +350,10 @@ impl XNode {
             up = n.parent();
             anchors.push(n);
         }
-        if anchors.iter().all(|a| a.node_type() != php_libxml::tree::NodeType::Document) {
+        if anchors
+            .iter()
+            .all(|a| a.node_type() != php_libxml::tree::NodeType::Document)
+        {
             anchors.push(self.doc.as_node());
         }
         let mut chain = Vec::new();
@@ -398,7 +401,10 @@ impl XNode {
         while !cur.is_null() {
             // SAFETY: walking parent links of live nodes.
             let t = unsafe { (*cur).type_ };
-            if matches!(t, lx::XML_DTD_NODE | lx::XML_ENTITY_DECL | lx::XML_ENTITY_NODE) {
+            if matches!(
+                t,
+                lx::XML_DTD_NODE | lx::XML_ENTITY_DECL | lx::XML_ENTITY_NODE
+            ) {
                 return false;
             }
             // SAFETY: as above.

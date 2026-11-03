@@ -1,5 +1,16 @@
 //! Ports of the remaining named `ext/simplexml/tests/*.phpt`.
 
+#![allow(
+    clippy::many_single_char_names,
+    clippy::too_many_lines,
+    clippy::needless_pass_by_value,
+    clippy::doc_markdown,
+    clippy::format_push_string,
+    clippy::items_after_statements,
+    clippy::redundant_closure,
+    clippy::type_complexity
+)]
+
 mod common;
 
 use common::{fixture, s, T};
@@ -51,19 +62,46 @@ fn t000_isset_bool_count_dump() {
         ("sxe", vec![]),
         ("sxe->elem1", vec![P::Prop("elem1")]),
         ("sxe->elem1[0]", vec![P::Prop("elem1"), i(0)]),
-        ("sxe->elem1[0]->elem2", vec![P::Prop("elem1"), i(0), P::Prop("elem2")]),
-        ("sxe->elem1[0]->elem2->bla", vec![P::Prop("elem1"), i(0), P::Prop("elem2"), P::Prop("bla")]),
-        ("sxe->elem1[0][\"attr1\"]", vec![P::Prop("elem1"), i(0), P::Dim(s("attr1"))]),
-        ("sxe->elem1[0]->attr1", vec![P::Prop("elem1"), i(0), P::Prop("attr1")]),
+        (
+            "sxe->elem1[0]->elem2",
+            vec![P::Prop("elem1"), i(0), P::Prop("elem2")],
+        ),
+        (
+            "sxe->elem1[0]->elem2->bla",
+            vec![P::Prop("elem1"), i(0), P::Prop("elem2"), P::Prop("bla")],
+        ),
+        (
+            "sxe->elem1[0][\"attr1\"]",
+            vec![P::Prop("elem1"), i(0), P::Dim(s("attr1"))],
+        ),
+        (
+            "sxe->elem1[0]->attr1",
+            vec![P::Prop("elem1"), i(0), P::Prop("attr1")],
+        ),
         ("sxe->elem1[1]", vec![P::Prop("elem1"), i(1)]),
         ("sxe->elem1[2]", vec![P::Prop("elem1"), i(2)]),
         ("sxe->elem11", vec![P::Prop("elem11")]),
-        ("sxe->elem11->elem111", vec![P::Prop("elem11"), P::Prop("elem111")]),
-        ("sxe->elem11->elem111->elem1111", vec![P::Prop("elem11"), P::Prop("elem111"), P::Prop("elem1111")]),
+        (
+            "sxe->elem11->elem111",
+            vec![P::Prop("elem11"), P::Prop("elem111")],
+        ),
+        (
+            "sxe->elem11->elem111->elem1111",
+            vec![P::Prop("elem11"), P::Prop("elem111"), P::Prop("elem1111")],
+        ),
         ("sxe->elem22", vec![P::Prop("elem22")]),
-        ("sxe->elem22->elem222", vec![P::Prop("elem22"), P::Prop("elem222")]),
-        ("sxe->elem22->attr22", vec![P::Prop("elem22"), P::Prop("attr22")]),
-        ("sxe->elem22[\"attr22\"]", vec![P::Prop("elem22"), P::Dim(s("attr22"))]),
+        (
+            "sxe->elem22->elem222",
+            vec![P::Prop("elem22"), P::Prop("elem222")],
+        ),
+        (
+            "sxe->elem22->attr22",
+            vec![P::Prop("elem22"), P::Prop("attr22")],
+        ),
+        (
+            "sxe->elem22[\"attr22\"]",
+            vec![P::Prop("elem22"), P::Dim(s("attr22"))],
+        ),
     ];
     for (what, path) in cases {
         t.echo(format!("==={what}\n"));
@@ -180,7 +218,10 @@ fn attributes_dimension_write() {
 #[test]
 fn foreach_by_reference() {
     let e = Sxe::get_iterator(true).unwrap_err();
-    assert_eq!(e.message(), Some("An iterator cannot be used with foreach by reference"));
+    assert_eq!(
+        e.message(),
+        Some("An iterator cannot be used with foreach by reference")
+    );
     assert!(Sxe::get_iterator(false).is_ok());
 }
 
@@ -247,14 +288,24 @@ fn xpath_on_rootless_document() {
     let x = t.load_string_ex("XXXXXXX^", Some("SimpleXMLElement"), 1, "", false);
     let sx = t.sxe(&x);
     let e = Sxe::xpath(&sx, &mut t.h, b"BBBB").unwrap_err();
-    assert_eq!(e.message(), Some("SimpleXMLElement is not properly initialized"));
+    assert_eq!(
+        e.message(),
+        Some("SimpleXMLElement is not properly initialized")
+    );
 }
 
 #[test]
 fn load_string_options_too_large() {
     let mut t = T::new("SimpleXMLElement_xpath_4");
-    let e = Sxe::load_string(&mut t.h, b"XXXXXXX^", None, 0x6000_0000_0000_0001, b"", false)
-        .unwrap_err();
+    let e = Sxe::load_string(
+        &mut t.h,
+        b"XXXXXXX^",
+        None,
+        0x6000_0000_0000_0001,
+        b"",
+        false,
+    )
+    .unwrap_err();
     assert_eq!(
         e.message(),
         Some("simplexml_load_string(): Argument #3 ($options) is too large")
@@ -401,7 +452,10 @@ fn get_prop_address_not_initialized() {
     let mut t = T::new("get_prop_address_not_initialized");
     let sx = Sxe::new("SimpleXMLElement");
     let e = Sxe::property_ptr(&sx, &mut t.h, b"a").unwrap_err();
-    assert_eq!(e.message(), Some("SimpleXMLElement is not properly initialized"));
+    assert_eq!(
+        e.message(),
+        Some("SimpleXMLElement is not properly initialized")
+    );
 }
 
 #[test]
@@ -440,7 +494,9 @@ fn gh12223_nested_entities() {
 fn gh15837_leaves_with_xpath() {
     let mut t = T::new("gh15837");
     let xml = "<xml>\n<fieldset1>\n</fieldset1>\n<fieldset2>\n<options>\n</options>\n</fieldset2>\n</xml>";
-    let sxe = t.new_sxe_ex("SimpleXMLIterator", xml, 0, false, "", false).unwrap();
+    let sxe = t
+        .new_sxe_ex("SimpleXMLIterator", xml, 0, false, "", false)
+        .unwrap();
     for (_, child) in t.rii(&sxe, 0) {
         let _ = t.xpath(&child, "ancestor-or-self::*");
     }
@@ -481,10 +537,12 @@ fn bug79971_1_nul_in_uri() {
     php_libxml::io::set_stream_hooks(Some(php_libxml::io::StreamHooks {
         open_read: Some(Box::new(|p: &[u8]| {
             let path = String::from_utf8_lossy(p).into_owned();
-            std::fs::File::open(path).ok().map(|f| php_libxml::io::InputStream {
-                reader: Box::new(f),
-                charset: None,
-            })
+            std::fs::File::open(path)
+                .ok()
+                .map(|f| php_libxml::io::InputStream {
+                    reader: Box::new(f),
+                    charset: None,
+                })
         })),
         open_write: None,
     }));
@@ -495,5 +553,8 @@ fn bug79971_1_nul_in_uri() {
     php_libxml::io::set_stream_hooks(None);
     let out = t.output();
     assert!(out.ends_with("bool(false)\n"), "{out}");
-    assert!(out.contains("URI must not contain percent-encoded NUL bytes"), "{out}");
+    assert!(
+        out.contains("URI must not contain percent-encoded NUL bytes"),
+        "{out}"
+    );
 }

@@ -1,5 +1,16 @@
 //! Ports of `ext/simplexml/tests/sxe_*.phpt` and `SimpleXMLElement_*.phpt`.
 
+#![allow(
+    clippy::many_single_char_names,
+    clippy::too_many_lines,
+    clippy::needless_pass_by_value,
+    clippy::doc_markdown,
+    clippy::format_push_string,
+    clippy::items_after_statements,
+    clippy::redundant_closure,
+    clippy::type_complexity
+)]
+
 mod common;
 
 use common::{fixture, s, trim, T};

@@ -1,6 +1,17 @@
 //! Randomised operation sequences over SimpleXML objects: no panics, no
 //! memory errors (run under valgrind for the latter), consistent results.
 
+#![allow(
+    clippy::many_single_char_names,
+    clippy::too_many_lines,
+    clippy::needless_pass_by_value,
+    clippy::doc_markdown,
+    clippy::format_push_string,
+    clippy::items_after_statements,
+    clippy::redundant_closure,
+    clippy::type_complexity
+)]
+
 mod common;
 
 use common::{s, T};
@@ -28,7 +39,9 @@ const DOCS: &[&str] = &[
     "<r xmlns=\"urn:d\" xmlns:p=\"urn:p\"><p:a p:x=\"1\">t</p:a><b/></r>",
 ];
 
-const NAMES: &[&str] = &["item", "a", "b", "c", "person", "child", "x", "k", "name", "", "0", "e"];
+const NAMES: &[&str] = &[
+    "item", "a", "b", "c", "person", "child", "x", "k", "name", "", "0", "e",
+];
 
 fn rand_value(r: &mut Rng) -> Value {
     match r.below(6) {
@@ -84,7 +97,12 @@ fn step(t: &mut T, r: &mut Rng, pool: &mut Vec<Value>) {
         }
         7 => Sxe::children(&sx, &mut t.h, None, false).ok(),
         8 => Sxe::attributes(&sx, &mut t.h, None, false).ok(),
-        9 => Sxe::xpath(&sx, &mut t.h, ["//*", "//@*", "//text()", "..", "count(//*)", "//comment()"][r.below(6)].as_bytes()).ok(),
+        9 => Sxe::xpath(
+            &sx,
+            &mut t.h,
+            ["//*", "//@*", "//text()", "..", "count(//*)", "//comment()"][r.below(6)].as_bytes(),
+        )
+        .ok(),
         10 => {
             let _ = Sxe::properties(&sx, &mut t.h, r.below(2) == 0);
             None
@@ -94,7 +112,9 @@ fn step(t: &mut T, r: &mut Rng, pool: &mut Vec<Value>) {
             let _ = php_runtime::dump::var_dump(&mut b, &v, &mut t.h);
             None
         }
-        12 => Sxe::clone_object(&sx).ok().map(|c| common::new_object("SimpleXMLElement", Some(c))),
+        12 => Sxe::clone_object(&sx)
+            .ok()
+            .map(|c| common::new_object("SimpleXMLElement", Some(c))),
         13 => {
             let _ = Sxe::rewind(&sx, &mut t.h);
             Sxe::iter_current(&sx)
@@ -104,9 +124,22 @@ fn step(t: &mut T, r: &mut Rng, pool: &mut Vec<Value>) {
             let _ = Sxe::has_children(&sx, &mut t.h);
             Some(Sxe::get_children(&sx))
         }
-        15 => Sxe::add_child(&sx, &mut t.h, name.as_bytes(), Some(b"v"), [None, Some(&b"urn:x"[..]), Some(&b""[..])][r.below(3)]).ok(),
+        15 => Sxe::add_child(
+            &sx,
+            &mut t.h,
+            name.as_bytes(),
+            Some(b"v"),
+            [None, Some(&b"urn:x"[..]), Some(&b""[..])][r.below(3)],
+        )
+        .ok(),
         16 => {
-            let _ = Sxe::add_attribute(&sx, &mut t.h, ["q", "p:q", "a"][r.below(3)].as_bytes(), b"1", [None, Some(&b"urn:p"[..])][r.below(2)]);
+            let _ = Sxe::add_attribute(
+                &sx,
+                &mut t.h,
+                ["q", "p:q", "a"][r.below(3)].as_bytes(),
+                b"1",
+                [None, Some(&b"urn:p"[..])][r.below(2)],
+            );
             None
         }
         17 => {
@@ -139,16 +172,24 @@ fn step(t: &mut T, r: &mut Rng, pool: &mut Vec<Value>) {
             None
         }
         22 => {
-            let _ = Sxe::construct(&sx, DOCS[r.below(DOCS.len())].as_bytes(), 0, false, b"", false);
+            let _ = Sxe::construct(
+                &sx,
+                DOCS[r.below(DOCS.len())].as_bytes(),
+                0,
+                false,
+                b"",
+                false,
+            );
             None
         }
         23 => {
             let _ = Sxe::register_xpath_namespace(&sx, b"x", b"urn:x");
             Sxe::xpath(&sx, &mut t.h, b"//x:item").ok()
         }
-        24 => Sxe::export_node(&sx).ok().flatten().and_then(|n| {
-            Sxe::import_dom(&mut t.h, Some(n), None).ok()
-        }),
+        24 => Sxe::export_node(&sx)
+            .ok()
+            .flatten()
+            .and_then(|n| Sxe::import_dom(&mut t.h, Some(n), None).ok()),
         _ => {
             pool.swap_remove(r.below(pool.len()));
             None
@@ -157,7 +198,11 @@ fn step(t: &mut T, r: &mut Rng, pool: &mut Vec<Value>) {
     if let Some(Value::Object(_)) = &res {
         pool.push(res.unwrap_or(Value::Null));
     } else if let Some(Value::Array(a)) = &res {
-        pool.extend(a.values().filter(|x| matches!(x, Value::Object(_))).cloned());
+        pool.extend(
+            a.values()
+                .filter(|x| matches!(x, Value::Object(_)))
+                .cloned(),
+        );
     }
     if pool.len() > 64 {
         pool.swap_remove(r.below(pool.len()));
@@ -166,7 +211,10 @@ fn step(t: &mut T, r: &mut Rng, pool: &mut Vec<Value>) {
 
 #[test]
 fn random_operation_sequences() {
-    let iterations: usize = std::env::var("SXE_FUZZ_ITERS").ok().and_then(|v| v.parse().ok()).unwrap_or(300);
+    let iterations: usize = std::env::var("SXE_FUZZ_ITERS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(300);
     for seed in 1..=40u64 {
         let mut t = T::new("fuzz");
         php_libxml::error::use_internal_errors(Some(true));

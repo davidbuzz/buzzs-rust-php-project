@@ -1,5 +1,5 @@
 //! libxml2 declarations that `php_libxml::ffi` does not (yet) provide:
-//! the XPath evaluator, the tree builders `SimpleXML` uses
+//! the `XPath` evaluator, the tree builders `SimpleXML` uses
 //! (`xmlNewTextChild`, `xmlNewChild`, `xmlNewProp`, …) and the plain
 //! `xmlRead*` entry points. Declarations only.
 //!

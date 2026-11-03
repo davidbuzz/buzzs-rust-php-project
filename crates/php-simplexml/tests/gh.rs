@@ -1,5 +1,16 @@
 //! Ports of `ext/simplexml/tests/gh*.phpt` and other named tests.
 
+#![allow(
+    clippy::many_single_char_names,
+    clippy::too_many_lines,
+    clippy::needless_pass_by_value,
+    clippy::doc_markdown,
+    clippy::format_push_string,
+    clippy::items_after_statements,
+    clippy::redundant_closure,
+    clippy::type_complexity
+)]
+
 mod common;
 
 use common::{s, T};
@@ -8,7 +19,10 @@ use php_simplexml::Sxe;
 
 fn first(t: &mut T, v: &Value, q: &str) -> Value {
     let r = t.xpath(v, q);
-    let x = r.as_array().and_then(|a| a.values().next().cloned()).unwrap_or(Value::Null);
+    let x = r
+        .as_array()
+        .and_then(|a| a.values().next().cloned())
+        .unwrap_or(Value::Null);
     x
 }
 
@@ -33,7 +47,8 @@ fn gh10983_attribute_dump() {
 #[test]
 fn gh12167_pi_name_and_string() {
     let mut t = T::new("gh12167");
-    let sxe = t.load_string("<?xml version=\"1.0\"?>\n<container>\n  <?foo pi contents ?>\n</container>");
+    let sxe =
+        t.load_string("<?xml version=\"1.0\"?>\n<container>\n  <?foo pi contents ?>\n</container>");
     let p = first(&mut t, &sxe, "//processing-instruction()");
     let n = t.get_name(&p);
     t.var_dump(&s(&n));
@@ -46,7 +61,9 @@ fn gh12167_pi_name_and_string() {
 #[test]
 fn gh12169_comment_name_and_string() {
     let mut t = T::new("gh12169");
-    let sxe = t.load_string("<?xml version=\"1.0\"?>\n<container>\n    <!-- comment contents -->\n</container>");
+    let sxe = t.load_string(
+        "<?xml version=\"1.0\"?>\n<container>\n    <!-- comment contents -->\n</container>",
+    );
     let p = first(&mut t, &sxe, "//comment()");
     let n = t.get_name(&p);
     t.var_dump(&s(&n));

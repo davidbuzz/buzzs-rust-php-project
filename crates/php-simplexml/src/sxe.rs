@@ -610,7 +610,7 @@ impl Sxe {
         Self::prop_dim_write(
             this,
             host,
-            Some(Member::Str(name.to_vec())),
+            Some(&Member::Str(name.to_vec())),
             Some(value),
             Access::Elements,
         )
@@ -628,7 +628,8 @@ impl Sxe {
             None => None,
             Some(v) => Some(Self::member_for_write(host, v)?),
         };
-        Self::prop_dim_write(this, host, member, Some(value), Access::Attribs).map(|(ok, _)| ok)
+        Self::prop_dim_write(this, host, member.as_ref(), Some(value), Access::Attribs)
+            .map(|(ok, _)| ok)
     }
 
     fn member_for_write(host: &mut dyn SxeHost, v: &Value) -> RtResult<Member> {
@@ -671,12 +672,12 @@ impl Sxe {
     fn prop_dim_write(
         this: &SxeRef,
         host: &mut dyn SxeHost,
-        member: Option<Member>,
+        member: Option<&Member>,
         value: Option<&Value>,
         mut access: Access,
     ) -> RtResult<(bool, Option<XNode>)> {
         let iter = this.iter_state();
-        match &member {
+        match member {
             None => {
                 if iter.kind == IterType::AttrList {
                     return Err(RuntimeError::Error(
@@ -737,7 +738,7 @@ impl Sxe {
         let Some(node) = node else {
             return Ok((true, None));
         };
-        let offset = match &member {
+        let offset = match member {
             Some(Member::Long(n)) => Some(*n),
             _ => None,
         };
@@ -750,7 +751,7 @@ impl Sxe {
         let mut loop_node = Some(node.clone());
         if access == Access::Attribs {
             while let Some(a) = attr.clone() {
-                match &member {
+                match member {
                     Some(Member::Long(n)) => {
                         if nodendx > *n {
                             break;
@@ -775,7 +776,7 @@ impl Sxe {
                 }
                 attr = a.next();
             }
-        } else if let Some(Member::Str(name)) = &member {
+        } else if let Some(Member::Str(name)) = member {
             let mut c = node.children();
             while let Some(child) = c {
                 if !child.is_text() && child.name_is(name) && iter.match_ns(&child) {
@@ -834,44 +835,41 @@ impl Sxe {
             ok = false;
         } else if access == Access::Elements {
             let mynode = mynode.unwrap_or_else(|| node.clone());
-            match loop_node {
-                None => {
-                    newnode = match &member {
-                        Some(Member::Str(name)) => {
-                            mynode.new_text_child(std::ptr::null_mut(), name, value_str.as_deref())
-                        }
-                        _ => mynode.parent().and_then(|p| {
-                            p.new_text_child(
-                                mynode.ns_ptr(),
-                                &mynode.name().unwrap_or_default(),
-                                value_str.as_deref(),
-                            )
-                        }),
-                    };
-                }
-                Some(_) => {
-                    if let Some(n) = offset {
-                        if n < 0 || cnt < n {
-                            warn(
+            if loop_node.is_none() {
+                newnode = match member {
+                    Some(Member::Str(name)) => {
+                        mynode.new_text_child(std::ptr::null_mut(), name, value_str.as_deref())
+                    }
+                    _ => mynode.parent().and_then(|p| {
+                        p.new_text_child(
+                            mynode.ns_ptr(),
+                            &mynode.name().unwrap_or_default(),
+                            value_str.as_deref(),
+                        )
+                    }),
+                };
+            } else {
+                if let Some(n) = offset {
+                    if n < 0 || cnt < n {
+                        warn(
                                 host,
                                 &format!(
                                     "Cannot add element {} number {n} when only {cnt} such elements exist",
                                     String::from_utf8_lossy(&mynode.name().unwrap_or_default())
                                 ),
                             )?;
-                        }
                     }
-                    if offset.is_some_and(|n| n < 0) {
-                        ok = false;
-                    } else {
-                        newnode = mynode.parent().and_then(|p| {
-                            p.new_text_child(
-                                mynode.ns_ptr(),
-                                &mynode.name().unwrap_or_default(),
-                                value_str.as_deref(),
-                            )
-                        });
-                    }
+                }
+                if offset.is_some_and(|n| n < 0) {
+                    ok = false;
+                } else {
+                    newnode = mynode.parent().and_then(|p| {
+                        p.new_text_child(
+                            mynode.ns_ptr(),
+                            &mynode.name().unwrap_or_default(),
+                            value_str.as_deref(),
+                        )
+                    });
                 }
             }
         } else if let Some(n) = offset {
@@ -879,7 +877,7 @@ impl Sxe {
                 host,
                 &format!("Cannot change attribute number {n} when only {nodendx} attributes exist"),
             )?;
-        } else if let Some(Member::Str(name)) = &member {
+        } else if let Some(Member::Str(name)) = member {
             newnode = node.new_prop(std::ptr::null_mut(), name, value_str.as_deref());
         }
         Ok((ok, newnode))
@@ -898,7 +896,7 @@ impl Sxe {
         let (ok, newnode) = Self::prop_dim_write(
             this,
             host,
-            Some(Member::Str(name.to_vec())),
+            Some(&Member::Str(name.to_vec())),
             None,
             Access::Elements,
         )?;
@@ -1266,7 +1264,8 @@ impl Sxe {
             } else {
                 false
             };
-            if !skip && !(n.is_element() && !iter.match_ns(&n)) && n.name().is_some() {
+            let ns_ok = !n.is_element() || iter.match_ns(&n);
+            if !skip && ns_ok && n.name().is_some() {
                 return Ok(false);
             }
             cur = if use_iter {
@@ -1695,8 +1694,7 @@ impl Sxe {
     /// `SimpleXMLElement::xpath($expression)`: an array of elements,
     /// `null` (attribute lists / no node) or `false`.
     pub fn xpath(this: &SxeRef, host: &mut dyn SxeHost, expression: &[u8]) -> RtResult<Value> {
-        let iter = this.iter_state();
-        if iter.kind == IterType::AttrList {
+        if this.iter_type() == IterType::AttrList {
             return Ok(Value::Null);
         }
         let node = this.get_node()?;
@@ -1704,81 +1702,11 @@ impl Sxe {
             return Ok(Value::Null);
         };
         let ctx = this.xpath_ctx()?;
-        let q = c_string(expression);
-        let doc = node.document().clone();
-        enum Hit {
-            Node(XNode),
-            Text(XNode),
-            Attr(XNode, Vec<u8>, Option<Vec<u8>>),
-        }
-        let mut hits = Vec::new();
-        // SAFETY: the context belongs to this object's document; the node
-        // and namespace list are live during the evaluation; every result
-        // node is pinned (located) before the result object is freed.
-        let outcome = unsafe {
-            (*ctx).node = node.ptr();
-            let ns = fx::xmlGetNsList(doc.as_ptr(), node.ptr());
-            let mut nr = 0;
-            if !ns.is_null() {
-                while !(*ns.add(nr)).is_null() {
-                    nr += 1;
-                }
-            }
-            (*ctx).namespaces = ns;
-            (*ctx).nsNr = i32::try_from(nr).unwrap_or(0);
-            let ret = fx::xmlXPathEval(q.as_ptr().cast(), ctx);
-            if !ns.is_null() {
-                xml_free(ns.cast());
-                (*ctx).namespaces = std::ptr::null_mut();
-                (*ctx).nsNr = 0;
-            }
-            if ret.is_null() {
-                Err(None)
-            } else if (*ret).type_ != fx::XPATH_NODESET {
-                let t = (*ret).type_;
-                fx::xmlXPathFreeObject(ret);
-                Err(Some(t))
-            } else {
-                let set = (*ret).nodesetval;
-                if !set.is_null() {
-                    let n = usize::try_from((*set).nodeNr).unwrap_or(0);
-                    for i in 0..n {
-                        let p = *(*set).nodeTab.add(i);
-                        let t = (*p).type_;
-                        match t {
-                            lx::XML_TEXT_NODE => {
-                                if let Some(parent) = node.locate((*p).parent) {
-                                    hits.push(Hit::Text(parent));
-                                }
-                            }
-                            lx::XML_ATTRIBUTE_NODE => {
-                                let a = p.cast::<lx::xmlAttr>();
-                                let name = crate::xnode::opt_bytes((*a).name).unwrap_or_default();
-                                let href = (*a)
-                                    .ns
-                                    .as_ref()
-                                    .and_then(|ns| crate::xnode::opt_bytes(ns.href));
-                                if let Some(parent) = node.locate((*a).parent) {
-                                    hits.push(Hit::Attr(parent, name, href));
-                                }
-                            }
-                            lx::XML_ELEMENT_NODE | lx::XML_PI_NODE | lx::XML_COMMENT_NODE => {
-                                if let Some(x) = node.locate(p) {
-                                    hits.push(Hit::Node(x));
-                                }
-                            }
-                            _ => {}
-                        }
-                    }
-                }
-                fx::xmlXPathFreeObject(ret);
-                Ok(())
-            }
-        };
-        match outcome {
+        let hits = match eval_xpath(ctx, &node, expression) {
+            Ok(hits) => hits,
             Err(None) => return Ok(Value::Bool(false)),
-            Err(Some(t)) => {
-                let name = match t {
+            Err(Some(kind)) => {
+                let name = match kind {
                     fx::XPATH_BOOLEAN => "bool",
                     fx::XPATH_NUMBER => "number",
                     fx::XPATH_STRING => "string",
@@ -1790,14 +1718,11 @@ impl Sxe {
                 )?;
                 return Ok(Value::Bool(false));
             }
-            Ok(()) => {}
-        }
+        };
         let mut out = HashTable::new();
         for hit in hits {
             let v = match hit {
-                Hit::Node(n) | Hit::Text(n) => {
-                    wrap(this, host, Some(n), IterType::None, None, None, false)?
-                }
+                Hit::Node(n) => wrap(this, host, Some(n), IterType::None, None, None, false)?,
                 Hit::Attr(parent, name, href) => wrap(
                     this,
                     host,
@@ -2093,6 +2018,89 @@ impl Sxe {
         node.new_prop(ns, &local, Some(value));
         Ok(())
     }
+}
+
+/// One `XPath` result as `SimpleXML` exposes it.
+enum Hit {
+    /// An element, comment or PI (text nodes map to their parent).
+    Node(XNode),
+    /// An attribute: its element, name and namespace URI.
+    Attr(XNode, Vec<u8>, Option<Vec<u8>>),
+}
+
+/// Evaluates `expression` with `node` as context node and the node's
+/// in-scope namespaces (`ctxt->namespaces`). `Err(None)` when evaluation
+/// failed, `Err(Some(type))` for a non-node-set result.
+fn eval_xpath(
+    ctx: *mut fx::xmlXPathContext,
+    node: &XNode,
+    expression: &[u8],
+) -> Result<Vec<Hit>, Option<i32>> {
+    let query = c_string(expression);
+    let doc = node.document().clone();
+    let mut hits = Vec::new();
+    // SAFETY: the context belongs to the node's document; the node and the
+    // namespace array are live during the evaluation; every result node is
+    // pinned (located) before the result object is freed.
+    unsafe {
+        (*ctx).node = node.ptr();
+        let ns = fx::xmlGetNsList(doc.as_ptr(), node.ptr());
+        let mut count = 0;
+        if !ns.is_null() {
+            while !(*ns.add(count)).is_null() {
+                count += 1;
+            }
+        }
+        (*ctx).namespaces = ns;
+        (*ctx).nsNr = i32::try_from(count).unwrap_or(0);
+        let ret = fx::xmlXPathEval(query.as_ptr().cast(), ctx);
+        if !ns.is_null() {
+            xml_free(ns.cast());
+            (*ctx).namespaces = std::ptr::null_mut();
+            (*ctx).nsNr = 0;
+        }
+        if ret.is_null() {
+            return Err(None);
+        }
+        if (*ret).type_ != fx::XPATH_NODESET {
+            let kind = (*ret).type_;
+            fx::xmlXPathFreeObject(ret);
+            return Err(Some(kind));
+        }
+        let set = (*ret).nodesetval;
+        if !set.is_null() {
+            let len = usize::try_from((*set).nodeNr).unwrap_or(0);
+            for idx in 0..len {
+                let p = *(*set).nodeTab.add(idx);
+                match (*p).type_ {
+                    lx::XML_TEXT_NODE => {
+                        if let Some(parent) = node.locate((*p).parent) {
+                            hits.push(Hit::Node(parent));
+                        }
+                    }
+                    lx::XML_ATTRIBUTE_NODE => {
+                        let attr = p.cast::<lx::xmlAttr>();
+                        let name = crate::xnode::opt_bytes((*attr).name).unwrap_or_default();
+                        let href = (*attr)
+                            .ns
+                            .as_ref()
+                            .and_then(|ns| crate::xnode::opt_bytes(ns.href));
+                        if let Some(parent) = node.locate((*attr).parent) {
+                            hits.push(Hit::Attr(parent, name, href));
+                        }
+                    }
+                    lx::XML_ELEMENT_NODE | lx::XML_PI_NODE | lx::XML_COMMENT_NODE => {
+                        if let Some(x) = node.locate(p) {
+                            hits.push(Hit::Node(x));
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        fx::xmlXPathFreeObject(ret);
+    }
+    Ok(hits)
 }
 
 /// `xmlSplitQName2`: `(local, prefix)` for `prefix:local`, `None` otherwise.

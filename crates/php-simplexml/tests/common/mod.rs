@@ -3,7 +3,15 @@
 //! implementation, output capture (including diagnostics formatted like
 //! PHP prints them) and an `EXPECTF` matcher.
 
-#![allow(dead_code, clippy::missing_panics_doc, clippy::must_use_candidate)]
+#![allow(
+    dead_code,
+    clippy::missing_panics_doc,
+    clippy::must_use_candidate,
+    clippy::doc_markdown,
+    clippy::unused_self,
+    clippy::needless_pass_by_value,
+    clippy::type_complexity
+)]
 
 use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
@@ -86,11 +94,21 @@ fn diag_line(out: &Out, func: &str, file: &str, label: &str, msg: &[u8]) {
 impl RuntimeContext for Host {
     fn diagnostic(&mut self, level: ErrorLevel, message: &str) -> RtResult<()> {
         let func = self.func.borrow().clone();
-        diag_line(&self.out, &func, &self.file, level.label(), message.as_bytes());
+        diag_line(
+            &self.out,
+            &func,
+            &self.file,
+            level.label(),
+            message.as_bytes(),
+        );
         Ok(())
     }
 
-    fn object_properties(&mut self, obj: &Obj, purpose: PropertyPurpose) -> RtResult<Option<ZArray>> {
+    fn object_properties(
+        &mut self,
+        obj: &Obj,
+        purpose: PropertyPurpose,
+    ) -> RtResult<Option<ZArray>> {
         match self.sxe_unwrap(obj) {
             Some(s) => Sxe::properties(&s, self, purpose == PropertyPurpose::Debug).map(Some),
             None => Ok(Some(ZArray::new())),
@@ -271,9 +289,23 @@ impl T {
         self.load_string_ex(xml, None, 0, "", false)
     }
 
-    pub fn load_string_ex(&mut self, xml: &str, class: Option<&str>, options: i64, ns: &str, is_prefix: bool) -> Value {
+    pub fn load_string_ex(
+        &mut self,
+        xml: &str,
+        class: Option<&str>,
+        options: i64,
+        ns: &str,
+        is_prefix: bool,
+    ) -> Value {
         let class = class.map(ZStr::from);
-        let r = Sxe::load_string(&mut self.h, xml.as_bytes(), class.as_ref(), options, ns.as_bytes(), is_prefix);
+        let r = Sxe::load_string(
+            &mut self.h,
+            xml.as_bytes(),
+            class.as_ref(),
+            options,
+            ns.as_bytes(),
+            is_prefix,
+        );
         self.catch(r)
     }
 
@@ -283,9 +315,24 @@ impl T {
     }
 
     /// `new $class($xml, ...)`.
-    pub fn new_sxe_ex(&mut self, class: &str, xml: &str, options: i64, is_url: bool, ns: &str, is_prefix: bool) -> RtResult<Value> {
+    pub fn new_sxe_ex(
+        &mut self,
+        class: &str,
+        xml: &str,
+        options: i64,
+        is_url: bool,
+        ns: &str,
+        is_prefix: bool,
+    ) -> RtResult<Value> {
         let sxe = Sxe::new(class);
-        Sxe::construct(&sxe, xml.as_bytes(), options, is_url, ns.as_bytes(), is_prefix)?;
+        Sxe::construct(
+            &sxe,
+            xml.as_bytes(),
+            options,
+            is_url,
+            ns.as_bytes(),
+            is_prefix,
+        )?;
         Ok(new_object(class, Some(sxe)))
     }
 
@@ -441,10 +488,22 @@ impl T {
         self.catch(r)
     }
 
-    pub fn add_child(&mut self, v: &Value, name: &str, value: Option<&str>, ns: Option<&str>) -> Value {
+    pub fn add_child(
+        &mut self,
+        v: &Value,
+        name: &str,
+        value: Option<&str>,
+        ns: Option<&str>,
+    ) -> Value {
         let s = self.sxe(v);
         self.func("SimpleXMLElement::addChild");
-        let r = Sxe::add_child(&s, &mut self.h, name.as_bytes(), value.map(str::as_bytes), ns.map(str::as_bytes));
+        let r = Sxe::add_child(
+            &s,
+            &mut self.h,
+            name.as_bytes(),
+            value.map(str::as_bytes),
+            ns.map(str::as_bytes),
+        );
         self.func("main");
         self.catch(r)
     }
@@ -452,7 +511,13 @@ impl T {
     pub fn add_attribute(&mut self, v: &Value, name: &str, value: &str, ns: Option<&str>) {
         let s = self.sxe(v);
         self.func("SimpleXMLElement::addAttribute");
-        let r = Sxe::add_attribute(&s, &mut self.h, name.as_bytes(), value.as_bytes(), ns.map(str::as_bytes));
+        let r = Sxe::add_attribute(
+            &s,
+            &mut self.h,
+            name.as_bytes(),
+            value.as_bytes(),
+            ns.map(str::as_bytes),
+        );
         self.func("main");
         self.catch(r);
     }
@@ -485,7 +550,10 @@ impl T {
         } else {
             got == expect
         };
-        assert!(ok, "{phpt}: output mismatch\n--- expected ---\n{expect}\n--- got ---\n{got}\n");
+        assert!(
+            ok,
+            "{phpt}: output mismatch\n--- expected ---\n{expect}\n--- got ---\n{got}\n"
+        );
     }
 
     /// Compares with an explicit expectation (EXPECTF syntax).
@@ -513,7 +581,13 @@ fn section(text: &str) -> (String, bool) {
     let mut cur: Option<(bool, Vec<&str>)> = None;
     let mut found = None;
     for line in text.lines() {
-        if line.starts_with("--") && line.ends_with("--") && line.len() > 4 && line[2..line.len() - 2].chars().all(|c| c.is_ascii_uppercase() || c == '_') {
+        if line.starts_with("--")
+            && line.ends_with("--")
+            && line.len() > 4
+            && line[2..line.len() - 2]
+                .chars()
+                .all(|c| c.is_ascii_uppercase() || c == '_')
+        {
             if let Some((f, lines)) = cur.take() {
                 found = Some((lines.join("\n"), f));
             }
@@ -551,7 +625,10 @@ pub fn fmatch(pat: &[u8], s: &[u8]) -> bool {
             b'd' => Some((|c| c.is_ascii_digit(), false)),
             b'x' => Some((|c| c.is_ascii_hexdigit(), false)),
             b'i' => Some((|c| c.is_ascii_digit() || c == b'-' || c == b'+', false)),
-            b'f' => Some((|c| c.is_ascii_digit() || matches!(c, b'.' | b'-' | b'+' | b'e' | b'E'), false)),
+            b'f' => Some((
+                |c| c.is_ascii_digit() || matches!(c, b'.' | b'-' | b'+' | b'e' | b'E'),
+                false,
+            )),
             b'c' => {
                 return !s.is_empty() && fmatch(rest, &s[1..]);
             }
@@ -589,7 +666,8 @@ pub fn fmatch(pat: &[u8], s: &[u8]) -> bool {
 
 /// `trim()`.
 pub fn trim(s: &str) -> String {
-    s.trim_matches(|c: char| matches!(c, ' ' | '\t' | '\n' | '\r' | '\0' | '\x0b')).to_string()
+    s.trim_matches(|c: char| matches!(c, ' ' | '\t' | '\n' | '\r' | '\0' | '\x0b'))
+        .to_string()
 }
 
 pub fn s(v: &str) -> Value {
