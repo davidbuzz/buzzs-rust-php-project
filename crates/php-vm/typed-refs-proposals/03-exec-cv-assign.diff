@@ -1,0 +1,68 @@
+diff --git a/crates/php-vm/src/exec.rs b/crates/php-vm/src/exec.rs
+index 4aedaa8..6677cc2 100644
+--- a/crates/php-vm/src/exec.rs
++++ b/crates/php-vm/src/exec.rs
+@@ -3,7 +3,7 @@
+ use crate::object;
+ use crate::opcode::{BinKind, CastKind, Op, Operand, UnKind};
+ use crate::vm::{FinState, Frame, RetTarget, Throw, Vm, VmResult};
+-use php_runtime::{ops, BinaryOp, ErrorLevel, Value, ZArray, ZStr};
++use php_runtime::{ops, BinaryOp, ErrorLevel, PhpRef, Value, ZArray, ZStr};
+ use std::rc::Rc;
+ 
+ /// What an instruction asks the loop to do next.
+@@ -97,13 +97,19 @@ impl Vm {
+         f.vars.borrow().slots.get(idx).cloned().flatten()
+     }
+ 
+-    /// Assigns to a compiled variable (through references).
+-    pub(crate) fn cv_assign(&mut self, cv: u32, v: Value) {
++    /// Assigns to a compiled variable (through references). A typed
++    /// reference is handed back with the value, unassigned: the caller
++    /// assigns through it with [`Vm::assign_ref`].
++    #[must_use]
++    pub(crate) fn cv_assign(&mut self, cv: u32, v: Value) -> Option<(PhpRef, Value)> {
+         let f = self.frame();
+         let idx = f.cv_idx(cv);
+         let mut vars = f.vars.borrow_mut();
+         let slot = &mut vars.slots[idx];
+         let old = match slot {
++            Some(Value::Reference(r)) if crate::typed_refs::has_type_sources(r) => {
++                return Some((r.clone(), v));
++            }
+             Some(Value::Reference(r)) => Some(r.set(v)),
+             _ => slot.replace(v),
+         };
+@@ -112,6 +118,7 @@ impl Vm {
+             crate::gc::possible_root(old);
+         }
+         drop(old);
++        None
+     }
+ 
+     /// Binds a compiled variable to a reference.
+@@ -423,7 +430,12 @@ impl Vm {
+                         if let Some(d) = dst {
+                             self.set_tmp(*d, v.clone());
+                         }
+-                        self.cv_assign(*cv, v);
++                        if let Some((r, v)) = self.cv_assign(*cv, v) {
++                            let v = self.assign_ref(&r, v)?;
++                            if let Some(d) = dst {
++                                self.set_tmp(*d, v);
++                            }
++                        }
+                         Flow::Next
+                     }
+                     Op::Assign { place, val, dst } => {
+@@ -779,7 +791,9 @@ impl Vm {
+                         if matched {
+                             self.frame_mut().pending_exc = None;
+                             if let Some(cv) = cv {
+-                                self.cv_assign(*cv, Value::Object(exc));
++                                if let Some((r, v)) = self.cv_assign(*cv, Value::Object(exc)) {
++                                    self.assign_ref_strict(&r, v)?;
++                                }
+                             }
+                         } else {
+                             self.frame_mut().ip = *next as usize;

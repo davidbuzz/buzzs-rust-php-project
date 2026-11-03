@@ -1,0 +1,13 @@
+diff --git a/crates/php-vm/src/builtins/var.rs b/crates/php-vm/src/builtins/var.rs
+index 6cf7640..4b0ddac 100644
+--- a/crates/php-vm/src/builtins/var.rs
++++ b/crates/php-vm/src/builtins/var.rs
+@@ -144,7 +144,7 @@ fn settype(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+         }
+         _ => return Err(super::util::value_error(vm, a, 2, "must be a valid type")),
+     };
+-    r.set(nv);
++    vm.assign_ref(&r, nv)?;
+     Ok(Value::Bool(true))
+ }
+ 

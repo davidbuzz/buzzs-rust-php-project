@@ -87,18 +87,13 @@ impl SourceProp {
         self.prop.ty.as_ref().map_or(mask::ANY, |t| t.mask)
     }
 
-    /// `zend_type_to_string` of the property type.
+    /// `zend_type_to_string` of the property type (`self`/`parent` are
+    /// not resolved in these messages).
     pub fn type_string(&self) -> String {
-        self.prop.ty.as_ref().map_or_else(
-            || "mixed".to_string(),
-            |t| {
-                t.display(
-                    self.decl.as_ref().map(|c| &c.name),
-                    self.decl.as_ref().and_then(|c| c.parent_name()),
-                    None,
-                )
-            },
-        )
+        self.prop
+            .ty
+            .as_ref()
+            .map_or_else(|| "mixed".to_string(), |t| t.display(None, None, None))
     }
 
     /// `%s::$%s` of the property (the class name is printed in full,
@@ -152,11 +147,6 @@ pub(crate) fn has_type_sources(r: &PhpRef) -> bool {
     !type_sources(r).is_empty()
 }
 
-/// Whether `v` is a reference with type sources.
-pub(crate) fn is_typed_ref(v: &Value) -> bool {
-    matches!(v, Value::Reference(r) if has_type_sources(r))
-}
-
 fn add_source(r: &PhpRef, holder: Holder, prop: Rc<PropInfo>, decl: Option<Rc<Class>>) {
     let meta = sources_meta(r).unwrap_or_else(|| {
         let m: Rc<dyn Any> = Rc::new(TypeSources::default());
@@ -169,8 +159,12 @@ fn add_source(r: &PhpRef, holder: Holder, prop: Rc<PropInfo>, decl: Option<Rc<Cl
     let Ok(mut list) = ts.list.try_borrow_mut() else {
         return;
     };
-    // A holder stores one reference: rebinding it replaces its source.
-    list.retain(|s| !s.holder.same(&holder));
+    // A holder stores one reference: it is a source once (in the order the
+    // sources were added, which error messages reflect).
+    list.retain(|s| s.holds(r));
+    if list.iter().any(|s| s.holder.same(&holder)) {
+        return;
+    }
     list.push(Source { holder, prop, decl });
 }
 
@@ -304,9 +298,7 @@ fn zval_value_name(v: &Value) -> String {
 /// when a `null`/`false` held by `r` would be auto-vivified into an array,
 /// `None` when that is allowed (or `r` is untyped).
 pub(crate) fn auto_init_error(r: &PhpRef) -> Option<String> {
-    if r.meta().is_none() {
-        return None;
-    }
+    r.meta()?;
     type_sources(r)
         .into_iter()
         .find(|s| s.mask() & mask::ARRAY == 0)
@@ -322,9 +314,7 @@ pub(crate) fn auto_init_error(r: &PhpRef) -> Option<String> {
 /// For a write walk about to auto-vivify the value held by reference `r`
 /// into an array: the error message when a type source forbids it.
 pub(crate) fn walk_auto_init_error(r: &PhpRef) -> Option<String> {
-    if r.meta().is_none() {
-        return None;
-    }
+    r.meta()?;
     match r.try_borrow().as_deref() {
         Some(Value::Null | Value::Bool(false)) => {}
         _ => return None,
@@ -441,7 +431,9 @@ impl Vm {
     /// `zend_verify_weak_scalar_type_hint` on a copy of `v`.
     fn weak_coerced(&mut self, src: &SourceProp, v: &Value) -> VmResult<Option<Value>> {
         let mut tmp = v.clone();
-        Ok(self.weak_scalar_coerce(src.mask(), &mut tmp)?.then_some(tmp))
+        Ok(self
+            .weak_scalar_coerce(src.mask(), &mut tmp)?
+            .then_some(tmp))
     }
 
     fn ref_type_error(&mut self, src: &SourceProp, v: &Value) -> Throw {
@@ -615,16 +607,6 @@ impl Vm {
         }
     }
 
-    /// `ZEND_REF_ADD_TYPE_SOURCE` for a static property cell holding `r`.
-    pub(crate) fn add_static_type_source(&mut self, sp: &StaticProp, r: &PhpRef) {
-        let Some(ty) = sp.ty.as_ref().filter(|t| !t.is_mixed()) else {
-            return;
-        };
-        let pi = Rc::new(static_prop_info(sp, ty.clone()));
-        let decl = self.find_class(sp.class.as_bytes());
-        add_source(r, Holder::Static(Rc::downgrade(&sp.cell)), pi, decl);
-    }
-
     /// `zend_verify_prop_assignable_by_ref` for `$o->p = &$x` (or a static
     /// property): checks the referenced value against property `pi`
     /// (coercing it in place when the reference is not typed yet). Throws
@@ -750,55 +732,38 @@ impl Vm {
         Ok(())
     }
 
-    /// `Cls::$p = &$x` for a typed static property: verifies the value and
-    /// records the source. Call before storing `r` in the cell.
-    pub(crate) fn bind_static_ref(&mut self, sp: &StaticProp, r: &Value) -> VmResult<()> {
-        let Value::Reference(r) = r else {
-            return Ok(());
-        };
-        let Some(ty) = sp.ty.as_ref().filter(|t| !t.is_mixed()) else {
-            return Ok(());
-        };
-        let pi = Rc::new(static_prop_info(sp, ty.clone()));
-        self.verify_prop_assignable_by_ref(&pi, r)?;
-        self.add_static_type_source(sp, r);
-        Ok(())
-    }
-
     /// The slot of an uninitialized typed property `name` of `o` that a
     /// reference operation handles itself (`zend_std_get_property_ptr_ptr`
     /// returns the `IS_UNDEF` slot for writes); `None` leaves the case to
     /// the regular property path (untyped, hooked, readonly or
     /// asymmetric-visibility properties, inaccessible ones, properties
     /// `unset()` since, lazy objects).
-    fn uninit_typed_slot(&mut self, o: &Obj, name: &ZStr) -> VmResult<Option<Rc<PropInfo>>> {
+    fn uninit_typed_slot(&mut self, o: &Obj, name: &ZStr) -> Option<Rc<PropInfo>> {
         let cls = object::class_of(o).clone();
         let scope = self.scope();
-        let pi = match self.lookup_prop(&cls, name, scope.as_ref()) {
-            crate::props::PropLookup::Found(pi) => pi,
-            _ => return Ok(None),
+        let crate::props::PropLookup::Found(pi) = self.lookup_prop(&cls, name, scope.as_ref())
+        else {
+            return None;
         };
         if pi.hooks.is_some()
             || pi.flags & (crate::func::flags::READONLY | crate::func::flags::SET_MASK) != 0
             || !is_checked_type(&pi)
         {
-            return Ok(None);
+            return None;
         }
         let idx = pi.slot as usize;
-        let Some(d) = object_rc(o) else {
-            return Ok(None);
-        };
+        let d = object_rc(o)?;
         let uninit = d
             .slots
             .try_borrow()
             .is_ok_and(|s| matches!(s.get(idx), Some(None)));
         // After unset(), `__get()` takes over.
-        let reinit = d.readonly_init.borrow().get(idx).copied().unwrap_or(false)
-            && cls.magic.get.is_some();
+        let reinit =
+            d.readonly_init.borrow().get(idx).copied().unwrap_or(false) && cls.magic.get.is_some();
         if !uninit || reinit || d.lazy.borrow().is_some() {
-            return Ok(None);
+            return None;
         }
-        Ok(Some(pi))
+        Some(pi)
     }
 
     /// `$r = &$o->p` on an uninitialized typed property
@@ -810,7 +775,7 @@ impl Vm {
         o: &Obj,
         name: &ZStr,
     ) -> VmResult<Option<PhpRef>> {
-        let Some(pi) = self.uninit_typed_slot(o, name)? else {
+        let Some(pi) = self.uninit_typed_slot(o, name) else {
             return Ok(None);
         };
         if !pi.ty.as_ref().is_some_and(TypeDecl::allows_null) {
@@ -848,7 +813,7 @@ impl Vm {
         if !matches!(r, Value::Reference(_)) {
             return Ok(None);
         }
-        let Some(pi) = self.uninit_typed_slot(o, name)? else {
+        let Some(pi) = self.uninit_typed_slot(o, name) else {
             return Ok(None);
         };
         let idx = pi.slot as usize;
@@ -937,7 +902,7 @@ fn cell_key(cell: &Rc<RefCell<Value>>) -> usize {
 /// Records a typed static property when its cell is fetched (so writes
 /// through the cell can be checked).
 pub(crate) fn note_static_prop(sp: &StaticProp) {
-    if !sp.ty.as_ref().is_some_and(|t| !t.is_mixed()) {
+    if sp.ty.as_ref().is_none_or(TypeDecl::is_mixed) {
         return;
     }
     let key = cell_key(&sp.cell);
@@ -994,7 +959,10 @@ fn promotes_to_array(v: Option<&Value>) -> bool {
     match v {
         None | Some(Value::Null | Value::Bool(false)) => true,
         Some(Value::Reference(r)) => {
-            matches!(r.try_borrow().as_deref(), Some(Value::Null | Value::Bool(false)))
+            matches!(
+                r.try_borrow().as_deref(),
+                Some(Value::Null | Value::Bool(false))
+            )
         }
         Some(_) => false,
     }
@@ -1128,7 +1096,12 @@ impl Vm {
                 drop(c);
                 info.init.set(true);
                 let decl = self.find_class(info.prop.class.as_bytes());
-                add_source(&r, Holder::Static(info.cell.clone()), info.prop.clone(), decl);
+                add_source(
+                    &r,
+                    Holder::Static(info.cell.clone()),
+                    info.prop.clone(),
+                    decl,
+                );
                 Ok(Some(Value::Reference(r)))
             }
             WOp::AssignRef(r) => {
@@ -1136,7 +1109,12 @@ impl Vm {
                 if let Value::Reference(x) = &r {
                     self.verify_prop_assignable_by_ref(&info.prop, x)?;
                     let decl = self.find_class(info.prop.class.as_bytes());
-                    add_source(x, Holder::Static(info.cell.clone()), info.prop.clone(), decl);
+                    add_source(
+                        x,
+                        Holder::Static(info.cell.clone()),
+                        info.prop.clone(),
+                        decl,
+                    );
                 }
                 info.init.set(true);
                 let old = match cell.try_borrow_mut() {

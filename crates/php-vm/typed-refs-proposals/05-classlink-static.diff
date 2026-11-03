@@ -1,0 +1,12 @@
+diff --git a/crates/php-vm/src/classlink.rs b/crates/php-vm/src/classlink.rs
+index ca4208c..ad39b19 100644
+--- a/crates/php-vm/src/classlink.rs
++++ b/crates/php-vm/src/classlink.rs
+@@ -472,6 +472,7 @@ impl Vm {
+                 *sp.cell.borrow_mut() = v;
+             }
+         }
++        crate::typed_refs::note_static_prop(&sp);
+         Ok(sp.cell.clone())
+     }
+ 

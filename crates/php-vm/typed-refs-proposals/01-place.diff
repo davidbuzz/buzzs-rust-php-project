@@ -1,0 +1,111 @@
+diff --git a/crates/php-vm/src/place.rs b/crates/php-vm/src/place.rs
+index 69f12e4..7a42ddd 100644
+--- a/crates/php-vm/src/place.rs
++++ b/crates/php-vm/src/place.rs
+@@ -71,6 +71,9 @@ pub(crate) enum Step {
+     Obj(Obj, usize),
+     /// A container error.
+     Err(WalkErr),
++    /// An assignment through a typed reference, performed once the walk
++    /// has released its borrows (`zend_assign_to_typed_ref`).
++    TypedRefAssign(PhpRef, Value),
+     /// Need the value of a string offset write with a non-string value:
+     /// (string slot handled) — not used.
+     Nothing,
+@@ -266,6 +269,11 @@ pub(crate) fn descend(
+                 "Cannot modify a value while it is being iterated".into(),
+             ));
+         }
++        if !matches!(wop, WOp::Unset) && !matches!(segs[i], RSeg::Prop(_)) {
++            if let Some(msg) = crate::typed_refs::walk_auto_init_error(&r) {
++                return Step::Err(WalkErr::TypeError(msg));
++            }
++        }
+         let mut b = r.borrow_mut();
+         return descend(&mut b, segs, i, wop, diags, false);
+     }
+@@ -486,6 +494,9 @@ pub(crate) fn apply_final(v: &mut Value, wop: &mut WOp) -> Step {
+         WOp::Assign(val) => {
+             let val = std::mem::take(val);
+             match v {
++                Value::Reference(r) if crate::typed_refs::has_type_sources(r) => {
++                    return Step::TypedRefAssign(r.clone(), val);
++                }
+                 Value::Reference(r) => {
+                     // The reference may be the container being walked
+                     // (`$a['k'] = null` where `$a['k']` is `&$a`): its value
+@@ -664,6 +675,9 @@ impl Vm {
+                 }
+             },
+             RBase::Cell(cell) => {
++                if let Some(v) = self.typed_static_write(&cell, segs, &mut wop)? {
++                    return Ok(v);
++                }
+                 if segs.is_empty() {
+                     let mut b = cell.borrow_mut();
+                     let s = apply_final(&mut b, &mut wop);
+@@ -705,6 +719,7 @@ impl Vm {
+             Step::Done(v) => Ok(v),
+             Step::Nothing => Ok(Value::Null),
+             Step::Err(e) => Err(self.walk_err(e)),
++            Step::TypedRefAssign(r, v) => self.assign_ref(&r, v),
+             Step::Obj(o, i) => self.obj_walk(o, segs, i, wop),
+         }
+     }
+@@ -718,6 +733,13 @@ impl Vm {
+         match wop {
+             WOp::Assign(v) => {
+                 let mut st = store.borrow_mut();
++                if let Some(Value::Reference(r)) = &st.slots[idx] {
++                    if crate::typed_refs::has_type_sources(r) {
++                        let r = r.clone();
++                        drop(st);
++                        return self.assign_ref(&r, v);
++                    }
++                }
+                 let old = match &mut st.slots[idx] {
+                     Some(Value::Reference(r)) => Some(r.set(v.clone())),
+                     slot => slot.replace(v.clone()),
+@@ -832,6 +854,7 @@ impl Vm {
+                         _ => Ok(Value::Null),
+                     };
+                 }
++                self.typed_prop_dim_write_check(&obj, name, &segs[i + 1], &wop)?;
+                 match self.property_container(&obj, name)? {
+                     PropContainer::Declared(idx) => {
+                         let mut diags = Vec::new();
+@@ -1152,7 +1175,10 @@ impl Vm {
+         } else {
+             ops::decrement(&mut nv, self).map_err(|e| self.rt_throw(e))?;
+         }
+-        let res = self.write_place(base2, &segs, WOp::Assign(nv))?;
++        let guard = crate::typed_refs::IncDecGuard::new(kind.is_inc(), &cur, &nv);
++        let res = self.write_place(base2, &segs, WOp::Assign(nv));
++        drop(guard);
++        let res = res?;
+         Ok(if kind.is_post() { cur } else { res })
+     }
+ 
+@@ -1233,7 +1259,10 @@ impl Vm {
+                     }
+                 }
+             },
+-            RBase::Cell(c) => c.borrow().deref(),
++            RBase::Cell(c) => {
++                self.typed_static_read_check(&c, mode)?;
++                c.borrow().deref()
++            }
+             RBase::Value(v) => v.deref(),
+             RBase::Undef(name) => {
+                 if mode != FetchMode::Is {
+@@ -1422,7 +1451,9 @@ impl Vm {
+         let mut cur = match base {
+             RBase::Var(store, idx) => store.borrow().slots[idx].as_ref().map(Value::deref),
+             RBase::This(o) => o.map(Value::Object),
+-            RBase::Cell(c) => Some(c.borrow().deref()),
++            RBase::Cell(c) => {
++                (!crate::typed_refs::static_cell_uninit(&c)).then(|| c.borrow().deref())
++            }
+             RBase::Value(v) => Some(v.deref()),
+             RBase::Undef(_) => None,
+             RBase::Globals => Some(Value::Array(ZArray::from_table(
