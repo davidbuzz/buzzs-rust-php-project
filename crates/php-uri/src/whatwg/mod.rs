@@ -476,6 +476,43 @@ mod tests {
     }
 
     #[test]
+    fn wpt_style_cases() {
+        let cases = [
+            ("http://example.com/foo/../bar", "http://example.com/bar"),
+            (
+                "http://example.com/foo/%2e%2e/bar",
+                "http://example.com/bar",
+            ),
+            ("http://example.com////../..", "http://example.com//"),
+            ("http://user@/www.example.com", ""),
+            ("http:/example.com/", "http://example.com/"),
+            ("http://[::127.0.0.1]", "http://[::7f00:1]/"),
+            ("http://[0:0:0:0:0:0:13.1.68.3]", "http://[::d01:4403]/"),
+            ("http://0x7f.0.0.1/", "http://127.0.0.1/"),
+            ("http://4294967295/", "http://255.255.255.255/"),
+            ("http://4294967296/", ""),
+            ("file:c:\\foo\\bar.html", "file:///c:/foo/bar.html"),
+            ("file://localhost/x", "file:///x"),
+            ("sc://ñ.test/", "sc://%C3%B1.test/"),
+            ("http://a:b@c:29/d", "http://a:b@c:29/d"),
+            ("http://::@c@d:2", "http://:%3A%40c@d:2/"),
+            ("ws://example.com:80/", "ws://example.com/"),
+            (
+                "http://example.com/\u{1F600}",
+                "http://example.com/%F0%9F%98%80",
+            ),
+            ("javascript:alert(1)", "javascript:alert(1)"),
+        ];
+        for (input, want) in cases {
+            let got = Url::parse(input.as_bytes(), None)
+                .url
+                .map(|u| String::from_utf8(u.serialize(false, false)).unwrap())
+                .unwrap_or_default();
+            assert_eq!(got, want, "{input}");
+        }
+    }
+
+    #[test]
     fn failures() {
         assert!(Url::parse(b"", None).url.is_none());
         assert!(Url::parse(b"/foo", None).url.is_none());
