@@ -390,3 +390,279 @@ fn bug_36798_latin1_literal() {
     let _ = PhpRef::new(Value::Null);
     assert_phpt!(h, "bug_36798.phpt");
 }
+
+#[test]
+fn bug_50458_fetch_func_closure() {
+    let mut h = TestHost::new();
+    let db = h.factory();
+    h.exec(&db, "CREATE TABLE test50458 (a VARCHAR(10))").unwrap();
+    h.exec(&db, "INSERT INTO test50458 (a) VALUES ('xyz')").unwrap();
+    h.add_function("upper", |_, args| {
+        let s = args[0].as_str().unwrap().to_ascii_uppercase();
+        Ok(Value::Str(s))
+    });
+    let res = h.query(&db, "SELECT a FROM test50458").unwrap();
+    let r = h.fetch_all(&res, Some(FETCH_FUNC), &[s("upper")]).unwrap();
+    h.dump(&r);
+    assert_phpt!(h, "bug_50458.phpt");
+}
+
+#[test]
+fn bug_60665_lazy_isset_empty() {
+    let mut h = TestHost::new();
+    let db = h.factory();
+    let st = h
+        .prepare(&db, "SELECT NULL AS null_value, 0 AS zero, 1 AS one ")
+        .unwrap();
+    h.execute(&st, None).unwrap();
+    let row = h.fetch(&st, FETCH_LAZY).unwrap();
+    let row = TestHost::row(&row).unwrap();
+    let empty = |h: &mut TestHost, n: &str| !row.has_property(h, &z(n), true).unwrap();
+    let results = [
+        empty(&mut h, "null_value"),
+        empty(&mut h, "zero"),
+        !empty(&mut h, "one"),
+        empty(&mut h, "missing"),
+    ];
+    let isset = |h: &mut TestHost, n: &str| row.has_property(h, &z(n), false).unwrap();
+    let results2 = [
+        !isset(&mut h, "null_value"),
+        isset(&mut h, "zero"),
+        isset(&mut h, "one"),
+        !isset(&mut h, "missing"),
+    ];
+    for b in results.into_iter().chain(results2) {
+        h.dump(&Value::Bool(b));
+    }
+    assert_phpt!(h, "bug_60665.phpt");
+}
+
+#[test]
+fn bug_61292_persistent_subclass() {
+    let mut h = TestHost::new();
+    h.add_class(
+        Class::new("Database_SQL")
+            .extends("PDO")
+            .prop_default("bar", Vis::Public, Value::Array(arr(vec![]))),
+    );
+    let mut opts = php_runtime::ZArray::new();
+    opts.make_mut()
+        .insert(php_runtime::ArrayKey::Int(ATTR_PERSISTENT), Value::Bool(true));
+    let db = h
+        .new_pdo("Database_SQL", "sqlite::memory:", Some(opts))
+        .unwrap();
+    let bar = TestHost::get_prop(&db, "bar").unwrap();
+    h.dump(&bar);
+    assert_phpt!(h, "bug_61292.phpt");
+}
+
+#[test]
+fn bug_64172_error_info_after_failure() {
+    let mut h = TestHost::new();
+    let db = h.factory();
+    h.exec(&db, "CREATE TABLE test64172 (x int)").unwrap();
+    h.exec(&db, "INSERT INTO test64172 VALUES (1)").unwrap();
+    let check = |h: &mut TestHost| {
+        h.echo("===TEST===\n");
+        let info = h.db_error_info(&db).unwrap();
+        let info = info.as_array().unwrap().clone();
+        h.dump(&Value::Bool(matches!(info.get_int(0), Some(Value::Str(_)))));
+        h.dump(&Value::Bool(matches!(info.get_int(1), Some(Value::Int(_)))));
+        h.dump(&Value::Bool(matches!(info.get_int(2), Some(Value::Str(_)))));
+        h.echo("===GOOD===\n");
+    };
+    h.echo("===FAIL===\n");
+    h.query(&db, "SELECT * FROM bad_table").unwrap();
+    h.echo("\n");
+    check(&mut h);
+    let st = h.query(&db, "SELECT * FROM test64172").unwrap();
+    h.fetch_all(&st, None, &[]).unwrap();
+    drop(st);
+    let info = h.db_error_info(&db).unwrap();
+    h.dump(&info);
+    h.echo("===FAIL===\n");
+    h.exec(&db, "INSERT INTO bad_table VALUES(1)").unwrap();
+    h.echo("\n");
+    check(&mut h);
+    h.exec(&db, "INSERT INTO test64172 VALUES (2)").unwrap();
+    let info = h.db_error_info(&db).unwrap();
+    h.dump(&info);
+    assert_phpt!(h, "bug_64172.phpt");
+}
+
+#[test]
+fn bug_65946_limit_param() {
+    let mut h = TestHost::new();
+    let db = h.factory();
+    let _ = h.set_attr(&db, ATTR_EMULATE_PREPARES, Value::Bool(true));
+    h.exec(&db, "CREATE TABLE test65946(id int)").unwrap();
+    h.exec(&db, "INSERT INTO test65946 VALUES(1)").unwrap();
+    let st = h
+        .prepare(&db, "SELECT * FROM test65946 LIMIT :limit")
+        .unwrap();
+    h.bind_value(&st, ParamId::Name(z("limit")), i(1), PARAM_INT)
+        .unwrap();
+    for _ in 0..2 {
+        if !h.execute(&st, None).unwrap() {
+            let e = h.stmt_error_info(&st).unwrap();
+            h.dump(&e);
+        }
+    }
+    let r = h.fetch_all(&st, Some(FETCH_ASSOC), &[]).unwrap();
+    h.dump(&r);
+    assert_phpt!(h, "bug_65946.phpt");
+}
+
+#[test]
+fn bug_69356_debug_dump_long_query() {
+    let mut h = TestHost::new();
+    let db = h.factory();
+    let _ = h.set_attr(&db, ATTR_EMULATE_PREPARES, Value::Bool(true));
+    let q = "SELECT '
+    Dumps the information contained by a prepared statement directly on the output. It will provide the SQL query in use, the number of parameters used (Params), the list of parameters, with their name, type (paramtype) as an integer, their key name or position, and the position in the query (if this is supported by the PDO driver, otherwise, it will be -1).
+    This is a debug function, which dump directly the data on the normal output.
+    Tip:
+    As with anything that outputs its result directly to the browser, the output-control functions can be used to capture the output of this function, and save it in a string (for example).
+    This will only dumps the parameters in the statement at the moment of the dump. Extra parameters are not stored in the statement, and not displayed.
+'";
+    let st = h.query(&db, q).unwrap();
+    let r = h.debug_dump(&st).unwrap();
+    h.dump(&r);
+    assert_phpt!(h, "bug_69356.phpt");
+}
+
+#[test]
+fn bug_71447_comments() {
+    let mut h = TestHost::new();
+    let db = h.factory();
+    h.set_attr(&db, ATTR_ERRMODE, i(ERRMODE_WARNING)).unwrap();
+    h.set_attr(&db, ATTR_DEFAULT_FETCH_MODE, i(FETCH_NUM)).unwrap();
+    let _ = h.set_attr(&db, ATTR_EMULATE_PREPARES, Value::Bool(false));
+    h.exec(&db, "CREATE TABLE test71447(id int)").unwrap();
+    h.exec(&db, "INSERT INTO test71447 VALUES(1)").unwrap();
+    let queries = [
+        "\n    SELECT -- That's all folks!\n        '\"abc\":8000'\n    FROM test71447\n",
+        "\n    SELECT\n        '\"abc\":8001 -- Wat?'\n    FROM test71447\n",
+        "\n    SELECT -- That's all folks!\n        '\"abc\":8002'\n    FROM test71447\n",
+        "\n    SELECT /* That's all folks! */\n        '\"abc\":8003'\n    FROM test71447\n",
+        "\n    SELECT -- Is it only \"single quotes?\n        '\"abc\":8004'\n    FROM test71447\n",
+    ];
+    for q in queries {
+        let st = h.prepare(&db, q).unwrap();
+        h.execute(&st, None).unwrap();
+        let v = h.fetch_column(&st, 0).unwrap();
+        h.dump(&v);
+    }
+    let st = h
+        .prepare(
+            &db,
+            "\n    SELECT -- What about question marks here?\n        *\n    FROM test71447\n    WHERE id = ?\n",
+        )
+        .unwrap();
+    h.execute(&st, Some(arr(vec![i(1)]))).unwrap();
+    let v = h.fetch_column(&st, 0).unwrap();
+    h.dump(&v);
+    let st = h
+        .prepare(
+            &db,
+            "\n    SELECT -- What about placeholders :bar\n        *\n    FROM test71447\n    WHERE id = :id\n",
+        )
+        .unwrap();
+    h.execute(&st, Some(assoc(vec![("id", i(1))]))).unwrap();
+    let v = h.fetch_column(&st, 0).unwrap();
+    h.dump(&v);
+    assert_phpt!(h, "bug_71447.phpt");
+}
+
+#[test]
+fn bug_71885_double_question_mark() {
+    let mut h = TestHost::new();
+    let db = h.factory();
+    h.set_attr(&db, ATTR_ERRMODE, i(ERRMODE_EXCEPTION)).unwrap();
+    h.exec(&db, "CREATE TABLE test71885 (a int)").unwrap();
+    let sql = "SELECT * FROM test71885 WHERE a ?? 1";
+    let e = h.exec(&db, sql).unwrap_err();
+    h.dump(&Value::Bool(TestHost::error_message(&e).contains('?')));
+    for _ in 0..2 {
+        let e = h.prepare(&db, sql).unwrap_err();
+        h.dump(&Value::Bool(TestHost::error_message(&e).contains('?')));
+    }
+    assert_phpt!(h, "bug_71885.phpt");
+}
+
+#[test]
+fn bug_72368_extra_param() {
+    let mut h = TestHost::new();
+    let db = h.factory();
+    h.set_attr(&db, ATTR_ERRMODE, i(ERRMODE_EXCEPTION)).unwrap();
+    for emulate in [false, true] {
+        let _ = h.set_attr(&db, ATTR_EMULATE_PREPARES, Value::Bool(emulate));
+        let st = h.prepare(&db, "SELECT 1").unwrap();
+        match h.execute(&st, Some(assoc(vec![(":bar", i(1))]))) {
+            Ok(b) => h.dump(&Value::Bool(b)),
+            Err(_) => h.dump(&s("ERR")),
+        }
+    }
+    h.echo("===DONE===\n");
+    assert_phpt!(h, "bug_72368.phpt");
+}
+
+#[test]
+fn bug_72788_persistent_failed_query() {
+    let mut h = TestHost::new();
+    for _ in 0..2 {
+        let mut opts = php_runtime::ZArray::new();
+        opts.make_mut()
+            .insert(php_runtime::ArrayKey::Int(ATTR_PERSISTENT), Value::Bool(true));
+        let db = h.factory_class("PDO", Some(opts));
+        let before = h.out.len();
+        let st = h.query(&db, "SELECT 1 FROM TABLE_DOES_NOT_EXIST").unwrap();
+        h.out.truncate(before);
+        if matches!(st, Value::Bool(false)) {
+            h.echo("Statement failed as expected\n");
+        }
+    }
+    h.echo("Done");
+    assert_eq!(h.persistent.len(), 1);
+    assert_phpt!(h, "bug_72788.phpt");
+}
+
+#[test]
+fn bug_73234_bind_null_type() {
+    let mut h = TestHost::new();
+    let db = h.factory();
+    let _ = h.set_attr(&db, ATTR_EMULATE_PREPARES, Value::Bool(true));
+    h.exec(&db, "CREATE TABLE test73234(id INT)").unwrap();
+    let st = h
+        .prepare(&db, "INSERT INTO test73234 VALUES(:value)")
+        .unwrap();
+    h.bind_value(&st, ParamId::Name(z(":value")), i(0), PARAM_NULL)
+        .unwrap();
+    h.execute(&st, None).unwrap();
+    h.bind_value(&st, ParamId::Name(z(":value")), Value::Null, PARAM_NULL)
+        .unwrap();
+    h.execute(&st, None).unwrap();
+    dump_query_all(&mut h, &db, "SELECT * FROM test73234", FETCH_ASSOC);
+    assert_phpt!(h, "bug_73234.phpt");
+}
+
+#[test]
+fn bug_79106_numeric_column_names() {
+    let mut h = TestHost::new();
+    let db = h.factory();
+    let st = h
+        .query(&db, "SELECT 0 as \"2007\", 0 as \"2008\", 0 as \"2020\"")
+        .unwrap();
+    let r = h.fetch_all(&st, None, &[]).unwrap();
+    h.dump(&r);
+    assert_phpt!(h, "bug_79106.phpt");
+
+    let mut h = TestHost::new();
+    let db = h.factory();
+    let st = h
+        .query(&db, "SELECT 11111 as \"1\", 22222 as \"2\"")
+        .unwrap();
+    let r = h.fetch_all(&st, None, &[]).unwrap();
+    h.dump(&r);
+    assert_phpt!(h, "bug_79106_collision.phpt");
+}
