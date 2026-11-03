@@ -1408,16 +1408,23 @@ impl Vm {
         if max < 0 {
             return false;
         }
-        let total = if max > 0 {
-            usize::try_from(max).unwrap_or(usize::MAX)
-        } else {
-            self.native_stack_size
-        };
         let reserved =
             usize::try_from(self.ini.get_long("zend.reserved_stack_size").max(0)).unwrap_or(0);
-        // Interpreter frames are much larger than php-src's: keep a margin.
-        let reserve = reserved.max(total / 8).max(256 << 10);
-        used + reserve > total
+        // The real thread stack must never be smashed, whatever the INI says.
+        let hard = self
+            .native_stack_size
+            .saturating_sub((self.native_stack_size / 8).max(256 << 10));
+        let budget = if max > 0 {
+            // `zend.max_allowed_stack_size` is sized for php-src's frames;
+            // the interpreter's are ~4x larger (same scale as fiber stacks).
+            usize::try_from(max)
+                .unwrap_or(usize::MAX)
+                .saturating_sub(reserved)
+                .saturating_mul(crate::fiber::STACK_SCALE)
+        } else {
+            hard.saturating_sub(reserved)
+        };
+        used > budget.min(hard)
     }
 
     /// Declares the native stack size of the thread running the VM (the

@@ -43,56 +43,6 @@ pub(crate) enum RSeg {
     Prop(ZStr),
 }
 
-/// The resolved segments of a place, stored inline for the common one- and
-/// two-segment paths (`$a[$i]`, `$o->p`, `$m[$i][$j]`) so that resolving a
-/// place does not allocate. php-src's `FETCH_DIM_*`/`FETCH_OBJ_*` operands
-/// live in the op array and the VM frame, never on the heap.
-#[derive(Debug)]
-pub(crate) struct RSegs {
-    len: usize,
-    inline: [RSeg; 2],
-    heap: Vec<RSeg>,
-}
-
-impl RSegs {
-    /// Room for `n` segments; allocates only when `n > 2`.
-    fn with_capacity(n: usize) -> Self {
-        RSegs {
-            len: 0,
-            inline: [RSeg::Append, RSeg::Append],
-            heap: if n > 2 {
-                Vec::with_capacity(n)
-            } else {
-                Vec::new()
-            },
-        }
-    }
-
-    fn push(&mut self, seg: RSeg) {
-        if self.heap.capacity() == 0 && self.len < self.inline.len() {
-            self.inline[self.len] = seg;
-        } else {
-            if self.heap.is_empty() {
-                let [a, b] = std::mem::replace(&mut self.inline, [RSeg::Append, RSeg::Append]);
-                self.heap.extend([a, b].into_iter().take(self.len));
-            }
-            self.heap.push(seg);
-        }
-        self.len += 1;
-    }
-}
-
-impl std::ops::Deref for RSegs {
-    type Target = [RSeg];
-    fn deref(&self) -> &[RSeg] {
-        if self.heap.is_empty() {
-            &self.inline[..self.len]
-        } else {
-            &self.heap
-        }
-    }
-}
-
 /// A write operation applied at the end of a path.
 pub(crate) enum WOp {
     Assign(Value),
@@ -581,7 +531,11 @@ pub(crate) fn apply_final(v: &mut Value, wop: &mut WOp) -> Step {
 
 impl Vm {
     /// Resolves a place's base and segments.
-    pub(crate) fn resolve_place(&mut self, pid: PlaceId, write: bool) -> VmResult<(RBase, RSegs)> {
+    pub(crate) fn resolve_place(
+        &mut self,
+        pid: PlaceId,
+        write: bool,
+    ) -> VmResult<(RBase, Vec<RSeg>)> {
         let code = self.frame().code.clone();
         let p = &code.places[pid as usize];
         let base = match &p.base {
@@ -635,7 +589,7 @@ impl Vm {
                 RBase::Value(v)
             }
         };
-        let mut segs = RSegs::with_capacity(p.segs.len());
+        let mut segs = Vec::with_capacity(p.segs.len());
         for s in &p.segs {
             segs.push(match s {
                 Seg::Dim(op) => RSeg::Dim(self.read_dim_operand(*op)?),

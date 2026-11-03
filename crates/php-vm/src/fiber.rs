@@ -111,7 +111,7 @@ const DEFAULT_STACK: usize = 4096 * 512;
 
 /// Our interpreter needs more native stack per PHP-level nesting than
 /// php-src does; scale `fiber.stack_size` by this factor.
-const STACK_SCALE: usize = 4;
+pub(crate) const STACK_SCALE: usize = 4;
 
 /// Conservative native stack use of one nested interpreter loop, used to
 /// turn the stack size into a nesting budget (`vm.depth`) so that deep

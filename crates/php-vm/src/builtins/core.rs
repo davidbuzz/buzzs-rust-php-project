@@ -322,15 +322,39 @@ fn get_object_vars(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             return Ok(Value::Array(t));
         }
     }
+    // Like php-src: the raw property table filtered by
+    // `zend_check_property_access()`, never per-name property reads (no
+    // hooks or `__get`); dynamic properties pass whatever their name.
+    let scope = vm.scope();
+    let cls = object::class_of(&o).clone();
     let mut t = HashTable::new();
-    for (k, name, _) in vm.visible_props(&o) {
-        let v = vm.read_property(&o, &name, crate::opcode::FetchMode::Is)?;
-        let key = match k {
-            Value::Int(i) => ArrayKey::Int(i),
-            Value::Str(s) => ArrayKey::from_zstr(&s),
-            _ => continue,
-        };
-        t.insert(key, v);
+    for (k, v, pi) in vm.object_prop_table(&o, false) {
+        let Some(v) = v else { continue };
+        match pi {
+            Some(pi) => {
+                let name = pi.name.clone();
+                let visible = match vm.lookup_prop(&cls, &name, scope.as_ref()) {
+                    crate::props::PropLookup::Found(found) if found.slot == pi.slot => true,
+                    // A parent's private property from the parent's scope.
+                    _ => {
+                        pi.visibility() == flags::PRIVATE
+                            && scope
+                                .as_ref()
+                                .is_some_and(|s| s.name.eq_ignore_ascii_case(pi.class.as_bytes()))
+                    }
+                };
+                if visible {
+                    t.insert(ArrayKey::from_zstr(&name), v);
+                }
+            }
+            None => {
+                let key = match k {
+                    ArrayKey::Str(s) => ArrayKey::from_zstr(&s),
+                    k => k,
+                };
+                t.insert(key, v);
+            }
+        }
     }
     Ok(Value::Array(ZArray::from_table(t)))
 }
