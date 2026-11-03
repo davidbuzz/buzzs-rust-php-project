@@ -6,13 +6,14 @@
 //! `setParameter()`, or `importStylesheet()`, which then fails with "while
 //! a transformation is in progress" like in PHP.
 
+use std::any::Any;
 use std::cell::{Cell, RefCell};
 use std::ffi::c_int;
 use std::ptr::NonNull;
 use std::rc::Rc;
 
 use crate::callbacks::{self, CallbackRegistry, Lookup, PHP_NAMESPACE};
-use crate::document::{ResultDocument, XmlDocument};
+use crate::document::{OwnedDocument, ResultDocument, XmlDocument};
 use crate::error::{XslError, XslResult};
 use crate::host::{CallbackArg, CallbackContext, CallbackReturn, ReturnedNode, XslHost};
 use crate::params::{parameter_key, ParamKey, Parameters};
@@ -86,9 +87,9 @@ pub enum XmlOutput {
 }
 
 /// An `XSLTProcessor` object's state. `C` is the embedder's callable type.
-#[derive(Debug)]
 pub struct XsltProcessor<C> {
     stylesheet: RefCell<Option<Rc<Stylesheet>>>,
+    sheet_keepalive: RefCell<Option<Rc<dyn Any>>>,
     has_keys: Cell<bool>,
     params: RefCell<Parameters>,
     callbacks: RefCell<CallbackRegistry<C>>,
@@ -96,6 +97,17 @@ pub struct XsltProcessor<C> {
     profiling: RefCell<Option<Vec<u8>>>,
     transform_depth: Cell<u32>,
     props: Cell<Properties>,
+}
+
+impl<C> std::fmt::Debug for XsltProcessor<C> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("XsltProcessor")
+            .field("has_stylesheet", &self.stylesheet.borrow().is_some())
+            .field("parameters", &self.params.borrow())
+            .field("security_prefs", &self.security_prefs.get())
+            .field("properties", &self.props.get())
+            .finish_non_exhaustive()
+    }
 }
 
 impl<C: Clone> Default for XsltProcessor<C> {
@@ -136,6 +148,7 @@ impl<C: Clone> XsltProcessor<C> {
         raw::ensure_init();
         Self {
             stylesheet: RefCell::new(None),
+            sheet_keepalive: RefCell::new(None),
             has_keys: Cell::new(false),
             params: RefCell::new(Parameters::default()),
             callbacks: RefCell::new(CallbackRegistry::default()),
@@ -243,12 +256,42 @@ impl<C: Clone> XsltProcessor<C> {
         else {
             return Ok(false);
         };
+        self.install(sheet, None);
+        Ok(true)
+    }
+
+    /// `importStylesheet()` with a clone made by the embedder's object
+    /// model (`php-dom`'s clone handler, which knows how to copy modern
+    /// DOM namespace data). Ownership of `clone` passes to the processor;
+    /// `keepalive` (PHP's `sheet_ref_obj`: e.g. the modern document's
+    /// namespace mapper that `clone`'s namespace structs belong to) is kept
+    /// for as long as the compiled stylesheet lives.
+    pub fn import_stylesheet_owned(
+        &self,
+        clone: OwnedDocument,
+        modern: bool,
+        keepalive: Option<Rc<dyn Any>>,
+    ) -> XslResult<bool> {
+        if self.is_transforming() {
+            return Err(XslError::Error(
+                "Cannot call XSLTProcessor::importStylesheet() while a transformation is in progress"
+                    .into(),
+            ));
+        }
+        let Some(sheet) = Stylesheet::compile_owned(clone, modern) else {
+            return Ok(false);
+        };
+        self.install(sheet, keepalive);
+        Ok(true)
+    }
+
+    fn install(&self, sheet: Stylesheet, keepalive: Option<Rc<dyn Any>>) {
         let clone_document = self.props.get().clone_document.unwrap_or(false);
         if clone_document || sheet.uses_keys() {
             self.has_keys.set(true);
         }
         *self.stylesheet.borrow_mut() = Some(Rc::new(sheet));
-        Ok(true)
+        *self.sheet_keepalive.borrow_mut() = keepalive;
     }
 
     /// Whether a stylesheet has been imported.

@@ -8,7 +8,12 @@
 //! * [`expect`] compares the output with the `--EXPECT--`/`--EXPECTF--`
 //!   section of the original `.phpt` file.
 
-#![allow(dead_code, clippy::missing_panics_doc, clippy::must_use_candidate)]
+#![allow(
+    dead_code,
+    clippy::missing_panics_doc,
+    clippy::must_use_candidate,
+    clippy::doc_markdown
+)]
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -141,18 +146,17 @@ impl TNode {
 
     /// `parentNode` (for namespace nodes: the element).
     pub fn parent_name(&self) -> Vec<u8> {
-        match self {
-            Self::Namespace { parent, .. } => parent.name(),
-            _ => {
-                let p = self.raw().parent;
-                if p.is_null() {
-                    return Vec::new();
-                }
-                // SAFETY: the parent is alive with the node.
-                unsafe { std::ffi::CStr::from_ptr((*p).name.cast()) }
-                    .to_bytes()
-                    .to_vec()
+        if let Self::Namespace { parent, .. } = self {
+            parent.name()
+        } else {
+            let p = self.raw().parent;
+            if p.is_null() {
+                return Vec::new();
             }
+            // SAFETY: the parent is alive with the node.
+            unsafe { std::ffi::CStr::from_ptr((*p).name.cast()) }
+                .to_bytes()
+                .to_vec()
         }
     }
 
@@ -257,6 +261,7 @@ thread_local! {
     static METHOD: RefCell<String> = const { RefCell::new(String::new()) };
     static EXCEPTION: RefCell<Option<Exc>> = const { RefCell::new(None) };
     static SILENCE: RefCell<bool> = const { RefCell::new(false) };
+    static CWD: RefCell<PathBuf> = RefCell::new(PathBuf::new());
 }
 
 pub fn echo(s: impl AsRef<[u8]>) {
@@ -279,7 +284,7 @@ fn display(level: &str, msg: &[u8]) {
     }
     echo(line);
     echo(msg);
-    echo(" in %s on line %d\n");
+    echo(" in /test.php on line 1\n");
 }
 
 /// Runs `f` as the PHP method `method` (warnings are prefixed with it).
@@ -320,6 +325,7 @@ pub fn exception_pending() -> bool {
 /// stream hooks resolving relative paths against `base`.
 pub fn setup(base: &Path) {
     php_libxml::error::reset_request_state();
+    CWD.with(|c| *c.borrow_mut() = base.to_path_buf());
     take_output();
     take_exception();
     php_libxml::error::set_diagnostic_handler(Some(Box::new(|d: Diagnostic| {
@@ -688,11 +694,22 @@ pub fn load(path: &Path) -> Document {
     })
 }
 
-/// `DOMDocument::loadXML()`.
+/// `DOMDocument::loadXML()`: like PHP's DOM, the document's URL is the
+/// current directory (the base for relative `xsl:include`/`document()`).
 pub fn load_xml(xml: &str) -> Document {
+    let cwd = CWD.with(|c| c.borrow().clone());
+    let options = ParseOptions {
+        url: Some(format!("{}/", cwd.display()).into_bytes()),
+        ..ParseOptions::default()
+    };
     in_method("DOMDocument::loadXML", || {
-        Document::parse_memory(xml.as_bytes(), &ParseOptions::default()).expect("loadXML")
+        Document::parse_memory(xml.as_bytes(), &options).expect("loadXML")
     })
+}
+
+/// `simplexml_load_string()` (no document URL).
+pub fn load_sxe(xml: &str) -> Document {
+    Document::parse_memory(xml.as_bytes(), &ParseOptions::default()).expect("simplexml_load_string")
 }
 
 /// `DOMDocument::saveXML()`.

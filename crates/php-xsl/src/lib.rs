@@ -33,7 +33,7 @@ pub mod processor;
 mod raw;
 
 pub use callbacks::{CallbackRegistry, Lookup, Mode};
-pub use document::{RawDocument, ResultDocument, XmlDocument};
+pub use document::{OwnedDocument, RawDocument, ResultDocument, XmlDocument};
 pub use error::{ErrorClass, XslError, XslResult};
 pub use host::{
     CallbackArg, CallbackContext, CallbackReturn, NodeArg, NodeRef, OwnedNode, ReturnedNode,

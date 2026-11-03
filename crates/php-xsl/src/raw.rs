@@ -28,7 +28,7 @@ use std::ptr::NonNull;
 use std::sync::Once;
 
 use crate::callbacks::PHP_NAMESPACE;
-use crate::document::ResultDocument;
+use crate::document::{OwnedDocument, ResultDocument};
 use crate::ffi;
 use crate::host::{NodeArg, NodeRef, OwnedNode};
 
@@ -364,38 +364,43 @@ pub(crate) struct Stylesheet {
 }
 
 impl Stylesheet {
-    /// `importStylesheet`'s core: copies `source` (the clone PHP makes),
-    /// restores namespace declarations for modern documents, and compiles
-    /// the copy with PHP's parser globals. `None` when libxslt rejects it
-    /// (its errors have been reported).
+    /// `importStylesheet`'s core: copies `source` (the clone PHP makes)
+    /// and compiles the copy (see [`Self::compile_owned`]).
     ///
     /// # Safety
     /// `source` must be a live document.
     pub(crate) unsafe fn compile(source: NonNull<ffi::xmlDoc>, modern: bool) -> Option<Self> {
         ensure_init();
-        // SAFETY: source is live; the copy is exclusively ours until it is
-        // handed to libxslt (which owns it on success).
+        // SAFETY: source is live; the copy is fresh and exclusively ours.
+        let copy = NonNull::new(unsafe { ffi::xmlCopyDoc(source.as_ptr(), 1) })?;
+        // SAFETY: as above.
+        Self::compile_owned(unsafe { OwnedDocument::from_raw(copy) }, modern)
+    }
+
+    /// Compiles a stylesheet document clone with PHP's parser globals,
+    /// after restoring namespace declarations for modern documents. `None`
+    /// when libxslt rejects it (its errors have been reported; the clone is
+    /// freed).
+    pub(crate) fn compile_owned(clone: OwnedDocument, modern: bool) -> Option<Self> {
+        ensure_init();
+        let doc = clone.as_ptr();
+        // SAFETY: doc is exclusively ours; on success libxslt takes it over
+        // (freed with the stylesheet), on failure it leaves it alone and
+        // the OwnedDocument frees it.
         let sheet = unsafe {
-            let copy = ffi::xmlCopyDoc(source.as_ptr(), 1);
-            if copy.is_null() {
-                return None;
-            }
             if modern {
-                ffi::php_xsl_glue_add_ns_defs(copy);
+                ffi::php_xsl_glue_add_ns_defs(doc);
             }
             let globals = ParseGlobalsScope::new();
             let errors = GenericErrorScope::new();
-            let sheet = ffi::xsltParseStylesheetDoc(copy);
+            let sheet = ffi::xsltParseStylesheetDoc(doc);
             drop(errors);
             drop(globals);
-            if sheet.is_null() {
-                // libxslt leaves the document alone on failure.
-                ffi::xmlFreeDoc(copy);
-            }
             sheet
         };
         resume_panic();
         let ptr = NonNull::new(sheet)?;
+        let _ = clone.into_raw();
         // SAFETY: ptr is a freshly compiled stylesheet.
         let uses_keys = unsafe { sheet_uses_keys(ptr) };
         Some(Self { ptr, uses_keys })

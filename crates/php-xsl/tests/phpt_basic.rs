@@ -1,6 +1,8 @@
 //! Ports of the transformation phpts of `ext/xsl/tests` (output compared
 //! with the original `--EXPECT--` sections).
 
+#![allow(clippy::doc_markdown, clippy::format_collect, clippy::similar_names)]
+
 mod common;
 
 use common::*;

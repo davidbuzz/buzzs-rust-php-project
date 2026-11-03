@@ -76,18 +76,25 @@ unsafe impl XmlDocument for RawDocument {
     }
 }
 
-/// The result tree of `transformToDoc()`, owned until handed over.
+/// An exclusively owned libxml2 document: the result tree of
+/// `transformToDoc()`, or a stylesheet clone handed to
+/// [`crate::XsltProcessor::import_stylesheet_owned`]. Freed on drop unless
+/// handed over.
 #[derive(Debug)]
-pub struct ResultDocument {
+pub struct OwnedDocument {
     ptr: NonNull<ffi::xmlDoc>,
 }
 
-impl ResultDocument {
-    /// Takes ownership of a document produced by libxslt.
+/// The result tree of `transformToDoc()`.
+pub type ResultDocument = OwnedDocument;
+
+impl OwnedDocument {
+    /// Takes ownership of a document.
     ///
     /// # Safety
-    /// `ptr` must be a fresh document nobody else references or frees.
-    pub(crate) unsafe fn from_raw(ptr: NonNull<ffi::xmlDoc>) -> Self {
+    /// `ptr` must be a valid document nobody else references, uses or
+    /// frees afterwards.
+    pub unsafe fn from_raw(ptr: NonNull<ffi::xmlDoc>) -> Self {
         Self { ptr }
     }
 
@@ -114,7 +121,7 @@ impl ResultDocument {
     }
 }
 
-impl Drop for ResultDocument {
+impl Drop for OwnedDocument {
     fn drop(&mut self) {
         // SAFETY: we own the document and free it exactly once.
         unsafe { ffi::xmlFreeDoc(self.ptr.as_ptr()) };

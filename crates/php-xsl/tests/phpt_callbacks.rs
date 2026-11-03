@@ -1,6 +1,8 @@
 //! Ports of the `php:function` / `registerPHPFunctions()` /
 //! `registerPHPFunctionNS()` phpts.
 
+#![allow(clippy::doc_markdown, clippy::format_collect, clippy::similar_names)]
+
 mod common;
 
 use std::rc::Rc;
