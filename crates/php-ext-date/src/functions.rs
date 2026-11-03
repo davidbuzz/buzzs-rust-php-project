@@ -324,7 +324,7 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
             timezone_name_from_abbr,
         )
         .function(
-            "timezone_identifiers_list(int $timezoneGroup = 2047, ?string $countryCode = null): array",
+            "timezone_identifiers_list(int $timezoneGroup = DateTimeZone::ALL, ?string $countryCode = null): array",
             timezone_identifiers_list,
         )
         .function("timezone_abbreviations_list(): array", timezone_abbreviations_list)
@@ -332,11 +332,11 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
         .function("date_default_timezone_set(string $timezoneId): bool", date_default_timezone_set)
         .function("date_default_timezone_get(): string", date_default_timezone_get)
         .function(
-            "date_sunrise(int $timestamp, int $returnFormat = 1, ?float $latitude = null, ?float $longitude = null, ?float $zenith = null, ?float $utcOffset = null): string|int|float|false",
+            "date_sunrise(int $timestamp, int $returnFormat = SUNFUNCS_RET_STRING, ?float $latitude = null, ?float $longitude = null, ?float $zenith = null, ?float $utcOffset = null): string|int|float|false",
             date_sunrise,
         )
         .function(
-            "date_sunset(int $timestamp, int $returnFormat = 1, ?float $latitude = null, ?float $longitude = null, ?float $zenith = null, ?float $utcOffset = null): string|int|float|false",
+            "date_sunset(int $timestamp, int $returnFormat = SUNFUNCS_RET_STRING, ?float $latitude = null, ?float $longitude = null, ?float $zenith = null, ?float $utcOffset = null): string|int|float|false",
             date_sunset,
         )
         .function(

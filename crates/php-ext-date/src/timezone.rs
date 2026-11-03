@@ -226,7 +226,7 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
         .method("getLocation(): array|false", p, get_location)
         .method("listAbbreviations(): array", ps, timezone_abbreviations_list)
         .method(
-            "listIdentifiers(int $timezoneGroup = 2047, ?string $countryCode = null): array",
+            "listIdentifiers(int $timezoneGroup = DateTimeZone::ALL, ?string $countryCode = null): array",
             ps,
             timezone_identifiers_list,
         )

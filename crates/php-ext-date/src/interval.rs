@@ -118,7 +118,7 @@ fn a64i(vm: &mut Vm, v: &Value) -> VmResult<i64> {
 /// `php_date_interval_initialize_from_hash()`.
 #[allow(clippy::cast_possible_truncation)]
 fn from_hash(vm: &mut Vm, h: &ZArray) -> VmResult<Interval> {
-    if let Some(Value::Str(s)) = get_str(h, "date_string").map(Value::deref) {
+    if let Some(Value::Str(s)) = get_str(h, "date_string").cloned() {
         return match Interval::from_date_string_property(s.as_bytes()) {
             Ok(iv) => Ok(iv),
             Err(m) => Err(vm.throw("Error", &lossy(&m))),
@@ -126,7 +126,7 @@ fn from_hash(vm: &mut Vm, h: &ZArray) -> VmResult<Interval> {
     }
     let mut r = RelTime::default();
     let long = |vm: &mut Vm, key: &str, def: i64| -> VmResult<i64> {
-        match get_str(h, key).map(Value::deref) {
+        match get_str(h, key).cloned() {
             Some(v) if scalar(&v) => get_long(vm, &v),
             _ => Ok(def),
         }
@@ -145,13 +145,13 @@ fn from_hash(vm: &mut Vm, h: &ZArray) -> VmResult<Interval> {
     r.weekday_behavior = long(vm, "weekday_behavior", -1)? as i32;
     r.first_last_day_of = long(vm, "first_last_day_of", -1)? as i32;
     r.invert = long(vm, "invert", 0)? as i32;
-    r.days = match get_str(h, "days").map(Value::deref) {
+    r.days = match get_str(h, "days").cloned() {
         Some(Value::Bool(false)) => UNSET,
         Some(v) if scalar(&v) => a64i(vm, &v)?,
         _ => -1,
     };
     r.special_type = u32::try_from(long(vm, "special_type", 0)?).unwrap_or(0);
-    r.special_amount = match get_str(h, "special_amount").map(Value::deref) {
+    r.special_amount = match get_str(h, "special_amount").cloned() {
         Some(v) if scalar(&v) => a64i(vm, &v)?,
         _ => -1,
     };
