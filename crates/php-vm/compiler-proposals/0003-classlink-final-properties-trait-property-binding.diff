@@ -1,0 +1,231 @@
+0003 — classlink.rs build_class: final properties and trait property binding.
+
+* do_inherit_property: redeclaring a final parent property (static or not)
+  fails with "Cannot override final property %s::$%s"; overriding a final
+  parent hook with "Cannot override final property hook %s::$%s::get()"
+  (inherit_property_hook).
+* zend_do_traits_property_binding: trait properties are bound after the
+  class's own properties (php-src order: var_dump shows own properties
+  first) and before inheritance, so they are checked only against own and
+  earlier-trait properties: hooked collisions give "%s and %s define the
+  same hooked property ($%s) in the composition of %s. Conflict resolution
+  between hooked properties is currently not supported. Class was composed",
+  other collisions must match in visibility/static/readonly, type and
+  (identical) default value or fail with "%s and %s define the same
+  property ($%s) in the composition of %s. However, the definition differs
+  and is considered incompatible. Class was composed"; compatible ones are
+  dropped. A readonly class using a trait with a non-readonly property
+  fails with "Readonly class %s cannot use trait with a non-readonly
+  property %s::$%s". Defaults that still need evaluation (ConstExpr::Code)
+  are assumed compatible since build_class has no VM.
+
+Fixes: Zend/tests/property_hooks/final, final_prop, final_prop_2,
+final_prop_promoted_{1,2,3,4}, traits_conflict; Zend/tests/readonly_props/
+readonly_trait_mismatch, readonly_with_default_trait_mismatch;
+Zend/tests/readonly_classes/gh9285_error; Zend/tests/traits/bug60369,
+bug74269, bugs/overridding-conflicting-property-initializer.
+
+diff --git a/crates/php-vm/src/classlink.rs b/crates/php-vm/src/classlink.rs
+index ec84ba6..906d5c5 100644
+--- a/crates/php-vm/src/classlink.rs
++++ b/crates/php-vm/src/classlink.rs
+@@ -872,6 +872,78 @@ fn is_valid_class_name(n: &[u8]) -> bool {
+             .all(|&c| c.is_ascii_alphanumeric() || c == b'_' || c == b'\\' || c >= 0x80)
+ }
+ 
++/// `zend_do_traits_property_binding`: the error for a property of trait
++/// `traits[ti]` that collides with an own (or earlier trait's) property of
++/// `class` in an incompatible way. Traits are bound before inheritance, so
++/// inherited properties are not considered here.
++#[allow(clippy::mutable_key_type)] // `ZStr` keys hash by content only.
++fn trait_property_conflict(
++    class: &ZStr,
++    traits: &[Rc<Class>],
++    ti: usize,
++    pd: &crate::class::PropDecl,
++    prop_map: &HashMap<ZStr, Rc<PropInfo>>,
++    static_map: &HashMap<ZStr, usize>,
++    static_props: &[StaticProp],
++) -> Option<String> {
++    let (cflags_, cty, cdefault, chooked) =
++        if let Some(e) = prop_map.get(&pd.name).filter(|e| e.class == *class) {
++            (
++                e.flags,
++                e.ty.as_ref(),
++                e.default.as_ref(),
++                e.hooks.is_some(),
++            )
++        } else {
++            let sp = static_map
++                .get(&pd.name)
++                .map(|&i| &static_props[i])
++                .filter(|sp| sp.class == *class)?;
++            (sp.flags, sp.ty.as_ref(), sp.default.as_ref(), false)
++        };
++    // `find_first_property_definition`.
++    let first = traits[..ti]
++        .iter()
++        .find(|t| {
++            t.decl
++                .as_ref()
++                .is_some_and(|d| d.props.iter().any(|p| p.name == pd.name))
++        })
++        .map_or_else(|| class.clone(), |t| t.name.clone());
++    let tname = &traits[ti].name;
++    if chooked || pd.hooks.is_some() {
++        return Some(format!(
++            "{first} and {tname} define the same hooked property (${}) in the composition of {class}. Conflict resolution between hooked properties is currently not supported. Class was composed",
++            pd.name
++        ));
++    }
++    let mask = flags::VISIBILITY | flags::STATIC | flags::READONLY;
++    let compatible = cflags_ & mask == pd.flags & mask
++        && cty == pd.ty.as_ref()
++        && trait_defaults_identical(cdefault, pd.default.as_ref());
++    (!compatible).then(|| {
++        format!(
++            "{first} and {tname} define the same property (${}) in the composition of {class}. However, the definition differs and is considered incompatible. Class was composed",
++            pd.name
++        )
++    })
++}
++
++/// `check_trait_property_or_constant_value_compatibility` for defaults
++/// known at link time; defaults that still need evaluation are assumed
++/// compatible.
++fn trait_defaults_identical(a: Option<&ConstExpr>, b: Option<&ConstExpr>) -> bool {
++    match (a, b) {
++        (None, None)
++        | (Some(ConstExpr::Code(_)), Some(_))
++        | (Some(_), Some(ConstExpr::Code(_))) => true,
++        (Some(ConstExpr::Value(x)), Some(ConstExpr::Value(y))) => {
++            php_runtime::ops::is_identical(x, y).unwrap_or(false)
++        }
++        _ => false,
++    }
++}
++
+ fn visibility_name(f: u32) -> &'static str {
+     match f & flags::VISIBILITY {
+         flags::PRIVATE => "private",
+@@ -1103,7 +1175,8 @@ fn build_class(
+             }
+         }
+     }
+-    let mut all_props: Vec<(crate::class::PropDecl, ZStr)> = Vec::new();
++    // (declaration, owner, index of the trait it comes from)
++    let mut all_props: Vec<(crate::class::PropDecl, ZStr, Option<usize>)> = Vec::new();
+     if decl.kind == ClassKind::Enum {
+         let mk = |n: &str, ty: crate::types::TypeDecl| crate::class::PropDecl {
+             name: ZStr::from(n),
+@@ -1121,22 +1194,103 @@ fn build_class(
+                 crate::types::TypeDecl::simple(crate::types::mask::STRING),
+             ),
+             name.clone(),
++            None,
+         ));
+         if let Some(b) = decl.backing {
+-            all_props.push((mk("value", crate::types::TypeDecl::simple(b)), name.clone()));
++            all_props.push((
++                mk("value", crate::types::TypeDecl::simple(b)),
++                name.clone(),
++                None,
++            ));
+         }
+     }
+-    for t in &traits {
++    // Own properties first; trait properties are bound after them
++    // (`zend_do_traits_property_binding`).
++    for p in &decl.props {
++        all_props.push((p.clone(), name.clone(), None));
++    }
++    for (ti, t) in traits.iter().enumerate() {
+         if let Some(td) = &t.decl {
+             for p in &td.props {
+-                all_props.push((p.clone(), name.clone()));
++                all_props.push((p.clone(), name.clone(), Some(ti)));
+             }
+         }
+     }
+-    for p in &decl.props {
+-        all_props.push((p.clone(), name.clone()));
+-    }
+-    for (pd, owner) in all_props {
++    for (pd, owner, from_trait) in all_props {
++        if let Some(ti) = from_trait {
++            if let Some(e) = trait_property_conflict(
++                &name,
++                &traits,
++                ti,
++                &pd,
++                &prop_map,
++                &static_map,
++                &static_props,
++            ) {
++                if err.is_none() {
++                    *err = Some(e);
++                }
++                continue;
++            }
++            let own = |c: &ZStr| *c == name;
++            if prop_map.get(&pd.name).is_some_and(|e| own(&e.class))
++                || static_map
++                    .get(&pd.name)
++                    .is_some_and(|&i| own(&static_props[i].class))
++            {
++                // Compatible with the own declaration: nothing to add.
++                continue;
++            }
++            if cflag & cflags::READONLY != 0 && pd.flags & flags::READONLY == 0 && err.is_none() {
++                *err = Some(format!(
++                    "Readonly class {} cannot use trait with a non-readonly property {}::${}",
++                    name, traits[ti].name, pd.name
++                ));
++            }
++        }
++        // `do_inherit_property`: a final parent property cannot be redeclared.
++        let inherited_final = prop_map
++            .get(&pd.name)
++            .filter(|e| e.class != name)
++            .map(|e| (e.flags, e.class.clone()))
++            .or_else(|| {
++                static_map
++                    .get(&pd.name)
++                    .map(|&i| &static_props[i])
++                    .filter(|sp| sp.class != name)
++                    .map(|sp| (sp.flags, sp.class.clone()))
++            });
++        if let Some((f, owner_class)) = inherited_final {
++            if f & flags::FINAL != 0 && err.is_none() {
++                *err = Some(format!(
++                    "Cannot override final property {owner_class}::${}",
++                    pd.name
++                ));
++            }
++        }
++        if let (Some(ph), Some(ch)) = (
++            prop_map
++                .get(&pd.name)
++                .filter(|e| e.class != name)
++                .and_then(|e| e.hooks.as_ref()),
++            pd.hooks.as_ref(),
++        ) {
++            let fin = if ph.final_get && ch.get.is_some() {
++                Some("get")
++            } else if ph.final_set && ch.set.is_some() {
++                Some("set")
++            } else {
++                None
++            };
++            if let Some(kind) = fin {
++                if err.is_none() {
++                    *err = Some(format!(
++                        "Cannot override final property hook {}::${}::{kind}()",
++                        ph.class, pd.name
++                    ));
++                }
++            }
++        }
+         if pd.flags & flags::STATIC != 0 {
+             let sp = StaticProp {
+                 name: pd.name.clone(),

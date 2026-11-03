@@ -1,0 +1,54 @@
+0005 — compiler/decl.rs: compile-time early binding only for classes without
+interfaces or traits.
+
+zend_compile_class_decl binds a top-level class at compile time only when
+it implements no interface and uses no trait ("We currently don't
+early-bind classes that implement interfaces or use traits"); enums always
+implement UnitEnum, and a non-trait class declaring __toString() implicitly
+implements Stringable. Such classes are declared when their statement runs,
+so `class_exists('C')` before `class C { use T; }` is false (as in
+/usr/bin/php) and composition errors are raised after earlier output.
+
+Fixes: Zend/tests/traits/property003, property004 (and the output before the
+fatal error in property005 / bug60536_002 once 0003 is applied).
+
+diff --git a/crates/php-vm/src/compiler/decl.rs b/crates/php-vm/src/compiler/decl.rs
+index 49d0d56..3f735ef 100644
+--- a/crates/php-vm/src/compiler/decl.rs
++++ b/crates/php-vm/src/compiler/decl.rs
+@@ -857,7 +857,7 @@ impl Compiler {
+         top_level: bool,
+     ) -> CResult<()> {
+         let idx = self.compile_class_decl(cd, false)?;
+-        if top_level {
++        if top_level && self.can_early_bind(idx) {
+             self.hoisted_classes.push(idx);
+         }
+         self.f().line = cd.span.line;
+@@ -865,6 +865,26 @@ impl Compiler {
+         Ok(())
+     }
+ 
++    /// `zend_compile_class_decl`: only classes that implement no interface
++    /// (enums and non-trait classes with `__toString()` implement one
++    /// implicitly) and
++    /// use no trait are bound at compile time; the others are declared when
++    /// their statement runs.
++    fn can_early_bind(&self, idx: u32) -> bool {
++        let classes = self.decls.classes.borrow();
++        let Some(d) = classes.get(idx as usize) else {
++            return false;
++        };
++        d.kind != ClassKind::Enum
++            && d.interfaces.is_empty()
++            && d.traits.is_empty()
++            && (d.kind == ClassKind::Trait
++                || !d
++                    .methods
++                    .iter()
++                    .any(|m| m.name.eq_ignore_ascii_case(b"__tostring")))
++    }
++
+     /// Compiles a class-like declaration; returns its index.
+     #[allow(clippy::too_many_lines)]
+     pub(crate) fn compile_class_decl(

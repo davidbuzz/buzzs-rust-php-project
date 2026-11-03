@@ -1,0 +1,115 @@
+0004 — classlink.rs: class constants fetched inside a constant expression
+name the class as written.
+
+Inside a constant expression php-src resolves `X::C` with
+zend_get_class_constant_ex(class_name, ...), whose errors print class_name
+as written ("Undefined constant self::UNKNOWN", "Cannot access private
+constant self::X", "Cannot declare self-referencing constant self::BAR"),
+and which marks the constant (IS_CONSTANT_VISITED) while evaluating it. The
+FETCH_CLASS_CONSTANT opcode instead calls zend_update_class_constant
+without marking. op_fetch_class_const now passes the written name (self /
+parent / static / the literal) when the current frame is a ConstExpr frame
+and evaluates an unevaluated constant unmarked otherwise; class_constant()
+keeps its behaviour via the new class_constant_ex(cls, name, shown, mark).
+
+Fixes: ext/reflection/tests/ReflectionClass_toString_004,
+ReflectionClassConstant_toString_error; Zend/tests/constants/bug41633_2,
+constexpr/constant_expressions_self_referencing_array, array_unpack/classes;
+ext/standard/tests/streams/bug77664.
+
+diff --git a/crates/php-vm/src/classlink.rs b/crates/php-vm/src/classlink.rs
+index 906d5c5..b182488 100644
+--- a/crates/php-vm/src/classlink.rs
++++ b/crates/php-vm/src/classlink.rs
+@@ -266,11 +266,48 @@ impl Vm {
+             }
+         };
+         let cls = self.resolve_class_spec(spec)?;
++        // Inside a constant expression php-src goes through
++        // `zend_get_class_constant_ex`, whose errors name the class as
++        // written (`self::X`) and which marks the constant while evaluating
++        // it; the `FETCH_CLASS_CONSTANT` opcode does neither.
++        let in_const_expr = self
++            .frames
++            .last()
++            .is_some_and(|f| f.kind == FrameKind::ConstExpr);
++        if in_const_expr {
++            let shown = match spec {
++                ClassSpec::SelfClass => ZStr::from("self"),
++                ClassSpec::Parent => ZStr::from("parent"),
++                ClassSpec::Static => ZStr::from("static"),
++                ClassSpec::Named(l) => self.lit_str(*l),
++                ClassSpec::Dyn(_) => cls.name.clone(),
++            };
++            self.class_constant_ex(&cls, &name, Some(&shown), true)?;
++        } else if cls
++            .find_const(name.as_bytes())
++            .is_some_and(|c| !c.is_case && c.value.borrow().is_none())
++        {
++            self.class_constant_ex(&cls, &name, None, false)?;
++        }
+         self.fetch_class_constant(&cls, &name)
+     }
+ 
+     /// Reads a class constant (evaluating it lazily).
+     pub(crate) fn class_constant(&mut self, cls: &Rc<Class>, name: &ZStr) -> VmResult<Value> {
++        self.class_constant_ex(cls, name, None, true)
++    }
++
++    /// [`Self::class_constant`] with the class named `shown` in errors
++    /// (instead of its resolved name) and optional recursion marking of an
++    /// unevaluated constant (`mark`).
++    fn class_constant_ex(
++        &mut self,
++        cls: &Rc<Class>,
++        name: &ZStr,
++        shown: Option<&ZStr>,
++        mark: bool,
++    ) -> VmResult<Value> {
++        let shown_name = |c: &ZStr| shown.map_or_else(|| object::display_name(c), Clone::clone);
+         if name.as_bytes() == b"class" {
+             return Ok(Value::Str(cls.name.clone()));
+         }
+@@ -279,7 +316,7 @@ impl Vm {
+                 "Error",
+                 &format!(
+                     "Undefined constant {}::{}",
+-                    object::display_name(&cls.name),
++                    shown_name(&cls.name),
+                     name.to_string_lossy()
+                 ),
+             ));
+@@ -303,7 +340,7 @@ impl Vm {
+                     "Error",
+                     &format!(
+                         "Cannot access {vis} constant {}::{}",
+-                        object::display_name(&cls.name),
++                        shown_name(&cls.name),
+                         name.to_string_lossy()
+                     ),
+                 ));
+@@ -320,17 +357,21 @@ impl Vm {
+                 "Error",
+                 &format!(
+                     "Cannot declare self-referencing constant {}::{}",
+-                    object::display_name(&c.class),
++                    shown_name(&c.class),
+                     name.to_string_lossy()
+                 ),
+             ));
+         }
+-        c.evaluating.set(true);
++        if mark {
++            c.evaluating.set(true);
++        }
+         let decl = self
+             .find_class(c.class.as_bytes())
+             .unwrap_or_else(|| cls.clone());
+         let r = self.eval_const_expr(&c.expr, Some(&decl));
+-        c.evaluating.set(false);
++        if mark {
++            c.evaluating.set(false);
++        }
+         let mut v = r?;
+         if let Some(ty) = &c.ty {
+             let ctx = crate::typecheck::TypeCtx {

@@ -1,0 +1,137 @@
+0001 — compiler/decl.rs: property declaration rules of php-src master
+(zend_compile_prop_decl).
+
+* Readonly properties may have a default value (RFC "Allow Readonly Property
+  Defaults", php-src a2640aebc91): the "Readonly property %s::$%s cannot have
+  default value" error is gone.
+* A readonly class makes *every* property readonly, static ones included, so
+  `readonly class Foo { public static int $bar; }` now fails with "Static
+  property Foo::$bar cannot be readonly" (it was silently accepted).
+* `final` is allowed on properties without hooks (PHP 8.4); the old
+  "Cannot declare property final, the final modifier is allowed only on
+  methods, classes, and properties with hooks" error is removed (the FINAL
+  flag was already carried into PropDecl, so Reflection isFinal()/
+  getModifiers()/__toString() report it).
+* Check order and texts as in master: enum, final+private, interface
+  (final / protected-private / explicit abstract), then for a property
+  without hooks "Interfaces may only include hooked properties" and
+  "Only hooked properties may be declared abstract".
+
+Fixes: Zend/tests/readonly_props/readonly_with_default{,_asymmetric_visibility,
+_inheritance,_interface_get_only}, readonly_trait_match, readonly_clone_success1,
+unset; Zend/tests/readonly_classes/readonly_class_property3,
+readonly_with_property_default{,_trait}; Zend/tests/property_hooks/
+abstract_prop_without_hooks, final_prop_promoted_{2,3,4}(with 0003);
+Zend/tests/errmsg/errmsg_037; tests/classes/interface_member; ext/reflection
+ReflectionProperty_{isFinal,getModifiers_basic,readonly_with_default,
+toString_002}, ReflectionClass_toString_009, final_property_indicated.
+
+diff --git a/crates/php-vm/src/compiler/decl.rs b/crates/php-vm/src/compiler/decl.rs
+index a3ca048..bda0d85 100644
+--- a/crates/php-vm/src/compiler/decl.rs
++++ b/crates/php-vm/src/compiler/decl.rs
+@@ -1060,56 +1060,53 @@ impl Compiler {
+         for m in &cd.members {
+             match &m.kind {
+                 ClassMemberKind::Property(pg) => {
++                    // `zend_compile_prop_decl`: a readonly class makes every
++                    // property readonly (static ones are then rejected below).
+                     let fl = modifiers_to_flags(pg.modifiers)
+-                        | if cflag & cflags::READONLY != 0
+-                            && pg.modifiers.contains(ast::Modifiers::STATIC) == false
+-                        {
++                        | if cflag & cflags::READONLY != 0 {
+                             flags::READONLY
+                         } else {
+                             0
+                         };
+-                    if kind == ClassKind::Interface
+-                        && pg
+-                            .modifiers
+-                            .intersects(ast::Modifiers::PROTECTED | ast::Modifiers::PRIVATE)
+-                    {
++                    if kind == ClassKind::Enum {
+                         return self.err(
+-                            "Property in interface cannot be protected or private",
++                            format!("Enum {cname} cannot include properties"),
+                             m.span.line,
+                         );
+                     }
+-                    if kind == ClassKind::Interface
+-                        && pg.modifiers.contains(ast::Modifiers::ABSTRACT)
+-                    {
+-                        return self.err("Property in interface cannot be explicitly abstract. All interface members are implicitly abstract", m.span.line);
+-                    }
+-                    if kind == ClassKind::Interface && pg.modifiers.contains(ast::Modifiers::FINAL)
+-                    {
+-                        return self.err("Property in interface cannot be final", m.span.line);
+-                    }
+                     if pg.modifiers.contains(ast::Modifiers::FINAL)
+                         && pg.modifiers.contains(ast::Modifiers::PRIVATE)
+                     {
+                         return self.err("Property cannot be both final and private", m.span.line);
+                     }
+-                    if kind == ClassKind::Interface && pg.props.iter().all(|p| p.hooks.is_none()) {
+-                        return self.err("Interfaces may not include properties", m.span.line);
+-                    }
+-                    if kind == ClassKind::Enum {
+-                        return self.err(
+-                            format!("Enum {cname} cannot include properties"),
+-                            m.span.line,
+-                        );
+-                    }
+-                    if pg.modifiers.contains(ast::Modifiers::ABSTRACT)
+-                        && pg.props.iter().all(|p| p.hooks.is_none())
+-                    {
+-                        return self.err("Properties cannot be declared abstract", m.span.line);
++                    if kind == ClassKind::Interface {
++                        if pg.modifiers.contains(ast::Modifiers::FINAL) {
++                            return self.err("Property in interface cannot be final", m.span.line);
++                        }
++                        if pg
++                            .modifiers
++                            .intersects(ast::Modifiers::PROTECTED | ast::Modifiers::PRIVATE)
++                        {
++                            return self.err(
++                                "Property in interface cannot be protected or private",
++                                m.span.line,
++                            );
++                        }
++                        if pg.modifiers.contains(ast::Modifiers::ABSTRACT) {
++                            return self.err("Property in interface cannot be explicitly abstract. All interface members are implicitly abstract", m.span.line);
++                        }
+                     }
+-                    if pg.modifiers.contains(ast::Modifiers::FINAL)
+-                        && pg.props.iter().all(|p| p.hooks.is_none())
+-                    {
+-                        return self.err("Cannot declare property final, the final modifier is allowed only on methods, classes, and properties with hooks", m.span.line);
++                    if pg.props.iter().any(|p| p.hooks.is_none()) {
++                        if kind == ClassKind::Interface {
++                            return self
++                                .err("Interfaces may only include hooked properties", m.span.line);
++                        }
++                        if pg.modifiers.contains(ast::Modifiers::ABSTRACT) {
++                            return self.err(
++                                "Only hooked properties may be declared abstract",
++                                m.span.line,
++                            );
++                        }
+                     }
+                     let ty = match &pg.ty {
+                         Some(t) => {
+@@ -1174,15 +1171,6 @@ impl Compiler {
+                                     p.span.line,
+                                 );
+                             }
+-                            if p.default.is_some() {
+-                                return self.err(
+-                                    format!(
+-                                        "Readonly property {cname}::${} cannot have default value",
+-                                        p.name.as_str_lossy()
+-                                    ),
+-                                    p.span.line,
+-                                );
+-                            }
+                             if fl & flags::STATIC != 0 {
+                                 return self.err(
+                                     format!(

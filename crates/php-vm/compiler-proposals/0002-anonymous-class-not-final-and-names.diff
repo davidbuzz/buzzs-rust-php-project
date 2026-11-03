@@ -1,0 +1,120 @@
+0002 — anonymous classes (compiler/decl.rs, classlink.rs).
+
+* Anonymous classes are not final in php-src (only ZEND_ACC_ANON_CLASS is
+  set; `final` on one is a parse error), so a class_alias of one can be
+  extended (Zend/tests/anon/011) and ReflectionClass::__toString() prints
+  "class class@anonymous..." not "final class ..." (gh22681/ReflectionClass_name).
+* zend_compile_single_typename does not substitute self/parent inside an
+  anonymous class (GH-18373): the type keeps "self"/"parent" like in traits
+  (ext/reflection/tests/gh18373).
+* Messages that php-src formats with %pS print the whole generated name,
+  including the NUL byte and "file:line$n" suffix: "Class %s cannot extend
+  ...", "%s %s must implement N abstract method(s)" / "... contains N
+  abstract method(s)..." (Zend/tests/anon/gh15994). Method names inside the
+  abstract list stay truncated (they are printed with %s).
+
+diff --git a/crates/php-vm/src/classlink.rs b/crates/php-vm/src/classlink.rs
+index 3054f47..ec84ba6 100644
+--- a/crates/php-vm/src/classlink.rs
++++ b/crates/php-vm/src/classlink.rs
+@@ -568,6 +568,9 @@ impl Vm {
+     fn link_class(&mut self, decl: &Rc<ClassDecl>, is_anon: bool) -> VmResult<Rc<Class>> {
+         let name = decl.name.clone();
+         let display = object::display_name(&name);
++        // Messages formatted with `%pS` print the whole name, including the
++        // NUL-separated suffix of an anonymous class.
++        let full = name.to_string_lossy();
+         let line = decl.line_start;
+         // Parent.
+         let parent = match &decl.parent {
+@@ -585,20 +588,20 @@ impl Vm {
+                 };
+                 if pc.is_interface() && decl.kind == ClassKind::Class {
+                     return Err(self.fatal_at(
+-                        &format!("Class {display} cannot extend interface {}", pc.name),
++                        &format!("Class {full} cannot extend interface {}", pc.name),
+                         line,
+                     ));
+                 }
+                 if pc.is_trait() {
+                     return Err(self.fatal_at(
+-                        &format!("Class {display} cannot extend trait {}", pc.name),
++                        &format!("Class {full} cannot extend trait {}", pc.name),
+                         line,
+                     ));
+                 }
+                 if pc.flags & cflags::FINAL != 0 {
+                     let what = if pc.is_enum() { "enum" } else { "final class" };
+                     return Err(self.fatal_at(
+-                        &format!("Class {display} cannot extend {what} {}", pc.name),
++                        &format!("Class {full} cannot extend {what} {}", pc.name),
+                         line,
+                     ));
+                 }
+@@ -608,10 +611,9 @@ impl Vm {
+                     } else {
+                         ("Non-readonly class", "readonly class")
+                     };
+-                    return Err(self.fatal_at(
+-                        &format!("{a} {display} cannot extend {b} {}", pc.name),
+-                        line,
+-                    ));
++                    return Err(
++                        self.fatal_at(&format!("{a} {full} cannot extend {b} {}", pc.name), line)
++                    );
+                 }
+                 Some(pc)
+             }
+@@ -810,10 +812,10 @@ impl Vm {
+                 let what = if cls.is_enum() { "Enum" } else { "Class" };
+                 let s = if n == 1 { "" } else { "s" };
+                 let msg = if cls.is_enum() || cls.flags & crate::class::cflags::ANON != 0 {
+-                    format!("{what} {display} must implement {n} abstract method{s} ({list})")
++                    format!("{what} {full} must implement {n} abstract method{s} ({list})")
+                 } else {
+                     format!(
+-                        "{what} {display} contains {n} abstract method{s} and must therefore be declared abstract or implement the remaining method{s} ({list})"
++                        "{what} {full} contains {n} abstract method{s} and must therefore be declared abstract or implement the remaining method{s} ({list})"
+                     )
+                 };
+                 return Err(self.fatal_at(&msg, line));
+diff --git a/crates/php-vm/src/compiler/decl.rs b/crates/php-vm/src/compiler/decl.rs
+index bda0d85..49d0d56 100644
+--- a/crates/php-vm/src/compiler/decl.rs
++++ b/crates/php-vm/src/compiler/decl.rs
+@@ -758,12 +758,13 @@ impl Compiler {
+                                 t.span.line,
+                             );
+                         }
++                        // `zend_compile_single_typename`: self/parent are not
++                        // substituted in traits or anonymous classes (GH-18373).
++                        let known = self.current_class().filter(|c| !c.is_trait && !c.is_anon);
+                         let resolved = if lc.as_slice() == b"self" {
+-                            self.current_class()
+-                                .filter(|c| !c.is_trait)
+-                                .map_or_else(|| ZStr::from("self"), |c| c.name.clone())
++                            known.map_or_else(|| ZStr::from("self"), |c| c.name.clone())
+                         } else {
+-                            self.current_class()
++                            known
+                                 .and_then(|c| c.parent.clone())
+                                 .unwrap_or_else(|| ZStr::from("parent"))
+                         };
+@@ -815,7 +816,7 @@ impl Compiler {
+         let lc = n.name.to_ascii_lowercase();
+         if n.kind == ast::NameKind::Unqualified && lc.as_slice() == b"self" {
+             if let Some(c) = self.current_class() {
+-                if !c.is_trait {
++                if !c.is_trait && !c.is_anon {
+                     return c.name.as_bytes().to_vec();
+                 }
+             }
+@@ -947,7 +948,7 @@ impl Compiler {
+             cflag |= cflags::READONLY;
+         }
+         if is_anon {
+-            cflag |= cflags::ANON | cflags::FINAL;
++            cflag |= cflags::ANON;
+         }
+         let attributes = self.attributes(&cd.attributes)?;
+         self.validate_attributes(
