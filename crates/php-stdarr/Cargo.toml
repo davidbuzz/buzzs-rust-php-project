@@ -1,11 +1,13 @@
 [package]
 name = "php-stdarr"
+description = "PHP's ext/standard array functions (array.c) on top of php-runtime"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+php-runtime = { path = "../php-runtime" }
 
 [lints]
 workspace = true
