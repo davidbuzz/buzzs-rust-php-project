@@ -19,6 +19,7 @@
 mod bridge;
 mod funcs;
 mod memory;
+mod objptr;
 mod stack;
 mod symtab;
 

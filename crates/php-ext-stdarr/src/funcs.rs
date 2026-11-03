@@ -7,6 +7,7 @@
 
 use crate::bridge::{by_ref, callback, check_callable, rest, rt, with_rng};
 use crate::memory;
+use crate::objptr;
 use crate::stack;
 use crate::symtab::CallerSymbols;
 use php_runtime::{Value, ZArray, ZStr};
@@ -593,28 +594,37 @@ find_fn!(array_all, sa::callback::array_all, Value::Bool);
 // ---------------------------------------------------------------------
 
 macro_rules! ptr_fn {
-    ($name:ident, $f:path) => {
+    ($name:ident, $f:path, $op:ident) => {
         pub fn $name(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             let arr = by_ref(a, 0);
+            if let Value::Object(o) = arr.get() {
+                return objptr::run(vm, &a.func_name(), &o, objptr::Op::$op);
+            }
             let r = $f(vm, &arr);
             rt(vm, r)
         }
     };
 }
-ptr_fn!(end, sa::pointer::end);
-ptr_fn!(prev, sa::pointer::prev);
-ptr_fn!(next, sa::pointer::next);
-ptr_fn!(reset, sa::pointer::reset);
+ptr_fn!(end, sa::pointer::end, End);
+ptr_fn!(prev, sa::pointer::prev, Prev);
+ptr_fn!(next, sa::pointer::next, Next);
+ptr_fn!(reset, sa::pointer::reset, Reset);
 
 pub fn current(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let v = a.at(0);
     let f = a.func_name();
+    if let Value::Object(o) = &v {
+        return objptr::run(vm, &f, o, objptr::Op::Current);
+    }
     let r = sa::pointer::current(vm, &f, &v);
     rt(vm, r)
 }
 
 pub fn key(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let v = a.at(0);
+    if let Value::Object(o) = &v {
+        return objptr::run(vm, "key", o, objptr::Op::Key);
+    }
     let r = sa::pointer::key(vm, &v);
     rt(vm, r)
 }
