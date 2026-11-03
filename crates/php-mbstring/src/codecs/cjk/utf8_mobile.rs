@@ -411,3 +411,14 @@ pub fn wchar_to_utf8_kddi_b(input: &[u32], buf: &mut ConvertBuf, _end: bool) {
 pub fn wchar_to_utf8_sb(input: &[u32], buf: &mut ConvertBuf, _end: bool) {
     wchar_to_mobile_utf8(input, buf, &SB);
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::codecs::cjk::testutil as tu;
+
+    #[test]
+    fn oracle_fixture() {
+        let n = tu::replay_oracle("utf8mobile_oracle.tsv");
+        assert!(n > 100);
+    }
+}
