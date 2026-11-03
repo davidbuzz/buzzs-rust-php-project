@@ -129,6 +129,24 @@ pub fn disable_core_dumps() {
     });
 }
 
+/// Runs in the child between `fork` and `exec`: if the runner dies (killed, crashed) the child
+/// gets SIGKILL instead of being orphaned, and its CPU time is capped slightly above the
+/// wall-clock timeout so a runaway test cannot spin forever even when nobody is left to kill it.
+fn child_safety_net(parent: u32, cpu_limit_secs: u64) -> std::io::Result<()> {
+    nix::sys::prctl::set_pdeathsig(Signal::SIGKILL)?;
+    // The parent may have died between fork and prctl.
+    if u32::try_from(nix::unistd::getppid().as_raw()).ok() != Some(parent) {
+        return Err(std::io::Error::other("runner exited"));
+    }
+    setrlimit(
+        Resource::RLIMIT_CPU,
+        cpu_limit_secs,
+        cpu_limit_secs.saturating_add(5),
+    )?;
+    setrlimit(Resource::RLIMIT_CORE, 0, 0)?;
+    Ok(())
+}
+
 /// Build the command and wire up its standard streams. Returns the merged stdout+stderr pipe
 /// reader when both are captured.
 fn build_command(inv: &Invocation<'_>) -> std::io::Result<(Command, Option<os_pipe::PipeReader>)> {
@@ -141,6 +159,15 @@ fn build_command(inv: &Invocation<'_>) -> std::io::Result<(Command, Option<os_pi
         .current_dir(inv.cwd)
         .env_clear()
         .process_group(0);
+    let cpu_limit = inv.timeout.as_secs().saturating_add(10);
+    let parent = std::process::id();
+    // SAFETY: the closure runs in the forked child before `exec`, where only
+    // async-signal-safe operations are allowed. It only performs the raw `prctl`, `getppid`
+    // and `setrlimit` system calls through nix's thin wrappers (no allocation, no locks) and
+    // converts an `Errno` into `io::Error` (also allocation-free).
+    unsafe {
+        cmd.pre_exec(move || child_safety_net(parent, cpu_limit));
+    }
     for (k, v) in inv.env {
         if !v.is_empty() {
             cmd.env(k, v);
@@ -310,6 +337,12 @@ mod tests {
             Duration::from_secs(10),
         );
         assert_eq!(out.data, b"unset\n");
+    }
+
+    #[test]
+    fn children_get_cpu_limit() {
+        let out = sh("ulimit -t", Capture::ALL, None, Duration::from_secs(10));
+        assert_eq!(out.data, b"20\n");
     }
 
     #[test]
