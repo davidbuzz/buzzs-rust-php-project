@@ -881,7 +881,15 @@ impl XmlParser {
         handlers: &mut dyn XmlHandlers,
         values: Option<&mut dyn StructSink>,
     ) -> Result<i64, XmlError> {
+        /// Clears `is_parsing` even when a handler panic unwinds.
+        struct Parsing<'a>(&'a Cell<bool>);
+        impl Drop for Parsing<'_> {
+            fn drop(&mut self) {
+                self.0.set(false);
+            }
+        }
         self.is_parsing.set(true);
+        let _parsing = Parsing(&self.is_parsing);
         let mut adapter = Adapter {
             parser: self,
             handlers,
@@ -890,7 +898,6 @@ impl XmlParser {
         let result = self
             .raw
             .parse(data, is_final, self.parse_huge.get(), &mut adapter);
-        self.is_parsing.set(false);
         result.map(i64::from).map_err(|_| XmlError::Recursive)
     }
 

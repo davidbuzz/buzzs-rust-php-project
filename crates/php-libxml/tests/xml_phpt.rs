@@ -978,3 +978,25 @@ impl Kind for PVal {
         }
     }
 }
+
+struct Panicky;
+
+impl XmlHandlers for Panicky {
+    fn start_element(&mut self, _name: &[u8], _attributes: &[(Vec<u8>, Vec<u8>)]) {
+        panic!("handler panic");
+    }
+}
+
+#[test]
+fn panics_in_handlers_propagate_and_parser_survives() {
+    let p = XmlParser::new(None).unwrap();
+    set_elements(&p, true, true);
+    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        p.parse(b"<a><b/></a>", true, &mut Panicky, None)
+    }));
+    assert!(r.is_err());
+    assert!(!p.is_parsing());
+    // A fresh parse on another parser works normally afterwards.
+    let q = XmlParser::new(None).unwrap();
+    assert_eq!(q.parse(b"<a/>", true, &mut NoHandlers, None), Ok(1));
+}

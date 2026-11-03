@@ -102,11 +102,11 @@ Keep rows when they reach 100%; they become the completion record. Add rows as g
 | ext/intl | 0% | low | ICU-backed i18n; large (595). |
 | ext/gd | 0% | low | Image processing (341). |
 | **XML stack** | | | |
-| ext/libxml | 0% | med | Shared libxml layer (33). |
+| ext/libxml | 55% | med | Shared libxml layer (33). `crates/php-libxml` binds the system libxml2 2.9.14 (own `ffi.rs`, layout-checked; all `unsafe` in `ffi`/`raw`): per-thread structured error capture replaying PHP's reporting channels (internal error list / `LibXMLError` data, `"… in Entity, line: N"` ctx warnings, generic warnings incl. `xmlReportError` formatting and the error buffer), `libxml_use_internal_errors/get_errors/get_last_error/clear_errors/disable_entity_loader`, user external entity loader (string/stream/null/failure), stream hooks for all libxml file I/O (`%00` check, `file:` unescaping, charset sniff), `LIBXML_*` constants, and a safe ref-counted `Document`/`Node` layer (parse/serialize/navigate/mutate) for dom/simplexml/xmlreader/xsl. Rust ports of the checkable phpt logic pass, valgrind-clean. Remaining: VM bindings; most libxml phpts need DOM. |
 | ext/dom | 0% | med | DOM Level 3 and the PHP 8.4 HTML5 `Dom\*` API; uses lexbor (914). |
 | ext/simplexml | 0% | med | (168). |
-| ext/xml | 0% | med | Expat-style SAX parser (71). |
-| ext/xmlreader / ext/xmlwriter | 0% | low | (64 / 52). |
+| ext/xml | 70% | med | Expat-style SAX parser (71). `crates/php-libxml::xml`: port of compat.c + xml.c on libxml2's push parser (byte-exact SAX chunking, default-handler fallbacks, entity handling, namespaces/separators), `XmlHandlers` trait for user callbacks, `xml_parse_into_struct` via a `StructSink` trait (live-array semantics) + `StructBuilder`, options/encodings/case folding, error table, line/column/byte index, recursion/while-parsing errors. 34 phpt ports pass. Remaining: VM bindings (`XMLParser` class, `xml_set_object` method lookup, deprecations, ValueErrors/TypeErrors from argument parsing). |
+| ext/xmlreader / ext/xmlwriter | 35% | low | (64 / 52). XMLWriter done in `crates/php-libxml::xmlwriter` (memory / `Write` sink / URI targets with PHP's path resolution, all start/end/write ops incl. DTD and `*Ns`, name ValueErrors, flush/outputMemory semantics; 21 phpt ports pass). Remaining: VM bindings for XMLWriter; XMLReader not started (can build on the same raw layer). |
 | ext/xsl | 0% | low | (88). |
 | ext/soap | 0% | low | (663). |
 | **Databases** | | | |
