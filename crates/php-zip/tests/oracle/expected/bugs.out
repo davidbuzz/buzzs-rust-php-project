@@ -1,0 +1,62 @@
+# bug70103: GLOB_NOSORT
+z->open = true
+z->addGlob = [0=>"{DIR}/g/foo.txt"]
+z->close = true
+z->open = true
+z->numFiles = 1
+z->getNameIndex = "foo.txt"
+z->close = true
+# bug72258: raw names
+z->open = true
+z->numFiles = 1
+z->getNameIndex = hex:80818283842f
+z->getNameIndex = hex:c387c3bcc3a9c3a2c3a42f
+z->getNameIndex = hex:c387c3bcc3a9c3a2c3a42f
+z->statIndex = ["name"=>hex:80818283842f,"index"=>0,"crc"=>0,"size"=>0,"mtime"=>1464523586,"comp_size"=>0,"comp_method"=>0,"encryption_method"=>0]
+z->close = true
+# bug81490: empty entry names
+z->open = true
+z->addFromString = true
+z->getStatusString = "No error"
+z->close = true
+z->open = true
+z->extractTo = false
+exists e = true
+# bug_gh12661: remove_path that is not a prefix
+z->open = true
+z->addGlob = [0=>"{DIR}/g/foo.txt"]
+z->addGlob = [0=>"{DIR}/g/foo.txt"]
+entry 0 = "{DIR}/g/foo.txt"
+entry 1 = "g/foo.txt"
+z->close = true
+# oo_supported
+ZipArchive::isCompressionMethodSupported = true
+ZipArchive::isCompressionMethodSupported = true
+ZipArchive::isCompressionMethodSupported = true
+ZipArchive::isCompressionMethodSupported = false
+ZipArchive::isEncryptionMethodSupported = true
+ZipArchive::isEncryptionMethodSupported = true
+ZipArchive::isEncryptionMethodSupported = true
+# oo_close_empty (libzip < 1.10 has no AFL_CREATE_OR_KEEP_FILE_FOR_EMPTY_ARCHIVE)
+z->open = true
+z->deleteIndex = true
+z->deleteIndex = true
+z->deleteIndex = true
+z->deleteIndex = true
+z->close = true
+exists ce.zip = false
+# mtime round trip (oo_setmtime)
+z->open = true
+z->addFromString = true
+z->addFromString = true
+z->setMtimeName = true
+z->setMtimeIndex = true
+z->close = true
+z->open = true
+z->statIndex = ["name"=>"foo","index"=>0,"crc"=>4094452955,"size"=>8,"mtime"=>1577232000,"comp_size"=>8,"comp_method"=>0,"encryption_method"=>0]
+z->statName = ["name"=>"bar","index"=>1,"crc"=>1829057889,"size"=>8,"mtime"=>1515283200,"comp_size"=>8,"comp_method"=>0,"encryption_method"=>0]
+z->extractTo = true
+ls bar 8 60d68002 mtime=1515283200
+ls foo 8 1cf531d9 mtime=1577232000
+z->close = true
+END
