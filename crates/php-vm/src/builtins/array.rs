@@ -24,7 +24,10 @@ impl sa::ArrayContext for Vm {
 
     fn column_property(&mut self, obj: &Obj, name: &ZStr) -> RtResult<Option<Value>> {
         // `has_property(ZEND_PROPERTY_EXISTS) || has_property(ZEND_PROPERTY_ISSET)`.
-        let has = self.column_prop_exists(obj, name) || self.has_property(obj, name, false).map_err(|t| self.to_rt(t))?;
+        let has = self.column_prop_exists(obj, name)
+            || self
+                .has_property(obj, name, false)
+                .map_err(|t| self.to_rt(t))?;
         if !has {
             return Ok(None);
         }
@@ -50,7 +53,12 @@ impl Vm {
         let scope = self.scope();
         match self.lookup_prop(&cls, name, scope.as_ref()) {
             PropLookup::Found(pi) => {
-                pi.hooks.is_none() && object::data(obj).slots.borrow().get(pi.slot as usize).is_some_and(Option::is_some)
+                pi.hooks.is_none()
+                    && object::data(obj)
+                        .slots
+                        .borrow()
+                        .get(pi.slot as usize)
+                        .is_some_and(Option::is_some)
             }
             PropLookup::Inaccessible(_) => false,
             PropLookup::NotFound => object::data(obj)
@@ -62,7 +70,9 @@ impl Vm {
     }
 
     pub(crate) fn random_globals(&mut self) -> &mut php_random::RandomGlobals {
-        self.ext.random.get_or_insert_with(php_random::RandomGlobals::new)
+        self.ext
+            .random
+            .get_or_insert_with(php_random::RandomGlobals::new)
     }
 
     /// Runs the destructors of objects released so far, now, instead of
