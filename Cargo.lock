@@ -454,6 +454,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "php-phar"
+version = "0.1.0"
+dependencies = [
+ "php-runtime",
+]
+
+[[package]]
 name = "php-posix"
 version = "0.1.0"
 dependencies = [
@@ -475,6 +482,7 @@ version = "0.1.0"
 name = "php-session"
 version = "0.1.0"
 dependencies = [
+ "php-random",
  "php-runtime",
 ]
 
@@ -487,6 +495,7 @@ name = "php-spl"
 version = "0.1.0"
 dependencies = [
  "php-runtime",
+ "php-stdarr",
 ]
 
 [[package]]
@@ -500,6 +509,13 @@ dependencies = [
 
 [[package]]
 name = "php-stdarr"
+version = "0.1.0"
+dependencies = [
+ "php-runtime",
+]
+
+[[package]]
+name = "php-stdmisc"
 version = "0.1.0"
 dependencies = [
  "php-runtime",
@@ -523,6 +539,9 @@ version = "0.1.0"
 [[package]]
 name = "php-sysv"
 version = "0.1.0"
+dependencies = [
+ "libc",
+]
 
 [[package]]
 name = "php-uri"

@@ -40,6 +40,7 @@ members = [
     "crates/php-session",
     "crates/php-stdmisc",
     "crates/php-phar",
+    "crates/php-dom",
 ]
 
 [workspace.package]
