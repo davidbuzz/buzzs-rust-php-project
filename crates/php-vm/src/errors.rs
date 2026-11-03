@@ -1,0 +1,326 @@
+//! Error reporting (`zend_error`, `php_error_cb`): user error handlers,
+//! display, logging, fatal errors and uncaught exceptions.
+
+use crate::object;
+use crate::vm::{FrameKind, LastError, Throw, Vm, VmResult};
+use php_runtime::{Obj, Value, ZStr};
+
+/// `E_*` constants.
+pub mod level {
+    /// `E_ERROR`
+    pub const ERROR: i64 = 1;
+    /// `E_WARNING`
+    pub const WARNING: i64 = 2;
+    /// `E_PARSE`
+    pub const PARSE: i64 = 4;
+    /// `E_NOTICE`
+    pub const NOTICE: i64 = 8;
+    /// `E_CORE_ERROR`
+    pub const CORE_ERROR: i64 = 16;
+    /// `E_CORE_WARNING`
+    pub const CORE_WARNING: i64 = 32;
+    /// `E_COMPILE_ERROR`
+    pub const COMPILE_ERROR: i64 = 64;
+    /// `E_COMPILE_WARNING`
+    pub const COMPILE_WARNING: i64 = 128;
+    /// `E_USER_ERROR`
+    pub const USER_ERROR: i64 = 256;
+    /// `E_USER_WARNING`
+    pub const USER_WARNING: i64 = 512;
+    /// `E_USER_NOTICE`
+    pub const USER_NOTICE: i64 = 1024;
+    /// `E_STRICT`
+    pub const STRICT: i64 = 2048;
+    /// `E_RECOVERABLE_ERROR`
+    pub const RECOVERABLE_ERROR: i64 = 4096;
+    /// `E_DEPRECATED`
+    pub const DEPRECATED: i64 = 8192;
+    /// `E_USER_DEPRECATED`
+    pub const USER_DEPRECATED: i64 = 16384;
+    /// `E_ALL`
+    pub const ALL: i64 = 30719;
+}
+
+/// The label printed for an error level.
+pub fn label(l: i64) -> &'static str {
+    match l {
+        1 | 16 | 64 | 256 => "Fatal error",
+        4096 => "Recoverable fatal error",
+        2 | 32 | 128 | 512 => "Warning",
+        4 => "Parse error",
+        8 | 1024 => "Notice",
+        2048 => "Strict Standards",
+        8192 | 16384 => "Deprecated",
+        _ => "Unknown error",
+    }
+}
+
+fn is_fatal(l: i64) -> bool {
+    matches!(l, 1 | 4 | 16 | 64 | 256 | 4096)
+}
+
+impl Vm {
+    /// The file and line of the currently executing user code.
+    pub fn current_location(&self) -> (ZStr, u32) {
+        for f in self.frames.iter().rev() {
+            if f.kind == FrameKind::Builtin {
+                continue;
+            }
+            return (f.code.filename.clone(), f.line());
+        }
+        (self.script_path.clone(), 0)
+    }
+
+    /// Whether code is executing.
+    pub fn is_executing(&self) -> bool {
+        self.frames.iter().any(|f| f.kind != FrameKind::Builtin)
+    }
+
+    /// Reports an error at the current location.
+    pub fn error(&mut self, level: i64, msg: &str) -> VmResult<()> {
+        let (file, line) = self.current_location();
+        self.error_at(level, msg, &file, line)
+    }
+
+    /// Reports a docref-style error (`func(): msg`) from a builtin.
+    pub(crate) fn docref(&mut self, level: i64, msg: &str) -> VmResult<()> {
+        let name = self
+            .frames
+            .iter()
+            .rev()
+            .find(|f| f.kind == FrameKind::Builtin)
+            .and_then(|f| {
+                let n = f.builtin_name.clone()?;
+                Some(match &f.scope {
+                    Some(c) if f.this.is_some() || f.called.is_some() => {
+                        format!("{}::{}", object::display_name(&c.name), n)
+                    }
+                    _ => n.to_string_lossy(),
+                })
+            });
+        match name {
+            Some(n) => self.error(level, &format!("{n}(): {msg}")),
+            None => self.error(level, msg),
+        }
+    }
+
+    /// Reports an error at a given location.
+    #[allow(clippy::too_many_lines)]
+    pub fn error_at(&mut self, level: i64, msg: &str, file: &ZStr, line: u32) -> VmResult<()> {
+        // User error handler.
+        let handleable = level
+            & (level::ERROR
+                | level::PARSE
+                | level::CORE_ERROR
+                | level::CORE_WARNING
+                | level::COMPILE_ERROR
+                | level::COMPILE_WARNING)
+            == 0;
+        if handleable && self.in_error_handler == 0 {
+            if let Some(h) = self.error_handlers.last().cloned() {
+                if !h.callback.is_null() && h.mask & level != 0 {
+                    self.in_error_handler += 1;
+                    let args = vec![
+                        Value::Int(level),
+                        Value::Str(ZStr::from(msg)),
+                        Value::Str(file.clone()),
+                        Value::Int(i64::from(line)),
+                    ];
+                    let r = self.call_value(&h.callback, args);
+                    self.in_error_handler -= 1;
+                    let r = r?;
+                    if !matches!(r, Value::Bool(false)) {
+                        if level == level::USER_ERROR || level == level::RECOVERABLE_ERROR {
+                            return Ok(());
+                        }
+                        return Ok(());
+                    }
+                }
+            }
+        }
+        self.last_error = Some(LastError {
+            level,
+            message: msg.to_string(),
+            file: file.clone(),
+            line,
+        });
+        if self.error_reporting & level != 0 || level & (level::CORE_ERROR | level::CORE_WARNING) != 0 {
+            self.display_error(level, msg, file, line);
+        }
+        if is_fatal(level) {
+            self.exit_status = 255;
+            object::set_destructors_enabled(false);
+            return Err(Throw::Fatal);
+        }
+        Ok(())
+    }
+
+    /// Displays/logs an error according to the ini settings.
+    pub(crate) fn display_error(&mut self, level: i64, msg: &str, file: &ZStr, line: u32) {
+        let lbl = label(level);
+        let file_s = file.to_string_lossy();
+        if self.ini.get_bool("log_errors") {
+            let log = format!("PHP {lbl}:  {msg} in {file_s} on line {line}");
+            self.log_error(&log);
+        }
+        let de = self
+            .ini
+            .get("display_errors")
+            .map(<[u8]>::to_ascii_lowercase)
+            .unwrap_or_default();
+        let display = match de.as_slice() {
+            b"stderr" => Some(true),
+            b"stdout" | b"1" | b"on" | b"yes" | b"true" => Some(false),
+            b"" | b"0" | b"off" | b"no" | b"false" | b"none" => None,
+            _ => {
+                if std::str::from_utf8(&de).ok().and_then(|s| s.trim().parse::<i64>().ok()).unwrap_or(0) != 0 {
+                    Some(false)
+                } else {
+                    None
+                }
+            }
+        };
+        let Some(to_stderr) = display else {
+            return;
+        };
+        let prepend = self.ini.get("error_prepend_string").map(<[u8]>::to_vec).unwrap_or_default();
+        let append = self.ini.get("error_append_string").map(<[u8]>::to_vec).unwrap_or_default();
+        if self.ini.get_bool("html_errors") {
+            let mut out = prepend.clone();
+            out.extend_from_slice(
+                format!("<br />\n<b>{lbl}</b>:  {msg} in <b>{file_s}</b> on line <b>{line}</b><br />\n").as_bytes(),
+            );
+            out.extend_from_slice(&append);
+            self.echo(&out);
+            return;
+        }
+        if to_stderr {
+            self.flush_stdout();
+            let s = format!("{lbl}: {msg} in {file_s} on line {line}\n");
+            let _ = std::io::Write::write_all(&mut std::io::stderr(), s.as_bytes());
+            return;
+        }
+        let mut out = prepend;
+        out.extend_from_slice(format!("\n{lbl}: ").as_bytes());
+        out.extend_from_slice(msg.as_bytes());
+        out.extend_from_slice(format!(" in {file_s} on line {line}\n").as_bytes());
+        out.extend_from_slice(&append);
+        self.echo(&out);
+    }
+
+    /// Writes to the error log (stderr in the CLI, or the `error_log` file).
+    pub(crate) fn log_error(&mut self, msg: &str) {
+        let target = self.ini.get("error_log").map(<[u8]>::to_vec).unwrap_or_default();
+        if !target.is_empty() && target != b"syslog" {
+            if let Ok(path) = std::str::from_utf8(&target) {
+                if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+                    let now = crate::builtins::time_now_string();
+                    let _ = std::io::Write::write_all(&mut f, format!("[{now}] {msg}\n").as_bytes());
+                    return;
+                }
+            }
+        }
+        self.flush_stdout();
+        let _ = std::io::Write::write_all(&mut std::io::stderr(), format!("{msg}\n").as_bytes());
+    }
+
+    /// Reports a fatal error at the current location and returns the bailout.
+    pub fn fatal(&mut self, msg: &str) -> Throw {
+        let (file, line) = self.current_location();
+        self.report_fatal(msg, &file, line);
+        Throw::Fatal
+    }
+
+    /// Reports a fatal error (`E_ERROR`) without user handlers.
+    pub(crate) fn report_fatal(&mut self, msg: &str, file: &ZStr, line: u32) {
+        self.last_error = Some(LastError {
+            level: level::ERROR,
+            message: msg.to_string(),
+            file: file.clone(),
+            line,
+        });
+        if self.error_reporting & level::ERROR != 0 {
+            self.display_error(level::ERROR, msg, file, line);
+        }
+        self.exit_status = 255;
+        object::set_destructors_enabled(false);
+    }
+
+    /// Reports a compile error (`E_COMPILE_ERROR`).
+    pub(crate) fn report_compile_error(&mut self, msg: &str, file: &ZStr, line: u32, parse: bool) {
+        let lv = if parse { level::PARSE } else { level::COMPILE_ERROR };
+        self.last_error = Some(LastError {
+            level: lv,
+            message: msg.to_string(),
+            file: file.clone(),
+            line,
+        });
+        if self.error_reporting & lv != 0 {
+            self.display_error(lv, msg, file, line);
+        }
+        self.exit_status = 255;
+        object::set_destructors_enabled(false);
+    }
+
+    /// Handles an exception that escaped all frames: the user exception
+    /// handler or the "Uncaught" fatal error.
+    pub(crate) fn uncaught_exception(&mut self, e: Obj) -> Result<(), Throw> {
+        if let Some(h) = self.exception_handlers.last().cloned() {
+            if !h.is_null() {
+                // The handler is removed while it runs.
+                self.exception_handlers.pop();
+                let r = self.call_value(&h, vec![Value::Object(e)]);
+                self.exception_handlers.push(h);
+                return match r {
+                    Ok(_) => Ok(()),
+                    Err(Throw::Exception(e2)) => {
+                        self.report_uncaught(&e2);
+                        Err(Throw::Fatal)
+                    }
+                    Err(t) => Err(t),
+                };
+            }
+        }
+        self.report_uncaught(&e);
+        Err(Throw::Fatal)
+    }
+
+    /// Prints "Fatal error: Uncaught ...".
+    pub(crate) fn report_uncaught(&mut self, e: &Obj) {
+        let cls = object::class_of(e).clone();
+        if cls.lc_name.as_bytes() == b"parseerror" || cls.lc_name.as_bytes() == b"compileerror" {
+            let msg = self.exc_prop(e, "message");
+            let file = self.exc_prop(e, "file");
+            let line = self.exc_prop(e, "line");
+            let msg = msg.as_str().map(ZStr::to_string_lossy).unwrap_or_default();
+            let file = file.as_str().cloned().unwrap_or_default();
+            let line = u32::try_from(line.as_int().unwrap_or(0)).unwrap_or(0);
+            self.report_compile_error(&msg, &file, line, cls.lc_name.as_bytes() == b"parseerror");
+            return;
+        }
+        let s = self.call_method_name(e, "__toString", Vec::new());
+        let s = match s {
+            Ok(Value::Str(s)) => s,
+            Ok(_) => ZStr::from(""),
+            Err(Throw::Exception(inner)) => {
+                let file = self.exc_prop(&inner, "file").as_str().cloned().unwrap_or_default();
+                let line = u32::try_from(self.exc_prop(&inner, "line").as_int().unwrap_or(0)).unwrap_or(0);
+                let msg = format!(
+                    "Uncaught {} in exception handling during call to {}::__toString()",
+                    object::class_of(&inner).name,
+                    cls.name
+                );
+                let _ = self.error_at(level::WARNING, &msg, &file, line);
+                self.exc_prop(e, "string").as_str().cloned().unwrap_or_default()
+            }
+            Err(_) => ZStr::from(""),
+        };
+        if !s.is_empty() || true {
+            self.set_exc_prop(e, "string", Value::Str(s.clone()));
+        }
+        let file = self.exc_prop(e, "file").as_str().cloned().unwrap_or_default();
+        let line = u32::try_from(self.exc_prop(e, "line").as_int().unwrap_or(0)).unwrap_or(0);
+        let msg = format!("Uncaught {}\n  thrown", s.to_string_lossy());
+        self.report_fatal(&msg, &file, line);
+    }
+}

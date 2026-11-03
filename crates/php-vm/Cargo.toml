@@ -6,6 +6,10 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+php-lexer = { path = "../php-lexer" }
+php-parser = { path = "../php-parser" }
+php-runtime = { path = "../php-runtime" }
+php-support = { path = "../php-support" }
 
 [lints]
 workspace = true

@@ -5,7 +5,12 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 
+[[bin]]
+name = "php"
+path = "src/main.rs"
+
 [dependencies]
+php-vm = { path = "../php-vm" }
 
 [lints]
 workspace = true

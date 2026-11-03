@@ -1,0 +1,555 @@
+//! The VM as `php_runtime::RuntimeContext` (object handlers, diagnostics)
+//! and as `php_support::output::OutputHost` (SAPI output).
+
+use crate::class::cflags;
+use crate::func::flags;
+use crate::object;
+use crate::vm::{Throw, Vm, VmResult};
+use php_runtime::serialize::SerializedObject;
+use php_runtime::{
+    ArrayKey, BinaryOp, CastTarget, ErrorLevel, HashTable, Obj, ObjectDump, ObjectKind,
+    PropertyPurpose, PropertySlot, RtResult, RuntimeContext, RuntimeError, Value, ZArray, ZStr,
+};
+use php_support::output::{OutputHost, OutputStack};
+use std::io::Write;
+
+impl Vm {
+    /// Converts a VM throw into a runtime error (remembering bailouts).
+    pub(crate) fn to_rt(&mut self, t: Throw) -> RuntimeError {
+        match t {
+            Throw::Exception(o) => RuntimeError::Thrown(Value::Object(o)),
+            other => {
+                self.pending_throw = Some(other);
+                RuntimeError::Fatal(String::new())
+            }
+        }
+    }
+
+    /// Writes output through the output buffering layer.
+    pub fn echo(&mut self, data: &[u8]) {
+        if data.is_empty() {
+            return;
+        }
+        php_support::output::write(self, data);
+    }
+
+    /// Flushes standard output.
+    pub fn flush_stdout(&mut self) {
+        let _ = self.stdout.flush();
+    }
+
+    /// `__toString` conversion; `None` if the object has no `__toString`.
+    pub(crate) fn object_to_string_opt(&mut self, o: &Obj) -> VmResult<Option<ZStr>> {
+        let cls = object::class_of(o).clone();
+        let Some(m) = cls.magic.to_string.clone() else {
+            return Ok(None);
+        };
+        let r = self.call_method(o, &m, Vec::new())?;
+        match r {
+            Value::Str(s) => Ok(Some(s)),
+            other => Err(self.make_throw(
+                "TypeError",
+                &format!(
+                    "{}::__toString(): Return value must be of type string, {} returned",
+                    object::display_name(&cls.name),
+                    crate::typecheck::given_type(&other)
+                ),
+            )),
+        }
+    }
+
+    /// The property table for a purpose (honouring `__debugInfo`).
+    pub(crate) fn props_for(&mut self, o: &Obj, purpose: PropertyPurpose) -> VmResult<Option<ZArray>> {
+        let cls = object::class_of(o).clone();
+        if purpose == PropertyPurpose::Debug {
+            if let Some(m) = cls.magic.debug_info.clone() {
+                let r = self.call_method(o, &m, Vec::new())?;
+                return match r {
+                    Value::Array(a) => Ok(Some(a)),
+                    Value::Null => Ok(Some(ZArray::new())),
+                    _ => {
+                        let msg = "__debuginfo() must return an array".to_string();
+                        Err(self.fatal(&msg))
+                    }
+                };
+            }
+        }
+        if let Some(a) = self.internal_object_array(o)? {
+            return Ok(Some(a));
+        }
+        let mut t = HashTable::new();
+        for (k, v, _) in self.object_prop_table(o, false) {
+            if let Some(v) = v {
+                t.insert(k, v);
+            }
+        }
+        Ok(Some(ZArray::from_table(t)))
+    }
+
+    fn std_compare(&mut self, a: &Obj, b: &Obj) -> VmResult<i32> {
+        let ca = object::class_of(a).clone();
+        let cb = object::class_of(b).clone();
+        if !std::rc::Rc::ptr_eq(&ca, &cb) {
+            return Ok(1);
+        }
+        if ca.is_enum() {
+            return Ok(1);
+        }
+        if let Some(r) = self.internal_compare(a, b)? {
+            return Ok(r);
+        }
+        // Compare declared slots in order, then dynamic tables.
+        let sa = object::data(a).slots.borrow().clone();
+        let sb = object::data(b).slots.borrow().clone();
+        for (x, y) in sa.iter().zip(sb.iter()) {
+            match (x, y) {
+                (Some(x), Some(y)) => {
+                    let r = php_runtime::ops::compare(x, y, self).map_err(|e| self.rt_throw(e))?;
+                    if r != 0 {
+                        return Ok(r);
+                    }
+                }
+                (None, None) => {}
+                (Some(_), None) => return Ok(1),
+                (None, Some(_)) => return Ok(1),
+            }
+        }
+        let da = object::data(a).dynamic.borrow().clone().unwrap_or_default();
+        let db = object::data(b).dynamic.borrow().clone().unwrap_or_default();
+        php_runtime::ops::compare_tables(&da, &db, self).map_err(|e| self.rt_throw(e))
+    }
+}
+
+impl RuntimeContext for Vm {
+    fn diagnostic(&mut self, level: ErrorLevel, message: &str) -> RtResult<()> {
+        self.error(level.bits(), message).map_err(|t| self.to_rt(t))
+    }
+
+    fn precision(&self) -> i64 {
+        self.precision
+    }
+
+    fn serialize_precision(&self) -> i64 {
+        self.serialize_precision
+    }
+
+    fn cast_object(&mut self, obj: &Obj, target: CastTarget) -> RtResult<Option<Value>> {
+        match target {
+            CastTarget::String => match self.object_to_string_opt(obj) {
+                Ok(Some(s)) => Ok(Some(Value::Str(s))),
+                Ok(None) => Ok(None),
+                Err(t) => Err(self.to_rt(t)),
+            },
+            CastTarget::Bool => Ok(Some(Value::Bool(true))),
+            CastTarget::Array => match self.object_to_array(obj) {
+                Ok(a) => Ok(Some(Value::Array(a))),
+                Err(t) => Err(self.to_rt(t)),
+            },
+            _ => Ok(None),
+        }
+    }
+
+    fn do_operation(&mut self, op: BinaryOp, op1: &Value, op2: &Value) -> RtResult<Option<Value>> {
+        let _ = (op, op1, op2);
+        Ok(None)
+    }
+
+    fn compare_objects(&mut self, op1: &Value, op2: &Value) -> RtResult<i32> {
+        php_runtime::ops::std_compare_objects(self, op1, op2, |vm, a, b| {
+            vm.std_compare(a, b).map_err(|t| vm.to_rt(t))
+        })
+    }
+
+    fn object_properties(&mut self, obj: &Obj, purpose: PropertyPurpose) -> RtResult<Option<ZArray>> {
+        self.props_for(obj, purpose).map_err(|t| self.to_rt(t))
+    }
+
+    fn object_dump(&mut self, obj: &Obj, purpose: PropertyPurpose) -> RtResult<ObjectDump> {
+        let cls = object::class_of(obj).clone();
+        if cls.is_enum() {
+            let case_name = self.enum_case_name(obj).unwrap_or_default();
+            let backing_type = cls.backing.map(|b| {
+                if b == crate::types::mask::LONG {
+                    "int"
+                } else {
+                    "string"
+                }
+            });
+            let has_debug_info = cls.magic.debug_info.is_some();
+            let properties = if purpose == PropertyPurpose::Debug && has_debug_info {
+                self.props_for(obj, purpose)
+                    .map_err(|t| self.to_rt(t))?
+                    .map(|t| t.iter().map(|(k, v)| (k.clone(), PropertySlot::Value(v.clone()))).collect())
+            } else {
+                None
+            };
+            return Ok(ObjectDump {
+                kind: ObjectKind::Enum {
+                    case_name,
+                    backing_type,
+                    has_debug_info,
+                },
+                properties,
+            });
+        }
+        let kind = if cls.lc_name.as_bytes() == b"stdclass" {
+            ObjectKind::StdClass
+        } else {
+            ObjectKind::Regular { lazy_prefix: "" }
+        };
+        let custom = purpose == PropertyPurpose::Debug && cls.magic.debug_info.is_some()
+            || self.has_internal_array(obj);
+        if custom {
+            let props = self.props_for(obj, purpose).map_err(|t| self.to_rt(t))?;
+            return Ok(ObjectDump {
+                kind,
+                properties: props.map(|t| {
+                    t.iter()
+                        .map(|(k, v)| (k.clone(), PropertySlot::Value(v.clone())))
+                        .collect()
+                }),
+            });
+        }
+        let include_uninit = matches!(purpose, PropertyPurpose::Debug);
+        let mut props = Vec::new();
+        for (k, v, pi) in self.object_prop_table(obj, include_uninit) {
+            match v {
+                Some(v) => props.push((k, PropertySlot::Value(v))),
+                None => {
+                    if let Some(pi) = pi {
+                        if let Some(ty) = &pi.ty {
+                            let decl = self.find_class(pi.class.as_bytes());
+                            let s = ty.display(
+                                decl.as_ref().map(|c| &c.name),
+                                decl.as_ref().and_then(|c| c.parent_name()),
+                                None,
+                            );
+                            props.push((k, PropertySlot::Uninitialized(ZStr::from(s))));
+                        }
+                    }
+                }
+            }
+        }
+        Ok(ObjectDump {
+            kind,
+            properties: Some(props),
+        })
+    }
+
+    fn serialize_object(&mut self, obj: &Obj) -> RtResult<SerializedObject> {
+        self.serialize_object_vm(obj).map_err(|t| self.to_rt(t))
+    }
+
+    fn unserialize_object_create(&mut self, class: &ZStr) -> RtResult<Value> {
+        self.unserialize_create(class).map_err(|t| self.to_rt(t))
+    }
+
+    fn unserialize_object_finish(&mut self, obj: &Value, props: ZArray) -> RtResult<()> {
+        self.unserialize_finish(obj, props).map_err(|t| self.to_rt(t))
+    }
+
+    fn unserialize_enum(&mut self, class: &ZStr, case: &ZStr) -> RtResult<Value> {
+        self.unserialize_enum_vm(class, case).map_err(|t| self.to_rt(t))
+    }
+
+    fn unserialize_custom(&mut self, class: &ZStr, data: &[u8]) -> RtResult<Value> {
+        self.unserialize_custom_vm(class, data).map_err(|t| self.to_rt(t))
+    }
+
+    fn is_enum(&mut self, obj: &Obj) -> bool {
+        object::class_of(obj).is_enum()
+    }
+
+    fn count_object(&mut self, obj: &Obj) -> RtResult<Option<i64>> {
+        if self.instance_of(obj, b"countable") {
+            let r = self
+                .call_method_name(obj, "count", Vec::new())
+                .map_err(|t| self.to_rt(t))?;
+            let n = self.to_long(&r).map_err(|t| self.to_rt(t))?;
+            return Ok(Some(n));
+        }
+        Ok(None)
+    }
+
+    fn property_read(&mut self, obj: &Obj, name: &ZStr) -> RtResult<Option<Value>> {
+        let (_, unmangled) = php_runtime::dump::unmangle_property_name(name.as_bytes());
+        let n = ZStr::from(unmangled);
+        let has = self.has_property(obj, &n, false).map_err(|t| self.to_rt(t))?;
+        if !has {
+            return Ok(None);
+        }
+        self.read_property(obj, &n, crate::opcode::FetchMode::Is)
+            .map(Some)
+            .map_err(|t| self.to_rt(t))
+    }
+
+    fn property_write(&mut self, obj: &Obj, name: &ZStr, value: Value) -> RtResult<()> {
+        self.write_mangled_prop(obj, name, value);
+        Ok(())
+    }
+
+    fn create_std_object(&mut self, props: ZArray) -> RtResult<Value> {
+        let o = self.create_std_object_vm().map_err(|t| self.to_rt(t))?;
+        if let Value::Object(obj) = &o {
+            *object::data(obj).dynamic.borrow_mut() = Some(props.to_proptable());
+        }
+        Ok(o)
+    }
+}
+
+impl Vm {
+    /// Writes a property given a (possibly mangled) name, without
+    /// visibility checks (unserialize).
+    pub(crate) fn write_mangled_prop(&mut self, obj: &Obj, name: &ZStr, value: Value) {
+        let (cls_part, unmangled) = php_runtime::dump::unmangle_property_name(name.as_bytes());
+        let cls = object::class_of(obj).clone();
+        let n = ZStr::from(unmangled);
+        let target = match cls_part {
+            Some(c) if c != b"*" => cls
+                .props
+                .iter()
+                .find(|p| p.name == n && p.class.as_bytes() == c && p.visibility() == flags::PRIVATE),
+            _ => cls.prop_map.get(&n).filter(|p| p.flags & flags::STATIC == 0),
+        };
+        if let Some(pi) = target {
+            object::data(obj).slots.borrow_mut()[pi.slot as usize] = Some(value);
+            return;
+        }
+        self.write_dynamic_prop(obj, n, value);
+    }
+
+    /// Serialization decision for an object.
+    pub(crate) fn serialize_object_vm(&mut self, obj: &Obj) -> VmResult<SerializedObject> {
+        let cls = object::class_of(obj).clone();
+        if cls.is_enum() {
+            let case = self.enum_case_name(obj).unwrap_or_default();
+            return Ok(SerializedObject::Enum {
+                class: cls.name.clone(),
+                case,
+            });
+        }
+        if cls.flags & cflags::NOT_SERIALIZABLE != 0 || cls.flags & cflags::ANON != 0 {
+            let n = if cls.flags & cflags::ANON != 0 {
+                "class@anonymous".to_string()
+            } else {
+                cls.name.to_string_lossy()
+            };
+            return Err(self.make_throw("Exception", &format!("Serialization of '{n}' is not allowed")));
+        }
+        if let Some(m) = cls.magic.serialize.clone() {
+            let r = self.call_method(obj, &m, Vec::new())?;
+            return match r {
+                Value::Array(a) => Ok(SerializedObject::Object {
+                    class: cls.name.clone(),
+                    props: a,
+                }),
+                other => Err(self.make_throw(
+                    "TypeError",
+                    &format!(
+                        "{}::__serialize() must return an array",
+                        object::display_name(&cls.name)
+                    ),
+                ))
+                .map(|x: SerializedObject| {
+                    drop(other);
+                    x
+                }),
+            };
+        }
+        if self.instance_of(obj, b"serializable") {
+            let r = self.call_method_name(obj, "serialize", Vec::new())?;
+            return match r {
+                Value::Str(s) => Ok(SerializedObject::Custom {
+                    class: cls.name.clone(),
+                    data: s.as_bytes().to_vec(),
+                }),
+                Value::Null => Ok(SerializedObject::Null),
+                _ => Err(self.make_throw(
+                    "Exception",
+                    &format!(
+                        "{}::serialize() must return a string or NULL",
+                        object::display_name(&cls.name)
+                    ),
+                )),
+            };
+        }
+        let table = self.props_for(obj, PropertyPurpose::Serialize)?.unwrap_or_default();
+        if let Some(m) = cls.magic.sleep.clone() {
+            let r = self.call_method(obj, &m, Vec::new())?;
+            let Value::Array(names) = r else {
+                self.warning(&format!(
+                    "serialize(): __sleep should return an array only containing the names of instance-variables to serialize"
+                ))?;
+                return Ok(SerializedObject::Null);
+            };
+            let mut out = HashTable::new();
+            for (_, n) in names.iter() {
+                let n = self.to_zstr(&n.deref())?;
+                // Find the property by plain or mangled name.
+                let mut found = None;
+                for (k, v) in table.iter() {
+                    if let ArrayKey::Str(ks) = k {
+                        let (_, un) = php_runtime::dump::unmangle_property_name(ks.as_bytes());
+                        if un == n.as_bytes() {
+                            found = Some((k.clone(), v.clone()));
+                            break;
+                        }
+                    }
+                }
+                match found {
+                    Some((k, v)) => {
+                        out.insert(k, v);
+                    }
+                    None => {
+                        self.warning(&format!(
+                            "serialize(): \"{}\" returned as member variable from __sleep() but does not exist",
+                            n.to_string_lossy()
+                        ))?;
+                    }
+                }
+            }
+            return Ok(SerializedObject::Object {
+                class: cls.name.clone(),
+                props: ZArray::from_table(out),
+            });
+        }
+        Ok(SerializedObject::Object {
+            class: cls.name.clone(),
+            props: table,
+        })
+    }
+
+    fn unserialize_create(&mut self, class: &ZStr) -> VmResult<Value> {
+        let cls = match self.lookup_class(class)? {
+            Some(c) => c,
+            None => {
+                let ic = self.find_class(b"__PHP_Incomplete_Class");
+                match ic {
+                    Some(ic) => {
+                        let o = self.instantiate_unchecked(&ic)?;
+                        self.write_dynamic_prop(&o, ZStr::from("__PHP_Incomplete_Class_Name"), Value::Str(class.clone()));
+                        return Ok(Value::Object(o));
+                    }
+                    None => {
+                        return Err(self.make_throw(
+                            "Error",
+                            &format!("Class \"{}\" not found", class.to_string_lossy()),
+                        ))
+                    }
+                }
+            }
+        };
+        if cls.is_enum() {
+            return Err(self.make_throw(
+                "Exception",
+                &format!("Unserialization of '{}' is not allowed", cls.name),
+            ));
+        }
+        if cls.flags & cflags::NOT_SERIALIZABLE != 0 {
+            return Err(self.make_throw(
+                "Exception",
+                &format!("Unserialization of '{}' is not allowed", cls.name),
+            ));
+        }
+        let o = self.instantiate_unchecked(&cls)?;
+        Ok(Value::Object(o))
+    }
+
+    fn unserialize_finish(&mut self, obj: &Value, props: ZArray) -> VmResult<()> {
+        let Value::Object(o) = obj else {
+            return Ok(());
+        };
+        let cls = object::class_of(o).clone();
+        if let Some(m) = cls.magic.unserialize.clone() {
+            self.call_method(o, &m, vec![Value::Array(props)])?;
+            return Ok(());
+        }
+        for (k, v) in props.iter() {
+            let name = match k {
+                ArrayKey::Str(s) => s.clone(),
+                ArrayKey::Int(i) => ZStr::from(i.to_string()),
+            };
+            self.write_mangled_prop(o, &name, v.clone());
+        }
+        if let Some(m) = cls.magic.wakeup.clone() {
+            self.call_method(o, &m, Vec::new())?;
+        }
+        Ok(())
+    }
+
+    fn unserialize_enum_vm(&mut self, class: &ZStr, case: &ZStr) -> VmResult<Value> {
+        let Some(cls) = self.lookup_class(class)? else {
+            return Err(self.make_throw(
+                "Error",
+                &format!("Class '{}' not found", class.to_string_lossy()),
+            ));
+        };
+        if !cls.is_enum() {
+            return Err(self.make_throw(
+                "Error",
+                &format!("Class '{}' is not an enum", class.to_string_lossy()),
+            ));
+        }
+        self.enum_case(&cls, case)
+    }
+
+    fn unserialize_custom_vm(&mut self, class: &ZStr, data: &[u8]) -> VmResult<Value> {
+        let cls = self.lookup_class_or_error(class)?;
+        let o = self.instantiate_unchecked(&cls)?;
+        self.call_method_name(&o, "unserialize", vec![Value::Str(ZStr::from(data))])?;
+        Ok(Value::Object(o))
+    }
+}
+
+impl OutputHost for Vm {
+    type Callback = Value;
+
+    fn output(&mut self) -> &mut OutputStack<Value> {
+        &mut self.output
+    }
+
+    fn call_handler(&mut self, callback: &mut Value, buffer: &[u8], mode: i32) -> Option<Vec<u8>> {
+        let cb = callback.clone();
+        let r = self.call_value(&cb, vec![Value::Str(ZStr::from(buffer)), Value::Int(i64::from(mode))]);
+        match r {
+            Ok(Value::Bool(false)) => None,
+            Ok(Value::Bool(true)) => Some(Vec::new()),
+            Ok(Value::Str(s)) => Some(s.as_bytes().to_vec()),
+            Ok(Value::Null) => Some(Vec::new()),
+            Ok(other) => match self.to_zstr(&other) {
+                Ok(s) => Some(s.as_bytes().to_vec()),
+                Err(_) => None,
+            },
+            Err(t) => {
+                if self.pending_throw.is_none() {
+                    self.pending_throw = Some(t);
+                }
+                None
+            }
+        }
+    }
+
+    fn sapi_write(&mut self, data: &[u8]) {
+        self.headers_sent = true;
+        let _ = self.stdout.write_all(data);
+    }
+
+    fn sapi_flush(&mut self) {
+        let _ = self.stdout.flush();
+    }
+
+    fn report(&mut self, diagnostic: php_support::Diagnostic) {
+        let msg = diagnostic.message.clone();
+        let level = i64::from(diagnostic.level.0);
+        let r = if diagnostic.docref {
+            self.docref(level, &msg)
+        } else {
+            self.error(level, &msg)
+        };
+        if let Err(t) = r {
+            if self.pending_throw.is_none() {
+                self.pending_throw = Some(t);
+            }
+        }
+    }
+}
