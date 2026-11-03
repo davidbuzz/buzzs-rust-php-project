@@ -77,6 +77,9 @@ impl ParamTable {
     }
 }
 
+/// `bound_param_map`: placeholder positions/names to rewritten names.
+pub(crate) type ParamMap = Vec<(ParamMapKey, Vec<u8>)>;
+
 /// `pdo_stmt_t`.
 pub(crate) struct Stmt {
     pub object: RefCell<Option<Weak<dyn PhpObject>>>,
@@ -93,7 +96,7 @@ pub(crate) struct Stmt {
     pub in_param_event: Cell<bool>,
     pub execute_incomplete: Cell<bool>,
     pub bound_params: RefCell<Option<ParamTable>>,
-    pub bound_param_map: RefCell<Option<Vec<(ParamMapKey, Vec<u8>)>>>,
+    pub bound_param_map: RefCell<Option<ParamMap>>,
     pub bound_columns: RefCell<Option<ParamTable>>,
     pub columns: RefCell<Option<Vec<ColumnData>>>,
     pub column_count: Cell<i64>,
@@ -397,6 +400,7 @@ impl Stmt {
     }
 
     /// `really_register_bound_param()`.
+    #[allow(clippy::too_many_lines)]
     pub fn register_bound_param(
         &self,
         cx: &mut Ctx<'_>,
@@ -497,23 +501,20 @@ impl Stmt {
             return true;
         };
         let r = self.hook(cx, &mut stored, ParamEvent::Alloc);
-        match r {
-            Some(Err(e)) => {
-                if let Some(t) = table.borrow_mut().as_mut() {
-                    t.remove(&key);
-                }
-                self.apply(cx, e);
-                self.handle_err(cx);
-                false
+        if let Some(Err(e)) = r {
+            if let Some(t) = table.borrow_mut().as_mut() {
+                t.remove(&key);
             }
-            _ => {
-                if let Some(t) = table.borrow_mut().as_mut() {
-                    if let Some(slot) = t.get_mut(&key) {
-                        *slot = stored;
-                    }
+            self.apply(cx, e);
+            self.handle_err(cx);
+            false
+        } else {
+            if let Some(t) = table.borrow_mut().as_mut() {
+                if let Some(slot) = t.get_mut(&key) {
+                    *slot = stored;
                 }
-                true
             }
+            true
         }
     }
 
@@ -672,7 +673,7 @@ impl std::fmt::Debug for PdoStatement {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PdoStatement")
             .field("query_string", &self.0.query_string.borrow())
-            .field("error_code", &code_str(&self.0.error_code.get()))
+            .field("error_code", &code_str(self.0.error_code.get()))
             .finish_non_exhaustive()
     }
 }
@@ -734,15 +735,14 @@ impl PdoStatement {
     /// `PHP_STMT_GET_OBJ`: the handle, or the "object is uninitialized"
     /// error.
     pub(crate) fn get(&self, cx: &mut Ctx<'_>) -> Option<Rc<Dbh>> {
-        match self.0.dbh() {
-            Some(d) => Some(d),
-            None => {
-                cx.throw_error(format!(
-                    "{} object is uninitialized",
-                    self.0.class_name.borrow()
-                ));
-                None
-            }
+        if let Some(d) = self.0.dbh() {
+            Some(d)
+        } else {
+            cx.throw_error(format!(
+                "{} object is uninitialized",
+                self.0.class_name.borrow()
+            ));
+            None
         }
     }
 
@@ -756,6 +756,7 @@ impl PdoStatement {
         cx.finish(r)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn bind(
         &self,
         cx: &mut Ctx<'_>,
@@ -856,7 +857,7 @@ impl PdoStatement {
         &self,
         host: &mut dyn PdoHost,
         param: &ParamId,
-        value: Value,
+        value: &Value,
         ty: i64,
     ) -> RtResult<bool> {
         let mut cx = Ctx::new(host);
@@ -902,7 +903,7 @@ impl PdoStatement {
                 if code[0] == 0 {
                     Value::Null
                 } else {
-                    Value::from(code_str(&code))
+                    Value::from(code_str(code))
                 }
             }
             None => Value::Null,
@@ -916,7 +917,7 @@ impl PdoStatement {
         let r = match self.get(&mut cx) {
             Some(dbh) => {
                 let code = self.0.error_code.get();
-                let mut out = ZArray::from_values([Value::from(code_str(&code))]);
+                let mut out = ZArray::from_values([Value::from(code_str(code))]);
                 if code != ERR_NONE {
                     if let Some(d) = dbh.driver() {
                         let sd = self.0.driver();

@@ -1,5 +1,15 @@
 //! Hand ports of `ext/pdo/tests/bug_*.phpt` over `sqlite::memory:`.
 
+#![allow(
+    clippy::many_single_char_names,
+    clippy::too_many_lines,
+    clippy::needless_pass_by_value,
+    clippy::cast_possible_wrap,
+    clippy::similar_names,
+    clippy::disallowed_names,
+    clippy::doc_markdown
+)]
+
 mod common;
 
 use common::*;

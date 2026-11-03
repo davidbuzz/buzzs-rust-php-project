@@ -2,6 +2,16 @@
 //! (fetch-mode setup, statement classes, reentrancy) over
 //! `sqlite::memory:`.
 
+#![allow(
+    clippy::many_single_char_names,
+    clippy::too_many_lines,
+    clippy::needless_pass_by_value,
+    clippy::cast_possible_wrap,
+    clippy::similar_names,
+    clippy::disallowed_names,
+    clippy::doc_markdown
+)]
+
 mod common;
 
 use common::*;
@@ -81,7 +91,8 @@ fn setfetchmode_atomic() {
     h.exec(&pdo, "INSERT INTO a (i) VALUES (1)").unwrap();
     let st = h.query(&pdo, "SELECT i FROM a").unwrap();
     let row = h.new_object("stdClass");
-    h.set_fetch_mode(&st, FETCH_INTO, &[row.clone()]).unwrap();
+    h.set_fetch_mode(&st, FETCH_INTO, std::slice::from_ref(&row))
+        .unwrap();
     if let Err(e) = h.set_fetch_mode(&st, FETCH_CLASS, &[]) {
         h.echo(&format!("into error: {}\n", TestHost::error_class(&e)));
     }
@@ -123,7 +134,8 @@ fn setfetchmode_reentrant_fetch() {
 
     let st = h.query(&pdo, "SELECT i FROM r ORDER BY i").unwrap();
     let into = h.new_object("stdClass");
-    h.set_fetch_mode(&st, FETCH_INTO, &[into.clone()]).unwrap();
+    h.set_fetch_mode(&st, FETCH_INTO, std::slice::from_ref(&into))
+        .unwrap();
     let (st2, into2) = (st.clone(), into.clone());
     h.autoload = Some(Rc::new(move |h: &mut TestHost, class| {
         let row = h.fetch(&st2, FETCH_DEFAULT).unwrap();
@@ -179,10 +191,11 @@ fn setfetchmode_reentrant_setmode() {
     let st = h.query(&pdo, "SELECT i FROM r").unwrap();
     let first = h.new_object("stdClass");
     let second = h.new_object("stdClass");
-    h.set_fetch_mode(&st, FETCH_INTO, &[first.clone()]).unwrap();
+    h.set_fetch_mode(&st, FETCH_INTO, std::slice::from_ref(&first))
+        .unwrap();
     let (st2, second2) = (st.clone(), second.clone());
     h.autoload = Some(Rc::new(move |h: &mut TestHost, class| {
-        h.set_fetch_mode(&st2, FETCH_INTO, &[second2.clone()])
+        h.set_fetch_mode(&st2, FETCH_INTO, std::slice::from_ref(&second2))
             .unwrap();
         let name = class.to_string_lossy();
         h.add_class(Class::new(&name).typed("i", "int"));

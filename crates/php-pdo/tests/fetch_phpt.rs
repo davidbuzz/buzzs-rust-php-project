@@ -2,6 +2,16 @@
 //! `sqlite::memory:` (and `sqlemu:`, SQLite behind PDO's prepare
 //! emulation).
 
+#![allow(
+    clippy::many_single_char_names,
+    clippy::too_many_lines,
+    clippy::needless_pass_by_value,
+    clippy::cast_possible_wrap,
+    clippy::similar_names,
+    clippy::disallowed_names,
+    clippy::doc_markdown
+)]
+
 mod common;
 
 use common::*;
@@ -39,7 +49,9 @@ fn print_err(h: &mut TestHost, e: &RuntimeError) {
 }
 
 fn sv(v: &Value) -> String {
-    v.as_str().map(|s| s.to_string_lossy()).unwrap_or_default()
+    v.as_str()
+        .map(php_runtime::ZStr::to_string_lossy)
+        .unwrap_or_default()
 }
 
 #[test]
@@ -508,7 +520,8 @@ fn fetch_lazy_default_and_not_default() {
     h.dump(&r);
     let r = h.fetch(&q, FETCH_DEFAULT).unwrap();
     h.dump(&r);
-    h.set_fetch_mode(&q, FETCH_INTO, &[o.clone()]).unwrap();
+    h.set_fetch_mode(&q, FETCH_INTO, std::slice::from_ref(&o))
+        .unwrap();
     let r = h.fetch(&q, FETCH_DEFAULT).unwrap();
     h.dump(&r);
     h.dump(&o);
@@ -583,7 +596,7 @@ fn gh20553_magic_set_fetch_class() {
         Class::new("dumpy")
             .ctor(|h, this, args| {
                 let class = TestHost::obj(this).class_name().to_string_lossy();
-                let a = args.map(|a| Value::Array(a.clone())).unwrap_or(Value::Null);
+                let a = args.map_or(Value::Null, |a| Value::Array(a.clone()));
                 let exported = h.export(&a);
                 h.echo(&format!(
                     "constructor called,\n  my class is '{class}'\n  input parameters: {exported}\n"
@@ -669,7 +682,8 @@ fn gh16703_fetch_into_self() {
     h.exec(&db, "INSERT INTO gh16703 (name) VALUES ('test_name')")
         .unwrap();
     let st = h.query(&db, "SELECT name FROM gh16703").unwrap();
-    h.set_fetch_mode(&st, FETCH_INTO, &[st.clone()]).unwrap();
+    h.set_fetch_mode(&st, FETCH_INTO, std::slice::from_ref(&st))
+        .unwrap();
     h.fetch(&st, FETCH_DEFAULT).unwrap();
     h.echo("done!\n");
     assert_phpt!(h, "gh16703.phpt");

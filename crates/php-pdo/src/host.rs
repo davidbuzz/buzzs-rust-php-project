@@ -421,7 +421,7 @@ impl<'h> Ctx<'h> {
     }
 }
 
-/// Converts an exception raised by the SQLite crate into a runtime error.
+/// Converts an exception raised by the `SQLite` crate into a runtime error.
 pub(crate) fn convert_php_error(host: &mut dyn PdoHost, e: php_sqlite::PhpError) -> RuntimeError {
     use php_sqlite::{ExceptionClass, PhpError};
     match e {

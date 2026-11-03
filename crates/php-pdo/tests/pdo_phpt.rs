@@ -1,5 +1,15 @@
 //! Hand ports of `ext/pdo/tests/pdo_0*.phpt` over `sqlite::memory:`.
 
+#![allow(
+    clippy::many_single_char_names,
+    clippy::too_many_lines,
+    clippy::needless_pass_by_value,
+    clippy::cast_possible_wrap,
+    clippy::similar_names,
+    clippy::disallowed_names,
+    clippy::doc_markdown
+)]
+
 mod common;
 
 use common::*;
@@ -167,7 +177,7 @@ fn test_class_with_name_ctor() -> Class {
         .ctor(|h, _, args| {
             let name = args
                 .and_then(|a| a.get_int(0).cloned())
-                .and_then(|v| v.as_str().map(|s| s.to_string_lossy()))
+                .and_then(|v| v.as_str().map(php_runtime::ZStr::to_string_lossy))
                 .unwrap_or_else(|| "N/A".into());
             h.echo(&format!("TestClass::__construct({name})\n"));
             Ok(())
@@ -859,9 +869,8 @@ fn pdo_035_pdorow() {
     ] {
         h.echo(&format!("{}\n", e.message().unwrap()));
     }
-    let out = h.output().replacen("bool(false)\n", "bool(false)\n", 1);
-    // `get_parent_class($result)` is a VM concern: it prints bool(false).
-    assert!(check_phpt("pdo", "pdo_035.phpt", &out));
+    // `get_parent_class($result)` (a VM concern) printed bool(false) above.
+    assert!(check_phpt("pdo", "pdo_035.phpt", &h.output()));
 }
 
 #[test]

@@ -61,7 +61,7 @@ fn connect(
     }
 }
 
-/// A SQLite connection.
+/// A `SQLite` connection.
 #[derive(Debug)]
 pub struct SqliteDbh {
     dbh: PdoSqliteDbh,
@@ -205,7 +205,7 @@ impl DbhDriver for SqliteDbh {
     }
 }
 
-/// A prepared SQLite statement.
+/// A prepared `SQLite` statement.
 #[derive(Debug)]
 pub struct SqliteStmt {
     stmt: PdoSqliteStmt,
@@ -218,10 +218,10 @@ impl SqliteStmt {
     }
 }
 
-fn hook_error(e: HookError) -> DriverError {
+fn hook_error(e: &HookError) -> DriverError {
     match e {
-        HookError::Driver(s) => DriverError::State(s),
-        HookError::Impl(state, msg) => DriverError::Impl(state, msg.to_string()),
+        HookError::Driver(s) => DriverError::State(*s),
+        HookError::Impl(state, msg) => DriverError::Impl(state, (*msg).to_string()),
         HookError::Silent => DriverError::Silent,
     }
 }
@@ -287,7 +287,7 @@ impl StmtDriver for SqliteStmt {
         let r = self.stmt.param_hook(cx, &mut p, ev, executed);
         param.parameter = p.parameter;
         param.paramno = p.paramno;
-        Some(r.map_err(hook_error))
+        Some(r.map_err(|e| hook_error(&e)))
     }
 
     fn set_attribute(

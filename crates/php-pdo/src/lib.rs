@@ -1,6 +1,6 @@
 //! PHP's `ext/pdo` core for phprust: the `PDO`, `PDOStatement` and `PDORow`
 //! classes as Rust handles, the driver interface, the fetch engine and the
-//! error modes, plus the adapter for the SQLite driver of `php-sqlite`.
+//! error modes, plus the adapter for the `SQLite` driver of `php-sqlite`.
 //!
 //! References: `ext/pdo/pdo.c`, `ext/pdo/pdo_dbh.c`, `ext/pdo/pdo_stmt.c`,
 //! `ext/pdo/php_pdo_driver.h`, `ext/pdo/*.stub.php`.

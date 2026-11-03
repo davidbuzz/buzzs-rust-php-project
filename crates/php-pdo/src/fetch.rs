@@ -265,7 +265,7 @@ pub(crate) fn do_fetch(
     how: i64,
     ori: i64,
     offset: i64,
-    mut group_key: Option<&mut Value>,
+    group_key: Option<&mut Value>,
 ) -> Option<Value> {
     let how = if how == FETCH_DEFAULT {
         st.default_fetch_type.get()
@@ -319,7 +319,7 @@ pub(crate) fn do_fetch(
     }
 
     st.in_fetch.set(true);
-    let r = do_fetch_row(cx, st, how, flags, count, group_key.as_deref_mut());
+    let r = do_fetch_row(cx, st, how, flags, count, group_key);
     st.in_fetch.set(false);
     r
 }
@@ -590,7 +590,7 @@ pub(crate) fn setup_fetch_mode(
     let Some(dbh) = st.dbh() else {
         return false;
     };
-    let arg1 = mode_arg_num + 1;
+    let first_arg_num = mode_arg_num + 1;
     let ctor_arg_num = mode_arg_num + 2;
     let nargs = u32::try_from(args.len()).unwrap_or(u32::MAX);
     let total = mode_arg_num + nargs;
@@ -623,18 +623,18 @@ pub(crate) fn setup_fetch_mode(
         }
         FETCH_COLUMN => {
             if nargs != 1 {
-                count_error(cx, "exactly", arg1);
+                count_error(cx, "exactly", first_arg_num);
                 return false;
             }
             let Value::Int(c) = args[0].deref() else {
                 cx.throw(func.type_error(
-                    arg1,
+                    first_arg_num,
                     &format!("must be of type int, {} given", args[0].value_name()),
                 ));
                 return false;
             };
             if c < 0 {
-                cx.throw(func.value_error(arg1, "must be greater than or equal to 0"));
+                cx.throw(func.value_error(first_arg_num, "must be greater than or equal to 0"));
                 return false;
             }
             FetchUnion::Column(c)
@@ -651,7 +651,7 @@ pub(crate) fn setup_fetch_mode(
                 }
             } else {
                 if nargs == 0 {
-                    count_error(cx, "at least", arg1);
+                    count_error(cx, "at least", first_arg_num);
                     return false;
                 }
                 if nargs > 2 {
@@ -659,12 +659,12 @@ pub(crate) fn setup_fetch_mode(
                     return false;
                 }
                 let Value::Str(name) = args[0].deref() else {
-                    cx.throw(func.wrong_type(arg1, "string", &args[0]));
+                    cx.throw(func.wrong_type(first_arg_num, "string", &args[0]));
                     return false;
                 };
                 let Some(info) = cx.host().lookup_class(&name) else {
                     if !cx.has_exception() {
-                        cx.throw(func.type_error(arg1, "must be a valid class"));
+                        cx.throw(func.type_error(first_arg_num, "must be a valid class"));
                     }
                     return false;
                 };
@@ -694,13 +694,13 @@ pub(crate) fn setup_fetch_mode(
             }
         }
         FETCH_INTO => {
-            if total != arg1 {
-                count_error(cx, "exactly", arg1);
+            if total != first_arg_num {
+                count_error(cx, "exactly", first_arg_num);
                 return false;
             }
             let v = args[0].deref();
             if !matches!(v, Value::Object(_)) {
-                cx.throw(func.wrong_type(arg1, "object", &args[0]));
+                cx.throw(func.wrong_type(first_arg_num, "object", &args[0]));
                 return false;
             }
             FetchUnion::Into(v)
@@ -751,12 +751,11 @@ impl PdoStatement {
             }
             return Value::Array(out);
         }
-        match do_fetch(cx, st, how, ori, off, None) {
-            Some(v) => v,
-            None => {
-                st.handle_err(cx);
-                Value::Bool(false)
-            }
+        if let Some(v) = do_fetch(cx, st, how, ori, off, None) {
+            v
+        } else {
+            st.handle_err(cx);
+            Value::Bool(false)
         }
     }
 
@@ -780,9 +779,10 @@ impl PdoStatement {
         ctor_args: Option<&ZArray>,
     ) -> Value {
         let info = match class {
-            Some(name) => match cx.host().lookup_class(name) {
-                Some(i) => Some(i),
-                None => {
+            Some(name) => {
+                if let Some(i) = cx.host().lookup_class(name) {
+                    Some(i)
+                } else {
                     if !cx.has_exception() {
                         cx.throw(
                             STMT_FETCH_OBJECT
@@ -791,7 +791,7 @@ impl PdoStatement {
                     }
                     return Value::Null;
                 }
-            },
+            }
             None => None,
         };
         if self.get(cx).is_none() {
@@ -817,12 +817,11 @@ impl PdoStatement {
                 ctor_args: ctor_args.cloned(),
             },
         );
-        let r = match do_fetch(cx, st, FETCH_CLASS, FETCH_ORI_NEXT, 0, None) {
-            Some(v) => v,
-            None => {
-                st.handle_err(cx);
-                Value::Bool(false)
-            }
+        let r = if let Some(v) = do_fetch(cx, st, FETCH_CLASS, FETCH_ORI_NEXT, 0, None) {
+            v
+        } else {
+            st.handle_err(cx);
+            Value::Bool(false)
         };
         *st.fetch.borrow_mut() = old;
         r
@@ -876,7 +875,7 @@ impl PdoStatement {
             return None;
         }
         let mut how = mode.unwrap_or(FETCH_DEFAULT);
-        let arg2 = args.first().map(Value::deref).filter(|v| !v.is_null());
+        let second = args.first().map(Value::deref).filter(|v| !v.is_null());
         let ctor_args = match args.get(1).map(Value::deref) {
             None | Some(Value::Null) => None,
             Some(Value::Array(a)) => Some(a),
@@ -896,7 +895,7 @@ impl PdoStatement {
 
         match fetch_mode {
             FETCH_CLASS => {
-                let fetch_class = if let Some(a2) = &arg2 {
+                let fetch_class = if let Some(a2) = &second {
                     let Value::Str(name) = a2 else {
                         cx.throw(f.wrong_type(2, "string", a2));
                         return None;
@@ -933,7 +932,7 @@ impl PdoStatement {
                     )));
                     return None;
                 }
-                let Some(callable) = arg2 else {
+                let Some(callable) = second else {
                     cx.throw(f.type_error(2, "must be a callable, null given"));
                     return None;
                 };
@@ -950,7 +949,7 @@ impl PdoStatement {
                     )));
                     return None;
                 }
-                let col = if let Some(a2) = &arg2 {
+                let col = if let Some(a2) = &second {
                     let Value::Int(c) = a2 else {
                         cx.throw(f.wrong_type(2, "int", a2));
                         return None;
@@ -1097,17 +1096,14 @@ impl StmtIterator {
     fn advance(&mut self, cx: &mut Ctx<'_>, increment: bool) {
         self.fetch_ahead = None;
         let st = &self.stmt.0;
-        match do_fetch(cx, st, FETCH_DEFAULT, FETCH_ORI_NEXT, 0, None) {
-            Some(v) => {
-                self.fetch_ahead = Some(v);
-                if increment {
-                    self.key = Some(self.key.map_or(0, |k| k.wrapping_add(1)));
-                }
+        if let Some(v) = do_fetch(cx, st, FETCH_DEFAULT, FETCH_ORI_NEXT, 0, None) {
+            self.fetch_ahead = Some(v);
+            if increment {
+                self.key = Some(self.key.map_or(0, |k| k.wrapping_add(1)));
             }
-            None => {
-                st.handle_err(cx);
-                self.key = None;
-            }
+        } else {
+            st.handle_err(cx);
+            self.key = None;
         }
     }
 

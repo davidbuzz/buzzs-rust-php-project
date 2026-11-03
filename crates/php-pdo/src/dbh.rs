@@ -60,7 +60,7 @@ impl std::fmt::Debug for Dbh {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Dbh")
             .field("driver", &self.entry.get().map(|e| e.name))
-            .field("error_code", &code_str(&self.error_code.get()))
+            .field("error_code", &code_str(self.error_code.get()))
             .field("is_persistent", &self.is_persistent.get())
             .finish_non_exhaustive()
     }
@@ -313,7 +313,7 @@ impl Pdo {
         dbh.driver()
     }
 
-    /// The SQLite driver handle, for the `Pdo\Sqlite` methods.
+    /// The `SQLite` driver handle, for the `Pdo\Sqlite` methods.
     pub fn sqlite(&self) -> Option<php_sqlite::pdo::PdoSqliteDbh> {
         let d = self.driver()?;
         d.as_any()
@@ -793,13 +793,13 @@ impl Pdo {
         let r = match self.check(&mut cx) {
             Some(dbh) => {
                 if let Some((stmt, _)) = &*dbh.query_stmt.borrow() {
-                    Value::from(code_str(&stmt.error_code.get()))
+                    Value::from(code_str(stmt.error_code.get()))
                 } else {
                     let code = dbh.error_code.get();
                     if code[0] == 0 {
                         Value::Null
                     } else {
-                        Value::from(code_str(&code))
+                        Value::from(code_str(code))
                     }
                 }
             }
@@ -818,7 +818,7 @@ impl Pdo {
                     Some(s) => s.error_code.get(),
                     None => dbh.error_code.get(),
                 };
-                let mut out = ZArray::from_values([Value::from(code_str(&code))]);
+                let mut out = ZArray::from_values([Value::from(code_str(code))]);
                 if code != ERR_NONE {
                     if let Some(d) = dbh.driver() {
                         let sd = query_stmt.as_ref().and_then(|s| s.driver());
@@ -1378,8 +1378,8 @@ fn construct_driver(
 
     if call_factory {
         *dbh.data_source.borrow_mut() = data_source[colon + 1..].to_vec();
-        *dbh.username.borrow_mut() = username.clone();
-        *dbh.password.borrow_mut() = password.clone();
+        dbh.username.borrow_mut().clone_from(&username);
+        dbh.password.borrow_mut().clone_from(&password);
         dbh.default_fetch_type.set(FETCH_BOTH);
     }
     let ac = attr_lval(cx, options, ATTR_AUTOCOMMIT, 1);

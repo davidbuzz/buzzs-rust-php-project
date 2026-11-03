@@ -1,6 +1,16 @@
 //! Focused tests of individual core behaviours (fetch modes, conversions,
 //! attributes, errors, DSN handling) over `sqlite::memory:`.
 
+#![allow(
+    clippy::many_single_char_names,
+    clippy::too_many_lines,
+    clippy::needless_pass_by_value,
+    clippy::cast_possible_wrap,
+    clippy::similar_names,
+    clippy::disallowed_names,
+    clippy::doc_markdown
+)]
+
 mod common;
 
 use common::*;
@@ -135,10 +145,6 @@ fn fetch_modes_overview() {
     );
     let q = h.query(&db, "SELECT a, b FROM t").unwrap();
     let r = h.fetch(&q, FETCH_OBJ).unwrap();
-    assert_eq!(
-        dump_str(&mut h, &r).replace(|c: char| c.is_ascii_digit() && false, ""),
-        dump_str(&mut h, &r)
-    );
     assert!(TestHost::get_prop(&r, "b").is_some());
     // invalid modes
     let q = h.query(&db, "SELECT a FROM t").unwrap();

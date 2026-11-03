@@ -18,7 +18,7 @@ pub(crate) const ERR_UNSET: ErrCode = [0; 5];
 pub(crate) const ERR_NONE: ErrCode = *b"00000";
 
 /// The error code as text (`""` while unset).
-pub(crate) fn code_str(code: &ErrCode) -> String {
+pub(crate) fn code_str(code: ErrCode) -> String {
     let end = code.iter().position(|&b| b == 0).unwrap_or(5);
     String::from_utf8_lossy(&code[..end]).into_owned()
 }
@@ -33,7 +33,7 @@ pub(crate) fn to_code(state: &str) -> ErrCode {
 }
 
 /// `pdo_sqlstate_state_to_description()`.
-fn describe(code: &ErrCode) -> &'static str {
+fn describe(code: ErrCode) -> &'static str {
     sqlstate::description(&code_str(code)).unwrap_or("<<Unknown error>>")
 }
 
@@ -76,8 +76,8 @@ pub(crate) fn raise_impl_error(
     if mode == ERRMODE_SILENT {
         return;
     }
-    let state = code_str(&code);
-    let msg = describe(&code);
+    let state = code_str(code);
+    let msg = describe(code);
     let message = match supp {
         Some(supp) => format!("SQLSTATE[{state}]: {msg}: {supp}"),
         None => format!("SQLSTATE[{state}]: {msg}"),
@@ -106,8 +106,8 @@ pub(crate) fn handle_error(cx: &mut Ctx<'_>, dbh: &Dbh, stmt: Option<&Stmt>) {
         Some(s) => s.error_code.get(),
         None => dbh.error_code.get(),
     };
-    let state = code_str(&code);
-    let msg = describe(&code);
+    let state = code_str(code);
+    let msg = describe(code);
     let mut native_code = 0;
     let mut supp: Option<String> = None;
     let mut info: Option<ZArray> = None;
@@ -241,10 +241,10 @@ mod tests {
 
     #[test]
     fn codes() {
-        assert_eq!(code_str(&ERR_UNSET), "");
-        assert_eq!(code_str(&to_code("HY000")), "HY000");
-        assert_eq!(describe(&to_code("HY093")), "Invalid parameter number");
-        assert_eq!(describe(&to_code("ZZZZZ")), "<<Unknown error>>");
+        assert_eq!(code_str(ERR_UNSET), "");
+        assert_eq!(code_str(to_code("HY000")), "HY000");
+        assert_eq!(describe(to_code("HY093")), "Invalid parameter number");
+        assert_eq!(describe(to_code("ZZZZZ")), "<<Unknown error>>");
     }
 
     #[test]

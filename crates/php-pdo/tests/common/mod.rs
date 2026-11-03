@@ -3,7 +3,15 @@
 //! property tables, `var_dump` output, diagnostics in CLI format and an
 //! EXPECTF matcher.
 
-#![allow(dead_code, clippy::missing_panics_doc, clippy::type_complexity)]
+#![allow(
+    dead_code,
+    clippy::missing_panics_doc,
+    clippy::type_complexity,
+    clippy::needless_pass_by_value,
+    clippy::unused_self,
+    clippy::match_same_arms,
+    clippy::single_match_else
+)]
 
 use php_pdo::host::{ClassInfo, PdoException, PdoHost};
 use php_pdo::{ConnectArgs, ParamId, Pdo, PdoRow, PdoStatement, PersistentList};
@@ -320,7 +328,7 @@ impl TestHost {
                 if let Some(existing) = props.iter_mut().find(|q: &&mut Prop| {
                     q.name.as_bytes() == p.name.as_bytes() && p.vis != Vis::Private
                 }) {
-                    existing.value = p.default.clone();
+                    existing.value.clone_from(&p.default);
                     continue;
                 }
                 props.push(Prop {
@@ -1229,7 +1237,7 @@ impl TestHost {
 
     pub fn bind_value(&mut self, st: &Value, id: ParamId, v: Value, ty: i64) -> RtResult<bool> {
         let old = self.enter("PDOStatement::bindValue");
-        let r = Self::stmt(st).bind_value(self, &id, v, ty);
+        let r = Self::stmt(st).bind_value(self, &id, &v, ty);
         self.func = old;
         r
     }
