@@ -35,6 +35,58 @@ fn with_state<R>(f: impl FnOnce(&mut JsonState) -> R) -> R {
     r
 }
 
+/// What `memory_get_usage()` reports for an idle request (the VM does not
+/// track allocations), used as the baseline of [`check_memory`].
+const BASE_USAGE: u64 = 2 * 1024 * 1024;
+
+/// Parses a `memory_limit` value (`zend_ini_parse_quantity`): `-1` (or any
+/// negative value) means unlimited.
+fn parse_limit(raw: &[u8]) -> Option<u64> {
+    let s = std::str::from_utf8(raw).ok()?.trim();
+    let (digits, mult) = match s.as_bytes().last()? {
+        b'k' | b'K' => (&s[..s.len() - 1], 1u64 << 10),
+        b'm' | b'M' => (&s[..s.len() - 1], 1 << 20),
+        b'g' | b'G' => (&s[..s.len() - 1], 1 << 30),
+        _ => (s, 1),
+    };
+    let n: i64 = digits.trim().parse().ok()?;
+    u64::try_from(n)
+        .ok()
+        .filter(|&n| n > 0)
+        .map(|n| n.saturating_mul(mult))
+}
+
+/// Models the `memory_limit` check of the allocations json_encode/decode
+/// make: the VM does not account memory, so the input and output buffers
+/// (`input + output` bytes on top of [`BASE_USAGE`]) are compared against
+/// the limit and the engine's out-of-memory fatal error is raised when they
+/// would not fit.
+fn check_memory(vm: &mut Vm, input: usize, output: usize) -> VmResult<()> {
+    let Some(limit) = vm
+        .ini_string("memory_limit")
+        .as_deref()
+        .and_then(parse_limit)
+    else {
+        return Ok(());
+    };
+    let need = BASE_USAGE + input as u64 + output as u64;
+    if need > limit {
+        return Err(vm.fatal(&format!(
+            "Allowed memory size of {limit} bytes exhausted (tried to allocate {output} bytes)"
+        )));
+    }
+    Ok(())
+}
+
+/// The input bytes of a value that json_encode copies from: the length of a
+/// top-level string (other values are not counted).
+fn input_len(v: &Value) -> usize {
+    match v {
+        Value::Str(s) => s.len(),
+        _ => 0,
+    }
+}
+
 /// The `json` extension.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Json;
@@ -53,7 +105,11 @@ fn json_encode(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         functions::json_encode(&mut st, &mut h, &value, flags, depth)
     };
     STATE.with(|s| *s.borrow_mut() = st);
-    r.map_err(|e| host::rt_throw(vm, e))
+    let r = r.map_err(|e| host::rt_throw(vm, e))?;
+    if let Value::Str(out) = &r {
+        check_memory(vm, input_len(&value), out.len())?;
+    }
+    Ok(r)
 }
 
 fn json_decode(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -71,7 +127,11 @@ fn json_decode(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         functions::json_decode(&mut st, &mut h, json.as_bytes(), assoc, depth, flags)
     };
     STATE.with(|s| *s.borrow_mut() = st);
-    r.map_err(|e| host::rt_throw(vm, e))
+    let r = r.map_err(|e| host::rt_throw(vm, e))?;
+    if let Value::Str(out) = &r {
+        check_memory(vm, json.len(), out.len())?;
+    }
+    Ok(r)
 }
 
 fn json_validate(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -149,6 +209,16 @@ mod tests {
         assert_eq!(with_state(|st| functions::json_last_error(st)), 4);
         with_state(JsonState::clear);
         assert_eq!(with_state(|st| functions::json_last_error(st)), 0);
+    }
+
+    #[test]
+    fn memory_limits() {
+        assert_eq!(parse_limit(b"8M"), Some(8 << 20));
+        assert_eq!(parse_limit(b"128k"), Some(128 << 10));
+        assert_eq!(parse_limit(b"1G"), Some(1 << 30));
+        assert_eq!(parse_limit(b"12345"), Some(12345));
+        assert_eq!(parse_limit(b"-1"), None);
+        assert_eq!(parse_limit(b""), None);
     }
 
     #[test]
