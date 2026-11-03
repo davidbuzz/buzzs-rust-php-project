@@ -1196,3 +1196,63 @@ impl PdoSqliteStmt {
         ZStr::from(self.stmt.sql())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use php_runtime::{CollectingContext, RuntimeError};
+
+    struct H(CollectingContext);
+
+    impl php_runtime::RuntimeContext for H {
+        fn diagnostic(
+            &mut self,
+            level: php_runtime::ErrorLevel,
+            message: &str,
+        ) -> php_runtime::RtResult<()> {
+            self.0.diagnostic(level, message)
+        }
+    }
+
+    impl crate::Host for H {
+        fn call(&mut self, _: &Value, _: &[Value]) -> Result<Value, RuntimeError> {
+            Ok(Value::Null)
+        }
+    }
+
+    #[test]
+    fn sqlstate_mapping() {
+        assert_eq!(sqlstate_for(0).as_str(), "00000");
+        assert_eq!(sqlstate_for(1).as_str(), "HY000");
+        assert_eq!(sqlstate_for(12).as_str(), "42S02");
+        assert_eq!(sqlstate_for(9).as_str(), "01002");
+        assert_eq!(sqlstate_for(22).as_str(), "HYC00");
+        assert_eq!(sqlstate_for(18).as_str(), "22001");
+        assert_eq!(sqlstate_for(19).as_str(), "23000");
+        assert_eq!(sqlstate_for(1555).as_str(), "HY000");
+        assert_eq!(
+            SqlState(*b"23000").description(),
+            Some("Integrity constraint violation")
+        );
+        assert_eq!(param_type_base(PARAM_STR | 0x4000_0000), PARAM_STR);
+        assert_eq!(param_type_base(PARAM_INT | 0x8000_0000), PARAM_INT);
+    }
+
+    #[test]
+    fn long_params() {
+        let mut h = H(CollectingContext::new());
+        let mut cx = Cx::new(&mut h);
+        assert_eq!(get_long_param(&mut cx, &Value::Int(3)), Some(3));
+        assert_eq!(get_long_param(&mut cx, &Value::Bool(true)), Some(1));
+        assert_eq!(get_long_param(&mut cx, &Value::from("42")), Some(42));
+        assert_eq!(get_long_param(&mut cx, &Value::from("7 apples")), Some(7));
+        assert!(!cx.has_exception());
+        assert_eq!(get_long_param(&mut cx, &Value::from("1.5")), None);
+        assert_eq!(
+            cx.take_exception().unwrap().message(),
+            Some("Attribute value must be of type int for selected attribute, string given")
+        );
+        assert_eq!(get_long_param(&mut cx, &Value::Float(1.0)), None);
+        assert!(cx.take_exception().is_some());
+    }
+}
