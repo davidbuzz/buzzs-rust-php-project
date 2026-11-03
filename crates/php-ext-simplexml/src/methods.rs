@@ -5,8 +5,10 @@ use std::rc::Rc;
 use php_runtime::{RtResult, Value, ZStr};
 use php_simplexml::{Sxe, SxeRef};
 use php_vm::class::Class;
-use php_vm::ext::{Args, VmResult};
+use php_vm::ext::{Args, Throw, VmResult};
 use php_vm::Vm;
+
+use php_ext_xsl::access::{ImportedNode, XmlSource};
 
 use crate::hooks::{direct, property_for_write};
 use crate::host::{rt_throw, sxe_of, LentHost};
@@ -199,7 +201,38 @@ pub fn magic_get(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         return Ok(Value::Null);
     };
     let name = a.str(0);
-    property_for_write(vm, &o, &name)
+    let r = property_for_write(vm, &o, &name);
+    if let Err(Throw::Exception(e)) = &r {
+        // The trampoline is not a frame of PHP's: drop it from the trace
+        // of an exception thrown right here.
+        drop_trampoline_frame(e);
+    }
+    r
+}
+
+/// Removes the leading `SimpleXMLElement->__get()` frame from an
+/// exception's trace.
+fn drop_trampoline_frame(e: &php_runtime::Obj) {
+    let cls = php_vm::object::class_of(e).clone();
+    let Some(pi) = cls.props.iter().find(|p| p.name.as_bytes() == b"trace") else {
+        return;
+    };
+    let d = php_vm::object::data(e);
+    let mut slots = d.slots.borrow_mut();
+    let Some(Some(Value::Array(frames))) = slots.get(pi.slot as usize) else {
+        return;
+    };
+    let is_trampoline = frames.values().next().is_some_and(|f| match f {
+        Value::Array(f) => matches!(
+            f.get_str(b"function"),
+            Some(Value::Str(n)) if n.as_bytes() == b"__get"
+        ),
+        _ => false,
+    });
+    if is_trampoline {
+        let rest: Vec<Value> = frames.values().skip(1).cloned().collect();
+        slots[pi.slot as usize] = Some(Value::Array(php_runtime::ZArray::from_values(rest)));
+    }
 }
 
 /// `Z_PARAM_CLASS_OR_NULL` against `SimpleXMLElement`: argument `n`
@@ -248,10 +281,23 @@ pub fn load_file(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     })
 }
 
-/// `simplexml_import_dom()`: the DOM binding does not expose its nodes
-/// yet, so every object is rejected as "not a valid XML node" (what PHP
-/// does for non-DOM objects).
+/// `simplexml_import_dom()`: the node comes from the DOM binding's
+/// `php_ext_xsl::access::DomAccess` provider (`php_libxml_import_node`);
+/// anything else is "not a valid XML node".
 pub fn import_dom(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let class = class_arg(vm, a, 1)?.map(|c| c.name.clone());
-    lent(vm, a, |h| Sxe::import_dom(h, None, class.as_ref()))
+    let node = match a.at(0) {
+        Value::Object(o) => match php_ext_xsl::access::import(vm, &o)? {
+            Some((_, found)) => match found {
+                ImportedNode::Document(XmlSource::Document(d)) => d.root(),
+                ImportedNode::Document(XmlSource::Node(n))
+                | ImportedNode::Node(XmlSource::Node(n)) => Some(n),
+                ImportedNode::Node(XmlSource::Document(d)) => d.root(),
+                _ => None,
+            },
+            _ => None,
+        },
+        _ => None,
+    };
+    lent(vm, a, |h| Sxe::import_dom(h, node, class.as_ref()))
 }

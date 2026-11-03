@@ -18,6 +18,7 @@
 mod hooks;
 mod host;
 mod methods;
+mod xsl;
 
 use php_vm::ext::{acc, class_flags, ClassBuilder, Extension, ModuleBuilder};
 
@@ -91,6 +92,7 @@ impl Extension for SimpleXml {
             .hooks(hooks::class_hooks())
             .register(mb.vm());
         let _ = sxe;
+        php_ext_xsl::access::register(&xsl::ACCESS);
         ClassBuilder::new("SimpleXMLIterator")
             .flags(class_flags::NOT_SERIALIZABLE)
             .extends(mb.vm(), "SimpleXMLElement")
