@@ -276,6 +276,16 @@ pub(crate) fn getimagetype<R: Read + Seek>(
     IMAGETYPE_UNKNOWN
 }
 
+/// `exif_imagetype($filename)` on the opened stream: the `IMAGETYPE_*`
+/// value, or `None` (PHP `false`) for unknown images.  `input` is the file
+/// name used in "Error reading from %s!" notices.
+pub fn exif_imagetype<R: Read + Seek>(reader: R, input: &[u8]) -> (Option<i64>, Vec<Diagnostic>) {
+    let mut stream = PhpStream::new(reader);
+    let mut diags = Vec::new();
+    let t = getimagetype(&mut stream, input, &mut diags);
+    ((t != IMAGETYPE_UNKNOWN).then_some(t), diags)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

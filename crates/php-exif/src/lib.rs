@@ -4,6 +4,7 @@
 mod avif;
 pub mod diag;
 pub mod encoding;
+pub mod exif;
 pub mod fmt;
 pub mod imagesize;
 pub mod imagetype;
