@@ -7,6 +7,9 @@
 //!   `passthru`/`shell_exec`, `proc_nice`.
 //! * [`process`] — `proc_open`/`proc_close`/`proc_get_status`/
 //!   `proc_terminate`.
+//! * [`query`] — `http_build_query`, `parse_str` and the SAPI's request
+//!   variable registration (`php_register_variable_ex`).
+//! * [`locale`] — `setlocale`, `localeconv`, `nl_langinfo`.
 //!
 //! All `unsafe` code is confined to [`sys`].
 
@@ -14,4 +17,5 @@ pub mod crypt;
 pub mod exec;
 pub mod locale;
 pub mod process;
+pub mod query;
 pub mod sys;
