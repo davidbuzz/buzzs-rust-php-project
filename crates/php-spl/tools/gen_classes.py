@@ -53,11 +53,15 @@ def rs(s):
 
 
 def split_params(s):
-    out, depth, cur, quote = [], 0, "", None
+    out, depth, cur, quote, esc = [], 0, "", None, False
     for ch in s:
         if quote:
             cur += ch
-            if ch == quote:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == quote:
                 quote = None
             continue
         if ch in "\"'":

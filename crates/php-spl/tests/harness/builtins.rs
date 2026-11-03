@@ -1180,6 +1180,49 @@ pub fn call(it: &mut Interp, name: &str, args: &[Value]) -> RtResult<Value> {
                 None => Value::Bool(false),
             }
         }
+        "fputcsv" | "fgetcsv" | "fseek" | "ftruncate" | "fgetc" | "stream_get_contents" => {
+            let Value::Resource(r) = a0() else { return Err(rt_err(format!("{name}(): Argument #1 must be of type resource"))) };
+            let mut strs = Vec::new();
+            if name == "fputcsv" {
+                for v in arr(&arg(args, 1))?.values() {
+                    strs.push(v.deref().to_zstr(it)?.as_bytes().to_vec());
+                }
+            }
+            let n1 = arg(args, 1).to_long(it)?;
+            let mut d = r.data_mut();
+            let Some(s) = d.as_mut().and_then(|b| b.downcast_mut::<php_streams::stream::Stream>()) else {
+                return Ok(Value::Bool(false));
+            };
+            match name {
+                "fputcsv" => {
+                    let mut o = php_stdstr::csv::CsvOptions::default();
+                    if let Some(Value::Str(x)) = args.get(2) { if let Some(c) = x.as_bytes().first() { o.delimiter = *c; } }
+                    if let Some(Value::Str(x)) = args.get(3) { if let Some(c) = x.as_bytes().first() { o.enclosure = *c; } }
+                    if let Some(Value::Str(x)) = args.get(4) { o.escape = x.as_bytes().first().copied(); }
+                    let line = php_stdstr::csv::fputcsv_line(&strs, &o, None);
+                    match s.write(&line) {
+                        Ok(n) => Value::Int(n as i64),
+                        Err(_) => Value::Bool(false),
+                    }
+                }
+                "fgetcsv" => match s.get_line(None) {
+                    None => Value::Bool(false),
+                    Some(l) => {
+                        let mut next = || s.get_line(None);
+                        match php_stdstr::csv::fgetcsv_parse(l, &php_stdstr::csv::CsvOptions::default(), &mut next) {
+                            Some(v) => Value::Array(ZArray::from_values(v.into_iter().map(|f| Value::Str(ZStr::from(f))))),
+                            None => Value::Array(ZArray::from_values([Value::Null])),
+                        }
+                    }
+                },
+                "fseek" => Value::Int(i64::from(s.seek(n1, 0))),
+                "ftruncate" => Value::Bool(s.truncate(n1) == 0),
+                "fgetc" => s.getc().map_or(Value::Bool(false), |c| Value::Str(ZStr::from_byte(c))),
+                _ => Value::Str(ZStr::from(s.copy_to_mem(None).unwrap_or_default())),
+            }
+        }
+        "chmod" => Value::Bool(php_streams::filestat::chmod(zstr(it, &a0())?.as_bytes(), arg(args, 1).to_long(it)?)),
+        "gc_enable" | "gc_disable" => Value::Null,
         "fclose" | "fwrite" | "fputs" | "fgets" | "feof" | "fread" | "rewind" | "ftell" | "fflush" => {
             let Value::Resource(r) = a0() else { return Err(rt_err(format!("{name}(): Argument #1 must be of type resource"))) };
             if name == "fclose" {

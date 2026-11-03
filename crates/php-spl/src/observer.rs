@@ -470,23 +470,29 @@ pub fn debug_info(host: &mut dyn SplHost, this: &Obj, st: &SplObject) -> RtResul
 
 fn legacy_serialize(host: &mut dyn SplHost, this: &Obj, st: &SplObject) -> RtResult<Value> {
     let entries = st.storage(|s| s.entries())?;
-    let mut buf = b"x:".to_vec();
-    buf.extend(php_runtime::serialize::serialize(
-        &Value::Int(to_long(entries.len())),
-        host,
-    )?);
+    let mut all = vec![Value::Int(to_long(entries.len()))];
     for (o, inf) in entries {
-        buf.extend(php_runtime::serialize::serialize(&Value::Object(o), host)?);
-        buf.push(b',');
-        buf.extend(php_runtime::serialize::serialize(&inf, host)?);
-        buf.push(b';');
+        all.push(Value::Object(o));
+        all.push(inf);
     }
-    buf.extend_from_slice(b"m:");
-    let props = host.std_properties(this);
-    buf.extend(php_runtime::serialize::serialize(
-        &Value::Array(props),
-        host,
-    )?);
+    all.push(Value::Array(host.std_properties(this)));
+    let pieces = serial::serialize_seq(host, &all)?;
+    let n = pieces.len();
+    let mut buf = b"x:".to_vec();
+    for (i, p) in pieces.into_iter().enumerate() {
+        if i == n - 1 {
+            buf.extend_from_slice(b"m:");
+            buf.extend(p);
+        } else if i == 0 {
+            buf.extend(p);
+        } else if i % 2 == 1 {
+            buf.extend(p);
+            buf.push(b',');
+        } else {
+            buf.extend(p);
+            buf.push(b';');
+        }
+    }
     Ok(Value::Str(buf.into()))
 }
 

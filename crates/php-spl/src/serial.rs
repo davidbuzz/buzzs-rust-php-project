@@ -191,8 +191,64 @@ pub fn unserialize_at(
     let mut q = Quiet(host);
     match unserialize(&buf[p..end], &UnserializeOptions::default(), &mut q) {
         Ok(Some(v)) => Ok((v, end)),
-        _ => Err(p),
+        _ => Err(end),
     }
+}
+
+/// Rewrites the back-reference numbers (`r:N;` / `R:N;`) of the
+/// serialized value at `p` by `delta`, appending the result to `out`.
+/// Returns the position after the value.
+fn copy_adjusting(buf: &[u8], p: usize, delta: i64, out: &mut Vec<u8>) -> Option<usize> {
+    let end = value_end(buf, p)?;
+    match buf.get(p)? {
+        b'r' | b'R' => {
+            let (n, _) = digits(buf, p + 2, false)?;
+            out.extend_from_slice(&buf[p..p + 2]);
+            out.extend_from_slice((n + delta).to_string().as_bytes());
+            out.push(b';');
+        }
+        b'a' | b'O' => {
+            let open = p + buf[p..end].iter().position(|&c| c == b'{')? + 1;
+            out.extend_from_slice(&buf[p..open]);
+            let mut q = open;
+            while buf.get(q) != Some(&b'}') {
+                q = copy_adjusting(buf, q, delta, out)?;
+                q = copy_adjusting(buf, q, delta, out)?;
+            }
+            out.push(b'}');
+        }
+        _ => out.extend_from_slice(&buf[p..end]),
+    }
+    Some(end)
+}
+
+/// Serializes `values` as one `php_var_serialize` sequence sharing the
+/// back-reference table (like consecutive calls with one `var_hash`), and
+/// returns each value's serialization.
+pub fn serialize_seq(host: &mut dyn SplHost, values: &[Value]) -> RtResult<Vec<Vec<u8>>> {
+    let all = php_runtime::serialize::serialize(
+        &Value::Array(ZArray::from_values(values.iter().cloned())),
+        host,
+    )?;
+    let mut out = Vec::with_capacity(values.len());
+    let Some(open) = all.iter().position(|&c| c == b'{') else {
+        return Ok(out);
+    };
+    let mut q = open + 1;
+    while all.get(q).is_some_and(|&c| c != b'}') {
+        let Some(after_key) = value_end(&all, q) else {
+            break;
+        };
+        let mut piece = Vec::new();
+        match copy_adjusting(&all, after_key, -1, &mut piece) {
+            Some(e) => {
+                out.push(piece);
+                q = e;
+            }
+            None => break,
+        }
+    }
+    Ok(out)
 }
 
 #[cfg(test)]

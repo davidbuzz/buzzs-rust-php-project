@@ -261,6 +261,17 @@ impl Frame {
 
 pub const EXIT_MARK: &str = "\0exit";
 
+/// One frame of the harness call stack (for exception traces).
+#[derive(Clone)]
+pub struct TFrame {
+    pub internal: bool,
+    pub func: String,
+    pub class: Option<String>,
+    pub ty: &'static str,
+    pub args: Vec<Value>,
+    pub line: u32,
+}
+
 pub struct Interp {
     pub out: Vec<u8>,
     pub file: String,
@@ -282,6 +293,7 @@ pub struct Interp {
     pub pcre: php_pcre::Pcre,
     pub deadline: std::time::Instant,
     pub pending_named: Vec<(String, Value)>,
+    pub trace_stack: Vec<TFrame>,
     pub steps: u64,
 }
 
@@ -323,6 +335,7 @@ impl Interp {
             deadline: std::time::Instant::now() + std::time::Duration::from_secs(10),
             steps: 0,
             pending_named: Vec::new(),
+            trace_stack: Vec::new(),
         };
         crate::harness::builtins::register_classes(&mut it);
         crate::harness::builtins::register_constants(&mut it);
@@ -418,6 +431,58 @@ impl Interp {
         self.echo(msg.as_bytes());
     }
 
+    pub fn build_trace(&self) -> Value {
+        let mut t = HashTable::new();
+        let n = self.trace_stack.len();
+        for (i, f) in self.trace_stack.iter().enumerate().rev() {
+            let mut fr = HashTable::new();
+            let caller_internal = i > 0 && self.trace_stack[i - 1].internal;
+            if !caller_internal {
+                fr.insert(ArrayKey::from("file"), Value::from(self.file.as_str()));
+                fr.insert(ArrayKey::from("line"), Value::Int(i64::from(f.line)));
+            }
+            let _ = n;
+            fr.insert(ArrayKey::from("function"), Value::from(f.func.as_str()));
+            if let Some(c) = &f.class {
+                fr.insert(ArrayKey::from("class"), Value::from(c.as_str()));
+                fr.insert(ArrayKey::from("type"), Value::from(f.ty));
+            }
+            fr.insert(ArrayKey::from("args"), Value::Array(ZArray::from_values(f.args.iter().map(Value::deref))));
+            let _ = t.push(Value::Array(ZArray::from_table(fr)));
+        }
+        Value::Array(ZArray::from_table(t))
+    }
+
+    pub fn trace_string(&mut self, ex: &Obj) -> String {
+        let trace = self.prop_get_raw(ex, "trace");
+        let mut out = String::new();
+        let mut n = 0;
+        if let Value::Array(frames) = trace {
+            for f in frames.values() {
+                let Value::Array(f) = f.deref() else { continue };
+                let g = |k: &str| f.get_str(k.as_bytes()).cloned().unwrap_or_default();
+                let file = g("file").to_zstr(self).map(|z| z.to_string_lossy()).unwrap_or_default();
+                let line = g("line").to_long(self).unwrap_or(0);
+                let func = g("function").to_zstr(self).map(|z| z.to_string_lossy()).unwrap_or_default();
+                let class = match g("class") {
+                    Value::Str(c) => format!("{}{}", c.to_string_lossy(), g("type").to_zstr(self).map(|z| z.to_string_lossy()).unwrap_or_default()),
+                    _ => String::new(),
+                };
+                let mut args = Vec::new();
+                if let Value::Array(a) = g("args") {
+                    for v in a.values() {
+                        args.push(trace_arg(&v.deref()));
+                    }
+                }
+                let loc = if f.get_str(b"file").is_some() { format!("{file}({line})") } else { "[internal function]".to_string() };
+                out.push_str(&format!("#{n} {loc}: {class}{func}({})\n", args.join(", ")));
+                n += 1;
+            }
+        }
+        out.push_str(&format!("#{n} {{main}}"));
+        out
+    }
+
     pub fn exception_to_string(&mut self, ex: &Obj) -> RtResult<String> {
         let mut parts = Vec::new();
         let mut cur = Some(ex.clone());
@@ -425,10 +490,11 @@ impl Interp {
             let msg = self.prop_get_raw(&e, "message").to_zstr(self)?.to_string_lossy();
             let line = self.prop_get_raw(&e, "line").to_long(self)?;
             let class = e.class_name().to_string_lossy();
+            let trace = self.trace_string(&e);
             let m = if msg.is_empty() {
-                format!("{class} in {}:{line}\nStack trace:\n#0 {{main}}", self.file)
+                format!("{class} in {}:{line}\nStack trace:\n{trace}", self.file)
             } else {
-                format!("{class}: {msg} in {}:{line}\nStack trace:\n#0 {{main}}", self.file)
+                format!("{class}: {msg} in {}:{line}\nStack trace:\n{trace}", self.file)
             };
             parts.push(m);
             cur = match self.prop_get_raw(&e, "previous") {
@@ -723,6 +789,8 @@ impl Interp {
             let l = Value::Int(i64::from(self.line));
             self.prop_set_raw(&obj, "file", f);
             self.prop_set_raw(&obj, "line", l);
+            let trace = self.build_trace();
+            self.prop_set_raw(&obj, "trace", trace);
         }
         Ok(obj)
     }
@@ -1438,3 +1506,24 @@ pub fn is_exit(e: &RuntimeError) -> bool {
 }
 
 pub use crate::harness::interp_expr::*;
+
+pub fn trace_arg(v: &Value) -> String {
+    match v {
+        Value::Null => "NULL".into(),
+        Value::Bool(b) => if *b { "true".into() } else { "false".into() },
+        Value::Int(i) => i.to_string(),
+        Value::Float(f) => php_runtime::float::double_to_string(*f, 17),
+        Value::Str(s) => {
+            let b = s.as_bytes();
+            if b.len() > 15 {
+                format!("'{}...'", String::from_utf8_lossy(&b[..15]))
+            } else {
+                format!("'{}'", String::from_utf8_lossy(b))
+            }
+        }
+        Value::Array(_) => "Array".into(),
+        Value::Object(o) => format!("Object({})", o.class_name().to_string_lossy()),
+        Value::Resource(r) => format!("Resource id #{}", r.handle()),
+        Value::Reference(r) => trace_arg(&r.get()),
+    }
+}

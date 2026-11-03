@@ -1500,10 +1500,30 @@ impl Interp {
                     let argv = self.eval_args(args, &|i| by_ref.get(i).copied().unwrap_or(false))?;
                     return self.call_user(&f, &argv, None, None, None, &[]);
                 }
-                let argv = self.eval_args(args, &|i| crate::harness::builtins::by_ref(&name, i))?;
+                let mut argv = self.eval_args(args, &|i| crate::harness::builtins::by_ref(&name, i))?;
+                let named = std::mem::take(&mut self.pending_named);
+                if !named.is_empty() {
+                    let params: &[&str] = match name.as_str() {
+                        "fputcsv" => &["stream", "fields", "separator", "enclosure", "escape", "eol"],
+                        "fgetcsv" => &["stream", "length", "separator", "enclosure", "escape"],
+                        "str_getcsv" => &["string", "separator", "enclosure", "escape"],
+                        _ => &[],
+                    };
+                    for (n, v) in named {
+                        if let Some(i) = params.iter().position(|p| *p == n) {
+                            if argv.len() <= i {
+                                argv.resize(i + 1, Value::Null);
+                            }
+                            argv[i] = v;
+                        }
+                    }
+                }
                 let line = self.line;
+                self.trace_stack.push(TFrame { internal: true, func: name.clone(), class: None, ty: "", args: argv.clone(), line });
                 let r = crate::harness::builtins::call(self, &name, &argv);
                 self.line = line;
+                let r = r.map_err(|e| self.to_thrown(e));
+                self.trace_stack.pop();
                 r
             }
             Callee::Expr(e) => {
@@ -1542,7 +1562,16 @@ impl Interp {
         let by_ref: Vec<bool> = match &m {
             Some(m) => match &m.kind {
                 MKind::User(d) => d.params.iter().map(|p| p.by_ref).collect(),
-                _ => Vec::new(),
+                _ => match php_spl::classes::find_method(&m.class, &m.name) {
+                    Some((_, md)) => {
+                        let mut v: Vec<bool> = md.params.iter().map(|p| p.by_ref).collect();
+                        if md.params.last().is_some_and(|p| p.variadic && p.by_ref) {
+                            v.extend(std::iter::repeat(true).take(32));
+                        }
+                        v
+                    }
+                    None => Vec::new(),
+                },
             },
             None => self.callable_by_ref(&Value::Object(o.clone())),
         };
@@ -1658,13 +1687,25 @@ impl Interp {
                 let def = def.clone();
                 self.call_user(&def, args, this.cloned(), scope, Some(cls.clone()), &[])
             }
-            MKind::Spl => {
+            MKind::Spl | MKind::Native(_) => {
                 let line = self.line;
-                let r = php_spl::call_method(self, &m.class, &m.name, this, args);
+                self.trace_stack.push(TFrame {
+                    internal: true,
+                    func: m.name.clone(),
+                    class: Some(m.class.clone()),
+                    ty: if this.is_some() { "->" } else { "::" },
+                    args: args.to_vec(),
+                    line,
+                });
+                let r = match &m.kind {
+                    MKind::Native(f) => f(self, this, args),
+                    _ => php_spl::call_method(self, &m.class, &m.name, this, args),
+                };
                 self.line = line;
+                let r = r.map_err(|e| self.to_thrown(e));
+                self.trace_stack.pop();
                 r
             }
-            MKind::Native(f) => f(self, this, args),
             MKind::Abstract => Err(rt_err(format!("Cannot call abstract method {}::{}()", m.class, m.name))),
         }
     }
@@ -1775,6 +1816,11 @@ impl Interp {
             frame.vars.insert(k.clone(), v.clone());
         }
         let line = self.line;
+        let (fclass, fname, fty) = match def.name.split_once("::") {
+            Some((c, m)) => (Some(c.to_string()), m.to_string(), if frame.this.is_some() { "->" } else { "::" }),
+            None => (None, def.name.clone(), ""),
+        };
+        self.trace_stack.push(TFrame { internal: false, func: fname, class: fclass, ty: fty, args: args.to_vec(), line });
         self.frames.push(frame);
         let r = (|| -> RtResult<Value> {
             let required = def.params.iter().take_while(|p| p.default.is_none() && !p.variadic).count();
@@ -1827,9 +1873,20 @@ impl Interp {
             }
         })();
         self.frames.pop();
+        self.trace_stack.pop();
         self.depth -= 1;
         self.line = line;
-        r
+        r.map_err(|e| self.to_thrown(e))
+    }
+
+    /// Converts an internal error into an exception object now, so that it
+    /// gets the current file/line/trace.
+    pub fn to_thrown(&mut self, e: RuntimeError) -> RuntimeError {
+        match e {
+            RuntimeError::Thrown(_) | RuntimeError::Fatal(_) => e,
+            e if is_exit(&e) => e,
+            other => RuntimeError::Thrown(Value::Object(self.exception_object(other))),
+        }
     }
 
     fn coerce_return(&mut self, def: &FuncDef, v: Value) -> RtResult<Value> {

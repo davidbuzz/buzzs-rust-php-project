@@ -71,6 +71,22 @@ fn callable_identity(v: &Value) -> Vec<u8> {
     }
 }
 
+/// The callable as `spl_autoload_functions()` reports it: `"C::m"`
+/// strings become `[class, method]` arrays.
+fn normalize_callable(v: &Value) -> Value {
+    if let Value::Str(s) = v.deref() {
+        let b = s.as_bytes();
+        if let Some(p) = b.windows(2).position(|w| w == b"::") {
+            let class = b[..p].strip_prefix(b"\\").unwrap_or(&b[..p]);
+            return Value::Array(ZArray::from_values([
+                Value::Str(ZStr::from(class)),
+                Value::Str(ZStr::from(&b[p + 2..])),
+            ]));
+        }
+    }
+    v.deref()
+}
+
 /// Dispatches an SPL function by lowercase name.
 pub(crate) fn call(host: &mut dyn SplHost, name: &str, args: &[Value]) -> Option<RtResult<Value>> {
     Some(match name {
@@ -292,7 +308,15 @@ fn autoload_register(host: &mut dyn SplHost, args: &[Value]) -> RtResult<Value> 
     let cb = if cb.is_null() {
         Value::Null
     } else {
-        a.callable(host, 0)?
+        match host.check_callable(&cb) {
+            Ok(()) => normalize_callable(&cb),
+            Err(reason) => {
+                return Err(RuntimeError::TypeError(format!(
+                    "{} must be a valid callback or null, {reason}",
+                    a.arg_prefix(0)
+                )))
+            }
+        }
     };
     let do_throw = a.opt_bool(host, 1, true)?;
     let prepend = a.opt_bool(host, 2, false)?;

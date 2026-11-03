@@ -987,18 +987,25 @@ pub(crate) fn call(
             "serialize" => {
                 Args::none(func, args)?;
                 let (flags, array) = st.array(|s| (s.flags, s.array.clone()))?;
-                let mut buf = b"x:".to_vec();
-                buf.extend(php_runtime::serialize::serialize(
-                    &Value::Int(flags & CLONE_MASK),
-                    host,
-                )?);
+                let mut all = vec![Value::Int(flags & CLONE_MASK)];
                 if flags & IS_SELF == 0 {
-                    buf.extend(php_runtime::serialize::serialize(&array, host)?);
-                    buf.push(b';');
+                    all.push(array);
                 }
-                buf.extend_from_slice(b"m:");
-                let props = host.std_properties(this);
-                buf.extend(php_runtime::serialize::serialize(&Value::Array(props), host)?);
+                all.push(Value::Array(host.std_properties(this)));
+                let pieces = serial::serialize_seq(host, &all)?;
+                let n = pieces.len();
+                let mut buf = b"x:".to_vec();
+                for (i, p) in pieces.into_iter().enumerate() {
+                    if i == n - 1 {
+                        buf.extend_from_slice(b"m:");
+                        buf.extend(p);
+                    } else {
+                        buf.extend(p);
+                        if i > 0 {
+                            buf.push(b';');
+                        }
+                    }
+                }
                 Ok(Value::Str(buf.into()))
             }
             "unserialize" => {

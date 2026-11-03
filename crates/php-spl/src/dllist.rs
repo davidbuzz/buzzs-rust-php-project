@@ -547,10 +547,15 @@ fn list_method(
         "serialize" => {
             Args::none(func, args)?;
             let (flags, values) = st.dllist(|d| (d.flags, d.list.values()))?;
-            let mut buf = php_runtime::serialize::serialize(&Value::Int(flags), host)?;
-            for v in values {
-                buf.push(b':');
-                buf.extend(php_runtime::serialize::serialize(&v, host)?);
+            let mut all = vec![Value::Int(flags)];
+            all.extend(values);
+            let pieces = serial::serialize_seq(host, &all)?;
+            let mut buf = Vec::new();
+            for (i, p) in pieces.into_iter().enumerate() {
+                if i > 0 {
+                    buf.push(b':');
+                }
+                buf.extend(p);
             }
             Ok(Value::Str(buf.into()))
         }

@@ -838,7 +838,7 @@ pub(crate) fn call(
                     _ => FsType::IsLink,
                 };
                 let (r, diags) = capture(|| php_stat(fname.as_bytes(), ty));
-                if let Some(e) = diags_to_exception("RuntimeException", func, &diags, Some(fname.as_bytes())) {
+                if let Some(e) = diags_to_exception("RuntimeException", func, &diags, None) {
                     return Err(e);
                 }
                 Ok(stat_value(&r))
@@ -941,7 +941,7 @@ pub(crate) fn call(
                     flags |= KEY_AS_PATHNAME | CURRENT_AS_SELF;
                 }
                 if path.is_empty() {
-                    return Err(a.value_error(0, "cannot be empty"));
+                    return Err(a.value_error(0, "must not be empty"));
                 }
                 if st.file(|f| f.path.is_some())? {
                     return Err(error("Directory object is already initialized"));
@@ -1403,6 +1403,10 @@ pub(crate) fn call(
                     let s = a.str(host, 2)?;
                     (escape_arg(&a, 2, &s)?, true)
                 } else {
+                    host.diagnostic(
+                        ErrorLevel::Deprecated,
+                        &format!("{func}(): the $escape parameter must be provided as its default value will change"),
+                    )?;
                     (i32::from(b'\\'), false)
                 };
                 st.file(|f| {
