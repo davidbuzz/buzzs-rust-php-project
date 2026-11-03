@@ -1,11 +1,13 @@
 [package]
 name = "php-random"
+description = "Bit-exact port of PHP's ext/random: Mt19937/PCG/Xoshiro/Secure engines, Randomizer, rand/mt_rand/lcg_value"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+getrandom = "0.4"
 
 [lints]
 workspace = true
