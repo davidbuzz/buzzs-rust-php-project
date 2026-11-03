@@ -40,6 +40,7 @@ pub fn all() -> Vec<Box<dyn Extension>> {
         Box::new(php_ext_sysv::Sysvshm),
         Box::new(php_ext_sysv::Shmop),
         Box::new(php_ext_pcntl::PcntlExt),
+        Box::new(php_ext_sockets::SocketsExt),
         Box::new(php_ext_calendar::Calendar),
         Box::new(php_ext_bcmath::Bcmath),
         Box::new(php_ext_gmp::Gmp),

@@ -39,6 +39,7 @@ php-ext-phar = { path = "../php-ext-phar" }
 php-ext-gettext = { path = "../php-ext-gettext" }
 php-ext-sysv = { path = "../php-ext-sysv" }
 php-ext-pcntl = { path = "../php-ext-pcntl" }
+php-ext-sockets = { path = "../php-ext-sockets" }
 php-ext-calendar = { path = "../php-ext-calendar" }
 php-ext-bcmath = { path = "../php-ext-bcmath" }
 php-ext-gmp = { path = "../php-ext-gmp" }

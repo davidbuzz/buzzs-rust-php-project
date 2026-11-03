@@ -8,6 +8,13 @@ rust-version.workspace = true
 [dependencies]
 php-vm = { path = "../php-vm" }
 php-runtime = { path = "../php-runtime" }
+php-sockets = { path = "../php-sockets" }
+php-streams = { path = "../php-streams" }
+php-ext-streams = { path = "../php-ext-streams" }
+libc = "0.2"
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+php-ext-stdarr = { path = "../php-ext-stdarr" }
