@@ -1,6 +1,9 @@
 """Thin ctypes binding to the system libgmp, used as an oracle for php-gmp."""
 import ctypes
 import ctypes.util
+import sys
+
+sys.set_int_max_str_digits(0)
 
 _lib = ctypes.CDLL(ctypes.util.find_library("gmp") or "libgmp.so.10")
 _libc = ctypes.CDLL(None)
@@ -231,3 +234,70 @@ class Rand:
         r = Z()
         _urandomm(r.p, ctypes.byref(self.st), Z(n).p)
         return int(r)
+
+
+tdiv_q = _op3("mpz_tdiv_q")
+tdiv_r = _op3("mpz_tdiv_r")
+cdiv_q = _op3("mpz_cdiv_q")
+cdiv_r = _op3("mpz_cdiv_r")
+fdiv_q = _op3("mpz_fdiv_q")
+fdiv_r = _op3("mpz_fdiv_r")
+mod = _op3("mpz_mod")
+_tstbit = _f("mpz_tstbit", ctypes.c_int, PZ, UL)
+_setbit = _f("mpz_setbit", None, PZ, UL)
+_clrbit = _f("mpz_clrbit", None, PZ, UL)
+_import = _f("mpz_import", None, PZ, ctypes.c_size_t, ctypes.c_int, ctypes.c_size_t, ctypes.c_int, ctypes.c_size_t, ctypes.c_char_p)
+_export = _f("mpz_export", ctypes.c_void_p, ctypes.c_void_p, ctypes.POINTER(ctypes.c_size_t), ctypes.c_int, ctypes.c_size_t, ctypes.c_int, ctypes.c_size_t, PZ)
+_mul_2exp = _f("mpz_mul_2exp", None, PZ, PZ, UL)
+_fdiv_q_2exp = _f("mpz_fdiv_q_2exp", None, PZ, PZ, UL)
+_powm_sec = _f("mpz_powm_sec", None, PZ, PZ, PZ, PZ)
+
+
+def tstbit(a, i):
+    return _tstbit(Z(a).p, i)
+
+
+def setbit(a, i):
+    z = Z(a)
+    _setbit(z.p, i)
+    return int(z)
+
+
+def clrbit(a, i):
+    z = Z(a)
+    _clrbit(z.p, i)
+    return int(z)
+
+
+def mul_2exp(a, n):
+    r = Z()
+    _mul_2exp(r.p, Z(a).p, n)
+    return int(r)
+
+
+def fdiv_q_2exp(a, n):
+    r = Z()
+    _fdiv_q_2exp(r.p, Z(a).p, n)
+    return int(r)
+
+
+def powm_sec(b, e, m):
+    r = Z()
+    _powm_sec(r.p, Z(b).p, Z(e).p, Z(m).p)
+    return int(r)
+
+
+def import_(data, order, size, endian):
+    r = Z()
+    _import(r.p, len(data) // size, order, size, endian, 0, data)
+    return int(r)
+
+
+def export(a, order, size, endian):
+    cnt = ctypes.c_size_t(0)
+    ptr = _export(None, ctypes.byref(cnt), order, size, endian, 0, Z(a).p)
+    if not ptr:
+        return b""
+    data = ctypes.string_at(ptr, cnt.value * size)
+    _libc.free(ptr)
+    return data
