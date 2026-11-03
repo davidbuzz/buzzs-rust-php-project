@@ -87,19 +87,8 @@ impl BcMath {
         }
     }
 
-    /// [`Self::resolve_scale`] for functions whose result is printed with
-    /// `scale` digits (callers check the allocation after parsing).
-    fn output_scale(&self, func: &str, scale: Option<i64>, arg_num: u32) -> Result<usize, BcError> {
-        self.resolve_scale(func, scale, arg_num)
-    }
-
     /// `bcmath_check_scale` + `null` handling for a function's scale argument.
-    fn resolve_scale(
-        &self,
-        func: &str,
-        scale: Option<i64>,
-        arg_num: u32,
-    ) -> Result<usize, BcError> {
+    fn resolve_scale(self, func: &str, scale: Option<i64>, arg_num: u32) -> Result<usize, BcError> {
         match scale {
             None => Ok(usize::try_from(self.scale).unwrap_or(usize::MAX)),
             Some(s) => {
@@ -129,7 +118,7 @@ impl BcMath {
     /// # Errors
     /// `ValueError` for a bad scale or malformed operand.
     pub fn bcadd(&self, num1: &[u8], num2: &[u8], scale: Option<i64>) -> Result<String, BcError> {
-        let scale = self.output_scale("bcadd", scale, 3)?;
+        let scale = self.resolve_scale("bcadd", scale, 3)?;
         let (a, b) = parse_two("bcadd", num1, num2)?;
         check_alloc(scale)?;
         format_checked(&BcNum::add(&a, &b, scale), scale)
@@ -140,7 +129,7 @@ impl BcMath {
     /// # Errors
     /// `ValueError` for a bad scale or malformed operand.
     pub fn bcsub(&self, num1: &[u8], num2: &[u8], scale: Option<i64>) -> Result<String, BcError> {
-        let scale = self.output_scale("bcsub", scale, 3)?;
+        let scale = self.resolve_scale("bcsub", scale, 3)?;
         let (a, b) = parse_two("bcsub", num1, num2)?;
         check_alloc(scale)?;
         format_checked(&BcNum::sub(&a, &b, scale), scale)
@@ -151,7 +140,7 @@ impl BcMath {
     /// # Errors
     /// `ValueError` for a bad scale or malformed operand.
     pub fn bcmul(&self, num1: &[u8], num2: &[u8], scale: Option<i64>) -> Result<String, BcError> {
-        let scale = self.output_scale("bcmul", scale, 3)?;
+        let scale = self.resolve_scale("bcmul", scale, 3)?;
         let (a, b) = parse_two("bcmul", num1, num2)?;
         check_alloc(scale)?;
         format_checked(&BcNum::multiply(&a, &b, scale), scale)
@@ -163,7 +152,7 @@ impl BcMath {
     /// `ValueError` for a bad scale or malformed operand,
     /// `DivisionByZeroError` ("Division by zero").
     pub fn bcdiv(&self, num1: &[u8], num2: &[u8], scale: Option<i64>) -> Result<String, BcError> {
-        let scale = self.output_scale("bcdiv", scale, 3)?;
+        let scale = self.resolve_scale("bcdiv", scale, 3)?;
         let (a, b) = parse_two("bcdiv", num1, num2)?;
         check_alloc(scale.saturating_add(a.int_len()))?;
         let q = BcNum::divide(&a, &b, scale)
@@ -177,7 +166,7 @@ impl BcMath {
     /// `ValueError` for a bad scale or malformed operand,
     /// `DivisionByZeroError` ("Modulo by zero").
     pub fn bcmod(&self, num1: &[u8], num2: &[u8], scale: Option<i64>) -> Result<String, BcError> {
-        let scale = self.output_scale("bcmod", scale, 3)?;
+        let scale = self.resolve_scale("bcmod", scale, 3)?;
         let (a, b) = parse_two("bcmod", num1, num2)?;
         check_alloc(scale.saturating_add(a.int_len()))?;
         let r = BcNum::modulo(&a, &b, scale)
@@ -197,7 +186,7 @@ impl BcMath {
         num2: &[u8],
         scale: Option<i64>,
     ) -> Result<(String, String), BcError> {
-        let scale = self.output_scale("bcdivmod", scale, 3)?;
+        let scale = self.resolve_scale("bcdivmod", scale, 3)?;
         let (a, b) = parse_two("bcdivmod", num1, num2)?;
         check_alloc(scale.saturating_add(a.int_len()))?;
         let (q, r) = BcNum::divmod(&a, &b, scale)
@@ -218,7 +207,7 @@ impl BcMath {
         scale: Option<i64>,
     ) -> Result<String, BcError> {
         const F: &str = "bcpowmod";
-        let scale = self.output_scale(F, scale, 4)?;
+        let scale = self.resolve_scale(F, scale, 4)?;
         let base = parse_arg(F, num, 1, "num")?;
         let expo = parse_arg(F, exponent, 2, "exponent")?;
         let modulus = parse_arg(F, modulus, 3, "modulus")?;
@@ -253,7 +242,7 @@ impl BcMath {
         scale: Option<i64>,
     ) -> Result<String, BcError> {
         const F: &str = "bcpow";
-        let scale = self.output_scale(F, scale, 3)?;
+        let scale = self.resolve_scale(F, scale, 3)?;
         let base = parse_arg(F, num, 1, "num")?;
         let expo = parse_arg(F, exponent, 2, "exponent")?;
         if expo.scale() != 0 {
@@ -279,7 +268,7 @@ impl BcMath {
     /// `ValueError` for a bad scale, malformed or negative operand.
     pub fn bcsqrt(&self, num: &[u8], scale: Option<i64>) -> Result<String, BcError> {
         const F: &str = "bcsqrt";
-        let scale = self.output_scale(F, scale, 2)?;
+        let scale = self.resolve_scale(F, scale, 2)?;
         let n = parse_arg(F, num, 1, "num")?;
         check_alloc(scale.saturating_add(n.int_len()))?;
         let r = BcNum::sqrt(&n, scale).ok_or_else(|| {

@@ -28,9 +28,8 @@ impl ErrorKind {
             Self::ValueError => "ValueError",
             Self::DivisionByZeroError => "DivisionByZeroError",
             Self::TypeError => "TypeError",
-            Self::Error => "Error",
+            Self::Error | Self::OutOfMemory => "Error",
             Self::Exception => "Exception",
-            Self::OutOfMemory => "Error",
         }
     }
 }

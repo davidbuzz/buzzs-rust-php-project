@@ -22,7 +22,7 @@ fn render_err(e: &BcError) -> String {
     }
 }
 
-fn ok(s: String) -> String {
+fn ok(s: impl std::fmt::Display) -> String {
     format!("OK\t{s}")
 }
 
@@ -38,7 +38,7 @@ fn scale_arg(s: &str) -> Option<i64> {
     }
 }
 
-fn run(bc: &BcMath, req: &[&str]) -> String {
+fn run(bc: BcMath, req: &[&str]) -> String {
     let b = |i: usize| req[i].as_bytes();
     let sc = |i: usize| Some(req[i].parse::<i64>().expect("scale"));
     let res: Result<String, BcError> = match req[0] {
@@ -50,7 +50,7 @@ fn run(bc: &BcMath, req: &[&str]) -> String {
         "divmod" => bc
             .bcdivmod(b(1), b(2), sc(3))
             .map(|(q, r)| format!("OK\t{q}\t{r}")),
-        "comp" => bc.bccomp(b(1), b(2), sc(3)).map(|c| ok(c.to_string())),
+        "comp" => bc.bccomp(b(1), b(2), sc(3)).map(ok),
         "pow" => bc.bcpow(b(1), b(2), sc(3)).map(ok),
         "powmod" => bc.bcpowmod(b(1), b(2), b(3), sc(4)).map(ok),
         "sqrt" => bc.bcsqrt(b(1), sc(2)).map(ok),
@@ -96,9 +96,7 @@ fn run(bc: &BcMath, req: &[&str]) -> String {
                             r.scale()
                         )
                     }),
-                "ncomp" => this
-                    .compare(Operand::Str(b(2)), scale_arg(req[3]))
-                    .map(|c| ok(c.to_string())),
+                "ncomp" => this.compare(Operand::Str(b(2)), scale_arg(req[3])).map(ok),
                 "npowmod" => this
                     .powmod(Operand::Str(b(2)), Operand::Str(b(3)), scale_arg(req[4]))
                     .map(|n| number_ok(&n)),
@@ -132,7 +130,7 @@ fn libbcmath_oracle() {
         let (req, expected) = line.split_once("\t=>\t").expect("separator");
         let req: Vec<&str> = req.split('\t').collect();
         total += 1;
-        let got = run(&bc, &req);
+        let got = run(bc, &req);
         if got != expected {
             failures.push(format!(
                 "{}\n  expected: {expected}\n  got:      {got}",

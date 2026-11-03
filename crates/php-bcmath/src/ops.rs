@@ -311,25 +311,24 @@ impl BcNum {
             Sign::Plus
         };
 
-        let mut power = if base.digits.iter().filter(|&&d| d != 0).count() == 1
-            && base.digits.iter().any(|&d| d == 1)
-        {
-            // |base| is a power of ten: avoid exponentiating digit by digit.
-            let one_pos = base.digits.iter().position(|&d| d == 1).unwrap_or(0);
-            // value = 10^(len - 1 - one_pos); the power as an integer with
-            // power_scale implied fractional digits.
-            let zeros_after = (base.digits.len() - 1 - one_pos)
-                .checked_mul(exp_usize)
-                .ok_or(RaiseError::FullLenOverflow)?;
-            build_power_from_pow10(zeros_after, power_scale)
-        } else {
-            let p = bigint::pow(&bigint::from_digits(&base.digits), exp);
-            let count = bigint::digit_count(&p);
-            let total = count.max(power_scale + 1);
-            let mut power = Self::new_zeroed(total - power_scale, power_scale);
-            bigint::write_digits(&p, &mut power.digits);
-            power
-        };
+        let mut power =
+            if base.digits.iter().filter(|&&d| d != 0).count() == 1 && base.digits.contains(&1) {
+                // |base| is a power of ten: avoid exponentiating digit by digit.
+                let one_pos = base.digits.iter().position(|&d| d == 1).unwrap_or(0);
+                // value = 10^(len - 1 - one_pos); the power as an integer with
+                // power_scale implied fractional digits.
+                let zeros_after = (base.digits.len() - 1 - one_pos)
+                    .checked_mul(exp_usize)
+                    .ok_or(RaiseError::FullLenOverflow)?;
+                build_power_from_pow10(zeros_after, power_scale)
+            } else {
+                let p = bigint::pow(&bigint::from_digits(&base.digits), exp);
+                let count = bigint::digit_count(&p);
+                let total = count.max(power_scale + 1);
+                let mut power = Self::new_zeroed(total - power_scale, power_scale);
+                bigint::write_digits(&p, &mut power.digits);
+                power
+            };
         power.rm_leading_zeros();
         if power.is_zero() {
             power.sign = Sign::Plus;
@@ -534,8 +533,8 @@ impl BcNum {
                 Ordering::Equal => {
                     rest_nonzero()
                         || match mode {
-                            M::HalfEven => !(prev_digit().is_none_or(|d| d % 2 == 0)),
-                            M::HalfOdd => !(prev_digit().is_some_and(|d| d % 2 == 1)),
+                            M::HalfEven => prev_digit().is_some_and(|d| d % 2 == 1),
+                            M::HalfOdd => prev_digit().is_none_or(|d| d % 2 == 0),
                             _ => false,
                         }
                 }

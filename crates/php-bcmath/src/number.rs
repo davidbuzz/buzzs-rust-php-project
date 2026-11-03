@@ -132,6 +132,15 @@ fn scale_too_large() -> BcError {
     BcError::value("scale of the result is too large")
 }
 
+/// An inferred result scale, which must not exceed `INT_MAX`.
+fn checked_scale(scale: usize) -> Result<usize, BcError> {
+    if scale > INT_MAX {
+        Err(scale_too_large())
+    } else {
+        Ok(scale)
+    }
+}
+
 /// Shrinks an expanded scale back to the digits actually used, by at most
 /// [`EXPAND_SCALE`].
 fn shrink_expanded(scale: usize, ret: &BcNum) -> usize {
@@ -176,16 +185,7 @@ fn calc(
             Ok(Number { num: ret, scale })
         }
         BinaryOp::Mul => {
-            let scale = match scale {
-                Some(s) => s,
-                None => {
-                    let s = s1 + s2;
-                    if s > INT_MAX {
-                        return Err(scale_too_large());
-                    }
-                    s
-                }
-            };
+            let scale = scale.map_or_else(|| checked_scale(s1 + s2), Ok)?;
             check_alloc(scale)?;
             let mut ret = BcNum::multiply(n1, n2, scale);
             ret.truncate_scale(scale);
@@ -196,16 +196,7 @@ fn calc(
             Ok(Number { num: ret, scale })
         }
         BinaryOp::Div => {
-            let mut scale = match scale {
-                Some(s) => s,
-                None => {
-                    let s = s1 + EXPAND_SCALE;
-                    if s > INT_MAX {
-                        return Err(scale_too_large());
-                    }
-                    s
-                }
-            };
+            let mut scale = scale.map_or_else(|| checked_scale(s1 + EXPAND_SCALE), Ok)?;
             check_alloc(scale.saturating_add(n1.int_len()))?;
             let mut ret = BcNum::divide(n1, n2, scale)
                 .ok_or_else(|| BcError::division_by_zero("Division by zero"))?;
@@ -247,21 +238,14 @@ fn pow_internal(
     let mut scale = match scale {
         Some(s) => s,
         None => match exponent.cmp(&0) {
-            Ordering::Greater => {
-                let s = usize::try_from(exponent)
-                    .ok()
-                    .and_then(|e| s1.checked_mul(e))
-                    .filter(|&s| s <= INT_MAX)
-                    .ok_or_else(scale_too_large)?;
-                s
-            }
+            Ordering::Greater => usize::try_from(exponent)
+                .ok()
+                .and_then(|e| s1.checked_mul(e))
+                .filter(|&s| s <= INT_MAX)
+                .ok_or_else(scale_too_large)?,
             Ordering::Less => {
-                let s = s1 + EXPAND_SCALE;
-                if s > INT_MAX {
-                    return Err(scale_too_large());
-                }
                 scale_expand = true;
-                s
+                checked_scale(s1 + EXPAND_SCALE)?
             }
             Ordering::Equal => 0,
         },
@@ -528,16 +512,7 @@ impl Number {
     pub fn sqrt(&self, scale: Option<i64>) -> Result<Self, BcError> {
         let func = method_name("sqrt");
         let explicit = resolve_method_scale(&func, scale, 1)?;
-        let mut scale = match explicit {
-            Some(s) => s,
-            None => {
-                let s = self.scale + EXPAND_SCALE;
-                if s > INT_MAX {
-                    return Err(scale_too_large());
-                }
-                s
-            }
-        };
+        let mut scale = explicit.map_or_else(|| checked_scale(self.scale + EXPAND_SCALE), Ok)?;
         check_alloc(scale.saturating_add(self.num.int_len()))?;
         let mut ret = BcNum::sqrt(&self.num, scale)
             .ok_or_else(|| BcError::value("Base number must be greater than or equal to 0"))?;
@@ -550,6 +525,7 @@ impl Number {
     }
 
     /// `floor()`.
+    #[must_use]
     pub fn floor(&self) -> Self {
         Self {
             num: BcNum::floor_or_ceil(&self.num, true),
@@ -558,6 +534,7 @@ impl Number {
     }
 
     /// `ceil()`.
+    #[must_use]
     pub fn ceil(&self) -> Self {
         Self {
             num: BcNum::floor_or_ceil(&self.num, false),

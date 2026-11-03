@@ -84,6 +84,7 @@ fn narrow(v: u64) -> u32 {
     u32::try_from(v).unwrap_or(u32::MAX)
 }
 
+#[allow(clippy::many_single_char_names)]
 /// Schoolbook product into `out` (which must be zeroed and `a.len() + b.len()` long).
 fn mul_schoolbook(a: &[u32], b: &[u32], out: &mut [u32]) {
     for (i, &x) in a.iter().enumerate() {
@@ -126,17 +127,17 @@ fn add(a: &[u32], b: &[u32]) -> Vec<u32> {
 /// `a -= b` where `a >= b`.
 fn sub_assign(a: &mut [u32], b: &[u32]) {
     let mut borrow = 0u64;
-    for i in 0..a.len() {
-        let sub = u64::from(b.get(i).copied().unwrap_or(0)) + borrow;
+    for (i, limb) in a.iter_mut().enumerate() {
         if i >= b.len() && borrow == 0 {
             break;
         }
-        let cur = u64::from(a[i]);
+        let sub = u64::from(b.get(i).copied().unwrap_or(0)) + borrow;
+        let cur = u64::from(*limb);
         if cur >= sub {
-            a[i] = narrow(cur - sub);
+            *limb = narrow(cur - sub);
             borrow = 0;
         } else {
-            a[i] = narrow(cur + BASE - sub);
+            *limb = narrow(cur + BASE - sub);
             borrow = 1;
         }
     }
@@ -160,6 +161,7 @@ fn add_at(out: &mut [u32], v: &[u32], offset: usize) {
     }
 }
 
+#[allow(clippy::many_single_char_names)] // Karatsuba's customary names.
 fn mul_into(a: &[u32], b: &[u32], out: &mut [u32]) {
     if a.len() < KARATSUBA_THRESHOLD || b.len() < KARATSUBA_THRESHOLD {
         mul_schoolbook(a, b, out);
@@ -263,6 +265,7 @@ fn mul_small(v: &[u32], f: u64) -> Vec<u32> {
 }
 
 /// Knuth, TAOCP vol. 2, 4.3.1, Algorithm D (quotient only).
+#[allow(clippy::many_single_char_names)] // Knuth's notation.
 fn knuth_div(n: &[u32], d: &[u32]) -> Vec<u32> {
     let dn = d.len();
     let f = BASE / (u64::from(d[dn - 1]) + 1);
