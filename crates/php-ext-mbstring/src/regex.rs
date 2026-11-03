@@ -20,7 +20,8 @@
 //! non-Ruby syntaxes selected by `j u g c z b d` (patterns are always read
 //! as Ruby/PCRE syntax), class intersections (`[a&&b]`), and Oniguruma's
 //! exact error texts beyond the common ones. `mbstring.regex_retry_limit`
-//! maps to PCRE2's match limit; `mbstring.regex_stack_limit` is ignored.
+//! maps to PCRE2's match limit (scaled ×2); `mbstring.regex_stack_limit`
+//! has no PCRE2 (JIT) equivalent and is ignored.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -452,6 +453,30 @@ fn onig_message(pcre: &[u8]) -> String {
     m.into_owned()
 }
 
+/// Oniguruma's `str_end_hash` for its name table.
+fn onig_name_hash(name: &[u8]) -> u32 {
+    let val = name
+        .iter()
+        .fold(0u32, |v, &b| v.wrapping_mul(997).wrapping_add(u32::from(b)));
+    val.wrapping_add(val >> 5)
+}
+
+/// Sorts names in the order `onig_foreach_name` visits them: by bucket of
+/// the (11-bin) `st` hash table, most recently inserted first within a bin.
+fn onig_name_order(names: &mut [(Vec<u8>, Vec<usize>)]) {
+    let bins = if names.len() > 55 { 19 } else { 11 };
+    let mut keyed: Vec<(u32, usize, (Vec<u8>, Vec<usize>))> = names
+        .iter()
+        .cloned()
+        .enumerate()
+        .map(|(i, n)| (onig_name_hash(&n.0) % bins, usize::MAX - i, n))
+        .collect();
+    keyed.sort_by_key(|k| (k.0, k.1));
+    for (slot, (_, _, n)) in names.iter_mut().zip(keyed) {
+        *slot = n;
+    }
+}
+
 /// `php_mbregex_compile_pattern`; warnings are raised here.
 fn compile(
     vm: &mut Vm,
@@ -520,6 +545,7 @@ fn compile(
             }
         }
     }
+    onig_name_order(&mut name_list);
     let c = Rc::new(Compiled {
         re,
         names: name_list,
@@ -552,12 +578,16 @@ enum Found {
 }
 
 fn match_config(vm: &Vm) -> php_pcre::MatchConfig {
+    // PCRE2's match limit counts about twice as many steps as
+    // Oniguruma's retry counter on backtracking-heavy patterns; a
+    // non-positive or too large limit keeps Oniguruma's default (10M).
     let retry = vm.ini_long("mbstring.regex_retry_limit");
-    let backtrack = if retry > 0 && retry < i64::from(u32::MAX) {
+    let retry = if retry > 0 && retry < i64::from(u32::MAX) {
         retry
     } else {
-        1_000_000
+        10_000_000
     };
+    let backtrack = retry.saturating_mul(2).min(i64::from(u32::MAX));
     php_pcre::MatchConfig::from_ini(backtrack, 100_000, true)
 }
 
@@ -899,14 +929,14 @@ fn replace_common(vm: &mut Vm, a: &mut Args, base_opts: u32, callable: bool) -> 
             return Ok(Value::Bool(false));
         }
     };
-    for regs in matches {
-        let (beg, end) = regs.get(0).unwrap_or((pos, pos));
-        if beg < pos {
-            continue;
-        }
-        out.extend_from_slice(&s[pos..beg]);
+    let nullable = matches!(
+        search(vm, &c, &to_subject(b"", enc), 0, false),
+        Found::Match(_)
+    );
+    // Appends the replacement (or the callback's result) for one match.
+    let mut emit = |vm: &mut Vm, out: &mut Vec<u8>, regs: &Regs| -> VmResult<()> {
         if let Some(rep) = &replacement {
-            substitute(&mut out, s, rep.as_bytes(), &c, &regs, enc);
+            substitute(out, s, rep.as_bytes(), &c, regs, enc);
         }
         if let Some(cb) = &callback {
             let mut subpats = ZArray::with_capacity(regs.0.len());
@@ -915,19 +945,48 @@ fn replace_common(vm: &mut Vm, a: &mut Args, base_opts: u32, callable: bool) -> 
                 let v = r.map_or_else(|| bytes(Vec::new()), |(b, e)| bytes(&s[b..e.max(b)]));
                 let _ = t.push(v);
             }
-            named_into(&c, &regs, s, t);
+            named_into(&c, regs, s, t);
             let ret = vm.call_value(cb, vec![Value::Array(subpats)])?;
             let r = vm.value_to_string(&ret)?;
             out.extend_from_slice(r.as_bytes());
         }
+        Ok(())
+    };
+    // Replay Oniguruma's search loop over the match list: each search
+    // from `pos` finds the first listed match starting at or after it.
+    let mut next = matches.into_iter().peekable();
+    loop {
+        while next
+            .peek()
+            .is_some_and(|r| r.get(0).is_none_or(|(b, _)| b < pos))
+        {
+            next.next();
+        }
+        let Some(regs) = next.next() else {
+            break;
+        };
+        let (beg, end) = regs.get(0).unwrap_or((pos, pos));
+        out.extend_from_slice(&s[pos..beg]);
+        emit(vm, &mut out, &regs)?;
         if pos < end {
             pos = end;
         } else if pos < s.len() {
+            // Oniguruma advances one *byte* after an empty match; a pattern
+            // that matches the empty string anywhere then also matches
+            // between the bytes of a multibyte character.
             let n = char_len(enc, s, pos);
-            out.extend_from_slice(&s[pos..pos + n]);
+            for k in 1..n {
+                out.push(s[pos + k - 1]);
+                if nullable {
+                    let mut mid = Regs(vec![None; regs.0.len()]);
+                    mid.0[0] = Some((pos + k, pos + k));
+                    emit(vm, &mut out, &mid)?;
+                }
+            }
+            out.push(s[pos + n - 1]);
             pos += n;
         } else {
-            pos += 1;
+            break;
         }
         if out.len() >= next_check {
             // smart_str growth.
@@ -980,26 +1039,34 @@ fn mb_split(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             return Ok(Value::Bool(false));
         }
     };
-    for regs in matches {
-        if count == 0 || pos >= s.len() {
+    let mut next = matches.into_iter().peekable();
+    while count != 0 && pos < s.len() {
+        while next
+            .peek()
+            .is_some_and(|r| r.get(0).is_none_or(|(b, _)| b < pos))
+        {
+            next.next();
+        }
+        let Some(regs) = next.next() else {
             break;
-        }
+        };
         let (beg, end) = regs.get(0).unwrap_or((pos, pos));
-        if beg < pos || end <= pos {
-            continue;
-        }
-        if beg < s.len() && beg >= chunk {
-            let _ = t.push(bytes(&s[chunk..beg]));
-            count = count.wrapping_sub(1);
-            if t.len().is_power_of_two() && t.len() >= 1024 {
-                crate::mem::check(vm, crate::mem::zstr(s.len()), crate::mem::packed(t.len()))?;
+        if pos < end {
+            if beg < s.len() && beg >= chunk {
+                let _ = t.push(bytes(&s[chunk..beg]));
+                count = count.wrapping_sub(1);
+                if t.len().is_power_of_two() && t.len() >= 1024 {
+                    crate::mem::check(vm, crate::mem::zstr(s.len()), crate::mem::packed(t.len()))?;
+                }
+            } else {
+                vm.php_warning("mbregex search failure in mbsplit(): ")?;
+                return Ok(Value::Bool(false));
             }
+            pos = end;
+            chunk = end;
         } else {
-            vm.php_warning("mbregex search failure in mbsplit(): ")?;
-            return Ok(Value::Bool(false));
+            pos += char_len(enc, s, pos);
         }
-        pos = end;
-        chunk = end;
     }
     if s.len() > chunk {
         let _ = t.push(bytes(&s[chunk..]));
@@ -1296,6 +1363,17 @@ mod tests {
         let utf8 = to_subject("aあ".as_bytes(), php_mbstring::encoding::utf8());
         assert!(utf8.back.is_none());
         assert_eq!(utf8.to_orig(4), 4);
+    }
+
+    #[test]
+    fn name_order_matches_oniguruma() {
+        let mut n: Vec<(Vec<u8>, Vec<usize>)> = ["b", "a", "c", "a2"]
+            .iter()
+            .map(|s| (s.as_bytes().to_vec(), vec![]))
+            .collect();
+        onig_name_order(&mut n);
+        let got: Vec<&[u8]> = n.iter().map(|x| x.0.as_slice()).collect();
+        assert_eq!(got, [&b"a2"[..], b"a", b"b", b"c"]);
     }
 
     #[test]
