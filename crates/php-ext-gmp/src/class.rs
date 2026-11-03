@@ -195,7 +195,16 @@ fn properties_for(_vm: &mut Vm, o: &Obj, purpose: PropertyPurpose) -> VmResult<O
     if purpose != PropertyPurpose::Debug {
         return Ok(None);
     }
-    let mut t = std_props(o);
+    // `zend_std_get_properties` + `zend_array_dup`: numeric names show as
+    // integer keys.
+    let mut t = HashTable::new();
+    for (k, v) in &std_props(o) {
+        let k = match k {
+            ArrayKey::Str(s) => ArrayKey::from_zstr(s),
+            k @ ArrayKey::Int(_) => k.clone(),
+        };
+        t.insert(k, v.clone());
+    }
     let num = mpz_of(o).map(|m| gmp::debug_num(&m)).unwrap_or_default();
     t.insert("num", Value::from(num));
     Ok(Some(ZArray::from_table(t)))
@@ -252,14 +261,21 @@ fn load_props(vm: &mut Vm, o: &Obj, props: &ZArray) -> VmResult<()> {
 fn unserialize(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let o = a.this_obj();
     let data = a.array(0);
-    let num = match data.get_int(0).map(Value::deref) {
+    // The VM may hand over `__unserialize()` data with integer keys
+    // stringified; accept both spellings.
+    let element = |i: i64| {
+        data.get_int(i)
+            .or_else(|| data.get_str(i.to_string().as_bytes()))
+            .map(Value::deref)
+    };
+    let num = match element(0) {
         Some(Value::Str(s)) => Some(s),
         _ => None,
     };
     let m =
         gmp::unserialize_number(num.as_ref().map(ZStr::as_bytes)).map_err(|e| op_throw(vm, &e))?;
     set_internal(&o, GmpState(m));
-    if let Some(props) = data.get_int(1).map(Value::deref) {
+    if let Some(props) = element(1) {
         let Value::Array(props) = props else {
             return Err(op_throw(vm, &gmp::unserialize_properties_error()));
         };
@@ -299,7 +315,12 @@ fn unserialize_legacy(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         let Value::Array(props) = props else {
             return Err(op_throw(vm, &gmp::unserialize_properties_error()));
         };
-        load_props(vm, &o, &props)?;
+        // `zend_hash_copy` into the property table (no deprecation).
+        let mut dynamic = data(&o).dynamic.borrow_mut();
+        let t = dynamic.get_or_insert_with(HashTable::new);
+        for (k, v) in props.iter() {
+            t.insert(k.clone(), v.clone());
+        }
     }
     Ok(Value::Null)
 }
