@@ -388,10 +388,17 @@ impl XPath {
             .set(self.0.evaluation_depth.get() + 1);
         // SAFETY: live context; userData is only read by our callbacks
         // during this call.
+        // A nested evaluation (from a PHP callback of an outer one on the
+        // same context) must leave the outer evaluation's state intact.
         let obj = crate::parse::with_generic_errors(|| unsafe {
+            let saved_user = (*ctxp).userData;
+            let saved_size = (*ctxp).contextSize;
+            let saved_pos = (*ctxp).proximityPosition;
             (*ctxp).userData = (&raw mut eval_ctx).cast();
             let o = ffi::xmlXPathEvalExpression(e.as_ptr().cast(), ctxp);
-            (*ctxp).userData = ptr::null_mut();
+            (*ctxp).userData = saved_user;
+            (*ctxp).contextSize = saved_size;
+            (*ctxp).proximityPosition = saved_pos;
             o
         });
         self.0

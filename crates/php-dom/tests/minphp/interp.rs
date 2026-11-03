@@ -2183,6 +2183,12 @@ impl Interp {
                     Some(i) => Some(to_key(&self.eval(i)?)),
                     None => None,
                 };
+                if let (ExprKind::Var(vn), Some(Key::Str(name))) = (&base.kind, &k) {
+                    if self.var_name(vn)? == b"GLOBALS" {
+                        self.frames.borrow_mut()[0].vars.insert(name.clone(), v);
+                        return Ok(());
+                    }
+                }
                 let bv = self.eval_quiet(base)?;
                 if let V::Obj(o) = &bv {
                     if o.dom().is_some() {

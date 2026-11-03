@@ -272,20 +272,31 @@ pub fn float_to_string(f: f64) -> String {
 struct Args<'a> {
     v: &'a [DomValue],
     params: &'static [ParamInfo],
-    func: String,
+    class: std::borrow::Cow<'a, str>,
+    method: &'a str,
 }
 
 impl<'a> Args<'a> {
-    fn new(class: &str, method: &str, v: &'a [DomValue]) -> Args<'a> {
-        let (c, m) = find_method(class, method).map_or((class.to_string(), &[][..]), |(c, m)| {
-            (c.name.to_string(), m.params)
-        });
-        let mname = find_method(class, method).map_or(method, |(_, m)| m.name);
-        Args {
-            v,
-            params: m,
-            func: format!("{c}::{mname}"),
+    fn new(class: &str, method: &'a str, v: &'a [DomValue]) -> Args<'a> {
+        match find_method(class, method) {
+            Some((c, m)) => Args {
+                v,
+                params: m.params,
+                class: std::borrow::Cow::Borrowed(c.name),
+                method: m.name,
+            },
+            None => Args {
+                v,
+                params: &[],
+                class: std::borrow::Cow::Owned(class.to_string()),
+                method,
+            },
         }
+    }
+
+    /// `Class::method`, for error messages.
+    fn func(&self) -> String {
+        format!("{}::{}", self.class, self.method)
     }
 
     fn arg_no(i: usize) -> u32 {
@@ -316,7 +327,7 @@ impl<'a> Args<'a> {
             Level::Deprecated,
             format!(
                 "{}(): Passing null to parameter #{} (${}) of type {ty} is deprecated",
-                self.func,
+                self.func(),
                 i + 1,
                 self.pname(i)
             ),
@@ -497,7 +508,7 @@ impl<'a> Args<'a> {
     }
 
     fn too_few(&self) -> DomError {
-        DomError::Error(format!("Too few arguments to function {}()", self.func))
+        DomError::Error(format!("Too few arguments to function {}()", self.func()))
     }
 }
 
@@ -683,7 +694,7 @@ pub fn call(
             _ => Err(undefined(class, method)),
         },
         DomObject::XPath(x) => call_xpath(x, &a, &m, host),
-        DomObject::TokenList(t) => crate::tokenlist::call(t, &a.func, &m, args),
+        DomObject::TokenList(t) => crate::tokenlist::call(t, &a.func(), &m, args),
         DomObject::Node(n) => call_node(n, class, &a, &m, method, host),
     }
 }

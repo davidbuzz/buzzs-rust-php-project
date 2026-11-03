@@ -192,16 +192,74 @@ pub fn class_table() -> &'static [ClassInfo] {
     table::CLASSES
 }
 
-/// Looks a class up by (case-insensitive) name.
-pub fn find_class(name: &str) -> Option<&'static ClassInfo> {
-    let name = name.strip_prefix('\\').unwrap_or(name);
-    table::CLASSES
-        .iter()
-        .find(|c| c.name.eq_ignore_ascii_case(name))
+/// FNV-1a: a cheap hasher for the short, trusted class/method names.
+#[derive(Default, Clone, Copy)]
+struct Fnv(u64);
+
+impl std::hash::Hasher for Fnv {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+    fn write(&mut self, bytes: &[u8]) {
+        let mut h = if self.0 == 0 { 0xcbf2_9ce4_8422_2325 } else { self.0 };
+        for &b in bytes {
+            h ^= u64::from(b);
+            h = h.wrapping_mul(0x0100_0000_01b3);
+        }
+        self.0 = h;
+    }
 }
 
-/// Finds a method on a class or its ancestors.
-pub fn find_method(class: &str, method: &str) -> Option<(&'static ClassInfo, &'static MethodInfo)> {
+type FnvMap<K, V> = std::collections::HashMap<K, V, std::hash::BuildHasherDefault<Fnv>>;
+
+/// Name → index into the class table (exact spelling and lowercase), and
+/// the precomputed subclass relation.
+struct ClassIndex {
+    exact: FnvMap<&'static str, usize>,
+    lower: FnvMap<String, usize>,
+    subclass: Vec<Vec<bool>>,
+}
+
+fn class_index() -> &'static ClassIndex {
+    static INDEX: std::sync::OnceLock<ClassIndex> = std::sync::OnceLock::new();
+    INDEX.get_or_init(|| {
+        let mut exact = FnvMap::default();
+        let mut lower = FnvMap::default();
+        for (i, c) in table::CLASSES.iter().enumerate() {
+            exact.insert(c.name, i);
+            lower.insert(c.name.to_ascii_lowercase(), i);
+        }
+        let subclass = table::CLASSES
+            .iter()
+            .map(|c| table::CLASSES.iter().map(|b| is_subclass_uncached(c.name, b.name)).collect())
+            .collect();
+        ClassIndex { exact, lower, subclass }
+    })
+}
+
+fn find_class_linear(name: &str) -> Option<&'static ClassInfo> {
+    table::CLASSES.iter().find(|c| c.name.eq_ignore_ascii_case(name))
+}
+
+fn class_idx(name: &str) -> Option<usize> {
+    let name = name.strip_prefix('\\').unwrap_or(name);
+    let idx = class_index();
+    if let Some(&i) = idx.exact.get(name) {
+        return Some(i);
+    }
+    if name.bytes().any(|b| b.is_ascii_uppercase()) {
+        idx.lower.get(&name.to_ascii_lowercase()).copied()
+    } else {
+        idx.lower.get(name).copied()
+    }
+}
+
+/// Looks a class up by (case-insensitive) name.
+pub fn find_class(name: &str) -> Option<&'static ClassInfo> {
+    class_idx(name).map(|i| &table::CLASSES[i])
+}
+
+fn find_method_uncached(class: &str, method: &str) -> Option<(&'static ClassInfo, &'static MethodInfo)> {
     let mut cur = find_class(class);
     while let Some(c) = cur {
         if let Some(m) = c
@@ -216,27 +274,51 @@ pub fn find_method(class: &str, method: &str) -> Option<(&'static ClassInfo, &'s
     // Interface default declarations (e.g. DOMChildNode::remove).
     let c = find_class(class)?;
     for i in c.interfaces {
-        if let Some(r) = find_method(i, method) {
+        if let Some(r) = find_method_uncached(i, method) {
             return Some(r);
         }
     }
     None
 }
 
-/// Whether `class` is `base` or derives from / implements it.
-pub fn is_subclass(class: &str, base: &str) -> bool {
-    let Some(c) = find_class(class) else {
+type MethodResult = Option<(&'static ClassInfo, &'static MethodInfo)>;
+
+thread_local! {
+    /// Per class: method name (as spelled by the caller) → lookup result.
+    static METHOD_MEMO: std::cell::RefCell<Vec<FnvMap<Box<str>, MethodResult>>> =
+        std::cell::RefCell::new(vec![FnvMap::default(); table::CLASSES.len()]);
+}
+
+/// Finds a method on a class or its ancestors.
+pub fn find_method(class: &str, method: &str) -> MethodResult {
+    let ci = class_idx(class)?;
+    if let Some(r) = METHOD_MEMO.with(|m| m.borrow()[ci].get(method).copied()) {
+        return r;
+    }
+    let r = find_method_uncached(table::CLASSES[ci].name, method);
+    METHOD_MEMO.with(|m| m.borrow_mut()[ci].insert(method.into(), r));
+    r
+}
+
+fn is_subclass_uncached(class: &str, base: &str) -> bool {
+    let Some(c) = find_class_linear(class) else {
         return false;
     };
-    if c.name
-        .eq_ignore_ascii_case(base.strip_prefix('\\').unwrap_or(base))
-    {
+    if c.name.eq_ignore_ascii_case(base) {
         return true;
     }
-    if c.parent.is_some_and(|p| is_subclass(p, base)) {
+    if c.parent.is_some_and(|p| is_subclass_uncached(p, base)) {
         return true;
     }
-    c.interfaces.iter().any(|i| is_subclass(i, base))
+    c.interfaces.iter().any(|i| is_subclass_uncached(i, base))
+}
+
+/// Whether `class` is `base` or derives from / implements it.
+pub fn is_subclass(class: &str, base: &str) -> bool {
+    match (class_idx(class), class_idx(base)) {
+        (Some(ci), Some(bi)) => class_index().subclass[ci][bi],
+        _ => false,
+    }
 }
 
 /// The property-handler set of a built-in class, in the order PHP
