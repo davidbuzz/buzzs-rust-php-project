@@ -28,19 +28,32 @@ impl SkeletonFormatter {
         let mut pe = UParseError::default();
         // SAFETY: skeleton is a live slice; l NUL-terminated.
         let p = unsafe {
-            ffi::unumf_openForSkeletonAndLocaleWithError(skeleton.as_ptr(), len32(skeleton), l.as_ptr(), &mut pe, &mut st)
+            ffi::unumf_openForSkeletonAndLocaleWithError(
+                skeleton.as_ptr(),
+                len32(skeleton),
+                l.as_ptr(),
+                &mut pe,
+                &mut st,
+            )
         };
         if st.is_failure() || p.is_null() {
             if !p.is_null() {
                 // SAFETY: closed once.
                 unsafe { ffi::unumf_close(p) };
             }
-            return Err((if st.is_failure() { st } else { UErrorCode::MEMORY_ALLOCATION_ERROR }, pe));
+            return Err((
+                if st.is_failure() {
+                    st
+                } else {
+                    UErrorCode::MEMORY_ALLOCATION_ERROR
+                },
+                pe,
+            ));
         }
         Ok(Self(p))
     }
 
-    fn run(&self, f: impl FnOnce(*mut UFormattedNumber, &mut UErrorCode)) -> Result<Vec<u16>, UErrorCode> {
+    fn run(f: impl FnOnce(*mut UFormattedNumber, &mut UErrorCode)) -> Result<Vec<u16>, UErrorCode> {
         let mut st = UErrorCode::ZERO;
         // SAFETY: no preconditions; ownership is taken by Result_.
         let r = Result_(unsafe { ffi::unumf_openResult(&mut st) });
@@ -54,20 +67,22 @@ impl SkeletonFormatter {
     /// `unumf_formatDouble()`.
     pub fn format_f64(&self, v: f64) -> Result<Vec<u16>, UErrorCode> {
         // SAFETY: self.0 and the result are live.
-        self.run(|r, st| unsafe { ffi::unumf_formatDouble(self.0, v, r, st) })
+        Self::run(|r, st| unsafe { ffi::unumf_formatDouble(self.0, v, r, st) })
     }
 
     /// `unumf_formatInt()`.
     pub fn format_i64(&self, v: i64) -> Result<Vec<u16>, UErrorCode> {
         // SAFETY: self.0 and the result are live.
-        self.run(|r, st| unsafe { ffi::unumf_formatInt(self.0, v, r, st) })
+        Self::run(|r, st| unsafe { ffi::unumf_formatInt(self.0, v, r, st) })
     }
 
     /// `unumf_formatDecimal()`.
     pub fn format_decimal(&self, v: &str) -> Result<Vec<u16>, UErrorCode> {
         let c = ffi::cstring(v);
         // SAFETY: self.0 and the result are live; c is NUL-terminated.
-        self.run(|r, st| unsafe { ffi::unumf_formatDecimal(self.0, c.as_ptr(), len32(v.as_bytes()), r, st) })
+        Self::run(|r, st| unsafe {
+            ffi::unumf_formatDecimal(self.0, c.as_ptr(), len32(v.as_bytes()), r, st);
+        })
     }
 }
 

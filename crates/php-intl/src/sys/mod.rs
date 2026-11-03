@@ -7,12 +7,12 @@
 #![allow(clippy::borrow_as_ptr)]
 
 pub mod loc;
-pub mod uchar;
-pub mod umsg;
-pub mod uplrules;
-pub mod unumf;
 pub mod ucal;
+pub mod uchar;
 pub mod udat;
 pub mod udatpg;
+pub mod umsg;
 pub mod unum;
+pub mod unumf;
+pub mod uplrules;
 pub mod ures;

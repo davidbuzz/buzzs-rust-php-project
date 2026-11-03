@@ -234,3 +234,142 @@ pub fn json_str(s: &str) -> String {
     out.push('"');
     out
 }
+
+/// A minimal JSON value (fixtures encode PHP arrays as JSON).
+#[derive(Debug, Clone, PartialEq)]
+pub enum J {
+    Null,
+    Bool(bool),
+    Int(i64),
+    Float(f64),
+    Str(String),
+    Arr(Vec<J>),
+    Obj(Vec<(String, J)>),
+}
+
+/// Parses JSON produced by `json_encode` (with `PRESERVE_ZERO_FRACTION`).
+pub fn json(s: &str) -> J {
+    let b = s.as_bytes();
+    let mut i = 0;
+
+    json_value(b, &mut i)
+}
+
+fn ws(b: &[u8], i: &mut usize) {
+    while *i < b.len() && b[*i].is_ascii_whitespace() {
+        *i += 1;
+    }
+}
+
+fn json_value(b: &[u8], i: &mut usize) -> J {
+    ws(b, i);
+    match b[*i] {
+        b'n' => {
+            *i += 4;
+            J::Null
+        }
+        b't' => {
+            *i += 4;
+            J::Bool(true)
+        }
+        b'f' => {
+            *i += 5;
+            J::Bool(false)
+        }
+        b'"' => J::Str(json_string(b, i)),
+        b'[' => {
+            *i += 1;
+            let mut v = Vec::new();
+            ws(b, i);
+            if b[*i] == b']' {
+                *i += 1;
+                return J::Arr(v);
+            }
+            loop {
+                v.push(json_value(b, i));
+                ws(b, i);
+                if b[*i] == b',' {
+                    *i += 1;
+                } else {
+                    *i += 1;
+                    return J::Arr(v);
+                }
+            }
+        }
+        b'{' => {
+            *i += 1;
+            let mut v = Vec::new();
+            ws(b, i);
+            if b[*i] == b'}' {
+                *i += 1;
+                return J::Obj(v);
+            }
+            loop {
+                ws(b, i);
+                let k = json_string(b, i);
+                ws(b, i);
+                *i += 1; // ':'
+                v.push((k, json_value(b, i)));
+                ws(b, i);
+                if b[*i] == b',' {
+                    *i += 1;
+                } else {
+                    *i += 1;
+                    return J::Obj(v);
+                }
+            }
+        }
+        _ => {
+            let start = *i;
+            while *i < b.len()
+                && (b[*i].is_ascii_digit() || matches!(b[*i], b'-' | b'+' | b'.' | b'e' | b'E'))
+            {
+                *i += 1;
+            }
+            let t = std::str::from_utf8(&b[start..*i]).expect("num");
+            if t.contains(['.', 'e', 'E']) {
+                J::Float(t.parse().expect("float"))
+            } else {
+                t.parse()
+                    .map_or_else(|_| J::Float(t.parse().expect("float")), J::Int)
+            }
+        }
+    }
+}
+
+fn json_string(b: &[u8], i: &mut usize) -> String {
+    *i += 1;
+    let mut out: Vec<u16> = Vec::new();
+    let mut raw = Vec::new();
+    loop {
+        let c = b[*i];
+        *i += 1;
+        match c {
+            b'"' => break,
+            b'\\' => {
+                let e = b[*i];
+                *i += 1;
+                let ch = match e {
+                    b'n' => '\n',
+                    b't' => '\t',
+                    b'r' => '\r',
+                    b'b' => '\u{8}',
+                    b'f' => '\u{c}',
+                    b'u' => {
+                        let h = std::str::from_utf8(&b[*i..*i + 4]).expect("hex");
+                        *i += 4;
+                        out.extend(String::from_utf8_lossy(&raw).encode_utf16());
+                        raw.clear();
+                        out.push(u16::from_str_radix(h, 16).expect("hex"));
+                        continue;
+                    }
+                    o => o as char,
+                };
+                raw.extend(ch.to_string().as_bytes());
+            }
+            o => raw.push(o),
+        }
+    }
+    out.extend(String::from_utf8_lossy(&raw).encode_utf16());
+    String::from_utf16_lossy(&out)
+}

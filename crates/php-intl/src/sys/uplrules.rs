@@ -23,7 +23,11 @@ impl PluralRules {
                 // SAFETY: closed once.
                 unsafe { ffi::uplrules_close(p) };
             }
-            return Err(if st.is_failure() { st } else { UErrorCode::MEMORY_ALLOCATION_ERROR });
+            return Err(if st.is_failure() {
+                st
+            } else {
+                UErrorCode::MEMORY_ALLOCATION_ERROR
+            });
         }
         Ok(Self(p))
     }
@@ -35,10 +39,12 @@ impl PluralRules {
     }
 
     /// `uplrules_selectWithFormat()` (uses the visible fraction digits of
-    /// `fmt` when it is a DecimalFormat).
+    /// `fmt` when it is a `DecimalFormat`).
     pub fn select_with_format(&self, n: f64, fmt: &NumberFormat) -> Result<Vec<u16>, UErrorCode> {
         // SAFETY: buffer contract handled by fill_u16; both handles live.
-        fill_u16(|b, c, st| unsafe { ffi::uplrules_selectWithFormat(self.0, n, fmt.as_ptr(), b, c, st) })
+        fill_u16(|b, c, st| unsafe {
+            ffi::uplrules_selectWithFormat(self.0, n, fmt.as_ptr(), b, c, st)
+        })
     }
 }
 

@@ -1,4 +1,4 @@
-//! `umsg_*` — used to validate MessageFormat patterns exactly as ICU does
+//! `umsg_*` — used to validate `MessageFormat` patterns exactly as ICU does
 //! (formatting itself is implemented in Rust, see `crate::msgformat`).
 
 use std::ffi::c_void;
@@ -19,7 +19,11 @@ impl MessageFormat {
         let l = ffi::cstring(locale);
         let mut pe = UParseError::default();
         let mut st = UErrorCode::ZERO;
-        let ptr = if pattern.is_empty() { std::ptr::null() } else { pattern.as_ptr() };
+        let ptr = if pattern.is_empty() {
+            std::ptr::null()
+        } else {
+            pattern.as_ptr()
+        };
         // SAFETY: pattern pointer/length describe a live slice (or null/0);
         // l is NUL-terminated.
         let p = unsafe { ffi::umsg_open(ptr, len32(pattern), l.as_ptr(), &mut pe, &mut st) };
@@ -41,7 +45,9 @@ impl MessageFormat {
         let mut pe = UParseError::default();
         let mut st = UErrorCode::ZERO;
         // SAFETY: self.0 is live; pattern is a live slice.
-        unsafe { ffi::umsg_applyPattern(self.0, pattern.as_ptr(), len32(pattern), &mut pe, &mut st) };
+        unsafe {
+            ffi::umsg_applyPattern(self.0, pattern.as_ptr(), len32(pattern), &mut pe, &mut st);
+        };
         if st.is_failure() {
             Err((st, pe))
         } else {
@@ -61,7 +67,11 @@ impl MessageFormat {
         // SAFETY: self.0 is live.
         let p = unsafe { ffi::umsg_clone(self.0, &mut st) };
         if st.is_failure() || p.is_null() {
-            return Err(if st.is_failure() { st } else { UErrorCode::MEMORY_ALLOCATION_ERROR });
+            return Err(if st.is_failure() {
+                st
+            } else {
+                UErrorCode::MEMORY_ALLOCATION_ERROR
+            });
         }
         Ok(Self(p.cast()))
     }

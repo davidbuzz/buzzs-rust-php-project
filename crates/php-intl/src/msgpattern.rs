@@ -1,5 +1,5 @@
 //! A port of ICU's `MessagePattern` (apostrophe mode `DOUBLE_OPTIONAL`):
-//! splits a MessageFormat pattern into parts.  Patterns are validated with
+//! splits a `MessageFormat` pattern into parts.  Patterns are validated with
 //! `umsg_open()` before they reach this parser, so error reporting here is
 //! coarse (exact ICU errors come from ICU itself).
 
@@ -89,7 +89,7 @@ impl Part {
     }
 }
 
-/// A parsed MessageFormat pattern.
+/// A parsed `MessageFormat` pattern.
 #[derive(Debug, Clone, Default)]
 pub struct MessagePattern {
     msg: Vec<u16>,
@@ -110,15 +110,19 @@ fn is_white(c: u16) -> bool {
 }
 
 fn is_identifier(c: u16) -> bool {
-    !(has_binary_property(u32::from(c), PATTERN_SYNTAX) || has_binary_property(u32::from(c), PATTERN_WHITE_SPACE))
+    !(has_binary_property(u32::from(c), PATTERN_SYNTAX)
+        || has_binary_property(u32::from(c), PATTERN_WHITE_SPACE))
 }
 
 type PResult<T> = Result<T, UErrorCode>;
 
 impl MessagePattern {
-    /// Parses a MessageFormat pattern.
+    /// Parses a `MessageFormat` pattern.
     pub fn parse(pattern: &[u16]) -> PResult<Self> {
-        let mut p = Self { msg: pattern.to_vec(), ..Self::default() };
+        let mut p = Self {
+            msg: pattern.to_vec(),
+            ..Self::default()
+        };
         p.parse_message(0, 0, 0, ArgType::None)?;
         Ok(p)
     }
@@ -204,7 +208,14 @@ impl MessagePattern {
         });
     }
 
-    fn add_limit_part(&mut self, start: usize, ty: PartType, index: usize, length: usize, value: i32) {
+    fn add_limit_part(
+        &mut self,
+        start: usize,
+        ty: PartType,
+        index: usize,
+        length: usize,
+        value: i32,
+    ) {
         let n = self.parts.len();
         self.parts[start].limit_part = n;
         self.add_part(ty, index, length, value);
@@ -215,7 +226,11 @@ impl MessagePattern {
     }
 
     fn index_of(&self, c: u16, from: usize) -> Option<usize> {
-        self.msg.get(from..)?.iter().position(|&x| x == c).map(|p| p + from)
+        self.msg
+            .get(from..)?
+            .iter()
+            .position(|&x| x == c)
+            .map(|p| p + from)
     }
 
     fn skip_white(&self, mut i: usize) -> usize {
@@ -245,7 +260,13 @@ impl MessagePattern {
         i
     }
 
-    fn parse_message(&mut self, index: usize, start_len: usize, nesting: i32, parent: ArgType) -> PResult<usize> {
+    fn parse_message(
+        &mut self,
+        index: usize,
+        start_len: usize,
+        nesting: i32,
+        parent: ArgType,
+    ) -> PResult<usize> {
         if nesting > MAX_VALUE {
             return Err(UErrorCode::INDEX_OUTOFBOUNDS_ERROR);
         }
@@ -271,23 +292,20 @@ impl MessagePattern {
                     {
                         self.add_part(PartType::SkipSyntax, index - 1, 1, 0);
                         loop {
-                            match self.index_of(APOS, index + 1) {
-                                Some(i) => {
-                                    index = i;
-                                    if self.at(index + 1) == APOS {
-                                        index += 1;
-                                        self.add_part(PartType::SkipSyntax, index, 1, 0);
-                                    } else {
-                                        self.add_part(PartType::SkipSyntax, index, 1, 0);
-                                        index += 1;
-                                        break;
-                                    }
-                                }
-                                None => {
-                                    index = len;
-                                    self.add_part(PartType::InsertChar, index, 0, i32::from(APOS));
+                            if let Some(i) = self.index_of(APOS, index + 1) {
+                                index = i;
+                                if self.at(index + 1) == APOS {
+                                    index += 1;
+                                    self.add_part(PartType::SkipSyntax, index, 1, 0);
+                                } else {
+                                    self.add_part(PartType::SkipSyntax, index, 1, 0);
+                                    index += 1;
                                     break;
                                 }
+                            } else {
+                                index = len;
+                                self.add_part(PartType::InsertChar, index, 0, i32::from(APOS));
+                                break;
                             }
                         }
                     } else {
@@ -391,7 +409,10 @@ impl MessagePattern {
         } else {
             let type_index = self.skip_white(index + 1);
             index = type_index;
-            while index < len && self.msg[index] < 0x80 && (self.msg[index] as u8).is_ascii_alphabetic() {
+            while index < len
+                && self.msg[index] < 0x80
+                && u8::try_from(self.msg[index]).is_ok_and(|b| b.is_ascii_alphabetic())
+            {
                 index += 1;
             }
             let length = index - type_index;
@@ -436,7 +457,9 @@ impl MessagePattern {
             }
         }
         self.add_limit_part(arg_start, PartType::ArgLimit, index, 1, 0);
-        self.parts.last_mut().map_or((), |p| p.arg_type = arg_type);
+        if let Some(p) = self.parts.last_mut() {
+            p.arg_type = arg_type;
+        }
         Ok(index + 1)
     }
 
@@ -448,7 +471,10 @@ impl MessagePattern {
             let c = self.msg[index];
             index += 1;
             if c == APOS {
-                index = self.index_of(APOS, index).ok_or(UErrorCode::PATTERN_SYNTAX_ERROR)? + 1;
+                index = self
+                    .index_of(APOS, index)
+                    .ok_or(UErrorCode::PATTERN_SYNTAX_ERROR)?
+                    + 1;
             } else if c == LBRACE {
                 nested += 1;
             } else if c == RBRACE {
@@ -497,7 +523,12 @@ impl MessagePattern {
         }
     }
 
-    fn parse_plural_or_select_style(&mut self, arg_type: ArgType, index: usize, nesting: i32) -> PResult<usize> {
+    fn parse_plural_or_select_style(
+        &mut self,
+        arg_type: ArgType,
+        index: usize,
+        nesting: i32,
+    ) -> PResult<usize> {
         let mut index = index;
         let mut is_empty = true;
         let mut has_other = false;
@@ -578,7 +609,11 @@ impl MessagePattern {
         }
         if c == 0x221e {
             if allow_infinity && index == limit {
-                let v = if neg { f64::NEG_INFINITY } else { f64::INFINITY };
+                let v = if neg {
+                    f64::NEG_INFINITY
+                } else {
+                    f64::INFINITY
+                };
                 self.add_part(PartType::ArgDouble, start, limit - start, 0);
                 if let Some(p) = self.parts.last_mut() {
                     p.double = v;
@@ -594,7 +629,12 @@ impl MessagePattern {
                 break;
             }
             if index == limit {
-                self.add_part(PartType::ArgInt, start, limit - start, if neg { -value } else { value });
+                self.add_part(
+                    PartType::ArgInt,
+                    start,
+                    limit - start,
+                    if neg { -value } else { value },
+                );
                 return Ok(());
             }
             c = self.msg[index];
@@ -612,7 +652,11 @@ impl MessagePattern {
 
 /// `strtod()` that must consume the whole string.
 fn c_strtod_full(s: &str) -> Option<f64> {
-    if s.is_empty() || !s.bytes().all(|b| b.is_ascii_digit() || matches!(b, b'+' | b'-' | b'.' | b'e' | b'E')) {
+    if s.is_empty()
+        || !s
+            .bytes()
+            .all(|b| b.is_ascii_digit() || matches!(b, b'+' | b'-' | b'.' | b'e' | b'E'))
+    {
         return None;
     }
     s.parse::<f64>().ok()
@@ -655,6 +699,12 @@ mod tests {
         assert!(p.parts().iter().any(|x| x.ty == PartType::ReplaceNumber));
         assert!((p.plural_offset(3) - 1.0).abs() < f64::EPSILON);
         let c = parse("{0,choice,0#none|1#one|1<many}");
-        assert!(c.parts().iter().filter(|x| x.ty == PartType::ArgSelector).count() == 3);
+        assert!(
+            c.parts()
+                .iter()
+                .filter(|x| x.ty == PartType::ArgSelector)
+                .count()
+                == 3
+        );
     }
 }
