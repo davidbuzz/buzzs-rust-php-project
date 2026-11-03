@@ -496,10 +496,12 @@ gh16337.phpt
 gh16477-2.phpt
 gh16477.phpt
 gh16588.phpt
+gh16589.phpt
 gh16604_1.phpt
 gh16604_2.phpt
 gh17198.phpt
 gh17463.phpt
+gh17516.phpt
 gh18304.phpt
 gh18322.phpt
 gh18421.phpt
@@ -511,6 +513,7 @@ gh20856.phpt
 gh21499.phpt
 gh21927.phpt
 gh22062.phpt
+gh23385.phpt
 gh7809.phpt
 gh8318.phpt
 gh8366.phpt
@@ -578,9 +581,11 @@ iterator_048.phpt
 iterator_049.phpt
 iterator_049b.phpt
 iterator_050.phpt
+iterator_051.phpt
 iterator_052.phpt
 iterator_053.phpt
 iterator_054.phpt
+iterator_055.phpt
 iterator_056.phpt
 iterator_057.phpt
 iterator_058.phpt
@@ -619,6 +624,7 @@ recursiveiteratoriterator_getsubiterator_variation.phpt
 recursiveiteratoriterator_getsubiterator_variation_002.phpt
 recursiveiteratoriterator_getsubiterator_variation_003.phpt
 recursiveiteratoriterator_next_during_endchildren.phpt
+recursiveiteratoriterator_next_during_valid.phpt
 recursiveiteratoriterator_nextelement_basic.phpt
 recursiveiteratoriterator_rewind_during_next.phpt
 regexIterator_flags_basic.phpt

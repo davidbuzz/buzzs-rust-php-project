@@ -146,6 +146,13 @@ pub trait ObjectIterator {
     fn key(&mut self, host: &mut dyn SplHost) -> RtResult<Option<Value>>;
     /// `move_forward`.
     fn next(&mut self, host: &mut dyn SplHost) -> RtResult<()>;
+
+    /// For `zend_user_iterator`s: the `Iterator` object whose methods this
+    /// iterator calls. Callers may then call the methods directly instead
+    /// of borrowing the iterator (so user code can re-enter it).
+    fn method_object(&self) -> Option<&Obj> {
+        None
+    }
 }
 
 /// `zend_user_iterator`: iterates an `Iterator` object by calling its
@@ -165,6 +172,9 @@ impl MethodIterator {
 }
 
 impl ObjectIterator for MethodIterator {
+    fn method_object(&self) -> Option<&Obj> {
+        Some(&self.obj)
+    }
     fn rewind(&mut self, host: &mut dyn SplHost) -> RtResult<()> {
         host.call_method(&self.obj, "rewind", &[]).map(|_| ())
     }

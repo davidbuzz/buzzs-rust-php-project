@@ -154,36 +154,38 @@ fn skip_protected(ht: &HashTable, mut pos: u32) -> u32 {
     }
 }
 
-/// `spl_array_get_pos_ptr`: the iteration position, creating the
-/// registered iterator on first use (positioned at the first element).
-fn get_pos(
+/// Runs `f` on the storage table and the iteration position
+/// (`spl_array_get_pos_ptr`, creating the registered iterator on first use,
+/// positioned at the first element); `f` returns the new position. All
+/// position work happens inside one table access, so copy-on-write
+/// separation cannot desynchronise positions and table layout.
+fn with_pos<R>(
     host: &mut dyn SplHost,
     st: &Rc<SplObject>,
     tgt: &Target,
     is_obj: bool,
-) -> RtResult<u32> {
+    f: impl FnOnce(&mut HashTable, u32) -> (u32, R),
+) -> RtResult<R> {
     let id = st.array(|a| a.ht_iter)?;
-    if let Some(id) = id {
-        with_ht(host, tgt, |ht| ht.iterator_pos(id))
-    } else {
-        let id = with_ht(host, tgt, |ht| {
-            let mut pos = ht.valid_pos(0);
-            if is_obj {
-                pos = skip_protected(ht, pos);
+    let (r, new_id) = with_ht(host, tgt, |ht| {
+        let (id, pos) = match id {
+            Some(id) => (id, ht.iterator_pos(id)),
+            None => {
+                let mut p = ht.valid_pos(0);
+                if is_obj {
+                    p = skip_protected(ht, p);
+                }
+                (ht.iterator_add(p), p)
             }
-            (ht.iterator_add(pos), pos)
-        })?;
-        st.array(|a| a.ht_iter = Some(id.0))?;
-        Ok(id.1)
+        };
+        let (np, r) = f(ht, pos);
+        ht.iterator_set_pos(id, np);
+        (r, id)
+    })?;
+    if id.is_none() {
+        st.array(|a| a.ht_iter = Some(new_id))?;
     }
-}
-
-fn set_pos(host: &mut dyn SplHost, st: &Rc<SplObject>, tgt: &Target, pos: u32) -> RtResult<()> {
-    let id = st.array(|a| a.ht_iter)?;
-    if let Some(id) = id {
-        with_ht(host, tgt, |ht| ht.iterator_set_pos(id, pos))?;
-    }
-    Ok(())
+    Ok(r)
 }
 
 /// The key under which `offset` is stored (`get_hash_key`); `Ok(None)`
@@ -720,22 +722,20 @@ impl ObjectIterator for ArrayIter {
         rewind(host, &self.obj, &self.st)
     }
     fn valid(&mut self, host: &mut dyn SplHost) -> RtResult<bool> {
-        let (tgt, is_obj) = target(host, &self.obj, &self.st)?;
-        let pos = get_pos(host, &self.st, &tgt, is_obj)?;
-        let t = table(host, &tgt)?;
-        Ok(t.at(t.valid_pos(pos)).is_some())
+        current_value(host, &self.obj, &self.st).map(|v| v.is_some())
     }
     fn current(&mut self, host: &mut dyn SplHost) -> RtResult<Option<Value>> {
         let (tgt, is_obj) = target(host, &self.obj, &self.st)?;
-        let pos = get_pos(host, &self.st, &tgt, is_obj)?;
-        if self.by_ref {
-            return with_ht(host, &tgt, |ht| {
-                let p = ht.valid_pos(pos);
+        let by_ref = self.by_ref;
+        with_pos(host, &self.st, &tgt, is_obj, |ht, pos| {
+            let p = ht.valid_pos(pos);
+            let v = if by_ref {
                 ht.at_mut(p).map(|slot| Value::Reference(slot.make_ref()))
-            });
-        }
-        let t = table(host, &tgt)?;
-        Ok(t.at(t.valid_pos(pos)).map(|(_, v)| v.clone()))
+            } else {
+                ht.at(p).map(|(_, v)| v.clone())
+            };
+            (pos, v)
+        })
     }
     fn key(&mut self, host: &mut dyn SplHost) -> RtResult<Option<Value>> {
         current_key(host, &self.obj, &self.st).map(Some)
@@ -747,40 +747,34 @@ impl ObjectIterator for ArrayIter {
 
 fn rewind(host: &mut dyn SplHost, this: &Obj, st: &Rc<SplObject>) -> RtResult<()> {
     let (tgt, is_obj) = target(host, this, st)?;
-    if st.array(|a| a.ht_iter.is_none())? {
-        get_pos(host, st, &tgt, is_obj)?;
-        return Ok(());
-    }
-    let pos = with_ht(host, &tgt, |ht| {
+    with_pos(host, st, &tgt, is_obj, |ht, _| {
         let p = ht.valid_pos(0);
-        if is_obj {
-            skip_protected(ht, p)
-        } else {
-            p
-        }
-    })?;
-    set_pos(host, st, &tgt, pos)
+        (if is_obj { skip_protected(ht, p) } else { p }, ())
+    })
 }
 
 /// `spl_array_next_ex`: whether there are more elements afterwards.
 fn next(host: &mut dyn SplHost, this: &Obj, st: &Rc<SplObject>) -> RtResult<bool> {
     let (tgt, is_obj) = target(host, this, st)?;
-    let pos = get_pos(host, st, &tgt, is_obj)?;
-    let t = table(host, &tgt)?;
-    let mut np = t.pos_forward(pos);
-    if is_obj {
-        np = skip_protected(&t, np);
-    }
-    set_pos(host, st, &tgt, np)?;
-    Ok(t.at(t.valid_pos(np)).is_some())
+    with_pos(host, st, &tgt, is_obj, |ht, pos| {
+        let mut np = ht.pos_forward(pos);
+        if is_obj {
+            np = skip_protected(ht, np);
+        }
+        let more = ht.at(ht.valid_pos(np)).is_some();
+        (np, more)
+    })
 }
 
 fn current_key(host: &mut dyn SplHost, this: &Obj, st: &Rc<SplObject>) -> RtResult<Value> {
     let (tgt, is_obj) = target(host, this, st)?;
-    let pos = get_pos(host, st, &tgt, is_obj)?;
-    let t = table(host, &tgt)?;
-    Ok(t.at(t.valid_pos(pos))
-        .map_or(Value::Null, |(k, _)| k.to_value()))
+    with_pos(host, st, &tgt, is_obj, |ht, pos| {
+        (
+            pos,
+            ht.at(ht.valid_pos(pos))
+                .map_or(Value::Null, |(k, _)| k.to_value()),
+        )
+    })
 }
 
 fn current_value(
@@ -789,9 +783,9 @@ fn current_value(
     st: &Rc<SplObject>,
 ) -> RtResult<Option<Value>> {
     let (tgt, is_obj) = target(host, this, st)?;
-    let pos = get_pos(host, st, &tgt, is_obj)?;
-    let t = table(host, &tgt)?;
-    Ok(t.at(t.valid_pos(pos)).map(|(_, v)| v.deref()))
+    with_pos(host, st, &tgt, is_obj, |ht, pos| {
+        (pos, ht.at(ht.valid_pos(pos)).map(|(_, v)| v.deref()))
+    })
 }
 
 // ---------------------------------------------------------------------------

@@ -546,16 +546,20 @@ fn list_method(
         }
         "serialize" => {
             Args::none(func, args)?;
-            let (flags, values) = st.dllist(|d| (d.flags, d.list.values()))?;
-            let mut all = vec![Value::Int(flags)];
-            all.extend(values);
-            let pieces = serial::serialize_seq(host, &all)?;
-            let mut buf = Vec::new();
-            for (i, p) in pieces.into_iter().enumerate() {
-                if i > 0 {
-                    buf.push(b':');
+            let (flags, head) = st.dllist(|d| (d.flags, d.list.head.clone()))?;
+            let mut buf = php_runtime::serialize::serialize(&Value::Int(flags), host)?;
+            let mut current = head;
+            while let Some(node) = current {
+                buf.push(b':');
+                let next = next_of(&node);
+                let data = node.borrow().data.clone().unwrap_or_default();
+                buf.extend(php_runtime::serialize::serialize(&data, host)?);
+                // Stop when the next element was removed meanwhile
+                // (`SPL_LLIST_CHECK_DELREF_EX(next, break)`).
+                if next.as_ref().is_some_and(|n| n.borrow().data.is_none()) {
+                    break;
                 }
-                buf.extend(p);
+                current = next;
             }
             Ok(Value::Str(buf.into()))
         }

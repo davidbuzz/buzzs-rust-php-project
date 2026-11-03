@@ -26,6 +26,16 @@ fn it_call<R>(
     host: &mut dyn SplHost,
     f: impl FnOnce(&mut dyn ObjectIterator, &mut dyn SplHost) -> RtResult<R>,
 ) -> RtResult<R> {
+    // User iterators are driven through their methods without holding the
+    // borrow, so that their code may re-enter the outer iterator.
+    let method_obj = it
+        .try_borrow()
+        .ok()
+        .and_then(|b| b.method_object().cloned());
+    if let Some(obj) = method_obj {
+        let mut m = crate::host::MethodIterator::new(obj);
+        return f(&mut m, host);
+    }
     let mut b = it
         .try_borrow_mut()
         .map_err(|_| error("Iterator is already in use"))?;

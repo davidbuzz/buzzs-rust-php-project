@@ -786,11 +786,22 @@ fn class_arg(
             return Err(a.type_error(i, what).into_valid());
         }
     };
-    match host.class_is_a(&name, base) {
+    let ok = if base.is_empty() {
+        host.class_is_a(&name, "stdClass").is_some()
+    } else {
+        host.class_is_a(&name, base) == Some(true)
+    };
+    match ok.then_some(true) {
         Some(true) => {
             let n = name.as_bytes();
             Ok(Some(ZStr::from(n.strip_prefix(b"\\").unwrap_or(n))))
         }
+        _ if base.is_empty() => Err(type_error(format!(
+            "{} must be a valid class name{}, {} given",
+            a.arg_prefix(i),
+            if nullable { " or null" } else { "" },
+            crate::args::value_name(&v)
+        ))),
         _ => Err(type_error(format!(
             "{} must be a class name derived from {base}{}, \"{}\" given",
             a.arg_prefix(i),
@@ -945,8 +956,9 @@ pub(crate) fn call(
             }
             ("SplFileInfo", "getfileinfo") => {
                 let a = Args::new(func, args, &["class"], 0, Some(1))?;
+                let base = st.file(|f| f.info_class.clone())?.to_string_lossy();
                 let c = if a.has(0) {
-                    class_arg(host, &a, 0, "SplFileInfo", true)?
+                    class_arg(host, &a, 0, &base, true)?
                 } else {
                     None
                 };
@@ -955,7 +967,17 @@ pub(crate) fn call(
             ("SplFileInfo", "getpathinfo") => {
                 let a = Args::new(func, args, &["class"], 0, Some(1))?;
                 let c = if a.has(0) {
-                    class_arg(host, &a, 0, "SplFileInfo", true)?
+                    let c = class_arg(host, &a, 0, "", true)?;
+                    if let Some(name) = &c {
+                        if host.class_is_a(name, "SplFileInfo") != Some(true) {
+                            return Err(type_error(format!(
+                                "{} must be a class name derived from SplFileInfo or null, {} given",
+                                a.arg_prefix(0),
+                                name.to_string_lossy()
+                            )));
+                        }
+                    }
+                    c
                 } else {
                     None
                 };
