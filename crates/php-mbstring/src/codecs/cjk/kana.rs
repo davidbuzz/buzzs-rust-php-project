@@ -387,3 +387,150 @@ pub fn jp_kana_convert(
 
     buf.into_bytes()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codecs::cjk::testutil::fixture_path;
+
+    fn unhex(s: &str) -> Vec<u8> {
+        (0..s.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&s[i..i + 2], 16).expect("hex"))
+            .collect()
+    }
+
+    fn kana(s: &str, mode: &str) -> String {
+        let mode = kana_mode_from_option(Some(mode.as_bytes())).expect("valid mode");
+        let out = jp_kana_convert(
+            s.as_bytes(),
+            crate::encoding::utf8(),
+            mode,
+            u32::from(b'?'),
+            ErrorMode::Char,
+        );
+        String::from_utf8(out).expect("utf-8")
+    }
+
+    #[test]
+    fn oracle_fixture() {
+        let text = std::fs::read_to_string(fixture_path("kana_oracle.tsv")).expect("fixture");
+        let mut failures = Vec::new();
+        let mut n = 0;
+        for line in text.lines() {
+            let f: Vec<&str> = line.split('\t').collect();
+            n += 1;
+            if f[1] == "ERR" {
+                match kana_mode_from_option(Some(f[0].as_bytes())) {
+                    Err(e) if e.message_for("mb_convert_kana") == f[2] => {}
+                    other => failures.push(format!("mode {:?}: {other:?}, want {}", f[0], f[2])),
+                }
+                continue;
+            }
+            let Ok(mode) = kana_mode_from_option(Some(f[0].as_bytes())) else {
+                failures.push(format!("mode {:?} rejected", f[0]));
+                continue;
+            };
+            let out = jp_kana_convert(
+                &unhex(f[1]),
+                crate::encoding::utf8(),
+                mode,
+                u32::from(b'?'),
+                ErrorMode::Char,
+            );
+            if out != unhex(f[2]) {
+                failures.push(format!(
+                    "mode {:?} in {} want {} got {}",
+                    f[0],
+                    f[1],
+                    f[2],
+                    crate::codecs::cjk::testutil::hex(&out)
+                ));
+            }
+        }
+        assert!(
+            failures.is_empty(),
+            "{} of {n} failed:\n{}",
+            failures.len(),
+            failures[..failures.len().min(20)].join("\n")
+        );
+        assert!(n > 10_000);
+    }
+
+    #[test]
+    fn php_test_examples() {
+        // From mb_convert_kana.phpt / the PHP manual
+        assert_eq!(kana("ｱｲｳｴｵ ｶﾞｷﾞｸﾞ ﾊﾟﾋﾟﾌﾟ", "KV"), "アイウエオ ガギグ パピプ");
+        assert_eq!(kana("ｱｲｳｴｵ ｶﾞｷﾞｸﾞ", "HV"), "あいうえお がぎぐ");
+        assert_eq!(kana("ｶﾞ", "K"), "カ゛");
+        assert_eq!(kana("ｳﾞ", "KV"), "ヴ");
+        assert_eq!(kana("ｳﾞ", "HV"), "う゛");
+        assert_eq!(kana("ガギ", "k"), "ｶﾞｷﾞ");
+        assert_eq!(kana("がぎ", "h"), "ｶﾞｷﾞ");
+        assert_eq!(kana("abc 123", "AS"), "ａｂｃ　１２３");
+        assert_eq!(kana("ａｂｃ　１２３－", "as"), "abc 123-");
+        assert_eq!(kana("−", "a"), "-");
+        assert_eq!(kana("\\~'\"", "M"), "￥￣’”");
+        assert_eq!(kana("￥￣’”＼", "m"), "\\~'\"\\");
+        assert_eq!(kana("ひらがな", "C"), "ヒラガナ");
+        assert_eq!(kana("カタカナ", "c"), "かたかな");
+        assert_eq!(kana("", "KV"), "");
+        // Default mode
+        assert_eq!(kana_mode_from_option(None), Ok(DEFAULT_MODE));
+        assert_eq!(kana_mode_from_option(Some(b"")), Ok(0));
+    }
+
+    #[test]
+    fn option_errors() {
+        let msg = |m: &[u8]| kana_mode_from_option(Some(m)).map_err(|e| e.to_string());
+        assert_eq!(
+            msg(b"Z"),
+            Err("Argument #2 ($mode) contains invalid flag: 'Z'".into())
+        );
+        assert_eq!(
+            msg(b"Aa"),
+            Err("Argument #2 ($mode) must not combine 'A' and 'a' flags".into())
+        );
+        assert_eq!(
+            msg(b"NAn"),
+            Err("Argument #2 ($mode) must not combine 'A' and 'n' flags".into())
+        );
+        assert_eq!(
+            msg(b"HK"),
+            Err("Argument #2 ($mode) must not combine 'H' and 'K' flags".into())
+        );
+        assert_eq!(
+            msg(b"kc"),
+            Err("Argument #2 ($mode) must not combine 'k' and 'c' flags".into())
+        );
+        assert_eq!(msg(b"A"), Ok(0x7));
+        assert_eq!(msg(b"KV"), Ok(DEFAULT_MODE));
+    }
+
+    #[test]
+    fn codepoint_outputs() {
+        let mut consumed = false;
+        let mut second = 0;
+        let glue = MBFL_HAN2ZEN_KATAKANA | MBFL_HAN2ZEN_GLUE;
+        assert_eq!(
+            convert_kana_codepoint(0xFF76, 0xFF9E, Some(&mut consumed), &mut second, glue),
+            0x30AC
+        );
+        assert!(consumed);
+        // `None` for `consumed` is fine when merging happens
+        assert_eq!(
+            convert_kana_codepoint(0xFF8A, 0xFF9F, None, &mut second, glue),
+            0x30D1
+        );
+        assert_eq!(second, 0);
+        assert_eq!(
+            convert_kana_codepoint(0x30AC, 0, None, &mut second, MBFL_ZEN2HAN_KATAKANA),
+            0xFF76
+        );
+        assert_eq!(second, 0xFF9E);
+        assert_eq!(
+            convert_kana_codepoint(0x1F600, 0, None, &mut second, 0x1FFFF),
+            0x1F600
+        );
+    }
+}
