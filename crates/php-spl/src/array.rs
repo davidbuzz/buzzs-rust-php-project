@@ -168,7 +168,9 @@ fn with_pos<R>(
 ) -> RtResult<R> {
     let id = st.array(|a| a.ht_iter)?;
     let (r, new_id) = with_ht(host, tgt, |ht| {
-        let (id, pos) = if let Some(id) = id { (id, ht.iterator_pos(id)) } else {
+        let (id, pos) = if let Some(id) = id {
+            (id, ht.iterator_pos(id))
+        } else {
             let mut p = ht.valid_pos(0);
             if is_obj {
                 p = skip_protected(ht, p);
