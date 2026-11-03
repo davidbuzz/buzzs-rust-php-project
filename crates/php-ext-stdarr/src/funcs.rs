@@ -305,9 +305,25 @@ pub fn natcasesort(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     Ok(Value::Bool(true))
 }
 
+/// The by-reference `array` (or `array|object`) parameter type check, which
+/// PHP's zpp performs before validating the callback that follows it.
+fn check_array_arg(vm: &mut Vm, a: &Args, allow_object: bool) -> VmResult<()> {
+    let v = a.at(0);
+    if matches!(v, Value::Array(_)) || (allow_object && matches!(v, Value::Object(_))) {
+        return Ok(());
+    }
+    let msg = format!(
+        "{}(): Argument #1 ($array) must be of type array, {} given",
+        a.func_name(),
+        v.value_name()
+    );
+    Err(vm.throw("TypeError", &msg))
+}
+
 macro_rules! usort_fn {
     ($name:ident, $f:path) => {
         pub fn $name(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+            check_array_arg(vm, a, false)?;
             let cb = a.at(1);
             check_callable(vm, a, 2, true, false, &cb)?;
             let arr = by_ref(a, 0);
@@ -502,6 +518,7 @@ pub fn array_walk_recursive(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 }
 
 fn walk(vm: &mut Vm, a: &Args, recursive: bool) -> VmResult<Value> {
+    check_array_arg(vm, a, true)?;
     let cb = a.at(1);
     check_callable(vm, a, 2, true, false, &cb)?;
     let arr = by_ref(a, 0);

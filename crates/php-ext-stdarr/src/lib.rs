@@ -102,7 +102,7 @@ const FUNCTIONS: &[(&str, NativeFn)] = &[
     ("array_uintersect_uassoc(array $array, ...$rest): array", f::array_uintersect_uassoc),
     ("array_walk(array|object &$array, $callback, mixed $arg = UNKNOWN): true", f::array_walk),
     ("array_walk_recursive(array|object &$array, $callback, mixed $arg = UNKNOWN): true", f::array_walk_recursive),
-    ("array_map($callback, array $array, ...$arrays): array", f::array_map),
+    ("array_map($callback, $array, ...$arrays): array", f::array_map),
     ("array_filter(array $array, $callback = null, int $mode = 0): array", f::array_filter),
     ("array_reduce(array $array, $callback, mixed $initial = null): mixed", f::array_reduce),
     ("array_find(array $array, $callback): mixed", f::array_find),

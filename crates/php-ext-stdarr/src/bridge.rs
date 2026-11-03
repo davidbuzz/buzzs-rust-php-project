@@ -1,7 +1,7 @@
 //! Glue between the VM's calling convention (`VmResult`, `Throw`, `Args`)
 //! and php-stdarr's (`RtResult`, `RuntimeError`, closures).
 
-use php_runtime::{PhpRef, RtResult, RuntimeError, Value};
+use php_runtime::{ArrayKey, PhpRef, RtResult, RuntimeError, Value, ZStr};
 use php_vm::ext::{Args, Throw, VmResult};
 use php_vm::Vm;
 
@@ -80,10 +80,18 @@ pub fn check_callable(
     nullable: bool,
     value: &Value,
 ) -> VmResult<()> {
-    if (nullable && value.is_null()) || vm.is_callable(value) {
+    if nullable && value.is_null() {
         return Ok(());
     }
-    let reason = vm.callable_error_message(value);
+    // `zend_is_callable_ex` autoloads the class of a `"C::m"` / `["C", "m"]`
+    // callable once; an exception thrown by an autoloader propagates.
+    let reason = match callable_class(value) {
+        Some(class) if vm.lookup_class(&class)?.is_none() => {
+            format!("class \"{}\" not found", class.to_string_lossy())
+        }
+        _ if vm.is_callable(value) => return Ok(()),
+        _ => vm.callable_error_message(value),
+    };
     let label = if named {
         let pname = a
             .func
@@ -100,6 +108,26 @@ pub fn check_callable(
         a.func_name()
     );
     Err(vm.throw("TypeError", &msg))
+}
+
+/// The class name a static-method callable refers to (not `self`,
+/// `parent` or `static`, which are resolved against the calling scope).
+fn callable_class(v: &Value) -> Option<ZStr> {
+    let class = match v {
+        Value::Str(s) => {
+            let b = s.as_bytes();
+            let p = b.windows(2).position(|w| w == b"::")?;
+            ZStr::from(&b[..p])
+        }
+        Value::Array(a) if a.len() == 2 => match a.get(&ArrayKey::Int(0)).map(Value::deref) {
+            Some(Value::Str(c)) => c,
+            _ => return None,
+        },
+        _ => return None,
+    };
+    let lc = class.to_ascii_lowercase();
+    let special = matches!(lc.as_bytes(), b"self" | b"parent" | b"static");
+    (!special && !class.is_empty()).then_some(class)
 }
 
 /// Runs `f` with the request's legacy RNG (`mt_rand` state shared with
