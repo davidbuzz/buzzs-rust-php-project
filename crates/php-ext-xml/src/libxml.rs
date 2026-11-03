@@ -19,7 +19,8 @@
 //! * [`flush_diagnostics`] — emit queued libxml diagnostics (when a call
 //!   was not wrapped in [`run`]).
 //! * [`errors_enabled`] — `php_libxml_uses_internal_errors()`.
-//! * [`errors`] / [`last_error`] / [`clear_errors`] — the error list.
+//! * [`errors`] / [`take_errors`] / [`last_error`] / [`clear_errors`] —
+//!   the error list.
 //! * [`push_error`] — `php_libxml_issue_error()`: list it or warn.
 //! * [`new_error_object`] — build a `LibXMLError` object.
 //! * [`with_streams_context`] / [`streams_context`] — the context set with
@@ -69,6 +70,14 @@ pub fn errors_enabled() -> bool {
 /// errors are enabled.
 pub fn errors() -> Vec<LibXmlError> {
     xerr::get_errors()
+}
+
+/// Returns the recorded errors and empties the list (libxml2's own last
+/// error is reset too), e.g. to inspect the errors of one operation.
+pub fn take_errors() -> Vec<LibXmlError> {
+    let out = xerr::get_errors();
+    xerr::clear_errors();
+    out
 }
 
 /// The last error (`libxml_get_last_error()`).
