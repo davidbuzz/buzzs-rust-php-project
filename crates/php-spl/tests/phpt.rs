@@ -17,7 +17,9 @@ fn all_tests() -> Vec<PathBuf> {
     let mut out = Vec::new();
     let mut stack = vec![spl_tests_dir()];
     while let Some(d) = stack.pop() {
-        let Ok(rd) = std::fs::read_dir(&d) else { continue };
+        let Ok(rd) = std::fs::read_dir(&d) else {
+            continue;
+        };
         for e in rd.flatten() {
             let p = e.path();
             if p.is_dir() {
@@ -32,7 +34,10 @@ fn all_tests() -> Vec<PathBuf> {
 }
 
 fn rel(p: &Path) -> String {
-    p.strip_prefix(spl_tests_dir()).unwrap_or(p).to_string_lossy().into_owned()
+    p.strip_prefix(spl_tests_dir())
+        .unwrap_or(p)
+        .to_string_lossy()
+        .into_owned()
 }
 
 /// A scratch copy of the test directory (tests write files next to
@@ -47,7 +52,9 @@ fn work_dir() -> PathBuf {
         while let Some(d) = stack.pop() {
             let rel = d.strip_prefix(&src).unwrap_or(&d).to_path_buf();
             let _ = std::fs::create_dir_all(dst.join(&rel));
-            let Ok(rd) = std::fs::read_dir(&d) else { continue };
+            let Ok(rd) = std::fs::read_dir(&d) else {
+                continue;
+            };
             for e in rd.flatten() {
                 let p = e.path();
                 if p.is_dir() {
@@ -69,7 +76,10 @@ fn run_isolated(p: &Path) -> harness::Outcome {
         .stack_size(256 * 1024 * 1024)
         .spawn(move || harness::run_phpt(&p, &work))
         .expect("spawn");
-    h.join().unwrap_or(harness::Outcome::Fail { expected: String::new(), got: "panic".into() })
+    h.join().unwrap_or(harness::Outcome::Fail {
+        expected: String::new(),
+        got: "panic".into(),
+    })
 }
 
 #[test]
@@ -77,20 +87,29 @@ fn phpt_passing() {
     if !spl_tests_dir().exists() {
         return;
     }
-    let list = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/phpt_pass.txt")).unwrap_or_default();
+    let list =
+        std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/phpt_pass.txt"))
+            .unwrap_or_default();
     let mut failures = Vec::new();
     for name in list.lines().filter(|l| !l.trim().is_empty()) {
         let p = spl_tests_dir().join(name);
         if let harness::Outcome::Fail { expected, got } = run_isolated(&p) {
-            failures.push(format!("{name}\n--- expected\n{expected}\n--- got\n{got}\n"));
+            failures.push(format!(
+                "{name}\n--- expected\n{expected}\n--- got\n{got}\n"
+            ));
         }
     }
     let _ = std::fs::remove_dir_all(work_dir());
-    assert!(failures.is_empty(), "{} regressions:\n{}", failures.len(), failures.join("\n"));
+    assert!(
+        failures.is_empty(),
+        "{} regressions:\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
 }
 
 #[test]
-#[ignore]
+#[ignore = "survey of the whole ext/spl suite; rewrites the pass list"]
 fn phpt_survey() {
     let filter = std::env::var("SPL_PHPT_FILTER").unwrap_or_default();
     let mut pass = Vec::new();
@@ -132,9 +151,11 @@ fn phpt_survey() {
 /// Runs `$SPL_RUN_FILE` (a PHP script) through the interpreter and prints
 /// the output: `SPL_RUN_FILE=x.php cargo test -p php-spl --test phpt run_file -- --ignored --nocapture`.
 #[test]
-#[ignore]
+#[ignore = "debug helper"]
 fn run_file() {
-    let Ok(f) = std::env::var("SPL_RUN_FILE") else { return };
+    let Ok(f) = std::env::var("SPL_RUN_FILE") else {
+        return;
+    };
     let src = std::fs::read(&f).expect("read");
     let out = harness::run(&src, &f);
     println!("{}", String::from_utf8_lossy(&out));

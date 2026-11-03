@@ -2,8 +2,8 @@
 
 use php_parser::ast::*;
 use php_runtime::{
-    ops, ArrayKey, ErrorLevel, HashTable, Obj, PhpObject, PhpRef, RtResult, RuntimeContext,
-    RuntimeError, Value, ZArray, ZStr,
+    ops, ArrayKey, ErrorLevel, HashTable, Obj, PhpObject, PhpRef, RtResult, RuntimeError, Value,
+    ZArray, ZStr,
 };
 use php_spl::{ObjectIterator, SplObject};
 use std::any::Any;
@@ -373,7 +373,10 @@ impl Interp {
         let program = match php_parser::parse(src, &php_parser::ParseOptions::default()) {
             Ok(p) => p,
             Err(e) => {
-                let msg = format!("\nParse error: {} in {} on line {}\n", e.message, self.file, e.line);
+                let msg = format!(
+                    "\nParse error: {} in {} on line {}\n",
+                    e.message, self.file, e.line
+                );
                 self.out.extend_from_slice(msg.as_bytes());
                 return;
             }
@@ -406,7 +409,10 @@ impl Interp {
             }
         }
         if let RuntimeError::Fatal(m) = &e {
-            let msg = format!("\nFatal error: {m} in {} on line {}\n", self.file, self.line);
+            let msg = format!(
+                "\nFatal error: {m} in {} on line {}\n",
+                self.file, self.line
+            );
             self.echo(msg.as_bytes());
             return;
         }
@@ -421,13 +427,20 @@ impl Interp {
             Ok(t) => t,
             Err(_) => String::from("?"),
         };
-        let line = self.prop_get_raw(&ex, "line").deref().to_long(self).unwrap_or(0);
+        let line = self
+            .prop_get_raw(&ex, "line")
+            .deref()
+            .to_long(self)
+            .unwrap_or(0);
         let msg = format!(
             "PHP Fatal error:  Uncaught {text}\n  thrown in {} on line {line}\n",
             self.file
         );
         let _ = msg;
-        let msg = format!("\nFatal error: Uncaught {text}\n  thrown in {} on line {line}\n", self.file);
+        let msg = format!(
+            "\nFatal error: Uncaught {text}\n  thrown in {} on line {line}\n",
+            self.file
+        );
         self.echo(msg.as_bytes());
     }
 
@@ -447,7 +460,10 @@ impl Interp {
                 fr.insert(ArrayKey::from("class"), Value::from(c.as_str()));
                 fr.insert(ArrayKey::from("type"), Value::from(f.ty));
             }
-            fr.insert(ArrayKey::from("args"), Value::Array(ZArray::from_values(f.args.iter().map(Value::deref))));
+            fr.insert(
+                ArrayKey::from("args"),
+                Value::Array(ZArray::from_values(f.args.iter().map(Value::deref))),
+            );
             let _ = t.push(Value::Array(ZArray::from_table(fr)));
         }
         Value::Array(ZArray::from_table(t))
@@ -461,11 +477,24 @@ impl Interp {
             for f in frames.values() {
                 let Value::Array(f) = f.deref() else { continue };
                 let g = |k: &str| f.get_str(k.as_bytes()).cloned().unwrap_or_default();
-                let file = g("file").to_zstr(self).map(|z| z.to_string_lossy()).unwrap_or_default();
+                let file = g("file")
+                    .to_zstr(self)
+                    .map(|z| z.to_string_lossy())
+                    .unwrap_or_default();
                 let line = g("line").to_long(self).unwrap_or(0);
-                let func = g("function").to_zstr(self).map(|z| z.to_string_lossy()).unwrap_or_default();
+                let func = g("function")
+                    .to_zstr(self)
+                    .map(|z| z.to_string_lossy())
+                    .unwrap_or_default();
                 let class = match g("class") {
-                    Value::Str(c) => format!("{}{}", c.to_string_lossy(), g("type").to_zstr(self).map(|z| z.to_string_lossy()).unwrap_or_default()),
+                    Value::Str(c) => format!(
+                        "{}{}",
+                        c.to_string_lossy(),
+                        g("type")
+                            .to_zstr(self)
+                            .map(|z| z.to_string_lossy())
+                            .unwrap_or_default()
+                    ),
                     _ => String::new(),
                 };
                 let mut args = Vec::new();
@@ -474,7 +503,11 @@ impl Interp {
                         args.push(trace_arg(&v.deref()));
                     }
                 }
-                let loc = if f.get_str(b"file").is_some() { format!("{file}({line})") } else { "[internal function]".to_string() };
+                let loc = if f.get_str(b"file").is_some() {
+                    format!("{file}({line})")
+                } else {
+                    "[internal function]".to_string()
+                };
                 out.push_str(&format!("#{n} {loc}: {class}{func}({})\n", args.join(", ")));
                 n += 1;
             }
@@ -487,14 +520,20 @@ impl Interp {
         let mut parts = Vec::new();
         let mut cur = Some(ex.clone());
         while let Some(e) = cur {
-            let msg = self.prop_get_raw(&e, "message").to_zstr(self)?.to_string_lossy();
+            let msg = self
+                .prop_get_raw(&e, "message")
+                .to_zstr(self)?
+                .to_string_lossy();
             let line = self.prop_get_raw(&e, "line").to_long(self)?;
             let class = e.class_name().to_string_lossy();
             let trace = self.trace_string(&e);
             let m = if msg.is_empty() {
                 format!("{class} in {}:{line}\nStack trace:\n{trace}", self.file)
             } else {
-                format!("{class}: {msg} in {}:{line}\nStack trace:\n{trace}", self.file)
+                format!(
+                    "{class}: {msg} in {}:{line}\nStack trace:\n{trace}",
+                    self.file
+                )
             };
             parts.push(m);
             cur = match self.prop_get_raw(&e, "previous") {
@@ -570,7 +609,11 @@ impl Interp {
     }
 
     pub fn declare_class(&mut self, c: &ClassDecl) -> RtResult<Rc<Class>> {
-        let name = c.name.as_ref().map(|n| s(&n.name)).unwrap_or_else(|| "class@anonymous".into());
+        let name = c
+            .name
+            .as_ref()
+            .map(|n| s(&n.name))
+            .unwrap_or_else(|| "class@anonymous".into());
         if let Some(k) = self.classes.get(&name.to_ascii_lowercase()) {
             if c.name.is_some() {
                 return Ok(k.clone());
@@ -592,7 +635,10 @@ impl Interp {
             let mut k = Some(ic.clone());
             while let Some(kk) = k {
                 for i in &kk.interfaces {
-                    if !interfaces.iter().any(|x: &String| x.eq_ignore_ascii_case(i)) {
+                    if !interfaces
+                        .iter()
+                        .any(|x: &String| x.eq_ignore_ascii_case(i))
+                    {
                         interfaces.push(i.clone());
                     }
                 }
@@ -704,7 +750,8 @@ impl Interp {
             self.trait_store(&name, c);
         }
         if c.name.is_some() {
-            self.classes.insert(name.to_ascii_lowercase(), class.clone());
+            self.classes
+                .insert(name.to_ascii_lowercase(), class.clone());
         }
         // static props defaults
         let decls: Vec<(String, Option<Expr>)> = class
@@ -731,7 +778,10 @@ impl Interp {
     }
 
     fn trait_store(&mut self, name: &str, c: &ClassDecl) {
-        TRAITS.with(|t| t.borrow_mut().insert(name.to_ascii_lowercase(), Rc::new(c.clone())));
+        TRAITS.with(|t| {
+            t.borrow_mut()
+                .insert(name.to_ascii_lowercase(), Rc::new(c.clone()))
+        });
     }
 
     fn trait_decls(&self, name: &[u8]) -> Option<Rc<ClassDecl>> {
@@ -744,7 +794,10 @@ impl Interp {
     // -----------------------------------------------------------------------
 
     pub fn new_object_raw(&mut self, class: &Rc<Class>) -> RtResult<Obj> {
-        if matches!(class.kind, CKind::Abstract | CKind::Interface | CKind::Trait) {
+        if matches!(
+            class.kind,
+            CKind::Abstract | CKind::Interface | CKind::Trait
+        ) {
             let what = match class.kind {
                 CKind::Interface => "interface",
                 CKind::Trait => "trait",
@@ -857,7 +910,13 @@ impl Interp {
         if self.error_reporting & bits == 0 {
             return Ok(());
         }
-        let text = format!("\n{}: {} in {} on line {}\n", level.label(), msg, self.file, self.line);
+        let text = format!(
+            "\n{}: {} in {} on line {}\n",
+            level.label(),
+            msg,
+            self.file,
+            self.line
+        );
         self.echo(text.as_bytes());
         Ok(())
     }
@@ -871,7 +930,9 @@ impl Interp {
         match e {
             RuntimeError::Thrown(Value::Object(o)) => o,
             other => {
-                let class = other.exception_class().unwrap_or_else(|| "Error".to_string());
+                let class = other
+                    .exception_class()
+                    .unwrap_or_else(|| "Error".to_string());
                 let msg = other.message().unwrap_or("").to_string();
                 let cls = self
                     .find_class(class.as_bytes())
@@ -918,13 +979,20 @@ impl Interp {
 
     pub fn prop_get_raw(&self, o: &Obj, name: &str) -> Value {
         match self.find_prop_key(o, name) {
-            Some(k) => tobj(o).props.borrow().get_str(k.as_bytes()).cloned().unwrap_or_default(),
+            Some(k) => tobj(o)
+                .props
+                .borrow()
+                .get_str(k.as_bytes())
+                .cloned()
+                .unwrap_or_default(),
             None => Value::Null,
         }
     }
 
     pub fn prop_set_raw(&self, o: &Obj, name: &str, v: Value) {
-        let key = self.find_prop_key(o, name).unwrap_or_else(|| ZStr::from(name));
+        let key = self
+            .find_prop_key(o, name)
+            .unwrap_or_else(|| ZStr::from(name));
         let t = tobj(o);
         let mut p = t.props.borrow_mut();
         let slot = p.make_mut();
@@ -976,7 +1044,10 @@ impl Interp {
                 self.echo(h);
                 Ok(Flow::Normal)
             }
-            StmtKind::If { branches, else_branch } => {
+            StmtKind::If {
+                branches,
+                else_branch,
+            } => {
                 for b in branches {
                     let c = self.eval(&b.cond)?;
                     if c.to_bool(self)? {
@@ -1020,7 +1091,12 @@ impl Interp {
                 }
                 Ok(Flow::Normal)
             }
-            StmtKind::For { init, cond, step, body } => {
+            StmtKind::For {
+                init,
+                cond,
+                step,
+                body,
+            } => {
                 for e in init {
                     self.eval(e)?;
                 }
@@ -1048,9 +1124,13 @@ impl Interp {
                 }
                 Ok(Flow::Normal)
             }
-            StmtKind::Foreach { subject, key, value, by_ref, body } => {
-                self.exec_foreach(subject, key.as_ref(), value, *by_ref, body)
-            }
+            StmtKind::Foreach {
+                subject,
+                key,
+                value,
+                by_ref,
+                body,
+            } => self.exec_foreach(subject, key.as_ref(), value, *by_ref, body),
             StmtKind::Switch { subject, cases } => {
                 let v = self.eval(subject)?;
                 let mut matched = None;
@@ -1146,7 +1226,11 @@ impl Interp {
                 }
                 Ok(Flow::Normal)
             }
-            StmtKind::Try { body, catches, finally } => {
+            StmtKind::Try {
+                body,
+                catches,
+                finally,
+            } => {
                 let r = self.exec_block(body);
                 let r = match r {
                     Err(e) if !is_exit(&e) && !matches!(e, RuntimeError::Fatal(_)) => {
@@ -1156,8 +1240,7 @@ impl Interp {
                             let hit = c.types.iter().any(|t| {
                                 let n = t.name.strip_prefix(b"\\").unwrap_or(&t.name);
                                 let n = s(n);
-                                tobj(&ex).class.is_a(&n)
-                                    || (n.eq_ignore_ascii_case("Throwable"))
+                                tobj(&ex).class.is_a(&n) || (n.eq_ignore_ascii_case("Throwable"))
                             });
                             if hit {
                                 if let Some(v) = &c.var {
@@ -1211,9 +1294,10 @@ impl Interp {
                 }
                 None => Ok(Flow::Normal),
             },
-            StmtKind::Nop | StmtKind::Use { .. } | StmtKind::GroupUse { .. } | StmtKind::Label(_) => {
-                Ok(Flow::Normal)
-            }
+            StmtKind::Nop
+            | StmtKind::Use { .. }
+            | StmtKind::GroupUse { .. }
+            | StmtKind::Label(_) => Ok(Flow::Normal),
             StmtKind::HaltCompiler { .. } => Err(RuntimeError::Custom {
                 class: ZStr::from(EXIT_MARK),
                 message: String::new(),
@@ -1249,7 +1333,9 @@ impl Interp {
         match subj.deref() {
             Value::Array(arr) => {
                 if by_ref {
-                    let Value::Reference(r) = subj else { unreachable!() };
+                    let Value::Reference(r) = subj else {
+                        unreachable!()
+                    };
                     let mut pos = 0u32;
                     loop {
                         let item = {
@@ -1353,7 +1439,10 @@ impl Interp {
             other => {
                 self.emit(
                     ErrorLevel::Warning,
-                    &format!("foreach() argument must be of type array|object, {} given", other.type_name()),
+                    &format!(
+                        "foreach() argument must be of type array|object, {} given",
+                        other.type_name()
+                    ),
                 )?;
                 Ok(Flow::Normal)
             }
@@ -1381,7 +1470,9 @@ impl Interp {
             let (cls, prop) = php_runtime::dump::unmangle_property_name(name.as_bytes());
             let visible = match cls {
                 None => true,
-                Some(b"*") => scope.as_ref().is_some_and(|s| t.class.is_a(&s.name) || s.is_a(&t.class.name)),
+                Some(b"*") => scope
+                    .as_ref()
+                    .is_some_and(|s| t.class.is_a(&s.name) || s.is_a(&t.class.name)),
                 Some(c) => scope.as_ref().is_some_and(|s| s.name.as_bytes() == c),
             };
             if visible {
@@ -1401,10 +1492,19 @@ impl Interp {
 
     pub fn get_var(&mut self, name: &[u8]) -> RtResult<Value> {
         if name == b"this" {
-            return Ok(self.frame().this.clone().map(Value::Object).unwrap_or_default());
+            return Ok(self
+                .frame()
+                .this
+                .clone()
+                .map(Value::Object)
+                .unwrap_or_default());
         }
         if name == b"GLOBALS" {
-            let g: Vec<(Vec<u8>, Value)> = self.frames[0].vars.iter().map(|(k, v)| (k.clone(), v.deref())).collect();
+            let g: Vec<(Vec<u8>, Value)> = self.frames[0]
+                .vars
+                .iter()
+                .map(|(k, v)| (k.clone(), v.deref()))
+                .collect();
             let mut t = HashTable::new();
             for (k, v) in g {
                 t.insert(ArrayKey::from_bytes(&k), v);
@@ -1414,7 +1514,10 @@ impl Interp {
         match self.frame().vars.get(name) {
             Some(v) => Ok(v.deref()),
             None => {
-                self.emit(ErrorLevel::Warning, &format!("Undefined variable ${}", s(name)))?;
+                self.emit(
+                    ErrorLevel::Warning,
+                    &format!("Undefined variable ${}", s(name)),
+                )?;
                 Ok(Value::Null)
             }
         }
@@ -1470,7 +1573,11 @@ impl Interp {
     pub fn resolve_class_name(&mut self, n: &[u8]) -> RtResult<Rc<Class>> {
         let l = lc(n);
         match l.as_str() {
-            "self" => self.frame().scope.clone().ok_or_else(|| rt_err("Cannot use \"self\" when no class scope is active")),
+            "self" => self
+                .frame()
+                .scope
+                .clone()
+                .ok_or_else(|| rt_err("Cannot use \"self\" when no class scope is active")),
             "static" => self
                 .frame()
                 .static_scope
@@ -1481,7 +1588,9 @@ impl Interp {
                 .scope
                 .clone()
                 .and_then(|c| c.parent.clone())
-                .ok_or_else(|| rt_err("Cannot use \"parent\" when current class scope has no parent")),
+                .ok_or_else(|| {
+                    rt_err("Cannot use \"parent\" when current class scope has no parent")
+                }),
             _ => self.lookup_class(n),
         }
     }
@@ -1505,12 +1614,16 @@ pub fn is_exit(e: &RuntimeError) -> bool {
     matches!(e, RuntimeError::Custom { class, .. } if class.as_bytes() == EXIT_MARK.as_bytes())
 }
 
-pub use crate::harness::interp_expr::*;
-
 pub fn trace_arg(v: &Value) -> String {
     match v {
         Value::Null => "NULL".into(),
-        Value::Bool(b) => if *b { "true".into() } else { "false".into() },
+        Value::Bool(b) => {
+            if *b {
+                "true".into()
+            } else {
+                "false".into()
+            }
+        }
         Value::Int(i) => i.to_string(),
         Value::Float(f) => php_runtime::float::double_to_string(*f, 17),
         Value::Str(s) => {

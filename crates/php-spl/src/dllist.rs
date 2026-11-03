@@ -178,7 +178,7 @@ impl LinkedList {
         let prev = prev_of(element);
         let next = next_of(element);
         if let Some(p) = &prev {
-            p.borrow_mut().next = next.clone();
+            p.borrow_mut().next.clone_from(&next);
         }
         if let Some(n) = &next {
             n.borrow_mut().prev = prev.as_ref().map(Rc::downgrade);

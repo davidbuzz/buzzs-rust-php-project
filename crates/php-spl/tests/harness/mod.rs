@@ -81,7 +81,10 @@ pub fn normalize(b: &[u8]) -> Vec<u8> {
         i += 1;
     }
     let t = trim_end(&out);
-    let start = t.iter().position(|c| !matches!(c, b'\n' | b'\r' | b' ' | b'\t')).unwrap_or(t.len());
+    let start = t
+        .iter()
+        .position(|c| !matches!(c, b'\n' | b'\r' | b' ' | b'\t'))
+        .unwrap_or(t.len());
     t[start..].to_vec()
 }
 
@@ -160,7 +163,13 @@ pub fn expectf_match(pattern: &[u8], output: &[u8]) -> bool {
     if !lit.is_empty() {
         toks.push(Tok::Lit(lit));
     }
-    fn m(toks: &[Tok], s: &[u8], memo: &mut std::collections::HashSet<(usize, usize)>, ti: usize, si: usize) -> bool {
+    fn m(
+        toks: &[Tok],
+        s: &[u8],
+        memo: &mut std::collections::HashSet<(usize, usize)>,
+        ti: usize,
+        si: usize,
+    ) -> bool {
         if ti == toks.len() {
             return si == s.len();
         }
@@ -168,14 +177,16 @@ pub fn expectf_match(pattern: &[u8], output: &[u8]) -> bool {
             return false;
         }
         let rest = &s[si..];
-        let try_lens = |lens: &mut dyn Iterator<Item = usize>, memo: &mut std::collections::HashSet<(usize, usize)>| {
-            for l in lens {
-                if m(toks, s, memo, ti + 1, si + l) {
-                    return true;
+        let try_lens =
+            |lens: &mut dyn Iterator<Item = usize>,
+             memo: &mut std::collections::HashSet<(usize, usize)>| {
+                for l in lens {
+                    if m(toks, s, memo, ti + 1, si + l) {
+                        return true;
+                    }
                 }
-            }
-            false
-        };
+                false
+            };
         match &toks[ti] {
             Tok::Lit(l) => rest.starts_with(l) && m(toks, s, memo, ti + 1, si + l.len()),
             Tok::S | Tok::SS => {
@@ -218,7 +229,9 @@ pub fn expectf_match(pattern: &[u8], output: &[u8]) -> bool {
             Tok::F => {
                 let n = rest
                     .iter()
-                    .take_while(|c| c.is_ascii_digit() || matches!(c, b'.' | b'-' | b'+' | b'e' | b'E'))
+                    .take_while(|c| {
+                        c.is_ascii_digit() || matches!(c, b'.' | b'-' | b'+' | b'e' | b'E')
+                    })
                     .count();
                 if n == 0 {
                     return false;
@@ -253,8 +266,31 @@ pub fn run_phpt(path: &std::path::Path, work: &std::path::Path) -> Outcome {
         Err(e) => return Outcome::Skip(e.to_string()),
     };
     let t = Phpt::parse(&data);
-    for unsupported in ["SKIPIF", "INI", "ARGS", "STDIN", "POST", "GET", "COOKIE", "ENV", "FILE_EXTERNAL", "EXTENSIONS", "CGI", "PHPDBG", "CAPTURE_STDIO", "XFAIL", "CONFLICTS", "FLAKY"] {
-        if unsupported == "SKIPIF" || unsupported == "INI" || unsupported == "CONFLICTS" || unsupported == "EXTENSIONS" || unsupported == "XFAIL" || unsupported == "FLAKY" {
+    for unsupported in [
+        "SKIPIF",
+        "INI",
+        "ARGS",
+        "STDIN",
+        "POST",
+        "GET",
+        "COOKIE",
+        "ENV",
+        "FILE_EXTERNAL",
+        "EXTENSIONS",
+        "CGI",
+        "PHPDBG",
+        "CAPTURE_STDIO",
+        "XFAIL",
+        "CONFLICTS",
+        "FLAKY",
+    ] {
+        if unsupported == "SKIPIF"
+            || unsupported == "INI"
+            || unsupported == "CONFLICTS"
+            || unsupported == "EXTENSIONS"
+            || unsupported == "XFAIL"
+            || unsupported == "FLAKY"
+        {
             continue;
         }
         if t.get(unsupported).is_some() {

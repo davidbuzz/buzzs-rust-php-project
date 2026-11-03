@@ -96,7 +96,7 @@ fn write_helper(
     st: &SplObject,
     host: &mut dyn SplHost,
     offset: Option<&Value>,
-    value: Value,
+    value: &Value,
 ) -> RtResult<()> {
     let offset = offset.ok_or_else(no_append)?;
     let index = offset_to_index(host, offset)?;
@@ -116,7 +116,7 @@ fn write_helper(
 }
 
 fn unset_helper(st: &SplObject, host: &mut dyn SplHost, offset: &Value) -> RtResult<()> {
-    write_helper(st, host, Some(offset), Value::Null)
+    write_helper(st, host, Some(offset), &Value::Null)
 }
 
 fn has_helper(
@@ -145,55 +145,53 @@ pub(crate) fn call(
     this: Option<&Obj>,
     args: &[Value],
 ) -> Option<RtResult<Value>> {
-    Some(match method {
-        "fromarray" => from_array(host, args),
-        _ => {
-            let this = match this_obj(this) {
-                Ok(t) => t,
-                Err(e) => return Some(Err(e)),
-            };
-            match method {
-                "__construct" => construct(host, this, args),
-                "__wakeup" => wakeup(host, this, args),
-                "__serialize" => serialize(host, this, args),
-                "__unserialize" => unserialize(host, this, args),
-                "count" | "getsize" => simple(host, this, args, method),
-                "toarray" | "jsonserialize" => simple(host, this, args, method),
-                "setsize" => set_size(host, this, args),
-                "offsetexists" => {
-                    let f = "SplFixedArray::offsetExists";
-                    (|| {
-                        let a = Args::new(f, args, &["index"], 1, Some(1))?;
-                        let st = state_of(host, this)?;
-                        has_helper(&st, host, &a.raw(0), false).map(Value::Bool)
-                    })()
-                }
-                "offsetget" => (|| {
-                    let a = Args::new("SplFixedArray::offsetGet", args, &["index"], 1, Some(1))?;
+    Some(if method == "fromarray" {
+        from_array(host, args)
+    } else {
+        let this = match this_obj(this) {
+            Ok(t) => t,
+            Err(e) => return Some(Err(e)),
+        };
+        match method {
+            "__construct" => construct(host, this, args),
+            "__wakeup" => wakeup(host, this, args),
+            "__serialize" => serialize(host, this, args),
+            "__unserialize" => unserialize(host, this, args),
+            "count" | "getsize" | "toarray" | "jsonserialize" => simple(host, this, args, method),
+            "setsize" => set_size(host, this, args),
+            "offsetexists" => {
+                let f = "SplFixedArray::offsetExists";
+                (|| {
+                    let a = Args::new(f, args, &["index"], 1, Some(1))?;
                     let st = state_of(host, this)?;
-                    read_helper(&st, host, Some(&a.raw(0)))
-                })(),
-                "offsetset" => (|| {
-                    let a = Args::new(
-                        "SplFixedArray::offsetSet",
-                        args,
-                        &["index", "value"],
-                        2,
-                        Some(2),
-                    )?;
-                    let st = state_of(host, this)?;
-                    let off = a.raw(0);
-                    write_helper(&st, host, Some(&off), a.raw(1)).map(|()| Value::Null)
-                })(),
-                "offsetunset" => (|| {
-                    let a = Args::new("SplFixedArray::offsetUnset", args, &["index"], 1, Some(1))?;
-                    let st = state_of(host, this)?;
-                    unset_helper(&st, host, &a.raw(0)).map(|()| Value::Null)
-                })(),
-                "getiterator" => Args::none("SplFixedArray::getIterator", args)
-                    .and_then(|()| crate::iter::internal_iterator_object(host, this)),
-                _ => return None,
+                    has_helper(&st, host, &a.raw(0), false).map(Value::Bool)
+                })()
             }
+            "offsetget" => (|| {
+                let a = Args::new("SplFixedArray::offsetGet", args, &["index"], 1, Some(1))?;
+                let st = state_of(host, this)?;
+                read_helper(&st, host, Some(&a.raw(0)))
+            })(),
+            "offsetset" => (|| {
+                let a = Args::new(
+                    "SplFixedArray::offsetSet",
+                    args,
+                    &["index", "value"],
+                    2,
+                    Some(2),
+                )?;
+                let st = state_of(host, this)?;
+                let off = a.raw(0);
+                write_helper(&st, host, Some(&off), &a.raw(1)).map(|()| Value::Null)
+            })(),
+            "offsetunset" => (|| {
+                let a = Args::new("SplFixedArray::offsetUnset", args, &["index"], 1, Some(1))?;
+                let st = state_of(host, this)?;
+                unset_helper(&st, host, &a.raw(0)).map(|()| Value::Null)
+            })(),
+            "getiterator" => Args::none("SplFixedArray::getIterator", args)
+                .and_then(|()| crate::iter::internal_iterator_object(host, this)),
+            _ => return None,
         }
     })
 }
@@ -393,7 +391,7 @@ pub fn write_dimension(
             .call_method(obj, "offsetSet", &[off, value])
             .map(|_| ());
     }
-    write_helper(st, host, offset, value)
+    write_helper(st, host, offset, &value)
 }
 
 /// `unset_dimension` handler.
@@ -405,7 +403,7 @@ pub fn unset_dimension(
 ) -> RtResult<()> {
     if host.has_user_method(obj, "offsetUnset") {
         return host
-            .call_method(obj, "offsetUnset", &[offset.clone()])
+            .call_method(obj, "offsetUnset", std::slice::from_ref(offset))
             .map(|_| ());
     }
     unset_helper(st, host, offset)
@@ -420,7 +418,7 @@ pub fn has_dimension(
     check_empty: bool,
 ) -> RtResult<bool> {
     if host.has_user_method(obj, "offsetExists") {
-        let r = host.call_method(obj, "offsetExists", &[offset.clone()])?;
+        let r = host.call_method(obj, "offsetExists", std::slice::from_ref(offset))?;
         return r.to_bool(host);
     }
     has_helper(st, host, offset, check_empty)

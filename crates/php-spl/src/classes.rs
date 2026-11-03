@@ -162,12 +162,15 @@ pub fn find_method(class: &str, method: &str) -> Option<(&'static str, &'static 
 
 /// The `E_DEPRECATED` message PHP emits when calling a method marked
 /// `#[\Deprecated]` (`zend_deprecated_function`), e.g. "Method
-/// SplObjectStorage::attach() is deprecated since 8.5, use method
-/// SplObjectStorage::offsetSet() instead". `class` is the declaring class.
+/// `SplObjectStorage::attach()` is deprecated since 8.5, use method
+/// `SplObjectStorage::offsetSet()` instead". `class` is the declaring class.
 #[must_use]
 pub fn deprecation_message(class: &str, method: &str) -> Option<String> {
     let c = find_class(class)?;
-    let m = c.methods.iter().find(|m| m.name.eq_ignore_ascii_case(method))?;
+    let m = c
+        .methods
+        .iter()
+        .find(|m| m.name.eq_ignore_ascii_case(method))?;
     let d = m.deprecated?;
     let mut suffix = String::new();
     if let Some(since) = d.since {
@@ -178,13 +181,18 @@ pub fn deprecation_message(class: &str, method: &str) -> Option<String> {
         suffix.push_str(", ");
         suffix.push_str(msg);
     }
-    Some(format!("Method {}::{}() is deprecated{suffix}", c.name, m.name))
+    Some(format!(
+        "Method {}::{}() is deprecated{suffix}",
+        c.name, m.name
+    ))
 }
 
 /// The deprecation message of an SPL function (`spl_object_hash()`...).
 #[must_use]
 pub fn function_deprecation_message(name: &str) -> Option<String> {
-    let f = FUNCTIONS.iter().find(|f| f.name.eq_ignore_ascii_case(name))?;
+    let f = FUNCTIONS
+        .iter()
+        .find(|f| f.name.eq_ignore_ascii_case(name))?;
     let d = f.deprecated?;
     let mut suffix = String::new();
     if let Some(since) = d.since {
@@ -262,8 +270,15 @@ fn engine_interfaces(name: &str) -> Option<Vec<&'static str>> {
 
 fn canonical_iface(name: &str) -> &'static str {
     const ENGINE: &[&str] = &[
-        "Traversable", "Iterator", "IteratorAggregate", "ArrayAccess", "Countable",
-        "Serializable", "Stringable", "JsonSerializable", "Throwable",
+        "Traversable",
+        "Iterator",
+        "IteratorAggregate",
+        "ArrayAccess",
+        "Countable",
+        "Serializable",
+        "Stringable",
+        "JsonSerializable",
+        "Throwable",
     ];
     ENGINE
         .iter()
@@ -294,7 +309,9 @@ pub fn interfaces_of(class: &str) -> Vec<&'static str> {
         }
     };
     if c.kind != ClassKind::Interface
-        && c.methods.iter().any(|m| m.name.eq_ignore_ascii_case("__toString"))
+        && c.methods
+            .iter()
+            .any(|m| m.name.eq_ignore_ascii_case("__toString"))
     {
         push(&mut out, "Stringable");
     }
@@ -341,20 +358,50 @@ mod tests {
         assert_eq!(constant("RecursiveTreeIterator", "LEAVES_ONLY"), Some(0));
         assert_eq!(
             interfaces_of("RecursiveArrayIterator"),
-            ["Countable", "Serializable", "ArrayAccess", "Iterator", "Traversable", "SeekableIterator", "RecursiveIterator"]
+            [
+                "Countable",
+                "Serializable",
+                "ArrayAccess",
+                "Iterator",
+                "Traversable",
+                "SeekableIterator",
+                "RecursiveIterator"
+            ]
         );
         assert_eq!(
             interfaces_of("SplFileObject"),
-            ["Stringable", "RecursiveIterator", "Traversable", "Iterator", "SeekableIterator"]
+            [
+                "Stringable",
+                "RecursiveIterator",
+                "Traversable",
+                "Iterator",
+                "SeekableIterator"
+            ]
         );
         assert_eq!(
             interfaces_of("CachingIterator"),
-            ["Stringable", "Iterator", "Traversable", "OuterIterator", "ArrayAccess", "Countable"]
+            [
+                "Stringable",
+                "Iterator",
+                "Traversable",
+                "OuterIterator",
+                "ArrayAccess",
+                "Countable"
+            ]
         );
-        assert_eq!(interfaces_of("BadMethodCallException"), ["Throwable", "Stringable"]);
+        assert_eq!(
+            interfaces_of("BadMethodCallException"),
+            ["Throwable", "Stringable"]
+        );
         assert_eq!(
             interfaces_of("ArrayObject"),
-            ["IteratorAggregate", "Traversable", "ArrayAccess", "Serializable", "Countable"]
+            [
+                "IteratorAggregate",
+                "Traversable",
+                "ArrayAccess",
+                "Serializable",
+                "Countable"
+            ]
         );
         let (_, fa) = find_method("SplFixedArray", "fromArray").unwrap();
         assert_ne!(fa.flags & MethodFlags::STATIC, 0);

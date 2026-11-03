@@ -3,7 +3,7 @@
 use super::interp::*;
 use php_runtime::serialize::SerializedObject;
 use php_runtime::{
-    ops, ArrayKey, CastTarget, ErrorLevel, HashTable, ObjectDump, ObjectKind, Obj, PropertyPurpose,
+    ops, ArrayKey, CastTarget, ErrorLevel, HashTable, Obj, ObjectDump, ObjectKind, PropertyPurpose,
     PropertySlot, RtResult, RuntimeContext, RuntimeError, Value, ZArray, ZStr,
 };
 use php_spl::{ClassInfo, ObjectIterator, SplHost, SplObject};
@@ -55,7 +55,11 @@ impl RuntimeContext for Interp {
         ops::std_compare_objects(self, op1, op2, |_, _, _| Ok(1))
     }
 
-    fn object_properties(&mut self, obj: &Obj, purpose: PropertyPurpose) -> RtResult<Option<ZArray>> {
+    fn object_properties(
+        &mut self,
+        obj: &Obj,
+        purpose: PropertyPurpose,
+    ) -> RtResult<Option<ZArray>> {
         if let Some(t) = php_spl::handlers::properties_for(self, obj, purpose)? {
             return Ok(Some(t));
         }
@@ -70,7 +74,9 @@ impl RuntimeContext for Interp {
                     Value::Array(a) => Some(a),
                     Value::Null => Some(ZArray::new()),
                     _ => {
-                        return Err(RuntimeError::Fatal("__debuginfo() must return an array".into()));
+                        return Err(RuntimeError::Fatal(
+                            "__debuginfo() must return an array".into(),
+                        ));
                     }
                 }
             } else if let Some(d) = php_spl::handlers::debug_info(self, obj)? {
@@ -88,7 +94,11 @@ impl RuntimeContext for Interp {
         };
         Ok(ObjectDump {
             kind,
-            properties: props.map(|t| t.iter().map(|(k, v)| (k.clone(), PropertySlot::Value(v.clone()))).collect()),
+            properties: props.map(|t| {
+                t.iter()
+                    .map(|(k, v)| (k.clone(), PropertySlot::Value(v.clone())))
+                    .collect()
+            }),
         })
     }
 
@@ -102,13 +112,19 @@ impl RuntimeContext for Interp {
                     cls.name
                 )));
             };
-            return Ok(SerializedObject::Object { class: obj.class_name(), props: a });
+            return Ok(SerializedObject::Object {
+                class: obj.class_name(),
+                props: a,
+            });
         }
         if cls.is_a("Serializable") {
             if let Some(m) = cls.find_method("serialize") {
                 let v = self.call_method_h(Some(obj), &cls, &m, &[])?;
                 return Ok(match v {
-                    Value::Str(s) => SerializedObject::Custom { class: obj.class_name(), data: s.as_bytes().to_vec() },
+                    Value::Str(s) => SerializedObject::Custom {
+                        class: obj.class_name(),
+                        data: s.as_bytes().to_vec(),
+                    },
                     _ => SerializedObject::Null,
                 });
             }
@@ -119,21 +135,36 @@ impl RuntimeContext for Interp {
             if let Value::Array(names) = v {
                 for n in names.values() {
                     let n = n.to_zstr(self)?.to_string_lossy();
-                    let key = self.find_prop_key(obj, &n).unwrap_or_else(|| ZStr::from(n.as_str()));
-                    let val = tobj(obj).props.borrow().get_str(key.as_bytes()).cloned().unwrap_or_default();
+                    let key = self
+                        .find_prop_key(obj, &n)
+                        .unwrap_or_else(|| ZStr::from(n.as_str()));
+                    let val = tobj(obj)
+                        .props
+                        .borrow()
+                        .get_str(key.as_bytes())
+                        .cloned()
+                        .unwrap_or_default();
                     out.insert_str_raw(key, val);
                 }
             }
-            return Ok(SerializedObject::Object { class: obj.class_name(), props: ZArray::from_table(out) });
+            return Ok(SerializedObject::Object {
+                class: obj.class_name(),
+                props: ZArray::from_table(out),
+            });
         }
         let props = tobj(obj).props.borrow().clone();
-        Ok(SerializedObject::Object { class: obj.class_name(), props })
+        Ok(SerializedObject::Object {
+            class: obj.class_name(),
+            props,
+        })
     }
 
     fn unserialize_object_create(&mut self, class: &ZStr) -> RtResult<Value> {
         let cls = match self.find_class(class.as_bytes()) {
             Some(c) => c,
-            None => self.find_class(b"__PHP_Incomplete_Class").expect("incomplete class"),
+            None => self
+                .find_class(b"__PHP_Incomplete_Class")
+                .expect("incomplete class"),
         };
         let o = self.new_object_raw(&cls)?;
         Ok(Value::Object(o))
@@ -143,12 +174,21 @@ impl RuntimeContext for Interp {
         let Value::Object(o) = obj else { return Ok(()) };
         let cls = tobj(o).class.clone();
         if let Some(m) = cls.find_method("__unserialize") {
-            self.call_method_h(Some(o), &cls, &m, &[Value::Array(ZArray::from_table(props.to_symtable()))])?;
+            self.call_method_h(
+                Some(o),
+                &cls,
+                &m,
+                &[Value::Array(ZArray::from_table(props.to_symtable()))],
+            )?;
             return Ok(());
         }
         for (k, v) in props.iter() {
             let key = k.to_zstr();
-            tobj(o).props.borrow_mut().make_mut().insert_str_raw(key, v.clone());
+            tobj(o)
+                .props
+                .borrow_mut()
+                .make_mut()
+                .insert_str_raw(key, v.clone());
         }
         if let Some(m) = cls.find_method("__wakeup") {
             self.call_method_h(Some(o), &cls, &m, &[])?;
@@ -181,11 +221,18 @@ impl RuntimeContext for Interp {
             if !declared && !cls.allow_dynamic && !cls.name.eq_ignore_ascii_case("stdClass") {
                 self.emit(
                     ErrorLevel::Deprecated,
-                    &format!("Creation of dynamic property {}::${n} is deprecated", cls.name),
+                    &format!(
+                        "Creation of dynamic property {}::${n} is deprecated",
+                        cls.name
+                    ),
                 )?;
             }
         }
-        tobj(obj).props.borrow_mut().make_mut().insert_str_raw(name.clone(), value);
+        tobj(obj)
+            .props
+            .borrow_mut()
+            .make_mut()
+            .insert_str_raw(name.clone(), value);
         Ok(())
     }
 
@@ -212,7 +259,8 @@ impl ArrayContext for Interp {
 
 impl SplHost for Interp {
     fn spl_state(&mut self, obj: &Obj) -> Option<Rc<SplObject>> {
-        obj.downcast_ref::<TObj>().and_then(|t| t.spl.borrow().clone())
+        obj.downcast_ref::<TObj>()
+            .and_then(|t| t.spl.borrow().clone())
     }
 
     fn call_method(&mut self, obj: &Obj, name: &str, args: &[Value]) -> RtResult<Value> {
@@ -226,7 +274,10 @@ impl SplHost for Interp {
     }
 
     fn has_method(&mut self, obj: &Obj, name: &str) -> bool {
-        tobj(obj).class.find_method(&name.to_ascii_lowercase()).is_some()
+        tobj(obj)
+            .class
+            .find_method(&name.to_ascii_lowercase())
+            .is_some()
     }
 
     fn instance_of(&mut self, obj: &Obj, class: &str) -> bool {
@@ -293,7 +344,9 @@ impl SplHost for Interp {
     }
 
     fn new_internal_iterator(&mut self, it: Box<dyn ObjectIterator>) -> RtResult<Value> {
-        let cls = self.find_class(b"InternalIterator").expect("InternalIterator");
+        let cls = self
+            .find_class(b"InternalIterator")
+            .expect("InternalIterator");
         let o = self.new_object_raw(&cls)?;
         *tobj(&o).extra.borrow_mut() = Extra::Iter(it);
         Ok(Value::Object(o))
@@ -342,7 +395,10 @@ fn class_info(cls: &Rc<Class>) -> ClassInfo {
     let mut c = Some(cls.clone());
     while let Some(k) = c {
         for i in &k.interfaces {
-            if !interfaces.iter().any(|x| x.eq_ignore_ascii_case(i.as_bytes())) {
+            if !interfaces
+                .iter()
+                .any(|x| x.eq_ignore_ascii_case(i.as_bytes()))
+            {
                 interfaces.push(ZStr::from(i.as_str()));
             }
         }
@@ -360,7 +416,11 @@ fn class_info(cls: &Rc<Class>) -> ClassInfo {
 struct InternalIt(Obj);
 
 impl InternalIt {
-    fn with<R>(&self, host: &mut dyn SplHost, f: impl FnOnce(&mut dyn ObjectIterator, &mut dyn SplHost) -> RtResult<R>) -> RtResult<R> {
+    fn with<R>(
+        &self,
+        host: &mut dyn SplHost,
+        f: impl FnOnce(&mut dyn ObjectIterator, &mut dyn SplHost) -> RtResult<R>,
+    ) -> RtResult<R> {
         let t = tobj(&self.0);
         let mut extra = std::mem::replace(&mut *t.extra.borrow_mut(), Extra::None);
         let r = match &mut extra {

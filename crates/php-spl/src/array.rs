@@ -156,21 +156,25 @@ fn skip_protected(ht: &HashTable, mut pos: u32) -> u32 {
 
 /// `spl_array_get_pos_ptr`: the iteration position, creating the
 /// registered iterator on first use (positioned at the first element).
-fn get_pos(host: &mut dyn SplHost, st: &Rc<SplObject>, tgt: &Target, is_obj: bool) -> RtResult<u32> {
+fn get_pos(
+    host: &mut dyn SplHost,
+    st: &Rc<SplObject>,
+    tgt: &Target,
+    is_obj: bool,
+) -> RtResult<u32> {
     let id = st.array(|a| a.ht_iter)?;
-    match id {
-        Some(id) => with_ht(host, tgt, |ht| ht.iterator_pos(id)),
-        None => {
-            let id = with_ht(host, tgt, |ht| {
-                let mut pos = ht.valid_pos(0);
-                if is_obj {
-                    pos = skip_protected(ht, pos);
-                }
-                (ht.iterator_add(pos), pos)
-            })?;
-            st.array(|a| a.ht_iter = Some(id.0))?;
-            Ok(id.1)
-        }
+    if let Some(id) = id {
+        with_ht(host, tgt, |ht| ht.iterator_pos(id))
+    } else {
+        let id = with_ht(host, tgt, |ht| {
+            let mut pos = ht.valid_pos(0);
+            if is_obj {
+                pos = skip_protected(ht, pos);
+            }
+            (ht.iterator_add(pos), pos)
+        })?;
+        st.array(|a| a.ht_iter = Some(id.0))?;
+        Ok(id.1)
     }
 }
 
@@ -337,7 +341,9 @@ fn write_dimension_ex(
 ) -> RtResult<()> {
     if check_inherited && host.has_user_method(this, "offsetSet") {
         let off = offset.cloned().unwrap_or_default();
-        return host.call_method(this, "offsetSet", &[off, value]).map(|_| ());
+        return host
+            .call_method(this, "offsetSet", &[off, value])
+            .map(|_| ());
     }
     if st.array(|a| a.apply_count)? > 0 {
         return Err(sorting_error());
@@ -386,7 +392,7 @@ fn unset_dimension_ex(
 ) -> RtResult<()> {
     if check_inherited && host.has_user_method(this, "offsetUnset") {
         return host
-            .call_method(this, "offsetUnset", &[offset.clone()])
+            .call_method(this, "offsetUnset", std::slice::from_ref(offset))
             .map(|_| ());
     }
     if st.array(|a| a.apply_count)? > 0 {
@@ -413,34 +419,40 @@ fn has_dimension_ex(
 ) -> RtResult<bool> {
     let mut value: Option<Value> = None;
     if check_inherited && host.has_user_method(this, "offsetExists") {
-        let r = host.call_method(this, "offsetExists", &[offset.clone()])?;
+        let r = host.call_method(this, "offsetExists", std::slice::from_ref(offset))?;
         if !r.to_bool(host)? {
             return Ok(false);
         }
         if check_empty == 0 {
             return Ok(true);
         } else if host.has_user_method(this, "offsetGet") {
-            value = Some(read_dimension_ex(host, this, st, true, Some(offset), DimKind::Read)?);
+            value = Some(read_dimension_ex(
+                host,
+                this,
+                st,
+                true,
+                Some(offset),
+                DimKind::Read,
+            )?);
         }
     }
-    let value = match value {
-        Some(v) => v,
-        None => {
-            let (tgt, is_obj) = target(host, this, st)?;
-            let Some(key) = hash_key(host, &offset.deref(), is_obj)? else {
-                return Err(illegal_offset(this, &offset.deref(), DimKind::Is));
-            };
-            let Some(tmp) = table(host, &tgt)?.get(&key).cloned() else {
-                return Ok(false);
-            };
-            if check_empty == 2 {
-                return Ok(true);
-            }
-            if check_empty != 0 && check_inherited && host.has_user_method(this, "offsetGet") {
-                read_dimension_ex(host, this, st, true, Some(offset), DimKind::Read)?
-            } else {
-                tmp
-            }
+    let value = if let Some(v) = value {
+        v
+    } else {
+        let (tgt, is_obj) = target(host, this, st)?;
+        let Some(key) = hash_key(host, &offset.deref(), is_obj)? else {
+            return Err(illegal_offset(this, &offset.deref(), DimKind::Is));
+        };
+        let Some(tmp) = table(host, &tgt)?.get(&key).cloned() else {
+            return Ok(false);
+        };
+        if check_empty == 2 {
+            return Ok(true);
+        }
+        if check_empty != 0 && check_inherited && host.has_user_method(this, "offsetGet") {
+            read_dimension_ex(host, this, st, true, Some(offset), DimKind::Read)?
+        } else {
+            tmp
         }
     };
     if check_empty != 0 {
@@ -611,7 +623,12 @@ pub fn has_property(
 }
 
 /// `unset_property` handler; returns whether it was handled.
-pub fn unset_property(host: &mut dyn SplHost, obj: &Obj, st: &Rc<SplObject>, name: &ZStr) -> RtResult<bool> {
+pub fn unset_property(
+    host: &mut dyn SplHost,
+    obj: &Obj,
+    st: &Rc<SplObject>,
+    name: &ZStr,
+) -> RtResult<bool> {
     if !as_props(host, obj, st, name)? {
         return Ok(false);
     }
@@ -762,10 +779,15 @@ fn current_key(host: &mut dyn SplHost, this: &Obj, st: &Rc<SplObject>) -> RtResu
     let (tgt, is_obj) = target(host, this, st)?;
     let pos = get_pos(host, st, &tgt, is_obj)?;
     let t = table(host, &tgt)?;
-    Ok(t.at(t.valid_pos(pos)).map_or(Value::Null, |(k, _)| k.to_value()))
+    Ok(t.at(t.valid_pos(pos))
+        .map_or(Value::Null, |(k, _)| k.to_value()))
 }
 
-fn current_value(host: &mut dyn SplHost, this: &Obj, st: &Rc<SplObject>) -> RtResult<Option<Value>> {
+fn current_value(
+    host: &mut dyn SplHost,
+    this: &Obj,
+    st: &Rc<SplObject>,
+) -> RtResult<Option<Value>> {
     let (tgt, is_obj) = target(host, this, st)?;
     let pos = get_pos(host, st, &tgt, is_obj)?;
     let t = table(host, &tgt)?;
@@ -803,9 +825,7 @@ fn set_array(
                     "{func}(): Using an object as a backing array for {which} is deprecated, as it allows violating class constraints and invariants"
                 ),
             )?;
-            let other_is_array = host
-                .spl_state(&o)
-                .is_some_and(|s| s.array(|_| ()).is_ok());
+            let other_is_array = host.spl_state(&o).is_some_and(|s| s.array(|_| ()).is_ok());
             if other_is_array {
                 if just_array {
                     let other = state_of(host, &o)?;
@@ -819,9 +839,7 @@ fn set_array(
                     Value::Object(o)
                 }
             } else {
-                let overloaded = host
-                    .spl_state(&o)
-                    .is_some_and(|s| s.fixed(|_| ()).is_ok())
+                let overloaded = host.spl_state(&o).is_some_and(|s| s.fixed(|_| ()).is_ok())
                     || host.is_overloaded_object(&o);
                 if overloaded {
                     return Err(invalid_argument(format!(
@@ -859,6 +877,7 @@ fn array_or_object_arg(a: &Args<'_>, i: usize) -> RtResult<Value> {
     }
 }
 
+#[allow(clippy::many_single_char_names)]
 fn class_arg(host: &mut dyn SplHost, a: &Args<'_>, i: usize) -> RtResult<ZStr> {
     let v = a.raw(i);
     let name = match &v {
@@ -909,14 +928,28 @@ pub(crate) fn call(
                     return Ok(Value::Null);
                 }
                 let max = if class == "ArrayObject" { 3 } else { 2 };
-                let a = Args::new(func, args, &["array", "flags", "iteratorClass"], 0, Some(max))?;
+                let a = Args::new(
+                    func,
+                    args,
+                    &["array", "flags", "iteratorClass"],
+                    0,
+                    Some(max),
+                )?;
                 let array = array_or_object_arg(&a, 0)?;
                 let flags = a.opt_long(host, 1, 0)?;
                 if a.len() > 2 {
                     let c = class_arg(host, &a, 2)?;
                     st.array(|s| s.iterator_class = c)?;
                 }
-                set_array(host, func, this, &st, &array, flags & !INT_MASK, a.len() == 1)?;
+                set_array(
+                    host,
+                    func,
+                    this,
+                    &st,
+                    &array,
+                    flags & !INT_MASK,
+                    a.len() == 1,
+                )?;
                 Ok(Value::Null)
             }
             "offsetexists" => {
@@ -926,7 +959,8 @@ pub(crate) fn call(
             "offsetget" => {
                 let a = Args::new(func, args, &["key"], 1, Some(1))?;
                 let k = a.raw(0);
-                read_dimension_ex(host, this, &st, false, Some(&k), DimKind::Read).map(|v| v.deref())
+                read_dimension_ex(host, this, &st, false, Some(&k), DimKind::Read)
+                    .map(|v| v.deref())
             }
             "offsetset" => {
                 let a = Args::new(func, args, &["key", "value"], 2, Some(2))?;
@@ -1018,7 +1052,11 @@ pub(crate) fn call(
                 Args::none(func, args)?;
                 let (flags, array, ic) =
                     st.array(|s| (s.flags, s.array.clone(), s.iterator_class.clone()))?;
-                let storage = if flags & IS_SELF != 0 { Value::Null } else { array };
+                let storage = if flags & IS_SELF != 0 {
+                    Value::Null
+                } else {
+                    array
+                };
                 let props = host.std_properties(this);
                 let ic = if ic.eq_ignore_ascii_case(b"ArrayIterator") {
                     Value::Null
@@ -1100,7 +1138,9 @@ pub(crate) fn call(
                         return Ok(Value::Null);
                     }
                 }
-                Err(out_of_bounds(format!("Seek position {opos} is out of range")))
+                Err(out_of_bounds(format!(
+                    "Seek position {opos} is out of range"
+                )))
             }
             "current" => {
                 Args::none(func, args)?;
@@ -1204,7 +1244,12 @@ fn sort_method(
     Ok(Value::Bool(true))
 }
 
-fn user_sort<'h>(host: &mut (dyn SplHost + 'h), r: &PhpRef, cb: &Value, by_key: bool) -> RtResult<()> {
+fn user_sort<'h>(
+    host: &mut (dyn SplHost + 'h),
+    r: &PhpRef,
+    cb: &Value,
+    by_key: bool,
+) -> RtResult<()> {
     let mut call = |h: &mut (dyn SplHost + 'h), a: &[Value]| h.call_callable(cb, a);
     if by_key {
         php_stdarr::sort::uksort::<dyn SplHost + 'h>(host, r, &mut call)
@@ -1227,10 +1272,14 @@ fn unserialize(
     let (Some(Value::Int(flags)), Some(storage), Some(Value::Array(members))) =
         (flags, storage, members)
     else {
-        return Err(unexpected_value("Incomplete or ill-typed serialization data"));
+        return Err(unexpected_value(
+            "Incomplete or ill-typed serialization data",
+        ));
     };
     if !matches!(iterator_class, None | Some(Value::Null | Value::Str(_))) {
-        return Err(unexpected_value("Incomplete or ill-typed serialization data"));
+        return Err(unexpected_value(
+            "Incomplete or ill-typed serialization data",
+        ));
     }
     st.array(|s| {
         s.flags &= !CLONE_MASK;
@@ -1240,7 +1289,9 @@ fn unserialize(
         st.array(|s| s.array = Value::Null)?;
     } else {
         if !matches!(storage, Value::Array(_) | Value::Object(_)) {
-            return Err(invalid_argument("Passed variable is not an array or object"));
+            return Err(invalid_argument(
+                "Passed variable is not an array or object",
+            ));
         }
         set_array(host, func, this, st, &storage, 0, true)?;
     }

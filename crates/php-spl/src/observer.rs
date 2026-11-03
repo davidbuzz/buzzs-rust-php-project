@@ -845,7 +845,7 @@ pub fn unset_dimension(
             Ok(())
         }
         _ => host
-            .call_method(obj, "offsetUnset", &[offset.clone()])
+            .call_method(obj, "offsetUnset", std::slice::from_ref(offset))
             .map(|_| ()),
     }
 }

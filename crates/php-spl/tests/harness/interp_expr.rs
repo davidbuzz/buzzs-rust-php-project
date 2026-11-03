@@ -63,7 +63,11 @@ pub fn to_key(it: &mut Interp, k: &Value) -> RtResult<ArrayKey> {
         Value::Resource(r) => {
             it.emit(
                 ErrorLevel::Warning,
-                &format!("Resource ID#{} used as offset, casting to integer ({})", r.handle(), r.handle()),
+                &format!(
+                    "Resource ID#{} used as offset, casting to integer ({})",
+                    r.handle(),
+                    r.handle()
+                ),
             )?;
             ArrayKey::Int(r.handle())
         }
@@ -112,7 +116,13 @@ impl Interp {
                 MagicConst::Line => Value::Int(i64::from(e.span.line)),
                 MagicConst::File => Value::from(self.file.as_str()),
                 MagicConst::Dir => Value::from(self.dir.as_str()),
-                MagicConst::Class => Value::from(self.frame().scope.as_ref().map(|c| c.name.clone()).unwrap_or_default()),
+                MagicConst::Class => Value::from(
+                    self.frame()
+                        .scope
+                        .as_ref()
+                        .map(|c| c.name.clone())
+                        .unwrap_or_default(),
+                ),
                 MagicConst::Function => {
                     let f = self.frame().func.clone();
                     Value::from(f.rsplit("::").next().unwrap_or("").to_string())
@@ -152,7 +162,11 @@ impl Interp {
                 let k = self.eval(index)?;
                 self.read_dim(&b, &k, DimKind::Read)
             }
-            ExprKind::Prop { object, name, nullsafe } => {
+            ExprKind::Prop {
+                object,
+                name,
+                nullsafe,
+            } => {
                 let o = self.eval(object)?;
                 if *nullsafe && o.is_null() {
                     return Ok(Value::Null);
@@ -166,7 +180,12 @@ impl Interp {
                 self.static_prop(&c, &n).map(|r| r.get())
             }
             ExprKind::Call { callee, args } => self.eval_call(callee, args),
-            ExprKind::MethodCall { object, name, args, nullsafe } => {
+            ExprKind::MethodCall {
+                object,
+                name,
+                args,
+                nullsafe,
+            } => {
                 let o = self.eval(object)?;
                 if *nullsafe && o.is_null() {
                     return Ok(Value::Null);
@@ -218,7 +237,10 @@ impl Interp {
             }
             ExprKind::AssignRef { target, value } => {
                 let r = match &value.kind {
-                    ExprKind::New { .. } | ExprKind::Call { .. } | ExprKind::MethodCall { .. } | ExprKind::StaticCall { .. } => {
+                    ExprKind::New { .. }
+                    | ExprKind::Call { .. }
+                    | ExprKind::MethodCall { .. }
+                    | ExprKind::StaticCall { .. } => {
                         let v = self.eval(value)?;
                         match v {
                             Value::Reference(r) => r,
@@ -315,7 +337,9 @@ impl Interp {
                 };
                 Ok(Value::Bool(tobj(&o).class.is_a(&name)))
             }
-            ExprKind::Conditional { cond, then, else_, .. } => {
+            ExprKind::Conditional {
+                cond, then, else_, ..
+            } => {
                 let c = self.eval(cond)?;
                 if c.to_bool(self)? {
                     match then {
@@ -329,7 +353,9 @@ impl Interp {
             ExprKind::Throw(e) => {
                 let v = self.eval(e)?;
                 match v {
-                    Value::Object(o) if tobj(&o).class.is_a("Throwable") => Err(RuntimeError::Thrown(Value::Object(o))),
+                    Value::Object(o) if tobj(&o).class.is_a("Throwable") => {
+                        Err(RuntimeError::Thrown(Value::Object(o)))
+                    }
                     _ => Err(rt_err("Can only throw objects")),
                 }
             }
@@ -339,21 +365,28 @@ impl Interp {
                     let v = if u.by_ref {
                         let r = {
                             let vars = &mut self.frame().vars;
-                            vars.entry(u.name.name.clone()).or_insert(Value::Null).make_ref()
+                            vars.entry(u.name.name.clone())
+                                .or_insert(Value::Null)
+                                .make_ref()
                         };
                         Value::Reference(r)
                     } else {
                         match self.frame().vars.get(&u.name.name) {
                             Some(v) => v.deref(),
                             None => {
-                                self.emit(ErrorLevel::Warning, &format!("Undefined variable ${}", s(&u.name.name)))?;
+                                self.emit(
+                                    ErrorLevel::Warning,
+                                    &format!("Undefined variable ${}", s(&u.name.name)),
+                                )?;
                                 Value::Null
                             }
                         }
                     };
                     bound.push((u.name.name.clone(), v));
                 }
-                let def = FuncDef { return_type: None, name: "{closure}".into(),
+                let def = FuncDef {
+                    return_type: None,
+                    name: "{closure}".into(),
                     params: c.params.clone(),
                     body: Rc::new(c.body.clone()),
                     arrow: None,
@@ -361,14 +394,31 @@ impl Interp {
                     is_generator: c.is_generator,
                     statics: Rc::new(RefCell::new(HashMap::new())),
                 };
-                let this = if c.is_static { None } else { self.frame().this.clone() };
+                let this = if c.is_static {
+                    None
+                } else {
+                    self.frame().this.clone()
+                };
                 let scope = self.frame().scope.clone();
-                self.make_closure(ClosureData { func: Rc::new(def), bound, this, scope, builtin: None, method: None })
+                self.make_closure(ClosureData {
+                    func: Rc::new(def),
+                    bound,
+                    this,
+                    scope,
+                    builtin: None,
+                    method: None,
+                })
             }
             ExprKind::ArrowFn(a) => {
-                let bound: Vec<(Vec<u8>, Value)> =
-                    self.frame().vars.iter().map(|(k, v)| (k.clone(), v.deref())).collect();
-                let def = FuncDef { return_type: None, name: "{closure}".into(),
+                let bound: Vec<(Vec<u8>, Value)> = self
+                    .frame()
+                    .vars
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.deref()))
+                    .collect();
+                let def = FuncDef {
+                    return_type: None,
+                    name: "{closure}".into(),
                     params: a.params.clone(),
                     body: Rc::new(Vec::new()),
                     arrow: Some(Rc::new((*a.body).clone())),
@@ -376,9 +426,20 @@ impl Interp {
                     is_generator: false,
                     statics: Rc::new(RefCell::new(HashMap::new())),
                 };
-                let this = if a.is_static { None } else { self.frame().this.clone() };
+                let this = if a.is_static {
+                    None
+                } else {
+                    self.frame().this.clone()
+                };
                 let scope = self.frame().scope.clone();
-                self.make_closure(ClosureData { func: Rc::new(def), bound, this, scope, builtin: None, method: None })
+                self.make_closure(ClosureData {
+                    func: Rc::new(def),
+                    bound,
+                    this,
+                    scope,
+                    builtin: None,
+                    method: None,
+                })
             }
             ExprKind::Match { subject, arms } => {
                 let v = self.eval(subject)?;
@@ -400,9 +461,14 @@ impl Interp {
                     Value::Object(_) => "of type object".into(),
                     other => other.to_zstr(self)?.to_string_lossy(),
                 };
-                Err(RuntimeError::Custom { class: ZStr::from("UnhandledMatchError"), message: format!("Unhandled match case {desc}") })
+                Err(RuntimeError::Custom {
+                    class: ZStr::from("UnhandledMatchError"),
+                    message: format!("Unhandled match case {desc}"),
+                })
             }
-            ExprKind::Yield { .. } | ExprKind::YieldFrom(_) => Err(rt_err("generators unsupported")),
+            ExprKind::Yield { .. } | ExprKind::YieldFrom(_) => {
+                Err(rt_err("generators unsupported"))
+            }
             ExprKind::Pipe { left, right } => {
                 let l = self.eval(left)?;
                 let f = self.eval(right)?;
@@ -457,7 +523,11 @@ impl Interp {
                 }
                 continue;
             }
-            let v = if it.by_ref { Value::Reference(self.get_ref(&it.value)?) } else { self.eval(&it.value)?.deref() };
+            let v = if it.by_ref {
+                Value::Reference(self.get_ref(&it.value)?)
+            } else {
+                self.eval(&it.value)?.deref()
+            };
             match &it.key {
                 Some(k) => {
                     let kv = self.eval(k)?;
@@ -541,10 +611,18 @@ impl Interp {
             drop(st);
             k = cl.parent.clone();
         }
-        Err(rt_err(format!("Access to undeclared static property {}::${n}", c.name)))
+        Err(rt_err(format!(
+            "Access to undeclared static property {}::${n}",
+            c.name
+        )))
     }
 
-    fn eval_binary(&mut self, op: php_parser::ast::BinaryOp, l: &Expr, r: &Expr) -> RtResult<Value> {
+    fn eval_binary(
+        &mut self,
+        op: php_parser::ast::BinaryOp,
+        l: &Expr,
+        r: &Expr,
+    ) -> RtResult<Value> {
         use php_parser::ast::BinaryOp as P;
         match op {
             P::BoolAnd => {
@@ -579,7 +657,12 @@ impl Interp {
         }
     }
 
-    pub fn binop(&mut self, op: php_parser::ast::BinaryOp, a: &Value, b: &Value) -> RtResult<Value> {
+    pub fn binop(
+        &mut self,
+        op: php_parser::ast::BinaryOp,
+        a: &Value,
+        b: &Value,
+    ) -> RtResult<Value> {
         use php_parser::ast::BinaryOp as P;
         Ok(match op {
             P::Identical => Value::Bool(ops::is_identical(a, b)?),
@@ -607,9 +690,13 @@ impl Interp {
             CastKind::Array => match v.deref() {
                 Value::Object(o) => {
                     if let Extra::Closure(_) = &*tobj(&o).extra.borrow() {
-                        return Ok(Value::Array(ZArray::from_values([Value::Object(o.clone())])));
+                        return Ok(Value::Array(ZArray::from_values([Value::Object(
+                            o.clone(),
+                        )])));
                     }
-                    let t = self.object_properties(&o, PropertyPurpose::ArrayCast)?.unwrap_or_default();
+                    let t = self
+                        .object_properties(&o, PropertyPurpose::ArrayCast)?
+                        .unwrap_or_default();
                     Value::Array(ZArray::from_table(t.to_symtable()))
                 }
                 other => Value::Array(other.to_array(self)?),
@@ -631,7 +718,10 @@ impl Interp {
                     Some(v) => Ok(v.deref()),
                     None => {
                         if kind != DimKind::Is {
-                            self.emit(ErrorLevel::Warning, &format!("Undefined array key {}", key_display(&key)))?;
+                            self.emit(
+                                ErrorLevel::Warning,
+                                &format!("Undefined array key {}", key_display(&key)),
+                            )?;
                         }
                         Ok(Value::Null)
                     }
@@ -647,11 +737,16 @@ impl Interp {
                 let idx = if n < 0 { n + len } else { n };
                 if idx < 0 || idx >= len {
                     if kind != DimKind::Is {
-                        self.emit(ErrorLevel::Warning, &format!("Uninitialized string offset {n}"))?;
+                        self.emit(
+                            ErrorLevel::Warning,
+                            &format!("Uninitialized string offset {n}"),
+                        )?;
                     }
                     return Ok(Value::from(""));
                 }
-                Ok(Value::Str(ZStr::from(&st.as_bytes()[idx as usize..=idx as usize])))
+                Ok(Value::Str(ZStr::from(
+                    &st.as_bytes()[idx as usize..=idx as usize],
+                )))
             }
             Value::Null => {
                 if kind != DimKind::Is {
@@ -676,7 +771,10 @@ impl Interp {
             return Ok(v);
         }
         if !tobj(o).class.is_a("ArrayAccess") {
-            return Err(rt_err(format!("Cannot use object of type {} as array", o.class_name())));
+            return Err(rt_err(format!(
+                "Cannot use object of type {} as array",
+                o.class_name()
+            )));
         }
         php_spl::handlers::std_read_dimension(self, o, k, kind)
     }
@@ -685,11 +783,15 @@ impl Interp {
         let Value::Object(o) = o.deref() else {
             self.emit(
                 ErrorLevel::Warning,
-                &format!("Attempt to read property \"{n}\" on {}", o.deref().value_name()),
+                &format!(
+                    "Attempt to read property \"{n}\" on {}",
+                    o.deref().value_name()
+                ),
             )?;
             return Ok(Value::Null);
         };
-        if let Some(v) = php_spl::handlers::read_property(self, &o, &ZStr::from(n), DimKind::Read)? {
+        if let Some(v) = php_spl::handlers::read_property(self, &o, &ZStr::from(n), DimKind::Read)?
+        {
             return Ok(v);
         }
         self.std_read_prop(&o, n, false)
@@ -698,12 +800,21 @@ impl Interp {
     pub fn std_read_prop(&mut self, o: &Obj, n: &str, quiet: bool) -> RtResult<Value> {
         if let Some(k) = self.find_prop_key(o, n) {
             if self.prop_visible(o, &k) {
-                return Ok(tobj(o).props.borrow().get_str(k.as_bytes()).map(Value::deref).unwrap_or_default());
+                return Ok(tobj(o)
+                    .props
+                    .borrow()
+                    .get_str(k.as_bytes())
+                    .map(Value::deref)
+                    .unwrap_or_default());
             }
             if tobj(o).class.find_method("__get").is_none() {
                 return Err(rt_err(format!(
                     "Cannot access {} property {}::${n}",
-                    if k.as_bytes().get(1) == Some(&b'*') { "protected" } else { "private" },
+                    if k.as_bytes().get(1) == Some(&b'*') {
+                        "protected"
+                    } else {
+                        "private"
+                    },
                     o.class_name()
                 )));
             }
@@ -713,7 +824,10 @@ impl Interp {
             return self.call_method_h(Some(o), &cls, &m, &[Value::from(n)]);
         }
         if !quiet {
-            self.emit(ErrorLevel::Warning, &format!("Undefined property: {}::${n}", o.class_name()))?;
+            self.emit(
+                ErrorLevel::Warning,
+                &format!("Undefined property: {}::${n}", o.class_name()),
+            )?;
         }
         Ok(Value::Null)
     }
@@ -723,7 +837,9 @@ impl Interp {
         let scope = self.frames.last().and_then(|f| f.scope.clone());
         match cls {
             None => true,
-            Some(b"*") => scope.is_some_and(|sc| tobj(o).class.is_a(&sc.name) || sc.is_a(&tobj(o).class.name)),
+            Some(b"*") => {
+                scope.is_some_and(|sc| tobj(o).class.is_a(&sc.name) || sc.is_a(&tobj(o).class.name))
+            }
             Some(c) => scope.is_some_and(|sc| sc.name.as_bytes() == c),
         }
     }
@@ -755,7 +871,10 @@ impl Interp {
         // declared typed props that are uninitialized
         let declared = {
             let cls = tobj(o).class.clone();
-            cls.all_props().iter().find(|(k, i)| k.props[*i].name == n).map(|(k, i)| mangle(&k.name, n, k.props[*i].visibility))
+            cls.all_props()
+                .iter()
+                .find(|(k, i)| k.props[*i].name == n)
+                .map(|(k, i)| mangle(&k.name, n, k.props[*i].visibility))
         };
         if let Some(key) = declared {
             tobj(o).props.borrow_mut().make_mut().insert_str_raw(key, v);
@@ -770,10 +889,17 @@ impl Interp {
         if !cls.allow_dynamic && !cls.name.eq_ignore_ascii_case("stdClass") {
             self.emit(
                 ErrorLevel::Deprecated,
-                &format!("Creation of dynamic property {}::${n} is deprecated", cls.name),
+                &format!(
+                    "Creation of dynamic property {}::${n} is deprecated",
+                    cls.name
+                ),
             )?;
         }
-        tobj(o).props.borrow_mut().make_mut().insert_str_raw(ZStr::from(n), v);
+        tobj(o)
+            .props
+            .borrow_mut()
+            .make_mut()
+            .insert_str_raw(ZStr::from(n), v);
         Ok(())
     }
 
@@ -787,8 +913,13 @@ impl Interp {
                 }
                 Ok(self.frame().vars.get(&n).map(Value::deref))
             }
-            ExprKind::Dim { base, index: Some(index) } => {
-                let Some(b) = self.eval_quiet(base)? else { return Ok(None) };
+            ExprKind::Dim {
+                base,
+                index: Some(index),
+            } => {
+                let Some(b) = self.eval_quiet(base)? else {
+                    return Ok(None);
+                };
                 let k = self.eval(index)?;
                 match b.deref() {
                     Value::Array(a) => {
@@ -810,13 +941,22 @@ impl Interp {
                 }
             }
             ExprKind::Prop { object, name, .. } => {
-                let Some(o) = self.eval_quiet(object)? else { return Ok(None) };
+                let Some(o) = self.eval_quiet(object)? else {
+                    return Ok(None);
+                };
                 let n = self.member_name(name)?;
-                let Value::Object(o) = o.deref() else { return Ok(None) };
+                let Value::Object(o) = o.deref() else {
+                    return Ok(None);
+                };
                 if !self.prop_isset(&o, &n)? {
                     return Ok(None);
                 }
-                if let Some(v) = php_spl::handlers::read_property(self, &o, &ZStr::from(n.as_str()), DimKind::Is)? {
+                if let Some(v) = php_spl::handlers::read_property(
+                    self,
+                    &o,
+                    &ZStr::from(n.as_str()),
+                    DimKind::Is,
+                )? {
                     return Ok(Some(v));
                 }
                 self.std_read_prop(&o, &n, true).map(Some)
@@ -826,9 +966,7 @@ impl Interp {
                 let n = s(&self.var_name(name)?);
                 Ok(self.static_prop(&c, &n).ok().map(|r| r.get()))
             }
-            ExprKind::ClassConst { .. } | ExprKind::Const(_) => {
-                Ok(Some(self.eval(e)?))
-            }
+            ExprKind::ClassConst { .. } | ExprKind::Const(_) => Ok(Some(self.eval(e)?)),
             _ => self.eval(e).map(Some),
         }
     }
@@ -843,10 +981,12 @@ impl Interp {
             Value::Str(st) => {
                 let n = match k.deref() {
                     Value::Int(n) => n,
-                    Value::Str(ks) => match php_runtime::numeric::is_numeric_string(ks.as_bytes(), false) {
-                        Some(php_runtime::numeric::Number::Int(n)) => n,
-                        _ => return Ok(false),
-                    },
+                    Value::Str(ks) => {
+                        match php_runtime::numeric::is_numeric_string(ks.as_bytes(), false) {
+                            Some(php_runtime::numeric::Number::Int(n)) => n,
+                            _ => return Ok(false),
+                        }
+                    }
                     Value::Float(f) => f as i64,
                     Value::Bool(b) => i64::from(b),
                     _ => return Ok(false),
@@ -863,7 +1003,10 @@ impl Interp {
             return Ok(r);
         }
         if !tobj(o).class.is_a("ArrayAccess") {
-            return Err(rt_err(format!("Cannot use object of type {} as array", o.class_name())));
+            return Err(rt_err(format!(
+                "Cannot use object of type {} as array",
+                o.class_name()
+            )));
         }
         php_spl::handlers::std_has_dimension(self, o, k, check_empty)
     }
@@ -874,7 +1017,11 @@ impl Interp {
         }
         if let Some(k) = self.find_prop_key(o, n) {
             if self.prop_visible(o, &k) {
-                return Ok(tobj(o).props.borrow().get_str(k.as_bytes()).is_some_and(|v| !v.is_null()));
+                return Ok(tobj(o)
+                    .props
+                    .borrow()
+                    .get_str(k.as_bytes())
+                    .is_some_and(|v| !v.is_null()));
             }
         }
         if let Some(m) = tobj(o).class.find_method("__isset") {
@@ -887,13 +1034,20 @@ impl Interp {
 
     pub fn eval_isset(&mut self, e: &Expr) -> RtResult<bool> {
         match &e.kind {
-            ExprKind::Dim { base, index: Some(index) } => {
-                let Some(b) = self.eval_quiet(base)? else { return Ok(false) };
+            ExprKind::Dim {
+                base,
+                index: Some(index),
+            } => {
+                let Some(b) = self.eval_quiet(base)? else {
+                    return Ok(false);
+                };
                 let k = self.eval(index)?;
                 self.isset_value_dim(&b, &k)
             }
             ExprKind::Prop { object, name, .. } => {
-                let Some(o) = self.eval_quiet(object)? else { return Ok(false) };
+                let Some(o) = self.eval_quiet(object)? else {
+                    return Ok(false);
+                };
                 let n = self.member_name(name)?;
                 match o.deref() {
                     Value::Object(o) => self.prop_isset(&o, &n),
@@ -906,8 +1060,13 @@ impl Interp {
 
     fn eval_empty(&mut self, e: &Expr) -> RtResult<bool> {
         match &e.kind {
-            ExprKind::Dim { base, index: Some(index) } => {
-                let Some(b) = self.eval_quiet(base)? else { return Ok(true) };
+            ExprKind::Dim {
+                base,
+                index: Some(index),
+            } => {
+                let Some(b) = self.eval_quiet(base)? else {
+                    return Ok(true);
+                };
                 let k = self.eval(index)?;
                 if let Value::Object(o) = b.deref() {
                     return Ok(!self.obj_has_dim(&o, &k, true)?);
@@ -919,10 +1078,16 @@ impl Interp {
                 Ok(!v.to_bool(self)?)
             }
             ExprKind::Prop { object, name, .. } => {
-                let Some(o) = self.eval_quiet(object)? else { return Ok(true) };
+                let Some(o) = self.eval_quiet(object)? else {
+                    return Ok(true);
+                };
                 let n = self.member_name(name)?;
-                let Value::Object(o) = o.deref() else { return Ok(true) };
-                if let Some(r) = php_spl::handlers::has_property(self, &o, &ZStr::from(n.as_str()), 1)? {
+                let Value::Object(o) = o.deref() else {
+                    return Ok(true);
+                };
+                if let Some(r) =
+                    php_spl::handlers::has_property(self, &o, &ZStr::from(n.as_str()), 1)?
+                {
                     return Ok(!r);
                 }
                 if !self.prop_isset(&o, &n)? {
@@ -984,7 +1149,12 @@ impl Interp {
             ExprKind::Var(v) => {
                 let n = self.var_name(v)?;
                 if n == b"this" {
-                    let t = self.frame().this.clone().map(Value::Object).unwrap_or_default();
+                    let t = self
+                        .frame()
+                        .this
+                        .clone()
+                        .map(Value::Object)
+                        .unwrap_or_default();
                     return Ok((LBase::Temp(t), Vec::new()));
                 }
                 Ok((LBase::Var(n), Vec::new()))
@@ -1000,9 +1170,12 @@ impl Interp {
             }
             ExprKind::Prop { object, name, .. } => {
                 let o = match &object.kind {
-                    ExprKind::Var(VarName::Name(id)) if id.name == b"this" => {
-                        self.frame().this.clone().map(Value::Object).unwrap_or_default()
-                    }
+                    ExprKind::Var(VarName::Name(id)) if id.name == b"this" => self
+                        .frame()
+                        .this
+                        .clone()
+                        .map(Value::Object)
+                        .unwrap_or_default(),
                     _ => {
                         // auto-vivification of objects is an error in PHP 8
                         self.eval(object)?
@@ -1011,7 +1184,10 @@ impl Interp {
                 let n = self.member_name(name)?;
                 match o.deref() {
                     Value::Object(o) => Ok((LBase::Prop(o, n), Vec::new())),
-                    other => Err(rt_err(format!("Attempt to assign property \"{n}\" on {}", other.value_name()))),
+                    other => Err(rt_err(format!(
+                        "Attempt to assign property \"{n}\" on {}",
+                        other.value_name()
+                    ))),
                 }
             }
             ExprKind::StaticProp { class, name, .. } => {
@@ -1052,7 +1228,10 @@ impl Interp {
                         return Ok(Value::Null);
                     }
                     if path.is_empty() && matches!(op, Op::AssignOp(..) | Op::IncDec(_)) {
-                        self.emit(ErrorLevel::Warning, &format!("Undefined variable ${}", s(&n)))?;
+                        self.emit(
+                            ErrorLevel::Warning,
+                            &format!("Undefined variable ${}", s(&n)),
+                        )?;
                     }
                 }
                 let slot = self.frame().vars.remove(&n).unwrap_or(Value::Null);
@@ -1080,15 +1259,26 @@ impl Interp {
                             return Ok(Value::Null);
                         }
                         Op::SetRef(r) => {
-                            let key = self.find_prop_key(&o, &n).unwrap_or_else(|| ZStr::from(n.as_str()));
-                            tobj(&o).props.borrow_mut().make_mut().insert_str_raw(key, Value::Reference(r.clone()));
+                            let key = self
+                                .find_prop_key(&o, &n)
+                                .unwrap_or_else(|| ZStr::from(n.as_str()));
+                            tobj(&o)
+                                .props
+                                .borrow_mut()
+                                .make_mut()
+                                .insert_str_raw(key, Value::Reference(r.clone()));
                             return Ok(r.get());
                         }
                         _ => {}
                     }
                 }
                 // ArrayObject with ARRAY_AS_PROPS etc.
-                if let Some(v) = php_spl::handlers::read_property(self, &o, &ZStr::from(n.as_str()), DimKind::Write)? {
+                if let Some(v) = php_spl::handlers::read_property(
+                    self,
+                    &o,
+                    &ZStr::from(n.as_str()),
+                    DimKind::Write,
+                )? {
                     let mut v = v;
                     let res = self.apply_val(&mut v, path, op);
                     if !matches!(v, Value::Reference(_) | Value::Object(_)) {
@@ -1101,8 +1291,11 @@ impl Interp {
                     None => {
                         if let Some(m) = tobj(&o).class.find_method("__get") {
                             let cls = tobj(&o).class.clone();
-                            let mut v = self.call_method_h(Some(&o), &cls, &m, &[Value::from(n.as_str())])?;
-                            if !matches!(v, Value::Object(_) | Value::Reference(_)) && !path.is_empty() {
+                            let mut v =
+                                self.call_method_h(Some(&o), &cls, &m, &[Value::from(n.as_str())])?;
+                            if !matches!(v, Value::Object(_) | Value::Reference(_))
+                                && !path.is_empty()
+                            {
                                 self.emit(
                                     ErrorLevel::Notice,
                                     &format!("Indirect modification of overloaded property {}::${n} has no effect", o.class_name()),
@@ -1111,10 +1304,14 @@ impl Interp {
                             return self.apply_val(&mut v, path, op);
                         }
                         if matches!(op, Op::AssignOp(..) | Op::IncDec(_)) && path.is_empty() {
-                            self.emit(ErrorLevel::Warning, &format!("Undefined property: {}::${n}", o.class_name()))?;
+                            self.emit(
+                                ErrorLevel::Warning,
+                                &format!("Undefined property: {}::${n}", o.class_name()),
+                            )?;
                         }
                         self.std_write_prop(&o, &n, Value::Null)?;
-                        self.find_prop_key(&o, &n).unwrap_or_else(|| ZStr::from(n.as_str()))
+                        self.find_prop_key(&o, &n)
+                            .unwrap_or_else(|| ZStr::from(n.as_str()))
                     }
                 };
                 let cur = {
@@ -1130,12 +1327,20 @@ impl Interp {
                     let mut inner = r.get();
                     let res = self.apply_val(&mut inner, path, op);
                     r.set(inner);
-                    tobj(&o).props.borrow_mut().make_mut().insert_str_raw(key, cur);
+                    tobj(&o)
+                        .props
+                        .borrow_mut()
+                        .make_mut()
+                        .insert_str_raw(key, cur);
                     return res;
                 }
                 let mut v = cur;
                 let res = self.apply_val(&mut v, path, op);
-                tobj(&o).props.borrow_mut().make_mut().insert_str_raw(key, v);
+                tobj(&o)
+                    .props
+                    .borrow_mut()
+                    .make_mut()
+                    .insert_str_raw(key, v);
                 res
             }
             LBase::StaticProp(c, n) => {
@@ -1145,7 +1350,9 @@ impl Interp {
                         let mut k = Some(c.clone());
                         while let Some(cl) = k {
                             if cl.statics.borrow().contains_key(&n) {
-                                cl.statics.borrow_mut().insert(n.clone(), Value::Reference(nr.clone()));
+                                cl.statics
+                                    .borrow_mut()
+                                    .insert(n.clone(), Value::Reference(nr.clone()));
                                 break;
                             }
                             k = cl.parent.clone();
@@ -1189,7 +1396,10 @@ impl Interp {
                 if matches!(op, Op::Unset) {
                     return Ok(Value::Null);
                 }
-                self.emit(ErrorLevel::Deprecated, "Automatic conversion of false to array is deprecated")?;
+                self.emit(
+                    ErrorLevel::Deprecated,
+                    "Automatic conversion of false to array is deprecated",
+                )?;
                 *v = Value::empty_array();
             }
             _ => {}
@@ -1240,7 +1450,10 @@ impl Interp {
                 };
                 if !existed && path.len() == 1 && matches!(op, Op::AssignOp(..) | Op::IncDec(_)) {
                     if let Some(k) = &key {
-                        self.emit(ErrorLevel::Warning, &format!("Undefined array key {}", key_display(k)))?;
+                        self.emit(
+                            ErrorLevel::Warning,
+                            &format!("Undefined array key {}", key_display(k)),
+                        )?;
                     }
                 }
                 let res = self.apply_val(&mut slot, &path[1..], op);
@@ -1283,11 +1496,17 @@ impl Interp {
                             let mut nv = cur.deref();
                             let old = nv.clone();
                             match idop {
-                                IncDecOp::PreInc | IncDecOp::PostInc => ops::increment(&mut nv, self)?,
+                                IncDecOp::PreInc | IncDecOp::PostInc => {
+                                    ops::increment(&mut nv, self)?
+                                }
                                 _ => ops::decrement(&mut nv, self)?,
                             }
                             self.obj_write_dim(&o, key.as_ref(), nv.clone())?;
-                            Ok(if matches!(idop, IncDecOp::PostInc | IncDecOp::PostDec) { old } else { nv })
+                            Ok(if matches!(idop, IncDecOp::PostInc | IncDecOp::PostDec) {
+                                old
+                            } else {
+                                nv
+                            })
                         }
                         Op::MakeRef | Op::SetRef(_) => {
                             let cur = self.obj_read_dim(&o, key.as_ref(), DimKind::Write)?;
@@ -1313,7 +1532,10 @@ impl Interp {
                 if !matches!(cur, Value::Reference(_) | Value::Object(_)) {
                     self.emit(
                         ErrorLevel::Notice,
-                        &format!("Indirect modification of overloaded element of {} has no effect", o.class_name()),
+                        &format!(
+                            "Indirect modification of overloaded element of {} has no effect",
+                            o.class_name()
+                        ),
                     )?;
                 }
                 self.apply_val(&mut cur, &path[1..], op)
@@ -1323,7 +1545,10 @@ impl Interp {
                 if matches!(op, Op::Unset) {
                     return Ok(Value::Null);
                 }
-                Err(rt_err(format!("Cannot use a scalar value as an array ({})", other.type_name())))
+                Err(rt_err(format!(
+                    "Cannot use a scalar value as an array ({})",
+                    other.type_name()
+                )))
             }
         }
     }
@@ -1363,7 +1588,11 @@ impl Interp {
                     }
                     _ => *v = nv.clone(),
                 }
-                Ok(if matches!(idop, IncDecOp::PostInc | IncDecOp::PostDec) { old } else { nv })
+                Ok(if matches!(idop, IncDecOp::PostInc | IncDecOp::PostDec) {
+                    old
+                } else {
+                    nv
+                })
             }
             Op::MakeRef => Ok(Value::Reference(v.make_ref())),
             Op::SetRef(r) => {
@@ -1379,7 +1608,10 @@ impl Interp {
             return Ok(());
         }
         if !tobj(o).class.is_a("ArrayAccess") {
-            return Err(rt_err(format!("Cannot use object of type {} as array", o.class_name())));
+            return Err(rt_err(format!(
+                "Cannot use object of type {} as array",
+                o.class_name()
+            )));
         }
         self.call_method(o, "offsetSet", &[k.cloned().unwrap_or_default(), v])?;
         Ok(())
@@ -1410,7 +1642,11 @@ impl Interp {
             return Ok(());
         }
         if let Some(k) = self.find_prop_key(o, n) {
-            tobj(o).props.borrow_mut().make_mut().remove(&ArrayKey::Str(k));
+            tobj(o)
+                .props
+                .borrow_mut()
+                .make_mut()
+                .remove(&ArrayKey::Str(k));
             return Ok(());
         }
         if let Some(m) = tobj(o).class.find_method("__unset") {
@@ -1424,7 +1660,11 @@ impl Interp {
     // Calls
     // -----------------------------------------------------------------------
 
-    pub fn eval_args(&mut self, args: &ArgList, by_ref: &dyn Fn(usize) -> bool) -> RtResult<Vec<Value>> {
+    pub fn eval_args(
+        &mut self,
+        args: &ArgList,
+        by_ref: &dyn Fn(usize) -> bool,
+    ) -> RtResult<Vec<Value>> {
         self.pending_named.clear();
         let mut out = Vec::new();
         for a in &args.args {
@@ -1483,9 +1723,18 @@ impl Interp {
                 let name = name.rsplit('\\').next().unwrap_or(&name).to_string();
                 if args.is_first_class_callable() {
                     if let Some(f) = self.functions.get(&name).cloned() {
-                        return self.make_closure(ClosureData { func: f, bound: Vec::new(), this: None, scope: None, builtin: None, method: None });
+                        return self.make_closure(ClosureData {
+                            func: f,
+                            bound: Vec::new(),
+                            this: None,
+                            scope: None,
+                            builtin: None,
+                            method: None,
+                        });
                     }
-                    let def = Rc::new(FuncDef { return_type: None, name: name.clone(),
+                    let def = Rc::new(FuncDef {
+                        return_type: None,
+                        name: name.clone(),
                         params: Vec::new(),
                         body: Rc::new(Vec::new()),
                         arrow: None,
@@ -1493,18 +1742,34 @@ impl Interp {
                         is_generator: false,
                         statics: Rc::new(RefCell::new(HashMap::new())),
                     });
-                    return self.make_closure(ClosureData { func: def, bound: Vec::new(), this: None, scope: None, builtin: Some(name), method: None });
+                    return self.make_closure(ClosureData {
+                        func: def,
+                        bound: Vec::new(),
+                        this: None,
+                        scope: None,
+                        builtin: Some(name),
+                        method: None,
+                    });
                 }
                 if let Some(f) = self.functions.get(&name).cloned() {
                     let by_ref: Vec<bool> = f.params.iter().map(|p| p.by_ref).collect();
-                    let argv = self.eval_args(args, &|i| by_ref.get(i).copied().unwrap_or(false))?;
+                    let argv =
+                        self.eval_args(args, &|i| by_ref.get(i).copied().unwrap_or(false))?;
                     return self.call_user(&f, &argv, None, None, None, &[]);
                 }
-                let mut argv = self.eval_args(args, &|i| crate::harness::builtins::by_ref(&name, i))?;
+                let mut argv =
+                    self.eval_args(args, &|i| crate::harness::builtins::by_ref(&name, i))?;
                 let named = std::mem::take(&mut self.pending_named);
                 if !named.is_empty() {
                     let params: &[&str] = match name.as_str() {
-                        "fputcsv" => &["stream", "fields", "separator", "enclosure", "escape", "eol"],
+                        "fputcsv" => &[
+                            "stream",
+                            "fields",
+                            "separator",
+                            "enclosure",
+                            "escape",
+                            "eol",
+                        ],
                         "fgetcsv" => &["stream", "length", "separator", "enclosure", "escape"],
                         "str_getcsv" => &["string", "separator", "enclosure", "escape"],
                         _ => &[],
@@ -1519,7 +1784,14 @@ impl Interp {
                     }
                 }
                 let line = self.line;
-                self.trace_stack.push(TFrame { internal: true, func: name.clone(), class: None, ty: "", args: argv.clone(), line });
+                self.trace_stack.push(TFrame {
+                    internal: true,
+                    func: name.clone(),
+                    class: None,
+                    ty: "",
+                    args: argv.clone(),
+                    line,
+                });
                 let r = crate::harness::builtins::call(self, &name, &argv);
                 self.line = line;
                 let r = r.map_err(|e| self.to_thrown(e));
@@ -1546,18 +1818,38 @@ impl Interp {
 
     pub fn eval_method_call(&mut self, o: Value, n: &str, args: &ArgList) -> RtResult<Value> {
         let Value::Object(o) = o.deref() else {
-            return Err(rt_err(format!("Call to a member function {n}() on {}", o.deref().value_name())));
+            return Err(rt_err(format!(
+                "Call to a member function {n}() on {}",
+                o.deref().value_name()
+            )));
         };
         let cls = tobj(&o).class.clone();
         php_spl::handlers::before_method_call(self, &o)?;
         let m = cls.find_method(&n.to_ascii_lowercase());
         if args.is_first_class_callable() {
-            let m = m.ok_or_else(|| rt_err(format!("Call to undefined method {}::{n}()", cls.name)))?;
+            let m =
+                m.ok_or_else(|| rt_err(format!("Call to undefined method {}::{n}()", cls.name)))?;
             let def = match &m.kind {
                 MKind::User(d) => d.clone(),
-                _ => Rc::new(FuncDef { return_type: None, name: n.into(), params: Vec::new(), body: Rc::new(Vec::new()), arrow: None, by_ref: false, is_generator: false, statics: Rc::new(RefCell::new(HashMap::new())) }),
+                _ => Rc::new(FuncDef {
+                    return_type: None,
+                    name: n.into(),
+                    params: Vec::new(),
+                    body: Rc::new(Vec::new()),
+                    arrow: None,
+                    by_ref: false,
+                    is_generator: false,
+                    statics: Rc::new(RefCell::new(HashMap::new())),
+                }),
             };
-            return self.make_closure(ClosureData { func: def, bound: Vec::new(), this: Some(o.clone()), scope: Some(cls.clone()), builtin: None, method: Some((Some(o.clone()), cls, m)) });
+            return self.make_closure(ClosureData {
+                func: def,
+                bound: Vec::new(),
+                this: Some(o.clone()),
+                scope: Some(cls.clone()),
+                builtin: None,
+                method: Some((Some(o.clone()), cls, m)),
+            });
         }
         let by_ref: Vec<bool> = match &m {
             Some(m) => match &m.kind {
@@ -1614,7 +1906,10 @@ impl Interp {
                 if let Some(target) = php_spl::handlers::method_target(self, &o)? {
                     return self.call_method(&target, n, &argv);
                 }
-                Err(rt_err(format!("Call to undefined method {}::{n}()", cls.name)))
+                Err(rt_err(format!(
+                    "Call to undefined method {}::{n}()",
+                    cls.name
+                )))
             }
         }
     }
@@ -1638,7 +1933,11 @@ impl Interp {
         };
         let argv = self.eval_args(args, &|i| by_ref.get(i).copied().unwrap_or(false))?;
         if m.is_static {
-            let st = if is_relative { self.frame().static_scope.clone().unwrap_or(c.clone()) } else { c.clone() };
+            let st = if is_relative {
+                self.frame().static_scope.clone().unwrap_or(c.clone())
+            } else {
+                c.clone()
+            };
             return self.call_method_h(None, &st, &m, &argv);
         }
         let this = self.frame().this.clone();
@@ -1647,12 +1946,21 @@ impl Interp {
                 let cls = tobj(&t).class.clone();
                 self.call_method_h(Some(&t), &cls, &m, &argv)
             }
-            _ => Err(rt_err(format!("Non-static method {}::{}() cannot be called statically", m.class, m.name))),
+            _ => Err(rt_err(format!(
+                "Non-static method {}::{}() cannot be called statically",
+                m.class, m.name
+            ))),
         }
     }
 
     /// Calls a resolved method. `cls` is the called class (`static`).
-    pub fn call_method_h(&mut self, this: Option<&Obj>, cls: &Rc<Class>, m: &Rc<MethodH>, args: &[Value]) -> RtResult<Value> {
+    pub fn call_method_h(
+        &mut self,
+        this: Option<&Obj>,
+        cls: &Rc<Class>,
+        m: &Rc<MethodH>,
+        args: &[Value],
+    ) -> RtResult<Value> {
         if matches!(m.kind, MKind::Spl) {
             if let Some(msg) = php_spl::classes::deprecation_message(&m.class, &m.name) {
                 self.emit(ErrorLevel::Deprecated, &msg)?;
@@ -1665,14 +1973,22 @@ impl Interp {
         self.depth += 1;
         if self.depth > 3000 {
             self.depth -= 1;
-            return Err(RuntimeError::Error("Maximum call stack size reached. Infinite recursion?".into()));
+            return Err(RuntimeError::Error(
+                "Maximum call stack size reached. Infinite recursion?".into(),
+            ));
         }
         let r = self.call_method_h_inner(this, cls, m, args);
         self.depth -= 1;
         r
     }
 
-    fn call_method_h_inner(&mut self, this: Option<&Obj>, cls: &Rc<Class>, m: &Rc<MethodH>, args: &[Value]) -> RtResult<Value> {
+    fn call_method_h_inner(
+        &mut self,
+        this: Option<&Obj>,
+        cls: &Rc<Class>,
+        m: &Rc<MethodH>,
+        args: &[Value],
+    ) -> RtResult<Value> {
         let named = std::mem::take(&mut self.pending_named);
         let placed;
         let args = if named.is_empty() {
@@ -1683,7 +1999,9 @@ impl Interp {
         };
         match &m.kind {
             MKind::User(def) => {
-                let scope = self.find_class(m.class.as_bytes()).or_else(|| Some(cls.clone()));
+                let scope = self
+                    .find_class(m.class.as_bytes())
+                    .or_else(|| Some(cls.clone()));
                 let def = def.clone();
                 self.call_user(&def, args, this.cloned(), scope, Some(cls.clone()), &[])
             }
@@ -1706,12 +2024,20 @@ impl Interp {
                 self.trace_stack.pop();
                 r
             }
-            MKind::Abstract => Err(rt_err(format!("Cannot call abstract method {}::{}()", m.class, m.name))),
+            MKind::Abstract => Err(rt_err(format!(
+                "Cannot call abstract method {}::{}()",
+                m.class, m.name
+            ))),
         }
     }
 
     /// Places named arguments by parameter name, filling gaps with defaults.
-    fn place_named(&mut self, m: &Rc<MethodH>, args: &[Value], named: Vec<(String, Value)>) -> RtResult<Vec<Value>> {
+    fn place_named(
+        &mut self,
+        m: &Rc<MethodH>,
+        args: &[Value],
+        named: Vec<(String, Value)>,
+    ) -> RtResult<Vec<Value>> {
         let params: Vec<(String, Option<Value>)> = match &m.kind {
             MKind::User(d) => {
                 let mut v = Vec::new();
@@ -1781,7 +2107,10 @@ impl Interp {
                     let a = Value::Array(ZArray::from_values(args.iter().cloned()));
                     return self.call_method_h(Some(o), &cls, &call, &[Value::from(name), a]);
                 }
-                Err(rt_err(format!("Call to undefined method {}::{name}()", cls.name)))
+                Err(rt_err(format!(
+                    "Call to undefined method {}::{name}()",
+                    cls.name
+                )))
             }
         }
     }
@@ -1801,7 +2130,9 @@ impl Interp {
         self.depth += 1;
         if self.depth > 2000 {
             self.depth -= 1;
-            return Err(RuntimeError::Fatal("Maximum call stack size reached".into()));
+            return Err(RuntimeError::Fatal(
+                "Maximum call stack size reached".into(),
+            ));
         }
         let mut frame = Frame {
             vars: HashMap::new(),
@@ -1817,16 +2148,39 @@ impl Interp {
         }
         let line = self.line;
         let (fclass, fname, fty) = match def.name.split_once("::") {
-            Some((c, m)) => (Some(c.to_string()), m.to_string(), if frame.this.is_some() { "->" } else { "::" }),
+            Some((c, m)) => (
+                Some(c.to_string()),
+                m.to_string(),
+                if frame.this.is_some() { "->" } else { "::" },
+            ),
             None => (None, def.name.clone(), ""),
         };
-        self.trace_stack.push(TFrame { internal: false, func: fname, class: fclass, ty: fty, args: args.to_vec(), line });
+        self.trace_stack.push(TFrame {
+            internal: false,
+            func: fname,
+            class: fclass,
+            ty: fty,
+            args: args.to_vec(),
+            line,
+        });
         self.frames.push(frame);
         let r = (|| -> RtResult<Value> {
-            let required = def.params.iter().take_while(|p| p.default.is_none() && !p.variadic).count();
-            let required = def.params.iter().rposition(|p| p.default.is_none() && !p.variadic).map_or(0, |i| i + 1).max(required);
+            let required = def
+                .params
+                .iter()
+                .take_while(|p| p.default.is_none() && !p.variadic)
+                .count();
+            let required = def
+                .params
+                .iter()
+                .rposition(|p| p.default.is_none() && !p.variadic)
+                .map_or(0, |i| i + 1)
+                .max(required);
             if args.len() < required {
-                let exact = def.params.iter().all(|p| p.default.is_none() && !p.variadic);
+                let exact = def
+                    .params
+                    .iter()
+                    .all(|p| p.default.is_none() && !p.variadic);
                 return Err(RuntimeError::ArgumentCountError(format!(
                     "Too few arguments to function {}(), {} passed in {} on line {} and {} {} expected",
                     def.name,
@@ -1859,7 +2213,12 @@ impl Interp {
                 self.frame().vars.insert(p.name.name.clone(), v);
                 if !p.modifiers.is_empty() {
                     if let Some(t) = self.frame().this.clone() {
-                        let val = self.frame().vars.get(&p.name.name).map(Value::deref).unwrap_or_default();
+                        let val = self
+                            .frame()
+                            .vars
+                            .get(&p.name.name)
+                            .map(Value::deref)
+                            .unwrap_or_default();
                         self.prop_set_raw(&t, &s(&p.name.name), val);
                     }
                 }
@@ -1890,8 +2249,12 @@ impl Interp {
     }
 
     fn coerce_return(&mut self, def: &FuncDef, v: Value) -> RtResult<Value> {
-        let Some(rt) = &def.return_type else { return Ok(v) };
-        let TypeKind::Named(n) = &rt.kind else { return Ok(v) };
+        let Some(rt) = &def.return_type else {
+            return Ok(v);
+        };
+        let TypeKind::Named(n) = &rt.kind else {
+            return Ok(v);
+        };
         Ok(match (lc(&n.name).as_str(), v.deref()) {
             ("string", Value::Int(_) | Value::Float(_)) => Value::Str(v.to_zstr(self)?),
             ("int", Value::Float(f)) if f.fract() == 0.0 => Value::Int(f as i64),
@@ -1907,19 +2270,26 @@ impl Interp {
             TypeKind::Nullable(inner) => (true, &inner.kind),
             k => (false, k),
         };
-        let TypeKind::Named(n) = kind else { return Ok(v) };
+        let TypeKind::Named(n) = kind else {
+            return Ok(v);
+        };
         let tn = lc(&n.name);
         if nullable && v.is_null() {
             return Ok(v);
         }
         let ok = match (tn.as_str(), &v) {
-            ("int", Value::Int(_)) | ("float", Value::Float(_)) | ("string", Value::Str(_)) | ("bool", Value::Bool(_)) => true,
+            ("int", Value::Int(_))
+            | ("float", Value::Float(_))
+            | ("string", Value::Str(_))
+            | ("bool", Value::Bool(_)) => true,
             ("float", Value::Int(n)) => return Ok(Value::Float(*n as f64)),
             ("int", Value::Float(f)) if f.fract() == 0.0 => return Ok(Value::Int(*f as i64)),
-            ("int", Value::Str(st)) => match php_runtime::numeric::is_numeric_string(st.as_bytes(), false) {
-                Some(php_runtime::numeric::Number::Int(n)) => return Ok(Value::Int(n)),
-                _ => false,
-            },
+            ("int", Value::Str(st)) => {
+                match php_runtime::numeric::is_numeric_string(st.as_bytes(), false) {
+                    Some(php_runtime::numeric::Number::Int(n)) => return Ok(Value::Int(n)),
+                    _ => false,
+                }
+            }
             ("string", Value::Int(_) | Value::Float(_)) => return Ok(Value::Str(v.to_zstr(self)?)),
             ("int" | "float" | "string" | "bool", _) => false,
             _ => true,
@@ -1948,10 +2318,14 @@ impl Interp {
                 let n = n.trim_start_matches('\\').to_string();
                 if let Some((c, m)) = n.split_once("::") {
                     let cls = self.lookup_class(c.as_bytes())?;
-                    let mh = cls
-                        .find_method(&m.to_ascii_lowercase())
-                        .ok_or_else(|| rt_err(format!("Call to undefined method {}::{m}()", cls.name)))?;
-                    let this = if mh.is_static { None } else { self.frame().this.clone() };
+                    let mh = cls.find_method(&m.to_ascii_lowercase()).ok_or_else(|| {
+                        rt_err(format!("Call to undefined method {}::{m}()", cls.name))
+                    })?;
+                    let this = if mh.is_static {
+                        None
+                    } else {
+                        self.frame().this.clone()
+                    };
                     return self.call_method_h(this.as_ref(), &cls, &mh, args);
                 }
                 let l = n.to_ascii_lowercase();
@@ -1962,7 +2336,12 @@ impl Interp {
             }
             Value::Array(a) if a.len() == 2 => {
                 let target = a.get_int(0).map(Value::deref).unwrap_or_default();
-                let m = a.get_int(1).map(Value::deref).unwrap_or_default().to_zstr(self)?.to_string_lossy();
+                let m = a
+                    .get_int(1)
+                    .map(Value::deref)
+                    .unwrap_or_default()
+                    .to_zstr(self)?
+                    .to_string_lossy();
                 match target {
                     Value::Object(o) => {
                         let mut cls = tobj(&o).class.clone();
@@ -1988,10 +2367,20 @@ impl Interp {
                             lookup = cls.parent.clone().ok_or_else(|| rt_err("no parent"))?;
                             mname = rest.to_string();
                         }
-                        let mh = lookup
-                            .find_method(&mname.to_ascii_lowercase())
-                            .ok_or_else(|| rt_err(format!("Call to undefined method {}::{mname}()", cls.name)))?;
-                        let this = if mh.is_static { None } else { self.frame().this.clone() };
+                        let mh =
+                            lookup
+                                .find_method(&mname.to_ascii_lowercase())
+                                .ok_or_else(|| {
+                                    rt_err(format!(
+                                        "Call to undefined method {}::{mname}()",
+                                        cls.name
+                                    ))
+                                })?;
+                        let this = if mh.is_static {
+                            None
+                        } else {
+                            self.frame().this.clone()
+                        };
                         self.call_method_h(this.as_ref(), &cls, &mh, args)
                     }
                 }
@@ -2008,8 +2397,19 @@ impl Interp {
                     if let Some((this, cls, m)) = &c.method {
                         return self.call_method_h(this.as_ref(), cls, m, args);
                     }
-                    let st = c.this.as_ref().map(|t| tobj(t).class.clone()).or_else(|| c.scope.clone());
-                    return self.call_user(&c.func, args, c.this.clone(), c.scope.clone(), st, &c.bound);
+                    let st = c
+                        .this
+                        .as_ref()
+                        .map(|t| tobj(t).class.clone())
+                        .or_else(|| c.scope.clone());
+                    return self.call_user(
+                        &c.func,
+                        args,
+                        c.this.clone(),
+                        c.scope.clone(),
+                        st,
+                        &c.bound,
+                    );
                 }
                 self.call_method(&o, "__invoke", args)
             }
@@ -2025,7 +2425,9 @@ impl Interp {
                 if let Some((c, m)) = n.split_once("::") {
                     return match self.find_class(c.as_bytes()) {
                         Some(cls) if cls.find_method(&m.to_ascii_lowercase()).is_some() => Ok(()),
-                        Some(cls) => Err(format!("class {} does not have a method \"{m}\"", cls.name)),
+                        Some(cls) => {
+                            Err(format!("class {} does not have a method \"{m}\"", cls.name))
+                        }
                         None => Err(format!("class \"{c}\" not found")),
                     };
                 }
@@ -2033,7 +2435,9 @@ impl Interp {
                 if self.functions.contains_key(&l) || crate::harness::builtins::exists(&l) {
                     Ok(())
                 } else {
-                    Err(format!("function \"{n}\" not found or invalid function name"))
+                    Err(format!(
+                        "function \"{n}\" not found or invalid function name"
+                    ))
                 }
             }
             Value::Array(a) if a.len() == 2 => {
@@ -2048,10 +2452,14 @@ impl Interp {
                         Some(c) => c,
                         None => return Err(format!("class \"{}\" not found", c.to_string_lossy())),
                     },
-                    _ => return Err("first array member is not a valid class name or object".into()),
+                    _ => {
+                        return Err("first array member is not a valid class name or object".into())
+                    }
                 };
                 let mm = m.strip_prefix("parent::").unwrap_or(&m);
-                if cls.find_method(&mm.to_ascii_lowercase()).is_some() || cls.find_method("__call").is_some() {
+                if cls.find_method(&mm.to_ascii_lowercase()).is_some()
+                    || cls.find_method("__call").is_some()
+                {
                     Ok(())
                 } else {
                     Err(format!("class {} does not have a method \"{m}\"", cls.name))
@@ -2059,7 +2467,9 @@ impl Interp {
             }
             Value::Array(_) => Err("array callback must have exactly two members".into()),
             Value::Object(o) => {
-                if matches!(&*tobj(&o).extra.borrow(), Extra::Closure(_)) || tobj(&o).class.find_method("__invoke").is_some() {
+                if matches!(&*tobj(&o).extra.borrow(), Extra::Closure(_))
+                    || tobj(&o).class.find_method("__invoke").is_some()
+                {
                     Ok(())
                 } else {
                     Err("no array or string given".into())
@@ -2070,13 +2480,20 @@ impl Interp {
     }
 
     fn include_file(&mut self, p: &str, kind: IncludeKind) -> RtResult<Value> {
-        let path = if p.starts_with('/') { p.to_string() } else { format!("{}/{}", self.dir, p) };
+        let path = if p.starts_with('/') {
+            p.to_string()
+        } else {
+            format!("{}/{}", self.dir, p)
+        };
         let Ok(src) = std::fs::read(&path) else {
             let fname = match kind {
                 IncludeKind::Require | IncludeKind::RequireOnce => "require",
                 _ => "include",
             };
-            self.emit(ErrorLevel::Warning, &format!("{fname}({p}): Failed to open stream: No such file or directory"))?;
+            self.emit(
+                ErrorLevel::Warning,
+                &format!("{fname}({p}): Failed to open stream: No such file or directory"),
+            )?;
             return Ok(Value::Bool(false));
         };
         let program = php_parser::parse(&src, &php_parser::ParseOptions::default())
@@ -2091,7 +2508,13 @@ impl Interp {
 }
 
 pub fn is_lvalue(e: &Expr) -> bool {
-    matches!(e.kind, ExprKind::Var(_) | ExprKind::Dim { .. } | ExprKind::Prop { .. } | ExprKind::StaticProp { .. })
+    matches!(
+        e.kind,
+        ExprKind::Var(_)
+            | ExprKind::Dim { .. }
+            | ExprKind::Prop { .. }
+            | ExprKind::StaticProp { .. }
+    )
 }
 
 pub fn cast_target_name(t: CastTarget) -> &'static str {

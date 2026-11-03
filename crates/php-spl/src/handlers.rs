@@ -56,7 +56,7 @@ pub fn std_read_dimension(
 ) -> RtResult<Value> {
     let off = offset.cloned().unwrap_or_default();
     if kind == DimKind::Is {
-        let r = host.call_method(obj, "offsetExists", &[off.clone()])?;
+        let r = host.call_method(obj, "offsetExists", std::slice::from_ref(&off))?;
         if !r.to_bool(host)? {
             return Ok(Value::Null);
         }
@@ -71,10 +71,10 @@ pub fn std_has_dimension(
     offset: &Value,
     check_empty: bool,
 ) -> RtResult<bool> {
-    let r = host.call_method(obj, "offsetExists", &[offset.clone()])?;
+    let r = host.call_method(obj, "offsetExists", std::slice::from_ref(offset))?;
     let exists = r.to_bool(host)?;
     if exists && check_empty {
-        let v = host.call_method(obj, "offsetGet", &[offset.clone()])?;
+        let v = host.call_method(obj, "offsetGet", std::slice::from_ref(offset))?;
         return v.to_bool(host);
     }
     Ok(exists)
@@ -214,7 +214,12 @@ pub fn read_property(
 }
 
 /// `write_property`; returns whether SPL handled the write.
-pub fn write_property(host: &mut dyn SplHost, obj: &Obj, name: &ZStr, value: Value) -> RtResult<bool> {
+pub fn write_property(
+    host: &mut dyn SplHost,
+    obj: &Obj,
+    name: &ZStr,
+    value: Value,
+) -> RtResult<bool> {
     let Some((st, fam)) = state(host, obj)? else {
         return Ok(false);
     };
@@ -271,6 +276,14 @@ pub fn compare(host: &mut dyn SplHost, a: &Obj, b: &Obj) -> RtResult<Option<i32>
     }
 }
 
+enum Plan {
+    Done(Box<SplState>),
+    Storage,
+    Array,
+    Iterators,
+    File,
+}
+
 /// `clone_obj`: the internal state for `new_obj`, a clone of `old`
 /// (properties are copied by the VM).
 pub fn clone_state(
@@ -286,17 +299,10 @@ pub fn clone_state(
     let Some(fresh) = fresh else {
         return Ok(None);
     };
-    enum Plan {
-        Done(SplState),
-        Storage,
-        Array,
-        Iterators,
-        File,
-    }
     let plan = st.with(|s| match s {
-        SplState::FixedArray(f) => Plan::Done(SplState::FixedArray(f.clone())),
-        SplState::Heap(h) => Plan::Done(SplState::Heap(h.clone())),
-        SplState::DlList(d) => Plan::Done(SplState::DlList(d.duplicate())),
+        SplState::FixedArray(f) => Plan::Done(Box::new(SplState::FixedArray(f.clone()))),
+        SplState::Heap(h) => Plan::Done(Box::new(SplState::Heap(h.clone()))),
+        SplState::DlList(d) => Plan::Done(Box::new(SplState::DlList(d.duplicate()))),
         SplState::Storage(_) => Plan::Storage,
         SplState::Array(_) => Plan::Array,
         SplState::DualIt(_) | SplState::RecursiveIt(_) => Plan::Iterators,
@@ -304,7 +310,7 @@ pub fn clone_state(
     })?;
     match plan {
         Plan::Done(s) => {
-            fresh.with(|f| *f = s)?;
+            fresh.with(|f| *f = *s)?;
         }
         Plan::Storage => crate::observer::clone_into(host, new_obj, &fresh, &st)?,
         Plan::Array => crate::array::clone_into(host, old, new_obj, &fresh, &st)?,

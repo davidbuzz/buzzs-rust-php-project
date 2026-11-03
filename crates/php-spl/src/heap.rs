@@ -103,6 +103,7 @@ pub fn extract_value(elem: &HeapElem, flags: i64) -> Value {
 
 /// The heap's comparison function (`heap->cmp`), calling an overridden
 /// `compare()` when the class has one.
+#[allow(clippy::many_single_char_names)]
 fn compare(
     host: &mut dyn SplHost,
     obj: &Obj,
@@ -274,6 +275,7 @@ fn validate(st: &SplObject, write: bool) -> RtResult<()> {
 
 /// Methods of `SplHeap` (and the subclasses' `compare`) and
 /// `SplPriorityQueue`. `class` is the declaring class.
+#[allow(clippy::too_many_lines, clippy::unnecessary_wraps)]
 pub(crate) fn call(
     host: &mut dyn SplHost,
     class: &str,

@@ -11,7 +11,9 @@ use crate::exceptions::{
 use crate::host::{ObjectIterator, SplHost};
 use crate::object::{state_of, SplObject};
 use crate::util::{this_obj, to_long};
-use php_runtime::{ArrayKey, ErrorLevel, HashTable, Obj, RtResult, RuntimeError, Value, ZArray, ZStr};
+use php_runtime::{
+    ArrayKey, ErrorLevel, HashTable, Obj, RtResult, RuntimeError, Value, ZArray, ZStr,
+};
 use std::cell::RefCell;
 use std::fmt;
 use std::rc::Rc;
@@ -75,6 +77,7 @@ pub const RTIT_BYPASS_KEY: i64 = 8;
 
 /// The variant-specific part of a dual iterator (`dit_type` + union).
 #[derive(Clone)]
+#[allow(missing_debug_implementations)]
 pub enum DualKind {
     /// Not constructed yet (`DIT_Unknown`).
     Unknown,
@@ -578,7 +581,13 @@ fn caching_next(host: &mut dyn SplHost, st: &SplObject) -> RtResult<()> {
     }
     let (recursive, inner) = st.dual(|d| {
         (
-            matches!(d.kind, DualKind::Caching { recursive: true, .. }),
+            matches!(
+                d.kind,
+                DualKind::Caching {
+                    recursive: true,
+                    ..
+                }
+            ),
             d.inner.clone(),
         )
     })?;
@@ -839,7 +848,10 @@ fn regex_accept(host: &mut dyn SplHost, this: &Obj, st: &SplObject) -> RtResult<
     Ok(result)
 }
 
-fn regex_field<R>(st: &SplObject, f: impl FnOnce(&mut i64, &mut i64, &mut i64, &ZStr) -> R) -> RtResult<R> {
+fn regex_field<R>(
+    st: &SplObject,
+    f: impl FnOnce(&mut i64, &mut i64, &mut i64, &ZStr) -> R,
+) -> RtResult<R> {
     st.dual(|d| match &mut d.kind {
         DualKind::Regex {
             flags,
@@ -912,7 +924,10 @@ pub(crate) fn call(
         let takes_args = matches!(
             (class, method),
             ("LimitIterator", "seek")
-                | ("CachingIterator", "setflags" | "offsetget" | "offsetset" | "offsetunset" | "offsetexists")
+                | (
+                    "CachingIterator",
+                    "setflags" | "offsetget" | "offsetset" | "offsetunset" | "offsetexists"
+                )
                 | ("AppendIterator", "append")
                 | ("RegexIterator", "setmode" | "setflags" | "setpregflags")
         );
@@ -923,9 +938,9 @@ pub(crate) fn call(
             check(&st)?;
         }
         match (class, method) {
-            ("IteratorIterator", "getinneriterator") => {
-                Ok(st.dual(|d| d.inner.clone())?.map_or(Value::Null, Value::Object))
-            }
+            ("IteratorIterator", "getinneriterator") => Ok(st
+                .dual(|d| d.inner.clone())?
+                .map_or(Value::Null, Value::Object)),
             ("IteratorIterator", "rewind") => {
                 dual_rewind(host, &st)?;
                 dual_fetch(host, &st, true)?;
@@ -954,8 +969,14 @@ pub(crate) fn call(
                 Ok(Value::Null)
             }
             ("CallbackFilterIterator", "accept") => {
-                let (data, key, inner, kind) =
-                    st.dual(|d| (d.data.clone(), d.key.clone(), d.inner.clone(), d.kind.clone()))?;
+                let (data, key, inner, kind) = st.dual(|d| {
+                    (
+                        d.data.clone(),
+                        d.key.clone(),
+                        d.inner.clone(),
+                        d.kind.clone(),
+                    )
+                })?;
                 let (Some(data), Some(key)) = (data, key) else {
                     return Ok(Value::Bool(false));
                 };
@@ -966,7 +987,13 @@ pub(crate) fn call(
                 let r = host.call_callable(&callback, &[data, key, inner])?;
                 Ok(r.deref())
             }
-            ("RecursiveFilterIterator" | "RecursiveCallbackFilterIterator" | "ParentIterator" | "RecursiveRegexIterator", "haschildren")
+            (
+                "RecursiveFilterIterator"
+                | "RecursiveCallbackFilterIterator"
+                | "ParentIterator"
+                | "RecursiveRegexIterator",
+                "haschildren",
+            )
             | ("ParentIterator", "accept") => {
                 let inner = st.dual(|d| d.inner.clone())?.ok_or_else(not_initialized)?;
                 host.call_method(&inner, "hasChildren", &[])
@@ -996,7 +1023,9 @@ pub(crate) fn call(
             }
             ("LimitIterator", "valid") => {
                 let (offset, count) = limit_params(&st)?;
-                st.dual(|d| Value::Bool((count == -1 || d.pos - offset < count) && d.data.is_some()))
+                st.dual(|d| {
+                    Value::Bool((count == -1 || d.pos - offset < count) && d.data.is_some())
+                })
             }
             ("LimitIterator", "next") => {
                 dual_next(host, &st, true)?;
@@ -1018,9 +1047,7 @@ pub(crate) fn call(
                 caching_rewind(host, &st)?;
                 Ok(Value::Null)
             }
-            ("CachingIterator", "valid") => {
-                Ok(Value::Bool(caching_flags(&st)? & CIT_VALID != 0))
-            }
+            ("CachingIterator", "valid") => Ok(Value::Bool(caching_flags(&st)? & CIT_VALID != 0)),
             ("CachingIterator", "next") => {
                 caching_next(host, &st)?;
                 Ok(Value::Null)
@@ -1067,15 +1094,14 @@ pub(crate) fn call(
                 let a = Args::new(&func, args, &["key"], 1, Some(1))?;
                 let key = a.str(host, 0)?;
                 full_cache_check(this, &st)?;
-                match with_cache(&st, |c| c.get(&ArrayKey::from_zstr(&key)).cloned())? {
-                    Some(v) => Ok(v.deref()),
-                    None => {
-                        host.diagnostic(
-                            ErrorLevel::Warning,
-                            &format!("Undefined array key \"{}\"", key.to_string_lossy()),
-                        )?;
-                        Ok(Value::Null)
-                    }
+                if let Some(v) = with_cache(&st, |c| c.get(&ArrayKey::from_zstr(&key)).cloned())? {
+                    Ok(v.deref())
+                } else {
+                    host.diagnostic(
+                        ErrorLevel::Warning,
+                        &format!("Undefined array key \"{}\"", key.to_string_lossy()),
+                    )?;
+                    Ok(Value::Null)
                 }
             }
             ("CachingIterator", "offsetunset") => {
@@ -1091,7 +1117,9 @@ pub(crate) fn call(
                 let a = Args::new(&func, args, &["key"], 1, Some(1))?;
                 let key = a.str(host, 0)?;
                 full_cache_check(this, &st)?;
-                with_cache(&st, |c| Value::Bool(c.contains_key(&ArrayKey::from_zstr(&key))))
+                with_cache(&st, |c| {
+                    Value::Bool(c.contains_key(&ArrayKey::from_zstr(&key)))
+                })
             }
             ("CachingIterator", "getcache") => {
                 full_cache_check(this, &st)?;
@@ -1129,10 +1157,18 @@ pub(crate) fn call(
                 with_cache(&st, |c| Value::Int(to_long(c.len())))
             }
             ("RecursiveCachingIterator", "haschildren") => st.dual(|d| {
-                Value::Bool(matches!(&d.kind, DualKind::Caching { children: Some(_), .. }))
+                Value::Bool(matches!(
+                    &d.kind,
+                    DualKind::Caching {
+                        children: Some(_),
+                        ..
+                    }
+                ))
             }),
             ("RecursiveCachingIterator", "getchildren") => st.dual(|d| match &d.kind {
-                DualKind::Caching { children: Some(c), .. } => c.clone(),
+                DualKind::Caching {
+                    children: Some(c), ..
+                } => c.clone(),
                 _ => Value::Null,
             }),
             ("NoRewindIterator", "rewind") => Ok(Value::Null),
@@ -1146,7 +1182,8 @@ pub(crate) fn call(
             }
             ("NoRewindIterator", "current") => {
                 let it = inner_it(&st)?.ok_or_else(not_initialized)?;
-                it_call(&it, host, |i, h| i.current(h)).map(|v| v.map_or(Value::Null, |v| v.deref()))
+                it_call(&it, host, |i, h| i.current(h))
+                    .map(|v| v.map_or(Value::Null, |v| v.deref()))
             }
             ("NoRewindIterator", "next") => {
                 let it = inner_it(&st)?.ok_or_else(not_initialized)?;
@@ -1184,9 +1221,8 @@ pub(crate) fn call(
                     }
                     loop {
                         let moved = append_next_iterator(host, &st)?;
-                        let same = st.dual(|d| {
-                            d.inner.as_ref().is_some_and(|o| Obj::ptr_eq(o, &it_obj))
-                        })?;
+                        let same =
+                            st.dual(|d| d.inner.as_ref().is_some_and(|o| Obj::ptr_eq(o, &it_obj)))?;
                         if same || !moved {
                             break;
                         }
@@ -1306,6 +1342,7 @@ pub enum RsState {
 
 /// One level of a recursive iteration (`spl_sub_iterator`).
 #[derive(Clone)]
+#[allow(missing_debug_implementations)]
 pub struct SubIter {
     /// The iterator object of this level.
     pub obj: Obj,
@@ -1678,14 +1715,19 @@ fn rit_construct(
 }
 
 fn tree_prefix(host: &mut dyn SplHost, st: &SplObject) -> RtResult<ZStr> {
-    let (levels, prefix) = st.recursive(|r| (r.iterators.clone().unwrap_or_default(), r.prefix.clone()))?;
+    let (levels, prefix) =
+        st.recursive(|r| (r.iterators.clone().unwrap_or_default(), r.prefix.clone()))?;
     let mut out = prefix[0].as_bytes().to_vec();
     let n = levels.len();
     for (i, s) in levels.iter().enumerate() {
         let has_next = host.call_method(&s.obj, "hasNext", &[])?;
         let is_true = matches!(has_next, Value::Bool(true));
         let part = if i + 1 < n {
-            if is_true { &prefix[1] } else { &prefix[2] }
+            if is_true {
+                &prefix[1]
+            } else {
+                &prefix[2]
+            }
         } else if is_true {
             &prefix[3]
         } else {
@@ -1782,7 +1824,8 @@ fn recursive_call(
         }
         ("RecursiveIteratorIterator", "current") => {
             let cur = current_sub(&st)?;
-            it_call(&cur.it, host, |i, h| i.current(h)).map(|v| v.map_or(Value::Null, |v| v.deref()))
+            it_call(&cur.it, host, |i, h| i.current(h))
+                .map(|v| v.map_or(Value::Null, |v| v.deref()))
         }
         (_, "next") => {
             rit_move_forward(host, this, &st)?;
@@ -1790,9 +1833,10 @@ fn recursive_call(
         }
         (_, "getdepth") => Ok(Value::Int(level_of(&st)?.map_or(0, to_long))),
         (_, "getinneriterator") => Ok(Value::Object(current_sub(&st)?.obj)),
-        (_, "beginiteration" | "enditeration" | "beginchildren" | "endchildren" | "nextelement") => {
-            Ok(Value::Null)
-        }
+        (
+            _,
+            "beginiteration" | "enditeration" | "beginchildren" | "endchildren" | "nextelement",
+        ) => Ok(Value::Null),
         (_, "callhaschildren") => {
             let Some(level) = level_of(&st)? else {
                 return Ok(Value::Bool(false));
@@ -1918,7 +1962,11 @@ pub fn method_target(host: &mut dyn SplHost, obj: &Obj) -> RtResult<Option<Obj>>
     if let Ok(inner) = st.dual(|d| d.inner.clone()) {
         return Ok(inner);
     }
-    if let Ok(level) = st.recursive(|r| r.iterators.as_ref().and_then(|v| v.last().map(|s| s.obj.clone()))) {
+    if let Ok(level) = st.recursive(|r| {
+        r.iterators
+            .as_ref()
+            .and_then(|v| v.last().map(|s| s.obj.clone()))
+    }) {
         if level.is_none() && st.recursive(|r| r.iterators.is_none())? {
             return Err(error(format!(
                 "The {} instance wasn't initialized properly",

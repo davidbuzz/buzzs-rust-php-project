@@ -33,7 +33,10 @@ fn oracle_scripts() {
             .stack_size(256 * 1024 * 1024)
             .spawn(move || {
                 let mut it = harness::Interp::new(&name);
-                it.dir = pp.parent().map(|d| d.to_string_lossy().into_owned()).unwrap_or_default();
+                it.dir = pp
+                    .parent()
+                    .map(|d| d.to_string_lossy().into_owned())
+                    .unwrap_or_default();
                 it.run_source(&src);
                 it.out
             })
@@ -41,7 +44,10 @@ fn oracle_scripts() {
             .join()
             .unwrap_or_else(|_| b"PANIC".to_vec());
         if let Ok(d) = std::env::var("SPL_ORACLE_DUMP") {
-            let f = p.file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_default();
+            let f = p
+                .file_name()
+                .map(|f| f.to_string_lossy().into_owned())
+                .unwrap_or_default();
             let _ = std::fs::write(Path::new(&d).join(f + ".got"), &got);
         }
         let (e, g) = (harness::normalize(&expected), harness::normalize(&got));
@@ -58,11 +64,22 @@ fn oracle_scripts() {
 }
 
 #[test]
-#[ignore]
+#[ignore = "regenerates the expected outputs with /usr/bin/php"]
 fn regen_oracle() {
     for p in scripts() {
         let out = std::process::Command::new("/usr/bin/php")
-            .args(["-d", "memory_limit=1G", "-d", "error_reporting=-1", "-d", "display_errors=1", "-d", "html_errors=0", "-d", "log_errors=0"])
+            .args([
+                "-d",
+                "memory_limit=1G",
+                "-d",
+                "error_reporting=-1",
+                "-d",
+                "display_errors=1",
+                "-d",
+                "html_errors=0",
+                "-d",
+                "log_errors=0",
+            ])
             .arg(&p)
             .output()
             .expect("run php");

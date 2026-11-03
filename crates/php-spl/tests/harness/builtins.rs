@@ -3,7 +3,7 @@
 use super::interp::*;
 use php_parser::ast::{Expr, ExprKind, Span};
 use php_runtime::{
-    ops, ArrayKey, ErrorLevel, HashTable, Obj, PhpRef, RtResult, RuntimeContext, RuntimeError, Value, ZArray, ZStr,
+    ops, ArrayKey, ErrorLevel, HashTable, Obj, PhpRef, RtResult, RuntimeError, Value, ZArray, ZStr,
 };
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -14,7 +14,10 @@ fn lit(v: Value) -> Expr {
     let kind = match v {
         Value::Str(s) => ExprKind::String(s.as_bytes().to_vec()),
         Value::Int(i) => ExprKind::Int(i),
-        Value::Array(_) => ExprKind::Array { items: Vec::new(), syntax: php_parser::ast::ArraySyntax::Short },
+        Value::Array(_) => ExprKind::Array {
+            items: Vec::new(),
+            syntax: php_parser::ast::ArraySyntax::Short,
+        },
         _ => ExprKind::Const(php_parser::ast::Name {
             kind: php_parser::ast::NameKind::Unqualified,
             name: b"null".to_vec(),
@@ -51,7 +54,13 @@ fn native_class(
     for (n, f, st) in methods {
         mm.insert(
             n.to_ascii_lowercase(),
-            Rc::new(MethodH { name: (*n).to_string(), class: name.to_string(), kind: MKind::Native(*f), is_static: *st, visibility: 0 }),
+            Rc::new(MethodH {
+                name: (*n).to_string(),
+                class: name.to_string(),
+                kind: MKind::Native(*f),
+                is_static: *st,
+                visibility: 0,
+            }),
         );
     }
     let spl_base = parent.as_ref().and_then(|p| p.spl_base);
@@ -73,13 +82,55 @@ fn native_class(
 
 fn exc_props(base: &str) -> Vec<PropDecl> {
     vec![
-        PropDecl { name: "message".into(), visibility: 1, default: Some(lit(Value::from(""))), is_static: false, typed: false },
-        PropDecl { name: "string".into(), visibility: 2, default: Some(lit(Value::from(""))), is_static: false, typed: true },
-        PropDecl { name: "code".into(), visibility: 1, default: Some(lit(Value::Int(0))), is_static: false, typed: false },
-        PropDecl { name: "file".into(), visibility: 1, default: Some(lit(Value::from(""))), is_static: false, typed: true },
-        PropDecl { name: "line".into(), visibility: 1, default: Some(lit(Value::Int(0))), is_static: false, typed: true },
-        PropDecl { name: "trace".into(), visibility: 2, default: Some(lit(Value::empty_array())), is_static: false, typed: true },
-        PropDecl { name: "previous".into(), visibility: 2, default: Some(lit(Value::Null)), is_static: false, typed: true },
+        PropDecl {
+            name: "message".into(),
+            visibility: 1,
+            default: Some(lit(Value::from(""))),
+            is_static: false,
+            typed: false,
+        },
+        PropDecl {
+            name: "string".into(),
+            visibility: 2,
+            default: Some(lit(Value::from(""))),
+            is_static: false,
+            typed: true,
+        },
+        PropDecl {
+            name: "code".into(),
+            visibility: 1,
+            default: Some(lit(Value::Int(0))),
+            is_static: false,
+            typed: false,
+        },
+        PropDecl {
+            name: "file".into(),
+            visibility: 1,
+            default: Some(lit(Value::from(""))),
+            is_static: false,
+            typed: true,
+        },
+        PropDecl {
+            name: "line".into(),
+            visibility: 1,
+            default: Some(lit(Value::Int(0))),
+            is_static: false,
+            typed: true,
+        },
+        PropDecl {
+            name: "trace".into(),
+            visibility: 2,
+            default: Some(lit(Value::empty_array())),
+            is_static: false,
+            typed: true,
+        },
+        PropDecl {
+            name: "previous".into(),
+            visibility: 2,
+            default: Some(lit(Value::Null)),
+            is_static: false,
+            typed: true,
+        },
     ]
     .into_iter()
     .map(|mut p| {
@@ -118,11 +169,35 @@ fn register_exceptions(it: &mut Interp) {
         ("getFile", |it, t, _| exc_get(it, t, "file"), false),
         ("getLine", |it, t, _| exc_get(it, t, "line"), false),
         ("getTrace", |_, _, _| Ok(Value::empty_array()), false),
-        ("getTraceAsString", |_, _, _| Ok(Value::from("#0 {main}")), false),
-        ("__toString", |it, t, _| Ok(Value::from(it.exception_to_string(t.unwrap())?)), false),
+        (
+            "getTraceAsString",
+            |_, _, _| Ok(Value::from("#0 {main}")),
+            false,
+        ),
+        (
+            "__toString",
+            |it, t, _| Ok(Value::from(it.exception_to_string(t.unwrap())?)),
+            false,
+        ),
     ];
-    native_class(it, "Exception", None, &["Throwable"], CKind::Class, exc_props("Exception"), methods);
-    native_class(it, "Error", None, &["Throwable"], CKind::Class, exc_props("Error"), methods);
+    native_class(
+        it,
+        "Exception",
+        None,
+        &["Throwable"],
+        CKind::Class,
+        exc_props("Exception"),
+        methods,
+    );
+    native_class(
+        it,
+        "Error",
+        None,
+        &["Throwable"],
+        CKind::Class,
+        exc_props("Error"),
+        methods,
+    );
     for (n, p) in [
         ("ErrorException", "Exception"),
         ("TypeError", "Error"),
@@ -153,7 +228,15 @@ pub fn register_classes(it: &mut Interp) {
         native_class(it, n, None, parents, CKind::Interface, Vec::new(), &[]);
     }
     native_class(it, "stdClass", None, &[], CKind::Class, Vec::new(), &[]);
-    native_class(it, "__PHP_Incomplete_Class", None, &[], CKind::Class, Vec::new(), &[]);
+    native_class(
+        it,
+        "__PHP_Incomplete_Class",
+        None,
+        &[],
+        CKind::Class,
+        Vec::new(),
+        &[],
+    );
     native_class(
         it,
         "Closure",
@@ -162,22 +245,50 @@ pub fn register_classes(it: &mut Interp) {
         CKind::Class,
         Vec::new(),
         &[
-            ("__invoke", |it, t, a| it.call_value(&Value::Object(t.unwrap().clone()), a), false),
+            (
+                "__invoke",
+                |it, t, a| it.call_value(&Value::Object(t.unwrap().clone()), a),
+                false,
+            ),
             ("bindTo", closure_bind_to, false),
             ("call", closure_call, false),
-            ("bind", |it, _, a| closure_bind_to(it, a.first().and_then(Value::as_object), &a[1..]), true),
-            ("fromCallable", |it, _, a| {
-                let v = a.first().cloned().unwrap_or_default();
-                if let Value::Object(o) = &v {
-                    if matches!(&*tobj(o).extra.borrow(), Extra::Closure(_)) {
-                        return Ok(v.clone());
+            (
+                "bind",
+                |it, _, a| closure_bind_to(it, a.first().and_then(Value::as_object), &a[1..]),
+                true,
+            ),
+            (
+                "fromCallable",
+                |it, _, a| {
+                    let v = a.first().cloned().unwrap_or_default();
+                    if let Value::Object(o) = &v {
+                        if matches!(&*tobj(o).extra.borrow(), Extra::Closure(_)) {
+                            return Ok(v.clone());
+                        }
                     }
-                }
-                let def = Rc::new(FuncDef { return_type: None, name: "{closure}".into(), params: Vec::new(), body: Rc::new(Vec::new()), arrow: None, by_ref: false, is_generator: false, statics: Rc::new(RefCell::new(HashMap::new())) });
-                let cb = v.clone();
-                let holder = it.make_closure(ClosureData { func: def, bound: vec![(b"__cb".to_vec(), cb)], this: None, scope: None, builtin: Some("__call_bound".into()), method: None })?;
-                Ok(holder)
-            }, true),
+                    let def = Rc::new(FuncDef {
+                        return_type: None,
+                        name: "{closure}".into(),
+                        params: Vec::new(),
+                        body: Rc::new(Vec::new()),
+                        arrow: None,
+                        by_ref: false,
+                        is_generator: false,
+                        statics: Rc::new(RefCell::new(HashMap::new())),
+                    });
+                    let cb = v.clone();
+                    let holder = it.make_closure(ClosureData {
+                        func: def,
+                        bound: vec![(b"__cb".to_vec(), cb)],
+                        this: None,
+                        scope: None,
+                        builtin: Some("__call_bound".into()),
+                        method: None,
+                    })?;
+                    Ok(holder)
+                },
+                true,
+            ),
         ],
     );
     native_class(
@@ -188,22 +299,46 @@ pub fn register_classes(it: &mut Interp) {
         CKind::Class,
         Vec::new(),
         &[
-            ("current", |it, t, _| super::host::internal_iter_call(it, t.unwrap(), "current"), false),
-            ("key", |it, t, _| super::host::internal_iter_call(it, t.unwrap(), "key"), false),
-            ("next", |it, t, _| super::host::internal_iter_call(it, t.unwrap(), "next"), false),
-            ("valid", |it, t, _| super::host::internal_iter_call(it, t.unwrap(), "valid"), false),
-            ("rewind", |it, t, _| super::host::internal_iter_call(it, t.unwrap(), "rewind"), false),
+            (
+                "current",
+                |it, t, _| super::host::internal_iter_call(it, t.unwrap(), "current"),
+                false,
+            ),
+            (
+                "key",
+                |it, t, _| super::host::internal_iter_call(it, t.unwrap(), "key"),
+                false,
+            ),
+            (
+                "next",
+                |it, t, _| super::host::internal_iter_call(it, t.unwrap(), "next"),
+                false,
+            ),
+            (
+                "valid",
+                |it, t, _| super::host::internal_iter_call(it, t.unwrap(), "valid"),
+                false,
+            ),
+            (
+                "rewind",
+                |it, t, _| super::host::internal_iter_call(it, t.unwrap(), "rewind"),
+                false,
+            ),
         ],
     );
     register_exceptions(it);
     // SPL classes, parents and interfaces first
-    let mut defs: Vec<&php_spl::classes::ClassDef> = php_spl::classes::class_table().iter().collect();
+    let mut defs: Vec<&php_spl::classes::ClassDef> =
+        php_spl::classes::class_table().iter().collect();
     let mut ordered = Vec::new();
     while !defs.is_empty() {
         let before = defs.len();
         defs.retain(|d| {
             let deps_ok = d.parent.iter().chain(d.interfaces.iter()).all(|n| {
-                it.find_class(n.as_bytes()).is_some() || ordered.iter().any(|o: &&php_spl::classes::ClassDef| o.name == *n)
+                it.find_class(n.as_bytes()).is_some()
+                    || ordered
+                        .iter()
+                        .any(|o: &&php_spl::classes::ClassDef| o.name == *n)
             });
             if deps_ok {
                 ordered.push(*d);
@@ -238,13 +373,22 @@ pub fn register_classes(it: &mut Interp) {
                 Rc::new(MethodH {
                     name: m.name.to_string(),
                     class: def.name.to_string(),
-                    kind: if abstract_ { MKind::Abstract } else { MKind::Spl },
+                    kind: if abstract_ {
+                        MKind::Abstract
+                    } else {
+                        MKind::Spl
+                    },
                     is_static: m.flags & php_spl::classes::MethodFlags::STATIC != 0,
-                    visibility: if m.flags & php_spl::classes::MethodFlags::PROTECTED != 0 { 1 } else { 0 },
+                    visibility: if m.flags & php_spl::classes::MethodFlags::PROTECTED != 0 {
+                        1
+                    } else {
+                        0
+                    },
                 }),
             );
         }
-        let spl_base = php_spl::object::canonical_class(def.name).or_else(|| parent.as_ref().and_then(|p| p.spl_base));
+        let spl_base = php_spl::object::canonical_class(def.name)
+            .or_else(|| parent.as_ref().and_then(|p| p.spl_base));
         let kind = match def.kind {
             php_spl::classes::ClassKind::Interface => CKind::Interface,
             php_spl::classes::ClassKind::Abstract => CKind::Abstract,
@@ -253,14 +397,25 @@ pub fn register_classes(it: &mut Interp) {
         let props = def
             .properties
             .iter()
-            .map(|p| PropDecl { name: p.name.to_string(), visibility: 0, default: Some(lit(Value::Null)), is_static: false, typed: false })
+            .map(|p| PropDecl {
+                name: p.name.to_string(),
+                visibility: 0,
+                default: Some(lit(Value::Null)),
+                is_static: false,
+                typed: false,
+            })
             .collect();
         let c = Rc::new(Class {
             name: def.name.to_string(),
             parent,
             interfaces: ifaces,
             kind,
-            consts: RefCell::new(def.constants.iter().map(|(n, v)| ((*n).to_string(), Ok(Value::Int(*v)))).collect()),
+            consts: RefCell::new(
+                def.constants
+                    .iter()
+                    .map(|(n, v)| ((*n).to_string(), Ok(Value::Int(*v))))
+                    .collect(),
+            ),
             statics: RefCell::new(HashMap::new()),
             props,
             methods,
@@ -274,7 +429,9 @@ pub fn register_classes(it: &mut Interp) {
 
 fn closure_bind_to(it: &mut Interp, this: Option<&Obj>, args: &[Value]) -> RtResult<Value> {
     let o = this.unwrap();
-    let Extra::Closure(c) = &*tobj(o).extra.borrow() else { return Ok(Value::Null) };
+    let Extra::Closure(c) = &*tobj(o).extra.borrow() else {
+        return Ok(Value::Null);
+    };
     let c = c.clone();
     let new_this = match args.first() {
         Some(Value::Object(t)) => Some(t.clone()),
@@ -283,7 +440,10 @@ fn closure_bind_to(it: &mut Interp, this: Option<&Obj>, args: &[Value]) -> RtRes
     let scope = match args.get(1) {
         Some(Value::Object(s)) => Some(tobj(s).class.clone()),
         Some(Value::Str(s)) => it.find_class(s.as_bytes()),
-        _ => new_this.as_ref().map(|t| tobj(t).class.clone()).or_else(|| c.scope.clone()),
+        _ => new_this
+            .as_ref()
+            .map(|t| tobj(t).class.clone())
+            .or_else(|| c.scope.clone()),
     };
     it.make_closure(ClosureData {
         func: c.func.clone(),
@@ -297,11 +457,22 @@ fn closure_bind_to(it: &mut Interp, this: Option<&Obj>, args: &[Value]) -> RtRes
 
 fn closure_call(it: &mut Interp, this: Option<&Obj>, args: &[Value]) -> RtResult<Value> {
     let o = this.unwrap();
-    let Extra::Closure(c) = &*tobj(o).extra.borrow() else { return Ok(Value::Null) };
+    let Extra::Closure(c) = &*tobj(o).extra.borrow() else {
+        return Ok(Value::Null);
+    };
     let c = c.clone();
-    let Some(Value::Object(nt)) = args.first() else { return Ok(Value::Null) };
+    let Some(Value::Object(nt)) = args.first() else {
+        return Ok(Value::Null);
+    };
     let scope = Some(tobj(nt).class.clone());
-    it.call_user(&c.func, &args[1..], Some(nt.clone()), scope.clone(), scope, &c.bound)
+    it.call_user(
+        &c.func,
+        &args[1..],
+        Some(nt.clone()),
+        scope.clone(),
+        scope,
+        &c.bound,
+    )
 }
 
 pub fn register_constants(it: &mut Interp) {
@@ -365,21 +536,48 @@ pub fn register_constants(it: &mut Interp) {
     }
     it.constants.insert("PHP_EOL".into(), Value::from("\n"));
     it.constants.insert("PHP_OS".into(), Value::from("Linux"));
-    it.constants.insert("PHP_OS_FAMILY".into(), Value::from("Linux"));
-    it.constants.insert("DIRECTORY_SEPARATOR".into(), Value::from("/"));
-    it.constants.insert("PATH_SEPARATOR".into(), Value::from(":"));
-    it.constants.insert("PHP_VERSION".into(), Value::from("8.6.0-dev"));
+    it.constants
+        .insert("PHP_OS_FAMILY".into(), Value::from("Linux"));
+    it.constants
+        .insert("DIRECTORY_SEPARATOR".into(), Value::from("/"));
+    it.constants
+        .insert("PATH_SEPARATOR".into(), Value::from(":"));
+    it.constants
+        .insert("PHP_VERSION".into(), Value::from("8.6.0-dev"));
     it.constants.insert("NAN".into(), Value::Float(f64::NAN));
-    it.constants.insert("INF".into(), Value::Float(f64::INFINITY));
-    it.constants.insert("PHP_FLOAT_EPSILON".into(), Value::Float(f64::EPSILON));
+    it.constants
+        .insert("INF".into(), Value::Float(f64::INFINITY));
+    it.constants
+        .insert("PHP_FLOAT_EPSILON".into(), Value::Float(f64::EPSILON));
 }
 
 /// Whether argument `i` of builtin `name` is by reference.
 pub fn by_ref(name: &str, i: usize) -> bool {
     match name {
-        "sort" | "rsort" | "usort" | "uasort" | "uksort" | "ksort" | "krsort" | "asort" | "arsort" | "natsort"
-        | "natcasesort" | "shuffle" | "array_push" | "array_pop" | "array_shift" | "array_unshift" | "array_splice"
-        | "end" | "reset" | "next" | "prev" | "array_walk" | "array_walk_recursive" | "settype" => i == 0,
+        "sort"
+        | "rsort"
+        | "usort"
+        | "uasort"
+        | "uksort"
+        | "ksort"
+        | "krsort"
+        | "asort"
+        | "arsort"
+        | "natsort"
+        | "natcasesort"
+        | "shuffle"
+        | "array_push"
+        | "array_pop"
+        | "array_shift"
+        | "array_unshift"
+        | "array_splice"
+        | "end"
+        | "reset"
+        | "next"
+        | "prev"
+        | "array_walk"
+        | "array_walk_recursive"
+        | "settype" => i == 0,
         "preg_match" | "preg_match_all" => i == 2,
         "array_multisort" => true,
         "str_replace" => i == 3,
@@ -390,32 +588,154 @@ pub fn by_ref(name: &str, i: usize) -> bool {
 pub fn exists(name: &str) -> bool {
     matches!(
         name,
-        "var_dump" | "print_r" | "var_export" | "printf" | "sprintf" | "count" | "sizeof" | "strlen" | "str_repeat"
-            | "implode" | "join" | "explode" | "array_keys" | "array_values" | "in_array" | "range" | "array_map"
-            | "array_merge" | "array_slice" | "array_reverse" | "array_sum" | "gettype" | "get_class" | "is_array"
-            | "is_object" | "is_int" | "is_string" | "is_bool" | "is_null" | "is_numeric" | "is_callable" | "intval"
-            | "strval" | "serialize" | "unserialize" | "strtoupper" | "strtolower" | "ucfirst" | "trim" | "str_pad"
-            | "max" | "min" | "abs" | "chr" | "ord" | "call_user_func" | "call_user_func_array" | "func_get_args"
-            | "array_key_exists" | "method_exists" | "class_exists" | "function_exists" | "substr" | "str_replace"
-            | "array_filter" | "usort" | "uasort" | "uksort" | "sort" | "ksort" | "strrev" | "is_float" | "floatval"
-            | "array_push" | "array_pop" | "array_shift" | "array_unshift" | "array_search" | "array_flip"
-            | "array_combine" | "array_fill" | "array_key_last" | "array_key_first" | "json_encode" | "dirname"
-            | "basename" | "file_exists" | "unlink" | "spl_object_id" | "spl_object_hash" | "iterator_to_array"
-            | "iterator_count" | "iterator_apply" | "strcmp" | "ucwords" | "lcfirst" | "str_contains"
-            | "str_starts_with" | "str_ends_with" | "array_unique" | "rsort" | "asort" | "arsort" | "krsort"
-            | "natsort" | "natcasesort" | "is_iterable" | "array_walk" | "strpos" | "array_diff" | "array_intersect"
-            | "array_column" | "array_chunk" | "array_fill_keys" | "array_rand" | "nl2br" | "number_format"
-            | "round" | "floor" | "ceil" | "sqrt" | "pow" | "dechex" | "hexdec" | "bin2hex" | "md5" | "crc32"
-            | "is_a" | "is_subclass_of" | "get_parent_class" | "get_object_vars" | "property_exists"
-            | "interface_exists" | "array_reduce" | "printf_" | "end" | "reset" | "next" | "prev" | "current"
-            | "key" | "array_product" | "str_split" | "mb_strlen" | "boolval" | "settype"
-    ) || php_spl::classes::function_table().iter().any(|f| f.name == name)
+        "var_dump"
+            | "print_r"
+            | "var_export"
+            | "printf"
+            | "sprintf"
+            | "count"
+            | "sizeof"
+            | "strlen"
+            | "str_repeat"
+            | "implode"
+            | "join"
+            | "explode"
+            | "array_keys"
+            | "array_values"
+            | "in_array"
+            | "range"
+            | "array_map"
+            | "array_merge"
+            | "array_slice"
+            | "array_reverse"
+            | "array_sum"
+            | "gettype"
+            | "get_class"
+            | "is_array"
+            | "is_object"
+            | "is_int"
+            | "is_string"
+            | "is_bool"
+            | "is_null"
+            | "is_numeric"
+            | "is_callable"
+            | "intval"
+            | "strval"
+            | "serialize"
+            | "unserialize"
+            | "strtoupper"
+            | "strtolower"
+            | "ucfirst"
+            | "trim"
+            | "str_pad"
+            | "max"
+            | "min"
+            | "abs"
+            | "chr"
+            | "ord"
+            | "call_user_func"
+            | "call_user_func_array"
+            | "func_get_args"
+            | "array_key_exists"
+            | "method_exists"
+            | "class_exists"
+            | "function_exists"
+            | "substr"
+            | "str_replace"
+            | "array_filter"
+            | "usort"
+            | "uasort"
+            | "uksort"
+            | "sort"
+            | "ksort"
+            | "strrev"
+            | "is_float"
+            | "floatval"
+            | "array_push"
+            | "array_pop"
+            | "array_shift"
+            | "array_unshift"
+            | "array_search"
+            | "array_flip"
+            | "array_combine"
+            | "array_fill"
+            | "array_key_last"
+            | "array_key_first"
+            | "json_encode"
+            | "dirname"
+            | "basename"
+            | "file_exists"
+            | "unlink"
+            | "spl_object_id"
+            | "spl_object_hash"
+            | "iterator_to_array"
+            | "iterator_count"
+            | "iterator_apply"
+            | "strcmp"
+            | "ucwords"
+            | "lcfirst"
+            | "str_contains"
+            | "str_starts_with"
+            | "str_ends_with"
+            | "array_unique"
+            | "rsort"
+            | "asort"
+            | "arsort"
+            | "krsort"
+            | "natsort"
+            | "natcasesort"
+            | "is_iterable"
+            | "array_walk"
+            | "strpos"
+            | "array_diff"
+            | "array_intersect"
+            | "array_column"
+            | "array_chunk"
+            | "array_fill_keys"
+            | "array_rand"
+            | "nl2br"
+            | "number_format"
+            | "round"
+            | "floor"
+            | "ceil"
+            | "sqrt"
+            | "pow"
+            | "dechex"
+            | "hexdec"
+            | "bin2hex"
+            | "md5"
+            | "crc32"
+            | "is_a"
+            | "is_subclass_of"
+            | "get_parent_class"
+            | "get_object_vars"
+            | "property_exists"
+            | "interface_exists"
+            | "array_reduce"
+            | "printf_"
+            | "end"
+            | "reset"
+            | "next"
+            | "prev"
+            | "current"
+            | "key"
+            | "array_product"
+            | "str_split"
+            | "mb_strlen"
+            | "boolval"
+            | "settype"
+    ) || php_spl::classes::function_table()
+        .iter()
+        .any(|f| f.name == name)
 }
 
 fn arr(v: &Value) -> RtResult<ZArray> {
     match v.deref() {
         Value::Array(a) => Ok(a),
-        other => Err(RuntimeError::TypeError(format!("expected array, {} given", other.value_name()))),
+        other => Err(RuntimeError::TypeError(format!(
+            "expected array, {} given",
+            other.value_name()
+        ))),
     }
 }
 
@@ -469,8 +789,12 @@ fn do_sprintf(it: &mut Interp, args: &[Value]) -> RtResult<Vec<u8>> {
         let f = v.to_double(it)?;
         fa.push(FArg(v, st, i, f));
     }
-    let refs: Vec<&dyn php_support::fmt::printf::FormatArg> = fa.iter().map(|a| a as &dyn php_support::fmt::printf::FormatArg).collect();
-    php_support::fmt::printf::sprintf(fmt.as_bytes(), &refs, &mut Sink).map_err(|e| RuntimeError::ValueError(e.message().to_string()))
+    let refs: Vec<&dyn php_support::fmt::printf::FormatArg> = fa
+        .iter()
+        .map(|a| a as &dyn php_support::fmt::printf::FormatArg)
+        .collect();
+    php_support::fmt::printf::sprintf(fmt.as_bytes(), &refs, &mut Sink)
+        .map_err(|e| RuntimeError::ValueError(e.message().to_string()))
 }
 
 fn with_callback<R>(
@@ -493,7 +817,12 @@ pub fn call(it: &mut Interp, name: &str, args: &[Value]) -> RtResult<Value> {
     let a0 = || arg(args, 0);
     Ok(match name {
         "__call_bound" => {
-            let cb = it.frame().vars.get(b"__cb".as_slice()).cloned().unwrap_or_default();
+            let cb = it
+                .frame()
+                .vars
+                .get(b"__cb".as_slice())
+                .cloned()
+                .unwrap_or_default();
             return it.call_value(&cb, args);
         }
         "var_dump" => {
@@ -569,32 +898,59 @@ pub fn call(it: &mut Interp, name: &str, args: &[Value]) -> RtResult<Value> {
         "explode" => {
             let sep = zstr(it, &a0())?;
             let s = zstr(it, &arg(args, 1))?;
-            let parts: Vec<Value> = split_bytes(s.as_bytes(), sep.as_bytes()).into_iter().map(|p| Value::Str(ZStr::from(p))).collect();
+            let parts: Vec<Value> = split_bytes(s.as_bytes(), sep.as_bytes())
+                .into_iter()
+                .map(|p| Value::Str(ZStr::from(p)))
+                .collect();
             Value::Array(ZArray::from_values(parts))
         }
         "str_split" => {
             let s = zstr(it, &a0())?;
-            let n = if args.len() > 1 { arg(args, 1).to_long(it)?.max(1) as usize } else { 1 };
-            Value::Array(ZArray::from_values(s.as_bytes().chunks(n).map(|c| Value::Str(ZStr::from(c)))))
+            let n = if args.len() > 1 {
+                arg(args, 1).to_long(it)?.max(1) as usize
+            } else {
+                1
+            };
+            Value::Array(ZArray::from_values(
+                s.as_bytes().chunks(n).map(|c| Value::Str(ZStr::from(c))),
+            ))
         }
-        "array_keys" => Value::Array(php_stdarr::basic::array_keys(it, &*arr(&a0())?, args.get(1), false)?),
+        "array_keys" => Value::Array(php_stdarr::basic::array_keys(
+            it,
+            &*arr(&a0())?,
+            args.get(1),
+            false,
+        )?),
         "array_values" => Value::Array(php_stdarr::basic::array_values(&arr(&a0())?)),
         "in_array" => {
             let strict = arg(args, 2).to_bool(it)?;
-            Value::Bool(php_stdarr::basic::in_array(it, &a0(), &*arr(&arg(args, 1))?, strict)?)
+            Value::Bool(php_stdarr::basic::in_array(
+                it,
+                &a0(),
+                &*arr(&arg(args, 1))?,
+                strict,
+            )?)
         }
         "array_search" => {
             let strict = arg(args, 2).to_bool(it)?;
             php_stdarr::basic::array_search(it, &a0(), &*arr(&arg(args, 1))?, strict)?
         }
-        "range" => Value::Array(php_stdarr::range::range(it, &a0(), &arg(args, 1), args.get(2))?),
+        "range" => Value::Array(php_stdarr::range::range(
+            it,
+            &a0(),
+            &arg(args, 1),
+            args.get(2),
+        )?),
         "array_map" => {
             let cb = a0();
             let arrays: Vec<Value> = args[1..].iter().map(Value::deref).collect();
             if cb.is_null() {
                 Value::Array(php_stdarr::callback::array_map(it, None, &arrays)?)
             } else {
-                with_callback(it, cb, |it, c| php_stdarr::callback::array_map(it, Some(c), &arrays))?.into()
+                with_callback(it, cb, |it, c| {
+                    php_stdarr::callback::array_map(it, Some(c), &arrays)
+                })?
+                .into()
             }
         }
         "array_filter" => {
@@ -603,18 +959,25 @@ pub fn call(it: &mut Interp, name: &str, args: &[Value]) -> RtResult<Value> {
             if arg(args, 1).is_null() {
                 Value::Array(php_stdarr::callback::array_filter(it, &a, None, mode)?)
             } else {
-                with_callback(it, arg(args, 1), |it, c| php_stdarr::callback::array_filter(it, &a, Some(c), mode))?.into()
+                with_callback(it, arg(args, 1), |it, c| {
+                    php_stdarr::callback::array_filter(it, &a, Some(c), mode)
+                })?
+                .into()
             }
         }
         "array_reduce" => {
             let a = arr(&a0())?;
             let init = arg(args, 2);
-            with_callback(it, arg(args, 1), |it, c| php_stdarr::callback::array_reduce(it, &a, c, Some(&init)))?
+            with_callback(it, arg(args, 1), |it, c| {
+                php_stdarr::callback::array_reduce(it, &a, c, Some(&init))
+            })?
         }
         "array_walk" => {
             let r = refarg(args, 0);
             let ud = args.get(2).map(Value::deref);
-            with_callback(it, arg(args, 1), |it, c| php_stdarr::callback::array_walk(it, &r, c, ud.as_ref()))?;
+            with_callback(it, arg(args, 1), |it, c| {
+                php_stdarr::callback::array_walk(it, &r, c, ud.as_ref())
+            })?;
             Value::Bool(true)
         }
         "array_merge" => {
@@ -631,13 +994,28 @@ pub fn call(it: &mut Interp, name: &str, args: &[Value]) -> RtResult<Value> {
             let pk = arg(args, 3).to_bool(it)?;
             Value::Array(php_stdarr::basic::array_slice(&a, off, len, pk))
         }
-        "array_reverse" => Value::Array(php_stdarr::basic::array_reverse(&*arr(&a0())?, arg(args, 1).to_bool(it)?)),
+        "array_reverse" => Value::Array(php_stdarr::basic::array_reverse(
+            &*arr(&a0())?,
+            arg(args, 1).to_bool(it)?,
+        )),
         "array_sum" => php_stdarr::basic::array_sum(it, &*arr(&a0())?)?,
         "array_product" => php_stdarr::basic::array_product(it, &*arr(&a0())?)?,
         "array_flip" => Value::Array(php_stdarr::basic::array_flip(it, &*arr(&a0())?)?),
-        "array_combine" => Value::Array(php_stdarr::basic::array_combine(it, &*arr(&a0())?, &*arr(&arg(args, 1))?)?),
-        "array_fill" => Value::Array(php_stdarr::basic::array_fill(a0().to_long(it)?, arg(args, 1).to_long(it)?, &arg(args, 2))?),
-        "array_fill_keys" => Value::Array(php_stdarr::basic::array_fill_keys(it, &*arr(&a0())?, &arg(args, 1))?),
+        "array_combine" => Value::Array(php_stdarr::basic::array_combine(
+            it,
+            &*arr(&a0())?,
+            &*arr(&arg(args, 1))?,
+        )?),
+        "array_fill" => Value::Array(php_stdarr::basic::array_fill(
+            a0().to_long(it)?,
+            arg(args, 1).to_long(it)?,
+            &arg(args, 2),
+        )?),
+        "array_fill_keys" => Value::Array(php_stdarr::basic::array_fill_keys(
+            it,
+            &*arr(&a0())?,
+            &arg(args, 1),
+        )?),
         "array_key_first" => php_stdarr::basic::array_key_first(&*arr(&a0())?),
         "array_key_last" => php_stdarr::basic::array_key_last(&*arr(&a0())?),
         "array_key_exists" | "key_exists" => {
@@ -651,16 +1029,36 @@ pub fn call(it: &mut Interp, name: &str, args: &[Value]) -> RtResult<Value> {
             }
         }
         "array_unique" => {
-            let fl = if args.len() > 1 { arg(args, 1).to_long(it)? } else { 2 };
+            let fl = if args.len() > 1 {
+                arg(args, 1).to_long(it)?
+            } else {
+                2
+            };
             Value::Array(php_stdarr::setops::array_unique(it, &arr(&a0())?, fl)?)
         }
-        "array_diff" => Value::Array(php_stdarr::setops::array_diff(it, &args.iter().map(Value::deref).collect::<Vec<_>>())?),
-        "array_intersect" => Value::Array(php_stdarr::setops::array_intersect(it, &args.iter().map(Value::deref).collect::<Vec<_>>())?),
-        "array_chunk" => Value::Array(php_stdarr::basic::array_chunk(&*arr(&a0())?, arg(args, 1).to_long(it)?, arg(args, 2).to_bool(it)?)?),
-        "array_push" => Value::Int(php_stdarr::stack::array_push(&refarg(args, 0), &args[1..].iter().map(Value::deref).collect::<Vec<_>>())?),
+        "array_diff" => Value::Array(php_stdarr::setops::array_diff(
+            it,
+            &args.iter().map(Value::deref).collect::<Vec<_>>(),
+        )?),
+        "array_intersect" => Value::Array(php_stdarr::setops::array_intersect(
+            it,
+            &args.iter().map(Value::deref).collect::<Vec<_>>(),
+        )?),
+        "array_chunk" => Value::Array(php_stdarr::basic::array_chunk(
+            &*arr(&a0())?,
+            arg(args, 1).to_long(it)?,
+            arg(args, 2).to_bool(it)?,
+        )?),
+        "array_push" => Value::Int(php_stdarr::stack::array_push(
+            &refarg(args, 0),
+            &args[1..].iter().map(Value::deref).collect::<Vec<_>>(),
+        )?),
         "array_pop" => php_stdarr::stack::array_pop(&refarg(args, 0))?,
         "array_shift" => php_stdarr::stack::array_shift(&refarg(args, 0))?,
-        "array_unshift" => Value::Int(php_stdarr::stack::array_unshift(&refarg(args, 0), &args[1..].iter().map(Value::deref).collect::<Vec<_>>())?),
+        "array_unshift" => Value::Int(php_stdarr::stack::array_unshift(
+            &refarg(args, 0),
+            &args[1..].iter().map(Value::deref).collect::<Vec<_>>(),
+        )?),
         "sort" => {
             let fl = arg(args, 1).to_long(it)?;
             php_stdarr::sort::sort(it, &refarg(args, 0), fl)?;
@@ -722,7 +1120,13 @@ pub fn call(it: &mut Interp, name: &str, args: &[Value]) -> RtResult<Value> {
         }),
         "get_class" => match a0() {
             Value::Object(o) => Value::Str(o.class_name()),
-            _ => Value::from(it.frame().scope.as_ref().map(|c| c.name.clone()).unwrap_or_default()),
+            _ => Value::from(
+                it.frame()
+                    .scope
+                    .as_ref()
+                    .map(|c| c.name.clone())
+                    .unwrap_or_default(),
+            ),
         },
         "get_parent_class" => {
             let c = match a0() {
@@ -736,7 +1140,9 @@ pub fn call(it: &mut Interp, name: &str, args: &[Value]) -> RtResult<Value> {
             }
         }
         "get_mangled_object_vars" => match a0() {
-            Value::Object(o) => Value::Array(ZArray::from_table(tobj(&o).props.borrow().to_symtable())),
+            Value::Object(o) => {
+                Value::Array(ZArray::from_table(tobj(&o).props.borrow().to_symtable()))
+            }
             _ => Value::Null,
         },
         "get_object_vars" => match a0() {
@@ -746,7 +1152,9 @@ pub fn call(it: &mut Interp, name: &str, args: &[Value]) -> RtResult<Value> {
         "is_a" | "is_subclass_of" => {
             let c = match a0() {
                 Value::Object(o) => Some(tobj(&o).class.clone()),
-                Value::Str(s) if name == "is_subclass_of" || arg(args, 2).to_bool(it)? => it.find_class(s.as_bytes()),
+                Value::Str(s) if name == "is_subclass_of" || arg(args, 2).to_bool(it)? => {
+                    it.find_class(s.as_bytes())
+                }
                 _ => None,
             };
             let target = zstr(it, &arg(args, 1))?.to_string_lossy();
@@ -823,7 +1231,11 @@ pub fn call(it: &mut Interp, name: &str, args: &[Value]) -> RtResult<Value> {
         "ucfirst" | "lcfirst" => {
             let mut b = zstr(it, &a0())?.as_bytes().to_vec();
             if let Some(c) = b.first_mut() {
-                *c = if name == "ucfirst" { c.to_ascii_uppercase() } else { c.to_ascii_lowercase() };
+                *c = if name == "ucfirst" {
+                    c.to_ascii_uppercase()
+                } else {
+                    c.to_ascii_lowercase()
+                };
             }
             Value::Str(ZStr::from(b))
         }
@@ -845,7 +1257,11 @@ pub fn call(it: &mut Interp, name: &str, args: &[Value]) -> RtResult<Value> {
         }
         "trim" | "rtrim" | "ltrim" | "chop" => {
             let s = zstr(it, &a0())?;
-            let chars: Vec<u8> = if args.len() > 1 { zstr(it, &arg(args, 1))?.as_bytes().to_vec() } else { b" \t\n\r\0\x0B".to_vec() };
+            let chars: Vec<u8> = if args.len() > 1 {
+                zstr(it, &arg(args, 1))?.as_bytes().to_vec()
+            } else {
+                b" \t\n\r\0\x0B".to_vec()
+            };
             let b = s.as_bytes();
             let mut st = 0;
             let mut en = b.len();
@@ -864,7 +1280,11 @@ pub fn call(it: &mut Interp, name: &str, args: &[Value]) -> RtResult<Value> {
         "str_pad" => {
             let s = zstr(it, &a0())?;
             let len = arg(args, 1).to_long(it)?.max(0) as usize;
-            let pad = if args.len() > 2 { zstr(it, &arg(args, 2))?.as_bytes().to_vec() } else { b" ".to_vec() };
+            let pad = if args.len() > 2 {
+                zstr(it, &arg(args, 2))?.as_bytes().to_vec()
+            } else {
+                b" ".to_vec()
+            };
             let ty = arg(args, 3).to_long(it)?;
             let mut b = s.as_bytes().to_vec();
             if b.len() < len && !pad.is_empty() {
@@ -894,7 +1314,11 @@ pub fn call(it: &mut Interp, name: &str, args: &[Value]) -> RtResult<Value> {
                 Value::Null => len - start,
                 v => {
                     let l = v.to_long(it)?;
-                    if l < 0 { (len - start + l).max(0) } else { l.min(len - start) }
+                    if l < 0 {
+                        (len - start + l).max(0)
+                    } else {
+                        l.min(len - start)
+                    }
                 }
             };
             Value::Str(ZStr::from(&b[start as usize..(start + l) as usize]))
@@ -902,7 +1326,11 @@ pub fn call(it: &mut Interp, name: &str, args: &[Value]) -> RtResult<Value> {
         "strpos" => {
             let h = zstr(it, &a0())?;
             let n = zstr(it, &arg(args, 1))?;
-            match h.as_bytes().windows(n.len().max(1)).position(|w| w == n.as_bytes()) {
+            match h
+                .as_bytes()
+                .windows(n.len().max(1))
+                .position(|w| w == n.as_bytes())
+            {
                 Some(p) if !n.is_empty() => Value::Int(p as i64),
                 _ => Value::Bool(false),
             }
@@ -912,8 +1340,16 @@ pub fn call(it: &mut Interp, name: &str, args: &[Value]) -> RtResult<Value> {
             let n = zstr(it, &arg(args, 1))?;
             Value::Bool(n.is_empty() || h.as_bytes().windows(n.len()).any(|w| w == n.as_bytes()))
         }
-        "str_starts_with" => Value::Bool(zstr(it, &a0())?.as_bytes().starts_with(zstr(it, &arg(args, 1))?.as_bytes())),
-        "str_ends_with" => Value::Bool(zstr(it, &a0())?.as_bytes().ends_with(zstr(it, &arg(args, 1))?.as_bytes())),
+        "str_starts_with" => Value::Bool(
+            zstr(it, &a0())?
+                .as_bytes()
+                .starts_with(zstr(it, &arg(args, 1))?.as_bytes()),
+        ),
+        "str_ends_with" => Value::Bool(
+            zstr(it, &a0())?
+                .as_bytes()
+                .ends_with(zstr(it, &arg(args, 1))?.as_bytes()),
+        ),
         "str_replace" => {
             let search = a0();
             let rep = arg(args, 1);
@@ -922,13 +1358,37 @@ pub fn call(it: &mut Interp, name: &str, args: &[Value]) -> RtResult<Value> {
                 (Value::Array(s), Value::Array(r)) => s
                     .values()
                     .zip(r.values().map(Some).chain(std::iter::repeat(None)))
-                    .map(|(a, b)| (a.to_zstr(it).map(|z| z.as_bytes().to_vec()).unwrap_or_default(), b.map(|b| b.to_zstr(it).map(|z| z.as_bytes().to_vec()).unwrap_or_default()).unwrap_or_default()))
+                    .map(|(a, b)| {
+                        (
+                            a.to_zstr(it)
+                                .map(|z| z.as_bytes().to_vec())
+                                .unwrap_or_default(),
+                            b.map(|b| {
+                                b.to_zstr(it)
+                                    .map(|z| z.as_bytes().to_vec())
+                                    .unwrap_or_default()
+                            })
+                            .unwrap_or_default(),
+                        )
+                    })
                     .collect(),
                 (Value::Array(s), r) => {
                     let r = zstr(it, r)?.as_bytes().to_vec();
-                    s.values().map(|a| (a.to_zstr(it).map(|z| z.as_bytes().to_vec()).unwrap_or_default(), r.clone())).collect()
+                    s.values()
+                        .map(|a| {
+                            (
+                                a.to_zstr(it)
+                                    .map(|z| z.as_bytes().to_vec())
+                                    .unwrap_or_default(),
+                                r.clone(),
+                            )
+                        })
+                        .collect()
                 }
-                (s, r) => vec![(zstr(it, s)?.as_bytes().to_vec(), zstr(it, r)?.as_bytes().to_vec())],
+                (s, r) => vec![(
+                    zstr(it, s)?.as_bytes().to_vec(),
+                    zstr(it, r)?.as_bytes().to_vec(),
+                )],
             };
             let mut out = subj.as_bytes().to_vec();
             for (s, r) in pairs {
@@ -939,8 +1399,18 @@ pub fn call(it: &mut Interp, name: &str, args: &[Value]) -> RtResult<Value> {
             }
             Value::Str(ZStr::from(out))
         }
-        "strcmp" => Value::Int(i64::from(php_runtime::string::binary_strcmp(zstr(it, &a0())?.as_bytes(), zstr(it, &arg(args, 1))?.as_bytes()).signum())),
-        "nl2br" => Value::Str(ZStr::from(replace_bytes(zstr(it, &a0())?.as_bytes(), b"\n", b"<br />\n"))),
+        "strcmp" => Value::Int(i64::from(
+            php_runtime::string::binary_strcmp(
+                zstr(it, &a0())?.as_bytes(),
+                zstr(it, &arg(args, 1))?.as_bytes(),
+            )
+            .signum(),
+        )),
+        "nl2br" => Value::Str(ZStr::from(replace_bytes(
+            zstr(it, &a0())?.as_bytes(),
+            b"\n",
+            b"<br />\n",
+        ))),
         "max" => php_stdarr::basic::max(it, &args.iter().map(Value::deref).collect::<Vec<_>>())?,
         "min" => php_stdarr::basic::min(it, &args.iter().map(Value::deref).collect::<Vec<_>>())?,
         "abs" => match a0() {
@@ -951,19 +1421,35 @@ pub fn call(it: &mut Interp, name: &str, args: &[Value]) -> RtResult<Value> {
         "ceil" => Value::Float(a0().to_double(it)?.ceil()),
         "round" => {
             let p = arg(args, 1).to_long(it)? as i32;
-            Value::Float(php_support::fmt::number::php_round(a0().to_double(it)?, p, php_support::fmt::number::RoundingMode::HalfUp))
+            Value::Float(php_support::fmt::number::php_round(
+                a0().to_double(it)?,
+                p,
+                php_support::fmt::number::RoundingMode::HalfUp,
+            ))
         }
         "sqrt" => Value::Float(a0().to_double(it)?.sqrt()),
         "pow" => ops::pow(&a0(), &arg(args, 1), it)?,
         "chr" => Value::Str(ZStr::from(vec![(a0().to_long(it)?.rem_euclid(256)) as u8])),
-        "ord" => Value::Int(i64::from(zstr(it, &a0())?.as_bytes().first().copied().unwrap_or(0))),
+        "ord" => Value::Int(i64::from(
+            zstr(it, &a0())?.as_bytes().first().copied().unwrap_or(0),
+        )),
         "dechex" => Value::from(format!("{:x}", a0().to_long(it)?)),
-        "hexdec" => Value::Int(i64::from_str_radix(&zstr(it, &a0())?.to_string_lossy(), 16).unwrap_or(0)),
-        "bin2hex" => Value::from(zstr(it, &a0())?.as_bytes().iter().map(|b| format!("{b:02x}")).collect::<String>()),
+        "hexdec" => {
+            Value::Int(i64::from_str_radix(&zstr(it, &a0())?.to_string_lossy(), 16).unwrap_or(0))
+        }
+        "bin2hex" => Value::from(
+            zstr(it, &a0())?
+                .as_bytes()
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect::<String>(),
+        ),
         "number_format" => {
             let d = a0().to_double(it)?;
             let dec = arg(args, 1).to_long(it)? as i32;
-            Value::Str(ZStr::from(php_support::fmt::number::number_format_double(d, dec, b".", b",")))
+            Value::Str(ZStr::from(php_support::fmt::number::number_format_double(
+                d, dec, b".", b",",
+            )))
         }
         "call_user_func" => {
             let f = a0();
@@ -982,22 +1468,32 @@ pub fn call(it: &mut Interp, name: &str, args: &[Value]) -> RtResult<Value> {
                 Value::Str(s) => it.find_class(s.as_bytes()),
                 _ => None,
             };
-            let m = zstr(it, &arg(args, 1))?.to_string_lossy().to_ascii_lowercase();
+            let m = zstr(it, &arg(args, 1))?
+                .to_string_lossy()
+                .to_ascii_lowercase();
             Value::Bool(c.is_some_and(|c| c.find_method(&m).is_some()))
         }
         "property_exists" => {
             let n = zstr(it, &arg(args, 1))?.to_string_lossy();
             Value::Bool(match a0() {
                 Value::Object(o) => it.find_prop_key(&o, &n).is_some(),
-                Value::Str(c) => it.find_class(c.as_bytes()).is_some_and(|c| c.all_props().iter().any(|(k, i)| k.props[*i].name == n)),
+                Value::Str(c) => it
+                    .find_class(c.as_bytes())
+                    .is_some_and(|c| c.all_props().iter().any(|(k, i)| k.props[*i].name == n)),
                 _ => false,
             })
         }
         "class_exists" | "interface_exists" => {
             let n = zstr(it, &a0())?;
             let autoload = args.len() < 2 || arg(args, 1).to_bool(it)?;
-            let c = if autoload { it.lookup_class(n.as_bytes()).ok() } else { it.find_class(n.as_bytes()) };
-            Value::Bool(c.is_some_and(|c| (c.kind == CKind::Interface) == (name == "interface_exists")))
+            let c = if autoload {
+                it.lookup_class(n.as_bytes()).ok()
+            } else {
+                it.find_class(n.as_bytes())
+            };
+            Value::Bool(
+                c.is_some_and(|c| (c.kind == CKind::Interface) == (name == "interface_exists")),
+            )
         }
         "function_exists" => {
             let n = zstr(it, &a0())?.to_string_lossy().to_ascii_lowercase();
@@ -1037,11 +1533,21 @@ pub fn call(it: &mut Interp, name: &str, args: &[Value]) -> RtResult<Value> {
         "mkdir" => {
             let p = zstr(it, &a0())?.to_string_lossy();
             let rec = arg(args, 2).to_bool(it)?;
-            Value::Bool(if rec { std::fs::create_dir_all(p).is_ok() } else { std::fs::create_dir(p).is_ok() })
+            Value::Bool(if rec {
+                std::fs::create_dir_all(p).is_ok()
+            } else {
+                std::fs::create_dir(p).is_ok()
+            })
         }
         "touch" => {
             let p = zstr(it, &a0())?.to_string_lossy();
-            Value::Bool(std::fs::OpenOptions::new().create(true).append(true).open(p).is_ok())
+            Value::Bool(
+                std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(p)
+                    .is_ok(),
+            )
         }
         "file_put_contents" => {
             let p = zstr(it, &a0())?.to_string_lossy();
@@ -1058,7 +1564,11 @@ pub fn call(it: &mut Interp, name: &str, args: &[Value]) -> RtResult<Value> {
             let append = arg(args, 2).to_long(it)? & 8 != 0;
             let r = if append {
                 use std::io::Write;
-                std::fs::OpenOptions::new().create(true).append(true).open(&p).and_then(|mut f| f.write_all(&data))
+                std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(&p)
+                    .and_then(|mut f| f.write_all(&data))
             } else {
                 std::fs::write(&p, &data)
             };
@@ -1077,7 +1587,9 @@ pub fn call(it: &mut Interp, name: &str, args: &[Value]) -> RtResult<Value> {
             let before = arg(args, 2).to_bool(it)?;
             let hb = h.as_bytes();
             let pos = if name == "strrchr" {
-                n.as_bytes().first().and_then(|c| hb.iter().rposition(|x| x == c))
+                n.as_bytes()
+                    .first()
+                    .and_then(|c| hb.iter().rposition(|x| x == c))
             } else if name == "stristr" {
                 let hl = hb.to_ascii_lowercase();
                 let nl = n.as_bytes().to_ascii_lowercase();
@@ -1105,7 +1617,11 @@ pub fn call(it: &mut Interp, name: &str, args: &[Value]) -> RtResult<Value> {
         "pathinfo" => {
             let p = zstr(it, &a0())?;
             let pi = php_streams::pathname::pathinfo(p.as_bytes());
-            let opt = if args.len() > 1 { arg(args, 1).to_long(it)? } else { 15 };
+            let opt = if args.len() > 1 {
+                arg(args, 1).to_long(it)?
+            } else {
+                15
+            };
             let mut t = HashTable::new();
             let mut put = |k: &str, v: Option<&Vec<u8>>| {
                 if let Some(v) = v {
@@ -1140,8 +1656,13 @@ pub fn call(it: &mut Interp, name: &str, args: &[Value]) -> RtResult<Value> {
             let l = zstr(it, &arg(args, 1))?.to_string_lossy();
             Value::Bool(std::os::unix::fs::symlink(t, l).is_ok())
         }
-        "is_link" => Value::Bool(std::fs::symlink_metadata(zstr(it, &a0())?.to_string_lossy()).is_ok_and(|m| m.file_type().is_symlink())),
-        "fileowner" | "filegroup" | "fileperms" | "filesize" | "fileinode" | "filemtime" | "fileatime" | "filectime" | "filetype" | "is_readable" | "is_writable" | "is_writeable" | "is_executable" => {
+        "is_link" => Value::Bool(
+            std::fs::symlink_metadata(zstr(it, &a0())?.to_string_lossy())
+                .is_ok_and(|m| m.file_type().is_symlink()),
+        ),
+        "fileowner" | "filegroup" | "fileperms" | "filesize" | "fileinode" | "filemtime"
+        | "fileatime" | "filectime" | "filetype" | "is_readable" | "is_writable"
+        | "is_writeable" | "is_executable" => {
             use php_streams::filestat::{php_stat, FsType, StatResult};
             let p = zstr(it, &a0())?;
             let ty = match name {
@@ -1173,7 +1694,10 @@ pub fn call(it: &mut Interp, name: &str, args: &[Value]) -> RtResult<Value> {
             let diags = php_streams::diag::take();
             php_streams::diag::set_handler(prev);
             for d in diags {
-                it.emit(ErrorLevel::Warning, &format!("fopen({}): {}", p.to_string_lossy(), d.text()))?;
+                it.emit(
+                    ErrorLevel::Warning,
+                    &format!("fopen({}): {}", p.to_string_lossy(), d.text()),
+                )?;
             }
             match s {
                 Some(s) => Value::Resource(php_runtime::Resource::new("stream", Some(Box::new(s)))),
@@ -1181,7 +1705,11 @@ pub fn call(it: &mut Interp, name: &str, args: &[Value]) -> RtResult<Value> {
             }
         }
         "fputcsv" | "fgetcsv" | "fseek" | "ftruncate" | "fgetc" | "stream_get_contents" => {
-            let Value::Resource(r) = a0() else { return Err(rt_err(format!("{name}(): Argument #1 must be of type resource"))) };
+            let Value::Resource(r) = a0() else {
+                return Err(rt_err(format!(
+                    "{name}(): Argument #1 must be of type resource"
+                )));
+            };
             let mut strs = Vec::new();
             if name == "fputcsv" {
                 for v in arr(&arg(args, 1))?.values() {
@@ -1190,15 +1718,28 @@ pub fn call(it: &mut Interp, name: &str, args: &[Value]) -> RtResult<Value> {
             }
             let n1 = arg(args, 1).to_long(it)?;
             let mut d = r.data_mut();
-            let Some(s) = d.as_mut().and_then(|b| b.downcast_mut::<php_streams::stream::Stream>()) else {
+            let Some(s) = d
+                .as_mut()
+                .and_then(|b| b.downcast_mut::<php_streams::stream::Stream>())
+            else {
                 return Ok(Value::Bool(false));
             };
             match name {
                 "fputcsv" => {
                     let mut o = php_stdstr::csv::CsvOptions::default();
-                    if let Some(Value::Str(x)) = args.get(2) { if let Some(c) = x.as_bytes().first() { o.delimiter = *c; } }
-                    if let Some(Value::Str(x)) = args.get(3) { if let Some(c) = x.as_bytes().first() { o.enclosure = *c; } }
-                    if let Some(Value::Str(x)) = args.get(4) { o.escape = x.as_bytes().first().copied(); }
+                    if let Some(Value::Str(x)) = args.get(2) {
+                        if let Some(c) = x.as_bytes().first() {
+                            o.delimiter = *c;
+                        }
+                    }
+                    if let Some(Value::Str(x)) = args.get(3) {
+                        if let Some(c) = x.as_bytes().first() {
+                            o.enclosure = *c;
+                        }
+                    }
+                    if let Some(Value::Str(x)) = args.get(4) {
+                        o.escape = x.as_bytes().first().copied();
+                    }
                     let line = php_stdstr::csv::fputcsv_line(&strs, &o, None);
                     match s.write(&line) {
                         Ok(n) => Value::Int(n as i64),
@@ -1209,29 +1750,52 @@ pub fn call(it: &mut Interp, name: &str, args: &[Value]) -> RtResult<Value> {
                     None => Value::Bool(false),
                     Some(l) => {
                         let mut next = || s.get_line(None);
-                        match php_stdstr::csv::fgetcsv_parse(l, &php_stdstr::csv::CsvOptions::default(), &mut next) {
-                            Some(v) => Value::Array(ZArray::from_values(v.into_iter().map(|f| Value::Str(ZStr::from(f))))),
+                        match php_stdstr::csv::fgetcsv_parse(
+                            l,
+                            &php_stdstr::csv::CsvOptions::default(),
+                            &mut next,
+                        ) {
+                            Some(v) => Value::Array(ZArray::from_values(
+                                v.into_iter().map(|f| Value::Str(ZStr::from(f))),
+                            )),
                             None => Value::Array(ZArray::from_values([Value::Null])),
                         }
                     }
                 },
                 "fseek" => Value::Int(i64::from(s.seek(n1, 0))),
                 "ftruncate" => Value::Bool(s.truncate(n1) == 0),
-                "fgetc" => s.getc().map_or(Value::Bool(false), |c| Value::Str(ZStr::from_byte(c))),
+                "fgetc" => s
+                    .getc()
+                    .map_or(Value::Bool(false), |c| Value::Str(ZStr::from_byte(c))),
                 _ => Value::Str(ZStr::from(s.copy_to_mem(None).unwrap_or_default())),
             }
         }
-        "chmod" => Value::Bool(php_streams::filestat::chmod(zstr(it, &a0())?.as_bytes(), arg(args, 1).to_long(it)?)),
+        "chmod" => Value::Bool(php_streams::filestat::chmod(
+            zstr(it, &a0())?.as_bytes(),
+            arg(args, 1).to_long(it)?,
+        )),
         "gc_enable" | "gc_disable" => Value::Null,
-        "fclose" | "fwrite" | "fputs" | "fgets" | "feof" | "fread" | "rewind" | "ftell" | "fflush" => {
-            let Value::Resource(r) = a0() else { return Err(rt_err(format!("{name}(): Argument #1 must be of type resource"))) };
+        "fclose" | "fwrite" | "fputs" | "fgets" | "feof" | "fread" | "rewind" | "ftell"
+        | "fflush" => {
+            let Value::Resource(r) = a0() else {
+                return Err(rt_err(format!(
+                    "{name}(): Argument #1 must be of type resource"
+                )));
+            };
             if name == "fclose" {
                 r.close();
                 return Ok(Value::Bool(true));
             }
-            let data2 = if args.len() > 1 { Some(zstr(it, &arg(args, 1))?) } else { None };
+            let data2 = if args.len() > 1 {
+                Some(zstr(it, &arg(args, 1))?)
+            } else {
+                None
+            };
             let mut d = r.data_mut();
-            let Some(s) = d.as_mut().and_then(|b| b.downcast_mut::<php_streams::stream::Stream>()) else {
+            let Some(s) = d
+                .as_mut()
+                .and_then(|b| b.downcast_mut::<php_streams::stream::Stream>())
+            else {
                 return Ok(Value::Bool(false));
             };
             match name {
@@ -1239,11 +1803,16 @@ pub fn call(it: &mut Interp, name: &str, args: &[Value]) -> RtResult<Value> {
                     Ok(n) => Value::Int(n as i64),
                     Err(_) => Value::Bool(false),
                 },
-                "fgets" => s.get_line(None).map_or(Value::Bool(false), |l| Value::Str(ZStr::from(l))),
+                "fgets" => s
+                    .get_line(None)
+                    .map_or(Value::Bool(false), |l| Value::Str(ZStr::from(l))),
                 "feof" => Value::Bool(s.eof()),
                 "fread" => {
-                    let n = data2.and_then(|z| z.to_string_lossy().parse::<usize>().ok()).unwrap_or(0);
-                    s.read_vec(n).map_or(Value::from(""), |v| Value::Str(ZStr::from(v)))
+                    let n = data2
+                        .and_then(|z| z.to_string_lossy().parse::<usize>().ok())
+                        .unwrap_or(0);
+                    s.read_vec(n)
+                        .map_or(Value::from(""), |v| Value::Str(ZStr::from(v)))
                 }
                 "rewind" => Value::Bool(s.rewind() == 0),
                 "ftell" => Value::Int(s.tell()),
@@ -1262,17 +1831,26 @@ pub fn call(it: &mut Interp, name: &str, args: &[Value]) -> RtResult<Value> {
                 Err(_) => Value::Bool(false),
             }
         }
-        "preg_match" | "preg_match_all" | "preg_replace" | "preg_split" | "preg_quote" => return preg(it, name, args),
+        "preg_match" | "preg_match_all" | "preg_replace" | "preg_split" | "preg_quote" => {
+            return preg(it, name, args)
+        }
         "getmypid" => Value::Int(i64::from(std::process::id())),
         "sys_get_temp_dir" => Value::from(std::env::temp_dir().to_string_lossy().into_owned()),
         "tempnam" => {
             let dir = zstr(it, &a0())?.to_string_lossy();
             let pre = zstr(it, &arg(args, 1))?.to_string_lossy();
-            let p = format!("{dir}/{pre}{}", std::process::id() as u64 * 1000 + it.tmpfiles.len() as u64);
+            let p = format!(
+                "{dir}/{pre}{}",
+                std::process::id() as u64 * 1000 + it.tmpfiles.len() as u64
+            );
             let _ = std::fs::write(&p, b"");
             Value::from(p)
         }
-        "getcwd" => Value::from(std::env::current_dir().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default()),
+        "getcwd" => Value::from(
+            std::env::current_dir()
+                .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+        ),
         "chdir" => Value::Bool(true),
         "error_reporting" => {
             let old = it.error_reporting;
@@ -1281,7 +1859,13 @@ pub fn call(it: &mut Interp, name: &str, args: &[Value]) -> RtResult<Value> {
             }
             Value::Int(old)
         }
-        "ini_set" | "ini_get" | "set_time_limit" | "gc_collect_cycles" | "ob_implicit_flush" | "setlocale" | "date_default_timezone_set" => Value::Bool(false),
+        "ini_set"
+        | "ini_get"
+        | "set_time_limit"
+        | "gc_collect_cycles"
+        | "ob_implicit_flush"
+        | "setlocale"
+        | "date_default_timezone_set" => Value::Bool(false),
         "set_error_handler" => {
             let old = it.error_handlers.last().cloned().unwrap_or_default();
             it.error_handlers.push(a0());
@@ -1302,7 +1886,11 @@ pub fn call(it: &mut Interp, name: &str, args: &[Value]) -> RtResult<Value> {
         }
         "trigger_error" | "user_error" => {
             let m = zstr(it, &a0())?.to_string_lossy();
-            let lvl = if args.len() > 1 { arg(args, 1).to_long(it)? } else { 1024 };
+            let lvl = if args.len() > 1 {
+                arg(args, 1).to_long(it)?
+            } else {
+                1024
+            };
             let level = match lvl {
                 256 => ErrorLevel::UserError,
                 512 => ErrorLevel::UserWarning,
@@ -1311,13 +1899,21 @@ pub fn call(it: &mut Interp, name: &str, args: &[Value]) -> RtResult<Value> {
             };
             it.emit(level, &m)?;
             if lvl == 256 {
-                return Err(RuntimeError::Custom { class: ZStr::from(EXIT_MARK), message: String::new() });
+                return Err(RuntimeError::Custom {
+                    class: ZStr::from(EXIT_MARK),
+                    message: String::new(),
+                });
             }
             Value::Bool(true)
         }
         "clone" => match a0() {
             Value::Object(o) => Value::Object(it.clone_object(&o)?),
-            other => return Err(rt_err(format!("__clone method called on non-object ({})", other.type_name()))),
+            other => {
+                return Err(rt_err(format!(
+                    "__clone method called on non-object ({})",
+                    other.type_name()
+                )))
+            }
         },
         "shuffle" => {
             let r = refarg(args, 0);
@@ -1335,15 +1931,24 @@ pub fn call(it: &mut Interp, name: &str, args: &[Value]) -> RtResult<Value> {
             if let Value::Str(s) = a0() {
                 it.echo(s.as_bytes());
             }
-            return Err(RuntimeError::Custom { class: ZStr::from(EXIT_MARK), message: String::new() });
+            return Err(RuntimeError::Custom {
+                class: ZStr::from(EXIT_MARK),
+                message: String::new(),
+            });
         }
         "ob_start" => {
             it.ob_stack.push(Vec::new());
             Value::Bool(true)
         }
         "ob_get_clean" | "ob_get_contents" => match name {
-            "ob_get_clean" => it.ob_stack.pop().map_or(Value::Bool(false), |b| Value::Str(ZStr::from(b))),
-            _ => it.ob_stack.last().map_or(Value::Bool(false), |b| Value::Str(ZStr::from(b.clone()))),
+            "ob_get_clean" => it
+                .ob_stack
+                .pop()
+                .map_or(Value::Bool(false), |b| Value::Str(ZStr::from(b))),
+            _ => it
+                .ob_stack
+                .last()
+                .map_or(Value::Bool(false), |b| Value::Str(ZStr::from(b.clone()))),
         },
         "ob_end_clean" => Value::Bool(it.ob_stack.pop().is_some()),
         "ob_end_flush" | "ob_get_flush" => {
@@ -1354,7 +1959,11 @@ pub fn call(it: &mut Interp, name: &str, args: &[Value]) -> RtResult<Value> {
         }
         "md5" => Value::from(format!("{:x}", md5_hash(zstr(it, &a0())?.as_bytes()))),
         "crc32" => Value::Int(i64::from(crc32(zstr(it, &a0())?.as_bytes()))),
-        "mb_strlen" => Value::Int(String::from_utf8_lossy(zstr(it, &a0())?.as_bytes()).chars().count() as i64),
+        "mb_strlen" => Value::Int(
+            String::from_utf8_lossy(zstr(it, &a0())?.as_bytes())
+                .chars()
+                .count() as i64,
+        ),
         "array_column" | "array_rand" => return Err(rt_err(format!("builtin {name} unsupported"))),
         "spl_autoload_register_" => Value::Null,
         "debug_zval_refcount" | "debug_zval_dump" => Value::Null,
@@ -1362,7 +1971,14 @@ pub fn call(it: &mut Interp, name: &str, args: &[Value]) -> RtResult<Value> {
         "array_is_list" => Value::Bool(arr(&a0())?.is_list()),
         "array_any" | "array_all" => {
             let a = arr(&a0())?;
-            with_callback(it, arg(args, 1), |it, c| if name == "array_any" { php_stdarr::callback::array_any(it, &a, c) } else { php_stdarr::callback::array_all(it, &a, c) })?.into()
+            with_callback(it, arg(args, 1), |it, c| {
+                if name == "array_any" {
+                    php_stdarr::callback::array_any(it, &a, c)
+                } else {
+                    php_stdarr::callback::array_all(it, &a, c)
+                }
+            })?
+            .into()
         }
         "date" => Value::from("2024-01-01"),
         "microtime" | "time" | "hrtime" => Value::Int(0),
@@ -1411,7 +2027,13 @@ fn json_encode(it: &mut Interp, v: &Value, flags: i64) -> RtResult<Vec<u8>> {
     let _ = flags;
     Ok(match v.deref() {
         Value::Null => b"null".to_vec(),
-        Value::Bool(b) => if b { b"true".to_vec() } else { b"false".to_vec() },
+        Value::Bool(b) => {
+            if b {
+                b"true".to_vec()
+            } else {
+                b"false".to_vec()
+            }
+        }
         Value::Int(i) => i.to_string().into_bytes(),
         Value::Float(f) => php_runtime::float::zend_gcvt(f, 17, b'.', b'e').into_bytes(),
         Value::Str(s) => {
@@ -1474,7 +2096,11 @@ fn crc32(data: &[u8]) -> u32 {
     for &b in data {
         crc ^= u32::from(b);
         for _ in 0..8 {
-            crc = if crc & 1 != 0 { (crc >> 1) ^ 0xEDB8_8320 } else { crc >> 1 };
+            crc = if crc & 1 != 0 {
+                (crc >> 1) ^ 0xEDB8_8320
+            } else {
+                crc >> 1
+            };
         }
     }
     !crc
@@ -1483,7 +2109,6 @@ fn crc32(data: &[u8]) -> u32 {
 fn md5_hash(_data: &[u8]) -> u128 {
     0
 }
-
 
 pub fn unused(_: &HashTable, _: ArrayKey, _: Obj) {}
 
@@ -1511,14 +2136,24 @@ fn pcre_array(a: &php_pcre::MatchArray) -> ZArray {
 fn preg(it: &mut Interp, name: &str, args: &[Value]) -> RtResult<Value> {
     if name == "preg_quote" {
         let s = zstr(it, &arg(args, 0))?;
-        let d = if args.len() > 1 { Some(zstr(it, &arg(args, 1))?) } else { None };
-        return Ok(Value::Str(ZStr::from(php_pcre::quote(s.as_bytes(), d.as_ref().map(ZStr::as_bytes)))));
+        let d = if args.len() > 1 {
+            Some(zstr(it, &arg(args, 1))?)
+        } else {
+            None
+        };
+        return Ok(Value::Str(ZStr::from(php_pcre::quote(
+            s.as_bytes(),
+            d.as_ref().map(ZStr::as_bytes),
+        ))));
     }
     let pat = zstr(it, &arg(args, 0))?;
     let re = match it.pcre.compile(pat.as_bytes()) {
         Ok(r) => r,
         Err(e) => {
-            it.emit(ErrorLevel::Warning, &format!("{name}(): {}", String::from_utf8_lossy(&e.message())))?;
+            it.emit(
+                ErrorLevel::Warning,
+                &format!("{name}(): {}", String::from_utf8_lossy(&e.message())),
+            )?;
             return Ok(Value::Bool(false));
         }
     };
@@ -1543,14 +2178,27 @@ fn preg(it: &mut Interp, name: &str, args: &[Value]) -> RtResult<Value> {
         "preg_replace" => {
             let rep = zstr(it, &arg(args, 1))?;
             let subj = zstr(it, &arg(args, 2))?;
-            let out = php_pcre::replace(&re, &cfg, subj.as_bytes(), &php_pcre::Replacement::parse(rep.as_bytes()), php_pcre::limit_from_php(-1));
-            Ok(out.result.map_or(Value::Null, |v| Value::Str(ZStr::from(v))))
+            let out = php_pcre::replace(
+                &re,
+                &cfg,
+                subj.as_bytes(),
+                &php_pcre::Replacement::parse(rep.as_bytes()),
+                php_pcre::limit_from_php(-1),
+            );
+            Ok(out
+                .result
+                .map_or(Value::Null, |v| Value::Str(ZStr::from(v))))
         }
         _ => {
             let subj = zstr(it, &arg(args, 1))?;
-            let limit = if args.len() > 2 { arg(args, 2).to_long(it)? } else { -1 };
+            let limit = if args.len() > 2 {
+                arg(args, 2).to_long(it)?
+            } else {
+                -1
+            };
             let flags = arg(args, 3).to_long(it)?;
-            Ok(php_pcre::split(&re, &cfg, subj.as_bytes(), limit, flags).map_or(Value::Bool(false), |a| Value::Array(pcre_array(&a))))
+            Ok(php_pcre::split(&re, &cfg, subj.as_bytes(), limit, flags)
+                .map_or(Value::Bool(false), |a| Value::Array(pcre_array(&a))))
         }
     }
 }

@@ -14,7 +14,7 @@ use php_runtime::{CastTarget, ErrorLevel, Obj, RtResult, RuntimeError, Value, ZA
 #[derive(Debug, Clone, Copy)]
 pub struct Args<'a> {
     func: &'a str,
-    args: &'a [Value],
+    values: &'a [Value],
     names: &'a [&'a str],
 }
 
@@ -55,7 +55,11 @@ impl<'a> Args<'a> {
         if args.len() < min || max.is_some_and(|m| args.len() > m) {
             return Err(count_error(func, args.len(), min, max));
         }
-        Ok(Args { func, args, names })
+        Ok(Args {
+            func,
+            values: args,
+            names,
+        })
     }
 
     /// `ZEND_PARSE_PARAMETERS_NONE()`.
@@ -76,31 +80,31 @@ impl<'a> Args<'a> {
     /// Number of passed arguments.
     #[must_use]
     pub fn len(&self) -> usize {
-        self.args.len()
+        self.values.len()
     }
 
     /// Whether no arguments were passed.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.args.is_empty()
+        self.values.is_empty()
     }
 
     /// Whether argument `i` (0-based) was passed.
     #[must_use]
     pub fn has(&self, i: usize) -> bool {
-        i < self.args.len()
+        i < self.values.len()
     }
 
     /// The raw argument (dereferenced), `null` when absent.
     #[must_use]
     pub fn raw(&self, i: usize) -> Value {
-        self.args.get(i).map(Value::deref).unwrap_or_default()
+        self.values.get(i).map(Value::deref).unwrap_or_default()
     }
 
     /// The raw argument without dereferencing (for by-reference parameters).
     #[must_use]
     pub fn raw_ref(&self, i: usize) -> Option<&'a Value> {
-        self.args.get(i)
+        self.values.get(i)
     }
 
     fn name(&self, i: usize) -> &str {
@@ -128,7 +132,7 @@ impl<'a> Args<'a> {
         ))
     }
 
-    /// A `ValueError` for argument `i`: "Func(): Argument #n ($x) `msg`".
+    /// A `ValueError` for argument `i`: "`Func()`: Argument #n ($x) `msg`".
     #[must_use]
     pub fn value_error(&self, i: usize, msg: &str) -> RuntimeError {
         RuntimeError::ValueError(format!("{} {msg}", self.arg_prefix(i)))
@@ -220,7 +224,7 @@ impl<'a> Args<'a> {
     /// `S`/`s`: a string argument.
     pub fn str(&self, host: &mut dyn SplHost, i: usize) -> RtResult<ZStr> {
         let v = self.raw(i);
-        match self.str_weak(host, &v)? {
+        match Self::str_weak(host, &v)? {
             Some(s) => Ok(s),
             None if v.is_null() => {
                 self.null_deprecated(host, i, "string")?;
@@ -245,7 +249,7 @@ impl<'a> Args<'a> {
         if !self.has(i) || v.is_null() {
             return Ok(None);
         }
-        match self.str_weak(host, &v)? {
+        match Self::str_weak(host, &v)? {
             Some(s) => Ok(Some(s)),
             None => Err(self.type_error(i, "?string")),
         }
@@ -260,7 +264,7 @@ impl<'a> Args<'a> {
         Ok(s)
     }
 
-    fn str_weak(&self, host: &mut dyn SplHost, v: &Value) -> RtResult<Option<ZStr>> {
+    fn str_weak(host: &mut dyn SplHost, v: &Value) -> RtResult<Option<ZStr>> {
         Ok(match v {
             Value::Str(s) => Some(s.clone()),
             Value::Int(_) | Value::Float(_) | Value::Bool(_) => Some(v.to_zstr(host)?),
@@ -379,7 +383,9 @@ pub trait IntoValid {
 impl IntoValid for RuntimeError {
     fn into_valid(self) -> Self {
         match self {
-            RuntimeError::TypeError(m) => RuntimeError::TypeError(m.replacen("must be of type a ", "must be a ", 1)),
+            RuntimeError::TypeError(m) => {
+                RuntimeError::TypeError(m.replacen("must be of type a ", "must be a ", 1))
+            }
             other => other,
         }
     }

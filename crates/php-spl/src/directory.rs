@@ -7,7 +7,9 @@ use crate::exceptions::{error, logic, out_of_bounds, runtime, throw, type_error}
 use crate::host::{ObjectIterator, SplHost};
 use crate::object::{state_of, SplObject};
 use crate::util::{private_prop, this_obj, to_long};
-use php_runtime::{ArrayKey, ErrorLevel, HashTable, Obj, RtResult, RuntimeError, Value, ZArray, ZStr};
+use php_runtime::{
+    ArrayKey, ErrorLevel, HashTable, Obj, RtResult, RuntimeError, Value, ZArray, ZStr,
+};
 use php_streams::diag::{Diagnostic, Severity};
 use php_streams::filestat::{php_stat, FsType, StatResult};
 use php_streams::stream::Stream;
@@ -205,10 +207,11 @@ impl FileState {
     /// `spl_filesystem_dir_read`.
     fn dir_read(&mut self) {
         self.file_name = None;
-        self.entry = match self.dirp.as_mut().and_then(Stream::readdir) {
-            Some(e) => e,
-            None => Vec::new(),
-        };
+        self.entry = self
+            .dirp
+            .as_mut()
+            .and_then(Stream::readdir)
+            .unwrap_or_default();
     }
 
     fn dir_read_skip(&mut self, skip_dots: bool) {
@@ -255,9 +258,7 @@ fn set_filename(fs: &mut FileState, path: &[u8]) {
     while len > 1 && path[len - 1] != b'/' {
         len -= 1;
     }
-    if len > 0 {
-        len -= 1;
-    }
+    len = len.saturating_sub(1);
     fs.path = Some(ZStr::from(&path[..len]));
 }
 
@@ -327,9 +328,8 @@ fn diags_to_exception(
 fn dir_open(fs: &mut FileState, func: &str, path: &[u8]) -> RtResult<()> {
     let skip_dots = fs.flags & SKIP_DOTS != 0;
     fs.kind = FsKind::Dir;
-    let (dirp, diags) = capture(|| {
-        php_streams::open::opendir(path, php_streams::wrapper::REPORT_ERRORS, None)
-    });
+    let (dirp, diags) =
+        capture(|| php_streams::open::opendir(path, php_streams::wrapper::REPORT_ERRORS, None));
     fs.dirp = dirp;
     fs.path = Some(if path.len() > 1 && path[path.len() - 1] == b'/' {
         ZStr::from(&path[..path.len() - 1])
@@ -359,7 +359,10 @@ fn dir_open(fs: &mut FileState, func: &str, path: &[u8]) -> RtResult<()> {
 fn file_open(fs: &mut FileState, func: &str, use_include_path: bool) -> RtResult<()> {
     fs.kind = FsKind::File;
     let name = fs.file_name.clone().unwrap_or_default();
-    if matches!(php_stat(name.as_bytes(), FsType::IsDir), StatResult::Bool(true)) {
+    if matches!(
+        php_stat(name.as_bytes(), FsType::IsDir),
+        StatResult::Bool(true)
+    ) {
         fs.open_mode = None;
         fs.file_name = None;
         return Err(logic("Cannot use SplFileObject with directories"));
@@ -368,9 +371,8 @@ fn file_open(fs: &mut FileState, func: &str, use_include_path: bool) -> RtResult
         .open_mode
         .as_ref()
         .map_or_else(|| "r".to_string(), ZStr::to_string_lossy);
-    let (stream, diags) = capture(|| {
-        php_streams::open::fopen(name.as_bytes(), &mode, use_include_path, None)
-    });
+    let (stream, diags) =
+        capture(|| php_streams::open::fopen(name.as_bytes(), &mode, use_include_path, None));
     if let Some(e) = diags_to_exception("RuntimeException", func, &diags, Some(name.as_bytes())) {
         fs.open_mode = None;
         fs.file_name = None;
@@ -416,8 +418,13 @@ fn create_info(host: &mut dyn SplHost, path: &ZStr, class: &ZStr) -> RtResult<Va
 }
 
 /// `spl_filesystem_object_create_type` for `SPL_FS_INFO`.
-fn create_type_info(host: &mut dyn SplHost, st: &SplObject, class: Option<ZStr>) -> RtResult<Value> {
-    let (kind, entry_empty, info_class) = st.file(|f| (f.kind, f.entry.is_empty(), f.info_class.clone()))?;
+fn create_type_info(
+    host: &mut dyn SplHost,
+    st: &SplObject,
+    class: Option<ZStr>,
+) -> RtResult<Value> {
+    let (kind, entry_empty, info_class) =
+        st.file(|f| (f.kind, f.entry.is_empty(), f.info_class.clone()))?;
     if kind == FsKind::Dir && entry_empty {
         return Err(runtime("Could not open file"));
     }
@@ -439,22 +446,33 @@ fn create_type_info(host: &mut dyn SplHost, st: &SplObject, class: Option<ZStr>)
 
 /// `openFile()`.
 fn create_type_file(host: &mut dyn SplHost, st: &SplObject, args: &[Value]) -> RtResult<Value> {
-    let (kind, entry_empty, file_class) = st.file(|f| (f.kind, f.entry.is_empty(), f.file_class.clone()))?;
+    let (kind, entry_empty, file_class) =
+        st.file(|f| (f.kind, f.entry.is_empty(), f.file_class.clone()))?;
     if kind == FsKind::Dir && entry_empty {
         return Err(runtime("Could not open file"));
     }
     let func = "SplFileInfo::openFile";
-    let a = Args::new(func, args, &["mode", "useIncludePath", "context"], 0, Some(3))?;
+    let a = Args::new(
+        func,
+        args,
+        &["mode", "useIncludePath", "context"],
+        0,
+        Some(3),
+    )?;
     let mode = a.opt_str(host, 0, "r")?;
     let use_include_path = a.opt_bool(host, 1, false)?;
     match a.raw(2) {
         Value::Null | Value::Resource(_) => {}
-        _ => return Err(a.type_error(2, "resource or null").into_resource()),
+        _ => return Err(a.type_error(2, "resource or null")),
     }
     let obj = host.create_object(&file_class)?;
     let file_name = st.file(FileState::get_file_name)??;
     if host.has_user_method(&obj, "__construct") {
-        host.call_method(&obj, "__construct", &[Value::Str(file_name), Value::Str(mode)])?;
+        host.call_method(
+            &obj,
+            "__construct",
+            &[Value::Str(file_name), Value::Str(mode)],
+        )?;
     } else {
         let path = st.file(|f| f.get_path())?;
         let nst = fs_of(host, &obj)?;
@@ -468,21 +486,6 @@ fn create_type_file(host: &mut dyn SplHost, st: &SplObject, args: &[Value]) -> R
     Ok(Value::Object(obj))
 }
 
-trait IntoResource {
-    fn into_resource(self) -> Self;
-}
-
-impl IntoResource for RuntimeError {
-    fn into_resource(self) -> Self {
-        match self {
-            RuntimeError::TypeError(m) => {
-                RuntimeError::TypeError(m.replacen("must be of type resource or null", "must be of type resource or null", 1))
-            }
-            other => other,
-        }
-    }
-}
-
 // ---------------------------------------------------------------------------
 // File reading
 // ---------------------------------------------------------------------------
@@ -490,7 +493,10 @@ impl IntoResource for RuntimeError {
 fn cannot_read(fs: &FileState) -> RuntimeError {
     runtime(format!(
         "Cannot read from file {}",
-        fs.file_name.as_ref().map(ZStr::to_string_lossy).unwrap_or_default()
+        fs.file_name
+            .as_ref()
+            .map(ZStr::to_string_lossy)
+            .unwrap_or_default()
     ))
 }
 
@@ -552,7 +558,13 @@ fn csv_opts(delimiter: u8, enclosure: u8, escape: i32) -> php_stdstr::csv::CsvOp
 }
 
 /// `spl_filesystem_file_read_csv`.
-fn read_csv(fs: &mut FileState, delimiter: u8, enclosure: u8, escape: i32, silent: bool) -> RtResult<Option<Value>> {
+fn read_csv(
+    fs: &mut FileState,
+    delimiter: u8,
+    enclosure: u8,
+    escape: i32,
+    silent: bool,
+) -> RtResult<Option<Value>> {
     loop {
         if !file_read(fs, silent, true)? {
             return Ok(None);
@@ -561,7 +573,12 @@ fn read_csv(fs: &mut FileState, delimiter: u8, enclosure: u8, escape: i32, silen
             break;
         }
     }
-    let line = fs.current_line.clone().unwrap_or_default().as_bytes().to_vec();
+    let line = fs
+        .current_line
+        .clone()
+        .unwrap_or_default()
+        .as_bytes()
+        .to_vec();
     fs.current_zval = None;
     let opts = csv_opts(delimiter, enclosure, escape);
     let stream = fs.stream.as_mut();
@@ -582,7 +599,12 @@ fn read_csv(fs: &mut FileState, delimiter: u8, enclosure: u8, escape: i32, silen
 }
 
 /// `spl_filesystem_file_read_line_ex`.
-fn read_line_ex(host: &mut dyn SplHost, this: &Obj, st: &SplObject, silent: bool) -> RtResult<bool> {
+fn read_line_ex(
+    host: &mut dyn SplHost,
+    this: &Obj,
+    st: &SplObject,
+    silent: bool,
+) -> RtResult<bool> {
     let flags = st.file(|f| f.flags)?;
     if flags & READ_CSV != 0 {
         return st.file(|f| {
@@ -640,7 +662,10 @@ fn file_rewind(host: &mut dyn SplHost, this: &Obj, st: &SplObject) -> RtResult<(
         if s.rewind() == -1 {
             return Err(runtime(format!(
                 "Cannot rewind file {}",
-                f.file_name.as_ref().map(ZStr::to_string_lossy).unwrap_or_default()
+                f.file_name
+                    .as_ref()
+                    .map(ZStr::to_string_lossy)
+                    .unwrap_or_default()
             )));
         }
         f.free_line();
@@ -727,22 +752,37 @@ fn method_name(class: &str, method: &str) -> Option<&'static str> {
         .map(|m| m.name)
 }
 
-fn class_arg(host: &mut dyn SplHost, a: &Args<'_>, i: usize, base: &str, nullable: bool) -> RtResult<Option<ZStr>> {
+fn class_arg(
+    host: &mut dyn SplHost,
+    a: &Args<'_>,
+    i: usize,
+    base: &str,
+    nullable: bool,
+) -> RtResult<Option<ZStr>> {
     let v = a.raw(i);
     if v.is_null() && nullable {
         return Ok(None);
     }
     let name = match &v {
         Value::Str(s) => s.clone(),
-        Value::Object(o) => match host.cast_object(o, php_runtime::CastTarget::String)? {
-            Some(Value::Str(s)) => s,
-            _ => {
-                let what = if nullable { "a valid class name or null" } else { "a valid class name" };
+        Value::Object(o) => {
+            if let Some(Value::Str(s)) = host.cast_object(o, php_runtime::CastTarget::String)? {
+                s
+            } else {
+                let what = if nullable {
+                    "a valid class name or null"
+                } else {
+                    "a valid class name"
+                };
                 return Err(a.type_error(i, what).into_valid());
             }
-        },
+        }
         _ => {
-            let what = if nullable { "a valid class name or null" } else { "a valid class name" };
+            let what = if nullable {
+                "a valid class name or null"
+            } else {
+                "a valid class name"
+            };
             return Err(a.type_error(i, what).into_valid());
         }
     };
@@ -761,7 +801,7 @@ fn class_arg(host: &mut dyn SplHost, a: &Args<'_>, i: usize, base: &str, nullabl
 }
 
 /// Methods of the file and directory classes.
-#[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_lines, clippy::many_single_char_names)]
 pub(crate) fn call(
     host: &mut dyn SplHost,
     class: &str,
@@ -798,15 +838,22 @@ pub(crate) fn call(
             }
             ("SplFileInfo", "getextension") => {
                 Args::none(func, args)?;
-                let part = st.file(|f| f.filename_part())?.ok_or_else(|| error("Object not initialized"))?;
+                let part = st
+                    .file(|f| f.filename_part())?
+                    .ok_or_else(|| error("Object not initialized"))?;
                 let base = php_streams::pathname::basename(&part, b"");
                 Ok(Value::Str(ZStr::from(extension_of(&base))))
             }
             ("SplFileInfo", "getbasename") => {
                 let a = Args::new(func, args, &["suffix"], 0, Some(1))?;
                 let suffix = a.opt_str(host, 0, "")?;
-                let part = st.file(|f| f.filename_part())?.ok_or_else(|| error("Object not initialized"))?;
-                Ok(Value::Str(ZStr::from(php_streams::pathname::basename(&part, suffix.as_bytes()))))
+                let part = st
+                    .file(|f| f.filename_part())?
+                    .ok_or_else(|| error("Object not initialized"))?;
+                Ok(Value::Str(ZStr::from(php_streams::pathname::basename(
+                    &part,
+                    suffix.as_bytes(),
+                ))))
             }
             ("SplFileInfo", "getpathname" | "__tostring") => {
                 Args::none(func, args)?;
@@ -814,9 +861,9 @@ pub(crate) fn call(
             }
             (
                 "SplFileInfo",
-                "getperms" | "getinode" | "getsize" | "getowner" | "getgroup" | "getatime" | "getmtime"
-                | "getctime" | "gettype" | "iswritable" | "isreadable" | "isexecutable" | "isfile"
-                | "isdir" | "islink",
+                "getperms" | "getinode" | "getsize" | "getowner" | "getgroup" | "getatime"
+                | "getmtime" | "getctime" | "gettype" | "iswritable" | "isreadable"
+                | "isexecutable" | "isfile" | "isdir" | "islink",
             ) => {
                 Args::none(func, args)?;
                 let fname = st.file(FileState::get_file_name)??;
@@ -877,7 +924,8 @@ pub(crate) fn call(
             ("SplFileInfo", "setfileclass") => {
                 let a = Args::new(func, args, &["class"], 0, Some(1))?;
                 let c = if a.has(0) {
-                    class_arg(host, &a, 0, "SplFileObject", false)?.unwrap_or_else(|| ZStr::from("SplFileObject"))
+                    class_arg(host, &a, 0, "SplFileObject", false)?
+                        .unwrap_or_else(|| ZStr::from("SplFileObject"))
                 } else {
                     ZStr::from("SplFileObject")
                 };
@@ -887,7 +935,8 @@ pub(crate) fn call(
             ("SplFileInfo", "setinfoclass") => {
                 let a = Args::new(func, args, &["class"], 0, Some(1))?;
                 let c = if a.has(0) {
-                    class_arg(host, &a, 0, "SplFileInfo", false)?.unwrap_or_else(|| ZStr::from("SplFileInfo"))
+                    class_arg(host, &a, 0, "SplFileInfo", false)?
+                        .unwrap_or_else(|| ZStr::from("SplFileInfo"))
                 } else {
                     ZStr::from("SplFileInfo")
                 };
@@ -896,12 +945,20 @@ pub(crate) fn call(
             }
             ("SplFileInfo", "getfileinfo") => {
                 let a = Args::new(func, args, &["class"], 0, Some(1))?;
-                let c = if a.has(0) { class_arg(host, &a, 0, "SplFileInfo", true)? } else { None };
+                let c = if a.has(0) {
+                    class_arg(host, &a, 0, "SplFileInfo", true)?
+                } else {
+                    None
+                };
                 create_type_info(host, &st, c)
             }
             ("SplFileInfo", "getpathinfo") => {
                 let a = Args::new(func, args, &["class"], 0, Some(1))?;
-                let c = if a.has(0) { class_arg(host, &a, 0, "SplFileInfo", true)? } else { None };
+                let c = if a.has(0) {
+                    class_arg(host, &a, 0, "SplFileInfo", true)?
+                } else {
+                    None
+                };
                 let c = match c {
                     Some(c) => c,
                     None => st.file(|f| f.info_class.clone())?,
@@ -921,19 +978,38 @@ pub(crate) fn call(
             }
             ("SplFileInfo", "_bad_state_ex") => {
                 Args::none(func, args)?;
-                Err(error("The parent constructor was not called: the object is in an invalid state"))
+                Err(error(
+                    "The parent constructor was not called: the object is in an invalid state",
+                ))
             }
             // ---------------- DirectoryIterator ----------------
-            ("DirectoryIterator" | "FilesystemIterator" | "RecursiveDirectoryIterator" | "GlobIterator", "__construct") => {
+            (
+                "DirectoryIterator"
+                | "FilesystemIterator"
+                | "RecursiveDirectoryIterator"
+                | "GlobIterator",
+                "__construct",
+            ) => {
                 let with_flags = class != "DirectoryIterator";
                 let (names, max): (&[&str], usize) = if with_flags {
-                    (if class == "GlobIterator" { &["pattern", "flags"] } else { &["directory", "flags"] }, 2)
+                    (
+                        if class == "GlobIterator" {
+                            &["pattern", "flags"]
+                        } else {
+                            &["directory", "flags"]
+                        },
+                        2,
+                    )
                 } else {
                     (&["directory"], 1)
                 };
                 let a = Args::new(func, args, names, 1, Some(max))?;
                 let path = a.path(host, 0)?;
-                let mut flags = if class == "FilesystemIterator" { SKIP_DOTS } else { 0 };
+                let mut flags = if class == "FilesystemIterator" {
+                    SKIP_DOTS
+                } else {
+                    0
+                };
                 if with_flags {
                     flags |= KEY_AS_PATHNAME | CURRENT_AS_FILEINFO;
                     flags = a.opt_long(host, 1, flags)?;
@@ -1000,7 +1076,9 @@ pub(crate) fn call(
                 while st.file(|f| f.index)? < pos {
                     let v = host.call_method(this, "valid", &[])?;
                     if !v.to_bool(host)? {
-                        return Err(out_of_bounds(format!("Seek position {pos} is out of range")));
+                        return Err(out_of_bounds(format!(
+                            "Seek position {pos} is out of range"
+                        )));
                     }
                     host.call_method(this, "next", &[])?;
                 }
@@ -1028,7 +1106,10 @@ pub(crate) fn call(
                 let suffix = a.opt_str(host, 0, "")?;
                 check_dir(&st)?;
                 let e = st.file(|f| f.entry.clone())?;
-                Ok(Value::Str(ZStr::from(php_streams::pathname::basename(&e, suffix.as_bytes()))))
+                Ok(Value::Str(ZStr::from(php_streams::pathname::basename(
+                    &e,
+                    suffix.as_bytes(),
+                ))))
             }
             ("DirectoryIterator", "isdot") => {
                 Args::none(func, args)?;
@@ -1102,9 +1183,16 @@ pub(crate) fn call(
                 Args::none(func, args)?;
                 let fname = st.file(FileState::get_file_name)??;
                 let (flags, sub_path, entry, info_class, file_class) = st.file(|f| {
-                    (f.flags, f.sub_path.clone(), f.entry.clone(), f.info_class.clone(), f.file_class.clone())
+                    (
+                        f.flags,
+                        f.sub_path.clone(),
+                        f.entry.clone(),
+                        f.info_class.clone(),
+                        f.file_class.clone(),
+                    )
                 })?;
-                let child = host.instantiate(&this.class_name(), &[Value::Str(fname), Value::Int(flags)])?;
+                let child =
+                    host.instantiate(&this.class_name(), &[Value::Str(fname), Value::Int(flags)])?;
                 if let Some(cst) = host.spl_state(&child) {
                     let sp = match sub_path {
                         Some(sp) if !sp.is_empty() => {
@@ -1151,7 +1239,13 @@ pub(crate) fn call(
             }
             // ---------------- SplFileObject ----------------
             ("SplFileObject", "__construct") => {
-                let a = Args::new(func, args, &["filename", "mode", "useIncludePath", "context"], 1, Some(4))?;
+                let a = Args::new(
+                    func,
+                    args,
+                    &["filename", "mode", "useIncludePath", "context"],
+                    1,
+                    Some(4),
+                )?;
                 let file_name = a.path(host, 0)?;
                 let mode = a.opt_str(host, 1, "r")?;
                 let use_include_path = a.opt_bool(host, 2, false)?;
@@ -1166,7 +1260,11 @@ pub(crate) fn call(
                     f.open_mode = Some(mode);
                     f.file_name = Some(file_name);
                     file_open(f, func, use_include_path)?;
-                    let orig = f.stream.as_ref().and_then(|s| s.orig_path.clone()).unwrap_or_default();
+                    let orig = f
+                        .stream
+                        .as_ref()
+                        .and_then(|s| s.orig_path.clone())
+                        .unwrap_or_default();
                     let mut len = orig.len();
                     if len > 1 && orig[len - 1] == b'/' {
                         len -= 1;
@@ -1174,9 +1272,7 @@ pub(crate) fn call(
                     while len > 1 && orig[len - 1] != b'/' {
                         len -= 1;
                     }
-                    if len > 0 {
-                        len -= 1;
-                    }
+                    len = len.saturating_sub(1);
                     f.path = Some(ZStr::from(&orig[..len]));
                     Ok(())
                 })??;
@@ -1328,10 +1424,28 @@ pub(crate) fn call(
                 Ok(Value::Null)
             }
             ("SplFileObject", "fgetcsv") => {
-                let a = Args::new(func, args, &["separator", "enclosure", "escape"], 0, Some(3))?;
-                let sep = if a.has(0) { Some(a.str(host, 0)?) } else { None };
-                let enc = if a.has(1) { Some(a.str(host, 1)?) } else { None };
-                let esc = if a.has(2) { Some(a.str(host, 2)?) } else { None };
+                let a = Args::new(
+                    func,
+                    args,
+                    &["separator", "enclosure", "escape"],
+                    0,
+                    Some(3),
+                )?;
+                let sep = if a.has(0) {
+                    Some(a.str(host, 0)?)
+                } else {
+                    None
+                };
+                let enc = if a.has(1) {
+                    Some(a.str(host, 1)?)
+                } else {
+                    None
+                };
+                let esc = if a.has(2) {
+                    Some(a.str(host, 2)?)
+                } else {
+                    None
+                };
                 check_file(&st)?;
                 let (mut d, mut e, cur_esc, esc_default) =
                     st.file(|f| (f.delimiter, f.enclosure, f.escape, f.is_escape_default))?;
@@ -1341,24 +1455,47 @@ pub(crate) fn call(
                 if let Some(s) = &enc {
                     e = single_char(&a, 1, s)?;
                 }
-                let x = match &esc {
-                    Some(s) => escape_arg(&a, 2, s)?,
-                    None => {
-                        if esc_default {
-                            escape_deprecation(host, func)?;
-                        }
-                        cur_esc
+                let x = if let Some(s) = &esc {
+                    escape_arg(&a, 2, s)?
+                } else {
+                    if esc_default {
+                        escape_deprecation(host, func)?;
                     }
+                    cur_esc
                 };
-                Ok(st.file(|f| read_csv(f, d, e, x, true))??.unwrap_or(Value::Bool(false)))
+                Ok(st
+                    .file(|f| read_csv(f, d, e, x, true))??
+                    .unwrap_or(Value::Bool(false)))
             }
             ("SplFileObject", "fputcsv") => {
-                let a = Args::new(func, args, &["fields", "separator", "enclosure", "escape", "eol"], 1, Some(5))?;
+                let a = Args::new(
+                    func,
+                    args,
+                    &["fields", "separator", "enclosure", "escape", "eol"],
+                    1,
+                    Some(5),
+                )?;
                 let fields = a.array(0)?;
-                let sep = if a.has(1) { Some(a.str(host, 1)?) } else { None };
-                let enc = if a.has(2) { Some(a.str(host, 2)?) } else { None };
-                let esc = if a.has(3) { Some(a.str(host, 3)?) } else { None };
-                let eol = if a.has(4) { Some(a.str(host, 4)?) } else { None };
+                let sep = if a.has(1) {
+                    Some(a.str(host, 1)?)
+                } else {
+                    None
+                };
+                let enc = if a.has(2) {
+                    Some(a.str(host, 2)?)
+                } else {
+                    None
+                };
+                let esc = if a.has(3) {
+                    Some(a.str(host, 3)?)
+                } else {
+                    None
+                };
+                let eol = if a.has(4) {
+                    Some(a.str(host, 4)?)
+                } else {
+                    None
+                };
                 check_file(&st)?;
                 let (mut d, mut e, cur_esc, esc_default) =
                     st.file(|f| (f.delimiter, f.enclosure, f.escape, f.is_escape_default))?;
@@ -1368,27 +1505,36 @@ pub(crate) fn call(
                 if let Some(s) = &enc {
                     e = single_char(&a, 2, s)?;
                 }
-                let x = match &esc {
-                    Some(s) => escape_arg(&a, 3, s)?,
-                    None => {
-                        if esc_default {
-                            escape_deprecation(host, func)?;
-                        }
-                        cur_esc
+                let x = if let Some(s) = &esc {
+                    escape_arg(&a, 3, s)?
+                } else {
+                    if esc_default {
+                        escape_deprecation(host, func)?;
                     }
+                    cur_esc
                 };
                 let mut strs: Vec<Vec<u8>> = Vec::with_capacity(fields.len());
                 for v in fields.values() {
                     strs.push(v.deref().to_zstr(host)?.as_bytes().to_vec());
                 }
-                let line = php_stdstr::csv::fputcsv_line(&strs, &csv_opts(d, e, x), eol.as_ref().map(ZStr::as_bytes));
+                let line = php_stdstr::csv::fputcsv_line(
+                    &strs,
+                    &csv_opts(d, e, x),
+                    eol.as_ref().map(ZStr::as_bytes),
+                );
                 st.file(|f| match f.stream.as_mut().map(|s| s.write(&line)) {
                     Some(Ok(n)) => Value::Int(to_long(n)),
                     _ => Value::Bool(false),
                 })
             }
             ("SplFileObject", "setcsvcontrol") => {
-                let a = Args::new(func, args, &["separator", "enclosure", "escape"], 0, Some(3))?;
+                let a = Args::new(
+                    func,
+                    args,
+                    &["separator", "enclosure", "escape"],
+                    0,
+                    Some(3),
+                )?;
                 let mut d = b',';
                 let mut e = b'"';
                 if a.has(0) {
@@ -1445,13 +1591,15 @@ pub(crate) fn call(
                 if let Some(Value::Reference(r)) = a.raw_ref(1) {
                     r.set(Value::Int(0));
                 }
-                let r = st.file(|f| f.stream.as_mut().map_or(-1, |s| {
-                    if s.supports_lock() {
-                        s.lock(i32::try_from(op).unwrap_or(0))
-                    } else {
-                        -1
-                    }
-                }))?;
+                let r = st.file(|f| {
+                    f.stream.as_mut().map_or(-1, |s| {
+                        if s.supports_lock() {
+                            s.lock(i32::try_from(op).unwrap_or(0))
+                        } else {
+                            -1
+                        }
+                    })
+                })?;
                 Ok(Value::Bool(r == 0))
             }
             ("SplFileObject", "fflush") => {
@@ -1474,9 +1622,11 @@ pub(crate) fn call(
                 check_file(&st)?;
                 st.file(|f| {
                     f.free_line();
-                    Value::Int(i64::from(f.stream.as_mut().map_or(-1, |s| {
-                        s.seek(pos, i32::try_from(whence).unwrap_or(0))
-                    })))
+                    Value::Int(i64::from(
+                        f.stream
+                            .as_mut()
+                            .map_or(-1, |s| s.seek(pos, i32::try_from(whence).unwrap_or(0))),
+                    ))
                 })
             }
             ("SplFileObject", "fgetc") => {
@@ -1500,9 +1650,9 @@ pub(crate) fn call(
                 check_file(&st)?;
                 let mut data = Vec::new();
                 let n = st.file(|f| {
-                    f.stream
-                        .as_mut()
-                        .map_or(0, |s| s.passthru(&mut |b| data.extend_from_slice(b)).unwrap_or(0))
+                    f.stream.as_mut().map_or(0, |s| {
+                        s.passthru(&mut |b| data.extend_from_slice(b)).unwrap_or(0)
+                    })
                 })?;
                 host.write_output(&data)?;
                 Ok(Value::Int(to_long(n)))
@@ -1538,12 +1688,18 @@ pub(crate) fn call(
                 check_file(&st)?;
                 let mut n = data.len();
                 if let Some(l) = length {
-                    n = if l >= 0 { n.min(usize::try_from(l).unwrap_or(usize::MAX)) } else { 0 };
+                    n = if l >= 0 {
+                        n.min(usize::try_from(l).unwrap_or(usize::MAX))
+                    } else {
+                        0
+                    };
                 }
                 if n == 0 {
                     return Ok(Value::Int(0));
                 }
-                let (r, diags) = capture(|| st.file(|f| f.stream.as_mut().map(|s| s.write(&data.as_bytes()[..n]))));
+                let (r, diags) = capture(|| {
+                    st.file(|f| f.stream.as_mut().map(|s| s.write(&data.as_bytes()[..n])))
+                });
                 emit_diags(host, func, &diags)?;
                 Ok(match r? {
                     Some(Ok(w)) => Value::Int(to_long(w)),
@@ -1566,8 +1722,15 @@ pub(crate) fn call(
                     return Err(a.value_error(0, "must be greater than or equal to 0"));
                 }
                 st.file(|f| {
-                    let name = f.file_name.as_ref().map(ZStr::to_string_lossy).unwrap_or_default();
-                    let s = f.stream.as_mut().ok_or_else(|| error("Object not initialized"))?;
+                    let name = f
+                        .file_name
+                        .as_ref()
+                        .map(ZStr::to_string_lossy)
+                        .unwrap_or_default();
+                    let s = f
+                        .stream
+                        .as_mut()
+                        .ok_or_else(|| error("Object not initialized"))?;
                     if !s.truncate_supported() {
                         return Err(logic(format!("Can't truncate file {name}")));
                     }
@@ -1603,7 +1766,9 @@ pub(crate) fn call(
                 }
                 st.file(|f| Value::Str(f.current_line.clone().unwrap_or_default()))
             }
-            _ => Err(RuntimeError::Error(format!("Call to undefined method {func}()"))),
+            _ => Err(RuntimeError::Error(format!(
+                "Call to undefined method {func}()"
+            ))),
         }
     })())
 }
@@ -1671,10 +1836,16 @@ pub fn debug_info(host: &mut dyn SplHost, this: &Obj, st: &SplObject) -> RtResul
     let mut out: HashTable = (*props).clone();
     st.file(|f| {
         let pathname = f.get_pathname().unwrap_or_default();
-        out.insert(ArrayKey::Str(private_prop("SplFileInfo", "pathName")), Value::Str(pathname));
+        out.insert(
+            ArrayKey::Str(private_prop("SplFileInfo", "pathName")),
+            Value::Str(pathname),
+        );
         if f.file_name.is_some() {
             let name = f.filename_part().unwrap_or_default();
-            out.insert(ArrayKey::Str(private_prop("SplFileInfo", "fileName")), Value::Str(ZStr::from(name)));
+            out.insert(
+                ArrayKey::Str(private_prop("SplFileInfo", "fileName")),
+                Value::Str(ZStr::from(name)),
+            );
         }
         if f.kind == FsKind::Dir {
             let glob = if f.is_glob() {
@@ -1682,7 +1853,10 @@ pub fn debug_info(host: &mut dyn SplHost, this: &Obj, st: &SplObject) -> RtResul
             } else {
                 Value::Bool(false)
             };
-            out.insert(ArrayKey::Str(private_prop("DirectoryIterator", "glob")), glob);
+            out.insert(
+                ArrayKey::Str(private_prop("DirectoryIterator", "glob")),
+                glob,
+            );
             out.insert(
                 ArrayKey::Str(private_prop("RecursiveDirectoryIterator", "subPathName")),
                 Value::Str(f.sub_path.clone().unwrap_or_default()),
@@ -1693,18 +1867,38 @@ pub fn debug_info(host: &mut dyn SplHost, this: &Obj, st: &SplObject) -> RtResul
                 ArrayKey::Str(private_prop("SplFileObject", "openMode")),
                 Value::Str(f.open_mode.clone().unwrap_or_default()),
             );
-            out.insert(ArrayKey::Str(private_prop("SplFileObject", "delimiter")), Value::Str(ZStr::from_byte(f.delimiter)));
-            out.insert(ArrayKey::Str(private_prop("SplFileObject", "enclosure")), Value::Str(ZStr::from_byte(f.enclosure)));
+            out.insert(
+                ArrayKey::Str(private_prop("SplFileObject", "delimiter")),
+                Value::Str(ZStr::from_byte(f.delimiter)),
+            );
+            out.insert(
+                ArrayKey::Str(private_prop("SplFileObject", "enclosure")),
+                Value::Str(ZStr::from_byte(f.enclosure)),
+            );
         }
     })?;
     Ok(ZArray::from_table(out))
 }
 
 /// Clone support (`spl_filesystem_object_clone`).
-pub fn clone_into(host: &mut dyn SplHost, old: &Obj, fresh: &SplObject, st: &SplObject) -> RtResult<()> {
+pub fn clone_into(
+    host: &mut dyn SplHost,
+    old: &Obj,
+    fresh: &SplObject,
+    st: &SplObject,
+) -> RtResult<()> {
     let _ = host;
     let (kind, flags, path, file_name, index, info_class, file_class, glob) = st.file(|f| {
-        (f.kind, f.flags, f.path.clone(), f.file_name.clone(), f.index, f.info_class.clone(), f.file_class.clone(), f.is_glob())
+        (
+            f.kind,
+            f.flags,
+            f.path.clone(),
+            f.file_name.clone(),
+            f.index,
+            f.info_class.clone(),
+            f.file_class.clone(),
+            f.is_glob(),
+        )
     })?;
     if kind == FsKind::File || glob {
         return Err(error(format!(
@@ -1714,22 +1908,19 @@ pub fn clone_into(host: &mut dyn SplHost, old: &Obj, fresh: &SplObject, st: &Spl
     }
     fresh.file(|f| {
         f.flags = flags;
-        match kind {
-            FsKind::Info => {
-                f.path = path;
-                f.file_name = file_name;
-                Ok(())
+        if kind == FsKind::Info {
+            f.path = path;
+            f.file_name = file_name;
+            Ok(())
+        } else {
+            let p = path.unwrap_or_default();
+            dir_open(f, "DirectoryIterator::__construct", p.as_bytes())?;
+            let skip = flags & SKIP_DOTS != 0;
+            for _ in 0..index {
+                f.dir_read_skip(skip);
             }
-            _ => {
-                let p = path.unwrap_or_default();
-                dir_open(f, "DirectoryIterator::__construct", p.as_bytes())?;
-                let skip = flags & SKIP_DOTS != 0;
-                for _ in 0..index {
-                    f.dir_read_skip(skip);
-                }
-                f.index = index;
-                Ok(())
-            }
+            f.index = index;
+            Ok(())
         }?;
         f.info_class = info_class;
         f.file_class = file_class;

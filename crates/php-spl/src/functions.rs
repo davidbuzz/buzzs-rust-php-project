@@ -155,9 +155,10 @@ fn class_list(host: &mut dyn SplHost, name: &str, args: &[Value]) -> RtResult<Va
     let autoload = a.opt_bool(host, 1, true)?;
     let info = match a.raw(0) {
         Value::Object(o) => host.object_class_info(&o),
-        Value::Str(s) => match host.class_info(&s, autoload) {
-            Some(i) => i,
-            None => {
+        Value::Str(s) => {
+            if let Some(i) = host.class_info(&s, autoload) {
+                i
+            } else {
                 host.diagnostic(
                     ErrorLevel::Warning,
                     &format!(
@@ -171,7 +172,7 @@ fn class_list(host: &mut dyn SplHost, name: &str, args: &[Value]) -> RtResult<Va
                 )?;
                 return Ok(Value::Bool(false));
             }
-        },
+        }
         _ => return Err(a.type_error(0, "object|string")),
     };
     let names = match name {

@@ -11,6 +11,9 @@ use std::rc::Rc;
 /// The internal state of one SPL object.
 #[derive(Debug)]
 #[non_exhaustive]
+// The states live behind one `Rc` per object; boxing the larger variants
+// would only add an indirection to every access.
+#[allow(clippy::large_enum_variant)]
 pub enum SplState {
     /// `SplFixedArray`.
     FixedArray(crate::fixedarray::FixedArray),
