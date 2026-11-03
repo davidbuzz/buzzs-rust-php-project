@@ -1,0 +1,6 @@
+--TEST--
+FILE_EXTERNAL and EXPECT_EXTERNAL
+--FILE_EXTERNAL--
+external.inc
+--EXPECT_EXTERNAL--
+external.out
