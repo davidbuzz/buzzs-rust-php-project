@@ -43,6 +43,7 @@ pub(crate) fn update_errors(e: &Errors) {
 }
 
 /// Forgets the last parse messages.
+#[cfg(test)]
 pub(crate) fn clear_errors() {
     LAST_ERRORS.with(|l| *l.borrow_mut() = None);
 }
