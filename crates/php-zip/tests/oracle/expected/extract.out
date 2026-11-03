@@ -1,0 +1,111 @@
+# extractTo: all / one / list; path sanitising
+z->open = true
+z->extractTo = true
+ls bar 4 c157a790 mtime=1123135908
+ls foo 5 dbb53f36 mtime=1123135904
+ls foobar/
+ls foobar/baz 27 a4f5c1aa mtime=1123135948
+z->extractTo = true
+ls bar 4 c157a790 mtime=1123135908
+z->extractTo = true
+ls bar 4 c157a790 mtime=1123135908
+ls foo 5 dbb53f36 mtime=1123135904
+z->extractTo = false
+exists out5 = true
+z->extractTo = false
+exists out6 = true
+z->extractTo = false
+ls bar 4 c157a790 mtime=1123135908
+z->extractTo = true
+ls bar 4 c157a790 mtime=1123135908
+ls foo 5 dbb53f36 mtime=1123135904
+ls foobar/
+ls foobar/baz 27 a4f5c1aa mtime=1123135948
+z->extractTo = true
+z->extractTo = false
+z->close = true
+# directories and traversal
+z->open = true
+z->extractTo = true
+ls test/
+ls test/empty/
+z->close = true
+z->open = true
+z->extractTo = true
+ls nt1/
+ls nt1/zzr_noharm.php 50 c7499d4c
+z->close = true
+z->open = 21
+! ValueError: Invalid or uninitialized Zip object
+z->open = true
+z->extractTo = true
+ls 1.txt 2 585cae37 mtime=1151335668
+z->close = true
+z->open = true
+z->addEmptyDir = true
+z->addFromString = true
+z->addFromString = true
+z->addFromString = true
+z->addFromString = true
+z->addFromString = true
+z->addFromString = true
+z->addFromString = true
+z->addFromString = true
+z->close = true
+z->open = true
+entry 0 = "../down2/"
+entry 1 = "../../up/file.txt"
+entry 2 = "/abs/file.txt"
+entry 3 = "a/./b/../c.txt"
+entry 4 = "x/.."
+entry 5 = "./lead.txt"
+entry 6 = "deep/er/est/f.txt"
+entry 7 = "trail//"
+entry 8 = "dir.txt/"
+[Warning] ZipArchive::extractTo({DIR}/d5/.): Failed to open stream: Is a directory
+z->extractTo = false
+ls a/
+ls a/c.txt 4 e9c6cfa1
+ls abs/
+ls abs/file.txt 3 f9ac6b05
+ls down2/
+ls up/
+ls up/file.txt 2 46c48bec
+exists down2 = false
+exists up = false
+z->extractTo = true
+ls a/
+ls a/c.txt 4 e9c6cfa1
+[Warning] ZipArchive::extractTo({DIR}/d7/.): Failed to open stream: Is a directory
+z->extractTo = false
+z->close = true
+# deleted / renamed entries
+z->open = true
+z->deleteName = true
+z->renameName = true
+z->extractTo = false
+z->extractTo = true
+ls renamed.txt 4 6627415e
+[Warning] ZipArchive::extractTo({DIR}/d10/.): Failed to open stream: Is a directory
+z->extractTo = false
+ls a/
+ls a/c.txt 4 e9c6cfa1
+ls abs/
+ls abs/file.txt 3 f9ac6b05
+ls down2/
+ls up/
+ls up/file.txt 2 46c48bec
+z->unchangeAll = true
+z->addFromString = true
+[Warning] ZipArchive::extractTo({DIR}/d11/.): Failed to open stream: Is a directory
+z->extractTo = false
+z->close = true
+# unwritable target
+z->open = true
+[Warning] ZipArchive::extractTo({DIR}/ro/bar): Failed to open stream: Permission denied
+z->extractTo = false
+z->extractTo = false
+[Warning] ZipArchive::extractTo({DIR}/ro/bar): Failed to open stream: Permission denied
+z->extractTo = false
+z->close = true
+END

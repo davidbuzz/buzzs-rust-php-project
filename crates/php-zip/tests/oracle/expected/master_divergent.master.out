@@ -1,0 +1,99 @@
+# corrupted data
+z->open = true
+z->addFromString = true
+z->setCompressionName = true
+z->close = true
+z->open = true
+[Warning] ZipArchive::extractTo(): Cannot extract "a.txt": "CRC error"
+z->extractTo = false
+ls a.txt 75 871c5702
+[Warning] ZipArchive::getFromName(): Cannot read entry: CRC error
+z->getFromName = false
+[Warning] ZipArchive::getFromIndex(): Cannot read entry: CRC error
+z->getFromIndex = false
+z->close = true
+z->open = true
+z->addFromString = true
+z->setCompressionName = true
+z->close = true
+z->open = true
+z->getFromName = ""
+z->getFromIndex = ""
+z->extractTo = true
+z->close = true
+z->open = true
+z->addFromString = true
+z->setCompressionName = true
+z->close = true
+z->open = true
+z->statIndex = ["name"=>"a.txt","index"=>0,"crc"=>1200541903,"size"=>20,"mtime"=>NOW,"comp_size"=>10,"comp_method"=>0,"encryption_method"=>0]
+[Warning] ZipArchive::extractTo(): Cannot extract "a.txt": "Zip archive inconsistent"
+z->extractTo = false
+ls a.txt 10 16c52c6e
+z->close = true
+# oo_extract_array_keys: any keys, TypeError for non-strings
+z->open = true
+z->addFromString = true
+z->addFromString = true
+z->close = true
+z->open = true
+z->extractTo = true
+ls file1.txt 3 f97c5d29
+! TypeError: ZipArchive::extractTo(): Argument #2 ($files) must only have elements of type string, int given
+! TypeError: ZipArchive::extractTo(): Argument #2 ($files) must only have elements of type string, null given
+! TypeError: ZipArchive::extractTo(): Argument #2 ($files) must only have elements of type string, true given
+! TypeError: ZipArchive::extractTo(): Argument #2 ($files) must only have elements of type string, float given
+! TypeError: ZipArchive::extractTo(): Argument #2 ($files) must only have elements of type string, array given
+ls file0.txt 4 d02c4c4c
+# bug_gh21705: FL_UNCHANGED for deleted entries
+z->deleteName = true
+z->getFromName = "one"
+z->getFromIndex = "one"
+z->getFromIndex = false
+z->close = true
+# wrong-file-size.zip: short reads are errors
+z->open = true
+[Warning] ZipArchive::getFromIndex(): Cannot read entry: Zip archive inconsistent
+z->getFromIndex = false
+[Warning] ZipArchive::getFromName(): Cannot read entry: Zip archive inconsistent
+z->getFromName = false
+z->getFromIndex = "te"
+z->close = true
+# argument checks that run before ZIP_FROM_OBJECT
+! ValueError: Invalid or uninitialized Zip object
+exists created_anyway = true
+u->extractTo = false
+u->setCompressionIndex = false
+! ValueError: ZipArchive::setCompressionIndex(): Argument #2 ($method) must be between -1 and 2147483647
+! ValueError: ZipArchive::setCompressionIndex(): Argument #3 ($compflags) must be between 0 and 65535
+! ValueError: ZipArchive::setCompressionName(): Argument #1 ($name) must not be empty
+! ValueError: ZipArchive::setCompressionName(): Argument #2 ($method) must be between -1 and 2147483647
+! ValueError: ZipArchive::setCompressionName(): Argument #2 ($method) must be between -1 and 2147483647
+! ValueError: ZipArchive::setCompressionName(): Argument #3 ($compflags) must be between 0 and 65535
+! ValueError: ZipArchive::setCompressionIndex(): Argument #2 ($method) must be between -1 and 2147483647
+! ValueError: ZipArchive::setMtimeName(): Argument #1 ($name) must not be empty
+u->deleteName = false
+u->renameIndex = false
+! ValueError: ZipArchive::renameIndex(): Argument #2 ($new_name) must not be empty
+u->unchangeIndex = false
+u->unchangeName = false
+! ValueError: ZipArchive::setCommentName(): Argument #1 ($name) must not be empty
+u->addGlob = false
+u->addPattern = false
+u->addFile = false
+! ValueError: ZipArchive::addGlob(): Argument #1 ($pattern) must not be empty
+! ValueError: ZipArchive::addPattern(): Argument #1 ($pattern) must not be empty
+! ValueError: ZipArchive::isCompressionMethodSupported(): Argument #1 ($method) must be between -1 and 2147483647
+! ValueError: ZipArchive::isCompressionMethodSupported(): Argument #1 ($method) must be between -1 and 2147483647
+ZipArchive::isCompressionMethodSupported = true
+! ValueError: ZipArchive::isEncryptionMethodSupported(): Argument #1 ($method) must be between 0 and 65535
+! ValueError: ZipArchive::isEncryptionMethodSupported(): Argument #1 ($method) must be between 0 and 65535
+# oo_getnameindex_large_index
+z->open = true
+z->getNameIndex = "file0.txt"
+z->getNameIndex = false
+z->getNameIndex = false
+z->getNameIndex = false
+z->getNameIndex = false
+z->close = true
+END
