@@ -71,7 +71,7 @@ Keep rows when they reach 100%; they become the completion record. Add rows as g
 | ext/reflection | 0% | high | Full Reflection API (577). |
 | ext/json | 0% | high | `json_encode`/`json_decode`/`json_validate`, `JsonSerializable` (111). |
 | ext/random | 0% | high | `Random\Randomizer`, engines (Mt19937, PCG, Xoshiro), `rand`/`mt_rand` that reproduce seeded sequences exactly (71). |
-| ext/hash | 0% | high | `hash()` algorithms, HMAC, HKDF, incremental hashing (87). |
+| ext/hash | 60% | high | `hash()` algorithms, HMAC, HKDF, incremental hashing (87). `crates/php-hash` is complete as a library: all 60 algorithms in `hash_algos()` order, bit-exact against `/usr/bin/php` (one-shot, chunked, HMAC, murmur/xxh seeds, xxh3/xxh128 secrets), `HashContext` init/update/final/copy with `HASH_HMAC`, `__serialize`/`__unserialize` state arrays byte-identical to PHP (incl. error codes), `hash_hkdf`, `hash_pbkdf2`, `hash_equals`, `mhash*`, `md5`/`sha1`/`crc32` helpers, exact error/deprecation texts. Remaining: VM bindings (functions, `HashContext` class, `hash_file`/`hash_update_stream` over streams). |
 | ext/ctype | 0% | med | `ctype_*` (49). |
 | ext/tokenizer | 0% | med | `token_get_all`, `PhpToken`; reuses the lexer (54). |
 | ext/uri | 0% | med | RFC 3986 and WHATWG URL parsing (608). |
