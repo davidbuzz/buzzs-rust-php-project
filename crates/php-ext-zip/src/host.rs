@@ -10,6 +10,7 @@
 use std::cell::RefCell;
 
 use php_ext_streams::bridge;
+use php_streams::diag::{self, Diagnostic, Severity, StreamErrorCode};
 use php_runtime::{
     BinaryOp, CastTarget, ErrorLevel, Obj, RtResult, RuntimeContext, RuntimeError, Value,
 };
@@ -72,11 +73,28 @@ fn no_vm() -> RuntimeError {
 #[derive(Debug, Default, Clone, Copy)]
 pub(crate) struct VmHost;
 
+/// Converts the throw of PHP code run by the library. Without an
+/// executing frame (destructors at request shutdown) PHP cannot propagate
+/// an exception: `zend_throw_exception_internal()` reports it as uncaught
+/// and bails out, so it becomes a bailout for the library too.
+fn callback_error(vm: &mut Vm, t: Throw) -> RuntimeError {
+    match t {
+        Throw::Exception(o) if !vm.is_executing() => {
+            if vm.pending_throw.is_none() {
+                vm.pending_throw = Some(Throw::Exception(o));
+            }
+            RuntimeError::Fatal(String::new())
+        }
+        t => to_rt(vm, t),
+    }
+}
+
 impl RuntimeContext for VmHost {
     fn diagnostic(&mut self, level: ErrorLevel, message: &str) -> RtResult<()> {
         bridge::with_vm(|vm| {
             bridge::flush_diags(vm);
-            vm.diagnostic(level, message)
+            let r = vm.error(level.bits(), message);
+            r.map_err(|t| callback_error(vm, t))
         })
         .unwrap_or(Ok(()))
     }
@@ -107,6 +125,8 @@ impl ZipHost for VmHost {
         bridge::with_vm(|vm| {
             // Warnings raised so far come before anything the callback does.
             bridge::flush_diags(vm);
+            // With an exception pending, `zend_call_function()` does not
+            // call anything.
             if let Some(t) = bridge::take_pending() {
                 return Err(to_rt(vm, t));
             }
@@ -114,7 +134,7 @@ impl ZipHost for VmHost {
             // Destructors of values released by the callback run now, like
             // PHP's refcounting would.
             let r = r.and_then(|v| vm.run_released_destructors().map(|()| v));
-            r.map_err(|t| to_rt(vm, t))
+            r.map_err(|t| callback_error(vm, t))
         })
         .unwrap_or_else(|| Err(no_vm()))
     }
@@ -125,7 +145,7 @@ impl ZipHost for VmHost {
 }
 
 /// `pcre_get_compiled_regex()`: compiles through the PCRE cache, emitting
-/// PCRE's warnings in order with the library's own diagnostics.
+/// PCRE's warnings right away (the library's own are immediate too).
 fn compile_regex(vm: &mut Vm, regex: &[u8]) -> Option<RegexMatcher> {
     let (result, warnings, cfg) = PCRE.with(|p| {
         let mut p = p.borrow_mut();
@@ -135,17 +155,48 @@ fn compile_regex(vm: &mut Vm, regex: &[u8]) -> Option<RegexMatcher> {
         let r = p.compile(regex);
         (r, p.take_warnings(), p.config())
     });
+    let mut warn = |vm: &mut Vm, w: &[u8]| {
+        if let Err(t) = vm.php_warning_bytes(w) {
+            bridge::set_pending(t);
+        }
+    };
     for w in warnings {
-        php_streams::diag::warning(w);
+        warn(vm, &w);
     }
     match result {
         Ok(re) => Some(Box::new(move |s: &[u8]| {
             matches!(php_pcre::match_one(&re, &cfg, s, false, 0, 0).result, Ok(n) if n > 0)
         })),
         Err(e) => {
-            php_streams::diag::warning(e.message());
+            warn(vm, &e.message());
             None
         }
+    }
+}
+
+/// The diagnostics sink installed by [`run`]: emits through the VM at once.
+fn emit_now(d: Diagnostic) {
+    let done = bridge::with_vm(|vm| {
+        // php_stream_display_wrapper_errors() stays silent when an
+        // exception has already been thrown.
+        if d.code == StreamErrorCode::OpenFailed && bridge::has_pending() {
+            return;
+        }
+        let text = d.text();
+        let r = match d.severity {
+            Severity::Warning => vm.php_warning(&text),
+            Severity::Notice => vm.php_notice(&text),
+            Severity::Deprecated => vm.php_deprecated(&text),
+            Severity::Error => vm.raise(1, &text),
+        };
+        if let Err(t) = r {
+            bridge::set_pending(t);
+        }
+    });
+    if done.is_none() {
+        // No VM lent (cannot happen inside `run`): queue it (the handler is
+        // detached while it runs, so this does not recurse).
+        diag::emit(d);
     }
 }
 
@@ -156,7 +207,12 @@ pub(crate) fn run<R>(
     vm: &mut Vm,
     f: impl FnOnce(&mut dyn ZipHost) -> RtResult<R>,
 ) -> VmResult<R> {
+    // Warnings are raised while the library runs (`php_error_docref()`
+    // inside the C code), so a user error handler sees the archive in the
+    // state it has at that point (e.g. "being closed").
+    let prev = diag::set_handler(Some(Box::new(emit_now)));
     let r = bridge::run(vm, || f(&mut VmHost));
+    diag::set_handler(prev);
     let r = match r {
         Ok(r) => r,
         Err(t) => {

@@ -10,7 +10,7 @@ use php_streams::stream::Stream;
 use php_vm::ext::{acc, Args, ClassBuilder, ClassHooks, ModuleBuilder, VmResult};
 use php_vm::func::flags;
 use php_vm::object;
-use php_vm::Vm;
+use php_vm::{Throw, Vm};
 use php_zip::consts::{self, ConstValue};
 use php_zip::{EntryStat, ExtractFiles, OpenResult, ZipArchive, ZipHost};
 
@@ -435,7 +435,50 @@ fn is_encryption_method_supported(vm: &mut Vm, a: &mut Args) -> VmResult<Value> 
 /// is destroyed. Registered as `__destruct` because the VM has no native
 /// destructor hook.
 fn destruct(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    with_zip(vm, a, |z, h| z.destroy(h)).map(|()| Value::Null)
+    match with_zip(vm, a, |z, h| z.destroy(h)) {
+        Ok(()) => Ok(Value::Null),
+        Err(Throw::Exception(e)) => {
+            hide_destructor_frame(&e);
+            Err(Throw::Exception(e))
+        }
+        Err(t) => Err(t),
+    }
+}
+
+/// Removes the `ZipArchive->__destruct()` frames from the trace of an
+/// exception raised while the object was destroyed: PHP's `dtor_obj`
+/// handler is not a function call and never appears in backtraces.
+fn hide_destructor_frame(e: &Obj) {
+    let d = object::data(e);
+    let Some(pi) = d.class.props.iter().find(|p| {
+        p.name.as_bytes() == b"trace" && matches!(p.class.as_bytes(), b"Exception" | b"Error")
+    }) else {
+        return;
+    };
+    let mut slots = d.slots.borrow_mut();
+    let Some(Some(Value::Array(trace))) = slots.get(pi.slot as usize).cloned() else {
+        return;
+    };
+    let is_dtor = |frame: &Value| {
+        let Value::Array(f) = frame.deref() else {
+            return false;
+        };
+        let field = |k: &[u8]| f.get_str(k).map(|v| v.deref());
+        matches!(field(b"function"), Some(Value::Str(n)) if n.as_bytes() == b"__destruct")
+            && matches!(field(b"class"), Some(Value::Str(c)) if c.as_bytes() == b"ZipArchive")
+    };
+    if !trace.iter().any(|(_, f)| is_dtor(f)) {
+        return;
+    }
+    let mut kept = ZArray::new();
+    for (_, f) in trace.iter() {
+        if !is_dtor(f) {
+            let _ = kept.make_mut().push(f.clone());
+        }
+    }
+    if let Some(slot) = slots.get_mut(pi.slot as usize) {
+        *slot = Some(Value::Array(kept));
+    }
 }
 
 // ---------------------------------------------------------------------------
