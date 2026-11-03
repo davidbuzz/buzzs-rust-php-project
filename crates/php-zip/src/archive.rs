@@ -1978,6 +1978,23 @@ impl ZipArchive {
         })
     }
 
+    /// `php_zip_has_property()` for a virtual property: with `not_empty`
+    /// (`ZEND_PROPERTY_NOT_EMPTY`, used by `empty()`) whether the value is
+    /// truthy, otherwise (`isset()` / `property_exists()`) always true.
+    /// `None` for other names.
+    pub fn has_property(&self, name: &[u8], not_empty: bool) -> Option<bool> {
+        let v = self.read_property(name)?;
+        Some(if not_empty {
+            match v {
+                Value::Int(i) => i != 0,
+                Value::Str(s) => !(s.is_empty() || s.as_bytes() == b"0"),
+                _ => false,
+            }
+        } else {
+            true
+        })
+    }
+
     /// Whether `name` is a virtual (read-only) property.
     pub fn is_virtual_property(name: &[u8]) -> bool {
         PROPERTY_NAMES.iter().any(|p| p.as_bytes() == name)

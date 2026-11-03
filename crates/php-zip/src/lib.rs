@@ -18,6 +18,40 @@
 //!
 //! All `unsafe` code wraps libzip calls; the raw declarations are in the
 //! private `ffi` module.
+//!
+//! # VM integration
+//!
+//! * Object handlers: create with [`ZipArchive::new`]; `read_property` →
+//!   [`ZipArchive::read_property`] (falls back to the standard handler for
+//!   other names); `write_property` / `get_property_ptr_ptr` on one of
+//!   [`PROPERTY_NAMES`] → [`error::readonly_property`]; `has_property` →
+//!   [`ZipArchive::has_property`]; `get_properties` → [`ZipArchive::properties`] merged in front
+//!   of the dynamic properties; `clone_obj` is NULL (uncloneable);
+//!   `dtor_obj` → [`ZipArchive::destroy`]; `free_obj` → [`ZipArchive::free`]
+//!   (or simply dropping the value).
+//! * Methods: [`class::METHODS`] lists names, parameters and (tentative)
+//!   return types; `__serialize`/`__unserialize` throw
+//!   [`ZipArchive::serialize`] / [`ZipArchive::unserialize`].
+//!   `getExternalAttributes*()` return the values to assign to the two
+//!   by-reference parameters.
+//! * Streams: `getStream*()` return a ready [`php_streams::stream::Stream`]
+//!   (ops label `"zip"`, `orig_path` = entry name, no wrapper); register
+//!   [`ZipWrapper`] as `"zip"`.
+//! * `RuntimeError::Fatal` returned from a method means a callback bailed
+//!   out (`exit()`); the VM should continue unwinding.
+//!
+//! # Known gaps
+//!
+//! * Archives closed when the last *stream* lets go of them (after the
+//!   object was destroyed) run without the VM, so progress/cancel callbacks
+//!   are not invoked then (PHP would call them).
+//! * `expand_filepath()` comes from `php-streams` and is purely lexical,
+//!   while PHP resolves symlinks of existing path components
+//!   (`CWD_FILEPATH`); the `filename` property can differ for paths through
+//!   symlinks.
+//! * Features of libzip newer than the system 1.7.3 (seekable entry
+//!   streams, zstd, torrentzip, `LENGTH_UNCHECKED`, …) are compiled in only
+//!   when building against such a libzip; that code path is untested here.
 
 mod extract;
 mod ffi;

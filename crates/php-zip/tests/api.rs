@@ -138,6 +138,11 @@ fn properties_and_errors() {
     assert!(matches!(z.read_property(b"lastId"), Some(Value::Int(-1))));
     assert!(z.read_property(b"bogus").is_none());
     assert!(ZipArchive::is_virtual_property(b"comment"));
+    assert_eq!(z.has_property(b"status", false), Some(true));
+    assert_eq!(z.has_property(b"status", true), Some(false));
+    assert_eq!(z.has_property(b"lastId", true), Some(true));
+    assert_eq!(z.has_property(b"filename", true), Some(false));
+    assert_eq!(z.has_property(b"bogus", true), None);
     assert!(!ZipArchive::is_virtual_property(b"custom"));
     let names: Vec<&str> = z.properties().iter().map(|(n, _)| *n).collect();
     assert_eq!(names, php_zip::PROPERTY_NAMES);
