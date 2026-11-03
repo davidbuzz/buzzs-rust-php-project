@@ -924,6 +924,7 @@ dependencies = [
 name = "php-ext-zip"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "php-ext-stdstr",
  "php-ext-streams",
  "php-pcre",
