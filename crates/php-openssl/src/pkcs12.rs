@@ -136,9 +136,7 @@ impl OpenSsl {
     /// `openssl_pkcs12_read()`: the array for `$certificates` (keys
     /// `cert`, `pkey`, `extracerts`) or `None` (false).
     pub fn pkcs12_read(&mut self, pkcs12: &[u8], passphrase: &[u8]) -> Option<PhpArray> {
-        let Some((bio, n)) = Bio::mem_written(pkcs12) else {
-            return None;
-        };
+        let (bio, n) = Bio::mem_written(pkcs12)?;
         if n <= 0 {
             self.store_errors();
             return None;
