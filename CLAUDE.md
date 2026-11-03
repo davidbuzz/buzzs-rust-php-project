@@ -71,7 +71,7 @@ A Rust re-implementation of PHP whose goal is to pass the php-src `.phpt` test s
 Several agents work concurrently, one crate each. Only edit files inside your own crate (plus your row(s) in FEATURE_GAP.md). Never edit workspace Cargo.toml; crates are pre-registered. Commit your own crate's files with `git add crates/<yours>` only.
 
 ## Resource limits (the box has OOM-crashed once)
-- `.cargo/config.toml` caps `cargo` at 3 jobs; never override it with `-j`.
+- `.cargo/config.toml` caps `cargo` at 2 jobs; never override it with `-j`.
 - EVERY invocation of `/usr/bin/php` (oracle scripts, fixture generators) MUST pass `-d memory_limit=1G`. Ubuntu's CLI php.ini sets `memory_limit=-1`, and one unbounded script took the machine down.
 - Do not run more than one `cargo test`/`cargo build` at a time from a single agent; do not run the whole php-src suite with `--php /usr/bin/php` (use subsets).
 
