@@ -23,5 +23,6 @@ pub fn all() -> Vec<Box<dyn Extension>> {
         Box::new(php_ext_mbstring::Mbstring),
         Box::new(php_ext_pdo::Pdo),
         Box::new(php_ext_openssl::OpenSsl),
+        Box::new(php_ext_intl::Intl),
     ]
 }
