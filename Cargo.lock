@@ -350,6 +350,7 @@ dependencies = [
  "php-cli-server",
  "php-ext-bcmath",
  "php-ext-calendar",
+ "php-ext-ctype",
  "php-ext-curl",
  "php-ext-date",
  "php-ext-dom",
@@ -588,6 +589,7 @@ version = "0.1.0"
 dependencies = [
  "php-ext-streams",
  "php-hash",
+ "php-memlimit",
  "php-runtime",
  "php-streams",
  "php-vm",
@@ -751,6 +753,7 @@ dependencies = [
 name = "php-ext-simplexml"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "php-ext-json",
  "php-ext-spl",
  "php-ext-stdarr",
@@ -903,6 +906,7 @@ dependencies = [
 name = "php-ext-xmlreader"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "php-ext-streams",
  "php-ext-xml",
  "php-runtime",
@@ -921,6 +925,14 @@ dependencies = [
  "php-streams",
  "php-vm",
  "php-xsl",
+]
+
+[[package]]
+name = "php-ext-zendtest"
+version = "0.1.0"
+dependencies = [
+ "php-runtime",
+ "php-vm",
 ]
 
 [[package]]
@@ -1213,6 +1225,8 @@ name = "php-streams"
 version = "0.1.0"
 dependencies = [
  "libc",
+ "php-stdstr",
+ "php-uri",
 ]
 
 [[package]]
