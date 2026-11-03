@@ -1,0 +1,5600 @@
+=== parse_url('64.246.30.37')
+=> array (
+  'path' => '64.246.30.37',
+)
+=== parse_url('64.246.30.37', -2)
+=> array (
+  'path' => '64.246.30.37',
+)
+=== parse_url('64.246.30.37', 0)
+=> NULL
+=== parse_url('64.246.30.37', 1)
+=> NULL
+=== parse_url('64.246.30.37', 2)
+=> NULL
+=== parse_url('64.246.30.37', 3)
+=> NULL
+=== parse_url('64.246.30.37', 4)
+=> NULL
+=== parse_url('64.246.30.37', 5)
+=> '64.246.30.37'
+=== parse_url('64.246.30.37', 6)
+=> NULL
+=== parse_url('64.246.30.37', 7)
+=> NULL
+=== parse_url('64.246.30.37', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('64.246.30.37', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('http://64.246.30.37')
+=> array (
+  'scheme' => 'http',
+  'host' => '64.246.30.37',
+)
+=== parse_url('http://64.246.30.37', -2)
+=> array (
+  'scheme' => 'http',
+  'host' => '64.246.30.37',
+)
+=== parse_url('http://64.246.30.37', 0)
+=> 'http'
+=== parse_url('http://64.246.30.37', 1)
+=> '64.246.30.37'
+=== parse_url('http://64.246.30.37', 2)
+=> NULL
+=== parse_url('http://64.246.30.37', 3)
+=> NULL
+=== parse_url('http://64.246.30.37', 4)
+=> NULL
+=== parse_url('http://64.246.30.37', 5)
+=> NULL
+=== parse_url('http://64.246.30.37', 6)
+=> NULL
+=== parse_url('http://64.246.30.37', 7)
+=> NULL
+=== parse_url('http://64.246.30.37', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('http://64.246.30.37', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('http://64.246.30.37/')
+=> array (
+  'scheme' => 'http',
+  'host' => '64.246.30.37',
+  'path' => '/',
+)
+=== parse_url('http://64.246.30.37/', -2)
+=> array (
+  'scheme' => 'http',
+  'host' => '64.246.30.37',
+  'path' => '/',
+)
+=== parse_url('http://64.246.30.37/', 0)
+=> 'http'
+=== parse_url('http://64.246.30.37/', 1)
+=> '64.246.30.37'
+=== parse_url('http://64.246.30.37/', 2)
+=> NULL
+=== parse_url('http://64.246.30.37/', 3)
+=> NULL
+=== parse_url('http://64.246.30.37/', 4)
+=> NULL
+=== parse_url('http://64.246.30.37/', 5)
+=> '/'
+=== parse_url('http://64.246.30.37/', 6)
+=> NULL
+=== parse_url('http://64.246.30.37/', 7)
+=> NULL
+=== parse_url('http://64.246.30.37/', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('http://64.246.30.37/', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('64.246.30.37/')
+=> array (
+  'path' => '64.246.30.37/',
+)
+=== parse_url('64.246.30.37/', -2)
+=> array (
+  'path' => '64.246.30.37/',
+)
+=== parse_url('64.246.30.37/', 0)
+=> NULL
+=== parse_url('64.246.30.37/', 1)
+=> NULL
+=== parse_url('64.246.30.37/', 2)
+=> NULL
+=== parse_url('64.246.30.37/', 3)
+=> NULL
+=== parse_url('64.246.30.37/', 4)
+=> NULL
+=== parse_url('64.246.30.37/', 5)
+=> '64.246.30.37/'
+=== parse_url('64.246.30.37/', 6)
+=> NULL
+=== parse_url('64.246.30.37/', 7)
+=> NULL
+=== parse_url('64.246.30.37/', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('64.246.30.37/', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('64.246.30.37:80/')
+=> array (
+  'host' => '64.246.30.37',
+  'port' => 80,
+  'path' => '/',
+)
+=== parse_url('64.246.30.37:80/', -2)
+=> array (
+  'host' => '64.246.30.37',
+  'port' => 80,
+  'path' => '/',
+)
+=== parse_url('64.246.30.37:80/', 0)
+=> NULL
+=== parse_url('64.246.30.37:80/', 1)
+=> '64.246.30.37'
+=== parse_url('64.246.30.37:80/', 2)
+=> 80
+=== parse_url('64.246.30.37:80/', 3)
+=> NULL
+=== parse_url('64.246.30.37:80/', 4)
+=> NULL
+=== parse_url('64.246.30.37:80/', 5)
+=> '/'
+=== parse_url('64.246.30.37:80/', 6)
+=> NULL
+=== parse_url('64.246.30.37:80/', 7)
+=> NULL
+=== parse_url('64.246.30.37:80/', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('64.246.30.37:80/', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('php.net')
+=> array (
+  'path' => 'php.net',
+)
+=== parse_url('php.net', -2)
+=> array (
+  'path' => 'php.net',
+)
+=== parse_url('php.net', 0)
+=> NULL
+=== parse_url('php.net', 1)
+=> NULL
+=== parse_url('php.net', 2)
+=> NULL
+=== parse_url('php.net', 3)
+=> NULL
+=== parse_url('php.net', 4)
+=> NULL
+=== parse_url('php.net', 5)
+=> 'php.net'
+=== parse_url('php.net', 6)
+=> NULL
+=== parse_url('php.net', 7)
+=> NULL
+=== parse_url('php.net', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('php.net', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('php.net/')
+=> array (
+  'path' => 'php.net/',
+)
+=== parse_url('php.net/', -2)
+=> array (
+  'path' => 'php.net/',
+)
+=== parse_url('php.net/', 0)
+=> NULL
+=== parse_url('php.net/', 1)
+=> NULL
+=== parse_url('php.net/', 2)
+=> NULL
+=== parse_url('php.net/', 3)
+=> NULL
+=== parse_url('php.net/', 4)
+=> NULL
+=== parse_url('php.net/', 5)
+=> 'php.net/'
+=== parse_url('php.net/', 6)
+=> NULL
+=== parse_url('php.net/', 7)
+=> NULL
+=== parse_url('php.net/', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('php.net/', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('http://php.net')
+=> array (
+  'scheme' => 'http',
+  'host' => 'php.net',
+)
+=== parse_url('http://php.net', -2)
+=> array (
+  'scheme' => 'http',
+  'host' => 'php.net',
+)
+=== parse_url('http://php.net', 0)
+=> 'http'
+=== parse_url('http://php.net', 1)
+=> 'php.net'
+=== parse_url('http://php.net', 2)
+=> NULL
+=== parse_url('http://php.net', 3)
+=> NULL
+=== parse_url('http://php.net', 4)
+=> NULL
+=== parse_url('http://php.net', 5)
+=> NULL
+=== parse_url('http://php.net', 6)
+=> NULL
+=== parse_url('http://php.net', 7)
+=> NULL
+=== parse_url('http://php.net', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('http://php.net', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('http://php.net/')
+=> array (
+  'scheme' => 'http',
+  'host' => 'php.net',
+  'path' => '/',
+)
+=== parse_url('http://php.net/', -2)
+=> array (
+  'scheme' => 'http',
+  'host' => 'php.net',
+  'path' => '/',
+)
+=== parse_url('http://php.net/', 0)
+=> 'http'
+=== parse_url('http://php.net/', 1)
+=> 'php.net'
+=== parse_url('http://php.net/', 2)
+=> NULL
+=== parse_url('http://php.net/', 3)
+=> NULL
+=== parse_url('http://php.net/', 4)
+=> NULL
+=== parse_url('http://php.net/', 5)
+=> '/'
+=== parse_url('http://php.net/', 6)
+=> NULL
+=== parse_url('http://php.net/', 7)
+=> NULL
+=== parse_url('http://php.net/', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('http://php.net/', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('www.php.net')
+=> array (
+  'path' => 'www.php.net',
+)
+=== parse_url('www.php.net', -2)
+=> array (
+  'path' => 'www.php.net',
+)
+=== parse_url('www.php.net', 0)
+=> NULL
+=== parse_url('www.php.net', 1)
+=> NULL
+=== parse_url('www.php.net', 2)
+=> NULL
+=== parse_url('www.php.net', 3)
+=> NULL
+=== parse_url('www.php.net', 4)
+=> NULL
+=== parse_url('www.php.net', 5)
+=> 'www.php.net'
+=== parse_url('www.php.net', 6)
+=> NULL
+=== parse_url('www.php.net', 7)
+=> NULL
+=== parse_url('www.php.net', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('www.php.net', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('www.php.net/')
+=> array (
+  'path' => 'www.php.net/',
+)
+=== parse_url('www.php.net/', -2)
+=> array (
+  'path' => 'www.php.net/',
+)
+=== parse_url('www.php.net/', 0)
+=> NULL
+=== parse_url('www.php.net/', 1)
+=> NULL
+=== parse_url('www.php.net/', 2)
+=> NULL
+=== parse_url('www.php.net/', 3)
+=> NULL
+=== parse_url('www.php.net/', 4)
+=> NULL
+=== parse_url('www.php.net/', 5)
+=> 'www.php.net/'
+=== parse_url('www.php.net/', 6)
+=> NULL
+=== parse_url('www.php.net/', 7)
+=> NULL
+=== parse_url('www.php.net/', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('www.php.net/', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('http://www.php.net')
+=> array (
+  'scheme' => 'http',
+  'host' => 'www.php.net',
+)
+=== parse_url('http://www.php.net', -2)
+=> array (
+  'scheme' => 'http',
+  'host' => 'www.php.net',
+)
+=== parse_url('http://www.php.net', 0)
+=> 'http'
+=== parse_url('http://www.php.net', 1)
+=> 'www.php.net'
+=== parse_url('http://www.php.net', 2)
+=> NULL
+=== parse_url('http://www.php.net', 3)
+=> NULL
+=== parse_url('http://www.php.net', 4)
+=> NULL
+=== parse_url('http://www.php.net', 5)
+=> NULL
+=== parse_url('http://www.php.net', 6)
+=> NULL
+=== parse_url('http://www.php.net', 7)
+=> NULL
+=== parse_url('http://www.php.net', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('http://www.php.net', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('http://www.php.net/')
+=> array (
+  'scheme' => 'http',
+  'host' => 'www.php.net',
+  'path' => '/',
+)
+=== parse_url('http://www.php.net/', -2)
+=> array (
+  'scheme' => 'http',
+  'host' => 'www.php.net',
+  'path' => '/',
+)
+=== parse_url('http://www.php.net/', 0)
+=> 'http'
+=== parse_url('http://www.php.net/', 1)
+=> 'www.php.net'
+=== parse_url('http://www.php.net/', 2)
+=> NULL
+=== parse_url('http://www.php.net/', 3)
+=> NULL
+=== parse_url('http://www.php.net/', 4)
+=> NULL
+=== parse_url('http://www.php.net/', 5)
+=> '/'
+=== parse_url('http://www.php.net/', 6)
+=> NULL
+=== parse_url('http://www.php.net/', 7)
+=> NULL
+=== parse_url('http://www.php.net/', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('http://www.php.net/', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('www.php.net:80')
+=> array (
+  'host' => 'www.php.net',
+  'port' => 80,
+)
+=== parse_url('www.php.net:80', -2)
+=> array (
+  'host' => 'www.php.net',
+  'port' => 80,
+)
+=== parse_url('www.php.net:80', 0)
+=> NULL
+=== parse_url('www.php.net:80', 1)
+=> 'www.php.net'
+=== parse_url('www.php.net:80', 2)
+=> 80
+=== parse_url('www.php.net:80', 3)
+=> NULL
+=== parse_url('www.php.net:80', 4)
+=> NULL
+=== parse_url('www.php.net:80', 5)
+=> NULL
+=== parse_url('www.php.net:80', 6)
+=> NULL
+=== parse_url('www.php.net:80', 7)
+=> NULL
+=== parse_url('www.php.net:80', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('www.php.net:80', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('http://www.php.net:80')
+=> array (
+  'scheme' => 'http',
+  'host' => 'www.php.net',
+  'port' => 80,
+)
+=== parse_url('http://www.php.net:80', -2)
+=> array (
+  'scheme' => 'http',
+  'host' => 'www.php.net',
+  'port' => 80,
+)
+=== parse_url('http://www.php.net:80', 0)
+=> 'http'
+=== parse_url('http://www.php.net:80', 1)
+=> 'www.php.net'
+=== parse_url('http://www.php.net:80', 2)
+=> 80
+=== parse_url('http://www.php.net:80', 3)
+=> NULL
+=== parse_url('http://www.php.net:80', 4)
+=> NULL
+=== parse_url('http://www.php.net:80', 5)
+=> NULL
+=== parse_url('http://www.php.net:80', 6)
+=> NULL
+=== parse_url('http://www.php.net:80', 7)
+=> NULL
+=== parse_url('http://www.php.net:80', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('http://www.php.net:80', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('http://www.php.net:80/')
+=> array (
+  'scheme' => 'http',
+  'host' => 'www.php.net',
+  'port' => 80,
+  'path' => '/',
+)
+=== parse_url('http://www.php.net:80/', -2)
+=> array (
+  'scheme' => 'http',
+  'host' => 'www.php.net',
+  'port' => 80,
+  'path' => '/',
+)
+=== parse_url('http://www.php.net:80/', 0)
+=> 'http'
+=== parse_url('http://www.php.net:80/', 1)
+=> 'www.php.net'
+=== parse_url('http://www.php.net:80/', 2)
+=> 80
+=== parse_url('http://www.php.net:80/', 3)
+=> NULL
+=== parse_url('http://www.php.net:80/', 4)
+=> NULL
+=== parse_url('http://www.php.net:80/', 5)
+=> '/'
+=== parse_url('http://www.php.net:80/', 6)
+=> NULL
+=== parse_url('http://www.php.net:80/', 7)
+=> NULL
+=== parse_url('http://www.php.net:80/', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('http://www.php.net:80/', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('http://www.php.net/index.php')
+=> array (
+  'scheme' => 'http',
+  'host' => 'www.php.net',
+  'path' => '/index.php',
+)
+=== parse_url('http://www.php.net/index.php', -2)
+=> array (
+  'scheme' => 'http',
+  'host' => 'www.php.net',
+  'path' => '/index.php',
+)
+=== parse_url('http://www.php.net/index.php', 0)
+=> 'http'
+=== parse_url('http://www.php.net/index.php', 1)
+=> 'www.php.net'
+=== parse_url('http://www.php.net/index.php', 2)
+=> NULL
+=== parse_url('http://www.php.net/index.php', 3)
+=> NULL
+=== parse_url('http://www.php.net/index.php', 4)
+=> NULL
+=== parse_url('http://www.php.net/index.php', 5)
+=> '/index.php'
+=== parse_url('http://www.php.net/index.php', 6)
+=> NULL
+=== parse_url('http://www.php.net/index.php', 7)
+=> NULL
+=== parse_url('http://www.php.net/index.php', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('http://www.php.net/index.php', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('www.php.net/?')
+=> array (
+  'path' => 'www.php.net/',
+  'query' => '',
+)
+=== parse_url('www.php.net/?', -2)
+=> array (
+  'path' => 'www.php.net/',
+  'query' => '',
+)
+=== parse_url('www.php.net/?', 0)
+=> NULL
+=== parse_url('www.php.net/?', 1)
+=> NULL
+=== parse_url('www.php.net/?', 2)
+=> NULL
+=== parse_url('www.php.net/?', 3)
+=> NULL
+=== parse_url('www.php.net/?', 4)
+=> NULL
+=== parse_url('www.php.net/?', 5)
+=> 'www.php.net/'
+=== parse_url('www.php.net/?', 6)
+=> ''
+=== parse_url('www.php.net/?', 7)
+=> NULL
+=== parse_url('www.php.net/?', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('www.php.net/?', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('www.php.net:80/?')
+=> array (
+  'host' => 'www.php.net',
+  'port' => 80,
+  'path' => '/',
+  'query' => '',
+)
+=== parse_url('www.php.net:80/?', -2)
+=> array (
+  'host' => 'www.php.net',
+  'port' => 80,
+  'path' => '/',
+  'query' => '',
+)
+=== parse_url('www.php.net:80/?', 0)
+=> NULL
+=== parse_url('www.php.net:80/?', 1)
+=> 'www.php.net'
+=== parse_url('www.php.net:80/?', 2)
+=> 80
+=== parse_url('www.php.net:80/?', 3)
+=> NULL
+=== parse_url('www.php.net:80/?', 4)
+=> NULL
+=== parse_url('www.php.net:80/?', 5)
+=> '/'
+=== parse_url('www.php.net:80/?', 6)
+=> ''
+=== parse_url('www.php.net:80/?', 7)
+=> NULL
+=== parse_url('www.php.net:80/?', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('www.php.net:80/?', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('http://www.php.net/?')
+=> array (
+  'scheme' => 'http',
+  'host' => 'www.php.net',
+  'path' => '/',
+  'query' => '',
+)
+=== parse_url('http://www.php.net/?', -2)
+=> array (
+  'scheme' => 'http',
+  'host' => 'www.php.net',
+  'path' => '/',
+  'query' => '',
+)
+=== parse_url('http://www.php.net/?', 0)
+=> 'http'
+=== parse_url('http://www.php.net/?', 1)
+=> 'www.php.net'
+=== parse_url('http://www.php.net/?', 2)
+=> NULL
+=== parse_url('http://www.php.net/?', 3)
+=> NULL
+=== parse_url('http://www.php.net/?', 4)
+=> NULL
+=== parse_url('http://www.php.net/?', 5)
+=> '/'
+=== parse_url('http://www.php.net/?', 6)
+=> ''
+=== parse_url('http://www.php.net/?', 7)
+=> NULL
+=== parse_url('http://www.php.net/?', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('http://www.php.net/?', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('http://www.php.net:80/?')
+=> array (
+  'scheme' => 'http',
+  'host' => 'www.php.net',
+  'port' => 80,
+  'path' => '/',
+  'query' => '',
+)
+=== parse_url('http://www.php.net:80/?', -2)
+=> array (
+  'scheme' => 'http',
+  'host' => 'www.php.net',
+  'port' => 80,
+  'path' => '/',
+  'query' => '',
+)
+=== parse_url('http://www.php.net:80/?', 0)
+=> 'http'
+=== parse_url('http://www.php.net:80/?', 1)
+=> 'www.php.net'
+=== parse_url('http://www.php.net:80/?', 2)
+=> 80
+=== parse_url('http://www.php.net:80/?', 3)
+=> NULL
+=== parse_url('http://www.php.net:80/?', 4)
+=> NULL
+=== parse_url('http://www.php.net:80/?', 5)
+=> '/'
+=== parse_url('http://www.php.net:80/?', 6)
+=> ''
+=== parse_url('http://www.php.net:80/?', 7)
+=> NULL
+=== parse_url('http://www.php.net:80/?', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('http://www.php.net:80/?', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('http://www.php.net:80/index.php')
+=> array (
+  'scheme' => 'http',
+  'host' => 'www.php.net',
+  'port' => 80,
+  'path' => '/index.php',
+)
+=== parse_url('http://www.php.net:80/index.php', -2)
+=> array (
+  'scheme' => 'http',
+  'host' => 'www.php.net',
+  'port' => 80,
+  'path' => '/index.php',
+)
+=== parse_url('http://www.php.net:80/index.php', 0)
+=> 'http'
+=== parse_url('http://www.php.net:80/index.php', 1)
+=> 'www.php.net'
+=== parse_url('http://www.php.net:80/index.php', 2)
+=> 80
+=== parse_url('http://www.php.net:80/index.php', 3)
+=> NULL
+=== parse_url('http://www.php.net:80/index.php', 4)
+=> NULL
+=== parse_url('http://www.php.net:80/index.php', 5)
+=> '/index.php'
+=== parse_url('http://www.php.net:80/index.php', 6)
+=> NULL
+=== parse_url('http://www.php.net:80/index.php', 7)
+=> NULL
+=== parse_url('http://www.php.net:80/index.php', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('http://www.php.net:80/index.php', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('http://www.php.net:80/foo/bar/index.php')
+=> array (
+  'scheme' => 'http',
+  'host' => 'www.php.net',
+  'port' => 80,
+  'path' => '/foo/bar/index.php',
+)
+=== parse_url('http://www.php.net:80/foo/bar/index.php', -2)
+=> array (
+  'scheme' => 'http',
+  'host' => 'www.php.net',
+  'port' => 80,
+  'path' => '/foo/bar/index.php',
+)
+=== parse_url('http://www.php.net:80/foo/bar/index.php', 0)
+=> 'http'
+=== parse_url('http://www.php.net:80/foo/bar/index.php', 1)
+=> 'www.php.net'
+=== parse_url('http://www.php.net:80/foo/bar/index.php', 2)
+=> 80
+=== parse_url('http://www.php.net:80/foo/bar/index.php', 3)
+=> NULL
+=== parse_url('http://www.php.net:80/foo/bar/index.php', 4)
+=> NULL
+=== parse_url('http://www.php.net:80/foo/bar/index.php', 5)
+=> '/foo/bar/index.php'
+=== parse_url('http://www.php.net:80/foo/bar/index.php', 6)
+=> NULL
+=== parse_url('http://www.php.net:80/foo/bar/index.php', 7)
+=> NULL
+=== parse_url('http://www.php.net:80/foo/bar/index.php', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('http://www.php.net:80/foo/bar/index.php', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('http://www.php.net:80/this/is/a/very/deep/directory/structure/and/file.php')
+=> array (
+  'scheme' => 'http',
+  'host' => 'www.php.net',
+  'port' => 80,
+  'path' => '/this/is/a/very/deep/directory/structure/and/file.php',
+)
+=== parse_url('http://www.php.net:80/this/is/a/very/deep/directory/structure/and/file.php', -2)
+=> array (
+  'scheme' => 'http',
+  'host' => 'www.php.net',
+  'port' => 80,
+  'path' => '/this/is/a/very/deep/directory/structure/and/file.php',
+)
+=== parse_url('http://www.php.net:80/this/is/a/very/deep/directory/structure/and/file.php', 0)
+=> 'http'
+=== parse_url('http://www.php.net:80/this/is/a/very/deep/directory/structure/and/file.php', 1)
+=> 'www.php.net'
+=== parse_url('http://www.php.net:80/this/is/a/very/deep/directory/structure/and/file.php', 2)
+=> 80
+=== parse_url('http://www.php.net:80/this/is/a/very/deep/directory/structure/and/file.php', 3)
+=> NULL
+=== parse_url('http://www.php.net:80/this/is/a/very/deep/directory/structure/and/file.php', 4)
+=> NULL
+=== parse_url('http://www.php.net:80/this/is/a/very/deep/directory/structure/and/file.php', 5)
+=> '/this/is/a/very/deep/directory/structure/and/file.php'
+=== parse_url('http://www.php.net:80/this/is/a/very/deep/directory/structure/and/file.php', 6)
+=> NULL
+=== parse_url('http://www.php.net:80/this/is/a/very/deep/directory/structure/and/file.php', 7)
+=> NULL
+=== parse_url('http://www.php.net:80/this/is/a/very/deep/directory/structure/and/file.php', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('http://www.php.net:80/this/is/a/very/deep/directory/structure/and/file.php', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('http://www.php.net:80/this/is/a/very/deep/directory/structure/and/file.php?lots=1&of=2&parameters=3&too=4&here=5')
+=> array (
+  'scheme' => 'http',
+  'host' => 'www.php.net',
+  'port' => 80,
+  'path' => '/this/is/a/very/deep/directory/structure/and/file.php',
+  'query' => 'lots=1&of=2&parameters=3&too=4&here=5',
+)
+=== parse_url('http://www.php.net:80/this/is/a/very/deep/directory/structure/and/file.php?lots=1&of=2&parameters=3&too=4&here=5', -2)
+=> array (
+  'scheme' => 'http',
+  'host' => 'www.php.net',
+  'port' => 80,
+  'path' => '/this/is/a/very/deep/directory/structure/and/file.php',
+  'query' => 'lots=1&of=2&parameters=3&too=4&here=5',
+)
+=== parse_url('http://www.php.net:80/this/is/a/very/deep/directory/structure/and/file.php?lots=1&of=2&parameters=3&too=4&here=5', 0)
+=> 'http'
+=== parse_url('http://www.php.net:80/this/is/a/very/deep/directory/structure/and/file.php?lots=1&of=2&parameters=3&too=4&here=5', 1)
+=> 'www.php.net'
+=== parse_url('http://www.php.net:80/this/is/a/very/deep/directory/structure/and/file.php?lots=1&of=2&parameters=3&too=4&here=5', 2)
+=> 80
+=== parse_url('http://www.php.net:80/this/is/a/very/deep/directory/structure/and/file.php?lots=1&of=2&parameters=3&too=4&here=5', 3)
+=> NULL
+=== parse_url('http://www.php.net:80/this/is/a/very/deep/directory/structure/and/file.php?lots=1&of=2&parameters=3&too=4&here=5', 4)
+=> NULL
+=== parse_url('http://www.php.net:80/this/is/a/very/deep/directory/structure/and/file.php?lots=1&of=2&parameters=3&too=4&here=5', 5)
+=> '/this/is/a/very/deep/directory/structure/and/file.php'
+=== parse_url('http://www.php.net:80/this/is/a/very/deep/directory/structure/and/file.php?lots=1&of=2&parameters=3&too=4&here=5', 6)
+=> 'lots=1&of=2&parameters=3&too=4&here=5'
+=== parse_url('http://www.php.net:80/this/is/a/very/deep/directory/structure/and/file.php?lots=1&of=2&parameters=3&too=4&here=5', 7)
+=> NULL
+=== parse_url('http://www.php.net:80/this/is/a/very/deep/directory/structure/and/file.php?lots=1&of=2&parameters=3&too=4&here=5', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('http://www.php.net:80/this/is/a/very/deep/directory/structure/and/file.php?lots=1&of=2&parameters=3&too=4&here=5', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('http://www.php.net:80/this/is/a/very/deep/directory/structure/and/')
+=> array (
+  'scheme' => 'http',
+  'host' => 'www.php.net',
+  'port' => 80,
+  'path' => '/this/is/a/very/deep/directory/structure/and/',
+)
+=== parse_url('http://www.php.net:80/this/is/a/very/deep/directory/structure/and/', -2)
+=> array (
+  'scheme' => 'http',
+  'host' => 'www.php.net',
+  'port' => 80,
+  'path' => '/this/is/a/very/deep/directory/structure/and/',
+)
+=== parse_url('http://www.php.net:80/this/is/a/very/deep/directory/structure/and/', 0)
+=> 'http'
+=== parse_url('http://www.php.net:80/this/is/a/very/deep/directory/structure/and/', 1)
+=> 'www.php.net'
+=== parse_url('http://www.php.net:80/this/is/a/very/deep/directory/structure/and/', 2)
+=> 80
+=== parse_url('http://www.php.net:80/this/is/a/very/deep/directory/structure/and/', 3)
+=> NULL
+=== parse_url('http://www.php.net:80/this/is/a/very/deep/directory/structure/and/', 4)
+=> NULL
+=== parse_url('http://www.php.net:80/this/is/a/very/deep/directory/structure/and/', 5)
+=> '/this/is/a/very/deep/directory/structure/and/'
+=== parse_url('http://www.php.net:80/this/is/a/very/deep/directory/structure/and/', 6)
+=> NULL
+=== parse_url('http://www.php.net:80/this/is/a/very/deep/directory/structure/and/', 7)
+=> NULL
+=== parse_url('http://www.php.net:80/this/is/a/very/deep/directory/structure/and/', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('http://www.php.net:80/this/is/a/very/deep/directory/structure/and/', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('http://www.php.net:80/this/../a/../deep/directory')
+=> array (
+  'scheme' => 'http',
+  'host' => 'www.php.net',
+  'port' => 80,
+  'path' => '/this/../a/../deep/directory',
+)
+=== parse_url('http://www.php.net:80/this/../a/../deep/directory', -2)
+=> array (
+  'scheme' => 'http',
+  'host' => 'www.php.net',
+  'port' => 80,
+  'path' => '/this/../a/../deep/directory',
+)
+=== parse_url('http://www.php.net:80/this/../a/../deep/directory', 0)
+=> 'http'
+=== parse_url('http://www.php.net:80/this/../a/../deep/directory', 1)
+=> 'www.php.net'
+=== parse_url('http://www.php.net:80/this/../a/../deep/directory', 2)
+=> 80
+=== parse_url('http://www.php.net:80/this/../a/../deep/directory', 3)
+=> NULL
+=== parse_url('http://www.php.net:80/this/../a/../deep/directory', 4)
+=> NULL
+=== parse_url('http://www.php.net:80/this/../a/../deep/directory', 5)
+=> '/this/../a/../deep/directory'
+=== parse_url('http://www.php.net:80/this/../a/../deep/directory', 6)
+=> NULL
+=== parse_url('http://www.php.net:80/this/../a/../deep/directory', 7)
+=> NULL
+=== parse_url('http://www.php.net:80/this/../a/../deep/directory', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('http://www.php.net:80/this/../a/../deep/directory', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('http://www.php.net:80/this/../a/../deep/directory/')
+=> array (
+  'scheme' => 'http',
+  'host' => 'www.php.net',
+  'port' => 80,
+  'path' => '/this/../a/../deep/directory/',
+)
+=== parse_url('http://www.php.net:80/this/../a/../deep/directory/', -2)
+=> array (
+  'scheme' => 'http',
+  'host' => 'www.php.net',
+  'port' => 80,
+  'path' => '/this/../a/../deep/directory/',
+)
+=== parse_url('http://www.php.net:80/this/../a/../deep/directory/', 0)
+=> 'http'
+=== parse_url('http://www.php.net:80/this/../a/../deep/directory/', 1)
+=> 'www.php.net'
+=== parse_url('http://www.php.net:80/this/../a/../deep/directory/', 2)
+=> 80
+=== parse_url('http://www.php.net:80/this/../a/../deep/directory/', 3)
+=> NULL
+=== parse_url('http://www.php.net:80/this/../a/../deep/directory/', 4)
+=> NULL
+=== parse_url('http://www.php.net:80/this/../a/../deep/directory/', 5)
+=> '/this/../a/../deep/directory/'
+=== parse_url('http://www.php.net:80/this/../a/../deep/directory/', 6)
+=> NULL
+=== parse_url('http://www.php.net:80/this/../a/../deep/directory/', 7)
+=> NULL
+=== parse_url('http://www.php.net:80/this/../a/../deep/directory/', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('http://www.php.net:80/this/../a/../deep/directory/', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('http://www.php.net:80/this/is/a/very/deep/directory/../file.php')
+=> array (
+  'scheme' => 'http',
+  'host' => 'www.php.net',
+  'port' => 80,
+  'path' => '/this/is/a/very/deep/directory/../file.php',
+)
+=== parse_url('http://www.php.net:80/this/is/a/very/deep/directory/../file.php', -2)
+=> array (
+  'scheme' => 'http',
+  'host' => 'www.php.net',
+  'port' => 80,
+  'path' => '/this/is/a/very/deep/directory/../file.php',
+)
+=== parse_url('http://www.php.net:80/this/is/a/very/deep/directory/../file.php', 0)
+=> 'http'
+=== parse_url('http://www.php.net:80/this/is/a/very/deep/directory/../file.php', 1)
+=> 'www.php.net'
+=== parse_url('http://www.php.net:80/this/is/a/very/deep/directory/../file.php', 2)
+=> 80
+=== parse_url('http://www.php.net:80/this/is/a/very/deep/directory/../file.php', 3)
+=> NULL
+=== parse_url('http://www.php.net:80/this/is/a/very/deep/directory/../file.php', 4)
+=> NULL
+=== parse_url('http://www.php.net:80/this/is/a/very/deep/directory/../file.php', 5)
+=> '/this/is/a/very/deep/directory/../file.php'
+=== parse_url('http://www.php.net:80/this/is/a/very/deep/directory/../file.php', 6)
+=> NULL
+=== parse_url('http://www.php.net:80/this/is/a/very/deep/directory/../file.php', 7)
+=> NULL
+=== parse_url('http://www.php.net:80/this/is/a/very/deep/directory/../file.php', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('http://www.php.net:80/this/is/a/very/deep/directory/../file.php', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('http://www.php.net:80/index.php?')
+=> array (
+  'scheme' => 'http',
+  'host' => 'www.php.net',
+  'port' => 80,
+  'path' => '/index.php',
+  'query' => '',
+)
+=== parse_url('http://www.php.net:80/index.php?', -2)
+=> array (
+  'scheme' => 'http',
+  'host' => 'www.php.net',
+  'port' => 80,
+  'path' => '/index.php',
+  'query' => '',
+)
+=== parse_url('http://www.php.net:80/index.php?', 0)
+=> 'http'
+=== parse_url('http://www.php.net:80/index.php?', 1)
+=> 'www.php.net'
+=== parse_url('http://www.php.net:80/index.php?', 2)
+=> 80
+=== parse_url('http://www.php.net:80/index.php?', 3)
+=> NULL
+=== parse_url('http://www.php.net:80/index.php?', 4)
+=> NULL
+=== parse_url('http://www.php.net:80/index.php?', 5)
+=> '/index.php'
+=== parse_url('http://www.php.net:80/index.php?', 6)
+=> ''
+=== parse_url('http://www.php.net:80/index.php?', 7)
+=> NULL
+=== parse_url('http://www.php.net:80/index.php?', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('http://www.php.net:80/index.php?', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('http://www.php.net:80/#foo')
+=> array (
+  'scheme' => 'http',
+  'host' => 'www.php.net',
+  'port' => 80,
+  'path' => '/',
+  'fragment' => 'foo',
+)
+=== parse_url('http://www.php.net:80/#foo', -2)
+=> array (
+  'scheme' => 'http',
+  'host' => 'www.php.net',
+  'port' => 80,
+  'path' => '/',
+  'fragment' => 'foo',
+)
+=== parse_url('http://www.php.net:80/#foo', 0)
+=> 'http'
+=== parse_url('http://www.php.net:80/#foo', 1)
+=> 'www.php.net'
+=== parse_url('http://www.php.net:80/#foo', 2)
+=> 80
+=== parse_url('http://www.php.net:80/#foo', 3)
+=> NULL
+=== parse_url('http://www.php.net:80/#foo', 4)
+=> NULL
+=== parse_url('http://www.php.net:80/#foo', 5)
+=> '/'
+=== parse_url('http://www.php.net:80/#foo', 6)
+=> NULL
+=== parse_url('http://www.php.net:80/#foo', 7)
+=> 'foo'
+=== parse_url('http://www.php.net:80/#foo', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('http://www.php.net:80/#foo', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('http://www.php.net:80/?#')
+=> array (
+  'scheme' => 'http',
+  'host' => 'www.php.net',
+  'port' => 80,
+  'path' => '/',
+  'query' => '',
+  'fragment' => '',
+)
+=== parse_url('http://www.php.net:80/?#', -2)
+=> array (
+  'scheme' => 'http',
+  'host' => 'www.php.net',
+  'port' => 80,
+  'path' => '/',
+  'query' => '',
+  'fragment' => '',
+)
+=== parse_url('http://www.php.net:80/?#', 0)
+=> 'http'
+=== parse_url('http://www.php.net:80/?#', 1)
+=> 'www.php.net'
+=== parse_url('http://www.php.net:80/?#', 2)
+=> 80
+=== parse_url('http://www.php.net:80/?#', 3)
+=> NULL
+=== parse_url('http://www.php.net:80/?#', 4)
+=> NULL
+=== parse_url('http://www.php.net:80/?#', 5)
+=> '/'
+=== parse_url('http://www.php.net:80/?#', 6)
+=> ''
+=== parse_url('http://www.php.net:80/?#', 7)
+=> ''
+=== parse_url('http://www.php.net:80/?#', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('http://www.php.net:80/?#', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('http://www.php.net:80/?test=1')
+=> array (
+  'scheme' => 'http',
+  'host' => 'www.php.net',
+  'port' => 80,
+  'path' => '/',
+  'query' => 'test=1',
+)
+=== parse_url('http://www.php.net:80/?test=1', -2)
+=> array (
+  'scheme' => 'http',
+  'host' => 'www.php.net',
+  'port' => 80,
+  'path' => '/',
+  'query' => 'test=1',
+)
+=== parse_url('http://www.php.net:80/?test=1', 0)
+=> 'http'
+=== parse_url('http://www.php.net:80/?test=1', 1)
+=> 'www.php.net'
+=== parse_url('http://www.php.net:80/?test=1', 2)
+=> 80
+=== parse_url('http://www.php.net:80/?test=1', 3)
+=> NULL
+=== parse_url('http://www.php.net:80/?test=1', 4)
+=> NULL
+=== parse_url('http://www.php.net:80/?test=1', 5)
+=> '/'
+=== parse_url('http://www.php.net:80/?test=1', 6)
+=> 'test=1'
+=== parse_url('http://www.php.net:80/?test=1', 7)
+=> NULL
+=== parse_url('http://www.php.net:80/?test=1', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('http://www.php.net:80/?test=1', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('http://www.php.net/?test=1&')
+=> array (
+  'scheme' => 'http',
+  'host' => 'www.php.net',
+  'path' => '/',
+  'query' => 'test=1&',
+)
+=== parse_url('http://www.php.net/?test=1&', -2)
+=> array (
+  'scheme' => 'http',
+  'host' => 'www.php.net',
+  'path' => '/',
+  'query' => 'test=1&',
+)
+=== parse_url('http://www.php.net/?test=1&', 0)
+=> 'http'
+=== parse_url('http://www.php.net/?test=1&', 1)
+=> 'www.php.net'
+=== parse_url('http://www.php.net/?test=1&', 2)
+=> NULL
+=== parse_url('http://www.php.net/?test=1&', 3)
+=> NULL
+=== parse_url('http://www.php.net/?test=1&', 4)
+=> NULL
+=== parse_url('http://www.php.net/?test=1&', 5)
+=> '/'
+=== parse_url('http://www.php.net/?test=1&', 6)
+=> 'test=1&'
+=== parse_url('http://www.php.net/?test=1&', 7)
+=> NULL
+=== parse_url('http://www.php.net/?test=1&', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('http://www.php.net/?test=1&', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('http://www.php.net:80/?&')
+=> array (
+  'scheme' => 'http',
+  'host' => 'www.php.net',
+  'port' => 80,
+  'path' => '/',
+  'query' => '&',
+)
+=== parse_url('http://www.php.net:80/?&', -2)
+=> array (
+  'scheme' => 'http',
+  'host' => 'www.php.net',
+  'port' => 80,
+  'path' => '/',
+  'query' => '&',
+)
+=== parse_url('http://www.php.net:80/?&', 0)
+=> 'http'
+=== parse_url('http://www.php.net:80/?&', 1)
+=> 'www.php.net'
+=== parse_url('http://www.php.net:80/?&', 2)
+=> 80
+=== parse_url('http://www.php.net:80/?&', 3)
+=> NULL
+=== parse_url('http://www.php.net:80/?&', 4)
+=> NULL
+=== parse_url('http://www.php.net:80/?&', 5)
+=> '/'
+=== parse_url('http://www.php.net:80/?&', 6)
+=> '&'
+=== parse_url('http://www.php.net:80/?&', 7)
+=> NULL
+=== parse_url('http://www.php.net:80/?&', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('http://www.php.net:80/?&', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('http://www.php.net:80/index.php?test=1&')
+=> array (
+  'scheme' => 'http',
+  'host' => 'www.php.net',
+  'port' => 80,
+  'path' => '/index.php',
+  'query' => 'test=1&',
+)
+=== parse_url('http://www.php.net:80/index.php?test=1&', -2)
+=> array (
+  'scheme' => 'http',
+  'host' => 'www.php.net',
+  'port' => 80,
+  'path' => '/index.php',
+  'query' => 'test=1&',
+)
+=== parse_url('http://www.php.net:80/index.php?test=1&', 0)
+=> 'http'
+=== parse_url('http://www.php.net:80/index.php?test=1&', 1)
+=> 'www.php.net'
+=== parse_url('http://www.php.net:80/index.php?test=1&', 2)
+=> 80
+=== parse_url('http://www.php.net:80/index.php?test=1&', 3)
+=> NULL
+=== parse_url('http://www.php.net:80/index.php?test=1&', 4)
+=> NULL
+=== parse_url('http://www.php.net:80/index.php?test=1&', 5)
+=> '/index.php'
+=== parse_url('http://www.php.net:80/index.php?test=1&', 6)
+=> 'test=1&'
+=== parse_url('http://www.php.net:80/index.php?test=1&', 7)
+=> NULL
+=== parse_url('http://www.php.net:80/index.php?test=1&', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('http://www.php.net:80/index.php?test=1&', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('http://www.php.net/index.php?&')
+=> array (
+  'scheme' => 'http',
+  'host' => 'www.php.net',
+  'path' => '/index.php',
+  'query' => '&',
+)
+=== parse_url('http://www.php.net/index.php?&', -2)
+=> array (
+  'scheme' => 'http',
+  'host' => 'www.php.net',
+  'path' => '/index.php',
+  'query' => '&',
+)
+=== parse_url('http://www.php.net/index.php?&', 0)
+=> 'http'
+=== parse_url('http://www.php.net/index.php?&', 1)
+=> 'www.php.net'
+=== parse_url('http://www.php.net/index.php?&', 2)
+=> NULL
+=== parse_url('http://www.php.net/index.php?&', 3)
+=> NULL
+=== parse_url('http://www.php.net/index.php?&', 4)
+=> NULL
+=== parse_url('http://www.php.net/index.php?&', 5)
+=> '/index.php'
+=== parse_url('http://www.php.net/index.php?&', 6)
+=> '&'
+=== parse_url('http://www.php.net/index.php?&', 7)
+=> NULL
+=== parse_url('http://www.php.net/index.php?&', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('http://www.php.net/index.php?&', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('http://www.php.net:80/index.php?foo&')
+=> array (
+  'scheme' => 'http',
+  'host' => 'www.php.net',
+  'port' => 80,
+  'path' => '/index.php',
+  'query' => 'foo&',
+)
+=== parse_url('http://www.php.net:80/index.php?foo&', -2)
+=> array (
+  'scheme' => 'http',
+  'host' => 'www.php.net',
+  'port' => 80,
+  'path' => '/index.php',
+  'query' => 'foo&',
+)
+=== parse_url('http://www.php.net:80/index.php?foo&', 0)
+=> 'http'
+=== parse_url('http://www.php.net:80/index.php?foo&', 1)
+=> 'www.php.net'
+=== parse_url('http://www.php.net:80/index.php?foo&', 2)
+=> 80
+=== parse_url('http://www.php.net:80/index.php?foo&', 3)
+=> NULL
+=== parse_url('http://www.php.net:80/index.php?foo&', 4)
+=> NULL
+=== parse_url('http://www.php.net:80/index.php?foo&', 5)
+=> '/index.php'
+=== parse_url('http://www.php.net:80/index.php?foo&', 6)
+=> 'foo&'
+=== parse_url('http://www.php.net:80/index.php?foo&', 7)
+=> NULL
+=== parse_url('http://www.php.net:80/index.php?foo&', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('http://www.php.net:80/index.php?foo&', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('http://www.php.net/index.php?&foo')
+=> array (
+  'scheme' => 'http',
+  'host' => 'www.php.net',
+  'path' => '/index.php',
+  'query' => '&foo',
+)
+=== parse_url('http://www.php.net/index.php?&foo', -2)
+=> array (
+  'scheme' => 'http',
+  'host' => 'www.php.net',
+  'path' => '/index.php',
+  'query' => '&foo',
+)
+=== parse_url('http://www.php.net/index.php?&foo', 0)
+=> 'http'
+=== parse_url('http://www.php.net/index.php?&foo', 1)
+=> 'www.php.net'
+=== parse_url('http://www.php.net/index.php?&foo', 2)
+=> NULL
+=== parse_url('http://www.php.net/index.php?&foo', 3)
+=> NULL
+=== parse_url('http://www.php.net/index.php?&foo', 4)
+=> NULL
+=== parse_url('http://www.php.net/index.php?&foo', 5)
+=> '/index.php'
+=== parse_url('http://www.php.net/index.php?&foo', 6)
+=> '&foo'
+=== parse_url('http://www.php.net/index.php?&foo', 7)
+=> NULL
+=== parse_url('http://www.php.net/index.php?&foo', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('http://www.php.net/index.php?&foo', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('http://www.php.net:80/index.php?test=1&test2=char&test3=mixesCI')
+=> array (
+  'scheme' => 'http',
+  'host' => 'www.php.net',
+  'port' => 80,
+  'path' => '/index.php',
+  'query' => 'test=1&test2=char&test3=mixesCI',
+)
+=== parse_url('http://www.php.net:80/index.php?test=1&test2=char&test3=mixesCI', -2)
+=> array (
+  'scheme' => 'http',
+  'host' => 'www.php.net',
+  'port' => 80,
+  'path' => '/index.php',
+  'query' => 'test=1&test2=char&test3=mixesCI',
+)
+=== parse_url('http://www.php.net:80/index.php?test=1&test2=char&test3=mixesCI', 0)
+=> 'http'
+=== parse_url('http://www.php.net:80/index.php?test=1&test2=char&test3=mixesCI', 1)
+=> 'www.php.net'
+=== parse_url('http://www.php.net:80/index.php?test=1&test2=char&test3=mixesCI', 2)
+=> 80
+=== parse_url('http://www.php.net:80/index.php?test=1&test2=char&test3=mixesCI', 3)
+=> NULL
+=== parse_url('http://www.php.net:80/index.php?test=1&test2=char&test3=mixesCI', 4)
+=> NULL
+=== parse_url('http://www.php.net:80/index.php?test=1&test2=char&test3=mixesCI', 5)
+=> '/index.php'
+=== parse_url('http://www.php.net:80/index.php?test=1&test2=char&test3=mixesCI', 6)
+=> 'test=1&test2=char&test3=mixesCI'
+=== parse_url('http://www.php.net:80/index.php?test=1&test2=char&test3=mixesCI', 7)
+=> NULL
+=== parse_url('http://www.php.net:80/index.php?test=1&test2=char&test3=mixesCI', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('http://www.php.net:80/index.php?test=1&test2=char&test3=mixesCI', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('www.php.net:80/index.php?test=1&test2=char&test3=mixesCI#some_page_ref123')
+=> array (
+  'host' => 'www.php.net',
+  'port' => 80,
+  'path' => '/index.php',
+  'query' => 'test=1&test2=char&test3=mixesCI',
+  'fragment' => 'some_page_ref123',
+)
+=== parse_url('www.php.net:80/index.php?test=1&test2=char&test3=mixesCI#some_page_ref123', -2)
+=> array (
+  'host' => 'www.php.net',
+  'port' => 80,
+  'path' => '/index.php',
+  'query' => 'test=1&test2=char&test3=mixesCI',
+  'fragment' => 'some_page_ref123',
+)
+=== parse_url('www.php.net:80/index.php?test=1&test2=char&test3=mixesCI#some_page_ref123', 0)
+=> NULL
+=== parse_url('www.php.net:80/index.php?test=1&test2=char&test3=mixesCI#some_page_ref123', 1)
+=> 'www.php.net'
+=== parse_url('www.php.net:80/index.php?test=1&test2=char&test3=mixesCI#some_page_ref123', 2)
+=> 80
+=== parse_url('www.php.net:80/index.php?test=1&test2=char&test3=mixesCI#some_page_ref123', 3)
+=> NULL
+=== parse_url('www.php.net:80/index.php?test=1&test2=char&test3=mixesCI#some_page_ref123', 4)
+=> NULL
+=== parse_url('www.php.net:80/index.php?test=1&test2=char&test3=mixesCI#some_page_ref123', 5)
+=> '/index.php'
+=== parse_url('www.php.net:80/index.php?test=1&test2=char&test3=mixesCI#some_page_ref123', 6)
+=> 'test=1&test2=char&test3=mixesCI'
+=== parse_url('www.php.net:80/index.php?test=1&test2=char&test3=mixesCI#some_page_ref123', 7)
+=> 'some_page_ref123'
+=== parse_url('www.php.net:80/index.php?test=1&test2=char&test3=mixesCI#some_page_ref123', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('www.php.net:80/index.php?test=1&test2=char&test3=mixesCI#some_page_ref123', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('http://secret@www.php.net:80/index.php?test=1&test2=char&test3=mixesCI#some_page_ref123')
+=> array (
+  'scheme' => 'http',
+  'host' => 'www.php.net',
+  'port' => 80,
+  'user' => 'secret',
+  'path' => '/index.php',
+  'query' => 'test=1&test2=char&test3=mixesCI',
+  'fragment' => 'some_page_ref123',
+)
+=== parse_url('http://secret@www.php.net:80/index.php?test=1&test2=char&test3=mixesCI#some_page_ref123', -2)
+=> array (
+  'scheme' => 'http',
+  'host' => 'www.php.net',
+  'port' => 80,
+  'user' => 'secret',
+  'path' => '/index.php',
+  'query' => 'test=1&test2=char&test3=mixesCI',
+  'fragment' => 'some_page_ref123',
+)
+=== parse_url('http://secret@www.php.net:80/index.php?test=1&test2=char&test3=mixesCI#some_page_ref123', 0)
+=> 'http'
+=== parse_url('http://secret@www.php.net:80/index.php?test=1&test2=char&test3=mixesCI#some_page_ref123', 1)
+=> 'www.php.net'
+=== parse_url('http://secret@www.php.net:80/index.php?test=1&test2=char&test3=mixesCI#some_page_ref123', 2)
+=> 80
+=== parse_url('http://secret@www.php.net:80/index.php?test=1&test2=char&test3=mixesCI#some_page_ref123', 3)
+=> 'secret'
+=== parse_url('http://secret@www.php.net:80/index.php?test=1&test2=char&test3=mixesCI#some_page_ref123', 4)
+=> NULL
+=== parse_url('http://secret@www.php.net:80/index.php?test=1&test2=char&test3=mixesCI#some_page_ref123', 5)
+=> '/index.php'
+=== parse_url('http://secret@www.php.net:80/index.php?test=1&test2=char&test3=mixesCI#some_page_ref123', 6)
+=> 'test=1&test2=char&test3=mixesCI'
+=== parse_url('http://secret@www.php.net:80/index.php?test=1&test2=char&test3=mixesCI#some_page_ref123', 7)
+=> 'some_page_ref123'
+=== parse_url('http://secret@www.php.net:80/index.php?test=1&test2=char&test3=mixesCI#some_page_ref123', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('http://secret@www.php.net:80/index.php?test=1&test2=char&test3=mixesCI#some_page_ref123', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('http://secret:@www.php.net/index.php?test=1&test2=char&test3=mixesCI#some_page_ref123')
+=> array (
+  'scheme' => 'http',
+  'host' => 'www.php.net',
+  'user' => 'secret',
+  'pass' => '',
+  'path' => '/index.php',
+  'query' => 'test=1&test2=char&test3=mixesCI',
+  'fragment' => 'some_page_ref123',
+)
+=== parse_url('http://secret:@www.php.net/index.php?test=1&test2=char&test3=mixesCI#some_page_ref123', -2)
+=> array (
+  'scheme' => 'http',
+  'host' => 'www.php.net',
+  'user' => 'secret',
+  'pass' => '',
+  'path' => '/index.php',
+  'query' => 'test=1&test2=char&test3=mixesCI',
+  'fragment' => 'some_page_ref123',
+)
+=== parse_url('http://secret:@www.php.net/index.php?test=1&test2=char&test3=mixesCI#some_page_ref123', 0)
+=> 'http'
+=== parse_url('http://secret:@www.php.net/index.php?test=1&test2=char&test3=mixesCI#some_page_ref123', 1)
+=> 'www.php.net'
+=== parse_url('http://secret:@www.php.net/index.php?test=1&test2=char&test3=mixesCI#some_page_ref123', 2)
+=> NULL
+=== parse_url('http://secret:@www.php.net/index.php?test=1&test2=char&test3=mixesCI#some_page_ref123', 3)
+=> 'secret'
+=== parse_url('http://secret:@www.php.net/index.php?test=1&test2=char&test3=mixesCI#some_page_ref123', 4)
+=> ''
+=== parse_url('http://secret:@www.php.net/index.php?test=1&test2=char&test3=mixesCI#some_page_ref123', 5)
+=> '/index.php'
+=== parse_url('http://secret:@www.php.net/index.php?test=1&test2=char&test3=mixesCI#some_page_ref123', 6)
+=> 'test=1&test2=char&test3=mixesCI'
+=== parse_url('http://secret:@www.php.net/index.php?test=1&test2=char&test3=mixesCI#some_page_ref123', 7)
+=> 'some_page_ref123'
+=== parse_url('http://secret:@www.php.net/index.php?test=1&test2=char&test3=mixesCI#some_page_ref123', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('http://secret:@www.php.net/index.php?test=1&test2=char&test3=mixesCI#some_page_ref123', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('http://:hideout@www.php.net:80/index.php?test=1&test2=char&test3=mixesCI#some_page_ref123')
+=> array (
+  'scheme' => 'http',
+  'host' => 'www.php.net',
+  'port' => 80,
+  'user' => '',
+  'pass' => 'hideout',
+  'path' => '/index.php',
+  'query' => 'test=1&test2=char&test3=mixesCI',
+  'fragment' => 'some_page_ref123',
+)
+=== parse_url('http://:hideout@www.php.net:80/index.php?test=1&test2=char&test3=mixesCI#some_page_ref123', -2)
+=> array (
+  'scheme' => 'http',
+  'host' => 'www.php.net',
+  'port' => 80,
+  'user' => '',
+  'pass' => 'hideout',
+  'path' => '/index.php',
+  'query' => 'test=1&test2=char&test3=mixesCI',
+  'fragment' => 'some_page_ref123',
+)
+=== parse_url('http://:hideout@www.php.net:80/index.php?test=1&test2=char&test3=mixesCI#some_page_ref123', 0)
+=> 'http'
+=== parse_url('http://:hideout@www.php.net:80/index.php?test=1&test2=char&test3=mixesCI#some_page_ref123', 1)
+=> 'www.php.net'
+=== parse_url('http://:hideout@www.php.net:80/index.php?test=1&test2=char&test3=mixesCI#some_page_ref123', 2)
+=> 80
+=== parse_url('http://:hideout@www.php.net:80/index.php?test=1&test2=char&test3=mixesCI#some_page_ref123', 3)
+=> ''
+=== parse_url('http://:hideout@www.php.net:80/index.php?test=1&test2=char&test3=mixesCI#some_page_ref123', 4)
+=> 'hideout'
+=== parse_url('http://:hideout@www.php.net:80/index.php?test=1&test2=char&test3=mixesCI#some_page_ref123', 5)
+=> '/index.php'
+=== parse_url('http://:hideout@www.php.net:80/index.php?test=1&test2=char&test3=mixesCI#some_page_ref123', 6)
+=> 'test=1&test2=char&test3=mixesCI'
+=== parse_url('http://:hideout@www.php.net:80/index.php?test=1&test2=char&test3=mixesCI#some_page_ref123', 7)
+=> 'some_page_ref123'
+=== parse_url('http://:hideout@www.php.net:80/index.php?test=1&test2=char&test3=mixesCI#some_page_ref123', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('http://:hideout@www.php.net:80/index.php?test=1&test2=char&test3=mixesCI#some_page_ref123', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('http://secret:hideout@www.php.net/index.php?test=1&test2=char&test3=mixesCI#some_page_ref123')
+=> array (
+  'scheme' => 'http',
+  'host' => 'www.php.net',
+  'user' => 'secret',
+  'pass' => 'hideout',
+  'path' => '/index.php',
+  'query' => 'test=1&test2=char&test3=mixesCI',
+  'fragment' => 'some_page_ref123',
+)
+=== parse_url('http://secret:hideout@www.php.net/index.php?test=1&test2=char&test3=mixesCI#some_page_ref123', -2)
+=> array (
+  'scheme' => 'http',
+  'host' => 'www.php.net',
+  'user' => 'secret',
+  'pass' => 'hideout',
+  'path' => '/index.php',
+  'query' => 'test=1&test2=char&test3=mixesCI',
+  'fragment' => 'some_page_ref123',
+)
+=== parse_url('http://secret:hideout@www.php.net/index.php?test=1&test2=char&test3=mixesCI#some_page_ref123', 0)
+=> 'http'
+=== parse_url('http://secret:hideout@www.php.net/index.php?test=1&test2=char&test3=mixesCI#some_page_ref123', 1)
+=> 'www.php.net'
+=== parse_url('http://secret:hideout@www.php.net/index.php?test=1&test2=char&test3=mixesCI#some_page_ref123', 2)
+=> NULL
+=== parse_url('http://secret:hideout@www.php.net/index.php?test=1&test2=char&test3=mixesCI#some_page_ref123', 3)
+=> 'secret'
+=== parse_url('http://secret:hideout@www.php.net/index.php?test=1&test2=char&test3=mixesCI#some_page_ref123', 4)
+=> 'hideout'
+=== parse_url('http://secret:hideout@www.php.net/index.php?test=1&test2=char&test3=mixesCI#some_page_ref123', 5)
+=> '/index.php'
+=== parse_url('http://secret:hideout@www.php.net/index.php?test=1&test2=char&test3=mixesCI#some_page_ref123', 6)
+=> 'test=1&test2=char&test3=mixesCI'
+=== parse_url('http://secret:hideout@www.php.net/index.php?test=1&test2=char&test3=mixesCI#some_page_ref123', 7)
+=> 'some_page_ref123'
+=== parse_url('http://secret:hideout@www.php.net/index.php?test=1&test2=char&test3=mixesCI#some_page_ref123', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('http://secret:hideout@www.php.net/index.php?test=1&test2=char&test3=mixesCI#some_page_ref123', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('http://secret@hideout@www.php.net:80/index.php?test=1&test2=char&test3=mixesCI#some_page_ref123')
+=> array (
+  'scheme' => 'http',
+  'host' => 'www.php.net',
+  'port' => 80,
+  'user' => 'secret@hideout',
+  'path' => '/index.php',
+  'query' => 'test=1&test2=char&test3=mixesCI',
+  'fragment' => 'some_page_ref123',
+)
+=== parse_url('http://secret@hideout@www.php.net:80/index.php?test=1&test2=char&test3=mixesCI#some_page_ref123', -2)
+=> array (
+  'scheme' => 'http',
+  'host' => 'www.php.net',
+  'port' => 80,
+  'user' => 'secret@hideout',
+  'path' => '/index.php',
+  'query' => 'test=1&test2=char&test3=mixesCI',
+  'fragment' => 'some_page_ref123',
+)
+=== parse_url('http://secret@hideout@www.php.net:80/index.php?test=1&test2=char&test3=mixesCI#some_page_ref123', 0)
+=> 'http'
+=== parse_url('http://secret@hideout@www.php.net:80/index.php?test=1&test2=char&test3=mixesCI#some_page_ref123', 1)
+=> 'www.php.net'
+=== parse_url('http://secret@hideout@www.php.net:80/index.php?test=1&test2=char&test3=mixesCI#some_page_ref123', 2)
+=> 80
+=== parse_url('http://secret@hideout@www.php.net:80/index.php?test=1&test2=char&test3=mixesCI#some_page_ref123', 3)
+=> 'secret@hideout'
+=== parse_url('http://secret@hideout@www.php.net:80/index.php?test=1&test2=char&test3=mixesCI#some_page_ref123', 4)
+=> NULL
+=== parse_url('http://secret@hideout@www.php.net:80/index.php?test=1&test2=char&test3=mixesCI#some_page_ref123', 5)
+=> '/index.php'
+=== parse_url('http://secret@hideout@www.php.net:80/index.php?test=1&test2=char&test3=mixesCI#some_page_ref123', 6)
+=> 'test=1&test2=char&test3=mixesCI'
+=== parse_url('http://secret@hideout@www.php.net:80/index.php?test=1&test2=char&test3=mixesCI#some_page_ref123', 7)
+=> 'some_page_ref123'
+=== parse_url('http://secret@hideout@www.php.net:80/index.php?test=1&test2=char&test3=mixesCI#some_page_ref123', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('http://secret@hideout@www.php.net:80/index.php?test=1&test2=char&test3=mixesCI#some_page_ref123', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('http://secret:hid:out@www.php.net:80/index.php?test=1&test2=char&test3=mixesCI#some_page_ref123')
+=> array (
+  'scheme' => 'http',
+  'host' => 'www.php.net',
+  'port' => 80,
+  'user' => 'secret',
+  'pass' => 'hid:out',
+  'path' => '/index.php',
+  'query' => 'test=1&test2=char&test3=mixesCI',
+  'fragment' => 'some_page_ref123',
+)
+=== parse_url('http://secret:hid:out@www.php.net:80/index.php?test=1&test2=char&test3=mixesCI#some_page_ref123', -2)
+=> array (
+  'scheme' => 'http',
+  'host' => 'www.php.net',
+  'port' => 80,
+  'user' => 'secret',
+  'pass' => 'hid:out',
+  'path' => '/index.php',
+  'query' => 'test=1&test2=char&test3=mixesCI',
+  'fragment' => 'some_page_ref123',
+)
+=== parse_url('http://secret:hid:out@www.php.net:80/index.php?test=1&test2=char&test3=mixesCI#some_page_ref123', 0)
+=> 'http'
+=== parse_url('http://secret:hid:out@www.php.net:80/index.php?test=1&test2=char&test3=mixesCI#some_page_ref123', 1)
+=> 'www.php.net'
+=== parse_url('http://secret:hid:out@www.php.net:80/index.php?test=1&test2=char&test3=mixesCI#some_page_ref123', 2)
+=> 80
+=== parse_url('http://secret:hid:out@www.php.net:80/index.php?test=1&test2=char&test3=mixesCI#some_page_ref123', 3)
+=> 'secret'
+=== parse_url('http://secret:hid:out@www.php.net:80/index.php?test=1&test2=char&test3=mixesCI#some_page_ref123', 4)
+=> 'hid:out'
+=== parse_url('http://secret:hid:out@www.php.net:80/index.php?test=1&test2=char&test3=mixesCI#some_page_ref123', 5)
+=> '/index.php'
+=== parse_url('http://secret:hid:out@www.php.net:80/index.php?test=1&test2=char&test3=mixesCI#some_page_ref123', 6)
+=> 'test=1&test2=char&test3=mixesCI'
+=== parse_url('http://secret:hid:out@www.php.net:80/index.php?test=1&test2=char&test3=mixesCI#some_page_ref123', 7)
+=> 'some_page_ref123'
+=== parse_url('http://secret:hid:out@www.php.net:80/index.php?test=1&test2=char&test3=mixesCI#some_page_ref123', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('http://secret:hid:out@www.php.net:80/index.php?test=1&test2=char&test3=mixesCI#some_page_ref123', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('nntp://news.php.net')
+=> array (
+  'scheme' => 'nntp',
+  'host' => 'news.php.net',
+)
+=== parse_url('nntp://news.php.net', -2)
+=> array (
+  'scheme' => 'nntp',
+  'host' => 'news.php.net',
+)
+=== parse_url('nntp://news.php.net', 0)
+=> 'nntp'
+=== parse_url('nntp://news.php.net', 1)
+=> 'news.php.net'
+=== parse_url('nntp://news.php.net', 2)
+=> NULL
+=== parse_url('nntp://news.php.net', 3)
+=> NULL
+=== parse_url('nntp://news.php.net', 4)
+=> NULL
+=== parse_url('nntp://news.php.net', 5)
+=> NULL
+=== parse_url('nntp://news.php.net', 6)
+=> NULL
+=== parse_url('nntp://news.php.net', 7)
+=> NULL
+=== parse_url('nntp://news.php.net', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('nntp://news.php.net', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('ftp://ftp.gnu.org/gnu/glic/glibc.tar.gz')
+=> array (
+  'scheme' => 'ftp',
+  'host' => 'ftp.gnu.org',
+  'path' => '/gnu/glic/glibc.tar.gz',
+)
+=== parse_url('ftp://ftp.gnu.org/gnu/glic/glibc.tar.gz', -2)
+=> array (
+  'scheme' => 'ftp',
+  'host' => 'ftp.gnu.org',
+  'path' => '/gnu/glic/glibc.tar.gz',
+)
+=== parse_url('ftp://ftp.gnu.org/gnu/glic/glibc.tar.gz', 0)
+=> 'ftp'
+=== parse_url('ftp://ftp.gnu.org/gnu/glic/glibc.tar.gz', 1)
+=> 'ftp.gnu.org'
+=== parse_url('ftp://ftp.gnu.org/gnu/glic/glibc.tar.gz', 2)
+=> NULL
+=== parse_url('ftp://ftp.gnu.org/gnu/glic/glibc.tar.gz', 3)
+=> NULL
+=== parse_url('ftp://ftp.gnu.org/gnu/glic/glibc.tar.gz', 4)
+=> NULL
+=== parse_url('ftp://ftp.gnu.org/gnu/glic/glibc.tar.gz', 5)
+=> '/gnu/glic/glibc.tar.gz'
+=== parse_url('ftp://ftp.gnu.org/gnu/glic/glibc.tar.gz', 6)
+=> NULL
+=== parse_url('ftp://ftp.gnu.org/gnu/glic/glibc.tar.gz', 7)
+=> NULL
+=== parse_url('ftp://ftp.gnu.org/gnu/glic/glibc.tar.gz', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('ftp://ftp.gnu.org/gnu/glic/glibc.tar.gz', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('zlib:http://foo@bar')
+=> array (
+  'scheme' => 'zlib',
+  'path' => 'http://foo@bar',
+)
+=== parse_url('zlib:http://foo@bar', -2)
+=> array (
+  'scheme' => 'zlib',
+  'path' => 'http://foo@bar',
+)
+=== parse_url('zlib:http://foo@bar', 0)
+=> 'zlib'
+=== parse_url('zlib:http://foo@bar', 1)
+=> NULL
+=== parse_url('zlib:http://foo@bar', 2)
+=> NULL
+=== parse_url('zlib:http://foo@bar', 3)
+=> NULL
+=== parse_url('zlib:http://foo@bar', 4)
+=> NULL
+=== parse_url('zlib:http://foo@bar', 5)
+=> 'http://foo@bar'
+=== parse_url('zlib:http://foo@bar', 6)
+=> NULL
+=== parse_url('zlib:http://foo@bar', 7)
+=> NULL
+=== parse_url('zlib:http://foo@bar', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('zlib:http://foo@bar', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('zlib:filename.txt')
+=> array (
+  'scheme' => 'zlib',
+  'path' => 'filename.txt',
+)
+=== parse_url('zlib:filename.txt', -2)
+=> array (
+  'scheme' => 'zlib',
+  'path' => 'filename.txt',
+)
+=== parse_url('zlib:filename.txt', 0)
+=> 'zlib'
+=== parse_url('zlib:filename.txt', 1)
+=> NULL
+=== parse_url('zlib:filename.txt', 2)
+=> NULL
+=== parse_url('zlib:filename.txt', 3)
+=> NULL
+=== parse_url('zlib:filename.txt', 4)
+=> NULL
+=== parse_url('zlib:filename.txt', 5)
+=> 'filename.txt'
+=== parse_url('zlib:filename.txt', 6)
+=> NULL
+=== parse_url('zlib:filename.txt', 7)
+=> NULL
+=== parse_url('zlib:filename.txt', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('zlib:filename.txt', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('zlib:/path/to/my/file/file.txt')
+=> array (
+  'scheme' => 'zlib',
+  'path' => '/path/to/my/file/file.txt',
+)
+=== parse_url('zlib:/path/to/my/file/file.txt', -2)
+=> array (
+  'scheme' => 'zlib',
+  'path' => '/path/to/my/file/file.txt',
+)
+=== parse_url('zlib:/path/to/my/file/file.txt', 0)
+=> 'zlib'
+=== parse_url('zlib:/path/to/my/file/file.txt', 1)
+=> NULL
+=== parse_url('zlib:/path/to/my/file/file.txt', 2)
+=> NULL
+=== parse_url('zlib:/path/to/my/file/file.txt', 3)
+=> NULL
+=== parse_url('zlib:/path/to/my/file/file.txt', 4)
+=> NULL
+=== parse_url('zlib:/path/to/my/file/file.txt', 5)
+=> '/path/to/my/file/file.txt'
+=== parse_url('zlib:/path/to/my/file/file.txt', 6)
+=> NULL
+=== parse_url('zlib:/path/to/my/file/file.txt', 7)
+=> NULL
+=== parse_url('zlib:/path/to/my/file/file.txt', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('zlib:/path/to/my/file/file.txt', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('foo://foo@bar')
+=> array (
+  'scheme' => 'foo',
+  'host' => 'bar',
+  'user' => 'foo',
+)
+=== parse_url('foo://foo@bar', -2)
+=> array (
+  'scheme' => 'foo',
+  'host' => 'bar',
+  'user' => 'foo',
+)
+=== parse_url('foo://foo@bar', 0)
+=> 'foo'
+=== parse_url('foo://foo@bar', 1)
+=> 'bar'
+=== parse_url('foo://foo@bar', 2)
+=> NULL
+=== parse_url('foo://foo@bar', 3)
+=> 'foo'
+=== parse_url('foo://foo@bar', 4)
+=> NULL
+=== parse_url('foo://foo@bar', 5)
+=> NULL
+=== parse_url('foo://foo@bar', 6)
+=> NULL
+=== parse_url('foo://foo@bar', 7)
+=> NULL
+=== parse_url('foo://foo@bar', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('foo://foo@bar', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('mailto:me@mydomain.com')
+=> array (
+  'scheme' => 'mailto',
+  'path' => 'me@mydomain.com',
+)
+=== parse_url('mailto:me@mydomain.com', -2)
+=> array (
+  'scheme' => 'mailto',
+  'path' => 'me@mydomain.com',
+)
+=== parse_url('mailto:me@mydomain.com', 0)
+=> 'mailto'
+=== parse_url('mailto:me@mydomain.com', 1)
+=> NULL
+=== parse_url('mailto:me@mydomain.com', 2)
+=> NULL
+=== parse_url('mailto:me@mydomain.com', 3)
+=> NULL
+=== parse_url('mailto:me@mydomain.com', 4)
+=> NULL
+=== parse_url('mailto:me@mydomain.com', 5)
+=> 'me@mydomain.com'
+=== parse_url('mailto:me@mydomain.com', 6)
+=> NULL
+=== parse_url('mailto:me@mydomain.com', 7)
+=> NULL
+=== parse_url('mailto:me@mydomain.com', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('mailto:me@mydomain.com', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('/foo.php?a=b&c=d')
+=> array (
+  'path' => '/foo.php',
+  'query' => 'a=b&c=d',
+)
+=== parse_url('/foo.php?a=b&c=d', -2)
+=> array (
+  'path' => '/foo.php',
+  'query' => 'a=b&c=d',
+)
+=== parse_url('/foo.php?a=b&c=d', 0)
+=> NULL
+=== parse_url('/foo.php?a=b&c=d', 1)
+=> NULL
+=== parse_url('/foo.php?a=b&c=d', 2)
+=> NULL
+=== parse_url('/foo.php?a=b&c=d', 3)
+=> NULL
+=== parse_url('/foo.php?a=b&c=d', 4)
+=> NULL
+=== parse_url('/foo.php?a=b&c=d', 5)
+=> '/foo.php'
+=== parse_url('/foo.php?a=b&c=d', 6)
+=> 'a=b&c=d'
+=== parse_url('/foo.php?a=b&c=d', 7)
+=> NULL
+=== parse_url('/foo.php?a=b&c=d', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('/foo.php?a=b&c=d', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('foo.php?a=b&c=d')
+=> array (
+  'path' => 'foo.php',
+  'query' => 'a=b&c=d',
+)
+=== parse_url('foo.php?a=b&c=d', -2)
+=> array (
+  'path' => 'foo.php',
+  'query' => 'a=b&c=d',
+)
+=== parse_url('foo.php?a=b&c=d', 0)
+=> NULL
+=== parse_url('foo.php?a=b&c=d', 1)
+=> NULL
+=== parse_url('foo.php?a=b&c=d', 2)
+=> NULL
+=== parse_url('foo.php?a=b&c=d', 3)
+=> NULL
+=== parse_url('foo.php?a=b&c=d', 4)
+=> NULL
+=== parse_url('foo.php?a=b&c=d', 5)
+=> 'foo.php'
+=== parse_url('foo.php?a=b&c=d', 6)
+=> 'a=b&c=d'
+=== parse_url('foo.php?a=b&c=d', 7)
+=> NULL
+=== parse_url('foo.php?a=b&c=d', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('foo.php?a=b&c=d', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('http://user:passwd@www.example.com:8080?bar=1&boom=0')
+=> array (
+  'scheme' => 'http',
+  'host' => 'www.example.com',
+  'port' => 8080,
+  'user' => 'user',
+  'pass' => 'passwd',
+  'query' => 'bar=1&boom=0',
+)
+=== parse_url('http://user:passwd@www.example.com:8080?bar=1&boom=0', -2)
+=> array (
+  'scheme' => 'http',
+  'host' => 'www.example.com',
+  'port' => 8080,
+  'user' => 'user',
+  'pass' => 'passwd',
+  'query' => 'bar=1&boom=0',
+)
+=== parse_url('http://user:passwd@www.example.com:8080?bar=1&boom=0', 0)
+=> 'http'
+=== parse_url('http://user:passwd@www.example.com:8080?bar=1&boom=0', 1)
+=> 'www.example.com'
+=== parse_url('http://user:passwd@www.example.com:8080?bar=1&boom=0', 2)
+=> 8080
+=== parse_url('http://user:passwd@www.example.com:8080?bar=1&boom=0', 3)
+=> 'user'
+=== parse_url('http://user:passwd@www.example.com:8080?bar=1&boom=0', 4)
+=> 'passwd'
+=== parse_url('http://user:passwd@www.example.com:8080?bar=1&boom=0', 5)
+=> NULL
+=== parse_url('http://user:passwd@www.example.com:8080?bar=1&boom=0', 6)
+=> 'bar=1&boom=0'
+=== parse_url('http://user:passwd@www.example.com:8080?bar=1&boom=0', 7)
+=> NULL
+=== parse_url('http://user:passwd@www.example.com:8080?bar=1&boom=0', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('http://user:passwd@www.example.com:8080?bar=1&boom=0', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('http://user_me-you:my_pas-word@www.example.com:8080?bar=1&boom=0')
+=> array (
+  'scheme' => 'http',
+  'host' => 'www.example.com',
+  'port' => 8080,
+  'user' => 'user_me-you',
+  'pass' => 'my_pas-word',
+  'query' => 'bar=1&boom=0',
+)
+=== parse_url('http://user_me-you:my_pas-word@www.example.com:8080?bar=1&boom=0', -2)
+=> array (
+  'scheme' => 'http',
+  'host' => 'www.example.com',
+  'port' => 8080,
+  'user' => 'user_me-you',
+  'pass' => 'my_pas-word',
+  'query' => 'bar=1&boom=0',
+)
+=== parse_url('http://user_me-you:my_pas-word@www.example.com:8080?bar=1&boom=0', 0)
+=> 'http'
+=== parse_url('http://user_me-you:my_pas-word@www.example.com:8080?bar=1&boom=0', 1)
+=> 'www.example.com'
+=== parse_url('http://user_me-you:my_pas-word@www.example.com:8080?bar=1&boom=0', 2)
+=> 8080
+=== parse_url('http://user_me-you:my_pas-word@www.example.com:8080?bar=1&boom=0', 3)
+=> 'user_me-you'
+=== parse_url('http://user_me-you:my_pas-word@www.example.com:8080?bar=1&boom=0', 4)
+=> 'my_pas-word'
+=== parse_url('http://user_me-you:my_pas-word@www.example.com:8080?bar=1&boom=0', 5)
+=> NULL
+=== parse_url('http://user_me-you:my_pas-word@www.example.com:8080?bar=1&boom=0', 6)
+=> 'bar=1&boom=0'
+=== parse_url('http://user_me-you:my_pas-word@www.example.com:8080?bar=1&boom=0', 7)
+=> NULL
+=== parse_url('http://user_me-you:my_pas-word@www.example.com:8080?bar=1&boom=0', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('http://user_me-you:my_pas-word@www.example.com:8080?bar=1&boom=0', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('file:///path/to/file')
+=> array (
+  'scheme' => 'file',
+  'path' => '/path/to/file',
+)
+=== parse_url('file:///path/to/file', -2)
+=> array (
+  'scheme' => 'file',
+  'path' => '/path/to/file',
+)
+=== parse_url('file:///path/to/file', 0)
+=> 'file'
+=== parse_url('file:///path/to/file', 1)
+=> NULL
+=== parse_url('file:///path/to/file', 2)
+=> NULL
+=== parse_url('file:///path/to/file', 3)
+=> NULL
+=== parse_url('file:///path/to/file', 4)
+=> NULL
+=== parse_url('file:///path/to/file', 5)
+=> '/path/to/file'
+=== parse_url('file:///path/to/file', 6)
+=> NULL
+=== parse_url('file:///path/to/file', 7)
+=> NULL
+=== parse_url('file:///path/to/file', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('file:///path/to/file', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('file://path/to/file')
+=> array (
+  'scheme' => 'file',
+  'host' => 'path',
+  'path' => '/to/file',
+)
+=== parse_url('file://path/to/file', -2)
+=> array (
+  'scheme' => 'file',
+  'host' => 'path',
+  'path' => '/to/file',
+)
+=== parse_url('file://path/to/file', 0)
+=> 'file'
+=== parse_url('file://path/to/file', 1)
+=> 'path'
+=== parse_url('file://path/to/file', 2)
+=> NULL
+=== parse_url('file://path/to/file', 3)
+=> NULL
+=== parse_url('file://path/to/file', 4)
+=> NULL
+=== parse_url('file://path/to/file', 5)
+=> '/to/file'
+=== parse_url('file://path/to/file', 6)
+=> NULL
+=== parse_url('file://path/to/file', 7)
+=> NULL
+=== parse_url('file://path/to/file', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('file://path/to/file', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('file:/path/to/file')
+=> array (
+  'scheme' => 'file',
+  'path' => '/path/to/file',
+)
+=== parse_url('file:/path/to/file', -2)
+=> array (
+  'scheme' => 'file',
+  'path' => '/path/to/file',
+)
+=== parse_url('file:/path/to/file', 0)
+=> 'file'
+=== parse_url('file:/path/to/file', 1)
+=> NULL
+=== parse_url('file:/path/to/file', 2)
+=> NULL
+=== parse_url('file:/path/to/file', 3)
+=> NULL
+=== parse_url('file:/path/to/file', 4)
+=> NULL
+=== parse_url('file:/path/to/file', 5)
+=> '/path/to/file'
+=== parse_url('file:/path/to/file', 6)
+=> NULL
+=== parse_url('file:/path/to/file', 7)
+=> NULL
+=== parse_url('file:/path/to/file', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('file:/path/to/file', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('http://1.2.3.4:/abc.asp?a=1&b=2')
+=> array (
+  'scheme' => 'http',
+  'host' => '1.2.3.4',
+  'path' => '/abc.asp',
+  'query' => 'a=1&b=2',
+)
+=== parse_url('http://1.2.3.4:/abc.asp?a=1&b=2', -2)
+=> array (
+  'scheme' => 'http',
+  'host' => '1.2.3.4',
+  'path' => '/abc.asp',
+  'query' => 'a=1&b=2',
+)
+=== parse_url('http://1.2.3.4:/abc.asp?a=1&b=2', 0)
+=> 'http'
+=== parse_url('http://1.2.3.4:/abc.asp?a=1&b=2', 1)
+=> '1.2.3.4'
+=== parse_url('http://1.2.3.4:/abc.asp?a=1&b=2', 2)
+=> NULL
+=== parse_url('http://1.2.3.4:/abc.asp?a=1&b=2', 3)
+=> NULL
+=== parse_url('http://1.2.3.4:/abc.asp?a=1&b=2', 4)
+=> NULL
+=== parse_url('http://1.2.3.4:/abc.asp?a=1&b=2', 5)
+=> '/abc.asp'
+=== parse_url('http://1.2.3.4:/abc.asp?a=1&b=2', 6)
+=> 'a=1&b=2'
+=== parse_url('http://1.2.3.4:/abc.asp?a=1&b=2', 7)
+=> NULL
+=== parse_url('http://1.2.3.4:/abc.asp?a=1&b=2', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('http://1.2.3.4:/abc.asp?a=1&b=2', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('http://foo.com#bar')
+=> array (
+  'scheme' => 'http',
+  'host' => 'foo.com',
+  'fragment' => 'bar',
+)
+=== parse_url('http://foo.com#bar', -2)
+=> array (
+  'scheme' => 'http',
+  'host' => 'foo.com',
+  'fragment' => 'bar',
+)
+=== parse_url('http://foo.com#bar', 0)
+=> 'http'
+=== parse_url('http://foo.com#bar', 1)
+=> 'foo.com'
+=== parse_url('http://foo.com#bar', 2)
+=> NULL
+=== parse_url('http://foo.com#bar', 3)
+=> NULL
+=== parse_url('http://foo.com#bar', 4)
+=> NULL
+=== parse_url('http://foo.com#bar', 5)
+=> NULL
+=== parse_url('http://foo.com#bar', 6)
+=> NULL
+=== parse_url('http://foo.com#bar', 7)
+=> 'bar'
+=== parse_url('http://foo.com#bar', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('http://foo.com#bar', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('scheme:')
+=> array (
+  'scheme' => 'scheme',
+)
+=== parse_url('scheme:', -2)
+=> array (
+  'scheme' => 'scheme',
+)
+=== parse_url('scheme:', 0)
+=> 'scheme'
+=== parse_url('scheme:', 1)
+=> NULL
+=== parse_url('scheme:', 2)
+=> NULL
+=== parse_url('scheme:', 3)
+=> NULL
+=== parse_url('scheme:', 4)
+=> NULL
+=== parse_url('scheme:', 5)
+=> NULL
+=== parse_url('scheme:', 6)
+=> NULL
+=== parse_url('scheme:', 7)
+=> NULL
+=== parse_url('scheme:', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('scheme:', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('foo+bar://baz@bang/bla')
+=> array (
+  'scheme' => 'foo+bar',
+  'host' => 'bang',
+  'user' => 'baz',
+  'path' => '/bla',
+)
+=== parse_url('foo+bar://baz@bang/bla', -2)
+=> array (
+  'scheme' => 'foo+bar',
+  'host' => 'bang',
+  'user' => 'baz',
+  'path' => '/bla',
+)
+=== parse_url('foo+bar://baz@bang/bla', 0)
+=> 'foo+bar'
+=== parse_url('foo+bar://baz@bang/bla', 1)
+=> 'bang'
+=== parse_url('foo+bar://baz@bang/bla', 2)
+=> NULL
+=== parse_url('foo+bar://baz@bang/bla', 3)
+=> 'baz'
+=== parse_url('foo+bar://baz@bang/bla', 4)
+=> NULL
+=== parse_url('foo+bar://baz@bang/bla', 5)
+=> '/bla'
+=== parse_url('foo+bar://baz@bang/bla', 6)
+=> NULL
+=== parse_url('foo+bar://baz@bang/bla', 7)
+=> NULL
+=== parse_url('foo+bar://baz@bang/bla', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('foo+bar://baz@bang/bla', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('gg:9130731')
+=> array (
+  'scheme' => 'gg',
+  'path' => '9130731',
+)
+=== parse_url('gg:9130731', -2)
+=> array (
+  'scheme' => 'gg',
+  'path' => '9130731',
+)
+=== parse_url('gg:9130731', 0)
+=> 'gg'
+=== parse_url('gg:9130731', 1)
+=> NULL
+=== parse_url('gg:9130731', 2)
+=> NULL
+=== parse_url('gg:9130731', 3)
+=> NULL
+=== parse_url('gg:9130731', 4)
+=> NULL
+=== parse_url('gg:9130731', 5)
+=> '9130731'
+=== parse_url('gg:9130731', 6)
+=> NULL
+=== parse_url('gg:9130731', 7)
+=> NULL
+=== parse_url('gg:9130731', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('gg:9130731', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('http://user:@pass@host/path?argument?value#etc')
+=> array (
+  'scheme' => 'http',
+  'host' => 'host',
+  'user' => 'user',
+  'pass' => '@pass',
+  'path' => '/path',
+  'query' => 'argument?value',
+  'fragment' => 'etc',
+)
+=== parse_url('http://user:@pass@host/path?argument?value#etc', -2)
+=> array (
+  'scheme' => 'http',
+  'host' => 'host',
+  'user' => 'user',
+  'pass' => '@pass',
+  'path' => '/path',
+  'query' => 'argument?value',
+  'fragment' => 'etc',
+)
+=== parse_url('http://user:@pass@host/path?argument?value#etc', 0)
+=> 'http'
+=== parse_url('http://user:@pass@host/path?argument?value#etc', 1)
+=> 'host'
+=== parse_url('http://user:@pass@host/path?argument?value#etc', 2)
+=> NULL
+=== parse_url('http://user:@pass@host/path?argument?value#etc', 3)
+=> 'user'
+=== parse_url('http://user:@pass@host/path?argument?value#etc', 4)
+=> '@pass'
+=== parse_url('http://user:@pass@host/path?argument?value#etc', 5)
+=> '/path'
+=== parse_url('http://user:@pass@host/path?argument?value#etc', 6)
+=> 'argument?value'
+=== parse_url('http://user:@pass@host/path?argument?value#etc', 7)
+=> 'etc'
+=== parse_url('http://user:@pass@host/path?argument?value#etc', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('http://user:@pass@host/path?argument?value#etc', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('http://10.10.10.10/:80')
+=> array (
+  'scheme' => 'http',
+  'host' => '10.10.10.10',
+  'path' => '/:80',
+)
+=== parse_url('http://10.10.10.10/:80', -2)
+=> array (
+  'scheme' => 'http',
+  'host' => '10.10.10.10',
+  'path' => '/:80',
+)
+=== parse_url('http://10.10.10.10/:80', 0)
+=> 'http'
+=== parse_url('http://10.10.10.10/:80', 1)
+=> '10.10.10.10'
+=== parse_url('http://10.10.10.10/:80', 2)
+=> NULL
+=== parse_url('http://10.10.10.10/:80', 3)
+=> NULL
+=== parse_url('http://10.10.10.10/:80', 4)
+=> NULL
+=== parse_url('http://10.10.10.10/:80', 5)
+=> '/:80'
+=== parse_url('http://10.10.10.10/:80', 6)
+=> NULL
+=== parse_url('http://10.10.10.10/:80', 7)
+=> NULL
+=== parse_url('http://10.10.10.10/:80', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('http://10.10.10.10/:80', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('http://x:?')
+=> array (
+  'scheme' => 'http',
+  'host' => 'x',
+  'query' => '',
+)
+=== parse_url('http://x:?', -2)
+=> array (
+  'scheme' => 'http',
+  'host' => 'x',
+  'query' => '',
+)
+=== parse_url('http://x:?', 0)
+=> 'http'
+=== parse_url('http://x:?', 1)
+=> 'x'
+=== parse_url('http://x:?', 2)
+=> NULL
+=== parse_url('http://x:?', 3)
+=> NULL
+=== parse_url('http://x:?', 4)
+=> NULL
+=== parse_url('http://x:?', 5)
+=> NULL
+=== parse_url('http://x:?', 6)
+=> ''
+=== parse_url('http://x:?', 7)
+=> NULL
+=== parse_url('http://x:?', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('http://x:?', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('x:blah.com')
+=> array (
+  'scheme' => 'x',
+  'path' => 'blah.com',
+)
+=== parse_url('x:blah.com', -2)
+=> array (
+  'scheme' => 'x',
+  'path' => 'blah.com',
+)
+=== parse_url('x:blah.com', 0)
+=> 'x'
+=== parse_url('x:blah.com', 1)
+=> NULL
+=== parse_url('x:blah.com', 2)
+=> NULL
+=== parse_url('x:blah.com', 3)
+=> NULL
+=== parse_url('x:blah.com', 4)
+=> NULL
+=== parse_url('x:blah.com', 5)
+=> 'blah.com'
+=== parse_url('x:blah.com', 6)
+=> NULL
+=== parse_url('x:blah.com', 7)
+=> NULL
+=== parse_url('x:blah.com', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('x:blah.com', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('x:/blah.com')
+=> array (
+  'scheme' => 'x',
+  'path' => '/blah.com',
+)
+=== parse_url('x:/blah.com', -2)
+=> array (
+  'scheme' => 'x',
+  'path' => '/blah.com',
+)
+=== parse_url('x:/blah.com', 0)
+=> 'x'
+=== parse_url('x:/blah.com', 1)
+=> NULL
+=== parse_url('x:/blah.com', 2)
+=> NULL
+=== parse_url('x:/blah.com', 3)
+=> NULL
+=== parse_url('x:/blah.com', 4)
+=> NULL
+=== parse_url('x:/blah.com', 5)
+=> '/blah.com'
+=== parse_url('x:/blah.com', 6)
+=> NULL
+=== parse_url('x:/blah.com', 7)
+=> NULL
+=== parse_url('x:/blah.com', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('x:/blah.com', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('x://::abc/?')
+=> false
+=== parse_url('x://::abc/?', -2)
+=> false
+=== parse_url('x://::abc/?', 0)
+=> false
+=== parse_url('x://::abc/?', 1)
+=> false
+=== parse_url('x://::abc/?', 2)
+=> false
+=== parse_url('x://::abc/?', 3)
+=> false
+=== parse_url('x://::abc/?', 4)
+=> false
+=== parse_url('x://::abc/?', 5)
+=> false
+=== parse_url('x://::abc/?', 6)
+=> false
+=== parse_url('x://::abc/?', 7)
+=> false
+=== parse_url('x://::abc/?', 8)
+=> false
+=== parse_url('x://::abc/?', 99)
+=> false
+=== parse_url('http://::?')
+=> array (
+  'scheme' => 'http',
+  'host' => ':',
+  'query' => '',
+)
+=== parse_url('http://::?', -2)
+=> array (
+  'scheme' => 'http',
+  'host' => ':',
+  'query' => '',
+)
+=== parse_url('http://::?', 0)
+=> 'http'
+=== parse_url('http://::?', 1)
+=> ':'
+=== parse_url('http://::?', 2)
+=> NULL
+=== parse_url('http://::?', 3)
+=> NULL
+=== parse_url('http://::?', 4)
+=> NULL
+=== parse_url('http://::?', 5)
+=> NULL
+=== parse_url('http://::?', 6)
+=> ''
+=== parse_url('http://::?', 7)
+=> NULL
+=== parse_url('http://::?', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('http://::?', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('http://::#')
+=> array (
+  'scheme' => 'http',
+  'host' => ':',
+  'fragment' => '',
+)
+=== parse_url('http://::#', -2)
+=> array (
+  'scheme' => 'http',
+  'host' => ':',
+  'fragment' => '',
+)
+=== parse_url('http://::#', 0)
+=> 'http'
+=== parse_url('http://::#', 1)
+=> ':'
+=== parse_url('http://::#', 2)
+=> NULL
+=== parse_url('http://::#', 3)
+=> NULL
+=== parse_url('http://::#', 4)
+=> NULL
+=== parse_url('http://::#', 5)
+=> NULL
+=== parse_url('http://::#', 6)
+=> NULL
+=== parse_url('http://::#', 7)
+=> ''
+=== parse_url('http://::#', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('http://::#', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('x://::6.5')
+=> array (
+  'scheme' => 'x',
+  'host' => ':',
+  'port' => 6,
+)
+=== parse_url('x://::6.5', -2)
+=> array (
+  'scheme' => 'x',
+  'host' => ':',
+  'port' => 6,
+)
+=== parse_url('x://::6.5', 0)
+=> 'x'
+=== parse_url('x://::6.5', 1)
+=> ':'
+=== parse_url('x://::6.5', 2)
+=> 6
+=== parse_url('x://::6.5', 3)
+=> NULL
+=== parse_url('x://::6.5', 4)
+=> NULL
+=== parse_url('x://::6.5', 5)
+=> NULL
+=== parse_url('x://::6.5', 6)
+=> NULL
+=== parse_url('x://::6.5', 7)
+=> NULL
+=== parse_url('x://::6.5', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('x://::6.5', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('http://?:/')
+=> false
+=== parse_url('http://?:/', -2)
+=> false
+=== parse_url('http://?:/', 0)
+=> false
+=== parse_url('http://?:/', 1)
+=> false
+=== parse_url('http://?:/', 2)
+=> false
+=== parse_url('http://?:/', 3)
+=> false
+=== parse_url('http://?:/', 4)
+=> false
+=== parse_url('http://?:/', 5)
+=> false
+=== parse_url('http://?:/', 6)
+=> false
+=== parse_url('http://?:/', 7)
+=> false
+=== parse_url('http://?:/', 8)
+=> false
+=== parse_url('http://?:/', 99)
+=> false
+=== parse_url('http://@?:/')
+=> false
+=== parse_url('http://@?:/', -2)
+=> false
+=== parse_url('http://@?:/', 0)
+=> false
+=== parse_url('http://@?:/', 1)
+=> false
+=== parse_url('http://@?:/', 2)
+=> false
+=== parse_url('http://@?:/', 3)
+=> false
+=== parse_url('http://@?:/', 4)
+=> false
+=== parse_url('http://@?:/', 5)
+=> false
+=== parse_url('http://@?:/', 6)
+=> false
+=== parse_url('http://@?:/', 7)
+=> false
+=== parse_url('http://@?:/', 8)
+=> false
+=== parse_url('http://@?:/', 99)
+=> false
+=== parse_url('file:///:')
+=> array (
+  'scheme' => 'file',
+  'path' => '/:',
+)
+=== parse_url('file:///:', -2)
+=> array (
+  'scheme' => 'file',
+  'path' => '/:',
+)
+=== parse_url('file:///:', 0)
+=> 'file'
+=== parse_url('file:///:', 1)
+=> NULL
+=== parse_url('file:///:', 2)
+=> NULL
+=== parse_url('file:///:', 3)
+=> NULL
+=== parse_url('file:///:', 4)
+=> NULL
+=== parse_url('file:///:', 5)
+=> '/:'
+=== parse_url('file:///:', 6)
+=> NULL
+=== parse_url('file:///:', 7)
+=> NULL
+=== parse_url('file:///:', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('file:///:', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('file:///a:/')
+=> array (
+  'scheme' => 'file',
+  'path' => 'a:/',
+)
+=== parse_url('file:///a:/', -2)
+=> array (
+  'scheme' => 'file',
+  'path' => 'a:/',
+)
+=== parse_url('file:///a:/', 0)
+=> 'file'
+=== parse_url('file:///a:/', 1)
+=> NULL
+=== parse_url('file:///a:/', 2)
+=> NULL
+=== parse_url('file:///a:/', 3)
+=> NULL
+=== parse_url('file:///a:/', 4)
+=> NULL
+=== parse_url('file:///a:/', 5)
+=> 'a:/'
+=== parse_url('file:///a:/', 6)
+=> NULL
+=== parse_url('file:///a:/', 7)
+=> NULL
+=== parse_url('file:///a:/', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('file:///a:/', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('file:///ab:/')
+=> array (
+  'scheme' => 'file',
+  'path' => '/ab:/',
+)
+=== parse_url('file:///ab:/', -2)
+=> array (
+  'scheme' => 'file',
+  'path' => '/ab:/',
+)
+=== parse_url('file:///ab:/', 0)
+=> 'file'
+=== parse_url('file:///ab:/', 1)
+=> NULL
+=== parse_url('file:///ab:/', 2)
+=> NULL
+=== parse_url('file:///ab:/', 3)
+=> NULL
+=== parse_url('file:///ab:/', 4)
+=> NULL
+=== parse_url('file:///ab:/', 5)
+=> '/ab:/'
+=== parse_url('file:///ab:/', 6)
+=> NULL
+=== parse_url('file:///ab:/', 7)
+=> NULL
+=== parse_url('file:///ab:/', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('file:///ab:/', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('file:///@:/')
+=> array (
+  'scheme' => 'file',
+  'path' => '@:/',
+)
+=== parse_url('file:///@:/', -2)
+=> array (
+  'scheme' => 'file',
+  'path' => '@:/',
+)
+=== parse_url('file:///@:/', 0)
+=> 'file'
+=== parse_url('file:///@:/', 1)
+=> NULL
+=== parse_url('file:///@:/', 2)
+=> NULL
+=== parse_url('file:///@:/', 3)
+=> NULL
+=== parse_url('file:///@:/', 4)
+=> NULL
+=== parse_url('file:///@:/', 5)
+=> '@:/'
+=== parse_url('file:///@:/', 6)
+=> NULL
+=== parse_url('file:///@:/', 7)
+=> NULL
+=== parse_url('file:///@:/', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('file:///@:/', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('file:///:80/')
+=> array (
+  'scheme' => 'file',
+  'path' => '/:80/',
+)
+=== parse_url('file:///:80/', -2)
+=> array (
+  'scheme' => 'file',
+  'path' => '/:80/',
+)
+=== parse_url('file:///:80/', 0)
+=> 'file'
+=== parse_url('file:///:80/', 1)
+=> NULL
+=== parse_url('file:///:80/', 2)
+=> NULL
+=== parse_url('file:///:80/', 3)
+=> NULL
+=== parse_url('file:///:80/', 4)
+=> NULL
+=== parse_url('file:///:80/', 5)
+=> '/:80/'
+=== parse_url('file:///:80/', 6)
+=> NULL
+=== parse_url('file:///:80/', 7)
+=> NULL
+=== parse_url('file:///:80/', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('file:///:80/', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('[]')
+=> array (
+  'path' => '[]',
+)
+=== parse_url('[]', -2)
+=> array (
+  'path' => '[]',
+)
+=== parse_url('[]', 0)
+=> NULL
+=== parse_url('[]', 1)
+=> NULL
+=== parse_url('[]', 2)
+=> NULL
+=== parse_url('[]', 3)
+=> NULL
+=== parse_url('[]', 4)
+=> NULL
+=== parse_url('[]', 5)
+=> '[]'
+=== parse_url('[]', 6)
+=> NULL
+=== parse_url('[]', 7)
+=> NULL
+=== parse_url('[]', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('[]', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('http://[x:80]/')
+=> array (
+  'scheme' => 'http',
+  'host' => '[x:80]',
+  'path' => '/',
+)
+=== parse_url('http://[x:80]/', -2)
+=> array (
+  'scheme' => 'http',
+  'host' => '[x:80]',
+  'path' => '/',
+)
+=== parse_url('http://[x:80]/', 0)
+=> 'http'
+=== parse_url('http://[x:80]/', 1)
+=> '[x:80]'
+=== parse_url('http://[x:80]/', 2)
+=> NULL
+=== parse_url('http://[x:80]/', 3)
+=> NULL
+=== parse_url('http://[x:80]/', 4)
+=> NULL
+=== parse_url('http://[x:80]/', 5)
+=> '/'
+=== parse_url('http://[x:80]/', 6)
+=> NULL
+=== parse_url('http://[x:80]/', 7)
+=> NULL
+=== parse_url('http://[x:80]/', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('http://[x:80]/', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('')
+=> array (
+  'path' => '',
+)
+=== parse_url('', -2)
+=> array (
+  'path' => '',
+)
+=== parse_url('', 0)
+=> NULL
+=== parse_url('', 1)
+=> NULL
+=== parse_url('', 2)
+=> NULL
+=== parse_url('', 3)
+=> NULL
+=== parse_url('', 4)
+=> NULL
+=== parse_url('', 5)
+=> ''
+=== parse_url('', 6)
+=> NULL
+=== parse_url('', 7)
+=> NULL
+=== parse_url('', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('/')
+=> array (
+  'path' => '/',
+)
+=== parse_url('/', -2)
+=> array (
+  'path' => '/',
+)
+=== parse_url('/', 0)
+=> NULL
+=== parse_url('/', 1)
+=> NULL
+=== parse_url('/', 2)
+=> NULL
+=== parse_url('/', 3)
+=> NULL
+=== parse_url('/', 4)
+=> NULL
+=== parse_url('/', 5)
+=> '/'
+=== parse_url('/', 6)
+=> NULL
+=== parse_url('/', 7)
+=> NULL
+=== parse_url('/', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('/', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('/rest/Users?filter={"id":"123"}')
+=> array (
+  'path' => '/rest/Users',
+  'query' => 'filter={"id":"123"}',
+)
+=== parse_url('/rest/Users?filter={"id":"123"}', -2)
+=> array (
+  'path' => '/rest/Users',
+  'query' => 'filter={"id":"123"}',
+)
+=== parse_url('/rest/Users?filter={"id":"123"}', 0)
+=> NULL
+=== parse_url('/rest/Users?filter={"id":"123"}', 1)
+=> NULL
+=== parse_url('/rest/Users?filter={"id":"123"}', 2)
+=> NULL
+=== parse_url('/rest/Users?filter={"id":"123"}', 3)
+=> NULL
+=== parse_url('/rest/Users?filter={"id":"123"}', 4)
+=> NULL
+=== parse_url('/rest/Users?filter={"id":"123"}', 5)
+=> '/rest/Users'
+=== parse_url('/rest/Users?filter={"id":"123"}', 6)
+=> 'filter={"id":"123"}'
+=== parse_url('/rest/Users?filter={"id":"123"}', 7)
+=> NULL
+=== parse_url('/rest/Users?filter={"id":"123"}', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('/rest/Users?filter={"id":"123"}', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('%:x')
+=> array (
+  'path' => '%:x',
+)
+=== parse_url('%:x', -2)
+=> array (
+  'path' => '%:x',
+)
+=== parse_url('%:x', 0)
+=> NULL
+=== parse_url('%:x', 1)
+=> NULL
+=== parse_url('%:x', 2)
+=> NULL
+=== parse_url('%:x', 3)
+=> NULL
+=== parse_url('%:x', 4)
+=> NULL
+=== parse_url('%:x', 5)
+=> '%:x'
+=== parse_url('%:x', 6)
+=> NULL
+=== parse_url('%:x', 7)
+=> NULL
+=== parse_url('%:x', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('%:x', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('https://example.com:0/')
+=> array (
+  'scheme' => 'https',
+  'host' => 'example.com',
+  'port' => 0,
+  'path' => '/',
+)
+=== parse_url('https://example.com:0/', -2)
+=> array (
+  'scheme' => 'https',
+  'host' => 'example.com',
+  'port' => 0,
+  'path' => '/',
+)
+=== parse_url('https://example.com:0/', 0)
+=> 'https'
+=== parse_url('https://example.com:0/', 1)
+=> 'example.com'
+=== parse_url('https://example.com:0/', 2)
+=> 0
+=== parse_url('https://example.com:0/', 3)
+=> NULL
+=== parse_url('https://example.com:0/', 4)
+=> NULL
+=== parse_url('https://example.com:0/', 5)
+=> '/'
+=== parse_url('https://example.com:0/', 6)
+=> NULL
+=== parse_url('https://example.com:0/', 7)
+=> NULL
+=== parse_url('https://example.com:0/', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('https://example.com:0/', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('http:///blah.com')
+=> false
+=== parse_url('http:///blah.com', -2)
+=> false
+=== parse_url('http:///blah.com', 0)
+=> false
+=== parse_url('http:///blah.com', 1)
+=> false
+=== parse_url('http:///blah.com', 2)
+=> false
+=== parse_url('http:///blah.com', 3)
+=> false
+=== parse_url('http:///blah.com', 4)
+=> false
+=== parse_url('http:///blah.com', 5)
+=> false
+=== parse_url('http:///blah.com', 6)
+=> false
+=== parse_url('http:///blah.com', 7)
+=> false
+=== parse_url('http:///blah.com', 8)
+=> false
+=== parse_url('http:///blah.com', 99)
+=> false
+=== parse_url('http://:80')
+=> false
+=== parse_url('http://:80', -2)
+=> false
+=== parse_url('http://:80', 0)
+=> false
+=== parse_url('http://:80', 1)
+=> false
+=== parse_url('http://:80', 2)
+=> false
+=== parse_url('http://:80', 3)
+=> false
+=== parse_url('http://:80', 4)
+=> false
+=== parse_url('http://:80', 5)
+=> false
+=== parse_url('http://:80', 6)
+=> false
+=== parse_url('http://:80', 7)
+=> false
+=== parse_url('http://:80', 8)
+=> false
+=== parse_url('http://:80', 99)
+=> false
+=== parse_url('http://user@:80')
+=> false
+=== parse_url('http://user@:80', -2)
+=> false
+=== parse_url('http://user@:80', 0)
+=> false
+=== parse_url('http://user@:80', 1)
+=> false
+=== parse_url('http://user@:80', 2)
+=> false
+=== parse_url('http://user@:80', 3)
+=> false
+=== parse_url('http://user@:80', 4)
+=> false
+=== parse_url('http://user@:80', 5)
+=> false
+=== parse_url('http://user@:80', 6)
+=> false
+=== parse_url('http://user@:80', 7)
+=> false
+=== parse_url('http://user@:80', 8)
+=> false
+=== parse_url('http://user@:80', 99)
+=> false
+=== parse_url('http://user:pass@:80')
+=> false
+=== parse_url('http://user:pass@:80', -2)
+=> false
+=== parse_url('http://user:pass@:80', 0)
+=> false
+=== parse_url('http://user:pass@:80', 1)
+=> false
+=== parse_url('http://user:pass@:80', 2)
+=> false
+=== parse_url('http://user:pass@:80', 3)
+=> false
+=== parse_url('http://user:pass@:80', 4)
+=> false
+=== parse_url('http://user:pass@:80', 5)
+=> false
+=== parse_url('http://user:pass@:80', 6)
+=> false
+=== parse_url('http://user:pass@:80', 7)
+=> false
+=== parse_url('http://user:pass@:80', 8)
+=> false
+=== parse_url('http://user:pass@:80', 99)
+=> false
+=== parse_url('http://:')
+=> false
+=== parse_url('http://:', -2)
+=> false
+=== parse_url('http://:', 0)
+=> false
+=== parse_url('http://:', 1)
+=> false
+=== parse_url('http://:', 2)
+=> false
+=== parse_url('http://:', 3)
+=> false
+=== parse_url('http://:', 4)
+=> false
+=== parse_url('http://:', 5)
+=> false
+=== parse_url('http://:', 6)
+=> false
+=== parse_url('http://:', 7)
+=> false
+=== parse_url('http://:', 8)
+=> false
+=== parse_url('http://:', 99)
+=> false
+=== parse_url('http://@/')
+=> false
+=== parse_url('http://@/', -2)
+=> false
+=== parse_url('http://@/', 0)
+=> false
+=== parse_url('http://@/', 1)
+=> false
+=== parse_url('http://@/', 2)
+=> false
+=== parse_url('http://@/', 3)
+=> false
+=== parse_url('http://@/', 4)
+=> false
+=== parse_url('http://@/', 5)
+=> false
+=== parse_url('http://@/', 6)
+=> false
+=== parse_url('http://@/', 7)
+=> false
+=== parse_url('http://@/', 8)
+=> false
+=== parse_url('http://@/', 99)
+=> false
+=== parse_url('http://@:/')
+=> false
+=== parse_url('http://@:/', -2)
+=> false
+=== parse_url('http://@:/', 0)
+=> false
+=== parse_url('http://@:/', 1)
+=> false
+=== parse_url('http://@:/', 2)
+=> false
+=== parse_url('http://@:/', 3)
+=> false
+=== parse_url('http://@:/', 4)
+=> false
+=== parse_url('http://@:/', 5)
+=> false
+=== parse_url('http://@:/', 6)
+=> false
+=== parse_url('http://@:/', 7)
+=> false
+=== parse_url('http://@:/', 8)
+=> false
+=== parse_url('http://@:/', 99)
+=> false
+=== parse_url('http://:/')
+=> false
+=== parse_url('http://:/', -2)
+=> false
+=== parse_url('http://:/', 0)
+=> false
+=== parse_url('http://:/', 1)
+=> false
+=== parse_url('http://:/', 2)
+=> false
+=== parse_url('http://:/', 3)
+=> false
+=== parse_url('http://:/', 4)
+=> false
+=== parse_url('http://:/', 5)
+=> false
+=== parse_url('http://:/', 6)
+=> false
+=== parse_url('http://:/', 7)
+=> false
+=== parse_url('http://:/', 8)
+=> false
+=== parse_url('http://:/', 99)
+=> false
+=== parse_url('http://?')
+=> false
+=== parse_url('http://?', -2)
+=> false
+=== parse_url('http://?', 0)
+=> false
+=== parse_url('http://?', 1)
+=> false
+=== parse_url('http://?', 2)
+=> false
+=== parse_url('http://?', 3)
+=> false
+=== parse_url('http://?', 4)
+=> false
+=== parse_url('http://?', 5)
+=> false
+=== parse_url('http://?', 6)
+=> false
+=== parse_url('http://?', 7)
+=> false
+=== parse_url('http://?', 8)
+=> false
+=== parse_url('http://?', 99)
+=> false
+=== parse_url('http://#')
+=> false
+=== parse_url('http://#', -2)
+=> false
+=== parse_url('http://#', 0)
+=> false
+=== parse_url('http://#', 1)
+=> false
+=== parse_url('http://#', 2)
+=> false
+=== parse_url('http://#', 3)
+=> false
+=== parse_url('http://#', 4)
+=> false
+=== parse_url('http://#', 5)
+=> false
+=== parse_url('http://#', 6)
+=> false
+=== parse_url('http://#', 7)
+=> false
+=== parse_url('http://#', 8)
+=> false
+=== parse_url('http://#', 99)
+=> false
+=== parse_url('http://?:')
+=> false
+=== parse_url('http://?:', -2)
+=> false
+=== parse_url('http://?:', 0)
+=> false
+=== parse_url('http://?:', 1)
+=> false
+=== parse_url('http://?:', 2)
+=> false
+=== parse_url('http://?:', 3)
+=> false
+=== parse_url('http://?:', 4)
+=> false
+=== parse_url('http://?:', 5)
+=> false
+=== parse_url('http://?:', 6)
+=> false
+=== parse_url('http://?:', 7)
+=> false
+=== parse_url('http://?:', 8)
+=> false
+=== parse_url('http://?:', 99)
+=> false
+=== parse_url('http://:?')
+=> false
+=== parse_url('http://:?', -2)
+=> false
+=== parse_url('http://:?', 0)
+=> false
+=== parse_url('http://:?', 1)
+=> false
+=== parse_url('http://:?', 2)
+=> false
+=== parse_url('http://:?', 3)
+=> false
+=== parse_url('http://:?', 4)
+=> false
+=== parse_url('http://:?', 5)
+=> false
+=== parse_url('http://:?', 6)
+=> false
+=== parse_url('http://:?', 7)
+=> false
+=== parse_url('http://:?', 8)
+=> false
+=== parse_url('http://:?', 99)
+=> false
+=== parse_url('http://blah.com:123456')
+=> false
+=== parse_url('http://blah.com:123456', -2)
+=> false
+=== parse_url('http://blah.com:123456', 0)
+=> false
+=== parse_url('http://blah.com:123456', 1)
+=> false
+=== parse_url('http://blah.com:123456', 2)
+=> false
+=== parse_url('http://blah.com:123456', 3)
+=> false
+=== parse_url('http://blah.com:123456', 4)
+=> false
+=== parse_url('http://blah.com:123456', 5)
+=> false
+=== parse_url('http://blah.com:123456', 6)
+=> false
+=== parse_url('http://blah.com:123456', 7)
+=> false
+=== parse_url('http://blah.com:123456', 8)
+=> false
+=== parse_url('http://blah.com:123456', 99)
+=> false
+=== parse_url('http://blah.com:abcdef')
+=> false
+=== parse_url('http://blah.com:abcdef', -2)
+=> false
+=== parse_url('http://blah.com:abcdef', 0)
+=> false
+=== parse_url('http://blah.com:abcdef', 1)
+=> false
+=== parse_url('http://blah.com:abcdef', 2)
+=> false
+=== parse_url('http://blah.com:abcdef', 3)
+=> false
+=== parse_url('http://blah.com:abcdef', 4)
+=> false
+=== parse_url('http://blah.com:abcdef', 5)
+=> false
+=== parse_url('http://blah.com:abcdef', 6)
+=> false
+=== parse_url('http://blah.com:abcdef', 7)
+=> false
+=== parse_url('http://blah.com:abcdef', 8)
+=> false
+=== parse_url('http://blah.com:abcdef', 99)
+=> false
+=== parse_url('//example.org:81/hi?a=b#c=d')
+=> array (
+  'host' => 'example.org',
+  'port' => 81,
+  'path' => '/hi',
+  'query' => 'a=b',
+  'fragment' => 'c=d',
+)
+=== parse_url('//example.org:81/hi?a=b#c=d', -2)
+=> array (
+  'host' => 'example.org',
+  'port' => 81,
+  'path' => '/hi',
+  'query' => 'a=b',
+  'fragment' => 'c=d',
+)
+=== parse_url('//example.org:81/hi?a=b#c=d', 0)
+=> NULL
+=== parse_url('//example.org:81/hi?a=b#c=d', 1)
+=> 'example.org'
+=== parse_url('//example.org:81/hi?a=b#c=d', 2)
+=> 81
+=== parse_url('//example.org:81/hi?a=b#c=d', 3)
+=> NULL
+=== parse_url('//example.org:81/hi?a=b#c=d', 4)
+=> NULL
+=== parse_url('//example.org:81/hi?a=b#c=d', 5)
+=> '/hi'
+=== parse_url('//example.org:81/hi?a=b#c=d', 6)
+=> 'a=b'
+=== parse_url('//example.org:81/hi?a=b#c=d', 7)
+=> 'c=d'
+=== parse_url('//example.org:81/hi?a=b#c=d', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('//example.org:81/hi?a=b#c=d', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('//example.org/hi?a=b#c=d')
+=> array (
+  'host' => 'example.org',
+  'path' => '/hi',
+  'query' => 'a=b',
+  'fragment' => 'c=d',
+)
+=== parse_url('//example.org/hi?a=b#c=d', -2)
+=> array (
+  'host' => 'example.org',
+  'path' => '/hi',
+  'query' => 'a=b',
+  'fragment' => 'c=d',
+)
+=== parse_url('//example.org/hi?a=b#c=d', 0)
+=> NULL
+=== parse_url('//example.org/hi?a=b#c=d', 1)
+=> 'example.org'
+=== parse_url('//example.org/hi?a=b#c=d', 2)
+=> NULL
+=== parse_url('//example.org/hi?a=b#c=d', 3)
+=> NULL
+=== parse_url('//example.org/hi?a=b#c=d', 4)
+=> NULL
+=== parse_url('//example.org/hi?a=b#c=d', 5)
+=> '/hi'
+=== parse_url('//example.org/hi?a=b#c=d', 6)
+=> 'a=b'
+=== parse_url('//example.org/hi?a=b#c=d', 7)
+=> 'c=d'
+=== parse_url('//example.org/hi?a=b#c=d', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('//example.org/hi?a=b#c=d', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('127.0.0.1:9999?')
+=> array (
+  'scheme' => '127.0.0.1',
+  'path' => '9999',
+  'query' => '',
+)
+=== parse_url('127.0.0.1:9999?', -2)
+=> array (
+  'scheme' => '127.0.0.1',
+  'path' => '9999',
+  'query' => '',
+)
+=== parse_url('127.0.0.1:9999?', 0)
+=> '127.0.0.1'
+=== parse_url('127.0.0.1:9999?', 1)
+=> NULL
+=== parse_url('127.0.0.1:9999?', 2)
+=> NULL
+=== parse_url('127.0.0.1:9999?', 3)
+=> NULL
+=== parse_url('127.0.0.1:9999?', 4)
+=> NULL
+=== parse_url('127.0.0.1:9999?', 5)
+=> '9999'
+=== parse_url('127.0.0.1:9999?', 6)
+=> ''
+=== parse_url('127.0.0.1:9999?', 7)
+=> NULL
+=== parse_url('127.0.0.1:9999?', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('127.0.0.1:9999?', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('127.0.0.1:9999#')
+=> array (
+  'scheme' => '127.0.0.1',
+  'path' => '9999',
+  'fragment' => '',
+)
+=== parse_url('127.0.0.1:9999#', -2)
+=> array (
+  'scheme' => '127.0.0.1',
+  'path' => '9999',
+  'fragment' => '',
+)
+=== parse_url('127.0.0.1:9999#', 0)
+=> '127.0.0.1'
+=== parse_url('127.0.0.1:9999#', 1)
+=> NULL
+=== parse_url('127.0.0.1:9999#', 2)
+=> NULL
+=== parse_url('127.0.0.1:9999#', 3)
+=> NULL
+=== parse_url('127.0.0.1:9999#', 4)
+=> NULL
+=== parse_url('127.0.0.1:9999#', 5)
+=> '9999'
+=== parse_url('127.0.0.1:9999#', 6)
+=> NULL
+=== parse_url('127.0.0.1:9999#', 7)
+=> ''
+=== parse_url('127.0.0.1:9999#', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('127.0.0.1:9999#', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('internal:#feeding')
+=> array (
+  'scheme' => 'internal',
+  'fragment' => 'feeding',
+)
+=== parse_url('internal:#feeding', -2)
+=> array (
+  'scheme' => 'internal',
+  'fragment' => 'feeding',
+)
+=== parse_url('internal:#feeding', 0)
+=> 'internal'
+=== parse_url('internal:#feeding', 1)
+=> NULL
+=== parse_url('internal:#feeding', 2)
+=> NULL
+=== parse_url('internal:#feeding', 3)
+=> NULL
+=== parse_url('internal:#feeding', 4)
+=> NULL
+=== parse_url('internal:#feeding', 5)
+=> NULL
+=== parse_url('internal:#feeding', 6)
+=> NULL
+=== parse_url('internal:#feeding', 7)
+=> 'feeding'
+=== parse_url('internal:#feeding', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('internal:#feeding', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('magnet:?xt=urn:sha1:YNCKHTQCWBTRNJIV4WNAE52SJUQCZO5C')
+=> array (
+  'scheme' => 'magnet',
+  'query' => 'xt=urn:sha1:YNCKHTQCWBTRNJIV4WNAE52SJUQCZO5C',
+)
+=== parse_url('magnet:?xt=urn:sha1:YNCKHTQCWBTRNJIV4WNAE52SJUQCZO5C', -2)
+=> array (
+  'scheme' => 'magnet',
+  'query' => 'xt=urn:sha1:YNCKHTQCWBTRNJIV4WNAE52SJUQCZO5C',
+)
+=== parse_url('magnet:?xt=urn:sha1:YNCKHTQCWBTRNJIV4WNAE52SJUQCZO5C', 0)
+=> 'magnet'
+=== parse_url('magnet:?xt=urn:sha1:YNCKHTQCWBTRNJIV4WNAE52SJUQCZO5C', 1)
+=> NULL
+=== parse_url('magnet:?xt=urn:sha1:YNCKHTQCWBTRNJIV4WNAE52SJUQCZO5C', 2)
+=> NULL
+=== parse_url('magnet:?xt=urn:sha1:YNCKHTQCWBTRNJIV4WNAE52SJUQCZO5C', 3)
+=> NULL
+=== parse_url('magnet:?xt=urn:sha1:YNCKHTQCWBTRNJIV4WNAE52SJUQCZO5C', 4)
+=> NULL
+=== parse_url('magnet:?xt=urn:sha1:YNCKHTQCWBTRNJIV4WNAE52SJUQCZO5C', 5)
+=> NULL
+=== parse_url('magnet:?xt=urn:sha1:YNCKHTQCWBTRNJIV4WNAE52SJUQCZO5C', 6)
+=> 'xt=urn:sha1:YNCKHTQCWBTRNJIV4WNAE52SJUQCZO5C'
+=== parse_url('magnet:?xt=urn:sha1:YNCKHTQCWBTRNJIV4WNAE52SJUQCZO5C', 7)
+=> NULL
+=== parse_url('magnet:?xt=urn:sha1:YNCKHTQCWBTRNJIV4WNAE52SJUQCZO5C', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('magnet:?xt=urn:sha1:YNCKHTQCWBTRNJIV4WNAE52SJUQCZO5C', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('http://example.com:80#@google.com/')
+=> array (
+  'scheme' => 'http',
+  'host' => 'example.com',
+  'port' => 80,
+  'fragment' => '@google.com/',
+)
+=== parse_url('http://example.com:80#@google.com/', -2)
+=> array (
+  'scheme' => 'http',
+  'host' => 'example.com',
+  'port' => 80,
+  'fragment' => '@google.com/',
+)
+=== parse_url('http://example.com:80#@google.com/', 0)
+=> 'http'
+=== parse_url('http://example.com:80#@google.com/', 1)
+=> 'example.com'
+=== parse_url('http://example.com:80#@google.com/', 2)
+=> 80
+=== parse_url('http://example.com:80#@google.com/', 3)
+=> NULL
+=== parse_url('http://example.com:80#@google.com/', 4)
+=> NULL
+=== parse_url('http://example.com:80#@google.com/', 5)
+=> NULL
+=== parse_url('http://example.com:80#@google.com/', 6)
+=> NULL
+=== parse_url('http://example.com:80#@google.com/', 7)
+=> '@google.com/'
+=== parse_url('http://example.com:80#@google.com/', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('http://example.com:80#@google.com/', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('http://example.com:80?@google.com/')
+=> array (
+  'scheme' => 'http',
+  'host' => 'example.com',
+  'port' => 80,
+  'query' => '@google.com/',
+)
+=== parse_url('http://example.com:80?@google.com/', -2)
+=> array (
+  'scheme' => 'http',
+  'host' => 'example.com',
+  'port' => 80,
+  'query' => '@google.com/',
+)
+=== parse_url('http://example.com:80?@google.com/', 0)
+=> 'http'
+=== parse_url('http://example.com:80?@google.com/', 1)
+=> 'example.com'
+=== parse_url('http://example.com:80?@google.com/', 2)
+=> 80
+=== parse_url('http://example.com:80?@google.com/', 3)
+=> NULL
+=== parse_url('http://example.com:80?@google.com/', 4)
+=> NULL
+=== parse_url('http://example.com:80?@google.com/', 5)
+=> NULL
+=== parse_url('http://example.com:80?@google.com/', 6)
+=> '@google.com/'
+=== parse_url('http://example.com:80?@google.com/', 7)
+=> NULL
+=== parse_url('http://example.com:80?@google.com/', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('http://example.com:80?@google.com/', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('http://user:pass@host')
+=> array (
+  'scheme' => 'http',
+  'host' => 'host',
+  'user' => 'user',
+  'pass' => 'pass',
+)
+=== parse_url('http://user:pass@host', -2)
+=> array (
+  'scheme' => 'http',
+  'host' => 'host',
+  'user' => 'user',
+  'pass' => 'pass',
+)
+=== parse_url('http://user:pass@host', 0)
+=> 'http'
+=== parse_url('http://user:pass@host', 1)
+=> 'host'
+=== parse_url('http://user:pass@host', 2)
+=> NULL
+=== parse_url('http://user:pass@host', 3)
+=> 'user'
+=== parse_url('http://user:pass@host', 4)
+=> 'pass'
+=== parse_url('http://user:pass@host', 5)
+=> NULL
+=== parse_url('http://user:pass@host', 6)
+=> NULL
+=== parse_url('http://user:pass@host', 7)
+=> NULL
+=== parse_url('http://user:pass@host', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('http://user:pass@host', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('//user:pass@host')
+=> array (
+  'host' => 'host',
+  'user' => 'user',
+  'pass' => 'pass',
+)
+=== parse_url('//user:pass@host', -2)
+=> array (
+  'host' => 'host',
+  'user' => 'user',
+  'pass' => 'pass',
+)
+=== parse_url('//user:pass@host', 0)
+=> NULL
+=== parse_url('//user:pass@host', 1)
+=> 'host'
+=== parse_url('//user:pass@host', 2)
+=> NULL
+=== parse_url('//user:pass@host', 3)
+=> 'user'
+=== parse_url('//user:pass@host', 4)
+=> 'pass'
+=== parse_url('//user:pass@host', 5)
+=> NULL
+=== parse_url('//user:pass@host', 6)
+=> NULL
+=== parse_url('//user:pass@host', 7)
+=> NULL
+=== parse_url('//user:pass@host', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('//user:pass@host', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('//user@host')
+=> array (
+  'host' => 'host',
+  'user' => 'user',
+)
+=== parse_url('//user@host', -2)
+=> array (
+  'host' => 'host',
+  'user' => 'user',
+)
+=== parse_url('//user@host', 0)
+=> NULL
+=== parse_url('//user@host', 1)
+=> 'host'
+=== parse_url('//user@host', 2)
+=> NULL
+=== parse_url('//user@host', 3)
+=> 'user'
+=== parse_url('//user@host', 4)
+=> NULL
+=== parse_url('//user@host', 5)
+=> NULL
+=== parse_url('//user@host', 6)
+=> NULL
+=== parse_url('//user@host', 7)
+=> NULL
+=== parse_url('//user@host', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('//user@host', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('//php.net/path?query=1:2')
+=> array (
+  'host' => 'php.net',
+  'path' => '/path',
+  'query' => 'query=1:2',
+)
+=== parse_url('//php.net/path?query=1:2', -2)
+=> array (
+  'host' => 'php.net',
+  'path' => '/path',
+  'query' => 'query=1:2',
+)
+=== parse_url('//php.net/path?query=1:2', 0)
+=> NULL
+=== parse_url('//php.net/path?query=1:2', 1)
+=> 'php.net'
+=== parse_url('//php.net/path?query=1:2', 2)
+=> NULL
+=== parse_url('//php.net/path?query=1:2', 3)
+=> NULL
+=== parse_url('//php.net/path?query=1:2', 4)
+=> NULL
+=== parse_url('//php.net/path?query=1:2', 5)
+=> '/path'
+=== parse_url('//php.net/path?query=1:2', 6)
+=> 'query=1:2'
+=== parse_url('//php.net/path?query=1:2', 7)
+=> NULL
+=== parse_url('//php.net/path?query=1:2', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('//php.net/path?query=1:2', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('//php.net/path.php?query=a:b')
+=> array (
+  'host' => 'php.net',
+  'path' => '/path.php',
+  'query' => 'query=a:b',
+)
+=== parse_url('//php.net/path.php?query=a:b', -2)
+=> array (
+  'host' => 'php.net',
+  'path' => '/path.php',
+  'query' => 'query=a:b',
+)
+=== parse_url('//php.net/path.php?query=a:b', 0)
+=> NULL
+=== parse_url('//php.net/path.php?query=a:b', 1)
+=> 'php.net'
+=== parse_url('//php.net/path.php?query=a:b', 2)
+=> NULL
+=== parse_url('//php.net/path.php?query=a:b', 3)
+=> NULL
+=== parse_url('//php.net/path.php?query=a:b', 4)
+=> NULL
+=== parse_url('//php.net/path.php?query=a:b', 5)
+=> '/path.php'
+=== parse_url('//php.net/path.php?query=a:b', 6)
+=> 'query=a:b'
+=== parse_url('//php.net/path.php?query=a:b', 7)
+=> NULL
+=== parse_url('//php.net/path.php?query=a:b', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('//php.net/path.php?query=a:b', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('//username@php.net/path?query=1:2')
+=> array (
+  'host' => 'php.net',
+  'user' => 'username',
+  'path' => '/path',
+  'query' => 'query=1:2',
+)
+=== parse_url('//username@php.net/path?query=1:2', -2)
+=> array (
+  'host' => 'php.net',
+  'user' => 'username',
+  'path' => '/path',
+  'query' => 'query=1:2',
+)
+=== parse_url('//username@php.net/path?query=1:2', 0)
+=> NULL
+=== parse_url('//username@php.net/path?query=1:2', 1)
+=> 'php.net'
+=== parse_url('//username@php.net/path?query=1:2', 2)
+=> NULL
+=== parse_url('//username@php.net/path?query=1:2', 3)
+=> 'username'
+=== parse_url('//username@php.net/path?query=1:2', 4)
+=> NULL
+=== parse_url('//username@php.net/path?query=1:2', 5)
+=> '/path'
+=== parse_url('//username@php.net/path?query=1:2', 6)
+=> 'query=1:2'
+=== parse_url('//username@php.net/path?query=1:2', 7)
+=> NULL
+=== parse_url('//username@php.net/path?query=1:2', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('//username@php.net/path?query=1:2', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('//example.org')
+=> array (
+  'host' => 'example.org',
+)
+=== parse_url('//example.org', -2)
+=> array (
+  'host' => 'example.org',
+)
+=== parse_url('//example.org', 0)
+=> NULL
+=== parse_url('//example.org', 1)
+=> 'example.org'
+=== parse_url('//example.org', 2)
+=> NULL
+=== parse_url('//example.org', 3)
+=> NULL
+=== parse_url('//example.org', 4)
+=> NULL
+=== parse_url('//example.org', 5)
+=> NULL
+=== parse_url('//example.org', 6)
+=> NULL
+=== parse_url('//example.org', 7)
+=> NULL
+=== parse_url('//example.org', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('//example.org', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('http://example.com/path/script.html?t=1#fragment?data')
+=> array (
+  'scheme' => 'http',
+  'host' => 'example.com',
+  'path' => '/path/script.html',
+  'query' => 't=1',
+  'fragment' => 'fragment?data',
+)
+=== parse_url('http://example.com/path/script.html?t=1#fragment?data', -2)
+=> array (
+  'scheme' => 'http',
+  'host' => 'example.com',
+  'path' => '/path/script.html',
+  'query' => 't=1',
+  'fragment' => 'fragment?data',
+)
+=== parse_url('http://example.com/path/script.html?t=1#fragment?data', 0)
+=> 'http'
+=== parse_url('http://example.com/path/script.html?t=1#fragment?data', 1)
+=> 'example.com'
+=== parse_url('http://example.com/path/script.html?t=1#fragment?data', 2)
+=> NULL
+=== parse_url('http://example.com/path/script.html?t=1#fragment?data', 3)
+=> NULL
+=== parse_url('http://example.com/path/script.html?t=1#fragment?data', 4)
+=> NULL
+=== parse_url('http://example.com/path/script.html?t=1#fragment?data', 5)
+=> '/path/script.html'
+=== parse_url('http://example.com/path/script.html?t=1#fragment?data', 6)
+=> 't=1'
+=== parse_url('http://example.com/path/script.html?t=1#fragment?data', 7)
+=> 'fragment?data'
+=== parse_url('http://example.com/path/script.html?t=1#fragment?data', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('http://example.com/path/script.html?t=1#fragment?data', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('http://example.com/path/script.html#fragment?data')
+=> array (
+  'scheme' => 'http',
+  'host' => 'example.com',
+  'path' => '/path/script.html',
+  'fragment' => 'fragment?data',
+)
+=== parse_url('http://example.com/path/script.html#fragment?data', -2)
+=> array (
+  'scheme' => 'http',
+  'host' => 'example.com',
+  'path' => '/path/script.html',
+  'fragment' => 'fragment?data',
+)
+=== parse_url('http://example.com/path/script.html#fragment?data', 0)
+=> 'http'
+=== parse_url('http://example.com/path/script.html#fragment?data', 1)
+=> 'example.com'
+=== parse_url('http://example.com/path/script.html#fragment?data', 2)
+=> NULL
+=== parse_url('http://example.com/path/script.html#fragment?data', 3)
+=> NULL
+=== parse_url('http://example.com/path/script.html#fragment?data', 4)
+=> NULL
+=== parse_url('http://example.com/path/script.html#fragment?data', 5)
+=> '/path/script.html'
+=== parse_url('http://example.com/path/script.html#fragment?data', 6)
+=> NULL
+=== parse_url('http://example.com/path/script.html#fragment?data', 7)
+=> 'fragment?data'
+=== parse_url('http://example.com/path/script.html#fragment?data', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('http://example.com/path/script.html#fragment?data', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url(':')
+=> false
+=== parse_url(':', -2)
+=> false
+=== parse_url(':', 0)
+=> false
+=== parse_url(':', 1)
+=> false
+=== parse_url(':', 2)
+=> false
+=== parse_url(':', 3)
+=> false
+=== parse_url(':', 4)
+=> false
+=== parse_url(':', 5)
+=> false
+=== parse_url(':', 6)
+=> false
+=== parse_url(':', 7)
+=> false
+=== parse_url(':', 8)
+=> false
+=== parse_url(':', 99)
+=> false
+=== parse_url('/busca/?fq=B:20001')
+=> array (
+  'path' => '/busca/',
+  'query' => 'fq=B:20001',
+)
+=== parse_url('/busca/?fq=B:20001', -2)
+=> array (
+  'path' => '/busca/',
+  'query' => 'fq=B:20001',
+)
+=== parse_url('/busca/?fq=B:20001', 0)
+=> NULL
+=== parse_url('/busca/?fq=B:20001', 1)
+=> NULL
+=== parse_url('/busca/?fq=B:20001', 2)
+=> NULL
+=== parse_url('/busca/?fq=B:20001', 3)
+=> NULL
+=== parse_url('/busca/?fq=B:20001', 4)
+=> NULL
+=== parse_url('/busca/?fq=B:20001', 5)
+=> '/busca/'
+=== parse_url('/busca/?fq=B:20001', 6)
+=> 'fq=B:20001'
+=== parse_url('/busca/?fq=B:20001', 7)
+=> NULL
+=== parse_url('/busca/?fq=B:20001', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('/busca/?fq=B:20001', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('/busca/?fq=B:200013')
+=> array (
+  'path' => '/busca/',
+  'query' => 'fq=B:200013',
+)
+=== parse_url('/busca/?fq=B:200013', -2)
+=> array (
+  'path' => '/busca/',
+  'query' => 'fq=B:200013',
+)
+=== parse_url('/busca/?fq=B:200013', 0)
+=> NULL
+=== parse_url('/busca/?fq=B:200013', 1)
+=> NULL
+=== parse_url('/busca/?fq=B:200013', 2)
+=> NULL
+=== parse_url('/busca/?fq=B:200013', 3)
+=> NULL
+=== parse_url('/busca/?fq=B:200013', 4)
+=> NULL
+=== parse_url('/busca/?fq=B:200013', 5)
+=> '/busca/'
+=== parse_url('/busca/?fq=B:200013', 6)
+=> 'fq=B:200013'
+=== parse_url('/busca/?fq=B:200013', 7)
+=> NULL
+=== parse_url('/busca/?fq=B:200013', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('/busca/?fq=B:200013', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('/busca/?fq=home:01234')
+=> array (
+  'path' => '/busca/',
+  'query' => 'fq=home:01234',
+)
+=== parse_url('/busca/?fq=home:01234', -2)
+=> array (
+  'path' => '/busca/',
+  'query' => 'fq=home:01234',
+)
+=== parse_url('/busca/?fq=home:01234', 0)
+=> NULL
+=== parse_url('/busca/?fq=home:01234', 1)
+=> NULL
+=== parse_url('/busca/?fq=home:01234', 2)
+=> NULL
+=== parse_url('/busca/?fq=home:01234', 3)
+=> NULL
+=== parse_url('/busca/?fq=home:01234', 4)
+=> NULL
+=== parse_url('/busca/?fq=home:01234', 5)
+=> '/busca/'
+=== parse_url('/busca/?fq=home:01234', 6)
+=> 'fq=home:01234'
+=== parse_url('/busca/?fq=home:01234', 7)
+=> NULL
+=== parse_url('/busca/?fq=home:01234', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('/busca/?fq=home:01234', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('/busca/?fq=home:012345')
+=> array (
+  'path' => '/busca/',
+  'query' => 'fq=home:012345',
+)
+=== parse_url('/busca/?fq=home:012345', -2)
+=> array (
+  'path' => '/busca/',
+  'query' => 'fq=home:012345',
+)
+=== parse_url('/busca/?fq=home:012345', 0)
+=> NULL
+=== parse_url('/busca/?fq=home:012345', 1)
+=> NULL
+=== parse_url('/busca/?fq=home:012345', 2)
+=> NULL
+=== parse_url('/busca/?fq=home:012345', 3)
+=> NULL
+=== parse_url('/busca/?fq=home:012345', 4)
+=> NULL
+=== parse_url('/busca/?fq=home:012345', 5)
+=> '/busca/'
+=== parse_url('/busca/?fq=home:012345', 6)
+=> 'fq=home:012345'
+=== parse_url('/busca/?fq=home:012345', 7)
+=> NULL
+=== parse_url('/busca/?fq=home:012345', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('/busca/?fq=home:012345', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('http://[::1]:8080/x')
+=> array (
+  'scheme' => 'http',
+  'host' => '[::1]',
+  'port' => 8080,
+  'path' => '/x',
+)
+=== parse_url('http://[::1]:8080/x', -2)
+=> array (
+  'scheme' => 'http',
+  'host' => '[::1]',
+  'port' => 8080,
+  'path' => '/x',
+)
+=== parse_url('http://[::1]:8080/x', 0)
+=> 'http'
+=== parse_url('http://[::1]:8080/x', 1)
+=> '[::1]'
+=== parse_url('http://[::1]:8080/x', 2)
+=> 8080
+=== parse_url('http://[::1]:8080/x', 3)
+=> NULL
+=== parse_url('http://[::1]:8080/x', 4)
+=> NULL
+=== parse_url('http://[::1]:8080/x', 5)
+=> '/x'
+=== parse_url('http://[::1]:8080/x', 6)
+=> NULL
+=== parse_url('http://[::1]:8080/x', 7)
+=> NULL
+=== parse_url('http://[::1]:8080/x', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('http://[::1]:8080/x', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('http://[::1]/x')
+=> array (
+  'scheme' => 'http',
+  'host' => '[::1]',
+  'path' => '/x',
+)
+=== parse_url('http://[::1]/x', -2)
+=> array (
+  'scheme' => 'http',
+  'host' => '[::1]',
+  'path' => '/x',
+)
+=== parse_url('http://[::1]/x', 0)
+=> 'http'
+=== parse_url('http://[::1]/x', 1)
+=> '[::1]'
+=== parse_url('http://[::1]/x', 2)
+=> NULL
+=== parse_url('http://[::1]/x', 3)
+=> NULL
+=== parse_url('http://[::1]/x', 4)
+=> NULL
+=== parse_url('http://[::1]/x', 5)
+=> '/x'
+=== parse_url('http://[::1]/x', 6)
+=> NULL
+=== parse_url('http://[::1]/x', 7)
+=> NULL
+=== parse_url('http://[::1]/x', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('http://[::1]/x', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('http://[::1]')
+=> array (
+  'scheme' => 'http',
+  'host' => '[::1]',
+)
+=== parse_url('http://[::1]', -2)
+=> array (
+  'scheme' => 'http',
+  'host' => '[::1]',
+)
+=== parse_url('http://[::1]', 0)
+=> 'http'
+=== parse_url('http://[::1]', 1)
+=> '[::1]'
+=== parse_url('http://[::1]', 2)
+=> NULL
+=== parse_url('http://[::1]', 3)
+=> NULL
+=== parse_url('http://[::1]', 4)
+=> NULL
+=== parse_url('http://[::1]', 5)
+=> NULL
+=== parse_url('http://[::1]', 6)
+=> NULL
+=== parse_url('http://[::1]', 7)
+=> NULL
+=== parse_url('http://[::1]', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('http://[::1]', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('[::1]:80')
+=> array (
+  'path' => '[::1]:80',
+)
+=== parse_url('[::1]:80', -2)
+=> array (
+  'path' => '[::1]:80',
+)
+=== parse_url('[::1]:80', 0)
+=> NULL
+=== parse_url('[::1]:80', 1)
+=> NULL
+=== parse_url('[::1]:80', 2)
+=> NULL
+=== parse_url('[::1]:80', 3)
+=> NULL
+=== parse_url('[::1]:80', 4)
+=> NULL
+=== parse_url('[::1]:80', 5)
+=> '[::1]:80'
+=== parse_url('[::1]:80', 6)
+=> NULL
+=== parse_url('[::1]:80', 7)
+=> NULL
+=== parse_url('[::1]:80', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('[::1]:80', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('http://a:65535')
+=> array (
+  'scheme' => 'http',
+  'host' => 'a',
+  'port' => 65535,
+)
+=== parse_url('http://a:65535', -2)
+=> array (
+  'scheme' => 'http',
+  'host' => 'a',
+  'port' => 65535,
+)
+=== parse_url('http://a:65535', 0)
+=> 'http'
+=== parse_url('http://a:65535', 1)
+=> 'a'
+=== parse_url('http://a:65535', 2)
+=> 65535
+=== parse_url('http://a:65535', 3)
+=> NULL
+=== parse_url('http://a:65535', 4)
+=> NULL
+=== parse_url('http://a:65535', 5)
+=> NULL
+=== parse_url('http://a:65535', 6)
+=> NULL
+=== parse_url('http://a:65535', 7)
+=> NULL
+=== parse_url('http://a:65535', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('http://a:65535', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('http://a:65536')
+=> false
+=== parse_url('http://a:65536', -2)
+=> false
+=== parse_url('http://a:65536', 0)
+=> false
+=== parse_url('http://a:65536', 1)
+=> false
+=== parse_url('http://a:65536', 2)
+=> false
+=== parse_url('http://a:65536', 3)
+=> false
+=== parse_url('http://a:65536', 4)
+=> false
+=== parse_url('http://a:65536', 5)
+=> false
+=== parse_url('http://a:65536', 6)
+=> false
+=== parse_url('http://a:65536', 7)
+=> false
+=== parse_url('http://a:65536', 8)
+=> false
+=== parse_url('http://a:65536', 99)
+=> false
+=== parse_url('http://a:0')
+=> array (
+  'scheme' => 'http',
+  'host' => 'a',
+  'port' => 0,
+)
+=== parse_url('http://a:0', -2)
+=> array (
+  'scheme' => 'http',
+  'host' => 'a',
+  'port' => 0,
+)
+=== parse_url('http://a:0', 0)
+=> 'http'
+=== parse_url('http://a:0', 1)
+=> 'a'
+=== parse_url('http://a:0', 2)
+=> 0
+=== parse_url('http://a:0', 3)
+=> NULL
+=== parse_url('http://a:0', 4)
+=> NULL
+=== parse_url('http://a:0', 5)
+=> NULL
+=== parse_url('http://a:0', 6)
+=> NULL
+=== parse_url('http://a:0', 7)
+=> NULL
+=== parse_url('http://a:0', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('http://a:0', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('http://a:00080/')
+=> array (
+  'scheme' => 'http',
+  'host' => 'a',
+  'port' => 80,
+  'path' => '/',
+)
+=== parse_url('http://a:00080/', -2)
+=> array (
+  'scheme' => 'http',
+  'host' => 'a',
+  'port' => 80,
+  'path' => '/',
+)
+=== parse_url('http://a:00080/', 0)
+=> 'http'
+=== parse_url('http://a:00080/', 1)
+=> 'a'
+=== parse_url('http://a:00080/', 2)
+=> 80
+=== parse_url('http://a:00080/', 3)
+=> NULL
+=== parse_url('http://a:00080/', 4)
+=> NULL
+=== parse_url('http://a:00080/', 5)
+=> '/'
+=== parse_url('http://a:00080/', 6)
+=> NULL
+=== parse_url('http://a:00080/', 7)
+=> NULL
+=== parse_url('http://a:00080/', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('http://a:00080/', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('http://a:0:5/')
+=> array (
+  'scheme' => 'http',
+  'host' => 'a:0',
+  'port' => 5,
+  'path' => '/',
+)
+=== parse_url('http://a:0:5/', -2)
+=> array (
+  'scheme' => 'http',
+  'host' => 'a:0',
+  'port' => 5,
+  'path' => '/',
+)
+=== parse_url('http://a:0:5/', 0)
+=> 'http'
+=== parse_url('http://a:0:5/', 1)
+=> 'a:0'
+=== parse_url('http://a:0:5/', 2)
+=> 5
+=== parse_url('http://a:0:5/', 3)
+=> NULL
+=== parse_url('http://a:0:5/', 4)
+=> NULL
+=== parse_url('http://a:0:5/', 5)
+=> '/'
+=== parse_url('http://a:0:5/', 6)
+=> NULL
+=== parse_url('http://a:0:5/', 7)
+=> NULL
+=== parse_url('http://a:0:5/', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('http://a:0:5/', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('//a:0:5/')
+=> array (
+  'host' => 'a:0',
+  'port' => 5,
+  'path' => '/',
+)
+=== parse_url('//a:0:5/', -2)
+=> array (
+  'host' => 'a:0',
+  'port' => 5,
+  'path' => '/',
+)
+=== parse_url('//a:0:5/', 0)
+=> NULL
+=== parse_url('//a:0:5/', 1)
+=> 'a:0'
+=== parse_url('//a:0:5/', 2)
+=> 5
+=== parse_url('//a:0:5/', 3)
+=> NULL
+=== parse_url('//a:0:5/', 4)
+=> NULL
+=== parse_url('//a:0:5/', 5)
+=> '/'
+=== parse_url('//a:0:5/', 6)
+=> NULL
+=== parse_url('//a:0:5/', 7)
+=> NULL
+=== parse_url('//a:0:5/', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('//a:0:5/', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('a:65535')
+=> array (
+  'host' => 'a',
+  'port' => 65535,
+)
+=== parse_url('a:65535', -2)
+=> array (
+  'host' => 'a',
+  'port' => 65535,
+)
+=== parse_url('a:65535', 0)
+=> NULL
+=== parse_url('a:65535', 1)
+=> 'a'
+=== parse_url('a:65535', 2)
+=> 65535
+=== parse_url('a:65535', 3)
+=> NULL
+=== parse_url('a:65535', 4)
+=> NULL
+=== parse_url('a:65535', 5)
+=> NULL
+=== parse_url('a:65535', 6)
+=> NULL
+=== parse_url('a:65535', 7)
+=> NULL
+=== parse_url('a:65535', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('a:65535', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('a:65536')
+=> false
+=== parse_url('a:65536', -2)
+=> false
+=== parse_url('a:65536', 0)
+=> false
+=== parse_url('a:65536', 1)
+=> false
+=== parse_url('a:65536', 2)
+=> false
+=== parse_url('a:65536', 3)
+=> false
+=== parse_url('a:65536', 4)
+=> false
+=== parse_url('a:65536', 5)
+=> false
+=== parse_url('a:65536', 6)
+=> false
+=== parse_url('a:65536', 7)
+=> false
+=== parse_url('a:65536', 8)
+=> false
+=== parse_url('a:65536', 99)
+=> false
+=== parse_url('a:123456')
+=> array (
+  'scheme' => 'a',
+  'path' => '123456',
+)
+=== parse_url('a:123456', -2)
+=> array (
+  'scheme' => 'a',
+  'path' => '123456',
+)
+=== parse_url('a:123456', 0)
+=> 'a'
+=== parse_url('a:123456', 1)
+=> NULL
+=== parse_url('a:123456', 2)
+=> NULL
+=== parse_url('a:123456', 3)
+=> NULL
+=== parse_url('a:123456', 4)
+=> NULL
+=== parse_url('a:123456', 5)
+=> '123456'
+=== parse_url('a:123456', 6)
+=> NULL
+=== parse_url('a:123456', 7)
+=> NULL
+=== parse_url('a:123456', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('a:123456', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('a:0/x')
+=> array (
+  'host' => 'a',
+  'port' => 0,
+  'path' => '/x',
+)
+=== parse_url('a:0/x', -2)
+=> array (
+  'host' => 'a',
+  'port' => 0,
+  'path' => '/x',
+)
+=== parse_url('a:0/x', 0)
+=> NULL
+=== parse_url('a:0/x', 1)
+=> 'a'
+=== parse_url('a:0/x', 2)
+=> 0
+=== parse_url('a:0/x', 3)
+=> NULL
+=== parse_url('a:0/x', 4)
+=> NULL
+=== parse_url('a:0/x', 5)
+=> '/x'
+=== parse_url('a:0/x', 6)
+=> NULL
+=== parse_url('a:0/x', 7)
+=> NULL
+=== parse_url('a:0/x', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('a:0/x', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url(':80')
+=> false
+=== parse_url(':80', -2)
+=> false
+=== parse_url(':80', 0)
+=> false
+=== parse_url(':80', 1)
+=> false
+=== parse_url(':80', 2)
+=> false
+=== parse_url(':80', 3)
+=> false
+=== parse_url(':80', 4)
+=> false
+=== parse_url(':80', 5)
+=> false
+=== parse_url(':80', 6)
+=> false
+=== parse_url(':80', 7)
+=> false
+=== parse_url(':80', 8)
+=> false
+=== parse_url(':80', 99)
+=> false
+=== parse_url(':80/x')
+=> false
+=== parse_url(':80/x', -2)
+=> false
+=== parse_url(':80/x', 0)
+=> false
+=== parse_url(':80/x', 1)
+=> false
+=== parse_url(':80/x', 2)
+=> false
+=== parse_url(':80/x', 3)
+=> false
+=== parse_url(':80/x', 4)
+=> false
+=== parse_url(':80/x', 5)
+=> false
+=== parse_url(':80/x', 6)
+=> false
+=== parse_url(':80/x', 7)
+=> false
+=== parse_url(':80/x', 8)
+=> false
+=== parse_url(':80/x', 99)
+=> false
+=== parse_url('::')
+=> array (
+  'path' => '::',
+)
+=== parse_url('::', -2)
+=> array (
+  'path' => '::',
+)
+=== parse_url('::', 0)
+=> NULL
+=== parse_url('::', 1)
+=> NULL
+=== parse_url('::', 2)
+=> NULL
+=== parse_url('::', 3)
+=> NULL
+=== parse_url('::', 4)
+=> NULL
+=== parse_url('::', 5)
+=> '::'
+=== parse_url('::', 6)
+=> NULL
+=== parse_url('::', 7)
+=> NULL
+=== parse_url('::', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('::', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('a:b@c:d')
+=> array (
+  'scheme' => 'a',
+  'path' => 'b@c:d',
+)
+=== parse_url('a:b@c:d', -2)
+=> array (
+  'scheme' => 'a',
+  'path' => 'b@c:d',
+)
+=== parse_url('a:b@c:d', 0)
+=> 'a'
+=== parse_url('a:b@c:d', 1)
+=> NULL
+=== parse_url('a:b@c:d', 2)
+=> NULL
+=== parse_url('a:b@c:d', 3)
+=> NULL
+=== parse_url('a:b@c:d', 4)
+=> NULL
+=== parse_url('a:b@c:d', 5)
+=> 'b@c:d'
+=== parse_url('a:b@c:d', 6)
+=> NULL
+=== parse_url('a:b@c:d', 7)
+=> NULL
+=== parse_url('a:b@c:d', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('a:b@c:d', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('FILE:///c:/x')
+=> array (
+  'scheme' => 'FILE',
+  'path' => 'c:/x',
+)
+=== parse_url('FILE:///c:/x', -2)
+=> array (
+  'scheme' => 'FILE',
+  'path' => 'c:/x',
+)
+=== parse_url('FILE:///c:/x', 0)
+=> 'FILE'
+=== parse_url('FILE:///c:/x', 1)
+=> NULL
+=== parse_url('FILE:///c:/x', 2)
+=> NULL
+=== parse_url('FILE:///c:/x', 3)
+=> NULL
+=== parse_url('FILE:///c:/x', 4)
+=> NULL
+=== parse_url('FILE:///c:/x', 5)
+=> 'c:/x'
+=== parse_url('FILE:///c:/x', 6)
+=> NULL
+=== parse_url('FILE:///c:/x', 7)
+=> NULL
+=== parse_url('FILE:///c:/x', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('FILE:///c:/x', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('file:///c:/x')
+=> array (
+  'scheme' => 'file',
+  'path' => 'c:/x',
+)
+=== parse_url('file:///c:/x', -2)
+=> array (
+  'scheme' => 'file',
+  'path' => 'c:/x',
+)
+=== parse_url('file:///c:/x', 0)
+=> 'file'
+=== parse_url('file:///c:/x', 1)
+=> NULL
+=== parse_url('file:///c:/x', 2)
+=> NULL
+=== parse_url('file:///c:/x', 3)
+=> NULL
+=== parse_url('file:///c:/x', 4)
+=> NULL
+=== parse_url('file:///c:/x', 5)
+=> 'c:/x'
+=== parse_url('file:///c:/x', 6)
+=> NULL
+=== parse_url('file:///c:/x', 7)
+=> NULL
+=== parse_url('file:///c:/x', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('file:///c:/x', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('file:////x')
+=> array (
+  'scheme' => 'file',
+  'path' => '//x',
+)
+=== parse_url('file:////x', -2)
+=> array (
+  'scheme' => 'file',
+  'path' => '//x',
+)
+=== parse_url('file:////x', 0)
+=> 'file'
+=== parse_url('file:////x', 1)
+=> NULL
+=== parse_url('file:////x', 2)
+=> NULL
+=== parse_url('file:////x', 3)
+=> NULL
+=== parse_url('file:////x', 4)
+=> NULL
+=== parse_url('file:////x', 5)
+=> '//x'
+=== parse_url('file:////x', 6)
+=> NULL
+=== parse_url('file:////x', 7)
+=> NULL
+=== parse_url('file:////x', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('file:////x', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('file://')
+=> false
+=== parse_url('file://', -2)
+=> false
+=== parse_url('file://', 0)
+=> false
+=== parse_url('file://', 1)
+=> false
+=== parse_url('file://', 2)
+=> false
+=== parse_url('file://', 3)
+=> false
+=== parse_url('file://', 4)
+=> false
+=== parse_url('file://', 5)
+=> false
+=== parse_url('file://', 6)
+=> false
+=== parse_url('file://', 7)
+=> false
+=== parse_url('file://', 8)
+=> false
+=== parse_url('file://', 99)
+=> false
+=== parse_url('http:')
+=> array (
+  'scheme' => 'http',
+)
+=== parse_url('http:', -2)
+=> array (
+  'scheme' => 'http',
+)
+=== parse_url('http:', 0)
+=> 'http'
+=== parse_url('http:', 1)
+=> NULL
+=== parse_url('http:', 2)
+=> NULL
+=== parse_url('http:', 3)
+=> NULL
+=== parse_url('http:', 4)
+=> NULL
+=== parse_url('http:', 5)
+=> NULL
+=== parse_url('http:', 6)
+=> NULL
+=== parse_url('http:', 7)
+=> NULL
+=== parse_url('http:', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('http:', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('http:/')
+=> array (
+  'scheme' => 'http',
+  'path' => '/',
+)
+=== parse_url('http:/', -2)
+=> array (
+  'scheme' => 'http',
+  'path' => '/',
+)
+=== parse_url('http:/', 0)
+=> 'http'
+=== parse_url('http:/', 1)
+=> NULL
+=== parse_url('http:/', 2)
+=> NULL
+=== parse_url('http:/', 3)
+=> NULL
+=== parse_url('http:/', 4)
+=> NULL
+=== parse_url('http:/', 5)
+=> '/'
+=== parse_url('http:/', 6)
+=> NULL
+=== parse_url('http:/', 7)
+=> NULL
+=== parse_url('http:/', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('http:/', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('http://')
+=> false
+=== parse_url('http://', -2)
+=> false
+=== parse_url('http://', 0)
+=> false
+=== parse_url('http://', 1)
+=> false
+=== parse_url('http://', 2)
+=> false
+=== parse_url('http://', 3)
+=> false
+=== parse_url('http://', 4)
+=> false
+=== parse_url('http://', 5)
+=> false
+=== parse_url('http://', 6)
+=> false
+=== parse_url('http://', 7)
+=> false
+=== parse_url('http://', 8)
+=> false
+=== parse_url('http://', 99)
+=> false
+=== parse_url('//')
+=> false
+=== parse_url('//', -2)
+=> false
+=== parse_url('//', 0)
+=> false
+=== parse_url('//', 1)
+=> false
+=== parse_url('//', 2)
+=> false
+=== parse_url('//', 3)
+=> false
+=== parse_url('//', 4)
+=> false
+=== parse_url('//', 5)
+=> false
+=== parse_url('//', 6)
+=> false
+=== parse_url('//', 7)
+=> false
+=== parse_url('//', 8)
+=> false
+=== parse_url('//', 99)
+=> false
+=== parse_url('///')
+=> false
+=== parse_url('///', -2)
+=> false
+=== parse_url('///', 0)
+=> false
+=== parse_url('///', 1)
+=> false
+=== parse_url('///', 2)
+=> false
+=== parse_url('///', 3)
+=> false
+=== parse_url('///', 4)
+=> false
+=== parse_url('///', 5)
+=> false
+=== parse_url('///', 6)
+=> false
+=== parse_url('///', 7)
+=> false
+=== parse_url('///', 8)
+=> false
+=== parse_url('///', 99)
+=> false
+=== parse_url('?')
+=> array (
+  'query' => '',
+)
+=== parse_url('?', -2)
+=> array (
+  'query' => '',
+)
+=== parse_url('?', 0)
+=> NULL
+=== parse_url('?', 1)
+=> NULL
+=== parse_url('?', 2)
+=> NULL
+=== parse_url('?', 3)
+=> NULL
+=== parse_url('?', 4)
+=> NULL
+=== parse_url('?', 5)
+=> NULL
+=== parse_url('?', 6)
+=> ''
+=== parse_url('?', 7)
+=> NULL
+=== parse_url('?', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('?', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('#')
+=> array (
+  'fragment' => '',
+)
+=== parse_url('#', -2)
+=> array (
+  'fragment' => '',
+)
+=== parse_url('#', 0)
+=> NULL
+=== parse_url('#', 1)
+=> NULL
+=== parse_url('#', 2)
+=> NULL
+=== parse_url('#', 3)
+=> NULL
+=== parse_url('#', 4)
+=> NULL
+=== parse_url('#', 5)
+=> NULL
+=== parse_url('#', 6)
+=> NULL
+=== parse_url('#', 7)
+=> ''
+=== parse_url('#', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('#', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('?#')
+=> array (
+  'query' => '',
+  'fragment' => '',
+)
+=== parse_url('?#', -2)
+=> array (
+  'query' => '',
+  'fragment' => '',
+)
+=== parse_url('?#', 0)
+=> NULL
+=== parse_url('?#', 1)
+=> NULL
+=== parse_url('?#', 2)
+=> NULL
+=== parse_url('?#', 3)
+=> NULL
+=== parse_url('?#', 4)
+=> NULL
+=== parse_url('?#', 5)
+=> NULL
+=== parse_url('?#', 6)
+=> ''
+=== parse_url('?#', 7)
+=> ''
+=== parse_url('?#', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('?#', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('a?b#c?d')
+=> array (
+  'path' => 'a',
+  'query' => 'b',
+  'fragment' => 'c?d',
+)
+=== parse_url('a?b#c?d', -2)
+=> array (
+  'path' => 'a',
+  'query' => 'b',
+  'fragment' => 'c?d',
+)
+=== parse_url('a?b#c?d', 0)
+=> NULL
+=== parse_url('a?b#c?d', 1)
+=> NULL
+=== parse_url('a?b#c?d', 2)
+=> NULL
+=== parse_url('a?b#c?d', 3)
+=> NULL
+=== parse_url('a?b#c?d', 4)
+=> NULL
+=== parse_url('a?b#c?d', 5)
+=> 'a'
+=== parse_url('a?b#c?d', 6)
+=> 'b'
+=== parse_url('a?b#c?d', 7)
+=> 'c?d'
+=== parse_url('a?b#c?d', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('a?b#c?d', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('http://h/p?#')
+=> array (
+  'scheme' => 'http',
+  'host' => 'h',
+  'path' => '/p',
+  'query' => '',
+  'fragment' => '',
+)
+=== parse_url('http://h/p?#', -2)
+=> array (
+  'scheme' => 'http',
+  'host' => 'h',
+  'path' => '/p',
+  'query' => '',
+  'fragment' => '',
+)
+=== parse_url('http://h/p?#', 0)
+=> 'http'
+=== parse_url('http://h/p?#', 1)
+=> 'h'
+=== parse_url('http://h/p?#', 2)
+=> NULL
+=== parse_url('http://h/p?#', 3)
+=> NULL
+=== parse_url('http://h/p?#', 4)
+=> NULL
+=== parse_url('http://h/p?#', 5)
+=> '/p'
+=== parse_url('http://h/p?#', 6)
+=> ''
+=== parse_url('http://h/p?#', 7)
+=> ''
+=== parse_url('http://h/p?#', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('http://h/p?#', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('x y://z')
+=> array (
+  'path' => 'x y://z',
+)
+=== parse_url('x y://z', -2)
+=> array (
+  'path' => 'x y://z',
+)
+=== parse_url('x y://z', 0)
+=> NULL
+=== parse_url('x y://z', 1)
+=> NULL
+=== parse_url('x y://z', 2)
+=> NULL
+=== parse_url('x y://z', 3)
+=> NULL
+=== parse_url('x y://z', 4)
+=> NULL
+=== parse_url('x y://z', 5)
+=> 'x y://z'
+=== parse_url('x y://z', 6)
+=> NULL
+=== parse_url('x y://z', 7)
+=> NULL
+=== parse_url('x y://z', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('x y://z', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('x y:80//z')
+=> array (
+  'host' => 'x y',
+  'port' => 80,
+  'path' => '//z',
+)
+=== parse_url('x y:80//z', -2)
+=> array (
+  'host' => 'x y',
+  'port' => 80,
+  'path' => '//z',
+)
+=== parse_url('x y:80//z', 0)
+=> NULL
+=== parse_url('x y:80//z', 1)
+=> 'x y'
+=== parse_url('x y:80//z', 2)
+=> 80
+=== parse_url('x y:80//z', 3)
+=> NULL
+=== parse_url('x y:80//z', 4)
+=> NULL
+=== parse_url('x y:80//z', 5)
+=> '//z'
+=== parse_url('x y:80//z', 6)
+=> NULL
+=== parse_url('x y:80//z', 7)
+=> NULL
+=== parse_url('x y:80//z', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('x y:80//z', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('1http://x')
+=> array (
+  'scheme' => '1http',
+  'host' => 'x',
+)
+=== parse_url('1http://x', -2)
+=> array (
+  'scheme' => '1http',
+  'host' => 'x',
+)
+=== parse_url('1http://x', 0)
+=> '1http'
+=== parse_url('1http://x', 1)
+=> 'x'
+=== parse_url('1http://x', 2)
+=> NULL
+=== parse_url('1http://x', 3)
+=> NULL
+=== parse_url('1http://x', 4)
+=> NULL
+=== parse_url('1http://x', 5)
+=> NULL
+=== parse_url('1http://x', 6)
+=> NULL
+=== parse_url('1http://x', 7)
+=> NULL
+=== parse_url('1http://x', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('1http://x', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('http://u@h@i/')
+=> array (
+  'scheme' => 'http',
+  'host' => 'i',
+  'user' => 'u@h',
+  'path' => '/',
+)
+=== parse_url('http://u@h@i/', -2)
+=> array (
+  'scheme' => 'http',
+  'host' => 'i',
+  'user' => 'u@h',
+  'path' => '/',
+)
+=== parse_url('http://u@h@i/', 0)
+=> 'http'
+=== parse_url('http://u@h@i/', 1)
+=> 'i'
+=== parse_url('http://u@h@i/', 2)
+=> NULL
+=== parse_url('http://u@h@i/', 3)
+=> 'u@h'
+=== parse_url('http://u@h@i/', 4)
+=> NULL
+=== parse_url('http://u@h@i/', 5)
+=> '/'
+=== parse_url('http://u@h@i/', 6)
+=> NULL
+=== parse_url('http://u@h@i/', 7)
+=> NULL
+=== parse_url('http://u@h@i/', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('http://u@h@i/', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('http://u:p:q@h/')
+=> array (
+  'scheme' => 'http',
+  'host' => 'h',
+  'user' => 'u',
+  'pass' => 'p:q',
+  'path' => '/',
+)
+=== parse_url('http://u:p:q@h/', -2)
+=> array (
+  'scheme' => 'http',
+  'host' => 'h',
+  'user' => 'u',
+  'pass' => 'p:q',
+  'path' => '/',
+)
+=== parse_url('http://u:p:q@h/', 0)
+=> 'http'
+=== parse_url('http://u:p:q@h/', 1)
+=> 'h'
+=== parse_url('http://u:p:q@h/', 2)
+=> NULL
+=== parse_url('http://u:p:q@h/', 3)
+=> 'u'
+=== parse_url('http://u:p:q@h/', 4)
+=> 'p:q'
+=== parse_url('http://u:p:q@h/', 5)
+=> '/'
+=== parse_url('http://u:p:q@h/', 6)
+=> NULL
+=== parse_url('http://u:p:q@h/', 7)
+=> NULL
+=== parse_url('http://u:p:q@h/', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('http://u:p:q@h/', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('http://h:1:2/')
+=> array (
+  'scheme' => 'http',
+  'host' => 'h:1',
+  'port' => 2,
+  'path' => '/',
+)
+=== parse_url('http://h:1:2/', -2)
+=> array (
+  'scheme' => 'http',
+  'host' => 'h:1',
+  'port' => 2,
+  'path' => '/',
+)
+=== parse_url('http://h:1:2/', 0)
+=> 'http'
+=== parse_url('http://h:1:2/', 1)
+=> 'h:1'
+=== parse_url('http://h:1:2/', 2)
+=> 2
+=== parse_url('http://h:1:2/', 3)
+=> NULL
+=== parse_url('http://h:1:2/', 4)
+=> NULL
+=== parse_url('http://h:1:2/', 5)
+=> '/'
+=== parse_url('http://h:1:2/', 6)
+=> NULL
+=== parse_url('http://h:1:2/', 7)
+=> NULL
+=== parse_url('http://h:1:2/', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('http://h:1:2/', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('http://h:/')
+=> array (
+  'scheme' => 'http',
+  'host' => 'h',
+  'path' => '/',
+)
+=== parse_url('http://h:/', -2)
+=> array (
+  'scheme' => 'http',
+  'host' => 'h',
+  'path' => '/',
+)
+=== parse_url('http://h:/', 0)
+=> 'http'
+=== parse_url('http://h:/', 1)
+=> 'h'
+=== parse_url('http://h:/', 2)
+=> NULL
+=== parse_url('http://h:/', 3)
+=> NULL
+=== parse_url('http://h:/', 4)
+=> NULL
+=== parse_url('http://h:/', 5)
+=> '/'
+=== parse_url('http://h:/', 6)
+=> NULL
+=== parse_url('http://h:/', 7)
+=> NULL
+=== parse_url('http://h:/', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('http://h:/', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('h:/')
+=> array (
+  'scheme' => 'h',
+  'path' => '/',
+)
+=== parse_url('h:/', -2)
+=> array (
+  'scheme' => 'h',
+  'path' => '/',
+)
+=== parse_url('h:/', 0)
+=> 'h'
+=== parse_url('h:/', 1)
+=> NULL
+=== parse_url('h:/', 2)
+=> NULL
+=== parse_url('h:/', 3)
+=> NULL
+=== parse_url('h:/', 4)
+=> NULL
+=== parse_url('h:/', 5)
+=> '/'
+=== parse_url('h:/', 6)
+=> NULL
+=== parse_url('h:/', 7)
+=> NULL
+=== parse_url('h:/', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('h:/', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('mailto:a@b.c?subject=x')
+=> array (
+  'scheme' => 'mailto',
+  'path' => 'a@b.c',
+  'query' => 'subject=x',
+)
+=== parse_url('mailto:a@b.c?subject=x', -2)
+=> array (
+  'scheme' => 'mailto',
+  'path' => 'a@b.c',
+  'query' => 'subject=x',
+)
+=== parse_url('mailto:a@b.c?subject=x', 0)
+=> 'mailto'
+=== parse_url('mailto:a@b.c?subject=x', 1)
+=> NULL
+=== parse_url('mailto:a@b.c?subject=x', 2)
+=> NULL
+=== parse_url('mailto:a@b.c?subject=x', 3)
+=> NULL
+=== parse_url('mailto:a@b.c?subject=x', 4)
+=> NULL
+=== parse_url('mailto:a@b.c?subject=x', 5)
+=> 'a@b.c'
+=== parse_url('mailto:a@b.c?subject=x', 6)
+=> 'subject=x'
+=== parse_url('mailto:a@b.c?subject=x', 7)
+=> NULL
+=== parse_url('mailto:a@b.c?subject=x', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('mailto:a@b.c?subject=x', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('news:comp.lang.php')
+=> array (
+  'scheme' => 'news',
+  'path' => 'comp.lang.php',
+)
+=== parse_url('news:comp.lang.php', -2)
+=> array (
+  'scheme' => 'news',
+  'path' => 'comp.lang.php',
+)
+=== parse_url('news:comp.lang.php', 0)
+=> 'news'
+=== parse_url('news:comp.lang.php', 1)
+=> NULL
+=== parse_url('news:comp.lang.php', 2)
+=> NULL
+=== parse_url('news:comp.lang.php', 3)
+=> NULL
+=== parse_url('news:comp.lang.php', 4)
+=> NULL
+=== parse_url('news:comp.lang.php', 5)
+=> 'comp.lang.php'
+=== parse_url('news:comp.lang.php', 6)
+=> NULL
+=== parse_url('news:comp.lang.php', 7)
+=> NULL
+=== parse_url('news:comp.lang.php', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('news:comp.lang.php', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('a.b:80')
+=> array (
+  'host' => 'a.b',
+  'port' => 80,
+)
+=== parse_url('a.b:80', -2)
+=> array (
+  'host' => 'a.b',
+  'port' => 80,
+)
+=== parse_url('a.b:80', 0)
+=> NULL
+=== parse_url('a.b:80', 1)
+=> 'a.b'
+=== parse_url('a.b:80', 2)
+=> 80
+=== parse_url('a.b:80', 3)
+=> NULL
+=== parse_url('a.b:80', 4)
+=> NULL
+=== parse_url('a.b:80', 5)
+=> NULL
+=== parse_url('a.b:80', 6)
+=> NULL
+=== parse_url('a.b:80', 7)
+=> NULL
+=== parse_url('a.b:80', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('a.b:80', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('a.b:800000')
+=> array (
+  'scheme' => 'a.b',
+  'path' => '800000',
+)
+=== parse_url('a.b:800000', -2)
+=> array (
+  'scheme' => 'a.b',
+  'path' => '800000',
+)
+=== parse_url('a.b:800000', 0)
+=> 'a.b'
+=== parse_url('a.b:800000', 1)
+=> NULL
+=== parse_url('a.b:800000', 2)
+=> NULL
+=== parse_url('a.b:800000', 3)
+=> NULL
+=== parse_url('a.b:800000', 4)
+=> NULL
+=== parse_url('a.b:800000', 5)
+=> '800000'
+=== parse_url('a.b:800000', 6)
+=> NULL
+=== parse_url('a.b:800000', 7)
+=> NULL
+=== parse_url('a.b:800000', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('a.b:800000', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('a.b:80a')
+=> array (
+  'scheme' => 'a.b',
+  'path' => '80a',
+)
+=== parse_url('a.b:80a', -2)
+=> array (
+  'scheme' => 'a.b',
+  'path' => '80a',
+)
+=== parse_url('a.b:80a', 0)
+=> 'a.b'
+=== parse_url('a.b:80a', 1)
+=> NULL
+=== parse_url('a.b:80a', 2)
+=> NULL
+=== parse_url('a.b:80a', 3)
+=> NULL
+=== parse_url('a.b:80a', 4)
+=> NULL
+=== parse_url('a.b:80a', 5)
+=> '80a'
+=== parse_url('a.b:80a', 6)
+=> NULL
+=== parse_url('a.b:80a', 7)
+=> NULL
+=== parse_url('a.b:80a', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('a.b:80a', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('a_b:80?x')
+=> array (
+  'path' => 'a_b:80',
+  'query' => 'x',
+)
+=== parse_url('a_b:80?x', -2)
+=> array (
+  'path' => 'a_b:80',
+  'query' => 'x',
+)
+=== parse_url('a_b:80?x', 0)
+=> NULL
+=== parse_url('a_b:80?x', 1)
+=> NULL
+=== parse_url('a_b:80?x', 2)
+=> NULL
+=== parse_url('a_b:80?x', 3)
+=> NULL
+=== parse_url('a_b:80?x', 4)
+=> NULL
+=== parse_url('a_b:80?x', 5)
+=> 'a_b:80'
+=== parse_url('a_b:80?x', 6)
+=> 'x'
+=== parse_url('a_b:80?x', 7)
+=> NULL
+=== parse_url('a_b:80?x', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('a_b:80?x', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('a_b:x?y')
+=> array (
+  'path' => 'a_b:x',
+  'query' => 'y',
+)
+=== parse_url('a_b:x?y', -2)
+=> array (
+  'path' => 'a_b:x',
+  'query' => 'y',
+)
+=== parse_url('a_b:x?y', 0)
+=> NULL
+=== parse_url('a_b:x?y', 1)
+=> NULL
+=== parse_url('a_b:x?y', 2)
+=> NULL
+=== parse_url('a_b:x?y', 3)
+=> NULL
+=== parse_url('a_b:x?y', 4)
+=> NULL
+=== parse_url('a_b:x?y', 5)
+=> 'a_b:x'
+=== parse_url('a_b:x?y', 6)
+=> 'y'
+=== parse_url('a_b:x?y', 7)
+=> NULL
+=== parse_url('a_b:x?y', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('a_b:x?y', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('a_b?:x')
+=> array (
+  'path' => 'a_b',
+  'query' => ':x',
+)
+=== parse_url('a_b?:x', -2)
+=> array (
+  'path' => 'a_b',
+  'query' => ':x',
+)
+=== parse_url('a_b?:x', 0)
+=> NULL
+=== parse_url('a_b?:x', 1)
+=> NULL
+=== parse_url('a_b?:x', 2)
+=> NULL
+=== parse_url('a_b?:x', 3)
+=> NULL
+=== parse_url('a_b?:x', 4)
+=> NULL
+=== parse_url('a_b?:x', 5)
+=> 'a_b'
+=== parse_url('a_b?:x', 6)
+=> ':x'
+=== parse_url('a_b?:x', 7)
+=> NULL
+=== parse_url('a_b?:x', 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url('a_b?:x', 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url('//:80')
+=> false
+=== parse_url('//:80', -2)
+=> false
+=== parse_url('//:80', 0)
+=> false
+=== parse_url('//:80', 1)
+=> false
+=== parse_url('//:80', 2)
+=> false
+=== parse_url('//:80', 3)
+=> false
+=== parse_url('//:80', 4)
+=> false
+=== parse_url('//:80', 5)
+=> false
+=== parse_url('//:80', 6)
+=> false
+=== parse_url('//:80', 7)
+=> false
+=== parse_url('//:80', 8)
+=> false
+=== parse_url('//:80', 99)
+=> false
+=== parse_url('/:80')
+=> false
+=== parse_url('/:80', -2)
+=> false
+=== parse_url('/:80', 0)
+=> false
+=== parse_url('/:80', 1)
+=> false
+=== parse_url('/:80', 2)
+=> false
+=== parse_url('/:80', 3)
+=> false
+=== parse_url('/:80', 4)
+=> false
+=== parse_url('/:80', 5)
+=> false
+=== parse_url('/:80', 6)
+=> false
+=== parse_url('/:80', 7)
+=> false
+=== parse_url('/:80', 8)
+=> false
+=== parse_url('/:80', 99)
+=> false
+=== parse_url("http://h/\x01\x7fx\x1f?q\x02#f\x03")
+=> array (
+  'scheme' => 'http',
+  'host' => 'h',
+  'path' => '/__x_',
+  'query' => 'q_',
+  'fragment' => 'f_',
+)
+=== parse_url("http://h/\x01\x7fx\x1f?q\x02#f\x03", -2)
+=> array (
+  'scheme' => 'http',
+  'host' => 'h',
+  'path' => '/__x_',
+  'query' => 'q_',
+  'fragment' => 'f_',
+)
+=== parse_url("http://h/\x01\x7fx\x1f?q\x02#f\x03", 0)
+=> 'http'
+=== parse_url("http://h/\x01\x7fx\x1f?q\x02#f\x03", 1)
+=> 'h'
+=== parse_url("http://h/\x01\x7fx\x1f?q\x02#f\x03", 2)
+=> NULL
+=== parse_url("http://h/\x01\x7fx\x1f?q\x02#f\x03", 3)
+=> NULL
+=== parse_url("http://h/\x01\x7fx\x1f?q\x02#f\x03", 4)
+=> NULL
+=== parse_url("http://h/\x01\x7fx\x1f?q\x02#f\x03", 5)
+=> '/__x_'
+=== parse_url("http://h/\x01\x7fx\x1f?q\x02#f\x03", 6)
+=> 'q_'
+=== parse_url("http://h/\x01\x7fx\x1f?q\x02#f\x03", 7)
+=> 'f_'
+=== parse_url("http://h/\x01\x7fx\x1f?q\x02#f\x03", 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url("http://h/\x01\x7fx\x1f?q\x02#f\x03", 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url("http://u\x05:p\x06@h\x07/")
+=> array (
+  'scheme' => 'http',
+  'host' => 'h_',
+  'user' => 'u_',
+  'pass' => 'p_',
+  'path' => '/',
+)
+=== parse_url("http://u\x05:p\x06@h\x07/", -2)
+=> array (
+  'scheme' => 'http',
+  'host' => 'h_',
+  'user' => 'u_',
+  'pass' => 'p_',
+  'path' => '/',
+)
+=== parse_url("http://u\x05:p\x06@h\x07/", 0)
+=> 'http'
+=== parse_url("http://u\x05:p\x06@h\x07/", 1)
+=> 'h_'
+=== parse_url("http://u\x05:p\x06@h\x07/", 2)
+=> NULL
+=== parse_url("http://u\x05:p\x06@h\x07/", 3)
+=> 'u_'
+=== parse_url("http://u\x05:p\x06@h\x07/", 4)
+=> 'p_'
+=== parse_url("http://u\x05:p\x06@h\x07/", 5)
+=> '/'
+=== parse_url("http://u\x05:p\x06@h\x07/", 6)
+=> NULL
+=== parse_url("http://u\x05:p\x06@h\x07/", 7)
+=> NULL
+=== parse_url("http://u\x05:p\x06@h\x07/", 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url("http://u\x05:p\x06@h\x07/", 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== parse_url("s\x01:x")
+=> array (
+  'path' => 's_:x',
+)
+=== parse_url("s\x01:x", -2)
+=> array (
+  'path' => 's_:x',
+)
+=== parse_url("s\x01:x", 0)
+=> NULL
+=== parse_url("s\x01:x", 1)
+=> NULL
+=== parse_url("s\x01:x", 2)
+=> NULL
+=== parse_url("s\x01:x", 3)
+=> NULL
+=== parse_url("s\x01:x", 4)
+=> NULL
+=== parse_url("s\x01:x", 5)
+=> 's_:x'
+=== parse_url("s\x01:x", 6)
+=> NULL
+=== parse_url("s\x01:x", 7)
+=> NULL
+=== parse_url("s\x01:x", 8)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given
+=== parse_url("s\x01:x", 99)
+!! ValueError: parse_url(): Argument #2 ($component) must be a valid URL component identifier, 99 given
+=== urlencode('')
+=> ''
+=== rawurlencode('')
+=> ''
+=== bin2hex(urldecode(''))
+=> ''
+=== bin2hex(rawurldecode(''))
+=> ''
+=== urlencode('abc')
+=> 'abc'
+=== rawurlencode('abc')
+=> 'abc'
+=== bin2hex(urldecode('abc'))
+=> '616263'
+=== bin2hex(rawurldecode('abc'))
+=> '616263'
+=== urlencode('a b+c~d_e.f-g')
+=> 'a+b%2Bc%7Ed_e.f-g'
+=== rawurlencode('a b+c~d_e.f-g')
+=> 'a%20b%2Bc~d_e.f-g'
+=== bin2hex(urldecode('a b+c~d_e.f-g'))
+=> '61206220637e645f652e662d67'
+=== bin2hex(rawurldecode('a b+c~d_e.f-g'))
+=> '6120622b637e645f652e662d67'
+=== urlencode('!"#$%&\'()*,/:;<=>?@[\\]^`{|}')
+=> '%21%22%23%24%25%26%27%28%29%2A%2C%2F%3A%3B%3C%3D%3E%3F%40%5B%5C%5D%5E%60%7B%7C%7D'
+=== rawurlencode('!"#$%&\'()*,/:;<=>?@[\\]^`{|}')
+=> '%21%22%23%24%25%26%27%28%29%2A%2C%2F%3A%3B%3C%3D%3E%3F%40%5B%5C%5D%5E%60%7B%7C%7D'
+=== bin2hex(urldecode('!"#$%&\'()*,/:;<=>?@[\\]^`{|}'))
+=> '2122232425262728292a2c2f3a3b3c3d3e3f405b5c5d5e607b7c7d'
+=== bin2hex(rawurldecode('!"#$%&\'()*,/:;<=>?@[\\]^`{|}'))
+=> '2122232425262728292a2c2f3a3b3c3d3e3f405b5c5d5e607b7c7d'
+=== urlencode("\x00\x01\x7f\x80\xff")
+=> '%00%01%7F%80%FF'
+=== rawurlencode("\x00\x01\x7f\x80\xff")
+=> '%00%01%7F%80%FF'
+=== bin2hex(urldecode("\x00\x01\x7f\x80\xff"))
+=> '00017f80ff'
+=== bin2hex(rawurldecode("\x00\x01\x7f\x80\xff"))
+=> '00017f80ff'
+=== urlencode('%41%4a%4A%zz%4%%')
+=> '%2541%254a%254A%25zz%254%25%25'
+=== rawurlencode('%41%4a%4A%zz%4%%')
+=> '%2541%254a%254A%25zz%254%25%25'
+=== bin2hex(urldecode('%41%4a%4A%zz%4%%'))
+=> '414a4a257a7a25342525'
+=== bin2hex(rawurldecode('%41%4a%4A%zz%4%%'))
+=> '414a4a257a7a25342525'
+=== urlencode('%')
+=> '%25'
+=== rawurlencode('%')
+=> '%25'
+=== bin2hex(urldecode('%'))
+=> '25'
+=== bin2hex(rawurldecode('%'))
+=> '25'
+=== urlencode('%4')
+=> '%254'
+=== rawurlencode('%4')
+=> '%254'
+=== bin2hex(urldecode('%4'))
+=> '2534'
+=== bin2hex(rawurldecode('%4'))
+=> '2534'
+=== urlencode('%41')
+=> '%2541'
+=== rawurlencode('%41')
+=> '%2541'
+=== bin2hex(urldecode('%41'))
+=> '41'
+=== bin2hex(rawurldecode('%41'))
+=> '41'
+=== urlencode('+%2B+')
+=> '%2B%252B%2B'
+=== rawurlencode('+%2B+')
+=> '%2B%252B%2B'
+=== bin2hex(urldecode('+%2B+'))
+=> '202b20'
+=== bin2hex(rawurldecode('+%2B+'))
+=> '2b2b2b'
+=== urlencode('%e4%f6%FC')
+=> '%25e4%25f6%25FC'
+=== rawurlencode('%e4%f6%FC')
+=> '%25e4%25f6%25FC'
+=== bin2hex(urldecode('%e4%f6%FC'))
+=> 'e4f6fc'
+=== bin2hex(rawurldecode('%e4%f6%FC'))
+=> 'e4f6fc'
+=== urlencode("caf\xc3\xa9 \xe2\x82\xac")
+=> 'caf%C3%A9+%E2%82%AC'
+=== rawurlencode("caf\xc3\xa9 \xe2\x82\xac")
+=> 'caf%C3%A9%20%E2%82%AC'
+=== bin2hex(urldecode("caf\xc3\xa9 \xe2\x82\xac"))
+=> '636166c3a920e282ac'
+=== bin2hex(rawurldecode("caf\xc3\xa9 \xe2\x82\xac"))
+=> '636166c3a920e282ac'
+=== urlencode("\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f !\"#\$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~\x7f\x80\x81\x82\x83\x84\x85\x86\x87\x88\x89\x8a\x8b\x8c\x8d\x8e\x8f\x90\x91\x92\x93\x94\x95\x96\x97\x98\x99\x9a\x9b\x9c\x9d\x9e\x9f\xa0\xa1\xa2\xa3\xa4\xa5\xa6\xa7\xa8\xa9\xaa\xab\xac\xad\xae\xaf\xb0\xb1\xb2\xb3\xb4\xb5\xb6\xb7\xb8\xb9\xba\xbb\xbc\xbd\xbe\xbf\xc0\xc1\xc2\xc3\xc4\xc5\xc6\xc7\xc8\xc9\xca\xcb\xcc\xcd\xce\xcf\xd0\xd1\xd2\xd3\xd4\xd5\xd6\xd7\xd8\xd9\xda\xdb\xdc\xdd\xde\xdf\xe0\xe1\xe2\xe3\xe4\xe5\xe6\xe7\xe8\xe9\xea\xeb\xec\xed\xee\xef\xf0\xf1\xf2\xf3\xf4\xf5\xf6\xf7\xf8\xf9\xfa\xfb\xfc\xfd\xfe\xff")
+=> '%00%01%02%03%04%05%06%07%08%09%0A%0B%0C%0D%0E%0F%10%11%12%13%14%15%16%17%18%19%1A%1B%1C%1D%1E%1F+%21%22%23%24%25%26%27%28%29%2A%2B%2C-.%2F0123456789%3A%3B%3C%3D%3E%3F%40ABCDEFGHIJKLMNOPQRSTUVWXYZ%5B%5C%5D%5E_%60abcdefghijklmnopqrstuvwxyz%7B%7C%7D%7E%7F%80%81%82%83%84%85%86%87%88%89%8A%8B%8C%8D%8E%8F%90%91%92%93%94%95%96%97%98%99%9A%9B%9C%9D%9E%9F%A0%A1%A2%A3%A4%A5%A6%A7%A8%A9%AA%AB%AC%AD%AE%AF%B0%B1%B2%B3%B4%B5%B6%B7%B8%B9%BA%BB%BC%BD%BE%BF%C0%C1%C2%C3%C4%C5%C6%C7%C8%C9%CA%CB%CC%CD%CE%CF%D0%D1%D2%D3%D4%D5%D6%D7%D8%D9%DA%DB%DC%DD%DE%DF%E0%E1%E2%E3%E4%E5%E6%E7%E8%E9%EA%EB%EC%ED%EE%EF%F0%F1%F2%F3%F4%F5%F6%F7%F8%F9%FA%FB%FC%FD%FE%FF'
+=== rawurlencode("\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f !\"#\$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~\x7f\x80\x81\x82\x83\x84\x85\x86\x87\x88\x89\x8a\x8b\x8c\x8d\x8e\x8f\x90\x91\x92\x93\x94\x95\x96\x97\x98\x99\x9a\x9b\x9c\x9d\x9e\x9f\xa0\xa1\xa2\xa3\xa4\xa5\xa6\xa7\xa8\xa9\xaa\xab\xac\xad\xae\xaf\xb0\xb1\xb2\xb3\xb4\xb5\xb6\xb7\xb8\xb9\xba\xbb\xbc\xbd\xbe\xbf\xc0\xc1\xc2\xc3\xc4\xc5\xc6\xc7\xc8\xc9\xca\xcb\xcc\xcd\xce\xcf\xd0\xd1\xd2\xd3\xd4\xd5\xd6\xd7\xd8\xd9\xda\xdb\xdc\xdd\xde\xdf\xe0\xe1\xe2\xe3\xe4\xe5\xe6\xe7\xe8\xe9\xea\xeb\xec\xed\xee\xef\xf0\xf1\xf2\xf3\xf4\xf5\xf6\xf7\xf8\xf9\xfa\xfb\xfc\xfd\xfe\xff")
+=> '%00%01%02%03%04%05%06%07%08%09%0A%0B%0C%0D%0E%0F%10%11%12%13%14%15%16%17%18%19%1A%1B%1C%1D%1E%1F%20%21%22%23%24%25%26%27%28%29%2A%2B%2C-.%2F0123456789%3A%3B%3C%3D%3E%3F%40ABCDEFGHIJKLMNOPQRSTUVWXYZ%5B%5C%5D%5E_%60abcdefghijklmnopqrstuvwxyz%7B%7C%7D~%7F%80%81%82%83%84%85%86%87%88%89%8A%8B%8C%8D%8E%8F%90%91%92%93%94%95%96%97%98%99%9A%9B%9C%9D%9E%9F%A0%A1%A2%A3%A4%A5%A6%A7%A8%A9%AA%AB%AC%AD%AE%AF%B0%B1%B2%B3%B4%B5%B6%B7%B8%B9%BA%BB%BC%BD%BE%BF%C0%C1%C2%C3%C4%C5%C6%C7%C8%C9%CA%CB%CC%CD%CE%CF%D0%D1%D2%D3%D4%D5%D6%D7%D8%D9%DA%DB%DC%DD%DE%DF%E0%E1%E2%E3%E4%E5%E6%E7%E8%E9%EA%EB%EC%ED%EE%EF%F0%F1%F2%F3%F4%F5%F6%F7%F8%F9%FA%FB%FC%FD%FE%FF'
+=== bin2hex(urldecode(urlencode("\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f !\"#\$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~\x7f\x80\x81\x82\x83\x84\x85\x86\x87\x88\x89\x8a\x8b\x8c\x8d\x8e\x8f\x90\x91\x92\x93\x94\x95\x96\x97\x98\x99\x9a\x9b\x9c\x9d\x9e\x9f\xa0\xa1\xa2\xa3\xa4\xa5\xa6\xa7\xa8\xa9\xaa\xab\xac\xad\xae\xaf\xb0\xb1\xb2\xb3\xb4\xb5\xb6\xb7\xb8\xb9\xba\xbb\xbc\xbd\xbe\xbf\xc0\xc1\xc2\xc3\xc4\xc5\xc6\xc7\xc8\xc9\xca\xcb\xcc\xcd\xce\xcf\xd0\xd1\xd2\xd3\xd4\xd5\xd6\xd7\xd8\xd9\xda\xdb\xdc\xdd\xde\xdf\xe0\xe1\xe2\xe3\xe4\xe5\xe6\xe7\xe8\xe9\xea\xeb\xec\xed\xee\xef\xf0\xf1\xf2\xf3\xf4\xf5\xf6\xf7\xf8\xf9\xfa\xfb\xfc\xfd\xfe\xff")))
+=> '000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff'
+=== bin2hex(rawurldecode(rawurlencode("\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f !\"#\$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~\x7f\x80\x81\x82\x83\x84\x85\x86\x87\x88\x89\x8a\x8b\x8c\x8d\x8e\x8f\x90\x91\x92\x93\x94\x95\x96\x97\x98\x99\x9a\x9b\x9c\x9d\x9e\x9f\xa0\xa1\xa2\xa3\xa4\xa5\xa6\xa7\xa8\xa9\xaa\xab\xac\xad\xae\xaf\xb0\xb1\xb2\xb3\xb4\xb5\xb6\xb7\xb8\xb9\xba\xbb\xbc\xbd\xbe\xbf\xc0\xc1\xc2\xc3\xc4\xc5\xc6\xc7\xc8\xc9\xca\xcb\xcc\xcd\xce\xcf\xd0\xd1\xd2\xd3\xd4\xd5\xd6\xd7\xd8\xd9\xda\xdb\xdc\xdd\xde\xdf\xe0\xe1\xe2\xe3\xe4\xe5\xe6\xe7\xe8\xe9\xea\xeb\xec\xed\xee\xef\xf0\xf1\xf2\xf3\xf4\xf5\xf6\xf7\xf8\xf9\xfa\xfb\xfc\xfd\xfe\xff")))
+=> '000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff'

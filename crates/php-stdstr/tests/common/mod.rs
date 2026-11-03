@@ -152,16 +152,19 @@ where
 
 fn export_str(s: &[u8], out: &mut String) {
     // var_export: '...' with \ and ' escaped; NUL bytes as ' . "\0" . '
-    out.push('\'');
+    // Raw bytes are decoded lossily, exactly like the fixture file is read.
+    let mut raw = Vec::with_capacity(s.len() + 2);
+    raw.push(b'\'');
     for &b in s {
         match b {
-            b'\\' => out.push_str("\\\\"),
-            b'\'' => out.push_str("\\'"),
-            0 => out.push_str("' . \"\\0\" . '"),
-            _ => out.push(char::from(b)),
+            b'\\' => raw.extend_from_slice(b"\\\\"),
+            b'\'' => raw.extend_from_slice(b"\\'"),
+            0 => raw.extend_from_slice(b"' . \"\\0\" . '"),
+            _ => raw.push(b),
         }
     }
-    out.push('\'');
+    raw.push(b'\'');
+    out.push_str(&String::from_utf8_lossy(&raw));
 }
 
 /// `smart_str_append_double(buf, d, serialize_precision = -1, zero_frac)`.
