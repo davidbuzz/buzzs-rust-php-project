@@ -375,3 +375,16 @@ pub fn wchar_to_hz(input: &[u32], buf: &mut ConvertBuf, end: bool) {
         buf.extend(b"~}");
     }
 }
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn detail_oracle() {
+        assert!(crate::codecs::cjk::testutil::replay_oracle("hz_oracle.tsv") > 500);
+    }
+
+    #[test]
+    fn exhaustive_oracle() {
+        assert!(crate::codecs::cjk::gb18030::exhaustive::replay("hz_exhaustive.tsv") > 500);
+    }
+}

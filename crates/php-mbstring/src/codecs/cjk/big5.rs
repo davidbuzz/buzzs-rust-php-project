@@ -318,3 +318,16 @@ pub fn wchar_to_cp950(input: &[u32], buf: &mut ConvertBuf, _end: bool) {
         emit_big5(w, s, buf);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn detail_oracle() {
+        assert!(crate::codecs::cjk::testutil::replay_oracle("big5_oracle.tsv") > 500);
+    }
+
+    #[test]
+    fn exhaustive_oracle() {
+        assert!(crate::codecs::cjk::gb18030::exhaustive::replay("big5_exhaustive.tsv") > 500);
+    }
+}

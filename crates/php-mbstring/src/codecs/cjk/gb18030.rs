@@ -650,3 +650,111 @@ pub fn cut_gb18030(s: &[u8], from: usize, len: usize) -> Vec<u8> {
         s[start..e].to_vec()
     }
 }
+
+/// Replay of the hashed exhaustive oracle fixtures
+/// (`tests/fixtures/cjk/gb_exhaustive_lib.php`), shared with the BIG5 and HZ
+/// tests.
+#[cfg(test)]
+pub(crate) mod exhaustive {
+    use crate::codecs::cjk::testutil::{enc, fixture_path};
+    use crate::codecs::utf8::push_utf8;
+    use crate::convert::{fast_convert, ErrorMode};
+
+    fn fnv1a64(data: &[u8]) -> String {
+        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+        for &b in data {
+            h ^= u64::from(b);
+            h = h.wrapping_mul(0x0100_0000_01b3);
+        }
+        format!("{h:016x}")
+    }
+
+    fn unhex(s: &str) -> Vec<u8> {
+        (0..s.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&s[i..i + 2], 16).expect("bad hex"))
+            .collect()
+    }
+
+    fn num<T: std::str::FromStr>(s: &str) -> T
+    where
+        T::Err: std::fmt::Debug,
+    {
+        s.parse().expect("bad number in fixture")
+    }
+
+    /// Replay `name`; returns the number of lines checked.
+    #[allow(clippy::cast_possible_truncation)]
+    pub(crate) fn replay(name: &str) -> usize {
+        let text = std::fs::read_to_string(fixture_path(name))
+            .unwrap_or_else(|e| panic!("cannot read fixture {name}: {e}"));
+        let mut failures = Vec::new();
+        let mut n = 0;
+        for line in text.lines() {
+            let f: Vec<&str> = line.split('\t').collect();
+            n += 1;
+            let (e, input, to_utf8, hash, errors) = match f[0] {
+                "dec" => {
+                    let mut input = unhex(f[2]);
+                    let sep = unhex(f[3]);
+                    let b1: u8 = num(f[4]);
+                    for b2 in 0..=255u8 {
+                        input.extend([b1, b2]);
+                        input.extend(&sep);
+                    }
+                    (f[1], input, true, f[5], f[6])
+                }
+                "dec4" => {
+                    let (b1, b2): (u8, u8) = (num(f[2]), num(f[3]));
+                    let mut input = Vec::new();
+                    for b3 in 0x81..=0xFEu8 {
+                        for b4 in 0x30..=0x39u8 {
+                            input.extend([b1, b2, b3, b4]);
+                        }
+                    }
+                    (f[1], input, true, f[4], f[5])
+                }
+                "enc" => {
+                    let (start, count): (u32, u32) = (num(f[2]), num(f[3]));
+                    let mut input = Vec::new();
+                    for cp in start..start + count {
+                        if !(0xD800..=0xDFFF).contains(&cp) {
+                            push_utf8(&mut input, cp);
+                        }
+                    }
+                    (f[1], input, false, f[4], f[5])
+                }
+                other => panic!("unknown record {other}"),
+            };
+            let (out, errs) = if to_utf8 {
+                fast_convert(&input, enc(e), enc("UTF-8"), 0x10_FFFD, ErrorMode::Char)
+            } else {
+                fast_convert(&input, enc("UTF-8"), enc(e), 0x3F, ErrorMode::Char)
+            };
+            let exp_err: u32 = num(errors);
+            if fnv1a64(&out) != hash || errs != exp_err {
+                failures.push(format!("{line} (got {} / {errs} errors)", fnv1a64(&out)));
+            }
+        }
+        assert!(
+            failures.is_empty(),
+            "{} of {n} exhaustive cases in {name} failed:\n{}",
+            failures.len(),
+            failures.join("\n")
+        );
+        n
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn detail_oracle() {
+        assert!(crate::codecs::cjk::testutil::replay_oracle("gb_oracle.tsv") > 500);
+    }
+
+    #[test]
+    fn exhaustive_oracle() {
+        assert!(super::exhaustive::replay("gb_exhaustive.tsv") > 1000);
+    }
+}
