@@ -520,3 +520,105 @@ fn uninitialized_pdo_handle() {
     assert!(e.is_err());
     assert!(p.driver_name() == Some("sqlite"));
 }
+
+fn emu_db(h: &mut TestHost) -> Value {
+    common::emu::register();
+    let db = h.new_pdo("PDO", "sqlemu::memory:", None).unwrap();
+    h.set_attr(&db, ATTR_ERRMODE, i(ERRMODE_WARNING)).unwrap();
+    db
+}
+
+#[test]
+fn emulated_prepares() {
+    let mut h = TestHost::new();
+    let db = emu_db(&mut h);
+    let st = h.prepare(&db, "SELECT ?, ?").unwrap();
+    assert!(h.execute(&st, Some(arr(vec![s("it's"), i(5)]))).unwrap());
+    let d = String::from_utf8_lossy(&TestHost::stmt(&st).debug_dump_bytes()).into_owned();
+    assert!(d.contains("Sent SQL: [19] SELECT 'it''s', '5'"), "{d}");
+    let r = h.fetch(&st, FETCH_NUM).unwrap();
+    assert_eq!(
+        dump_str(&mut h, &r),
+        "array(2) {\n  [0]=>\n  string(4) \"it's\"\n  [1]=>\n  string(1) \"5\"\n}\n"
+    );
+    // wrong number of parameters
+    let st = h.prepare(&db, "SELECT ?").unwrap();
+    assert!(!h.execute(&st, Some(arr(vec![i(1), i(2)]))).unwrap());
+    assert!(h.output().contains(
+        "PDOStatement::execute(): SQLSTATE[HY093]: Invalid parameter number: number of bound variables does not match number of tokens"
+    ));
+    // mixed placeholders
+    h.out.clear();
+    let st = h.prepare(&db, "SELECT :a, ?").unwrap();
+    assert!(!h.execute(&st, Some(arr(vec![i(1)]))).unwrap());
+    assert!(h
+        .output()
+        .contains("Invalid parameter number: mixed named and positional parameters"));
+    // undefined named parameter
+    h.out.clear();
+    let st = h.prepare(&db, "SELECT :a").unwrap();
+    assert!(!h.execute(&st, Some(assoc(vec![(":b", i(1))]))).unwrap());
+    assert!(
+        h.output()
+            .contains("Invalid parameter number: parameter was not defined"),
+        "{}",
+        h.output()
+    );
+    // the same named parameter twice
+    h.out.clear();
+    let st = h.prepare(&db, "SELECT :a, :a").unwrap();
+    assert!(h.execute(&st, Some(assoc(vec![(":a", s("v"))]))).unwrap());
+    let r = h.fetch(&st, FETCH_NUM).unwrap();
+    assert_eq!(
+        dump_str(&mut h, &r),
+        "array(2) {\n  [0]=>\n  string(1) \"v\"\n  [1]=>\n  string(1) \"v\"\n}\n"
+    );
+    // PDO::ATTR_EMULATE_PREPARES as seen by the statement
+    let v = TestHost::stmt(&st)
+        .get_attribute(&mut h, ATTR_EMULATE_PREPARES)
+        .unwrap();
+    assert!(matches!(v, Value::Bool(true)));
+    // typed parameters
+    let st = h.prepare(&db, "SELECT :i, :b, :n, :l").unwrap();
+    h.bind_value(&st, ParamId::Name(z(":i")), s("12abc"), PARAM_INT)
+        .unwrap();
+    h.bind_value(&st, ParamId::Name(z(":b")), i(0), PARAM_BOOL)
+        .unwrap();
+    h.bind_value(&st, ParamId::Name(z(":n")), s("x"), PARAM_NULL)
+        .unwrap();
+    let lob = Value::Resource(php_runtime::Resource::new(
+        "stream",
+        Some(Box::new(b"blob".to_vec())),
+    ));
+    h.bind_value(&st, ParamId::Name(z(":l")), lob, PARAM_LOB)
+        .unwrap();
+    assert!(h.execute(&st, None).unwrap());
+    let d = String::from_utf8_lossy(&TestHost::stmt(&st).debug_dump_bytes()).into_owned();
+    assert!(
+        d.contains("Sent SQL: [26] SELECT 12, 0, NULL, 'blob'"),
+        "{d}"
+    );
+}
+
+#[test]
+fn gc_values_report_bound_state() {
+    let mut h = TestHost::new();
+    let db = db_with_rows(&mut h);
+    h.set_attr(
+        &db,
+        ATTR_STATEMENT_CLASS,
+        Value::Array(arr(vec![s("PDOStatement")])),
+    )
+    .unwrap();
+    assert!(TestHost::pdo(&db).gc_values().is_empty());
+    let st = h.prepare(&db, "SELECT a FROM t WHERE a = ?").unwrap();
+    let v = PhpRef::new(i(1));
+    h.bind_param(&st, ParamId::Position(1), &v, PARAM_INT)
+        .unwrap();
+    let o = h.new_object("stdClass");
+    h.set_fetch_mode(&st, FETCH_INTO, std::slice::from_ref(&o))
+        .unwrap();
+    let gc = TestHost::stmt(&st).gc_values();
+    // the PDO object, the bound variable and the fetch-into object
+    assert_eq!(gc.len(), 3);
+}

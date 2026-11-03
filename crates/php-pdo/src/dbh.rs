@@ -326,6 +326,18 @@ impl Pdo {
         self.dbh().entry.get().map(|e| e.name)
     }
 
+    /// The values the VM must report to its garbage collector
+    /// (`dbh_get_gc`): the default statement constructor arguments.
+    pub fn gc_values(&self) -> Vec<Value> {
+        self.dbh()
+            .def_stmt_ctor_args
+            .borrow()
+            .clone()
+            .map(Value::Array)
+            .into_iter()
+            .collect()
+    }
+
     /// The current error mode (`PDO::ATTR_ERRMODE`).
     pub fn error_mode(&self) -> i64 {
         self.dbh().error_mode.get()
