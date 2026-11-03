@@ -33,7 +33,9 @@ use php_vm::ext::{
 use php_vm::func::flags;
 use php_vm::object::{class_of, data};
 use php_vm::Vm;
-use php_xmlreader::{CollectingHost, IssetKind, PropValue, Property, ReaderError, Source, XmlReader};
+use php_xmlreader::{
+    CollectingHost, IssetKind, PropValue, Property, ReaderError, Source, XmlReader,
+};
 
 /// The `xmlreader` extension.
 #[derive(Debug, Clone, Copy, Default)]
@@ -195,7 +197,10 @@ fn std_properties(o: &Obj) -> HashTable {
                 continue;
             }
             if let Some(Some(v)) = slots.get(pi.slot as usize) {
-                t.insert(ArrayKey::Str(mangle(pi.flags, &pi.class, &pi.name)), v.clone());
+                t.insert(
+                    ArrayKey::Str(mangle(pi.flags, &pi.class, &pi.name)),
+                    v.clone(),
+                );
             }
         }
     }
@@ -266,7 +271,9 @@ fn get_attribute_no(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 fn get_attribute_ns(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let st = this_state(vm, a)?;
     let (name, ns) = (a.str(0), a.str(1));
-    let r = with_reader(vm, a, &st, |r| r.get_attribute_ns(name.as_bytes(), ns.as_bytes()))?;
+    let r = with_reader(vm, a, &st, |r| {
+        r.get_attribute_ns(name.as_bytes(), ns.as_bytes())
+    })?;
     r.map(opt_str_value).map_err(|e| throw(vm, &e))
 }
 
@@ -312,7 +319,9 @@ fn move_to_attribute_no(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 fn move_to_attribute_ns(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let st = this_state(vm, a)?;
     let (name, ns) = (a.str(0), a.str(1));
-    let r = with_reader(vm, a, &st, |r| r.move_to_attribute_ns(name.as_bytes(), ns.as_bytes()))?;
+    let r = with_reader(vm, a, &st, |r| {
+        r.move_to_attribute_ns(name.as_bytes(), ns.as_bytes())
+    })?;
     r.map(Value::Bool).map_err(|e| throw(vm, &e))
 }
 
@@ -431,7 +440,13 @@ type StaticLoad =
 /// The shared body of `open()`/`XML()`: on an instance (re)loads it and
 /// returns a `bool`; called statically returns a new `XMLReader` or
 /// `false`.
-fn legacy_load(vm: &mut Vm, a: &Args, name: &str, on_obj: InstanceLoad, on_class: StaticLoad) -> VmResult<Value> {
+fn legacy_load(
+    vm: &mut Vm,
+    a: &Args,
+    name: &str,
+    on_obj: InstanceLoad,
+    on_class: StaticLoad,
+) -> VmResult<Value> {
     let arg = a.str(0);
     let encoding = opt_bytes(a, 1);
     let flags_ = a.int(2);
@@ -641,7 +656,10 @@ mod tests {
     #[test]
     fn prop_values() {
         assert!(matches!(prop_value(PropValue::Int(3)), Value::Int(3)));
-        assert!(matches!(prop_value(PropValue::Bool(true)), Value::Bool(true)));
+        assert!(matches!(
+            prop_value(PropValue::Bool(true)),
+            Value::Bool(true)
+        ));
         assert!(matches!(opt_str_value(None), Value::Null));
         assert!(matches!(opt_str_value(Some(b"x".to_vec())), Value::Str(_)));
     }

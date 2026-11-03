@@ -50,7 +50,9 @@ pub fn construct(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let is_url = a.bool(2);
     let ns = bytes(a, 3);
     let is_prefix = a.bool(4);
-    lent(vm, a, |_| Sxe::construct(&st, &data, options, is_url, &ns, is_prefix))?;
+    lent(vm, a, |_| {
+        Sxe::construct(&st, &data, options, is_url, &ns, is_prefix)
+    })?;
     Ok(Value::Null)
 }
 
@@ -122,7 +124,9 @@ pub fn add_attribute(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let qname = bytes(a, 0);
     let value = bytes(a, 1);
     let ns = opt_bytes(a, 2);
-    lent(vm, a, |h| Sxe::add_attribute(&st, h, &qname, &value, ns.as_deref()))?;
+    lent(vm, a, |h| {
+        Sxe::add_attribute(&st, h, &qname, &value, ns.as_deref())
+    })?;
     Ok(Value::Null)
 }
 
@@ -238,14 +242,14 @@ fn drop_trampoline_frame(e: &php_runtime::Obj) {
 /// `Z_PARAM_CLASS_OR_NULL` against `SimpleXMLElement`: argument `n`
 /// (0-based) as the class to instantiate.
 fn class_arg(vm: &mut Vm, a: &Args, n: usize) -> VmResult<Option<Rc<Class>>> {
-    let Some(v) = a.opt(n) else {
+    let Some(arg) = a.opt(n) else {
         return Ok(None);
     };
-    let name = vm.value_to_string(&v)?;
+    let name = vm.value_to_string(&arg)?;
     let base = vm.find_class(b"SimpleXMLElement");
     let found = vm.lookup_class(&name)?;
     match (found, base) {
-        (Some(c), Some(b)) if c.is_subclass_of(&b) => Ok(Some(c)),
+        (Some(cls), Some(root)) if cls.is_subclass_of(&root) => Ok(Some(cls)),
         _ => Err(a.type_error(
             vm,
             n + 1,
@@ -289,10 +293,10 @@ pub fn import_dom(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let node = match a.at(0) {
         Value::Object(o) => match php_ext_xsl::access::import(vm, &o)? {
             Some((_, found)) => match found {
-                ImportedNode::Document(XmlSource::Document(d)) => d.root(),
+                ImportedNode::Document(XmlSource::Document(d))
+                | ImportedNode::Node(XmlSource::Document(d)) => d.root(),
                 ImportedNode::Document(XmlSource::Node(n))
                 | ImportedNode::Node(XmlSource::Node(n)) => Some(n),
-                ImportedNode::Node(XmlSource::Document(d)) => d.root(),
                 _ => None,
             },
             _ => None,

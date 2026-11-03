@@ -156,7 +156,11 @@ impl RuntimeContext for VmHost<'_> {
     fn compare_objects(&mut self, op1: &Value, op2: &Value) -> RtResult<i32> {
         self.vm.compare_objects(op1, op2)
     }
-    fn object_properties(&mut self, obj: &Obj, purpose: PropertyPurpose) -> RtResult<Option<ZArray>> {
+    fn object_properties(
+        &mut self,
+        obj: &Obj,
+        purpose: PropertyPurpose,
+    ) -> RtResult<Option<ZArray>> {
         self.vm.object_properties(obj, purpose)
     }
     fn object_dump(&mut self, obj: &Obj, purpose: PropertyPurpose) -> RtResult<ObjectDump> {
@@ -220,7 +224,11 @@ impl RuntimeContext for LentHost {
     fn compare_objects(&mut self, op1: &Value, op2: &Value) -> RtResult<i32> {
         lend(|h| h.compare_objects(op1, op2))
     }
-    fn object_properties(&mut self, obj: &Obj, purpose: PropertyPurpose) -> RtResult<Option<ZArray>> {
+    fn object_properties(
+        &mut self,
+        obj: &Obj,
+        purpose: PropertyPurpose,
+    ) -> RtResult<Option<ZArray>> {
         lend(|h| h.object_properties(obj, purpose))
     }
     fn object_dump(&mut self, obj: &Obj, purpose: PropertyPurpose) -> RtResult<ObjectDump> {

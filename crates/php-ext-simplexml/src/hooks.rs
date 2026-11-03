@@ -44,12 +44,21 @@ pub fn direct<R>(vm: &mut Vm, f: impl FnOnce(&mut VmHost<'_>) -> RtResult<R>) ->
 
 /// The fetch type of the property/dimension access being executed.
 pub fn fetch_mode(vm: &Vm) -> FetchMode {
-    let Some(f) = vm.frames.iter().rev().find(|f| f.kind != FrameKind::Builtin) else {
+    let Some(f) = vm
+        .frames
+        .iter()
+        .rev()
+        .find(|f| f.kind != FrameKind::Builtin)
+    else {
         return FetchMode::Read;
     };
     match f.ip.checked_sub(1).and_then(|i| f.code.ops.get(i)) {
-        Some(Op::Assign { .. } | Op::AssignRef { .. } | Op::MakeRef { .. }) => FetchMode::Write,
-        Some(Op::FeReset { place: Some(_), .. }) => FetchMode::Write,
+        Some(
+            Op::Assign { .. }
+            | Op::AssignRef { .. }
+            | Op::MakeRef { .. }
+            | Op::FeReset { place: Some(_), .. },
+        ) => FetchMode::Write,
         Some(Op::AssignOp { .. } | Op::IncDec { .. }) => FetchMode::ReadWrite,
         Some(
             Op::Isset { .. }
@@ -172,7 +181,9 @@ fn write_property(vm: &mut Vm, o: &Obj, name: &ZStr, v: &Value) -> VmResult<bool
     let Some(st) = sxe_of(o) else {
         return Ok(false);
     };
-    direct(vm, |h| Sxe::write_property(&st, h, name.as_bytes(), &v.deref()))?;
+    direct(vm, |h| {
+        Sxe::write_property(&st, h, name.as_bytes(), &v.deref())
+    })?;
     Ok(true)
 }
 
@@ -233,7 +244,9 @@ fn write_dimension(vm: &mut Vm, o: &Obj, k: Option<&Value>, v: &Value) -> VmResu
         return Ok(false);
     };
     let key = k.map(Value::deref);
-    direct(vm, |h| Sxe::write_dimension(&st, h, key.as_ref(), &v.deref()))?;
+    direct(vm, |h| {
+        Sxe::write_dimension(&st, h, key.as_ref(), &v.deref())
+    })?;
     Ok(true)
 }
 
