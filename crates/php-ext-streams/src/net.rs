@@ -9,8 +9,8 @@ use std::time::Duration;
 
 use php_runtime::{Value, ZArray};
 use php_streams::stream::{
-    flags, CastAs, OpFailed, Stream, StreamOps, StreamOption, StreamState, OPT_ERR,
-    OPT_NOTIMPL, OPT_OK,
+    flags, CastAs, OpFailed, Stream, StreamOps, StreamOption, StreamState, OPT_ERR, OPT_NOTIMPL,
+    OPT_OK,
 };
 use php_streams::transports;
 use php_streams::value::Value as SValue;
@@ -58,7 +58,7 @@ fn wait_fd(fd: RawFd, events: i16, timeout: Option<Duration>) -> bool {
         revents: 0,
     };
     // SAFETY: `p` is a valid pollfd for the duration of the call.
-    let rc = unsafe { libc::poll(&mut p, 1, ms) };
+    let rc = unsafe { libc::poll(&raw mut p, 1, ms) };
     rc > 0
 }
 
@@ -185,7 +185,7 @@ fn default_timeout(vm: &Vm) -> Duration {
 }
 
 /// `PHP_TIMEOUT_ULL_MAX / 1000000.0`.
-const TIMEOUT_MAX: f64 = 18_446_744_073_709.551_615;
+const TIMEOUT_MAX: f64 = 18_446_744_073_709.55;
 
 /// Converts a validated timeout in seconds; negative or huge values wait
 /// forever (`tv_pointer = NULL`).
@@ -199,16 +199,14 @@ fn to_duration(t: f64) -> Option<Duration> {
 /// A `?float $timeout` argument of `stream_socket_client()` /
 /// `stream_socket_accept()` ("must be a finite value").
 fn finite_timeout(vm: &mut Vm, a: &Args, n: usize) -> VmResult<Option<Duration>> {
-    match a.opt(n) {
-        None => Ok(Some(default_timeout(vm))),
-        Some(_) => {
-            let t = a.float(n);
-            if !t.is_finite() {
-                return Err(a.value_error(vm, n + 1, "must be a finite value"));
-            }
-            Ok(to_duration(t))
-        }
+    if a.opt(n).is_none() {
+        return Ok(Some(default_timeout(vm)));
     }
+    let t = a.float(n);
+    if !t.is_finite() {
+        return Err(a.value_error(vm, n + 1, "must be a finite value"));
+    }
+    Ok(to_duration(t))
 }
 
 fn set_ref(a: &mut Args, n: usize, v: Value) {
@@ -271,8 +269,16 @@ fn xport_create(
     if !server && flags & 4 == 0 && matches!(scheme.as_str(), "tcp" | "udp" | "unix") {
         // No STREAM_CLIENT_CONNECT: an unconnected socket (xp_socket parses
         // the address only when connecting).
-        let domain = if scheme == "unix" { libc::AF_UNIX } else { libc::AF_INET };
-        let ty = if scheme == "udp" { libc::SOCK_DGRAM } else { libc::SOCK_STREAM };
+        let domain = if scheme == "unix" {
+            libc::AF_UNIX
+        } else {
+            libc::AF_INET
+        };
+        let ty = if scheme == "udp" {
+            libc::SOCK_DGRAM
+        } else {
+            libc::SOCK_STREAM
+        };
         // SAFETY: plain socket(2) call.
         let fd = unsafe { libc::socket(domain, ty, 0) };
         if fd >= 0 {
@@ -294,33 +300,31 @@ fn xport_create(
             s
         }));
     }
-    let r = bridge::run(vm, || transports::socket_client(address.as_bytes(), timeout))?;
-    Ok(r
-        .map(|mut s| {
-            s.context = ctx;
-            s
-        })
-        .map_err(|e| XportError {
-            errno: e.errno,
-            message: e.message,
-        }))
+    let r = bridge::run(vm, || {
+        transports::socket_client(address.as_bytes(), timeout)
+    })?;
+    Ok(r.map(|mut s| {
+        s.context = ctx;
+        s
+    })
+    .map_err(|e| XportError {
+        errno: e.errno,
+        message: e.message,
+    }))
 }
 
 fn fsockopen_impl(vm: &mut Vm, a: &mut Args, persistent: bool) -> VmResult<Value> {
     let host = str_arg(a, 0);
     let port = a.int(1);
-    let timeout = match a.opt(4) {
-        None => Some(default_timeout(vm)),
-        Some(_) => {
+    let timeout = if a.opt(4).is_none() {
+        Some(default_timeout(vm))
+    } else {
+        {
             let t = a.float(4);
             #[allow(clippy::float_cmp)]
             let minus_one = t == -1.0;
             if !minus_one && !(0.0..=TIMEOUT_MAX).contains(&t) {
-                return Err(a.value_error(
-                    vm,
-                    5,
-                    "must be -1 or between 0 and 18446744073709",
-                ));
+                return Err(a.value_error(vm, 5, "must be -1 or between 0 and 18446744073709"));
             }
             if minus_one {
                 None
@@ -432,8 +436,9 @@ fn server_socket(scheme: &str, rest: &str, address: &str) -> Result<Stream, Xpor
                 std::net::UdpSocket::bind(bind).map(|l| (OwnedFd::from(l), "udp_socket"))
             }
         }
-        "unix" => std::os::unix::net::UnixListener::bind(rest)
-            .map(|l| (OwnedFd::from(l), "unix_socket")),
+        "unix" => {
+            std::os::unix::net::UnixListener::bind(rest).map(|l| (OwnedFd::from(l), "unix_socket"))
+        }
         _ => {
             let shown: String = scheme.chars().take(31).collect();
             return Err(XportError {
@@ -477,9 +482,6 @@ fn stream_socket_enable_crypto(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         Some(_) => Some(stream_arg(vm, a, 3)?),
         None => None,
     };
-    if enable && method.is_none() && !cell.get().is_some_and(|s| s.context.is_some()) {
-        // Without a context there is no crypto_method option to fall back on.
-    }
     let Some(hook) = xport::crypto_hooks().enable else {
         vm.php_warning("SSL/TLS support is not available in this build")?;
         return Ok(Value::Bool(false));
@@ -530,9 +532,9 @@ fn sockaddr_name(fd: RawFd, remote: bool) -> Option<String> {
     // SAFETY: `p`/`len` describe `ss`, which outlives the call.
     let rc = unsafe {
         if remote {
-            libc::getpeername(fd, p, &mut len)
+            libc::getpeername(fd, p, &raw mut len)
         } else {
-            libc::getsockname(fd, p, &mut len)
+            libc::getsockname(fd, p, &raw mut len)
         }
     };
     if rc != 0 {
@@ -569,7 +571,9 @@ fn sockaddr_name(fd: RawFd, remote: bool) -> Option<String> {
 fn stream_socket_accept(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let cell = stream_arg(vm, a, 0)?;
     let timeout = finite_timeout(vm, a, 1)?;
-    let fd = cell.get().and_then(|mut s| s.cast(CastAs::FdForSelect, false));
+    let fd = cell
+        .get()
+        .and_then(|mut s| s.cast(CastAs::FdForSelect, false));
     let Some(fd) = fd else {
         return Ok(Value::Bool(false));
     };
@@ -581,10 +585,7 @@ fn stream_socket_accept(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let nfd = unsafe { libc::accept(fd, std::ptr::null_mut(), std::ptr::null_mut()) };
     if nfd < 0 {
         let e = errno();
-        vm.php_warning(&format!(
-            "Accept failed: {}",
-            php_streams::sys::strerror(e)
-        ))?;
+        vm.php_warning(&format!("Accept failed: {}", php_streams::sys::strerror(e)))?;
         return Ok(Value::Bool(false));
     }
     // SAFETY: `nfd` is a fresh descriptor owned by nobody else.
@@ -616,7 +617,9 @@ fn stream_socket_accept(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 fn stream_socket_get_name(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let cell = stream_arg(vm, a, 0)?;
     let remote = a.bool(1);
-    let fd = cell.get().and_then(|mut s| s.cast(CastAs::FdForSelect, false));
+    let fd = cell
+        .get()
+        .and_then(|mut s| s.cast(CastAs::FdForSelect, false));
     let name = fd.and_then(|fd| sockaddr_name(fd, remote));
     Ok(match name {
         Some(n) if !n.is_empty() => bytes(n.as_bytes()),
@@ -639,7 +642,9 @@ fn stream_socket_shutdown(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             ))
         }
     };
-    let fd = cell.get().and_then(|mut s| s.cast(CastAs::FdForSelect, false));
+    let fd = cell
+        .get()
+        .and_then(|mut s| s.cast(CastAs::FdForSelect, false));
     // SAFETY: shutdown on a descriptor owned by the stream.
     let ok = fd.is_some_and(|fd| unsafe { libc::shutdown(fd, how) } == 0);
     Ok(Value::Bool(ok))
@@ -680,7 +685,9 @@ fn stream_socket_recvfrom(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     }
     let flags = i32::try_from(a.int(2)).unwrap_or(0);
     set_ref(a, 3, Value::Null);
-    let fd = cell.get().and_then(|mut s| s.cast(CastAs::FdForSelect, false));
+    let fd = cell
+        .get()
+        .and_then(|mut s| s.cast(CastAs::FdForSelect, false));
     let Some(fd) = fd else {
         return Ok(Value::Bool(false));
     };
@@ -702,13 +709,26 @@ fn stream_socket_sendto(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let cell = stream_arg(vm, a, 0)?;
     let data = str_arg(a, 1);
     let flags = i32::try_from(a.int(2)).unwrap_or(0);
-    let fd = cell.get().and_then(|mut s| s.cast(CastAs::FdForSelect, false));
+    let fd = cell
+        .get()
+        .and_then(|mut s| s.cast(CastAs::FdForSelect, false));
     let Some(fd) = fd else {
         return Ok(Value::Bool(false));
     };
     // SAFETY: `data` is valid for `data.len()` bytes.
-    let n = unsafe { libc::send(fd, data.as_ptr().cast(), data.len(), flags | libc::MSG_NOSIGNAL) };
-    Ok(if n < 0 { Value::Bool(false) } else { Value::Int(i64::try_from(n).unwrap_or(0)) })
+    let n = unsafe {
+        libc::send(
+            fd,
+            data.as_ptr().cast(),
+            data.len(),
+            flags | libc::MSG_NOSIGNAL,
+        )
+    };
+    Ok(if n < 0 {
+        Value::Bool(false)
+    } else {
+        Value::Int(i64::try_from(n).unwrap_or(0))
+    })
 }
 
 /// Registers the functions and `STREAM_*` socket constants.

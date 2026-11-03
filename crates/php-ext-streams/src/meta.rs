@@ -73,7 +73,11 @@ impl Tokenizer<'_> {
                             break;
                         }
                         ch = getc(self.stream);
-                        if ch == 0 || ch == compliment || ch == i32::from(b'<') || ch == i32::from(b'>') {
+                        if ch == 0
+                            || ch == compliment
+                            || ch == i32::from(b'<')
+                            || ch == i32::from(b'>')
+                        {
                             break;
                         }
                         buf.push(byte(ch));
@@ -99,7 +103,7 @@ impl Tokenizer<'_> {
                             break;
                         }
                         ch = getc(self.stream);
-                        if ch == 0 || ch < 0 {
+                        if ch <= 0 {
                             break;
                         }
                         let b = byte(ch);

@@ -13,7 +13,9 @@ use php_vm::ext::{Args, ModuleBuilder, Throw, VmResult};
 use php_vm::Vm;
 
 use crate::bridge::{self, bytes};
-use crate::res::{self, context_arg, fname, path_arg, str_arg, stream_arg, with_stream, StreamCell};
+use crate::res::{
+    self, context_arg, fname, path_arg, str_arg, stream_arg, with_stream, StreamCell,
+};
 
 /// Turns a library `ArgError` into the PHP `ValueError`.
 pub fn arg_error(vm: &mut Vm, a: &Args, e: &ArgError) -> Throw {
@@ -45,7 +47,9 @@ pub fn open_stream(
     }
     let mut opened = None;
     crate::userwrap::clear_last_object();
-    let s = bridge::run(vm, || open::open_wrapper(path, mode, options, &mut opened, ctx))?;
+    let s = bridge::run(vm, || {
+        open::open_wrapper(path, mode, options, &mut opened, ctx)
+    })?;
     let Some(s) = s else {
         if let Some(e) = php_wrapper::take_exception() {
             return Err(php_url_exception(vm, a, &e));
@@ -68,7 +72,8 @@ fn trailing_slash_on_file(path: &[u8]) -> bool {
         return false;
     }
     let p = path.strip_prefix(b"file://").unwrap_or(path);
-    if php_streams::wrapper::scheme_len(p) > 0 && php_streams::util::find_bytes(p, b"://").is_some() {
+    if php_streams::wrapper::scheme_len(p) > 0 && php_streams::util::find_bytes(p, b"://").is_some()
+    {
         return false;
     }
     std::fs::metadata(php_streams::util::os_path(p))
@@ -262,7 +267,9 @@ fn fdatasync(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 fn fpassthru(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let cell = stream_arg(vm, a, 0)?;
     let mut out = Vec::new();
-    let n = with_stream(vm, &cell, |s| lib::fpassthru(s, &mut |d| out.extend_from_slice(d)))?;
+    let n = with_stream(vm, &cell, |s| {
+        lib::fpassthru(s, &mut |d| out.extend_from_slice(d))
+    })?;
     vm.output(&out);
     Ok(Value::Int(n.unwrap_or(0)))
 }
@@ -329,6 +336,14 @@ fn file_get_contents(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     Ok(str_or_false(r))
 }
 
+/// `file_put_contents()` data, converted before opening.
+enum Owned {
+    Bytes(Vec<u8>),
+    Chunks(Vec<Vec<u8>>),
+    Invalid,
+    Stream,
+}
+
 fn file_put_contents(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let path = path_arg(vm, a, 0)?;
     let data = a.at(1);
@@ -340,12 +355,6 @@ fn file_put_contents(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let ctx = context_arg(vm, a, 3, flags & lib::FILE_NO_DEFAULT_CONTEXT != 0)?;
     if path.is_empty() {
         return Err(vm.throw("ValueError", open::EMPTY_PATH_ERROR));
-    }
-    enum Owned {
-        Bytes(Vec<u8>),
-        Chunks(Vec<Vec<u8>>),
-        Invalid,
-        Stream,
     }
     let owned = match &data {
         Value::Resource(_) => Owned::Stream,
@@ -373,12 +382,8 @@ fn file_put_contents(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             Owned::Chunks(c) => PutData::Chunks(c),
             Owned::Invalid => PutData::Invalid,
             Owned::Stream => {
-                let Some(cell) = src.as_ref() else {
-                    return None;
-                };
-                let Some(mut s) = cell.get() else {
-                    return None;
-                };
+                let cell = src.as_ref()?;
+                let mut s = cell.get()?;
                 return lib::file_put_contents(&path, PutData::Stream(&mut s), flags, ctx.as_ref());
             }
         };
@@ -541,7 +546,11 @@ fn dirname(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 fn pathinfo(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let p = str_arg(a, 0);
-    let opt = if a.has(1) { a.int(1) } else { pathname::PATHINFO_ALL };
+    let opt = if a.has(1) {
+        a.int(1)
+    } else {
+        pathname::PATHINFO_ALL
+    };
     if opt == pathname::PATHINFO_ALL {
         let info = pathname::pathinfo(&p);
         let mut arr = ZArray::new();
@@ -590,12 +599,12 @@ fn notices(vm: &mut Vm, ns: Vec<php_stdstr::error::Notice>) -> VmResult<()> {
     Ok(())
 }
 
-fn csv_opts(
-    vm: &mut Vm,
-    a: &Args,
-    first: usize,
-) -> VmResult<php_stdstr::csv::CsvOptions> {
-    let name: &'static str = if fname(a) == "fputcsv" { "fputcsv" } else { "fgetcsv" };
+fn csv_opts(vm: &mut Vm, a: &Args, first: usize) -> VmResult<php_stdstr::csv::CsvOptions> {
+    let name: &'static str = if fname(a) == "fputcsv" {
+        "fputcsv"
+    } else {
+        "fgetcsv"
+    };
     let sep = a.get(first).map(|_| str_arg(a, first));
     let enc = a.get(first + 1).map(|_| str_arg(a, first + 1));
     let esc = a.get(first + 2).map(|_| str_arg(a, first + 2));

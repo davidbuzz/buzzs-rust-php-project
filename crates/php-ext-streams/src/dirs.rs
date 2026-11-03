@@ -27,7 +27,11 @@ fn set_default_dir(r: Option<Resource>) {
 }
 
 fn is_default_dir(r: &Resource) -> bool {
-    DEFAULT_DIR.with(|d| d.borrow().as_ref().is_some_and(|x| x.handle() == r.handle()))
+    DEFAULT_DIR.with(|d| {
+        d.borrow()
+            .as_ref()
+            .is_some_and(|x| x.handle() == r.handle())
+    })
 }
 
 /// Opens a directory stream; returns the resource.
@@ -71,20 +75,15 @@ fn dir(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 /// `php_dir_get_directory_stream_from_user_arg`.
 fn dir_from_arg(vm: &mut Vm, a: &Args) -> VmResult<(Resource, Rc<StreamCell>)> {
-    let r = match a.opt(0) {
-        None => {
-            vm.php_deprecated(
-                "Passing null is deprecated, instead the last opened directory stream should be provided",
-            )?;
-            match DEFAULT_DIR.with(|d| d.borrow().clone()) {
-                Some(r) => r,
-                None => return Err(vm.throw("TypeError", "No resource supplied")),
-            }
-        }
-        Some(_) => {
-            let pair = res::stream_arg_res(vm, a, 0)?;
-            return dir_check(vm, a, pair);
-        }
+    if a.opt(0).is_some() {
+        let pair = res::stream_arg_res(vm, a, 0)?;
+        return dir_check(vm, a, pair);
+    }
+    vm.php_deprecated(
+        "Passing null is deprecated, instead the last opened directory stream should be provided",
+    )?;
+    let Some(r) = DEFAULT_DIR.with(|d| d.borrow().clone()) else {
+        return Err(vm.throw("TypeError", "No resource supplied"));
     };
     let cell = res::stream_of_resource(vm, a, &r)?;
     dir_check(vm, a, (r, cell))
@@ -183,7 +182,10 @@ fn m_rewind(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 }
 
 fn m_construct(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
-    Err(vm.throw("Error", "Cannot directly construct Directory, use dir() instead"))
+    Err(vm.throw(
+        "Error",
+        "Cannot directly construct Directory, use dir() instead",
+    ))
 }
 
 fn scandir(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {

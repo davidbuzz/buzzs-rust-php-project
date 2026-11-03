@@ -79,7 +79,8 @@ fn stream_get_meta_data(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
                 arr.make_mut().insert("wrapper_data", w.clone());
             }
         }
-        arr.make_mut().insert(ArrayKey::Str(ZStr::from(k.as_str())), bridge::from_lib(&v));
+        arr.make_mut()
+            .insert(ArrayKey::Str(ZStr::from(k.as_str())), bridge::from_lib(&v));
     }
     if let Some(c) = crypto {
         arr.make_mut().insert("crypto", c);
@@ -236,10 +237,7 @@ fn stream_select(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             .map(|e| e.iter().map(|(_, _, c)| select_fd(c)).collect())
             .collect()
     })?;
-    let sets = fds
-        .iter()
-        .filter(|f| f.iter().any(Option::is_some))
-        .count();
+    let sets = fds.iter().filter(|f| f.iter().any(Option::is_some)).count();
     if sets == 0 {
         return Err(vm.throw("ValueError", "No stream arrays were passed"));
     }
@@ -272,8 +270,8 @@ fn stream_select(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         }
         if n > 0 {
             a.set_ref(0, Value::Array(ready));
-            for i in 1..3 {
-                if arrays[i].is_some() {
+            for (i, arr) in arrays.iter().enumerate().skip(1) {
+                if arr.is_some() {
                     a.set_ref(i, Value::Array(ZArray::new()));
                 }
             }
@@ -413,7 +411,10 @@ fn callable_error(vm: &mut Vm, v: &Value) -> String {
                 if vm.find_class(c.as_bytes()).is_none() {
                     return format!("class \"{c}\" not found");
                 }
-                return format!("class {c} does not have a method \"{}\"", &name[c.len() + 2..]);
+                return format!(
+                    "class {c} does not have a method \"{}\"",
+                    &name[c.len() + 2..]
+                );
             }
             format!("function \"{name}\" not found or invalid function name")
         }
@@ -569,7 +570,8 @@ fn stream_context_get_params(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     if let Some(n) = c.notifier.borrow().clone() {
         arr.make_mut().insert("notification", n);
     }
-    arr.make_mut().insert("options", Value::Array(c.options.borrow().clone()));
+    arr.make_mut()
+        .insert("options", Value::Array(c.options.borrow().clone()));
     Ok(Value::Array(arr))
 }
 

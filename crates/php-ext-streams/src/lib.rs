@@ -1,7 +1,7 @@
 //! The file and stream functions of `ext/standard` for the phprust VM:
 //! binds the `php-streams` library through the `php_vm::ext` extension API.
 //!
-//! * [`files`] — `file.c` (fopen, fread, file_get_contents, unlink, ...);
+//! * [`files`] — `file.c` (`fopen`, `fread`, `file_get_contents`, `unlink`, ...);
 //! * [`stat`] — `filestat.c` (stat family, chmod, touch, disk space);
 //! * [`dirs`] — `dir.c` (opendir, scandir, glob, `Directory`);
 //! * [`streams`] — `streamsfuncs.c` (meta data, contexts, select);
@@ -11,6 +11,10 @@
 //!
 //! [`bridge`] connects the library's diagnostics and callbacks to the VM,
 //! [`res`] owns the stream and context resources.
+
+// Native handlers must match `NativeFn` and return `VmResult` even when
+// they cannot fail.
+#![allow(clippy::unnecessary_wraps)]
 
 pub mod bridge;
 pub mod dirs;

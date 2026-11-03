@@ -36,8 +36,9 @@ fn popen(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     };
     vm.flush_stdout();
     let mut c = Command::new("/bin/sh");
-    c.arg("-c")
-        .arg(std::ffi::OsStr::new(&String::from_utf8_lossy(&cmd).into_owned()));
+    c.arg("-c").arg(std::ffi::OsStr::new(
+        &String::from_utf8_lossy(&cmd).into_owned(),
+    ));
     if reading {
         c.stdout(Stdio::piped());
     } else {

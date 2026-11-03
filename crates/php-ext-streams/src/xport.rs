@@ -127,7 +127,12 @@ pub fn crypto_hooks() -> CryptoHooks {
 /// The transport registered for `scheme`.
 pub fn find(scheme: &str) -> Option<Transport> {
     let scheme = scheme.to_ascii_lowercase();
-    TRANSPORTS.with(|r| r.borrow().iter().find(|(s, _)| *s == scheme).map(|(_, t)| *t))
+    TRANSPORTS.with(|r| {
+        r.borrow()
+            .iter()
+            .find(|(s, _)| *s == scheme)
+            .map(|(_, t)| *t)
+    })
 }
 
 /// Registered scheme names, in registration order.
@@ -181,7 +186,10 @@ mod tests {
     #[test]
     fn host_port() {
         assert_eq!(parse_host_port("[::1]:1337/"), Some(("::1".into(), 1337)));
-        assert_eq!(parse_host_port("127.0.0.1:80"), Some(("127.0.0.1".into(), 80)));
+        assert_eq!(
+            parse_host_port("127.0.0.1:80"),
+            Some(("127.0.0.1".into(), 80))
+        );
         assert_eq!(parse_host_port("abc"), None);
         assert_eq!(split_scheme("ssl://x:1").0, "ssl");
         assert_eq!(split_scheme("x:1").0, "tcp");
@@ -195,10 +203,13 @@ mod tests {
                 message: String::new(),
             }))
         }
-        register_transport("SSL", Transport {
-            create: f,
-            accept: None,
-        });
+        register_transport(
+            "SSL",
+            Transport {
+                create: f,
+                accept: None,
+            },
+        );
         assert!(find("ssl").is_some());
         assert!(schemes().contains(&"ssl".to_string()));
     }

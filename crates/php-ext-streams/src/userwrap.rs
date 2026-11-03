@@ -33,7 +33,9 @@ pub fn clear_last_object() {
 
 /// Takes the last instantiated object as a value.
 pub fn take_last_object() -> Option<Value> {
-    LAST_OBJECT.with(|l| l.borrow_mut().take()).map(Value::Object)
+    LAST_OBJECT
+        .with(|l| l.borrow_mut().take())
+        .map(Value::Object)
 }
 
 /// A class registered as a wrapper.
@@ -93,12 +95,7 @@ impl UserWrapperClass for WrapperClass {
 
 /// Calls `method` on `obj` with library arguments, converting by-ref
 /// arguments (`by_ref[i]`) back. Shared with user filters.
-pub fn call_method(
-    obj: &Obj,
-    method: &str,
-    args: &mut [SValue],
-    by_ref: &[usize],
-) -> UserCall {
+pub fn call_method(obj: &Obj, method: &str, args: &mut [SValue], by_ref: &[usize]) -> UserCall {
     bridge::with_vm(|vm| {
         bridge::flush_diags(vm);
         if bridge::has_pending() {
@@ -158,7 +155,11 @@ pub fn method_exists(vm: &mut Vm, obj: &Obj, method: &str) -> bool {
 
 impl UserStreamObject for WrapperObject {
     fn call(&mut self, method: &str, args: &mut [SValue]) -> UserCall {
-        let by_ref: &[usize] = if method == user::methods::OPEN { &[3] } else { &[] };
+        let by_ref: &[usize] = if method == user::methods::OPEN {
+            &[3]
+        } else {
+            &[]
+        };
         call_method(&self.obj, method, args, by_ref)
     }
 
@@ -179,15 +180,15 @@ impl UserStreamObject for WrapperObject {
 fn stream_wrapper_register(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let protocol = res::str_arg(a, 0);
     let name = a.str(1);
-    let class = match vm.lookup_class(&name)? {
-        Some(c) => c,
-        None => {
-            return Err(a.type_error(
-                vm,
-                2,
-                &format!("must be a valid class name, \"{}\" given", name.to_string_lossy()),
-            ))
-        }
+    let Some(class) = vm.lookup_class(&name)? else {
+        return Err(a.type_error(
+            vm,
+            2,
+            &format!(
+                "must be a valid class name, \"{}\" given",
+                name.to_string_lossy()
+            ),
+        ));
     };
     if class.is_interface() || class.is_trait() || class.is_abstract() || class.is_enum() {
         return Err(a.value_error(vm, 2, "must be a concrete class"));
@@ -227,6 +228,12 @@ pub fn register(m: &mut ModuleBuilder<'_>) {
         "stream_register_wrapper(string $protocol, string $class, int $flags = 0): bool",
         stream_wrapper_register,
     )
-    .function("stream_wrapper_unregister(string $protocol): bool", stream_wrapper_unregister)
-    .function("stream_wrapper_restore(string $protocol): bool", stream_wrapper_restore);
+    .function(
+        "stream_wrapper_unregister(string $protocol): bool",
+        stream_wrapper_unregister,
+    )
+    .function(
+        "stream_wrapper_restore(string $protocol): bool",
+        stream_wrapper_restore,
+    );
 }

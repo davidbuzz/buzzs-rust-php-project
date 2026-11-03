@@ -210,7 +210,7 @@ pub fn to_lib(v: &Value) -> SValue {
 /// Converts a library value for the VM.
 pub fn from_lib(v: &SValue) -> Value {
     match v {
-        SValue::Null | SValue::Object { .. } => Value::Null,
+        SValue::Null | SValue::Object { .. } | SValue::Resource(_) => Value::Null,
         SValue::Bool(b) => Value::Bool(*b),
         SValue::Int(i) => Value::Int(*i),
         SValue::Float(f) => Value::Float(*f),
@@ -220,13 +220,14 @@ pub fn from_lib(v: &SValue) -> Value {
             for (k, v) in items {
                 match k {
                     SKey::Int(i) => a.make_mut().insert(*i, from_lib(v)),
-                    SKey::Str(s) => a.make_mut().insert(ArrayKey::Str(ZStr::from(s.as_slice())), from_lib(v)),
+                    SKey::Str(s) => a
+                        .make_mut()
+                        .insert(ArrayKey::Str(ZStr::from(s.as_slice())), from_lib(v)),
                 };
             }
             Value::Array(a)
         }
         SValue::Stream(id) => crate::res::stream_value_by_id(*id).unwrap_or(Value::Null),
-        SValue::Resource(_) => Value::Null,
     }
 }
 
@@ -263,8 +264,11 @@ mod tests {
         let v = Value::Array(a);
         let back = from_lib(&to_lib(&v));
         let arr = back.as_array().expect("array");
-        assert_eq!(arr.get_str(b"k"), Some(&Value::Int(3)));
-        assert_eq!(arr.get_int(5).and_then(Value::as_str).map(ZStr::as_bytes), Some(&b"x"[..]));
+        assert!(matches!(arr.get_str(b"k"), Some(Value::Int(3))));
+        assert_eq!(
+            arr.get_int(5).and_then(Value::as_str).map(ZStr::as_bytes),
+            Some(&b"x"[..])
+        );
     }
 
     #[test]

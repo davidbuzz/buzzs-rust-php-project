@@ -251,7 +251,10 @@ fn attach(vm: &mut Vm, a: &Args, append: bool) -> VmResult<Value> {
         }
         return Err(vm.throw(
             "TypeError",
-            &format!("{}(): supplied resource is not a valid {BUCKET} resource", fname(a)),
+            &format!(
+                "{}(): supplied resource is not a valid {BUCKET} resource",
+                fname(a)
+            ),
         ));
     };
     if let Value::Str(s) = vm.get_property(&o, "data")?.deref() {
@@ -292,15 +295,15 @@ fn stream_get_filters(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
 fn stream_filter_register(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let name = a.str(0).to_string_lossy();
     let cname = a.str(1);
-    let class = match vm.lookup_class(&cname)? {
-        Some(c) => c,
-        None => {
-            return Err(a.type_error(
-                vm,
-                2,
-                &format!("must be a valid class name, \"{}\" given", cname.to_string_lossy()),
-            ))
-        }
+    let Some(class) = vm.lookup_class(&cname)? else {
+        return Err(a.type_error(
+            vm,
+            2,
+            &format!(
+                "must be a valid class name, \"{}\" given",
+                cname.to_string_lossy()
+            ),
+        ));
     };
     if name.is_empty() {
         return Err(a.value_error(vm, 1, "must be a non-empty string"));
@@ -309,7 +312,9 @@ fn stream_filter_register(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         return Err(a.value_error(vm, 2, "must be a concrete class"));
     }
     let factory = Rc::new(UserFilterFactory::new(Rc::new(FilterClass { class })));
-    Ok(Value::Bool(wrapper::register_filter_volatile(&name, factory)))
+    Ok(Value::Bool(wrapper::register_filter_volatile(
+        &name, factory,
+    )))
 }
 
 fn apply(vm: &mut Vm, a: &Args, append: bool) -> VmResult<Value> {
@@ -318,7 +323,7 @@ fn apply(vm: &mut Vm, a: &Args, append: bool) -> VmResult<Value> {
     let rw = a.int(2);
     let params = a.get(3);
     let lib_params = params.as_ref().map(bridge::to_lib);
-    PENDING_PARAMS.with(|p| *p.borrow_mut() = params.clone());
+    PENDING_PARAMS.with(|p| p.borrow_mut().clone_from(&params));
     let r = bridge::run(vm, || {
         let mut s = cell.get()?;
         let read_write = if rw & lib::STREAM_FILTER_ALL == 0 {
@@ -342,7 +347,7 @@ fn apply(vm: &mut Vm, a: &Args, append: bool) -> VmResult<Value> {
                 continue;
             }
             if params.is_some() {
-                PENDING_PARAMS.with(|p| *p.borrow_mut() = params.clone());
+                PENDING_PARAMS.with(|p| p.borrow_mut().clone_from(&params));
             }
             let f = wrapper::create_filter(&name, lib_params.as_ref(), cell.persistent)?;
             last = Some(if append {
@@ -387,7 +392,10 @@ fn stream_filter_remove(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let invalid = |vm: &mut Vm| {
         vm.throw(
             "TypeError",
-            &format!("{}(): supplied resource is not a valid {FILTER} resource", fname(a)),
+            &format!(
+                "{}(): supplied resource is not a valid {FILTER} resource",
+                fname(a)
+            ),
         )
     };
     let Some((Some(cell), id)) = found else {

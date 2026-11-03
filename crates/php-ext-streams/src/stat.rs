@@ -34,7 +34,11 @@ stat_fns! {
 
 fn clearstatcache(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let clear = a.bool(0);
-    let f = if a.has(1) { Some(path_arg(vm, a, 1)?) } else { None };
+    let f = if a.has(1) {
+        Some(path_arg(vm, a, 1)?)
+    } else {
+        None
+    };
     lib::clearstatcache(clear, f.as_deref());
     Ok(Value::Null)
 }
@@ -42,7 +46,11 @@ fn clearstatcache(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 fn principal(a: &Args, n: usize) -> Principal {
     match a.at(n) {
         Value::Int(i) => Principal::Id(i),
-        v => Principal::Name(v.as_str().map(|s| s.as_bytes().to_vec()).unwrap_or_default()),
+        v => Principal::Name(
+            v.as_str()
+                .map(|s| s.as_bytes().to_vec())
+                .unwrap_or_default(),
+        ),
     }
 }
 
@@ -138,7 +146,16 @@ pub fn register(m: &mut ModuleBuilder<'_>) {
             "clearstatcache(bool $clear_realpath_cache = false, string $filename = \"\"): void",
             clearstatcache,
         )
-        .function("disk_total_space(string $directory): float|false", disk_total_space)
-        .function("disk_free_space(string $directory): float|false", disk_free_space)
-        .function("diskfreespace(string $directory): float|false", disk_free_space);
+        .function(
+            "disk_total_space(string $directory): float|false",
+            disk_total_space,
+        )
+        .function(
+            "disk_free_space(string $directory): float|false",
+            disk_free_space,
+        )
+        .function(
+            "diskfreespace(string $directory): float|false",
+            disk_free_space,
+        );
 }

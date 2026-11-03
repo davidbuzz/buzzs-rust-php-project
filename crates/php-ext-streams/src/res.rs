@@ -70,7 +70,7 @@ impl StreamCell {
     /// socket), keeping the resource identity. Returns the old stream.
     pub fn replace_stream(self: &Rc<Self>, new: Stream) -> Option<Stream> {
         let new_id = new.id();
-        let old = std::mem::replace(&mut *self.stream.try_borrow_mut().ok()?, Some(new));
+        let old = self.stream.try_borrow_mut().ok()?.replace(new);
         STREAMS.with(|m| {
             let mut m = m.borrow_mut();
             m.remove(&self.id.get());
@@ -96,8 +96,7 @@ impl StreamCell {
 /// Whether closing `s` runs PHP code.
 fn needs_vm(s: &Stream) -> bool {
     s.ops().is_userspace()
-        || s
-            .read_filters
+        || s.read_filters
             .filters
             .iter()
             .chain(s.write_filters.filters.iter())
@@ -180,7 +179,11 @@ pub fn new_stream_ex(mut stream: Stream, wrapper_data: Option<Value>, persistent
         wrapper_data: RefCell::new(wrapper_data),
         persistent,
     });
-    let ty = if persistent { PERSISTENT_STREAM } else { STREAM };
+    let ty = if persistent {
+        PERSISTENT_STREAM
+    } else {
+        STREAM
+    };
     let r = Resource::new(ty, Some(Box::new(StreamRes(Rc::clone(&cell)))));
     cell.handle.set(r.handle());
     STREAMS.with(|m| m.borrow_mut().insert(id, Rc::downgrade(&cell)));
@@ -222,8 +225,16 @@ pub fn stream_value_by_id(id: u64) -> Option<Value> {
     if cell.is_closed() {
         return None;
     }
-    let ty = if cell.persistent { PERSISTENT_STREAM } else { STREAM };
-    let r = Resource::with_handle(cell.handle(), ty, Some(Box::new(StreamRes(Rc::clone(&cell)))));
+    let ty = if cell.persistent {
+        PERSISTENT_STREAM
+    } else {
+        STREAM
+    };
+    let r = Resource::with_handle(
+        cell.handle(),
+        ty,
+        Some(Box::new(StreamRes(Rc::clone(&cell)))),
+    );
     Some(Value::Resource(r))
 }
 
@@ -269,7 +280,11 @@ pub fn live_resources() -> Vec<(i64, &'static str, Value)> {
         if c.is_closed() {
             continue;
         }
-        let ty = if c.persistent { PERSISTENT_STREAM } else { STREAM };
+        let ty = if c.persistent {
+            PERSISTENT_STREAM
+        } else {
+            STREAM
+        };
         let r = Resource::with_handle(c.handle(), ty, Some(Box::new(StreamRes(Rc::clone(&c)))));
         out.push((c.handle(), ty, Value::Resource(r)));
     }
@@ -379,7 +394,10 @@ pub fn resource_arg(vm: &mut Vm, a: &Args, n: usize) -> VmResult<Resource> {
         other => Err(a.type_error(
             vm,
             n + 1,
-            &format!("must be of type resource, {} given", bridge::given_type(&other)),
+            &format!(
+                "must be of type resource, {} given",
+                bridge::given_type(&other)
+            ),
         )),
     }
 }
@@ -409,7 +427,10 @@ pub fn stream_of_resource(vm: &mut Vm, a: &Args, r: &Resource) -> VmResult<Rc<St
         Some(c) if !r.is_closed() && !c.is_closed() => Ok(c),
         _ => Err(vm.throw(
             "TypeError",
-            &format!("{}(): supplied resource is not a valid stream resource", fname(a)),
+            &format!(
+                "{}(): supplied resource is not a valid stream resource",
+                fname(a)
+            ),
         )),
     }
 }
@@ -487,7 +508,9 @@ mod tests {
         let Value::Resource(r) = &v else { panic!() };
         assert_eq!(stream_id_of(r), Some(id));
         let alias = stream_value_by_id(id).expect("alias");
-        let Value::Resource(ar) = &alias else { panic!() };
+        let Value::Resource(ar) = &alias else {
+            panic!()
+        };
         assert_eq!(ar.handle(), r.handle());
         drop(alias);
         drop(v);
@@ -500,7 +523,9 @@ mod tests {
         let Value::Resource(r) = &v else { panic!() };
         let cell = ctx_cell_of(r).expect("ctx");
         let alias = context_value(&cell.ctx);
-        let Value::Resource(ar) = &alias else { panic!() };
+        let Value::Resource(ar) = &alias else {
+            panic!()
+        };
         assert_eq!(ar.handle(), r.handle());
     }
 }
