@@ -14,12 +14,17 @@
 #![allow(clippy::doc_markdown)]
 // Native handlers and object hooks must match the VM's fn-pointer types.
 #![allow(clippy::unnecessary_wraps)]
+// Test snippets are PHP source; uniform raw strings read best.
+#![cfg_attr(test, allow(clippy::needless_raw_string_hashes))]
 
 pub mod host;
 pub mod pdo;
 pub mod sqlite3;
 pub mod stmt;
 pub mod streams;
+
+#[cfg(test)]
+mod tests;
 
 use php_runtime::Value;
 use php_support::ini::{Access, IniDirective, ModifyHandler};

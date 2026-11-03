@@ -21,6 +21,10 @@ thread_local! {
     /// `EG(persistent_list)` entries of PDO: lives as long as the process
     /// (persistent connections survive requests).
     static PERSISTENT: RefCell<Option<PersistentList>> = const { RefCell::new(None) };
+    /// A warning raised while `PDO` connects (`EH_THROW`), already turned
+    /// into its `PDOException`: the previous exception of the next
+    /// `PDOException`.
+    static EH_THROW_PENDING: RefCell<Option<Obj>> = const { RefCell::new(None) };
 }
 
 // ---------------------------------------------------------------------------
@@ -341,6 +345,7 @@ impl<'a> VmHost<'a> {
 
 impl Drop for VmHost<'_> {
     fn drop(&mut self) {
+        EH_THROW_PENDING.with(|p| p.borrow_mut().take());
         if let Some(p) = self.persistent.take() {
             PERSISTENT.with(|s| {
                 let mut s = s.borrow_mut();
@@ -589,6 +594,9 @@ impl PdoHost for VmHost<'_> {
     fn new_pdo_exception(&mut self, exception: PdoException) -> RuntimeError {
         let t = self.vm.throw("PDOException", &exception.message);
         if let Throw::Exception(o) = &t {
+            if let Some(prev) = EH_THROW_PENDING.with(|p| p.borrow_mut().take()) {
+                set_previous(o, &prev);
+            }
             self.vm.set_property_raw(o, "code", exception.code);
             if let Some(info) = exception.error_info {
                 self.vm.set_property_raw(o, "errorInfo", Value::Array(info));
@@ -623,21 +631,26 @@ impl PdoHost for VmHost<'_> {
     }
 
     fn read_uri_line(&mut self, uri: &[u8], max: usize) -> Option<Vec<u8>> {
-        let mut opened = None;
-        let line = php_streams::open::open_wrapper(
-            uri,
-            "rb",
-            php_streams::wrapper::REPORT_ERRORS,
-            &mut opened,
-            None,
-        )
-        .and_then(|mut s| s.get_line(Some(max.saturating_sub(1))));
-        if let Err(t) = crate::streams::flush_diagnostics(self.vm) {
-            if self.vm.pending_throw.is_none() {
-                self.vm.pending_throw = Some(t);
+        let r = crate::streams::run(self.vm, || {
+            let mut opened = None;
+            php_streams::open::open_wrapper(
+                uri,
+                "rb",
+                php_streams::wrapper::REPORT_ERRORS,
+                &mut opened,
+                None,
+            )
+            .and_then(|mut s| s.get_line(Some(max.saturating_sub(1))))
+        });
+        match r {
+            Ok(line) => line,
+            Err(t) => {
+                if self.vm.pending_throw.is_none() {
+                    self.vm.pending_throw = Some(t);
+                }
+                None
             }
         }
-        line
     }
 
     fn write_output(&mut self, bytes: &[u8]) -> RtResult<()> {
@@ -677,12 +690,21 @@ fn check_open_basedir(vm: &mut Vm, path: &[u8]) -> bool {
     }
     let basedir = vm.ini_string("open_basedir").unwrap_or_default();
     php_streams::state::update_settings(|s| s.open_basedir = basedir);
-    // While PDO connects, warnings are turned into exceptions (EH_THROW)
-    // by the PDO core, which this path bypasses: drop the warning there
-    // and let the "open_basedir prohibits" exception speak.
+    let allowed = php_streams::paths::check_open_basedir(path);
+    // While PDO connects, warnings become exceptions (EH_THROW in the PDO
+    // core, which this path bypasses): the warning turns into the
+    // `PDOException` that becomes the previous exception of the next one
+    // the connection throws.
     let func = active_function_name(vm);
-    let quiet = func == "PDO::__construct" || func == "PDO::connect";
-    let allowed = php_streams::paths::check_open_basedir_ex(path, !quiet);
+    if func == "PDO::__construct" || func == "PDO::connect" {
+        for d in php_streams::diag::take() {
+            let msg = format!("{func}(): {}", d.text());
+            let t = vm.throw("PDOException", &msg);
+            if let Throw::Exception(o) = t {
+                EH_THROW_PENDING.with(|p| *p.borrow_mut() = Some(o));
+            }
+        }
+    }
     let _ = crate::streams::flush_diagnostics(vm);
     !allowed
 }
