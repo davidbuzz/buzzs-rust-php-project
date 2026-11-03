@@ -571,8 +571,13 @@ fn run_php(c: &mut Client, prepared: Option<Prepared>, is_static: bool) -> Outco
     };
     let _ = stream.set_nonblocking(false);
     let _ = stream.set_write_timeout(Some(Duration::from_secs(10)));
+    // The body moves to the request thread (it can be large); the rest of
+    // the request stays for logging and static serving.
+    let content = c.reader.request.content.take();
+    let mut request = c.reader.request.clone();
+    request.content = content;
     let job = Job {
-        request: c.reader.request.clone(),
+        request,
         stream,
         addr: c.addr.clone(),
         is_static,

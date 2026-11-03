@@ -377,6 +377,14 @@ impl Handler for RequestReader {
             self.request_read = true;
             return 2;
         }
+        if info.content_length > 0 && self.request.content.is_none() {
+            // Bounded by post_max_size above (or unlimited by configuration).
+            let want = usize::try_from(info.content_length).unwrap_or(0);
+            let mut v = Vec::new();
+            if v.try_reserve_exact(want).is_ok() {
+                self.request.content = Some(v);
+            }
+        }
         if self
             .request
             .header(b"expect")

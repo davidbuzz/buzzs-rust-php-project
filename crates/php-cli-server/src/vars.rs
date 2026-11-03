@@ -259,8 +259,9 @@ fn base64_decode(s: &[u8]) -> Vec<u8> {
     out
 }
 
-/// Reads the body for a non-multipart POST (`sapi_read_standard_form_data`).
-fn read_standard_form_data(vm: &mut Vm, ctx: &RequestCtx) {
+/// `sapi_read_standard_form_data()`: enforces `post_max_size`; returns
+/// whether the body was accepted.
+fn read_standard_form_data(vm: &mut Vm, ctx: &RequestCtx) -> bool {
     let content_length = i64::try_from(ctx.request.content.as_ref().map_or(0, Vec::len))
         .unwrap_or(i64::MAX);
     let post_max_size = vm.ini_long("post_max_size");
@@ -272,10 +273,13 @@ fn read_standard_form_data(vm: &mut Vm, ctx: &RequestCtx) {
             ),
             true,
         );
-        return;
+        return false;
     }
-    let body = ctx.read_rest();
-    *ctx.body.borrow_mut() = Body::Buffered(body);
+    // The body stays in the request (no copy): `php://input` and `$_POST`
+    // read it from there.
+    ctx.post_read_offset
+        .set(ctx.request.content.as_ref().map_or(0, Vec::len));
+    true
 }
 
 /// Populates every superglobal for the request.
@@ -301,12 +305,10 @@ pub fn populate(vm: &mut Vm, ctx: &RequestCtx, facts: &ServerFacts<'_>, auth: &A
         if let Some(ct) = &content_type {
             match content_type_key(ct).as_slice() {
                 b"application/x-www-form-urlencoded" => {
-                    read_standard_form_data(vm, ctx);
-                    if has(b'P') {
-                        let data = match &*ctx.body.borrow() {
-                            Body::Buffered(d) => d.clone(),
-                            Body::Consumed => Vec::new(),
-                        };
+                    if read_standard_form_data(vm, ctx) && has(b'P') {
+                        // `php_stream_copy_to_mem()` of the request body:
+                        // the copy counts towards memory_limit, as in PHP.
+                        let data = req.content.clone().unwrap_or_default();
                         let _ = query::treat_data(
                             ParseKind::Post,
                             &data,
@@ -353,7 +355,9 @@ pub fn populate(vm: &mut Vm, ctx: &RequestCtx, facts: &ServerFacts<'_>, auth: &A
                         ctx.uploaded.borrow_mut().extend(outcome.uploaded);
                     }
                 }
-                _ => read_standard_form_data(vm, ctx),
+                _ => {
+                    read_standard_form_data(vm, ctx);
+                }
             }
         }
     }

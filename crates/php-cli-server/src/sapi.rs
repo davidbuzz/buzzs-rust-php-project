@@ -58,8 +58,8 @@ impl std::fmt::Debug for ServerConfig {
 /// The request body as seen by `php://input`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Body {
-    /// Read and kept.
-    Buffered(Vec<u8>),
+    /// Available (the request content).
+    Available,
     /// Consumed by the multipart parser (`php://input` is empty).
     Consumed,
 }
@@ -125,7 +125,7 @@ impl RequestCtx {
             headers_written: Cell::new(false),
             discard_headers: Cell::new(false),
             uploaded: RefCell::new(Vec::new()),
-            body: RefCell::new(Body::Buffered(Vec::new())),
+            body: RefCell::new(Body::Available),
             post_read_offset: Cell::new(0),
             header_callback: RefCell::new(None),
             router_declined: Cell::new(false),
@@ -196,29 +196,10 @@ impl RequestCtx {
         n
     }
 
-    /// Reads the rest of the body.
-    pub fn read_rest(&self) -> Vec<u8> {
-        let mut out = Vec::new();
-        let mut buf = vec![0u8; 0x4000];
-        loop {
-            let n = self.read_post(&mut buf);
-            out.extend_from_slice(&buf[..n]);
-            if n < buf.len() {
-                break;
-            }
-        }
-        out
-    }
-
     /// The body for `php://input`.
     pub fn input(&self) -> Vec<u8> {
-        let rest = self.read_rest();
-        let mut b = self.body.borrow_mut();
-        match &mut *b {
-            Body::Buffered(v) => {
-                v.extend_from_slice(&rest);
-                v.clone()
-            }
+        match &*self.body.borrow() {
+            Body::Available => self.request.content.clone().unwrap_or_default(),
             Body::Consumed => Vec::new(),
         }
     }
