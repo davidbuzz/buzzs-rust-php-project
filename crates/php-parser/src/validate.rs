@@ -10,9 +10,9 @@
 
 use crate::ast::{
     ArgKind, ArgList, ArrayItem, ArraySyntax, BinaryOp, CastKind, ClassDecl, ClassKind,
-    ClassMemberKind, ClassRef, Diagnostic, DiagnosticLevel, Expr, ExprKind, InterpPart, MemberName,
-    Modifiers, Name, NameKind, NewClass, Param, Program, Stmt, StmtKind, TraitAdaptation, Type,
-    TypeKind, VarName,
+    ClassMemberKind, ClassRef, Diagnostic, DiagnosticLevel, Expr, ExprKind, InterpPart,
+    InterpSyntax, MemberName, Modifiers, Name, NameKind, NewClass, Param, Program, Stmt, StmtKind,
+    TraitAdaptation, Type, TypeKind, VarName,
 };
 use crate::error::ParseError;
 use std::collections::HashSet;
@@ -61,6 +61,10 @@ struct FnCtx {
     /// Loop stack: `true` for `switch`.
     loops: Vec<bool>,
     statics: HashSet<Vec<u8>>,
+    /// Lower-cased method name (methods only).
+    method: Option<Vec<u8>>,
+    /// Nesting depth of `finally` blocks being compiled.
+    in_finally: u32,
 }
 
 struct ClassCtx {
@@ -216,6 +220,8 @@ impl Validator {
                 by_ref: false,
                 loops: Vec::new(),
                 statics: HashSet::new(),
+                method: None,
+                in_finally: 0,
             });
         }
         let i = self.fns.len() - 1;
@@ -253,6 +259,8 @@ impl Validator {
             by_ref: false,
             loops: Vec::new(),
             statics: HashSet::new(),
+            method: None,
+            in_finally: 0,
         });
         for (i, s) in stmts.iter().enumerate() {
             self.top_stmt(s, stmts, i)?;
@@ -482,6 +490,13 @@ impl Validator {
                 self.func().loops.push(true);
                 let r = (|| {
                     for c in cases {
+                        if c.semicolon {
+                            self.warn(
+                                DiagnosticLevel::Deprecated,
+                                "Case statements followed by a semicolon (;) are deprecated, use a colon (:) instead",
+                                c.cond.as_ref().map_or(c.span.line, |e| e.span.line),
+                            );
+                        }
                         if let Some(e) = &c.cond {
                             self.expr(e)?;
                         }
@@ -496,13 +511,39 @@ impl Validator {
                 let is_break = matches!(s.kind, StmtKind::Break(_));
                 self.break_continue(is_break, depth.as_ref(), line)
             }
-            StmtKind::Return(e) => match e {
-                Some(e) if self.func().by_ref && is_variable(e) && !is_call(e) => {
-                    self.var(e, Mode::Write)
+            StmtKind::Return(e) => {
+                match e {
+                    Some(e) if self.func().by_ref && is_variable(e) && !is_call(e) => {
+                        self.var(e, Mode::Write)?;
+                    }
+                    Some(e) => self.expr(e)?,
+                    None => {}
                 }
-                Some(e) => self.expr(e),
-                None => Ok(()),
-            },
+                let line = if e.is_some() { self.cur_line } else { line };
+                if e.is_some() && !self.classes.is_empty() {
+                    match self.func().method.as_deref() {
+                        Some(b"__construct") => self.warn(
+                            DiagnosticLevel::Deprecated,
+                            "Returning a value from a constructor is deprecated",
+                            line,
+                        ),
+                        Some(b"__destruct") => self.warn(
+                            DiagnosticLevel::Deprecated,
+                            "Returning a value from a destructor is deprecated",
+                            line,
+                        ),
+                        _ => {}
+                    }
+                }
+                if self.func().in_finally > 0 {
+                    self.warn(
+                        DiagnosticLevel::Deprecated,
+                        "Returning from a finally block is deprecated",
+                        line,
+                    );
+                }
+                Ok(())
+            }
             StmtKind::Global(vars) => {
                 for v in vars {
                     if is_this(v) {
@@ -566,7 +607,10 @@ impl Validator {
                     self.stmts(&c.body)?;
                 }
                 if let Some(f) = finally {
-                    self.stmts(f)?;
+                    self.func().in_finally += 1;
+                    let r = self.stmts(f);
+                    self.func().in_finally -= 1;
+                    r?;
                 }
                 Ok(())
             }
@@ -576,6 +620,8 @@ impl Validator {
                     by_ref: f.by_ref,
                     loops: Vec::new(),
                     statics: HashSet::new(),
+                    method: None,
+                    in_finally: 0,
                 });
                 let r = (|| {
                     self.params(&f.params, None)?;
@@ -815,6 +861,8 @@ impl Validator {
             by_ref,
             loops: Vec::new(),
             statics: HashSet::new(),
+            method: None,
+            in_finally: 0,
         });
         let r = self.params(params, None).and_then(|()| f(self));
         self.fns.pop();
@@ -860,6 +908,8 @@ impl Validator {
             by_ref: false,
             loops: Vec::new(),
             statics: HashSet::new(),
+            method: None,
+            in_finally: 0,
         });
         let r = self.class_members(c, &class_name);
         self.fns = saved_fns;
@@ -958,6 +1008,16 @@ impl Validator {
                     if in_interface {
                         flags |= Modifiers::ABSTRACT;
                     }
+                    if flags.contains(Modifiers::PRIVATE)
+                        && flags.contains(Modifiers::FINAL)
+                        && !md.name.eq_ignore_case("__construct")
+                    {
+                        self.warn(
+                            DiagnosticLevel::CompileWarning,
+                            "Private methods cannot be final as they are never overridden by other classes",
+                            md.span.line,
+                        );
+                    }
                     let has_body = md.body.is_some();
                     if flags.contains(Modifiers::ABSTRACT) {
                         let what = if in_interface {
@@ -995,6 +1055,8 @@ impl Validator {
                         by_ref: md.by_ref,
                         loops: Vec::new(),
                         statics: HashSet::new(),
+                        method: Some(md.name.name.to_ascii_lowercase()),
+                        in_finally: 0,
                     });
                     let r = (|| {
                         self.params(&md.params, Some((is_ctor, abstract_ctor)))?;
@@ -1131,6 +1193,8 @@ impl Validator {
                 by_ref: h.by_ref,
                 loops: Vec::new(),
                 statics: HashSet::new(),
+                method: None,
+                in_finally: 0,
             });
             let r = (|| {
                 if let Some(ps) = &h.params {
@@ -1463,9 +1527,32 @@ impl Validator {
             | ExprKind::Const(_)
             | ExprKind::MagicConst(_) => Ok(()),
             ExprKind::Interpolated(parts) | ExprKind::ShellExec(parts) => {
+                if matches!(e.kind, ExprKind::ShellExec(_)) {
+                    self.warn(
+                        DiagnosticLevel::Deprecated,
+                        "The backtick (`) operator is deprecated, use shell_exec() instead",
+                        line,
+                    );
+                }
                 for p in parts {
-                    if let InterpPart::Expr { expr, .. } = p {
-                        self.expr(expr)?;
+                    match p {
+                        InterpPart::Literal(_, span) => self.cur_line = span.line,
+                        InterpPart::Expr { expr, syntax } => {
+                            match syntax {
+                                InterpSyntax::DollarCurly => self.warn(
+                                    DiagnosticLevel::Deprecated,
+                                    "Using ${var} in strings is deprecated, use {$var} instead",
+                                    self.cur_line,
+                                ),
+                                InterpSyntax::DollarCurlyExpr => self.warn(
+                                    DiagnosticLevel::Deprecated,
+                                    "Using ${expr} (variable variables) in strings is deprecated, use {${expr}} instead",
+                                    self.cur_line,
+                                ),
+                                InterpSyntax::Simple | InterpSyntax::Braced => {}
+                            }
+                            self.expr(expr)?;
+                        }
                     }
                 }
                 Ok(())

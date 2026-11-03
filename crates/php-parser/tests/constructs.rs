@@ -472,7 +472,10 @@ fn doc_comments() {
     let php_parser::ast::ClassMemberKind::Property(group) = &class.members[0].kind else {
         panic!()
     };
-    assert_eq!(group.props[0].doc_comment.as_deref(), Some(&b"/** pdoc */"[..]));
+    assert_eq!(
+        group.props[0].doc_comment.as_deref(),
+        Some(&b"/** pdoc */"[..])
+    );
     let php_parser::ast::ClassMemberKind::Method(method) = &class.members[1].kind else {
         panic!()
     };

@@ -1,5 +1,21 @@
 //! Parser and AST for PHP, a port of `Zend/zend_language_parser.y` and
-//! `Zend/zend_ast.{h,c}`.
+//! `Zend/zend_ast.{h,c}` (php-src master grammar).
+//!
+//! * [`parse`] / [`parse_eval`] turn source bytes into an [`ast::Program`],
+//!   or a [`ParseError`] whose message and line match PHP's
+//!   (`Parse error: syntax error, unexpected token "}", expecting ";"`,
+//!   scanner errors, and the compile errors PHP raises while parsing).
+//! * [`validate`] runs the context-free compile-time checks of
+//!   `zend_compile.c` (write contexts, destructuring, argument order,
+//!   `break` depth, declare/namespace placement, ...) and collects
+//!   compile-time deprecations and warnings. [`parse`] runs it unless
+//!   [`ParseOptions::syntax_only`] is set.
+//! * [`export`] is `zend_ast_export()`: it prints an AST back as PHP code
+//!   exactly like PHP does in `assert()` failure messages.
+//! * [`visit`] is a read-only visitor over the AST.
+//!
+//! Every node carries a [`ast::Span`]: byte offsets plus the line number
+//! PHP associates with the node.
 //!
 //! ```
 //! let program = php_parser::parse(b"<?php echo 1 + 2;", &php_parser::ParseOptions::default()).unwrap();
