@@ -2,7 +2,7 @@
 
 use php_pcre::{limit_from_php, MatchFailure, PregError, Regex, Replacement};
 use php_runtime::{ArrayKey, HashTable, Value, ZArray, ZStr};
-use php_vm::ext::{Args, ModuleBuilder, VmResult};
+use php_vm::ext::{Args, ModuleBuilder, Throw, VmResult};
 use php_vm::Vm;
 
 use crate::convert::to_zarray;
@@ -145,17 +145,23 @@ fn replace_common(vm: &mut Vm, a: &Args, is_filter: bool) -> VmResult<Value> {
     let mut count = 0usize;
     let result = if let Value::Array(subjects) = &subject {
         let mut out = HashTable::with_capacity(subjects.len());
+        let mut pending = Pending::default();
         for (key, entry) in entries(subjects) {
             let old = count;
-            let s = vm.value_to_string(&entry)?;
-            let r = replace_in_subject(vm, &regex, &replacement, s.as_bytes(), limit, &mut count)?;
-            if let Some(r) = r {
+            let Some(s) = pending.absorb(vm.value_to_string(&entry))? else {
+                continue;
+            };
+            if pending.is_set() {
+                continue;
+            }
+            let r = replace_in_subject(vm, &regex, &replacement, s.as_bytes(), limit, &mut count);
+            if let Some(Some(r)) = pending.absorb(r)? {
                 if !is_filter || count > old {
                     out.insert(key, Value::Str(ZStr::from(r)));
                 }
             }
         }
-        Value::Array(ZArray::from(out))
+        pending.finish(Value::Array(ZArray::from(out)))?
     } else {
         let s = vm.value_to_string(&subject)?;
         match replace_in_subject(vm, &regex, &replacement, s.as_bytes(), limit, &mut count)? {
@@ -167,6 +173,44 @@ fn replace_common(vm: &mut Vm, a: &Args, is_filter: bool) -> VmResult<Value> {
         a.set_ref(4, Value::Int(count_value(count)));
     }
     Ok(result)
+}
+
+/// An exception raised while looping over an array subject.
+///
+/// PHP keeps iterating with the exception pending: later elements are
+/// still converted to strings (emitting their conversion warnings) but no
+/// more matching or callback calls happen. Other unwinds (`exit`, fatal
+/// errors) propagate immediately.
+#[derive(Default)]
+struct Pending(Option<Throw>);
+
+impl Pending {
+    /// Records an exception from `r`; `Ok(None)` when `r` threw one.
+    fn absorb<T>(&mut self, r: VmResult<T>) -> VmResult<Option<T>> {
+        match r {
+            Ok(v) => Ok(Some(v)),
+            Err(Throw::Exception(e)) => {
+                if self.0.is_none() {
+                    self.0 = Some(Throw::Exception(e));
+                }
+                Ok(None)
+            }
+            Err(t) => Err(t),
+        }
+    }
+
+    /// Whether an exception is pending.
+    fn is_set(&self) -> bool {
+        self.0.is_some()
+    }
+
+    /// Rethrows the pending exception, or returns `v`.
+    fn finish<T>(self, v: T) -> VmResult<T> {
+        match self.0 {
+            Some(t) => Err(t),
+            None => Ok(v),
+        }
+    }
 }
 
 /// The `(key, value)` pairs of an array, copied out so the VM can be
@@ -312,15 +356,20 @@ fn replace_func_impl(
 ) -> VmResult<Value> {
     if let Value::Array(subjects) = subject {
         let mut out = HashTable::with_capacity(subjects.len());
+        let mut pending = Pending::default();
         for (key, entry) in entries(subjects) {
-            let s = vm.value_to_string(&entry)?;
-            if let Some(r) =
-                replace_func_in_subject(vm, regex, callback, s.as_bytes(), limit, flags, count)?
-            {
+            let Some(s) = pending.absorb(vm.value_to_string(&entry))? else {
+                continue;
+            };
+            if pending.is_set() {
+                continue;
+            }
+            let r = replace_func_in_subject(vm, regex, callback, s.as_bytes(), limit, flags, count);
+            if let Some(Some(r)) = pending.absorb(r)? {
                 out.insert(key, Value::Str(ZStr::from(r)));
             }
         }
-        return Ok(Value::Array(ZArray::from(out)));
+        return pending.finish(Value::Array(ZArray::from(out)));
     }
     let s = vm.value_to_string(subject)?;
     Ok(
@@ -445,8 +494,14 @@ fn grep_impl(vm: &mut Vm, re: &Regex, input: &ZArray, invert: bool) -> VmResult<
     let mut out = HashTable::new();
     // Entries are copied as they are, so references stay references.
     let raw: Vec<(ArrayKey, Value)> = input.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+    let mut pending = Pending::default();
     for (key, entry) in raw {
-        let s = vm.value_to_string(&entry.deref())?;
+        let Some(s) = pending.absorb(vm.value_to_string(&entry.deref()))? else {
+            continue;
+        };
+        if pending.is_set() {
+            continue;
+        }
         match php_pcre::grep(re, &cfg, [s.as_bytes()], invert) {
             Ok(kept) => {
                 if !kept.is_empty() {
@@ -459,7 +514,7 @@ fn grep_impl(vm: &mut Vm, re: &Regex, input: &ZArray, invert: bool) -> VmResult<
             }
         }
     }
-    Ok(Value::Array(ZArray::from(out)))
+    pending.finish(Value::Array(ZArray::from(out)))
 }
 
 fn preg_quote(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
