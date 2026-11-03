@@ -175,6 +175,7 @@ pub struct Net {
     pub use_compression: bool,
     unc: Vec<u8>,
     unc_pos: usize,
+    prefetch: Vec<u8>,
     /// TLS is active on the stream.
     pub ssl: bool,
     /// The stream is a Unix socket.
@@ -202,6 +203,7 @@ impl Net {
             let _ = t.shutdown();
         }
         self.ssl = false;
+        self.prefetch.clear();
         self.unc.clear();
         self.unc_pos = 0;
     }
@@ -372,12 +374,55 @@ impl Net {
         cfg.connect(&name, plain).ok()
     }
 
+    /// Whether data (or EOF) can be read without blocking (`select()`
+    /// readiness used by `mysqlnd_poll`).
+    pub fn readable(&mut self) -> bool {
+        if self.unc_pos < self.unc.len() || !self.prefetch.is_empty() {
+            return true;
+        }
+        let (plain, pending) = match self.stream.as_ref() {
+            None => return false,
+            Some(Stream::Plain(p)) => (p, 0),
+            Some(Stream::Tls(t)) => (t.get_ref(), t.ssl().pending()),
+        };
+        if pending > 0 {
+            return true;
+        }
+        let mut b = [0u8; 1];
+        let r = match plain {
+            Plain::Tcp(s) => {
+                let _ = s.set_nonblocking(true);
+                let r = s.peek(&mut b);
+                let _ = s.set_nonblocking(false);
+                r
+            }
+            Plain::Unix(s) => {
+                // no stable peek for Unix sockets: read one byte non-blocking
+                // and keep it in the prefetch buffer
+                let _ = s.set_nonblocking(true);
+                let mut sref = s;
+                let r = sref.read(&mut b);
+                let _ = s.set_nonblocking(false);
+                if let Ok(1) = r {
+                    self.prefetch.push(b[0]);
+                }
+                r
+            }
+        };
+        match r {
+            Ok(_) => true,
+            Err(e) => e.kind() != io::ErrorKind::WouldBlock,
+        }
+    }
+
     /// `mysqlnd_vio::network_read`: reads exactly `buf.len()` bytes.
     pub fn network_read(&mut self, buf: &mut [u8], stats: &mut Stats) -> bool {
+        let mut done = self.prefetch.len().min(buf.len());
+        buf[..done].copy_from_slice(&self.prefetch[..done]);
+        self.prefetch.drain(..done);
         let Some(s) = self.stream.as_mut() else {
             return false;
         };
-        let mut done = 0;
         let mut ok = true;
         while done < buf.len() {
             match s.read(&mut buf[done..]) {

@@ -2714,3 +2714,105 @@ mod tests {
         assert_eq!(c.affected_rows(), 0);
     }
 }
+
+/// Outcome of [`poll`] (`mysqlnd_poll`), as indices into the input slices.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PollResult {
+    /// Connections from `read` with a result ready to be reaped.
+    pub read: Vec<usize>,
+    /// Connections from `error` reported in error (never set, like `select()`).
+    pub error: Vec<usize>,
+    /// Connections from `read` that have no pending query (`$reject`).
+    pub dont_poll: Vec<usize>,
+    /// Number of ready descriptors.
+    pub ready: usize,
+}
+
+/// `mysqlnd_poll` (`mysqli_poll`): waits up to `sec`/`usec` for any of the
+/// `read` connections to have an async result. `None` on failure (a warning
+/// has been queued).
+#[must_use]
+pub fn poll(read: &[Connection], error: &[Connection], sec: i64, usec: i64) -> Option<PollResult> {
+    if sec < 0 || usec < 0 {
+        diag::warn("Negative values passed for sec and/or usec");
+        return None;
+    }
+    let mut res = PollResult::default();
+    let mut candidates = Vec::new();
+    for (i, c) in read.iter().enumerate() {
+        let st = c.state();
+        if st <= ConnState::Ready || st == ConnState::QuitSent {
+            res.dont_poll.push(i);
+        } else if c.data().net.is_open() {
+            candidates.push(i);
+        }
+    }
+    let err_open = error.iter().filter(|c| c.data().net.is_open()).count();
+    if candidates.is_empty() && err_open == 0 {
+        diag::warn(if res.dont_poll.is_empty() {
+            "No stream arrays were passed"
+        } else {
+            "All arrays passed are clear"
+        });
+        return None;
+    }
+    #[allow(clippy::cast_sign_loss)]
+    let timeout = Duration::from_secs(sec as u64) + Duration::from_micros(usec as u64);
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        res.read = candidates
+            .iter()
+            .copied()
+            .filter(|&i| read[i].data().net.readable())
+            .collect();
+        if !res.read.is_empty() || std::time::Instant::now() >= deadline {
+            break;
+        }
+        std::thread::sleep(
+            Duration::from_millis(1)
+                .min(deadline.saturating_duration_since(std::time::Instant::now())),
+        );
+    }
+    res.ready = res.read.len();
+    Some(res)
+}
+
+/// A registry of idle persistent connections keyed by their connect
+/// parameters (the `p:` host prefix of mysqli). The binding parks a
+/// connection with [`pool_put`] at request end and reuses it with
+/// [`pool_take`] (which calls `restart_psession`).
+pub mod pool {
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+
+    use super::Connection;
+
+    thread_local! {
+        static POOL: RefCell<HashMap<String, Vec<Connection>>> = RefCell::new(HashMap::new());
+    }
+
+    /// Takes an idle connection for `key`, if any.
+    #[must_use]
+    pub fn pool_take(key: &str) -> Option<Connection> {
+        let c = POOL.with(|p| p.borrow_mut().get_mut(key).and_then(Vec::pop))?;
+        c.restart_psession();
+        Some(c)
+    }
+
+    /// Parks `c` for reuse (after `end_psession`).
+    pub fn pool_put(key: &str, c: Connection) {
+        c.end_psession();
+        POOL.with(|p| p.borrow_mut().entry(key.to_string()).or_default().push(c));
+    }
+
+    /// Number of idle connections for `key`.
+    #[must_use]
+    pub fn pool_len(key: &str) -> usize {
+        POOL.with(|p| p.borrow().get(key).map_or(0, Vec::len))
+    }
+
+    /// Drops every idle connection.
+    pub fn pool_clear() {
+        POOL.with(|p| p.borrow_mut().clear());
+    }
+}

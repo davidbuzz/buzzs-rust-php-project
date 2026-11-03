@@ -33,7 +33,9 @@ pub mod stats;
 pub mod stmt;
 pub mod wire;
 
-pub use conn::{CloseType, ConnState, Connection, OptionValue, UpsertStatus};
+pub use conn::{
+    poll, pool, CloseType, ConnState, Connection, OptionValue, PollResult, UpsertStatus,
+};
 pub use error::{Error, ErrorEntry, ErrorInfo, Result};
 pub use protocol::Field;
 pub use result::{Metadata, ResultSet};
