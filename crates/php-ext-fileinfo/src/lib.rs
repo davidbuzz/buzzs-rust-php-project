@@ -12,6 +12,10 @@
 //! whose constructor failed (or was never run) has none and every method
 //! throws `Error: Invalid finfo object`.
 
+// Native handlers share one `fn(&mut Vm, &mut Args) -> VmResult<Value>`
+// signature, even those that cannot fail.
+#![allow(clippy::unnecessary_wraps)]
+
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 
@@ -23,7 +27,9 @@ use php_streams::diag::{self, Severity};
 use php_streams::plain::StdioOps;
 use php_streams::stream::Stream;
 use php_streams::wrapper::REPORT_ERRORS;
-use php_vm::ext::{acc, class_flags, Args, ClassBuilder, Extension, ModuleBuilder, Throw, VmResult};
+use php_vm::ext::{
+    acc, class_flags, Args, ClassBuilder, Extension, ModuleBuilder, Throw, VmResult,
+};
 use php_vm::Vm;
 
 /// The `fileinfo` extension.
@@ -219,27 +225,42 @@ fn set_flags(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 }
 
 fn buffer(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let (o, base, _) = target(a);
-    if a.has(base + 2) {
-        vm.php_deprecated(php_fileinfo::buffer_context_deprecation())?;
-    }
+    let (o, base, style) = target(a);
+    // ZPP (`r!`) runs before the deprecation.
     if let Some(v) = a.get(base + 2) {
         if !matches!(v, Value::Null | Value::Resource(_)) {
-            return Err(a.type_error(
-                vm,
-                base + 3,
-                &format!(
-                    "must be of type resource or null, {} given",
-                    bridge::given_type(&v)
-                ),
-            ));
+            return Err(context_type_error(vm, style, "buffer", base + 3, &v));
         }
+    }
+    if a.has(base + 2) {
+        vm.php_deprecated(php_fileinfo::buffer_context_deprecation())?;
     }
     let data = a.str(base);
     let flags = flags_arg(a, base + 1);
     let (r, warnings) = with_finfo(vm, &o, |f| collect(|w| f.buffer(data.as_bytes(), flags, w)))?;
     Reporter::new(false).warnings(vm, warnings)?;
     Ok(r.map_or(Value::Bool(false), |d| Value::Str(ZStr::from(d))))
+}
+
+/// The display name of `finfo_<name>()` / `finfo::<name>()`.
+fn func_name(style: CallStyle, name: &str) -> String {
+    match style {
+        CallStyle::Function => format!("finfo_{name}"),
+        CallStyle::Method => format!("finfo::{name}"),
+    }
+}
+
+/// ZPP's `TypeError` for a `$context` (argument #`n`) that is neither a
+/// resource nor `null`.
+fn context_type_error(vm: &mut Vm, style: CallStyle, name: &str, n: usize, v: &Value) -> Throw {
+    vm.throw(
+        "TypeError",
+        &format!(
+            "{}(): Argument #{n} ($context) must be of type resource or null, {} given",
+            func_name(style, name),
+            bridge::given_type(v)
+        ),
+    )
 }
 
 fn file(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -254,12 +275,32 @@ fn file(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     }
     with_finfo(vm, &o, |_| ())?;
     check.map_err(|t| thrown(vm, t))?;
-    let ctx = res::context_arg(vm, a, base + 2, false)?;
+    let ctx = context_arg(vm, a, base + 2, style)?;
     let flags = flags_arg(a, base + 1);
     let r = from_path(vm, a, path, ctx.as_ref(), &mut |vm, run| {
         with_finfo(vm, &o, |f| collect(|w| run(f, flags, w)))
     })?;
     Ok(r.map_or(Value::Bool(false), |d| Value::Str(ZStr::from(d))))
+}
+
+/// `php_stream_context_from_zval()` on the `$context` argument `n`
+/// (`null` is the default context), with the messages naming
+/// `finfo_file()` or `finfo::file()`.
+fn context_arg(vm: &mut Vm, a: &Args, n: usize, style: CallStyle) -> VmResult<Option<ContextRef>> {
+    match a.at(n) {
+        Value::Null => Ok(res::ctx_cell_of(&res::default_context()).map(|c| c.ctx.clone())),
+        Value::Resource(r) => match res::ctx_cell_of(&r) {
+            Some(c) => Ok(Some(c.ctx.clone())),
+            None => Err(vm.throw(
+                "TypeError",
+                &format!(
+                    "{}(): supplied resource is not a valid Stream-Context resource",
+                    func_name(style, "file")
+                ),
+            )),
+        },
+        other => Err(context_type_error(vm, style, "file", n + 1, &other)),
+    }
 }
 
 /// How [`from_path`] reaches a cookie: `get(vm, run)` calls `run` on it with
@@ -384,7 +425,10 @@ fn mime_content_type(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         }
         other => {
             let name = bridge::given_type(&other);
-            return Err(thrown(vm, php_fileinfo::mime_content_type_type_error(&name)));
+            return Err(thrown(
+                vm,
+                php_fileinfo::mime_content_type_type_error(&name),
+            ));
         }
     };
     Ok(r.map_or(Value::Bool(false), |d| Value::Str(ZStr::from(d))))
@@ -434,5 +478,51 @@ impl Extension for Fileinfo {
             buffer,
         )
         .function("mime_content_type($filename): string|false", mime_content_type);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn names() {
+        assert_eq!(func_name(CallStyle::Function, "file"), "finfo_file");
+        assert_eq!(func_name(CallStyle::Method, "buffer"), "finfo::buffer");
+    }
+
+    #[test]
+    fn flags_default_to_none() {
+        let a = Args::default();
+        assert_eq!(flags_arg(&a, 1), php_fileinfo::FILEINFO_NONE);
+    }
+
+    #[test]
+    fn stream_io_reads_and_seeks() {
+        let mut s = php_streams::memory::memory_create(php_streams::mode::TempMode::Default);
+        assert!(s.write(b"hello world").is_ok());
+        let mut io = StreamIo(&mut s);
+        assert_eq!(io.seek(SeekFrom::Start(6)).ok(), Some(6));
+        let mut out = String::new();
+        assert!(io.read_to_string(&mut out).is_ok());
+        assert_eq!(out, "world");
+    }
+
+    #[test]
+    fn plain_files_are_handed_over_by_descriptor() {
+        let dir = std::env::temp_dir().join(format!("php-ext-fileinfo-{}", std::process::id()));
+        assert!(std::fs::create_dir_all(&dir).is_ok());
+        let file = dir.join("x.txt");
+        assert!(std::fs::write(&file, b"hello").is_ok());
+        let open = |p: &std::path::Path| {
+            php_streams::plain::fopen(p.as_os_str().as_encoded_bytes(), "rb", 0, &mut None).ok()
+        };
+        if let Some(mut s) = open(&file) {
+            assert!(matches!(source_of(&mut s), Source::File(_)));
+        }
+        if let Some(mut s) = open(&dir) {
+            assert!(matches!(source_of(&mut s), Source::Directory));
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

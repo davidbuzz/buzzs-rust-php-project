@@ -13,6 +13,10 @@
 //! untyped, mirroring the C `z` specifier: a non-string variable is reported
 //! with sodium's own `SodiumException` instead of a `TypeError`.
 
+// Native handlers share one `fn(&mut Vm, &mut Args) -> VmResult<Value>`
+// signature, even those that cannot fail.
+#![allow(clippy::unnecessary_wraps)]
+
 use php_runtime::{ArrayKey, Obj, Value, ZArray, ZStr};
 use php_sodium::{
     aead, boxes, consts, error, hash, pwhash, ristretto, secretbox, secretstream, sign, util, Error,
@@ -317,12 +321,7 @@ fn generichash_final(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 }
 
 fn kdf_derive_from_key(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let r = hash::kdf_derive_from_key(
-        a.int(0),
-        a.int(1),
-        a.str(2).as_bytes(),
-        a.str(3).as_bytes(),
-    );
+    let r = hash::kdf_derive_from_key(a.int(0), a.int(1), a.str(2).as_bytes(), a.str(3).as_bytes());
     out(vm, r)
 }
 
@@ -459,9 +458,7 @@ fn stream_xchacha20_xor_ic(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 }
 
 fn add(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let mut val = ref_string(vm, a, 0, || {
-        Error::Sodium(error::STRINGS_REQUIRED.into())
-    })?;
+    let mut val = ref_string(vm, a, 0, || Error::Sodium(error::STRINGS_REQUIRED.into()))?;
     match util::add(&mut val, a.str(1).as_bytes()) {
         Ok(()) => {
             a.set_ref(0, bytes(val));
@@ -517,7 +514,6 @@ fn base642bin(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 /// The `create` hook of `SodiumException` (`sodium_exception_create_object`):
 /// the trace is scrubbed as soon as the object exists.
-#[allow(clippy::unnecessary_wraps)] // the hook signature is fixed
 fn exception_created(_vm: &mut Vm, o: &Obj) -> VmResult<()> {
     scrub_trace(o);
     Ok(())
