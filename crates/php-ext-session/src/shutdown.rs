@@ -64,7 +64,8 @@ fn report(vm: &mut Vm, e: RuntimeError) {
     }
 }
 
-fn report_uncaught(vm: &mut Vm, e: &Obj) {
+/// Prints "Fatal error: Uncaught …" for `e` (`zend_exception_error`).
+pub(crate) fn report_uncaught(vm: &mut Vm, e: &Obj) {
     let text = match vm.call_method_by_name(e, "__toString", Vec::new()) {
         Ok(Value::Str(s)) => s.to_string_lossy(),
         _ => String::new(),

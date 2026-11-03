@@ -64,11 +64,22 @@ fn put_parked(s: Box<SessionState>) {
     PARKED.with(|p| *p.borrow_mut() = Some(s));
 }
 
-/// Converts a VM throw into a runtime error; bailouts (`exit`, fatal
-/// errors) are parked in `vm.pending_throw`.
+/// Converts a VM throw into a runtime error; non-exception throws are
+/// parked in `vm.pending_throw` (and resumed by [`to_throw`]).
+///
+/// `exit()` unwinds like an exception in PHP 8 (`unwind_exit`): the session
+/// module sees a pending exception and keeps its bookkeeping consistent
+/// (`PS(in_save_handler)` is reset). A fatal error is a bailout
+/// ([`RuntimeError::Fatal`]): the module behaves as after a `longjmp`.
 pub(crate) fn to_rt(vm: &mut Vm, t: Throw) -> RuntimeError {
     match t {
         Throw::Exception(o) => RuntimeError::Thrown(Value::Object(o)),
+        Throw::Exit => {
+            if vm.pending_throw.is_none() {
+                vm.pending_throw = Some(Throw::Exit);
+            }
+            RuntimeError::Thrown(Value::Null)
+        }
         other => {
             if vm.pending_throw.is_none() {
                 vm.pending_throw = Some(other);
@@ -129,17 +140,35 @@ pub(crate) fn docref(vm: &mut Vm, level: i64, message: &[u8]) -> Result<(), Thro
     if vm.is_executing() {
         return vm.php_error_bytes(level, message);
     }
-    let prefix = active_builtin(vm).unwrap_or_else(|| {
-        match phase() {
-            Phase::Startup => "PHP Startup",
-            Phase::Shutdown => "PHP Request Shutdown",
-            Phase::Running => "Unknown",
-        }
-        .to_string()
-    });
+    let prefix = active_builtin(vm).map_or_else(
+        || {
+            match phase() {
+                Phase::Startup => "PHP Startup",
+                Phase::Shutdown => "PHP Request Shutdown",
+                Phase::Running => "Unknown",
+            }
+            .to_string()
+        },
+        |f| format!("{f}()"),
+    );
     let mut m = format!("{prefix}: ").into_bytes();
     m.extend_from_slice(message);
-    vm.error_at_bytes(level, &m, &ZStr::from("Unknown"), 0)
+    if phase() != Phase::Startup {
+        return vm.error_at_bytes(level, &m, &ZStr::from("Unknown"), 0);
+    }
+    // Startup errors are written before the SAPI is activated: they do
+    // not count as sent headers (`SG(headers_sent)` is reset by
+    // `sapi_activate()`), and an `E_ERROR` does not stop the request.
+    let sent = vm.headers_sent;
+    let status = vm.exit_status;
+    let r = vm.error_at_bytes(level, &m, &ZStr::from("Unknown"), 0);
+    vm.headers_sent = sent;
+    if r.is_err() && level == 1 {
+        vm.exit_status = status;
+        php_vm::object::set_destructors_enabled(true);
+        return Ok(());
+    }
+    r
 }
 
 /// `zend_error(level, message)` ("in Unknown on line 0" outside PHP code).
@@ -268,9 +297,19 @@ impl SessionHost for VmHost<'_> {
     }
 
     fn call_handler(&mut self, callable: &Value, args: &[Value]) -> RtResult<Option<Value>> {
-        self.parked(|vm| match vm.call_value(callable, args.to_vec()) {
-            Ok(v) => Ok(Some(v)),
-            Err(t) => Err(to_rt(vm, t)),
+        self.parked(|vm| {
+            // With no frame at all (request shutdown) an exception cannot
+            // propagate: `zend_call_function()` reports it as uncaught
+            // right away and bails out.
+            let toplevel = vm.frames.is_empty();
+            match vm.call_value(callable, args.to_vec()) {
+                Ok(v) => Ok(Some(v)),
+                Err(Throw::Exception(o)) if toplevel => {
+                    crate::shutdown::report_uncaught(vm, &o);
+                    Err(to_rt(vm, Throw::Fatal))
+                }
+                Err(t) => Err(to_rt(vm, t)),
+            }
         })
     }
 

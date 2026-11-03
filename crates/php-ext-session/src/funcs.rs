@@ -4,7 +4,7 @@
 use php_runtime::{RtResult, Value, ZStr};
 use php_session::api;
 use php_vm::ext::{Args, ModuleBuilder, VmResult};
-use php_vm::Vm;
+use php_vm::{Throw, Vm};
 
 use crate::host::{with_host, VmHost};
 
@@ -84,12 +84,27 @@ fn opt_bool(a: &Args, n: usize) -> Option<bool> {
     }
 }
 
-/// Runs a library entry point and converts its result.
-fn call<T>(vm: &mut Vm, f: impl FnOnce(&mut VmHost<'_>) -> RtResult<T>) -> VmResult<T> {
-    with_host(vm, |h| {
+/// Runs a library entry point and converts its result. Values released by
+/// the module (e.g. an invalid save-handler return value) are destroyed
+/// before the function returns, so their destructors' exceptions surface
+/// from the call, as in PHP.
+pub(crate) fn call<T>(
+    vm: &mut Vm,
+    f: impl FnOnce(&mut VmHost<'_>) -> RtResult<T>,
+) -> VmResult<T> {
+    let r = with_host(vm, |h| {
         let r = f(h);
         h.vm_result(r)
-    })
+    });
+    let d = vm.run_released_destructors();
+    match (r, d) {
+        // An exception thrown while another is pending replaces it (PHP
+        // chains the earlier one as `previous`).
+        (Ok(_) | Err(Throw::Exception(_)), Err(t @ Throw::Exception(_))) | (Ok(_), Err(t)) => {
+            Err(t)
+        }
+        (r, _) => r,
+    }
 }
 
 fn bool_v(r: VmResult<bool>) -> VmResult<Value> {

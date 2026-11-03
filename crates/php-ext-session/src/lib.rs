@@ -42,6 +42,7 @@ impl Extension for Session {
     }
 
     fn register(&self, m: &mut ModuleBuilder<'_>) {
+        ini::normalize_config(m.vm());
         ini::register(m);
         funcs::register(m);
         classes::register(m);

@@ -7,7 +7,7 @@ use php_session::class;
 use php_vm::ext::{acc, class_flags, Args, ClassBuilder, ModuleBuilder, VmResult};
 use php_vm::Vm;
 
-use crate::host::with_host;
+use crate::funcs::call;
 
 /// Registers the interfaces, the class and the constants.
 pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
@@ -48,62 +48,38 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
 
 fn open(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let (path, name) = (a.str(0), a.str(1));
-    with_host(vm, |h| {
-        let r = class::session_handler_open(h, path.as_bytes(), name.as_bytes());
-        h.vm_result(r).map(Value::Bool)
-    })
+    call(vm, |h| class::session_handler_open(h, path.as_bytes(), name.as_bytes())).map(Value::Bool)
 }
 
 fn close(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
-    with_host(vm, |h| {
-        let r = class::session_handler_close(h);
-        h.vm_result(r).map(Value::Bool)
-    })
+    call(vm, |h| class::session_handler_close(h)).map(Value::Bool)
 }
 
 fn read(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let id = a.str(0);
-    with_host(vm, |h| {
-        let r = class::session_handler_read(h, id.as_bytes());
-        h.vm_result(r)
-    })
+    call(vm, |h| class::session_handler_read(h, id.as_bytes()))
 }
 
 fn write(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let (id, data) = (a.str(0), a.str(1));
-    with_host(vm, |h| {
-        let r = class::session_handler_write(h, id.as_bytes(), data.as_bytes());
-        h.vm_result(r).map(Value::Bool)
-    })
+    call(vm, |h| class::session_handler_write(h, id.as_bytes(), data.as_bytes())).map(Value::Bool)
 }
 
 fn destroy(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let id = a.str(0);
-    with_host(vm, |h| {
-        let r = class::session_handler_destroy(h, id.as_bytes());
-        h.vm_result(r).map(Value::Bool)
-    })
+    call(vm, |h| class::session_handler_destroy(h, id.as_bytes())).map(Value::Bool)
 }
 
 fn gc(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let max = a.int(0);
-    with_host(vm, |h| {
-        let r = class::session_handler_gc(h, max);
-        h.vm_result(r)
-    })
+    call(vm, |h| class::session_handler_gc(h, max))
 }
 
 fn create_sid(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
-    with_host(vm, |h| {
-        let r = class::session_handler_create_sid(h);
-        h.vm_result(r)
-    })
+    call(vm, |h| class::session_handler_create_sid(h))
 }
 
 fn validate_id(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let id = a.str(0);
-    with_host(vm, |h| {
-        let r = class::session_handler_validate_id(h, id.as_bytes());
-        h.vm_result(r).map(Value::Bool)
-    })
+    call(vm, |h| class::session_handler_validate_id(h, id.as_bytes())).map(Value::Bool)
 }

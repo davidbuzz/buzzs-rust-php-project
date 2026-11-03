@@ -45,6 +45,30 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
     }
 }
 
+/// The value PHP's INI parser gives an unquoted constant-like word
+/// (`On`/`True`/`Yes` → `"1"`, `Off`/`False`/`No`/`None` → `""`).
+fn ini_bareword(v: &[u8]) -> Option<&'static [u8]> {
+    let lc = v.to_ascii_lowercase();
+    match lc.as_slice() {
+        b"on" | b"true" | b"yes" => Some(b"1"),
+        b"off" | b"false" | b"no" | b"none" => Some(b""),
+        _ => None,
+    }
+}
+
+/// Applies the INI parser's boolean-word conversion to the configured
+/// (`-d`) values of the session directives: the CLI stores them raw.
+pub(crate) fn normalize_config(vm: &mut Vm) {
+    for d in DIRECTIVES {
+        let Some(v) = vm.ini.config_value(d.name) else {
+            continue;
+        };
+        if let Some(n) = ini_bareword(v) {
+            vm.ini.set_config(d.name, n.to_vec());
+        }
+    }
+}
+
 /// The configuration value (`php.ini`/`-d`) of a directive.
 pub(crate) fn config_value(vm: &Vm, name: &str) -> Option<Vec<u8>> {
     vm.ini.config_value(name).map(<[u8]>::to_vec)
@@ -139,4 +163,19 @@ fn ini_restore_hook(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         }
         Ok(Value::Null)
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ini_bareword;
+
+    #[test]
+    fn barewords() {
+        assert_eq!(ini_bareword(b"TRUE"), Some(&b"1"[..]));
+        assert_eq!(ini_bareword(b"on"), Some(&b"1"[..]));
+        assert_eq!(ini_bareword(b"None"), Some(&b""[..]));
+        assert_eq!(ini_bareword(b"off"), Some(&b""[..]));
+        assert_eq!(ini_bareword(b"1"), None);
+        assert_eq!(ini_bareword(b"Lax"), None);
+    }
 }
