@@ -339,6 +339,40 @@ pub fn dev_minor(dev: u64) -> u64 {
     (dev & 0xff) | ((dev >> 12) & !0xff)
 }
 
+/// `getuid()`.
+pub fn uid() -> u32 {
+    // SAFETY: getuid has no preconditions and cannot fail.
+    unsafe { libc::getuid() }
+}
+
+/// `getgid()`.
+pub fn gid() -> u32 {
+    // SAFETY: getgid has no preconditions and cannot fail.
+    unsafe { libc::getgid() }
+}
+
+/// Whether `gid` is the process' group or one of its supplementary groups.
+pub fn in_group(gid_to_check: i64) -> bool {
+    if i64::from(gid()) == gid_to_check {
+        return true;
+    }
+    // SAFETY: a zero-length query with a null buffer returns the count.
+    let n = unsafe { libc::getgroups(0, std::ptr::null_mut()) };
+    let Ok(len) = usize::try_from(n) else {
+        return false;
+    };
+    if len == 0 {
+        return false;
+    }
+    let mut groups = vec![0 as libc::gid_t; len];
+    // SAFETY: `groups` has room for `n` entries.
+    let got = unsafe { libc::getgroups(n, groups.as_mut_ptr()) };
+    let got = usize::try_from(got).unwrap_or(0);
+    groups[..got.min(len)]
+        .iter()
+        .any(|&g| i64::from(g) == gid_to_check)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

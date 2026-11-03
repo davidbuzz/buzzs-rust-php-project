@@ -11,11 +11,28 @@
 //! filters are traits the VM implements, and warnings are reported through
 //! [`diag`].
 
+pub mod builtin;
+pub mod context;
 pub mod diag;
+pub mod file;
+pub mod filestat;
 pub mod filter;
 pub mod fnmatch;
 pub mod glob;
+pub mod glob_wrapper;
+pub mod memory;
+pub mod mode;
+pub mod open;
+pub mod pathname;
+pub mod paths;
+pub mod php_wrapper;
+pub mod plain;
 pub mod stat;
+pub mod state;
+pub mod stream;
 pub mod sys;
+pub mod temp;
+pub mod user;
 pub mod util;
 pub mod value;
+pub mod wrapper;
