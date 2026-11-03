@@ -6,9 +6,10 @@ use php_runtime::{
     ArrayKey, BinaryOp, CastTarget, ErrorLevel, HashTable, Obj, ObjectDump, PropertyPurpose,
     RtResult, RuntimeContext, RuntimeError, Value, ZArray, ZStr,
 };
-use php_spl::{ClassInfo, MethodIterator, ObjectIterator, SplHost, SplObject};
+use php_spl::{ClassInfo, HostIterator, NativeOp, ObjectIterator, SplHost, SplObject};
 use php_stdarr::ArrayContext;
 use php_vm::class::Class;
+use php_vm::ext::NativeIterator;
 use php_vm::func::{flags, Func};
 use php_vm::object::{class_of, data};
 use php_vm::vm::FrameKind;
@@ -477,8 +478,7 @@ impl SplHost for VmHost<'_> {
             return None;
         }
         let r = hook(self.vm, obj, false)
-            .and_then(|it| crate::iter::native_proxy(self.vm, it))
-            .map(|proxy| Box::new(MethodIterator::new(proxy)) as Box<dyn ObjectIterator>);
+            .map(|it| Box::new(HostIterator::new(Box::new(it))) as Box<dyn ObjectIterator>);
         Some(self.vm_rt(r))
     }
 
@@ -560,6 +560,51 @@ impl SplHost for VmHost<'_> {
             self.pcre = Some(p.unwrap_or_default());
         }
         self.pcre.get_or_insert_with(php_pcre::Pcre::new)
+    }
+
+    fn drive_native(&mut self, it: &mut dyn std::any::Any, op: NativeOp) -> RtResult<Value> {
+        let Some(it) = it.downcast_mut::<Box<dyn NativeIterator>>() else {
+            return Err(RuntimeError::Error(
+                "foreign iterator of unknown type".to_string(),
+            ));
+        };
+        let r = match op {
+            NativeOp::Rewind => it.rewind(self.vm).map(|()| Value::Null),
+            NativeOp::Valid => it.valid(self.vm).map(Value::Bool),
+            NativeOp::Current => it.current(self.vm),
+            NativeOp::Key => it.key(self.vm),
+            NativeOp::Next => it.next(self.vm).map(|()| Value::Null),
+        };
+        self.vm_rt(r)
+    }
+
+    fn run_pending_destructors(&mut self) -> RtResult<()> {
+        let mut first: Option<Throw> = None;
+        loop {
+            let pending = php_vm::object::take_pending_destructors();
+            if pending.is_empty() {
+                break;
+            }
+            for o in pending {
+                let cls = class_of(&o).clone();
+                let r = if cls.magic.destruct.is_some() {
+                    self.vm
+                        .call_method_by_name(&o, "__destruct", Vec::new())
+                        .map(|_| ())
+                } else if let Some(f) = cls.hooks.as_ref().and_then(|h| h.destruct) {
+                    f(self.vm, &o)
+                } else {
+                    Ok(())
+                };
+                if let Err(t) = r {
+                    first.get_or_insert(t);
+                }
+            }
+        }
+        match first {
+            Some(t) => Err(to_rt(self.vm, t)),
+            None => Ok(()),
+        }
     }
 
     fn write_output(&mut self, bytes: &[u8]) -> RtResult<()> {

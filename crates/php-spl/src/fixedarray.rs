@@ -7,7 +7,9 @@ use crate::object::{state_of, SplObject};
 use crate::util::{this_obj, DimKind};
 use php_runtime::convert::dval_to_lval_safe;
 use php_runtime::numeric::handle_numeric_str;
-use php_runtime::{ArrayKey, ErrorLevel, HashTable, Obj, PropertyPurpose, RtResult, Value, ZArray};
+use php_runtime::{
+    ArrayKey, ErrorLevel, HashTable, Obj, PropertyPurpose, RtResult, RuntimeError, Value, ZArray,
+};
 use std::rc::Rc;
 
 /// The internal state of an `SplFixedArray` (`spl_fixedarray`).
@@ -15,6 +17,34 @@ use std::rc::Rc;
 pub struct FixedArray {
     /// The elements; the size is `elements.len()`.
     pub elements: Vec<Value>,
+    /// `cached_resize`: while a resize runs element destructors, the size
+    /// a re-entrant `setSize()` asked for (`Some` = resize in progress).
+    pub cached_resize: Option<usize>,
+}
+
+/// `sizeof(zval)`, for PHP's allocation-overflow message.
+const ZVAL_SIZE: usize = 16;
+
+/// `safe_emalloc(size, sizeof(zval), 0)`: the fatal error PHP raises when
+/// the element block size overflows, or when it cannot be allocated.
+fn checked_alloc(elements: &mut Vec<Value>, size: usize) -> RtResult<()> {
+    if size
+        .checked_mul(ZVAL_SIZE)
+        .is_none_or(|b| b > isize::MAX.unsigned_abs())
+    {
+        return Err(RuntimeError::Fatal(format!(
+            "Possible integer overflow in memory allocation ({size} * {ZVAL_SIZE} + 0)"
+        )));
+    }
+    let extra = size.saturating_sub(elements.len());
+    if elements.try_reserve_exact(extra).is_err() {
+        return Err(RuntimeError::Fatal(format!(
+            "Out of memory (tried to allocate {} bytes)",
+            size * ZVAL_SIZE
+        )));
+    }
+    elements.resize(size, Value::Null);
+    Ok(())
 }
 
 impl FixedArray {
@@ -23,12 +53,17 @@ impl FixedArray {
     pub fn with_size(size: usize) -> Self {
         FixedArray {
             elements: vec![Value::Null; size],
+            cached_resize: None,
         }
     }
 
-    /// `spl_fixedarray_resize`.
-    pub fn resize(&mut self, size: usize) {
-        self.elements.resize(size, Value::Null);
+    /// Whether the array may be (re-)initialised by `__construct()`,
+    /// `__unserialize()` or `__wakeup()`: it is empty and no resize is
+    /// running destructors (`spl_fixedarray_empty` +
+    /// `spl_fixedarray_resize_in_progress`).
+    #[must_use]
+    pub fn can_init(&self) -> bool {
+        self.elements.is_empty() && self.cached_resize.is_none()
     }
 
     /// `toArray()`.
@@ -203,11 +238,14 @@ fn construct(host: &mut dyn SplHost, this: &Obj, args: &[Value]) -> RtResult<Val
         return Err(a.value_error(0, "must be greater than or equal to 0"));
     }
     let st = state_of(host, this)?;
+    let size = usize::try_from(size).unwrap_or(usize::MAX);
     st.fixed(|f| {
-        if f.elements.is_empty() {
-            f.resize(usize::try_from(size).unwrap_or(0));
+        if f.can_init() {
+            checked_alloc(&mut f.elements, size)
+        } else {
+            Ok(())
         }
-    })?;
+    })??;
     Ok(Value::Null)
 }
 
@@ -233,24 +271,75 @@ fn set_size(host: &mut dyn SplHost, this: &Obj, args: &[Value]) -> RtResult<Valu
         return Err(a.value_error(0, "must be greater than or equal to 0"));
     }
     let st = state_of(host, this)?;
-    // Drop the removed elements after releasing the borrow (destructors).
-    let removed = st.fixed(|f| {
-        let n = usize::try_from(size).unwrap_or(usize::MAX);
-        if n < f.elements.len() {
-            f.elements.split_off(n)
-        } else {
-            f.resize(n);
-            Vec::new()
-        }
-    })?;
-    drop(removed);
+    resize(host, &st, usize::try_from(size).unwrap_or(usize::MAX))?;
     Ok(Value::Bool(true))
+}
+
+/// `spl_fixedarray_resize`: destructors of removed elements run without a
+/// borrow of the state and may resize again (the last request wins once
+/// the current resize finished) but cannot re-initialise the array.
+pub fn resize(host: &mut dyn SplHost, st: &Rc<SplObject>, size: usize) -> RtResult<()> {
+    enum Step {
+        Done,
+        Release { removed: Vec<Value>, reverse: bool },
+    }
+    let step = st.fixed(|f| -> RtResult<Step> {
+        if size == f.elements.len() {
+            return Ok(Step::Done);
+        }
+        if f.cached_resize.is_some() {
+            f.cached_resize = Some(size);
+            return Ok(Step::Done);
+        }
+        if f.elements.is_empty() {
+            checked_alloc(&mut f.elements, size)?;
+            return Ok(Step::Done);
+        }
+        if size > f.elements.len() {
+            checked_alloc(&mut f.elements, size)?;
+            return Ok(Step::Done);
+        }
+        f.cached_resize = Some(size);
+        let removed = f.elements.split_off(size);
+        f.elements.shrink_to_fit();
+        // A full clear destroys from the end (`spl_fixedarray_dtor`), a
+        // shrink from the cut (`spl_fixedarray_dtor_range`).
+        Ok(Step::Release {
+            removed,
+            reverse: size == 0,
+        })
+    })??;
+    let Step::Release { removed, reverse } = step else {
+        return Ok(());
+    };
+    // Each element is released on its own, its destructor running before
+    // the next one is released, with the array already resized.
+    let mut failed = None;
+    let mut release = |v: Value| {
+        drop(v);
+        if let Err(e) = host.run_pending_destructors() {
+            failed.get_or_insert(e);
+        }
+    };
+    if reverse {
+        removed.into_iter().rev().for_each(&mut release);
+    } else {
+        removed.into_iter().for_each(&mut release);
+    }
+    let cached = st.fixed(|f| f.cached_resize.take())?;
+    if let Some(e) = failed {
+        return Err(e);
+    }
+    match cached {
+        Some(c) if c != size => resize(host, st, c),
+        _ => Ok(()),
+    }
 }
 
 fn wakeup(host: &mut dyn SplHost, this: &Obj, args: &[Value]) -> RtResult<Value> {
     Args::none("SplFixedArray::__wakeup", args)?;
     let st = state_of(host, this)?;
-    if st.fixed(|f| f.elements.is_empty())? {
+    if st.fixed(|f| f.can_init())? {
         let props = host.std_properties(this);
         let elements: Vec<Value> = props.values().map(Value::deref).collect();
         st.fixed(|f| f.elements = elements)?;
@@ -280,7 +369,7 @@ fn unserialize(host: &mut dyn SplHost, this: &Obj, args: &[Value]) -> RtResult<V
     let a = Args::new("SplFixedArray::__unserialize", args, &["data"], 1, Some(1))?;
     let data = a.array(0)?;
     let st = state_of(host, this)?;
-    if !st.fixed(|f| f.elements.is_empty())? {
+    if !st.fixed(|f| f.can_init())? {
         return Ok(Value::Null);
     }
     let mut elements = Vec::new();
@@ -329,7 +418,8 @@ fn from_array(host: &mut dyn SplHost, args: &[Value]) -> RtResult<Value> {
             };
             usize::try_from(tmp).unwrap_or(usize::MAX)
         };
-        let mut f = FixedArray::with_size(size);
+        let mut f = FixedArray::default();
+        checked_alloc(&mut f.elements, size)?;
         for (k, v) in data.iter() {
             if let ArrayKey::Int(n) = k {
                 if let Some(slot) = usize::try_from(*n).ok().and_then(|i| f.elements.get_mut(i)) {
@@ -341,6 +431,7 @@ fn from_array(host: &mut dyn SplHost, args: &[Value]) -> RtResult<Value> {
     } else {
         FixedArray {
             elements: data.values().map(Value::deref).collect(),
+            cached_resize: None,
         }
     };
     let obj = host.create_object(&"SplFixedArray".into())?;

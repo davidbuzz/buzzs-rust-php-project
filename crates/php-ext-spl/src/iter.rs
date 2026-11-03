@@ -5,7 +5,7 @@
 
 use crate::host::{rt_throw, VmHost};
 use php_runtime::ZStr;
-use php_runtime::{Obj, RtResult, Value};
+use php_runtime::{RtResult, Value};
 use php_spl::ObjectIterator;
 use php_vm::ext::{acc, class_flags, Args, ClassBuilder, NativeFn, NativeIterator, VmResult};
 use php_vm::func::Func;
@@ -75,19 +75,9 @@ impl NativeIterator for SplNativeIter {
     }
 }
 
-/// What an `InternalIterator` object drives.
-enum Inner {
-    /// An SPL iterator (`SplFixedArray::getIterator()`).
-    Spl(Box<dyn ObjectIterator>),
-    /// A VM `get_iterator` handler result, exposed as `Iterator` methods so
-    /// that SPL's wrapping iterators can drive native-iterator classes
-    /// (`SimpleXMLElement`, DOM lists, ...) through the host.
-    Native(Box<dyn NativeIterator>),
-}
-
 /// The state of an `InternalIterator` object.
 struct InternalIt {
-    it: Option<Inner>,
+    it: Option<Box<dyn ObjectIterator>>,
     rewound: bool,
 }
 
@@ -100,28 +90,11 @@ pub fn new_internal_iterator(vm: &mut Vm, it: Box<dyn ObjectIterator>) -> VmResu
     php_vm::object::set_internal(
         &o,
         InternalIt {
-            it: Some(Inner::Spl(it)),
+            it: Some(it),
             rewound: false,
         },
     );
     Ok(Value::Object(o))
-}
-
-/// Wraps a VM native iterator in an `InternalIterator` object whose
-/// methods forward to it one-to-one (the caller rewinds explicitly).
-pub fn native_proxy(vm: &mut Vm, it: Box<dyn NativeIterator>) -> VmResult<Obj> {
-    let Some(cls) = vm.find_class(b"InternalIterator") else {
-        return Err(vm.throw("Error", "Class \"InternalIterator\" not found"));
-    };
-    let o = vm.new_object(&cls)?;
-    php_vm::object::set_internal(
-        &o,
-        InternalIt {
-            it: Some(Inner::Native(it)),
-            rewound: true,
-        },
-    );
-    Ok(o)
 }
 
 #[derive(Clone, Copy)]
@@ -170,31 +143,12 @@ fn internal_op(vm: &mut Vm, a: &mut Args, op: Op) -> VmResult<Value> {
             "The InternalIterator object has not been properly initialized",
         ));
     };
-    let r = match &mut it {
-        Inner::Spl(it) => with_host(vm, |h| run_op(h, it.as_mut(), rewound, op)),
-        Inner::Native(it) => run_native(vm, it.as_mut(), op),
-    };
+    let r = with_host(vm, |h| run_op(h, it.as_mut(), rewound, op));
     php_vm::object::internal::<InternalIt, _>(&this, |s| {
         s.it = Some(it);
         s.rewound = true;
     });
     r
-}
-
-fn run_native(vm: &mut Vm, it: &mut dyn NativeIterator, op: Op) -> VmResult<Value> {
-    Ok(match op {
-        Op::Current => it.current(vm)?,
-        Op::Key => it.key(vm)?,
-        Op::Next => {
-            it.next(vm)?;
-            Value::Null
-        }
-        Op::Valid => Value::Bool(it.valid(vm)?),
-        Op::Rewind => {
-            it.rewind(vm)?;
-            Value::Null
-        }
-    })
 }
 
 fn run_op(

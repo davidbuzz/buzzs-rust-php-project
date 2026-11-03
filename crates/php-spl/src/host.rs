@@ -9,6 +9,9 @@
 use crate::object::SplObject;
 use php_runtime::{Obj, RtResult, RuntimeError, Value, ZArray, ZStr};
 use php_stdarr::ArrayContext;
+use std::any::Any;
+use std::cell::RefCell;
+use std::fmt;
 use std::rc::Rc;
 
 /// Class metadata for `class_implements()`, `class_parents()` and
@@ -127,6 +130,26 @@ pub trait SplHost: ArrayContext {
     /// limits and `preg_last_error()`.
     fn pcre(&mut self) -> &mut php_pcre::Pcre;
 
+    /// Runs the destructors of objects released since the last call (the
+    /// VM defers `__destruct` to a safe point; SPL code that releases
+    /// elements one by one — `SplFixedArray::setSize()` — runs them at the
+    /// point PHP would). The default does nothing.
+    fn run_pending_destructors(&mut self) -> RtResult<()> {
+        Ok(())
+    }
+
+    /// Performs `op` on a host-owned native iterator wrapped in a
+    /// [`HostIterator`] (as returned by [`SplHost::foreign_iterator`]), so
+    /// that it runs as the engine's iterator functions — not as PHP-level
+    /// method calls. The default fails: hosts that hand out
+    /// `HostIterator`s implement it.
+    fn drive_native(&mut self, it: &mut dyn Any, op: NativeOp) -> RtResult<Value> {
+        let _ = (it, op);
+        Err(RuntimeError::Error(
+            "the host does not drive native iterators".to_string(),
+        ))
+    }
+
     /// Writes to the output (`fpassthru`).
     fn write_output(&mut self, bytes: &[u8]) -> RtResult<()>;
 }
@@ -153,21 +176,100 @@ pub trait ObjectIterator {
     fn method_object(&self) -> Option<&Obj> {
         None
     }
+
+    /// For `zend_user_iterator`s: a handle sharing this iterator's state
+    /// (the object and the cached current value), used to call the
+    /// methods without holding a borrow of the iterator.
+    fn method_iter(&self) -> Option<MethodIterator> {
+        None
+    }
+}
+
+/// One step of the `zend_object_iterator` protocol, for
+/// [`SplHost::drive_native`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativeOp {
+    /// `rewind`.
+    Rewind,
+    /// `valid` (returns a bool).
+    Valid,
+    /// `get_current_data`.
+    Current,
+    /// `get_current_key`.
+    Key,
+    /// `move_forward`.
+    Next,
+}
+
+/// An iterator owned by the host (e.g. the VM's `get_iterator` result for
+/// a generator or a native class), driven through
+/// [`SplHost::drive_native`].
+pub struct HostIterator {
+    inner: Box<dyn Any>,
+}
+
+impl fmt::Debug for HostIterator {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("HostIterator")
+    }
+}
+
+impl HostIterator {
+    /// Wraps a host iterator.
+    #[must_use]
+    pub fn new(inner: Box<dyn Any>) -> Self {
+        HostIterator { inner }
+    }
+}
+
+impl ObjectIterator for HostIterator {
+    fn rewind(&mut self, host: &mut dyn SplHost) -> RtResult<()> {
+        host.drive_native(self.inner.as_mut(), NativeOp::Rewind)
+            .map(|_| ())
+    }
+    fn valid(&mut self, host: &mut dyn SplHost) -> RtResult<bool> {
+        let v = host.drive_native(self.inner.as_mut(), NativeOp::Valid)?;
+        Ok(matches!(v, Value::Bool(true)))
+    }
+    fn current(&mut self, host: &mut dyn SplHost) -> RtResult<Option<Value>> {
+        host.drive_native(self.inner.as_mut(), NativeOp::Current)
+            .map(Some)
+    }
+    fn key(&mut self, host: &mut dyn SplHost) -> RtResult<Option<Value>> {
+        host.drive_native(self.inner.as_mut(), NativeOp::Key)
+            .map(Some)
+    }
+    fn next(&mut self, host: &mut dyn SplHost) -> RtResult<()> {
+        host.drive_native(self.inner.as_mut(), NativeOp::Next)
+            .map(|_| ())
+    }
 }
 
 /// `zend_user_iterator`: iterates an `Iterator` object by calling its
-/// `rewind`/`valid`/`current`/`key`/`next` methods.
+/// `rewind`/`valid`/`current`/`key`/`next` methods. Like
+/// `zend_user_it_get_current_data`, the value returned by `current()` is
+/// cached until the next `next()`/`rewind()`; clones share the cache.
 #[derive(Debug, Clone)]
 pub struct MethodIterator {
     /// The iterator object.
     pub obj: Obj,
+    value: Rc<RefCell<Option<Value>>>,
 }
 
 impl MethodIterator {
     /// Wraps an `Iterator` object.
     #[must_use]
     pub fn new(obj: Obj) -> Self {
-        MethodIterator { obj }
+        MethodIterator {
+            obj,
+            value: Rc::new(RefCell::new(None)),
+        }
+    }
+
+    /// `zend_user_it_invalidate_current`: drops the cached value.
+    pub fn invalidate_current(&self) {
+        let old = self.value.borrow_mut().take();
+        drop(old);
     }
 }
 
@@ -175,7 +277,11 @@ impl ObjectIterator for MethodIterator {
     fn method_object(&self) -> Option<&Obj> {
         Some(&self.obj)
     }
+    fn method_iter(&self) -> Option<MethodIterator> {
+        Some(self.clone())
+    }
     fn rewind(&mut self, host: &mut dyn SplHost) -> RtResult<()> {
+        self.invalidate_current();
         host.call_method(&self.obj, "rewind", &[]).map(|_| ())
     }
     fn valid(&mut self, host: &mut dyn SplHost) -> RtResult<bool> {
@@ -183,12 +289,19 @@ impl ObjectIterator for MethodIterator {
         v.to_bool(host)
     }
     fn current(&mut self, host: &mut dyn SplHost) -> RtResult<Option<Value>> {
-        host.call_method(&self.obj, "current", &[]).map(Some)
+        let cached = self.value.borrow().clone();
+        if let Some(v) = cached {
+            return Ok(Some(v));
+        }
+        let v = host.call_method(&self.obj, "current", &[])?;
+        *self.value.borrow_mut() = Some(v.clone());
+        Ok(Some(v))
     }
     fn key(&mut self, host: &mut dyn SplHost) -> RtResult<Option<Value>> {
         host.call_method(&self.obj, "key", &[]).map(Some)
     }
     fn next(&mut self, host: &mut dyn SplHost) -> RtResult<()> {
+        self.invalidate_current();
         host.call_method(&self.obj, "next", &[]).map(|_| ())
     }
 }

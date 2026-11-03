@@ -44,7 +44,7 @@ pub mod observer;
 pub mod serial;
 pub mod util;
 
-pub use host::{ClassInfo, MethodIterator, ObjectIterator, SplHost};
+pub use host::{ClassInfo, HostIterator, MethodIterator, NativeOp, ObjectIterator, SplHost};
 pub use object::{create_state, SplObject, SplState};
 pub use util::DimKind;
 

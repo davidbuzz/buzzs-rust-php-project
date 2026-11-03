@@ -1,7 +1,7 @@
 string(1) "a"
 string(1) "b"
 
-Deprecated: Implicit conversion from float 1.5 to int loses precision in /home/buzz/phprust/crates/php-spl/tests/oracle/fixedarray.php on line 7
+Deprecated: Implicit conversion from float 1.5 to int loses precision in %CRATE%/tests/oracle/fixedarray.php on line 7
 string(1) "b"
 string(1) "b"
 string(1) "a"

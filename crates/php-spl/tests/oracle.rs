@@ -7,6 +7,24 @@ mod harness;
 
 use std::path::{Path, PathBuf};
 
+/// Replaces the crate directory in script output with `%CRATE%`, so the
+/// cached outputs do not depend on where the repository is checked out.
+fn crate_relative(out: &[u8]) -> Vec<u8> {
+    let dir = env!("CARGO_MANIFEST_DIR").as_bytes();
+    let mut v = Vec::with_capacity(out.len());
+    let mut i = 0;
+    while i < out.len() {
+        if out[i..].starts_with(dir) {
+            v.extend_from_slice(b"%CRATE%");
+            i += dir.len();
+        } else {
+            v.push(out[i]);
+            i += 1;
+        }
+    }
+    v
+}
+
 fn scripts() -> Vec<PathBuf> {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/oracle");
     let mut v: Vec<PathBuf> = std::fs::read_dir(dir)
@@ -50,6 +68,7 @@ fn oracle_scripts() {
                 .unwrap_or_default();
             let _ = std::fs::write(Path::new(&d).join(f + ".got"), &got);
         }
+        let got = crate_relative(&got);
         let (e, g) = (harness::normalize(&expected), harness::normalize(&got));
         if e != g {
             failures.push(format!(
@@ -85,6 +104,6 @@ fn regen_oracle() {
             .expect("run php");
         let mut data = out.stdout;
         data.extend_from_slice(&out.stderr);
-        std::fs::write(p.with_extension("out"), data).expect("write");
+        std::fs::write(p.with_extension("out"), crate_relative(&data)).expect("write");
     }
 }

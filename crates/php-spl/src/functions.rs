@@ -6,7 +6,10 @@
 use crate::args::Args;
 use crate::host::SplHost;
 use crate::observer::object_hash;
-use php_runtime::{ArrayKey, ErrorLevel, HashTable, RtResult, RuntimeError, Value, ZArray, ZStr};
+use php_runtime::{
+    ArrayKey, ErrorLevel, HashTable, Obj, PropertyPurpose, RtResult, RuntimeError, Value, ZArray,
+    ZStr,
+};
 use std::cell::RefCell;
 
 /// The default `spl_autoload()` extensions.
@@ -41,7 +44,7 @@ pub fn autoloaders() -> Vec<Value> {
 
 /// A canonical identity for a callable, used to detect duplicate
 /// registrations (`zend_fcc_equals`).
-fn callable_identity(v: &Value) -> Vec<u8> {
+fn callable_identity(host: &mut dyn SplHost, v: &Value) -> Vec<u8> {
     match v.deref() {
         Value::Str(s) => {
             let b = s.as_bytes();
@@ -66,9 +69,53 @@ fn callable_identity(v: &Value) -> Vec<u8> {
             out.extend_from_slice(&method);
             out
         }
-        Value::Object(o) => format!("#{}", o.handle()).into_bytes(),
+        Value::Object(o) if o.class_name().eq_ignore_ascii_case(b"Closure") => {
+            closure_identity(host, &o).unwrap_or_else(|| format!("#{}", o.handle()).into_bytes())
+        }
+        // An invokable object stands for its `__invoke()` method.
+        Value::Object(o) => format!("#{}::__invoke", o.handle()).into_bytes(),
         _ => Vec::new(),
     }
+}
+
+/// `zend_fcc_equals` for first-class callables: a closure created by
+/// `f(...)` / `$obj->m(...)` / `C::m(...)` is the same autoloader as the
+/// function or method it wraps (its debug table names the `function`
+/// and, for instance methods, the bound `this`). Real closures (debug
+/// table with `name`) are identified by the object.
+fn closure_identity(host: &mut dyn SplHost, o: &Obj) -> Option<Vec<u8>> {
+    let props = host.object_properties(o, PropertyPurpose::Debug).ok()??;
+    let Some(Value::Str(func)) = props.get_str(b"function").map(Value::deref) else {
+        return None;
+    };
+    let func = func.as_bytes().to_ascii_lowercase();
+    match props.get_str(b"this").map(Value::deref) {
+        Some(Value::Object(this)) => {
+            let method = func
+                .windows(2)
+                .rposition(|w| w == b"::")
+                .map_or(&func[..], |p| &func[p + 2..]);
+            let mut out = format!("#{}::", this.handle()).into_bytes();
+            out.extend_from_slice(method);
+            Some(out)
+        }
+        _ => Some(func),
+    }
+}
+
+/// The identities of the registered loaders (computed outside the
+/// registry borrow: identifying a closure asks the host).
+fn loader_identities(host: &mut dyn SplHost) -> Vec<Vec<u8>> {
+    autoloaders()
+        .iter()
+        .map(|l| {
+            if l.is_null() {
+                b"spl_autoload".to_vec()
+            } else {
+                callable_identity(host, l)
+            }
+        })
+        .collect()
 }
 
 /// The callable as `spl_autoload_functions()` reports it: `"C::m"`
@@ -327,23 +374,17 @@ fn autoload_register(host: &mut dyn SplHost, args: &[Value]) -> RtResult<Value> 
             "spl_autoload_register(): Argument #2 ($do_throw) has been ignored, spl_autoload_register() will always throw",
         )?;
     }
-    if !cb.is_null() && callable_identity(&cb) == b"spl_autoload_call" {
+    if !cb.is_null() && callable_identity(host, &cb) == b"spl_autoload_call" {
         return Err(a.value_error(0, "must not be the spl_autoload_call() function"));
     }
     let id = if cb.is_null() {
         b"spl_autoload".to_vec()
     } else {
-        callable_identity(&cb)
+        callable_identity(host, &cb)
     };
+    let exists = loader_identities(host).contains(&id);
     AUTOLOAD.with(|s| {
         let mut s = s.borrow_mut();
-        let exists = s.loaders.iter().any(|l| {
-            if l.is_null() {
-                id == b"spl_autoload"
-            } else {
-                callable_identity(l) == id
-            }
-        });
         if !exists {
             let entry = if id == b"spl_autoload" {
                 Value::from("spl_autoload")
@@ -363,7 +404,7 @@ fn autoload_register(host: &mut dyn SplHost, args: &[Value]) -> RtResult<Value> 
 fn autoload_unregister(host: &mut dyn SplHost, args: &[Value]) -> RtResult<Value> {
     let a = Args::new("spl_autoload_unregister", args, &["callback"], 1, Some(1))?;
     let cb = a.callable(host, 0)?;
-    let id = callable_identity(&cb);
+    let id = callable_identity(host, &cb);
     if id == b"spl_autoload_call" {
         host.diagnostic(
             ErrorLevel::Deprecated,
@@ -372,10 +413,12 @@ fn autoload_unregister(host: &mut dyn SplHost, args: &[Value]) -> RtResult<Value
         AUTOLOAD.with(|s| s.borrow_mut().loaders.clear());
         return Ok(Value::Bool(true));
     }
+    let ids = loader_identities(host);
     let removed = AUTOLOAD.with(|s| {
         let mut s = s.borrow_mut();
         let before = s.loaders.len();
-        s.loaders.retain(|l| callable_identity(l) != id);
+        let mut keep = ids.iter().map(|i| *i != id);
+        s.loaders.retain(|_| keep.next().unwrap_or(true));
         s.loaders.len() != before
     });
     Ok(Value::Bool(removed))

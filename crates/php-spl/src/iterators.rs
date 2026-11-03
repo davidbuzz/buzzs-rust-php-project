@@ -28,12 +28,8 @@ fn it_call<R>(
 ) -> RtResult<R> {
     // User iterators are driven through their methods without holding the
     // borrow, so that their code may re-enter the outer iterator.
-    let method_obj = it
-        .try_borrow()
-        .ok()
-        .and_then(|b| b.method_object().cloned());
-    if let Some(obj) = method_obj {
-        let mut m = crate::host::MethodIterator::new(obj);
+    let method_it = it.try_borrow().ok().and_then(|b| b.method_iter());
+    if let Some(mut m) = method_it {
         return f(&mut m, host);
     }
     let mut b = it
@@ -212,6 +208,14 @@ fn inner_it(st: &SplObject) -> RtResult<Option<ItRef>> {
 
 /// `spl_dual_it_free`.
 fn dual_free(st: &SplObject) -> RtResult<()> {
+    // `invalidate_current` of the inner iterator (drops the value a
+    // `zend_user_iterator` cached).
+    if let Some(it) = inner_it(st)? {
+        let cached = it.try_borrow().ok().and_then(|b| b.method_iter());
+        if let Some(m) = cached {
+            m.invalidate_current();
+        }
+    }
     let garbage = st.dual(|d| {
         let g = (d.data.take(), d.key.take());
         if let DualKind::Caching { zstr, children, .. } = &mut d.kind {
