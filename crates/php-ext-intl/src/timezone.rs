@@ -56,7 +56,7 @@ pub(crate) fn process_value(vm: &mut Vm, a: &Args, v: Option<Value>, n: usize, e
                 name = Some(vm.value_to_string(&Value::Object(o))?);
             } else {
                 let cls = php_vm::object::class_of(&o).name.to_string_lossy();
-                return Err(a.type_error(vm, n + 1, &format!("Object of class {cls} could not be converted to string")));
+                return Err(core::type_error(vm, a, n + 1, &format!("Object of class {cls} could not be converted to string")));
             }
         }
         Some(other) => name = Some(vm.value_to_string(&other)?),
@@ -245,7 +245,13 @@ fn use_daylight_time(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 fn get_offset(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let (o, off, t) = fetch(vm, a)?;
-    match t.offset(a.float(off), a.bool(off + 1)) {
+    let date = a.float(off);
+    let r = if date.is_finite() {
+        t.offset(date, a.bool(off + 1))
+    } else {
+        Err(php_intl::Error::intl(php_intl::UErrorCode::ILLEGAL_ARGUMENT_ERROR, "error obtaining offset"))
+    };
+    match r {
         Ok((raw, dst)) => {
             a.set_ref(off + 2, Value::Int(i64::from(raw)));
             a.set_ref(off + 3, Value::Int(i64::from(dst)));

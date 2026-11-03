@@ -93,6 +93,20 @@ fn visibility(v: &str) -> u32 {
     }
 }
 
+/// Signature overrides: PHP checks these arities itself (with its own
+/// messages), so the VM must accept any number of arguments.
+fn sig_override(key: &str, sig: &'static str) -> &'static str {
+    match key {
+        "IntlGregorianCalendar::__construct" => {
+            "__construct($timezoneOrYear = UNKNOWN, $localeOrMonth = UNKNOWN, $day = UNKNOWN, $hour = UNKNOWN, $minute = UNKNOWN, $second = UNKNOWN, ...$__extra)"
+        }
+        "intlgregcal_create_instance" => {
+            "intlgregcal_create_instance($timezoneOrYear = UNKNOWN, $localeOrMonth = UNKNOWN, $day = UNKNOWN, $hour = UNKNOWN, $minute = UNKNOWN, $second = UNKNOWN, ...$__extra): ?IntlGregorianCalendar"
+        }
+        _ => sig,
+    }
+}
+
 /// Registers everything.
 pub(crate) fn register(
     m: &mut ModuleBuilder<'_>,
@@ -172,7 +186,7 @@ pub(crate) fn register(
                 continue;
             }
             let h = handlers.get(mt.key).copied().unwrap_or(core::not_implemented as NativeFn);
-            b = b.method(mt.sig, f, h);
+            b = b.method(sig_override(mt.key, mt.sig), f, h);
         }
         if c.kind == ClassKind::Class && c.name != "IntlException" {
             let mut hooks = o.hooks;
@@ -185,7 +199,7 @@ pub(crate) fn register(
     }
     for f in crate::stubs::FUNCTIONS {
         let h = handlers.get(f.key).copied().unwrap_or(core::not_implemented as NativeFn);
-        m.function(f.sig, h);
+        m.function(sig_override(f.key, f.sig), h);
         if let Some((since, msg)) = f.deprecated {
             m.deprecated(since, msg);
         }

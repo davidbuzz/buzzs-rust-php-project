@@ -17,7 +17,7 @@ pub(crate) fn text(z: &ZStr) -> String {
 pub(crate) fn path(vm: &mut Vm, a: &Args, n: usize) -> VmResult<String> {
     let z = a.str(n);
     if z.as_bytes().contains(&0) {
-        return Err(a.value_error(vm, n + 1, "must not contain any null bytes"));
+        return Err(core::value_error(vm, a, n + 1, "must not contain any null bytes"));
     }
     Ok(text(&z))
 }
@@ -27,7 +27,7 @@ pub(crate) fn opt_path(vm: &mut Vm, a: &Args, n: usize) -> VmResult<Option<Strin
     match a.opt(n) {
         Some(Value::Str(z)) => {
             if z.as_bytes().contains(&0) {
-                return Err(a.value_error(vm, n + 1, "must not contain any null bytes"));
+                return Err(core::value_error(vm, a, n + 1, "must not contain any null bytes"));
             }
             Ok(Some(text(&z)))
         }
@@ -60,7 +60,7 @@ fn get_default(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
 fn set_default(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let z = a.str(0);
     if z.as_bytes().contains(&0) {
-        return Err(a.value_error(vm, 1, "must not contain any null bytes"));
+        return Err(core::value_error(vm, a, 1, "must not contain any null bytes"));
     }
     let v = lib::set_default_value(&text(&z));
     crate::set_default_locale_ini(vm, &v);

@@ -14,6 +14,7 @@
 mod calendar;
 mod collator;
 mod core;
+mod dateformat;
 mod dt;
 mod iter;
 mod locale;
@@ -109,6 +110,7 @@ fn all_handlers() -> HashMap<&'static str, NativeFn> {
         iter::handlers(),
         timezone::handlers(),
         calendar::handlers(),
+        dateformat::handlers(),
     ] {
         for (k, f) in list {
             h.insert(k, f);
@@ -134,6 +136,9 @@ fn class_opts(name: &str) -> registry::ClassOpts {
                 properties_for: Some(timezone::debug_info),
                 ..ClassHooks::default()
             };
+        }
+        "IntlDateFormatter" => {
+            o.hooks = ClassHooks { clone: Some(dateformat::clone), ..ClassHooks::default() };
         }
         "IntlCalendar" | "IntlGregorianCalendar" => {
             o.hooks = ClassHooks {

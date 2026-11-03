@@ -4,7 +4,7 @@
 use php_intl::calendar::PhpDateTime;
 use php_intl::timezone::{DateTimeZoneSpec, PhpZone};
 use php_runtime::{Obj, Value, ZStr};
-use php_vm::ext::VmResult;
+use php_vm::ext::{Throw, VmResult};
 use php_vm::Vm;
 
 /// Whether `o` is an instance of the class `name` (or a subclass).
@@ -73,8 +73,8 @@ pub(crate) fn make_timezone(vm: &mut Vm, spec: &DateTimeZoneSpec) -> VmResult<Va
     };
     match vm.new_object_with_args(&cls, vec![Value::Str(ZStr::from(name))]) {
         Ok(o) => Ok(Value::Object(o)),
-        Err(_) if matches!(spec, DateTimeZoneSpec::Id(_)) => {
-            Err(vm.throw("IntlException", "DateTimeZone constructor threw exception"))
+        Err(Throw::Exception(prev)) if matches!(spec, DateTimeZoneSpec::Id(_)) => {
+            Err(throw_with_previous(vm, "IntlException", "DateTimeZone constructor threw exception", prev))
         }
         Err(e) => Err(e),
     }
@@ -88,4 +88,13 @@ pub(crate) fn make_datetime(vm: &mut Vm, ts: i64, tz: &Value) -> VmResult<Value>
     let o = vm.new_object_with_args(&cls, vec![Value::Str(ZStr::from(format!("@{ts}")))])?;
     vm.call_method_by_name(&o, "setTimezone", vec![tz.clone()])?;
     Ok(Value::Object(o))
+}
+
+/// Throws `class` with `message`, chaining `prev` as its previous exception.
+pub(crate) fn throw_with_previous(vm: &mut Vm, class: &str, message: &str, prev: Obj) -> Throw {
+    let t = vm.throw(class, message);
+    if let Throw::Exception(e) = &t {
+        vm.set_property_raw(e, "previous", Value::Object(prev));
+    }
+    t
 }

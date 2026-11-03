@@ -230,8 +230,8 @@ pub(crate) fn fail(vm: &mut Vm, a: &Args, o: Option<&Obj>, e: Error, shift: usiz
 /// Builds the exception for a non-intl [`Error`].
 pub(crate) fn throw_engine(vm: &mut Vm, a: &Args, e: Error, shift: usize) -> Throw {
     match e {
-        Error::ArgumentValue { arg, message } => a.value_error(vm, arg as usize + shift, &message),
-        Error::ArgumentType { arg, message } => a.type_error(vm, arg as usize + shift, &message),
+        Error::ArgumentValue { arg, message } => value_error(vm, a, arg as usize + shift, &message),
+        Error::ArgumentType { arg, message } => type_error(vm, a, arg as usize + shift, &message),
         Error::Value(m) => vm.throw("ValueError", &m),
         Error::Thrown(m) => vm.throw("Error", &m),
         Error::ArgumentCount(m) => vm.throw("ArgumentCountError", &m),
@@ -324,4 +324,29 @@ pub(crate) fn type_name(v: &Value) -> String {
         Value::Resource(_) => "resource".into(),
         Value::Reference(r) => type_name(&r.get()),
     }
+}
+
+fn arg_error(vm: &mut Vm, class: &str, a: &Args, n: usize, msg: &str) -> Throw {
+    let fname = active_function(vm).unwrap_or_else(|| a.func_name());
+    let pname = a
+        .func
+        .as_ref()
+        .and_then(|f| f.params.get(n.wrapping_sub(1)).map(|p| p.name.to_string_lossy()))
+        .unwrap_or_default();
+    vm.throw(class, &format!("{fname}(): Argument #{n} (${pname}) {msg}"))
+}
+
+/// `zend_argument_value_error(n, msg)` (`Class::method` aware).
+pub(crate) fn value_error(vm: &mut Vm, a: &Args, n: usize, msg: &str) -> Throw {
+    arg_error(vm, "ValueError", a, n, msg)
+}
+
+/// `zend_argument_type_error(n, msg)` (`Class::method` aware).
+pub(crate) fn type_error(vm: &mut Vm, a: &Args, n: usize, msg: &str) -> Throw {
+    arg_error(vm, "TypeError", a, n, msg)
+}
+
+/// `zend_argument_error(class, n, msg)`.
+pub(crate) fn argument_error(vm: &mut Vm, class: &str, a: &Args, n: usize, msg: &str) -> Throw {
+    arg_error(vm, class, a, n, msg)
 }

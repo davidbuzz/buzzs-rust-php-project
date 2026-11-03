@@ -62,7 +62,14 @@ fn from_date_time(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         }
         _ => return Ok(Value::Null),
     };
-    let pdt = dt::php_datetime(vm, &dto)?;
+    let pdt = match dt::php_datetime(vm, &dto) {
+        Ok(p) => p,
+        Err(php_vm::ext::Throw::Exception(e)) if php_vm::object::class_of(&e).instance_of_name(b"error") => {
+            core::global_error_set(vm, UErrorCode::ILLEGAL_ARGUMENT_ERROR, "DateTime object is unconstructed")?;
+            return Ok(Value::Null);
+        }
+        Err(e) => return Err(e),
+    };
     let loc = opt_string(a, 1);
     match IntlCalendar::from_date_time(&pdt, loc.as_deref()) {
         Ok(c) => object(vm, c),
@@ -238,7 +245,7 @@ fn roll(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let (o, off) = fetch(vm, a)?;
     let field = a.int(off);
     if !(0..lib::FIELD_COUNT).contains(&field) {
-        return Err(a.value_error(vm, off + 1, "must be a valid field"));
+        return Err(core::value_error(vm, a, off + 1, "must be a valid field"));
     }
     let amount = match a.at(off + 1) {
         Value::Bool(b) => {
@@ -294,7 +301,7 @@ fn to_date_time(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 /// (error recorded).
 fn gregorian_body(vm: &mut Vm, a: &Args, is_ctor: bool, target: Option<&Obj>) -> VmResult<Option<IntlCalendar>> {
     core::reset_global();
-    let n = core::num_args(a);
+    let n = if a.values.len() > 6 { a.values.len() } else { core::num_args(a) };
     if is_ctor && n > 2 {
         vm.raise(
             8192,
@@ -314,7 +321,7 @@ fn gregorian_body(vm: &mut Vm, a: &Args, is_ctor: bool, target: Option<&Obj>) ->
     if variant <= 2 {
         if variant >= 2 && !matches!(a.at(1), Value::Str(_) | Value::Null) {
             let given = crate::core::type_name(&a.at(1));
-            return Err(a.type_error(vm, 2, &format!("must be of type ?string, {given} given")));
+            return Err(core::type_error(vm, a, 2, &format!("must be of type ?string, {given} given")));
         }
         if let Some(t) = target {
             if core::is_constructed::<IntlCalendar>(t) {
@@ -348,7 +355,7 @@ fn gregorian_body(vm: &mut Vm, a: &Args, is_ctor: bool, target: Option<&Obj>) ->
             Value::Null if i >= 3 => 0,
             other => {
                 let given = crate::core::type_name(other);
-                return Err(a.type_error(vm, i + 1, &format!("must be of type int, {given} given")));
+                return Err(core::type_error(vm, a, i + 1, &format!("must be of type int, {given} given")));
             }
         };
         vals.push(iv);
@@ -360,7 +367,7 @@ fn gregorian_body(vm: &mut Vm, a: &Args, is_ctor: bool, target: Option<&Obj>) ->
     }
     for (i, v) in vals.iter().enumerate() {
         if i32::try_from(*v).is_err() {
-            return Err(a.value_error(vm, i + 1, &format!("must be between {} and {}", i32::MIN, i32::MAX)));
+            return Err(core::value_error(vm, a, i + 1, &format!("must be between {} and {}", i32::MIN, i32::MAX)));
         }
     }
     let tzname = dt::default_tz_name(vm)?;
@@ -406,7 +413,7 @@ fn greg_from_fields(vm: &mut Vm, a: &mut Args, count: usize) -> VmResult<Value> 
     }
     for (i, v) in vals.iter().enumerate() {
         if i32::try_from(*v).is_err() {
-            return Err(a.value_error(vm, i + 1, &format!("must be between {} and {}", i32::MIN, i32::MAX)));
+            return Err(core::value_error(vm, a, i + 1, &format!("must be between {} and {}", i32::MIN, i32::MAX)));
         }
     }
     let tzname = dt::default_tz_name(vm)?;
@@ -486,10 +493,6 @@ pub(crate) fn require(o: &Obj) -> Option<IntlCalendar> {
     calendar_of(o).and_then(std::result::Result::ok)
 }
 
-/// Unused marker to keep the import list honest.
-#[allow(dead_code)]
-const _CODE: UErrorCode = UErrorCode::ZERO;
-
 /// Handlers by stub key.
 pub(crate) fn handlers() -> Vec<(&'static str, NativeFn)> {
     vec![
@@ -540,6 +543,7 @@ pub(crate) fn handlers() -> Vec<(&'static str, NativeFn)> {
         ("IntlCalendar::setSkippedWallTimeOption", set_skipped_wall_time_option),
         ("IntlCalendar::setTime", set_time),
         ("IntlCalendar::setTimeZone", set_time_zone),
+        ("intlcal_set_time_zone", set_time_zone),
         ("IntlCalendar::toDateTime", to_date_time),
         ("IntlGregorianCalendar::createFromDate", greg_create_from_date),
         ("IntlGregorianCalendar::createFromDateTime", greg_create_from_date_time),

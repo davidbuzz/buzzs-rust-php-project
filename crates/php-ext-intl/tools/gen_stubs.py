@@ -16,10 +16,13 @@ root, consts_path = sys.argv[1], sys.argv[2]
 
 # ----------------------------------------------------------- constants
 consts = {}
-cur = None
+cur = "__global__"
+in_classes = False
 for line in open(consts_path, encoding="utf-8"):
+    if line.startswith("pub const CLASSES"):
+        in_classes = True
     m = re.match(r'^        "(\w+)",$', line)
-    if m:
+    if m and in_classes:
         cur = m.group(1)
         continue
     m = re.match(r'^\s+\("(\w+)", ConstValue::(Int|Str|Float)\((.*)\)\),$', line)
@@ -60,7 +63,12 @@ def resolve_defaults(sig):
         for v in vals:
             r |= v
         return "= " + str(r)
-    return re.sub(r"= ((?:\w+::\w+)(?:\s*\|\s*\w+::\w+)*)", rep_default, sig)
+    sig = re.sub(r"= ((?:\w+::\w+)(?:\s*\|\s*\w+::\w+)*)", rep_default, sig)
+
+    def rep_global(m):
+        v = consts.get(("__global__", m.group(1)))
+        return m.group(0) if v is None else "= " + v
+    return re.sub(r"= ([A-Z][A-Z0-9_]+)(?=[,)])", rep_global, sig)
 
 
 def norm(s):
