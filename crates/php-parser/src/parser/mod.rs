@@ -62,7 +62,12 @@ pub(crate) struct Parser<'a> {
     /// `yield`.
     pub generator_stack: Vec<bool>,
     pub warnings: Vec<Diagnostic>,
+    /// Current recursion depth (bounded like bison's stack).
+    pub depth: u32,
 }
+
+/// Bison's `YYMAXDEPTH`, approximated as a recursion limit.
+const MAX_DEPTH: u32 = 9990;
 
 impl<'a> Parser<'a> {
     pub fn new(src: &'a [u8], opts: &ParseOptions) -> Self {
@@ -87,6 +92,7 @@ impl<'a> Parser<'a> {
             doc_comment: None,
             generator_stack: Vec::new(),
             warnings: Vec::new(),
+            depth: 0,
         }
     }
 
@@ -216,10 +222,6 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// Whether the current token is of kind `k`.
-    pub fn at(&mut self, k: TokenKind) -> bool {
-        self.peek() == k
-    }
 
     /// Consumes a token of kind `k`, or fails with a syntax error listing
     /// `expected` (which should include `k`).
@@ -302,6 +304,18 @@ impl<'a> Parser<'a> {
             name: name.to_vec(),
             span: tok.span,
         }
+    }
+
+    /// Enters one level of nesting, failing like bison when its stack is
+    /// exhausted. The caller must decrement `depth` afterwards.
+    pub fn enter(&mut self) -> PResult<()> {
+        self.depth += 1;
+        if self.depth > MAX_DEPTH {
+            let line = self.cur().end_line;
+            self.depth -= 1;
+            return Err(ParseError::parse("memory exhausted", line));
+        }
+        Ok(())
     }
 
     /// Marks the innermost function as a generator.
