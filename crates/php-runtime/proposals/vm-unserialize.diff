@@ -1,0 +1,171 @@
+VM-side adoption of php-runtime 8e9e810 (serialize.rs unserialize options / enum hook). Apply from the repo root with: git apply crates/php-runtime/proposals/vm-unserialize.diff
+- context.rs: RuntimeContext::unserialize_enum_case for the VM, so E: values parsed by php-runtime (session, SPL legacy formats) fail with php-src's warnings/offsets instead of an Error exception.
+- builtins/serial.rs: pub Vm::unserialize_options_in_effect(): the active unserialize() call's allowed_classes/max_depth/cur_depth (or the unserialize_max_depth ini outside one), with the docref function name; used by spl-unserialize.diff and session-unserialize.diff.
+- errors.rs: docref_function_name() factored out of docref_bytes() (no behaviour change).
+- iter.rs: foreach over $this from a parent's method lists the parent's private properties (visible_props recorded no declaring class, so op_fe_fetch's has_property_raw looked the name up in the child class and skipped it); fixes pdo_fetch_class_with_serialize_flag.
+
+diff --git a/crates/php-vm/src/builtins/serial.rs b/crates/php-vm/src/builtins/serial.rs
+index 957de85..fe69464 100644
+--- a/crates/php-vm/src/builtins/serial.rs
++++ b/crates/php-vm/src/builtins/serial.rs
+@@ -22,6 +22,7 @@ use crate::vm::{Vm, VmResult};
+ use php_runtime::dump::unmangle_property_name;
+ use php_runtime::float::zend_gcvt;
+ use php_runtime::numeric::{handle_numeric_str, strtod};
++use php_runtime::serialize::{AllowedClasses, UnserializeOptions};
+ use php_runtime::{ArrayKey, HashTable, Obj, PhpRef, PropertyPurpose, Value, ZArray, ZStr};
+ use std::cell::{Cell, RefCell};
+ use std::collections::{HashMap, HashSet};
+@@ -1637,6 +1638,47 @@ fn unser_init(vm: &Vm) -> (UnserRc, bool) {
+     })
+ }
+ 
++impl Vm {
++    /// The `var_hash` options a `php_var_unserialize()` made by native code
++    /// (a native `Serializable::unserialize()` such as `ArrayObject`'s legacy
++    /// format, `session_decode()`) runs with: those of the active
++    /// `unserialize()` call (`allowed_classes`, `max_depth`, and the depth
++    /// reached so far), or the `unserialize_max_depth` ini setting outside
++    /// one (or under the serialize lock, where a fresh context is used).
++    /// Diagnostics name the active builtin function, like
++    /// `php_error_docref()`.
++    #[must_use]
++    pub fn unserialize_options_in_effect(&self) -> UnserializeOptions {
++        let function: std::borrow::Cow<'static, str> =
++            std::borrow::Cow::Owned(self.docref_function_name().unwrap_or_default());
++        let active = if is_locked() {
++            None
++        } else {
++            UNSER.with(|u| {
++                let u = u.borrow();
++                let d = u.1.as_ref().filter(|_| u.0 > 0)?.borrow();
++                Some(UnserializeOptions {
++                    max_depth: UnserializeOptions::max_depth_from_ini(d.max_depth),
++                    allowed_classes: d
++                        .allowed
++                        .clone()
++                        .map_or(AllowedClasses::All, AllowedClasses::Only),
++                    depth: usize::try_from(d.cur_depth).unwrap_or(0),
++                    function: function.clone(),
++                    ..UnserializeOptions::default()
++                })
++            })
++        };
++        active.unwrap_or_else(|| UnserializeOptions {
++            max_depth: UnserializeOptions::max_depth_from_ini(
++                self.ini_long("unserialize_max_depth"),
++            ),
++            function,
++            ..UnserializeOptions::default()
++        })
++    }
++}
++
+ /// `php_var_unserialize_destroy()`: the outermost call runs the delayed
+ /// `__wakeup()` / `__unserialize()` calls.
+ fn unser_destroy(vm: &mut Vm, d: &UnserRc, outermost: bool, run: bool) -> VmResult<()> {
+diff --git a/crates/php-vm/src/context.rs b/crates/php-vm/src/context.rs
+index 3335186..cfa9260 100644
+--- a/crates/php-vm/src/context.rs
++++ b/crates/php-vm/src/context.rs
+@@ -5,7 +5,7 @@ use crate::class::cflags;
+ use crate::func::flags;
+ use crate::object;
+ use crate::vm::{Throw, Vm, VmResult};
+-use php_runtime::serialize::SerializedObject;
++use php_runtime::serialize::{EnumCaseLookup, SerializedObject};
+ use php_runtime::{
+     ArrayKey, BinaryOp, CastTarget, ErrorLevel, HashTable, Obj, ObjectDump, ObjectKind,
+     PropertyPurpose, PropertySlot, RtResult, RuntimeContext, RuntimeError, Value, ZArray, ZStr,
+@@ -356,6 +356,11 @@ impl RuntimeContext for Vm {
+             .map_err(|t| self.to_rt(t))
+     }
+ 
++    fn unserialize_enum_case(&mut self, class: &ZStr, case: &ZStr) -> RtResult<EnumCaseLookup> {
++        self.unserialize_enum_case_vm(class, case)
++            .map_err(|t| self.to_rt(t))
++    }
++
+     fn unserialize_custom(&mut self, class: &ZStr, data: &[u8]) -> RtResult<Value> {
+         self.unserialize_custom_vm(class, data)
+             .map_err(|t| self.to_rt(t))
+@@ -633,6 +638,25 @@ impl Vm {
+         self.enum_case(&cls, case)
+     }
+ 
++    /// `E:` resolution for php-runtime's parser (session, SPL legacy
++    /// formats): each failure is reported by the parser with php-src's
++    /// warning and offset instead of an exception.
++    fn unserialize_enum_case_vm(&mut self, class: &ZStr, case: &ZStr) -> VmResult<EnumCaseLookup> {
++        let Some(cls) = self.lookup_class(class)? else {
++            return Ok(EnumCaseLookup::ClassNotFound);
++        };
++        if !cls.is_enum() {
++            return Ok(EnumCaseLookup::NotAnEnum);
++        }
++        let Some(c) = cls.find_const(case.as_bytes()).cloned() else {
++            return Ok(EnumCaseLookup::UndefinedCase);
++        };
++        if !c.is_case {
++            return Ok(EnumCaseLookup::NotACase);
++        }
++        Ok(EnumCaseLookup::Found(self.enum_case(&cls, case)?))
++    }
++
+     fn unserialize_custom_vm(&mut self, class: &ZStr, data: &[u8]) -> VmResult<Value> {
+         let cls = self.lookup_class_or_error(class)?;
+         if cls.flags & cflags::NOT_SERIALIZABLE != 0 {
+diff --git a/crates/php-vm/src/errors.rs b/crates/php-vm/src/errors.rs
+index 977262f..f243c50 100644
+--- a/crates/php-vm/src/errors.rs
++++ b/crates/php-vm/src/errors.rs
+@@ -88,10 +88,10 @@ impl Vm {
+         self.docref_bytes(level, msg.as_bytes())
+     }
+ 
+-    /// Binary-safe [`Vm::docref`].
+-    pub(crate) fn docref_bytes(&mut self, level: i64, msg: &[u8]) -> VmResult<()> {
+-        let name = self
+-            .frames
++    /// The function `php_error_docref()` names (`get_active_function_name()`):
++    /// the innermost builtin frame, as `Class::method` for methods.
++    pub(crate) fn docref_function_name(&self) -> Option<String> {
++        self.frames
+             .iter()
+             .rev()
+             .find(|f| f.kind == FrameKind::Builtin)
+@@ -103,8 +103,12 @@ impl Vm {
+                     }
+                     _ => n.to_string_lossy(),
+                 })
+-            });
+-        match name {
++            })
++    }
++
++    /// Binary-safe [`Vm::docref`].
++    pub(crate) fn docref_bytes(&mut self, level: i64, msg: &[u8]) -> VmResult<()> {
++        match self.docref_function_name() {
+             Some(n) => {
+                 let mut m = format!("{n}(): ").into_bytes();
+                 m.extend_from_slice(msg);
+diff --git a/crates/php-vm/src/iter.rs b/crates/php-vm/src/iter.rs
+index f31efeb..530caac 100644
+--- a/crates/php-vm/src/iter.rs
++++ b/crates/php-vm/src/iter.rs
+@@ -56,7 +56,14 @@ impl Vm {
+                     let name = pi.name.clone();
+                     match self.lookup_prop(&cls, &name, scope.as_ref()) {
+                         PropLookup::Found(found) if found.slot == pi.slot => {
+-                            out.push((Value::Str(name.clone()), name, None));
++                            // A parent's private property seen from the
++                            // parent's scope is not in the object's own
++                            // property map: record its declaring class so
++                            // the fetch does not look it up there.
++                            let private_of = (pi.visibility() == flags::PRIVATE
++                                && !pi.class.eq_ignore_ascii_case(cls.name.as_bytes()))
++                            .then(|| pi.class.clone());
++                            out.push((Value::Str(name.clone()), name, private_of));
+                         }
+                         _ => {
+                             // Private props of other classes / inaccessible.

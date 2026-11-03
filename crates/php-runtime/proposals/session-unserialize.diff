@@ -1,0 +1,141 @@
+Session adoption (php-session + php-ext-session owners); needs vm-unserialize.diff. decode_with() runs php_var_unserialize semantics (unserialize_partial: no offset/extra-data warnings) with the VM's options, so warnings read "session_decode(): ..." (bug72663_3) and unserialize_max_depth applies; also forwards unserialize_enum_case.
+
+diff --git a/crates/php-ext-session/src/host.rs b/crates/php-ext-session/src/host.rs
+index b9bbafc..251f730 100644
+--- a/crates/php-ext-session/src/host.rs
++++ b/crates/php-ext-session/src/host.rs
+@@ -284,6 +284,13 @@ impl RuntimeContext for VmHost<'_> {
+     fn unserialize_enum(&mut self, class: &ZStr, case: &ZStr) -> RtResult<Value> {
+         self.parked(|vm| vm.unserialize_enum(class, case))
+     }
++    fn unserialize_enum_case(
++        &mut self,
++        class: &ZStr,
++        case: &ZStr,
++    ) -> RtResult<php_runtime::serialize::EnumCaseLookup> {
++        self.parked(|vm| vm.unserialize_enum_case(class, case))
++    }
+     fn unserialize_custom(&mut self, class: &ZStr, data: &[u8]) -> RtResult<Value> {
+         self.parked(|vm| vm.unserialize_custom(class, data))
+     }
+@@ -309,6 +316,10 @@ impl SessionHost for VmHost<'_> {
+         self.state()
+     }
+ 
++    fn unserialize_options(&mut self) -> php_runtime::serialize::UnserializeOptions {
++        self.vm.unserialize_options_in_effect()
++    }
++
+     fn emit_diagnostic(&mut self, level: ErrorLevel, message: &str) -> RtResult<()> {
+         self.parked(|vm| docref(vm, level.bits(), message.as_bytes()).map_err(|t| to_rt(vm, t)))
+     }
+diff --git a/crates/php-session/src/host.rs b/crates/php-session/src/host.rs
+index 5311c16..8b25d1a 100644
+--- a/crates/php-session/src/host.rs
++++ b/crates/php-session/src/host.rs
+@@ -1,6 +1,7 @@
+ //! The interface between the session module and its embedder (the VM/SAPI).
+ 
+ use crate::state::SessionState;
++use php_runtime::serialize::UnserializeOptions;
+ use php_runtime::{ErrorLevel, Obj, PhpRef, RtResult, RuntimeContext, RuntimeError, Value, ZArray};
+ use std::path::PathBuf;
+ 
+@@ -21,6 +22,13 @@ pub trait SessionHost: RuntimeContext {
+     /// The per-request session state (`PS()` globals).
+     fn session(&mut self) -> &mut SessionState;
+ 
++    /// The `var_hash` options session data is unserialized with
++    /// (`unserialize_max_depth`, and diagnostics naming the active function
++    /// like `php_error_docref`). The default uses php-runtime's defaults.
++    fn unserialize_options(&mut self) -> UnserializeOptions {
++        UnserializeOptions::default()
++    }
++
+     /// `php_error_docref(NULL, level, "%s", message)`. Returning `Err`
+     /// models a user error handler throwing; the session module keeps going
+     /// and reports the exception when the current entry point returns.
+diff --git a/crates/php-session/src/serializer.rs b/crates/php-session/src/serializer.rs
+index 1869244..13890d8 100644
+--- a/crates/php-session/src/serializer.rs
++++ b/crates/php-session/src/serializer.rs
+@@ -11,7 +11,9 @@
+ //! assembling use a small scanner over the serialization grammar of
+ //! `ext/standard/var_unserializer.re`.
+ 
+-use php_runtime::serialize::{serialize, unserialize, SerializedObject, UnserializeOptions};
++use php_runtime::serialize::{
++    serialize, unserialize_partial, EnumCaseLookup, SerializedObject, UnserializeOptions,
++};
+ use php_runtime::{
+     ArrayKey, BinaryOp, CastTarget, ErrorLevel, Obj, ObjectDump, PropertyPurpose, RtResult,
+     RuntimeContext, RuntimeError, Value, ZArray, ZStr,
+@@ -211,13 +213,25 @@ pub fn decode(
+     ser: Serializer,
+     data: &[u8],
+     ctx: &mut (impl RuntimeContext + ?Sized),
++) -> RtResult<Decoded> {
++    decode_with(ser, data, &UnserializeOptions::default(), ctx)
++}
++
++/// Decodes session data with explicit `php_var_unserialize()` options
++/// (`max_depth`, the function named by diagnostics).
++pub fn decode_with(
++    ser: Serializer,
++    data: &[u8],
++    opts: &UnserializeOptions,
++    ctx: &mut (impl RuntimeContext + ?Sized),
+ ) -> RtResult<Decoded> {
+     let mut quiet = Quiet(ctx);
+     if ser == Serializer::PhpSerialize {
+-        let result = unserialize(data, &UnserializeOptions::default(), &mut quiet)?;
++        // `php_var_unserialize()`: no offset / extra-data warnings.
++        let result = unserialize_partial(data, 0, opts, &mut quiet)?;
+         return Ok(match result {
+-            Some(v) => Decoded::Replace { value: v, ok: true },
+-            None => Decoded::Replace {
++            Ok((v, _)) => Decoded::Replace { value: v, ok: true },
++            Err(_) => Decoded::Replace {
+                 value: Value::empty_array(),
+                 ok: data.is_empty(),
+             },
+@@ -267,8 +281,13 @@ pub fn decode(
+             combined.extend_from_slice(payload);
+         }
+         combined.push(b'}');
+-        match unserialize(&combined, &UnserializeOptions::default(), &mut quiet)? {
+-            Some(Value::Array(arr)) => {
++        // The enclosing array adds one level the C code does not have.
++        let mut opts = opts.clone();
++        if opts.max_depth > 0 {
++            opts.max_depth += 1;
++        }
++        match unserialize_partial(&combined, 0, &opts, &mut quiet)? {
++            Ok((Value::Array(arr), _)) => {
+                 for (name, (_, v)) in names.into_iter().zip(arr.iter()) {
+                     entries.push((name, v.clone()));
+                 }
+@@ -329,6 +348,9 @@ impl<C: RuntimeContext + ?Sized> RuntimeContext for Quiet<'_, C> {
+     fn unserialize_enum(&mut self, class: &ZStr, case: &ZStr) -> RtResult<Value> {
+         self.0.unserialize_enum(class, case)
+     }
++    fn unserialize_enum_case(&mut self, class: &ZStr, case: &ZStr) -> RtResult<EnumCaseLookup> {
++        self.0.unserialize_enum_case(class, case)
++    }
+     fn unserialize_custom(&mut self, class: &ZStr, data: &[u8]) -> RtResult<Value> {
+         self.0.unserialize_custom(class, data)
+     }
+diff --git a/crates/php-session/src/state.rs b/crates/php-session/src/state.rs
+index 9d6c1d1..818fdd5 100644
+--- a/crates/php-session/src/state.rs
++++ b/crates/php-session/src/state.rs
+@@ -354,7 +354,8 @@ pub(crate) fn decode(h: &mut dyn SessionHost, data: &[u8]) -> bool {
+     let Some(ser) = h.session().serializer else {
+         return false;
+     };
+-    let ok = match serializer::decode(ser, data, h) {
++    let opts = h.unserialize_options();
++    let ok = match serializer::decode_with(ser, data, &opts, h) {
+         Ok(Decoded::Merge { entries, ok }) => {
+             if let Some(r) = h.session().http_session_vars.clone() {
+                 let mut v = r.borrow_mut();

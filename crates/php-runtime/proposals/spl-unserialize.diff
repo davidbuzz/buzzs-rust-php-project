@@ -1,0 +1,112 @@
+SPL adoption (php-spl + php-ext-spl owners); needs vm-unserialize.diff. Nested legacy-format unserialization uses php_runtime::serialize::unserialize_partial on the whole buffer with the active unserialize() call's options: allowed_classes reaches ArrayObject contents (bug72785), failure offsets are php-src's and docref warnings name the method (bug73341); also forwards unserialize_enum_case.
+
+diff --git a/crates/php-ext-spl/src/host.rs b/crates/php-ext-spl/src/host.rs
+index 6c8d00f..8b90fa1 100644
+--- a/crates/php-ext-spl/src/host.rs
++++ b/crates/php-ext-spl/src/host.rs
+@@ -362,6 +362,13 @@ impl RuntimeContext for VmHost<'_> {
+     fn unserialize_enum(&mut self, class: &ZStr, case: &ZStr) -> RtResult<Value> {
+         self.vm.unserialize_enum(class, case)
+     }
++    fn unserialize_enum_case(
++        &mut self,
++        class: &ZStr,
++        case: &ZStr,
++    ) -> RtResult<php_runtime::serialize::EnumCaseLookup> {
++        self.vm.unserialize_enum_case(class, case)
++    }
+     fn unserialize_custom(&mut self, class: &ZStr, data: &[u8]) -> RtResult<Value> {
+         self.vm.unserialize_custom(class, data)
+     }
+@@ -402,6 +409,10 @@ impl SplHost for VmHost<'_> {
+         spl_state_of(obj)
+     }
+ 
++    fn unserialize_options(&mut self) -> php_runtime::serialize::UnserializeOptions {
++        self.vm.unserialize_options_in_effect()
++    }
++
+     fn call_method(&mut self, obj: &Obj, name: &str, args: &[Value]) -> RtResult<Value> {
+         let r = self.vm.call_method_by_name(obj, name, args.to_vec());
+         self.vm_rt(r)
+diff --git a/crates/php-spl/src/host.rs b/crates/php-spl/src/host.rs
+index cd60637..7b11b53 100644
+--- a/crates/php-spl/src/host.rs
++++ b/crates/php-spl/src/host.rs
+@@ -7,6 +7,7 @@
+ //! callback, `__toString`, ...) may freely use the same SPL object again.
+ 
+ use crate::object::SplObject;
++use php_runtime::serialize::UnserializeOptions;
+ use php_runtime::{Obj, RtResult, RuntimeError, Value, ZArray, ZStr};
+ use php_stdarr::ArrayContext;
+ use std::any::Any;
+@@ -39,6 +40,15 @@ pub trait SplHost: ArrayContext {
+     /// (`None` for objects that are not instances of an SPL class).
+     fn spl_state(&mut self, obj: &Obj) -> Option<Rc<SplObject>>;
+ 
++    /// The options of the `var_hash` the legacy `Serializable` formats
++    /// unserialize their parts with: the active `unserialize()` call's
++    /// (`allowed_classes`, `max_depth` and the depth reached), with
++    /// diagnostics naming the active method. The default uses php-runtime's
++    /// defaults.
++    fn unserialize_options(&mut self) -> UnserializeOptions {
++        UnserializeOptions::default()
++    }
++
+     /// `zend_call_method`: calls `$obj->name(...$args)` with normal method
+     /// dispatch. When the method resolves to an internal SPL method the VM
+     /// routes the call back to [`crate::call_method`].
+diff --git a/crates/php-spl/src/serial.rs b/crates/php-spl/src/serial.rs
+index cb7394f..3bc4559 100644
+--- a/crates/php-spl/src/serial.rs
++++ b/crates/php-spl/src/serial.rs
+@@ -4,7 +4,7 @@
+ //! unserializes it without emitting `unserialize()` warnings.
+ 
+ use crate::host::SplHost;
+-use php_runtime::serialize::{unserialize, SerializedObject, UnserializeOptions};
++use php_runtime::serialize::{unserialize_partial, EnumCaseLookup, SerializedObject};
+ use php_runtime::{
+     BinaryOp, CastTarget, ErrorLevel, Obj, ObjectDump, PropertyPurpose, RtResult, RuntimeContext,
+     Value, ZArray, ZStr,
+@@ -158,6 +158,9 @@ impl RuntimeContext for Quiet<'_> {
+     fn unserialize_enum(&mut self, class: &ZStr, case: &ZStr) -> RtResult<Value> {
+         self.0.unserialize_enum(class, case)
+     }
++    fn unserialize_enum_case(&mut self, class: &ZStr, case: &ZStr) -> RtResult<EnumCaseLookup> {
++        self.0.unserialize_enum_case(class, case)
++    }
+     fn unserialize_custom(&mut self, class: &ZStr, data: &[u8]) -> RtResult<Value> {
+         self.0.unserialize_custom(class, data)
+     }
+@@ -178,20 +181,21 @@ impl RuntimeContext for Quiet<'_> {
+     }
+ }
+ 
+-/// Unserializes one value starting at `p`; returns the value and the
+-/// position after it. `Err(pos)` reports the error offset. Exceptions
+-/// thrown by user code during unserialization are reported as errors at
+-/// `p` too (the caller converts them to its own exception).
++/// Unserializes one value starting at `p` (`php_var_unserialize()` with
++/// the host's [`SplHost::unserialize_options`]); returns the value and the
++/// position after it. `Err(pos)` reports the error offset. Exceptions thrown
++/// by user code during unserialization are reported as errors at `p` (the
++/// caller converts them to its own exception).
+ pub fn unserialize_at(
+     host: &mut dyn SplHost,
+     buf: &[u8],
+     p: usize,
+ ) -> Result<(Value, usize), usize> {
+-    let end = value_end(buf, p).ok_or(p)?;
++    let opts = host.unserialize_options();
+     let mut q = Quiet(host);
+-    match unserialize(&buf[p..end], &UnserializeOptions::default(), &mut q) {
+-        Ok(Some(v)) => Ok((v, end)),
+-        _ => Err(end),
++    match unserialize_partial(buf, p, &opts, &mut q) {
++        Ok(r) => r,
++        Err(_) => Err(p),
+     }
+ }
+ 
