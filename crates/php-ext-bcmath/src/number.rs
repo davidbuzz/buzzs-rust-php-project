@@ -74,6 +74,20 @@ fn float_to_long(vm: &mut Vm, d: f64) -> VmResult<Option<i64>> {
     Ok(Some(l))
 }
 
+/// Whether the calling code (the code below the running native frame, or
+/// the running code for operator handlers) uses `strict_types`
+/// (`ZEND_ARG_USES_STRICT_TYPES()`).
+fn caller_strict(vm: &Vm) -> bool {
+    let mut frames = vm.frames.iter().rev();
+    match frames.next() {
+        Some(f) if matches!(f.kind, php_vm::vm::FrameKind::Builtin) => {
+            frames.next().is_some_and(|f| f.code.strict_types)
+        }
+        Some(f) => f.code.strict_types,
+        None => false,
+    }
+}
+
 /// `bcmath_number_parse_num` (operator operands). `None` is `FAILURE`.
 fn operator_arg(vm: &mut Vm, v: &Value) -> VmResult<Option<Arg>> {
     Ok(match v {
@@ -81,6 +95,8 @@ fn operator_arg(vm: &mut Vm, v: &Value) -> VmResult<Option<Arg>> {
         Value::Object(o) if is_number(o) => number_of(o).map(Arg::Num),
         Value::Int(i) => Some(Arg::Int(*i)),
         Value::Str(s) => Some(Arg::Str(s.clone())),
+        // `zend_parse_arg_long_slow` refuses everything in strict mode.
+        _ if caller_strict(vm) => None,
         Value::Bool(b) => Some(Arg::Int(i64::from(*b))),
         Value::Float(d) => float_to_long(vm, *d)?.map(Arg::Int),
         _ => None,
@@ -99,6 +115,7 @@ fn method_arg(vm: &mut Vm, a: &Args, n: usize, method: &str, pname: &str) -> VmR
         }
         Value::Int(i) => return Ok(Arg::Int(*i)),
         Value::Str(s) => return Ok(Arg::Str(s.clone())),
+        _ if caller_strict(vm) => {}
         Value::Bool(b) => return Ok(Arg::Int(i64::from(*b))),
         Value::Null => {
             vm.raise(
