@@ -518,6 +518,16 @@ impl Vm {
                 ));
             }
         }
+        if cls.is_trait() {
+            self.error(
+                crate::errors::level::DEPRECATED,
+                &format!(
+                    "Accessing static trait property {}::${} is deprecated, it should only be accessed on a class using the trait",
+                    cls.name,
+                    name.to_string_lossy()
+                ),
+            )?;
+        }
         if !sp.initialized.get() {
             sp.initialized.set(true);
             if let Some(d) = &sp.default {
@@ -1465,12 +1475,14 @@ struct TraitAbstractCheck {
     proto: Rc<Method>,
 }
 
-/// A copy of a trait method for the using class: it gets its own static
-/// variables (`zend_add_trait_method` copies the op array).
-fn trait_method_copy(f: &Func) -> Func {
+/// A copy of a trait method for the using class, under the name it is
+/// added with: it gets its own static variables (`zend_add_trait_method`
+/// copies the op array).
+fn trait_method_copy(f: &Func, name: &ZStr) -> Func {
     match f {
         Func::User(u) => Func::User(Rc::new(UserFunction {
-            name: u.name.clone(),
+            // `new_fn->common.function_name = name` (an alias).
+            name: name.clone(),
             params: u.params.clone(),
             required: u.required,
             return_type: u.return_type.clone(),
@@ -1648,7 +1660,7 @@ impl TraitMethodBinder<'_> {
             .map_or_else(|| self.weak.clone(), |m| m.proto_scope.clone());
         let m = Rc::new(Method {
             name: name.clone(),
-            func: trait_method_copy(&tm.func),
+            func: trait_method_copy(&tm.func, name),
             flags: fl | flags::FROM_TRAIT,
             scope: self.weak.clone(),
             proto_scope: proto,
@@ -1811,7 +1823,70 @@ fn visibility_name(f: u32) -> &'static str {
 
 /// Checks overriding rules; returns (message, line).
 fn check_method_inheritance(cls: &Rc<Class>) -> Option<(String, u32)> {
-    let parent = cls.parent.as_ref()?;
+    if let Some(parent) = &cls.parent {
+        if let Some(e) = check_parent_methods(cls, parent) {
+            return Some(e);
+        }
+    }
+    check_interface_methods(cls)
+}
+
+/// `do_inherit_method` for the methods of interfaces the parent does not
+/// already implement: an implementing method (own, from a trait or
+/// inherited) must be public and keep the staticness.
+fn check_interface_methods(cls: &Rc<Class>) -> Option<(String, u32)> {
+    if cls.is_interface() {
+        return None;
+    }
+    for iface in &cls.interfaces {
+        if cls
+            .parent
+            .as_ref()
+            .is_some_and(|p| p.interfaces.iter().any(|i| Rc::ptr_eq(i, iface)))
+        {
+            continue;
+        }
+        for lc in &iface.method_order {
+            let (Some(im), Some(m)) = (iface.methods.get(lc), cls.methods.get(lc)) else {
+                continue;
+            };
+            if Rc::ptr_eq(im, m) {
+                continue;
+            }
+            let line = crate::variance::func_location(&m.func).1;
+            let iname = object::display_name(&iface.name);
+            let cname = object::display_name(&m.scope().name);
+            if im.is_static() != m.is_static() {
+                let msg = if m.is_static() {
+                    format!(
+                        "Cannot make non static method {iname}::{}() static in class {cname}",
+                        m.name
+                    )
+                } else {
+                    format!(
+                        "Cannot make static method {iname}::{}() non static in class {cname}",
+                        m.name
+                    )
+                };
+                return Some((msg, line));
+            }
+            if m.visibility() != flags::PUBLIC {
+                return Some((
+                    format!(
+                        "Access level to {cname}::{}() must be public (as in class {iname})",
+                        m.name
+                    ),
+                    line,
+                ));
+            }
+        }
+    }
+    None
+}
+
+/// `do_inheritance_check_on_method` (all but the signature) for the
+/// methods overriding a parent method.
+fn check_parent_methods(cls: &Rc<Class>, parent: &Rc<Class>) -> Option<(String, u32)> {
     for (lc, m) in &cls.methods {
         let Some(pm) = parent.methods.get(lc) else {
             continue;
