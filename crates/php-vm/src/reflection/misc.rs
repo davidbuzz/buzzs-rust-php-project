@@ -19,19 +19,24 @@ use std::rc::Rc;
 // Extension attribution
 // ---------------------------------------------------------------------
 
+/// Snapshot of the function, class and constant tables.
+type Tables = (HashSet<Vec<u8>>, HashSet<Vec<u8>>, HashSet<Vec<u8>>);
+
 #[derive(Default)]
 struct Modules {
     functions: HashMap<Vec<u8>, String>,
     classes: HashMap<Vec<u8>, String>,
     constants: HashMap<Vec<u8>, String>,
-    snapshot: Option<(HashSet<Vec<u8>>, HashSet<Vec<u8>>, HashSet<Vec<u8>>)>,
+    #[allow(dead_code)]
+    snapshot: Option<Tables>,
 }
 
 thread_local! {
     static MODULES: RefCell<Modules> = RefCell::new(Modules::default());
 }
 
-fn snapshot(vm: &Vm) -> (HashSet<Vec<u8>>, HashSet<Vec<u8>>, HashSet<Vec<u8>>) {
+#[allow(dead_code)]
+fn snapshot(vm: &Vm) -> Tables {
     (
         vm.functions.keys().map(|k| k.as_bytes().to_vec()).collect(),
         vm.classes.keys().map(|k| k.as_bytes().to_vec()).collect(),
@@ -42,6 +47,7 @@ fn snapshot(vm: &Vm) -> (HashSet<Vec<u8>>, HashSet<Vec<u8>>, HashSet<Vec<u8>>) {
 /// Records which functions, classes and constants extension `name`
 /// registered (call with `begin = true` before and `false` after
 /// `Extension::register`).
+#[allow(dead_code)] // called from `Vm::with_extensions` once that hook lands
 pub(crate) fn record_module(vm: &Vm, name: &str, begin: bool) {
     if begin {
         let s = snapshot(vm);
@@ -51,7 +57,9 @@ pub(crate) fn record_module(vm: &Vm, name: &str, begin: bool) {
     let (f, c, k) = snapshot(vm);
     MODULES.with(|m| {
         let mut m = m.borrow_mut();
-        let Some((bf, bc, bk)) = m.snapshot.take() else { return };
+        let Some((bf, bc, bk)) = m.snapshot.take() else {
+            return;
+        };
         for x in f.difference(&bf) {
             m.functions.insert(x.clone(), name.to_string());
         }
@@ -66,20 +74,73 @@ pub(crate) fn record_module(vm: &Vm, name: &str, begin: bool) {
 
 /// Core (`zend_builtin_functions.c`) functions.
 const CORE_FUNCTIONS: &[&str] = &[
-    "zend_version", "func_num_args", "func_get_arg", "func_get_args", "strlen", "strcmp", "strncmp", "strcasecmp",
-    "strncasecmp", "error_reporting", "define", "defined", "get_class", "get_called_class", "get_parent_class",
-    "is_subclass_of", "is_a", "get_class_vars", "get_object_vars", "get_mangled_object_vars", "get_class_methods",
-    "method_exists", "property_exists", "class_exists", "interface_exists", "trait_exists", "enum_exists",
-    "function_exists", "class_alias", "get_included_files", "get_required_files", "trigger_error", "user_error",
-    "set_error_handler", "restore_error_handler", "set_exception_handler", "restore_exception_handler",
-    "get_declared_classes", "get_declared_traits", "get_declared_interfaces", "get_defined_functions",
-    "get_defined_vars", "get_resource_type", "get_resource_id", "get_resources", "get_loaded_extensions",
-    "get_defined_constants", "debug_backtrace", "debug_print_backtrace", "extension_loaded", "get_extension_funcs",
-    "gc_mem_caches", "gc_collect_cycles", "gc_enabled", "gc_enable", "gc_disable", "gc_status", "clone",
+    "zend_version",
+    "func_num_args",
+    "func_get_arg",
+    "func_get_args",
+    "strlen",
+    "strcmp",
+    "strncmp",
+    "strcasecmp",
+    "strncasecmp",
+    "error_reporting",
+    "define",
+    "defined",
+    "get_class",
+    "get_called_class",
+    "get_parent_class",
+    "is_subclass_of",
+    "is_a",
+    "get_class_vars",
+    "get_object_vars",
+    "get_mangled_object_vars",
+    "get_class_methods",
+    "method_exists",
+    "property_exists",
+    "class_exists",
+    "interface_exists",
+    "trait_exists",
+    "enum_exists",
+    "function_exists",
+    "class_alias",
+    "get_included_files",
+    "get_required_files",
+    "trigger_error",
+    "user_error",
+    "set_error_handler",
+    "restore_error_handler",
+    "set_exception_handler",
+    "restore_exception_handler",
+    "get_declared_classes",
+    "get_declared_traits",
+    "get_declared_interfaces",
+    "get_defined_functions",
+    "get_defined_vars",
+    "get_resource_type",
+    "get_resource_id",
+    "get_resources",
+    "get_loaded_extensions",
+    "get_defined_constants",
+    "debug_backtrace",
+    "debug_print_backtrace",
+    "extension_loaded",
+    "get_extension_funcs",
+    "gc_mem_caches",
+    "gc_collect_cycles",
+    "gc_enabled",
+    "gc_enable",
+    "gc_disable",
+    "gc_status",
+    "clone",
 ];
 
 /// The extension of an internal function.
-pub(crate) fn function_module(vm: &Vm, f: &Func, scope: Option<&Rc<Class>>, name: &ZStr) -> Option<String> {
+pub(crate) fn function_module(
+    vm: &Vm,
+    f: &Func,
+    scope: Option<&Rc<Class>>,
+    name: &ZStr,
+) -> Option<String> {
     if f.is_user() {
         return None;
     }
@@ -121,7 +182,10 @@ pub(crate) fn function_module(vm: &Vm, f: &Func, scope: Option<&Rc<Class>>, name
             return Some(m.into());
         }
     }
-    if matches!(s.as_str(), "rand" | "srand" | "getrandmax" | "lcg_value" | "random_int" | "random_bytes") {
+    if matches!(
+        s.as_str(),
+        "rand" | "srand" | "getrandmax" | "lcg_value" | "random_int" | "random_bytes"
+    ) {
         return Some("random".into());
     }
     Some("standard".into())
@@ -147,16 +211,50 @@ pub(crate) fn class_module(vm: &Vm, c: &Rc<Class>) -> Option<String> {
         return Some("date".into());
     }
     let spl = [
-        "arrayiterator", "arrayobject", "splobjectstorage", "spldoublylinkedlist", "splqueue", "splstack", "splheap",
-        "splminheap", "splmaxheap", "splpriorityqueue", "splfixedarray", "splobserver", "splsubject", "splfileinfo",
-        "splfileobject", "spltempfileobject", "directoryiterator", "filesystemiterator", "recursivedirectoryiterator",
-        "globiterator", "logicexception", "badfunctioncallexception", "badmethodcallexception", "domainexception",
-        "invalidargumentexception", "lengthexception", "outofrangeexception", "runtimeexception", "outofboundsexception",
-        "overflowexception", "rangeexception", "underflowexception", "unexpectedvalueexception", "recursiveiterator",
-        "outeriterator", "seekableiterator", "countable",
+        "arrayiterator",
+        "arrayobject",
+        "splobjectstorage",
+        "spldoublylinkedlist",
+        "splqueue",
+        "splstack",
+        "splheap",
+        "splminheap",
+        "splmaxheap",
+        "splpriorityqueue",
+        "splfixedarray",
+        "splobserver",
+        "splsubject",
+        "splfileinfo",
+        "splfileobject",
+        "spltempfileobject",
+        "directoryiterator",
+        "filesystemiterator",
+        "recursivedirectoryiterator",
+        "globiterator",
+        "logicexception",
+        "badfunctioncallexception",
+        "badmethodcallexception",
+        "domainexception",
+        "invalidargumentexception",
+        "lengthexception",
+        "outofrangeexception",
+        "runtimeexception",
+        "outofboundsexception",
+        "overflowexception",
+        "rangeexception",
+        "underflowexception",
+        "unexpectedvalueexception",
+        "recursiveiterator",
+        "outeriterator",
+        "seekableiterator",
+        "countable",
     ];
     if spl.contains(&n.as_str()) || n.ends_with("iterator") && !matches!(n.as_str(), "iterator") {
-        return Some(if n == "countable" { "Core".into() } else { "SPL".into() });
+        return Some(if n == "countable" {
+            "Core".into()
+        } else {
+            "SPL".into()
+        });
     }
     Some("Core".into())
 }
@@ -171,10 +269,20 @@ pub(crate) fn constant_module(_vm: &Vm, name: &ZStr) -> String {
         || s.starts_with("ZEND_")
         || matches!(
             s.as_str(),
-            "TRUE" | "FALSE" | "NULL" | "true" | "false" | "null" | "DEBUG_BACKTRACE_PROVIDE_OBJECT" | "DEBUG_BACKTRACE_IGNORE_ARGS"
+            "TRUE"
+                | "FALSE"
+                | "NULL"
+                | "true"
+                | "false"
+                | "null"
+                | "DEBUG_BACKTRACE_PROVIDE_OBJECT"
+                | "DEBUG_BACKTRACE_IGNORE_ARGS"
                 | "UPLOAD_ERR_OK"
         )
-        || (s.starts_with("PHP_") && !s.starts_with("PHP_ROUND") && !s.starts_with("PHP_URL") && !s.starts_with("PHP_QUERY"));
+        || (s.starts_with("PHP_")
+            && !s.starts_with("PHP_ROUND")
+            && !s.starts_with("PHP_URL")
+            && !s.starts_with("PHP_QUERY"));
     if core {
         "Core".into()
     } else if s.starts_with("PREG_") || s.starts_with("PCRE_") {
@@ -198,7 +306,10 @@ pub(crate) fn constant_file(_name: &ZStr) -> Option<ZStr> {
 
 /// All extension names, as `get_loaded_extensions()` reports them.
 fn module_names(vm: &Vm) -> Vec<String> {
-    let mut v: Vec<String> = crate::LOADED_EXTENSIONS.iter().map(|s| (*s).to_string()).collect();
+    let mut v: Vec<String> = crate::LOADED_EXTENSIONS
+        .iter()
+        .map(|s| (*s).to_string())
+        .collect();
     v.extend(vm.loaded_extensions.iter().cloned());
     v
 }
@@ -206,7 +317,13 @@ fn module_names(vm: &Vm) -> Vec<String> {
 /// `reflection_extension_factory`.
 pub(crate) fn extension_value(vm: &mut Vm, name: &str) -> VmResult<Value> {
     let n = ZStr::from(name);
-    super::new_refl(vm, "ReflectionExtension", Refl::Extension(n.clone()), Some(&n), None)
+    super::new_refl(
+        vm,
+        "ReflectionExtension",
+        Refl::Extension(n.clone()),
+        Some(&n),
+        None,
+    )
 }
 
 // ---------------------------------------------------------------------
@@ -247,11 +364,20 @@ fn get_modifier_names(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 /// Registers `ReflectionException`, `Reflection` and `Reflector`.
 pub(crate) fn register_base(vm: &mut Vm) {
-    ClassBuilder::new("ReflectionException").extends(vm, "Exception").register(vm);
-    ClassBuilder::new("Reflection")
-        .method("getModifierNames(int $modifiers): array", STAT, get_modifier_names)
+    ClassBuilder::new("ReflectionException")
+        .extends(vm, "Exception")
         .register(vm);
-    ClassBuilder::new("Reflector").flags(cflags::INTERFACE | cflags::ABSTRACT).implements(vm, &["Stringable"]).register(vm);
+    ClassBuilder::new("Reflection")
+        .method(
+            "getModifierNames(int $modifiers): array",
+            STAT,
+            get_modifier_names,
+        )
+        .register(vm);
+    ClassBuilder::new("Reflector")
+        .flags(cflags::INTERFACE | cflags::ABSTRACT)
+        .implements(vm, &["Stringable"])
+        .register(vm);
 }
 
 fn clone_error(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
@@ -265,7 +391,10 @@ fn clone_error(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
 fn this_gen(vm: &mut Vm, a: &Args) -> VmResult<Obj> {
     match this_refl(vm, a)? {
         Refl::Generator(g) => Ok(g),
-        _ => Err(vm.make_throw("Error", "Internal error: Failed to retrieve the reflection object")),
+        _ => Err(vm.make_throw(
+            "Error",
+            "Internal error: Failed to retrieve the reflection object",
+        )),
     }
 }
 
@@ -298,14 +427,19 @@ fn gen_frame(vm: &Vm, g: &Obj) -> Option<GenFrame> {
     .flatten();
     match suspended {
         Some(x) => x,
-        None => vm.frames.iter().rev().find(|f| f.generator.as_ref().is_some_and(|x| Obj::ptr_eq(x, g))).map(|f| GenFrame {
-            file: f.code.filename.clone(),
-            line: f.line(),
-            func: f.func.clone(),
-            this: f.this.clone(),
-            closure: f.closure.clone(),
-            scope: f.scope.clone(),
-        }),
+        None => vm
+            .frames
+            .iter()
+            .rev()
+            .find(|f| f.generator.as_ref().is_some_and(|x| Obj::ptr_eq(x, g)))
+            .map(|f| GenFrame {
+                file: f.code.filename.clone(),
+                line: f.line(),
+                func: f.func.clone(),
+                this: f.this.clone(),
+                closure: f.closure.clone(),
+                scope: f.scope.clone(),
+            }),
     }
 }
 
@@ -315,7 +449,9 @@ fn gen_closed(vm: &mut Vm) -> crate::vm::Throw {
 
 fn rg_construct(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let o = this(a);
-    let Value::Object(g) = a.at(0) else { return Ok(Value::Null) };
+    let Value::Object(g) = a.at(0) else {
+        return Ok(Value::Null);
+    };
     object::set_internal(&o, Refl::Generator(g));
     Ok(Value::Null)
 }
@@ -346,10 +482,22 @@ fn rg_get_this(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 fn rg_get_function(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let g = this_gen(vm, a)?;
-    let Some(f) = gen_frame(vm, &g) else { return Err(gen_closed(vm)) };
-    let Some(func) = f.func else { return Ok(Value::Null) };
+    let Some(f) = gen_frame(vm, &g) else {
+        return Err(gen_closed(vm));
+    };
+    let Some(func) = f.func else {
+        return Ok(Value::Null);
+    };
     if let Some(c) = f.closure {
-        return super::function_value(vm, FnRef { func, method: None, class: None, closure: Some(c) });
+        return super::function_value(
+            vm,
+            FnRef {
+                func,
+                method: None,
+                class: None,
+                closure: Some(c),
+            },
+        );
     }
     if let Some(s) = f.scope {
         if let Some(m) = s.find_method(func.name().as_bytes()).cloned() {
@@ -375,7 +523,9 @@ fn rg_is_closed(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 fn rg_get_trace(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let g = this_gen(vm, a)?;
-    let Some(f) = gen_frame(vm, &g) else { return Err(gen_closed(vm)) };
+    let Some(f) = gen_frame(vm, &g) else {
+        return Err(gen_closed(vm));
+    };
     let mut t = HashTable::new();
     let mut e = HashTable::new();
     e.insert(ArrayKey::from("file"), Value::Str(f.file));
@@ -387,7 +537,10 @@ fn rg_get_trace(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             if let Some(o) = &f.this {
                 e.insert(ArrayKey::from("object"), Value::Object(o.clone()));
             }
-            e.insert(ArrayKey::from("type"), zs(if f.this.is_some() { "->" } else { "::" }));
+            e.insert(
+                ArrayKey::from("type"),
+                zs(if f.this.is_some() { "->" } else { "::" }),
+            );
         }
     }
     e.insert(ArrayKey::from("args"), Value::Array(ZArray::new()));
@@ -402,10 +555,22 @@ pub(crate) fn register_generator(vm: &mut Vm) {
         .method("__construct(Generator $generator)", PUB, rg_construct)
         .method("getExecutingLine(): int", PUB, rg_get_executing_line)
         .method("getExecutingFile(): string", PUB, rg_get_executing_file)
-        .method("getTrace(int $options = DEBUG_BACKTRACE_PROVIDE_OBJECT): array", PUB, rg_get_trace)
-        .method("getFunction(): ReflectionFunctionAbstract", PUB, rg_get_function)
+        .method(
+            "getTrace(int $options = DEBUG_BACKTRACE_PROVIDE_OBJECT): array",
+            PUB,
+            rg_get_trace,
+        )
+        .method(
+            "getFunction(): ReflectionFunctionAbstract",
+            PUB,
+            rg_get_function,
+        )
         .method("getThis(): ?object", PUB, rg_get_this)
-        .method("getExecutingGenerator(): Generator", PUB, rg_get_executing_generator)
+        .method(
+            "getExecutingGenerator(): Generator",
+            PUB,
+            rg_get_executing_generator,
+        )
         .method("isClosed(): bool", PUB, rg_is_closed)
         .register(vm);
 }
@@ -417,7 +582,10 @@ pub(crate) fn register_generator(vm: &mut Vm) {
 fn this_fiber(vm: &mut Vm, a: &Args) -> VmResult<Obj> {
     match this_refl(vm, a)? {
         Refl::Fiber(f) => Ok(f),
-        _ => Err(vm.make_throw("Error", "Internal error: Failed to retrieve the reflection object")),
+        _ => Err(vm.make_throw(
+            "Error",
+            "Internal error: Failed to retrieve the reflection object",
+        )),
     }
 }
 
@@ -428,12 +596,22 @@ fn fiber_state(f: &Obj) -> Option<crate::fiber::FiberState> {
 fn fiber_location(vm: &Vm, f: &Obj) -> Option<(ZStr, u32)> {
     let st = fiber_state(f)?;
     match st {
-        crate::fiber::FiberState::Suspended => object::internal::<crate::fiber::FiberData, _>(f, |d| {
-            d.frames.iter().rev().find(|fr| fr.kind != crate::vm::FrameKind::Builtin).map(|fr| (fr.code.filename.clone(), fr.line()))
-        })
-        .flatten(),
+        crate::fiber::FiberState::Suspended => {
+            object::internal::<crate::fiber::FiberData, _>(f, |d| {
+                d.frames
+                    .iter()
+                    .rev()
+                    .find(|fr| fr.kind != crate::vm::FrameKind::Builtin)
+                    .map(|fr| (fr.code.filename.clone(), fr.line()))
+            })
+            .flatten()
+        }
         crate::fiber::FiberState::Running => {
-            let fr = vm.frames.iter().rev().find(|fr| fr.kind != crate::vm::FrameKind::Builtin)?;
+            let fr = vm
+                .frames
+                .iter()
+                .rev()
+                .find(|fr| fr.kind != crate::vm::FrameKind::Builtin)?;
             Some((fr.code.filename.clone(), fr.line()))
         }
         _ => None,
@@ -443,7 +621,10 @@ fn fiber_location(vm: &Vm, f: &Obj) -> Option<(ZStr, u32)> {
 fn fiber_check(vm: &mut Vm, f: &Obj) -> VmResult<()> {
     match fiber_state(f) {
         Some(crate::fiber::FiberState::Suspended | crate::fiber::FiberState::Running) => Ok(()),
-        _ => Err(vm.make_throw("Error", "Cannot fetch information from a fiber that has not been started or is terminated")),
+        _ => Err(vm.make_throw(
+            "Error",
+            "Cannot fetch information from a fiber that has not been started or is terminated",
+        )),
     }
 }
 
@@ -474,7 +655,10 @@ fn rfb_get_executing_line(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 fn rfb_get_callable(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let f = this_fiber(vm, a)?;
     if matches!(fiber_state(&f), Some(crate::fiber::FiberState::Dead) | None) {
-        return Err(vm.make_throw("Error", "Cannot fetch the callable from a fiber that has terminated"));
+        return Err(vm.make_throw(
+            "Error",
+            "Cannot fetch the callable from a fiber that has terminated",
+        ));
     }
     Ok(Value::Null)
 }
@@ -498,7 +682,11 @@ pub(crate) fn register_fiber(vm: &mut Vm) {
         .method("getExecutingFile(): ?string", PUB, rfb_get_executing_file)
         .method("getExecutingLine(): ?int", PUB, rfb_get_executing_line)
         .method("getCallable(): callable", PUB, rfb_get_callable)
-        .method("getTrace(int $options = DEBUG_BACKTRACE_PROVIDE_OBJECT): array", PUB, rfb_get_trace)
+        .method(
+            "getTrace(int $options = DEBUG_BACKTRACE_PROVIDE_OBJECT): array",
+            PUB,
+            rfb_get_trace,
+        )
         .register(vm);
 }
 
@@ -511,7 +699,9 @@ thread_local! {
 }
 
 fn rr_from_array_element(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let Value::Array(arr) = a.at(0) else { return Ok(Value::Null) };
+    let Value::Array(arr) = a.at(0) else {
+        return Ok(Value::Null);
+    };
     let key = match a.at(1) {
         Value::Int(i) => ArrayKey::Int(i),
         Value::Str(s) => ArrayKey::from_zstr(&s),
@@ -524,7 +714,13 @@ fn rr_from_array_element(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             if r.refcount() == 1 && !self_ref {
                 return Ok(Value::Null);
             }
-            super::new_refl(vm, "ReflectionReference", Refl::Reference(r.clone()), None, None)
+            super::new_refl(
+                vm,
+                "ReflectionReference",
+                Refl::Reference(r.clone()),
+                None,
+                None,
+            )
         }
         Some(_) => Ok(Value::Null),
     }
@@ -536,7 +732,9 @@ fn rr_get_id(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     };
     let key = REF_KEY.with(|k| {
         if k.get() == 0 {
-            let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(1, |d| d.as_nanos());
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(1, |d| d.as_nanos());
             k.set(u64::try_from(now & 0xffff_ffff_ffff).unwrap_or(1) | 1);
         }
         k.get()
@@ -548,14 +746,21 @@ fn rr_get_id(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 }
 
 fn rr_construct(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
-    Err(vm.make_throw("Error", "Call to private ReflectionReference::__construct() from global scope"))
+    Err(vm.make_throw(
+        "Error",
+        "Call to private ReflectionReference::__construct() from global scope",
+    ))
 }
 
 /// Registers `ReflectionReference`.
 pub(crate) fn register_reference(vm: &mut Vm) {
     ClassBuilder::new("ReflectionReference")
         .flags(cflags::FINAL | cflags::NOT_SERIALIZABLE | cflags::NO_NEW)
-        .method("fromArrayElement(array $array, int|string $key): ?ReflectionReference", STAT, rr_from_array_element)
+        .method(
+            "fromArrayElement(array $array, int|string $key): ?ReflectionReference",
+            STAT,
+            rr_from_array_element,
+        )
         .method("getId(): string", PUB, rr_get_id)
         .method("__clone(): void", PRIV, clone_error)
         .method("__construct()", PRIV, rr_construct)
@@ -569,14 +774,20 @@ pub(crate) fn register_reference(vm: &mut Vm) {
 fn this_ext(vm: &mut Vm, a: &Args) -> VmResult<String> {
     match this_refl(vm, a)? {
         Refl::Extension(n) => Ok(n.to_string_lossy()),
-        _ => Err(vm.make_throw("Error", "Internal error: Failed to retrieve the reflection object")),
+        _ => Err(vm.make_throw(
+            "Error",
+            "Internal error: Failed to retrieve the reflection object",
+        )),
     }
 }
 
 fn re_construct(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let o = this(a);
     let n = str_arg(a, 0).to_string_lossy();
-    let Some(m) = module_names(vm).into_iter().find(|m| m.eq_ignore_ascii_case(&n)) else {
+    let Some(m) = module_names(vm)
+        .into_iter()
+        .find(|m| m.eq_ignore_ascii_case(&n))
+    else {
         return Err(rexc(vm, &format!("Extension \"{n}\" does not exist")));
     };
     let z = ZStr::from(m.as_str());
@@ -644,7 +855,9 @@ fn re_get_ini_entries(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let mut t = HashTable::new();
     if let Ok(entries) = vm.ini.ini_get_all(Some(&m)) {
         for e in entries {
-            let v = e.local_value.map_or(Value::Null, |x| Value::Str(ZStr::from(x)));
+            let v = e
+                .local_value
+                .map_or(Value::Null, |x| Value::Str(ZStr::from(x)));
             t.insert(ArrayKey::Str(ZStr::from(e.name.as_str())), v);
         }
     }
@@ -672,7 +885,11 @@ fn re_get_classes(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 fn re_get_class_names(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let m = this_ext(vm, a)?;
-    Ok(Value::Array(ZArray::from_values(ext_classes(vm, &m).into_iter().map(|c| Value::Str(c.name.clone())))))
+    Ok(Value::Array(ZArray::from_values(
+        ext_classes(vm, &m)
+            .into_iter()
+            .map(|c| Value::Str(c.name.clone())),
+    )))
 }
 
 fn re_get_dependencies(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -712,8 +929,15 @@ fn re_is_temporary(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 fn re_to_string(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let m = this_ext(vm, a)?;
-    let num = module_names(vm).iter().position(|x| x.eq_ignore_ascii_case(&m)).map_or(0, |i| i + 1);
-    let mut out = format!("Extension [ <persistent> extension #{num} {m} version {} ] {{\n", crate::PHP_VERSION).into_bytes();
+    let num = module_names(vm)
+        .iter()
+        .position(|x| x.eq_ignore_ascii_case(&m))
+        .map_or(0, |i| i + 1);
+    let mut out = format!(
+        "Extension [ <persistent> extension #{num} {m} version {} ] {{\n",
+        crate::PHP_VERSION
+    )
+    .into_bytes();
     if let Ok(entries) = vm.ini.ini_get_all(Some(&m)) {
         if !entries.is_empty() {
             out.extend_from_slice(b"\n  - INI {\n");
@@ -734,7 +958,9 @@ fn re_to_string(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
                         p.join(",")
                     }
                 };
-                out.extend_from_slice(format!("    Entry [ {} <{acc}> ]\n      Current = '", e.name).as_bytes());
+                out.extend_from_slice(
+                    format!("    Entry [ {} <{acc}> ]\n      Current = '", e.name).as_bytes(),
+                );
                 out.extend_from_slice(e.local_value.as_deref().unwrap_or_default());
                 out.extend_from_slice(b"'\n");
                 if e.local_value != e.global_value {
@@ -751,7 +977,13 @@ fn re_to_string(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     if !consts.is_empty() {
         out.extend_from_slice(format!("\n  - Constants [{}] {{\n", consts.len()).as_bytes());
         for (k, v) in consts {
-            out.extend(super::export::const_string(vm, &k, &v, &["persistent"], "    ")?);
+            out.extend(super::export::const_string(
+                vm,
+                &k,
+                &v,
+                &["persistent"],
+                "    ",
+            )?);
         }
         out.extend_from_slice(b"  }\n");
     }
@@ -759,7 +991,12 @@ fn re_to_string(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     if !funcs.is_empty() {
         out.extend_from_slice(b"\n  - Functions {\n");
         for (_, f) in funcs {
-            out.extend(super::export::function_string(vm, &FnRef::function(f), None, "    "));
+            out.extend(super::export::function_string(
+                vm,
+                &FnRef::function(f),
+                None,
+                "    ",
+            ));
         }
         out.extend_from_slice(b"  }\n");
     }
@@ -778,7 +1015,10 @@ fn re_to_string(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 fn rze_construct(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let n = str_arg(a, 0);
-    Err(rexc(vm, &format!("Zend Extension \"{}\" does not exist", n.to_string_lossy())))
+    Err(rexc(
+        vm,
+        &format!("Zend Extension \"{}\" does not exist", n.to_string_lossy()),
+    ))
 }
 
 fn rze_empty(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -831,7 +1071,10 @@ pub(crate) fn register_extension(vm: &mut Vm) {
 /// Registers the internal backed enum `PropertyHookType`.
 pub(crate) fn register_hook_type(vm: &mut Vm) {
     let name = ZStr::from("PropertyHookType");
-    let ifaces: Vec<Rc<Class>> = ["UnitEnum", "BackedEnum"].iter().filter_map(|n| vm.find_class(n.as_bytes())).collect();
+    let ifaces: Vec<Rc<Class>> = ["UnitEnum", "BackedEnum"]
+        .iter()
+        .filter_map(|n| vm.find_class(n.as_bytes()))
+        .collect();
     let cls = Rc::new_cyclic(|weak| {
         let mk_const = |n: &str, v: &str| {
             Rc::new(ClassConst {
@@ -848,7 +1091,11 @@ pub(crate) fn register_hook_type(vm: &mut Vm) {
             })
         };
         let consts = vec![mk_const("Get", "get"), mk_const("Set", "set")];
-        let const_map: HashMap<ZStr, usize> = consts.iter().enumerate().map(|(i, c)| (c.name.clone(), i)).collect();
+        let const_map: HashMap<ZStr, usize> = consts
+            .iter()
+            .enumerate()
+            .map(|(i, c)| (c.name.clone(), i))
+            .collect();
         let mk_prop = |n: &str, slot: u32| {
             Rc::new(PropInfo {
                 name: ZStr::from(n),
@@ -863,7 +1110,8 @@ pub(crate) fn register_hook_type(vm: &mut Vm) {
             })
         };
         let props = vec![mk_prop("name", 0), mk_prop("value", 1)];
-        let prop_map: HashMap<ZStr, Rc<PropInfo>> = props.iter().map(|p| (p.name.clone(), p.clone())).collect();
+        let prop_map: HashMap<ZStr, Rc<PropInfo>> =
+            props.iter().map(|p| (p.name.clone(), p.clone())).collect();
         let mut methods: HashMap<ZStr, Rc<Method>> = HashMap::new();
         let mut order = Vec::new();
         for (sig, fl, h) in crate::builtins::enum_methods() {

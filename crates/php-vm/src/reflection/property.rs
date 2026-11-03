@@ -2,7 +2,10 @@
 
 use super::class::{has_dynamic, update_class_constants};
 use super::order::{self, PropMeta};
-use super::{class_value, rexc, set_name_props, str_arg, this, this_refl, with_scope, PropRef, Refl, PRIV, PUB, RO};
+use super::{
+    class_value, rexc, set_name_props, str_arg, this, this_refl, with_scope, PropRef, Refl, PRIV,
+    PUB, RO,
+};
 use crate::builtins::classbuilder::ClassBuilder;
 use crate::class::{cflags, Class, PropInfo, StaticProp};
 use crate::func::{flags, Args, Func, Method};
@@ -53,12 +56,20 @@ pub(crate) fn php_flags(p: &PropMeta) -> i64 {
 fn this_prop(vm: &mut Vm, a: &Args) -> VmResult<PropRef> {
     match this_refl(vm, a)? {
         Refl::Prop(p) => Ok(p),
-        _ => Err(vm.make_throw("Error", "Internal error: Failed to retrieve the reflection object")),
+        _ => Err(vm.make_throw(
+            "Error",
+            "Internal error: Failed to retrieve the reflection object",
+        )),
     }
 }
 
 /// Coerces a value for a typed static property.
-pub(crate) fn coerce_static(vm: &mut Vm, sp: &StaticProp, ty: &TypeDecl, v: Value) -> VmResult<Value> {
+pub(crate) fn coerce_static(
+    vm: &mut Vm,
+    sp: &StaticProp,
+    ty: &TypeDecl,
+    v: Value,
+) -> VmResult<Value> {
     let pi = PropInfo {
         name: sp.name.clone(),
         slot: 0,
@@ -82,7 +93,12 @@ fn rp_construct(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             let s = vm.to_zstr(v)?;
             match vm.lookup_class(&s)? {
                 Some(c) => (c, None),
-                None => return Err(rexc(vm, &format!("Class \"{}\" does not exist", s.to_string_lossy()))),
+                None => {
+                    return Err(rexc(
+                        vm,
+                        &format!("Class \"{}\" does not exist", s.to_string_lossy()),
+                    ))
+                }
             }
         }
     };
@@ -92,15 +108,31 @@ fn rp_construct(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         let shadow = c.props.iter().any(|p| p.name == n) || c.prop_map.contains_key(&n);
         let dynamic = !shadow && obj.as_ref().is_some_and(|x| has_dynamic(x, &n));
         if !dynamic {
-            return Err(rexc(vm, &format!("Property {}::${} does not exist", c.name, n.to_string_lossy())));
+            return Err(rexc(
+                vm,
+                &format!(
+                    "Property {}::${} does not exist",
+                    c.name,
+                    n.to_string_lossy()
+                ),
+            ));
         }
     }
     let decl = match &meta {
-        Some(p) => vm.find_class(p.class.as_bytes()).map_or_else(|| p.class.clone(), |x| x.name.clone()),
+        Some(p) => vm
+            .find_class(p.class.as_bytes())
+            .map_or_else(|| p.class.clone(), |x| x.name.clone()),
         None => c.name.clone(),
     };
     set_name_props(&o, Some(&n), Some(&decl));
-    object::set_internal(&o, Refl::Prop(PropRef { class: c, name: n, meta: meta.map(Rc::new) }));
+    object::set_internal(
+        &o,
+        Refl::Prop(PropRef {
+            class: c,
+            name: n,
+            meta: meta.map(Rc::new),
+        }),
+    );
     Ok(Value::Null)
 }
 
@@ -116,12 +148,16 @@ fn rp_get_name(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 fn rp_get_mangled_name(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let p = this_prop(vm, a)?;
-    let Some(m) = &p.meta else { return Ok(Value::Str(p.name)) };
+    let Some(m) = &p.meta else {
+        return Ok(Value::Str(p.name));
+    };
     let mut v = Vec::new();
     match m.flags & flags::VISIBILITY {
         flags::PRIVATE => {
             v.push(0);
-            let decl = vm.find_class(m.class.as_bytes()).map_or_else(|| m.class.clone(), |c| c.name.clone());
+            let decl = vm
+                .find_class(m.class.as_bytes())
+                .map_or_else(|| m.class.clone(), |c| c.name.clone());
             v.extend_from_slice(decl.as_bytes());
             v.push(0);
         }
@@ -158,7 +194,9 @@ rp_flag!(rp_is_final, super::acc::FINAL);
 
 fn rp_get_modifiers(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let p = this_prop(vm, a)?;
-    Ok(Value::Int(flags_of(&p) & (0x7 | 0x1800 | 0x10 | 0x80 | 0x40 | 0x200 | 0x20)))
+    Ok(Value::Int(
+        flags_of(&p) & (0x7 | 0x1800 | 0x10 | 0x80 | 0x40 | 0x200 | 0x20),
+    ))
 }
 
 fn rp_is_default(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -172,7 +210,9 @@ fn rp_is_dynamic(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 /// Whether property `name` of class `decl` is a promoted constructor
 /// parameter.
 fn is_promoted(vm: &Vm, m: &PropMeta) -> bool {
-    let Some(decl) = vm.find_class(m.class.as_bytes()) else { return false };
+    let Some(decl) = vm.find_class(m.class.as_bytes()) else {
+        return false;
+    };
     let ctor = decl.methods.get(b"__construct".as_slice()).cloned();
     ctor.is_some_and(|c| {
         Rc::ptr_eq(&c.scope(), &decl)
@@ -185,7 +225,11 @@ fn is_promoted(vm: &Vm, m: &PropMeta) -> bool {
 
 fn rp_is_promoted(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let p = this_prop(vm, a)?;
-    Ok(Value::Bool(p.meta.as_ref().is_some_and(|m| !m.is_static && is_promoted(vm, m))))
+    Ok(Value::Bool(
+        p.meta
+            .as_ref()
+            .is_some_and(|m| !m.is_static && is_promoted(vm, m)),
+    ))
 }
 
 fn object_arg(a: &Args, n: usize) -> Option<Obj> {
@@ -196,7 +240,10 @@ fn object_arg(a: &Args, n: usize) -> Option<Obj> {
 }
 
 fn decl_class(vm: &Vm, p: &PropRef) -> Rc<Class> {
-    p.meta.as_ref().and_then(|m| vm.find_class(m.class.as_bytes())).unwrap_or_else(|| p.class.clone())
+    p.meta
+        .as_ref()
+        .and_then(|m| vm.find_class(m.class.as_bytes()))
+        .unwrap_or_else(|| p.class.clone())
 }
 
 fn static_cell(vm: &mut Vm, p: &PropRef) -> VmResult<Rc<std::cell::RefCell<Value>>> {
@@ -214,7 +261,11 @@ fn rp_get_value(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             let dc = decl_class(vm, &p);
             return Err(vm.make_throw(
                 "Error",
-                &format!("Typed static property {}::${} must not be accessed before initialization", super::dn(&dc.name), p.name),
+                &format!(
+                    "Typed static property {}::${} must not be accessed before initialization",
+                    super::dn(&dc.name),
+                    p.name
+                ),
             ));
         }
         return Ok(v);
@@ -227,10 +278,15 @@ fn rp_get_value(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     };
     let dc = decl_class(vm, &p);
     if !object::class_of(&o).is_subclass_of(&dc) {
-        return Err(rexc(vm, "Given object is not an instance of the class this property was declared in"));
+        return Err(rexc(
+            vm,
+            "Given object is not an instance of the class this property was declared in",
+        ));
     }
     let c = p.class.clone();
-    with_scope(vm, Some(c), |vm| vm.read_property(&o, &p.name, FetchMode::Read))
+    with_scope(vm, Some(c), |vm| {
+        vm.read_property(&o, &p.name, FetchMode::Read)
+    })
 }
 
 fn rp_set_value(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -243,7 +299,9 @@ fn rp_set_value(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             }
             a.at(1)
         } else {
-            vm.deprecated("Calling ReflectionProperty::setValue() with a single argument is deprecated")?;
+            vm.deprecated(
+                "Calling ReflectionProperty::setValue() with a single argument is deprecated",
+            )?;
             a.at(0)
         };
         let cell = static_cell(vm, &p)?;
@@ -298,35 +356,60 @@ fn effective(vm: &Vm, p: &PropRef, o: &Obj) -> Option<PropMeta> {
 
 fn rp_get_raw_value(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let p = this_prop(vm, a)?;
-    let Some(o) = object_arg(a, 0) else { return Ok(Value::Null) };
+    let Some(o) = object_arg(a, 0) else {
+        return Ok(Value::Null);
+    };
     if !object::class_of(&o).is_subclass_of(&p.class) {
-        return Err(rexc(vm, "Given object is not an instance of the class this property was declared in"));
+        return Err(rexc(
+            vm,
+            "Given object is not an instance of the class this property was declared in",
+        ));
     }
     let m = effective(vm, &p, &o);
     if m.as_ref().is_some_and(|m| m.is_static) {
         return Err(rexc(vm, "May not use getRawValue on static properties"));
     }
-    match m.as_ref().filter(|m| m.hooks.as_ref().is_some_and(|h| h.get.is_some())) {
+    match m
+        .as_ref()
+        .filter(|m| m.hooks.as_ref().is_some_and(|h| h.get.is_some()))
+    {
         Some(m) => {
             if m.flags & flags::VIRTUAL != 0 {
                 return Err(vm.make_throw(
                     "Error",
-                    &format!("Must not read from virtual property {}::${}", super::dn(&object::class_of(&o).name), p.name),
+                    &format!(
+                        "Must not read from virtual property {}::${}",
+                        super::dn(&object::class_of(&o).name),
+                        p.name
+                    ),
                 ));
             }
-            let Some(pi) = &m.info else { return Ok(Value::Null) };
-            let v = object::data(&o).slots.borrow().get(pi.slot as usize).cloned().flatten();
+            let Some(pi) = &m.info else {
+                return Ok(Value::Null);
+            };
+            let v = object::data(&o)
+                .slots
+                .borrow()
+                .get(pi.slot as usize)
+                .cloned()
+                .flatten();
             match v {
                 Some(v) => Ok(v.deref()),
                 None => Err(vm.make_throw(
                     "Error",
-                    &format!("Typed property {}::${} must not be accessed before initialization", super::dn(&pi.class), pi.name),
+                    &format!(
+                        "Typed property {}::${} must not be accessed before initialization",
+                        super::dn(&pi.class),
+                        pi.name
+                    ),
                 )),
             }
         }
         None => {
             let c = p.class.clone();
-            with_scope(vm, Some(c), |vm| vm.read_property(&o, &p.name, FetchMode::Read))
+            with_scope(vm, Some(c), |vm| {
+                vm.read_property(&o, &p.name, FetchMode::Read)
+            })
         }
     }
 }
@@ -337,15 +420,24 @@ pub(crate) fn set_raw(vm: &mut Vm, p: &PropRef, o: &Obj, v: Value) -> VmResult<(
     if m.as_ref().is_some_and(|m| m.is_static) {
         return Err(rexc(vm, "May not use setRawValue on static properties"));
     }
-    match m.as_ref().filter(|m| m.hooks.as_ref().is_some_and(|h| h.set.is_some())) {
+    match m
+        .as_ref()
+        .filter(|m| m.hooks.as_ref().is_some_and(|h| h.set.is_some()))
+    {
         Some(m) => {
             if m.flags & flags::VIRTUAL != 0 {
                 return Err(vm.make_throw(
                     "Error",
-                    &format!("Must not write to virtual property {}::${}", super::dn(&object::class_of(o).name), p.name),
+                    &format!(
+                        "Must not write to virtual property {}::${}",
+                        super::dn(&object::class_of(o).name),
+                        p.name
+                    ),
                 ));
             }
-            let Some(pi) = m.info.clone() else { return Ok(()) };
+            let Some(pi) = m.info.clone() else {
+                return Ok(());
+            };
             let v = vm.coerce_prop(Some(o), &pi, v)?;
             let d = object::data(o);
             let mut slots = d.slots.borrow_mut();
@@ -368,7 +460,9 @@ pub(crate) fn set_raw(vm: &mut Vm, p: &PropRef, o: &Obj, v: Value) -> VmResult<(
 
 fn rp_set_raw_value(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let p = this_prop(vm, a)?;
-    let Some(o) = object_arg(a, 0) else { return Ok(Value::Null) };
+    let Some(o) = object_arg(a, 0) else {
+        return Ok(Value::Null);
+    };
     if !object::class_of(&o).is_subclass_of(&p.class) {
         vm.deprecated("Calling ReflectionProperty::setRawValue() with a given object that is not an instance of the class this property was declared in is deprecated")?;
     }
@@ -381,7 +475,11 @@ fn rp_is_initialized(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     if p.meta.as_ref().is_some_and(|m| m.is_static) {
         let cell = static_cell(vm, &p)?;
         let v = cell.borrow().deref();
-        return Ok(Value::Bool(!super::class::static_uninit(&p.class, p.name.as_bytes(), &v)));
+        return Ok(Value::Bool(!super::class::static_uninit(
+            &p.class,
+            p.name.as_bytes(),
+            &v,
+        )));
     }
     let Some(o) = object_arg(a, 0) else {
         return Err(vm.make_throw(
@@ -391,7 +489,10 @@ fn rp_is_initialized(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     };
     let dc = decl_class(vm, &p);
     if !object::class_of(&o).is_subclass_of(&dc) {
-        return Err(rexc(vm, "Given object is not an instance of the class this property was declared in"));
+        return Err(rexc(
+            vm,
+            "Given object is not an instance of the class this property was declared in",
+        ));
     }
     let target = vm.lazy_object_for(&o, Some(&p.name))?;
     let m = effective(vm, &p, &target);
@@ -400,7 +501,11 @@ fn rp_is_initialized(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             if pi.is_virtual() {
                 true
             } else {
-                object::data(&target).slots.borrow().get(pi.slot as usize).is_some_and(Option::is_some)
+                object::data(&target)
+                    .slots
+                    .borrow()
+                    .get(pi.slot as usize)
+                    .is_some_and(Option::is_some)
             }
         }
         None => has_dynamic(&target, &p.name),
@@ -415,14 +520,25 @@ fn rp_get_declaring_class(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 fn rp_get_doc_comment(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let p = this_prop(vm, a)?;
-    Ok(p.meta.and_then(|m| m.doc.clone()).map_or(Value::Bool(false), Value::Str))
+    Ok(p.meta
+        .and_then(|m| m.doc.clone())
+        .map_or(Value::Bool(false), Value::Str))
 }
 
 fn rp_get_attributes(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let p = this_prop(vm, a)?;
-    let Some(m) = &p.meta else { return Ok(Value::Array(php_runtime::ZArray::new())) };
+    let Some(m) = &p.meta else {
+        return Ok(Value::Array(php_runtime::ZArray::new()));
+    };
     let dc = decl_class(vm, &p);
-    super::attribute::attributes_array_in(vm, &m.attributes, super::target::PROPERTY, Some(&dc), dc.filename.clone(), a)
+    super::attribute::attributes_array_in(
+        vm,
+        &m.attributes,
+        super::target::PROPERTY,
+        Some(&dc),
+        dc.filename.clone(),
+        a,
+    )
 }
 
 fn rp_set_accessible(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
@@ -441,7 +557,9 @@ fn rp_get_type(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 fn rp_get_settable_type(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let p = this_prop(vm, a)?;
-    let Some(m) = &p.meta else { return Ok(Value::Null) };
+    let Some(m) = &p.meta else {
+        return Ok(Value::Null);
+    };
     let dc = decl_class(vm, &p);
     if let Some(h) = &m.hooks {
         if m.flags & flags::VIRTUAL != 0 && h.set.is_none() {
@@ -485,11 +603,15 @@ fn default_value(vm: &mut Vm, p: &PropRef) -> VmResult<Option<Value>> {
 
 fn rp_has_default(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let p = this_prop(vm, a)?;
-    let Some(m) = &p.meta else { return Ok(Value::Bool(false)) };
+    let Some(m) = &p.meta else {
+        return Ok(Value::Bool(false));
+    };
     if m.flags & flags::VIRTUAL != 0 || (m.hooks.is_some() && is_promoted(vm, m)) {
         return Ok(Value::Bool(false));
     }
-    Ok(Value::Bool(m.default.is_some() || (m.is_static && m.ty.is_none())))
+    Ok(Value::Bool(
+        m.default.is_some() || (m.is_static && m.ty.is_none()),
+    ))
 }
 
 fn rp_get_default(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -504,8 +626,17 @@ fn rp_get_default(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 }
 
 /// A hook function as a method of its declaring class.
-fn hook_method(vm: &Vm, m: &PropMeta, f: &Rc<crate::func::UserFunction>, is_final: bool) -> Option<(Rc<Method>, Rc<Class>)> {
-    let cn = f.class_name.clone().or_else(|| m.hooks.as_ref().map(|h| h.class.clone())).unwrap_or_else(|| m.class.clone());
+fn hook_method(
+    vm: &Vm,
+    m: &PropMeta,
+    f: &Rc<crate::func::UserFunction>,
+    is_final: bool,
+) -> Option<(Rc<Method>, Rc<Class>)> {
+    let cn = f
+        .class_name
+        .clone()
+        .or_else(|| m.hooks.as_ref().map(|h| h.class.clone()))
+        .unwrap_or_else(|| m.class.clone());
     let c = vm.find_class(cn.as_bytes())?;
     let mut fl = flags::PUBLIC;
     if is_final {
@@ -530,7 +661,11 @@ fn hook_kind(vm: &mut Vm, v: &Value) -> VmResult<bool> {
 
 fn rp_has_hooks(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let p = this_prop(vm, a)?;
-    Ok(Value::Bool(p.meta.as_ref().is_some_and(|m| m.hooks.as_ref().is_some_and(|h| h.get.is_some() || h.set.is_some()))))
+    Ok(Value::Bool(p.meta.as_ref().is_some_and(|m| {
+        m.hooks
+            .as_ref()
+            .is_some_and(|h| h.get.is_some() || h.set.is_some())
+    })))
 }
 
 fn rp_get_hooks(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -558,15 +693,34 @@ fn rp_get_hooks(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 fn rp_has_hook(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let p = this_prop(vm, a)?;
     let get = hook_kind(vm, &a.at(0))?;
-    Ok(Value::Bool(p.meta.as_ref().and_then(|m| m.hooks.clone()).is_some_and(|h| if get { h.get.is_some() } else { h.set.is_some() })))
+    Ok(Value::Bool(
+        p.meta
+            .as_ref()
+            .and_then(|m| m.hooks.clone())
+            .is_some_and(|h| {
+                if get {
+                    h.get.is_some()
+                } else {
+                    h.set.is_some()
+                }
+            }),
+    ))
 }
 
 fn rp_get_hook(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let p = this_prop(vm, a)?;
     let get = hook_kind(vm, &a.at(0))?;
-    let Some(m) = &p.meta else { return Ok(Value::Null) };
-    let Some(h) = m.hooks.clone() else { return Ok(Value::Null) };
-    let (f, fin) = if get { (h.get.clone(), h.final_get) } else { (h.set.clone(), h.final_set) };
+    let Some(m) = &p.meta else {
+        return Ok(Value::Null);
+    };
+    let Some(h) = m.hooks.clone() else {
+        return Ok(Value::Null);
+    };
+    let (f, fin) = if get {
+        (h.get.clone(), h.final_get)
+    } else {
+        (h.set.clone(), h.final_set)
+    };
     match f.and_then(|f| hook_method(vm, m, &f, fin)) {
         Some((meth, c)) => super::method_value(vm, &meth, &c),
         None => Ok(Value::Null),
@@ -580,7 +734,10 @@ fn scope_arg(vm: &mut Vm, a: &Args) -> VmResult<Option<Rc<Class>>> {
             let s = vm.to_zstr(&v)?;
             match vm.lookup_class(&s)? {
                 Some(c) => Ok(Some(c)),
-                None => Err(vm.make_throw("Error", &format!("Class \"{}\" not found", s.to_string_lossy()))),
+                None => Err(vm.make_throw(
+                    "Error",
+                    &format!("Class \"{}\" not found", s.to_string_lossy()),
+                )),
             }
         }
     }
@@ -605,18 +762,29 @@ fn rw_prelude(vm: &mut Vm, a: &Args, p: &PropRef) -> VmResult<(Option<Obj>, Opti
     let mut prop = p.meta.as_deref().cloned();
     if let (Some(m), Some(o)) = (&p.meta, &obj) {
         if m.is_static {
-            return Err(rexc(vm, "null is expected as object argument for static properties"));
+            return Err(rexc(
+                vm,
+                "null is expected as object argument for static properties",
+            ));
         }
         let dc = decl_class(vm, p);
         if !object::class_of(o).is_subclass_of(&dc) {
-            return Err(rexc(vm, "Given object is not an instance of the class this property was declared in"));
+            return Err(rexc(
+                vm,
+                "Given object is not an instance of the class this property was declared in",
+            ));
         }
         prop = effective(vm, p, o);
     }
     Ok((obj, prop))
 }
 
-fn magic_get_readable(vm: &mut Vm, ce: &Rc<Class>, obj: Option<&Obj>, name: &ZStr) -> VmResult<bool> {
+fn magic_get_readable(
+    vm: &mut Vm,
+    ce: &Rc<Class>,
+    obj: Option<&Obj>,
+    name: &ZStr,
+) -> VmResult<bool> {
     if ce.magic.get.is_some() {
         if let (Some(o), Some(isset)) = (obj, ce.magic.isset.clone()) {
             let r = vm.call_method(o, &isset, vec![Value::Str(name.clone())])?;
@@ -625,7 +793,12 @@ fn magic_get_readable(vm: &mut Vm, ce: &Rc<Class>, obj: Option<&Obj>, name: &ZSt
         return Ok(true);
     }
     if let Some(o) = obj {
-        if object::data(o).lazy.borrow().as_ref().is_some_and(|l| !l.initialized) {
+        if object::data(o)
+            .lazy
+            .borrow()
+            .as_ref()
+            .is_some_and(|l| !l.initialized)
+        {
             let t = vm.lazy_object_for(o, None)?;
             super::lazy::force_init(vm, o)?;
             return Ok(has_dynamic(&t, name) || has_dynamic(o, name));
@@ -637,20 +810,34 @@ fn magic_get_readable(vm: &mut Vm, ce: &Rc<Class>, obj: Option<&Obj>, name: &ZSt
 fn rp_is_readable(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let p = this_prop(vm, a)?;
     let (obj, prop) = rw_prelude(vm, a, &p)?;
-    let ce = obj.as_ref().map_or_else(|| p.class.clone(), |o| object::class_of(o).clone());
+    let ce = obj
+        .as_ref()
+        .map_or_else(|| p.class.clone(), |o| object::class_of(o).clone());
     let Some(prop) = prop else {
         if let Some(o) = &obj {
             if has_dynamic(o, &p.name) {
                 return Ok(Value::Bool(true));
             }
         }
-        return Ok(Value::Bool(magic_get_readable(vm, &ce, obj.as_ref(), &p.name)?));
+        return Ok(Value::Bool(magic_get_readable(
+            vm,
+            &ce,
+            obj.as_ref(),
+            &p.name,
+        )?));
     };
     let scope = scope_arg(vm, a)?;
-    let pce = vm.find_class(prop.class.as_bytes()).unwrap_or_else(|| ce.clone());
+    let pce = vm
+        .find_class(prop.class.as_bytes())
+        .unwrap_or_else(|| ce.clone());
     if !check_visibility(prop.flags & flags::VISIBILITY, &pce, scope.as_ref()) {
         if !prop.is_static {
-            return Ok(Value::Bool(magic_get_readable(vm, &ce, obj.as_ref(), &p.name)?));
+            return Ok(Value::Bool(magic_get_readable(
+                vm,
+                &ce,
+                obj.as_ref(),
+                &p.name,
+            )?));
         }
         return Ok(Value::Bool(false));
     }
@@ -661,19 +848,45 @@ fn rp_is_readable(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     if prop.is_static {
         let cell = static_cell(vm, &p)?;
         let v = cell.borrow().deref();
-        return Ok(Value::Bool(!super::class::static_uninit(&p.class, p.name.as_bytes(), &v)));
+        return Ok(Value::Bool(!super::class::static_uninit(
+            &p.class,
+            p.name.as_bytes(),
+            &v,
+        )));
     }
     if let (Some(o), false) = (&obj, has_get) {
         if let Some(pi) = &prop.info {
             let mut o = o.clone();
-            if object::data(&o).slots.borrow().get(pi.slot as usize).is_some_and(Option::is_none) {
-                if object::data(&o).lazy.borrow().as_ref().is_some_and(|l| !l.initialized) {
+            if object::data(&o)
+                .slots
+                .borrow()
+                .get(pi.slot as usize)
+                .is_some_and(Option::is_none)
+            {
+                if object::data(&o)
+                    .lazy
+                    .borrow()
+                    .as_ref()
+                    .is_some_and(|l| !l.initialized)
+                {
                     o = super::lazy::force_init(vm, &o)?;
-                    if object::data(&o).slots.borrow().get(pi.slot as usize).is_some_and(Option::is_some) {
+                    if object::data(&o)
+                        .slots
+                        .borrow()
+                        .get(pi.slot as usize)
+                        .is_some_and(Option::is_some)
+                    {
                         return Ok(Value::Bool(true));
                     }
                 }
-                if pi.ty.is_none() || object::data(&o).readonly_init.borrow().get(pi.slot as usize).copied().unwrap_or(false) {
+                if pi.ty.is_none()
+                    || object::data(&o)
+                        .readonly_init
+                        .borrow()
+                        .get(pi.slot as usize)
+                        .copied()
+                        .unwrap_or(false)
+                {
                     return Ok(Value::Bool(magic_get_readable(vm, &ce, Some(&o), &p.name)?));
                 }
                 return Ok(Value::Bool(false));
@@ -686,7 +899,9 @@ fn rp_is_readable(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 fn rp_is_writable(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let p = this_prop(vm, a)?;
     let (obj, prop) = rw_prelude(vm, a, &p)?;
-    let ce = obj.as_ref().map_or_else(|| p.class.clone(), |o| object::class_of(o).clone());
+    let ce = obj
+        .as_ref()
+        .map_or_else(|| p.class.clone(), |o| object::class_of(o).clone());
     let Some(prop) = prop else {
         if ce.flags & cflags::READONLY == 0 && !ce.is_enum() {
             return Ok(Value::Bool(true));
@@ -694,7 +909,9 @@ fn rp_is_writable(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         return Ok(Value::Bool(ce.magic.set.is_some()));
     };
     let scope = scope_arg(vm, a)?;
-    let pce = vm.find_class(prop.class.as_bytes()).unwrap_or_else(|| ce.clone());
+    let pce = vm
+        .find_class(prop.class.as_bytes())
+        .unwrap_or_else(|| ce.clone());
     if !check_visibility(prop.flags & flags::VISIBILITY, &pce, scope.as_ref()) {
         if !prop.is_static {
             return Ok(Value::Bool(ce.magic.set.is_some()));
@@ -713,7 +930,9 @@ fn rp_is_writable(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         return Ok(Value::Bool(false));
     }
     if prop.flags & flags::VIRTUAL != 0 && prop.hooks.is_some() {
-        return Ok(Value::Bool(prop.hooks.as_ref().is_some_and(|h| h.set.is_some())));
+        return Ok(Value::Bool(
+            prop.hooks.as_ref().is_some_and(|h| h.set.is_some()),
+        ));
     }
     if prop.flags & flags::VIRTUAL != 0 {
         return Ok(Value::Bool(prop.flags & flags::READONLY == 0));
@@ -721,12 +940,25 @@ fn rp_is_writable(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     if prop.flags & flags::READONLY != 0 {
         if let (Some(o), Some(pi)) = (&obj, &prop.info) {
             let mut o = o.clone();
-            if object::data(&o).slots.borrow().get(pi.slot as usize).is_some_and(Option::is_none)
-                && object::data(&o).lazy.borrow().as_ref().is_some_and(|l| !l.initialized)
+            if object::data(&o)
+                .slots
+                .borrow()
+                .get(pi.slot as usize)
+                .is_some_and(Option::is_none)
+                && object::data(&o)
+                    .lazy
+                    .borrow()
+                    .as_ref()
+                    .is_some_and(|l| !l.initialized)
             {
                 o = super::lazy::force_init(vm, &o)?;
             }
-            if object::data(&o).slots.borrow().get(pi.slot as usize).is_some_and(Option::is_some) {
+            if object::data(&o)
+                .slots
+                .borrow()
+                .get(pi.slot as usize)
+                .is_some_and(Option::is_some)
+            {
                 return Ok(Value::Bool(false));
             }
         }
@@ -758,18 +990,42 @@ pub(crate) fn register(vm: &mut Vm) {
         .constant("IS_VIRTUAL", Value::Int(512))
         .constant("IS_FINAL", Value::Int(32))
         .method("__clone(): void", PRIV, clone_error)
-        .method("__construct(object|string $class, string $property)", PUB, rp_construct)
+        .method(
+            "__construct(object|string $class, string $property)",
+            PUB,
+            rp_construct,
+        )
         .method("__toString(): string", PUB, rp_to_string)
         .method("getName(): string", PUB, rp_get_name)
         .method("getMangledName(): string", PUB, rp_get_mangled_name)
         .method("getValue(?object $object = null): mixed", PUB, rp_get_value)
-        .method("setValue(mixed $objectOrValue, mixed $value = UNKNOWN): void", PUB, rp_set_value)
+        .method(
+            "setValue(mixed $objectOrValue, mixed $value = UNKNOWN): void",
+            PUB,
+            rp_set_value,
+        )
         .method("getRawValue(object $object): mixed", PUB, rp_get_raw_value)
-        .method("setRawValue(object $object, mixed $value): void", PUB, rp_set_raw_value)
-        .method("setRawValueWithoutLazyInitialization(object $object, mixed $value): void", PUB, lz::rp_set_raw_value_without_lazy_initialization)
-        .method("skipLazyInitialization(object $object): void", PUB, lz::rp_skip_lazy_initialization)
+        .method(
+            "setRawValue(object $object, mixed $value): void",
+            PUB,
+            rp_set_raw_value,
+        )
+        .method(
+            "setRawValueWithoutLazyInitialization(object $object, mixed $value): void",
+            PUB,
+            lz::rp_set_raw_value_without_lazy_initialization,
+        )
+        .method(
+            "skipLazyInitialization(object $object): void",
+            PUB,
+            lz::rp_skip_lazy_initialization,
+        )
         .method("isLazy(object $object): bool", PUB, lz::rp_is_lazy)
-        .method("isInitialized(?object $object = null): bool", PUB, rp_is_initialized)
+        .method(
+            "isInitialized(?object $object = null): bool",
+            PUB,
+            rp_is_initialized,
+        )
         .method("isPublic(): bool", PUB, rp_is_public)
         .method("isPrivate(): bool", PUB, rp_is_private)
         .method("isProtected(): bool", PUB, rp_is_protected)
@@ -783,21 +1039,49 @@ pub(crate) fn register(vm: &mut Vm) {
         .method("isVirtual(): bool", PUB, rp_is_virtual)
         .method("isPromoted(): bool", PUB, rp_is_promoted)
         .method("getModifiers(): int", PUB, rp_get_modifiers)
-        .method("getDeclaringClass(): ReflectionClass", PUB, rp_get_declaring_class)
+        .method(
+            "getDeclaringClass(): ReflectionClass",
+            PUB,
+            rp_get_declaring_class,
+        )
         .method("getDocComment(): string|false", PUB, rp_get_doc_comment)
-        .method("setAccessible(bool $accessible): void", PUB, rp_set_accessible)
+        .method(
+            "setAccessible(bool $accessible): void",
+            PUB,
+            rp_set_accessible,
+        )
         .method("getType(): ?ReflectionType", PUB, rp_get_type)
-        .method("getSettableType(): ?ReflectionType", PUB, rp_get_settable_type)
+        .method(
+            "getSettableType(): ?ReflectionType",
+            PUB,
+            rp_get_settable_type,
+        )
         .method("hasType(): bool", PUB, rp_has_type)
         .method("hasDefaultValue(): bool", PUB, rp_has_default)
         .method("getDefaultValue(): mixed", PUB, rp_get_default)
-        .method("getAttributes(?string $name = null, int $flags = 0): array", PUB, rp_get_attributes)
+        .method(
+            "getAttributes(?string $name = null, int $flags = 0): array",
+            PUB,
+            rp_get_attributes,
+        )
         .method("hasHooks(): bool", PUB, rp_has_hooks)
         .method("getHooks(): array", PUB, rp_get_hooks)
         .method("hasHook(PropertyHookType $type): bool", PUB, rp_has_hook)
-        .method("getHook(PropertyHookType $type): ?ReflectionMethod", PUB, rp_get_hook)
+        .method(
+            "getHook(PropertyHookType $type): ?ReflectionMethod",
+            PUB,
+            rp_get_hook,
+        )
         .method("isFinal(): bool", PUB, rp_is_final)
-        .method("isReadable(?string $scope, ?object $object = null): bool", PUB, rp_is_readable)
-        .method("isWritable(?string $scope, ?object $object = null): bool", PUB, rp_is_writable)
+        .method(
+            "isReadable(?string $scope, ?object $object = null): bool",
+            PUB,
+            rp_is_readable,
+        )
+        .method(
+            "isWritable(?string $scope, ?object $object = null): bool",
+            PUB,
+            rp_is_writable,
+        )
         .register(vm);
 }

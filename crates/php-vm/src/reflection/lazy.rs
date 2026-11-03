@@ -8,7 +8,7 @@
 //! before every property operation.
 
 use super::class::{this_class_obj, update_class_constants};
-use super::{rexc, str_arg, this_refl, with_scope, PropRef, Refl};
+use super::{rexc, this_refl, PropRef, Refl};
 use crate::class::{cflags, Class};
 use crate::func::{flags, Args};
 use crate::lazy::LazyInfo;
@@ -33,13 +33,21 @@ pub(crate) fn is_uninit(o: &Obj) -> bool {
 
 /// Whether slot `slot` of `o` is lazy.
 fn slot_is_lazy(o: &Obj, slot: usize) -> bool {
-    object::data(o).lazy.borrow().as_ref().is_some_and(|i| !i.initialized && i.lazy_slots.get(slot).copied().unwrap_or(false))
+    object::data(o)
+        .lazy
+        .borrow()
+        .as_ref()
+        .is_some_and(|i| !i.initialized && i.lazy_slots.get(slot).copied().unwrap_or(false))
 }
 
 /// The slot of a declared, non-virtual property `name` of `o`'s class.
 fn slot_of(o: &Obj, name: &ZStr) -> Option<usize> {
     let c = object::class_of(o).clone();
-    let pi = c.prop_map.get(name).cloned().or_else(|| c.props.iter().find(|p| p.name == *name).cloned())?;
+    let pi = c
+        .prop_map
+        .get(name)
+        .cloned()
+        .or_else(|| c.props.iter().find(|p| p.name == *name).cloned())?;
     if pi.is_virtual() {
         return None;
     }
@@ -48,7 +56,9 @@ fn slot_of(o: &Obj, name: &ZStr) -> Option<usize> {
 
 /// The object a property operation on `o` acts on (`Vm::lazy_object_for`).
 pub(crate) fn object_for(vm: &mut Vm, o: &Obj, name: Option<&ZStr>) -> VmResult<Obj> {
-    let Some(i) = info(o) else { return Ok(o.clone()) };
+    let Some(i) = info(o) else {
+        return Ok(o.clone());
+    };
     if i.initialized {
         return match i.instance {
             Some(inst) => object_for(vm, &inst, name),
@@ -105,7 +115,10 @@ struct Snapshot {
 
 fn snapshot(o: &Obj) -> Snapshot {
     let d = object::data(o);
-    let s = Snapshot { slots: d.slots.borrow().clone(), dynamic: d.dynamic.borrow().clone() };
+    let s = Snapshot {
+        slots: d.slots.borrow().clone(),
+        dynamic: d.dynamic.borrow().clone(),
+    };
     s
 }
 
@@ -118,7 +131,9 @@ fn revert(o: &Obj, s: Snapshot) {
 
 /// `zend_lazy_object_init`.
 pub(crate) fn init(vm: &mut Vm, o: &Obj) -> VmResult<Obj> {
-    let Some(i) = info(o) else { return Ok(o.clone()) };
+    let Some(i) = info(o) else {
+        return Ok(o.clone());
+    };
     if i.initialized {
         return match i.instance {
             Some(inst) => force_init(vm, &inst),
@@ -162,7 +177,9 @@ pub(crate) fn init(vm: &mut Vm, o: &Obj) -> VmResult<Obj> {
                 ),
             ));
         }
-        if Obj::ptr_eq(&inst, o) || info(&inst).is_some_and(|x| !x.initialized || x.proxy) && info(&inst).is_some() {
+        if Obj::ptr_eq(&inst, o)
+            || info(&inst).is_some_and(|x| !x.initialized || x.proxy) && info(&inst).is_some()
+        {
             revert(o, snap);
             return Err(vm.make_throw("Error", "Lazy proxy factory must return a non-lazy object"));
         }
@@ -203,7 +220,10 @@ pub(crate) fn init(vm: &mut Vm, o: &Obj) -> VmResult<Obj> {
         }
         Ok(v) if !v.deref().is_null() => {
             revert(o, snap);
-            Err(vm.make_throw("TypeError", "Lazy object initializer must return NULL or no value"))
+            Err(vm.make_throw(
+                "TypeError",
+                "Lazy object initializer must return NULL or no value",
+            ))
         }
         Ok(_) => {
             set_info(o, None);
@@ -234,11 +254,12 @@ fn compatible(real: &Obj, lazy: &Obj) -> bool {
     if count(lc) != count(rc) {
         return false;
     }
-    let same = |a: &Option<Rc<crate::func::Method>>, b: &Option<Rc<crate::func::Method>>| match (a, b) {
-        (None, None) => true,
-        (Some(x), Some(y)) => Rc::ptr_eq(x, y),
-        _ => false,
-    };
+    let same =
+        |a: &Option<Rc<crate::func::Method>>, b: &Option<Rc<crate::func::Method>>| match (a, b) {
+            (None, None) => true,
+            (Some(x), Some(y)) => Rc::ptr_eq(x, y),
+            _ => false,
+        };
     same(&lc.magic.destruct, &rc.magic.destruct) && same(&lc.magic.clone, &rc.magic.clone)
 }
 
@@ -256,24 +277,42 @@ fn all_slots(c: &Class) -> Vec<bool> {
 }
 
 /// `zend_object_make_lazy`.
-fn make_lazy(vm: &mut Vm, obj: Option<Obj>, cls: &Rc<Class>, initializer: Value, opts: i64, proxy: bool) -> VmResult<Obj> {
+fn make_lazy(
+    vm: &mut Vm,
+    obj: Option<Obj>,
+    cls: &Rc<Class>,
+    initializer: Value,
+    opts: i64,
+    proxy: bool,
+) -> VmResult<Obj> {
     let is_std = cls.lc_name.as_bytes() == b"stdclass";
     if cls.flags & cflags::INTERNAL != 0 && !is_std {
-        return Err(vm.make_throw("Error", &format!("Cannot make instance of internal class lazy: {} is internal", cls.name)));
+        return Err(vm.make_throw(
+            "Error",
+            &format!(
+                "Cannot make instance of internal class lazy: {} is internal",
+                cls.name
+            ),
+        ));
     }
-    let mut p = cls.parent.clone();
-    while let Some(pc) = p {
+    for pc in std::iter::successors(cls.parent.clone(), |x| x.parent.clone()) {
         if pc.flags & cflags::INTERNAL != 0 && pc.lc_name.as_bytes() != b"stdclass" {
             return Err(vm.make_throw(
                 "Error",
-                &format!("Cannot make instance of internal class lazy: {} inherits internal class {}", cls.name, pc.name),
+                &format!(
+                    "Cannot make instance of internal class lazy: {} inherits internal class {}",
+                    cls.name, pc.name
+                ),
             ));
         }
-        p = pc.parent.clone();
     }
     let (o, lazy_slots) = match obj {
         None => {
-            if cls.is_interface() || cls.is_trait() || cls.is_enum() || super::class::is_abstract(cls) {
+            if cls.is_interface()
+                || cls.is_trait()
+                || cls.is_enum()
+                || super::class::is_abstract(cls)
+            {
                 vm.instantiate(cls)?;
             }
             update_class_constants(vm, cls)?;
@@ -284,7 +323,10 @@ fn make_lazy(vm: &mut Vm, obj: Option<Obj>, cls: &Rc<Class>, initializer: Value,
         Some(o) => {
             if let Some(i) = info(&o) {
                 if i.initializing {
-                    return Err(vm.make_throw("Error", "Can not reset an object while it is being initialized"));
+                    return Err(vm.make_throw(
+                        "Error",
+                        "Can not reset an object while it is being initialized",
+                    ));
                 }
                 set_info(&o, None);
             } else {
@@ -331,7 +373,15 @@ fn make_lazy(vm: &mut Vm, obj: Option<Obj>, cls: &Rc<Class>, initializer: Value,
     d.flags.set(d.flags.get() | oflags::DESTRUCTED);
     set_info(
         &o,
-        Some(LazyInfo { proxy, initializer, options: opts, initialized: false, instance: None, initializing: false, lazy_slots }),
+        Some(LazyInfo {
+            proxy,
+            initializer,
+            options: opts,
+            initialized: false,
+            instance: None,
+            initializing: false,
+            lazy_slots,
+        }),
     );
     Ok(o)
 }
@@ -339,7 +389,11 @@ fn make_lazy(vm: &mut Vm, obj: Option<Obj>, cls: &Rc<Class>, initializer: Value,
 /// Decrements the lazy property count; realizes the object when none is
 /// left (`zend_lazy_object_decr_lazy_props` + `zend_lazy_object_realize`).
 fn after_slot_unmarked(o: &Obj) {
-    let done = object::data(o).lazy.borrow().as_ref().is_some_and(|i| !i.initialized && !i.lazy_slots.iter().any(|x| *x));
+    let done = object::data(o)
+        .lazy
+        .borrow()
+        .as_ref()
+        .is_some_and(|i| !i.initialized && !i.lazy_slots.iter().any(|x| *x));
     if done {
         set_info(o, None);
         clear_destructed(o);
@@ -365,7 +419,12 @@ fn check_options(vm: &mut Vm, a: &Args, idx: usize, method: &str, reset: bool) -
     };
     let argn = idx + 1;
     if opts & !(SKIP_INITIALIZATION_ON_SERIALIZE | SKIP_DESTRUCTOR) != 0 {
-        return Err(rexc(vm, &format!("ReflectionClass::{method}(): Argument #{argn} ($options) contains invalid flags")));
+        return Err(rexc(
+            vm,
+            &format!(
+                "ReflectionClass::{method}(): Argument #{argn} ($options) contains invalid flags"
+            ),
+        ));
     }
     if !reset && opts & SKIP_DESTRUCTOR != 0 {
         return Err(rexc(
@@ -476,7 +535,10 @@ pub(crate) fn rc_get_lazy_initializer(vm: &mut Vm, a: &mut Args) -> VmResult<Val
 fn this_prop(vm: &mut Vm, a: &Args) -> VmResult<PropRef> {
     match this_refl(vm, a)? {
         Refl::Prop(p) => Ok(p),
-        _ => Err(vm.make_throw("Error", "Internal error: Failed to retrieve the reflection object")),
+        _ => Err(vm.make_throw(
+            "Error",
+            "Internal error: Failed to retrieve the reflection object",
+        )),
     }
 }
 
@@ -514,22 +576,52 @@ fn lazy_compatible(vm: &mut Vm, p: &PropRef, o: &Obj, method: &str) -> VmResult<
         _ => super::order::find_prop(vm, &oc, p.name.as_bytes()),
     };
     let Some(m) = meta else {
-        return Err(rexc(vm, &format!("Cannot use {method}() on dynamic property {}::${}", p.class.name, p.name)));
+        return Err(rexc(
+            vm,
+            &format!(
+                "Cannot use {method}() on dynamic property {}::${}",
+                p.class.name, p.name
+            ),
+        ));
     };
     let decl = super::dn(&m.class);
     if m.is_static {
-        return Err(rexc(vm, &format!("Cannot use {method}() on static property {decl}::${}", p.name)));
+        return Err(rexc(
+            vm,
+            &format!(
+                "Cannot use {method}() on static property {decl}::${}",
+                p.name
+            ),
+        ));
     }
     if m.flags & flags::VIRTUAL != 0 {
-        return Err(rexc(vm, &format!("Cannot use {method}() on virtual property {decl}::${}", p.name)));
+        return Err(rexc(
+            vm,
+            &format!(
+                "Cannot use {method}() on virtual property {decl}::${}",
+                p.name
+            ),
+        ));
     }
-    if oc.flags & cflags::INTERNAL != 0 && oc.lc_name.as_bytes() != b"stdclass" && oc.hooks.as_ref().is_some_and(|h| h.write_property.is_some()) {
-        return Err(rexc(vm, &format!("Cannot use {method}() on internal class {}", oc.name)));
+    if oc.flags & cflags::INTERNAL != 0
+        && oc.lc_name.as_bytes() != b"stdclass"
+        && oc
+            .hooks
+            .as_ref()
+            .is_some_and(|h| h.write_property.is_some())
+    {
+        return Err(rexc(
+            vm,
+            &format!("Cannot use {method}() on internal class {}", oc.name),
+        ));
     }
     Ok(m.info.map_or(0, |pi| pi.slot as usize))
 }
 
-pub(crate) fn rp_set_raw_value_without_lazy_initialization(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+pub(crate) fn rp_set_raw_value_without_lazy_initialization(
+    vm: &mut Vm,
+    a: &mut Args,
+) -> VmResult<Value> {
     let p = this_prop(vm, a)?;
     let o = prop_obj(vm, a, &p, "setRawValueWithoutLazyInitialization")?;
     let o = real(&o);
@@ -537,7 +629,15 @@ pub(crate) fn rp_set_raw_value_without_lazy_initialization(vm: &mut Vm, a: &mut 
     let was_lazy = slot_is_lazy(&o, slot);
     unmark(&o, slot);
     let r = super::property::set_raw(vm, &p, &o, a.at(1));
-    if r.is_err() && was_lazy && object::data(&o).slots.borrow().get(slot).is_some_and(Option::is_none) && is_uninit(&o) {
+    if r.is_err()
+        && was_lazy
+        && object::data(&o)
+            .slots
+            .borrow()
+            .get(slot)
+            .is_some_and(Option::is_none)
+        && is_uninit(&o)
+    {
         with_info(&o, |i| {
             if let Some(s) = i.lazy_slots.get_mut(slot) {
                 *s = true;
@@ -578,7 +678,9 @@ pub(crate) fn rp_is_lazy(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         Some(m) if m.flags & flags::PRIVATE != 0 => Some((**m).clone()),
         _ => super::order::find_prop(vm, &oc, p.name.as_bytes()),
     };
-    let Some(m) = meta else { return Ok(Value::Bool(false)) };
+    let Some(m) = meta else {
+        return Ok(Value::Bool(false));
+    };
     if m.is_static || m.flags & flags::VIRTUAL != 0 {
         return Ok(Value::Bool(false));
     }
@@ -588,6 +690,7 @@ pub(crate) fn rp_is_lazy(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 /// The real instance of an initialized lazy proxy (its `var_dump()` shows
 /// `["instance" => ...]`, `zend_lazy_object_debug_info`).
+#[allow(dead_code)] // VM hook (object dump), see the module docs
 pub(crate) fn proxy_instance(o: &Obj) -> Option<Obj> {
     match info(o) {
         Some(i) if i.proxy && i.initialized => i.instance,
@@ -598,25 +701,30 @@ pub(crate) fn proxy_instance(o: &Obj) -> Option<Obj> {
 /// `zend_lazy_object_clone`: initializes `o` and returns the object to clone
 /// (`None`: not lazy). For an initialized proxy, returns a new proxy whose
 /// instance is a clone of the real instance.
+#[allow(dead_code)] // VM hook (`clone`), see the module docs
 pub(crate) fn clone_lazy(vm: &mut Vm, o: &Obj) -> VmResult<Option<Value>> {
     let Some(i) = info(o) else { return Ok(None) };
     if !i.initialized {
         init(vm, o)?;
     }
     let Some(i) = info(o) else { return Ok(None) };
-    let Some(inst) = i.instance.clone() else { return Ok(None) };
+    let Some(inst) = i.instance.clone() else {
+        return Ok(None);
+    };
     let cls = object::class_of(o).clone();
     let new_inst = vm.clone_value(Value::Object(inst))?;
-    let Value::Object(new_inst) = new_inst else { return Ok(None) };
+    let Value::Object(new_inst) = new_inst else {
+        return Ok(None);
+    };
     let np = object::new_object(cls.clone(), vec![None; cls.props.len()]);
     let d = object::data(&np);
     d.flags.set(d.flags.get() | oflags::DESTRUCTED);
-    set_info(&np, Some(LazyInfo { instance: Some(new_inst), ..i }));
+    set_info(
+        &np,
+        Some(LazyInfo {
+            instance: Some(new_inst),
+            ..i
+        }),
+    );
     Ok(Some(Value::Object(np)))
-}
-
-#[allow(dead_code)]
-fn unused(vm: &mut Vm, a: &Args) -> VmResult<()> {
-    let _ = (str_arg(a, 0), with_scope(vm, None, |_| Ok(())));
-    Ok(())
 }

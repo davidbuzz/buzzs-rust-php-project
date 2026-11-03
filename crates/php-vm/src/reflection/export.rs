@@ -103,7 +103,9 @@ pub(crate) fn format_default_value(vm: &Vm, v: &Value) -> Vec<u8> {
     }
     match v {
         Value::Array(a) => {
-            let is_list = a.iter().enumerate().all(|(i, (k, _))| matches!(k, ArrayKey::Int(n) if usize::try_from(*n).ok() == Some(i)));
+            let is_list = a.iter().enumerate().all(
+                |(i, (k, _))| matches!(k, ArrayKey::Int(n) if usize::try_from(*n).ok() == Some(i)),
+            );
             let mut out = vec![b'['];
             for (i, (k, val)) in a.iter().enumerate() {
                 if i > 0 {
@@ -156,7 +158,9 @@ fn resolve_name(ns: &[u8], n: &ast::Name) -> Vec<u8> {
 }
 
 fn is_special_class(n: &[u8]) -> bool {
-    n.eq_ignore_ascii_case(b"self") || n.eq_ignore_ascii_case(b"parent") || n.eq_ignore_ascii_case(b"static")
+    n.eq_ignore_ascii_case(b"self")
+        || n.eq_ignore_ascii_case(b"parent")
+        || n.eq_ignore_ascii_case(b"static")
 }
 
 /// Resolves class and constant names like the compiler does for constant
@@ -177,9 +181,13 @@ fn resolve_expr_in(e: &mut Expr, ns: &[u8], self_name: Option<&[u8]>) {
         }
     }
     match &mut e.kind {
-        ExprKind::ClassConst { class, .. } | ExprKind::ClassName(class) | ExprKind::StaticProp { class, .. } => {
+        ExprKind::ClassConst { class, .. }
+        | ExprKind::ClassName(class)
+        | ExprKind::StaticProp { class, .. } => {
             if let ClassRef::Name(n) = class.as_mut() {
-                if n.kind != NameKind::FullyQualified && !(n.kind == NameKind::Unqualified && is_special_class(&n.name)) {
+                if n.kind != NameKind::FullyQualified
+                    && !(n.kind == NameKind::Unqualified && is_special_class(&n.name))
+                {
                     let r = resolve_name(ns, n);
                     if r != n.name || n.kind == NameKind::Relative {
                         n.name = r;
@@ -192,7 +200,9 @@ fn resolve_expr_in(e: &mut Expr, ns: &[u8], self_name: Option<&[u8]>) {
         }
         ExprKind::StaticCall { class, args, .. } => {
             if let ClassRef::Name(n) = class.as_mut() {
-                if n.kind != NameKind::FullyQualified && !(n.kind == NameKind::Unqualified && is_special_class(&n.name)) {
+                if n.kind != NameKind::FullyQualified
+                    && !(n.kind == NameKind::Unqualified && is_special_class(&n.name))
+                {
                     n.name = resolve_name(ns, n);
                     n.kind = NameKind::FullyQualified;
                 }
@@ -210,7 +220,9 @@ fn resolve_expr_in(e: &mut Expr, ns: &[u8], self_name: Option<&[u8]>) {
         }
         ExprKind::Const(n) => {
             let lc = n.name.to_ascii_lowercase();
-            if n.kind == NameKind::Unqualified && matches!(lc.as_slice(), b"true" | b"false" | b"null") {
+            if n.kind == NameKind::Unqualified
+                && matches!(lc.as_slice(), b"true" | b"false" | b"null")
+            {
                 n.name = lc;
                 return;
             }
@@ -232,7 +244,9 @@ fn resolve_expr_in(e: &mut Expr, ns: &[u8], self_name: Option<&[u8]>) {
             resolve_expr(right, ns);
         }
         ExprKind::Unary { expr, .. } | ExprKind::Cast { expr, .. } => resolve_expr(expr, ns),
-        ExprKind::Conditional { cond, then, else_, .. } => {
+        ExprKind::Conditional {
+            cond, then, else_, ..
+        } => {
             resolve_expr(cond, ns);
             if let Some(t) = then {
                 resolve_expr(t, ns);
@@ -254,7 +268,9 @@ fn resolve_expr_in(e: &mut Expr, ns: &[u8], self_name: Option<&[u8]>) {
 fn resolve_args(args: &mut ast::ArgList, ns: &[u8]) {
     for a in &mut args.args {
         match &mut a.kind {
-            ArgKind::Positional(x) | ArgKind::Unpack(x) | ArgKind::Named { value: x, .. } => resolve_expr(x, ns),
+            ArgKind::Positional(x) | ArgKind::Unpack(x) | ArgKind::Named { value: x, .. } => {
+                resolve_expr(x, ns);
+            }
             _ => {}
         }
     }
@@ -276,12 +292,8 @@ fn strip_parens(e: Expr) -> Expr {
 }
 
 /// `zend_ast_export` of a not yet evaluated constant expression, given its
-/// source text and the namespace it was compiled in.
-pub(crate) fn export_const_expr(text: &str, ns: &[u8]) -> Vec<u8> {
-    export_const_expr_in(text, ns, None)
-}
-
-/// [`export_const_expr`] inside class `self_name`.
+/// source text, the namespace it was compiled in and the class `self`
+/// refers to.
 pub(crate) fn export_const_expr_in(text: &str, ns: &[u8], self_name: Option<&[u8]>) -> Vec<u8> {
     match parse_const_expr(text) {
         Some(mut e) => {
@@ -341,12 +353,22 @@ pub(crate) fn param_default_repr(vm: &Vm, f: &FnRef, p: &ParamInfo) -> Option<Ve
         Some(ConstExpr::Code(_)) => {
             let text = p.default_text.clone().unwrap_or_default();
             let declared_in_trait = match &f.func {
-                Func::User(u) => u.class_name.as_ref().and_then(|n| vm.find_class(n.as_bytes())).is_some_and(|c| c.is_trait()),
+                Func::User(u) => u
+                    .class_name
+                    .as_ref()
+                    .and_then(|n| vm.find_class(n.as_bytes()))
+                    .is_some_and(|c| c.is_trait()),
                 Func::Builtin(_) => false,
             };
-            let scope = f.scope(vm).filter(|c| !c.is_trait() && f.closure.is_none() && !declared_in_trait);
+            let scope = f
+                .scope(vm)
+                .filter(|c| !c.is_trait() && f.closure.is_none() && !declared_in_trait);
             let sn = scope.as_ref().map(|c| c.name.as_bytes().to_vec());
-            Some(export_const_expr_in(&text, &fn_namespace(vm, f), sn.as_deref()))
+            Some(export_const_expr_in(
+                &text,
+                &fn_namespace(vm, f),
+                sn.as_deref(),
+            ))
         }
         None => None,
     }
@@ -362,7 +384,11 @@ pub(crate) fn parameter_string(vm: &Vm, f: &FnRef, idx: usize, required: bool) -
     let params = f.func.params();
     let Some(p) = params.get(idx) else { return b.0 };
     b.s(&format!("Parameter #{idx} [ "));
-    b.s(if required { "<required> " } else { "<optional> " });
+    b.s(if required {
+        "<required> "
+    } else {
+        "<optional> "
+    });
     if let Some(t) = &p.ty {
         b.s(&ZType::from_decl(t).to_php()).c(b' ');
     }
@@ -386,7 +412,9 @@ pub(crate) fn parameter_string(vm: &Vm, f: &FnRef, idx: usize, required: bool) -
                 };
             }
             Func::User(_) => {
-                if let Some(d) = param_default_repr(vm, f, p).filter(|_| idx >= f.func.required() as usize) {
+                if let Some(d) =
+                    param_default_repr(vm, f, p).filter(|_| idx >= f.func.required() as usize)
+                {
                     b.s(" = ").b(&d);
                 }
             }
@@ -402,7 +430,12 @@ fn method_in(c: &Class, name: &[u8]) -> Option<Rc<Method>> {
 
 /// `_function_string`.
 #[allow(clippy::too_many_lines)]
-pub(crate) fn function_string(vm: &mut Vm, f: &FnRef, scope: Option<&Rc<Class>>, indent: &str) -> Vec<u8> {
+pub(crate) fn function_string(
+    vm: &mut Vm,
+    f: &FnRef,
+    scope: Option<&Rc<Class>>,
+    indent: &str,
+) -> Vec<u8> {
     let mut b = Buf::default();
     let fl = f.flags();
     let fscope = f.scope(vm);
@@ -475,16 +508,23 @@ pub(crate) fn function_string(vm: &mut Vm, f: &FnRef, scope: Option<&Rc<Class>>,
     }
     b.z(&f.name()).s(" ] {\n");
     if let (Func::User(u), true) = (&f.func, f.is_user()) {
-        b.s(indent).s("  @@ ").z(&u.code.filename).s(&format!(" {} - {}\n", u.line_start, u.line_end));
+        b.s(indent)
+            .s("  @@ ")
+            .z(&u.code.filename)
+            .s(&format!(" {} - {}\n", u.line_start, u.line_end));
     }
     let pind = format!("{indent}  ");
     if is_closure {
         let vars = super::function::static_vars(vm, f);
         if !vars.is_empty() {
             b.c(b'\n');
-            b.s(&pind).s(&format!("- Bound Variables [{}] {{\n", vars.len()));
+            b.s(&pind)
+                .s(&format!("- Bound Variables [{}] {{\n", vars.len()));
             for (i, (k, _)) in vars.iter().enumerate() {
-                b.s(&pind).s(&format!("    Variable #{i} [ $")).z(k).s(" ]\n");
+                b.s(&pind)
+                    .s(&format!("    Variable #{i} [ $"))
+                    .z(k)
+                    .s(" ]\n");
             }
             b.s(&pind).s("}\n");
         }
@@ -493,7 +533,8 @@ pub(crate) fn function_string(vm: &mut Vm, f: &FnRef, scope: Option<&Rc<Class>>,
     let required = f.func.required() as usize;
     if !params.is_empty() || !f.is_user() || f.func.return_type().is_some() {
         b.c(b'\n');
-        b.s(&pind).s(&format!("- Parameters [{}] {{\n", params.len()));
+        b.s(&pind)
+            .s(&format!("- Parameters [{}] {{\n", params.len()));
         for i in 0..params.len() {
             b.s(&pind).s("  ");
             let ps = parameter_string(vm, f, i, i < required);
@@ -503,7 +544,14 @@ pub(crate) fn function_string(vm: &mut Vm, f: &FnRef, scope: Option<&Rc<Class>>,
         b.s(&pind).s("}\n");
     }
     if let Some((rt, tentative)) = super::function::return_type(vm, f) {
-        b.s(&format!("  {indent}- {} [ ", if tentative { "Tentative return" } else { "Return" }));
+        b.s(&format!(
+            "  {indent}- {} [ ",
+            if tentative {
+                "Tentative return"
+            } else {
+                "Return"
+            }
+        ));
         b.s(&ZType::from_decl(&rt).to_php()).c(b' ');
         b.s("]\n");
     }
@@ -517,8 +565,12 @@ fn prop_default_repr(vm: &mut Vm, p: &PropMeta, cls: &Rc<Class>) -> Option<Vec<u
         return None;
     }
     if p.is_static {
-        let decl = vm.find_class(p.class.as_bytes()).unwrap_or_else(|| cls.clone());
-        let cell = decl.find_static(p.name.as_bytes()).map(|s| (s.cell.clone(), s.initialized.get(), s.default.clone()));
+        let decl = vm
+            .find_class(p.class.as_bytes())
+            .unwrap_or_else(|| cls.clone());
+        let cell = decl
+            .find_static(p.name.as_bytes())
+            .map(|s| (s.cell.clone(), s.initialized.get(), s.default.clone()));
         return match cell {
             Some((_, _, Some(e))) => Some(const_expr_repr(vm, &e, &p.class, &p.name, false)),
             Some((_, _, None)) => {
@@ -532,7 +584,9 @@ fn prop_default_repr(vm: &mut Vm, p: &PropMeta, cls: &Rc<Class>) -> Option<Vec<u
         };
     }
     let e = p.default.clone()?;
-    let decl = vm.find_class(p.class.as_bytes()).unwrap_or_else(|| cls.clone());
+    let decl = vm
+        .find_class(p.class.as_bytes())
+        .unwrap_or_else(|| cls.clone());
     if let (Some(pi), Some(defs)) = (&p.info, decl.defaults.borrow().as_ref()) {
         if let Some(Some(v)) = defs.get(pi.slot as usize) {
             return Some(format_default_value(vm, v));
@@ -543,7 +597,13 @@ fn prop_default_repr(vm: &mut Vm, p: &PropMeta, cls: &Rc<Class>) -> Option<Vec<u
 
 /// `zend_ast_export` of a compiled constant expression of class `class`
 /// (re-parsed from the declaring file).
-pub(crate) fn const_expr_repr(vm: &Vm, e: &ConstExpr, class: &ZStr, member: &ZStr, is_const: bool) -> Vec<u8> {
+pub(crate) fn const_expr_repr(
+    vm: &Vm,
+    e: &ConstExpr,
+    class: &ZStr,
+    member: &ZStr,
+    is_const: bool,
+) -> Vec<u8> {
     match e {
         ConstExpr::Value(v) => format_default_value(vm, v),
         ConstExpr::Code(_) => {
@@ -570,10 +630,19 @@ pub(crate) fn const_expr_repr(vm: &Vm, e: &ConstExpr, class: &ZStr, member: &ZSt
 }
 
 /// `_property_string`.
-pub(crate) fn property_string(vm: &mut Vm, p: Option<&PropMeta>, name: &ZStr, cls: &Rc<Class>, indent: &str) -> Vec<u8> {
+pub(crate) fn property_string(
+    vm: &mut Vm,
+    p: Option<&PropMeta>,
+    name: &ZStr,
+    cls: &Rc<Class>,
+    indent: &str,
+) -> Vec<u8> {
     let mut b = Buf::default();
     let Some(p) = p else {
-        b.s(indent).s("Property [ <dynamic> public $").z(name).s(" ]\n");
+        b.s(indent)
+            .s("Property [ <dynamic> public $")
+            .z(name)
+            .s(" ]\n");
         return b.0;
     };
     if let Some(d) = &p.doc {
@@ -654,7 +723,12 @@ fn const_value_text(vm: &mut Vm, v: &Value) -> VmResult<Vec<u8>> {
 }
 
 /// `_class_const_string`.
-pub(crate) fn class_const_string(vm: &mut Vm, cls: &Rc<Class>, c: &Rc<ClassConst>, indent: &str) -> VmResult<Vec<u8>> {
+pub(crate) fn class_const_string(
+    vm: &mut Vm,
+    cls: &Rc<Class>,
+    c: &Rc<ClassConst>,
+    indent: &str,
+) -> VmResult<Vec<u8>> {
     let v = super::constant::const_value_of(vm, cls, c)?;
     let mut b = Buf::default();
     if let Some(d) = &c.doc_comment {
@@ -665,19 +739,31 @@ pub(crate) fn class_const_string(vm: &mut Vm, cls: &Rc<Class>, c: &Rc<ClassConst
         flags::PROTECTED => "protected",
         _ => "public",
     };
-    let fin = if c.flags & flags::FINAL != 0 { "final " } else { "" };
+    let fin = if c.flags & flags::FINAL != 0 {
+        "final "
+    } else {
+        ""
+    };
     let ty = match &c.ty {
         Some(t) => ZType::from_decl(t).to_php(),
         None => zval_type_name(&v).to_string(),
     };
-    b.s(indent).s(&format!("Constant [ {fin}{vis} {ty} ")).z(&c.name).s(" ] { ");
+    b.s(indent)
+        .s(&format!("Constant [ {fin}{vis} {ty} "))
+        .z(&c.name)
+        .s(" ] { ");
     let t = const_value_text(vm, &v)?;
     b.b(&t).s(" }\n");
     Ok(b.0)
 }
 
 /// `_enum_case_string`.
-pub(crate) fn enum_case_string(vm: &mut Vm, cls: &Rc<Class>, c: &Rc<ClassConst>, indent: &str) -> VmResult<Vec<u8>> {
+pub(crate) fn enum_case_string(
+    vm: &mut Vm,
+    cls: &Rc<Class>,
+    c: &Rc<ClassConst>,
+    indent: &str,
+) -> VmResult<Vec<u8>> {
     let v = vm.enum_case(cls, &c.name)?;
     let mut b = Buf::default();
     if let Some(d) = &super::constant::const_doc_comment(cls, c) {
@@ -695,7 +781,13 @@ pub(crate) fn enum_case_string(vm: &mut Vm, cls: &Rc<Class>, c: &Rc<ClassConst>,
 }
 
 /// `_const_string` (global constants).
-pub(crate) fn const_string(vm: &mut Vm, name: &ZStr, v: &Value, cflags_: &[&str], indent: &str) -> VmResult<Vec<u8>> {
+pub(crate) fn const_string(
+    vm: &mut Vm,
+    name: &ZStr,
+    v: &Value,
+    cflags_: &[&str],
+    indent: &str,
+) -> VmResult<Vec<u8>> {
     let mut b = Buf::default();
     b.s(indent).s("Constant [ ");
     if !cflags_.is_empty() {
@@ -723,17 +815,26 @@ fn has_iterator(c: &Rc<Class>) -> bool {
         return true;
     }
     if c.props.iter().any(|p| p.hooks.is_some())
-        || c.decl.as_ref().is_some_and(|d| d.props.iter().any(|p| p.hooks.is_some()))
+        || c.decl
+            .as_ref()
+            .is_some_and(|d| d.props.iter().any(|p| p.hooks.is_some()))
     {
         return true;
     }
-    c.interfaces.iter().any(|i| matches!(i.lc_name.as_bytes(), b"iterator" | b"iteratoraggregate"))
+    c.interfaces
+        .iter()
+        .any(|i| matches!(i.lc_name.as_bytes(), b"iterator" | b"iteratoraggregate"))
         || matches!(c.lc_name.as_bytes(), b"iterator" | b"iteratoraggregate")
 }
 
 /// `_class_string`.
 #[allow(clippy::too_many_lines)]
-pub(crate) fn class_string(vm: &mut Vm, c: &Rc<Class>, obj: Option<&Obj>, indent: &str) -> VmResult<Vec<u8>> {
+pub(crate) fn class_string(
+    vm: &mut Vm,
+    c: &Rc<Class>,
+    obj: Option<&Obj>,
+    indent: &str,
+) -> VmResult<Vec<u8>> {
     let mut b = Buf::default();
     if let Some(d) = &c.doc_comment {
         b.s(indent).z(d).c(b'\n');
@@ -787,12 +888,20 @@ pub(crate) fn class_string(vm: &mut Vm, c: &Rc<Class>, obj: Option<&Obj>, indent
     }
     if c.is_enum() {
         if let Some(m) = c.backing {
-            b.s(if m == crate::types::mask::STRING { ": string" } else { ": int" });
+            b.s(if m == crate::types::mask::STRING {
+                ": string"
+            } else {
+                ": int"
+            });
         }
     }
     let ifaces = super::class::interfaces_order(vm, c);
     if !ifaces.is_empty() {
-        b.s(if c.is_interface() { " extends " } else { " implements " });
+        b.s(if c.is_interface() {
+            " extends "
+        } else {
+            " implements "
+        });
         for (i, x) in ifaces.iter().enumerate() {
             if i > 0 {
                 b.s(", ");
@@ -803,7 +912,10 @@ pub(crate) fn class_string(vm: &mut Vm, c: &Rc<Class>, obj: Option<&Obj>, indent
     b.s(" ] {\n");
     if user {
         let file = c.filename.clone().unwrap_or_default();
-        b.s(indent).s("  @@ ").z(&file).s(&format!(" {}-{}\n", c.line_start, c.line_end));
+        b.s(indent)
+            .s("  @@ ")
+            .z(&file)
+            .s(&format!(" {}-{}\n", c.line_start, c.line_end));
     }
     let sub = format!("{indent}    ");
     // Constants and enum cases.
@@ -833,7 +945,10 @@ pub(crate) fn class_string(vm: &mut Vm, c: &Rc<Class>, obj: Option<&Obj>, indent
     // Static properties.
     let props = order::props(vm, c);
     let statics: Vec<&PropMeta> = props.iter().filter(|p| p.is_static).collect();
-    b.s(&format!("\n{indent}  - Static properties [{}] {{\n", statics.len()));
+    b.s(&format!(
+        "\n{indent}  - Static properties [{}] {{\n",
+        statics.len()
+    ));
     for p in &statics {
         let s = property_string(vm, Some(p), &p.name, c, &sub);
         b.b(&s);
@@ -845,7 +960,10 @@ pub(crate) fn class_string(vm: &mut Vm, c: &Rc<Class>, obj: Option<&Obj>, indent
         .filter(|m| m.visibility() != flags::PRIVATE || Rc::ptr_eq(&m.scope(), c))
         .collect();
     let smethods: Vec<&Rc<Method>> = methods.iter().filter(|m| m.is_static()).collect();
-    b.s(&format!("\n{indent}  - Static methods [{}] {{", smethods.len()));
+    b.s(&format!(
+        "\n{indent}  - Static methods [{}] {{",
+        smethods.len()
+    ));
     if smethods.is_empty() {
         b.c(b'\n');
     }
@@ -873,9 +991,9 @@ pub(crate) fn class_string(vm: &mut Vm, c: &Rc<Class>, obj: Option<&Obj>, indent
             .as_ref()
             .map(|t| {
                 t.iter()
-                    .filter_map(|(k, _)| match k {
-                        ArrayKey::Str(s) => Some(s.clone()),
-                        ArrayKey::Int(i) => Some(ZStr::from(i.to_string())),
+                    .map(|(k, _)| match k {
+                        ArrayKey::Str(s) => s.clone(),
+                        ArrayKey::Int(i) => ZStr::from(i.to_string()),
                     })
                     .collect()
             })
@@ -903,9 +1021,17 @@ pub(crate) fn class_string(vm: &mut Vm, c: &Rc<Class>, obj: Option<&Obj>, indent
     for m in &imethods {
         b.c(b'\n');
         let mut fr = FnRef::method(m, c);
-        if let (Some(o), true) = (obj, c.lc_name.as_bytes() == b"closure" && m.name.eq_ignore_ascii_case(b"__invoke")) {
+        if let (Some(o), true) = (
+            obj,
+            c.lc_name.as_bytes() == b"closure" && m.name.eq_ignore_ascii_case(b"__invoke"),
+        ) {
             if let Some(d) = vm.closure_data(o) {
-                fr = FnRef { func: d.func.clone(), method: None, class: None, closure: Some(o.clone()) };
+                fr = FnRef {
+                    func: d.func.clone(),
+                    method: None,
+                    class: None,
+                    closure: Some(o.clone()),
+                };
             }
         }
         let s = function_string(vm, &fr, Some(c), &sub);
@@ -929,10 +1055,39 @@ mod tests {
 
     #[test]
     fn exports_namespaced_constant_expressions() {
-        assert_eq!(export_const_expr("new Bar()", b"App"), b"new \\App\\Bar()".to_vec());
-        assert_eq!(export_const_expr("self::BAR", b"App"), b"self::BAR".to_vec());
-        assert_eq!(export_const_expr("Bar::BAZ", b"App"), b"\\App\\Bar::BAZ".to_vec());
-        assert_eq!(export_const_expr("foo::BAR", b""), b"foo::BAR".to_vec());
-        assert_eq!(export_const_expr("PHP_SELF + 1", b""), b"PHP_SELF + 1".to_vec());
+        assert_eq!(
+            export_const_expr_in("new Bar()", b"App", None),
+            b"new \\App\\Bar()".to_vec()
+        );
+        assert_eq!(
+            export_const_expr_in("self::BAR", b"App", None),
+            b"self::BAR".to_vec()
+        );
+        assert_eq!(
+            export_const_expr_in("Bar::BAZ", b"App", None),
+            b"\\App\\Bar::BAZ".to_vec()
+        );
+        assert_eq!(
+            export_const_expr_in("foo::BAR", b"", None),
+            b"foo::BAR".to_vec()
+        );
+        assert_eq!(
+            export_const_expr_in("PHP_SELF + 1", b"", None),
+            b"PHP_SELF + 1".to_vec()
+        );
+        assert_eq!(
+            export_const_expr_in("self::class", b"", Some(b"F")),
+            b"'F'".to_vec()
+        );
+        assert_eq!(
+            export_const_expr_in("new self()", b"App", None),
+            b"new self()".to_vec()
+        );
+    }
+
+    #[test]
+    fn namespace_of_names() {
+        assert_eq!(namespace_of(&ZStr::from("A\\B\\C")), b"A\\B".to_vec());
+        assert_eq!(namespace_of(&ZStr::from("C")), Vec::<u8>::new());
     }
 }

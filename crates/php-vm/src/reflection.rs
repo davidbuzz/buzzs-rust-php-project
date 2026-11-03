@@ -20,6 +20,21 @@
 //! * [`export`] — the `__toString()` renderers
 //! * [`order`] — php-src hash table orders of class members
 
+// Builtin handlers all share the `BuiltinFn` signature (`vm`, `a`), and
+// some never fail; the class tables use `ZStr` keys like the rest of the VM.
+#![allow(
+    clippy::many_single_char_names,
+    clippy::unnecessary_wraps,
+    clippy::mutable_key_type,
+    clippy::single_match_else,
+    clippy::type_complexity,
+    clippy::too_many_lines,
+    clippy::option_option,
+    clippy::needless_pass_by_value,
+    clippy::match_same_arms,
+    clippy::collapsible_match
+)]
+
 mod attribute;
 mod class;
 mod constant;
@@ -41,6 +56,7 @@ use crate::vm::{Throw, Vm, VmResult};
 use php_runtime::{Obj, PhpRef, Value, ZStr};
 use std::rc::Rc;
 
+#[allow(unused_imports)]
 pub(crate) use misc::record_module;
 
 const PUB: u32 = flags::PUBLIC;
@@ -74,7 +90,6 @@ pub(crate) mod acc {
     pub const PROTECTED_SET: i64 = 2048;
     pub const PRIVATE_SET: i64 = 4096;
     pub const DEPRECATED: i64 = 2048;
-    pub const IMPLICIT_ABSTRACT_CLASS: i64 = 16;
     pub const EXPLICIT_ABSTRACT_CLASS: i64 = 64;
     pub const READONLY_CLASS: i64 = 65536;
 }
@@ -96,12 +111,22 @@ pub(crate) struct FnRef {
 impl FnRef {
     /// A plain function.
     pub fn function(func: Func) -> Self {
-        FnRef { func, method: None, class: None, closure: None }
+        FnRef {
+            func,
+            method: None,
+            class: None,
+            closure: None,
+        }
     }
 
     /// A method of `class`.
     pub fn method(m: &Rc<Method>, class: &Rc<Class>) -> Self {
-        FnRef { func: m.func.clone(), method: Some(m.clone()), class: Some(class.clone()), closure: None }
+        FnRef {
+            func: m.func.clone(),
+            method: Some(m.clone()),
+            class: Some(class.clone()),
+            closure: None,
+        }
     }
 
     /// `Closure::__invoke` of a closure object: an internal trampoline
@@ -109,7 +134,10 @@ impl FnRef {
     pub fn is_trampoline(&self) -> bool {
         self.func.is_user()
             && self.method.as_ref().is_some_and(|m| {
-                m.name.as_bytes() == b"__invoke" && m.scope.upgrade().is_some_and(|c| c.lc_name.as_bytes() == b"closure")
+                m.name.as_bytes() == b"__invoke"
+                    && m.scope
+                        .upgrade()
+                        .is_some_and(|c| c.lc_name.as_bytes() == b"closure")
             })
     }
 
@@ -129,7 +157,11 @@ impl FnRef {
     /// The function flags, with method modifiers.
     pub fn flags(&self) -> u32 {
         match &self.method {
-            Some(m) => m.flags | (self.func.flags() & !(flags::VISIBILITY | flags::STATIC | flags::FINAL | flags::ABSTRACT)),
+            Some(m) => {
+                m.flags
+                    | (self.func.flags()
+                        & !(flags::VISIBILITY | flags::STATIC | flags::FINAL | flags::ABSTRACT))
+            }
             None => self.func.flags(),
         }
     }
@@ -202,7 +234,11 @@ pub(crate) enum Refl {
     /// `ReflectionClassConstant` / enum cases.
     Const { class: Rc<Class>, c: Rc<ClassConst> },
     /// `ReflectionType` subclasses.
-    Type { ty: TypeDecl, scope: Option<Rc<Class>>, legacy: bool },
+    Type {
+        ty: TypeDecl,
+        scope: Option<Rc<Class>>,
+        legacy: bool,
+    },
     /// `ReflectionAttribute`.
     Attr(Rc<AttrRef>),
     /// `ReflectionExtension` / `ReflectionZendExtension`.
@@ -225,11 +261,17 @@ pub(crate) fn refl(o: &Obj) -> Option<Refl> {
 /// `GET_REFLECTION_OBJECT()`.
 pub(crate) fn this_refl(vm: &mut Vm, a: &Args) -> VmResult<Refl> {
     let Some(o) = a.this.as_ref() else {
-        return Err(vm.make_throw("Error", "Internal error: Failed to retrieve the reflection object"));
+        return Err(vm.make_throw(
+            "Error",
+            "Internal error: Failed to retrieve the reflection object",
+        ));
     };
     match refl(o) {
         Some(r) => Ok(r),
-        None => Err(vm.make_throw("Error", "Internal error: Failed to retrieve the reflection object")),
+        None => Err(vm.make_throw(
+            "Error",
+            "Internal error: Failed to retrieve the reflection object",
+        )),
     }
 }
 
@@ -291,7 +333,13 @@ pub(crate) fn rexc(vm: &mut Vm, msg: &str) -> Throw {
 }
 
 /// Creates a reflection object of class `class` with state `r`.
-pub(crate) fn new_refl(vm: &mut Vm, class: &str, r: Refl, name: Option<&ZStr>, cname: Option<&ZStr>) -> VmResult<Value> {
+pub(crate) fn new_refl(
+    vm: &mut Vm,
+    class: &str,
+    r: Refl,
+    name: Option<&ZStr>,
+    cname: Option<&ZStr>,
+) -> VmResult<Value> {
     let Some(cls) = vm.find_class(class.as_bytes()) else {
         return Err(vm.make_throw("Error", &format!("Class \"{class}\" not found")));
     };
@@ -303,14 +351,33 @@ pub(crate) fn new_refl(vm: &mut Vm, class: &str, r: Refl, name: Option<&ZStr>, c
 
 /// `zend_reflection_class_factory`.
 pub(crate) fn class_value(vm: &mut Vm, c: &Rc<Class>) -> VmResult<Value> {
-    let cn = if c.is_enum() { "ReflectionEnum" } else { "ReflectionClass" };
-    new_refl(vm, cn, Refl::Class { cls: c.clone(), obj: None }, Some(&c.name), None)
+    let cn = if c.is_enum() {
+        "ReflectionEnum"
+    } else {
+        "ReflectionClass"
+    };
+    new_refl(
+        vm,
+        cn,
+        Refl::Class {
+            cls: c.clone(),
+            obj: None,
+        },
+        Some(&c.name),
+        None,
+    )
 }
 
 /// `reflection_method_factory`.
 pub(crate) fn method_value(vm: &mut Vm, m: &Rc<Method>, class: &Rc<Class>) -> VmResult<Value> {
     let scope = m.scope();
-    new_refl(vm, "ReflectionMethod", Refl::Function(FnRef::method(m, class)), Some(&m.name), Some(&scope.name))
+    new_refl(
+        vm,
+        "ReflectionMethod",
+        Refl::Function(FnRef::method(m, class)),
+        Some(&m.name),
+        Some(&scope.name),
+    )
 }
 
 /// `reflection_function_factory`.
@@ -330,8 +397,15 @@ pub(crate) fn str_arg(a: &Args, n: usize) -> ZStr {
 
 /// Runs `f` with the class scope of the calling user frame replaced by
 /// `scope` (`EG(fake_scope)`).
-pub(crate) fn with_scope<T>(vm: &mut Vm, scope: Option<Rc<Class>>, f: impl FnOnce(&mut Vm) -> VmResult<T>) -> VmResult<T> {
-    let idx = vm.frames.iter().rposition(|fr| fr.kind != crate::vm::FrameKind::Builtin);
+pub(crate) fn with_scope<T>(
+    vm: &mut Vm,
+    scope: Option<Rc<Class>>,
+    f: impl FnOnce(&mut Vm) -> VmResult<T>,
+) -> VmResult<T> {
+    let idx = vm
+        .frames
+        .iter()
+        .rposition(|fr| fr.kind != crate::vm::FrameKind::Builtin);
     let Some(idx) = idx else {
         return f(vm);
     };

@@ -37,7 +37,12 @@ pub(crate) struct ZType {
 impl ZType {
     /// Converts the VM's type declaration.
     pub fn from_decl(t: &TypeDecl) -> Self {
-        let mut z = ZType { mask: t.mask & !mask::ITERABLE, names: Vec::new(), intersection: false, iterable: false };
+        let mut z = ZType {
+            mask: t.mask & !mask::ITERABLE,
+            names: Vec::new(),
+            intersection: false,
+            iterable: false,
+        };
         if t.pure_intersection && t.mask & mask::NULL == 0 {
             if let Some(g) = t.intersections.first() {
                 z.names = g.iter().map(|n| TypeElem::Class(n.clone())).collect();
@@ -55,7 +60,11 @@ impl ZType {
             if z.names.is_empty() && t.mask & !(mask::ITERABLE | mask::NULL) == 0 {
                 z.iterable = true;
             }
-            if !z.names.iter().any(|e| matches!(e, TypeElem::Class(c) if c.eq_ignore_ascii_case(b"Traversable"))) {
+            if !z
+                .names
+                .iter()
+                .any(|e| matches!(e, TypeElem::Class(c) if c.eq_ignore_ascii_case(b"Traversable")))
+            {
                 z.names.push(TypeElem::Class(ZStr::from("Traversable")));
             }
             z.mask |= mask::ARRAY;
@@ -65,12 +74,22 @@ impl ZType {
 
     /// A builtin-only type.
     pub fn simple(m: u32) -> Self {
-        ZType { mask: m, names: Vec::new(), intersection: false, iterable: false }
+        ZType {
+            mask: m,
+            names: Vec::new(),
+            intersection: false,
+            iterable: false,
+        }
     }
 
     /// A single class type.
     pub fn class(n: ZStr) -> Self {
-        ZType { mask: 0, names: vec![TypeElem::Class(n)], intersection: false, iterable: false }
+        ZType {
+            mask: 0,
+            names: vec![TypeElem::Class(n)],
+            intersection: false,
+            iterable: false,
+        }
     }
 
     /// `ZEND_TYPE_ALLOW_NULL`.
@@ -92,7 +111,11 @@ impl ZType {
                 .iter()
                 .map(|e| match e {
                     TypeElem::Class(c) => c.to_string_lossy(),
-                    TypeElem::Inter(g) => g.iter().map(ZStr::to_string_lossy).collect::<Vec<_>>().join("&"),
+                    TypeElem::Inter(g) => g
+                        .iter()
+                        .map(ZStr::to_string_lossy)
+                        .collect::<Vec<_>>()
+                        .join("&"),
                 })
                 .collect();
             parts.push(s.join("&"));
@@ -101,7 +124,13 @@ impl ZType {
                 match e {
                     TypeElem::Class(c) => parts.push(c.to_string_lossy()),
                     TypeElem::Inter(g) => {
-                        parts.push(format!("({})", g.iter().map(ZStr::to_string_lossy).collect::<Vec<_>>().join("&")));
+                        parts.push(format!(
+                            "({})",
+                            g.iter()
+                                .map(ZStr::to_string_lossy)
+                                .collect::<Vec<_>>()
+                                .join("&")
+                        ));
                     }
                 }
             }
@@ -154,7 +183,11 @@ impl ZType {
     /// `zend_named_reflection_type_to_string` (BC for `iterable`).
     pub fn to_named_string(&self) -> String {
         if self.iterable {
-            return if self.allows_null() { "?iterable".into() } else { "iterable".into() };
+            return if self.allows_null() {
+                "?iterable".into()
+            } else {
+                "iterable".into()
+            };
         }
         self.to_php()
     }
@@ -185,13 +218,19 @@ impl ZType {
 fn this_type(vm: &mut Vm, a: &Args) -> VmResult<(ZType, bool)> {
     match this_refl(vm, a)? {
         Refl::Type { ty, legacy, .. } => Ok((ZType::from_decl(&ty), legacy)),
-        _ => Err(vm.make_throw("Error", "Internal error: Failed to retrieve the reflection object")),
+        _ => Err(vm.make_throw(
+            "Error",
+            "Internal error: Failed to retrieve the reflection object",
+        )),
     }
 }
 
 /// Converts a `ZType` back to the VM representation (for nested types).
 fn to_decl(z: &ZType) -> TypeDecl {
-    let mut t = TypeDecl { mask: z.mask, ..Default::default() };
+    let mut t = TypeDecl {
+        mask: z.mask,
+        ..Default::default()
+    };
     if z.iterable {
         t.mask = (z.mask & !mask::ARRAY) | mask::ITERABLE;
         return t;
@@ -219,7 +258,12 @@ fn to_decl(z: &ZType) -> TypeDecl {
 }
 
 /// `reflection_type_factory`.
-pub(crate) fn type_value(vm: &mut Vm, ty: &TypeDecl, scope: Option<&Rc<Class>>, legacy: bool) -> VmResult<Value> {
+pub(crate) fn type_value(
+    vm: &mut Vm,
+    ty: &TypeDecl,
+    scope: Option<&Rc<Class>>,
+    legacy: bool,
+) -> VmResult<Value> {
     let z = ZType::from_decl(ty);
     zt_value(vm, &z, scope, legacy)
 }
@@ -233,7 +277,17 @@ fn zt_value(vm: &mut Vm, z: &ZType, scope: Option<&Rc<Class>>, legacy: bool) -> 
     };
     let is_only_null = z.mask == mask::NULL && z.names.is_empty();
     let legacy = legacy && kind == 0 && !z.is_mixed() && !is_only_null;
-    new_refl(vm, cls, Refl::Type { ty: to_decl(z), scope: scope.cloned(), legacy }, None, None)
+    new_refl(
+        vm,
+        cls,
+        Refl::Type {
+            ty: to_decl(z),
+            scope: scope.cloned(),
+            legacy,
+        },
+        None,
+        None,
+    )
 }
 
 fn rt_allows_null(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -241,7 +295,9 @@ fn rt_allows_null(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 }
 
 fn rt_to_string(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    Ok(Value::Str(ZStr::from(this_type(vm, a)?.0.to_named_string())))
+    Ok(Value::Str(ZStr::from(
+        this_type(vm, a)?.0.to_named_string(),
+    )))
 }
 
 fn rt_get_name(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -257,10 +313,17 @@ fn rt_is_builtin(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     if z.iterable {
         return Ok(Value::Bool(true));
     }
-    Ok(Value::Bool(z.names.is_empty() && z.mask & mask::STATIC == 0))
+    Ok(Value::Bool(
+        z.names.is_empty() && z.mask & mask::STATIC == 0,
+    ))
 }
 
-fn push_type(vm: &mut Vm, out: &mut Vec<Value>, mut z: ZType, scope: Option<&Rc<Class>>) -> VmResult<()> {
+fn push_type(
+    vm: &mut Vm,
+    out: &mut Vec<Value>,
+    mut z: ZType,
+    scope: Option<&Rc<Class>>,
+) -> VmResult<()> {
     z.iterable = false;
     out.push(zt_value(vm, &z, scope, false)?);
     Ok(())
@@ -289,7 +352,15 @@ fn rt_get_types(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         return Ok(Value::Array(ZArray::from_values(out)));
     }
     let m = z.mask;
-    for b in [mask::STATIC, mask::CALLABLE, mask::OBJECT, mask::ARRAY, mask::STRING, mask::LONG, mask::DOUBLE] {
+    for b in [
+        mask::STATIC,
+        mask::CALLABLE,
+        mask::OBJECT,
+        mask::ARRAY,
+        mask::STRING,
+        mask::LONG,
+        mask::DOUBLE,
+    ] {
         if m & b != 0 {
             push_type(vm, &mut out, ZType::simple(b), scope.as_ref())?;
         }
@@ -314,7 +385,12 @@ fn clone_error(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
 /// Registers the type classes.
 pub(crate) fn register(vm: &mut Vm) {
     ClassBuilder::new("ReflectionType")
-        .flags(cflags::ABSTRACT | cflags::EXPLICIT_ABSTRACT | cflags::NOT_SERIALIZABLE | cflags::NO_CLONE)
+        .flags(
+            cflags::ABSTRACT
+                | cflags::EXPLICIT_ABSTRACT
+                | cflags::NOT_SERIALIZABLE
+                | cflags::NO_CLONE,
+        )
         .implements(vm, &["Stringable"])
         .method("__clone(): void", PRIV, clone_error)
         .method("allowsNull(): bool", PUB, rt_allows_null)
@@ -343,16 +419,32 @@ mod tests {
     use super::*;
 
     fn decl(m: u32, classes: &[&str]) -> TypeDecl {
-        TypeDecl { mask: m, classes: classes.iter().map(|c| ZStr::from(*c)).collect(), ..Default::default() }
+        TypeDecl {
+            mask: m,
+            classes: classes.iter().map(|c| ZStr::from(*c)).collect(),
+            ..Default::default()
+        }
     }
 
     #[test]
     fn nullable_and_union_rendering() {
-        assert_eq!(ZType::from_decl(&decl(mask::LONG | mask::NULL, &[])).to_php(), "?int");
-        assert_eq!(ZType::from_decl(&decl(mask::LONG | mask::STRING | mask::NULL, &[])).to_php(), "string|int|null");
-        assert_eq!(ZType::from_decl(&decl(mask::NULL, &["Foo"])).to_php(), "?Foo");
+        assert_eq!(
+            ZType::from_decl(&decl(mask::LONG | mask::NULL, &[])).to_php(),
+            "?int"
+        );
+        assert_eq!(
+            ZType::from_decl(&decl(mask::LONG | mask::STRING | mask::NULL, &[])).to_php(),
+            "string|int|null"
+        );
+        assert_eq!(
+            ZType::from_decl(&decl(mask::NULL, &["Foo"])).to_php(),
+            "?Foo"
+        );
         assert_eq!(ZType::from_decl(&decl(mask::ANY, &[])).to_php(), "mixed");
-        assert_eq!(ZType::from_decl(&decl(mask::FALSE | mask::LONG, &[])).to_php(), "int|false");
+        assert_eq!(
+            ZType::from_decl(&decl(mask::FALSE | mask::LONG, &[])).to_php(),
+            "int|false"
+        );
     }
 
     #[test]
@@ -367,8 +459,14 @@ mod tests {
 
     #[test]
     fn kinds() {
-        assert_eq!(ZType::from_decl(&decl(mask::BOOL | mask::NULL, &[])).kind(), 0);
-        assert_eq!(ZType::from_decl(&decl(mask::LONG | mask::STRING, &[])).kind(), 1);
+        assert_eq!(
+            ZType::from_decl(&decl(mask::BOOL | mask::NULL, &[])).kind(),
+            0
+        );
+        assert_eq!(
+            ZType::from_decl(&decl(mask::LONG | mask::STRING, &[])).kind(),
+            1
+        );
         assert_eq!(ZType::from_decl(&decl(mask::LONG, &["A"])).kind(), 1);
         assert_eq!(ZType::from_decl(&decl(mask::NULL, &["A"])).kind(), 0);
         assert_eq!(ZType::from_decl(&decl(0, &["A", "B"])).kind(), 1);

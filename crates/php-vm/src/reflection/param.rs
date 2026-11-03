@@ -2,13 +2,16 @@
 
 use super::class::class_arg;
 use super::export::{self, parse_const_expr};
-use super::{class_value, function_value, method_value, rexc, set_name_props, this, this_refl, FnRef, Refl, PRIV, PUB, RO};
+use super::{
+    class_value, function_value, method_value, rexc, set_name_props, this, this_refl, FnRef, Refl,
+    PRIV, PUB, RO,
+};
 use crate::builtins::classbuilder::ClassBuilder;
 use crate::class::{cflags, ConstExpr};
 use crate::func::{Args, Func};
 use crate::object;
 use crate::opcode::ParamInfo;
-use crate::types::mask;
+use crate::types::{mask, TypeDecl};
 use crate::vm::{Vm, VmResult};
 use php_parser::ast::{ClassRef, ExprKind, MagicConst, MemberName, NameKind};
 use php_runtime::{ArrayKey, Value, ZStr};
@@ -17,28 +20,47 @@ use std::rc::Rc;
 fn this_param(vm: &mut Vm, a: &Args) -> VmResult<(FnRef, usize, ParamInfo)> {
     match this_refl(vm, a)? {
         Refl::Param { f, idx } => {
-            let p = f.func.params().get(idx).cloned().unwrap_or_else(|| ParamInfo {
-                name: ZStr::empty(),
-                by_ref: false,
-                variadic: false,
-                ty: None,
-                has_default: false,
-                default_text: None,
-                promote: 0,
-                sensitive: false,
-                default_expr: None,
-                attributes: Vec::new(),
-            });
+            let p = f
+                .func
+                .params()
+                .get(idx)
+                .cloned()
+                .unwrap_or_else(|| ParamInfo {
+                    name: ZStr::empty(),
+                    by_ref: false,
+                    variadic: false,
+                    ty: None,
+                    has_default: false,
+                    default_text: None,
+                    promote: 0,
+                    sensitive: false,
+                    default_expr: None,
+                    attributes: Vec::new(),
+                });
             Ok((f, idx, p))
         }
-        _ => Err(vm.make_throw("Error", "Internal error: Failed to retrieve the reflection object")),
+        _ => Err(vm.make_throw(
+            "Error",
+            "Internal error: Failed to retrieve the reflection object",
+        )),
     }
 }
 
 /// `reflection_parameter_factory`.
 pub(crate) fn param_value(vm: &mut Vm, f: &FnRef, idx: usize) -> VmResult<Value> {
-    let name = f.func.params().get(idx).map(|p| p.name.clone()).unwrap_or_default();
-    super::new_refl(vm, "ReflectionParameter", Refl::Param { f: f.clone(), idx }, Some(&name), None)
+    let name = f
+        .func
+        .params()
+        .get(idx)
+        .map(|p| p.name.clone())
+        .unwrap_or_default();
+    super::new_refl(
+        vm,
+        "ReflectionParameter",
+        Refl::Param { f: f.clone(), idx },
+        Some(&name),
+        None,
+    )
 }
 
 fn rp_construct(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -49,12 +71,21 @@ fn rp_construct(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             let n = s.as_bytes().strip_prefix(b"\\").unwrap_or(s.as_bytes());
             match vm.functions.get(n.to_ascii_lowercase().as_slice()).cloned() {
                 Some(func) => FnRef::function(func),
-                None => return Err(rexc(vm, &format!("Function {}() does not exist", s.to_string_lossy()))),
+                None => {
+                    return Err(rexc(
+                        vm,
+                        &format!("Function {}() does not exist", s.to_string_lossy()),
+                    ))
+                }
             }
         }
         Value::Array(arr) => {
-            let (Some(cr), Some(m)) = (arr.get(&ArrayKey::Int(0)), arr.get(&ArrayKey::Int(1))) else {
-                return Err(rexc(vm, "Expected array($object, $method) or array($classname, $method)"));
+            let (Some(cr), Some(m)) = (arr.get(&ArrayKey::Int(0)), arr.get(&ArrayKey::Int(1)))
+            else {
+                return Err(rexc(
+                    vm,
+                    "Expected array($object, $method) or array($classname, $method)",
+                ));
             };
             let (cr, m) = (cr.deref(), m.deref());
             let c = match &cr {
@@ -63,7 +94,12 @@ fn rp_construct(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
                     let n = vm.to_zstr(other)?;
                     match vm.lookup_class(&n)? {
                         Some(c) => c,
-                        None => return Err(rexc(vm, &format!("Class \"{}\" does not exist", n.to_string_lossy()))),
+                        None => {
+                            return Err(rexc(
+                                vm,
+                                &format!("Class \"{}\" does not exist", n.to_string_lossy()),
+                            ))
+                        }
                     }
                 }
             };
@@ -71,7 +107,10 @@ fn rp_construct(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             match c.find_method(mn.as_bytes()).cloned() {
                 Some(mm) => FnRef::method(&mm, &c),
                 None => {
-                    if let (Value::Object(ob), true) = (&cr, c.lc_name.as_bytes() == b"closure" && mn.eq_ignore_ascii_case(b"__invoke")) {
+                    if let (Value::Object(ob), true) = (
+                        &cr,
+                        c.lc_name.as_bytes() == b"closure" && mn.eq_ignore_ascii_case(b"__invoke"),
+                    ) {
                         match vm.closure_data(ob) {
                             Some(d) => {
                                 let m = Rc::new(crate::func::Method {
@@ -81,12 +120,33 @@ fn rp_construct(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
                                     scope: Rc::downgrade(&c),
                                     proto_scope: Rc::downgrade(&c),
                                 });
-                                FnRef { func: d.func, method: Some(m), class: Some(c.clone()), closure: None }
+                                FnRef {
+                                    func: d.func,
+                                    method: Some(m),
+                                    class: Some(c.clone()),
+                                    closure: None,
+                                }
                             }
-                            None => return Err(rexc(vm, &format!("Method {}::{}() does not exist", c.name, mn.to_string_lossy()))),
+                            None => {
+                                return Err(rexc(
+                                    vm,
+                                    &format!(
+                                        "Method {}::{}() does not exist",
+                                        c.name,
+                                        mn.to_string_lossy()
+                                    ),
+                                ))
+                            }
                         }
                     } else {
-                        return Err(rexc(vm, &format!("Method {}::{}() does not exist", c.name, mn.to_string_lossy())));
+                        return Err(rexc(
+                            vm,
+                            &format!(
+                                "Method {}::{}() does not exist",
+                                c.name,
+                                mn.to_string_lossy()
+                            ),
+                        ));
                     }
                 }
             }
@@ -94,11 +154,21 @@ fn rp_construct(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         Value::Object(ob) => {
             let c = object::class_of(ob).clone();
             if let Some(d) = vm.closure_data(ob) {
-                FnRef { func: d.func, method: None, class: None, closure: Some(ob.clone()) }
+                FnRef {
+                    func: d.func,
+                    method: None,
+                    class: None,
+                    closure: Some(ob.clone()),
+                }
             } else {
                 match c.find_method(b"__invoke").cloned() {
                     Some(m) => FnRef::method(&m, &c),
-                    None => return Err(rexc(vm, &format!("Method {}::__invoke() does not exist", c.name))),
+                    None => {
+                        return Err(rexc(
+                            vm,
+                            &format!("Method {}::__invoke() does not exist", c.name),
+                        ))
+                    }
                 }
             }
         }
@@ -117,7 +187,12 @@ fn rp_construct(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let idx = match a.at(1) {
         Value::Str(n) => match params.iter().position(|p| p.name == n) {
             Some(i) => i,
-            None => return Err(rexc(vm, "The parameter specified by its name could not be found")),
+            None => {
+                return Err(rexc(
+                    vm,
+                    "The parameter specified by its name could not be found",
+                ))
+            }
         },
         v => {
             let i = v.as_int().unwrap_or(0);
@@ -129,7 +204,12 @@ fn rp_construct(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             }
             match usize::try_from(i) {
                 Ok(i) if i < params.len() => i,
-                _ => return Err(rexc(vm, "The parameter specified by its offset could not be found")),
+                _ => {
+                    return Err(rexc(
+                        vm,
+                        "The parameter specified by its offset could not be found",
+                    ))
+                }
             }
         }
     };
@@ -142,7 +222,9 @@ fn rp_construct(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 fn rp_to_string(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let (f, idx, _) = this_param(vm, a)?;
     let req = idx < f.func.required() as usize;
-    Ok(Value::Str(ZStr::from(export::parameter_string(vm, &f, idx, req))))
+    Ok(Value::Str(ZStr::from(export::parameter_string(
+        vm, &f, idx, req,
+    ))))
 }
 
 fn rp_get_name(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -235,7 +317,12 @@ fn default_constant_name(vm: &Vm, f: &FnRef, p: &ParamInfo) -> Option<Option<Str
         let t = text.trim();
         let e = parse_const_expr(t)?;
         return match &e.kind {
-            ExprKind::Const(n) if !matches!(n.name.to_ascii_lowercase().as_slice(), b"true" | b"false" | b"null") => {
+            ExprKind::Const(n)
+                if !matches!(
+                    n.name.to_ascii_lowercase().as_slice(),
+                    b"true" | b"false" | b"null"
+                ) =>
+            {
                 Some(Some(t.to_string()))
             }
             ExprKind::ClassConst { .. } => Some(Some(t.to_string())),
@@ -263,7 +350,9 @@ fn default_constant_name(vm: &Vm, f: &FnRef, p: &ParamInfo) -> Option<Option<Str
             let cn = match class.as_ref() {
                 ClassRef::Name(n) => {
                     let lc = n.name.to_ascii_lowercase();
-                    if n.kind == NameKind::Unqualified && matches!(lc.as_slice(), b"self" | b"parent" | b"static") {
+                    if n.kind == NameKind::Unqualified
+                        && matches!(lc.as_slice(), b"self" | b"parent" | b"static")
+                    {
                         String::from_utf8_lossy(&n.name).into_owned()
                     } else {
                         join(n)
@@ -313,7 +402,7 @@ fn rp_get_type(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 }
 fn rp_allows_null(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let p = this_param(vm, a)?.2;
-    Ok(Value::Bool(p.ty.as_ref().is_none_or(|t| t.allows_null())))
+    Ok(Value::Bool(p.ty.as_ref().is_none_or(TypeDecl::allows_null)))
 }
 fn rp_by_ref(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     Ok(Value::Bool(this_param(vm, a)?.2.by_ref))
@@ -332,16 +421,27 @@ fn rp_is_promoted(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 }
 fn rp_is_array(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let p = this_param(vm, a)?.2;
-    Ok(Value::Bool(p.ty.as_ref().is_some_and(|t| t.mask & !mask::NULL == mask::ARRAY && !t.has_classes())))
+    Ok(Value::Bool(p.ty.as_ref().is_some_and(|t| {
+        t.mask & !mask::NULL == mask::ARRAY && !t.has_classes()
+    })))
 }
 fn rp_is_callable(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let p = this_param(vm, a)?.2;
-    Ok(Value::Bool(p.ty.as_ref().is_some_and(|t| t.mask & !mask::NULL == mask::CALLABLE && !t.has_classes())))
+    Ok(Value::Bool(p.ty.as_ref().is_some_and(|t| {
+        t.mask & !mask::NULL == mask::CALLABLE && !t.has_classes()
+    })))
 }
 fn rp_get_attributes(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let (f, _, p) = this_param(vm, a)?;
     let scope = f.scope(vm);
-    super::attribute::attributes_array_in(vm, &p.attributes, super::target::PARAMETER, scope.as_ref(), super::function::fn_file(&f), a)
+    super::attribute::attributes_array_in(
+        vm,
+        &p.attributes,
+        super::target::PARAMETER,
+        scope.as_ref(),
+        super::function::fn_file(&f),
+        a,
+    )
 }
 fn rp_get_declaring_function(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let (f, _, _) = this_param(vm, a)?;
@@ -358,7 +458,13 @@ fn rp_get_declaring_function(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         }
         Some(s) => {
             let name = f.name();
-            super::new_refl(vm, "ReflectionMethod", Refl::Function(f.clone()), Some(&name), Some(&s.name))
+            super::new_refl(
+                vm,
+                "ReflectionMethod",
+                Refl::Function(f.clone()),
+                Some(&name),
+                Some(&s.name),
+            )
         }
         None => function_value(vm, f),
     }
@@ -373,32 +479,53 @@ fn rp_get_declaring_class(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 fn rp_get_class(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     vm.deprecated("Method ReflectionParameter::getClass() is deprecated since 8.0, use ReflectionParameter::getType() instead")?;
     let (f, _, p) = this_param(vm, a)?;
-    let Some(t) = &p.ty else { return Ok(Value::Null) };
+    let Some(t) = &p.ty else {
+        return Ok(Value::Null);
+    };
     if t.classes.len() != 1 || !t.intersections.is_empty() || t.mask & !mask::NULL != 0 {
         return Ok(Value::Null);
     }
     let cn = t.classes[0].clone();
     let scope = f.scope(vm);
-    let c = if cn.eq_ignore_ascii_case(b"self") {
-        match scope {
-            Some(s) => s,
-            None => return Err(rexc(vm, "Parameter uses \"self\" as type but function is not a class member")),
-        }
-    } else if cn.eq_ignore_ascii_case(b"parent") {
-        match scope {
-            Some(s) => match &s.parent {
-                Some(p) => p.clone(),
-                None => return Err(rexc(vm, "Parameter uses \"parent\" as type although class does not have a parent")),
-            },
-            None => return Err(rexc(vm, "Parameter uses \"parent\" as type but function is not a class member")),
-        }
-    } else {
-        class_arg(vm, &Value::Str(cn), "Class")?
-    };
+    let c =
+        if cn.eq_ignore_ascii_case(b"self") {
+            match scope {
+                Some(s) => s,
+                None => {
+                    return Err(rexc(
+                        vm,
+                        "Parameter uses \"self\" as type but function is not a class member",
+                    ))
+                }
+            }
+        } else if cn.eq_ignore_ascii_case(b"parent") {
+            match scope {
+                Some(s) => match &s.parent {
+                    Some(p) => p.clone(),
+                    None => return Err(rexc(
+                        vm,
+                        "Parameter uses \"parent\" as type although class does not have a parent",
+                    )),
+                },
+                None => {
+                    return Err(rexc(
+                        vm,
+                        "Parameter uses \"parent\" as type but function is not a class member",
+                    ))
+                }
+            }
+        } else {
+            class_arg(vm, &Value::Str(cn), "Class")?
+        };
     class_value(vm, &c)
 }
 
-fn deprecated_wrap(vm: &mut Vm, a: &mut Args, which: &str, f: fn(&mut Vm, &mut Args) -> VmResult<Value>) -> VmResult<Value> {
+fn deprecated_wrap(
+    vm: &mut Vm,
+    a: &mut Args,
+    which: &str,
+    f: fn(&mut Vm, &mut Args) -> VmResult<Value>,
+) -> VmResult<Value> {
     vm.deprecated(&format!("Method ReflectionParameter::{which}() is deprecated since 8.0, use ReflectionParameter::getType() instead"))?;
     f(vm, a)
 }
@@ -422,14 +549,26 @@ pub(crate) fn register(vm: &mut Vm) {
         .flags(cflags::NOT_SERIALIZABLE | cflags::NO_CLONE)
         .prop("name", RO, Some("string"), None)
         .method("__clone(): void", PRIV, clone_error)
-        .method("__construct($function, int|string $param)", PUB, rp_construct)
+        .method(
+            "__construct($function, int|string $param)",
+            PUB,
+            rp_construct,
+        )
         .method("__toString(): string", PUB, rp_to_string)
         .method("getDocComment(): string|false", PUB, rp_get_doc_comment)
         .method("getName(): string", PUB, rp_get_name)
         .method("isPassedByReference(): bool", PUB, rp_by_ref)
         .method("canBePassedByValue(): bool", PUB, rp_by_val)
-        .method("getDeclaringFunction(): ReflectionFunctionAbstract", PUB, rp_get_declaring_function)
-        .method("getDeclaringClass(): ?ReflectionClass", PUB, rp_get_declaring_class)
+        .method(
+            "getDeclaringFunction(): ReflectionFunctionAbstract",
+            PUB,
+            rp_get_declaring_function,
+        )
+        .method(
+            "getDeclaringClass(): ?ReflectionClass",
+            PUB,
+            rp_get_declaring_class,
+        )
         .method("getClass(): ?ReflectionClass", PUB, rp_get_class)
         .method("hasType(): bool", PUB, rp_has_type)
         .method("getType(): ?ReflectionType", PUB, rp_get_type)
@@ -440,10 +579,22 @@ pub(crate) fn register(vm: &mut Vm) {
         .method("isOptional(): bool", PUB, rp_is_optional)
         .method("isDefaultValueAvailable(): bool", PUB, rp_has_default)
         .method("getDefaultValue(): mixed", PUB, rp_get_default)
-        .method("isDefaultValueConstant(): bool", PUB, rp_is_default_constant)
-        .method("getDefaultValueConstantName(): ?string", PUB, rp_get_default_constant_name)
+        .method(
+            "isDefaultValueConstant(): bool",
+            PUB,
+            rp_is_default_constant,
+        )
+        .method(
+            "getDefaultValueConstantName(): ?string",
+            PUB,
+            rp_get_default_constant_name,
+        )
         .method("isVariadic(): bool", PUB, rp_is_variadic)
         .method("isPromoted(): bool", PUB, rp_is_promoted)
-        .method("getAttributes(?string $name = null, int $flags = 0): array", PUB, rp_get_attributes)
+        .method(
+            "getAttributes(?string $name = null, int $flags = 0): array",
+            PUB,
+            rp_get_attributes,
+        )
         .register(vm);
 }

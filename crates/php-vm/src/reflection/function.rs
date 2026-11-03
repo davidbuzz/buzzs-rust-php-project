@@ -2,7 +2,10 @@
 //! `ReflectionMethod`.
 
 use super::class::{bind_args, class_arg, method_php_flags, split_args};
-use super::{class_value, method_value, new_refl, rexc, set_name_props, this, this_refl, zs, FnRef, Refl, PRIV, PUB, RO, STAT};
+use super::{
+    class_value, method_value, new_refl, rexc, set_name_props, this, this_refl, zs, FnRef, Refl,
+    PRIV, PUB, RO, STAT,
+};
 use crate::builtins::classbuilder::ClassBuilder;
 use crate::class::{cflags, Class};
 use crate::func::{flags, Args, Func, Method};
@@ -31,13 +34,15 @@ const TENTATIVE: &[(&str, &str)] = &[
 ];
 
 fn is_tentative(f: &FnRef) -> bool {
-    let (Func::Builtin(_), Some(m)) = (&f.func, &f.method) else { return false };
+    let (Func::Builtin(_), Some(m)) = (&f.func, &f.method) else {
+        return false;
+    };
     let scope = m.scope();
     let lc = String::from_utf8_lossy(&m.name.to_ascii_lowercase()).into_owned();
     if scope.lc_name.starts_with(b"reflect") {
-        return TENTATIVE
-            .iter()
-            .any(|(c, ms)| scope.lc_name.as_bytes() == c.as_bytes() && ms.split(' ').any(|x| x == lc));
+        return TENTATIVE.iter().any(|(c, ms)| {
+            scope.lc_name.as_bytes() == c.as_bytes() && ms.split(' ').any(|x| x == lc)
+        });
     }
     // Other internal classes: non-final methods of non-final classes have
     // tentative return types (php-src stubs), except magic methods and the
@@ -46,7 +51,10 @@ fn is_tentative(f: &FnRef) -> bool {
         && m.flags & flags::FINAL == 0
         && scope.flags & cflags::FINAL == 0
         && !lc.starts_with("__")
-        && !matches!(scope.lc_name.as_bytes(), b"unitenum" | b"backedenum" | b"stringable")
+        && !matches!(
+            scope.lc_name.as_bytes(),
+            b"unitenum" | b"backedenum" | b"stringable"
+        )
         && !scope.instance_of_name(b"throwable")
 }
 
@@ -62,7 +70,8 @@ pub(crate) fn param_doc_comment(f: &FnRef, idx: usize) -> Option<ZStr> {
     if u.hook_prop.is_some() && u.params.len() <= idx {
         return None;
     }
-    super::source::param_doc_comment(u.code.filename.as_bytes(), u.line_start, u.line_end, idx).map(ZStr::from)
+    super::source::param_doc_comment(u.code.filename.as_bytes(), u.line_start, u.line_end, idx)
+        .map(ZStr::from)
 }
 
 /// The file declaring a user function.
@@ -77,19 +86,29 @@ pub(crate) fn fn_file(f: &FnRef) -> Option<ZStr> {
 pub(crate) fn this_fn(vm: &mut Vm, a: &Args) -> VmResult<FnRef> {
     match this_refl(vm, a)? {
         Refl::Function(f) => Ok(f),
-        _ => Err(vm.make_throw("Error", "Internal error: Failed to retrieve the reflection object")),
+        _ => Err(vm.make_throw(
+            "Error",
+            "Internal error: Failed to retrieve the reflection object",
+        )),
     }
 }
 
 /// Static variables (closure `use` variables first) with their current
 /// values (`op_array.static_variables`).
 pub(crate) fn static_vars(vm: &Vm, f: &FnRef) -> Vec<(ZStr, Value)> {
-    let Func::User(u) = &f.func else { return Vec::new() };
+    let Func::User(u) = &f.func else {
+        return Vec::new();
+    };
     let mut out: Vec<(ZStr, Value)> = Vec::new();
     let cdata = f.closure.as_ref().and_then(|c| vm.closure_data(c));
     if u.is_closure() {
         for us in &u.uses {
-            let v = cdata.as_ref().and_then(|d| d.vars.iter().find(|(cv, _)| *cv == us.cv).map(|(_, v)| v.deref()));
+            let v = cdata.as_ref().and_then(|d| {
+                d.vars
+                    .iter()
+                    .find(|(cv, _)| *cv == us.cv)
+                    .map(|(_, v)| v.deref())
+            });
             match v {
                 Some(v) => out.push((us.name.clone(), v)),
                 None if !us.implicit => out.push((us.name.clone(), Value::Null)),
@@ -124,7 +143,12 @@ pub(crate) fn static_vars(vm: &Vm, f: &FnRef) -> Vec<(ZStr, Value)> {
         None => u.statics.borrow().clone(),
     };
     for (idx, cv, lit) in inits {
-        let name = u.code.cv_names.get(cv as usize).cloned().unwrap_or_default();
+        let name = u
+            .code
+            .cv_names
+            .get(cv as usize)
+            .cloned()
+            .unwrap_or_default();
         let v = match store.get(idx as usize).cloned().flatten() {
             Some(r) => Value::Reference(r),
             None => lit.unwrap_or(Value::Null),
@@ -171,7 +195,12 @@ fn rf_construct(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 fn rf_to_string(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let f = this_fn(vm, a)?;
     let scope = f.class.clone();
-    Ok(Value::Str(ZStr::from(super::export::function_string(vm, &f, scope.as_ref(), ""))))
+    Ok(Value::Str(ZStr::from(super::export::function_string(
+        vm,
+        &f,
+        scope.as_ref(),
+        "",
+    ))))
 }
 
 /// A real (non-fake) closure: `(fn_flags & (CLOSURE|FAKE_CLOSURE)) == CLOSURE`.
@@ -215,7 +244,9 @@ fn rf_get_parameters(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 fn rf_num_params(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let f = this_fn(vm, a)?;
-    Ok(Value::Int(i64::try_from(f.func.params().len()).unwrap_or(0)))
+    Ok(Value::Int(
+        i64::try_from(f.func.params().len()).unwrap_or(0),
+    ))
 }
 
 fn rf_num_required(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -263,10 +294,12 @@ macro_rules! rf_bool {
 rf_bool!(rf_is_variadic, |f| f.func.is_variadic());
 rf_bool!(rf_returns_ref, |f| f.func.flags() & flags::RETURN_REF != 0);
 rf_bool!(rf_is_generator, |f| f.func.flags() & flags::GENERATOR != 0);
-rf_bool!(rf_is_closure, |f| f.method.is_none() && (f.func.flags() & flags::CLOSURE != 0 || f.closure.is_some()));
+rf_bool!(rf_is_closure, |f| f.method.is_none()
+    && (f.func.flags() & flags::CLOSURE != 0 || f.closure.is_some()));
 rf_bool!(rf_is_internal, |f| !f.is_user());
 rf_bool!(rf_is_user, |f| f.is_user());
-rf_bool!(rf_is_deprecated, |f| f.func.flags() & flags::DEPRECATED != 0);
+rf_bool!(rf_is_deprecated, |f| f.func.flags() & flags::DEPRECATED
+    != 0);
 rf_bool!(rf_is_static, |f| f.flags() & flags::STATIC != 0);
 rf_bool!(rf_is_anonymous, |f| is_real_closure(&f));
 
@@ -317,7 +350,11 @@ fn rf_get_file_name(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 fn rf_get_attributes(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let f = this_fn(vm, a)?;
     let scope = f.scope(vm);
-    let t = if scope.is_some() && !is_real_closure(&f) { super::target::METHOD } else { super::target::FUNCTION };
+    let t = if scope.is_some() && !is_real_closure(&f) {
+        super::target::METHOD
+    } else {
+        super::target::FUNCTION
+    };
     let attrs = match &f.func {
         Func::User(u) => u.attributes.clone(),
         Func::Builtin(_) => Vec::new(),
@@ -374,7 +411,12 @@ fn rf_get_closure_called_class(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let f = this_fn(vm, a)?;
     if let Some(c) = &f.closure {
         if let Some(d) = vm.closure_data(c) {
-            let cls = d.this.as_ref().map(|t| object::class_of(t).clone()).or(d.called).or(d.scope);
+            let cls = d
+                .this
+                .as_ref()
+                .map(|t| object::class_of(t).clone())
+                .or(d.called)
+                .or(d.scope);
             if let Some(s) = cls {
                 return class_value(vm, &s);
             }
@@ -383,9 +425,16 @@ fn rf_get_closure_called_class(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     Ok(Value::Null)
 }
 
-fn call_function(vm: &mut Vm, f: &FnRef, args: Vec<Value>, named: Vec<(ZStr, Value)>) -> VmResult<Value> {
+fn call_function(
+    vm: &mut Vm,
+    f: &FnRef,
+    args: Vec<Value>,
+    named: Vec<(ZStr, Value)>,
+) -> VmResult<Value> {
     let mut call = match &f.closure {
-        Some(c) => vm.closure_call(c).unwrap_or_else(|| PendingCall::new(f.func.clone())),
+        Some(c) => vm
+            .closure_call(c)
+            .unwrap_or_else(|| PendingCall::new(f.func.clone())),
         None => PendingCall::new(f.func.clone()),
     };
     bind_args(vm, &mut call, args, named)?;
@@ -447,7 +496,11 @@ fn rf_is_disabled(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
 
 fn instantiate_method(vm: &mut Vm, a: &Args, is_ctor: bool) -> VmResult<(Rc<Class>, FnRef)> {
     let arg1 = a.at(0);
-    let arg2 = if is_ctor { a.get(1).filter(|v| !v.is_null()) } else { None };
+    let arg2 = if is_ctor {
+        a.get(1).filter(|v| !v.is_null())
+    } else {
+        None
+    };
     let (cls, mname, orig) = match (&arg1, arg2) {
         (Value::Object(o), Some(m)) => (object::class_of(o).clone(), vm.to_zstr(&m)?, Some(o.clone())),
         (Value::Object(_), None) => {
@@ -485,13 +538,28 @@ fn instantiate_method(vm: &mut Vm, a: &Args, is_ctor: bool) -> VmResult<(Rc<Clas
                     scope: Rc::downgrade(&cls),
                     proto_scope: Rc::downgrade(&cls),
                 });
-                return Ok((cls.clone(), FnRef { func: d.func, method: Some(m), class: Some(cls.clone()), closure: Some(o.clone()) }));
+                return Ok((
+                    cls.clone(),
+                    FnRef {
+                        func: d.func,
+                        method: Some(m),
+                        class: Some(cls.clone()),
+                        closure: Some(o.clone()),
+                    },
+                ));
             }
         }
     }
     match cls.find_method(mname.as_bytes()).cloned() {
         Some(m) => Ok((cls.clone(), FnRef::method(&m, &cls))),
-        None => Err(rexc(vm, &format!("Method {}::{}() does not exist", cls.name, mname.to_string_lossy()))),
+        None => Err(rexc(
+            vm,
+            &format!(
+                "Method {}::{}() does not exist",
+                cls.name,
+                mname.to_string_lossy()
+            ),
+        )),
     }
 }
 
@@ -513,10 +581,16 @@ fn rm_create_from_method_name(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let (_, f) = instantiate_method(vm, a, false)?;
     if let Some(c) = &a.called {
         if c.flags & (cflags::ABSTRACT | cflags::EXPLICIT_ABSTRACT) != 0 {
-            return Err(vm.make_throw("Error", &format!("Cannot instantiate abstract class {}", c.name)));
+            return Err(vm.make_throw(
+                "Error",
+                &format!("Cannot instantiate abstract class {}", c.name),
+            ));
         }
     }
-    let called = a.called.clone().map_or_else(|| "ReflectionMethod".to_string(), |c| c.name.to_string_lossy());
+    let called = a.called.clone().map_or_else(
+        || "ReflectionMethod".to_string(),
+        |c| c.name.to_string_lossy(),
+    );
     let scope_name = f.scope(vm).map(|c| c.name.clone()).unwrap_or_default();
     let n = f.name();
     new_refl(vm, &called, Refl::Function(f), Some(&n), Some(&scope_name))
@@ -539,15 +613,22 @@ rm_bool!(rm_is_final, |f| f & flags::FINAL != 0);
 
 fn rm_is_ctor(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let f = this_fn(vm, a)?;
-    let (Some(m), Some(c)) = (&f.method, &f.class) else { return Ok(Value::Bool(false)) };
+    let (Some(m), Some(c)) = (&f.method, &f.class) else {
+        return Ok(Value::Bool(false));
+    };
     Ok(Value::Bool(
         m.name.eq_ignore_ascii_case(b"__construct")
-            && c.magic.construct.as_ref().is_some_and(|ct| Rc::ptr_eq(&ct.scope(), &m.scope())),
+            && c.magic
+                .construct
+                .as_ref()
+                .is_some_and(|ct| Rc::ptr_eq(&ct.scope(), &m.scope())),
     ))
 }
 
 fn rm_is_dtor(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    Ok(Value::Bool(this_fn(vm, a)?.name().eq_ignore_ascii_case(b"__destruct")))
+    Ok(Value::Bool(
+        this_fn(vm, a)?.name().eq_ignore_ascii_case(b"__destruct"),
+    ))
 }
 
 fn rm_get_declaring_class(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -568,7 +649,12 @@ fn rm_get_modifiers(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 fn rm_has_prototype(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let f = this_fn(vm, a)?;
-    Ok(Value::Bool(f.method.as_ref().and_then(super::order::prototype).is_some()))
+    Ok(Value::Bool(
+        f.method
+            .as_ref()
+            .and_then(super::order::prototype)
+            .is_some(),
+    ))
 }
 
 fn rm_get_prototype(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -580,22 +666,46 @@ fn rm_get_prototype(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         }
         None => {
             let cn = f.class.as_ref().map(|c| c.name.clone()).unwrap_or_default();
-            Err(rexc(vm, &format!("Method {}::{}() does not have a prototype", cn, f.name())))
+            Err(rexc(
+                vm,
+                &format!("Method {}::{}() does not have a prototype", cn, f.name()),
+            ))
         }
     }
 }
 
-fn invoke_method(vm: &mut Vm, f: &FnRef, obj: Value, args: Vec<Value>, named: Vec<(ZStr, Value)>, variadic: bool) -> VmResult<Value> {
+fn invoke_method(
+    vm: &mut Vm,
+    f: &FnRef,
+    obj: Value,
+    args: Vec<Value>,
+    named: Vec<(ZStr, Value)>,
+    variadic: bool,
+) -> VmResult<Value> {
     let Some(scope) = f.scope(vm) else {
-        return Err(vm.make_throw("Error", "Internal error: Failed to retrieve the reflection object"));
+        return Err(vm.make_throw(
+            "Error",
+            "Internal error: Failed to retrieve the reflection object",
+        ));
     };
     let fl = f.flags();
     if fl & flags::ABSTRACT != 0 {
-        return Err(rexc(vm, &format!("Trying to invoke abstract method {}::{}()", scope.name, f.name())));
+        return Err(rexc(
+            vm,
+            &format!(
+                "Trying to invoke abstract method {}::{}()",
+                scope.name,
+                f.name()
+            ),
+        ));
     }
     let this = if fl & flags::STATIC != 0 {
         if !obj.is_null() {
-            let mn = if variadic { "ReflectionMethod::invoke" } else { "ReflectionMethod::invokeArgs" };
+            let mn = if variadic {
+                "ReflectionMethod::invoke"
+            } else {
+                "ReflectionMethod::invokeArgs"
+            };
             vm.deprecated(&format!(
                 "Calling {mn}() for static method {}::{}() does not need an object parameter",
                 scope.name,
@@ -607,7 +717,10 @@ fn invoke_method(vm: &mut Vm, f: &FnRef, obj: Value, args: Vec<Value>, named: Ve
         match obj {
             Value::Object(o) => {
                 if !object::class_of(&o).is_subclass_of(&scope) {
-                    return Err(rexc(vm, "Given object is not an instance of the class this method was declared in"));
+                    return Err(rexc(
+                        vm,
+                        "Given object is not an instance of the class this method was declared in",
+                    ));
                 }
                 if let Some(orig) = &f.closure {
                     if !php_runtime::Obj::ptr_eq(orig, &o) {
@@ -616,17 +729,29 @@ fn invoke_method(vm: &mut Vm, f: &FnRef, obj: Value, args: Vec<Value>, named: Ve
                             _ => false,
                         };
                         if !same {
-                            return Err(rexc(vm, "Given Closure is not the same as the reflected Closure"));
+                            return Err(rexc(
+                                vm,
+                                "Given Closure is not the same as the reflected Closure",
+                            ));
                         }
                     }
-                    let mut call = vm.closure_call(&o).unwrap_or_else(|| PendingCall::new(f.func.clone()));
+                    let mut call = vm
+                        .closure_call(&o)
+                        .unwrap_or_else(|| PendingCall::new(f.func.clone()));
                     bind_args(vm, &mut call, args, named)?;
                     return Ok(vm.call_pending(call)?.deref());
                 }
                 Some(o)
             }
             _ => {
-                return Err(rexc(vm, &format!("Trying to invoke non static method {}::{}() without an object", scope.name, f.name())));
+                return Err(rexc(
+                    vm,
+                    &format!(
+                        "Trying to invoke non static method {}::{}() without an object",
+                        scope.name,
+                        f.name()
+                    ),
+                ));
             }
         }
     };
@@ -634,7 +759,12 @@ fn invoke_method(vm: &mut Vm, f: &FnRef, obj: Value, args: Vec<Value>, named: Ve
         Some(t) => object::class_of(t).clone(),
         None => f.class.clone().unwrap_or_else(|| scope.clone()),
     };
-    let mut call = PendingCall { this, scope: Some(scope), called: Some(called), ..PendingCall::new(f.func.clone()) };
+    let mut call = PendingCall {
+        this,
+        scope: Some(scope),
+        called: Some(called),
+        ..PendingCall::new(f.func.clone())
+    };
     bind_args(vm, &mut call, args, named)?;
     Ok(vm.call_pending(call)?.deref())
 }
@@ -643,7 +773,10 @@ fn invoke_method(vm: &mut Vm, f: &FnRef, obj: Value, args: Vec<Value>, named: Ve
 fn object_or_null(vm: &mut Vm, f: &FnRef, a: &Args, method: &str) -> VmResult<Value> {
     if f.flags() & flags::ABSTRACT != 0 {
         let scope = f.scope(vm).map(|c| c.name.clone()).unwrap_or_default();
-        return Err(rexc(vm, &format!("Trying to invoke abstract method {}::{}()", scope, f.name())));
+        return Err(rexc(
+            vm,
+            &format!("Trying to invoke abstract method {}::{}()", scope, f.name()),
+        ));
     }
     let v = a.at(0);
     if !matches!(v, Value::Null | Value::Object(_)) {
@@ -661,7 +794,10 @@ fn object_or_null(vm: &mut Vm, f: &FnRef, a: &Args, method: &str) -> VmResult<Va
 fn rm_invoke(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let f = this_fn(vm, a)?;
     if !a.has(0) {
-        return Err(vm.make_throw("ArgumentCountError", "ReflectionMethod::invoke() expects at least 1 argument, 0 given"));
+        return Err(vm.make_throw(
+            "ArgumentCountError",
+            "ReflectionMethod::invoke() expects at least 1 argument, 0 given",
+        ));
     }
     let obj = object_or_null(vm, &f, a, "invoke")?;
     let args: Vec<Value> = a.values.iter().skip(1).cloned().collect();
@@ -698,7 +834,11 @@ fn rm_get_closure(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let f = this_fn(vm, a)?;
     let scope = f.scope(vm);
     if f.flags() & flags::STATIC != 0 {
-        let call = PendingCall { scope: scope.clone(), called: scope, ..PendingCall::new(f.func.clone()) };
+        let call = PendingCall {
+            scope: scope.clone(),
+            called: scope,
+            ..PendingCall::new(f.func.clone())
+        };
         return vm.make_closure_from_call(call);
     }
     let Some(Value::Object(o)) = a.get(0) else {
@@ -709,14 +849,22 @@ fn rm_get_closure(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     };
     if let Some(s) = &scope {
         if !object::class_of(&o).is_subclass_of(s) {
-            return Err(rexc(vm, "Given object is not an instance of the class this method was declared in"));
+            return Err(rexc(
+                vm,
+                "Given object is not an instance of the class this method was declared in",
+            ));
         }
     }
     if f.closure.is_some() && object::class_of(&o).lc_name.as_bytes() == b"closure" {
         return Ok(Value::Object(o));
     }
     let called = object::class_of(&o).clone();
-    let call = PendingCall { this: Some(o), scope, called: Some(called), ..PendingCall::new(f.func.clone()) };
+    let call = PendingCall {
+        this: Some(o),
+        scope,
+        called: Some(called),
+        ..PendingCall::new(f.func.clone())
+    };
     vm.make_closure_from_call(call)
 }
 
@@ -733,7 +881,12 @@ fn clone_error(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
 pub(crate) fn register_abstract(vm: &mut Vm) {
     ClassBuilder::new("ReflectionFunctionAbstract")
         .hooks(super::constant::hooks())
-        .flags(cflags::ABSTRACT | cflags::EXPLICIT_ABSTRACT | cflags::NOT_SERIALIZABLE | cflags::NO_CLONE)
+        .flags(
+            cflags::ABSTRACT
+                | cflags::EXPLICIT_ABSTRACT
+                | cflags::NOT_SERIALIZABLE
+                | cflags::NO_CLONE,
+        )
         .implements(vm, &["Reflector"])
         .prop("name", RO, Some("string"), None)
         .method("__clone(): void", PRIV, clone_error)
@@ -746,13 +899,33 @@ pub(crate) fn register_abstract(vm: &mut Vm) {
         .method("isVariadic(): bool", PUB, rf_is_variadic)
         .method("isStatic(): bool", PUB, rf_is_static)
         .method("getClosureThis(): ?object", PUB, rf_get_closure_this)
-        .method("getClosureScopeClass(): ?ReflectionClass", PUB, rf_get_closure_scope_class)
-        .method("getClosureCalledClass(): ?ReflectionClass", PUB, rf_get_closure_called_class)
-        .method("getClosureUsedVariables(): array", PUB, rf_get_closure_used_variables)
+        .method(
+            "getClosureScopeClass(): ?ReflectionClass",
+            PUB,
+            rf_get_closure_scope_class,
+        )
+        .method(
+            "getClosureCalledClass(): ?ReflectionClass",
+            PUB,
+            rf_get_closure_called_class,
+        )
+        .method(
+            "getClosureUsedVariables(): array",
+            PUB,
+            rf_get_closure_used_variables,
+        )
         .method("getDocComment(): string|false", PUB, rf_get_doc_comment)
         .method("getEndLine(): int|false", PUB, rf_get_end_line)
-        .method("getExtension(): ?ReflectionExtension", PUB, rf_get_extension)
-        .method("getExtensionName(): string|false", PUB, rf_get_extension_name)
+        .method(
+            "getExtension(): ?ReflectionExtension",
+            PUB,
+            rf_get_extension,
+        )
+        .method(
+            "getExtensionName(): string|false",
+            PUB,
+            rf_get_extension_name,
+        )
         .method("getFileName(): string|false", PUB, rf_get_file_name)
         .method("getName(): string", PUB, rf_get_name)
         .method("getNamespaceName(): string", PUB, rf_get_ns)
@@ -765,9 +938,21 @@ pub(crate) fn register_abstract(vm: &mut Vm) {
         .method("returnsReference(): bool", PUB, rf_returns_ref)
         .method("hasReturnType(): bool", PUB, rf_has_return_type)
         .method("getReturnType(): ?ReflectionType", PUB, rf_get_return_type)
-        .method("hasTentativeReturnType(): bool", PUB, rf_has_tentative_return_type)
-        .method("getTentativeReturnType(): ?ReflectionType", PUB, rf_get_tentative_return_type)
-        .method("getAttributes(?string $name = null, int $flags = 0): array", PUB, rf_get_attributes)
+        .method(
+            "hasTentativeReturnType(): bool",
+            PUB,
+            rf_has_tentative_return_type,
+        )
+        .method(
+            "getTentativeReturnType(): ?ReflectionType",
+            PUB,
+            rf_get_tentative_return_type,
+        )
+        .method(
+            "getAttributes(?string $name = null, int $flags = 0): array",
+            PUB,
+            rf_get_attributes,
+        )
         .register(vm);
 }
 
@@ -799,8 +984,16 @@ pub(crate) fn register_method(vm: &mut Vm) {
         .constant("IS_PRIVATE", Value::Int(4))
         .constant("IS_ABSTRACT", Value::Int(64))
         .constant("IS_FINAL", Value::Int(32))
-        .method("__construct(object|string $objectOrMethod, ?string $method = null)", PUB, rm_construct)
-        .method("createFromMethodName(string $method): static", STAT, rm_create_from_method_name)
+        .method(
+            "__construct(object|string $objectOrMethod, ?string $method = null)",
+            PUB,
+            rm_construct,
+        )
+        .method(
+            "createFromMethodName(string $method): static",
+            STAT,
+            rm_create_from_method_name,
+        )
         .method("__toString(): string", PUB, rf_to_string)
         .method("isPublic(): bool", PUB, rm_is_public)
         .method("isPrivate(): bool", PUB, rm_is_private)
@@ -809,13 +1002,33 @@ pub(crate) fn register_method(vm: &mut Vm) {
         .method("isFinal(): bool", PUB, rm_is_final)
         .method("isConstructor(): bool", PUB, rm_is_ctor)
         .method("isDestructor(): bool", PUB, rm_is_dtor)
-        .method("getClosure(?object $object = null): Closure", PUB, rm_get_closure)
+        .method(
+            "getClosure(?object $object = null): Closure",
+            PUB,
+            rm_get_closure,
+        )
         .method("getModifiers(): int", PUB, rm_get_modifiers)
-        .method("invoke(mixed $object = UNKNOWN, mixed ...$args): mixed", PUB, rm_invoke)
-        .method("invokeArgs(mixed $object = UNKNOWN, mixed $args = UNKNOWN): mixed", PUB, rm_invoke_args)
-        .method("getDeclaringClass(): ReflectionClass", PUB, rm_get_declaring_class)
+        .method(
+            "invoke(mixed $object = UNKNOWN, mixed ...$args): mixed",
+            PUB,
+            rm_invoke,
+        )
+        .method(
+            "invokeArgs(mixed $object = UNKNOWN, mixed $args = UNKNOWN): mixed",
+            PUB,
+            rm_invoke_args,
+        )
+        .method(
+            "getDeclaringClass(): ReflectionClass",
+            PUB,
+            rm_get_declaring_class,
+        )
         .method("getPrototype(): ReflectionMethod", PUB, rm_get_prototype)
         .method("hasPrototype(): bool", PUB, rm_has_prototype)
-        .method("setAccessible(bool $accessible): void", PUB, rm_set_accessible)
+        .method(
+            "setAccessible(bool $accessible): void",
+            PUB,
+            rm_set_accessible,
+        )
         .register(vm);
 }

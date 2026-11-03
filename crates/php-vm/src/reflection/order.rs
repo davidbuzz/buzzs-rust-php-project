@@ -59,11 +59,6 @@ impl PropMeta {
             internal: false,
         }
     }
-
-    /// Visibility bits.
-    pub fn visibility(&self) -> u32 {
-        self.flags & flags::VISIBILITY
-    }
 }
 
 /// The hooks of a property including those inherited from parent classes
@@ -74,27 +69,29 @@ fn merged_hooks(c: &Rc<Class>, pi: &PropInfo) -> Option<Rc<PropHooks>> {
         return Some(own);
     }
     let mut h = (*own).clone();
-    let mut p = c.parent.clone();
-    while let Some(pc) = p {
+    for pc in std::iter::successors(c.parent.clone(), |x| x.parent.clone()) {
         if let Some(ph) = pc.prop_map.get(&pi.name).and_then(|x| x.hooks.clone()) {
             if h.get.is_none() && ph.get.is_some() {
-                h.get = ph.get.clone();
+                h.get.clone_from(&ph.get);
                 h.final_get = ph.final_get;
             }
             if h.set.is_none() && ph.set.is_some() {
-                h.set = ph.set.clone();
+                h.set.clone_from(&ph.set);
                 h.final_set = ph.final_set;
             }
         }
-        p = pc.parent.clone();
     }
     Some(Rc::new(h))
 }
 
 /// Finds the declaration of a static property (for its attributes).
 fn static_decl_attrs(vm: &Vm, class: &ZStr, name: &ZStr) -> Vec<AttributeInfo> {
-    let Some(c) = vm.find_class(class.as_bytes()) else { return Vec::new() };
-    let Some(decl) = &c.decl else { return Vec::new() };
+    let Some(c) = vm.find_class(class.as_bytes()) else {
+        return Vec::new();
+    };
+    let Some(decl) = &c.decl else {
+        return Vec::new();
+    };
     if let Some(p) = decl.props.iter().find(|p| p.name == *name) {
         return p.attributes.clone();
     }
@@ -112,10 +109,17 @@ fn static_decl_attrs(vm: &Vm, class: &ZStr, name: &ZStr) -> Vec<AttributeInfo> {
 /// restricted to entries visible in `c` (no inherited private shadows).
 pub(crate) fn find_prop(vm: &Vm, c: &Rc<Class>, name: &[u8]) -> Option<PropMeta> {
     let key = ZStr::from(name);
-    let internal = |pi: &PropInfo| vm.find_class(pi.class.as_bytes()).is_some_and(|d| d.flags & crate::class::cflags::INTERNAL != 0 || d.is_enum());
+    let internal = |pi: &PropInfo| {
+        vm.find_class(pi.class.as_bytes())
+            .is_some_and(|d| d.flags & crate::class::cflags::INTERNAL != 0 || d.is_enum())
+    };
     if let Some(pi) = c.prop_map.get(&key) {
         if pi.visibility() != flags::PRIVATE || pi.class.eq_ignore_ascii_case(c.name.as_bytes()) {
-            return Some(PropMeta { internal: internal(pi), hooks: merged_hooks(c, pi), ..PropMeta::from_info(pi) });
+            return Some(PropMeta {
+                internal: internal(pi),
+                hooks: merged_hooks(c, pi),
+                ..PropMeta::from_info(pi)
+            });
         }
     }
     if let Some(sp) = c.find_static(name) {
@@ -201,15 +205,10 @@ pub(crate) fn props(vm: &Vm, c: &Rc<Class>) -> Vec<PropMeta> {
     let mut names = Vec::new();
     let mut seen = HashSet::new();
     prop_names(c, &mut names, &mut seen);
-    names.iter().filter_map(|n| find_prop(vm, c, n.as_bytes())).collect()
-}
-
-/// The number of inherited private properties ("shadows") of `c`.
-pub(crate) fn shadow_count(vm: &Vm, c: &Rc<Class>) -> usize {
-    let mut names = Vec::new();
-    let mut seen = HashSet::new();
-    prop_names(c, &mut names, &mut seen);
-    names.iter().filter(|n| find_prop(vm, c, n.as_bytes()).is_none()).count()
+    names
+        .iter()
+        .filter_map(|n| find_prop(vm, c, n.as_bytes()))
+        .collect()
 }
 
 /// The methods of `c` (`function_table`) in php-src order.
@@ -223,7 +222,7 @@ pub(crate) fn methods(c: &Rc<Class>) -> Vec<Rc<Method>> {
     };
     if let Some(decl) = &c.decl {
         for m in &decl.methods {
-            push(ZStr::from(m.name.to_ascii_lowercase()), &mut order);
+            push(m.name.to_ascii_lowercase(), &mut order);
         }
         if c.is_enum() {
             push(ZStr::from("cases"), &mut order);
@@ -234,14 +233,17 @@ pub(crate) fn methods(c: &Rc<Class>) -> Vec<Rc<Method>> {
         }
         if let Some(p) = &c.parent {
             for m in methods(p) {
-                push(ZStr::from(m.name.to_ascii_lowercase()), &mut order);
+                push(m.name.to_ascii_lowercase(), &mut order);
             }
         }
     }
     for lc in &c.method_order {
         push(lc.clone(), &mut order);
     }
-    order.iter().filter_map(|lc| c.methods.get(lc).cloned()).collect()
+    order
+        .iter()
+        .filter_map(|lc| c.methods.get(lc).cloned())
+        .collect()
 }
 
 /// The constants of `c` (`constants_table`) in php-src order.
@@ -290,13 +292,16 @@ pub(crate) fn consts(c: &Rc<Class>) -> Vec<Rc<ClassConst>> {
     for cc in &c.consts {
         push(&cc.name, &mut order);
     }
-    order.iter().filter_map(|n| c.find_const(n.as_bytes()).cloned()).collect()
+    order
+        .iter()
+        .filter_map(|n| c.find_const(n.as_bytes()).cloned())
+        .collect()
 }
 
 /// `common.prototype` of method `m`.
 pub(crate) fn prototype(m: &Rc<Method>) -> Option<Rc<Method>> {
     let scope = m.scope();
-    let lc = ZStr::from(m.name.to_ascii_lowercase());
+    let lc = m.name.to_ascii_lowercase();
     let mut proto: Option<Rc<Method>> = None;
     if let Some(p) = &scope.parent {
         if let Some(pm) = p.methods.get(&lc) {
@@ -309,7 +314,11 @@ pub(crate) fn prototype(m: &Rc<Method>) -> Option<Rc<Method>> {
             }
         }
     }
-    let inherited: Vec<Rc<Class>> = scope.parent.as_ref().map(|p| p.interfaces.clone()).unwrap_or_default();
+    let inherited: Vec<Rc<Class>> = scope
+        .parent
+        .as_ref()
+        .map(|p| p.interfaces.clone())
+        .unwrap_or_default();
     for i in &scope.interfaces {
         if Rc::ptr_eq(i, &scope) || inherited.iter().any(|x| Rc::ptr_eq(x, i)) {
             continue;

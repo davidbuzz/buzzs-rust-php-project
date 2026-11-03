@@ -12,7 +12,13 @@ use std::rc::Rc;
 
 /// `reflect_attributes`: the `getAttributes(?string $name, int $flags)`
 /// implementation.
-pub(crate) fn attributes_array(vm: &mut Vm, attrs: &[AttributeInfo], tgt: i64, scope: Option<&Rc<Class>>, a: &Args) -> VmResult<Value> {
+pub(crate) fn attributes_array(
+    vm: &mut Vm,
+    attrs: &[AttributeInfo],
+    tgt: i64,
+    scope: Option<&Rc<Class>>,
+    a: &Args,
+) -> VmResult<Value> {
     attributes_array_in(vm, attrs, tgt, scope, None, a)
 }
 
@@ -36,7 +42,10 @@ pub(crate) fn attributes_array_in(
     if fl & !2 != 0 {
         return Err(vm.make_throw(
             "ValueError",
-            &format!("{}(): Argument #2 ($flags) must be a valid attribute filter flag", a.func_name_qualified()),
+            &format!(
+                "{}(): Argument #2 ($flags) must be a valid attribute filter flag",
+                a.func_name_qualified()
+            ),
         ));
     }
     let mut base: Option<Rc<Class>> = None;
@@ -44,7 +53,12 @@ pub(crate) fn attributes_array_in(
     if let (Some(n), true) = (&name, fl & 2 != 0) {
         match vm.lookup_class(n)? {
             Some(c) => base = Some(c),
-            None => return Err(vm.make_throw("Error", &format!("Class \"{}\" not found", n.to_string_lossy()))),
+            None => {
+                return Err(vm.make_throw(
+                    "Error",
+                    &format!("Class \"{}\" not found", n.to_string_lossy()),
+                ))
+            }
         }
         name = None;
     }
@@ -61,9 +75,25 @@ pub(crate) fn attributes_array_in(
                 _ => continue,
             }
         }
-        let repeated = attrs.iter().filter(|x| x.name.eq_ignore_ascii_case(at.name.as_bytes())).count() > 1;
-        let r = AttrRef { info: at.clone(), target: tgt, repeated, scope: scope.cloned(), file: file.clone() };
-        out.push(super::new_refl(vm, "ReflectionAttribute", Refl::Attr(Rc::new(r)), Some(&at.name), None)?);
+        let repeated = attrs
+            .iter()
+            .filter(|x| x.name.eq_ignore_ascii_case(at.name.as_bytes()))
+            .count()
+            > 1;
+        let r = AttrRef {
+            info: at.clone(),
+            target: tgt,
+            repeated,
+            scope: scope.cloned(),
+            file: file.clone(),
+        };
+        out.push(super::new_refl(
+            vm,
+            "ReflectionAttribute",
+            Refl::Attr(Rc::new(r)),
+            Some(&at.name),
+            None,
+        )?);
     }
     Ok(Value::Array(ZArray::from_values(out)))
 }
@@ -79,7 +109,10 @@ impl QualifiedName for Args {
             Some(o) => {
                 let c = crate::object::class_of(o).clone();
                 let lc = ZStr::from(n.to_ascii_lowercase());
-                let owner = c.methods.get(&lc).map_or_else(|| c.name.clone(), |m| m.scope().name.clone());
+                let owner = c
+                    .methods
+                    .get(&lc)
+                    .map_or_else(|| c.name.clone(), |m| m.scope().name.clone());
                 format!("{}::{n}", owner.to_string_lossy())
             }
             None => n,
@@ -90,7 +123,10 @@ impl QualifiedName for Args {
 fn this_attr(vm: &mut Vm, a: &Args) -> VmResult<Rc<AttrRef>> {
     match this_refl(vm, a)? {
         Refl::Attr(r) => Ok(r),
-        _ => Err(vm.make_throw("Error", "Internal error: Failed to retrieve the reflection object")),
+        _ => Err(vm.make_throw(
+            "Error",
+            "Internal error: Failed to retrieve the reflection object",
+        )),
     }
 }
 
@@ -114,7 +150,11 @@ fn ra_is_repeated(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 }
 
 /// Evaluates the arguments of an attribute (`zend_get_attribute_value`).
-fn attr_args(vm: &mut Vm, info: &AttributeInfo, scope: Option<&Rc<Class>>) -> VmResult<(Vec<Value>, Vec<(ZStr, Value)>)> {
+fn attr_args(
+    vm: &mut Vm,
+    info: &AttributeInfo,
+    scope: Option<&Rc<Class>>,
+) -> VmResult<(Vec<Value>, Vec<(ZStr, Value)>)> {
     let mut pos = Vec::new();
     let mut named = Vec::new();
     for (n, e) in &info.args {
@@ -152,7 +192,9 @@ fn ra_to_string(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     if r.info.args.is_empty() {
         out.push(b'\n');
     } else {
-        out.extend_from_slice(format!(" {{\n  - Arguments [{}] {{\n", r.info.args.len()).as_bytes());
+        out.extend_from_slice(
+            format!(" {{\n  - Arguments [{}] {{\n", r.info.args.len()).as_bytes(),
+        );
         for (i, (n, e)) in r.info.args.iter().enumerate() {
             out.extend_from_slice(format!("    Argument #{i} [ ").as_bytes());
             if let Some(n) = n {
@@ -179,12 +221,19 @@ fn ra_to_string(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 /// The exported source of argument `i` of an attribute.
 fn source_arg(vm: &Vm, r: &AttrRef, i: usize) -> Option<Vec<u8>> {
-    let file = r.file.clone().or_else(|| vm.frames.iter().rev().find(|f| f.kind != crate::vm::FrameKind::Builtin).map(|f| f.code.filename.clone()))?;
+    let file = r.file.clone().or_else(|| {
+        vm.frames
+            .iter()
+            .rev()
+            .find(|f| f.kind != crate::vm::FrameKind::Builtin)
+            .map(|f| f.code.filename.clone())
+    })?;
     let args = super::source::attribute_args(file.as_bytes(), r.info.line, r.info.name.as_bytes())?;
     let a = args.get(i)?;
     let ns = super::export::namespace_of(&r.info.name);
     let e = match &a.kind {
-        php_parser::ast::ArgKind::Positional(x) | php_parser::ast::ArgKind::Named { value: x, .. } => x.clone(),
+        php_parser::ast::ArgKind::Positional(x)
+        | php_parser::ast::ArgKind::Named { value: x, .. } => x.clone(),
         _ => return None,
     };
     Some(super::export::export_expr_ns(e, &ns))
@@ -192,7 +241,15 @@ fn source_arg(vm: &Vm, r: &AttrRef, i: usize) -> Option<Vec<u8>> {
 
 /// `zend_get_attribute_target_names`.
 pub(crate) fn target_names(f: i64) -> String {
-    let names = ["class", "function", "method", "property", "class constant", "parameter", "constant"];
+    let names = [
+        "class",
+        "function",
+        "method",
+        "property",
+        "class constant",
+        "parameter",
+        "constant",
+    ];
     let mut v = Vec::new();
     for (i, n) in names.iter().enumerate() {
         if f & (1 << i) != 0 {
@@ -210,13 +267,24 @@ pub(crate) fn attribute_flags(vm: &mut Vm, c: &Rc<Class>) -> VmResult<Option<i64
             b"returntypewillchange" => Some(target::METHOD),
             b"sensitiveparameter" => Some(target::PARAMETER),
             b"override" => Some(target::METHOD | target::PROPERTY | target::CLASS_CONSTANT),
-            b"deprecated" => Some(target::METHOD | target::FUNCTION | target::CLASS_CONSTANT | target::CONSTANT | target::CLASS),
+            b"deprecated" => Some(
+                target::METHOD
+                    | target::FUNCTION
+                    | target::CLASS_CONSTANT
+                    | target::CONSTANT
+                    | target::CLASS,
+            ),
             b"nodiscard" => Some(target::METHOD | target::FUNCTION),
             b"delayedtargetvalidation" => Some(target::ALL),
             _ => None,
         });
     }
-    let Some(marker) = c.attributes.iter().find(|x| x.name.eq_ignore_ascii_case(b"Attribute")).cloned() else {
+    let Some(marker) = c
+        .attributes
+        .iter()
+        .find(|x| x.name.eq_ignore_ascii_case(b"Attribute"))
+        .cloned()
+    else {
         return Ok(None);
     };
     let Some((_, e)) = marker.args.first() else {
@@ -243,10 +311,19 @@ pub(crate) fn attribute_flags(vm: &mut Vm, c: &Rc<Class>) -> VmResult<Option<i64
 fn ra_new_instance(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let r = this_attr(vm, a)?;
     let Some(c) = vm.lookup_class(&r.info.name)? else {
-        return Err(vm.make_throw("Error", &format!("Attribute class \"{}\" not found", r.info.name)));
+        return Err(vm.make_throw(
+            "Error",
+            &format!("Attribute class \"{}\" not found", r.info.name),
+        ));
     };
     let Some(fl) = attribute_flags(vm, &c)? else {
-        return Err(vm.make_throw("Error", &format!("Attempting to use non-attribute class \"{}\" as attribute", r.info.name)));
+        return Err(vm.make_throw(
+            "Error",
+            &format!(
+                "Attempting to use non-attribute class \"{}\" as attribute",
+                r.info.name
+            ),
+        ));
     };
     if r.target & fl == 0 {
         return Err(vm.make_throw(
@@ -260,7 +337,10 @@ fn ra_new_instance(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         ));
     }
     if c.flags & cflags::INTERNAL == 0 && fl & target::IS_REPEATABLE == 0 && r.repeated {
-        return Err(vm.make_throw("Error", &format!("Attribute \"{}\" must not be repeated", r.info.name)));
+        return Err(vm.make_throw(
+            "Error",
+            &format!("Attribute \"{}\" must not be repeated", r.info.name),
+        ));
     }
     let (pos, named) = attr_args(vm, &r.info, r.scope.as_ref())?;
     let o = vm.instantiate(&c)?;
@@ -268,14 +348,25 @@ fn ra_new_instance(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         Some(m) => {
             if m.visibility() != flags::PUBLIC {
                 mark_ctor_failed(&o);
-                let vis = if m.visibility() == flags::PRIVATE { "private" } else { "protected" };
+                let vis = if m.visibility() == flags::PRIVATE {
+                    "private"
+                } else {
+                    "protected"
+                };
                 return Err(vm.make_throw(
                     "Error",
-                    &format!("Call to {vis} {}::__construct() from global scope", super::dn(&c.name)),
+                    &format!(
+                        "Call to {vis} {}::__construct() from global scope",
+                        super::dn(&c.name)
+                    ),
                 ));
             }
-            let mut call =
-                PendingCall { this: Some(o.clone()), scope: Some(m.scope()), called: Some(c.clone()), ..PendingCall::new(m.func.clone()) };
+            let mut call = PendingCall {
+                this: Some(o.clone()),
+                scope: Some(m.scope()),
+                called: Some(c.clone()),
+                ..PendingCall::new(m.func.clone())
+            };
             if let Err(e) = bind_args(vm, &mut call, pos, named) {
                 mark_ctor_failed(&o);
                 return Err(e);
@@ -287,7 +378,10 @@ fn ra_new_instance(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         }
         None => {
             if let Some((n, _)) = named.first() {
-                return Err(vm.make_throw("Error", &format!("Unknown named parameter ${}", n.to_string_lossy())));
+                return Err(vm.make_throw(
+                    "Error",
+                    &format!("Unknown named parameter ${}", n.to_string_lossy()),
+                ));
             }
         }
     }
@@ -322,4 +416,19 @@ pub(crate) fn register(vm: &mut Vm) {
         .method("__clone(): void", PRIV, clone_error)
         .method("__construct(mixed ...$args)", PRIV, ra_construct)
         .register(vm);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::target_names;
+
+    #[test]
+    fn target_name_lists() {
+        assert_eq!(target_names(1), "class");
+        assert_eq!(target_names(2 | 4), "function, method");
+        assert_eq!(
+            target_names(127),
+            "class, function, method, property, class constant, parameter, constant"
+        );
+    }
 }

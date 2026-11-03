@@ -21,14 +21,22 @@ fn program(file: &[u8]) -> Option<Rc<ast::Program>> {
     }
     let path = String::from_utf8_lossy(file).into_owned();
     let p = std::fs::read(&path).ok().and_then(|src| {
-        let opts = php_parser::ParseOptions { skip_shebang: true, ..Default::default() };
+        let opts = php_parser::ParseOptions {
+            skip_shebang: true,
+            ..Default::default()
+        };
         php_parser::parse(&src, &opts).ok().map(Rc::new)
     });
     CACHE.with(|c| c.borrow_mut().insert(file.to_vec(), p.clone()));
     p
 }
 
-fn find_in<'a>(stmts: &'a [Stmt], line: u32, ns: &mut Vec<u8>, out: &mut Option<(&'a ClassDecl, Vec<u8>)>) {
+fn find_in<'a>(
+    stmts: &'a [Stmt],
+    line: u32,
+    ns: &mut Vec<u8>,
+    out: &mut Option<(&'a ClassDecl, Vec<u8>)>,
+) {
     for s in stmts {
         if out.is_some() {
             return;
@@ -51,7 +59,10 @@ fn find_in<'a>(stmts: &'a [Stmt], line: u32, ns: &mut Vec<u8>, out: &mut Option<
                 }
             }
             StmtKind::Block(b) => find_in(b, line, ns, out),
-            StmtKind::If { branches, else_branch } => {
+            StmtKind::If {
+                branches,
+                else_branch,
+            } => {
                 for br in branches {
                     find_in(std::slice::from_ref(br.body.as_ref()), line, ns, out);
                 }
@@ -131,7 +142,10 @@ struct ParamCollector {
 
 impl ParamCollector {
     fn check(&mut self, start: u32, end: u32, params: &[ast::Param]) {
-        if self.found.is_none() && start == self.line && (end == self.end || self.end == 0 || end == 0) {
+        if self.found.is_none()
+            && start == self.line
+            && (end == self.end || self.end == 0 || end == 0)
+        {
             self.found = Some(params.to_vec());
         }
     }
@@ -185,7 +199,11 @@ impl php_parser::visit::Visitor for ParamCollector {
 /// `file:line-end`.
 pub(crate) fn param_doc_comment(file: &[u8], line: u32, end: u32, idx: usize) -> Option<Vec<u8>> {
     let p = program(file)?;
-    let mut v = ParamCollector { line, end, found: None };
+    let mut v = ParamCollector {
+        line,
+        end,
+        found: None,
+    };
     php_parser::visit::walk_stmts(&mut v, &p.statements);
     v.found?.get(idx)?.doc_comment.clone()
 }
@@ -263,10 +281,17 @@ pub(crate) fn attribute_args(file: &[u8], line: u32, name: &[u8]) -> Option<Vec<
             if let Some(StmtKind::Function(f)) = p.statements.first().map(|s| &s.kind) {
                 for grp in &f.attributes {
                     for at in &grp.attributes {
-                        let short = at.name.name.rsplit(|&c| c == b'\\').next().unwrap_or(&at.name.name);
+                        let short = at
+                            .name
+                            .name
+                            .rsplit(|&c| c == b'\\')
+                            .next()
+                            .unwrap_or(&at.name.name);
                         let want = name.rsplit(|&c| c == b'\\').next().unwrap_or(name);
                         if short.eq_ignore_ascii_case(want) {
-                            return Some(at.args.as_ref().map(|a| a.args.clone()).unwrap_or_default());
+                            return Some(
+                                at.args.as_ref().map(|a| a.args.clone()).unwrap_or_default(),
+                            );
                         }
                     }
                 }
@@ -280,10 +305,16 @@ pub(crate) fn attribute_args(file: &[u8], line: u32, name: &[u8]) -> Option<Vec<
 
 /// The attributes of enum case `name` (name, arguments) declared in the class
 /// at `file:line`, with the namespace of the declaration.
-pub(crate) fn case_attributes(file: &[u8], line: u32, name: &[u8]) -> Option<(ast::Attributes, Vec<u8>)> {
+pub(crate) fn case_attributes(
+    file: &[u8],
+    line: u32,
+    name: &[u8],
+) -> Option<(ast::Attributes, Vec<u8>)> {
     let (c, ns) = class_ast(file, line)?;
     c.members.iter().find_map(|m| match &m.kind {
-        ClassMemberKind::EnumCase(ec) if ec.name.name == name => Some((ec.attributes.clone(), ns.clone())),
+        ClassMemberKind::EnumCase(ec) if ec.name.name == name => {
+            Some((ec.attributes.clone(), ns.clone()))
+        }
         _ => None,
     })
 }
@@ -323,11 +354,44 @@ pub(crate) fn literal_value(e: &Expr) -> Option<php_runtime::Value> {
             }
             Value::Array(ZArray::from_table(t))
         }
-        ast::ExprKind::Unary { op: ast::UnaryOp::Minus, expr } => match literal_value(expr)? {
+        ast::ExprKind::Unary {
+            op: ast::UnaryOp::Minus,
+            expr,
+        } => match literal_value(expr)? {
             Value::Int(i) => Value::Int(-i),
             Value::Float(f) => Value::Float(-f),
             _ => return None,
         },
         _ => return None,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extracts_attribute_groups() {
+        assert_eq!(
+            attribute_group(b"  #[A(1, ']')] class C {}"),
+            Some(b"#[A(1, ']')]".to_vec())
+        );
+        assert_eq!(
+            attribute_group(b"#[A([1, 2]), B] function f() {}"),
+            Some(b"#[A([1, 2]), B]".to_vec())
+        );
+        assert_eq!(attribute_group(b"no attributes"), None);
+    }
+
+    #[test]
+    fn literal_values() {
+        let e = super::super::export::parse_const_expr("[1, 'a' => -2.5, true]").expect("parses");
+        let v = literal_value(&e).expect("literal");
+        let php_runtime::Value::Array(a) = v else {
+            panic!("array")
+        };
+        assert_eq!(a.len(), 3);
+        let e = super::super::export::parse_const_expr("FOO").expect("parses");
+        assert!(literal_value(&e).is_none());
+    }
 }
