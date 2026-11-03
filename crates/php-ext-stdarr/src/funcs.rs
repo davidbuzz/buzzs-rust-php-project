@@ -7,7 +7,7 @@
 
 use crate::bridge::{by_ref, callback, check_callable, rest, rt, with_rng};
 use crate::symtab::CallerSymbols;
-use php_runtime::{Value, ZStr};
+use php_runtime::{Value, ZArray, ZStr};
 use php_stdarr as sa;
 use php_vm::ext::{Args, VmResult};
 use php_vm::vm::FrameKind;
@@ -305,11 +305,32 @@ pub fn array_unshift(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 }
 
 pub fn array_splice(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    // `USED_RET()`: read before anything else can start another call.
+    let used_ret = vm.pending_call_dst.is_some() || !called_from_code(vm);
     let arr = by_ref(a, 0);
     let len = a.opt(2).map(|_| a.int(2));
     let rep = a.get(3);
     let r = sa::stack::array_splice(vm, &arr, a.int(1), len, rep.as_ref());
-    Ok(Value::Array(rt(vm, r)?))
+    let removed = rt(vm, r)?;
+    if used_ret {
+        return Ok(Value::Array(removed));
+    }
+    // Without a used result PHP destroys the removed elements while the
+    // array is being rebuilt (holding an extra reference to it), and fails
+    // if a destructor modified or replaced the array meanwhile.
+    let held = match &*arr.borrow() {
+        Value::Array(z) => Some(z.clone()),
+        _ => None,
+    };
+    drop(removed);
+    vm.run_released_destructors()?;
+    if let Some(held) = held {
+        let same = matches!(&*arr.borrow(), Value::Array(z) if z.addr() == held.addr());
+        if !same {
+            return Err(vm.throw("Error", "Array was modified during array_splice operation"));
+        }
+    }
+    Ok(Value::Array(ZArray::new()))
 }
 
 // ---------------------------------------------------------------------

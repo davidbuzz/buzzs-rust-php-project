@@ -58,7 +58,7 @@ const FUNCTIONS: &[(&str, NativeFn)] = &[
     ("array_product(array $array): int|float", f::array_product),
     ("min(mixed $value, mixed ...$values): mixed", f::min),
     ("max(mixed $value, mixed ...$values): mixed", f::max),
-    ("range($start, $end, int|float $step = 1): array", f::range),
+    ("range(string|int|float $start, string|int|float $end, int|float $step = 1): array", f::range),
     ("sort(array &$array, int $flags = SORT_REGULAR): true", f::sort),
     ("rsort(array &$array, int $flags = SORT_REGULAR): true", f::rsort),
     ("asort(array &$array, int $flags = SORT_REGULAR): true", f::asort),
