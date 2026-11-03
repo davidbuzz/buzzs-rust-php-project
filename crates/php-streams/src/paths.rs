@@ -62,7 +62,12 @@ pub fn expand_filepath_relative(path: &[u8], relative_to: Option<&[u8]>) -> Opti
     } else {
         sys::getcwd().unwrap_or_default()
     };
-    let out = normalize(&cwd, path);
+    let mut out = normalize(&cwd, path);
+    // CWD_FILEPATH: an existing path is resolved like realpath() (symbolic
+    // links followed).
+    if let Ok(real) = std::fs::canonicalize(crate::util::os_path(&out)) {
+        out = crate::util::path_bytes(&real);
+    }
     if out.len() >= MAXPATHLEN {
         return None;
     }
@@ -174,6 +179,8 @@ pub fn check_open_basedir_ex(path: &[u8], warn: bool) -> bool {
             return true;
         }
     }
+    // php_check_open_basedir_ex() leaves errno = EPERM.
+    sys::set_errno(libc::EPERM);
     if warn {
         diag::warning(diag::msg(&[
             b"open_basedir restriction in effect. File(",

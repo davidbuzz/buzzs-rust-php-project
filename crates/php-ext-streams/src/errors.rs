@@ -188,7 +188,9 @@ pub fn report(vm: &mut Vm, diags: Vec<Diagnostic>) {
         }
         Mode::Exception | Mode::Silent => {}
     }
-    if let Some(handler) = option(ctx.as_ref(), b"error_handler") {
+    // zend_call_function() does nothing while an exception is pending.
+    let handler = option(ctx.as_ref(), b"error_handler").filter(|_| !bridge::has_pending());
+    if let Some(handler) = handler {
         match errors_array(vm, &entries) {
             Ok(arr) => {
                 if vm.is_callable(&handler) {

@@ -35,7 +35,16 @@ pub fn error_text(err: &io::Error) -> String {
     strerror(errno_of(err))
 }
 
-/// The thread's current `errno`.
+/// Sets the calling thread's `errno`.
+pub fn set_errno(e: i32) {
+    // SAFETY: __errno_location() returns the calling thread's errno slot,
+    // valid for the thread's lifetime.
+    unsafe {
+        *libc::__errno_location() = e;
+    }
+}
+
+/// The calling thread's `errno`.
 pub fn last_errno() -> i32 {
     io::Error::last_os_error().raw_os_error().unwrap_or(0)
 }
