@@ -2081,7 +2081,7 @@ Zend/tests/function_arguments/variadic_argument_type_error.phpt	0	OK
 Zend/tests/function_call_array_item.phpt	0	OK					
 Zend/tests/function_exists_basic.phpt	0	OK					
 Zend/tests/function_outside_namespace.phpt	0	FATAL	5	Namespace declaration statement has to be the very first statement or after any declare call in the script	Fatal error	%d	Namespace declaration statement has to be the very first statement or after any declare call in the script
-Zend/tests/function_redecl.phpt	0	FATAL	3	Cannot redeclare f() (previously declared in /tmp/php-parser-lint-651512/t2082.php:2)	Fatal error	%d	Cannot redeclare function f() (previously declared in %s:%d)
+Zend/tests/function_redecl.phpt	0	FATAL	3	Cannot redeclare f() (previously declared in /tmp/php-parser-lint-692738/t2082.php:2)	Fatal error	%d	Cannot redeclare function f() (previously declared in %s:%d)
 Zend/tests/functions/007.phpt	0	OK					
 Zend/tests/functions/readonly_as_method_name_is_ok.phpt	0	OK					
 Zend/tests/functions/zend_call_function_deprecated_frame.phpt	0	OK					
@@ -4543,7 +4543,7 @@ Zend/tests/str_offset_007.phpt	0	OK
 Zend/tests/str_offset_008.phpt	0	OK					
 Zend/tests/strcasecmp_basic.phpt	0	OK					
 Zend/tests/streams/bug38779.phpt	0	OK					
-Zend/tests/streams/bug38779_1.phpt	0	OK			Parse error	%d	%s error%
+Zend/tests/streams/bug38779_1.phpt	0	OK			Parse error	%d	%s error
 Zend/tests/streams/bug41421.phpt	0	OK					
 Zend/tests/streams/bug78340.phpt	0	OK					
 Zend/tests/streams/gh10072.phpt	0	OK					
@@ -10283,7 +10283,7 @@ tests/lang/bug20175.phpt	0	OK
 tests/lang/bug21094.phpt	0	OK					
 tests/lang/bug21600.phpt	0	OK					
 tests/lang/bug21669.phpt	0	OK					
-tests/lang/bug21820.phpt	0	PARSE	6	syntax error, unexpected string content "", expecting "-" or identifier or variable or number	Parse error	%d	%s error, %sidentifier%svariable%snumber%
+tests/lang/bug21820.phpt	0	PARSE	6	syntax error, unexpected string content "", expecting "-" or identifier or variable or number	Parse error	%d	%s error, %sidentifier%svariable%snumber
 tests/lang/bug21849.phpt	0	OK					
 tests/lang/bug21961.phpt	0	OK					
 tests/lang/bug22231.phpt	0	OK					

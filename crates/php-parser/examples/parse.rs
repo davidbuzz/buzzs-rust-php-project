@@ -15,7 +15,8 @@ fn main() {
                         if debug {
                             println!("{p:#?}");
                         } else if export {
-                            let _ = &p; println!("(export not yet available)");
+                            let _ = &p;
+                            println!("(export not yet available)");
                         } else {
                             println!("{path}: OK");
                         }

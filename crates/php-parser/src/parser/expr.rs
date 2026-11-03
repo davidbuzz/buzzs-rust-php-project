@@ -378,7 +378,12 @@ impl Parser<'_> {
         ))
     }
 
-    fn prefix(&mut self, start: Span, min: u8, f: impl FnOnce(Box<Expr>) -> ExprKind) -> PResult<Expr> {
+    fn prefix(
+        &mut self,
+        start: Span,
+        min: u8,
+        f: impl FnOnce(Box<Expr>) -> ExprKind,
+    ) -> PResult<Expr> {
         let operand = self.parse_expr_bp(min)?;
         let span = self.span_from(start);
         Ok(Expr::new(f(bx(operand)), span))
@@ -489,7 +494,10 @@ impl Parser<'_> {
                     T::Require => IncludeKind::Require,
                     _ => IncludeKind::RequireOnce,
                 };
-                self.prefix(start, prec::INCLUDE + 1, |e| ExprKind::Include { kind, expr: e })
+                self.prefix(start, prec::INCLUDE + 1, |e| ExprKind::Include {
+                    kind,
+                    expr: e,
+                })
             }
             T::Clone => self.parse_clone(),
             T::List => {
@@ -628,6 +636,18 @@ impl Parser<'_> {
             Err(self.unexpected(&[T::LParen]))
         } else {
             Err(self.unexpected(&[]))
+        }
+    }
+
+    /// Parses a `variable` that must be followed by one of `follow`; any
+    /// other token is reported after bison's reduction to
+    /// `array_object_dereferenceable`.
+    pub(crate) fn parse_variable_followed_by(&mut self, follow: &[T]) -> PResult<Expr> {
+        let v = self.parse_variable()?;
+        if follow.contains(&self.peek()) {
+            Ok(v)
+        } else {
+            Err(self.unexpected(AOD_FOLLOW))
         }
     }
 
@@ -779,7 +799,10 @@ impl Parser<'_> {
                 let parts = self.parse_encaps_list(T::DoubleQuote)?;
                 self.expect1(T::DoubleQuote)?;
                 let span = self.span_from(start);
-                Ok((Expr::new(ExprKind::Interpolated(parts), span), Cat::Callable))
+                Ok((
+                    Expr::new(ExprKind::Interpolated(parts), span),
+                    Cat::Callable,
+                ))
             }
             T::Backtick => {
                 self.bump();
@@ -796,9 +819,7 @@ impl Parser<'_> {
                 self.bump();
                 let kind = match self.peek() {
                     T::EndHeredoc => ExprKind::String(Vec::new()),
-                    T::EncapsedAndWhitespace
-                        if self.peek_nth(1) == T::EndHeredoc =>
-                    {
+                    T::EncapsedAndWhitespace if self.peek_nth(1) == T::EndHeredoc => {
                         let t = self.bump();
                         match t.value {
                             Some(TokenValue::Str(s)) => ExprKind::String(s),
@@ -1073,7 +1094,7 @@ impl Parser<'_> {
             }
             _ if is_identifier_token(k) => {
                 let t = self.bump();
-                let ident = self.ident_of(&t);
+                let ident = self.ident_checked(&t)?;
                 if self.peek() == T::LParen {
                     let args = self.parse_argument_list()?;
                     let span = self.span_from(start);
@@ -1117,7 +1138,7 @@ impl Parser<'_> {
         match self.peek() {
             T::String => {
                 let t = self.bump();
-                Ok(MemberName::Ident(self.ident_of(&t)))
+                Ok(MemberName::Ident(self.ident_checked(&t)?))
             }
             T::LBrace => {
                 self.bump();
@@ -1236,7 +1257,8 @@ impl Parser<'_> {
         } else {
             Vec::new()
         };
-        if !attrs.is_empty() || matches!(self.peek(), T::Class | T::Abstract | T::Final | T::Readonly)
+        if !attrs.is_empty()
+            || matches!(self.peek(), T::Class | T::Abstract | T::Final | T::Readonly)
         {
             let (decl, args) = self.parse_anonymous_class(attrs)?;
             let span = self.span_from(start);
@@ -1423,15 +1445,45 @@ impl Parser<'_> {
     }
 
     fn parse_argument(&mut self) -> PResult<Arg> {
+        let k = self.peek();
+        // A keyword at the start of an argument may also be the name of a
+        // named argument: if the keyword's own rule fails on the very next
+        // token, bison has reduced it to `identifier` and expects `:`.
+        let saved = self.colon_hint;
+        if matches!(
+            k,
+            T::New
+                | T::Clone
+                | T::Print
+                | T::Include
+                | T::IncludeOnce
+                | T::Require
+                | T::RequireOnce
+                | T::Eval
+                | T::Isset
+                | T::Empty
+                | T::Array
+                | T::List
+                | T::Throw
+                | T::Match
+                | T::Static
+                | T::Readonly
+        ) {
+            self.colon_hint = Some(self.cur_span().start);
+        }
+        let r = self.parse_argument_inner();
+        self.colon_hint = saved;
+        r
+    }
+
+    fn parse_argument_inner(&mut self) -> PResult<Arg> {
         let start = self.cur_span();
         let k = self.peek();
         if is_identifier_token(k) && self.peek_nth(1) == T::Colon {
             let t = self.bump();
-            let name = self.ident_of(&t);
+            let name = self.ident_checked(&t)?;
             self.bump(); // :
-            if self.peek() == T::Question
-                && matches!(self.peek_nth(1), T::Comma | T::RParen)
-            {
+            if self.peek() == T::Question && matches!(self.peek_nth(1), T::Comma | T::RParen) {
                 self.bump();
                 return Ok(Arg {
                     kind: ArgKind::NamedPlaceholder(name),
@@ -1538,7 +1590,7 @@ impl Parser<'_> {
         match self.peek() {
             T::AmpersandFollowedByVarOrVararg | T::AmpersandNotFollowedByVarOrVararg => {
                 self.bump();
-                let value = self.parse_variable()?;
+                let value = self.parse_variable_followed_by(&[T::Comma, T::RBracket, T::RParen])?;
                 return Ok(ArrayItem {
                     key: None,
                     value,
@@ -1584,7 +1636,10 @@ impl Parser<'_> {
         let (value, by_ref) = match self.peek() {
             T::AmpersandFollowedByVarOrVararg | T::AmpersandNotFollowedByVarOrVararg => {
                 self.bump();
-                (self.parse_variable()?, true)
+                (
+                    self.parse_variable_followed_by(&[T::Comma, T::RBracket, T::RParen])?,
+                    true,
+                )
             }
             T::List => {
                 let l = self.parse_list_pattern()?;
@@ -1656,13 +1711,28 @@ impl Parser<'_> {
                     parts.push(self.parse_encaps_var()?);
                 }
                 _ => {
-                    return Err(self.unexpected(&[
-                        T::Variable,
-                        T::EncapsedAndWhitespace,
-                        T::DollarOpenCurlyBraces,
-                        T::CurlyOpen,
-                        close,
-                    ]))
+                    let only_literal =
+                        parts.len() == 1 && matches!(parts[0], InterpPart::Literal(..));
+                    let expected: &[T] = match (close, parts.is_empty(), only_literal) {
+                        (T::DoubleQuote, true, _) => &[
+                            T::EncapsedAndWhitespace,
+                            T::Variable,
+                            T::DollarOpenCurlyBraces,
+                            T::CurlyOpen,
+                        ],
+                        (T::DoubleQuote, _, true) => {
+                            &[T::Variable, T::DollarOpenCurlyBraces, T::CurlyOpen]
+                        }
+                        (T::EndHeredoc, _, true) => &[
+                            T::Variable,
+                            T::EndHeredoc,
+                            T::DollarOpenCurlyBraces,
+                            T::CurlyOpen,
+                        ],
+                        (T::Backtick, true, _) | (T::Backtick, _, true) => &[T::Backtick],
+                        _ => &[],
+                    };
+                    return Err(self.unexpected(expected));
                 }
             }
         }
@@ -1694,7 +1764,7 @@ impl Parser<'_> {
                     T::ObjectOperator | T::NullsafeObjectOperator => {
                         let nullsafe = self.bump().kind == T::NullsafeObjectOperator;
                         let t = self.expect1(T::String)?;
-                        let name = MemberName::Ident(self.ident_of(&t));
+                        let name = MemberName::Ident(self.ident_checked(&t)?);
                         let span = self.span_from(start);
                         Ok(InterpPart::Expr {
                             expr: Expr::new(
@@ -1760,10 +1830,7 @@ impl Parser<'_> {
             _ => {
                 // T_CURLY_OPEN variable '}'
                 self.bump();
-                let v = self.parse_variable()?;
-                if self.peek() != T::RBrace {
-                    return Err(self.unexpected(&[]));
-                }
+                let v = self.parse_variable_followed_by(&[T::RBrace])?;
                 self.bump();
                 Ok(InterpPart::Expr {
                     expr: v,

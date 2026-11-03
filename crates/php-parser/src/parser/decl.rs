@@ -72,9 +72,7 @@ fn modifier_token_to_flag(target: ModifierTarget, k: T) -> Result<Modifiers, Str
         T::Final => Some(Modifiers::FINAL),
         T::Static if matches!(target, M::Property | M::Method) => Some(Modifiers::STATIC),
         T::PublicSet if matches!(target, M::Property | M::Cpp) => Some(Modifiers::PUBLIC_SET),
-        T::ProtectedSet if matches!(target, M::Property | M::Cpp) => {
-            Some(Modifiers::PROTECTED_SET)
-        }
+        T::ProtectedSet if matches!(target, M::Property | M::Cpp) => Some(Modifiers::PROTECTED_SET),
         T::PrivateSet if matches!(target, M::Property | M::Cpp) => Some(Modifiers::PRIVATE_SET),
         _ => None,
     };
@@ -86,10 +84,7 @@ fn modifier_token_to_flag(target: ModifierTarget, k: T) -> Result<Modifiers, Str
             M::Cpp => "parameter",
             M::PropertyHook => "property hook",
         };
-        format!(
-            "Cannot use the {} modifier on a {member}",
-            modifier_name(k)
-        )
+        format!("Cannot use the {} modifier on a {member}", modifier_name(k))
     })
 }
 
@@ -508,7 +503,7 @@ impl Parser<'_> {
             false
         };
         let nt = self.bump(); // T_STRING or T_READONLY
-        let name = self.ident_of(&nt);
+        let name = self.ident_checked(&nt)?;
         self.peek();
         let doc_comment = self.take_doc_comment();
         if self.peek() != T::LParen {
@@ -691,7 +686,7 @@ impl Parser<'_> {
         };
         let line = kw.end_line;
         let name_tok = self.expect1(T::String)?;
-        let name = self.ident_of(&name_tok);
+        let name = self.ident_checked(&name_tok)?;
         let mut extends = None;
         let mut implements = Vec::new();
         let mut backing_type = None;
@@ -855,7 +850,7 @@ impl Parser<'_> {
                 return Err(self.unexpected(&[]));
             }
             let t = self.bump();
-            let name = self.ident_of(&t);
+            let name = self.ident_checked(&t)?;
             let value = if self.eat(T::Equals).is_some() {
                 Some(self.parse_expr()?)
             } else {
@@ -949,7 +944,7 @@ impl Parser<'_> {
                 return Err(self.unexpected(&[]));
             }
             let t = self.bump();
-            let name = self.ident_of(&t);
+            let name = self.ident_checked(&t)?;
             self.expect1(T::Equals)?;
             let value = self.parse_expr()?;
             self.peek();
@@ -1065,7 +1060,7 @@ impl Parser<'_> {
             false
         };
         let nt = self.expect1(T::String)?;
-        let name = self.ident_of(&nt);
+        let name = self.ident_checked(&nt)?;
         self.peek();
         let doc_comment = self.take_doc_comment();
         let line = self.prev_end_line;
@@ -1131,7 +1126,7 @@ impl Parser<'_> {
             return Err(self.unexpected(&[]));
         }
         let nt: Tok = self.bump();
-        let name = self.ident_of(&nt);
+        let name = self.ident_checked(&nt)?;
         self.peek();
         let doc_comment = self.take_doc_comment();
         if self.peek() != T::LParen {
@@ -1178,7 +1173,7 @@ impl Parser<'_> {
             let t = self.bump();
             return Ok(TraitMethodRef {
                 trait_name: Some(trait_name),
-                method: self.ident_of(&t),
+                method: self.ident_checked(&t)?,
                 span: self.span_from(start),
             });
         }
@@ -1188,7 +1183,7 @@ impl Parser<'_> {
         let t = self.bump();
         Ok(TraitMethodRef {
             trait_name: None,
-            method: self.ident_of(&t),
+            method: self.ident_checked(&t)?,
             span: self.span_from(start),
         })
     }
@@ -1216,7 +1211,7 @@ impl Parser<'_> {
                         .map_err(|m| self.action_error(m))?;
                     let alias = if is_identifier_token(self.peek()) {
                         let t = self.bump();
-                        Some(self.ident_of(&t))
+                        Some(self.ident_checked(&t)?)
                     } else {
                         None
                     };
@@ -1231,7 +1226,7 @@ impl Parser<'_> {
                     TraitAdaptation::Alias {
                         method,
                         modifiers: Modifiers::NONE,
-                        alias: Some(self.ident_of(&t)),
+                        alias: Some(self.ident_checked(&t)?),
                         span: self.span_from(start),
                     }
                 } else {

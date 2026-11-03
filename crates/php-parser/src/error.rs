@@ -62,7 +62,13 @@ impl ParseError {
 
 impl fmt::Display for ParseError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}: {} on line {}", self.label(), self.message, self.line)
+        write!(
+            f,
+            "{}: {} on line {}",
+            self.label(),
+            self.message,
+            self.line
+        )
     }
 }
 
@@ -368,16 +374,25 @@ mod tests {
             describe_unexpected(TokenKind::StartHeredoc, b"<<<\"MYLABEL\"\n"),
             "heredoc start \"<<<\"MYLABEL\""
         );
-        assert_eq!(describe_unexpected(TokenKind::Echo, b"<?="), "token \"echo\"");
+        assert_eq!(
+            describe_unexpected(TokenKind::Echo, b"<?="),
+            "token \"echo\""
+        );
         assert_eq!(
             describe_unexpected(TokenKind::BadCharacter, b"\x7f"),
             "character 0x7F"
         );
         assert_eq!(
-            describe_unexpected(TokenKind::String, b"abcdefghijabcdefghijabcdefghijabcdefghij"),
+            describe_unexpected(
+                TokenKind::String,
+                b"abcdefghijabcdefghijabcdefghijabcdefghij"
+            ),
             "identifier \"abcdefghijabcdefghijabcdefghij...\""
         );
-        assert_eq!(describe_unexpected(TokenKind::NsSeparator, b"\\"), "token \"\\\"");
+        assert_eq!(
+            describe_unexpected(TokenKind::NsSeparator, b"\\"),
+            "token \"\\\""
+        );
         assert_eq!(
             describe_unexpected(TokenKind::DoubleQuote, b"\""),
             "double-quote mark"

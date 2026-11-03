@@ -84,9 +84,12 @@ fn expected_errors(secs: &BTreeMap<String, Vec<u8>>) -> Vec<(String, String, Str
                 if let Some(pos) = rest.rfind(" on line ") {
                     let before = &rest[..pos];
                     let lineno = rest[pos + 9..].trim().to_owned();
-                    let ipos = before.rfind(" in ").or_else(|| before.rfind("%sin ").map(|p| p + 1));
-                    if let Some(ipos) = ipos {
-                        let file = &before[ipos + 4..];
+                    let ipos = before
+                        .rfind(" in ")
+                        .map(|p| (p, p + 4))
+                        .or_else(|| before.rfind("%sin ").map(|p| (p, p + 5)));
+                    if let Some((ipos, fpos)) = ipos {
+                        let file = &before[fpos..];
                         if file.contains("eval()'d") || file.contains("://") {
                             continue;
                         }
@@ -226,10 +229,12 @@ fn parse_line(s: &str) -> Option<u32> {
     s.parse().ok()
 }
 
-fn expected_of(cols: &[&str]) -> (Expected, bool) {
+fn expected_of(cols: &[&str], runtime_code: bool) -> (Expected, bool) {
     let (status, pline, pmsg, ek, el, em) = (cols[2], cols[3], cols[4], cols[5], cols[6], cols[7]);
-    // EXPECT says parse error: authoritative (php-src master).
-    if ek == "Parse error" {
+    // EXPECT says parse error: authoritative (php-src master), unless the
+    // oracle accepts the file, in which case the error comes from code
+    // compiled at runtime (eval, include of a stream).
+    if ek == "Parse error" && !(status == "OK" && runtime_code) {
         let line = if status == "PARSE" && wildcard_match(em, pmsg) {
             parse_line(pline)
         } else {
@@ -237,7 +242,11 @@ fn expected_of(cols: &[&str]) -> (Expected, bool) {
         };
         return (Expected::Parse(em.to_owned(), line), true);
     }
-    let fatal = if ek == "Fatal error" { vec![em.to_owned()] } else { Vec::new() };
+    let fatal = if ek == "Fatal error" {
+        vec![em.to_owned()]
+    } else {
+        Vec::new()
+    };
     match status {
         // Newer syntax than the oracle PHP understands.
         "PARSE" if fatal.is_empty() => (Expected::Ok(fatal), false),
@@ -313,7 +322,10 @@ fn corpus_agreement() {
             eprintln!("{}", cols[0]);
         }
         let result = std::panic::catch_unwind(|| php_parser::parse(file, &opts));
-        let (expected, verified) = expected_of(&cols);
+        let runtime_code = [&b"eval("[..], b"include", b"require", b"stream_wrapper"]
+            .iter()
+            .any(|w| file.windows(w.len()).any(|x| x == *w));
+        let (expected, verified) = expected_of(&cols, runtime_code);
         total += 1;
         let cat = match (&expected, verified) {
             (Expected::Ok(_), true) => "ok",
@@ -357,7 +369,11 @@ fn corpus_agreement() {
                 Ok(_) => "OK".to_owned(),
                 Err(e) => format!("{}: {} (line {})", e.label(), e.message, e.line),
             };
-            let _ = writeln!(report, "{}\n    expected {expected:?}\n    got      {got}", cols[0]);
+            let _ = writeln!(
+                report,
+                "{}\n    expected {expected:?}\n    got      {got}",
+                cols[0]
+            );
         }
     }
     if let Ok(p) = std::env::var("PARSER_CORPUS_REPORT") {

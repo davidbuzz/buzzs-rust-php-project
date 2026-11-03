@@ -75,7 +75,7 @@ impl Parser<'_> {
     }
 
     /// A `top_statement_list` inside `namespace X { ... }`.
-    fn parse_top_list_until_brace(&mut self) -> PResult<Vec<Stmt>> {
+    fn parse_top_list_until_brace(&mut self, open: Span) -> PResult<Vec<Stmt>> {
         let mut stmts = Vec::new();
         loop {
             let k = self.peek();
@@ -89,8 +89,15 @@ impl Parser<'_> {
             let halted = matches!(s.kind, StmtKind::HaltCompiler { .. });
             stmts.push(s);
             if halted {
-                // The lexer has stopped: report end of file.
-                return Err(self.unexpected(&[]));
+                // The scanner stopped inside the braces: at the end of input
+                // it reports the unclosed `{`.
+                let line = self.prev_end_line;
+                let msg = if open.line == line {
+                    "Unclosed '{'".to_owned()
+                } else {
+                    format!("Unclosed '{{' on line {}", open.line)
+                };
+                return Err(crate::ParseError::parse(msg, line));
             }
         }
     }
@@ -98,7 +105,11 @@ impl Parser<'_> {
     /// `inner_statement_list`, stopping before any token of `terminators`;
     /// any other token that cannot start a statement is reported with
     /// `on_bad` as the expected list.
-    pub(crate) fn parse_inner_list(&mut self, terminators: &[T], on_bad: &[T]) -> PResult<Vec<Stmt>> {
+    pub(crate) fn parse_inner_list(
+        &mut self,
+        terminators: &[T],
+        on_bad: &[T],
+    ) -> PResult<Vec<Stmt>> {
         let mut stmts = Vec::new();
         loop {
             let k = self.peek();
@@ -165,7 +176,8 @@ impl Parser<'_> {
                 self.expect1(T::LParen)?;
                 self.expect1(T::RParen)?;
                 self.expect1(T::Semicolon)?;
-                Err(self.compile_error("__HALT_COMPILER() can only be used from the outermost scope"))
+                Err(self
+                    .compile_error("__HALT_COMPILER() can only be used from the outermost scope"))
             }
             T::Attribute => {
                 let attrs = self.parse_attributes()?;
@@ -280,11 +292,11 @@ impl Parser<'_> {
             T::For => {
                 self.bump();
                 self.expect1(T::LParen)?;
-                let init = self.parse_for_exprs(T::Semicolon)?;
+                let init = self.parse_for_exprs(T::Semicolon, false)?;
                 self.expect1(T::Semicolon)?;
-                let cond = self.parse_for_exprs(T::Semicolon)?;
+                let cond = self.parse_for_exprs(T::Semicolon, true)?;
                 self.expect1(T::Semicolon)?;
-                let step = self.parse_for_exprs(T::RParen)?;
+                let step = self.parse_for_exprs(T::RParen, false)?;
                 self.expect1(T::RParen)?;
                 let body = self.parse_loop_body(T::EndFor)?;
                 StmtKind::For {
@@ -381,7 +393,7 @@ impl Parser<'_> {
                 self.expect1(T::LParen)?;
                 let mut vars = Vec::new();
                 loop {
-                    vars.push(self.parse_variable()?);
+                    vars.push(self.parse_variable_followed_by(&[T::Comma, T::RParen])?);
                     match self.peek() {
                         T::Comma => {
                             self.bump();
@@ -409,14 +421,14 @@ impl Parser<'_> {
             T::Goto => {
                 self.bump();
                 let t = self.expect1(T::String)?;
-                let label = self.ident_of(&t);
+                let label = self.ident_checked(&t)?;
                 self.expect1(T::Semicolon)?;
                 StmtKind::Goto(label)
             }
             T::String if self.peek_nth(1) == T::Colon => {
                 let t = self.bump();
                 self.bump();
-                StmtKind::Label(self.ident_of(&t))
+                StmtKind::Label(self.ident_checked(&t)?)
             }
             T::VoidCast => {
                 self.bump();
@@ -490,7 +502,7 @@ impl Parser<'_> {
     }
 
     /// `for_exprs` / `for_cond_exprs` up to `close`.
-    fn parse_for_exprs(&mut self, close: T) -> PResult<Vec<Expr>> {
+    fn parse_for_exprs(&mut self, close: T, is_cond: bool) -> PResult<Vec<Expr>> {
         let mut exprs = Vec::new();
         if self.peek() == close {
             return Ok(exprs);
@@ -501,6 +513,10 @@ impl Parser<'_> {
                 let e = self.parse_expr()?;
                 let span = self.span_from(start);
                 exprs.push(Expr::new(ExprKind::VoidCast(Box::new(e)), span));
+                // `for_cond_exprs` cannot end with a `(void)` cast.
+                if is_cond && self.peek() != T::Comma {
+                    return Err(self.unexpected(&[T::Comma]));
+                }
             } else {
                 exprs.push(self.parse_expr()?);
             }
@@ -666,7 +682,10 @@ impl Parser<'_> {
         match self.peek() {
             T::AmpersandFollowedByVarOrVararg | T::AmpersandNotFollowedByVarOrVararg => {
                 self.bump();
-                Ok((self.parse_variable()?, true))
+                Ok((
+                    self.parse_variable_followed_by(&[T::DoubleArrow, T::RParen])?,
+                    true,
+                ))
             }
             T::List => Ok((self.parse_list_pattern()?, false)),
             T::LBracket => {
@@ -684,7 +703,10 @@ impl Parser<'_> {
                     false,
                 ))
             }
-            _ => Ok((self.parse_variable()?, false)),
+            _ => Ok((
+                self.parse_variable_followed_by(&[T::DoubleArrow, T::RParen])?,
+                false,
+            )),
         }
     }
 
@@ -859,7 +881,7 @@ impl Parser<'_> {
     /// `const_decl`: `T_STRING '=' expr`.
     fn parse_const_decl(&mut self) -> PResult<ConstElem> {
         let t = self.expect1(T::String)?;
-        let name = self.ident_of(&t);
+        let name = self.ident_checked(&t)?;
         self.expect1(T::Equals)?;
         let value = self.parse_expr()?;
         self.peek();
@@ -919,7 +941,8 @@ impl Parser<'_> {
             }
             T::LBrace => {
                 self.bump();
-                let body = self.parse_top_list_until_brace()?;
+                let open = self.prev_span;
+                let body = self.parse_top_list_until_brace(open)?;
                 self.bump();
                 Ok(Stmt {
                     kind: StmtKind::Namespace {
@@ -980,7 +1003,7 @@ impl Parser<'_> {
             }
             let alias = if self.eat(T::As).is_some() {
                 let a = self.expect1(T::String)?;
-                Some(self.ident_of(&a))
+                Some(self.ident_checked(&a)?)
             } else {
                 None
             };
@@ -1028,19 +1051,22 @@ impl Parser<'_> {
             };
             let k = self.peek();
             if !matches!(k, T::String | T::NameQualified) {
-                return Err(self.unexpected(
-                    if kind.is_none() && item_kind == UseKind::Class {
-                        &[T::String, T::NameQualified, T::Function, T::Const]
-                    } else {
-                        &[T::String, T::NameQualified]
-                    },
-                ));
+                let keyword_seen = self.prev_span.start == istart.start && self.prev_span != istart;
+                let expected: &[T] = if !items.is_empty() && !keyword_seen {
+                    // after `,`: bison reduced `possible_comma`
+                    &[T::RBrace]
+                } else if kind.is_none() && item_kind == UseKind::Class {
+                    &[T::String, T::NameQualified, T::Function, T::Const]
+                } else {
+                    &[T::String, T::NameQualified]
+                };
+                return Err(self.unexpected(expected));
             }
             let t = self.bump();
             let name = self.name_of(&t);
             let alias = if self.eat(T::As).is_some() {
                 let a = self.expect1(T::String)?;
-                Some(self.ident_of(&a))
+                Some(self.ident_checked(&a)?)
             } else {
                 None
             };
@@ -1062,9 +1088,8 @@ impl Parser<'_> {
                     self.bump();
                     return Ok(items);
                 }
-                _ => return Err(self.unexpected(&[T::Comma, T::RBrace])),
+                _ => return Err(self.unexpected(&[T::RBrace])),
             }
         }
     }
 }
-

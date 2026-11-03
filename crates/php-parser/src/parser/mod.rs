@@ -64,6 +64,9 @@ pub(crate) struct Parser<'a> {
     pub warnings: Vec<Diagnostic>,
     /// Current recursion depth (bounded like bison's stack).
     pub depth: u32,
+    /// Start offset of a keyword that began a call argument (see
+    /// `parse_argument`).
+    pub colon_hint: Option<usize>,
 }
 
 /// Bison's `YYMAXDEPTH`, approximated as a recursion limit.
@@ -93,6 +96,7 @@ impl<'a> Parser<'a> {
             generator_stack: Vec::new(),
             warnings: Vec::new(),
             depth: 0,
+            colon_hint: None,
         }
     }
 
@@ -222,7 +226,6 @@ impl<'a> Parser<'a> {
         }
     }
 
-
     /// Consumes a token of kind `k`, or fails with a syntax error listing
     /// `expected` (which should include `k`).
     pub fn expect(&mut self, k: TokenKind, expected: &[TokenKind]) -> PResult<Tok> {
@@ -264,6 +267,11 @@ impl<'a> Parser<'a> {
             }
         }
         let text = self.text(&tok);
+        let expected = if self.colon_hint.is_some_and(|s| s == self.prev_span.start) {
+            &[TokenKind::Colon][..]
+        } else {
+            expected
+        };
         ParseError::parse(syntax_error_message(tok.kind, text, expected), tok.end_line)
     }
 
@@ -288,6 +296,19 @@ impl<'a> Parser<'a> {
     /// The identifier text of a token.
     pub fn ident_of(&self, tok: &Tok) -> Ident {
         Ident::new(self.text(tok).to_vec(), tok.span)
+    }
+
+    /// The identifier of a token used as `identifier` (`zend_lex_tstring`):
+    /// `<?=` scans as `echo` but cannot be used as a name.
+    pub fn ident_checked(&mut self, tok: &Tok) -> PResult<Ident> {
+        if self.text(tok) == b"<?=" {
+            let line = self.cur().end_line;
+            return Err(ParseError::parse(
+                "Cannot use \"<?=\" as an identifier",
+                line,
+            ));
+        }
+        Ok(self.ident_of(tok))
     }
 
     /// Builds a [`Name`] from a name token.
