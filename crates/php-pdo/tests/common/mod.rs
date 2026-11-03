@@ -210,6 +210,8 @@ pub struct TestHost {
     pub autoload: Option<Rc<dyn Fn(&mut TestHost, &ZStr)>>,
     pub persistent: PersistentList,
     pub ini: HashMap<Vec<u8>, Vec<u8>>,
+    /// `set_error_handler()`: receives the message.
+    pub error_handler: Option<Rc<dyn Fn(&mut TestHost, &str) -> RtResult<()>>>,
 }
 
 impl Default for TestHost {
@@ -237,6 +239,7 @@ impl TestHost {
             autoload: None,
             persistent: PersistentList::new(),
             ini: HashMap::new(),
+            error_handler: None,
         };
         h.add_class(Class::new("stdClass").dynamic());
         h.add_class(Class::new("PDO"));
@@ -744,11 +747,21 @@ impl PdoHost for TestHost {
     }
 
     fn docref(&mut self, level: ErrorLevel, message: &str) -> RtResult<()> {
+        self.docref_ex(level, message, false)
+    }
+
+    fn docref_ex(&mut self, level: ErrorLevel, message: &str, pending: bool) -> RtResult<()> {
         let msg = if self.func.is_empty() {
             message.to_string()
         } else {
             format!("{}(): {message}", self.func)
         };
+        if let Some(handler) = self.error_handler.clone() {
+            if pending {
+                return Ok(());
+            }
+            return handler(self, &msg);
+        }
         self.diagnostic(level, &msg)
     }
 

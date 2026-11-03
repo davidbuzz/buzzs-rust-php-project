@@ -83,6 +83,20 @@ pub trait PdoHost: RuntimeContext {
         self.diagnostic(level, message)
     }
 
+    /// [`PdoHost::docref`] while the PDO core may have an exception
+    /// pending (`EG(exception)` set): a VM must not invoke the user error
+    /// handler then (`zend_call_function` refuses to run), but still
+    /// displays/logs the message. The default ignores `exception_pending`.
+    fn docref_ex(
+        &mut self,
+        level: ErrorLevel,
+        message: &str,
+        exception_pending: bool,
+    ) -> RtResult<()> {
+        let _ = exception_pending;
+        self.docref(level, message)
+    }
+
     /// `get_active_function_or_method_name()` (e.g. `"PDO::__construct"`),
     /// used as the prefix of warnings turned into exceptions while the
     /// constructor runs with `EH_THROW` error handling.
@@ -346,7 +360,8 @@ impl<'h> Ctx<'h> {
             }
             return;
         }
-        let r = self.host.docref(level, message);
+        let pending = self.pending.is_some();
+        let r = self.host.docref_ex(level, message, pending);
         self.check(r);
     }
 

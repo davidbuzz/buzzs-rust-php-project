@@ -417,3 +417,241 @@ fn stmt_fetchobject_ctor_args() {
     h.dump(&r);
     assert_phpt!(h, "pdo_stmt_fetchobject_ctor_args_after_default.phpt");
 }
+
+#[test]
+fn fetch_class_change_ctor_args_during_fetch5() {
+    let mut h = TestHost::new();
+    let db = h.factory();
+    h.set_attr(&db, ATTR_ERRMODE, i(ERRMODE_WARNING)).unwrap();
+    h.add_class(Class::new("B").ctor(|_, _, _| Ok(())));
+    h.exec(
+        &db,
+        "CREATE TABLE f(id int NOT NULL PRIMARY KEY, val1 VARCHAR(10), val2 VARCHAR(10))",
+    )
+    .unwrap();
+    for r in [
+        "1, 'A', 'alpha'",
+        "2, 'B', 'beta'",
+        "3, 'C', 'gamma'",
+        "4, 'D', 'delta'",
+    ] {
+        h.exec(&db, &format!("INSERT INTO f VALUES({r})")).unwrap();
+    }
+    let st = h.prepare(&db, "SELECT val1, val2 FROM f").unwrap();
+    h.execute(&st, None).unwrap();
+    let st2 = st.clone();
+    h.error_handler = Some(Rc::new(move |h: &mut TestHost, msg: &str| {
+        h.set_fetch_mode(
+            &st2,
+            FETCH_CLASS,
+            &[s("B"), Value::Array(arr(vec![s(msg)]))],
+        )?;
+        h.echo(&format!("{msg}\n"));
+        Ok(())
+    }));
+    let r = h.fetch_all(
+        &st,
+        Some(FETCH_CLASS | FETCH_SERIALIZE),
+        &[s("B"), Value::Array(arr(vec![st.clone()]))],
+    );
+    match r {
+        Ok(v) => h.dump(&v),
+        Err(e) => print_err(&mut h, &e),
+    }
+    assert_phpt!(h, "pdo_fetch_class_change_ctor_args_during_fetch5.phpt");
+}
+
+#[test]
+fn uninitialized_objects() {
+    let mut h = TestHost::new();
+    h.add_class(Class::new("MyPDO").extends("PDO").ctor(|_, _, _| Ok(())));
+    h.add_class(
+        Class::new("MyPDOStatement")
+            .extends("PDOStatement")
+            .ctor(|_, _, _| Ok(())),
+    );
+    let pdo = h.new_object("MyPDO");
+    if let Err(e) = h.query(&pdo, "foo") {
+        print_err(&mut h, &e);
+    }
+    let st = h.new_object("MyPDOStatement");
+    if let Err(e) = h.fetch(&st, FETCH_DEFAULT) {
+        print_err(&mut h, &e);
+    }
+    let st = h.new_object("MyPDOStatement");
+    if let Err(e) = h.foreach(&st, |_, _, _| {}) {
+        print_err(&mut h, &e);
+    }
+    assert_phpt!(h, "pdo_uninitialized.phpt");
+}
+
+#[test]
+fn query_string_read_only() {
+    // pdo_036: `queryString` may be initialised once on a bare statement
+    let st = php_pdo::PdoStatement::new();
+    assert!(!st.is_initialized());
+    assert!(matches!(
+        php_pdo::PdoStatement::check_property_write(b"queryString", false),
+        Ok(false)
+    ));
+    let e = php_pdo::PdoStatement::check_property_write(b"queryString", true).unwrap_err();
+    assert_eq!(e.message(), Some("Property queryString is read only"));
+    assert!(php_pdo::PdoStatement::check_property_unset(b"queryString").is_err());
+    assert!(php_pdo::PdoStatement::check_property_unset(b"other").is_ok());
+    let mut h = TestHost::new();
+    let e = php_pdo::PdoRow::constructor_error(&mut h);
+    assert_eq!(
+        TestHost::error_message(&e),
+        "You may not create a PDORow manually"
+    );
+}
+
+#[test]
+fn fetch_function_overload_statement_class() {
+    let mut h = TestHost::new();
+    let db = h.factory();
+    h.exec(
+        &db,
+        "CREATE TABLE o(id int NOT NULL PRIMARY KEY, val VARCHAR(10))",
+    )
+    .unwrap();
+    for r in ["1, 'A'", "2, 'B'", "3, 'C'", "4, 'D'"] {
+        h.exec(&db, &format!("INSERT INTO o VALUES ({r})")).unwrap();
+    }
+    h.add_class(
+        Class::new("DerivedStatement")
+            .extends("PDOStatement")
+            .prop("name")
+            .private_ctor()
+            .ctor(|h, this, args| {
+                let name = args.unwrap().get_int(0).unwrap().clone();
+                h.echo(&format!("DerivedStatement::__construct({})\n", sv(&name)));
+                TestHost::set_prop(this, "name", name);
+                Ok(())
+            })
+            .method("reTrieve", false, Vis::Public, |h, _, a| {
+                let (id, val) = (sv(&a[0]), sv(&a[1]));
+                h.echo(&format!("DerivedStatement::reTrieve({id},{val})\n"));
+                Ok(s(&format!("{id} => {val}")))
+            }),
+    );
+    let mut opts = ZArray::new();
+    opts.make_mut().insert(
+        ArrayKey::Int(ATTR_STATEMENT_CLASS),
+        Value::Array(arr(vec![
+            s("DerivedStatement"),
+            Value::Array(arr(vec![s("Overloaded"), db.clone()])),
+        ])),
+    );
+    let d = h
+        .prepare_opts(&db, "SELECT id, val FROM o", Some(opts))
+        .unwrap();
+    let class = TestHost::obj(&d).class_name().to_string_lossy();
+    h.dump(&s(&class));
+    h.execute(&d, None).unwrap();
+    let callable = Value::Array(arr(vec![d.clone(), s("retrieve")]));
+    let r = h.fetch_all(&d, Some(FETCH_FUNC), &[callable]).unwrap();
+    h.dump(&r);
+    assert_phpt!(h, "pdo_fetch_function_overload_statement_class.phpt");
+}
+
+#[test]
+fn fetch_class_cyclic_ctor_and_opaque() {
+    let mut h = TestHost::new();
+    let db = h.factory();
+    h.add_class(
+        Class::new("Test")
+            .typed("val1", "string")
+            .typed("val2", "string")
+            .ctor(|h, _, a| {
+                let v = a.unwrap().get_int(0).unwrap().clone();
+                h.dump(&v);
+                Ok(())
+            }),
+    );
+    h.exec(
+        &db,
+        "CREATE TABLE c(id int NOT NULL PRIMARY KEY, val1 VARCHAR(10), val2 VARCHAR(10))",
+    )
+    .unwrap();
+    for r in ["1, 'A', 'alpha'", "2, 'B', 'beta'"] {
+        h.exec(&db, &format!("INSERT INTO c VALUES({r})")).unwrap();
+    }
+    // $args = []; $args[] = &$args;
+    let r = php_runtime::PhpRef::new(Value::Array(ZArray::new()));
+    let mut inner = ZArray::new();
+    let _ = inner.make_mut().push(Value::Reference(r.clone()));
+    r.set(Value::Array(inner.clone()));
+    let args = r.get();
+    let st = h.prepare(&db, "SELECT val1, val2 FROM c").unwrap();
+    h.set_fetch_mode(
+        &st,
+        FETCH_CLASS,
+        &[s("Test"), Value::Array(arr(vec![args]))],
+    )
+    .unwrap();
+    h.execute(&st, None).unwrap();
+    let v = h.fetch(&st, FETCH_DEFAULT).unwrap();
+    h.dump(&v);
+    // break the cycle for the test's memory checker
+    r.set(Value::Null);
+    assert_phpt!(h, "pdo_fetch_class_cyclic_ctor.phpt");
+
+    let mut h = TestHost::new();
+    let db = h.factory();
+    h.add_class(
+        Class::new("Directory")
+            .typed("path", "string")
+            .typed("handle", "mixed"),
+    );
+    h.exec(
+        &db,
+        "CREATE TABLE p(id int NOT NULL PRIMARY KEY, path VARCHAR(10))",
+    )
+    .unwrap();
+    for r in ["1, 'AA'", "2, 'BB'", "3, 'CC'"] {
+        h.exec(&db, &format!("INSERT INTO p VALUES({r})")).unwrap();
+    }
+    let st = h.prepare(&db, "SELECT path FROM p").unwrap();
+    h.execute(&st, None).unwrap();
+    let r = h
+        .fetch_all(
+            &st,
+            Some(FETCH_CLASS),
+            &[s("Directory"), Value::Array(ZArray::new())],
+        )
+        .unwrap();
+    h.dump(&r);
+    assert_phpt!(h, "pdo_fetch_class_opaque_object.phpt");
+}
+
+#[test]
+fn bind_reentrant_execute() {
+    let mut h = TestHost::new();
+    let db = h.factory();
+    h.exec(&db, "CREATE TABLE test_bind_reentrant (name varchar(10))")
+        .unwrap();
+    let st = h
+        .prepare(
+            &db,
+            "SELECT name FROM test_bind_reentrant WHERE name = ? OR name = ?",
+        )
+        .unwrap();
+    let st2 = st.clone();
+    h.add_class(Class::new("ReExecute").method(
+        "__toString",
+        false,
+        Vis::Public,
+        move |h, _, _| {
+            h.execute(&st2, Some(arr(vec![s("x"), s("y")])))?;
+            Ok(s("r"))
+        },
+    ));
+    let re = h.new_object("ReExecute");
+    h.execute(&st, Some(arr(vec![s("a"), re]))).unwrap();
+    let re = h.new_object("ReExecute");
+    h.bind_value(&st, php_pdo::ParamId::Position(2), re, PARAM_STR)
+        .unwrap();
+    h.echo("Done\n");
+    assert_phpt!(h, "pdo_bind_reentrant_execute.phpt");
+}
