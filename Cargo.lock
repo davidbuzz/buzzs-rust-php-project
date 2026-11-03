@@ -882,6 +882,10 @@ name = "php-mbstring"
 version = "0.1.0"
 
 [[package]]
+name = "php-memlimit"
+version = "0.1.0"
+
+[[package]]
 name = "php-mysqlnd"
 version = "0.1.0"
 dependencies = [

@@ -91,6 +91,7 @@ members = [
     "crates/php-ext-json",
     "crates/php-ext-streams",
     "crates/php-ext-ctype",
+    "crates/php-ext-xsl",
 ]
 
 [workspace.package]
@@ -126,4 +127,10 @@ opt-level = 3
 [profile.dev.package.php-bcmath]
 opt-level = 3
 [profile.dev.package.php-mbstring]
+opt-level = 2
+[profile.dev.package.php-runtime]
+opt-level = 2
+[profile.dev.package.php-lexer]
+opt-level = 2
+[profile.dev.package.php-parser]
 opt-level = 2
