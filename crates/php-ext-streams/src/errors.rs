@@ -55,6 +55,11 @@ thread_local! {
     static CLASSES: RefCell<Vec<Rc<Class>>> = const { RefCell::new(Vec::new()) };
 }
 
+/// The context of the running operation, without consuming it.
+pub fn operation_context() -> Option<ContextRef> {
+    OP_CONTEXT.with(|c| c.borrow().clone())
+}
+
 /// Records the context of the running operation.
 pub fn set_operation_context(ctx: Option<ContextRef>) {
     OP_CONTEXT.with(|c| *c.borrow_mut() = ctx);

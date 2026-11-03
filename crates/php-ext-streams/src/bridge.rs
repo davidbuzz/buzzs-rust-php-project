@@ -29,6 +29,9 @@ thread_local! {
     /// While set, [`flush_diags`] leaves the diagnostics queued (a hook is
     /// running with its stream taken out of the resource).
     static DEFER_FLUSH: Cell<bool> = const { Cell::new(false) };
+    /// The contexts of the running (nested) operations.
+    static OP_CONTEXTS: RefCell<Vec<Option<php_streams::context::ContextRef>>> =
+        const { RefCell::new(Vec::new()) };
 }
 
 /// Restores the previous VM pointer when a scope ends (also on unwind).
@@ -123,19 +126,47 @@ pub fn run_stream<R>(vm: &mut Vm, f: impl FnOnce() -> R) -> VmResult<R> {
     run_ex(vm, false, f)
 }
 
+/// `PHP_STREAM_ERROR_MAX_DEPTH`.
+const MAX_OPERATION_DEPTH: usize = 1000;
+
 fn run_ex<R>(vm: &mut Vm, sync: bool, f: impl FnOnce() -> R) -> VmResult<R> {
+    let depth = OP_CONTEXTS.with(|s| s.borrow().len());
+    if depth >= MAX_OPERATION_DEPTH {
+        // php_stream_error_operation_begin() refuses the operation: its
+        // errors stay with the enclosing one.
+        vm.php_warning(&format!(
+            "Stream error operation depth exceeded ({depth}), possible infinite recursion"
+        ))?;
+        let outer = take_pending();
+        let r = if sync {
+            enter(vm, f)
+        } else {
+            enter_nosync(vm, f)
+        };
+        let inner = take_pending();
+        if let Some(t) = outer {
+            set_pending(t);
+        }
+        return match inner {
+            Some(t) => Err(t),
+            None => Ok(r),
+        };
+    }
     // Diagnostics queued by library calls made outside a bridge scope
     // belong to their caller, which collects them with `take_diagnostics`.
     // A nested call (from PHP code a callback runs) is its own error
     // operation: the enclosing operation's errors stay queued until it
     // ends (`php_stream_error_operation_begin/end`).
-    let enclosing = if has_vm() {
+    // (Inside a callback the VM is lent out, so `has_vm()` is false: the
+    // operation depth tells nested calls apart from stray library calls.)
+    let enclosing = if has_vm() || depth > 0 {
         diag::take()
     } else {
         let _ = diag::take();
         Vec::new()
     };
     let outer = take_pending();
+    OP_CONTEXTS.with(|s| s.borrow_mut().push(crate::errors::operation_context()));
     let r = if sync {
         enter(vm, f)
     } else {
@@ -144,6 +175,15 @@ fn run_ex<R>(vm: &mut Vm, sync: bool, f: impl FnOnce() -> R) -> VmResult<R> {
     flush_diags(vm);
     for d in enclosing.into_iter().rev() {
         diag::push_front(d);
+    }
+    // The enclosing operation reports with its own context again.
+    let enclosing_ctx = OP_CONTEXTS.with(|s| {
+        let mut s = s.borrow_mut();
+        s.pop();
+        s.last().cloned()
+    });
+    if let Some(ctx) = enclosing_ctx {
+        crate::errors::set_operation_context(ctx);
     }
     let inner = take_pending();
     if let Some(t) = outer {
