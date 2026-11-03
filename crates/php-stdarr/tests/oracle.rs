@@ -64,9 +64,37 @@ fn unser(data: &[u8]) -> Value {
         .expect("valid serialized data")
 }
 
+fn try_unser(data: &[u8]) -> Option<Value> {
+    let mut ctx = Ctx::new();
+    unserialize(data, &UnserializeOptions::default(), &mut ctx)
+        .ok()
+        .flatten()
+}
+
+/// `serialize()`, digested like `digest()` in `gen_oracle.php` when long.
 fn ser(v: &Value) -> String {
     let mut ctx = Ctx::new();
-    String::from_utf8_lossy(&serialize(v, &mut ctx).expect("serialize")).into_owned()
+    let bytes = serialize(v, &mut ctx).expect("serialize");
+    if bytes.len() > 4096 {
+        return format!("crc32:{:08x}:{}", crc32(&bytes), bytes.len());
+    }
+    String::from_utf8_lossy(&bytes).into_owned()
+}
+
+/// CRC-32 (IEEE), as PHP's `crc32()`.
+fn crc32(data: &[u8]) -> u32 {
+    let mut crc = !0u32;
+    for &b in data {
+        crc ^= u32::from(b);
+        for _ in 0..8 {
+            crc = if crc & 1 == 1 {
+                (crc >> 1) ^ 0xEDB8_8320
+            } else {
+                crc >> 1
+            };
+        }
+    }
+    !crc
 }
 
 /// PHP's `unserialize()` builds every non-empty array as a hash table
@@ -124,8 +152,16 @@ fn load_cases() -> Vec<Case> {
     let text = include_str!("data/oracle.txt");
     text.lines()
         .filter(|l| !l.is_empty())
-        .map(|line| {
-            let v = unser(&b64_decode(line));
+        .enumerate()
+        .map(|(n, line)| {
+            let raw = b64_decode(line);
+            assert!(
+                try_unser(&raw).is_some(),
+                "fixture line {} does not unserialize: {}",
+                n + 1,
+                String::from_utf8_lossy(&raw)
+            );
+            let v = unser(&raw);
             let Value::Array(t) = v else {
                 panic!("bad case")
             };
@@ -133,6 +169,12 @@ fn load_cases() -> Vec<Case> {
                 Value::Str(s) => s.as_bytes().to_vec(),
                 _ => panic!("no args"),
             };
+            assert!(
+                try_unser(&args_ser).is_some(),
+                "fixture line {} has bad args: {}",
+                n + 1,
+                String::from_utf8_lossy(&args_ser)
+            );
             let natural_args: Vec<Value> = match unser(&args_ser) {
                 Value::Array(a) => a.values().cloned().collect(),
                 _ => panic!("args not array"),
@@ -421,8 +463,14 @@ fn opt_int(v: Option<&Value>) -> Option<i64> {
     }
 }
 
+/// `bool` parameter coercion (zpp weak mode) for the scalars in the fixture.
 fn boolean(v: Option<&Value>) -> bool {
-    matches!(v, Some(Value::Bool(true)))
+    match v {
+        Some(Value::Bool(b)) => *b,
+        Some(Value::Int(i)) => *i != 0,
+        Some(Value::Str(s)) => !(s.is_empty() || s.as_bytes() == b"0"),
+        _ => false,
+    }
 }
 
 struct Outcome {

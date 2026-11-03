@@ -95,6 +95,12 @@ const BYREF = ['sort', 'rsort', 'asort', 'arsort', 'ksort', 'krsort', 'natsort',
     'usort', 'uasort', 'uksort', 'array_multisort', 'array_walk', 'array_walk_recursive',
     'array_push', 'array_pop', 'array_shift', 'array_unshift', 'array_splice', 'shuffle'];
 
+// Large serializations are stored as "crc32:<hex>:<length>" to keep the
+// fixture small.
+function digest(string $s): string {
+    return strlen($s) > 4096 ? sprintf('crc32:%08x:%d', crc32($s), strlen($s)) : $s;
+}
+
 function fixup($s) {
     global $MASTER_FIXUPS;
     return strtr($s, $MASTER_FIXUPS);
@@ -119,7 +125,7 @@ function run(string $func, array $args) {
     }
     try {
         $r = $fn(...$call);
-        $result = serialize($r);
+        $result = digest(serialize($r));
     } catch (Throwable $e) {
         $exc = get_class($e) . ': ' . fixup($e->getMessage());
     }
@@ -127,7 +133,7 @@ function run(string $func, array $args) {
     $base = str_starts_with($func, 'seed:') ? substr($func, 5) : $func;
     if (in_array($base, BYREF, true)) {
         $after = array_map(fn($v) => $v instanceof Closure ? null : $v, $call);
-        $byref = serialize(array_values($after));
+        $byref = digest(serialize(array_values($after)));
     }
     $out[] = base64_encode(serialize([
         'func' => $func,
@@ -548,6 +554,94 @@ foreach ([1, 42, 1234] as $seed) {
     $sparse = range(0, 99);
     foreach (range(0, 97) as $i) unset($sparse[$i]);
     run('seed:array_rand', [$seed, $sparse, 1]);
+}
+
+
+// ---------------------------------------------------------------------------
+// Calls with literal arguments mined from php-src's array tests
+// ---------------------------------------------------------------------------
+function has_object($v): bool {
+    if (is_object($v) || is_resource($v)) return true;
+    if (is_array($v)) {
+        foreach ($v as $x) if (has_object($x)) return true;
+    }
+    return false;
+}
+
+function balanced_args(string $src, int $start): ?string {
+    $depth = 0;
+    $len = strlen($src);
+    $quote = null;
+    for ($i = $start; $i < $len; $i++) {
+        $c = $src[$i];
+        if ($quote !== null) {
+            if ($c === '\\') { $i++; continue; }
+            if ($c === $quote) $quote = null;
+            continue;
+        }
+        if ($c === '"' || $c === "'") { $quote = $c; continue; }
+        if ($c === '(' || $c === '[') $depth++;
+        if ($c === ')' || $c === ']') {
+            if ($depth === 0) return $c === ')' ? substr($src, $start, $i - $start) : null;
+            $depth--;
+        }
+    }
+    return null;
+}
+
+$mine = ['range', 'array_fill', 'array_fill_keys', 'array_chunk', 'array_slice', 'array_pad',
+    'min', 'max', 'array_unique', 'array_merge', 'array_merge_recursive', 'array_replace',
+    'array_replace_recursive', 'array_combine', 'array_flip', 'array_count_values', 'array_sum',
+    'array_product', 'array_keys', 'array_values', 'array_reverse', 'array_search', 'in_array',
+    'array_key_exists', 'array_diff', 'array_diff_key', 'array_diff_assoc', 'array_intersect',
+    'array_intersect_key', 'array_intersect_assoc', 'count', 'array_column',
+    'array_change_key_case', 'array_is_list', 'array_key_first', 'array_key_last', 'array_rand',
+    'sort', 'rsort', 'asort', 'arsort', 'ksort', 'krsort', 'natsort', 'natcasesort',
+    'array_multisort', 'array_splice', 'array_push', 'array_pop', 'array_shift', 'array_unshift'];
+$seen = [];
+$dir = dirname(__DIR__, 4) . '/modules/php-src/ext/standard/tests/array';
+$it = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($dir));
+$files = [];
+foreach ($it as $f) {
+    if (str_ends_with($f->getFilename(), '.phpt')) $files[] = $f->getPathname();
+}
+sort($files);
+foreach ($files as $file) {
+    $text = file_get_contents($file);
+    if (!preg_match('/--FILE--\n(.*?)\n--[A-Z_]+--/s', $text, $m)) continue;
+    $code = $m[1];
+    foreach ($mine as $fn) {
+        $offset = 0;
+        while (preg_match('/(?<![\w>$:\\\\])' . $fn . '\s*\(/', $code, $mm, PREG_OFFSET_CAPTURE, $offset)) {
+            $open = $mm[0][1] + strlen($mm[0][0]);
+            $offset = $open;
+            $argtext = balanced_args($code, $open);
+            if ($argtext === null || trim($argtext) === '' || preg_match('/[$]|new |function|fn\s*\(|::|->|\bclass\b|fopen|STDIN|\.\.\./', $argtext)) continue;
+            if (isset($seen[$fn . $argtext])) continue;
+            $seen[$fn . $argtext] = true;
+            try {
+                $args = @eval("return [$argtext];");
+            } catch (Throwable $e) {
+                continue;
+            }
+            if (!is_array($args) || $args !== array_values($args) || has_object($args)) continue;
+            // Skip what php-src master changed (validated in the Rust unit
+            // tests) and argument coercions that belong to the VM's zpp.
+            if ($fn === 'array_change_key_case' && isset($args[1]) && $args[1] !== 0 && $args[1] !== 1) continue;
+            if ($fn === 'range' && (in_array(null, $args, true) || (isset($args[2]) && is_string($args[2])))) continue;
+            $before = count($out);
+            if ($fn === 'array_rand') {
+                run('seed:array_rand', array_merge([7], $args));
+            } else {
+                run($fn, $args);
+            }
+            $rec = unserialize(base64_decode(end($out)));
+            if (count($out) > $before && (str_contains((string)$rec['exc'], 'exceeds the maximum array size')
+                || str_contains(implode("\n", $rec['msgs']), 'Passing null to parameter'))) {
+                array_pop($out);
+            }
+        }
+    }
 }
 
 echo implode("\n", $out), "\n";
