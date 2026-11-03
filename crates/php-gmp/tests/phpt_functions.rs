@@ -618,3 +618,275 @@ fn gmp_neg_nextprime() {
     check("gmp_nextprime", &[T("stdClass")], "TypeError: gmp_nextprime(): Argument #1 ($num) must be of type GMP|string|int, stdClass given");
     let _ = Bool(true);
 }
+
+#[test]
+fn perfect_and_popcount() {
+    for (v, e) in [
+        (I(0), true),
+        (S("0"), true),
+        (I(-1), false),
+        (I(1), true),
+        (I(16), true),
+        (I(17), false),
+        (S("1000000"), true),
+        (S("1000001"), false),
+        (g("100101"), false),
+        (g("64"), true),
+        (g("-5"), false),
+    ] {
+        check("gmp_perfect_square", &[v], &format!("bool({e})"));
+    }
+    for (v, e) in [
+        (I(0), true),
+        (I(1), true),
+        (I(2), false),
+        (I(4), true),
+        (I(6), false),
+        (I(8), true),
+        (I(-1), true),
+        (I(-2), false),
+        (I(-4), false),
+        (I(-6), false),
+        (I(-8), true),
+        (g("7442665456261594668083173595997"), true),
+        (g("7442665456261594668083173595998"), false),
+    ] {
+        check("gmp_perfect_power", &[v], &format!("bool({e})"));
+    }
+    check("gmp_popcount", &[I(-1)], "int(-1)");
+    check("gmp_popcount", &[I(0)], "int(0)");
+    check("gmp_popcount", &[I(12123)], "int(10)");
+    check("gmp_popcount", &[S("52638927634234")], "int(31)");
+    check("gmp_popcount", &[S("-23476123423433")], "int(-1)");
+    check("gmp_popcount", &[g("9876546789222")], "int(20)");
+}
+
+#[test]
+fn powers() {
+    let exp_err =
+        "ValueError: gmp_pow(): Argument #2 ($exponent) must be between 0 and 18446744073709551615";
+    check("gmp_pow", &[I(2), I(10)], "1024");
+    check("gmp_pow", &[I(-2), I(10)], "1024");
+    check("gmp_pow", &[I(-2), I(11)], "-2048");
+    check("gmp_pow", &[S("2"), I(0)], "1");
+    check("gmp_pow", &[S("2"), I(-1)], exp_err);
+    check("gmp_pow", &[I(50), I(10)], "97656250000000000");
+    check("gmp_pow", &[I(50), I(-5)], exp_err);
+    check("gmp_pow", &[g("-20"), I(10)], "10240000000000");
+    for (b, e, m, r) in [
+        (I(0), I(1), I(10), "0"),
+        (I(5), I(1), I(10), "5"),
+        (I(-5), I(1), I(-10), "5"),
+        (I(-5), I(1), I(10), "5"),
+        (I(-5), I(11), I(10), "5"),
+        (S("77"), I(3), I(1000), "533"),
+        (g("11"), I(3), I(1000), "331"),
+        (g("11"), g("7"), I(1000), "171"),
+        (g("11"), g("7"), g("900"), "371"),
+        (I(10), g("0"), I(10), "1"),
+    ] {
+        check("gmp_powm", &[b, e, m], r);
+    }
+    check(
+        "gmp_powm",
+        &[I(5), I(11), I(0)],
+        "DivisionByZeroError: gmp_powm(): Argument #3 ($modulus) Modulo by zero",
+    );
+    check(
+        "gmp_powm",
+        &[I(5), S("11"), g("0")],
+        "DivisionByZeroError: gmp_powm(): Argument #3 ($modulus) Modulo by zero",
+    );
+    check("gmp_powm", &[g("11"), T("array"), g("900")], "TypeError: gmp_powm(): Argument #2 ($exponent) must be of type GMP|string|int, array given");
+    check(
+        "gmp_powm",
+        &[I(10), g("-5"), I(10)],
+        "ValueError: gmp_powm(): Argument #2 ($exponent) must be greater than or equal to 0",
+    );
+    check("gmp_powm_sec", &[I(4), I(13), I(497)], "445");
+    check("gmp_powm_sec", &[g("7"), g("3"), g("13")], "5");
+    for e in [0, -1] {
+        check(
+            "gmp_powm_sec",
+            &[I(4), I(e), I(497)],
+            "ValueError: gmp_powm_sec(): Argument #2 ($exponent) must be greater than 0",
+        );
+    }
+    check(
+        "gmp_powm_sec",
+        &[I(4), I(13), I(0)],
+        "DivisionByZeroError: gmp_powm_sec(): Argument #3 ($modulus) Modulo by zero",
+    );
+    check(
+        "gmp_powm_sec",
+        &[I(4), I(13), I(496)],
+        "ValueError: gmp_powm_sec(): Argument #3 ($modulus) must be odd",
+    );
+}
+
+#[test]
+fn primes() {
+    for v in [-1, 0, 1, 2] {
+        check(
+            "gmp_prevprime",
+            &[I(v)],
+            "ValueError: gmp_prevprime(): Argument #1 ($num) must be greater than 2",
+        );
+    }
+    check("gmp_prevprime", &[I(3)], "2 definitely=true");
+    check("gmp_prevprime", &[I(4)], "3 definitely=true");
+    check("gmp_prevprime", &[I(10_000)], "9973 definitely=true");
+    let probable = Mpz::from(10).pow(80).next_prime();
+    let out = call("gmp_prevprime", &[G(&probable + &Mpz::from(1))]);
+    assert_eq!(out, format!("{probable} definitely=false"));
+    assert_eq!(call("gmp_prob_prime", &[G(probable)]), "int(1)");
+    let expected = ["int(0)", "int(2)", "int(2)", "int(2)", "int(0)"];
+    for (v, e) in [I(10), S("7"), I(17), I(-31), S("172368715471481723")]
+        .into_iter()
+        .zip(expected)
+    {
+        check("gmp_prob_prime", &[v], e);
+    }
+    let loop_expected = [
+        "0", "0", "0", "0", "0", "0", "2", "0", "2", "0", "0", "0", "0", "0", "0", "0", "0", "0",
+        "0", "0", "0", "0", "0", "0", "0", "0",
+    ];
+    let mut k = 0;
+    for i in -1..12 {
+        check(
+            "gmp_prob_prime",
+            &[I(773 * i - i * 7 - 1), I(i)],
+            &format!("int({})", loop_expected[k]),
+        );
+        k += 1;
+        let n = &Mpz::parse(b"23476812735411", 10).unwrap() + &Mpz::from(i - 1);
+        check(
+            "gmp_prob_prime",
+            &[G(n), I(i)],
+            &format!("int({})", loop_expected[k]),
+        );
+        k += 1;
+    }
+    check("gmp_prob_prime", &[g("19481923")], "int(0)");
+    check("gmp_prob_prime", &[g("0")], "int(0)");
+}
+
+#[test]
+fn roots() {
+    check("gmp_rootrem", &[I(1000), I(3)], "[10, 0]");
+    check("gmp_rootrem", &[I(100), I(3)], "[4, 36]");
+    check("gmp_rootrem", &[I(-100), I(3)], "[-4, -36]");
+    check("gmp_rootrem", &[I(1000), I(4)], "[5, 375]");
+    check("gmp_rootrem", &[I(100), I(4)], "[3, 19]");
+    check("gmp_rootrem", &[I(-100), I(4)], "ValueError: gmp_rootrem(): Argument #2 ($nth) must be odd if argument #1 ($num) is negative");
+    check("gmp_rootrem", &[I(0), I(3)], "[0, 0]");
+    check(
+        "gmp_rootrem",
+        &[I(100), I(0)],
+        "ValueError: gmp_rootrem(): Argument #2 ($nth) must be between 1 and 18446744073709551615",
+    );
+    check(
+        "gmp_rootrem",
+        &[I(100), I(-3)],
+        "ValueError: gmp_rootrem(): Argument #2 ($nth) must be between 1 and 18446744073709551615",
+    );
+    check("gmp_root", &[I(1000), I(3)], "10");
+    check("gmp_root", &[I(100), I(3)], "4");
+    check("gmp_root", &[I(-100), I(3)], "-4");
+    check("gmp_root", &[I(1000), I(4)], "5");
+    check("gmp_root", &[I(100), I(4)], "3");
+    check(
+        "gmp_root",
+        &[I(-100), I(4)],
+        "ValueError: gmp_root(): Argument #2 ($nth) must be odd if argument #1 ($num) is negative",
+    );
+    check("gmp_root", &[I(0), I(3)], "0");
+    check(
+        "gmp_root",
+        &[I(100), I(0)],
+        "ValueError: gmp_root(): Argument #2 ($nth) must be between 1 and 18446744073709551615",
+    );
+    let neg = "ValueError: gmp_sqrt(): Argument #1 ($num) must be greater than or equal to 0";
+    check("gmp_sqrt", &[I(-2)], neg);
+    check("gmp_sqrt", &[S("-2")], neg);
+    check("gmp_sqrt", &[S("0")], "0");
+    check("gmp_sqrt", &[S("2")], "1");
+    check("gmp_sqrt", &[S("144")], "12");
+    check("gmp_sqrt", &[g("-144")], neg);
+    check("gmp_sqrt", &[g("777")], "27");
+    check(
+        "gmp_sqrtrem",
+        &[I(-1)],
+        "ValueError: gmp_sqrtrem(): Argument #1 ($num) must be greater than or equal to 0",
+    );
+    for (v, e) in [
+        (S("0"), "[0, 0]"),
+        (I(2), "[1, 1]"),
+        (I(10), "[3, 1]"),
+        (I(7), "[2, 3]"),
+        (I(3), "[1, 2]"),
+        (I(100_000), "[316, 144]"),
+        (S("1000000"), "[1000, 0]"),
+        (S("1000001"), "[1000, 1]"),
+        (g("1000001"), "[1000, 1]"),
+    ] {
+        check("gmp_sqrtrem", &[v], e);
+    }
+}
+
+#[test]
+fn scans_and_bits() {
+    check(
+        "gmp_scan0",
+        &[S("434234"), I(-10)],
+        "ValueError: gmp_scan0(): Argument #2 ($start) must be between 0 and 2147483647 * 64",
+    );
+    check("gmp_scan0", &[S("434234"), I(1)], "int(2)");
+    check("gmp_scan0", &[I(4096), I(0)], "int(0)");
+    check("gmp_scan0", &[S("1000000000"), I(5)], "int(5)");
+    check("gmp_scan0", &[S("1000000000"), I(200)], "int(200)");
+    check("gmp_scan0", &[g("24234527465274"), I(10)], "int(13)");
+    check(
+        "gmp_scan0",
+        &[T("array"), I(200)],
+        "TypeError: gmp_scan0(): Argument #1 ($num1) must be of type GMP|string|int, array given",
+    );
+    check(
+        "gmp_scan1",
+        &[S("434234"), I(-10)],
+        "ValueError: gmp_scan1(): Argument #2 ($start) must be between 0 and 2147483647 * 64",
+    );
+    check("gmp_scan1", &[S("434234"), I(1)], "int(1)");
+    check("gmp_scan1", &[I(4096), I(0)], "int(12)");
+    check("gmp_scan1", &[S("1000000000"), I(5)], "int(9)");
+    check("gmp_scan1", &[S("1000000000"), I(200)], "int(-1)");
+    check("gmp_scan1", &[g("24234527465274"), I(10)], "int(10)");
+    let tb_err =
+        "ValueError: gmp_testbit(): Argument #2 ($index) must be between 0 and 2147483647 * 64";
+    check("gmp_testbit", &[g("0"), I(-10)], tb_err);
+    check("gmp_testbit", &[g("0"), I(0)], "bool(false)");
+    check("gmp_testbit", &[g("0"), I(100)], "bool(false)");
+    check("gmp_testbit", &[g("-1"), I(1)], "bool(true)");
+    check("gmp_testbit", &[g("-1"), I(-1)], tb_err);
+    let mut n = Mpz::from(1_000_000);
+    harness::setbit("gmp_setbit", &mut n, 1, true);
+    assert_eq!(n.to_string(), "1000002");
+    harness::setbit("gmp_setbit", &mut n, 5, true);
+    assert_eq!(n.to_string(), "1000034");
+    let mut n = Mpz::parse(b"238462734628347239571823641234", 10).unwrap();
+    check("gmp_testbit", &[G(n.clone()), I(5)], "bool(false)");
+    harness::setbit("gmp_setbit", &mut n, 5, true);
+    assert_eq!(n.to_string(), "238462734628347239571823641266");
+    harness::setbit("gmp_clrbit", &mut n, 5, false);
+    assert_eq!(n.to_string(), "238462734628347239571823641234");
+    check("gmp_xor", &[S("111111"), S("2222222")], "2120329");
+    check("gmp_xor", &[I(123_123), I(435_234)], "476369");
+    check("gmp_xor", &[I(555), S("2342341123")], "2342340648");
+    check("gmp_xor", &[I(-1), I(3333)], "-3334");
+    check("gmp_xor", &[I(4545), I(-20)], "-4563");
+    check(
+        "gmp_xor",
+        &[S("test"), S("no test")],
+        &format!("ValueError: gmp_xor(): Argument #1 ($num1) {NOT_INT}"),
+    );
+}
