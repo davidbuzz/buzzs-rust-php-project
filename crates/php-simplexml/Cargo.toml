@@ -1,12 +1,13 @@
 [package]
 name = "php-simplexml"
-description = "PHP's ext/filter: filter_var/filter_var_array/filter_input engine with all validation and sanitizing filters"
+description = "PHP's ext/simplexml: SimpleXMLElement/SimpleXMLIterator over libxml2 with PHP's property, dimension, cast and iteration semantics"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+php-libxml = { path = "../php-libxml" }
 php-runtime = { path = "../php-runtime" }
 
 [lints]
