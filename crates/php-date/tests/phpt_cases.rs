@@ -224,3 +224,53 @@ fn date_sunset_variation8_poles() {
         }
     }
 }
+
+#[test]
+fn timezone_location_get() {
+    let z = TimezoneSpec::Id(tz::get("Europe/Oslo").unwrap());
+    let v = z.location().unwrap();
+    assert_eq!(v.get("country_code"), Some(&Value::Str("NO".into())));
+    let Some(Value::Float(lat)) = v.get("latitude") else { panic!() };
+    assert!((59.9166..59.9167).contains(lat), "{lat}");
+    assert_eq!(v.get("longitude"), Some(&Value::Float(10.75)));
+    assert_eq!(v.get("comments"), Some(&Value::Str(String::new())));
+    assert!(TimezoneSpec::Offset(3600).location().is_none());
+}
+
+#[test]
+fn timezone_abbreviations_list_basic1() {
+    let Value::Array(abbr) = api::timezone_abbreviations_list() else { panic!() };
+    assert_eq!(abbr.len(), 144);
+    let acst = api::timezone_abbreviations_list();
+    let Some(Value::Array(entries)) = acst.get("acst") else { panic!() };
+    assert_eq!(entries.len(), 6);
+    let first = &entries[0].1;
+    assert_eq!(first.get("dst"), Some(&Value::Bool(false)));
+    assert_eq!(first.get("offset"), Some(&Value::Int(34200)));
+    assert_eq!(first.get("timezone_id"), Some(&Value::Str("Australia/Adelaide".into())));
+}
+
+#[test]
+fn timezones_list() {
+    let a = tz::identifiers_list(tz::group::ALL, None).unwrap();
+    let b = tz::identifiers_list(tz::group::AMERICA, None).unwrap();
+    let c = tz::identifiers_list(tz::group::ALL_WITH_BC, None).unwrap();
+    let d = tz::identifiers_list(tz::group::EUROPE | tz::group::UTC, None).unwrap();
+    let found = |l: &[&str], z: &str| l.contains(&z);
+    let got: Vec<[bool; 4]> = ["Europe/Oslo", "America/New_York", "UTC", "US/Eastern"]
+        .iter()
+        .map(|z| [found(&a, z), found(&b, z), found(&c, z), found(&d, z)])
+        .collect();
+    assert_eq!(
+        got,
+        vec![
+            [true, false, true, true],
+            [true, true, true, false],
+            [true, false, true, true],
+            [false, false, true, false],
+        ]
+    );
+    assert!(!tz::is_valid_id("AAA"));
+    assert!(tz::is_valid_id("Africa/Abidjan"));
+    assert!(tz::is_valid_id("Zulu"));
+}
