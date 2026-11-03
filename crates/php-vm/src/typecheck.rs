@@ -105,6 +105,10 @@ impl Vm {
         }
         if let Value::Reference(r) = v {
             let mut inner = r.get();
+            // "We cannot have conversions for typed refs."
+            if !Self::ref_allows_param_coercion(r) {
+                return Ok(self.type_accepts(ty, &inner, ctx));
+            }
             let ok = self.verify_type(ty, &mut inner, ctx)?;
             if ok {
                 r.set(inner);
@@ -151,7 +155,7 @@ impl Vm {
 
     /// `zend_verify_weak_scalar_type_hint`: preference order
     /// int → float → string → bool.
-    fn weak_scalar_coerce(&mut self, m: u32, v: &mut Value) -> VmResult<bool> {
+    pub(crate) fn weak_scalar_coerce(&mut self, m: u32, v: &mut Value) -> VmResult<bool> {
         if m & mask::LONG != 0 {
             if let (true, Value::Str(s)) = (m & mask::DOUBLE != 0, &*v) {
                 // int|float with a string: is_numeric_string() decides.
