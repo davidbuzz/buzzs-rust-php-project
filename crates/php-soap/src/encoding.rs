@@ -139,6 +139,7 @@ pub struct EncodeCtx<'h> {
     cur_uniq_ref: i64,
     decode_depth: u32,
     protected: HashSet<usize>,
+    mem: usize,
 }
 
 impl std::fmt::Debug for EncodeCtx<'_> {
@@ -390,6 +391,7 @@ impl<'h> EncodeCtx<'h> {
             cur_uniq_ref: 0,
             decode_depth: 0,
             protected: HashSet::new(),
+            mem: 0,
         }
     }
 
@@ -887,6 +889,8 @@ impl<'h> EncodeCtx<'h> {
         if self.decode_depth >= SOAP_MAX_DECODE_DEPTH {
             bail!("Encoding: Nesting level too deep");
         }
+        self.mem += 64 + doc.content(data).len();
+        self.host.memory_check(self.mem)?;
         self.decode_depth += 1;
         let r = self.to_zval(encode, doc, data);
         self.decode_depth -= 1;

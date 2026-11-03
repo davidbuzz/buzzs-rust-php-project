@@ -125,6 +125,14 @@ pub struct TestHost {
     pub now: i64,
     /// File name used in error messages.
     pub script: String,
+    /// Directory relative includes resolve against.
+    pub base_dir: std::path::PathBuf,
+    /// The file being executed (`__FILE__`).
+    pub current_file: std::path::PathBuf,
+    /// Replacement sources for included files (by base name).
+    pub include_override: HashMap<String, String>,
+    /// User call depth (simulates the memory limit on runaway recursion).
+    pub depth: usize,
 }
 
 impl TestHost {
@@ -259,6 +267,37 @@ impl TestHost {
 
     pub fn props_of(obj: &Obj) -> &RefCell<ZArray> {
         &obj.downcast_ref::<TestObj>().expect("test object").props
+    }
+
+    /// The `memory_limit` INI value in bytes (0 = unlimited).
+    pub fn memory_limit(&self) -> usize {
+        let v = self.ini.get("memory_limit").map_or_else(|| "128M".to_owned(), |v| String::from_utf8_lossy(v).into_owned());
+        let v = v.trim();
+        if v.starts_with('-') {
+            return 0;
+        }
+        let (num, mul) = match v.as_bytes().last() {
+            Some(b'M' | b'm') => (&v[..v.len() - 1], 1024 * 1024),
+            Some(b'K' | b'k') => (&v[..v.len() - 1], 1024),
+            Some(b'G' | b'g') => (&v[..v.len() - 1], 1024 * 1024 * 1024),
+            _ => (v, 1),
+        };
+        num.parse::<usize>().unwrap_or(0) * mul
+    }
+
+    /// Whether a class exists.
+    pub fn class_exists(&self, name: &str) -> bool {
+        self.canonical_class(name).is_some()
+    }
+
+    /// The declared spelling of a class name.
+    pub fn canonical(&self, name: &str) -> String {
+        self.canonical_class(name).unwrap_or_else(|| name.to_owned())
+    }
+
+    /// A user method in the class chain.
+    pub fn find_user_method(&self, class: &str, name: &str) -> Option<MethodFn> {
+        self.find_method(class, name)
     }
 
     fn find_method(&self, class: &str, name: &str) -> Option<MethodFn> {
@@ -422,6 +461,13 @@ impl SoapHost for TestHost {
     }
 
     fn call_callable(&mut self, callable: &Value, args: &[Value]) -> RtResult<Value> {
+        if let Value::Array(a) = callable.deref() {
+            if let (Some(Value::Object(o)), Some(Value::Str(m))) = (a.get_int(0).map(Value::deref), a.get_int(1).map(Value::deref)) {
+                if let Some(f) = self.find_method(&o.class_name().to_string_lossy(), &m.to_string_lossy()) {
+                    return f(self, &o, args);
+                }
+            }
+        }
         let name = callable.to_zstr(self)?;
         match self.call_function(name.as_bytes(), args)? {
             Some(v) => Ok(v),
@@ -494,19 +540,38 @@ impl SoapHost for TestHost {
     }
 
     fn load_resource(&mut self, url: &str, _context: Option<&Value>) -> Result<Vec<u8>, String> {
-        self.files
-            .get(url)
-            .cloned()
-            .ok_or_else(|| format!("failed to load external entity \"{url}\"\n"))
+        if let Some(f) = self.files.get(url) {
+            return Ok(f.clone());
+        }
+        let path = url.strip_prefix("file://").unwrap_or(url);
+        if !url.contains("://") || url.starts_with("file://") {
+            if let Ok(d) = std::fs::read(path) {
+                return Ok(d);
+            }
+        }
+        Err(format!("failed to load external entity \"{url}\"\n"))
     }
 
     fn realpath(&mut self, path: &str) -> Option<String> {
         if self.files.contains_key(path) {
-            Some(path.to_owned())
-        } else {
-            let p = format!("/tests/{path}");
-            self.files.contains_key(&p).then_some(p)
+            return Some(path.to_owned());
         }
+        let p = format!("/tests/{path}");
+        if self.files.contains_key(&p) {
+            return Some(p);
+        }
+        let joined = self.base_dir.join(path);
+        std::fs::canonicalize(joined).ok().map(|p| p.to_string_lossy().into_owned())
+    }
+
+    fn memory_check(&mut self, bytes: usize) -> RtResult<()> {
+        let limit = self.memory_limit();
+        if limit > 0 && bytes > limit {
+            return Err(RuntimeError::Fatal(format!(
+                "Allowed memory size of {limit} bytes exhausted (tried to allocate 65536 bytes)"
+            )));
+        }
+        Ok(())
     }
 
     fn now(&mut self) -> i64 {
@@ -579,27 +644,39 @@ impl TestHost {
         self.ob.pop().unwrap_or_default()
     }
 
-    /// Prints an uncaught error like the CLI does and reports whether the
-    /// script must stop.
+    /// Prints an uncaught error like the CLI does.
     pub fn report(&mut self, e: &RuntimeError) {
+        let file = if self.script.is_empty() { "test.php".to_owned() } else { self.script.clone() };
         match e {
             RuntimeError::Fatal(m) => {
-                let s = format!("\nFatal error: {m} in {} on line 1\n", self.script);
+                let s = format!("\nFatal error: {m} in {file} on line 1\n");
                 self.echo(s.as_bytes());
             }
             RuntimeError::Custom { class, .. } if class.as_bytes() == b"__exit__" => {}
             other => {
                 let o = self.exception_object(other);
-                let (class, msg) = match &o {
-                    Some(o) => (
-                        o.class_name().to_string_lossy(),
-                        self.read_slot(o, "message")
+                let text = match &o {
+                    Some(o) => {
+                        let class = o.class_name().to_string_lossy();
+                        let msg = self
+                            .read_slot(o, "message")
                             .map(|m| m.to_zstr(self).map(|z| z.to_string_lossy()).unwrap_or_default())
-                            .unwrap_or_default(),
-                    ),
-                    None => ("Error".into(), format!("{other:?}")),
+                            .unwrap_or_default();
+                        if self.is_a(&class, "SoapFault") {
+                            let code = self
+                                .read_slot(o, "faultcode")
+                                .map(|m| m.to_zstr(self).map(|z| z.to_string_lossy()).unwrap_or_default())
+                                .unwrap_or_default();
+                            format!("SoapFault exception: [{code}] {msg} in {file}:1\nStack trace:\n#0 {{main}}")
+                        } else {
+                            format!("{class}: {msg} in {file}:1\nStack trace:\n#0 {{main}}")
+                        }
+                    }
+                    None => format!("Error: {other:?} in {file}:1\nStack trace:\n#0 {{main}}"),
                 };
-                let s = format!("\nFatal error: Uncaught {class}: {msg} in test.php:1\nStack trace:\n#0 {{main}}\n  thrown in test.php on line 1\n");
+                let s = format!("PHP Fatal error:  Uncaught {text}\n  thrown in {file} on line 1\n");
+                let _ = s;
+                let s = format!("\nFatal error: Uncaught {text}\n  thrown in {file} on line 1\n");
                 self.echo(s.as_bytes());
             }
         }

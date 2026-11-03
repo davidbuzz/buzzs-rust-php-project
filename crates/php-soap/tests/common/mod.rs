@@ -5,6 +5,7 @@
 #![allow(dead_code, clippy::missing_panics_doc, clippy::must_use_candidate)]
 
 pub mod host;
+pub mod php;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
