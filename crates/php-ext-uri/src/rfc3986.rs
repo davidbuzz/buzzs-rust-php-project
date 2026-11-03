@@ -4,7 +4,6 @@
 use php_runtime::{Obj, Value};
 use php_uri::api::rfc3986::{self as api, Rfc3986Uri};
 use php_uri::UriError;
-use php_vm::class::cflags;
 use php_vm::ext::{acc, class_flags, Args, ClassBuilder, ClassHooks, ModuleBuilder, VmResult};
 use php_vm::Vm;
 
@@ -391,7 +390,7 @@ fn b_build(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
     let p = acc::PRIVATE;
     ClassBuilder::new(BUILDER_CLASS)
-        .flags(class_flags::FINAL | cflags::NO_DYNAMIC_PROPERTIES)
+        .flags(class_flags::FINAL | class_flags::NO_DYNAMIC_PROPERTIES)
         .prop("scheme", p, Some("?string"), Some(Value::Null))
         .prop("userinfo", p, Some("?string"), Some(Value::Null))
         .prop("host", p, Some("?string"), Some(Value::Null))
@@ -406,7 +405,7 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
             b_set_scheme,
         )
         .method(
-            "setUserInfo(?string $userInfo): static",
+            "setUserInfo(#[\\SensitiveParameter] ?string $userInfo): static",
             acc::PUBLIC,
             b_set_user_info,
         )
@@ -428,7 +427,7 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
 
     let pb = acc::PUBLIC;
     ClassBuilder::new(URI_CLASS)
-        .flags(class_flags::FINAL | cflags::NO_DYNAMIC_PROPERTIES | cflags::READONLY)
+        .flags(class_flags::FINAL | class_flags::NO_DYNAMIC_PROPERTIES | class_flags::READONLY)
         .hooks(ClassHooks {
             create: Some(create),
             clone: Some(clone),
@@ -450,7 +449,7 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
         .method("withScheme(?string $scheme): static", pb, with_scheme)
         .method("getUserInfo(): ?string", pb, get_user_info)
         .method("getRawUserInfo(): ?string", pb, get_raw_user_info)
-        .method("withUserInfo(?string $userinfo): static", pb, with_user_info)
+        .method("withUserInfo(#[\\SensitiveParameter] ?string $userinfo): static", pb, with_user_info)
         .method("getUsername(): ?string", pb, get_username)
         .method("getRawUsername(): ?string", pb, get_raw_username)
         .method("getPassword(): ?string", pb, get_password)

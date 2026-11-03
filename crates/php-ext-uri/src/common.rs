@@ -235,12 +235,9 @@ pub(crate) fn unserialize_props_ok(data: &ZArray) -> bool {
     matches!(index(data, 1), Some(Value::Array(a)) if a.is_empty())
 }
 
-/// `zend_hash_index_find(data, i)`. php-runtime's unserializer currently
-/// hands `__unserialize()` the object's property table, whose integer keys
-/// were turned into numeric strings, so `"0"` is accepted as well.
+/// `zend_hash_index_find(data, i)`.
 fn index(data: &ZArray, i: i64) -> Option<&Value> {
     data.get(&ArrayKey::Int(i))
-        .or_else(|| data.get(&ArrayKey::Str(ZStr::from(i.to_string()))))
 }
 
 /// `__debugInfo()` from the library's ordered pairs.
@@ -286,15 +283,13 @@ mod tests {
         let _ = t.push(Value::Null);
         let _ = t.push(Value::Array(ZArray::new()));
         assert_eq!(unserialize_uri(&ZArray::from_table(t)), None);
-        // Numeric-string keys (property tables) are accepted.
+        // Numeric-string keys are not integer keys.
         let mut state = HashTable::new();
         state.insert(ArrayKey::from_bytes(b"uri"), Value::string("/x"));
         let mut t = HashTable::new();
         t.insert_str_raw(ZStr::from("0"), Value::Array(ZArray::from_table(state)));
         t.insert_str_raw(ZStr::from("1"), Value::Array(ZArray::new()));
-        let t = ZArray::from_table(t);
-        assert_eq!(unserialize_uri(&t).as_deref(), Some(&b"/x"[..]));
-        assert!(unserialize_props_ok(&t));
+        assert_eq!(unserialize_uri(&ZArray::from_table(t)), None);
     }
 
     #[test]

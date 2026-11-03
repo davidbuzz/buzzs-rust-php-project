@@ -12,8 +12,8 @@ use crate::convert::MbConverter;
 use crate::io::{origin_of, StreamIo};
 use crate::{emit, memory_limit};
 
-/// The `exif.*` settings in effect; values `ini_set()` could not have
-/// accepted (unknown encodings) fall back to the defaults.
+/// The `exif.*` settings in effect (validated by the `on_modify`
+/// handlers; a value that still fails, e.g. from `-d`, keeps the default).
 fn config(vm: &Vm) -> ExifConfig {
     let mut cfg = ExifConfig::default();
     for (name, _) in php_exif::exif::INI_ENTRIES {

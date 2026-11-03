@@ -6,76 +6,102 @@
 //! this crate keeps the parsed URI as native object state, converts values
 //! and turns `UriError`s into PHP exceptions (including the
 //! `Uri\WhatWg\UrlValidationError` lists of `InvalidUrlException::$errors`
-//! and the by-reference `$errors`/`$softErrors` arguments).
-//!
-//! The extension API cannot build native enums yet, so the six enums are
-//! declared by compiling their PHP source at startup (like
-//! `php-ext-random` does for `Random\IntervalBoundary`).
+//! and the by-reference `$errors`/`$softErrors` arguments). The enums are
+//! native unit enums.
 
 mod common;
 mod memory;
 mod rfc3986;
 mod whatwg;
 
-use php_runtime::ZStr;
-use php_vm::class::cflags;
-use php_vm::ext::{ClassBuilder, Extension, ModuleBuilder};
+use php_vm::ext::{class_flags, ClassBuilder, Extension, InfoItem, ModuleBuilder};
 use php_vm::Vm;
 
 /// The `uri` extension.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Uri;
 
-/// The enum declarations of `php_uri.stub.php`.
-const ENUMS: &str = r"<?php
-namespace Uri {
-    enum UriComparisonMode { case IncludeFragment; case ExcludeFragment; }
-}
-namespace Uri\Rfc3986 {
-    enum UriType { case AbsolutePathReference; case RelativePathReference; case NetworkPathReference; case Uri; }
-    enum UriHostType { case IpV4; case IpV6; case IpVFuture; case RegisteredName; }
-}
-namespace Uri\WhatWg {
-    enum UrlValidationErrorType {
-        case DomainToAscii; case DomainToUnicode; case DomainInvalidCodePoint; case HostInvalidCodePoint;
-        case Ipv4EmptyPart; case Ipv4TooManyParts; case Ipv4NonNumericPart; case Ipv4NonDecimalPart;
-        case Ipv4OutOfRangePart; case Ipv6Unclosed; case Ipv6InvalidCompression; case Ipv6TooManyPieces;
-        case Ipv6MultipleCompression; case Ipv6InvalidCodePoint; case Ipv6TooFewPieces;
-        case Ipv4InIpv6TooManyPieces; case Ipv4InIpv6InvalidCodePoint; case Ipv4InIpv6OutOfRangePart;
-        case Ipv4InIpv6TooFewParts; case InvalidUrlUnit; case SpecialSchemeMissingFollowingSolidus;
-        case MissingSchemeNonRelativeUrl; case InvalidReverseSoldius; case InvalidCredentials;
-        case HostMissing; case PortOutOfRange; case PortInvalid; case FileInvalidWindowsDriveLetter;
-        case FileInvalidWindowsDriveLetterHost;
-    }
-    enum UrlHostType { case IpV4; case IpV6; case Domain; case Opaque; case Empty; }
-    enum UrlPercentEncodingMode {
-        case Username; case Password; case OpaqueHost; case Path; case OpaquePath; case PathSegment;
-        case Query; case SpecialQuery; case FormQuery; case Fragment;
-    }
-}
-";
+/// The unit enums of `php_uri.stub.php`: name and cases.
+const ENUMS: &[(&str, &[&str])] = &[
+    (
+        "Uri\\Rfc3986\\UriType",
+        &[
+            "AbsolutePathReference",
+            "RelativePathReference",
+            "NetworkPathReference",
+            "Uri",
+        ],
+    ),
+    (
+        "Uri\\Rfc3986\\UriHostType",
+        &["IpV4", "IpV6", "IpVFuture", "RegisteredName"],
+    ),
+    (
+        "Uri\\WhatWg\\UrlPercentEncodingMode",
+        &[
+            "Username",
+            "Password",
+            "OpaqueHost",
+            "Path",
+            "OpaquePath",
+            "PathSegment",
+            "Query",
+            "SpecialQuery",
+            "FormQuery",
+            "Fragment",
+        ],
+    ),
+    (
+        "Uri\\UriComparisonMode",
+        &["IncludeFragment", "ExcludeFragment"],
+    ),
+    (
+        "Uri\\WhatWg\\UrlHostType",
+        &["IpV4", "IpV6", "Domain", "Opaque", "Empty"],
+    ),
+];
 
-/// Declares the enums from PHP source (no native enum builder exists).
-fn register_enums(vm: &mut Vm) {
-    if vm.find_class(b"Uri\\UriComparisonMode").is_some() {
-        return;
+/// Registers a native unit enum.
+fn register_enum(vm: &mut Vm, name: &str, cases: &[&str]) {
+    let mut b = ClassBuilder::new(name).unit_enum();
+    for c in cases {
+        b = b.case(c, None);
     }
-    let _ = vm.run_main(ENUMS.as_bytes(), &ZStr::from("[ext/uri]"));
+    b.register(vm);
+}
+
+/// `Uri\WhatWg\UrlValidationErrorType` (its cases come from php-uri).
+fn register_validation_error_type(vm: &mut Vm) {
+    let mut b = ClassBuilder::new(common::VALIDATION_ERROR_TYPE_ENUM).unit_enum();
+    for t in php_uri::UrlValidationErrorType::ALL {
+        b = b.case(t.name(), None);
+    }
+    b.register(vm);
+}
+
+/// `PHP_MINFO_FUNCTION(uri)` (static build with the bundled uriparser).
+fn info(_vm: &mut Vm) -> Vec<InfoItem> {
+    vec![
+        InfoItem::TableStart,
+        InfoItem::Row(vec!["URI support".into(), "active".into()]),
+        InfoItem::Row(vec!["uriparser bundled version".into(), "1.0.2".into()]),
+        InfoItem::TableEnd,
+    ]
 }
 
 /// The plain exception hierarchy of `Uri\`.
 fn register_exceptions(m: &mut ModuleBuilder<'_>) {
     ClassBuilder::new("Uri\\UriException")
         .extends(m.vm(), "Exception")
-        .flags(cflags::NO_DYNAMIC_PROPERTIES)
+        .flags(class_flags::NO_DYNAMIC_PROPERTIES)
         .register(m.vm());
     ClassBuilder::new("Uri\\UriError")
         .extends(m.vm(), "Error")
-        .flags(cflags::NO_DYNAMIC_PROPERTIES)
+        .flags(class_flags::NO_DYNAMIC_PROPERTIES)
         .register(m.vm());
     ClassBuilder::new("Uri\\InvalidUriException")
         .extends(m.vm(), "Uri\\UriException")
-        .flags(cflags::NO_DYNAMIC_PROPERTIES)
+        .flags(class_flags::NO_DYNAMIC_PROPERTIES)
         .register(m.vm());
 }
 
@@ -85,11 +111,21 @@ impl Extension for Uri {
     }
 
     fn register(&self, m: &mut ModuleBuilder<'_>) {
-        register_enums(m.vm());
+        // `PHP_MINIT_FUNCTION(uri)` order.
         rfc3986::register(m);
+        for (name, cases) in &ENUMS[..2] {
+            register_enum(m.vm(), name, cases);
+        }
+        whatwg::register(m);
+        for (name, cases) in &ENUMS[2..4] {
+            register_enum(m.vm(), name, cases);
+        }
         register_exceptions(m);
         whatwg::register_exception(m);
+        let (name, cases) = ENUMS[4];
+        register_enum(m.vm(), name, cases);
         whatwg::register_validation_error(m);
-        whatwg::register(m);
+        register_validation_error_type(m.vm());
+        m.info(info);
     }
 }

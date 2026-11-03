@@ -8,6 +8,8 @@
 //! copy), lexbor's IDNA processing works on code points, and every WHATWG
 //! validation error keeps a copy of the rest of the input as its `context`.
 //!
+//! The current usage and the limit come from `php-memlimit`.
+//!
 //! The check also protects the process: `php-uri` materializes those
 //! contexts eagerly, which is quadratic in the input length, so inputs
 //! that would exceed the limit are rejected before parsing.
@@ -15,8 +17,6 @@
 use php_vm::ext::VmResult;
 use php_vm::Vm;
 
-/// Memory a fresh script already uses.
-const BASELINE_USAGE: u64 = 512 * 1024;
 /// `sizeof(UriPathSegmentA)`.
 const SEGMENT_SIZE: u64 = 32;
 /// A `UrlValidationError` object with its three properties.
@@ -25,28 +25,21 @@ const VALIDATION_ERROR_SIZE: u64 = 128;
 /// points, mapped and normalized copies).
 const IDNA_FACTOR: u64 = 8;
 
-/// The effective `memory_limit` in bytes (`None` = unlimited).
-fn limit(vm: &Vm) -> Option<u64> {
-    let raw = vm
-        .ini_string("memory_limit")
-        .unwrap_or_else(|| b"128M".to_vec());
-    let (v, _) = php_support::ini::parse_quantity(&raw);
-    u64::try_from(v).ok().filter(|&v| v > 0)
-}
-
 /// Raises the out-of-memory fatal error when an operation needing `bytes`
-/// (on top of the baseline) exceeds `memory_limit`.
+/// does not fit under `memory_limit` given the script's current usage
+/// (`php-memlimit` accounting).
 pub(crate) fn check(vm: &mut Vm, bytes: u64) -> VmResult<()> {
-    let Some(limit) = limit(vm) else {
+    let n = usize::try_from(bytes).unwrap_or(usize::MAX);
+    if php_memlimit::would_fit(n) {
+        return Ok(());
+    }
+    let Some(limit) = php_memlimit::limit() else {
         return Ok(());
     };
-    if BASELINE_USAGE.saturating_add(bytes) > limit {
-        let tried = bytes.clamp(SEGMENT_SIZE, 2 * 1024 * 1024);
-        return Err(vm.fatal(&format!(
-            "Allowed memory size of {limit} bytes exhausted (tried to allocate {tried} bytes)"
-        )));
-    }
-    Ok(())
+    let tried = bytes.clamp(SEGMENT_SIZE, 2 * 1024 * 1024);
+    Err(vm.fatal(&format!(
+        "Allowed memory size of {limit} bytes exhausted (tried to allocate {tried} bytes)"
+    )))
 }
 
 /// What uriparser holds for a parsed RFC 3986 URI.

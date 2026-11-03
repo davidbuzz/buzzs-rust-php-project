@@ -21,6 +21,12 @@ pub(crate) struct StreamIo<'a>(pub(crate) &'a mut Stream);
 
 impl Read for StreamIo<'_> {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        // Once `memory_limit` has been crossed the VM raises the fatal
+        // error after this call; stop feeding the parsers so that a line
+        // or segment buffer cannot grow into the hard ceiling.
+        if php_memlimit::is_pending() {
+            return Ok(0);
+        }
         self.0
             .read(buf)
             .map_err(|_| io::Error::other("php_stream_read() failed"))

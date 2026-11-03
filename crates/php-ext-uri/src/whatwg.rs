@@ -6,7 +6,6 @@ use php_runtime::{Obj, Value};
 use php_uri::api::whatwg::{self as api, WhatWgUrl};
 use php_uri::whatwg::UrlPercentEncodingMode;
 use php_uri::{UriError, UrlValidationError};
-use php_vm::class::cflags;
 use php_vm::ext::{acc, class_flags, Args, ClassBuilder, ClassHooks, ModuleBuilder, VmResult};
 use php_vm::Vm;
 
@@ -493,7 +492,7 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
             b_set_username,
         )
         .method(
-            "setPassword(?string $password): static",
+            "setPassword(#[\\SensitiveParameter] ?string $password): static",
             acc::PUBLIC,
             b_set_password,
         )
@@ -515,7 +514,7 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
 
     let pb = acc::PUBLIC;
     ClassBuilder::new(URL_CLASS)
-        .flags(class_flags::FINAL | cflags::NO_DYNAMIC_PROPERTIES | cflags::READONLY)
+        .flags(class_flags::FINAL | class_flags::NO_DYNAMIC_PROPERTIES | class_flags::READONLY)
         .hooks(ClassHooks {
             create: Some(create),
             clone: Some(clone),
@@ -537,7 +536,7 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
         .method("getUsername(): ?string", pb, get_username)
         .method("withUsername(?string $username): static", pb, with_username)
         .method("getPassword(): ?string", pb, get_password)
-        .method("withPassword(?string $password): static", pb, with_password)
+        .method("withPassword(#[\\SensitiveParameter] ?string $password): static", pb, with_password)
         .method("getAsciiHost(): ?string", pb, get_ascii_host)
         .method("getUnicodeHost(): ?string", pb, get_unicode_host)
         .method("getHostType(): ?Uri\\WhatWg\\UrlHostType", pb, get_host_type)
@@ -574,7 +573,7 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
 pub(crate) fn register_exception(m: &mut ModuleBuilder<'_>) {
     ClassBuilder::new(INVALID_URL_EXCEPTION)
         .extends(m.vm(), "Uri\\InvalidUriException")
-        .flags(cflags::NO_DYNAMIC_PROPERTIES)
+        .flags(class_flags::NO_DYNAMIC_PROPERTIES)
         .prop("errors", acc::PUBLIC | acc::READONLY, Some("array"), None)
         .method(
             "__construct(string $message = \"\", array $errors = [], int $code = 0, ?Throwable $previous = null)",
@@ -588,7 +587,7 @@ pub(crate) fn register_exception(m: &mut ModuleBuilder<'_>) {
 pub(crate) fn register_validation_error(m: &mut ModuleBuilder<'_>) {
     let ro = acc::PUBLIC | acc::READONLY;
     ClassBuilder::new(common::VALIDATION_ERROR_CLASS)
-        .flags(class_flags::FINAL | cflags::NO_DYNAMIC_PROPERTIES | cflags::READONLY)
+        .flags(class_flags::FINAL | class_flags::NO_DYNAMIC_PROPERTIES | class_flags::READONLY)
         .prop("context", ro, Some("string"), None)
         .prop("type", ro, Some("Uri\\WhatWg\\UrlValidationErrorType"), None)
         .prop("failure", ro, Some("bool"), None)
