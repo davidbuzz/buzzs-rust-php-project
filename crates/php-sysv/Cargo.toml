@@ -1,12 +1,13 @@
 [package]
 name = "php-sysv"
-description = "PHP's ext/filter: filter_var/filter_var_array/filter_input engine with all validation and sanitizing filters"
+description = "PHP's ext/sysvmsg, ext/sysvsem, ext/sysvshm and ext/shmop over libc System V IPC with PHP's exact protocols, layouts and diagnostics"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+libc = "0.2"
 
 [lints]
 workspace = true
