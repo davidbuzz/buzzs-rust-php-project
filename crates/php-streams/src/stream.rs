@@ -474,6 +474,7 @@ impl Stream {
             position: self.position,
             chain,
             seek_request: None,
+            eof: self.state.eof,
         }
     }
 
@@ -1506,7 +1507,13 @@ impl Stream {
         } else {
             0
         };
-        if let Some(hook) = CLOSE_HOOK.with(|h| h.borrow().clone()) {
+        // `try_with`: streams owned by thread-locals close during their
+        // destruction, after the hook slot may be gone.
+        let hook = CLOSE_HOOK
+            .try_with(|h| h.try_borrow().ok().and_then(|h| h.clone()))
+            .ok()
+            .flatten();
+        if let Some(hook) = hook {
             hook(self.state.id);
         }
         let mut ret = self.ops.close(&mut self.state, preserve);

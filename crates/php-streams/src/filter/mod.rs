@@ -23,16 +23,30 @@ pub mod user;
 pub use user::{UserFilter, UserFilterFactory, UserFilterObject};
 
 /// One bucket of data.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default)]
 pub struct Bucket {
     /// The bucket contents.
     pub data: Vec<u8>,
+    /// Identity of a bucket exposed to PHP as a `StreamBucket` (0: none),
+    /// so attaching it again moves it instead of duplicating it.
+    pub tag: u64,
 }
+
+impl PartialEq for Bucket {
+    fn eq(&self, other: &Self) -> bool {
+        self.data == other.data
+    }
+}
+
+impl Eq for Bucket {}
 
 impl Bucket {
     /// Creates a bucket.
     pub fn new(data: impl Into<Vec<u8>>) -> Self {
-        Bucket { data: data.into() }
+        Bucket {
+            data: data.into(),
+            tag: 0,
+        }
     }
 }
 
@@ -140,6 +154,9 @@ pub struct FilterEnv {
     pub chain: ChainKind,
     /// A seek the filter asks for (`php_stream_seek(stream, pos, SEEK_SET)`).
     pub seek_request: Option<i64>,
+    /// The stream's EOF flag when the chain runs (what `feof()` on the
+    /// stream reports from inside a user filter).
+    pub eof: bool,
 }
 
 impl FilterEnv {
@@ -151,6 +168,7 @@ impl FilterEnv {
             position: 0,
             chain,
             seek_request: None,
+            eof: false,
         }
     }
 }
@@ -485,6 +503,14 @@ mod tests {
         assert_eq!(consumed, 2);
         assert!(chain.remove(id).is_some());
         assert_eq!(chain.len(), 1);
+    }
+
+    #[test]
+    fn bucket_identity_is_not_content() {
+        let mut a = Bucket::new("x");
+        a.tag = 7;
+        assert_eq!(a, Bucket::new("x"));
+        assert_ne!(a, Bucket::new("y"));
     }
 
     #[test]

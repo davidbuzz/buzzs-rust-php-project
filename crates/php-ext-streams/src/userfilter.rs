@@ -32,6 +32,12 @@ thread_local! {
     static BUCKET_CLASS: RefCell<Option<Rc<Class>>> = const { RefCell::new(None) };
     /// The VM value of the `$params` argument of the filter being created.
     static PENDING_PARAMS: RefCell<Option<Value>> = const { RefCell::new(None) };
+    /// The last `Bucket::tag` handed out.
+    static BUCKET_TAG: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    /// The brigade each tagged bucket was last attached to
+    /// (`bucket->brigade`).
+    static BUCKET_HOME: RefCell<std::collections::HashMap<u64, Weak<RefCell<Brigade>>>> =
+        RefCell::new(std::collections::HashMap::new());
 }
 
 /// A filter attached with `stream_filter_append()`/`prepend()`.
@@ -71,18 +77,25 @@ impl UserFilterClass for FilterClass {
                 }
             };
             let p = vm_params.unwrap_or_else(|| params.map_or(Value::Null, bridge::from_lib));
-            if let Err(t) = vm
-                .set_property(&obj, "filtername", bytes(filtername))
-                .and_then(|()| vm.set_property(&obj, "params", p))
-            {
+            // add_property_string()/add_property_zval(): a failure leaves
+            // the exception pending but the filter is still created.
+            if let Err(t) = vm.set_property(&obj, "filtername", bytes(filtername)) {
                 bridge::set_pending(t);
-                return None;
+            }
+            if let Err(t) = vm.set_property(&obj, "params", p) {
+                bridge::set_pending(t);
             }
             Some(obj)
         })
         .flatten()
         .map(|obj| {
-            let created = userwrap::call_method(&obj, "onCreate", &mut [], &[]);
+            // zend_call_method_if_exists() does nothing with an exception
+            // pending.
+            let created = if bridge::has_pending() {
+                UserCall::Returned(SValue::Null)
+            } else {
+                userwrap::call_method(&obj, "onCreate", &mut [], &[])
+            };
             let created = match created {
                 UserCall::NotImplemented => UserCall::Returned(SValue::Null),
                 c => c,
@@ -93,6 +106,21 @@ impl UserFilterClass for FilterClass {
             )
         })
     }
+}
+
+/// `zend_update_property_ex()` with `EG(fake_scope)` = the filter class.
+/// Without a PHP frame to carry the scope (request shutdown) the slot is
+/// written directly.
+fn set_stream_property(vm: &mut Vm, obj: &Obj, v: Value, scope: &Rc<Class>) -> VmResult<()> {
+    if vm
+        .frames
+        .iter()
+        .all(|f| f.kind == php_vm::vm::FrameKind::Builtin)
+    {
+        vm.set_property_raw(obj, "stream", v);
+        return Ok(());
+    }
+    vm.set_property_scoped(obj, "stream", v, scope)
 }
 
 fn new_brigade(b: Brigade) -> (Resource, SharedBrigade) {
@@ -118,9 +146,53 @@ impl UserFilterObject for FilterObject {
             if bridge::has_pending() {
                 return UserCall::Threw;
             }
-            let stream = res::stream_value_by_id(stream_id).unwrap_or(Value::Null);
-            if let Err(t) = vm.set_property(&obj, "stream", stream) {
-                bridge::set_pending(t);
+            // userfilter_assign_stream(): only an existing `stream`
+            // property is assigned, from the class scope, honouring its
+            // type.
+            let scope = php_vm::object::class_of(&obj).clone();
+            let has_stream = vm
+                .call_value(
+                    &bytes("property_exists"),
+                    vec![Value::Object(obj.clone()), bytes("stream")],
+                )
+                .is_ok_and(|v| matches!(v, Value::Bool(true)));
+            if has_stream {
+                let stream = res::filter_stream_value(stream_id);
+                if let Err(t) = set_stream_property(vm, &obj, stream, &scope) {
+                    bridge::set_pending(t);
+                    return UserCall::Threw;
+                }
+            }
+            let class_name = php_vm::object::display_name(&scope.name).to_string_lossy();
+            if !userwrap::method_exists(vm, &obj, "filter") {
+                // call_user_function() on a missing or inaccessible method.
+                let why = match scope.methods.get(&php_runtime::ZStr::from("filter")) {
+                    Some(m) => {
+                        let vis = if m.flags & acc::PRIVATE != 0 {
+                            "private"
+                        } else {
+                            "protected"
+                        };
+                        format!(
+                            "cannot access {vis} method {class_name}::{}()",
+                            m.name.to_string_lossy()
+                        )
+                    }
+                    None => format!("class {class_name} does not have a method \"filter\""),
+                };
+                let msg = format!("Invalid callback {class_name}::filter, {why}");
+                if vm
+                    .frames
+                    .iter()
+                    .all(|f| f.kind == php_vm::vm::FrameKind::Builtin)
+                {
+                    // At shutdown (no stack frame) zend_call_function()
+                    // reports an E_ERROR instead of throwing.
+                    let _ = vm.raise(1, &msg);
+                } else {
+                    let t = vm.throw("Error", &msg);
+                    bridge::set_pending(t);
+                }
                 return UserCall::Threw;
             }
             let c = PhpRef::new(consumed.map_or(Value::Null, Value::Int));
@@ -131,7 +203,14 @@ impl UserFilterObject for FilterObject {
                 Value::Bool(closing),
             ];
             let r = match vm.call_method_by_name(&obj, "filter", args) {
-                Ok(v) => UserCall::Returned(bridge::to_lib(&v)),
+                // convert_to_long(&retval) (warns for objects).
+                Ok(v) => match vm.value_to_int(&v) {
+                    Ok(i) => UserCall::Returned(SValue::Int(i)),
+                    Err(t) => {
+                        bridge::set_pending(t);
+                        UserCall::Threw
+                    }
+                },
                 Err(t) => {
                     bridge::set_pending(t);
                     UserCall::Threw
@@ -143,8 +222,8 @@ impl UserFilterObject for FilterObject {
                     v => vm.value_to_int(&v).unwrap_or(0),
                 });
             }
-            if !bridge::has_pending() {
-                vm.set_property_raw(&obj, "stream", Value::Null);
+            if has_stream && !bridge::has_pending() {
+                let _ = set_stream_property(vm, &obj, Value::Null, &scope);
             }
             r
         })
@@ -199,10 +278,20 @@ fn fetch_brigade(vm: &mut Vm, a: &Args, n: usize) -> VmResult<SharedBrigade> {
     })
 }
 
-fn bucket_object(vm: &mut Vm, bucket: Bucket) -> VmResult<Value> {
+/// A fresh bucket identity (`Bucket::tag`).
+fn next_tag() -> u64 {
+    BUCKET_TAG.with(|t| {
+        let v = t.get() + 1;
+        t.set(v);
+        v
+    })
+}
+
+fn bucket_object(vm: &mut Vm, mut bucket: Bucket) -> VmResult<Value> {
     let Some(cls) = BUCKET_CLASS.with(|c| c.borrow().clone()) else {
         return Ok(Value::Null);
     };
+    bucket.tag = next_tag();
     let len = i64::try_from(bucket.data.len()).unwrap_or(i64::MAX);
     let data = bytes(&bucket.data);
     let shared: SharedBucket = Rc::new(RefCell::new(bucket));
@@ -261,12 +350,33 @@ fn attach(vm: &mut Vm, a: &Args, append: bool) -> VmResult<Value> {
         shared.borrow_mut().data = s.as_bytes().to_vec();
     }
     let bucket = shared.borrow().clone();
-    let mut brigade = b.borrow_mut();
-    if append {
-        brigade.push_back(bucket);
-    } else {
-        brigade.push_front(bucket);
+    // A bucket already on a brigade is unlinked first (the same
+    // php_stream_bucket may be attached through clones of its object).
+    let previous = BUCKET_HOME.with(|h| h.borrow().get(&bucket.tag).and_then(Weak::upgrade));
+    if let Some(prev) = previous {
+        if let Ok(mut prev) = prev.try_borrow_mut() {
+            if let Some(i) = prev.iter().position(|x| x.tag == bucket.tag) {
+                prev.remove(i);
+            }
+        }
     }
+    let tag = bucket.tag;
+    {
+        let mut brigade = b.borrow_mut();
+        if let Some(i) = brigade.iter().position(|x| x.tag == tag) {
+            brigade.remove(i);
+        }
+        if append {
+            brigade.push_back(bucket);
+        } else {
+            brigade.push_front(bucket);
+        }
+    }
+    BUCKET_HOME.with(|h| {
+        let mut h = h.borrow_mut();
+        h.retain(|_, w| w.strong_count() > 0);
+        h.insert(tag, Rc::downgrade(&b));
+    });
     Ok(Value::Null)
 }
 
@@ -461,10 +571,12 @@ pub fn register(m: &mut ModuleBuilder<'_>) {
         .register(m.vm());
     let bucket = ClassBuilder::new("StreamBucket")
         .flags(class_flags::FINAL)
-        .prop("bucket", acc::PUBLIC | acc::READONLY, None, None)
-        .prop("data", acc::PUBLIC | acc::READONLY, Some("string"), None)
-        .prop("datalen", acc::PUBLIC | acc::READONLY, Some("int"), None)
-        .prop("dataLength", acc::PUBLIC | acc::READONLY, Some("int"), None)
+        // `@readonly` in the stub is documentation only: user filters
+        // assign `$bucket->data` (user_filters_arginfo.h: ZEND_ACC_PUBLIC).
+        .prop("bucket", acc::PUBLIC, None, Some(Value::Null))
+        .prop("data", acc::PUBLIC, Some("string"), None)
+        .prop("datalen", acc::PUBLIC, Some("int"), None)
+        .prop("dataLength", acc::PUBLIC, Some("int"), None)
         .register(m.vm());
     BUCKET_CLASS.with(|c| *c.borrow_mut() = Some(bucket));
     m.function("stream_bucket_make_writeable($brigade): ?StreamBucket", stream_bucket_make_writeable)

@@ -102,7 +102,11 @@ pub fn notify_raw(ctx: Option<&ContextRef>, n: &Notification) {
     let Some(ctx) = ctx.filter(|c| has_notifier(c)) else {
         return;
     };
-    let hook = NOTIFY_HOOK.with(|h| h.borrow().clone());
+    // Streams may be closed while thread-locals are being destroyed.
+    let hook = NOTIFY_HOOK
+        .try_with(|h| h.try_borrow().ok().and_then(|h| h.clone()))
+        .ok()
+        .flatten();
     if let Some(hook) = hook {
         hook(ctx, n);
     }

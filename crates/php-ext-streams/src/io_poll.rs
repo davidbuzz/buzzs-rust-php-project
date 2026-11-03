@@ -296,7 +296,11 @@ fn retire(ctx: &CtxRef, w: &Rc<RefCell<WatcherState>>) {
 
 /// `php_io_poll_stream_notify_close()`: the stream `id` is being closed.
 fn notify_close(id: u64) {
-    let Some(list) = STREAM_WATCHERS.with(|m| m.borrow_mut().remove(&id)) else {
+    let Some(list) = STREAM_WATCHERS
+        .try_with(|m| m.try_borrow_mut().ok().and_then(|mut m| m.remove(&id)))
+        .ok()
+        .flatten()
+    else {
         return;
     };
     for w in list.iter().filter_map(Weak::upgrade) {

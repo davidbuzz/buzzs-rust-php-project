@@ -130,7 +130,8 @@ fn fclose(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             // descriptor; only dropping the constant's resource keeps it.
             s.clear_flags(php_streams::stream::flags::NO_CLOSE);
         }
-        result = bridge::run(vm, || s.close())?;
+        let id = s.id();
+        result = res::fclosing(id, || bridge::run(vm, || s.close()))?;
         crate::process::reap(cell.id());
     } else {
         r.close();
@@ -176,7 +177,10 @@ fn fgetc(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 fn feof(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let cell = stream_arg(vm, a, 0)?;
     let r = with_stream(vm, &cell, Stream::eof)?;
-    Ok(Value::Bool(r.unwrap_or(true)))
+    // A stream whose user filter is running reports its EOF flag.
+    Ok(Value::Bool(r.unwrap_or_else(|| {
+        php_streams::filter::user::filtering_eof(cell.id()).unwrap_or(true)
+    })))
 }
 
 fn fflush(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {

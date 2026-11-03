@@ -9,6 +9,24 @@ use super::{
 use crate::diag;
 use crate::value::{UserCall, Value};
 
+thread_local! {
+    /// The streams whose user filters are running: `(stream id, eof)`.
+    static FILTERING: std::cell::RefCell<Vec<(u64, bool)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// The EOF flag of stream `id` while one of its user filters runs (the
+/// stream itself is busy then): what `feof($this->stream)` reports.
+pub fn filtering_eof(id: u64) -> Option<bool> {
+    FILTERING.with(|f| {
+        f.borrow()
+            .iter()
+            .rev()
+            .find(|(s, _)| *s == id)
+            .map(|(_, e)| *e)
+    })
+}
+
 /// A `php_user_filter` instance, implemented by the VM.
 ///
 /// The VM exposes `input`/`output` to PHP code as the bucket brigade
@@ -122,7 +140,11 @@ impl StreamFilter for UserFilter {
         let mut c = consumed
             .as_deref()
             .map(|c| i64::try_from(*c).unwrap_or(i64::MAX));
+        FILTERING.with(|f| f.borrow_mut().push((env.stream_id, env.eof)));
         let call = obj.filter(env.stream_id, input, output, &mut c, flags.is_closing());
+        FILTERING.with(|f| {
+            f.borrow_mut().pop();
+        });
         let status = match &call {
             UserCall::Returned(v) => FilterStatus::from_long(v.to_long()),
             UserCall::NotImplemented => {

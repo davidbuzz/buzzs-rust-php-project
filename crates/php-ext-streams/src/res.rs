@@ -41,6 +41,10 @@ pub struct StreamCell {
     /// The context resource state attached to the stream (kept alive like
     /// PHP's `stream->ctx` reference).
     ctx_keep: RefCell<Option<Rc<CtxCell>>>,
+    /// A stand-in for a stream that has no resource of its own (opened by
+    /// `file_get_contents()`, `include`, ...) while its user filter runs:
+    /// never holds the stream, which is busy.
+    proxy: bool,
 }
 
 impl StreamCell {
@@ -53,7 +57,7 @@ impl StreamCell {
 
     /// Whether the stream has been closed.
     pub fn is_closed(&self) -> bool {
-        self.stream.try_borrow().is_ok_and(|s| s.is_none())
+        !self.proxy && self.stream.try_borrow().is_ok_and(|s| s.is_none())
     }
 
     /// Removes the stream (for closing).
@@ -113,7 +117,10 @@ fn needs_vm(s: &Stream) -> bool {
 
 impl Drop for StreamCell {
     fn drop(&mut self) {
-        STREAMS.with(|m| {
+        if self.proxy {
+            return;
+        }
+        let _ = STREAMS.try_with(|m| {
             if let Ok(mut m) = m.try_borrow_mut() {
                 m.remove(&self.id.get());
             }
@@ -121,10 +128,14 @@ impl Drop for StreamCell {
         let Some(mut s) = self.stream.get_mut().take() else {
             return;
         };
+        // The resource is gone: user filters see `$this->stream === null`.
+        let id = s.id();
+        let _ = RELEASED.try_with(|r| r.borrow_mut().insert(id));
         if needs_vm(&s) && !bridge::has_vm() {
-            DEFERRED.with(|d| d.borrow_mut().push(s));
+            let _ = DEFERRED.try_with(|d| d.borrow_mut().push(s));
         } else {
             s.close();
+            let _ = RELEASED.try_with(|r| r.borrow_mut().remove(&id));
         }
     }
 }
@@ -154,6 +165,12 @@ thread_local! {
     static STREAMS: RefCell<HashMap<u64, Weak<StreamCell>>> = RefCell::new(HashMap::new());
     static CONTEXTS: RefCell<HashMap<usize, Weak<CtxCell>>> = RefCell::new(HashMap::new());
     static DEFERRED: RefCell<Vec<Stream>> = const { RefCell::new(Vec::new()) };
+    /// Streams being closed by `fclose()` (their resource is still valid).
+    static FCLOSING: RefCell<std::collections::HashSet<u64>> =
+        RefCell::new(std::collections::HashSet::new());
+    /// Streams whose resource was released while they still close.
+    static RELEASED: RefCell<std::collections::HashSet<u64>> =
+        RefCell::new(std::collections::HashSet::new());
     /// Persistent ids of open persistent streams.
     static PERSISTENT: RefCell<HashMap<String, u64>> = RefCell::new(HashMap::new());
     static DEFAULT_CONTEXT: RefCell<Option<Resource>> = const { RefCell::new(None) };
@@ -188,6 +205,7 @@ pub fn new_stream_ex(mut stream: Stream, wrapper_data: Option<Value>, persistent
         handle: Cell::new(0),
         wrapper_data: RefCell::new(wrapper_data),
         persistent,
+        proxy: false,
     });
     let ty = if persistent {
         PERSISTENT_STREAM
@@ -231,6 +249,7 @@ pub fn new_stream_with_handle(stream: Stream, handle: i64) -> Value {
         wrapper_data: RefCell::new(None),
         persistent: false,
         ctx_keep: RefCell::new(None),
+        proxy: false,
     });
     let r = Resource::with_handle(handle, STREAM, Some(Box::new(StreamRes(Rc::clone(&cell)))));
     STREAMS.with(|m| m.borrow_mut().insert(id, Rc::downgrade(&cell)));
@@ -269,6 +288,47 @@ pub fn stream_value_by_id(id: u64) -> Option<Value> {
     Some(Value::Resource(r))
 }
 
+/// `$this->stream` for a user filter of stream `id`: its resource; `null`
+/// while the resource is being closed (`res->type < 0`); for a stream
+/// without a resource of its own, a stand-in resource that functions see
+/// as a busy stream (`feof()` reports the filter-time EOF flag).
+pub fn filter_stream_value(id: u64) -> Value {
+    if RELEASED.with(|r| r.borrow().contains(&id)) {
+        return Value::Null;
+    }
+    let cell = STREAMS.with(|m| m.borrow().get(&id).and_then(Weak::upgrade));
+    match cell {
+        // fclose(): the resource is still valid while the stream closes.
+        Some(c) if c.is_closed() && FCLOSING.with(|f| f.borrow().contains(&id)) => {
+            Value::Resource(Resource::with_handle(
+                c.handle(),
+                if c.persistent {
+                    PERSISTENT_STREAM
+                } else {
+                    STREAM
+                },
+                Some(Box::new(StreamRes(Rc::clone(&c)))),
+            ))
+        }
+        Some(c) if c.is_closed() => Value::Null,
+        Some(_) => stream_value_by_id(id).unwrap_or(Value::Null),
+        None => {
+            let cell = Rc::new(StreamCell {
+                stream: RefCell::new(None),
+                id: Cell::new(id),
+                handle: Cell::new(0),
+                wrapper_data: RefCell::new(None),
+                persistent: false,
+                ctx_keep: RefCell::new(None),
+                proxy: true,
+            });
+            let r = Resource::new(STREAM, Some(Box::new(StreamRes(Rc::clone(&cell)))));
+            cell.handle.set(r.handle());
+            Value::Resource(r)
+        }
+    }
+}
+
 /// Closes streams whose last reference was dropped while no native call
 /// was running.
 pub fn close_deferred(vm: &mut Vm) {
@@ -278,7 +338,9 @@ pub fn close_deferred(vm: &mut Vm) {
             break;
         }
         for mut s in pending {
+            let id = s.id();
             let _ = bridge::run(vm, || s.close());
+            RELEASED.with(|r| r.borrow_mut().remove(&id));
         }
     }
 }
@@ -292,6 +354,17 @@ pub fn shutdown(vm: &mut Vm) {
     cells.sort_by_key(|c| std::cmp::Reverse(c.handle()));
     for c in cells {
         if c.handle() <= 3 {
+            // STDIN/STDOUT/STDERR keep their descriptors (NO_CLOSE), but
+            // their write filters are flushed when the resource list is
+            // destroyed.
+            let filtered = c.get().is_some_and(|s| !s.write_filters.is_empty());
+            if filtered {
+                if let Some(mut s) = c.take() {
+                    if let Err(php_vm::vm::Throw::Exception(e)) = bridge::run(vm, || s.close()) {
+                        report_uncaught(vm, &e);
+                    }
+                }
+            }
             continue;
         }
         if let Some(mut s) = c.take() {
@@ -299,6 +372,25 @@ pub fn shutdown(vm: &mut Vm) {
         }
     }
     close_deferred(vm);
+}
+
+/// Runs `f` (closing stream `id`) as `fclose()` does: user filters still
+/// see the stream's resource.
+pub fn fclosing<R>(id: u64, f: impl FnOnce() -> R) -> R {
+    FCLOSING.with(|s| s.borrow_mut().insert(id));
+    let r = f();
+    FCLOSING.with(|s| s.borrow_mut().remove(&id));
+    r
+}
+
+/// An exception escaping a filter callback while the resource list is
+/// destroyed: "Fatal error: Uncaught ..." (`zend_exception_error`).
+fn report_uncaught(vm: &mut Vm, e: &php_runtime::Obj) {
+    let text = match vm.call_method_by_name(e, "__toString", Vec::new()) {
+        Ok(Value::Str(s)) => s.to_string_lossy(),
+        _ => return,
+    };
+    let _ = vm.raise(1, &format!("Uncaught {text}\n  thrown"));
 }
 
 /// `get_resources()`: the live stream and context resources (the ones this
