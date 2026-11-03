@@ -1,7 +1,7 @@
 //! `ext/sqlite3`: the `SQLite3`, `SQLite3Stmt`, `SQLite3Result` and
 //! `SQLite3Exception` classes and the `SQLITE3_*` constants.
 
-use crate::host::with_sqlite;
+use crate::host::{bind_callable, with_sqlite};
 use php_runtime::{Obj, Value};
 use php_sqlite::constants::{
     SQLITE3STMT_CLASS_CONSTANTS, SQLITE3_BOTH, SQLITE3_CLASS_CONSTANTS, SQLITE3_OPEN_CREATE,
@@ -72,7 +72,12 @@ fn this_result(vm: &mut Vm, a: &Args) -> VmResult<Rc<Sqlite3Result>> {
 fn check_path(vm: &mut Vm, a: &Args, n: usize) -> VmResult<Vec<u8>> {
     let s = a.str(n).into_bytes();
     if s.contains(&0) {
-        return Err(a.value_error(vm, n + 1, "must not contain any null bytes"));
+        return Err(crate::host::arg_value_error(
+            vm,
+            a,
+            n + 1,
+            "must not contain any null bytes",
+        ));
     }
     Ok(s)
 }
@@ -210,7 +215,8 @@ fn prepare(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 fn query(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let db = this_db(a);
     let sql = a.str(0);
-    match with_sqlite(vm, |h| db.query(h, sql.as_bytes(), true))? {
+    let used = crate::host::used_ret(vm);
+    match with_sqlite(vm, |h| db.query(h, sql.as_bytes(), used))? {
         Some(r) => new_result_object(vm, r),
         None => Ok(Value::Bool(false)),
     }
@@ -220,13 +226,14 @@ fn query_single(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let db = this_db(a);
     let sql = a.str(0);
     let entire = a.bool(1);
-    with_sqlite(vm, |h| db.query_single(h, sql.as_bytes(), entire, true))
+    let used = crate::host::used_ret(vm);
+    with_sqlite(vm, |h| db.query_single(h, sql.as_bytes(), entire, used))
 }
 
 fn create_function(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let db = this_db(a);
     let name = a.str(0);
-    let cb = a.at(1);
+    let cb = bind_callable(vm, a.at(1));
     let argc = int_or(a, 2, -1);
     let flags = a.int(3);
     with_sqlite(vm, |_| db.create_function(name.as_bytes(), cb, argc, flags)).map(Value::Bool)
@@ -235,8 +242,8 @@ fn create_function(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 fn create_aggregate(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let db = this_db(a);
     let name = a.str(0);
-    let step = a.at(1);
-    let fini = a.at(2);
+    let step = bind_callable(vm, a.at(1));
+    let fini = bind_callable(vm, a.at(2));
     let argc = int_or(a, 3, -1);
     with_sqlite(vm, |_| {
         db.create_aggregate(name.as_bytes(), step, fini, argc)
@@ -247,7 +254,7 @@ fn create_aggregate(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 fn create_collation(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let db = this_db(a);
     let name = a.str(0);
-    let cb = a.at(1);
+    let cb = bind_callable(vm, a.at(1));
     with_sqlite(vm, |_| db.create_collation(name.as_bytes(), cb)).map(Value::Bool)
 }
 
@@ -286,7 +293,7 @@ fn enable_exceptions(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 fn set_authorizer(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let db = this_db(a);
-    let cb = a.opt(0);
+    let cb = a.opt(0).map(|cb| bind_callable(vm, cb));
     with_sqlite(vm, |_| db.set_authorizer(cb)).map(Value::Bool)
 }
 
@@ -397,8 +404,9 @@ fn stmt_explain(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 fn stmt_set_explain(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let mode = a.int(0);
     if !(0..=2).contains(&mode) {
-        return Err(a.value_error(
+        return Err(crate::host::arg_value_error(
             vm,
+            a,
             1,
             "must be one of the SQLite3Stmt::EXPLAIN_MODE_* constants",
         ));

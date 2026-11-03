@@ -154,6 +154,43 @@ pub fn active_function_name(vm: &Vm) -> String {
         .unwrap_or_default()
 }
 
+/// `zend_argument_value_error()` for native methods:
+/// `Class::method(): Argument #n ($name) msg` (`n` is 1-based).
+pub fn arg_value_error(vm: &mut Vm, a: &php_vm::ext::Args, n: usize, msg: &str) -> Throw {
+    let func = active_function_name(vm);
+    let name = a
+        .func
+        .as_ref()
+        .and_then(|f| f.params.get(n.saturating_sub(1)))
+        .map_or_else(String::new, |p| p.name.to_string_lossy());
+    vm.throw(
+        "ValueError",
+        &format!("{func}(): Argument #{n} (${name}) {msg}"),
+    )
+}
+
+/// `USED_RET()`: whether the caller uses the return value of the running
+/// native function (`false` for a call statement such as `$db->query(...);`).
+pub fn used_ret(vm: &Vm) -> bool {
+    let Some(b) = vm.frames.iter().rposition(|f| f.kind == FrameKind::Builtin) else {
+        return true;
+    };
+    let Some(caller) = b.checked_sub(1).and_then(|i| vm.frames.get(i)) else {
+        return true;
+    };
+    if caller.kind == FrameKind::Builtin {
+        return true;
+    }
+    match caller
+        .ip
+        .checked_sub(1)
+        .and_then(|i| caller.code.ops.get(i))
+    {
+        Some(php_vm::opcode::Op::DoCall { dst }) => dst.is_some(),
+        _ => true,
+    }
+}
+
 /// `object_init_ex()`: creates an instance without running its
 /// constructor, refusing abstract and other non-instantiable classes.
 pub fn instantiate(vm: &mut Vm, cls: &Rc<Class>) -> VmResult<Obj> {
@@ -215,6 +252,28 @@ fn class_info_of(cls: &Rc<Class>) -> ClassInfo {
         constructor_is_public: ctor
             .is_some_and(|m| m.flags & (flags::PRIVATE | flags::PROTECTED) == 0),
         can_unserialize: cls.instance_of_name(b"serializable"),
+    }
+}
+
+/// `zend_fcc_dup()` of a callable validated in the caller's scope: method
+/// callables (`[$this, 'privateMethod']`, `"Class::method"`) are bound to
+/// a `Closure` now, so that calling them later (from a database callback,
+/// in another scope) still works.
+pub fn bind_callable(vm: &mut Vm, callable: Value) -> Value {
+    let is_method = match &callable {
+        Value::Array(_) => true,
+        Value::Str(s) => s.as_bytes().windows(2).any(|w| w == b"::"),
+        _ => false,
+    };
+    if !is_method {
+        return callable;
+    }
+    match vm.call_value(
+        &Value::from("Closure::fromCallable"),
+        vec![callable.clone()],
+    ) {
+        Ok(v @ Value::Object(_)) => v,
+        _ => callable,
     }
 }
 
@@ -393,6 +452,26 @@ impl PdoHost for VmHost<'_> {
         self.docref_impl(level, message)
     }
 
+    fn docref_ex(
+        &mut self,
+        level: ErrorLevel,
+        message: &str,
+        exception_pending: bool,
+    ) -> RtResult<()> {
+        // zend_error_impl(): with an exception pending the user error
+        // handler cannot run, and nothing is displayed either.
+        if exception_pending
+            && self
+                .vm
+                .error_handlers
+                .last()
+                .is_some_and(|h| !h.callback.is_null() && h.mask & level.bits() != 0)
+        {
+            return Ok(());
+        }
+        self.docref_impl(level, message)
+    }
+
     fn active_function_name(&self) -> String {
         active_function_name(self.vm)
     }
@@ -428,6 +507,24 @@ impl PdoHost for VmHost<'_> {
         };
         if class_of(o).magic.construct.is_none() {
             return Ok(());
+        }
+        let named = args.is_some_and(|a| {
+            a.iter()
+                .any(|(k, _)| matches!(k, php_runtime::ArrayKey::Str(_)))
+        });
+        let public = class_info_of(class_of(o)).constructor_is_public;
+        if named && public {
+            // String keys are named arguments; only the generic call path
+            // of the VM resolves them.
+            let callable = Value::Array(ZArray::from_values([
+                Value::Object(o.clone()),
+                Value::from("__construct"),
+            ]));
+            let arr = Value::Array(args.cloned().unwrap_or_default());
+            let r = self
+                .vm
+                .call_function("call_user_func_array", vec![callable, arr]);
+            return self.rt(r).map(|_| ());
         }
         let args: Vec<Value> = args
             .map(|a| a.iter().map(|(_, v)| v.clone()).collect())
@@ -485,9 +582,8 @@ impl PdoHost for VmHost<'_> {
     }
 
     fn create_row(&mut self, row: PdoRow) -> RtResult<Value> {
-        let o = self.new_instance(&ZStr::from("PDORow"))?;
-        php_vm::object::set_internal(&o, row);
-        Ok(Value::Object(o))
+        let r = crate::stmt::create_row(self.vm, row);
+        self.rt(r).map(Value::Object)
     }
 
     fn new_pdo_exception(&mut self, exception: PdoException) -> RuntimeError {
@@ -579,7 +675,14 @@ fn check_open_basedir(vm: &mut Vm, path: &[u8]) -> bool {
     if !open_basedir_active(vm) {
         return false;
     }
-    let allowed = php_streams::paths::check_open_basedir(path);
+    let basedir = vm.ini_string("open_basedir").unwrap_or_default();
+    php_streams::state::update_settings(|s| s.open_basedir = basedir);
+    // While PDO connects, warnings are turned into exceptions (EH_THROW)
+    // by the PDO core, which this path bypasses: drop the warning there
+    // and let the "open_basedir prohibits" exception speak.
+    let func = active_function_name(vm);
+    let quiet = func == "PDO::__construct" || func == "PDO::connect";
+    let allowed = php_streams::paths::check_open_basedir_ex(path, !quiet);
     let _ = crate::streams::flush_diagnostics(vm);
     !allowed
 }

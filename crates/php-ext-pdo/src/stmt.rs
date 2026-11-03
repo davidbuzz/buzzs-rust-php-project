@@ -394,8 +394,10 @@ fn row_write_property(vm: &mut Vm, _o: &Obj, _name: &ZStr, _v: &Value) -> VmResu
 }
 
 fn row_has_property(vm: &mut Vm, o: &Obj, name: &ZStr, empty: bool) -> VmResult<Option<bool>> {
+    // The VM's hook answers `empty()` itself; `PdoRow` follows
+    // `has_property(check_empty)` ("set and truthy").
     let row = row_of(o);
-    with_host(vm, |h| row.has_property(h, name, empty)).map(Some)
+    with_host(vm, |h| row.has_property(h, name, empty)).map(|r| Some(if empty { !r } else { r }))
 }
 
 fn row_unset_property(vm: &mut Vm, _o: &Obj, _name: &ZStr) -> VmResult<bool> {
@@ -431,12 +433,35 @@ fn row_properties_for(vm: &mut Vm, o: &Obj, purpose: PropertyPurpose) -> VmResul
     with_host(vm, |h| row.debug_properties(h)).map(Some)
 }
 
-fn row_construct(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
+thread_local! {
+    /// Set while [`create_row`] instantiates a `PDORow`.
+    static CREATING_ROW: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// `row_get_ctor`: `new PDORow` (and reflection) throw; only the fetch
+/// code creates rows.
+fn row_create(vm: &mut Vm, _o: &Obj) -> VmResult<()> {
+    if CREATING_ROW.with(std::cell::Cell::get) {
+        return Ok(());
+    }
     let e = {
         let mut h = VmHost::new(vm);
         PdoRow::constructor_error(&mut h)
     };
     Err(crate::host::rt_throw(vm, e))
+}
+
+/// Creates the `PDORow` object of a `PDO::FETCH_LAZY` fetch.
+pub fn create_row(vm: &mut Vm, row: PdoRow) -> VmResult<Obj> {
+    let Some(cls) = vm.find_class(b"PDORow") else {
+        return Err(vm.throw("Error", "Class \"PDORow\" not found"));
+    };
+    CREATING_ROW.with(|c| c.set(true));
+    let r = vm.new_object(&cls);
+    CREATING_ROW.with(|c| c.set(false));
+    let o = r?;
+    php_vm::object::set_internal(&o, row);
+    Ok(o)
 }
 
 /// Registers `PDOStatement`, `PDORow` and the statement iterator class.
@@ -513,8 +538,16 @@ pub fn register(vm: &mut Vm) {
         .method("getIterator(): Iterator", pub_, get_iterator)
         .register(vm);
 
+    // ALLOW_DYNAMIC: the VM has no `get_property_ptr_ptr` hook; nested
+    // writes (`$row->a->b = 1`) must not raise the dynamic-property
+    // deprecation (direct writes still go through `write_property`).
     ClassBuilder::new("PDORow")
-        .flags(class_flags::FINAL | class_flags::NOT_SERIALIZABLE | class_flags::NO_CLONE)
+        .flags(
+            class_flags::FINAL
+                | class_flags::NOT_SERIALIZABLE
+                | class_flags::NO_CLONE
+                | class_flags::ALLOW_DYNAMIC,
+        )
         .prop("queryString", pub_, Some("string"), None)
         .hooks(ClassHooks {
             read_property: Some(row_read_property),
@@ -526,8 +559,8 @@ pub fn register(vm: &mut Vm) {
             has_dimension: Some(row_has_dimension),
             unset_dimension: Some(row_unset_dimension),
             properties_for: Some(row_properties_for),
+            create: Some(row_create),
             ..Default::default()
         })
-        .method("__construct()", pub_, row_construct)
         .register(vm);
 }

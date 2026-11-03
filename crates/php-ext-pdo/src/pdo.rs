@@ -1,6 +1,6 @@
 //! The `PDO`, `PDOException` and `Pdo\Sqlite` classes and `pdo_drivers()`.
 
-use crate::host::{pdo_of, with_host, with_sqlite};
+use crate::host::{bind_callable, pdo_of, with_host, with_sqlite};
 use php_pdo::consts::{pdo_class_constants, ConstValue, PARAM_STR};
 use php_pdo::{ConnectArgs, Pdo};
 use php_runtime::{Obj, Value, ZArray, ZStr};
@@ -186,7 +186,12 @@ fn sqlite_dbh(vm: &mut Vm, a: &Args) -> VmResult<PdoSqliteDbh> {
 /// The NUL-byte check of a `p` (path) ZPP argument.
 fn check_path(vm: &mut Vm, a: &Args, n: usize, s: &ZStr) -> VmResult<()> {
     if s.as_bytes().contains(&0) {
-        return Err(a.value_error(vm, n + 1, "must not contain any null bytes"));
+        return Err(crate::host::arg_value_error(
+            vm,
+            a,
+            n + 1,
+            "must not contain any null bytes",
+        ));
     }
     Ok(())
 }
@@ -222,7 +227,7 @@ fn create_aggregate(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 fn create_collation(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let h = sqlite_dbh(vm, a)?;
     let name = a.str(0);
-    let cb = a.at(1);
+    let cb = bind_callable(vm, a.at(1));
     Ok(Value::Bool(h.create_collation(name.as_bytes(), cb)))
 }
 
@@ -230,7 +235,7 @@ fn load_extension(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let name = a.str(0);
     check_path(vm, a, 0, &name)?;
     if name.is_empty() {
-        return Err(a.value_error(vm, 1, "must not be empty"));
+        return Err(crate::host::arg_value_error(vm, a, 1, "must not be empty"));
     }
     let h = sqlite_dbh(vm, a)?;
     with_sqlite(vm, |host| {
@@ -278,7 +283,8 @@ fn open_blob(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 fn set_authorizer(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let h = sqlite_dbh(vm, a)?;
-    h.set_authorizer(a.opt(0));
+    let cb = a.opt(0).map(|cb| bind_callable(vm, cb));
+    h.set_authorizer(cb);
     Ok(Value::Null)
 }
 
@@ -302,44 +308,63 @@ fn legacy(vm: &mut Vm, a: &Args, name: &str, replacement: &str) -> VmResult<PdoS
     Ok(h)
 }
 
+/// `Z_PARAM_FUNC` of the legacy methods (checked after the deprecation,
+/// like the engine does for `ZEND_ACC_DEPRECATED` functions).
+fn legacy_callable(vm: &mut Vm, a: &Args, n: usize, method: &str) -> VmResult<Value> {
+    let cb = a.at(n);
+    if vm.is_callable(&cb) {
+        return Ok(bind_callable(vm, cb));
+    }
+    let name = a
+        .func
+        .as_ref()
+        .and_then(|f| f.params.get(n))
+        .map_or_else(String::new, |p| p.name.to_string_lossy());
+    let why = vm.callable_error_message(&cb);
+    Err(vm.throw(
+        "TypeError",
+        &format!(
+            "PDO::{method}(): Argument #{} (${name}) must be a valid callback, {why}",
+            n + 1
+        ),
+    ))
+}
+
 fn sqlite_create_function(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let h = legacy(vm, a, "sqliteCreateFunction", "Pdo\\Sqlite::createFunction")?;
+    let m = "sqliteCreateFunction";
+    let h = legacy(vm, a, m, "Pdo\\Sqlite::createFunction")?;
+    let cb = legacy_callable(vm, a, 1, m)?;
     let name = a.str(0);
     let argc = if a.has(2) { a.int(2) } else { -1 };
     Ok(Value::Bool(h.create_function(
         name.as_bytes(),
-        a.at(1),
+        cb,
         argc,
         a.int(3),
     )))
 }
 
 fn sqlite_create_aggregate(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let h = legacy(
-        vm,
-        a,
-        "sqliteCreateAggregate",
-        "Pdo\\Sqlite::createAggregate",
-    )?;
+    let m = "sqliteCreateAggregate";
+    let h = legacy(vm, a, m, "Pdo\\Sqlite::createAggregate")?;
+    let step = legacy_callable(vm, a, 1, m)?;
+    let fini = legacy_callable(vm, a, 2, m)?;
     let name = a.str(0);
     let argc = if a.has(3) { a.int(3) } else { -1 };
     Ok(Value::Bool(h.create_aggregate(
         name.as_bytes(),
-        a.at(1),
-        a.at(2),
+        step,
+        fini,
         argc,
     )))
 }
 
 fn sqlite_create_collation(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let h = legacy(
-        vm,
-        a,
-        "sqliteCreateCollation",
-        "Pdo\\Sqlite::createCollation",
-    )?;
+    let m = "sqliteCreateCollation";
+    let h = legacy(vm, a, m, "Pdo\\Sqlite::createCollation")?;
+    let cb = legacy_callable(vm, a, 1, m)?;
     let name = a.str(0);
-    Ok(Value::Bool(h.create_collation(name.as_bytes(), a.at(1))))
+    Ok(Value::Bool(h.create_collation(name.as_bytes(), cb)))
 }
 
 fn const_value(v: ConstValue) -> Value {
@@ -420,17 +445,17 @@ pub fn register(vm: &mut Vm) {
         set_attribute,
     )
     .method(
-        "sqliteCreateFunction(string $name, callable $callback, int $numArgs = -1, int $flags = 0): bool",
+        "sqliteCreateFunction(string $name, mixed $callback, int $numArgs = -1, int $flags = 0): bool",
         pub_,
         sqlite_create_function,
     )
     .method(
-        "sqliteCreateAggregate(string $name, callable $step, callable $finalize, int $numArgs = -1): bool",
+        "sqliteCreateAggregate(string $name, mixed $step, mixed $finalize, int $numArgs = -1): bool",
         pub_,
         sqlite_create_aggregate,
     )
     .method(
-        "sqliteCreateCollation(string $name, callable $callback): bool",
+        "sqliteCreateCollation(string $name, mixed $callback): bool",
         pub_,
         sqlite_create_collation,
     )
