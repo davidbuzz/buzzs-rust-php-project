@@ -1,0 +1,95 @@
+array (
+  'name' => '/C=BR/ST=Rio Grande do Sul/L=Porto Alegre/CN=Henrique do N. Angelo/emailAddress=hnangelo@php.net',
+  'subject' => 
+  array (
+    'C' => 'BR',
+    'ST' => 'Rio Grande do Sul',
+    'L' => 'Porto Alegre',
+    'CN' => 'Henrique do N. Angelo',
+    'emailAddress' => 'hnangelo@php.net',
+  ),
+  'hash' => '0f3c1241',
+  'issuer' => 
+  array (
+    'C' => 'BR',
+    'ST' => 'Rio Grande do Sul',
+    'L' => 'Porto Alegre',
+    'CN' => 'Henrique do N. Angelo',
+    'emailAddress' => 'hnangelo@php.net',
+  ),
+  'version' => 2,
+  'serialNumber' => '12593567369101004962',
+  'serialNumberHex' => 'AEC556CC723750A2',
+  'validFrom' => '080630102843Z',
+  'validTo' => '080730102843Z',
+  'validFrom_time_t' => 1214821723,
+  'validTo_time_t' => 1217413723,
+  'signatureTypeSN' => 'RSA-SHA1',
+  'signatureTypeLN' => 'sha1WithRSAEncryption',
+  'signatureTypeNID' => 65,
+  'purposes' => 
+  array (
+    1 => 
+    array (
+      0 => true,
+      1 => true,
+      2 => 'sslclient',
+    ),
+    2 => 
+    array (
+      0 => true,
+      1 => true,
+      2 => 'sslserver',
+    ),
+    3 => 
+    array (
+      0 => true,
+      1 => true,
+      2 => 'nssslserver',
+    ),
+    4 => 
+    array (
+      0 => true,
+      1 => true,
+      2 => 'smimesign',
+    ),
+    5 => 
+    array (
+      0 => true,
+      1 => true,
+      2 => 'smimeencrypt',
+    ),
+    6 => 
+    array (
+      0 => true,
+      1 => true,
+      2 => 'crlsign',
+    ),
+    7 => 
+    array (
+      0 => true,
+      1 => true,
+      2 => 'any',
+    ),
+    8 => 
+    array (
+      0 => true,
+      1 => true,
+      2 => 'ocsphelper',
+    ),
+    9 => 
+    array (
+      0 => false,
+      1 => true,
+      2 => 'timestampsign',
+    ),
+  ),
+  'extensions' => 
+  array (
+    'subjectKeyIdentifier' => 'DB:7E:40:72:BD:5C:35:85:EC:29:29:81:12:E8:62:68:6A:B7:3F:7D',
+    'authorityKeyIdentifier' => 'keyid:DB:7E:40:72:BD:5C:35:85:EC:29:29:81:12:E8:62:68:6A:B7:3F:7D
+DirName:/C=BR/ST=Rio Grande do Sul/L=Porto Alegre/CN=Henrique do N. Angelo/emailAddress=hnangelo@php.net
+serial:AE:C5:56:CC:72:37:50:A2',
+    'basicConstraints' => 'CA:TRUE',
+  ),
+)

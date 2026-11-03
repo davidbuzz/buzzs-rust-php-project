@@ -105,6 +105,15 @@ fn format_float(f: f64) -> String {
     }
 }
 
+/// A `bool|int` return value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BoolOrInt {
+    /// `true` / `false`.
+    Bool(bool),
+    /// An integer (e.g. `-1` for errors).
+    Int(i64),
+}
+
 /// An ordered PHP array.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct PhpArray {

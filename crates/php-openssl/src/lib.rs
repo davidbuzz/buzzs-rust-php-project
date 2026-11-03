@@ -55,7 +55,7 @@ pub mod x509;
 
 pub use args::{AsymmetricKey, CertArg, Certificate, CertificateSigningRequest, CsrArg, KeyArg};
 pub use error::{Diagnostic, ErrorQueue, Level, PhpResult, Throw};
-pub use value::{Key, PhpArray, PhpValue};
+pub use value::{BoolOrInt, Key, PhpArray, PhpValue};
 
 /// Per-request state of the openssl extension.
 #[derive(Debug)]

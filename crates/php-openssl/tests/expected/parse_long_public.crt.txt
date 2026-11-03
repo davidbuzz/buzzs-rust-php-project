@@ -1,0 +1,86 @@
+array (
+  'name' => '/C=PL/ST=Some-State/O=Internet Widgits Pty Ltd',
+  'subject' => 
+  array (
+    'countryName' => 'PL',
+    'stateOrProvinceName' => 'Some-State',
+    'organizationName' => 'Internet Widgits Pty Ltd',
+  ),
+  'hash' => 'f644f7b0',
+  'issuer' => 
+  array (
+    'countryName' => 'PL',
+    'stateOrProvinceName' => 'Some-State',
+    'organizationName' => 'Internet Widgits Pty Ltd',
+  ),
+  'version' => 0,
+  'serialNumber' => '10591928240753140494',
+  'serialNumberHex' => '92FE169DD484E30E',
+  'validFrom' => '150610121247Z',
+  'validTo' => '160609121247Z',
+  'validFrom_time_t' => 1433938367,
+  'validTo_time_t' => 1465474367,
+  'signatureTypeSN' => 'RSA-SHA256',
+  'signatureTypeLN' => 'sha256WithRSAEncryption',
+  'signatureTypeNID' => 668,
+  'purposes' => 
+  array (
+    1 => 
+    array (
+      0 => true,
+      1 => true,
+      2 => 'SSL client',
+    ),
+    2 => 
+    array (
+      0 => true,
+      1 => true,
+      2 => 'SSL server',
+    ),
+    3 => 
+    array (
+      0 => true,
+      1 => true,
+      2 => 'Netscape SSL server',
+    ),
+    4 => 
+    array (
+      0 => true,
+      1 => true,
+      2 => 'S/MIME signing',
+    ),
+    5 => 
+    array (
+      0 => true,
+      1 => true,
+      2 => 'S/MIME encryption',
+    ),
+    6 => 
+    array (
+      0 => true,
+      1 => true,
+      2 => 'CRL signing',
+    ),
+    7 => 
+    array (
+      0 => true,
+      1 => true,
+      2 => 'Any Purpose',
+    ),
+    8 => 
+    array (
+      0 => true,
+      1 => true,
+      2 => 'OCSP helper',
+    ),
+    9 => 
+    array (
+      0 => false,
+      1 => true,
+      2 => 'Time Stamp signing',
+    ),
+  ),
+  'extensions' => 
+  array (
+  ),
+)

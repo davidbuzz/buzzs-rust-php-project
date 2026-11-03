@@ -1,0 +1,107 @@
+array (
+  'name' => '/C=RO/ST=Romania/L=Craiova/O=Sergiu SRL/OU=Sergiu SRL/CN=Sergiu personal/emailAddress=n_sergiu@hotmail.com',
+  'subject' => 
+  array (
+    'C' => 'RO',
+    'ST' => 'Romania',
+    'L' => 'Craiova',
+    'O' => 'Sergiu SRL',
+    'OU' => 'Sergiu SRL',
+    'CN' => 'Sergiu personal',
+    'emailAddress' => 'n_sergiu@hotmail.com',
+  ),
+  'hash' => '858ede19',
+  'issuer' => 
+  array (
+    'C' => 'RO',
+    'ST' => 'Romania',
+    'L' => 'Craiova',
+    'O' => 'Sergiu',
+    'OU' => 'Sergiu SRL',
+    'CN' => 'Sergiu CA',
+    'emailAddress' => 'n_sergiu@hotmail.com',
+  ),
+  'version' => 2,
+  'serialNumber' => '39',
+  'serialNumberHex' => '27',
+  'validFrom' => '040514133456Z',
+  'validTo' => '050514133456Z',
+  'validFrom_time_t' => 1084541696,
+  'validTo_time_t' => 1116077696,
+  'signatureTypeSN' => 'RSA-MD5',
+  'signatureTypeLN' => 'md5WithRSAEncryption',
+  'signatureTypeNID' => 8,
+  'purposes' => 
+  array (
+    1 => 
+    array (
+      0 => true,
+      1 => false,
+      2 => 'sslclient',
+    ),
+    2 => 
+    array (
+      0 => true,
+      1 => false,
+      2 => 'sslserver',
+    ),
+    3 => 
+    array (
+      0 => true,
+      1 => false,
+      2 => 'nssslserver',
+    ),
+    4 => 
+    array (
+      0 => true,
+      1 => false,
+      2 => 'smimesign',
+    ),
+    5 => 
+    array (
+      0 => true,
+      1 => false,
+      2 => 'smimeencrypt',
+    ),
+    6 => 
+    array (
+      0 => false,
+      1 => false,
+      2 => 'crlsign',
+    ),
+    7 => 
+    array (
+      0 => true,
+      1 => true,
+      2 => 'any',
+    ),
+    8 => 
+    array (
+      0 => true,
+      1 => false,
+      2 => 'ocsphelper',
+    ),
+    9 => 
+    array (
+      0 => false,
+      1 => false,
+      2 => 'timestampsign',
+    ),
+  ),
+  'extensions' => 
+  array (
+    'basicConstraints' => 'CA:FALSE',
+    'nsComment' => 'For Grid use only; request tag userTag',
+    'nsCertType' => 'SSL Client, SSL Server, S/MIME',
+    'crlDistributionPoints' => 'Full Name:
+  URI:http://mobile.blue-software.ro:90/ca/crl.shtml',
+    'nsCaPolicyUrl' => 'http://mobile.blue-software.ro:90/pub/',
+    'subjectAltName' => 'email:sergiu@bluesoftware.ro',
+    'subjectKeyIdentifier' => 'B0:A7:FF:F9:41:15:DE:23:39:BD:DD:31:0F:97:A0:B2:A2:74:E0:FC',
+    'authorityKeyIdentifier' => 'DirName:/C=RO/ST=Romania/L=Craiova/O=Sergiu/OU=Sergiu SRL/CN=Sergiu CA/emailAddress=n_sergiu@hotmail.com
+serial:00',
+    'keyUsage' => 'Digital Signature, Non Repudiation, Key Encipherment, Data Encipherment',
+    'nsBaseUrl' => 'http://62.231.98.52/',
+    '1.2.3.4' => '>çb4',
+  ),
+)
