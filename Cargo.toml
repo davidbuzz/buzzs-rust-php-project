@@ -20,6 +20,7 @@ members = [
     "crates/php-filter",
     "crates/php-ctype",
     "crates/php-uri",
+    "crates/php-bcmath",
 ]
 
 [workspace.package]

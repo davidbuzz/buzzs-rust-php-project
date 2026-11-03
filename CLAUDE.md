@@ -31,6 +31,7 @@ A Rust re-implementation of PHP whose goal is to pass the php-src `.phpt` test s
 - `crates/php-filter`   — filter_var/filter_input validation+sanitize filters (ref: ext/filter)
 - `crates/php-ctype`    — ctype_* (ref: ext/ctype)
 - `crates/php-uri`      — RFC 3986 + WHATWG URL parsers behind Uri\\Rfc3986\\Uri / Uri\\WhatWg\\Url (ref: ext/uri)
+- `crates/php-bcmath`   — arbitrary-precision decimal arithmetic for bc* functions and BcMath\\Number (ref: ext/bcmath)
 
 ## Parallel work
 Several agents work concurrently, one crate each. Only edit files inside your own crate (plus your row(s) in FEATURE_GAP.md). Never edit workspace Cargo.toml; crates are pre-registered. Commit your own crate's files with `git add crates/<yours>` only.
