@@ -27,7 +27,7 @@ mod symtab;
 
 use funcs as f;
 use php_runtime::Value;
-use php_vm::ext::{Extension, ModuleBuilder, NativeFn};
+use php_vm::ext::{ClassBuilder, Extension, ModuleBuilder, NativeFn};
 
 /// The array part of `ext/standard`.
 #[derive(Debug, Clone, Copy, Default)]
@@ -172,8 +172,18 @@ impl Extension for StdArray {
         for &(name, value) in CONSTANTS {
             m.constant(name, Value::Int(value));
         }
+        register_sort_direction(m);
     }
 }
 
 #[cfg(test)]
 mod tests;
+
+/// Declares the `SortDirection` unit enum (basic_functions.stub.php).
+fn register_sort_direction(m: &mut ModuleBuilder<'_>) {
+    let mut b = ClassBuilder::new("SortDirection").unit_enum();
+    for case in ["Ascending", "Descending"] {
+        b = b.case(case, None);
+    }
+    b.register(m.vm());
+}
