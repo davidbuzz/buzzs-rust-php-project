@@ -188,6 +188,7 @@ impl RangeFormatter {
     /// shortest round-trip representation is what `Formattable` uses).
     /// An int and a float are never "equal before rounding", as with
     /// `Formattable::operator==`.
+    #[allow(clippy::many_single_char_names)]
     pub fn format(&self, a: RangeValue, b: RangeValue) -> Result<Vec<u16>, UErrorCode> {
         let mut st = UErrorCode::ZERO;
         // SAFETY: no preconditions; ownership is taken by RangeResult.
