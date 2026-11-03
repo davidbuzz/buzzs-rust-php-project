@@ -356,41 +356,21 @@ impl XNode {
         {
             anchors.push(self.doc.as_node());
         }
-        let mut chain = Vec::new();
         let mut cur = target;
-        let anchor: Node = loop {
+        loop {
             if cur.is_null() {
                 return self.wrap_raw(target);
             }
-            if let Some(a) = anchors.iter().find(|a| a.as_ptr() == cur) {
-                break a.clone();
+            if anchors.iter().any(|a| a.as_ptr() == cur) {
+                break;
             }
-            chain.push(cur);
             // SAFETY: walking parent links of live nodes.
             cur = unsafe { (*cur).parent };
-        };
-        let mut handle = anchor;
-        for &step in chain.iter().rev() {
-            // SAFETY: step is a live node (an ancestor of target).
-            let is_attr = unsafe { (*step).type_ } == lx::XML_ATTRIBUTE_NODE;
-            let found = if is_attr {
-                handle.attributes().into_iter().find(|a| a.as_ptr() == step)
-            } else {
-                let mut c = handle.first_child();
-                loop {
-                    match c {
-                        Some(n) if n.as_ptr() == step => break Some(n),
-                        Some(n) => c = n.next_sibling(),
-                        None => break None,
-                    }
-                }
-            };
-            match found {
-                Some(n) => handle = n,
-                None => return self.wrap_raw(target),
-            }
         }
-        Some(XNode::from_node(handle))
+        // SAFETY: `target` is reachable through parent links from a node
+        // this document keeps alive (a pinned ancestor or the document
+        // node), so it is a live node of this document's tree.
+        unsafe { self.doc.node_handle(target) }.map(XNode::from_node)
     }
 
     /// Whether the node belongs to the document tree proper (not to the

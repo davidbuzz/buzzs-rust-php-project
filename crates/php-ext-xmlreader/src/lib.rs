@@ -399,7 +399,15 @@ fn expand(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     }
     // The copy goes into the base node's document (or none).
     let base = match a.opt(0) {
-        Some(Value::Object(o)) => php_ext_dom::interop::import_node(&o),
+        Some(Value::Object(o)) => {
+            let Some(b) = php_ext_dom::interop::import_node(&o) else {
+                // `NODE_GET_OBJ`: an unconstructed DOM object.
+                let class = php_vm::object::display_name(&o.class_name());
+                vm.php_warning(&format!("Couldn't fetch {}", class.to_string_lossy()))?;
+                return Ok(Value::Bool(false));
+            };
+            Some(b)
+        }
         _ => None,
     };
     let doc = base

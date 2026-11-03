@@ -29,6 +29,7 @@ pub fn class_hooks() -> ClassHooks {
         has_dimension: Some(has_dimension),
         unset_dimension: Some(unset_dimension),
         get_iterator: Some(get_iterator),
+        get_properties: Some(get_properties),
         ..ClassHooks::default()
     }
 }
@@ -72,6 +73,14 @@ fn properties_for(vm: &mut Vm, o: &Obj, purpose: PropertyPurpose) -> VmResult<Op
     }
     let is_debug = purpose == PropertyPurpose::Debug;
     direct(vm, |h| Sxe::properties(&st, h, is_debug)).map(Some)
+}
+
+/// `get_properties` (`sxe_get_properties`): `get_object_vars()`.
+fn get_properties(vm: &mut Vm, o: &Obj) -> VmResult<Option<ZArray>> {
+    let Some(st) = sxe_of(o) else {
+        return Ok(None);
+    };
+    direct(vm, |h| Sxe::properties(&st, h, false)).map(Some)
 }
 
 fn compare(vm: &mut Vm, a: &Value, b: &Value) -> VmResult<Option<i32>> {
