@@ -1,0 +1,460 @@
+s:get	s:uk-ua_CALIFORNIA@currency=;currency=GRN	s:uk	s:	s:UA	s:!U_ZERO_ERROR	s:!U_ZERO_ERROR	a:["CALIFORNIA"]	a:{"language":"uk","region":"UA","variant0":"CALIFORNIA"}
+s:disp	s:uk-ua_CALIFORNIA@currency=;currency=GRN	s:en	s:!U_INVALID_FORMAT_ERROR	s:Ukrainian	s:	s:Ukraine	s:CALIFORNIA
+s:disp	s:uk-ua_CALIFORNIA@currency=;currency=GRN	s:fr	s:!U_INVALID_FORMAT_ERROR	s:ukrainien	s:	s:Ukraine	s:CALIFORNIA
+s:disp	s:uk-ua_CALIFORNIA@currency=;currency=GRN	s:de	s:!U_INVALID_FORMAT_ERROR	s:Ukrainisch	s:	s:Ukraine	s:CALIFORNIA
+s:disp	s:uk-ua_CALIFORNIA@currency=;currency=GRN	s:ja	s:!U_INVALID_FORMAT_ERROR	s:ウクライナ語	s:	s:ウクライナ	s:CALIFORNIA
+s:disp	s:uk-ua_CALIFORNIA@currency=;currency=GRN	s:xx	s:!U_INVALID_FORMAT_ERROR	s:Ukrainian	s:	s:Ukraine	s:CALIFORNIA
+s:disp	s:uk-ua_CALIFORNIA@currency=;currency=GRN	s:ar	s:!U_INVALID_FORMAT_ERROR	s:الأوكرانية	s:	s:أوكرانيا	s:CALIFORNIA
+s:get	s:root	s:	s:	s:	s:	s:!U_ZERO_ERROR	a:[]	a:[]
+s:disp	s:root	s:en	s:Unknown language	s:Unknown language	s:	s:	s:
+s:disp	s:root	s:fr	s:langue indéterminée	s:langue indéterminée	s:	s:	s:
+s:disp	s:root	s:de	s:Unbekannte Sprache	s:Unbekannte Sprache	s:	s:	s:
+s:disp	s:root	s:ja	s:言語不明	s:言語不明	s:	s:	s:
+s:disp	s:root	s:xx	s:Unknown language	s:Unknown language	s:	s:	s:
+s:disp	s:root	s:ar	s:لغة غير معروفة	s:لغة غير معروفة	s:	s:	s:
+s:get	s:uk@currency=EURO	s:uk	s:	s:	s:uk@currency=EURO	a:{"currency":"EURO"}	a:[]	a:{"language":"uk"}
+s:disp	s:uk@currency=EURO	s:en	s:Ukrainian (Currency=EURO)	s:Ukrainian	s:	s:	s:
+s:disp	s:uk@currency=EURO	s:fr	s:ukrainien (devise=EURO)	s:ukrainien	s:	s:	s:
+s:disp	s:uk@currency=EURO	s:de	s:Ukrainisch (Währung=EURO)	s:Ukrainisch	s:	s:	s:
+s:disp	s:uk@currency=EURO	s:ja	s:ウクライナ語 (通貨=EURO)	s:ウクライナ語	s:	s:	s:
+s:disp	s:uk@currency=EURO	s:xx	s:Ukrainian (Currency=EURO)	s:Ukrainian	s:	s:	s:
+s:disp	s:uk@currency=EURO	s:ar	s:الأوكرانية (العملة=EURO)	s:الأوكرانية	s:	s:	s:
+s:get	s:Hindi	s:hindi	s:	s:	s:hindi	s:!U_ZERO_ERROR	a:[]	a:{"language":"hindi"}
+s:disp	s:Hindi	s:en	s:hindi	s:hindi	s:	s:	s:
+s:disp	s:Hindi	s:fr	s:hindi	s:hindi	s:	s:	s:
+s:disp	s:Hindi	s:de	s:hindi	s:hindi	s:	s:	s:
+s:disp	s:Hindi	s:ja	s:hindi	s:hindi	s:	s:	s:
+s:disp	s:Hindi	s:xx	s:hindi	s:hindi	s:	s:	s:
+s:disp	s:Hindi	s:ar	s:hindi	s:hindi	s:	s:	s:
+s:get	s:de	s:de	s:	s:	s:de	s:!U_ZERO_ERROR	a:[]	a:{"language":"de"}
+s:disp	s:de	s:en	s:German	s:German	s:	s:	s:
+s:disp	s:de	s:fr	s:allemand	s:allemand	s:	s:	s:
+s:disp	s:de	s:de	s:Deutsch	s:Deutsch	s:	s:	s:
+s:disp	s:de	s:ja	s:ドイツ語	s:ドイツ語	s:	s:	s:
+s:disp	s:de	s:xx	s:German	s:German	s:	s:	s:
+s:disp	s:de	s:ar	s:الألمانية	s:الألمانية	s:	s:	s:
+s:get	s:fr	s:fr	s:	s:	s:fr	s:!U_ZERO_ERROR	a:[]	a:{"language":"fr"}
+s:disp	s:fr	s:en	s:French	s:French	s:	s:	s:
+s:disp	s:fr	s:fr	s:français	s:français	s:	s:	s:
+s:disp	s:fr	s:de	s:Französisch	s:Französisch	s:	s:	s:
+s:disp	s:fr	s:ja	s:フランス語	s:フランス語	s:	s:	s:
+s:disp	s:fr	s:xx	s:French	s:French	s:	s:	s:
+s:disp	s:fr	s:ar	s:الفرنسية	s:الفرنسية	s:	s:	s:
+s:get	s:ja	s:ja	s:	s:	s:ja	s:!U_ZERO_ERROR	a:[]	a:{"language":"ja"}
+s:disp	s:ja	s:en	s:Japanese	s:Japanese	s:	s:	s:
+s:disp	s:ja	s:fr	s:japonais	s:japonais	s:	s:	s:
+s:disp	s:ja	s:de	s:Japanisch	s:Japanisch	s:	s:	s:
+s:disp	s:ja	s:ja	s:日本語	s:日本語	s:	s:	s:
+s:disp	s:ja	s:xx	s:Japanese	s:Japanese	s:	s:	s:
+s:disp	s:ja	s:ar	s:اليابانية	s:اليابانية	s:	s:	s:
+s:get	s:i-enochian	s:i-enochian	s:!U_ZERO_ERROR	s:!U_ZERO_ERROR	s:@x=i-enochian	a:{"x":"i-enochian"}	a:[]	a:{"grandfathered":"i-enochian"}
+s:disp	s:i-enochian	s:en	s:i-enochian (Private-Use=i-enochian)	s:i-enochian	s:!U_ZERO_ERROR	s:!U_ZERO_ERROR	s:!U_ZERO_ERROR
+s:disp	s:i-enochian	s:fr	s:i-enochian (usage privé=i-enochian)	s:i-enochian	s:!U_ZERO_ERROR	s:!U_ZERO_ERROR	s:!U_ZERO_ERROR
+s:disp	s:i-enochian	s:de	s:i-enochian (Privatnutzung=i-enochian)	s:i-enochian	s:!U_ZERO_ERROR	s:!U_ZERO_ERROR	s:!U_ZERO_ERROR
+s:disp	s:i-enochian	s:ja	s:i-enochian (私用=i-enochian)	s:i-enochian	s:!U_ZERO_ERROR	s:!U_ZERO_ERROR	s:!U_ZERO_ERROR
+s:disp	s:i-enochian	s:xx	s:i-enochian (Private-Use=i-enochian)	s:i-enochian	s:!U_ZERO_ERROR	s:!U_ZERO_ERROR	s:!U_ZERO_ERROR
+s:disp	s:i-enochian	s:ar	s:i-enochian (استخدام خاص=i-enochian)	s:i-enochian	s:!U_ZERO_ERROR	s:!U_ZERO_ERROR	s:!U_ZERO_ERROR
+s:get	s:zh-Hant	s:zh	s:Hant	s:	s:zh_Hant	s:!U_ZERO_ERROR	a:[]	a:{"language":"zh","script":"Hant"}
+s:disp	s:zh-Hant	s:en	s:Chinese (Traditional)	s:Chinese	s:Traditional Han	s:	s:
+s:disp	s:zh-Hant	s:fr	s:chinois (traditionnel)	s:chinois	s:sinogrammes traditionnels	s:	s:
+s:disp	s:zh-Hant	s:de	s:Chinesisch (Traditionell)	s:Chinesisch	s:Traditionelles Chinesisch	s:	s:
+s:disp	s:zh-Hant	s:ja	s:中国語 (繁体字)	s:中国語	s:漢字(繁体字)	s:	s:
+s:disp	s:zh-Hant	s:xx	s:Chinese (Traditional)	s:Chinese	s:Traditional	s:	s:
+s:disp	s:zh-Hant	s:ar	s:الصينية (التقليدية)	s:الصينية	s:الهان التقليدية	s:	s:
+s:get	s:zh-Hans	s:zh	s:Hans	s:	s:zh_Hans	s:!U_ZERO_ERROR	a:[]	a:{"language":"zh","script":"Hans"}
+s:disp	s:zh-Hans	s:en	s:Chinese (Simplified)	s:Chinese	s:Simplified Han	s:	s:
+s:disp	s:zh-Hans	s:fr	s:chinois (simplifié)	s:chinois	s:sinogrammes simplifiés	s:	s:
+s:disp	s:zh-Hans	s:de	s:Chinesisch (Vereinfacht)	s:Chinesisch	s:Vereinfachtes Chinesisch	s:	s:
+s:disp	s:zh-Hans	s:ja	s:中国語 (簡体字)	s:中国語	s:漢字(簡体字)	s:	s:
+s:disp	s:zh-Hans	s:xx	s:Chinese (Simplified)	s:Chinese	s:Simplified	s:	s:
+s:disp	s:zh-Hans	s:ar	s:الصينية (المبسطة)	s:الصينية	s:الهان المبسطة	s:	s:
+s:get	s:sr-Cyrl	s:sr	s:Cyrl	s:	s:sr_Cyrl	s:!U_ZERO_ERROR	a:[]	a:{"language":"sr","script":"Cyrl"}
+s:disp	s:sr-Cyrl	s:en	s:Serbian (Cyrillic)	s:Serbian	s:Cyrillic	s:	s:
+s:disp	s:sr-Cyrl	s:fr	s:serbe (cyrillique)	s:serbe	s:cyrillique	s:	s:
+s:disp	s:sr-Cyrl	s:de	s:Serbisch (Kyrillisch)	s:Serbisch	s:Kyrillisch	s:	s:
+s:disp	s:sr-Cyrl	s:ja	s:セルビア語 (キリル文字)	s:セルビア語	s:キリル文字	s:	s:
+s:disp	s:sr-Cyrl	s:xx	s:Serbian (Cyrillic)	s:Serbian	s:Cyrillic	s:	s:
+s:disp	s:sr-Cyrl	s:ar	s:الصربية (السيريلية)	s:الصربية	s:السيريلية	s:	s:
+s:get	s:sr-Latn	s:sr	s:Latn	s:	s:sr_Latn	s:!U_ZERO_ERROR	a:[]	a:{"language":"sr","script":"Latn"}
+s:disp	s:sr-Latn	s:en	s:Serbian (Latin)	s:Serbian	s:Latin	s:	s:
+s:disp	s:sr-Latn	s:fr	s:serbe (latin)	s:serbe	s:latin	s:	s:
+s:disp	s:sr-Latn	s:de	s:Serbisch (Lateinisch)	s:Serbisch	s:Lateinisch	s:	s:
+s:disp	s:sr-Latn	s:ja	s:セルビア語 (ラテン文字)	s:セルビア語	s:ラテン文字	s:	s:
+s:disp	s:sr-Latn	s:xx	s:Serbian (Latin)	s:Serbian	s:Latin	s:	s:
+s:disp	s:sr-Latn	s:ar	s:الصربية (اللاتينية)	s:الصربية	s:اللاتينية	s:	s:
+s:get	s:zh-Hans-CN	s:zh	s:Hans	s:CN	s:zh_Hans_CN	s:!U_ZERO_ERROR	a:[]	a:{"language":"zh","script":"Hans","region":"CN"}
+s:disp	s:zh-Hans-CN	s:en	s:Chinese (Simplified, China)	s:Chinese	s:Simplified Han	s:China	s:
+s:disp	s:zh-Hans-CN	s:fr	s:chinois (simplifié, Chine)	s:chinois	s:sinogrammes simplifiés	s:Chine	s:
+s:disp	s:zh-Hans-CN	s:de	s:Chinesisch (Vereinfacht, China)	s:Chinesisch	s:Vereinfachtes Chinesisch	s:China	s:
+s:disp	s:zh-Hans-CN	s:ja	s:中国語 (簡体字、中国)	s:中国語	s:漢字(簡体字)	s:中国	s:
+s:disp	s:zh-Hans-CN	s:xx	s:Chinese (Simplified, China)	s:Chinese	s:Simplified	s:China	s:
+s:disp	s:zh-Hans-CN	s:ar	s:الصينية (المبسطة، الصين)	s:الصينية	s:الهان المبسطة	s:الصين	s:
+s:get	s:sr-Latn-CS	s:sr	s:Latn	s:CS	s:sr_Latn_CS	s:!U_ZERO_ERROR	a:[]	a:{"language":"sr","script":"Latn","region":"CS"}
+s:disp	s:sr-Latn-CS	s:en	s:Serbian (Latin, Serbia)	s:Serbian	s:Latin	s:Serbia	s:
+s:disp	s:sr-Latn-CS	s:fr	s:serbe (latin, Serbie)	s:serbe	s:latin	s:Serbie	s:
+s:disp	s:sr-Latn-CS	s:de	s:Serbisch (Lateinisch, Serbien)	s:Serbisch	s:Lateinisch	s:Serbien	s:
+s:disp	s:sr-Latn-CS	s:ja	s:セルビア語 (ラテン文字、セルビア)	s:セルビア語	s:ラテン文字	s:セルビア	s:
+s:disp	s:sr-Latn-CS	s:xx	s:Serbian (Latin, Serbia)	s:Serbian	s:Latin	s:Serbia	s:
+s:disp	s:sr-Latn-CS	s:ar	s:الصربية (اللاتينية، صربيا)	s:الصربية	s:اللاتينية	s:صربيا	s:
+s:get	s:sl-rozaj	s:sl	s:	s:	s:sl__ROZAJ	s:!U_ZERO_ERROR	a:["ROZAJ"]	a:{"language":"sl","variant0":"ROZAJ"}
+s:disp	s:sl-rozaj	s:en	s:Slovenian (Resian)	s:Slovenian	s:	s:	s:Resian
+s:disp	s:sl-rozaj	s:fr	s:slovène (dialecte de Resia)	s:slovène	s:	s:	s:dialecte de Resia
+s:disp	s:sl-rozaj	s:de	s:Slowenisch (Resianisch)	s:Slowenisch	s:	s:	s:Resianisch
+s:disp	s:sl-rozaj	s:ja	s:スロベニア語 (レシア方言)	s:スロベニア語	s:	s:	s:レシア方言
+s:disp	s:sl-rozaj	s:xx	s:Slovenian (Resian)	s:Slovenian	s:	s:	s:Resian
+s:disp	s:sl-rozaj	s:ar	s:السلوفانية (ROZAJ)	s:السلوفانية	s:	s:	s:ROZAJ
+s:get	s:sl-nedis	s:sl	s:	s:	s:sl__NEDIS	s:!U_ZERO_ERROR	a:["NEDIS"]	a:{"language":"sl","variant0":"NEDIS"}
+s:disp	s:sl-nedis	s:en	s:Slovenian (Natisone dialect)	s:Slovenian	s:	s:	s:Natisone dialect
+s:disp	s:sl-nedis	s:fr	s:slovène (dialecte de Natisone)	s:slovène	s:	s:	s:dialecte de Natisone
+s:disp	s:sl-nedis	s:de	s:Slowenisch (Natisone-Dialekt)	s:Slowenisch	s:	s:	s:Natisone-Dialekt
+s:disp	s:sl-nedis	s:ja	s:スロベニア語 (ナティゾーネ方言)	s:スロベニア語	s:	s:	s:ナティゾーネ方言
+s:disp	s:sl-nedis	s:xx	s:Slovenian (Natisone dialect)	s:Slovenian	s:	s:	s:Natisone dialect
+s:disp	s:sl-nedis	s:ar	s:السلوفانية (لهجة ناتيسون)	s:السلوفانية	s:	s:	s:لهجة ناتيسون
+s:get	s:de-CH-1901	s:de	s:	s:CH	s:de_CH_1901	s:!U_ZERO_ERROR	a:["1901"]	a:{"language":"de","region":"CH","variant0":"1901"}
+s:disp	s:de-CH-1901	s:en	s:German (Switzerland, Traditional German orthography)	s:German	s:	s:Switzerland	s:Traditional German orthography
+s:disp	s:de-CH-1901	s:fr	s:allemand (Suisse, orthographe allemande traditionnelle)	s:allemand	s:	s:Suisse	s:orthographe allemande traditionnelle
+s:disp	s:de-CH-1901	s:de	s:Deutsch (Schweiz, Alte deutsche Rechtschreibung)	s:Deutsch	s:	s:Schweiz	s:Alte deutsche Rechtschreibung
+s:disp	s:de-CH-1901	s:ja	s:ドイツ語 (スイス、ドイツ語旧正書法)	s:ドイツ語	s:	s:スイス	s:ドイツ語旧正書法
+s:disp	s:de-CH-1901	s:xx	s:German (Switzerland, Traditional German orthography)	s:German	s:	s:Switzerland	s:Traditional German orthography
+s:disp	s:de-CH-1901	s:ar	s:الألمانية (سويسرا، التهجئة الألمانية التقليدية)	s:الألمانية	s:	s:سويسرا	s:التهجئة الألمانية التقليدية
+s:get	s:sl-IT-nedis	s:sl	s:	s:IT	s:sl_IT_NEDIS	s:!U_ZERO_ERROR	a:["NEDIS"]	a:{"language":"sl","region":"IT","variant0":"NEDIS"}
+s:disp	s:sl-IT-nedis	s:en	s:Slovenian (Italy, Natisone dialect)	s:Slovenian	s:	s:Italy	s:Natisone dialect
+s:disp	s:sl-IT-nedis	s:fr	s:slovène (Italie, dialecte de Natisone)	s:slovène	s:	s:Italie	s:dialecte de Natisone
+s:disp	s:sl-IT-nedis	s:de	s:Slowenisch (Italien, Natisone-Dialekt)	s:Slowenisch	s:	s:Italien	s:Natisone-Dialekt
+s:disp	s:sl-IT-nedis	s:ja	s:スロベニア語 (イタリア、ナティゾーネ方言)	s:スロベニア語	s:	s:イタリア	s:ナティゾーネ方言
+s:disp	s:sl-IT-nedis	s:xx	s:Slovenian (Italy, Natisone dialect)	s:Slovenian	s:	s:Italy	s:Natisone dialect
+s:disp	s:sl-IT-nedis	s:ar	s:السلوفانية (إيطاليا، لهجة ناتيسون)	s:السلوفانية	s:	s:إيطاليا	s:لهجة ناتيسون
+s:get	s:sl-Latn-IT-nedis	s:sl	s:Latn	s:IT	s:sl_Latn_IT_NEDIS	s:!U_ZERO_ERROR	a:["NEDIS"]	a:{"language":"sl","script":"Latn","region":"IT","variant0":"NEDIS"}
+s:disp	s:sl-Latn-IT-nedis	s:en	s:Slovenian (Latin, Italy, Natisone dialect)	s:Slovenian	s:Latin	s:Italy	s:Natisone dialect
+s:disp	s:sl-Latn-IT-nedis	s:fr	s:slovène (latin, Italie, dialecte de Natisone)	s:slovène	s:latin	s:Italie	s:dialecte de Natisone
+s:disp	s:sl-Latn-IT-nedis	s:de	s:Slowenisch (Lateinisch, Italien, Natisone-Dialekt)	s:Slowenisch	s:Lateinisch	s:Italien	s:Natisone-Dialekt
+s:disp	s:sl-Latn-IT-nedis	s:ja	s:スロベニア語 (ラテン文字、イタリア、ナティゾーネ方言)	s:スロベニア語	s:ラテン文字	s:イタリア	s:ナティゾーネ方言
+s:disp	s:sl-Latn-IT-nedis	s:xx	s:Slovenian (Latin, Italy, Natisone dialect)	s:Slovenian	s:Latin	s:Italy	s:Natisone dialect
+s:disp	s:sl-Latn-IT-nedis	s:ar	s:السلوفانية (اللاتينية، إيطاليا، لهجة ناتيسون)	s:السلوفانية	s:اللاتينية	s:إيطاليا	s:لهجة ناتيسون
+s:get	s:de-DE	s:de	s:	s:DE	s:de_DE	s:!U_ZERO_ERROR	a:[]	a:{"language":"de","region":"DE"}
+s:disp	s:de-DE	s:en	s:German (Germany)	s:German	s:	s:Germany	s:
+s:disp	s:de-DE	s:fr	s:allemand (Allemagne)	s:allemand	s:	s:Allemagne	s:
+s:disp	s:de-DE	s:de	s:Deutsch (Deutschland)	s:Deutsch	s:	s:Deutschland	s:
+s:disp	s:de-DE	s:ja	s:ドイツ語 (ドイツ)	s:ドイツ語	s:	s:ドイツ	s:
+s:disp	s:de-DE	s:xx	s:German (Germany)	s:German	s:	s:Germany	s:
+s:disp	s:de-DE	s:ar	s:الألمانية (ألمانيا)	s:الألمانية	s:	s:ألمانيا	s:
+s:get	s:en-US	s:en	s:	s:US	s:en_US	s:!U_ZERO_ERROR	a:[]	a:{"language":"en","region":"US"}
+s:disp	s:en-US	s:en	s:English (United States)	s:English	s:	s:United States	s:
+s:disp	s:en-US	s:fr	s:anglais (États-Unis)	s:anglais	s:	s:États-Unis	s:
+s:disp	s:en-US	s:de	s:Englisch (Vereinigte Staaten)	s:Englisch	s:	s:Vereinigte Staaten	s:
+s:disp	s:en-US	s:ja	s:英語 (アメリカ合衆国)	s:英語	s:	s:アメリカ合衆国	s:
+s:disp	s:en-US	s:xx	s:English (United States)	s:English	s:	s:United States	s:
+s:disp	s:en-US	s:ar	s:الإنجليزية (الولايات المتحدة)	s:الإنجليزية	s:	s:الولايات المتحدة	s:
+s:get	s:es-419	s:es	s:	s:419	s:es_419	s:!U_ZERO_ERROR	a:[]	a:{"language":"es","region":"419"}
+s:disp	s:es-419	s:en	s:Spanish (Latin America)	s:Spanish	s:	s:Latin America	s:
+s:disp	s:es-419	s:fr	s:espagnol (Amérique latine)	s:espagnol	s:	s:Amérique latine	s:
+s:disp	s:es-419	s:de	s:Spanisch (Lateinamerika)	s:Spanisch	s:	s:Lateinamerika	s:
+s:disp	s:es-419	s:ja	s:スペイン語 (ラテンアメリカ)	s:スペイン語	s:	s:ラテンアメリカ	s:
+s:disp	s:es-419	s:xx	s:Spanish (Latin America)	s:Spanish	s:	s:Latin America	s:
+s:disp	s:es-419	s:ar	s:الإسبانية (أمريكا اللاتينية)	s:الإسبانية	s:	s:أمريكا اللاتينية	s:
+s:get	s:de-CH-x-phonebk	s:de	s:	s:CH	s:de_CH@x=phonebk	a:{"x":"phonebk"}	a:[]	a:{"language":"de","region":"CH","private0":"phonebk"}
+s:disp	s:de-CH-x-phonebk	s:en	s:German (Switzerland, Private-Use=phonebk)	s:German	s:	s:Switzerland	s:
+s:disp	s:de-CH-x-phonebk	s:fr	s:allemand (Suisse, usage privé=phonebk)	s:allemand	s:	s:Suisse	s:
+s:disp	s:de-CH-x-phonebk	s:de	s:Deutsch (Schweiz, Privatnutzung=phonebk)	s:Deutsch	s:	s:Schweiz	s:
+s:disp	s:de-CH-x-phonebk	s:ja	s:ドイツ語 (スイス、私用=phonebk)	s:ドイツ語	s:	s:スイス	s:
+s:disp	s:de-CH-x-phonebk	s:xx	s:German (Switzerland, Private-Use=phonebk)	s:German	s:	s:Switzerland	s:
+s:disp	s:de-CH-x-phonebk	s:ar	s:الألمانية (سويسرا، استخدام خاص=phonebk)	s:الألمانية	s:	s:سويسرا	s:
+s:get	s:az-Arab-x-AZE-derbend	s:az	s:Arab	s:	s:az_Arab@x=aze-derbend	a:{"x":"aze-derbend"}	a:[]	a:{"language":"az","script":"Arab","private0":"AZE","private1":"derbend"}
+s:disp	s:az-Arab-x-AZE-derbend	s:en	s:Azerbaijani (Arabic, Private-Use=aze-derbend)	s:Azerbaijani	s:Arabic	s:	s:
+s:disp	s:az-Arab-x-AZE-derbend	s:fr	s:azerbaïdjanais (arabe, usage privé=aze-derbend)	s:azerbaïdjanais	s:arabe	s:	s:
+s:disp	s:az-Arab-x-AZE-derbend	s:de	s:Aserbaidschanisch (Arabisch, Privatnutzung=aze-derbend)	s:Aserbaidschanisch	s:Arabisch	s:	s:
+s:disp	s:az-Arab-x-AZE-derbend	s:ja	s:アゼルバイジャン語 (アラビア文字、私用=aze-derbend)	s:アゼルバイジャン語	s:アラビア文字	s:	s:
+s:disp	s:az-Arab-x-AZE-derbend	s:xx	s:Azerbaijani (Arabic, Private-Use=aze-derbend)	s:Azerbaijani	s:Arabic	s:	s:
+s:disp	s:az-Arab-x-AZE-derbend	s:ar	s:الأذربيجانية (العربية، استخدام خاص=aze-derbend)	s:الأذربيجانية	s:العربية	s:	s:
+s:get	s:qaa-Qaaa-QM-x-southern	s:qaa	s:Qaaa	s:QM	s:qaa_Qaaa_QM@x=southern	a:{"x":"southern"}	a:[]	a:{"language":"qaa","script":"Qaaa","region":"QM","private0":"southern"}
+s:disp	s:qaa-Qaaa-QM-x-southern	s:en	s:qaa (Qaaa, QM, Private-Use=southern)	s:qaa	s:Qaaa	s:QM	s:
+s:disp	s:qaa-Qaaa-QM-x-southern	s:fr	s:qaa (Qaaa, QM, usage privé=southern)	s:qaa	s:Qaaa	s:QM	s:
+s:disp	s:qaa-Qaaa-QM-x-southern	s:de	s:qaa (Qaaa, QM, Privatnutzung=southern)	s:qaa	s:Qaaa	s:QM	s:
+s:disp	s:qaa-Qaaa-QM-x-southern	s:ja	s:qaa (Qaaa、QM、私用=southern)	s:qaa	s:Qaaa	s:QM	s:
+s:disp	s:qaa-Qaaa-QM-x-southern	s:xx	s:qaa (Qaaa, QM, Private-Use=southern)	s:qaa	s:Qaaa	s:QM	s:
+s:disp	s:qaa-Qaaa-QM-x-southern	s:ar	s:qaa (Qaaa، QM، استخدام خاص=southern)	s:qaa	s:Qaaa	s:QM	s:
+s:get	s:sr-Latn-QM	s:sr	s:Latn	s:QM	s:sr_Latn_QM	s:!U_ZERO_ERROR	a:[]	a:{"language":"sr","script":"Latn","region":"QM"}
+s:disp	s:sr-Latn-QM	s:en	s:Serbian (Latin, QM)	s:Serbian	s:Latin	s:QM	s:
+s:disp	s:sr-Latn-QM	s:fr	s:serbe (latin, QM)	s:serbe	s:latin	s:QM	s:
+s:disp	s:sr-Latn-QM	s:de	s:Serbisch (Lateinisch, QM)	s:Serbisch	s:Lateinisch	s:QM	s:
+s:disp	s:sr-Latn-QM	s:ja	s:セルビア語 (ラテン文字、QM)	s:セルビア語	s:ラテン文字	s:QM	s:
+s:disp	s:sr-Latn-QM	s:xx	s:Serbian (Latin, QM)	s:Serbian	s:Latin	s:QM	s:
+s:disp	s:sr-Latn-QM	s:ar	s:الصربية (اللاتينية، QM)	s:الصربية	s:اللاتينية	s:QM	s:
+s:get	s:sr-Qaaa-CS	s:sr	s:Qaaa	s:CS	s:sr_Qaaa_CS	s:!U_ZERO_ERROR	a:[]	a:{"language":"sr","script":"Qaaa","region":"CS"}
+s:disp	s:sr-Qaaa-CS	s:en	s:Serbian (Qaaa, Serbia)	s:Serbian	s:Qaaa	s:Serbia	s:
+s:disp	s:sr-Qaaa-CS	s:fr	s:serbe (Qaaa, Serbie)	s:serbe	s:Qaaa	s:Serbie	s:
+s:disp	s:sr-Qaaa-CS	s:de	s:Serbisch (Qaaa, Serbien)	s:Serbisch	s:Qaaa	s:Serbien	s:
+s:disp	s:sr-Qaaa-CS	s:ja	s:セルビア語 (Qaaa、セルビア)	s:セルビア語	s:Qaaa	s:セルビア	s:
+s:disp	s:sr-Qaaa-CS	s:xx	s:Serbian (Qaaa, Serbia)	s:Serbian	s:Qaaa	s:Serbia	s:
+s:disp	s:sr-Qaaa-CS	s:ar	s:الصربية (Qaaa، صربيا)	s:الصربية	s:Qaaa	s:صربيا	s:
+s:get	s:en-US-u-islamcal	s:en	s:	s:US	s:en_US@attribute=islamcal	a:{"attribute":"islamcal"}	a:[]	a:{"language":"en","region":"US"}
+s:disp	s:en-US-u-islamcal	s:en	s:English (United States, attribute=islamcal)	s:English	s:	s:United States	s:
+s:disp	s:en-US-u-islamcal	s:fr	s:anglais (États-Unis, attribute=islamcal)	s:anglais	s:	s:États-Unis	s:
+s:disp	s:en-US-u-islamcal	s:de	s:Englisch (Vereinigte Staaten, attribute=islamcal)	s:Englisch	s:	s:Vereinigte Staaten	s:
+s:disp	s:en-US-u-islamcal	s:ja	s:英語 (アメリカ合衆国、attribute=islamcal)	s:英語	s:	s:アメリカ合衆国	s:
+s:disp	s:en-US-u-islamcal	s:xx	s:English (United States, attribute=islamcal)	s:English	s:	s:United States	s:
+s:disp	s:en-US-u-islamcal	s:ar	s:الإنجليزية (الولايات المتحدة، attribute=islamcal)	s:الإنجليزية	s:	s:الولايات المتحدة	s:
+s:get	s:zh-CN-a-myext-x-private	s:zh	s:	s:CN	s:zh_CN@a=myext;x=private	a:{"a":"myext","x":"private"}	a:[]	a:{"language":"zh","region":"CN","private0":"private"}
+s:disp	s:zh-CN-a-myext-x-private	s:en	s:Chinese (China, a=myext, Private-Use=private)	s:Chinese	s:	s:China	s:
+s:disp	s:zh-CN-a-myext-x-private	s:fr	s:chinois (Chine, a=myext, usage privé=private)	s:chinois	s:	s:Chine	s:
+s:disp	s:zh-CN-a-myext-x-private	s:de	s:Chinesisch (China, a=myext, Privatnutzung=private)	s:Chinesisch	s:	s:China	s:
+s:disp	s:zh-CN-a-myext-x-private	s:ja	s:中国語 (中国、a=myext、私用=private)	s:中国語	s:	s:中国	s:
+s:disp	s:zh-CN-a-myext-x-private	s:xx	s:Chinese (China, a=myext, Private-Use=private)	s:Chinese	s:	s:China	s:
+s:disp	s:zh-CN-a-myext-x-private	s:ar	s:الصينية (الصين، a=myext، استخدام خاص=private)	s:الصينية	s:	s:الصين	s:
+s:get	s:en-a-myext-b-another	s:en	s:	s:	s:en@a=myext;b=another	a:{"a":"myext","b":"another"}	a:[]	a:{"language":"en"}
+s:disp	s:en-a-myext-b-another	s:en	s:English (a=myext, b=another)	s:English	s:	s:	s:
+s:disp	s:en-a-myext-b-another	s:fr	s:anglais (a=myext, b=another)	s:anglais	s:	s:	s:
+s:disp	s:en-a-myext-b-another	s:de	s:Englisch (a=myext, b=another)	s:Englisch	s:	s:	s:
+s:disp	s:en-a-myext-b-another	s:ja	s:英語 (a=myext、b=another)	s:英語	s:	s:	s:
+s:disp	s:en-a-myext-b-another	s:xx	s:English (a=myext, b=another)	s:English	s:	s:	s:
+s:disp	s:en-a-myext-b-another	s:ar	s:الإنجليزية (a=myext، b=another)	s:الإنجليزية	s:	s:	s:
+s:get	s:de-419-DE	s:de	s:	s:419	s:de_419_DE	s:!U_ZERO_ERROR	a:["DE"]	a:{"language":"de","region":"419","variant0":"DE"}
+s:disp	s:de-419-DE	s:en	s:German (Latin America, DE)	s:German	s:	s:Latin America	s:DE
+s:disp	s:de-419-DE	s:fr	s:allemand (Amérique latine, DE)	s:allemand	s:	s:Amérique latine	s:DE
+s:disp	s:de-419-DE	s:de	s:Deutsch (Lateinamerika, DE)	s:Deutsch	s:	s:Lateinamerika	s:DE
+s:disp	s:de-419-DE	s:ja	s:ドイツ語 (ラテンアメリカ、DE)	s:ドイツ語	s:	s:ラテンアメリカ	s:DE
+s:disp	s:de-419-DE	s:xx	s:German (Latin America, DE)	s:German	s:	s:Latin America	s:DE
+s:disp	s:de-419-DE	s:ar	s:الألمانية (أمريكا اللاتينية، DE)	s:الألمانية	s:	s:أمريكا اللاتينية	s:DE
+s:get	s:a-DE	s:a	s:	s:DE	s:a_DE	s:!U_ZERO_ERROR	a:[]	a:[]
+s:disp	s:a-DE	s:en	s:a (Germany)	s:a	s:	s:Germany	s:
+s:disp	s:a-DE	s:fr	s:a (Allemagne)	s:a	s:	s:Allemagne	s:
+s:disp	s:a-DE	s:de	s:a (Deutschland)	s:a	s:	s:Deutschland	s:
+s:disp	s:a-DE	s:ja	s:a (ドイツ)	s:a	s:	s:ドイツ	s:
+s:disp	s:a-DE	s:xx	s:a (Germany)	s:a	s:	s:Germany	s:
+s:disp	s:a-DE	s:ar	s:a (ألمانيا)	s:a	s:	s:ألمانيا	s:
+s:get	s:ar-a-aaa-b-bbb-a-ccc	s:ar	s:	s:	s:ar@a=aaa;b=bbb	a:{"a":"aaa","b":"bbb"}	a:[]	a:{"language":"ar"}
+s:disp	s:ar-a-aaa-b-bbb-a-ccc	s:en	s:Arabic (a=aaa, b=bbb)	s:Arabic	s:	s:	s:
+s:disp	s:ar-a-aaa-b-bbb-a-ccc	s:fr	s:arabe (a=aaa, b=bbb)	s:arabe	s:	s:	s:
+s:disp	s:ar-a-aaa-b-bbb-a-ccc	s:de	s:Arabisch (a=aaa, b=bbb)	s:Arabisch	s:	s:	s:
+s:disp	s:ar-a-aaa-b-bbb-a-ccc	s:ja	s:アラビア語 (a=aaa、b=bbb)	s:アラビア語	s:	s:	s:
+s:disp	s:ar-a-aaa-b-bbb-a-ccc	s:xx	s:Arabic (a=aaa, b=bbb)	s:Arabic	s:	s:	s:
+s:disp	s:ar-a-aaa-b-bbb-a-ccc	s:ar	s:العربية (a=aaa، b=bbb)	s:العربية	s:	s:	s:
+s:get	s:x-whatever	s:x-whatever	s:	s:	s:@x=whatever	a:{"x":"whatever"}	a:[]	a:{"private0":"whatever"}
+s:disp	s:x-whatever	s:en	s:x-whatever (Private-Use=whatever)	s:x-whatever	s:	s:	s:
+s:disp	s:x-whatever	s:fr	s:x-whatever (usage privé=whatever)	s:x-whatever	s:	s:	s:
+s:disp	s:x-whatever	s:de	s:x-whatever (Privatnutzung=whatever)	s:x-whatever	s:	s:	s:
+s:disp	s:x-whatever	s:ja	s:x-whatever (私用=whatever)	s:x-whatever	s:	s:	s:
+s:disp	s:x-whatever	s:xx	s:x-whatever (Private-Use=whatever)	s:x-whatever	s:	s:	s:
+s:disp	s:x-whatever	s:ar	s:x-whatever (استخدام خاص=whatever)	s:x-whatever	s:	s:	s:
+s:get	s:i-klingon	s:i-klingon	s:!U_ZERO_ERROR	s:!U_ZERO_ERROR	s:tlh	s:!U_ZERO_ERROR	a:[]	a:{"grandfathered":"i-klingon"}
+s:disp	s:i-klingon	s:en	s:Klingon	s:Klingon	s:!U_ZERO_ERROR	s:!U_ZERO_ERROR	s:!U_ZERO_ERROR
+s:disp	s:i-klingon	s:fr	s:klingon	s:klingon	s:!U_ZERO_ERROR	s:!U_ZERO_ERROR	s:!U_ZERO_ERROR
+s:disp	s:i-klingon	s:de	s:Klingonisch	s:Klingonisch	s:!U_ZERO_ERROR	s:!U_ZERO_ERROR	s:!U_ZERO_ERROR
+s:disp	s:i-klingon	s:ja	s:クリンゴン語	s:クリンゴン語	s:!U_ZERO_ERROR	s:!U_ZERO_ERROR	s:!U_ZERO_ERROR
+s:disp	s:i-klingon	s:xx	s:Klingon	s:Klingon	s:!U_ZERO_ERROR	s:!U_ZERO_ERROR	s:!U_ZERO_ERROR
+s:disp	s:i-klingon	s:ar	s:الكلينجون	s:الكلينجون	s:!U_ZERO_ERROR	s:!U_ZERO_ERROR	s:!U_ZERO_ERROR
+s:get	s:zh-min-nan	s:zh-min-nan	s:!U_ZERO_ERROR	s:!U_ZERO_ERROR	s:nan	s:!U_ZERO_ERROR	a:[]	a:{"grandfathered":"zh-min-nan"}
+s:disp	s:zh-min-nan	s:en	s:Chinese (MIN, NAN)	s:Min Nan Chinese	s:!U_ZERO_ERROR	s:!U_ZERO_ERROR	s:!U_ZERO_ERROR
+s:disp	s:zh-min-nan	s:fr	s:chinois (MIN, NAN)	s:minnan	s:!U_ZERO_ERROR	s:!U_ZERO_ERROR	s:!U_ZERO_ERROR
+s:disp	s:zh-min-nan	s:de	s:Chinesisch (MIN, NAN)	s:Min Nan	s:!U_ZERO_ERROR	s:!U_ZERO_ERROR	s:!U_ZERO_ERROR
+s:disp	s:zh-min-nan	s:ja	s:中国語 (MIN、NAN)	s:閩南語	s:!U_ZERO_ERROR	s:!U_ZERO_ERROR	s:!U_ZERO_ERROR
+s:disp	s:zh-min-nan	s:xx	s:Chinese (MIN, NAN)	s:Min Nan Chinese	s:!U_ZERO_ERROR	s:!U_ZERO_ERROR	s:!U_ZERO_ERROR
+s:disp	s:zh-min-nan	s:ar	s:الصينية (MIN، NAN)	s:مين-نان الصينية	s:!U_ZERO_ERROR	s:!U_ZERO_ERROR	s:!U_ZERO_ERROR
+s:get	s:EN_us	s:en	s:	s:US	s:en_US	s:!U_ZERO_ERROR	a:[]	a:{"language":"en","region":"US"}
+s:disp	s:EN_us	s:en	s:English (United States)	s:English	s:	s:United States	s:
+s:disp	s:EN_us	s:fr	s:anglais (États-Unis)	s:anglais	s:	s:États-Unis	s:
+s:disp	s:EN_us	s:de	s:Englisch (Vereinigte Staaten)	s:Englisch	s:	s:Vereinigte Staaten	s:
+s:disp	s:EN_us	s:ja	s:英語 (アメリカ合衆国)	s:英語	s:	s:アメリカ合衆国	s:
+s:disp	s:EN_us	s:xx	s:English (United States)	s:English	s:	s:United States	s:
+s:disp	s:EN_us	s:ar	s:الإنجليزية (الولايات المتحدة)	s:الإنجليزية	s:	s:الولايات المتحدة	s:
+s:get	s:en_US_POSIX	s:en	s:	s:US	s:en_US_POSIX	s:!U_ZERO_ERROR	a:["POSIX"]	a:{"language":"en","region":"US","variant0":"POSIX"}
+s:disp	s:en_US_POSIX	s:en	s:English (United States, Computer)	s:English	s:	s:United States	s:Computer
+s:disp	s:en_US_POSIX	s:fr	s:anglais (États-Unis, informatique)	s:anglais	s:	s:États-Unis	s:informatique
+s:disp	s:en_US_POSIX	s:de	s:Englisch (Vereinigte Staaten, Posix)	s:Englisch	s:	s:Vereinigte Staaten	s:Posix
+s:disp	s:en_US_POSIX	s:ja	s:英語 (アメリカ合衆国、コンピュータ)	s:英語	s:	s:アメリカ合衆国	s:コンピュータ
+s:disp	s:en_US_POSIX	s:xx	s:English (United States, Computer)	s:English	s:	s:United States	s:Computer
+s:disp	s:en_US_POSIX	s:ar	s:الإنجليزية (الولايات المتحدة، حاسوب)	s:الإنجليزية	s:	s:الولايات المتحدة	s:حاسوب
+s:get	s:de_DE@collation=phonebook;currency=EUR	s:de	s:	s:DE	s:de_DE@collation=phonebook;currency=EUR	a:{"collation":"phonebook","currency":"EUR"}	a:[]	a:{"language":"de","region":"DE"}
+s:disp	s:de_DE@collation=phonebook;currency=EUR	s:en	s:German (Germany, Sort Order=Phonebook Sort Order, Currency=Euro)	s:German	s:	s:Germany	s:
+s:disp	s:de_DE@collation=phonebook;currency=EUR	s:fr	s:allemand (Allemagne, ordre de tri=ordre de l’annuaire, devise=euro)	s:allemand	s:	s:Allemagne	s:
+s:disp	s:de_DE@collation=phonebook;currency=EUR	s:de	s:Deutsch (Deutschland, Sortierung=Telefonbuch-Sortierung, Währung=Euro)	s:Deutsch	s:	s:Deutschland	s:
+s:disp	s:de_DE@collation=phonebook;currency=EUR	s:ja	s:ドイツ語 (ドイツ、並べ替え順序=電話帳順、通貨=ユーロ)	s:ドイツ語	s:	s:ドイツ	s:
+s:disp	s:de_DE@collation=phonebook;currency=EUR	s:xx	s:German (Germany, Sort Order=Phonebook Sort Order, Currency=Euro)	s:German	s:	s:Germany	s:
+s:disp	s:de_DE@collation=phonebook;currency=EUR	s:ar	s:الألمانية (ألمانيا، ترتيب الفرز=الترتيب حسب دليل الهاتف، العملة=يورو)	s:الألمانية	s:	s:ألمانيا	s:
+s:get	s:sl_IT_nedis_rozaj	s:sl	s:	s:IT	s:sl_IT_NEDIS_ROZAJ	s:!U_ZERO_ERROR	a:["NEDIS","ROZAJ"]	a:{"language":"sl","region":"IT","variant0":"NEDIS","variant1":"ROZAJ"}
+s:disp	s:sl_IT_nedis_rozaj	s:en	s:Slovenian (Italy, NEDIS_ROZAJ)	s:Slovenian	s:	s:Italy	s:NEDIS_ROZAJ
+s:disp	s:sl_IT_nedis_rozaj	s:fr	s:slovène (Italie, NEDIS_ROZAJ)	s:slovène	s:	s:Italie	s:NEDIS_ROZAJ
+s:disp	s:sl_IT_nedis_rozaj	s:de	s:Slowenisch (Italien, NEDIS_ROZAJ)	s:Slowenisch	s:	s:Italien	s:NEDIS_ROZAJ
+s:disp	s:sl_IT_nedis_rozaj	s:ja	s:スロベニア語 (イタリア、NEDIS_ROZAJ)	s:スロベニア語	s:	s:イタリア	s:NEDIS_ROZAJ
+s:disp	s:sl_IT_nedis_rozaj	s:xx	s:Slovenian (Italy, NEDIS_ROZAJ)	s:Slovenian	s:	s:Italy	s:NEDIS_ROZAJ
+s:disp	s:sl_IT_nedis_rozaj	s:ar	s:السلوفانية (إيطاليا، NEDIS_ROZAJ)	s:السلوفانية	s:	s:إيطاليا	s:NEDIS_ROZAJ
+s:get	s:es_ES@calendar=gregorian	s:es	s:	s:ES	s:es_ES@calendar=gregorian	a:{"calendar":"gregorian"}	a:[]	a:{"language":"es","region":"ES"}
+s:disp	s:es_ES@calendar=gregorian	s:en	s:Spanish (Spain, Calendar=Gregorian Calendar)	s:Spanish	s:	s:Spain	s:
+s:disp	s:es_ES@calendar=gregorian	s:fr	s:espagnol (Espagne, calendrier=calendrier grégorien)	s:espagnol	s:	s:Espagne	s:
+s:disp	s:es_ES@calendar=gregorian	s:de	s:Spanisch (Spanien, Kalender=Gregorianischer Kalender)	s:Spanisch	s:	s:Spanien	s:
+s:disp	s:es_ES@calendar=gregorian	s:ja	s:スペイン語 (スペイン、暦法=西暦[グレゴリオ暦])	s:スペイン語	s:	s:スペイン	s:
+s:disp	s:es_ES@calendar=gregorian	s:xx	s:Spanish (Spain, Calendar=Gregorian Calendar)	s:Spanish	s:	s:Spain	s:
+s:disp	s:es_ES@calendar=gregorian	s:ar	s:الإسبانية (إسبانيا، التقويم=التقويم الميلادي)	s:الإسبانية	s:	s:إسبانيا	s:
+s:get	s:sr_Latn_RS_REVISED@currency=USD	s:sr	s:Latn	s:RS	s:sr_Latn_RS_REVISED@currency=USD	a:{"currency":"USD"}	a:["REVISED"]	a:{"language":"sr","script":"Latn","region":"RS","variant0":"REVISED"}
+s:disp	s:sr_Latn_RS_REVISED@currency=USD	s:en	s:Serbian (Latin, Serbia, Revised Orthography, Currency=US Dollar)	s:Serbian	s:Latin	s:Serbia	s:Revised Orthography
+s:disp	s:sr_Latn_RS_REVISED@currency=USD	s:fr	s:serbe (latin, Serbie, orthographe révisée, devise=dollar des États-Unis)	s:serbe	s:latin	s:Serbie	s:orthographe révisée
+s:disp	s:sr_Latn_RS_REVISED@currency=USD	s:de	s:Serbisch (Lateinisch, Serbien, Revidierte Rechtschreibung, Währung=US-Dollar)	s:Serbisch	s:Lateinisch	s:Serbien	s:Revidierte Rechtschreibung
+s:disp	s:sr_Latn_RS_REVISED@currency=USD	s:ja	s:セルビア語 (ラテン文字、セルビア、改訂版、通貨=米ドル)	s:セルビア語	s:ラテン文字	s:セルビア	s:改訂版
+s:disp	s:sr_Latn_RS_REVISED@currency=USD	s:xx	s:Serbian (Latin, Serbia, Revised Orthography, Currency=US Dollar)	s:Serbian	s:Latin	s:Serbia	s:Revised Orthography
+s:disp	s:sr_Latn_RS_REVISED@currency=USD	s:ar	s:الصربية (اللاتينية، صربيا، تهجئة تمت مراجعتها، العملة=دولار أمريكي)	s:الصربية	s:اللاتينية	s:صربيا	s:تهجئة تمت مراجعتها
+s:get	s:	s:en	s:	s:US	s:en_US	s:!U_ZERO_ERROR	a:[]	a:{"language":"en","region":"US"}
+s:disp	s:	s:en	s:English (United States)	s:English	s:	s:United States	s:
+s:disp	s:	s:fr	s:anglais (États-Unis)	s:anglais	s:	s:États-Unis	s:
+s:disp	s:	s:de	s:Englisch (Vereinigte Staaten)	s:Englisch	s:	s:Vereinigte Staaten	s:
+s:disp	s:	s:ja	s:英語 (アメリカ合衆国)	s:英語	s:	s:アメリカ合衆国	s:
+s:disp	s:	s:xx	s:English (United States)	s:English	s:	s:United States	s:
+s:disp	s:	s:ar	s:الإنجليزية (الولايات المتحدة)	s:الإنجليزية	s:	s:الولايات المتحدة	s:
+s:get	s:xx_YY_ZZ	s:xx	s:	s:YY	s:xx_YY_ZZ	s:!U_ZERO_ERROR	a:["ZZ"]	a:{"language":"xx","region":"YY","variant0":"ZZ"}
+s:disp	s:xx_YY_ZZ	s:en	s:xx (YY, ZZ)	s:xx	s:	s:YY	s:ZZ
+s:disp	s:xx_YY_ZZ	s:fr	s:xx (YY, ZZ)	s:xx	s:	s:YY	s:ZZ
+s:disp	s:xx_YY_ZZ	s:de	s:xx (YY, ZZ)	s:xx	s:	s:YY	s:ZZ
+s:disp	s:xx_YY_ZZ	s:ja	s:xx (YY、ZZ)	s:xx	s:	s:YY	s:ZZ
+s:disp	s:xx_YY_ZZ	s:xx	s:xx (YY, ZZ)	s:xx	s:	s:YY	s:ZZ
+s:disp	s:xx_YY_ZZ	s:ar	s:xx (YY، ZZ)	s:xx	s:	s:YY	s:ZZ
+s:get	s:-	s:	s:	s:	s:__	s:!U_ZERO_ERROR	a:[]	a:[]
+s:disp	s:-	s:en	s:Unknown language	s:Unknown language	s:	s:	s:
+s:disp	s:-	s:fr	s:langue indéterminée	s:langue indéterminée	s:	s:	s:
+s:disp	s:-	s:de	s:Unbekannte Sprache	s:Unbekannte Sprache	s:	s:	s:
+s:disp	s:-	s:ja	s:言語不明	s:言語不明	s:	s:	s:
+s:disp	s:-	s:xx	s:Unknown language	s:Unknown language	s:	s:	s:
+s:disp	s:-	s:ar	s:لغة غير معروفة	s:لغة غير معروفة	s:	s:	s:
+s:get	s:@calendar=islamic	s:	s:	s:	s:@calendar=islamic	a:{"calendar":"islamic"}	a:[]	a:[]
+s:disp	s:@calendar=islamic	s:en	s:Unknown language (Calendar=Hijri Calendar)	s:Unknown language	s:	s:	s:
+s:disp	s:@calendar=islamic	s:fr	s:langue indéterminée (calendrier=calendrier hégirien)	s:langue indéterminée	s:	s:	s:
+s:disp	s:@calendar=islamic	s:de	s:Unbekannte Sprache (Kalender=Hidschri-Kalender)	s:Unbekannte Sprache	s:	s:	s:
+s:disp	s:@calendar=islamic	s:ja	s:言語不明 (暦法=イスラム暦)	s:言語不明	s:	s:	s:
+s:disp	s:@calendar=islamic	s:xx	s:Unknown language (Calendar=Hijri Calendar)	s:Unknown language	s:	s:	s:
+s:disp	s:@calendar=islamic	s:ar	s:لغة غير معروفة (التقويم=التقويم الهجري)	s:لغة غير معروفة	s:	s:	s:
+s:get	s:en-	s:en	s:	s:	s:en__	s:!U_ZERO_ERROR	a:[]	a:{"language":"en"}
+s:disp	s:en-	s:en	s:English	s:English	s:	s:	s:
+s:disp	s:en-	s:fr	s:anglais	s:anglais	s:	s:	s:
+s:disp	s:en-	s:de	s:Englisch	s:Englisch	s:	s:	s:
+s:disp	s:en-	s:ja	s:英語	s:英語	s:	s:	s:
+s:disp	s:en-	s:xx	s:English	s:English	s:	s:	s:
+s:disp	s:en-	s:ar	s:الإنجليزية	s:الإنجليزية	s:	s:	s:
+s:get	s:sgn-BE-FR	s:sgn-BE-FR	s:!U_ZERO_ERROR	s:!U_ZERO_ERROR	s:sgn_BE_FR	s:!U_ZERO_ERROR	a:[]	a:{"grandfathered":"sgn-BE-FR"}
+s:disp	s:sgn-BE-FR	s:en	s:sgn (Belgium, FR)	s:sfb	s:!U_ZERO_ERROR	s:!U_ZERO_ERROR	s:!U_ZERO_ERROR
+s:disp	s:sgn-BE-FR	s:fr	s:sgn (Belgique, FR)	s:sfb	s:!U_ZERO_ERROR	s:!U_ZERO_ERROR	s:!U_ZERO_ERROR
+s:disp	s:sgn-BE-FR	s:de	s:sgn (Belgien, FR)	s:sfb	s:!U_ZERO_ERROR	s:!U_ZERO_ERROR	s:!U_ZERO_ERROR
+s:disp	s:sgn-BE-FR	s:ja	s:sgn (ベルギー、FR)	s:sfb	s:!U_ZERO_ERROR	s:!U_ZERO_ERROR	s:!U_ZERO_ERROR
+s:disp	s:sgn-BE-FR	s:xx	s:sgn (Belgium, FR)	s:sfb	s:!U_ZERO_ERROR	s:!U_ZERO_ERROR	s:!U_ZERO_ERROR
+s:disp	s:sgn-BE-FR	s:ar	s:sgn (بلجيكا، FR)	s:sfb	s:!U_ZERO_ERROR	s:!U_ZERO_ERROR	s:!U_ZERO_ERROR
+s:get	s:art-lojban	s:art-lojban	s:!U_ZERO_ERROR	s:!U_ZERO_ERROR	s:jbo	s:!U_ZERO_ERROR	a:[]	a:{"grandfathered":"art-lojban"}
+s:disp	s:art-lojban	s:en	s:art (LOJBAN)	s:Lojban	s:!U_ZERO_ERROR	s:!U_ZERO_ERROR	s:!U_ZERO_ERROR
+s:disp	s:art-lojban	s:fr	s:art (LOJBAN)	s:lojban	s:!U_ZERO_ERROR	s:!U_ZERO_ERROR	s:!U_ZERO_ERROR
+s:disp	s:art-lojban	s:de	s:art (LOJBAN)	s:Lojban	s:!U_ZERO_ERROR	s:!U_ZERO_ERROR	s:!U_ZERO_ERROR
+s:disp	s:art-lojban	s:ja	s:art (LOJBAN)	s:ロジバン語	s:!U_ZERO_ERROR	s:!U_ZERO_ERROR	s:!U_ZERO_ERROR
+s:disp	s:art-lojban	s:xx	s:art (LOJBAN)	s:Lojban	s:!U_ZERO_ERROR	s:!U_ZERO_ERROR	s:!U_ZERO_ERROR
+s:disp	s:art-lojban	s:ar	s:art (LOJBAN)	s:اللوجبان	s:!U_ZERO_ERROR	s:!U_ZERO_ERROR	s:!U_ZERO_ERROR
+s:get	s:en_GB_oed	s:en	s:	s:GB	s:en_GB_OED	s:!U_ZERO_ERROR	a:["OED"]	a:{"language":"en","region":"GB","variant0":"OED"}
+s:disp	s:en_GB_oed	s:en	s:English (United Kingdom, OED)	s:English	s:	s:United Kingdom	s:OED
+s:disp	s:en_GB_oed	s:fr	s:anglais (Royaume-Uni, OED)	s:anglais	s:	s:Royaume-Uni	s:OED
+s:disp	s:en_GB_oed	s:de	s:Englisch (Vereinigtes Königreich, OED)	s:Englisch	s:	s:Vereinigtes Königreich	s:OED
+s:disp	s:en_GB_oed	s:ja	s:英語 (イギリス、OED)	s:英語	s:	s:イギリス	s:OED
+s:disp	s:en_GB_oed	s:xx	s:English (United Kingdom, OED)	s:English	s:	s:United Kingdom	s:OED
+s:disp	s:en_GB_oed	s:ar	s:الإنجليزية (المملكة المتحدة، OED)	s:الإنجليزية	s:	s:المملكة المتحدة	s:OED
+s:get	s:zh_Hant_TW@collation=stroke	s:zh	s:Hant	s:TW	s:zh_Hant_TW@collation=stroke	a:{"collation":"stroke"}	a:[]	a:{"language":"zh","script":"Hant","region":"TW"}
+s:disp	s:zh_Hant_TW@collation=stroke	s:en	s:Chinese (Traditional, Taiwan, Sort Order=Stroke Sort Order)	s:Chinese	s:Traditional Han	s:Taiwan	s:
+s:disp	s:zh_Hant_TW@collation=stroke	s:fr	s:chinois (traditionnel, Taïwan, ordre de tri=ordre des traits)	s:chinois	s:sinogrammes traditionnels	s:Taïwan	s:
+s:disp	s:zh_Hant_TW@collation=stroke	s:de	s:Chinesisch (Traditionell, Taiwan, Sortierung=Strichfolge)	s:Chinesisch	s:Traditionelles Chinesisch	s:Taiwan	s:
+s:disp	s:zh_Hant_TW@collation=stroke	s:ja	s:中国語 (繁体字、台湾、並べ替え順序=画数順)	s:中国語	s:漢字(繁体字)	s:台湾	s:
+s:disp	s:zh_Hant_TW@collation=stroke	s:xx	s:Chinese (Traditional, Taiwan, Sort Order=Stroke Sort Order)	s:Chinese	s:Traditional	s:Taiwan	s:
+s:disp	s:zh_Hant_TW@collation=stroke	s:ar	s:الصينية (التقليدية، تايوان، ترتيب الفرز=الترتيب حسب نظام كتابة المجموع الصيني)	s:الصينية	s:الهان التقليدية	s:تايوان	s:
+s:dispkw	s:calendar	s:en	s:!Error
+s:dispkwv	s:de_DE@collation=phonebook;currency=EUR	s:calendar	s:en	s:!Error
+s:dispkwv	s:zh_TW@calendar=chinese;numbers=hanidec	s:calendar	s:en	s:!Error
+s:dispkwv	s:en	s:calendar	s:en	s:!Error
+s:dispkw	s:calendar	s:de	s:!Error
+s:dispkwv	s:de_DE@collation=phonebook;currency=EUR	s:calendar	s:de	s:!Error
+s:dispkwv	s:zh_TW@calendar=chinese;numbers=hanidec	s:calendar	s:de	s:!Error
+s:dispkwv	s:en	s:calendar	s:de	s:!Error
+s:dispkw	s:calendar	s:zh	s:!Error
+s:dispkwv	s:de_DE@collation=phonebook;currency=EUR	s:calendar	s:zh	s:!Error
+s:dispkwv	s:zh_TW@calendar=chinese;numbers=hanidec	s:calendar	s:zh	s:!Error
+s:dispkwv	s:en	s:calendar	s:zh	s:!Error
+s:dispkw	s:collation	s:en	s:!Error
+s:dispkwv	s:de_DE@collation=phonebook;currency=EUR	s:collation	s:en	s:!Error
+s:dispkwv	s:zh_TW@calendar=chinese;numbers=hanidec	s:collation	s:en	s:!Error
+s:dispkwv	s:en	s:collation	s:en	s:!Error
+s:dispkw	s:collation	s:de	s:!Error
+s:dispkwv	s:de_DE@collation=phonebook;currency=EUR	s:collation	s:de	s:!Error
+s:dispkwv	s:zh_TW@calendar=chinese;numbers=hanidec	s:collation	s:de	s:!Error
+s:dispkwv	s:en	s:collation	s:de	s:!Error
+s:dispkw	s:collation	s:zh	s:!Error
+s:dispkwv	s:de_DE@collation=phonebook;currency=EUR	s:collation	s:zh	s:!Error
+s:dispkwv	s:zh_TW@calendar=chinese;numbers=hanidec	s:collation	s:zh	s:!Error
+s:dispkwv	s:en	s:collation	s:zh	s:!Error
+s:dispkw	s:currency	s:en	s:!Error
+s:dispkwv	s:de_DE@collation=phonebook;currency=EUR	s:currency	s:en	s:!Error
+s:dispkwv	s:zh_TW@calendar=chinese;numbers=hanidec	s:currency	s:en	s:!Error
+s:dispkwv	s:en	s:currency	s:en	s:!Error
+s:dispkw	s:currency	s:de	s:!Error
+s:dispkwv	s:de_DE@collation=phonebook;currency=EUR	s:currency	s:de	s:!Error
+s:dispkwv	s:zh_TW@calendar=chinese;numbers=hanidec	s:currency	s:de	s:!Error
+s:dispkwv	s:en	s:currency	s:de	s:!Error
+s:dispkw	s:currency	s:zh	s:!Error
+s:dispkwv	s:de_DE@collation=phonebook;currency=EUR	s:currency	s:zh	s:!Error
+s:dispkwv	s:zh_TW@calendar=chinese;numbers=hanidec	s:currency	s:zh	s:!Error
+s:dispkwv	s:en	s:currency	s:zh	s:!Error
+s:dispkw	s:numbers	s:en	s:!Error
+s:dispkwv	s:de_DE@collation=phonebook;currency=EUR	s:numbers	s:en	s:!Error
+s:dispkwv	s:zh_TW@calendar=chinese;numbers=hanidec	s:numbers	s:en	s:!Error
+s:dispkwv	s:en	s:numbers	s:en	s:!Error
+s:dispkw	s:numbers	s:de	s:!Error
+s:dispkwv	s:de_DE@collation=phonebook;currency=EUR	s:numbers	s:de	s:!Error
+s:dispkwv	s:zh_TW@calendar=chinese;numbers=hanidec	s:numbers	s:de	s:!Error
+s:dispkwv	s:en	s:numbers	s:de	s:!Error
+s:dispkw	s:numbers	s:zh	s:!Error
+s:dispkwv	s:de_DE@collation=phonebook;currency=EUR	s:numbers	s:zh	s:!Error
+s:dispkwv	s:zh_TW@calendar=chinese;numbers=hanidec	s:numbers	s:zh	s:!Error
+s:dispkwv	s:en	s:numbers	s:zh	s:!Error
+s:dispkw	s:xx	s:en	s:!Error
+s:dispkwv	s:de_DE@collation=phonebook;currency=EUR	s:xx	s:en	s:!Error
+s:dispkwv	s:zh_TW@calendar=chinese;numbers=hanidec	s:xx	s:en	s:!Error
+s:dispkwv	s:en	s:xx	s:en	s:!Error
+s:dispkw	s:xx	s:de	s:!Error
+s:dispkwv	s:de_DE@collation=phonebook;currency=EUR	s:xx	s:de	s:!Error
+s:dispkwv	s:zh_TW@calendar=chinese;numbers=hanidec	s:xx	s:de	s:!Error
+s:dispkwv	s:en	s:xx	s:de	s:!Error
+s:dispkw	s:xx	s:zh	s:!Error
+s:dispkwv	s:de_DE@collation=phonebook;currency=EUR	s:xx	s:zh	s:!Error
+s:dispkwv	s:zh_TW@calendar=chinese;numbers=hanidec	s:xx	s:zh	s:!Error
+s:dispkwv	s:en	s:xx	s:zh	s:!Error
+s:compose	a:{"language":"de"}	s:de
+s:compose	a:{"language":"de","script":"Latn","region":"DE"}	s:de_Latn_DE
+s:compose	a:{"language":"zh","script":"Hant","region":"TW","variant0":"v1","variant1":"v2","private0":"p1","private1":"p2"}	s:zh_Hant_TW_v1_v2_x_p1_p2
+s:compose	a:{"language":"en","variant":["a","b"],"private":["x1"],"extlang":"ext"}	s:en_ext_a_b_x_x1
+s:compose	a:{"language":"en","extlang0":"e1","extlang2":"e3"}	s:en_e1_e3
+s:compose	a:{"grandfathered":"i-klingon","language":"xx"}	s:i-klingon
+s:compose	a:{"language":"en","region":12}	s:!U_ILLEGAL_ARGUMENT_ERROR
+s:compose	a:{"language":"en","variant":["a",3]}	s:!U_ILLEGAL_ARGUMENT_ERROR
+s:compose	a:{"region":"DE"}	s:!ValueError
+s:compose	a:[]	s:!U_ZERO_ERROR
+s:compose	a:{"language":"en","private":"priv"}	s:en_x_priv
+s:filter	s:de-DEVA	s:de-DE	s:!U_ZERO_ERROR	s:!U_ZERO_ERROR
+s:filter	s:de-DE-1996	s:de-DE	~T	~T
+s:filter	s:DE-de	s:de_DE	~T	~T
+s:filter	s:de	s:de-DE	s:!U_ZERO_ERROR	s:!U_ZERO_ERROR
+s:filter	s:sl_IT	s:sl	~T	~T
+s:filter	s:sl-IT-nedis	s:sl_IT	~T	~T
+s:filter	s:en_US@currency=USD	s:en_US	s:!U_ZERO_ERROR	~T
+s:filter	s:zh-Hant	s:*	~T	~T
+s:filter	s:	s:en	s:!U_ZERO_ERROR	s:!U_ZERO_ERROR
+s:filter	s:en	s:	s:!U_ZERO_ERROR	s:!U_ZERO_ERROR
+s:filter	s:de-DE	s:de-de	~T	~T
+s:lookup	a:["de-DEVA","de-DE-1996","de","de-De"]	s:de-DE-1996-x-prv1-prv2	~F	s:de-DE-1996	s:de-DE-1996
+s:lookup	a:["de-DEVA","de-DE-1996","de","de-De"]	s:de-DE-1996-x-prv1-prv2	~T	s:de_de_1996	s:de_de_1996
+s:lookup	a:["de-DEVA","de-DE-1996","de","de-De"]	s:de-DE	~F	s:de-De	s:de-De
+s:lookup	a:["de-DEVA","de-DE-1996","de","de-De"]	s:de-DE	~T	s:de_de	s:de_de
+s:lookup	a:["en","en_US","zh_Hans"]	s:zh-Hans-CN	~F	s:zh_Hans	s:zh_Hans
+s:lookup	a:["en","en_US","zh_Hans"]	s:zh-Hans-CN	~T	s:zh_hans	s:zh_hans
+s:lookup	a:["EN_us","de"]	s:en-US-u-cu-usd	~F	s:EN_us	s:EN_us
+s:lookup	a:["EN_us","de"]	s:en-US-u-cu-usd	~T	s:en_us	s:en_us
+s:lookup	a:["fr"]	s:en	~F	s:xx_XX	s:
+s:lookup	a:["fr"]	s:en	~T	s:xx_XX	s:
+s:lookup	a:["sl_IT"]	s:sl-IT-nedis	~F	s:sl_IT	s:sl_IT
+s:lookup	a:["sl_IT"]	s:sl-IT-nedis	~T	s:sl_it	s:sl_it
+s:accept	s:en-US,en;q=0.5	s:en_US
+s:accept	s:fr-FR;q=0.8,de	s:de
+s:accept	s:xx, yy	s:!U_ZERO_ERROR
+s:accept	s:zh-Hant-TW	s:zh_Hant_TW
+s:accept	s:*	s:!U_ZERO_ERROR
+s:accept	s:	s:!U_ZERO_ERROR
+s:accept	s:en-us	s:en_US
+s:accept	s:pt_BR	s:pt_BR
+s:accept	s:sr-Latn-RS;q=0.1	s:sr_Latn_RS

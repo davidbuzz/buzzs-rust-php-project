@@ -980,6 +980,11 @@ icu! {
 }
 // DECLS-END
 
+// Declarations the generator cannot express (array parameters).
+icu! {
+    fn uenum_openCharStringsEnumeration(strings: *const *const c_char, count: i32, ec: *mut UErrorCode) -> *mut UEnumeration;
+}
+
 // ---------------------------------------------------------------------------
 // Buffer helpers
 // ---------------------------------------------------------------------------

@@ -183,23 +183,26 @@ pub fn set_keyword_value(
     Ok(String::from_utf8_lossy(&buf[..n]).into_owned())
 }
 
-/// `uloc_openKeywords()` drained into `(keyword, value)` pairs.
-pub fn keywords(locale: &str) -> Result<Vec<(String, String)>, UErrorCode> {
+/// `uloc_openKeywords()` drained into `(keyword, value)` pairs.  `Ok(None)`
+/// when ICU returns no enumeration (no keywords, or a malformed list).
+pub fn keywords(locale: &str) -> Result<Option<Vec<(String, String)>>, UErrorCode> {
     let l = cstring(locale);
     let mut st = UErrorCode::ZERO;
     // SAFETY: l is NUL-terminated; ownership of the enumeration is taken.
     let p = unsafe { ffi::uloc_openKeywords(l.as_ptr(), &mut st) };
-    if p.is_null() && st.is_success() {
-        return Ok(Vec::new());
+    if p.is_null() {
+        return Ok(None);
     }
     // SAFETY: p comes from uloc_openKeywords and is owned from here on.
-    let e = unsafe { ffi::Enumeration::from_raw(p, st) }?;
+    let Ok(e) = (unsafe { ffi::Enumeration::from_raw(p, st) }) else {
+        return Ok(None);
+    };
     let mut out = Vec::new();
     for k in e.collect_strings()? {
         let v = keyword_value(locale, &k)?;
         out.push((k, v));
     }
-    Ok(out)
+    Ok(Some(out))
 }
 
 type DisplayFn =
@@ -301,31 +304,57 @@ pub fn is_right_to_left(locale: &str) -> bool {
     unsafe { ffi::uloc_isRightToLeft(l.as_ptr()) != 0 }
 }
 
-/// `uloc_acceptLanguageFromHTTP()` against all available locales.
-/// Returns `(result, UAcceptResult, status)`.
-pub fn accept_language_from_http(header: &str, cap: usize) -> (String, i32, UErrorCode) {
+/// `uloc_acceptLanguageFromHTTP()` against `available` (or all available
+/// locales from `ures_openAvailableLocales`).  Returns `(result,
+/// UAcceptResult, status)`; a failure to open the list is reported with
+/// `UAcceptResult == -1`.
+pub fn accept_language_from_http(
+    header: &str,
+    available: Option<&[&str]>,
+    cap: usize,
+) -> (String, i32, UErrorCode) {
     let h = cstring(header);
     let mut st = UErrorCode::ZERO;
-    // SAFETY: the enumeration is owned and closed by `Enumeration`.
-    let avail = unsafe { ffi::ures_openAvailableLocales(std::ptr::null(), &mut st) };
-    // SAFETY: avail comes from ures_openAvailableLocales and is owned from here on.
-    let Ok(avail) = (unsafe { ffi::Enumeration::from_raw(avail, st) }) else {
-        return (String::new(), 0, st);
+    let owned: Vec<std::ffi::CString> = available
+        .unwrap_or(&[])
+        .iter()
+        .map(|s| cstring(s))
+        .collect();
+    let ptrs: Vec<*const c_char> = owned.iter().map(|c| c.as_ptr()).collect();
+    let raw = match available {
+        // SAFETY: ptrs points to NUL-terminated strings that outlive the
+        // enumeration (it copies nothing but is closed before they drop).
+        Some(_) => unsafe {
+            ffi::uenum_openCharStringsEnumeration(ptrs.as_ptr(), ffi::len32(&ptrs), &mut st)
+        },
+        // SAFETY: no preconditions.
+        None => unsafe { ffi::ures_openAvailableLocales(std::ptr::null(), &mut st) },
     };
-    let mut buf = vec![0u8; cap];
+    // SAFETY: raw is a freshly opened enumeration owned from here on.
+    let avail = match unsafe { ffi::Enumeration::from_raw(raw, st) } {
+        Ok(e) => e,
+        Err(e) => return (String::new(), -1, e),
+    };
+    let mut buf = vec![0u8; cap + 1];
     let mut outres = 0i32;
     let mut st = UErrorCode::ZERO;
-    // SAFETY: buf has `cap` bytes, h is NUL-terminated, avail is live.
+    // SAFETY: buf has more than `cap` bytes, h is NUL-terminated, avail is live.
     let n = unsafe {
         ffi::uloc_acceptLanguageFromHTTP(
             buf.as_mut_ptr().cast(),
-            ffi::len32(&buf),
+            i32::try_from(cap).unwrap_or(i32::MAX),
             &mut outres,
             h.as_ptr(),
             avail.as_ptr(),
             &mut st,
         )
     };
-    let n = usize::try_from(n).unwrap_or(0).min(cap);
-    (String::from_utf8_lossy(&buf[..n]).into_owned(), outres, st)
+    drop(avail);
+    drop(owned);
+    let m = usize::try_from(n).unwrap_or(0).min(cap);
+    (
+        String::from_utf8_lossy(&buf[..m]).into_owned(),
+        if n < 0 { -2 } else { outres },
+        st,
+    )
 }
