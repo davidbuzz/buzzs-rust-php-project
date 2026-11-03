@@ -860,6 +860,22 @@ pub fn compare_tables(
     Ok(0)
 }
 
+/// `php_array_key_compare_unstable_i`: the default `ksort()` key order.
+/// Two integer keys never compare equal (`h1 > h2 ? 1 : -1`), two string
+/// keys use [`smart_strcmp`], mixed keys use [`compare`].
+pub fn compare_keys(
+    a: &crate::array::ArrayKey,
+    b: &crate::array::ArrayKey,
+    ctx: &mut (impl RuntimeContext + ?Sized),
+) -> RtResult<i32> {
+    use crate::array::ArrayKey;
+    match (a, b) {
+        (ArrayKey::Int(x), ArrayKey::Int(y)) => Ok(if x > y { 1 } else { -1 }),
+        (ArrayKey::Str(x), ArrayKey::Str(y)) => Ok(smart_strcmp(x.as_bytes(), y.as_bytes())),
+        _ => compare(&a.to_value(), &b.to_value(), ctx),
+    }
+}
+
 /// `==` (`zend_compare(a, b) == 0`, with the string fast path).
 pub fn is_equal(a: &Value, b: &Value, ctx: &mut (impl RuntimeContext + ?Sized)) -> RtResult<bool> {
     let (da, db) = (deref(a), deref(b));
