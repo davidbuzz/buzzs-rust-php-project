@@ -15,5 +15,10 @@ php-ext-streams = { path = "../php-ext-streams" }
 php-ext-xsl = { path = "../php-ext-xsl" }
 php-xsl = { path = "../php-xsl" }
 
+[dev-dependencies]
+php-ext-spl = { path = "../php-ext-spl" }
+php-ext-json = { path = "../php-ext-json" }
+php-ext-stdarr = { path = "../php-ext-stdarr" }
+
 [lints]
 workspace = true
