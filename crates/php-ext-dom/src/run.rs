@@ -115,6 +115,16 @@ pub(crate) fn lib<R>(vm: &mut Vm, f: impl FnOnce() -> R) -> VmResult<R> {
     }
 }
 
+/// Runs a library operation that cannot reach PHP code or the stream
+/// layer (no VM is lent; only diagnostics are forwarded). This is the fast
+/// path for the bulk of DOM calls.
+pub(crate) fn direct<R>(vm: &mut Vm, f: impl FnOnce() -> R) -> VmResult<R> {
+    ensure_installed();
+    let r = f();
+    flush(vm)?;
+    Ok(r)
+}
+
 /// Runs a library operation of the native function described by `a`.
 pub(crate) fn call<R>(vm: &mut Vm, a: &Args, f: impl FnOnce() -> R) -> VmResult<R> {
     ensure_installed();

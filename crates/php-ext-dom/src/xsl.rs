@@ -12,6 +12,7 @@ use php_dom::dispatch::{self, DomObject, PropRead};
 use php_dom::interop::{adopt_document, namespace_node, wrap_raw_node};
 use php_dom::{DomValue, Node};
 use php_ext_xsl::access::{DomAccess, ImportedNode, XmlSource};
+use php_libxml::tree::SharedDocument;
 use php_runtime::{Obj, Value};
 use php_vm::class::Class;
 use php_vm::ext::{Args, VmResult};
@@ -110,7 +111,7 @@ impl DomAccess for DomXslAccess {
             return Ok(None);
         };
         let d = DomObject::Node(n);
-        let r = crate::run::lib(vm, || dispatch::read_property(&d, "ownerDocument"))?;
+        let r = crate::run::direct(vm, || dispatch::read_property(&d, "ownerDocument"))?;
         match r {
             Ok(PropRead::Value(DomValue::Node(doc))) => Ok(Some(node_object(vm, &doc)?)),
             _ => Ok(None),
@@ -166,13 +167,21 @@ impl DomAccess for DomXslAccess {
     }
 }
 
-/// `dom_import_simplexml()`: the element or attribute behind a
-/// `SimpleXMLElement`, sharing its tree.
+/// The family a shared document was imported with, if known.
+pub(crate) fn family_of(shared: &SharedDocument) -> Option<bool> {
+    let key = shared.as_ptr() as usize;
+    IMPORTED.with(|m| m.borrow().get(&key).copied())
+}
+
+/// `dom_import_simplexml()` / `Dom\import_simplexml()`: the element or
+/// attribute behind a `SimpleXMLElement`, sharing its tree (the document
+/// is locked to the family it was first imported as).
 pub(crate) fn import_simplexml(vm: &mut Vm, a: &Args) -> VmResult<Value> {
     let bad = |vm: &mut Vm, a: &Args| a.type_error(vm, 1, "is not a valid node type");
     let Value::Object(o) = a.at(0) else {
         return Err(bad(vm, a));
     };
+    let modern = a.func_name().to_ascii_lowercase().starts_with("dom\\");
     if let Some(n) = node_of(&o) {
         return Ok(Value::Object(node_object(vm, &n)?));
     }
@@ -180,9 +189,8 @@ pub(crate) fn import_simplexml(vm: &mut Vm, a: &Args) -> VmResult<Value> {
     let Some((_, ImportedNode::Node(XmlSource::Node(sx)))) = found else {
         return Err(bad(vm, a));
     };
-    let t = sx.node_type();
     if !matches!(
-        t,
+        sx.node_type(),
         php_libxml::tree::NodeType::Element | php_libxml::tree::NodeType::Attribute
     ) {
         return Err(bad(vm, a));
@@ -190,21 +198,33 @@ pub(crate) fn import_simplexml(vm: &mut Vm, a: &Args) -> VmResult<Value> {
     let Some(p) = NonNull::new(sx.as_ptr().cast::<c_void>()) else {
         return Err(bad(vm, a));
     };
-    // Lock the document to one node family.
-    let modern = a.func_name().to_ascii_lowercase().starts_with("dom\\");
-    let doc_key = sx.document().as_ptr() as usize;
-    let previous = IMPORTED.with(|m| *m.borrow_mut().entry(doc_key).or_insert(modern));
-    if previous != modern {
-        let msg = if modern {
-            "must not be already imported as a DOMNode"
-        } else {
-            "must not be already imported as a Dom\\Node"
-        };
-        return Err(a.type_error(vm, 1, msg));
+    let document = sx.document();
+    let came_from_dom = document.is_shared();
+    let shared = document.to_shared();
+    let key = shared.as_ptr() as usize;
+    // Lock the document to one node family (`document->class_type`).
+    let known = IMPORTED.with(|m| m.borrow().get(&key).copied());
+    let previous = match known {
+        Some(f) => Some(f),
+        // A tree DOM handed to SimpleXML: its family is the DOM document's.
+        None if came_from_dom => {
+            // SAFETY: `p` is a live node of the shared document.
+            let n = unsafe { php_dom::interop::wrap_shared_node(&shared, p.as_ptr()) };
+            n.map(|n| n.family_is_modern())
+        }
+        None => None,
+    };
+    if let Some(prev) = previous {
+        if prev != modern {
+            let msg = if modern {
+                "must not be already imported as a DOMNode"
+            } else {
+                "must not be already imported as a Dom\\Node"
+            };
+            return Err(a.type_error(vm, 1, msg));
+        }
     }
-    // SAFETY: the node belongs to a document kept alive by the attached
-    // SimpleXML handle.
-    let n = unsafe { wrap_raw_node(p) };
-    n.attach_keepalive(Rc::new(sx) as Rc<dyn Any>);
-    Ok(Value::Object(node_object(vm, &n)?))
+    IMPORTED.with(|m| m.borrow_mut().insert(key, modern));
+    // SAFETY: `p` is a live node of the shared document.
+    unsafe { crate::interop::shared_node_object(vm, &shared, p, modern) }
 }

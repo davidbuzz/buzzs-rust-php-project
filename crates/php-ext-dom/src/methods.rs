@@ -21,26 +21,68 @@ use crate::state::{dom_object, set_dom_object, to_dom, to_value};
 /// A method declaration: declaring class and method.
 type MethodDecl = Option<(&'static str, &'static MethodInfo)>;
 
+/// What the handler needs to know about one registered native method,
+/// computed once per `Builtin` (keyed by its address).
+#[derive(Clone)]
+struct MethodMeta {
+    /// The method name as registered.
+    name: Rc<str>,
+    /// The stub declaration.
+    decl: MethodDecl,
+    /// Whether the call may reach PHP code or the stream layer (I/O,
+    /// `XPath` callbacks, class checks) and must lend the VM.
+    needs_vm: bool,
+}
+
 thread_local! {
-    /// `(builtin, lowercase method)` → declaration.
-    static METHODS: std::cell::RefCell<std::collections::HashMap<(&'static str, String), MethodDecl>> =
+    /// `Builtin` address → metadata.
+    static METHODS: std::cell::RefCell<std::collections::HashMap<usize, MethodMeta>> =
         std::cell::RefCell::new(std::collections::HashMap::new());
 }
 
-/// `find_method`, cached.
-fn method_info(builtin: &'static str, method: &str) -> MethodDecl {
-    let key = (builtin, method.to_ascii_lowercase());
-    if let Some(r) = METHODS.with(|m| m.borrow().get(&key).copied()) {
-        return r;
+/// Method names (lowercase substrings) whose implementation may perform
+/// I/O, parse with external entities or call back into PHP.
+const NEEDS_VM: &[&str] = &[
+    "load",
+    "save",
+    "validate",
+    "xinclude",
+    "c14n",
+    "evaluate",
+    "query",
+    "registernodeclass",
+    "createfrom",
+    "schema",
+    "relaxng",
+    "adjacenthtml",
+    "registerphp",
+    "__construct",
+];
+
+/// The cached metadata of the native method being called.
+fn method_meta(a: &Args, builtin: &'static str) -> MethodMeta {
+    let key = a.func.as_ref().map_or(0, |f| Rc::as_ptr(f) as usize);
+    if key != 0 {
+        if let Some(m) = METHODS.with(|m| m.borrow().get(&key).cloned()) {
+            return m;
+        }
     }
-    let r = find_method(builtin, method).map(|(c, m)| (c.name, m));
-    METHODS.with(|m| m.borrow_mut().insert(key, r));
-    r
+    let name = a.func_name();
+    let lc = name.to_ascii_lowercase();
+    let meta = MethodMeta {
+        decl: find_method(builtin, &name).map(|(c, m)| (c.name, m)),
+        needs_vm: NEEDS_VM.iter().any(|n| lc.contains(n)),
+        name: Rc::from(name),
+    };
+    if key != 0 {
+        METHODS.with(|m| m.borrow_mut().insert(key, meta.clone()));
+    }
+    meta
 }
 
 /// The error context of `builtin::method` called on an object of `class`.
-fn method_ctx(builtin: &'static str, method: &str, class: String) -> Ctx {
-    match method_info(builtin, method) {
+fn method_ctx(builtin: &'static str, method: &str, decl: MethodDecl, class: String) -> Ctx {
+    match decl {
         Some((c, m)) => Ctx {
             func: format!("{c}::{}", m.name),
             params: m.params.iter().map(|p| p.name).collect(),
@@ -57,13 +99,9 @@ fn method_ctx(builtin: &'static str, method: &str, class: String) -> Ctx {
 
 /// Converts the passed arguments (trailing omitted optional arguments are
 /// left out so php-dom can tell them from explicit values).
-fn convert_args(
-    vm: &mut Vm,
-    a: &Args,
-    builtin: &'static str,
-    method: &str,
-) -> VmResult<Vec<DomValue>> {
-    let params = method_info(builtin, method).map_or(&[][..], |(_, m)| m.params);
+fn convert_args(vm: &mut Vm, a: &Args, meta: &MethodMeta) -> VmResult<Vec<DomValue>> {
+    let params = meta.decl.map_or(&[][..], |(_, m)| m.params);
+    let method = &*meta.name;
     let n = a
         .passed
         .iter()
@@ -126,36 +164,61 @@ fn convert_args(
     Ok(out)
 }
 
-fn finish(vm: &mut Vm, r: Result<DomValue, php_dom::DomError>, ctx: &Ctx) -> VmResult<Value> {
-    match check(vm, r, Some(ctx))? {
-        Some(v) => to_value(vm, v),
-        None => Ok(Value::Bool(false)),
+/// Converts a library result; the error context is only built on failure.
+fn finish(
+    vm: &mut Vm,
+    r: Result<DomValue, php_dom::DomError>,
+    ctx: impl FnOnce() -> Ctx,
+) -> VmResult<Value> {
+    match r {
+        Ok(v) => to_value(vm, v),
+        Err(e) => {
+            let ctx = ctx();
+            match check::<DomValue>(vm, Err(e), Some(&ctx))? {
+                Some(v) => to_value(vm, v),
+                None => Ok(Value::Bool(false)),
+            }
+        }
+    }
+}
+
+/// Runs a library call, lending the VM only when the method needs it.
+fn invoke<R>(vm: &mut Vm, a: &Args, meta: &MethodMeta, f: impl FnOnce() -> R) -> VmResult<R> {
+    if meta.needs_vm {
+        run::call(vm, a, f)
+    } else {
+        run::direct(vm, f)
     }
 }
 
 /// Static methods (`createFromString()`, `quote()`, …).
-fn static_method(vm: &mut Vm, a: &Args, name: &str) -> VmResult<Value> {
+fn static_method(vm: &mut Vm, a: &Args) -> VmResult<Value> {
     let builtin = a
         .called
         .as_ref()
         .and_then(builtin_of_class)
         .unwrap_or("DOMNode");
-    let ctx = method_ctx(builtin, name, builtin.to_string());
-    let dargs = convert_args(vm, a, builtin, name)?;
+    let meta = method_meta(a, builtin);
+    let dargs = convert_args(vm, a, &meta)?;
+    let name = meta.name.clone();
     let r = run::call(vm, a, || {
-        dispatch::call_static(builtin, name, &dargs, &VmHost)
+        dispatch::call_static(builtin, &name, &dargs, &VmHost)
     })?;
-    finish(vm, r, &ctx)
+    finish(vm, r, || {
+        method_ctx(builtin, &name, meta.decl, builtin.to_string())
+    })
 }
 
 /// `__construct`.
 fn construct(vm: &mut Vm, a: &Args, this: &Obj, builtin: &'static str) -> VmResult<Value> {
+    let meta = method_meta(a, builtin);
     let ctx = method_ctx(
         builtin,
         "__construct",
+        meta.decl,
         display_name(&class_of(this).name).to_string_lossy(),
     );
-    let dargs = convert_args(vm, a, builtin, "__construct")?;
+    let dargs = convert_args(vm, a, &meta)?;
     match dom_object(this) {
         Some(d) => {
             let r = run::call(vm, a, || dispatch::construct(&d, &dargs, &VmHost))?;
@@ -183,35 +246,37 @@ fn construct(vm: &mut Vm, a: &Args, this: &Obj, builtin: &'static str) -> VmResu
 
 /// The handler of every DOM method.
 pub(crate) fn method(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let name = a.func_name();
     let Some(this) = a.this.clone() else {
-        return static_method(vm, a, &name);
+        return static_method(vm, a);
     };
     let Some(builtin) = builtin_of(&this) else {
+        let name = a.func_name();
         return Err(vm.throw("Error", &format!("Call to undefined method {name}()")));
     };
+    let meta = method_meta(a, builtin);
+    let name = meta.name.clone();
     if name.eq_ignore_ascii_case("__construct") {
         return construct(vm, a, &this, builtin);
     }
-    let class = display_name(&class_of(&this).name).to_string_lossy();
-    let ctx = method_ctx(builtin, &name, class.clone());
     let Some(d) = dom_object(&this) else {
         if crate::hooks::is_xpath_class(builtin) {
             return Err(crate::hooks::invalid_state(vm));
         }
+        let class = display_name(&class_of(&this).name).to_string_lossy();
         return Err(vm.throw("Error", &format!("Couldn't fetch {class}")));
     };
     if name.eq_ignore_ascii_case("getIterator") {
         let it = crate::hooks::new_iter(Some(d));
         return Ok(Value::Object(vm.new_internal_iterator(Box::new(it))?));
     }
-    let dargs = convert_args(vm, a, builtin, &name)?;
-    let mut r = run::call(vm, a, || dispatch::call(&d, &name, &dargs, &VmHost))?;
-    if name.eq_ignore_ascii_case("__sleep") || name.eq_ignore_ascii_case("__wakeup") {
-        // `zend_throw_exception_ex(NULL, ...)`: a plain `Exception`.
-        if let Err(php_dom::DomError::Error(m)) = r {
-            r = Err(php_dom::DomError::Exception(m));
-        }
-    }
-    finish(vm, r, &ctx)
+    let dargs = convert_args(vm, a, &meta)?;
+    let r = invoke(vm, a, &meta, || dispatch::call(&d, &name, &dargs, &VmHost))?;
+    finish(vm, r, || {
+        method_ctx(
+            builtin,
+            &name,
+            meta.decl,
+            display_name(&class_of(&this).name).to_string_lossy(),
+        )
+    })
 }

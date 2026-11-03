@@ -63,6 +63,9 @@ pub(crate) fn obj_ctx(o: &Obj) -> Ctx {
 
 #[allow(clippy::unnecessary_wraps)] // signature fixed by `ClassHooks::create`
 fn create(_vm: &mut Vm, o: &Obj) -> VmResult<()> {
+    if crate::state::wrapping() {
+        return Ok(());
+    }
     let Some(b) = builtin_of(o) else {
         return Ok(());
     };
@@ -89,7 +92,7 @@ fn clone(vm: &mut Vm, old: &Obj, new: &Obj) -> VmResult<()> {
         return Ok(());
     };
     let ctx = obj_ctx(old);
-    let r = run::lib(vm, || dispatch::clone_object(&d))?;
+    let r = run::direct(vm, || dispatch::clone_object(&d))?;
     let Some(c) = check(vm, r, Some(&ctx))? else {
         return Ok(());
     };
@@ -142,7 +145,7 @@ fn read_property(vm: &mut Vm, o: &Obj, name: &ZStr) -> VmResult<Option<Value>> {
         return Ok(None);
     }
     let ctx = obj_ctx(o);
-    let r = run::lib(vm, || dispatch::read_property(&d, &n))?;
+    let r = run::direct(vm, || dispatch::read_property(&d, &n))?;
     match check(vm, r, Some(&ctx))? {
         Some(PropRead::Value(v)) => Ok(Some(to_value(vm, v)?)),
         Some(PropRead::Uninit) | None => Ok(Some(Value::Null)),
@@ -259,7 +262,12 @@ fn write_property(vm: &mut Vm, o: &Obj, name: &ZStr, v: &Value) -> VmResult<bool
     };
     let dv = to_dom(vm, &value);
     let ctx = obj_ctx(o);
-    let r = run::lib(vm, || dispatch::write_property(&d, &n, &dv))?;
+    // innerHTML/outerHTML setters parse markup (entities may load files).
+    let r = if matches!(n.as_str(), "innerHTML" | "outerHTML") {
+        run::lib(vm, || dispatch::write_property(&d, &n, &dv))?
+    } else {
+        run::direct(vm, || dispatch::write_property(&d, &n, &dv))?
+    };
     check(vm, r, Some(&ctx))?;
     Ok(true)
 }
@@ -276,7 +284,7 @@ fn has_property(vm: &mut Vm, o: &Obj, name: &ZStr, check_empty: bool) -> VmResul
         return Ok(Some(true));
     }
     let ctx = obj_ctx(o);
-    let r = run::lib(vm, || dispatch::read_property(&d, &n))?;
+    let r = run::direct(vm, || dispatch::read_property(&d, &n))?;
     let v = match check(vm, r, Some(&ctx))? {
         Some(PropRead::Value(v)) => to_value(vm, v)?,
         Some(PropRead::NotHandled) => return Ok(None),
@@ -368,7 +376,7 @@ fn properties_for(vm: &mut Vm, o: &Obj, purpose: PropertyPurpose) -> VmResult<Op
         return Ok(None);
     };
     let mut t = std_properties(o);
-    let items = run::lib(vm, || dispatch::debug_info(&d))?;
+    let items = run::direct(vm, || dispatch::debug_info(&d))?;
     for (name, v) in items {
         let v = to_value(vm, v)?;
         t.insert(ArrayKey::Str(ZStr::from(name)), v);
@@ -414,7 +422,7 @@ fn read_dimension(vm: &mut Vm, o: &Obj, k: &Value) -> VmResult<Option<Value>> {
     }
     let off = to_offset(vm, k)?;
     let ctx = obj_ctx(o);
-    let r = run::lib(vm, || dispatch::offset_get(&d, &off))?;
+    let r = run::direct(vm, || dispatch::offset_get(&d, &off))?;
     match check(vm, r, Some(&ctx))? {
         Some(v) => Ok(Some(to_value(vm, v)?)),
         None => Ok(Some(Value::Null)),
@@ -432,12 +440,12 @@ fn has_dimension(vm: &mut Vm, o: &Obj, k: &Value, check_empty: bool) -> VmResult
         && !matches!(off, Offset::Other(_) | Offset::Array(_))
     {
         // Tokens are strings ("0" is empty): perform an actual read.
-        let r = run::lib(vm, || dispatch::offset_get(&d, &off))?;
+        let r = run::direct(vm, || dispatch::offset_get(&d, &off))?;
         let v = check(vm, r, Some(&ctx))?.unwrap_or(php_dom::DomValue::Null);
         let v = to_value(vm, v)?;
         return Ok(Some(vm.value_to_bool(&v)?));
     }
-    let r = run::lib(vm, || dispatch::offset_exists(&d, &off))?;
+    let r = run::direct(vm, || dispatch::offset_exists(&d, &off))?;
     Ok(Some(check(vm, r, Some(&ctx))?.unwrap_or(false)))
 }
 

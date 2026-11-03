@@ -14,6 +14,16 @@
 //! * [`host`] implements [`php_dom::DomHost`]: `XPath` PHP callbacks,
 //!   `registerNodeClass` class checks and stream I/O through php-streams.
 //! * [`xsl`] is the DOM provider of `XSLTProcessor` documents.
+//!
+//! # API for other bindings
+//!
+//! [`interop`] lets other libxml-based extensions exchange nodes with DOM:
+//! [`interop::import_node`] returns the `xmlNode*`/`xmlDoc*` behind a DOM
+//! object (with a keep-alive handle and its API family), and the unsafe
+//! [`interop::node_object`] turns an `xmlNode*` into its PHP DOM object
+//! (existing object if any, else the class php-src would create;
+//! legacy/modern by document kind). Consumers: `XMLReader::expand()`,
+//! `simplexml_import_dom()`/`dom_import_simplexml()`, XSL.
 
 // Handlers follow the VM's `(vm, o, a, …)` naming convention.
 #![allow(clippy::many_single_char_names)]
@@ -21,6 +31,7 @@
 mod errors;
 mod hooks;
 mod host;
+pub mod interop;
 mod methods;
 mod run;
 mod state;
@@ -297,7 +308,10 @@ mod tests {
             "createElement(string $localName, string $value = \"\")"
         );
         let (_, m) = php_dom::classes::find_method("Dom\\Element", "getAttribute").expect("m");
-        assert_eq!(signature(m, false), "getAttribute(string $qualifiedName): ?string");
+        assert_eq!(
+            signature(m, false),
+            "getAttribute(string $qualifiedName): ?string"
+        );
     }
 
     #[test]

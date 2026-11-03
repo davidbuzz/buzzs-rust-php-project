@@ -32,6 +32,9 @@ pub(crate) struct DomState {
 }
 
 thread_local! {
+    /// Set while this module instantiates an object whose native state it
+    /// supplies itself (the `create` hook then does nothing).
+    static WRAPPING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// Identity cache for collection objects PHP returns the same object
     /// for (`$el->children`, `$doc->implementation`).
     static IDENTITY: RefCell<HashMap<usize, Weak<dyn PhpObject>>> = RefCell::new(HashMap::new());
@@ -78,9 +81,17 @@ fn new_dom_object(vm: &mut Vm, class: &str, fallback: &str, d: DomObject) -> VmR
     let Some(cls) = class_named(vm, class, fallback) else {
         return Err(vm.throw("Error", &format!("Class \"{class}\" not found")));
     };
-    let o = vm.new_object(&cls)?;
+    WRAPPING.with(|w| w.set(true));
+    let o = vm.new_object(&cls);
+    WRAPPING.with(|w| w.set(false));
+    let o = o?;
     set_dom_object(&o, d);
     Ok(o)
+}
+
+/// Whether the object being created gets its state from this module.
+pub(crate) fn wrapping() -> bool {
+    WRAPPING.with(std::cell::Cell::get)
 }
 
 /// `php_dom_create_object`: the PHP object of a node.
@@ -301,7 +312,7 @@ impl DomIter {
     fn ensure(&mut self, vm: &mut Vm) -> VmResult<()> {
         if self.handle.is_none() {
             if let Some(src) = self.source.clone() {
-                let h = crate::run::lib(vm, || php_dom::dispatch::iterate(&src))?;
+                let h = crate::run::direct(vm, || php_dom::dispatch::iterate(&src))?;
                 self.handle = crate::errors::check(vm, h, None)?;
             }
         }
@@ -354,7 +365,7 @@ impl NativeIterator for DomIter {
         let Some(h) = self.handle.clone() else {
             return Ok(());
         };
-        let r = crate::run::lib(vm, || h.0.borrow_mut().next())?;
+        let r = crate::run::direct(vm, || h.0.borrow_mut().next())?;
         crate::errors::check(vm, r, None).map(|_| ())
     }
 }
