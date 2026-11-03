@@ -25,6 +25,7 @@ pub mod msgformat;
 pub mod msgpattern;
 pub mod normalizer;
 pub mod numfmt;
+pub mod resourcebundle;
 pub mod sys;
 pub mod timezone;
 pub mod transliterator;
