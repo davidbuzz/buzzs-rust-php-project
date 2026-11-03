@@ -197,7 +197,7 @@ fn serialize_entries(
     for _ in 0..n {
         let mut discard = Vec::new();
         let mut payload = Vec::new();
-        if sc.value(&mut discard, 0).is_none() || sc.value(&mut payload, 0).is_none() {
+        if sc.value(&mut discard).is_none() || sc.value(&mut payload).is_none() {
             break;
         }
         payloads.push(payload);
@@ -250,7 +250,7 @@ pub fn decode(
         let mut sc = Scanner::new(data, 1);
         sc.pos = value_start;
         let mut payload = Vec::new();
-        if sc.value(&mut payload, 0).is_none() {
+        if sc.value(&mut payload).is_none() {
             names.pop();
             ok = false;
             break;
@@ -431,30 +431,47 @@ impl<'a> Scanner<'a> {
         Some(n)
     }
 
-    /// Copies `n` key/value pairs and the closing `}`.
-    fn elements(&mut self, n: usize, out: &mut Vec<u8>, depth: usize) -> Option<()> {
-        for _ in 0..n {
-            self.value(out, depth + 1)?;
-            self.value(out, depth + 1)?;
+    /// Copies one complete value (iteratively, so deep nesting cannot
+    /// overflow the stack).
+    fn value(&mut self, out: &mut Vec<u8>) -> Option<()> {
+        // Remaining items (keys and values) of each open container.
+        let mut open: Vec<usize> = Vec::new();
+        loop {
+            if let Some(n) = self.item(out)? {
+                if open.len() >= MAX_SCAN_DEPTH {
+                    return None;
+                }
+                open.push(n.checked_mul(2)?);
+            }
+            loop {
+                match open.last_mut() {
+                    None => return Some(()),
+                    Some(rem) if *rem > 0 => {
+                        *rem -= 1;
+                        break;
+                    }
+                    Some(_) => {
+                        self.expect(b'}', out)?;
+                        open.pop();
+                    }
+                }
+            }
         }
-        self.expect(b'}', out)
     }
 
-    /// Copies one complete value.
-    fn value(&mut self, out: &mut Vec<u8>, depth: usize) -> Option<()> {
-        if depth > MAX_SCAN_DEPTH {
-            return None;
-        }
+    /// Copies one token; for `a:`/`O:` only the header up to `{` is copied
+    /// and the number of elements is returned.
+    fn item(&mut self, out: &mut Vec<u8>) -> Option<Option<usize>> {
         let tag = self.peek()?;
         match tag {
             b'N' => {
                 self.raw(1, out)?;
-                self.expect(b';', out)
+                self.expect(b';', out)?;
             }
             b'b' | b'i' | b'd' => {
                 self.raw(1, out)?;
                 self.expect(b':', out)?;
-                self.until_semicolon(out)
+                self.until_semicolon(out)?;
             }
             b'R' | b'r' => {
                 self.raw(1, out)?;
@@ -466,7 +483,7 @@ impl<'a> Scanner<'a> {
                     return None;
                 }
                 out.extend_from_slice(shifted.to_string().as_bytes());
-                self.expect(b';', out)
+                self.expect(b';', out)?;
             }
             b's' | b'E' => {
                 self.raw(1, out)?;
@@ -474,7 +491,7 @@ impl<'a> Scanner<'a> {
                 let n = self.uint(out)?;
                 self.expect(b':', out)?;
                 self.quoted(n, out)?;
-                self.expect(b';', out)
+                self.expect(b';', out)?;
             }
             b'S' => {
                 self.raw(1, out)?;
@@ -490,7 +507,7 @@ impl<'a> Scanner<'a> {
                     }
                 }
                 self.expect(b'"', out)?;
-                self.expect(b';', out)
+                self.expect(b';', out)?;
             }
             b'a' => {
                 self.raw(1, out)?;
@@ -498,7 +515,7 @@ impl<'a> Scanner<'a> {
                 let n = self.uint(out)?;
                 self.expect(b':', out)?;
                 self.expect(b'{', out)?;
-                self.elements(n, out, depth)
+                return Some(Some(n));
             }
             b'O' | b'C' => {
                 self.raw(1, out)?;
@@ -510,15 +527,15 @@ impl<'a> Scanner<'a> {
                 let m = self.uint(out)?;
                 self.expect(b':', out)?;
                 self.expect(b'{', out)?;
-                if tag == b'C' {
-                    self.raw(m, out)?;
-                    self.expect(b'}', out)
-                } else {
-                    self.elements(m, out, depth)
+                if tag == b'O' {
+                    return Some(Some(m));
                 }
+                self.raw(m, out)?;
+                self.expect(b'}', out)?;
             }
-            _ => None,
+            _ => return None,
         }
+        Some(None)
     }
 }
 
@@ -653,6 +670,25 @@ mod tests {
         };
         assert!(ok);
         assert!(ctx.diagnostics.is_empty());
+    }
+
+    #[test]
+    fn deep_nesting_is_bounded() {
+        let mut ctx = CollectingContext::new();
+        let mut data = b"a|".to_vec();
+        for _ in 0..5000 {
+            data.extend_from_slice(b"a:1:{i:0;");
+        }
+        data.extend_from_slice(b"N;");
+        data.extend(std::iter::repeat_n(b'}', 5000));
+        let Decoded::Merge { ok, .. } = decode(Serializer::Php, &data, &mut ctx).unwrap() else {
+            panic!()
+        };
+        assert!(!ok);
+        let mut sc = Scanner::new(b"S:3:\"a\\62c\";", 0);
+        let mut out = Vec::new();
+        assert!(sc.value(&mut out).is_some());
+        assert_eq!(out, b"S:3:\"a\\62c\";");
     }
 
     #[test]
