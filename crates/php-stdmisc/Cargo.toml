@@ -1,6 +1,6 @@
 [package]
 name = "php-stdmisc"
-description = "PHP's ext/filter: filter_var/filter_var_array/filter_input engine with all validation and sanitizing filters"
+description = "The remaining 'misc' of PHP's ext/standard: crypt/password hashing, exec/proc_open, network/DNS, environment/info, highlighting, getopt, http_build_query/parse_str, locale, mail, error_log"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -8,6 +8,10 @@ rust-version.workspace = true
 
 [dependencies]
 php-runtime = { path = "../php-runtime" }
+php-lexer = { path = "../php-lexer" }
+php-hash = { path = "../php-hash" }
+php-random = { path = "../php-random" }
+libc = "0.2"
 
 [lints]
 workspace = true
