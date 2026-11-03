@@ -33,7 +33,6 @@ pub mod userwrap;
 pub mod xport;
 
 use php_runtime::{Resource, Value};
-use php_streams::stream::flags;
 use php_vm::ext::{Extension, ModuleBuilder};
 use php_vm::Vm;
 
@@ -55,8 +54,9 @@ fn register_std_streams(m: &mut ModuleBuilder<'_>) {
             php_streams::open::fopen(url.as_bytes(), mode, false, None)
         });
         let _ = php_streams::diag::take();
-        if let Some(mut s) = s {
-            s.add_flags(flags::NO_CLOSE);
+        // cli_register_file_handles(no_close = false): fclose(STDIN)
+        // really closes descriptor 0.
+        if let Some(s) = s {
             let handle = i64::try_from(i).unwrap_or(0) + 1;
             m.constant(name, res::new_stream_with_handle(s, handle));
         }

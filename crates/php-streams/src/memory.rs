@@ -74,7 +74,13 @@ impl StreamOps for MemoryOps {
         if self.mode == TempMode::Append {
             self.fpos = self.data.len();
         }
-        let end = self.fpos + buf.len();
+        let Some(end) = self
+            .fpos
+            .checked_add(buf.len())
+            .filter(|&e| isize::try_from(e).is_ok())
+        else {
+            return Err(OpFailed);
+        };
         if end > self.data.len() {
             self.data.resize(end, 0);
         }
@@ -89,25 +95,17 @@ impl StreamOps for MemoryOps {
 
     #[allow(clippy::cast_possible_wrap, clippy::cast_sign_loss)]
     fn seek(&mut self, st: &mut StreamState, offset: i64, whence: i32, newpos: &mut i64) -> bool {
-        let len = self.data.len() as i64;
-        let target = match whence {
-            SEEK_CUR => {
-                if offset < 0 && (self.fpos as i64) < -offset {
-                    None
-                } else {
-                    Some(self.fpos as i64 + offset)
-                }
-            }
-            SEEK_SET => (offset >= 0).then_some(offset),
-            SEEK_END => {
-                if offset > 0 {
-                    Some(len + offset)
-                } else if len < -offset {
-                    None
-                } else {
-                    Some(len + offset)
-                }
-            }
+        // size_t arithmetic as in php_stream_memory_seek() (wrapping; the
+        // new offset is reported as zend_off_t).
+        let len = self.data.len() as u64;
+        let fpos = self.fpos as u64;
+        let mag = offset.unsigned_abs();
+        let target: Option<u64> = match whence {
+            SEEK_CUR if offset < 0 => fpos.checked_sub(mag),
+            SEEK_CUR => Some(fpos.wrapping_add(mag)),
+            SEEK_SET => (offset >= 0).then_some(mag),
+            SEEK_END if offset > 0 => Some(len.wrapping_add(mag)),
+            SEEK_END => len.checked_sub(mag),
             _ => {
                 *newpos = self.fpos as i64;
                 return false;
@@ -115,7 +113,7 @@ impl StreamOps for MemoryOps {
         };
         if let Some(t) = target {
             self.fpos = usize::try_from(t).unwrap_or(usize::MAX);
-            *newpos = t;
+            *newpos = t as i64;
             st.eof = false;
             st.fatal_error = false;
             true
@@ -125,6 +123,7 @@ impl StreamOps for MemoryOps {
             false
         }
     }
+
 
     fn stat(&mut self, _st: &mut StreamState) -> Option<StatBuf> {
         Some(StatBuf {

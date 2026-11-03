@@ -116,6 +116,7 @@ fn fclose(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         return Ok(Value::Bool(false));
     }
     let mut result = 0;
+    sync_stdio(vm, &cell);
     if let Some(mut s) = cell.take() {
         r.close();
         result = bridge::run(vm, || s.close())?;
