@@ -1010,6 +1010,13 @@ impl Vm {
             func: Some(b.clone()),
         };
         let mut r = (b.handler)(self, &mut args);
+        // Blocking builtins (sleep, stream reads) return to a pending
+        // interrupt.
+        if r.is_ok() {
+            if let Err(e) = self.check_interrupt() {
+                r = Err(e);
+            }
+        }
         // Objects released by the builtin (e.g. by-ref outputs overwriting
         // the last reference) are destructed while its frame is still
         // active, so traces show `[internal function]` + the builtin.
@@ -1333,6 +1340,9 @@ impl Vm {
 
     /// Runs a prepared call to completion.
     pub(crate) fn call_pending(&mut self, mut call: PendingCall) -> VmResult<Value> {
+        // `zend_call_function` services pending interrupts (async signals)
+        // before entering user code from internal code.
+        self.check_interrupt()?;
         match call.func.clone() {
             Func::User(uf) => {
                 // Arguments passed by value to by-ref parameters.

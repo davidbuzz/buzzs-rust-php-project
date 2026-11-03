@@ -495,6 +495,11 @@ pub struct Vm {
     /// INI warnings raised while building the registry at startup (the
     /// SAPI reports them as "PHP Startup: ...").
     pub startup_diagnostics: Vec<php_support::Diagnostic>,
+    /// SAPI log sink for `log_errors` (`sapi_module.log_message`);
+    /// `None` writes to stderr / the `error_log` file.
+    pub log_hook: Option<Box<dyn FnMut(&[u8])>>,
+    /// The value the main script `return`ed (a router's `false`).
+    pub main_return: Value,
     /// Named native output handlers (`ob_start('ob_gzhandler')`).
     pub output_handler_aliases: HashMap<ZStr, crate::ext::OutputHandlerFn>,
     /// `include` opener hook.

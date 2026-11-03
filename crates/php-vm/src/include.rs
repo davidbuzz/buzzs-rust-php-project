@@ -186,7 +186,10 @@ impl Vm {
         let r = self.execute(base);
         self.frames.truncate(base);
         match r {
-            Ok(_) => Ok(()),
+            Ok(v) => {
+                self.main_return = v;
+                Ok(())
+            }
             Err(t) => self.handle_top_throw(t),
         }
     }

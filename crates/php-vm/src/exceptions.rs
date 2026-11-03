@@ -321,7 +321,9 @@ impl Vm {
                                 _ => "include",
                             })
                     };
-                    if f.kind == FrameKind::Include && !ignore_args {
+                    // `include_filename`: only known once a frame inside the
+                    // included file was recorded (zend_fetch_debug_backtrace).
+                    if f.kind == FrameKind::Include && !ignore_args && !out.is_empty() {
                         entry.insert(
                             ArrayKey::Str(ZStr::from("args")),
                             Value::Array(ZArray::from_values([Value::Str(

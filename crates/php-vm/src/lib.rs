@@ -177,6 +177,8 @@ impl Vm {
             ini_stage: crate::ext::IniStage::Runtime,
             magic_call_name: None,
             startup_diagnostics: Vec::new(),
+            log_hook: None,
+            main_return: Value::Null,
             output_handler_aliases: std::collections::HashMap::new(),
             include_opener: None,
             source_filter: None,

@@ -360,6 +360,24 @@ impl MapState {
     }
 }
 
+/// `zend_weakmap_get_gc`: every value is kept alive only while both the
+/// map and its key are (a conditional edge). Storage shared with an active
+/// iterator is not reported (the iterator co-owns it).
+impl crate::gc::GcTraverse for Rc<MapCell> {
+    fn gc_traverse(&self, v: &mut crate::gc::GcVisitor<'_>) {
+        if Rc::strong_count(self) != 1 {
+            return;
+        }
+        let Ok(st) = self.try_borrow() else {
+            v.opaque();
+            return;
+        };
+        for e in st.entries.iter().flatten() {
+            v.weak_entry(&e.key.data, &e.value);
+        }
+    }
+}
+
 fn map_of(o: &Obj) -> Option<Rc<MapCell>> {
     object::internal::<Rc<MapCell>, _>(o, |m| m.clone())
 }
@@ -777,6 +795,7 @@ fn ii_rewind(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 /// Registers `WeakReference`, `WeakMap` and (unless already present)
 /// `InternalIterator`.
 pub(crate) fn register(vm: &mut Vm) {
+    crate::gc::register_traverse::<Rc<MapCell>>();
     if vm.find_class(b"InternalIterator").is_none() {
         ClassBuilder::new("InternalIterator")
             .flags(cflags::FINAL | cflags::NO_CLONE)

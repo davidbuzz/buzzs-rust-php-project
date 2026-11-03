@@ -607,7 +607,26 @@ fn fiber_error_construct(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
 }
 
 /// Registers `Fiber` and `FiberError`.
+/// `zend_fiber_object_gc`: everything a fiber owns — the resolved call of
+/// a fiber not started yet, the callable, the frames of a suspended fiber,
+/// the value in transit and the return value. (Rust temporaries on the
+/// fiber's native stack stay invisible: treated as external references.)
+fn gc_traverse(d: &FiberData, v: &mut crate::gc::GcVisitor<'_>) {
+    if let Some(c) = &d.call {
+        v.pending_call(c);
+    }
+    v.value(&d.callable);
+    for f in &d.frames {
+        v.frame(f);
+    }
+    if let Some(Ok(x)) = &d.transfer {
+        v.value(x);
+    }
+    v.value(&d.ret);
+}
+
 pub(crate) fn register(vm: &mut Vm) {
+    crate::gc::register_traverse_with::<FiberData>(gc_traverse);
     ClassBuilder::new("Fiber")
         .flags(cflags::FINAL | cflags::NOT_SERIALIZABLE | cflags::NO_CLONE)
         .method(

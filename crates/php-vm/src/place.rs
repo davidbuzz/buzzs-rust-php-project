@@ -714,11 +714,17 @@ impl Vm {
             }
             WOp::AssignRef(r) => {
                 let old = store.borrow_mut().slots[idx].replace(r.clone());
+                if let Some(old) = &old {
+                    crate::gc::possible_root(old);
+                }
                 drop(old);
                 Ok(r)
             }
             WOp::Unset => {
                 let old = store.borrow_mut().slots[idx].take();
+                if let Some(old) = &old {
+                    crate::gc::possible_root(old);
+                }
                 drop(old);
                 Ok(Value::Null)
             }

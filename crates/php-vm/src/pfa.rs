@@ -102,12 +102,11 @@ impl Vm {
                     pfa.placeholders.resize(p + 1, false);
                 }
                 if call.args[p].is_some() || pfa.placeholders[p] {
-                    let n = name
-                        .as_ref()
-                        .map_or_else(String::new, ZStr::to_string_lossy);
+                    let n = name.as_ref().map_or_else(String::new, ZStr::to_string_lossy);
+                    let what = if pfa.placeholders[p] { "placeholder" } else { "argument" };
                     return Err(self.make_throw(
                         "Error",
-                        &format!("Named parameter ${n} overwrites previous argument"),
+                        &format!("Named parameter ${n} overwrites previous {what}"),
                     ));
                 }
                 call.args[p] = Some(Value::Null);
@@ -376,8 +375,10 @@ impl Vm {
         // Generate the closure source.
         let scope = call.scope.clone();
         let type_src = |ty: &crate::types::TypeDecl| -> String {
-            let parent = scope.as_ref().and_then(|s| s.parent_name());
-            ty.display(scope.as_ref().map(|s| &s.name), parent, None)
+            // `self`/`parent` stay as written: the closure is compiled in
+            // the target's class scope.
+            let _ = &scope;
+            ty.to_php_string()
         };
         let mut src = String::new();
         let mut uses: Vec<String> = Vec::new();

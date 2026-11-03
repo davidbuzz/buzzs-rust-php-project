@@ -108,6 +108,9 @@ impl Vm {
             _ => slot.replace(v),
         };
         drop(vars);
+        if let Some(old) = &old {
+            crate::gc::possible_root(old);
+        }
         drop(old);
     }
 
@@ -116,6 +119,9 @@ impl Vm {
         let f = self.frame();
         let idx = f.cv_idx(cv);
         let old = f.vars.borrow_mut().slots[idx].replace(v);
+        if let Some(old) = &old {
+            crate::gc::possible_root(old);
+        }
         drop(old);
     }
 
@@ -613,6 +619,18 @@ impl Vm {
                         };
                         self.op_return(v, base)?
                     }
+                    Op::ReturnByRefValue { val } => {
+                        let raw = self.read_raw(*val)?;
+                        let v = match raw {
+                            Value::Reference(r) => Value::Reference(r),
+                            other => {
+                                self.notice("Only variable references should be returned by reference")?;
+                                let checked = self.verify_return(Some(other))?;
+                                Value::Reference(php_runtime::PhpRef::new(checked))
+                            }
+                        };
+                        self.op_return_raw(Some(v), base)?
+                    }
                     Op::ReturnRef { place } => {
                         let by_ref = self
                             .frame()
@@ -876,6 +894,10 @@ impl Vm {
                 };
                 if object::has_pending_destructors() {
                     self.run_pending_destructors()?;
+                }
+                // Root buffer reached the threshold (`gc_possible_root_when_full`).
+                if crate::gc::wants_run() {
+                    self.gc_safe_point()?;
                 }
                 // Delayed memory_limit violation (`zend_mm_delayed_error`).
                 if php_memlimit::is_pending() {
@@ -1215,6 +1237,7 @@ impl Vm {
             .ufunc
             .as_ref()
             .is_some_and(|u| u.flags & crate::func::flags::RETURN_REF != 0);
+        crate::gc::frame_released(&frame);
         drop(frame);
         let v = if by_ref { v } else { self.copy_on_assign(v) };
         if fidx <= base {

@@ -75,7 +75,14 @@ impl Vm {
                 let r = self.call_method(o, &m, Vec::new())?;
                 return match r {
                     Value::Array(a) => Ok(Some(a)),
-                    Value::Null => Ok(Some(ZArray::new())),
+                    Value::Null => {
+                        let msg = format!(
+                            "Returning null from {}::__debugInfo() is deprecated, return an empty array instead",
+                            object::display_name(&cls.name)
+                        );
+                        self.deprecated(&msg)?;
+                        Ok(Some(ZArray::new()))
+                    }
                     _ => {
                         let msg = "__debugInfo() must return an array".to_string();
                         Err(self.fatal(&msg))

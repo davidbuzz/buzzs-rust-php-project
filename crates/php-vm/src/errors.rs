@@ -233,7 +233,8 @@ impl Vm {
         if self.ini.get_bool("html_errors") {
             let mut out = prepend.clone();
             out.extend_from_slice(format!("<br />\n<b>{lbl}</b>:  ").as_bytes());
-            out.extend_from_slice(msg);
+            // `php_error_cb`: the message is HTML-escaped with html_errors.
+            out.extend_from_slice(&html_escape(msg));
             out.extend_from_slice(
                 format!(" in <b>{file_s}</b> on line <b>{line}</b><br />\n").as_bytes(),
             );
@@ -277,6 +278,12 @@ impl Vm {
                     return;
                 }
             }
+        }
+        // `sapi_module.log_message`: a SAPI may route the log itself.
+        if let Some(mut hook) = self.log_hook.take() {
+            hook(msg.as_bytes());
+            self.log_hook = Some(hook);
+            return;
         }
         self.flush_stdout();
         let _ = std::io::Write::write_all(&mut std::io::stderr(), format!("{msg}\n").as_bytes());
@@ -413,4 +420,19 @@ impl Vm {
         let msg = format!("Uncaught {}\n  thrown", s.to_string_lossy());
         self.report_fatal(&msg, &file, line);
     }
+}
+
+/// `escape_html` of `php_error_cb` (`ENT_COMPAT | ENT_SUBSTITUTE`).
+fn html_escape(msg: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(msg.len());
+    for &c in msg {
+        match c {
+            b'&' => out.extend_from_slice(b"&amp;"),
+            b'<' => out.extend_from_slice(b"&lt;"),
+            b'>' => out.extend_from_slice(b"&gt;"),
+            b'"' => out.extend_from_slice(b"&quot;"),
+            _ => out.push(c),
+        }
+    }
+    out
 }

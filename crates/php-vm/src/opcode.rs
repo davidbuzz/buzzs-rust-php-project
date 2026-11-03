@@ -397,6 +397,10 @@ pub enum Op {
     Return { val: Operand },
     /// Returns a reference to `place` (by-ref functions).
     ReturnRef { place: PlaceId },
+    /// `return expr;` in a by-reference function where `expr` is not a
+    /// variable: references pass through, values get the
+    /// "Only variable references should be returned by reference" notice.
+    ReturnByRefValue { val: Operand },
     /// Suspends the call frame into a new `Generator`.
     GeneratorCreate,
     /// `yield`.
