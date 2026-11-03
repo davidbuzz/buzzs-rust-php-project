@@ -482,7 +482,10 @@ fn rp_get_class(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let Some(t) = &p.ty else {
         return Ok(Value::Null);
     };
-    let cn = if t.classes.is_empty() && t.intersections.is_empty() && t.mask & !mask::NULL == mask::ITERABLE {
+    let cn = if t.classes.is_empty()
+        && t.intersections.is_empty()
+        && t.mask & !mask::NULL == mask::ITERABLE
+    {
         // `iterable` is `Traversable|array`: its class is `Traversable`.
         ZStr::from("Traversable")
     } else if t.classes.len() != 1 || !t.intersections.is_empty() || t.mask & !mask::NULL != 0 {

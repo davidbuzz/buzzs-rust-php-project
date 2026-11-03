@@ -305,11 +305,15 @@ pub(crate) fn prototype_in(m: &Rc<Method>, class: &Rc<Class>) -> Option<Rc<Metho
     let scope = m.scope();
     let lc = m.name.to_ascii_lowercase();
     let mut k = Some(class.clone());
-    while let Some(kc) = k {
+    while let Some(kc) = k.take() {
         if Rc::ptr_eq(&kc, &scope) {
             break;
         }
-        let inherited: Vec<Rc<Class>> = kc.parent.as_ref().map(|p| p.interfaces.clone()).unwrap_or_default();
+        let inherited: Vec<Rc<Class>> = kc
+            .parent
+            .as_ref()
+            .map(|p| p.interfaces.clone())
+            .unwrap_or_default();
         for i in &kc.interfaces {
             if inherited.iter().any(|x| Rc::ptr_eq(x, i)) {
                 continue;
@@ -320,7 +324,7 @@ pub(crate) fn prototype_in(m: &Rc<Method>, class: &Rc<Class>) -> Option<Rc<Metho
                 }
             }
         }
-        k = kc.parent.clone();
+        k.clone_from(&kc.parent);
     }
     prototype(m)
 }

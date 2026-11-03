@@ -12,6 +12,7 @@ use std::rc::Rc;
 
 /// `reflect_attributes`: the `getAttributes(?string $name, int $flags)`
 /// implementation.
+#[allow(dead_code)]
 pub(crate) fn attributes_array(
     vm: &mut Vm,
     attrs: &[AttributeInfo],
@@ -239,6 +240,53 @@ fn source_arg(vm: &Vm, r: &AttrRef, i: usize) -> Option<Vec<u8>> {
     Some(super::export::export_expr_ns(e, &ns))
 }
 
+/// The error of an internal attribute's validator, kept for
+/// `#[\DelayedTargetValidation]` (`zend_attribute.validation_error`).
+fn delayed_validation_error(c: &Class, r: &AttrRef) -> Option<String> {
+    let scope = r.scope.as_ref()?;
+    if r.target != target::CLASS {
+        return None;
+    }
+    let n = super::dn(&scope.name);
+    let kind = if scope.is_trait() {
+        "trait"
+    } else if scope.is_interface() {
+        "interface"
+    } else if scope.is_enum() {
+        "enum"
+    } else {
+        "class"
+    };
+    match c.lc_name.as_bytes() {
+        b"attribute" => {
+            let what = if scope.is_trait() || scope.is_interface() || scope.is_enum() {
+                kind
+            } else if scope.flags & cflags::EXPLICIT_ABSTRACT != 0 {
+                "abstract class"
+            } else {
+                return None;
+            };
+            Some(format!("Cannot apply #[\\Attribute] to {what} {n}"))
+        }
+        b"allowdynamicproperties" => {
+            let what = if scope.is_trait() || scope.is_interface() || scope.is_enum() {
+                kind
+            } else if scope.flags & cflags::READONLY != 0 {
+                "readonly class"
+            } else {
+                return None;
+            };
+            Some(format!(
+                "Cannot apply #[\\AllowDynamicProperties] to {what} {n}"
+            ))
+        }
+        b"deprecated" if !scope.is_trait() => {
+            Some(format!("Cannot apply #[\\Deprecated] to {kind} {n}"))
+        }
+        _ => None,
+    }
+}
+
 /// `zend_get_attribute_target_names`.
 pub(crate) fn target_names(f: i64) -> String {
     let names = [
@@ -335,6 +383,9 @@ fn ra_new_instance(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
                 target_names(fl)
             ),
         ));
+    }
+    if let Some(msg) = delayed_validation_error(&c, &r) {
+        return Err(vm.make_throw("Error", &msg));
     }
     if c.flags & cflags::INTERNAL == 0 && fl & target::IS_REPEATABLE == 0 && r.repeated {
         return Err(vm.make_throw(

@@ -77,9 +77,22 @@ pub(crate) fn object_for(vm: &mut Vm, o: &Obj, name: Option<&ZStr>) -> VmResult<
             if !slot_is_lazy(o, slot) {
                 return Ok(o.clone());
             }
-        } else if !i.proxy {
+        } else {
             let c = object::class_of(o).clone();
-            if c.prop_map.get(n).is_some_and(|p| p.is_virtual()) {
+            if !i.proxy && c.prop_map.get(n).is_some_and(|p| p.is_virtual()) {
+                return Ok(o.clone());
+            }
+            // Undeclared property handled by a magic method: the magic
+            // method runs first and initializes only if it observes state.
+            let m = &c.magic;
+            let guarded = vm
+                .prop_guards
+                .iter()
+                .any(|(h, gn, _)| *h == o.handle() && gn == n);
+            if !i.proxy
+                && !guarded
+                && (m.get.is_some() || m.set.is_some() || m.isset.is_some() || m.unset.is_some())
+            {
                 return Ok(o.clone());
             }
         }
@@ -618,6 +631,43 @@ fn lazy_compatible(vm: &mut Vm, p: &PropRef, o: &Obj, method: &str) -> VmResult<
     Ok(m.info.map_or(0, |pi| pi.slot as usize))
 }
 
+/// Writes a declared property slot directly (no hooks, no `__set`).
+fn set_slot_raw(vm: &mut Vm, p: &PropRef, o: &Obj, slot: usize, v: Value) -> VmResult<()> {
+    let oc = object::class_of(o).clone();
+    let Some(pi) = oc
+        .props
+        .iter()
+        .find(|x| x.slot as usize == slot && x.name == p.name)
+        .cloned()
+    else {
+        return super::property::set_raw(vm, p, o, v);
+    };
+    if pi.hooks.as_ref().is_some_and(|h| h.set.is_some()) {
+        return super::property::set_raw(vm, p, o, v);
+    }
+    if pi.is_readonly()
+        && object::data(o)
+            .slots
+            .borrow()
+            .get(slot)
+            .is_some_and(Option::is_some)
+    {
+        return Err(vm.make_throw(
+            "Error",
+            &format!(
+                "Cannot modify readonly property {}::${}",
+                super::dn(&pi.class),
+                pi.name
+            ),
+        ));
+    }
+    let v = vm.coerce_prop(Some(o), &pi, v)?;
+    if let Some(s) = object::data(o).slots.borrow_mut().get_mut(slot) {
+        *s = Some(v);
+    }
+    Ok(())
+}
+
 pub(crate) fn rp_set_raw_value_without_lazy_initialization(
     vm: &mut Vm,
     a: &mut Args,
@@ -628,7 +678,7 @@ pub(crate) fn rp_set_raw_value_without_lazy_initialization(
     let slot = lazy_compatible(vm, &p, &o, "setRawValueWithoutLazyInitialization")?;
     let was_lazy = slot_is_lazy(&o, slot);
     unmark(&o, slot);
-    let r = super::property::set_raw(vm, &p, &o, a.at(1));
+    let r = set_slot_raw(vm, &p, &o, slot, a.at(1));
     if r.is_err()
         && was_lazy
         && object::data(&o)

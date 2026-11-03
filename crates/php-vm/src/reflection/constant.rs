@@ -404,11 +404,11 @@ fn rk_get_value(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 }
 fn rk_is_deprecated(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let c = this_constant(vm, a)?;
-    Ok(Value::Bool(super::misc::constant_deprecated(&c.name)))
+    Ok(Value::Bool(super::misc::constant_deprecated(vm, &c.name)))
 }
 fn rk_get_file_name(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let c = this_constant(vm, a)?;
-    Ok(super::misc::constant_file(&c.name).map_or(Value::Bool(false), Value::Str))
+    Ok(super::misc::constant_file(vm, &c.name).map_or(Value::Bool(false), Value::Str))
 }
 fn rk_get_extension(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let c = this_constant(vm, a)?;
@@ -426,8 +426,22 @@ fn rk_get_extension_name(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     Ok(super::zs(&super::misc::constant_module(vm, &c.name)))
 }
 fn rk_get_attributes(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let _ = this_constant(vm, a)?;
-    super::attribute::attributes_array(vm, &[], super::target::CONSTANT, None, a)
+    let c = this_constant(vm, a)?;
+    let mut attrs = vm
+        .const_attributes
+        .get(&c.name)
+        .map(|x| (**x).clone())
+        .unwrap_or_default();
+    if attrs.is_empty() && super::misc::constant_deprecated(vm, &c.name) {
+        // Deprecated internal constants carry `#[\Deprecated]`.
+        attrs.push(crate::class::AttributeInfo {
+            name: ZStr::from("Deprecated"),
+            args: Vec::new(),
+            line: 0,
+        });
+    }
+    let file = vm.const_files.get(&c.name).cloned();
+    super::attribute::attributes_array_in(vm, &attrs, super::target::CONSTANT, None, file, a)
 }
 fn rk_to_string(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let c = this_constant(vm, a)?;
@@ -435,7 +449,7 @@ fn rk_to_string(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     if !is_user_constant(vm, &c.name) {
         fl.push("persistent");
     }
-    if super::misc::constant_deprecated(&c.name) {
+    if super::misc::constant_deprecated(vm, &c.name) {
         fl.push("deprecated");
     }
     let s = super::export::const_string(vm, &c.name, &c.value, &fl, "")?;

@@ -44,18 +44,21 @@ fn is_tentative(f: &FnRef) -> bool {
             scope.lc_name.as_bytes() == c.as_bytes() && ms.split(' ').any(|x| x == lc)
         });
     }
-    // Other internal classes: non-final methods of non-final classes have
-    // tentative return types (php-src stubs), except magic methods and the
-    // enum interfaces.
+    // Other internal classes: overridable (non-final, non-private) methods
+    // have tentative return types in the php-src stubs; constructors and
+    // `__toString` (Stringable) declare real ones, as do the enum
+    // interfaces.
     scope.flags & cflags::INTERNAL != 0
-        && m.flags & flags::FINAL == 0
+        && m.flags & (flags::FINAL | flags::PRIVATE) == 0
         && scope.flags & cflags::FINAL == 0
-        && !lc.starts_with("__")
+        && !matches!(
+            lc.as_str(),
+            "__construct" | "__destruct" | "__tostring" | "__invoke"
+        )
         && !matches!(
             scope.lc_name.as_bytes(),
             b"unitenum" | b"backedenum" | b"stringable"
         )
-        && !scope.instance_of_name(b"throwable")
 }
 
 /// The return type and whether it is tentative.
@@ -309,7 +312,16 @@ fn rf_get_doc_comment(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         return Ok(Value::Bool(false));
     }
     Ok(match &f.func {
-        Func::User(u) => u.doc_comment.clone().map_or(Value::Bool(false), Value::Str),
+        Func::User(u) => match &u.doc_comment {
+            Some(d) => Value::Str(d.clone()),
+            None if u.hook_prop.is_some() => super::source::hook_doc_comment(
+                u.code.filename.as_bytes(),
+                u.line_start,
+                u.line_end,
+            )
+            .map_or(Value::Bool(false), |d| Value::Str(ZStr::from(d))),
+            None => Value::Bool(false),
+        },
         Func::Builtin(_) => Value::Bool(false),
     })
 }

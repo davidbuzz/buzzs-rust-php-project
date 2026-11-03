@@ -152,43 +152,12 @@ pub(crate) fn function_module(
         return Some(m);
     }
     let s = String::from_utf8_lossy(&lc).into_owned();
-    if CORE_FUNCTIONS.contains(&s.as_str()) {
-        return Some("Core".into());
-    }
-    let prefixed = [
-        ("preg_", "pcre"),
-        ("hash", "hash"),
-        ("mt_", "random"),
-        ("random_", "random"),
-        ("spl_", "SPL"),
-        ("iterator_", "SPL"),
-        ("class_implements", "SPL"),
-        ("class_parents", "SPL"),
-        ("class_uses", "SPL"),
-        ("date", "date"),
-        ("timezone_", "date"),
-        ("strtotime", "date"),
-        ("mktime", "date"),
-        ("gmmktime", "date"),
-        ("checkdate", "date"),
-        ("gmdate", "date"),
-        ("idate", "date"),
-        ("time", "date"),
-        ("localtime", "date"),
-        ("getdate", "date"),
-    ];
-    for (p, m) in prefixed {
-        if s.starts_with(p) {
-            return Some(m.into());
-        }
-    }
-    if matches!(
-        s.as_str(),
-        "rand" | "srand" | "getrandmax" | "lcg_value" | "random_int" | "random_bytes"
-    ) {
-        return Some("random".into());
-    }
-    Some("standard".into())
+    // Unattributed functions are the VM's own builtins.
+    Some(if CORE_FUNCTIONS.contains(&s.as_str()) {
+        "Core".into()
+    } else {
+        "standard".into()
+    })
 }
 
 /// The extension of an internal class.
@@ -200,108 +169,64 @@ pub(crate) fn class_module(vm: &Vm, c: &Rc<Class>) -> Option<String> {
         return Some(m);
     }
     let _ = vm;
-    let n = c.lc_name.to_string_lossy();
-    if n.starts_with("reflect") || n == "propertyhooktype" {
+    // Classes registered by the VM itself: the reflection classes and the
+    // engine's (`Closure`, `Exception`, ...).
+    let n = c.lc_name.as_bytes();
+    if n.starts_with(b"reflect") || n == b"propertyhooktype" {
         return Some("Reflection".into());
-    }
-    if n.starts_with("random\\") {
-        return Some("random".into());
-    }
-    if n.starts_with("date") {
-        return Some("date".into());
-    }
-    let spl = [
-        "arrayiterator",
-        "arrayobject",
-        "splobjectstorage",
-        "spldoublylinkedlist",
-        "splqueue",
-        "splstack",
-        "splheap",
-        "splminheap",
-        "splmaxheap",
-        "splpriorityqueue",
-        "splfixedarray",
-        "splobserver",
-        "splsubject",
-        "splfileinfo",
-        "splfileobject",
-        "spltempfileobject",
-        "directoryiterator",
-        "filesystemiterator",
-        "recursivedirectoryiterator",
-        "globiterator",
-        "logicexception",
-        "badfunctioncallexception",
-        "badmethodcallexception",
-        "domainexception",
-        "invalidargumentexception",
-        "lengthexception",
-        "outofrangeexception",
-        "runtimeexception",
-        "outofboundsexception",
-        "overflowexception",
-        "rangeexception",
-        "underflowexception",
-        "unexpectedvalueexception",
-        "recursiveiterator",
-        "outeriterator",
-        "seekableiterator",
-        "countable",
-    ];
-    if spl.contains(&n.as_str()) || n.ends_with("iterator") && !matches!(n.as_str(), "iterator") {
-        return Some(if n == "countable" {
-            "Core".into()
-        } else {
-            "SPL".into()
-        });
     }
     Some("Core".into())
 }
 
 /// The extension of an internal constant.
 pub(crate) fn constant_module(_vm: &Vm, name: &ZStr) -> String {
+    // Unattributed constants are the VM's own (`Core` engine constants,
+    // otherwise `standard`), as `get_defined_constants(true)` splits them.
+    const PREFIXES: &[&[u8]] = &[
+        b"E_",
+        b"PHP_",
+        b"ZEND_",
+        b"DEBUG_BACKTRACE_",
+        b"UPLOAD_ERR_",
+        b"PEAR_",
+    ];
     if let Some(m) = MODULES.with(|m| m.borrow().constants.get(name.as_bytes()).cloned()) {
         return m;
     }
-    let s = name.to_string_lossy();
-    let core = s.starts_with("E_")
-        || s.starts_with("ZEND_")
+    let n = name.as_bytes();
+    let core = PREFIXES.iter().any(|p| n.starts_with(p))
         || matches!(
-            s.as_str(),
-            "TRUE"
-                | "FALSE"
-                | "NULL"
-                | "true"
-                | "false"
-                | "null"
-                | "DEBUG_BACKTRACE_PROVIDE_OBJECT"
-                | "DEBUG_BACKTRACE_IGNORE_ARGS"
-                | "UPLOAD_ERR_OK"
-        )
-        || (s.starts_with("PHP_")
-            && !s.starts_with("PHP_ROUND")
-            && !s.starts_with("PHP_URL")
-            && !s.starts_with("PHP_QUERY"));
+            n,
+            b"TRUE"
+                | b"FALSE"
+                | b"NULL"
+                | b"DEFAULT_INCLUDE_PATH"
+                | b"STDIN"
+                | b"STDOUT"
+                | b"STDERR"
+                | b"__COMPILER_HALT_OFFSET__"
+        );
     if core {
         "Core".into()
-    } else if s.starts_with("PREG_") || s.starts_with("PCRE_") {
-        "pcre".into()
-    } else if s.starts_with("MT_RAND") {
-        "random".into()
     } else {
         "standard".into()
     }
 }
 
-/// Whether a global constant is deprecated.
-pub(crate) fn constant_deprecated(_name: &ZStr) -> bool {
-    false
+/// Whether a global constant is deprecated (internal deprecation table or
+/// `#[\Deprecated]` on a user constant).
+pub(crate) fn constant_deprecated(vm: &Vm, name: &ZStr) -> bool {
+    vm.deprecated_constants.contains_key(name)
+        || name.as_bytes() == b"E_STRICT"
+        || vm
+            .const_attributes
+            .get(name)
+            .is_some_and(|a| a.iter().any(|x| x.name.eq_ignore_ascii_case(b"Deprecated")))
 }
 
-/// The file a user constant was declared in (not tracked).
-pub(crate) fn constant_file(_name: &ZStr) -> Option<ZStr> {
-    None
+/// The file a user constant was declared in.
+pub(crate) fn constant_file(vm: &Vm, name: &ZStr) -> Option<ZStr> {
+    vm.const_files.get(name).cloned()
 }
 
 /// All extension names, as `get_loaded_extensions()` reports them.
@@ -418,7 +343,11 @@ impl GenFrame {
             this: f.this.clone(),
             closure: f.closure.clone(),
             scope: f.scope.clone(),
-            args: f.args.iter().map(|a| a.clone().map(|v| v.deref()).unwrap_or_default()).collect(),
+            args: f
+                .args
+                .iter()
+                .map(|a| a.clone().map(|v| v.deref()).unwrap_or_default())
+                .collect(),
         }
     }
 }
@@ -484,7 +413,12 @@ fn rg_get_this(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 fn gen_fnref(f: &GenFrame) -> Option<FnRef> {
     let func = f.func.clone()?;
     if let Some(c) = &f.closure {
-        return Some(FnRef { func, method: None, class: None, closure: Some(c.clone()) });
+        return Some(FnRef {
+            func,
+            method: None,
+            class: None,
+            closure: Some(c.clone()),
+        });
     }
     if let Some(s) = &f.scope {
         if let Some(m) = s.find_method(func.name().as_bytes()).cloned() {
@@ -495,12 +429,16 @@ fn gen_fnref(f: &GenFrame) -> Option<FnRef> {
 }
 
 fn rg_get_function(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let (g, saved) = match this_refl(vm, a)? {
-        Refl::Generator(g, f) => (g, f),
-        _ => return Err(vm.make_throw("Error", "Internal error: Failed to retrieve the reflection object")),
+    let Refl::Generator(g, saved) = this_refl(vm, a)? else {
+        return Err(vm.make_throw(
+            "Error",
+            "Internal error: Failed to retrieve the reflection object",
+        ));
     };
     let f = gen_frame(vm, &g).and_then(|f| gen_fnref(&f)).or(saved);
-    let Some(f) = f else { return Err(gen_closed(vm)) };
+    let Some(f) = f else {
+        return Err(gen_closed(vm));
+    };
     match (&f.method, &f.class) {
         (Some(m), Some(c)) => super::method_value(vm, &m.clone(), &c.clone()),
         _ => super::function_value(vm, f),
@@ -534,7 +472,9 @@ fn rg_get_trace(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     // executing generator; the trace lists the executing one first.
     let mut chain = vec![g.clone()];
     let mut cur = g.clone();
-    while let Some(p) = object::internal::<crate::generator::GenData, _>(&cur, |d| d.parent.clone()).flatten() {
+    while let Some(p) =
+        object::internal::<crate::generator::GenData, _>(&cur, |d| d.parent.clone()).flatten()
+    {
         if chain.iter().any(|x| Obj::ptr_eq(x, &p)) {
             break;
         }
@@ -559,12 +499,18 @@ fn rg_get_trace(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
                     if let (Some(o), true) = (&f.this, options & 1 != 0) {
                         e.insert(ArrayKey::from("object"), Value::Object(o.clone()));
                     }
-                    e.insert(ArrayKey::from("type"), zs(if f.this.is_some() { "->" } else { "::" }));
+                    e.insert(
+                        ArrayKey::from("type"),
+                        zs(if f.this.is_some() { "->" } else { "::" }),
+                    );
                 }
             }
         }
         if options & 2 == 0 {
-            e.insert(ArrayKey::from("args"), Value::Array(ZArray::from_values(f.args.clone())));
+            e.insert(
+                ArrayKey::from("args"),
+                Value::Array(ZArray::from_values(f.args.clone())),
+            );
         }
         out.push(Value::Array(ZArray::from_table(e)));
     }
@@ -683,7 +629,7 @@ fn rfb_get_callable(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             "Cannot fetch the callable from a fiber that has terminated",
         ));
     }
-    Ok(Value::Null)
+    Ok(crate::fiber::fiber_callable(&f).unwrap_or_default())
 }
 
 fn rfb_get_trace(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -697,12 +643,16 @@ fn rfb_get_trace(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     match fiber_state(&f) {
         Some(crate::fiber::FiberState::Running) => {
             // Only the fiber's own frames: hide the frames below its base.
-            let base = object::internal::<crate::fiber::FiberData, _>(&f, |d| d.base).unwrap_or(0).min(vm.frames.len());
+            let base = object::internal::<crate::fiber::FiberData, _>(&f, |d| d.base)
+                .unwrap_or(0)
+                .min(vm.frames.len());
             // A fiber that resumed another one ends where that one starts.
             let end = vm
                 .fibers
                 .iter()
-                .filter(|x| !Obj::ptr_eq(x, &f) && fiber_state(x) == Some(crate::fiber::FiberState::Running))
+                .filter(|x| {
+                    !Obj::ptr_eq(x, &f) && fiber_state(x) == Some(crate::fiber::FiberState::Running)
+                })
                 .filter_map(|x| object::internal::<crate::fiber::FiberData, _>(x, |d| d.base))
                 .filter(|b| *b > base)
                 .min()
@@ -719,7 +669,10 @@ fn rfb_get_trace(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         }
         _ => {
             // Suspended: trace the fiber's saved frames.
-            let saved = object::internal::<crate::fiber::FiberData, _>(&f, |d| std::mem::take(&mut d.frames)).unwrap_or_default();
+            let saved = object::internal::<crate::fiber::FiberData, _>(&f, |d| {
+                std::mem::take(&mut d.frames)
+            })
+            .unwrap_or_default();
             let outer = std::mem::replace(&mut vm.frames, saved);
             let t = vm.backtrace(false, ignore_args, provide_object, 0);
             let saved = std::mem::replace(&mut vm.frames, outer);
@@ -861,16 +814,23 @@ fn re_get_version(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     Ok(zs(crate::PHP_VERSION))
 }
 
-fn ext_functions(vm: &Vm, m: &str) -> Vec<(ZStr, Func)> {
-    let mut v: Vec<(ZStr, Func)> = vm
-        .functions
-        .iter()
-        .filter(|(_, f)| !f.is_user())
-        .filter(|(k, f)| function_module(vm, f, None, k).is_some_and(|x| x.eq_ignore_ascii_case(m)))
-        .map(|(k, f)| (k.clone(), f.clone()))
-        .collect();
-    v.sort_by(|a, b| a.0.cmp(&b.0));
-    v
+/// The functions of extension `m` in registration order
+/// (`get_extension_funcs()`).
+fn ext_functions(vm: &mut Vm, m: &str) -> Vec<(ZStr, Func)> {
+    let names = match vm.call_function("get_extension_funcs", vec![Value::Str(ZStr::from(m))]) {
+        Ok(Value::Array(a)) => a
+            .values()
+            .filter_map(|v| v.as_str().cloned())
+            .collect::<Vec<_>>(),
+        _ => Vec::new(),
+    };
+    names
+        .into_iter()
+        .filter_map(|n| {
+            let lc = n.to_ascii_lowercase();
+            vm.functions.get(&lc).cloned().map(|f| (lc, f))
+        })
+        .collect()
 }
 
 fn re_get_functions(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -885,16 +845,29 @@ fn re_get_functions(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     Ok(Value::Array(ZArray::from_table(t)))
 }
 
-fn ext_constants(vm: &Vm, m: &str) -> Vec<(ZStr, Value)> {
-    let mut v: Vec<(ZStr, Value)> = vm
-        .constants
-        .iter()
-        .filter(|(k, _)| !vm.user_constants.contains(k))
-        .filter(|(k, _)| constant_module(vm, k).eq_ignore_ascii_case(m))
-        .map(|(k, v)| (k.clone(), v.clone()))
-        .collect();
-    v.sort_by(|a, b| a.0.cmp(&b.0));
-    v
+/// The constants of extension `m` in registration order
+/// (`get_defined_constants(true)[$m]`).
+fn ext_constants(vm: &mut Vm, m: &str) -> Vec<(ZStr, Value)> {
+    let Ok(Value::Array(all)) = vm.call_function("get_defined_constants", vec![Value::Bool(true)])
+    else {
+        return Vec::new();
+    };
+    let group = all.iter().find_map(|(k, v)| match (k, v) {
+        (ArrayKey::Str(s), Value::Array(a)) if s.eq_ignore_ascii_case(m.as_bytes()) => {
+            Some(a.clone())
+        }
+        _ => None,
+    });
+    group
+        .map(|g| {
+            g.iter()
+                .filter_map(|(k, v)| match k {
+                    ArrayKey::Str(s) => Some((s.clone(), v.clone())),
+                    ArrayKey::Int(_) => None,
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 fn re_get_constants(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -909,7 +882,7 @@ fn re_get_constants(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 fn re_get_ini_entries(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let m = this_ext(vm, a)?;
     let mut t = HashTable::new();
-    if let Ok(entries) = vm.ini.ini_get_all(Some(&m)) {
+    if let Some(entries) = module_ini(vm, &m) {
         for e in entries {
             let v = e
                 .local_value
@@ -967,9 +940,103 @@ fn re_get_dependencies(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     Ok(Value::Array(ZArray::from_table(t)))
 }
 
+/// The INI entries of extension `m`: those registered with its module
+/// name, plus `m.*` directives the VM registers under `Core` on behalf of
+/// bundled extensions (`pcre.*`, `date.*`, ...).
+fn module_ini(vm: &Vm, m: &str) -> Option<Vec<php_support::ini::IniEntryInfo>> {
+    let mut entries = vm.ini.ini_get_all(Some(m)).unwrap_or_default();
+    if !m.eq_ignore_ascii_case("Core") {
+        let prefix = format!("{}.", m.to_ascii_lowercase());
+        if let Ok(core) = vm.ini.ini_get_all(Some("Core")) {
+            entries.extend(
+                core.into_iter()
+                    .filter(|e| e.name.to_ascii_lowercase().starts_with(&prefix)),
+            );
+        }
+    }
+    entries.sort_by(|a, b| {
+        a.name
+            .to_ascii_lowercase()
+            .cmp(&b.name.to_ascii_lowercase())
+    });
+    Some(entries)
+}
+
+/// `display_ini_entries()` (text mode) for module `m`.
+fn ini_block(vm: &Vm, m: &str, out: &mut Vec<u8>) {
+    let Some(entries) = module_ini(vm, m) else {
+        return;
+    };
+    if entries.is_empty() {
+        return;
+    }
+    let show = |v: Option<&[u8]>| -> Vec<u8> {
+        match v {
+            Some(x) if !x.is_empty() => x.to_vec(),
+            _ => b"no value".to_vec(),
+        }
+    };
+    out.extend_from_slice(b"\nDirective => Local Value => Master Value\n");
+    for e in entries {
+        out.extend_from_slice(e.name.as_bytes());
+        out.extend_from_slice(b" => ");
+        out.extend(show(e.local_value.as_deref()));
+        out.extend_from_slice(b" => ");
+        out.extend(show(e.global_value.as_deref()));
+        out.push(b'\n');
+    }
+}
+
+/// `php_info_print_module()` in text mode.
+fn module_info_text(vm: &mut Vm, m: &str) -> Vec<u8> {
+    use crate::ext::InfoItem;
+    let mut out = format!("\n{m}\n").into_bytes();
+    if m.eq_ignore_ascii_case("Reflection") {
+        // `PHP_MINFO_FUNCTION(reflection)`.
+        out.extend_from_slice(b"\nReflection => enabled\n");
+        return out;
+    }
+    let cell = |c: &str| {
+        if c.is_empty() {
+            " ".to_string()
+        } else {
+            c.to_string()
+        }
+    };
+    match vm.module_info(m) {
+        Some(items) => {
+            for it in items {
+                match it {
+                    InfoItem::TableStart => out.push(b'\n'),
+                    InfoItem::TableEnd => {}
+                    InfoItem::Header(cols) | InfoItem::Row(cols) => {
+                        let v: Vec<String> = cols.iter().map(|c| cell(c)).collect();
+                        out.extend_from_slice(v.join(" => ").as_bytes());
+                        out.push(b'\n');
+                    }
+                    InfoItem::ColspanHeader(text) => {
+                        let spaces = 74i64 - i64::try_from(text.len()).unwrap_or(0);
+                        let pad = usize::try_from((spaces / 2).max(1)).unwrap_or(1);
+                        out.extend_from_slice(
+                            format!("{:>pad$}{text}{:>pad$}\n", " ", " ").as_bytes(),
+                        );
+                    }
+                    InfoItem::IniEntries => ini_block(vm, m, &mut out),
+                }
+            }
+        }
+        None => {
+            out.extend_from_slice(format!("\nVersion => {}\n", crate::PHP_VERSION).as_bytes());
+            ini_block(vm, m, &mut out);
+        }
+    }
+    out
+}
+
 fn re_info(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let m = this_ext(vm, a)?;
-    vm.echo(format!("\n{m}\n\n").as_bytes());
+    let out = module_info_text(vm, &m);
+    vm.echo(&out);
     Ok(Value::Null)
 }
 
@@ -994,7 +1061,7 @@ fn re_to_string(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         crate::PHP_VERSION
     )
     .into_bytes();
-    if let Ok(entries) = vm.ini.ini_get_all(Some(&m)) {
+    if let Some(entries) = module_ini(vm, &m) {
         if !entries.is_empty() {
             out.extend_from_slice(b"\n  - INI {\n");
             for e in entries {

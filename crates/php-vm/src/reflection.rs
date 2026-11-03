@@ -57,7 +57,7 @@ use php_runtime::{Obj, PhpRef, Value, ZStr};
 use std::rc::Rc;
 
 #[allow(unused_imports)]
-pub(crate) use misc::{constant_module, function_module, record_module};
+pub(crate) use misc::record_module;
 
 const PUB: u32 = flags::PUBLIC;
 const STAT: u32 = flags::PUBLIC | flags::STATIC;
