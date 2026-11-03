@@ -72,7 +72,11 @@ pub(crate) fn throw(vm: &mut Vm, e: DomError, ctx: Option<&Ctx>) -> Option<Throw
 
 /// Converts a library result: errors become exceptions, `Silent` becomes
 /// `Ok(None)`.
-pub(crate) fn check<T>(vm: &mut Vm, r: Result<T, DomError>, ctx: Option<&Ctx>) -> VmResult<Option<T>> {
+pub(crate) fn check<T>(
+    vm: &mut Vm,
+    r: Result<T, DomError>,
+    ctx: Option<&Ctx>,
+) -> VmResult<Option<T>> {
     match r {
         Ok(v) => Ok(Some(v)),
         Err(e) => match throw(vm, e, ctx) {

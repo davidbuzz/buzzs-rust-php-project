@@ -29,7 +29,7 @@ pub(crate) fn builtin_of_class(cls: &std::rc::Rc<php_vm::class::Class>) -> Optio
     }
     let mut found = None;
     let mut c = Some(cls.clone());
-    while let Some(cl) = c {
+    while let Some(cl) = c.take() {
         let name = display_name(&cl.name).to_string_lossy();
         if let Some(ci) = find_class(&name) {
             if ci.kind == php_dom::classes::ClassKind::Class {
@@ -37,7 +37,7 @@ pub(crate) fn builtin_of_class(cls: &std::rc::Rc<php_vm::class::Class>) -> Optio
                 break;
             }
         }
-        c = cl.parent.clone();
+        c.clone_from(&cl.parent);
     }
     BUILTIN.with(|m| m.borrow_mut().insert(key, found));
     found
@@ -192,7 +192,11 @@ fn coerce(vm: &mut Vm, v: &Value, ty: &str, decl: &str, name: &str) -> VmResult<
         )
     };
     if v.is_null() {
-        return if nullable { Ok(Value::Null) } else { Err(fail(vm, &v)) };
+        return if nullable {
+            Ok(Value::Null)
+        } else {
+            Err(fail(vm, &v))
+        };
     }
     match base {
         "mixed" => Ok(v),
@@ -332,7 +336,10 @@ fn std_properties(o: &Obj) -> HashTable {
                 continue;
             }
             if let Some(Some(v)) = slots.get(pi.slot as usize) {
-                t.insert(ArrayKey::Str(mangle(pi.flags, &pi.class, &pi.name)), v.clone());
+                t.insert(
+                    ArrayKey::Str(mangle(pi.flags, &pi.class, &pi.name)),
+                    v.clone(),
+                );
             }
         }
     }
@@ -352,7 +359,10 @@ fn properties_for(vm: &mut Vm, o: &Obj, purpose: PropertyPurpose) -> VmResult<Op
     let Some(d) = dom_object(o) else {
         if builtin_of(o).is_some_and(is_xpath_class) {
             let mut t = std_properties(o);
-            t.insert(ArrayKey::Str(ZStr::from("registerNodeNamespaces")), Value::Bool(true));
+            t.insert(
+                ArrayKey::Str(ZStr::from("registerNodeNamespaces")),
+                Value::Bool(true),
+            );
             return Ok(Some(ZArray::from_table(t)));
         }
         return Ok(None);
@@ -440,18 +450,18 @@ fn get_iterator(vm: &mut Vm, o: &Obj, by_ref: bool) -> VmResult<Box<dyn NativeIt
             "An iterator cannot be used with foreach by reference",
         ));
     }
-    Ok(new_iter(dom_object(o)))
+    Ok(Box::new(new_iter(dom_object(o))))
 }
 
 /// An iterator over a collection object.
-pub(crate) fn new_iter(d: Option<DomObject>) -> Box<DomIter> {
+pub(crate) fn new_iter(d: Option<DomObject>) -> DomIter {
     let rewindable = matches!(d, Some(DomObject::TokenList(_)));
-    Box::new(DomIter {
+    DomIter {
         source: d,
         handle: None,
         started: false,
         rewindable,
-    })
+    }
 }
 
 /// Handlers of every DOM class.

@@ -18,15 +18,17 @@ use crate::host::VmHost;
 use crate::run;
 use crate::state::{dom_object, set_dom_object, to_dom, to_value};
 
+/// A method declaration: declaring class and method.
+type MethodDecl = Option<(&'static str, &'static MethodInfo)>;
+
 thread_local! {
     /// `(builtin, lowercase method)` → declaration.
-    static METHODS: std::cell::RefCell<
-        std::collections::HashMap<(&'static str, String), Option<(&'static str, &'static MethodInfo)>>,
-    > = std::cell::RefCell::new(std::collections::HashMap::new());
+    static METHODS: std::cell::RefCell<std::collections::HashMap<(&'static str, String), MethodDecl>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
 }
 
 /// `find_method`, cached.
-fn method_info(builtin: &'static str, method: &str) -> Option<(&'static str, &'static MethodInfo)> {
+fn method_info(builtin: &'static str, method: &str) -> MethodDecl {
     let key = (builtin, method.to_ascii_lowercase());
     if let Some(r) = METHODS.with(|m| m.borrow().get(&key).copied()) {
         return r;
@@ -77,7 +79,9 @@ fn convert_args(
     let mut out = Vec::with_capacity(n);
     for i in 0..n {
         let v = a.values[i].deref();
-        let p = params.get(i).or_else(|| params.last().filter(|p| p.variadic));
+        let p = params
+            .get(i)
+            .or_else(|| params.last().filter(|p| p.variadic));
         let is_callable = p.is_some_and(|p| p.ty == Some("callable"));
         let dv = if is_callable && !v.is_null() {
             DomValue::Callable(Rc::new(v.clone()))
@@ -138,13 +142,19 @@ fn static_method(vm: &mut Vm, a: &Args, name: &str) -> VmResult<Value> {
         .unwrap_or("DOMNode");
     let ctx = method_ctx(builtin, name, builtin.to_string());
     let dargs = convert_args(vm, a, builtin, name)?;
-    let r = run::call(vm, a, || dispatch::call_static(builtin, name, &dargs, &VmHost))?;
+    let r = run::call(vm, a, || {
+        dispatch::call_static(builtin, name, &dargs, &VmHost)
+    })?;
     finish(vm, r, &ctx)
 }
 
 /// `__construct`.
 fn construct(vm: &mut Vm, a: &Args, this: &Obj, builtin: &'static str) -> VmResult<Value> {
-    let ctx = method_ctx(builtin, "__construct", display_name(&class_of(this).name).to_string_lossy());
+    let ctx = method_ctx(
+        builtin,
+        "__construct",
+        display_name(&class_of(this).name).to_string_lossy(),
+    );
     let dargs = convert_args(vm, a, builtin, "__construct")?;
     match dom_object(this) {
         Some(d) => {
@@ -193,7 +203,7 @@ pub(crate) fn method(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     };
     if name.eq_ignore_ascii_case("getIterator") {
         let it = crate::hooks::new_iter(Some(d));
-        return Ok(Value::Object(vm.new_internal_iterator(it)?));
+        return Ok(Value::Object(vm.new_internal_iterator(Box::new(it))?));
     }
     let dargs = convert_args(vm, a, builtin, &name)?;
     let mut r = run::call(vm, a, || dispatch::call(&d, &name, &dargs, &VmHost))?;

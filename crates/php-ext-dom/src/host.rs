@@ -112,7 +112,10 @@ fn call_with(callable: &Value, args: Vec<XPathArg>) -> Result<XPathReturn, DomEr
 impl DomHost for VmHost {
     fn is_subclass_of(&self, class: &str, base: &str) -> bool {
         bridge::with_vm(|vm| {
-            match (vm.find_class(class.as_bytes()), vm.find_class(base.as_bytes())) {
+            match (
+                vm.find_class(class.as_bytes()),
+                vm.find_class(base.as_bytes()),
+            ) {
                 (Some(c), Some(b)) => c.is_subclass_of(&b),
                 _ => false,
             }

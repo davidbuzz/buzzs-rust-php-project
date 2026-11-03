@@ -42,11 +42,6 @@ pub(crate) fn dom_object(o: &Obj) -> Option<DomObject> {
     internal::<DomState, _>(o, |s| s.obj.clone()).flatten()
 }
 
-/// Whether the object carries DOM state at all.
-pub(crate) fn has_state(o: &Obj) -> bool {
-    internal::<DomState, _>(o, |_| ()).is_some()
-}
-
 /// Replaces the php-dom object of `o`.
 pub(crate) fn set_dom_object(o: &Obj, d: DomObject) {
     if internal::<DomState, _>(o, |s| s.obj = Some(d.clone())).is_none() {
@@ -101,7 +96,12 @@ pub(crate) fn node_object(vm: &mut Vm, n: &Node) -> VmResult<Obj> {
 
 /// Looks up an identity-cached object.
 fn cached(id: usize) -> Option<Obj> {
-    IDENTITY.with(|m| m.borrow().get(&id).and_then(Weak::upgrade).map(Obj::from_rc))
+    IDENTITY.with(|m| {
+        m.borrow()
+            .get(&id)
+            .and_then(Weak::upgrade)
+            .map(Obj::from_rc)
+    })
 }
 
 /// Stores an identity-cached object.
@@ -149,7 +149,12 @@ pub(crate) fn to_value(vm: &mut Vm, v: DomValue) -> VmResult<Value> {
         }
         DomValue::NamedNodeMap(m) => {
             let class = m.class_name();
-            Value::Object(new_dom_object(vm, class, class, DomObject::NamedNodeMap(m))?)
+            Value::Object(new_dom_object(
+                vm,
+                class,
+                class,
+                DomObject::NamedNodeMap(m),
+            )?)
         }
         DomValue::Implementation(i) => {
             let id = i.identity();
@@ -167,7 +172,12 @@ pub(crate) fn to_value(vm: &mut Vm, v: DomValue) -> VmResult<Value> {
             if let Some(o) = cached(id) {
                 return Ok(Value::Object(o));
             }
-            let o = new_dom_object(vm, "Dom\\TokenList", "Dom\\TokenList", DomObject::TokenList(t))?;
+            let o = new_dom_object(
+                vm,
+                "Dom\\TokenList",
+                "Dom\\TokenList",
+                DomObject::TokenList(t),
+            )?;
             cache(id, &o);
             Value::Object(o)
         }
@@ -315,7 +325,10 @@ impl NativeIterator for DomIter {
 
     fn valid(&mut self, vm: &mut Vm) -> VmResult<bool> {
         self.ensure(vm)?;
-        Ok(self.handle.as_ref().is_some_and(|h| h.0.borrow_mut().valid()))
+        Ok(self
+            .handle
+            .as_ref()
+            .is_some_and(|h| h.0.borrow_mut().valid()))
     }
 
     fn current(&mut self, vm: &mut Vm) -> VmResult<Value> {

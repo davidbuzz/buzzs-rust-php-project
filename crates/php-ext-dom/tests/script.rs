@@ -39,7 +39,9 @@ fn run(code: &str) -> String {
 #[test]
 fn load_and_save() {
     assert_eq!(
-        run(r#"$d = new DOMDocument(); $d->loadXML('<r a="1"><c>x</c></r>'); echo $d->saveXML($d->documentElement);"#),
+        run(
+            r#"$d = new DOMDocument(); $d->loadXML('<r a="1"><c>x</c></r>'); echo $d->saveXML($d->documentElement);"#
+        ),
         r#"<r a="1"><c>x</c></r>"#
     );
 }
@@ -49,7 +51,7 @@ fn node_identity() {
     assert_eq!(
         run(r"$d = new DOMDocument(); $d->loadXML('<r><c/></r>');
               var_dump($d->documentElement === $d->documentElement);
-              $c = $d->documentElement->firstChild; $c->foo = 1;
+              $c = $d->documentElement->firstChild; @$c->foo = 1;
               echo $d->documentElement->firstChild->foo;"),
         "bool(true)\n1"
     );
@@ -58,12 +60,14 @@ fn node_identity() {
 #[test]
 fn live_lists_and_iteration() {
     assert_eq!(
-        run(r"$d = new DOMDocument(); $d->loadXML('<r><c>1</c><c>2</c></r>');
+        run(
+            r"$d = new DOMDocument(); $d->loadXML('<r><c>1</c><c>2</c></r>');
               $l = $d->getElementsByTagName('c');
               foreach ($l as $k => $n) echo $k, '=', $n->textContent, ' ';
-              echo count($l), ' ', $l[1]->textContent, ' ', isset($l[5]) ? 'y' : 'n';
+              echo $l->count(), ' ', $l[1]->textContent, ' ', isset($l[5]) ? 'y' : 'n';
               $d->documentElement->appendChild($d->createElement('c', '3'));
-              echo ' ', $l->length;"),
+              echo ' ', $l->length;"
+        ),
         "0=1 1=2 2 2 n 3"
     );
 }
@@ -71,9 +75,9 @@ fn live_lists_and_iteration() {
 #[test]
 fn readonly_properties_and_exceptions() {
     assert_eq!(
-        run(r"$d = new DOMDocument();
-              try { $d->nodeType = 3; } catch (Error $e) { echo $e->getMessage(), \"\n\"; }
-              try { $d->createElement('1x'); } catch (DOMException $e) { echo $e->getCode(), ' ', $e->getMessage(); }"),
+        run(r#"$d = new DOMDocument();
+              try { $d->nodeType = 3; } catch (Error $e) { echo $e->getMessage(), "\n"; }
+              try { $d->createElement('1x'); } catch (DOMException $e) { echo $e->getCode(), ' ', $e->getMessage(); }"#),
         "Cannot modify private(set) property DOMNode::$nodeType from global scope\n5 Invalid Character Error"
     );
 }
@@ -81,11 +85,13 @@ fn readonly_properties_and_exceptions() {
 #[test]
 fn xpath_with_callbacks() {
     assert_eq!(
-        run(r#"$d = new DOMDocument(); $d->loadXML('<r><c>a</c><c>b</c></r>');
+        run(
+            r#"$d = new DOMDocument(); $d->loadXML('<r><c>a</c><c>b</c></r>');
               $x = new DOMXPath($d);
               $x->registerNamespace('php', 'http://php.net/xpath');
               $x->registerPhpFunctions('strtoupper');
-              foreach ($x->query('//c[php:functionString("strtoupper", .) = "B"]') as $n) echo $n->textContent;"#),
+              foreach ($x->query('//c[php:functionString("strtoupper", .) = "B"]') as $n) echo $n->textContent;"#
+        ),
         "b"
     );
 }
@@ -93,9 +99,11 @@ fn xpath_with_callbacks() {
 #[test]
 fn register_node_class() {
     assert_eq!(
-        run(r"class MyEl extends DOMElement { function hi() { return 'hi ' . $this->tagName; } }
+        run(
+            r"class MyEl extends DOMElement { function hi() { return 'hi ' . $this->tagName; } }
               $d = new DOMDocument(); $d->registerNodeClass('DOMElement', 'MyEl');
-              $d->loadXML('<r/>'); echo get_class($d->documentElement), ' ', $d->documentElement->hi();"),
+              $d->loadXML('<r/>'); echo get_class($d->documentElement), ' ', $d->documentElement->hi();"
+        ),
         "MyEl hi r"
     );
 }
@@ -103,9 +111,11 @@ fn register_node_class() {
 #[test]
 fn modern_html_document() {
     assert_eq!(
-        run(r#"$d = Dom\HTMLDocument::createFromString('<p class="a b">x</p>', LIBXML_NOERROR);
+        run(
+            r#"$d = Dom\HTMLDocument::createFromString('<p class="a b">x</p>', LIBXML_NOERROR);
               $p = $d->querySelector('p');
-              echo $p->classList->length, ' ', $p->classList === $p->classList ? 'same' : 'diff', ' ', $d->saveHTML($p);"#),
+              echo $p->classList->length, ' ', $p->classList === $p->classList ? 'same' : 'diff', ' ', $d->saveHTML($p);"#
+        ),
         r#"2 same <p class="a b">x</p>"#
     );
 }

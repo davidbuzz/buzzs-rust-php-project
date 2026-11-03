@@ -15,6 +15,9 @@
 //!   `registerNodeClass` class checks and stream I/O through php-streams.
 //! * [`xsl`] is the DOM provider of `XSLTProcessor` documents.
 
+// Handlers follow the VM's `(vm, o, a, …)` naming convention.
+#![allow(clippy::many_single_char_names)]
+
 mod errors;
 mod hooks;
 mod host;
@@ -291,8 +294,10 @@ mod tests {
         let (_, m) = php_dom::classes::find_method("DOMDocument", "createElement").expect("m");
         assert_eq!(
             signature(m, false),
-            "createElement(string $localName, string $value = \"\"): DOMElement|false"
+            "createElement(string $localName, string $value = \"\")"
         );
+        let (_, m) = php_dom::classes::find_method("Dom\\Element", "getAttribute").expect("m");
+        assert_eq!(signature(m, false), "getAttribute(string $qualifiedName): ?string");
     }
 
     #[test]
