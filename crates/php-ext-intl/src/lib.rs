@@ -11,6 +11,7 @@
 //! [`core`].
 #![allow(clippy::needless_pass_by_value, clippy::unnecessary_wraps)]
 
+mod breakiter;
 mod calendar;
 mod collator;
 mod core;
@@ -112,6 +113,7 @@ fn all_handlers() -> HashMap<&'static str, NativeFn> {
         misc::handlers(),
         locale::handlers(),
         collator::handlers(),
+        breakiter::handlers(),
         iter::handlers(),
         timezone::handlers(),
         calendar::handlers(),
@@ -152,6 +154,15 @@ fn class_opts(name: &str) -> registry::ClassOpts {
         }
         "MessageFormatter" => {
             o.hooks = ClassHooks { clone: Some(msgformat::clone), ..ClassHooks::default() };
+        }
+        "IntlBreakIterator" | "IntlRuleBasedBreakIterator" | "IntlCodePointBreakIterator" => {
+            o.hooks = ClassHooks {
+                clone: Some(breakiter::clone),
+                compare: Some(breakiter::compare),
+                properties_for: Some(breakiter::debug_info),
+                get_iterator: Some(breakiter::get_iterator),
+                ..ClassHooks::default()
+            };
         }
         "Transliterator" => {
             o.hooks = ClassHooks { clone: Some(translit::clone), ..ClassHooks::default() };

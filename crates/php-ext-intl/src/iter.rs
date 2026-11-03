@@ -9,18 +9,23 @@ use crate::core;
 
 /// A native element source (`zend_object_iterator` funcs).
 pub(crate) trait IterSource {
-    /// Moves to the first element (`None` → rewind unsupported).
-    fn rewind(&mut self, vm: &mut Vm) -> Option<VmResult<()>>;
+    /// Moves to the first element (`None` → rewind unsupported); may
+    /// change the iteration index.
+    fn rewind(&mut self, vm: &mut Vm, index: &mut i64) -> Option<VmResult<()>>;
     /// Whether there is a current element.
     fn valid(&self) -> bool;
     /// The current element (`null` when invalid).
     fn current(&self) -> Value;
-    /// The current key, or `None` for the iteration index.
-    fn key(&self) -> Option<Value> {
+    /// The current key given the iteration index.
+    fn key(&self, index: i64) -> Value {
+        Value::Int(index)
+    }
+    /// Advances; may change the iteration index.
+    fn move_forward(&mut self, vm: &mut Vm, index: &mut i64) -> VmResult<()>;
+    /// The object a parts iterator wraps.
+    fn wrapped(&self) -> Option<Obj> {
         None
     }
-    /// Advances.
-    fn move_forward(&mut self, vm: &mut Vm) -> VmResult<()>;
 }
 
 /// The payload of an `IntlIterator`.
@@ -46,7 +51,7 @@ impl StringList {
 }
 
 impl IterSource for StringList {
-    fn rewind(&mut self, _vm: &mut Vm) -> Option<VmResult<()>> {
+    fn rewind(&mut self, _vm: &mut Vm, _index: &mut i64) -> Option<VmResult<()>> {
         self.pos = 0;
         self.started = true;
         Some(Ok(()))
@@ -64,7 +69,7 @@ impl IterSource for StringList {
         }
     }
 
-    fn move_forward(&mut self, _vm: &mut Vm) -> VmResult<()> {
+    fn move_forward(&mut self, _vm: &mut Vm, _index: &mut i64) -> VmResult<()> {
         if self.started {
             self.pos += 1;
         } else {
@@ -103,14 +108,15 @@ fn current(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 fn key(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let o = fetch(vm, a)?;
-    Ok(core::with::<IterState, _>(&o, |s| s.src.key().unwrap_or(Value::Int(s.index))).unwrap_or_default())
+    Ok(core::with::<IterState, _>(&o, |s| s.src.key(s.index)).unwrap_or_default())
 }
 
 fn next(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let o = fetch(vm, a)?;
     core::with::<IterState, _>(&o, |s| {
+        let r = s.src.move_forward(vm, &mut s.index);
         s.index += 1;
-        s.src.move_forward(vm)
+        r
     })
     .unwrap_or(Ok(()))?;
     Ok(Value::Null)
@@ -118,7 +124,7 @@ fn next(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 fn rewind(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let o = fetch(vm, a)?;
-    let r = core::with::<IterState, _>(&o, |s| s.src.rewind(vm)).flatten();
+    let r = core::with::<IterState, _>(&o, |s| s.src.rewind(vm, &mut s.index)).flatten();
     match r {
         Some(r) => r?,
         None => core::errors_set(vm, &o, php_intl::UErrorCode::UNSUPPORTED_ERROR, "rewind not supported")?,
@@ -138,7 +144,11 @@ impl NativeIterator for Foreach {
     fn rewind(&mut self, vm: &mut Vm) -> VmResult<()> {
         core::with::<IterState, _>(&self.0, |s| {
             s.index = 0;
-            s.src.rewind(vm).unwrap_or(Ok(()))
+            let r = s.src.rewind(vm, &mut s.index).unwrap_or(Ok(()));
+            // The engine resets the index to -1 and increments it before
+            // the first fetch.
+            s.index = 0;
+            r
         })
         .unwrap_or(Ok(()))
     }
@@ -152,13 +162,13 @@ impl NativeIterator for Foreach {
     }
 
     fn key(&mut self, _vm: &mut Vm) -> VmResult<Value> {
-        Ok(core::with::<IterState, _>(&self.0, |s| s.src.key().unwrap_or(Value::Int(s.index))).unwrap_or_default())
+        Ok(core::with::<IterState, _>(&self.0, |s| s.src.key(s.index)).unwrap_or_default())
     }
 
     fn next(&mut self, vm: &mut Vm) -> VmResult<()> {
         core::with::<IterState, _>(&self.0, |s| {
             s.index += 1;
-            s.src.move_forward(vm)
+            s.src.move_forward(vm, &mut s.index)
         })
         .unwrap_or(Ok(()))
     }
