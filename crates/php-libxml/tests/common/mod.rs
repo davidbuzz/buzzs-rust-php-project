@@ -1,7 +1,7 @@
 //! Shared helpers for the .phpt ports: a tiny PHP value model with
 //! `print_r` / `var_dump` renderers.
 
-#![allow(dead_code)]
+#![allow(dead_code, clippy::cast_possible_wrap, clippy::manual_assert)]
 
 use php_libxml::xml::{StructBuilder, StructEntry, StructValue};
 
@@ -31,11 +31,22 @@ pub fn opt(b: Option<&[u8]>) -> PVal {
 }
 
 pub fn list(items: Vec<PVal>) -> PVal {
-    PVal::Arr(items.into_iter().enumerate().map(|(i, v)| (Key::Int(i as i64), v)).collect())
+    PVal::Arr(
+        items
+            .into_iter()
+            .enumerate()
+            .map(|(i, v)| (Key::Int(i as i64), v))
+            .collect(),
+    )
 }
 
 pub fn assoc(items: Vec<(&[u8], PVal)>) -> PVal {
-    PVal::Arr(items.into_iter().map(|(k, v)| (Key::Str(k.to_vec()), v)).collect())
+    PVal::Arr(
+        items
+            .into_iter()
+            .map(|(k, v)| (Key::Str(k.to_vec()), v))
+            .collect(),
+    )
 }
 
 fn key_from_bytes(k: &[u8]) -> Key {
@@ -51,7 +62,12 @@ fn key_from_bytes(k: &[u8]) -> Key {
 }
 
 pub fn pairs(items: &[(Vec<u8>, Vec<u8>)]) -> PVal {
-    PVal::Arr(items.iter().map(|(k, v)| (key_from_bytes(k), s(v))).collect())
+    PVal::Arr(
+        items
+            .iter()
+            .map(|(k, v)| (key_from_bytes(k), s(v)))
+            .collect(),
+    )
 }
 
 pub fn entry(e: &StructEntry) -> PVal {
@@ -80,7 +96,12 @@ pub fn index(b: &StructBuilder) -> PVal {
             .as_ref()
             .map(|idx| {
                 idx.iter()
-                    .map(|(k, v)| (key_from_bytes(k), list(v.iter().map(|n| PVal::Int(*n)).collect())))
+                    .map(|(k, v)| {
+                        (
+                            key_from_bytes(k),
+                            list(v.iter().map(|n| PVal::Int(*n)).collect()),
+                        )
+                    })
                     .collect()
             })
             .unwrap_or_default(),
