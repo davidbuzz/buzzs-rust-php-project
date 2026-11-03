@@ -132,6 +132,9 @@ foreach (file($scenario, FILE_IGNORE_NEW_LINES) as $line) {
     $cmd = json_decode($line, true);
     if (!is_array($cmd)) { echo "BAD LINE $line\n"; continue; }
     $op = array_shift($cmd);
+    if (in_array($op, ['sread', 'sstat', 'sclose'], true) && $cmd[0] === -1) {
+        $cmd[0] = count($streams) - 1;
+    }
     try {
         switch ($op) {
             case 'echo':

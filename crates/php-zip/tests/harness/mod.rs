@@ -606,7 +606,11 @@ pub fn run(script: &str, dir: &Path, fix: &Path) -> String {
         if line.is_empty() || line.starts_with('#') {
             continue;
         }
-        let cmd: Vec<J> = serde_json::from_str(line).unwrap_or_else(|e| panic!("bad line {line}: {e}"));
+        let mut cmd: Vec<J> = serde_json::from_str(line).unwrap_or_else(|e| panic!("bad line {line}: {e}"));
+        if matches!(cmd[0].as_str(), Some("sread" | "sstat" | "sclose")) && cmd[1].as_i64() == Some(-1) {
+            let last = st.borrow().streams.len().saturating_sub(1);
+            cmd[1] = J::from(last);
+        }
         let op = cmd[0].as_str().unwrap().to_string();
         let rest = &cmd[1..];
         let sname = |i: usize| rest[i].as_str().unwrap().to_string();

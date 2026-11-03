@@ -119,4 +119,12 @@ z->getStreamIndex = stream #0
 unset z
 read #0 = "foo" eof=true
 fclose #0 = true
+# fstat on an unreadable archive (stream_fstat_unreadable_archive)
+z->open = true
+z->addFromString = true
+z->close = true
+fopen = stream #1
+fstat #1 = size=5 mode=100000 mtime=NOW nlink=1 ino=-1
+fstat #1 = false
+read #1 = "entry" eof=true
 END
