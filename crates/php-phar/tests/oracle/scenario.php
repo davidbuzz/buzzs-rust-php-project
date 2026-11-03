@@ -69,6 +69,8 @@ foreach ($lines as $line) {
                 break;
             case 'fn': echo dump(($w[1])(...$args), $W), "\n"; break;
             case 'release': $p = null; echo "ok\n"; break;
+            case 'clearstatcache': clearstatcache(); echo "ok\n"; break;
+            case 'copyfile': echo dump(copy("$W/{$w[1]}", "$W/{$w[2]}"), $W), "\n"; break;
             case 'shell': echo dump(file_exists("$W/{$w[1]}"), $W), "\n"; break;
             case 'mkfile':
                 @mkdir(dirname("$W/{$w[1]}"), 0777, true);

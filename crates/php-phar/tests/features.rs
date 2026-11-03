@@ -643,3 +643,213 @@ fn including_phars_directly() {
     assert_eq!(compile_source(&plain), CompileSource::Original);
     registry::reset_request();
 }
+
+/// `files/phar_test.inc`: a stub plus a hand-built manifest.
+fn phar_test_inc(stub: &[u8], files: &[(&str, &[u8], u32)], alias: &[u8]) -> Vec<u8> {
+    let mut entries = Vec::new();
+    for (name, cont, ulen) in files {
+        entries.extend_from_slice(&u32::try_from(name.len()).unwrap().to_le_bytes());
+        entries.extend_from_slice(name.as_bytes());
+        for v in [*ulen, 1_141_214_400, *ulen, php_hash::crc32(cont), 0x1B6, 0] {
+            entries.extend_from_slice(&v.to_le_bytes());
+        }
+    }
+    let mut m = Vec::new();
+    m.extend_from_slice(&u32::try_from(files.len()).unwrap().to_le_bytes());
+    m.extend_from_slice(&0x1000u16.to_be_bytes());
+    m.extend_from_slice(&0u32.to_le_bytes());
+    m.extend_from_slice(&u32::try_from(alias.len()).unwrap().to_le_bytes());
+    m.extend_from_slice(alias);
+    m.extend_from_slice(&0u32.to_le_bytes());
+    m.extend_from_slice(&entries);
+    let mut out = stub.to_vec();
+    out.extend_from_slice(&u32::try_from(m.len()).unwrap().to_le_bytes());
+    out.extend_from_slice(&m);
+    for (_, cont, _) in files {
+        out.extend_from_slice(cont);
+    }
+    out
+}
+
+fn streams() {
+    let _ = php_streams::wrapper::register_global(b"phar", Rc::new(php_phar::wrapper::PharWrapper));
+    let _ = php_streams::diag::take();
+}
+
+fn url(archive: &[u8], entry: &str) -> Vec<u8> {
+    [b"phar://".as_slice(), archive, b"/", entry.as_bytes()].concat()
+}
+
+#[test]
+fn short_entry_is_a_crc_mismatch() {
+    // 013.phpt: the manifest claims 2 bytes but the file ends after 1.
+    writable();
+    registry::set_ini("phar.require_hash", false, true);
+    streams();
+    let d = workdir("t013");
+    let p = path(&d, "013.phar.php");
+    std::fs::write(
+        String::from_utf8(p.clone()).unwrap(),
+        phar_test_inc(b"<?php __HALT_COMPILER(); ?>", &[("a", b"a", 2)], b"hio"),
+    )
+    .unwrap();
+    let r = php_streams::file::file_get_contents(&url(&p, "a"), false, None, 0, None).unwrap();
+    assert_eq!(r, None);
+    let w = php_streams::diag::take();
+    assert!(
+        w[0].text().ends_with(&format!(
+            "internal corruption of phar \"{}\" (crc32 mismatch on file \"a\")",
+            String::from_utf8_lossy(&p)
+        )),
+        "{}",
+        w[0].text()
+    );
+    registry::set_ini("phar.require_hash", true, true);
+    registry::reset_request();
+}
+
+#[test]
+fn flushing_after_the_file_vanished_fails_like_bug13786() {
+    writable();
+    let d = workdir("b13786");
+    let p = path(&d, "DataArchive.phar");
+    let mut o = PharObject::new(false);
+    o.construct(&p, None, 0).unwrap();
+    o.add_from_string(b"0", b"file 0").unwrap();
+    assert_eq!(content(&p, "0"), b"file 0");
+    o.release();
+    std::fs::remove_file(String::from_utf8(p.clone()).unwrap()).unwrap();
+    let mut o = PharObject::new(false);
+    o.construct(&p, None, 0).unwrap();
+    assert_eq!(o.count().unwrap(), 1, "the archive stays registered");
+    let e = o.add_from_string(b"1", b"file 1").unwrap_err();
+    assert_eq!(e.class, php_phar::error::ExceptionClass::Phar);
+    assert_eq!(
+        e.message,
+        format!(
+            "unable to seek to start of file \"0\" while creating new phar \"{}\"",
+            String::from_utf8_lossy(&p)
+        )
+    );
+    o.release();
+    registry::reset_request();
+}
+
+#[test]
+fn writing_through_a_read_handle_like_gh19038() {
+    writable();
+    streams();
+    let d = workdir("gh19038");
+    let p = path(&d, "gh19038.phar");
+    let mut o = PharObject::new(false);
+    o.construct(&p, None, 0).unwrap();
+    o.add_from_string(b"file", b"123").unwrap();
+    let mut opened = None;
+    let mut f =
+        php_streams::open::open_wrapper(&url(&p, "file"), "r", 0, &mut opened, None).unwrap();
+    assert_eq!(f.seek(3, 0), 0);
+    assert_eq!(f.write(b"456").unwrap(), 3);
+    assert_eq!(f.seek(0, 0), 0);
+    assert_eq!(f.read_vec(100).unwrap(), b"123456");
+    f.close();
+    o.release();
+    registry::reset_request();
+}
+
+#[test]
+fn mounting_phar_urls_like_copyonwrite4() {
+    writable();
+    streams();
+    let d = workdir("cow4");
+    let p = path(&d, "write4.phar");
+    let mut o = PharObject::new(false);
+    o.construct(&p, None, 0).unwrap();
+    o.offset_set(b"tobemounted", b"hi").unwrap();
+    o.release();
+    registry::reset_request();
+    writable();
+    assert!(registry::load_cache_list(&p));
+    let exe = url(&p, "index.php");
+    object::mount(Some(&exe), b"test.txt", &url(&p, "tobemounted")).unwrap();
+    assert_eq!(
+        php_streams::file::file_get_contents(&url(&p, "test.txt"), false, None, 0, None).unwrap(),
+        Some(b"hi".to_vec())
+    );
+    assert_eq!(content(&p, "test.txt"), b"hi");
+    registry::reset_request();
+}
+
+#[test]
+fn file_info_setters_copy_cached_archives_on_write() {
+    writable();
+    let d = workdir("ficow");
+    let p = path(&d, "c.phar");
+    let mut o = PharObject::new(false);
+    o.construct(&p, None, 0).unwrap();
+    o.offset_set(b"a", b"x").unwrap();
+    o.release();
+    registry::reset_request();
+    writable();
+    assert!(registry::load_cache_list(&p));
+    let mut fi = PharFileInfo::new();
+    fi.construct(&url(&p, "a")).unwrap();
+    assert!(fi.entry_info().unwrap().is_persistent);
+    fi.chmod(0o755).unwrap();
+    assert!(!fi.entry_info().unwrap().is_persistent);
+    assert_eq!(fi.entry_info().unwrap().flags & 0o777, 0o755);
+    fi.set_metadata(php_runtime::Value::Int(1), b"i:1;".to_vec())
+        .unwrap();
+    assert!(fi.has_metadata().unwrap());
+    fi.release();
+    // the cached manifest itself stays untouched (as in PHP)
+    registry::reset_request();
+    writable();
+    let mut fi = PharFileInfo::new();
+    fi.construct(&url(&p, "a")).unwrap();
+    assert!(fi.entry_info().unwrap().is_persistent);
+    assert!(!fi.has_metadata().unwrap());
+    fi.release();
+    registry::reset_request();
+}
+
+#[test]
+fn rewritten_archive_files_are_seen_like_gh13833() {
+    writable();
+    registry::set_ini("phar.require_hash", false, true);
+    let d = workdir("gh13833");
+    let p = path(&d, "gh13833.phar");
+    let fs = String::from_utf8(p.clone()).unwrap();
+    std::fs::write(
+        &fs,
+        phar_test_inc(
+            b"<?php\nPhar::mapPhar('hio');\n__HALT_COMPILER(); ?>",
+            &[("a", b"a", 1)],
+            b"hio",
+        ),
+    )
+    .unwrap();
+    assert!(object::map_phar(Some(&p), Some(b"hio"), true).unwrap());
+    std::fs::write(
+        &fs,
+        phar_test_inc(b"<?php __HALT_COMPILER(); ?>", &[("a", b"a", 1)], b"hio"),
+    )
+    .unwrap();
+    let mut o = PharObject::new(false);
+    o.construct(&p, None, 0).unwrap();
+    o.set_metadata(
+        php_runtime::Value::Null,
+        br#"O:8:"stdClass":1:{s:2:"my";s:6:"friend";}"#.to_vec(),
+    )
+    .unwrap();
+    let copy = format!("{fs}.copy.phar");
+    std::fs::copy(&fs, &copy).unwrap();
+    let mut o2 = PharObject::new(false);
+    let e = o2.construct(copy.as_bytes(), None, 0).unwrap_err();
+    assert_eq!(
+        e.message,
+        format!("internal corruption of phar \"{copy}\" (trying to read past buffer end)")
+    );
+    o.release();
+    registry::set_ini("phar.require_hash", true, true);
+    registry::reset_request();
+}

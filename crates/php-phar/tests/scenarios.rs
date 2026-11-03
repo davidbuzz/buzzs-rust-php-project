@@ -592,6 +592,16 @@ impl Ctx {
                 self.info(&name, words[2], &args).map(|v| dump(&v, &w))
             }
             "fn" => Ok(dump(&Self::func(words[1], &args), &w)),
+            "clearstatcache" => {
+                php_streams::state::clear_stat_cache();
+                Ok("ok".into())
+            }
+            "copyfile" => Ok(dump(
+                &V::Bool(
+                    std::fs::copy(format!("{w}/{}", words[1]), format!("{w}/{}", words[2])).is_ok(),
+                ),
+                &w,
+            )),
             "release" => {
                 if let Some(mut p) = self.p.take() {
                     p.release();
@@ -816,6 +826,18 @@ fn normalize(out: &str) -> String {
     out.lines()
         .filter(|l| !l.starts_with("W: (errno "))
         .map(|l| {
+            // master drops the path from the RecursiveDirectoryIterator error
+            let l = match (
+                l.find("RecursiveDirectoryIterator::__construct("),
+                l.find("): Failed"),
+            ) {
+                (Some(a), Some(b)) if a < b => format!(
+                    "{}RecursiveDirectoryIterator::__construct(){}",
+                    &l[..a],
+                    &l[b + 1..]
+                ),
+                _ => l.to_string(),
+            };
             l.replace(
                 "exists and is a not a directory",
                 "exists and is not a directory",

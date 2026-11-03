@@ -1,0 +1,29 @@
+phar p:d.phar.zip.php
+call isFileFormat i:1
+call addEmptyDir s:test
+call offsetGet s:test
+call offsetGet s:test/
+copyfile d.phar.zip.php d1.phar.zip.php
+fn mkdir u:d.phar.zip.php/another/dir/
+call offsetGet s:another/dir
+fn rmdir u:d.phar.zip.php/another/dir/
+copyfile d.phar.zip.php d2.phar.zip.php
+clearstatcache
+fn file_exists u:d.phar.zip.php/another/dir/
+fn file_exists u:d1.phar.zip.php/test/
+fn file_exists u:d2.phar.zip.php/another/dir/
+fn is_dir u:d.phar.zip.php/test
+fn rmdir u:d.phar.zip.php/test
+clearstatcache
+fn file_exists u:d.phar.zip.php/test
+fn mkdir u:ok.phar.zip/fails
+fn mkdir u:ok.phar.zip/fails
+fn file_put_contents u:ok.phar.zip/sub/directory.txt s:hi
+fn mkdir u:ok.phar.zip/sub
+fn mkdir u:ok.phar.zip/sub/directory.txt
+fn mkdir s:phar://
+fn rmdir s:phar://
+fn rmdir u:unknown.phar.zip/hi
+fn rmdir u:d.phar.zip.php
+fn rmdir u:d.phar.zip.php/
+fn mkdir u:d.phar.zip.php/

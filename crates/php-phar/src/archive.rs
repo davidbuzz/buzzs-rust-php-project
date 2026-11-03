@@ -171,6 +171,31 @@ impl Entry {
     }
 }
 
+/// Identity and state of the file an archive image was read from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DiskStamp {
+    dev: u64,
+    ino: u64,
+    size: u64,
+    mtime: i64,
+    mtime_nsec: i64,
+}
+
+impl DiskStamp {
+    /// The stamp of `path`, if it exists.
+    pub fn of(path: &[u8]) -> Option<Self> {
+        use std::os::unix::fs::MetadataExt;
+        let m = std::fs::metadata(crate::sys::path(path)).ok()?;
+        Some(DiskStamp {
+            dev: m.dev(),
+            ino: m.ino(),
+            size: m.size(),
+            mtime: m.mtime(),
+            mtime_nsec: m.mtime_nsec(),
+        })
+    }
+}
+
 /// An open archive (`phar_archive_data`).
 #[derive(Debug, Default, Clone)]
 #[allow(clippy::struct_excessive_bools)] // mirrors the C bit-fields
@@ -202,6 +227,10 @@ pub struct Archive {
     pub refcount: i32,
     /// The archive image (decompressed for gz/bz2 archives).
     pub fp: Option<Rc<Vec<u8>>>,
+    /// When `fp` mirrors the (uncompressed) file on disk: the file's
+    /// identity and state, so writes by others to the same inode become
+    /// visible as they would through PHP's open file handle.
+    pub fp_disk: Option<DiskStamp>,
     /// Signature type.
     pub sig_flags: u32,
     /// Upper-case hex signature.
@@ -296,15 +325,35 @@ impl Archive {
     }
 
     /// Loads the image from disk when it is not open (`phar_open_archive_fp`).
+    ///
+    /// An image that mirrors the file on disk is refreshed when the same
+    /// file (inode) was rewritten meanwhile — PHP reads through an open
+    /// handle and sees such changes; a replaced or deleted file keeps the
+    /// old content, like the still-open handle would.
     pub fn open_archive_fp(&mut self) -> Option<Rc<Vec<u8>>> {
         if let Some(fp) = &self.fp {
-            return Some(Rc::clone(fp));
+            let fp = Rc::clone(fp);
+            if let Some(stamp) = self.fp_disk {
+                if let Some(now) = DiskStamp::of(&self.fname) {
+                    if now.dev == stamp.dev && now.ino == stamp.ino && now != stamp {
+                        if let Ok(data) = crate::sys::read_file(&self.fname) {
+                            let data = Rc::new(data);
+                            self.fp = Some(Rc::clone(&data));
+                            self.fp_disk = Some(now);
+                            return Some(data);
+                        }
+                    }
+                }
+            }
+            return Some(fp);
         }
         if !php_streams::paths::check_open_basedir(&self.fname) {
             return None;
         }
+        let stamp = DiskStamp::of(&self.fname);
         let data = Rc::new(crate::sys::read_file(&self.fname).ok()?);
         self.fp = Some(Rc::clone(&data));
+        self.fp_disk = stamp;
         Some(data)
     }
 
@@ -431,7 +480,24 @@ impl Archive {
                 let end = start.saturating_add(len as usize).min(b.len());
                 Some(b[start..end].to_vec())
             }
-            FpType::Tmp => crate::sys::read_file(&tmp?).ok(),
+            FpType::Tmp => {
+                let tmp = tmp?;
+                let mut own = b"phar://".to_vec();
+                own.extend_from_slice(&self.fname);
+                own.push(b'/');
+                if let Some(inner) = tmp.strip_prefix(own.as_slice()) {
+                    // mounted from this very archive: avoid re-borrowing it
+                    let inner = inner.to_vec();
+                    return self.read_entry(&inner).ok();
+                }
+                if crate::util::find(&tmp, b"://").is_some() {
+                    php_streams::file::file_get_contents(&tmp, false, None, 0, None)
+                        .ok()
+                        .flatten()
+                } else {
+                    crate::sys::read_file(&tmp).ok()
+                }
+            }
             FpType::Fp => {
                 let img = self.open_archive_fp()?;
                 let start = usize::try_from(offset).ok()?;
@@ -536,8 +602,13 @@ impl Archive {
         if is_zip {
             self.verify_zip_local(key)?;
         }
+        let size = self
+            .manifest
+            .get(key)
+            .map_or(0, |e| e.uncompressed_filesize) as usize;
         let data = self.raw_content(key).unwrap_or_default();
-        if php_hash::crc32(&data) == crc {
+        // php_crc32_stream_bulk_update() fails on a short read
+        if data.len() >= size && php_hash::crc32(&data[..size]) == crc {
             if let Some(e) = self.manifest.get_mut(key) {
                 e.is_crc_checked = true;
             }
@@ -571,9 +642,10 @@ impl Archive {
             (e.offset_abs, e.compressed_filesize)
         };
         let img = self.open_archive_fp()?;
-        let start = usize::try_from(offset).ok()?;
-        img.get(start..start.checked_add(csize as usize)?)
-            .map(<[u8]>::to_vec)
+        // like a seek + read on the open file: past the end yields less
+        let start = usize::try_from(offset).unwrap_or(usize::MAX).min(img.len());
+        let end = start.saturating_add(csize as usize).min(img.len());
+        Some(img[start..end].to_vec())
     }
 
     /// `phar_separate_entry_fp()` / `phar_copy_entry_fp()`: gives the entry

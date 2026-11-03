@@ -1,0 +1,67 @@
+> phar p:d.phar.php
+ok
+> call isFileFormat i:1
+bool(true)
+> call addEmptyDir s:test
+NULL
+> call offsetGet s:test
+PharFileInfo(phar://%W%/d.phar.php/test)
+> call offsetGet s:test/
+PharFileInfo(phar://%W%/d.phar.php/test)
+> copyfile d.phar.php d1.phar.php
+bool(true)
+> fn mkdir u:d.phar.php/another/dir/
+bool(true)
+> call offsetGet s:another/dir
+PharFileInfo(phar://%W%/d.phar.php/another/dir)
+> fn rmdir u:d.phar.php/another/dir/
+bool(true)
+> copyfile d.phar.php d2.phar.php
+bool(true)
+> clearstatcache
+ok
+> fn file_exists u:d.phar.php/another/dir/
+bool(false)
+> fn file_exists u:d1.phar.php/test/
+bool(true)
+> fn file_exists u:d2.phar.php/another/dir/
+bool(false)
+> fn is_dir u:d.phar.php/test
+bool(true)
+> fn rmdir u:d.phar.php/test
+bool(true)
+> clearstatcache
+ok
+> fn file_exists u:d.phar.php/test
+bool(false)
+> fn mkdir u:ok.phar.php/fails
+bool(true)
+> fn mkdir u:ok.phar.php/fails
+W: phar error: cannot create directory "fails" in phar "%W%/ok.phar.php", directory already exists
+bool(false)
+> fn file_put_contents u:ok.phar.php/sub/directory.txt s:hi
+int(2)
+> fn mkdir u:ok.phar.php/sub
+W: phar error: cannot create directory "sub" in phar "%W%/ok.phar.php", directory already exists
+bool(false)
+> fn mkdir u:ok.phar.php/sub/directory.txt
+W: phar error: cannot create directory "sub/directory.txt" in phar "%W%/ok.phar.php", phar error: path "sub/directory.txt" exists and is a not a directory
+bool(false)
+> fn mkdir s:phar://
+W: phar error: cannot create directory "phar://", no phar archive specified
+bool(false)
+> fn rmdir s:phar://
+W: phar error: cannot remove directory "phar://", no phar archive specified, or phar archive does not exist
+bool(false)
+> fn rmdir u:unknown.phar.php/hi
+W: phar error: cannot remove directory "hi" in phar "%W%/unknown.phar.php", directory does not exist
+bool(false)
+> fn rmdir u:d.phar.php
+W: phar error: cannot remove directory "" in phar "%W%/d.phar.php", directory does not exist
+bool(false)
+> fn rmdir u:d.phar.php/
+W: phar error: cannot remove directory "" in phar "%W%/d.phar.php", directory does not exist
+bool(false)
+> fn mkdir u:d.phar.php/
+W: phar error: cannot create directory "" in phar "%W%/d.phar.php", phar error: invalid path "" must not be empty
+bool(false)

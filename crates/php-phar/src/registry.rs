@@ -963,6 +963,24 @@ pub fn open_from_bytes(
     }
 }
 
+/// [`open_from_bytes`] for data just read from `path`, remembering the
+/// file's identity when the image mirrors it.
+fn open_with_stamp(
+    path: &[u8],
+    data: Vec<u8>,
+    actual: &[u8],
+    alias: Option<&[u8]>,
+) -> Result<ArchiveRef, String> {
+    let stamp = crate::archive::DiskStamp::of(path);
+    let ar = open_from_bytes(data, actual, alias)?;
+    let mut a = ar.borrow_mut();
+    if a.flags & FILE_COMPRESSION_MASK == 0 && a.fp_disk.is_none() {
+        a.fp_disk = stamp;
+    }
+    drop(a);
+    Ok(ar)
+}
+
 /// `phar_open_from_filename()`. `Err(None)` is a failure without message.
 pub fn open_from_filename(
     fname: &[u8],
@@ -984,7 +1002,7 @@ pub fn open_from_filename(
         );
     };
     let actual = php_streams::paths::expand_filepath(fname).unwrap_or_else(|| fname.to_vec());
-    open_from_bytes(data, &actual, alias).map_err(Some)
+    open_with_stamp(fname, data, &actual, alias).map_err(Some)
 }
 
 /// `phar_create_or_parse_filename()`.
@@ -1001,7 +1019,7 @@ pub fn create_or_parse_filename(
         if crate::sys::path(fname).is_file() {
             let actual =
                 php_streams::paths::expand_filepath(fname).unwrap_or_else(|| fname.to_vec());
-            let ar = open_from_bytes(data, &actual, alias).map_err(Some)?;
+            let ar = open_with_stamp(fname, data, &actual, alias).map_err(Some)?;
             {
                 let mut a = ar.borrow_mut();
                 if a.is_data || !readonly() {
@@ -1190,7 +1208,7 @@ pub fn open_executed_filename(
         )));
     };
     let actual = php_streams::paths::expand_filepath(fname).unwrap_or_else(|| fname.to_vec());
-    open_from_bytes(data, &actual, alias)
+    open_with_stamp(fname, data, &actual, alias)
         .map(|_| ())
         .map_err(Some)
 }
@@ -1343,7 +1361,7 @@ pub fn flush_ex(
         }
         let mut a = ar_ref.borrow_mut();
         let old = if a.fp.is_some() && !a.is_brandnew {
-            a.fp.clone()
+            a.open_archive_fp()
         } else {
             crate::sys::read_file(&a.fname).ok().map(Rc::new)
         };
@@ -1351,6 +1369,7 @@ pub fn flush_ex(
     };
     let mut a = ar_ref.borrow_mut();
     a.fp = Some(Rc::new(image));
+    a.fp_disk = None;
     if a.donotflush {
         return Ok(());
     }
@@ -1358,7 +1377,11 @@ pub fn flush_ex(
     let flags = a.flags;
     let img = a.fp.clone().unwrap_or_default();
     drop(a);
-    write_out(&fname, &img, flags)
+    write_out(&fname, &img, flags)?;
+    if flags & FILE_COMPRESSION_MASK == 0 {
+        ar_ref.borrow_mut().fp_disk = crate::archive::DiskStamp::of(&fname);
+    }
+    Ok(())
 }
 
 /// `phar_flush()`.

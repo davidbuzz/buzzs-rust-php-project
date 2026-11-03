@@ -560,7 +560,12 @@ pub fn flush(
         } else {
             let e = ar.manifest.get(key).ok_or_else(String::new)?;
             if e.fp_type == FpType::Fp {
-                ar.stored_bytes(key).unwrap_or_default()
+                let name = s(&e.filename);
+                ar.stored_bytes(key).ok_or_else(|| {
+                    format!(
+                        "unable to seek to start of file \"{name}\" while creating new phar \"{fname}\""
+                    )
+                })?
             } else {
                 let mut c = ar.read_entry(key).unwrap_or_default();
                 c.truncate(csize as usize);

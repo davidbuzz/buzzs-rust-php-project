@@ -184,7 +184,7 @@ impl PharStream {
                 .unwrap_or_default(),
             FpType::Tmp => {
                 if self.tmp_cache.is_none() {
-                    self.tmp_cache = src.tmp.as_ref().and_then(|t| crate::sys::read_file(t).ok());
+                    self.tmp_cache = src.tmp.as_deref().and_then(read_external);
                 }
                 self.tmp_cache.clone().unwrap_or_default()
             }
@@ -224,6 +224,27 @@ impl StreamOps for PharStream {
     }
 
     fn write(&mut self, st: &mut StreamState, buf: &[u8]) -> Result<usize, OpFailed> {
+        let Some(d) = self.data.as_mut() else {
+            return Err(OpFailed);
+        };
+        let needs_buffer = d.with_entry(|e| e.data.is_none()).unwrap_or(false);
+        if needs_buffer {
+            // PHP writes straight into the archive fp of an entry opened
+            // for reading; give the entry its own copy of the content.
+            let (bytes, size, _) = self.content();
+            let Some(d) = self.data.as_mut() else {
+                return Err(OpFailed);
+            };
+            let mut c = bytes;
+            c.truncate(size as usize);
+            d.with_entry_mut(|e| {
+                e.data = Some(Rc::new(std::cell::RefCell::new(c)));
+                e.fp_type = FpType::Mod;
+                e.offset = 0;
+            });
+            d.zero = 0;
+            self.tmp_cache = None;
+        }
         let Some(d) = self.data.as_mut() else {
             return Err(OpFailed);
         };
@@ -339,6 +360,18 @@ impl StreamOps for PharStream {
     }
 }
 
+/// Reads a mounted file: plain paths directly, URLs (`phar://...`)
+/// through the streams layer.
+fn read_external(path: &[u8]) -> Option<Vec<u8>> {
+    if crate::util::find(path, b"://").is_some() {
+        php_streams::file::file_get_contents(path, false, None, 0, None)
+            .ok()
+            .flatten()
+    } else {
+        crate::sys::read_file(path).ok()
+    }
+}
+
 /// A phar directory stream (`phar_dir_ops`).
 #[derive(Debug, Default)]
 pub struct PharDir {
@@ -362,8 +395,10 @@ impl StreamOps for PharDir {
         Err(OpFailed)
     }
 
-    fn can_write(&self) -> bool {
-        false
+    // `phar_dir_write()` exists (and always fails), so no "not writable"
+    // notice is raised.
+    fn write(&mut self, _st: &mut StreamState, _buf: &[u8]) -> Result<usize, OpFailed> {
+        Err(OpFailed)
     }
 
     fn readdir(&mut self, _st: &mut StreamState) -> Option<Vec<u8>> {
@@ -873,6 +908,7 @@ impl Wrapper for PharWrapper {
         if let Err(e) = reg::entry_remove(data) {
             warn(options, Code::UnlinkFailed, e);
         }
+        php_streams::state::clear_stat_cache();
         Some(true)
     }
 
@@ -1071,6 +1107,7 @@ impl Wrapper for PharWrapper {
                 return Some(false);
             }
         }
+        php_streams::state::clear_stat_cache();
         Some(true)
     }
 
@@ -1192,6 +1229,7 @@ impl Wrapper for PharWrapper {
             return Some(false);
         }
         phar.borrow_mut().add_virtual_dirs(&inner);
+        php_streams::state::clear_stat_cache();
         Some(true)
     }
 
@@ -1296,8 +1334,12 @@ impl Wrapper for PharWrapper {
                     );
                     return Some(false);
                 }
+                // even if a still-referenced deleted entry lingers, the
+                // directory must not stat as an implicit one any more
+                phar.borrow_mut().virtual_dirs.remove(&k);
             }
         }
+        php_streams::state::clear_stat_cache();
         Some(true)
     }
 }

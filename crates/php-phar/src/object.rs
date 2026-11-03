@@ -29,6 +29,11 @@ use crate::registry::{self as reg, EntryRef};
 use crate::util::{is_magic_phar, path_check, s};
 
 /// What `getMetadata()` should return.
+///
+/// For [`MetadataGet::Serialized`] the caller unserializes the data with the
+/// user's options; diagnostics are prefixed with
+/// [`PharObject::METADATA_FUNCTION`] / [`PharFileInfo::METADATA_FUNCTION`]
+/// (`"Phar::getMetadata(): Error at offset ..."`), not `unserialize()`.
 #[derive(Debug, Clone)]
 pub enum MetadataGet {
     /// No metadata (`NULL`).
@@ -109,6 +114,10 @@ pub enum ExtractFiles {
 }
 
 impl PharObject {
+    /// The function name used for metadata unserialize diagnostics (the
+    /// same for `PharData`, as in PHP).
+    pub const METADATA_FUNCTION: &'static str = "Phar::getMetadata";
+
     /// A new, uninitialised object.
     pub fn new(is_data_class: bool) -> Self {
         PharObject {
@@ -1424,8 +1433,7 @@ fn walk_directory(dir: &[u8]) -> Result<Vec<Vec<u8>>, String> {
     let mut out = Vec::new();
     walk(dir, &mut out).map_err(|e| {
         format!(
-            "RecursiveDirectoryIterator::__construct({}): Failed to open directory: {}",
-            s(dir),
+            "RecursiveDirectoryIterator::__construct(): Failed to open directory: {}",
             crate::wrapper::strerror(&e)
         )
     })?;
@@ -2255,10 +2263,13 @@ pub fn unlink_archive(fname: &[u8], executed: Option<&[u8]>) -> PharResult<bool>
 /// A `PharFileInfo` object.
 #[derive(Debug, Default)]
 pub struct PharFileInfo {
-    inner: Option<(ArchiveRef, EntryRef)>,
+    inner: std::cell::RefCell<Option<(ArchiveRef, EntryRef)>>,
 }
 
 impl PharFileInfo {
+    /// The function name used for metadata unserialize diagnostics.
+    pub const METADATA_FUNCTION: &'static str = "PharFileInfo::getMetadata";
+
     /// An uninitialised object.
     pub fn new() -> Self {
         PharFileInfo::default()
@@ -2267,7 +2278,7 @@ impl PharFileInfo {
     /// `PharFileInfo::__construct()`: returns the `SplFileInfo`
     /// constructor argument (the file name).
     pub fn construct(&mut self, fname: &[u8]) -> PharResult<Vec<u8>> {
-        if self.inner.is_some() {
+        if self.inner.borrow().is_some() {
             return Err(PharError::bad_method("Cannot call constructor twice"));
         }
         let invalid = || {
@@ -2304,13 +2315,13 @@ impl PharFileInfo {
                 a.refcount += 1;
             }
         }
-        self.inner = Some((phar, er));
+        *self.inner.get_mut() = Some((phar, er));
         Ok(fname.to_vec())
     }
 
     /// `PharFileInfo::__destruct()` / object free.
     pub fn release(&mut self) {
-        let Some((ar, er)) = self.inner.take() else {
+        let Some((ar, er)) = self.inner.get_mut().take() else {
             return;
         };
         if let EntryRef::Manifest(k) = er {
@@ -2332,9 +2343,28 @@ impl PharFileInfo {
     }
 
     fn get(&self) -> PharResult<(ArchiveRef, EntryRef)> {
-        self.inner.clone().ok_or_else(|| {
+        self.inner.borrow().clone().ok_or_else(|| {
             PharError::bad_method("Cannot call method on an uninitialized PharFileInfo object")
         })
+    }
+
+    /// Makes a cached (`phar.cache_list`) archive writable before a
+    /// modification (`phar_copy_on_write()` + re-fetching the entry).
+    fn cow(&self) -> PharResult<()> {
+        let (ar, _) = self.get()?;
+        if !ar.borrow().is_persistent {
+            return Ok(());
+        }
+        let new = reg::copy_on_write(&ar).ok_or_else(|| {
+            PharError::phar(format!(
+                "phar \"{}\" is persistent, unable to copy on write",
+                s(&ar.borrow().fname)
+            ))
+        })?;
+        if let Some((a, _)) = self.inner.borrow_mut().as_mut() {
+            *a = new;
+        }
+        Ok(())
     }
 
     fn entry(&self) -> PharResult<Entry> {
@@ -2413,6 +2443,7 @@ impl PharFileInfo {
                 s(&ar.borrow().fname)
             )));
         }
+        self.cow()?;
         let ar = self.update(|e| {
             e.flags &= !ENT_PERM_MASK;
             e.flags |= crate::util::lo32(perms & 0o777);
@@ -2446,6 +2477,7 @@ impl PharFileInfo {
         if e.is_temp_dir {
             return Err(PharError::bad_method("Phar entry is a temporary directory (not an actual entry in the archive), cannot set metadata"));
         }
+        self.cow()?;
         let ar = self.update(|e| {
             e.metadata = Metadata {
                 serialized: Some(serialized),
@@ -2472,6 +2504,7 @@ impl PharFileInfo {
         if !e.metadata.has_data() {
             return Ok(true);
         }
+        self.cow()?;
         let ar = self.update(|e| {
             e.metadata.clear();
             e.is_modified = true;
@@ -2537,6 +2570,8 @@ impl PharFileInfo {
         if e.is_deleted {
             return Err(PharError::bad_method("Cannot compress deleted file"));
         }
+        self.cow()?;
+        let (ar, _) = self.get()?;
         let key = er.key().unwrap_or_default().to_vec();
         let (target, other, other_name, this_name) = match method {
             m if m == i64::from(ENT_COMPRESSED_GZ) => {
@@ -2620,6 +2655,8 @@ impl PharFileInfo {
                 "Cannot decompress Bzip2-compressed file, bz2 extension is not enabled",
             ));
         }
+        self.cow()?;
+        let (ar, _) = self.get()?;
         let kind = match e.flags & ENT_COMPRESSION_MASK {
             ENT_COMPRESSED_GZ => "gzip",
             ENT_COMPRESSED_BZ2 => "bz2",
