@@ -3,8 +3,6 @@
 //! validation errors are reported in the same order and with the same
 //! context strings.
 
-use std::borrow::Cow;
-
 use super::encode::{
     percent_encode_into, MAP_C0, MAP_FRAGMENT, MAP_PATH, MAP_QUERY, MAP_SPECIAL_QUERY,
     MAP_USERINFO, URL_MAP,
@@ -12,11 +10,50 @@ use super::encode::{
 use super::host::{parse_host, HostOpt};
 use super::utf8::{decode_valid_utf8_single, decode_valid_utf8_single_reverse, DECODE_ERROR};
 use super::{Host, SchemeType, Url};
-use crate::{UrlValidationError, UrlValidationErrorType as E};
+use crate::{ErrorContext, UrlValidationError, UrlValidationErrorType as E};
+use std::sync::Arc;
 
 /// A failed parse (lexbor returned a non-OK status).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Fail;
+
+/// A buffer that validation-error contexts can share.
+#[derive(Debug, Clone)]
+pub struct SharedBuf {
+    bytes: Arc<[u8]>,
+    /// Positions of NUL bytes (where PHP's C-string reading stops).
+    nuls: Vec<usize>,
+}
+
+impl SharedBuf {
+    /// Copies `data` into a shareable buffer.
+    pub fn new(data: &[u8]) -> Self {
+        SharedBuf {
+            bytes: Arc::from(data),
+            nuls: data
+                .iter()
+                .enumerate()
+                .filter_map(|(i, &c)| (c == 0).then_some(i))
+                .collect(),
+        }
+    }
+
+    /// The context starting at `pos`: up to the next NUL byte or the end.
+    fn context(&self, pos: usize) -> ErrorContext {
+        let pos = pos.min(self.bytes.len());
+        let idx = self.nuls.partition_point(|&n| n < pos);
+        let end = self.nuls.get(idx).copied().unwrap_or(self.bytes.len());
+        ErrorContext::from_shared(Arc::clone(&self.bytes), pos, end)
+    }
+}
+
+impl std::ops::Deref for SharedBuf {
+    type Target = [u8];
+
+    fn deref(&self) -> &[u8] {
+        &self.bytes
+    }
+}
 
 /// The validation error log of one parser run.
 #[derive(Debug, Clone, Default)]
@@ -28,10 +65,9 @@ pub struct Log {
 impl Log {
     /// Appends an error whose context is `buf[pos..]` up to the first NUL
     /// byte (lexbor stores a pointer that PHP reads as a C string).
-    pub(crate) fn push(&mut self, buf: &[u8], pos: usize, t: E) {
-        let tail = buf.get(pos..).unwrap_or(&[]);
-        let len = tail.iter().position(|&c| c == 0).unwrap_or(tail.len());
-        self.errors.push(UrlValidationError::new(&tail[..len], t));
+    pub(crate) fn push(&mut self, buf: &SharedBuf, pos: usize, t: E) {
+        self.errors
+            .push(UrlValidationError::new(buf.context(pos), t));
     }
 }
 
@@ -213,15 +249,19 @@ pub(crate) fn parse_basic(
         Some(u) => (u, false),
         None => (&mut fresh, true),
     };
+    let input = SharedBuf::new(input);
     let (mut start, mut end) = (0, input.len());
     if is_fresh {
-        (start, end) = leading_trailing(log, input);
+        (start, end) = leading_trailing(log, &input);
     }
-    let data: Cow<'_, [u8]> = remove_tab_newline(log, input, start, end);
-    if let Cow::Owned(ref v) = data {
-        start = 0;
-        end = v.len();
-    }
+    let data = match remove_tab_newline(log, &input, start, end) {
+        Some(buf) => {
+            start = 0;
+            end = buf.len();
+            buf
+        }
+        None => input,
+    };
     let mut p = Parser {
         log,
         data: &data,
@@ -235,7 +275,7 @@ pub(crate) fn parse_basic(
 }
 
 /// `lxb_url_leading_trailing`: trims C0 controls and spaces.
-fn leading_trailing(log: &mut Log, input: &[u8]) -> (usize, usize) {
+fn leading_trailing(log: &mut Log, input: &SharedBuf) -> (usize, usize) {
     let mut p = 0;
     let end0 = input.len();
     while p < end0 {
@@ -272,32 +312,28 @@ fn leading_trailing(log: &mut Log, input: &[u8]) -> (usize, usize) {
 }
 
 /// `lxb_url_remove_tab_newline`.
-fn remove_tab_newline<'a>(
+fn remove_tab_newline(
     log: &mut Log,
-    input: &'a [u8],
+    input: &SharedBuf,
     start: usize,
     end: usize,
-) -> Cow<'a, [u8]> {
+) -> Option<SharedBuf> {
     let slice = &input[start..end];
-    let Some(first) = slice
+    let first = slice
         .iter()
-        .position(|&c| matches!(c, b'\t' | b'\n' | b'\r'))
-    else {
-        return Cow::Borrowed(input);
-    };
+        .position(|&c| matches!(c, b'\t' | b'\n' | b'\r'))?;
     log.push(input, start + first, E::InvalidUrlUnit);
-    Cow::Owned(
-        slice
-            .iter()
-            .copied()
-            .filter(|c| !matches!(c, b'\t' | b'\n' | b'\r'))
-            .collect(),
-    )
+    let cleaned: Vec<u8> = slice
+        .iter()
+        .copied()
+        .filter(|c| !matches!(c, b'\t' | b'\n' | b'\r'))
+        .collect();
+    Some(SharedBuf::new(&cleaned))
 }
 
 struct Parser<'a, 'l> {
     log: &'l mut Log,
-    data: &'a [u8],
+    data: &'a SharedBuf,
     start: usize,
     end: usize,
     base: Option<&'a Url>,

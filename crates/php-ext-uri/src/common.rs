@@ -126,7 +126,7 @@ pub(crate) fn init_prop(vm: &mut Vm, o: &Obj, name: &str, v: Value) {
 pub(crate) fn validation_error(vm: &mut Vm, e: &UrlValidationError) -> VmResult<Value> {
     let cls = class(vm, VALIDATION_ERROR_CLASS)?;
     let o = vm.new_object(&cls)?;
-    init_prop(vm, &o, "context", bytes(e.context.clone()));
+    init_prop(vm, &o, "context", bytes(e.context.to_vec()));
     let ty = enum_case(vm, VALIDATION_ERROR_TYPE_ENUM, e.error_type.name())?;
     init_prop(vm, &o, "type", ty);
     init_prop(vm, &o, "failure", Value::Bool(e.failure));

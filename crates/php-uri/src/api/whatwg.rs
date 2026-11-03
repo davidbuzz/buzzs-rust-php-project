@@ -1,7 +1,7 @@
 //! `Uri\WhatWg\Url`, `Uri\WhatWg\UrlBuilder` and `Uri\WhatWg\url_percent_encode()`.
 
 use super::{invalid_serialization_data, DebugValue};
-use crate::whatwg::{self as w, Host, Log, SchemeType, State, Url, UrlHostType};
+use crate::whatwg::{self as w, Host, Log, SchemeType, SharedBuf, State, Url, UrlHostType};
 use crate::{UriComparisonMode, UriError, UrlValidationError, UrlValidationErrorType as E};
 
 /// The PHP class name.
@@ -659,13 +659,15 @@ fn resolve_reference(
                 }
             }
             let mut reference = Vec::with_capacity(path.len());
+            let mut path_buf: Option<SharedBuf> = None;
             for (i, &ch) in path.iter().enumerate() {
                 match ch {
                     b'?' => reference.extend_from_slice(b"%3F"),
                     b'#' => {
                         reference.extend_from_slice(b"%23");
+                        let buf = path_buf.get_or_insert_with(|| SharedBuf::new(path));
                         let mut log = Log::default();
-                        log.push(path, i, E::InvalidUrlUnit);
+                        log.push(buf, i, E::InvalidUrlUnit);
                         errors.append(&mut log.errors);
                     }
                     _ => reference.push(ch),

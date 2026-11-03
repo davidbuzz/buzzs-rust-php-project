@@ -3,7 +3,7 @@
 
 use super::encode::{percent_encode_into, MAP_C0, URL_MAP};
 use super::idna;
-use super::parser::{Fail, Log};
+use super::parser::{Fail, Log, SharedBuf};
 use super::Host;
 use crate::UrlValidationErrorType as E;
 
@@ -55,7 +55,7 @@ fn hex(c: u8) -> Option<u8> {
 /// `lxb_url_host_parse`: parses `data[begin..end]`.
 pub(crate) fn parse_host(
     log: &mut Log,
-    data: &[u8],
+    data: &SharedBuf,
     begin: usize,
     end: usize,
     mut opt: HostOpt,
@@ -109,16 +109,21 @@ pub(crate) fn parse_host(
         .iter()
         .position(|&c| c < 128 && is_forbidden_domain(c))
     {
-        log.push(&domain, i, E::DomainInvalidCodePoint);
+        log.push(&SharedBuf::new(&domain), i, E::DomainInvalidCodePoint);
         return Err(Fail);
     }
     if is_ipv4(&domain) {
-        return parse_ipv4(log, &domain).map(Host::Ipv4);
+        return parse_ipv4(log, &SharedBuf::new(&domain)).map(Host::Ipv4);
     }
     Ok(Host::Domain(domain))
 }
 
-fn parse_opaque_host(log: &mut Log, data: &[u8], begin: usize, end: usize) -> Result<Host, Fail> {
+fn parse_opaque_host(
+    log: &mut Log,
+    data: &SharedBuf,
+    begin: usize,
+    end: usize,
+) -> Result<Host, Fail> {
     if begin == end {
         return Ok(Host::Empty);
     }
@@ -232,7 +237,7 @@ fn is_ipv4(data: &[u8]) -> bool {
 }
 
 /// `lxb_url_ipv4_parse` on a domain string.
-fn parse_ipv4(log: &mut Log, data: &[u8]) -> Result<u32, Fail> {
+fn parse_ipv4(log: &mut Log, data: &SharedBuf) -> Result<u32, Fail> {
     /// Multipliers for the last part, indexed by `5 - parts`.
     const ST: [u64; 6] = [0, 256, 65_536, 16_777_216, 4_294_967_296, 0];
     if data.is_empty() {
@@ -296,7 +301,7 @@ fn parse_ipv4(log: &mut Log, data: &[u8]) -> Result<u32, Fail> {
 /// `lxb_url_ipv6_parse` on `data[begin..end]` (without brackets).
 pub(crate) fn parse_ipv6(
     log: &mut Log,
-    data: &[u8],
+    data: &SharedBuf,
     begin: usize,
     end: usize,
 ) -> Result<[u16; 8], Fail> {
@@ -387,7 +392,7 @@ pub(crate) fn parse_ipv6(
 /// address, written into `ipv6[*piece..]`. Returns the position after it.
 fn parse_ipv4_in_ipv6(
     log: &mut Log,
-    data: &[u8],
+    data: &SharedBuf,
     mut p: usize,
     end: usize,
     ipv6: &mut [u16; 8],
@@ -536,7 +541,7 @@ mod tests {
             decode: s.contains('%'),
             idna: s.bytes().any(|c| c >= 0x80) || s.to_ascii_lowercase().contains("xn--"),
         };
-        let r = parse_host(&mut log, s.as_bytes(), 0, s.len(), opt);
+        let r = parse_host(&mut log, &SharedBuf::new(s.as_bytes()), 0, s.len(), opt);
         let names = log
             .errors
             .iter()

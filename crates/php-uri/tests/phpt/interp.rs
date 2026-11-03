@@ -151,7 +151,7 @@ impl Interp {
         V::Obj(Rc::new(RefCell::new(Obj {
             id,
             kind: Kind::ValErr {
-                context: e.context.clone(),
+                context: e.context.to_vec(),
                 ty,
                 failure: e.failure,
             },

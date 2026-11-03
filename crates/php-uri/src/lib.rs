@@ -11,7 +11,7 @@ pub mod error;
 pub mod rfc3986;
 pub mod whatwg;
 
-pub use error::{ErrorClass, UriError, UrlValidationError, UrlValidationErrorType};
+pub use error::{ErrorClass, ErrorContext, UriError, UrlValidationError, UrlValidationErrorType};
 
 /// `Uri\UriComparisonMode`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

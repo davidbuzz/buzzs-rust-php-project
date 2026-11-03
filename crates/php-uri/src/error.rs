@@ -6,6 +6,8 @@
 //! `Uri\WhatWg\UrlValidationError` objects stored in its `errors` property.
 
 use std::fmt;
+use std::ops::Deref;
+use std::sync::Arc;
 
 /// The PHP class of a thrown error.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -173,12 +175,102 @@ impl fmt::Display for UrlValidationErrorType {
     }
 }
 
+/// The `context` string of a validation error.
+///
+/// lexbor records a pointer into the parsed buffer and PHP reads it as a C
+/// string, so each context is "the rest of the buffer up to the first NUL".
+/// Copying that for every error would be quadratic in the input length, so
+/// a context shares the buffer and only stores its range.
+#[derive(Clone)]
+pub struct ErrorContext {
+    buf: Arc<[u8]>,
+    start: usize,
+    end: usize,
+}
+
+impl ErrorContext {
+    /// A context over `buf[start..end]`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the range is out of bounds.
+    pub fn from_shared(buf: Arc<[u8]>, start: usize, end: usize) -> Self {
+        assert!(
+            start <= end && end <= buf.len(),
+            "context range out of bounds"
+        );
+        ErrorContext { buf, start, end }
+    }
+
+    /// The context bytes.
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.buf[self.start..self.end]
+    }
+
+    /// Whether two contexts point into the same underlying buffer.
+    pub fn shares_buffer_with(&self, other: &ErrorContext) -> bool {
+        Arc::ptr_eq(&self.buf, &other.buf)
+    }
+}
+
+impl Deref for ErrorContext {
+    type Target = [u8];
+
+    fn deref(&self) -> &[u8] {
+        self.as_bytes()
+    }
+}
+
+impl PartialEq for ErrorContext {
+    fn eq(&self, other: &Self) -> bool {
+        self.as_bytes() == other.as_bytes()
+    }
+}
+
+impl Eq for ErrorContext {}
+
+impl fmt::Debug for ErrorContext {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{:?}", String::from_utf8_lossy(self.as_bytes()))
+    }
+}
+
+impl From<Vec<u8>> for ErrorContext {
+    fn from(v: Vec<u8>) -> Self {
+        let end = v.len();
+        ErrorContext {
+            buf: v.into(),
+            start: 0,
+            end,
+        }
+    }
+}
+
+impl From<&[u8]> for ErrorContext {
+    fn from(v: &[u8]) -> Self {
+        v.to_vec().into()
+    }
+}
+
+impl From<&str> for ErrorContext {
+    fn from(v: &str) -> Self {
+        v.as_bytes().into()
+    }
+}
+
+impl From<ErrorContext> for Vec<u8> {
+    fn from(c: ErrorContext) -> Self {
+        c.to_vec()
+    }
+}
+
 /// One `Uri\WhatWg\UrlValidationError` object.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UrlValidationError {
     /// The `context` property: the remainder of the input starting at the
-    /// position where the error was detected (as lexbor reports it).
-    pub context: Vec<u8>,
+    /// position where the error was detected (as lexbor reports it). Use
+    /// `.to_vec()` to get the PHP string.
+    pub context: ErrorContext,
     /// The `type` property.
     pub error_type: UrlValidationErrorType,
     /// The `failure` property.
@@ -187,7 +279,7 @@ pub struct UrlValidationError {
 
 impl UrlValidationError {
     /// Creates an error with the default `failure` flag of its type.
-    pub fn new(context: impl Into<Vec<u8>>, error_type: UrlValidationErrorType) -> Self {
+    pub fn new(context: impl Into<ErrorContext>, error_type: UrlValidationErrorType) -> Self {
         UrlValidationError {
             context: context.into(),
             error_type,

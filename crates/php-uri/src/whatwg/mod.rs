@@ -10,7 +10,7 @@ pub mod unicode_tables;
 pub mod utf8;
 
 pub use encode::{url_percent_encode, UrlPercentEncodingMode};
-pub use parser::{Fail, Log, State};
+pub use parser::{Fail, Log, SharedBuf, State};
 
 use crate::UrlValidationError;
 
@@ -384,6 +384,7 @@ impl Url {
 
 /// `lxb_url_parse_host_ipv6` on text that may be bracketed.
 pub fn parse_ipv6_text(log: &mut Log, data: &[u8]) -> Result<[u16; 8], Fail> {
+    let data = &SharedBuf::new(data);
     let (begin, end) = if data.first() == Some(&b'[') {
         if data.last() != Some(&b']') {
             log.push(
@@ -419,7 +420,12 @@ mod tests {
         Url::parse(input.as_bytes(), None)
             .errors
             .into_iter()
-            .map(|e| (String::from_utf8(e.context).unwrap(), e.error_type.name()))
+            .map(|e| {
+                (
+                    String::from_utf8(e.context.to_vec()).unwrap(),
+                    e.error_type.name(),
+                )
+            })
             .collect()
     }
 
