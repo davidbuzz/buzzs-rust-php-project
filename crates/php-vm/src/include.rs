@@ -31,6 +31,7 @@ impl Vm {
             let opts = php_parser::ParseOptions {
                 short_open_tag: self.ini.get_bool("short_open_tag"),
                 skip_shebang,
+                multibyte: self.ini.get_bool("zend.multibyte"),
                 ..Default::default()
             };
             php_parser::parse(src, &opts)
