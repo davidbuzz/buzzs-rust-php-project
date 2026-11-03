@@ -45,6 +45,7 @@ pub struct FakeHost {
     pub temp: PathBuf,
     pub shutdown_registered: bool,
     pub error_handler_throws: bool,
+    pub deny_basedir: bool,
 }
 
 impl FakeHost {
@@ -70,6 +71,7 @@ impl FakeHost {
             temp: std::env::temp_dir(),
             shutdown_registered: false,
             error_handler_throws: false,
+            deny_basedir: false,
         }
     }
 
@@ -350,6 +352,17 @@ impl SessionHost for FakeHost {
 
     fn gc_random(&mut self, max: i64) -> i64 {
         max
+    }
+
+    fn open_basedir_denied(&mut self, path: &[u8]) -> bool {
+        if self.deny_basedir {
+            let msg = format!(
+                "open_basedir restriction in effect. File({}) is not within the allowed path(s): (.)",
+                String::from_utf8_lossy(path)
+            );
+            let _ = self.emit_diagnostic(php_runtime::ErrorLevel::Warning, &msg);
+        }
+        self.deny_basedir
     }
 
     fn define_sid(&mut self, value: &[u8]) {

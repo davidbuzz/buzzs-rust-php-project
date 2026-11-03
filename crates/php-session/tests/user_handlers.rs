@@ -1,4 +1,5 @@
 //! User save handlers (`ext/session/tests/user_session_module/*.phpt`).
+#![allow(clippy::too_many_lines)]
 
 mod common;
 

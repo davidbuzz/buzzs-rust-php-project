@@ -1,4 +1,5 @@
 //! Session lifecycle behaviour ported from `ext/session/tests/*.phpt`.
+#![allow(clippy::too_many_lines)]
 
 mod common;
 
