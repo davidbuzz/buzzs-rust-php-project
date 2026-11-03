@@ -13,6 +13,7 @@ php-simplexml = { path = "../php-simplexml" }
 php-ext-xml = { path = "../php-ext-xml" }
 php-ext-streams = { path = "../php-ext-streams" }
 php-ext-xsl = { path = "../php-ext-xsl" }
+php-libxml = { path = "../php-libxml" }
 php-xsl = { path = "../php-xsl" }
 
 [dev-dependencies]

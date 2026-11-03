@@ -7,6 +7,9 @@
 //!   or save: the VM must stay reachable from libxml2's stream hooks and
 //!   the user entity loader while the library runs).
 
+use std::any::Any;
+use std::rc::Rc;
+
 use php_ext_streams::bridge;
 use php_runtime::{
     BinaryOp, CastTarget, ErrorLevel, Obj, ObjectDump, PropertyPurpose, RtResult, RuntimeContext,
@@ -53,9 +56,24 @@ pub fn rt_throw(vm: &mut Vm, e: RuntimeError) -> Throw {
     }
 }
 
+/// The internal state of a `SimpleXMLElement` object: the library state
+/// plus, for trees owned by another object model, that model's
+/// keep-alive.
+pub struct SxeState {
+    /// The library state.
+    pub sxe: SxeRef,
+    _keep: Option<Rc<dyn Any>>,
+}
+
+/// Attaches `sxe` to `o`.
+pub fn set_sxe(o: &Obj, sxe: SxeRef) {
+    let keep = sxe.document().and_then(|d| crate::foreign::keepalive_for(&d));
+    php_vm::object::set_internal(o, SxeState { sxe, _keep: keep });
+}
+
 /// The `SimpleXML` state attached to an object.
 pub fn sxe_of(o: &Obj) -> Option<SxeRef> {
-    php_vm::object::internal::<SxeRef, _>(o, |s| s.clone())
+    php_vm::object::internal::<SxeState, _>(o, |s| s.sxe.clone())
 }
 
 /// `php_sxe_object_new` + state: an instance of `class` (no constructor)
@@ -68,7 +86,7 @@ pub fn wrap_object(vm: &mut Vm, class: &ZStr, sxe: SxeRef) -> Result<Value, Thro
         return Err(vm.throw("Error", "Class \"SimpleXMLElement\" not found"));
     };
     let o = vm.new_object(&cls)?;
-    php_vm::object::set_internal::<SxeRef>(&o, sxe);
+    set_sxe(&o, sxe);
     Ok(Value::Object(o))
 }
 

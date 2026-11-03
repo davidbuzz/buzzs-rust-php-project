@@ -3,13 +3,13 @@
 //! The fetch type the C handlers receive (`BP_VAR_R`/`W`/`RW`/`IS`) comes
 //! from `Vm::property_context` / `Vm::dimension_context`.
 
-use php_runtime::{CastTarget, Obj, PropertyPurpose, RtResult, Value, ZArray, ZStr};
+use php_runtime::{CastTarget, Obj, PhpRef, PropertyPurpose, RtResult, Value, ZArray, ZStr};
 use php_simplexml::{CheckKind, FetchMode, PropertyPtr, Sxe, SxeRef};
 use php_vm::ext::{ClassHooks, DimensionCtx, NativeIterator, PropCtx, VmResult};
 use php_vm::func::Func;
 use php_vm::Vm;
 
-use crate::host::{rt_throw, sxe_of, VmHost};
+use crate::host::{rt_throw, set_sxe, sxe_of, VmHost};
 
 /// The hooks of `SimpleXMLElement` (inherited by subclasses).
 pub fn class_hooks() -> ClassHooks {
@@ -49,7 +49,7 @@ pub fn is_user_method(o: &Obj, method: &str) -> bool {
 #[allow(clippy::unnecessary_wraps)] // signature fixed by `ClassHooks::create`
 fn create(_vm: &mut Vm, o: &Obj) -> VmResult<()> {
     let class = php_vm::object::class_of(o).name.clone();
-    php_vm::object::set_internal::<SxeRef>(o, Sxe::new(class));
+    set_sxe(o, Sxe::new(class));
     Ok(())
 }
 
@@ -58,7 +58,7 @@ fn clone(vm: &mut Vm, old: &Obj, new: &Obj) -> VmResult<()> {
         return Ok(());
     };
     let copy = direct(vm, |_| Sxe::clone_object(&st))?;
-    php_vm::object::set_internal::<SxeRef>(new, copy);
+    set_sxe(new, copy);
     Ok(())
 }
 
@@ -121,14 +121,26 @@ fn read_property(vm: &mut Vm, o: &Obj, name: &ZStr) -> VmResult<Option<Value>> {
             // creates a missing element, else the VM falls back to
             // `read_property`.
             match direct(vm, |h| Sxe::property_ptr(&st, h, name))? {
-                PropertyPtr::Value(v) => return Ok(Some(v)),
+                PropertyPtr::Value(v) => return Ok(Some(as_ref_if(ctx, v))),
                 PropertyPtr::Error => return Ok(Some(Value::Null)),
                 PropertyPtr::Fallback if ctx == PropCtx::ReadWrite => FetchMode::Read,
                 PropertyPtr::Fallback => FetchMode::Write,
             }
         }
     };
-    direct(vm, |h| Sxe::read_property(&st, h, name, mode)).map(Some)
+    let ctx = vm.property_context();
+    let v = direct(vm, |h| Sxe::read_property(&st, h, name, mode))?;
+    Ok(Some(as_ref_if(ctx, v)))
+}
+
+/// `&$sxe->p`: the VM binds a reference only when the handler answers
+/// with one (PHP references the temporary element zval).
+fn as_ref_if(ctx: PropCtx, v: Value) -> Value {
+    match v {
+        Value::Reference(_) => v,
+        v if ctx == PropCtx::Ref => Value::Reference(PhpRef::new(v)),
+        v => v,
+    }
 }
 
 fn write_property(vm: &mut Vm, o: &Obj, name: &ZStr, v: &Value) -> VmResult<bool> {

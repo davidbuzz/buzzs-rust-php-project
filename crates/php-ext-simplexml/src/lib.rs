@@ -13,6 +13,7 @@
 //!   [`php_ext_xml::libxml::run`] (stream hooks, entity loader, libxml2
 //!   diagnostics and the `libxml_use_internal_errors()` list).
 
+mod foreign;
 mod hooks;
 mod host;
 mod methods;

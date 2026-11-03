@@ -1,5 +1,6 @@
 //! `SimpleXMLElement` methods and the `simplexml_*()` functions.
 
+use std::ptr::NonNull;
 use std::rc::Rc;
 
 use php_runtime::{RtResult, Value, ZStr};
@@ -9,8 +10,11 @@ use php_vm::ext::{Args, VmResult};
 use php_vm::Vm;
 
 use php_ext_xsl::access::{ImportedNode, XmlSource};
+use php_libxml::tree::Node;
+use php_xsl::XmlDocument;
 
 use crate::hooks::direct;
+use crate::foreign;
 use crate::host::{rt_throw, sxe_of, LentHost};
 
 /// Runs a library call inside [`php_ext_xml::libxml::run`] (stream hooks,
@@ -244,23 +248,49 @@ pub fn load_file(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     })
 }
 
-/// `simplexml_import_dom()`: the node comes from the DOM binding's
-/// `php_ext_xsl::access::DomAccess` provider (`php_libxml_import_node`);
-/// anything else is "not a valid XML node".
+/// `simplexml_import_dom()`: the node comes from the object model's
+/// `php_ext_xsl::access::DomAccess` provider (`php_libxml_import_node`)
+/// and the tree is shared, not copied; anything else is "not a valid XML
+/// node".
 pub fn import_dom(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let class = class_arg(vm, a, 1)?.map(|c| c.name.clone());
     let node = match a.at(0) {
-        Value::Object(o) => match php_ext_xsl::access::import(vm, &o)? {
-            Some((_, found)) => match found {
-                ImportedNode::Document(XmlSource::Document(d))
-                | ImportedNode::Node(XmlSource::Document(d)) => d.root(),
-                ImportedNode::Document(XmlSource::Node(n))
-                | ImportedNode::Node(XmlSource::Node(n)) => Some(n),
-                _ => None,
-            },
-            _ => None,
-        },
+        Value::Object(o) => imported_node(vm, &o)?,
         _ => None,
     };
     lent(vm, a, |h| Sxe::import_dom(h, node, class.as_ref()))
+}
+
+/// The libxml node behind a DOM (or other provider's) object.
+fn imported_node(vm: &mut Vm, o: &php_runtime::Obj) -> VmResult<Option<Node>> {
+    let Some((_, found)) = php_ext_xsl::access::import(vm, o)? else {
+        return Ok(None);
+    };
+    let (src, is_doc) = match found {
+        ImportedNode::Document(s) => (s, true),
+        ImportedNode::Node(s) => (s, false),
+        ImportedNode::Detached => return Ok(None),
+    };
+    let doc = match src {
+        XmlSource::Document(d) => return Ok(if is_doc { Some(d.as_node()) } else { None }),
+        XmlSource::Node(n) => return Ok(Some(n)),
+        XmlSource::Raw { doc, keepalive } => {
+            let Some(ptr) = NonNull::new(doc.xml_doc().as_ptr().cast()) else {
+                return Ok(None);
+            };
+            // SAFETY: the provider guarantees the document lives while
+            // `keepalive` does; every SimpleXML object on it holds it.
+            unsafe { foreign::document(ptr, &keepalive) }
+        }
+    };
+    if is_doc {
+        return Ok(Some(doc.as_node()));
+    }
+    // The provider exposes only the document: locate the node by its
+    // `getNodePath()`.
+    let path = vm.call_method_by_name(o, "getNodePath", Vec::new())?;
+    Ok(match path {
+        Value::Str(p) => foreign::node_by_path(&doc, p.as_bytes()),
+        _ => None,
+    })
 }
