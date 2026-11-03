@@ -399,16 +399,15 @@ fn has_dimension(vm: &mut Vm, o: &Obj, k: &Value, check_empty: bool) -> VmResult
     };
     let off = to_offset(vm, k)?;
     let ctx = obj_ctx(o);
-    let r = run::lib(vm, || dispatch::offset_exists(&d, &off))?;
-    let exists = check(vm, r, Some(&ctx))?.unwrap_or(false);
-    if exists && check_empty && matches!(d, DomObject::TokenList(_)) {
-        // Tokens are strings: "0" is empty.
+    if check_empty && matches!(d, DomObject::TokenList(_)) {
+        // Tokens are strings ("0" is empty): perform an actual read.
         let r = run::lib(vm, || dispatch::offset_get(&d, &off))?;
         let v = check(vm, r, Some(&ctx))?.unwrap_or(php_dom::DomValue::Null);
         let v = to_value(vm, v)?;
         return Ok(Some(vm.value_to_bool(&v)?));
     }
-    Ok(Some(exists))
+    let r = run::lib(vm, || dispatch::offset_exists(&d, &off))?;
+    Ok(Some(check(vm, r, Some(&ctx))?.unwrap_or(false)))
 }
 
 #[allow(clippy::unnecessary_wraps)] // signature fixed by `ClassHooks::count`

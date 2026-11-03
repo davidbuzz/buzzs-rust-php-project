@@ -187,6 +187,12 @@ pub(crate) fn method(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         return Ok(Value::Object(vm.new_internal_iterator(it)?));
     }
     let dargs = convert_args(vm, a, builtin, &name)?;
-    let r = run::call(vm, a, || dispatch::call(&d, &name, &dargs, &VmHost))?;
+    let mut r = run::call(vm, a, || dispatch::call(&d, &name, &dargs, &VmHost))?;
+    if name.eq_ignore_ascii_case("__sleep") || name.eq_ignore_ascii_case("__wakeup") {
+        // `zend_throw_exception_ex(NULL, ...)`: a plain `Exception`.
+        if let Err(php_dom::DomError::Error(m)) = r {
+            r = Err(php_dom::DomError::Exception(m));
+        }
+    }
     finish(vm, r, &ctx)
 }
