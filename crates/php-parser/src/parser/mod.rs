@@ -30,6 +30,8 @@ pub struct ParseOptions {
     /// Record the tokens accepted as identifiers in
     /// [`Program::identifier_tokens`](crate::ast::Program::identifier_tokens).
     pub record_identifier_tokens: bool,
+    /// Which thread [`crate::parse`] parses on.
+    pub stack: crate::StackPolicy,
 }
 
 /// Result type of parser functions.
@@ -71,6 +73,11 @@ pub(crate) struct Parser<'a> {
     pub foreach_ref_keys: Vec<usize>,
     /// Current recursion depth (bounded like bison's stack).
     pub depth: u32,
+    /// Native stack address below which recursion must stop.
+    pub stack_limit: Option<usize>,
+    /// Set when parsing stopped because the native stack ran low (rather
+    /// than at bison's depth limit).
+    pub stack_exhausted: bool,
     /// Start offset of a keyword that began a call argument (see
     /// `parse_argument`).
     pub colon_hint: Option<usize>,
@@ -106,6 +113,8 @@ impl<'a> Parser<'a> {
             identifier_tokens: opts.record_identifier_tokens.then(Vec::new),
             foreach_ref_keys: Vec::new(),
             depth: 0,
+            stack_limit: None,
+            stack_exhausted: false,
             colon_hint: None,
         }
     }
@@ -349,7 +358,9 @@ impl<'a> Parser<'a> {
     /// exhausted. The caller must decrement `depth` afterwards.
     pub fn enter(&mut self) -> PResult<()> {
         self.depth += 1;
-        if self.depth > MAX_DEPTH {
+        let low_stack = crate::stack::exhausted(self.stack_limit);
+        if self.depth > MAX_DEPTH || low_stack {
+            self.stack_exhausted |= low_stack && self.depth <= MAX_DEPTH;
             let line = self.cur().end_line;
             self.depth -= 1;
             return Err(ParseError::parse("memory exhausted", line));
@@ -381,21 +392,32 @@ pub(crate) fn is_identifier_token(k: TokenKind) -> bool {
     k == TokenKind::String || k.is_semi_reserved()
 }
 
-/// Parses a complete file.
-#[allow(clippy::trivially_copy_pass_by_ref)] // `ParseOptions` may grow
-pub fn parse_program(src: &[u8], opts: &ParseOptions) -> Result<Program, ParseError> {
+/// Parses a complete file, stopping recursion when the native stack falls
+/// below `stack_limit`. The error's flag tells whether that happened.
+#[allow(clippy::trivially_copy_pass_by_ref)]
+pub(crate) fn parse_program_limited(
+    src: &[u8],
+    opts: &ParseOptions,
+    stack_limit: Option<usize>,
+) -> Result<Program, (ParseError, bool)> {
     let mut p = Parser::new(src, opts);
+    p.stack_limit = stack_limit;
+    let r = parse_program_inner(&mut p);
+    r.map_err(|e| (e, p.stack_exhausted))
+}
+
+fn parse_program_inner(p: &mut Parser<'_>) -> Result<Program, ParseError> {
     match p.parse_top_level() {
         Ok((statements, halt_compiler_offset)) => {
-            let mut identifier_tokens = p.identifier_tokens.unwrap_or_default();
+            let mut identifier_tokens = p.identifier_tokens.take().unwrap_or_default();
             identifier_tokens.sort_unstable();
             identifier_tokens.dedup();
             Ok(Program {
                 statements,
                 halt_compiler_offset,
-                warnings: p.warnings,
+                warnings: std::mem::take(&mut p.warnings),
                 identifier_tokens,
-                foreach_ref_keys: p.foreach_ref_keys,
+                foreach_ref_keys: std::mem::take(&mut p.foreach_ref_keys),
             })
         }
         Err(mut e) => {

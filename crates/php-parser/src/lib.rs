@@ -28,46 +28,70 @@ pub mod ast;
 mod error;
 pub mod export;
 mod parser;
+mod stack;
 pub mod validate;
 pub mod visit;
 
 pub use ast::Program;
 pub use error::{ErrorKind, ParseError};
 pub use parser::ParseOptions;
-
-/// Stack size of the parsing thread. The parser is recursive; bison's
-/// stack allows nesting up to depth 10000, which needs a deep native stack.
-const PARSER_STACK_SIZE: usize = 512 * 1024 * 1024;
+pub use stack::StackPolicy;
 
 /// Parses a PHP file (starting in inline-HTML mode, like a script file).
 ///
-/// Parsing runs on a helper thread with a large stack so that deeply nested
-/// code behaves like PHP (which fails with `memory exhausted` only beyond
-/// bison's maximum depth).
+/// Deeply nested code needs a deep native stack to behave like PHP (which
+/// fails with `memory exhausted` only beyond bison's maximum depth);
+/// [`ParseOptions::stack`] decides where the parser runs. With the default
+/// [`StackPolicy::Auto`] it runs on the calling thread and moves to a helper
+/// thread only for code that nests too deeply for the remaining stack.
 #[allow(clippy::trivially_copy_pass_by_ref)] // stable API; `ParseOptions` may grow
 pub fn parse(src: &[u8], opts: &ParseOptions) -> Result<Program, ParseError> {
+    match opts.stack {
+        StackPolicy::CurrentThread => {
+            parse_and_validate(src, opts, stack::stack_limit()).map_err(|(e, _)| e)
+        }
+        StackPolicy::Spawn(size) => parse_on_helper(src, opts, size),
+        StackPolicy::Auto => match stack::stack_limit() {
+            Some(limit) => match parse_and_validate(src, opts, Some(limit)) {
+                Err((_, true)) => parse_on_helper(src, opts, stack::HELPER_STACK_SIZE),
+                r => r.map_err(|(e, _)| e),
+            },
+            None => parse_on_helper(src, opts, stack::HELPER_STACK_SIZE),
+        },
+    }
+}
+
+/// Parses on a scoped helper thread with a `size`-byte stack.
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn parse_on_helper(src: &[u8], opts: &ParseOptions, size: usize) -> Result<Program, ParseError> {
     std::thread::scope(|s| {
         match std::thread::Builder::new()
             .name("php-parser".into())
-            .stack_size(PARSER_STACK_SIZE)
-            .spawn_scoped(s, || parse_and_validate(src, opts))
+            .stack_size(size)
+            .spawn_scoped(s, || parse_and_validate(src, opts, stack::stack_limit()))
         {
             Ok(handle) => match handle.join() {
-                Ok(r) => r,
+                Ok(r) => r.map_err(|(e, _)| e),
                 Err(panic) => std::panic::resume_unwind(panic),
             },
-            Err(_) => parse_and_validate(src, opts),
+            Err(_) => parse_and_validate(src, opts, stack::stack_limit()).map_err(|(e, _)| e),
         }
     })
 }
 
+/// Parses and validates, stopping before the native stack drops below
+/// `limit`; the error flag tells whether that is why it failed.
 #[allow(clippy::trivially_copy_pass_by_ref)]
-fn parse_and_validate(src: &[u8], opts: &ParseOptions) -> Result<Program, ParseError> {
-    let mut program = parser::parse_program(src, opts)?;
+fn parse_and_validate(
+    src: &[u8],
+    opts: &ParseOptions,
+    limit: Option<usize>,
+) -> Result<Program, (ParseError, bool)> {
+    let mut program = parser::parse_program_limited(src, opts, limit)?;
     if !opts.syntax_only {
-        if let Err(mut e) = validate::validate(&mut program) {
+        if let Err((mut e, low)) = validate::validate_limited(&mut program, limit) {
             e.warnings = std::mem::take(&mut program.warnings);
-            return Err(e);
+            return Err((e, low));
         }
     }
     Ok(program)

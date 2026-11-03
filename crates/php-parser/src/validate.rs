@@ -21,13 +21,23 @@ use std::collections::HashSet;
 /// error in compilation order; compile warnings are appended to
 /// `program.warnings`.
 pub fn validate(program: &mut Program) -> Result<(), ParseError> {
+    validate_limited(program, None).map_err(|(e, _)| e)
+}
+
+/// Like [`validate`], stopping when the native stack falls below
+/// `stack_limit`; the flag of the error tells whether that happened.
+pub(crate) fn validate_limited(
+    program: &mut Program,
+    stack_limit: Option<usize>,
+) -> Result<(), (ParseError, bool)> {
     let mut v = Validator {
         foreach_ref_keys: program.foreach_ref_keys.iter().copied().collect(),
+        stack_limit,
         ..Validator::default()
     };
     let r = v.top_level(&program.statements);
     program.warnings.append(&mut v.warnings);
-    r
+    r.map_err(|e| (e, v.stack_exhausted))
 }
 
 type VResult = Result<(), ParseError>;
@@ -89,6 +99,10 @@ struct Validator {
     in_const_expr: bool,
     /// Statement starts of `foreach` loops with a by-reference key.
     foreach_ref_keys: HashSet<usize>,
+    /// Native stack address below which recursion must stop.
+    stack_limit: Option<usize>,
+    /// Set when the check stopped because the native stack ran low.
+    stack_exhausted: bool,
     /// `CG(zend_lineno)`: line of the node compiled last.
     cur_line: u32,
     /// Inside a property hook: (property name, hook name).
@@ -254,6 +268,15 @@ impl Validator {
                 _ => n.name.clone(),
             },
         }
+    }
+
+    /// Stops before the native stack overflows.
+    fn check_stack(&mut self, line: u32) -> VResult {
+        if crate::stack::exhausted(self.stack_limit) {
+            self.stack_exhausted = true;
+            return Err(ParseError::parse("memory exhausted", line));
+        }
+        Ok(())
     }
 
     // ---- top level -------------------------------------------------------
@@ -428,6 +451,7 @@ impl Validator {
 
     #[allow(clippy::too_many_lines)]
     fn stmt(&mut self, s: &Stmt) -> VResult {
+        self.check_stack(s.span.line)?;
         let line = s.span.line;
         match &s.kind {
             StmtKind::Block(b) => self.stmts(b),
@@ -1528,6 +1552,7 @@ impl Validator {
 
     #[allow(clippy::too_many_lines)]
     fn expr(&mut self, e: &Expr) -> VResult {
+        self.check_stack(e.span.line)?;
         let line = e.span.line;
         self.cur_line = line;
         match &e.kind {

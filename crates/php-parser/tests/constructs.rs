@@ -554,3 +554,33 @@ fn identifier_tokens() {
     let p = php_parser::parse(src.as_bytes(), &ParseOptions::default()).unwrap();
     assert!(p.identifier_tokens.is_empty());
 }
+
+#[test]
+fn stack_policies() {
+    use php_parser::StackPolicy;
+    let n = 3000;
+    let src = format!("<?php $a = {}1{};", "[".repeat(n), "]".repeat(n));
+    // A thread with a small stack: `Auto` moves to a helper thread,
+    // `CurrentThread` gives up like bison's stack overflow would.
+    let h = std::thread::Builder::new()
+        .stack_size(2 * 1024 * 1024)
+        .spawn(move || {
+            let auto = php_parser::parse(src.as_bytes(), &ParseOptions::default()).is_ok();
+            let opts = ParseOptions {
+                stack: StackPolicy::CurrentThread,
+                ..ParseOptions::default()
+            };
+            let current = php_parser::parse(src.as_bytes(), &opts).map_err(|e| e.message);
+            let opts = ParseOptions {
+                stack: StackPolicy::Spawn(64 * 1024 * 1024),
+                ..ParseOptions::default()
+            };
+            let spawned = php_parser::parse(src.as_bytes(), &opts).is_ok();
+            (auto, current, spawned)
+        })
+        .unwrap();
+    let (auto, current, spawned) = h.join().unwrap();
+    assert!(auto);
+    assert_eq!(current.unwrap_err(), "memory exhausted");
+    assert!(spawned);
+}
