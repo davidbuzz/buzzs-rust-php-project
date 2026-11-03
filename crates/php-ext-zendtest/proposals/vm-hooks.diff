@@ -1,4 +1,4 @@
-Proposed php-vm changes for ext/zend_test (crates/php-ext-zendtest).
+Proposed php-vm changes for ext/zend_test (crates/php-ext-zendtest), against 04c037a.
 Apply with `git apply` from the repository root, then enable the binding
 side by adding `features = ["vm-hooks"]` to the php-ext-zendtest line of
 crates/php-cli/Cargo.toml.
@@ -29,10 +29,10 @@ Measured with these applied: ext/zend_test/tests 99/168 (56 without),
 the zend_test-gated tests elsewhere 102/136 (95 without).
 
 diff --git a/crates/php-vm/src/call.rs b/crates/php-vm/src/call.rs
-index eaabf50..3abd6fa 100644
+index 76403bf..af6ef61 100644
 --- a/crates/php-vm/src/call.rs
 +++ b/crates/php-vm/src/call.rs
-@@ -835,11 +835,42 @@ impl Vm {
+@@ -883,11 +883,42 @@ impl Vm {
              ));
          }
          self.frames.push(f);
@@ -76,25 +76,26 @@ index eaabf50..3abd6fa 100644
          &mut self,
          b: &Rc<Builtin>,
          mut call: PendingCall,
-@@ -874,6 +905,7 @@ impl Vm {
+@@ -923,6 +954,7 @@ impl Vm {
          f.called.clone_from(&call.called);
          self.frames.push(f);
          let depth = self.frames.len();
 +        self.observer_begin_top();
          // Arity.
-         let positional_count = call.args.iter().filter(|a| a.is_some()).count();
          if !call.has_named && npassed < b.required as usize {
-@@ -1009,7 +1041,9 @@ impl Vm {
+             let e = self.arg_count_error_builtin(&fname(self), b, npassed);
+@@ -1071,8 +1103,10 @@ impl Vm {
              called: call.called,
              func: Some(b.clone()),
          };
 +        self.observer_internal(None);
          let mut r = (b.handler)(self, &mut args);
+         r = self.flush_typed_arg_writes(r);
 +        self.observer_internal(Some(r.as_ref()));
          // Blocking builtins (sleep, stream reads) return to a pending
          // interrupt.
          if r.is_ok() {
-@@ -1033,7 +1067,7 @@ impl Vm {
+@@ -1096,7 +1130,7 @@ impl Vm {
                  };
              }
          }
@@ -103,7 +104,7 @@ index eaabf50..3abd6fa 100644
              self.frames.truncate(depth - 1);
          }
          r
-@@ -1065,7 +1099,7 @@ impl Vm {
+@@ -1128,7 +1162,7 @@ impl Vm {
  
      /// Pops frames above `depth - 1` (the builtin frame pushed at `depth`).
      fn pop_frames_to(&mut self, depth: usize) {
@@ -112,7 +113,7 @@ index eaabf50..3abd6fa 100644
              self.frames.truncate(depth - 1);
          }
      }
-@@ -1496,9 +1530,18 @@ impl Vm {
+@@ -1592,9 +1626,18 @@ impl Vm {
          let Some(f) = f else {
              return Err(self.make_throw("Error", &format!("Call to undefined function {name}()")));
          };
@@ -203,7 +204,7 @@ index 56fe39d..255ec96 100644
              };
              if let Some(m) = msg {
 diff --git a/crates/php-vm/src/compiler/mod.rs b/crates/php-vm/src/compiler/mod.rs
-index b652289..4b7e801 100644
+index 71396c5..17f3b0e 100644
 --- a/crates/php-vm/src/compiler/mod.rs
 +++ b/crates/php-vm/src/compiler/mod.rs
 @@ -1,6 +1,6 @@
@@ -215,10 +216,10 @@ index b652289..4b7e801 100644
  mod decl;
  mod expr;
 diff --git a/crates/php-vm/src/exec.rs b/crates/php-vm/src/exec.rs
-index 4aedaa8..1f5ffaf 100644
+index 6677cc2..1ffc232 100644
 --- a/crates/php-vm/src/exec.rs
 +++ b/crates/php-vm/src/exec.rs
-@@ -188,6 +188,7 @@ impl Vm {
+@@ -195,6 +195,7 @@ impl Vm {
                      }
                  }
                  Err(t) => {
@@ -226,7 +227,7 @@ index 4aedaa8..1f5ffaf 100644
                      self.frames.truncate(base);
                      return Err(t);
                  }
-@@ -235,6 +236,7 @@ impl Vm {
+@@ -242,6 +243,7 @@ impl Vm {
                  }
              }
              // Unwind this frame.
@@ -234,7 +235,7 @@ index 4aedaa8..1f5ffaf 100644
              let popped = self.frames.pop();
              if let Some(p) = &popped {
                  if let Some(g) = &p.generator {
-@@ -1230,6 +1232,7 @@ impl Vm {
+@@ -1244,6 +1246,7 @@ impl Vm {
      pub(crate) fn op_return_raw(&mut self, v: Option<Value>, base: usize) -> VmResult<Flow> {
          let v = v.unwrap_or_default();
          let fidx = self.frames.len() - 1;
@@ -243,7 +244,7 @@ index 4aedaa8..1f5ffaf 100644
          if let Some(g) = &frame.generator {
              crate::generator::finish_with(g, v);
 diff --git a/crates/php-vm/src/ext.rs b/crates/php-vm/src/ext.rs
-index e163555..8e4f4ab 100644
+index 20ca305..983ca22 100644
 --- a/crates/php-vm/src/ext.rs
 +++ b/crates/php-vm/src/ext.rs
 @@ -26,6 +26,8 @@ use std::rc::Rc;
@@ -255,7 +256,7 @@ index e163555..8e4f4ab 100644
  pub use crate::vm::{Throw, VmResult};
  
  /// Method/property flag bits for [`ClassBuilder`].
-@@ -314,6 +316,20 @@ impl<'a> ModuleBuilder<'a> {
+@@ -318,6 +320,20 @@ impl<'a> ModuleBuilder<'a> {
          self
      }
  
@@ -277,7 +278,7 @@ index e163555..8e4f4ab 100644
      /// [`ModuleBuilder::vm`] to finish it.
      pub fn class(&mut self, name: &str) -> ClassBuilder {
 diff --git a/crates/php-vm/src/generator.rs b/crates/php-vm/src/generator.rs
-index 6c3a986..9620b70 100644
+index 1b87e6c..86766f5 100644
 --- a/crates/php-vm/src/generator.rs
 +++ b/crates/php-vm/src/generator.rs
 @@ -265,12 +265,19 @@ impl Vm {
@@ -337,7 +338,7 @@ index 1096781..6e0ef6d 100644
          self.frames.truncate(base);
          match r {
 diff --git a/crates/php-vm/src/lib.rs b/crates/php-vm/src/lib.rs
-index 81e800e..905a49c 100644
+index c1840d4..82ab378 100644
 --- a/crates/php-vm/src/lib.rs
 +++ b/crates/php-vm/src/lib.rs
 @@ -30,6 +30,7 @@ mod generator;
@@ -348,7 +349,7 @@ index 81e800e..905a49c 100644
  mod pfa;
  mod iter;
  mod lazy;
-@@ -180,6 +181,7 @@ impl Vm {
+@@ -181,6 +182,7 @@ impl Vm {
              include_opener: None,
              source_filter: None,
              builtin_deprecations: std::collections::HashMap::new(),
@@ -625,7 +626,7 @@ index b664880..1be8487 100644
      }
      let Some(marker) = c
 diff --git a/crates/php-vm/src/vm.rs b/crates/php-vm/src/vm.rs
-index c93b42e..fffddd3 100644
+index fd6b8d5..747f8b6 100644
 --- a/crates/php-vm/src/vm.rs
 +++ b/crates/php-vm/src/vm.rs
 @@ -297,6 +297,8 @@ pub struct Frame {
@@ -637,7 +638,7 @@ index c93b42e..fffddd3 100644
  }
  
  impl Frame {
-@@ -344,6 +346,7 @@ impl Frame {
+@@ -359,6 +361,7 @@ impl Frame {
              magic_name: None,
              caller_strict: false,
              called_from_internal: false,
@@ -645,7 +646,7 @@ index c93b42e..fffddd3 100644
          }
      }
  
-@@ -509,6 +512,8 @@ pub struct Vm {
+@@ -524,6 +527,8 @@ pub struct Vm {
      /// `#[\Deprecated]` suffixes (" since X, msg") of native functions,
      /// by lowercase name.
      pub builtin_deprecations: HashMap<ZStr, Vec<u8>>,
