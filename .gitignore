@@ -3,3 +3,4 @@
 *.phpt.out
 *.phpt.diff
 /build
+/modules/php-rust

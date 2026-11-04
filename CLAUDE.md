@@ -2,6 +2,7 @@
 
 A Rust re-implementation of PHP whose goal is to pass the php-src `.phpt` test suite.
 `modules/php-src/` is a READ-ONLY reference clone of https://github.com/php/php-src (never edit it; it is gitignored).
+`modules/php-rust/` is a READ-ONLY clone of https://github.com/francescotinti/php-rust — the competing project (phprust.com); for study/comparison only, never edit it, never copy code from it (its license must be respected; use it for measured comparisons and ideas, not code).
 `/usr/bin/php` (the C implementation) is installed and may be used as an oracle to check expected behaviour.
 
 ## Layout (cargo workspace)

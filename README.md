@@ -103,6 +103,8 @@ Projects with the same or an overlapping thesis, found by searching the project 
   Ahead of this repo on: CPU performance, end-to-end application validation
   (WordPress, Symfony http-kernel), and public presence. Behind on: engine-corpus pass
   rate, extension breadth, SAPI coverage, and master tracking.
+  A READ-ONLY reference clone lives at `modules/php-rust/` (gitignored) for
+  comparison and study; its code is never edited or copied.
 - **[jolicode/rphp](https://github.com/jolicode/rphp)** — AI-assisted experiment
   ([write-up](https://jolicode.com/blog/writing-the-php-virtual-machine-in-rust-with-a-lot-of-help-from-ai)):
   ~80% of basic compatibility tests, 5–15× slower on pure code, but a copy-on-write
