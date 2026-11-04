@@ -84,6 +84,34 @@ git clone https://github.com/php/php-src modules/php-src
 `/usr/bin/php` (PHP 8.3.6) is used as an oracle by the library test suites. Where 8.3 and
 php-src master differ, the port follows master.
 
+## Related work
+
+Projects with the same or an overlapping thesis, found by searching the project goals
+(5 Nov 2026):
+
+- **[francescotinti/php-rust](https://github.com/francescotinti/php-rust)** /
+  [phprust.com](https://phprust.com/) — the closest relative, and the owner of the
+  "phprust" name on the web. Same core thesis stated almost verbatim ("the contract worth
+  preserving isn't Zend's design, but PHP's observable output", the `.phpt` corpus as an
+  executable oracle, performance measured against the reference interpreter's CPU with a
+  1× target). Targets PHP 8.5 via the mago parser → HIR → bytecode pipeline; reports the
+  full WordPress core suite at effective oracle parity over a native mysqli wire protocol,
+  with micro-benchmarks at ~2.1–2.9× oracle CPU (s183) and the WP suite at ~1.77×.
+- **[jolicode/rphp](https://github.com/jolicode/rphp)** — AI-assisted experiment
+  ([write-up](https://jolicode.com/blog/writing-the-php-virtual-machine-in-rust-with-a-lot-of-help-from-ai)):
+  ~80% of basic compatibility tests, 5–15× slower on pure code, but a copy-on-write
+  "fork mode" for requests that beats classic PHP serving on app workloads. Confirms the
+  register-VM (not stack-VM) choice as necessary for matching destruction/error ordering.
+- Earlier/smaller efforts: `rust-php/php`, `tagua-vm` (archived), various experimental
+  interpreters and parsers (`wudi/php-parser`, `jorgsowa/rust-php-parser`);
+  [mago](https://github.com/carthage-software/mago) is a PHP toolchain (not an engine)
+  in Rust.
+
+This project differs in following php-src `master` (not a fixed release), implementing
+extensions as per-extension crates validated byte-for-byte against the full in-scope
+`.phpt` tree (including `sapi/`, mod_php, and the CLI server), and gating performance
+per workload on instruction counts rather than a micro-benchmark average.
+
 ## Resource notes
 
 Many agents build concurrently on one machine, so `.cargo/config.toml` caps `cargo` at 2
