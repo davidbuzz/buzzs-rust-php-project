@@ -97,6 +97,12 @@ Projects with the same or an overlapping thesis, found by searching the project 
   1× target). Targets PHP 8.5 via the mago parser → HIR → bytecode pipeline; reports the
   full WordPress core suite at effective oracle parity over a native mysqli wire protocol,
   with micro-benchmarks at ~2.1–2.9× oracle CPU (s183) and the WP suite at ~1.77×.
+  On the shared yardstick its own COVERAGE.md reports **Zend/tests at 2,655/4,067 ran
+  (65.3%)** and **1,017/2,143 internal functions (47%)** — versus this repo's ~80% of
+  Zend/tests ran and 91.8% of the full in-scope php-src suite (which it does not run).
+  Ahead of this repo on: CPU performance, end-to-end application validation
+  (WordPress, Symfony http-kernel), and public presence. Behind on: engine-corpus pass
+  rate, extension breadth, SAPI coverage, and master tracking.
 - **[jolicode/rphp](https://github.com/jolicode/rphp)** — AI-assisted experiment
   ([write-up](https://jolicode.com/blog/writing-the-php-virtual-machine-in-rust-with-a-lot-of-help-from-ai)):
   ~80% of basic compatibility tests, 5–15× slower on pure code, but a copy-on-write
@@ -110,7 +116,10 @@ Projects with the same or an overlapping thesis, found by searching the project 
 This project differs in following php-src `master` (not a fixed release), implementing
 extensions as per-extension crates validated byte-for-byte against the full in-scope
 `.phpt` tree (including `sapi/`, mod_php, and the CLI server), and gating performance
-per workload on instruction counts rather than a micro-benchmark average.
+per workload on instruction counts rather than a micro-benchmark average. Lessons worth
+adopting from the relatives: application-level end-to-end validation (WordPress core
+suite over the native mysqli client is the natural next milestone here), and a public
+name that does not collide with phprust.com before anything is published.
 
 ## Resource notes
 
