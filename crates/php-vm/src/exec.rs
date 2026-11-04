@@ -10,6 +10,24 @@ use std::rc::Rc;
 /// destructors, `__clone`, magic methods); each one uses native stack.
 const MAX_NESTED_EXECUTIONS: u32 = 20000;
 
+/// A number peeked from an operand for the sealed [`Op::Bin`] forms.
+#[derive(Clone, Copy)]
+enum Num {
+    Int(i64),
+    Float(f64),
+}
+
+impl Num {
+    #[inline]
+    #[allow(clippy::cast_precision_loss)] // php-src's (double) widening
+    fn as_f64(self) -> f64 {
+        match self {
+            Num::Int(i) => i as f64,
+            Num::Float(f) => f,
+        }
+    }
+}
+
 /// What an instruction asks the loop to do next.
 pub(crate) enum Flow {
     /// Continue with the next instruction of the current frame.
@@ -45,6 +63,101 @@ impl Vm {
             Value::Str(s) => s.clone(),
             other => ZStr::from(format!("{other:?}")),
         }
+    }
+
+    /// The current numeric value of a CV or literal operand, without
+    /// cloning, warnings or reference traversal (`None` sends the op down
+    /// the generic path).
+    #[inline]
+    fn peek_num(&self, op: Operand) -> Option<Num> {
+        match op {
+            Operand::Cv(cv) => {
+                let f = self.frame();
+                let idx = f.cv_idx(cv);
+                match f.vars.borrow().slots.get(idx) {
+                    Some(Some(Value::Int(i))) => Some(Num::Int(*i)),
+                    Some(Some(Value::Float(x))) => Some(Num::Float(*x)),
+                    _ => None,
+                }
+            }
+            Operand::Lit(i) => match self.frame().code.literals.get(i as usize) {
+                Some(Value::Int(v)) => Some(Num::Int(*v)),
+                Some(Value::Float(v)) => Some(Num::Float(*v)),
+                _ => None,
+            },
+            // Numbers have no Drop: the slot's value can be left in place
+            // (consuming reads leave Null behind, but every later use of a
+            // tmp slot is preceded by a write).
+            Operand::Tmp(t) | Operand::TmpKeep(t) => match self.frame().tmps.get(t as usize) {
+                Some(Value::Int(i)) => Some(Num::Int(*i)),
+                Some(Value::Float(f)) => Some(Num::Float(*f)),
+                _ => None,
+            },
+            Operand::Unused => None,
+        }
+    }
+
+    /// Sealed numeric form of [`Op::Bin`]: the handlers php-src specializes
+    /// for `LONG`/`DOUBLE` operand pairs, computed without materializing
+    /// `Value` temporaries. `None` when an operand is not a plain defined
+    /// number or the result leaves the int domain (overflow → float
+    /// promotion is the generic path's job). Mixed int/float pairs use
+    /// php-src's `(double)` widening; `===`/`!==` on mixed types is a type
+    /// mismatch.
+    #[inline]
+    fn bin_num_fast(&self, op: BinKind, a: Operand, b: Operand) -> Option<Value> {
+        let x = self.peek_num(a)?;
+        let y = self.peek_num(b)?;
+        if let (Num::Int(x), Num::Int(y)) = (x, y) {
+            return Some(match op {
+                BinKind::Arith(BinaryOp::Add) => Value::Int(x.checked_add(y)?),
+                BinKind::Arith(BinaryOp::Sub) => Value::Int(x.checked_sub(y)?),
+                BinKind::Arith(BinaryOp::Mul) => Value::Int(x.checked_mul(y)?),
+                BinKind::Arith(BinaryOp::BitOr) => Value::Int(x | y),
+                BinKind::Arith(BinaryOp::BitAnd) => Value::Int(x & y),
+                BinKind::Arith(BinaryOp::BitXor) => Value::Int(x ^ y),
+                BinKind::Equal | BinKind::Identical => Value::Bool(x == y),
+                BinKind::NotEqual | BinKind::NotIdentical => Value::Bool(x != y),
+                BinKind::Less => Value::Bool(x < y),
+                BinKind::LessEqual => Value::Bool(x <= y),
+                BinKind::Spaceship => Value::Int(match x.cmp(&y) {
+                    std::cmp::Ordering::Less => -1,
+                    std::cmp::Ordering::Equal => 0,
+                    std::cmp::Ordering::Greater => 1,
+                }),
+                _ => return None,
+            });
+        }
+        let mixed = matches!(
+            (x, y),
+            (Num::Int(_), Num::Float(_)) | (Num::Float(_), Num::Int(_))
+        );
+        #[allow(clippy::cast_precision_loss)] // php-src's (double) widening
+        let (xf, yf) = (x.as_f64(), y.as_f64());
+        Some(match op {
+            BinKind::Arith(BinaryOp::Add) => Value::Float(xf + yf),
+            BinKind::Arith(BinaryOp::Sub) => Value::Float(xf - yf),
+            BinKind::Arith(BinaryOp::Mul) => Value::Float(xf * yf),
+            BinKind::Equal => Value::Bool(xf == yf),
+            BinKind::NotEqual => Value::Bool(xf != yf),
+            BinKind::Identical => Value::Bool(!mixed && xf == yf),
+            BinKind::NotIdentical => Value::Bool(mixed || xf != yf),
+            BinKind::Less => Value::Bool(xf < yf),
+            BinKind::LessEqual => Value::Bool(xf <= yf),
+            _ => return None,
+        })
+    }
+
+    /// Generic [`Op::Bin`] evaluation, out of line so the dispatch loop
+    /// stays small (the sealed numeric forms handle the hot cases).
+    #[inline(never)]
+    fn bin_slow(&mut self, op: BinKind, a: Operand, b: Operand, dst: u32) -> VmResult<()> {
+        let x = self.read(a)?;
+        let y = self.read(b)?;
+        let r = self.binary(op, &x, &y)?;
+        drop((x, y));
+        self.set_tmp(dst, r);
+        Ok(())
     }
 
     /// Reads an operand (dereferenced), warning on undefined variables.
@@ -298,11 +411,18 @@ impl Vm {
                         Flow::Next
                     }
                     Op::Bin { op, a, b, dst } => {
-                        let x = self.read(*a)?;
-                        let y = self.read(*b)?;
-                        let r = self.binary(*op, &x, &y)?;
-                        drop((x, y));
-                        self.set_tmp(*dst, r);
+                        // Sealed numeric fast path (php-src's specialized
+                        // long/double handlers): operands are CVs or
+                        // literals currently holding plain numbers.
+                        // Anything else - references, undefined variables,
+                        // strings, overflow, division - takes the
+                        // out-of-line generic path with its exact
+                        // semantics.
+                        if let Some(r) = self.bin_num_fast(*op, *a, *b) {
+                            self.set_tmp(*dst, r);
+                        } else {
+                            self.bin_slow(*op, *a, *b, *dst)?;
+                        }
                         Flow::Next
                     }
                     Op::Unary { op, a, dst } => {
