@@ -100,6 +100,13 @@ Projects with the same or an overlapping thesis, found by searching the project 
   On the shared yardstick its own COVERAGE.md reports **Zend/tests at 2,655/4,067 ran
   (65.3%)** and **1,017/2,143 internal functions (47%)** — versus this repo's ~80% of
   Zend/tests ran and 91.8% of the full in-scope php-src suite (which it does not run).
+  Measured head-to-head here (5 Nov 2026, same runner, same php-src master corpus,
+  same oracle): conformance Zend/tests+tests/ **phpr 47.6% vs ours ~82%** of ran;
+  performance (instruction ratio vs `/usr/bin/php` on this repo's 82-workload gate)
+  **phpr ~2.3–9.7× on the 47 workloads its parser can run** (it cannot parse
+  `Zend/micro_bench.php`) **vs ours 4.8–27× (geomean 17.9×)** — i.e. phpr's
+  interpreter is ~2.5–3× leaner per op today, while this repo leads conformance by
+  ~35 points on the same corpus.
   Ahead of this repo on: CPU performance, end-to-end application validation
   (WordPress, Symfony http-kernel), and public presence. Behind on: engine-corpus pass
   rate, extension breadth, SAPI coverage, and master tracking.
