@@ -167,6 +167,17 @@ pub struct PendingCall {
     pub strict: bool,
 }
 
+/// Reusable buffers of the call protocol (see [`Vm::call_bufs`]).
+#[derive(Debug, Default)]
+pub(crate) struct CallBufs {
+    /// Pending-call argument vectors.
+    pub(crate) args: Vec<Vec<Option<Value>>>,
+    /// ZPP value vectors.
+    pub(crate) values: Vec<Vec<Value>>,
+    /// ZPP passed-flag vectors.
+    pub(crate) passed: Vec<Vec<bool>>,
+}
+
 impl PendingCall {
     /// A call without object context.
     pub fn new(func: Func) -> Self {
@@ -526,6 +537,9 @@ pub struct Vm {
     /// Cached `(zend.max_allowed_stack_size, zend.reserved_stack_size)`;
     /// both are `INI_SYSTEM`, so they never change after startup.
     pub(crate) stack_limit_ini: Option<(i64, usize)>,
+    /// Reusable buffers of the call protocol (php-src keeps call frames and
+    /// arguments on the VM stack; these pools avoid per-call mallocs).
+    pub(crate) call_bufs: CallBufs,
     /// Named native output handlers (`ob_start('ob_gzhandler')`).
     pub output_handler_aliases: HashMap<ZStr, crate::ext::OutputHandlerFn>,
     /// `include` opener hook.

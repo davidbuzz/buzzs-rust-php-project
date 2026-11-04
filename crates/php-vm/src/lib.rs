@@ -180,6 +180,7 @@ impl Vm {
             native_stack_base: 0,
             native_stack_size: 8 << 20,
             stack_limit_ini: None,
+            call_bufs: crate::vm::CallBufs::default(),
             output_handler_aliases: std::collections::HashMap::new(),
             include_opener: None,
             source_filter: None,

@@ -48,6 +48,45 @@ impl Vm {
     // INIT
     // ------------------------------------------------------------------
 
+    /// Pushes a pending call, giving it a pooled argument buffer so the
+    /// SEND ops do not allocate (php-src's VM-stack call frames).
+    #[inline]
+    fn push_pending(&mut self, mut call: PendingCall) {
+        if call.args.capacity() == 0 {
+            if let Some(v) = self.call_bufs.args.pop() {
+                call.args = v;
+            }
+        }
+        self.frame_mut().calls.push(call);
+    }
+
+    /// Returns an argument buffer to the pool.
+    #[inline]
+    fn put_arg_vec(&mut self, mut v: Vec<Option<Value>>) {
+        if v.capacity() > 0 && self.call_bufs.args.len() < 16 {
+            v.clear();
+            self.call_bufs.args.push(v);
+        }
+    }
+
+    /// Returns a ZPP value buffer to the pool.
+    #[inline]
+    fn put_val_vec(&mut self, mut v: Vec<Value>) {
+        if v.capacity() > 0 && self.call_bufs.values.len() < 16 {
+            v.clear();
+            self.call_bufs.values.push(v);
+        }
+    }
+
+    /// Returns a ZPP passed-flag buffer to the pool.
+    #[inline]
+    fn put_bool_vec(&mut self, mut v: Vec<bool>) {
+        if v.capacity() > 0 && self.call_bufs.passed.len() < 16 {
+            v.clear();
+            self.call_bufs.passed.push(v);
+        }
+    }
+
     pub(crate) fn op_init_fcall(
         &mut self,
         name: u32,
@@ -62,7 +101,7 @@ impl Vm {
             .get(name as usize)
             .and_then(|c| c.as_ref().and_then(crate::opcode::CachedFunc::get));
         if let Some(func) = cached {
-            self.frame_mut().calls.push(PendingCall::new(func));
+            self.push_pending(PendingCall::new(func));
             return Ok(());
         }
         let lc = self.lit_str(name);
@@ -92,13 +131,13 @@ impl Vm {
             }
             cache[slot] = Some(crate::opcode::CachedFunc::new(&func));
         }
-        self.frame_mut().calls.push(PendingCall::new(func));
+        self.push_pending(PendingCall::new(func));
         Ok(())
     }
 
     pub(crate) fn op_init_dyn_call(&mut self, callee: Value) -> VmResult<()> {
         let call = self.resolve_callable_for_call(&callee)?;
-        self.frame_mut().calls.push(call);
+        self.push_pending(call);
         Ok(())
     }
 
@@ -209,7 +248,7 @@ impl Vm {
             ));
         };
         let call = self.method_call(&o, &name)?;
-        self.frame_mut().calls.push(call);
+        self.push_pending(call);
         Ok(())
     }
 
@@ -458,7 +497,7 @@ impl Vm {
         );
         let cls = self.resolve_class_spec(class)?;
         let call = self.static_method_call(&cls, &name, forward)?;
-        self.frame_mut().calls.push(call);
+        self.push_pending(call);
         Ok(())
     }
 
@@ -491,7 +530,7 @@ impl Vm {
         }
         let mut call = self.pending_for_method(&ctor, Some(o), cls);
         call.is_ctor = true;
-        self.frame_mut().calls.push(call);
+        self.push_pending(call);
         Ok(true)
     }
 
@@ -922,8 +961,10 @@ impl Vm {
         let fname = |vm: &Self| vm.func_display(&Func::Builtin(b.clone()), call.scope.as_ref());
         let nparams = b.params.len();
         let variadic = b.flags & flags::VARIADIC != 0;
-        let mut values: Vec<Value> = Vec::with_capacity(call.args.len());
-        let mut passed: Vec<bool> = Vec::with_capacity(call.args.len());
+        let mut values: Vec<Value> = self.call_bufs.values.pop().unwrap_or_default();
+        values.reserve(call.args.len());
+        let mut passed: Vec<bool> = self.call_bufs.passed.pop().unwrap_or_default();
+        passed.reserve(call.args.len());
         let npassed = call.args.len();
         if b.flags & flags::DEPRECATED != 0 {
             // Before zpp, like ZEND_DO_ICALL.
@@ -939,7 +980,11 @@ impl Vm {
         );
         f.func = Some(Func::Builtin(b.clone()));
         f.builtin_name = Some(b.name.clone());
-        f.args.clone_from(&call.args);
+        f.args = {
+            let mut fa = self.call_bufs.args.pop().unwrap_or_default();
+            fa.extend(call.args.iter().cloned());
+            fa
+        };
         f.this.clone_from(&call.this);
         f.scope = call.scope.clone();
         f.called.clone_from(&call.called);
@@ -956,7 +1001,8 @@ impl Vm {
             self.pop_frames_to(depth);
             return Err(e);
         }
-        for (i, a) in call.args.into_iter().enumerate() {
+        let mut call_args = std::mem::take(&mut call.args);
+        for (i, a) in call_args.drain(..).enumerate() {
             match a {
                 Some(v) => {
                     values.push(v);
@@ -981,6 +1027,7 @@ impl Vm {
                 }
             }
         }
+        self.put_arg_vec(call_args);
         // Omitted trailing optional parameters get their declared defaults
         // (not marked as passed); backtraces only show the passed ones.
         let nframe_args = values.len();
@@ -1105,7 +1152,11 @@ impl Vm {
         // Objects released by the builtin (e.g. by-ref outputs overwriting
         // the last reference) are destructed while its frame is still
         // active, so traces show `[internal function]` + the builtin.
-        drop(args);
+        {
+            let Args { values, passed, .. } = args;
+            self.put_val_vec(values);
+            self.put_bool_vec(passed);
+        }
         if object::has_pending_destructors() && self.frames.len() == depth {
             if let Err(e) = self.run_pending_destructors() {
                 r = match (r, e) {
