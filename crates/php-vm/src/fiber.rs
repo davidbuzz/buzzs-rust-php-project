@@ -593,14 +593,16 @@ fn fiber_destroy(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     };
     with(&o, |d| d.destroyed = true);
     // php-src destroys from the `dtor_obj` handler, without a call frame:
-    // replace our `__destruct` frame by one backtraces skip.
+    // replace our `__destruct` frame by an internal call-site boundary.
+    // Its name stops caller lookup, but no function means no trace entry.
     let own = vm.frames.pop();
-    let hidden = Frame::with_vars(
+    let mut hidden = Frame::with_vars(
         vm.empty_code.clone(),
         FrameKind::Builtin,
         vm.empty_vars.clone(),
         None,
     );
+    hidden.builtin_name = Some(ZStr::from("__destruct"));
     vm.frames.push(hidden);
     let r = vm.fiber_switch_in(&o, Err(Throw::Exception(g)));
     vm.frames.pop();
