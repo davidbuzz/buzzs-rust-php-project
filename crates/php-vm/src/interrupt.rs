@@ -162,9 +162,15 @@ pub(crate) fn register_tick_function(vm: &mut Vm, a: &mut crate::func::Args) -> 
 /// `unregister_tick_function(callable $callback): void`.
 pub(crate) fn unregister_tick_function(vm: &mut Vm, a: &mut crate::func::Args) -> VmResult<Value> {
     let cb = a.at(0);
+    let target = resolve_fcc(vm, &cb)?;
     let mut i = 0;
     while i < vm.user_ticks.len() {
-        if callables_equal(&vm.user_ticks[i].callable, &cb) {
+        let registered = vm.user_ticks[i].callable.clone();
+        let equal = match (&target, resolve_fcc(vm, &registered)?) {
+            (Some(x), Some(y)) => fcc_equals(x, &y),
+            _ => callables_equal(&registered, &cb),
+        };
+        if equal {
             if vm.user_ticks[i].calling {
                 return Err(vm.make_throw(
                     "Error",
@@ -177,6 +183,43 @@ pub(crate) fn unregister_tick_function(vm: &mut Vm, a: &mut crate::func::Args) -
         i += 1;
     }
     Ok(Value::Null)
+}
+
+/// The resolved call of a tick callable (`zend_fcall_info_cache`), or
+/// `None` when it is not callable.
+fn resolve_fcc(vm: &mut Vm, v: &Value) -> VmResult<Option<crate::vm::PendingCall>> {
+    Ok(vm.zend_is_callable(v, true)?.ok())
+}
+
+/// `zend_fcc_equals()` (Zend/zend_API.h) on resolved calls: the same
+/// `$this` and called scope, and the same function: a real closure only
+/// equals itself; a first-class-callable (fake) closure equals the
+/// function or method it wraps (`zend_fcc_closure_equals_ex`), and
+/// trampolines compare by the called method name.
+fn fcc_equals(a: &crate::vm::PendingCall, b: &crate::vm::PendingCall) -> bool {
+    use php_runtime::Obj;
+    use std::rc::Rc;
+    // `PendingCall::closure` is only set for real closures
+    // (`Vm::closure_call`).
+    let real_closure = |c: &crate::vm::PendingCall| c.closure.clone();
+    let same_this = match (&a.this, &b.this) {
+        (None, None) => true,
+        (Some(x), Some(y)) => Obj::ptr_eq(x, y),
+        _ => false,
+    };
+    let same_called = match (&a.called, &b.called) {
+        (None, None) => true,
+        (Some(x), Some(y)) => Rc::ptr_eq(x, y),
+        _ => false,
+    };
+    if !same_this || !same_called {
+        return false;
+    }
+    match (real_closure(a), real_closure(b)) {
+        (Some(x), Some(y)) => Obj::ptr_eq(&x, &y),
+        (None, None) => crate::func::Func::ptr_eq(&a.func, &b.func) && a.magic_name == b.magic_name,
+        _ => false,
+    }
 }
 
 /// `zend_fcc_equals` approximated on the callable values: function names

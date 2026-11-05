@@ -206,3 +206,38 @@ fn builtins_called_without_a_previous_frame() {
         "3Cannot call forward_static_call() when no class scope is active"
     );
 }
+
+/// `unregister_tick_function()` compares resolved callables
+/// (`zend_fcc_equals`): a first-class callable equals the function,
+/// method, trampoline or `__invoke` it wraps (php-src
+/// `ext/standard/tests/general_functions/gh22118.phpt`).
+#[test]
+fn unregister_tick_function_matches_first_class_callables() {
+    let src = r#"<?php
+declare(ticks=1);
+$n = 0;
+function t(): void { global $n; $n++; }
+class T {
+    public int $a = 0;
+    public int $m = 0;
+    public int $i = 0;
+    public function a(): void { $this->a++; }
+    public function __invoke(): void { $this->i++; }
+    public function __call(string $name, array $args): void { $this->m++; }
+    public function run(): void {
+        register_tick_function($this->a(...));
+        unregister_tick_function([$this, 'a']);
+        register_tick_function($this->missing(...));
+        unregister_tick_function($this->missing(...));
+        register_tick_function($this(...));
+        unregister_tick_function($this);
+        echo "{$this->a} {$this->m} {$this->i}\n";
+    }
+}
+register_tick_function(t(...));
+unregister_tick_function('t');
+echo "$n\n";
+(new T())->run();
+"#;
+    assert_eq!(run(src, &[]), "1\n1 1 1\n");
+}
