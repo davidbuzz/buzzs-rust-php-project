@@ -75,3 +75,17 @@ foreach (get_object_vars($t) as $k => $v) { echo "outside $k: $v\n"; }
 "#);
     assert_eq!(out, "prop => Test\nprop: Test\noutside prop: Test2\n");
 }
+
+/// `zend_fe_fetch_object_helper` unmangles NUL-prefixed dynamic keys and
+/// reads their buckets directly (foreach_018).
+#[test]
+fn foreach_unmangles_nul_prefixed_dynamic_keys() {
+    let out = run(r#"<?php
+$obj = (object)["\0A\0b" => 42, "\0*\0c" => 24, "d" => 1];
+foreach ($obj as $k => $v) { echo strlen($k), ":$k=$v\n"; }
+foreach ($obj as $k => &$v) { $v *= 2; }
+unset($v);
+foreach ($obj as $k => $v) { echo "$k=$v\n"; }
+"#);
+    assert_eq!(out, "1:b=42\n1:c=24\n1:d=1\nb=84\nc=48\nd=2\n");
+}
