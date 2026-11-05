@@ -228,3 +228,19 @@ X::
         "8\n10\n"
     );
 }
+
+/// gh21768.phpt: an internal class lists its inherited properties first
+/// (DOMDocument after DOMNode's), a user class its own first.
+#[test]
+fn internal_classes_list_inherited_properties_first() {
+    assert_eq!(
+        run(r#"<?php
+class P { public $a; } class Q extends P { public $b; }
+foreach ([Q::class, ErrorException::class] as $c) {
+    foreach ((new ReflectionClass($c))->getProperties() as $rp) echo $rp->getName(), " ";
+    echo "\n";
+}
+"#),
+        "b a \nmessage code file line severity \n"
+    );
+}
