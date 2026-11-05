@@ -308,6 +308,61 @@ echo "done\n";
 }
 
 #[test]
+fn non_jit_lazy_dynamic_compound_assignment_preserves_initializer_order() {
+    assert_eq!(
+        run(r#"<?php
+#[AllowDynamicProperties]
+class C {
+    public int $b = 1;
+    public function __construct() {
+        var_dump(__METHOD__);
+        $this->a = 1;
+        $this->b = 3;
+    }
+}
+function test(string $name, object $obj, ReflectionClass $reflector) {
+    echo "# ", $name, ":\n";
+    var_dump($reflector->isUninitializedLazyObject($obj));
+    $obj->a += 1;
+    var_dump($obj->a, $obj->b, $reflector->isUninitializedLazyObject($obj));
+    var_dump($obj->a += 1, $obj->a, $obj->b);
+}
+$reflector = new ReflectionClass(C::class);
+$obj = $reflector->newLazyGhost(function ($obj) {
+    var_dump("initializer");
+    $obj->__construct();
+});
+test("Ghost", $obj, $reflector);
+$obj = $reflector->newLazyProxy(function ($obj) {
+    var_dump("initializer");
+    return new C();
+});
+test("Proxy", $obj, $reflector);
+"#),
+        "# Ghost:\n\
+         bool(true)\n\
+         string(11) \"initializer\"\n\
+         string(14) \"C::__construct\"\n\
+         int(2)\n\
+         int(3)\n\
+         bool(false)\n\
+         int(3)\n\
+         int(3)\n\
+         int(3)\n\
+         # Proxy:\n\
+         bool(true)\n\
+         string(11) \"initializer\"\n\
+         string(14) \"C::__construct\"\n\
+         int(2)\n\
+         int(3)\n\
+         bool(false)\n\
+         int(3)\n\
+         int(3)\n\
+         int(3)\n"
+    );
+}
+
+#[test]
 fn lazy_initialization_detects_released_objects_and_chains_errors() {
     assert_eq!(
         run(r#"<?php
