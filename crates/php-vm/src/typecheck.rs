@@ -38,57 +38,96 @@ impl Vm {
         }
     }
 
-    /// Whether `v` satisfies `ty` without coercion.
+    /// Whether `v` satisfies `ty` without coercion, resolving callables
+    /// with the callable deprecations suppressed.
     pub(crate) fn type_accepts(&mut self, ty: &TypeDecl, v: &Value, ctx: &TypeCtx<'_>) -> bool {
+        // With the deprecations suppressed nothing in the check can fail.
+        matches!(self.check_type(ty, v, ctx, false), Ok(true))
+    }
+
+    /// `zend_check_type_slow` without coercion: whether `v` satisfies `ty`.
+    /// `emit_callable_deprecations` is php-src's `!is_internal`: a user
+    /// function's parameter or return type resolves a string/array
+    /// callable with `zend_is_callable_ex(arg, NULL, 0, ...)`, so the
+    /// "Use of \"self\" in callables" and `Callables of the form [...]`
+    /// deprecations are raised (in the current frame, i.e. at the callee's
+    /// RECV or the VERIFY_RETURN_TYPE line), once per check.
+    fn check_type(
+        &mut self,
+        ty: &TypeDecl,
+        v: &Value,
+        ctx: &TypeCtx<'_>,
+        emit_callable_deprecations: bool,
+    ) -> VmResult<bool> {
         let m = ty.mask;
-        match v {
+        Ok(match v {
             Value::Null => m & mask::NULL != 0,
             Value::Bool(true) => m & mask::TRUE != 0,
             Value::Bool(false) => m & mask::FALSE != 0,
             Value::Int(_) => m & mask::LONG != 0,
             Value::Float(_) => m & mask::DOUBLE != 0,
             Value::Str(_) => {
-                m & mask::STRING != 0 || (m & mask::CALLABLE != 0 && self.is_callable_value(v))
+                m & mask::STRING != 0
+                    || (m & mask::CALLABLE != 0
+                        && self.callable_accepts(v, emit_callable_deprecations)?)
             }
             Value::Array(_) => {
                 m & (mask::ARRAY | mask::ITERABLE) != 0
-                    || (m & mask::CALLABLE != 0 && self.is_callable_value(v))
+                    || (m & mask::CALLABLE != 0
+                        && self.callable_accepts(v, emit_callable_deprecations)?)
             }
             Value::Resource(_) => m & mask::RESOURCE != 0,
             Value::Reference(r) => {
                 let inner = r.get();
-                self.type_accepts(ty, &inner, ctx)
+                self.check_type(ty, &inner, ctx, emit_callable_deprecations)?
             }
             Value::Object(o) => {
                 if m & mask::OBJECT != 0 {
-                    return true;
+                    return Ok(true);
                 }
                 let cls = object::class_of(o).clone();
                 if m & mask::ITERABLE != 0 && cls.instance_of_name(b"traversable") {
-                    return true;
+                    return Ok(true);
                 }
                 if m & mask::STATIC != 0 {
                     if let Some(c) = ctx.called {
                         if cls.is_subclass_of(c) {
-                            return true;
+                            return Ok(true);
                         }
                     }
                 }
+                // Objects (closures, `__invoke`) have no callable
+                // deprecations: always resolve them suppressed.
                 if m & mask::CALLABLE != 0 && self.is_callable_value(v) {
-                    return true;
+                    return Ok(true);
                 }
                 for c in &ty.classes {
                     if self.class_matches(&cls, c, ctx) {
-                        return true;
+                        return Ok(true);
                     }
                 }
                 for g in &ty.intersections {
                     if g.iter().all(|c| self.class_matches(&cls, c, ctx)) {
-                        return true;
+                        return Ok(true);
                     }
                 }
                 false
             }
+        })
+    }
+
+    /// The `MAY_BE_CALLABLE` step of `zend_check_type_slow` for a string or
+    /// array: `zend_is_callable_ex` in the current frame, with
+    /// `IS_CALLABLE_SUPPRESS_DEPRECATIONS` unless `emit_deprecations`.
+    /// Emitting, an exception (a throwing error handler or autoloader)
+    /// propagates.
+    #[inline(never)]
+    #[cold]
+    fn callable_accepts(&mut self, v: &Value, emit_deprecations: bool) -> VmResult<bool> {
+        if emit_deprecations {
+            Ok(self.zend_is_callable(v, false)?.is_ok())
+        } else {
+            Ok(self.is_callable_value(v))
         }
     }
 
@@ -107,7 +146,7 @@ impl Vm {
             let mut inner = r.get();
             // "We cannot have conversions for typed refs."
             if !Self::ref_allows_param_coercion(r) {
-                return Ok(self.type_accepts(ty, &inner, ctx));
+                return self.check_type(ty, &inner, ctx, ctx.internal_arg.is_none());
             }
             let ok = self.verify_type(ty, &mut inner, ctx)?;
             if ok {
@@ -115,7 +154,9 @@ impl Vm {
             }
             return Ok(ok);
         }
-        if self.type_accepts(ty, v, ctx) {
+        // php-src's `is_internal`: only internal function arguments resolve
+        // callables with the deprecations suppressed.
+        if self.check_type(ty, v, ctx, ctx.internal_arg.is_none())? {
             return Ok(true);
         }
         let m = ty.mask;

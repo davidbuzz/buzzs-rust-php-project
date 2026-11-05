@@ -822,3 +822,45 @@ var_dump(array_key_exists($resource, $a));
         "Resource ID#42 used as offset, casting to integer (42)\nbool(true)\n"
     );
 }
+
+/// `zend_check_type_slow` resolves string/array callables for user
+/// parameter and return types without `IS_CALLABLE_SUPPRESS_DEPRECATIONS`:
+/// the deprecations are raised once per check, at the callee's declaration
+/// (RECV) or the `return` line; a `string` member of the type short-circuits.
+#[test]
+fn user_callable_type_emits_callable_deprecations() {
+    let src = r#"<?php
+set_error_handler(function ($level, $message, $file, $line) { echo "$line: $message\n"; });
+class A { public static function foo() {} }
+class B extends A {
+    function p(callable $c) { echo "p\n"; }
+    function u(callable|string $c) { echo "u\n"; }
+    function n(?callable $c) { echo "n\n"; }
+    function r(): callable { return ["B", "parent::foo"]; }
+    function t() {
+        $this->p("self::foo");
+        $this->p(["static", "foo"]);
+        $this->u("parent::foo");
+        $this->n(null);
+        $this->r();
+        $this->p("parent::foo");
+        try { $this->p("self::nope"); } catch (TypeError $e) { echo $e::class, "\n"; }
+    }
+}
+(new B)->t();
+"#;
+    assert_eq!(
+        run(src),
+        "5: Use of \"self\" in callables is deprecated\n\
+         p\n\
+         5: Use of \"static\" in callables is deprecated\n\
+         p\n\
+         u\n\
+         n\n\
+         8: Callables of the form [\"B\", \"parent::foo\"] are deprecated\n\
+         5: Use of \"parent\" in callables is deprecated\n\
+         p\n\
+         5: Use of \"self\" in callables is deprecated\n\
+         TypeError\n"
+    );
+}
