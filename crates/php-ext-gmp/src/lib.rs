@@ -143,7 +143,11 @@ fn address_space_limit() -> Option<u128> {
     if unsafe { libc::getrlimit(libc::RLIMIT_AS, &raw mut rl) } != 0 {
         return None;
     }
-    (rl.rlim_cur != libc::RLIM_INFINITY).then(|| u128::from(rl.rlim_cur))
+    if rl.rlim_cur == libc::RLIM_INFINITY {
+        None
+    } else {
+        Some(u128::from(rl.rlim_cur))
+    }
 }
 
 /// `E_DEPRECATED`.
