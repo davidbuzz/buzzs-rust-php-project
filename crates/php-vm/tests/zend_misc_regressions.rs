@@ -92,3 +92,21 @@ var_dump($call([Closure::fromCallable('strcmp'), '__invoke'], ['string2' => 'b',
         "ArgumentCountError: Closure::__invoke(): Argument #1 ($string1) not passed\nint(0)\n"
     );
 }
+
+/// A call compiled into a builtin instruction is a temporary: passing it
+/// by reference is an error, not the "Only variables" notice of a real
+/// call result (`bug79783`).
+#[test]
+fn special_compiled_call_result_cannot_be_passed_by_reference() {
+    let out = run(r#"<?php
+function f() { return 1; }
+function g(&$r) {}
+g(f());
+echo "next\n";
+try { g(strlen("d")); } catch (Error $e) { echo $e->getMessage(), "\n"; }
+"#);
+    assert_eq!(
+        out,
+        "\nNotice: Only variables should be passed by reference in t.php on line 4\nnext\ng(): Argument #1 ($r) could not be passed by reference\n"
+    );
+}
