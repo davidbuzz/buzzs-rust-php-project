@@ -275,7 +275,7 @@ impl Compiler {
             None
         };
         // Attributes first (`zend_compile_func_decl`).
-        let attributes = self.attributes(spec.attributes)?;
+        let attributes = self.attributes_at(spec.attributes, Some(spec.line_start))?;
         let tgt = if spec.kind == FnKind::Method {
             super::attrs::target::METHOD
         } else {
@@ -484,7 +484,7 @@ impl Compiler {
                 }
                 modifiers_to_flags(p.modifiers)
             };
-            let attrs = self.attributes(&p.attributes)?;
+            let attrs = self.attributes_at(&p.attributes, Some(spec.line_start))?;
             let promoted_tgt = if promote == 0 {
                 0
             } else {
@@ -1207,7 +1207,7 @@ impl Compiler {
         if is_anon {
             cflag |= cflags::ANON;
         }
-        let attributes = self.attributes(&cd.attributes)?;
+        let attributes = self.attributes_at(&cd.attributes, Some(cd.span.line))?;
         self.validate_attributes(
             &attributes,
             super::attrs::target::CLASS,

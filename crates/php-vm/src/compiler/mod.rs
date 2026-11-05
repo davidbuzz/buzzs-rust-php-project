@@ -662,6 +662,17 @@ impl Compiler {
     }
 
     pub(crate) fn attributes(&mut self, groups: &ast::Attributes) -> CResult<Vec<AttributeInfo>> {
+        self.attributes_at(groups, None)
+    }
+
+    /// [`Compiler::attributes`] of a declaration starting on `decl_line`:
+    /// `zend_compile_attributes()` reports its own argument-list errors on
+    /// `CG(zend_lineno)`, the declaration's line rather than the attribute's.
+    pub(crate) fn attributes_at(
+        &mut self,
+        groups: &ast::Attributes,
+        decl_line: Option<u32>,
+    ) -> CResult<Vec<AttributeInfo>> {
         let mut out = Vec::new();
         for g in groups {
             for a in &g.attributes {
@@ -669,8 +680,10 @@ impl Compiler {
                 let mut args: Vec<(Option<ZStr>, ConstExpr)> = Vec::new();
                 if let Some(al) = &a.args {
                     if al.is_first_class_callable() {
-                        return self
-                            .err("Cannot create Closure as attribute argument", a.span.line);
+                        return self.err(
+                            "Cannot create Closure as attribute argument",
+                            decl_line.unwrap_or(a.span.line),
+                        );
                     }
                     let mut uses_named = false;
                     for arg in &al.args {
@@ -679,7 +692,7 @@ impl Compiler {
                                 if uses_named {
                                     return self.err(
                                         "Cannot use positional argument after named argument",
-                                        arg.span.line,
+                                        decl_line.unwrap_or(arg.span.line),
                                     );
                                 }
                                 self.check_const_expr(e, true)?;
@@ -694,7 +707,7 @@ impl Compiler {
                                             "Duplicate named parameter ${}",
                                             n.to_string_lossy()
                                         ),
-                                        arg.span.line,
+                                        decl_line.unwrap_or(arg.span.line),
                                     );
                                 }
                                 self.check_const_expr(value, true)?;
@@ -703,7 +716,7 @@ impl Compiler {
                             ast::ArgKind::Unpack(_) => {
                                 return self.err(
                                     "Cannot use unpacking in attribute argument list",
-                                    arg.span.line,
+                                    decl_line.unwrap_or(arg.span.line),
                                 );
                             }
                             _ => {}

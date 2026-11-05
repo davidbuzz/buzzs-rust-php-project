@@ -208,3 +208,13 @@ fn nullsafe_closure_creation_is_compile_error() {
     // A nullsafe access applied to the conversion's result is fine.
     assert_eq!(run("<?php\necho strlen(...)?->__invoke('abc');"), "3");
 }
+
+/// Attribute argument-list errors are reported on the declaration's line
+/// (`CG(zend_lineno)` in zend_compile_attributes(); first_class_callable_011).
+#[test]
+fn attribute_closure_error_uses_declaration_line() {
+    let msg = "\nFatal error: Cannot create Closure as attribute argument in t.php on line ";
+    assert_eq!(run("<?php\n#[Attribute(...)]\nclass Foo {\n\n}\n"), format!("{msg}3\n"));
+    assert_eq!(run("<?php\n#[Attribute(...)]\n\nfunction f() {\n}\n"), format!("{msg}4\n"));
+    assert_eq!(run("<?php\nfunction g(\n#[A(...)]\n\n$x) {}\n"), format!("{msg}2\n"));
+}
