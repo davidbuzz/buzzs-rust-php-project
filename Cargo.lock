@@ -459,6 +459,7 @@ dependencies = [
  "cc",
  "php-lexer",
  "php-libxml",
+ "php-memlimit",
  "php-parser",
  "phpt-runner",
 ]
@@ -532,6 +533,7 @@ dependencies = [
  "php-ext-xml",
  "php-ext-xsl",
  "php-libxml",
+ "php-memlimit",
  "php-runtime",
  "php-streams",
  "php-vm",
