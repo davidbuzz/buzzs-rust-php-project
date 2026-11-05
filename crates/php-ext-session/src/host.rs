@@ -390,6 +390,12 @@ impl SessionHost for VmHost<'_> {
         self.vm.headers_sent
     }
 
+    fn output_start(&self) -> Option<(String, u32)> {
+        self.vm
+            .output_started()
+            .map(|(file, line)| (file.to_string_lossy(), line))
+    }
+
     fn add_header(&mut self, line: &[u8], replace: bool) {
         crate::headers::add(line, replace);
     }

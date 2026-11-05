@@ -366,3 +366,11 @@ echo "Done\n";"#,
          Done\n";
     assert_eq!(out, expected);
 }
+
+#[test]
+fn headers_sent_warning_names_where_output_started() {
+    let out = run_with("<?php\necho \"out\\n\";\nvar_dump(session_start());\n", &[]);
+    let expected = "out\n\nWarning: session_start(): Session cannot be started after headers have \
+         already been sent (sent from test.php on line 2) in test.php on line 3\nbool(false)\n";
+    assert_eq!(out, expected);
+}
