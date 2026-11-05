@@ -66,3 +66,26 @@ var_dump(Test::$y);
 Cannot assign string to reference held by property Test::$y of type int\nint(7)\n"
     );
 }
+
+/// ReflectionProperty_isWritable_readonly.phpt: an initialized readonly
+/// property is writable once inside `__clone()`.
+#[test]
+fn is_writable_sees_reinitable_readonly_properties_while_cloning() {
+    assert_eq!(
+        run(r"<?php
+class A {
+    public readonly int $a;
+    public function __construct() { $this->a = 42; }
+    public function __clone() {
+        $rp = new ReflectionProperty($this, 'a');
+        var_dump($rp->isWritable(A::class, $this));
+        $this->a = 43;
+        var_dump($rp->isWritable(A::class, $this));
+    }
+}
+var_dump((new ReflectionProperty(A::class, 'a'))->isWritable(A::class, new A));
+clone new A;
+"),
+        "bool(false)\nbool(true)\nbool(false)\n"
+    );
+}

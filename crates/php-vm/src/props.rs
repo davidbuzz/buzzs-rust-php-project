@@ -677,7 +677,7 @@ impl Vm {
     /// Whether an initialized readonly property may not be modified: only
     /// while cloning (`__clone()`, clone-with) is each one reinitializable,
     /// once (`IS_PROP_REINITABLE`).
-    fn readonly_locked(&self, o: &Obj, pi: &PropInfo) -> bool {
+    pub(crate) fn readonly_locked(&self, o: &Obj, pi: &PropInfo) -> bool {
         object::data(o).flags.get() & oflags::CLONING == 0
             || self
                 .prop_guards

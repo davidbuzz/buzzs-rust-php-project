@@ -960,6 +960,9 @@ fn rp_is_writable(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
                 .borrow()
                 .get(pi.slot as usize)
                 .is_some_and(Option::is_some)
+                // An initialized readonly property is writable again, once,
+                // while the object is being cloned (`IS_PROP_REINITABLE`).
+                && vm.readonly_locked(&o, pi)
             {
                 return Ok(Value::Bool(false));
             }
