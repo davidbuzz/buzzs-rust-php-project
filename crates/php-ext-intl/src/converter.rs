@@ -394,6 +394,17 @@ fn get_standards(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     }
 }
 
+/// `php_converter_free_object`: closing the ICU converters (source, then
+/// destination) fires a subclass's callbacks with `REASON_CLOSE`. The
+/// payload holds the object itself (the callback target), so this also
+/// breaks that cycle.
+pub(crate) fn destruct(vm: &mut Vm, o: &Obj) -> VmResult<()> {
+    let Some(payload) = core::take_data(o) else {
+        return Ok(());
+    };
+    vmbridge::enter(vm, || drop(payload))
+}
+
 /// `clone_obj`: a fresh converter with the same encodings.
 pub(crate) fn clone(vm: &mut Vm, old: &Obj, new: &Obj) -> VmResult<()> {
     create(vm, new)?;

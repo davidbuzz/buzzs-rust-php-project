@@ -202,6 +202,7 @@ fn class_opts(name: &str) -> registry::ClassOpts {
             o.hooks = ClassHooks {
                 create: Some(converter::create),
                 clone: Some(converter::clone),
+                destruct: Some(converter::destruct),
                 ..ClassHooks::default()
             };
         }
