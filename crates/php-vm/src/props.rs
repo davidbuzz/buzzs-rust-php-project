@@ -1763,14 +1763,27 @@ impl Vm {
                 if !defined && !uninit && self.has_magic(o, name, G_UNSET) {
                     return self.magic_unset(o, name);
                 }
+                if defined {
+                    // A dynamic property's creation built the property
+                    // table (`rebuild_object_properties`).
+                    object::note_dynamic_property_table(object::data(o));
+                }
                 // Unsetting clears `IS_PROP_UNINIT` (`__get()` & co. apply
                 // from now on).
                 let old = object::data(o).slots.borrow_mut()[idx].take();
                 if let Some(f) = object::data(o).readonly_init.borrow_mut().get_mut(idx) {
                     *f = true;
                 }
-                drop(old);
-                Ok(())
+                if old.is_none() {
+                    return Ok(());
+                }
+                let d = object::data(o);
+                if !object::begin_stale_count(d) {
+                    drop(old);
+                    object::note_declared_unset(d);
+                    return Ok(());
+                }
+                self.unset_slot_release(o, old)
             }
             PropLookup::Inaccessible(pi) => {
                 if self.has_magic(o, name, G_UNSET) {
@@ -1802,6 +1815,23 @@ impl Vm {
                 Ok(())
             }
         }
+    }
+
+    /// Releases the old value of a declared slot just unset while the
+    /// object's property table still counts it ([`object::begin_stale_count`]):
+    /// destructors the release queued run now, inside the unset, as
+    /// `zval_ptr_dtor` runs them in `zend_std_unset_property`.
+    #[cold]
+    #[inline(never)]
+    fn unset_slot_release(&mut self, o: &Obj, old: Option<Value>) -> VmResult<()> {
+        drop(old);
+        let r = if object::has_pending_destructors() {
+            self.run_pending_destructors()
+        } else {
+            Ok(())
+        };
+        object::end_stale_count(object::data(o));
+        r
     }
 
     /// Whether declared slot `idx` was explicitly unset (the opposite of
@@ -2114,7 +2144,9 @@ impl Vm {
         Ok(Value::Object(object::new_object(cls, Vec::new())))
     }
 
-    /// The property table with mangled names (`(array)` cast, `var_dump`).
+    /// The property table with mangled names (`var_dump`, `foreach`,
+    /// `get_object_vars`): `zend_std_get_properties`, which materializes
+    /// `zobj->properties` (see [`object::note_property_table`]).
     pub(crate) fn object_prop_table(
         &mut self,
         o: &Obj,
@@ -2122,6 +2154,21 @@ impl Vm {
     ) -> Vec<(ArrayKey, Option<Value>, Option<Rc<PropInfo>>)> {
         if let Some(instance) = crate::reflection::lazy::proxy_instance(o) {
             return self.object_prop_table(&instance, include_uninit);
+        }
+        object::note_property_table(object::data(o));
+        self.object_prop_entries(o, include_uninit)
+    }
+
+    /// The entries of [`Self::object_prop_table`] without materializing a
+    /// property table (`zend_std_build_object_properties_array`, the
+    /// `(array)` cast of an object without one).
+    fn object_prop_entries(
+        &mut self,
+        o: &Obj,
+        include_uninit: bool,
+    ) -> Vec<(ArrayKey, Option<Value>, Option<Rc<PropInfo>>)> {
+        if let Some(instance) = crate::reflection::lazy::proxy_instance(o) {
+            return self.object_prop_entries(&instance, include_uninit);
         }
         let cls = object::class_of(o).clone();
         let d = object::data(o);
@@ -2173,7 +2220,7 @@ impl Vm {
         if let Some(a) = self.internal_object_array(o)? {
             return Ok(a);
         }
-        let entries = self.object_prop_table(o, false);
+        let entries = self.object_prop_entries(o, false);
         // A reference only the property holds is unwrapped
         // (`zend_std_build_object_properties_array`, `zend_array_dup`, the
         // conversion of `zend_proptable_to_symtable`), except when a plain

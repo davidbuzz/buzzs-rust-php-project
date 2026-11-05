@@ -8,6 +8,13 @@
 //! so that the VM calls `__destruct` at the next safe point — this gives
 //! PHP's refcount-driven destructor timing without access to the VM from
 //! `Drop`.
+//!
+//! The object store (`EG(objects_store)`, ref: Zend/zend_objects_API.c)
+//! holds a weak handle to the current outer `Rc` of every object, so a
+//! lookup by handle (shutdown destructors, `WeakReference::get()`) yields
+//! the same `Obj` — the same identity for `===` and recursion guards, and
+//! the same refcount — as every other holder, as php-src's one
+//! `zend_object *` per handle does.
 
 use crate::class::Class;
 use php_runtime::{ArrayKey, HashTable, Obj, PhpObject, Value, ZStr};
@@ -30,6 +37,13 @@ pub mod oflags {
     /// A handle of the object was buffered as a possible GC root (a hint
     /// like `GC_INFO`: freeing the handle removes its buffer entry).
     pub const GC_BUFFERED: u32 = 1 << 4;
+    /// The object has a materialized property table (`zobj->properties`,
+    /// built by `rebuild_object_properties` for `var_dump`, `foreach`,
+    /// `get_object_vars` & co.).
+    pub const PROPS_TABLE: u32 = 1 << 5;
+    /// `HASH_FLAG_HAS_EMPTY_IND` on that table: a declared slot it points
+    /// to was undefined, so its element count is recalculated.
+    pub const EMPTY_IND: u32 = 1 << 6;
 }
 
 /// The state of a PHP object.
@@ -74,6 +88,10 @@ thread_local! {
     static PROP_ORDERS: RefCell<HashMap<u32, Rc<PropOrder>>> = RefCell::new(HashMap::new());
     /// Size of [`PROP_ORDERS`] at which entries of freed objects are pruned.
     static PROP_ORDERS_PRUNE_AT: Cell<usize> = const { Cell::new(PROP_ORDERS_MIN_PRUNE) };
+    /// Handles of objects whose declared property is being unset while
+    /// releasing its old value runs destructors (see
+    /// [`begin_stale_count`]); one entry per pending unset.
+    static STALE_COUNTS: RefCell<Vec<u32>> = const { RefCell::new(Vec::new()) };
 }
 
 /// Smallest [`PROP_ORDERS`] size that triggers pruning.
@@ -84,8 +102,9 @@ const PROP_ORDERS_MIN_PRUNE: usize = 64;
 const STORE_INITIAL: usize = 1024;
 
 struct ObjectStore {
-    /// Live objects by handle (index = handle - 1).
-    objects: Vec<Option<Weak<ObjectData>>>,
+    /// Live objects by handle (index = handle - 1): the object's current
+    /// outer `Rc` (thin, so a slot stays one word).
+    objects: Vec<Option<Weak<ObjBox>>>,
     /// Free handles (LIFO, like Zend's free list).
     free: Vec<u32>,
     /// `EG_FLAGS_OBJECT_STORE_NO_REUSE`: while shutdown destructors run,
@@ -234,7 +253,9 @@ impl Drop for ObjBox {
             return;
         }
         data.flags.set(data.flags.get() | oflags::DESTRUCTED);
-        let revived = Obj::new(ObjBox(data.clone()));
+        let rc = Rc::new(ObjBox(data.clone()));
+        register_outer(&rc);
+        let revived = Obj::from_rc(rc);
         let _ = PENDING.try_with(|p| {
             if let Ok(mut p) = p.try_borrow_mut() {
                 p.push(revived);
@@ -269,9 +290,26 @@ pub fn new_object(class: Rc<Class>, slots: Vec<Option<Value>>) -> Obj {
             readonly_init: RefCell::new(vec![false; n]),
             lazy: RefCell::new(None),
         });
-        s.objects[handle as usize - 1] = Some(Rc::downgrade(&data));
-        Obj::new(ObjBox(data))
+        let rc = Rc::new(ObjBox(data));
+        s.objects[handle as usize - 1] = Some(Rc::downgrade(&rc));
+        Obj::from_rc(rc)
     })
+}
+
+/// Makes `rc` the store's handle of its object: lookups by handle return
+/// this `Obj` from now on (the previous outer `Rc` is gone or going).
+fn register_outer(rc: &Rc<ObjBox>) {
+    // `try_with`/`try_borrow_mut`: called from `Drop`.
+    let _ = STORE.try_with(|s| {
+        if let Ok(mut s) = s.try_borrow_mut() {
+            if let Some(slot) = (rc.0.handle as usize)
+                .checked_sub(1)
+                .and_then(|i| s.objects.get_mut(i))
+            {
+                *slot = Some(Rc::downgrade(rc));
+            }
+        }
+    });
 }
 
 /// An object handle taken from the store with no object behind it.
@@ -378,11 +416,13 @@ pub fn destructors_enabled() -> bool {
 
 /// All live objects in handle order (for shutdown destructors).
 pub fn live_objects() -> Vec<Rc<ObjectData>> {
+    // The upgraded `Rc<ObjBox>` is a second strong handle, so dropping it
+    // inside the borrow never runs `ObjBox::drop`.
     STORE.with(|s| {
         s.borrow()
             .objects
             .iter()
-            .filter_map(|w| w.as_ref().and_then(Weak::upgrade))
+            .filter_map(|w| w.as_ref().and_then(Weak::upgrade).map(|b| b.0.clone()))
             .collect()
     })
 }
@@ -394,6 +434,18 @@ pub fn store_len() -> usize {
 
 /// The live object in store slot `i` (handle `i + 1`), if any.
 pub fn live_object_at(i: usize) -> Option<Rc<ObjectData>> {
+    live_box_at(i).map(|b| b.0.clone())
+}
+
+/// The live object in store slot `i` (handle `i + 1`) as the `Obj` every
+/// other holder has (same identity and refcount).
+// A closure: `Rc<ObjBox>` coerces to `Rc<dyn PhpObject>` at the call.
+#[allow(clippy::redundant_closure)]
+pub fn live_obj_at(i: usize) -> Option<Obj> {
+    live_box_at(i).map(|b| Obj::from_rc(b))
+}
+
+fn live_box_at(i: usize) -> Option<Rc<ObjBox>> {
     STORE.with(|s| {
         s.borrow()
             .objects
@@ -409,10 +461,115 @@ pub fn set_handle_no_reuse(on: bool) {
     STORE.with(|s| s.borrow_mut().no_reuse = on);
 }
 
-/// Wraps existing object data in a new handle (used at shutdown for objects
-/// only reachable through cycles).
+/// The `Obj` of existing object data: the store's current handle when one
+/// is alive (so identity and refcount match every other holder), else a
+/// new outer `Rc`, which becomes the store's handle.
 pub fn revive(data: Rc<ObjectData>) -> Obj {
-    Obj::new(ObjBox(data))
+    let live = (data.handle as usize).checked_sub(1).and_then(live_box_at);
+    if let Some(b) = &live {
+        if Rc::ptr_eq(&b.0, &data) {
+            return Obj::from_rc(b.clone());
+        }
+    }
+    let rc = Rc::new(ObjBox(data));
+    if live.is_none() {
+        register_outer(&rc);
+    }
+    drop(live);
+    Obj::from_rc(rc)
+}
+
+/// `rebuild_object_properties`: `d` now has a materialized property table
+/// (`zobj->properties`). A declared slot that is undefined at that point
+/// sets `HASH_FLAG_HAS_EMPTY_IND` on it.
+#[inline]
+pub fn note_property_table(d: &ObjectData) {
+    if d.flags.get() & oflags::PROPS_TABLE == 0 {
+        build_property_table(d);
+    }
+}
+
+/// [`note_property_table`] for an object with dynamic properties, whose
+/// creation materialized the table (`zend_std_write_property` calls
+/// `rebuild_object_properties`). The slots' state at the creation is not
+/// recorded; the current one stands in for it.
+pub fn note_dynamic_property_table(d: &ObjectData) {
+    if d.flags.get() & oflags::PROPS_TABLE == 0 && d.dynamic.try_borrow().is_ok_and(|t| t.is_some())
+    {
+        build_property_table(d);
+    }
+}
+
+#[cold]
+#[inline(never)]
+fn build_property_table(d: &ObjectData) {
+    let mut f = d.flags.get() | oflags::PROPS_TABLE;
+    let holes = d.slots.try_borrow().is_ok_and(|slots| {
+        d.class
+            .props
+            .iter()
+            .filter(|p| !p.is_virtual())
+            .any(|p| slots.get(p.slot as usize).is_none_or(Option::is_none))
+    });
+    if holes {
+        f |= oflags::EMPTY_IND;
+    }
+    d.flags.set(f);
+}
+
+/// `zend_std_unset_property` on a defined declared slot of `d`: the slot is
+/// `IS_UNDEF` already, but `HASH_FLAG_HAS_EMPTY_IND` is only set on the
+/// property table after the old value was released. Destructors that
+/// release runs synchronously (`zval_ptr_dtor`) therefore still see the
+/// table's old element count (`zend_array_count`), e.g. in `var_dump`.
+///
+/// Returns whether that window applies (a property table exists and has
+/// no empty indirect slot yet); the caller then runs the destructors and
+/// calls [`end_stale_count`].
+#[must_use]
+pub fn begin_stale_count(d: &ObjectData) -> bool {
+    let f = d.flags.get();
+    if f & (oflags::PROPS_TABLE | oflags::EMPTY_IND) != oflags::PROPS_TABLE {
+        return false;
+    }
+    STALE_COUNTS.with(|s| s.borrow_mut().push(d.handle));
+    true
+}
+
+/// Ends the window opened by [`begin_stale_count`]: the table is flagged
+/// `HASH_FLAG_HAS_EMPTY_IND`, so counts are exact from now on.
+pub fn end_stale_count(d: &ObjectData) {
+    let _ = STALE_COUNTS.try_with(|s| {
+        if let Ok(mut s) = s.try_borrow_mut() {
+            if let Some(p) = s.iter().rposition(|&h| h == d.handle) {
+                s.remove(p);
+            }
+        }
+    });
+    d.flags.set(d.flags.get() | oflags::EMPTY_IND);
+}
+
+/// Unset declared properties `zend_array_count` still counts for the
+/// object `handle` (see [`begin_stale_count`]).
+#[must_use]
+pub fn stale_count(handle: u32) -> usize {
+    STALE_COUNTS.with(|s| {
+        let s = s.borrow();
+        if s.is_empty() {
+            0
+        } else {
+            s.iter().filter(|&&h| h == handle).count()
+        }
+    })
+}
+
+/// `HASH_FLAG_HAS_EMPTY_IND` after a declared slot was unset with no
+/// destructor in between (the table's count is recalculated from now on).
+pub fn note_declared_unset(d: &ObjectData) {
+    let f = d.flags.get();
+    if f & oflags::PROPS_TABLE != 0 {
+        d.flags.set(f | oflags::EMPTY_IND);
+    }
 }
 
 /// The handle number the next object will get (`spl_object_id` tests).
@@ -592,7 +749,7 @@ fn prune_prop_orders(m: &mut HashMap<u32, Rc<PropOrder>>) {
                 .and_then(|i| s.objects.get(i))
                 .and_then(Option::as_ref)
                 .and_then(Weak::upgrade)
-                .is_some_and(|d| d.flags.get() & oflags::PROP_ORDER != 0)
+                .is_some_and(|b| b.0.flags.get() & oflags::PROP_ORDER != 0)
         });
     });
     let next = (m.len() * 2).max(PROP_ORDERS_MIN_PRUNE);

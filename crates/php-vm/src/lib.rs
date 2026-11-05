@@ -436,17 +436,22 @@ impl Vm {
         let mut keep = Vec::new();
         let mut i = 0;
         while i < object::store_len() {
-            let slot = object::live_object_at(i);
+            // The object's own handle (`GC_ADDREF(obj)`), not a second
+            // `Rc`: `$this` in the destructor is identical (`===`, the
+            // recursion guards of `var_dump`) to the other references.
+            let slot = object::live_obj_at(i);
             i += 1;
-            let Some(d) = slot else {
+            let Some(o) = slot else {
                 continue;
             };
+            let d = object::data(&o);
             if d.flags.get() & object::oflags::DESTRUCTED != 0 || !d.class.has_destructor() {
                 continue;
             }
             d.flags.set(d.flags.get() | object::oflags::DESTRUCTED);
-            let o = object::revive(d.clone());
-            keep.push(d);
+            if let Some(b) = o.downcast_ref::<object::ObjBox>() {
+                keep.push(b.0.clone());
+            }
             if let Err(e) = self.call_destructor(&o) {
                 return self.destructor_error(e);
             }
