@@ -147,7 +147,8 @@ pub(crate) fn key_of(v: &Value, diags: &mut Diags, ctx: KeyCtx) -> Result<ArrayK
             return Err(WalkErr::TypeError(match ctx {
                 KeyCtx::Isset => format!("Cannot access offset of type {tn} in isset or empty"),
                 KeyCtx::Unset => format!("Cannot unset offset of type {tn} on array"),
-                KeyCtx::Literal => format!("Illegal offset type"),
+                // Array literals too (`zend_illegal_array_offset_access`);
+                // "Illegal offset type" is only the compile-time error.
                 _ => format!("Cannot access offset of type {tn} on array"),
             }));
         }

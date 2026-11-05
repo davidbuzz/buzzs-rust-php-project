@@ -226,3 +226,20 @@ try {
 "#;
     assert_eq!(run(src), "9\n");
 }
+
+/// Array literals and constant-expression arrays reject array/object keys
+/// with `zend_illegal_array_offset_access`'s message (GH-8821).
+#[test]
+fn illegal_array_literal_key_names_its_type() {
+    let src = r#"<?php
+enum E { case A; }
+$k = []; try { $a = [$k => 1]; } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+$o = new stdClass; try { $a = [1, $o => 1]; } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+class C { const X = [E::A => 3]; }
+try { var_dump(C::X); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+"#;
+    assert_eq!(
+        run(src),
+        "Cannot access offset of type array on array\nCannot access offset of type stdClass on array\nCannot access offset of type E on array\n"
+    );
+}
