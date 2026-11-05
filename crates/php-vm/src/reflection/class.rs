@@ -849,7 +849,17 @@ fn rc_new_instance_without_ctor(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         && c.hooks.as_ref().is_some_and(|h| h.create.is_some())
         || matches!(
             c.lc_name.as_bytes(),
-            b"generator" | b"closure" | b"fiber" | b"weakreference" | b"weakmap"
+            b"generator"
+                | b"closure"
+                | b"fiber"
+                | b"weakreference"
+                | b"weakmap"
+                // `ext/standard/io_poll.c` gives these final classes a
+                // `create_object`; their binding sets the state up in the
+                // constructor instead.
+                | b"io\\poll\\context"
+                | b"io\\poll\\watcher"
+                | b"io\\poll\\streampollhandle"
         )
     {
         return Err(rexc(
