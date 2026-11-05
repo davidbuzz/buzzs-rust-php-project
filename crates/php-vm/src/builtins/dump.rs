@@ -656,11 +656,19 @@ fn var_dump_object(
         (ObjectKind::Enum { .. }, None) if zv.is_some() => Some(enum_props(vm, o)?),
         (_, p) => p,
     };
-    let count = properties.as_ref().map_or(0, |p| {
+    let mut count = properties.as_ref().map_or(0, |p| {
         p.iter()
             .filter(|(_, s)| matches!(s, PropertySlot::Value(_)))
             .count()
     });
+    // `zend_array_count` of the object's own table while an unset of one
+    // of its declared properties runs destructors (see
+    // `object::begin_stale_count`).
+    if cls.magic.debug_info.is_none()
+        && !crate::ext::hooks_of(o).is_some_and(|h| h.properties_for.is_some())
+    {
+        count += crate::object::stale_count(o.handle());
+    }
     out.put(common);
     // `%pS`: the full name (anonymous classes include `\0file:line$n`).
     let class = cls.name.clone();
