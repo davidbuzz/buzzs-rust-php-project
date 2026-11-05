@@ -183,3 +183,27 @@ var_dump((new ReflectionEnumUnitCase(Demo::class, 'D'))->getDocComment());
         "string(11) \"/** F\0oo */\"\nbool(false)\n"
     );
 }
+
+/// attributes/ReflectionAttribute_newInstance_exception.phpt: the attribute
+/// constructor is called from the attribute's location.
+#[test]
+fn attribute_constructor_is_called_from_the_attribute_location() {
+    assert_eq!(
+        run(r#"<?php
+#[Attribute]
+class A {
+    public function __construct() { throw new Exception('Test'); }
+}
+class Foo {
+    #[A]
+    public function bar() {}
+}
+try {
+    (new ReflectionMethod(Foo::class, 'bar'))->getAttributes()[0]->newInstance();
+} catch (Exception $e) {
+    echo $e->getTraceAsString(), "\n";
+}
+"#),
+        "#0 t.php(7): A->__construct()\n#1 t.php(11): ReflectionAttribute->newInstance()\n#2 {main}\n"
+    );
+}

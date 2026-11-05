@@ -602,6 +602,11 @@ pub struct Vm {
     pub autoloaders: Vec<Value>,
     /// Classes currently being autoloaded.
     pub autoloading: HashSet<ZStr>,
+    /// The dummy call frames of `ReflectionAttribute::newInstance()`
+    /// (`zend_get_attribute_object`): the index of the builtin frame and
+    /// the attribute's file and line, which calls made from it report as
+    /// their call site.
+    pub attribute_call_sites: Vec<(usize, ZStr, u32)>,
     /// Exit status.
     pub exit_status: i32,
     /// Shutdown functions.

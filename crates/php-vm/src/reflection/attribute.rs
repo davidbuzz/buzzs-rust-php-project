@@ -423,7 +423,16 @@ fn ra_new_instance(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
                 mark_ctor_failed(&o);
                 return Err(e);
             }
-            if let Err(e) = vm.call_pending(call) {
+            // `zend_get_attribute_object()` calls the constructor from a
+            // dummy frame at the attribute's location.
+            let site = r.file.clone().map(|f| (vm.frames.len().saturating_sub(1), f, r.info.line));
+            let pushed = site.is_some();
+            vm.attribute_call_sites.extend(site);
+            let result = vm.call_pending(call);
+            if pushed {
+                vm.attribute_call_sites.pop();
+            }
+            if let Err(e) = result {
                 mark_ctor_failed(&o);
                 return Err(e);
             }
