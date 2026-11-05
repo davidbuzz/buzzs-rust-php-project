@@ -188,7 +188,7 @@ fn assert_options(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         .map(<[u8]>::to_vec)
         .unwrap_or_default();
     st.on_ini_update("assert.callback", &cb);
-    st.callback = vm.ext.assert_callback.clone();
+    st.callback.clone_from(&vm.ext.assert_callback);
     let value = a.get(1);
     let (old, change) = st.assert_options(a.int(0), value.as_ref(), vm).vm(vm)?;
     vm.ext.assert_callback = st.callback;

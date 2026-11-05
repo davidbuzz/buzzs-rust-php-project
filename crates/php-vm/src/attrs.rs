@@ -201,7 +201,32 @@ mod tests {
 
 impl Vm {
     /// `zend_deprecated_constant` for a global constant being read.
+    /// Called on every constant fetch: a 64-bit filter of the names'
+    /// hashes skips both map lookups for the (common) undeprecated case.
+    #[inline]
     pub(crate) fn constant_deprecation(&mut self, name: &ZStr) -> VmResult<()> {
+        let total = self.deprecated_constants.len() + self.const_attributes.len();
+        if total == 0 {
+            return Ok(());
+        }
+        let (len, mut mask) = self.const_deprecation_filter.get();
+        if len != total {
+            mask = self
+                .deprecated_constants
+                .keys()
+                .chain(self.const_attributes.keys())
+                .fold(0, |m, k| m | (1u64 << (k.hash_value() & 63)));
+            self.const_deprecation_filter.set((total, mask));
+        }
+        if mask & (1u64 << (name.hash_value() & 63)) == 0 {
+            return Ok(());
+        }
+        self.constant_deprecation_slow(name)
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn constant_deprecation_slow(&mut self, name: &ZStr) -> VmResult<()> {
         if let Some(suffix) = self.deprecated_constants.get(name).cloned() {
             let mut msg = format!("Constant {} is deprecated", name.to_string_lossy()).into_bytes();
             msg.extend_from_slice(&suffix);

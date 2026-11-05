@@ -339,11 +339,27 @@ var_dump($params[0]->isVariadic(), $params[0]->getType()->getName());
     assert_eq!(out, "one fail arguments\nbool(true)\nstring(5) \"mixed\"\n");
 }
 
-/// zend_compile_func_array_map(): `array_map(f(...), $array)` compiles into
+/// A stand-in `array_map` that marks the calls that were not inlined.
+struct ArrayMapStub;
+
+impl Extension for ArrayMapStub {
+    fn name(&self) -> &'static str {
+        "array_map_stub_test"
+    }
+
+    fn register(&self, module: &mut ModuleBuilder<'_>) {
+        module.function(
+            "array_map(?callable $callback, $array, ...$arrays): array",
+            |_vm, _args| Ok(Value::Int(42)),
+        );
+    }
+}
+
+/// `zend_compile_func_array_map()`: `array_map(f(...), $array)` compiles into
 /// a foreach loop calling `f` directly (keys kept, no Closure, no
 /// `array_map()` frame, `ZEND_TYPE_ASSERT` on the array); other callbacks
 /// and literal non-arrays keep the real call
-/// (Zend/tests/functions/zend_call_function_deprecated_frame.phpt, gh14003).
+/// (`Zend/tests/functions/zend_call_function_deprecated_frame.phpt`, gh14003).
 #[test]
 fn array_map_with_first_class_callable_is_inlined() {
     let sink = Sink::default();
@@ -373,9 +389,9 @@ var_dump(array_map('foo', [1]), array_map(foo(...), 'lit'));
 }
 
 /// Attribute arguments print like `zend_ast_export` after
-/// zend_compile_const_expr_*(): closures as `Closure(name)` (named after
+/// `zend_compile_const_expr`_*(): closures as `Closure(name)` (named after
 /// the function whose attributes they are in), first-class-callable
-/// function names resolved (closure_const_expr and first_class_callable
+/// function names resolved (closure_const_expr and `first_class_callable`
 /// `attributes_ast_printing_runtime.phpt`). The printer re-reads the
 /// declaring file, so the scripts are written to disk.
 #[test]

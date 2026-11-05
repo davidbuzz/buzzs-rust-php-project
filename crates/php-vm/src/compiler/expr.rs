@@ -138,7 +138,7 @@ impl Compiler {
 
     /// The class of `X::$p` / `X::m()`: a dynamic class expression belongs
     /// to the enclosing nullsafe chain (`zend_ast_is_short_circuited`
-    /// follows `child[0]` of ZEND_AST_STATIC_PROP / ZEND_AST_STATIC_CALL).
+    /// follows `child[0]` of ZEND_AST_STATIC_PROP / `ZEND_AST_STATIC_CALL`).
     fn chain_class_spec(&mut self, cref: &ast::ClassRef) -> CResult<ClassSpec> {
         match cref {
             ast::ClassRef::Expr(e) => {
@@ -154,7 +154,7 @@ impl Compiler {
 
     /// The place of an `isset()` / `empty()` / `??` operand with the
     /// short-circuit jumps of its own nullsafe chain. Nullsafe bases are
-    /// fetched quietly (`zend_emit_jmp_null` after a BP_VAR_IS fetch).
+    /// fetched quietly (`zend_emit_jmp_null` after a `BP_VAR_IS` fetch).
     fn compile_is_place(&mut self, e: &Expr) -> CResult<(Place, Vec<usize>)> {
         let saved = std::mem::take(&mut self.f().sc_jumps);
         let saved_quiet = std::mem::replace(&mut self.f().sc_quiet, true);
@@ -1078,7 +1078,7 @@ impl Compiler {
     }
 
     /// The operand of `++`/`--`: `zend_compile_pre_incdec` fetches `$this`
-    /// with FETCH_THIS (a temporary copy, so `++$this` compiles and fails
+    /// with `FETCH_THIS` (a temporary copy, so `++$this` compiles and fails
     /// at run time); everything else is a write place.
     fn compile_incdec_place(&mut self, var: &Expr) -> CResult<Place> {
         if let ExprKind::Var(VarName::Name(id)) = &var.kind {
@@ -1529,6 +1529,7 @@ impl Compiler {
     /// assigns each target its value directly, without building the
     /// array. A pending value is released if an exception interrupts the
     /// assignments (see [`crate::opcode::LiveTmp`]).
+    #[allow(clippy::similar_names)] // `line` and the `live` ranges
     fn compile_list_from_array(
         &mut self,
         targets: &[Option<ArrayItem>],
@@ -2480,7 +2481,7 @@ impl Compiler {
         Ok(Some(result))
     }
 
-    /// `zend_compile_class_name` (Zend/zend_compile.c) on `(expr)::class`:
+    /// `zend_compile_class_name` (`Zend/zend_compile.c`) on `(expr)::class`:
     /// a number literal is an illegal class name, and an expression folded
     /// to a constant other than a string cannot be used with `::class`.
     #[cold]
@@ -2659,7 +2660,7 @@ pub(crate) fn keep_place(p: &mut Place) {
     }
 }
 
-/// `zend_list_assign_from_array_applies` (Zend/zend_compile.c): a flat,
+/// `zend_list_assign_from_array_applies` (`Zend/zend_compile.c)`: a flat,
 /// unkeyed list without references and an unkeyed array literal without
 /// references or spread, one value per target. Returns the values.
 fn list_from_array_values<'a>(
@@ -2688,7 +2689,7 @@ fn list_from_array_values<'a>(
     Some(items.as_slice())
 }
 
-/// `zend_is_call` (Zend/zend_compile.c).
+/// `zend_is_call` (`Zend/zend_compile.c`).
 pub(crate) fn is_call_expr(e: &Expr) -> bool {
     matches!(
         e.kind,
@@ -2699,7 +2700,7 @@ pub(crate) fn is_call_expr(e: &Expr) -> bool {
     )
 }
 
-/// `zend_ast_is_short_circuited` (Zend/zend_compile.c): whether `e` ends a
+/// `zend_ast_is_short_circuited` (`Zend/zend_compile.c)`: whether `e` ends a
 /// chain containing `?->`.
 pub(crate) fn contains_nullsafe(e: &Expr) -> bool {
     match &e.kind {

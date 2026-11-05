@@ -1660,10 +1660,7 @@ impl Compiler {
                         let default = match &p.default {
                             Some(d) => {
                                 self.check_const_expr(d, false)?;
-                                let saved_prop = std::mem::replace(
-                                    &mut self.hook_prop,
-                                    Some(p.name.name.clone()),
-                                );
+                                let saved_prop = self.hook_prop.replace(p.name.name.clone());
                                 let v = self.const_expr(d);
                                 self.hook_prop = saved_prop;
                                 Some(v?)
@@ -1723,8 +1720,7 @@ impl Compiler {
                         let attributes = if pi == 0 || pg.attributes.is_empty() {
                             attrs.clone()
                         } else {
-                            let saved_prop =
-                                std::mem::replace(&mut self.hook_prop, Some(p.name.name.clone()));
+                            let saved_prop = self.hook_prop.replace(p.name.name.clone());
                             let a = self.attributes(&pg.attributes);
                             self.hook_prop = saved_prop;
                             a?

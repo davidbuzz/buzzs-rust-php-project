@@ -1,5 +1,5 @@
 //! Class/function/constant name collision regressions
-//! (Zend/tests/{name_collision,class_alias,class_name,namespaces}).
+//! (`Zend/tests/{name_collision,class_alias,class_name,namespaces`}).
 use php_vm::{Vm, VmOptions};
 use std::cell::RefCell;
 use std::io::Write;
@@ -164,7 +164,7 @@ fn class_name_of_constant_operand_is_a_compile_error() {
     );
 }
 
-/// `zend_objects_store_call_destructors` (Zend/tests/class_alias/bug54268):
+/// `zend_objects_store_call_destructors` (`Zend/tests/class_alias/bug54268)`:
 /// an object created by a shutdown destructor is destructed as well.
 #[test]
 fn shutdown_destructs_objects_created_by_destructors() {
@@ -178,11 +178,11 @@ fn shutdown_destructs_objects_created_by_destructors() {
 
 /// A function declared inside a method has no class scope
 /// (`zend_compile_func_decl` clears `CG(active_class_entry)`), unlike a
-/// closure (nested_method_and_function.phpt).
+/// closure (`nested_method_and_function.phpt`).
 #[test]
 fn function_declared_in_a_method_has_no_class_scope() {
     assert_eq!(
-        run(r#"<?php
+        run(r"<?php
 namespace Baz;
 class Foo {
     public static function bar() {
@@ -194,7 +194,7 @@ class Foo {
 }
 $c = Foo::bar();
 $c();
-"#),
+"),
         "string(0) \"\"\nstring(7) \"Baz\\foo\"\nstring(7) \"Baz\\foo\"\nstring(7) \"Baz\\Foo\"\nstring(7) \"Baz\\Foo\"\n"
     );
 }

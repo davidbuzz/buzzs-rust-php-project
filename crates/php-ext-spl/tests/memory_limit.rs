@@ -21,7 +21,7 @@ impl Write for Sink {
     }
 }
 
-/// oom_SplFixedArray_fromArray_001.phpt: the block is refused before it is
+/// `oom_SplFixedArray_fromArray_001.phpt`: the block is refused before it is
 /// allocated and the fatal follows the call.
 #[test]
 fn from_array_refuses_a_block_over_the_limit() {

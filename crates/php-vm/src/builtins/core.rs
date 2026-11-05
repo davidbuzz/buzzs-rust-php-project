@@ -985,6 +985,7 @@ fn restore_error_handler(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
 
 /// `get_error_handler()` (`Zend/zend_builtin_functions.c`): the current
 /// `EG(user_error_handler)`, or null.
+#[allow(clippy::unnecessary_wraps)] // builtin handler signature
 fn get_error_handler(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
     Ok(vm
         .error_handlers
@@ -1014,8 +1015,9 @@ fn restore_exception_handler(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
     Ok(Value::Bool(true))
 }
 
-/// `get_exception_handler()` (Zend/zend_builtin_functions.c): the active
+/// `get_exception_handler()` (`Zend/zend_builtin_functions.c)`: the active
 /// user exception handler, or null.
+#[allow(clippy::unnecessary_wraps)] // builtin handler signature
 fn get_exception_handler(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
     Ok(vm.exception_handlers.last().cloned().unwrap_or_default())
 }

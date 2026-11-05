@@ -1387,7 +1387,7 @@ impl Vm {
     /// Raises the deferred "Undefined variable" warning of
     /// [`Vm::place_assign_undef_cv`] before an object's final dimension
     /// write (`offsetSet`, a native `write_dimension`), as `ZEND_ASSIGN_DIM`
-    /// reads OP_DATA before `zend_assign_to_object_dim`.
+    /// reads `OP_DATA` before `zend_assign_to_object_dim`.
     fn take_pending_undef_value(&mut self) -> VmResult<()> {
         let depth = self.frames.len();
         let pending = PENDING_UNDEF_VALUE.with(|c| match c.get() {
@@ -1415,6 +1415,22 @@ impl Vm {
             // One walk: offsets convert and object handlers run once.
             return self.write_place(base, &segs, WOp::AssignOp(op, v));
         }
+        // Fast path: a plain variable holding an int or float
+        // (`ZEND_ASSIGN_OP` on a CV): no destructor, reference or type
+        // constraint can be involved, so the slot is updated in place.
+        if let RBase::Var(store, idx) = &base {
+            let cur = match store.borrow().slots.get(*idx) {
+                Some(Some(n @ (Value::Int(_) | Value::Float(_)))) => Some(n.clone()),
+                _ => None,
+            };
+            if let Some(cur) = cur {
+                let nv = ops::binary_op(op, &cur, &v, self).map_err(|e| self.rt_throw(e))?;
+                if let Some(slot) = store.borrow_mut().slots.get_mut(*idx) {
+                    *slot = Some(nv.clone());
+                }
+                return Ok(nv);
+            }
+        }
         // Fast path: plain variable holding a string being appended to.
         if let RBase::Var(store, idx) = &base {
             if op == BinaryOp::Concat {
@@ -1438,6 +1454,7 @@ impl Vm {
     /// the walk ended on an `ArrayAccess` offset, that object and offset.
     /// `None` when the walk was abandoned because an error handler changed
     /// the array (see `rw_container_changed`).
+    #[allow(clippy::type_complexity)] // (value, overloaded ArrayAccess target)
     fn fetch_rw(
         &mut self,
         base: RBase,
@@ -2094,7 +2111,7 @@ impl Vm {
     }
 
     /// `zval_get_long_ex(offset, /* is_strict */ true)` on a float offset
-    /// of a string in isset()/empty() (`zend_isset_dim_slow`): the
+    /// of a string in `isset()/empty()` (`zend_isset_dim_slow`): the
     /// not-representable warning, then the precision-loss deprecation.
     #[cold]
     fn isset_float_string_offset(&mut self, d: f64) -> VmResult<i64> {

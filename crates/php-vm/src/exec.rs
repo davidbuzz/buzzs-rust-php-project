@@ -481,7 +481,7 @@ impl Vm {
         }
     }
 
-    /// `cleanup_live_vars` (Zend/zend_execute.c): releases the temporaries
+    /// `cleanup_live_vars` (`Zend/zend_execute.c)`: releases the temporaries
     /// live at the throwing op, in order, before a handler of this frame
     /// runs; their destructors see `exc` in flight.
     #[cold]
@@ -1526,9 +1526,9 @@ impl Vm {
         res
     }
 
-    /// ZEND_FETCH_LIST_W on a VAR container that is not a reference (a
-    /// by-value call result, Zend/zend_vm_def.h): notices and falls back
-    /// to ZEND_FETCH_LIST_R; the element then becomes a fresh reference.
+    /// `ZEND_FETCH_LIST_W` on a VAR container that is not a reference (a
+    /// by-value call result, `Zend/zend_vm_def.h)`: notices and falls back
+    /// to `ZEND_FETCH_LIST_R`; the element then becomes a fresh reference.
     #[cold]
     fn list_fetch_ref(&mut self, pid: crate::opcode::PlaceId, dst: Option<u32>) -> VmResult<()> {
         let referenceable = match self.frame().code.places[pid as usize].base {
@@ -1552,9 +1552,10 @@ impl Vm {
         Ok(())
     }
 
-    /// `zend_ast_add_unpacked_element` (Zend/zend_ast.c): a constant
+    /// `zend_ast_add_unpacked_element` (`Zend/zend_ast.c)`: a constant
     /// expression spreads arrays only, never Traversables.
     #[cold]
+    #[allow(clippy::needless_pass_by_value)] // the operand value is owned by the caller's read
     fn const_array_unpack(&mut self, arr: u32, src: Value) -> VmResult<()> {
         let src = src.deref();
         if !matches!(src, Value::Array(_)) {
@@ -1858,7 +1859,7 @@ impl Vm {
             .and_then(|f| f.scope.clone())
     }
 
-    /// `ZEND_TYPE_ASSERT` (Zend/zend_vm_def.h) for an array parameter: the
+    /// `ZEND_TYPE_ASSERT` (`Zend/zend_vm_def.h`) for an array parameter: the
     /// operand is read without an undefined-variable warning.
     fn op_type_assert_array(&mut self, val: Operand, msg: u32) -> VmResult<()> {
         let v = if let Operand::Cv(cv) = val {

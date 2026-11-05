@@ -38,7 +38,7 @@ fn run(source: &str) -> String {
 
 /// `ZEND_END_SILENCE` and the `ZEND_LIVE_SILENCE` cleanup on unwinding
 /// restore the saved mask only while the current one is still silenced
-/// (bug #33771, error_reporting02/03/08).
+/// (bug #33771, `error_reporting02/03/08`).
 #[test]
 fn silence_restore_keeps_masks_set_inside() {
     let out = run(r#"<?php
@@ -108,7 +108,7 @@ $u4++;
 }
 
 /// A direct `call_user_func('self::m')` whose deprecation the error handler
-/// turns into an exception throws the callback TypeError chained to it
+/// turns into an exception throws the callback `TypeError` chained to it
 /// (GH-21699).
 #[test]
 fn call_user_func_keyword_deprecation_throw_chains_type_error() {
@@ -134,7 +134,7 @@ try {
 /// (bug #71336).
 #[test]
 fn get_object_vars_unwraps_singly_held_references() {
-    let out = run(r#"<?php
+    let out = run(r"<?php
 class C {
     public $bar = [1];
     function t() { f($this->bar); $v = get_object_vars($this); $this->bar[] = 2; var_dump($v['bar']); }
@@ -143,7 +143,7 @@ class C {
 function f(&$x) {}
 (new C)->t();
 (new C)->u();
-"#);
+");
     assert_eq!(
         out,
         "array(1) {\n  [0]=>\n  int(1)\n}\narray(2) {\n  [0]=>\n  int(1)\n  [1]=>\n  int(2)\n}\n"
@@ -229,7 +229,7 @@ echo "done\n";
 /// `SPEC(COMMUTATIVE)` opcodes (`ZEND_MUL`, `ZEND_BW_OR`/`AND`/`XOR`) get
 /// their operands swapped when op1's type sorts before op2's (`IS_CONST` <
 /// `IS_TMP_VAR` < `IS_CV`), so the error names them in swapped order
-/// (operator_unsupported_types.phpt; expectations from php-src master).
+/// (`operator_unsupported_types.phpt`; expectations from php-src master).
 #[test]
 fn commutative_operands_are_reported_in_canonical_order() {
     let out = run(r#"<?php

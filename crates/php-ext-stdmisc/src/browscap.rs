@@ -14,10 +14,14 @@ const E_CORE_ERROR: i64 = 16;
 /// `E_CORE_WARNING`.
 const E_CORE_WARNING: i64 = 32;
 
+/// The `browscap` INI file name and its parsed contents (`None` when it
+/// could not be read).
+type LoadedBrowscap = (Vec<u8>, Option<Rc<Browscap>>);
+
 thread_local! {
     /// The data read from the `browscap` file (`global_bdata`), keyed by
     /// the file name; `None` when it could not be read.
-    static DATA: RefCell<Option<(Vec<u8>, Option<Rc<Browscap>>)>> = const { RefCell::new(None) };
+    static DATA: RefCell<Option<LoadedBrowscap>> = const { RefCell::new(None) };
 }
 
 /// `php_browscap_parser_cb` over the INI parser callbacks.
@@ -96,6 +100,7 @@ fn server_user_agent(vm: &Vm) -> Option<Value> {
 }
 
 /// `get_browser(?string $user_agent = null, bool $return_array = false)`.
+#[allow(clippy::single_match_else)] // php_get_browser's two-level fallback
 fn get_browser(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let agent = a.get(0).filter(|v| !v.is_null());
     let return_array = a.get(1).is_some() && a.bool(1);

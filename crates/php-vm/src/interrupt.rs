@@ -191,7 +191,7 @@ fn resolve_fcc(vm: &mut Vm, v: &Value) -> VmResult<Option<crate::vm::PendingCall
     Ok(vm.zend_is_callable(v, true)?.ok())
 }
 
-/// `zend_fcc_equals()` (Zend/zend_API.h) on resolved calls: the same
+/// `zend_fcc_equals()` (`Zend/zend_API.h`) on resolved calls: the same
 /// `$this` and called scope, and the same function: a real closure only
 /// equals itself; a first-class-callable (fake) closure equals the
 /// function or method it wraps (`zend_fcc_closure_equals_ex`), and

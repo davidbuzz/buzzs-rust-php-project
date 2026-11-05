@@ -207,7 +207,7 @@ const C = [...new It];
 
 /// `zend_ast_is_short_circuited`: a nullsafe chain passed as an argument,
 /// through `X::$p` / `X::m()`, inside `isset`/`empty`/`??` (fetched in
-/// BP_VAR_IS mode) or iterated by reference behaves as one value; taking a
+/// `BP_VAR_IS` mode) or iterated by reference behaves as one value; taking a
 /// reference of it is a compile error.
 #[test]
 fn nullsafe_chains_short_circuit_as_one_value() {
@@ -243,7 +243,7 @@ var_dump($o->bar);
     }
 }
 
-/// list() semantics of zend_compile_list_assign / ZEND_FETCH_LIST_[RW]:
+/// list() semantics of zend_compile_list_assign / `ZEND_FETCH_LIST`_[RW]:
 /// strings are not destructured; a by-value call result notices; foreach
 /// with a referencing list iterates by reference; the source is made a
 /// reference before any target rebinds it; the result of a referencing
@@ -287,7 +287,7 @@ var_dump($arr);
 
 /// `zend_try_compile_list_assign_from_array`: the values are assigned
 /// directly, so a dropped value is released at its assignment, and the
-/// pending values are released before a handler runs (cleanup_live_vars).
+/// pending values are released before a handler runs (`cleanup_live_vars`).
 #[test]
 fn list_from_array_literal_lifetimes() {
     let out = run(r#"<?php

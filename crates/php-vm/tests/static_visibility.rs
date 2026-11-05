@@ -44,7 +44,7 @@ try { A::inside(); } catch (Error $e) { echo $e->getMessage(), "\n"; }
 
 /// `isset()`/`empty()`/`??` fetch static properties in `BP_VAR_IS` mode:
 /// undeclared or inaccessible ones are quietly unset, while an unknown
-/// class still throws (Zend/zend_execute.c
+/// class still throws (`Zend/zend_execute.c`
 /// `zend_fetch_static_property_address()`).
 #[test]
 fn isset_on_inaccessible_static_property_is_quiet() {

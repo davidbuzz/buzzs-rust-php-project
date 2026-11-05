@@ -220,7 +220,7 @@ pub fn register_internal_iterator(vm: &mut Vm) {
         .method("rewind(): void", acc::PUBLIC, ii_rewind)
         // `zend_internal_iterator_free` of the VM's native iterators.
         .hooks(ClassHooks {
-            destruct: Some(|vm, o| vm.internal_iterator_destruct(o)),
+            destruct: Some(php_vm::Vm::internal_iterator_destruct),
             ..ClassHooks::default()
         })
         .register(vm);

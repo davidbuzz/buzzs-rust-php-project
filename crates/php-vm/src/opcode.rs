@@ -215,7 +215,7 @@ pub enum ArgSrc {
     Place(PlaceId),
     /// A dimension or property of a temporary expression (`[0, 1][0]`):
     /// by value only; a by-ref parameter throws "Cannot use temporary
-    /// expression in write context" (FETCH_DIM/OBJ_FUNC_ARG on a TMP).
+    /// expression in write context" (`FETCH_DIM/OBJ_FUNC_ARG` on a TMP).
     TempPlace(PlaceId),
 }
 
@@ -269,7 +269,7 @@ pub enum Op {
     /// Spreads `src` into the array in `arr` (`...$x`).
     ArrayUnpack { arr: u32, src: Operand },
     /// `...$x` inside a constant expression: only arrays may be spread
-    /// (`zend_ast_add_unpacked_element`, Zend/zend_ast.c).
+    /// (`zend_ast_add_unpacked_element`, `Zend/zend_ast.c`).
     ConstArrayUnpack { arr: u32, src: Operand },
 
     /// Unconditional jump.
@@ -322,7 +322,7 @@ pub enum Op {
     },
     /// Makes `place` a reference and stores it in `dst`.
     MakeRef { place: PlaceId, dst: u32 },
-    /// ZEND_FETCH_LIST_W (+ ZEND_MAKE_REF into `dst`) of a destructuring
+    /// ZEND_FETCH_LIST_W (+ `ZEND_MAKE_REF` into `dst`) of a destructuring
     /// element whose source is a call result: unless the result is a
     /// reference, notices and reads the element by value instead.
     ListFetchRef { place: PlaceId, dst: Option<u32> },
@@ -385,7 +385,7 @@ pub enum Op {
     CallableConvert {
         dst: u32,
         /// Compiled in a constant expression, where a `__callStatic`
-        /// trampoline is an `Error` (zend_ast_evaluate_inner()).
+        /// trampoline is an `Error` (`zend_ast_evaluate_inner()`).
         const_expr: bool,
     },
     /// `ZEND_SEND_PLACEHOLDER` (`?` or `name: ?`) of a partial application.
@@ -561,7 +561,7 @@ pub enum Op {
 
 /// A temporary that an exception thrown by an op in `start..end` releases
 /// before the handler runs (`zend_live_range` / `cleanup_live_vars`,
-/// Zend/zend_execute.c). Only recorded where the release is observable:
+/// `Zend/zend_execute.c`). Only recorded where the release is observable:
 /// the values of a list assignment from an array literal.
 #[derive(Clone, Copy, Debug)]
 pub struct LiveTmp {

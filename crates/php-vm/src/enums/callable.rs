@@ -68,6 +68,15 @@ impl Vm {
         self.zend_is_callable(v, false)
     }
 
+    /// Whether argument `n` (0-based) of callable `v` is by-reference
+    /// (`ARG_SHOULD_BE_SENT_BY_REF`), resolving it without deprecations;
+    /// `false` for an invalid callable.
+    pub fn callable_arg_by_ref(&mut self, v: &Value, n: usize) -> VmResult<bool> {
+        Ok(self
+            .zend_is_callable(v, true)?
+            .is_ok_and(|c| c.func.arg_by_ref(n)))
+    }
+
     /// The class a `self`/`parent`/`static` callable target stands for in
     /// the calling user frame (`fcc->calling_scope`); `None` for other
     /// names or when no such class is in scope.

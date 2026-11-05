@@ -245,7 +245,7 @@ try { var_dump(C::X); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
 }
 
 /// `SensitiveParameterValue` keeps its value in the private readonly
-/// `$value` property (Zend/zend_attributes.stub.php), so clones and
+/// `$value` property (`Zend/zend_attributes.stub.php`), so clones and
 /// reflection see it, and it is `@strict-properties`.
 #[test]
 fn sensitive_parameter_value_is_a_readonly_property() {
@@ -268,7 +268,7 @@ var_dump($v);
 
 /// `eval()` reports its operand's line (`zend_ast_create_1()` copies the
 /// child's lineno), and a heredoc literal carries its body's line
-/// (Zend/tests/function_arguments/sensitive_parameter_eval_call.phpt).
+/// (`Zend/tests/function_arguments/sensitive_parameter_eval_call.phpt`).
 #[test]
 fn eval_line_is_its_operand_line() {
     let src = r#"<?php

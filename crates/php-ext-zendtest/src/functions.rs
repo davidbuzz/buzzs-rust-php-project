@@ -339,10 +339,15 @@ fn call_with_consumed_args(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     }
     let list: Vec<Value> = args.values().cloned().collect();
     // `zend_call_function` moves a consumed argument into the callee
-    // unless it is a reference; the bits of the moved ones come back.
+    // unless it is a reference or the parameter is by-reference (a value
+    // sent there is wrapped in a new reference, `must_wrap`); the bits of
+    // the moved ones come back.
     let mut actual = 0_i64;
     for (i, v) in list.iter().enumerate().take(32) {
-        if consumed & (1_i64 << i) != 0 && !matches!(v, Value::Reference(_)) {
+        if consumed & (1_i64 << i) != 0
+            && !matches!(v, Value::Reference(_))
+            && !vm.callable_arg_by_ref(&cb, i)?
+        {
             actual |= 1_i64 << i;
         }
     }

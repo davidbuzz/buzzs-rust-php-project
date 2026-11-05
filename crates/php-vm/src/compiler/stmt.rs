@@ -5,7 +5,7 @@ use crate::ast::{self, Expr, ExprKind, Stmt, StmtKind, VarName};
 use crate::opcode::{ArgSrc, BinKind, ForeachKind, Op, Operand, Place, PlaceBase, TryEntry};
 use php_runtime::{Value, ZStr};
 
-/// `ZEND_SYMBOL_CLASS` (`FC(seen_symbols)` kinds, Zend/zend_compile.h).
+/// `ZEND_SYMBOL_CLASS` (`FC(seen_symbols)` kinds, `Zend/zend_compile.h`).
 pub(crate) const SYMBOL_CLASS: u8 = 1 << 0;
 /// `ZEND_SYMBOL_FUNCTION`.
 pub(crate) const SYMBOL_FUNCTION: u8 = 1 << 1;
@@ -429,7 +429,7 @@ impl Compiler {
         }
     }
 
-    /// `zend_compile_const_decl` (Zend/zend_compile.c): `true`/`false`/`null`
+    /// `zend_compile_const_decl` (`Zend/zend_compile.c)`: `true`/`false`/`null`
     /// cannot be declared, nor a name imported by `use const` for another
     /// constant. Registers the name as seen.
     fn check_const_decl_name(&mut self, unqualified: &[u8], full: &[u8], line: u32) -> CResult<()> {
@@ -467,7 +467,7 @@ impl Compiler {
         *self.seen_symbols.entry(name).or_insert(0) |= kind;
     }
 
-    /// `zend_compile_use` (Zend/zend_compile.c) for one imported name.
+    /// `zend_compile_use` (`Zend/zend_compile.c`) for one imported name.
     #[allow(clippy::too_many_lines)]
     fn add_use(
         &mut self,

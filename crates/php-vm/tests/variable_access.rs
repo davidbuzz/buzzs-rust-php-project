@@ -89,7 +89,7 @@ try { unset($a[0][[]]); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
     );
 }
 
-/// UNSET_DIM/FETCH_DIM_UNSET warn on undefined CVs and deprecate `false`;
+/// `UNSET_DIM/FETCH_DIM_UNSET` warn on undefined CVs and deprecate `false`;
 /// `$this` fetches throw outside objects; offsets are read when fetched.
 #[test]
 fn unset_and_isset_follow_fetch_order_and_this_checks() {

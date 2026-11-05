@@ -195,7 +195,7 @@ pub(crate) struct FnCtx {
     /// Short-circuit jumps of the current nullsafe chain.
     pub sc_jumps: Vec<usize>,
     /// Compiling an `isset()`/`empty()`/`??` operand: nullsafe bases are
-    /// fetched in BP_VAR_IS mode.
+    /// fetched in `BP_VAR_IS` mode.
     pub sc_quiet: bool,
     /// See [`OpArray::live_tmps`].
     pub live_tmps: Vec<crate::opcode::LiveTmp>,

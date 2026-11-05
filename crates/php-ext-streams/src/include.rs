@@ -145,7 +145,7 @@ mod tests {
     /// `php_stream_open_for_zend_ex` + `zend_stream_fixup`: a user wrapper
     /// opened for `require` sees `stream_set_option` (no read buffer) and
     /// `stream_stat` (sizing) before the first `stream_read`, whose
-    /// exception propagates (Zend/tests/exceptions/exception_stream_wrapper).
+    /// exception propagates (`Zend/tests/exceptions/exception_stream_wrapper`).
     #[test]
     fn include_through_a_user_wrapper_sets_option_and_stats_first() {
         let sink = Sink::default();

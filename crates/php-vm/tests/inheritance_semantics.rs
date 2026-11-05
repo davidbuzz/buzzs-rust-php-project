@@ -348,7 +348,7 @@ fn class_redeclaration_names_the_existing_class() {
     );
 }
 
-/// `E_STRICT` is `#[\Deprecated]` in Zend/zend_constants.stub.php.
+/// `E_STRICT` is `#[\Deprecated]` in `Zend/zend_constants.stub.php`.
 #[test]
 fn e_strict_constant_is_deprecated() {
     let out = run("<?php\necho E_ALL, \"\\n\";\necho E_STRICT, \"\\n\";\n");
@@ -431,7 +431,7 @@ S::$n();
 fn call_trampoline_keeps_references_from_call_user_func_array() {
     // bug50394: `zend_call_function` does not unwrap references for a
     // trampoline; the VM's own sends pass values.
-    let out = run(r#"<?php
+    let out = run(r"<?php
 function inc(&$x) { $x++; }
 class Proxy {
     function __call($name, $args) { call_user_func_array('inc', $args); }
@@ -440,7 +440,7 @@ $arg = 1;
 call_user_func_array([new Proxy, 'bar'], [&$arg]);
 (new Proxy)->bar($arg);
 var_dump($arg);
-"#);
+");
     assert_eq!(
         out,
         "\nWarning: inc(): Argument #1 ($x) must be passed by reference, value given in t.php on line 4\nint(2)\n"
@@ -549,10 +549,10 @@ g();
 /// without `$allow_string` is deprecated and yields false.
 #[test]
 fn is_a_with_string_without_allow_string_is_deprecated() {
-    let out = run(r#"<?php
+    let out = run(r"<?php
 class A {}
 var_dump(is_a('A', 'A'), is_a('A', 'A', true), is_subclass_of('A', 'A', false), is_a(1, 'A'));
-"#);
+");
     assert_eq!(
         out,
         "\nDeprecated: Calling is_a() with a string when $allow_string is false in t.php on line 3\n\

@@ -304,7 +304,7 @@ impl Vm {
     /// Initializes static variable slot `idx`. A slot that a recursive call
     /// made from the initializer already set wins: `ZEND_BIND_STATIC` binds
     /// the existing reference and drops the computed value
-    /// (Zend/tests/static_variables/static_variables_recursive.phpt).
+    /// (`Zend/tests/static_variables/static_variables_recursive.phpt`).
     pub(crate) fn static_init(&mut self, idx: u32, v: Value) -> PhpRef {
         fn put(b: &mut Vec<Option<PhpRef>>, idx: usize, v: Value) -> PhpRef {
             if b.len() <= idx {

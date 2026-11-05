@@ -1014,13 +1014,13 @@ echo Foo::$foo['foo'], "\n";
 #[test]
 fn promoted_by_reference_property_binds_the_argument() {
     // ctor_promotion_by_ref: `ZEND_ASSIGN_OBJ_REF`.
-    let out = run(r#"<?php
+    let out = run(r"<?php
 class Ary { public function __construct(public array &$array) {} }
 $array = [];
 $ary = new Ary($array);
 $array[] = 42;
 var_dump($ary->array);
-"#);
+");
     assert_eq!(out, "array(1) {\n  [0]=>\n  int(42)\n}\n");
 }
 
@@ -1206,12 +1206,12 @@ bool(true)
 fn unset_dim_of_false_is_deprecated_without_conversion() {
     // ZEND_UNSET_DIM / FETCH_DIM_UNSET call zend_false_to_array_deprecated().
     assert_eq!(
-        run(r#"<?php
+        run(r"<?php
 $a = false;
 unset($a[0][0]);
 unset($a[0]);
 var_dump($a);
-"#),
+"),
         "
 Deprecated: Automatic conversion of false to array is deprecated in t.php on line 3
 
@@ -1226,12 +1226,12 @@ fn nested_unset_through_missing_property_creates_it() {
     // bug78644: FETCH_OBJ_UNSET adds the missing dynamic property as null
     // (zend_std_get_property_ptr_ptr).
     assert_eq!(
-        run(r#"<?php
+        run(r"<?php
 $a = new stdClass;
 unset($a->b->c->d);
 unset($a->b->c['d']);
 var_dump($a);
-"#),
+"),
         "object(stdClass)#1 (1) {\n  [\"b\"]=>\n  NULL\n}\n"
     );
 }
@@ -1278,7 +1278,7 @@ array(2) {
 fn return_type_coercion_precedes_finally() {
     // bug72347: VERIFY_RETURN_TYPE runs before zend_handle_loops_and_finally.
     assert_eq!(
-        run(r#"<?php
+        run(r"<?php
 function test() : int {
     $d = 1.5;
     try {
@@ -1288,7 +1288,7 @@ function test() : int {
     }
 }
 var_dump(test());
-"#),
+"),
         "
 Deprecated: Implicit conversion from float 1.5 to int loses precision in t.php on line 5
 float(1.5)
@@ -1326,7 +1326,7 @@ CompileError: Encoding must be a literal
 fn traversable_unpack_numeric_string_keys_are_positional() {
     // GH-18581: ZEND_SEND_UNPACK applies ZEND_HANDLE_NUMERIC to iterator keys.
     assert_eq!(
-        run(r#"<?php
+        run(r"<?php
 function g() {
     yield '100' => 'first';
     yield '101' => 'second';
@@ -1337,7 +1337,7 @@ function test($x = null, $y = null, ...$z) {
     var_dump($x, $y, $z);
 }
 test(...g());
-"#),
+"),
         "string(5) \"first\"
 string(6) \"second\"
 array(2) {

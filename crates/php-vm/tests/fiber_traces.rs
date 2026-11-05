@@ -107,7 +107,7 @@ try { $fiber->resume(); } catch (Exception $e) { show_trace($e); }
     );
 }
 
-/// Like [`run`], with zend_test's `_ZendTestFiber` registered.
+/// Like [`run`], with `zend_test`'s `_ZendTestFiber` registered.
 fn run_with_test_fiber(source: &str) -> String {
     let sink = Sink::default();
     let mut vm = Vm::new(&VmOptions::default(), Box::new(sink.clone()));
@@ -158,7 +158,7 @@ var_dump($fiber->getReturn());
 fn test_fiber_suspended_from_inside_a_fiber_and_pipe_to() {
     // ext/zend_test/tests/fiber_test_05.phpt and fiber_test_07.phpt
     let output = run_with_test_fiber(
-        r#"<?php
+        r"<?php
 $test = new _ZendTestFiber(function (): void {
     $fiber = new Fiber(function (): int {
         $value = Fiber::suspend(1);
@@ -183,7 +183,7 @@ $value = $test->resume(2 * $value);
 $piped = new _ZendTestFiber(function (): int { return 7; });
 $piped->pipeTo(function (int $result): void { var_dump($result); });
 var_dump($piped->start());
-"#,
+",
     );
     assert_eq!(
         output,
@@ -195,11 +195,11 @@ var_dump($piped->start());
 fn test_fiber_backtraces_end_inside_the_fiber() {
     // ext/zend_test/tests/gh16230.phpt
     let output = run_with_test_fiber(
-        r#"<?php
+        r"<?php
 function show() { var_dump(debug_backtrace()); }
 $test = new _ZendTestFiber(function (): void { show(); });
 $test->start();
-"#,
+",
     );
     // show() called from the closure, which has no caller (no file/line).
     assert!(output.starts_with("array(2) {"), "{output}");

@@ -108,7 +108,21 @@ fn noop_construct(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
 }
 
 /// `SensitiveParameterValue::__construct()`: initializes the private
-/// readonly `$value` (property slot 0, Zend/zend_attributes.c).
+/// readonly `$value` (property slot 0, `Zend/zend_attributes.c`).
+#[allow(clippy::unnecessary_wraps)] // ClassHooks::properties_for signature
+fn sensitive_value_properties(
+    _vm: &mut Vm,
+    o: &Obj,
+    purpose: php_runtime::PropertyPurpose,
+) -> std::option::Option<php_runtime::ZArray> {
+    if purpose == php_runtime::PropertyPurpose::Debug
+        && crate::object::class_of(o).magic.debug_info.is_some()
+    {
+        return Ok(None);
+    }
+    Ok(Some(php_runtime::ZArray::new()))
+}
+
 fn sensitive_value_construct(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let o = a.this_obj();
     let d = crate::object::data(&o);
@@ -297,6 +311,12 @@ pub(crate) fn register(vm: &mut Vm) {
         .method("__construct(mixed $value)", PUB, sensitive_value_construct)
         .method("getValue(): mixed", PUB, sensitive_value_get)
         .method("__debugInfo(): array", PUB, sensitive_value_debug_info)
+        // `attributes_sensitive_parameter_value_get_properties_for`: no
+        // listing shows the value (var_dump uses `__debugInfo`).
+        .hooks(crate::ext::ClassHooks {
+            properties_for: Some(sensitive_value_properties),
+            ..crate::ext::ClassHooks::default()
+        })
         .register(vm);
     ClassBuilder::new("__PHP_Incomplete_Class")
         .flags(cflags::FINAL | cflags::ALLOW_DYNAMIC)

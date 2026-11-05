@@ -616,9 +616,24 @@ impl Vm {
     /// The storage slot of `A::$name` for `isset()`/`empty()`
     /// (`zend_std_get_static_property_with_info` with `BP_VAR_IS`): an
     /// undeclared or inaccessible static property yields no slot instead
-    /// of an error.
-    #[cold]
+    /// of an error. One lookup for the common (public, declared) case.
     pub(crate) fn static_prop_cell_is(
+        &mut self,
+        cls: &Rc<Class>,
+        name: &ZStr,
+    ) -> VmResult<Option<Rc<RefCell<Value>>>> {
+        if let Some(sp) = cls.find_static(name.as_bytes()) {
+            if sp.flags & flags::VISIBILITY == flags::PUBLIC {
+                let sp = sp.clone();
+                return self.static_prop_slot(cls, name, &sp).map(Some);
+            }
+        }
+        self.static_prop_cell_is_slow(cls, name)
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn static_prop_cell_is_slow(
         &mut self,
         cls: &Rc<Class>,
         name: &ZStr,
@@ -642,7 +657,7 @@ impl Vm {
                 return Ok(None);
             }
         }
-        self.static_prop_cell(cls, name).map(Some)
+        self.static_prop_slot(cls, name, &sp).map(Some)
     }
 
     /// The storage slot of `A::$name`.
@@ -681,6 +696,17 @@ impl Vm {
                 ));
             }
         }
+        self.static_prop_slot(cls, name, &sp)
+    }
+
+    /// The tail of a static property fetch once `sp` is known accessible:
+    /// the trait deprecation, lazy default evaluation and the slot.
+    fn static_prop_slot(
+        &mut self,
+        cls: &Rc<Class>,
+        name: &ZStr,
+        sp: &StaticProp,
+    ) -> VmResult<Rc<RefCell<Value>>> {
         if cls.is_trait() {
             self.error(
                 crate::errors::level::DEPRECATED,
@@ -701,7 +727,7 @@ impl Vm {
                 *sp.cell.borrow_mut() = v;
             }
         }
-        crate::typed_refs::note_static_prop(&sp);
+        crate::typed_refs::note_static_prop(sp);
         Ok(sp.cell.clone())
     }
 
@@ -769,7 +795,7 @@ impl Vm {
     /// early-bound (hoisted) declaration is consumed by its first
     /// execution; executing the statement again (a declaration inside a
     /// function called twice, or in a loop) redeclares the class, as the
-    /// runtime-definition key is gone (`do_bind_class`, Zend/zend_compile.c).
+    /// runtime-definition key is gone (`do_bind_class`, `Zend/zend_compile.c`).
     pub(crate) fn declare_class_stmt(&mut self, decl: &Rc<ClassDecl>) -> VmResult<()> {
         let key = Rc::as_ptr(decl) as usize;
         if self.bound_decls.remove(&key).is_none() {
@@ -1790,7 +1816,7 @@ pub(crate) fn variance_decl(name: &[u8]) -> Option<Rc<ClassDecl>> {
 }
 
 /// The `%s %pS cannot implement previously implemented interface %pS`
-/// compile error of `zend_do_implement_interfaces` (Zend/zend_inheritance.c).
+/// compile error of `zend_do_implement_interfaces` (`Zend/zend_inheritance.c`).
 #[cold]
 fn dup_interface_error(vm: &mut Vm, kind: ClassKind, name: &str, iface: &ZStr, line: u32) -> Throw {
     // `zend_get_object_type_uc`.
@@ -1806,7 +1832,7 @@ fn dup_interface_error(vm: &mut Vm, kind: ClassKind, name: &str, iface: &ZStr, l
     )
 }
 
-/// `zend_class_redeclaration_error_ex` (Zend/zend_API.c): the message for
+/// `zend_class_redeclaration_error_ex` (`Zend/zend_API.c)`: the message for
 /// declaring `new_name` (a class declaration or a `class_alias()` alias)
 /// while `old` already holds that name.
 #[cold]
@@ -2323,6 +2349,7 @@ fn trait_prop_decls(t: &Rc<Class>) -> Vec<crate::class::PropDecl> {
 /// `class` in an incompatible way. Traits are bound before inheritance, so
 /// inherited properties are not considered here.
 #[allow(clippy::mutable_key_type, clippy::too_many_arguments)] // `ZStr` keys hash by content only.
+#[allow(clippy::mutable_key_type)] // ZStr's cached-hash cell never changes Hash/Eq
 fn trait_property_conflict(
     class: &ZStr,
     traits: &[Rc<Class>],

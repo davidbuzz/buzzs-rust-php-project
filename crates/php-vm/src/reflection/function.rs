@@ -485,7 +485,15 @@ fn rf_get_attributes(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     } else {
         super::target::FUNCTION
     };
-    let attrs = match &f.func {
+    // `zend_get_call_trampoline_func` copies the attributes of the
+    // `__call`/`__callStatic` method the trampoline stands for.
+    let trampoline_target = f
+        .closure
+        .as_ref()
+        .and_then(|c| vm.closure_data(c))
+        .filter(|d| d.magic_name.is_some())
+        .map(|d| d.func);
+    let attrs = match trampoline_target.as_ref().unwrap_or(&f.func) {
         Func::User(u) => u.attributes.clone(),
         Func::Builtin(_) => builtin_key(&f)
             .and_then(|k| vm.builtin_attributes.get(&k))

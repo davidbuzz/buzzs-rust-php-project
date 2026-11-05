@@ -49,7 +49,7 @@ enum FiberKind {
     /// `Fiber`: `Fiber::suspend()` suspends the innermost one
     /// (`EG(active_fiber)`).
     Fiber,
-    /// zend_test's `_ZendTestFiber` (`ext/zend_test/fiber.c`), a symmetric
+    /// `zend_test`'s `_ZendTestFiber` (`ext/zend_test/fiber.c`), a symmetric
     /// coroutine with its own active-fiber pointer (`ZT_G(active_fiber)`):
     /// suspending either kind from inside the other suspends the contexts
     /// running above it together with it.
@@ -933,7 +933,7 @@ fn test_fiber_suspend(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     suspend_innermost(vm, v, FiberKind::Test)
 }
 
-/// Registers zend_test's `_ZendTestFiber` (`zend_test_fiber_init`): a
+/// Registers `zend_test`'s `_ZendTestFiber` (`zend_test_fiber_init`): a
 /// fiber class with its own active-fiber pointer, so that it and `Fiber`
 /// can suspend each other's callers.
 pub fn register_zend_test_fiber(vm: &mut Vm) {

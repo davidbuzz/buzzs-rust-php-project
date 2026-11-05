@@ -596,7 +596,7 @@ fn stack_policies() {
 }
 
 /// `array_pair_list` rtrims only the implicit element after the last comma
-/// (zend_language_parser.y), so an explicit trailing hole stays an error.
+/// (`zend_language_parser.y`), so an explicit trailing hole stays an error.
 #[test]
 fn array_trailing_holes() {
     let opts = ParseOptions::default();

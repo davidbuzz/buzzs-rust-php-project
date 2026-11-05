@@ -470,7 +470,7 @@ impl Vm {
 
     /// `X::__construct()` on an inaccessible private constructor
     /// (`ZEND_INIT_STATIC_METHOD_CALL` with an unused op2): "Cannot call
-    /// private X::__construct()" unless `$this` is exactly the constructor's
+    /// private X::__`construct()`" unless `$this` is exactly the constructor's
     /// class.
     #[cold]
     fn private_ctor_call_error(
@@ -523,6 +523,7 @@ impl Vm {
 
     /// [`Vm::static_method_call`]; `use_this: false` is a dynamic call's
     /// `zend_std_get_static_method` without object forwarding.
+    #[allow(clippy::too_many_lines)] // zend_std_get_static_method, one lookup order
     fn static_method_call_ex(
         &mut self,
         cls: &Rc<Class>,

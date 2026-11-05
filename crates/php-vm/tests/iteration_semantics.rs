@@ -1,4 +1,4 @@
-//! Built-in iterator interfaces, ArrayAccess and foreach regressions
+//! Built-in iterator interfaces, `ArrayAccess` and foreach regressions
 //! (Zend/tests/{iterators,ArrayAccess,foreach}).
 use php_vm::{Vm, VmOptions};
 use std::cell::RefCell;
@@ -35,7 +35,7 @@ fn run(source: &str) -> String {
     output
 }
 
-/// `zend_implement_aggregate` / `zend_implement_iterator` (bug48667_1/2).
+/// `zend_implement_aggregate` / `zend_implement_iterator` (`bug48667_1/2`).
 #[test]
 fn class_cannot_be_both_iterator_and_aggregate() {
     for ifaces in ["Iterator, IteratorAggregate", "IteratorAggregate, Iterator"] {
@@ -55,7 +55,7 @@ fn class_cannot_be_both_iterator_and_aggregate() {
 }
 
 /// `get_object_vars()` applies `zend_check_property_access()` to dynamic
-/// properties too (foreach_shadowed_dyn_property).
+/// properties too (`foreach_shadowed_dyn_property`).
 #[test]
 fn get_object_vars_hides_dynamic_property_shadowed_by_private() {
     let out = run(r#"<?php
@@ -77,7 +77,7 @@ foreach (get_object_vars($t) as $k => $v) { echo "outside $k: $v\n"; }
 }
 
 /// `zend_fe_fetch_object_helper` unmangles NUL-prefixed dynamic keys and
-/// reads their buckets directly (foreach_018).
+/// reads their buckets directly (`foreach_018`).
 #[test]
 fn foreach_unmangles_nul_prefixed_dynamic_keys() {
     let out = run(r#"<?php
@@ -91,7 +91,7 @@ foreach ($obj as $k => $v) { echo "$k=$v\n"; }
 }
 
 /// A by-reference arrow function over a non-variable returns by value with
-/// the ZEND_RETURN_BY_REF notice (oss_fuzz_58181).
+/// the ZEND_RETURN_BY_REF notice (`oss_fuzz_58181`).
 #[test]
 fn by_ref_arrow_fn_on_value_notices() {
     let out = run("<?php\n$f = fn&() => true;\n$x = $f();\nvar_dump($x);\n");
@@ -123,7 +123,7 @@ try { $r = &$a['xx']; } catch (Error $e) { echo get_class($e), ": ", $e->getMess
     );
 }
 
-/// `list()` over a string warns like any other scalar (foreach_list_002).
+/// `list()` over a string warns like any other scalar (`foreach_list_002`).
 #[test]
 fn list_destructuring_of_string_warns() {
     let out = run("<?php\nforeach (['c'] as list(, $a)) {\n    var_dump($a);\n}\n");
@@ -133,7 +133,7 @@ fn list_destructuring_of_string_warns() {
     );
 }
 
-/// `$o[] op= v` on an ArrayAccess object reads `offsetGet(null)` and
+/// `$o[] op= v` on an `ArrayAccess` object reads `offsetGet(null)` and
 /// writes `offsetSet(null, ..)` (bug69955); a by-reference fetch whose
 /// `offsetGet()` returns an object raises no notice (bug39297).
 #[test]

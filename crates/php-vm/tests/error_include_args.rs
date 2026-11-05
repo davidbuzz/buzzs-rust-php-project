@@ -150,6 +150,7 @@ fn ini_set_value_types() {
 /// `ext/standard/tests/general_functions/bug60723.phpt`).
 #[test]
 fn error_log_file_uses_date_for_the_timestamp() {
+    #[allow(clippy::unnecessary_wraps)] // builtin handler signature
     fn fake_date(
         _vm: &mut Vm,
         a: &mut php_vm::ext::Args,

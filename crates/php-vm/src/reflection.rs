@@ -155,7 +155,7 @@ impl FnRef {
                 return_type: None,
                 flags: flags::PUBLIC
                     | flags::VARIADIC
-                    | (d.func.flags() & (flags::STATIC | flags::RETURN_REF)),
+                    | (d.func.flags() & (flags::STATIC | flags::RETURN_REF | flags::DEPRECATED)),
                 handler: reflected_trampoline,
             })),
             None => d.func.clone(),

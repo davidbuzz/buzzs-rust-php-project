@@ -217,7 +217,7 @@ $f('cb');
 
 #[test]
 fn fiber_switches_are_notified_before_each_switch() {
-    use php_vm::ext::{FiberContext, FiberState};
+    use php_vm::ext::FiberContext;
     fn describe(c: &FiberContext) -> String {
         format!(
             "{}:{:?}{}",

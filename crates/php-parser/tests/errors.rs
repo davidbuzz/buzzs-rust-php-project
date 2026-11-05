@@ -584,7 +584,7 @@ fn messages_match_php() {
 
 /// A closure's `use` variables live in its static-variables table
 /// (`zend_compile_closure_uses()`), so redeclaring one as `static` is a
-/// duplicate (Zend/tests/static_variables/static_variables_closure_bind.phpt).
+/// duplicate (`Zend/tests/static_variables/static_variables_closure_bind.phpt`).
 #[test]
 fn static_redeclaring_closure_use_is_duplicate() {
     let src = b"<?php\n$a = null;\nfunction () use (&$a) {\n    static $a;\n};\n";

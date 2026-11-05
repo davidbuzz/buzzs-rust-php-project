@@ -55,7 +55,7 @@ fn strip_underscores(digits: &[u8]) -> Vec<u8> {
 
 /// Overflowing prefixed literal to float, rounding step by step like
 /// `zend_hex_strtod` / `zend_oct_strtod` / `zend_bin_strtod`
-/// (Zend/zend_strtod.c). The octal and binary loops compute
+/// (`Zend/zend_strtod.c`). The octal and binary loops compute
 /// `value * base + c - '0'`, i.e. add the ASCII code before subtracting
 /// `'0'`, which rounds differently once `value` exceeds 2^53.
 fn accumulate_float(digits: &[u8], radix: u32) -> f64 {

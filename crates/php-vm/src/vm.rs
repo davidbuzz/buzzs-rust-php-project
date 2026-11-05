@@ -779,6 +779,10 @@ pub struct Vm {
     pub const_files: HashMap<ZStr, ZStr>,
     /// Deprecated native constants: name → " since X, msg" suffix.
     pub deprecated_constants: HashMap<ZStr, Vec<u8>>,
+    /// `(entries, mask)`: a 64-bit filter of the hashes of the names in
+    /// `deprecated_constants` and `const_attributes`, rebuilt when their
+    /// size changes (entries are only ever added).
+    pub(crate) const_deprecation_filter: std::cell::Cell<(usize, u64)>,
     /// Shared empty code for builtin frames.
     pub empty_code: Rc<OpArray>,
     /// Shared empty variable store for builtin frames.

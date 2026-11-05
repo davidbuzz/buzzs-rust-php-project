@@ -884,7 +884,7 @@ thread_local! {
 /// Sets how deeply array comparisons (`==`, `<=>`, `===`) may nest before
 /// failing with "Maximum call stack size reached during comparison", the
 /// embedder's model of `zend_call_stack_overflowed()` in
-/// `zend_hash_compare` (Zend/zend_hash.c). Unlimited by default.
+/// `zend_hash_compare` (`Zend/zend_hash.c`). Unlimited by default.
 pub fn set_compare_depth_limit(limit: usize) {
     COMPARE_DEPTH.with(|c| c.set((c.get().0, limit)));
 }

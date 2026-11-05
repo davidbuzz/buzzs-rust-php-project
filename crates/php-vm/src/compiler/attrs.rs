@@ -12,10 +12,13 @@ use std::collections::HashMap;
 /// (`Attribute::TARGET_*`) and returns the compile error, if any.
 pub type ExtAttributeValidator = fn(target: u32) -> Option<String>;
 
+/// An extension attribute: its target flags and optional validator.
+type ExtAttribute = (u32, Option<ExtAttributeValidator>);
+
 thread_local! {
     /// Attribute classes registered by extensions
     /// (`zend_mark_internal_attribute`), by lowercase name.
-    static EXT_ATTRIBUTES: RefCell<HashMap<Vec<u8>, (u32, Option<ExtAttributeValidator>)>> =
+    static EXT_ATTRIBUTES: RefCell<HashMap<Vec<u8>, ExtAttribute>> =
         RefCell::new(HashMap::new());
 }
 
