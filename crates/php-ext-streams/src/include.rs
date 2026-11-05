@@ -8,7 +8,7 @@ use std::cell::Cell;
 
 use php_runtime::ZStr;
 use php_streams::diag::{self, Severity};
-use php_streams::stream::{BufferMode, StreamOption};
+use php_streams::stream::{BufferMode, Stream, StreamOption};
 use php_streams::wrapper::{REPORT_ERRORS, STREAM_OPEN_FOR_INCLUDE, USE_PATH};
 use php_vm::ext::{IncludeOpen, IncludeOpenerFn, VmResult};
 use php_vm::Vm;
@@ -61,7 +61,7 @@ fn opener(vm: &mut Vm, name: &[u8], kind: &str) -> VmResult<IncludeOpen> {
             if s.read_filters.is_empty() {
                 let _ = s.stat();
             }
-            let src = s.copy_to_mem(None).unwrap_or_default();
+            let src = read_source(&mut s);
             let opened = opened.or_else(|| s.orig_path.clone());
             if bridge::pending_is_fatal() {
                 // A fatal error in a wrapper callback longjmps past the
@@ -97,12 +97,34 @@ fn opener(vm: &mut Vm, name: &[u8], kind: &str) -> VmResult<IncludeOpen> {
         return Err(t);
     }
     Ok(match r {
-        Some((source, opened)) => IncludeOpen::Opened {
+        Some((Some(source), opened)) => IncludeOpen::Opened {
             source,
             opened_path: ZStr::from(opened.unwrap_or_else(|| name.to_vec())),
         },
-        None => IncludeOpen::Failed,
+        Some((None, _)) | None => IncludeOpen::Failed,
     })
+}
+
+/// `zend_stream_fixup`'s read loop: `None` when a read fails (a user
+/// filter returning `PSFS_ERR_FATAL`, a wrapper's `stream_read()`
+/// returning `false`), which fails the include ("Failed opening ... for
+/// inclusion"). A buffer that cannot grow under `memory_limit` yields the
+/// source read so far; the pending OOM is raised after the include.
+fn read_source(s: &mut Stream) -> Option<Vec<u8>> {
+    let mut out = Vec::new();
+    let mut buf = vec![0u8; php_streams::stream::CHUNK_SIZE];
+    loop {
+        match s.read(&mut buf) {
+            Ok(0) => return Some(out),
+            Ok(n) => {
+                if !php_streams::util::reserve_more(&mut out, n) {
+                    return Some(Vec::new());
+                }
+                out.extend_from_slice(&buf[..n]);
+            }
+            Err(_) => return None,
+        }
+    }
 }
 
 /// `php_verror()` origin once an exception is pending: the throw moved the
@@ -251,6 +273,39 @@ include('lib://test.php');
             4,
             "{out}"
         );
+    }
+
+    /// `zend_stream_fixup` fails when a read fails: a user filter whose
+    /// `filter()` is the default (`PSFS_ERR_FATAL`) makes the include
+    /// fail (Zend/tests/include_fail_during_read).
+    #[test]
+    fn failed_read_fails_the_include() {
+        let path =
+            std::env::temp_dir().join(format!("phprust-include-fail-{}.php", std::process::id()));
+        std::fs::write(&path, "<?php echo 1;").expect("write fixture");
+        let p = path.to_string_lossy().into_owned();
+        let out = run(format!(
+            "<?php
+class SampleFilter extends php_user_filter {{ }}
+stream_filter_register('sample.filter', SampleFilter::class);
+var_dump(include 'php://filter/read=sample.filter/resource={p}');
+"
+        )
+        .as_bytes());
+        let _ = std::fs::remove_file(&path);
+        assert!(
+            out.contains(
+                "Warning: include(): Unprocessed filter buckets remaining on input brigade"
+            ),
+            "{out}"
+        );
+        assert!(
+            out.contains(&format!(
+                "Warning: include(): Failed opening 'php://filter/read=sample.filter/resource={p}' for inclusion"
+            )),
+            "{out}"
+        );
+        assert!(out.ends_with("bool(false)\n"), "{out}");
     }
 
     #[test]
