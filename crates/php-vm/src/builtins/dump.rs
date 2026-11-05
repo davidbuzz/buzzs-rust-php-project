@@ -164,6 +164,21 @@ const DEFAULT_STACK: i64 = 8 << 20;
 
 thread_local! {
     static DEPTH: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// See [`set_resource_refs_hook`].
+    static RESOURCE_REFS: std::cell::Cell<Option<crate::ext::ResourceRefsFn>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// Installs the callback reporting the references an extension's internal
+/// structures hold to a resource.
+pub(crate) fn set_resource_refs_hook(f: crate::ext::ResourceRefsFn) {
+    RESOURCE_REFS.with(|h| h.set(Some(f)));
+}
+
+/// References to `r` held outside PHP values (`GC_ADDREF` on the
+/// `zend_resource` by its extension, e.g. `stream->ctx`).
+fn resource_internal_refs(r: &php_runtime::Resource) -> usize {
+    RESOURCE_REFS.with(std::cell::Cell::get).map_or(0, |f| f(r))
 }
 
 /// The usable stack in bytes (`zend.max_allowed_stack_size -
@@ -373,9 +388,13 @@ pub(crate) fn var_dump(
             out.put(&t);
             match zv {
                 // Resources do not expose their handle count: report the
-                // usual "variable + argument" (or "container") count.
+                // usual "variable + argument" (or "container") count, plus
+                // the references the owning extension holds (GH-10885: a
+                // stream keeps its context).
                 Some(_) => {
-                    out.put(format!(") refcount({})\n", if level == 1 { 2 } else { 1 }).as_bytes());
+                    let base = if level == 1 { 2 } else { 1 };
+                    let n = base + resource_internal_refs(r);
+                    out.put(format!(") refcount({n})\n").as_bytes());
                 }
                 None => out.put(b")\n"),
             }
