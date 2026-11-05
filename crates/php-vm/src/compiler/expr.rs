@@ -1490,7 +1490,7 @@ impl Compiler {
                 let n = self.member_name(name)?;
                 self.f().line = line;
                 self.emit(Op::InitMethodCall { obj: o, name: n });
-                self.finish_call(args, line, need)
+                self.finish_call_at(args, line, member_name_line(name), need)
             }
             ExprKind::StaticCall { class, name, args }
                 if self.parent_hook_property(class, name).is_some() =>
@@ -1553,7 +1553,7 @@ impl Compiler {
                     class: spec,
                     name: n,
                 });
-                self.finish_call(args, line, need)
+                self.finish_call_at(args, line, member_name_line(name), need)
             }
             ExprKind::New { class, args } => {
                 let spec = match &**class {
@@ -1591,6 +1591,19 @@ impl Compiler {
     }
 
     fn finish_call(&mut self, args: &ArgList, line: u32, need: bool) -> CResult<Option<Operand>> {
+        self.finish_call_at(args, line, line, need)
+    }
+
+    /// [`Self::finish_call`] with the line of the `DoCall` (the call site
+    /// backtraces report): method and static calls use the line of the
+    /// method name (`zend_compile_call_common(..., method_ast lineno)`).
+    fn finish_call_at(
+        &mut self,
+        args: &ArgList,
+        line: u32,
+        call_line: u32,
+        need: bool,
+    ) -> CResult<Option<Operand>> {
         if args.is_first_class_callable() {
             let t = self.tmp();
             self.f().line = line;
@@ -1616,7 +1629,7 @@ impl Compiler {
             return Ok(Some(Operand::Tmp(t)));
         }
         self.compile_args(args)?;
-        self.f().line = line;
+        self.f().line = call_line;
         let dst = need.then(|| self.tmp());
         self.emit(Op::DoCall { dst });
         Ok(dst.map(Operand::Tmp))
@@ -2127,5 +2140,13 @@ fn const_truthiness(v: &Value) -> Option<bool> {
         Value::Str(s) => Some(!(s.is_empty() || s.as_bytes() == b"0")),
         Value::Array(a) => Some(!a.is_empty()),
         _ => None,
+    }
+}
+
+/// The line of a method name (`zend_ast_get_lineno(method_ast)`).
+fn member_name_line(name: &MemberName) -> u32 {
+    match name {
+        MemberName::Ident(i) => i.span.line,
+        MemberName::Expr(e) => e.span.line,
     }
 }

@@ -207,3 +207,24 @@ try {
         "#0 t.php(7): A->__construct()\n#1 t.php(11): ReflectionAttribute->newInstance()\n#2 {main}\n"
     );
 }
+
+/// ReflectionFiber_bug_gh11121_*.phpt: a multi-line method call is made
+/// from the line of the method name.
+#[test]
+fn method_call_site_is_the_method_name_line() {
+    assert_eq!(
+        run(r#"<?php
+class X {
+    function start() { echo (new Exception)->getTrace()[0]['line'], "\n"; }
+    static function s() { echo (new Exception)->getTrace()[0]['line'], "\n"; }
+}
+(new X(
+))
+    ->start();
+X::
+    s(
+    );
+"#),
+        "8\n10\n"
+    );
+}
