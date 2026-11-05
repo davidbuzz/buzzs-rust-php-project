@@ -95,6 +95,10 @@ pub struct GenData {
     lent: bool,
     /// Function name for `__debugInfo()`.
     func_name: ZStr,
+    /// The closure a closure's generator runs (`generator->func`): kept
+    /// until the generator object is freed, not just while its frame
+    /// lives (`zend_generator_free_storage`).
+    pub(crate) closure: Option<Obj>,
 }
 
 thread_local! {
@@ -241,6 +245,7 @@ impl Vm {
             (Some(f), None) => f.name().clone(),
             _ => ZStr::from(""),
         };
+        let closure = frame.closure.clone();
         let cls = self.find_class(b"Generator").expect("Generator class");
         let g = object::new_object(cls, Vec::new());
         object::set_internal(
@@ -264,6 +269,7 @@ impl Vm {
                 pending_exc: None,
                 lent: false,
                 func_name,
+                closure,
             },
         );
         let v = Value::Object(g);
@@ -956,6 +962,14 @@ impl Vm {
                 self.gen_destroy(&p)?;
             }
         }
+        // `zend_generator_cleanup_unfinished_execution`
+        // (`cleanup_unfinished_calls`): a `new` suspended during its
+        // argument evaluation is never destructed (gh9750-008).
+        with(g, |d| {
+            if let Some(f) = &d.frame {
+                crate::exec::ctor_failed_unfinished(&f.calls);
+            }
+        });
         let in_finally_scope = with(g, |d| {
             d.frame.as_ref().is_some_and(|f| {
                 let ip = u32::try_from(f.ip.saturating_sub(1)).unwrap_or(u32::MAX);

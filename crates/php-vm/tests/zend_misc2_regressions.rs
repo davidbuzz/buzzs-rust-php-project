@@ -173,3 +173,41 @@ echo count($z), $z[1], "\n";
          Err: Implicit conversion from float 1.5 to int loses precision\n12\n"
     );
 }
+
+/// A closure's generator holds the closure until the generator itself is
+/// freed, also after it finished (`generator_closure_collection`).
+#[test]
+fn finished_generator_keeps_its_closure_until_freed() {
+    let out = run(r#"<?php
+$f = function () { yield 1; yield 2; };
+$r = WeakReference::create($f);
+$g = $f();
+unset($f);
+foreach ($g as $v) echo $v;
+echo "\n", $r->get() === null ? "freed" : "alive", "\n";
+unset($g);
+echo $r->get() === null ? "freed" : "alive", "\n";
+"#);
+    assert_eq!(out, "12\nalive\nfreed\n");
+}
+
+/// Destroying a generator suspended inside the arguments of `new` does not
+/// destruct the half-constructed object (`gh9750-008`).
+#[test]
+fn destroyed_generator_does_not_destruct_pending_new() {
+    let out = run(r#"<?php
+class C { function __destruct() { echo "C\n"; } }
+class D { function __destruct() { echo "D\n"; } }
+$gen = function ($c) use (&$gen) {
+    new D($gen, yield);
+};
+$gen = $gen(new C());
+foreach ($gen as $value) {
+    break;
+}
+$gen = null;
+gc_collect_cycles();
+echo "done\n";
+"#);
+    assert_eq!(out, "C\ndone\n");
+}
