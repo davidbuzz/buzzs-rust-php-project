@@ -106,23 +106,60 @@ pub fn encode(
     vars: &ZArray,
     ctx: &mut (impl RuntimeContext + ?Sized),
 ) -> RtResult<Encoded> {
+    Ok(encode_with(ser, vars, &mut |keys: Option<&[ZStr]>| {
+        serialize_selected(vars, keys, ctx)
+    }))
+}
+
+/// The `php_var_serialize()` calls of one encoding: the entries of `vars`
+/// named by `keys` in order, or the whole array for `None` (the
+/// `php_serialize` handler), all with one shared `var_hash`
+/// (`PHP_VAR_SERIALIZE_INIT` … `PHP_VAR_SERIALIZE_DESTROY`). Returns one
+/// payload per value; `Err` is an exception thrown while serializing.
+pub type SerializeValues<'a> = dyn FnMut(Option<&[ZStr]>) -> RtResult<Vec<Vec<u8>>> + 'a;
+
+/// [`SerializeValues`] over php-runtime's serializer.
+pub fn serialize_selected(
+    vars: &ZArray,
+    keys: Option<&[ZStr]>,
+    ctx: &mut (impl RuntimeContext + ?Sized),
+) -> RtResult<Vec<Vec<u8>>> {
+    match keys {
+        None => Ok(vec![serialize(&Value::Array(vars.clone()), ctx)?]),
+        Some(keys) => {
+            let entries: Vec<(ZStr, Value)> = keys
+                .iter()
+                .map(|k| {
+                    let v = vars.get_str(k.as_bytes()).cloned().unwrap_or_default();
+                    (k.clone(), v)
+                })
+                .collect();
+            serialize_entries(&entries, ctx)
+        }
+    }
+}
+
+/// [`encode`] with the values serialized by `values` (the embedder's
+/// serializer, so that a `serialize()` made from
+/// `Serializable::serialize()` joins the shared `var_hash`).
+pub fn encode_with(ser: Serializer, vars: &ZArray, values: &mut SerializeValues<'_>) -> Encoded {
     if ser == Serializer::PhpSerialize {
-        return Ok(match serialize(&Value::Array(vars.clone()), ctx) {
-            Ok(data) => Encoded {
-                data: Some(data),
+        return match values(None) {
+            Ok(mut data) => Encoded {
+                data: Some(data.pop().unwrap_or_default()),
                 ..Encoded::default()
             },
             Err(e) => Encoded {
                 exception: Some(e),
                 ..Encoded::default()
             },
-        });
+        };
     }
     // PS_ENCODE_LOOP: numeric keys are skipped with a warning.
     let mut warnings = Vec::new();
-    let mut selected: Vec<(ZStr, Value)> = Vec::new();
+    let mut selected: Vec<ZStr> = Vec::new();
     let mut bad_key = None;
-    for (k, v) in vars.iter() {
+    for (k, _) in vars.iter() {
         match k {
             ArrayKey::Int(n) => warnings.push(format!("Skipping numeric key {n}")),
             ArrayKey::Str(s) => {
@@ -133,34 +170,38 @@ pub fn encode(
                     bad_key = Some(s.clone());
                     break;
                 }
-                selected.push((s.clone(), v.clone()));
+                selected.push(s.clone());
             }
         }
     }
-    let (values, exception) = match serialize_entries(&selected, ctx) {
-        Ok(v) => (v, None),
-        Err(e) => (Vec::new(), Some(e)),
+    let (payloads, exception) = if selected.is_empty() {
+        (Vec::new(), None)
+    } else {
+        match values(Some(&selected)) {
+            Ok(v) => (v, None),
+            Err(e) => (Vec::new(), Some(e)),
+        }
     };
     if let Some(bad) = bad_key {
         warnings.push(format!(
             "Failed to write session data. Data contains invalid key \"{}\"",
             bad.to_string_lossy()
         ));
-        return Ok(Encoded {
+        return Encoded {
             data: None,
             warnings,
             exception,
-        });
+        };
     }
     if exception.is_some() {
-        return Ok(Encoded {
+        return Encoded {
             data: None,
             warnings,
             exception,
-        });
+        };
     }
     let mut out = Vec::new();
-    for ((key, _), payload) in selected.iter().zip(values) {
+    for (key, payload) in selected.iter().zip(payloads) {
         match ser {
             Serializer::Php => {
                 out.extend_from_slice(key.as_bytes());
@@ -176,11 +217,11 @@ pub fn encode(
         }
         out.extend_from_slice(&payload);
     }
-    Ok(Encoded {
+    Encoded {
         data: Some(out),
         warnings,
         exception: None,
-    })
+    }
 }
 
 /// Serializes the values with one shared reference table and returns each
@@ -298,26 +339,41 @@ pub fn decode_with(
     Ok(Decoded::Merge { entries, ok })
 }
 
-/// One `php_var_unserialize()` of the value at an offset of the session
-/// data: `Ok(Ok((value, end)))`, `Ok(Err(failure_offset))`, or `Err` for an
-/// exception; `None` declines (see [`decode_nested`]).
-pub type NestedUnserialize<'a> =
-    dyn FnMut(&[u8], usize) -> Option<RtResult<Result<(Value, usize), usize>>> + 'a;
+/// The embedder side of [`decode_nested`].
+pub trait NestedDecode {
+    /// One `php_var_unserialize()` of the value at `offset` of the session
+    /// data in the shared `var_hash`: `Ok(Ok((value, end)))`,
+    /// `Ok(Err(failure_offset))`, or `Err` for an exception; `None`
+    /// declines (no shared `var_hash` is open).
+    fn unserialize_at(
+        &mut self,
+        data: &[u8],
+        offset: usize,
+    ) -> Option<RtResult<Result<(Value, usize), usize>>>;
 
-/// Decodes session data value by value with `nested`, the embedder's
-/// `php_var_unserialize()` joining an active `unserialize()` call's shared
-/// `var_hash` (a `Serializable::unserialize()` calling `session_decode()`):
-/// `r:`/`R:` back-references then resolve against that call's slots, as
-/// `PHP_VAR_UNSERIALIZE_INIT` shares `BG(unserialize)` (bug #70219).
-/// Returns `None` when `nested` declines, i.e. no such call is active, and
-/// [`decode_with`] applies.
+    /// `php_set_session_var()`: stores a decoded entry into `$_SESSION`
+    /// before the next value is parsed (the value it replaces is released
+    /// first, so its object handle can be reused).
+    fn store(&mut self, name: ZStr, value: Value);
+}
+
+/// Decodes session data value by value with the embedder's
+/// `php_var_unserialize()` in one shared `var_hash`
+/// (`PHP_VAR_UNSERIALIZE_INIT`), which also joins an active
+/// `unserialize()` call's (a `Serializable::unserialize()` calling
+/// `session_decode()`, bug #70219) and is joined by `unserialize()` calls
+/// made from `Serializable::unserialize()` (bug #79031): `r:`/`R:`
+/// back-references resolve across those boundaries. `php`/`php_binary`
+/// entries are stored through [`NestedDecode::store`] as they are parsed
+/// (the result's `entries` is empty). Returns `None` when the embedder
+/// declines, and [`decode_with`] applies.
 pub fn decode_nested(
     ser: Serializer,
     data: &[u8],
-    nested: &mut NestedUnserialize<'_>,
+    nested: &mut dyn NestedDecode,
 ) -> Option<RtResult<Decoded>> {
     if ser == Serializer::PhpSerialize {
-        return Some(nested(data, 0)?.map(|r| match r {
+        return Some(nested.unserialize_at(data, 0)?.map(|r| match r {
             Ok((value, _)) => Decoded::Replace { value, ok: true },
             Err(_) => Decoded::Replace {
                 value: Value::empty_array(),
@@ -325,7 +381,6 @@ pub fn decode_nested(
             },
         }));
     }
-    let mut entries = Vec::new();
     let mut ok = true;
     let mut p = 0;
     while p < data.len() {
@@ -343,9 +398,9 @@ pub fn decode_nested(
             }
             (ZStr::from(&data[p + 1..=p + namelen]), p + 1 + namelen)
         };
-        match nested(data, value_start)? {
+        match nested.unserialize_at(data, value_start)? {
             Ok(Ok((value, end))) => {
-                entries.push((name, value));
+                nested.store(name, value);
                 p = end;
             }
             Ok(Err(_)) => {
@@ -355,7 +410,10 @@ pub fn decode_nested(
             Err(e) => return Some(Err(e)),
         }
     }
-    Some(Ok(Decoded::Merge { entries, ok }))
+    Some(Ok(Decoded::Merge {
+        entries: Vec::new(),
+        ok,
+    }))
 }
 
 /// A context wrapper that hides the `unserialize()` "Error at offset" /

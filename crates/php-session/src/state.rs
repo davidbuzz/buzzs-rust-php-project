@@ -332,20 +332,48 @@ pub(crate) fn encode(h: &mut dyn SessionHost) -> Option<Vec<u8>> {
         return None;
     };
     let ser = h.session().serializer?;
-    match serializer::encode(ser, &vars, h) {
-        Ok(enc) => {
-            for w in &enc.warnings {
-                warn(h, ErrorLevel::Warning, w);
-            }
-            if let Some(e) = enc.exception {
-                throw(h, e);
-            }
-            enc.data
-        }
-        Err(e) => {
-            throw(h, e);
-            None
-        }
+    let mut values = |keys: Option<&[ZStr]>| {
+        let shared = h.serialize_shared(&vars, keys);
+        shared.unwrap_or_else(|| serializer::serialize_selected(&vars, keys, h))
+    };
+    let enc = serializer::encode_with(ser, &vars, &mut values);
+    for w in &enc.warnings {
+        warn(h, ErrorLevel::Warning, w);
+    }
+    if let Some(e) = enc.exception {
+        throw(h, e);
+    }
+    enc.data
+}
+
+/// `php_set_session_var()`: stores a decoded entry into `$_SESSION`
+/// (verbatim string key). The replaced value is released after the borrow
+/// ends, as its destructor may run user code.
+fn set_session_var(h: &mut dyn SessionHost, name: ZStr, value: Value) {
+    let Some(r) = h.session().http_session_vars.clone() else {
+        return;
+    };
+    let old = r
+        .borrow_mut()
+        .as_array_mut()
+        .and_then(|t| t.insert_str_raw(name, value));
+    drop(old);
+}
+
+/// The session decoders' view of the host ([`serializer::NestedDecode`]).
+struct SessionDecoder<'a>(&'a mut dyn SessionHost);
+
+impl serializer::NestedDecode for SessionDecoder<'_> {
+    fn unserialize_at(
+        &mut self,
+        data: &[u8],
+        offset: usize,
+    ) -> Option<RtResult<Result<(Value, usize), usize>>> {
+        self.0.unserialize_shared(data, offset)
+    }
+
+    fn store(&mut self, name: ZStr, value: Value) {
+        set_session_var(self.0, name, value);
     }
 }
 
@@ -354,12 +382,13 @@ pub(crate) fn decode(h: &mut dyn SessionHost, data: &[u8]) -> bool {
     let Some(ser) = h.session().serializer else {
         return false;
     };
-    let shared = if h.session().in_rfc1867_update {
+    let rfc1867 = h.session().in_rfc1867_update;
+    // PHP_VAR_UNSERIALIZE_INIT
+    let opened = !rfc1867 && h.begin_unserialize();
+    let shared = if rfc1867 {
         None
     } else {
-        serializer::decode_nested(ser, data, &mut |d: &[u8], off: usize| {
-            h.unserialize_shared(d, off)
-        })
+        serializer::decode_nested(ser, data, &mut SessionDecoder(&mut *h))
     };
     #[allow(clippy::single_match_else)] // the None arm is a multi-line computation
     let decoded = match shared {
@@ -374,13 +403,8 @@ pub(crate) fn decode(h: &mut dyn SessionHost, data: &[u8]) -> bool {
     let bailout = matches!(&decoded, Err(RuntimeError::Fatal(_)));
     let ok = match decoded {
         Ok(Decoded::Merge { entries, ok }) => {
-            if let Some(r) = h.session().http_session_vars.clone() {
-                let mut v = r.borrow_mut();
-                if let Some(t) = v.as_array_mut() {
-                    for (name, val) in entries {
-                        t.insert_str_raw(name, val);
-                    }
-                }
+            for (name, val) in entries {
+                set_session_var(h, name, val);
             }
             ok
         }
@@ -401,6 +425,13 @@ pub(crate) fn decode(h: &mut dyn SessionHost, data: &[u8]) -> bool {
             false
         }
     };
+    if opened {
+        // PHP_VAR_UNSERIALIZE_DESTROY (the delayed `__wakeup()` calls)
+        let run = !h.session().has_exception();
+        if let Err(e) = h.end_unserialize(run, bailout) {
+            throw(h, e);
+        }
+    }
     if !ok {
         // php_session_cancel_decode()
         destroy(h);

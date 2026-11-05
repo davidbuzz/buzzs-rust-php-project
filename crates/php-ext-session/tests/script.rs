@@ -405,3 +405,48 @@ session_start();
          Unknown on line 0\n";
     assert_eq!(out, expected);
 }
+
+/// Bug #79031: `serialize()`/`unserialize()` called from a
+/// `Serializable` share the session encoder's/decoder's `var_hash`.
+#[test]
+fn nested_serialize_shares_the_session_var_hash() {
+    let out = run_with(
+        r#"<?php ob_start();
+class S implements Serializable {
+    public $p;
+    function __construct($p) { $this->p = $p; }
+    function serialize() { return serialize(get_object_vars($this)); }
+    function unserialize($d) { $this->p = unserialize($d)['p']; }
+}
+$o = new stdClass;
+session_start();
+$_SESSION = ['a' => new S($o), 'b' => new S($o)];
+$enc = session_encode();
+echo $enc, "\n";
+session_decode($enc);
+var_dump($_SESSION['a']->p === $_SESSION['b']->p);"#,
+        &[("error_reporting", "24575"), ("session.use_cookies", "0")],
+    );
+    assert_eq!(
+        out,
+        "a|C:1:\"S\":33:{a:1:{s:1:\"p\";O:8:\"stdClass\":0:{}}}b|C:1:\"S\":18:{a:1:{s:1:\"p\";r:3;}}\nbool(true)\n"
+    );
+}
+
+/// `php_set_session_var()`: each decoded entry replaces the old value
+/// before the next one is parsed, so the freed object handle is reused.
+#[test]
+fn decoded_entries_are_stored_one_by_one() {
+    let out = run_with(
+        r#"<?php ob_start();
+session_start();
+session_decode('x|O:8:"stdClass":0:{}y|O:8:"stdClass":0:{}');
+session_decode('x|O:8:"stdClass":0:{}y|O:8:"stdClass":0:{}');
+var_dump($_SESSION);"#,
+        &[("session.use_cookies", "0")],
+    );
+    assert_eq!(
+        out,
+        "array(2) {\n  [\"x\"]=>\n  object(stdClass)#3 (0) {\n  }\n  [\"y\"]=>\n  object(stdClass)#1 (0) {\n  }\n}\n"
+    );
+}

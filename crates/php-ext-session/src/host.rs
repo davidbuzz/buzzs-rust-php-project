@@ -320,6 +320,18 @@ impl SessionHost for VmHost<'_> {
         self.vm.unserialize_options_in_effect()
     }
 
+    fn begin_unserialize(&mut self) -> bool {
+        self.vm.begin_unserialize_context();
+        true
+    }
+
+    fn end_unserialize(&mut self, run: bool, bailout: bool) -> RtResult<()> {
+        self.parked(|vm| {
+            vm.end_unserialize_context(run, bailout)
+                .map_err(|t| to_rt(vm, t))
+        })
+    }
+
     fn unserialize_shared(
         &mut self,
         data: &[u8],
@@ -332,6 +344,25 @@ impl SessionHost for VmHost<'_> {
             vm.unserialize_nested(data, offset)
                 .map_err(|t| to_rt(vm, t))
         }))
+    }
+
+    fn serialize_shared(
+        &mut self,
+        vars: &ZArray,
+        keys: Option<&[ZStr]>,
+    ) -> Option<RtResult<Vec<Vec<u8>>>> {
+        let whole;
+        let values: Vec<&Value> = match keys {
+            Some(keys) => keys
+                .iter()
+                .filter_map(|k| vars.get_str(k.as_bytes()))
+                .collect(),
+            None => {
+                whole = Value::Array(vars.clone());
+                vec![&whole]
+            }
+        };
+        Some(self.parked(|vm| vm.serialize_values(&values).map_err(|t| to_rt(vm, t))))
     }
 
     fn emit_diagnostic(&mut self, level: ErrorLevel, message: &str) -> RtResult<()> {

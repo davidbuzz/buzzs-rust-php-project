@@ -84,6 +84,9 @@ thread_local! {
     static UNSER: RefCell<(u32, Option<UnserRc>)> = const { RefCell::new((0, None)) };
     static ABANDONED_SER: RefCell<Vec<SerRc>> = const { RefCell::new(Vec::new()) };
     static ABANDONED_UNSER: RefCell<Vec<UnserRc>> = const { RefCell::new(Vec::new()) };
+    /// The contexts opened by [`Vm::begin_unserialize_context`] (and
+    /// whether each is the outermost), innermost last.
+    static OPENED_UNSER: RefCell<Vec<(UnserRc, bool)>> = const { RefCell::new(Vec::new()) };
 }
 
 /// `php_basic_early_rinit()` / `PHP_RINIT(basic)`: discard contexts left
@@ -94,7 +97,8 @@ fn request_startup(_vm: &mut Vm) {
     let unser = UNSER.with(|s| std::mem::take(&mut *s.borrow_mut()));
     let abandoned_ser = ABANDONED_SER.with(|s| std::mem::take(&mut *s.borrow_mut()));
     let abandoned_unser = ABANDONED_UNSER.with(|s| std::mem::take(&mut *s.borrow_mut()));
-    drop((ser, unser, abandoned_ser, abandoned_unser));
+    let opened_unser = OPENED_UNSER.with(|s| std::mem::take(&mut *s.borrow_mut()));
+    drop((ser, unser, abandoned_ser, abandoned_unser, opened_unser));
 }
 
 impl Vm {
@@ -582,6 +586,39 @@ fn declared_exact<'c>(cls: &'c Class, key: &[u8]) -> Option<&'c PropInfo> {
             Some(cn) => vis == flags::PRIVATE && p.class.as_bytes() == cn,
         }
     })
+}
+
+impl Vm {
+    /// `PHP_VAR_SERIALIZE_INIT`, one `php_var_serialize()` per value, then
+    /// `PHP_VAR_SERIALIZE_DESTROY` (the session serializers'
+    /// `PS_ENCODE_LOOP`): the values share one `var_hash`, so later ones
+    /// back-reference earlier ones, and a `serialize()` made from a
+    /// `Serializable::serialize()` meanwhile joins it (bug #79031). The
+    /// values are taken as stored in an array (a reference nobody else
+    /// holds is a plain value). Returns one payload per value.
+    pub fn serialize_values(&mut self, values: &[&Value]) -> VmResult<Vec<Vec<u8>>> {
+        let d = ser_init();
+        let mut out = Vec::with_capacity(values.len());
+        for v in values {
+            let mut s = Serializer {
+                buf: Vec::new(),
+                d: &d,
+            };
+            match s.value(self, &element(v)) {
+                Ok(()) => out.push(s.buf),
+                Err(Throw::Fatal) => {
+                    ABANDONED_SER.with(|s| s.borrow_mut().push(d.clone()));
+                    return Err(Throw::Fatal);
+                }
+                Err(t) => {
+                    ser_destroy();
+                    return Err(t);
+                }
+            }
+        }
+        ser_destroy();
+        Ok(out)
+    }
 }
 
 #[allow(clippy::many_single_char_names)]
@@ -2123,6 +2160,33 @@ impl Vm {
             (Err(t), _) | (Ok(_), Err(t)) => Err(t),
             (Ok(v), Ok(())) => Ok(v),
         }
+    }
+
+    /// `PHP_VAR_UNSERIALIZE_INIT` for native code that cannot run inside
+    /// [`Vm::with_unserialize_context`] (the session decoders, which store
+    /// every value as soon as it is parsed): until the matching
+    /// [`Vm::end_unserialize_context`], [`Vm::unserialize_nested`] calls
+    /// (and `unserialize()` calls made from `Serializable::unserialize()`)
+    /// share one `var_hash`.
+    pub fn begin_unserialize_context(&mut self) {
+        let opened = unser_init(self);
+        OPENED_UNSER.with(|o| o.borrow_mut().push(opened));
+    }
+
+    /// `PHP_VAR_UNSERIALIZE_DESTROY` of the innermost context from
+    /// [`Vm::begin_unserialize_context`]: the outermost one runs the
+    /// delayed `__wakeup()`/`__unserialize()` calls when `run` (no
+    /// exception is pending). After a fatal error (`bailout`) the context
+    /// is abandoned instead, as `zend_bailout()` skips the destroy.
+    pub fn end_unserialize_context(&mut self, run: bool, bailout: bool) -> VmResult<()> {
+        let Some((d, outermost)) = OPENED_UNSER.with(|o| o.borrow_mut().pop()) else {
+            return Ok(());
+        };
+        if bailout {
+            ABANDONED_UNSER.with(|u| u.borrow_mut().push(d));
+            return Ok(());
+        }
+        unser_destroy(self, &d, outermost, run)
     }
 
     pub fn unserialize_nested(
