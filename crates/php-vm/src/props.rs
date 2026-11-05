@@ -1719,7 +1719,7 @@ impl Vm {
                     .class_by_name(&constant.class)
                     .unwrap_or_else(|| cls.clone());
                 crate::reflection::with_scope(self, Some(scope), |vm| {
-                    vm.class_constant(cls, &constant.name)
+                    vm.update_class_constant(cls, &constant.name)
                 })?;
             }
         }

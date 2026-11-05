@@ -369,6 +369,14 @@ impl Vm {
         self.class_constant_ex(cls, name, None, true)
     }
 
+    /// `zend_update_class_constant` (from `zend_update_class_constants`):
+    /// evaluates a constant without marking it as visited, so a nested
+    /// read of it (say, from an autoloader) evaluates it again.
+    pub(crate) fn update_class_constant(&mut self, cls: &Rc<Class>, name: &ZStr) -> VmResult<()> {
+        self.class_constant_ex(cls, name, None, false)?;
+        Ok(())
+    }
+
     /// [`Self::class_constant`] with the class named `shown` in errors
     /// (instead of its resolved name) and optional recursion marking of an
     /// unevaluated constant (`mark`).

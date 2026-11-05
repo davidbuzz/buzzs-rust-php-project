@@ -292,3 +292,25 @@ fn e_strict_constant_is_deprecated() {
         "30719\n\nDeprecated: Constant E_STRICT is deprecated since 8.4, the error level was removed in t.php on line 3\n2048\n"
     );
 }
+
+/// `zend_update_class_constants` (instantiation) evaluates constants
+/// without the recursion mark of `zend_get_class_constant_ex`, so an
+/// autoloader may read the constant being updated (GH-10709).
+#[test]
+fn class_constant_update_does_not_mark_recursion() {
+    let out = run(r#"<?php
+class B { const C = A::C . "B"; }
+spl_autoload_register(function ($class) {
+    class A { const C = "A"; }
+    echo B::C, "\n";
+});
+new B();
+echo B::C, "\n";
+class D { const X = self::Y; const Y = self::X; }
+try { new D; } catch (Error $e) { echo $e->getMessage(), "\n"; }
+"#);
+    assert_eq!(
+        out,
+        "AB\nAB\nCannot declare self-referencing constant self::Y\n"
+    );
+}
