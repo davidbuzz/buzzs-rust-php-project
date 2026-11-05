@@ -20,6 +20,77 @@ pub(crate) fn export_expr_text(source: &[u8], e: &Expr) -> String {
     String::from_utf8_lossy(&source[s..end]).into_owned()
 }
 
+/// Collects the class and constant names of an expression that `use`
+/// imports resolve differently from the namespace prefix: `(start, end,
+/// resolved name)`.
+struct ImportedNames<'c> {
+    c: &'c Compiler,
+    out: Vec<(usize, usize, Vec<u8>)>,
+}
+
+impl ImportedNames<'_> {
+    fn class(&mut self, n: &ast::Name) {
+        let special = n.kind == ast::NameKind::Unqualified
+            && (n.name.eq_ignore_ascii_case(b"self")
+                || n.name.eq_ignore_ascii_case(b"parent")
+                || n.name.eq_ignore_ascii_case(b"static"));
+        if special
+            || !matches!(
+                n.kind,
+                ast::NameKind::Unqualified | ast::NameKind::Qualified
+            )
+        {
+            return;
+        }
+        let r = self.c.resolve_class_name(n);
+        if r != self.c.ns_prefixed(&n.name) {
+            self.out.push((n.span.start, n.span.end, r));
+        }
+    }
+
+    fn constant(&mut self, n: &ast::Name) {
+        let r = match n.kind {
+            ast::NameKind::Unqualified => match self.c.const_uses.get(&n.name) {
+                Some(i) => i.clone(),
+                None => return,
+            },
+            ast::NameKind::Qualified => {
+                let r = self.c.resolve_class_name(n);
+                if r == self.c.ns_prefixed(&n.name) {
+                    return;
+                }
+                r
+            }
+            _ => return,
+        };
+        self.out.push((n.span.start, n.span.end, r));
+    }
+}
+
+impl php_parser::visit::Visitor for ImportedNames<'_> {
+    fn visit_expr(&mut self, e: &Expr) {
+        match &e.kind {
+            ast::ExprKind::Closure(_) | ast::ExprKind::ArrowFn(_) => return,
+            ast::ExprKind::New { class, .. } => {
+                if let ast::NewClass::Name(n) = &**class {
+                    self.class(n);
+                }
+            }
+            ast::ExprKind::ClassConst { class, .. }
+            | ast::ExprKind::ClassName(class)
+            | ast::ExprKind::StaticProp { class, .. }
+            | ast::ExprKind::StaticCall { class, .. } => {
+                if let ast::ClassRef::Name(n) = &**class {
+                    self.class(n);
+                }
+            }
+            ast::ExprKind::Const(n) => self.constant(n),
+            _ => {}
+        }
+        php_parser::visit::walk_expr(self, e);
+    }
+}
+
 fn modifiers_to_flags(m: ast::Modifiers) -> u32 {
     let mut f = 0;
     if m.contains(ast::Modifiers::PUBLIC) || m.contains(ast::Modifiers::VAR) {
@@ -265,6 +336,37 @@ impl Compiler {
         self.f().line = a.span.line;
         self.emit(Op::MakeClosure { idx, dst: t });
         Ok(Operand::Tmp(t))
+    }
+
+    /// The source text of a parameter default with the names that `use`
+    /// imports resolve spliced in fully qualified: the reflection export
+    /// re-resolves the text against the namespace only, while php-src
+    /// exports the compiled AST (GH-9447).
+    fn default_text_with_imports(&self, d: &Expr) -> String {
+        let mut names = ImportedNames {
+            c: self,
+            out: Vec::new(),
+        };
+        php_parser::visit::Visitor::visit_expr(&mut names, d);
+        if names.out.is_empty() {
+            return export_expr_text(&self.source, d);
+        }
+        let s = d.span.start.min(self.source.len());
+        let end = d.span.end.min(self.source.len()).max(s);
+        names.out.sort_by_key(|r| r.0);
+        let mut text = Vec::with_capacity(end - s + 16);
+        let mut at = s;
+        for (a, b, resolved) in names.out {
+            if a < at || b > end {
+                continue;
+            }
+            text.extend_from_slice(&self.source[at..a]);
+            text.push(b'\\');
+            text.extend_from_slice(&resolved);
+            at = b;
+        }
+        text.extend_from_slice(&self.source[at..end]);
+        String::from_utf8_lossy(&text).into_owned()
     }
 
     #[allow(clippy::too_many_lines)]
@@ -527,7 +629,7 @@ impl Compiler {
                     if self.multibyte {
                         String::from_utf8_lossy(&php_parser::export::export_expr(d)).into_owned()
                     } else {
-                        export_expr_text(&self.source, d)
+                        self.default_text_with_imports(d)
                     }
                 }),
                 promote,

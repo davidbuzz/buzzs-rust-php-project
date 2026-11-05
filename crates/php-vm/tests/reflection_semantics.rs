@@ -289,3 +289,37 @@ foreach ((new ReflectionFunction('rd_flags'))->getParameters() as $p) {
         "int(5)\n\nDeprecated: Constant RD_OLD is deprecated since 8.4, use RD_A in t.php on line 3\nint(2)\n"
     );
 }
+
+/// GH-9447: parameter defaults are exported with the names `use` imports
+/// resolve to (class names and constants).
+#[test]
+fn parameter_default_export_resolves_imports() {
+    let out = run(r#"<?php
+namespace App;
+use SomewhereElse\Qux;
+use SomewhereElse\Sub;
+use const Other\LIMIT;
+class Foo {
+    public function bar(
+        $b = new Bar(),
+        $c = new parent(),
+        $f = new Qux(),
+        $g = new namespace\Qux(),
+        $h = [Sub\Deep::X, LIMIT],
+        $i = new \Qux(),
+    ) {}
+}
+foreach ((new \ReflectionMethod(Foo::class, 'bar'))->getParameters() as $p) {
+    echo $p, "\n";
+}
+"#);
+    assert_eq!(
+        out,
+        "Parameter #0 [ <optional> $b = new \\App\\Bar() ]\n\
+         Parameter #1 [ <optional> $c = new parent() ]\n\
+         Parameter #2 [ <optional> $f = new \\SomewhereElse\\Qux() ]\n\
+         Parameter #3 [ <optional> $g = new \\App\\Qux() ]\n\
+         Parameter #4 [ <optional> $h = [\\SomewhereElse\\Sub\\Deep::X, Other\\LIMIT] ]\n\
+         Parameter #5 [ <optional> $i = new \\Qux() ]\n"
+    );
+}
