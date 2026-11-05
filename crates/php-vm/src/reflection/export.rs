@@ -444,7 +444,9 @@ pub(crate) fn function_string(
             b.s(indent).z(d).c(b'\n');
         }
     }
-    let is_closure = fl & flags::CLOSURE != 0 && f.method.is_none();
+    // zend_create_fake_closure() adds ZEND_ACC_CLOSURE to the copied
+    // function, so `f(...)` reflects as a closure too.
+    let is_closure = (fl & flags::CLOSURE != 0 || f.closure.is_some()) && f.method.is_none();
     b.s(indent);
     b.s(if is_closure {
         "Closure [ "

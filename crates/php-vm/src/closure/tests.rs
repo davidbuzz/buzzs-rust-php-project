@@ -228,3 +228,14 @@ fn closure_as_array_literal_key() {
     );
     assert_eq!(out, "Cannot access offset of type Closure on array");
 }
+
+/// A first-class callable reflects as `Closure [ ... ]`: the fake closure's
+/// function carries ZEND_ACC_CLOSURE (first_class_callable_signature.phpt).
+#[test]
+fn fake_closure_reflection_string() {
+    let out = run("<?php function test(int $a) {}\necho new ReflectionFunction(test(...));");
+    assert_eq!(
+        out,
+        "Closure [ <user> function test ] {\n  @@ t.php 1 - 1\n\n  - Parameters [1] {\n    Parameter #0 [ <required> int $a ]\n  }\n}\n"
+    );
+}
