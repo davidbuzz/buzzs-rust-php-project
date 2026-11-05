@@ -919,3 +919,26 @@ echo "\n";
 "#);
     assert_eq!(out, "absc\nab\n");
 }
+
+/// Instantiation evaluates static property initializers as well
+/// (`zend_update_class_constants`); a failed one is retried (GH-10356).
+#[test]
+fn instantiation_evaluates_static_property_initializers() {
+    let out = run(r#"<?php
+class Foo {
+    public static $foo = [
+        'foo' => DOES_NOT_EXIST,
+    ];
+}
+for ($i = 0; $i < 2; $i++) {
+    try { new Foo(); } catch (Error $e) { echo $e->getMessage(), " @", $e->getLine(), "\n"; }
+}
+define('DOES_NOT_EXIST', 1);
+new Foo();
+echo Foo::$foo['foo'], "\n";
+"#);
+    assert_eq!(
+        out,
+        "Undefined constant \"DOES_NOT_EXIST\" @4\nUndefined constant \"DOES_NOT_EXIST\" @4\n1\n"
+    );
+}
