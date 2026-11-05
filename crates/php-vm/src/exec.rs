@@ -710,8 +710,7 @@ impl Vm {
                         Flow::Next
                     }
                     Op::SendUnpack { src } => {
-                        let v = self.read(*src)?;
-                        self.op_send_unpack(v)?;
+                        self.op_send_unpack(*src)?;
                         Flow::Next
                     }
                     Op::DoCall { dst } => {

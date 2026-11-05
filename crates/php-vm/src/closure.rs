@@ -620,12 +620,13 @@ fn closure_invoke(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         })
         .unwrap_or_default();
     let mut args = Vec::with_capacity(a.values.len());
+    let mut named = std::mem::take(&mut a.named);
     for (i, v) in std::mem::take(&mut a.values).into_iter().enumerate() {
         if !a.passed.get(i).copied().unwrap_or(true) {
-            break;
+            continue;
         }
         let by_ref = params.get(i).is_some_and(|p| p.0);
-        if by_ref && !v.is_reference() {
+        let v = if by_ref && !v.is_reference() {
             let name = params
                 .get(i)
                 .map_or_else(String::new, |p| p.1.to_string_lossy());
@@ -633,12 +634,16 @@ fn closure_invoke(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
                 "Closure::__invoke(): Argument #{} (${name}) must be passed by reference, value given",
                 i + 1
             ))?;
-            args.push(Value::Reference(PhpRef::new(v)));
+            Value::Reference(PhpRef::new(v))
         } else {
+            v
+        };
+        if i == args.len() {
             args.push(v);
+        } else if let Some((_, name)) = params.get(i) {
+            named.push((name.clone(), v));
         }
     }
-    let named = std::mem::take(&mut a.named);
     vm.call_value_named(&Value::Object(c), args, named)
 }
 

@@ -545,3 +545,94 @@ fn object_union_rejects_redundant_static_in_both_orders() {
         "Zend/tests/type_declarations/union_types/redundant_types/object_and_static2.phpt",
     );
 }
+
+#[test]
+fn introspection_keeps_positional_references_and_closure_snapshots() {
+    assert_eq!(
+        run(r#"<?php
+function f(&$a, &...$rest) {
+    $a = 10; $rest[0] = 20; $rest["named"] = 30;
+    echo func_num_args(), ":", serialize(func_get_args()), ":", serialize(func_get_arg(1)), "\n";
+}
+$a = 1; $b = 2; $c = 3; f($a, $b, named: $c);
+echo "$a:$b:$c\n";
+$f = function($a, ...$rest) {
+    $a = 9; $rest[0] = 8;
+    echo func_num_args(), ":", serialize(func_get_args()), "\n";
+};
+$f(a: 1, extra: 2); $f(1, 2, extra: 3);
+"#),
+        "2:a:2:{i:0;i:10;i:1;i:20;}:i:20;\n10:20:30\n1:a:1:{i:0;i:9;}\n2:a:2:{i:0;i:9;i:1;i:2;}\n"
+    );
+}
+
+#[test]
+fn named_assertion_and_constructorless_calls_match_reference() {
+    reference_phpt("Zend/tests/named_params/assert.phpt");
+    reference_phpt("Zend/tests/named_params/ctor_extra_named_args.phpt");
+    assert_eq!(
+        run(r#"<?php
+class C {}
+function effect() { echo "effect\n"; return 1; }
+new C(effect());
+try { new C(...["unknown" => 1]); } catch (Error $e) { echo $e->getMessage(), "\n"; }
+echo "ok\n";
+"#),
+        "effect\nUnknown named parameter $unknown\nok\n"
+    );
+}
+
+#[test]
+fn named_array_unpack_separates_values_but_preserves_existing_references() {
+    assert_eq!(
+        run(r#"<?php
+function f($a = null, &...$rest) { foreach ($rest as &$value) { $value++; } }
+$number = 1; $array = ["named" => &$number, 0 => 2];
+try { f(...$array); } catch (Error $e) { echo $e->getMessage(), "\n"; }
+$array = ["named" => &$number]; $copy = $array;
+f(...$array);
+echo $number, ":", $array["named"], ":", $copy["named"], "\n";
+$array = ["named" => 1]; $copy = $array;
+f(...$array);
+echo $array["named"], ":", $copy["named"], "\n";
+"#),
+        "Cannot use positional argument after named argument during unpacking\n2:2:2\n2:1\n"
+    );
+}
+
+#[test]
+fn closure_invoke_preserves_named_gaps_and_reference_arguments() {
+    assert_eq!(
+        run(r#"<?php
+$f = function($a = "a", &$b = null, $c = "c") { $b++; echo "$a:$b:$c\n"; };
+$b = 1; $f->__invoke(b: $b, c: "C"); echo "$b\n";
+"#),
+        "a:2:C\n2\n"
+    );
+}
+
+#[test]
+fn direct_indirect_call_traces_omit_only_compiled_forwarding_frames() {
+    assert_eq!(
+        run(r#"<?php
+function f() {
+    foreach (debug_backtrace() as $frame) {
+        echo $frame["function"], ":", isset($frame["line"]) ? "line" : "internal", "\n";
+    }
+}
+call_user_func("f"); $call = "call_user_func"; $call("f"); call_user_func_array("f", []);
+"#),
+        "f:line\nf:internal\ncall_user_func:line\nf:line\n"
+    );
+}
+
+#[test]
+fn variadic_type_errors_omit_the_variadic_parameter_name() {
+    assert_eq!(
+        run(r#"<?php
+function f(int ...$args) {}
+try { f(1, []); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+"#),
+        "f(): Argument #2 must be of type int, array given, called in t.php on line 3\n"
+    );
+}

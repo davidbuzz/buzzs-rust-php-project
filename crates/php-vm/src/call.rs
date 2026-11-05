@@ -4,7 +4,7 @@ use crate::class::Class;
 use crate::exec::scope_display;
 use crate::func::{flags, Args, Builtin, Func, Method, UserFunction};
 use crate::object;
-use crate::opcode::{ArgSrc, ClassSpec, FetchMode};
+use crate::opcode::{ArgSrc, ClassSpec, FetchMode, Op, Operand};
 use crate::typecheck::{given_type, TypeCtx};
 use crate::vm::{Frame, FrameKind, PendingCall, RetTarget, Throw, Vm, VmResult};
 use php_runtime::{ArrayKey, HashTable, Obj, PhpRef, Value, ZArray, ZStr};
@@ -111,7 +111,9 @@ impl Vm {
             .get(name as usize)
             .and_then(|c| c.as_ref().and_then(crate::opcode::CachedFunc::get));
         if let Some(func) = cached {
-            self.push_pending(PendingCall::new(func));
+            let mut call = PendingCall::new(func);
+            call.direct = true;
+            self.push_pending(call);
             return Ok(());
         }
         let lc = self.lit_str(name);
@@ -141,7 +143,9 @@ impl Vm {
             }
             cache[slot] = Some(crate::opcode::CachedFunc::new(&func));
         }
-        self.push_pending(PendingCall::new(func));
+        let mut call = PendingCall::new(func);
+        call.direct = true;
+        self.push_pending(call);
         Ok(())
     }
 
@@ -523,7 +527,27 @@ impl Vm {
             f(self, &o)?;
         }
         let Some(ctor) = cls.magic.construct.clone() else {
-            return Ok(false);
+            if matches!(
+                self.frame().code.ops.get(self.frame().ip),
+                Some(Op::DoCall { .. })
+            ) {
+                return Ok(false);
+            }
+            // A constructor-less class still evaluates positional arguments and
+            // rejects named arguments, without declaring a reflected constructor.
+            let func = Func::Builtin(Rc::new(Builtin {
+                name: ZStr::from("__construct"),
+                params: Vec::new(),
+                defaults: Vec::new(),
+                required: 0,
+                return_type: None,
+                flags: flags::NO_BODY,
+                handler: |_vm, _args| Ok(Value::Null),
+            }));
+            let mut call = PendingCall::new(func);
+            call.is_ctor = true;
+            self.push_pending(call);
+            return Ok(true);
         };
         let scope = self.scope();
         if !self.can_access_method(&ctor, scope.as_ref()) {
@@ -717,7 +741,16 @@ impl Vm {
         Ok(())
     }
 
-    pub(crate) fn op_send_unpack(&mut self, v: Value) -> VmResult<()> {
+    pub(crate) fn op_send_unpack(&mut self, src: Operand) -> VmResult<()> {
+        let raw = match src {
+            Operand::Cv(cv) => match self.cv_get(cv) {
+                Some(v) => v,
+                None => self.read(src)?,
+            },
+            _ => self.read_raw(src)?,
+        };
+        let mut v = raw.deref();
+        let traversable = matches!(v, Value::Object(_));
         let items: Vec<(Value, Value)> = match &v {
             Value::Array(a) => a.iter().map(|(k, v)| (k.to_value(), v.clone())).collect(),
             Value::Object(o) if self.instance_of(o, b"traversable") => self.iterate_to_vec(&v)?,
@@ -731,40 +764,78 @@ impl Vm {
                 ))
             }
         };
+        let mut changed = false;
         for (k, val) in items {
-            match k {
-                Value::Str(s) => {
-                    let pos = self.arg_position(&s)?;
-                    let by_ref = {
-                        let call = self.frame().calls.last().expect("pending call");
-                        pos.is_some_and(|p| call.func.arg_by_ref(p))
-                    };
-                    let val = if by_ref { val } else { val.deref() };
-                    self.push_arg(pos, Some(s), val)?;
-                }
-                _ => {
-                    let has_named = self.frame().calls.last().expect("pending call").has_named;
-                    if has_named {
+            let (pos, name) = match &k {
+                Value::Str(s) => (self.arg_position(s)?, Some(s.clone())),
+                Value::Int(_) => {
+                    if self.frame().calls.last().expect("pending call").has_named {
                         return Err(self.make_throw(
                             "Error",
                             "Cannot use positional argument after named argument during unpacking",
                         ));
                     }
-                    let (by_ref, n) = {
-                        let call = self.frame().calls.last().expect("pending call");
-                        let n = call.args.len();
-                        (call.func.arg_by_ref(n), n)
+                    (
+                        Some(self.frame().calls.last().expect("pending call").args.len()),
+                        None,
+                    )
+                }
+                _ => {
+                    return Err(self.make_throw(
+                        "Error",
+                        "Keys must be of type int|string during argument unpacking",
+                    ))
+                }
+            };
+            let (by_ref, n, prefer_ref) = {
+                let call = self.frame().calls.last().expect("pending call");
+                let params = call.func.params();
+                let n = pos.unwrap_or_else(|| params.len().saturating_sub(1));
+                let param = params.get(n).or_else(|| params.last());
+                (
+                    call.magic_name.is_none() && call.func.arg_by_ref(n),
+                    n,
+                    param.is_some_and(|p| p.promote & crate::opcode::PREFER_REF != 0),
+                )
+            };
+            let val = if by_ref && !traversable {
+                let value = match val {
+                    Value::Reference(r) => Value::Reference(r),
+                    other => Value::Reference(PhpRef::new(other)),
+                };
+                if let Value::Array(a) = &mut v {
+                    let key = match &k {
+                        Value::Str(s) => ArrayKey::Str(s.clone()),
+                        Value::Int(i) => ArrayKey::Int(*i),
+                        _ => unreachable!("validated unpack key"),
                     };
-                    let _ = n;
-                    let val = if by_ref {
-                        match val {
-                            Value::Reference(r) => Value::Reference(r),
-                            other => Value::Reference(PhpRef::new(other)),
+                    a.make_mut().insert(key, value.clone());
+                    changed = true;
+                }
+                value
+            } else if by_ref && !prefer_ref {
+                let call = self.frame().calls.last().expect("pending call");
+                let fname = self.func_display(&call.func, call.scope.as_ref());
+                self.warning(&format!(
+                    "Cannot pass by-reference argument {} of {fname}() by unpacking a Traversable, passing by-value instead", n + 1
+                ))?;
+                Value::Reference(PhpRef::new(val.deref()))
+            } else {
+                val.deref()
+            };
+            self.push_arg(pos, name, val)?;
+        }
+        if changed {
+            match raw {
+                Value::Reference(r) => {
+                    self.assign_ref(&r, v)?;
+                }
+                _ => {
+                    if let Operand::Cv(cv) = src {
+                        if let Some((r, value)) = self.cv_assign(cv, v) {
+                            self.assign_ref(&r, value)?;
                         }
-                    } else {
-                        val.deref()
-                    };
-                    self.push_arg(None, None, val)?;
+                    }
                 }
             }
         }
@@ -796,6 +867,9 @@ impl Vm {
         dst: Option<u32>,
         strict: bool,
     ) -> VmResult<bool> {
+        if call.is_ctor && call.func.flags() & flags::NO_BODY != 0 {
+            return Ok(false);
+        }
         let skip_deprecation = dst.is_none() && call.func.flags() & flags::NODISCARD != 0;
         match call.func.clone() {
             Func::User(uf) => {
@@ -1009,7 +1083,16 @@ impl Vm {
             None,
         );
         f.func = Some(Func::Builtin(b.clone()));
-        f.builtin_name = Some(b.name.clone());
+        // Direct call_user_func calls compile to frameless call forwarding in Zend.
+        if !call.direct
+            || !matches!(
+                b.name.as_bytes(),
+                b"call_user_func" | b"call_user_func_array"
+            )
+        {
+            f.builtin_name = Some(b.name.clone());
+        }
+        f.named.clone_from(&call.named);
         f.args = if call.args.is_empty() {
             Vec::new()
         } else {
@@ -1023,7 +1106,7 @@ impl Vm {
         self.frames.push(f);
         let depth = self.frames.len();
         // Arity.
-        if !call.has_named && npassed < b.required as usize {
+        if npassed < b.required as usize && (!call.has_named || !call.named.is_empty()) {
             let e = self.arg_count_error_builtin(&fname(self), b, npassed);
             self.pop_frames_to(depth);
             return Err(e);
@@ -1097,6 +1180,18 @@ impl Vm {
                 f.args = frame_args(&values[..nframe_args]);
             }
         }
+        // Array variadics use Z_PARAM_VARIADIC, not Z_PARAM_VARIADIC_WITH_NAMED.
+        if !call.named.is_empty() && b.name.as_bytes().starts_with(b"array_") {
+            let e = self.make_throw(
+                "ArgumentCountError",
+                &format!(
+                    "Internal function {}() does not accept named variadic arguments",
+                    fname(self)
+                ),
+            );
+            self.pop_frames_to(depth);
+            return Err(e);
+        }
         // Type coercion.
         let mut coerced = false;
         for (i, v) in values.iter_mut().enumerate() {
@@ -1128,6 +1223,34 @@ impl Vm {
                 strict,
                 internal_arg: Some((&fname, i + 1, &pname)),
             };
+            if ty.mask & crate::types::mask::CALLABLE != 0
+                && !ty.has_classes()
+                && ty.mask & !(crate::types::mask::CALLABLE | crate::types::mask::NULL) == 0
+                && !(ty.allows_null() && v.is_null())
+            {
+                let callable = match self.zend_is_callable(v, true) {
+                    Ok(callable) => callable,
+                    Err(e) => {
+                        self.pop_frames_to(depth);
+                        return Err(e);
+                    }
+                };
+                match callable {
+                    Ok(_) => continue,
+                    Err(why) => {
+                        let nul = if ty.allows_null() { " or null" } else { "" };
+                        let e = self.make_throw(
+                            "TypeError",
+                            &format!(
+                                "{fname}(): Argument #{} (${pname}) must be a valid callback{nul}, {why}",
+                                i + 1
+                            ),
+                        );
+                        self.pop_frames_to(depth);
+                        return Err(e);
+                    }
+                }
+            }
             let ok = match self.verify_type(ty, v, &ctx) {
                 Ok(ok) => ok,
                 Err(e) => {
@@ -1297,14 +1420,31 @@ impl Vm {
             )
         });
         let fname = self.func_display(&func, scope.as_ref());
+        let pname = if p.variadic {
+            String::new()
+        } else {
+            format!(" (${})", p.name)
+        };
         let mut msg = format!(
-            "{fname}(): Argument #{} (${}) must be of type {tyname}, {} given",
+            "{fname}(): Argument #{}{pname} must be of type {tyname}, {} given",
             n + 1,
-            p.name,
             given_type(v)
         );
-        if !internal && self.frames.len() >= 2 {
-            let caller = &self.frames[self.frames.len() - 2];
+        let through_call_user_func = self.frames.iter().rev().nth(1).is_some_and(|caller| {
+            caller.builtin_name.is_none()
+                && caller.func.as_ref().is_some_and(|func| {
+                    let name = func.name();
+                    matches!(name.as_bytes(), b"call_user_func" | b"call_user_func_array")
+                })
+        });
+        if (!internal || through_call_user_func) && self.frames.len() >= 2 {
+            let caller = self
+                .frames
+                .iter()
+                .rev()
+                .skip(1)
+                .find(|f| f.kind != FrameKind::Builtin)
+                .expect("caller frame");
             if caller.kind != FrameKind::Builtin {
                 msg.push_str(&format!(
                     ", called in {} on line {}",
@@ -1400,9 +1540,11 @@ impl Vm {
             .skip(1)
             .find(|caller| caller.kind != FrameKind::Builtin);
         let through_call_user_func = self.frames.iter().rev().nth(1).is_some_and(|caller| {
-            caller.builtin_name.as_ref().is_some_and(|name| {
-                matches!(name.as_bytes(), b"call_user_func" | b"call_user_func_array")
-            })
+            caller.builtin_name.is_none()
+                && caller.func.as_ref().is_some_and(|func| {
+                    let name = func.name();
+                    matches!(name.as_bytes(), b"call_user_func" | b"call_user_func_array")
+                })
         });
         if !internal || through_call_user_func {
             if let Some(caller) = caller {
@@ -1628,7 +1770,10 @@ impl Vm {
         args: Vec<Value>,
         named: Vec<(ZStr, Value)>,
     ) -> VmResult<Value> {
-        let mut call = self.resolve_callable_for_call(callable)?;
+        let mut call = match self.zend_is_callable(callable, false)? {
+            Ok(call) => call,
+            Err(reason) => return Err(self.make_throw("TypeError", &reason)),
+        };
         call.args = args.into_iter().map(Some).collect();
         for (k, v) in named {
             let pos = if call.magic_name.is_some() {

@@ -277,7 +277,9 @@ impl Vm {
             {
                 break;
             }
-            if f.kind == FrameKind::ConstExpr {
+            if f.kind == FrameKind::ConstExpr
+                || (f.kind == FrameKind::Builtin && f.builtin_name.is_none())
+            {
                 if idx == 0 {
                     break;
                 }
@@ -290,7 +292,11 @@ impl Vm {
             // shown as "[internal function]".
             let prev = (idx > 0).then(|| {
                 let mut pidx = idx - 1;
-                while pidx > 0 && self.frames[pidx].kind == FrameKind::ConstExpr {
+                while pidx > 0
+                    && (self.frames[pidx].kind == FrameKind::ConstExpr
+                        || (self.frames[pidx].kind == FrameKind::Builtin
+                            && self.frames[pidx].builtin_name.is_none()))
+                {
                     pidx -= 1;
                 }
                 &self.frames[pidx]
@@ -460,6 +466,10 @@ impl Vm {
                     .or_else(|| params.last().filter(|p| p.variadic))
                     .is_some_and(|p| p.sensitive);
                 out.push((None, a.deref(), sensitive));
+            }
+            for (key, value) in &f.named {
+                let sensitive = params.last().is_some_and(|p| p.variadic && p.sensitive);
+                out.push((Some(key.clone()), value.deref(), sensitive));
             }
             return out;
         }
