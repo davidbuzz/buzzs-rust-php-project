@@ -461,6 +461,9 @@ impl SessionHost for VmHost<'_> {
         if basedir.is_empty() {
             return false;
         }
+        // `PG(open_basedir)` holds the directories a runtime `ini_set()`
+        // expanded (`OnUpdateBaseDir`), not the INI string.
+        let basedir = php_ext_streams::ini::effective_open_basedir(basedir);
         php_streams::state::update_settings(|s| s.open_basedir.clone_from(&basedir));
         if php_streams::paths::check_open_basedir_ex(path, false) {
             return false;
