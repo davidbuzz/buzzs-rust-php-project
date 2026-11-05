@@ -228,6 +228,8 @@ impl Vm {
         // strings exist before any script runs, so their first use (e.g.
         // `(string) 0`) does not show in `memory_get_usage()` deltas.
         let _ = (ZStr::empty(), ZStr::from_byte(0));
+        // `zend_objects_store_init()`: likewise for the object store.
+        object::prewarm_store();
         builtins::register_all(&mut vm);
         vm
     }
