@@ -397,6 +397,13 @@ impl MbState {
         self.current_internal_encoding
     }
 
+    /// Encoding exposed by `php_mb_zend_internal_encoding_getter`.
+    /// Unlike [`Self::internal_encoding`], `mb_internal_encoding()` does not
+    /// change this configured encoding; encoding INI handlers do.
+    pub fn script_internal_encoding(&self) -> &'static Encoding {
+        self.internal_encoding
+    }
+
     /// The current HTTP output encoding (may be `pass`).
     #[allow(clippy::misnamed_getters)]
     pub fn http_output_encoding(&self) -> &'static Encoding {
@@ -746,9 +753,10 @@ impl MbState {
         Ok(enc)
     }
 
-    /// `php_mb_parse_encoding_list`. `arg_num == 0` means INI context
-    /// (warning instead of exception).
-    pub(crate) fn parse_encoding_list(
+    /// `php_mb_parse_encoding_list`: a comma-separated list using the language's
+    /// `auto` expansion. With `arg_num == 0`, invalid names produce INI
+    /// diagnostics; hosts can drain them with [`Self::take_diagnostics`].
+    pub fn parse_encoding_list(
         &mut self,
         value: &[u8],
         arg_num: u32,

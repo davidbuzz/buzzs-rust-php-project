@@ -809,7 +809,8 @@ impl Parser<'_> {
                     let name = match &d.value.kind {
                         ExprKind::Int(value) => value.to_string().into_bytes(),
                         ExprKind::Float(value) => {
-                            let mut name = crate::export::format_double(*value, 14);
+                            let mut name =
+                                crate::export::format_double(*value, self.encoding_precision);
                             if name.ends_with(".0") {
                                 name.truncate(name.len() - 2);
                             }

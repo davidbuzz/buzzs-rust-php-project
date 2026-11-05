@@ -137,6 +137,19 @@ pub type IncludeOpenerFn = fn(&mut Vm, &[u8], &str) -> VmResult<IncludeOpen>;
 /// includes), e.g. phar stubs (`zend_compile_file` override).
 pub type SourceFilterFn = fn(&mut Vm, &ZStr, Vec<u8>) -> VmResult<Vec<u8>>;
 
+/// Owned script list and current mbstring internal/substitution settings.
+#[derive(Clone, Debug)]
+pub struct ScriptEncodingSettings {
+    /// Parsed `zend.script_encoding`, including language-specific `auto`.
+    pub script_encodings: Vec<&'static php_mbstring::Encoding>,
+    /// Effective mbstring request settings. The VM supplies Unicode detection
+    /// and PHP numeric precision from INI.
+    pub options: php_parser::ScriptEncodingOptions<'static>,
+}
+
+/// Supplies configured scanner encoding and current mbstring substitution state.
+pub type ScriptEncodingFn = fn(&Vm) -> ScriptEncodingSettings;
+
 /// A named native output handler (`php_output_handler_alias_ctor_t`):
 /// receives the buffer and the `PHP_OUTPUT_HANDLER_*` mode; `Ok(None)`
 /// means failure (the buffer passes through).
@@ -639,6 +652,11 @@ impl Vm {
     /// Installs a source filter run before compiling scripts.
     pub fn set_source_filter(&mut self, f: SourceFilterFn) {
         self.source_filter = Some(f);
+    }
+
+    /// Installs mbstring's request-state provider for all parser entry paths.
+    pub fn set_script_encoding_provider(&mut self, f: ScriptEncodingFn) {
+        self.script_encoding_provider = Some(f);
     }
 
     /// The `phpinfo()` section of extension `name`, if it registered one.

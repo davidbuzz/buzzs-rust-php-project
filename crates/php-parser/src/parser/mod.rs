@@ -88,6 +88,7 @@ pub(crate) struct Parser<'a> {
     pub stack_exhausted: bool,
     /// [`ParseOptions::multibyte`].
     multibyte: bool,
+    encoding_precision: usize,
     /// Start offset of a keyword that began a call argument (see
     /// `parse_argument`).
     pub colon_hint: Option<usize>,
@@ -128,6 +129,7 @@ impl<'a> Parser<'a> {
             stack_exhausted: false,
             colon_hint: None,
             multibyte: opts.multibyte,
+            encoding_precision: encoding.precision,
         }
     }
 
@@ -430,6 +432,7 @@ fn parse_program_inner(p: &mut Parser<'_>) -> Result<Program, ParseError> {
             identifier_tokens.sort_unstable();
             identifier_tokens.dedup();
             Ok(Program {
+                multibyte: p.multibyte,
                 statements,
                 halt_compiler_offset,
                 warnings: std::mem::take(&mut p.warnings),

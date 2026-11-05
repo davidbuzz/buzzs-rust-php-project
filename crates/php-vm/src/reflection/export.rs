@@ -616,9 +616,9 @@ pub(crate) fn const_expr_repr(
                 let lines = [c.line_start, c.line_end];
                 lines.iter().find_map(|&l| {
                     if is_const {
-                        super::source::const_value(file.as_bytes(), l, member.as_bytes())
+                        super::source::const_value(vm, file.as_bytes(), l, member.as_bytes())
                     } else {
-                        super::source::prop_default(file.as_bytes(), l, member.as_bytes())
+                        super::source::prop_default(vm, file.as_bytes(), l, member.as_bytes())
                     }
                 })
             });

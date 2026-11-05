@@ -191,6 +191,8 @@ impl Vm {
             output_handler_hooks: std::collections::HashMap::new(),
             include_opener: None,
             source_filter: None,
+            script_encoding_provider: None,
+            parsed_sources: std::cell::RefCell::new(std::collections::HashMap::new()),
             builtin_deprecations: std::collections::HashMap::new(),
             const_deprecation_guard: std::collections::HashSet::new(),
             const_attributes: std::collections::HashMap::new(),
@@ -401,7 +403,8 @@ impl Vm {
         }
     }
 
-    /// Checks the syntax of a file (`php -l`). Returns the error message.
+    /// Checks file syntax with default settings (legacy embedding convenience).
+    /// Configured hosts, including CLI lint, use [`Self::parse_source`] instead.
     pub fn lint(src: &[u8]) -> Result<(), (String, u32, bool)> {
         let opts = php_parser::ParseOptions {
             skip_shebang: true,

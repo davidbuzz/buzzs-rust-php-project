@@ -232,7 +232,7 @@ fn rp_get_name(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 }
 fn rp_get_doc_comment(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let (f, idx, _) = this_param(vm, a)?;
-    Ok(super::function::param_doc_comment(&f, idx).map_or(Value::Bool(false), Value::Str))
+    Ok(super::function::param_doc_comment(vm, &f, idx).map_or(Value::Bool(false), Value::Str))
 }
 fn rp_get_position(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     Ok(Value::Int(i64::try_from(this_param(vm, a)?.1).unwrap_or(0)))

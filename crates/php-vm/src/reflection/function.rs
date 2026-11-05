@@ -68,13 +68,19 @@ pub(crate) fn return_type(_vm: &Vm, f: &FnRef) -> Option<(TypeDecl, bool)> {
 }
 
 /// The doc comment of parameter `idx` (not tracked by the compiler).
-pub(crate) fn param_doc_comment(f: &FnRef, idx: usize) -> Option<ZStr> {
+pub(crate) fn param_doc_comment(vm: &Vm, f: &FnRef, idx: usize) -> Option<ZStr> {
     let Func::User(u) = &f.func else { return None };
     if u.hook_prop.is_some() && u.params.len() <= idx {
         return None;
     }
-    super::source::param_doc_comment(u.code.filename.as_bytes(), u.line_start, u.line_end, idx)
-        .map(ZStr::from)
+    super::source::param_doc_comment(
+        vm,
+        u.code.filename.as_bytes(),
+        u.line_start,
+        u.line_end,
+        idx,
+    )
+    .map(ZStr::from)
 }
 
 /// The file declaring a user function.
@@ -175,8 +181,12 @@ fn static_const_init(
     u: &crate::func::UserFunction,
     name: &ZStr,
 ) -> Option<Value> {
-    let inits =
-        super::source::static_initializers(u.code.filename.as_bytes(), u.line_start, u.line_end);
+    let inits = super::source::static_initializers(
+        vm,
+        u.code.filename.as_bytes(),
+        u.line_start,
+        u.line_end,
+    );
     let (_, e) = inits
         .into_iter()
         .find(|(n, _)| n.as_slice() == name.as_bytes())?;
@@ -399,6 +409,7 @@ fn rf_get_doc_comment(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         Func::User(u) => match &u.doc_comment {
             Some(d) => Value::Str(d.clone()),
             None if u.hook_prop.is_some() => super::source::hook_doc_comment(
+                vm,
                 u.code.filename.as_bytes(),
                 u.line_start,
                 u.line_end,

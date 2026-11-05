@@ -14,7 +14,9 @@ use std::sync::Arc;
 pub struct ScriptEncodingOptions<'a> {
     /// `zend.script_encoding`, in configured order; empty means no fallback.
     pub script_encodings: &'a [&'static Encoding],
-    /// Effective mbstring internal encoding; `None` preserves script encoding.
+    /// Internal encoding exposed by Zend's mbstring getter (configured rather
+    /// than the current encoding changed by `mb_internal_encoding()`).
+    /// `None` preserves script encoding.
     pub internal_encoding: Option<&'static Encoding>,
     /// `zend.detect_unicode`: BOM and NUL-byte detection precede the fallback.
     pub detect_unicode: bool,
@@ -22,6 +24,8 @@ pub struct ScriptEncodingOptions<'a> {
     pub replacement_char: u32,
     /// Effective mbstring conversion error mode.
     pub error_mode: ErrorMode,
+    /// PHP `precision` used when a numeric encoding declaration becomes a name.
+    pub precision: usize,
 }
 
 impl Default for ScriptEncodingOptions<'_> {
@@ -32,6 +36,7 @@ impl Default for ScriptEncodingOptions<'_> {
             detect_unicode: true,
             replacement_char: 0x3F,
             error_mode: ErrorMode::Char,
+            precision: 14,
         }
     }
 }

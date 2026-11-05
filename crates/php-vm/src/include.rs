@@ -17,6 +17,42 @@ pub(crate) enum CompileOutcome {
 }
 
 impl Vm {
+    /// Parses source with current INI and mbstring request settings.
+    ///
+    /// For eval, Zend scans in the effective internal encoding and bypasses
+    /// Unicode detection. Files use `zend.script_encoding` and BOM detection.
+    pub fn parse_source(
+        &self,
+        src: &[u8],
+        is_eval: bool,
+        skip_shebang: bool,
+    ) -> Result<php_parser::Program, php_parser::ParseError> {
+        let opts = php_parser::ParseOptions {
+            short_open_tag: self.ini.get_bool("short_open_tag"),
+            start_in_scripting: is_eval,
+            skip_shebang,
+            multibyte: self.ini.get_bool("zend.multibyte")
+                && self.script_encoding_provider.is_some(),
+            ..Default::default()
+        };
+        let Some(provider) = self.script_encoding_provider.filter(|_| opts.multibyte) else {
+            return php_parser::parse(src, &opts);
+        };
+        let current = provider(self);
+        let script_encodings: Vec<_> = if is_eval {
+            current.options.internal_encoding.into_iter().collect()
+        } else {
+            current.script_encodings
+        };
+        let encoding = php_parser::ScriptEncodingOptions {
+            script_encodings: &script_encodings,
+            detect_unicode: !is_eval && self.ini.get_bool("zend.detect_unicode"),
+            precision: usize::try_from(self.ini.get_long("precision")).unwrap_or(14),
+            ..current.options
+        };
+        php_parser::parse_with_encoding(src, &opts, &encoding)
+    }
+
     /// Parses and compiles source code.
     pub(crate) fn compile_source(
         &mut self,
@@ -25,17 +61,7 @@ impl Vm {
         is_eval: bool,
         skip_shebang: bool,
     ) -> VmResult<CompileOutcome> {
-        let parsed = if is_eval {
-            php_parser::parse_eval(src)
-        } else {
-            let opts = php_parser::ParseOptions {
-                short_open_tag: self.ini.get_bool("short_open_tag"),
-                skip_shebang,
-                multibyte: self.ini.get_bool("zend.multibyte"),
-                ..Default::default()
-            };
-            php_parser::parse(src, &opts)
-        };
+        let parsed = self.parse_source(src, is_eval, skip_shebang);
         let program = match parsed {
             Ok(p) => p,
             Err(e) => {
@@ -87,6 +113,11 @@ impl Vm {
         }
         for (level, msg, line) in &unit.warnings {
             self.error_at(*level, msg, filename, *line)?;
+        }
+        if program.multibyte {
+            self.parsed_sources
+                .borrow_mut()
+                .insert(filename.clone(), Rc::new(program));
         }
         let unit = Rc::new(unit);
         self.units.push(unit.clone());
@@ -155,12 +186,26 @@ impl Vm {
     /// Runs the main script; returns normally after shutdown work is done
     /// by the caller.
     pub fn run_main(&mut self, src: &[u8], path: &ZStr) -> Result<(), Throw> {
+        self.run_top_level(src, path, false)
+    }
+
+    /// Runs top-level eval input, as CLI `-r`, `-B`, `-R`, and `-E` do.
+    /// Input has no opening tag and uses Zend's configured internal encoding.
+    pub fn run_eval(&mut self, src: &[u8], path: &ZStr) -> Result<(), Throw> {
+        self.run_top_level(src, path, true)
+    }
+
+    fn run_top_level(&mut self, src: &[u8], path: &ZStr, is_eval: bool) -> Result<(), Throw> {
         self.script_path = path.clone();
-        let src = match self.filter_source(path, src.to_vec()) {
-            Ok(s) => s,
-            Err(t) => return self.handle_top_throw(t),
+        let src = if is_eval {
+            src.to_vec()
+        } else {
+            match self.filter_source(path, src.to_vec()) {
+                Ok(s) => s,
+                Err(t) => return self.handle_top_throw(t),
+            }
         };
-        let unit = match self.compile_source(&src, path, false, true) {
+        let unit = match self.compile_source(&src, path, is_eval, !is_eval) {
             Ok(CompileOutcome::Ok(u)) => u,
             Ok(CompileOutcome::ParseError(e)) => {
                 self.report_uncaught(&e);

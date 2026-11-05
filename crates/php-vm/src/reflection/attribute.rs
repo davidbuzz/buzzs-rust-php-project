@@ -229,7 +229,8 @@ fn source_arg(vm: &Vm, r: &AttrRef, i: usize) -> Option<Vec<u8>> {
             .find(|f| f.kind != crate::vm::FrameKind::Builtin)
             .map(|f| f.code.filename.clone())
     })?;
-    let args = super::source::attribute_args(file.as_bytes(), r.info.line, r.info.name.as_bytes())?;
+    let args =
+        super::source::attribute_args(vm, file.as_bytes(), r.info.line, r.info.name.as_bytes())?;
     let a = args.get(i)?;
     let ns = super::export::namespace_of(&r.info.name);
     let e = match &a.kind {

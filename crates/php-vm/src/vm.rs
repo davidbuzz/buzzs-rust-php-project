@@ -698,6 +698,10 @@ pub struct Vm {
     pub include_opener: Option<crate::ext::IncludeOpenerFn>,
     /// Source filter hook.
     pub source_filter: Option<crate::ext::SourceFilterFn>,
+    /// Current mbstring encoding/substitution settings.
+    pub(crate) script_encoding_provider: Option<crate::ext::ScriptEncodingFn>,
+    /// Source ASTs retained with their original compile-time encoding semantics.
+    pub(crate) parsed_sources: std::cell::RefCell<HashMap<ZStr, Rc<php_parser::Program>>>,
     /// `#[\Deprecated]` suffixes (" since X, msg") of native functions,
     /// by lowercase name.
     pub builtin_deprecations: HashMap<ZStr, Vec<u8>>,

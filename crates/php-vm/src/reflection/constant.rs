@@ -168,13 +168,13 @@ fn rcc_is_enum_case(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 }
 /// Attributes of enum cases (not kept by the compiler): literal arguments
 /// re-read from the source.
-fn case_attributes(c: &Class, cc: &ClassConst) -> Vec<crate::class::AttributeInfo> {
+fn case_attributes(vm: &Vm, c: &Class, cc: &ClassConst) -> Vec<crate::class::AttributeInfo> {
     let Some(file) = c.filename.clone() else {
         return Vec::new();
     };
     let Some((groups, ns)) = [c.line_start, c.line_end]
         .iter()
-        .find_map(|&l| super::source::case_attributes(file.as_bytes(), l, cc.name.as_bytes()))
+        .find_map(|&l| super::source::case_attributes(vm, file.as_bytes(), l, cc.name.as_bytes()))
     else {
         return Vec::new();
     };
@@ -232,7 +232,7 @@ fn case_attributes(c: &Class, cc: &ClassConst) -> Vec<crate::class::AttributeInf
 fn rcc_get_attributes(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let (c, cc) = this_const(vm, a)?;
     let attrs = if cc.is_case && cc.attributes.is_empty() {
-        case_attributes(&c, &cc)
+        case_attributes(vm, &c, &cc)
     } else {
         cc.attributes.clone()
     };
@@ -262,7 +262,7 @@ pub(crate) fn const_doc_comment(c: &Class, cc: &ClassConst) -> Option<ZStr> {
     let file = c.filename.clone()?;
     [c.line_start, c.line_end]
         .iter()
-        .find_map(|&l| super::source::case_doc_comment(file.as_bytes(), l, cc.name.as_bytes()))
+        .find_map(|&l| super::source::case_doc_comment(vm, file.as_bytes(), l, cc.name.as_bytes()))
         .map(ZStr::from)
 }
 fn rcc_get_type(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {

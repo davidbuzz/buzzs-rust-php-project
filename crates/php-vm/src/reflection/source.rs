@@ -1,33 +1,29 @@
 //! Access to the source ASTs of declarations.
 //!
 //! The VM compiles constant expressions (property defaults, class constant
-//! values) to op arrays without keeping the AST. php-src prints such
-//! not-yet-evaluated expressions with `zend_ast_export`, so reflection
-//! re-parses the declaring file (cached per file) and exports the
-//! expression from there.
+//! values) to op arrays. For multibyte files, retain the declaration AST so
+//! reflection uses the original encoding/substitution semantics even after
+//! runtime settings change. Otherwise re-parse with the VM's current settings
+//! and cache per VM, rather than sharing incompatible encodings across VMs.
 
+use crate::vm::Vm;
 use php_parser::ast::{self, ClassDecl, ClassMemberKind, Expr, Stmt, StmtKind};
-use std::cell::RefCell;
-use std::collections::HashMap;
+use php_runtime::ZStr;
 use std::rc::Rc;
 
-thread_local! {
-    static CACHE: RefCell<HashMap<Vec<u8>, Option<Rc<ast::Program>>>> = RefCell::new(HashMap::new());
-}
-
-fn program(file: &[u8]) -> Option<Rc<ast::Program>> {
-    if let Some(p) = CACHE.with(|c| c.borrow().get(file).cloned()) {
-        return p;
+fn program(vm: &Vm, file: &[u8]) -> Option<Rc<ast::Program>> {
+    if let Some(p) = vm.parsed_sources.borrow().get(file).cloned() {
+        return Some(p);
     }
     let path = String::from_utf8_lossy(file).into_owned();
-    let p = std::fs::read(&path).ok().and_then(|src| {
-        let opts = php_parser::ParseOptions {
-            skip_shebang: true,
-            ..Default::default()
-        };
-        php_parser::parse(&src, &opts).ok().map(Rc::new)
-    });
-    CACHE.with(|c| c.borrow_mut().insert(file.to_vec(), p.clone()));
+    let p = std::fs::read(&path)
+        .ok()
+        .and_then(|src| vm.parse_source(&src, false, true).ok().map(Rc::new));
+    if let Some(p) = &p {
+        vm.parsed_sources
+            .borrow_mut()
+            .insert(ZStr::from(file), p.clone());
+    }
     p
 }
 
@@ -78,8 +74,8 @@ fn find_in<'a>(
 
 /// Finds a class declaration (by file and start line) and the namespace
 /// it is declared in.
-pub(crate) fn class_ast(file: &[u8], line: u32) -> Option<(ClassDecl, Vec<u8>)> {
-    let p = program(file)?;
+pub(crate) fn class_ast(vm: &Vm, file: &[u8], line: u32) -> Option<(ClassDecl, Vec<u8>)> {
+    let p = program(vm, file)?;
     let mut ns = Vec::new();
     let mut out = None;
     find_in(&p.statements, line, &mut ns, &mut out);
@@ -88,8 +84,13 @@ pub(crate) fn class_ast(file: &[u8], line: u32) -> Option<(ClassDecl, Vec<u8>)> 
 
 /// The default value expression of property `name` declared in the class at
 /// `file:line`.
-pub(crate) fn prop_default(file: &[u8], line: u32, name: &[u8]) -> Option<(Expr, Vec<u8>)> {
-    let (c, ns) = class_ast(file, line)?;
+pub(crate) fn prop_default(
+    vm: &Vm,
+    file: &[u8],
+    line: u32,
+    name: &[u8],
+) -> Option<(Expr, Vec<u8>)> {
+    let (c, ns) = class_ast(vm, file, line)?;
     for m in &c.members {
         if let ClassMemberKind::Property(g) = &m.kind {
             for p in &g.props {
@@ -104,8 +105,13 @@ pub(crate) fn prop_default(file: &[u8], line: u32, name: &[u8]) -> Option<(Expr,
 
 /// The value expression of class constant `name` declared in the class at
 /// `file:line`.
-pub(crate) fn const_value(file: &[u8], line: u32, name: &[u8]) -> Option<(Expr, Vec<u8>)> {
-    let (c, ns) = class_ast(file, line)?;
+pub(crate) fn const_value(
+    vm: &Vm,
+    file: &[u8],
+    line: u32,
+    name: &[u8],
+) -> Option<(Expr, Vec<u8>)> {
+    let (c, ns) = class_ast(vm, file, line)?;
     for m in &c.members {
         match &m.kind {
             ClassMemberKind::Const(g) => {
@@ -125,8 +131,8 @@ pub(crate) fn const_value(file: &[u8], line: u32, name: &[u8]) -> Option<(Expr, 
 }
 
 /// The doc comment of enum case `name` declared in the class at `file:line`.
-pub(crate) fn case_doc_comment(file: &[u8], line: u32, name: &[u8]) -> Option<Vec<u8>> {
-    let (c, _) = class_ast(file, line)?;
+pub(crate) fn case_doc_comment(vm: &Vm, file: &[u8], line: u32, name: &[u8]) -> Option<Vec<u8>> {
+    let (c, _) = class_ast(vm, file, line)?;
     c.members.iter().find_map(|m| match &m.kind {
         ClassMemberKind::EnumCase(ec) if ec.name.name == name => ec.doc_comment.clone(),
         _ => None,
@@ -197,8 +203,14 @@ impl php_parser::visit::Visitor for ParamCollector {
 
 /// The doc comment of parameter `idx` of the function declared at
 /// `file:line-end`.
-pub(crate) fn param_doc_comment(file: &[u8], line: u32, end: u32, idx: usize) -> Option<Vec<u8>> {
-    let p = program(file)?;
+pub(crate) fn param_doc_comment(
+    vm: &Vm,
+    file: &[u8],
+    line: u32,
+    end: u32,
+    idx: usize,
+) -> Option<Vec<u8>> {
+    let p = program(vm, file)?;
     let mut v = ParamCollector {
         line,
         end,
@@ -208,109 +220,111 @@ pub(crate) fn param_doc_comment(file: &[u8], line: u32, end: u32, idx: usize) ->
     v.found?.get(idx)?.doc_comment.clone()
 }
 
-/// Reads the source line `line` (1-based) and everything after it.
-fn text_from_line(file: &[u8], line: u32) -> Option<Vec<u8>> {
-    let src = std::fs::read(String::from_utf8_lossy(file).into_owned()).ok()?;
-    let mut cur = 1u32;
-    let mut start = 0usize;
-    for (i, &b) in src.iter().enumerate() {
-        if cur == line {
-            start = i;
-            break;
-        }
-        if b == b'\n' {
-            cur += 1;
-            if cur == line {
-                start = i + 1;
-                break;
-            }
-        }
-    }
-    if cur != line {
-        return None;
-    }
-    Some(src[start..].to_vec())
+/// Finds attribute arguments in the original encoding-aware declaration AST.
+struct AttributeArgs<'a> {
+    line: u32,
+    name: &'a [u8],
+    found: Option<Vec<ast::Arg>>,
 }
 
-/// Extracts the attribute group starting at the first `#[` of `text`.
-fn attribute_group(text: &[u8]) -> Option<Vec<u8>> {
-    let start = text.windows(2).position(|w| w == b"#[")?;
-    let mut depth = 0i32;
-    let mut quote: Option<u8> = None;
-    let mut i = start + 1;
-    while i < text.len() {
-        let c = text[i];
-        if let Some(q) = quote {
-            if c == b'\\' {
-                i += 2;
-                continue;
+impl AttributeArgs<'_> {
+    fn check(&mut self, groups: &ast::Attributes) {
+        for group in groups {
+            for attribute in &group.attributes {
+                let short = attribute.name.name.rsplit(|&byte| byte == b'\\').next();
+                let want = self.name.rsplit(|&byte| byte == b'\\').next();
+                if self.found.is_none()
+                    && attribute.span.line == self.line
+                    && short
+                        .zip(want)
+                        .is_some_and(|(short, want)| short.eq_ignore_ascii_case(want))
+                {
+                    self.found = Some(
+                        attribute
+                            .args
+                            .as_ref()
+                            .map(|args| args.args.clone())
+                            .unwrap_or_default(),
+                    );
+                }
             }
-            if c == q {
-                quote = None;
-            }
-        } else {
-            match c {
-                b'\'' | b'"' => quote = Some(c),
-                b'[' | b'(' => depth += 1,
-                b']' | b')' => {
-                    depth -= 1;
-                    if depth == 0 {
-                        return Some(text[start..=i].to_vec());
+        }
+    }
+
+    fn hooks(&mut self, hooks: Option<&Vec<ast::PropertyHook>>) {
+        for hook in hooks.into_iter().flatten() {
+            self.check(&hook.attributes);
+        }
+    }
+}
+
+impl php_parser::visit::Visitor for AttributeArgs<'_> {
+    fn visit_stmt(&mut self, stmt: &Stmt) {
+        match &stmt.kind {
+            StmtKind::Function(function) => self.check(&function.attributes),
+            StmtKind::Const { attributes, .. } => self.check(attributes),
+            _ => {}
+        }
+        php_parser::visit::walk_stmt(self, stmt);
+    }
+
+    fn visit_expr(&mut self, expr: &Expr) {
+        match &expr.kind {
+            ast::ExprKind::Closure(function) => self.check(&function.attributes),
+            ast::ExprKind::ArrowFn(function) => self.check(&function.attributes),
+            _ => {}
+        }
+        php_parser::visit::walk_expr(self, expr);
+    }
+
+    fn visit_param(&mut self, param: &ast::Param) {
+        self.check(&param.attributes);
+        self.hooks(param.hooks.as_ref());
+        php_parser::visit::walk_param(self, param);
+    }
+
+    fn visit_class(&mut self, class: &ClassDecl) {
+        self.check(&class.attributes);
+        for member in &class.members {
+            match &member.kind {
+                ClassMemberKind::Method(method) => self.check(&method.attributes),
+                ClassMemberKind::Const(group) => self.check(&group.attributes),
+                ClassMemberKind::Property(group) => {
+                    self.check(&group.attributes);
+                    for property in &group.props {
+                        self.hooks(property.hooks.as_ref());
                     }
                 }
+                ClassMemberKind::EnumCase(case) => self.check(&case.attributes),
                 _ => {}
             }
         }
-        i += 1;
+        php_parser::visit::walk_class(self, class);
     }
-    None
 }
 
 /// The argument expressions of the attribute `name` written at `file:line`
 /// (the `n`-th attribute of that name in the group).
-pub(crate) fn attribute_args(file: &[u8], line: u32, name: &[u8]) -> Option<Vec<ast::Arg>> {
-    let text = text_from_line(file, line)?;
-    let mut rest: &[u8] = &text;
-    // An attribute may be the 2nd+ group on the line: try each group.
-    for _ in 0..8 {
-        let g = attribute_group(rest)?;
-        let mut src = b"<?php ".to_vec();
-        src.extend_from_slice(&g);
-        src.extend_from_slice(b" function __reflection_attribute_probe() {}");
-        if let Ok(p) = php_parser::parse(&src, &php_parser::ParseOptions::default()) {
-            if let Some(StmtKind::Function(f)) = p.statements.first().map(|s| &s.kind) {
-                for grp in &f.attributes {
-                    for at in &grp.attributes {
-                        let short = at
-                            .name
-                            .name
-                            .rsplit(|&c| c == b'\\')
-                            .next()
-                            .unwrap_or(&at.name.name);
-                        let want = name.rsplit(|&c| c == b'\\').next().unwrap_or(name);
-                        if short.eq_ignore_ascii_case(want) {
-                            return Some(
-                                at.args.as_ref().map(|a| a.args.clone()).unwrap_or_default(),
-                            );
-                        }
-                    }
-                }
-            }
-        }
-        let pos = rest.windows(2).position(|w| w == b"#[")?;
-        rest = &rest[pos + g.len()..];
-    }
-    None
+pub(crate) fn attribute_args(vm: &Vm, file: &[u8], line: u32, name: &[u8]) -> Option<Vec<ast::Arg>> {
+    let program = program(vm, file)?;
+    let mut visitor = AttributeArgs {
+        line,
+        name,
+        found: None,
+    };
+    php_parser::visit::walk_stmts(&mut visitor, &program.statements);
+    visitor.found
 }
 
 /// The attributes of enum case `name` (name, arguments) declared in the class
 /// at `file:line`, with the namespace of the declaration.
 pub(crate) fn case_attributes(
+    vm: &Vm,
     file: &[u8],
     line: u32,
     name: &[u8],
 ) -> Option<(ast::Attributes, Vec<u8>)> {
-    let (c, ns) = class_ast(file, line)?;
+    let (c, ns) = class_ast(vm, file, line)?;
     c.members.iter().find_map(|m| match &m.kind {
         ClassMemberKind::EnumCase(ec) if ec.name.name == name => {
             Some((ec.attributes.clone(), ns.clone()))
@@ -408,8 +422,8 @@ impl php_parser::visit::Visitor for HookDoc {
 }
 
 /// The doc comment of the property hook declared at `file:line-end`.
-pub(crate) fn hook_doc_comment(file: &[u8], line: u32, end: u32) -> Option<Vec<u8>> {
-    let p = program(file)?;
+pub(crate) fn hook_doc_comment(vm: &Vm, file: &[u8], line: u32, end: u32) -> Option<Vec<u8>> {
+    let p = program(vm, file)?;
     let mut v = HookDoc {
         line,
         end,
@@ -445,8 +459,8 @@ impl php_parser::visit::Visitor for StaticInits {
 
 /// The initializer expressions of the `static` variables of the function
 /// spanning `file:start-end`.
-pub(crate) fn static_initializers(file: &[u8], start: u32, end: u32) -> Vec<(Vec<u8>, Expr)> {
-    let Some(p) = program(file) else {
+pub(crate) fn static_initializers(vm: &Vm, file: &[u8], start: u32, end: u32) -> Vec<(Vec<u8>, Expr)> {
+    let Some(p) = program(vm, file) else {
         return Vec::new();
     };
     let mut v = StaticInits {
@@ -463,16 +477,28 @@ mod tests {
     use super::*;
 
     #[test]
-    fn extracts_attribute_groups() {
-        assert_eq!(
-            attribute_group(b"  #[A(1, ']')] class C {}"),
-            Some(b"#[A(1, ']')]".to_vec())
-        );
-        assert_eq!(
-            attribute_group(b"#[A([1, 2]), B] function f() {}"),
-            Some(b"#[A([1, 2]), B]".to_vec())
-        );
-        assert_eq!(attribute_group(b"no attributes"), None);
+    fn attribute_arguments_use_encoding_aware_declaration_ast() {
+        let opts = php_parser::ParseOptions {
+            multibyte: true,
+            ..Default::default()
+        };
+        let program = php_parser::parse(
+            b"<?php declare(encoding='SJIS');\n#[A(1, '\x82\xA0')] class C {}",
+            &opts,
+        )
+        .unwrap();
+        let vm = Vm::new(&crate::VmOptions::default(), Box::new(std::io::sink()));
+        vm.parsed_sources
+            .borrow_mut()
+            .insert(ZStr::from("not-on-disk.php"), Rc::new(program));
+        let args = attribute_args(&vm, b"not-on-disk.php", 2, b"A").unwrap();
+        assert_eq!(args.len(), 2);
+        let ast::ArgKind::Positional(value) = &args[1].kind else {
+            panic!("expected positional argument");
+        };
+        assert_eq!(value.kind, ast::ExprKind::String("あ".as_bytes().to_vec()));
+        let other = Vm::new(&crate::VmOptions::default(), Box::new(std::io::sink()));
+        assert!(attribute_args(&other, b"not-on-disk.php", 2, b"A").is_none());
     }
 
     #[test]

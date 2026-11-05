@@ -221,6 +221,8 @@ pub(crate) struct Compiler {
     /// Names of functions declared in this file (for redeclare errors).
     pub declared_functions: HashMap<Vec<u8>, u32>,
     pub source: Rc<[u8]>,
+    /// Original source offsets cannot recover multibyte semantic text.
+    pub multibyte: bool,
     /// Property name while compiling a property hook (`__PROPERTY__`).
     pub hook_prop: Option<Vec<u8>>,
     pub closure_depth: u32,
@@ -250,6 +252,7 @@ pub fn compile(
         opts,
         declared_functions: HashMap::new(),
         source,
+        multibyte: program.multibyte,
         hook_prop: None,
         closure_depth: 0,
     };

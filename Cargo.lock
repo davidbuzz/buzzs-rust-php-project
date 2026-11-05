@@ -412,6 +412,7 @@ dependencies = [
  "php-ext-zip",
  "php-ext-zlib",
  "php-memlimit",
+ "php-parser",
  "php-runtime",
  "php-support",
  "php-vm",
@@ -666,6 +667,7 @@ version = "0.1.0"
 dependencies = [
  "php-mbstring",
  "php-memlimit",
+ "php-parser",
  "php-pcre",
  "php-runtime",
  "php-stdmisc",
@@ -1075,6 +1077,9 @@ dependencies = [
 [[package]]
 name = "php-lexer"
 version = "0.1.0"
+dependencies = [
+ "php-mbstring",
+]
 
 [[package]]
 name = "php-libxml"
@@ -1114,6 +1119,7 @@ version = "0.1.0"
 dependencies = [
  "libc",
  "php-lexer",
+ "php-mbstring",
 ]
 
 [[package]]
@@ -1309,6 +1315,7 @@ version = "0.1.0"
 dependencies = [
  "php-hash",
  "php-lexer",
+ "php-mbstring",
  "php-memlimit",
  "php-parser",
  "php-random",

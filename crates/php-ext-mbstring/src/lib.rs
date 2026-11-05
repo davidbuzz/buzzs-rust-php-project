@@ -43,6 +43,7 @@ impl Extension for Mbstring {
         output::register(m);
         regex::register(m);
         ini::register_hooks(m);
+        multibyte::register_hooks(m);
         ini::startup(m.vm());
         multibyte::install(m.vm());
         m.info(module_info);

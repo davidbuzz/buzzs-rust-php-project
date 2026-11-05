@@ -1000,9 +1000,7 @@ fn execute_script(vm: &mut Vm, src: &[u8], path: &[u8]) -> i32 {
 
 /// `zend_eval_string_ex(code, NULL, name, 1)`.
 fn eval_code(vm: &mut Vm, code: &[u8], name: &str) -> Result<(), Throw> {
-    let mut src = b"<?php ".to_vec();
-    src.extend_from_slice(code);
-    vm.run_main(&src, &ZStr::from(name))
+    vm.run_eval(code, &ZStr::from(name))
 }
 
 /// `PHP_CLI_MODE_PROCESS_STDIN`: `-B`, then `-R`/`-F` for every line
@@ -1058,7 +1056,35 @@ fn process_stdin(vm: &mut Vm, req: &Request) -> i32 {
 /// `-l`: `php_lint_script()` then the CLI's verdict line.
 fn lint(cfg: &Config, src: &[u8], php_self: &[u8]) -> i32 {
     let name = lossy(php_self);
-    match Vm::lint(src) {
+    let mut vm = new_vm(cfg);
+    request_startup(&mut vm);
+    let parsed = vm.parse_source(src, false, true);
+    let warnings = match &parsed {
+        Ok(program) => &program.warnings,
+        Err(error) => &error.warnings,
+    };
+    for warning in warnings {
+        let level = match warning.level {
+            php_parser::ast::DiagnosticLevel::CompileWarning => 128,
+            php_parser::ast::DiagnosticLevel::Deprecated => 8192,
+            php_parser::ast::DiagnosticLevel::Warning => 2,
+        };
+        if vm
+            .error_at(level, &warning.message, &ZStr::from(php_self), warning.line)
+            .is_err()
+        {
+            vm.flush_stdout();
+            return 255;
+        }
+    }
+    vm.flush_stdout();
+    match parsed.map(|_| ()).map_err(|error| {
+        (
+            error.message,
+            error.line,
+            error.kind == php_parser::ErrorKind::Parse,
+        )
+    }) {
         Ok(()) => {
             out(format!("No syntax errors detected in {name}\n").as_bytes());
             0

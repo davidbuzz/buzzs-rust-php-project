@@ -14,6 +14,9 @@ pub use php_lexer::Span;
 /// A parsed file (`ZEND_AST_STMT_LIST` at the top level).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Program {
+    /// Source was scanned with Zend multibyte filtering. Consumers must use
+    /// semantic AST bytes rather than slicing the original input with spans.
+    pub multibyte: bool,
     /// Top-level statements.
     pub statements: Vec<Stmt>,
     /// Byte offset just past `__halt_compiler();` if the file contains it

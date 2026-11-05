@@ -53,9 +53,9 @@ pub fn parse(src: &[u8], opts: &ParseOptions) -> Result<Program, ParseError> {
 /// Parses source using the host's script/internal encoding and substitution
 /// settings. Filtering is only enabled when [`ParseOptions::multibyte`] is on.
 ///
-/// For `eval()`, set [`ParseOptions::start_in_scripting`] and supply the current
-/// internal encoding as the sole script encoding, with Unicode detection off,
-/// as Zend does. Spans and identifier offsets refer to the filtered scanner
+/// For `eval()`, set [`ParseOptions::start_in_scripting`] and supply Zend's
+/// configured internal encoding as the sole script encoding, with Unicode
+/// detection off. Spans and identifier offsets refer to the filtered scanner
 /// buffer (with any detected BOM removed), not necessarily the supplied bytes.
 #[allow(clippy::trivially_copy_pass_by_ref)]
 pub fn parse_with_encoding(

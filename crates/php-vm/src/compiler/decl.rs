@@ -494,10 +494,13 @@ impl Compiler {
                 variadic: p.variadic,
                 ty,
                 has_default: p.default.is_some(),
-                default_text: p
-                    .default
-                    .as_ref()
-                    .map(|d| export_expr_text(&self.source, d)),
+                default_text: p.default.as_ref().map(|d| {
+                    if self.multibyte {
+                        String::from_utf8_lossy(&php_parser::export::export_expr(d)).into_owned()
+                    } else {
+                        export_expr_text(&self.source, d)
+                    }
+                }),
                 promote,
                 sensitive: attrs
                     .iter()
