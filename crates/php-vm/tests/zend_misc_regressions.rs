@@ -147,3 +147,18 @@ var_dump($b);
          int(42)\narray(1) {\n  [\"k\"]=>\n  int(42)\n}\n"
     );
 }
+
+/// A call to a function declared earlier in the file compiles a by-value
+/// `$a[]` argument for reading: a compile error (`array_append_reading_error`).
+/// By-reference parameters and functions not yet declared are unaffected.
+#[test]
+fn append_passed_by_value_to_known_function_is_a_compile_error() {
+    let (status, out) = run_status("<?php\n\nfunction test($var) { }\ntest($arr[]);\n");
+    assert_ne!(status, 0, "{out}");
+    assert!(
+        out.contains("Fatal error: Cannot use [] for reading in t.php on line 4"),
+        "{out}"
+    );
+    let out = run("<?php\nfunction r(&$x) {}\nr($a[]);\nvar_dump(count($a));\ntry { g($b[]); } catch (Error $e) { echo $e->getMessage(), \"\\n\"; }\nfunction g($v) {}\n");
+    assert_eq!(out, "int(1)\nCannot use [] for reading\n");
+}

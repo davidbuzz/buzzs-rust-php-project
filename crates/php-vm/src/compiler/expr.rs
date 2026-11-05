@@ -1822,6 +1822,7 @@ impl Compiler {
                         if let Some(r) = self.compile_special_call(n, args, line, need)? {
                             return Ok(Some(r));
                         }
+                        self.check_known_function_args(n, args)?;
                     }
                     self.emit_init_fcall(n);
                 } else if let Callee::Expr(ex) = &**callee {
@@ -2110,6 +2111,40 @@ impl Compiler {
             }
         }
         Ok((variadic, const_args))
+    }
+
+    /// `zend_compile_args` with a known `fbc` (a top-level function of this
+    /// file compiled earlier): an argument for a by-value parameter is
+    /// compiled for reading (`BP_VAR_R`), so `f($a[])` is the compile error
+    /// "Cannot use [] for reading".
+    fn check_known_function_args(&self, n: &ast::Name, args: &ArgList) -> CResult<()> {
+        if self.known_functions.is_empty() {
+            return Ok(());
+        }
+        let (name, fallback) = self.resolve_function_name(n);
+        if fallback.is_some() {
+            // Unqualified in a namespace: resolved at runtime.
+            return Ok(());
+        }
+        let Some(params) = self.known_functions.get(&name.to_ascii_lowercase()) else {
+            return Ok(());
+        };
+        for (i, a) in args.args.iter().enumerate() {
+            let ArgKind::Positional(e) = &a.kind else {
+                // Named arguments and unpacking end the positional run.
+                return Ok(());
+            };
+            let by_ref = match params.get(i) {
+                Some(&(by_ref, _)) => by_ref,
+                None => params
+                    .last()
+                    .is_some_and(|&(by_ref, variadic)| variadic && by_ref),
+            };
+            if !by_ref && reads_append(e) {
+                return self.err("Cannot use [] for reading", e.span.line);
+            }
+        }
+        Ok(())
     }
 
     pub(crate) fn compile_args(&mut self, args: &ArgList) -> CResult<()> {
@@ -2757,5 +2792,19 @@ fn member_name_line(name: &MemberName) -> u32 {
     match name {
         MemberName::Ident(i) => i.span.line,
         MemberName::Expr(e) => e.span.line,
+    }
+}
+
+/// Whether compiling `e` for reading (`BP_VAR_R`) reaches a `[]` fetch:
+/// the expression or a dimension/property base it is fetched from.
+fn reads_append(e: &Expr) -> bool {
+    let mut cur = e;
+    loop {
+        match &cur.kind {
+            ExprKind::Dim { index: None, .. } => return true,
+            ExprKind::Dim { base, .. } => cur = &**base,
+            ExprKind::Prop { object, .. } => cur = &**object,
+            _ => return false,
+        }
     }
 }
