@@ -431,3 +431,15 @@ var_dump(class_exists('A'));
         "Use of \"self\" in callables is deprecated\nFirst::load\nload A\ninner A\nbool(false)\n"
     );
 }
+
+#[test]
+fn internal_class_constants_list_inherited_first() {
+    // Bug #75242: an internal class's table holds the parent's constants
+    // before its own.
+    let out = run(r#"<?php
+foreach ((new ReflectionClass('RecursiveArrayIterator'))->getConstants() as $k => $v) {
+    echo $k, "=", $v, "\n";
+}
+"#);
+    assert_eq!(out, "STD_PROP_LIST=1\nARRAY_AS_PROPS=2\nCHILD_ARRAYS_ONLY=4\n");
+}

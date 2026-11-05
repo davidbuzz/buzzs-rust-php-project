@@ -277,18 +277,11 @@ pub(crate) fn consts(c: &Rc<Class>) -> Vec<Rc<ClassConst>> {
                 push(&cc.name, &mut order);
             }
         }
-    } else {
-        for cc in &c.consts {
-            if cc.class.eq_ignore_ascii_case(c.name.as_bytes()) {
-                push(&cc.name, &mut order);
-            }
-        }
-        if let Some(p) = &c.parent {
-            for cc in consts(p) {
-                push(&cc.name, &mut order);
-            }
-        }
     }
+    // The table order: an internal class inherits (`zend_do_inheritance` in
+    // `zend_register_internal_class_with_flags`) and implements its
+    // interfaces before declaring its own constants, which is the order
+    // `ClassBuilder` builds the table in.
     for cc in &c.consts {
         push(&cc.name, &mut order);
     }
