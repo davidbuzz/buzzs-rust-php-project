@@ -354,8 +354,21 @@ pub(crate) fn decode(h: &mut dyn SessionHost, data: &[u8]) -> bool {
     let Some(ser) = h.session().serializer else {
         return false;
     };
-    let opts = h.unserialize_options();
-    let ok = match serializer::decode_with(ser, data, &opts, h) {
+    let shared = if h.session().in_rfc1867_update {
+        None
+    } else {
+        serializer::decode_nested(ser, data, &mut |d: &[u8], off: usize| {
+            h.unserialize_shared(d, off)
+        })
+    };
+    let decoded = match shared {
+        Some(r) => r,
+        None => {
+            let opts = h.unserialize_options();
+            serializer::decode_with(ser, data, &opts, h)
+        }
+    };
+    let ok = match decoded {
         Ok(Decoded::Merge { entries, ok }) => {
             if let Some(r) = h.session().http_session_vars.clone() {
                 let mut v = r.borrow_mut();
@@ -368,6 +381,12 @@ pub(crate) fn decode(h: &mut dyn SessionHost, data: &[u8]) -> bool {
             ok
         }
         Ok(Decoded::Replace { value, ok }) => {
+            // `if (Z_TYPE(session_vars) == IS_NULL) array_init(...)`
+            let value = if value.is_null() {
+                Value::empty_array()
+            } else {
+                value
+            };
             let r = PhpRef::new(value);
             h.session().http_session_vars = Some(r.clone());
             h.bind_session_global(Some(r));

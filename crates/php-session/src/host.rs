@@ -29,6 +29,22 @@ pub trait SessionHost: RuntimeContext {
         UnserializeOptions::default()
     }
 
+    /// `php_var_unserialize()` of the one value at `offset` in `data` within
+    /// the active `unserialize()` call's shared `var_hash` (so a
+    /// `Serializable::unserialize()` calling `session_decode()` resolves
+    /// `r:`/`R:` against the outer call's slots): `Ok(Ok((value, end)))`,
+    /// `Ok(Err(failure_offset))`, or `Err` for an exception. `None` (the
+    /// default, and whenever no `unserialize()` call is active) makes the
+    /// module parse the data itself with [`SessionHost::unserialize_options`].
+    fn unserialize_shared(
+        &mut self,
+        data: &[u8],
+        offset: usize,
+    ) -> Option<RtResult<Result<(Value, usize), usize>>> {
+        let _ = (data, offset);
+        None
+    }
+
     /// `php_error_docref(NULL, level, "%s", message)`. Returning `Err`
     /// models a user error handler throwing; the session module keeps going
     /// and reports the exception when the current entry point returns.

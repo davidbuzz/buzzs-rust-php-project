@@ -1096,14 +1096,20 @@ impl Unserializer<'_> {
             return Ok(incomplete(vm));
         }
         let f = Value::Str(ZStr::from(func.as_slice()));
-        if !vm.is_callable_value(&f) {
-            let err = vm.callable_error(&f);
-            return Err(vm.make_throw(
-                "Error",
-                &format!("Invalid callback {}, {err}", String::from_utf8_lossy(&func)),
-            ));
-        }
-        locked(|| vm.call_value(&f, vec![Value::Str(name.clone())]))?;
+        // `call_user_function()`: `zend_is_callable_ex()` in the calling
+        // user frame's scope, deprecations ("Use of \"parent\" in
+        // callables …") included.
+        let mut call = match vm.zend_is_callable(&f, false)? {
+            Ok(call) => call,
+            Err(err) => {
+                return Err(vm.make_throw(
+                    "Error",
+                    &format!("Invalid callback {}, {err}", String::from_utf8_lossy(&func)),
+                ));
+            }
+        };
+        call.args = vec![Some(Value::Str(name.clone()))];
+        locked(|| vm.call_pending(call))?;
         if let Some(c) = locked(|| vm.lookup_class(name))? {
             Ok(Some((c, false)))
         } else {
@@ -1282,13 +1288,36 @@ impl Unserializer<'_> {
                     _ => None,
                 },
             };
+            // A reused location (duplicate key) drops its old value, and
+            // with it this slot's type source.
+            let reused = loc.is_some();
             let Some(v) = self.value(vm, loc)? else {
                 return Ok(false);
             };
             match &target {
                 Target::Declared(pi) => {
-                    if let Some(ty) = pi.ty.clone() {
+                    let cell = match &v {
+                        Value::Reference(c) => Some(c.clone()),
+                        _ => None,
+                    };
+                    let typed_ref = !reused
+                        && cell
+                            .as_ref()
+                            .is_some_and(crate::typed_refs::has_type_sources);
+                    if typed_ref && pi.ty.is_some() {
+                        // `R:` to a value an earlier typed property holds:
+                        // the reference must satisfy this type too,
+                        // without coercion.
+                        let info = cls
+                            .props
+                            .get(pi.slot as usize)
+                            .cloned()
+                            .unwrap_or_else(|| Rc::new(pi.clone()));
+                        let mut checked = v.clone();
+                        vm.verify_prop_assignable_by_ref_strict(&info, &mut checked)?;
+                    } else if let Some(ty) = pi.ty.clone() {
                         let mut inner = v.deref();
+                        let was_int = matches!(inner, Value::Int(_));
                         let decl = vm.find_class(pi.class.as_bytes());
                         let ctx = TypeCtx {
                             scope: decl.as_ref(),
@@ -1312,6 +1341,12 @@ impl Unserializer<'_> {
                                 ),
                             ));
                         }
+                        // The strict-mode int -> float coercion is kept.
+                        if was_int && matches!(inner, Value::Float(_)) {
+                            if let Some(c) = &cell {
+                                c.set(inner);
+                            }
+                        }
                     }
                     let d = object::data(o);
                     let mut slots = d.slots.borrow_mut();
@@ -1326,6 +1361,14 @@ impl Unserializer<'_> {
                     }
                     if let Some(r) = d.readonly_init.borrow_mut().get_mut(pi.slot as usize) {
                         *r = true;
+                    }
+                    // `ZEND_REF_ADD_TYPE_SOURCE` / `ref_props`: the parse
+                    // cell becomes a typed reference if a later `R:`
+                    // shares it (a source only counts while the slot
+                    // still holds the cell, i.e. after unwrapping only
+                    // for shared cells).
+                    if let Some(c) = &cell {
+                        vm.add_slot_type_source(o, pi.slot as usize, c);
                     }
                 }
                 Target::Dynamic(k) => {
@@ -1621,6 +1664,19 @@ struct Unwrapper {
     slot_counts: HashMap<usize, usize>,
 }
 
+/// Drops parse-cell handles without offering them to the cycle collector's
+/// possible-root buffer. php-src's `var_hash` holds no refcounts, so its
+/// teardown never buffers roots; here a buffered weak handle would also
+/// keep the cell's allocation alive until the buffer is compacted, which
+/// `memory_get_usage()` sees as a leak (bug #81142). Shared cells are
+/// buffered when the user later releases the result.
+fn without_root_recording<R>(f: impl FnOnce() -> R) -> R {
+    let prev = php_runtime::ref_roots::set_recording(false);
+    let r = f();
+    php_runtime::ref_roots::set_recording(prev);
+    r
+}
+
 impl Unwrapper {
     fn value(&mut self, v: &mut Value) {
         match v {
@@ -1630,7 +1686,7 @@ impl Unwrapper {
                     let mut inner = r.set(Value::Null);
                     self.value(&mut inner);
                     r.set(inner.clone());
-                    *v = inner;
+                    without_root_recording(|| *v = inner);
                 } else if self.seen_refs.insert(r.addr()) {
                     let mut inner = r.set(Value::Null);
                     self.value(&mut inner);
@@ -1706,6 +1762,19 @@ fn unser_init(vm: &Vm) -> (UnserRc, bool) {
 }
 
 impl Vm {
+    /// Whether a `php_var_unserialize()` made by native code now joins an
+    /// active `unserialize()` call's `var_hash` (`PHP_VAR_UNSERIALIZE_INIT`
+    /// sharing `BG(unserialize)`): inside one and not under the serialize
+    /// lock.
+    #[must_use]
+    pub fn unserialize_context_active(&self) -> bool {
+        !is_locked()
+            && UNSER.with(|u| {
+                let u = u.borrow();
+                u.0 > 0 && u.1.is_some()
+            })
+    }
+
     /// The `var_hash` options a `php_var_unserialize()` made by native code
     /// (a native `Serializable::unserialize()` such as `ArrayObject`'s legacy
     /// format, `session_decode()`) runs with: those of the active
@@ -1762,7 +1831,7 @@ fn unser_destroy(vm: &mut Vm, d: &UnserRc, outermost: bool, run: bool) -> VmResu
         return Ok(());
     }
     let dtors = std::mem::take(&mut d.borrow_mut().dtors);
-    d.borrow_mut().slots.clear();
+    without_root_recording(|| d.borrow_mut().slots.clear());
     // With an exception pending the calls do not run (and count as failed).
     let mut failed = !run;
     let mut result = Ok(());
@@ -2096,6 +2165,113 @@ pub(crate) fn register(vm: &mut Vm) {
 #[cfg(test)]
 mod tests {
     use super::{unescape, valid_class_name};
+    use crate::{Vm, VmOptions};
+    use std::cell::RefCell;
+    use std::io::Write;
+    use std::rc::Rc;
+
+    #[derive(Clone, Default)]
+    struct Sink(Rc<RefCell<Vec<u8>>>);
+
+    impl Write for Sink {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.borrow_mut().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn run(src: &str) -> String {
+        let sink = Sink::default();
+        let mut vm = Vm::new(&VmOptions::default(), Box::new(sink.clone()));
+        vm.run_script(src.as_bytes(), "t.php");
+        drop(vm);
+        let out = sink.0.borrow().clone();
+        String::from_utf8_lossy(&out).into_owned()
+    }
+
+    #[test]
+    fn callback_func_name_with_nul_is_cut_in_the_reason() {
+        let out = run("<?php ini_set('unserialize_callback_func', \"foo\\0butno\");\n\
+             function foo($n) {}\n\
+             try { unserialize('O:3:\"FOO\":0:{}'); }\n\
+             catch (Error $e) { echo $e->getMessage(); }");
+        assert_eq!(
+            out,
+            "Invalid callback foo\0butno, function \"foo\" not found or invalid function name"
+        );
+    }
+
+    #[test]
+    fn callback_func_resolves_parent_in_the_calling_scope() {
+        let out = run("<?php ini_set('unserialize_callback_func', 'parent::cb');\n\
+             class P { static function cb($n) { echo __CLASS__, \" $n\\n\"; eval('class Foo {}'); } }\n\
+             class C extends P { function u($s) { return unserialize($s); } }\n\
+             try { unserialize('O:3:\"Bar\":0:{}'); }\n\
+             catch (Error $e) { echo $e->getMessage(), \"\\n\"; }\n\
+             echo get_class((new C)->u('O:3:\"Foo\":0:{}'));");
+        assert!(out.starts_with(
+            "Invalid callback parent::cb, cannot access \"parent\" when no class scope is active\n"
+        ));
+        assert!(out.contains("Use of \"parent\" in callables is deprecated"));
+        assert!(out.ends_with("P Foo\nFoo"), "{out}");
+    }
+
+    #[test]
+    fn incomplete_object_refuses_references_and_method_calls() {
+        let out = run("<?php $i = unserialize('O:1:\"C\":1:{s:1:\"p\";i:1;}');\n\
+             foreach ([function () use ($i) { $x = 1; $i->p = &$x; }, function () use ($i) { $r = &$i->p; },\n\
+             fn() => $i->p[] = 1, fn() => $i->f()] as $f) {\n\
+             try { $f(); echo \"ok\\n\"; } catch (Error $e) { echo substr($e->getMessage(), 0, 31), \"\\n\"; } }");
+        assert_eq!(
+            out,
+            "The script tried to modify a pr\n\
+             The script tried to modify a pr\n\
+             The script tried to modify a pr\n\
+             The script tried to call a meth\n"
+        );
+    }
+
+    #[test]
+    fn typed_property_references() {
+        let out = run("<?php class A { public int $a; public $b; }\n\
+             class D { public int $a; public float $b; }\n\
+             $o = unserialize('O:1:\"A\":2:{s:1:\"a\";i:1;s:1:\"b\";R:2;}');\n\
+             try { $o->b = 'x'; } catch (TypeError $e) { echo $e->getMessage(), \"\\n\"; }\n\
+             var_dump(unserialize('O:1:\"D\":1:{s:1:\"b\";i:1;}')->b);\n\
+             var_dump(unserialize('O:1:\"D\":2:{s:1:\"b\";i:1;s:1:\"b\";i:2;}')->b);\n\
+             foreach (['O:1:\"D\":2:{s:1:\"a\";i:1;s:1:\"b\";R:2;}',\n\
+                       'O:1:\"D\":2:{s:1:\"b\";i:1;s:1:\"a\";R:2;}'] as $s) {\n\
+             try { unserialize($s); } catch (TypeError $e) { echo $e->getMessage(), \"\\n\"; } }");
+        assert_eq!(
+            out,
+            "Cannot assign string to reference held by property A::$a of type int\n\
+             float(1)\n\
+             float(2)\n\
+             Reference with value of type int held by property D::$a of type int is not compatible with property D::$b of type float\n\
+             Cannot assign float to property D::$a of type int\n"
+        );
+    }
+
+    #[test]
+    fn parse_cell_teardown_buffers_no_possible_roots() {
+        use php_runtime::{ref_roots, PhpRef, Value};
+        let prev = ref_roots::set_recording(true);
+        drop(ref_roots::take());
+        let cell = PhpRef::new(Value::empty_array());
+        let table_handle = cell.clone();
+        super::without_root_recording(|| drop(cell));
+        assert_eq!(ref_roots::len(), 0);
+        // Recording is restored afterwards.
+        let again = table_handle.clone();
+        drop(again);
+        assert_eq!(ref_roots::len(), 1);
+        drop(ref_roots::take());
+        drop(table_handle);
+        ref_roots::set_recording(prev);
+    }
 
     #[test]
     fn class_names() {

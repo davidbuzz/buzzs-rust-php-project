@@ -324,9 +324,11 @@ impl Vm {
             fcc.calling = Some(org.clone());
             callable.clone()
         } else {
+            // `"%s"` of `ZSTR_VAL(callable)`: the name stops at a NUL byte.
+            let shown = bytes.split(|&c| c == 0).next().unwrap_or_default();
             return Ok(Err(format!(
                 "function \"{}\" not found or invalid function name",
-                callable.to_string_lossy()
+                String::from_utf8_lossy(shown)
             )));
         };
         let lm = mname.to_ascii_lowercase();

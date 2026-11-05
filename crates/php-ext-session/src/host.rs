@@ -320,6 +320,17 @@ impl SessionHost for VmHost<'_> {
         self.vm.unserialize_options_in_effect()
     }
 
+    fn unserialize_shared(
+        &mut self,
+        data: &[u8],
+        offset: usize,
+    ) -> Option<RtResult<Result<(Value, usize), usize>>> {
+        if !self.vm.unserialize_context_active() {
+            return None;
+        }
+        Some(self.parked(|vm| vm.unserialize_nested(data, offset).map_err(|t| to_rt(vm, t))))
+    }
+
     fn emit_diagnostic(&mut self, level: ErrorLevel, message: &str) -> RtResult<()> {
         self.parked(|vm| docref(vm, level.bits(), message.as_bytes()).map_err(|t| to_rt(vm, t)))
     }

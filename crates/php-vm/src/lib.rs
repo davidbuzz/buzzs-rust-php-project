@@ -215,6 +215,10 @@ impl Vm {
             vm.sync_ini(n);
         }
         vm.startup_diagnostics = sink;
+        // `zend_interned_strings_init()`: the empty and one-character
+        // strings exist before any script runs, so their first use (e.g.
+        // `(string) 0`) does not show in `memory_get_usage()` deltas.
+        let _ = (ZStr::empty(), ZStr::from_byte(0));
         builtins::register_all(&mut vm);
         vm
     }

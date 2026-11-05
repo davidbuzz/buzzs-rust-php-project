@@ -1222,6 +1222,13 @@ impl Vm {
         name: &ZStr,
         r: Value,
     ) -> VmResult<Value> {
+        if let Some(f) = object::class_of(o)
+            .hooks
+            .as_ref()
+            .and_then(|h| h.get_property_ptr_ptr)
+        {
+            f(self, o, name)?;
+        }
         let lazy_target = self.lazy_object_for(o, Some(name))?;
         let o = &lazy_target;
         if let Some(r) = self.assign_uninit_typed_prop_ref(o, name, &r)? {
