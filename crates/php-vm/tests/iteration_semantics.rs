@@ -132,3 +132,28 @@ fn list_destructuring_of_string_warns() {
         "\nWarning: Cannot use string as array in t.php on line 2\nNULL\n"
     );
 }
+
+/// `$o[] op= v` on an ArrayAccess object reads `offsetGet(null)` and
+/// writes `offsetSet(null, ..)` (bug69955); a by-reference fetch whose
+/// `offsetGet()` returns an object raises no notice (bug39297).
+#[test]
+fn array_access_append_assign_op_and_object_ref_fetch() {
+    let out = run(r#"<?php
+class C implements ArrayAccess {
+    public $o;
+    function offsetExists($k): bool { return true; }
+    function offsetGet($k): mixed { echo "get "; var_dump($k); return $k === 'obj' ? $this->o : 100; }
+    function offsetSet($k, $v): void { echo "set "; var_dump($k, $v); }
+    function offsetUnset($k): void {}
+}
+function byRef(&$x) { return $x; }
+$c = new C;
+$c->o = new stdClass;
+var_dump($c[] += 5);
+var_dump(byRef($c['obj']) === $c->o);
+"#);
+    assert_eq!(
+        out,
+        "get NULL\nset NULL\nint(105)\nint(105)\nget string(3) \"obj\"\nbool(true)\n"
+    );
+}

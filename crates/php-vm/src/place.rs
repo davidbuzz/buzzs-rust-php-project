@@ -1016,12 +1016,9 @@ impl Vm {
                             self.call_method_name(&obj, "offsetSet", vec![key, v.clone()])?;
                             Ok(v)
                         }
-                        WOp::FetchRw => {
-                            if matches!(seg, RSeg::Append) {
-                                return Err(self.make_throw("Error", "Cannot use [] for reading"));
-                            }
-                            self.call_method_name_raw(&obj, "offsetGet", vec![key])
-                        }
+                        // `zend_binary_assign_op_obj_dim`: `$o[] op= v` reads
+                        // `offsetGet(null)` (bug69955).
+                        WOp::FetchRw => self.call_method_name_raw(&obj, "offsetGet", vec![key]),
                         WOp::Unset => {
                             self.call_method_name(&obj, "offsetUnset", vec![key])?;
                             Ok(Value::Null)
@@ -1030,6 +1027,9 @@ impl Vm {
                             let r = self.call_method_name_raw(&obj, "offsetGet", vec![key])?;
                             match r {
                                 Value::Reference(r) => Ok(Value::Reference(r)),
+                                // `zend_fetch_dimension_address`: an object
+                                // result needs no reference (bug39297).
+                                o @ Value::Object(_) => Ok(Value::Reference(PhpRef::new(o))),
                                 other => {
                                     self.notice(&format!(
                                         "Indirect modification of overloaded element of {} has no effect",
