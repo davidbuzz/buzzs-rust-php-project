@@ -1082,6 +1082,32 @@ impl Compiler {
     }
 
     /// Compiles a class-like declaration; returns its index.
+    /// `zend_resolve_const_class_name_reference()`: a class reference
+    /// (`extends`, `implements`, `use`, trait rules) may not be one of the
+    /// `self`/`parent`/`static` fetch keywords.
+    fn resolve_class_reference(&self, name: &ast::Name, ty: &str) -> CResult<ZStr> {
+        if is_class_fetch_keyword(name) {
+            return self.err(
+                format!(
+                    "Cannot use \"{}\" as {ty}, as it is reserved",
+                    String::from_utf8_lossy(&name.name)
+                ),
+                name.span.line,
+            );
+        }
+        // `zend_resolve_class_name()`: `\static` is not a class name either.
+        if name.kind == ast::NameKind::FullyQualified && is_fetch_keyword(&name.name) {
+            return self.err(
+                format!(
+                    "'\\{}' is an invalid class name",
+                    String::from_utf8_lossy(&name.name)
+                ),
+                name.span.line,
+            );
+        }
+        Ok(ZStr::from(self.resolve_class_name(name)))
+    }
+
     #[allow(clippy::too_many_lines)]
     pub(crate) fn compile_class_decl(
         &mut self,
@@ -1094,10 +1120,10 @@ impl Compiler {
             ast::ClassKind::Trait => ClassKind::Trait,
             ast::ClassKind::Enum => ClassKind::Enum,
         };
-        let parent = cd
-            .extends
-            .as_ref()
-            .map(|n| ZStr::from(self.resolve_class_name(n)));
+        let parent = match &cd.extends {
+            Some(n) => Some(self.resolve_class_reference(n, "class name")?),
+            None => None,
+        };
         let name: ZStr = if is_anon {
             self.anon_counter += 1;
             let prefix = parent.as_ref().map_or_else(
@@ -1161,18 +1187,6 @@ impl Compiler {
             }
             ZStr::from(self.ns_prefixed_pub(&n))
         };
-        if let Some(p) = &parent {
-            let lc = p.to_ascii_lowercase();
-            if matches!(lc.as_bytes(), b"self" | b"parent" | b"static") {
-                return self.err(
-                    format!(
-                        "Cannot use '{}' as class name, as it is reserved",
-                        p.to_string_lossy()
-                    ),
-                    cd.span.line,
-                );
-            }
-        }
         let mut cflag = 0u32;
         match kind {
             ClassKind::Interface => cflag |= cflags::INTERFACE,
@@ -1209,11 +1223,11 @@ impl Compiler {
         {
             cflag |= cflags::ALLOW_DYNAMIC;
         }
-        let interfaces: Vec<ZStr> = cd
+        let interfaces = cd
             .implements
             .iter()
-            .map(|n| ZStr::from(self.resolve_class_name(n)))
-            .collect();
+            .map(|n| self.resolve_class_reference(n, "interface name"))
+            .collect::<CResult<Vec<ZStr>>>()?;
         self.classes.push(ClassCtx {
             name: name.clone(),
             parent: parent.clone(),
@@ -1821,25 +1835,25 @@ impl Compiler {
                         );
                     }
                     for t in &tu.traits {
-                        traits.push(ZStr::from(self.resolve_class_name(t)));
+                        traits.push(self.resolve_class_reference(t, "trait name")?);
                     }
                     for a in &tu.adaptations {
                         match a {
                             ast::TraitAdaptation::Precedence {
                                 method, insteadof, ..
                             } => {
-                                let tn = method
-                                    .trait_name
-                                    .as_ref()
-                                    .map(|n| ZStr::from(self.resolve_class_name(n)))
-                                    .unwrap_or_default();
+                                let tn = match &method.trait_name {
+                                    Some(n) => self.resolve_class_reference(n, "trait name")?,
+                                    None => ZStr::default(),
+                                };
+                                let insteadof = insteadof
+                                    .iter()
+                                    .map(|n| self.resolve_class_reference(n, "trait name"))
+                                    .collect::<CResult<Vec<ZStr>>>()?;
                                 rules.push(TraitRule::Precedence {
                                     trait_name: tn,
                                     method: ZStr::from(method.method.name.as_slice()),
-                                    insteadof: insteadof
-                                        .iter()
-                                        .map(|n| ZStr::from(self.resolve_class_name(n)))
-                                        .collect(),
+                                    insteadof,
                                 });
                             }
                             ast::TraitAdaptation::Alias {
@@ -1857,11 +1871,12 @@ impl Compiler {
                                     }
                                     f
                                 };
+                                let trait_name = match &method.trait_name {
+                                    Some(n) => Some(self.resolve_class_reference(n, "trait name")?),
+                                    None => None,
+                                };
                                 rules.push(TraitRule::Alias {
-                                    trait_name: method
-                                        .trait_name
-                                        .as_ref()
-                                        .map(|n| ZStr::from(self.resolve_class_name(n))),
+                                    trait_name,
                                     method: ZStr::from(method.method.name.as_slice()),
                                     flags: f,
                                     alias: alias.as_ref().map(|a| ZStr::from(a.name.as_slice())),
@@ -2529,6 +2544,20 @@ fn is_builtin_type(lc: &[u8]) -> bool {
             | b"callable"
             | b"static"
     )
+}
+
+/// `zend_get_class_fetch_type_ast() != ZEND_FETCH_CLASS_DEFAULT`: an
+/// unqualified (or `namespace\`-relative) `self`, `parent` or `static`.
+fn is_class_fetch_keyword(name: &ast::Name) -> bool {
+    matches!(name.kind, ast::NameKind::Unqualified | ast::NameKind::Relative)
+        && is_fetch_keyword(&name.name)
+}
+
+/// `self`, `parent` or `static` (case-insensitive).
+fn is_fetch_keyword(n: &[u8]) -> bool {
+    n.eq_ignore_ascii_case(b"self")
+        || n.eq_ignore_ascii_case(b"parent")
+        || n.eq_ignore_ascii_case(b"static")
 }
 
 pub(super) fn is_reserved_class_name(lc: &[u8]) -> bool {
