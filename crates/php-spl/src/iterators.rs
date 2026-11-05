@@ -616,7 +616,7 @@ fn caching_next(host: &mut dyn SplHost, st: &SplObject) -> RtResult<()> {
                     })?;
                 }
                 Err(e) => {
-                    if flags & CIT_CATCH_GET_CHILD == 0 {
+                    if !catches(flags, &e) {
                         return Err(e);
                     }
                 }
@@ -1447,17 +1447,19 @@ fn hook(host: &mut dyn SplHost, this: &Obj, name: &str) -> RtResult<()> {
     Ok(())
 }
 
+/// Whether `CATCH_GET_CHILD` swallows `e`: exceptions are, while an
+/// unwind exit or graceful exit (`exit`, fatal errors, a destroyed fiber:
+/// [`RuntimeError::Fatal`]) always propagates (GH-24264).
+fn catches(flags: i64, e: &RuntimeError) -> bool {
+    flags & CIT_CATCH_GET_CHILD != 0 && !matches!(e, RuntimeError::Fatal(_))
+}
+
 /// Runs `f`; with `CATCH_GET_CHILD` an error is swallowed (`Ok(None)`).
 fn catchable<R>(flags: i64, r: RtResult<R>) -> RtResult<Option<R>> {
     match r {
         Ok(v) => Ok(Some(v)),
-        Err(e) => {
-            if flags & CIT_CATCH_GET_CHILD != 0 && !matches!(e, RuntimeError::Fatal(_)) {
-                Ok(None)
-            } else {
-                Err(e)
-            }
-        }
+        Err(e) if catches(flags, &e) => Ok(None),
+        Err(e) => Err(e),
     }
 }
 
@@ -1539,7 +1541,7 @@ fn rit_move_forward(host: &mut dyn SplHost, this: &Obj, st: &SplObject) -> RtRes
                 let r = match r {
                     Ok(v) => Some(v),
                     Err(e) => {
-                        if flags & CIT_CATCH_GET_CHILD != 0 {
+                        if catches(flags, &e) {
                             None
                         } else {
                             set_state(st, level, RsState::Next)?;
@@ -1598,7 +1600,7 @@ fn rit_move_forward(host: &mut dyn SplHost, this: &Obj, st: &SplObject) -> RtRes
                 let child = match r {
                     Ok(c) => c,
                     Err(e) => {
-                        if flags & CIT_CATCH_GET_CHILD != 0 {
+                        if catches(flags, &e) {
                             set_state(st, level, RsState::Next)?;
                             continue;
                         }
@@ -1997,4 +1999,27 @@ pub fn method_target(host: &mut dyn SplHost, obj: &Obj) -> RtResult<Option<Obj>>
 #[must_use]
 pub fn is_array_entry(v: &Value) -> bool {
     matches!(v, Value::Array(_))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{catchable, catches, CIT_CATCH_GET_CHILD};
+    use php_runtime::RuntimeError;
+
+    #[test]
+    fn catch_get_child_never_swallows_unwind_exits() {
+        let exception = RuntimeError::Error("boom".to_string());
+        let exit = RuntimeError::Fatal(String::new());
+        assert!(catches(CIT_CATCH_GET_CHILD, &exception));
+        assert!(!catches(0, &exception));
+        assert!(!catches(CIT_CATCH_GET_CHILD, &exit));
+        assert!(matches!(
+            catchable::<()>(CIT_CATCH_GET_CHILD, Err(exit)),
+            Err(RuntimeError::Fatal(_))
+        ));
+        assert!(matches!(
+            catchable::<()>(CIT_CATCH_GET_CHILD, Err(exception)),
+            Ok(None)
+        ));
+    }
 }
