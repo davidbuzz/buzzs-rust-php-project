@@ -350,6 +350,10 @@ fn self_callables_register_the_class_of_the_registering_scope() {
     assert_eq!(
         out,
         "First::load\nSecond::load\nFirst::load(Missing)\nSecond::load(Missing)\nbool(false)\n"
+    );
+}
+
+#[test]
 fn foreach_over_spl_objects_numbers_handles_like_zend() {
     // `ArrayObject::getIterator()` creates an ArrayIterator and the
     // `foreach` iterator takes one more handle; a non-Traversable SPL
@@ -557,4 +561,58 @@ scope();
 var_dump(gc_collect_cycles());
 "#);
     assert_eq!(out, "int(3)\n");
+}
+
+#[test]
+fn sorting_object_storage_reorders_its_properties() {
+    // `ArrayObject::asort()`/`ksort()` over an object sort its property
+    // table, declared properties included; the order shows in every
+    // listing, survives `clone`, and later additions go last.
+    let out = run(r#"<?php
+class C { public $p1 = 'x'; public $p2 = 'z'; private $p3 = 'a'; public $p4 = 'y'; }
+function keys($a) { return str_replace("\0", '|', implode(',', array_keys($a))); }
+$c = new C;
+$c->dyn = 'b';
+$ao = @new ArrayObject($c);
+$ao->asort();
+foreach ($c as $k => $v) echo "$k=$v ";
+echo "\n", keys(get_object_vars($c)), "\n", keys((array)$c), "\n";
+echo str_replace("\0", '|', serialize($c)), "\n";
+$ao->ksort();
+echo keys((array)$c), "\n";
+$c->p1 = 'NEW'; unset($c->dyn); $c->dyn = 'b2'; $c->n = 1;
+echo keys((array)$c), "\n";
+$d = clone $c;
+echo keys(get_object_vars($d)), "\n";
+$e = new C;
+echo keys(get_object_vars($e)), "\n";
+"#);
+    assert_eq!(
+        out,
+        "dyn=b p1=x p4=y p2=z \n\
+         dyn,p1,p4,p2\n\
+         |C|p3,dyn,p1,p4,p2\n\
+         O:1:\"C\":5:{s:5:\"|C|p3\";s:1:\"a\";s:3:\"dyn\";s:1:\"b\";s:2:\"p1\";s:1:\"x\";\
+         s:2:\"p4\";s:1:\"y\";s:2:\"p2\";s:1:\"z\";}\n\
+         |C|p3,dyn,p1,p2,p4\n\
+         |C|p3,p1,p2,p4,dyn,n\n\
+         p1,p2,p4,dyn,n\n\
+         p1,p2,p4\n"
+    );
+}
+
+#[test]
+fn writes_through_array_object_keep_declaration_order() {
+    // Unsetting and re-adding a declared property through the
+    // ArrayObject is no reorder: it stays in its declared place.
+    let out = run(r#"<?php
+class C { public $a = 1; public $b = 2; public $c = 3; }
+$o = new C;
+$ao = @new ArrayObject($o);
+unset($ao['a']);
+$ao['x'] = 9;
+$ao['a'] = 4;
+echo implode(',', array_keys(get_object_vars($o))), "\n";
+"#);
+    assert_eq!(out, "a,b,c,x\n");
 }

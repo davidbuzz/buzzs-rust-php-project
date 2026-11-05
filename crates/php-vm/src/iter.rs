@@ -69,6 +69,9 @@ impl Vm {
                 .into_iter()
                 .filter(|(_, _, pi)| pi.is_none()),
         );
+        if let Some(order) = object::prop_order(object::data(o)) {
+            order.sort(&mut table, |(k, _, pi)| (pi.as_ref().map(|p| p.slot), k));
+        }
         for (k, _, pi) in table {
             match pi {
                 Some(pi) => {

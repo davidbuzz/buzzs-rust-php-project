@@ -377,6 +377,7 @@ fn make_lazy(
             let oc = object::class_of(&o).clone();
             let d = object::data(&o);
             *d.dynamic.borrow_mut() = None;
+            object::set_prop_order(d, None);
             let mut lazy = vec![false; oc.props.len()];
             {
                 let mut slots = d.slots.borrow_mut();

@@ -1508,6 +1508,9 @@ impl Vm {
                     let mut dynp = d.dynamic.borrow_mut();
                     dynp.as_mut().and_then(|t| t.remove(&key))
                 };
+                if old.is_some() {
+                    object::forget_dynamic_prop_order(object::data(o), &key);
+                }
                 if old.is_none() && self.has_magic(o, name, G_UNSET) {
                     return self.magic_unset(o, name);
                 }
@@ -1839,6 +1842,9 @@ impl Vm {
                 out.push((k.clone(), Some(v.clone()), None));
             }
         }
+        if let Some(order) = object::prop_order(d) {
+            order.sort(&mut out, |(k, _, pi)| (pi.as_ref().map(|p| p.slot), k));
+        }
         out
     }
 
@@ -1940,6 +1946,7 @@ impl Vm {
         let nd = object::data(&n);
         *nd.readonly_init.borrow_mut() = d.readonly_init.borrow().clone();
         *nd.dynamic.borrow_mut() = d.dynamic.borrow().clone();
+        object::copy_prop_order(d, nd);
         self.clone_internal(&o, &n)?;
         if let Some(f) = cls.hooks.as_ref().and_then(|h| h.clone) {
             f(self, &o, &n)?;

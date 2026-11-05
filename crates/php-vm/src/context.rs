@@ -134,8 +134,8 @@ impl Vm {
         if let Some(a) = self.internal_object_array(o)? {
             return Ok(Some(a));
         }
-        let mut t = HashTable::new();
         if matches!(purpose, PropertyPurpose::VarExport | PropertyPurpose::Json) {
+            let mut t = object::PropTableBuilder::new(object::data(o));
             for pi in object::class_of(o).props.clone() {
                 if purpose == PropertyPurpose::Json && pi.visibility() != flags::PUBLIC {
                     continue;
@@ -154,18 +154,19 @@ impl Vm {
                             .flatten()
                     };
                 if let Some(value) = value {
-                    t.insert(crate::props::mangle(&pi), value);
+                    t.push(Some(pi.slot), crate::props::mangle(&pi), value);
                 }
             }
             for (key, value, prop) in self.object_prop_table(o, false) {
                 if prop.is_none() {
                     if let Some(value) = value {
-                        t.insert(key, value);
+                        t.push(None, key, value);
                     }
                 }
             }
-            return Ok(Some(ZArray::from_table(t)));
+            return Ok(Some(ZArray::from_table(t.finish())));
         }
+        let mut t = HashTable::new();
         for (k, v, _) in self.object_prop_table(o, false) {
             if let Some(v) = v {
                 t.insert(k, v);

@@ -11,7 +11,9 @@ use php_stdarr::ArrayContext;
 use php_vm::class::Class;
 use php_vm::ext::{NativeIterator, VmResult};
 use php_vm::func::{flags, Func};
-use php_vm::object::{class_of, data};
+use php_vm::object::{
+    class_of, data, prop_order, set_prop_order, PropKey, PropOrder, PropTableBuilder,
+};
 use php_vm::vm::FrameKind;
 use php_vm::{Throw, Vm};
 use std::cell::RefCell;
@@ -199,7 +201,7 @@ fn property_value(v: &Value) -> Value {
 fn build_properties(obj: &Obj) -> ZArray {
     let cls = class_of(obj).clone();
     let d = data(obj);
-    let mut t = HashTable::new();
+    let mut t = PropTableBuilder::new(d);
     {
         let slots = d.slots.borrow();
         for pi in &cls.props {
@@ -207,7 +209,8 @@ fn build_properties(obj: &Obj) -> ZArray {
                 continue;
             }
             if let Some(Some(v)) = slots.get(pi.slot as usize) {
-                t.insert(
+                t.push(
+                    Some(pi.slot),
                     ArrayKey::Str(mangle(pi.flags, &pi.class, &pi.name)),
                     property_value(v),
                 );
@@ -216,20 +219,45 @@ fn build_properties(obj: &Obj) -> ZArray {
     }
     if let Some(dynp) = d.dynamic.borrow().as_ref() {
         for (k, v) in dynp {
-            t.insert(k.clone(), property_value(v));
+            t.push(None, k.clone(), property_value(v));
         }
     }
-    ZArray::from_table(t)
+    ZArray::from_table(t.finish())
+}
+
+/// Whether the keys `new` shares with `current` come in another relative
+/// order: the table was reordered (sorted), not merely written to.
+fn reordered(current: &ZArray, new: &ZArray) -> bool {
+    let index: HashMap<&ArrayKey, usize> =
+        current.keys().enumerate().map(|(i, k)| (k, i)).collect();
+    let mut last = None;
+    for k in new.keys() {
+        if let Some(&i) = index.get(k) {
+            if last.is_some_and(|l| i < l) {
+                return true;
+            }
+            last = Some(i);
+        }
+    }
+    false
 }
 
 /// Replaces an object's property table (inverse of [`std_properties`]).
+///
+/// The table's order becomes the object's property order
+/// ([`php_vm::object::PropOrder`]) once it was reordered (an
+/// `ArrayObject::asort()` & co. over the object), as Zend's sort of
+/// `zobj->properties` shows in every later listing; an object that already
+/// has its own order follows later writes (appended keys go last).
 pub fn set_std_properties(obj: &Obj, props: &ZArray) {
+    let current = build_properties(obj);
     remember(obj, props);
     let cls = class_of(obj).clone();
     let d = data(obj);
     let mut slots = d.slots.borrow_mut();
     let mut seen = vec![false; slots.len()];
     let mut dynamic = HashTable::new();
+    let mut order = Vec::with_capacity(props.len());
     for (k, v) in props.iter() {
         let declared = match k {
             ArrayKey::Str(s) => {
@@ -256,9 +284,11 @@ pub fn set_std_properties(obj: &Obj, props: &ZArray) {
                     slots[i] = Some(v.clone());
                     seen[i] = true;
                 }
+                order.push(PropKey::Slot(pi.slot));
             }
             None => {
                 dynamic.insert(k.clone(), v.clone());
+                order.push(PropKey::Dynamic(k.clone()));
             }
         }
     }
@@ -272,6 +302,40 @@ pub fn set_std_properties(obj: &Obj, props: &ZArray) {
     if had_dynamic || !dynamic.is_empty() {
         *d.dynamic.borrow_mut() = Some(dynamic);
     }
+    if prop_order(d).is_some() || reordered(&current, props) {
+        let order = (!is_default_order(&cls, &order)).then(|| PropOrder::from_keys(order));
+        set_prop_order(d, order);
+    }
+}
+
+/// Whether `order` is the default listing order: declared properties in
+/// declaration order, then dynamic ones (the dynamic table keeps their
+/// order itself).
+fn is_default_order(cls: &Class, order: &[PropKey]) -> bool {
+    let position: HashMap<u32, usize> = cls
+        .props
+        .iter()
+        .filter(|pi| pi.flags & flags::STATIC == 0 && !pi.is_virtual())
+        .enumerate()
+        .map(|(i, pi)| (pi.slot, i))
+        .collect();
+    let mut last = None;
+    let mut dynamic = false;
+    for k in order {
+        match k {
+            PropKey::Dynamic(_) => dynamic = true,
+            PropKey::Slot(slot) => {
+                let Some(&p) = position.get(slot) else {
+                    return false;
+                };
+                if dynamic || last.is_some_and(|l| p < l) {
+                    return false;
+                }
+                last = Some(p);
+            }
+        }
+    }
+    true
 }
 
 /// Binds newly installed references before the raw property-table writeback.

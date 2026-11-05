@@ -10,9 +10,10 @@
 //! `Drop`.
 
 use crate::class::Class;
-use php_runtime::{HashTable, Obj, PhpObject, Value, ZStr};
+use php_runtime::{ArrayKey, HashTable, Obj, PhpObject, Value, ZStr};
 use std::any::Any;
 use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 use std::fmt;
 use std::rc::{Rc, Weak};
 
@@ -24,6 +25,8 @@ pub mod oflags {
     pub const CLONING: u32 = 1 << 1;
     /// Object is an enum case.
     pub const ENUM_CASE: u32 = 1 << 2;
+    /// The object has its own property order (see [`super::PropOrder`]).
+    pub const PROP_ORDER: u32 = 1 << 3;
 }
 
 /// The state of a PHP object.
@@ -58,7 +61,15 @@ thread_local! {
     static PENDING: RefCell<Vec<Obj>> = const { RefCell::new(Vec::new()) };
     static HAS_PENDING: Cell<bool> = const { Cell::new(false) };
     static DESTRUCTORS_ENABLED: Cell<bool> = const { Cell::new(true) };
+    /// Per-object property orders by handle; an entry only counts while its
+    /// object carries [`oflags::PROP_ORDER`].
+    static PROP_ORDERS: RefCell<HashMap<u32, Rc<PropOrder>>> = RefCell::new(HashMap::new());
+    /// Size of [`PROP_ORDERS`] at which entries of freed objects are pruned.
+    static PROP_ORDERS_PRUNE_AT: Cell<usize> = const { Cell::new(PROP_ORDERS_MIN_PRUNE) };
 }
+
+/// Smallest [`PROP_ORDERS`] size that triggers pruning.
+const PROP_ORDERS_MIN_PRUNE: usize = 64;
 
 #[derive(Default)]
 struct ObjectStore {
@@ -308,5 +319,249 @@ pub fn display_name(name: &ZStr) -> ZStr {
     match name.as_bytes().iter().position(|&c| c == 0) {
         Some(p) => ZStr::from(&name.as_bytes()[..p]),
         None => name.clone(),
+    }
+}
+
+/// A property of an object in a [`PropOrder`]: a declared property by slot
+/// or a dynamic property by key.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum PropKey {
+    /// A declared property (`PropInfo::slot`).
+    Slot(u32),
+    /// A dynamic property.
+    Dynamic(ArrayKey),
+}
+
+/// An object's own property order.
+///
+/// Zend lists properties from `zobj->properties`, a table rebuilt in
+/// declaration order (then dynamic properties) and normally kept in that
+/// order; `ArrayObject::asort()` & co. over an object storage sort that
+/// table in place, and the new order then shows everywhere (`var_dump`,
+/// `foreach`, `get_object_vars`, `(array)`, `serialize`, `json_encode`).
+/// Objects keep values in their slots and dynamic table here, so the
+/// override is the rank of each property; listings stable-sort by it.
+/// Properties without a rank (added after the reorder) keep their default
+/// order after the ranked ones, as appends to `zobj->properties` do. Only
+/// objects flagged [`oflags::PROP_ORDER`] have one, so ordinary listings
+/// pay a flag test.
+#[derive(Clone, Debug, Default)]
+pub struct PropOrder {
+    slots: HashMap<u32, usize>,
+    dynamic: HashMap<ArrayKey, usize>,
+}
+
+impl PropOrder {
+    /// The order of `keys` (the first occurrence of a key counts).
+    #[must_use]
+    pub fn from_keys(keys: impl IntoIterator<Item = PropKey>) -> Self {
+        let mut order = Self::default();
+        for (i, k) in keys.into_iter().enumerate() {
+            match k {
+                PropKey::Slot(s) => {
+                    order.slots.entry(s).or_insert(i);
+                }
+                PropKey::Dynamic(k) => {
+                    order.dynamic.entry(k).or_insert(i);
+                }
+            }
+        }
+        order
+    }
+
+    /// The rank of a declared property (`slot`) or of the dynamic
+    /// property `key`; unranked properties sort last.
+    #[must_use]
+    pub fn rank(&self, slot: Option<u32>, key: &ArrayKey) -> usize {
+        match slot {
+            Some(s) => self.slots.get(&s),
+            None => self.dynamic.get(key),
+        }
+        .copied()
+        .unwrap_or(usize::MAX)
+    }
+
+    /// Stable-sorts property entries (in default order) into this order;
+    /// `key_of` gives an entry's slot (declared) and key.
+    pub fn sort<T>(&self, items: &mut [T], key_of: impl Fn(&T) -> (Option<u32>, &ArrayKey)) {
+        items.sort_by_key(|item| {
+            let (slot, key) = key_of(item);
+            self.rank(slot, key)
+        });
+    }
+}
+
+/// The property order of an object, when it has its own.
+#[must_use]
+pub fn prop_order(d: &ObjectData) -> Option<Rc<PropOrder>> {
+    if d.flags.get() & oflags::PROP_ORDER == 0 {
+        return None;
+    }
+    PROP_ORDERS.with(|m| m.borrow().get(&d.handle).cloned())
+}
+
+/// Gives an object its own property order (`None` restores the default:
+/// declaration order, then dynamic properties).
+pub fn set_prop_order(d: &ObjectData, order: Option<PropOrder>) {
+    match order {
+        Some(order) => install_prop_order(d, Rc::new(order)),
+        None => {
+            if d.flags.get() & oflags::PROP_ORDER != 0 {
+                d.flags.set(d.flags.get() & !oflags::PROP_ORDER);
+                let _ = PROP_ORDERS.try_with(|m| m.borrow_mut().remove(&d.handle));
+            }
+        }
+    }
+}
+
+/// `clone`: the copy lists its properties in the original's order.
+pub fn copy_prop_order(from: &ObjectData, to: &ObjectData) {
+    match prop_order(from) {
+        Some(order) => install_prop_order(to, order),
+        None => set_prop_order(to, None),
+    }
+}
+
+/// A dynamic property was removed: re-adding it appends it (Zend deletes
+/// the `zobj->properties` bucket).
+pub fn forget_dynamic_prop_order(d: &ObjectData, key: &ArrayKey) {
+    if d.flags.get() & oflags::PROP_ORDER == 0 {
+        return;
+    }
+    PROP_ORDERS.with(|m| {
+        if let Some(order) = m.borrow_mut().get_mut(&d.handle) {
+            Rc::make_mut(order).dynamic.remove(key);
+        }
+    });
+}
+
+fn install_prop_order(d: &ObjectData, order: Rc<PropOrder>) {
+    d.flags.set(d.flags.get() | oflags::PROP_ORDER);
+    PROP_ORDERS.with(|m| {
+        let mut m = m.borrow_mut();
+        if !m.contains_key(&d.handle) && m.len() >= PROP_ORDERS_PRUNE_AT.with(Cell::get) {
+            prune_prop_orders(&mut m);
+        }
+        m.insert(d.handle, order);
+    });
+}
+
+/// Drops the orders of freed objects (their handles may since belong to
+/// objects without the flag).
+fn prune_prop_orders(m: &mut HashMap<u32, Rc<PropOrder>>) {
+    STORE.with(|s| {
+        let s = s.borrow();
+        m.retain(|&h, _| {
+            (h as usize)
+                .checked_sub(1)
+                .and_then(|i| s.objects.get(i))
+                .and_then(Option::as_ref)
+                .and_then(Weak::upgrade)
+                .is_some_and(|d| d.flags.get() & oflags::PROP_ORDER != 0)
+        });
+    });
+    let next = (m.len() * 2).max(PROP_ORDERS_MIN_PRUNE);
+    PROP_ORDERS_PRUNE_AT.with(|c| c.set(next));
+}
+
+/// Builds a property table in an object's property order: entries are
+/// pushed in default order (declared, then dynamic).
+pub struct PropTableBuilder {
+    order: Option<Rc<PropOrder>>,
+    table: HashTable,
+    ranked: Vec<(usize, ArrayKey, Value)>,
+}
+
+impl PropTableBuilder {
+    /// A builder for the properties of `d`.
+    #[must_use]
+    pub fn new(d: &ObjectData) -> Self {
+        Self {
+            order: prop_order(d),
+            table: HashTable::new(),
+            ranked: Vec::new(),
+        }
+    }
+
+    /// Adds a declared (`slot`) or dynamic property.
+    pub fn push(&mut self, slot: Option<u32>, key: ArrayKey, value: Value) {
+        match &self.order {
+            None => {
+                self.table.insert(key, value);
+            }
+            Some(order) => {
+                let rank = order.rank(slot, &key);
+                self.ranked.push((rank, key, value));
+            }
+        }
+    }
+
+    /// Adds a property under `key`, ranked as the property `prop` (its
+    /// key in the object's table) is.
+    pub fn push_renamed(
+        &mut self,
+        slot: Option<u32>,
+        prop: &ArrayKey,
+        key: ArrayKey,
+        value: Value,
+    ) {
+        match &self.order {
+            None => {
+                self.table.insert(key, value);
+            }
+            Some(order) => {
+                let rank = order.rank(slot, prop);
+                self.ranked.push((rank, key, value));
+            }
+        }
+    }
+
+    /// The finished table.
+    #[must_use]
+    pub fn finish(mut self) -> HashTable {
+        self.ranked.sort_by_key(|e| e.0);
+        for (_, key, value) in self.ranked {
+            self.table.insert(key, value);
+        }
+        self.table
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn key(s: &str) -> ArrayKey {
+        ArrayKey::Str(ZStr::from(s))
+    }
+
+    #[test]
+    fn prop_order_ranks_slots_and_dynamic_keys() {
+        let order = PropOrder::from_keys([
+            PropKey::Dynamic(key("d")),
+            PropKey::Slot(2),
+            PropKey::Slot(0),
+            PropKey::Slot(2),
+        ]);
+        assert_eq!(order.rank(None, &key("d")), 0);
+        assert_eq!(order.rank(Some(2), &key("ignored")), 1);
+        assert_eq!(order.rank(Some(0), &key("ignored")), 2);
+        assert_eq!(order.rank(Some(1), &key("p1")), usize::MAX);
+        assert_eq!(order.rank(None, &key("new")), usize::MAX);
+    }
+
+    #[test]
+    fn prop_order_sort_is_stable_for_unranked_entries() {
+        let order = PropOrder::from_keys([PropKey::Slot(1), PropKey::Dynamic(key("d"))]);
+        let mut items = vec![
+            (Some(0), key("a")),
+            (Some(1), key("b")),
+            (None, key("e")),
+            (None, key("d")),
+            (None, key("f")),
+        ];
+        order.sort(&mut items, |(slot, k)| (*slot, k));
+        let names: Vec<_> = items.iter().map(|(_, k)| k.clone()).collect();
+        assert_eq!(names, [key("b"), key("d"), key("a"), key("e"), key("f")]);
     }
 }
