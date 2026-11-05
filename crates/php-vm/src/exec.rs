@@ -1405,7 +1405,7 @@ impl Vm {
     pub(crate) fn op_return_raw(&mut self, v: Option<Value>, base: usize) -> VmResult<Flow> {
         let v = v.unwrap_or_default();
         let fidx = self.frames.len() - 1;
-        let frame = self.frames.pop().expect("frame");
+        let mut frame = self.frames.pop().expect("frame");
         if let Some(g) = &frame.generator {
             crate::generator::finish_with(g, v);
             drop(frame);
@@ -1420,7 +1420,17 @@ impl Vm {
             .as_ref()
             .is_some_and(|u| u.flags & crate::func::flags::RETURN_REF != 0);
         crate::gc::frame_released(&frame);
-        drop(frame);
+        let is_user_func = frame.kind == crate::vm::FrameKind::Function && frame.ufunc.is_some();
+        let should_pool = is_user_func
+            && self.call_bufs.user_frames.len() < 8
+            && frame.tmps.capacity() <= 256
+            && frame.calls.capacity() <= 64;
+        if should_pool {
+            frame.clear_for_pool(&self.empty_code);
+            self.call_bufs.user_frames.push(frame);
+        } else {
+            drop(frame);
+        }
         let v = if by_ref { v } else { self.copy_on_assign(v) };
         if fidx <= base {
             return Ok(Flow::Done(v));

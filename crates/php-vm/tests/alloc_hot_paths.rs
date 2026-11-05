@@ -157,15 +157,13 @@ fn zend_smart_branch_allocates_nothing() {
 /// `ZEND_RETURN`: the frame is pushed on the VM stack, args are written into
 /// its slots. No heap allocation.
 #[test]
-#[ignore = "perf target: PLAN.md stage 3 (frames on a VM stack) and stage 4 (call protocol)"]
-fn zend_do_ucall_allocates_nothing_target() {
+fn zend_do_ucall_allocates_nothing() {
     assert_allocs("function f($a, $b) { return $a; }", "f($i, 2);", 0);
 }
 
 /// Typed parameters and return (`ZEND_RECV` with `ZEND_VERIFY_RETURN_TYPE`).
 #[test]
-#[ignore = "perf target: PLAN.md stages 3-4"]
-fn zend_do_ucall_typed_allocates_nothing_target() {
+fn zend_do_ucall_typed_allocates_nothing() {
     assert_allocs(
         "function f(int $a, int $b): int { return $a; }",
         "f($i, 2);",
@@ -175,8 +173,7 @@ fn zend_do_ucall_typed_allocates_nothing_target() {
 
 /// `ZEND_INIT_METHOD_CALL` (runtime-cache hit) + `ZEND_DO_UCALL`.
 #[test]
-#[ignore = "perf target: PLAN.md stages 3-5"]
-fn zend_init_method_call_allocates_nothing_target() {
+fn zend_init_method_call_allocates_nothing() {
     assert_allocs(
         "class C { function m($x) { return $x; } } $o = new C;",
         "$o->m(1);",
@@ -186,8 +183,7 @@ fn zend_init_method_call_allocates_nothing_target() {
 
 /// `ZEND_INIT_STATIC_METHOD_CALL` (runtime-cache hit) + `ZEND_DO_UCALL`.
 #[test]
-#[ignore = "perf target: PLAN.md stages 3-5"]
-fn zend_init_static_method_call_allocates_nothing_target() {
+fn zend_init_static_method_call_allocates_nothing() {
     assert_allocs(
         "class C { static function m($x) { return $x; } }",
         "C::m(1);",

@@ -176,22 +176,26 @@ pub(crate) struct CallBufs {
     pub(crate) values: Vec<Vec<Value>>,
     /// ZPP passed-flag vectors.
     pub(crate) passed: Vec<Vec<bool>>,
+    /// Prewarmed and pooled user function frames.
+    pub(crate) user_frames: Vec<Frame>,
 }
 
 impl CallBufs {
     /// Pools pre-filled at startup so that reaching steady state does not
     /// allocate while user code runs (`memory_get_usage()` deltas, e.g.
     /// Zend/tests/bug79514.phpt, must not see the pools grow).
-    pub(crate) fn prewarmed() -> Self {
+    pub(crate) fn prewarmed(empty_code: &Rc<OpArray>) -> Self {
         let mut b = CallBufs {
             args: Vec::with_capacity(16),
             values: Vec::with_capacity(16),
             passed: Vec::with_capacity(16),
+            user_frames: Vec::with_capacity(8),
         };
         for _ in 0..4 {
             b.args.push(Vec::with_capacity(8));
             b.values.push(Vec::with_capacity(8));
             b.passed.push(Vec::with_capacity(8));
+            b.user_frames.push(Frame::new_pooled(empty_code.clone()));
         }
         b
     }
@@ -334,6 +338,109 @@ pub struct Frame {
 }
 
 impl Frame {
+    /// Creates a pre-allocated empty frame for the pool.
+    pub fn new_pooled(empty_code: Rc<OpArray>) -> Self {
+        Frame {
+            func: None,
+            ufunc: None,
+            code: empty_code,
+            ip: 0,
+            vars: Rc::new(RefCell::new(VarStore {
+                slots: Vec::with_capacity(8),
+                names: Vec::with_capacity(8),
+                index: None,
+            })),
+            cv_map: None,
+            tmps: Vec::with_capacity(16),
+            iters: Vec::with_capacity(4),
+            fins: Vec::with_capacity(2),
+            calls: Vec::with_capacity(4),
+            this: None,
+            scope: None,
+            called: None,
+            args: Vec::with_capacity(8),
+            named: Vec::with_capacity(4),
+            ret: RetTarget::Discard,
+            closure: None,
+            generator: None,
+            pending_exc: None,
+            kind: FrameKind::Function,
+            statics: None,
+            is_ctor: false,
+            silence_saved: Vec::with_capacity(2),
+            builtin_name: None,
+            magic_name: None,
+            caller_strict: false,
+            called_from_internal: false,
+        }
+    }
+
+    /// Cleans up state when returning to the frame pool, dropping all user values
+    /// while preserving allocated buffer capacities.
+    pub fn clear_for_pool(&mut self, empty_code: &Rc<OpArray>) {
+        self.func = None;
+        self.ufunc = None;
+        self.code = empty_code.clone();
+        self.ip = 0;
+        self.cv_map = None;
+        self.tmps.clear();
+        self.iters.clear();
+        self.fins.clear();
+        self.calls.clear();
+        self.this = None;
+        self.scope = None;
+        self.called = None;
+        self.args.clear();
+        self.named.clear();
+        self.ret = RetTarget::Discard;
+        self.closure = None;
+        self.generator = None;
+        self.pending_exc = None;
+        self.statics = None;
+        self.is_ctor = false;
+        self.silence_saved.clear();
+        self.builtin_name = None;
+        self.magic_name = None;
+        self.caller_strict = false;
+        self.called_from_internal = false;
+        if let Some(rc_mut) = Rc::get_mut(&mut self.vars) {
+            let vs = rc_mut.get_mut();
+            vs.slots.clear();
+            vs.names.clear();
+            vs.index = None;
+        } else {
+            self.vars = Rc::new(RefCell::new(VarStore::default()));
+        }
+    }
+
+    /// Re-initializes a pooled frame for a new user function call.
+    pub fn reinit_for_user(&mut self, code: Rc<OpArray>, kind: FrameKind) {
+        self.code = code;
+        self.kind = kind;
+        self.ip = 0;
+        let ntmps = self.code.num_tmps as usize;
+        self.tmps.clear();
+        self.tmps.resize(ntmps, Value::Null);
+        let niters = self.code.num_iters as usize;
+        self.iters.clear();
+        self.iters.resize_with(niters, || None);
+        let nfin = self.code.num_finally as usize;
+        self.fins.clear();
+        self.fins.resize(nfin, FinState::None);
+        self.calls.clear();
+        self.silence_saved.clear();
+        if let Some(rc_mut) = Rc::get_mut(&mut self.vars) {
+            let vs = rc_mut.get_mut();
+            vs.slots.clear();
+            vs.slots.resize(self.code.cv_names.len(), None);
+            vs.names.clear();
+            vs.names.extend(self.code.cv_names.iter().cloned());
+            vs.index = None;
+        } else {
+            self.vars = Rc::new(RefCell::new(VarStore::with_names(&self.code.cv_names)));
+        }
+    }
+
     /// Creates a frame for `code` with its own variable store.
     pub fn new(code: Rc<OpArray>, kind: FrameKind) -> Self {
         let vars = Rc::new(RefCell::new(VarStore::with_names(&code.cv_names)));

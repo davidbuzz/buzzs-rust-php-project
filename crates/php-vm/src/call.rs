@@ -911,7 +911,13 @@ impl Vm {
         caller_strict: bool,
         from_internal: bool,
     ) -> VmResult<()> {
-        let mut f = Frame::new(uf.code.clone(), FrameKind::Function);
+        let mut f = match self.call_bufs.user_frames.pop() {
+            Some(mut f) => {
+                f.reinit_for_user(uf.code.clone(), FrameKind::Function);
+                f
+            }
+            None => Frame::new(uf.code.clone(), FrameKind::Function),
+        };
         f.func = Some(call.func);
         f.ufunc = Some(uf.clone());
         f.this = call.this;
@@ -930,12 +936,14 @@ impl Vm {
             for (k, v) in call.named {
                 arr.insert(ArrayKey::Str(k), v.deref());
             }
+            self.put_arg_vec(std::mem::take(&mut f.args));
             f.args = vec![
                 Some(Value::Str(name.clone())),
                 Some(Value::Array(ZArray::from_table(arr))),
             ];
             f.magic_name = Some(name);
         } else {
+            self.put_arg_vec(std::mem::take(&mut f.args));
             f.args = call.args;
             f.named = call.named;
         }
