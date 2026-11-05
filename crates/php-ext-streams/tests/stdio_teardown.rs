@@ -25,7 +25,15 @@ impl Write for Sink {
     }
 }
 
+/// The VM interrupt flag is process-wide (like a signal flag; one VM per
+/// process in the CLI): a test's prompt stream close must not be consumed
+/// by another thread's VM, so this binary's VMs run one at a time.
+static VM_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 fn run(code: &str) -> String {
+    let _serial = VM_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let sink = Sink::default();
     let streams = php_ext_streams::Streams;
     let exts: [&dyn Extension; 1] = [&streams];
