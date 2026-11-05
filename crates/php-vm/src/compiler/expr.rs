@@ -1,5 +1,6 @@
 //! Expression compilation.
 
+use super::stack;
 use super::stmt::is_ref_expr;
 use super::{CResult, Compiler, FnKind};
 use crate::ast::{
@@ -184,12 +185,28 @@ impl Compiler {
         }
     }
 
-    #[allow(clippy::too_many_lines)]
+    /// One `zend_compile_expr()` level: its `zend_check_stack_limit()`,
+    /// then the expression.
     fn compile_expr_inner(&mut self, e: &Expr) -> CResult<Operand> {
+        let bytes = stack::expr_frame_bytes(&e.kind);
+        if !self.stack.enter(bytes) {
+            return self.stack_limit_error(e.span.line);
+        }
+        let r = self.compile_expr_body(e);
+        self.stack.leave(bytes);
+        r
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn compile_expr_body(&mut self, e: &Expr) -> CResult<Operand> {
         let line = e.span.line;
         self.f().line = line;
         if let Some(v) = self.try_fold(e) {
             return Ok(self.lit(v));
+        }
+        if self.stack.overflowed() {
+            // `zend_eval_const_expr()` ran out of stack.
+            return self.stack_limit_error(line);
         }
         Ok(match &e.kind {
             ExprKind::Int(i) => self.lit(Value::Int(*i)),
@@ -945,8 +962,18 @@ impl Compiler {
         self.member_name(n)
     }
 
-    /// Compiles a writable expression into a place (offsets evaluated now).
-    pub(crate) fn compile_place(&mut self, e: &Expr, _for_unset: bool) -> CResult<Place> {
+    /// Compiles a writable expression into a place (offsets evaluated now),
+    /// after `zend_delayed_compile_var()`'s `zend_check_stack_limit()`.
+    pub(crate) fn compile_place(&mut self, e: &Expr, for_unset: bool) -> CResult<Place> {
+        if !self.stack.enter(stack::VAR_FRAME_BYTES) {
+            return self.stack_limit_error(e.span.line);
+        }
+        let r = self.compile_place_body(e, for_unset);
+        self.stack.leave(stack::VAR_FRAME_BYTES);
+        r
+    }
+
+    fn compile_place_body(&mut self, e: &Expr, _for_unset: bool) -> CResult<Place> {
         self.f().line = e.span.line;
         Ok(match &e.kind {
             ExprKind::Var(VarName::Name(id)) => {
@@ -2608,8 +2635,19 @@ impl Compiler {
         }
     }
 
-    /// Constant folding of simple expressions.
+    /// Constant folding of simple expressions, after
+    /// `zend_eval_const_expr()`'s `zend_check_stack_limit()`: past the
+    /// limit nothing folds and the compiler reports the overflow.
     pub(crate) fn try_fold(&self, e: &Expr) -> Option<Value> {
+        if !self.stack.enter(stack::FOLD_FRAME_BYTES) {
+            return None;
+        }
+        let r = self.try_fold_inner(e);
+        self.stack.leave(stack::FOLD_FRAME_BYTES);
+        r
+    }
+
+    fn try_fold_inner(&self, e: &Expr) -> Option<Value> {
         match &e.kind {
             ExprKind::Int(i) => Some(Value::Int(*i)),
             ExprKind::Float(f) => Some(Value::Float(*f)),

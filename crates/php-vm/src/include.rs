@@ -116,6 +116,7 @@ impl Vm {
                 Some(crate::func::Func::Builtin(_))
             ),
             anon_base: self.anon_counter,
+            stack_limit: self.compile_stack_limit(),
         };
         let unit = match compiler::compile(&program, Rc::from(src), opts) {
             Ok(u) => {
@@ -208,6 +209,36 @@ impl Vm {
             .map(|n| st.find_or_add(n.as_bytes()))
             .collect::<Vec<_>>()
             .into()
+    }
+
+    /// php-src's C stack at the start of a compilation, for the compiler's
+    /// `zend_check_stack_limit()` model: the usable stack
+    /// (`zend.max_allowed_stack_size - zend.reserved_stack_size`, whose 0
+    /// default reserves `ZEND_ALLOCA_MAX_SIZE + 16 KiB`; with an automatic
+    /// maximum, the one the runtime checks use) and the bytes in use (the
+    /// native stack used since the first execution, scaled to php-src's
+    /// frames as `native_stack_exhausted` does, plus php-src's frames from
+    /// `main()` down to the first `zend_compile_expr()`).
+    #[cold]
+    fn compile_stack_limit(&self) -> Option<compiler::CompileStackLimit> {
+        const DEFAULT_RESERVED: usize = 48 << 10;
+        const COMPILE_BASE_BYTES: usize = 24 << 10;
+        let reserved = match usize::try_from(self.ini.get_long("zend.reserved_stack_size")) {
+            Ok(0) | Err(_) => DEFAULT_RESERVED,
+            Ok(r) => r,
+        };
+        let stack = match usize::try_from(self.ini.get_long("zend.max_allowed_stack_size")) {
+            Err(_) => return None,
+            Ok(0) => self.native_stack_size / crate::fiber::STACK_SCALE,
+            Ok(m) => m,
+        };
+        let marker = 0u8;
+        let here = std::ptr::addr_of!(marker) as usize;
+        let running = self.native_stack_base.saturating_sub(here) / crate::fiber::STACK_SCALE;
+        Some(compiler::CompileStackLimit {
+            used: COMPILE_BASE_BYTES.saturating_add(running),
+            size: stack.saturating_sub(reserved),
+        })
     }
 
     /// Runs the main script; returns normally after shutdown work is done

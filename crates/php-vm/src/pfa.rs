@@ -826,6 +826,7 @@ impl Vm {
                 Some(Func::Builtin(_))
             ),
             anon_base: self.anon_counter,
+            stack_limit: None,
         };
         match crate::compiler::compile(&program, Rc::from(src), opts) {
             Ok(u) => {

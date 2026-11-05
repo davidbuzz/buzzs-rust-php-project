@@ -4,7 +4,10 @@ pub(crate) mod attrs;
 mod constexpr;
 mod decl;
 mod expr;
+mod stack;
 mod stmt;
+
+pub use stack::CompileStackLimit;
 
 use crate::ast::{self, Name, NameKind};
 use crate::class::{AttributeInfo, ClassDecl, ConstExpr};
@@ -93,6 +96,9 @@ pub struct CompileOptions {
     /// compilation (`CG(rtd_key_counter)`), so recompiling a file or eval
     /// string names its anonymous classes afresh.
     pub anon_base: u32,
+    /// The C stack model of compile-time `zend_check_stack_limit()`;
+    /// `None` disables the check.
+    pub stack_limit: Option<CompileStackLimit>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -310,6 +316,8 @@ pub(crate) struct Compiler {
     /// name (`foo()`, `C::m()`), which names the closures in the attribute
     /// arguments as `CG(active_op_array)` is already the function.
     pub attr_owner: Option<String>,
+    /// Compile-time `zend_check_stack_limit()` state.
+    pub(crate) stack: stack::StackModel,
 }
 
 /// Compiles a parsed program.
@@ -334,6 +342,7 @@ pub fn compile(
         hoisted_classes: Vec::new(),
         warnings: Vec::new(),
         anon_counter: opts.anon_base,
+        stack: stack::StackModel::new(opts.stack_limit),
         opts,
         declared_functions: HashMap::new(),
         known_functions: HashMap::new(),
