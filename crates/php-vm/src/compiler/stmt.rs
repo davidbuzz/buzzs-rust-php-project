@@ -189,20 +189,29 @@ impl Compiler {
                             self.emit(Op::Global { cv, name });
                         }
                         ExprKind::Var(VarName::Expr(e)) => {
-                            // global $$x: bind by runtime name.
+                            // `zend_compile_global_var` without a CV: the name
+                            // is evaluated once, FETCH_W (global) then FETCH_W
+                            // (local) and ASSIGN_REF.
                             let n = self.compile_expr(e)?;
-                            let t = self.tmp();
-                            let gl = self.lit_str(b"GLOBALS");
-                            let _ = gl;
-                            let place = self.place(Place {
+                            self.f().line = v.span.line;
+                            let global = self.place(Place {
+                                base: PlaceBase::Global(Compiler::keep(n)),
+                                segs: Vec::new(),
+                            });
+                            let local = self.place(Place {
                                 base: PlaceBase::VarVar(n),
                                 segs: Vec::new(),
                             });
-                            let _ = t;
-                            // Approximation: make the local a reference to the
-                            // global through $GLOBALS semantics.
-                            self.emit(Op::Nop);
-                            let _ = place;
+                            let t = self.tmp();
+                            self.emit(Op::MakeRef {
+                                place: global,
+                                dst: t,
+                            });
+                            self.emit(Op::AssignRef {
+                                place: local,
+                                src: Operand::Tmp(t),
+                                dst: None,
+                            });
                         }
                         _ => {}
                     }

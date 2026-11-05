@@ -1137,3 +1137,27 @@ set
 ok
 ");
 }
+
+#[test]
+fn dynamic_global_statement_and_globals_fetch_warning() {
+    // zend_compile_global_var with a non-CV name; ZEND_FETCH_GLOBAL warning.
+    assert_eq!(run(r#"<?php
+function sf($arg) { echo "called\n"; return $arg; }
+function test() {
+    global ${sf("a")};
+    var_dump($a);
+    $a = 43;
+    try { global ${new stdClass}; } catch (Error $e) { echo $e->getMessage(), "\n"; }
+}
+$a = 42;
+test();
+var_dump($a);
+$GLOBALS["nope"];
+"#), "called
+int(42)
+Object of class stdClass could not be converted to string
+int(43)
+
+Warning: Undefined global variable $nope in t.php on line 12
+");
+}

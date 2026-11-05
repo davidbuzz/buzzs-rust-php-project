@@ -1602,6 +1602,21 @@ impl Vm {
         )
     }
 
+    /// The read warning for an undefined variable base: `$GLOBALS[...]`
+    /// fetches carry `ZEND_FETCH_GLOBAL` ("Undefined global variable",
+    /// `zend_fetch_var_address_helper`).
+    #[cold]
+    fn undefined_place_var_msg(&self, pid: PlaceId, name: &ZStr) -> String {
+        if matches!(
+            self.frame().code.places[pid as usize].base,
+            PlaceBase::Global(_)
+        ) {
+            format!("Undefined global variable ${name}")
+        } else {
+            crate::exec::undefined_var_msg(name)
+        }
+    }
+
     /// Reads a place.
     #[allow(clippy::too_many_lines)]
     pub(crate) fn place_fetch(&mut self, pid: PlaceId, mode: FetchMode) -> VmResult<Value> {
@@ -1625,7 +1640,8 @@ impl Vm {
                     None => {
                         if mode != FetchMode::Is {
                             let name = store.borrow().names[idx].clone();
-                            self.warning(&crate::exec::undefined_var_msg(&name))?;
+                            let msg = self.undefined_place_var_msg(pid, &name);
+                            self.warning(&msg)?;
                         }
                         Value::Null
                     }
@@ -1651,7 +1667,8 @@ impl Vm {
             RBase::Value(v) => v.deref(),
             RBase::Undef(name) => {
                 if mode != FetchMode::Is {
-                    self.warning(&crate::exec::undefined_var_msg(&name))?;
+                    let msg = self.undefined_place_var_msg(pid, &name);
+                    self.warning(&msg)?;
                 }
                 Value::Null
             }
