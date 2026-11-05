@@ -274,7 +274,10 @@ pub(crate) fn check_override(cls: &Rc<Class>) -> Option<(String, u32)> {
         return None;
     }
     let parent = cls.parent.as_ref();
+    // Methods print `ZEND_FN_SCOPE_NAME` (`%s`, cut at the NUL of an
+    // anonymous class name); constants and properties print `%pS` (whole).
     let display = crate::object::display_name(&cls.name);
+    let full = cls.name.to_string_lossy();
     for lc in &cls.method_order {
         let Some(m) = cls.methods.get(lc) else {
             continue;
@@ -286,9 +289,16 @@ pub(crate) fn check_override(cls: &Rc<Class>) -> Option<(String, u32)> {
         if !has_attr(&uf.attributes, b"override") {
             continue;
         }
-        let in_parent = parent
-            .and_then(|p| p.find_method(lc.as_bytes()))
-            .is_some_and(|pm| pm.visibility() != flags::PRIVATE);
+        let in_parent = if lc.as_bytes() == b"__construct" {
+            // `do_inheritance_check_on_method`: a ctor only has a prototype
+            // when it is abstract (or comes from an interface); otherwise
+            // the check returns before `ZEND_INHERITANCE_RESET_CHILD_OVERRIDE`.
+            ctor_has_abstract_proto(parent)
+        } else {
+            parent
+                .and_then(|p| p.find_method(lc.as_bytes()))
+                .is_some_and(|pm| pm.visibility() != flags::PRIVATE)
+        };
         let in_iface = cls
             .interfaces
             .iter()
@@ -319,7 +329,7 @@ pub(crate) fn check_override(cls: &Rc<Class>) -> Option<(String, u32)> {
         if !in_parent && !in_iface {
             return Some((
                 format!(
-                    "{display}::{} has #[\\Override] attribute, but no matching parent constant exists",
+                    "{full}::{} has #[\\Override] attribute, but no matching parent constant exists",
                     c.name.to_string_lossy()
                 ),
                 0,
@@ -342,7 +352,7 @@ pub(crate) fn check_override(cls: &Rc<Class>) -> Option<(String, u32)> {
         if has_attr(&p.attributes, b"override") && parent_prop.is_none() {
             return Some((
                 format!(
-                    "{display}::${} has #[\\Override] attribute, but no matching parent property exists",
+                    "{full}::${} has #[\\Override] attribute, but no matching parent property exists",
                     p.name.to_string_lossy()
                 ),
                 0,
@@ -375,5 +385,43 @@ pub(crate) fn check_override(cls: &Rc<Class>) -> Option<(String, u32)> {
             }
         }
     }
+    // Static properties live outside `props`; their attributes are on the
+    // declaration.
+    if let Some(decl) = &cls.decl {
+        for pd in &decl.props {
+            if pd.flags & flags::STATIC == 0 || !has_attr(&pd.attributes, b"override") {
+                continue;
+            }
+            let in_parent = parent
+                .and_then(|pc| pc.static_map.get(&pd.name).map(|&i| &pc.static_props[i]))
+                .is_some_and(|sp| sp.flags & flags::PRIVATE == 0);
+            if !in_parent {
+                return Some((
+                    format!(
+                        "{full}::${} has #[\\Override] attribute, but no matching parent property exists",
+                        pd.name.to_string_lossy()
+                    ),
+                    0,
+                ));
+            }
+        }
+    }
     None
+}
+
+/// Whether a child `__construct` gets a prototype from `parent`'s
+/// constructor: the parent's (or an ancestor's) constructor is abstract.
+fn ctor_has_abstract_proto(parent: Option<&Rc<Class>>) -> bool {
+    use crate::func::flags;
+    let mut cur = parent.cloned();
+    while let Some(c) = cur {
+        if c.methods
+            .get(b"__construct".as_slice())
+            .is_some_and(|m| m.flags & flags::ABSTRACT != 0)
+        {
+            return true;
+        }
+        cur = c.parent.clone();
+    }
+    false
 }

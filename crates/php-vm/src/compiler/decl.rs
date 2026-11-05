@@ -1423,7 +1423,21 @@ impl Compiler {
         if is_anon {
             cflag |= cflags::ANON;
         }
-        let attributes = self.attributes_at(&cd.attributes, Some(cd.span.line))?;
+        // `zend_compile_class_decl` compiles the attributes with the new
+        // class active: `self` in their arguments is this class.
+        self.classes.push(ClassCtx {
+            name: name.clone(),
+            parent: parent.clone(),
+            is_trait: kind == ClassKind::Trait,
+            is_interface: kind == ClassKind::Interface,
+            is_anon,
+        });
+        let saved_closure_depth = self.closure_depth;
+        self.closure_depth = 0;
+        let attributes = self.attributes_at(&cd.attributes, Some(cd.span.line));
+        self.closure_depth = saved_closure_depth;
+        self.classes.pop();
+        let attributes = attributes?;
         self.validate_attributes(
             &attributes,
             super::attrs::target::CLASS,

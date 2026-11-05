@@ -216,6 +216,7 @@ impl Vm {
             const_deprecation_filter: std::cell::RefCell::new((0, Vec::new())),
             ct_constants: None,
             pending_call_dst: None,
+            builtin_deprecation_reported: false,
             empty_code,
             empty_vars: Rc::new(RefCell::new(vm::VarStore::default())),
             prop_guards: HashSet::new(),

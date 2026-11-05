@@ -254,6 +254,9 @@ pub(crate) struct AttrRef {
     pub scope: Option<Rc<Class>>,
     /// The file declaring the attribute.
     pub file: Option<ZStr>,
+    /// Whether the declaration is a property hook
+    /// (`CG(context).active_property_info_name` for validators).
+    pub hook: bool,
 }
 
 /// A reflected global constant (`ReflectionConstant`).

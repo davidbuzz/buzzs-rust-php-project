@@ -500,7 +500,8 @@ fn rf_get_attributes(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             .map(|v| (**v).clone())
             .unwrap_or_default(),
     };
-    super::attribute::attributes_array_in(vm, &attrs, t, scope.as_ref(), fn_file(&f), a)
+    let hook = matches!(&f.func, Func::User(u) if u.name.as_bytes().starts_with(b"$"));
+    super::attribute::attributes_array_decl(vm, &attrs, t, scope.as_ref(), fn_file(&f), hook, a)
 }
 
 fn rf_get_static_variables(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
