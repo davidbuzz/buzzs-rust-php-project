@@ -453,16 +453,31 @@ impl MessageFormatter {
             .icu
             .try_clone()
             .map_err(|_| Error::Thrown("Failed to clone MessageFormatter".into()))?;
-        let compiled = Compiled::new(self.compiled.pat.pattern(), &self.locale)
+        let mut compiled = Compiled::new(self.compiled.pat.pattern(), &self.locale)
             .or_else(|_| Compiled::new(&upat, &self.locale))
             .map_err(|_| Error::Thrown("Failed to clone MessageFormatter".into()))?;
+        // `umsg_clone()` copies the sub-formats with the time zone the
+        // first `format()` gave them, and php-src copies `tz_set`, so the
+        // clone keeps formatting in that zone.
+        if self.tz_set {
+            for idx in &self.compiled.top_level_dates {
+                let Some(SubFormat::Date(orig)) = self.compiled.formats.get(idx) else {
+                    continue;
+                };
+                if let (Some(SubFormat::Date(df)), Ok(copy)) =
+                    (compiled.formats.get_mut(idx), orig.try_clone())
+                {
+                    *df = copy;
+                }
+            }
+        }
         Ok(Self {
             icu,
             locale: self.locale.clone(),
             orig: self.orig.clone(),
             compiled,
             named_types: None,
-            tz_set: false,
+            tz_set: self.tz_set,
             default_nf: None,
             default_df: None,
             cardinal: None,
