@@ -885,7 +885,17 @@ impl Vm {
                 let n = self.read(*op)?;
                 let n = self.to_zstr(&n)?;
                 if n.as_bytes() == b"this" {
-                    RBase::This(self.frame().this.clone())
+                    // `zend_fetch_var_address_helper`: `$this` is never in
+                    // the symbol table, so `zend_fetch_this_var` runs: a
+                    // write fetch throws, a read outside an object is an
+                    // undefined variable.
+                    if write {
+                        return Err(self.make_throw("Error", "Cannot re-assign $this"));
+                    }
+                    match self.frame().this.clone() {
+                        Some(o) => RBase::This(Some(o)),
+                        None => RBase::Undef(n),
+                    }
                 } else {
                     let vars = self.frame().vars.clone();
                     let idx = if write {

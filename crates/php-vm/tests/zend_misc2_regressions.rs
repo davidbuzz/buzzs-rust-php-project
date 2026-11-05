@@ -120,3 +120,30 @@ fn continue_targeting_switch_warns_once() {
         "\nWarning: \"continue\" targeting switch is equivalent to \"break\". Did you mean to use \"continue 2\"? in t.php on line 5\nok"
     );
 }
+
+/// `$$name` naming `this` goes through `zend_fetch_this_var`: write
+/// fetches throw "Cannot re-assign $this", a read outside an object warns
+/// (`this_reassign`).
+#[test]
+fn variable_variable_this_write_throws() {
+    let out = run(r#"<?php
+#[AllowDynamicProperties]
+class C { function m() {
+    $a = 'this';
+    try { $$a->x = 1; echo "no\n"; } catch (Error $e) { echo $e->getMessage(), "\n"; }
+    try { $$a = 1; echo "no\n"; } catch (Error $e) { echo $e->getMessage(), "\n"; }
+    echo get_class($$a), "\n";
+} }
+(new C)->m();
+function f() {
+    $a = 'this';
+    try { $$a .= 1; echo "no\n"; } catch (Error $e) { echo $e->getMessage(), "\n"; }
+    var_dump($$a);
+}
+f();
+"#);
+    assert_eq!(
+        out,
+        "Cannot re-assign $this\nCannot re-assign $this\nC\nCannot re-assign $this\n\nWarning: Undefined variable $this in t.php on line 13\nNULL\n"
+    );
+}
