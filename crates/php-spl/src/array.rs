@@ -341,8 +341,23 @@ fn read_dimension_ex(
                 }
             }
             if user_get {
-                let off = offset.cloned().unwrap_or_default();
-                return host.call_method(this, "offsetGet", &[off]);
+                // `$o[]` in a write fetch passes an undefined offset.
+                let r = match offset {
+                    Some(off) => host.call_method(this, "offsetGet", std::slice::from_ref(off)),
+                    None => host.call_method_undef(this, "offsetGet"),
+                };
+                if r.is_err() && !matches!(kind, DimKind::Read | DimKind::Is) {
+                    // `rv` stays undefined: the engine gets the
+                    // uninitialized zval and notices the write fetch.
+                    host.diagnostic(
+                        ErrorLevel::Notice,
+                        &format!(
+                            "Indirect modification of overloaded element of {} has no effect",
+                            this.class_name()
+                        ),
+                    )?;
+                }
+                return r;
             }
         }
     }

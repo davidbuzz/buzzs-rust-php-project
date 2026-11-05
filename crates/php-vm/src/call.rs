@@ -2132,6 +2132,26 @@ impl Vm {
         self.call_pending(call)
     }
 
+    /// Calls a method by name with possibly undefined arguments (`None` is
+    /// `ZVAL_UNDEF`, e.g. the offset `spl_array_read_dimension_ex` hands
+    /// `offsetGet()` for `$o[]`): a user method reports "Argument #n (...)
+    /// not passed".
+    pub fn call_method_with_undef(
+        &mut self,
+        o: &Obj,
+        name: &str,
+        args: Vec<Option<Value>>,
+    ) -> VmResult<Value> {
+        let cls = object::class_of(o).clone();
+        let lc = ZStr::from(name.to_ascii_lowercase());
+        let mut call = match cls.methods.get(&lc).cloned() {
+            Some(m) => self.pending_for_method(&m, Some(o.clone()), cls),
+            None => self.method_call(o, &ZStr::from(name))?,
+        };
+        call.args = args;
+        self.call_pending(call)
+    }
+
     /// Calls a static method by name.
     pub(crate) fn call_static_method(
         &mut self,
