@@ -539,7 +539,10 @@ fn reserved_class_name_error_keeps_earlier_deprecation() {
     // GH-15976: `class _ {}` deprecates before `class bool {}` fails.
     let opts = ParseOptions::default();
     let e = php_parser::parse(b"<?php\nclass _ {}\nclass bool {}\n", &opts).unwrap_err();
-    assert_eq!(e.message, "Cannot use \"bool\" as a class name as it is reserved");
+    assert_eq!(
+        e.message,
+        "Cannot use \"bool\" as a class name as it is reserved"
+    );
     assert_eq!(e.warnings.len(), 1);
     assert_eq!(
         e.warnings[0].message,
