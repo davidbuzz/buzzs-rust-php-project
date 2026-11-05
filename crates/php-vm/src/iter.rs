@@ -184,13 +184,17 @@ impl Vm {
     }
 
     fn object_iter(&mut self, o: Obj, by_ref: bool) -> VmResult<ForeachIter> {
+        // `ce->get_iterator` is only set for `Traversable` classes; other
+        // classes with extension hooks (`SplFileInfo`) iterate properties.
+        let traversable = self.instance_of(&o, b"traversable");
         if let Some(f) = crate::ext::hooks_of(&o)
             .and_then(|h| h.get_iterator)
-            .filter(|_| !object::has_internal::<crate::generator::GenData>(&o))
+            .filter(|_| traversable && !object::has_internal::<crate::generator::GenData>(&o))
         {
             let mut it = f(self, &o, by_ref)?;
+            let handle = object::HandleGuard::reserve();
             it.rewind(self)?;
-            return Ok(ForeachIter::Native(crate::vm::NativeIter(it), false));
+            return Ok(ForeachIter::Native(crate::vm::NativeIter(it), false, handle));
         }
         if object::has_internal::<crate::generator::GenData>(&o) {
             if by_ref
@@ -212,10 +216,12 @@ impl Vm {
                     self.make_throw("Exception", "Cannot traverse an already closed generator")
                 );
             }
+            let handle = object::HandleGuard::reserve();
             self.gen_rewind(&o)?;
             return Ok(ForeachIter::Generator {
                 obj: o,
                 started: false,
+                handle,
             });
         }
         if self.instance_of(&o, b"traversable") {
@@ -251,16 +257,20 @@ impl Vm {
                         self.make_throw("Exception", "Cannot traverse an already closed generator")
                     );
                 }
+                let handle = object::HandleGuard::reserve();
                 self.gen_rewind(&it)?;
                 return Ok(ForeachIter::Generator {
                     obj: it,
                     started: false,
+                    handle,
                 });
             }
+            let handle = object::HandleGuard::reserve();
             self.call_method_name(&it, "rewind", Vec::new())?;
             return Ok(ForeachIter::Iterator {
                 obj: it,
                 started: false,
+                handle,
             });
         }
         // Iterating properties initializes a lazy object (a proxy iterates
@@ -431,7 +441,7 @@ impl Vm {
                     None => Ok(false),
                 }
             }
-            ForeachIter::Iterator { obj, started } => {
+            ForeachIter::Iterator { obj, started, .. } => {
                 let obj = obj.clone();
                 if *started {
                     self.call_method_name(&obj, "next", Vec::new())?;
@@ -450,7 +460,7 @@ impl Vm {
                     Ok(false)
                 }
             }
-            ForeachIter::Generator { obj, started } => {
+            ForeachIter::Generator { obj, started, .. } => {
                 let obj = obj.clone();
                 if *started {
                     self.gen_next(&obj)?;
@@ -467,7 +477,7 @@ impl Vm {
                     Ok(false)
                 }
             }
-            ForeachIter::Native(it, started) => {
+            ForeachIter::Native(it, started, _) => {
                 if *started {
                     it.0.next(self)?;
                 }

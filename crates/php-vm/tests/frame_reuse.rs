@@ -678,3 +678,28 @@ try { f(1, []); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
         "f(): Argument #2 must be of type int, array given, called in t.php on line 3\n"
     );
 }
+
+#[test]
+fn foreach_iterators_take_an_object_handle() {
+    // `zend_iterator_init`: the iterator of a `foreach` over an `Iterator`
+    // or a generator is an object and holds a handle until `FE_FREE`.
+    assert_eq!(
+        run(r#"<?php
+class It implements Iterator {
+    private $i = 0;
+    function current(): mixed { return 1; }
+    function key(): mixed { return 0; }
+    function next(): void { $this->i++; }
+    function rewind(): void { $this->i = 0; }
+    function valid(): bool { return $this->i < 1; }
+}
+$it = new It;
+foreach ($it as $v) { echo spl_object_id(new stdClass), ","; }
+echo spl_object_id(new stdClass), ",";
+function g() { yield 1; }
+foreach (g() as $v) { echo spl_object_id(new stdClass), ","; }
+echo spl_object_id(new stdClass), "\n";
+"#),
+        "3,2,4,3\n"
+    );
+}

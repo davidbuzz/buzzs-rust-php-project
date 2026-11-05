@@ -260,6 +260,8 @@ pub enum ForeachIter {
         obj: Obj,
         /// Whether `rewind` has been done / first fetch.
         started: bool,
+        /// The `zend_object_iterator`'s own handle, released after `obj`.
+        handle: crate::object::HandleGuard,
     },
     /// A generator.
     Generator {
@@ -267,9 +269,12 @@ pub enum ForeachIter {
         obj: Obj,
         /// First fetch done.
         started: bool,
+        /// The `zend_object_iterator`'s own handle, released after `obj`.
+        handle: crate::object::HandleGuard,
     },
-    /// A native iterator (extension `get_iterator` hook).
-    Native(NativeIter, bool),
+    /// A native iterator (extension `get_iterator` hook), whether the first
+    /// fetch is done, and the iterator's own handle (released last).
+    Native(NativeIter, bool, crate::object::HandleGuard),
     /// An empty iteration (non-iterable subject).
     Empty,
 }

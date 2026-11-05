@@ -168,6 +168,57 @@ pub fn new_object(class: Rc<Class>, slots: Vec<Option<Value>>) -> Obj {
     })
 }
 
+/// An object handle taken from the store with no object behind it.
+///
+/// Zend's `zend_object_iterator` is itself an object: `zend_iterator_init`
+/// takes a handle from the object store for every `get_iterator` iterator
+/// (`foreach` over an `Iterator`, an `IteratorAggregate`, a generator or an
+/// internal class), and `FE_FREE` returns it after the iterated object has
+/// been released. The guard reproduces that numbering: the handle goes
+/// back on the free list when it drops.
+pub struct HandleGuard(u32);
+
+impl HandleGuard {
+    /// Takes the next free handle (`zend_objects_store_put`).
+    #[must_use]
+    pub fn reserve() -> Self {
+        STORE.with(|s| {
+            let mut s = s.borrow_mut();
+            let handle = if let Some(h) = s.free.pop() {
+                h
+            } else {
+                s.objects.push(None);
+                u32::try_from(s.objects.len()).unwrap_or(u32::MAX)
+            };
+            HandleGuard(handle)
+        })
+    }
+
+    /// The reserved handle number.
+    #[must_use]
+    pub fn handle(&self) -> u32 {
+        self.0
+    }
+}
+
+impl Drop for HandleGuard {
+    fn drop(&mut self) {
+        let handle = self.0;
+        // `try_with`: the store may already be gone during thread teardown.
+        let _ = STORE.try_with(|s| {
+            if let Ok(mut s) = s.try_borrow_mut() {
+                s.free.push(handle);
+            }
+        });
+    }
+}
+
+impl fmt::Debug for HandleGuard {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "HandleGuard(#{})", self.0)
+    }
+}
+
 /// Returns our object data for an `Obj`.
 ///
 /// # Panics

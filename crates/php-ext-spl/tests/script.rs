@@ -302,3 +302,18 @@ fn later_binding_failure_rolls_back_storage_and_coercion() {
         assert!(matches!(r.get(), Value::Array(a) if a.is_empty()));
     }
 }
+
+#[test]
+fn foreach_over_spl_objects_numbers_handles_like_zend() {
+    // `ArrayObject::getIterator()` creates an ArrayIterator and the
+    // `foreach` iterator takes one more handle; a non-Traversable SPL
+    // class iterates its properties.
+    let out = run(r#"<?php
+        $a = new ArrayObject([1]);
+        foreach ($a as $v) { echo spl_object_id(new stdClass), ","; }
+        echo spl_object_id(new stdClass), "\n";
+        class F extends SplFileInfo { public $p = 1; }
+        foreach (new F('x') as $k => $v) { echo $k, "=", $v, "\n"; }
+    "#);
+    assert_eq!(out, "4,3\np=1\n");
+}
