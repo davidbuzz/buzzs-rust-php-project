@@ -282,3 +282,13 @@ fn class_redeclaration_names_the_existing_class() {
         "{out}"
     );
 }
+
+/// `E_STRICT` is `#[\Deprecated]` in Zend/zend_constants.stub.php.
+#[test]
+fn e_strict_constant_is_deprecated() {
+    let out = run("<?php\necho E_ALL, \"\\n\";\necho E_STRICT, \"\\n\";\n");
+    assert_eq!(
+        out,
+        "30719\n\nDeprecated: Constant E_STRICT is deprecated since 8.4, the error level was removed in t.php on line 3\n2048\n"
+    );
+}

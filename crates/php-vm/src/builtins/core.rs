@@ -2482,6 +2482,15 @@ pub(crate) fn register(vm: &mut Vm) {
     ] {
         constant(vm, n, Value::Int(v));
     }
+    // `#[\Deprecated(since: '8.4', message: 'the error level was removed')]`
+    // on `E_STRICT` in Zend/zend_constants.stub.php.
+    vm.deprecated_constants.insert(
+        ZStr::from("E_STRICT"),
+        crate::attrs::format_suffix(
+            Some(&ZStr::from("8.4")),
+            Some(&ZStr::from("the error level was removed")),
+        ),
+    );
     constant(vm, "ZEND_THREAD_SAFE", Value::Bool(false));
     constant(vm, "ZEND_DEBUG_BUILD", Value::Bool(false));
     constant(vm, "PHP_INT_MAX", Value::Int(i64::MAX));
