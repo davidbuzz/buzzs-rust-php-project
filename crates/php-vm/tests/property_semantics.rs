@@ -1108,3 +1108,32 @@ Attempt to increment/decrement property \"p\" on null
 bool(false)
 ");
 }
+
+#[test]
+fn undefined_assigned_value_warns_after_property_fetches() {
+    // bug43201: ZEND_ASSIGN_DIM reads OP_DATA after FETCH_OBJ_W's notice,
+    // but before zend_assign_to_object_dim calls offsetSet.
+    assert_eq!(run(r#"<?php
+class Foo { function __get($k) { return null; } }
+class AA implements ArrayAccess {
+    function offsetGet($o): mixed { echo "get\n"; return null; }
+    function offsetSet($o, $v): void { echo "set\n"; }
+    function offsetExists($o): bool { return false; }
+    function offsetUnset($o): void {}
+}
+$c = new Foo();
+$c->arr[0]["k2"] = $ref;
+$o = new stdClass;
+$o->aa = new AA;
+$o->aa[1] = $ref2;
+echo "ok\n";
+"#), "
+Notice: Indirect modification of overloaded property Foo::$arr has no effect in t.php on line 10
+
+Warning: Undefined variable $ref in t.php on line 10
+
+Warning: Undefined variable $ref2 in t.php on line 13
+set
+ok
+");
+}

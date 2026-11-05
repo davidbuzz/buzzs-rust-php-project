@@ -563,6 +563,11 @@ thread_local! {
     /// `Vm::obj_walk`, taken by `Vm::fetch_rw`.
     static OVERLOADED_RW: std::cell::Cell<Option<(Obj, Value)>> =
         const { std::cell::Cell::new(None) };
+    /// The undefined compiled variable (and frame depth) a
+    /// `place = $undef` walk through a property still has to warn about:
+    /// set by `Vm::place_assign_undef_cv`.
+    static PENDING_UNDEF_VALUE: std::cell::Cell<Option<(u32, usize)>> =
+        const { std::cell::Cell::new(None) };
 }
 
 /// Performs deferred reference assignments; called once a write walk has
@@ -1097,6 +1102,7 @@ impl Vm {
                         match &wop {
                             WOp::Assign(v) => {
                                 if let Some(f) = h.write_dimension {
+                                    self.take_pending_undef_value()?;
                                     if f(self, &obj, keyopt, v)? {
                                         return Ok(v.clone());
                                     }
@@ -1189,6 +1195,7 @@ impl Vm {
                     let assign_ref = matches!(wop, WOp::AssignRef(_));
                     return match wop {
                         WOp::Assign(v) => {
+                            self.take_pending_undef_value()?;
                             self.call_method_name(&obj, "offsetSet", vec![key, v.clone()])?;
                             Ok(v)
                         }
@@ -1309,8 +1316,42 @@ impl Vm {
             return self.place_assign(pid, v);
         }
         let (base, segs) = self.resolve_place(pid, true)?;
-        let v = self.read_cv(cv)?;
-        self.write_place(base, &segs, WOp::Assign(v))
+        if !segs.iter().any(|s| matches!(s, RSeg::Prop(_))) {
+            let v = self.read_cv(cv)?;
+            return self.write_place(base, &segs, WOp::Assign(v));
+        }
+        // Through a property, the fetches (`FETCH_OBJ_W`'s "Indirect
+        // modification" notice, `__get`, `offsetGet`) precede the OP_DATA
+        // read: the value's warning is raised just before the final store
+        // (`Vm::take_pending_undef_value`) or after the walk.
+        let depth = self.frames.len();
+        let saved = PENDING_UNDEF_VALUE.with(|c| c.replace(Some((cv, depth))));
+        let r = self.write_place(base, &segs, WOp::Assign(Value::Null));
+        let mine = PENDING_UNDEF_VALUE.with(|c| c.replace(saved));
+        let r = r?;
+        if let Some((cv, _)) = mine {
+            self.read_cv(cv)?;
+        }
+        Ok(r)
+    }
+
+    /// Raises the deferred "Undefined variable" warning of
+    /// [`Vm::place_assign_undef_cv`] before an object's final dimension
+    /// write (`offsetSet`, a native `write_dimension`), as `ZEND_ASSIGN_DIM`
+    /// reads OP_DATA before `zend_assign_to_object_dim`.
+    fn take_pending_undef_value(&mut self) -> VmResult<()> {
+        let depth = self.frames.len();
+        let pending = PENDING_UNDEF_VALUE.with(|c| match c.get() {
+            Some((cv, d)) if d == depth => {
+                c.set(None);
+                Some(cv)
+            }
+            _ => None,
+        });
+        if let Some(cv) = pending {
+            self.read_cv(cv)?;
+        }
+        Ok(())
     }
 
     /// `place op= v`
