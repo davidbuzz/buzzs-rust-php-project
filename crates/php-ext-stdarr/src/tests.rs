@@ -125,6 +125,63 @@ fn extract_and_compact_use_the_callers_scope() {
 }
 
 #[test]
+fn extract_negative_keys_preserves_the_callers_snapshot() {
+    assert_eq!(
+        run("$a = [-5 => 'hello', 'world', 2 => 'positive', 'check' => 'extracted'];
+            function foo(array $a) {
+                extract($a, EXTR_PREFIX_ALL, 'prefix');
+                var_dump(get_defined_vars());
+            }
+            foo($a);"),
+        concat!(
+            "array(3) {\n",
+            "  [\"a\"]=>\n",
+            "  array(4) {\n",
+            "    [-5]=>\n",
+            "    string(5) \"hello\"\n",
+            "    [-4]=>\n",
+            "    string(5) \"world\"\n",
+            "    [2]=>\n",
+            "    string(8) \"positive\"\n",
+            "    [\"check\"]=>\n",
+            "    string(9) \"extracted\"\n",
+            "  }\n",
+            "  [\"prefix_2\"]=>\n",
+            "  string(8) \"positive\"\n",
+            "  [\"prefix_check\"]=>\n",
+            "  string(9) \"extracted\"\n",
+            "}\n"
+        )
+    );
+}
+
+#[test]
+fn defined_vars_snapshot_preserves_visibility_and_reference_ownership() {
+    assert_eq!(
+        run("function snapshot($a) {
+                $unset = 1; unset($unset);
+                $null = null;
+                $shared = [1]; $alias =& $shared;
+                $single = [2]; $gone =& $single; unset($gone);
+                $dynamic = 'dynamic'; $$dynamic = 3;
+                extract($a);
+                $vars = get_defined_vars();
+                echo implode(',', array_keys($vars)), '|';
+                $vars['a']['x'] = 9;
+                $vars['single'][0] = 9;
+                $vars['shared'][0] = 9;
+                $vars['x'] = 9;
+                echo $a['x'], ',', $single[0], ',', $shared[0], ',', $alias[0], ',', $x,
+                    '|', (int) array_key_exists('null', $vars),
+                    '|', (int) array_key_exists('unset', $vars),
+                    '|', (int) array_key_exists('vars', $vars);
+            }
+            snapshot(['x' => 1]);"),
+        "a,null,shared,alias,single,dynamic,x|1,2,9,9,1|1|0|0"
+    );
+}
+
+#[test]
 fn rng_shares_mt_srand_state() {
     let a = run("mt_srand(42); $x = range(1, 10); shuffle($x); echo implode(',', $x);");
     let b = run("mt_srand(42); $x = range(1, 10); shuffle($x); echo implode(',', $x);");

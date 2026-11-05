@@ -1224,15 +1224,16 @@ fn get_defined_vars(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
     let Some(idx) = caller_idx(vm) else {
         return Ok(Value::Array(ZArray::new()));
     };
-    let t = vm.frames[idx].vars.borrow().to_array();
-    // `zend_array_dup`: references nobody else holds become plain values.
+    let vars = vm.frames[idx].vars.borrow();
+    // `zend_array_dup`: check ownership before copying the symbol-table slots.
     let mut out = HashTable::new();
-    for (k, v) in t.iter() {
+    for (name, slot) in vars.names.iter().zip(&vars.slots) {
+        let Some(v) = slot else { continue };
         let v = match v {
             Value::Reference(r) if r.refcount() == 1 => r.get(),
             other => other.clone(),
         };
-        out.insert(k.clone(), v);
+        out.insert(php_runtime::ArrayKey::Str(name.clone()), v);
     }
     Ok(Value::Array(ZArray::from_table(out)))
 }
