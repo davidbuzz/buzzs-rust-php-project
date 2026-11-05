@@ -38,14 +38,14 @@ fn run(code: &str) -> String {
 /// interned literal (matches PHP's `debug_zval_dump` output).
 #[test]
 fn merged_unwrapped_reference_retains_interned_string() {
-    let output = run(r#"<?php
+    let output = run(r"<?php
 $x = 'xxx';
 $d = ['test' => &$x];
 unset($x);
 $a = ['test' => 'yyy'];
 $a = array_merge($a, $d);
 debug_zval_dump($a);
-"#);
+");
     assert_eq!(
         output,
         "array(1) refcount(2){\n  [\"test\"]=>\n  string(3) \"xxx\" interned\n}\n"

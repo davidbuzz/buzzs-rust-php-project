@@ -416,6 +416,7 @@ pub fn populate(vm: &mut Vm, ctx: &RequestCtx, facts: &ServerFacts<'_>, auth: &A
     }
 
     // $_GET, $_COOKIE
+    #[allow(clippy::single_match_else)] // the None arm is a multi-line computation
     let (get, cookie) = match early {
         Some(parsed) => parsed,
         None => {

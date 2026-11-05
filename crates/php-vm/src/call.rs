@@ -1184,6 +1184,7 @@ impl Vm {
                 .is_some_and(|caller| caller.kind == FrameKind::Function)
     }
 
+    #[allow(clippy::too_many_lines)] // the builtin call protocol (zend_execute_internal)
     fn call_builtin_impl(
         &mut self,
         b: &Rc<Builtin>,

@@ -361,6 +361,7 @@ pub(crate) fn decode(h: &mut dyn SessionHost, data: &[u8]) -> bool {
             h.unserialize_shared(d, off)
         })
     };
+    #[allow(clippy::single_match_else)] // the None arm is a multi-line computation
     let decoded = match shared {
         Some(r) => r,
         None => {

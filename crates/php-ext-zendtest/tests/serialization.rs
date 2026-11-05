@@ -95,13 +95,13 @@ fn bailout_abandons_actual_context_until_request_startup() {
 fn nested_serializable_bailout_does_not_destroy_shared_context() {
     let mut vm = machine();
     vm.run_script(
-        br#"<?php
+        br"<?php
 class Payload implements Serializable {
     function serialize(): string { zend_test_serialization_bailout(false, false); }
     function unserialize(string $data): void {}
 }
 serialize(new Payload);
-"#,
+",
         "bailout.php",
     );
     assert_eq!(field(&vm, "serialize_level"), V::Int(2));

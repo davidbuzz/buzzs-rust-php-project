@@ -72,6 +72,7 @@ pub(crate) fn unnamed_subpats(m: MatchRef<'_>, num_subpats: usize, flags: i64) -
     let mark = m.mark();
     let mut out = HashTable::with_capacity(groups + usize::from(mark.is_some()));
     for i in 0..groups {
+        #[allow(clippy::single_match_else)] // the None arm is a multi-line computation
         let val = match (m.span(i), m.group(i)) {
             (Some((start, _)), Some(bytes)) => {
                 let s = Value::Str(str_fast(bytes));

@@ -31,7 +31,8 @@ fn run(source: &str, ini: &[(&str, &str)]) -> String {
     let mut vm = Vm::new(&options, Box::new(sink.clone()));
     let _status = vm.run_script(source.as_bytes(), "t.php");
     drop(vm);
-    String::from_utf8(sink.0.borrow().clone()).expect("UTF-8 output")
+    let out = sink.0.borrow().clone();
+    String::from_utf8(out).expect("UTF-8 output")
 }
 
 const MISSING: &str = "/nonexistent-phprust-dir/missing.php";

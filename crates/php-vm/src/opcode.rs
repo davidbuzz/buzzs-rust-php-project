@@ -457,6 +457,11 @@ pub enum Op {
     },
     /// `clone a`
     Clone { a: Operand, dst: u32 },
+    /// `func_num_args()` called by name, without arguments, in a function
+    /// body (`ZEND_FUNC_NUM_ARGS`): no call frame, no observer frame.
+    FuncNumArgs { dst: Option<u32> },
+    /// `func_get_args()` likewise (`ZEND_FUNC_GET_ARGS`).
+    FuncGetArgs { dst: Option<u32> },
 
     /// `echo`
     Echo(Operand),

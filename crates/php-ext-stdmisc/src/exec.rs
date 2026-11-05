@@ -35,7 +35,7 @@ fn exec_fn(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     Ok(ret)
 }
 
-/// PHP reads the command's output through a popen() stream, whose reads
+/// PHP reads the command's output through a `popen()` stream, whose reads
 /// clear the stat cache (`php_stdiop_read`): a file the command changed
 /// is stat()ed afresh (bug #72666).
 fn pipe_read_done() {

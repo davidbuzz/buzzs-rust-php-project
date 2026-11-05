@@ -372,7 +372,7 @@ fn foreach_over_spl_objects_numbers_handles_like_zend() {
 fn array_object_element_references_match_zend() {
     // A compound assignment leaves no visible reference in a wrapped
     // object's property table, and `$ao[$k] = &$v` binds the element.
-    let out = run(r#"<?php
+    let out = run(r"<?php
 $o = new stdClass;
 $ao = @new ArrayObject($o);
 $ao['x'] = 1;
@@ -383,7 +383,7 @@ var_dump($o, (array) $ao);
 $ao = new ArrayObject;
 foreach ([1, 2] as $i => $var) { $ao[$i] = &$var; }
 var_dump($ao->getArrayCopy());
-"#);
+");
     assert_eq!(
         out,
         r#"object(stdClass)#1 (2) {
@@ -460,6 +460,8 @@ fn autoloader_is_called_as_resolved_in_the_registering_scope() {
         "__call(autoload, Outer)\nbool(false)\n__call(autoload, Inner)\nbool(false)\n"
     );
 }
+
+#[test]
 fn array_iterator_initializes_lazy_storage() {
     // GH-15833: reading a lazy object's property table initializes it
     // (a proxy reads its real instance; a failing initializer throws).
@@ -553,7 +555,7 @@ call_user_func(function () {
 #[test]
 fn object_storage_cycle_counts_only_objects() {
     // Bug #53071: the collected cycle is the three objects.
-    let out = run(r#"<?php
+    let out = run(r"<?php
 class C { public $member; }
 function scope() {
     $a = new C();
@@ -565,7 +567,7 @@ function scope() {
 }
 scope();
 var_dump(gc_collect_cycles());
-"#);
+");
     assert_eq!(out, "int(3)\n");
 }
 

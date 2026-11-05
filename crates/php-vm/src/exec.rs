@@ -973,6 +973,17 @@ impl Vm {
                         self.set_tmp(*dst, r);
                         Flow::Next
                     }
+                    Op::FuncNumArgs { dst } => {
+                        let n = self.frame().args.len();
+                        self.set_dst(*dst, Value::Int(i64::try_from(n).unwrap_or(i64::MAX)));
+                        Flow::Next
+                    }
+                    Op::FuncGetArgs { dst } => {
+                        let idx = self.frames.len() - 1;
+                        let args = self.frame_args(idx);
+                        self.set_dst(*dst, Value::Array(args));
+                        Flow::Next
+                    }
                     Op::Echo(a) => {
                         let v = self.read(*a)?;
                         match &v {

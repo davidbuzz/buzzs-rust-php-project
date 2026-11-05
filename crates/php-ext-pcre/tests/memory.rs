@@ -25,7 +25,7 @@ impl Write for Sink {
 #[test]
 fn bug81243_exact_reference_output_with_live_allocations() {
     // ext/pcre/tests/bug81243.phpt, including both unmodified comparisons.
-    let source = br#"<?php
+    let source = br"<?php
 $test_string = str_repeat('Eins zwei drei', 2000);
 
 $replaced = preg_replace('/\s/', '-', $test_string);
@@ -40,7 +40,7 @@ $replaced = str_repeat($replaced, 1);
 $mem1 = memory_get_usage();
 var_dump($mem0 == $mem1);
 ?>
-"#;
+";
     let sink = Sink::default();
     let opts = VmOptions::default();
     let ext = php_ext_pcre::Pcre;

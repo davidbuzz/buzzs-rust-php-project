@@ -227,6 +227,7 @@ fn build_properties(obj: &Obj) -> ZArray {
 
 /// Whether the keys `new` shares with `current` come in another relative
 /// order: the table was reordered (sorted), not merely written to.
+#[allow(clippy::mutable_key_type)] // ZStr's cached-hash cell never changes Hash/Eq
 fn reordered(current: &ZArray, new: &ZArray) -> bool {
     let index: HashMap<&ArrayKey, usize> =
         current.keys().enumerate().map(|(i, k)| (k, i)).collect();

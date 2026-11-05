@@ -547,69 +547,73 @@ impl Vm {
     // Static properties
     // ------------------------------------------------------------------
 
-    /// The storage slot of `A::$name`.
-    pub(crate) fn static_prop_cell(
-        &mut self,
-        cls: &Rc<Class>,
-        name: &ZStr,
-    ) -> VmResult<Rc<RefCell<Value>>> {
-        // Zend checks visibility even when the declaration is not static.
-        if cls.find_static(name.as_bytes()).is_none() {
-            if let Some(pi) = cls.prop_map.get(name) {
-                let scope = self.scope();
-                let mut decl = self.find_class(pi.class.as_bytes());
-                if pi.flags & flags::PROTECTED != 0 {
-                    while let Some(parent) = decl.as_ref().and_then(|d| d.parent.clone()) {
-                        if parent.prop_map.get(name).is_some_and(|p| {
-                            p.visibility() != flags::PRIVATE && p.flags & flags::STATIC == 0
-                        }) {
-                            decl = Some(parent);
-                        } else {
-                            break;
-                        }
-                    }
-                }
-                let accessible = match (pi.flags & flags::VISIBILITY, &scope, &decl) {
-                    (flags::PUBLIC, _, _) => true,
-                    (flags::PRIVATE, Some(s), Some(d)) => Rc::ptr_eq(s, d),
-                    (flags::PROTECTED, Some(s), Some(d)) => {
-                        s.is_subclass_of(d) || d.is_subclass_of(s)
-                    }
-                    _ => false,
-                };
-                if !accessible {
-                    let vis = if pi.flags & flags::PRIVATE != 0 {
-                        "private"
+    /// The slow path of [`Vm::static_prop_cell`] when `cls` has no static
+    /// `$name`: Zend checks visibility even when the declaration is not
+    /// static, and `properties_info` also carries an ancestor's private
+    /// statics, so `B::$x` naming `A`'s private `$x` is a visibility error
+    /// (or `A`'s own slot when accessed from `A`).
+    #[cold]
+    #[inline(never)]
+    fn static_prop_miss(&mut self, cls: &Rc<Class>, name: &ZStr) -> VmResult<StaticProp> {
+        if let Some(pi) = cls.prop_map.get(name) {
+            let scope = self.scope();
+            let mut decl = self.find_class(pi.class.as_bytes());
+            if pi.flags & flags::PROTECTED != 0 {
+                while let Some(parent) = decl.as_ref().and_then(|d| d.parent.clone()) {
+                    if parent.prop_map.get(name).is_some_and(|p| {
+                        p.visibility() != flags::PRIVATE && p.flags & flags::STATIC == 0
+                    }) {
+                        decl = Some(parent);
                     } else {
-                        "protected"
-                    };
-                    return Err(self.make_throw(
-                        "Error",
-                        &format!(
-                            "Cannot access {vis} property {}::${}",
-                            object::display_name(&cls.name),
-                            name.to_string_lossy()
-                        ),
-                    ));
+                        break;
+                    }
                 }
             }
+            let accessible = match (pi.flags & flags::VISIBILITY, &scope, &decl) {
+                (flags::PUBLIC, _, _) => true,
+                (flags::PRIVATE, Some(s), Some(d)) => Rc::ptr_eq(s, d),
+                (flags::PROTECTED, Some(s), Some(d)) => s.is_subclass_of(d) || d.is_subclass_of(s),
+                _ => false,
+            };
+            if !accessible {
+                let vis = if pi.flags & flags::PRIVATE != 0 {
+                    "private"
+                } else {
+                    "protected"
+                };
+                return Err(self.make_throw(
+                    "Error",
+                    &format!(
+                        "Cannot access {vis} property {}::${}",
+                        object::display_name(&cls.name),
+                        name.to_string_lossy()
+                    ),
+                ));
+            }
         }
-        // Zend's `properties_info` also carries an ancestor's private
-        // statics, so `B::$x` naming `A`'s private `$x` is a visibility
-        // error (or `A`'s own slot when accessed from `A`).
-        let Some(sp) = cls
-            .find_static(name.as_bytes())
-            .cloned()
-            .or_else(|| inherited_private_static(cls, name.as_bytes()))
-        else {
-            return Err(self.make_throw(
+        inherited_private_static(cls, name.as_bytes()).ok_or_else(|| {
+            self.make_throw(
                 "Error",
                 &format!(
                     "Access to undeclared static property {}::${}",
                     object::display_name(&cls.name),
                     name.to_string_lossy()
                 ),
-            ));
+            )
+        })
+    }
+
+    /// The storage slot of `A::$name`.
+    pub(crate) fn static_prop_cell(
+        &mut self,
+        cls: &Rc<Class>,
+        name: &ZStr,
+    ) -> VmResult<Rc<RefCell<Value>>> {
+        // One lookup on the hot path; misses (instance-property visibility
+        // errors, ancestors' private statics, undeclared) are cold.
+        let sp = match cls.find_static(name.as_bytes()) {
+            Some(sp) => sp.clone(),
+            None => self.static_prop_miss(cls, name)?,
         };
         if sp.flags & flags::VISIBILITY != flags::PUBLIC {
             let scope = self.scope();
@@ -1974,12 +1978,12 @@ struct TraitRules {
 /// The nearest ancestor's private static `$name` that `cls` does not
 /// inherit into its own static table.
 fn inherited_private_static(cls: &Class, name: &[u8]) -> Option<StaticProp> {
-    let mut cur = cls.parent.clone();
+    let mut cur = cls.parent.as_ref();
     while let Some(c) = cur {
         if let Some(sp) = c.find_static(name) {
             return (sp.flags & flags::PRIVATE != 0).then(|| sp.clone());
         }
-        cur = c.parent.clone();
+        cur = c.parent.as_ref();
     }
     None
 }

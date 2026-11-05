@@ -499,7 +499,7 @@ impl Compiler {
             )?;
             // `Type $p = null` (PHP 5 style, `forced_allow_nullable`) is
             // exempt from the optional-before-required notice.
-            if p.default.is_some() && !forced && (i as u32) < required {
+            if p.default.is_some() && !forced && u32::try_from(i).is_ok_and(|i| i < required) {
                 // php-src names the last required parameter.
                 let later = (required as usize)
                     .checked_sub(1)

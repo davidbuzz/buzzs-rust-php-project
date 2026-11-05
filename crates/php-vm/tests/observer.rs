@@ -1,4 +1,4 @@
-//! zend_observer semantics: begin/end pairing, unwinds, generators and the
+//! `zend_observer` semantics: begin/end pairing, unwinds, generators and the
 //! internal enter/leave notifications around native handlers.
 
 use php_vm::ext::{ObservedFrame, ObserverHooks};
@@ -12,7 +12,7 @@ thread_local! {
 fn name(f: &ObservedFrame) -> String {
     f.function
         .as_ref()
-        .map_or_else(|| "{main}".to_owned(), |n| n.to_string_lossy().to_string())
+        .map_or_else(|| "{main}".to_owned(), |n| n.to_string_lossy())
 }
 
 fn log(entry: String) {
@@ -55,12 +55,12 @@ fn observe(source: &str, internal: bool) -> Vec<String> {
 #[test]
 fn begin_and_end_pair_for_returns_and_exceptions() {
     let log = observe(
-        r#"<?php
+        r"<?php
 function ok() { return 1; }
 function boom() { throw new Exception('x'); }
 ok();
 try { boom(); } catch (Exception $e) {}
-"#,
+",
         false,
     );
     assert_eq!(
@@ -79,10 +79,10 @@ try { boom(); } catch (Exception $e) {}
 #[test]
 fn generators_end_on_yield_and_begin_on_resume() {
     let log = observe(
-        r#"<?php
+        r"<?php
 function gen() { yield 1; yield 2; }
 foreach (gen() as $v) {}
-"#,
+",
         false,
     );
     let gen: Vec<_> = log.iter().filter(|e| e.contains("gen")).cloned().collect();

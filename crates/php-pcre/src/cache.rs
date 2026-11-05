@@ -75,7 +75,7 @@ impl Default for MatchConfig {
 /// FNV-1a over the cache key.
 ///
 /// Every `preg_*` call looks its pattern up, so the hash is on the hot path
-/// of tight matching loops; SipHash's flooding resistance buys nothing for
+/// of tight matching loops; `SipHash`'s flooding resistance buys nothing for
 /// keys that are the script's own pattern literals (PHP hashes them with
 /// plain DJBX33A) and costs most of a cache hit.
 #[derive(Debug, Clone, Copy)]

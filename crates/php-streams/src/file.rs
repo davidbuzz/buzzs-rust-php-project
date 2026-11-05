@@ -298,6 +298,7 @@ const ZVAL_SIZE: usize = 16;
 
 /// Feeds the lines of `buf` to `f` as `file()` splits them; stops (and
 /// returns `false`) as soon as `f` does.
+#[allow(clippy::many_single_char_names)] // mirrors php_stream_get_line's cursors
 fn for_each_line(
     buf: &[u8],
     eol: u8,

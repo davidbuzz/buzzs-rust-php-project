@@ -132,6 +132,7 @@ pub fn cache_entries() -> Vec<Bucket> {
 }
 
 /// `realpath_cache_find()`: drops expired entries of the chain on the way.
+#[allow(clippy::many_single_char_names)] // tsrm_realpath's names
 fn cache_find(path: &[u8], t: i64, ttl: i64) -> Option<Bucket> {
     let key = cache_key(path);
     CACHE.with(|c| {

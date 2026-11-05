@@ -90,8 +90,8 @@ thread_local! {
 /// behind by a bailout before any request hooks can deserialize sessions.
 fn request_startup(_vm: &mut Vm) {
     LOCK.with(|l| l.set(0));
-    let ser = SER.with(|s| std::mem::replace(&mut *s.borrow_mut(), (0, None)));
-    let unser = UNSER.with(|s| std::mem::replace(&mut *s.borrow_mut(), (0, None)));
+    let ser = SER.with(|s| std::mem::take(&mut *s.borrow_mut()));
+    let unser = UNSER.with(|s| std::mem::take(&mut *s.borrow_mut()));
     let abandoned_ser = ABANDONED_SER.with(|s| std::mem::take(&mut *s.borrow_mut()));
     let abandoned_unser = ABANDONED_UNSER.with(|s| std::mem::take(&mut *s.borrow_mut()));
     drop((ser, unser, abandoned_ser, abandoned_unser));
@@ -115,7 +115,7 @@ impl Vm {
     }
 
     /// The actual `BG(serialize_lock)`, `BG(serialize)` and
-    /// `BG(unserialize)` state exposed by zend_test.
+    /// `BG(unserialize)` state exposed by `zend_test`.
     pub fn serialization_state(&self) -> ZArray {
         let (ser_level, ser_data) = SER.with(|s| {
             let s = s.borrow();

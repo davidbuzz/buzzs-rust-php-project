@@ -6,7 +6,7 @@ use crate::class::Class;
 use crate::func::Method;
 use crate::object;
 use crate::vm::{FrameKind, PendingCall, Vm, VmResult};
-use php_runtime::{ArrayKey, Obj, Value, ZArray, ZStr};
+use php_runtime::{ArrayKey, Obj, Value, ZStr};
 use std::rc::Rc;
 
 /// `zend_fcall_info_cache` while resolving.

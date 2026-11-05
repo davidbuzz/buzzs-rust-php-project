@@ -33,7 +33,6 @@ fn call(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             }
         }
     }
-    let before = php_spl::functions::autoloaders().len();
     let r = {
         let _entry = crate::files::enter();
         let mut host = VmHost::new(vm);

@@ -123,7 +123,7 @@ fn publish(vm: &mut Vm, name: &[u8], arr: ZArray) {
     let old = {
         let mut g = vm.globals.borrow_mut();
         let i = g.find_or_add(name) as usize;
-        std::mem::replace(&mut g.slots[i], Some(Value::Array(arr)))
+        g.slots[i].replace(Value::Array(arr))
     };
     // Release the previous value outside the borrow (destructors).
     drop(old);

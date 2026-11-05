@@ -104,7 +104,7 @@ pub enum ModifyHandler {
     /// `OnUpdateMailCrLfMode` (`crlf`/`lf`/`mixed`/`os`).
     MailCrLfMode,
     /// `OnUpdateAutoDetectLineEndings`: `OnUpdateBool` plus an
-    /// "auto_detect_line_endings is deprecated" `E_DEPRECATED` for true values.
+    /// "`auto_detect_line_endings` is deprecated" `E_DEPRECATED` for true values.
     AutoDetectLineEndings,
 }
 

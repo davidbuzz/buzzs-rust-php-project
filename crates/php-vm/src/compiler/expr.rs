@@ -1782,6 +1782,7 @@ impl Compiler {
     }
 
     /// Compile-time special functions. Returns `None` when `n` is not one.
+    #[allow(clippy::too_many_lines)] // one arm per special function, as zend_try_compile_special_func
     fn compile_special_call(
         &mut self,
         n: &ast::Name,
@@ -1836,6 +1837,22 @@ impl Compiler {
                 self.f().line = line;
                 self.emit(Op::Exit(v));
                 Ok(Some(self.lit(Value::Null)))
+            }
+            // zend_compile_func_num_args / zend_compile_func_get_args: only
+            // inside a function body, and not as a namespaced fallback.
+            b"func_num_args" | b"func_get_args"
+                if fb.is_none() && args.args.is_empty() && !self.f().func_name.is_empty() =>
+            {
+                self.f().line = line;
+                let dst = need.then(|| self.tmp());
+                if lc.as_slice() == b"func_num_args" {
+                    self.emit(Op::FuncNumArgs { dst });
+                } else {
+                    self.emit(Op::FuncGetArgs { dst });
+                }
+                Ok(Some(
+                    dst.map_or_else(|| self.lit(Value::Null), Operand::Tmp),
+                ))
             }
             b"clone" if only_positional && positional.len() == 1 => {
                 let v = self.compile_expr(positional[0])?;

@@ -51,6 +51,7 @@ impl Identity {
 }
 
 #[derive(Default)]
+#[allow(clippy::struct_excessive_bools)] // independent re-entrancy flags
 pub(crate) struct ObserverState {
     /// `hooks.is_some()`, as one byte the call path can test cheaply.
     pub(crate) enabled: bool,
@@ -120,6 +121,7 @@ impl Vm {
         let key = identity.key();
         let info = ObservedFrame::from_frame(frame);
         self.observer.in_hook = true;
+        #[allow(clippy::single_match_else)] // the None arm is a multi-line computation
         let selected = match self.observer.initialized.get(&key) {
             Some((_, selected)) => *selected,
             None => {

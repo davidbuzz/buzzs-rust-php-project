@@ -465,7 +465,7 @@ fn get_object_vars(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
                             ArrayKey::from_zstr(key)
                         }
                     }
-                    key => key.clone(),
+                    key @ ArrayKey::Int(_) => key.clone(),
                 };
                 if !t.contains_key(&key) {
                     t.insert(key, value);
@@ -733,6 +733,27 @@ fn property_exists(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             vm.prop_ctx = saved;
             if let Some(r) = r? {
                 return Ok(Value::Bool(r));
+            }
+        }
+        // `zend_std_has_property(ZEND_PROPERTY_EXISTS)` from the calling
+        // scope: an ancestor's private property counts when called from
+        // that ancestor and its slot is initialized (bug50810).
+        if let Some(scope) = vm.scope() {
+            let data = object::data(o);
+            let found = cls.props.iter().any(|x| {
+                x.name == p
+                    && x.visibility() == crate::func::flags::PRIVATE
+                    && x.class
+                        .as_bytes()
+                        .eq_ignore_ascii_case(scope.name.as_bytes())
+                    && data
+                        .slots
+                        .borrow()
+                        .get(x.slot as usize)
+                        .is_some_and(Option::is_some)
+            });
+            if found {
+                return Ok(Value::Bool(true));
             }
         }
         let d = object::data(o).dynamic.borrow();
@@ -1374,7 +1395,7 @@ fn is_callable(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     } else {
         // `zend_is_callable_ex(var, NULL, 0, ...)`: deprecations (`"static"`
         // in callables) are emitted and exceptions propagate.
-        matches!(vm.zend_is_callable(&v, false)?, Ok(_))
+        vm.zend_is_callable(&v, false)?.is_ok()
     };
     if a.has(2) {
         let name = vm.callable_name(&v);
