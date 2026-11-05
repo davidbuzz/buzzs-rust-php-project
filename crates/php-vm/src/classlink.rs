@@ -613,12 +613,12 @@ impl Vm {
         cls: &Rc<Class>,
         name: &ZStr,
     ) -> VmResult<Option<Rc<RefCell<Value>>>> {
-        let sp = match cls.find_static(name.as_bytes()) {
-            Some(sp) => sp.clone(),
-            None => match inherited_private_static(cls, name.as_bytes()) {
-                Some(sp) => sp,
-                None => return Ok(None),
-            },
+        let Some(sp) = cls
+            .find_static(name.as_bytes())
+            .cloned()
+            .or_else(|| inherited_private_static(cls, name.as_bytes()))
+        else {
+            return Ok(None);
         };
         if sp.flags & flags::VISIBILITY != flags::PUBLIC {
             let scope = self.scope();
