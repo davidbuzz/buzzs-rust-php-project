@@ -165,13 +165,17 @@ $fiber->resume();
 fn by_ref_void_function_emits_compile_deprecation() {
     assert_eq!(
         run("<?php\nfunction &test(): void {\n}\n$r =& test();\nvar_dump($r);\n"),
-        "Deprecated: test(): Returning by reference from a void function is deprecated in t.php on line 2\n\nNotice: Only variable references should be returned by reference in t.php on line 4\nNULL\n"
+        "\nDeprecated: test(): Returning by reference from a void function is deprecated in t.php on line 2\n\nNotice: Only variable references should be returned by reference in t.php on line 3\nNULL\n"
     );
 }
 
 #[test]
 fn unpacked_assertion_rejects_generated_positional_description() {
-    let output = run("<?php assert(...[false, \"explicit\"]);");
+    let sink = Sink::default();
+    let mut vm = Vm::new(&VmOptions::default(), Box::new(sink.clone()));
+    let status = vm.run_script(b"<?php assert(...[false, \"explicit\"]);", "t.php");
+    assert_eq!(status, 255);
+    let output = String::from_utf8(sink.0.borrow().clone()).expect("UTF-8 output");
     assert!(output.contains("Cannot use positional argument after argument unpacking"));
 }
 
