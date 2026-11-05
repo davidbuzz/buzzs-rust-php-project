@@ -208,3 +208,21 @@ $test->start();
     assert!(!output.contains("start"), "{output}");
     assert_eq!(output.matches("[\"file\"]").count(), 1, "{output}");
 }
+
+#[test]
+fn backtraces_show_only_string_coercions_of_internal_arguments() {
+    // zend_parse_arg_str_weak converts in place; zend_parse_arg_long_weak
+    // does not (gh17797.phpt shows the deprecated NULL).
+    let (_, output) = run(r#"<?php
+set_error_handler(function () {
+    $t = debug_backtrace();
+    var_dump($t[1]["args"]);
+    return true;
+});
+trigger_error(123, "512");
+"#);
+    assert_eq!(
+        output,
+        "array(2) {\n  [0]=>\n  string(3) \"123\"\n  [1]=>\n  string(3) \"512\"\n}\n"
+    );
+}

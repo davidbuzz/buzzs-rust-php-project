@@ -301,6 +301,18 @@ impl Vm {
                 }
                 &self.frames[pidx]
             });
+            // `zend_fetch_debug_backtrace`: code an internal function runs
+            // directly (`zend_execute`, e.g. zend_test_compile_string()) is a
+            // dummy frame, skipped when its caller has no file to preserve.
+            if matches!(f.kind, FrameKind::Include | FrameKind::Eval)
+                && prev.is_some_and(|p| p.kind == FrameKind::Builtin)
+            {
+                if idx == 0 {
+                    break;
+                }
+                idx -= 1;
+                continue;
+            }
             let mut entry = HashTable::new();
             // File/line of the call site.
             let attr_site = idx

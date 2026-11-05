@@ -1361,7 +1361,6 @@ impl Vm {
             return self.builtin_arg_error(depth, e);
         }
         // Type coercion.
-        let mut coerced = false;
         for (i, v) in values.iter_mut().enumerate() {
             if !passed[i] {
                 continue;
@@ -1382,7 +1381,6 @@ impl Vm {
             if ty.is_mixed() || accepts_without_coercion(ty.mask, v) {
                 continue;
             }
-            coerced = true;
             let fname = fname(self);
             let pname = p.name.to_string_lossy();
             let ctx = TypeCtx {
@@ -1445,10 +1443,18 @@ impl Vm {
                 let e = self.make_throw("TypeError", &msg);
                 return self.builtin_arg_error(depth, e);
             }
-        }
-        if coerced {
-            if let Some(f) = self.frames.get_mut(depth - 1) {
-                frame_args(&values[..nframe_args], &mut f.args);
+            // Weak-mode zpp converts to a string in place
+            // (`zend_parse_arg_str_weak`), which backtraces show; other
+            // scalar conversions only fill C locals, leaving the argument as
+            // passed (`NULL` for a deprecated null-to-int).
+            if matches!(v, Value::Str(_)) && i < nframe_args {
+                if let Some(slot) = self
+                    .frames
+                    .get_mut(depth - 1)
+                    .and_then(|f| f.args.get_mut(i))
+                {
+                    *slot = Some(v.clone());
+                }
             }
         }
         let mut args = Args {
