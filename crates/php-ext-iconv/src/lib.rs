@@ -63,6 +63,9 @@ fn raise(vm: &mut Vm, a: &Args, d: Diagnostic) -> VmResult<()> {
         Diagnostic::Notice(m) => vm.php_notice(&m),
         Diagnostic::Deprecated(m) => vm.php_deprecated(&m),
         Diagnostic::ValueError(m) => Err(vm.throw("ValueError", &format!("{}(): {m}", fname(a)))),
+        // A fallible allocation recorded the violation: the VM raises the
+        // delayed fatal right after this call.
+        Diagnostic::OutOfMemory { .. } if php_vm::oom_pending() => Ok(()),
         Diagnostic::OutOfMemory { requested } => {
             let limit = ini::configured_memory_limit(vm);
             Err(vm.fatal(&format!(
