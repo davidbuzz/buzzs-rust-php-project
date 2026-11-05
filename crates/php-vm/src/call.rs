@@ -2186,7 +2186,7 @@ impl Vm {
                 }
             }
         }
-        match call.func.clone() {
+        let r = match call.func.clone() {
             Func::User(uf) => {
                 self.check_deprecated_call(&call)?;
                 let strict = call.strict;
@@ -2198,6 +2198,28 @@ impl Vm {
                 let strict = call.strict;
                 self.call_builtin(&b, call, strict)
             }
+        };
+        match r {
+            Err(Throw::Exception(old)) => self.interrupt_after_throw(old),
+            r => r,
+        }
+    }
+
+    /// `zend_call_function` checks `EG(vm_interrupt)` once the callee has
+    /// returned, in the caller's frame, also when the callee threw `old`
+    /// (e.g. a tick function raising a signal and throwing): the interrupt
+    /// handlers run with the exception set aside (pcntl's dispatcher, master)
+    /// and one they throw gets `old` as its previous exception.
+    #[cold]
+    #[inline(never)]
+    fn interrupt_after_throw(&mut self, old: Obj) -> VmResult<Value> {
+        match self.check_interrupt() {
+            Ok(()) => Err(Throw::Exception(old)),
+            Err(Throw::Exception(new)) => {
+                crate::exceptions::chain_previous(&new, &old);
+                Err(Throw::Exception(new))
+            }
+            Err(e) => Err(e),
         }
     }
 
