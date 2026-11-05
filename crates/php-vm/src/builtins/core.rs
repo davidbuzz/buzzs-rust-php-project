@@ -490,7 +490,7 @@ fn get_object_vars(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     // hooked properties without a get hook are skipped. No `__get`.
     let scope = vm.scope();
     let cls = object::class_of(&o).clone();
-    let mut t = HashTable::new();
+    let mut t = object::PropTableBuilder::new(object::data(&o));
     for pi in cls.props.clone() {
         let name = pi.name.clone();
         if !property_visible(vm, &cls, &pi, scope.as_ref()) {
@@ -509,7 +509,7 @@ fn get_object_vars(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
                 None => continue, // uninitialized typed property
             }
         };
-        t.insert(ArrayKey::from_zstr(&name), v);
+        t.push(Some(pi.slot), ArrayKey::from_zstr(&name), v);
     }
     if let Some(dyn_t) = object::data(&o).dynamic.borrow().as_ref() {
         for (k, v) in dyn_t.iter() {
@@ -517,9 +517,10 @@ fn get_object_vars(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
                 ArrayKey::Str(s) => ArrayKey::from_zstr(s),
                 k => k.clone(),
             };
-            t.insert(key, v.clone());
+            t.push_renamed(None, k, key, v.clone());
         }
     }
+    let t = t.finish();
     Ok(Value::Array(ZArray::from_table(t)))
 }
 

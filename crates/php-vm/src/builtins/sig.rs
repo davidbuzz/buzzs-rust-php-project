@@ -199,10 +199,12 @@ pub(crate) fn parse_sig(sig: &str) -> Sig {
             Some(eq) => (p[..eq].trim(), Some(p[eq + 1..].trim())),
             None => (p, None),
         };
-        // Native markers: `#[\SensitiveParameter]` and `@prefer-ref`.
+        // Native markers: `#[\SensitiveParameter]`, `@prefer-ref` and
+        // `@unchecked` (an arginfo-only type).
         let mut decl = decl.trim();
         let mut sensitive = false;
         let mut prefer_ref = false;
+        let mut unchecked = false;
         loop {
             if let Some(r) = decl
                 .strip_prefix("#[\\SensitiveParameter]")
@@ -212,6 +214,9 @@ pub(crate) fn parse_sig(sig: &str) -> Sig {
                 decl = r.trim_start();
             } else if let Some(r) = decl.strip_prefix("@prefer-ref") {
                 prefer_ref = true;
+                decl = r.trim_start();
+            } else if let Some(r) = decl.strip_prefix("@unchecked") {
+                unchecked = true;
                 decl = r.trim_start();
             } else {
                 break;
@@ -242,6 +247,13 @@ pub(crate) fn parse_sig(sig: &str) -> Sig {
         if is_var {
             variadic = true;
         }
+        let mut native_bits = 0;
+        if prefer_ref {
+            native_bits |= crate::opcode::PREFER_REF;
+        }
+        if unchecked {
+            native_bits |= crate::opcode::UNCHECKED_TYPE;
+        }
         if default.is_none() && !is_var {
             required = u32::try_from(i + 1).unwrap_or(0);
         }
@@ -252,11 +264,7 @@ pub(crate) fn parse_sig(sig: &str) -> Sig {
             ty,
             has_default: default.is_some(),
             default_text: default.map(str::to_string),
-            promote: if prefer_ref {
-                crate::opcode::PREFER_REF
-            } else {
-                0
-            },
+            promote: native_bits,
             sensitive,
             default_expr: None,
             attributes: Vec::new(),
@@ -285,5 +293,29 @@ mod int_literal_tests {
         assert_eq!(parse_int_literal("0x1F"), Some(31));
         assert_eq!(parse_int_literal("0"), Some(0));
         assert_eq!(parse_int_literal("1.5"), None);
+    }
+}
+
+#[cfg(test)]
+mod marker_tests {
+    use super::parse_sig;
+    use crate::opcode::{PREFER_REF, UNCHECKED_TYPE};
+    use crate::types::mask;
+
+    #[test]
+    fn unchecked_types_are_kept_for_reflection() {
+        let s = parse_sig("f(@unchecked array|object $a = [], @prefer-ref array &$b, int $c = 0)");
+        let [a, b, c] = &s.params[..] else {
+            panic!("three parameters");
+        };
+        assert_eq!(
+            a.ty.as_ref().map(|t| t.mask),
+            Some(mask::ARRAY | mask::OBJECT)
+        );
+        assert_eq!(a.promote, UNCHECKED_TYPE);
+        assert_eq!(b.promote, PREFER_REF);
+        assert!(b.by_ref);
+        assert_eq!(c.promote, 0);
+        assert_eq!(s.required, 2);
     }
 }

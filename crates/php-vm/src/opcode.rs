@@ -550,6 +550,16 @@ pub type Literal = Value;
 /// argument is a variable, by value otherwise.
 pub const PREFER_REF: u32 = 1 << 31;
 
+/// Bit in [`ParamInfo::promote`] of native parameters declared
+/// `@unchecked`: the type is arginfo only (Reflection, inheritance checks);
+/// the handler parses the argument itself, like `zend_parse_parameters`
+/// does in php-src, so the VM neither checks nor coerces it.
+pub const UNCHECKED_TYPE: u32 = 1 << 30;
+
+/// The [`ParamInfo::promote`] bits that mark native parameters rather than
+/// constructor promotion.
+pub const NATIVE_PARAM_BITS: u32 = PREFER_REF | UNCHECKED_TYPE;
+
 /// Information about one declared parameter.
 #[derive(Clone, Debug)]
 pub struct ParamInfo {

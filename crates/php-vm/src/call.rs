@@ -1359,7 +1359,7 @@ impl Vm {
                 continue;
             };
             let Some(ty) = &p.ty else { continue };
-            if p.by_ref {
+            if p.by_ref || p.promote & crate::opcode::UNCHECKED_TYPE != 0 {
                 continue;
             }
             // Fast path: the value already has an accepted type, so
