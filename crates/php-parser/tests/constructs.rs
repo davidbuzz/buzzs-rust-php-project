@@ -594,3 +594,22 @@ fn stack_policies() {
     assert_eq!(current.unwrap_err(), "memory exhausted");
     assert!(spawned);
 }
+
+/// `array_pair_list` rtrims only the implicit element after the last comma
+/// (zend_language_parser.y), so an explicit trailing hole stays an error.
+#[test]
+fn array_trailing_holes() {
+    let opts = ParseOptions::default();
+    let e = php_parser::parse(b"<?php\nvar_dump([1, 2, ,]);\n", &opts).unwrap_err();
+    assert_eq!(e.message, "Cannot use empty array elements in arrays");
+    assert_eq!(e.line, 2);
+    let e = php_parser::parse(b"<?php [,];", &opts).unwrap_err();
+    assert_eq!(e.message, "Cannot use empty array elements in arrays");
+    let e = php_parser::parse(b"<?php ['a' => $b, ,] = [];", &opts).unwrap_err();
+    assert_eq!(
+        e.message,
+        "Cannot use empty array entries in keyed array assignment"
+    );
+    let ok = b"<?php [1, 2,]; [$a, , $b] = [1, 2, 3]; [$a,,] = [1];";
+    assert!(php_parser::parse(ok, &opts).is_ok());
+}
