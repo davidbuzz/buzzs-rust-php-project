@@ -266,9 +266,13 @@ pub enum StmtKind {
         else_branch: Option<Box<Stmt>>,
     },
     /// `while (cond) body`.
+    ///
+    /// The expressions of `While`, `DoWhile`, `Switch` and `Foreach` are
+    /// boxed so that no variant is larger than [`StmtKind::Expr`]: every
+    /// [`Stmt`] pays for the largest one.
     While {
         /// Loop condition.
-        cond: Expr,
+        cond: Box<Expr>,
         /// Loop body.
         body: Box<Stmt>,
     },
@@ -277,7 +281,7 @@ pub enum StmtKind {
         /// Loop body.
         body: Box<Stmt>,
         /// Loop condition.
-        cond: Expr,
+        cond: Box<Expr>,
     },
     /// `for (init; cond; step) body`.
     For {
@@ -292,13 +296,13 @@ pub enum StmtKind {
     },
     /// `foreach (subject as key => value) body`.
     ///
-    /// `subject` and `value` are boxed: three inline [`Expr`]s made this
-    /// the largest variant, and every [`Stmt`] (about 450 bytes) paid for it.
+    /// The expressions are boxed: three inline [`Expr`]s made this the
+    /// largest variant, and every [`Stmt`] (about 450 bytes) paid for it.
     Foreach {
         /// The iterated expression.
         subject: Box<Expr>,
         /// The key target.
-        key: Option<Expr>,
+        key: Option<Box<Expr>>,
         /// The value target (a variable, or a list/array for destructuring).
         value: Box<Expr>,
         /// Whether the value is bound by reference (`&$v`).
@@ -309,7 +313,7 @@ pub enum StmtKind {
     /// `switch (subject) { cases }`.
     Switch {
         /// The switched-on expression.
-        subject: Expr,
+        subject: Box<Expr>,
         /// The cases, in order.
         cases: Vec<SwitchCase>,
     },
@@ -957,11 +961,15 @@ pub enum ExprKind {
         parenthesized: bool,
     },
     /// A function call.
+    ///
+    /// The argument lists of `Call`, `MethodCall`, `StaticCall` and `New`
+    /// are boxed: inline they made [`ExprKind`] 112 bytes, and every
+    /// expression node paid for it.
     Call {
         /// The callee.
         callee: Box<Callee>,
         /// The arguments.
-        args: ArgList,
+        args: Box<ArgList>,
     },
     /// `$a->b()` or `$a?->b()`.
     MethodCall {
@@ -970,7 +978,7 @@ pub enum ExprKind {
         /// The method name.
         name: MemberName,
         /// The arguments.
-        args: ArgList,
+        args: Box<ArgList>,
         /// `?->`
         nullsafe: bool,
     },
@@ -981,14 +989,14 @@ pub enum ExprKind {
         /// The method name.
         name: MemberName,
         /// The arguments.
-        args: ArgList,
+        args: Box<ArgList>,
     },
     /// `new A(args)` or `new class {}`.
     New {
         /// The class.
         class: Box<NewClass>,
         /// Constructor arguments (empty when no parentheses were written).
-        args: ArgList,
+        args: Box<ArgList>,
     },
     /// `a = b`.
     Assign {

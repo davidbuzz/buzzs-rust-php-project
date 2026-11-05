@@ -90,14 +90,18 @@ impl Vm {
     }
 
     /// Parses and compiles source code.
+    ///
+    /// The source comes as the `Rc` the compiled unit keeps, so the caller's
+    /// buffer is released before parsing and a large include is not held
+    /// twice while its AST is alive.
     pub(crate) fn compile_source(
         &mut self,
-        src: &[u8],
+        src: Rc<[u8]>,
         filename: &ZStr,
         is_eval: bool,
         skip_shebang: bool,
     ) -> VmResult<CompileOutcome> {
-        let parsed = self.parse_source(src, is_eval, skip_shebang);
+        let parsed = self.parse_source(&src, is_eval, skip_shebang);
         let program = match parsed {
             Ok(p) => p,
             Err(e) => {
@@ -161,15 +165,9 @@ impl Vm {
         // diagnostics; any other is released statement by statement while
         // it compiles.
         let (compiled, kept) = if program.multibyte {
-            (
-                compiler::compile(&program, Rc::from(src), opts),
-                Some(program),
-            )
+            (compiler::compile(&program, src, opts), Some(program))
         } else {
-            (
-                compiler::compile_program(program, Rc::from(src), opts),
-                None,
-            )
+            (compiler::compile_program(program, src, opts), None)
         };
         self.activate_compiled_auto_globals();
         let unit = match compiled {
@@ -350,7 +348,7 @@ impl Vm {
                 Err(t) => return self.handle_top_throw(t),
             }
         };
-        let unit = match self.compile_source(&src, path, is_eval, !is_eval) {
+        let unit = match self.compile_source(Rc::from(src), path, is_eval, !is_eval) {
             Ok(CompileOutcome::Ok(u)) => u,
             Ok(CompileOutcome::ParseError(e)) => {
                 self.report_uncaught(&e);
@@ -438,7 +436,7 @@ impl Vm {
                 file.to_string_lossy(),
                 line
             ));
-            let unit = match self.compile_source(s.as_bytes(), &fname, true, false)? {
+            let unit = match self.compile_source(Rc::from(s.as_bytes()), &fname, true, false)? {
                 CompileOutcome::Ok(u) => u,
                 CompileOutcome::ParseError(e) => return Err(Throw::Exception(e)),
                 CompileOutcome::Fatal => return Err(Throw::Fatal),
@@ -519,7 +517,7 @@ impl Vm {
             self.included.push(real_z);
         }
         let src = self.filter_source(&display_path, src)?;
-        let unit = match self.compile_source(&src, &display_path, false, true)? {
+        let unit = match self.compile_source(Rc::from(src), &display_path, false, true)? {
             CompileOutcome::Ok(u) => u,
             CompileOutcome::ParseError(e) => return Err(Throw::Exception(e)),
             CompileOutcome::Fatal => return Err(Throw::Fatal),
@@ -549,7 +547,7 @@ impl Vm {
             self.included.push(path.clone());
         }
         let src = self.filter_source(&path, src)?;
-        let unit = match self.compile_source(&src, &path, false, true)? {
+        let unit = match self.compile_source(Rc::from(src), &path, false, true)? {
             CompileOutcome::Ok(u) => u,
             CompileOutcome::ParseError(e) => return Err(Throw::Exception(e)),
             CompileOutcome::Fatal => return Err(Throw::Fatal),
@@ -626,7 +624,7 @@ impl Vm {
             Err(_) => return Ok(()),
         };
         let p = ZStr::from(path);
-        let unit = match self.compile_source(&src, &p, false, true)? {
+        let unit = match self.compile_source(Rc::from(src), &p, false, true)? {
             CompileOutcome::Ok(u) => u,
             CompileOutcome::ParseError(e) => return self.handle_top_throw(Throw::Exception(e)),
             CompileOutcome::Fatal => return Err(Throw::Fatal),

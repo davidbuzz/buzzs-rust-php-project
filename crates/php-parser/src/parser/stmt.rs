@@ -282,7 +282,7 @@ impl Parser<'_> {
                 let cond = self.parse_paren_tail_expr()?;
                 let body = self.parse_loop_body(T::EndWhile)?;
                 StmtKind::While {
-                    cond,
+                    cond: Box::new(cond),
                     body: Box::new(body),
                 }
             }
@@ -295,7 +295,7 @@ impl Parser<'_> {
                 self.expect1(T::Semicolon)?;
                 StmtKind::DoWhile {
                     body: Box::new(body),
-                    cond,
+                    cond: Box::new(cond),
                 }
             }
             T::For => {
@@ -677,7 +677,7 @@ impl Parser<'_> {
         Ok(Stmt {
             kind: StmtKind::Foreach {
                 subject: Box::new(subject),
-                key,
+                key: key.map(Box::new),
                 value: Box::new(value),
                 by_ref,
                 body: Box::new(body),
@@ -775,7 +775,10 @@ impl Parser<'_> {
             self.expect1(T::Semicolon)?;
         }
         Ok(Stmt {
-            kind: StmtKind::Switch { subject, cases },
+            kind: StmtKind::Switch {
+                subject: Box::new(subject),
+                cases,
+            },
             span: self.span_from(start),
         })
     }

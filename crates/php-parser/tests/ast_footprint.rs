@@ -5,7 +5,7 @@
 //! (`Zend/tests/runtime_compile_time_binary_operands.phpt` includes 11 MB of
 //! code under `memory_limit=256M`; php-src's arena AST is a fraction of it).
 
-use php_parser::ast::{ExprKind, Program, Stmt, StmtKind};
+use php_parser::ast::{Expr, ExprKind, Program, Stmt, StmtKind};
 use php_parser::ParseOptions;
 
 fn parse(src: &str) -> Program {
@@ -16,11 +16,45 @@ fn parse(src: &str) -> Program {
 }
 
 /// `foreach` used to hold three inline expressions, which made every
-/// statement node about 450 bytes.
+/// statement node about 450 bytes; inline `while`/`switch` expressions kept
+/// it at 192. No variant is now larger than an expression statement.
 #[test]
 fn statement_nodes_stay_small() {
     let size = std::mem::size_of::<Stmt>();
+    assert!(
+        size <= std::mem::size_of::<Expr>() + 40,
+        "size_of::<Stmt>() = {size}"
+    );
     assert!(size < 256, "size_of::<Stmt>() = {size}");
+}
+
+/// The generated file has about 900k expression nodes; inline argument
+/// lists made each one 136 bytes.
+#[test]
+fn expression_nodes_stay_small() {
+    let size = std::mem::size_of::<Expr>();
+    assert!(size <= 104, "size_of::<Expr>() = {size}");
+}
+
+#[test]
+fn call_arguments_are_boxed() {
+    let p = parse("<?php f(1); $o->m(2, 3); A::s(); new B(4);");
+    let args_len = |i: usize| {
+        let StmtKind::Expr(e) = &p.statements[i].kind else {
+            panic!("not an expression statement: {:?}", p.statements[i].kind);
+        };
+        match &e.kind {
+            ExprKind::Call { args, .. }
+            | ExprKind::MethodCall { args, .. }
+            | ExprKind::StaticCall { args, .. }
+            | ExprKind::New { args, .. } => args.args.len(),
+            other => panic!("not a call: {other:?}"),
+        }
+    };
+    assert_eq!(
+        (args_len(0), args_len(1), args_len(2), args_len(3)),
+        (1, 2, 0, 1)
+    );
 }
 
 #[test]
