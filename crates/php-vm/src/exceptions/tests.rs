@@ -205,3 +205,24 @@ throw new Exception("main");
 "#;
     assert_eq!(run(src), "h1: main\nh2: from h1\nh2\n");
 }
+
+/// `ZEND_AST_NEW` has the line of its class name: the constructor call's
+/// frame reports it (GH-8810).
+#[test]
+fn constructor_frame_reports_the_class_name_line_of_new() {
+    let src = r#"<?php
+class A {
+    public function __construct() {
+        throw new Exception();
+    }
+}
+try {
+    new
+        A
+        ();
+} catch (Exception $e) {
+    echo $e->getTrace()[0]['line'], "\n";
+}
+"#;
+    assert_eq!(run(src), "9\n");
+}

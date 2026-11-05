@@ -1556,6 +1556,13 @@ impl Compiler {
                 self.finish_call_at(args, line, member_name_line(name), need)
             }
             ExprKind::New { class, args } => {
+                // `ZEND_AST_NEW` takes the line of its class child, which
+                // NEW and the constructor's DO_FCALL report.
+                let line = match &**class {
+                    NewClass::Name(n) => n.span.line,
+                    NewClass::Expr(ex) => ex.span.line,
+                    NewClass::Anonymous(_) => line,
+                };
                 let spec = match &**class {
                     NewClass::Name(n) => self.class_spec_name(n)?,
                     NewClass::Expr(ex) => {
