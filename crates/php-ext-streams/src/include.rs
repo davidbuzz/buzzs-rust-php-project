@@ -68,7 +68,11 @@ fn opener(vm: &mut Vm, name: &[u8], kind: &str) -> VmResult<IncludeOpen> {
             Severity::Deprecated => 8192,
             Severity::Error => 1,
         };
-        let origin = vm.include_error_origin(kind, name);
+        let origin = if pending.is_some() {
+            active_function_origin(vm)
+        } else {
+            vm.include_error_origin(kind, name)
+        };
         vm.raise(level, &format!("{origin}: {}", d.text()))?;
     }
     if let Some(t) = pending {
@@ -81,6 +85,29 @@ fn opener(vm: &mut Vm, name: &[u8], kind: &str) -> VmResult<IncludeOpen> {
         },
         None => IncludeOpen::Failed,
     })
+}
+
+/// `php_verror()` origin once an exception is pending: the throw moved the
+/// opline off `ZEND_INCLUDE_OR_EVAL`, so the active function names it
+/// (`main` at the top level of a script, include or eval).
+fn active_function_origin(vm: &Vm) -> String {
+    let name = match vm.frames.last() {
+        Some(f) if f.kind == php_vm::vm::FrameKind::Function => {
+            let n = f
+                .func
+                .as_ref()
+                .map_or_else(|| "main".to_string(), |func| func.name().to_string_lossy());
+            match &f.scope {
+                Some(c) => format!(
+                    "{}::{n}",
+                    php_vm::object::display_name(&c.name).to_string_lossy()
+                ),
+                None => n,
+            }
+        }
+        _ => "main".to_string(),
+    };
+    format!("{name}()")
 }
 
 #[cfg(test)]

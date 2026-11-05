@@ -106,3 +106,23 @@ run();
 echo "after\n";"#);
     assert_eq!(out, "closing NULL\nafter\n");
 }
+
+/// `php_verror()`: once creating an include's filter threw, its warnings
+/// name the active function (`main`, `f`) rather than `include`.
+#[test]
+fn include_warnings_after_a_throw_name_the_active_function() {
+    let out = run(r#"class SampleFilter extends php_user_filter { private $data = \FOO; }
+stream_filter_register('sample.filter', SampleFilter::class);
+function f() { include 'php://filter/read=sample.filter/resource=php://memory'; }
+try { include 'php://filter/read=sample.filter/resource=php://memory'; } catch (Throwable $e) { echo $e::class, ': ', $e->getMessage(), "\n"; }
+try { f(); } catch (Throwable $e) { echo $e::class, ': ', $e->getMessage(), "\n"; }"#);
+    assert_eq!(
+        out,
+        "\nWarning: main(): Unable to create or locate filter \"sample.filter\" in test.php on line 4\n\
+         \nWarning: main(): Unable to create filter (sample.filter) in test.php on line 4\n\
+         Error: Undefined constant \"FOO\"\n\
+         \nWarning: f(): Unable to create or locate filter \"sample.filter\" in test.php on line 3\n\
+         \nWarning: f(): Unable to create filter (sample.filter) in test.php on line 3\n\
+         Error: Undefined constant \"FOO\"\n"
+    );
+}
