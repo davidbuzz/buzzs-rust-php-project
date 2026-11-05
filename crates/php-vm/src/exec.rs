@@ -914,7 +914,7 @@ impl Vm {
                     }
                     Op::DeclareClass(idx) => {
                         let d = code.decls.classes.borrow()[*idx as usize].clone();
-                        self.declare_class(&d, false)?;
+                        self.declare_class_stmt(&d)?;
                         Flow::Next
                     }
                     Op::DeclareAnonClass { idx, dst } => {
