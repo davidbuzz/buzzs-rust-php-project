@@ -1694,6 +1694,12 @@ impl Vm {
                 let cv = *cv;
                 return self.read_cv(cv);
             }
+            // FETCH_DIM_FUNC_ARG sent by value: `$a[]` fails before its
+            // container or any later offset is read
+            // (`zend_use_undef_in_read_context`).
+            if matches!(p.segs.first(), Some(Seg::Append)) {
+                return Err(self.make_throw("Error", "Cannot use [] for reading"));
+            }
         }
         let code = self.frame().code.clone();
         let place = &code.places[pid as usize];

@@ -1331,3 +1331,18 @@ echo $a["foo"], "\n";
 $x = 1; $o->foo = &$x; $b = (array) $o; $x = 2; echo $b["foo"], "\n";
 "#), "123\n2\n");
 }
+
+#[test]
+fn append_sent_by_value_fails_before_reading_offsets() {
+    // func_arg_fetch_optimization: FETCH_DIM_FUNC_ARG with an UNUSED dim.
+    assert_eq!(run(r#"<?php
+function test($x) {
+    test($x[][$y]);
+}
+try {
+    test([]);
+} catch (Throwable $e) {
+    echo $e::class, ': ', $e->getMessage(), "\n";
+}
+"#), "Error: Cannot use [] for reading\n");
+}
