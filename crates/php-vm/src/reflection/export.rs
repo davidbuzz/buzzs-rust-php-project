@@ -260,7 +260,65 @@ fn resolve_expr_in(e: &mut Expr, ns: &[u8], self_name: Option<&[u8]>) {
             }
         }
         ExprKind::Prop { object, .. } => resolve_expr(object, ns),
-        ExprKind::Call { args, .. } => resolve_args(args, ns),
+        ExprKind::Call { callee, args } => {
+            // zend_compile_const_expr_fcc(): the function name is resolved
+            // (not fully qualified unless written so).
+            if let ast::Callee::Name(n) = callee.as_mut() {
+                if n.kind != NameKind::FullyQualified {
+                    n.name = resolve_name(ns, n);
+                    n.kind = NameKind::Qualified;
+                }
+            }
+            resolve_args(args, ns);
+        }
+        _ => {}
+    }
+}
+
+/// `zend_ast_export` of an attribute argument: class, constant and
+/// function names resolved relative to `ns`, and each closure (compiled
+/// to a `ZEND_AST_OP_ARRAY`) printed as `Closure(name)` with the names of
+/// the compiled closures, in source order.
+pub(crate) fn export_attr_arg(mut e: Expr, ns: &[u8], closures: &[ZStr]) -> Vec<u8> {
+    resolve_expr(&mut e, ns);
+    let mut names = closures.iter();
+    name_closures(&mut e, &mut names);
+    php_parser::export::export_expr(&e)
+}
+
+fn name_closures(e: &mut Expr, names: &mut std::slice::Iter<'_, ZStr>) {
+    let name_args = |args: &mut ast::ArgList, names: &mut std::slice::Iter<'_, ZStr>| {
+        for a in &mut args.args {
+            if let ArgKind::Positional(x) | ArgKind::Named { value: x, .. } = &mut a.kind {
+                name_closures(x, names);
+            }
+        }
+    };
+    if matches!(e.kind, ExprKind::Closure(_)) {
+        if let Some(n) = names.next() {
+            let mut text = b"Closure(".to_vec();
+            text.extend_from_slice(n.as_bytes());
+            text.push(b')');
+            e.kind = ExprKind::Const(ast::Name {
+                kind: NameKind::Unqualified,
+                name: text,
+                span: e.span,
+            });
+        }
+        return;
+    }
+    match &mut e.kind {
+        ExprKind::Array { items, .. } => {
+            for it in items.iter_mut().flatten() {
+                if let Some(k) = &mut it.key {
+                    name_closures(k, names);
+                }
+                name_closures(&mut it.value, names);
+            }
+        }
+        ExprKind::New { args, .. }
+        | ExprKind::Call { args, .. }
+        | ExprKind::StaticCall { args, .. } => name_args(args, names),
         _ => {}
     }
 }
@@ -304,11 +362,6 @@ pub(crate) fn export_const_expr_in(text: &str, ns: &[u8], self_name: Option<&[u8
     }
 }
 
-/// `zend_ast_export` of an attribute argument expression.
-pub(crate) fn export_expr_ns(mut e: Expr, ns: &[u8]) -> Vec<u8> {
-    resolve_expr(&mut e, ns);
-    php_parser::export::export_expr(&e)
-}
 
 /// The namespace a function or class was declared in.
 pub(crate) fn namespace_of(name: &ZStr) -> Vec<u8> {
@@ -444,7 +497,9 @@ pub(crate) fn function_string(
             b.s(indent).z(d).c(b'\n');
         }
     }
-    let is_closure = fl & flags::CLOSURE != 0 && f.method.is_none();
+    // zend_create_fake_closure() adds ZEND_ACC_CLOSURE to the copied
+    // function, so `f(...)` reflects as a closure too.
+    let is_closure = (fl & flags::CLOSURE != 0 || f.closure.is_some()) && f.method.is_none();
     b.s(indent);
     b.s(if is_closure {
         "Closure [ "

@@ -77,6 +77,9 @@ pub struct CompileOptions {
     pub strict_types: bool,
     /// Whether `sprintf` is currently registered as an internal function.
     pub sprintf_builtin: bool,
+    /// Whether `array_map` is currently registered as an internal function
+    /// (`zend_compile_func_array_map()` needs its arginfo).
+    pub array_map_builtin: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -277,6 +280,13 @@ pub(crate) struct Compiler {
     /// compiled inline (0 otherwise): these are constant expressions in
     /// php-src, evaluated by `zend_ast_evaluate_ex`.
     pub inline_const_depth: usize,
+    /// Compiling the value of a top-level `const` statement, which runs
+    /// inline rather than as a constant-expression op array.
+    pub in_global_const: bool,
+    /// While compiling a function's or method's attributes: its display
+    /// name (`foo()`, `C::m()`), which names the closures in the attribute
+    /// arguments as `CG(active_op_array)` is already the function.
+    pub attr_owner: Option<String>,
 }
 
 /// Compiles a parsed program.
@@ -310,6 +320,8 @@ pub fn compile(
         in_const_default: false,
         in_const_decl: false,
         inline_const_depth: 0,
+        in_global_const: false,
+        attr_owner: None,
     };
     for w in &program.warnings {
         let level = match w.level {
@@ -743,6 +755,17 @@ impl Compiler {
     }
 
     pub(crate) fn attributes(&mut self, groups: &ast::Attributes) -> CResult<Vec<AttributeInfo>> {
+        self.attributes_at(groups, None)
+    }
+
+    /// [`Compiler::attributes`] of a declaration starting on `decl_line`:
+    /// `zend_compile_attributes()` reports its own argument-list errors on
+    /// `CG(zend_lineno)`, the declaration's line rather than the attribute's.
+    pub(crate) fn attributes_at(
+        &mut self,
+        groups: &ast::Attributes,
+        decl_line: Option<u32>,
+    ) -> CResult<Vec<AttributeInfo>> {
         let mut out = Vec::new();
         for g in groups {
             for a in &g.attributes {
@@ -750,8 +773,10 @@ impl Compiler {
                 let mut args: Vec<(Option<ZStr>, ConstExpr)> = Vec::new();
                 if let Some(al) = &a.args {
                     if al.is_first_class_callable() {
-                        return self
-                            .err("Cannot create Closure as attribute argument", a.span.line);
+                        return self.err(
+                            "Cannot create Closure as attribute argument",
+                            decl_line.unwrap_or(a.span.line),
+                        );
                     }
                     let mut uses_named = false;
                     for arg in &al.args {
@@ -760,7 +785,7 @@ impl Compiler {
                                 if uses_named {
                                     return self.err(
                                         "Cannot use positional argument after named argument",
-                                        arg.span.line,
+                                        decl_line.unwrap_or(arg.span.line),
                                     );
                                 }
                                 self.check_const_expr(e, true)?;
@@ -775,7 +800,7 @@ impl Compiler {
                                             "Duplicate named parameter ${}",
                                             n.to_string_lossy()
                                         ),
-                                        arg.span.line,
+                                        decl_line.unwrap_or(arg.span.line),
                                     );
                                 }
                                 self.check_const_expr(value, true)?;
@@ -784,7 +809,7 @@ impl Compiler {
                             ast::ArgKind::Unpack(_) => {
                                 return self.err(
                                     "Cannot use unpacking in attribute argument list",
-                                    arg.span.line,
+                                    decl_line.unwrap_or(arg.span.line),
                                 );
                             }
                             _ => {}

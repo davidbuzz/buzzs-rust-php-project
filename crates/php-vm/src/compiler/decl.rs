@@ -234,7 +234,17 @@ impl Compiler {
                 return n.clone();
             }
         }
-        let f = self.fref();
+        let mut f = self.fref();
+        if f.kind == FnKind::ConstExpr {
+            // `CG(active_op_array)`: the function whose attributes are being
+            // compiled, else the code the constant expression appears in.
+            if let Some(owner) = &self.attr_owner {
+                return ZStr::from(format!("{{closure:{owner}:{line}}}"));
+            }
+            if let Some(outer) = self.fns.iter().rev().find(|c| c.kind != FnKind::ConstExpr) {
+                f = outer;
+            }
+        }
         let s = match f.kind {
             FnKind::Closure => format!("{{closure:{}:{}}}", f.func_name, line),
             FnKind::Function => format!("{{closure:{}():{}}}", f.func_name, line),
@@ -393,7 +403,17 @@ impl Compiler {
             None
         };
         // Attributes first (`zend_compile_func_decl`).
-        let attributes = self.attributes(spec.attributes)?;
+        let owner = match spec.kind {
+            FnKind::Function => Some(format!("{}()", spec.name)),
+            FnKind::Method => self
+                .current_class()
+                .map(|c| format!("{}::{}()", c.name, spec.method_name)),
+            _ => None,
+        };
+        let saved_owner = std::mem::replace(&mut self.attr_owner, owner);
+        let attributes = self.attributes_at(spec.attributes, Some(spec.line_start));
+        self.attr_owner = saved_owner;
+        let attributes = attributes?;
         let tgt = if spec.kind == FnKind::Method {
             super::attrs::target::METHOD
         } else {
@@ -602,7 +622,7 @@ impl Compiler {
                 }
                 modifiers_to_flags(p.modifiers)
             };
-            let attrs = self.attributes(&p.attributes)?;
+            let attrs = self.attributes_at(&p.attributes, Some(spec.line_start))?;
             let promoted_tgt = if promote == 0 {
                 0
             } else {
@@ -1365,7 +1385,7 @@ impl Compiler {
         if is_anon {
             cflag |= cflags::ANON;
         }
-        let attributes = self.attributes(&cd.attributes)?;
+        let attributes = self.attributes_at(&cd.attributes, Some(cd.span.line))?;
         self.validate_attributes(
             &attributes,
             super::attrs::target::CLASS,

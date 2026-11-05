@@ -952,8 +952,14 @@ impl Vm {
                         self.set_tmp(*dst, c);
                         Flow::Next
                     }
-                    Op::CallableConvert { dst } => {
+                    Op::CallableConvert { dst, const_expr } => {
                         let call = self.frame_mut().calls.pop().expect("pending call");
+                        if *const_expr && call.magic_name.is_some() {
+                            return Err(self.make_throw(
+                                "Error",
+                                "Creating a callable for the magic __callStatic() method is not supported in constant expressions",
+                            ));
+                        }
                         let c = self.make_closure_from_call(call)?;
                         self.set_tmp(*dst, c);
                         Flow::Next
@@ -1279,6 +1285,10 @@ impl Vm {
                     Op::MatchError { subject } => {
                         let v = self.read(*subject)?;
                         return Err(self.match_error(&v));
+                    }
+                    Op::TypeAssertArray { val, msg } => {
+                        self.op_type_assert_array(*val, *msg)?;
+                        Flow::Next
                     }
                     Op::Ticks(n) => {
                         self.op_ticks(*n)?;
@@ -1835,6 +1845,35 @@ impl Vm {
             .rev()
             .find(|f| f.kind != crate::vm::FrameKind::Builtin)
             .and_then(|f| f.scope.clone())
+    }
+
+    /// `ZEND_TYPE_ASSERT` (Zend/zend_vm_def.h) for an array parameter: the
+    /// operand is read without an undefined-variable warning.
+    fn op_type_assert_array(&mut self, val: Operand, msg: u32) -> VmResult<()> {
+        let v = if let Operand::Cv(cv) = val {
+            let f = self.frame();
+            let idx = f.cv_idx(cv);
+            let slot = f.vars.borrow().slots.get(idx).cloned().flatten();
+            slot.as_ref().map_or(Value::Null, Value::deref)
+        } else {
+            self.read_raw(val)?
+        };
+        if matches!(v, Value::Array(_)) {
+            return Ok(());
+        }
+        Err(self.type_assert_error(&v, msg))
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn type_assert_error(&mut self, v: &Value, msg: u32) -> Throw {
+        let prefix = self.lit_str(msg);
+        let m = format!(
+            "{}, {} given",
+            prefix.to_string_lossy(),
+            crate::typecheck::given_type(v)
+        );
+        self.make_throw("TypeError", &m)
     }
 }
 

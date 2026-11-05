@@ -131,7 +131,12 @@ impl Compiler {
                 if !args.is_partial() {
                     return self.err(INVALID, line);
                 }
-                if let Callee::Expr(_) = &**callee {
+                if let Callee::Expr(x) = &**callee {
+                    // zend_compile_const_expr_fcc(): a literal callee that is
+                    // not a string (`(0)(...)`).
+                    if matches!(x.kind, ExprKind::Int(_) | ExprKind::Float(_)) {
+                        return self.err("Illegal function name", line);
+                    }
                     return self.err(
                         "Cannot use dynamic function name in constant expression",
                         line,
@@ -143,8 +148,16 @@ impl Compiler {
                 if !args.is_partial() {
                     return self.err(INVALID, line);
                 }
-                if let ClassRef::Expr(_) = &**class {
-                    return self.err("Cannot use dynamic class name in constant expression", line);
+                match &**class {
+                    ClassRef::Expr(_) => {
+                        return self
+                            .err("Cannot use dynamic class name in constant expression", line)
+                    }
+                    ClassRef::Name(n) if is_static_name(n) => {
+                        return self
+                            .err("\"static\" is not allowed in compile-time constants", line)
+                    }
+                    ClassRef::Name(_) => {}
                 }
                 if let MemberName::Expr(_) = name {
                     return self.err(

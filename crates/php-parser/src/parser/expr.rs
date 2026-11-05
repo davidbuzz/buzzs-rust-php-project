@@ -822,10 +822,15 @@ impl Parser<'_> {
             }
             T::StartHeredoc => {
                 self.bump();
+                let mut line = start.line;
                 let kind = match self.peek() {
                     T::EndHeredoc => ExprKind::String(Vec::new()),
                     T::EncapsedAndWhitespace if self.peek_nth(1) == T::EndHeredoc => {
                         let t = self.bump();
+                        // `T_START_HEREDOC T_ENCAPSED_AND_WHITESPACE
+                        // T_END_HEREDOC { $$ = $2; }`: the literal carries
+                        // the body token's line (zend_language_parser.y).
+                        line = t.span.line;
                         match t.value {
                             Some(TokenValue::Str(s)) => ExprKind::String(s),
                             _ => ExprKind::String(Vec::new()),
@@ -834,7 +839,8 @@ impl Parser<'_> {
                     _ => ExprKind::Interpolated(self.parse_encaps_list(T::EndHeredoc)?),
                 };
                 self.expect1(T::EndHeredoc)?;
-                let span = self.span_from(start);
+                let mut span = self.span_from(start);
+                span.line = line;
                 Ok((Expr::new(kind, span), Cat::Other))
             }
             T::LBracket => Ok((self.parse_short_array()?, Cat::Callable)),

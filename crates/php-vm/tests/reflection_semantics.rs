@@ -338,3 +338,91 @@ var_dump($params[0]->isVariadic(), $params[0]->getType()->getName());
 "#);
     assert_eq!(out, "one fail arguments\nbool(true)\nstring(5) \"mixed\"\n");
 }
+
+/// zend_compile_func_array_map(): `array_map(f(...), $array)` compiles into
+/// a foreach loop calling `f` directly (keys kept, no Closure, no
+/// `array_map()` frame, `ZEND_TYPE_ASSERT` on the array); other callbacks
+/// and literal non-arrays keep the real call
+/// (Zend/tests/functions/zend_call_function_deprecated_frame.phpt, gh14003).
+#[test]
+fn array_map_with_first_class_callable_is_inlined() {
+    let sink = Sink::default();
+    let mut vm =
+        Vm::with_extensions(&VmOptions::default(), Box::new(sink.clone()), &[&ArrayMapStub]);
+    vm.run_script(
+        br"<?php
+function foo($v) { return $v . '!'; }
+function boom($v) { throw new Exception('x'); }
+var_dump(array_map(foo(...), ['a' => 'x', 3 => 'y']));
+try { array_map(boom(...), [1]); } catch (Exception $e) { echo $e->getTraceAsString(), PHP_EOL; }
+$s = 'str';
+try { array_map(foo(...), $s); } catch (TypeError $e) { echo $e->getMessage(), PHP_EOL; }
+var_dump(array_map('foo', [1]), array_map(foo(...), 'lit'));
+",
+        "t.php",
+    );
+    drop(vm);
+    let output = String::from_utf8(sink.0.borrow().clone()).expect("UTF-8 output");
+    assert_eq!(
+        output,
+        "array(2) {\n  [\"a\"]=>\n  string(2) \"x!\"\n  [3]=>\n  string(2) \"y!\"\n}\n#0 t.php(5): boom(1)\n#1 {main}\narray_map(): Argument #2 ($array) must be of type array, string given\nint(42)\nint(42)\n"
+    );
+}
+
+/// Attribute arguments print like `zend_ast_export` after
+/// zend_compile_const_expr_*(): closures as `Closure(name)` (named after
+/// the function whose attributes they are in), first-class-callable
+/// function names resolved (closure_const_expr and first_class_callable
+/// `attributes_ast_printing_runtime.phpt`). The printer re-reads the
+/// declaring file, so the scripts are written to disk.
+#[test]
+fn attribute_arguments_print_compiled_closures_and_resolved_callables() {
+    let run_file = |name: &str, src: &str| {
+        let file = format!("phprust-{}-{name}.php", std::process::id());
+        let path = std::env::temp_dir().join(file);
+        std::fs::write(&path, src).expect("write script");
+        let sink = Sink::default();
+        let mut vm = Vm::new(&VmOptions::default(), Box::new(sink.clone()));
+        vm.run_script(src.as_bytes(), &path.to_string_lossy());
+        drop(vm);
+        let _ = std::fs::remove_file(&path);
+        let output = sink.0.borrow().clone();
+        String::from_utf8(output).expect("UTF-8 output")
+    };
+    assert_eq!(
+        run_file(
+            "closure",
+            r"<?php
+
+#[Attr(static function ($foo) {
+    echo $foo;
+})]
+function foo() { }
+
+foreach ((new ReflectionFunction('foo'))->getAttributes() as $attribute) {
+    echo $attribute;
+}
+"
+        ),
+        "Attribute [ Attr ] {\n  - Arguments [1] {\n    Argument #0 [ Closure({closure:foo():3}) ]\n  }\n}\n"
+    );
+    assert_eq!(
+        run_file(
+            "fcc",
+            r"<?php
+
+namespace Test;
+
+class Clazz {
+    #[Attr(strrev(...), \strrev(...), Clazz::foo(...), self::foo(...))]
+    function foo() { }
+}
+
+foreach ((new \ReflectionMethod(Clazz::class, 'foo'))->getAttributes() as $attribute) {
+    echo $attribute;
+}
+"
+        ),
+        "Attribute [ Test\\Attr ] {\n  - Arguments [4] {\n    Argument #0 [ Test\\strrev(...) ]\n    Argument #1 [ \\strrev(...) ]\n    Argument #2 [ \\Test\\Clazz::foo(...) ]\n    Argument #3 [ self::foo(...) ]\n  }\n}\n"
+    );
+}

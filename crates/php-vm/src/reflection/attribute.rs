@@ -238,7 +238,26 @@ fn source_arg(vm: &Vm, r: &AttrRef, i: usize) -> Option<Vec<u8>> {
         | php_parser::ast::ArgKind::Named { value: x, .. } => x.clone(),
         _ => return None,
     };
-    Some(super::export::export_expr_ns(e, &ns))
+    // The closures the argument compiled to, in order (their names are
+    // what `zend_ast_export` prints for a `ZEND_AST_OP_ARRAY`).
+    let closures: Vec<ZStr> = match r.info.args.get(i) {
+        Some((_, ConstExpr::Code(code))) => {
+            let fns = code.decls.functions.borrow();
+            let names: Vec<ZStr> = code
+                .ops
+                .iter()
+                .filter_map(|op| match op {
+                    crate::opcode::Op::MakeClosure { idx, .. } => {
+                        fns.get(*idx as usize).map(|f| f.name.clone())
+                    }
+                    _ => None,
+                })
+                .collect();
+            names
+        }
+        _ => Vec::new(),
+    };
+    Some(super::export::export_attr_arg(e, &ns, &closures))
 }
 
 /// The error of an internal attribute's validator, kept for

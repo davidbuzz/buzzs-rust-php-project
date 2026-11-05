@@ -557,6 +557,7 @@ pub(crate) fn apply_final(v: &mut Value, wop: &mut WOp) -> Step {
 
 impl Vm {
     /// Resolves a place's base and segments.
+    #[inline]
     pub(crate) fn resolve_place(
         &mut self,
         pid: PlaceId,
@@ -1420,7 +1421,7 @@ impl Vm {
                 return self.read_cv(cv);
             }
         }
-        let (base, segs) = self.resolve_place(pid, false)?;
+        let (base, segs) = self.resolve_place_ex(pid, false, mode == FetchMode::Is)?;
         let mut cur = match base {
             RBase::Var(store, idx) => {
                 let v = store.borrow().slots[idx].as_ref().map(Value::deref);

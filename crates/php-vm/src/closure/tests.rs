@@ -183,3 +183,100 @@ fn callable_names() {
          echo \"$a $b $c $d\\n\";");
     assert_eq!(out, "Foo::__invoke Foo::bar strlen Closure::__invoke\n");
 }
+
+/// A recursive call made by a static initializer sets the slot first; the
+/// outer `ZEND_BIND_STATIC` then binds that reference and drops its own
+/// value (Zend/tests/static_variables/static_variables_recursive.phpt).
+#[test]
+fn recursive_static_initializer_keeps_inner_value() {
+    let out = run(
+        "<?php function foo($i) { static $a = $i <= 2 ? foo($i + 1) : \"Done $i\"; echo $a, \"\\n\"; return $i; }\nfoo(0); foo(5);",
+    );
+    assert_eq!(out, "Done 3\nDone 3\nDone 3\nDone 3\nDone 3\n");
+}
+
+/// A callable conversion inside a nullsafe chain is a compile error
+/// (zend_compile_method_call(); first_class_callable_012/013.phpt).
+#[test]
+fn nullsafe_closure_creation_is_compile_error() {
+    for src in ["<?php\n$foo?->bar(...);\n", "<?php\n$foo?->foo->bar(...);\n"] {
+        assert_eq!(
+            run(src),
+            "\nFatal error: Cannot combine nullsafe operator with Closure creation in t.php on line 2\n"
+        );
+    }
+    // A nullsafe access applied to the conversion's result is fine.
+    assert_eq!(run("<?php\necho strlen(...)?->__invoke('abc');"), "3");
+}
+
+/// Attribute argument-list errors are reported on the declaration's line
+/// (`CG(zend_lineno)` in zend_compile_attributes(); first_class_callable_011).
+#[test]
+fn attribute_closure_error_uses_declaration_line() {
+    let msg = "\nFatal error: Cannot create Closure as attribute argument in t.php on line ";
+    assert_eq!(run("<?php\n#[Attribute(...)]\nclass Foo {\n\n}\n"), format!("{msg}3\n"));
+    assert_eq!(run("<?php\n#[Attribute(...)]\n\nfunction f() {\n}\n"), format!("{msg}4\n"));
+    assert_eq!(run("<?php\nfunction g(\n#[A(...)]\n\n$x) {}\n"), format!("{msg}2\n"));
+}
+
+/// `ZEND_ADD_ARRAY_ELEMENT` with an object key raises
+/// zend_illegal_array_offset_access() (closure_array_key_error.phpt).
+#[test]
+fn closure_as_array_literal_key() {
+    let out = run(
+        "<?php\ntry { var_dump([function () {} => 1]); } catch (TypeError $e) { echo $e->getMessage(); }",
+    );
+    assert_eq!(out, "Cannot access offset of type Closure on array");
+}
+
+/// A first-class callable reflects as `Closure [ ... ]`: the fake closure's
+/// function carries ZEND_ACC_CLOSURE (first_class_callable_signature.phpt).
+#[test]
+fn fake_closure_reflection_string() {
+    let out = run("<?php function test(int $a) {}\necho new ReflectionFunction(test(...));");
+    assert_eq!(
+        out,
+        "Closure [ <user> function test ] {\n  @@ t.php 1 - 1\n\n  - Parameters [1] {\n    Parameter #0 [ <required> int $a ]\n  }\n}\n"
+    );
+}
+
+/// `ZEND_INIT_NS_FCALL_BY_NAME` caches the global fallback in the call
+/// site's run-time cache, so sites that already ran keep calling it after
+/// `ns\strrev` is declared (first_class_callable/constexpr/namespace_004).
+#[test]
+fn namespaced_fallback_is_cached_per_call_site() {
+    let out = run(r"<?php
+namespace Foo;
+function f(\Closure $c = strrev(...)) {
+    echo strrev('ab'), $c('cd'), strrev(...)('ef'), PHP_EOL;
+}
+f();
+function g() { echo strrev('gh'), PHP_EOL; }
+if (true) {
+    function strrev($v) { return 'ns'; }
+}
+f();
+g();
+echo strrev('x'), PHP_EOL;
+");
+    assert_eq!(out, "badcfe\nbadcfe\nns\nns\n");
+}
+
+/// Constant-expression first-class callables: compile-time name checks
+/// and the `__callStatic` runtime error (zend_compile_const_expr_fcc(),
+/// zend_ast_evaluate_inner(); first_class_callable/constexpr/error_*).
+#[test]
+fn const_expr_callable_errors() {
+    assert_eq!(
+        run("<?php\nclass Foo {\n    public const C = static::m(...);\n}\n"),
+        "\nFatal error: \"static\" is not allowed in compile-time constants in t.php on line 3\n"
+    );
+    assert_eq!(
+        run("<?php\n\nconst C = (0)(...);\n"),
+        "\nFatal error: Illegal function name in t.php on line 3\n"
+    );
+    assert_eq!(
+        run("<?php\nclass Foo { public static function __callStatic($n, $a) {} }\nconst C = Foo::m(...);\n"),
+        "\nFatal error: Uncaught Error: Creating a callable for the magic __callStatic() method is not supported in constant expressions in t.php:3\nStack trace:\n#0 {main}\n  thrown in t.php on line 3\n"
+    );
+}

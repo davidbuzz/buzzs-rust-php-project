@@ -581,3 +581,17 @@ fn messages_match_php() {
     assert!(n > 0);
     assert!(failures.is_empty(), "mismatches:\n{failures}");
 }
+
+/// A closure's `use` variables live in its static-variables table
+/// (`zend_compile_closure_uses()`), so redeclaring one as `static` is a
+/// duplicate (Zend/tests/static_variables/static_variables_closure_bind.phpt).
+#[test]
+fn static_redeclaring_closure_use_is_duplicate() {
+    let src = b"<?php\n$a = null;\nfunction () use (&$a) {\n    static $a;\n};\n";
+    let e = php_parser::parse(src, &ParseOptions::default()).expect_err("duplicate static");
+    assert_eq!(e.message, "Duplicate declaration of static variable $a");
+    assert_eq!(e.line, 4);
+    // A use variable and a different static are fine.
+    let ok = b"<?php\nfunction () use ($a) { static $b; };\n";
+    assert!(php_parser::parse(ok, &ParseOptions::default()).is_ok());
+}

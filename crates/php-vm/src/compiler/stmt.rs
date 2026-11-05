@@ -368,7 +368,9 @@ impl Compiler {
                     self.check_const_decl_name(&c.name.name, &full, c.span.line)?;
                     let saved = std::mem::replace(&mut self.in_const_decl, true);
                     let depth = std::mem::replace(&mut self.inline_const_depth, self.fns.len());
+                    let global = std::mem::replace(&mut self.in_global_const, true);
                     let val = self.compile_expr(&c.value);
+                    self.in_global_const = global;
                     self.inline_const_depth = depth;
                     self.in_const_decl = saved;
                     let val = val?;
