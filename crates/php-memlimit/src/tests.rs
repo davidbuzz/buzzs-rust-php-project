@@ -216,17 +216,19 @@ fn soft_limit_is_flagged_not_failed() {
     let a = CountingAlloc::new(System);
     let _vm = alloc(&a, 3 * M);
     a.request_start(Some(4 * M)).expect("limit");
-    let ok = alloc(&a, 3 * M);
+    // A large block from the request's chunks fits.
+    let ok = alloc(&a, M);
     assert!(!ok.p.is_null());
     assert_eq!(a.check(), None);
-    let over = alloc(&a, M);
+    // A huge block needs its own pages: 2M of chunks + 3M > 4M.
+    let over = alloc(&a, 3 * M);
     assert!(!over.p.is_null(), "soft-limit allocations succeed");
     assert!(a.is_pending());
     assert_eq!(
         a.check(),
         Some(OverLimit {
             limit: 4 * M,
-            tried: M
+            tried: 3 * M
         })
     );
     // First violation wins until cleared.
@@ -235,24 +237,56 @@ fn soft_limit_is_flagged_not_failed() {
         a.check(),
         Some(OverLimit {
             limit: 4 * M,
-            tried: M
+            tried: 3 * M
         })
     );
     a.clear();
     assert_eq!(a.check(), None);
-    // Still over: the next allocation re-flags.
+    // Zend never made the failing allocation: small ones after the fatal
+    // (shutdown functions) are served from the existing chunks.
     let _again = alloc(&a, 99);
+    assert_eq!(a.check(), None, "the violating block is forgiven");
+    // A genuinely new huge block over the limit is flagged again.
+    let _big = alloc(&a, 3 * M);
     assert_eq!(
         a.check(),
         Some(OverLimit {
             limit: 4 * M,
-            tried: 99
+            tried: 3 * M
         })
     );
     a.clear();
     drop(over);
     let _fine = alloc(&a, 10);
     assert_eq!(a.check(), None, "back under the limit");
+}
+
+/// `zend_mm_check_limit` only runs when Zend needs memory from the OS: a
+/// small block that fits in an already counted chunk never fails, even
+/// close to the limit; one that needs a new chunk past the limit does.
+#[test]
+fn small_blocks_fail_only_when_a_new_chunk_passes_the_limit() {
+    let a = CountingAlloc::new(System);
+    a.request_start(Some(4 * M)).expect("limit");
+    // Fill up to 64 bytes short of 4M with blocks below the huge size.
+    let mut fill = Vec::new();
+    while 4 * M - a.usage() > M + 64 {
+        fill.push(alloc(&a, M));
+    }
+    fill.push(alloc(&a, 4 * M - a.usage() - 64));
+    assert_eq!(a.check(), None);
+    let _tiny = alloc(&a, 64);
+    assert_eq!(a.check(), None, "still inside the second chunk");
+    let _next = alloc(&a, 1);
+    assert_eq!(
+        a.check(),
+        Some(OverLimit {
+            limit: 4 * M,
+            tried: 1
+        }),
+        "a third chunk would pass 4M"
+    );
+    drop(fill);
 }
 
 #[test]
@@ -280,12 +314,15 @@ fn take_suspends_recording_until_clear() {
     a.clear();
     assert!(!a.is_handled());
     let _z = alloc(&a, 100);
+    assert_eq!(a.take(), None, "the taken violation's block is forgiven");
+    let _w = alloc(&a, 3 * M);
     assert_eq!(
         a.take(),
         Some(OverLimit {
             limit: 4 * M,
-            tried: 100
-        })
+            tried: 3 * M
+        }),
+        "recording is re-armed after clear"
     );
     drop(x);
 }
@@ -337,7 +374,8 @@ fn try_reserve_semantics() {
     let a = CountingAlloc::new(System);
     assert_eq!(a.try_reserve(usize::MAX), Ok(()), "unlimited");
     a.request_start(Some(100 * M)).expect("limit");
-    let room = 100 * M - a.usage();
+    // A huge reservation fits next to the chunks already in use.
+    let room = 100 * M - crate::limit::round_to_chunks(a.usage());
     assert!(a.would_fit(room));
     assert_eq!(a.try_reserve(room), Ok(()));
     assert_eq!(a.check(), None);

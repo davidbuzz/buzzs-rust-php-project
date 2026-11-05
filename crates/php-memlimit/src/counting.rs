@@ -11,8 +11,9 @@ use std::sync::atomic::{
 use std::sync::OnceLock;
 
 use crate::limit::{
-    clamp_to_max_warning, hard_limit_for, limit_from_ini, round_to_chunks, HardLimitExceeded,
-    HardLimitPercentError, MemoryLimitIni, OverLimit, SetLimitError, LIMIT_MAX, PHP_BASELINE,
+    chunk_floor, clamp_to_max_warning, hard_limit_for, limit_from_ini, round_to_chunks,
+    zend_limit_allows, HardLimitExceeded, HardLimitPercentError, MemoryLimitIni, OverLimit,
+    SetLimitError, LIMIT_MAX, MAX_LARGE_SIZE, PHP_BASELINE,
 };
 
 /// Signature of the hard-ceiling handler (see
@@ -163,6 +164,10 @@ pub struct CountingAlloc<A> {
     over_state: AtomicU8,
     over_limit: AtomicUsize,
     over_tried: AtomicUsize,
+    /// Bytes of the allocation that recorded the request's memory-limit
+    /// violation. Zend never makes that allocation (the fatal unwinds
+    /// first); we must grant it, so it is left out of later limit checks.
+    forgiven: AtomicUsize,
     hard_handler: OnceLock<HardLimitHandler>,
     in_hard_handler: AtomicBool,
     /// Zend's tracked allocator (`USE_ZEND_ALLOC=0 USE_TRACKED_ALLOC=1`):
@@ -190,6 +195,7 @@ impl<A> CountingAlloc<A> {
             over_state: AtomicU8::new(NONE),
             over_limit: AtomicUsize::new(0),
             over_tried: AtomicUsize::new(0),
+            forgiven: AtomicUsize::new(0),
             hard_handler: OnceLock::new(),
             in_hard_handler: AtomicBool::new(false),
             tracked: AtomicBool::new(false),
@@ -254,6 +260,7 @@ impl<A> CountingAlloc<A> {
     /// checked against — is no longer rounded to [`CHUNK_SIZE`](crate::CHUNK_SIZE).
     pub fn set_tracked(&self, tracked: bool) {
         self.tracked.store(tracked, Relaxed);
+        self.update_thresholds();
     }
 
     /// Whether [tracked mode](Self::set_tracked) is on.
@@ -387,7 +394,12 @@ impl<A> CountingAlloc<A> {
                 let base = self.baseline.load(Relaxed);
                 let to_raw = |v: usize| v.saturating_add(base).saturating_sub(PHP_BASELINE);
                 let hard = hard_limit_for(l, self.hard_percent.load(Relaxed));
-                (to_raw(l), to_raw(hard))
+                // Small and large blocks only fail when a new chunk would
+                // pass the limit (`zend_limit_allows`); huge ones are routed
+                // to the slow path by size in `admit`.
+                let soft = if self.is_tracked() { l } else { chunk_floor(l) };
+                let soft = to_raw(soft).saturating_add(self.forgiven.load(Relaxed));
+                (soft, to_raw(hard))
             }
         };
         self.soft_raw.store(soft, Relaxed);
@@ -396,7 +408,9 @@ impl<A> CountingAlloc<A> {
 
     // ---- over-limit record -------------------------------------------
 
-    fn record(&self, over: OverLimit) {
+    /// Records `over` unless a violation is already recorded or handled;
+    /// whether it was recorded.
+    fn record(&self, over: OverLimit) -> bool {
         if self
             .over_state
             .compare_exchange(NONE, RECORDING, Acquire, Relaxed)
@@ -405,6 +419,9 @@ impl<A> CountingAlloc<A> {
             self.over_limit.store(over.limit, Relaxed);
             self.over_tried.store(over.tried, Relaxed);
             self.over_state.store(PENDING, Release);
+            true
+        } else {
+            false
         }
     }
 
@@ -464,7 +481,19 @@ impl<A> CountingAlloc<A> {
     /// Whether `bytes` more would still fit under the soft limit.
     pub fn would_fit(&self, bytes: usize) -> bool {
         self.limit()
-            .is_none_or(|l| self.usage().saturating_add(bytes) <= l)
+            .is_none_or(|l| self.limit_allows(self.usage(), bytes, l))
+    }
+
+    /// Whether `size` more bytes at reported usage `usage` (not counting
+    /// them) pass `zend_mm_check_limit` under `limit` (see
+    /// [`zend_limit_allows`]; exact bytes in [tracked mode](Self::set_tracked)).
+    fn limit_allows(&self, usage: usize, size: usize, limit: usize) -> bool {
+        let usage = usage.saturating_sub(self.forgiven.load(Relaxed));
+        if self.is_tracked() {
+            usage.saturating_add(size) <= limit
+        } else {
+            zend_limit_allows(usage, size, limit)
+        }
     }
 
     /// Fallible-allocation check for builtins: if allocating `bytes` more
@@ -521,6 +550,7 @@ impl<A> CountingAlloc<A> {
     /// [`DEFAULT_LIMIT`]: crate::DEFAULT_LIMIT
     pub fn request_start(&self, limit: Option<usize>) -> Result<(), SetLimitError> {
         self.bind_to_current_thread();
+        self.forgiven.store(0, Relaxed);
         self.force_limit(None);
         self.set_baseline();
         self.clear();
@@ -530,6 +560,7 @@ impl<A> CountingAlloc<A> {
     /// Request shutdown: lift the limit, clear any violation, reset baseline
     /// and peak.
     pub fn request_end(&self) {
+        self.forgiven.store(0, Relaxed);
         self.force_limit(None);
         self.clear();
         self.baseline.store(0, Relaxed);
@@ -543,7 +574,9 @@ impl<A> CountingAlloc<A> {
     #[inline]
     fn admit(&self, size: usize) -> bool {
         let new = self.add_live(size);
-        if new > self.soft_raw.load(Relaxed) && !self.admit_over_soft(new, size) {
+        if (new > self.soft_raw.load(Relaxed) || size > MAX_LARGE_SIZE)
+            && !self.admit_over_soft(new, size)
+        {
             self.release(size);
             return false;
         }
@@ -573,10 +606,23 @@ impl<A> CountingAlloc<A> {
             return true;
         }
         let limit = self.limit.load(Relaxed);
-        if limit != UNLIMITED {
-            self.record(OverLimit { limit, tried: size });
+        if limit == UNLIMITED {
+            return true;
         }
-        !in_fallible_scope()
+        let before = self.reported(new).saturating_sub(size);
+        if self.limit_allows(before, size, limit) {
+            return true;
+        }
+        let recorded = self.record(OverLimit { limit, tried: size });
+        let granted = !in_fallible_scope();
+        if recorded && granted {
+            // Zend's failing allocation never happens; ours does, so leave
+            // it out of the checks for the rest of the request (shutdown
+            // functions and destructors still run under the limit).
+            self.forgiven.fetch_add(size, Relaxed);
+            self.update_thresholds();
+        }
+        granted
     }
 
     #[inline]

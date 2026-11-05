@@ -50,6 +50,39 @@ pub fn round_to_chunks(bytes: usize) -> usize {
     bytes.max(1).div_ceil(CHUNK_SIZE).saturating_mul(CHUNK_SIZE)
 }
 
+/// Zend MM page size (`ZEND_MM_PAGE_SIZE`); huge blocks are mapped in
+/// multiples of it.
+pub const PAGE_SIZE: usize = 4096;
+
+/// `ZEND_MM_MAX_LARGE_SIZE`: requests above this many bytes are *huge*
+/// blocks (`zend_mm_alloc_huge`), mapped on their own; smaller ones are
+/// carved out of 2 MiB chunks.
+pub const MAX_LARGE_SIZE: usize = CHUNK_SIZE - PAGE_SIZE;
+
+/// Whether a request of `size` bytes, made while `usage` bytes are live (not
+/// counting it), passes `zend_mm_check_limit` under `limit`.
+///
+/// Zend checks the limit against `heap->real_size` — whole chunks plus huge
+/// blocks — only when it needs more memory from the OS: a new chunk for
+/// small and large requests (`zend_mm_alloc_pages`), the page-aligned block
+/// itself for huge ones (`zend_mm_alloc_huge`). A small request served from
+/// an existing chunk never fails. `real_size` is modelled as `usage` rounded
+/// up to whole chunks.
+pub fn zend_limit_allows(usage: usize, size: usize, limit: usize) -> bool {
+    if size > MAX_LARGE_SIZE {
+        let block = size.div_ceil(PAGE_SIZE).saturating_mul(PAGE_SIZE);
+        round_to_chunks(usage).saturating_add(block) <= limit
+    } else {
+        usage.saturating_add(size) <= chunk_floor(limit)
+    }
+}
+
+/// The most small/large-block usage `limit` allows: its whole chunks
+/// (`round_to_chunks(u) <= limit` exactly when `u <= chunk_floor(limit)`).
+pub fn chunk_floor(limit: usize) -> usize {
+    limit / CHUNK_SIZE * CHUNK_SIZE
+}
+
 /// `scale_by_percent()` from `Zend/zend_alloc.c`: `value * percent / 100`
 /// without intermediate overflow, saturating at `usize::MAX`.
 pub fn scale_by_percent(value: usize, percent: i64) -> usize {
@@ -207,6 +240,23 @@ mod tests {
     use super::*;
 
     const M: usize = 1024 * 1024;
+
+    /// `zend_mm_check_limit` granularity: small requests only fail when a
+    /// new chunk would pass the limit, huge ones when their pages would.
+    #[test]
+    fn zend_limit_is_chunk_and_page_granular() {
+        // 8M = 4 chunks: small blocks fit until usage would pass 8M.
+        assert!(zend_limit_allows(8 * M - 11, 11, 8 * M));
+        assert!(!zend_limit_allows(8 * M - 10, 11, 8 * M));
+        // 9M still holds only 4 whole chunks.
+        assert!(!zend_limit_allows(8 * M, 1, 9 * M));
+        assert_eq!(chunk_floor(9 * M), 8 * M);
+        // Huge: whole chunks in use plus the page-aligned block.
+        assert!(zend_limit_allows(M, 6 * M, 8 * M)); // 2M + 6M
+        assert!(!zend_limit_allows(2 * M + 1, 6 * M, 8 * M)); // 4M + 6M
+        assert!(!zend_limit_allows(M, 6 * M + 1, 8 * M)); // 2M + 6M + 4K
+        assert_eq!(MAX_LARGE_SIZE, 2 * M - PAGE_SIZE);
+    }
 
     #[test]
     fn ini_conversion() {
