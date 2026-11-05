@@ -140,3 +140,20 @@ fn non_compound_use_warns_outside_namespace() {
     );
     assert_eq!(run("<?php\nnamespace N;\nuse A;\necho 'ok';\n"), "ok");
 }
+
+/// `zend_compile_class_name` rejects `::class` on literals at compile time.
+#[test]
+fn class_name_of_constant_operand_is_a_compile_error() {
+    assert_contains(
+        "<?php\n\necho (2)::class;\n",
+        "Fatal error: Illegal class name in t.php on line 3",
+    );
+    assert_contains(
+        "<?php\n\n(1+1)::class;\n",
+        "Fatal error: Cannot use \"::class\" on int in t.php on line 3",
+    );
+    assert_contains(
+        "<?php\n\n([1])::class;\n",
+        "Fatal error: Cannot use \"::class\" on array in t.php on line 3",
+    );
+}

@@ -241,6 +241,9 @@ impl Compiler {
                         }
                     }
                 }
+                if let ast::ClassRef::Expr(inner) = &**class {
+                    self.check_class_name_operand(inner)?;
+                }
                 let spec = self.class_spec(class)?;
                 let t = self.tmp();
                 self.emit(Op::FetchClassName {
@@ -1995,6 +1998,23 @@ impl Compiler {
             }
         };
         Ok(Some(result))
+    }
+
+    /// `zend_compile_class_name` (Zend/zend_compile.c) on `(expr)::class`:
+    /// a number literal is an illegal class name, and an expression folded
+    /// to a constant other than a string cannot be used with `::class`.
+    #[cold]
+    fn check_class_name_operand(&self, e: &Expr) -> CResult<()> {
+        if matches!(e.kind, ExprKind::Int(_) | ExprKind::Float(_)) {
+            return self.err("Illegal class name", e.span.line);
+        }
+        match self.try_fold(e) {
+            Some(Value::Str(_)) | None => Ok(()),
+            Some(v) => self.err(
+                format!("Cannot use \"::class\" on {}", v.value_name()),
+                e.span.line,
+            ),
+        }
     }
 
     /// Constant folding of simple expressions.
