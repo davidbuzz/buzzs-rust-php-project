@@ -67,8 +67,10 @@ impl Vm {
 
     /// The current numeric value of a CV or literal operand, without
     /// cloning, warnings or reference traversal (`None` sends the op down
-    /// the generic path).
-    #[inline]
+    /// the generic path). Always inlined into [`Vm::bin_num_fast`]: as a
+    /// call it returns its `Option<Num>` through memory.
+    #[inline(always)]
+    #[allow(clippy::inline_always)] // as a call, the `Option<Num>` is returned through memory
     fn peek_num(&self, op: Operand) -> Option<Num> {
         match op {
             Operand::Cv(cv) => {
@@ -265,7 +267,33 @@ impl Vm {
     /// Stores a temporary.
     #[inline]
     pub(crate) fn set_tmp(&mut self, t: u32, v: Value) {
-        self.frame_mut().tmps[t as usize] = v;
+        let old = std::mem::replace(&mut self.frame_mut().tmps[t as usize], v);
+        // The slot almost always holds a scalar (or the `Null` a consuming
+        // read left behind): skip the out-of-line `drop_in_place` call.
+        if matches!(
+            old,
+            Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_)
+        ) {
+            std::mem::forget(old);
+        }
+    }
+
+    /// The boolean held by temporary `op`, consumed, if it holds one: the
+    /// `IS_TRUE`/`IS_FALSE` fast path of php-src's `ZEND_JMPZ`/`ZEND_JMPNZ`
+    /// handlers (comparison results), without the out-of-line read,
+    /// conversion and drop of the generic path.
+    #[inline]
+    fn take_tmp_bool(&mut self, op: Operand) -> Option<bool> {
+        let Operand::Tmp(t) = op else {
+            return None;
+        };
+        let slot = self.frame_mut().tmps.get_mut(t as usize)?;
+        if let Value::Bool(b) = *slot {
+            *slot = Value::Null;
+            Some(b)
+        } else {
+            None
+        }
     }
 
     /// Stores an optional result.
@@ -699,15 +727,27 @@ impl Vm {
                         Flow::Next
                     }
                     Op::JmpZ(a, t) => {
-                        let v = self.read(*a)?;
-                        if !self.to_bool(&v)? {
+                        let b = match self.take_tmp_bool(*a) {
+                            Some(b) => b,
+                            None => {
+                                let v = self.read(*a)?;
+                                self.to_bool(&v)?
+                            }
+                        };
+                        if !b {
                             self.frame_mut().ip = *t as usize;
                         }
                         Flow::Next
                     }
                     Op::JmpNz(a, t) => {
-                        let v = self.read(*a)?;
-                        if self.to_bool(&v)? {
+                        let b = match self.take_tmp_bool(*a) {
+                            Some(b) => b,
+                            None => {
+                                let v = self.read(*a)?;
+                                self.to_bool(&v)?
+                            }
+                        };
+                        if b {
                             self.frame_mut().ip = *t as usize;
                         }
                         Flow::Next
