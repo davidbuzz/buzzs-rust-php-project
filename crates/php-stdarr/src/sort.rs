@@ -54,6 +54,11 @@ fn php_sort<C: ArrayContext + ?Sized>(
     reverse: bool,
     renumber: bool,
 ) -> RtResult<()> {
+    if !by_key {
+        if let Some(res) = sort_self_bound(ctx, array, flags, reverse, renumber) {
+            return res;
+        }
+    }
     with_bound_array(array, func, 1, "array", |a| {
         sort_table(
             ctx,
@@ -64,6 +69,61 @@ fn php_sort<C: ArrayContext + ?Sized>(
             renumber,
         )
     })
+}
+
+/// The value sorts of an array that holds the very reference it is passed
+/// by (`$a[0] =& $a`). php-src sorts the table in place, with its hash index
+/// reset (`zend_hash_sort_internal`), so comparisons reaching the array
+/// through that element see its current, half-sorted order and find none
+/// of its keys (`Zend/tests/bug63882_2.phpt`); [`HashTable::sort_by_in_ref`]
+/// reproduces that. `None` for every other array, which takes the
+/// [`with_bound_array`] path.
+fn sort_self_bound<C: ArrayContext + ?Sized>(
+    ctx: &mut C,
+    array: &PhpRef,
+    flags: i64,
+    reverse: bool,
+    renumber: bool,
+) -> Option<RtResult<()>> {
+    let holds_itself = matches!(&*array.try_borrow()?, Value::Array(a)
+        if a.values().any(|v| matches!(v, Value::Reference(r) if PhpRef::ptr_eq(r, array))));
+    if !holds_itself {
+        return None;
+    }
+    Some(sort_self_bound_slow(ctx, array, flags, reverse, renumber))
+}
+
+/// The slow path of [`sort_self_bound`].
+#[cold]
+#[inline(never)]
+fn sort_self_bound_slow<C: ArrayContext + ?Sized>(
+    ctx: &mut C,
+    array: &PhpRef,
+    flags: i64,
+    reverse: bool,
+    renumber: bool,
+) -> RtResult<()> {
+    // `Z_PARAM_ARRAY_HT_EX(array, 0, 1)` separates a shared table
+    // (`zend_array_dup`) and sorts an unshared one as it is. No PHP code
+    // runs before the first comparison publishes the live table.
+    let mut work = match array.set(Value::Null) {
+        Value::Array(a) => a.into_table(),
+        other => {
+            array.set(other);
+            return Ok(());
+        }
+    };
+    let kind = SortKind::from_flags(flags);
+    let mut slot = ErrSlot::default();
+    let attached = work.sort_by_in_ref(
+        array,
+        |_, va, _, vb| slot.run(|| compare_data_by(ctx, kind, reverse, va, vb)),
+        renumber,
+    );
+    if attached {
+        array.set(Value::Array(ZArray::from_table(work)));
+    }
+    slot.into_result()
 }
 
 /// `sort(array &$array, int $flags = SORT_REGULAR): true`.

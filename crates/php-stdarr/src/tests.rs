@@ -1211,3 +1211,40 @@ fn walk_object_initializes_before_walking_cast_table() {
         );
     }
 }
+
+/// php-src sorts in place with the hash index reset
+/// (`zend_hash_sort_internal`): a comparison reaching the array through its
+/// own reference sees a table in which every key lookup misses, so
+/// `['m' => ['m' => 0, 's' => 0], 's' => &$a]` compares `m` against it as
+/// uncomparable (1). Expected orders from php 8.3 (`Zend/tests/bug63882_2.phpt`).
+#[test]
+fn self_referencing_array_sorts_in_place() {
+    for (reverse, expected) in [(false, ["'s'", "'m'"]), (true, ["'m'", "'s'"])] {
+        let mut ctx = Ctx::new();
+        let r = PhpRef::new(Value::Array(ZArray::from_pairs([(
+            "m",
+            Value::Array(ZArray::from_pairs([
+                ("m", Value::Int(0)),
+                ("s", Value::Int(0)),
+            ])),
+        )])));
+        let me = Value::Reference(r.clone());
+        if let Value::Array(a) = &mut *r.borrow_mut() {
+            a.make_mut().insert("s", me);
+        }
+        if reverse {
+            sort::arsort(&mut ctx, &r, SORT_REGULAR).unwrap();
+        } else {
+            sort::asort(&mut ctx, &r, SORT_REGULAR).unwrap();
+        }
+        let out = arr_of(&r.get());
+        assert_eq!(keys(&out), expected, "reverse={reverse}");
+        // The sorted table is what the reference holds, its element is still
+        // that reference, and its index works again.
+        assert!(matches!(
+            out.get(&ArrayKey::from("s")),
+            Some(Value::Reference(x)) if PhpRef::ptr_eq(x, &r)
+        ));
+        assert!(ctx.messages().is_empty());
+    }
+}
