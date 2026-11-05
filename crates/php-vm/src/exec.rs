@@ -1389,6 +1389,12 @@ impl Vm {
                         self.error(i64::from(*level), &m)?;
                         Flow::Next
                     }
+                    Op::ConstDimCheck { obj } => {
+                        if matches!(self.read(*obj)?, Value::Object(_)) {
+                            return Err(self.const_dim_on_object());
+                        }
+                        Flow::Next
+                    }
                     Op::ConstPropCheck { obj, name, dst } => {
                         let n = self.read(*name)?;
                         let n = self.to_zstr(&n)?;
@@ -1916,6 +1922,13 @@ impl Vm {
             "Error",
             "Fetching properties on non-enums in constant expressions is not allowed",
         )
+    }
+
+    /// `Cannot use [] on objects in constant expression`
+    /// (`zend_ast_evaluate_ex`, `ZEND_AST_DIM`).
+    #[cold]
+    fn const_dim_on_object(&mut self) -> Throw {
+        self.make_throw("Error", "Cannot use [] on objects in constant expression")
     }
 
     /// Creates an exception of an internal class and returns the throw.

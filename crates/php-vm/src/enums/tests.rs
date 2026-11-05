@@ -193,3 +193,21 @@ fn link_time_enum_errors() {
     let fatal = out.find("Fatal error: Enum Foo cannot implement the Serializable interface");
     assert!(matches!((dep, fatal), (Some(d), Some(f)) if d < f), "{out}");
 }
+
+#[test]
+fn dim_on_object_in_constant_expression() {
+    let out = run(&format!(
+        "<?php enum Foo implements ArrayAccess {{ case Bar;\n\
+         public function offsetGet($k): mixed {{ return 42; }}\n\
+         public function offsetExists($k): bool {{ return true; }}\n\
+         public function offsetSet($k, $v): void {{}}\n\
+         public function offsetUnset($k): void {{}} }}\n\
+         class X {{ const A = [1, [2, 3]]; const B = X::A[1][0]; const C = Foo::Bar[0]; }}\n\
+         var_dump(X::B);\n\
+         try {{ var_dump(X::C); }} {CATCH}"
+    ));
+    assert_eq!(
+        out,
+        "int(2)\nError: Cannot use [] on objects in constant expression\n"
+    );
+}
