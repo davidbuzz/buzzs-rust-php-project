@@ -409,8 +409,17 @@ fn var_dump_object(
         out.put(b"*RECURSION*\n");
         return Ok(());
     };
-    let refs = o.refcount();
+    let refs_before = o.refcount();
     let ObjectDump { kind, properties } = object_dump(vm, out, o, PropertyPurpose::Debug)?;
+    // `php_debug_zval_dump` prints the refcount after
+    // `zend_get_properties_for()`: a table a native handler builds
+    // (`SplFixedArray`) holds its own references to the values, the
+    // standard property table does not (GH-8044).
+    let refs = if crate::ext::hooks_of(o).is_some_and(|h| h.properties_for.is_some()) {
+        o.refcount()
+    } else {
+        refs_before
+    };
     let properties = match (&kind, properties) {
         (ObjectKind::Enum { .. }, None) if zv.is_some() => Some(enum_props(vm, o)?),
         (_, p) => p,
@@ -595,7 +604,6 @@ fn print_hash(
 // ---------------------------------------------------------------------------
 
 fn circular(vm: &mut Vm, out: &mut Out) -> VmResult<()> {
-    out.flush(vm);
     vm.diagnostic(
         ErrorLevel::Warning,
         "var_export does not handle circular references",

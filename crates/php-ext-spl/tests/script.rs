@@ -443,3 +443,26 @@ foreach ((new ReflectionClass('RecursiveArrayIterator'))->getConstants() as $k =
 "#);
     assert_eq!(out, "STD_PROP_LIST=1\nARRAY_AS_PROPS=2\nCHILD_ARRAYS_ONLY=4\n");
 }
+
+#[test]
+fn fixed_array_export_and_zval_dump_match_zend() {
+    // GH-8044: var_export() buffers its output (the circular-reference
+    // warning comes first) and debug_zval_dump() counts the references of
+    // the table `get_properties_for` builds.
+    let out = run(r#"<?php
+set_error_handler(function ($n, $m) { echo "W:$m\n"; return true; });
+call_user_func(function () {
+    $x = new SplFixedArray(1);
+    $x[0] = $x;
+    echo "start\n";
+    var_export($x); echo "\n";
+    debug_zval_dump($x);
+});
+"#);
+    assert_eq!(
+        out,
+        "start\nW:var_export does not handle circular references\n\
+         \\SplFixedArray::__set_state(array(\n   0 => NULL,\n))\n\
+         object(SplFixedArray)#3 (1) refcount(4){\n  [0]=>\n  *RECURSION*\n}\n"
+    );
+}
