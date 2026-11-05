@@ -754,6 +754,11 @@ fn method_exists(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         return Ok(Value::Bool(true));
     }
     if let Value::Object(o) = &v {
+        // `get_method` of the object: methods outside the class table
+        // (PDO's driver methods) exist for it.
+        if vm.extra_method(o, &cls, &m).is_some() {
+            return Ok(Value::Bool(true));
+        }
         return Ok(Value::Bool(forwarded_method_exists(vm, o, &m)?));
     }
     Ok(Value::Bool(false))

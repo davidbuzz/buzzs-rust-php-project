@@ -406,6 +406,11 @@ impl Vm {
                 } else if let Some(c) = org.magic.call.clone() {
                     handler = Some(Handler::Magic(c, mname.clone()));
                     via_handler = true;
+                } else if let Some(m) = self.extra_method(&obj, &org, &mname) {
+                    // The rest of the object's `get_method` (PDO's driver
+                    // methods): a real function, not a trampoline, so the
+                    // checks below apply to it.
+                    handler = Some(Handler::Method(m));
                 }
             } else if let Some(cs) = &calling {
                 // zend_std_get_static_method.

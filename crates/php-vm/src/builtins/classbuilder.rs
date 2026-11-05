@@ -36,6 +36,47 @@ fn abstract_stub(
     Err(vm.make_throw("Error", "Cannot call abstract method"))
 }
 
+/// The native method of stub signature `sig` with flags `fl` (public
+/// when no visibility is given; `VARIADIC`/`RETURN_REF` from the stub).
+fn builtin_method(sig: &str, fl: u32, h: BuiltinFn) -> Builtin {
+    let s = parse_sig(sig);
+    let mut bfl = fl;
+    if s.variadic {
+        bfl |= flags::VARIADIC;
+    }
+    if s.by_ref_return {
+        bfl |= flags::RETURN_REF;
+    }
+    if bfl & flags::VISIBILITY == 0 {
+        bfl |= flags::PUBLIC;
+    }
+    Builtin {
+        name: ZStr::from(s.name.as_str()),
+        params: s.params,
+        defaults: s.defaults,
+        required: s.required,
+        return_type: s.ret,
+        flags: bfl,
+        handler: h,
+    }
+}
+
+/// A native method of `scope` that is not in its method table: the
+/// functions a `get_method` handler hands out from a table of its own
+/// (`pdo_hash_methods` in ext/pdo/pdo_dbh.c builds them from the driver's
+/// `zend_function_entry` list with `func.scope = pdo_dbh_ce`). Served
+/// through [`crate::ext::ClassHooks::extra_method`].
+pub fn native_method(scope: &Rc<Class>, sig: &str, fl: u32, h: BuiltinFn) -> Rc<Method> {
+    let b = builtin_method(sig, fl, h);
+    Rc::new(Method {
+        name: b.name.clone(),
+        flags: b.flags,
+        func: Func::Builtin(Rc::new(b)),
+        scope: Rc::downgrade(scope),
+        proto_scope: Rc::downgrade(scope),
+    })
+}
+
 impl ClassBuilder {
     /// Starts a class.
     pub fn new(name: &str) -> Self {
@@ -376,27 +417,9 @@ impl ClassBuilder {
             let mut methods: HashMap<ZStr, Rc<Method>> = HashMap::new();
             let mut order: Vec<ZStr> = Vec::new();
             for (sig, f, h) in &self.methods {
-                let s = parse_sig(sig);
-                let mut bfl = *f;
-                if s.variadic {
-                    bfl |= flags::VARIADIC;
-                }
-                if s.by_ref_return {
-                    bfl |= flags::RETURN_REF;
-                }
-                if bfl & flags::VISIBILITY == 0 {
-                    bfl |= flags::PUBLIC;
-                }
-                let b = Builtin {
-                    name: ZStr::from(s.name.as_str()),
-                    params: s.params,
-                    defaults: s.defaults,
-                    required: s.required,
-                    return_type: s.ret,
-                    flags: bfl,
-                    handler: *h,
-                };
-                let lc = ZStr::from(s.name.to_ascii_lowercase());
+                let b = builtin_method(sig, *f, *h);
+                let bfl = b.flags;
+                let lc = ZStr::from(b.name.to_ascii_lowercase());
                 let proto = parent
                     .as_ref()
                     .and_then(|p| p.methods.get(&lc))
@@ -405,7 +428,7 @@ impl ClassBuilder {
                 methods.insert(
                     lc,
                     Rc::new(Method {
-                        name: ZStr::from(s.name.as_str()),
+                        name: b.name.clone(),
                         func: Func::Builtin(Rc::new(b)),
                         flags: bfl,
                         scope: weak.clone(),
