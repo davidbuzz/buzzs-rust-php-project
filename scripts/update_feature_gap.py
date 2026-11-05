@@ -32,6 +32,8 @@ from pathlib import Path
 
 # Row name in FEATURE_GAP.md -> list of path prefixes (directories end with "/").
 MAPPING: dict[str, list[str]] = {
+    # Whole suite (out-of-scope prefixes are excluded as for every row).
+    "All in-scope `.phpt` tests": ["Zend/", "tests/", "ext/", "sapi/"],
     # Language front end / compiler.
     "Parser and AST": ["Zend/tests/grammar/", "Zend/tests/ast/"],
     "Compile-time diagnostics": ["Zend/tests/errmsg/"],
