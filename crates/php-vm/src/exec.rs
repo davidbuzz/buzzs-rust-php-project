@@ -921,6 +921,7 @@ impl Vm {
                                 self.echo(s.as_bytes());
                             }
                         }
+                        self.take_pending_throw()?;
                         Flow::Next
                     }
                     Op::Exit(a) => {

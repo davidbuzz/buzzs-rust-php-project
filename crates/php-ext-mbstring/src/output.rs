@@ -139,11 +139,18 @@ mod tests {
             Box::new(Vec::<u8>::new()),
             &[&ext],
         );
+        php_support::output::start(
+            &mut vm,
+            php_support::output::StartHandler::Default,
+            0,
+            flags::STDFLAGS,
+        );
         assert!(!vm
             .add_response_header(b"Content-Type: application/json\r\nInjected: yes", true)
             .expect("header"));
         assert_eq!(vm.response_mimetype(), None);
         assert!(vm.sends_default_content_type());
+        assert!(!vm.response_headers_sent().expect("headers_sent"));
         assert!(vm
             .add_response_header(b"Content-Type: text/plain", true)
             .expect("header"));

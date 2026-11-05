@@ -19,6 +19,7 @@ struct TestHost {
     sapi_flushes: usize,
     headers_ok: Option<bool>,
     conflicts: Vec<(&'static str, &'static str)>,
+    released: Vec<(usize, Vec<u8>)>,
 }
 
 impl OutputHost for TestHost {
@@ -47,6 +48,15 @@ impl OutputHost for TestHost {
 
     fn send_headers(&mut self) -> bool {
         self.headers_ok.unwrap_or(true)
+    }
+
+    fn release_handler_callback(&mut self, callback: Cb) {
+        self.released.push((self.stack.level(), self.out.clone()));
+        drop(callback);
+    }
+
+    fn has_pending_fatal(&self) -> bool {
+        self.fatal
     }
 
     fn check_handler_conflicts(&mut self, name: &[u8]) -> bool {
@@ -381,6 +391,48 @@ fn gh20837_start_after_fatal_fails() {
         h.finish(),
         "\nFatal error: ob_start(): Cannot use output buffering in output buffering display handlers in %s on line %d\n\nNotice: ob_start(): Failed to create buffer in %s on line %d\n"
     );
+}
+
+#[test]
+fn popped_callback_is_released_after_downstream_output() {
+    let mut h = TestHost::default();
+    h.ob_start_cb("lower", 1, 0x70, cb(|_, s, _| Some(s.to_vec())));
+    h.ob_start_cb("upper", 0, 0x70, cb(|_, s, _| Some(s.to_vec())));
+    h.echo("foo");
+    assert!(h.end_flush());
+    assert_eq!(h.released, vec![(1, b"foo".to_vec())]);
+    assert_eq!(h.stack.level(), 1);
+    assert_eq!(h.finish(), "foo");
+}
+
+#[test]
+fn rejected_callback_is_released_on_a_deactivated_stack() {
+    let mut h = TestHost::default();
+    deactivate(&mut h);
+    assert!(!h.ob_start_cb("rejected", 0, 0x70, cb(|_, s, _| Some(s.to_vec()))));
+    assert_eq!(h.released, vec![(0, Vec::new())]);
+}
+
+#[test]
+fn fatal_in_native_callback_keeps_running_handler_until_deactivation() {
+    let mut h = TestHost::default();
+    let handler = StartHandler::Alias {
+        name: b"native".to_vec(),
+        callback: cb(|h, _, _| {
+            h.report(Diagnostic::new(ErrorLevel::ERROR, "out of memory"));
+            Some(b"must not be sent".to_vec())
+        }),
+    };
+    assert!(start(&mut h, handler, 0, flags::STDFLAGS));
+    h.echo("buffered");
+    assert!(!h.end_flush());
+    assert!(h.fatal);
+    assert!(h.out.is_empty());
+    assert_eq!(h.stack.running_flags(), Some(flags::STDFLAGS));
+    assert!(h.released.is_empty());
+    deactivate(&mut h);
+    assert_eq!(h.released, vec![(0, Vec::new())]);
+    assert!(!h.stack.is_activated());
 }
 
 #[test]

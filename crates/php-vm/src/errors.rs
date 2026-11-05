@@ -238,7 +238,11 @@ impl Vm {
             let mut out = prepend.clone();
             out.extend_from_slice(format!("<br />\n<b>{lbl}</b>:  ").as_bytes());
             // `php_error_cb`: the message is HTML-escaped with html_errors.
-            out.extend_from_slice(&html_escape(msg));
+            let internal_encoding = self.ini.get("internal_encoding");
+            let default_charset = self.ini.get("default_charset");
+            let charset =
+                php_stdstr::html::effective_charset_hint(None, internal_encoding, default_charset);
+            out.extend_from_slice(&html_escape(msg, charset));
             out.extend_from_slice(
                 format!(" in <b>{file_s}</b> on line <b>{line}</b><br />\n").as_bytes(),
             );
@@ -302,14 +306,18 @@ impl Vm {
 
     /// Reports a fatal error (`E_ERROR`) without user handlers.
     pub(crate) fn report_fatal(&mut self, msg: &str, file: &ZStr, line: u32) {
+        self.report_fatal_bytes(msg.as_bytes(), file, line);
+    }
+
+    fn report_fatal_bytes(&mut self, msg: &[u8], file: &ZStr, line: u32) {
         self.last_error = Some(LastError {
             level: level::ERROR,
-            message: msg.as_bytes().to_vec(),
+            message: msg.to_vec(),
             file: file.clone(),
             line,
         });
         if self.error_reporting & level::ERROR != 0 {
-            self.display_error(level::ERROR, msg.as_bytes(), file, line);
+            self.display_error(level::ERROR, msg, file, line);
         }
         self.exit_status = 255;
         object::set_destructors_enabled(false);
@@ -421,22 +429,39 @@ impl Vm {
             file
         };
         let line = u32::try_from(self.exc_prop(e, "line").as_int().unwrap_or(0)).unwrap_or(0);
-        let msg = format!("Uncaught {}\n  thrown", s.to_string_lossy());
-        self.report_fatal(&msg, &file, line);
+        let mut msg = b"Uncaught ".to_vec();
+        msg.extend_from_slice(s.as_bytes());
+        msg.extend_from_slice(b"\n  thrown");
+        self.report_fatal_bytes(&msg, &file, line);
     }
 }
 
-/// `escape_html` of `php_error_cb` (`ENT_COMPAT | ENT_SUBSTITUTE`).
-fn html_escape(msg: &[u8]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(msg.len());
-    for &c in msg {
-        match c {
-            b'&' => out.extend_from_slice(b"&amp;"),
-            b'<' => out.extend_from_slice(b"&lt;"),
-            b'>' => out.extend_from_slice(b"&gt;"),
-            b'"' => out.extend_from_slice(b"&quot;"),
-            _ => out.push(c),
-        }
+/// `escape_html` of `php_error_cb`: retry invalid input with substitution.
+fn html_escape(msg: &[u8], charset: Option<&[u8]>) -> Vec<u8> {
+    use php_stdstr::html::{escape_html_entities, ENT_COMPAT, ENT_SUBSTITUTE};
+
+    let mut notices = php_stdstr::Notices::new();
+    let out = escape_html_entities(
+        msg,
+        false,
+        ENT_COMPAT,
+        charset,
+        true,
+        true,
+        "htmlspecialchars",
+        &mut notices,
+    );
+    if out.is_empty() {
+        return escape_html_entities(
+            msg,
+            false,
+            ENT_COMPAT | ENT_SUBSTITUTE,
+            charset,
+            true,
+            true,
+            "htmlspecialchars",
+            &mut notices,
+        );
     }
     out
 }

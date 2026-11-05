@@ -33,6 +33,20 @@ impl Vm {
         php_support::output::write(self, data);
     }
 
+    fn release_output_destructors(&mut self) {
+        let pending = self.pending_throw.take();
+        let released = self.run_released_destructors();
+        self.pending_throw = match (pending, released) {
+            (Some(Throw::Exception(old)), Err(Throw::Exception(new))) => {
+                crate::exceptions::chain_previous(&new, &old);
+                Some(Throw::Exception(new))
+            }
+            (Some(old), Err(Throw::Exception(_))) => Some(old),
+            (_, Err(t)) => Some(t),
+            (pending, Ok(())) => self.pending_throw.take().or(pending),
+        };
+    }
+
     /// Flushes standard output.
     pub fn flush_stdout(&mut self) {
         let _ = self.stdout.flush();
@@ -734,41 +748,41 @@ impl OutputHost for Vm {
     }
 
     fn call_handler(&mut self, callback: &mut Value, buffer: &[u8], mode: i32) -> Option<Vec<u8>> {
-        let cb = callback.clone();
         // Named native handlers (`php_output_handler_alias`).
-        if let Value::Str(n) = &cb {
-            if let Some(f) = self.output_handler_aliases.get(n).copied() {
-                return match (f.handler)(self, buffer, mode) {
-                    Ok(r) => r,
-                    Err(t) => {
-                        if self.pending_throw.is_none() {
-                            self.pending_throw = Some(t);
-                        }
-                        None
-                    }
-                };
-            }
-        }
-        let r = self.call_value(
-            &cb,
-            vec![Value::Str(ZStr::from(buffer)), Value::Int(i64::from(mode))],
-        );
-        match r {
-            Ok(Value::Bool(false)) => None,
-            Ok(Value::Bool(true)) => Some(Vec::new()),
-            Ok(Value::Str(s)) => Some(s.as_bytes().to_vec()),
-            Ok(Value::Null) => Some(Vec::new()),
-            Ok(other) => match self.to_zstr(&other) {
-                Ok(s) => Some(s.as_bytes().to_vec()),
-                Err(_) => None,
-            },
+        let alias = match callback {
+            Value::Str(n) => self.output_handler_aliases.get(n).copied(),
+            _ => None,
+        };
+        let r = if let Some(f) = alias {
+            (f.handler)(self, buffer, mode)
+        } else {
+            self.call_value(
+                callback,
+                vec![Value::Str(ZStr::from(buffer)), Value::Int(i64::from(mode))],
+            )
+            .and_then(|value| match value {
+                Value::Bool(false) => Ok(None),
+                Value::Bool(true) | Value::Null => Ok(Some(Vec::new())),
+                Value::Str(s) => Ok(Some(s.as_bytes().to_vec())),
+                other => self.to_zstr(&other).map(|s| Some(s.as_bytes().to_vec())),
+            })
+        };
+        let output = match r {
+            Ok(output) => output,
             Err(t) => {
                 if self.pending_throw.is_none() {
                     self.pending_throw = Some(t);
                 }
                 None
             }
+        };
+        // Return values can release captured objects while OG(running) is set.
+        self.release_output_destructors();
+        // Native callbacks may only record an OOM until they return.
+        if let Err(t) = self.raise_pending_oom() {
+            self.pending_throw = Some(t);
         }
+        output
     }
 
     fn sapi_write(&mut self, data: &[u8]) {
@@ -797,6 +811,22 @@ impl OutputHost for Vm {
         self.pending_throw.is_some()
     }
 
+    fn has_pending_fatal(&self) -> bool {
+        // `exit` while user code runs is an unwind exception: the handler
+        // fails and the stack unwinds normally. Only a frameless exit (at
+        // shutdown) bails out like a fatal.
+        match self.pending_throw {
+            Some(Throw::Fatal) => true,
+            Some(Throw::Exit) => self.frames.is_empty(),
+            _ => false,
+        }
+    }
+
+    fn release_handler_callback(&mut self, callback: Value) {
+        drop(callback);
+        self.release_output_destructors();
+    }
+
     fn sapi_flush(&mut self) {
         let _ = self.stdout.flush();
     }
@@ -810,7 +840,7 @@ impl OutputHost for Vm {
             self.error(level, &msg)
         };
         if let Err(t) = r {
-            if self.pending_throw.is_none() {
+            if matches!(t, Throw::Fatal) || self.pending_throw.is_none() {
                 self.pending_throw = Some(t);
             }
         }

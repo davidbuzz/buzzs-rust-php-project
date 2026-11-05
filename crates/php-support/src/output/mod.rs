@@ -382,6 +382,16 @@ pub trait OutputHost {
         false
     }
 
+    /// Whether a callback bailed out rather than throwing an exception.
+    fn has_pending_fatal(&self) -> bool {
+        false
+    }
+
+    /// Releases a handler's callable, including its captured objects.
+    fn release_handler_callback(&mut self, callback: Self::Callback) {
+        drop(callback);
+    }
+
     /// Reports a diagnostic.  An `E_ERROR` is fatal: the operation that
     /// reported it returns and the VM must bail out.
     fn report(&mut self, diagnostic: Diagnostic);
@@ -502,19 +512,30 @@ fn output_header<H: OutputHost + ?Sized>(host: &mut H) {
     }
 }
 
+fn handler_free<H: OutputHost + ?Sized>(host: &mut H, handler: Handler<H::Callback>) {
+    if let HandlerFunc::User(Some(callback)) = handler.func {
+        host.release_handler_callback(callback);
+    }
+}
+
 /// `php_output_deactivate()`: drops every handler (end of request, or
 /// after a fatal error).
 pub fn deactivate<H: OutputHost + ?Sized>(host: &mut H) {
     if host.output().flags & status::ACTIVATED != 0 {
         output_header(host);
-        let o = host.output();
-        o.flags ^= status::ACTIVATED;
-        o.active = None;
-        o.running = None;
-        while o.handlers.pop().is_some() {
+        {
+            let o = host.output();
+            o.flags ^= status::ACTIVATED;
             o.active = None;
+            o.running = None;
         }
-        o.detached = None;
+        while let Some(handler) = host.output().handlers.pop() {
+            handler_free(host, handler);
+            host.output().active = None;
+        }
+        if let Some(handler) = host.output().detached.take() {
+            handler_free(host, handler);
+        }
     }
 }
 
@@ -626,16 +647,20 @@ fn handler_op<H: OutputHost + ?Sized>(host: &mut H, id: u64, ctx: &mut Context) 
         let retval = match taken_user {
             Some(mut cb) => {
                 let r = host.call_handler(&mut cb, &buffer, ctx.op);
-                if let Some(h) = host.output().find_mut(id) {
-                    if let HandlerFunc::User(slot) = &mut h.func {
-                        *slot = Some(cb);
-                    }
+                if let Some(Handler {
+                    func: HandlerFunc::User(slot),
+                    ..
+                }) = host.output().find_mut(id)
+                {
+                    *slot = Some(cb);
+                } else {
+                    host.release_handler_callback(cb);
                 }
                 r
             }
             None => None,
         };
-        if !host.output().is_activated() {
+        if !host.output().is_activated() || host.has_pending_fatal() {
             // A fatal error inside the handler: PHP bails out here.
             return Status::Failure;
         }
@@ -643,7 +668,9 @@ fn handler_op<H: OutputHost + ?Sized>(host: &mut H, id: u64, ctx: &mut Context) 
             .output()
             .find(id)
             .is_some_and(|h| h.flags & flags::PRODUCED_OUTPUT != 0);
-        if is_user && produced {
+        // main/output.c skips the deprecation only when the call threw
+        // (retval UNDEF); a handler that returned false still gets it.
+        if is_user && produced && (retval.is_some() || !host.has_pending_exception()) {
             let name = {
                 let h = host.output().find_mut(id);
                 h.map(|h| {
@@ -682,7 +709,7 @@ fn handler_op<H: OutputHost + ?Sized>(host: &mut H, id: u64, ctx: &mut Context) 
             (Some(false), _) => Some(Vec::new()),
             (None, Some(mut f)) => {
                 let r = f(&buffer, ctx.op);
-                if !host.output().is_activated() {
+                if !host.output().is_activated() || host.has_pending_fatal() {
                     return Status::Failure;
                 }
                 if let Some(h) = host.output().find_mut(id) {
@@ -789,7 +816,7 @@ fn output_op<H: OutputHost + ?Sized>(host: &mut H, op: i32, data: &[u8]) {
                 if stack_apply_op(host, id, &mut ctx) {
                     break;
                 }
-                if !host.output().is_activated() {
+                if !host.output().is_activated() || host.has_pending_fatal() {
                     return;
                 }
             }
@@ -800,7 +827,7 @@ fn output_op<H: OutputHost + ?Sized>(host: &mut H, op: i32, data: &[u8]) {
             .map(|h| h.id)
         {
             handler_op(host, top, &mut ctx);
-            if !host.output().is_activated() {
+            if !host.output().is_activated() || host.has_pending_fatal() {
                 return;
             }
         } else {
@@ -858,7 +885,7 @@ pub fn flush<H: OutputHost + ?Sized>(host: &mut H) -> bool {
     };
     let mut ctx = Context::new(flags::FLUSH);
     handler_op(host, id, &mut ctx);
-    if !host.output().is_activated() {
+    if !host.output().is_activated() || host.has_pending_fatal() {
         return true;
     }
     if let Some(out) = ctx.output.filter(|o| !o.is_empty()) {
@@ -955,14 +982,20 @@ fn stack_pop<H: OutputHost + ?Sized>(host: &mut H, pop_flags: u32) -> bool {
         if !host.output().is_activated() {
             return true;
         }
+        if host.has_pending_fatal() {
+            return false;
+        }
     }
     let o = host.output();
-    o.handlers.pop();
+    let orphan = o.handlers.pop();
     o.active = o.handlers.last().map(|h| h.id);
     if pop_flags & POP_DISCARD == 0 {
         if let Some(out) = ctx.output.filter(|o| !o.is_empty()) {
             write(host, &out);
         }
+    }
+    if let Some(handler) = orphan {
+        handler_free(host, handler);
     }
     true
 }
@@ -985,19 +1018,24 @@ pub fn discard<H: OutputHost + ?Sized>(host: &mut H) -> bool {
 /// `php_output_discard_all()`.
 pub fn discard_all<H: OutputHost + ?Sized>(host: &mut H) {
     while host.output().active.is_some() {
-        stack_pop(host, POP_DISCARD | POP_FORCE);
+        if !stack_pop(host, POP_DISCARD | POP_FORCE) {
+            break;
+        }
     }
 }
 
 /// `php_output_handler_start()` for a prepared handler.
 fn handler_start<H: OutputHost + ?Sized>(host: &mut H, mut handler: Handler<H::Callback>) -> bool {
     if host.output().flags & status::ACTIVATED == 0 {
+        handler_free(host, handler);
         return false;
     }
     if lock_error(host, flags::START) {
+        handler_free(host, handler);
         return false;
     }
     if !host.check_handler_conflicts(&handler.name) {
+        handler_free(host, handler);
         return false;
     }
     let o = host.output();
@@ -1142,7 +1180,7 @@ pub fn ob_get_flush<H: OutputHost + ?Sized>(host: &mut H) -> Option<Vec<u8>> {
         );
         return None;
     };
-    if !end(host) {
+    if !end(host) && !host.has_pending_fatal() {
         let (n, l) = active_name_level(host);
         notice(host, format!("Failed to delete buffer of {n} ({l})"));
     }
@@ -1152,7 +1190,7 @@ pub fn ob_get_flush<H: OutputHost + ?Sized>(host: &mut H) -> Option<Vec<u8>> {
 /// `ob_get_clean()`: `None` is PHP's `false`.
 pub fn ob_get_clean<H: OutputHost + ?Sized>(host: &mut H) -> Option<Vec<u8>> {
     let contents = host.output().contents()?;
-    if !discard(host) {
+    if !discard(host) && !host.has_pending_fatal() {
         let (n, l) = active_name_level(host);
         notice(host, format!("Failed to delete buffer of {n} ({l})"));
     }

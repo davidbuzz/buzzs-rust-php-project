@@ -341,11 +341,11 @@ impl Vm {
             let _ = self.call_global_destructors();
             self.in_shutdown = false;
         }
-        object::set_destructors_enabled(false);
         for h in self.shutdown_hooks.clone() {
             h(self);
         }
         php_support::output::request_shutdown(self);
+        object::set_destructors_enabled(false);
         // `sapi_deactivate`: headers go out (and header_register_callback
         // runs) even when the script produced no output.
         crate::builtins::headers::send_headers(self);

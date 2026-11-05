@@ -159,6 +159,54 @@ fn source_return_buffers_obey_the_output_handler_lock() {
 }
 
 #[test]
+fn returned_object_destructor_runs_inside_the_output_handler() {
+    let out = run(r#"
+        class OutputValue {
+            function __toString() { return 'discarded'; }
+            function __destruct() { highlight_string('x', true); }
+        }
+        ob_start(function($s) { return new OutputValue; });
+        echo 'buffered';
+        ob_end_flush();
+    "#);
+    assert!(
+        out.contains(
+            "Fatal error: highlight_string(): Cannot use output buffering in output buffering display handlers"
+        ),
+        "{out}"
+    );
+    assert!(!out.contains("discarded"), "{out}");
+}
+
+#[test]
+fn gh20906_destructors_and_captured_callbacks_obey_the_output_lock() {
+    for (name, call) in [
+        ("php_strip_whitespace", "php_strip_whitespace(__FILE__)"),
+        ("highlight_file", "highlight_file(__FILE__, true)"),
+        ("highlight_string", "highlight_string(__FILE__, true)"),
+    ] {
+        let out = run(&format!(
+            "class A {{
+                function __destruct() {{
+                    {call};
+                    echo 'x';
+                    $c = new A;
+                    ob_start(function () use ($c) {{ return '/'; }}, 1);
+                    ob_start(function () use (&$c) {{ $c = new A; return '/'; }}, 1);
+                }}
+            }}
+            new A;"
+        ));
+        assert!(
+            out.contains(&format!(
+                "Fatal error: {name}(): Cannot use output buffering in output buffering display handlers"
+            )),
+            "{out}"
+        );
+    }
+}
+
+#[test]
 fn source_return_buffers_capture_open_warnings_and_restore_the_stack() {
     let out = run(r#"ob_start();
         set_error_handler(function($n, $m) { var_dump(ob_get_level()); return true; });

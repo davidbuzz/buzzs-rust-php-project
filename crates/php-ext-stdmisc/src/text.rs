@@ -129,21 +129,23 @@ fn highlight_file(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
                 "Failed opening '{}' for highlighting",
                 String::from_utf8_lossy(path.as_bytes())
             ))?;
+            return Ok(None);
+        };
+        let html = highlight::highlight(&src, &colors(vm), short_tags(vm));
+        Ok(Some(html))
+    })();
+    match result {
+        Ok(Some(html)) => emit(vm, &html, ret),
+        result => {
             if ret {
                 output::end(vm);
             }
-            return Ok(Value::Bool(false));
-        };
-        let html = highlight::highlight(&src, &colors(vm), short_tags(vm));
-        emit(vm, &html, ret)
-    })();
-    if ret && result.is_err() {
-        output::end(vm);
+            if let Some(t) = vm.pending_throw.take() {
+                return Err(t);
+            }
+            result.map(|_| Value::Bool(false))
+        }
     }
-    if let Some(t) = vm.pending_throw.take() {
-        return Err(t);
-    }
-    result
 }
 
 fn php_strip_whitespace(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -154,8 +156,7 @@ fn php_strip_whitespace(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     start_capture(vm)?;
     let result = (|| {
         let Some(src) = read_script(vm, path.as_bytes())? else {
-            output::end(vm);
-            return Ok(Value::from(""));
+            return Ok(None);
         };
         let (out, warnings) = highlight::strip_whitespace(&src, short_tags(vm));
         for w in warnings {
@@ -165,15 +166,18 @@ fn php_strip_whitespace(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             };
             vm.error_at(level, &w.message, &path, w.line)?;
         }
-        emit(vm, &out, true)
+        Ok(Some(out))
     })();
-    if result.is_err() {
-        output::end(vm);
+    match result {
+        Ok(Some(out)) => emit(vm, &out, true),
+        result => {
+            output::end(vm);
+            if let Some(t) = vm.pending_throw.take() {
+                return Err(t);
+            }
+            result.map(|_| Value::from(""))
+        }
     }
-    if let Some(t) = vm.pending_throw.take() {
-        return Err(t);
-    }
-    result
 }
 
 fn http_build_query(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
