@@ -71,10 +71,24 @@ fn read_script(vm: &mut Vm, path: &[u8]) -> VmResult<Option<Vec<u8>>> {
             &mut opened,
             None,
         );
-        stream.map(|mut s| {
-            let source = s.copy_to_mem(None).unwrap_or_default();
+        stream.and_then(|mut s| {
+            s.add_flags(php_streams::stream::flags::NO_BUFFER);
+            let mut source = Vec::new();
+            let mut buffer = [0; php_streams::stream::CHUNK_SIZE];
+            let result = loop {
+                match s.read(&mut buffer) {
+                    Ok(0) => break Some(source),
+                    Ok(n) => {
+                        if !php_streams::util::reserve_more(&mut source, n) {
+                            break None;
+                        }
+                        source.extend_from_slice(&buffer[..n]);
+                    }
+                    Err(_) => break None,
+                }
+            };
             s.close();
-            source
+            result
         })
     })
 }
@@ -245,12 +259,22 @@ fn locale_arg(vm: &mut Vm, n: usize, v: Value, strict: bool) -> VmResult<Value> 
 /// order after all scalar arguments have been validated.
 fn setlocale(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let cat = a.int(0);
-    let strict = vm
-        .frames
-        .iter()
-        .rev()
-        .nth(1)
-        .is_some_and(|f| f.kind != php_vm::vm::FrameKind::Builtin && f.code.strict_types);
+    let mut callers = vm.frames.iter().rev().skip(1);
+    let mut caller = callers.next();
+    if caller.is_some_and(|f| {
+        f.kind == php_vm::vm::FrameKind::Builtin
+            && f.builtin_name.is_none()
+            && f.func.as_ref().is_some_and(|func| {
+                matches!(
+                    func.name().as_bytes(),
+                    b"call_user_func" | b"call_user_func_array"
+                )
+            })
+    }) {
+        caller = callers.next();
+    }
+    let strict =
+        caller.is_some_and(|f| f.kind != php_vm::vm::FrameKind::Builtin && f.code.strict_types);
     let mut args = Vec::with_capacity(a.values.len().saturating_sub(1));
     for (i, v) in a.values.iter().skip(1).map(Value::deref).enumerate() {
         if i == 0 && matches!(v, Value::Array(_)) {

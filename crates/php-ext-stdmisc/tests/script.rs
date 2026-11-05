@@ -241,6 +241,71 @@ fn scanner_reads_wrappers_and_include_path() {
 }
 
 #[test]
+fn scanner_distinguishes_read_failure_from_empty_source() {
+    let misc = php_ext_stdmisc::StdMisc;
+    let streams = php_ext_streams::Streams;
+    let out = run_with(&VmOptions::default(), &[&streams, &misc], r#"
+        class ReadSource {
+            public $context;
+            private $mode;
+            private $read = false;
+            function stream_open($path, $mode, $options, &$opened_path) {
+                $this->mode = $path;
+                return true;
+            }
+            function stream_read($length) {
+                if ($this->mode === 'readsource://throw') {
+                    throw new Error('read failed');
+                }
+                if ($this->mode === 'readsource://empty') { return ''; }
+                if ($this->mode === 'readsource://partial' && !$this->read) {
+                    $this->read = true;
+                    return '<?php echo 1; ?>';
+                }
+                return false;
+            }
+            function stream_eof() { return $this->mode === 'readsource://empty'; }
+            function stream_stat() { return ['mode' => 0100644, 'size' => 0]; }
+            function stream_set_option($option, $arg1, $arg2) { return true; }
+        }
+        stream_wrapper_register('readsource', ReadSource::class);
+        set_error_handler(function($n, $s) { echo $s, "\n"; });
+        var_dump(highlight_file('readsource://failed', true));
+        var_dump(highlight_file('readsource://partial', true));
+        var_dump(is_string(highlight_file('readsource://empty', true)));
+        var_dump(php_strip_whitespace('readsource://empty'));
+        try { php_strip_whitespace('readsource://throw'); }
+        catch (Error $e) { echo $e->getMessage(), "\n"; }
+    "#);
+    assert_eq!(
+        out,
+        "highlight_file(): Failed opening 'readsource://failed' for highlighting\nbool(false)\n\
+         highlight_file(): Failed opening 'readsource://partial' for highlighting\nbool(false)\n\
+         bool(true)\nstring(0) \"\"\nread failed\n"
+    );
+}
+
+#[test]
+fn setlocale_direct_forwarding_is_strict_and_dynamic_forwarding_is_weak() {
+    let out = run(r#"declare(strict_types=1);
+        try { call_user_func('setlocale', LC_ALL, 0); }
+        catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+        try { call_user_func_array('setlocale', [LC_ALL, '0', 0]); }
+        catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+        $forward = 'call_user_func';
+        $forward('setlocale', LC_ALL, 0);
+        $forward = 'call_user_func_array';
+        $forward('setlocale', [LC_ALL, '0', 0]);
+        echo "weak forwarding\n";
+    "#);
+    assert_eq!(
+        out,
+        "setlocale(): Argument #2 ($locales) must be of type array|string|null, int given\n\
+         setlocale(): Argument #3 must be of type ?string, int given\nweak forwarding\n"
+    );
+}
+
+#[test]
 fn ini_functions() {
     let out = run(
         r#"$a = parse_ini_string("x = 1\n[s]\ny[] = on\n", true, INI_SCANNER_TYPED);
