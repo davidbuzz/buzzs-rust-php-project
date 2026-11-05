@@ -452,6 +452,9 @@ pub(crate) fn descend(
             }
         },
         seg @ (RSeg::Dim(_) | RSeg::Append) => {
+            // Whether this container was `false` just converted to an
+            // array (`zend_false_to_array_deprecated`).
+            let mut from_false = false;
             match v {
                 Value::Array(_) => {}
                 Value::Null => {
@@ -470,6 +473,7 @@ pub(crate) fn descend(
                         return Step::Done(Value::Null);
                     }
                     *v = Value::Array(ZArray::new());
+                    from_false = true;
                 }
                 Value::Object(o) => return Step::Obj(o.clone(), i),
                 Value::Str(_) => return string_container_step(v, segs, i, wop, diags),
@@ -538,7 +542,7 @@ pub(crate) fn descend(
                             // array across the "Undefined variable" warning
                             // and the null-offset deprecation.
                             arr.make_mut();
-                            let hit = UndefDimHit::Array(arr.clone());
+                            let hit = UndefDimHit::Array(arr.clone(), from_false);
                             UNDEF_DIM_HIT.with(|c| c.set(Some((cv, hit))));
                             return Step::Done(Value::Null);
                         }
@@ -675,8 +679,12 @@ pub(crate) fn take_nonvar_ref(depth: usize) -> bool {
 /// diagnostics, and the assignment is redone silently unless the error
 /// handler destroyed (or, for an array, shared) the container.
 enum UndefDimHit {
-    /// An array: `slow_index_convert_w`'s `GC_ADDREF(ht)`.
-    Array(ZArray),
+    /// An array: `slow_index_convert_w`'s `GC_ADDREF(ht)`. The flag is set
+    /// when the walk made it from `false`: `ZEND_ASSIGN_DIM` holds the new
+    /// array across the "Automatic conversion of false to array" deprecation
+    /// (already raised with the walk's diagnostics) and abandons the write,
+    /// before reading the offset, when the error handler freed it.
+    Array(ZArray, bool),
     /// A string: `zend_assign_to_string_offset`'s `GC_ADDREF(s)`.
     Str(ZStr),
 }
@@ -1650,9 +1658,16 @@ impl Vm {
     /// abandoned and the assignment yields null.
     #[cold]
     fn undef_dim_diags(&mut self, cv: u32, hit: UndefDimHit, v: &Value) -> VmResult<bool> {
+        if let UndefDimHit::Array(held, true) = &hit {
+            // `ZEND_ASSIGN_DIM`: `GC_DELREF(ht) == 0` after the false
+            // deprecation -> `assign_dim_error`; the offset is never read.
+            if held.refcount() == 1 {
+                return Ok(false);
+            }
+        }
         self.undef_dim_warning(cv)?;
         match hit {
-            UndefDimHit::Array(held) => {
+            UndefDimHit::Array(held, _) => {
                 if held.refcount() != 2 {
                     return Ok(false);
                 }

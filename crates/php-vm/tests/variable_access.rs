@@ -335,3 +335,32 @@ var_dump($x, $b);
          Err: Undefined variable $d\nErr: String offset cast occurred\nNULL\nstring(0) \"\"\n"
     );
 }
+
+/// `ZEND_ASSIGN_DIM` converts a `false` container to an array before it
+/// reads the offset: when the error handler for the "Automatic conversion
+/// of false to array" deprecation frees the new array, the write is
+/// abandoned and an undefined-variable offset is never read (php-src
+/// `Zend/tests/falsetoarray_002.phpt`).
+#[test]
+fn false_to_array_freed_by_the_handler_skips_the_undefined_offset() {
+    assert_eq!(
+        run(r#"<?php
+set_error_handler(function ($code, $msg) {
+    echo "Err: $msg\n";
+    $GLOBALS['a'] = '';
+});
+$a = [!'a'];
+$a[0][$d] = 'b';
+var_dump($a);
+$a = [false];
+$r = ($a[0][$d] = 'b');
+var_dump($a, $r);
+$a = false;
+$a[$d] = 'b';
+var_dump($a);
+"#),
+        "Err: Automatic conversion of false to array is deprecated\nstring(0) \"\"\n\
+         Err: Automatic conversion of false to array is deprecated\nstring(0) \"\"\nNULL\n\
+         Err: Automatic conversion of false to array is deprecated\nstring(0) \"\"\n"
+    );
+}
