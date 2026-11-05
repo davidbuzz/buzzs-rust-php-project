@@ -469,13 +469,13 @@ $a = fresh(); $alias =& $a; var_dump(isset($a[1.0E+42]));
 $a = fresh(); var_dump(\array_key_exists(1.0E+42, $a));
 "#;
     let warning = "The float 1.0E+42 is not representable as an int, cast occurred\n";
-    let expected = format!("{warning}bool(false)\n{warning}bool(true)\n{warning}bool(false)\n");
+    let removed = format!("{warning}bool(false)\n{warning}bool(true)\n{warning}bool(false)\n");
+    // Unsetting the handler's local global binding leaves the caller's
+    // reference and array alive; null/replacement assignments do not.
+    let unbound = format!("{warning}bool(true)\n{warning}bool(false)\n{warning}bool(true)\n");
     assert_eq!(
         run_array_lookup(src),
-        format!(
-            "{}{warning}bool(false)\n{warning}bool(false)\n",
-            expected.repeat(3)
-        )
+        format!("{removed}{unbound}{removed}{warning}bool(false)\n{warning}bool(false)\n")
     );
 }
 
@@ -606,9 +606,11 @@ catch (TypeError $e) {
     echo $e->getTrace()[0]["function"], "\n";
 }
 "#;
+    // Both array_key_exists calls finish before var_dump prints either
+    // result, so the null-key diagnostic precedes both boolean values.
     assert_eq!(
         run_array_lookup(src),
-        "bool(true)\nbool(true)\nbool(true)\nUsing null as the key parameter for array_key_exists() is deprecated, use an empty string instead\nbool(true)\nCannot access offset of type array on array\nCannot access offset of type stdClass on array\narray\nbool(true)\nkey\narray\nbool(true)\nUndefined variable $missing_key\narray\nUsing null as the key parameter for array_key_exists() is deprecated, use an empty string instead\nbool(false)\nUndefined variable $missing_array\narray_key_exists(): Argument #2 ($array) must be of type array, null given\narray_key_exists\n"
+        "bool(true)\nbool(true)\nUsing null as the key parameter for array_key_exists() is deprecated, use an empty string instead\nbool(true)\nbool(true)\nCannot access offset of type array on array\nCannot access offset of type stdClass on array\narray\nbool(true)\nkey\narray\nbool(true)\nUndefined variable $missing_key\narray\nUsing null as the key parameter for array_key_exists() is deprecated, use an empty string instead\nbool(false)\nUndefined variable $missing_array\narray_key_exists(): Argument #2 ($array) must be of type array, null given\narray_key_exists\n"
     );
 }
 
