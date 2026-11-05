@@ -656,6 +656,8 @@ pub struct Vm {
     pub(crate) send_default_content_type: bool,
     /// Active non-CLI SAPI's header operation (`sapi_header_op`).
     pub response_header_hook: Option<crate::ext::ResponseHeaderFn>,
+    /// Observer of the SAPI's multipart parser (`php_rfc1867_callback`).
+    pub rfc1867_callback: Option<crate::ext::Rfc1867Fn>,
     /// Running fibers (innermost last).
     pub fibers: Vec<Obj>,
     /// Destination temporary of the builtin call in progress (fibers).

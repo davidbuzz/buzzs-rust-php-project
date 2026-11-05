@@ -19,6 +19,7 @@ use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 /// `E_WARNING`.
 const E_WARNING: i64 = 2;
@@ -487,6 +488,31 @@ fn flush(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
     Ok(Value::Null)
 }
 
+/// PID of the server while a request runs in a forked child of it (0 in
+/// the server itself).
+static SERVER_PID: AtomicU32 = AtomicU32::new(0);
+
+/// Records, in a request child, the PID of the server process that forked
+/// it: PHP runs every request in the server process, so `getmypid()` is
+/// the same for all requests a server (or worker) handles.
+pub fn set_server_pid(pid: u32) {
+    SERVER_PID.store(pid, Ordering::Relaxed);
+}
+
+/// The PID `getmypid()` reports.
+#[must_use]
+pub fn server_pid() -> u32 {
+    match SERVER_PID.load(Ordering::Relaxed) {
+        0 => std::process::id(),
+        pid => pid,
+    }
+}
+
+#[allow(clippy::unnecessary_wraps)]
+fn getmypid(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
+    Ok(Value::Int(i64::from(server_pid())))
+}
+
 #[allow(clippy::unnecessary_wraps)]
 fn php_sapi_name(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
     Ok(str_value("cli-server"))
@@ -697,6 +723,7 @@ impl Extension for CliServerModule {
             )
             .function("flush(): void", flush)
             .function("php_sapi_name(): string|false", php_sapi_name)
+            .function("getmypid(): int|false", getmypid)
             .function("connection_aborted(): bool", connection_aborted)
             .function("connection_status(): int", connection_status)
             .function(
@@ -860,9 +887,6 @@ fn run_request_inner(
         let line = format!("X-Powered-By: PHP/{}", php_vm::PHP_VERSION);
         let _ = ctx.header_op(HeaderOp::Replace(line.as_bytes(), 0));
     }
-    for hook in vm.startup_hooks.clone() {
-        hook(vm);
-    }
     let limit = u64::try_from(vm.ini.get_long("memory_limit")).unwrap_or(u64::MAX);
     if php_memlimit::request_start(php_memlimit::limit_from_ini(limit)).is_err() {
         php_memlimit::GLOBAL.force_limit(Some(php_memlimit::DEFAULT_LIMIT));
@@ -874,7 +898,12 @@ fn run_request_inner(
         router: cfg.router.as_deref(),
         client_addr: &ctx.client_addr,
     };
+    // php_hash_environment() (which parses the body, reporting uploads to
+    // the rfc1867 observer) precedes zend_activate_modules() (RINIT).
     crate::vars::populate(vm, ctx, &facts, &auth);
+    for hook in vm.startup_hooks.clone() {
+        hook(vm);
+    }
     install_input_hook(ctx);
     vm.script_path = ZStr::from("Unknown");
 
@@ -938,5 +967,14 @@ mod tests {
         assert!(is_fatal_level(4096));
         assert!(!is_fatal_level(2));
         assert!(!is_fatal_level(8192));
+    }
+
+    #[test]
+    fn request_children_report_the_server_pid() {
+        assert_eq!(server_pid(), std::process::id());
+        set_server_pid(4242);
+        assert_eq!(server_pid(), 4242);
+        set_server_pid(0);
+        assert_eq!(server_pid(), std::process::id());
     }
 }

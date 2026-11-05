@@ -272,3 +272,77 @@ fn rewrite_var_start_inside_a_handler_bails_out() {
         "\nFatal error: output_add_rewrite_var(): Cannot use output buffering in output buffering display handlers in test.php on line 2\n"
     );
 }
+
+#[test]
+fn upload_progress_is_stored_before_request_startup() {
+    use php_runtime::{Value, ZArray};
+    use php_vm::ext::Rfc1867Event;
+
+    let dir = save_dir("upload-progress");
+    let path = dir.to_string_lossy().into_owned();
+    let ini: Vec<(String, String)> = [
+        ("session.save_path", path.as_str()),
+        ("session.use_strict_mode", "0"),
+        ("session.upload_progress.cleanup", "0"),
+        ("session.upload_progress.freq", "0"),
+        ("session.upload_progress.min_freq", "0"),
+    ]
+    .iter()
+    .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+    .collect();
+    let sink = Sink::default();
+    let ext = php_ext_session::Session;
+    let exts: [&dyn Extension; 1] = [&ext];
+    let opts = VmOptions { ini };
+    let mut vm = Vm::with_extensions(&opts, Box::new(sink.clone()), &exts);
+    // The SAPI has parsed the cookies (php_session_rfc1867_early_find_sid).
+    {
+        let mut cookie = ZArray::new();
+        cookie
+            .make_mut()
+            .insert("PHPSESSID", Value::string("upload1"));
+        let mut g = vm.globals.borrow_mut();
+        let i = g.find_or_add(b"_COOKIE") as usize;
+        g.slots[i] = Some(Value::Array(cookie));
+    }
+    let cb = vm
+        .rfc1867_callback
+        .expect("the session module observes uploads");
+    let events = [
+        Rfc1867Event::Start {
+            content_length: 100,
+        },
+        Rfc1867Event::FormData {
+            name: b"PHP_SESSION_UPLOAD_PROGRESS",
+            value: b"t",
+        },
+        Rfc1867Event::FileStart {
+            name: b"file",
+            filename: b"a.txt",
+        },
+        Rfc1867Event::FileData {
+            offset: 0,
+            length: 3,
+        },
+        Rfc1867Event::FileEnd {
+            temp_filename: Some(&b"/tmp/phpUpload"[..]),
+            cancel_upload: 0,
+        },
+        Rfc1867Event::End,
+    ];
+    for event in events {
+        assert!(cb(&mut vm, event, 100));
+    }
+    vm.run_script(
+        br#"<?php ob_start(); session_id("upload1"); session_start();
+        $p = $_SESSION["upload_progress_t"];
+        var_dump($p["done"], $p["bytes_processed"], $p["files"][0]["name"], $p["files"][0]["tmp_name"]);"#,
+        "test.php",
+    );
+    drop(vm);
+    let out = String::from_utf8_lossy(&sink.0.borrow()).into_owned();
+    assert_eq!(
+        out,
+        "bool(true)\nint(100)\nstring(5) \"a.txt\"\nstring(14) \"/tmp/phpUpload\"\n"
+    );
+}

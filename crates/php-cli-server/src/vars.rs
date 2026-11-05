@@ -8,6 +8,7 @@ use crate::request::Request;
 use crate::sapi::{Body, RequestCtx};
 use php_runtime::{ArrayKey, HashTable, Value, ZArray, ZStr};
 use php_stdmisc::query::{self, InputSettings, ParseKind, RegisterOptions};
+use php_vm::ext::Rfc1867Event;
 use php_vm::Vm;
 use std::path::PathBuf;
 
@@ -288,6 +289,29 @@ fn read_standard_form_data(vm: &mut Vm, ctx: &RequestCtx) -> bool {
     true
 }
 
+/// `$_GET` (`treat_data(PARSE_GET)`), empty unless `enabled`.
+fn parse_get(vm: &mut Vm, req: &Request, settings: &InputSettings, enabled: bool) -> ZArray {
+    let mut get = ZArray::new();
+    if enabled {
+        if let Some(q) = &req.query_string {
+            let _ = query::treat_data(ParseKind::Get, c_str(q), &mut get, settings, "", None, vm);
+        }
+    }
+    get
+}
+
+/// `$_COOKIE` (`treat_data(PARSE_COOKIE)`), empty unless `enabled`.
+fn parse_cookie(vm: &mut Vm, req: &Request, settings: &InputSettings, enabled: bool) -> ZArray {
+    let mut cookie = ZArray::new();
+    if enabled {
+        if let Some(c) = req.header(b"cookie") {
+            let c = c_str(c).to_vec();
+            let _ = query::treat_data(ParseKind::Cookie, &c, &mut cookie, settings, "", None, vm);
+        }
+    }
+    cookie
+}
+
 /// Populates every superglobal for the request.
 #[allow(clippy::too_many_lines)]
 pub fn populate(vm: &mut Vm, ctx: &RequestCtx, facts: &ServerFacts<'_>, auth: &AuthData) {
@@ -306,6 +330,8 @@ pub fn populate(vm: &mut Vm, ctx: &RequestCtx, facts: &ServerFacts<'_>, auth: &A
     // $_POST / $_FILES are read at SAPI activation (before $_GET).
     let mut post = ZArray::new();
     let mut files = ZArray::new();
+    // `$_GET`/`$_COOKIE` parsed early for the upload observer.
+    let mut early: Option<(ZArray, ZArray)> = None;
     let content_type = req.header(b"content-type").map(<[u8]>::to_vec);
     if vm.ini_bool("enable_post_data_reading") && req.method == crate::parser::Method::Post {
         if let Some(ct) = &content_type {
@@ -342,8 +368,28 @@ pub fn populate(vm: &mut Vm, ctx: &RequestCtx, facts: &ServerFacts<'_>, auth: &A
                         let content_length =
                             i64::try_from(req.content.as_ref().map_or(0, Vec::len))
                                 .unwrap_or(i64::MAX);
+                        let callback = vm.rfc1867_callback;
+                        if callback.is_some() {
+                            // php_session_rfc1867_early_find_sid(): the
+                            // observer looks the session ID up in
+                            // $_COOKIE / $_GET while the body is parsed.
+                            let get = parse_get(vm, req, &settings, has(b'G'));
+                            let cookie = parse_cookie(vm, req, &settings, has(b'C'));
+                            set_global(vm, "_GET", get.clone());
+                            set_global(vm, "_COOKIE", cookie.clone());
+                            early = Some((get, cookie));
+                        }
                         let mut read = |buf: &mut [u8]| ctx.read_post(buf);
-                        let outcome = multipart::parse(ct, content_length, &upload, &mut read);
+                        let outcome = match callback {
+                            Some(cb) => multipart::parse_with_events(
+                                ct,
+                                content_length,
+                                &upload,
+                                &mut read,
+                                &mut |event: Rfc1867Event<'_>, bytes| cb(vm, event, bytes),
+                            ),
+                            None => multipart::parse(ct, content_length, &upload, &mut read),
+                        };
                         *ctx.body.borrow_mut() = Body::Consumed;
                         for w in &outcome.warnings {
                             startup_warning(vm, &w.message, w.docref);
@@ -369,22 +415,14 @@ pub fn populate(vm: &mut Vm, ctx: &RequestCtx, facts: &ServerFacts<'_>, auth: &A
         }
     }
 
-    // $_GET
-    let mut get = ZArray::new();
-    if has(b'G') {
-        if let Some(q) = &req.query_string {
-            let _ = query::treat_data(ParseKind::Get, c_str(q), &mut get, &settings, "", None, vm);
+    // $_GET, $_COOKIE
+    let (get, cookie) = match early {
+        Some(parsed) => parsed,
+        None => {
+            let get = parse_get(vm, req, &settings, has(b'G'));
+            (get, parse_cookie(vm, req, &settings, has(b'C')))
         }
-    }
-
-    // $_COOKIE
-    let mut cookie = ZArray::new();
-    if has(b'C') {
-        if let Some(c) = req.header(b"cookie") {
-            let c = c_str(c).to_vec();
-            let _ = query::treat_data(ParseKind::Cookie, &c, &mut cookie, &settings, "", None, vm);
-        }
-    }
+    };
 
     // $_SERVER
     let mut server = ZArray::new();

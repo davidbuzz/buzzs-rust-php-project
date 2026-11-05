@@ -8,6 +8,7 @@
 //! the warnings PHP would raise.  Registering the variables is left to the
 //! caller (it needs the VM for `php_register_variable_ex`).
 
+use php_vm::ext::Rfc1867Event;
 use std::collections::HashSet;
 use std::io::Write;
 use std::os::unix::ffi::OsStrExt;
@@ -30,6 +31,8 @@ pub mod upload_err {
     pub const NO_TMP_DIR: i64 = 6;
     /// `UPLOAD_ERR_CANT_WRITE`.
     pub const CANT_WRITE: i64 = 7;
+    /// `UPLOAD_ERR_EXTENSION` (the upload observer cancelled it).
+    pub const EXTENSION: i64 = 8;
 }
 
 /// INI settings consulted by the upload handler.
@@ -541,12 +544,27 @@ fn boundary_of(content_type: &[u8]) -> Result<Vec<u8>, &'static str> {
 }
 
 /// `rfc1867_post_handler()`: parses a `multipart/form-data` body.
-#[allow(clippy::too_many_lines)]
 pub fn parse(
     content_type: &[u8],
     content_length: i64,
     settings: &UploadSettings,
     read: &mut dyn FnMut(&mut [u8]) -> usize,
+) -> Outcome {
+    parse_with_events(content_type, content_length, settings, read, &mut |_, _| {
+        true
+    })
+}
+
+/// [`parse`] reporting its progress to `events` (`php_rfc1867_callback`),
+/// which also receives `SG(read_post_bytes)`; an event returning `false`
+/// skips the field or cancels the upload, as `FAILURE` does in PHP.
+#[allow(clippy::too_many_lines)]
+pub fn parse_with_events(
+    content_type: &[u8],
+    content_length: i64,
+    settings: &UploadSettings,
+    read: &mut dyn FnMut(&mut [u8]) -> usize,
+    events: &mut dyn FnMut(Rfc1867Event<'_>, i64) -> bool,
 ) -> Outcome {
     let mut p = Parser {
         out: Outcome::default(),
@@ -603,7 +621,10 @@ pub fn parse(
     let mut count = 0i64;
     let mut max_file_size: i64 = 0;
 
-    while !mb.eof() {
+    // A failed start event goes straight to `fileupload_done`.
+    let started = events(Rfc1867Event::Start { content_length }, mb.read_bytes);
+
+    while started && !mb.eof() {
         let Some(headers) = mb.headers() else {
             break;
         };
@@ -645,15 +666,29 @@ pub fn parse(
                 let value = mb.read_body();
                 count += 1;
                 if count <= settings.max_input_vars {
+                    let event = Rfc1867Event::FormData {
+                        name: &param,
+                        value: &value,
+                    };
+                    if !events(event, mb.read_bytes) {
+                        continue;
+                    }
                     p.register(Target::Post, &param, RegValue::Str(value.clone()), false);
-                } else if count == settings.max_input_vars + 1 {
-                    p.warn(
-                        format!(
-                            "Input variables exceeded {}. To increase the limit change max_input_vars in php.ini.",
-                            settings.max_input_vars
-                        ),
-                        true,
-                    );
+                } else {
+                    if count == settings.max_input_vars + 1 {
+                        p.warn(
+                            format!(
+                                "Input variables exceeded {}. To increase the limit change max_input_vars in php.ini.",
+                                settings.max_input_vars
+                            ),
+                            true,
+                        );
+                    }
+                    let event = Rfc1867Event::FormData {
+                        name: &param,
+                        value: &value,
+                    };
+                    events(event, mb.read_bytes);
                 }
                 if normalize_protected_variable(&param).eq_ignore_ascii_case(b"MAX_FILE_SIZE") {
                     max_file_size = crate::headers::strtol(c_str(&value));
@@ -711,6 +746,13 @@ pub fn parse(
             continue;
         }
         let filename = filename.unwrap_or_default();
+        let event = Rfc1867Event::FileStart {
+            name: &param,
+            filename: &filename,
+        };
+        if !events(event, mb.read_bytes) {
+            continue;
+        }
 
         let mut cancel: i64 = 0;
         let mut total: i64 = 0;
@@ -735,7 +777,15 @@ pub fn parse(
             upload_cnt -= 1;
             while cancel == 0 && !chunk.is_empty() {
                 let blen = i64::try_from(chunk.len()).unwrap_or(i64::MAX);
-                if settings.upload_max_filesize > 0 && total + blen > settings.upload_max_filesize {
+                let event = Rfc1867Event::FileData {
+                    offset: total,
+                    length: blen,
+                };
+                if !events(event, mb.read_bytes) {
+                    cancel = upload_err::EXTENSION;
+                } else if settings.upload_max_filesize > 0
+                    && total + blen > settings.upload_max_filesize
+                {
                     cancel = upload_err::INI_SIZE;
                 } else if max_file_size != 0 && total + blen > max_file_size {
                     cancel = upload_err::FORM_SIZE;
@@ -754,6 +804,14 @@ pub fn parse(
         }
         if cancel == 0 && !end {
             cancel = upload_err::PARTIAL;
+        }
+        let temp_bytes = temp.as_ref().map(|t| t.as_os_str().as_bytes().to_vec());
+        let event = Rfc1867Event::FileEnd {
+            temp_filename: temp_bytes.as_deref(),
+            cancel_upload: cancel,
+        };
+        if !events(event, mb.read_bytes) {
+            cancel = upload_err::EXTENSION;
         }
         if cancel == 0 {
             if let Some(t) = &temp {
@@ -844,6 +902,7 @@ pub fn parse(
             false,
         );
     }
+    events(Rfc1867Event::End, mb.read_bytes);
     p.out
 }
 
@@ -1040,5 +1099,104 @@ mod tests {
         assert_eq!(rest, b" filename=x");
         assert_eq!(memstr(b"abc\n--X", b"\n--XY", true), Some(3));
         assert_eq!(memstr(b"abc\n--X", b"\n--XY", false), None);
+    }
+
+    /// Runs [`parse_with_events`], logging the events; `verdict` decides
+    /// each event's result.
+    fn run_events(
+        body: &[u8],
+        verdict: &dyn Fn(&Rfc1867Event<'_>) -> bool,
+    ) -> (Outcome, Vec<String>) {
+        let mut pos = 0;
+        let mut read = |buf: &mut [u8]| {
+            let n = buf.len().min(body.len() - pos);
+            buf[..n].copy_from_slice(&body[pos..pos + n]);
+            pos += n;
+            n
+        };
+        let mut log = Vec::new();
+        let o = parse_with_events(
+            CT.as_bytes(),
+            i64::try_from(body.len()).unwrap(),
+            &tmp_settings(),
+            &mut read,
+            &mut |e, _| {
+                let entry = match e {
+                    Rfc1867Event::Start { content_length } => format!("start {content_length}"),
+                    Rfc1867Event::FormData { name, value } => format!(
+                        "formdata {}={}",
+                        String::from_utf8_lossy(name),
+                        String::from_utf8_lossy(value)
+                    ),
+                    Rfc1867Event::FileStart { name, filename } => format!(
+                        "file_start {} {}",
+                        String::from_utf8_lossy(name),
+                        String::from_utf8_lossy(filename)
+                    ),
+                    Rfc1867Event::FileData { offset, length } => {
+                        format!("file_data {offset} {length}")
+                    }
+                    Rfc1867Event::FileEnd {
+                        temp_filename,
+                        cancel_upload,
+                    } => format!("file_end {} {cancel_upload}", temp_filename.is_some()),
+                    Rfc1867Event::End => "end".to_string(),
+                };
+                log.push(entry);
+                verdict(&e)
+            },
+        );
+        (o, log)
+    }
+
+    const PROGRESS_BODY: &[u8] = b"--XyZ\r\nContent-Disposition: form-data; name=\"PHP_SESSION_UPLOAD_PROGRESS\"\r\n\r\ntest\r\n\
+--XyZ\r\nContent-Disposition: form-data; name=\"file\"; filename=\"t.txt\"\r\nContent-Type: text/plain\r\n\r\ncontents\r\n\
+--XyZ--\r\n";
+
+    #[test]
+    fn upload_events_in_order() {
+        let (o, log) = run_events(PROGRESS_BODY, &|_| true);
+        assert_eq!(
+            log,
+            [
+                format!("start {}", PROGRESS_BODY.len()),
+                "formdata PHP_SESSION_UPLOAD_PROGRESS=test".to_string(),
+                "file_start file t.txt".to_string(),
+                "file_data 0 8".to_string(),
+                "file_end true 0".to_string(),
+                "end".to_string(),
+            ]
+        );
+        assert_eq!(o.registrations[0].target, Target::Post);
+        assert_eq!(
+            o.registrations.last().map(|r| &r.value),
+            Some(&RegValue::Long(8))
+        );
+        assert_eq!(o.uploaded.len(), 1);
+        cleanup(&o.uploaded);
+    }
+
+    #[test]
+    fn failed_events_skip_fields_and_cancel_uploads() {
+        let (o, _) = run_events(PROGRESS_BODY, &|e| {
+            !matches!(
+                e,
+                Rfc1867Event::FormData { .. } | Rfc1867Event::FileData { .. }
+            )
+        });
+        // The field is not registered; the file reports UPLOAD_ERR_EXTENSION.
+        assert!(o.registrations.iter().all(|r| r.target == Target::Files));
+        let error = o
+            .registrations
+            .iter()
+            .find(|r| r.name == b"file[error]")
+            .map(|r| r.value.clone());
+        assert_eq!(error, Some(RegValue::Long(upload_err::EXTENSION)));
+        assert!(o.uploaded.is_empty());
+
+        let (o, log) = run_events(PROGRESS_BODY, &|e| !matches!(e, Rfc1867Event::Start { .. }));
+        assert!(o.registrations.is_empty());
+        assert_eq!(log.len(), 2);
+        assert_eq!(log[1], "end");
     }
 }
