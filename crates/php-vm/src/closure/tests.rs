@@ -218,3 +218,13 @@ fn attribute_closure_error_uses_declaration_line() {
     assert_eq!(run("<?php\n#[Attribute(...)]\n\nfunction f() {\n}\n"), format!("{msg}4\n"));
     assert_eq!(run("<?php\nfunction g(\n#[A(...)]\n\n$x) {}\n"), format!("{msg}2\n"));
 }
+
+/// `ZEND_ADD_ARRAY_ELEMENT` with an object key raises
+/// zend_illegal_array_offset_access() (closure_array_key_error.phpt).
+#[test]
+fn closure_as_array_literal_key() {
+    let out = run(
+        "<?php\ntry { var_dump([function () {} => 1]); } catch (TypeError $e) { echo $e->getMessage(); }",
+    );
+    assert_eq!(out, "Cannot access offset of type Closure on array");
+}
