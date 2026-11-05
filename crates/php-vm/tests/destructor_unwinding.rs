@@ -285,3 +285,36 @@ echo "end\n";
         "Exception: dtor\nException: dtor\nTypeError: Unsupported operand types: T + T\nend\n"
     );
 }
+
+/// `zend_generator_dtor_storage`: destroying a generator suspended in a
+/// finally block whose exception is pending runs the inner finally and
+/// rethrows the pending exception (`zend_dispatch_try_catch_finally_helper`
+/// adopts the backed-up exception when none is in flight).
+#[test]
+fn destroyed_generator_rethrows_the_exception_pending_in_its_finally() {
+    let (status, output) = run(r#"<?php
+function gen() {
+    try {
+        throw new Exception("1");
+    } finally {
+        try {
+            throw new Exception("2");
+        } finally {
+            try {
+                yield;
+            } finally {
+                echo "inner finally\n";
+            }
+        }
+    }
+}
+try {
+    gen()->rewind();
+} catch (Exception $e) {
+    echo $e->getMessage(), " <- ", $e->getPrevious()?->getMessage(), "\n";
+}
+echo "end\n";
+"#);
+    assert_eq!(status, 0);
+    assert_eq!(output, "inner finally\n2 <- 1\nend\n");
+}

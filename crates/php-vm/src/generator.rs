@@ -101,6 +101,21 @@ thread_local! {
     /// Bumped whenever a delegation link is removed, invalidating cached
     /// roots.
     static EPOCH: Cell<u64> = const { Cell::new(0) };
+    /// The unwind markers `gen_destroy` throws into the generators it is
+    /// force-closing (innermost last).
+    static CLOSE_MARKERS: std::cell::RefCell<Vec<Obj>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Whether `e` is the marker of a generator being force-closed. php-src
+/// closes it with no exception at all (`zend_generator_dtor_storage` jumps
+/// into the finally block), so an exception pending in an enclosing
+/// finally block is rethrown in its place
+/// (`zend_dispatch_try_catch_finally_helper`: `ex = EG(exception) =
+/// Z_OBJ_P(fast_call)`), unlike a fiber's graceful exit, which discards it.
+#[cold]
+pub(crate) fn is_close_marker(e: &Obj) -> bool {
+    CLOSE_MARKERS.with(|m| m.borrow().iter().any(|o| Obj::ptr_eq(o, e)))
 }
 
 fn epoch() -> u64 {
@@ -928,11 +943,12 @@ impl Vm {
             close(g);
             return Ok(());
         };
+        let ge_marker = ge.clone();
         // zend_generator_cleanup_unfinished_execution: release pending
         // calls and loop variables before entering `finally`.
         let released = with(g, |d| {
             d.forced_close = true;
-            d.pending_exc = Some(ge);
+            d.pending_exc = Some(ge.clone());
             d.frame.as_mut().map(|f| {
                 (
                     std::mem::take(&mut f.calls),
@@ -943,7 +959,9 @@ impl Vm {
         .flatten();
         drop(released);
         self.run_pending_destructors()?;
+        CLOSE_MARKERS.with(|m| m.borrow_mut().push(ge_marker));
         let r = self.gen_run(g);
+        CLOSE_MARKERS.with(|m| m.borrow_mut().pop());
         close(g);
         match r {
             Err(Throw::Exception(e)) if is_graceful(&e) => Ok(()),

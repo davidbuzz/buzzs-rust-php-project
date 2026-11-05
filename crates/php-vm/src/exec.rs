@@ -384,7 +384,14 @@ impl Vm {
                         let f = self.frame_mut();
                         let prev = std::mem::take(&mut f.fins[fin as usize]);
                         if let FinState::Exception(p) = prev {
-                            crate::exceptions::chain_previous(&exc, &p);
+                            if crate::fiber::is_graceful_exit(&exc)
+                                && crate::generator::is_close_marker(&exc)
+                            {
+                                // A force-closed generator rethrows it.
+                                exc = p;
+                            } else {
+                                crate::exceptions::chain_previous(&exc, &p);
+                            }
                         }
                     }
                 }
