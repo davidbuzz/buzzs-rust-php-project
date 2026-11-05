@@ -491,6 +491,8 @@ pub(crate) fn descend(
             match seg {
                 RSeg::Append => {
                     let t = arr.make_mut();
+                    // The key `push_mut` uses (`nNextFreeElement`).
+                    let slot_key = t.next_index();
                     if last {
                         match wop {
                             WOp::Assign(val) => {
@@ -512,7 +514,12 @@ pub(crate) fn descend(
                                 Step::Done(r)
                             }
                             _ => match t.push_mut(Value::Null) {
-                                Ok(slot) => apply_final(slot, wop),
+                                Ok(slot) => {
+                                    if matches!(wop, WOp::AssignOp(..)) {
+                                        record_append(i, slot_key);
+                                    }
+                                    apply_final(slot, wop)
+                                }
                                 Err(_) => {
                                     Step::Err(WalkErr::Error(
                                         "Cannot add element to the array as the next element is already occupied".into(),
@@ -522,7 +529,12 @@ pub(crate) fn descend(
                         }
                     } else {
                         match t.push_mut(Value::Null) {
-                            Ok(slot) => descend(slot, segs, i + 1, wop, diags, true),
+                            Ok(slot) => {
+                                if matches!(wop, WOp::AssignOp(..)) {
+                                    record_append(i, slot_key);
+                                }
+                                descend(slot, segs, i + 1, wop, diags, true)
+                            }
                             Err(_) => {
                                 Step::Err(WalkErr::Error(
                                         "Cannot add element to the array as the next element is already occupied".into(),
@@ -615,6 +627,45 @@ thread_local! {
     /// made them (see [`apply_final`]).
     static DEFERRED_REF_ASSIGNS: std::cell::RefCell<Vec<(PhpRef, Value)>> =
         const { std::cell::RefCell::new(Vec::new()) };
+}
+
+thread_local! {
+    /// The elements `[]` segments appended during the first walk of a
+    /// compound assignment, as (segment index, key). `ZEND_ASSIGN_DIM_OP`
+    /// with no offset inserts one null element and operates on it in place
+    /// (`zend_hash_next_index_insert(ht, &EG(uninitialized_zval))`); the
+    /// silent write-back walk targets those elements instead of appending
+    /// again (bug32833: `$a[] .= 'x'`).
+    static APPENDED: std::cell::RefCell<Vec<(usize, i64)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// See `APPENDED`.
+#[cold]
+#[inline(never)]
+fn record_append(seg: usize, key: i64) {
+    APPENDED.with(|a| a.borrow_mut().push((seg, key)));
+}
+
+/// The segments for the write-back walk of a compound assignment whose
+/// first walk over `segs` appended elements: each recorded `[]` becomes
+/// the offset of the element it appended. `None` when nothing was
+/// appended (the walk is repeated over `segs` as is).
+fn take_appended_segs(segs: &[RSeg]) -> Option<Vec<RSeg>> {
+    if !segs.iter().any(|s| matches!(s, RSeg::Append)) {
+        return None;
+    }
+    let rec = APPENDED.with(|a| std::mem::take(&mut *a.borrow_mut()));
+    if rec.is_empty() {
+        return None;
+    }
+    let mut out = segs.to_vec();
+    for (i, k) in rec {
+        if let Some(seg @ RSeg::Append) = out.get_mut(i) {
+            *seg = RSeg::Dim(Value::Int(k));
+        }
+    }
+    Some(out)
 }
 
 thread_local! {
@@ -1043,6 +1094,11 @@ impl Vm {
             }
             RBase::Undef(_) => return Ok(Value::Null),
         };
+        let appended = if matches!(wop, WOp::AssignOp(..)) {
+            take_appended_segs(segs)
+        } else {
+            None
+        };
         let flushed = if quiet {
             Ok(())
         } else {
@@ -1066,6 +1122,7 @@ impl Vm {
                 // The final slot lies inside the base's container: write the
                 // result back with a second, silent walk.
                 let nv = self.assign_op_value(*op, cur, rhs)?;
+                let segs = appended.as_deref().unwrap_or(segs);
                 return self.write_place_inner(again, segs, WOp::Assign(nv), true);
             }
             (Step::Err(WalkErr::StringOffsetObject), _, Some(again)) => {
@@ -1136,17 +1193,19 @@ impl Vm {
         step: Step,
         segs: &[RSeg],
         wop: WOp,
-        mut walk: impl FnMut(&mut WOp, &mut Diags) -> Step,
+        appended: Option<Vec<RSeg>>,
+        mut walk: impl FnMut(&[RSeg], &mut WOp, &mut Diags) -> Step,
     ) -> VmResult<Value> {
         if let (Step::Done(cur), WOp::AssignOp(op, rhs)) = (&step, &wop) {
             let nv = self.assign_op_value(*op, cur, rhs)?;
             let mut w = WOp::Assign(nv);
-            let s = walk(&mut w, &mut Vec::new());
+            let segs = appended.as_deref().unwrap_or(segs);
+            let s = walk(segs, &mut w, &mut Vec::new());
             return self.finish_step(s, segs, w);
         }
         if matches!(step, Step::Err(WalkErr::StringOffsetObject)) {
             return self.assign_string_offset_object(&wop, |vm, mut w| {
-                let s = walk(&mut w, &mut Vec::new());
+                let s = walk(segs, &mut w, &mut Vec::new());
                 vm.finish_step(s, segs, w)
             });
         }
@@ -1159,14 +1218,19 @@ impl Vm {
         &mut self,
         segs: &[RSeg],
         wop: WOp,
-        mut walk: impl FnMut(&mut WOp, &mut Diags) -> Step,
+        mut walk: impl FnMut(&[RSeg], &mut WOp, &mut Diags) -> Step,
     ) -> VmResult<Value> {
         let mut diags = Vec::new();
         let mut w = wop;
         // A hit pending in an outer walk (whose diagnostics are being
         // reported) is not this walk's.
         let outer_hit = UNDEF_DIM_HIT.with(std::cell::Cell::take);
-        let s = walk(&mut w, &mut diags);
+        let s = walk(segs, &mut w, &mut diags);
+        let appended = if matches!(w, WOp::AssignOp(..)) {
+            take_appended_segs(segs)
+        } else {
+            None
+        };
         let hit = UNDEF_DIM_HIT.with(|c| c.replace(outer_hit));
         let flushed = self.flush_diags(diags);
         let changed = rw_container_changed(&w);
@@ -1177,7 +1241,7 @@ impl Vm {
         if let Some((cv, hit)) = hit {
             return self.descend_undef_dim(cv, hit, segs, w, walk);
         }
-        self.finish_native(s, segs, w, walk)
+        self.finish_native(s, segs, w, appended, walk)
     }
 
     /// [`Vm::assign_undef_dim`] for a walk stopped inside a container
@@ -1191,7 +1255,7 @@ impl Vm {
         hit: UndefDimHit,
         segs: &[RSeg],
         wop: WOp,
-        mut walk: impl FnMut(&mut WOp, &mut Diags) -> Step,
+        mut walk: impl FnMut(&[RSeg], &mut WOp, &mut Diags) -> Step,
     ) -> VmResult<Value> {
         let WOp::Assign(v) = &wop else {
             return Ok(Value::Null);
@@ -1200,22 +1264,22 @@ impl Vm {
             return Ok(Value::Null);
         }
         let mut w = wop;
-        let s = walk(&mut w, &mut Vec::new());
+        let s = walk(segs, &mut w, &mut Vec::new());
         self.finish_step(s, segs, w)
     }
 
     /// Continues a write walk at segment `i` inside a reference.
     fn descend_ref(&mut self, r: &PhpRef, segs: &[RSeg], i: usize, wop: WOp) -> VmResult<Value> {
-        self.descend_with(segs, wop, |w, d| {
+        self.descend_with(segs, wop, |sg, w, d| {
             let mut b = r.borrow_mut();
-            descend(&mut b, segs, i, w, d, false)
+            descend(&mut b, sg, i, w, d, false)
         })
     }
 
     /// Continues a write walk at segment `i` inside a temporary (a
     /// handler's non-reference result: the modification is lost).
     fn descend_temp(&mut self, mut v: Value, segs: &[RSeg], i: usize, wop: WOp) -> VmResult<Value> {
-        self.descend_with(segs, wop, |w, d| descend(&mut v, segs, i, w, d, false))
+        self.descend_with(segs, wop, |sg, w, d| descend(&mut v, sg, i, w, d, false))
     }
 
     fn finish_step(&mut self, step: Step, segs: &[RSeg], wop: WOp) -> VmResult<Value> {
@@ -1369,22 +1433,22 @@ impl Vm {
                 match self.property_container(&obj, name, rw)? {
                     PropContainer::Declared(idx) => {
                         let obj = self.lazy_object_for(&obj, Some(name))?;
-                        let walk = |w: &mut WOp, d: &mut Diags| {
+                        let walk = |sg: &[RSeg], w: &mut WOp, d: &mut Diags| {
                             let data = object::data(&obj);
                             let mut slots = data.slots.borrow_mut();
                             let slot = slots[idx].get_or_insert(Value::Null);
-                            descend(slot, segs, i + 1, w, d, false)
+                            descend(slot, sg, i + 1, w, d, false)
                         };
                         self.descend_with(segs, wop, walk)
                     }
                     PropContainer::Dynamic(key) => {
                         let obj = self.lazy_object_for(&obj, Some(name))?;
-                        let walk = |w: &mut WOp, d: &mut Diags| {
+                        let walk = |sg: &[RSeg], w: &mut WOp, d: &mut Diags| {
                             let data = object::data(&obj);
                             let mut dynp = data.dynamic.borrow_mut();
                             let t = dynp.get_or_insert_with(php_runtime::HashTable::new);
                             let slot = t.lookup(key.clone());
-                            descend(slot, segs, i + 1, w, d, false)
+                            descend(slot, sg, i + 1, w, d, false)
                         };
                         self.descend_with(segs, wop, walk)
                     }
