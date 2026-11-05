@@ -1319,9 +1319,7 @@ fn unserialize(
         }
         set_array(host, func, this, st, &storage, 0, true)?;
     }
-    for (k, v) in members.iter() {
-        host.property_write(this, &k.to_zstr(), v.clone())?;
-    }
+    host.properties_load(this, &members)?;
     if let Some(Value::Str(c)) = iterator_class {
         match host.class_is_a(&c, "ArrayIterator") {
             None => {
@@ -1416,9 +1414,7 @@ fn legacy_unserialize(
     let Value::Array(members) = members else {
         return Err(err(np));
     };
-    for (k, v) in members.iter() {
-        host.property_write(this, &k.to_zstr(), v.clone())?;
-    }
+    host.properties_load(this, &members)?;
     Ok(())
 }
 

@@ -354,3 +354,27 @@ array(2) {
 }
 "#);
 }
+
+#[test]
+fn unserialize_members_load_like_object_properties_load() {
+    // GH-9708: declared members are type-checked strictly; undeclared
+    // ones are dynamic properties with the PHP 8.2 deprecation.
+    let out = run(r#"<?php
+error_reporting(E_ALL);
+set_error_handler(function ($n, $m) { echo $m, "\n"; return true; });
+class Foo extends ArrayObject { public int $a = 5; }
+try {
+    unserialize('O:3:"Foo":4:{i:0;i:0;i:1;a:0:{}i:2;a:1:{s:1:"a";s:2:"10";}i:3;N;}');
+} catch (TypeError $e) {
+    echo $e->getMessage(), "\n";
+}
+$f = unserialize('O:13:"SplFixedArray":2:{i:0;i:1;s:3:"foo";s:3:"bar";}');
+var_dump($f->foo);
+"#);
+    assert_eq!(
+        out,
+        "Cannot assign string to property Foo::$a of type int\n\
+         Creation of dynamic property SplFixedArray::$foo is deprecated\n\
+         string(3) \"bar\"\n"
+    );
+}

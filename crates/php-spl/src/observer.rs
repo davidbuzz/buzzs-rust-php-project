@@ -405,9 +405,7 @@ pub(crate) fn call(
                         None => key = Some(v.clone()),
                     }
                 }
-                for (k, v) in members.iter() {
-                    host.property_write(this, &k.to_zstr(), v.clone())?;
-                }
+                host.properties_load(this, &members)?;
                 Ok(Value::Null)
             }
             "__debuginfo" => {
@@ -561,9 +559,7 @@ fn legacy_unserialize(
     let Value::Array(members) = members else {
         return Err(err(np));
     };
-    for (k, v) in members.iter() {
-        host.property_write(this, &k.to_zstr(), v.clone())?;
-    }
+    host.properties_load(this, &members)?;
     Ok(())
 }
 

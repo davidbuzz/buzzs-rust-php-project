@@ -373,17 +373,17 @@ fn unserialize(host: &mut dyn SplHost, this: &Obj, args: &[Value]) -> RtResult<V
         return Ok(Value::Null);
     }
     let mut elements = Vec::new();
-    let mut members = Vec::new();
+    let mut members = HashTable::new();
     for (k, v) in data.iter() {
         match k {
             ArrayKey::Int(_) => elements.push(v.deref()),
-            ArrayKey::Str(s) => members.push((s.clone(), v.clone())),
+            ArrayKey::Str(_) => {
+                members.insert(k.clone(), v.clone());
+            }
         }
     }
     st.fixed(|f| f.elements = elements)?;
-    for (k, v) in members {
-        host.property_write(this, &k, v)?;
-    }
+    host.properties_load(this, &ZArray::from_table(members))?;
     Ok(Value::Null)
 }
 

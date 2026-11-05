@@ -134,6 +134,17 @@ pub trait SplHost: ArrayContext {
     /// wraps an object and writes to it). Keys are mangled names.
     fn set_std_properties(&mut self, obj: &Obj, props: ZArray) -> RtResult<()>;
 
+    /// `object_properties_load`: loads the extra members of an
+    /// `__unserialize()` payload (mangled keys) into the object, with
+    /// typed-property checks and the dynamic-property deprecation. The
+    /// default writes each member with `property_write`.
+    fn properties_load(&mut self, obj: &Obj, props: &ZArray) -> RtResult<()> {
+        for (k, v) in props.iter() {
+            self.property_write(obj, &k.to_zstr(), v.clone())?;
+        }
+        Ok(())
+    }
+
     /// Class metadata of a class name (`None` when it does not exist after
     /// optional autoloading).
     fn class_info(&mut self, name: &ZStr, autoload: bool) -> Option<ClassInfo>;
