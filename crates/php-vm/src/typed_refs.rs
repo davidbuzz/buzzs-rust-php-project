@@ -776,8 +776,7 @@ impl Vm {
             .try_borrow()
             .is_ok_and(|s| matches!(s.get(idx), Some(None)));
         // After unset(), `__get()` takes over.
-        let reinit =
-            d.readonly_init.borrow().get(idx).copied().unwrap_or(false) && cls.magic.get.is_some();
+        let reinit = d.slot_unset(idx) && cls.magic.get.is_some();
         if !uninit || reinit || d.lazy.borrow().is_some() {
             return None;
         }
@@ -1190,7 +1189,7 @@ impl Vm {
             self.lookup_prop(&cls, name, scope.as_ref()),
             crate::props::PropLookup::Found(p) if Rc::ptr_eq(&p, &pi)
         );
-        let unset_since = d.readonly_init.borrow().get(idx).copied().unwrap_or(false);
+        let unset_since = d.slot_unset(idx);
         if !accessible
             || (uninit && (unset_since && cls.magic.get.is_some()))
             || pi.flags & (crate::func::flags::READONLY | crate::func::flags::SET_MASK) != 0

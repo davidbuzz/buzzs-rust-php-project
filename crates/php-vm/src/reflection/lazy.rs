@@ -122,7 +122,7 @@ fn clear_destructed(o: &Obj) {
 /// Snapshot of an object's properties for reverting a failed init.
 struct Snapshot {
     slots: Vec<Option<Value>>,
-    dynamic: Option<HashTable>,
+    dynamic: Option<Box<HashTable>>,
 }
 
 fn snapshot(o: &Obj) -> Snapshot {

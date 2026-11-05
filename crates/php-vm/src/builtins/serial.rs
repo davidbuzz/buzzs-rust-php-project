@@ -1422,9 +1422,7 @@ impl Unserializer<'_> {
                     } else {
                         drop(slots);
                     }
-                    if let Some(r) = d.readonly_init.borrow_mut().get_mut(pi.slot as usize) {
-                        *r = true;
-                    }
+                    d.set_slot_unset(pi.slot as usize, true);
                     // `ZEND_REF_ADD_TYPE_SOURCE` / `ref_props`: the parse
                     // cell becomes a typed reference if a later `R:`
                     // shares it (a source only counts while the slot
@@ -1437,7 +1435,7 @@ impl Unserializer<'_> {
                 Target::Dynamic(k) => {
                     let d = object::data(o);
                     let mut dynp = d.dynamic.borrow_mut();
-                    let t = dynp.get_or_insert_with(HashTable::new);
+                    let t = dynp.get_or_insert_with(Box::default);
                     let key = ArrayKey::Str(k.clone());
                     let old = t.get(&key).cloned();
                     t.insert(key, v);

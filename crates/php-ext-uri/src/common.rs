@@ -116,9 +116,7 @@ pub(crate) fn init_prop(vm: &mut Vm, o: &Obj, name: &str, v: Value) {
         .rev()
         .find(|p| p.name.as_bytes() == name.as_bytes())
     {
-        if let Some(flag) = data.readonly_init.borrow_mut().get_mut(pi.slot as usize) {
-            *flag = true;
-        }
+        data.set_slot_unset(pi.slot as usize, true);
     }
 }
 

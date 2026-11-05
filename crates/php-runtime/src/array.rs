@@ -171,7 +171,73 @@ pub struct HashTable {
     internal_ptr: u32,
     kind: Kind,
     /// Registered iterator positions: `(id, pos)`.
-    iterators: Vec<(IterId, u32)>,
+    iterators: IterList,
+}
+
+/// The registered iterators of a table (`HT_ITERATORS_COUNT`): boxed and
+/// absent while there are none, which is almost always (8 bytes per table
+/// instead of an inline `Vec`'s 24).
+#[derive(Clone, Default)]
+struct IterList(Option<Box<Vec<(IterId, u32)>>>);
+
+impl IterList {
+    fn push(&mut self, it: (IterId, u32)) {
+        self.0.get_or_insert_with(Box::default).push(it);
+    }
+
+    fn retain(&mut self, f: impl FnMut(&(IterId, u32)) -> bool) {
+        if let Some(v) = &mut self.0 {
+            v.retain(f);
+            if v.is_empty() {
+                self.0 = None;
+            }
+        }
+    }
+
+    /// Moves all of `other`'s iterators to the end of this list.
+    fn append(&mut self, other: &mut IterList) {
+        if let Some(mut o) = other.0.take() {
+            match &mut self.0 {
+                Some(v) => v.append(&mut o),
+                None => self.0 = Some(o),
+            }
+        }
+    }
+}
+
+impl std::ops::Deref for IterList {
+    type Target = [(IterId, u32)];
+    fn deref(&self) -> &[(IterId, u32)] {
+        match &self.0 {
+            Some(v) => v.as_slice(),
+            None => &[],
+        }
+    }
+}
+
+impl std::ops::DerefMut for IterList {
+    fn deref_mut(&mut self) -> &mut [(IterId, u32)] {
+        match &mut self.0 {
+            Some(v) => v.as_mut_slice(),
+            None => &mut [],
+        }
+    }
+}
+
+impl<'a> IntoIterator for &'a IterList {
+    type Item = &'a (IterId, u32);
+    type IntoIter = std::slice::Iter<'a, (IterId, u32)>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
+impl<'a> IntoIterator for &'a mut IterList {
+    type Item = &'a mut (IterId, u32);
+    type IntoIter = std::slice::IterMut<'a, (IterId, u32)>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter_mut()
+    }
 }
 
 impl Default for HashTable {
@@ -224,7 +290,7 @@ impl HashTable {
             next_free: i64::MIN,
             internal_ptr: 0,
             kind: Kind::Uninit,
-            iterators: Vec::new(),
+            iterators: IterList::default(),
         }
     }
 
@@ -1543,7 +1609,7 @@ where
             next_free: self.next_free,
             internal_ptr: 0,
             kind: Kind::Hash,
-            iterators: Vec::new(),
+            iterators: IterList::default(),
         }
     }
 
@@ -1739,10 +1805,11 @@ impl ZArray {
         ZArray(Rc::new(HashTable::with_capacity(n)))
     }
 
-    /// Wraps a table.
+    /// Wraps a table (also accepts a boxed table, such as an object's
+    /// dynamic property table).
     #[must_use]
-    pub fn from_table(t: HashTable) -> Self {
-        ZArray(Rc::new(t))
+    pub fn from_table(t: impl Into<HashTable>) -> Self {
+        ZArray(Rc::new(t.into()))
     }
 
     /// Builds a list from values.
@@ -1815,6 +1882,19 @@ impl fmt::Debug for ZArray {
     }
 }
 
+/// Unboxes a table (objects keep their dynamic property table boxed).
+impl From<Box<HashTable>> for HashTable {
+    fn from(t: Box<HashTable>) -> Self {
+        *t
+    }
+}
+
+impl From<Box<HashTable>> for ZArray {
+    fn from(t: Box<HashTable>) -> Self {
+        ZArray(Rc::new(*t))
+    }
+}
+
 impl From<HashTable> for ZArray {
     fn from(t: HashTable) -> Self {
         ZArray::from_table(t)
@@ -1842,6 +1922,23 @@ mod tests {
 
     fn ints(t: &HashTable) -> Vec<i64> {
         t.values().map(|v| v.as_int().unwrap_or(-999)).collect()
+    }
+
+    #[test]
+    fn table_header_stays_small() {
+        // data, index, boxed iterator list, counters (zend_array: 56).
+        assert!(std::mem::size_of::<HashTable>() <= 80);
+        assert_eq!(std::mem::size_of::<IterList>(), 8);
+        let mut t = HashTable::new();
+        let _ = t.push(Value::Int(1));
+        let a = t.iterator_add(0);
+        let b = t.iterator_add(0);
+        assert!(t.has_iterators());
+        t.iterator_del(a);
+        assert_eq!(t.iterator_positions().len(), 1);
+        t.iterator_del(b);
+        assert!(!t.has_iterators());
+        assert!(t.iterator_positions().is_empty());
     }
 
     #[test]

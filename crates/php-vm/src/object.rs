@@ -54,18 +54,121 @@ pub struct ObjectData {
     pub class: Rc<Class>,
     /// Declared property slots (`None` = undefined/uninitialized).
     pub slots: RefCell<Vec<Option<Value>>>,
-    /// Dynamic properties.
-    pub dynamic: RefCell<Option<HashTable>>,
+    /// Dynamic properties (`zend_object.properties`). Boxed: most objects
+    /// have none, and an inline table added ~90 bytes to every object.
+    pub dynamic: RefCell<Option<Box<HashTable>>>,
     /// Internal state for builtin classes.
     pub internal: RefCell<Option<Box<dyn Any>>>,
     /// `oflags`.
     pub flags: Cell<u32>,
-    /// Readonly slots that have been initialized (by slot index) — used to
-    /// detect "Cannot modify readonly property".
-    pub readonly_init: RefCell<Vec<bool>>,
+    /// Per declared slot: explicitly unset (`IS_PROP_UNINIT` cleared, so
+    /// `__get()` & co. apply). Bit `i` for slot `i < 63`; bit 63 means the
+    /// flags of slots 63 and up live in [`UNSET_OVERFLOW`]. Read and written
+    /// through [`ObjectData::slot_unset`] / [`ObjectData::set_slot_unset`].
+    /// php-src keeps this flag in the property zval's `u2`; a bit set here
+    /// costs 8 bytes per object instead of a `RefCell<Vec<bool>>` (32 bytes
+    /// plus an allocation).
+    unset_bits: Cell<u64>,
     /// Lazy-object state (`ReflectionClass::newLazyGhost()` & co). Boxed:
     /// few objects are lazy, and inline it added ~70 bytes to every object.
     pub lazy: RefCell<Option<Box<crate::lazy::LazyInfo>>>,
+}
+
+/// Slots whose "explicitly unset" flag fits in [`ObjectData::unset_bits`].
+const UNSET_INLINE_SLOTS: usize = 63;
+/// [`ObjectData::unset_bits`] flag: the object has [`UNSET_OVERFLOW`] flags.
+const UNSET_OVERFLOW_BIT: u64 = 1 << 63;
+
+thread_local! {
+    /// "Explicitly unset" flags of slots `>= UNSET_INLINE_SLOTS`, by object
+    /// handle (index = slot - `UNSET_INLINE_SLOTS`). Only objects of classes
+    /// with more than 63 declared properties ever get an entry.
+    static UNSET_OVERFLOW: RefCell<HashMap<u32, Vec<bool>>> = RefCell::new(HashMap::new());
+}
+
+impl ObjectData {
+    /// Whether declared slot `idx` was explicitly unset (`unset()` on a
+    /// declared property, or an unserialized uninitialized one): the
+    /// opposite of `IS_PROP_UNINIT` for an undefined slot.
+    #[inline]
+    #[must_use]
+    pub fn slot_unset(&self, idx: usize) -> bool {
+        let bits = self.unset_bits.get();
+        if idx < UNSET_INLINE_SLOTS {
+            return bits & (1 << idx) != 0;
+        }
+        bits & UNSET_OVERFLOW_BIT != 0 && self.overflow_unset(idx)
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn overflow_unset(&self, idx: usize) -> bool {
+        UNSET_OVERFLOW
+            .try_with(|m| {
+                m.borrow()
+                    .get(&self.handle)
+                    .and_then(|v| v.get(idx - UNSET_INLINE_SLOTS).copied())
+                    .unwrap_or(false)
+            })
+            .unwrap_or(false)
+    }
+
+    /// Sets or clears the "explicitly unset" flag of declared slot `idx`.
+    #[inline]
+    pub fn set_slot_unset(&self, idx: usize, unset: bool) {
+        if idx < UNSET_INLINE_SLOTS {
+            let bit = 1u64 << idx;
+            let bits = self.unset_bits.get();
+            self.unset_bits
+                .set(if unset { bits | bit } else { bits & !bit });
+        } else if unset || self.unset_bits.get() & UNSET_OVERFLOW_BIT != 0 {
+            self.set_overflow_unset(idx, unset);
+        }
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn set_overflow_unset(&self, idx: usize, unset: bool) {
+        let i = idx - UNSET_INLINE_SLOTS;
+        let _ = UNSET_OVERFLOW.try_with(|m| {
+            let mut m = m.borrow_mut();
+            let v = m.entry(self.handle).or_default();
+            if v.len() <= i {
+                v.resize(i + 1, false);
+            }
+            v[i] = unset;
+        });
+        self.unset_bits
+            .set(self.unset_bits.get() | UNSET_OVERFLOW_BIT);
+    }
+
+    /// Copies all "explicitly unset" flags from `from` (object clone).
+    pub fn copy_unset_flags(&self, from: &ObjectData) {
+        let had_overflow = self.unset_bits.get() & UNSET_OVERFLOW_BIT != 0;
+        let bits = from.unset_bits.get();
+        self.unset_bits.set(bits);
+        if had_overflow || bits & UNSET_OVERFLOW_BIT != 0 {
+            let _ = UNSET_OVERFLOW.try_with(|m| {
+                let mut m = m.borrow_mut();
+                let src = m.get(&from.handle).cloned();
+                match src {
+                    Some(v) if bits & UNSET_OVERFLOW_BIT != 0 => m.insert(self.handle, v),
+                    _ => m.remove(&self.handle),
+                }
+            });
+        }
+    }
+}
+
+/// Drops the [`UNSET_OVERFLOW`] flags of a freed object.
+#[cold]
+#[inline(never)]
+fn forget_unset_overflow(handle: u32) {
+    let _ = UNSET_OVERFLOW.try_with(|m| {
+        if let Ok(mut m) = m.try_borrow_mut() {
+            m.remove(&handle);
+        }
+    });
 }
 
 impl fmt::Debug for ObjectData {
@@ -187,6 +290,9 @@ pub(crate) fn prewarm_store() {
 impl Drop for ObjectData {
     fn drop(&mut self) {
         let handle = self.handle;
+        if self.unset_bits.get() & UNSET_OVERFLOW_BIT != 0 {
+            forget_unset_overflow(handle);
+        }
         let seq = PENDING_SEQ.try_with(Cell::get).unwrap_or(0);
         // `zend_weakrefs_notify`: purge WeakMap entries before the handle
         // can be reused.
@@ -276,7 +382,6 @@ impl std::ops::Deref for ObjBox {
 /// Allocates a handle and creates an object of `class` with the given slot
 /// values.
 pub fn new_object(class: Rc<Class>, slots: Vec<Option<Value>>) -> Obj {
-    let n = slots.len();
     STORE.with(|s| {
         let mut s = s.borrow_mut();
         let handle = s.take_handle();
@@ -287,7 +392,7 @@ pub fn new_object(class: Rc<Class>, slots: Vec<Option<Value>>) -> Obj {
             dynamic: RefCell::new(None),
             internal: RefCell::new(None),
             flags: Cell::new(0),
-            readonly_init: RefCell::new(vec![false; n]),
+            unset_bits: Cell::new(0),
             lazy: RefCell::new(None),
         });
         let rc = Rc::new(ObjBox(data));

@@ -90,7 +90,7 @@ fn members(o: &Obj) -> ZArray {
     let d = object::data(o);
     let dynamic = d.dynamic.borrow();
     dynamic
-        .as_ref()
+        .as_deref()
         .map(|t| ZArray::from_table(t.clone()))
         .unwrap_or_default()
 }

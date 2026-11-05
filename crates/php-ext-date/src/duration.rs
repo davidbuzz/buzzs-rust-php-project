@@ -241,9 +241,7 @@ fn write_slot(o: &Obj, name: &str, v: Value) {
         if let Some(s) = d.slots.borrow_mut().get_mut(slot) {
             *s = Some(v);
         }
-        if let Some(f) = d.readonly_init.borrow_mut().get_mut(slot) {
-            *f = true;
-        }
+        d.set_slot_unset(slot, true);
     }
 }
 

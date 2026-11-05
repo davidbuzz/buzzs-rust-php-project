@@ -201,7 +201,7 @@ fn std_properties(o: &Obj) -> HashTable {
             }
         }
     }
-    if let Some(dynp) = d.dynamic.borrow().as_ref() {
+    if let Some(dynp) = d.dynamic.borrow().as_deref() {
         for (k, v) in dynp {
             t.insert(k.clone(), v.clone());
         }

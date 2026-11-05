@@ -87,7 +87,7 @@ pub(crate) fn own_properties(o: &php_runtime::Obj) -> ZArray {
                 t.insert(ArrayKey::Str(p.name.clone()), v.clone());
             }
         }
-        if let Some(dynamic) = d.dynamic.borrow().as_ref() {
+        if let Some(dynamic) = d.dynamic.borrow().as_deref() {
             for (k, v) in dynamic {
                 t.insert(k.clone(), v.clone());
             }
