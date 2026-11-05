@@ -63,6 +63,11 @@ pub mod flags {
     /// A temporary native method made by a `get_method` handler
     /// (`internal_function.module` is NULL): it belongs to no extension.
     pub const NO_MODULE: u32 = 1 << 24;
+    /// A native function whose argument-parsing errors (arity, type) have
+    /// the argument values removed from every frame of the exception's
+    /// backtrace (ext/sodium's `sodium_remove_param_values_from_backtrace`
+    /// after a failed `zend_parse_parameters`).
+    pub const SCRUB_ARG_ERROR_TRACE: u32 = 1 << 25;
     /// Set-visibility mask.
     pub const SET_MASK: u32 = SET_PUBLIC | SET_PROTECTED | SET_PRIVATE;
 }

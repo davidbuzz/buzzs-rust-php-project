@@ -16,6 +16,10 @@ fn var_dump(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         out.flush(vm);
         r?;
     }
+    // An exception a `get_debug_info` handler left pending while still
+    // returning its table (`xmlreader_get_debug_info`) surfaces once the
+    // dump is written.
+    vm.take_pending_throw()?;
     Ok(Value::Null)
 }
 
@@ -28,6 +32,7 @@ fn debug_zval_dump(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         out.flush(vm);
         r?;
     }
+    vm.take_pending_throw()?;
     Ok(Value::Null)
 }
 
@@ -37,12 +42,15 @@ fn print_r(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         // Output produced by `__debugInfo()` is not captured.
         let mut out = Out::collect();
         dump::print_r(vm, &mut out, &v, 0)?;
-        return Ok(sv(out.finish(vm)));
+        let printed = sv(out.finish(vm));
+        vm.take_pending_throw()?;
+        return Ok(printed);
     }
     let mut out = Out::stream();
     let r = dump::print_r(vm, &mut out, &v, 0);
     out.flush(vm);
     r?;
+    vm.take_pending_throw()?;
     Ok(Value::Bool(true))
 }
 

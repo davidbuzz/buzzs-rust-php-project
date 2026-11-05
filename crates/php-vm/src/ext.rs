@@ -317,6 +317,24 @@ impl<'a> ModuleBuilder<'a> {
         self
     }
 
+    /// Marks the function registered last so that its argument-parsing
+    /// errors (arity, type) leave the exception's backtrace without
+    /// argument values: ext/sodium calls
+    /// `sodium_remove_param_values_from_backtrace(EG(exception))` when
+    /// `zend_parse_parameters` fails.
+    pub fn scrub_arg_error_trace(&mut self) -> &mut Self {
+        if let Some(lc) = self.last_function.clone() {
+            if let Some(crate::func::Func::Builtin(b)) = self.vm.functions.get(&lc).cloned() {
+                let mut nb = (*b).clone();
+                nb.flags |= crate::func::flags::SCRUB_ARG_ERROR_TRACE;
+                self.vm
+                    .functions
+                    .insert(lc, crate::func::Func::Builtin(Rc::new(nb)));
+            }
+        }
+        self
+    }
+
     /// Registers `alias` for an already registered function.
     pub fn alias(&mut self, alias: &str, target: &str) -> &mut Self {
         crate::builtins::alias(self.vm, alias, &target.to_ascii_lowercase());

@@ -14,6 +14,7 @@ php-streams = { path = "../php-streams" }
 php-ext-streams = { path = "../php-ext-streams" }
 php-ext-exif = { path = "../php-ext-exif" }
 php-xmlreader = { path = "../php-xmlreader" }
+php-memlimit = { path = "../php-memlimit" }
 
 [dev-dependencies]
 php-exif = { path = "../php-exif" }

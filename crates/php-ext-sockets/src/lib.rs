@@ -68,10 +68,17 @@ fn throw(vm: &mut Vm, e: SocketError) -> Throw {
 /// Emits the warnings the last library call queued.
 fn warn(vm: &mut Vm) -> VmResult<()> {
     for w in with(Sockets::take_warnings) {
-        vm.php_warning(&w)?;
+        match w.strip_prefix(php_sockets::PLAIN_WARNING) {
+            // `zend_error(E_WARNING, ...)`: no function prefix.
+            Some(plain) => vm.raise(E_WARNING, plain)?,
+            None => vm.php_warning(&w)?,
+        }
     }
     Ok(())
 }
+
+/// `E_WARNING`.
+const E_WARNING: i64 = 2;
 
 /// Emits the warnings, then maps the result: `ok` on success, `false` for
 /// [`SocketError::Failed`], an exception otherwise.

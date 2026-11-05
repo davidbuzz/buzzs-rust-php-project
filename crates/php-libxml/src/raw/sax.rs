@@ -88,6 +88,13 @@ pub trait ExpatSink {
     ) -> i64;
     /// `h_start_ns(prefix, uri)`.
     fn start_namespace_decl(&mut self, prefix: Option<&[u8]>, uri: Option<&[u8]>);
+    /// Whether event processing stopped (`EG(exception)` or `ZEND_HAS_OOM()`):
+    /// checked between the attributes of a start tag, like `compat.c`'s
+    /// `_start_element_handler_ns`, so a huge tag cannot run into the hard
+    /// memory limit.
+    fn aborted(&self) -> bool {
+        false
+    }
 }
 
 /// State reachable from the SAX `userData` pointer.
@@ -204,6 +211,9 @@ unsafe extern "C" fn start_element_handler(
                     let k = opt_slice(*p).unwrap_or_default().to_vec();
                     let v = opt_slice(*p.add(1)).unwrap_or_default().to_vec();
                     attrs.push((k, v));
+                    if sink.aborted() {
+                        return;
+                    }
                     p = p.add(2);
                 }
             }
@@ -261,6 +271,9 @@ unsafe extern "C" fn start_element_handler_ns(
                         std::slice::from_raw_parts(start, len).to_vec()
                     };
                     attrs.push((key, value));
+                    if sink.aborted() {
+                        return;
+                    }
                 }
             }
             sink.start_element(&qualified, &attrs);

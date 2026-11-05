@@ -1587,8 +1587,26 @@ impl Unserializer<'_> {
             cell.set(Value::Object(o.clone()));
             self.d.borrow_mut().objects.push(o.clone());
             // `zend_user_unserialize`: no lock, nested unserialize() calls
-            // share this context.
-            vm.call_method_name(&o, "unserialize", vec![Value::Str(payload)])?;
+            // share this context. An internal class's own `ce->unserialize`
+            // (`gmp_unserialize`) is a C callback, not a method call: it
+            // pushes no frame, so its exceptions' traces start at
+            // `unserialize()` (bug #70284).
+            match native_unserializer(cls) {
+                Some(b) => {
+                    let mut args = Args {
+                        values: vec![Value::Str(payload)],
+                        passed: vec![true],
+                        named: Vec::new(),
+                        this: Some(o.clone()),
+                        called: Some(cls.clone()),
+                        func: Some(b.clone()),
+                    };
+                    (b.handler)(vm, &mut args)?;
+                }
+                None => {
+                    vm.call_method_name(&o, "unserialize", vec![Value::Str(payload)])?;
+                }
+            }
         }
         self.cur.pos += dlen + 1;
         Ok(Some(Value::Null))
@@ -1687,6 +1705,18 @@ enum Target {
 fn has_custom_unserializer(cls: &Rc<Class>) -> bool {
     cls.instance_of_name(b"serializable")
         || (cls.flags & cflags::INTERNAL != 0 && cls.find_method(b"unserialize").is_some())
+}
+
+/// The native `C:` unserializer of an internal class that is not
+/// `Serializable` (GMP's `ce->unserialize`), called without a frame.
+fn native_unserializer(cls: &Rc<Class>) -> Option<Rc<crate::func::Builtin>> {
+    if cls.flags & cflags::INTERNAL == 0 || cls.instance_of_name(b"serializable") {
+        return None;
+    }
+    match &cls.find_method(b"unserialize")?.func {
+        crate::func::Func::Builtin(b) => Some(b.clone()),
+        crate::func::Func::User(_) => None,
+    }
 }
 
 /// `ZEND_ACC_NOT_SERIALIZABLE` (inherited; anonymous classes have it).

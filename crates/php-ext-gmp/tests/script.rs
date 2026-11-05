@@ -78,3 +78,16 @@ fn seeded_random_is_deterministic() {
     assert_eq!(a, b);
     assert!(!a.is_empty());
 }
+
+#[test]
+fn legacy_unserializer_pushes_no_frame() {
+    // Bug #70284: `gmp_unserialize` is `ce->unserialize`, a C callback.
+    assert_eq!(
+        run(
+            r#"try { unserialize('C:3:"GMP":4:{r:2;}'); } catch (Exception $e) {
+            echo $e->getMessage(), ' ', count($e->getTrace()), ' ', $e->getTrace()[0]['function'];
+        }"#
+        ),
+        "Could not unserialize number 1 unserialize"
+    );
+}

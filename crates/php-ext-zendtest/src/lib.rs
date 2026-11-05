@@ -31,6 +31,7 @@ mod patch;
 mod post;
 mod stack;
 mod state;
+mod uri;
 mod util;
 mod zpp;
 
@@ -65,6 +66,7 @@ impl Extension for ZendTest {
         php_vm::ext::register_zend_test_fiber(m.vm());
         iterators::register(m);
         object_handlers::register(m);
+        uri::register(m);
         #[cfg(feature = "observer")]
         observer::register(m);
         m.info(info);

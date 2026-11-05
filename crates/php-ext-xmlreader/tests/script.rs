@@ -121,3 +121,26 @@ fn from_stream_and_subclass() {
     "#;
     assert_eq!(run(code), "ctor root c root R");
 }
+
+#[test]
+fn var_dump_prints_the_table_then_raises_the_pending_error() {
+    // fromString_custom_constructor.phpt: `isEmptyElement` fails before
+    // the first read(); `xmlreader_get_debug_info` skips it and leaves the
+    // exception pending.
+    let code = r#"
+        $r = XMLReader::fromString('<root/>');
+        try { var_dump($r); } catch (Error $e) { echo $e->getMessage(), "\n"; }
+        var_dump($r->read(), $r->nodeType);
+    "#;
+    let out = run(code);
+    assert!(out.starts_with("object(XMLReader)#"), "{out}");
+    assert!(
+        out.contains(" (13) {\n  [\"attributeCount\"]=>\n  int(0)\n"),
+        "{out}"
+    );
+    assert!(!out.contains("isEmptyElement"), "{out}");
+    assert!(
+        out.ends_with("}\nFailed to read property because no XML data has been read yet\nbool(true)\nint(1)\n"),
+        "{out}"
+    );
+}

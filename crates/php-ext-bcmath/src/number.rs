@@ -9,8 +9,10 @@ use std::cmp::Ordering;
 use php_bcmath::{BcError, BinaryOp as BcOp, Number, Operand};
 use php_runtime::convert::{double_fits_long, is_long_compatible};
 use php_runtime::float::format_double_h;
-use php_runtime::{BinaryOp, CastTarget, Obj, PropertyPurpose, Value, ZArray, ZStr};
-use php_vm::ext::{acc, class_flags, Args, ClassBuilder, ClassHooks, ModuleBuilder, VmResult};
+use php_runtime::{BinaryOp, CastTarget, Obj, PhpRef, PropertyPurpose, Value, ZArray, ZStr};
+use php_vm::ext::{
+    acc, class_flags, Args, ClassBuilder, ClassHooks, ModuleBuilder, PropCtx, VmResult,
+};
 use php_vm::object::{internal, set_internal};
 use php_vm::Vm;
 
@@ -311,15 +313,24 @@ fn properties_for(_vm: &mut Vm, o: &Obj, _p: PropertyPurpose) -> VmResult<Option
     Ok(Some(arr))
 }
 
-fn read_property(_vm: &mut Vm, o: &Obj, name: &ZStr) -> VmResult<Option<Value>> {
+/// `bcmath_number_read_property`. `bcmath_number_get_property_ptr_ptr`
+/// returns NULL (every property is virtual), so a reference fetch
+/// (`$x = &$n->value`) binds to a temporary copy of the value instead of
+/// failing on the readonly declaration (GH-18641).
+fn read_property(vm: &mut Vm, o: &Obj, name: &ZStr) -> VmResult<Option<Value>> {
     let Some(n) = number_of(o) else {
         return Ok(None);
     };
-    Ok(match name.as_bytes() {
-        b"value" => Some(Value::Str(ZStr::from(n.value()))),
-        b"scale" => Some(Value::Int(n.scale())),
-        _ => None,
-    })
+    let v = match name.as_bytes() {
+        b"value" => Value::Str(ZStr::from(n.value())),
+        b"scale" => Value::Int(n.scale()),
+        _ => return Ok(None),
+    };
+    Ok(Some(if vm.property_context() == PropCtx::Ref {
+        Value::Reference(PhpRef::new(v))
+    } else {
+        v
+    }))
 }
 
 fn write_property(vm: &mut Vm, _o: &Obj, name: &ZStr, _v: &Value) -> VmResult<bool> {
@@ -349,15 +360,17 @@ fn unset_property(vm: &mut Vm, _o: &Obj, name: &ZStr) -> VmResult<bool> {
     }
 }
 
-/// `isset()` (`check_empty == false`: whether it is set) and `empty()`
-/// (`check_empty == true`: the VM expects whether it is *empty*, the
-/// negation of C's `ZEND_PROPERTY_NOT_EMPTY` result).
+/// `bcmath_number_has_property`: `isset()` (`check_empty == false`:
+/// whether it is set) and `empty()` (`check_empty == true`: C's
+/// `ZEND_PROPERTY_NOT_EMPTY`, whether it is set and not empty; the VM
+/// negates it for `empty()`, as the `ClassHooks::has_property` contract
+/// says).
 fn has_property(_vm: &mut Vm, o: &Obj, name: &ZStr, check_empty: bool) -> VmResult<Option<bool>> {
     let name = name.to_string_lossy();
-    let not_empty = number_of(o)
+    let set_and_not_empty = number_of(o)
         .and_then(|n| n.has_property(&name, check_empty))
         .unwrap_or(false);
-    Ok(Some(if check_empty { !not_empty } else { not_empty }))
+    Ok(Some(set_and_not_empty))
 }
 
 fn cast(vm: &mut Vm, o: &Obj, target: CastTarget) -> VmResult<Option<Value>> {

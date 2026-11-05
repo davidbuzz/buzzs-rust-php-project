@@ -222,9 +222,12 @@ fn properties_for(vm: &mut Vm, o: &Obj, purpose: PropertyPurpose) -> VmResult<Op
         t.insert(ArrayKey::Str(ZStr::from(name)), prop_value(v));
     }
     if let Some(e) = err {
-        // PHP leaves the exception pending and still prints the table;
-        // the VM cannot do both, so the exception wins.
-        return Err(throw(vm, &e));
+        // PHP leaves the exception pending and still returns the table:
+        // `var_dump()` prints it, then raises the parked exception.
+        let pending = throw(vm, &e);
+        if vm.pending_throw.is_none() {
+            vm.pending_throw = Some(pending);
+        }
     }
     Ok(Some(ZArray::from_table(t)))
 }
