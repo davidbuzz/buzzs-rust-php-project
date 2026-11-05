@@ -52,15 +52,26 @@ fn same_line_repeats_ignored() {
     let out = run(SCRIPT, &[("ignore_repeated_errors", "1")]);
     assert_eq!(count(&out, "Undefined variable $u1 in"), 1, "{out}");
     assert_eq!(count(&out, "Undefined variable $u2 in"), 1, "{out}");
-    assert_eq!(count(&out, "Undefined variable $u in t.php on line 3"), 1, "{out}");
-    assert_eq!(count(&out, "Undefined variable $u in t.php on line 4"), 1, "{out}");
+    assert_eq!(
+        count(&out, "Undefined variable $u in t.php on line 3"),
+        1,
+        "{out}"
+    );
+    assert_eq!(
+        count(&out, "Undefined variable $u in t.php on line 4"),
+        1,
+        "{out}"
+    );
 }
 
 #[test]
 fn any_source_repeats_ignored() {
     let out = run(
         SCRIPT,
-        &[("ignore_repeated_errors", "1"), ("ignore_repeated_source", "1")],
+        &[
+            ("ignore_repeated_errors", "1"),
+            ("ignore_repeated_source", "1"),
+        ],
     );
     assert_eq!(count(&out, "Undefined variable $u in"), 1, "{out}");
 }
