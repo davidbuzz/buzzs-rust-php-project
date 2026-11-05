@@ -1,12 +1,14 @@
 //! The scanner state machine, a hand-written port of
 //! `Zend/zend_language_scanner.l`.
 
+use crate::encoding::{Input, ScriptEncoding, ScriptEncodingOptions};
 use crate::literal::{
     count_newlines, is_label_char, is_label_start, parse_float_literal, parse_lnum,
     parse_prefixed_int, strip_indentation, unescape_double_quoted, unescape_single_quoted,
     LexWarning, WarningKind,
 };
 use crate::token::{Span, Token, TokenKind, TokenValue};
+use std::borrow::Cow;
 use std::fmt::Write as _;
 
 /// Which flavour of scanning to perform.
@@ -90,7 +92,8 @@ const USING_TABS: u8 = 2;
 #[derive(Clone, Debug)]
 #[allow(clippy::struct_excessive_bools)]
 pub struct Lexer<'a> {
-    src: &'a [u8],
+    src: Input<'a>,
+    encoding: Option<ScriptEncoding<'a>>,
     pos: usize,
     tok_start: usize,
     line: u32,
@@ -218,7 +221,8 @@ impl<'a> Lexer<'a> {
             State::Initial
         };
         Self {
-            src,
+            src: Input::Borrowed(src),
+            encoding: None,
             pos: 0,
             tok_start: 0,
             line: 1,
@@ -238,14 +242,81 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    /// The source being scanned.
-    pub fn source(&self) -> &'a [u8] {
-        self.src
+    /// Creates a lexer with Zend multibyte input/output filtering enabled.
+    ///
+    /// Token spans refer to [`Self::source`], not the original input bytes.
+    /// The parser must call [`Self::set_script_encoding`] immediately after
+    /// an encoding declaration's closing parenthesis, before scanning ahead.
+    pub fn with_script_encoding(
+        src: &'a [u8],
+        opts: LexerOptions,
+        encoding: &ScriptEncodingOptions<'_>,
+    ) -> Self {
+        let mut lexer = Self::with_options(src, opts);
+        let (state, input) = ScriptEncoding::new(src, encoding);
+        lexer.src = input;
+        lexer.encoding = Some(state);
+        lexer
+    }
+
+    /// The possibly filtered source being scanned.
+    pub fn source(&self) -> &[u8] {
+        &self.src
+    }
+
+    /// Changes the script encoding and, if needed, rescans the original input.
+    ///
+    /// The cursor and line counter stay at the declaration's closing `)`,
+    /// matching Zend. Returns false when multibyte filtering is not enabled.
+    pub fn set_script_encoding(&mut self, encoding: &'static php_mbstring::Encoding) -> bool {
+        let Some(state) = self.encoding.as_mut() else {
+            return false;
+        };
+        if let Some(input) = state.set_encoding(encoding) {
+            self.src = input;
+        }
+        true
+    }
+
+    /// Token bytes after the scanner's output filter, for AST semantic names
+    /// and inline HTML. Lexical prefixes (`$`, `\`, `namespace\`) are retained
+    /// unconverted so a parser can strip them before storing the semantic name.
+    /// Use [`Token::text`] with [`Self::source`] for raw text.
+    pub fn token_text(&self, token: Token) -> Cow<'a, [u8]> {
+        let text = token.text(self.source());
+        let prefix = match token.kind {
+            TokenKind::Variable | TokenKind::NameFullyQualified => 1,
+            TokenKind::NameRelative => b"namespace\\".len(),
+            _ => 0,
+        };
+        if let Some(converted) = self
+            .encoding
+            .as_ref()
+            .and_then(|state| state.output(&text[prefix..]))
+        {
+            let mut bytes = text[..prefix].to_vec();
+            bytes.extend_from_slice(&converted);
+            return Cow::Owned(bytes);
+        }
+        match &self.src {
+            Input::Borrowed(src) => Cow::Borrowed(token.text(*src)),
+            Input::Filtered(_) => Cow::Owned(text.to_vec()),
+        }
     }
 
     /// Current byte offset (the end of the last token).
     pub fn offset(&self) -> usize {
         self.pos
+    }
+
+    /// Original-script offset of the cursor, after any detected BOM.
+    ///
+    /// Used for `__COMPILER_HALT_OFFSET__`; returns `usize::MAX` if no original
+    /// prefix maps exactly to the filtered cursor.
+    pub fn scanned_file_offset(&self) -> usize {
+        self.encoding
+            .as_ref()
+            .map_or(self.pos, |state| state.original_offset(self.pos))
     }
 
     /// The current line counter.
@@ -403,6 +474,11 @@ impl<'a> Lexer<'a> {
         }
         let start_line = self.line;
         let kind = self.scan();
+        if let Some(TokenValue::Str(bytes)) = &mut self.value {
+            if let Some(converted) = self.encoding.as_ref().and_then(|state| state.output(bytes)) {
+                *bytes = converted;
+            }
+        }
         let start = self.tok_start;
         let end = self.pos;
         if kind == TokenKind::End {
@@ -434,7 +510,7 @@ impl<'a> Lexer<'a> {
     }
 
     fn handle_newlines(&mut self, start: usize, end: usize) {
-        self.line += count_newlines(self.src, start, end);
+        self.line += count_newlines(&self.src, start, end);
     }
 
     /// Runs the scanner rules; a rule returning `None` restarts scanning
@@ -485,7 +561,7 @@ impl<'a> Lexer<'a> {
     // ---- INITIAL -----------------------------------------------------------
 
     fn scan_initial(&mut self) -> TokenKind {
-        let src = self.src;
+        let src = self.src.clone();
         let p = self.pos;
         if p >= src.len() {
             return self.end_token();
@@ -540,7 +616,7 @@ impl<'a> Lexer<'a> {
     }
 
     fn inline_html(&mut self, start: usize) -> TokenKind {
-        let src = self.src;
+        let src = self.src.clone();
         let limit = src.len();
         let mut cur = self.pos;
         loop {
@@ -586,7 +662,7 @@ impl<'a> Lexer<'a> {
     /// Matches `{WHITESPACE_OR_COMMENTS}` (one or more) starting at `p`,
     /// returning the end position.
     fn match_ws_or_comments(&self, mut p: usize, at_least_one: bool) -> Option<usize> {
-        let src = self.src;
+        let src = self.src.clone();
         let start = p;
         loop {
             let c = self.at(p);
@@ -662,7 +738,7 @@ impl<'a> Lexer<'a> {
     #[allow(clippy::too_many_lines)]
     fn scan_scripting(&mut self) -> TokenKind {
         use TokenKind as T;
-        let src = self.src;
+        let src = self.src.clone();
         let p = self.pos;
         if p >= src.len() {
             return self.end_token();
@@ -964,7 +1040,7 @@ impl<'a> Lexer<'a> {
 
     fn scan_label(&mut self, p: usize) -> TokenKind {
         use TokenKind as T;
-        let src = self.src;
+        let src = self.src.clone();
         let label_end = self.scan_label_end(p);
         let label = &src[p..label_end];
 
@@ -1033,7 +1109,7 @@ impl<'a> Lexer<'a> {
 
     fn try_cast(&mut self, p: usize) -> Option<TokenKind> {
         use TokenKind as T;
-        let src = self.src;
+        let src = self.src.clone();
         let mut q = p + 1;
         while q < src.len() && (src[q] == b' ' || src[q] == b'\t') {
             q += 1;
@@ -1108,7 +1184,7 @@ impl<'a> Lexer<'a> {
 
     fn scan_number(&mut self) -> TokenKind {
         use TokenKind as T;
-        let src = self.src;
+        let src = self.src.clone();
         let p = self.pos;
         let dec = |c: u8| c.is_ascii_digit();
 
@@ -1197,7 +1273,7 @@ impl<'a> Lexer<'a> {
     }
 
     fn scan_line_comment(&mut self, p: usize, prefix: usize) -> TokenKind {
-        let src = self.src;
+        let src = self.src.clone();
         let mut q = p + prefix;
         while q < src.len() {
             match src[q] {
@@ -1211,7 +1287,7 @@ impl<'a> Lexer<'a> {
     }
 
     fn scan_block_comment(&mut self, p: usize) -> TokenKind {
-        let src = self.src;
+        let src = self.src.clone();
         let is_doc = self.at(p + 2) == b'*'
             && p + 3 < src.len()
             && matches!(self.at(p + 3), b' ' | b'\n' | b'\r' | b'\t');
@@ -1246,7 +1322,7 @@ impl<'a> Lexer<'a> {
     }
 
     fn scan_single_quoted(&mut self, p: usize, bprefix: usize) -> TokenKind {
-        let src = self.src;
+        let src = self.src.clone();
         let mut q = p + bprefix + 1;
         loop {
             if q < src.len() {
@@ -1301,7 +1377,7 @@ impl<'a> Lexer<'a> {
     }
 
     fn scan_double_quoted_start(&mut self, p: usize, bprefix: usize) -> TokenKind {
-        let src = self.src;
+        let src = self.src.clone();
         let body_start = p + bprefix + 1;
         let mut q = body_start;
         while q < src.len() {
@@ -1335,7 +1411,7 @@ impl<'a> Lexer<'a> {
 
     #[allow(clippy::too_many_lines)]
     fn try_heredoc_start(&mut self, p: usize, bprefix: usize) -> Option<TokenKind> {
-        let src = self.src;
+        let src = self.src.clone();
         let mut q = p + bprefix + 3;
         while q < src.len() && (src[q] == b' ' || src[q] == b'\t') {
             q += 1;
@@ -1455,7 +1531,8 @@ impl<'a> Lexer<'a> {
     /// line at the end of the scan).
     fn heredoc_scan_ahead_run(&mut self) -> (usize, bool, Option<TokenKind>, u32) {
         let mut ahead = Lexer {
-            src: self.src,
+            src: self.src.clone(),
+            encoding: self.encoding.clone(),
             pos: self.pos,
             tok_start: self.pos,
             line: self.line,
@@ -1505,7 +1582,7 @@ impl<'a> Lexer<'a> {
     // ---- ST_LOOKING_FOR_PROPERTY -------------------------------------------
 
     fn scan_looking_for_property(&mut self) -> Option<TokenKind> {
-        let src = self.src;
+        let src = self.src.clone();
         let p = self.pos;
         let c = self.at(p);
         if p < src.len() {
@@ -1564,7 +1641,7 @@ impl<'a> Lexer<'a> {
 
     fn scan_var_offset(&mut self) -> TokenKind {
         use TokenKind as T;
-        let src = self.src;
+        let src = self.src.clone();
         let p = self.pos;
         if p >= src.len() {
             return self.end_token();
@@ -1651,7 +1728,7 @@ impl<'a> Lexer<'a> {
     /// Rules shared by double quotes, backquotes and heredocs. Returns `None`
     /// if none matched.
     fn scan_interpolation_start(&mut self) -> Option<TokenKind> {
-        let src = self.src;
+        let src = self.src.clone();
         let p = self.pos;
         let c = self.at(p);
         if c == b'$' && p < src.len() {
@@ -1696,7 +1773,7 @@ impl<'a> Lexer<'a> {
         if let Some(k) = self.scan_interpolation_start() {
             return k;
         }
-        let src = self.src;
+        let src = self.src.clone();
         let p = self.pos;
         if p >= src.len() {
             return self.end_token();
@@ -1743,7 +1820,7 @@ impl<'a> Lexer<'a> {
         if let Some(k) = self.scan_interpolation_start() {
             return k;
         }
-        let src = self.src;
+        let src = self.src.clone();
         let p = self.pos;
         if p >= src.len() {
             return self.end_token();
@@ -1791,7 +1868,7 @@ impl<'a> Lexer<'a> {
         if let Some(k) = self.scan_interpolation_start() {
             return k;
         }
-        let src = self.src;
+        let src = self.src.clone();
         let p = self.pos;
         if p >= src.len() {
             return self.end_token();
@@ -1916,7 +1993,7 @@ impl<'a> Lexer<'a> {
     }
 
     fn scan_nowdoc(&mut self) -> TokenKind {
-        let src = self.src;
+        let src = self.src.clone();
         let p = self.pos;
         if p >= src.len() {
             return self.end_token();

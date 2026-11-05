@@ -130,8 +130,8 @@ impl Parser<'_> {
                 self.bump();
                 self.expect1(T::LParen)?;
                 self.expect1(T::RParen)?;
-                let semi = self.expect1(T::Semicolon)?;
-                let offset = semi.span.end;
+                self.expect1(T::Semicolon)?;
+                let offset = self.lexer.scanned_file_offset();
                 self.stop_lexing();
                 Ok(Stmt {
                     kind: StmtKind::HaltCompiler { offset },
@@ -805,6 +805,32 @@ impl Parser<'_> {
                         message: "declare(encoding=...) ignored because Zend multibyte feature is turned off by settings".to_owned(),
                         line,
                     });
+                } else {
+                    let name = match &d.value.kind {
+                        ExprKind::Int(value) => value.to_string().into_bytes(),
+                        ExprKind::Float(value) => {
+                            let mut name = crate::export::format_double(*value, 14);
+                            if name.ends_with(".0") {
+                                name.truncate(name.len() - 2);
+                            }
+                            name.into_bytes()
+                        }
+                        ExprKind::String(value) => value.clone(),
+                        _ => unreachable!(),
+                    };
+                    if let Some(encoding) = php_mbstring::encoding::by_cname(&name) {
+                        self.lexer.set_script_encoding(encoding);
+                    } else {
+                        let end = name.iter().position(|&byte| byte == 0).unwrap_or(name.len());
+                        self.warnings.push(crate::ast::Diagnostic {
+                            level: crate::ast::DiagnosticLevel::CompileWarning,
+                            message: format!(
+                                "Unsupported encoding [{}]",
+                                String::from_utf8_lossy(&name[..end])
+                            ),
+                            line,
+                        });
+                    }
                 }
             }
         }

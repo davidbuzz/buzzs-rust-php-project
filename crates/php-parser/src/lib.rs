@@ -35,6 +35,7 @@ pub mod visit;
 pub use ast::Program;
 pub use error::{ErrorKind, ParseError};
 pub use parser::ParseOptions;
+pub use php_lexer::ScriptEncodingOptions;
 pub use stack::StackPolicy;
 
 /// Parses a PHP file (starting in inline-HTML mode, like a script file).
@@ -46,35 +47,58 @@ pub use stack::StackPolicy;
 /// thread only for code that nests too deeply for the remaining stack.
 #[allow(clippy::trivially_copy_pass_by_ref)] // stable API; `ParseOptions` may grow
 pub fn parse(src: &[u8], opts: &ParseOptions) -> Result<Program, ParseError> {
+    parse_with_encoding(src, opts, &ScriptEncodingOptions::default())
+}
+
+/// Parses source using the host's script/internal encoding and substitution
+/// settings. Filtering is only enabled when [`ParseOptions::multibyte`] is on.
+///
+/// For `eval()`, set [`ParseOptions::start_in_scripting`] and supply the current
+/// internal encoding as the sole script encoding, with Unicode detection off,
+/// as Zend does. Spans and identifier offsets refer to the filtered scanner
+/// buffer (with any detected BOM removed), not necessarily the supplied bytes.
+#[allow(clippy::trivially_copy_pass_by_ref)]
+pub fn parse_with_encoding(
+    src: &[u8],
+    opts: &ParseOptions,
+    encoding: &ScriptEncodingOptions<'_>,
+) -> Result<Program, ParseError> {
     match opts.stack {
         StackPolicy::CurrentThread => {
-            parse_and_validate(src, opts, stack::stack_limit()).map_err(|(e, _)| e)
+            parse_and_validate(src, opts, encoding, stack::stack_limit()).map_err(|(e, _)| e)
         }
-        StackPolicy::Spawn(size) => parse_on_helper(src, opts, size),
+        StackPolicy::Spawn(size) => parse_on_helper(src, opts, encoding, size),
         StackPolicy::Auto => match stack::stack_limit() {
-            Some(limit) => match parse_and_validate(src, opts, Some(limit)) {
-                Err((_, true)) => parse_on_helper(src, opts, stack::HELPER_STACK_SIZE),
+            Some(limit) => match parse_and_validate(src, opts, encoding, Some(limit)) {
+                Err((_, true)) => parse_on_helper(src, opts, encoding, stack::HELPER_STACK_SIZE),
                 r => r.map_err(|(e, _)| e),
             },
-            None => parse_on_helper(src, opts, stack::HELPER_STACK_SIZE),
+            None => parse_on_helper(src, opts, encoding, stack::HELPER_STACK_SIZE),
         },
     }
 }
 
 /// Parses on a scoped helper thread with a `size`-byte stack.
 #[allow(clippy::trivially_copy_pass_by_ref)]
-fn parse_on_helper(src: &[u8], opts: &ParseOptions, size: usize) -> Result<Program, ParseError> {
+fn parse_on_helper(
+    src: &[u8],
+    opts: &ParseOptions,
+    encoding: &ScriptEncodingOptions<'_>,
+    size: usize,
+) -> Result<Program, ParseError> {
     std::thread::scope(|s| {
         match std::thread::Builder::new()
             .name("php-parser".into())
             .stack_size(size)
-            .spawn_scoped(s, || parse_and_validate(src, opts, stack::stack_limit()))
+            .spawn_scoped(s, || parse_and_validate(src, opts, encoding, stack::stack_limit()))
         {
             Ok(handle) => match handle.join() {
                 Ok(r) => r.map_err(|(e, _)| e),
                 Err(panic) => std::panic::resume_unwind(panic),
             },
-            Err(_) => parse_and_validate(src, opts, stack::stack_limit()).map_err(|(e, _)| e),
+            Err(_) => {
+                parse_and_validate(src, opts, encoding, stack::stack_limit()).map_err(|(e, _)| e)
+            }
         }
     })
 }
@@ -85,9 +109,10 @@ fn parse_on_helper(src: &[u8], opts: &ParseOptions, size: usize) -> Result<Progr
 fn parse_and_validate(
     src: &[u8],
     opts: &ParseOptions,
+    encoding: &ScriptEncodingOptions<'_>,
     limit: Option<usize>,
 ) -> Result<Program, (ParseError, bool)> {
-    let mut program = parser::parse_program_limited(src, opts, limit)?;
+    let mut program = parser::parse_program_limited(src, opts, encoding, limit)?;
     if !opts.syntax_only {
         if let Err((mut e, low)) = validate::validate_limited(&mut program, limit) {
             e.warnings = std::mem::take(&mut program.warnings);

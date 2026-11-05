@@ -7,6 +7,7 @@ rust-version.workspace = true
 
 [dependencies]
 php-lexer = { path = "../php-lexer" }
+php-mbstring = { path = "../php-mbstring" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = "0.2"

@@ -11,7 +11,10 @@ mod stmt;
 
 use crate::ast::{Diagnostic, DiagnosticLevel, Ident, Name, NameKind, Program, Span};
 use crate::error::{syntax_error_message, ParseError};
-use php_lexer::{LexError, LexMode, Lexer, LexerOptions, TokenKind, TokenValue, WarningKind};
+use php_lexer::{
+    LexError, LexMode, Lexer, LexerOptions, ScriptEncodingOptions, TokenKind, TokenValue, WarningKind,
+};
+use std::borrow::Cow;
 use std::collections::VecDeque;
 
 /// Parser configuration.
@@ -32,9 +35,9 @@ pub struct ParseOptions {
     pub record_identifier_tokens: bool,
     /// Which thread [`crate::parse`] parses on.
     pub stack: crate::StackPolicy,
-    /// `zend.multibyte` is on: `declare(encoding=...)` is honoured by the
-    /// host's script-encoding filter instead of drawing the "ignored because
-    /// Zend multibyte feature is turned off" compile warning.
+    /// Enable Zend multibyte script filtering and `declare(encoding=...)`.
+    /// [`crate::parse`] uses default encoding settings; hosts can supply INI
+    /// settings through [`crate::parse_with_encoding`].
     pub multibyte: bool,
 }
 
@@ -43,11 +46,12 @@ pub(crate) type PResult<T> = Result<T, ParseError>;
 
 /// A token with its semantic value.
 #[derive(Clone, Debug)]
-pub(crate) struct Tok {
+pub(crate) struct Tok<'a> {
     pub kind: TokenKind,
     pub span: Span,
     pub end_line: u32,
     pub value: Option<TokenValue>,
+    text: Cow<'a, [u8]>,
     /// Doc comment scanned in the trivia before this token.
     doc: Option<Vec<u8>>,
 }
@@ -55,9 +59,8 @@ pub(crate) struct Tok {
 /// The parser state.
 #[allow(clippy::struct_excessive_bools)] // parser state flags
 pub(crate) struct Parser<'a> {
-    pub src: &'a [u8],
     lexer: Lexer<'a>,
-    buf: VecDeque<Tok>,
+    buf: VecDeque<Tok<'a>>,
     /// Whether the doc-comment effects of `buf[0]` have been applied.
     front_applied: bool,
     lex_error: Option<LexError>,
@@ -95,18 +98,19 @@ const MAX_DEPTH: u32 = 9990;
 
 impl<'a> Parser<'a> {
     #[allow(clippy::trivially_copy_pass_by_ref)] // `ParseOptions` may grow
-    pub fn new(src: &'a [u8], opts: &ParseOptions) -> Self {
-        let lexer = Lexer::with_options(
-            src,
-            LexerOptions {
-                mode: LexMode::Parser,
-                short_tags: opts.short_open_tag,
-                start_in_scripting: opts.start_in_scripting,
-                skip_shebang: opts.skip_shebang,
-            },
-        );
+    pub fn new(src: &'a [u8], opts: &ParseOptions, encoding: &ScriptEncodingOptions<'_>) -> Self {
+        let lexer_opts = LexerOptions {
+            mode: LexMode::Parser,
+            short_tags: opts.short_open_tag,
+            start_in_scripting: opts.start_in_scripting,
+            skip_shebang: opts.skip_shebang,
+        };
+        let lexer = if opts.multibyte {
+            Lexer::with_script_encoding(src, lexer_opts, encoding)
+        } else {
+            Lexer::with_options(src, lexer_opts)
+        };
         Self {
-            src,
             lexer,
             buf: VecDeque::new(),
             front_applied: false,
@@ -129,17 +133,18 @@ impl<'a> Parser<'a> {
 
     // ---- token stream ----------------------------------------------------
 
-    fn lex_one(&mut self) -> Tok {
+    fn lex_one(&mut self) -> Tok<'a> {
         let mut doc = None;
         loop {
             if self.lexer_stopped {
-                let len = self.src.len();
+                let len = self.lexer.source().len();
                 let line = self.lexer.line();
                 return Tok {
                     kind: TokenKind::End,
                     span: Span::new(len, len, line),
                     end_line: line,
                     value: None,
+                    text: Cow::Borrowed(b""),
                     doc,
                 };
             }
@@ -148,7 +153,7 @@ impl<'a> Parser<'a> {
             match t.kind {
                 TokenKind::Whitespace | TokenKind::Comment | TokenKind::OpenTag => continue,
                 TokenKind::DocComment => {
-                    doc = Some(t.text(self.src).to_vec());
+                    doc = Some(self.lexer.token_text(t).into_owned());
                     continue;
                 }
                 TokenKind::Error if self.lex_error.is_none() => {
@@ -157,11 +162,13 @@ impl<'a> Parser<'a> {
                 _ => {}
             }
             let value = self.lexer.take_value();
+            let text = self.lexer.token_text(t);
             return Tok {
                 kind: t.kind,
                 span: t.span,
                 end_line: t.end_line,
                 value,
+                text,
                 doc,
             };
         }
@@ -189,7 +196,7 @@ impl<'a> Parser<'a> {
 
     /// Makes sure the current token is scanned and its doc-comment effects
     /// (`CG(doc_comment)` updates) are applied.
-    fn front(&mut self) -> &Tok {
+    fn front(&mut self) -> &Tok<'a> {
         self.fill(0);
         if !self.front_applied {
             self.front_applied = true;
@@ -210,7 +217,7 @@ impl<'a> Parser<'a> {
     }
 
     /// The current token.
-    pub fn cur(&mut self) -> &Tok {
+    pub fn cur(&mut self) -> &Tok<'a> {
         self.front()
     }
 
@@ -227,13 +234,14 @@ impl<'a> Parser<'a> {
     }
 
     /// Consumes the current token.
-    pub fn bump(&mut self) -> Tok {
+    pub fn bump(&mut self) -> Tok<'a> {
         self.front();
         let tok = self.buf.pop_front().unwrap_or_else(|| Tok {
             kind: TokenKind::End,
             span: Span::default(),
             end_line: 0,
             value: None,
+            text: Cow::Borrowed(b""),
             doc: None,
         });
         self.front_applied = false;
@@ -243,7 +251,7 @@ impl<'a> Parser<'a> {
     }
 
     /// Consumes the current token if it is of kind `k`.
-    pub fn eat(&mut self, k: TokenKind) -> Option<Tok> {
+    pub fn eat(&mut self, k: TokenKind) -> Option<Tok<'a>> {
         if self.peek() == k {
             Some(self.bump())
         } else {
@@ -253,7 +261,7 @@ impl<'a> Parser<'a> {
 
     /// Consumes a token of kind `k`, or fails with a syntax error listing
     /// `expected` (which should include `k`).
-    pub fn expect(&mut self, k: TokenKind, expected: &[TokenKind]) -> PResult<Tok> {
+    pub fn expect(&mut self, k: TokenKind, expected: &[TokenKind]) -> PResult<Tok<'a>> {
         if self.peek() == k {
             Ok(self.bump())
         } else {
@@ -262,13 +270,13 @@ impl<'a> Parser<'a> {
     }
 
     /// Consumes a token of kind `k`, failing with `expecting "k"`.
-    pub fn expect1(&mut self, k: TokenKind) -> PResult<Tok> {
+    pub fn expect1(&mut self, k: TokenKind) -> PResult<Tok<'a>> {
         self.expect(k, &[k])
     }
 
     /// The source text of a token.
-    pub fn text(&self, tok: &Tok) -> &'a [u8] {
-        &self.src[tok.span.start..tok.span.end]
+    pub fn text<'t>(&self, tok: &'t Tok<'a>) -> &'t [u8] {
+        &tok.text
     }
 
     /// Stops the lexer (after `__halt_compiler();`).
@@ -291,7 +299,7 @@ impl<'a> Parser<'a> {
                 return ParseError::parse(e.message.clone(), e.line);
             }
         }
-        let text = self.text(&tok);
+        let text = &self.lexer.source()[tok.span.start..tok.span.end];
         let expected = if self.colon_hint.is_some_and(|s| s == self.prev_span.start) {
             &[TokenKind::Colon][..]
         } else {
@@ -319,13 +327,13 @@ impl<'a> Parser<'a> {
     }
 
     /// The identifier text of a token.
-    pub fn ident_of(&self, tok: &Tok) -> Ident {
+    pub fn ident_of(&self, tok: &Tok<'a>) -> Ident {
         Ident::new(self.text(tok).to_vec(), tok.span)
     }
 
     /// The identifier of a token used as `identifier` (`zend_lex_tstring`):
     /// `<?=` scans as `echo` but cannot be used as a name.
-    pub fn ident_checked(&mut self, tok: &Tok) -> PResult<Ident> {
+    pub fn ident_checked(&mut self, tok: &Tok<'a>) -> PResult<Ident> {
         if self.text(tok) == b"<?=" {
             let line = self.cur().end_line;
             return Err(ParseError::parse(
@@ -347,7 +355,7 @@ impl<'a> Parser<'a> {
     }
 
     /// Builds a [`Name`] from a name token.
-    pub fn name_of(&self, tok: &Tok) -> Name {
+    pub fn name_of(&self, tok: &Tok<'a>) -> Name {
         let text = self.text(tok);
         let (kind, name) = match tok.kind {
             TokenKind::NameFullyQualified => (NameKind::FullyQualified, &text[1..]),
@@ -406,9 +414,10 @@ pub(crate) fn is_identifier_token(k: TokenKind) -> bool {
 pub(crate) fn parse_program_limited(
     src: &[u8],
     opts: &ParseOptions,
+    encoding: &ScriptEncodingOptions<'_>,
     stack_limit: Option<usize>,
 ) -> Result<Program, (ParseError, bool)> {
-    let mut p = Parser::new(src, opts);
+    let mut p = Parser::new(src, opts, encoding);
     p.stack_limit = stack_limit;
     let r = parse_program_inner(&mut p);
     r.map_err(|e| (e, p.stack_exhausted))

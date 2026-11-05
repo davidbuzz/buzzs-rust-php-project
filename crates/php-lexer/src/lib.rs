@@ -65,10 +65,12 @@
 
 #![warn(missing_docs)]
 
+mod encoding;
 mod lexer;
 mod literal;
 mod token;
 
+pub use encoding::ScriptEncodingOptions;
 pub use lexer::{LexError, LexMode, Lexer, LexerOptions};
 pub use literal::{
     count_newlines, is_label_char, is_label_start, parse_float_literal, parse_lnum,
