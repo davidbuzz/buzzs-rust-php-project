@@ -318,6 +318,10 @@ pub enum Op {
     },
     /// Makes `place` a reference and stores it in `dst`.
     MakeRef { place: PlaceId, dst: u32 },
+    /// ZEND_FETCH_LIST_W (+ ZEND_MAKE_REF into `dst`) of a destructuring
+    /// element whose source is a call result: unless the result is a
+    /// reference, notices and reads the element by value instead.
+    ListFetchRef { place: PlaceId, dst: Option<u32> },
     /// Reads a place.
     Fetch {
         place: PlaceId,
@@ -535,6 +539,20 @@ pub enum Op {
     AssertCheck { dst: u32, skip: Label },
 }
 
+/// A temporary that an exception thrown by an op in `start..end` releases
+/// before the handler runs (`zend_live_range` / `cleanup_live_vars`,
+/// Zend/zend_execute.c). Only recorded where the release is observable:
+/// the values of a list assignment from an array literal.
+#[derive(Clone, Copy, Debug)]
+pub struct LiveTmp {
+    /// First op at which the temporary holds its value.
+    pub start: Label,
+    /// One past the op that consumes it.
+    pub end: Label,
+    /// The temporary.
+    pub tmp: u32,
+}
+
 /// A try/catch/finally region.
 #[derive(Clone, Debug, Default)]
 pub struct TryEntry {
@@ -616,6 +634,8 @@ pub struct OpArray {
     pub num_statics: u32,
     /// Try regions, innermost first.
     pub try_table: Vec<TryEntry>,
+    /// Live ranges of temporaries released on exceptions.
+    pub live_tmps: Vec<LiveTmp>,
     /// The file the code comes from.
     pub filename: ZStr,
     /// `declare(strict_types=1)`.

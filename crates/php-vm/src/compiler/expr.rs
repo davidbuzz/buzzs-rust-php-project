@@ -1195,14 +1195,50 @@ impl Compiler {
                     return self.err("Cannot take reference of a nullsafe chain", line);
                 }
                 if has_ref && is_ref_expr(value) {
+                    // zend_compile_assign: the source is fetched for
+                    // writing and made a reference first, so the elements
+                    // are taken from it even if a target rebinds the
+                    // source variable (`[&$a, &$b] = $a`).
                     let src = self.compile_place(value, false)?;
-                    self.compile_destructure_ref(items, &src, line)?;
+                    let pid = self.place(src);
+                    let t = self.tmp();
+                    self.emit(Op::MakeRef { place: pid, dst: t });
+                    let src = Place {
+                        base: PlaceBase::Value(Operand::TmpKeep(t)),
+                        segs: Vec::new(),
+                    };
+                    self.compile_destructure_ref(items, &src, line, false)?;
                     if need {
-                        return Ok(Some(self.fetch_place(src, FetchMode::Read)));
+                        return Ok(Some(Operand::Tmp(t)));
                     }
+                    self.free(Operand::Tmp(t));
                     return Ok(None);
                 }
+                if !need && !has_ref {
+                    if let Some(values) = list_from_array_values(items, value) {
+                        self.compile_list_from_array(items, values, line)?;
+                        return Ok(None);
+                    }
+                }
                 let v = self.compile_expr(value)?;
+                if has_ref && is_call_expr(value) {
+                    // zend_compile_list_assign: the call result is a VAR
+                    // that ZEND_FETCH_LIST_W writes through only when the
+                    // function returned a reference.
+                    if let Operand::Tmp(t) = v {
+                        let src = Place {
+                            base: PlaceBase::Value(Operand::TmpKeep(t)),
+                            segs: Vec::new(),
+                        };
+                        self.f().line = line;
+                        self.compile_destructure_ref(items, &src, line, true)?;
+                        if need {
+                            return Ok(Some(v));
+                        }
+                        self.free(v);
+                        return Ok(None);
+                    }
+                }
                 let v = match v {
                     Operand::Cv(_) => {
                         let t = self.tmp();
@@ -1311,11 +1347,50 @@ impl Compiler {
         Ok(())
     }
 
-    fn compile_destructure_ref(
+    /// `zend_try_compile_list_assign_from_array`: `[$a, $b] = [$x, $y];` as
+    /// a statement compiles the values in order (copying variables), then
+    /// assigns each target its value directly, without building the
+    /// array. A pending value is released if an exception interrupts the
+    /// assignments (see [`crate::opcode::LiveTmp`]).
+    fn compile_list_from_array(
+        &mut self,
+        targets: &[Option<ArrayItem>],
+        values: &[Option<ArrayItem>],
+        line: u32,
+    ) -> CResult<()> {
+        let mut ops = Vec::with_capacity(values.len());
+        for v in values.iter().flatten() {
+            let op = self.compile_expr(&v.value)?;
+            let op = if let Operand::Cv(_) = op {
+                let t = self.tmp();
+                self.emit(Op::Move { src: op, dst: t });
+                Operand::Tmp(t)
+            } else {
+                op
+            };
+            ops.push((op, self.here()));
+        }
+        let mut live = Vec::new();
+        for (t, (op, start)) in targets.iter().flatten().zip(ops) {
+            self.f().line = line;
+            self.assign_to(&t.value, op, None)?;
+            if let Operand::Tmp(tmp) = op {
+                let end = self.here();
+                live.push(crate::opcode::LiveTmp { start, end, tmp });
+            }
+        }
+        self.f().live_tmps.extend(live);
+        Ok(())
+    }
+
+    /// Destructuring with references from the place `src`; `call_base`:
+    /// `src` is a call result (see [`Op::ListFetchRef`]).
+    pub(crate) fn compile_destructure_ref(
         &mut self,
         items: &[Option<ArrayItem>],
         src: &Place,
         line: u32,
+        call_base: bool,
     ) -> CResult<()> {
         let mut idx = 0i64;
         for it in items {
@@ -1336,11 +1411,27 @@ impl Compiler {
             keep_place(&mut p);
             p.segs.push(Seg::Dim(key));
             if let ExprKind::Array { items: sub, .. } = &it.value.kind {
-                self.compile_destructure_ref(sub, &p, line)?;
+                if call_base && has_nested_ref(it) {
+                    let mut q = p.clone();
+                    keep_place(&mut q);
+                    let pid = self.place(q);
+                    self.emit(Op::ListFetchRef {
+                        place: pid,
+                        dst: None,
+                    });
+                }
+                self.compile_destructure_ref(sub, &p, line, call_base)?;
             } else if it.by_ref {
                 let pid = self.place(p);
                 let t = self.tmp();
-                self.emit(Op::MakeRef { place: pid, dst: t });
+                if call_base {
+                    self.emit(Op::ListFetchRef {
+                        place: pid,
+                        dst: Some(t),
+                    });
+                } else {
+                    self.emit(Op::MakeRef { place: pid, dst: t });
+                }
                 let tp = self.compile_write_place(&it.value)?;
                 let tpid = self.place(tp);
                 self.emit(Op::AssignRef {
@@ -2182,6 +2273,46 @@ pub(crate) fn keep_place(p: &mut Place) {
     }
 }
 
+/// `zend_list_assign_from_array_applies` (Zend/zend_compile.c): a flat,
+/// unkeyed list without references and an unkeyed array literal without
+/// references or spread, one value per target. Returns the values.
+fn list_from_array_values<'a>(
+    targets: &[Option<ArrayItem>],
+    value: &'a Expr,
+) -> Option<&'a [Option<ArrayItem>]> {
+    let ExprKind::Array { items, syntax } = &value.kind else {
+        return None;
+    };
+    if *syntax == ast::ArraySyntax::List || targets.is_empty() || items.len() != targets.len() {
+        return None;
+    }
+    for (t, v) in targets.iter().zip(items) {
+        let (t, v) = (t.as_ref()?, v.as_ref()?);
+        if t.key.is_some()
+            || t.by_ref
+            || t.unpack
+            || matches!(t.value.kind, ExprKind::Array { .. })
+            || v.key.is_some()
+            || v.by_ref
+            || v.unpack
+        {
+            return None;
+        }
+    }
+    Some(items.as_slice())
+}
+
+/// `zend_is_call` (Zend/zend_compile.c).
+pub(crate) fn is_call_expr(e: &Expr) -> bool {
+    matches!(
+        e.kind,
+        ExprKind::Call { .. }
+            | ExprKind::MethodCall { .. }
+            | ExprKind::StaticCall { .. }
+            | ExprKind::Pipe { .. }
+    )
+}
+
 /// `zend_ast_is_short_circuited` (Zend/zend_compile.c): whether `e` ends a
 /// chain containing `?->`.
 pub(crate) fn contains_nullsafe(e: &Expr) -> bool {
@@ -2200,7 +2331,7 @@ pub(crate) fn contains_nullsafe(e: &Expr) -> bool {
     }
 }
 
-fn has_nested_ref(i: &ArrayItem) -> bool {
+pub(crate) fn has_nested_ref(i: &ArrayItem) -> bool {
     if let ExprKind::Array { items, .. } = &i.value.kind {
         items
             .iter()

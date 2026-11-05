@@ -108,6 +108,7 @@ impl ImageBuilder {
             num_finally: original.num_finally,
             num_statics: original.num_statics,
             try_table: original.try_table.clone(),
+            live_tmps: original.live_tmps.clone(),
             filename: original.filename.clone(),
             strict_types: original.strict_types,
             decls: self.table(&original.decls),

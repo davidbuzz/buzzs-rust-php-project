@@ -242,3 +242,74 @@ var_dump($o->bar);
         );
     }
 }
+
+/// list() semantics of zend_compile_list_assign / ZEND_FETCH_LIST_[RW]:
+/// strings are not destructured; a by-value call result notices; foreach
+/// with a referencing list iterates by reference; the source is made a
+/// reference before any target rebinds it; the result of a referencing
+/// list assignment can be passed by reference.
+#[test]
+fn list_reference_semantics() {
+    let out = run(r#"<?php
+[$a, $b] = "hi";
+var_dump($a);
+function no_ref($a) { return $a; }
+function &ref_return(&$a) { return $a; }
+$x = [1, 2];
+[&$v] = no_ref($x);
+[[&$w]] = no_ref([[1]]);
+[, &$v] = ref_return($x);
+$v = 9;
+echo $x[1], "\n";
+$c = [[1, 2], [3, 4]];
+foreach ($c as [&$p, $q]) { $p++; $q++; }
+echo $c[0][0], $c[0][1], $c[1][0], "\n";
+$a = [1, 2];
+$r =& $a;
+[&$a, &$b] = $a;
+$a++; $b++;
+echo $r[0], $r[1], "\n";
+function change(&$ref) { $ref = 'changed'; }
+$arr = [1];
+change([&$e] = $arr);
+var_dump($arr);
+"#);
+    let notice = "\nNotice: Attempting to set reference to non referenceable value in t.php on line";
+    let string = "\nWarning: Cannot use string as array in t.php on line 2\n";
+    assert_eq!(
+        out,
+        format!(
+            "{string}{string}NULL\n{notice} 7\n{notice} 8\n{notice} 8\n9\n224\n23\nstring(7) \"changed\"\n"
+        )
+    );
+}
+
+/// `zend_try_compile_list_assign_from_array`: the values are assigned
+/// directly, so a dropped value is released at its assignment, and the
+/// pending values are released before a handler runs (cleanup_live_vars).
+#[test]
+fn list_from_array_literal_lifetimes() {
+    let out = run(r#"<?php
+class D {
+    function __construct(public $n) {}
+    function __destruct() { echo "destruct $this->n\n"; }
+}
+final class Boom { function __destruct() { throw new Exception('boom'); } }
+function boom() { throw new Exception('boom'); }
+$o = new D('o');
+[$o, $p] = [new D('new o'), $o];
+echo $p->n, "\n";
+unset($o, $p);
+$b = 0;
+try { [$a, $a, $b] = [new Boom, new stdClass, 42]; } catch (Exception $e) { echo $e->getMessage(), "\n"; }
+var_dump($b);
+try { [$a, $b] = [new D('first'), boom()]; } catch (Exception $e) { echo $e->getMessage(), "\n"; }
+try { [$arr[boom()], $b] = [new D('v1'), new D('v2')]; } catch (Exception $e) { echo $e->getMessage(), "\n"; }
+echo "done\n";
+"#);
+    assert_eq!(
+        out,
+        "o\ndestruct new o\ndestruct o\nboom\nint(0)\ndestruct first\nboom\n\
+         destruct v1\ndestruct v2\nboom\ndone\n"
+    );
+}

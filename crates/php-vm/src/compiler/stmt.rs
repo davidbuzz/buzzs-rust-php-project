@@ -769,6 +769,11 @@ impl Compiler {
         by_ref: bool,
         body: &Stmt,
     ) -> CResult<()> {
+        // zend_compile_foreach: a list() value with references
+        // (zend_propagate_list_refs) iterates by reference.
+        let list_refs = matches!(&value.kind, ExprKind::Array { items, .. }
+            if items.iter().flatten().any(|i| i.by_ref || super::expr::has_nested_ref(i)));
+        let by_ref = by_ref || list_refs;
         let iter = {
             let f = self.f();
             f.num_iters += 1;
@@ -837,7 +842,17 @@ impl Compiler {
         self.f().line = value.span.line;
         if by_ref {
             if let ExprKind::Array { items, .. } = &value.kind {
-                self.compile_destructure(items, Operand::Tmp(vt), value.span.line)?;
+                if list_refs {
+                    // ZEND_FETCH_LIST_W through the FE_FETCH_RW reference.
+                    let src = Place {
+                        base: PlaceBase::Value(Operand::TmpKeep(vt)),
+                        segs: Vec::new(),
+                    };
+                    self.compile_destructure_ref(items, &src, value.span.line, false)?;
+                    self.emit(Op::Free(Operand::Tmp(vt)));
+                } else {
+                    self.compile_destructure(items, Operand::Tmp(vt), value.span.line)?;
+                }
             } else {
                 let p = self.compile_place(value, false)?;
                 let pid = self.place(p);
@@ -1134,6 +1149,21 @@ impl Compiler {
 
     /// Unused helper kept for `ArgSrc` construction symmetry.
     pub(crate) fn arg_src_for(&mut self, e: &Expr) -> CResult<ArgSrc> {
+        if let ExprKind::Assign { target, value } = &e.kind {
+            // zend_compile_list_assign with references yields the source
+            // VAR (a reference), sent with ZEND_SEND_VAR_NO_REF.
+            if let ExprKind::Array { items, .. } = &target.kind {
+                if (is_ref_expr(value) || super::expr::is_call_expr(value))
+                    && items
+                        .iter()
+                        .flatten()
+                        .any(|i| i.by_ref || super::expr::has_nested_ref(i))
+                {
+                    let op = self.compile_expr(e)?;
+                    return Ok(ArgSrc::CallResult(op));
+                }
+            }
+        }
         if is_ref_expr(e) {
             // zend_compile_args: a short-circuited chain is passed by
             // value, and its jumps end at the argument.

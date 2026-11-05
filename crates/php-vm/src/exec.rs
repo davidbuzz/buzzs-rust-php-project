@@ -348,6 +348,12 @@ impl Vm {
                 f.silence_saved.clear();
                 self.error_reporting = saved;
             }
+            if !self.frame().code.live_tmps.is_empty() {
+                exc = match self.release_live_tmps(exc) {
+                    Ok(e) => e,
+                    Err(t) => return Err(self.abandon_unwinding(t, base)),
+                };
+            }
             let f = self.frames.last_mut().expect("frame");
             let throw_ip = f.ip.saturating_sub(1) as u32;
             let code = f.code.clone();
@@ -414,6 +420,30 @@ impl Vm {
                 return Err(Throw::Exception(exc));
             }
         }
+    }
+
+    /// `cleanup_live_vars` (Zend/zend_execute.c): releases the temporaries
+    /// live at the throwing op, in order, before a handler of this frame
+    /// runs; their destructors see `exc` in flight.
+    #[cold]
+    fn release_live_tmps(&mut self, exc: php_runtime::Obj) -> Result<php_runtime::Obj, Throw> {
+        let f = self.frame_mut();
+        #[allow(clippy::cast_possible_truncation)]
+        let throw_ip = f.ip.saturating_sub(1) as u32;
+        let code = f.code.clone();
+        let mut dead = Vec::new();
+        for l in &code.live_tmps {
+            if (l.start..l.end).contains(&throw_ip) {
+                if let Some(v) = f.tmps.get_mut(l.tmp as usize) {
+                    dead.push(std::mem::take(v));
+                }
+            }
+        }
+        if dead.is_empty() {
+            return Ok(exc);
+        }
+        drop(dead);
+        self.destruct_while_unwinding(exc)
     }
 
     /// Releases the temporaries, foreach iterators and unfinished calls of
@@ -689,6 +719,10 @@ impl Vm {
                     Op::MakeRef { place, dst } => {
                         let r = self.place_make_ref(*place)?;
                         self.set_tmp(*dst, Value::Reference(r));
+                        Flow::Next
+                    }
+                    Op::ListFetchRef { place, dst } => {
+                        self.list_fetch_ref(*place, *dst)?;
                         Flow::Next
                     }
                     Op::Fetch { place, mode, dst } => {
@@ -1361,6 +1395,32 @@ impl Vm {
         })();
         self.frame_mut().tmps[arr as usize] = a;
         res
+    }
+
+    /// ZEND_FETCH_LIST_W on a VAR container that is not a reference (a
+    /// by-value call result, Zend/zend_vm_def.h): notices and falls back
+    /// to ZEND_FETCH_LIST_R; the element then becomes a fresh reference.
+    #[cold]
+    fn list_fetch_ref(&mut self, pid: crate::opcode::PlaceId, dst: Option<u32>) -> VmResult<()> {
+        let referenceable = match self.frame().code.places[pid as usize].base {
+            crate::opcode::PlaceBase::Value(
+                crate::opcode::Operand::Tmp(t) | crate::opcode::Operand::TmpKeep(t),
+            ) => matches!(self.frame().tmps[t as usize], Value::Reference(_)),
+            _ => true,
+        };
+        if referenceable {
+            let r = self.place_make_ref(pid)?;
+            if let Some(d) = dst {
+                self.set_tmp(d, Value::Reference(r));
+            }
+            return Ok(());
+        }
+        self.notice("Attempting to set reference to non referenceable value")?;
+        let v = self.place_fetch(pid, crate::opcode::FetchMode::List)?;
+        if let Some(d) = dst {
+            self.set_tmp(d, Value::Reference(PhpRef::new(v)));
+        }
+        Ok(())
     }
 
     /// `zend_ast_add_unpacked_element` (Zend/zend_ast.c): a constant

@@ -1343,6 +1343,9 @@ impl Vm {
             }
             Value::Str(s) => {
                 if mode == FetchMode::List {
+                    // zend_fetch_dimension_address_read with is_list: a
+                    // string is not destructured.
+                    self.warning("Cannot use string as array")?;
                     return Ok(Value::Null);
                 }
                 let mut diags = Vec::new();
