@@ -117,6 +117,17 @@ pub trait SplHost: ArrayContext {
         None
     }
 
+    /// `zend_iterator_init`: every `zend_object_iterator` is itself an
+    /// object and takes a handle from the object store
+    /// (`zend_objects_store_put`) when `get_iterator` creates it, so the
+    /// objects created while it lives get higher handle numbers. Returns a
+    /// token that holds such a handle until it is dropped (the handle then
+    /// goes back on the free list, `zend_objects_store_del`). The default
+    /// (`None`) reserves nothing.
+    fn reserve_iterator_handle(&mut self) -> Option<Box<dyn Any>> {
+        None
+    }
+
     /// Whether a non-SPL object has custom `get_properties` /
     /// `get_properties_for` handlers (e.g. `DateTime`, `Closure`), which
     /// makes it unusable as `ArrayObject` storage ("Overloaded object of

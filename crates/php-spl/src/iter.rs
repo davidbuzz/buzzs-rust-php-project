@@ -6,11 +6,34 @@ use crate::exceptions::{error, exception};
 use crate::host::{MethodIterator, ObjectIterator, SplHost};
 use php_runtime::convert::dval_to_lval_safe;
 use php_runtime::{ArrayKey, ErrorLevel, HashTable, Obj, RtResult, Value, ZArray, ZStr};
+use std::any::Any;
 
 /// `ce->get_iterator(ce, obj, by_ref)` for any object: the VM's foreign
 /// iterators, SPL native iterators, `Iterator` objects (method calls) and
 /// `IteratorAggregate` objects (`getIterator()`, recursively).
+///
+/// Like `zend_iterator_init`, the new iterator holds an object handle
+/// ([`SplHost::reserve_iterator_handle`]) until it is dropped, taken after
+/// any `getIterator()` call. Callers that reserve the handle themselves
+/// (the VM's `foreach`) use [`get_iterator_unhandled`].
 pub fn get_iterator(
+    host: &mut dyn SplHost,
+    obj: &Obj,
+    by_ref: bool,
+) -> RtResult<Box<dyn ObjectIterator>> {
+    let it = get_iterator_unhandled(host, obj, by_ref)?;
+    Ok(match host.reserve_iterator_handle() {
+        Some(handle) => Box::new(HandledIterator {
+            inner: it,
+            _handle: handle,
+        }),
+        None => it,
+    })
+}
+
+/// [`get_iterator`] without the iterator's object handle, for callers that
+/// account for it themselves (the VM's `foreach` reserves one per loop).
+pub fn get_iterator_unhandled(
     host: &mut dyn SplHost,
     obj: &Obj,
     by_ref: bool,
@@ -33,7 +56,7 @@ pub fn get_iterator(
         let r = host.call_method(obj, "getIterator", &[])?;
         return match r.deref() {
             Value::Object(o) if host.instance_of(&o, "Traversable") => {
-                get_iterator(host, &o, by_ref)
+                get_iterator_unhandled(host, &o, by_ref)
             }
             _ => Err(exception(format!(
                 "Objects returned by {}::getIterator() must be traversable or implement interface Iterator",
@@ -45,6 +68,39 @@ pub fn get_iterator(
         "Object of type {} is not traversable",
         obj.class_name()
     )))
+}
+
+/// A `get_iterator` iterator with the object handle `zend_iterator_init`
+/// gave it. Fields drop in order: the iterator (and the object it holds)
+/// is released before its handle returns to the free list, as in
+/// `zend_objects_store_del` (`free_obj`, then the handle).
+struct HandledIterator {
+    inner: Box<dyn ObjectIterator>,
+    _handle: Box<dyn Any>,
+}
+
+impl ObjectIterator for HandledIterator {
+    fn rewind(&mut self, host: &mut dyn SplHost) -> RtResult<()> {
+        self.inner.rewind(host)
+    }
+    fn valid(&mut self, host: &mut dyn SplHost) -> RtResult<bool> {
+        self.inner.valid(host)
+    }
+    fn current(&mut self, host: &mut dyn SplHost) -> RtResult<Option<Value>> {
+        self.inner.current(host)
+    }
+    fn key(&mut self, host: &mut dyn SplHost) -> RtResult<Option<Value>> {
+        self.inner.key(host)
+    }
+    fn next(&mut self, host: &mut dyn SplHost) -> RtResult<()> {
+        self.inner.next(host)
+    }
+    fn method_object(&self) -> Option<&Obj> {
+        self.inner.method_object()
+    }
+    fn method_iter(&self) -> Option<MethodIterator> {
+        self.inner.method_iter()
+    }
 }
 
 /// `zend_create_internal_iterator_zval`: an `InternalIterator` over the

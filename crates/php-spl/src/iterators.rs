@@ -117,10 +117,12 @@ pub enum DualKind {
     },
     /// `AppendIterator`.
     Append {
+        /// The native iterator of `array_it` (declared first: it is
+        /// released before the `ArrayIterator`, as in
+        /// `spl_dual_it_free_storage`).
+        it: ItRef,
         /// The `ArrayIterator` holding the iterators.
         array_it: Obj,
-        /// Its native iterator.
-        it: ItRef,
     },
     /// `RegexIterator` / `RecursiveRegexIterator`.
     Regex {
@@ -144,20 +146,25 @@ pub enum DualKind {
 
 /// The state of `IteratorIterator` and its subclasses
 /// (`spl_dual_it_object`).
+///
+/// The fields are declared in `spl_dual_it_free_storage`'s release order
+/// (Rust drops them in declaration order): the current element, the inner
+/// iterator (whose object handle is freed first), the inner object, then
+/// the variant's parts, so freed handles are reused in php-src's order.
 #[derive(Clone)]
 pub struct DualIt {
-    /// The variant.
-    pub kind: DualKind,
-    /// The inner object.
-    pub inner: Option<Obj>,
-    /// The class used for the inner object (downcast for `IteratorIterator`).
-    pub inner_class: Option<ZStr>,
-    /// The inner native iterator.
-    pub inner_it: Option<ItRef>,
     /// Current value (`None` = `UNDEF`).
     pub data: Option<Value>,
     /// Current key (`None` = `UNDEF`).
     pub key: Option<Value>,
+    /// The inner native iterator.
+    pub inner_it: Option<ItRef>,
+    /// The inner object.
+    pub inner: Option<Obj>,
+    /// The class used for the inner object (downcast for `IteratorIterator`).
+    pub inner_class: Option<ZStr>,
+    /// The variant.
+    pub kind: DualKind,
     /// Position.
     pub pos: i64,
 }
@@ -1355,13 +1362,18 @@ pub enum RsState {
 }
 
 /// One level of a recursive iteration (`spl_sub_iterator`).
+///
+/// `it` is declared before `obj` so that dropping a level releases the
+/// native iterator (and its object handle) before the level's object, as
+/// `zend_iterator_dtor(sub_iter); zval_ptr_dtor(&zobject)` do in
+/// `spl_recursive_it_rewind_ex` and `spl_RecursiveIteratorIterator_free_iterators`.
 #[derive(Clone)]
 #[allow(missing_debug_implementations)]
 pub struct SubIter {
-    /// The iterator object of this level.
-    pub obj: Obj,
     /// Its native iterator.
     pub it: ItRef,
+    /// The iterator object of this level.
+    pub obj: Obj,
     /// The state machine state.
     pub state: RsState,
 }
@@ -1383,6 +1395,18 @@ pub struct RecursiveIt {
     pub prefix: [ZStr; 6],
     /// `RecursiveTreeIterator` postfix.
     pub postfix: ZStr,
+}
+
+impl Drop for RecursiveIt {
+    /// `spl_RecursiveIteratorIterator_free_iterators`: the levels are
+    /// released from the deepest one up.
+    fn drop(&mut self) {
+        if let Some(levels) = self.iterators.as_mut() {
+            while let Some(level) = levels.pop() {
+                drop(level);
+            }
+        }
+    }
 }
 
 impl fmt::Debug for RecursiveIt {
@@ -1521,7 +1545,18 @@ fn rit_move_forward(host: &mut dyn SplHost, this: &Obj, st: &SplObject) -> RtRes
                         && sub(st, level)?.is_some_and(|s| Rc::ptr_eq(&s.it, &cur.it));
                     if still_same {
                         let garbage = st.recursive(|r| r.iterators.as_mut().and_then(Vec::pop))?;
-                        drop((garbage, cur));
+                        // `zval_ptr_dtor(&garbage); zend_iterator_dtor(iterator)`:
+                        // here the level's object is released before its
+                        // iterator (which then frees the object, if it held
+                        // the last reference, and then its own handle).
+                        let SubIter {
+                            it: cur_it,
+                            obj: cur_obj,
+                            ..
+                        } = cur;
+                        let (garbage_it, garbage_obj) = garbage.map(|g| (g.it, g.obj)).unzip();
+                        drop((garbage_obj, cur_obj));
+                        drop((garbage_it, cur_it));
                         // `zval_ptr_dtor(&garbage)`: the child iterator is
                         // destructed right here, and an exception from its
                         // destructor ends the walk (`while (!EG(exception))`).
@@ -1928,13 +1963,33 @@ fn recursive_call(
 #[derive(Debug)]
 pub struct RecursiveItIter {
     obj: Obj,
+    st: Rc<SplObject>,
 }
 
 impl RecursiveItIter {
-    /// Creates it.
+    /// Creates it over the object and its SPL state.
     #[must_use]
-    pub fn new(obj: Obj) -> Self {
-        RecursiveItIter { obj }
+    pub fn new(obj: Obj, st: Rc<SplObject>) -> Self {
+        RecursiveItIter { obj, st }
+    }
+}
+
+impl Drop for RecursiveItIter {
+    /// `spl_recursive_it_dtor`: releasing the `foreach` iterator releases
+    /// every level below the top one (deepest first), leaving the object
+    /// at depth 0.
+    fn drop(&mut self) {
+        let below = self.st.recursive(|r| {
+            r.iterators
+                .as_mut()
+                .filter(|v| v.len() > 1)
+                .map(|v| v.split_off(1))
+        });
+        if let Ok(Some(mut levels)) = below {
+            while let Some(level) = levels.pop() {
+                drop(level);
+            }
+        }
     }
 }
 

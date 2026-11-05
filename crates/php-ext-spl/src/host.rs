@@ -695,6 +695,10 @@ impl SplHost for VmHost<'_> {
         Some(self.vm_rt(r))
     }
 
+    fn reserve_iterator_handle(&mut self) -> Option<Box<dyn std::any::Any>> {
+        Some(Box::new(php_vm::object::HandleGuard::reserve()))
+    }
+
     fn is_overloaded_object(&mut self, obj: &Obj) -> bool {
         spl_state_of(obj).is_none()
             && class_of(obj)
@@ -1009,6 +1013,9 @@ impl SplHost for BridgedHost {
     }
     fn foreign_iterator(&mut self, obj: &Obj) -> Option<RtResult<Box<dyn ObjectIterator>>> {
         lent(|h| h.foreign_iterator(obj)).flatten()
+    }
+    fn reserve_iterator_handle(&mut self) -> Option<Box<dyn std::any::Any>> {
+        Some(Box::new(php_vm::object::HandleGuard::reserve()))
     }
     fn is_overloaded_object(&mut self, obj: &Obj) -> bool {
         lent(|h| h.is_overloaded_object(obj)).unwrap_or(false)
