@@ -502,7 +502,11 @@ fn get_object_vars(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             vm.read_property(&o, &name, crate::opcode::FetchMode::Is)?
         } else {
             let d = object::data(&o);
-            let slot = d.slots.borrow().get(pi.slot as usize).cloned().flatten();
+            let slot = d
+                .slots
+                .borrow()
+                .get(pi.slot as usize)
+                .and_then(|s| s.as_ref().map(unref_singly_held));
             match slot {
                 Some(v) => v,
                 None => continue, // uninitialized typed property
@@ -516,11 +520,21 @@ fn get_object_vars(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
                 ArrayKey::Str(s) => ArrayKey::from_zstr(s),
                 k => k.clone(),
             };
-            t.push_renamed(None, k, key, v.clone());
+            t.push_renamed(None, k, key, unref_singly_held(v));
         }
     }
     let t = t.finish();
     Ok(Value::Array(ZArray::from_table(t)))
+}
+
+/// `get_object_vars()` copies a reference nothing else holds as its value
+/// (`Z_ISREF_P(value) && Z_REFCOUNT_P(value) == 1`), e.g. the one left by
+/// passing the property by reference.
+fn unref_singly_held(v: &Value) -> Value {
+    match v {
+        Value::Reference(r) if r.refcount() == 1 => r.get(),
+        v => v.clone(),
+    }
 }
 
 /// A property in `properties_info` order: (name, declaring class, flags,
