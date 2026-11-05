@@ -162,9 +162,8 @@ mod tests {
     }
 
     #[test]
-    fn printf_does_not_overflow_its_buffer() {
-        // Longer than the buffer: truncated, not a panic.
-        super::printf(format_args!("{}", ""));
+    fn formatting_truncates_at_the_buffer() {
+        // Longer than `printf`'s buffer: truncated, not a panic.
         let long = "x".repeat(1000);
         let mut buf = [0u8; 256];
         let mut cur = std::io::Cursor::new(&mut buf[..]);
