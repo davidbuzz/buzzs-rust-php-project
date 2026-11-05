@@ -104,7 +104,11 @@ fn gh16711_constants_in_registration_order() {
         run(r"$r = new ReflectionExtension('HaSh');
             $constants = $r->getConstants();
             define('HASH_USER_REGRESSION', 99);
-            var_dump(count($constants));
+            $count = 0;
+            foreach ($constants as $value) {
+                ++$count;
+            }
+            var_dump($count);
             foreach ($constants as $name => $value) {
                 echo $name, '=', $value, PHP_EOL;
             }
@@ -165,8 +169,10 @@ fn hash_constant_reflection_attribution() {
     assert_eq!(
         run(
             r"$constants = (new ReflectionExtension('hash'))->getConstants();
-            $valid = count($constants) === 40;
+            $count = 0;
+            $valid = true;
             foreach ($constants as $name => $value) {
+                ++$count;
                 $r = new ReflectionConstant($name);
                 $valid = $valid
                     && $r->getName() === $name
@@ -175,7 +181,7 @@ fn hash_constant_reflection_attribution() {
                     && $r->getExtension()->getConstants() === $constants
                     && $r->isDeprecated() === ($name !== 'HASH_HMAC');
             }
-            var_dump($valid);"
+            var_dump($valid && $count === 40);"
         ),
         "bool(true)\n"
     );
