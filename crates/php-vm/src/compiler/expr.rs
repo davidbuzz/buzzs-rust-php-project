@@ -47,6 +47,21 @@ pub(crate) fn map_binop(op: AB) -> Option<BinaryOp> {
     })
 }
 
+/// The `op_type` order php-src's `zend_vm_set_opcode_handler` compares to
+/// put the operands of a `SPEC(COMMUTATIVE)` opcode (`ZEND_MUL`,
+/// `ZEND_BW_OR`/`AND`/`XOR`) in canonical order: `IS_CONST` <
+/// `IS_TMP_VAR` < `IS_CV` (`IS_VAR` results are temporaries here). A
+/// swapped pair converts — and reports unsupported operand types — in
+/// swapped order (`operator_unsupported_types.phpt`).
+fn operand_rank(op: Operand) -> u8 {
+    match op {
+        Operand::Unused => 0,
+        Operand::Lit(_) => 1,
+        Operand::Tmp(_) | Operand::TmpKeep(_) => 2,
+        Operand::Cv(_) => 8,
+    }
+}
+
 impl Compiler {
     fn parent_hook_property(&self, class: &ast::ClassRef, name: &MemberName) -> Option<ZStr> {
         let ast::ClassRef::Expr(expr) = class else {
@@ -1112,9 +1127,11 @@ impl Compiler {
             _ => {
                 let l = self.compile_expr(left)?;
                 let r = self.compile_expr(right)?;
-                let (l, r) = if matches!(op, AB::Identical | AB::NotIdentical)
+                let (l, r) = if (matches!(op, AB::Identical | AB::NotIdentical)
                     && matches!(l, Operand::Lit(_))
-                    && !matches!(r, Operand::Lit(_))
+                    && !matches!(r, Operand::Lit(_)))
+                    || (matches!(op, AB::Mul | AB::BitOr | AB::BitAnd | AB::BitXor)
+                        && operand_rank(l) < operand_rank(r))
                 {
                     (r, l)
                 } else {
