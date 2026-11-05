@@ -555,6 +555,17 @@ fn reserved_class_name_error_keeps_earlier_deprecation() {
 }
 
 #[test]
+fn pipe_rhs_arrow_fn_must_be_parenthesized() {
+    let opts = ParseOptions::default();
+    let e = php_parser::parse(b"<?php 42 |> fn($x) => $x |> fn($x) => $x;", &opts).unwrap_err();
+    assert_eq!(
+        e.message,
+        "Arrow functions on the right hand side of |> must be parenthesized"
+    );
+    assert!(php_parser::parse(b"<?php 42 |> (fn($x) => $x) |> (fn($x) => $x);", &opts).is_ok());
+}
+
+#[test]
 fn identifier_tokens() {
     let src = "<?php namespace list; class A { const FOR = 1; function list() {} use T { T::if as public; } } A::class; A::FOR; $a->list(); f(array: 1); readonly(1); enum E { case Default; } function readonly() {} $x?->foreach; f(new: 1);";
     let opts = ParseOptions {

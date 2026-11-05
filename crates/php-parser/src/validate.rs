@@ -1744,6 +1744,13 @@ impl Validator {
                 self.expr(right)
             }
             ExprKind::Pipe { left, right } => {
+                // `zend_compile_pipe`
+                if matches!(&right.kind, ExprKind::ArrowFn(f) if !f.parenthesized) {
+                    return err(
+                        "Arrow functions on the right hand side of |> must be parenthesized",
+                        line,
+                    );
+                }
                 self.expr(left)?;
                 self.expr(right)
             }
