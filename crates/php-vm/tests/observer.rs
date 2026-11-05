@@ -278,3 +278,34 @@ $s = (string) new Exception('x');
         ]
     );
 }
+
+#[test]
+fn declarations_are_notified_when_bound() {
+    // ext/zend_test/tests/observer_declarations_01.phpt
+    LOG.with(|l| l.borrow_mut().clear());
+    let mut vm = Vm::new(&VmOptions::default(), Box::new(std::io::sink()));
+    vm.set_observer(ObserverHooks {
+        init: Some(|_, _| true),
+        begin: Some(|_, f| log(format!("begin {}", name(f)))),
+        function_declared: Some(|_, n| log(format!("function {}", n.to_string_lossy()))),
+        class_linked: Some(|_, n| log(format!("class {}", n.to_string_lossy()))),
+        ..ObserverHooks::default()
+    });
+    vm.run_script(
+        b"<?php function Foo() {} class A {} class B extends A {}
+if (true) { function nested() {} class C extends A {} }",
+        "decl.php",
+    );
+    drop(vm);
+    assert_eq!(
+        LOG.with(|l| l.borrow().clone()),
+        [
+            "function foo",
+            "class a",
+            "class b",
+            "begin {main}",
+            "function nested",
+            "class c",
+        ]
+    );
+}

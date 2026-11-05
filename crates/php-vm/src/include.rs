@@ -146,6 +146,7 @@ impl Vm {
                 self.report_compile_error(&msg, &f.code.filename, f.line_start, false);
                 return Err(Throw::Fatal);
             }
+            self.observer_declared(&lc, false);
             self.functions.insert(lc, crate::func::Func::User(f));
         }
         for &i in &unit.hoisted_classes {

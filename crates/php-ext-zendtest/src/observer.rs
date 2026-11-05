@@ -323,6 +323,26 @@ fn fiber_switch(vm: &mut Vm, from: &FiberContext, to: &FiberContext) {
     out(vm, &s);
 }
 
+/// `declared_function_observer` / `declared_class_observer`.
+fn declared(vm: &mut Vm, what: &str, lcname: &ZStr) {
+    if ini(vm, "observe_declaring") {
+        let line = format!(
+            "{}<!-- declared {what} '{}' -->\n",
+            indent(0),
+            c_str(lcname)
+        );
+        out(vm, &line);
+    }
+}
+
+fn function_declared(vm: &mut Vm, lcname: &ZStr) {
+    declared(vm, "function", lcname);
+}
+
+fn class_linked(vm: &mut Vm, lcname: &ZStr) {
+    declared(vm, "class", lcname);
+}
+
 /// `zend_test_execute_internal`: around every native call.
 fn internal_enter(vm: &mut Vm, f: &ObservedFrame) {
     if let Some(n) = display(f) {
@@ -385,6 +405,8 @@ fn module_startup(vm: &mut Vm) {
         fiber_init: enabled.then_some(fiber_init as fn(&mut Vm, &FiberContext)),
         fiber_switch: enabled.then_some(fiber_switch as fn(&mut Vm, &FiberContext, &FiberContext)),
         fiber_destroy: enabled.then_some(fiber_destroy as fn(&mut Vm, &FiberContext)),
+        function_declared: enabled.then_some(function_declared as fn(&mut Vm, &ZStr)),
+        class_linked: enabled.then_some(class_linked as fn(&mut Vm, &ZStr)),
     });
     if ini(vm, "set_vm_interrupt_on_end") {
         vm.register_interrupt_handler(on_interrupt);

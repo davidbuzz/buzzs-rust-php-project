@@ -60,6 +60,12 @@ pub struct ObserverHooks {
     /// `zend_observer_fiber_destroy_register`: a dead fiber context is
     /// being freed.
     pub fiber_destroy: Option<fn(&mut Vm, &FiberContext)>,
+    /// `zend_observer_function_declared_register`: a user function was
+    /// declared (lowercase name).
+    pub function_declared: Option<fn(&mut Vm, &ZStr)>,
+    /// `zend_observer_class_linked_register`: a user class was linked
+    /// (lowercase name).
+    pub class_linked: Option<fn(&mut Vm, &ZStr)>,
 }
 
 enum Identity {
@@ -279,6 +285,33 @@ impl Vm {
         if let Some(hook) = hook {
             let in_hook = std::mem::replace(&mut self.observer.in_hook, true);
             hook(self, ctx);
+            self.observer.in_hook = in_hook;
+        }
+    }
+
+    /// `zend_observer_function_declared_notify` (`class == false`) /
+    /// `zend_observer_class_linked_notify`. Free without observers.
+    #[inline]
+    pub(crate) fn observer_declared(&mut self, lcname: &ZStr, class: bool) {
+        if self.observer.enabled {
+            self.observer_declared_slow(lcname, class);
+        }
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn observer_declared_slow(&mut self, lcname: &ZStr, class: bool) {
+        let Some(hooks) = self.observer.hooks else {
+            return;
+        };
+        let hook = if class {
+            hooks.class_linked
+        } else {
+            hooks.function_declared
+        };
+        if let Some(hook) = hook {
+            let in_hook = std::mem::replace(&mut self.observer.in_hook, true);
+            hook(self, lcname);
             self.observer.in_hook = in_hook;
         }
     }
