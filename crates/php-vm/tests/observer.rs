@@ -132,3 +132,59 @@ fn no_observer_means_no_notifications() {
     drop(vm);
     assert!(LOG.with(|l| l.borrow().is_empty()));
 }
+
+#[test]
+fn func_num_args_and_func_get_args_in_functions_are_opcodes() {
+    let log = observe(
+        r#"<?php
+function f() { \func_num_args(); func_get_args(); strlen("x"); }
+f(1);
+try { func_num_args(); } catch (Error $e) {}
+"#,
+        true,
+    );
+    let internal: Vec<_> = log
+        .iter()
+        .filter(|e| e.starts_with("enter") || e.starts_with("leave"))
+        .cloned()
+        .collect();
+    // Only the global-scope call is a real internal call.
+    assert_eq!(
+        internal,
+        [
+            "enter strlen",
+            "leave strlen ok",
+            "enter func_num_args",
+            "leave func_num_args err"
+        ]
+    );
+}
+
+#[test]
+fn partial_application_trampolines_observe_only_the_target() {
+    let log = observe(
+        r"<?php
+function f($a, $b) { return $a + $b; }
+$f = f(1, ...);
+$f(2);
+",
+        true,
+    );
+    assert!(log.iter().any(|e| e == "begin f"), "{log:?}");
+    assert!(!log.iter().any(|e| e.contains("func_num_args")), "{log:?}");
+}
+
+#[test]
+fn engine_reads_of_the_sapi_header_state_are_not_observed() {
+    LOG.with(|l| l.borrow_mut().clear());
+    let mut vm = Vm::new(&VmOptions::default(), Box::new(std::io::sink()));
+    vm.set_observer(ObserverHooks {
+        init: Some(|_, _| true),
+        begin: Some(|_, f| log(format!("begin {}", name(f)))),
+        internal_enter: Some(|_, f| log(format!("enter {}", name(f)))),
+        ..ObserverHooks::default()
+    });
+    assert!(!vm.response_headers_sent().expect("headers_sent"));
+    drop(vm);
+    assert!(LOG.with(|l| l.borrow().is_empty()));
+}

@@ -1148,6 +1148,22 @@ impl Vm {
         result
     }
 
+    /// `zend_compile_func_num_args()` / `zend_compile_func_get_args()`:
+    /// inside a function body, a statically named zero-argument call
+    /// compiles to `ZEND_FUNC_NUM_ARGS` / `ZEND_FUNC_GET_ARGS`, so no
+    /// internal call exists for observers to see. (Only consulted while
+    /// observers are enabled.)
+    fn compiles_to_opcode(&self, b: &Builtin, call: &PendingCall) -> bool {
+        call.direct
+            && call.args.is_empty()
+            && !call.has_named
+            && matches!(b.name.as_bytes(), b"func_num_args" | b"func_get_args")
+            && self
+                .frames
+                .last()
+                .is_some_and(|caller| caller.kind == FrameKind::Function)
+    }
+
     fn call_builtin_impl(
         &mut self,
         b: &Rc<Builtin>,
@@ -1218,7 +1234,8 @@ impl Vm {
                     && call
                         .scope
                         .as_ref()
-                        .is_some_and(|c| c.name.as_bytes() == b"Generator"));
+                        .is_some_and(|c| c.name.as_bytes() == b"Generator"))
+                || self.compiles_to_opcode(b, &call);
         }
         self.frames.push(f);
         let depth = self.frames.len();

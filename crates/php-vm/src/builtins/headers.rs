@@ -39,6 +39,12 @@ fn with<R>(f: impl FnOnce(&mut HeaderState) -> R) -> R {
     STATE.with(|s| f(&mut s.borrow_mut()))
 }
 
+/// `sapi_activate()` / `php_output_activate()`: a new request on this
+/// thread starts with no response code, callback or output position.
+pub(crate) fn reset() {
+    with(|s| *s = HeaderState::default());
+}
+
 /// `php_output_get_start_filename()` / `php_output_get_start_lineno()`.
 #[must_use]
 pub fn output_start() -> Option<(ZStr, u32)> {

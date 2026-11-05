@@ -224,6 +224,12 @@ impl Vm {
     ) -> Result<PersistentDeclarations, i32> {
         let failed = result.is_err();
         let status = self.shutdown(result);
+        // `php_request_shutdown()` leaves per-thread request state behind
+        // (a fatal error disables destructors, headers are marked sent with
+        // the startup file's output position); the next request starts
+        // clean (`zend_activate()`, `sapi_activate()`, `php_output_activate()`).
+        crate::object::set_destructors_enabled(true);
+        crate::builtins::headers::reset();
         if failed || status != 0 {
             return Err(status.max(1));
         }
@@ -282,28 +288,33 @@ impl Vm {
         let classes: Vec<_> = persistent.classes.iter().map(|c| image.class(c)).collect();
         let units: Vec<_> = persistent.units.iter().map(|u| image.unit(u)).collect();
         image.finish();
+        // The startup VM was built like this one, so the image also holds
+        // what extensions compile from PHP source while the VM is
+        // constructed (e.g. `enum RoundingMode`). This VM already declared
+        // those; the preload request itself could not have redeclared them.
         for (name, function) in functions {
-            if self.functions.contains_key(&name) {
-                return Err(self.make_throw(
-                    "Error",
-                    &format!("Cannot redeclare function {}()", function.name),
-                ));
-            }
-            self.functions.insert(name, Func::User(function));
+            self.functions.entry(name).or_insert(Func::User(function));
         }
         // The startup declaration order has already resolved dependencies.
         // Linking diagnostics were reported by the preload request; opcache
         // installs the linked classes without repeating them.
         let error_reporting = std::mem::replace(&mut self.error_reporting, 0);
-        let linked = classes.iter().try_for_each(|class| {
-            self.declare_class(class, class.flags & crate::class::cflags::ANON != 0)
-                .map(drop)
-        });
+        let mut linked = Ok(());
+        for class in &classes {
+            if self.classes.contains_key(&class.name.to_ascii_lowercase()) {
+                continue;
+            }
+            let anonymous = class.flags & crate::class::cflags::ANON != 0;
+            if let Err(error) = self.declare_class(class, anonymous) {
+                linked = Err(error);
+                break;
+            }
+        }
         self.error_reporting = error_reporting;
         linked?;
         for (alias, name) in &persistent.aliases {
             if let Some(class) = self.classes.get(name).cloned() {
-                self.classes.insert(alias.clone(), class);
+                self.classes.entry(alias.clone()).or_insert(class);
             }
         }
         self.units.extend(units);

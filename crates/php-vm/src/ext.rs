@@ -567,8 +567,10 @@ impl Vm {
     }
 
     /// Reads the active SAPI's sent state, including non-CLI overrides.
+    /// This is the engine reading `SG(headers_sent)`, not a userland call,
+    /// so observers never see it.
     pub fn response_headers_sent(&mut self) -> VmResult<bool> {
-        let sent = self.call_value(&Value::from("headers_sent"), Vec::new())?;
+        let sent = self.call_function("headers_sent", Vec::new())?;
         Ok(matches!(sent, Value::Bool(true)))
     }
 
