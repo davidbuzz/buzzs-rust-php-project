@@ -652,6 +652,10 @@ impl Compiler {
         let fins: Vec<u32> = self.fref().finally_stack.iter().rev().copied().collect();
         if returns_ref && !is_gen {
             if let Some(ex) = e {
+                // zend_compile_return: zend_assert_not_short_circuited.
+                if super::expr::contains_nullsafe(ex) {
+                    return self.err("Cannot take reference of a nullsafe chain", line);
+                }
                 if is_ref_expr(ex) {
                     let p = self.compile_place(ex, false)?;
                     let pid = self.place(p);
@@ -781,7 +785,11 @@ impl Compiler {
             }
         }
         let reset = if by_ref {
+            // zend_compile_foreach: a nullsafe chain is not a writable
+            // variable (zend_can_write_to_variable), so it is iterated as
+            // a temporary copy.
             let p = if subject.is_variable()
+                && !super::expr::contains_nullsafe(subject)
                 && !matches!(
                     subject.kind,
                     ExprKind::Call { .. }
@@ -1127,7 +1135,9 @@ impl Compiler {
     /// Unused helper kept for `ArgSrc` construction symmetry.
     pub(crate) fn arg_src_for(&mut self, e: &Expr) -> CResult<ArgSrc> {
         if is_ref_expr(e) {
-            if let ExprKind::Prop { nullsafe: true, .. } = e.kind {
+            // zend_compile_args: a short-circuited chain is passed by
+            // value, and its jumps end at the argument.
+            if super::expr::contains_nullsafe(e) {
                 let op = self.compile_expr(e)?;
                 return Ok(ArgSrc::Val(op));
             }

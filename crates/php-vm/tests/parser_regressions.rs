@@ -204,3 +204,41 @@ const C = [...new It];
     );
     assert!(!out.starts_with('1'), "{out}");
 }
+
+/// `zend_ast_is_short_circuited`: a nullsafe chain passed as an argument,
+/// through `X::$p` / `X::m()`, inside `isset`/`empty`/`??` (fetched in
+/// BP_VAR_IS mode) or iterated by reference behaves as one value; taking a
+/// reference of it is a compile error.
+#[test]
+fn nullsafe_chains_short_circuit_as_one_value() {
+    let out = run(r#"<?php
+class Foo { public $bar; function n() { echo "n\n"; return null; } }
+var_dump(null?->bar()->baz);
+var_dump(null?->bar()::$baz);
+var_dump(null?->bar()::baz(print("no\n")));
+var_dump((new Foo)->n()?->x()::$y);
+var_dump(isset($foo?->bar), empty($foo?->bar->baz), $foo?->bar ?? 'd');
+$o = new Foo;
+foreach ($o?->bar as &$v) {}
+$o->bar = [1];
+foreach ($o?->bar as &$v) { $v++; }
+var_dump($o->bar);
+"#);
+    assert_eq!(
+        out,
+        "NULL\nNULL\nNULL\nn\nNULL\nbool(false)\nbool(true)\nstring(1) \"d\"\n\n\
+         Warning: foreach() argument must be of type array|object, null given in t.php on line 9\n\
+         array(1) {\n  [0]=>\n  int(1)\n}\n"
+    );
+    for src in [
+        "<?php\nfunction &f($o) {\n    return $o?->bar;\n}\n",
+        "<?php\nfunction &g($o) {\n    yield $o->y?->y;\n}\n",
+        "<?php\n[&$y] = $y?->y->y;\n",
+    ] {
+        let out = run(src);
+        assert!(
+            out.contains("Fatal error: Cannot take reference of a nullsafe chain in t.php on line"),
+            "{src}: {out}"
+        );
+    }
+}

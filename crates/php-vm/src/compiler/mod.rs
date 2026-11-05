@@ -155,6 +155,9 @@ pub(crate) struct FnCtx {
     pub is_static: bool,
     /// Short-circuit jumps of the current nullsafe chain.
     pub sc_jumps: Vec<usize>,
+    /// Compiling an `isset()`/`empty()`/`??` operand: nullsafe bases are
+    /// fetched in BP_VAR_IS mode.
+    pub sc_quiet: bool,
     pub in_finally: u32,
     /// Pending `FastCall` patches: (finally id, op index).
     pub fast_calls: Vec<(u32, usize)>,
@@ -196,6 +199,7 @@ impl FnCtx {
             method_name: ZStr::empty(),
             is_static: false,
             sc_jumps: Vec::new(),
+            sc_quiet: false,
             in_finally: 0,
             fast_calls: Vec::new(),
         }

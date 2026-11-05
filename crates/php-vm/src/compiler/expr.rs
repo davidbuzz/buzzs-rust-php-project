@@ -84,7 +84,9 @@ impl Compiler {
     /// Compiles an expression and returns the operand holding its value.
     pub(crate) fn compile_expr(&mut self, e: &Expr) -> CResult<Operand> {
         let saved = std::mem::take(&mut self.f().sc_jumps);
+        let saved_quiet = std::mem::replace(&mut self.f().sc_quiet, false);
         let r = self.compile_expr_inner(e);
+        self.f().sc_quiet = saved_quiet;
         let jumps = std::mem::replace(&mut self.f().sc_jumps, saved);
         let op = r?;
         if jumps.is_empty() {
@@ -117,6 +119,28 @@ impl Compiler {
             | ExprKind::StaticProp { .. } => self.compile_expr_inner(e),
             _ => self.compile_expr(e),
         }
+    }
+
+    /// The class of `X::$p` / `X::m()`: a dynamic class expression belongs
+    /// to the enclosing nullsafe chain (`zend_ast_is_short_circuited`
+    /// follows `child[0]` of ZEND_AST_STATIC_PROP / ZEND_AST_STATIC_CALL).
+    fn chain_class_spec(&mut self, cref: &ast::ClassRef) -> CResult<ClassSpec> {
+        match cref {
+            ast::ClassRef::Expr(e) => Ok(ClassSpec::Dyn(self.compile_chain(e)?)),
+            ast::ClassRef::Name(_) => self.class_spec(cref),
+        }
+    }
+
+    /// The place of an `isset()` / `empty()` / `??` operand with the
+    /// short-circuit jumps of its own nullsafe chain. Nullsafe bases are
+    /// fetched quietly (`zend_emit_jmp_null` after a BP_VAR_IS fetch).
+    fn compile_is_place(&mut self, e: &Expr) -> CResult<(Place, Vec<usize>)> {
+        let saved = std::mem::take(&mut self.f().sc_jumps);
+        let saved_quiet = std::mem::replace(&mut self.f().sc_quiet, true);
+        let p = self.compile_place(e, false);
+        self.f().sc_quiet = saved_quiet;
+        let jumps = std::mem::replace(&mut self.f().sc_jumps, saved);
+        Ok((p?, jumps))
     }
 
     /// Compiles an assignment-like expression without a result.
@@ -399,10 +423,7 @@ impl Compiler {
                 if is_ref_expr(inner)
                     && !matches!(inner.kind, ExprKind::Var(VarName::Name(ref id)) if id.name == b"this")
                 {
-                    let saved = std::mem::take(&mut self.f().sc_jumps);
-                    let p = self.compile_place(inner, false);
-                    let jumps = std::mem::replace(&mut self.f().sc_jumps, saved);
-                    let p = p?;
+                    let (p, jumps) = self.compile_is_place(inner)?;
                     let pid = self.place(p);
                     self.emit(Op::Empty { place: pid, dst: t });
                     if !jumps.is_empty() {
@@ -519,6 +540,10 @@ impl Compiler {
                 let t = self.tmp();
                 if self.fref().returns_ref {
                     if let Some(v) = value {
+                        // zend_compile_yield: zend_assert_not_short_circuited.
+                        if contains_nullsafe(v) {
+                            return self.err("Cannot take reference of a nullsafe chain", line);
+                        }
                         if is_ref_expr(v) {
                             let p = self.compile_place(v, false)?;
                             let pid = self.place(p);
@@ -863,10 +888,16 @@ impl Compiler {
             } => {
                 let mut p = self.compile_place_base(object)?;
                 if *nullsafe {
+                    let quiet = self.f().sc_quiet;
+                    let mode = if quiet {
+                        FetchMode::Is
+                    } else {
+                        FetchMode::Read
+                    };
                     let v = if p.segs.is_empty() {
                         match p.base {
                             PlaceBase::Value(op) => op,
-                            PlaceBase::Cv(cv) => {
+                            PlaceBase::Cv(cv) if !quiet => {
                                 let t = self.tmp();
                                 self.emit(Op::Move {
                                     src: Operand::Cv(cv),
@@ -879,11 +910,11 @@ impl Compiler {
                                     base,
                                     segs: Vec::new(),
                                 },
-                                FetchMode::Read,
+                                mode,
                             ),
                         }
                     } else {
-                        self.fetch_place(p, FetchMode::Read)
+                        self.fetch_place(p, mode)
                     };
                     let j = self.emit(Op::JmpNull {
                         a: Compiler::keep(v),
@@ -901,7 +932,7 @@ impl Compiler {
                 p
             }
             ExprKind::StaticProp { class, name, .. } => {
-                let spec = self.class_spec(class)?;
+                let spec = self.chain_class_spec(class)?;
                 let n = match name {
                     VarName::Name(id) => self.lit(Value::Str(ZStr::from(id.name.as_slice()))),
                     VarName::Expr(ex) => self.compile_expr(ex)?,
@@ -995,10 +1026,7 @@ impl Compiler {
                 return Ok(Operand::Tmp(t));
             }
         }
-        let saved = std::mem::take(&mut self.f().sc_jumps);
-        let p = self.compile_place(v, false);
-        let jumps = std::mem::replace(&mut self.f().sc_jumps, saved);
-        let p = p?;
+        let (p, jumps) = self.compile_is_place(v)?;
         let pid = self.place(p);
         self.emit(Op::Isset { place: pid, dst: t });
         if !jumps.is_empty() {
@@ -1060,10 +1088,7 @@ impl Compiler {
                         if id.name == b"this" {
                             self.compile_expr(left)?
                         } else {
-                            let saved = std::mem::take(&mut self.f().sc_jumps);
-                            let p = self.compile_place(left, false);
-                            let jumps = std::mem::replace(&mut self.f().sc_jumps, saved);
-                            let p = p?;
+                            let (p, jumps) = self.compile_is_place(left)?;
                             let r = self.fetch_place(p, FetchMode::Is);
                             if jumps.is_empty() {
                                 r
@@ -1077,10 +1102,7 @@ impl Compiler {
                             }
                         }
                     } else {
-                        let saved = std::mem::take(&mut self.f().sc_jumps);
-                        let p = self.compile_place(left, false);
-                        let jumps = std::mem::replace(&mut self.f().sc_jumps, saved);
-                        let p = p?;
+                        let (p, jumps) = self.compile_is_place(left)?;
                         let r = self.fetch_place(p, FetchMode::Is);
                         if !jumps.is_empty() {
                             let d = match r {
@@ -1168,6 +1190,10 @@ impl Compiler {
                     .iter()
                     .flatten()
                     .any(|i| i.by_ref || has_nested_ref(i));
+                if has_ref && contains_nullsafe(value) {
+                    // zend_compile_assign: zend_assert_not_short_circuited.
+                    return self.err("Cannot take reference of a nullsafe chain", line);
+                }
                 if has_ref && is_ref_expr(value) {
                     let src = self.compile_place(value, false)?;
                     self.compile_destructure_ref(items, &src, line)?;
@@ -1589,7 +1615,7 @@ impl Compiler {
                 self.finish_call(args, line, need)
             }
             ExprKind::StaticCall { class, name, args } => {
-                let spec = self.class_spec(class)?;
+                let spec = self.chain_class_spec(class)?;
                 let n = self.member_name(name)?;
                 self.f().line = line;
                 self.emit(Op::InitStaticCall {
@@ -2156,7 +2182,9 @@ pub(crate) fn keep_place(p: &mut Place) {
     }
 }
 
-fn contains_nullsafe(e: &Expr) -> bool {
+/// `zend_ast_is_short_circuited` (Zend/zend_compile.c): whether `e` ends a
+/// chain containing `?->`.
+pub(crate) fn contains_nullsafe(e: &Expr) -> bool {
     match &e.kind {
         ExprKind::Prop {
             object, nullsafe, ..
@@ -2165,6 +2193,9 @@ fn contains_nullsafe(e: &Expr) -> bool {
             object, nullsafe, ..
         } => *nullsafe || contains_nullsafe(object),
         ExprKind::Dim { base, .. } => contains_nullsafe(base),
+        ExprKind::StaticProp { class, .. } | ExprKind::StaticCall { class, .. } => {
+            matches!(&**class, ast::ClassRef::Expr(c) if contains_nullsafe(c))
+        }
         _ => false,
     }
 }
