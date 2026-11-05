@@ -535,6 +535,25 @@ mod tests {
         assert_eq!(crate::render_all(&v), ["s:42", "s:1.5", "N"]);
     }
 
+    /// `ZVAL_STRINGL_FAST`: empty and one-byte values are interned
+    /// (mysqli_result_references_mysqlnd).
+    #[test]
+    fn text_short_strings_interned() {
+        let mut st = Stats::default();
+        let f = [
+            field(MYSQL_TYPE_VAR_STRING, 0),
+            field(MYSQL_TYPE_VAR_STRING, 0),
+            field(MYSQL_TYPE_VAR_STRING, 0),
+        ];
+        let row = text_row(&[Some(b"a"), Some(b""), Some(b"ab")]);
+        let v = decode_text_row(&row, &f, false, &mut st).unwrap();
+        let interned: Vec<bool> = v
+            .iter()
+            .map(|v| matches!(v, Value::Str(s) if s.is_interned()))
+            .collect();
+        assert_eq!(interned, [true, true, false]);
+    }
+
     #[test]
     fn text_native_types() {
         let mut st = Stats::default();
