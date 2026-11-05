@@ -271,12 +271,14 @@ fn fdatasync(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 fn fpassthru(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let cell = stream_arg(vm, a, 0)?;
-    let mut out = Vec::new();
-    let n = with_stream(vm, &cell, |s| {
-        lib::fpassthru(s, &mut |d| out.extend_from_slice(d))
-    })?;
-    vm.output(&out);
-    Ok(Value::Int(n.unwrap_or(0)))
+    let mut buf = vec![0u8; php_streams::stream::CHUNK_SIZE];
+    let mut count = 0usize;
+    // `_php_stream_passthru()`: PHPWRITE each chunk as it is read.
+    while let Some(Ok(n @ 1..)) = with_stream(vm, &cell, |s| s.read(&mut buf))? {
+        vm.output(&buf[..n]);
+        count += n;
+    }
+    Ok(Value::Int(i64::try_from(count).unwrap_or(i64::MAX)))
 }
 
 fn readfile(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -287,14 +289,16 @@ fn readfile(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let Some((mut s, _)) = open_stream(vm, a, &path, "rb", opts, ctx.as_ref())? else {
         return Ok(Value::Bool(false));
     };
-    let mut out = Vec::new();
-    let n = bridge::run(vm, || {
-        let n = lib::fpassthru(&mut s, &mut |d| out.extend_from_slice(d));
-        s.close();
-        n
-    })?;
-    vm.output(&out);
-    Ok(Value::Int(n))
+    let mut buf = vec![0u8; php_streams::stream::CHUNK_SIZE];
+    let mut count = 0usize;
+    // `php_stream_passthru()`: PHPWRITE each chunk as it is read, so large
+    // files never sit in memory.
+    while let Ok(n @ 1..) = bridge::run_stream(vm, || s.read(&mut buf))? {
+        vm.output(&buf[..n]);
+        count += n;
+    }
+    bridge::run(vm, || s.close())?;
+    Ok(Value::Int(i64::try_from(count).unwrap_or(i64::MAX)))
 }
 
 fn file_get_contents(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
