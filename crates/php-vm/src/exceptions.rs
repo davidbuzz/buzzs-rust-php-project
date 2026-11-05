@@ -303,14 +303,9 @@ impl Vm {
             });
             let mut entry = HashTable::new();
             // File/line of the call site.
-            let attr_site = (idx > 0)
-                .then(|| {
-                    self.attribute_call_sites
-                        .iter()
-                        .rev()
-                        .find(|s| s.0 == idx - 1)
-                })
-                .flatten();
+            let attr_site = idx
+                .checked_sub(1)
+                .and_then(|p| self.attribute_call_sites.iter().rev().find(|s| s.0 == p));
             if let Some((_, file, line)) = attr_site {
                 entry.insert(ArrayKey::Str(ZStr::from("file")), Value::Str(file.clone()));
                 entry.insert(
