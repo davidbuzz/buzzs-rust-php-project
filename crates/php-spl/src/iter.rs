@@ -23,11 +23,21 @@ pub fn get_iterator(
 ) -> RtResult<Box<dyn ObjectIterator>> {
     let it = get_iterator_unhandled(host, obj, by_ref)?;
     Ok(match host.reserve_iterator_handle() {
-        Some(handle) => Box::new(HandledIterator {
-            inner: it,
-            _handle: handle,
-        }),
+        Some(handle) => with_handle(it, handle),
         None => it,
+    })
+}
+
+/// Attaches an object handle token (from
+/// [`SplHost::reserve_iterator_handle`]) to an iterator built without
+/// [`get_iterator`], e.g. one created directly for
+/// `zend_create_internal_iterator_zval`. The iterator is dropped before the
+/// token.
+#[must_use]
+pub fn with_handle(it: Box<dyn ObjectIterator>, handle: Box<dyn Any>) -> Box<dyn ObjectIterator> {
+    Box::new(HandledIterator {
+        inner: it,
+        _handle: handle,
     })
 }
 
