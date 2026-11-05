@@ -23,7 +23,15 @@ impl Write for Sink {
     }
 }
 
+/// `memory_limit` is process-wide (one counting allocator, as one PHP
+/// process): VMs in parallel test threads would reset each other's limit,
+/// so the script tests of this binary run one at a time.
+static VM_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 fn run_with(ini: &[(&str, &str)], code: &str) -> String {
+    let _serial = VM_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let sink = Sink::default();
     let ext = php_ext_stdstr::StdStr;
     let exts: [&dyn Extension; 1] = [&ext];
