@@ -327,10 +327,7 @@ pub enum Op {
     Empty { place: PlaceId, dst: u32 },
     /// Finishes a pending call with a literal nonrepresentable float key.
     /// Only a native call with a defined CV array avoids copying that array.
-    ArrayKeyExists {
-        array: ArgSrc,
-        dst: Option<u32>,
-    },
+    ArrayKeyExists { array: ArgSrc, dst: Option<u32> },
     /// `unset(place)`.
     Unset { place: PlaceId },
     /// `global $name` bound to `cv`.

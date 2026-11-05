@@ -48,8 +48,7 @@ fn debug_info_statics_and_uses() {
 
 #[test]
 fn named_method_closure_return_error_name_and_trace() {
-    let out = run(
-        "<?php\n\
+    let out = run("<?php\n\
          class foo {\n\
              public function bar(): callable {\n\
                  $test = 'one';\n\
@@ -62,8 +61,7 @@ fn named_method_closure_return_error_name_and_trace() {
          $func = $baz->bar();\n\
          try { $func(); } catch (TypeError $e) {\n\
              echo $e->getMessage(), \"\\n\", $e->getTraceAsString(), \"\\n\";\n\
-         }\n",
-    );
+         }\n");
     assert_eq!(
         out,
         "foo::{closure:foo::bar():5}(): Return value must be of type array, null returned\n\
@@ -74,8 +72,7 @@ fn named_method_closure_return_error_name_and_trace() {
 
 #[test]
 fn anonymous_method_closure_return_error_name_and_trace() {
-    let out = run(
-        "<?php\n\
+    let out = run("<?php\n\
          $obj = new class {\n\
              public function bar(): callable {\n\
                  return function(): array { return null; };\n\
@@ -84,8 +81,7 @@ fn anonymous_method_closure_return_error_name_and_trace() {
          $func = $obj->bar();\n\
          try { $func(); } catch (TypeError $e) {\n\
              echo $e->getMessage(), \"\\n\", $e->getTraceAsString(), \"\\n\";\n\
-         }\n",
-    );
+         }\n");
     assert_eq!(
         out,
         "class@anonymous::{closure:class@anonymous(): Return value must be of type array, null returned\n\

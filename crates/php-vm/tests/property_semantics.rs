@@ -310,7 +310,7 @@ echo "done\n";
 #[test]
 fn non_jit_lazy_dynamic_compound_assignment_preserves_initializer_order() {
     assert_eq!(
-        run(r#"<?php
+        run(r##"<?php
 #[AllowDynamicProperties]
 class C {
     public int $b = 1;
@@ -338,7 +338,7 @@ $obj = $reflector->newLazyProxy(function ($obj) {
     return new C();
 });
 test("Proxy", $obj, $reflector);
-"#),
+"##),
         "# Ghost:\n\
          bool(true)\n\
          string(11) \"initializer\"\n\

@@ -1802,7 +1802,9 @@ impl Compiler {
                 self.f().line = line;
                 let dst = need.then(|| self.tmp());
                 self.emit(Op::ArrayKeyExists { array, dst });
-                Ok(Some(dst.map_or_else(|| self.lit(Value::Null), Operand::Tmp)))
+                Ok(Some(
+                    dst.map_or_else(|| self.lit(Value::Null), Operand::Tmp),
+                ))
             }
             b"exit" | b"die" if only_positional && positional.len() <= 1 => {
                 let v = match positional.first() {

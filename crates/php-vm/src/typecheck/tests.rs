@@ -58,7 +58,9 @@ fn run_array_lookup(src: &str) -> String {
     let mut vm = Vm::new(&VmOptions::default(), Box::new(sink.clone()));
     vm.register_function("array_key_exists($key, array $array): bool", lookup);
     vm.register_function("test_resource()", |_vm, _args| {
-        Ok(Value::Resource(php_runtime::Resource::with_handle(42, "test", None)))
+        Ok(Value::Resource(php_runtime::Resource::with_handle(
+            42, "test", None,
+        )))
     });
     vm.run_script(src.as_bytes(), "t.php");
     drop(vm);
@@ -470,7 +472,10 @@ $a = fresh(); var_dump(\array_key_exists(1.0E+42, $a));
     let expected = format!("{warning}bool(false)\n{warning}bool(true)\n{warning}bool(false)\n");
     assert_eq!(
         run_array_lookup(src),
-        format!("{}{warning}bool(false)\n{warning}bool(false)\n", expected.repeat(3))
+        format!(
+            "{}{warning}bool(false)\n{warning}bool(false)\n",
+            expected.repeat(3)
+        )
     );
 }
 
@@ -491,7 +496,10 @@ var_dump(empty(fresh()[1.0E+42]));
 "#;
     let warning = "The float 1.0E+42 is not representable as an int, cast occurred\n";
     let expected = format!("{warning}bool(true)\n").repeat(4);
-    assert_eq!(run_array_lookup(src), format!("{expected}{warning}bool(false)\n"));
+    assert_eq!(
+        run_array_lookup(src),
+        format!("{expected}{warning}bool(false)\n")
+    );
 }
 
 #[test]
@@ -515,7 +523,16 @@ fn array_key_exists_specialization_is_float_literal_only() {
     use crate::opcode::Op;
 
     for key in [
-        "true", "false", "0", "'0'", "null", "1.5", "$key", "$resource", "[]", "new stdClass",
+        "true",
+        "false",
+        "0",
+        "'0'",
+        "null",
+        "1.5",
+        "$key",
+        "$resource",
+        "[]",
+        "new stdClass",
     ] {
         let src = format!("<?php array_key_exists({key}, $array);");
         let unit = compile(&src).expect("valid call");

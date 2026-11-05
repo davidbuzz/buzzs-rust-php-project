@@ -1701,7 +1701,11 @@ impl Vm {
                 Some(c) => format!("{}::{}", object::display_name(&c.name), f.name()),
                 None => f.name().to_string_lossy(),
             });
-            let what = if scope.is_some() { "method" } else { "function" };
+            let what = if scope.is_some() {
+                "method"
+            } else {
+                "function"
+            };
             return Err(self.make_throw(
                 "TypeError",
                 &format!("{fname}(): never-returning {what} must not implicitly return"),

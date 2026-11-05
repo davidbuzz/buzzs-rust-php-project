@@ -31,8 +31,7 @@ fn run(source: &str) -> String {
 
 #[test]
 fn nan_to_other_master_baseline() {
-    let output = run(
-        r#"<?php
+    let output = run(r#"<?php
 $nan = fdiv(0, 0);
 var_dump($nan);
 function implicit_to_bool(bool $v) { var_dump($v); }
@@ -49,8 +48,7 @@ foreach (['null', 'bool', 'int', 'string', 'array', 'object'] as $type) {
     settype($nan, $type);
     var_dump($nan);
 }
-"#,
-    );
+"#);
     let normalized = output
         .lines()
         .map(|line| {
@@ -127,8 +125,7 @@ object(stdClass)#ID (1) {
 #[test]
 fn cast_callbacks_wrap_replacements_without_restarting_conversion() {
     assert_eq!(
-        run(
-            r#"<?php
+        run(r#"<?php
 foreach ([null, "changed", [1], (object) ["nested" => 1]] as $replacement) {
     set_error_handler(function ($level, $message) use ($replacement) {
         global $v;
@@ -140,8 +137,7 @@ foreach ([null, "changed", [1], (object) ["nested" => 1]] as $replacement) {
     $v = NAN; settype($v, "array"); echo serialize($v), "\n";
     $v = NAN; settype($v, "object"); echo serialize($v), "\n";
 }
-"#
-        ),
+"#),
         concat!(
             "2:unexpected NAN value was coerced to array\n",
             "a:1:{i:0;N;}\n",
@@ -182,8 +178,7 @@ foreach ([null, "changed", [1], (object) ["nested" => 1]] as $replacement) {
 #[test]
 fn cast_callbacks_preserve_temporary_and_detached_reference_operands() {
     assert_eq!(
-        run(
-            r#"<?php
+        run(r#"<?php
 set_error_handler(function ($level, $message) {
     global $v;
     $v = "changed";
@@ -201,8 +196,7 @@ set_error_handler(function ($level, $message) {
 });
 $v = NAN; $alias =& $v; $a = (array) $v; var_dump($a[0]);
 $v = NAN; $alias =& $v; $o = (object) $v; var_dump($o->scalar);
-"#
-        ),
+"#),
         concat!(
             "unexpected NAN value was coerced to array\nfloat(NAN)\n",
             "unexpected NAN value was coerced to object\nfloat(NAN)\n",
@@ -217,8 +211,7 @@ $v = NAN; $alias =& $v; $o = (object) $v; var_dump($o->scalar);
 #[test]
 fn cast_warning_handler_locations_and_suppression() {
     assert_eq!(
-        run(
-            r#"<?php
+        run(r#"<?php
 set_error_handler(function ($level, $message, $file, $line) {
     echo $level, ":", $message, ":", $file, ":", $line, "\n";
 });
@@ -229,8 +222,7 @@ restore_error_handler();
 $a = @(array) $v;
 $o = @(object) $v;
 var_dump($a[0], $o->scalar);
-"#
-        ),
+"#),
         concat!(
             "2:unexpected NAN value was coerced to array:t.php:6\n",
             "2:unexpected NAN value was coerced to object:t.php:7\n",
@@ -242,8 +234,7 @@ var_dump($a[0], $o->scalar);
 #[test]
 fn throwing_cast_warning_handler_preserves_exception_and_skips_assignment() {
     assert_eq!(
-        run(
-            r#"<?php
+        run(r#"<?php
 $exception = new Exception("nan warning");
 set_error_handler(function ($level, $message) use ($exception) {
     global $v;
@@ -258,8 +249,7 @@ $v = NAN;
 try { $result = (object) $v; } catch (Exception $caught) {
     var_dump($caught === $exception, $v, $result);
 }
-"#
-        ),
+"#),
         concat!(
             "bool(true)\nstring(7) \"changed\"\nstring(8) \"original\"\n",
             "bool(true)\nstring(7) \"changed\"\nstring(8) \"original\"\n",
@@ -270,16 +260,14 @@ try { $result = (object) $v; } catch (Exception $caught) {
 #[test]
 fn finite_and_infinite_container_casts_do_not_warn() {
     assert_eq!(
-        run(
-            r#"<?php
+        run(r#"<?php
 set_error_handler(function ($level, $message) { echo $message, "\n"; });
 foreach ([0.0, -0.0, 1.5, INF, -INF] as $v) {
     $a = (array) $v;
     $o = (object) $v;
     var_dump($a[0] === $v, $o->scalar === $v);
 }
-"#
-        ),
+"#),
         "bool(true)\n".repeat(10)
     );
 }
