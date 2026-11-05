@@ -147,10 +147,35 @@ fn read_property(vm: &mut Vm, o: &Obj, name: &ZStr) -> VmResult<Option<Value>> {
     let ctx = obj_ctx(o);
     let r = run::direct(vm, || dispatch::read_property(&d, &n))?;
     match check(vm, r, Some(&ctx))? {
-        Some(PropRead::Value(v)) => Ok(Some(to_value(vm, v)?)),
+        Some(PropRead::Value(v)) => {
+            let modern_impl = matches!(&v, php_dom::DomValue::Implementation(i) if i.modern);
+            let v = to_value(vm, v)?;
+            if modern_impl {
+                keep_cached(o, &v);
+            }
+            Ok(Some(v))
+        }
         Some(PropRead::Uninit) | None => Ok(Some(Value::Null)),
         Some(PropRead::NotHandled) => Ok(None),
     }
+}
+
+/// `dom_modern_document_implementation_read` caches the
+/// `Dom\Implementation` in a property slot of the document object: the
+/// document object keeps it alive (and releases it before its own handle).
+fn keep_cached(o: &Obj, v: &Value) {
+    let Value::Object(io) = v else {
+        return;
+    };
+    php_vm::object::internal::<DomState, _>(o, |s| {
+        let held = s
+            .keep
+            .iter()
+            .any(|k| matches!(k, Value::Object(x) if Obj::ptr_eq(x, io)));
+        if !held {
+            s.keep.push(v.clone());
+        }
+    });
 }
 
 /// The declaration of a DOM property (searching the built-in ancestors).
