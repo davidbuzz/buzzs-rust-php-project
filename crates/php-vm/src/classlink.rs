@@ -700,27 +700,11 @@ impl Vm {
             return Ok(c.clone());
         }
         let lc = ZStr::from(decl.name.to_ascii_lowercase());
-        if self.classes.contains_key(&lc) {
-            let kind = match decl.kind {
-                ClassKind::Interface => "interface",
-                ClassKind::Trait => "trait",
-                ClassKind::Enum => "enum",
-                ClassKind::Class => "class",
-            };
-            let _ = kind;
-            return Err(self.fatal_at(
-                &format!(
-                    "Cannot declare {} {}, because the name is already in use",
-                    match decl.kind {
-                        ClassKind::Interface => "interface",
-                        ClassKind::Trait => "trait",
-                        ClassKind::Enum => "enum",
-                        ClassKind::Class => "class",
-                    },
-                    decl.name
-                ),
-                decl.line_start,
-            ));
+        if let Some(old) = self.classes.get(&lc) {
+            // `zend_class_redeclaration_error`: names the class already
+            // declared under that name (its kind and spelling).
+            let msg = class_redeclaration_message(&old.name, old);
+            return Err(self.fatal_at(&msg, decl.line_start));
         }
         let (cls, recorded) = self.link_class(decl, is_anon)?;
         self.bound_decls.insert(key, cls.clone());
@@ -735,6 +719,20 @@ impl Vm {
             self.error_at(level, &msg, &decl.filename, l)?;
         }
         Ok(cls)
+    }
+
+    /// `ZEND_DECLARE_CLASS`: binds a class declaration statement. An
+    /// early-bound (hoisted) declaration is consumed by its first
+    /// execution; executing the statement again (a declaration inside a
+    /// function called twice, or in a loop) redeclares the class, as the
+    /// runtime-definition key is gone (`do_bind_class`, Zend/zend_compile.c).
+    pub(crate) fn declare_class_stmt(&mut self, decl: &Rc<ClassDecl>) -> VmResult<()> {
+        let key = Rc::as_ptr(decl) as usize;
+        if self.bound_decls.remove(&key).is_none() {
+            self.declare_class(decl, false)?;
+            self.bound_decls.remove(&key);
+        }
+        Ok(())
     }
 
     /// Registers a linked class.
@@ -1302,6 +1300,11 @@ impl Vm {
                     line,
                 ));
             }
+            if direct_ifaces.iter().any(|x| Rc::ptr_eq(x, &ic)) {
+                // `zend_do_implement_interfaces`: the same interface named
+                // twice (e.g. through a `class_alias()`).
+                return Err(dup_interface_error(self, decl.kind, &full, &ic.name, line));
+            }
             if is_pending(&ic) {
                 deps.push(ic.clone());
             }
@@ -1695,6 +1698,47 @@ pub(crate) fn variance_decl(name: &[u8]) -> Option<Rc<ClassDecl>> {
         }
     });
     Some(decl)
+}
+
+/// The `%s %pS cannot implement previously implemented interface %pS`
+/// compile error of `zend_do_implement_interfaces` (Zend/zend_inheritance.c).
+#[cold]
+fn dup_interface_error(vm: &mut Vm, kind: ClassKind, name: &str, iface: &ZStr, line: u32) -> Throw {
+    // `zend_get_object_type_uc`.
+    let kind = match kind {
+        ClassKind::Trait => "Trait",
+        ClassKind::Interface => "Interface",
+        ClassKind::Enum => "Enum",
+        ClassKind::Class => "Class",
+    };
+    vm.fatal_at(
+        &format!("{kind} {name} cannot implement previously implemented interface {iface}"),
+        line,
+    )
+}
+
+/// `zend_class_redeclaration_error_ex` (Zend/zend_API.c): the message for
+/// declaring `new_name` (a class declaration or a `class_alias()` alias)
+/// while `old` already holds that name.
+#[cold]
+pub(crate) fn class_redeclaration_message(new_name: &ZStr, old: &Class) -> String {
+    // `zend_get_object_type`.
+    let kind = if old.is_trait() {
+        "trait"
+    } else if old.is_interface() {
+        "interface"
+    } else if old.is_enum() {
+        "enum"
+    } else {
+        "class"
+    };
+    match &old.filename {
+        Some(file) if old.flags & cflags::INTERNAL == 0 => format!(
+            "Cannot redeclare {kind} {new_name} (previously declared in {file}:{})",
+            old.line_start
+        ),
+        _ => format!("Cannot redeclare {kind} {new_name}"),
+    }
 }
 
 /// Whether a declared class still waits for variance checks.

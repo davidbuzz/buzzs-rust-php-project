@@ -1158,20 +1158,10 @@ fn class_alias(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         .unwrap_or(alias.as_bytes());
     let lc = ZStr::from(an.to_ascii_lowercase());
     if vm.classes.contains_key(&lc) {
-        let existing = vm.classes[&lc].clone();
-        let kind = if existing.is_interface() {
-            "interface"
-        } else if existing.is_trait() {
-            "trait"
-        } else if existing.is_enum() {
-            "enum"
-        } else {
-            "class"
-        };
-        vm.warning(&format!(
-            "Cannot declare {kind} {}, because the name is already in use",
-            String::from_utf8_lossy(an)
-        ))?;
+        // `zend_class_redeclaration_error_ex(E_WARNING, alias_name, ce)`:
+        // the message names the aliased class's kind and location.
+        let msg = crate::classlink::class_redeclaration_message(&alias, &c);
+        vm.warning(&msg)?;
         return Ok(Value::Bool(false));
     }
     if matches!(

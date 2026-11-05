@@ -84,6 +84,22 @@ impl Compiler {
     ) -> CResult<()> {
         let name = self.ns_prefixed_pub(&fd.name.name);
         let lc = name.to_ascii_lowercase();
+        // `zend_begin_func_decl`: the unqualified name must not name a
+        // different function imported by `use function`.
+        if self
+            .fn_uses
+            .get(&fd.name.name.to_ascii_lowercase())
+            .is_some_and(|import| !import.eq_ignore_ascii_case(&lc))
+        {
+            return self.err(
+                format!(
+                    "Cannot redeclare function {}() (previously declared as local import)",
+                    String::from_utf8_lossy(&name)
+                ),
+                fd.span.line,
+            );
+        }
+        self.register_seen_symbol(lc.clone(), super::stmt::SYMBOL_FUNCTION);
         if top_level {
             if let Some(&line) = self.declared_functions.get(&lc) {
                 return self.err(
@@ -1186,7 +1202,24 @@ impl Compiler {
                     cd.span.line,
                 ));
             }
-            ZStr::from(self.ns_prefixed_pub(&n))
+            let full = self.ns_prefixed_pub(&n);
+            // `zend_compile_class_decl`: the unqualified name must not
+            // name a different class imported by `use`.
+            if self
+                .class_uses
+                .get(&lc)
+                .is_some_and(|import| !import.eq_ignore_ascii_case(&full))
+            {
+                return self.err(
+                    format!(
+                        "Cannot redeclare class {} (previously declared as local import)",
+                        String::from_utf8_lossy(&full)
+                    ),
+                    cd.span.line,
+                );
+            }
+            self.register_seen_symbol(full.to_ascii_lowercase(), super::stmt::SYMBOL_CLASS);
+            ZStr::from(full)
         };
         let mut cflag = 0u32;
         match kind {

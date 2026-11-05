@@ -550,3 +550,12 @@ fn ini_parse_quantity_warns() {
 fn get_current_user_without_script_is_empty() {
     assert_eq!(run(r#"var_dump(get_current_user());"#), "string(0) \"\"\n");
 }
+
+#[test]
+fn ini_access_constants() {
+    // ext/standard/basic_functions.stub.php: `ZEND_INI_*` access levels,
+    // also resolved from inside a namespace (Zend/tests/namespaces/ns_044).
+    let out = run(r#"namespace test\ns1;
+        echo INI_USER, INI_PERDIR, INI_SYSTEM, INI_ALL, \INI_ALL, constant("INI_ALL");"#);
+    assert_eq!(out, "124777");
+}

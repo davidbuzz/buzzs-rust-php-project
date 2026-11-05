@@ -229,7 +229,13 @@ fn get_included_files(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
 pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
     m.constant("INI_SCANNER_NORMAL", Value::Int(0))
         .constant("INI_SCANNER_RAW", Value::Int(1))
-        .constant("INI_SCANNER_TYPED", Value::Int(2));
+        .constant("INI_SCANNER_TYPED", Value::Int(2))
+        // `ZEND_INI_USER` / `PERDIR` / `SYSTEM` / `ALL`
+        // (ext/standard/basic_functions.stub.php).
+        .constant("INI_USER", Value::Int(1))
+        .constant("INI_PERDIR", Value::Int(2))
+        .constant("INI_SYSTEM", Value::Int(4))
+        .constant("INI_ALL", Value::Int(7));
     m.function(
         "ini_get_all(?string $extension = null, bool $details = true): array|false",
         ini_get_all,

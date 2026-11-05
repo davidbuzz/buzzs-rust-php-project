@@ -209,6 +209,9 @@ pub(crate) struct Compiler {
     pub class_uses: HashMap<Vec<u8>, Vec<u8>>,
     pub fn_uses: HashMap<Vec<u8>, Vec<u8>>,
     pub const_uses: HashMap<Vec<u8>, Vec<u8>>,
+    /// `FC(seen_symbols)`: lower-case class/function names and constant
+    /// names declared so far in the file, with their `ZEND_SYMBOL_*` kinds.
+    pub seen_symbols: HashMap<Vec<u8>, u8>,
     pub strict_types: bool,
     /// `FC(declarables).ticks`: N of the active `declare(ticks=N)`.
     pub(crate) ticks: u32,
@@ -247,6 +250,7 @@ pub fn compile(
         class_uses: HashMap::new(),
         fn_uses: HashMap::new(),
         const_uses: HashMap::new(),
+        seen_symbols: HashMap::new(),
         strict_types: false,
         ticks: 0,
         decls: Rc::new(DeclTable::default()),
