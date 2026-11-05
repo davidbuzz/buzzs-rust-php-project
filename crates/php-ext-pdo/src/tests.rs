@@ -170,3 +170,28 @@ fn blob_stream_resource() {
     "#);
     assert_eq!(out, "stream:hello");
 }
+
+/// `dbh_method_get`: the legacy `sqlite*` methods come from the driver's
+/// method table, so a `PDO` without an `SQLite` connection has no such
+/// method ("Call to undefined method", as spelled, with no deprecation
+/// first), while an `SQLite` one reports the 8.5 deprecation and runs it.
+#[test]
+fn legacy_sqlite_methods_need_an_sqlite_connection() {
+    let out = run(r#"
+        set_error_handler(function ($no, $msg) { echo $no, ':', $msg, ';'; return true; });
+        class P extends PDO { function __construct() {} }
+        try { (new P)->sqliteCreateFunction('f', 'strlen'); }
+        catch (Error $e) { echo get_class($e), ':', $e->getMessage(), ';'; }
+        try { (new P)->SQLITECREATECOLLATION('c', 'strcmp'); }
+        catch (Error $e) { echo $e->getMessage(), ';'; }
+        $db = new PDO('sqlite::memory:');
+        var_dump($db->sqliteCreateFunction('f', 'strlen'));
+    "#);
+    assert_eq!(
+        out,
+        "Error:Call to undefined method P::sqliteCreateFunction();\
+         Call to undefined method P::SQLITECREATECOLLATION();\
+         8192:Method PDO::sqliteCreateFunction() is deprecated since 8.5, \
+         use Pdo\\Sqlite::createFunction() instead;bool(true)\n"
+    );
+}
