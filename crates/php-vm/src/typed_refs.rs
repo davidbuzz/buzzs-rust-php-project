@@ -515,9 +515,9 @@ impl Vm {
         self.assign_ref_ex(r, v, None)
     }
 
-    /// [`Vm::assign_ref`] with an explicit strictness (`None`: that of
-    /// the calling code).
-    fn assign_ref_ex(&mut self, r: &PhpRef, v: Value, strict: Option<bool>) -> VmResult<Value> {
+    /// Assigns through a reference with explicit strictness (`None`: that
+    /// of the calling code), using the typed-reference assignment checks.
+    pub fn assign_ref_ex(&mut self, r: &PhpRef, v: Value, strict: Option<bool>) -> VmResult<Value> {
         let incdec = take_incdec_overflow();
         if r.meta().is_none() {
             return Ok(set_ref_value(r, v));

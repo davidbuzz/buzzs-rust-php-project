@@ -243,6 +243,36 @@ pub fn max2<C: RuntimeContext + ?Sized>(ctx: &mut C, lhs: &Value, rhs: &Value) -
     frameless_minmax(ctx, lhs, rhs, true)
 }
 
+/// `clamp(mixed $value, mixed $min, mixed $max): mixed`.
+pub fn clamp<C: RuntimeContext + ?Sized>(
+    ctx: &mut C,
+    value: &Value,
+    min: &Value,
+    max: &Value,
+) -> RtResult<Value> {
+    let (value, min, max) = (deref(value), deref(min), deref(max));
+    for (n, name, bound) in [(2, "min", &min), (3, "max", &max)] {
+        if matches!(bound, Value::Float(f) if f.is_nan()) {
+            return Err(arg_value_error("clamp", n, Some(name), "must not be NAN"));
+        }
+    }
+    if ops::compare(&max, &min, ctx)? == -1 {
+        return Err(arg_value_error(
+            "clamp",
+            2,
+            Some("min"),
+            "must be smaller than or equal to argument #3 ($max)",
+        ));
+    }
+    if ops::compare(&max, &value, ctx)? == -1 {
+        return Ok(max);
+    }
+    if ops::compare(&value, &min, ctx)? == -1 {
+        return Ok(min);
+    }
+    Ok(value)
+}
+
 #[allow(clippy::cast_precision_loss)]
 fn frameless_minmax<C: RuntimeContext + ?Sized>(
     ctx: &mut C,

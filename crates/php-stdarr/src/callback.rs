@@ -165,11 +165,15 @@ fn walk_object<C: ArrayContext + ?Sized>(
             }
             Some(PropertyRef::Detached(r)) => {
                 let before = r.get();
-                walk_element(ctx, &key, r.clone(), callback, userdata, recursive, guard)?;
+                let result = walk_element(ctx, &key, r.clone(), callback, userdata, recursive, guard);
                 let after = r.get();
-                if !ops::is_identical(&before, &after)? {
-                    ctx.property_write(obj, &key.to_zstr(), after)?;
-                }
+                let write = match ops::is_identical(&before, &after) {
+                    Ok(false) => ctx.property_write(obj, &key.to_zstr(), after),
+                    Ok(true) => Ok(()),
+                    Err(e) => Err(e),
+                };
+                result?;
+                write?;
             }
         }
     }

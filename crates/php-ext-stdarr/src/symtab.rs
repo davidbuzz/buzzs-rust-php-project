@@ -28,6 +28,38 @@ impl CallerSymbols {
             vars: caller.vars.clone(),
         })
     }
+
+    /// Assignments made by `extract()` must honor typed-reference sources.
+    pub fn checked(self, vm: &mut Vm) -> CheckedSymbols<'_> {
+        CheckedSymbols { inner: self, vm }
+    }
+}
+
+#[derive(Debug)]
+pub struct CheckedSymbols<'a> {
+    inner: CallerSymbols,
+    vm: &'a mut Vm,
+}
+
+impl SymbolTable for CheckedSymbols<'_> {
+    fn lookup(&mut self, name: &ZStr) -> VarSlot {
+        self.inner.lookup(name)
+    }
+
+    fn assign(&mut self, name: &ZStr, value: Value) -> RtResult<()> {
+        if let VarSlot::Defined(Value::Reference(r)) = self.inner.lookup(name) {
+            self.vm
+                .assign_ref_ex(&r, value, Some(false))
+                .map(|_| ())
+                .map_err(|t| self.vm.runtime_error_from(t))
+        } else {
+            self.inner.assign(name, value)
+        }
+    }
+
+    fn set(&mut self, name: &ZStr, value: Value) {
+        self.inner.set(name, value);
+    }
 }
 
 impl SymbolTable for CallerSymbols {

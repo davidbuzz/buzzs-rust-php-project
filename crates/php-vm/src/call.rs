@@ -676,7 +676,29 @@ impl Vm {
                 }
             }
             ArgSrc::Place(pid) => {
-                if by_ref {
+                let globals = {
+                    let p = &self.frame().code.places[*pid as usize];
+                    matches!(p.base, crate::opcode::PlaceBase::GlobalsArray) && p.segs.is_empty()
+                };
+                if by_ref && globals && !prefer_ref {
+                    let call = self.frame().calls.last().expect("pending call").clone();
+                    let p = pos.unwrap_or_else(|| call.func.params().len().saturating_sub(1));
+                    let pname = call
+                        .func
+                        .params()
+                        .get(p)
+                        .filter(|p| !p.variadic)
+                        .map_or_else(String::new, |x| format!(" (${})", x.name));
+                    let fname = self.func_display(&call.func, call.scope.as_ref());
+                    return Err(self.make_throw(
+                        "Error",
+                        &format!(
+                            "{fname}(): Argument #{}{pname} could not be passed by reference",
+                            p + 1
+                        ),
+                    ));
+                }
+                if by_ref && !globals {
                     Value::Reference(self.place_make_ref(*pid)?)
                 } else {
                     self.place_fetch(*pid, FetchMode::Read)?

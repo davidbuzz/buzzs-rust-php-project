@@ -63,6 +63,7 @@ const FUNCTIONS: &[(&str, NativeFn)] = &[
     ("array_product(array $array): int|float", f::array_product),
     ("min(mixed $value, mixed ...$values): mixed", f::min),
     ("max(mixed $value, mixed ...$values): mixed", f::max),
+    ("clamp(mixed $value, mixed $min, mixed $max): mixed", f::clamp),
     ("range(string|int|float $start, string|int|float $end, int|float $step = 1): array", f::range),
     ("sort(array &$array, int $flags = SORT_REGULAR): true", f::sort),
     ("rsort(array &$array, int $flags = SORT_REGULAR): true", f::rsort),
@@ -170,7 +171,16 @@ impl Extension for StdArray {
             m.function(sig, handler);
         }
         for &(name, value) in CONSTANTS {
-            m.constant(name, Value::Int(value));
+            if name == "SORT_LOCALE_STRING" {
+                m.constant_deprecated(
+                    name,
+                    Value::Int(value),
+                    "8.6",
+                    "use one of the Collator::*sort*() methods instead",
+                );
+            } else {
+                m.constant(name, Value::Int(value));
+            }
         }
         register_sort_direction(m);
     }

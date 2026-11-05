@@ -148,6 +148,127 @@ fn constants_and_misc() {
 }
 
 #[test]
+fn clamp_preserves_values_and_validates_bounds() {
+    assert_eq!(
+        run("echo clamp(2, 1.3, 3.4), '|', clamp(0, 1.3, 3.4), '|', clamp('d', 'c', 'g');
+            $f = clamp(...); echo '|', $f(value: 'a', min: 'c', max: 'g');
+            echo '|', (int) is_int(clamp(2, 1.3, 3.4)), '|', (int) is_nan(clamp(NAN, 4, 6));"),
+        "2|1.3|d|c|1|1"
+    );
+    assert_eq!(
+        run("foreach ([[4, NAN, NAN], [7, 6, NAN], [1, 3, 2]] as $args) {
+            try { clamp(...$args); } catch (ValueError $e) { echo $e->getMessage(), '|'; }
+        }"),
+        "clamp(): Argument #2 ($min) must not be NAN|clamp(): Argument #3 ($max) must not be NAN|clamp(): Argument #2 ($min) must be smaller than or equal to argument #3 ($max)|"
+    );
+}
+
+#[test]
+fn globals_prefer_ref_uses_a_snapshot() {
+    assert_eq!(
+        run("$marker = 1;
+            function detached() {
+                extract($GLOBALS, EXTR_REFS);
+                $marker = 4;
+                echo $GLOBALS['marker'], ',', $marker, '|';
+            }
+            detached();
+            $ref = &$marker;
+            function shared() {
+                extract($GLOBALS, EXTR_REFS);
+                $marker = 8;
+                echo $GLOBALS['marker'], ',';
+                $GLOBALS['marker'] = 9;
+                echo $marker;
+            }
+            shared();"),
+        "1,4|8,9"
+    );
+}
+
+#[test]
+fn extract_checks_typed_references_before_later_entries() {
+    assert_eq!(
+        run("declare(strict_types=1);
+            class T { public int $i = 0; public string $s = ''; }
+            $o = new T; $i = &$o->i; $s = &$o->s;
+            try { extract(['i' => 'foo', 's' => 42]); }
+            catch (TypeError $e) { echo $e->getMessage(), '|'; }
+            echo $o->i, ',', strlen($o->s), '|';
+            echo extract(['i' => '7', 's' => 42]), '|', $o->i, ',', $o->s;"),
+        "Cannot assign string to reference held by property T::$i of type int|0,0|2|7,42"
+    );
+}
+
+#[test]
+fn globals_rejects_mutating_array_arguments() {
+    assert_eq!(
+        run("$marker = 42;
+            try { array_splice($GLOBALS, 0, count($GLOBALS)); }
+            catch (Error $e) { echo $e->getMessage(), '|'; }
+            try { sort($GLOBALS); }
+            catch (Error $e) { echo $e->getMessage(), '|'; }
+            echo $marker;
+            $GLOBALS['items'] = [3, 1, 2];
+            sort($GLOBALS['items']); echo '|', implode(',', $items);"),
+        "array_splice(): Argument #1 ($array) could not be passed by reference|sort(): Argument #1 ($array) could not be passed by reference|42|1,2,3"
+    );
+}
+
+#[test]
+fn array_map_self_reference_cleanup() {
+    assert_eq!(
+        run("$a = ['k1' => 'v1', 'k2' => 'v2'];
+            $a[] = &$a['k1']; $a[] = &$a;
+            $mapped = array_map(fn($v) => [$v], $a);
+            $same = array_map(null, $a);
+            $zip = array_map(null, $a, $a);
+            $a[0] = null; $a[1] = null;
+            echo count($mapped), ',', count($same), ',', count($zip), '|', (int) is_null($a), '|done';"),
+        "4,4,4|1|done"
+    );
+}
+
+#[test]
+fn merge_recursive_self_reference_cleanup() {
+    assert_eq!(
+        run("$a = ['key1' => ['key2' => []]];
+            $a['key1']['key2']['key3'] = &$a;
+            $b = ['key1' => ['key2' => []]];
+            $b['key1']['key2']['key3'] = &$b;
+            try { array_merge_recursive($a, $b); }
+            catch (Error $e) { echo $e->getMessage(), '|'; }
+            $a['key1']['key2']['key3'] = null;
+            $b['key1']['key2']['key3'] = null;
+            echo (int) is_null($a), (int) is_null($b), '|done';"),
+        "Recursion detected|11|done"
+    );
+}
+
+#[test]
+fn walk_typed_reference_writeback() {
+    assert_eq!(
+        run("class T { public int $prop = 42; }
+            $o = new T;
+            try { @array_walk($o, function (&$v) { $v = []; }); }
+            catch (TypeError $e) { echo $e->getMessage(), '|'; }
+            echo $o->prop;
+            @array_walk($o, function (&$v) { $v = '7'; });
+            echo '|', $o->prop, '|', (int) is_int($o->prop);"),
+        "Cannot assign array to reference held by property T::$prop of type int|42|7|1"
+    );
+}
+
+#[test]
+fn locale_sort_constant_is_deprecated() {
+    let out = run("$a = ['b', 'a']; sort($a, SORT_LOCALE_STRING); echo implode(',', $a);");
+    assert!(out.contains(
+        "Constant SORT_LOCALE_STRING is deprecated since 8.6, use one of the Collator::*sort*() methods instead"
+    ));
+    assert!(out.ends_with("a,b"));
+}
+
+#[test]
 fn object_internal_pointer_persists() {
     let out = run("class T { public int $a; public $b = 1; public $c = 2; }
         $o = new T;

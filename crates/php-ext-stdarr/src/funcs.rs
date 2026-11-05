@@ -255,6 +255,11 @@ pub fn max(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     rt(vm, r)
 }
 
+pub fn clamp(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let r = sa::basic::clamp(vm, &a.at(0), &a.at(1), &a.at(2));
+    rt(vm, r)
+}
+
 /// The number of elements of a numeric `range()`, if cheaply known.
 #[allow(clippy::cast_precision_loss)]
 fn range_len(start: &Value, end: &Value, step: Option<&Value>) -> Option<f64> {
@@ -721,11 +726,11 @@ fn forbid_dynamic_call(vm: &mut Vm, a: &Args) -> VmResult<CallerSymbols> {
 }
 
 pub fn extract(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let mut sym = forbid_dynamic_call(vm, a)?;
+    let sym = forbid_dynamic_call(vm, a)?;
     let arr = a.values.first().cloned().unwrap_or_default();
     let prefix = a.get(2).map(|_| a.str(2));
     let r = sa::symbols::extract(
-        &mut sym,
+        &mut sym.checked(vm),
         &arr,
         int_or(a, 1, sa::EXTR_OVERWRITE),
         prefix.as_ref(),

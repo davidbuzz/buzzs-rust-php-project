@@ -839,6 +839,56 @@ fn frameless_min_max() {
     );
 }
 
+#[test]
+fn clamp_mixed_values_and_nan_bounds() {
+    let mut ctx = Ctx::new();
+    let min = Value::Float(1.3);
+    let max = Value::Float(3.4);
+    assert!(matches!(
+        basic::clamp(&mut ctx, &Value::Int(2), &min, &max).unwrap(),
+        Value::Int(2)
+    ));
+    assert!(php_runtime::ops::is_identical(
+        &basic::clamp(&mut ctx, &Value::Int(0), &min, &max).unwrap(),
+        &min
+    )
+    .unwrap());
+    assert!(matches!(
+        basic::clamp(&mut ctx, &Value::Float(f64::NAN), &min, &max).unwrap(),
+        Value::Float(f) if f.is_nan()
+    ));
+    assert_eq!(
+        basic::clamp(&mut ctx, &Value::Null, &Value::Int(-1), &Value::Int(1))
+            .unwrap()
+            .as_int(),
+        Some(-1)
+    );
+    let same = Value::Object(Obj::new(TestObj));
+    assert!(php_runtime::ops::is_identical(
+        &basic::clamp(&mut ctx, &same, &same, &same).unwrap(),
+        &same
+    )
+    .unwrap());
+    let r = PhpRef::new(Value::from("d"));
+    assert!(matches!(
+        basic::clamp(&mut ctx, &Value::Reference(r), &Value::from("c"), &Value::from("g")).unwrap(),
+        Value::Str(s) if s.as_bytes() == b"d"
+    ));
+    for (min, max, message) in [
+        (f64::NAN, f64::NAN, "clamp(): Argument #2 ($min) must not be NAN"),
+        (1.0, f64::NAN, "clamp(): Argument #3 ($max) must not be NAN"),
+        (
+            3.0,
+            2.0,
+            "clamp(): Argument #2 ($min) must be smaller than or equal to argument #3 ($max)",
+        ),
+    ] {
+        let err = basic::clamp(&mut ctx, &Value::Int(2), &Value::Float(min), &Value::Float(max))
+            .unwrap_err();
+        assert_eq!(err.message(), Some(message));
+    }
+}
+
 /// gh16053: merging into an object entry converts it with `(array)`.
 #[test]
 fn merge_recursive_into_object_entry() {
@@ -1022,6 +1072,27 @@ fn walk_object_properties() {
         ctx.inner.messages(),
         ["Deprecated: array_walk(): Passing an object for argument #1 $array to array_walk() is deprecated, call get_object_vars() first instead"]
     );
+    for recursive in [false, true] {
+        ctx.props = ZArray::from_pairs([("a", Value::Int(1)), ("b", Value::Int(2))]);
+        ctx.writes.clear();
+        let mut cb = |_: &mut ObjCtx, a: &[Value]| {
+            if let Value::Reference(r) = &a[0] {
+                r.set(Value::Int(99));
+            }
+            Err(RuntimeError::Error("callback failed".to_string()))
+        };
+        let err = if recursive {
+            callback::array_walk_recursive(&mut ctx, &obj, &mut cb, None)
+        } else {
+            callback::array_walk(&mut ctx, &obj, &mut cb, None)
+        }
+        .unwrap_err();
+        assert_eq!(err.message(), Some("callback failed"));
+        assert_eq!(ctx.writes.len(), 1);
+        assert_eq!(ctx.writes[0].0, "a");
+        assert_eq!(ctx.writes[0].1.as_int(), Some(99));
+        assert_eq!(ctx.props.get(&ArrayKey::from("b")).unwrap().as_int(), Some(2));
+    }
 }
 
 /// `array_walk()` prepares a lazy object once, then walks only its live

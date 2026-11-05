@@ -1259,6 +1259,7 @@ dependencies = [
 name = "php-stdarr"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "php-runtime",
 ]
 

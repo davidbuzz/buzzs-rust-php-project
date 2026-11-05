@@ -31,7 +31,7 @@ pub enum SortKind {
     Natural,
     /// `SORT_NATURAL | SORT_FLAG_CASE`.
     NaturalCase,
-    /// `SORT_LOCALE_STRING` (compared with `strcoll` in the C locale).
+    /// `SORT_LOCALE_STRING` (compared with `strcoll` in the current locale).
     LocaleString,
 }
 
@@ -201,6 +201,19 @@ pub fn strcoll_c(a: &[u8], b: &[u8]) -> i32 {
     }
 }
 
+/// `strcoll` in the process's current `LC_COLLATE`, ignoring bytes after NUL.
+#[must_use]
+pub fn strcoll(a: &[u8], b: &[u8]) -> i32 {
+    let cstr = |s: &[u8]| {
+        let mut bytes = s.split(|&c| c == 0).next().unwrap_or(&[]).to_vec();
+        bytes.push(0);
+        bytes
+    };
+    let (a, b) = (cstr(a), cstr(b));
+    // SAFETY: both buffers are NUL-terminated and live throughout the call.
+    unsafe { libc::strcoll(a.as_ptr().cast(), b.as_ptr().cast()) }
+}
+
 // ---------------------------------------------------------------------------
 // Key comparisons
 // ---------------------------------------------------------------------------
@@ -256,7 +269,7 @@ pub fn key_compare_natural(a: &ArrayKey, b: &ArrayKey, fold_case: bool) -> i32 {
 /// `php_array_key_compare_string_locale_unstable_i`.
 #[must_use]
 pub fn key_compare_locale(a: &ArrayKey, b: &ArrayKey) -> i32 {
-    strcoll_c(&key_bytes(a), &key_bytes(b))
+    strcoll(&key_bytes(a), &key_bytes(b))
 }
 
 /// Compares two keys with the comparison selected by `kind`. With
@@ -374,14 +387,14 @@ pub fn data_compare_natural<C: RuntimeContext + ?Sized>(
     Ok(strnatcmp_ex(x.as_bytes(), y.as_bytes(), fold_case))
 }
 
-/// `string_locale_compare_function` (`SORT_LOCALE_STRING`, "C" locale).
+/// `string_locale_compare_function` (`SORT_LOCALE_STRING`, current locale).
 pub fn data_compare_locale<C: RuntimeContext + ?Sized>(
     ctx: &mut C,
     a: &Value,
     b: &Value,
 ) -> RtResult<i32> {
     let (x, y) = str_pair(ctx, a, b)?;
-    Ok(strcoll_c(x.as_bytes(), y.as_bytes()))
+    Ok(strcoll(x.as_bytes(), y.as_bytes()))
 }
 
 /// Compares two values with the comparison selected by `kind`; with
