@@ -443,8 +443,12 @@ impl Vm {
                         Flow::Next
                     }
                     Op::Cast { kind, a, dst } => {
-                        let x = self.read(*a)?;
-                        let r = self.cast(*kind, x)?;
+                        let x = if matches!(*kind, CastKind::Array | CastKind::Object) {
+                            self.read_raw(*a)?
+                        } else {
+                            self.read(*a)?
+                        };
+                        let r = self.cast(*kind, *a, x)?;
                         self.set_tmp(*dst, r);
                         Flow::Next
                     }
@@ -1168,7 +1172,11 @@ impl Vm {
         }
     }
 
-    fn cast(&mut self, kind: CastKind, x: Value) -> VmResult<Value> {
+    fn cast(&mut self, kind: CastKind, source: Operand, raw: Value) -> VmResult<Value> {
+        let (x, reference) = match raw {
+            Value::Reference(r) => (r.get(), Some(r)),
+            other => (other, None),
+        };
         Ok(match kind {
             CastKind::Int => Value::Int(self.to_long(&x)?),
             CastKind::Float => Value::Float(self.to_double(&x)?),
@@ -1179,7 +1187,26 @@ impl Vm {
                 Value::Array(_) => x,
                 Value::Object(o) => Value::Array(self.object_to_array(&o)?),
                 Value::Null => Value::Array(ZArray::new()),
-                other => Value::Array(ZArray::from_values([other])),
+                other => {
+                    let other = if matches!(other, Value::Float(f) if f.is_nan()) {
+                        let held = match source {
+                            Operand::Cv(cv) => self.cv_get(cv),
+                            _ => reference.map(Value::Reference),
+                        };
+                        self.warning("unexpected NAN value was coerced to array")?;
+                        // Zend wraps the value after the callback, without re-dispatching.
+                        match held {
+                            Some(Value::Reference(r)) => r.get(),
+                            _ => match source {
+                                Operand::Cv(cv) => self.cv_get(cv).unwrap_or(Value::Null).deref(),
+                                _ => other,
+                            },
+                        }
+                    } else {
+                        other
+                    };
+                    Value::Array(ZArray::from_values([other]))
+                }
             },
             CastKind::Object => match x {
                 Value::Object(_) => x,
@@ -1187,6 +1214,22 @@ impl Vm {
                 Value::Null => self.create_std_object_vm()?,
                 other => {
                     let o = self.create_std_object_vm()?;
+                    let other = if matches!(other, Value::Float(f) if f.is_nan()) {
+                        let held = match source {
+                            Operand::Cv(cv) => self.cv_get(cv),
+                            _ => reference.map(Value::Reference),
+                        };
+                        self.warning("unexpected NAN value was coerced to object")?;
+                        match held {
+                            Some(Value::Reference(r)) => r.get(),
+                            _ => match source {
+                                Operand::Cv(cv) => self.cv_get(cv).unwrap_or(Value::Null).deref(),
+                                _ => other,
+                            },
+                        }
+                    } else {
+                        other
+                    };
                     if let Value::Object(obj) = &o {
                         self.write_dynamic_prop(obj, ZStr::from("scalar"), other);
                     }
