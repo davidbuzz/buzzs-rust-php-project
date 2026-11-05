@@ -246,6 +246,12 @@ impl Compiler {
                         _ => {}
                     }
                 }
+                // `zend_try_ct_eval_const()`: persistent internal constants
+                // are substituted at compile time (only `PHP_EOL`, whose
+                // value is fixed per platform, is modelled).
+                if fb.is_none() && n.as_slice() == b"PHP_EOL" {
+                    return Ok(self.lit(Value::Str(ZStr::from("\n"))));
+                }
                 if lc.as_slice() == b"__compiler_halt_offset__" {
                     let n = self.lit_str(b"__COMPILER_HALT_OFFSET__");
                     let t = self.tmp();
@@ -1298,6 +1304,25 @@ impl Compiler {
         Operand::Tmp(dst)
     }
 
+    /// `zend_try_ct_eval_binary_op()` in `zend_compile_binary_op()`: two
+    /// literal operands that [`Compiler::try_fold`] could not see (magic
+    /// constants, substituted constants) fold unless evaluating them would
+    /// diagnose or throw.
+    fn fold_lit_binary(&self, op: AB, l: Operand, r: Operand) -> Option<Value> {
+        let (Operand::Lit(a), Operand::Lit(b)) = (l, r) else {
+            return None;
+        };
+        let bop = map_binop(op)?;
+        let lits = &self.fref().literals;
+        let (x, y) = (lits.get(a as usize)?, lits.get(b as usize)?);
+        if matches!(x, Value::Array(_)) || matches!(y, Value::Array(_)) {
+            return None;
+        }
+        let mut ctx = CollectingContext::new();
+        let v = php_runtime::ops::binary_op(bop, x, y, &mut ctx).ok()?;
+        ctx.diagnostics.is_empty().then_some(v)
+    }
+
     fn compile_binary(&mut self, op: AB, left: &Expr, right: &Expr) -> CResult<Operand> {
         let t = self.tmp();
         match op {
@@ -1381,6 +1406,9 @@ impl Compiler {
             _ => {
                 let l = self.compile_expr(left)?;
                 let r = self.compile_expr(right)?;
+                if let Some(v) = self.fold_lit_binary(op, l, r) {
+                    return Ok(self.lit(v));
+                }
                 let (l, r) = if op == AB::Concat {
                     self.f().line = left.span.line;
                     let l = self.concat_cast_array_literal(l);
@@ -1415,6 +1443,9 @@ impl Compiler {
                     ),
                 };
                 self.f().line = left.span.line;
+                if matches!(kind, BinKind::Arith(BinaryOp::Add)) {
+                    self.user_opcode_hook("ZEND_ADD");
+                }
                 self.emit(Op::Bin {
                     op: kind,
                     a,

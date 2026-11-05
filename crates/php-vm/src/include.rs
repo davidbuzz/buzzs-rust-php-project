@@ -117,6 +117,7 @@ impl Vm {
             ),
             anon_base: self.anon_counter,
             stack_limit: self.compile_stack_limit(),
+            user_opcodes: self.user_opcodes(),
         };
         let unit = match compiler::compile(&program, Rc::from(src), opts) {
             Ok(u) => {

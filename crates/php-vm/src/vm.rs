@@ -820,6 +820,9 @@ pub struct Vm {
     pub prop_guards: HashSet<(u32, ZStr, u8)>,
     /// Request-local observer initialization and callback state.
     pub(crate) observer: crate::observer::ObserverState,
+    /// `zend_set_user_opcode_handler()` hooks: Zend opcode name and the
+    /// handler run before each such opcode compiled after registration.
+    pub(crate) user_opcode_handlers: Vec<(&'static str, crate::observer::UserOpcodeHandler)>,
 }
 
 impl std::fmt::Debug for Vm {

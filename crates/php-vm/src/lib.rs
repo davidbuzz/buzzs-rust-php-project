@@ -220,6 +220,7 @@ impl Vm {
             empty_vars: Rc::new(RefCell::new(vm::VarStore::default())),
             prop_guards: HashSet::new(),
             observer: crate::observer::ObserverState::default(),
+            user_opcode_handlers: Vec::new(),
         };
         for n in ["error_reporting", "precision", "serialize_precision"] {
             vm.sync_ini(n);

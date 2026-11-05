@@ -1389,6 +1389,10 @@ impl Vm {
                         self.error(i64::from(*level), &m)?;
                         Flow::Next
                     }
+                    Op::UserOpcode { opcode } => {
+                        self.run_user_opcode_handler(*opcode);
+                        Flow::Next
+                    }
                     Op::ConstPropCheck { obj, name, dst } => {
                         let n = self.read(*name)?;
                         let n = self.to_zstr(&n)?;

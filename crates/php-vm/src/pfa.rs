@@ -827,6 +827,7 @@ impl Vm {
             ),
             anon_base: self.anon_counter,
             stack_limit: None,
+            user_opcodes: Vec::new(),
         };
         match crate::compiler::compile(&program, Rc::from(src), opts) {
             Ok(u) => {

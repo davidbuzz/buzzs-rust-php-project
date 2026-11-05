@@ -4,6 +4,8 @@ pub(crate) mod attrs;
 mod constexpr;
 mod decl;
 mod expr;
+#[cfg(test)]
+mod fold_tests;
 mod stack;
 mod stmt;
 
@@ -99,6 +101,9 @@ pub struct CompileOptions {
     /// The C stack model of compile-time `zend_check_stack_limit()`;
     /// `None` disables the check.
     pub stack_limit: Option<CompileStackLimit>,
+    /// Zend opcodes with a `zend_set_user_opcode_handler()` hook: each is
+    /// preceded by an `Op::UserOpcode`.
+    pub user_opcodes: Vec<&'static str>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -422,6 +427,15 @@ impl Compiler {
 
     pub(crate) fn err<T>(&self, msg: impl Into<String>, line: u32) -> CResult<T> {
         Err(CompileError::new(msg, line, self.warnings.clone()))
+    }
+
+    /// The `Op::UserOpcode` before an instruction implementing `opcode`,
+    /// when that Zend opcode has a user handler.
+    pub(crate) fn user_opcode_hook(&mut self, opcode: &'static str) {
+        if self.opts.user_opcodes.contains(&opcode) {
+            let name = self.lit_str(opcode.as_bytes());
+            self.emit(Op::UserOpcode { opcode: name });
+        }
     }
 
     pub(crate) fn emit(&mut self, op: Op) -> usize {
